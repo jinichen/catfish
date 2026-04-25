@@ -1,0 +1,5 @@
+name: catfish-autocompress
+description: 鲶鱼自动上下文压缩 —— 继承 Hermes 内置 ContextCompressor，默认 70% 触发（比 Hermes 的 75% 稍早），可用 CATFISH_COMPRESS_THRESHOLD 环境变量调节。
+version: 0.1.0
+author: Catfish Platform Team
+license: MIT

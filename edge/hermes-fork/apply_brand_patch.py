@@ -1,0 +1,468 @@
+#!/usr/bin/env python3
+"""对 ~/.hermes/hermes-agent/ 源码做品牌替换 —— 把 Hermes/Nous Research 字样换成鲶鱼。
+
+设计要点：
+    1. 幂等：已替换过的字符串跳过，不重复 patch
+    2. 备份：每个被改的文件第一次会备份到 <file>.before-catfish
+    3. dry-run：默认只打印不动，加 --apply 才真正写
+    4. revert：加 --revert 还原所有 .before-catfish 备份
+    5. 精准替换：只改用户看得见的字符串字面量，不动代码逻辑 / 注释 / 测试
+
+使用：
+    python3 apply_brand_patch.py            # dry-run，看会改什么
+    python3 apply_brand_patch.py --apply    # 真的改
+    python3 apply_brand_patch.py --revert   # 还原
+"""
+from __future__ import annotations
+
+import argparse
+import re
+import shutil
+import sys
+from pathlib import Path
+
+HERMES_ROOT = Path.home() / ".hermes" / "hermes-agent"
+BACKUP_SUFFIX = ".before-catfish"
+
+
+# 规则：(相对 HERMES_ROOT 的路径, 原字符串, 新字符串, 说明)
+# 只改**用户在 UI 里看得见的字符串字面量**，不碰代码语法、不碰测试
+RULES: list[tuple[str, str, str, str]] = [
+    # ---------- TS: ui-tui/src/theme.ts ----------
+    (
+        "ui-tui/src/theme.ts",
+        "name: 'Hermes Agent',",
+        "name: '鲶鱼',",
+        "theme.ts: brand name",
+    ),
+    (
+        "ui-tui/src/theme.ts",
+        "icon: '⚕',",
+        "icon: '🐟',",
+        "theme.ts: brand icon",
+    ),
+    (
+        "ui-tui/src/theme.ts",
+        "goodbye: 'Goodbye! ⚕',",
+        "goodbye: '再见 🐟',",
+        "theme.ts: exit message",
+    ),
+    # ---------- TS: ui-tui/src/bootBanner.ts ----------
+    (
+        "ui-tui/src/bootBanner.ts",
+        "⚕ Nous Research · Messenger of the Digital Gods",
+        "🐟 鲶鱼平台 · 员工的数字副手",
+        "bootBanner: tagline",
+    ),
+    (
+        "ui-tui/src/bootBanner.ts",
+        "⚕ NOUS HERMES",
+        "🐟 CATFISH",
+        "bootBanner: fallback ASCII",
+    ),
+    # ---------- TS: ui-tui/src/components/branding.tsx ----------
+    (
+        "ui-tui/src/components/branding.tsx",
+        "Nous Research · Messenger of the Digital Gods",
+        "鲶鱼平台 · 员工的数字副手",
+        "branding: tagline in main banner",
+    ),
+    (
+        "ui-tui/src/components/branding.tsx",
+        " · Nous Research",
+        " · 鲶鱼平台",
+        "branding: model row suffix",
+    ),
+    # ---------- TS: ui-tui/src/components/appLayout.tsx ----------
+    # ⚕ 在这里作为状态栏前缀，改成 🐟
+    (
+        "ui-tui/src/components/appLayout.tsx",
+        "⚕ {ui.status}",
+        "🐟 {ui.status}",
+        "appLayout: status bar icon",
+    ),
+    # ---------- Python: hermes_cli/banner.py ----------
+    (
+        "hermes_cli/banner.py",
+        "[dim {dim}]Nous Research[/]",
+        "[dim {dim}]鲶鱼平台[/]",
+        "banner.py: model row suffix",
+    ),
+    # ---------- Python: cli.py ----------
+    (
+        "cli.py",
+        "- Nous Research",
+        "- 鲶鱼平台",
+        "cli.py: title row suffix",
+    ),
+    # ---------- Python: hermes_cli/skin_engine.py ----------
+    # 5 处相同 "Welcome to Hermes Agent!..." 全部替换
+    (
+        "hermes_cli/skin_engine.py",
+        "Welcome to Hermes Agent! Type your message or /help for commands.",
+        "欢迎回来。输入消息或 /help 看命令。",
+        "skin_engine: welcome message (5 处都会命中)",
+    ),
+    # ---------- Python: cli.py welcome fallback ----------
+    (
+        "cli.py",
+        '"Welcome to Hermes Agent! Type your message or /help for commands."',
+        '"欢迎回来。输入消息或 /help 看命令。"',
+        "cli.py: welcome fallback",
+    ),
+    (
+        "cli.py",
+        'get_branding("welcome", "Welcome to Hermes Agent! Type your message or /help for commands.")',
+        'get_branding("welcome", "欢迎回来。输入消息或 /help 看命令。")',
+        "cli.py: welcome in get_branding",
+    ),
+    # ---------- banner.py 主标题（line 243）----------
+    # 这条是启动 banner 顶部的 "Hermes Agent v0.10.0 (2026.4.16) · upstream xxxx"
+    # 真源头就在这里，改了整个 banner 标题立即变鲶鱼
+    (
+        "hermes_cli/banner.py",
+        'base = f"Hermes Agent v{VERSION} ({RELEASE_DATE})"',
+        'base = f"鲶鱼 v{VERSION} ({RELEASE_DATE})"',
+        "banner.py: 启动 banner 标题",
+    ),
+    # ---------- banner.py agent_name fallback（line 519）----------
+    (
+        "hermes_cli/banner.py",
+        'agent_name = _skin_branding("agent_name", "Hermes Agent")',
+        'agent_name = _skin_branding("agent_name", "鲶鱼")',
+        "banner.py: agent_name skin fallback",
+    ),
+    # ---------- skin_engine.py skin 品牌字符串（同一字符串多处一次性替换）----------
+    # default / mono / slate / light 四个 skin 都有 `"agent_name": "Hermes Agent"`
+    # content.replace() 会把所有 occurrences 都改掉
+    (
+        "hermes_cli/skin_engine.py",
+        '"agent_name": "Hermes Agent"',
+        '"agent_name": "鲶鱼"',
+        "skin_engine: agent_name 全部改成鲶鱼（4~5 处）",
+    ),
+    # default / mono / slate / light 的 goodbye 都是 "Goodbye! ⚕"
+    (
+        "hermes_cli/skin_engine.py",
+        '"goodbye": "Goodbye! ⚕"',
+        '"goodbye": "再见 🐟"',
+        "skin_engine: goodbye ⚕ 改鲶鱼（4 处）",
+    ),
+    # paperwhite skin 的 goodbye 用了 unicode escape
+    (
+        "hermes_cli/skin_engine.py",
+        '"goodbye": "Goodbye! \\u2695"',
+        '"goodbye": "再见 🐟"',
+        "skin_engine: goodbye \\u2695 改鲶鱼",
+    ),
+    # (已回滚) 原本想改 default skin 的 prompt / dim 提高对比度，
+    # 但 default skin 是为**深色终端**设计的。正确做法是让员工用 /skin daylight
+    # 或 /skin warm-lightmode 切换到浅色终端专用 skin。
+    # 所以保留 default skin 原色（#FFF8DC 象牙白 / #B8860B 暗金）。
+    # docstring 里的示例字符串（影响很小，但保持一致性）
+    (
+        "hermes_cli/skin_engine.py",
+        'print(skin.get_branding("agent_name"))  # "Hermes Agent"',
+        'print(skin.get_branding("agent_name"))  # "鲶鱼"',
+        "skin_engine: docstring 示例",
+    ),
+]
+
+
+# ============================================================
+# 整函数替换：极简 build_welcome_banner
+# ============================================================
+# 原函数 220 行，构造左右双列 banner 含完整 Tools/Skills 列表。
+# 员工每次启动都被 40 行信息刷屏，空间浪费 + 颜色对比度差。
+# 新函数 4 行 Panel：标题 / 模型+路径 / 总览数字 / session。
+
+NEW_BUILD_WELCOME_BANNER = '''def build_welcome_banner(console, model: str, cwd: str,
+                         tools=None,
+                         enabled_toolsets=None,
+                         session_id=None,
+                         get_toolset_for_tool=None,
+                         context_length: int = None):
+    """鲶鱼极简启动 banner：4 行 Panel + 高对比度颜色。"""
+    from pathlib import Path as _Path
+
+    # --- 模型简名 ---
+    model_short = model.split("/")[-1] if "/" in model else model
+    if model_short.endswith(".gguf"):
+        model_short = model_short[:-5]
+    if len(model_short) > 40:
+        model_short = model_short[:37] + "..."
+
+    # --- 路径简化（把 $HOME 替换成 ~）---
+    cwd_short = str(cwd) if cwd else ""
+    home = str(_Path.home())
+    if cwd_short.startswith(home):
+        cwd_short = "~" + cwd_short[len(home):]
+    if len(cwd_short) > 60:
+        cwd_short = "..." + cwd_short[-57:]
+
+    # --- context 显示 ---
+    ctx = f" · {_format_context_length(context_length)} ctx" if context_length else ""
+
+    # --- 总览：工具数 + MCP server 数 ---
+    n_tools = len(tools or [])
+    n_mcp = 0
+    try:
+        from tools.mcp_tool import get_registered_mcp_servers
+        n_mcp = len(get_registered_mcp_servers() or [])
+    except Exception:
+        n_mcp = 0
+
+    # --- 构造极简内容（3~4 行）---
+    lines = [
+        f"[bold cyan]{model_short}[/][dim]{ctx}[/]  [dim cyan]·[/]  [bold]鲶鱼平台[/]",
+        f"[dim]{cwd_short}[/]",
+        f"[dim]{n_tools} tools · {n_mcp} MCP server{'s' if n_mcp != 1 else ''} · /help 看全部命令[/]",
+    ]
+    if session_id:
+        lines.append(f"[dim]Session: {session_id}[/]")
+
+    content = "\\n".join(lines)
+    title = format_banner_version_label()
+
+    outer_panel = Panel(
+        content,
+        title=f"[bold cyan]{title}[/]",
+        border_style="cyan",
+        padding=(0, 2),
+        expand=True,
+    )
+
+    console.print()
+    console.print(outer_panel)
+
+
+'''
+
+
+# 鲶鱼 tips 替换块（替换 hermes_cli/tips.py 的整个 TIPS 列表）
+CATFISH_TIPS_BLOCK = '''TIPS = [
+    "鲶鱼是你的副手，不是工具 —— 说\\"帮我做 X\\"，不是\\"怎么做 X\\"",
+    "catfish doctor 一键看平台健康：gateway / Chrome / 索引 / 身份",
+    "找文件用自然语言：\\"帮我找上周那份合同\\"。catfish-search 比 find 快 100 倍，还能读 PDF/Word。",
+    "context 到 70% 自动压缩，不用手动 /compress",
+    "长上下文切 catfish-public-gemini-pro（2M tokens）",
+    "浏览器任务直接说：\\"帮我去 Jira 看这 sprint 所有 close 的 ticket\\"",
+    "飞书消息过滤：catfish-feishu 帮你看哪条领导在问你，生成草稿给你审核",
+    "需要周报？鲶鱼代写，你审核后本人从飞书发 —— 领导不知道有 AI 帮忙",
+    "你的数据归你：memory / 搜索索引 / 草稿全在 ~/.catfish/，不上传任何地方",
+    "skill 可自生成 + 自测 + 自修复 + 自动 cronjob 注册（Self-Evolution）",
+]'''
+
+
+# 多行 ASCII block 的 regex 替换规则（一条规则干掉一整个变量赋值）
+# 格式：(文件路径, pattern, replacement, 说明, detect_pattern)
+#   detect_pattern 用于"已 patched" 检测：如果这个已经出现，跳过
+REGEX_RULES: list[tuple[str, str, str, str, str]] = [
+    # 删掉顶部那个 "HERMES-AGENT" 巨字 ASCII（6 行蓝字）
+    (
+        "hermes_cli/banner.py",
+        r'HERMES_AGENT_LOGO = """.*?"""',
+        'HERMES_AGENT_LOGO = ""',
+        "banner.py: 清空 HERMES-AGENT 大字 LOGO",
+        'HERMES_AGENT_LOGO = ""',
+    ),
+    # 删掉中间那个蛇杖 ASCII（15 行 braille）
+    (
+        "hermes_cli/banner.py",
+        r'HERMES_CADUCEUS = """.*?"""',
+        'HERMES_CADUCEUS = ""',
+        "banner.py: 清空蛇杖 ASCII",
+        'HERMES_CADUCEUS = ""',
+    ),
+    # tips.py TIPS 列表整块替换成鲶鱼 10 条
+    (
+        "hermes_cli/tips.py",
+        r'TIPS = \[.*?\n\]',
+        CATFISH_TIPS_BLOCK,
+        "tips.py: 整个 TIPS 列表替换为鲶鱼 10 条",
+        '鲶鱼是你的副手',  # detect marker
+    ),
+]
+
+
+def _read(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def _write(path: Path, content: str) -> None:
+    path.write_text(content, encoding="utf-8")
+
+
+def _ensure_backup(path: Path) -> None:
+    backup = path.with_suffix(path.suffix + BACKUP_SUFFIX)
+    if not backup.exists():
+        shutil.copy2(path, backup)
+
+
+def _check_already_patched(content: str, new_str: str, old_str: str) -> bool:
+    """如果 new_str 已出现且 old_str 已消失 → 已 patched。"""
+    return new_str in content and old_str not in content
+
+
+def _replace_function(content: str, func_name: str, new_code: str) -> tuple[str, bool]:
+    """把顶层函数 `def func_name(...)` 到下一个顶层 def/class 之间的所有行替换成 new_code。
+
+    返回 (new_content, changed)。
+    """
+    lines = content.split("\n")
+    start = None
+    for i, line in enumerate(lines):
+        if line.startswith(f"def {func_name}("):
+            start = i
+            break
+    if start is None:
+        return content, False
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        if lines[i].startswith("def ") or lines[i].startswith("class "):
+            end = i
+            break
+    # 构造新内容，new_code 已含尾部 \n
+    new_lines = lines[:start] + [new_code.rstrip("\n")] + lines[end:]
+    new_content = "\n".join(new_lines)
+    return new_content, new_content != content
+
+
+def apply(dry_run: bool) -> int:
+    changed_files: set[Path] = set()
+    already_patched = 0
+    skipped_missing = 0
+
+    # ---------- 简单字符串规则 ----------
+    for rel_path, old, new, desc in RULES:
+        target = HERMES_ROOT / rel_path
+        if not target.exists():
+            print(f"  SKIP  {rel_path:50s}  (文件不存在)")
+            skipped_missing += 1
+            continue
+        content = _read(target)
+
+        if _check_already_patched(content, new, old):
+            print(f"  DONE  {desc}")
+            already_patched += 1
+            continue
+
+        if old not in content:
+            print(f"  MISS  {desc}  -- 找不到原字符串，可能 hermes 升级了")
+            continue
+
+        new_content = content.replace(old, new)
+        if new_content == content:
+            print(f"  NOOP  {desc}")
+            continue
+
+        if dry_run:
+            print(f"  WILL  {desc}")
+        else:
+            _ensure_backup(target)
+            _write(target, new_content)
+            print(f"  PATCH {desc}")
+
+        changed_files.add(target)
+
+    # ---------- Regex 规则（多行 block 替换）----------
+    for rel_path, pattern, replacement, desc, detect in REGEX_RULES:
+        target = HERMES_ROOT / rel_path
+        if not target.exists():
+            print(f"  SKIP  {rel_path:50s}  (文件不存在)")
+            skipped_missing += 1
+            continue
+        content = _read(target)
+
+        # 已 patched 检测：detect 在文件里，原 pattern 已被替换
+        if detect in content and not re.search(pattern, content, re.DOTALL):
+            print(f"  DONE  {desc}")
+            already_patched += 1
+            continue
+
+        if not re.search(pattern, content, re.DOTALL):
+            print(f"  MISS  {desc}  -- regex 匹配不到")
+            continue
+
+        new_content = re.sub(pattern, replacement, content, flags=re.DOTALL)
+        if new_content == content:
+            print(f"  NOOP  {desc}")
+            continue
+
+        if dry_run:
+            print(f"  WILL  {desc}  (regex)")
+        else:
+            _ensure_backup(target)
+            _write(target, new_content)
+            print(f"  PATCH {desc}  (regex)")
+
+        changed_files.add(target)
+
+    # ---------- 整函数替换（极简 build_welcome_banner）----------
+    target = HERMES_ROOT / "hermes_cli/banner.py"
+    if target.exists():
+        content = _read(target)
+        # 已 patched 检测：看是否有"极简启动 banner"字串
+        if "鲶鱼极简启动 banner" in content:
+            print("  DONE  banner.py: build_welcome_banner 已替换为极简版")
+            already_patched += 1
+        else:
+            new_content, changed = _replace_function(
+                content, "build_welcome_banner", NEW_BUILD_WELCOME_BANNER,
+            )
+            if not changed:
+                print("  MISS  banner.py: 找不到 build_welcome_banner 函数")
+            elif dry_run:
+                print("  WILL  banner.py: 替换 build_welcome_banner 为极简版（整函数替换）")
+                changed_files.add(target)
+            else:
+                _ensure_backup(target)
+                _write(target, new_content)
+                print("  PATCH banner.py: build_welcome_banner 替换为极简版")
+                changed_files.add(target)
+
+    print()
+    print(f"汇总：{len(changed_files)} 个文件{'将' if dry_run else '已'}改；"
+          f"{already_patched} 条规则已 patched；"
+          f"{skipped_missing} 个文件跳过")
+    return 0 if not skipped_missing else 1
+
+
+def revert() -> int:
+    restored = 0
+    for rel_path, _old, _new, _desc in RULES:
+        target = HERMES_ROOT / rel_path
+        backup = target.with_suffix(target.suffix + BACKUP_SUFFIX)
+        if backup.exists():
+            shutil.copy2(backup, target)
+            backup.unlink()
+            print(f"  REVERT {rel_path}")
+            restored += 1
+    print()
+    print(f"还原了 {restored} 个文件")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--apply", action="store_true", help="真的应用替换（默认 dry-run）")
+    parser.add_argument("--revert", action="store_true", help="还原所有 .before-catfish 备份")
+    args = parser.parse_args()
+
+    if not HERMES_ROOT.exists():
+        print(f"错误：找不到 {HERMES_ROOT}")
+        return 1
+
+    if args.revert:
+        return revert()
+
+    mode = "APPLY" if args.apply else "DRY-RUN"
+    print(f"=== Catfish brand patch ({mode}) ===")
+    print(f"目标目录：{HERMES_ROOT}")
+    print(f"备份后缀：{BACKUP_SUFFIX}")
+    print()
+    return apply(dry_run=not args.apply)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

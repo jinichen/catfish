@@ -1,0 +1,3 @@
+# 平台图标占位
+# 真正的 icons 用 `pnpm tauri icon path/to/logo.png` 自动生成：
+#   32x32.png / 128x128.png / 128x128@2x.png / icon.icns (mac) / icon.ico (win)

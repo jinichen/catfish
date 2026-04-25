@@ -1,0 +1,129 @@
+# Catfish 根级 .gitignore —— 各子项目自带的 .gitignore 也保留作为补充
+#
+# 三大重灾区（绝对不能 commit）:
+#   - venv/             Python 虚拟环境，569MB+
+#   - node_modules/     Node 依赖，86MB+
+#   - target/           Rust 编译产物，3.6GB
+#   - .companion-state/ Companion 运行时状态（PID / log / Chrome profile）
+
+# ============================================================
+# Companion 运行时状态 —— 全员工本机数据，绝不 commit
+# ============================================================
+.companion-state/
+.catfish/
+
+# ============================================================
+# Python
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 虚拟环境（多个子项目都有）
+venv/
+.venv/
+env/
+.env/
+ENV/
+
+# 包构建产物
+build/
+dist/
+*.egg-info/
+*.egg
+wheels/
+.eggs/
+
+# 测试 / lint 缓存
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.tox/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+
+# Jupyter
+.ipynb_checkpoints/
+
+# ============================================================
+# Node / TypeScript / Vite
+# ============================================================
+node_modules/
+.pnpm-store/
+dist/
+dist-ssr/
+.vite/
+*.tsbuildinfo
+
+# 包管理器锁文件保留（lock 应该 commit）—— 不忽略 package-lock.json / pnpm-lock.yaml
+
+# ============================================================
+# Rust / Tauri
+# ============================================================
+# Cargo build target，每个子项目可能都有
+target/
+**/target/
+Cargo.lock                       # 库项目忽略，二进制项目应保留
+!edge/companion-app/src-tauri/Cargo.lock  # 这是二进制项目，保留 lock
+
+# ============================================================
+# 敏感配置（含 API key / token / 密码）
+# ============================================================
+.env
+.env.local
+.env.*.local
+*.env.local
+auth.json
+*.pem
+*.key
+*.pfx
+*.p12
+
+# 但 .env.example 是模板，要 commit
+!.env.example
+
+# ============================================================
+# OS / 编辑器
+# ============================================================
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+
+# ============================================================
+# 日志 / 临时文件
+# ============================================================
+*.log
+*.pid
+*.seed
+*.pid.lock
+logs/
+tmp/
+.tmp/
+
+# ============================================================
+# 数据库 / 索引
+# ============================================================
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# 但 schema/migration 文件保留
+!**/migrations/*.sql
+!**/schema.sql
+
+# ============================================================
+# 临时草稿
+# ============================================================
+COMMITS_*.md                       # commit 草稿，commit 后即删
+*.draft

@@ -1,0 +1,56 @@
+[project]
+name = "catfish-feishu-monitor"
+version = "0.1.0"
+description = "员工本地飞书消息实时相关性过滤 + 自动草稿，通过 CDP 监听员工自己的飞书 Web"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Catfish Platform Team" }]
+
+dependencies = [
+    "pyyaml>=6.0.2",
+    "websockets>=12.0",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.7.0",
+]
+
+[project.scripts]
+catfish-feishu = "catfish_feishu.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+catfish_feishu = ["scripts/*.js"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "PL", "C90", "N", "UP", "B"]
+ignore = ["PLR0913", "PLR2004"]
+
+[tool.ruff.lint.pylint]
+max-statements = 50
+max-branches = 12
+max-returns = 6
+max-args = 8
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["PLR0913", "PLR2004", "N802"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

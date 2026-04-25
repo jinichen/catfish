@@ -1,0 +1,84 @@
+# Hermes → 鲶鱼 字符串替换映射表
+# rebrand.sh 读这个文件，按规则把 hermes 源码里的品牌字符串替换成鲶鱼版。
+#
+# 规则结构：
+#   - file_glob: 匹配文件的 glob 模式（相对于 ~/.hermes/hermes-agent/）
+#     replacements:
+#       - from: "原字符串"
+#         to:   "替换成"
+#         comment: 说明这条规则的目的
+#
+# 注意：
+#   - replace 是字面量替换（不是正则），避免误伤
+#   - 同一字符串可能在多个文件出现，需要列出所有命中的 file_glob
+#   - 替换前 rebrand.sh 会备份原文件到 .catfish-backup
+#   - 重复执行幂等（已替换的不重复）
+
+version: 1
+project_name: catfish-hermes-rebrand
+description: 把 Hermes Agent UI 里的 Nous Research 品牌字样替换成鲶鱼 / 小鲶
+
+# ---------- 核心字符串替换（待 grep 结果定位文件后精确填）----------
+
+rules:
+
+  # 主 banner 标题
+  - file_globs: []   # TODO: grep 输出后填
+    replacements:
+      - from: "Hermes Agent v"
+        to:   "Catfish v0.1.0  ·  rt: hermes-"
+        comment: 把"Hermes Agent v0.10.0"改成"Catfish v0.1.0 · rt: hermes-0.10.0"
+      - from: "Welcome to Hermes Agent!"
+        to:   "欢迎使用鲶鱼 · 直接说事，不用客气。"
+        comment: 启动欢迎语
+      - from: "Goodbye! ⚕"
+        to:   "再见 🐟"
+        comment: 退出语
+
+  # 状态栏 / 模型显示
+  - file_globs: []
+    replacements:
+      - from: "Nous Research"
+        to:   "鲶鱼平台"
+        comment: 模型名后面那个"Nous Research"
+      - from: "⚕"
+        to:   "🐟"
+        comment: 医蛇符号 → 鱼，整个 UI 统一身份符
+
+  # Tip 提示里 hermes XXX 的命令
+  - file_globs: []
+    replacements:
+      - from: "hermes sessions browse"
+        to:   "catfish sessions browse"
+      - from: "hermes update"
+        to:   "catfish update"
+      - from: "hermes plugins"
+        to:   "catfish plugins"
+      - from: "hermes mcp"
+        to:   "catfish mcp"
+      - from: "hermes chat"
+        to:   "catfish chat"
+      - from: "hermes -p"
+        to:   "catfish -p"
+
+  # ASCII art（蛇杖 → 鲶鱼）
+  - file_globs: []
+    replacements:
+      - from: "(整段蛇杖 ASCII art，待 grep 后定位)"
+        to:   "(catfish-ascii.txt 内容)"
+        comment: 大字 ASCII art 整段替换
+
+# ---------- 不替换的（保留）----------
+
+# 这些是技术性的不影响品牌：
+# - "hermes_cli" 这种 Python 模块名不动（影响代码运行）
+# - LICENSE 文件不动（保留 Nous Research 原版权信息，符合 MIT 要求）
+# - upstream 引用 / hermes-agent.git 这类版本控制不动
+# - copyright 注释保留
+
+protected:
+  - "hermes_cli"
+  - "from hermes"
+  - "import hermes"
+  - "Copyright (c) 2025 Nous Research"  # MIT 必须保留
+  - "MIT License"

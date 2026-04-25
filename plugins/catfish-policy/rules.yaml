@@ -1,0 +1,73 @@
+# ============================================================
+# 鲶鱼红线策略 · 默认规则
+# ============================================================
+# 原则：
+#   • 只定义"禁止做什么"，不审查对话内容
+#   • 每条规则命中时返回给 agent 一段可解释的说明，让它能告诉员工
+#   • 规则应该少而准 —— 宁可漏一条，不可误杀
+# ============================================================
+
+version: 1
+
+rules:
+
+  # ---------- R1: 系统级破坏命令 ----------
+  - id: no-recursive-root-delete
+    kind: shell_command
+    match:
+      - "rm -rf /"
+      - "rm -rf /*"
+      - "rm -rf ~"
+      - ":(){ :|:& };:"        # fork bomb
+      - "dd if=/dev/zero of=/dev/"
+      - "mkfs."                # 格式化
+    reason: |
+      系统级破坏命令被策略拦截。如果你需要清理文件，请限定具体目录
+      （例如 rm -rf ./some-specific-dir）。
+
+  # ---------- R2: 敏感凭据文件读取 ----------
+  - id: no-credential-file-read
+    kind: file_read
+    paths:
+      - "~/.ssh/id_*"
+      - "~/.ssh/*_rsa"
+      - "~/.ssh/*_ed25519"
+      - "~/.aws/credentials"
+      - "~/.gnupg/**"
+      - "~/Library/Keychains/**"
+      - "~/.config/gcloud/**"
+    reason: |
+      敏感凭据路径被策略拦截。如果你确实需要访问公钥或配置，请明确
+      指定非密钥文件（如 ~/.ssh/config）。
+
+  # ---------- R3: 绕过网关直接调公共 LLM ----------
+  - id: no-rogue-llm
+    kind: network_request
+    deny_hosts:
+      - "api.openai.com"
+      - "api.anthropic.com"
+      - "generativelanguage.googleapis.com"
+      - "api.deepseek.com"
+      - "api.x.ai"
+    reason: |
+      检测到直接调用公共 LLM 端点。请通过鲶鱼网关
+      (localhost:8999) 访问模型，以保证数据主权与用量可见。
+
+  # ---------- R4: 本机钥匙串 / Credential Manager ----------
+  - id: no-keychain-access
+    kind: shell_command
+    match:
+      - "security find-generic-password"
+      - "security find-internet-password"
+      - "security export"
+    reason: |
+      禁止通过 shell 读取本机钥匙串。如果 agent 需要某个凭据，请
+      通过鲶鱼 Secret Broker 获取（即将在 P1 上线）。
+
+  # ---------- R5: 无确认安装 cron ----------
+  # TODO(P1): 等 Hermes cronjob 工具的 pre_tool_call 钩子稳定后再接
+  # - id: cron-requires-confirm
+  #   kind: tool_name
+  #   match: ["cronjob"]
+  #   require_user_confirm: true
+  #   reason: "新的定时任务需要员工明确确认"

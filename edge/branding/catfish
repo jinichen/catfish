@@ -1,0 +1,197 @@
+#!/usr/bin/env bash
+# catfish · 鲶鱼平台员工入口命令
+#
+# 替代直接敲 hermes：先打鲶鱼 banner、检查环境、然后 exec 到真正的 hermes。
+# 员工心智里"敲 catfish"就是进入鲶鱼平台，跟"敲 hermes"切割开。
+#
+# 用法：
+#     catfish                    # 进交互式 hermes
+#     catfish --no-banner        # 跳过启动横幅
+#     catfish --raw              # 直接调底层 hermes（不做任何包装）
+#     catfish chat ...           # 透传给 hermes 子命令
+#
+# 特殊命令（catfish 自有的，不透传给 hermes）：
+#     catfish status             # 看鲶鱼平台整体状态（gateway / chrome / 索引 / Hermes）
+#     catfish version            # 看 catfish 版本
+#     catfish doctor             # 自检（依赖 / 配置 / 服务）
+#
+
+set -euo pipefail
+
+# ---------- 配置 ----------
+
+CATFISH_VERSION="0.1.0"
+CATFISH_HOME="${CATFISH_HOME:-$HOME/.catfish}"
+HERMES_BIN="${HERMES_BIN:-hermes}"
+
+# ---------- 颜色（可被 NO_COLOR / 非 tty 关掉）----------
+
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+    # 用 $'...' (C-style escape) 让变量真正含 ESC 字符，
+    # 这样 echo 和 cat heredoc 不需要 -e 也能输出彩色。
+    BOLD=$'\033[1m';  DIM=$'\033[2m';  CYAN=$'\033[36m';  YELLOW=$'\033[33m'
+    GREEN=$'\033[32m';  RESET=$'\033[0m'
+else
+    BOLD=''; DIM=''; CYAN=''; YELLOW=''; GREEN=''; RESET=''
+fi
+
+# ---------- ASCII banner ----------
+
+banner() {
+    cat <<EOF
+${CYAN}${BOLD}
+    ╔═══════════════════════════════════════════════╗
+    ║                                               ║
+    ║         🐟  鲶  鱼  ·  C A T F I S H          ║
+    ║                                               ║
+    ║       员工的 AI 副手 · 边缘主权 · 平等         ║
+    ║                                               ║
+    ╚═══════════════════════════════════════════════╝
+${RESET}${DIM}    v${CATFISH_VERSION}${RESET}
+
+EOF
+}
+
+# ---------- 子命令 ----------
+
+cmd_version() {
+    echo "catfish v${CATFISH_VERSION}"
+    if command -v "$HERMES_BIN" >/dev/null 2>&1; then
+        echo "underlying: $($HERMES_BIN --version 2>/dev/null | head -1 || echo "$HERMES_BIN unknown version")"
+    fi
+}
+
+cmd_status() {
+    echo "${BOLD}=== 鲶鱼平台状态 ===${RESET}"
+    echo
+
+    # 1. Gateway
+    echo "${BOLD}[Gateway]${RESET}"
+    if curl -sSf -m 2 http://127.0.0.1:8999/health >/dev/null 2>&1; then
+        echo "    ${GREEN}OK${RESET} catfish-gateway 跑着 (127.0.0.1:8999)"
+    else
+        echo "    ${YELLOW}OFF${RESET} gateway 没起。启动：cd central/llm-gateway && python -m catfish_gateway.app"
+    fi
+    echo
+
+    # 2. Catfish Chrome
+    echo "${BOLD}[Catfish Chrome]${RESET}"
+    if curl -sSf -m 2 http://127.0.0.1:9222/json/version >/dev/null 2>&1; then
+        chrome_ver="$(curl -s http://127.0.0.1:9222/json/version | python3 -c "import sys,json;print(json.load(sys.stdin).get('Browser',''))" 2>/dev/null || echo unknown)"
+        echo "    ${GREEN}OK${RESET} CDP 9222 通 ($chrome_ver)"
+    else
+        echo "    ${YELLOW}OFF${RESET} 没起。启动：bash edge/browser-agent/scripts/catfish-browser-attach.sh"
+    fi
+    echo
+
+    # 3. 本地搜索
+    echo "${BOLD}[Local Search]${RESET}"
+    if command -v catfish-search >/dev/null 2>&1; then
+        catfish-search status 2>&1 | sed 's/^/    /'
+    else
+        echo "    ${YELLOW}未装${RESET}  装：bash onboarding/install-catfish.sh"
+    fi
+    echo
+
+    # 4. SOUL 是否接管
+    echo "${BOLD}[Identity (SOUL.md)]${RESET}"
+    if [ -L "$HOME/.hermes/SOUL.md" ]; then
+        target="$(readlink "$HOME/.hermes/SOUL.md")"
+        case "$target" in
+            *catfish*identity*)
+                echo "    ${GREEN}OK${RESET} catfish 已接管"
+                ;;
+            *)
+                echo "    ${YELLOW}其他${RESET} 软链到 $target"
+                ;;
+        esac
+    elif [ -f "$HOME/.hermes/SOUL.md" ]; then
+        echo "    ${YELLOW}默认${RESET} 没装 catfish identity。装：bash edge/identity/install.sh"
+    else
+        echo "    ${YELLOW}缺${RESET} ~/.hermes/SOUL.md 不存在"
+    fi
+    echo
+
+    # 5. Hermes 本体
+    echo "${BOLD}[Hermes Runtime]${RESET}"
+    if command -v "$HERMES_BIN" >/dev/null 2>&1; then
+        echo "    ${GREEN}OK${RESET} $($HERMES_BIN --version 2>/dev/null | head -1 || echo "$HERMES_BIN")"
+    else
+        echo "    ${YELLOW}未装${RESET} 装 Hermes Agent"
+    fi
+}
+
+cmd_doctor() {
+    echo "${BOLD}=== 鲶鱼自检 ===${RESET}"
+    cmd_status
+    echo
+    echo "${BOLD}[Python]${RESET}"
+    if command -v python3 >/dev/null 2>&1; then
+        echo "    ${GREEN}OK${RESET} $(python3 --version)"
+    else
+        echo "    ${YELLOW}缺${RESET} python3"
+    fi
+    echo
+    echo "${BOLD}[路径检查]${RESET}"
+    case ":$PATH:" in
+        *":$HOME/.local/bin:"*)
+            echo "    ${GREEN}OK${RESET} ~/.local/bin 在 PATH"
+            ;;
+        *)
+            echo "    ${YELLOW}WARN${RESET} ~/.local/bin 不在 PATH（catfish-* 命令找不到）"
+            ;;
+    esac
+}
+
+# ---------- 主分发 ----------
+
+main() {
+    # 优先识别 catfish 自有的 meta 命令（不进 Hermes）
+    case "${1:-}" in
+        version|-v|--version)
+            cmd_version
+            exit 0
+            ;;
+        status)
+            shift
+            cmd_status "$@"
+            exit 0
+            ;;
+        doctor|self-check|check)
+            shift
+            cmd_doctor "$@"
+            exit 0
+            ;;
+        --raw)
+            shift
+            exec "$HERMES_BIN" "$@"
+            ;;
+        --no-banner)
+            shift
+            exec "$HERMES_BIN" "$@"
+            ;;
+        -h|--help)
+            cat <<EOF
+${BOLD}catfish${RESET} - 鲶鱼平台员工入口
+
+用法：
+    catfish                    交互式启动（带鲶鱼 banner）
+    catfish --no-banner        不打 banner 直接进 hermes
+    catfish --raw              透传给底层 hermes，不加任何包装
+    catfish status             看平台整体状态（gateway / Chrome / 搜索 / SOUL / Hermes）
+    catfish doctor             深度自检
+    catfish version            看版本
+    catfish <hermes 子命令>    透传给 hermes（chat / model / mcp / sessions ...）
+
+一切问题先跑 catfish doctor 看哪条红 / 黄。
+EOF
+            exit 0
+            ;;
+    esac
+
+    # 默认：打 banner，进入 hermes
+    banner
+    exec "$HERMES_BIN" "$@"
+}
+
+main "$@"

@@ -1,0 +1,72 @@
+[project]
+name = "catfish-gateway"
+version = "0.1.0"
+description = "Catfish LLM Gateway — company LLM routing with SSO auth"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Catfish Platform Team" }]
+
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "litellm>=1.50.0",
+    "pyyaml>=6.0.2",
+    "pydantic>=2.9.0",
+    "PyJWT[crypto]>=2.9.0",
+    "httpx>=0.27.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.7.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # isort
+    "W",    # pycodestyle warnings
+    "PL",   # pylint (含复杂度检查)
+    "C90",  # mccabe 环复杂度
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+]
+ignore = [
+    "PLR0913",  # 允许参数多的函数（FastAPI 路由很常见）
+    "PLR2004",  # 允许 magic numbers（HTTP 状态码等）
+    "B008",     # FastAPI 惯用法：Depends() 在参数默认值里；B008 是通用规则不适合 FastAPI
+]
+
+[tool.ruff.lint.pylint]
+max-statements = 50          # 单函数最多 50 条语句
+max-branches = 12            # 嵌套分支 ≤ 12
+max-returns = 6              # return 次数 ≤ 6
+max-args = 8                 # 位置参数 ≤ 8
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10          # 环复杂度 ≤ 10
+
+[tool.ruff.lint.per-file-ignores]
+# 测试文件宽松点
+"tests/**/*.py" = ["PLR0913", "PLR2004", "N802"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

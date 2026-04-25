@@ -1,0 +1,14 @@
+name: catfish-policy
+version: 0.1.0
+description: 鲶鱼红线策略 — 拦截高危工具调用，不审查内容
+author: Catfish Platform Team
+kind: standalone
+
+provides_hooks:
+  - pre_tool_call
+
+# 可通过环境变量禁用，比如调试时：CATFISH_POLICY_DISABLED=1
+requires_env:
+  - name: CATFISH_POLICY_DISABLED
+    required: false
+    description: "设为 1 可临时禁用所有红线（仅限调试）"

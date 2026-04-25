@@ -1,0 +1,141 @@
+# ============================================================
+# 鲶鱼网关 · 模型清单
+# ============================================================
+# tier:           private | public
+# mode:           chat | embedding
+# upstream.model: LiteLLM 完整名（必须带 provider 前缀）
+#                 e.g. openai/xxx  gemini/gemini-2.5-pro  bedrock/xxx
+#
+# fallback（P1 实现，字段先预留）：
+#   fallback:
+#     on_errors: [502, 503, 504, 429, timeout]  # 触发切换的错误码
+#     chain: [备用模型 A, 备用模型 B]          # 按顺序尝试
+#     max_hops: 2                              # 最多切几次
+# ============================================================
+
+version: 1
+
+models:
+
+  # ---------- 内部 · 主力通用 ----------
+  - name: catfish-private-main
+    tier: private
+    display_name: "Qwen3.5 122B (A10B MoE) · 主力"
+    mode: chat
+    default: true
+
+    upstream:
+      model: openai/qwen_v3_5_122b_a10b
+      api_base: http://10.10.40.102:32730/openapi/71c6900d-9d33-425b-b6c1-d4430e036c91/v1
+      api_key_env: INTERNAL_LLM_KEY
+
+    # 上游管理员确认实际支持 250K tokens。
+    # 我们对员工承诺 128K（官方主流 Qwen 3.5 心智 + 一倍以上安全余量）。
+    # 长上下文（>128K）场景推荐员工切 catfish-public-gemini-pro（2M）。
+    context_window: 128000
+    supports_tool_use: true
+    supports_streaming: true
+    recommended_for: [general, chat, tool_use, code]
+    cost_tier: free
+
+  # ---------- 内部 · 多模态 ----------
+  - name: catfish-private-vision
+    tier: private
+    display_name: "Qwen3-VL 30B (A3B MoE) · 多模态"
+    mode: chat
+
+    upstream:
+      model: openai/qwen_v3_vl_moe_30b_a3b
+      api_base: http://10.10.40.102:32730/openapi/e7aca390-9b5d-4c21-a41b-a9a9aa7eed7d/v1
+      api_key_env: INTERNAL_LLM_KEY
+
+    # 多模态模型相比主力模型 context 略窄些，留 64K 员工承诺。
+    # 真实支持大概率也是 128K+ 量级，视后续压测调整。
+    context_window: 64000
+    supports_tool_use: true
+    supports_streaming: true
+    supports_vision: true
+    recommended_for: [vision, ocr, image_analysis]
+    cost_tier: free
+
+  # ---------- 内部 · Embedding ----------
+  # ⚠️ TODO: 替换为 bge-m3 在平台上的实际部署 UUID
+  - name: catfish-private-embed
+    tier: private
+    display_name: "BGE-M3 · Embedding"
+    mode: embedding
+
+    upstream:
+      model: openai/bge-m3
+      api_base: http://10.10.40.102:32730/openapi/373cd113-3840-4b83-99bd-b228847cfc7b/v1
+      api_key_env: INTERNAL_LLM_KEY
+
+    cost_tier: free
+
+  # ---------- 公共 · Gemini 2.5 Pro（长上下文） ----------
+  # 200 万 token 上下文，适合长文档分析、跨会话回溯、复杂推理
+  # 如果 GEMINI_API_KEY 未设置，此模型不会出现在员工 catalog 中
+  - name: catfish-public-gemini-pro
+    tier: public
+    display_name: "Gemini 3.1 Pro Preview · 长上下文（公共付费）"
+    mode: chat
+
+    upstream:
+      model: gemini/gemini-3.1-pro-preview
+      api_key_env: GEMINI_API_KEY
+      # Gemini 3 系列在 temperature < 1.0 时可能陷入循环或推理质量下降
+      # 官方建议固定 1.0，不管客户端传什么
+      param_overrides:
+        temperature: 1.0
+      # Preview 模型冷启动偏慢，给足时间
+      timeout: 180
+
+    context_window: 2000000
+    supports_tool_use: true
+    supports_streaming: true
+    supports_vision: true
+    recommended_for: [long_context, complex_reasoning, vision, research]
+    cost_tier: paid
+
+  # ---------- 公共 · Gemini 2.5 Flash（快速/便宜） ----------
+  - name: catfish-public-gemini-flash
+    tier: public
+    display_name: "Gemini 3.1 Flash-Lite Preview · 快速响应（公共付费）"
+    mode: chat
+
+    upstream:
+      model: gemini/gemini-3.1-flash-lite-preview
+      api_key_env: GEMINI_API_KEY
+      # Gemini 3 系列必须 temperature = 1.0，详见 pro 配置
+      param_overrides:
+        temperature: 1.0
+      # Preview 模型冷启动偏慢，给足时间
+      timeout: 180
+
+    context_window: 1000000
+    supports_tool_use: true
+    supports_streaming: true
+    supports_vision: true
+    recommended_for: [fast, cheap, general, bulk]
+    cost_tier: paid
+
+  # ---------- (已禁用) Gemini 2.0 Flash ----------
+  # ⚠️ Google 2025 起对 free tier 管得很严：gemini-2.0-flash 在
+  # 标准免费 API key 上配额是 0（429 RESOURCE_EXHAUSTED, limit: 0）。
+  # 要用此模型需在 Google Cloud 上启用 billing。
+  # 留存模板以便未来付费 key 或 Vertex AI 路径启用。
+  #
+  # - name: catfish-public-gemini-stable
+  #   tier: public
+  #   display_name: "Gemini 2.0 Flash · 付费稳定版"
+  #   mode: chat
+  #   upstream:
+  #     model: gemini/gemini-2.0-flash
+  #     api_key_env: GEMINI_API_KEY
+  #     timeout: 60
+  #   context_window: 1000000
+  #   supports_tool_use: true
+  #   supports_streaming: true
+  #   supports_vision: true
+  #   recommended_for: [fast, general, stable]
+  #   cost_tier: paid
