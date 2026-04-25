@@ -15,7 +15,7 @@
 //! 数据全部从现有 ~/.hermes 读, 没引入任何新存储。
 
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use rusqlite::Connection;
 use serde::Serialize;
