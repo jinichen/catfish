@@ -81,7 +81,7 @@ models:
     mode: chat
 
     upstream:
-      model: gemini/gemini-3.1-pro-preview
+      model: gemini/gemini-2.5-flash
       api_key_env: GEMINI_API_KEY
       # Gemini 3 系列在 temperature < 1.0 时可能陷入循环或推理质量下降
       # 官方建议固定 1.0，不管客户端传什么

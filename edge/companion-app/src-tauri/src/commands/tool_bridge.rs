@@ -17,8 +17,9 @@ use crate::services::{catfish_paths, process};
 
 const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// 跟 Python tool-bridge 协议对齐 —— 字段都是 snake_case,
+/// 不用 rename_all="camelCase" 否则 input_schema 会被改成 inputSchema 跟 Python 错位。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ToolInfo {
     pub name: String,
     pub description: String,
@@ -29,7 +30,6 @@ pub struct ToolInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ToolCallResult {
     pub ok: bool,
     pub tool: String,

@@ -3,6 +3,7 @@
 import { useUIStore, type TabId } from "../store/ui";
 
 const TABS: { id: TabId; label: string }[] = [
+  { id: "chat", label: "对话" },
   { id: "console", label: "控制台" },
   { id: "sessions", label: "会话" },
   { id: "dashboard", label: "仪表盘" },

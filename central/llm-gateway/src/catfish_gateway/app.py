@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -37,13 +38,25 @@ def _load_dotenv() -> Path | None:
 
 _ENV_FILE_LOADED = _load_dotenv()
 
+# 关键：在 import litellm 之前先做网络层屏蔽。
+# litellm 的 aiohttp client 在 import 时就读 HTTPS_PROXY 等 env 缓存到内部 client，
+# 之后 unset os.environ 也没用了。所以 precheck_and_setup 必须在 litellm 导入之前。
+from .network import precheck_and_setup  # noqa: E402, PLC0415
+
+_NETWORK_STATUS = precheck_and_setup()
+
 import litellm  # noqa: E402
 from fastapi import Depends, FastAPI, HTTPException, Request  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import StreamingResponse  # noqa: E402
 
 from .auth import User, get_current_user, get_current_user_optional  # noqa: E402
 from .catalog import build_catalog  # noqa: E402
 from .config import Config, load_config  # noqa: E402
+from .identity_inject import (  # noqa: E402
+    header_skips_identity,
+    inject_identity_if_needed,
+)
 from .metrics import log_request_metadata  # noqa: E402
 
 # Global setup
@@ -90,7 +103,46 @@ async def lifespan(app: FastAPI):
     from .network import report_upstream_reachability  # noqa: PLC0415
     app.state.upstream_status = report_upstream_reachability(config.models)
 
+    # 后台定期重探(60s 间隔), 让 catalog 反映 VPN 起停 / Clash 起停 / 服务器恢复等。
+    # silent=True 不打 banner 免得日志被刷屏, 只用 logger.info 记一行变化。
+    async def _refresh_loop() -> None:
+        prev_reachable = {
+            n: bool(s.get("reachable"))
+            for n, s in app.state.upstream_status.items()
+        }
+        while True:
+            try:
+                await asyncio.sleep(60)
+                new_status = report_upstream_reachability(config.models, silent=True)
+                app.state.upstream_status = new_status
+
+                # 只有"可达性变化"时打日志,避免每分钟刷一行噪音
+                changes = []
+                for name, s in new_status.items():
+                    now_reach = bool(s.get("reachable"))
+                    if prev_reachable.get(name) != now_reach:
+                        arrow = "✓→" if now_reach else "✗→"
+                        changes.append(f"{name}: {arrow} {s.get('reason')}")
+                        prev_reachable[name] = now_reach
+                if changes:
+                    logger.info(
+                        "upstream reachability changed: %s",
+                        " | ".join(changes),
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("upstream refresh loop error (continuing)")
+
+    refresh_task = asyncio.create_task(_refresh_loop())
+
     yield
+
+    refresh_task.cancel()
+    try:
+        await refresh_task
+    except asyncio.CancelledError:
+        pass
     logger.info("catfish-gateway shutting down")
 
 
@@ -99,6 +151,16 @@ app = FastAPI(
     description="Company LLM routing with SSO -- part of the Catfish platform",
     version="0.1.0",
     lifespan=lifespan,
+)
+
+# CORS：Tauri webview / Companion App 跨域调 gateway 必须放过 OPTIONS preflight。
+# Dev 阶段开放所有源；P1 上线后改成白名单：tauri://localhost / companion 域名 / 公司 SaaS 域名。
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,  # 不带 cookie，dev token 走 Authorization 头
+    allow_methods=["*"],      # 含 OPTIONS / POST / GET 等
+    allow_headers=["*"],      # 含 Authorization / Content-Type / X-Catfish-* 等
 )
 
 
@@ -432,6 +494,11 @@ async def chat_completions(
     if model.mode != "chat":
         raise HTTPException(status_code=400, detail=f"model {model_name} is not a chat model")
 
+    # 鲶鱼身份注入：客户端没传 system message 就自动加 SOUL + memory
+    # Hermes 这种已自带 system 的不动；客户端可加 X-Catfish-Skip-Identity: true 强制跳过
+    skip = header_skips_identity(request.headers)
+    body["messages"] = inject_identity_if_needed(body.get("messages", []), skip=skip)
+
     params = _build_litellm_params(body, model)
 
     if bool(params.get("stream", False)):
@@ -497,12 +564,10 @@ async def embeddings(
 
 
 def run():
-    # 网络层屏蔽：员工不该 care HTTPS_PROXY / Clash 状态。
-    # gateway 启动前自检代理可达性，死掉的代理主动 unset，
-    # 强制 NO_PROXY 包含本机 + 内网，避免内部调用被错误代理劫持。
-    from .network import precheck_and_setup, print_banner  # noqa: PLC0415
-    network_status = precheck_and_setup()
-    print_banner(network_status)
+    # 网络层屏蔽已经在 module 顶部做过了（必须在 import litellm 之前）。
+    # 这里只打印之前缓存的 status banner。
+    from .network import print_banner  # noqa: PLC0415
+    print_banner(_NETWORK_STATUS)
 
     # Intentional lazy import: uvicorn only needed when launching as a script.
     import uvicorn  # noqa: PLC0415

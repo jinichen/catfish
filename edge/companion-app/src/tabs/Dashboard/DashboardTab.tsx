@@ -1,9 +1,10 @@
-/** 仪表盘 tab —— 4 张卡片：身份 / 配额 / 模型清单 / Skills+MCP */
+/** 仪表盘 tab —— 4 张卡片 + 1 张跨行的 self-evolution 卡 */
 
 import IdentityCard from "./IdentityCard";
 import QuotaCard from "./QuotaCard";
 import CatalogCard from "./CatalogCard";
 import SkillsMcpCard from "./SkillsMcpCard";
+import LearningCard from "./LearningCard";
 
 export default function DashboardTab() {
   return (
@@ -18,6 +19,7 @@ export default function DashboardTab() {
       <QuotaCard />
       <CatalogCard />
       <SkillsMcpCard />
+      <LearningCard />
     </div>
   );
 }

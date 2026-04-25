@@ -1,0 +1,329 @@
+/** 调 catfish-gateway /v1/chat/completions 的 streaming 客户端。
+ *
+ * 用 fetch + ReadableStream 解 SSE：
+ *     data: {"choices":[{"delta":{"content":"..."}}]}\n\n
+ *     data: {"choices":[{"delta":{"tool_calls":[...]}}]}\n\n
+ *     data: [DONE]\n\n
+ *
+ * SOUL/memory 注入由 gateway middleware 自动处理（决策 3b），
+ * 这里直接发 user messages 即可。
+ *
+ * tool calling: 客户端传 tools 参数,LLM 决定调哪个 → 我们执行 → 回传继续。
+ */
+
+import type { ChatMessage, ToolCall } from "../types/chat";
+import { config } from "./env";
+import { gatewayGetDevToken } from "./tauri";
+
+interface SendChatParams {
+  model: string;
+  messages: ChatMessage[];
+  /** OpenAI tool calling 兼容的 tool 定义列表,空表示不带 tools */
+  tools?: OpenAITool[];
+  /** 每个 token 来一次 */
+  onDelta: (text: string) => void;
+  /** LLM 决定调工具(stream 中 tool_calls 累积完毕)时触发 */
+  onToolCalls?: (calls: ToolCall[]) => void;
+  /** 流自然结束(finish_reason=stop / [DONE]) */
+  onDone: (info?: ChatStreamDoneInfo) => void;
+  /** 任何错误 */
+  onError: (msg: string) => void;
+  signal?: AbortSignal;
+}
+
+export interface OpenAITool {
+  type: "function";
+  function: {
+    name: string;
+    description?: string;
+    parameters: Record<string, unknown>;
+  };
+}
+
+export interface ChatUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+}
+
+export interface ChatStreamDoneInfo {
+  finish_reason?: string;
+  usage?: ChatUsage;
+}
+
+/** Token 缓存 —— 第一次调 gateway 时通过 Tauri Rust 读 .env 拿真 token,后续复用。 */
+let _cachedToken: string | null = null;
+
+async function getToken(): Promise<string> {
+  if (_cachedToken) return _cachedToken;
+  try {
+    const token = await gatewayGetDevToken();
+    _cachedToken = token;
+    return token;
+  } catch (e) {
+    console.warn("[catfish chat] 读 dev token 失败,用 fallback:", e);
+    return "dev-token-local";
+  }
+}
+
+export function _clearTokenCache(): void {
+  _cachedToken = null;
+}
+
+// ── OpenAI 兼容线格式 ──
+
+interface OpenAIWireMessage {
+  role: string;
+  content: string | null;
+  tool_calls?: Array<{
+    id: string;
+    type: "function";
+    function: { name: string; arguments: string };
+  }>;
+  tool_call_id?: string;
+}
+
+function toWire(messages: ChatMessage[]): OpenAIWireMessage[] {
+  return messages.map((m) => {
+    if (m.role === "tool") {
+      // tool 角色: content 是工具结果(已是字符串),携带 tool_call_id
+      return {
+        role: "tool",
+        content: m.content,
+        tool_call_id: m.tool_call_id,
+      };
+    }
+    if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
+      return {
+        role: "assistant",
+        content: m.content || null,
+        tool_calls: m.tool_calls.map((tc) => ({
+          id: tc.id,
+          type: "function" as const,
+          function: {
+            name: tc.name,
+            arguments: JSON.stringify(tc.args ?? {}),
+          },
+        })),
+      };
+    }
+    return {
+      role: m.role,
+      content: m.content,
+    };
+  });
+}
+
+// ── 流式 tool_calls 累积 ──
+//
+// LLM 流式返回 tool_calls 时, function.arguments 是 JSON 字符串, 分多个 chunk 来。
+// 我们用 index 做 key, 累积成完整对象, 流结束时一次性 JSON.parse。
+interface ToolCallAcc {
+  id: string;
+  name: string;
+  argumentsJson: string;
+}
+
+export async function streamChat(params: SendChatParams): Promise<void> {
+  const {
+    model,
+    messages,
+    tools,
+    onDelta,
+    onToolCalls,
+    onDone,
+    onError,
+    signal,
+  } = params;
+
+  const url = `${config.gatewayUrl}/v1/chat/completions`;
+  const body: Record<string, unknown> = {
+    model,
+    messages: toWire(messages),
+    stream: true,
+  };
+  if (tools && tools.length > 0) {
+    body.tools = tools;
+    // tool_choice 默认 auto,让 LLM 自己决定要不要调
+  }
+
+  let token: string;
+  try {
+    token = await getToken();
+  } catch (e) {
+    onError(`读 dev token 失败: ${stringify(e)}`);
+    return;
+  }
+
+  let resp: Response;
+  try {
+    resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
+  } catch (e) {
+    onError(`无法连接 gateway: ${stringify(e)}`);
+    return;
+  }
+
+  if (!resp.ok) {
+    let detail = "";
+    try {
+      const errJson = await resp.json();
+      detail = errJson?.detail?.message || JSON.stringify(errJson);
+    } catch {
+      detail = await resp.text().catch(() => "");
+    }
+    onError(`HTTP ${resp.status}: ${detail || "unknown"}`);
+    return;
+  }
+  if (!resp.body) {
+    onError("响应没有 stream body");
+    return;
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let usage: ChatUsage | undefined;
+  let finishReason: string | undefined;
+  // index → ToolCallAcc
+  const toolCallsAcc: Record<number, ToolCallAcc> = {};
+
+  function finalizeToolCallsIfAny() {
+    const indices = Object.keys(toolCallsAcc).map(Number).sort((a, b) => a - b);
+    if (indices.length === 0) return;
+
+    const finalized: ToolCall[] = [];
+    for (const idx of indices) {
+      const acc = toolCallsAcc[idx];
+      if (!acc.id || !acc.name) continue;
+      let args: Record<string, unknown> = {};
+      if (acc.argumentsJson.trim()) {
+        try {
+          args = JSON.parse(acc.argumentsJson);
+        } catch (e) {
+          // 参数解析失败 — 把原始字符串塞进去让 caller 知道
+          finalized.push({
+            id: acc.id,
+            name: acc.name,
+            args: { _raw: acc.argumentsJson, _parse_error: String(e) },
+            status: "error",
+            error: `参数 JSON 解析失败: ${e}`,
+          });
+          continue;
+        }
+      }
+      finalized.push({
+        id: acc.id,
+        name: acc.name,
+        args,
+        status: "pending",
+      });
+    }
+    if (finalized.length > 0 && onToolCalls) {
+      onToolCalls(finalized);
+    }
+  }
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) !== -1) {
+        const chunk = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+
+        const lines = chunk.split("\n");
+        for (const line of lines) {
+          if (!line.startsWith("data:")) continue;
+          const data = line.slice(5).trim();
+          if (!data) continue;
+          if (data === "[DONE]") {
+            finalizeToolCallsIfAny();
+            onDone({ finish_reason: finishReason, usage });
+            return;
+          }
+
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(data);
+          } catch {
+            continue;
+          }
+
+          if (
+            typeof parsed === "object" &&
+            parsed !== null &&
+            "error" in parsed &&
+            typeof (parsed as { error: unknown }).error === "string"
+          ) {
+            onError((parsed as { error: string }).error);
+            return;
+          }
+
+          const obj = parsed as {
+            choices?: Array<{
+              delta?: {
+                content?: string;
+                tool_calls?: Array<{
+                  index?: number;
+                  id?: string;
+                  type?: string;
+                  function?: { name?: string; arguments?: string };
+                }>;
+              };
+              finish_reason?: string | null;
+            }>;
+            usage?: ChatUsage;
+          };
+          if (obj.usage) usage = obj.usage;
+          const choice = obj.choices?.[0];
+          if (!choice) continue;
+
+          if (choice.finish_reason) finishReason = choice.finish_reason;
+
+          const delta = choice.delta;
+          if (delta?.content) onDelta(delta.content);
+
+          // 累积 tool_calls 块
+          if (delta?.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              const i = tc.index ?? 0;
+              if (!toolCallsAcc[i]) {
+                toolCallsAcc[i] = { id: "", name: "", argumentsJson: "" };
+              }
+              if (tc.id) toolCallsAcc[i].id = tc.id;
+              if (tc.function?.name) toolCallsAcc[i].name = tc.function.name;
+              if (tc.function?.arguments) {
+                toolCallsAcc[i].argumentsJson += tc.function.arguments;
+              }
+            }
+          }
+        }
+      }
+    }
+    // 流自然结束(没 [DONE]):也 finalize
+    finalizeToolCallsIfAny();
+    onDone({ finish_reason: finishReason, usage });
+  } catch (e) {
+    if ((e as Error).name === "AbortError") {
+      onDone({ finish_reason: "abort", usage });
+      return;
+    }
+    onError(`stream 中断: ${stringify(e)}`);
+  }
+}
+
+function stringify(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  return String(e);
+}

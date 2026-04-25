@@ -20,6 +20,8 @@ import type { CatalogResponse } from "../types/catalog";
 export const gatewayStart = () => rawInvoke<void>("gateway_start");
 export const gatewayStop = () => rawInvoke<void>("gateway_stop");
 export const gatewayStatus = () => rawInvoke<ServiceStatus>("gateway_status");
+export const gatewayGetDevToken = () =>
+  rawInvoke<string>("gateway_get_dev_token");
 
 // ── chrome ───────────────────────────────────────────────
 export const chromeLaunch = () => rawInvoke<void>("chrome_launch");
@@ -40,7 +42,8 @@ export const toolBridgeStatus = () =>
 export interface ToolInfo {
   name: string;
   description: string;
-  inputSchema: Record<string, unknown>;
+  /** snake_case 跟 Python tool-bridge 协议对齐;不要改 camelCase 否则解析空 */
+  input_schema: Record<string, unknown>;
   emoji: string;
   toolset: string;
   available: boolean;
@@ -62,13 +65,56 @@ export const fetchHealthz = () =>
 export const fetchCatalog = () => rawInvoke<CatalogResponse>("catalog");
 
 // ── logs ─────────────────────────────────────────────────
-export const tailLogs = (service: string, fromEnd = true) =>
+// 默认 fromEnd=false: 先 dump 老日志, 然后 tail 新增 ——
+// 员工切到 LogPanel 立刻能看到内容,不至于面对空白。
+// 长期跑的 server 日志通常 <1MB,完整 dump 一次没什么开销。
+export const tailLogs = (service: string, fromEnd = false) =>
   rawInvoke<void>("tail", { service, fromEnd });
+export const stopTailLogs = (service: string) =>
+  rawInvoke<void>("stop_tail", { service });
 
-// ── sessions ─────────────────────────────────────────────
+// ── sessions (read) ──────────────────────────────────────
 export const listSessions = () => rawInvoke<SessionMeta[]>("sessions_list");
 export const getSession = (id: string) =>
   rawInvoke<SessionDetail>("sessions_get", { id });
+
+// ── sessions (write) —— Plan C Week 2 持久化 ──
+export interface SessionCreateInput {
+  model: string;
+  title?: string;
+  systemPrompt?: string;
+}
+export interface SessionCreateOutput {
+  id: string;
+  startedAt: number;
+}
+export interface MessageAppendInput {
+  sessionId: string;
+  role: string;
+  content: string;
+  /** JSON 字符串 (OpenAI tool_calls 格式), 没有则不传 */
+  toolCalls?: string;
+  toolCallId?: string;
+  toolName?: string;
+  tokenCount?: number;
+  finishReason?: string;
+}
+export interface SessionFinalizeInput {
+  sessionId: string;
+  endReason?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+}
+export const sessionCreate = (input: SessionCreateInput) =>
+  rawInvoke<SessionCreateOutput>("session_create", { input });
+export const sessionMessageAppend = (input: MessageAppendInput) =>
+  rawInvoke<number>("session_message_append", { input });
+export const sessionFinalize = (input: SessionFinalizeInput) =>
+  rawInvoke<void>("session_finalize", { input });
+export const sessionUpdateTitle = (sessionId: string, title: string) =>
+  rawInvoke<void>("session_update_title", { sessionId, title });
+export const sessionCheck = (sessionId: string) =>
+  rawInvoke<string | null>("session_check", { sessionId });
 
 // ── identity ─────────────────────────────────────────────
 import type {
@@ -80,6 +126,11 @@ export const fetchIdentity = () => rawInvoke<IdentityInfo>("identity_info");
 export const fetchSkills = () => rawInvoke<SkillNamespace[]>("list_skills");
 export const fetchMcpServers = () =>
   rawInvoke<McpServerEntry[]>("list_mcp_servers");
+
+// ── self-evolution ──────────────────────────────────────
+import type { TodayLearningStats } from "../types/learning";
+export const fetchTodayLearningStats = () =>
+  rawInvoke<TodayLearningStats>("learning_today_stats");
 
 // ── system ───────────────────────────────────────────────
 export const openTerminal = (cwd?: string) =>

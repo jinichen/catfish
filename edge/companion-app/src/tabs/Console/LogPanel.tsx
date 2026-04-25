@@ -7,6 +7,7 @@ const SERVICES = [
   { id: "gateway", label: "Gateway" },
   { id: "chrome", label: "Chrome" },
   { id: "local_search", label: "Local Search" },
+  { id: "tool_bridge", label: "Tool Bridge" },
 ];
 
 export default function LogPanel() {

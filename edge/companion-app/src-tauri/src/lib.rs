@@ -18,6 +18,11 @@ pub fn run() {
         .setup(|app| {
             #[cfg(desktop)]
             tray::install(app.handle())?;
+
+            // 调试需要时手动打开 DevTools:右键页面 → Inspect Element,
+            // 或者在 lib.rs 里临时加 window.open_devtools() 重新编译。
+            // 之前为了 debug 自动开过,但日常用不需要。
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -25,6 +30,7 @@ pub fn run() {
             commands::gateway::gateway_start,
             commands::gateway::gateway_stop,
             commands::gateway::gateway_status,
+            commands::gateway::gateway_get_dev_token,
             // chrome
             commands::chrome::chrome_launch,
             commands::chrome::chrome_kill,
@@ -44,14 +50,23 @@ pub fn run() {
             commands::health::catalog,
             // logs
             commands::logs::tail,
-            // sessions
+            commands::logs::stop_tail,
+            // sessions (read)
             commands::sessions::sessions_list,
             commands::sessions::sessions_get,
+            // sessions (write) —— Plan C Week 2 持久化
+            commands::session_write::session_create,
+            commands::session_write::session_message_append,
+            commands::session_write::session_finalize,
+            commands::session_write::session_update_title,
+            commands::session_write::session_check,
             // identity
             commands::identity::identity_info,
             // skills + mcp
             commands::skills::list_skills,
             commands::skills::list_mcp_servers,
+            // self-evolution: 鲶鱼今天学了什么
+            commands::learning::learning_today_stats,
             // system
             commands::system::open_terminal,
             commands::system::notify,

@@ -45,6 +45,11 @@ pub fn spawn_detached(cfg: SpawnConfig) -> anyhow::Result<SpawnHandle> {
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(log_clone));
 
+    // Python 子进程在 stdout 重定向到文件时默认变 block buffering (4-8KB)，
+    // 这会让日志看上去"卡很久才出现"。强制 unbuffered 让每行立刻写盘。
+    // 对非 Python 进程 (如 Chrome) 这个 env 变量被忽略,无副作用。
+    cmd.env("PYTHONUNBUFFERED", "1");
+
     for (k, v) in &cfg.env {
         cmd.env(k, v);
     }

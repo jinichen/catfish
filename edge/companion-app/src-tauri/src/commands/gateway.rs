@@ -80,6 +80,33 @@ pub async fn gateway_stop() -> Result<(), String> {
     Ok(())
 }
 
+/// 从 gateway 的 .env 读 CATFISH_DEV_TOKEN —— Companion 调 chat 接口需要带这个。
+///
+/// 设计:员工本机跑的 Companion 透明地读 gateway .env,员工不需要手动配 token。
+/// SSO 上线后改成从 SSO session 取 access_token,弃用此 command。
+#[tauri::command]
+pub async fn gateway_get_dev_token() -> Result<String, String> {
+    let dir = catfish_paths::gateway_dir()
+        .ok_or_else(|| "找不到 gateway 目录".to_string())?;
+    let env_file = dir.join(".env");
+    if !env_file.exists() {
+        return Err(format!("{} 不存在", env_file.display()));
+    }
+    let content = std::fs::read_to_string(&env_file)
+        .map_err(|e| format!("读 .env 失败: {e}"))?;
+    for line in content.lines() {
+        let line = line.trim();
+        if line.starts_with('#') || line.is_empty() {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("CATFISH_DEV_TOKEN=") {
+            // 容忍 KEY="value" 这种带引号的写法
+            return Ok(rest.trim().trim_matches(|c| c == '"' || c == '\'').to_string());
+        }
+    }
+    Err("CATFISH_DEV_TOKEN 不在 gateway .env 里".to_string())
+}
+
 #[tauri::command]
 pub async fn gateway_status() -> Result<ServiceStatus, String> {
     // 1. 先 TCP 探活

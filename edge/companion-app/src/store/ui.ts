@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type TabId = "console" | "sessions" | "dashboard";
+export type TabId = "chat" | "console" | "sessions" | "dashboard";
 
 interface UIState {
   activeTab: TabId;
@@ -10,7 +10,8 @@ interface UIState {
 }
 
 export const useUIStore = create<UIState>((set) => ({
-  activeTab: "console",
+  // 默认进入对话 tab —— 这是员工最常用的功能
+  activeTab: "chat",
   darkMode: false,
   setActiveTab: (tab) => set({ activeTab: tab }),
   toggleDarkMode: () => set((s) => ({ darkMode: !s.darkMode })),
