@@ -21,7 +21,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict
 
-from . import adapter, bootstrap
+from . import adapter, bootstrap, catfish_tools
 
 logger = logging.getLogger("catfish.tool_bridge.server")
 
@@ -121,10 +121,13 @@ async def serve_forever(socket_path: Path) -> None:
     os.chmod(socket_path, 0o600)  # 只员工自己能连
     logger.info("listening on %s", socket_path)
 
+    hermes_count = len(adapter._r().get_all_tool_names())
+    native_count = len(catfish_tools.CATFISH_NATIVE_TOOLS)
     print("─" * 60, flush=True)
     print("🐟 catfish-tool-bridge", flush=True)
     print(f"   socket : {socket_path}", flush=True)
-    print(f"   tools  : {len(adapter._r().get_all_tool_names())} 个", flush=True)
+    print(f"   tools  : {hermes_count + native_count} 个 "
+          f"(hermes {hermes_count} + catfish 原生 {native_count})", flush=True)
     print("─" * 60, flush=True)
 
     async with server:

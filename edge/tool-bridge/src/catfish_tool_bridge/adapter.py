@@ -17,6 +17,8 @@ import logging
 import traceback
 from typing import Any, Dict, List
 
+from . import catfish_tools
+
 logger = logging.getLogger("catfish.tool_bridge.adapter")
 
 # bootstrap 后由 server 注入
@@ -41,11 +43,19 @@ def _r():
 # ============================================================
 
 def list_tools() -> List[Dict[str, Any]]:
-    """返回 OpenAI tool calling 兼容的 tool definitions。"""
+    """返回 OpenAI tool calling 兼容的 tool definitions。
+
+    输出顺序: catfish 原生 tools 排前面 (优先曝光给 LLM, prompt 里它们更早被
+    扫到), 然后是 hermes 的 builtin tools 按字母序。
+    """
     r = _r()
+    out: List[Dict[str, Any]] = list(catfish_tools.CATFISH_NATIVE_TOOLS)
+
     names = sorted(r.get_all_tool_names())
-    out = []
     for name in names:
+        # 防止重名 —— 极端情况下 catfish 想 "覆写" hermes 的 tool
+        if catfish_tools.is_native(name):
+            continue
         try:
             entry = r.get_entry(name)
             schema = r.get_schema(name)
@@ -77,6 +87,20 @@ async def dispatch_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         {"ok": bool, "result": <jsonable> | None, "error": str | None,
          "tool": name, "stderr": str | None}
     """
+    # 先看 catfish 原生 tool —— 这些不走 hermes registry, 也不要求 toolset
+    # 可用性检查 (它们就是 catfish 自己的代码, 一定在)
+    if catfish_tools.is_native(name):
+        try:
+            raw = await asyncio.to_thread(catfish_tools.dispatch_native, name, args)
+            return {"ok": True, "tool": name, "result": raw, "error": None}
+        except Exception as e:
+            logger.exception("native dispatch failed: %s", name)
+            return {
+                "ok": False, "tool": name, "result": None,
+                "error": f"{type(e).__name__}: {e}",
+                "traceback": traceback.format_exc()[:2000],
+            }
+
     r = _r()
     if name not in r.get_all_tool_names():
         return {
@@ -144,6 +168,7 @@ def health() -> Dict[str, Any]:
     r = _r()
     return {
         "ok": True,
-        "tool_count": len(r.get_all_tool_names()),
-        "toolsets": list(r.get_registered_toolset_names()),
+        "tool_count": len(r.get_all_tool_names()) + len(catfish_tools.CATFISH_NATIVE_TOOLS),
+        "native_tool_count": len(catfish_tools.CATFISH_NATIVE_TOOLS),
+        "toolsets": list(r.get_registered_toolset_names()) + ["catfish_native"],
     }
