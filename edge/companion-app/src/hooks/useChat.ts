@@ -45,11 +45,21 @@ async function ensureTools(): Promise<OpenAITool[]> {
   try {
     const list = await toolBridgeListTools();
     const usable = list.filter((t) => t.available);
+    // tool-bridge 给的 ToolInfo 是扁平: {name, description, input_schema, emoji, toolset, available}
+    // OpenAI tools API 要求: {type:"function", function:{name, description, parameters}}
+    // input_schema 仅对应 parameters 字段; 早期版本误把整个 input_schema 当 function 用了,
+    // 结果发出去的 tool 没有 name 字段, OpenAI 兼容路径 (Qwen) 宽容能跑,
+    // 但 Gemini 走 GoogleAIStudioGeminiConfig.map_openai_params 会 KeyError: 'name' 直接挂。
     const wire: OpenAITool[] = usable.map((t) => ({
       type: "function" as const,
-      // hermes 的 input_schema 已经是 {name, description, parameters} 结构,
-      // 直接当 OpenAI tool.function 用
-      function: t.input_schema as unknown as OpenAITool["function"],
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: (t.input_schema as Record<string, unknown>) ?? {
+          type: "object",
+          properties: {},
+        },
+      },
     }));
     _cachedTools = wire;
     console.info(

@@ -31,12 +31,42 @@ pub struct SessionMeta {
     pub message_count: u32,
     /// input + output + cache_read + cache_write + reasoning 之和
     pub total_tokens: u64,
+    /// "cli" (Hermes 起的) / "companion" (Companion 起的) / null (老数据)
+    /// 给左侧 sidebar 区分来源加 badge 用
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+/// 完整消息 —— 给 ChatPanel resume 历史用 (Plan C Week 3)
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionMessage {
+    /// SQLite rowid 当 React key
+    pub id: i64,
+    /// "user" / "assistant" / "system" / "tool"
+    pub role: String,
+    /// 可能为空 (assistant 仅做 tool_call 时)
+    pub content: String,
+    /// JSON string of OpenAI tool_calls array, None 表示这条不是工具调用
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<String>,
+    /// 工具结果消息会有 tool_call_id 关联回 assistant 的 tool_calls[].id
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    /// 给 tool 角色的工具名 (有些场景需要按工具分组渲染)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    /// ISO-8601 UTC
+    pub timestamp: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionDetail {
     pub meta: SessionMeta,
+    /// 全部消息 —— 给 resume / 完整查看用; 按 timestamp asc
+    pub messages: Vec<SessionMessage>,
+    /// 老接口字段, 保留兼容现有 SessionsTab 的 SessionDetail UI
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_user_message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -102,7 +132,8 @@ fn list_blocking() -> Result<Vec<SessionMeta>, String> {
                 COALESCE(output_tokens, 0) +
                 COALESCE(cache_read_tokens, 0) +
                 COALESCE(cache_write_tokens, 0) +
-                COALESCE(reasoning_tokens, 0) AS total_tokens
+                COALESCE(reasoning_tokens, 0) AS total_tokens,
+                source
             FROM sessions
             ORDER BY started_at DESC
             LIMIT ?1
@@ -124,10 +155,12 @@ fn list_blocking() -> Result<Vec<SessionMeta>, String> {
 fn detail_blocking(id: String) -> Result<SessionDetail, String> {
     let conn = open_db()?;
     let meta = meta_by_id(&conn, &id)?;
+    let messages = messages_blocking(&conn, &id)?;
     let last_user = last_message(&conn, &id, "user")?;
     let last_assistant = last_message(&conn, &id, "assistant")?;
     Ok(SessionDetail {
         meta,
+        messages,
         last_user_message: last_user,
         last_assistant_message: last_assistant,
     })
@@ -144,7 +177,8 @@ fn meta_by_id(conn: &Connection, id: &str) -> Result<SessionMeta, String> {
             COALESCE(output_tokens, 0) +
             COALESCE(cache_read_tokens, 0) +
             COALESCE(cache_write_tokens, 0) +
-            COALESCE(reasoning_tokens, 0) AS total_tokens
+            COALESCE(reasoning_tokens, 0) AS total_tokens,
+            source
         FROM sessions
         WHERE id = ?1
     "#,
@@ -185,6 +219,7 @@ fn last_message(conn: &Connection, id: &str, role: &str) -> Result<Option<String
 }
 
 /// SQL row → SessionMeta 的共享转换器
+/// 列序: id, title, model, started_at, ended_at, end_reason, message_count, total_tokens, source
 fn row_to_meta(row: &rusqlite::Row) -> rusqlite::Result<SessionMeta> {
     Ok(SessionMeta {
         id: row.get(0)?,
@@ -197,7 +232,44 @@ fn row_to_meta(row: &rusqlite::Row) -> rusqlite::Result<SessionMeta> {
         end_reason: row.get(5)?,
         message_count: row.get::<_, i64>(6)?.max(0) as u32,
         total_tokens: row.get::<_, i64>(7)?.max(0) as u64,
+        source: row.get(8)?,
     })
+}
+
+/// 拉某 session 的全部 messages, 给 resume 用。按 timestamp asc + rowid asc 稳定排序。
+fn messages_blocking(conn: &Connection, id: &str) -> Result<Vec<SessionMessage>, String> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT
+                rowid, role, COALESCE(content, ''),
+                tool_calls, tool_call_id, tool_name, timestamp
+            FROM messages
+            WHERE session_id = ?1
+            ORDER BY timestamp ASC, rowid ASC
+        "#,
+        )
+        .map_err(|e| format!("SQL 准备失败: {e}"))?;
+
+    let rows = stmt
+        .query_map(params![id], |row| {
+            Ok(SessionMessage {
+                id: row.get(0)?,
+                role: row.get(1)?,
+                content: truncate(row.get::<_, String>(2)?),
+                tool_calls: row.get(3)?,
+                tool_call_id: row.get(4)?,
+                tool_name: row.get(5)?,
+                timestamp: unix_to_iso(row.get(6)?),
+            })
+        })
+        .map_err(|e| format!("SQL 查询失败: {e}"))?;
+
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r.map_err(|e| format!("行解析失败: {e}"))?);
+    }
+    Ok(out)
 }
 
 // ============================================================

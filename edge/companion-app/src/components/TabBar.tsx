@@ -2,10 +2,10 @@
 
 import { useUIStore, type TabId } from "../store/ui";
 
+// 注: "会话" tab 已并入 "对话" 的左侧 sidebar (P0-3.1), 这里不再列出
 const TABS: { id: TabId; label: string }[] = [
   { id: "chat", label: "对话" },
   { id: "console", label: "控制台" },
-  { id: "sessions", label: "会话" },
   { id: "dashboard", label: "仪表盘" },
 ];
 

@@ -291,3 +291,318 @@ pub async fn session_check(session_id: String) -> Result<Option<String>, String>
     .await
     .map_err(|e| format!("内部错误: {e}"))?
 }
+
+// ============================================================
+// 单测 —— 重点验证: id 唯一性, append/finalize/title 4 happy paths,
+//          + 并发写不挂 (模拟 hermes 同时写 state.db 的场景)
+//
+// 跑法: cd src-tauri && cargo test --lib commands::session_write
+//
+// 不依赖真 hermes —— 用一个临时目录假装是 $HOME, 自己建个 schema 兼容的 db。
+// ============================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+
+    /// 测试用建一个跟 hermes state.db 兼容的最小 schema
+    /// (只建 session_write.rs 用到的字段, 比真 schema 少很多)
+    fn create_test_schema(conn: &Connection) {
+        conn.execute_batch(
+            r#"
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                source TEXT,
+                model TEXT,
+                model_config TEXT,
+                system_prompt TEXT,
+                started_at REAL,
+                ended_at REAL,
+                end_reason TEXT,
+                message_count INTEGER DEFAULT 0,
+                tool_call_count INTEGER DEFAULT 0,
+                input_tokens INTEGER DEFAULT 0,
+                output_tokens INTEGER DEFAULT 0,
+                cache_read_tokens INTEGER DEFAULT 0,
+                cache_write_tokens INTEGER DEFAULT 0,
+                reasoning_tokens INTEGER DEFAULT 0,
+                title TEXT
+            );
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT,
+                tool_call_id TEXT,
+                tool_calls TEXT,
+                tool_name TEXT,
+                timestamp REAL,
+                token_count INTEGER,
+                finish_reason TEXT
+            );
+            "#,
+        )
+        .expect("create_test_schema");
+    }
+
+    /// HOME env 是进程级共享, 多 test 并发会互相覆盖 —— 用一个 mutex 串行化。
+    /// (这是 Rust test 跑 env-mutating code 的标准 workaround)
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// 设 HOME 指向 tmp_dir, 在那建好 .hermes/state.db, 返回 TempDir 把所有权
+    /// 交给调用者 (drop 时清理目录)。
+    fn setup_test_env() -> (TempDir, std::sync::MutexGuard<'static, ()>) {
+        let guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = TempDir::new().expect("tempdir");
+        let hermes = tmp.path().join(".hermes");
+        std::fs::create_dir_all(&hermes).unwrap();
+        let db_path = hermes.join("state.db");
+        let conn = Connection::open(&db_path).unwrap();
+        create_test_schema(&conn);
+        std::env::set_var("HOME", tmp.path());
+        (tmp, guard)
+    }
+
+    // ---------- random_hex_6 ----------
+
+    #[test]
+    fn random_hex_6_format() {
+        let s = random_hex_6();
+        assert_eq!(s.len(), 6);
+        assert!(s.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn random_hex_6_not_constant() {
+        // 跑 100 次, 至少要有 5 个不同结果 (LCG 不是密码学随机, 但快速连续调
+        // 也不该全相同 —— 历史 bug: 之前用 nanos%16 在 6 次连续 <1μs 内输出
+        // 全相同, 改 LCG 后修复)。
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..100 {
+            seen.insert(random_hex_6());
+        }
+        assert!(
+            seen.len() >= 5,
+            "random_hex_6 太弱, 100 次只产出 {} 个不同值",
+            seen.len()
+        );
+    }
+
+    #[test]
+    fn generate_session_id_format() {
+        let id = generate_session_id();
+        // YYYYMMDD_HHMMSS_xxxxxx —— 总长 8+1+6+1+6 = 22
+        assert_eq!(id.len(), 22, "id should be 22 chars: {id}");
+        let parts: Vec<&str> = id.split('_').collect();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0].len(), 8); // date
+        assert_eq!(parts[1].len(), 6); // time
+        assert_eq!(parts[2].len(), 6); // hex
+    }
+
+    // ---------- happy paths ----------
+
+    #[tokio::test]
+    async fn session_create_inserts_row() {
+        let (_tmp, _g) = setup_test_env();
+        let out = session_create(SessionCreateInput {
+            model: "test-model".into(),
+            title: Some("hi".into()),
+            system_prompt: Some("be nice".into()),
+        })
+        .await
+        .expect("create");
+        assert!(!out.id.is_empty());
+        assert!(out.started_at > 0.0);
+
+        let conn = Connection::open(state_db_path().unwrap()).unwrap();
+        let (model, source, title): (String, String, String) = conn
+            .query_row(
+                "SELECT model, source, title FROM sessions WHERE id = ?1",
+                params![out.id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(model, "test-model");
+        assert_eq!(source, "companion");
+        assert_eq!(title, "hi");
+    }
+
+    #[tokio::test]
+    async fn session_message_append_increments_counts() {
+        let (_tmp, _g) = setup_test_env();
+        let s = session_create(SessionCreateInput {
+            model: "m".into(),
+            title: None,
+            system_prompt: None,
+        })
+        .await
+        .unwrap();
+
+        // 普通消息, 不计 tool_call_count
+        session_message_append(MessageAppendInput {
+            session_id: s.id.clone(),
+            role: "user".into(),
+            content: "hi".into(),
+            tool_calls: None,
+            tool_call_id: None,
+            tool_name: None,
+            token_count: None,
+            finish_reason: None,
+        })
+        .await
+        .unwrap();
+
+        // 带 tool_calls 的消息, 计 tool_call_count
+        session_message_append(MessageAppendInput {
+            session_id: s.id.clone(),
+            role: "assistant".into(),
+            content: String::new(),
+            tool_calls: Some("[{\"name\":\"x\"}]".into()),
+            tool_call_id: None,
+            tool_name: None,
+            token_count: None,
+            finish_reason: None,
+        })
+        .await
+        .unwrap();
+
+        let conn = Connection::open(state_db_path().unwrap()).unwrap();
+        let (mc, tcc): (i64, i64) = conn
+            .query_row(
+                "SELECT message_count, tool_call_count FROM sessions WHERE id = ?1",
+                params![s.id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(mc, 2);
+        assert_eq!(tcc, 1);
+    }
+
+    #[tokio::test]
+    async fn session_finalize_writes_ended_and_tokens() {
+        let (_tmp, _g) = setup_test_env();
+        let s = session_create(SessionCreateInput {
+            model: "m".into(),
+            title: None,
+            system_prompt: None,
+        })
+        .await
+        .unwrap();
+
+        session_finalize(SessionFinalizeInput {
+            session_id: s.id.clone(),
+            end_reason: Some("user_close".into()),
+            input_tokens: Some(100),
+            output_tokens: Some(200),
+        })
+        .await
+        .unwrap();
+
+        let conn = Connection::open(state_db_path().unwrap()).unwrap();
+        let (ended, reason, in_tok, out_tok): (Option<f64>, String, i64, i64) = conn
+            .query_row(
+                "SELECT ended_at, end_reason, input_tokens, output_tokens FROM sessions WHERE id = ?1",
+                params![s.id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert!(ended.is_some());
+        assert_eq!(reason, "user_close");
+        assert_eq!(in_tok, 100);
+        assert_eq!(out_tok, 200);
+    }
+
+    #[tokio::test]
+    async fn session_update_title_and_check() {
+        let (_tmp, _g) = setup_test_env();
+        let s = session_create(SessionCreateInput {
+            model: "m".into(),
+            title: None,
+            system_prompt: None,
+        })
+        .await
+        .unwrap();
+
+        session_update_title(s.id.clone(), "新标题".into())
+            .await
+            .unwrap();
+
+        let conn = Connection::open(state_db_path().unwrap()).unwrap();
+        let title: String = conn
+            .query_row(
+                "SELECT title FROM sessions WHERE id = ?1",
+                params![s.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(title, "新标题");
+
+        // session_check 应该返回 source = companion
+        let src = session_check(s.id.clone()).await.unwrap();
+        assert_eq!(src, Some("companion".into()));
+
+        // 不存在的 id → None
+        let none = session_check("nope".into()).await.unwrap();
+        assert_eq!(none, None);
+    }
+
+    // ---------- 并发: 模拟 hermes 也在写, busy_timeout 挡得住 ----------
+
+    #[tokio::test]
+    async fn concurrent_appends_dont_lose_messages() {
+        let (_tmp, _g) = setup_test_env();
+        let s = session_create(SessionCreateInput {
+            model: "m".into(),
+            title: None,
+            system_prompt: None,
+        })
+        .await
+        .unwrap();
+
+        // 10 条消息 spawn 出去并发 append
+        let id = s.id.clone();
+        let mut handles = Vec::new();
+        for i in 0..10 {
+            let id = id.clone();
+            handles.push(tokio::spawn(async move {
+                session_message_append(MessageAppendInput {
+                    session_id: id,
+                    role: "user".into(),
+                    content: format!("msg {i}"),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    tool_name: None,
+                    token_count: None,
+                    finish_reason: None,
+                })
+                .await
+            }));
+        }
+        for h in handles {
+            h.await.unwrap().expect("append succeeded");
+        }
+
+        let conn = Connection::open(state_db_path().unwrap()).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE session_id = ?1",
+                params![s.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 10);
+
+        let mc: i64 = conn
+            .query_row(
+                "SELECT message_count FROM sessions WHERE id = ?1",
+                params![s.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(mc, 10);
+    }
+}

@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
-export type TabId = "chat" | "console" | "sessions" | "dashboard";
+// "sessions" tab 已并入 "chat" 的 sidebar (P0-3.1 后), 不再单独 tab
+export type TabId = "chat" | "console" | "dashboard";
 
 interface UIState {
   activeTab: TabId;

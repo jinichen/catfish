@@ -30,5 +30,9 @@ thiserror = "1.0"
 log = "0.4"
 env_logger = "0.11"
 
+[dev-dependencies]
+# tempfile: 给单测建临时 ~/.hermes 目录用 (session_write / learning / endpoints)
+tempfile = "3"
+
 [features]
 custom-protocol = ["tauri/custom-protocol"]

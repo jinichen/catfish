@@ -4,11 +4,12 @@
  * 用户切到"控制台"再切回"对话"看不到之前的对话。
  *
  * 现在 store 是单例,跨组件 mount/unmount 持久。
- * Week 3 持久化时(写 state.db),从这个 store 钩 listener 即可。
+ * Week 3 持久化 (state.db 持久 + sidebar 切换 + resume 历史) 钩这个 store。
  */
 
 import { create } from "zustand";
-import type { ChatMessage } from "../types/chat";
+import type { ChatMessage, ToolCall } from "../types/chat";
+import type { SessionDetail, SessionMessage } from "../types/session";
 
 interface ChatState {
   /** 当前对话所有消息 */
@@ -32,7 +33,67 @@ interface ChatState {
   setStreamingId: (id: string | null) => void;
   setModel: (m: string) => void;
   setPersistedSessionId: (id: string | null) => void;
+  /**
+   * 把一个历史会话 (从 sessions_get 拿到的 SessionDetail) 灌进 store, 用于 resume。
+   * - 把 DB 里的 SessionMessage[] 映射成 ChatMessage[]
+   * - 设 persistedSessionId 让后续 send 顺着同一个 session 续写
+   * - reset streaming 状态 (历史一定不在 streaming 中)
+   * - model 也跟随 session 的 model (但不强制, 调用方可以再 setModel)
+   */
+  loadSession: (detail: SessionDetail) => void;
   reset: () => void;
+}
+
+/** SessionMessage (DB 行) -> ChatMessage (UI 运行时) 映射。
+ *  - tool_calls JSON 反序列化成 ToolCall[], status 一律 "done" (历史已完成)
+ *  - 不解析 tool 角色消息的 result 字段, 直接当 content 显示
+ */
+function dbMessageToChat(m: SessionMessage): ChatMessage {
+  let toolCalls: ToolCall[] | undefined;
+  if (m.toolCalls) {
+    try {
+      const parsed = JSON.parse(m.toolCalls);
+      if (Array.isArray(parsed)) {
+        toolCalls = parsed.map((tc, i) => ({
+          id: String(tc.id ?? `historical-${m.id}-${i}`),
+          name: String(tc.function?.name ?? tc.name ?? "(unknown)"),
+          args: safeParseArgs(tc.function?.arguments ?? tc.arguments),
+          status: "done" as const,
+        }));
+      }
+    } catch {
+      // 解析坏了不致命, 历史记录里有畸形 tool_calls 就忽略
+    }
+  }
+  // ChatRole 是 union, 兜底成 "assistant" 避免 string 不被接受
+  const role = (["user", "assistant", "system", "tool"] as const).includes(
+    m.role as never,
+  )
+    ? (m.role as ChatMessage["role"])
+    : "assistant";
+  return {
+    id: `db-${m.id}`,
+    role,
+    content: m.content,
+    tool_calls: toolCalls,
+    tool_call_id: m.toolCallId,
+    ts: m.timestamp,
+    status: "done",
+  };
+}
+
+function safeParseArgs(raw: unknown): Record<string, unknown> {
+  if (raw == null) return {};
+  if (typeof raw === "object") return raw as Record<string, unknown>;
+  if (typeof raw === "string") {
+    try {
+      const v = JSON.parse(raw);
+      return v && typeof v === "object" ? (v as Record<string, unknown>) : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
 }
 
 export const useChatStore = create<ChatState>((set) => ({
@@ -43,8 +104,7 @@ export const useChatStore = create<ChatState>((set) => ({
   persistedSessionId: null,
 
   setMessages: (messages) => set({ messages }),
-  addMessage: (msg) =>
-    set((s) => ({ messages: [...s.messages, msg] })),
+  addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
   updateMessage: (id, update) =>
     set((s) => ({
       messages: s.messages.map((m) =>
@@ -62,6 +122,14 @@ export const useChatStore = create<ChatState>((set) => ({
   setModel: (model) => set({ model }),
   setPersistedSessionId: (persistedSessionId) =>
     set({ persistedSessionId }),
+  loadSession: (detail) =>
+    set({
+      messages: detail.messages.map(dbMessageToChat),
+      isStreaming: false,
+      streamingId: null,
+      model: detail.meta.model,
+      persistedSessionId: detail.meta.id,
+    }),
   reset: () =>
     set({
       messages: [],

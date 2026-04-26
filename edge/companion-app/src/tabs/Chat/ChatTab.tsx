@@ -1,9 +1,20 @@
-/** 对话 tab 顶层 —— 头部(标题 + 模型选择 + 新对话) + 主面板 */
+/** 对话 tab 顶层 —— 左侧 SessionList sidebar | 右侧 ChatPanel。
+ *
+ * Plan C Week 3 (P0-3.1 + 3.2):
+ *   - 左侧拉 ~/.hermes/state.db sessions, 区分 cli/companion 来源
+ *   - 点列表项 → sessions_get 拉全部 messages → ChatStore.loadSession
+ *   - "+ 新对话" → reset store, persistedSessionId 清空, 下次 send 自动新建
+ *   - 流式输出中, sidebar 切换 / 新建按钮禁用 (避免条件竞争)
+ */
 
+import { useCallback, useState } from "react";
 import { useChat } from "../../hooks/useChat";
+import { useChatStore } from "../../store/chat";
+import { useCatalog } from "../../hooks/useCatalog";
+import { getSession } from "../../lib/tauri";
 import ChatPanel from "./ChatPanel";
 import ChatModelPicker from "./ChatModelPicker";
-import { useCatalog } from "../../hooks/useCatalog";
+import ChatSidebar from "./ChatSidebar";
 
 export default function ChatTab() {
   const { catalog } = useCatalog();
@@ -21,90 +32,148 @@ export default function ChatTab() {
     reset,
   } = useChat(defaultModel);
 
-  // catalog 加载后, 如果当前 model 还是初始 fallback, 校正成 catalog default
-  // (不放 useEffect 里, 简单起见 mount 后用户手动选即可)
+  const persistedSessionId = useChatStore((s) => s.persistedSessionId);
+  const loadSession = useChatStore((s) => s.loadSession);
+
+  /** 父组件持有 sidebar 的 refresh key —— 发完一条消息后 bump 让左侧列表重拉 */
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const handleSelect = useCallback(
+    async (id: string) => {
+      if (id === persistedSessionId) return; // 点的就是当前
+      try {
+        const detail = await getSession(id);
+        loadSession(detail);
+        setLoadError(null);
+      } catch (e) {
+        console.error("[catfish chat] 切换会话失败:", e);
+        setLoadError(`切换失败: ${e}`);
+      }
+    },
+    [persistedSessionId, loadSession],
+  );
+
+  const handleNew = useCallback(() => {
+    if (messages.length === 0 && !persistedSessionId) return;
+    reset();
+    setLoadError(null);
+  }, [messages.length, persistedSessionId, reset]);
+
+  /** 包一层 send: 完成后 bump refreshKey 让 sidebar 看到新会话 / 新 message_count */
+  const handleSend = useCallback(
+    async (text: string) => {
+      await send(text);
+      setRefreshKey((k) => k + 1);
+    },
+    [send],
+  );
 
   return (
     <div
       style={{
         display: "flex",
-        flexDirection: "column",
+        flexDirection: "row",
         height: "100%",
+        minHeight: 0,
       }}
     >
-      <header
+      <ChatSidebar
+        activeId={persistedSessionId}
+        onSelect={handleSelect}
+        onNew={handleNew}
+        refreshKey={refreshKey}
+        busy={isStreaming}
+      />
+
+      <div
         style={{
+          flex: 1,
+          minWidth: 0,
           display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "var(--space-3) var(--space-4)",
-          borderBottom: "1px solid var(--catfish-border)",
-          background: "var(--catfish-bg-elevated)",
-          gap: "var(--space-3)",
+          flexDirection: "column",
+          height: "100%",
         }}
       >
-        <div
+        <header
           style={{
             display: "flex",
             alignItems: "center",
-            gap: "var(--space-2)",
-            fontSize: 13,
-            fontWeight: 600,
+            justifyContent: "space-between",
+            padding: "var(--space-3) var(--space-4)",
+            borderBottom: "1px solid var(--catfish-border)",
+            background: "var(--catfish-bg-elevated)",
+            gap: "var(--space-3)",
           }}
         >
-          <span>🐟 对话</span>
-          {messages.length > 0 && (
-            <span
-              style={{
-                fontSize: 11,
-                color: "var(--catfish-text-muted)",
-                fontWeight: 400,
-              }}
-            >
-              · {messages.length} 条消息
-            </span>
-          )}
-        </div>
-
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "var(--space-2)",
-          }}
-        >
-          <ChatModelPicker current={model} onChange={setModel} />
-          <button
-            onClick={() => {
-              if (messages.length === 0) return;
-              if (confirm("清空当前对话开始新对话？")) reset();
-            }}
-            disabled={messages.length === 0 || isStreaming}
+          <div
             style={{
-              padding: "4px 10px",
-              fontSize: 12,
-              border: "1px solid var(--catfish-border)",
-              borderRadius: "var(--radius-sm)",
-              background: "transparent",
-              color: "var(--catfish-text-muted)",
-              cursor:
-                messages.length === 0 || isStreaming ? "default" : "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: "var(--space-2)",
+              fontSize: 13,
+              fontWeight: 600,
+              minWidth: 0,
             }}
           >
-            + 新对话
-          </button>
-        </div>
-      </header>
+            <span>🐟 对话</span>
+            {persistedSessionId && (
+              <span
+                title={persistedSessionId}
+                style={{
+                  fontSize: 11,
+                  color: "var(--catfish-text-muted)",
+                  fontWeight: 400,
+                  fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  maxWidth: 200,
+                }}
+              >
+                · {persistedSessionId}
+              </span>
+            )}
+            {messages.length > 0 && (
+              <span
+                style={{
+                  fontSize: 11,
+                  color: "var(--catfish-text-muted)",
+                  fontWeight: 400,
+                }}
+              >
+                · {messages.length} 条
+              </span>
+            )}
+          </div>
 
-      <div style={{ flex: 1, minHeight: 0 }}>
-        <ChatPanel
-          messages={messages}
-          isStreaming={isStreaming}
-          streamingId={streamingId}
-          onSend={send}
-          onCancel={cancel}
-          onReset={reset}
-        />
+          <ChatModelPicker current={model} onChange={setModel} />
+        </header>
+
+        {loadError && (
+          <div
+            style={{
+              padding: "8px 12px",
+              fontSize: 12,
+              background: "rgba(220, 38, 38, 0.08)",
+              color: "#dc2626",
+              borderBottom: "1px solid var(--catfish-border)",
+            }}
+          >
+            {loadError}
+          </div>
+        )}
+
+        <div style={{ flex: 1, minHeight: 0 }}>
+          <ChatPanel
+            messages={messages}
+            isStreaming={isStreaming}
+            streamingId={streamingId}
+            onSend={handleSend}
+            onCancel={cancel}
+            onReset={reset}
+          />
+        </div>
       </div>
     </div>
   );

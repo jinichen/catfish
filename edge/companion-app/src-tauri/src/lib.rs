@@ -23,6 +23,11 @@ pub fn run() {
             // 或者在 lib.rs 里临时加 window.open_devtools() 重新编译。
             // 之前为了 debug 自动开过,但日常用不需要。
 
+            // 后台静默拉起 gateway + tool-bridge —— 不让员工手动按"启动"。
+            // tool-bridge 没起来 = 聊天工具列表为空 = Gemini 退化到 native tool_code。
+            // 见 services/autostart.rs 详细说明。
+            services::autostart::schedule_autostart();
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

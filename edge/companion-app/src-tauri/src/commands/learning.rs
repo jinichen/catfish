@@ -308,6 +308,130 @@ fn build_summary(
 }
 
 // ============================================================
+// 单测 —— pure logic (frontmatter parser / 时间边界 / summary builder)
+// I/O 部分 (collect_memories / collect_db_stats) 跟 Python catfish_tools.py
+// 测试镜像 (见 edge/tool-bridge/tests/test_catfish_tools.py 的 16 个边界)
+// 跑法: cargo test --lib commands::learning
+// ============================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---------- extract_description ----------
+
+    #[test]
+    fn extract_description_basic() {
+        let text = "---\nname: foo\ndescription: hello world\n---\n# Body";
+        assert_eq!(extract_description(text), Some("hello world".into()));
+    }
+
+    #[test]
+    fn extract_description_quoted() {
+        let text = "---\ndescription: \"quoted value\"\n---\n";
+        assert_eq!(extract_description(text), Some("quoted value".into()));
+    }
+
+    #[test]
+    fn extract_description_single_quoted() {
+        let text = "---\ndescription: 'single'\n---\n";
+        assert_eq!(extract_description(text), Some("single".into()));
+    }
+
+    #[test]
+    fn extract_description_no_frontmatter() {
+        let text = "# 直接是 markdown";
+        assert_eq!(extract_description(text), None);
+    }
+
+    #[test]
+    fn extract_description_no_description_field() {
+        let text = "---\nname: foo\nversion: 1\n---\n";
+        assert_eq!(extract_description(text), None);
+    }
+
+    #[test]
+    fn extract_description_empty_value_skipped() {
+        let text = "---\ndescription:\n---\n";
+        assert_eq!(extract_description(text), None);
+    }
+
+    #[test]
+    fn extract_description_unterminated_frontmatter() {
+        let text = "---\ndescription: never closed\n";
+        assert_eq!(extract_description(text), None);
+    }
+
+    // ---------- 时间边界 ----------
+
+    #[test]
+    fn today_start_is_in_past() {
+        let start = today_start_unix();
+        let now = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        assert!(start <= now, "today_start should be <= now");
+        assert!(now - start < 86_400.0, "today_start should be < 24h ago");
+    }
+
+    #[test]
+    fn is_today_true_for_recent() {
+        let now = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        assert!(is_today(now));
+    }
+
+    #[test]
+    fn is_today_false_for_yesterday() {
+        let yesterday = today_start_unix() - 1.0;
+        assert!(!is_today(yesterday));
+    }
+
+    // ---------- build_summary ----------
+
+    #[test]
+    fn build_summary_no_activity() {
+        let s = build_summary(0, 0, 0, 0);
+        assert!(s.contains("还没动静"));
+    }
+
+    #[test]
+    fn build_summary_mixed_activity() {
+        let s = build_summary(2, 1, 5, 12);
+        assert!(s.contains("5 次对话"));
+        assert!(s.contains("12 次工具"));
+        assert!(s.contains("2 条 memory"));
+        assert!(s.contains("1 个 skill"));
+    }
+
+    #[test]
+    fn build_summary_only_sessions() {
+        let s = build_summary(0, 0, 3, 0);
+        assert!(s.contains("3 次对话"));
+        assert!(!s.contains("memory"));
+        assert!(!s.contains("skill"));
+        assert!(!s.contains("工具"));
+    }
+
+    // ---------- unix_to_iso ----------
+
+    #[test]
+    fn unix_to_iso_basic() {
+        // 2026-04-26 00:00:00 UTC = 1777161600
+        let iso = unix_to_iso(1777161600.0);
+        assert!(iso.starts_with("2026-04-26"));
+    }
+
+    #[test]
+    fn unix_to_iso_zero_returns_unix_epoch() {
+        let iso = unix_to_iso(0.0);
+        assert!(iso.starts_with("1970-01-01"));
+    }
+}
+
+// ============================================================
 // Tauri command
 // ============================================================
 
