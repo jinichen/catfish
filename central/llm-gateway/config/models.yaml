@@ -11,6 +11,11 @@
 #     on_errors: [502, 503, 504, 429, timeout]  # 触发切换的错误码
 #     chain: [备用模型 A, 备用模型 B]          # 按顺序尝试
 #     max_hops: 2                              # 最多切几次
+#
+# env-var 插值:
+#   字符串值里写 ${VAR} 或 ${VAR:-default}, 加载时从 os.environ 替换。
+#   敏感信息 (内网 hostname / UUID / base URL) 不直接写进 yaml,
+#   而是通过 .env 注入。详见 .env.example。
 # ============================================================
 
 version: 1
@@ -26,7 +31,8 @@ models:
 
     upstream:
       model: openai/qwen_v3_5_122b_a10b
-      api_base: http://10.10.40.102:32730/openapi/71c6900d-9d33-425b-b6c1-d4430e036c91/v1
+      # api_base 完整 URL 走 env 注入,避免 hostname/UUID 进版本库
+      api_base: ${INTERNAL_LLM_BASE_QWEN_MAIN}
       api_key_env: INTERNAL_LLM_KEY
 
     # 上游管理员确认实际支持 250K tokens。
@@ -46,7 +52,7 @@ models:
 
     upstream:
       model: openai/qwen_v3_vl_moe_30b_a3b
-      api_base: http://10.10.40.102:32730/openapi/e7aca390-9b5d-4c21-a41b-a9a9aa7eed7d/v1
+      api_base: ${INTERNAL_LLM_BASE_QWEN_VISION}
       api_key_env: INTERNAL_LLM_KEY
 
     # 多模态模型相比主力模型 context 略窄些，留 64K 员工承诺。
@@ -67,12 +73,42 @@ models:
 
     upstream:
       model: openai/bge-m3
-      api_base: http://10.10.40.102:32730/openapi/373cd113-3840-4b83-99bd-b228847cfc7b/v1
+      api_base: ${INTERNAL_LLM_BASE_BGE_M3}
       api_key_env: INTERNAL_LLM_KEY
 
     cost_tier: free
 
-  # ---------- 公共 · Gemini 2.5 Pro（长上下文） ----------
+  # ---------- 公共 · 阿里云百炼 Qwen3.6-Flash ----------
+  # DashScope OpenAI 兼容端点。没配 DASHSCOPE_API_KEY 时不出现在 catalog。
+  # 模型详情: https://bailian.console.aliyun.com/model-market/detail/qwen3.6-flash
+  #   - 256K 上下文
+  #   - 多模态: 文本 + 图像 + 视频 + 音频输入
+  #   - function calling
+  #   - 重点提升 agentic coding 能力
+  #   - 价格: 输入 ¥1.2/M tok, 输出 ¥7.2/M tok
+  # 用途:
+  #   - 内网 Qwen (catfish-private-main) 不可达时的公共备份
+  #   - Gemini 免费配额耗尽时的 fallback
+  #   - 出差 / 公司外网络场景
+  - name: catfish-public-qwen-flash
+    tier: public
+    display_name: "Qwen3.6-Flash · 通义千问快速多模态（公共付费）"
+    mode: chat
+
+    upstream:
+      model: openai/qwen3.6-flash
+      api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api_key_env: DASHSCOPE_API_KEY
+      timeout: 90  # 多模态请求图像/视频处理偏慢, 给宽裕
+
+    context_window: 262144  # 256K
+    supports_tool_use: true
+    supports_streaming: true
+    supports_vision: true
+    recommended_for: [general, chat, tool_use, vision, code, fast, fallback]
+    cost_tier: paid
+
+  # ---------- 公共 · Gemini 3.1 Pro（长上下文） ----------
   # 200 万 token 上下文，适合长文档分析、跨会话回溯、复杂推理
   # 如果 GEMINI_API_KEY 未设置，此模型不会出现在员工 catalog 中
   - name: catfish-public-gemini-pro
@@ -81,7 +117,7 @@ models:
     mode: chat
 
     upstream:
-      model: gemini/gemini-2.5-flash
+      model: gemini/gemini-3.1-pro-preview
       api_key_env: GEMINI_API_KEY
       # Gemini 3 系列在 temperature < 1.0 时可能陷入循环或推理质量下降
       # 官方建议固定 1.0，不管客户端传什么
@@ -96,6 +132,13 @@ models:
     supports_vision: true
     recommended_for: [long_context, complex_reasoning, vision, research]
     cost_tier: paid
+
+    # 撞 429 / 503 / timeout 时自动落回 Qwen3.6-Flash
+    # (Qwen 没配 key 时自动跳过, 直接返回错误给客户端)
+    fallback:
+      on_errors: [429, 503, 504, "timeout"]
+      chain: [catfish-public-qwen-flash, catfish-private-main]
+      max_hops: 2
 
   # ---------- 公共 · Gemini 2.5 Flash（快速/便宜） ----------
   - name: catfish-public-gemini-flash
@@ -116,26 +159,11 @@ models:
     supports_tool_use: true
     supports_streaming: true
     supports_vision: true
+    # Gemini Flash 是免费层, 配额最容易耗尽, 必须有 fallback
+    fallback:
+      on_errors: [429, 503, 504, "timeout"]
+      chain: [catfish-public-qwen-flash, catfish-private-main]
+      max_hops: 2
     recommended_for: [fast, cheap, general, bulk]
     cost_tier: paid
 
-  # ---------- (已禁用) Gemini 2.0 Flash ----------
-  # ⚠️ Google 2025 起对 free tier 管得很严：gemini-2.0-flash 在
-  # 标准免费 API key 上配额是 0（429 RESOURCE_EXHAUSTED, limit: 0）。
-  # 要用此模型需在 Google Cloud 上启用 billing。
-  # 留存模板以便未来付费 key 或 Vertex AI 路径启用。
-  #
-  # - name: catfish-public-gemini-stable
-  #   tier: public
-  #   display_name: "Gemini 2.0 Flash · 付费稳定版"
-  #   mode: chat
-  #   upstream:
-  #     model: gemini/gemini-2.0-flash
-  #     api_key_env: GEMINI_API_KEY
-  #     timeout: 60
-  #   context_window: 1000000
-  #   supports_tool_use: true
-  #   supports_streaming: true
-  #   supports_vision: true
-  #   recommended_for: [fast, general, stable]
-  #   cost_tier: paid

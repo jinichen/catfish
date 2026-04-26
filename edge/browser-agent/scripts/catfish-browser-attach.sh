@@ -9,7 +9,8 @@
 # 做的事：
 #   1. 检查 Chrome 是否以 --remote-debugging-port=9222 方式运行
 #   2. 没运行就帮员工启动一个（带恢复上次会话 + tabs）
-#   3. 从 http://localhost:9222/json/version 抓 webSocketDebuggerUrl
+#   3. 从 http://$CATFISH_CHROME_DEBUG_HOST:$CATFISH_CHROME_DEBUG_PORT/json/version 抓 webSocketDebuggerUrl
+#      (默认 127.0.0.1:9222，可由 env var 覆写)
 #   4. 幂等地写进 ~/.hermes/config.yaml 的 browser.cdp_url
 #   5. 提示员工下次 hermes browser_navigate 就 <3 秒了
 #
@@ -18,8 +19,9 @@
 
 set -euo pipefail
 
-PORT=9222
-DEBUG_URL="http://localhost:$PORT/json/version"
+PORT="${CATFISH_CHROME_DEBUG_PORT:-9222}"
+HOST="${CATFISH_CHROME_DEBUG_HOST:-127.0.0.1}"
+DEBUG_URL="http://${HOST}:${PORT}/json/version"
 HERMES_CONFIG="$HOME/.hermes/config.yaml"
 
 # Chrome 的安全策略（2024 起）：默认 profile 下 --remote-debugging-port 被静默忽略，
@@ -125,7 +127,7 @@ if [ "$CHROME_ALREADY_UP" = "0" ]; then
         echo "    自己诊断一下："
         echo "        pgrep -fl 'Google Chrome'       # 进程在不在"
         echo "        lsof -iTCP:$PORT -sTCP:LISTEN   # 9222 有没有人监听"
-        echo "        curl -v http://localhost:$PORT/json/version  # 看详细错误"
+        echo "        curl -v http://${HOST}:${PORT}/json/version  # 看详细错误"
         echo ""
         echo "    可能原因："
         echo "        1. Chrome 正在恢复大量 tab，30 秒还没完。等它完再 curl 看看，通了就手动跑第 3/4 步"

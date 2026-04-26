@@ -3,14 +3,30 @@
 设计点：
     读员工在 ~/.hermes/config.yaml 里已经配好的 browser.cdp_url，
     避免让员工重复配 CDP WebSocket 地址。
+
+Env vars (跟 Companion 端 services::endpoints 同名约定):
+    CATFISH_GATEWAY_HOST   默认 127.0.0.1
+    CATFISH_GATEWAY_PORT   默认 8999
+    CATFISH_GATEWAY_URL    完整 URL, 优先级最高 (覆盖 host/port)
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
 import yaml
+
+
+def _default_gateway_url() -> str:
+    """默认 gateway URL —— 跟 Companion / .env.example 一份配置同源。"""
+    full = os.environ.get("CATFISH_GATEWAY_URL", "").strip()
+    if full:
+        return full.rstrip("/")
+    host = os.environ.get("CATFISH_GATEWAY_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    port = os.environ.get("CATFISH_GATEWAY_PORT", "8999").strip() or "8999"
+    return f"http://{host}:{port}"
 
 CATFISH_HOME = Path.home() / ".catfish"
 CONFIG_FILE = CATFISH_HOME / "feishu.yaml"
@@ -44,7 +60,8 @@ handlers:
   auto_draft: true               # 预生成回复草稿到 ~/.catfish/feishu-drafts/
 
 draft:
-  gateway_url: "http://127.0.0.1:8999"
+  # gateway_url 留空时, 回落到 CATFISH_GATEWAY_URL 或 host+port env (默认 127.0.0.1:8999)
+  gateway_url: ""
   model: "catfish-private-main"
   max_length: 200
   tone: "简洁、专业、不卑不亢，跟领导说话别太客套"
@@ -85,7 +102,7 @@ class HandlerConfig:
 
 @dataclass
 class DraftConfig:
-    gateway_url: str = "http://127.0.0.1:8999"
+    gateway_url: str = field(default_factory=_default_gateway_url)
     model: str = "catfish-private-main"
     max_length: int = 200
     tone: str = "简洁、专业、不卑不亢"
@@ -173,7 +190,7 @@ def _parse_handlers(d: dict[str, Any]) -> HandlerConfig:
 
 def _parse_draft(d: dict[str, Any]) -> DraftConfig:
     return DraftConfig(
-        gateway_url=str(d.get("gateway_url") or "http://127.0.0.1:8999"),
+        gateway_url=str(d.get("gateway_url") or _default_gateway_url()),
         model=str(d.get("model") or "catfish-private-main"),
         max_length=int(d.get("max_length") or 200),
         tone=str(d.get("tone") or "简洁、专业、不卑不亢"),

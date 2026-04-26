@@ -51,7 +51,8 @@ rules:
       - "api.x.ai"
     reason: |
       检测到直接调用公共 LLM 端点。请通过鲶鱼网关
-      (localhost:8999) 访问模型，以保证数据主权与用量可见。
+      (CATFISH_GATEWAY_URL，默认 http://127.0.0.1:8999) 访问模型，
+      以保证数据主权与用量可见。
 
   # ---------- R4: 本机钥匙串 / Credential Manager ----------
   - id: no-keychain-access

@@ -24,6 +24,29 @@ CATFISH_VERSION="0.1.0"
 CATFISH_HOME="${CATFISH_HOME:-$HOME/.catfish}"
 HERMES_BIN="${HERMES_BIN:-hermes}"
 
+# 端口 / 主机（跟 Companion services::endpoints + feishu config 同名约定）
+CATFISH_GATEWAY_HOST="${CATFISH_GATEWAY_HOST:-127.0.0.1}"
+CATFISH_GATEWAY_PORT="${CATFISH_GATEWAY_PORT:-8999}"
+CATFISH_CHROME_DEBUG_HOST="${CATFISH_CHROME_DEBUG_HOST:-127.0.0.1}"
+CATFISH_CHROME_DEBUG_PORT="${CATFISH_CHROME_DEBUG_PORT:-9222}"
+
+# ---------- 代理环境净化 ----------
+# 背景: hermes 的 httpx client 只看 HTTPS_PROXY (无视 NO_PROXY), 员工 shell 里
+#       常设 HTTPS_PROXY=127.0.0.1:7890 (Clash/Mihomo) → hermes 把"调网关"的
+#       请求劫到代理上, 反正 7890 不知道怎么转发到 8999, 直接 connection refused。
+# 决策: 敲 catfish 时把代理 env 全 unset 再 exec hermes。
+#       gateway 是 localhost, 不需要代理。 gateway 自己内部调上游公网 LLM (Gemini
+#       等) 时它的 network.py 会按需走代理, 跟 hermes 这边的 env 无关。
+# 影响范围: 只影响 hermes 子进程, 不动 shell。Git / 浏览器 / 等照常走代理。
+# 留逃生口: 设 CATFISH_KEEP_PROXY=1 关掉这个净化 (调试 / 极端场景)。
+nuke_proxy_for_hermes() {
+    if [ -n "${CATFISH_KEEP_PROXY:-}" ]; then
+        return 0
+    fi
+    unset HTTPS_PROXY HTTP_PROXY ALL_PROXY
+    unset https_proxy http_proxy all_proxy
+}
+
 # ---------- 颜色（可被 NO_COLOR / 非 tty 关掉）----------
 
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -66,19 +89,21 @@ cmd_status() {
     echo
 
     # 1. Gateway
+    local gw_endpoint="${CATFISH_GATEWAY_HOST}:${CATFISH_GATEWAY_PORT}"
     echo "${BOLD}[Gateway]${RESET}"
-    if curl -sSf -m 2 http://127.0.0.1:8999/health >/dev/null 2>&1; then
-        echo "    ${GREEN}OK${RESET} catfish-gateway 跑着 (127.0.0.1:8999)"
+    if curl -sSf -m 2 "http://${gw_endpoint}/health" >/dev/null 2>&1; then
+        echo "    ${GREEN}OK${RESET} catfish-gateway 跑着 (${gw_endpoint})"
     else
         echo "    ${YELLOW}OFF${RESET} gateway 没起。启动：cd central/llm-gateway && python -m catfish_gateway.app"
     fi
     echo
 
     # 2. Catfish Chrome
+    local chrome_endpoint="${CATFISH_CHROME_DEBUG_HOST}:${CATFISH_CHROME_DEBUG_PORT}"
     echo "${BOLD}[Catfish Chrome]${RESET}"
-    if curl -sSf -m 2 http://127.0.0.1:9222/json/version >/dev/null 2>&1; then
-        chrome_ver="$(curl -s http://127.0.0.1:9222/json/version | python3 -c "import sys,json;print(json.load(sys.stdin).get('Browser',''))" 2>/dev/null || echo unknown)"
-        echo "    ${GREEN}OK${RESET} CDP 9222 通 ($chrome_ver)"
+    if curl -sSf -m 2 "http://${chrome_endpoint}/json/version" >/dev/null 2>&1; then
+        chrome_ver="$(curl -s "http://${chrome_endpoint}/json/version" | python3 -c "import sys,json;print(json.load(sys.stdin).get('Browser',''))" 2>/dev/null || echo unknown)"
+        echo "    ${GREEN}OK${RESET} CDP ${CATFISH_CHROME_DEBUG_PORT} 通 ($chrome_ver)"
     else
         echo "    ${YELLOW}OFF${RESET} 没起。启动：bash edge/browser-agent/scripts/catfish-browser-attach.sh"
     fi
@@ -164,10 +189,12 @@ main() {
             ;;
         --raw)
             shift
+            nuke_proxy_for_hermes
             exec "$HERMES_BIN" "$@"
             ;;
         --no-banner)
             shift
+            nuke_proxy_for_hermes
             exec "$HERMES_BIN" "$@"
             ;;
         -h|--help)
@@ -183,14 +210,21 @@ ${BOLD}catfish${RESET} - 鲶鱼平台员工入口
     catfish version            看版本
     catfish <hermes 子命令>    透传给 hermes（chat / model / mcp / sessions ...）
 
+环境变量:
+    CATFISH_KEEP_PROXY=1       不要 unset HTTPS_PROXY/HTTP_PROXY (默认 unset 防代理劫持 localhost)
+    CATFISH_GATEWAY_HOST        默认 127.0.0.1
+    CATFISH_GATEWAY_PORT        默认 8999
+    CATFISH_CHROME_DEBUG_PORT   默认 9222
+
 一切问题先跑 catfish doctor 看哪条红 / 黄。
 EOF
             exit 0
             ;;
     esac
 
-    # 默认：打 banner，进入 hermes
+    # 默认：打 banner，净化代理 env，进入 hermes
     banner
+    nuke_proxy_for_hermes
     exec "$HERMES_BIN" "$@"
 }
 

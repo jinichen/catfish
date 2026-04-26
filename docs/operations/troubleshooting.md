@@ -3,6 +3,10 @@
 > 基于真实部署踩坑整理。遇到问题按顺序查，大部分能自己搞定。
 >
 > 覆盖范围：员工自装鲶鱼遇到的常见问题 + 平台侧运维问题。
+>
+> **变量约定**：本手册示例命令里 `$INTERNAL_LLM_HOST` 指代你公司内部 LLM
+> 平台的 IP/hostname（来自 `INTERNAL_LLM_BASE_*` env vars 的 host 部分），
+> 跑命令前请 `export INTERNAL_LLM_HOST=10.x.x.x` 或直接替换为实际值。
 
 ---
 
@@ -19,7 +23,7 @@ ps aux | grep catfish_gateway | grep -v grep
 env | grep -i proxy
 
 # 3. 到内网的路由是什么？
-route get 10.10.40.102 2>&1 | head -10
+route get $INTERNAL_LLM_HOST 2>&1 | head -10
 ```
 
 三条结果决定后续怎么查。
@@ -57,31 +61,49 @@ env | grep -i proxy
 ```
 
 看到 `HTTPS_PROXY=http://127.0.0.1:7890` 或类似？这是 Clash / V2ray / 公司代理。
-Python httpx 同时读 HTTP_PROXY 和 HTTPS_PROXY，哪怕目标是 `http://localhost`，
-只要设了 HTTPS_PROXY，httpx 也会走代理。代理不知道怎么处理本地地址，返 502。
+Hermes 自身的 OpenAI client 用 httpx，但**忽略 `NO_PROXY` 环境变量**
+（`trust_env=False` 类配置），所以哪怕目标是 `http://localhost`，
+只要设了 HTTPS_PROXY，httpx 也会走代理。代理不知道怎么处理本地地址，
+返 502 或 connection refused。
 
-**临时修：**
+**先验证是不是这个问题（用 curl 绕开代理）：**
 ```bash
-unset HTTPS_PROXY https_proxy HTTP_PROXY http_proxy ALL_PROXY
-hermes
+curl --noproxy '*' -sf http://localhost:8999/healthz
+```
+- 返回 `{"status":"ok",...}` → gateway 没问题，确认是 hermes 的代理问题
+- 失败 → gateway 自己挂了，跟代理无关，去查 1.1
+
+**正确修法：用 `catfish` 命令而不是裸 `hermes`**
+
+`edge/branding/catfish` wrapper 已经内置代理净化，敲 `catfish` 自动 unset
+`HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` 再 exec hermes，员工 shell 的代理
+设置不动（浏览器 / git 等照常）。
+
+```bash
+# ✅ 标准用法
+catfish
+
+# ❌ 别裸跑 hermes
+hermes  # 撞代理
+
+# ⚠ 极少数调试场景需要保留代理
+CATFISH_KEEP_PROXY=1 catfish
 ```
 
-**永久修（Clash Verge）：**
-打开 Clash -> 设置 -> 规则 -> 直连列表，加入：
+**临时修（如果一定要用裸 hermes）：**
+```bash
+HTTPS_PROXY= HTTP_PROXY= ALL_PROXY= hermes
+```
+
+**Clash Verge 用户也建议设直连规则（多一道保险，浏览器/curl 等也受益）：**
+打开 Clash → 设置 → 规则 → 直连列表，加入：
 - `localhost`
 - `127.0.0.1/8`
 - `10.0.0.0/8`
 - `192.168.0.0/16`
 
-**永久修（~/.zshrc 给 hermes 加 wrapper）：**
-```bash
-cat >> ~/.zshrc << 'EOF'
-function hermes() {
-  env -u HTTPS_PROXY -u https_proxy -u HTTP_PROXY -u http_proxy command hermes "$@"
-}
-EOF
-source ~/.zshrc
-```
+> 注：Companion App **不受影响**，它内部 spawn 的 gateway 进程独立处理代理
+> （`network.py` 启动时检测代理可达性后自动 unset）。
 
 ---
 
@@ -105,7 +127,7 @@ Cannot connect to host 10.10.x.x
 
 ```bash
 ifconfig | grep utun    # 有 utun0/utun1... 说明 VPN 接口在
-route get 10.10.40.102  # gateway 不能是 default 路由的家里网关
+route get $INTERNAL_LLM_HOST  # gateway 不能是 default 路由的家里网关
 ```
 
 如果 `gateway: 172.20.10.1`（你手机热点）或 `gateway: 192.168.1.1`（家里路由）
@@ -118,7 +140,7 @@ route get 10.10.40.102  # gateway 不能是 default 路由的家里网关
 ```bash
 INTERNAL_KEY=$(grep INTERNAL_LLM_KEY /Users/chenhongbo/person_task/catfish/central/llm-gateway/.env | cut -d= -f2)
 curl -s -o /dev/null -w "%{http_code} · %{time_total}s\n" --max-time 5 \
-  http://10.10.40.102:32730/openapi/YOUR-UUID/v1/models \
+  http://$INTERNAL_LLM_HOST:32730/openapi/YOUR-UUID/v1/models \
   -H "Authorization: Bearer $INTERNAL_KEY"
 ```
 
@@ -146,7 +168,7 @@ curl -s -o /dev/null -w "%{http_code} · %{time_total}s\n" --max-time 5 \
 ### 症状
 
 ```bash
-curl ... http://10.10.40.102:...
+curl ... http://$INTERNAL_LLM_HOST:...
 HTTP 502 · 0.004s
 ```
 

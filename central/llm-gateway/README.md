@@ -17,7 +17,7 @@
 ## 环境要求
 
 - Python **3.12**（推荐，最稳定）
-- 能访问公司内部 LLM 平台（本项目默认 `10.10.40.102:32730`）
+- 能访问公司内部 LLM 平台（地址通过 `INTERNAL_LLM_BASE_*` env vars 注入，详见 `.env.example`）
 
 ---
 
@@ -41,8 +41,8 @@ python -m catfish_gateway.app
 ```
 
 访问：
-- `http://localhost:8000/docs` — FastAPI 自动文档
-- `http://localhost:8000/health` — 健康检查
+- `http://localhost:8999/docs` — FastAPI 自动文档
+- `http://localhost:8999/healthz` — 健康检查
 
 ---
 
@@ -76,7 +76,7 @@ docker compose logs -f
 ```yaml
 llm:
   provider: openai
-  api_base: http://<gateway-host>:8000/v1
+  api_base: http://<gateway-host>:8999/v1
   api_key: <dev-token-or-sso-token>
   model: catfish-private-main
 ```
@@ -84,10 +84,50 @@ llm:
 或者用环境变量：
 
 ```bash
-export OPENAI_API_BASE=http://<gateway-host>:8000/v1
+export OPENAI_API_BASE=http://<gateway-host>:8999/v1
 export OPENAI_API_KEY=<dev-token>
 export OPENAI_MODEL_NAME=catfish-private-main
 ```
+
+---
+
+## ⚠ 用 `catfish` 命令，**不要**裸跑 `hermes`
+
+公司网络环境通常有代理（Clash / Mihomo 等监听 7890 端口），员工 shell 里
+`HTTPS_PROXY=http://127.0.0.1:7890` 是常态。
+
+**问题**：hermes 自身的 OpenAI client 用 httpx 但**忽略 `NO_PROXY` 环境变量**
+（`trust_env=False` 或类似配置）。结果：
+
+- hermes 调网关 `http://localhost:8999` 时，httpx 把请求发给代理 `:7890`
+- 代理不知道怎么转发到本地 `:8999` → `connection refused`
+- 员工看到 `APIConnectionError`，以为网关挂了，但其实 gateway 跑得好好的
+
+**修法**：用 `catfish` 命令（`edge/branding/catfish`）替代裸 `hermes`。
+catfish wrapper 在 `exec hermes` 前会 unset `HTTPS_PROXY` / `HTTP_PROXY` /
+`ALL_PROXY`，hermes 子进程拿不到代理变量，直接走 localhost。Shell 里的代理
+设置不动，浏览器、git 等照常走代理。
+
+```bash
+# ✅ 推荐用法
+catfish
+
+# ❌ 不要这样，会撞代理
+hermes
+
+# ⚠ 极少数调试场景需要保留代理给 hermes
+CATFISH_KEEP_PROXY=1 catfish
+```
+
+如果验证：
+```bash
+# 这条不走代理，能通说明 gateway 没问题
+curl --noproxy '*' -sf http://localhost:8999/healthz
+# {"status":"ok","service":"catfish-gateway"}
+```
+
+> Companion App 不受影响 —— 它内部 spawn 的 gateway 进程独立处理代理（`network.py`
+> 启动时检测代理可达性后自动 unset）。
 
 ---
 

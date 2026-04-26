@@ -7,10 +7,8 @@
 use std::time::Duration;
 
 use crate::commands::types::ServiceStatus;
-use crate::services::{catfish_paths, process};
+use crate::services::{catfish_paths, endpoints, process};
 
-const GATEWAY_PORT: u16 = 8999;
-const GATEWAY_BASE: &str = "http://127.0.0.1:8999";
 const TCP_TIMEOUT: Duration = Duration::from_millis(800);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -37,13 +35,16 @@ pub async fn gateway_start() -> Result<(), String> {
         .ok_or_else(|| "找不到 PID 文件路径".to_string())?;
 
     // 3. spawn
+    let ep = endpoints::endpoints();
     let cfg = process::SpawnConfig {
         program: python,
         args: vec!["-m".into(), "catfish_gateway.app".into()],
         log_path,
         working_dir: dir,
         env: vec![
-            ("PORT".into(), GATEWAY_PORT.to_string()),
+            // gateway 自己读 PORT 环境变量决定监听端口; 我们把 endpoints 配置
+            // 透传过去, 保证前后端口一致 (员工只用配一个 CATFISH_GATEWAY_PORT)
+            ("PORT".into(), ep.gateway_port.to_string()),
             // gateway 内部仍可走代理调外网模型，所以 HTTPS_PROXY 透传
             // gateway 自己的 network.py 会处理代理可达性
         ],
@@ -109,11 +110,13 @@ pub async fn gateway_get_dev_token() -> Result<String, String> {
 
 #[tauri::command]
 pub async fn gateway_status() -> Result<ServiceStatus, String> {
+    let ep = endpoints::endpoints();
+
     // 1. 先 TCP 探活
-    let tcp_alive = probe_tcp("127.0.0.1", GATEWAY_PORT).await;
+    let tcp_alive = probe_tcp(&ep.gateway_host, ep.gateway_port).await;
     if !tcp_alive {
         return Ok(ServiceStatus::down(
-            Some(GATEWAY_PORT),
+            Some(ep.gateway_port),
             "未启动 — 点 \"启动\" 按钮拉起",
         ));
     }
@@ -129,9 +132,9 @@ pub async fn gateway_status() -> Result<ServiceStatus, String> {
         running: true,
         healthy,
         pid,
-        port: Some(GATEWAY_PORT),
+        port: Some(ep.gateway_port),
         message: Some(if healthy {
-            format!("已连接 :{GATEWAY_PORT}")
+            format!("已连接 :{}", ep.gateway_port)
         } else {
             "TCP 通但 /healthz 失败 — 检查 .env / dev token".into()
         }),
@@ -157,8 +160,9 @@ async fn probe_healthz() -> bool {
         Ok(c) => c,
         Err(_) => return false,
     };
+    let base = endpoints::endpoints().gateway_base();
     client
-        .get(format!("{GATEWAY_BASE}/healthz"))
+        .get(format!("{base}/healthz"))
         .send()
         .await
         .map(|r| r.status().is_success())

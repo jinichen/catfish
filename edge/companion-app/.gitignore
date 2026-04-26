@@ -6,6 +6,10 @@ node_modules/
 dist/
 dist-ssr/
 
+# tsc -b 把 vite.config.ts 编译出的副产物 (build-only, 不入库)
+vite.config.d.ts
+vite.config.js
+
 # Tauri
 src-tauri/target/
 # Cargo.lock 应该 commit (二进制项目锁版本)，不忽略

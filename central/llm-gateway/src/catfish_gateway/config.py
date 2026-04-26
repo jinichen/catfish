@@ -1,13 +1,58 @@
-"""Config loader -- parse models.yaml and provide access helpers."""
+"""Config loader -- parse models.yaml and provide access helpers.
+
+Env-var 插值:
+    YAML 里允许写 ${VAR} 或 ${VAR:-default}, 加载时从 os.environ 替换。
+    设计目的: 让 models.yaml 里不出现内网 IP / UUID / API base 等敏感信息,
+    全部通过 env 注入。开源出去时 yaml 是干净的占位符模板。
+
+    支持语法 (只在 string value 里识别):
+        ${VAR}            必需; 没设置就报错
+        ${VAR:-default}   可选, 没设置时用 default
+
+    嵌入式 (一行可有多个占位符) + 嵌套 dict/list 全递归处理。
+"""
 
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field
+
+# ${VAR} 或 ${VAR:-default}; default 段允许空, 但不允许出现 } 字面
+# (复杂的 default 自己加引号即可避开)
+_ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+
+
+def _interpolate_env(value: Any) -> Any:
+    """递归把 ${VAR} / ${VAR:-default} 替换为 os.environ 里的值。
+
+    递归边界: str / dict / list 才递归; 其它类型 (int/bool/None) 原样返回。
+    """
+    if isinstance(value, dict):
+        return {k: _interpolate_env(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_interpolate_env(v) for v in value]
+    if not isinstance(value, str):
+        return value
+
+    def _sub(match: re.Match[str]) -> str:
+        var = match.group(1)
+        default = match.group(2)
+        env_val = os.environ.get(var)
+        if env_val is not None:
+            return env_val
+        if default is not None:
+            return default
+        raise RuntimeError(
+            f"env variable ${{{var}}} is referenced in config but not set "
+            f"(use ${{{var}:-default}} 给 fallback 或在 .env 里设)"
+        )
+
+    return _ENV_PATTERN.sub(_sub, value)
 
 
 class UpstreamConfig(BaseModel):
@@ -48,6 +93,32 @@ class UpstreamConfig(BaseModel):
         return bool(os.environ.get(self.api_key_env))
 
 
+class FallbackConfig(BaseModel):
+    """模型 fallback 链配置 —— 上游错误时自动切到下一个模型。
+
+    设计:
+        on_errors: 触发 fallback 的错误码/类型集合。429 (配额) / 503 (上游不可用) /
+                   504 / "timeout" 是默认。其它错误 (400 客户端错 / 401 鉴权错) 不
+                   走 fallback —— 切模型不会修。
+        chain:    按顺序尝试的 model name 列表。第一个挂了试第二个, 以此类推。
+        max_hops: 最多跳几次。防 chain 互相循环 (a→b, b→a) 卡死。
+
+    用法:
+        catfish-public-gemini-pro 配 chain=[catfish-public-qwen-flash]
+        Gemini 撞 429 → gateway 透明地用 Qwen 重试同一个 messages, 员工无感。
+
+    展望:
+        未来可加 chain 选择策略 (cheap_first / fast_first / quality_first),
+        现在按 yaml 顺序就够。
+    """
+
+    on_errors: list = Field(
+        default_factory=lambda: [429, 503, 504, "timeout"],
+    )
+    chain: list[str] = Field(default_factory=list)
+    max_hops: int = 2
+
+
 class ModelConfig(BaseModel):
     """A single model the gateway can route to."""
 
@@ -65,6 +136,9 @@ class ModelConfig(BaseModel):
     supports_vision: bool = False
     recommended_for: list[str] = Field(default_factory=list)
     cost_tier: str = "free"  # free | paid
+
+    # P1: 上游失败时自动切到 chain 里下一个模型。空 chain (默认) 表示不 fallback。
+    fallback: FallbackConfig | None = None
 
 
 class Config(BaseModel):
@@ -105,4 +179,9 @@ def load_config(path: Path | None = None) -> Config:
 
     with open(path) as f:
         data = yaml.safe_load(f)
+
+    # 在 pydantic validate 之前先做 env 插值 —— 这样 ModelConfig 拿到的就是
+    # 已经替换好的真实值 (api_base / 任何 ${VAR} 占位符都被替换), validation
+    # 也能正确工作 (例如必填字段没设默认时能立即报清楚错)
+    data = _interpolate_env(data)
     return Config.model_validate(data)

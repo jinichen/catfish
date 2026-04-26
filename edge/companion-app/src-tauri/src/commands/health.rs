@@ -8,7 +8,8 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-const GATEWAY_BASE: &str = "http://127.0.0.1:8999";
+use crate::services::endpoints;
+
 const HTTP_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// 既要 Deserialize（reqwest 解 gateway 返回）也要 Serialize（送给前端）
@@ -22,8 +23,9 @@ pub struct HealthzResp {
 #[tauri::command]
 pub async fn healthz() -> Result<HealthzResp, String> {
     let client = build_client()?;
+    let base = endpoints::endpoints().gateway_base();
     let resp = client
-        .get(format!("{GATEWAY_BASE}/healthz"))
+        .get(format!("{base}/healthz"))
         .send()
         .await
         .map_err(|e| format!("连接失败：{e}"))?;
@@ -41,8 +43,9 @@ pub async fn healthz() -> Result<HealthzResp, String> {
 #[tauri::command]
 pub async fn catalog() -> Result<Value, String> {
     let client = build_client()?;
+    let base = endpoints::endpoints().gateway_base();
     let resp = client
-        .get(format!("{GATEWAY_BASE}/v1/catalog"))
+        .get(format!("{base}/v1/catalog"))
         .send()
         .await
         .map_err(|e| format!("连接失败：{e}"))?;

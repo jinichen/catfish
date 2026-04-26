@@ -9,9 +9,8 @@
 use std::time::Duration;
 
 use crate::commands::types::ServiceStatus;
-use crate::services::{catfish_paths, process};
+use crate::services::{catfish_paths, endpoints, process};
 
-const CHROME_DEBUG_PORT: u16 = 9222;
 const TCP_TIMEOUT: Duration = Duration::from_millis(800);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -37,10 +36,11 @@ pub async fn chrome_launch() -> Result<(), String> {
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| std::env::temp_dir());
 
+    let chrome_port = endpoints::endpoints().chrome_port;
     let cfg = process::SpawnConfig {
         program: chrome_bin,
         args: vec![
-            format!("--remote-debugging-port={CHROME_DEBUG_PORT}"),
+            format!("--remote-debugging-port={chrome_port}"),
             format!("--user-data-dir={}", user_data_dir.display()),
             "--no-first-run".into(),
             "--no-default-browser-check".into(),
@@ -83,9 +83,12 @@ pub async fn chrome_kill() -> Result<(), String> {
 
 #[tauri::command]
 pub async fn chrome_status() -> Result<ServiceStatus, String> {
+    let ep = endpoints::endpoints();
+    let host = ep.chrome_host.clone();
+    let port = ep.chrome_port;
     let tcp_alive = tokio::time::timeout(
         TCP_TIMEOUT,
-        tokio::net::TcpStream::connect(("127.0.0.1", CHROME_DEBUG_PORT)),
+        tokio::net::TcpStream::connect((host.as_str(), port)),
     )
     .await
     .map(|r| r.is_ok())
@@ -93,19 +96,20 @@ pub async fn chrome_status() -> Result<ServiceStatus, String> {
 
     if !tcp_alive {
         return Ok(ServiceStatus::down(
-            Some(CHROME_DEBUG_PORT),
+            Some(port),
             "未启动 — 点 \"启动\" 拉起 Catfish Chrome",
         ));
     }
 
     // 9222 通了再 GET /json/version 确认是 DevTools 协议
+    let chrome_base = ep.chrome_base();
     let healthy = match reqwest::Client::builder()
         .timeout(HTTP_TIMEOUT)
         .no_proxy()
         .build()
     {
         Ok(c) => c
-            .get(format!("http://127.0.0.1:{CHROME_DEBUG_PORT}/json/version"))
+            .get(format!("{chrome_base}/json/version"))
             .send()
             .await
             .map(|r| r.status().is_success())
@@ -120,9 +124,9 @@ pub async fn chrome_status() -> Result<ServiceStatus, String> {
         running: true,
         healthy,
         pid,
-        port: Some(CHROME_DEBUG_PORT),
+        port: Some(port),
         message: Some(if healthy {
-            format!("DevTools 已就绪 :{CHROME_DEBUG_PORT}")
+            format!("DevTools 已就绪 :{port}")
         } else {
             "TCP 通但非 Chrome DevTools — 端口被别的进程占了？".into()
         }),
