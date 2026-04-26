@@ -700,6 +700,206 @@ Google 从 2024 年起禁止默认 profile 开调试端口，防止恶意软件�
 
 ---
 
+## 2026-04-26（周日）
+
+**今日主轴**：按 TOMORROW.md 节奏起手 —— P0-1 Self-Evolution M2 落地。
+
+### 完成
+
+#### P0-1 · `catfish_today_summary` 原生工具（~40 min）
+
+修昨晚截图里的 UX bug：员工问"今天学了什么"时，LLM 调 `session_search` 翻历史，答非所问。给 LLM 一个明确的 native tool 直接回答今日活动。
+
+- 新增 `catfish/edge/tool-bridge/src/catfish_tool_bridge/catfish_tools.py`（~210 行）
+  - `CATFISH_NATIVE_TOOLS` schema：description 显式告诉 LLM 这个 tool 用于回答"今日"问题，而不是 `session_search`/`memory_recall`
+  - `collect_today_summary()` 直读 `~/.hermes/USER.md` + `memories/*.md` + `skills/<ns>/<name>/SKILL.md` mtime + `state.db` sessions/messages —— 与 `learning.rs` 同一份逻辑的 Python 镜像
+  - 故意不走 IPC 调 Companion：tool-bridge 起来时 Companion 不一定开着（CLI 也在用）
+  - sqlite 用 `mode=ro` 只读连接，免得污染 hermes 自己的 WAL
+- `adapter.py` 接入：
+  - `list_tools()` native 排前面 + 重名 hermes tool 跳过
+  - `dispatch_tool()` native 不走 hermes registry / toolset 可用性检查
+  - `health()` 区分 hermes / native tool 数
+- `server.py` 启动 banner 显示 `(hermes 60 + catfish 原生 1)` 拆分
+- 测试：`tests/test_catfish_tools.py`（16 单测）+ `tests/test_adapter.py`（7 单测）
+  - 边界覆盖：无 `~/.hermes` / USER.md 昨天改 / memories 子目录混合 / SKILL.md 无 frontmatter / state.db 不存在 / state.db schema 错乱
+  - adapter 覆盖：native 排序、重名跳过、dispatch 不依赖 registry、health 字段
+  - **23/23 通过，0.05s**
+
+### 踩坑
+
+- **Python 字符串里的 ASCII 双引号** —— 第一版 description 写成 `回答员工的"今日"问题`，里面是 ASCII `"` 不是中文 `"`，整个字符串被截断，第二个 `"` 后变成裸标识符，`SyntaxError: invalid syntax. Perhaps you forgot a comma?` 指向行首。改用 `「今日」` 中文角括号绕开。
+
+### 遗留（按 TOMORROW.md 顺序）
+
+- **P0-2 内网 IP / hardcode 环境变量化**（60 min，开源前必清）
+- **P0-3.1 / 3.2 多会话 sidebar + resume**（3-5 天）
+- **更多关键路径单测**：`session_write.rs`（rusqlite, Rust `#[cfg(test)]`）+ `learning.rs` + `catalog.py` 三状态字段 —— TOMORROW.md 测试清单里的剩余三项
+
+### 节奏
+
+8-10h 节奏起步。今日上半场把 P0-1 完整做完（含测试），P0-2 起手。
+
+#### P0-2 · 清所有硬编码（IP / 端口 / hostname）
+
+开源前必清的口子。范围扩到所有「会随部署变」的字面值，不止内网 IP。
+
+**全栈共享 env 约定**（`catfish/.env.example` 顶层定义）:
+- `CATFISH_GATEWAY_HOST` / `CATFISH_GATEWAY_PORT` / `CATFISH_GATEWAY_URL`
+- `CATFISH_CHROME_DEBUG_HOST` / `CATFISH_CHROME_DEBUG_PORT`
+- `INTERNAL_LLM_BASE_QWEN_MAIN` / `_QWEN_VISION` / `_BGE_M3` / `INTERNAL_LLM_KEY`
+
+**Gateway 侧 (Python)**:
+- `config.py` 加 `_interpolate_env()` 支持 `${VAR}` / `${VAR:-default}`，递归走 dict/list；缺必需 env 立即报清楚错（不偷偷走 None）
+- `models.yaml` 三个 `api_base` 改占位 `${INTERNAL_LLM_BASE_*}`，YAML 干净到能直接开源
+- `network.py` 注释里的 `10.10.40.102` 字面值替换为通用描述
+- `docker-compose.yml` 默认 `PORT` 8000 → 8999 与全栈对齐
+- `.env.example` 加 LLM base / 全栈 host+port 段
+- 18 单测覆盖：完整替换 / 嵌入 / 默认 / 嵌套 / 缺失报错 / yaml 端到端
+
+**Companion 侧 (Rust)**:
+- 新增 `services/endpoints.rs`（~140 行 + 6 单测）：`OnceLock<Endpoints>` 从 env 读 host/port，进程内冻结
+- `commands/health.rs` / `gateway.rs` / `chrome.rs` 都改用 `endpoints::endpoints().gateway_base()` 等，三个文件再也没 `127.0.0.1:8999` / `:9222` 字面值
+- 启动 gateway 子进程时 `PORT` 透传 env 配置 → 前端展示端口 + 后端监听端口必然一致
+
+**Companion 侧 (TS)**:
+- `lib/env.ts` 加 `readGatewayUrl()`：`VITE_CATFISH_GATEWAY_URL` > `VITE_CATFISH_GATEWAY_HOST/PORT` > 默认
+- `lib/http.ts` 默认 base 改读 `config.gatewayUrl` 而非硬编码常量
+
+**Feishu Monitor**:
+- `config.py` `_default_gateway_url()` 走 env，YAML 模板 `gateway_url: ""` 留空时回落 env
+- 既保留员工 yaml 显式覆盖能力，又支持纯 env 配置
+
+**bash + 文档**:
+- `branding/catfish` 4 个端口 env 提到顶部，`cmd_status` 用变量
+- `catfish-browser-attach.sh` `PORT` / `HOST` 走 env
+- `policy/rules.yaml` no-rogue-llm 提示文案改成提 `CATFISH_GATEWAY_URL`
+- `central/llm-gateway/README.md` 不再写死内网 IP，指 `.env.example`
+- `docs/operations/troubleshooting.md` 全部 `10.10.40.102` 换成 `$INTERNAL_LLM_HOST`，开头加变量约定
+
+### 验证（P0-2）
+
+- gateway 单测 **48 通过**（含 18 个 `_interpolate_env` 新单测）
+- tool-bridge 单测 **23 通过**（无回归）
+- 内网 IP / UUID 在 runtime 代码 + docs 全部清零（仅 CHANGELOG/TOMORROW/STRATEGY 历史保留）
+- Rust `cargo check` 因 sandbox 无 cargo 未跑，要在本机跑 `cargo check && cargo test --lib services::endpoints`
+
+#### P0-4 · Gateway 防 Gemini code_execution 退化
+
+**症状**：员工切到 Gemini 2.5-flash 聊天，问"查 CHANGELOG"，UI 显示"工具调用:" 后跟 `{"tool_code": "print(mcp_catfish_local_search_local_search(...))"}` —— 工具名是模型瞎编的 MCP-style 名字，dispatch 时 unknown tool，对话卡死。
+
+**根因**：Gemini 2.x/3.x (Pro / Flash 都有) 在 `tools=[]` 时会自动启用 native 的 code_execution / tool_code 模式，输出 Python 伪代码块。LiteLLM 在 OpenAI schema 转译时把它包成假 tool_call。更深一层：tool-bridge 没起来 → `useChat` 透传 `tools=[]` → 才触发 Gemini 退化。
+
+**修复**：`gemini_guard.py` 新文件 + 18 单测
+- `_is_gemini(model)` 检测 `gemini/*` 前缀（覆盖 2.x/3.x 全 Pro / Flash / Preview）
+- `harden_for_gemini(body, model)` 在 system message 末尾 append 禁止 tool_code 的中英双语指令（~80 token）
+- 幂等（靠 `[CATFISH-GEMINI-GUARD]` marker，重复调用不重复 append）
+- 多模态 system content（list of parts）也支持，找 text part 加，全 image 时新建 text part
+- 不依赖 tools 字段，不破坏现有 SOUL inject
+- `app.py` `chat_completions` 时序：identity inject → gemini guard → litellm
+
+**验证**：gateway 单测累计 **66 通过**（48 + 新增 18）
+
+#### P0-5 · Companion 自起 tool-bridge 服务（彻底堵漏）
+
+P0-4 是症状治理，根因还是 tool-bridge 没起 → tools=[] → Gemini 才会退化。这一项把根因彻底堵上。
+
+**改动**：`services/autostart.rs` 新文件
+- `schedule_autostart()` 在 Tauri setup hook 里 spawn 后台任务
+- 顺序拉 gateway → tool-bridge（gateway 瞬启，tool-bridge 要 ~3-5s import hermes toolset）
+- `pid_alive()` 检查 PID 文件 + 进程 → 已在跑就 no-op，不当 Err 处理
+- 失败用 `log::warn!`，不阻塞 UI 启动
+- socket 残留文件先清（上次 crash 留下的死文件）
+- 复用现有 `process::SpawnConfig` + `catfish_paths` 不重复造轮子
+- `lib.rs` setup hook 加一行 `services::autostart::schedule_autostart();`
+
+**用户可见效果**：员工 Cmd+Q Companion 后再开，仪表盘的 gateway / tool-bridge 卡片应该自己变绿，不用手动点"启动"。聊天里 Gemini 不会再退化到 tool_code，因为 tools 数组永远有内容。
+
+**验证**：autostart 是 Rust 侧改动，sandbox 无 cargo；本机 `cargo build --release` 重编 Companion 后 Cmd+Q 重启：
+1. `tail -f ~/person_task/catfish/.companion-state/tool-bridge.log` 启动后立即应有日志
+2. 仪表盘 tool-bridge 卡片自动变绿
+3. Gemini 聊天里问"今天有啥更新"，应该规规矩矩调 `catfish_today_summary` 拿真数据
+
+#### Fix · useChat tool schema 错把 input_schema 当 function
+
+**症状**：开 Companion + tool-bridge autostart 起来后，Gemini 模型聊天直接报 `litellm.APIConnectionError: 'name'`。Qwen 路径完全正常。
+
+**根因**：`useChat.ts` `ensureTools()` 第 48-58 行注释说"hermes input_schema 已经是 {name, description, parameters}"——这条注释是错的。tool-bridge 给的 `ToolInfo` 是扁平结构 `{name, description, input_schema, ...}`，`input_schema` 仅对应 OpenAI tool 的 `parameters` 字段。代码把 `input_schema` 整个当 `function` 用了，发出去的 tool 缺 `name`。OpenAI 兼容路径（Qwen）宽容能跑，Gemini 走 `GoogleAIStudioGeminiConfig.map_openai_params._map_function` 时 `KeyError: 'name'` 直接挂。
+
+**修复**：
+- `useChat.ts` 改成显式 `function: {name: t.name, description: t.description, parameters: t.input_schema ?? {type: "object", properties: {}}}`
+- `gateway/tools_sanitizer.py` 新文件 + 14 单测：网关侧防御性兜底，畸形 tool 单条丢掉不让 500
+- `app.py` `chat_completions` 时序：identity → sanitize_tools → gemini_guard → litellm
+
+#### P0-3.1 + P0-3.2 · Plan C Week 3 多会话 sidebar + resume
+
+合并一项做完。
+
+**Rust 侧** (`commands/sessions.rs`):
+- `SessionMeta` 加 `source` 字段（cli/companion/null）—— sidebar 显示来源 badge
+- 新增 `SessionMessage` struct（id, role, content, tool_calls, tool_call_id, tool_name, timestamp）
+- `SessionDetail` 加 `messages: Vec<SessionMessage>` —— 给 resume 用，按 timestamp asc
+- `messages_blocking()` 新查询：拉全部消息 + 截断超长 content
+- 老字段 `lastUserMessage` / `lastAssistantMessage` 保留兼容现有 SessionsTab UI
+
+**TS 侧 store** (`store/chat.ts`):
+- 新增 `loadSession(detail: SessionDetail)` action：DB messages → ChatMessage 映射
+- `dbMessageToChat()` 把 SQL row 转运行时格式，tool_calls JSON 反序列化成 ToolCall[]，status 一律 "done"（历史已完成）
+- 设 `persistedSessionId` 让后续 send 顺着同一 session 续写
+
+**TS 侧 UI**:
+- 新文件 `tabs/Chat/ChatSidebar.tsx`（~240 行）：左侧 240px 会话列表
+  - SourceBadge（蓝点 = companion / 灰点 = cli）
+  - 相对时间显示（"刚刚" / "X 分钟前" / "X 天前" / 日期）
+  - 流式中禁用切换，防异步条件竞争
+  - "+ 新对话"按钮固定在底部
+  - refreshKey prop 让父组件能在 send 后强制重拉
+- `ChatTab.tsx` 重构：`[左侧 SessionList | 右侧 ChatPanel]` flex 布局
+  - 点列表项 → `getSession()` → `loadSession(detail)` 灌进 store
+  - "+ 新对话"按钮搬到 sidebar，header 留模型选择
+  - header 显示当前会话 id（截断 + tooltip）+ 消息数
+  - send 完后 bump refreshKey 让 sidebar 看到新 message_count
+
+#### #18 · 关键路径测试
+
+按 TOMORROW.md 测试清单全部补齐。
+
+**Python (sandbox 跑通)**:
+- `tests/test_catalog.py` —— 14 单测：三状态字段（key+reachable / key+unreachable / 无 cache → None / 无 key 统一文案）+ default 选取逻辑 + embedding 隐藏 + 匿名/认证用户 + can_access 过滤 + real-world 5 模型混合场景
+- `tests/test_gemini_guard.py` —— 18 单测（已有，P0-4 补的）
+- `tests/test_tools_sanitizer.py` —— 14 单测（已有，P0-4 补的）
+- `tests/test_config_interpolate.py` —— 18 单测（已有，P0-2 补的）
+
+**Rust (写完待本机 cargo 跑)**:
+- `commands/session_write.rs` 加 `#[cfg(test)] mod tests` —— 7 单测：random_hex_6 唯一性 + generate_session_id 格式 + create/append/finalize/title 四 happy paths + concurrent 10 路并发 append 不丢
+- `commands/learning.rs` 加 `#[cfg(test)] mod tests` —— 14 单测：extract_description 7 边界（基本/quoted/single quoted/无 frontmatter/无 description/空 value/未结束）+ today/is_today 时间边界 + build_summary 三场景 + unix_to_iso
+- `services/endpoints.rs` —— 6 单测（已有，P0-2 补的）
+- `Cargo.toml` 加 `[dev-dependencies] tempfile = "3"`
+
+**总账**:
+- Python: gateway 94 + tool-bridge 23 = **117 全过 0.26s**
+- Rust 新增: 27 单测（待本机 `cargo test --lib` 跑）
+- 跑法: `cd central/llm-gateway && pytest tests/`；`cd edge/companion-app/src-tauri && cargo test --lib`
+
+### 今日总账（2026-04-26）
+
+| 任务 | 状态 | 单测 |
+|------|------|------|
+| P0-1 catfish_today_summary tool | ✅ | 16 + 7 |
+| P0-2 清硬编码（IP/端口/hostname） | ✅ | 18 + 6 |
+| P0-3.1 sidebar | ✅ | (UI) |
+| P0-3.2 resume 历史 | ✅ | (集成) |
+| P0-4 Gemini guard | ✅ | 18 |
+| P0-5 自起 tool-bridge | ✅ | (Rust 集成) |
+| Fix useChat tool schema | ✅ | 14 (sanitizer) |
+| #18 关键路径测试 | ✅ | 14 (catalog) + 27 (Rust) |
+
+**遗留**（明天起手或本周）:
+- P1 模型 fallback 链（today Gemini 配额耗尽暴露的痛点）
+- gateway 错误返回人话化（429 → "Gemini 免费配额今天用完了"）
+- Companion 仪表盘加 tool-bridge 状态卡片（autostart 起来了但仪表盘不显示）
+
+---
+
 ## 记录规则
 
 - 每天收工时补一条
