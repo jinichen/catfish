@@ -53,6 +53,9 @@ from fastapi.responses import StreamingResponse  # noqa: E402
 from .auth import User, get_current_user, get_current_user_optional  # noqa: E402
 from .catalog import build_catalog  # noqa: E402
 from .config import Config, load_config  # noqa: E402
+from .gemini_guard import harden_for_gemini  # noqa: E402
+from .fallback import should_fallback, with_fallback  # noqa: E402
+from .tools_sanitizer import sanitize_tools  # noqa: E402
 from .identity_inject import (  # noqa: E402
     header_skips_identity,
     inject_identity_if_needed,
@@ -399,40 +402,86 @@ def _raise_upstream_error(
 
 
 async def _stream_chat_completion(
-    params: dict,
+    body: dict,
     *,
     user_sub: str,
     model_name: str,
-    model=None,
+    model,
 ) -> AsyncIterator[str]:
-    """SSE async generator for streaming chat completions."""
+    """SSE async generator for streaming chat completions, with fallback chain.
+
+    Fallback 时机:
+        在 "acompletion + 首 chunk" 阶段失败 → 切下一个模型重试
+        已开始流之后挂掉 → 没法切, 直接转 SSE error 返回 (中途换模型会乱掉客户端解析)
+    """
     start = time.time()
     prompt_tokens = 0
     completion_tokens = 0
     status_str = "ok"
     err = ""
+    used_model = model
+    config: Config = app.state.config
+    attempts_log: list[str] = []
+
     try:
-        response = await litellm.acompletion(**params)
-        async for chunk in response:
+        # 用 fallback 链找一个能拿到首 chunk 的模型
+        async def _start_stream(candidate_model):
+            params = _build_litellm_params(body, candidate_model)
+            response = await litellm.acompletion(**params)
+            iterator = response.__aiter__()
+            # 拉首 chunk —— 这是 429 / 503 最容易抛错的地方
+            try:
+                first = await iterator.__anext__()
+            except StopAsyncIteration:
+                first = None
+            return iterator, first
+
+        (iterator, first_chunk), used_model, attempts_log = await with_fallback(
+            config, model, _start_stream,
+        )
+
+        # 重新对齐 model_name 到实际用的 (给 metrics + 客户端 [DONE] 之前的元信息)
+        if used_model is not model:
+            logger.info(
+                "stream served by fallback: requested=%s used=%s",
+                model.name, used_model.name,
+            )
+        # 写出首 chunk (可能是 None, 表示流空)
+        if first_chunk is not None:
+            data = first_chunk.model_dump() if hasattr(first_chunk, "model_dump") else first_chunk
+            if isinstance(data, dict):
+                usage = data.get("usage") or {}
+                prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
+                completion_tokens = usage.get("completion_tokens", completion_tokens)
+            yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+        # 后续 chunks 流出去 —— 这阶段挂了不再 fallback
+        async for chunk in iterator:
             data = chunk.model_dump() if hasattr(chunk, "model_dump") else chunk
-            # Some chunks carry usage; pick up if present
             if isinstance(data, dict):
                 usage = data.get("usage") or {}
                 prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
                 completion_tokens = usage.get("completion_tokens", completion_tokens)
             yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
-    except Exception as e:  # noqa: BLE001 -- deliberately catching broad to convert to SSE error
+    except Exception as e:  # noqa: BLE001
         status_str = "error"
         err = str(e)
-        logger.exception("streaming chat completion failed")
-        yield f"data: {json.dumps({'error': err[:200]})}\n\n"
+        logger.exception(
+            "streaming chat completion failed (attempts=%s)",
+            " -> ".join(attempts_log) if attempts_log else "single",
+        )
+        # 给客户端一个 friendly 错误 —— 把内部 trace 简化成人话
+        friendly = _friendly_upstream_error(err)
+        yield f"data: {json.dumps({'error': friendly})}\n\n"
     finally:
-        if model is not None and prompt_tokens > 0:
-            _check_context_usage(model, prompt_tokens, user_sub)
+        # metrics 用实际用的 model_name (fallback 时跟客户端请求的不一样)
+        actual_model_name = used_model.name if used_model is not None else model_name
+        if used_model is not None and prompt_tokens > 0:
+            _check_context_usage(used_model, prompt_tokens, user_sub)
         log_request_metadata(
             user=user_sub,
-            model=model_name,
+            model=actual_model_name,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             latency_ms=(time.time() - start) * 1000,
@@ -441,17 +490,47 @@ async def _stream_chat_completion(
         )
 
 
+def _friendly_upstream_error(raw: str) -> str:
+    """把 LiteLLM / Google 的 trace 转人话, 截断在 200 字符。
+
+    最常见的几种, 给员工看的:
+        429 / quota / RESOURCE_EXHAUSTED → "免费配额耗尽"
+        timeout                          → "上游响应超时"
+        401 / unauthorized               → "API Key 无效"
+        503 / overloaded                 → "上游过载, 稍后再试"
+    """
+    low = raw.lower()
+    if "resource_exhausted" in low or ("quota" in low and "exceeded" in low):
+        return "免费配额今日耗尽 — 切换到 Qwen 或明天再试"
+    if " 429" in low or "rate limit" in low or "ratelimit" in low:
+        return "上游限流 — 稍后再试或换模型"
+    if "timeout" in low or "timed out" in low:
+        return "上游响应超时 — 网络可能不稳, 稍后再试"
+    if "401" in low or "unauthorized" in low or "invalid api key" in low:
+        return "API Key 无效 — 检查 .env 里的 key 是否过期"
+    if " 503" in low or "overloaded" in low or "service unavailable" in low:
+        return "上游过载 — 稍后再试或换模型"
+    # 兜底: 截断
+    return raw[:200]
+
+
 async def _invoke_chat_completion(
-    params: dict,
+    body: dict,
     *,
     user_sub: str,
     model_name: str,
-    model=None,
+    model,
 ) -> dict[str, Any]:
-    """Non-streaming chat completion path."""
+    """Non-streaming chat completion path, with fallback chain support."""
     start = time.time()
+    config: Config = app.state.config
+
+    async def _call(candidate_model):
+        params = _build_litellm_params(body, candidate_model)
+        return await litellm.acompletion(**params)
+
     try:
-        response = await litellm.acompletion(**params)
+        response, used_model, _attempts = await with_fallback(config, model, _call)
     except Exception as e:
         _raise_upstream_error(
             e,
@@ -461,13 +540,19 @@ async def _invoke_chat_completion(
             log_context="chat completion failed",
         )
         raise  # unreachable; satisfies type checker
+
+    if used_model is not model:
+        logger.info(
+            "non-stream served by fallback: requested=%s used=%s",
+            model.name, used_model.name,
+        )
+
     usage = getattr(response, "usage", None)
     prompt_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
-    if model is not None:
-        _check_context_usage(model, prompt_tokens, user_sub)
+    _check_context_usage(used_model, prompt_tokens, user_sub)
     log_request_metadata(
         user=user_sub,
-        model=model_name,
+        model=used_model.name,
         prompt_tokens=prompt_tokens,
         completion_tokens=getattr(usage, "completion_tokens", 0) if usage else 0,
         latency_ms=(time.time() - start) * 1000,
@@ -499,17 +584,27 @@ async def chat_completions(
     skip = header_skips_identity(request.headers)
     body["messages"] = inject_identity_if_needed(body.get("messages", []), skip=skip)
 
-    params = _build_litellm_params(body, model)
+    # 防御性清洗 tools 数组 —— 畸形 tool (例如缺 function.name) 直接丢, 不让
+    # LiteLLM 转 Gemini functionDeclarations 时 KeyError 把整个请求挂掉。
+    body = sanitize_tools(body)
 
-    if bool(params.get("stream", False)):
+    # Gemini 防退化: 在 system 末尾加禁用 native tool_code 的指令
+    # 没用 Gemini 模型 / 客户端不传 system 都会跳过, 无副作用
+    body = harden_for_gemini(body, model)
+
+    # 注意: 这里传 body (而不是预构建的 params) 给 _invoke / _stream
+    # 因为 fallback 时换模型, params 里的 api_base / api_key / 等都得重新构建
+    is_stream = bool(body.get("stream", False))
+
+    if is_stream:
         return StreamingResponse(
             _stream_chat_completion(
-                params, user_sub=user.sub, model_name=model_name, model=model,
+                body, user_sub=user.sub, model_name=model_name, model=model,
             ),
             media_type="text/event-stream",
         )
     return await _invoke_chat_completion(
-        params, user_sub=user.sub, model_name=model_name, model=model,
+        body, user_sub=user.sub, model_name=model_name, model=model,
     )
 
 
