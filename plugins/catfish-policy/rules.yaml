@@ -72,3 +72,73 @@ rules:
   #   match: ["cronjob"]
   #   require_user_confirm: true
   #   reason: "新的定时任务需要员工明确确认"
+
+  # ---------- R6: 防 LLM 误删 catfish-* skill ----------
+  # 历史踩坑 (2026-04-26): Qwen3.6-Flash 在 catfish-email skill 命令调用失败时
+  # 自作主张调 skill_manage(action=delete, name=catfish-email) "试图 reinstall",
+  # 把员工的 catfish skill 软链给 rm 了, 导致后续工具一直找不到。
+  # 红线: 任何 catfish-* skill 由员工 / install.sh 管理, LLM 不准动。
+  - id: no-delete-catfish-skill
+    kind: tool_name
+    match:
+      - "skill_manage"
+    deny_args_pattern:
+      - 'action.*delete.*catfish-'
+      - 'name.*catfish-.*action.*delete'
+    reason: |
+      绝不允许 LLM 删除 catfish 自家 skill (catfish-email / catfish-browser-* 等)。
+      如果 skill 命令跑不通, 让员工重新跑 install.sh, 不是删 skill。
+
+  # ---------- R7: skill 创建必须员工 explicit 同意 ----------
+  # 配套 SOUL.md "Skill 生成纪律" 章. 防 LLM 自作主张瞎建 skill / 把敏感数据
+  # 存进 skill 内容. SOUL 已经规定"必须 quote 步骤给员工 review", 这里加一条
+  # 硬保险: skill 内容里出现已知敏感模式 (密码 / token / 邮箱地址 / 等) 就 deny.
+  - id: skill-create-no-secrets
+    kind: tool_name
+    match:
+      - "skill_manage"
+    deny_args_pattern:
+      # 创建/更新 skill 时, 内容含明文密码 / API key / token 等敏感模式
+      - 'action.*(?:create|update).*password\s*[:=]'
+      - 'action.*(?:create|update).*api[_-]?key\s*[:=]'
+      - 'action.*(?:create|update).*token\s*[:=]'
+      - 'action.*(?:create|update).*Authorization:\s*Bearer'
+      # 邮箱地址 (粗粒度, 看到 @ 字符就警惕) — 可能是员工真邮箱不能存
+      - 'action.*(?:create|update).*[\w.+-]+@[\w-]+\.[\w.-]+'
+    reason: |
+      skill 内容里检测到敏感模式 (密码 / API key / token / 邮箱地址等)。
+      这些不能存进 skill 文件 (skill 会被读 + 共享, 凭据会泄漏)。
+      只存"步骤模板", 真实凭据 / 数据让员工每次输入或从 secret broker 拿。
+      详见 SOUL.md 'Skill 生成纪律' 章。
+
+  # ---------- R8: (已删除) screenshot active_window 模式约束 ----------
+  # 历史: 2026-04-27 因 macOS Automation 权限对 hermes venv unsigned python3.11
+  # 不持久化, active_window 模式被彻底从 catfish_screenshot 删除. 代码层面已没
+  # 这个分支, policy 不再需要此规则. 编号保留作为踩坑标记, 不要复用.
+
+  # ---------- R9: 禁止 LLM 自作主张改员工的 hermes config / SOUL ----------
+  # 历史踩坑 (2026-04-27): LLM 调了不存在的 memory tool 拿到 "tool 不可用" 错误,
+  # 不去查 tool list, 反而**幻觉成"是 config 坏了"**, 用 patch 工具改员工
+  # ~/.hermes/config.yaml 加了一个未经验证的 provider:auto 值. 员工没同意, 改完
+  # 还要重启 hermes —— 这是典型的"工具 error 一脚踩进配置 cargo cult".
+  #
+  # 这两个文件由员工 / install.sh / catfish 平台管理:
+  #   ~/.hermes/config.yaml   - hermes 主配置, 改错可能让 hermes 启动失败
+  #   ~/.hermes/SOUL.md       - 鲶鱼人格定义, 改了影响所有后续对话
+  #   ~/.hermes/USER.md       - 顶层 memory, 改了 LLM 后续行为变化
+  - id: no-touch-hermes-control-files
+    kind: file_write
+    paths:
+      - "~/.hermes/config.yaml"
+      - "~/.hermes/SOUL.md"
+      - "~/.hermes/USER.md"
+    reason: |
+      你不能擅自改员工的 hermes 控制文件 (config.yaml / SOUL.md / USER.md)。
+      这些是平台 / 员工管理的, LLM 自动改容易引入未经验证的配置导致服务挂掉。
+
+      正确做法:
+        - 工具调用报"不可用" → 去查 tool list 看真实工具名是什么 (`memory_save` / `memory_recall`),
+          不是假设是 config 坏了去改 config
+        - 真有 config 问题 → 跟员工说"你的 config 里 X 字段为空, 我建议改成 Y, 你确认改吗?"
+          得到员工"对, 改" 才动
+        - 想给员工记新 memory → 写 ~/.hermes/memories/*.md (不是 USER.md), 详见 SOUL "Memory 写入纪律"
