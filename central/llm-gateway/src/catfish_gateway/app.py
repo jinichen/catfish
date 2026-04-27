@@ -375,6 +375,9 @@ def _raise_upstream_error(
 
     Factored out because both chat completions (non-stream) and embeddings share
     the exact same error-handling path.
+
+    给客户端的 detail 里同时返回 raw `message` (诊断用) + 翻译过的 `friendly`
+    (员工 UI 直接显示给员工看的话), 让 Companion 前端可以二选一.
     """
     err_type = type(exc).__name__
     err_msg = str(exc)[:400]
@@ -392,6 +395,7 @@ def _raise_upstream_error(
             "error": "upstream error",
             "error_type": err_type,
             "message": err_msg[:300],
+            "friendly": _friendly_upstream_error(err_msg),
             "model": model_name,
             "latency_ms": round(latency_ms, 1),
         },
@@ -490,28 +494,9 @@ async def _stream_chat_completion(
         )
 
 
-def _friendly_upstream_error(raw: str) -> str:
-    """把 LiteLLM / Google 的 trace 转人话, 截断在 200 字符。
-
-    最常见的几种, 给员工看的:
-        429 / quota / RESOURCE_EXHAUSTED → "免费配额耗尽"
-        timeout                          → "上游响应超时"
-        401 / unauthorized               → "API Key 无效"
-        503 / overloaded                 → "上游过载, 稍后再试"
-    """
-    low = raw.lower()
-    if "resource_exhausted" in low or ("quota" in low and "exceeded" in low):
-        return "免费配额今日耗尽 — 切换到 Qwen 或明天再试"
-    if " 429" in low or "rate limit" in low or "ratelimit" in low:
-        return "上游限流 — 稍后再试或换模型"
-    if "timeout" in low or "timed out" in low:
-        return "上游响应超时 — 网络可能不稳, 稍后再试"
-    if "401" in low or "unauthorized" in low or "invalid api key" in low:
-        return "API Key 无效 — 检查 .env 里的 key 是否过期"
-    if " 503" in low or "overloaded" in low or "service unavailable" in low:
-        return "上游过载 — 稍后再试或换模型"
-    # 兜底: 截断
-    return raw[:200]
+# _friendly_upstream_error 抽到 errors.py (无 litellm 依赖, 测试可独立 import).
+# 在 app.py 里给一个 alias 别名, 兼容历史 import 路径.
+from .errors import friendly_upstream_error as _friendly_upstream_error
 
 
 async def _invoke_chat_completion(

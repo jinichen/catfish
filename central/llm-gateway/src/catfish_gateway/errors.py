@@ -1,0 +1,78 @@
+"""错误信息翻译 — 把 LiteLLM / OpenAI / 网络层异常 trace 转成员工能看的话.
+
+设计独立模块, 不依赖 litellm/fastapi, 让测试可以独立 import 跑.
+"""
+from __future__ import annotations
+
+
+def friendly_upstream_error(raw: str) -> str:
+    """把 LiteLLM / OpenAI / Google 的 trace 转人话, 截断在 200 字符以内.
+
+    覆盖 catfish 真实撞过的全部错误类别 (2026-04-27/28 调试时积累):
+
+      4xx 上游拒绝:
+        400 / BadRequest    → 请求格式错 (常见: 工具 schema 错 / image_url 不被这个模型支持 / 模型名错)
+        401 / Unauthorized  → API Key 无效或过期
+        403 / Forbidden     → 没权限调这个模型 / 区域受限
+        404 / not found     → 模型在 dashscope 上不存在 (qwen3.6-max-preview 类)
+        429 / rate limit    → 限流
+      5xx 上游异常:
+        500 / Internal      → 上游服务自己挂了
+        502 / Bad Gateway   → 上游网关找不到服务 (内网 LLM endpoint UUID 失效)
+        503 / overloaded    → 上游过载
+        504 / Gateway Timeout → 上游响应慢
+      网络层:
+        Connection error / refused / cannot connect → 内网不通 (VPN/Clash 问题)
+        Broken pipe / ClientOSError → 连接中途断
+        APIConnectionError → openai sdk 抛, 一般是底层网络
+      Provider 特有:
+        RESOURCE_EXHAUSTED / quota exceeded → Gemini 免费配额耗尽
+        Hermes/Gemini code_execution → 代码执行模式被拒 (我们的 gemini_guard 拦的)
+    """
+    low = raw.lower()
+
+    # ===== Provider 特有错误 (优先匹配, 信号最强) =====
+    if "resource_exhausted" in low or ("quota" in low and "exceed" in low):
+        return "Gemini 免费配额今日耗尽 — 切到 Qwen 或明天再试"
+    if "code_execution" in low and ("disabled" in low or "not allowed" in low or "拒" in low):
+        return "Gemini 拒绝了带工具的请求 — gemini_guard 问题, 反馈给鸿波"
+
+    # ===== 4xx 客户端错误 =====
+    if " 429" in f" {low} " or "rate limit" in low or "ratelimit" in low or "too many requests" in low:
+        return "调用频率超限 (429) — 等几秒再试 / 换个模型"
+    if " 401" in f" {low} " or "unauthorized" in low or "invalid api key" in low or "incorrect api key" in low:
+        return "API Key 无效 (401) — 检查 .env 的 key 是否过期 / 写错"
+    if " 403" in f" {low} " or "forbidden" in low or "permission denied" in low:
+        return "没权限调这个模型 (403) — 公司账号未开通 / 区域受限"
+    if " 404" in f" {low} " or ("model" in low and "not found" in low) or "找不到服务" in raw:
+        return "上游说没这个模型 (404) — 检查 models.yaml 的 upstream.model 名字对不对"
+    if " 400" in f" {low} " or "bad request" in low or "badrequest" in low:
+        # 400 最容易撞但原因多样, 提示员工常见可能性
+        if "image" in low or "image_url" in low or "vision" in low:
+            return "请求带图但模型不支持视觉 (400) — Companion 应该自动切视觉模型, 没切就是 bug"
+        if "tool" in low or "function" in low:
+            return "工具调用格式错 (400) — tool schema 可能缺字段, 反馈给鸿波"
+        return "请求格式错 (400) — 模型名 / 参数 / 工具 schema 有一个不对"
+
+    # ===== 5xx 上游服务器错误 =====
+    if " 502" in f" {low} " or "bad gateway" in low:
+        return "上游网关异常 (502) — 内网 LLM endpoint 可能 UUID 失效, 联系平台管理员或切换模型"
+    if " 504" in f" {low} " or "gateway timeout" in low:
+        return "上游网关超时 (504) — 上游慢, 稍后再试 / 换模型"
+    if " 503" in f" {low} " or "overloaded" in low or "service unavailable" in low:
+        return "上游过载 (503) — 稍后再试或换模型"
+    if " 500" in f" {low} " or "internal server error" in low or "internalservererror" in low:
+        return "上游内部错误 (500) — 上游服务自己挂了, 换模型或稍后试"
+
+    # ===== 网络层错误 =====
+    if "connection refused" in low or "connect call failed" in low:
+        return "网络层拒绝连接 — 内网服务没在跑 / VPN 没连上 / Clash 把内网代理了"
+    if "cannot connect" in low or "connectionerror" in low or "apiconnectionerror" in low:
+        return "网络层连接失败 — 检查 VPN / Clash / 内网状态"
+    if "broken pipe" in low or "clientoserror" in low:
+        return "连接中途断了 — 网络抖动, 重试一次"
+    if "timeout" in low or "timed out" in low:
+        return "上游响应超时 — 网络慢或上游慢, 稍后再试"
+
+    # ===== 兜底 =====
+    return raw[:200]

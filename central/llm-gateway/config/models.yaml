@@ -107,12 +107,25 @@ models:
   #   - 内网 Qwen (catfish-private-main) 不可达时的公共备份
   #   - Gemini 免费配额耗尽时的 fallback
   #   - 出差 / 公司外网络场景
-  - name: catfish-public-ds4-pro
+  - name: catfish-public-qwen-flash
+    # 历史: 一度改成 catfish-public-ds4-pro, 但 fallback chain (line 53/81/157/182)
+    # 都引用 catfish-public-qwen-flash, 改名导致 gateway 启动 warn
+    # "fallback chain refers to unknown model: catfish-public-qwen-flash" — 整个
+    # fallback 系统失效. 2026-04-28 修回, 不要再改 name (除非同步改 4 条 chain).
     tier: public
     display_name: "Qwen3.6-Flash · 通义千问快速多模态（公共付费）"
     mode: chat
 
     upstream:
+      # ⚠️ TODO 鸿波验证: 这个 model 名 'qwen3.6-max-preview' 在 dashscope
+      # 真实存在吗? 实际 dashscope 多模态 Qwen 系列常见命名:
+      #   qwen-vl-max-latest / qwen-vl-plus-latest (Qwen-VL 视觉系列)
+      #   qwen-max-latest / qwen-plus-latest / qwen-turbo-latest (Qwen 文本)
+      # 如果 'qwen3.6-max-preview' 不存在, fallback 真触发时会撞 404.
+      # 验证方法: 拿 DASHSCOPE_API_KEY 用 curl 测一下:
+      #   curl https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions \
+      #     -H "Authorization: Bearer $DASHSCOPE_API_KEY" \
+      #     -d '{"model":"qwen3.6-max-preview","messages":[{"role":"user","content":"hi"}]}'
       model: openai/qwen3.6-max-preview
       api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
       api_key_env: DASHSCOPE_API_KEY
