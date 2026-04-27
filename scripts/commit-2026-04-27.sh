@@ -187,13 +187,20 @@ run "git commit -m 'docs(soul,policy): 反幻觉 + 系统操作 + memory 三层�
 # Commit 8 · CHANGELOG
 # ============================================================
 echo
-echo "=== Commit 8/8 · CHANGELOG + commit script 自己 ==="
+echo "=== Commit 8/8 · 4-27 docs + Skill lifecycle 防御 + commit script ==="
 run 'git add CHANGELOG.md'
+run 'git add docs/BACKLOG.md'
+run 'git add docs/COMPETITIVE-DIFFERENTIATION.md'
+run 'git add docs/POSITIONING.md'
+run 'git add docs/SKILL-LIFECYCLE.md'
 run 'git add scripts/commit-2026-04-27.sh'
-run "git commit -m 'docs(changelog): 2026-04-27 详细日志' \
-  -m '主线: 视觉/多模态全栈打通 + SOUL 反幻觉补丁 + 4-26 P1 收尾追登' \
-  -m '8 项完成 + 7 条踩坑 + 4-26 P1 收尾 + 当前遗留' \
-  -m 'scripts/commit-2026-04-27.sh: 本次 8 个 commit 的执行脚本 (含 git reset HEAD 自我幂等防误捏)'"
+run "git commit -m 'docs+feat: 4-27 收官 (CHANGELOG/BACKLOG/COMPETITIVE-DIFF/SKILL-LIFECYCLE)' \
+  -m 'CHANGELOG: 4-27 详细日志 (视觉/多模态全栈打通 + SOUL 反幻觉补丁 + 4-26 P1 收尾追登 — 8 项完成 + 7 条踩坑)' \
+  -m 'docs/BACKLOG.md (新增): 全量任务积压 121+ 项 / 11 个 section (战略/GTM/工程 P1-P3/运营/法律/多模态/品牌/Skill lifecycle). Task tracker 装 sprint, BACKLOG 装全量, 每周 review' \
+  -m 'docs/COMPETITIVE-DIFFERENTIATION.md (新增): 应对「鲶鱼跟 Hermes/OpenClaw 同质化」质疑. 三层架构图 (Linux/Ubuntu 类比) + 16 维硬指标对比 + 4 种误读反驳 + 5 条 hard diff + 销售 4 件套话术 + Demo 三连镜头. 销售/pitch/招聘统一引用源' \
+  -m 'POSITIONING.md 加固: § 11 FAQ 加「跟 Hermes 同质化」条目; § 12 招牌镜头改成 0 配置启动 / 接 Foxmail / 演练方法论 三连; § 14 加锁层差' \
+  -m 'docs/SKILL-LIFECYCLE.md (新增): Skill 5 阶段框架 (Plan/Create/Review/Use/Evolve), 元文档指导 SOUL/policy/tool 设计. 当前覆盖 Plan + Create + Evolve(部分), 其余进 BACKLOG P1' \
+  -m 'scripts/commit-2026-04-27.sh: 本次 8 个 commit 的执行脚本 (git reset HEAD 自我幂等)'"
 
 # ============================================================
 # 完成
