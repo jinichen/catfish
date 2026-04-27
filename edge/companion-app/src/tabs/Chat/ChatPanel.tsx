@@ -3,14 +3,14 @@
 import { useEffect, useRef } from "react";
 import ChatMessage from "./ChatMessage";
 import ChatInput from "./ChatInput";
-import type { ChatMessage as Msg } from "../../types/chat";
+import type { Attachment, ChatMessage as Msg } from "../../types/chat";
 
 interface Props {
   messages: Msg[];
   isStreaming: boolean;
   /** 当前正在流式输出的 assistant 消息 id —— 用来决定哪条显示光标 */
   streamingId: string | null;
-  onSend: (text: string) => void;
+  onSend: (text: string, attachments: Attachment[]) => void;
   onCancel: () => void;
   onReset: () => void;
 }

@@ -62,8 +62,8 @@ export default function ChatTab() {
 
   /** 包一层 send: 完成后 bump refreshKey 让 sidebar 看到新会话 / 新 message_count */
   const handleSend = useCallback(
-    async (text: string) => {
-      await send(text);
+    async (text: string, attachments: import("../../types/chat").Attachment[] = []) => {
+      await send(text, attachments);
       setRefreshKey((k) => k + 1);
     },
     [send],

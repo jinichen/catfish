@@ -20,10 +20,24 @@ import {
   sessionCreate,
   sessionMessageAppend,
   sessionFinalize,
+  fetchCatalog,
 } from "../lib/tauri";
-import type { ChatMessage, ToolCall } from "../types/chat";
+import type { Attachment, ChatMessage, ToolCall } from "../types/chat";
+import type { CatalogModel } from "../types/catalog";
 
 const MAX_TOOL_ROUNDS = 10;
+
+// 视觉模型 fallback 优先级 (从高到低)
+//   1. 内网 Qwen3-VL (免费, 本地, 国产 OCR 强)
+//   2. 公共 Qwen-Flash (256K 多模态, 付费, 备份)
+//   3. 公共 Gemini Flash (快, 付费)
+//   4. 公共 Gemini Pro (慢但强, 付费)
+const VISION_MODEL_PREFERENCE = [
+  "catfish-private-vision",
+  "catfish-public-qwen-flash",
+  "catfish-public-gemini-flash",
+  "catfish-public-gemini-pro",
+];
 
 function uuid(): string {
   return crypto.randomUUID
@@ -76,6 +90,79 @@ async function ensureTools(): Promise<OpenAITool[]> {
 /** 切账号 / 重启 tool_bridge / 装新 skill 后调一次清缓存让 ensureTools 重拉 */
 export function _clearToolsCache(): void {
   _cachedTools = null;
+}
+
+// ─── 视觉模型自动选择 ───────────────────────────────────
+//
+// 员工带图发送时, 如果当前模型不支持视觉 (比如默认主力 deepseek-flash 是纯文本),
+// 直接发上去会被上游丢图 / 报错. 我们做透明切换:
+//   1. 拉 catalog 找 supports_vision=true 的模型
+//   2. 按 VISION_MODEL_PREFERENCE 优先级挑第一个 reachable + api_key_configured 的
+//   3. 改当前 store 的 model, 在聊天里追加一条 system 角色消息说"已切到 X"
+//
+// 失败兜底: catalog 拉不到或没视觉模型 → 用原模型硬发, 让上游报错员工自己决策
+
+interface VisionSwitchResult {
+  switched: boolean;
+  /** 改后的 model id (没切就是原值) */
+  newModel: string;
+  /** 给员工看的提示 (没切就是 null) */
+  notice: string | null;
+}
+
+async function maybeSwitchToVision(
+  currentModel: string,
+): Promise<VisionSwitchResult> {
+  let models: CatalogModel[];
+  try {
+    const cat = await fetchCatalog();
+    models = cat.models ?? [];
+  } catch (e) {
+    console.warn("[catfish chat] 拉 catalog 失败, 不切视觉模型:", e);
+    return { switched: false, newModel: currentModel, notice: null };
+  }
+
+  const cur = models.find((m) => m.id === currentModel);
+  // 当前模型已经支持视觉 → 不切
+  if (cur && cur.supports_vision) {
+    return { switched: false, newModel: currentModel, notice: null };
+  }
+
+  // visionPool: 只看 supports_vision + api_key_configured。
+  // 故意不看 is_reachable —— catalog 那个字段是 30s/15s 缓存, 抖动会误杀;
+  // 即使探测时不通, 实际请求时可能恰好通了, 不该提前 block 切换。
+  // 真不通会在 LiteLLM 调用时报 ConnectionError, 那时 fallback chain 接管。
+  const visionPool = models.filter(
+    (m) => m.supports_vision && m.api_key_configured,
+  );
+  if (visionPool.length === 0) {
+    return {
+      switched: false,
+      newModel: currentModel,
+      notice:
+        "⚠ 没有可用的视觉模型 (supports_vision=true 且配了 API key 的为空)。" +
+        "检查 catfish-private-vision 配置, 或在 .env 配 GEMINI_API_KEY / DASHSCOPE_API_KEY 启用公共视觉模型。",
+    };
+  }
+
+  for (const preferred of VISION_MODEL_PREFERENCE) {
+    const m = visionPool.find((x) => x.id === preferred);
+    if (m) {
+      return {
+        switched: true,
+        newModel: m.id,
+        notice: `🔁 检测到图片附件, 已切到「${m.display_name.split(" · ")[0] || m.id}」(原 ${cur?.display_name || currentModel} 不支持视觉)`,
+      };
+    }
+  }
+
+  // PREFERENCE 列表里都没匹配, 就用 visionPool 第一个
+  const first = visionPool[0];
+  return {
+    switched: true,
+    newModel: first.id,
+    notice: `🔁 检测到图片附件, 已切到「${first.display_name}」(原模型不支持视觉)`,
+  };
 }
 
 // ─── 主 hook ───────────────────────────────────
@@ -202,8 +289,10 @@ export function useChat(initialModel: string) {
       // 在 await 之后会被错误收窄成 never,即使 callback 里改了 x。
       const refs: { calls: ToolCall[] } = { calls: [] };
 
+      // 关键: model 从 store snapshot 读, 不用闭包捕获的 — 因为 send() 里
+      // maybeSwitchToVision 可能在这一轮之前刚切过模型, closure 里的 model 还是旧值。
       await streamChat({
-        model,
+        model: useChatStore.getState().model,
         messages: ctx.currentMessages,
         tools: ctx.tools,
         signal: ctx.ctrl.signal,
@@ -356,23 +445,64 @@ export function useChat(initialModel: string) {
   );
 
   const send = useCallback(
-    async (content: string) => {
-      if (!content.trim() || isStreaming) return;
+    async (content: string, attachments: Attachment[] = []) => {
+      const trimmed = content.trim();
+      // 文字+图片都为空才拒. 只发图(没文字)是允许的.
+      if (!trimmed && attachments.length === 0) return;
+      if (isStreaming) return;
 
       // 0. 第一次 send 时 lazy create state.db session (持久化的开端)
       await ensureSessionId();
 
-      // 1. push user message
+      // 0.5. 如果带图但当前模型不支持视觉 → 透明切到视觉模型
+      //      切了的话往聊天里追加一条 system 提示, 让员工知道发生了啥.
+      //      没视觉模型可切 → 给员工 error 消息, **abort 这次发送** —
+      //      硬发 deepseek-flash + image_url 上游会 400, 浪费一轮还误导员工.
+      if (attachments.some((a) => a.kind === "image")) {
+        const sw = await maybeSwitchToVision(model);
+        if (sw.switched) {
+          setModelInStore(sw.newModel);
+        }
+        if (sw.notice) {
+          // 用 assistant 角色 + status='done' 显示提示 (UI ChatMessage 不渲染 system)
+          const noticeMsg: ChatMessage = {
+            id: uuid(),
+            role: "assistant",
+            content: sw.notice,
+            ts: nowIso(),
+            status: sw.switched ? "done" : "error",
+            // status=error 给红色错误 styling, 让员工立刻注意到
+            error: sw.switched ? undefined : sw.notice,
+          };
+          addMessage(noticeMsg);
+          // 不 persistMessage —— UI 提示性质, 不进 state.db
+        }
+        // 没切成 + 有 notice = 当前模型不支持视觉但视觉模型也找不到/拉不到。
+        // 短路返回, 不去硬发让上游 400 浪费一轮 + 误导员工. notice 已经写进
+        // 错误消息显示给员工了.
+        // (notice=null + switched=false = 当前模型本来就支持视觉, 继续往下发)
+        if (!sw.switched && sw.notice) {
+          return;
+        }
+      }
+
+      // 1. push user message (带 attachments, in-memory only)
       const userMsg: ChatMessage = {
         id: uuid(),
         role: "user",
-        content: content.trim(),
+        content: trimmed,
+        attachments: attachments.length > 0 ? attachments : undefined,
         ts: nowIso(),
         status: "done",
       };
-      const requestMessages = [...messages, userMsg];
+      const requestMessages = [...useChatStore.getState().messages, userMsg];
       addMessage(userMsg);
-      void persistMessage(userMsg);
+      // 持久化到 state.db: 图片不落库, 只存文字 + 占位符 (恢复时只剩文字)
+      const persistContent =
+        attachments.length > 0
+          ? `${trimmed}${trimmed ? "\n" : ""}[📎 ${attachments.length} 张图片 — Companion in-memory, 切会话不保留]`
+          : trimmed;
+      void persistMessage({ ...userMsg, content: persistContent, attachments: undefined });
       setIsStreaming(true);
 
       // 2. 拉 tools(第一次会调 tool_bridge,后续走 cache)
@@ -416,10 +546,11 @@ export function useChat(initialModel: string) {
     },
     [
       isStreaming,
-      messages,
+      model,
       addMessage,
       setIsStreaming,
       setStreamingId,
+      setModelInStore,
       runOneRound,
       ensureSessionId,
       persistMessage,

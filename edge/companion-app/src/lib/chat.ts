@@ -72,9 +72,15 @@ export function _clearTokenCache(): void {
 
 // ── OpenAI 兼容线格式 ──
 
+/** OpenAI multimodal content part —— text 或 image_url. Gemini / Qwen3-VL /
+ * Qwen-Flash 都接受这个 shape (LiteLLM 透传)。 */
+type OpenAIContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
 interface OpenAIWireMessage {
   role: string;
-  content: string | null;
+  content: string | OpenAIContentPart[] | null;
   tool_calls?: Array<{
     id: string;
     type: "function";
@@ -106,6 +112,21 @@ function toWire(messages: ChatMessage[]): OpenAIWireMessage[] {
           },
         })),
       };
+    }
+    // user 带图片附件 → 用 OpenAI multimodal content array
+    if (m.role === "user" && m.attachments && m.attachments.length > 0) {
+      const parts: OpenAIContentPart[] = [];
+      // 文字第一个 (即使是空字符串也保留, 让模型知道员工没写文字描述)
+      parts.push({ type: "text", text: m.content || "" });
+      for (const att of m.attachments) {
+        if (att.kind === "image") {
+          parts.push({
+            type: "image_url",
+            image_url: { url: `data:${att.mimeType};base64,${att.base64}` },
+          });
+        }
+      }
+      return { role: "user", content: parts };
     }
     return {
       role: m.role,

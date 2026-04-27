@@ -25,6 +25,7 @@ export default function ChatMessage({ msg, showCaret = false }: Props) {
 }
 
 function UserBubble({ msg }: { msg: Msg }) {
+  const hasAttachments = msg.attachments && msg.attachments.length > 0;
   return (
     <div
       style={{
@@ -44,9 +45,40 @@ function UserBubble({ msg }: { msg: Msg }) {
           lineHeight: 1.5,
           whiteSpace: "pre-wrap",
           wordBreak: "break-word",
+          display: "flex",
+          flexDirection: "column",
+          gap: hasAttachments && msg.content ? "var(--space-2)" : 0,
         }}
       >
-        {msg.content}
+        {/* 图片附件优先于文字, 视觉上更清楚 */}
+        {hasAttachments && (
+          <div
+            style={{
+              display: "flex",
+              gap: "var(--space-2)",
+              flexWrap: "wrap",
+            }}
+          >
+            {msg.attachments!.map((att, i) =>
+              att.kind === "image" ? (
+                <img
+                  key={i}
+                  src={`data:${att.mimeType};base64,${att.base64}`}
+                  alt={att.name}
+                  style={{
+                    maxWidth: 220,
+                    maxHeight: 220,
+                    borderRadius: "var(--radius-sm)",
+                    display: "block",
+                    objectFit: "contain",
+                    background: "rgba(0,0,0,0.1)",
+                  }}
+                />
+              ) : null,
+            )}
+          </div>
+        )}
+        {msg.content && <span>{msg.content}</span>}
       </div>
     </div>
   );

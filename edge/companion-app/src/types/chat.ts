@@ -22,12 +22,34 @@ export interface ToolCall {
   error?: string;
 }
 
+/** 用户附件 —— v0.1 只支持 image, 后续扩 file / audio / video。
+ *
+ * MVP 选型: data 走 base64 完整放内存, 不写磁盘也不进 state.db
+ * (state.db 只存"[📎 N 张图片]"占位符)。优点: 实现简单、跨进程零感知;
+ * 代价: 切会话再回来图片消失 (只剩文字)。后续要持久化再迁。
+ */
+export type AttachmentKind = "image";
+
+export interface Attachment {
+  kind: AttachmentKind;
+  /** MIME 类型, 如 "image/png" / "image/jpeg" */
+  mimeType: string;
+  /** 文件名(显示用), 没有就是 "pasted-image.png" 这种 */
+  name: string;
+  /** base64 编码的内容(不含 data URI 前缀, gateway 那边拼) */
+  base64: string;
+  /** 字节大小, 给 UI 显示用 */
+  sizeBytes: number;
+}
+
 export interface ChatMessage {
   /** 客户端生成的 uuid,渲染 React key 用 */
   id: string;
   role: ChatRole;
   /** 主文本内容;assistant 在 streaming 时这里持续 append */
   content: string;
+  /** user 消息的图片/文件附件 (in-memory, 不持久化到 state.db) */
+  attachments?: Attachment[];
   /** assistant 消息可能伴随多个 tool_calls(并行 / 串行都有可能) */
   tool_calls?: ToolCall[];
   /** tool 角色消息携带的 call id —— 关联到对应 assistant 的 tool_calls[i].id */
