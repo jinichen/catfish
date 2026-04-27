@@ -25,10 +25,13 @@ from catfish_tool_bridge import catfish_tools
 # ---------- helpers ----------
 
 def _set_home(monkeypatch: pytest.MonkeyPatch, path: Path) -> None:
-    """让 catfish_tools._home() 看到 path 为 home"""
+    """让 catfish_tools._home() 看到 path 为 home + 重置 audit path 跟随"""
     monkeypatch.setenv("HOME", str(path))
     # USERPROFILE 也清掉, 免得 Windows 路径污染
     monkeypatch.delenv("USERPROFILE", raising=False)
+    # audit 模块用 module-level _audit_path 缓存, 测试间要重置让它跟随新 HOME
+    from catfish_tool_bridge import audit
+    monkeypatch.setattr(audit, "_audit_path", path / ".hermes" / ".catfish_audit.jsonl")
 
 
 def _touch(path: Path, text: str = "", mtime: float | None = None) -> None:
@@ -80,6 +83,10 @@ def test_no_hermes_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert result["new_skills_count"] == 0
     assert result["memories"] == []
     assert result["new_skills"] == []
+    # BL-C15 audit-based 字段
+    assert result["tool_invocations_today"] == 0
+    assert result["tool_failures_today"] == 0
+    assert result["skill_unused_30d"] == []
     assert "今天还没动静" in result["summary"]
 
 
@@ -510,3 +517,153 @@ def test_week_start_unix_monotonic() -> None:
     assert prev_w < this_w
     # 间隔 7 天
     assert (this_w - prev_w) == 7 * 86400
+
+
+# ============================================================
+# BL-C15: tool_invocations / failures (audit-based)
+# ============================================================
+
+
+def test_audit_stats_today_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """audit.jsonl 不存在 → tool_invocations_today = 0"""
+    _set_home(monkeypatch, tmp_path)
+    result = catfish_tools.collect_today_summary()
+    assert result["tool_invocations_today"] == 0
+    assert result["tool_failures_today"] == 0
+
+
+def test_audit_stats_today_counts_events(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """audit.jsonl 有今天的事件 → 计数 + 失败数对"""
+    _set_home(monkeypatch, tmp_path)
+    from catfish_tool_bridge import audit
+
+    # 写 5 个事件 (今天): 3 个 ok, 2 个 failed
+    for i in range(3):
+        audit.write_event(f"tool_{i}", ok=True, args={"i": i})
+    audit.write_event("tool_a", ok=False, error="some error")
+    audit.write_event("tool_b", ok=False, error="another")
+
+    result = catfish_tools.collect_today_summary()
+    assert result["tool_invocations_today"] == 5
+    assert result["tool_failures_today"] == 2
+
+
+def test_audit_stats_excludes_yesterday(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """昨天的事件不算今天 invocations"""
+    _set_home(monkeypatch, tmp_path)
+    from catfish_tool_bridge import audit
+    import json
+
+    # 手动写一行昨天的 + 一行今天的
+    yesterday = "2025-01-01"
+    today_iso = catfish_tools.datetime.now().date().isoformat()
+    audit_path = audit.audit_path()
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    audit_path.write_text(
+        json.dumps({
+            "ts": f"{yesterday}T10:00:00.000+00:00",
+            "tool": "old", "ok": True, "error": None,
+            "latency_ms": 1.0, "args_preview": "",
+        }) + "\n" +
+        json.dumps({
+            "ts": f"{today_iso}T10:00:00.000+00:00",
+            "tool": "new", "ok": True, "error": None,
+            "latency_ms": 1.0, "args_preview": "",
+        }) + "\n"
+    )
+    result = catfish_tools.collect_today_summary()
+    assert result["tool_invocations_today"] == 1  # 只今天那条
+
+
+# ============================================================
+# BL-C15: skill_unused_30d
+# ============================================================
+
+
+def test_unused_skills_empty_when_no_skills(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """没 skill 目录 → unused 列表空"""
+    _set_home(monkeypatch, tmp_path)
+    result = catfish_tools.collect_today_summary()
+    assert result["skill_unused_30d"] == []
+
+
+def test_unused_skills_recent_modified_excluded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """skill 最近改过 → 不算 unused"""
+    _set_home(monkeypatch, tmp_path)
+    skill_md = tmp_path / ".hermes" / "skills" / "ns" / "fresh-skill" / "SKILL.md"
+    _touch(skill_md, "fresh content")  # mtime = now
+    result = catfish_tools.collect_today_summary()
+    assert result["skill_unused_30d"] == []
+
+
+def test_unused_skills_old_modified_included(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """skill 35 天前改过 → 算 unused, 30 天阈值"""
+    _set_home(monkeypatch, tmp_path)
+    skill_md = tmp_path / ".hermes" / "skills" / "ns" / "stale-skill" / "SKILL.md"
+    old_mtime = time.time() - 35 * 86400  # 35 天前
+    _touch(skill_md, "stale content", mtime=old_mtime)
+
+    result = catfish_tools.collect_today_summary()
+    assert len(result["skill_unused_30d"]) == 1
+    item = result["skill_unused_30d"][0]
+    assert item["full_name"] == "ns/stale-skill"
+    assert item["days_since_modified"] >= 35
+
+
+def test_unused_skills_symlink_excluded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """catfish-* skill 是软链, 不算员工 unused (R6 也禁止删)"""
+    _set_home(monkeypatch, tmp_path)
+
+    # 建源: 35 天前的 SKILL.md
+    src_dir = tmp_path / "catfish-src" / "catfish-email"
+    src_dir.mkdir(parents=True)
+    src_md = src_dir / "SKILL.md"
+    _touch(src_md, "src", mtime=time.time() - 35 * 86400)
+
+    # 软链到 ~/.hermes/skills/productivity/catfish-email
+    skills_root = tmp_path / ".hermes" / "skills" / "productivity"
+    skills_root.mkdir(parents=True)
+    (skills_root / "catfish-email").symlink_to(src_dir)
+
+    result = catfish_tools.collect_today_summary()
+    # catfish-email 是软链, 不在 unused 列表里
+    assert result["skill_unused_30d"] == []
+
+
+def test_unused_skills_sorted_by_age_desc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """unused 列表按"多久没改"降序 (最旧的在前)"""
+    _set_home(monkeypatch, tmp_path)
+    now = time.time()
+    for name, age_days in [("a-30d", 32), ("b-60d", 60), ("c-90d", 90)]:
+        md = tmp_path / ".hermes" / "skills" / "ns" / name / "SKILL.md"
+        _touch(md, name, mtime=now - age_days * 86400)
+
+    result = catfish_tools.collect_today_summary()
+    names = [item["full_name"] for item in result["skill_unused_30d"]]
+    assert names == ["ns/c-90d", "ns/b-60d", "ns/a-30d"]
+
+
+def test_unused_skills_29d_not_included(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """阈值精确 — 29 天前的不算 unused (默认 30 天)"""
+    _set_home(monkeypatch, tmp_path)
+    md = tmp_path / ".hermes" / "skills" / "ns" / "borderline" / "SKILL.md"
+    _touch(md, "x", mtime=time.time() - 29 * 86400)
+
+    result = catfish_tools.collect_today_summary()
+    assert result["skill_unused_30d"] == []

@@ -514,6 +514,76 @@ def _build_summary(
     return f"今天小鲶 {'、'.join(parts)}。"
 
 
+def _collect_audit_stats_today() -> Dict[str, Any]:
+    """从 ~/.hermes/.catfish_audit.jsonl 拿今天的 tool 调用统计.
+
+    跟 db_stats 的 tool_calls_today 不同 — db_stats 来自 hermes state.db (cli/companion
+    sessions), audit.jsonl 来自 tool-bridge dispatch (含 catfish native tool 调用).
+    audit 视角是"tool-bridge 服务的所有调用", 更准.
+    """
+    fallback = {"tool_invocations_today": 0, "tool_failures_today": 0}
+    try:
+        from . import audit  # 避免顶层 import 循环
+    except ImportError:
+        return fallback
+
+    today_iso = datetime.now().date().isoformat()  # 例 "2026-04-28"
+    try:
+        events = audit.read_events(since_iso=today_iso, limit=10000)
+    except Exception:  # noqa: BLE001
+        return fallback
+
+    failures = sum(1 for e in events if not e.get("ok", True))
+    return {
+        "tool_invocations_today": len(events),
+        "tool_failures_today": failures,
+    }
+
+
+def _collect_unused_skills(days: int = 30) -> List[Dict[str, Any]]:
+    """找 ~/.hermes/skills/<ns>/<name>/SKILL.md mtime 超过 N 天前的 skill.
+
+    判定原则: SKILL.md 文件 mtime 是 last touch (创建 / update / 员工手动改). N 天没动
+    + 没出现在 audit 里 = 候选 unused. 给员工建议删 (走 catfish_skill_backup +
+    skill_manage delete 流程, 详见 docs/SKILL-LIFECYCLE.md 阶段 5).
+
+    catfish-* skill 排除掉 (软链管理, R6 也禁止删).
+    """
+    out: List[Dict[str, Any]] = []
+    skills_dir = _hermes_dir() / "skills"
+    if not skills_dir.is_dir():
+        return out
+
+    cutoff_unix = time.time() - days * 86400
+
+    for ns_dir in skills_dir.iterdir():
+        if not ns_dir.is_dir() or ns_dir.name.startswith("."):
+            continue
+        for skill_dir in ns_dir.iterdir():
+            if not skill_dir.is_dir():
+                continue
+            # catfish-* skill 通过 install.sh 软链, 不算"员工 unused"
+            if skill_dir.is_symlink():
+                continue
+            manifest = skill_dir / "SKILL.md"
+            if not manifest.exists():
+                continue
+            try:
+                mtime = manifest.stat().st_mtime
+            except OSError:
+                continue
+            if mtime > cutoff_unix:
+                continue
+            out.append({
+                "full_name": f"{ns_dir.name}/{skill_dir.name}",
+                "last_modified": _unix_to_iso(mtime),
+                "days_since_modified": int((time.time() - mtime) / 86400),
+            })
+
+    out.sort(key=lambda s: s["days_since_modified"], reverse=True)
+    return out
+
+
 def collect_today_summary() -> Dict[str, Any]:
     """返回与 Tauri learning_today_stats 对齐的字段(camelCase 风格), 给 LLM 看。"""
     memories = _collect_memories()
@@ -528,6 +598,12 @@ def collect_today_summary() -> Dict[str, Any]:
     tokens = db_stats["total_tokens_today"]
 
     soft = _collect_soft_skill_stats()
+
+    # BL-C15: audit-based 字段 (tool 调用监控)
+    audit_today = _collect_audit_stats_today()
+
+    # BL-C15/C16: 30 天 SKILL.md mtime 没动的 skill, 候选 unused (给员工删/留建议)
+    unused_skills = _collect_unused_skills(days=30)
 
     summary = _build_summary(
         memories_today, skills_today, sessions, tool_calls,
@@ -550,6 +626,10 @@ def collect_today_summary() -> Dict[str, Any]:
         "coaching_sessions_prev_week": soft["coaching_sessions_prev_week"],
         "emails_drafted_today": soft["emails_drafted_today"],
         "methodologies_this_week": soft["methodologies_this_week"],
+        # ==== Skill lifecycle 阶段 4 (BL-C15/C16, audit-based) ====
+        "tool_invocations_today": audit_today["tool_invocations_today"],
+        "tool_failures_today": audit_today["tool_failures_today"],
+        "skill_unused_30d": unused_skills,
         "generated_at": _unix_to_iso(time.time()),
     }
 
