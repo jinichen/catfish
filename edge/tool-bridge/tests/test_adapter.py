@@ -69,10 +69,12 @@ def test_list_tools_native_first(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_fake_registry(monkeypatch, ["zebra_tool", "alpha_tool"])
     out = adapter.list_tools()
     names = [t["name"] for t in out]
-    # native 在最前
-    assert names[0] == "catfish_today_summary"
-    # hermes 按字母排
-    rest = names[1:]
+    # native tools 全在最前面 (按 CATFISH_NATIVE_TOOLS 列表顺序)
+    n_native = len(catfish_tools.CATFISH_NATIVE_TOOLS)
+    expected_native = [t["name"] for t in catfish_tools.CATFISH_NATIVE_TOOLS]
+    assert names[:n_native] == expected_native
+    # hermes 部分按字母排
+    rest = names[n_native:]
     assert rest == sorted(rest)
     assert "alpha_tool" in rest
     assert "zebra_tool" in rest

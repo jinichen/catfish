@@ -17,7 +17,7 @@ import logging
 import traceback
 from typing import Any, Dict, List
 
-from . import catfish_tools
+from . import catfish_tools, skill_watcher
 
 logger = logging.getLogger("catfish.tool_bridge.adapter")
 
@@ -87,6 +87,10 @@ async def dispatch_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         {"ok": bool, "result": <jsonable> | None, "error": str | None,
          "tool": name, "stderr": str | None}
     """
+    # 给 skill_watcher 标记"现在 LLM 在繁忙地用工具", 防它在 LLM 调用循环中突然
+    # 重启 tool-bridge. 这是廉价操作 (一次 lock + 时间戳更新)。
+    skill_watcher.mark_dispatch()
+
     # 先看 catfish 原生 tool —— 这些不走 hermes registry, 也不要求 toolset
     # 可用性检查 (它们就是 catfish 自己的代码, 一定在)
     if catfish_tools.is_native(name):

@@ -12,7 +12,20 @@ metadata:
 
 # catfish-browser-task
 
-让小鲶**替员工操作浏览器**，基于 Hermes 自带的 `browser_navigate` / `browser_click` / `browser_snapshot` / `browser_cdp` 等原生工具，提供一套稳健的任务模板。
+让小鲶**替员工操作浏览器**，基于 Hermes 自带的 `browser_click` / `browser_snapshot` / `browser_cdp` 等原生工具，配合 catfish 自己写的 `catfish_browser_goto` (导航) + `catfish_screenshot` (像素级看图)，提供一套稳健的任务模板。
+
+## ⚠️ 工具选择铁律 (踩过坑总结)
+
+| 想干啥 | 用啥 | 不要用啥 |
+|---|---|---|
+| **打开 / navigate 一个 URL** | **`catfish_browser_goto`** (catfish 自己写, 走原生 CDP page-level Page.navigate, 返回真实 title+url) | `browser_navigate` (hermes 上游, 实测在 Companion 隔离 Chrome 上**调用 ✓ 但页面没真换**, 而且模型还会编"已打开") |
+| 看页面整体 | `browser_vision` 粗看 / `catfish_screenshot` 精细 | (见下面"第 3 步 看图") |
+| 拿元素结构 | `browser_snapshot` | — |
+| 点击元素 | `browser_click` | — |
+| 输入文字 | `browser_type` | — |
+| 读 console / 网络 | `browser_console` / `browser_network` | — |
+
+**铁律**: **导航永远用 `catfish_browser_goto`** (除非它真挂了再 fallback hermes browser_navigate). 历史教训 (2026-04-27): 用户让模型"打开搜狐", 模型 ✓ 调 browser_navigate, 然后编"搜狐首页已打开, 顶部有导航栏...", **实际 Chrome 还停在 about:blank**. 这种 hallucination 是 hermes 上游 fork 的 bug, 我们不修上游, 直接绕开。
 
 ## 何时调用（重要：browser 是"最后一公里"工具，先看有没有 API）
 
@@ -113,13 +126,26 @@ metadata:
 适用：Jira / Confluence / GitLab / GitHub / 大多数 SPA。拿到结构化元素列表后按 ref（比如 `e22`）定位。
 注意 `browser_snapshot full` 遇到大页面会被**截断**，碰到就换 `compact` 或 scroll 后再 snapshot。
 
-**B. 多模态（Hermes 自带 `browser_vision`）** —— Hermes 内置 vision 工具
-适用：
-- snapshot 被截断且关键信息在截断部分
-- canvas 图表、PDF 嵌入、富媒体页面 accessibility 不完整
-- 需要"看"而不是"读"的场景（比如判断按钮颜色、图形布局）
+**B. 多模态 — 看图** —— 两个工具二选一, 看场景
 
-**代价**：每次 `browser_vision` 约 10~20 秒（截图 + vision 模型推理），比 snapshot+DOM 解析贵一个数量级。
+| 场景 | 用啥 | 为啥 |
+|---|---|---|
+| 看页面**整体布局 / 颜色 / 大致内容** (粗看) | `browser_vision` | 走 question 接口直接答, 省一步往返 |
+| **验证码 / 小数字 / 像素级精确字符识别 / 任何要"看清"的事** | **`catfish_screenshot mode=fullscreen`** + 让 Qwen3-VL 直接看图 | browser_vision 实测在精细识别上不可靠 (它有自己的 vision pipeline, 分辨率/采样可能丢精度, 模型有时直接瞎答) |
+| canvas 图表 / PDF 嵌入 / 富媒体 accessibility 不完整 | 先试 `browser_vision`, 不准就 `catfish_screenshot` 兜底 | — |
+
+**铁律 (踩过坑总结)**:
+> **验证码 → 永远 `catfish_screenshot`**, 不要 `browser_vision`. 历史教训 (2026-04-27): browser_vision 在 catfish_browser_task 跑验证码登录时, 看似 ✓ 调用成功但实际填 e3="xtF7" 是**模型用历史数据猜的**, 跟当前页面的验证码毫无关系。换 catfish_screenshot 拍 Chrome 窗口让 Qwen3-VL 直接看就准。
+
+**代价对比**:
+- `browser_vision`: 10~20s, 走 hermes 内置 pipeline. 精度不可控.
+- `catfish_screenshot fullscreen`: <1s 拍主屏 + base64 喂下一轮 user message. Qwen3-VL 直接当 user input 看, **精度跟你直接给员工看图一样**. (浏览器场景 Chrome 占主屏, fullscreen 拍下来就是浏览器内容.)
+
+> ⚠️ **工具名清单 — 别瞎猜**:
+> - 浏览器**粗看页面**: `browser_vision`
+> - 浏览器**精确识别** (验证码 / 数字 / 细节): `catfish_screenshot mode=fullscreen` (Chrome 窗口在前台时拍 Chrome)
+> - 员工**桌面应用** (Excel / Foxmail / 桌面 GUI): `catfish_screenshot mode=fullscreen`
+> - **没有** `browser_screenshot` / `screenshot` / `take_screenshot` 这种工具.
 
 **规则**：
 - 先 A 后 B
@@ -133,6 +159,36 @@ metadata:
 - 数值有无"114k"这种缩写需要展开？
 - 时间戳是相对（"3 分钟前"）还是绝对（`2026-04-24T11:15`）？员工可能更想要绝对时间
 - 如果有"你不知道"的字段，**明说不知道**，不要编
+
+### 第 5 步：评估能不能存 skill (重要 · 配套 SOUL "Skill 生成纪律")
+
+任务跑完输出结果之后, **快速判断这事是不是值得存 skill**:
+
+**满足以下全部 3 条**才主动建议:
+
+1. **重复性**: 用 `memory_recall` 查近 7 天员工有没有做过类似 (同域名 / 同步骤数 / 同最终目标), 数 ≥ 3 才算
+2. **无红线**: 这次没涉及 send_email / delete / 改外部数据 / 读他人数据 / 操作凭据
+3. **员工没标记 ad-hoc**: 员工没说"算了" / "这是一次性的" / "下次别这么做"
+
+满足 → **主动一句话** (不强推):
+
+```
+"我注意到你这周 X 次跑同一个 [域名/任务], 步骤几乎一样.
+ 要不要我把它存成 skill, 下次说'帮我做 [任务名]' 直接走?
+ 存的话步骤会给你 review, 不存我也理解."
+```
+
+不满足 → **不要提**, 直接结束
+
+如果员工 explicit 说"存成 skill" / "保存这个" / "记下来这个流程",
+**立即**走 SOUL "Skill 生成纪律" 章的"何时立即建" 路径, 不需要 ≥ 3 次条件.
+
+**红线 (绝不做)**:
+- ❌ 没员工 yes 自动 `skill_manage(action=create)`
+- ❌ skill 内容里存真实数据 (用户名 / 数字 / 邮箱 / 等), 只存"步骤模板 + 参数定义"
+- ❌ skill 命名用 "auto-1" 这种, 必须业务可读 (例 `catfish-jira-sprint-status`)
+
+详见 SOUL.md "Skill 生成纪律" 章.
 
 ## 常见失败模式与对策
 

@@ -21,7 +21,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict
 
-from . import adapter, bootstrap, catfish_tools
+from . import adapter, bootstrap, catfish_tools, skill_watcher
 
 logger = logging.getLogger("catfish.tool_bridge.server")
 
@@ -117,7 +117,15 @@ async def serve_forever(socket_path: Path) -> None:
 
     socket_path.parent.mkdir(parents=True, exist_ok=True)
 
-    server = await asyncio.start_unix_server(_handle_client, str(socket_path))
+    # readline limit 拉到 16MB —— catfish_screenshot 工具返回的 base64 PNG 单行
+    # 可能 5-10 MB, 默认 64KB 会让 readline 抛 LimitOverrunError。
+    # 上限 12MB raw + base64 1.33x ≈ 16MB, 跟 catfish_tools._MAX_SCREENSHOT_BYTES
+    # 配套, 保险起见多留点。
+    server = await asyncio.start_unix_server(
+        _handle_client,
+        str(socket_path),
+        limit=16 * 1024 * 1024,
+    )
     os.chmod(socket_path, 0o600)  # 只员工自己能连
     logger.info("listening on %s", socket_path)
 
@@ -129,6 +137,10 @@ async def serve_forever(socket_path: Path) -> None:
     print(f"   tools  : {hermes_count + native_count} 个 "
           f"(hermes {hermes_count} + catfish 原生 {native_count})", flush=True)
     print("─" * 60, flush=True)
+
+    # 起 skill watcher daemon: 检测 ~/.hermes/skills/ 变化后 graceful 重启
+    # (Companion autostart 会 respawn, 新进程重新 import hermes tools 加载新 skill)
+    skill_watcher.start()
 
     async with server:
         await server.serve_forever()

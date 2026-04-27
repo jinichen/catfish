@@ -296,3 +296,217 @@ def test_native_tool_schema_shape() -> None:
         assert "input_schema" in tool
         assert tool["input_schema"]["type"] == "object"
         assert "properties" in tool["input_schema"]
+
+
+# ============================================================
+# 软技能维度 (#46) 单测
+# ============================================================
+
+
+def _make_state_db(tmp_path: Path) -> Path:
+    """建一个跟 hermes state.db schema 兼容的最小 db, 给软技能测试用"""
+    hermes = tmp_path / ".hermes"
+    hermes.mkdir(parents=True, exist_ok=True)
+    db = hermes / "state.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        """
+        CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            started_at REAL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT,
+            role TEXT,
+            content TEXT,
+            tool_calls TEXT,
+            timestamp REAL
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+    return db
+
+
+def test_soft_skills_no_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """state.db 不存在 → fallback 全 0, 不抛"""
+    _set_home(monkeypatch, tmp_path)
+    out = catfish_tools._collect_soft_skill_stats()
+    assert out["coaching_sessions_today"] == 0
+    assert out["emails_drafted_today"] == 0
+    assert out["methodologies_this_week"] == []
+
+
+def test_soft_skills_coaching_today(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """assistant 回复含'做对了' + '改进点' 应被识别为演练复盘"""
+    _set_home(monkeypatch, tmp_path)
+    db = _make_state_db(tmp_path)
+    now = time.time()
+
+    conn = sqlite3.connect(db)
+    # 演练 1: 完整复盘
+    conn.execute(
+        "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
+        ("s1", "assistant", "复盘 -- ✓ 做对了: 数据准备充分 ✗ 改进点: 别 hedge 词", now),
+    )
+    # 演练 2: 同 session 多条 (应去重计为 1)
+    conn.execute(
+        "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
+        ("s1", "assistant", "继续聊 ... 做对了 X / 改进点 Y", now + 1),
+    )
+    # 演练 3: 不同 session
+    conn.execute(
+        "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
+        ("s2", "assistant", "另一场 -- 做对了 ABC, 改进点 DEF", now + 2),
+    )
+    # 干扰: assistant 普通回复 (不含两关键词都)
+    conn.execute(
+        "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
+        ("s3", "assistant", "今天天气好", now + 3),
+    )
+    conn.commit()
+    conn.close()
+
+    out = catfish_tools._collect_soft_skill_stats()
+    assert out["coaching_sessions_today"] == 2  # s1 + s2 (去重 + 干扰过滤)
+
+
+def test_soft_skills_emails_drafted_today(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_home(monkeypatch, tmp_path)
+    db = _make_state_db(tmp_path)
+    now = time.time()
+
+    conn = sqlite3.connect(db)
+    # tool_calls 含 catfish-email
+    conn.execute(
+        "INSERT INTO messages (session_id, role, content, tool_calls, timestamp) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ("s1", "assistant", "好", '[{"name":"terminal","args":{"cmd":"catfish-email list"}}]', now),
+    )
+    conn.execute(
+        "INSERT INTO messages (session_id, role, content, tool_calls, timestamp) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ("s1", "assistant", "好", '[{"name":"terminal","args":{"cmd":"catfish-email read --id X"}}]', now + 1),
+    )
+    # 干扰: 别的 tool_calls
+    conn.execute(
+        "INSERT INTO messages (session_id, role, content, tool_calls, timestamp) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ("s1", "assistant", "好", '[{"name":"read_file"}]', now + 2),
+    )
+    conn.commit()
+    conn.close()
+
+    out = catfish_tools._collect_soft_skill_stats()
+    assert out["emails_drafted_today"] == 2
+
+
+def test_soft_skills_methodologies_detected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """assistant 回复里出现的 STAR / SBI / 金字塔 等被识别"""
+    _set_home(monkeypatch, tmp_path)
+    db = _make_state_db(tmp_path)
+    now = time.time()
+
+    conn = sqlite3.connect(db)
+    long_text = "你这场用 STAR 框架更合适 — Situation/Task/Action/Result。" + "x" * 100
+    conn.execute(
+        "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
+        ("s1", "assistant", long_text, now),
+    )
+    long_text2 = "1:1 给反馈用 SBI 框架: Situation-Behavior-Impact。" + "y" * 100
+    conn.execute(
+        "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
+        ("s2", "assistant", long_text2, now + 1),
+    )
+    long_text3 = "你这种汇报应用金字塔原理: 结论先行..." + "z" * 100
+    conn.execute(
+        "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
+        ("s3", "assistant", long_text3, now + 2),
+    )
+    conn.commit()
+    conn.close()
+
+    out = catfish_tools._collect_soft_skill_stats()
+    methods = out["methodologies_this_week"]
+    assert "STAR" in methods
+    assert "SBI" in methods
+    assert "金字塔" in methods
+    # 顺序按 KNOWN_METHODOLOGIES 不是字母 (UI 稳定)
+    assert methods.index("STAR") < methods.index("SBI")
+
+
+def test_soft_skills_methodologies_short_content_ignored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """短消息 (length<=50) 不参与 methodology 检测, 防误命中"""
+    _set_home(monkeypatch, tmp_path)
+    db = _make_state_db(tmp_path)
+    now = time.time()
+
+    conn = sqlite3.connect(db)
+    # 短消息含 STAR 但应被忽略
+    conn.execute(
+        "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
+        ("s1", "assistant", "STAR", now),
+    )
+    conn.commit()
+    conn.close()
+
+    out = catfish_tools._collect_soft_skill_stats()
+    assert out["methodologies_this_week"] == []
+
+
+def test_collect_today_summary_includes_soft_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """collect_today_summary 顶层字段必须含 5 个新软技能字段"""
+    _set_home(monkeypatch, tmp_path)
+    out = catfish_tools.collect_today_summary()
+    for field in (
+        "coaching_sessions_today",
+        "coaching_sessions_this_week",
+        "coaching_sessions_prev_week",
+        "emails_drafted_today",
+        "methodologies_this_week",
+    ):
+        assert field in out, f"missing {field}"
+
+
+def test_summary_text_includes_coaching_when_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_home(monkeypatch, tmp_path)
+    db = _make_state_db(tmp_path)
+    now = time.time()
+
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
+        ("s1", "assistant", "复盘: 做对了 X, 改进点 Y", now),
+    )
+    conn.commit()
+    conn.close()
+
+    out = catfish_tools.collect_today_summary()
+    assert "演练 1 次" in out["summary"]
+
+
+def test_week_start_unix_monotonic() -> None:
+    """周界对齐: prev < this"""
+    this_w = catfish_tools._week_start_unix(0)
+    prev_w = catfish_tools._week_start_unix(1)
+    assert prev_w < this_w
+    # 间隔 7 天
+    assert (this_w - prev_w) == 7 * 86400
