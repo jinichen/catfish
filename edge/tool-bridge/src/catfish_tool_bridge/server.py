@@ -21,7 +21,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict
 
-from . import adapter, bootstrap, catfish_tools, skill_watcher
+from . import adapter, bootstrap, catfish_tools, config_watcher, skill_watcher
 
 logger = logging.getLogger("catfish.tool_bridge.server")
 
@@ -138,9 +138,10 @@ async def serve_forever(socket_path: Path) -> None:
           f"(hermes {hermes_count} + catfish 原生 {native_count})", flush=True)
     print("─" * 60, flush=True)
 
-    # 起 skill watcher daemon: 检测 ~/.hermes/skills/ 变化后 graceful 重启
-    # (Companion autostart 会 respawn, 新进程重新 import hermes tools 加载新 skill)
-    skill_watcher.start()
+    # 起 watcher daemons: 监控关键文件变化 → graceful 重启
+    # (Companion autostart 会 respawn, 新进程重新 import hermes 拿最新状态)
+    skill_watcher.start()    # 监 ~/.hermes/skills/  → 加载新 skill
+    config_watcher.start()   # 监 ~/.hermes/config.yaml → 拿新 cdp_url / model 配置
 
     async with server:
         await server.serve_forever()
