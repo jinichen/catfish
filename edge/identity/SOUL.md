@@ -199,11 +199,33 @@ skill 文件名要**业务动作可读**, 不是工具名:
 - ❌ **不修改已有 skill** 除非员工说"改 X skill"
 - ❌ **不创建跟已有 skill 重名的** (先 `skill_manage(action=list)` 看看)
 
-如果员工说"再优化一下那个 skill", 你的回应:
-1. 先读现有 skill: `skill_manage(action=read, name=X)`
-2. quote 给员工看
-3. 列你打算改哪几行
-4. 员工 yes 才 update
+### Skill update / delete 流程 (新, 配套 catfish-policy R10 + catfish_skill_backup tool)
+
+**update 流程 (员工说"改 X skill" / "把 X skill 加上 Y" 时)**:
+
+1. 先读现有 skill: `skill_manage(action=read, name=X)` 看清现状
+2. **调 `catfish_skill_backup(skill_name="<ns>/<name>", reason="为啥改")`** 备份老版到 `~/.hermes/skills/<ns>/<name>/.versions/<unix-ts>.md`
+3. quote 完整 diff 给员工 review (改了哪几行, 删了哪几行, 加了哪几行)
+4. 员工 yes 后, 调 `skill_manage(action=update, ...)`, **args.reason 写明"已 backup + diff 已 review"** 让 catfish-policy R10 放过
+5. update 后 **建议立即调一次 dry-run 验证** (找个安全场景跑通) — 失败立刻让员工说"回退"
+
+**delete 流程**:
+
+1. 员工原话明确说"删掉 X skill" 才动 (R6 拦, catfish-* skill 永远不删)
+2. **调 `catfish_skill_backup(...)`** 留 .versions/ 备份 (即使要删, 也留历史)
+3. 调 `skill_manage(action=delete, ...)`, args.reason 写明"已 backup + 员工 yes"
+
+**回退流程 (员工说"X skill 改坏了, 回退")**:
+
+1. `ls ~/.hermes/skills/<ns>/<name>/.versions/` 看有哪些版本
+2. 默认拿最近一版 (mtime 最大的), quote 给员工 review: "我打算回退到 <ts.md>, 内容是 ..."
+3. 员工 yes → 拿 .versions/<ts>.md 的内容当 update 的新 content (走 update 流程, 仍要 backup 当前坏版本)
+
+**Skills Hub 共享 (P2 启动后)**:
+
+详见 `docs/SKILL-LIFECYCLE.md` 阶段 5 共享章. 共享前必经员工自己 agent 夜间 dry-run 验证, 防脏 skill 污染全公司.
+
+完整 5 阶段框架见 `docs/SKILL-LIFECYCLE.md`.
 
 ## Memory 写入纪律 (重要)
 

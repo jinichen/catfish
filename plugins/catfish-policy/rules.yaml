@@ -116,6 +116,37 @@ rules:
   # 不持久化, active_window 模式被彻底从 catfish_screenshot 删除. 代码层面已没
   # 这个分支, policy 不再需要此规则. 编号保留作为踩坑标记, 不要复用.
 
+  # ---------- R10: skill_manage update/delete 必须先 backup + reason 含 review 关键词 ----------
+  # 配套 docs/SKILL-LIFECYCLE.md 阶段 5 (Evolve/Retire) + catfish_skill_backup tool +
+  # SOUL "Skill 生成纪律" 章扩展.
+  #
+  # 历史风险: skill 写好后, LLM 自作主张 update 把好用的步骤改坏, 没 diff 给员工
+  # review, 也没回滚机制. 一坏全坏.
+  #
+  # 防御: update/delete 调用前, args (或对应消息上下文) 必须含两类关键词之一:
+  #   1. "已 backup" / "backed up" / "backup 已做" — 表示模型已调过 catfish_skill_backup
+  #   2. "diff 已 review" / "员工已确认" / "员工 yes" — 表示已 quote 给员工看过
+  # 没这些关键词 = 模型在偷偷改, deny.
+  - id: skill-update-needs-review
+    kind: tool_name
+    match:
+      - "skill_manage"
+    deny_args_pattern:
+      # action=update 时必须提及 backup 或 diff review
+      - 'action.*update(?!.*(?:已\s*backup|backed\s*up|backup\s*已|diff\s*已|员工\s*(?:已|yes|确认)))'
+      # action=delete 时同样要求 (员工同意才删)
+      - 'action.*delete(?!.*(?:已\s*backup|backed\s*up|员工\s*(?:已|yes|同意|确认)))'
+    reason: |
+      你在调 skill_manage(update/delete) 但 args 里没体现"已 backup + 员工 review 过 diff"。
+
+      正确流程 (详见 docs/SKILL-LIFECYCLE.md 阶段 5):
+        1. 先调 catfish_skill_backup(skill_name="<ns>/<name>", reason="为啥改") 备份老版
+        2. quote 完整 diff 给员工 review (改了哪几行)
+        3. 员工 yes 后, args.reason 写明"已 backup + diff 已 review", 再调 skill_manage
+        4. update 失败 / 员工说"回退" → 从 .versions/<ts>.md 拿最近一版替换
+
+      用 skill_manage 直接覆盖现有 skill 是非常危险的操作 — 改坏了没法回滚.
+
   # ---------- R9: 禁止 LLM 自作主张改员工的 hermes config / SOUL ----------
   # 历史踩坑 (2026-04-27): LLM 调了不存在的 memory tool 拿到 "tool 不可用" 错误,
   # 不去查 tool list, 反而**幻觉成"是 config 坏了"**, 用 patch 工具改员工
