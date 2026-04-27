@@ -900,6 +900,163 @@ P0-4 是症状治理，根因还是 tool-bridge 没起 → tools=[] → Gemini �
 
 ---
 
+## 2026-04-27（周一）
+
+视觉 / 多模态全栈打通 + 一波 SOUL 反幻觉补丁 + 4-26 P1 收尾追登。
+
+> 这一天主线是: 让员工**给小鲶喂图**这条路真正能跑通——从 Tauri 端 📎/粘贴/拖入加图，到 gateway multimodal 透传，到 Qwen3-VL 真的"看清像素而不是瞎答"，到 SOUL 层防"我没视觉能力"自我否认。中间还顺手把 catfish_screenshot 默认改成零打扰的 active_window 模式，并修了 browser_vision 在精细识别上的可靠性误导。
+
+### 完成
+
+#### #50 · Companion 起 Chrome 后自动刷新 hermes cdp_url
+
+**痛点**：每次 Chrome 重启 `webSocketDebuggerUrl` UUID 变，但 `~/.hermes/config.yaml` 的 `browser.cdp_url` 写死，不刷新员工敲 `browser_navigate` 就 404。之前要靠 `catfish-browser-attach.sh` 手动跑。
+
+**实现** (`commands/chrome.rs`, `services/catfish_paths.rs`)：
+- `chrome_launch` 后 `tokio::spawn` 后台 poll Chrome `/json/version`，60 次 retry × 500ms = 30s 兜底
+- 拿到 `webSocketDebuggerUrl` 写入 yaml 的 `browser.cdp_url` 字段（yaml 解析 + 已是同值 skip 防 inotify 噪音）
+- 容错：Chrome 没起来 → 静默放弃 + log warn；hermes config 不存在 → skip
+- `catfish_paths.rs` 新增 `hermes_config_path()` 助手
+
+**Hermes 内存缓存的限制**：已在跑的 hermes session 把 cdp_url 缓存在内存，config 改了也不刷新——员工还是要 `/exit` 重进。这是上游 hermes 行为，我们改不了，但 cdp_url 本身已经是最新的，再读一次就通。
+
+#### #51 · catfish_screenshot 工具 + SKILL (Qwen3-VL 看屏幕)
+
+tool-bridge 加 native tool。
+
+- **mac**: `screencapture` 系统命令封装；**win**: `PIL.ImageGrab`（fallback）
+- 输入参数 `mode` + `reason` 必填（reason 一句话员工能看到）
+- 12MB 单张上限（base64 后 ~16MB），超就拒绝不撑爆 socket
+- `server.py` `start_unix_server` 的 `limit` 从默认 64KB 拉到 16MB（不然 readline 处理不了大 base64 一行）
+- SKILL.md (`tool-bridge/hermes-skill/catfish-screenshot/`): 文档化何时调 / 不该调（浏览器场景永远 browser_vision、本地文件用 read_file）/ 隐私红线
+- catfish-policy R8: `mode=fullscreen` 时 reason 必须含"员工/明确/全屏/同意/要求/确认"等词，否则 deny
+- install.sh (`tool-bridge/hermes-skill/install.sh`): 软链 SKILL 到 `~/.hermes/skills/productivity/catfish-screenshot`
+- 17 单测：schema / 入参校验 / mac 三种 mode / 员工取消 / 文件超大 / dispatch 路由
+
+#### #52 · ChatInput 图片附件 (粘贴/拖放/上传 + 自动切视觉模型)
+
+**整条多模态管线**：
+
+- `types/chat.ts` 新 `Attachment` interface (kind, mimeType, name, base64, sizeBytes) + `ChatMessage.attachments?` 字段
+- `lib/chat.ts` `toWire()` 检测 user message 含附件 → 输出 OpenAI multimodal content array `[{type:"text"}, {type:"image_url", image_url:{url:"data:..."}}]`
+- `tabs/Chat/ChatInput.tsx` 完全重写：📎 按钮（隐藏 file input + accept="image/*"）/ `onPaste` 捕获剪贴板图片 / `onDragOver/Drop` 拖入区域背景变浅青色反馈 / 缩略图行（64×64 + ×删除）/ 错误提示行 / max 6 张 + 12MB 单张校验
+- `tabs/Chat/ChatPanel.tsx` + `tabs/Chat/ChatTab.tsx`: `onSend` / `handleSend` 透传 `attachments`
+- `tabs/Chat/ChatMessage.tsx` UserBubble: 渲染图片缩略图（max 220×220 contain），文字附件并存
+- `hooks/useChat.ts`: `send()` 改签名 `(content: string, attachments?: Attachment[])`；新增 `maybeSwitchToVision(currentModel)` 在带图发送但当前模型 `supports_vision=false` 时透明切到视觉模型；按优先级 `[catfish-private-vision, catfish-public-qwen-flash, catfish-public-gemini-flash, catfish-public-gemini-pro]` 选第一个 reachable+key_configured 的；切了在对话流追加一条 assistant 提示"🔁 已切到 X"；切不到（pool 空）短路返回 + 红色错误，不去硬发让上游 400
+- `runOneRound` 内 `streamChat({model: useChatStore.getState().model})`——从 store snapshot 读，避免 closure 拿到旧 model
+
+**State.db 持久化策略**：图片 base64 不入库（避免膨胀状态库），文字部分末尾加占位符 `[📎 N 张图片 — Companion in-memory, 切会话不保留]`。切回历史会话只剩文字。后续要持久化再迁。
+
+#### Gateway · vision 加 fallback chain + connection error 进 on_errors
+
+P1 fallback 链 4-26 已经覆盖了 main + gemini-pro/flash，今天发现 **vision 漏了**——内网 10.10.40.x 一抖动 catfish-private-vision 就直接挂员工。
+
+- `models.yaml` `catfish-private-vision` 加 `fallback: {chain: [catfish-public-qwen-flash, catfish-public-gemini-flash], on_errors: [429, 502, 503, 504, "timeout", "connection error", "connection refused"]}`
+- 所有现有 fallback 的 `on_errors` 也补齐这两个 connection error 关键词
+- `fallback.py` `_ERROR_KEYWORDS` 加同义词扩展（"connection error" → "cannot connect" / "connect call failed" / "broken pipe" / "apiconnectionerror"）—— 实际撞内网 wifi 抖动时 LiteLLM 抛的就是这一组
+
+24 现有 fallback 测试不回归 + 4 个新增手工 keyword 验证。
+
+#### #53 · SOUL.md 加多模态自我认知段，防"我没视觉能力"幻觉
+
+**症状**：Qwen3-VL 在 browser-task 上下文里，`browser_vision` tool 调用失败后，把"工具失败"错位成"我没视觉能力"，越解释越偏（说"我是语言模型，依赖 browser_vision 工具"）。
+
+**修法**：SOUL.md 加"多模态能力 (重要 — 防自我否认)"段：
+- 列出当前可能的多模态模型（catfish-private-vision / qwen-flash / gemini）
+- ✅ "image_url 直接看，不需要工具"
+- ❌ 三句严禁说："我是语言模型..." / "依赖 browser_vision..." / "工具失败所以看不了"
+- 区分 browser_vision（浏览器 tool）vs user message image_url（你直接看，原生能力）
+
+SOUL.md 是 mtime cache + `~/.hermes/SOUL.md` 软链回源代码——改完 gateway 自动 reload 不需要重启。
+
+#### #54 · catfish_screenshot 加 active_window 模式 (零打扰自动截图)
+
+**反馈**：默认 `mode=interactive` 弹十字让员工框选，员工："不能让人工去选择"。
+
+**新模式 `active_window`**：
+- `osascript` 拿 frontmost window ID（"tell application System Events to get id of first window of (first process whose frontmost is true)"）
+- `screencapture -l <window-id>`，全自动 0 鼠标
+- 设为**新默认**（覆盖 interactive）
+- macOS Accessibility 权限没给时（osascript 失败）静默 fallback 到 fullscreen——还是不打扰员工
+- Win 端 `interactive/window/active_window` 全退到 fullscreen 并带 platform_note 提示员工先关敏感窗口
+
+19 个 screenshot 测试（新增 2 个 active_window case：拿到 ID 走 `-l` / 没 Accessibility 权限静默 fallback 到全屏）。
+
+#### #55 · 修正 browser_vision 误导，验证码场景改走 catfish_screenshot
+
+**症状**：员工实测——browser_vision 在像素级精细识别（验证码）上**不可靠**，看似 ✓ 调用成功但 `e3` 填的字符是模型用历史数据**瞎答**，跟当前页面验证码毫无关系。登录"成功"是凑巧或页面没真登上。
+
+**修法**：catfish-browser-task SKILL.md 加对比表：
+- 粗看页面布局 / 颜色：`browser_vision` OK
+- 验证码 / 小数字 / 任何"看清"：**永远 `catfish_screenshot mode=active_window` 拍 Chrome 窗口**，让 Qwen3-VL 直接看 base64 PNG—精度 = 员工肉眼
+
+SOUL.md 删掉之前误导性"浏览器场景永远 browser_vision"，同步成"看清像素 → catfish_screenshot 直拍"。
+
+**根因猜测**：browser_vision 走 hermes 内置 vision pipeline，中间层（图压缩 / 模型路由 / question-answer 提示模板）有损精度，遇验证码这种小字符直接糊。catfish_screenshot 直拍像素喂 user message，没中间损失。
+
+#### #56 · SOUL.md 加"系统操作不让员工跑 shell"段，防 6 步手动清单
+
+**症状**：模型遇到 cdp 失效，给员工列 6 步手动命令清单（退 Hermes / Cmd+Q Chrome / `open -n -a /Applications/Google\ Chrome.app --args --remote-debugging-port=9222` / 手动访问 / 重启 Hermes / "告诉我，我立即演示"）。员工是来用产品的，不是来当 sysadmin。
+
+**修法**：SOUL.md 加段教模型——优先级 1. catfish 内置 tool / 2. Companion UI 按钮 / 3. 实在不行才 shell（且 ≤ 2 条）。给标准答案表（cdp 失效 / Companion 异常 / tool-bridge 死 / gateway 502 / skill 不生效），每条 ≤ 2 步。
+
+具体反例：cdp 失效正确答案是"Companion 控制台点「启动 Catfish Chrome」（自动同步 cdp_url）+ /exit 重进 hermes"——2 步搞定，配合 #50 是无感的。
+
+### 踩坑
+
+- **Qwen3-VL 自我否认**：browser-task 上下文里 vision tool 调失败 → 模型错位成"我没视觉能力"。修：SOUL.md 加专项指引 + 区分清楚 browser_vision tool vs 直接喂 image_url 的多模态原生能力。
+- **browser_vision 不可靠**：实测在验证码识别上看似 ✓ 调用成功，实际填的字符是模型瞎猜（e3="xtF7" 跟当前页面无关）。真要看清像素就 catfish_screenshot 直拍 Chrome 窗口。上游 hermes 的 vision pipeline 中间层精度损失，我们改不了，但可以绕开。
+- **内网 LLM 整体不可达 (TimeoutError + ConnectionRefused)**：公司 VPN 抖动 / 平台维护时 catfish-private-{main, vision} 全断。修：vision 加 fallback chain；fallback.py 识别 connection error 关键词；自动落公共 qwen-flash。
+- **fallback chain 自我覆盖**：编辑 models.yaml 时 fallback chain 莫名变成 `[qwen-flash, vision, qwen-flash]`（vision 重复 + 顺序错），原因不明，可能是 Edit 工具的某个 race。修：手动 grep 校验后修正成 `[qwen-flash, gemini-flash]`。今后批量改 yaml 后必须 yaml.safe_load 验证一遍。
+- **rollup native binding (sandbox)**：Linux sandbox 跑 `npm run build` 撞 mac-installed rollup binding 不兼容。不是代码问题——TypeScript `tsc --noEmit` 通过即可，真打包在用户 mac 跑。
+- **tempfile.gettempdir() 缓存**：screenshot 测试里多个 case 跑同一秒，生成同一个 `/tmp/catfish-shot-<unix>.png` 路径，下个 test 看到上个写的文件误判成功。修：`monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))` 直接打补丁，不能用 `setenv("TMPDIR", ...)`（gettempdir 已模块级缓存）。
+- **zsh `#` 当参数**：之前几次给用户的命令里写了 `# 注释` 行内，zsh 不支持行内 `#` 当参数前缀，把 `# 或 dev` 当作 cargo 的额外参数喂进去导致 build 失败。教训：给 user 的 shell 命令永远不带 inline 注释。
+- **模型幻觉 hermes_tools 模块**：员工尝试 `python -c "from hermes_tools import browser_navigate"` 测，模块根本不存在 (LLM 瞎想出来的 import 名)。Hermes 工具是 registry 模式 + tool calling 协议，要测得走 tool-bridge socket / hermes CLI / Companion 内对话。
+
+### 测试
+
+- tool-bridge: **63 全过**（新增 17 screenshot + 2 active_window + 1 修正 adapter 测试）
+- gateway: fallback 24 测试不回归 + 4 个新增手工 connection-error keyword 验证
+- companion-app: TypeScript `tsc --noEmit` 通过
+
+### 4-26 P1 收尾追登
+
+> 本来该归 4-26 entry，但 working tree 没单独成 commit，顺手追登：
+
+- **#43 catfish-roleplay skill** (`edge/communication-coach/hermes-skill/catfish-roleplay/`, ~310 行 SKILL.md): 3 阶段演练——收集 4 项 → 在角色里 → 系统反馈（3 ✓ + 3 ✗ + 方法论命名 + next-time）
+- **#44 SOUL.md 情绪共情层**: emotion 信号识别 + 3 步先停一拍 + 边界（不滥扮心理咨询）
+- **#45 POSITIONING.md** (`docs/POSITIONING.md`, 14 章 ~430 行): 战略定位文档
+- **#46 Self-Evolution 软技能进步追踪**: `learning.rs` 加 5 字段（coaching_sessions_today/this_week/prev_week, emails_drafted_today, methodologies_this_week）；`catfish_today_summary` Python 镜像同步
+- **#47 catfish wrapper skin 修**: `branding/catfish` 加 `ensure_skin`——默认 `display.skin: default`，品牌 skin opt-in via `CATFISH_BRAND_SKIN=1`；同时 `nuke_proxy_for_hermes` 防代理污染
+- **#48 Skill 生成纪律 (B 模式)**: SOUL.md 新增"Skill 生成纪律"章（≥3 次重复触发智能建议，员工"存成 skill"也存）；catfish-policy R6（防 skill_manage delete 误删 catfish-* skill）+ R7（防 skill 内容含密码/api_key/token/邮箱地址等敏感字段）
+- **#49 skill_watcher hot-reload** (`tool-bridge/.../skill_watcher.py`): 后台 daemon poll `~/.hermes/skills/` 的 SKILL.md mtime；变化后等 30s quiet period（dispatch_tool 期间不触发）→ `os._exit(0)` → Companion autostart respawn 加载新 skill。13 单测覆盖。
+
+### 遗留
+
+- **Companion Tauri 真机 build**：今天 Rust 改动（chrome.rs cdp 自动刷新）和前端改动（ChatInput 多模态）都已 tsc 过，但用户没本机 `cargo build --release` 出新 .app。下次员工用前必须重 build，否则只有 dev mode 能看到效果。
+- **catfish-public-qwen-flash 配置疑似错**：`upstream.model: openai/deepseek-v4-flash`，但 display_name / 注释指 Qwen3.6-Flash。LiteLLM 一旦 fallback 到这条会触发新错误。优先级低（公网模型平时用得少），但 fallback 真启用时会撞。
+- **#41 Companion macOS LaunchAgent 自启动** 还没做。当前 autostart 只在 Companion 起来后管 tool-bridge / gateway，但 Companion 自己关掉再开机不会自动起。
+- **#38, #39 跨平台 IPC**: Companion 当前用 Unix socket 跟 tool-bridge 通信，Windows 装不上。要改 TCP localhost。
+- **#35-#37 Outlook / Foxmail Win 适配器**: email-agent 现在只覆盖 Foxmail Mac，Outlook Mac (AppleScript) / Outlook Win (pywin32 COM) / Foxmail Win 都待做。
+- **gateway 错误返回人话化**（4-26 已列遗留）：429 / timeout / 401 翻译成员工能看的话——今天没碰，下次。
+- **Companion 仪表盘加 tool-bridge 状态卡片**（4-26 已列遗留）：autostart 起来了但仪表盘不显示——今天没碰。
+
+### 今日总账（2026-04-27）
+
+| 任务 | 状态 | 单测 |
+|------|------|------|
+| #50 Chrome cdp_url 自动刷新 | ✅ | (Rust 集成) |
+| #51 catfish_screenshot 工具 + SKILL | ✅ | 17 |
+| #52 ChatInput 图片附件 + 自动切视觉模型 | ✅ | tsc 通过 |
+| #53 SOUL.md 多模态自我认知 | ✅ | (prompt) |
+| #54 catfish_screenshot active_window | ✅ | +2 |
+| #55 browser_vision 误导修正 | ✅ | (prompt) |
+| #56 SOUL.md 不让员工跑 shell | ✅ | (prompt) |
+| Gateway vision fallback + connection error | ✅ | 4 (验证 keyword) + 24 (回归) |
+| 4-26 P1 收尾追登 (#43-#49) | ✅ 已合 | (前期) |
+
+---
+
 ## 记录规则
 
 - 每天收工时补一条
