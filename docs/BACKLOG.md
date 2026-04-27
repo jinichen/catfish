@@ -70,15 +70,15 @@
 
 ## C · 工程 P1 近期 (sprint 内, 已在 task tracker 的也列出来)
 
-按依赖排序:
+> **2026-04-28 节奏调整**: Phase 1 先把 Mac 全栈 + 中央服务 P0 闭环 (Week 1-6),
+> Win 跨平台 (BL-C2~C5) 推到 **Phase 1 末尾 (Week 7)** 一鼓作气批量做.
+> 详见 `STRATEGY.md` Phase 1 范围拍板段.
+
+### C.1 Mac + Skill lifecycle (Week 1-2 — 当前 sprint)
 
 | ID | Task # | 项 | 估时 | 阻塞 |
 |---|---|---|---|---|
 | BL-C1 | #35 | macOS Mail.app adapter | 2 天 | BL-X1 |
-| BL-C2 | #38 | Companion IPC 跨平台 (Unix Socket → TCP localhost) | 0.5 天 | — |
-| BL-C3 | #39 | Companion Win 路径 + 端到端验证 | 1 天 | C2 |
-| BL-C4 | #36 | Outlook for Windows adapter (pywin32 COM) | 1 天 | C2-C3 |
-| BL-C5 | #37 | Foxmail for Windows adapter | 2 天 | C2-C3 |
 | BL-C6 | #41 | Companion macOS LaunchAgent 自启动 | 0.5 天 | — |
 | BL-C7 | #32 | Plan C Week 4 polish (quota / RBAC / 自启动) | 1.5 天 | C6 |
 | BL-C8 | (新) | Gateway 错误人话化 (429/timeout/401 → 员工友好文案) | 0.5 天 | — |
@@ -90,6 +90,18 @@
 | BL-C14 | (新) | Skill lifecycle 阶段 4 Use: tool-bridge 加 .audit.jsonl 事件流 (每次 dispatch_tool 命中 skill 写一行) | 0.5 天 | — |
 | BL-C15 | (新) | Skill lifecycle 阶段 4 Use: catfish_today_summary 加 skill_invocations/failures/unused_30d 字段 + LearningCard UI | 1 天 | C14 |
 | BL-C16 | (新) | Skill lifecycle 阶段 4 Use: 30 天未用 skill 主动建议员工删/留 | 0.5 天 | C14 |
+
+### C.2 Win 跨平台 ❄️ 暂缓到 Phase 1 末尾 (Week 7) 批量做
+
+> 不在当前 sprint, 不在 task tracker 优先列. 等 Mac 全栈 + 中央服务 P0 完成后一鼓作气 4-5 天搞定.
+> **现在做 Mac 时**: IPC 用 abstraction 包一层 (Trait `Transport` / `BaseTransport`), 路径用 `pathlib.Path` 不 hardcode, 平台分支预留 `if sys.platform == "win32"` 占位, 防到 Week 7 改造代价大.
+
+| ID | Task # | 项 | 估时 | 状态 |
+|---|---|---|---|---|
+| BL-C2 | #38 | Companion IPC 跨平台 (Unix Socket → TCP localhost) | 0.5 天 | ❄️ 暂缓 |
+| BL-C3 | #39 | Companion Win 路径 + 端到端验证 | 1 天 | ❄️ 暂缓 (依赖 C2) |
+| BL-C4 | #36 | Outlook for Windows adapter (pywin32 COM) | 1 天 | ❄️ 暂缓 (依赖 C2-C3) |
+| BL-C5 | #37 | Foxmail for Windows adapter | 2 天 | ❄️ 暂缓 (依赖 C2-C3) |
 
 ---
 

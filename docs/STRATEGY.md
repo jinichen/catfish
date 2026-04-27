@@ -105,11 +105,55 @@
 
 **不做**：拆 repo、open source 公告、社区建设。
 
-### Phase 1 · 1-2 月（拆 repo 准备）
+### Phase 1 · 1-2 月（拆 repo 准备 + Mac+中央 闭环）
 
-**目标**：把要开源的组件拆成独立 repo，但仍 private 直到 Phase 2。
+**目标**：把要开源的组件拆成独立 repo（仍 private 直到 Phase 2）；同时把**单平台单员工 demo 跑通**支撑 Phase 2 公告 + 第一客户。
 
-具体动作:
+#### 范围拍板 (2026-04-28 鸿波)
+
+**做**:
+- ✅ Mac 全栈打透 (Mail.app adapter / LaunchAgent / Companion 浮窗+菜单栏+.pkg / 全图形化 onboarding)
+- ✅ 中央服务 P0 4 件 (SSO 真接入 / 审计日志 / RBAC / Quota) — 第一客户合同必须的
+- ✅ 中央服务 P1 5 件 (Skills Hub / Secret Broker / Telemetry / MCP Registry / catfish-distribution) — 看节奏取舍
+- ✅ Phase 2 公告材料 + 拆 repo 准备 + 测试覆盖 70%+
+
+**推到 Phase 1 末尾批量做** (4-5 天 sprint):
+- ⏸ Win 跨平台改造 (IPC Unix Socket → TCP localhost / 路径处理)
+- ⏸ Outlook for Windows adapter
+- ⏸ Foxmail for Windows adapter
+
+#### 这个调整的理由
+
+1. **聚焦减切换成本**: Mac/Win/中央三线切, context switch 成本高 → 一线打透节奏快很多
+2. **demo 闭环优先**: 客户 PoC 看的是"一个员工真能用起来", 不是"两个平台都各能用 50%"
+3. **风险隔离**: IPC TCP 改造是基础设施级重构, 弄不好回归 Mac. 把 Mac 完全稳定 + 全测试 → 再上 Win, 安全
+4. **中央平台无关**: 中央服务 (SSO / Skills Hub / Audit) 不挑平台, 现在做正好喂 Mac demo, 拖到 Win 时一起反而堵
+5. **客户优先级**: 100-500 人企业里 Mac 占 5-20% (设计 / 产品 / 销售 leader / IT lead), 这群人是决策者+意见领袖, 拿下他们后 Win 推动顺
+
+#### 客户问 "Win 现在能用吗" 的应对
+
+- Phase 2 公告里**明确写**: "Mac GA, Win Beta Phase 1 末尾交付"
+- 客户全 Win → **不签**, 不试图勉强
+- 现在签的客户 5-20% Mac 用户先用, Win 用户 1-2 个月后 Beta 加入
+
+#### 防 Mac 设计假设到 Win 阶段反咬的预案
+
+- 现在 Mac 写代码时, IPC 用 abstraction 层包一层 (Rust Trait `Transport` / Python `BaseTransport`), 后面 Unix socket → TCP 只换实现, 业务层不动
+- 路径处理用 `pathlib.Path` 不要 hardcode `/Users/...`
+- 平台分支预留 `if sys.platform == "win32"` 占位, 注释 `// TODO Phase 1 末尾实现`
+
+#### 节奏
+
+```
+Week 1   ━━ Mac 全栈打透 (8 个 P0 任务 ~5 天)
+Week 2-3 ━━ Companion 二期 polish + 中央服务 P0 (并行)
+Week 4-6 ━━ 中央服务 P1 (看节奏取舍)
+Week 7   ━━ Win 一鼓作气 (4-5 天)
+Week 8   ━━ 整体测试 + Phase 2 公告准备
+```
+
+#### 拆 repo 等基础设施动作
+
 - 用 `git subtree split` 抽取 `central/llm-gateway` 等到独立 repo（**保留 commit history**）
 - 主 `catfish` repo 变成 monorepo 索引：private 部分 + 通过 git submodule 引用 open 部分
 - 给每个开源 repo 加 CONTRIBUTING / CODE_OF_CONDUCT / SECURITY / .github/ISSUE_TEMPLATE
