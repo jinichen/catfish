@@ -39,9 +39,23 @@ logger = logging.getLogger("catfish.gateway.fallback")
 # ============================================================
 
 # 字符串关键词 —— 不区分大小写匹配错误的 str(exc)
+#
+# 注意: "connection error" / "connection refused" / "broken pipe" 这三类要触发
+#       fallback, 因为内网 (10.10.40.x) VPN 抖动 / 平台重启时这就是 LiteLLM 抛出来的。
+#       Without 这些, 内网 vision 挂掉时 fallback chain 不会启动, 员工就看到一脸懵的
+#       "InternalServerError: Connection error" — 落不到公共模型。
 _ERROR_KEYWORDS = {
     "timeout": ("timeout", "timed out"),
     "rate limit": ("rate limit", "ratelimit", "quota", "resource_exhausted"),
+    "connection error": (
+        "connection error",
+        "connection refused",
+        "cannot connect",
+        "connect call failed",
+        "broken pipe",
+        "apiconnectionerror",
+    ),
+    "connection refused": ("connection refused", "connect call failed"),
 }
 
 

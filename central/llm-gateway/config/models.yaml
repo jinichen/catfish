@@ -25,7 +25,7 @@ models:
   # ---------- 内部 · 主力通用 ----------
   - name: catfish-private-main
     tier: private
-    display_name: "Qwen3.5 122B (A10B MoE) · 主力"
+    display_name: "qwen_v3_5_122b_a10b· 主力"
     mode: chat
     default: true
 
@@ -43,6 +43,15 @@ models:
     supports_streaming: true
     recommended_for: [general, chat, tool_use, code]
     cost_tier: free
+
+    # 内网 LLM 平台偶发 502 / endpoint 维护 / UUID 重启失效时,
+    # 主力模型不能直接挂死员工 — 落到公共模型保业务。
+    # 顺序: 内网公共备份 (qwen-flash) → 外网 (gemini-flash) → 不再降级。
+    # 注: 公共模型在 .env 里没配 key 时会自动跳过, 不会傻等。
+    fallback:
+      on_errors: [429, 502, 503, 504, "timeout", "connection error", "connection refused"]
+      chain: [catfish-public-qwen-flash, catfish-public-gemini-flash]
+      max_hops: 2
 
   # ---------- 内部 · 多模态 ----------
   - name: catfish-private-vision
@@ -63,6 +72,14 @@ models:
     supports_vision: true
     recommended_for: [vision, ocr, image_analysis]
     cost_tier: free
+
+    # 内网 vision endpoint 不可达时 (10.10.40.x VPN 抖动 / 平台维护) 直接落到
+    # 公共多模态. qwen-flash 256K 也支持视觉, gemini-flash 是兜底。
+    # 视觉模型必须有 chain — 没有的话员工传图就直接挂, 没有体面降级。
+    fallback:
+      on_errors: [429, 502, 503, 504, "timeout", "connection error", "connection refused"]
+      chain: [catfish-private-main, catfish-public-qwen-flash, catfish-public-gemini-flash]
+      max_hops: 2
 
   # ---------- 内部 · Embedding ----------
   # ⚠️ TODO: 替换为 bge-m3 在平台上的实际部署 UUID
@@ -90,13 +107,13 @@ models:
   #   - 内网 Qwen (catfish-private-main) 不可达时的公共备份
   #   - Gemini 免费配额耗尽时的 fallback
   #   - 出差 / 公司外网络场景
-  - name: catfish-public-qwen-flash
+  - name: catfish-public-ds4-pro
     tier: public
     display_name: "Qwen3.6-Flash · 通义千问快速多模态（公共付费）"
     mode: chat
 
     upstream:
-      model: openai/qwen3.6-flash
+      model: openai/qwen3.6-max-preview
       api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
       api_key_env: DASHSCOPE_API_KEY
       timeout: 90  # 多模态请求图像/视频处理偏慢, 给宽裕
@@ -136,7 +153,7 @@ models:
     # 撞 429 / 503 / timeout 时自动落回 Qwen3.6-Flash
     # (Qwen 没配 key 时自动跳过, 直接返回错误给客户端)
     fallback:
-      on_errors: [429, 503, 504, "timeout"]
+      on_errors: [429, 502, 503, 504, "timeout", "connection error", "connection refused"]
       chain: [catfish-public-qwen-flash, catfish-private-main]
       max_hops: 2
 
@@ -161,7 +178,7 @@ models:
     supports_vision: true
     # Gemini Flash 是免费层, 配额最容易耗尽, 必须有 fallback
     fallback:
-      on_errors: [429, 503, 504, "timeout"]
+      on_errors: [429, 502, 503, 504, "timeout", "connection error", "connection refused"]
       chain: [catfish-public-qwen-flash, catfish-private-main]
       max_hops: 2
     recommended_for: [fast, cheap, general, bulk]
