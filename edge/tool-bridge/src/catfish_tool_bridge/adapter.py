@@ -17,7 +17,9 @@ import logging
 import traceback
 from typing import Any, Dict, List
 
-from . import catfish_tools, skill_watcher
+import time
+
+from . import audit, catfish_tools, skill_watcher
 
 logger = logging.getLogger("catfish.tool_bridge.adapter")
 
@@ -86,11 +88,32 @@ async def dispatch_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     返回的字典固定 shape:
         {"ok": bool, "result": <jsonable> | None, "error": str | None,
          "tool": name, "stderr": str | None}
+
+    每次调用末尾会写一行 audit 事件到 ~/.hermes/.catfish_audit.jsonl
+    (用于 Skill lifecycle 阶段 4 健康面板 / 30 天提醒 / 失败率告警 / billing).
+    audit 写失败不影响 dispatch 主流程.
     """
     # 给 skill_watcher 标记"现在 LLM 在繁忙地用工具", 防它在 LLM 调用循环中突然
     # 重启 tool-bridge. 这是廉价操作 (一次 lock + 时间戳更新)。
     skill_watcher.mark_dispatch()
 
+    start = time.time()
+    result = await _do_dispatch(name, args)
+    latency_ms = (time.time() - start) * 1000
+
+    # 写 audit (永远不抛, 不影响主流程返回)
+    audit.write_event(
+        tool=name,
+        ok=result["ok"],
+        args=args,
+        error=result.get("error"),
+        latency_ms=latency_ms,
+    )
+    return result
+
+
+async def _do_dispatch(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    """实际 dispatch 逻辑. 抽出来让 dispatch_tool 可以包 audit."""
     # 先看 catfish 原生 tool —— 这些不走 hermes registry, 也不要求 toolset
     # 可用性检查 (它们就是 catfish 自己的代码, 一定在)
     if catfish_tools.is_native(name):
