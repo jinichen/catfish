@@ -47,6 +47,55 @@ nuke_proxy_for_hermes() {
     unset https_proxy http_proxy all_proxy
 }
 
+# ---------- 终端 skin 自动修 ----------
+# 背景: 4-25 给 hermes 装了"象牙白"等 catfish 品牌 skin, 但 skin 是按"哪种终端
+#       背景"设计的. 浅色终端用 daylight 风格, 深色终端 (Homebrew/Pro/Solarized)
+#       看不清字. 已知员工切终端 profile 后, 旧 skin 就跟新背景对不上了.
+# 决策: catfish 启动时把 ~/.hermes/config.yaml 的 skin 强制设为 default, 这个
+#       skin 是 hermes 通用的、跨深浅终端配色都可读的. 想保留品牌 skin 的员工
+#       设 CATFISH_BRAND_SKIN=1 跳过. 想用别的 skin 设 CATFISH_DEFAULT_SKIN=<name>.
+# 容错: 写 yaml 失败不阻塞 hermes 启动. 配置不存在或没 skin 字段都直接退出.
+# 不动: shell 不变. 只动 ~/.hermes/config.yaml 的 skin 一个字段.
+ensure_skin() {
+    if [ -n "${CATFISH_BRAND_SKIN:-}" ]; then
+        return 0
+    fi
+    local target_skin="${CATFISH_DEFAULT_SKIN:-default}"
+    local hermes_config="$HOME/.hermes/config.yaml"
+    [ -f "$hermes_config" ] || return 0
+
+    # 用 Python yaml 安全更新 (sed/awk 容易破坏其它字段)
+    # 错误静默 — skin 修不上不影响 hermes 启动
+    # 注: hermes config schema 里 skin 嵌套在 display.skin, 不是顶层
+    python3 - "$hermes_config" "$target_skin" 2>/dev/null <<'PY' || true
+import sys
+try:
+    import yaml
+except ImportError:
+    sys.exit(0)  # PyYAML 没装就跳过, 用户手动 /skin <name> --global
+
+config_path, target = sys.argv[1], sys.argv[2]
+try:
+    with open(config_path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    display = data.get("display")
+    if not isinstance(display, dict):
+        # 没 display 段 → hermes 用全部内置默认, 不画蛇添足
+        sys.exit(0)
+    current = display.get("skin")
+    if current == target:
+        sys.exit(0)
+    if current is None:
+        # display 段在但没 skin 字段 → 同样不强加, 让 hermes 内置默认走
+        sys.exit(0)
+    display["skin"] = target
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+except Exception:
+    pass
+PY
+}
+
 # ---------- 颜色（可被 NO_COLOR / 非 tty 关掉）----------
 
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -190,11 +239,13 @@ main() {
         --raw)
             shift
             nuke_proxy_for_hermes
+            ensure_skin
             exec "$HERMES_BIN" "$@"
             ;;
         --no-banner)
             shift
             nuke_proxy_for_hermes
+            ensure_skin
             exec "$HERMES_BIN" "$@"
             ;;
         -h|--help)
@@ -211,7 +262,9 @@ ${BOLD}catfish${RESET} - 鲶鱼平台员工入口
     catfish <hermes 子命令>    透传给 hermes（chat / model / mcp / sessions ...）
 
 环境变量:
-    CATFISH_KEEP_PROXY=1       不要 unset HTTPS_PROXY/HTTP_PROXY (默认 unset 防代理劫持 localhost)
+    CATFISH_KEEP_PROXY=1        不要 unset HTTPS_PROXY/HTTP_PROXY (默认 unset 防代理劫持 localhost)
+    CATFISH_BRAND_SKIN=1        保留 hermes 当前 skin (默认强制 default 防深色终端不可读)
+    CATFISH_DEFAULT_SKIN=<name> 自选要切的 skin 名 (默认 "default", 也可设 "dark" / "daylight" / 等)
     CATFISH_GATEWAY_HOST        默认 127.0.0.1
     CATFISH_GATEWAY_PORT        默认 8999
     CATFISH_CHROME_DEBUG_PORT   默认 9222
@@ -222,9 +275,10 @@ EOF
             ;;
     esac
 
-    # 默认：打 banner，净化代理 env，进入 hermes
+    # 默认：打 banner，净化代理 env，确保 skin 兼容当前终端，进入 hermes
     banner
     nuke_proxy_for_hermes
+    ensure_skin
     exec "$HERMES_BIN" "$@"
 }
 

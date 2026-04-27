@@ -9,6 +9,7 @@
 
 import { useLearning } from "../../hooks/useLearning";
 import { formatTokens } from "../../lib/format";
+import type { TodayLearningStats } from "../../types/learning";
 
 export default function LearningCard() {
   const { stats, error } = useLearning();
@@ -82,6 +83,9 @@ export default function LearningCard() {
             />
           </div>
 
+          {/* 软技能维度 (#46) */}
+          <SoftSkillSection stats={stats} />
+
           {/* 今天新增的 skill */}
           {stats.newSkills.length > 0 && (
             <Section
@@ -130,44 +134,66 @@ export default function LearningCard() {
             <Section
               title={`Memory (${stats.memoriesUpdatedToday}/${stats.memories.length} 今天更新)`}
             >
+              <div
+                style={{
+                  fontSize: 11,
+                  color: "var(--catfish-text-muted)",
+                  marginBottom: "var(--space-2)",
+                  lineHeight: 1.5,
+                }}
+              >
+                📌 顶层 = 稳定身份档案 (hermes 启动时注入 system prompt)
+                <br />
+                📝 memories/ = 对话中动态学到的, 按主题片段 (hermes 按需检索)
+              </div>
               <ul style={listStyle}>
-                {stats.memories.map((m) => (
-                  <li
-                    key={m.name}
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      padding: "var(--space-1) 0",
-                      fontSize: 12,
-                    }}
-                  >
-                    <span style={{ display: "flex", gap: "var(--space-2)", alignItems: "center" }}>
-                      <span
-                        style={{
-                          display: "inline-block",
-                          width: 6,
-                          height: 6,
-                          borderRadius: "50%",
-                          background: m.modifiedToday
-                            ? "var(--status-ok)"
-                            : "var(--status-idle)",
-                        }}
-                      />
-                      <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>
-                        {m.name}.md
-                      </span>
-                      <span style={{ color: "var(--catfish-text-muted)" }}>
-                        {formatBytes(m.size)}
-                      </span>
-                    </span>
-                    <span
-                      style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}
+                {stats.memories.map((m) => {
+                  const isToplevel = !m.name.includes("/");
+                  const icon = isToplevel ? "📌" : "📝";
+                  const label = isToplevel
+                    ? `${m.name} · 身份档案`
+                    : m.name.replace("memories/", "memories/");
+                  return (
+                    <li
+                      key={m.name}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        padding: "var(--space-1) 0",
+                        fontSize: 12,
+                      }}
                     >
-                      {m.modifiedToday ? "今天更新" : timeAgo(m.modifiedAt)}
-                    </span>
-                  </li>
-                ))}
+                      <span style={{ display: "flex", gap: "var(--space-2)", alignItems: "center" }}>
+                        <span
+                          style={{
+                            display: "inline-block",
+                            width: 6,
+                            height: 6,
+                            borderRadius: "50%",
+                            background: m.modifiedToday
+                              ? "var(--status-ok)"
+                              : "var(--status-idle)",
+                          }}
+                        />
+                        <span style={{ fontSize: 13 }} title={isToplevel ? "稳定身份档案" : "动态学到的记忆片段"}>
+                          {icon}
+                        </span>
+                        <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>
+                          {label}.md
+                        </span>
+                        <span style={{ color: "var(--catfish-text-muted)" }}>
+                          {formatBytes(m.size)}
+                        </span>
+                      </span>
+                      <span
+                        style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}
+                      >
+                        {m.modifiedToday ? "今天更新" : timeAgo(m.modifiedAt)}
+                      </span>
+                    </li>
+                  );
+                })}
               </ul>
             </Section>
           )}
@@ -268,4 +294,145 @@ function timeAgo(iso: string): string {
   if (diff < 3600) return `${Math.floor(diff / 60)}m 前`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h 前`;
   return `${Math.floor(diff / 86400)}d 前`;
+}
+
+// ============================================================
+// 软技能维度 section (#46 沟通能力进步追踪)
+//
+// 设计取舍 (跟 backend 对齐):
+//   - 不显示"情绪触发次数" (隐私)
+//   - 不打分 / 不打级
+//   - 周对比用 ↑↓→ 三态, 不显示百分比 (太冷)
+//   - methodologies 是开放性"接触过", 不是"掌握度"
+// 数据全空时整段不渲染, 不打扰新员工
+// ============================================================
+
+function SoftSkillSection({ stats }: { stats: TodayLearningStats }) {
+  const hasAnything =
+    stats.coachingSessionsToday > 0 ||
+    stats.coachingSessionsThisWeek > 0 ||
+    stats.emailsDraftedToday > 0 ||
+    stats.methodologiesThisWeek.length > 0;
+
+  if (!hasAnything) return null;
+
+  const trend = trendIndicator(
+    stats.coachingSessionsThisWeek,
+    stats.coachingSessionsPrevWeek,
+  );
+
+  return (
+    <div
+      style={{
+        marginBottom: "var(--space-4)",
+        paddingBottom: "var(--space-3)",
+        borderBottom: "1px solid var(--catfish-border)",
+      }}
+    >
+      <h4
+        style={{
+          fontSize: 11,
+          color: "var(--catfish-text-muted)",
+          marginBottom: "var(--space-3)",
+          textTransform: "uppercase",
+          letterSpacing: 0.5,
+          fontWeight: 600,
+        }}
+      >
+        软技能维度
+      </h4>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(3, 1fr)",
+          gap: "var(--space-3)",
+          marginBottom: "var(--space-3)",
+        }}
+      >
+        <Stat
+          label="今日演练"
+          value={stats.coachingSessionsToday.toString()}
+          highlight={stats.coachingSessionsToday > 0}
+        />
+        <Stat
+          label="今日起草邮件"
+          value={stats.emailsDraftedToday.toString()}
+          highlight={stats.emailsDraftedToday > 0}
+        />
+        <div>
+          <div style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
+            本周演练 {trend.icon}
+          </div>
+          <div
+            style={{
+              fontSize: 22,
+              fontWeight: 600,
+              fontFamily: "var(--font-mono)",
+              color: trend.color,
+            }}
+            title={`本周 ${stats.coachingSessionsThisWeek} 次, 上周 ${stats.coachingSessionsPrevWeek} 次`}
+          >
+            {stats.coachingSessionsThisWeek}
+            <span
+              style={{
+                fontSize: 11,
+                color: "var(--catfish-text-muted)",
+                marginLeft: 6,
+                fontWeight: 400,
+              }}
+            >
+              / 上周 {stats.coachingSessionsPrevWeek}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* 本周接触的方法论 */}
+      {stats.methodologiesThisWeek.length > 0 && (
+        <div>
+          <div
+            style={{
+              fontSize: 11,
+              color: "var(--catfish-text-muted)",
+              marginBottom: 4,
+            }}
+          >
+            本周接触的沟通方法论
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {stats.methodologiesThisWeek.map((m) => (
+              <span
+                key={m}
+                style={{
+                  fontSize: 11,
+                  padding: "2px 8px",
+                  border: "1px solid var(--catfish-border)",
+                  borderRadius: 999,
+                  fontFamily: "var(--font-mono)",
+                  color: "var(--catfish-text)",
+                  background: "var(--catfish-bg)",
+                }}
+              >
+                {m}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function trendIndicator(
+  thisWeek: number,
+  prevWeek: number,
+): { icon: string; color: string } {
+  if (thisWeek > prevWeek) {
+    return { icon: "↑", color: "var(--status-ok, #16a34a)" };
+  }
+  if (thisWeek < prevWeek) {
+    return { icon: "↓", color: "var(--catfish-text-muted)" };
+  }
+  return { icon: "→", color: "var(--catfish-text-muted)" };
 }
