@@ -199,6 +199,64 @@ skill 文件名要**业务动作可读**, 不是工具名:
 - ❌ **不修改已有 skill** 除非员工说"改 X skill"
 - ❌ **不创建跟已有 skill 重名的** (先 `skill_manage(action=list)` 看看)
 
+### Skill lifecycle 阶段 3 · Review (创建前后两道质量门)
+
+> **为啥要 Review**: skill 创建容易, 但写完往员工 skills/ 一塞就走 = 不负责. 历史踩坑:
+> 模型创建一个 skill, 步骤里引用了不存在的工具, 员工后来要用才发现 skill 跑不通; 或者
+> 跟已有 skill 触发词重叠, 模型每次选错. Review 两道门挡住这些.
+
+#### Review-A · 创建**前**重复检查 (BL-C13)
+
+调 `skill_manage(action=create, ...)` **之前**, 必须先:
+
+1. `skill_manage(action=list)` 拿现有 skill 列表 (含 name + description)
+2. 看新 skill 是否**跟现有撞车**:
+   - **名字相似**: "feishu-expense" vs "feishu-报销-submit" → 撞
+   - **触发词重叠**: 你打算让 description 写"员工说'报销'就调", 但已经有 X skill description 也写"员工说'报销'调" → 撞
+   - **流程目标重合**: 都干"提交飞书报销", 步骤略有不同 → 撞
+
+3. 撞车了 → **不要**直接新建, 一句话给员工:
+   ```
+   "我看到你已经有 'productivity/expense-submit' 干类似事, 步骤是 1-2-3.
+    你这次需求看起来跟它差一点 (X / Y), 是改它还是真新建一个?
+    改它的话步骤变化会给你 review (走 R10 流程), 新建的话名字得跟它区分开."
+   ```
+
+4. 员工 yes 改 → 走阶段 5 update 流程 (backup → diff → R10)
+5. 员工 yes 真新建 → 名字必须**主动跟它区分** (例: 加场景前缀 / 区分动词)
+6. 员工 no → 调 `memory_save` 记一条"员工 2026-XX-XX 决定 X 不重建", 不再问
+
+#### Review-B · 创建**后**立即 dry-run 验证 (BL-C12)
+
+`skill_manage(action=create)` 调用成功 ≠ skill 真能用. 必须**立即跑一次最小验证**:
+
+**做法 (不动外部数据的安全步骤)**:
+
+- 浏览器类 skill: 跑 `catfish_browser_goto` 打开 skill 描述里的目标 URL, 然后 `browser_snapshot` 看页面结构跟 skill 步骤里的 ref 对得上 (不点击 / 不提交)
+- 邮件类 skill: 跑 `catfish-email accounts` 验证账号能拿到, 跑 `catfish-email list --limit=1` 验证读得到 (不发邮件 / 不起草)
+- 内网系统类: 跑 `catfish_browser_goto` 到登录态页, 验证已登录 (不操作敏感按钮)
+- 文件类 skill: 走 `read_file` 验证 skill 引用的路径存在 (不写不删)
+
+**验证后跟员工说**:
+
+- ✅ 通过: "skill 'X' 创建好了, 我跑了一次 dry-run (打开 https://X / 读到第一封邮件), 步骤模板对得上. 你后面用就行."
+- ⚠️ 部分通过: "skill 'X' 创建了, 但 dry-run 时步骤 3 那个 ref 'e23' 找不到 — 页面可能改版了 / 或者 ref 我写错. 要 update 修一下吗?"
+- ❌ 跑不通: "skill 'X' 创建了但 dry-run 失败: <具体错误>. 我建议 **删掉 + 重建** (比修一个错的快). 删走 catfish_skill_backup → skill_manage(delete), 你 yes 我就动."
+
+**🚫 dry-run 时不能做**:
+
+- ❌ 真的发邮件 / 真的提交表单 / 真的删数据 — 任何 side effect 操作
+- ❌ 跑 dry-run 失败就默默不说, 留个半成品给员工 (员工后来用才发现, 体验更差)
+- ❌ 不调用任何工具就声称"dry-run 通过" (不是嘴上说说, 是真跑工具)
+
+#### 阶段 3 跟阶段 5 的关系
+
+- 阶段 3 (Review) 是创建过程里 — **先**重复检查, **后**dry-run
+- 阶段 5 (Evolve/Retire) 是创建之后变更 — update / delete / 回退
+
+Review-A 失败 (重复了) → **不进**阶段 5, 直接停在阶段 1 重新评估
+Review-B 失败 (dry-run 不通) → 走阶段 5 delete 流程 (backup + 删, 重建)
+
 ### Skill update / delete 流程 (新, 配套 catfish-policy R10 + catfish_skill_backup tool)
 
 **update 流程 (员工说"改 X skill" / "把 X skill 加上 Y" 时)**:
