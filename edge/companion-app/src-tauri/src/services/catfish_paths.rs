@@ -178,6 +178,11 @@ pub fn chrome_user_data_dir() -> Option<PathBuf> {
     companion_state_dir().map(|d| d.join("chrome-profile"))
 }
 
+/// hermes 主 config 路径 (~/.hermes/config.yaml)
+pub fn hermes_config_path() -> Option<PathBuf> {
+    home_dir().map(|h| h.join(".hermes").join("config.yaml"))
+}
+
 /// 找 Chrome 二进制（Mac 优先，Windows 备选）
 pub fn find_chrome() -> Option<PathBuf> {
     let candidates: &[&str] = &[
