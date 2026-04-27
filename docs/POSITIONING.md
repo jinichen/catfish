@@ -159,6 +159,21 @@
 
 ## 11 · 反对意见 (FAQ)
 
+**"鲶鱼跟 Hermes / OpenClaw / OpenInterpreter 这些开源 agent 不是同一个东西吗?"**
+
+不是. 它们是**底层 runtime / SDK** (Linux kernel 那一层); 鲶鱼是**基于 runtime 的产品 + 企业平台** (Ubuntu 那一层). 详细对比见 `docs/COMPETITIVE-DIFFERENTIATION.md`.
+
+简版: 拿 Linux kernel 跟 Ubuntu 比同质化吗? 内核相同, 产品完全不同. 客户付钱买的不是内核.
+
+5 条硬差异 (随便哪条都让 Hermes 直接出局):
+1. **直读员工已登录的 Foxmail / Chrome / 内网 OA** — Hermes 没有, 要自己写代码接
+2. **数据 100% 在员工电脑, 公司只看 metadata** — Hermes 没这种架构, 它只是单机
+3. **演练方法论 (SBI / NVC / STAR / 金字塔)** — Hermes 没有, 它是通用 runtime
+4. **跨员工 skill 共享 (Skills Hub, P2)** — Hermes 没有"组织层"概念
+5. **企业鉴权 + Quota + Audit + IT 5 人能跑** — Hermes 完全没有
+
+最关键的差: Hermes 服务**会装会配**的开发者 (5%), 鲶鱼服务**装不动 Hermes** 的销售/HR/客服 (95%).
+
 **"为什么不直接用 ChatGPT?"**
 ChatGPT 看不到员工本地的 Foxmail / Outlook / 内网系统. 员工要复制粘贴一上下午, 还可能漏数据 / 截图泄漏隐私. 鲶鱼直接接员工已登录的客户端, 5 秒读到本地数据.
 
@@ -182,13 +197,38 @@ ChatGPT 看不到员工本地的 Foxmail / Outlook / 内网系统. 员工要复�
 
 ## 12 · "招牌镜头" (用一张截图打广告时拍这个)
 
-不是 Dashboard. 不是配置页. 是**这一幕**:
+不是 Dashboard. 不是配置页. 是**这一组连续动作** (锁死跟 Hermes 等开源 CLI agent 的层差):
 
-> 员工打开 Catfish Companion, 在对话里问 "周三给老板做汇报, 帮我演练 raise"
+### 镜头 1 · 0 配置启动 (锁死安装门槛)
+
+> 销售小王打开公司发的 Catfish 安装包, **双击, 0 配置 0 命令行**, SSO 登录,
+> 进对话: "今天哪些客户还没回?"
 >
-> 小鲶问 4 件事 → 员工 30 秒回 → 进入 in-character 模式 → 老板模式 push 员工 → 员工卡壳 → 老板继续 push → 10 分钟后员工说"暂停, 复盘" → 小鲶给 ✓3 / ✗3 / 推荐 STAR 框架 / 下次试试主动 push
+> 5 秒后, 表格列出未读邮件 + 优先级 + 紧急程度
 
-这一幕是**全产品最浓缩的卖点**: 边缘 (本机) + niche (职场沟通) + 真方法论 (STAR) + 真反馈 (具体可改) + 不空话 (不说"加油").
+锁死: Hermes / OpenClaw 半小时配置门槛, 销售根本上不去手. 这一帧客户**自动会问** "Hermes 能这样吗?", 答案是"不能".
+
+### 镜头 2 · 接本地客户端 (锁死中国本土场景)
+
+> 同一对话: "帮我给王总起草一封, 客气点"
+>
+> 5 秒后: 草稿在 Foxmail Drafts 里待发, 鲶鱼读了员工历史邮件知道王总的称谓 / 邮件风格
+
+锁死: ChatGPT 看不到 Foxmail, Hermes 接不到 Foxmail SQLite. 中国大量公司用 Foxmail / 自建邮件 / 飞书内网, 没有 IMAP, 没有 API. 鲶鱼直接接员工**已登录**的客户端.
+
+### 镜头 3 · 演练真方法论 (锁死价值差异)
+
+> 同一对话: "帮我演练下午的 demo"
+>
+> 进 in-character 模式 → 鲶鱼扮苛刻客户, 多轮 push → 员工卡壳 → 客户继续 push → 10 分钟后员工说"暂停, 复盘" → 鲶鱼给 ✓3 / ✗3 / 推荐 STAR 框架 / 下次试试主动 push
+
+锁死: ChatGPT / Hermes 都是 yes-man, 没有方法论沉淀. 鲶鱼用真 SBI / NVC / STAR / 金字塔.
+
+---
+
+**这一组连续 3 个镜头**是**全产品最浓缩的卖点**:
+- 0 配置 + 接本地 + 真方法论 = 鲶鱼
+- 缺一不可, 缺一项就跟 Hermes / ChatGPT 同质化了
 
 ---
 
@@ -211,6 +251,8 @@ ChatGPT 看不到员工本地的 Foxmail / Outlook / 内网系统. 员工要复�
 > **鲶鱼不是 AI 助手, 鲶鱼是中国企业的 AI 同事 — 一个不会泄密、不耽误事、能学习、敢顶嘴的同事。**
 
 —— 边缘 + niche + 协同 = 鲶鱼.
+
+**对应到技术层差**: 鲶鱼**不是 AI 引擎** (Hermes / OpenClaw / OpenInterpreter 在那一层), 鲶鱼**是基于引擎的整车** — 销售 / HR / 客服直接开走, 不需要先学修车. 详见 `docs/COMPETITIVE-DIFFERENTIATION.md`.
 
 ---
 
