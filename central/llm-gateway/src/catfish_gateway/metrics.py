@@ -103,6 +103,7 @@ def log_request_metadata(
     latency_ms: float = 0.0,
     status: str = "ok",
     error: str = "",
+    security_concern: str | None = None,
 ) -> None:
     """Emit a single structured log line + persist 到 JSONL.
 
@@ -112,12 +113,14 @@ def log_request_metadata(
       - token counts
       - latency
       - status / error code
+      - security_concern (例: 'prompt_credential_detected', 防员工 IT 漏审计)
 
     Explicitly EXCLUDES:
       - prompt content
       - completion content
       - tool call arguments
       - raw headers
+      - 任何凭据真值 (security_concern 只是标记字符串, 不含真密码)
     """
     record = {
         "ts": int(time.time()),
@@ -133,6 +136,9 @@ def log_request_metadata(
     if error:
         # Truncate to avoid accidentally leaking upstream prompt echoes in errors
         record["error"] = error[:200]
+    if security_concern:
+        # 标记字段, 例 'prompt_credential_detected'. 不含真密码值, 只标记类型.
+        record["security_concern"] = security_concern[:100]
 
     # 1. stderr log (实时可见, 给 ops 看)
     logger.info(json.dumps(record, ensure_ascii=False))

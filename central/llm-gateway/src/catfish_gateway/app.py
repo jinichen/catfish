@@ -411,6 +411,7 @@ async def _stream_chat_completion(
     user_sub: str,
     model_name: str,
     model,
+    security_concern: str | None = None,
 ) -> AsyncIterator[str]:
     """SSE async generator for streaming chat completions, with fallback chain.
 
@@ -491,6 +492,7 @@ async def _stream_chat_completion(
             latency_ms=(time.time() - start) * 1000,
             status=status_str,
             error=err,
+            security_concern=security_concern,
         )
 
 
@@ -505,6 +507,7 @@ async def _invoke_chat_completion(
     user_sub: str,
     model_name: str,
     model,
+    security_concern: str | None = None,
 ) -> dict[str, Any]:
     """Non-streaming chat completion path, with fallback chain support."""
     start = time.time()
@@ -542,6 +545,7 @@ async def _invoke_chat_completion(
         completion_tokens=getattr(usage, "completion_tokens", 0) if usage else 0,
         latency_ms=(time.time() - start) * 1000,
         status="ok",
+        security_concern=security_concern,
     )
     return response.model_dump() if hasattr(response, "model_dump") else response
 
@@ -569,6 +573,20 @@ async def chat_completions(
     skip = header_skips_identity(request.headers)
     body["messages"] = inject_identity_if_needed(body.get("messages", []), skip=skip)
 
+    # Prompt 安全检测: 扫 user messages 看是否含明文密码 / 凭据.
+    # 不拦截 (员工知道在干嘛), 只 log warn + audit 标记, 让员工 IT 事后能查谁在何时
+    # 把密码写进 prompt — 推荐他们用 secret_ref 替代.
+    from .prompt_security import detect_credentials_in_messages  # noqa: PLC0415
+    credential_hits = detect_credentials_in_messages(body.get("messages", []))
+    if credential_hits:
+        logger.warning(
+            "user=%s 在 prompt 里检测到密码 / 凭据明文 (%d 处). "
+            "建议员工用 secret_ref (keychain:// 或 env://) 替代. user_sub=%s",
+            user.sub, len(credential_hits), user.sub,
+        )
+        # 把 hits 暂存到 request state, 让后面 audit log 能拿到
+        request.state.credential_hits = credential_hits
+
     # 防御性清洗 tools 数组 —— 畸形 tool (例如缺 function.name) 直接丢, 不让
     # LiteLLM 转 Gemini functionDeclarations 时 KeyError 把整个请求挂掉。
     body = sanitize_tools(body)
@@ -581,15 +599,25 @@ async def chat_completions(
     # 因为 fallback 时换模型, params 里的 api_base / api_key / 等都得重新构建
     is_stream = bool(body.get("stream", False))
 
+    # 把 prompt_security 检测结果转成 security_concern 字符串 (audit log 字段),
+    # 不含真密码值, 只标记 'prompt_credential_detected' 类型.
+    security_concern = (
+        "prompt_credential_detected"
+        if getattr(request.state, "credential_hits", None)
+        else None
+    )
+
     if is_stream:
         return StreamingResponse(
             _stream_chat_completion(
                 body, user_sub=user.sub, model_name=model_name, model=model,
+                security_concern=security_concern,
             ),
             media_type="text/event-stream",
         )
     return await _invoke_chat_completion(
         body, user_sub=user.sub, model_name=model_name, model=model,
+        security_concern=security_concern,
     )
 
 

@@ -480,12 +480,88 @@ def test_browser_click_missing_selector() -> None:
 
 
 def test_browser_fill_required_fields() -> None:
+    """v3: 只 selector 必填, text 跟 secret_ref 二选一 (运行时检查)"""
     tool = next(
         t for t in catfish_tools.CATFISH_NATIVE_TOOLS
         if t["name"] == "catfish_browser_fill"
     )
     required = set(tool["input_schema"]["required"])
-    assert {"selector", "text"} <= required
+    assert "selector" in required
+    # text 跟 secret_ref 都不在 required (运行时检查二选一)
+    assert "text" not in required
+    assert "secret_ref" not in required
+
+
+def test_browser_fill_neither_text_nor_secret_ref_returns_error() -> None:
+    """text 和 secret_ref 都没给 → error"""
+    result = catfish_tools.browser_fill({"selector": "input#u"})
+    assert result["type"] == "error"
+    assert "secret_ref" in result["error"] or "text" in result["error"]
+
+
+def test_browser_fill_text_looks_like_secret_ref_rejected() -> None:
+    """员工把 secret_ref 写到 text 字段 → error 提示放对位置"""
+    result = catfish_tools.browser_fill({
+        "selector": "input#u",
+        "text": "keychain://my_pwd",  # 写错位置了
+    })
+    assert result["type"] == "error"
+    assert "secret_ref" in result["error"]
+
+
+def test_browser_fill_secret_ref_env_resolves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """env:// secret_ref 走 env var 拉值, 不进 LLM 上下文 — security_audit=via_secret_ref"""
+    monkeypatch.setenv("EIS_PASSWORD", "real_pwd_xyz")
+
+    class FakePage:
+        def fill(self, selector, text, timeout):
+            # 验证: page.fill 收到的真值是从 env var 拉的, 不是 secret_ref 本身
+            assert text == "real_pwd_xyz"
+
+    class FakeContext:
+        pages = [FakePage()]
+
+    class FakeBrowser:
+        contexts = [FakeContext()]
+
+    class FakeChromium:
+        def connect_over_cdp(self, url):
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            pass
+
+    monkeypatch.setattr(catfish_tools, "_import_playwright", lambda: FakePlaywright)
+
+    result = catfish_tools.browser_fill({
+        "selector": "input[name='password']",
+        "secret_ref": "env://EIS_PASSWORD",
+    })
+    assert result["type"] == "ok"
+    assert result["security_audit"] == "credential_via_secret_ref"
+    assert result["secret_ref_used"] == "env://EIS_PASSWORD"
+    # filled_chars 应该是真值长度, 不是 secret_ref 长度
+    assert result["filled_chars"] == len("real_pwd_xyz")
+
+
+def test_browser_fill_secret_ref_failure_no_leak(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """secret_ref 解析失败 → error, 不泄漏任何值 (因为没有值)"""
+    monkeypatch.delenv("NONEXISTENT_PWD", raising=False)
+    result = catfish_tools.browser_fill({
+        "selector": "input[name='password']",
+        "secret_ref": "env://NONEXISTENT_PWD",
+    })
+    assert result["type"] == "error"
+    assert "secret_ref" in result["error"]
+    assert "没设" in result["error"] or "set" in result["error"].lower()
 
 
 def test_browser_fill_password_allowed_with_audit_marker(

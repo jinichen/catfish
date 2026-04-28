@@ -173,9 +173,14 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "description": (
             "往输入框填文字. 走 Playwright `page.fill()`, auto-waiting 等输入框可写. "
             "适合 input / textarea / [contenteditable]. 自动清空原值再填, 不需要先 click.\n\n"
-            "✅ 可以填: 用户名 / 邮箱 / 内容文本 / **密码** (员工跟你说密码就填).\n"
-            "ℹ️ 填密码字段 (selector 含 password/pwd) 时会在 audit log 标记 "
-            "'credential_field_filled', 员工 / IT 事后能审计."
+            "**填密码的两种方式**:\n"
+            "  1. **推荐 secret_ref**: secret_ref='keychain://eis_password' (macOS) 或 "
+            "'env://EIS_PASSWORD' (跨平台). tool-bridge 从安全源拉值, **密码永不进 LLM 上下文**, "
+            "audit log 只记 secret_ref 引用不记密码值. 员工事先用 `security add-generic-password "
+            "-a $USER -s eis_password -w '<密码>'` 存到 keychain.\n"
+            "  2. **text 直传 (不推荐密码场景)**: text='jiniaA1+' 直接填, 会在 audit 标记 "
+            "'credential_field_filled' 但密码已经在 LLM 上下文了.\n\n"
+            "**两个字段二选一**: 给了 secret_ref 就忽略 text, 反之亦然. 都没给 → error."
         ),
         "input_schema": {
             "type": "object",
@@ -186,7 +191,14 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
                 },
                 "text": {
                     "type": "string",
-                    "description": "要填的文字. 不准是密码 / 凭据.",
+                    "description": "要填的文字 (明文). 用户名 / 邮箱 / 内容首选这个. 密码场景优先用 secret_ref.",
+                },
+                "secret_ref": {
+                    "type": "string",
+                    "description": (
+                        "安全源引用, 例 'keychain://eis_password' / 'env://EIS_PASSWORD'. "
+                        "tool-bridge 自动拉值, LLM 不会看到真值. 推荐密码场景用这个."
+                    ),
                 },
                 "timeout_seconds": {
                     "type": "number",
@@ -194,7 +206,7 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
                     "description": "等元素可写的最长时间. 默认 10s",
                 },
             },
-            "required": ["selector", "text"],
+            "required": ["selector"],
         },
         "emoji": "⌨️",
         "toolset": "catfish_native",
@@ -1059,29 +1071,65 @@ def browser_click(args: Dict[str, Any]) -> Dict[str, Any]:
 def browser_fill(args: Dict[str, Any]) -> Dict[str, Any]:
     """走 Playwright `page.fill()`. 自动清空原值再填.
 
-    历史 (2026-04-28): 一度拒填 password / pwd selector, 但实测员工日常需要鲶鱼帮登录,
-    拒了 = 核心场景废. 改成:
-      - 不再拒, 让员工正常使用 (password 早在 LLM 上下文里了, 拦不拦没意义)
-      - 检测到 password 字段 → 在返回结果里标 security_note + 写 audit log,
-        让员工 / IT 事后能审计
-      - 未来 (P1) 加 secret_ref 机制让密码从 keychain 拉, 永不进 LLM 上下文
+    历史:
+      v1 (2026-04-28 早): 拒填 password 字段 → 实测员工需要登录场景, 拒了核心废.
+      v2 (2026-04-28 中): 允许填 + 加 security_audit 标记 → 但密码仍在 LLM 上下文.
+      v3 (2026-04-28 当前): 加 secret_ref 字段, 密码从 keychain / env 拉, **永不进 LLM 上下文**.
+        text 字段保留 (用户名 / 邮箱 / 内容用), secret_ref 跟 text 二选一.
     """
     selector = (args.get("selector") or "").strip()
-    text = args.get("text", "")
+    text = args.get("text")
+    secret_ref = (args.get("secret_ref") or "").strip()
+
     if not selector:
         return {"type": "error", "error": "selector 必填"}
-    if text is None:
-        return {"type": "error", "error": "text 必填 (空字符串可以)"}
+
+    # secret_ref 跟 text 二选一. 都没给 → error. 都给 → 优先 secret_ref + warning.
+    if not secret_ref and (text is None or text == ""):
+        return {
+            "type": "error",
+            "error": "必须给 'text' 或 'secret_ref' 之一. 密码场景用 secret_ref",
+        }
+
     timeout_ms = int(float(args.get("timeout_seconds") or 10.0) * 1000)
     timeout_ms = max(1000, min(timeout_ms, 60_000))
 
-    # 检测密码 / 凭据字段, 但**不拒**, 只标记 (写 audit log 让员工 IT 可审计)
+    # 检测密码 / 凭据字段
     selector_lower = selector.lower()
     is_credential_field = (
         "password" in selector_lower
         or "pwd" in selector_lower
         or "passwd" in selector_lower
     )
+
+    # 解析 secret_ref (如果有), 拿到真实密码值
+    actual_text: str
+    used_secret_ref = False
+    if secret_ref:
+        try:
+            from . import secret_resolver  # noqa: PLC0415
+            actual_text = secret_resolver.resolve_secret(secret_ref)
+            used_secret_ref = True
+        except Exception as e:  # SecretResolveError 或其他
+            return {
+                "type": "error",
+                "error": f"secret_ref 解析失败: {e}",
+            }
+    else:
+        actual_text = str(text)
+        # 检测员工是不是把 secret_ref 写错位置 (写到 text 字段了)
+        try:
+            from . import secret_resolver  # noqa: PLC0415
+            if secret_resolver.is_secret_ref(actual_text):
+                return {
+                    "type": "error",
+                    "error": (
+                        f"text='{actual_text[:30]}...' 看起来是 secret_ref. "
+                        "应该传到 secret_ref 字段, 不是 text 字段."
+                    ),
+                }
+        except ImportError:
+            pass
 
     try:
         sync_playwright = _import_playwright()
@@ -1096,19 +1144,27 @@ def browser_fill(args: Dict[str, Any]) -> Dict[str, Any]:
                 return {"type": "error", "error": str(e)}
 
             try:
-                page.fill(selector, str(text), timeout=timeout_ms)
-                result = {
+                page.fill(selector, actual_text, timeout=timeout_ms)
+                result: Dict[str, Any] = {
                     "type": "ok",
                     "selector": selector,
-                    "filled_chars": len(str(text)),
-                    "summary": f"✓ 在 '{selector}' 填了 {len(str(text))} 个字符",
+                    "filled_chars": len(actual_text),
+                    "summary": f"✓ 在 '{selector}' 填了 {len(actual_text)} 个字符",
                 }
-                if is_credential_field:
-                    result["security_note"] = (
-                        "selector 看起来是密码 / 凭据字段. catfish 已填, 但建议未来使用 "
-                        "secret_ref 机制 (P1) 让密码从 keychain 拉, 不经过 LLM 上下文."
-                    )
+                # 标 audit:
+                #   - 用了 secret_ref → "credential_via_secret_ref" (好的实践)
+                #   - 直接 text + 是密码字段 → "credential_field_filled" (不好的实践, 提醒)
+                if used_secret_ref:
+                    result["security_audit"] = "credential_via_secret_ref"
+                    result["secret_ref_used"] = secret_ref  # 记 ref 不记值
+                    result["summary"] += f" (从 {secret_ref} 拉值, 密码不进 LLM 上下文)"
+                elif is_credential_field:
                     result["security_audit"] = "credential_field_filled"
+                    result["security_note"] = (
+                        "selector 看起来是密码 / 凭据字段, 但 text 是明文 (已经在 LLM 上下文了). "
+                        "下次推荐用 secret_ref='keychain://<name>' 或 'env://<NAME>' "
+                        "让密码从安全源拉, 不进 LLM."
+                    )
                 return result
             except Exception as e:
                 err_str = str(e)
