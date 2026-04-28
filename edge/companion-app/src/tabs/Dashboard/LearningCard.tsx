@@ -142,9 +142,9 @@ export default function LearningCard() {
                   lineHeight: 1.5,
                 }}
               >
-                📌 顶层 = 稳定身份档案 (hermes 启动时注入 system prompt)
+                📌 顶层 = 稳定身份档案 (小鲶启动时自动加载, 永远记得)
                 <br />
-                📝 memories/ = 对话中动态学到的, 按主题片段 (hermes 按需检索)
+                📝 memories/ = 对话中动态学到的, 按主题片段 (小鲶按需检索)
               </div>
               <ul style={listStyle}>
                 {stats.memories.map((m) => {
@@ -209,9 +209,8 @@ export default function LearningCard() {
               lineHeight: 1.5,
             }}
           >
-            小鲶在用 hermes 的 memory tool 自动记录你的偏好,用 skill_manage
-            自动把复杂工作流抽象成可复用 skill。这块每天都在变, 是 catfish
-            "self-evolution" 的真证据。
+            小鲶自动记录你的偏好, 把复杂工作流抽象成可复用 skill。
+            这块每天都在变, 是鲶鱼 "self-evolution" 的真证据。
           </div>
         </>
       )}

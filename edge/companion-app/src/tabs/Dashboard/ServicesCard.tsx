@@ -30,7 +30,7 @@ const SERVICES: ServiceRow[] = [
   {
     id: "tool_bridge",
     name: "Tool Bridge",
-    why: "暴露 hermes 60+ 工具给 LLM, 没起来 = LLM 无工具瞎答",
+    why: "暴露 60+ 工具给小鲶, 没起来 = 小鲶无工具瞎答",
   },
   {
     id: "chrome",

@@ -198,7 +198,7 @@ export default function ChatSidebar({
         </button>
         <button
           onClick={() => void openTerminal().catch(() => {})}
-          title="在 macOS 终端里拉起 hermes CLI 会话 (跟当前 Companion 共享 ~/.hermes/state.db)"
+          title="在终端打开鲶鱼 CLI (跟 Companion 共享同一对话历史)"
           style={{
             width: "100%",
             padding: "6px 12px",
@@ -210,7 +210,7 @@ export default function ChatSidebar({
             fontSize: 11,
           }}
         >
-          ⌘ 在终端开 hermes
+          ⌘ 在终端开鲶鱼
         </button>
       </footer>
     </aside>
@@ -297,7 +297,7 @@ function SourceBadge({ source }: { source?: string }) {
   const isCompanion = source === "companion";
   return (
     <span
-      title={isCompanion ? "Companion 起的对话" : "CLI/Hermes 起的对话"}
+      title={isCompanion ? "Companion 起的对话" : "终端起的对话"}
       style={{
         display: "inline-block",
         width: 6,

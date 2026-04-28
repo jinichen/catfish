@@ -1,4 +1,4 @@
-/** 当前身份 —— 系统用户 / SOUL 来源 / Hermes skin / 活动会话 */
+/** 当前身份 —— 系统用户 / SOUL 来源 / 运行时主题 / 活动会话 */
 
 import { useIdentity } from "../../hooks/useIdentity";
 
