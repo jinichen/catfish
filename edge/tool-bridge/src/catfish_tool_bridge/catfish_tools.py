@@ -37,6 +37,43 @@ from typing import Any, Dict, List, Optional, Tuple
 
 CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
     {
+        "name": "catfish_remember",
+        "description": (
+            "记住员工**本次 session** 明确告诉你的硬事实 (URL / 凭据 ref / 错误原因 / 流程关键点). "
+            "存到 ~/.catfish/session_facts.json, gateway 在每次 chat 时**自动**注入到 system prompt "
+            "末尾, 你后续每次推理都能看到. 比 SOUL.md 复述模式更稳 (不依赖你自觉).\n\n"
+            "✅ 调用场景:\n"
+            "  - 员工说 'EIS 用 http 不是 https' → catfish_remember(key='eis_url', value='http://eis.ffcs.cn')\n"
+            "  - 员工说 '我密码 ref 是 keychain://eis_password' → catfish_remember(key='eis_password_ref', value='keychain://eis_password')\n"
+            "  - 员工纠正你 'tool-bridge 死了不是我的请求错' → catfish_remember(key='conn_refused_means', value='tool-bridge 死了, watchdog 5s 内会重启, 不要重做我的请求')\n\n"
+            "❌ 不该调用:\n"
+            "  - 跨 session 永久事实 → 用 memory_save (那是写 ~/.hermes/memories/)\n"
+            "  - 员工的情绪/客套 ('好烦' / '辛苦') → 不是事实, 别记\n"
+            "  - 你自己推测的 → 必须是员工**明确**说的硬事实\n\n"
+            "key: 短 snake_case (例 'eis_url' / 'login_flow_step3'), 1-100 字符\n"
+            "value: 事实内容, 1-1000 字符\n\n"
+            "覆盖语义: 同 key 再调一次会覆盖 (员工说 'EIS 改 https 了' 你重存即可). "
+            "session 结束员工自己 rm ~/.catfish/session_facts.json 清空."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "事实的 key, snake_case, 1-100 字符",
+                },
+                "value": {
+                    "type": "string",
+                    "description": "事实的 value, 1-1000 字符",
+                },
+            },
+            "required": ["key", "value"],
+        },
+        "emoji": "📌",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
         "name": "catfish_today_summary",
         "description": (
             "看小鲶今天学到了什么:今天的对话数、工具调用次数、新增/更新的 "
@@ -1395,6 +1432,105 @@ def skill_backup(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ============================================================
+# session_facts — 跟 LLM attention 失焦 hot-fix 配套, 工程级兜底
+# ============================================================
+#
+# 设计 (2026-04-28 鸿波 demo 后加):
+#   SOUL.md 复述模式靠模型自觉, 不一定每次都 quote 关键事实. session_facts
+#   是工程级兜底: 模型听到员工硬事实时调 catfish_remember, 写到一个 JSON 文件;
+#   gateway 每次 chat 请求, 自动把这个文件内容拼到 system prompt 末尾.
+#   不依赖 attention, 永远在最近 token.
+#
+# 跟 memory_save 的区别:
+#   memory_save → 跨 session 永久 (写 ~/.hermes/memories/*.md)
+#   catfish_remember → 当前 session 内的硬事实 (写 ~/.catfish/session_facts.json)
+#                      session 结束员工 rm 文件即可清空
+#
+# 边界:
+#   - key 1-100 字符, value 1-1000 字符 (防滥用)
+#   - 同 key 覆盖 (员工说 "EIS 改 https 了" 重存即可)
+#   - 单文件全局 (Phase 1 单用户单进程; SSO 上来后加 user_id 区分)
+#   - 文件不存在 = 没有 facts, gateway inject 跳过
+
+SESSION_FACTS_PATH = Path.home() / ".catfish" / "session_facts.json"
+_FACTS_KEY_MAX_LEN = 100
+_FACTS_VALUE_MAX_LEN = 1000
+_FACTS_MAX_ENTRIES = 50  # 防内存爆: 超过 50 个 key 拒绝再加
+
+
+def _read_session_facts() -> Dict[str, str]:
+    """读 session_facts.json. 文件不存在 / 损坏 → 空 dict."""
+    if not SESSION_FACTS_PATH.exists():
+        return {}
+    try:
+        import json
+        with open(SESSION_FACTS_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {}
+        # 只保留 str -> str (防文件被乱写)
+        return {
+            str(k)[:_FACTS_KEY_MAX_LEN]: str(v)[:_FACTS_VALUE_MAX_LEN]
+            for k, v in data.items()
+            if isinstance(k, str) and isinstance(v, str)
+        }
+    except Exception:
+        return {}
+
+
+def _write_session_facts(facts: Dict[str, str]) -> None:
+    """写回 session_facts.json. 失败抛, 让 caller 处理 (返回 error)."""
+    import json
+    SESSION_FACTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(SESSION_FACTS_PATH, "w", encoding="utf-8") as f:
+        json.dump(facts, f, ensure_ascii=False, indent=2)
+
+
+def remember_fact(args: Dict[str, Any]) -> Dict[str, Any]:
+    """tool: 记一个 session 内的硬事实."""
+    key = (args.get("key") or "").strip()
+    value = (args.get("value") or "").strip()
+    if not key:
+        return {"type": "error", "error": "key 必填"}
+    if not value:
+        return {"type": "error", "error": "value 必填"}
+    if len(key) > _FACTS_KEY_MAX_LEN:
+        return {"type": "error", "error": f"key 太长 (>{_FACTS_KEY_MAX_LEN} 字符)"}
+    if len(value) > _FACTS_VALUE_MAX_LEN:
+        return {"type": "error", "error": f"value 太长 (>{_FACTS_VALUE_MAX_LEN} 字符)"}
+
+    facts = _read_session_facts()
+    if key not in facts and len(facts) >= _FACTS_MAX_ENTRIES:
+        return {
+            "type": "error",
+            "error": (
+                f"session_facts 已满 ({_FACTS_MAX_ENTRIES} 条上限). "
+                "员工 rm ~/.catfish/session_facts.json 清空, 或员工 explicit "
+                "告诉你哪些可以删."
+            ),
+        }
+    is_overwrite = key in facts
+    facts[key] = value
+    try:
+        _write_session_facts(facts)
+    except Exception as e:
+        return {"type": "error", "error": f"写 session_facts 失败: {e}"}
+
+    return {
+        "type": "ok",
+        "key": key,
+        "value_preview": value[:100] + ("…" if len(value) > 100 else ""),
+        "total_facts": len(facts),
+        "overwrite": is_overwrite,
+        "summary": (
+            f"{'更新' if is_overwrite else '记住'}了 '{key}'. "
+            f"当前 {len(facts)} 条 session_facts. "
+            f"gateway 会在每次 chat 自动 inject 到 system prompt 末尾."
+        ),
+    }
+
+
+# ============================================================
 # dispatch 入口
 # ============================================================
 
@@ -1406,6 +1542,8 @@ def is_native(name: str) -> bool:
 
 
 def dispatch_native(name: str, args: Dict[str, Any]) -> Any:
+    if name == "catfish_remember":
+        return remember_fact(args)
     if name == "catfish_today_summary":
         return collect_today_summary()
     if name == "catfish_screenshot":

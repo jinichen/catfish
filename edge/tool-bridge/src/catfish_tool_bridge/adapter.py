@@ -82,6 +82,52 @@ def list_tools() -> List[Dict[str, Any]]:
 # tools/dispatch
 # ============================================================
 
+#: execute_code 误用守卫 — sandbox 子进程拿不到 hermes session, 调 catfish_*
+#: 必死锁. 这些子串只要在脚本里出现, 大概率是模型搞错 (踩过坑 2026-04-28 鸿波 demo).
+_EXECUTE_CODE_FORBIDDEN_PATTERNS = (
+    "catfish_browser_",
+    "catfish_screenshot",
+    "catfish_skill_",
+    "catfish_tool_bridge",
+    "import catfish_",
+    "from catfish_",
+)
+
+
+def _check_execute_code_misuse(name: str, args: Dict[str, Any]) -> str | None:
+    """检测 execute_code 沙箱误调用 catfish 工具. 命中返回 friendly error 字符串.
+
+    返回 None = OK; 字符串 = 应该立即拒绝 + 把字符串塞进 error 字段.
+
+    为啥拦: hermes execute_code 是 bash/python sandbox 子进程, 跟 hermes 主进程
+    完全隔离, 拿不到 tool-bridge unix socket / browser session. 模型在脚本里
+    `import catfish_browser_*` 或调对应函数必死锁等 30s timeout, 浪费员工时间.
+    SOUL.md § execute_code 红线已经写过纪律, 这里加工程兜底.
+    """
+    if name not in {"execute_code", "shell_exec", "python", "bash"}:
+        return None
+    # 拼起来: code / command / input 等常见字段
+    text_parts: list[str] = []
+    for key in ("code", "command", "input", "script", "args"):
+        v = args.get(key)
+        if isinstance(v, str):
+            text_parts.append(v)
+        elif isinstance(v, list):
+            text_parts.extend(str(x) for x in v if isinstance(x, str))
+    text = "\n".join(text_parts).lower()
+    if not text:
+        return None
+    hits = [p for p in _EXECUTE_CODE_FORBIDDEN_PATTERNS if p.lower() in text]
+    if not hits:
+        return None
+    return (
+        f"⚠️ {name} 沙箱里检测到 catfish 工具调用 ({hits[0]}). "
+        f"这必失败 — sandbox 子进程拿不到 hermes browser session / tool-bridge socket. "
+        f"请用原生 tool calling 直接调 catfish_browser_* 等, 不要写脚本调. "
+        f"详见 SOUL.md § execute_code 红线."
+    )
+
+
 async def dispatch_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     """调用一个 tool。
 
@@ -96,6 +142,17 @@ async def dispatch_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     # 给 skill_watcher 标记"现在 LLM 在繁忙地用工具", 防它在 LLM 调用循环中突然
     # 重启 tool-bridge. 这是廉价操作 (一次 lock + 时间戳更新)。
     skill_watcher.mark_dispatch()
+
+    # 守卫: execute_code 沙箱误调用 catfish 工具 → 立即拒绝, 不让模型死等 timeout.
+    misuse_msg = _check_execute_code_misuse(name, args)
+    if misuse_msg:
+        return {
+            "ok": False,
+            "tool": name,
+            "result": None,
+            "error": misuse_msg,
+            "stderr": None,
+        }
 
     start = time.time()
     result = await _do_dispatch(name, args)

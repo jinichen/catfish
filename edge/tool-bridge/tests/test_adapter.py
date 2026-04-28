@@ -137,6 +137,53 @@ def test_dispatch_native_does_not_truncate_for_no_max_size() -> None:
     assert "_truncated" not in result["result"]
 
 
+# ---------- execute_code 误用守卫 ----------
+
+
+def test_execute_code_with_catfish_browser_rejected() -> None:
+    """模型在 execute_code 里写脚本调 catfish_browser_* → 立即拒绝, 别让它死等"""
+    result = asyncio.run(adapter.dispatch_tool("execute_code", {
+        "code": "import catfish_tool_bridge\nresult = catfish_browser_goto(url='http://x')",
+    }))
+    assert result["ok"] is False
+    assert "catfish" in result["error"].lower()
+    assert "execute_code" in result["error"] or "沙箱" in result["error"]
+
+
+def test_execute_code_with_catfish_screenshot_rejected() -> None:
+    result = asyncio.run(adapter.dispatch_tool("execute_code", {
+        "code": "x = catfish_screenshot()",
+    }))
+    assert result["ok"] is False
+
+
+def test_execute_code_with_pure_python_passes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """纯计算 / 不调 catfish 工具的脚本 — 不拦. 应该走到 hermes registry."""
+    _install_fake_registry(monkeypatch, ["execute_code"])
+    result = asyncio.run(adapter.dispatch_tool("execute_code", {
+        "code": "print(sum(range(100)))",
+    }))
+    # 关键: 即使最后失败 (fake registry 不真跑), 错误也不该是 "catfish 工具调用" misuse
+    if result["ok"] is False:
+        assert "catfish 工具调用" not in (result.get("error") or "")
+
+
+def test_shell_exec_with_catfish_also_rejected() -> None:
+    """守卫覆盖 shell_exec / python / bash 等同义工具名"""
+    result = asyncio.run(adapter.dispatch_tool("shell_exec", {
+        "command": "python -c 'import catfish_tool_bridge; print(1)'",
+    }))
+    assert result["ok"] is False
+
+
+def test_non_execute_tools_not_affected() -> None:
+    """普通 tool (例如 catfish_today_summary native) 不受守卫干扰"""
+    result = asyncio.run(adapter.dispatch_tool("catfish_today_summary", {}))
+    # 不该撞 misuse 守卫 (那是给 execute_code 类的)
+    if result["ok"] is False:
+        assert "catfish 工具调用" not in (result.get("error") or "")
+
+
 # ---------- health ----------
 
 def test_health_includes_native_count(monkeypatch: pytest.MonkeyPatch) -> None:
