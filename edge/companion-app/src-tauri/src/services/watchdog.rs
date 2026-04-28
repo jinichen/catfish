@@ -116,6 +116,17 @@ fn is_alive(pid_file_getter: impl Fn() -> Option<std::path::PathBuf>, cmdline: &
     process::read_pid_file_alive_strict(&pid_file, cmdline).is_some()
 }
 
+/// 探测 TCP 端口是否被占用 (不区分谁占).
+///
+/// 用途: gateway 类有固定监听端口 (8999) 的服务, watchdog spawn 前应该
+/// 先看端口被没被占. 占了 = 有人在跑 (可能是开发者手动 `python -m catfish_gateway.app`),
+/// 别 spawn 撞端口. 没占 = 真没起, 该 spawn.
+///
+/// 实现: 尝试 bind 同一个端口, bind 成功 = 没被占 (立刻 drop 释放), bind 失败 = 占了.
+async fn port_in_use(port: u16) -> bool {
+    tokio::net::TcpListener::bind(("127.0.0.1", port)).await.is_err()
+}
+
 /// app 启动时调一次, 起背景 watchdog task.
 ///
 /// 跟 [`autostart::schedule_autostart`] 互补: autostart 负责冷启动拉起,
@@ -138,12 +149,22 @@ pub fn schedule_watchdog() {
             if !gateway_health.is_in_backoff()
                 && !is_alive(catfish_paths::gateway_pid_file, "catfish_gateway")
             {
-                log::info!("watchdog: gateway dead, respawning");
-                autostart::ensure_gateway_running().await;
-                if is_alive(catfish_paths::gateway_pid_file, "catfish_gateway") {
-                    gateway_health.record_success("gateway");
+                // 端口被占 = 有人在跑 (大概率开发者手动 python -m catfish_gateway.app
+                // 调试代码, 没写 PID file). watchdog 不该 spawn 第二个撞端口.
+                let gw_port = crate::services::endpoints::endpoints().gateway_port;
+                if port_in_use(gw_port).await {
+                    log::info!(
+                        "watchdog: gateway 端口 {} 已被占 (开发者可能手动跑), 跳过 spawn",
+                        gw_port
+                    );
                 } else {
-                    gateway_health.record_failure("gateway");
+                    log::info!("watchdog: gateway dead, respawning");
+                    autostart::ensure_gateway_running().await;
+                    if is_alive(catfish_paths::gateway_pid_file, "catfish_gateway") {
+                        gateway_health.record_success("gateway");
+                    } else {
+                        gateway_health.record_failure("gateway");
+                    }
                 }
             }
 
