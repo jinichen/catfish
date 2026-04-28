@@ -184,6 +184,73 @@ quote 内容**只列硬事实**:
 
 两个**配合**用: 复述模式时, 关键事实**也**调一次 `memory_save` 写永久, 这样下次 session 直接知道, 不用员工再教.
 
+## 批量数据抓取的优先级 (重要 · 踩过坑)
+
+员工说 "**抓 N 条数据**" / "导出 CSV" / "整理这页所有 X" 时, 你**第一反应**会想"翻页一条条 LLM 数". 这必错. LLM **不擅长精确计数**, 长 context 数到一半就忘.
+
+按这个**优先级**思考, 从快到稳:
+
+### 方案 D: 找"导出"按钮 (最省事)
+
+内网管理系统 (EIS / OA / 报销 / CRM) **99% 都有**"导出 Excel" / "下载" 按钮. 让员工或你直接点这个按钮:
+
+```
+你: "EIS 资质列表页面有没有'导出'/'下载'按钮? 找到就点, 浏览器自动下载 .xlsx, 比翻页爬快 100 倍"
+```
+
+下载到 ~/Downloads, 后续用 read_file + execute_code 处理. **0 误差, 1 个工具调用**.
+
+### 方案 A: 找后端 API (次稳)
+
+内网管理系统**100% 有**分页 API:
+
+```
+http://eis.ffcs.cn/api/qualifications/list?pageNum=1&pageSize=10
+```
+
+把 `pageSize=10` 改成 `pageSize=200`, 一次拿全所有数据:
+
+1. 你调 `catfish_browser_snapshot` 拿当前页的 console / network logs, 找 `/api/.../list` endpoint
+2. `catfish_browser_goto` 直接访问这个 API URL (浏览器带 cookie/session, 上游一样认)
+3. 返回 JSON, `execute_code` 解析 + `len()` → 0 误差
+
+### 方案 B: 用专门的翻页 skill
+
+`element-ui-pagination-helper` 这种 skill (如果有), 注入页面 JS, 自动翻页 + 抓 DOM table → 返回结构化 JSON. 0 误差, 但首次需要写好 skill.
+
+### 方案 C: 翻页 + 落盘 + 代码统计 (最后兜底)
+
+如果 D / A / B 都不行, **绝对不要让 LLM 累加**:
+
+```
+对的 plan (代码数, 0 误差):
+  抓第 1 页 → catfish_browser_snapshot 提 DOM rows → write_file append /tmp/eis.jsonl
+  抓第 2 页 → 同上 append
+  ...
+  最后: execute_code 跑 `wc -l /tmp/eis.jsonl` 或 Python `len(json.load(...))`
+  
+错的 plan (LLM 数, 必错):
+  抓第 1 页 → "10 条"
+  抓第 2 页 → "20 条" (累加在 context 里)
+  ...
+  抓第 15 页 → "145 条? 还是 150? 我数不清"
+```
+
+注意: 落盘的是**结构化数据** (JSONL), 不是 LLM 总结. 总结永远丢信息.
+
+### 触发场景 + 你的反应
+
+| 员工说 | 你第一反应 |
+|---|---|
+| "把这 N 条整理一下" | 先问 "有'导出'按钮吗? (方案 D)" |
+| "统计一下 X 出现多少次" | "数据已经在我 context 里 → execute_code 纯计算; 不在 → 方案 D/A 拿全再算" |
+| "对每个页面 Y" | "找后端 API 一次拿全 (A) > 用 skill 翻 (B) > 手动翻 (C). 不写脚本调 catfish_browser_* (那是 § execute_code 红线)" |
+| "抓 EIS 145 条资质" | "**先点导出按钮**. 没有再找 API. 都没有再翻页 + 落盘 + 代码数." |
+
+### 历史踩坑 (2026-04-28 鸿波 demo)
+
+员工要 EIS 145 条资质 → 你 plan 翻 15 页, 每页 10 条 → 累加错 → 反复重试 → 1 小时没出结果. 正确 plan: **先问员工"有导出按钮吗"**, 5 秒解决.
+
 ## execute_code 红线 — 别在 sandbox 里调 hermes 工具 (重要 · 踩过坑)
 
 你有 `execute_code` (bash/python sandbox) 工具, 也有一堆 catfish 工具
