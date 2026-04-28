@@ -36,12 +36,16 @@ import os
 from fastapi import Header, HTTPException
 
 from .base import AuthProvider, User
+from .composite import CompositeProvider
 from .dev_token import DevTokenProvider
+from .oidc import OIDCProvider
 
 __all__ = [
     "User",
     "AuthProvider",
     "DevTokenProvider",
+    "OIDCProvider",
+    "CompositeProvider",
     "make_auth_provider",
     "get_current_user",
     "get_current_user_optional",
@@ -61,10 +65,17 @@ def _env() -> str:
 def make_auth_provider() -> AuthProvider:
     """工厂: 根据 env 返合适的 AuthProvider.
 
-    Phase 1A: 一律返 DevTokenProvider (env=dev 用 / env=prod 也兜底用,
-              因为决策 6 dev_token 在 prod 也保留作 SSO 配错救急).
-    Phase 1B: env=prod 返 CompositeProvider([OIDCProvider, DevTokenProvider]),
-              优先 OIDC, dev_token 兜底.
+    决策对齐 (docs/AUTH-DESIGN.md § 13):
+      - 决策 1: 飞书 + 自建 OIDC (Phase 1B-1 自建 catfish-identity 已 ship)
+      - 决策 2: gateway 直接验 IdP JWT (OIDCProvider 即此)
+      - 决策 6: dev_token 在 prod 保留作兜底 (CompositeProvider 串 OIDC + dev_token)
+
+    行为:
+      env=dev:  DevTokenProvider 单一 (本地开发)
+      env=prod: 看 CATFISH_OIDC_ISSUER:
+                设了  → CompositeProvider([OIDC, DevToken]) — 优先 OIDC + 兜底
+                没设 → DevTokenProvider + warning (生产配置缺失, 应该立即告警)
+      其他 env: DevTokenProvider 兜底 + warning
     """
     env = _env()
     if env == "dev":
@@ -72,11 +83,27 @@ def make_auth_provider() -> AuthProvider:
         return DevTokenProvider()
 
     if env == "prod":
-        # Phase 1B 上 OIDC 后这里改成 CompositeProvider.
-        # 当前 dev_token 兜底, 加 warning log 让 ops 知道 OIDC 还没接.
+        oidc_issuer = os.environ.get("CATFISH_OIDC_ISSUER", "").strip()
+        if oidc_issuer:
+            audience = os.environ.get("CATFISH_OIDC_AUDIENCE", "catfish-companion")
+            jwks_uri_env = os.environ.get("CATFISH_OIDC_JWKS_URI", "").strip()
+            oidc = OIDCProvider(
+                issuer=oidc_issuer,
+                audience=audience,
+                jwks_uri=jwks_uri_env or None,
+            )
+            # Composite: 优先 OIDC (真 SSO), 失败 fallback dev_token (生产兜底).
+            # dev_token 启用条件: CATFISH_DEV_TOKEN env 显式设 (非默认).
+            # Phase 1C 加: dev_token 在 prod 用时 audit 标 auth_method='dev_token',
+            # Companion UI 显 warning banner.
+            logger.info(
+                "auth: env=prod → Composite[OIDC(%s), DevToken]", oidc_issuer
+            )
+            return CompositeProvider([oidc, DevTokenProvider()])
+
         logger.warning(
-            "auth: env=prod 但 OIDCProvider 还没 ship (Phase 1B), "
-            "暂用 DevTokenProvider 兜底. UI 应显 warning banner."
+            "auth: env=prod 但 CATFISH_OIDC_ISSUER 没设, fallback DevTokenProvider. "
+            "生产部署应该配 OIDC."
         )
         return DevTokenProvider()
 
