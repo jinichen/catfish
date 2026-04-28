@@ -971,8 +971,27 @@ def _import_playwright():
         ) from e
 
 
+# Chrome 网络层 net_error 关键字 (区别于 404/500 这种 server 层 error).
+# 撞这些 = 根本连不上服务器 → 适合走 https→http fallback.
+_NET_LAYER_ERRORS = (
+    "ERR_CONNECTION_REFUSED",
+    "ERR_CONNECTION_RESET",
+    "ERR_CONNECTION_CLOSED",
+    "ERR_SSL_PROTOCOL_ERROR",
+    "ERR_CERT_",
+    "ERR_TIMED_OUT",
+)
+
+
 def browser_goto(args: Dict[str, Any]) -> Dict[str, Any]:
-    """走 Playwright `page.goto()`. connect_over_cdp 复用员工已登录 Chrome."""
+    """走 Playwright `page.goto()`. connect_over_cdp 复用员工已登录 Chrome.
+
+    https→http 自动 fallback (踩过坑 2026-04-28):
+      模型默认补 https, 但中国电信内网很多老系统 (.ffcs.cn / .10086.cn) 只监听 80.
+      https 过去直接 ERR_CONNECTION_REFUSED. 这里检测到网络层 error + url 是 https
+      时, 自动用同一个 page 切 http 重试 1 次. 成功就加 fallback_hint 让模型记住.
+      双保险: SOUL.md 也有"内网默认 http" 纪律, 这是工程层兜底.
+    """
     url = (args.get("url") or "").strip()
     if not url:
         return {"type": "error", "error": "url 必填"}
@@ -987,6 +1006,29 @@ def browser_goto(args: Dict[str, Any]) -> Dict[str, Any]:
     except RuntimeError as e:
         return {"type": "error", "error": str(e)}
 
+    def _try_goto(page, target_url: str) -> Dict[str, Any]:
+        """单次 goto 尝试, 包装成 result dict (不抛)."""
+        try:
+            response = page.goto(target_url, wait_until=wait_until, timeout=timeout_ms)
+            actual_title = page.title()
+            actual_url = page.url
+            http_status = response.status if response else None
+            matched = target_url in actual_url or actual_url.startswith(target_url[:20])
+            return {
+                "type": "ok",
+                "navigated_to": target_url,
+                "actual_title": actual_title,
+                "actual_url": actual_url,
+                "http_status": http_status,
+                "summary": (
+                    f"已 navigate 到 {target_url}. 真实 title='{actual_title}', "
+                    f"url='{actual_url}', http={http_status}. "
+                    f"({'✓ 加载成功' if matched else '⚠ url 跟请求不一致, 可能重定向'})"
+                ),
+            }
+        except Exception as e:
+            return {"type": "error", "error": f"playwright goto 异常: {type(e).__name__}: {e}"}
+
     try:
         with sync_playwright() as p:
             try:
@@ -994,29 +1036,33 @@ def browser_goto(args: Dict[str, Any]) -> Dict[str, Any]:
             except RuntimeError as e:
                 return {"type": "error", "error": str(e)}
 
-            try:
-                response = page.goto(url, wait_until=wait_until, timeout=timeout_ms)
-                # 拿真实 title + url (Playwright 内部已经等到目标 wait_until 状态)
-                actual_title = page.title()
-                actual_url = page.url
-                http_status = response.status if response else None
+            result = _try_goto(page, url)
 
-                matched = url in actual_url or actual_url.startswith(url[:20])
-                return {
-                    "type": "ok",
-                    "navigated_to": url,
-                    "actual_title": actual_title,
-                    "actual_url": actual_url,
-                    "http_status": http_status,
-                    "summary": (
-                        f"已 navigate 到 {url}. 真实 title='{actual_title}', "
-                        f"url='{actual_url}', http={http_status}. "
-                        f"({'✓ 加载成功' if matched else '⚠ url 跟请求不一致, 可能重定向'})"
-                    ),
-                }
-            finally:
-                # 不关 browser (它是员工日常 Chrome, 关了就糟); 不关 page (要保留状态给后续 tool 用)
-                pass
+            # https → http fallback (网络层撞墙 + url 是 https 才触发)
+            if (
+                result.get("type") == "error"
+                and url.lower().startswith("https://")
+                and any(err in result.get("error", "") for err in _NET_LAYER_ERRORS)
+            ):
+                fallback_url = "http://" + url[len("https://"):]
+                fb_result = _try_goto(page, fallback_url)
+                if fb_result.get("type") == "ok":
+                    fb_result["fallback_hint"] = (
+                        f"⚠ {url} (https) 不通 ({result['error'][:80]}…), 自动 fallback "
+                        f"到 {fallback_url} (http) 成功. 内网老系统常见 "
+                        f"(.ffcs.cn / .10086.cn / .chinatelecom.cn 等). "
+                        f"以后**直接用 http://**, 不要补 https://."
+                    )
+                    fb_result["summary"] = "[https→http fallback] " + fb_result["summary"]
+                    return fb_result
+                # fallback 也失败 → 增强原始 error 给员工更多线索
+                result["error"] = (
+                    f"{result['error']}\n"
+                    f"注: 已自动尝试 http fallback ({fallback_url}) 也失败 "
+                    f"({fb_result.get('error', '')[:80]}). 可能员工不在公司内网, 或服务器临时挂了."
+                )
+            return result
+            # 不关 browser (员工日常 Chrome) / 不关 page (后续 tool 复用)
     except Exception as e:
         return {"type": "error", "error": f"playwright goto 异常: {type(e).__name__}: {e}"}
 
