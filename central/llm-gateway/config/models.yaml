@@ -34,6 +34,10 @@ models:
       # api_base 完整 URL 走 env 注入,避免 hostname/UUID 进版本库
       api_base: ${INTERNAL_LLM_BASE_QWEN_MAIN}
       api_key_env: INTERNAL_LLM_KEY
+      # 私有 LLM (10.10.40.102) MoE active 10B + 24K prompt 时 TTFT 常 60s+,
+      # 默认 60s 太紧, 给 180s 喘息. 真超时 fallback chain (qwen-flash) 兜底.
+      # 踩过坑 2026-04-28 鸿波 demo: 反复 ReadTimeout 卡 demo.
+      timeout: 180
 
     # 上游管理员确认实际支持 250K tokens。
     # 我们对员工承诺 128K（官方主流 Qwen 3.5 心智 + 一倍以上安全余量）。
@@ -63,6 +67,9 @@ models:
       model: openai/qwen_v3_vl_moe_30b_a3b
       api_base: ${INTERNAL_LLM_BASE_QWEN_VISION}
       api_key_env: INTERNAL_LLM_KEY
+      # 多模态模型图像/视频处理偏慢, MoE active 3B 也比稳定模型 TTFT 长.
+      # 给 180s 跟 main 对齐, 跟公共多模态 (timeout: 90) 区分 (公共更快).
+      timeout: 180
 
     # 多模态模型相比主力模型 context 略窄些，留 64K 员工承诺。
     # 真实支持大概率也是 128K+ 量级，视后续压测调整。

@@ -21,7 +21,7 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(2);
 #[tauri::command]
 pub async fn chrome_launch() -> Result<(), String> {
     if let Some(pid_file) = catfish_paths::chrome_pid_file() {
-        if let Some(pid) = process::read_pid_file_alive(&pid_file) {
+        if let Some(pid) = process::read_pid_file_alive_strict(&pid_file, "remote-debugging-port") {
             return Err(format!("Chrome 已在跑（PID {pid}）"));
         }
     }
@@ -126,7 +126,7 @@ fn kill_tool_bridge_for_respawn() {
             return;
         }
     };
-    let pid = match process::read_pid_file_alive(&pid_file) {
+    let pid = match process::read_pid_file_alive_strict(&pid_file, "catfish_tool_bridge") {
         Some(p) => p,
         None => {
             log::debug!("tool-bridge 没在跑, 不需要 respawn");
@@ -272,7 +272,7 @@ pub async fn chrome_status() -> Result<ServiceStatus, String> {
     };
 
     let pid = catfish_paths::chrome_pid_file()
-        .and_then(|p| process::read_pid_file_alive(&p));
+        .and_then(|p| process::read_pid_file_alive_strict(&p, "remote-debugging-port"));
 
     Ok(ServiceStatus {
         running: true,

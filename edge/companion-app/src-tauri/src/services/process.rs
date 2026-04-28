@@ -128,7 +128,16 @@ pub fn is_alive(pid: u32) -> bool {
     }
 }
 
-/// 从 PID 文件读出 PID 并验活；文件不存在或进程已死返回 None
+/// 从 PID 文件读出 PID 并验活；文件不存在或进程已死返回 None.
+///
+/// 注意: 这是**宽松版**, 只看 PID 存活, 不验进程是不是我们的. macOS / Linux 上
+/// PID 会被 OS 回收复用, 旧 catfish 服务死掉后那个 PID 可能被分给别的进程
+/// (比如 ssh / docker), 这个函数会误判"还在跑". 想准确请用
+/// `read_pid_file_alive_strict(path, cmdline_substr)`.
+///
+/// 留着是因为以后可能给"我不在乎是谁的进程, 反正 PID 占了就别动" 类场景用.
+/// 现在所有调用点都换成 strict 版了, 暂时 dead code.
+#[allow(dead_code)]
 pub fn read_pid_file_alive(path: &std::path::Path) -> Option<u32> {
     let s = std::fs::read_to_string(path).ok()?;
     let pid: u32 = s.trim().parse().ok()?;
@@ -136,5 +145,72 @@ pub fn read_pid_file_alive(path: &std::path::Path) -> Option<u32> {
         Some(pid)
     } else {
         None
+    }
+}
+
+/// 严格版: PID 存活 **且** cmdline 含指定 substring 才算"还在跑".
+///
+/// 解决 macOS / Linux 上 PID 复用导致 Companion 永远启动不起来子进程的 bug:
+///   旧 tool-bridge PID 死掉 → OS 回收 → 分给别的进程 → kill -0 还成功 →
+///   Companion 误以为 tool-bridge 还在 → 拒绝 spawn 新的 → UI 卡黄.
+///
+/// 自愈: 检测到 PID 复用 (PID 活但 cmdline 不匹配) 时自动删 stale PID file,
+///       下次调用就直接 None, 上层的 start 路径会 fresh spawn.
+///
+/// 保守策略: cmdline 拿不到 (ps 失败 / 输出空) 时**默认认为是我们的进程**,
+///           跟旧 `read_pid_file_alive` 行为一致, 不引入新风险.
+pub fn read_pid_file_alive_strict(
+    path: &std::path::Path,
+    cmdline_substr: &str,
+) -> Option<u32> {
+    let s = std::fs::read_to_string(path).ok()?;
+    let pid: u32 = s.trim().parse().ok()?;
+    if !is_alive(pid) {
+        // PID 死了 → stale, 清文件 (省得下次再误读)
+        let _ = std::fs::remove_file(path);
+        return None;
+    }
+    match cmdline_matches(pid, cmdline_substr) {
+        Some(false) => {
+            // 确认 PID 复用 (是别人家进程) → 清 stale 文件
+            let _ = std::fs::remove_file(path);
+            None
+        }
+        Some(true) | None => Some(pid),
+    }
+}
+
+/// 检查 PID 的 cmdline 是否含 substr.
+/// `Some(true)` = 含, `Some(false)` = 不含, `None` = 拿不到 (保守处理).
+fn cmdline_matches(pid: u32, substr: &str) -> Option<bool> {
+    #[cfg(unix)]
+    {
+        let output = Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "command="])
+            .output()
+            .ok()?;
+        let s = String::from_utf8(output.stdout).ok()?;
+        if s.trim().is_empty() {
+            return None;
+        }
+        Some(s.contains(substr))
+    }
+    #[cfg(windows)]
+    {
+        let output = Command::new("wmic")
+            .args([
+                "process",
+                "where",
+                &format!("ProcessId={}", pid),
+                "get",
+                "CommandLine",
+            ])
+            .output()
+            .ok()?;
+        let s = String::from_utf8(output.stdout).ok()?;
+        if s.trim().is_empty() {
+            return None;
+        }
+        Some(s.contains(substr))
     }
 }

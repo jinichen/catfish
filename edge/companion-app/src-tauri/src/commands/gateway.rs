@@ -16,7 +16,7 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(2);
 pub async fn gateway_start() -> Result<(), String> {
     // 1. 已经在跑就拒绝重启（防员工双击启动按钮起两个）
     if let Some(pid_file) = catfish_paths::gateway_pid_file() {
-        if let Some(pid) = process::read_pid_file_alive(&pid_file) {
+        if let Some(pid) = process::read_pid_file_alive_strict(&pid_file, "catfish_gateway") {
             return Err(format!("Gateway 已在跑（PID {pid}）"));
         }
     }
@@ -126,7 +126,7 @@ pub async fn gateway_status() -> Result<ServiceStatus, String> {
 
     // 3. 读 PID 文件确认是不是 Companion 起的
     let pid = catfish_paths::gateway_pid_file()
-        .and_then(|p| process::read_pid_file_alive(&p));
+        .and_then(|p| process::read_pid_file_alive_strict(&p, "catfish_gateway"));
 
     Ok(ServiceStatus {
         running: true,

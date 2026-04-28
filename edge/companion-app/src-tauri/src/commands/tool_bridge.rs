@@ -44,7 +44,7 @@ pub struct ToolCallResult {
 #[tauri::command]
 pub async fn tool_bridge_start() -> Result<(), String> {
     if let Some(pid_file) = catfish_paths::tool_bridge_pid_file() {
-        if let Some(pid) = process::read_pid_file_alive(&pid_file) {
+        if let Some(pid) = process::read_pid_file_alive_strict(&pid_file, "catfish_tool_bridge") {
             return Err(format!("tool-bridge 已在跑（PID {pid}）"));
         }
     }
@@ -109,7 +109,7 @@ pub async fn tool_bridge_stop() -> Result<(), String> {
 #[tauri::command]
 pub async fn tool_bridge_status() -> Result<ServiceStatus, String> {
     let pid = catfish_paths::tool_bridge_pid_file()
-        .and_then(|p| process::read_pid_file_alive(&p));
+        .and_then(|p| process::read_pid_file_alive_strict(&p, "catfish_tool_bridge"));
 
     if pid.is_none() {
         return Ok(ServiceStatus::down(

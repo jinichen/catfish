@@ -16,7 +16,7 @@ use crate::services::{catfish_paths, process};
 #[tauri::command]
 pub async fn local_search_start() -> Result<(), String> {
     if let Some(pid_file) = catfish_paths::local_search_pid_file() {
-        if let Some(pid) = process::read_pid_file_alive(&pid_file) {
+        if let Some(pid) = process::read_pid_file_alive_strict(&pid_file, "catfish_search") {
             return Err(format!("Local Search watcher 已在跑（PID {pid}）"));
         }
     }
@@ -81,7 +81,7 @@ pub async fn local_search_stop() -> Result<(), String> {
 #[tauri::command]
 pub async fn local_search_status() -> Result<ServiceStatus, String> {
     let pid = catfish_paths::local_search_pid_file()
-        .and_then(|p| process::read_pid_file_alive(&p));
+        .and_then(|p| process::read_pid_file_alive_strict(&p, "catfish_search"));
 
     match pid {
         Some(pid) => Ok(ServiceStatus {
