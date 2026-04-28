@@ -1,0 +1,54 @@
+[project]
+name = "catfish-identity"
+version = "0.1.0"
+description = "Catfish Identity — 自建 OIDC server, 给 catfish-gateway 提供 SSO. 客户没自己 SSO 时直接用; 有的话切到客户的 SSO, 关掉本服务即可."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Catfish Platform Team" }]
+
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pyyaml>=6.0.2",
+    "pydantic>=2.9.0",
+    "PyJWT[crypto]>=2.9.0",
+    "bcrypt>=4.2.0",
+    "cryptography>=43.0.0",
+    "python-dotenv>=1.0.0",
+    "python-multipart>=0.0.20",  # /authorize POST form
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.27.0",
+    "ruff>=0.7.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "PL", "C90", "N", "UP", "B"]
+ignore = [
+    "PLR0913",
+    "PLR2004",
+    "B008",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["PLR0913", "PLR2004", "N802"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

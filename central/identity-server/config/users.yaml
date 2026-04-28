@@ -1,0 +1,30 @@
+# Catfish Identity 用户表
+#
+# 加用户:
+#   1. 生成 bcrypt hash:
+#      python3 -c 'from catfish_identity.users import hash_password; print(hash_password("YOUR_PASSWORD"))'
+#   2. 在下面 list 加一条 dict (email / password_hash / name / department / tier 必填)
+#   3. 重启 catfish-identity (Phase 2 加 hot-reload)
+#
+# tier: 'employee' (默认) | 'admin'
+# department: 任意字符串 (Phase 2 RBAC 用)
+#
+# 安全:
+#   - 这个文件含密码 hash, 不能进 git public repo
+#   - 生产部署: chmod 600 + 路径在 ~/.catfish/identity-server/users.yaml
+#   - 测试 / dev: 默认两个 user, 演示完改密码 / 删条目
+
+users:
+  - email: chenhongbo@ffcs.cn
+    password_hash: $2b$12$lurtJgClagy68sidF76/uux2DvJwbYzNlbOBMHOIvmJNQG2N2WvM2
+    name: 陈鸿波
+    department: engineering
+    tier: admin
+    # 密码: catfish123 (demo only, 真实部署立即改)
+
+  - email: demo@ffcs.cn
+    password_hash: $2b$12$qAldu2EfoyoGA92KRqIYU.Ln5n6WAj1yMyTYdqL7g4vD1lkhwbPEK
+    name: Demo User
+    department: sales
+    tier: employee
+    # 密码: demo123 (demo only)
