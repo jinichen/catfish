@@ -417,18 +417,24 @@ def test_dispatch_screenshot_routes_correctly(
 
 
 # ============================================================
-# catfish_browser_goto (原生 CDP, 绕开 hermes browser_navigate)
+# catfish_browser_* (Playwright connect_over_cdp 后端)
 # ============================================================
+#
+# 历史 (本测试文件):
+#   v1: 测直 CDP /json/list + WebSocket
+#   v2 (现): 直 CDP 全废, 换 Playwright. 测 mock playwright 实现 + 入参校验 + 友好错误
 
 
-def test_browser_goto_in_native_tools_list() -> None:
-    """catfish_browser_goto 必须出现在 CATFISH_NATIVE_TOOLS"""
-    names = [t["name"] for t in catfish_tools.CATFISH_NATIVE_TOOLS]
+def test_browser_tools_in_native_list() -> None:
+    """4 个 catfish_browser_* 都在 CATFISH_NATIVE_TOOLS"""
+    names = {t["name"] for t in catfish_tools.CATFISH_NATIVE_TOOLS}
     assert "catfish_browser_goto" in names
+    assert "catfish_browser_click" in names
+    assert "catfish_browser_fill" in names
+    assert "catfish_browser_snapshot" in names
 
 
 def test_browser_goto_required_url() -> None:
-    """url 必填"""
     tool = next(
         t for t in catfish_tools.CATFISH_NATIVE_TOOLS
         if t["name"] == "catfish_browser_goto"
@@ -436,55 +442,172 @@ def test_browser_goto_required_url() -> None:
     assert "url" in tool["input_schema"]["required"]
 
 
-def test_browser_goto_missing_url_returns_error() -> None:
-    """没传 url → error, 不去连 Chrome"""
+def test_browser_goto_missing_url() -> None:
     result = catfish_tools.browser_goto({})
     assert result["type"] == "error"
     assert "url" in result["error"]
 
 
-def test_browser_goto_blank_url_returns_error() -> None:
-    """url 是空白字符串 → 也算没传"""
+def test_browser_goto_blank_url() -> None:
     result = catfish_tools.browser_goto({"url": "   "})
     assert result["type"] == "error"
 
 
-def test_browser_goto_chrome_unreachable() -> None:
-    """Chrome 没起 → 连不上 /json/list 应返友好错误, 不抛"""
-    # 改 chrome base 到一个肯定连不通的端口
-    import os as _os
-    _os.environ["CATFISH_CHROME_BASE"] = "http://127.0.0.1:1"  # 故意死端口
-    try:
-        result = catfish_tools.browser_goto(
-            {"url": "https://example.com", "wait_seconds": 0}
-        )
-        assert result["type"] == "error"
-        assert "连不上" in result["error"] or "Chrome" in result["error"]
-    finally:
-        del _os.environ["CATFISH_CHROME_BASE"]
-
-
-def test_browser_goto_no_pages_returns_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Chrome 在跑但 /json/list 返 empty 或没 page-type → 友好错误"""
-    monkeypatch.setattr(
-        catfish_tools, "_http_get_json",
-        lambda url, timeout_sec=3.0: [
-            {"type": "iframe", "webSocketDebuggerUrl": "ws://x"},  # 不是 page
-        ],
-    )
-    result = catfish_tools.browser_goto(
-        {"url": "https://example.com", "wait_seconds": 0}
-    )
+def test_browser_goto_no_playwright_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """playwright 没装 → 友好提示装"""
+    def fake_import() -> object:
+        raise RuntimeError("缺 playwright 包. 装一下...")
+    monkeypatch.setattr(catfish_tools, "_import_playwright", fake_import)
+    result = catfish_tools.browser_goto({"url": "https://example.com"})
     assert result["type"] == "error"
-    assert "page" in result["error"]
+    assert "playwright" in result["error"]
 
 
-def test_dispatch_browser_goto_routes_correctly() -> None:
-    """dispatch_native('catfish_browser_goto', ...) 应该路由到 browser_goto"""
-    # 走 missing url 路径, 立刻 return error 不去连 Chrome
+def test_browser_click_required_selector() -> None:
+    tool = next(
+        t for t in catfish_tools.CATFISH_NATIVE_TOOLS
+        if t["name"] == "catfish_browser_click"
+    )
+    assert "selector" in tool["input_schema"]["required"]
+
+
+def test_browser_click_missing_selector() -> None:
+    result = catfish_tools.browser_click({})
+    assert result["type"] == "error"
+    assert "selector" in result["error"]
+
+
+def test_browser_fill_required_fields() -> None:
+    tool = next(
+        t for t in catfish_tools.CATFISH_NATIVE_TOOLS
+        if t["name"] == "catfish_browser_fill"
+    )
+    required = set(tool["input_schema"]["required"])
+    assert {"selector", "text"} <= required
+
+
+def test_browser_fill_password_blocked() -> None:
+    """selector 含 password → 拒绝, 不让自动填密码"""
+    result = catfish_tools.browser_fill({
+        "selector": "input[name='password']",
+        "text": "secret123",
+    })
+    assert result["type"] == "error"
+    assert "密码" in result["error"]
+
+
+def test_browser_fill_pwd_keyword_blocked() -> None:
+    """各种密码框命名变体都拒"""
+    for sel in ["input#pwd", "input[name='passwd']", "#user-password"]:
+        result = catfish_tools.browser_fill({"selector": sel, "text": "x"})
+        assert result["type"] == "error", f"selector {sel} 应该被拒但通过了"
+
+
+def test_browser_fill_missing_selector() -> None:
+    result = catfish_tools.browser_fill({"text": "x"})
+    assert result["type"] == "error"
+
+
+def test_browser_snapshot_no_required_fields() -> None:
+    """snapshot 所有字段可选"""
+    tool = next(
+        t for t in catfish_tools.CATFISH_NATIVE_TOOLS
+        if t["name"] == "catfish_browser_snapshot"
+    )
+    assert tool["input_schema"]["required"] == []
+
+
+def test_dispatch_browser_goto_routes() -> None:
     result = catfish_tools.dispatch_native("catfish_browser_goto", {})
     assert result["type"] == "error"
     assert "url" in result["error"]
+
+
+def test_dispatch_browser_click_routes() -> None:
+    result = catfish_tools.dispatch_native("catfish_browser_click", {})
+    assert result["type"] == "error"
+    assert "selector" in result["error"]
+
+
+def test_dispatch_browser_fill_routes() -> None:
+    result = catfish_tools.dispatch_native("catfish_browser_fill", {})
+    assert result["type"] == "error"
+
+
+def test_dispatch_browser_snapshot_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """snapshot 不需要必填参数, 路由直接进去, 没 playwright 则友好报错"""
+    def fake_import() -> object:
+        raise RuntimeError("缺 playwright 包...")
+    monkeypatch.setattr(catfish_tools, "_import_playwright", fake_import)
+    result = catfish_tools.dispatch_native("catfish_browser_snapshot", {})
+    assert result["type"] == "error"
+
+
+# ============================================================
+# _flatten_a11y 纯函数 (accessibility tree → 元素列表)
+# ============================================================
+
+
+def test_flatten_a11y_empty() -> None:
+    out: list = []
+    catfish_tools._flatten_a11y(None, out)
+    assert out == []
+
+
+def test_flatten_a11y_button() -> None:
+    """有 name + role=button 的节点收进 out"""
+    node = {"role": "button", "name": "提交", "children": []}
+    out: list = []
+    catfish_tools._flatten_a11y(node, out)
+    assert len(out) == 1
+    assert out[0]["role"] == "button"
+    assert out[0]["name"] == "提交"
+
+
+def test_flatten_a11y_unnamed_skipped() -> None:
+    """没 name + 不在 interesting roles 的不收"""
+    node = {"role": "generic", "name": "", "children": []}
+    out: list = []
+    catfish_tools._flatten_a11y(node, out)
+    assert out == []
+
+
+def test_flatten_a11y_max_count_caps() -> None:
+    """超过 max_count 立刻停, 不爆"""
+    # 100 个 button 嵌套
+    node: dict = {"role": "button", "name": "x", "children": []}
+    cur = node
+    for _ in range(100):
+        next_node: dict = {"role": "button", "name": "x", "children": []}
+        cur["children"].append(next_node)
+        cur = next_node
+
+    out: list = []
+    catfish_tools._flatten_a11y(node, out, max_count=10)
+    assert len(out) == 10  # 严格上限, 不会超
+
+
+def test_flatten_a11y_recursive() -> None:
+    """递归遍历子节点"""
+    node = {
+        "role": "form",
+        "name": "登录",
+        "children": [
+            {"role": "textbox", "name": "用户名", "children": []},
+            {"role": "textbox", "name": "密码", "children": []},
+            {"role": "button", "name": "登录", "children": []},
+        ],
+    }
+    out: list = []
+    catfish_tools._flatten_a11y(node, out)
+    # form + 3 children = 4
+    assert len(out) == 4
+    roles = [e["role"] for e in out]
+    assert roles == ["form", "textbox", "textbox", "button"]
 
 
 # ============================================================

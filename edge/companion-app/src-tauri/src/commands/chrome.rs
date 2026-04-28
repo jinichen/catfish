@@ -49,6 +49,11 @@ pub async fn chrome_launch() -> Result<(), String> {
             "--no-first-run".into(),
             "--no-default-browser-check".into(),
             "--disable-features=DialMediaRouteProvider".into(), // 减少后台噪音
+            // Chrome 138+ 默认拒绝 CDP WebSocket 连接如果 Origin 不在白名单.
+            // 我们的 tool-bridge / hermes browser tool 用 websocket-client 连进来时
+            // 默认发空 Origin, 会被 close. 开发期 * 最宽松, 生产再收紧.
+            // 不加这条 = catfish_browser_goto / hermes browser_navigate 全挂.
+            "--remote-allow-origins=*".into(),
             "about:blank".into(), // 默认开空白页
         ],
         log_path,

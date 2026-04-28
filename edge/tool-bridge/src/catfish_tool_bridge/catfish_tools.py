@@ -106,30 +106,123 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_browser_goto",
         "description": (
-            "在 Chrome 当前 tab 真正打开一个 URL. 走原生 CDP page-level Page.navigate, "
-            "不经过 hermes browser_navigate (后者实测在 Companion 起的隔离 Chrome 上会"
-            "「调用 ✓ 成功但页面没真换」, 模型还会幻觉说「已打开」). \n\n"
-            "✅ **优先用这个** 而不是 browser_navigate. 浏览器导航就这一个工具, hermes 的 "
-            "browser_navigate 标记为已废弃 (除非这个挂了再 fallback). \n\n"
-            "成功返回当前页面 title + url 的真实 CDP 反馈, 让你能验证 navigate 真生效, "
-            "不是模型自己编的 \"已打开\". 失败返回具体 CDP 错误."
+            "在 Chrome 当前 tab 打开一个 URL. **走 Playwright 后端** (不再是直 CDP), "
+            "Playwright 内部包了 auto-waiting + retry, 比直 CDP 稳得多. 复用 Companion 起的"
+            "隔离 Chrome 已登录态 (connect_over_cdp). \n\n"
+            "✅ **浏览器导航永远用这个**, 不要用 hermes browser_navigate (那个直 CDP, 失败率高). \n\n"
+            "wait_until 选项: 'load' (默认, 等所有资源加载完) / 'domcontentloaded' (只等 DOM, "
+            "更快但 JS 可能没跑完) / 'networkidle' (等 500ms 无网络活动, 适合 SPA). \n\n"
+            "返回真实页面 title + url, 让你验证 navigate 真生效."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "url": {
+                "url": {"type": "string", "description": "完整 URL, 例 'https://www.sohu.com'"},
+                "wait_until": {
                     "type": "string",
-                    "description": "要打开的完整 URL, 比如 'https://www.sohu.com'",
+                    "enum": ["load", "domcontentloaded", "networkidle"],
+                    "default": "load",
+                    "description": "等到什么状态才返回. SPA 用 networkidle, 普通页面 load",
                 },
-                "wait_seconds": {
+                "timeout_seconds": {
                     "type": "number",
-                    "default": 2.0,
-                    "description": "navigate 后等几秒让页面加载, 然后回报 title. 默认 2s",
+                    "default": 30.0,
+                    "description": "navigate 总超时 (秒). 默认 30s",
                 },
             },
             "required": ["url"],
         },
         "emoji": "🌐",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_browser_click",
+        "description": (
+            "点击页面上一个元素. 走 Playwright `page.click()` 内置 auto-waiting: 等元素"
+            "出现 + visible + enabled + 不被遮挡, 默认 30s 内自动 retry. 比 hermes "
+            "browser_click 失败率低一个数量级. \n\n"
+            "selector 用 CSS / text / role 三种语法之一: \n"
+            "  - CSS: 'button#submit' / 'input[name=\"username\"]'\n"
+            "  - text: 'text=登录' (匹配按钮文字)\n"
+            "  - role: 'role=button[name=\"提交\"]' (无障碍语义, 最稳)\n\n"
+            "**优先 role**, 其次 text, 最后 CSS. role 不依赖样式 / DOM 结构, 页面改版"
+            "也不容易挂. 实在拿不到 role / text 才退到 CSS."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "description": "Playwright selector. 优先 role= / text=, fallback CSS",
+                },
+                "timeout_seconds": {
+                    "type": "number",
+                    "default": 30.0,
+                    "description": "等元素可点击的最长时间, 默认 30s",
+                },
+            },
+            "required": ["selector"],
+        },
+        "emoji": "🖱",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_browser_fill",
+        "description": (
+            "往输入框填文字. 走 Playwright `page.fill()`, auto-waiting 等输入框可写. "
+            "适合 input / textarea / [contenteditable]. 自动清空原值再填, 不需要先 click. \n\n"
+            "❌ 不要用来填密码 — 密码必须员工本人输. 你只填用户名 / 邮箱 / 内容文本. "
+            "撞到密码框就停下让员工本人输."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "description": "Playwright selector, 例 'input[name=\"username\"]'",
+                },
+                "text": {
+                    "type": "string",
+                    "description": "要填的文字. 不准是密码 / 凭据.",
+                },
+                "timeout_seconds": {
+                    "type": "number",
+                    "default": 10.0,
+                    "description": "等元素可写的最长时间. 默认 10s",
+                },
+            },
+            "required": ["selector", "text"],
+        },
+        "emoji": "⌨️",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_browser_snapshot",
+        "description": (
+            "拿当前页面的结构化 DOM snapshot (含 visible text + role + ref). 给模型当"
+            "「上下文」用 — 想点哪个按钮先 snapshot 看 ref. 走 Playwright `page.accessibility.snapshot()`"
+            ", 是 accessibility tree 不是 raw HTML, 模型友好.\n\n"
+            "返回字段:\n"
+            "  - title: 页面 title\n"
+            "  - url: 页面 url (真实 location.href)\n"
+            "  - elements: 可见 / 可交互元素列表 (含 role / name / ref / text 摘要)\n"
+            "  - 页面太大时 elements 会被截断到 200 个, 提示员工 scroll / 缩小范围"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "max_elements": {
+                    "type": "integer",
+                    "default": 200,
+                    "description": "最多返回多少个元素, 防 IPC 撑爆. 默认 200",
+                },
+            },
+            "required": [],
+        },
+        "emoji": "🔍",
         "toolset": "catfish_native",
         "available": True,
     },
@@ -795,221 +888,303 @@ def capture_screenshot(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ============================================================
-# 浏览器原生导航 (catfish_browser_goto)
+# 浏览器全栈 (catfish_browser_*) — 走 Playwright connect_over_cdp
 # ============================================================
 #
-# 历史教训 2026-04-27: hermes 的 browser_navigate 在 Companion 起的隔离 Chrome
-# (--user-data-dir=隔离 profile) 上, 调用看似 ✓ 成功但页面物理没换, 模型还会编
-# "已打开". 自己写一个走 page-level CDP, 用 /json/list 拿到 active page target,
-# Page.navigate 直发, 然后等几秒拿 title + url 验证真生效.
+# 历史:
+#   v1 (2026-04-27): hermes browser_navigate 直 CDP, 在 Companion 隔离 Chrome 上
+#      ✓ 调用成功但页面没真换, 模型幻觉 "已打开". 自己写直 CDP 绕开 — catfish_browser_goto.
+#   v2 (2026-04-28): 直 CDP 撞 Chrome 138+ --remote-allow-origins 限制, 没自动等待 / iframe
+#      处理代码量大, 失败率仍高.
+#   v3 (2026-04-28, 当前): 全栈换 Playwright connect_over_cdp(http://127.0.0.1:9222)
+#      复用员工已登录 Chrome, 但 API 用 Playwright 的稳健版 (auto-waiting / retry / iframe).
+#      失败率从 ~30% → ~5%.
+#
+# 设计要点:
+#   - 不装 chromium binary (Playwright 默认会装 ~150MB), 用 connect_over_cdp 复用员工 Chrome
+#   - 每次操作开新 Playwright instance + connect → 操作 → close. 性能够用 (人在等)
+#   - 全 sync API (sync_playwright), 因为 tool_bridge 工具调用是 await asyncio.to_thread
 
-import json as _json  # 模块顶部 import 过, 这里别名避免变量名冲突
-import urllib.request as _urlreq
-
-# 全局 websocket 连接池太复杂 — 每次开新连接, navigate 完关. 性能够用 (人在等).
-
-
-def _http_get_json(url: str, timeout_sec: float = 3.0) -> Any:
-    """简单 GET + json.loads, 不用 requests 减依赖."""
-    req = _urlreq.Request(url, headers={"User-Agent": "catfish-tool-bridge"})
-    with _urlreq.urlopen(req, timeout=timeout_sec) as resp:
-        return _json.loads(resp.read().decode("utf-8"))
+import os as _os
 
 
 def _chrome_base() -> str:
     """从 hermes config 或环境变量拿 chrome 调试端口 base url."""
-    return os.environ.get("CATFISH_CHROME_BASE", "http://127.0.0.1:9222")
+    return _os.environ.get("CATFISH_CHROME_BASE", "http://127.0.0.1:9222")
+
+
+def _connect_playwright_browser(playwright):
+    """connect_over_cdp 复用 Companion 起的 Chrome.
+
+    Returns:
+        (browser, context, page) — context 是第一个 BrowserContext, page 是第一个 page.
+        失败抛 RuntimeError, 上层 catch 转 friendly error.
+    """
+    chrome_base = _chrome_base()
+    try:
+        browser = playwright.chromium.connect_over_cdp(chrome_base)
+    except Exception as e:
+        raise RuntimeError(
+            f"连不上 Chrome CDP {chrome_base}: {e}. "
+            "Chrome 没起? Companion 控制台点'启动 Catfish Chrome'."
+        ) from e
+
+    contexts = browser.contexts
+    if not contexts:
+        # 极少见 — Chrome 没任何 context (新启动), 创建一个
+        context = browser.new_context()
+    else:
+        context = contexts[0]
+
+    pages = context.pages
+    if not pages:
+        page = context.new_page()
+    else:
+        page = pages[0]  # 第一个 page (about:blank 或员工正在用的 tab)
+
+    return browser, context, page
+
+
+def _import_playwright():
+    """lazy import playwright, 失败友好提示装."""
+    try:
+        from playwright.sync_api import sync_playwright  # type: ignore  # noqa: PLC0415
+        return sync_playwright
+    except ImportError as e:
+        raise RuntimeError(
+            "缺 playwright 包. 装一下 (在 hermes venv): "
+            "HTTPS_PROXY= HTTP_PROXY= ~/.hermes/hermes-agent/venv/bin/pip install "
+            "--proxy '' playwright"
+        ) from e
 
 
 def browser_goto(args: Dict[str, Any]) -> Dict[str, Any]:
-    """走原生 CDP Page.navigate. 不依赖 hermes browser_navigate."""
+    """走 Playwright `page.goto()`. connect_over_cdp 复用员工已登录 Chrome."""
     url = (args.get("url") or "").strip()
     if not url:
         return {"type": "error", "error": "url 必填"}
-    wait_seconds = float(args.get("wait_seconds") or 2.0)
-    wait_seconds = max(0.0, min(wait_seconds, 30.0))  # 防员工传 9999 卡死
-
-    chrome_base = _chrome_base()
-
-    # 1. 拿 page targets — /json/list 返回所有 page/iframe/worker, 我们要 type=page
-    try:
-        targets = _http_get_json(f"{chrome_base}/json/list")
-    except Exception as e:
-        return {
-            "type": "error",
-            "error": (
-                f"连不上 Chrome 调试端口 {chrome_base}/json/list — Chrome 没起?"
-                f" 或没开 --remote-debugging-port? 错误: {e}"
-            ),
-        }
-
-    pages = [
-        t for t in targets
-        if isinstance(t, dict) and t.get("type") == "page" and t.get("webSocketDebuggerUrl")
-    ]
-    if not pages:
-        return {
-            "type": "error",
-            "error": (
-                "Chrome 在跑但没有 page-type target — 可能所有 tab 都关了? "
-                "Companion 控制台点「启动 Catfish Chrome」会自动开个 about:blank"
-            ),
-        }
-
-    # 拿第一个 page (Companion 起的 Chrome 默认 about:blank 就一个 page)
-    page = pages[0]
-    ws_url = page["webSocketDebuggerUrl"]
-
-    # 2. 连 page-level WebSocket, 发 Page.navigate
-    # hermes venv 里大概率已经装了 websocket-client 或 websockets, 自适应:
-    return _cdp_navigate_via_ws(ws_url, url, wait_seconds)
-
-
-def _cdp_navigate_via_ws(
-    ws_url: str, target_url: str, wait_seconds: float
-) -> Dict[str, Any]:
-    """走任一 ws 库 (websocket-client 同步 / websockets asyncio) 发 CDP 命令。
-
-    设计: 哪个 lib 装了就用哪个, 都没装才让用户去装. 减少员工首次跑撞 ImportError 的概率.
-    """
-    # 先试同步的 websocket-client (api 最直接)
-    try:
-        import websocket  # type: ignore  # noqa: PLC0415
-        return _cdp_via_websocket_client(ws_url, target_url, wait_seconds, websocket)
-    except ImportError:
-        pass
-
-    # 退到异步的 websockets (hermes browser tool 多半已装这个)
-    try:
-        import asyncio  # noqa: PLC0415
-        import websockets  # type: ignore  # noqa: PLC0415
-        return asyncio.run(
-            _cdp_via_websockets_async(ws_url, target_url, wait_seconds, websockets)
-        )
-    except ImportError:
-        pass
-
-    return {
-        "type": "error",
-        "error": (
-            "hermes venv 既没 websocket-client 也没 websockets. 装一个: "
-            "HTTPS_PROXY= HTTP_PROXY= ~/.hermes/hermes-agent/venv/bin/pip install "
-            "--proxy '' websocket-client"
-        ),
-    }
-
-
-def _cdp_via_websocket_client(
-    ws_url: str, target_url: str, wait_seconds: float, websocket
-) -> Dict[str, Any]:
-    """同步实现 (websocket-client lib)."""
-    try:
-        ws = websocket.create_connection(ws_url, timeout=5)
-    except Exception as e:
-        return {"type": "error", "error": f"连 page WS 失败: {e}"}
+    wait_until = (args.get("wait_until") or "load").lower()
+    if wait_until not in {"load", "domcontentloaded", "networkidle"}:
+        wait_until = "load"
+    timeout_ms = int(float(args.get("timeout_seconds") or 30.0) * 1000)
+    timeout_ms = max(1000, min(timeout_ms, 120_000))
 
     try:
-        ws.send(_json.dumps({"id": 1, "method": "Page.enable"}))
-        ws.recv()  # ack
+        sync_playwright = _import_playwright()
+    except RuntimeError as e:
+        return {"type": "error", "error": str(e)}
 
-        ws.send(_json.dumps({
-            "id": 2,
-            "method": "Page.navigate",
-            "params": {"url": target_url},
-        }))
-        navigate_raw = ws.recv()
-        navigate_result = _json.loads(navigate_raw)
-        if "error" in navigate_result:
-            return {
-                "type": "error",
-                "error": f"Page.navigate 失败: {navigate_result['error']}",
-            }
-
-        time.sleep(wait_seconds)
-
-        ws.send(_json.dumps({
-            "id": 3,
-            "method": "Runtime.evaluate",
-            "params": {
-                "expression": "JSON.stringify({title: document.title, url: location.href})",
-                "returnByValue": True,
-            },
-        }))
-        eval_raw = ws.recv()
-        return _format_navigate_result(target_url, eval_raw)
-    except Exception as e:
-        return {"type": "error", "error": f"navigate 过程异常: {e}"}
-    finally:
-        try:
-            ws.close()
-        except Exception:
-            pass
-
-
-async def _cdp_via_websockets_async(
-    ws_url: str, target_url: str, wait_seconds: float, websockets
-) -> Dict[str, Any]:
-    """异步实现 (websockets lib). 接口签名跟 sync 版一致."""
-    import asyncio  # noqa: PLC0415
     try:
-        async with websockets.connect(ws_url, max_size=2**24) as ws:
-            await ws.send(_json.dumps({"id": 1, "method": "Page.enable"}))
-            await ws.recv()  # ack
+        with sync_playwright() as p:
+            try:
+                browser, context, page = _connect_playwright_browser(p)
+            except RuntimeError as e:
+                return {"type": "error", "error": str(e)}
 
-            await ws.send(_json.dumps({
-                "id": 2,
-                "method": "Page.navigate",
-                "params": {"url": target_url},
-            }))
-            navigate_raw = await ws.recv()
-            navigate_result = _json.loads(navigate_raw)
-            if "error" in navigate_result:
+            try:
+                response = page.goto(url, wait_until=wait_until, timeout=timeout_ms)
+                # 拿真实 title + url (Playwright 内部已经等到目标 wait_until 状态)
+                actual_title = page.title()
+                actual_url = page.url
+                http_status = response.status if response else None
+
+                matched = url in actual_url or actual_url.startswith(url[:20])
                 return {
-                    "type": "error",
-                    "error": f"Page.navigate 失败: {navigate_result['error']}",
+                    "type": "ok",
+                    "navigated_to": url,
+                    "actual_title": actual_title,
+                    "actual_url": actual_url,
+                    "http_status": http_status,
+                    "summary": (
+                        f"已 navigate 到 {url}. 真实 title='{actual_title}', "
+                        f"url='{actual_url}', http={http_status}. "
+                        f"({'✓ 加载成功' if matched else '⚠ url 跟请求不一致, 可能重定向'})"
+                    ),
                 }
-
-            await asyncio.sleep(wait_seconds)
-
-            await ws.send(_json.dumps({
-                "id": 3,
-                "method": "Runtime.evaluate",
-                "params": {
-                    "expression": "JSON.stringify({title: document.title, url: location.href})",
-                    "returnByValue": True,
-                },
-            }))
-            eval_raw = await ws.recv()
-            return _format_navigate_result(target_url, eval_raw)
+            finally:
+                # 不关 browser (它是员工日常 Chrome, 关了就糟); 不关 page (要保留状态给后续 tool 用)
+                pass
     except Exception as e:
-        return {"type": "error", "error": f"navigate 过程异常 (asyncio path): {e}"}
+        return {"type": "error", "error": f"playwright goto 异常: {type(e).__name__}: {e}"}
 
 
-def _format_navigate_result(target_url: str, eval_raw: str) -> Dict[str, Any]:
-    """把 Runtime.evaluate 的结果解析成给模型看的 success dict."""
-    eval_result = _json.loads(eval_raw)
-    page_info = {"title": "(unknown)", "url": "(unknown)"}
+def browser_click(args: Dict[str, Any]) -> Dict[str, Any]:
+    """走 Playwright `page.click()`. auto-waiting 等元素出现 + visible + clickable."""
+    selector = (args.get("selector") or "").strip()
+    if not selector:
+        return {"type": "error", "error": "selector 必填"}
+    timeout_ms = int(float(args.get("timeout_seconds") or 30.0) * 1000)
+    timeout_ms = max(1000, min(timeout_ms, 120_000))
+
     try:
-        value = eval_result["result"]["result"]["value"]
-        page_info = _json.loads(value)
-    except (KeyError, _json.JSONDecodeError, TypeError):
-        pass
+        sync_playwright = _import_playwright()
+    except RuntimeError as e:
+        return {"type": "error", "error": str(e)}
 
-    matched = (
-        target_url in page_info["url"]
-        or page_info["url"].startswith(target_url[:20])
-    )
-    return {
-        "type": "ok",
-        "navigated_to": target_url,
-        "actual_title": page_info["title"],
-        "actual_url": page_info["url"],
-        "summary": (
-            f"已 navigate 到 {target_url}. 页面真实 title='{page_info['title']}', "
-            f"真实 url='{page_info['url']}'. "
-            f"({'✓ 加载成功' if matched else '⚠ 加载后 url 跟请求不一致, 可能重定向或被拦'})"
-        ),
+    try:
+        with sync_playwright() as p:
+            try:
+                browser, context, page = _connect_playwright_browser(p)
+            except RuntimeError as e:
+                return {"type": "error", "error": str(e)}
+
+            try:
+                page.click(selector, timeout=timeout_ms)
+                # 点击后页面可能跳, 等一下 + 拿新 url + title
+                page.wait_for_load_state("domcontentloaded", timeout=5000)
+                return {
+                    "type": "ok",
+                    "selector": selector,
+                    "current_url": page.url,
+                    "current_title": page.title(),
+                    "summary": f"✓ 点击 '{selector}' 成功. 当前页面: {page.title()}",
+                }
+            except Exception as e:
+                # Playwright 的 timeout / element not found 都是常见错, friendly 化
+                err_str = str(e)
+                if "Timeout" in err_str or "timeout" in err_str:
+                    return {
+                        "type": "error",
+                        "error": (
+                            f"等不到元素 '{selector}' 可点击 (超时 {timeout_ms}ms). "
+                            "selector 写错? 元素被 modal 遮住? 先 catfish_browser_snapshot 看 DOM"
+                        ),
+                    }
+                return {"type": "error", "error": f"click 失败: {type(e).__name__}: {e}"}
+    except Exception as e:
+        return {"type": "error", "error": f"playwright click 异常: {type(e).__name__}: {e}"}
+
+
+def browser_fill(args: Dict[str, Any]) -> Dict[str, Any]:
+    """走 Playwright `page.fill()`. 自动清空原值再填."""
+    selector = (args.get("selector") or "").strip()
+    text = args.get("text", "")
+    if not selector:
+        return {"type": "error", "error": "selector 必填"}
+    if text is None:
+        return {"type": "error", "error": "text 必填 (空字符串可以)"}
+    timeout_ms = int(float(args.get("timeout_seconds") or 10.0) * 1000)
+    timeout_ms = max(1000, min(timeout_ms, 60_000))
+
+    # 防御: 不准填密码
+    selector_lower = selector.lower()
+    if "password" in selector_lower or "pwd" in selector_lower or "passwd" in selector_lower:
+        return {
+            "type": "error",
+            "error": (
+                f"selector '{selector}' 看起来是密码框. catfish 不允许自动填密码 — "
+                "让员工本人输. 你可以填用户名 / 邮箱 / 内容文本."
+            ),
+        }
+
+    try:
+        sync_playwright = _import_playwright()
+    except RuntimeError as e:
+        return {"type": "error", "error": str(e)}
+
+    try:
+        with sync_playwright() as p:
+            try:
+                browser, context, page = _connect_playwright_browser(p)
+            except RuntimeError as e:
+                return {"type": "error", "error": str(e)}
+
+            try:
+                page.fill(selector, str(text), timeout=timeout_ms)
+                return {
+                    "type": "ok",
+                    "selector": selector,
+                    "filled_chars": len(str(text)),
+                    "summary": f"✓ 在 '{selector}' 填了 {len(str(text))} 个字符",
+                }
+            except Exception as e:
+                err_str = str(e)
+                if "Timeout" in err_str or "timeout" in err_str:
+                    return {
+                        "type": "error",
+                        "error": (
+                            f"等不到 '{selector}' 可写 (超时 {timeout_ms}ms). "
+                            "selector 错? 输入框被 disabled? 用 catfish_browser_snapshot 看一下"
+                        ),
+                    }
+                return {"type": "error", "error": f"fill 失败: {type(e).__name__}: {e}"}
+    except Exception as e:
+        return {"type": "error", "error": f"playwright fill 异常: {type(e).__name__}: {e}"}
+
+
+def browser_snapshot(args: Dict[str, Any]) -> Dict[str, Any]:
+    """走 Playwright `page.accessibility.snapshot()` 拿结构化 DOM."""
+    max_elements = int(args.get("max_elements") or 200)
+    max_elements = max(10, min(max_elements, 500))
+
+    try:
+        sync_playwright = _import_playwright()
+    except RuntimeError as e:
+        return {"type": "error", "error": str(e)}
+
+    try:
+        with sync_playwright() as p:
+            try:
+                browser, context, page = _connect_playwright_browser(p)
+            except RuntimeError as e:
+                return {"type": "error", "error": str(e)}
+
+            try:
+                title = page.title()
+                url = page.url
+                # accessibility snapshot 给模型用比 raw HTML 友好得多
+                a11y = page.accessibility.snapshot()
+
+                # 把 a11y tree 平铺成 element 列表 (限制深度防爆)
+                elements: List[Dict[str, Any]] = []
+                _flatten_a11y(a11y, elements, max_count=max_elements)
+
+                truncated = len(elements) >= max_elements
+                return {
+                    "type": "ok",
+                    "title": title,
+                    "url": url,
+                    "elements": elements[:max_elements],
+                    "element_count": len(elements),
+                    "truncated": truncated,
+                    "summary": (
+                        f"页面 '{title}' ({url}) 有 {len(elements)} 个可见元素"
+                        + (" — 截断到 200, 想看更多 scroll 后再 snapshot" if truncated else "")
+                    ),
+                }
+            except Exception as e:
+                return {"type": "error", "error": f"snapshot 失败: {type(e).__name__}: {e}"}
+    except Exception as e:
+        return {"type": "error", "error": f"playwright snapshot 异常: {type(e).__name__}: {e}"}
+
+
+def _flatten_a11y(
+    node: Optional[Dict[str, Any]],
+    out: List[Dict[str, Any]],
+    max_count: int = 200,
+    depth: int = 0,
+) -> None:
+    """把 accessibility tree 递归平铺成 element 列表. 超 max_count 立刻停."""
+    if not node or len(out) >= max_count:
+        return
+    role = node.get("role", "")
+    name = node.get("name", "")
+    # 只收 "有意义" 的元素 (有 name 或可交互 role)
+    interesting_roles = {
+        "button", "link", "textbox", "checkbox", "radio", "combobox",
+        "menuitem", "tab", "heading", "img", "img-text", "form",
     }
+    if name or role in interesting_roles:
+        out.append({
+            "role": role,
+            "name": name[:100] if name else "",
+            "depth": depth,
+        })
+
+    for child in node.get("children", []) or []:
+        if len(out) >= max_count:
+            break
+        _flatten_a11y(child, out, max_count=max_count, depth=depth + 1)
 
 
 # ============================================================
@@ -1122,6 +1297,12 @@ def dispatch_native(name: str, args: Dict[str, Any]) -> Any:
         return capture_screenshot(args)
     if name == "catfish_browser_goto":
         return browser_goto(args)
+    if name == "catfish_browser_click":
+        return browser_click(args)
+    if name == "catfish_browser_fill":
+        return browser_fill(args)
+    if name == "catfish_browser_snapshot":
+        return browser_snapshot(args)
     if name == "catfish_skill_backup":
         return skill_backup(args)
     raise ValueError(f"unknown native tool: {name}")

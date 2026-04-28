@@ -12,20 +12,37 @@ metadata:
 
 # catfish-browser-task
 
-让小鲶**替员工操作浏览器**，基于 Hermes 自带的 `browser_click` / `browser_snapshot` / `browser_cdp` 等原生工具，配合 catfish 自己写的 `catfish_browser_goto` (导航) + `catfish_screenshot` (像素级看图)，提供一套稳健的任务模板。
+让小鲶**替员工操作浏览器**, 全栈走 catfish 自己的 `catfish_browser_*` 工具 (Playwright connect_over_cdp 后端), 配合 `catfish_screenshot` (像素级看图), 提供一套稳健的任务模板.
 
-## ⚠️ 工具选择铁律 (踩过坑总结)
+## ⚠️ 工具选择铁律 (踩过坑总结, 2026-04-28 全栈换 Playwright)
 
-| 想干啥 | 用啥 | 不要用啥 |
+| 想干啥 | ✅ 永远用 | ❌ 永远别用 (已废弃) |
 |---|---|---|
-| **打开 / navigate 一个 URL** | **`catfish_browser_goto`** (catfish 自己写, 走原生 CDP page-level Page.navigate, 返回真实 title+url) | `browser_navigate` (hermes 上游, 实测在 Companion 隔离 Chrome 上**调用 ✓ 但页面没真换**, 而且模型还会编"已打开") |
-| 看页面整体 | `browser_vision` 粗看 / `catfish_screenshot` 精细 | (见下面"第 3 步 看图") |
-| 拿元素结构 | `browser_snapshot` | — |
-| 点击元素 | `browser_click` | — |
-| 输入文字 | `browser_type` | — |
-| 读 console / 网络 | `browser_console` / `browser_network` | — |
+| **打开 / navigate 一个 URL** | `catfish_browser_goto` | ~~`browser_navigate`~~ (hermes 直 CDP, 失败率 30%+) |
+| **点击元素 (按钮 / 链接)** | `catfish_browser_click` | ~~`browser_click`~~ (hermes 直 CDP, 没 auto-waiting) |
+| **填表单 / 输入** | `catfish_browser_fill` | ~~`browser_type`~~ (同上) |
+| **拿页面 DOM 结构** | `catfish_browser_snapshot` | ~~`browser_snapshot`~~ (hermes 给 raw HTML, 模型不友好) |
+| **像素级精确识别** (验证码 / 小数字 / 看清) | `catfish_screenshot mode=fullscreen` | `browser_vision` (实测瞎答) |
+| 看页面整体粗看 | `browser_vision` (够用) | — |
+| 读 console / 网络 | `browser_console` / `browser_network` (hermes, 这些还能用) | — |
 
-**铁律**: **导航永远用 `catfish_browser_goto`** (除非它真挂了再 fallback hermes browser_navigate). 历史教训 (2026-04-27): 用户让模型"打开搜狐", 模型 ✓ 调 browser_navigate, 然后编"搜狐首页已打开, 顶部有导航栏...", **实际 Chrome 还停在 about:blank**. 这种 hallucination 是 hermes 上游 fork 的 bug, 我们不修上游, 直接绕开。
+**铁律**: **catfish_browser_* 4 件套是默认**, hermes browser_navigate / click / type / snapshot 全部废弃. 历史:
+
+- v1 (2026-04-27): hermes browser_navigate 在隔离 Chrome 上"调用 ✓ 但页面没真换", 模型幻觉"已打开". 写了 catfish_browser_goto 走直 CDP 绕开.
+- v2 (2026-04-28): 直 CDP 撞 Chrome 138+ `--remote-allow-origins` 限制, 没自动等待 / iframe 处理代码量大, 失败率 30%+.
+- v3 (2026-04-28, 当前): 全栈换 **Playwright connect_over_cdp**. Playwright 内置 auto-waiting + retry + iframe 透明处理. 失败率 ~5%.
+
+### Playwright auto-waiting 是什么
+
+每个 catfish_browser_click / fill 内部默认等元素出现 + visible + 可交互, 默认超时 30s 内自动 retry. **你不需要自己 sleep 等**. 旧版 hermes browser_click 没这层, 经常"点了但没生效".
+
+### selector 写法优先级 (传给 click / fill)
+
+1. **`role=button[name="提交"]`** ⭐ 最稳 (无障碍语义, 页面改版也不挂)
+2. `text=登录` (匹配按钮文字)
+3. `input[name="username"]` / CSS (退路, 依赖具体 DOM)
+
+写代码时优先 role=, 实在不行才退到 CSS.
 
 ## 何时调用（重要：browser 是"最后一公里"工具，先看有没有 API）
 
