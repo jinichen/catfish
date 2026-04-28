@@ -77,6 +77,7 @@ pub fn run() {
             commands::skills::list_mcp_servers,
             // self-evolution: 鲶鱼今天学了什么
             commands::learning::learning_today_stats,
+            commands::audit::audit_summary,
             // system
             commands::system::open_terminal,
             commands::system::notify,

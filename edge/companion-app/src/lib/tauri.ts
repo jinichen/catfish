@@ -132,6 +132,11 @@ import type { TodayLearningStats } from "../types/learning";
 export const fetchTodayLearningStats = () =>
   rawInvoke<TodayLearningStats>("learning_today_stats");
 
+// ── audit / telemetry ────────────────────────────────────
+import type { AuditSummary } from "../types/audit";
+export const fetchAuditSummary = () =>
+  rawInvoke<AuditSummary>("audit_summary");
+
 // ── system ───────────────────────────────────────────────
 export const openTerminal = (cwd?: string) =>
   rawInvoke<void>("open_terminal", { cwd });

@@ -8,6 +8,7 @@
 //!   - 每个 #[tauri::command] 必须返回 Result<T, String>，
 //!     错误统一序列化成字符串给前端
 
+pub mod audit;
 pub mod chrome;
 pub mod gateway;
 pub mod health;
