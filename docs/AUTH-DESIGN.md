@@ -382,13 +382,26 @@ auth:
 >
 > 修改本文需要主理人 (鸿波) 显式同意, 在 git log 留下变更原因.
 
-**决策状态** (待填):
-- 决策 1 (一期 IdP): ⏸ 待拍
-- 决策 2 (自建 vs 直接接): ⏸ 待拍 (推荐 A)
-- 决策 3 (sub 格式): ⏸ 待拍 (推荐 email)
-- 决策 4 (离线兜底): ⏸ 待拍 (推荐 A 只读模式)
-- 决策 5 (session 存哪): ⏸ 待拍 (推荐 A JWT stateless)
-- 决策 6 (dev_token 保留): ⏸ 待拍 (推荐 A 保留)
+**决策状态** (2026-04-28 鸿波拍板, 全部采纳推荐):
+
+- 决策 1 (一期 IdP): ✅ **B** — 飞书 + 自建 OIDC (~45% 客户覆盖)
+- 决策 2 (自建 vs 直接接): ✅ **A** — gateway 直接验 IdP 签的 JWT (中央最小)
+- 决策 3 (sub 格式): ✅ **A** — email (跨 IdP 通用, audit log 可读)
+- 决策 4 (离线兜底): ✅ **A** — catfish 进入"只读模式" (本地 catfish_* 可用, 不发 LLM 请求)
+- 决策 5 (session 存哪): ✅ **A** — JWT stateless (1h access + 7d refresh, 中央零状态)
+- 决策 6 (dev_token 保留): ✅ **A** — 保留作生产兜底 (warning banner + audit 标 auth_method=dev_token)
+
+**拍板上下文** (2026-04-28 demo sprint):
+- 5 月中旬客户交流, 必须看到多用户登录 (不能再 dev_token 单用户硬编码)
+- 目标客户: 中国电信内部 + 其他央国企部门 (都用飞书, 多数有自建 SSO)
+- 决策依据见 `docs/SSO-RATIFY.md` (5 分钟精简版, 含今天 demo sprint 学到的考量)
+- 全部采纳推荐 = Phase 1A→B→C 7 天交付, 5 月 demo 前 ship
+
+**实施时间线**:
+- Phase 1A · AuthProvider ABC 重构: 1-2 天 (开始 2026-04-29)
+- Phase 1B · OIDCProvider + 飞书 adapter: 3-4 天
+- Phase 1C · Companion OAuth flow: 2-3 天
+- 总计 6-9 天, 5 月 demo 前完工
 
 ---
 
