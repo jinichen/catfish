@@ -22,6 +22,7 @@ export default function SkillsMcpCard() {
         border: "1px solid var(--catfish-border)",
         borderRadius: "var(--radius-md)",
         padding: "var(--space-4)",
+        gridColumn: "1 / -1", // 占整行: skills 列表多, 用宽度比用高度更好读
       }}
     >
       <h3 style={{ marginBottom: "var(--space-3)" }}>Skills & MCP</h3>
@@ -82,10 +83,19 @@ export default function SkillsMcpCard() {
             </Section>
           )}
 
-          {/* Skills 折叠列表 */}
+          {/* Skills 折叠列表 — grid 多列, 利用宽度 */}
           {skills && skills.length > 0 && (
             <Section title="Skills (按 namespace)">
-              <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+              <ul
+                style={{
+                  listStyle: "none",
+                  padding: 0,
+                  margin: 0,
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+                  gap: "var(--space-1) var(--space-3)",
+                }}
+              >
                 {skills.map((ns) => (
                   <NamespaceRow key={ns.namespace} ns={ns} />
                 ))}
