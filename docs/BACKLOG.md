@@ -338,6 +338,7 @@ STRATEGY.md            ─→  战略拍板 (3 个月一动)        ─→  填�
 POSITIONING.md         ─→  产品定位 one-pager           ─→  填充 BACKLOG.md B 段 (GTM)
 COMPETITIVE-DIFF.md    ─→  应对"跟 Hermes / OpenClaw 同质化" ─→  对外口径统一
 SKILL-LIFECYCLE.md     ─→  Skill 5 阶段框架 (元文档)         ─→  指导 SOUL/policy/tool 设计
+AUTH-DESIGN.md         ─→  SSO 落地路径 (BL-D6)              ─→  实施前 6 决策点必须拍板
 IDEAS.md               ─→  长尾创意池 (随时加)           ─→  填充 BACKLOG.md E 段
 TOMORROW.md            ─→  当周 sprint 计划 (每周写)     ─→  从 BACKLOG.md C/D 段挑出来
 CHANGELOG.md           ─→  完成的事 (每天补)             ←─  BACKLOG.md ✅ 项的归宿
