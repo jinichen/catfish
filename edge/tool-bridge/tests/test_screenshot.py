@@ -488,21 +488,116 @@ def test_browser_fill_required_fields() -> None:
     assert {"selector", "text"} <= required
 
 
-def test_browser_fill_password_blocked() -> None:
-    """selector 含 password → 拒绝, 不让自动填密码"""
+def test_browser_fill_password_allowed_with_audit_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """selector 含 password → **允许填**, 但加 security_audit 标记让员工 IT 事后能查.
+
+    历史 (2026-04-28): 一度拒填 password, 但实测员工日常需要鲶鱼帮登录,
+    拒了 = 核心场景废. 改成允许 + audit 标记.
+    """
+    # mock playwright 让 fill 走通
+    class FakePage:
+        def fill(self, selector, text, timeout):
+            pass
+
+    class FakeContext:
+        pages = [FakePage()]
+
+    class FakeBrowser:
+        contexts = [FakeContext()]
+
+    class FakeChromium:
+        def connect_over_cdp(self, url):
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            pass
+
+    monkeypatch.setattr(catfish_tools, "_import_playwright", lambda: FakePlaywright)
+
     result = catfish_tools.browser_fill({
         "selector": "input[name='password']",
         "text": "secret123",
     })
-    assert result["type"] == "error"
-    assert "密码" in result["error"]
+    # 关键: type=ok 不再是 error
+    assert result["type"] == "ok"
+    # 但有 audit 标记
+    assert result.get("security_audit") == "credential_field_filled"
+    assert "security_note" in result
 
 
-def test_browser_fill_pwd_keyword_blocked() -> None:
-    """各种密码框命名变体都拒"""
+def test_browser_fill_pwd_keyword_variants_all_marked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """各种密码框命名变体都加 audit 标记"""
+    class FakePage:
+        def fill(self, selector, text, timeout):
+            pass
+
+    class FakeContext:
+        pages = [FakePage()]
+
+    class FakeBrowser:
+        contexts = [FakeContext()]
+
+    class FakeChromium:
+        def connect_over_cdp(self, url):
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            pass
+
+    monkeypatch.setattr(catfish_tools, "_import_playwright", lambda: FakePlaywright)
+
     for sel in ["input#pwd", "input[name='passwd']", "#user-password"]:
         result = catfish_tools.browser_fill({"selector": sel, "text": "x"})
-        assert result["type"] == "error", f"selector {sel} 应该被拒但通过了"
+        assert result["type"] == "ok", f"selector {sel} 应该允许但被拒"
+        assert result.get("security_audit") == "credential_field_filled"
+
+
+def test_browser_fill_non_password_no_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """普通字段 (用户名 / 邮箱 / 内容) 不应该有 security_audit 标记"""
+    class FakePage:
+        def fill(self, selector, text, timeout):
+            pass
+
+    class FakeContext:
+        pages = [FakePage()]
+
+    class FakeBrowser:
+        contexts = [FakeContext()]
+
+    class FakeChromium:
+        def connect_over_cdp(self, url):
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            pass
+
+    monkeypatch.setattr(catfish_tools, "_import_playwright", lambda: FakePlaywright)
+
+    result = catfish_tools.browser_fill({
+        "selector": "input[name='username']",
+        "text": "alice",
+    })
+    assert result["type"] == "ok"
+    assert "security_audit" not in result
+    assert "security_note" not in result
 
 
 def test_browser_fill_missing_selector() -> None:

@@ -101,13 +101,21 @@ async def dispatch_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     result = await _do_dispatch(name, args)
     latency_ms = (time.time() - start) * 1000
 
-    # 写 audit (永远不抛, 不影响主流程返回)
+    # 写 audit (永远不抛, 不影响主流程返回).
+    # 工具结果里 'security_audit' 字段 (例: 'credential_field_filled') 也并入 audit log
+    # 让 IT 事后能 grep 谁在啥时候填了密码字段.
+    audit_extra: dict[str, Any] = {}
+    inner_result = result.get("result")
+    if isinstance(inner_result, dict) and "security_audit" in inner_result:
+        audit_extra["security_audit"] = inner_result["security_audit"]
+
     audit.write_event(
         tool=name,
         ok=result["ok"],
         args=args,
         error=result.get("error"),
         latency_ms=latency_ms,
+        extra=audit_extra or None,
     )
     return result
 

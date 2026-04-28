@@ -172,9 +172,10 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "name": "catfish_browser_fill",
         "description": (
             "往输入框填文字. 走 Playwright `page.fill()`, auto-waiting 等输入框可写. "
-            "适合 input / textarea / [contenteditable]. 自动清空原值再填, 不需要先 click. \n\n"
-            "❌ 不要用来填密码 — 密码必须员工本人输. 你只填用户名 / 邮箱 / 内容文本. "
-            "撞到密码框就停下让员工本人输."
+            "适合 input / textarea / [contenteditable]. 自动清空原值再填, 不需要先 click.\n\n"
+            "✅ 可以填: 用户名 / 邮箱 / 内容文本 / **密码** (员工跟你说密码就填).\n"
+            "ℹ️ 填密码字段 (selector 含 password/pwd) 时会在 audit log 标记 "
+            "'credential_field_filled', 员工 / IT 事后能审计."
         ),
         "input_schema": {
             "type": "object",
@@ -1056,7 +1057,15 @@ def browser_click(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def browser_fill(args: Dict[str, Any]) -> Dict[str, Any]:
-    """走 Playwright `page.fill()`. 自动清空原值再填."""
+    """走 Playwright `page.fill()`. 自动清空原值再填.
+
+    历史 (2026-04-28): 一度拒填 password / pwd selector, 但实测员工日常需要鲶鱼帮登录,
+    拒了 = 核心场景废. 改成:
+      - 不再拒, 让员工正常使用 (password 早在 LLM 上下文里了, 拦不拦没意义)
+      - 检测到 password 字段 → 在返回结果里标 security_note + 写 audit log,
+        让员工 / IT 事后能审计
+      - 未来 (P1) 加 secret_ref 机制让密码从 keychain 拉, 永不进 LLM 上下文
+    """
     selector = (args.get("selector") or "").strip()
     text = args.get("text", "")
     if not selector:
@@ -1066,16 +1075,13 @@ def browser_fill(args: Dict[str, Any]) -> Dict[str, Any]:
     timeout_ms = int(float(args.get("timeout_seconds") or 10.0) * 1000)
     timeout_ms = max(1000, min(timeout_ms, 60_000))
 
-    # 防御: 不准填密码
+    # 检测密码 / 凭据字段, 但**不拒**, 只标记 (写 audit log 让员工 IT 可审计)
     selector_lower = selector.lower()
-    if "password" in selector_lower or "pwd" in selector_lower or "passwd" in selector_lower:
-        return {
-            "type": "error",
-            "error": (
-                f"selector '{selector}' 看起来是密码框. catfish 不允许自动填密码 — "
-                "让员工本人输. 你可以填用户名 / 邮箱 / 内容文本."
-            ),
-        }
+    is_credential_field = (
+        "password" in selector_lower
+        or "pwd" in selector_lower
+        or "passwd" in selector_lower
+    )
 
     try:
         sync_playwright = _import_playwright()
@@ -1091,12 +1097,19 @@ def browser_fill(args: Dict[str, Any]) -> Dict[str, Any]:
 
             try:
                 page.fill(selector, str(text), timeout=timeout_ms)
-                return {
+                result = {
                     "type": "ok",
                     "selector": selector,
                     "filled_chars": len(str(text)),
                     "summary": f"✓ 在 '{selector}' 填了 {len(str(text))} 个字符",
                 }
+                if is_credential_field:
+                    result["security_note"] = (
+                        "selector 看起来是密码 / 凭据字段. catfish 已填, 但建议未来使用 "
+                        "secret_ref 机制 (P1) 让密码从 keychain 拉, 不经过 LLM 上下文."
+                    )
+                    result["security_audit"] = "credential_field_filled"
+                return result
             except Exception as e:
                 err_str = str(e)
                 if "Timeout" in err_str or "timeout" in err_str:

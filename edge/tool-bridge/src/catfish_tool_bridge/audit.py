@@ -102,6 +102,7 @@ def write_event(
     args: Any = None,
     error: str | None = None,
     latency_ms: float = 0.0,
+    extra: dict[str, Any] | None = None,
 ) -> None:
     """写一行事件到 audit jsonl.
 
@@ -114,6 +115,8 @@ def write_event(
         args: 入参 dict (会被截短到 200 字)
         error: 失败时的错误描述 (成功时传 None)
         latency_ms: 耗时毫秒
+        extra: 额外 metadata 字段 (例如 security_audit='credential_field_filled'),
+               并入事件 dict 顶层. 跨工具按需传, 不传 = 不加.
     """
     event = {
         "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
@@ -123,6 +126,8 @@ def write_event(
         "latency_ms": round(latency_ms, 1),
         "args_preview": _serialize_args(args) if args is not None else "",
     }
+    if extra:
+        event.update(extra)
 
     try:
         line = json.dumps(event, ensure_ascii=False) + "\n"
