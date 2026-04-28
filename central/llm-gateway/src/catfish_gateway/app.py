@@ -54,6 +54,7 @@ from .auth import User, get_current_user, get_current_user_optional  # noqa: E40
 from .catalog import build_catalog  # noqa: E402
 from .config import Config, load_config  # noqa: E402
 from .gemini_guard import harden_for_gemini  # noqa: E402
+from .multimodal_guard import route_to_vision_if_needed  # noqa: E402
 from .fallback import should_fallback, with_fallback  # noqa: E402
 from .tools_sanitizer import sanitize_tools  # noqa: E402
 from .identity_inject import (  # noqa: E402
@@ -586,6 +587,20 @@ async def chat_completions(
         )
         # 把 hits 暂存到 request state, 让后面 audit log 能拿到
         request.state.credential_hits = credential_hits
+
+    # 含图自动 reroute 到 vision 模型: 防止主力模型 (非 vision) 收到 image_url
+    # 直接被上游 protobuf 解析炸 BadRequest 400. in-place 改 body["model"].
+    rerouted_model, vision_hint = route_to_vision_if_needed(
+        body, config, model
+    )
+    if rerouted_model is not None:
+        model = rerouted_model
+        model_name = rerouted_model.name
+        request.state.vision_reroute_hint = vision_hint
+        logger.info(
+            "auto-route to vision: orig_user=%s new_model=%s",
+            user.sub, model_name,
+        )
 
     # 防御性清洗 tools 数组 —— 畸形 tool (例如缺 function.name) 直接丢, 不让
     # LiteLLM 转 Gemini functionDeclarations 时 KeyError 把整个请求挂掉。
