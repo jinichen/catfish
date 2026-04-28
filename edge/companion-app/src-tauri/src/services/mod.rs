@@ -7,3 +7,4 @@ pub mod autostart;
 pub mod catfish_paths;
 pub mod endpoints;
 pub mod process;
+pub mod watchdog;

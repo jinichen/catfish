@@ -29,8 +29,8 @@ pub fn schedule_autostart() {
 // gateway
 // ============================================================
 
-async fn ensure_gateway_running() {
-    if pid_alive(catfish_paths::gateway_pid_file().as_deref()) {
+pub async fn ensure_gateway_running() {
+    if pid_alive(catfish_paths::gateway_pid_file().as_deref(), "catfish_gateway") {
         log::info!("autostart: gateway already running");
         return;
     }
@@ -85,8 +85,8 @@ async fn ensure_gateway_running() {
 // tool-bridge
 // ============================================================
 
-async fn ensure_tool_bridge_running() {
-    if pid_alive(catfish_paths::tool_bridge_pid_file().as_deref()) {
+pub async fn ensure_tool_bridge_running() {
+    if pid_alive(catfish_paths::tool_bridge_pid_file().as_deref(), "catfish_tool_bridge") {
         log::info!("autostart: tool-bridge already running");
         return;
     }
@@ -154,11 +154,11 @@ async fn ensure_tool_bridge_running() {
 // helpers
 // ============================================================
 
-fn pid_alive(pid_file: Option<&Path>) -> bool {
+fn pid_alive(pid_file: Option<&Path>, cmdline_substr: &str) -> bool {
     pid_file
         .and_then(|p| {
             if p.exists() {
-                process::read_pid_file_alive(p)
+                process::read_pid_file_alive_strict(p, cmdline_substr)
             } else {
                 None
             }

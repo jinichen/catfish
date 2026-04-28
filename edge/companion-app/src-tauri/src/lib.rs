@@ -28,6 +28,11 @@ pub fn run() {
             // 见 services/autostart.rs 详细说明。
             services::autostart::schedule_autostart();
 
+            // Watchdog: 5s 一次检查 gateway / tool-bridge 死活, 死了 respawn.
+            // skill_watcher / config_watcher 主动退进程后必须有人接锅, 否则
+            // 员工卡死. 见 services/watchdog.rs.
+            services::watchdog::schedule_watchdog();
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
