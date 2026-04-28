@@ -48,6 +48,11 @@ def friendly_upstream_error(raw: str) -> str:
         return "上游说没这个模型 (404) — 检查 models.yaml 的 upstream.model 名字对不对"
     if " 400" in f" {low} " or "bad request" in low or "badrequest" in low:
         # 400 最容易撞但原因多样, 提示员工常见可能性
+        # Go protobuf 解析错 — 大概率多模态发给非 vision 模型 (上游 Go 服务用 protobuf 解析)
+        # 踩过坑 2026-04-28 鸿波: catfish-private-main 收到截图 → proto syntax error.
+        # 现在 multimodal_guard 已经在前面拦了, 但 fallback 链可能还撞.
+        if "proto" in low and "syntax" in low and "invalid value" in low:
+            return "请求格式上游不认 (400) — 大概率截图发给了非 vision 模型. multimodal_guard 应该自动切, 切完还撞就是 bug"
         if "image" in low or "image_url" in low or "vision" in low:
             return "请求带图但模型不支持视觉 (400) — Companion 应该自动切视觉模型, 没切就是 bug"
         if "tool" in low or "function" in low:

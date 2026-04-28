@@ -55,6 +55,7 @@ from .catalog import build_catalog  # noqa: E402
 from .config import Config, load_config  # noqa: E402
 from .gemini_guard import harden_for_gemini  # noqa: E402
 from .multimodal_guard import route_to_vision_if_needed  # noqa: E402
+from .session_facts import inject_session_facts  # noqa: E402
 from .fallback import should_fallback, with_fallback  # noqa: E402
 from .tools_sanitizer import sanitize_tools  # noqa: E402
 from .identity_inject import (  # noqa: E402
@@ -615,6 +616,11 @@ async def chat_completions(
     # Hermes 这种已自带 system 的不动；客户端可加 X-Catfish-Skip-Identity: true 强制跳过
     skip = header_skips_identity(request.headers)
     body["messages"] = inject_identity_if_needed(body.get("messages", []), skip=skip)
+
+    # session_facts 注入: 把员工本 session 内明确告诉过的硬事实 (catfish_remember
+    # 写到 ~/.catfish/session_facts.json) 拼到最后一条 system message 末尾.
+    # 工程级 attention 兜底, 不依赖模型自觉 quote (SOUL.md 复述模式是软纪律).
+    body["messages"] = inject_session_facts(body["messages"])
 
     # Prompt 安全检测: 扫 user messages 看是否含明文密码 / 凭据.
     # 不拦截 (员工知道在干嘛), 只 log warn + audit 标记, 让员工 IT 事后能查谁在何时
