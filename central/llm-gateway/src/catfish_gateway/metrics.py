@@ -101,6 +101,7 @@ def log_request_metadata(
     prompt_tokens: int = 0,
     completion_tokens: int = 0,
     latency_ms: float = 0.0,
+    ttft_ms: float | None = None,
     status: str = "ok",
     error: str = "",
     security_concern: str | None = None,
@@ -111,7 +112,8 @@ def log_request_metadata(
       - who (user id)
       - what model (实际 fallback 后用的)
       - token counts
-      - latency
+      - latency_ms (总耗时, 含 fallback 等待 + 流式所有 chunks)
+      - ttft_ms (time-to-first-token, streaming 才有, 看上游慢不慢)
       - status / error code
       - security_concern (例: 'prompt_credential_detected', 防员工 IT 漏审计)
 
@@ -133,6 +135,9 @@ def log_request_metadata(
         "latency_ms": round(latency_ms, 1),
         "status": status,
     }
+    if ttft_ms is not None:
+        # 区分上游慢 (TTFT 长) vs 输出长 (latency 长 但 TTFT 正常). 关键运维信号.
+        record["ttft_ms"] = round(ttft_ms, 1)
     if error:
         # Truncate to avoid accidentally leaking upstream prompt echoes in errors
         record["error"] = error[:200]

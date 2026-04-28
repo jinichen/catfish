@@ -405,6 +405,32 @@ def _raise_upstream_error(
 
 # Chat completions
 
+#: 上游 chunk 间隔超过这个秒数时, 发 SSE keepalive comment 防客户端 / 中间代理 timeout.
+#: 私有 LLM tool calling 思考阶段经常 30-60s 没 chunk, 不发心跳前端会断开.
+#: SSE comment 行 (": keepalive\n\n") 任何 SSE 解析器都忽略, 不影响数据语义.
+_KEEPALIVE_INTERVAL_SECS = 30
+
+
+async def _stream_with_keepalive(iterator, interval_secs: float = _KEEPALIVE_INTERVAL_SECS):
+    """Wrap async iterator: chunk 间隔 > interval_secs 时 yield keepalive marker.
+
+    Yields:
+        - 原 chunk 对象 (上游来的 ChatCompletionChunk)
+        - 字符串 "__keepalive__" (上游慢, 该发心跳了; caller 自己翻译成 SSE comment)
+
+    用 asyncio.wait_for 给每次 __anext__ 加超时, 不影响最终拿到的总数据.
+    """
+    while True:
+        try:
+            chunk = await asyncio.wait_for(
+                iterator.__anext__(), timeout=interval_secs
+            )
+            yield chunk
+        except asyncio.TimeoutError:
+            yield "__keepalive__"
+        except StopAsyncIteration:
+            return
+
 
 async def _stream_chat_completion(
     body: dict,
@@ -421,6 +447,7 @@ async def _stream_chat_completion(
         已开始流之后挂掉 → 没法切, 直接转 SSE error 返回 (中途换模型会乱掉客户端解析)
     """
     start = time.time()
+    ttft_ms: float | None = None  # 首 token / 首 chunk 延迟, fallback 后会被覆盖成实际值
     prompt_tokens = 0
     completion_tokens = 0
     status_str = "ok"
@@ -445,6 +472,14 @@ async def _stream_chat_completion(
         (iterator, first_chunk), used_model, attempts_log = await with_fallback(
             config, model, _start_stream,
         )
+        # 首 chunk 拿到 = 上游开始往外吐数据. 这就是 TTFT (time-to-first-token).
+        # 注: 如果走了 fallback, 这里记的是"最终成功那个模型的 TTFT", 不算前面失败模型的等待.
+        ttft_ms = (time.time() - start) * 1000
+        if ttft_ms > 30_000:
+            logger.warning(
+                "TTFT 异常: model=%s ttft=%.0fms (>30s, 上游可能拥堵, 看是否需要切 flash)",
+                used_model.name, ttft_ms,
+            )
 
         # 重新对齐 model_name 到实际用的 (给 metrics + 客户端 [DONE] 之前的元信息)
         if used_model is not model:
@@ -461,8 +496,14 @@ async def _stream_chat_completion(
                 completion_tokens = usage.get("completion_tokens", completion_tokens)
             yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
-        # 后续 chunks 流出去 —— 这阶段挂了不再 fallback
-        async for chunk in iterator:
+        # 后续 chunks 流出去 —— 这阶段挂了不再 fallback.
+        # 用 _stream_with_keepalive 包装: 上游 chunk 间隔 > 30s 时插 SSE comment
+        # 防客户端/中间代理 timeout 断开. 私有 LLM tool calling 思考阶段尤其需要.
+        async for chunk in _stream_with_keepalive(iterator):
+            if chunk == "__keepalive__":
+                # SSE comment 行, 客户端会忽略, 但 TCP 连接保活.
+                yield ": keepalive\n\n"
+                continue
             data = chunk.model_dump() if hasattr(chunk, "model_dump") else chunk
             if isinstance(data, dict):
                 usage = data.get("usage") or {}
@@ -491,6 +532,7 @@ async def _stream_chat_completion(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             latency_ms=(time.time() - start) * 1000,
+            ttft_ms=ttft_ms,
             status=status_str,
             error=err,
             security_concern=security_concern,

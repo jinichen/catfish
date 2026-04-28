@@ -31,7 +31,12 @@ from agent.context_engine import ContextEngine
 
 logger = logging.getLogger("catfish.autocompress")
 
-DEFAULT_THRESHOLD = 0.70
+# 默认 50% 触发压缩 (旧值 70% 太晚, 私有 LLM 在 24K+ tokens 时 TTFT 已经 60s+).
+# 50% × 128K context = 64K, 还能装下大量历史; 但触发后压到 ~30K, 私有 LLM TTFT
+# 回到 5-10s. 平衡"压太早丢上下文"和"压太晚卡死".
+# 踩过坑 2026-04-28 鸿波 demo: 阈值 70% + 私有 LLM 慢 → 反复 ReadTimeout.
+# 员工调高/调低用 CATFISH_COMPRESS_THRESHOLD env (例如 0.4 = 40% 触发).
+DEFAULT_THRESHOLD = 0.50
 MIN_THRESHOLD = 0.10
 MAX_THRESHOLD = 0.95
 
