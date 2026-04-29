@@ -52,10 +52,40 @@ function nowIso(): string {
 // ─── tools 列表缓存 ───────────────────────────────────
 // 成功一次后用 cache 避免每次 send 都查 tool_bridge。
 // 失败时**不缓存**,下次 send 会重试(tool_bridge 可能晚启动 / 中途重启)。
+//
+// 三重失效策略 (鸿波 2026-04-29 多次翻车后加):
+//   1. TTL 60s — 时间到自动失效
+//   2. 关键工具缺失 — cache 里没 KEY_TOOLS 任意一个就立即重拉 (装新工具后能自动感知)
+//   3. _clearToolsCache() 显式清 — 切账号 / 重启 tool_bridge / 装新 skill 后调
+//
+// KEY_TOOLS: 如果 tool-bridge 装上了**任意一个**新关键工具但 cache 里没看到, 立即重拉.
+// 这样 Companion 启动早期拉到 8 个老工具后, tool-bridge 装上 catfish_run_skill (第 9 个),
+// 下次 chat 自动检测 cache 缺 catfish_run_skill → 重拉拿到 9 个 → 模型立即可见新工具.
+// 不需要用户 Cmd+R.
+const KEY_TOOLS = ["catfish_run_skill"];
 let _cachedTools: OpenAITool[] | null = null;
+let _cachedAt = 0;
+const _TOOLS_CACHE_TTL_MS = 60_000;
+
+function _cacheHasAllKeyTools(cached: OpenAITool[]): boolean {
+  const names = new Set(cached.map((t) => t.function.name));
+  return KEY_TOOLS.every((kt) => names.has(kt));
+}
 
 async function ensureTools(): Promise<OpenAITool[]> {
-  if (_cachedTools !== null) return _cachedTools;
+  const now = Date.now();
+  if (
+    _cachedTools !== null
+    && now - _cachedAt < _TOOLS_CACHE_TTL_MS
+    && _cacheHasAllKeyTools(_cachedTools)
+  ) {
+    return _cachedTools;
+  }
+  if (_cachedTools !== null && !_cacheHasAllKeyTools(_cachedTools)) {
+    console.info(
+      "[catfish chat] cache 里缺关键工具, 强制重拉 tool_bridge",
+    );
+  }
   try {
     const list = await toolBridgeListTools();
     const usable = list.filter((t) => t.available);
@@ -76,8 +106,9 @@ async function ensureTools(): Promise<OpenAITool[]> {
       },
     }));
     _cachedTools = wire;
+    _cachedAt = Date.now();
     console.info(
-      `[catfish chat] 加载 ${wire.length}/${list.length} 个工具(${list.length - wire.length} 个不可用 toolset)`,
+      `[catfish chat] 加载 ${wire.length}/${list.length} 个工具(${list.length - wire.length} 个不可用 toolset, TTL 60s)`,
     );
     return wire;
   } catch (e) {
@@ -90,6 +121,7 @@ async function ensureTools(): Promise<OpenAITool[]> {
 /** 切账号 / 重启 tool_bridge / 装新 skill 后调一次清缓存让 ensureTools 重拉 */
 export function _clearToolsCache(): void {
   _cachedTools = null;
+  _cachedAt = 0;
 }
 
 // ─── 视觉模型自动选择 ───────────────────────────────────

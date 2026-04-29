@@ -3,6 +3,8 @@
 import { Markdown } from "../../lib/markdown";
 import type { ChatMessage as Msg } from "../../types/chat";
 import ChatToolCall from "./ChatToolCall";
+import { extractFilePaths } from "../../lib/path_detect";
+import { FilePillList } from "../../components/FilePill";
 
 interface Props {
   msg: Msg;
@@ -92,6 +94,10 @@ function AssistantBubble({
   showCaret: boolean;
 }) {
   const isError = msg.status === "error";
+  // 助手把生成的文件路径拼在了 markdown 里 (eg "已生成 /Users/.../report.docx").
+  // 提一组 FilePill 出来 — 但只在内容稳定后(非流式)做, 否则路径还没写完就误识别.
+  const assistantFilePaths =
+    !showCaret && msg.content ? extractFilePaths(msg.content) : [];
 
   return (
     <div
@@ -130,6 +136,11 @@ function AssistantBubble({
         {msg.content && <Markdown text={msg.content} />}
         {!msg.content && showCaret && (
           <span style={{ color: "var(--catfish-text-muted)" }}>…</span>
+        )}
+        {/* 助手 message 里直接提到的文件路径 → pill —— skill 之后助手往往
+            会写一句 "已生成 /Users/.../报告.docx", 这里让它点击可达. */}
+        {assistantFilePaths.length > 0 && (
+          <FilePillList paths={assistantFilePaths} />
         )}
         {/* tool calls 列表 —— 每个一行,折叠式 */}
         {msg.tool_calls && msg.tool_calls.length > 0 && (

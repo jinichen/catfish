@@ -1,0 +1,29 @@
+# 字体目录 — 严禁 commit 任何字体二进制
+#
+# 法律红线: 商业字体 (方正 / 中易中标 / 汉仪 等) 分发会被起诉.
+# 即使 customer/ 目录存放的是客户授权字体, 我们也不带进 git
+# 否则下游 fork 会把客户授权字体扩散出去.
+
+# 所有字体二进制
+customer/*.ttf
+customer/*.TTF
+customer/*.otf
+customer/*.OTF
+customer/*.ttc
+customer/*.TTC
+customer/*.woff
+customer/*.woff2
+
+# opensource/ 也只 commit 经过审核的开源字体, 默认 ignore 字体二进制
+# 添加新开源字体时, 单独用 git add -f 强加, 同时在 README 表里登记来源 + 许可证
+opensource/*.ttf
+opensource/*.TTF
+opensource/*.otf
+opensource/*.OTF
+opensource/*.ttc
+opensource/*.TTC
+
+# 但 placeholder / readme / loader.py 要 commit
+!**/.gitkeep
+!**/PLACEHOLDER*.md
+!**/README.md

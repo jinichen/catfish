@@ -1187,6 +1187,134 @@ SSO 全链路一日 ship (Phase 1A + 1B + 1C 实际 6 小时完成原计划 6-9 
 - `docs/ELEVATOR-PITCH.md` (185 行) — 30 秒电梯演讲 5 个对象版本
 - `docs/COMPARE-1PAGER.md` (138 行) — vs ChatGPT/星辰 1 页对比图
 
+#### 🔧 SKILL 自动注入 + run_skill 工具 (踩过坑 鸿波 demo 场景翻车)
+
+需求 — 鸿波 4-29 现场测试: 跟鲶鱼说"写一份汇报材料", `qwen_v3_5_122b_a10b` 模型回了"我无法访问你的文件系统, 给你写个 Python 脚本你跑". 完全没调任何工具. 根因: catfish/skills/ 下 leadership-briefing skill 存在, 但 LLM **看不到它** — gateway 没注入 skill 列表, tool-bridge 没暴露 run_skill 工具. 必须在 5 月 demo 前修.
+
+- **gateway 端 `skills_loader.py`** (新增, 175 行):
+  - 扫 `catfish/skills/**/SKILL.md`, 解析 yaml frontmatter (name + description)
+  - skills 根目录发现策略: `CATFISH_SKILLS_DIR` env > 从 `__file__` 向上找
+  - `format_skills_block(skills)` 渲染 markdown 块, 每个 skill 一段, 顶部点出"用 catfish_run_skill 调用"
+- **gateway 端 `skills_inject.py`** (新增, 110 行):
+  - `inject_skills_catalog(messages)` 在最后一条 system message 末尾追加 skill 列表
+  - 缓存机制: skill 列表 mtime fingerprint, SKILL.md 改了立即生效, 稳态零成本
+  - 幂等: 同样 block 已存在不重复追加
+  - 跟 inject_session_facts / inject_stats_guard 同套机制 + 顺序: identity → session_facts → stats_guard → **skills_catalog** → 后续
+- **tool-bridge 端 `catfish_run_skill` 工具** (`catfish_tools.py` 加 ~190 行):
+  - schema: `{skill_path, params}` 双字段, params 可传 `_help: True` 拿入参 schema
+  - 安全: 拒绝 `..` 路径遍历; 必须在 `catfish/skills/` root 内; script.py 必须存在
+  - 反射加载 script.py 用 `importlib.util.spec_from_file_location`, **必须**先 `sys.modules[name] = module` 再 exec_module — 否则 dataclass + `from __future__ import annotations` 会抛 `'NoneType' object has no attribute '__dict__'` (踩过坑)
+  - 自动找 `render_*` 函数; 用 `inspect.signature` 推参数 schema 给 LLM 看
+  - 返回值挖文件路径 (.docx / .xlsx / .pptx) 拼到 `files` 字段, Companion 自动渲染为可点击 pill
+  - 友好错误: 参数不匹配时提示用 `_help` 模式
+- **测试**:
+  - tool-bridge `test_run_skill.py` 8 测试 (注册 / _help / 真调 / 路径遍历 / 不存在 / 参数错 / sys.modules 不污染)
+  - gateway `test_skills_inject.py` 11 测试 (扫描 / frontmatter / inject 位置 / 幂等 / 不 mutate)
+  - **gateway 全套 323/323 全过** (旧 312 + 新 11)
+  - **tool-bridge 全套 165/165 全过**
+
+#### 📁 文件下载 UI 优雅化 (Phase 2 风格)
+
+需求 — Office skill 装好之后 (python-docx / openpyxl / python-pptx), 鲶鱼能生成 .docx / .xlsx / .pptx, 但聊天界面没"下载入口", 员工要去 Finder 翻找路径才能拿到文件. 不优雅.
+
+- **Tauri 端 `commands/file.rs`** (新增, 121 行):
+  - `reveal_in_finder(path)` — macOS `open -R <path>`, Linux `xdg-open <parent>`, Windows `explorer /select,<path>`
+  - `open_file(path)` — 用系统默认 app 打开
+  - 安全: 只接受绝对路径 + 验证文件存在 + 拒绝 `/.ssh/` `/.aws/` `/.gnupg/` `/.kube/` `/etc/passwd` `/etc/shadow` `keychain` 等敏感路径子串
+  - 已注册到 `lib.rs` invoke_handler + `commands/mod.rs`
+- **前端 `lib/path_detect.ts`** (新增, 130 行):
+  - 正则提取**绝对路径** (拒绝 markdown 片段误匹配): macOS/Linux `/...` + Windows `C:\...`
+  - 支持扩展名白名单: docx/xlsx/pptx/pdf/csv/json/png/jpg/zip/md/txt 等
+  - `extractFilePaths(text)` 返回去重列表 (最多 10 个) / `basename` / `extname` / `fileEmoji`
+- **前端 `components/FilePill.tsx`** (新增, 130 行):
+  - 胶囊样式: emoji + 文件名 (hover 看完整路径) + "在 Finder 显示" + "打开" 双按钮
+  - 错误就近显示在 pill 下方 (不弹 alert), 文件已删除/敏感路径/系统不支持各有友好文案
+- **挂入 ChatToolCall.tsx** — tool result 完成后自动扫路径, 折叠状态下也显示 pill (员工不必展开就能下载)
+- **挂入 ChatMessage.tsx** — 助手 message 流式结束后扫 markdown 里提到的路径, 一并出 pill
+- TypeScript 全套类型校验通过 (`tsc --noEmit` 无错)
+
+#### 📝 leadership-briefing skill 真复刻 PDF (鸿波提供 PDF 样板, 反复迭代)
+
+需求 — 5 段公文 .docx 严格按真实公司样式 (鸿波 4-29 提供"建造师补位汇报" PDF):
+- 标题 1-N 行居中加粗 (方正小标宋三号)
+- 5 段固定标题 一/二/三/四/五: 背景 / 问题 / 方案 / 请示 / 下一步
+- § 三方案是 **kv_table** (项目-内容两列), 不是多方案对比
+- § 四请示事项是**单段文字**, 不是表格
+- § 五下一步是**数字层级列表** (1./(1)(2))
+- 红字高亮 (important_phrases 任意位置自动标 RGB(255,0,0))
+- 页脚 X / Y 居中
+
+**blocks 模式重构** — 从死板 5 段表格化, 改成段内 blocks 数组 (paragraph / kv_table / table / ordered_list 4 类), LLM 段内任意混排. 真实公文里 § 二可能"段落+表格+段落"混排.
+
+**CSV 附件支持** — `attachments=[{filename, kind: 'csv', headers, rows}]`, 跟主 .docx 同目录, UTF-8 BOM (Excel/Numbers 中文不乱码). 正文里 LLM 自由写 "详见附件 N" 引用.
+
+**输出路径策略** — 员工指定 honor (例 `~/Desktop/`), 没指定默认 `~/.catfish/output/YYYY-MM-DD/HHMMSS_<标题>/` (鲶鱼托管, 不污染用户目录, 重启不消失). 不用 /tmp (macOS 重启清空).
+
+**测试**: `catfish/skills/department/leadership-briefing/tests/test_render.py` 25 测试 (字体/5 段/blocks 类型/CSV 附件/输出路径/红字高亮)
+
+#### 📊 weekly-report skill (周报 .xlsx, 真复刻员工模板)
+
+需求 — 鸿波 4-29 提供"周报-陈鸿波 20260424.xlsx" 样板, 写 skill 让员工说"写周报"自动生成同样格式:
+
+- 单 Sheet, 6 列: 序号/项目-事项名称/本周进度/下周计划/计划完成时间/备注
+- 表头加粗 + 浅蓝底纹 (D9E7F5)
+- 多行单元格 wrap_text 自动换行
+- 边框全实线 0.5pt, 列宽 5/15/40/40/15/20
+- 字体微软雅黑 (周报跟公文不同, 不强制方正小标宋)
+- 默认输出 `~/Desktop/周报-<员工>-<YYYYMMDD>.xlsx`, 日期从 week_label 抽取
+
+**测试**: `catfish/skills/department/weekly-report/tests/test_render.py` 17 测试 (表头顺序/底纹/边框/多行/列宽/文件名/路径解析)
+
+#### 🛡 skill_guard 工程级保护 (鸿波 4-29 多次翻车后加)
+
+链路: 员工 → Companion → gateway → 上游 LLM. Companion `_cachedTools` 模块变量缓存了启动时工具列表, tool-bridge 装新工具后 Companion 不刷, body.tools 里**没有 catfish_run_skill** → 模型即便看到 system prompt 提示也调不出来.
+
+`skill_guard.py` (工程级强制, 跟 stats_guard 同套路):
+- 检测员工最近 user message 含 skill 触发词 (汇报/请示/立项/周报 等)
+- 检查 body.tools 里有没有 catfish_run_skill
+- 命中且工具就位 → 注入 REQUIRED block: "**禁止**用 execute_code 自写 python-docx, **必须** catfish_run_skill"
+- 命中但工具缺失 → 注入 MISSING block: 让员工 Cmd+R 刷 Companion + 让模型告知员工
+
+`useChat.ts` 同步加了 60s TTL + 关键工具缺失自动重拉 — 以后不需要 Cmd+R, ensureTools 检测 cache 里没 catfish_run_skill 就立即重拉.
+
+**测试**: gateway `test_skill_guard.py` 16 测试 (意图覆盖/工具检测/inject 行为/幂等)
+
+#### ⚙ tool_capability_guard (配置驱动, 跟 multimodal_guard 同设计)
+
+`route_to_tool_capable_if_needed()` — 检测 model.supports_tool_use=False + skill 意图 → 自动 reroute 到 catalog 里 supports_tool_use=True 的备选模型 (同 tier 优先).
+
+**走过弯路**: 第一版硬编码 `KNOWN_TOOL_BAD_MODELS = ["qwen_v3_5_122b_a10b"]` 黑名单 — 鸿波质疑"是不是模型参数文件已经设了 fallback, 你硬编码冗余", 立刻撤回. ModelConfig 早就有 supports_tool_use 字段, 我没用. 重构成纯配置驱动, 备选模型也从 catalog 自然挑.
+
+**测试**: gateway `test_tool_capability_guard.py` 14 测试 (默认值/同 tier 优先/跨 tier fallback/embedding 排除/意图覆盖)
+
+#### 🎨 字体目录三层结构 (法律红线)
+
+商业字体 (方正/中易) **绝对不分发**, 三层目录:
+- `catfish/fonts/customer/` — 客户授权字体, 客户 IT 部署时填, **.gitignore 禁止 commit 任何 .ttf/.otf**
+- `catfish/fonts/opensource/` — 开源字体 (思源宋体 SIL OFL 协议), 鲶鱼自带可 commit
+- 系统字体 fallback (黑体/宋体)
+
+`loader.py` (扫两层目录 + macOS 注册到 ~/Library/Fonts/), `INSTRUCTIONS.md` 给客户 IT 看的部署指引.
+
+#### 🖥 Companion 仪表盘显示 catfish skills (Tauri Rust)
+
+之前 `commands/skills.rs` 只扫 `~/.hermes/skills/`, 仪表盘看不到 leadership-briefing / weekly-report. 鸿波反馈"我就是看不到这个工具".
+
+改 `list_skills_blocking()` 同时扫 `<catfish_root>/skills/` + `~/.hermes/skills/`, catfish skills 加 `🐟 catfish:` 前缀强调来源. 需 `npm run tauri build` 才生效.
+
+#### 🔥 真因复盘: hermes 自创 skill 抢占 (整天的核心翻车原因)
+
+整天反复测都失败, **以为是模型 (qwen 122b) tool calling 不行**, 加各种工程保护. 实际真因 — 模型之前自己生成的代码被 hermes-agent 注册成了**自创 skill**:
+
+- `~/.hermes/skills/data-analysis/qualification-management-report/SKILL.md` (自创汇报 skill)
+- `~/.hermes/skills/data-analysis/eis-qualification-analysis/SKILL.md` (自创 EIS 数据 skill)
+
+模型每次看到"资质管理汇报"等关键词, **优先选自创 skill** (因为名字更精确匹配 + 是它自己写的代码), 走自创 skill 的 hardcode 微软雅黑 + 自创段标题 + python-docx 路径, 完全绕开 catfish_run_skill.
+
+`rm -rf` 那两个目录之后, 模型才会真用 catfish 工程审定 skill. 鸿波亲自指出: "千问其实都支持工具调用, 之前用的不好就是几个 SKILL 冲突的问题."
+
+防御: skill_guard REQUIRED block 写明"严禁 execute_code 自写", 防模型再生成自创 skill. 长期方案: 在 SOUL.md / hermes write_file 入口加铁律, 不允许覆盖 catfish 工程审定 skill 同领域的新 skill.
+
 ### 踩过坑
 
 - **macOS .app 不继承 terminal env**: 现象 — Companion 启动后报 "OIDC 配置错: CATFISH_OIDC_ISSUER 没设", 即使 terminal 里 export 了. 原因 — macOS LaunchServices 启动 .app 不读 shell env. 解法 — `launchctl setenv` 全局生效 (临时) + 长期改成读 `~/.catfish/companion.yaml` (Phase 1C-2 立即做完).
@@ -1202,21 +1330,29 @@ SSO 全链路一日 ship (Phase 1A + 1B + 1C 实际 6 小时完成原计划 6-9 
 - **Phase 2 安全加固**: PKCE / id_token Companion 端验签 / refresh_token rotation / 失败计数 / RBAC. 5 月 demo 后做.
 - **客户 SSO 接入文档**: `docs/SSO-CUSTOMER-INTEGRATION.md` — 客户 IT 拿这份能自己接 SSO. 今天写.
 
-### 今日总账
+### 今日总账 (含 4-29 全天 + 晚间追加)
 
 | 类别 | 数量 |
 |------|------|
-| Task ship | **8 个** (Phase 1A/1B-1/1B-2/1C/1C-2 + stats_guard + SOUL § 数据统计 + 6 件文档) |
-| 测试 | gateway 312 (含新 29 OIDC + 37 stats_guard) + identity-server 31 (新模块) + Companion (Rust 单测 + 集成手动验证) |
-| 代码新增 | ~1500 行 (auth/ + identity-server/ + oauth.rs + stats_guard.py + tests) |
-| 文档新增 | ~1100 行 (5 月 demo 6 件套) |
-| 端到端验证 | curl + 浏览器双路径 OAuth flow 通, gateway 验签返 authenticated:true |
+| Task ship 上半场 | **8 个** (Phase 1A/1B-1/1B-2/1C/1C-2 + stats_guard + SOUL § 数据统计 + 6 件文档) |
+| Task ship 下半场 | **8 个** (FilePill / leadership-briefing / blocks 模式 / 字体目录 / weekly-report / skill_guard / tool_capability_guard / 仪表盘 catfish skills) |
+| 测试 | gateway 365 (旧 312 + 新 16 skill_guard + 14 tool_capability_guard + 11 skills_inject + 12 misc) + identity-server 31 + tool-bridge 165 (含新 8 run_skill) + leadership-briefing 25 + weekly-report 17 + Companion (Rust 单测 + 集成手动验证) |
+| 代码新增 | ~3500 行 (auth/ + identity-server/ + oauth.rs + skills_*.py + skill_guard.py + tool_capability_guard.py + skill 套件 + FilePill + 字体目录 + 仪表盘 Rust 改动) |
+| 文档新增 | ~1500 行 (5 月 demo 6 件套 + 2 个 skill SKILL.md/README) |
+| 端到端验证 | OAuth + gateway/tool-bridge 链路通; **真实 PDF/XLSX 模板复刻产出 sample-output** 跟模板一致 |
 
 ### 明天起手式
 
-- 上午: 公司拿 3 类格式 (汇报模板 / EIS 字段截图 / 周报模板) + 录 30s 短视频 (case 素材)
-- 下午: 写 3 个业务 skill scaffolding (eis-qualification-export / weekly-report / leadership-briefing)
-- 晚上: commit + push (今天累积 5+ 个 commit, 还没 push)
+- 上午:
+  - 在公司测 catfish-private-main (qwen 122b) 真不真支持 tool calling — **撤回**今天对 122b 的"不调工具"判定 (没真测过, 它内网不可达, 鸿波点出此误判)
+  - 端到端验证 weekly-report + leadership-briefing 真生成 (新对话 + 任意千问 + 发"写本周周报")
+  - cargo build Companion 让仪表盘看到 catfish skills (可选, 不影响功能)
+- 下午:
+  - 写第 3 个 skill scaffolding (eis-qualification-export 或 annual-summary 二选一)
+  - 客户 SSO 接入文档收尾 (`docs/SSO-CUSTOMER-INTEGRATION.md`)
+- 晚上:
+  - commit + push (今天累积 ~15 个文件改动, 还没 push)
+  - 5 月 demo PoC 演示流程彩排
 
 ---
 

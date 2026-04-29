@@ -150,3 +150,11 @@ export const openTerminal = (cwd?: string) =>
   rawInvoke<void>("open_terminal", { cwd });
 export const sendNotification = (title: string, body: string) =>
   rawInvoke<void>("notify", { title, body });
+
+// ── file (Phase 2 优雅下载: skill 生成的文件,在 Finder 打开/显示) ───
+/** 在 Finder/资源管理器里高亮选中文件 (macOS: open -R). */
+export const revealInFinder = (path: string) =>
+  rawInvoke<void>("reveal_in_finder", { path });
+/** 用系统默认 app 打开文件 (macOS: open <path>). */
+export const openFile = (path: string) =>
+  rawInvoke<void>("open_file", { path });

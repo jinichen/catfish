@@ -11,6 +11,7 @@
 pub mod audit;
 pub mod auth;
 pub mod chrome;
+pub mod file;
 pub mod gateway;
 pub mod health;
 pub mod identity;

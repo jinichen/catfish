@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import type { ToolCall } from "../../types/chat";
+import { extractFilePaths } from "../../lib/path_detect";
+import { FilePillList } from "../../components/FilePill";
 
 interface Props {
   call: ToolCall;
@@ -42,6 +44,12 @@ export default function ChatToolCall({ call }: Props) {
       // 不是 JSON,原样
     }
   }
+
+  // 自动扫描 result 里的文件路径 — skill 生成的 .docx / .xlsx / .pptx
+  // 等都该在这里冒出来. 即使工具调用还在 running, 如果上次的 result 留着也能识别
+  // (但 status !== done 时不渲染按钮 — 文件可能还没真正写完).
+  const filePaths =
+    call.status === "done" ? extractFilePaths(resultStr) : [];
 
   return (
     <div
@@ -96,6 +104,17 @@ export default function ChatToolCall({ call }: Props) {
           </span>
         )}
       </div>
+      {/* 文件 pill —— 折叠状态下也显示, 让员工不必展开就看见"下载入口" */}
+      {filePaths.length > 0 && (
+        <div
+          style={{
+            padding: "0 var(--space-3) 6px",
+            borderTop: "1px solid var(--catfish-border)",
+          }}
+        >
+          <FilePillList paths={filePaths} />
+        </div>
+      )}
       {open && (
         <div
           style={{

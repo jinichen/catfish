@@ -86,6 +86,9 @@ pub fn run() {
             // system
             commands::system::open_terminal,
             commands::system::notify,
+            // file (Phase 2 优雅下载: skill 生成的 .docx/.xlsx/.pptx 在 Finder 显示)
+            commands::file::reveal_in_finder,
+            commands::file::open_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

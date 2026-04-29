@@ -55,7 +55,10 @@ from .catalog import build_catalog  # noqa: E402
 from .config import Config, load_config  # noqa: E402
 from .gemini_guard import harden_for_gemini  # noqa: E402
 from .multimodal_guard import route_to_vision_if_needed  # noqa: E402
+from .tool_capability_guard import route_to_tool_capable_if_needed  # noqa: E402
 from .session_facts import inject_session_facts  # noqa: E402
+from .skill_guard import inject_skill_guard  # noqa: E402
+from .skills_inject import inject_skills_catalog  # noqa: E402
 from .stats_guard import inject_stats_guard  # noqa: E402
 from .fallback import should_fallback, with_fallback  # noqa: E402
 from .tools_sanitizer import sanitize_tools  # noqa: E402
@@ -628,6 +631,19 @@ async def chat_completions(
     # 配套硬规则. 鸿波 2026-04-29 反馈"软纪律已修正多次仍出错".
     body["messages"] = inject_stats_guard(body["messages"])
 
+    # skills 注入: 把 catfish/skills/ 下所有工程审定 skill 的 (name + description)
+    # 列表追加到 system prompt 末尾. LLM 看到 leadership-briefing 等之后, 用户说
+    # "写汇报材料"时会主动调 catfish_run_skill, 不再退化到"我给你写脚本你跑".
+    # 鸿波 2026-04-29 反馈"qwen 122b 不调工具退化到自己写 Python".
+    body["messages"] = inject_skills_catalog(body["messages"])
+
+    # skill_guard 工程级强制 (跟 stats_guard 同套路, 鸿波 2026-04-29 多次翻车后加):
+    # - 检测员工最近 message 含"汇报 / 请示 / 立项"等 skill 触发词
+    # - 检查 body.tools 里有没有 catfish_run_skill (Companion 端 _cachedTools 卡旧值会缺)
+    # - 命中且工具就位 → 加铁律: 必须 catfish_run_skill, 严禁 execute_code 自写 python-docx
+    # - 命中但工具缺失 → 加诊断警告: 让员工 Cmd+R 刷 Companion, 不要硬上自写
+    body["messages"] = inject_skill_guard(body["messages"], body)
+
     # Prompt 安全检测: 扫 user messages 看是否含明文密码 / 凭据.
     # 不拦截 (员工知道在干嘛), 只 log warn + audit 标记, 让员工 IT 事后能查谁在何时
     # 把密码写进 prompt — 推荐他们用 secret_ref 替代.
@@ -653,6 +669,21 @@ async def chat_completions(
         request.state.vision_reroute_hint = vision_hint
         logger.info(
             "auto-route to vision: orig_user=%s new_model=%s",
+            user.sub, model_name,
+        )
+
+    # tool calling 能力自动 reroute: 已知 tool 调用不稳的模型 (qwen 122b a10b)
+    # 检测到 user 触发 skill 意图时, 强制切到 flash 系列. 防止 122b 文字幻觉
+    # "已生成 X.docx" 但磁盘上没文件 (鸿波 4-29 demo 反复翻车的真因).
+    rerouted_tool, tool_hint = route_to_tool_capable_if_needed(
+        body, config, model
+    )
+    if rerouted_tool is not None:
+        model = rerouted_tool
+        model_name = rerouted_tool.name
+        request.state.tool_capability_hint = tool_hint
+        logger.info(
+            "auto-route to tool-capable: orig_user=%s new_model=%s",
             user.sub, model_name,
         )
 
