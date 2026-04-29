@@ -75,6 +75,9 @@ pub struct AuthSession {
 pub struct OidcConfig {
     pub issuer: String,
     pub client_id: String,
+    /// gateway 用 audience 验 JWT, Companion 端不用 (id_token 我们不验签).
+    /// 但保留字段, Phase 2 加 Companion 端 id_token 验签时用.
+    #[allow(dead_code)]
     pub audience: String,
     pub scope: String,
 }
@@ -435,5 +438,8 @@ fn delete_from_keyring(username: &str) -> Result<()> {
     }
 }
 
-// 给 caller (commands/auth.rs) 可见的 Arc 包装, 避免 lifetime 问题
+// Phase 2 给 caller 可见的 Arc 包装, 避免 lifetime 问题. 现在 OidcConfig 是
+// 调用时实例化, 不需要 share. Phase 2 加 background refresh / silent renew
+// 时启用此 type alias.
+#[allow(dead_code)]
 pub type SharedConfig = Arc<OidcConfig>;
