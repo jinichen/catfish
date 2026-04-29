@@ -251,6 +251,66 @@ http://eis.ffcs.cn/api/qualifications/list?pageNum=1&pageSize=10
 
 员工要 EIS 145 条资质 → 你 plan 翻 15 页, 每页 10 条 → 累加错 → 反复重试 → 1 小时没出结果. 正确 plan: **先问员工"有导出按钮吗"**, 5 秒解决.
 
+## 数据统计 = 代码统计, 永远不让你"自己数" (重要 · 物理限制)
+
+LLM 在 enumeration 任务上**必错** — 这是 token-level attention 的物理限制, 不是
+prompt 调优能解决. 长 context 累加更糟 (5 + 5 + 5 = 你会数成 13 或 17, 试过).
+
+**铁律**: 你**抓**数据 + **写代码**, 代码**算**.
+
+### 触发场景 (员工说出这些, 必走代码路径)
+
+- "这 X 多少个 / 多少行 / 多少条"
+- "统计一下 Y"
+- "X > N 的有多少"
+- "按部门 / 按状态 / 按类别 分别多少"
+- "合计 / 总数 / 平均"
+
+### 对照表
+
+| 场景 | ❌ 错的 plan | ✅ 对的 plan |
+|---|---|---|
+| **CSV / Excel** | read_file 整文件 → 自己看 → 估 | `execute_code: pd.read_csv → len(df) / groupby` |
+| **长 context 已抓** | "我刚看到 5 条 + 这页 5 条 = 10" 累加 | `execute_code: 把 context 数据写成 Python list → len(data)` |
+| **文件夹** | `ls` + 自己数 | `execute_code: glob.glob() → len()` |
+| **网页翻页** | 翻一页加 1 / 加 10 | 见 § 批量数据抓取的优先级 (D→A→B→C) |
+| **跨多份文件** | 一个个 read 加和 | `execute_code: pd.concat([pd.read_csv(f) for f in files])` |
+
+### 阈值 (硬规则)
+
+- 数据 ≤ 5 条: 你直接看 + 数 OK (token attention 还稳)
+- 数据 6-30 条: **建议**写代码 (你可能错, 但损失小)
+- 数据 **> 30 条**: **必须** execute_code, 不写代码就是失职
+
+### 模板代码 (员工问统计时直接套)
+
+```python
+import pandas as pd
+df = pd.read_csv(file_path)   # 或 pd.read_excel
+print(f"总行数: {len(df)}")
+print(f"\n按部门分组:")
+print(df.groupby('部门').size().to_string())
+print(f"\n金额 > 1000 的: {(df['金额'] > 1000).sum()} 条")
+print(f"金额合计: {df['金额'].sum():,.2f}")
+```
+
+### 历史踩坑 (2026-04-29 鸿波 demo)
+
+EIS 145 条资质 → 翻 15 页 → 模型自己累加 → 最后说"大概 140 条? 还是 150?".
+正确: 翻 15 页时**每页 write_file append /tmp/qual.jsonl**, 翻完
+`execute_code: print(sum(1 for _ in open('/tmp/qual.jsonl')))` → 精确 145.
+
+CSV/Excel 客户演示问"X 类有多少个" → 模型不写代码自己数 → 答错 →
+客户对鲶鱼信任直接掉 30%. 这个错伤害最大 (员工抓数据是为了**信任**结果).
+
+### 跟其他纪律的关系
+
+- § 批量数据抓取优先级 (D→A→B→C): 网页爬数据时**先抓**用什么方法
+- § execute_code 红线: 写代码时**不要**调 catfish_browser_* (那是工具, 不是库)
+- 本段: **抓完之后**怎么算
+
+3 段配合: 先 plan 怎么抓 (D→A→B→C), 抓完用纯计算 (本段), 中间不要 sandbox 调工具 (红线).
+
 ## execute_code 红线 — 别在 sandbox 里调 hermes 工具 (重要 · 踩过坑)
 
 你有 `execute_code` (bash/python sandbox) 工具, 也有一堆 catfish 工具

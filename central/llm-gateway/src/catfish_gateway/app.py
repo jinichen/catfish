@@ -56,6 +56,7 @@ from .config import Config, load_config  # noqa: E402
 from .gemini_guard import harden_for_gemini  # noqa: E402
 from .multimodal_guard import route_to_vision_if_needed  # noqa: E402
 from .session_facts import inject_session_facts  # noqa: E402
+from .stats_guard import inject_stats_guard  # noqa: E402
 from .fallback import should_fallback, with_fallback  # noqa: E402
 from .tools_sanitizer import sanitize_tools  # noqa: E402
 from .identity_inject import (  # noqa: E402
@@ -621,6 +622,11 @@ async def chat_completions(
     # 写到 ~/.catfish/session_facts.json) 拼到最后一条 system message 末尾.
     # 工程级 attention 兜底, 不依赖模型自觉 quote (SOUL.md 复述模式是软纪律).
     body["messages"] = inject_session_facts(body["messages"])
+
+    # stats_guard 注入: 员工最近一句要求"统计 / 多少 / 合计" 等, 强制提醒模型
+    # 必须 execute_code 用 Python 算, 不许自数. SOUL.md § 数据统计 = 代码统计
+    # 配套硬规则. 鸿波 2026-04-29 反馈"软纪律已修正多次仍出错".
+    body["messages"] = inject_stats_guard(body["messages"])
 
     # Prompt 安全检测: 扫 user messages 看是否含明文密码 / 凭据.
     # 不拦截 (员工知道在干嘛), 只 log warn + audit 标记, 让员工 IT 事后能查谁在何时

@@ -165,8 +165,13 @@ class TestMakeAuthProvider:
     def test_prod_env_phase1a_still_dev_token(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Phase 1A: prod env 也用 DevTokenProvider 兜底 (Phase 1B 上 OIDC 后改 Composite)"""
+        """Phase 1A: prod env + 没 OIDC_ISSUER → DevTokenProvider (兜底).
+
+        Phase 1B-2 改: prod + OIDC_ISSUER 设了 → Composite[OIDC, DevToken].
+        本测试覆盖 OIDC_ISSUER 没设的兜底路径, 必须 delenv 防 env leak.
+        """
         monkeypatch.setenv("CATFISH_ENV", "prod")
+        monkeypatch.delenv("CATFISH_OIDC_ISSUER", raising=False)
         p = make_auth_provider()
         assert isinstance(p, DevTokenProvider)
 
