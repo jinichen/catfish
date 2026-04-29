@@ -82,10 +82,53 @@ pub struct OidcConfig {
     pub scope: String,
 }
 
+/// ~/.catfish/companion.yaml 文件 schema (oidc 段子集).
+#[derive(Debug, Deserialize)]
+struct CompanionYamlFile {
+    oidc: Option<CompanionYamlOidc>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CompanionYamlOidc {
+    issuer: String,
+    client_id: Option<String>,
+    audience: Option<String>,
+    scope: Option<String>,
+}
+
 impl OidcConfig {
+    /// 加载 OIDC 配置. 优先级 (踩过坑 2026-04-29 鸿波):
+    ///
+    ///   1. ~/.catfish/companion.yaml 的 oidc 段 — **生产路径**, 员工友好
+    ///   2. CATFISH_OIDC_* env — **dev / 测试路径**, terminal 启动用
+    ///   3. 都没 → 自动生成默认 yaml + 返默认配置 (catfish-identity 本地)
+    ///
+    /// 为啥不只用 env: macOS .app 通过 LaunchServices 启动**不继承 terminal env**,
+    /// 员工装完 .app 没人帮他 launchctl setenv. yaml 文件路径稳定, 装/部署友好.
+    pub fn load() -> Result<Self> {
+        // 1. yaml 文件
+        if let Some(cfg) = Self::from_yaml_file()? {
+            log::info!("OIDC 配置来自 ~/.catfish/companion.yaml");
+            return Ok(cfg);
+        }
+        // 2. env 兜底 (dev / 测试)
+        if std::env::var("CATFISH_OIDC_ISSUER").is_ok() {
+            log::info!("OIDC 配置来自 env (生产应该用 ~/.catfish/companion.yaml)");
+            return Self::from_env();
+        }
+        // 3. 都没: 自动生成默认 yaml, 配 catfish-identity 本地. 员工后续按需改.
+        log::warn!(
+            "OIDC 配置不存在, 自动生成默认 ~/.catfish/companion.yaml \
+             (指向本地 catfish-identity:8998). 客户用别的 SSO 改这个文件即可."
+        );
+        Self::ensure_default_yaml()?;
+        Self::from_yaml_file()?
+            .ok_or_else(|| anyhow!("自动生成默认 yaml 后仍读不到, 内部 bug"))
+    }
+
     pub fn from_env() -> Result<Self> {
         let issuer = std::env::var("CATFISH_OIDC_ISSUER")
-            .map_err(|_| anyhow!("CATFISH_OIDC_ISSUER 没设, 不能走 OAuth flow"))?;
+            .map_err(|_| anyhow!("CATFISH_OIDC_ISSUER 没设"))?;
         let client_id = std::env::var("CATFISH_OIDC_CLIENT_ID")
             .unwrap_or_else(|_| "catfish-companion".into());
         let audience = std::env::var("CATFISH_OIDC_AUDIENCE")
@@ -98,6 +141,84 @@ impl OidcConfig {
             audience,
             scope,
         })
+    }
+
+    fn yaml_path() -> Result<std::path::PathBuf> {
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .map_err(|_| anyhow!("找不到 HOME 环境变量"))?;
+        Ok(std::path::PathBuf::from(home)
+            .join(".catfish")
+            .join("companion.yaml"))
+    }
+
+    fn from_yaml_file() -> Result<Option<Self>> {
+        let path = Self::yaml_path()?;
+        if !path.exists() {
+            return Ok(None);
+        }
+        let content = std::fs::read_to_string(&path)
+            .with_context(|| format!("读 {} 失败", path.display()))?;
+        let parsed: CompanionYamlFile = serde_yaml::from_str(&content)
+            .with_context(|| format!("解析 {} YAML 失败", path.display()))?;
+        let oidc = match parsed.oidc {
+            Some(o) => o,
+            None => return Ok(None),  // 文件存在但没 oidc 段, fallback env
+        };
+        let client_id = oidc.client_id.unwrap_or_else(|| "catfish-companion".into());
+        Ok(Some(Self {
+            issuer: oidc.issuer.trim_end_matches('/').to_string(),
+            audience: oidc.audience.unwrap_or_else(|| client_id.clone()),
+            scope: oidc.scope.unwrap_or_else(|| DEFAULT_SCOPE.into()),
+            client_id,
+        }))
+    }
+
+    /// 第一次启动 (没 yaml 也没 env) 时, 自动生成默认配置文件指向本地
+    /// catfish-identity. 客户用别的 SSO 时手动改这个 yaml.
+    fn ensure_default_yaml() -> Result<()> {
+        let path = Self::yaml_path()?;
+        if path.exists() {
+            return Ok(());
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let content = r#"# Catfish Companion 配置文件
+# 路径: ~/.catfish/companion.yaml
+# 自动生成于第一次启动 Companion 时, 客户按需修改.
+#
+# 改完重启 Companion 即可生效. 员工不需要敲 launchctl setenv 这种命令.
+
+oidc:
+  # SSO 端点 (catfish-identity 本地 / 客户自建 OIDC / 飞书等)
+  issuer: http://127.0.0.1:8998
+
+  # OIDC client 标识. catfish-identity 不严格校验, 客户自建 SSO 要跟 IT 确认
+  client_id: catfish-companion
+
+  # JWT 的 audience claim. catfish-identity 演示用 'test'; 真生产改为 client_id.
+  audience: test
+
+  # OAuth scope. 决定 IdP 返哪些 claim.
+  scope: openid email profile
+
+# Phase 2 扩展段 (现在不读, 但写在这预留位置):
+# endpoints:
+#   gateway_url: http://127.0.0.1:8999
+# audit:
+#   max_log_size_mb: 100
+"#;
+        std::fs::write(&path, content)
+            .with_context(|| format!("写默认 yaml 到 {} 失败", path.display()))?;
+        // 权限 0600 (含敏感配置时安全, 现在也提前打)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
+        log::info!("已生成默认 ~/.catfish/companion.yaml, 客户按需修改 oidc.issuer");
+        Ok(())
     }
 }
 

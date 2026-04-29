@@ -73,7 +73,9 @@ pub async fn auth_whoami() -> Result<AuthState, String> {
 /// 如果 60 秒没完成 (员工没登录) 抛 timeout 错.
 #[tauri::command]
 pub async fn auth_login() -> Result<AuthState, String> {
-    let cfg = OidcConfig::from_env().map_err(|e| format!("OIDC 配置错: {e}"))?;
+    // load() 优先级: ~/.catfish/companion.yaml > env > 自动生成默认 yaml
+    // macOS .app 不继承 terminal env 的坑由 yaml 路径解决
+    let cfg = OidcConfig::load().map_err(|e| format!("OIDC 配置错: {e}"))?;
     let session = oauth::run_login_flow(&cfg)
         .await
         .map_err(|e| format!("登录失败: {e}"))?;
