@@ -9,6 +9,7 @@
 //!     错误统一序列化成字符串给前端
 
 pub mod audit;
+pub mod auth;
 pub mod chrome;
 pub mod gateway;
 pub mod health;

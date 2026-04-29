@@ -1,0 +1,95 @@
+//! 鉴权 Tauri 命令: login / logout / whoami / get_access_token.
+//!
+//! 给前端 React 调.
+//! 内部委托给 services::oauth.
+
+use serde::{Deserialize, Serialize};
+
+use crate::services::oauth::{self, AuthSession, OidcConfig};
+
+/// 返回给前端的 user info. AuthSession 子集, 不暴露 expires_at 之外的敏感字段.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthState {
+    pub authenticated: bool,
+    pub email: String,
+    pub name: String,
+    pub department: String,
+    pub tier: String,
+    /// 'oidc' / 'dev_token' / ''. UI 用来决定要不要显 warning banner.
+    pub auth_method: String,
+    pub expires_at: i64,
+}
+
+impl From<AuthSession> for AuthState {
+    fn from(s: AuthSession) -> Self {
+        Self {
+            authenticated: true,
+            email: s.email,
+            name: s.name,
+            department: s.department,
+            tier: s.tier,
+            auth_method: s.auth_method,
+            expires_at: s.expires_at,
+        }
+    }
+}
+
+impl AuthState {
+    fn anonymous() -> Self {
+        Self {
+            authenticated: false,
+            email: String::new(),
+            name: String::new(),
+            department: String::new(),
+            tier: String::new(),
+            auth_method: String::new(),
+            expires_at: 0,
+        }
+    }
+}
+
+/// `whoami` — Companion 启动时调, 看现在登录了没.
+///
+/// 优先级:
+///   1. CATFISH_DEV_TOKEN env 设了 → 返 dev_token 身份 (auth_method='dev_token')
+///   2. Keychain 有未过期 token → 返 已登录
+///   3. 都没 → 返 anonymous (前端弹登录)
+#[tauri::command]
+pub async fn auth_whoami() -> Result<AuthState, String> {
+    Ok(oauth::try_load_session()
+        .map(AuthState::from)
+        .unwrap_or_else(AuthState::anonymous))
+}
+
+/// `login` — 启动 OAuth flow.
+///
+/// 这个调用会:
+///   1. 弹默认浏览器到 IdP authorize URL
+///   2. 临时起 HTTP server 监听 callback (60 秒超时)
+///   3. 拿 code → 换 token → 存 Keychain
+///   4. 返登录后的 AuthState
+///
+/// 前端调用时 await: 用户在浏览器输密码 + 跳回 callback 完成 = 这个 promise resolve.
+/// 如果 60 秒没完成 (员工没登录) 抛 timeout 错.
+#[tauri::command]
+pub async fn auth_login() -> Result<AuthState, String> {
+    let cfg = OidcConfig::from_env().map_err(|e| format!("OIDC 配置错: {e}"))?;
+    let session = oauth::run_login_flow(&cfg)
+        .await
+        .map_err(|e| format!("登录失败: {e}"))?;
+    Ok(session.into())
+}
+
+/// `logout` — 清 Keychain. dev_token 模式下返成功但没真清 (env 是员工自己设的).
+#[tauri::command]
+pub async fn auth_logout() -> Result<(), String> {
+    oauth::logout().map_err(|e| format!("登出失败: {e}"))
+}
+
+/// `auth_get_access_token` — 给前端调 gateway 时用.
+/// 注意: 这个不暴露 id_token (没必要), 只返 access_token.
+/// 前端拿到后直接 `Authorization: Bearer <token>` 调 gateway.
+#[tauri::command]
+pub async fn auth_get_access_token() -> Result<Option<String>, String> {
+    Ok(oauth::current_access_token())
+}

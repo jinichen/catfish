@@ -29,6 +29,14 @@ anyhow = "1.0"
 thiserror = "1.0"
 log = "0.4"
 env_logger = "0.11"
+# Phase 1C SSO: keyring (macOS Keychain / Win Credential Manager / Linux Secret Service)
+keyring = "3"
+# OAuth flow: 生成 state / code_challenge (Phase 2 PKCE 用)
+rand = "0.8"
+# base64url 编 state
+base64 = "0.22"
+# url 解析 query params
+url = "2"
 
 [dev-dependencies]
 # tempfile: 给单测建临时 ~/.hermes 目录用 (session_write / learning / endpoints)

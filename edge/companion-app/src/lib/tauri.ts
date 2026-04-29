@@ -137,6 +137,14 @@ import type { AuditSummary } from "../types/audit";
 export const fetchAuditSummary = () =>
   rawInvoke<AuditSummary>("audit_summary");
 
+// ── auth (SSO Phase 1C) ──────────────────────────────────
+import type { AuthState } from "../types/auth";
+export const authWhoami = () => rawInvoke<AuthState>("auth_whoami");
+export const authLogin = () => rawInvoke<AuthState>("auth_login");
+export const authLogout = () => rawInvoke<void>("auth_logout");
+export const authGetAccessToken = () =>
+  rawInvoke<string | null>("auth_get_access_token");
+
 // ── system ───────────────────────────────────────────────
 export const openTerminal = (cwd?: string) =>
   rawInvoke<void>("open_terminal", { cwd });

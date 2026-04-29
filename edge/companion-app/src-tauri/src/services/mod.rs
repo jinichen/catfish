@@ -6,5 +6,6 @@
 pub mod autostart;
 pub mod catfish_paths;
 pub mod endpoints;
+pub mod oauth;
 pub mod process;
 pub mod watchdog;

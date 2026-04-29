@@ -78,6 +78,11 @@ pub fn run() {
             // self-evolution: 鲶鱼今天学了什么
             commands::learning::learning_today_stats,
             commands::audit::audit_summary,
+            // SSO Phase 1C: OAuth flow + Keychain
+            commands::auth::auth_whoami,
+            commands::auth::auth_login,
+            commands::auth::auth_logout,
+            commands::auth::auth_get_access_token,
             // system
             commands::system::open_terminal,
             commands::system::notify,
