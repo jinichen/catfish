@@ -1057,6 +1057,169 @@ SOUL.md 删掉之前误导性"浏览器场景永远 browser_vision"，同步成"
 
 ---
 
+## 2026-04-28（周一）
+
+demo sprint 大日 · 21 task ship + 5 月 demo 文档级筹备
+
+### 完成
+
+#### P0 安全 + 凭据 (3 项)
+
+- **secret_resolver** (`edge/tool-bridge/.../secret_resolver.py`, ~80 行):
+  scheme env:// / keychain:// / wincred:// (后者 Phase 2). Keychain 走 `security find-generic-password -w`. 错误格式 / 平台限制 / 超时全 friendly error.
+- **prompt_security** (`central/llm-gateway/.../prompt_security.py`):
+  中英文密码 regex (密码是/为/: + password=/passwd:/api_key= + Bearer header). 命中 → audit 加 `security_concern='prompt_credential_detected'`, warn 不拦.
+- **secret_ref + audit 整合**: `browser_fill` 加 `secret_ref` 参数; tool-bridge audit 加 security_audit 标记; gateway metrics 加 security_concern 字段. 测试 152 + 189 = 341 全过.
+
+#### P0 浏览器 + Tool Bridge 稳定性 (5 项)
+
+- **browser_goto https→http fallback**: 内网老系统 (.ffcs.cn) 只听 80. 撞 ERR_CONNECTION_REFUSED + URL 是 https → 同 page 切 http 重试 1 次. 加 `fallback_hint` 让模型记住下次走 http.
+- **multimodal_guard**: 含图请求 + 当前模型不支持 vision → 自动 reroute 到 catfish-private-vision (同 tier 优先, 跨 tier 兜底). 修 protobuf 解析炸 BadRequest 400.
+- **stale PID 检测** (踩过坑 鸿波 demo): tool-bridge PID 死后被 OS 复用给别的进程, `kill -0` 误判活. 加 `read_pid_file_alive_strict(path, cmdline_substr)` 用 `ps -p PID -o command=` 验进程身份. 4 卡片 + autostart 共 12 处调用切到 strict 版.
+- **Companion watchdog** (`services/watchdog.rs`): 5s tick 检查 gateway / tool-bridge 进程死活, 死了自动 respawn (复用 autostart::ensure_*_running). 连续 5 次 spawn 失败 → 3 分钟 backoff. 跟 skill_watcher 主动 exit 配合.
+- **Watchdog port 探测**: 开发者手动跑 gateway 时 watchdog 5s tick 看 PID file → 误以为没在跑 → spawn 第二个 → 撞 8999. 修法: spawn 前 `tokio::TcpListener::bind` 探测端口被占就让位.
+
+#### P0 性能 + 可观测 (5 项)
+
+- **私有 LLM timeout** 60→180s (catfish-private-main / vision): MoE active 10B + 24K prompt TTFT 60s+ 常态.
+- **auto-compress 阈值** 70%→50% (`catfish-autocompress`): 50% × 128K = 64K 触发, 压完 ~30K, TTFT 回 5-10s.
+- **TTFT metric** (`metrics.py` + `app.py`): streaming 路径首 chunk 到达时间记 `ttft_ms`. >30s 自动 warn log. JSONL 审计加这字段, 区分"上游慢" vs "输出长".
+- **streaming keepalive** (`_stream_with_keepalive`): asyncio.wait_for 包装 iterator, 每 30s timeout = yield SSE comment `: keepalive\n\n`. 防客户端 / 中间代理 timeout.
+- **friendly_error 加 proto syntax** (`errors.py`): "BadRequest + invalid value Invalid + proto syntax" → 翻译成 "请求格式上游不认 (大概率截图发给非 vision 模型)". 27 case 测试.
+
+#### Companion UI + 品牌 (3 项)
+
+- **AuditCard 仪表盘** (Rust `commands/audit.rs` + React `AuditCard.tsx`):
+  读 `~/.catfish/gateway_audit.jsonl` 聚合显示今日请求数 / 错误率 / Token / 本地优先 % / TTFT p50/p95 / security_concern 计数. 兑现"中央可审看不到内容"卖点.
+- **SkillsMcpCard 占整行 + 多列**: 之前占 1 列, 旁边 LearningCard 是 1/-1 占整行, 导致 SkillsMcp 旁边大片空白. 改 `gridColumn: 1/-1` + namespace 列表 grid `auto-fill minmax(220px, 1fr)`.
+- **品牌纪律 BRAND-VOICE.md**: dashboard 露 hermes/skill_manage/system prompt 等开发术语. 删 5 处 UI 文案, 注释保留 (开发者参考). 写 docs/BRAND-VOICE.md (红线表 + 触点分类 + 检查清单).
+
+#### Skill / Memory / Attention (4 项)
+
+- **SOUL.md attention hot-fix** (复述模式): 长 session 模型失忆反复犯错. 触发"你又来一遍" → 进复述模式, 每次回复开头 quote 已知硬事实. SOUL.md 加 60 行.
+- **catfish_remember tool + inject_session_facts**: 工程级 attention 兜底, 不依赖模型自觉. tool-bridge `catfish_remember(key, value)` 写 `~/.catfish/session_facts.json`; gateway 入口注入到 system prompt 末尾. 跟复述模式互补.
+- **SOUL.md execute_code 红线** (踩过坑 EIS 145 条 demo): 模型在 sandbox 写脚本 import catfish_browser_*, 必死锁. SOUL.md 加进程边界对比 + 4 条红线 + 触发场景 + 完整 demo 踩坑历史.
+- **SOUL.md 批量数据抓取优先级** (D→A→B→C): 找导出按钮 > 找后端 API > 用 skill > 翻页落盘 + 代码统计.
+- **execute_code 误用守卫** (`adapter.py`): tool-bridge 检测 sandbox 调 catfish_browser_* / catfish_screenshot 等子串 → 立即拒绝 + friendly error "请用原生 tool calling, 别写脚本调".
+
+#### Companion 工程 (1 项)
+
+- **LaunchAgent autostart 安装脚本** (`scripts/install-launchagent.sh`):
+  写 `~/Library/LaunchAgents/com.catfish.companion.plist` + `launchctl bootstrap` (新 API). RunAtLoad=true + KeepAlive (异常退出自动拉起). 标准位置. 1 行命令开机自启.
+
+### 踩过坑
+
+- **stale PID + macOS PID 复用**: 现象 — tool-bridge 死后 Companion 永远启不来子进程, 必须手动 rm pid file. 原因 — `kill -0 PID` 不区分进程身份, OS 复用 PID 给别的进程时被当成活. 解法 — `ps -p PID -o command=` 验 cmdline 含 'catfish_tool_bridge' 等 substring.
+- **proto syntax error**: 现象 — catfish_screenshot 后调 main 模型撞 `code = 400 cause = proto: syntax error (line 1:1): invalid value Invalid`. 原因 — 主力模型不支持 vision, 上游 Go protobuf 解析多模态 content list 炸. 解法 — multimodal_guard 自动 route 到 vision 模型.
+- **内网 https 撞 ERR_CONNECTION_REFUSED**: 现象 — 模型默认补 https://eis.ffcs.cn 全失败. 原因 — EIS 老系统只监听 80. 解法 — browser_goto 加 https→http fallback + SOUL.md 加纪律 (内网默认 http).
+- **Watchdog 跟手动 gateway 抢端口**: 现象 — 开发者 `python -m catfish_gateway.app` 启 gateway, 5s 后 watchdog spawn 第二个撞 8999, 自己被 shutdown. 原因 — watchdog 看 PID file 不指向 Companion 启的就当死. 解法 — spawn 前 port 探测.
+
+### 遗留
+
+- 私有 LLM (10.10.40.102) 偶尔不可达 (VPN 抖动) — 跟我们代码无关.
+- catfish-public-qwen-flash 配置 deepseek-v4-flash 名字疑似错 (4-27 已记) — 没碰.
+- Companion 仪表盘 tool-bridge 状态卡片 (BL-C9) — AuditCard 算覆盖了 audit, tool-bridge 仍没单独卡片. 推到 5 月之后.
+
+### 今日总账
+
+| 类别 | 数量 |
+|------|------|
+| Task | **21 ship** |
+| 测试 | gateway 223 (含新 19 multimodal_guard) + tool-bridge 152 (含新 5 secret_resolver) + 5 case execute_code 守卫 |
+| 文档新增 | BRAND-VOICE.md (123 行) / AUTH-DESIGN.md § 13 决策 / SSO-RATIFY.md (192 行) / ROADMAP.md (126 行) |
+| Commit | 多个 commit, 主要按主题分 (security / brand / dashboard / SOUL / watchdog / TTFT) |
+
+---
+
+## 2026-04-29（周二）
+
+SSO 全链路一日 ship (Phase 1A + 1B + 1C 实际 6 小时完成原计划 6-9 天) + 5 月 demo 文档级齐.
+
+### 完成
+
+#### 🔐 SSO 全链路 (5 个 sub-phase)
+
+- **Phase 1A · AuthProvider ABC 重构** (gateway):
+  - `auth.py` 单文件 → `auth/` 包: `base.py` (AuthProvider ABC + User dataclass + auth_method 字段) / `dev_token.py` (现有逻辑 100% 兼容) / `__init__.py` (工厂 + lazy singleton + 测试 hook)
+  - 23 case ABC 边界测试, 旧 223 case 全过 (gateway 246/246)
+- **Phase 1B-1 · 自建 catfish-identity OIDC server** (新模块 `central/identity-server/`):
+  - 5 OIDC 端点: discovery / jwks / authorize / token / userinfo
+  - RS256 + JWKS 自动生成 RSA 2048 (`~/.catfish/identity-server/keys`)
+  - bcrypt 密码 hash + YAML 用户表 + timing-safe 验证 (未知 user 也跑 bcrypt 防 timing attack)
+  - 31/31 测试 (jwt_signer 5 + users 10 + routes 16, 完整 auth code flow)
+  - 简单 HTML 登录页 (内联, 不依赖 jinja). HTML escape 防注入.
+- **Phase 1B-2 · gateway OIDCProvider + CompositeProvider**:
+  - `OIDCProvider` 用 `PyJWKClient` 自带缓存 (兼容旧版 PyJWT 不支持 lifespan 参数 — try/except fallback)
+  - 拒绝: expired / wrong_iss / wrong_aud / missing_sub / access_token_misuse / unknown_kid / wrong_sig
+  - `CompositeProvider` 串联多 provider, is_strict 高水位 (任一 strict 即 strict)
+  - 工厂 env=prod + OIDC_ISSUER 设了 → Composite[OIDC, DevToken]; 没设 → DevToken + warning
+  - 29 case 测试, gateway 全套 275/275 全过
+- **Phase 1C · Companion OAuth flow** (Tauri Rust):
+  - `services/oauth.rs` (~340 行): 完整 Authorization Code flow
+    - 起临时 HTTP server 监听 127.0.0.1 随机端口
+    - 浏览器跳 IdP `/authorize`, callback 收 code + 验 state CSRF
+    - POST `/token` 换 access_token + id_token
+    - 存 macOS Keychain (keyring crate 跨平台)
+  - 4 Tauri command (whoami / login / logout / get_access_token)
+  - React `LoginGate` (没登录挡住整个 App) + `AuthBanner` (dev_token 模式黄色 warning) + `useAuth` hook
+- **Phase 1C-2 · OIDC 配置从 yaml 读** (踩过坑 macOS .app 不继承 terminal env):
+  - `OidcConfig::load()` 优先级: `~/.catfish/companion.yaml` > env > 自动生成默认 yaml
+  - 第一次启动自动写默认 yaml + 0600 权限. 客户切自己 SSO 改 yaml 一行重启即可 (30 秒).
+
+#### 📊 数据统计准确度修复 (踩过坑 鸿波"已修正多次仍出错")
+
+- **SOUL.md § 数据统计 = 代码统计** (软规则):
+  - LLM enumeration 30+ 条必错 (token attention 物理限制)
+  - CSV/Excel/文件夹/网页/跨多文件 5 类场景对照表
+  - 阈值: ≤5 直接看 / 6-30 建议代码 / 30+ **必须** execute_code
+- **stats_guard 工程级强制** (`stats_guard.py`):
+  - 正则检测员工最近一句 user message 含统计意图关键词 (多语言: 多少/统计/总数/合计/总共/累计/平均/最大/最小/分组/按.*分类/占比/行数/条数/计数/出现.*次/去重 + 英文 count/sum/total/group by/aggregate)
+  - 命中即在最后一条 system message 末尾追加 STATS_GUARD_BLOCK 强制提醒 (含 execute_code 模板)
+  - 跟 inject_session_facts 同机制
+  - 37 case 测试, gateway 全套 312/312 全过
+
+#### 📚 5 月 demo 文档级 6 件套 (~1100 行)
+
+- `docs/MAY-DEMO-PREP.md` (176 行) — 准备清单 8 段
+- `docs/MAY-DEMO-DECK.md` (210 行) — PPT 30 张大纲 + 演讲口语稿 + 现场翻车话术
+- `docs/MAY-DEMO-Q-AND-A.md` (244 行) — 客户必问 12 题, 每题 5-10 句答案
+- `docs/POC-PLAN.md` (220 行) — PoC 1-2-3 周标准化方案 + 双方权责 + 商务条款
+- `docs/ELEVATOR-PITCH.md` (185 行) — 30 秒电梯演讲 5 个对象版本
+- `docs/COMPARE-1PAGER.md` (138 行) — vs ChatGPT/星辰 1 页对比图
+
+### 踩过坑
+
+- **macOS .app 不继承 terminal env**: 现象 — Companion 启动后报 "OIDC 配置错: CATFISH_OIDC_ISSUER 没设", 即使 terminal 里 export 了. 原因 — macOS LaunchServices 启动 .app 不读 shell env. 解法 — `launchctl setenv` 全局生效 (临时) + 长期改成读 `~/.catfish/companion.yaml` (Phase 1C-2 立即做完).
+- **PyJWT 旧版没 lifespan 参数**: 现象 — sandbox PyJWT 版本旧, `PyJWKClient(jwks_uri, lifespan=cache_ttl)` 抛 TypeError. 解法 — try/except 兜底, 旧版不传 lifespan.
+- **bcrypt timing-safe dummy hash 格式错**: 现象 — `bcrypt.checkpw(b"dummy", b"$2b$12$dummy_hash...")` ValueError "Invalid". 原因 — 我写的 dummy 字符串不是合法 bcrypt 格式. 解法 — module-level 用 `bcrypt.hashpw(b"placeholder", bcrypt.gensalt())` 生成合法 dummy.
+- **测试 env leak**: 现象 — `test_prod_env_phase1a_still_dev_token` 失败. 原因 — Phase 1B-2 改了行为 (prod + OIDC_ISSUER → Composite), 测试期望旧 Phase 1A 行为, 但 OIDC_ISSUER 在测试环境 leak 进来. 解法 — 测试加 `monkeypatch.delenv("CATFISH_OIDC_ISSUER")`.
+
+### 遗留
+
+- **gateway models.yaml** working tree 未 commit (鸿波端有改动, 内容未确认).
+- **真实 case 视频** (3 个 1 分钟): 鸿波下午回家自己录.
+- **业务 skill 真跑通**: 等鸿波明天去公司拿格式 (汇报模板 / EIS 字段 / 周报模板) 后写 3 个 SKILL.md scaffolding.
+- **Phase 2 安全加固**: PKCE / id_token Companion 端验签 / refresh_token rotation / 失败计数 / RBAC. 5 月 demo 后做.
+- **客户 SSO 接入文档**: `docs/SSO-CUSTOMER-INTEGRATION.md` — 客户 IT 拿这份能自己接 SSO. 今天写.
+
+### 今日总账
+
+| 类别 | 数量 |
+|------|------|
+| Task ship | **8 个** (Phase 1A/1B-1/1B-2/1C/1C-2 + stats_guard + SOUL § 数据统计 + 6 件文档) |
+| 测试 | gateway 312 (含新 29 OIDC + 37 stats_guard) + identity-server 31 (新模块) + Companion (Rust 单测 + 集成手动验证) |
+| 代码新增 | ~1500 行 (auth/ + identity-server/ + oauth.rs + stats_guard.py + tests) |
+| 文档新增 | ~1100 行 (5 月 demo 6 件套) |
+| 端到端验证 | curl + 浏览器双路径 OAuth flow 通, gateway 验签返 authenticated:true |
+
+### 明天起手式
+
+- 上午: 公司拿 3 类格式 (汇报模板 / EIS 字段截图 / 周报模板) + 录 30s 短视频 (case 素材)
+- 下午: 写 3 个业务 skill scaffolding (eis-qualification-export / weekly-report / leadership-briefing)
+- 晚上: commit + push (今天累积 5+ 个 commit, 还没 push)
+
+---
+
 ## 记录规则
 
 - 每天收工时补一条

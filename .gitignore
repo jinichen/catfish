@@ -127,3 +127,7 @@ tmp/
 # ============================================================
 COMMITS_*.md                       # commit 草稿，commit 后即删
 *.draft
+
+# 部署相关配置, 每个环境不同, 不进 git
+# 客户 / 个人本机改 timeout / 模型名 / fallback 等, 不互相覆盖
+central/llm-gateway/config/models.yaml
