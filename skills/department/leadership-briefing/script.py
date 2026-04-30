@@ -535,30 +535,97 @@ def _flatten_text_for_audit(
     return "\n".join(p for p in parts if p)
 
 
+def _normalize_errors(raw_errors) -> list[dict[str, Any]]:
+    """归一化错别字 errors 格式 → [{old, new, pos, category}].
+
+    pycorrector 返回 [(wrong, correct, begin, end), ...] (list of tuple)
+    typo_check 返回 [{old, new, pos, category}, ...] (list of dict)
+    统一成后者格式让 audit.json 一致, 调用方按 dict 读不挂.
+    """
+    out: list[dict[str, Any]] = []
+    for err in raw_errors or []:
+        if isinstance(err, dict):
+            out.append({
+                "old": err.get("old") or err.get("source") or err.get("wrong", ""),
+                "new": err.get("new") or err.get("target") or err.get("correct", ""),
+                "pos": err.get("pos") or err.get("position") or err.get("begin", -1),
+                "category": err.get("category", ""),
+            })
+        elif isinstance(err, (list, tuple)) and len(err) >= 2:
+            # pycorrector: (wrong, correct, begin, end)
+            out.append({
+                "old": str(err[0]),
+                "new": str(err[1]),
+                "pos": int(err[2]) if len(err) > 2 else -1,
+                "category": "pycorrector",
+            })
+    return out
+
+
 def _maybe_audit(
     title_lines, sections, attachments, important, docx_path: Path
 ) -> Path | None:
-    try:
-        from pycorrector import Corrector  # type: ignore
-    except Exception:
-        return None
+    """生成 .audit.json 旁路文件, 标错别字 / 合规问题. 不改 .docx 本体.
 
+    优先级:
+      1. 内置 typo_check.py (0 依赖, 50+ 常见公文错字规则) — 默认
+      2. (可选) pycorrector 全量字典 — 如果 hermes venv 真装了 pycorrector + torch
+
+    鸿波 4-30: pycorrector 依赖 torch (~2GB), 重型. 用 typo_check.py mini
+    版覆盖最常见错, 客户 demo 90% 效果一样. 想升级真用 pycorrector → 装 torch.
+    """
     full_text = _flatten_text_for_audit(
         title_lines, sections, attachments, important
     )
+
+    # 双 backend 合并去重: typo_check mini (公文准) + pycorrector (通用补漏)
+    # 鸿波 4-30 实测: mini 字典在公文场景命中率比 pycorrector Kenlm 高 (后者是通用
+    # 语言模型, 公文术语 "部署"/"账户" 没特别训练). 合并取并集效果最好.
+    all_errors: list[dict[str, Any]] = []
+    backends_used: list[str] = []
+
+    # 1. typo_check mini (主, 永远跑, 0 依赖)
     try:
-        corrector = Corrector()
-        result = corrector.correct(full_text)
-        errors = result.get("errors", []) if isinstance(result, dict) else []
+        from typo_check import correct as mini_correct  # type: ignore
+        mini_result = mini_correct(full_text)
+        mini_errors = _normalize_errors(mini_result.get("errors", []))
+        all_errors.extend(mini_errors)
+        backends_used.append(f"typo_check ({len(mini_errors)})")
     except Exception as e:
-        errors = []
-        result = {"error": f"pycorrector 失败: {e}"}
+        backends_used.append(f"typo_check 失败: {e}")
+
+    # 2. pycorrector (辅, 装了就跑, 没装跳过)
+    try:
+        from pycorrector import Corrector  # type: ignore
+        corrector = Corrector()
+        pyc_result = corrector.correct(full_text)
+        pyc_errors = _normalize_errors(pyc_result.get("errors", []))
+        # 标记来源 (替换 category)
+        for e in pyc_errors:
+            e["category"] = "pycorrector"
+        all_errors.extend(pyc_errors)
+        backends_used.append(f"pycorrector ({len(pyc_errors)})")
+    except Exception:
+        backends_used.append("pycorrector 跳过 (没装 / kenlm 缺)")
+
+    # 去重: 按 (old, pos) 合并, 保留第一次出现 (typo_check 优先)
+    seen: set[tuple[str, int]] = set()
+    errors: list[dict[str, Any]] = []
+    for e in all_errors:
+        key = (e.get("old", ""), e.get("pos", -1))
+        if key in seen:
+            continue
+        seen.add(key)
+        errors.append(e)
+
+    backend = " + ".join(backends_used)
 
     audit_path = docx_path.with_suffix(".audit.json")
     audit_path.write_text(
         json.dumps(
             {
                 "docx": str(docx_path),
+                "backend": backend,
                 "found_errors": len(errors),
                 "errors": errors,
             },
