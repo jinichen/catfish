@@ -56,7 +56,10 @@ from .config import Config, load_config  # noqa: E402
 from .gemini_guard import harden_for_gemini  # noqa: E402
 from .multimodal_guard import route_to_vision_if_needed  # noqa: E402
 from .tool_capability_guard import route_to_tool_capable_if_needed  # noqa: E402
+from .employee_journal import inject_employee_journal  # noqa: E402
+from .inject_session_history import inject_session_history  # noqa: E402
 from .session_facts import inject_session_facts  # noqa: E402
+from .session_summarizer import trigger_background_summary  # noqa: E402
 from .skill_guard import inject_skill_guard  # noqa: E402
 from .skills_inject import inject_skills_catalog  # noqa: E402
 from .stats_guard import inject_stats_guard  # noqa: E402
@@ -631,18 +634,36 @@ async def chat_completions(
     # 配套硬规则. 鸿波 2026-04-29 反馈"软纪律已修正多次仍出错".
     body["messages"] = inject_stats_guard(body["messages"])
 
-    # skills 注入: 把 catfish/skills/ 下所有工程审定 skill 的 (name + description)
-    # 列表追加到 system prompt 末尾. LLM 看到 leadership-briefing 等之后, 用户说
-    # "写汇报材料"时会主动调 catfish_run_skill, 不再退化到"我给你写脚本你跑".
-    # 鸿波 2026-04-29 反馈"qwen 122b 不调工具退化到自己写 Python".
+    # ⚠️ 2026-04-30 一度禁用 → 立即撤回 (B 方案假设错了)
+    #
+    # 历史:
+    #   - 4-30 上午: 鸿波建议 catfish skill 装到 hermes ~/.hermes/skills/productivity/
+    #     catfish-* 下, 走 hermes 原生调用. 我假设 hermes skill 是"模型自动可见的
+    #     tool", 复制过去就能用. 软禁用了 A 方案的 inject + catfish_run_skill.
+    #   - 4-30 下午测试: 实际 hermes skill 不是自动 tool, 模型不会主动调用. 它会调
+    #     skill_manage / execute_code 自写代码, 还是绕开 catfish 工程审定 skill.
+    #   - 结论: A 方案 (catfish_run_skill 工具直接执行 script.py) 才是符合实际的设计.
+    #     立刻撤回 B 方案的禁用.
+    #
+    # B 方案做的 install_to_hermes.sh 复制 SKILL.md 到 hermes 路径无害, 留着备用 (作为
+    # hermes 端"看得到 catfish skill 存在"的兜底). 但调用走 A 方案的 catfish_run_skill.
     body["messages"] = inject_skills_catalog(body["messages"])
-
-    # skill_guard 工程级强制 (跟 stats_guard 同套路, 鸿波 2026-04-29 多次翻车后加):
-    # - 检测员工最近 message 含"汇报 / 请示 / 立项"等 skill 触发词
-    # - 检查 body.tools 里有没有 catfish_run_skill (Companion 端 _cachedTools 卡旧值会缺)
-    # - 命中且工具就位 → 加铁律: 必须 catfish_run_skill, 严禁 execute_code 自写 python-docx
-    # - 命中但工具缺失 → 加诊断警告: 让员工 Cmd+R 刷 Companion, 不要硬上自写
     body["messages"] = inject_skill_guard(body["messages"], body)
+
+    # ── 跨 session 上下文 (鸿波 4-30 反馈"跨对话信息割裂, 不像真实个体") ──
+    # 档 1: 注入最近 7 天 session 元信息 (id / 时间 / 首条 user message), 模型
+    #       看到至少**意识到**有这些历史存在
+    body["messages"] = inject_session_history(body["messages"])
+    # 档 2: 注入 ~/.catfish/employee_journal.md 内容 (LLM 总结过的关键决策 /
+    #       偏好 / 里程碑), 模型看到员工"过去几天究竟讲了啥决定了啥"
+    body["messages"] = inject_employee_journal(body["messages"])
+    # 后台触发: 异步总结 1 个最近结束但没总结过的 session, append 到 journal.
+    # fire-and-forget, 不阻塞当前请求, 失败静默. 让 journal 自动持续填充.
+    try:
+        import asyncio  # noqa: PLC0415
+        asyncio.create_task(trigger_background_summary())
+    except Exception:
+        pass
 
     # Prompt 安全检测: 扫 user messages 看是否含明文密码 / 凭据.
     # 不拦截 (员工知道在干嘛), 只 log warn + audit 标记, 让员工 IT 事后能查谁在何时

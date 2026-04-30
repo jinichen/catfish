@@ -35,23 +35,23 @@ from script import (  # noqa: E402
 
 @pytest.fixture
 def pdf_sample(tmp_path):
+    """4 段固定逻辑顺序 (概况/分项/问题/下一步), heading 文本 LLM 自由发挥."""
     return dict(
         title_lines=[
             "关于电子与智能化工程专业承包一级资质所需",
             "建造师持证人员补位的汇报",
         ],
         sections=[
-            {"heading": "一、背景与现状", "blocks": [
+            # § 一 概况 (heading 自由命名 — 这里用"总体情况")
+            {"heading": "一、电子与智能化资质总体情况", "blocks": [
                 {"type": "paragraph", "text": (
                     "公司持证人员 5 人, 尚缺 1 人. 5 名持证人员明细详见附件 1."
                 )},
             ]},
-            {"heading": "二、问题与影响", "blocks": [
+            # § 二 分项情况说明 (heading 自由命名 — 这里用"业务影响明细")
+            {"heading": "二、业务影响及缺口明细", "blocks": [
                 {"type": "paragraph", "text": "该缺口已对业务产生影响:"},
                 {"type": "paragraph", "text": "泉州公司及省政企均反馈, ..."},
-            ]},
-            {"heading": "三、方案", "blocks": [
-                {"type": "paragraph", "text": "经与相关部门沟通协调, 方案如下:"},
                 {"type": "kv_table", "rows": [
                     ["用人部门", "已与人力部沟通, 挂靠在集成能力中心"],
                     ["公司归属", "先入职北福, 后转中电"],
@@ -63,13 +63,15 @@ def pdf_sample(tmp_path):
                     ["社医保", "由公司统一缴纳支付"],
                 ]},
             ]},
-            {"heading": "四、请示事项", "blocks": [
+            # § 三 存在问题 (heading 自由命名 — 这里用"主要问题")
+            {"heading": "三、当前面临的主要问题", "blocks": [
                 {"type": "paragraph", "text": (
-                    "是否同意上述补位方案: 补位一名人员入职集成能力中心, "
-                    "相应成本公司承担."
+                    "若直接变更法人, 该资质证书会被暂停. 必须先完成补位, "
+                    "才能推进法人变更."
                 )},
             ]},
-            {"heading": "五、下一步计划", "blocks": [
+            # § 四 下一步计划 (heading 自由命名 — 这里用"工作安排")
+            {"heading": "四、下一步工作安排", "blocks": [
                 {"type": "ordered_list", "items": [
                     {"text": "启动一级建造师招聘工作:", "subs": [
                         "(1) 学历本科及以上",
@@ -127,20 +129,31 @@ def test_can_reopen(pdf_sample):
     assert len(doc.paragraphs) >= 6
 
 
-# ── 5 段固定 ───────────────────────────────────────────────────
+# ── 4 段固定逻辑顺序, heading 文本 LLM 自由 ───────────────────
 
 
-def test_five_sections_in_order(pdf_sample):
+def test_four_sections_with_flexible_headings(pdf_sample):
+    """4 段顺序固定, 但 heading 文本由 LLM 自由命名 (鸿波 4-30 改).
+
+    我们检查段编号 一/二/三/四 顺序, 不检查具体字眼.
+    """
     from docx import Document
+    import re
 
     result = render_briefing(**pdf_sample)
     doc = Document(result["docx"])
-    expected = [
-        "一、背景与现状", "二、问题与影响", "三、方案",
-        "四、请示事项", "五、下一步计划",
-    ]
-    found = [p.text.strip() for p in doc.paragraphs if p.text.strip() in expected]
-    assert found == expected
+    # 找所有 一、 / 二、 / 三、 / 四、 开头的段落
+    section_pattern = re.compile(r"^([一二三四五六七八九])、")
+    found_numbers = []
+    for p in doc.paragraphs:
+        m = section_pattern.match(p.text.strip())
+        if m:
+            found_numbers.append(m.group(1))
+
+    # 必须正好 4 段, 顺序 一/二/三/四
+    assert found_numbers == ["一", "二", "三", "四"], (
+        f"应有 4 段 (一/二/三/四), 实际 {found_numbers}"
+    )
 
 
 # ── 标题 + 字体 ────────────────────────────────────────────────
@@ -170,25 +183,32 @@ def test_title_font_is_fangzheng(pdf_sample):
 
 
 def test_section_heading_font_is_heihei(pdf_sample):
+    """段标题黑体加粗 — 不再检查具体字眼 (heading 自由), 只检查 一、二、三、四 开头的段."""
+    import re
     from docx import Document
     from docx.oxml.ns import qn
 
     result = render_briefing(**pdf_sample)
     doc = Document(result["docx"])
-    expected = {"一、背景与现状", "二、问题与影响", "三、方案", "四、请示事项", "五、下一步计划"}
+    section_re = re.compile(r"^[一二三四]、")
+    found = 0
     for para in doc.paragraphs:
-        if para.text.strip() in expected and para.runs:
+        if section_re.match(para.text.strip()) and para.runs:
             run = para.runs[0]
             rFonts = run._element.find(qn("w:rPr")).find(qn("w:rFonts"))
-            assert rFonts.get(qn("w:eastAsia")) == FONT_HEADING
-            assert run.bold is True
+            assert rFonts.get(qn("w:eastAsia")) == FONT_HEADING, (
+                f"段标题 {para.text!r} 字体应是黑体"
+            )
+            assert run.bold is True, f"段标题 {para.text!r} 应加粗"
+            found += 1
+    assert found == 4, f"应找到 4 个段标题, 实际 {found}"
 
 
 # ── block 类型 ────────────────────────────────────────────────
 
 
-def test_kv_table_in_solution_section(pdf_sample):
-    """§ 三应有 1 个 2 列 kv_table (4 行: 用人部门/公司归属/待遇标准/社医保)."""
+def test_kv_table_in_section(pdf_sample):
+    """fixture 里 § 二有一个 2 列 kv_table (4 行: 用人部门/公司归属/待遇标准/社医保)."""
     from docx import Document
 
     result = render_briefing(**pdf_sample)
@@ -213,16 +233,18 @@ def test_paragraph_blocks_present(pdf_sample):
     assert "泉州公司" in all_text
 
 
-def test_ordered_list_in_next_steps(pdf_sample):
-    """§ 五是 1./2./3. + (1)(2) 数字层级, 不是表格."""
+def test_ordered_list_in_section(pdf_sample):
+    """fixture 里 § 四 (下一步) 是 1./2./3. + (1)(2) 数字层级, 不是表格."""
+    import re
     from docx import Document
 
     result = render_briefing(**pdf_sample)
     doc = Document(result["docx"])
 
+    # 找 § 四 段标题 (任意"四、..."开头)
     section_idx = next(
         i for i, p in enumerate(doc.paragraphs)
-        if p.text.strip() == "五、下一步计划"
+        if re.match(r"^四、", p.text.strip())
     )
     after = [p.text for p in doc.paragraphs[section_idx + 1 :]]
     assert any(p.startswith("1. ") for p in after)
@@ -232,18 +254,19 @@ def test_ordered_list_in_next_steps(pdf_sample):
     assert any("(2)" in p for p in after)
 
 
-def test_request_section_is_paragraph(pdf_sample):
-    """§ 四请示事项是段落, 不是表格."""
+def test_section_three_has_problem_paragraph(pdf_sample):
+    """fixture § 三 (存在问题) 段是段落, 含"必须先完成补位" 字样."""
+    import re
     from docx import Document
 
     result = render_briefing(**pdf_sample)
     doc = Document(result["docx"])
     section_idx = next(
         i for i, p in enumerate(doc.paragraphs)
-        if p.text.strip() == "四、请示事项"
+        if re.match(r"^三、", p.text.strip())
     )
     body = doc.paragraphs[section_idx + 1].text
-    assert "是否同意" in body and "公司承担" in body
+    assert "必须" in body or "推进" in body
 
 
 def test_mixed_blocks_in_one_section(tmp_path):

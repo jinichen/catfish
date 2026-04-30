@@ -25,7 +25,11 @@ import {
 import type { Attachment, ChatMessage, ToolCall } from "../types/chat";
 import type { CatalogModel } from "../types/catalog";
 
-const MAX_TOOL_ROUNDS = 10;
+// 20 轮够用 — leadership-briefing skill 多附件场景一次成功的话只 1-3 轮 (拿
+// schema + 真调). 如果模型 args 格式错循环, 也最多浪费 20 轮就停 (跟 10 轮
+// 体验上区别不大, 但给跨 skill 复杂任务留余地). 鸿波 2026-04-30 反馈"10 轮
+// 总是踩到上限" 后调高.
+const MAX_TOOL_ROUNDS = 20;
 
 // 视觉模型 fallback 优先级 (从高到低)
 //   1. 内网 Qwen3-VL (免费, 本地, 国产 OCR 强)
@@ -545,6 +549,12 @@ export function useChat(initialModel: string) {
 
       try {
         let currentMessages = requestMessages;
+        // 连续 parse_error 计数 — 模型生成不合法 JSON args 时, Companion 会
+        // fallback 到 _raw + _parse_error 字段. 连续 3 轮同样问题 = 模型卡循环, 早停.
+        // 鸿波 4-30 踩过坑: 第 1 轮 catfish_run_skill 已成功生成 .docx, 但模型继续
+        // "再优化一版" args 一直 JSON 错, 烧完 10 轮上限. 早停让员工立刻看第一次成果.
+        let consecutiveParseErrors = 0;
+
         for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
           if (ctrl.signal.aborted) break;
 
@@ -555,6 +565,35 @@ export function useChat(initialModel: string) {
             tools,
           });
           currentMessages = result.updatedMessages;
+
+          // 检测本轮 tool_calls 是否都是 parse_error (LLM args JSON 不合法)
+          const lastMsg = result.updatedMessages[result.updatedMessages.length - 1];
+          const allParseErrors =
+            lastMsg?.role === "assistant"
+            && (lastMsg.tool_calls?.length ?? 0) > 0
+            && lastMsg.tool_calls!.every(
+              (tc) => "_parse_error" in (tc.args as Record<string, unknown>)
+            );
+          if (allParseErrors) {
+            consecutiveParseErrors++;
+            if (consecutiveParseErrors >= 3) {
+              const earlyStopMsg: ChatMessage = {
+                id: uuid(),
+                role: "assistant",
+                content:
+                  "\n\n⚠ 检测到模型连续 3 轮生成不合法 JSON 参数 (tool args parse error). "
+                  + "早停以避免烧 token. 如果之前有 ✓ 成功的 tool_call, 那次的输出就是结果, "
+                  + "看上面的 FilePill 打开. 重新提问 (或简化数据) 可以继续.",
+                ts: nowIso(),
+                status: "done",
+              };
+              addMessage(earlyStopMsg);
+              break;
+            }
+          } else {
+            consecutiveParseErrors = 0;
+          }
+
           if (!result.shouldContinue) break;
 
           if (round === MAX_TOOL_ROUNDS - 1) {

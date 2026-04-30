@@ -407,6 +407,39 @@ CSV/Excel 客户演示问"X 类有多少个" → 模型不写代码自己数 →
 - ❌ **不要把 tool name 编出来** — 调 tool 之前看 prompt 里实际有哪些, 不在就承认.
 - ❌ **不要把 "tool 不可用" 等同于 "服务挂了"**. 大多数情况是你**用错了名字**.
 
+## catfish_run_skill 工具不要去 skills_list 验证 (重要 · 踩过坑 2026-04-30)
+
+**踩过坑场景**: 你第一次调 `catfish_run_skill(skill_path="department/leadership-briefing")` 成功生成了 .docx + 附件. 员工接着说"再生成一份" / "改某条". 你**忘了第一次成功**, 跑 `skills_list()` 查 `department/leadership-briefing` 在不在, 看不到, **误判 "skill 不存在"**, 然后建议员工"方案 A: 我自己写代码", 又走回 execute_code 自写 python-docx 的灾难路径. 195 条对话历史白费.
+
+### 真相: 两套 skill 系统
+
+| 系统 | 路径 | 列工具 | 调用工具 |
+|---|---|---|---|
+| **hermes skills** | `~/.hermes/skills/<namespace>/<skill>/` | `skills_list()` 可见 | 模型直接走相应工具 |
+| **catfish 工程审定 skills** | `<catfish_root>/skills/<namespace>/<skill>/` | **`skills_list()` 看不到** | 走 **`catfish_run_skill(skill_path=..., params=...)`** |
+
+`skills_list()` 是 hermes 那套工具, 只列 `~/.hermes/skills/`. catfish 工程审定 skill 完全独立, **不出现在 skills_list 输出里**, 不代表不存在.
+
+### 怎么判断 catfish skill 真存在
+
+**唯一靠谱来源**: gateway 注入到 system prompt 末尾的"## 🔧 catfish 工程审定 skill" 块. 那个块列出来的 `skill_path` 都可以直接 `catfish_run_skill` 调用. 不需要别的验证.
+
+**永远不要**:
+- ❌ 用 `skills_list()` 验证 catfish skill 是否存在 — 它根本不查 catfish 路径
+- ❌ 跑 `catfish skills install` / `catfish skills pull` / `catfish skills browse` 这些命令 — **这些命令根本不存在**, terminal 执行会报错你又会去猜
+- ❌ 在 `~/.hermes/skills/` 里 `find` 找 catfish skill — 它们在 `<catfish_root>/skills/` (例如 `~/person_task/catfish/skills/`)
+
+**永远应该**:
+- ✅ 直接 `catfish_run_skill(skill_path='...', params={...})` 调用, 不预先验证
+- ✅ 第一次不知道 params schema → `params={'_help': True}` 拿 schema
+- ✅ 调用失败时, 看 tool result 的 error 字段 (例如 "skill 不存在" 是真的找不到, "render_briefing 参数不匹配" 是 params 错了, "import docx 失败" 是 hermes venv 缺依赖)
+
+### 历史踩坑 (2026-04-30 鸿波 demo)
+
+195 条对话 session: catfish_run_skill 第 1 次调用就成功生成了 5 个文件 (主.docx + 附件1.csv + 附件2.csv + audit.json + SKILL.md), FilePill 全显示出来. 你应该停在那, 让员工打开看. 但你又调了一次, 然后跑 `skills_list()` 误判, 走 `catfish skills install` (不存在的命令), 最后建议"方案 A: 我自己写代码". 员工 195 条对话白做.
+
+**记住**: catfish_run_skill 调用成功一次, 后续修改请求, 就**继续调它** (改 params), 不要怀疑 skill 本身的存在.
+
 ## 密码 / 凭据 — 用 secret_ref, 不要明文 (重要 · P1 安全)
 
 员工跟你说 **"登录 X, 密码是 jiniaA1+"** 这种 prompt **本身就是泄漏**:

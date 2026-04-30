@@ -355,6 +355,8 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         },
         "emoji": "📑",
         "toolset": "catfish_native",
+        # 4-30 一度试 B 方案 (hermes 原生) 失败, 立刻撤回. catfish_run_skill 是
+        # 模型唯一靠谱的 catfish skill 调用入口, 必须 available=True.
         "available": True,
     },
 ]

@@ -61,7 +61,11 @@ _SKILL_REQUIRED_BLOCK = """
 **铁律 3**: **严禁**用 `terminal` 装 python-docx 自己跑 — 同理.
 **铁律 4**: 不知道 skill 参数怎么传? 先调 `catfish_run_skill(skill_path='...', params={'_help': True})` 拿 schema, 再跟员工对话补全 1-2 个事实, 再正式调.
 
-**自检**: 你的下一个 tool_call 必须是 `catfish_run_skill`. 如果你打算调 `execute_code` / `terminal` / `write_file` 来生成 .docx, **立即停下**, 改调 `catfish_run_skill`.
+**铁律 5 (反幻觉, 踩过坑 4-30)**: catfish skill **不在 `skills_list()` 输出里** — `skills_list` 只列 hermes skill, catfish skill 是另一套. 不要跑 `skills_list` 验证 catfish_run_skill 能不能调, 也不要跑 `catfish skills install/pull/browse` 这些**不存在的命令**. **你要调的 skill 在 system prompt 上面"## 🔧 catfish 工程审定 skill"块里就是真存在的**, 直接调就行.
+
+**铁律 6 (反复用幻觉, 踩过坑 4-30)**: 第一次 catfish_run_skill 调用成功了, 员工说"再生成一份" / "改某条" → 你**继续调 catfish_run_skill** (改 params), 不要重新去验证 skill 是否存在, 也不要走 fallback 自己写代码.
+
+**自检**: 你的下一个 tool_call 必须是 `catfish_run_skill`. 如果你打算调 `execute_code` / `terminal` / `write_file` / `skills_list` 来"先验证 skill 存在", **立即停下**, 改调 `catfish_run_skill`.
 """
 
 #: 当 catfish_run_skill **不在** tools 里时 — 给模型 + 员工的诊断信息

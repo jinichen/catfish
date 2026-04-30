@@ -1356,6 +1356,117 @@ SSO 全链路一日 ship (Phase 1A + 1B + 1C 实际 6 小时完成原计划 6-9 
 
 ---
 
+## 2026-04-30（周三）
+
+跨 session 上下文 + leadership-briefing 4 段重构 + 多次设计弯路复盘.
+
+### 完成
+
+#### 🧠 跨 session 上下文 (鸿波反馈"不像真实个体, 100 个素不相识的人轮流帮我")
+
+LLM 应用最深的痛点 — 每个 session 是孤岛, 模型不知道员工"上次/之前/上周"做了什么. 鸿波 195 条对话里协商出来的"4 段框架 + 表格附件化"决策, 新对话**等于零**. 5 月 demo 致命点.
+
+- **档 1: `inject_session_history`** (~150 行)
+  - 读 `~/.hermes/state.db` 取最近 7 天 sessions (id / 时间 / 消息数 / title / 首条 user message)
+  - 注入 system prompt 顶部, 模型每次推理都看到**历史索引**
+  - 读 read-only + 1s timeout + 异常吞掉
+  - 注入策略: 找最后 system message 末尾追加, 幂等
+- **档 2: `employee_journal` + `session_summarizer`** (~350 行 + 15 测试)
+  - `~/.catfish/employee_journal.md` 追加式日记, 每 session 1 段 LLM 总结 (1-2 段, 100-300 字)
+  - 自动总结: chat_completions 入口 `asyncio.create_task(trigger_background_summary)` fire-and-forget
+  - 后台 LLM 调用: openai/qwen3.5-flash-2026-02-23 (跟 catalog 一致), DASHSCOPE_API_KEY 没设早返
+  - mark 时机: 只有 journal **真写入了**才 mark. 失败 (网络抖 / 模块没装) 不 mark, 留给下次重试
+  - prompt 设计: LLM 只填 `### <主题>` + 正文, 日期前缀由 gateway 加 (防 LLM 脑补错时间)
+  - journal 上限 50KB (~12K token), 超过从尾部截断保留最新, 全文注入 system prompt
+- **联合效果**: 模型每次 chat 看到 (1) session 索引 (2) 关键决策 / 偏好 / 里程碑总结. 真正"持久个体"不再是孤岛
+- **真实验证**: 鸿波本机跑 9 session 全部成功总结, journal 自动填充 ~6KB. 新对话发"我最近做了什么", 鲶鱼能引用具体 session + 决策
+
+#### 📋 leadership-briefing skill 4 段重构 + 强化分析 + 表格附件化
+
+之前 5 段公文式 (背景/问题/方案/请示/下一步) 在测试中输出过于死板. 鸿波建议改成 4 段 (概况/分项/问题/下一步), heading 文本 LLM 自由命名 (按汇报场景挑).
+
+- **SKILL.md 改 4 段**: heading 文本 LLM 自由 ("一、2026 年资质管理工作总体情况" 比 "一、概况" 更切场景)
+- **内容质量铁律**: 每段必须 论点 + 数据支撑 + 推论 + 承上启下 4 要素, 不许堆数据列举
+- **表格全转附件**: 默认所有表格化数据 (清单/频次/对比/明细) → attachments, 仅 1 个关键 KPI 总览 (≤5 行) 例外
+- **完整示例重写**: 4 段全 paragraph 分析为主, 5 个附件覆盖明细数据
+- **测试**: 25 个全过 (4 段顺序检查改成 regex 一/二/三/四, 不写死字眼)
+
+#### 🛠 工程细节修复
+
+- **Companion `useChat.ts` MAX_TOOL_ROUNDS 10 → 20**: 鸿波"10 轮总踩上限"反馈
+- **parse_error 早停**: 连续 3 轮 LLM 生成不合法 JSON args (Companion 端 fallback 到 `_raw + _parse_error`) → 早停 + 友好提示员工"看上面 ✓ 成功的 tool_call 输出"
+- **`useChat.ts` cache 60s TTL + 关键工具缺失自动重拉**: 不再需要 Cmd+R 刷新
+- **Tauri Rust `commands/skills.rs`**: 同时扫 `~/.hermes/skills/` + `<catfish_root>/skills/`, catfish skills 加 `🐟 catfish:` 前缀强调来源, 仪表盘可见
+
+#### 📜 SOUL.md 加铁律 — catfish_run_skill 反幻觉
+
+鸿波 4-30 实测发现: 第一次 `catfish_run_skill ✓` 成功生成 5 个文件, 后续模型用 `skills_list()` 查 catfish skill, 看不到 → 误判"skill 不存在", 走 `catfish skills install` (不存在的命令), 最后建议"方案 A: 我自己写代码", 烧完 195 条对话.
+
+新增 SOUL.md § "catfish_run_skill 工具不要去 skills_list 验证 (重要 · 踩过坑 2026-04-30)":
+- 两套 skill 系统: hermes (~/.hermes/skills/) vs catfish (<catfish_root>/skills/) 完全独立
+- catfish skill 不在 skills_list 输出里, 不要去查
+- 唯一靠谱来源: gateway 注入到 system prompt 的 catfish skill 列表
+- 永远不要跑 `catfish skills install/pull/browse` (这些命令不存在)
+- skill_guard REQUIRED block 同步加铁律 5/6: 双层防御
+
+### 走过的弯路 (老实复盘)
+
+#### 弯路 1: B 方案 hermes 原生迁移 → 立刻撤回
+
+**假设**: catfish skill 装到 `~/.hermes/skills/productivity/catfish-*` 下, 走 hermes 原生调用机制, 不再需要 catfish_run_skill / skill_guard / skills_inject. 鸿波建议"跟 catfish-email 同等地位".
+
+**实测翻车**: hermes 的 skill 不是 LLM 自动可见的 tool, 模型不会主动调. 它会调 `skill_manage / execute_code` 自写代码绕过 catfish skill.
+
+**结论**: A 方案 (catfish_run_skill 工具直接执行 script.py) 才是符合实际的设计. 立刻撤回 B 禁用. install_to_hermes.sh 留着备用 (复制 SKILL.md 到 hermes 路径无害, 仪表盘能看到).
+
+#### 弯路 2: tool_capability_guard 硬编码黑名单 → 改配置驱动
+
+第一版加 `KNOWN_TOOL_BAD_MODELS = ["qwen_v3_5_122b_a10b"]` 黑名单. 鸿波质疑"是不是模型参数文件已经设了 fallback, 你硬编码冗余". 立刻撤回. ModelConfig 早就有 `supports_tool_use` 字段, 我没用. 重构成纯配置驱动, 备选模型也从 catalog 自然挑.
+
+后续验证: 用户不在公司 → 122b 内网不可达 → 自动 fallback 到 qwen-flash → "不调工具"实际是 fallback 到的 qwen-flash 行为, 不是 122b 本身. 撤回对 122b 的"不调工具"判定.
+
+#### 弯路 3: hermes 自创 skill 抢占 catfish skill (整天测试翻车的真因)
+
+整天反复测都失败, 以为是 catfish_run_skill 或模型问题. 实际是模型之前自己写的代码被 hermes-agent 注册成了**自创 skill**:
+- `~/.hermes/skills/data-analysis/qualification-management-report/`
+- `~/.hermes/skills/data-analysis/eis-qualification-analysis/`
+
+模型每次看到"资质管理汇报", **优先选自创 skill** (因为名字精确匹配 + 是它自己写的代码), 走自创 skill 的 hardcode 微软雅黑 + 自创段标题 + python-docx 路径, 完全绕开 catfish_run_skill.
+
+`rm -rf` 删了之后, 模型才会真用 catfish 工程审定 skill. 鸿波亲自指出: "千问其实都支持工具调用, 之前用的不好就是几个 SKILL 冲突的问题."
+
+### 踩过坑
+
+- **session_summarizer 提前 mark 设计错**: 第一版"LLM 调用前提前 mark", 担心调用循环烧 token. 实际遇到环境错误 (litellm 没装) 时, 10 个 session 全被错误 mark, 永远不再总结. 改成"只有 journal 真写入了才 mark", 失败留给重试.
+- **session_summarizer LLM 脑补时间**: prompt 让 LLM 输出 `## YYYY-MM-DD ...`, LLM 自己生成时间和 session.started_at 不一致. 改成 LLM 只写 `### <主题>`, 日期前缀由 gateway 加.
+- **install_to_hermes.sh 跑通但 hermes 不识别为 tool**: hermes skill 系统不是 LLM 自动可见的 tool, 是文件 + skill_view 手动加载. B 方案设计假设错.
+- **hermes venv 缺 litellm**: `~/.hermes/hermes-agent/venv/bin/python` 跑 session_summarizer 报 `No module named 'litellm'`. 修: 用 catfish gateway venv 跑, 或 hermes venv 装 litellm.
+
+### 遗留
+
+- **5 月 demo 真实演示彩排**: 用户 + 鲶鱼演 "新对话引用 journal 真历史" + "leadership-briefing 一句话生成合规 .docx", 验客户真震撼
+- **hermes venv 装 litellm**: 让总结脚本可以从 hermes 那边触发 (现在只能 gateway venv 跑)
+- **journal 截断策略升级**: 现在尾部截断, 长期应该向量检索召回最相关的, 不全文注入
+- **下一个 catfish skill**: weekly-report 的"自动从 hermes 历史抽取本周做了什么" Phase 2
+
+### 今日总账
+
+| 类别 | 数量 |
+|------|------|
+| Task ship | **17 个** (跨 session 2 模块 + leadership-briefing 4 段 + skill_guard 加铁律 + 仪表盘 + scaffold weekly-report + tool_capability 重构 + ...) |
+| 测试 | gateway 380 (含新 15 跨 session) + tool-bridge 165 + leadership-briefing 25 + weekly-report 17 全过 |
+| 代码新增 | ~2500 行 (跨 session 2 模块 + 工程级改动) |
+| 真实成果 | journal 9 段自动总结 + leadership-briefing 4 段示例 + weekly-report .xlsx 模板 |
+| 走过弯路 | 3 个老实复盘 (B 方案 / 黑名单 / hermes 自创 skill) |
+
+### 明天起手式
+
+- 在公司测 catfish-private-main (qwen 122b) 真实 tool 调用能力 — 撤回 4-29 / 4-30 对 122b 的两次误判
+- 5 月 demo 演示流程彩排 (新对话引用 journal + 一句话生成汇报)
+- weekly-report 真生成 sample, 跟鸿波公司模板对比
+
+---
+
 ## 记录规则
 
 - 每天收工时补一条

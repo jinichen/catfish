@@ -46,8 +46,8 @@ def test_help_returns_schema():
     assert "help" in r
     assert "render_briefing" in r["summary"]
     required = r["help"]["required"]
-    # 5 段 + 周边参数
-    for k in ("title", "background", "problems", "solutions", "next_steps"):
+    # 新 schema (4-30 重构): title_lines + sections + 周边
+    for k in ("title_lines", "sections"):
         assert k in required, f"required 缺 {k}"
 
 
@@ -55,27 +55,36 @@ def test_help_returns_schema():
 
 
 def _sample_params(out_path: str) -> dict:
+    """leadership-briefing 新 schema (blocks 模式 + sections, 4-30 重构后).
+
+    旧 schema (title/problems/solutions/recommendation_reason/requests/...) 已废弃.
+    """
     return dict(
-        title="测试请示件",
-        background="背景一段.",
-        problems=[{"desc": "p", "impact": "i", "urgency": "高"}],
-        solutions=[
-            {
-                "name": "A",
-                "recommended": True,
-                "path": "p",
-                "resources": "r",
-                "effect": "e",
-                "risk": "k",
-            }
+        title_lines=["测试请示件"],
+        sections=[
+            {"heading": "一、背景与现状", "blocks": [
+                {"type": "paragraph", "text": "背景一段."},
+            ]},
+            {"heading": "二、问题与影响", "blocks": [
+                {"type": "paragraph", "text": "问题 X."},
+            ]},
+            {"heading": "三、方案", "blocks": [
+                {"type": "paragraph", "text": "方案介绍."},
+                {"type": "kv_table", "rows": [
+                    ["项目", "内容"],
+                ]},
+            ]},
+            {"heading": "四、请示事项", "blocks": [
+                {"type": "paragraph", "text": "请批准."},
+            ]},
+            {"heading": "五、下一步计划", "blocks": [
+                {"type": "ordered_list", "items": [
+                    {"text": "落地", "subs": []},
+                ]},
+            ]},
         ],
-        recommendation_reason="理由",
-        requests=[{"content": "请批准", "owner": "X 部", "deadline": "下周"}],
-        next_steps=[
-            {"action": "落地", "owner": "张三", "deadline": "5 月底", "note": ""}
-        ],
-        department="测试部",
-        date_str="2026 年 4 月 30 日",
+        attachments=[],
+        important_phrases=[],
         output_path=out_path,
     )
 
