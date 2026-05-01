@@ -21,7 +21,12 @@ pub struct SkillAuditSummary {
     pub total_count: usize,
     pub top_skills: Vec<TopSkill>,
     pub failed_skills: Vec<FailedSkill>,
-    pub unused_30d: Vec<String>,
+    /// 🆕 最近 7 天 ship 的 skill (SKILL.md mtime < 7 天). 没 audit 也正常 — 鼓励员工试用
+    pub recently_shipped: Vec<String>,
+    /// ⚠ 老 skill 从没用过 (SKILL.md ≥ 7 天 + audit 无记录). 真没人用, 评估删/留
+    pub never_called_old: Vec<String>,
+    /// 💤 调用过但最近 30 天没调用 — 老 skill 提示员工评估删/留
+    pub stale_30d: Vec<String>,
     pub avg_duration_ms: u64,
 }
 
@@ -64,7 +69,8 @@ fn audit_path() -> Option<PathBuf> {
 pub async fn skill_audit_summary() -> Result<SkillAuditSummary, String> {
     let path = audit_path().ok_or("HOME env 未设")?;
     if !path.exists() {
-        // 还没有任何 audit, 返空 summary
+        // 没 audit 文件. 按 mtime 区分新老
+        let (recently_shipped, never_called_old) = classify_known_by_mtime()?;
         return Ok(SkillAuditSummary {
             today_count: 0,
             today_ok_count: 0,
@@ -72,7 +78,9 @@ pub async fn skill_audit_summary() -> Result<SkillAuditSummary, String> {
             total_count: 0,
             top_skills: vec![],
             failed_skills: vec![],
-            unused_30d: skills_known()?,
+            recently_shipped,
+            never_called_old,
+            stale_30d: vec![],
             avg_duration_ms: 0,
         });
     }
@@ -167,13 +175,37 @@ pub async fn skill_audit_summary() -> Result<SkillAuditSummary, String> {
     failed_skills.reverse(); // 最新在前
     failed_skills.truncate(10);
 
-    // 30 天未用 skill = 已知 skill - 30 天内调用过的 skill
-    let known = skills_known()?;
-    let used_30d: std::collections::HashSet<String> = counts.keys().cloned().collect();
-    let unused_30d: Vec<String> = known
-        .into_iter()
-        .filter(|s| !used_30d.contains(s))
+    // 区分 3 类 skill 状态:
+    //   🆕 recently_shipped:  SKILL.md mtime < 7 天, 不论 audit
+    //   ⚠ never_called_old:  ≥ 7 天 + audit 无记录 (真没人用, 评估删)
+    //   💤 stale_30d:         调过, 但 30 天没调
+    let known_with_age = skills_known_with_age()?;
+    // 所有 audit 里出现过的 skill_path
+    let ever_called: std::collections::HashSet<String> = run_events
+        .iter()
+        .filter(|e| !e.skill_path.is_empty())
+        .map(|e| e.skill_path.clone())
         .collect();
+    // 30 天内被调用过的
+    let used_30d: std::collections::HashSet<String> = counts.keys().cloned().collect();
+
+    let mut recently_shipped: Vec<String> = vec![];
+    let mut never_called_old: Vec<String> = vec![];
+    let mut stale_30d: Vec<String> = vec![];
+    let now = chrono::Utc::now();
+    let seven_days_ago = now - chrono::Duration::days(7);
+    for (s, mtime_iso) in known_with_age {
+        let is_new = parse_ts(&mtime_iso).map(|t| t >= seven_days_ago).unwrap_or(false);
+        if !ever_called.contains(&s) {
+            if is_new {
+                recently_shipped.push(s);
+            } else {
+                never_called_old.push(s);
+            }
+        } else if !used_30d.contains(&s) {
+            stale_30d.push(s);
+        }
+    }
 
     // 平均耗时 (近 30 天 ok 的)
     let durations: Vec<u64> = run_events
@@ -194,17 +226,18 @@ pub async fn skill_audit_summary() -> Result<SkillAuditSummary, String> {
         total_count,
         top_skills,
         failed_skills,
-        unused_30d,
+        recently_shipped,
+        never_called_old,
+        stale_30d,
         avg_duration_ms,
     })
 }
 
-/// 扫 catfish/skills/ 拿所有已知 skill 路径 (用于"30 天未用" 对比).
-/// 从 Companion 项目相对路径找, 找不到返空.
-fn skills_known() -> Result<Vec<String>, String> {
-    // 同 commands/skills.rs 的探测逻辑, 简化版
+/// 扫 catfish/skills/ 拿 (skill_path, SKILL.md mtime ISO) 对.
+/// 用于 SkillAuditCard 区分 "🆕 最近 ship" vs "⚠ 老 skill 没用过".
+fn skills_known_with_age() -> Result<Vec<(String, String)>, String> {
     if let Ok(custom) = std::env::var("CATFISH_SKILLS_DIR") {
-        return scan_skills(&PathBuf::from(custom));
+        return scan_skills_with_age(&PathBuf::from(custom));
     }
     let home = std::env::var("HOME").map_err(|_| "HOME env 未设".to_string())?;
     let candidates = [
@@ -214,18 +247,18 @@ fn skills_known() -> Result<Vec<String>, String> {
     for c in &candidates {
         let p = PathBuf::from(c);
         if p.is_dir() {
-            return scan_skills(&p);
+            return scan_skills_with_age(&p);
         }
     }
     Ok(vec![])
 }
 
-fn scan_skills(root: &PathBuf) -> Result<Vec<String>, String> {
-    let mut paths = vec![];
+fn scan_skills_with_age(root: &PathBuf) -> Result<Vec<(String, String)>, String> {
+    let mut paths_with_age: Vec<(String, String)> = vec![];
     fn walk(
         dir: &PathBuf,
         root: &PathBuf,
-        out: &mut Vec<String>,
+        out: &mut Vec<(String, String)>,
     ) -> std::io::Result<()> {
         for entry in std::fs::read_dir(dir)? {
             let entry = entry?;
@@ -234,7 +267,12 @@ fn scan_skills(root: &PathBuf) -> Result<Vec<String>, String> {
                 let skill_md = p.join("SKILL.md");
                 if skill_md.exists() {
                     if let Ok(rel) = p.strip_prefix(root) {
-                        out.push(rel.to_string_lossy().to_string());
+                        let mtime_iso = std::fs::metadata(&skill_md)
+                            .ok()
+                            .and_then(|m| m.modified().ok())
+                            .map(|sys| chrono::DateTime::<chrono::Utc>::from(sys).to_rfc3339())
+                            .unwrap_or_default();
+                        out.push((rel.to_string_lossy().to_string(), mtime_iso));
                     }
                 } else {
                     walk(&p, root, out)?;
@@ -243,7 +281,37 @@ fn scan_skills(root: &PathBuf) -> Result<Vec<String>, String> {
         }
         Ok(())
     }
-    let _ = walk(root, root, &mut paths);
-    paths.sort();
-    Ok(paths)
+    let _ = walk(root, root, &mut paths_with_age);
+    paths_with_age.sort();
+    Ok(paths_with_age)
 }
+
+/// audit 文件完全不存在时的 fallback — 按 mtime 直接分两类.
+fn classify_known_by_mtime() -> Result<(Vec<String>, Vec<String>), String> {
+    let with_age = skills_known_with_age()?;
+    let now = chrono::Utc::now();
+    let seven_days_ago = now - chrono::Duration::days(7);
+
+    let mut recently_shipped: Vec<String> = vec![];
+    let mut never_called_old: Vec<String> = vec![];
+
+    fn parse_ts(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+        chrono::DateTime::parse_from_rfc3339(s)
+            .ok()
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+    }
+
+    for (s, mtime_iso) in with_age {
+        let is_new = parse_ts(&mtime_iso)
+            .map(|t| t >= seven_days_ago)
+            .unwrap_or(false);
+        if is_new {
+            recently_shipped.push(s);
+        } else {
+            never_called_old.push(s);
+        }
+    }
+    Ok((recently_shipped, never_called_old))
+}
+
+// (老版 skills_known / scan_skills 已被 skills_known_with_age + scan_skills_with_age 替代)
