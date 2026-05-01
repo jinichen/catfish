@@ -1398,6 +1398,41 @@ LLM 应用最深的痛点 — 每个 session 是孤岛, 模型不知道员工"�
 - **`useChat.ts` cache 60s TTL + 关键工具缺失自动重拉**: 不再需要 Cmd+R 刷新
 - **Tauri Rust `commands/skills.rs`**: 同时扫 `~/.hermes/skills/` + `<catfish_root>/skills/`, catfish skills 加 `🐟 catfish:` 前缀强调来源, 仪表盘可见
 
+#### 🔤 错别字双 backend 合并 (typo_check mini + pycorrector)
+
+5 月 demo 公文场景对错别字零容忍 ("帐户/帳戶"上汇报会被领导挑出来). 鸿波下午要求集成 pycorrector. 实测发现 pycorrector 默认 Corrector 用 Kenlm 通用语言模型 (非公文术语训练), 同段文本只命中 1 个错 ("布暑→布署", 还是错的, 正确是"部署"). 做不了主力.
+
+- **`typo_check.py` (新, 0 依赖, 230 行)**: 公文场景常见错字字典 50+ 条 (账户/部署/即将/登录/抉择/沟通/通讯 等), 跑同段文本命中 8 个. 是公文场景主力.
+- **dual-backend merge in `_maybe_audit`**: typo_check 优先 + pycorrector 补充, 按 `(old, pos)` 主键去重. mini 字典覆盖公文高频, pycorrector Kenlm 偶尔捞到稀有错字, 互补.
+- **`_normalize_errors` 适配层**: pycorrector 返回 `[(wrong, correct, begin, end)]` (tuples), typo_check 返回 `[{old, new, pos, category}]` (dicts), 统一为 dict 格式以便去重 + 落 audit.
+- **依赖**: hermes venv 装 kenlm + 下载 `zh_giga.no_cna_cmn.prune01244.klm` (~2.9GB). 无 pycorrector 环境照样跑 (mini 主力).
+- **测试**: 25/25 通过.
+
+#### 📢 演讲稿全套更新 (4 份 docs 同步今日新增功能)
+
+跨 session 记忆 + leadership-briefing 4 段重构 + 双 backend 错别字必须打进 5 月 demo 卖点话术, 否则等同没做.
+
+- **`docs/MAY-DEMO-DECK.md`** (PPT 大纲 30 → 32 张):
+  - 加 Slide 11-12 **场景 4 · 跨 session 记忆 demo** (含口语稿 + 关键卖点字幕 + 现场演法)
+  - 加 Slide 19 **锁层差 3 · 跨 session 记忆** (vs ChatGPT 对比 + 双档技术实现 + 隐私设计)
+  - Slide 5 场景 1 升级: 4 段公文 + 表格转附件 + 双 backend 错别字检查写入 demo 步骤
+  - Slide 18 数据流对比表加"跨对话记忆" 行
+  - Slide 21 总结差异化 3 → 4 条 (加跨 session 记忆)
+  - Slide 26 客户必问 5 → 6 题 (加"跨 session 记忆怎么实现")
+  - 时间分配 30 → 35 分钟, 4 demo 场景占 14 分钟
+- **`docs/ELEVATOR-PITCH.md`** (5 个 30 秒电梯演讲):
+  - V1 (CTO) / V2 (部门领导) / V3 (员工) / V4 (CISO) 各加跨 session 记忆卖点 (适配听众)
+  - "不要说的话"反例表加"AI 长记忆 / 大模型记忆" → 改"鲶鱼像同事一样记得你, 记忆全本地"
+  - V1 节奏拆解 3 句 → 4 句 (加 Phase 1 已 ship 跨 session 记忆 token)
+- **`docs/MAY-DEMO-Q-AND-A.md`** (12 → 13 题):
+  - 新增第 13 题"跨 session 记忆怎么实现, 隐私怎么保证?" — 详细备背 (双档机制 + 5 条隐私保证 + 营销话术对比表 + demo 流程 + Phase 2 升级)
+  - 紧急话术加 2 条: 场景 4 翻车 fallback + 客户怀疑云端时当场 cat journal
+- **`docs/MAY-DEMO-PREP.md`** (个人检查清单):
+  - 工程检查加双 backend 验证 + hermes venv 依赖 (litellm + pycorrector + kenlm + Chinese model)
+  - 新增 §跨 session 记忆 准备清单 7 条 (演前 7 天积累 journal / DASHSCOPE_API_KEY / 演前一晚关重启触发总结 / inject 链路 curl 测 / 录屏 backup)
+  - 现场演示流程 3 → 4 场景, 13 → 17 分钟
+  - 紧急 fallback 加场景 4 翻车 + 客户质疑云端的应对
+
 #### 📜 SOUL.md 加铁律 — catfish_run_skill 反幻觉
 
 鸿波 4-30 实测发现: 第一次 `catfish_run_skill ✓` 成功生成 5 个文件, 后续模型用 `skills_list()` 查 catfish skill, 看不到 → 误判"skill 不存在", 走 `catfish skills install` (不存在的命令), 最后建议"方案 A: 我自己写代码", 烧完 195 条对话.
@@ -1444,26 +1479,37 @@ LLM 应用最深的痛点 — 每个 session 是孤岛, 模型不知道员工"�
 
 ### 遗留
 
-- **5 月 demo 真实演示彩排**: 用户 + 鲶鱼演 "新对话引用 journal 真历史" + "leadership-briefing 一句话生成合规 .docx", 验客户真震撼
-- **hermes venv 装 litellm**: 让总结脚本可以从 hermes 那边触发 (现在只能 gateway venv 跑)
-- **journal 截断策略升级**: 现在尾部截断, 长期应该向量检索召回最相关的, 不全文注入
-- **下一个 catfish skill**: weekly-report 的"自动从 hermes 历史抽取本周做了什么" Phase 2
+- **5 月 demo 真实演示彩排**: 用户 + 鲶鱼演 "新对话引用 journal 真历史" + "leadership-briefing 一句话生成合规 .docx" + "场景 4 跨 session 记忆", 验客户真震撼 (现在 4 场景, 17 分钟)
+- ~~**hermes venv 装 litellm**~~: 4-30 晚已用清华镜像装好, session_summarizer 后台总结链路打通
+- **journal 截断策略升级**: 现在尾部截断, 长期应该向量检索召回最相关的, 不全文注入 (5-6 月做)
+- **下一个 catfish skill**: weekly-report 的"自动从 hermes 历史抽取本周做了什么" 完整版 Phase 2 (简化版方式 A+ 已 ship 在 SKILL.md)
 
 ### 今日总账
 
 | 类别 | 数量 |
 |------|------|
-| Task ship | **17 个** (跨 session 2 模块 + leadership-briefing 4 段 + skill_guard 加铁律 + 仪表盘 + scaffold weekly-report + tool_capability 重构 + ...) |
-| 测试 | gateway 380 (含新 15 跨 session) + tool-bridge 165 + leadership-briefing 25 + weekly-report 17 全过 |
-| 代码新增 | ~2500 行 (跨 session 2 模块 + 工程级改动) |
-| 真实成果 | journal 9 段自动总结 + leadership-briefing 4 段示例 + weekly-report .xlsx 模板 |
+| Task ship | **22 个** (跨 session 2 模块 + leadership-briefing 4 段 + skill_guard 加铁律 + 仪表盘 + scaffold weekly-report + tool_capability 重构 + 双 backend 错别字 + 演讲稿 4 份同步 + ...) |
+| 测试 | gateway 380 (含新 15 跨 session) + tool-bridge 165 + leadership-briefing 25 (含双 backend) + weekly-report 17 全过 |
+| 代码新增 | ~2700 行 (跨 session 2 模块 + 工程级改动 + typo_check.py 230 行 + 4 份演讲 docs) |
+| 真实成果 | journal 9 段自动总结 + leadership-briefing 4 段示例 + weekly-report .xlsx 模板 + 5 月 demo 全套话术更新 (32 张 PPT + V1-V5 电梯 + 13 题 Q&A + 检查清单) |
 | 走过弯路 | 3 个老实复盘 (B 方案 / 黑名单 / hermes 自创 skill) |
+
+#### 📋 BACKLOG v2 + CAPABILITY-MATRIX 落地 (修 backlog 漂移)
+
+鸿波收工时翻文档发现"完整功能规划缺了, 是不是都没记下来" — 实测发现 BACKLOG.md v1 (4-27 写) 之后 3 天 ship 的 30+ 项**一个都没回写**, 漂移 3 天. 真因: 我们 daily 写 CHANGELOG (事实记账), 但 BACKLOG 是意图规划, 需要回写 ⬜ → ✅, 我们没做.
+
+- **`docs/BACKLOG.md` v2** (121 → 186 项): 加 §K 4-28~30 ship 完成项快照 (30 项 ✅, 含 SSO 全链路 / 业务 skill / 跨 session / Companion 工程 / SOUL 铁律 / demo 物料) + 加 §L 当前缺口 (25 项, 含 demo 前必做 / PoC 阶段 / Skill 全生命周期 5/10 / 演讲补缺 / 工程债). 加维护规则铁律: **每天收工必须回写 ✅, 严禁再漂**.
+- **`docs/CAPABILITY-MATRIX.md`** (新, 4-30 v1): 鲶鱼现状能力快照, 8 大模块 35+ 项功能, 每项标代码位置 / 测试覆盖 / Demo 场景 / Phase. 解决"找不到完整功能规划"的根本问题.
+- **`docs/README.md`** 重写: 加核心 4 件套维护节奏 (BACKLOG / CHANGELOG / ROADMAP / CAPABILITY-MATRIX) + 文档关系图 + 入坑指南.
+- **后续节奏**: BACKLOG 每周一 review + 每天回写 ✅ / CHANGELOG 每天补 / CAPABILITY-MATRIX 每 sprint 末更新 / ROADMAP 季度调.
 
 ### 明天起手式
 
 - 在公司测 catfish-private-main (qwen 122b) 真实 tool 调用能力 — 撤回 4-29 / 4-30 对 122b 的两次误判
-- 5 月 demo 演示流程彩排 (新对话引用 journal + 一句话生成汇报)
+- 5 月 demo 演示流程彩排 (4 场景 17 分钟, 含场景 4 跨 session 记忆) — 真机+录屏, 计时
 - weekly-report 真生成 sample, 跟鸿波公司模板对比
+- demo 前 7 天起每天用 catfish 工作, 攒真实 employee_journal.md (没内容客户看不到效果)
+- ★ **新铁律**: 每天收工写 CHANGELOG 时, **同步在 BACKLOG.md 标 ✅** (防再漂)
 
 ---
 

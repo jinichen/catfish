@@ -1,8 +1,8 @@
 # 鲶鱼 · 全量 Backlog
 
-> **版本**: v1, 2026-04-27 创建
+> **版本**: v2, 2026-04-30 升级 (v1 = 2026-04-27 创建)
 > **维护人**: 鸿波
-> **跟 Task Tracker 的关系**: Task tracker (Cowork tasks #1-#64) 只装 sprint 内 (~1-2 周内做) 的事;
+> **跟 Task Tracker 的关系**: Task tracker (Cowork tasks) 只装 sprint 内 (~1-2 周内做) 的事;
 > **本 backlog 装全量** — 战略 / 商业 / 工程 P1-P3 / 运营 / 文档 / 法律 / 多模态扩展 全部.
 >
 > **维护规则**:
@@ -13,16 +13,31 @@
 
 ---
 
+## v2 升级说明 (2026-04-30)
+
+v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写 — backlog 漂移. v2 修这事:
+
+1. **回写已完成项**: BL-X1~X6 阻塞重新 review; 原 backlog 里被 ship 的项改 ⬜ → ✅ + 标 commit 日期
+2. **新增 §K · 4-28~30 三天 ship 完成项快照**: 23+ 项不在 v1 backlog 里的新功能 (跨 session 上下文 / leadership-briefing 4 段 / weekly-report / 双 backend 错别字 / SSO 全链路 / 演讲稿 etc.)
+3. **新增 §L · 4-30 当前缺口 (新发现的待办)**: skill 全生命周期残缺 / journal 向量召回 / IDP UserStore PG 化 / weekly P2 完整版 / 真机彩排 / hermes venv 总结脚本路径 / fonts 二进制移出 git 等
+4. **总览统计**更新: ~121 项 → ~150 项, 已 ship 30+ 项
+
+后续每周一 review 时**必须**回写, 严禁再漂.
+
+---
+
 ## 阻塞 / 等鸿波 (今天才能解锁)
 
 | ID | 项 | 状态 | 阻塞 |
 |---|---|---|---|
 | BL-X1 | `ls -la ~/Library/Mail/` 给我看路径结构 | 🚧 | Mail.app adapter 开工前提 |
-| BL-X2 | Companion Tauri 本机 `cargo build --release` 出新 .app | 🚧 | 验证 #50 / #58 / #62 真机生效 |
+| BL-X2 | Companion Tauri 本机 `cargo build --release` 出新 .app | 🚧 | 验证仪表盘 catfish skills + tool-bridge 卡片真机生效 (4-29 加了功能, 真机没 build) |
 | BL-X3 | `grep provider ~/.hermes/config.yaml` 检查 LLM 之前自作主张加的 `provider:auto` 是否还在 | 🚧 | 在的话改回 `''` |
 | BL-X4 | `catfish_browser_goto` Companion 真机验证 (新对话发"打开 https://www.sohu.com") | 🚧 | — |
-| BL-X5 | SOUL 三件套真机生效验证 (反幻觉 / 系统操作 / Memory 三层触发) | 🚧 | — |
+| BL-X5 | SOUL 三件套真机生效验证 (反幻觉 / 系统操作 / Memory 三层触发) | 🚧 | 4-30 SOUL 加了 catfish_run_skill 反幻觉铁律, 真机一起验 |
 | BL-X6 | `open -e ~/.hermes/USER.md` 加"喜欢历史哲学"段 | 🚧 | — |
+| BL-X7 (新) | 公司机器测 catfish-private-main (qwen 122b) 真实 tool 调用能力 (撤回 4-29 / 4-30 两次误判) | 🚧 | 5-1 起进公司 |
+| BL-X8 (新) | 5 月 demo 真机彩排 (4 场景 17 分钟, 含场景 4 跨 session 记忆) — 计时 + 录屏复盘 | 🚧 | demo 前 3 天 + 前 1 天各 1 次 |
 
 ---
 
@@ -43,7 +58,7 @@
 | BL-A9 | Phase 1: `git subtree split` 抽取开源组件到独立 repo (保留 history) | ⬜ | 1 周 | A1-A8 |
 | BL-A10 | Phase 1: 主 repo 改成 monorepo + git submodule 引用 open 部分 | ⬜ | 0.5 周 | A9 |
 | BL-A11 | Phase 1: 给开源 repo 加 CONTRIBUTING / .github/ISSUE_TEMPLATE | ⬜ | 0.5 周 | A9 |
-| BL-A12 | Phase 1: 测试覆盖到 70%+ (当前估 30-40%) | ⬜ | 1-2 周 | — |
+| BL-A12 | Phase 1: 测试覆盖到 70%+ (4-30 估 50%+, gateway 380 / tool-bridge 165 / leadership-briefing 25 / weekly-report 17) | ⬜ | 1-2 周 | — |
 | BL-A13 | Phase 1: docs.catfish.ai 域名 + 文档站 (mkdocs / docusaurus) | ⬜ | 1 周 | — |
 | BL-A14 | Phase 2: 改 5 个开源 repo visibility public + HN/知乎/X 公告 | ⬜ | 0.5 周 | A9-A13 |
 | BL-A15 | Phase 2 公告前法务咨询: 开源合规 / hermes-fork license / 算法备案 | ⬜ | 决策 + 1 周 | A14 |
@@ -56,8 +71,8 @@
 |---|---|---|---|
 | BL-B1 | catfish-cloud beta 内测平台搭建 (SaaS 多租户) | ⬜ | 4-6 周 |
 | BL-B2 | 私有部署报价单: <50 人 / 50-500 / 500+ 三档 | ⬜ | 决策 1 天 |
-| BL-B3 | 至少 3 个客户 demo 场景准备 (POC) | ⬜ | 1 周 |
-| BL-B4 | GTM materials: 销售一页纸 / Demo 视频 / Sales deck | ⬜ | 1 周 |
+| BL-B3 | 至少 3 个客户 demo 场景准备 (POC) | ✅ 4-30 | (4 场景: EIS+汇报 / 屏幕邮件 / IT 仪表盘 / 跨 session 记忆) |
+| BL-B4 | GTM materials: 销售一页纸 / Demo 视频 / Sales deck | 🔵 (部分) | DECK 32 张 + ELEVATOR 5 版本 + Q&A 13 题已写, 视频待录 |
 | BL-B5 | 营销网站 (catfish.ai 落地页) | ⬜ | 1 周 |
 | BL-B6 | 销售路径决策: 自销 vs 渠道 (中国 to-B 特殊路径) | ⬜ | 决策 |
 | BL-B7 | 价格策略决策: per-seat / per-org / 用量计费 | ⬜ | 决策 |
@@ -76,20 +91,20 @@
 
 ### C.1 Mac + Skill lifecycle (Week 1-2 — 当前 sprint)
 
-| ID | Task # | 项 | 估时 | 阻塞 |
+| ID | Task # | 项 | 估时 | 状态 |
 |---|---|---|---|---|
-| BL-C1 | #35 | macOS Mail.app adapter | 2 天 | BL-X1 |
-| BL-C6 | #41 | Companion macOS LaunchAgent 自启动 | 0.5 天 | — |
-| BL-C7 | #32 | Plan C Week 4 polish (quota / RBAC / 自启动) | 1.5 天 | C6 |
-| BL-C8 | (新) | Gateway 错误人话化 (429/timeout/401 → 员工友好文案) | 0.5 天 | — |
-| BL-C9 | (新) | Companion 仪表盘加 tool-bridge 状态卡片 (autostart 起来了但 UI 没显示) | 0.3 天 | — |
-| BL-C10 | (新) | catfish-public-qwen-flash upstream model 名字修正 (写 deepseek-v4-flash 实际是 Qwen3.6) | 0.1 天 | — |
-| BL-C11 | (新) | tool-bridge config_watcher (cdp_url mtime 监听 → respawn, 比 chrome.rs 触发更全面) | 0.5 天 | — |
-| BL-C12 | (新) | Skill lifecycle 阶段 3 Review: 创建/更新后立即 dry-run 验证, 失败回滚 | 0.5 天 | — |
-| BL-C13 | (新) | Skill lifecycle 阶段 3 Review: 创建前重复检查 (skill_view/skill_list 看相似 skill) | 0.3 天 | — |
-| BL-C14 | (新) | Skill lifecycle 阶段 4 Use: tool-bridge 加 .audit.jsonl 事件流 (每次 dispatch_tool 命中 skill 写一行) | 0.5 天 | — |
-| BL-C15 | (新) | Skill lifecycle 阶段 4 Use: catfish_today_summary 加 skill_invocations/failures/unused_30d 字段 + LearningCard UI | 1 天 | C14 |
-| BL-C16 | (新) | Skill lifecycle 阶段 4 Use: 30 天未用 skill 主动建议员工删/留 | 0.5 天 | C14 |
+| BL-C1 | #35 | macOS Mail.app adapter | 2 天 | ⬜ (依赖 BL-X1) |
+| BL-C6 | #41 | Companion macOS LaunchAgent 自启动 | 0.5 天 | ⬜ |
+| BL-C7 | #32 | Plan C Week 4 polish (quota / RBAC / 自启动) | 1.5 天 | ⬜ (依赖 C6) |
+| BL-C8 | (新) | Gateway 错误人话化 (429/timeout/401 → 员工友好文案) | 0.5 天 | ⬜ |
+| BL-C9 | (新) | Companion 仪表盘加 tool-bridge 状态卡片 (autostart 起来了但 UI 没显示) | 0.3 天 | ⬜ |
+| BL-C10 | (新) | catfish-public-qwen-flash upstream model 名字修正 (写 deepseek-v4-flash 实际是 Qwen3.6) | 0.1 天 | ⬜ |
+| BL-C11 | (新) | tool-bridge config_watcher (cdp_url mtime 监听 → respawn, 比 chrome.rs 触发更全面) | 0.5 天 | ⬜ |
+| BL-C12 | (新) | Skill lifecycle 阶段 3 Review: 创建/更新后立即 dry-run 验证, 失败回滚 | 0.5 天 | ⬜ |
+| BL-C13 | (新) | Skill lifecycle 阶段 3 Review: 创建前重复检查 (skill_view/skill_list 看相似 skill) | 0.3 天 | ⬜ |
+| BL-C14 | (新) | Skill lifecycle 阶段 4 Use: tool-bridge 加 .audit.jsonl 事件流 (每次 dispatch_tool 命中 skill 写一行) | 0.5 天 | ⬜ |
+| BL-C15 | (新) | Skill lifecycle 阶段 4 Use: catfish_today_summary 加 skill_invocations/failures/unused_30d 字段 + LearningCard UI | 1 天 | ⬜ (依赖 C14) |
+| BL-C16 | (新) | Skill lifecycle 阶段 4 Use: 30 天未用 skill 主动建议员工删/留 | 0.5 天 | ⬜ (依赖 C14) |
 
 ### C.2 Win 跨平台 ❄️ 暂缓到 Phase 1 末尾 (Week 7) 批量做
 
@@ -114,17 +129,18 @@
 | BL-D1 | Skills Hub 中央服务 — 员工贡献 skill 回中央, 类比 GitHub Marketplace | ⬜ | 3-4 周 |
 | BL-D2 | Secret Broker 中央服务 — 凭据中转, 让员工不暴露 token | ⬜ | 2-3 周 |
 | BL-D3 | MCP Registry 中央服务 — 内部 MCP server 注册中心 | ⬜ | 2-3 周 |
-| BL-D4 | 中央 Telemetry — 业务数据收集 (token / 延迟 metadata, **不含对话内容**) | ⬜ | 2 周 |
+| BL-D4 | 中央 Telemetry — 业务数据收集 (token / 延迟 metadata, **不含对话内容**) | 🔵 (部分) | gateway audit JSONL 已写, telemetry server 收集还没建 |
 | BL-D5 | catfish-distribution — SaaS 多租户分发管理 | ⬜ | 3-4 周 |
 
 ### D.2 Auth / Audit / Quota / RBAC
 
 | ID | 项 | 状态 | 估时 |
 |---|---|---|---|
-| BL-D6 | SSO 真接入 (替换 dev token, 4-22 已列遗留) | ⬜ | 1 周 |
-| BL-D7 | 中央审计日志 (token 数 / 延迟 / 不含对话内容) | ⬜ | 1 周 |
+| BL-D6 | SSO 真接入 (替换 dev token) | ✅ 4-28 | catfish-identity OIDC server + 飞书 adapter + Companion JWT + dev_token fallback ~600 行, 端到端通 |
+| BL-D7 | 中央审计日志 (token 数 / 延迟 / 不含对话内容) | ✅ 4-22~28 | gateway audit JSONL ship, AuditCard 已显示 |
 | BL-D8 | RBAC 系统 (#32 提到一部分) | ⬜ | 1 周 |
 | BL-D9 | Quota 系统 (#32 提到一部分) | ⬜ | 1 周 |
+| BL-D17 (新) | IDP UserStore 抽象 + PG/LDAP backend (现 yaml 短期够用) | ⬜ | 3-5 天 (Phase 2 起前) |
 
 ### D.3 Companion UI 二期 (来自 IDEAS § Companion UI 形态)
 
@@ -211,14 +227,14 @@
 
 | ID | IDEAS# | 项 | 估时 | 备注 |
 |---|---|---|---|---|
-| BL-E24 | #22 | 网关 Fallback 链 | ✅ | 已 #22 完成 (4-26) |
+| BL-E24 | #22 | 网关 Fallback 链 | ✅ 4-26 | 已 ship, 自动 fallback 到公网模型 |
 | BL-E25 | #23 | 三层统一搜索 (公网 / 公司内 / 本地) — 智能路由 | 1-2 周 | Browser Agent + MCP 连接器 |
 
 ### E.9 🔧 平台
 
 | ID | IDEAS# | 项 | 估时 | 备注 |
 |---|---|---|---|---|
-| BL-E26 | #24 | Hermes 自定义 skill namespace (catfish 独立 namespace 不混 productivity) | 0.5-3 天 | 调研 hermes 加载逻辑, 等 catfish skill ≥ 3 时做 |
+| BL-E26 | #24 | Hermes 自定义 skill namespace (catfish 独立 namespace 不混 productivity) | ✅ 4-29 (绕路) | catfish skill 走独立 catfish_run_skill 工具 + skills/<namespace>/<skill>/ 目录, 不混入 hermes namespace. 实质等价 |
 
 ---
 
@@ -230,7 +246,7 @@
 | BL-F2 | Windows .msi 安装包 (Win 路径完成后) | ⬜ | 1 周 |
 | BL-F3 | 全图形化 onboarding (员工首次启动引导) | ⬜ | 1 周 |
 | BL-F4 | 数据迁移工具: 员工换电脑迁 memory/skill/state.db | ⬜ | 0.5 周 |
-| BL-F5 | 备份方案: memory + state.db 自动备份到指定位置 | ⬜ | 0.5 周 |
+| BL-F5 | 备份方案: memory + state.db + employee_journal 自动备份到指定位置 | ⬜ | 0.5 周 |
 | BL-F6 | hermes state.db schema 升级机制 (未来 schema 变了怎么 migrate) | ⬜ | 0.5 周 |
 | BL-F7 | Production gateway 部署 (现 dev mode) | ⬜ | 1 周 |
 | BL-F8 | catfish-cloud SaaS 多租户运营手册 | ⬜ | 1 周 |
@@ -248,9 +264,10 @@
 | BL-G2 | 管理员部署文档 (private 部署版) | ⬜ | 1 周 |
 | BL-G3 | 开发者 API 文档 (gateway / tool-bridge IPC 协议) | ⬜ | 1 周 |
 | BL-G4 | Tutorial / onboarding 视频 (3-5 分钟一个) | ⬜ | 1 周 |
-| BL-G5 | 测试覆盖率提升: 30-40% → 70%+ | ⬜ | 1-2 周 |
+| BL-G5 | 测试覆盖率提升: 30-40% → 70%+ (4-30 已升到 ~50%, 还需 G6/G7) | 🔵 | 1-2 周 |
 | BL-G6 | 端到端集成测试 (现在只有单元) | ⬜ | 1 周 |
 | BL-G7 | CI/CD pipeline (GitHub Actions / 内部 CI) | ⬜ | 0.5 周 |
+| BL-G8 (新) | docs/CAPABILITY-MATRIX.md (现状能力快照) — 跟 BACKLOG 互补 | ✅ 4-30 | 跟 v2 同步落地 |
 
 ---
 
@@ -266,6 +283,7 @@
 | BL-H6 | 隐私政策 / 用户协议 / 服务条款 起草 | ⬜ | catfish-cloud 上线前 |
 | BL-H7 | 第三方依赖 license attribution 全审 (hermes / Tauri / litellm 等) | ⬜ | 开源前 |
 | BL-H8 | Phase 2 公告前法务咨询 (开源合规风险) | ⬜ | Phase 2 前 |
+| BL-H9 (新) | fonts/opensource/二进制从 git 移出 (现 git 历史含字体文件, license 风险) | ⬜ | 开源前必做 |
 
 ---
 
@@ -293,23 +311,158 @@
 
 ---
 
-## 总览统计
+## ★ K · 4-28~30 三天 ship 完成项快照 (v1 backlog 没列, v2 补回写)
+
+> 这一节专门装 v1 backlog 漂移期间 (4-28 ~ 4-30) 真实 ship 的功能.
+> 每项标 commit 日期 + 主要文件位置 (代码位置在 `docs/CAPABILITY-MATRIX.md` 进一步细化).
+> Phase 标签: 全部 **Phase 1** (现在 ship 中).
+
+### K.1 SSO + 身份层 (4-28 主)
+
+| ID | 项 | Ship 日期 | 主文件 |
+|---|---|---|---|
+| BL-K1 | catfish-identity OIDC server (~600 行) — 自建轻量 issuer + JWKS + token endpoint | ✅ 4-28 | `central/identity-server/` |
+| BL-K2 | 飞书 OIDC adapter — 用户用飞书账号扫码登录 | ✅ 4-28 | `central/identity-server/adapters/feishu.py` |
+| BL-K3 | Companion JWT 客户端 — 自动刷 token + 持久化 | ✅ 4-28 | `edge/companion-app/src/auth/` |
+| BL-K4 | dev_token 兜底机制 + warning banner — SSO 配错时救急 | ✅ 4-28 | gateway `auth/middleware.py` |
+| BL-K5 | gateway auth=oidc / dev 切换 — env 一行换 | ✅ 4-28 | `central/llm-gateway/.env` |
+| BL-K6 | SSO 6 决策点文档化 — 为客户对接做基础 | ✅ 4-28 | `docs/AUTH-DESIGN.md` |
+
+### K.2 Skill 系统 (4-28 + 4-29 主)
+
+| ID | 项 | Ship 日期 | 主文件 |
+|---|---|---|---|
+| BL-K7 | catfish_run_skill 工具 — importlib 反射 load `skills/<ns>/<skill>/script.py` | ✅ 4-28 | `edge/tool-bridge/.../catfish_tools.py` |
+| BL-K8 | skill 自动注入 — gateway inject 当前可调 catfish skill 列表到 system prompt | ✅ 4-28 | `central/llm-gateway/.../inject_skill_catalog.py` |
+| BL-K9 | skill_guard 工程级保护 — REQUIRED block, 防模型胡乱跑 skills_install/browse 假命令 | ✅ 4-29 | `central/llm-gateway/.../skill_guard.py` |
+| BL-K10 | tool_capability_guard 配置驱动 — 用 ModelConfig.supports_tool_use, 不硬编码黑名单 | ✅ 4-29 | `central/llm-gateway/.../tool_capability_guard.py` |
+| BL-K11 | Companion 仪表盘显示 catfish skills (Tauri Rust 同时扫 hermes + catfish 目录) | ✅ 4-29 | `edge/companion-app/src-tauri/src/commands/skills.rs` |
+| BL-K12 | 字体目录三层结构 (legal-restricted / opensource / system-fallback, 法律红线) | ✅ 4-29 | `skills/_shared/fonts/` |
+
+### K.3 业务 skill (4-29 + 4-30 主)
+
+| ID | 项 | Ship 日期 | 主文件 |
+|---|---|---|---|
+| BL-K13 | leadership-briefing skill (V1 真复刻 PDF) | ✅ 4-29 | `skills/department/leadership-briefing/` |
+| BL-K14 | leadership-briefing 改 4 段公文 (概况/分项/问题/下一步), heading 文本 LLM 自由 | ✅ 4-30 | `skills/department/leadership-briefing/SKILL.md` |
+| BL-K15 | leadership-briefing 内容质量铁律 (论点+数据+推论+承上启下), 表格全转附件 CSV | ✅ 4-30 | `skills/department/leadership-briefing/script.py` |
+| BL-K16 | leadership-briefing 双 backend 错别字检查 (typo_check 公文字典 50+ 条 + pycorrector Kenlm 补充, 按 (old, pos) 去重) | ✅ 4-30 | `skills/department/leadership-briefing/typo_check.py` |
+| BL-K17 | weekly-report skill (员工周报 .xlsx 复刻员工模板) | ✅ 4-29 | `skills/department/weekly-report/` |
+| BL-K18 | weekly-report Phase 2 简化版 (方式 A+ — LLM 用 session_search 抽近 7 天历史, 员工 review/补充) | ✅ 4-30 | `skills/department/weekly-report/SKILL.md` |
+
+### K.4 ★ 跨 session 上下文 / 持久个体 (4-30 主, 5 月 demo 致命卖点)
+
+| ID | 项 | Ship 日期 | 主文件 |
+|---|---|---|---|
+| BL-K19 | 档1 inject_session_history — 注入最近 7 天 session 元数据 (id/时间/消息数/title/首条 user msg) | ✅ 4-30 | `central/llm-gateway/.../inject_session_history.py` |
+| BL-K20 | 档2 employee_journal — 追加式日记 markdown, 50KB tail-truncate, 注入 system prompt | ✅ 4-30 | `central/llm-gateway/.../employee_journal.py` |
+| BL-K21 | 档2 session_summarizer — 后台异步 LLM 总结结束的 session, append 到 journal (qwen-flash, 失败重试) | ✅ 4-30 | `central/llm-gateway/.../session_summarizer.py` |
+| BL-K22 | hermes venv 装 litellm (用清华镜像) — session_summarizer 后台总结链路打通 | ✅ 4-30 | hermes venv |
+
+### K.5 SOUL.md / 反幻觉 (4-30 主)
+
+| ID | 项 | Ship 日期 | 主文件 |
+|---|---|---|---|
+| BL-K23 | SOUL.md 加 § "catfish_run_skill 工具不要去 skills_list 验证" 铁律 (踩过坑) | ✅ 4-30 | `edge/identity/SOUL.md` |
+| BL-K24 | skill_guard REQUIRED block 同步加铁律 5/6: 双层防御 | ✅ 4-30 | `central/llm-gateway/.../skill_guard.py` |
+| BL-K25 | 删除 hermes 自创 skill (data-analysis/qualification-management-report 等抢占的) | ✅ 4-30 | `~/.hermes/skills/data-analysis/` rm -rf |
+
+### K.6 Companion 工程改善 (4-30)
+
+| ID | 项 | Ship 日期 | 主文件 |
+|---|---|---|---|
+| BL-K26 | useChat.ts MAX_TOOL_ROUNDS 10 → 20 ("10 轮总踩上限"反馈) | ✅ 4-30 | `edge/companion-app/src/hooks/useChat.ts` |
+| BL-K27 | useChat.ts 连续 3 轮 parse_error 早停 + 友好提示 | ✅ 4-30 | 同上 |
+| BL-K28 | useChat.ts cache 60s TTL + 关键工具缺失自动重拉 (不用 Cmd+R 刷新) | ✅ 4-30 | 同上 |
+
+### K.7 5 月 demo 准备 (4-28 + 4-30)
+
+| ID | 项 | Ship 日期 | 主文件 |
+|---|---|---|---|
+| BL-K29 | 5 月 demo 文档 6 件套基础版 (~1100 行) | ✅ 4-28 | `docs/MAY-DEMO-PREP.md` etc. |
+| BL-K30 | 演讲稿 4 份同步今日新增功能: DECK 32 张 (含场景 4 跨 session) + ELEVATOR V1-V5 + Q&A 13 题 + PREP 检查清单 | ✅ 4-30 | `docs/MAY-DEMO-DECK.md` etc. |
+
+---
+
+## ★ L · 4-30 当前缺口 (新发现的待办, v1 backlog 漏的)
+
+> 这一节装 4-30 当天讨论 / 实测中发现的待办, v1 没列. 按优先级排.
+
+### L.1 demo 前必做 (5 月中旬前)
+
+| ID | 项 | 估时 | 状态 |
+|---|---|---|---|
+| BL-L1 | 真机彩排 (4 场景 17 分钟) — demo 前 3 天 + 前 1 天各 1 次, 计时 + 录屏复盘 | 2 × 1 小时 | ⬜ (= BL-X8) |
+| BL-L2 | demo 前 7 天积累 employee_journal.md — 真实用 catfish 工作攒至少 5-10 段 session 摘要 (没内容客户看不到效果) | 持续 | ⬜ |
+| BL-L3 | 真实部门汇报模板 (.docx) 拿回来 — 让 leadership-briefing 学风格 (用词 / 结构 / 数据展示偏好) | 5 分钟 | 🚧 (公司带回来) |
+| BL-L4 | EIS 资质列表页面截图 + URL/API 探查 (确认有"导出"按钮 = 方案 D 直接成立) | 5 分钟 | 🚧 (公司带回来) |
+| BL-L5 | 30 秒真实使用录屏 (cmd+shift+5) — 5 月 demo PPT 嵌入 | 30 秒 | ⬜ |
+| BL-L6 | 第 3 个 catfish skill (annual-summary 或 project-approval) — 给客户看 skill 不止 2 个 | 1-2 天 | ⬜ |
+
+### L.2 PoC 阶段 (5-6 月)
+
+| ID | 项 | 估时 | 状态 |
+|---|---|---|---|
+| BL-L7 | weekly-report Phase 2 完整版 — 接 hermes audit log + tool 调用历史自动判断本周做了哪些事拼草稿 (现在简化版方式 A+) | 1 周 | ⬜ |
+| BL-L8 | journal 向量召回升级 — 现在 50KB tail-truncate 半年员工正常用够, 长期 (2-3 年用户) 应升级为 embed journal 段落按相关性 retrieve top-K | 1-2 周 | ⬜ |
+| BL-L9 | journal append-only 备份 / 同步策略 (员工换机 / 误删保护) | 0.5 周 | ⬜ |
+| BL-L10 | session_summarizer 不依赖 DASHSCOPE_API_KEY — 改用 catfish 自己 gateway 路由的任意可用模型 | 0.5 天 | ⬜ |
+| BL-L11 | catfish_run_skill 加载失败友好错误引导 (现在 stack trace 不友好) | 0.5 天 | ⬜ |
+| BL-L12 | hermes venv 也能跑 session_summarizer (现在只能从 gateway venv 跑) | 0.5 天 | ⬜ |
+| BL-L13 | IDP UserStore 抽象 + PG/LDAP backend (= BL-D17, 短期 yaml 够) | 3-5 天 | ⬜ |
+
+### L.3 Skill 全生命周期补齐 (5/10 步未做)
+
+> 现 catfish skill 系统 ship 了 5 步: 设计 / 加载 / 调用 / inject_catalog / guard. 还差 5 步:
+
+| ID | 项 | 估时 | 状态 |
+|---|---|---|---|
+| BL-L14 | Skill 版本管理 (skill 改 SKILL.md, 旧 session 是否兼容) | 0.5 周 | ⬜ |
+| BL-L15 | Skill 下线 / deprecation 流程 (warning banner) | 0.3 天 | ⬜ |
+| BL-L16 | Skill 删除 (清掉 audit + 仪表盘 + 提示员工) | 0.3 天 | ⬜ |
+| BL-L17 | Skill 完整审计 (catfish_run_skill 调用全 audit, 跟 gateway audit 关联) | 0.5 周 | ⬜ |
+| BL-L18 | Skill 分享 / 安装 (从其他员工 / 中央 hub 拿 skill, 关联 BL-D1 Skills Hub) | 1 周 | ⬜ |
+
+### L.4 演讲稿 / 销售物料补缺 (demo 前)
+
+| ID | 项 | 估时 | 状态 |
+|---|---|---|---|
+| BL-L19 | demo 实录 3 个 1 分钟视频 (真实 case 嵌入 PPT) | 1 天 | ⬜ |
+| BL-L20 | PPT 实际制作 (按 MAY-DEMO-DECK.md 32 张大纲填) — Keynote / 飞书 | 1 天 | ⬜ |
+| BL-L21 | SSO 接入文档收尾 (给客户 IT 自助接入) | 1 天 | ⬜ |
+
+### L.5 工程债清理
+
+| ID | 项 | 估时 | 状态 |
+|---|---|---|---|
+| BL-L22 | fonts/opensource/二进制从 git 历史移出 (= BL-H9, license 风险) | 0.5 天 | ⬜ |
+| BL-L23 | install_to_hermes.sh / setup_b_plan.sh (B 方案撤回, 留着无害但 cleanup) | 0.3 天 | ❄️ |
+| BL-L24 | gateway audit JSONL 字段稳定化 + 文档 (Phase 2 IT 审计前) | 0.5 周 | ⬜ |
+| BL-L25 | tool-bridge / gateway / catfish-identity 中央服务 7×24 watchdog respawn 实测 | 0.5 天 | ⬜ |
+
+---
+
+## 总览统计 (v2)
 
 ```
-A  战略 / 开闭         15 项 ⬜  · 1-3 个月集中做 (Phase 0→1→2)
-B  GTM / 商业化        11 项 ⬜  · Phase 2 启动前 + 长期
-C  工程 P1 近期        11 项 ⬜  · ~2 周内
-D  工程 P2 中期        16 项 ⬜  · 1-3 个月
-E  工程 P3 远期 (IDEAS) 26 项 ⬜  · 3-6 个月按需挑做
-F  运营 / 部署         11 项 ⬜  · 持续
-G  内部建设 / Docs     7 项  ⬜  · 持续
-H  法律 / 合规         8 项  ⬜  · Phase 1 / Phase 2 前必做
-I  多模态扩展          6 项  ⬜  · P1.5-P2 之间
-J  品牌 / VI           4 项  ⬜  · Phase 2 前
+A  战略 / 开闭          15 项  (15 ⬜)              · 1-3 个月集中做 (Phase 0→1→2)
+B  GTM / 商业化         11 项  (9 ⬜ + 1 🔵 + 1 ✅)  · Phase 2 启动前 + 长期
+C  工程 P1 近期         16 项  (12 ⬜ + 4 ❄️)        · ~2 周内
+D  工程 P2 中期         17 项  (14 ⬜ + 1 🔵 + 2 ✅) · 1-3 个月
+E  工程 P3 远期 (IDEAS) 26 项  (24 ⬜ + 2 ✅)        · 3-6 个月按需挑做
+F  运营 / 部署          11 项  (11 ⬜)               · 持续
+G  内部建设 / Docs      8 项   (6 ⬜ + 1 🔵 + 1 ✅)  · 持续
+H  法律 / 合规          9 项   (9 ⬜)                · Phase 1 / Phase 2 前必做
+I  多模态扩展           6 项   (6 ⬜)                · P1.5-P2 之间
+J  品牌 / VI            4 项   (3 ⬜ + 1 ✅)         · Phase 2 前
 
-阻塞 / 等鸿波           6 项 🚧  · 今天才能解锁
+K  ★ 4-28~30 ship 快照  30 项  (30 ✅)               · 已完成 (回写)
+L  ★ 4-30 当前缺口      25 项  (24 ⬜ + 1 ❄️)        · 5 月 demo 前 / PoC / 后续
 
-合计 ~121 项
+阻塞 / 等鸿波           8 项   (8 🚧)               · 解锁后归类
+
+合计 ~186 项 (v1 = 121 项, v2 +65 项)
+其中已完成 ~35 项 (✅), 进行中 3 项 (🔵)
 ```
 
 ---
@@ -319,15 +472,16 @@ J  品牌 / VI           4 项  ⬜  · Phase 2 前
 1. **每周一早上**: 看一眼这份 backlog, 挑 5-10 项进 task tracker 做下周 sprint
 2. **完成的不删**: 改 status = ✅ + 加 task # / commit hash, 留作历史 (软著申报 + 项目 review)
 3. **新想法加到末尾**: 不需要立刻拆细, 按 section 归类即可, 后续 review 时拆
-4. **状态约定**:
+4. **每天收工写 CHANGELOG 时**: ★ 重要 — 同步把当天 ship 的事在 BACKLOG 里标 ✅ (防再漂)
+5. **状态约定**:
    - ⬜ 未开始
    - 🔵 进行中 (在 task tracker 里)
    - ✅ 已完成
    - 🚧 阻塞 (等外部 / 等决策)
    - ❄️ 暂不做 (有意识 deprioritize, 不忘记)
    - 💀 已废弃 (踩坑后决定不做了, 保留历史)
-5. **每月**: 整体 review 一次, 重新评估优先级 — 战略可能变, backlog 也跟着调
-6. **修这份文档**: 改完 commit message 写 `docs(backlog): <一句话原因>`, 在 git log 留下变更轨迹
+6. **每月**: 整体 review 一次, 重新评估优先级 — 战略可能变, backlog 也跟着调
+7. **修这份文档**: 改完 commit message 写 `docs(backlog): <一句话原因>`, 在 git log 留下变更轨迹
 
 ---
 
@@ -339,17 +493,21 @@ POSITIONING.md         ─→  产品定位 one-pager           ─→  填充 B
 COMPETITIVE-DIFF.md    ─→  应对"跟 Hermes / OpenClaw 同质化" ─→  对外口径统一
 SKILL-LIFECYCLE.md     ─→  Skill 5 阶段框架 (元文档)         ─→  指导 SOUL/policy/tool 设计
 AUTH-DESIGN.md         ─→  SSO 落地路径 (BL-D6)              ─→  实施前 6 决策点必须拍板
-IDEAS.md               ─→  长尾创意池 (随时加)           ─→  填充 BACKLOG.md E 段
-TOMORROW.md            ─→  当周 sprint 计划 (每周写)     ─→  从 BACKLOG.md C/D 段挑出来
-CHANGELOG.md           ─→  完成的事 (每天补)             ←─  BACKLOG.md ✅ 项的归宿
-Cowork tasks           ─→  当前 sprint 跟踪 (实时)       ←─  从 BACKLOG.md 挑出来
-BACKLOG.md (本)        ─→  全量积压 (每周 review)        →   汇总以上所有
+IDEAS.md               ─→  长尾创意池 (随时加)               ─→  填充 BACKLOG.md E 段
+TOMORROW.md            ─→  当周 sprint 计划 (每周写)         ─→  从 BACKLOG.md C/D 段挑出来
+ROADMAP.md             ─→  4 Phase 客户视角 (粗块)           ←─  BACKLOG.md K (已 ship) 决定 Phase 边界
+CAPABILITY-MATRIX.md   ─→  现状能力快照 (✅ 项 + 代码位置)   ←─  BACKLOG.md K + Phase 1 完成项
+CHANGELOG.md           ─→  完成的事 (每天补)                 ←─  BACKLOG.md ✅ 项的归宿
+Cowork tasks           ─→  当前 sprint 跟踪 (实时)           ←─  从 BACKLOG.md 挑出来
+BACKLOG.md (本)        ─→  全量积压 (每周 review)            →   汇总以上所有
 ```
 
 ---
 
 ## 决策签名
 
-> 此文档代表 2026-04-27 的全量 backlog 快照. 后续按"维护规则"持续更新.
+> v1 = 2026-04-27 全量 backlog 快照 (121 项, 121 ⬜).
+> **v2 = 2026-04-30 升级**: 修 v1 漂移问题, 回写 4-28~30 ship 30 项, 新增 25 项缺口, 总计 186 项. 已 ship ~35 项 (✅).
 >
+> 后续按"维护规则" §4 持续更新 — **每天收工时回写 ✅, 严禁再漂**.
 > 重大优先级调整 (例如 P3 提到 P1 / 整段砍掉) 在 git log commit message 里写明原因.

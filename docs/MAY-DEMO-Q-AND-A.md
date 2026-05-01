@@ -1,6 +1,8 @@
 # 5 月客户交流 · Q&A 详细答案
 
-> 客户必问 12 题, 每题 5-10 句话答案 + 演示时具体引用. demo 前背一遍, 现场不结巴.
+> 客户必问 13 题, 每题 5-10 句话答案 + 演示时具体引用. demo 前背一遍, 现场不结巴.
+>
+> 📌 **2026-04-30 更新**: 加第 13 题"跨 session 记忆怎么实现, 隐私怎么保证?" — 4-30 接通, 5 月 demo 主打卖点之一.
 
 ---
 
@@ -237,6 +239,48 @@
 
 ---
 
+## 13. ★ "跨 session 记忆怎么实现? 员工隐私 / 数据安全怎么保证?" (新增 4-30)
+
+**核心一句**: 双档机制 — 档1 注入最近 7 天 session 元数据, 档2 长期 LLM 自动总结日记. 全在员工本机 markdown 文件, 中央 gateway 看不到内容.
+
+**展开**:
+> **为什么有这个功能**: 客户跟我们提过最痛的一句话 — "你们鲶鱼跨对话信息割裂, 不像真同事". ChatGPT / 通义 / 星辰每开新对话从零, 员工要重新介绍背景, 体感就是个聊天机. 鲶鱼必须解决.
+>
+> **怎么做的 (双档机制)**:
+>
+> - **档 1 · 最近 7 天 session 概览** (`inject_session_history`): gateway 启动时读 `~/.hermes/state.db` (本地 SQLite), 取最近 7 天 session 的 metadata (started_at / message_count / title / 首条用户消息), 注入到当前对话的系统 prompt. 让鲶鱼"瞄一眼最近做了啥".
+>
+> - **档 2 · 长期工作日记** (`employee_journal.md`): 每个 session 结束后, gateway 后台异步起一个 `session_summarizer`, 用 flash 模型 (qwen-flash 国内可达) 总结成 100-300 字日记 append 到 `~/.catfish/employee_journal.md`. 下次新对话, gateway inject 这份 journal 的 tail 50KB. 员工跟鲶鱼共事半年, 它还记得你 3 月办过 27001, 你团队叫张三李四.
+>
+> **隐私 / 安全**:
+>
+> 1. **全本地**: `~/.catfish/employee_journal.md` 是员工电脑的纯文本文件. **从来不上传任何云服务**. 你们 IT 想审, `cat ~/.catfish/employee_journal.md` 就行
+> 2. **中央 gateway 看不到**: 中央 audit log 字段是 user / model / token / TTFT, **没有 journal 内容字段** — 代码层面写死的, 客户 IT 可审代码确认
+> 3. **总结用员工自己的 LLM**: 后台总结调用走的是 gateway 配的 LLM (你们私有 qwen 或客户 IT 选的厂商), 总结过程跟员工日常对话同走一条路, 同样合规
+> 4. **员工可控**: 员工不想留记忆, `rm ~/.catfish/employee_journal.md` 一句话清空. 想擦某段历史, 直接编辑 markdown
+> 5. **离职可销毁**: 员工离职, IT 收回机器擦盘, journal 跟着没了. 没有云端备份残留
+>
+> **跟"AI 长记忆"营销话术的区别**:
+>
+> | 营销话术 | 鲶鱼的真实做法 |
+> |---|---|
+> | "AI 大模型有长记忆" | flash 模型总结成 markdown, 不是 fine-tune 模型 |
+> | "无限对话上下文" | tail 50KB 截断, 半年员工正常使用够 |
+> | "云端永久存储" | 全本地, 不上云 |
+> | "记得你的所有数据" | 只记 session 摘要, 不记原文 (原文在 hermes state.db) |
+>
+> **demo 现场怎么演** (Slide 11-12):
+> 1. 关掉 Companion 重启, 模拟"第二天"
+> 2. 员工: "昨天那个汇报材料怎么改的"
+> 3. 鲶鱼直接接上下文 — 不需要员工重新介绍背景
+> 4. 客户立即就能感受"这是真同事不是聊天机"
+>
+> **未来升级 (Phase 2 Q3 2026)**: 现在 tail-truncate 50KB, 半年员工日常用够; 长期员工 (2-3 年用户) 升级为向量召回 (embed journal 段落, 按相关性 retrieve top-K 而非 tail), 不影响员工感知, 性能优化.
+
+**演示时引用**: Slide 11-12 (场景 4 跨 session 记忆 demo) + Slide 19 (锁层差 3 卖点) + 必要时 cat journal 给客户看
+
+---
+
 ## 紧急情况话术 (现场 demo 翻车)
 
 | 状况 | 你说 |
@@ -245,6 +289,8 @@
 | 模型答错 | "这就是 LLM 幻觉. 你们看到了, 是我们最坦诚的演示. 我们的设计是**审计 + 容错**, 这个错误现在写到 audit log, 我们 IT 复盘能改进 prompt 或换模型" |
 | 网络断 | "演示用的是公司内网, 我切到本地 fallback, 我们的容灾设计就是为这个" |
 | 客户问"为啥这功能不行" | "实话: 这个 Phase 2 (Q3) 才 ship, 现在演示的是 Phase 1. 这是设计上的取舍 — 我们 Phase 1 把核心打透再扩展" |
+| **场景 4 跨 session 鲶鱼记不起来** | "看, 我们 cat 一下 employee_journal 文件 — 这个 session 还没被后台总结 (异步, 不阻塞主流程). 正常使用每天后台自动跑, 第二天就有了. 我现在手动触发一次给大家看" → `curl -X POST localhost:8999/internal/summarize` 或直接 cat journal 已有内容 |
+| **客户怀疑跨 session 记忆是云端记的** | 当场 `cat ~/.catfish/employee_journal.md` 给客户看. "这就是文件本体, 在我笔记本上, 你们可以拿走拷贝看. 没有任何云端备份." |
 
 ---
 

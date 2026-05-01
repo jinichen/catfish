@@ -2,6 +2,8 @@
 
 > 鸿波个人备忘. 5 月中旬给客户做 demo, 用这份对着收集 / 检查.
 > 距 demo: 17 天 (今天 4-29).
+>
+> 📌 **2026-04-30 更新**: 加场景 4 (跨 session 记忆) 准备清单 + leadership-briefing 双 backend 错别字检查准备项.
 
 ---
 
@@ -72,8 +74,19 @@
 
 - [ ] 3 个业务 skill 都跑通 1 次端到端
 - [ ] EIS 资质数据真抓 145+ 条 (CSV 落盘)
-- [ ] 月度汇报材料真生成 1 份 .docx (套部门模板)
-- [ ] 周报草稿真生成 1 份 (包含日历 + 工单)
+- [ ] 月度汇报材料真生成 1 份 .docx (套部门模板, **4 段公文 + 表格转 CSV 附件 + 双 backend 错别字检查全流程跑通**)
+- [ ] **typo_check + pycorrector 双 backend** 在 hermes venv 跑通 (4-30 接通, demo 现场要确认 hermes venv 装了 litellm + pycorrector + kenlm + Chinese model)
+- [ ] 周报草稿真生成 1 份 (包含日历 + 工单, **方式 A+ 用 session_search 自动抽近 7 天**)
+
+### ★ 跨 session 记忆 (4-30 新增, 场景 4 必备)
+
+- [ ] **演示前 7 天**: 真实用 catfish 工作 (跑 demo 准备 / 写代码 / 写 PPT 等), 确保 `~/.catfish/employee_journal.md` 至少有 5-10 段 session 摘要 (没内容客户看不到效果)
+- [ ] `~/.hermes/state.db` 至少 5 个 session 有 message_count > 3 (档1 才注入)
+- [ ] DASHSCOPE_API_KEY 配在 hermes venv `.env` 里, session_summarizer 后台异步总结正常
+- [ ] `tail -20 ~/.catfish/employee_journal.md` 看最近总结质量 (主题简洁 / 第三人称 / 抓重点)
+- [ ] 演示**前一晚关掉 Companion 重启一次**, 触发后台总结, 确保 demo 时刚好有"昨天那个汇报材料" 的真实记忆
+- [ ] gateway inject 链路实测: `curl -X POST gateway/v1/chat/completions ...` 看 system prompt 含 `## 📅 员工最近 7 天 session 历史` + `## 📝 员工长期日记`
+- [ ] **录屏 backup**: 录一段"员工新对话 → 鲶鱼引用昨天上下文"的场景 4 录屏, 现场 live 演示翻车有 fallback
 
 ### 演示环境
 
@@ -85,7 +98,7 @@
 
 ### 内容资料
 
-- [ ] PPT 30 张内 (开场痛点 / 3 demo 场景 / 差异化 / Roadmap / 商业模式 / Q&A)
+- [ ] PPT 32 张内 (开场痛点 / **4 demo 场景** (含跨 session 记忆) / 差异化 / Roadmap / 商业模式 / Q&A)
 - [ ] `docs/ROADMAP.md` 备好 (随时翻这一页)
 - [ ] `docs/POSITIONING.md` 客户问差异化时翻
 - [ ] 3 个 1 分钟真实 case 短视频 (你录的)
@@ -100,11 +113,12 @@
 > "你们公司员工早上打开电脑, 要登录 EIS / OA / 飞书 / 邮箱 4-5 个系统.
 > 一份报销要跨 3 个系统填 12 个字段. 这就是鲶鱼要解决的."
 
-### 3-13 分钟: 3 个 demo 场景
+### 3-15 分钟: 4 个 demo 场景 (4-30 加场景 4)
 
 ```
-1. 员工: "登录 EIS 抓今天 145 条资质"
+1. 员工: "登录 EIS 抓今天 145 条资质, 用部门模板生成本月汇报"
    → secret_ref + Catfish Chrome 隔离 + skill 翻页 + 落盘 + execute_code 统计 + CSV 导出
+   → 4 段公文 (概况/分项/问题/下一步) + 表格转附件 + 双 backend 错别字自审 → .docx
 
 2. 员工: "看下我屏幕处理这封邮件"
    → 截图自动 route 到 vision 模型 + 不替员工按发送 (隐私设计)
@@ -112,9 +126,15 @@
 3. IT admin: 打开 Companion 仪表盘
    → audit / token / 模型分布 / security_concern 标签
    → 兑现"中央可审看不到内容" 卖点
+
+4. ★ 第二天员工新对话: "昨天那个汇报怎么改"
+   → 关 Companion 重启, 鲶鱼直接接上下文 (档1 + 档2)
+   → 引用上周 session 摘要 + 长期 journal
+   → 当场 cat ~/.catfish/employee_journal.md 给客户看"记忆全本地"
+   → 兑现"真同事不是聊天机" 卖点
 ```
 
-### 13-15 分钟: Roadmap + 商业 (翻 ROADMAP.md)
+### 15-17 分钟: Roadmap + 商业 (翻 ROADMAP.md)
 
 > Phase 1 现在 ship · 单员工副手
 > Phase 2 Q3 2026 · 团队版 (SSO + RBAC + Skill share)
@@ -164,6 +184,8 @@
 | Catfish Chrome 不响应 | Companion 控制台 → Chrome 卡片 → 重启 |
 | 演示中模型答错 | 别慌. 说"模型偶尔会错, 关键是我们能审计 / 能纠错 / 能换模型. 这就是 catfish 中央 gateway 的价值." |
 | 模型自数错 (人数 / 行数) | 说"这就是为什么我们强制 execute_code, 我现在演示一下精确版" → 重跑用 `统计`关键词触发 stats_guard |
+| 场景 4 鲶鱼记不起来 | "看, employee_journal 里这条 session 还没被后台总结 — 异步设计不阻塞主流程. 我直接 cat 给大家看已总结的几段 (引用别的真实 session)" → 现场打开 markdown 让客户看记忆颗粒度 |
+| 客户怀疑跨 session 是上传云端 | 当场终端 `cat ~/.catfish/employee_journal.md` + `ls ~/.catfish/` 给客户看. "这是文件本体, 在我笔记本上, 没有任何云端备份." |
 
 ---
 
