@@ -1,5 +1,7 @@
 ---
 name: weekly-report
+version: "1.0.0"
+deprecated: false
 description: |-
   ⭐ 生成员工周报 .xlsx — 部门内向上提交的工作汇总. 严格按真实公司模板复刻 (鸿波 4-29 提供 .xlsx 样板).
 

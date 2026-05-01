@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useRef, useState, type KeyboardEvent, type ClipboardEvent, type DragEvent, type ChangeEvent } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { Attachment } from "../../types/chat";
 
 interface Props {
@@ -22,33 +23,82 @@ interface Props {
   onReset: () => void;
 }
 
-const MAX_ATTACHMENT_BYTES = 12 * 1024 * 1024; // 12MB 单张 — 跟 catfish_screenshot 的 _MAX_SCREENSHOT_BYTES 对齐
-const MAX_ATTACHMENTS = 6; // 单条消息最多 6 张图, 防员工误拖整个文件夹
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024; // 20MB 单文件 (PDF 平均, 图片够)
+const MAX_ATTACHMENTS = 6; // 单条消息最多 6 个附件, 防员工误拖整个文件夹
 
-/** File → Attachment, 失败 throw */
-async function fileToAttachment(file: File): Promise<Attachment> {
-  if (!file.type.startsWith("image/")) {
-    throw new Error(`不支持的文件类型: ${file.type || "未知"} (目前只支持图片)`);
+const SUPPORTED_FILE_EXTS = [".pdf", ".xlsx", ".xls", ".docx", ".csv", ".txt", ".md", ".markdown", ".log"];
+
+/** 看文件是图片还是可解析文档. 都不是就 throw. */
+function classifyFile(file: File): "image" | "file" {
+  if (file.type.startsWith("image/")) return "image";
+  const lowerName = (file.name || "").toLowerCase();
+  if (SUPPORTED_FILE_EXTS.some((ext) => lowerName.endsWith(ext))) {
+    return "file";
   }
+  throw new Error(
+    `不支持: ${file.type || file.name}. 支持: 图片 / PDF / Excel / Word / CSV / TXT / MD`
+  );
+}
+
+/** File → Attachment. 图片走 base64; 文档走 Tauri parse_file → text. */
+async function fileToAttachment(file: File): Promise<Attachment> {
   if (file.size > MAX_ATTACHMENT_BYTES) {
     const mb = (file.size / 1024 / 1024).toFixed(1);
-    throw new Error(`图片太大 (${mb}MB > 12MB), 压一下再传`);
+    throw new Error(`文件太大 (${mb}MB > 20MB)`);
   }
-  // FileReader → base64 (data URI 头要剥掉, gateway 那边拼)
-  const dataUri = await new Promise<string>((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(r.result as string);
-    r.onerror = () => reject(r.error);
-    r.readAsDataURL(file);
+  const kind = classifyFile(file);
+
+  if (kind === "image") {
+    // 图片: FileReader → base64 (gateway 拼 data URI 给 vision 模型)
+    const dataUri = await new Promise<string>((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result as string);
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(file);
+    });
+    const comma = dataUri.indexOf(",");
+    const base64 = comma >= 0 ? dataUri.slice(comma + 1) : dataUri;
+    return {
+      kind: "image",
+      mimeType: file.type,
+      name: file.name || "pasted-image.png",
+      base64,
+      sizeBytes: file.size,
+    };
+  }
+
+  // 文档: 写到 /tmp → invoke('parse_file') → 拿提取的纯文本
+  // (用 Tauri 的 fs API 写, 不直接走 OS subprocess; 简单做法用 base64 → Rust 写)
+  const arrayBuffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(arrayBuffer);
+  // 先存到一个 tmp 路径. 用 Rust 端 helper 写 (避免在前端 polyfill fs).
+  // 但我们没有 write_tmp_file command, 这里走简化路径:
+  // base64 → Rust command 'parse_file_from_b64' 内部写 tmp + 解析 + 删 tmp
+  // (留 P2 重构. MVP 直接 base64 一次过)
+  let binary = "";
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  const fileB64 = btoa(binary);
+
+  const result = await invoke<{
+    filename: string;
+    ext: string;
+    char_count: number;
+    truncated: boolean;
+    text: string;
+  }>("parse_file_from_b64", {
+    fileB64,
+    filename: file.name || "upload",
   });
-  const comma = dataUri.indexOf(",");
-  const base64 = comma >= 0 ? dataUri.slice(comma + 1) : dataUri;
+
   return {
-    kind: "image",
-    mimeType: file.type,
-    name: file.name || "pasted-image.png",
-    base64,
+    kind: "file",
+    mimeType: file.type || "application/octet-stream",
+    name: result.filename,
     sizeBytes: file.size,
+    text: result.text,
+    truncated: result.truncated,
   };
 }
 
@@ -62,6 +112,10 @@ export default function ChatInput({
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [attachError, setAttachError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
+  // 🎤 语音录音状态 (方案 C+ 五一 sprint Day 1: Whisper.cpp 本地, ffmpeg subprocess 录)
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [speechHint, setSpeechHint] = useState<string | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -77,6 +131,43 @@ export default function ChatInput({
   useEffect(() => {
     taRef.current?.focus();
   }, []);
+
+  // 🎤 录音逻辑 — ffmpeg 子进程录 + Whisper.cpp 转 (方案 C+ Day 1, 全本地)
+  // 按下 🎤: invoke speech_start_recording → Rust 启 ffmpeg avfoundation 录 wav
+  // 再按 🎤: invoke speech_stop_and_transcribe → kill ffmpeg + whisper-cli → 文字 append
+  // (绕过 WKWebView 不支持 navigator.mediaDevices.getUserMedia 的限制)
+  async function startRecording() {
+    if (isRecording || isTranscribing) return;
+    try {
+      await invoke("speech_start_recording");
+      setIsRecording(true);
+      setSpeechHint("正在录音… 再按 🎤 结束");
+    } catch (err) {
+      console.error("speech_start_recording failed:", err);
+      setSpeechHint(`录音启动失败: ${(err as Error).message || err}`);
+      setTimeout(() => setSpeechHint(null), 4000);
+    }
+  }
+
+  async function stopRecording() {
+    if (!isRecording) return;
+    setIsRecording(false);
+    setIsTranscribing(true);
+    setSpeechHint("识别中…");
+    try {
+      const transcript = await invoke<string>("speech_stop_and_transcribe");
+      // 把文字 append 到当前 text (不覆盖已写内容)
+      setText((cur) => (cur ? cur + " " + transcript : transcript));
+      setSpeechHint(null);
+      taRef.current?.focus();
+    } catch (err) {
+      console.error("speech_stop_and_transcribe failed:", err);
+      setSpeechHint(`识别失败: ${(err as Error).message || err}`);
+      setTimeout(() => setSpeechHint(null), 4000);
+    } finally {
+      setIsTranscribing(false);
+    }
+  }
 
   /** 把一组 File 加进 attachments, 校验失败显示在 attachError */
   async function addFiles(files: FileList | File[]): Promise<void> {
@@ -199,13 +290,38 @@ export default function ChatInput({
             marginBottom: "var(--space-2)",
           }}
         >
-          {attachments.map((att, idx) => (
-            <ThumbCard
-              key={idx}
-              attachment={att}
-              onRemove={() => removeAttachment(idx)}
-            />
-          ))}
+          {attachments.map((att, idx) =>
+            att.kind === "image" ? (
+              <ThumbCard
+                key={idx}
+                attachment={att}
+                onRemove={() => removeAttachment(idx)}
+              />
+            ) : (
+              <FileChip
+                key={idx}
+                attachment={att}
+                onRemove={() => removeAttachment(idx)}
+              />
+            )
+          )}
+        </div>
+      )}
+
+      {/* 🎤 语音 hint toast (方案 B 五一 sprint Day 1) */}
+      {speechHint && (
+        <div
+          style={{
+            color: "var(--catfish-cyan)",
+            fontSize: 12,
+            marginBottom: "var(--space-2)",
+            background: "var(--catfish-cyan-dim)",
+            padding: "var(--space-1) var(--space-2)",
+            borderRadius: "var(--radius-sm)",
+            display: "inline-block",
+          }}
+        >
+          🎤 {speechHint}
         </div>
       )}
 
@@ -229,11 +345,11 @@ export default function ChatInput({
           gap: "var(--space-2)",
         }}
       >
-        {/* 隐藏的 file input — 点 📎 按钮触发 */}
+        {/* 隐藏的 file input — 点 📎 按钮触发 (图片 + 文档) */}
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*"
+          accept="image/*,.pdf,.xlsx,.xls,.docx,.csv,.txt,.md,.markdown,.log"
           multiple
           onChange={onFileInputChange}
           style={{ display: "none" }}
@@ -260,6 +376,36 @@ export default function ChatInput({
           }}
         >
           📎
+        </button>
+
+        {/* 🎤 语音输入按钮 — 方案 C 五一 sprint Day 1: Whisper.cpp 本地
+           按一下开始录音, 再按一下停止 → 自动转文字填到 textarea. 数据 100% 本地. */}
+        <button
+          onClick={isRecording ? stopRecording : startRecording}
+          disabled={isStreaming || isTranscribing}
+          title={
+            isRecording
+              ? "再按一下结束录音"
+              : isTranscribing
+              ? "识别中…"
+              : "语音输入 (Whisper.cpp 本地, 不上传)"
+          }
+          style={{
+            padding: "6px 10px",
+            border: "1px solid",
+            borderColor: isRecording ? "var(--status-err)" : "var(--catfish-border)",
+            borderRadius: "var(--radius-sm)",
+            background: isRecording ? "var(--status-err)" : "transparent",
+            color: isRecording ? "white" : "var(--catfish-text-muted)",
+            fontSize: 16,
+            cursor: isStreaming || isTranscribing ? "default" : "pointer",
+            lineHeight: 1,
+            minHeight: 36,
+            // 录音中: 心跳呼吸效果
+            animation: isRecording ? "catfish-pulse 1.2s ease-in-out infinite" : undefined,
+          }}
+        >
+          {isTranscribing ? "⏳" : "🎤"}
         </button>
 
         <textarea
@@ -328,6 +474,78 @@ export default function ChatInput({
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+/** 文件类型 → emoji 图标 */
+function fileEmoji(name: string): string {
+  const lower = name.toLowerCase();
+  if (lower.endsWith(".pdf")) return "📕";
+  if (lower.endsWith(".xlsx") || lower.endsWith(".xls") || lower.endsWith(".csv")) return "📊";
+  if (lower.endsWith(".docx")) return "📝";
+  if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "📋";
+  return "📄";
+}
+
+function FileChip({
+  attachment,
+  onRemove,
+}: {
+  attachment: Attachment;
+  onRemove: () => void;
+}) {
+  const sizeKb = Math.max(1, Math.round(attachment.sizeBytes / 1024));
+  const charCount = attachment.text?.length ?? 0;
+  const truncated = attachment.truncated;
+  return (
+    <div
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "var(--space-1)",
+        padding: "6px 10px",
+        background: "var(--catfish-bg)",
+        border: "1px solid var(--catfish-border)",
+        borderRadius: "var(--radius-md)",
+        fontSize: 12,
+        maxWidth: 280,
+      }}
+      title={`${attachment.name} · ${sizeKb} KB · ${charCount} 字${truncated ? " (已截断)" : ""}`}
+    >
+      <span style={{ fontSize: 16 }}>{fileEmoji(attachment.name)}</span>
+      <span
+        style={{
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          maxWidth: 200,
+        }}
+      >
+        {attachment.name}
+      </span>
+      <span style={{ color: "var(--catfish-text-muted)", fontSize: 11 }}>
+        {truncated ? `${(charCount / 1000).toFixed(0)}K 字 (截断)` : `${(charCount / 1000).toFixed(0)}K 字`}
+      </span>
+      <button
+        onClick={onRemove}
+        style={{
+          width: 18,
+          height: 18,
+          borderRadius: "50%",
+          border: "none",
+          background: "rgba(0,0,0,0.4)",
+          color: "white",
+          fontSize: 11,
+          cursor: "pointer",
+          padding: 0,
+          marginLeft: "var(--space-1)",
+          lineHeight: 1,
+        }}
+        title="删除"
+      >
+        ×
+      </button>
     </div>
   );
 }

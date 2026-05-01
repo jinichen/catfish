@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import platform
 import shutil
@@ -357,6 +358,164 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         # 4-30 一度试 B 方案 (hermes 原生) 失败, 立刻撤回. catfish_run_skill 是
         # 模型唯一靠谱的 catfish skill 调用入口, 必须 available=True.
+        "available": True,
+    },
+    {
+        "name": "catfish_a2a_ask",
+        "description": (
+            "Plan D · Catfish Federation — 问另一个员工的鲶鱼一个问题. "
+            "五一 sprint Day 4-5 ship.\n\n"
+            "✅ 调用场景:\n"
+            "  - 员工说 '问下张三老板对项目 X 怎么看' / '问下小李上周做了什么' / "
+            "    '让我们看看王五对方案怎么想'\n"
+            "  - 你 (鲶鱼) 替员工查另一员工的公开偏好/项目状态\n"
+            "  - 注意: 这是**跨员工**信息查询, 不是查公司文档\n\n"
+            "❌ 不该调用:\n"
+            "  - 员工自己的事 (你直接回答)\n"
+            "  - 查文档 / 数据库 (用其他工具)\n"
+            "  - 涉及敏感隐私 (B 的 ALLOW.md 默认会拒绝)\n\n"
+            "**隐私边界**: B 的鲶鱼会按 B 自己写的 ALLOW.md 决定能不能答.\n"
+            "  - 命中 allow → B 回答\n"
+            "  - 命中 deny / 没匹配 → 拒绝, 你告知员工\n\n"
+            "**audit**: 双方鲶鱼都会写 ~/.catfish/a2a_audit.jsonl, 客户 IT 可审."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "to_sub": {
+                    "type": "string",
+                    "description": (
+                        "目标员工的 SSO sub (邮箱形式), 例 'bob@ffcs.cn'. "
+                        "你不知道的时候反问员工要."
+                    ),
+                },
+                "question": {
+                    "type": "string",
+                    "description": (
+                        "替员工问 B 的问题, 1 句话, 不超过 500 字. "
+                        "尽量具体, 含关键词 (B 的 ALLOW.md 是关键词匹配)."
+                    ),
+                },
+                "purpose": {
+                    "type": "string",
+                    "description": (
+                        "用途分类, 例 '周报' / '汇报' / '咨询' / '协作'. "
+                        "B 的 ALLOW.md 可能限定 allow_purpose, 填准了命中率高."
+                    ),
+                    "default": "",
+                },
+                "context_hint": {
+                    "type": "string",
+                    "description": (
+                        "解释 A 员工为什么问这个 (1 句话). 帮 B 决定怎么答. "
+                        "例: 'alice 要给老板汇报' / 'bob 的同事在做类似项目'."
+                    ),
+                    "default": "",
+                },
+            },
+            "required": ["to_sub", "question"],
+        },
+        "emoji": "🤝",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_skill_install",
+        "description": (
+            "本机安装一个 skill — 从一个目录复制到 catfish/skills/<namespace>/<skill-name>/. "
+            "Skills Hub MVP (五一 sprint Day 3, 跨实例 share 是 Phase 3 BL-D1).\n\n"
+            "✅ 调用场景:\n"
+            "  - 员工说 '把这个 skill 装上' / '安装 X skill' (员工提供目录路径)\n"
+            "  - 员工拿了同事的 skill 目录, 想装到自己 catfish\n\n"
+            "❌ 不该调用:\n"
+            "  - 员工没明确要求安装\n"
+            "  - source_dir 在系统目录 (/etc, /usr 等) — 安全考虑拒绝\n\n"
+            "**安装规则**:\n"
+            "  1. source_dir 必须含 SKILL.md (必须), script.py (可选, 没 script 也行就只 LLM 看 spec)\n"
+            "  2. SKILL.md frontmatter 的 name 字段 → 决定安装到 <namespace>/<name>/\n"
+            "  3. 同名 skill 已存在 → 必须 overwrite=true 才覆盖, 否则拒绝\n"
+            "  4. 安装后自动 audit log + 仪表盘自动出现 (skills_loader 下次扫描就看到)\n\n"
+            "**返回**: {ok, installed_path, error}.\n"
+            "**audit**: ~/.catfish/skill_audit.jsonl event_type=install."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "source_dir": {
+                    "type": "string",
+                    "description": (
+                        "源目录绝对路径或 ~ 开头. 必须含 SKILL.md. "
+                        "例: '~/Downloads/my-new-skill/' 或 '/tmp/shared-skill/'"
+                    ),
+                },
+                "namespace": {
+                    "type": "string",
+                    "description": (
+                        "安装到的 namespace, 例 'department' / 'personal' / 'shared'. "
+                        "默认 'personal' (员工本人安装的). "
+                        "工程审定 skill 装 'department' (鸿波 / 工程团队)."
+                    ),
+                    "default": "personal",
+                },
+                "overwrite": {
+                    "type": "boolean",
+                    "description": (
+                        "同名 skill 已存在时是否覆盖. 默认 false. "
+                        "覆盖前自动 backup 到 skill-trash."
+                    ),
+                    "default": False,
+                },
+            },
+            "required": ["source_dir"],
+        },
+        "emoji": "📦",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_skill_delete",
+        "description": (
+            "删除一个 catfish 工程审定 skill (整个目录). 五一 sprint Day 2 加.\n\n"
+            "✅ 调用场景:\n"
+            "  - 员工明确说 '删掉 X skill' / '不再需要 X skill'\n"
+            "  - skill 已经废弃 (catfish_run_skill 返回过 deprecated_warning)\n\n"
+            "❌ 不该调用:\n"
+            "  - 员工只说 '看不到这个 skill 了' (那是其他问题, 不是要删)\n"
+            "  - 员工没明确要求删 — 这是不可逆操作, 必须显式确认\n\n"
+            "**安全保障**: 删之前自动 backup 到 ~/.catfish/skill-trash/<unix-ts>/, "
+            "30 天内可恢复. 真要永久删, 员工 30 天后手动清空 trash.\n\n"
+            "**返回**: {ok, deleted_path, backup_path, error}.\n"
+            "**audit**: 调用记 ~/.catfish/skill_audit.jsonl event_type=delete, "
+            "客户 IT 可审 skill 生命周期.\n\n"
+            "**注意**: 删 skill 后, 现有 session 已加载的 module 仍可调 (sys.modules), "
+            "但新 session 看不到, 仪表盘自动消失. 想立即生效请重启 Companion."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "skill_path": {
+                    "type": "string",
+                    "description": (
+                        "skill 相对路径, 例 'department/leadership-briefing'. "
+                        "跟 catfish_run_skill 用的 skill_path 一致."
+                    ),
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "删除原因 — 员工说的话或你判断的, 写 audit log",
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "description": (
+                        "**必填 true**. 防误删 — 员工没明确说删, "
+                        "你不应该自己判断 confirm=true."
+                    ),
+                },
+            },
+            "required": ["skill_path", "reason", "confirm"],
+        },
+        "emoji": "🗑",
+        "toolset": "catfish_native",
         "available": True,
     },
 ]
@@ -1608,6 +1767,76 @@ def _catfish_skills_root() -> Optional[Path]:
     return None
 
 
+def _read_skill_metadata(skill_md: Path) -> Dict[str, Any]:
+    """读 SKILL.md frontmatter 拿 version/deprecated/deprecated_reason.
+
+    五一 sprint Day 2: Skill 全生命周期 4 步基础.
+    tool-bridge 独立 venv 不能 import gateway 的 skills_loader, 这里写 mini 版本.
+
+    返回 {version, deprecated, deprecated_reason}, 没 frontmatter 走默认值.
+    """
+    default = {"version": "0.1.0", "deprecated": False, "deprecated_reason": ""}
+    if not skill_md.exists():
+        return default
+    try:
+        text = skill_md.read_text(encoding="utf-8")
+    except Exception:
+        return default
+
+    # 找 --- ... --- frontmatter
+    if not text.startswith("---"):
+        return default
+    end_idx = text.find("\n---", 3)
+    if end_idx < 0:
+        return default
+    fm_text = text[3:end_idx].strip()
+
+    # mini yaml 解析: 不引 yaml 依赖, 只支持 key: value 单行
+    # SKILL.md 复杂字段 (description |- multiline) 这里跳过, 只关心 version/deprecated 单行
+    result = dict(default)
+    for line in fm_text.split("\n"):
+        line = line.strip()
+        if ":" not in line or line.startswith("#"):
+            continue
+        if line.startswith(" ") or line.startswith("\t"):
+            continue  # 缩进行 (description 子内容) 跳过
+        key, _, val = line.partition(":")
+        key = key.strip()
+        val = val.strip().strip("'\"")
+        if key == "version" and val:
+            result["version"] = val
+        elif key == "deprecated":
+            result["deprecated"] = val.lower() in ("true", "yes", "1")
+        elif key == "deprecated_reason" and val:
+            result["deprecated_reason"] = val
+    return result
+
+
+def _skill_audit_path() -> Path:
+    """skill 调用审计 jsonl 路径. ~/.catfish/skill_audit.jsonl, 一行一个事件."""
+    return Path.home() / ".catfish" / "skill_audit.jsonl"
+
+
+def _write_skill_audit(event: Dict[str, Any]) -> None:
+    """append 一行 JSON 到 ~/.catfish/skill_audit.jsonl. 失败静默, 不阻塞主流程."""
+    try:
+        path = _skill_audit_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # 不存原始 params (可能含密码 / PII), 只存关键 metadata
+        line = json.dumps(event, ensure_ascii=False)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception as e:
+        # audit 写失败不阻塞用户操作
+        try:
+            import logging  # noqa: PLC0415
+            logging.getLogger("catfish.tool_bridge").warning(
+                "skill_audit 写失败: %s", e
+            )
+        except Exception:
+            pass
+
+
 def _load_skill_module(script_py: Path):
     """动态 import 一个 skill 的 script.py.
 
@@ -1801,10 +2030,37 @@ def run_skill(args: Dict[str, Any]) -> Dict[str, Any]:
             ),
         }
 
-    # 真调
+    # 五一 sprint Day 2: 读 skill metadata (version/deprecated)
+    skill_md = skill_dir / "SKILL.md"
+    metadata = _read_skill_metadata(skill_md)
+    deprecated_warning = None
+    if metadata["deprecated"]:
+        reason = metadata["deprecated_reason"] or "(未填原因)"
+        deprecated_warning = (
+            f"⚠️ skill '{skill_path}' 已下线 (deprecated). 原因: {reason}. "
+            "本次仍执行但建议换用其他 skill."
+        )
+
+    # 真调 — 计时 + audit
+    started_at = time.time()
+    audit_event: Dict[str, Any] = {
+        "ts": datetime.utcnow().isoformat() + "Z",
+        "skill_path": skill_path,
+        "skill_version": metadata["version"],
+        "deprecated": metadata["deprecated"],
+        "param_keys": sorted([k for k in params.keys() if not k.startswith("_")]),
+        # 注意: 不存 params 原始值 (可能含 PII), 只记 key 列表
+    }
     try:
         result = fn(**params)
     except TypeError as e:
+        audit_event.update({
+            "ok": False,
+            "error_type": "TypeError",
+            "error_msg": str(e)[:500],
+            "duration_ms": int((time.time() - started_at) * 1000),
+        })
+        _write_skill_audit(audit_event)
         return {
             "ok": False,
             "error": (
@@ -1814,6 +2070,13 @@ def run_skill(args: Dict[str, Any]) -> Dict[str, Any]:
             "summary": "",
         }
     except Exception as e:
+        audit_event.update({
+            "ok": False,
+            "error_type": type(e).__name__,
+            "error_msg": str(e)[:500],
+            "duration_ms": int((time.time() - started_at) * 1000),
+        })
+        _write_skill_audit(audit_event)
         return {
             "ok": False,
             "error": f"{fn_name} 执行失败: {e!r}",
@@ -1821,16 +2084,354 @@ def run_skill(args: Dict[str, Any]) -> Dict[str, Any]:
             "summary": "",
         }
 
+    duration_ms = int((time.time() - started_at) * 1000)
     files = _extract_file_paths(result)
-    return {
+
+    # 写 audit (成功)
+    audit_event.update({
+        "ok": True,
+        "duration_ms": duration_ms,
+        "file_count": len(files),
+        "files": files[:10],  # 限制 10 个 path 防 audit 过大
+    })
+    _write_skill_audit(audit_event)
+
+    response: Dict[str, Any] = {
         "ok": True,
         "result": result,
         "files": files,
         "summary": (
-            f"已通过 {skill_path} 生成 {len(files)} 个文件: " +
+            f"已通过 {skill_path} (v{metadata['version']}) 生成 {len(files)} 个文件: " +
             (", ".join(files) if files else "(无文件输出, result 见 result 字段)")
         ),
     }
+    if deprecated_warning:
+        response["deprecated_warning"] = deprecated_warning
+    return response
+
+
+# ============================================================
+# catfish_a2a_ask — Plan D Catfish Federation (五一 sprint Day 4-5)
+# ============================================================
+
+
+def a2a_ask(args: Dict[str, Any]) -> Dict[str, Any]:
+    """tool: 问另一个员工的鲶鱼一个问题.
+
+    HTTP POST 到 gateway 的 /a2a/internal/ask, gateway 内部做 lookup + sign + 调 B.
+    """
+    to_sub = (args.get("to_sub") or "").strip()
+    question = (args.get("question") or "").strip()
+    purpose = (args.get("purpose") or "").strip()
+    context_hint = (args.get("context_hint") or "").strip()
+
+    if not to_sub or not question:
+        return {"ok": False, "error": "to_sub / question 必填"}
+
+    # 当前员工 sub. 单机 mock 通过 env CATFISH_USER_SUB.
+    from_sub = os.environ.get("CATFISH_USER_SUB", "").strip()
+    if not from_sub:
+        return {
+            "ok": False,
+            "error": "CATFISH_USER_SUB env 未设, 单机 mock 必须设 (生产从 SSO 拿)",
+        }
+
+    gateway_url = os.environ.get(
+        "CATFISH_GATEWAY_URL",
+        "http://127.0.0.1:8999",
+    ).rstrip("/")
+
+    body = {
+        "from_sub": from_sub,
+        "to_sub": to_sub,
+        "question": question,
+        "purpose": purpose,
+        "context_hint": context_hint,
+    }
+
+    try:
+        import urllib.request  # noqa: PLC0415
+
+        req = urllib.request.Request(
+            f"{gateway_url}/a2a/internal/ask",
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": f"调 gateway /a2a/internal/ask 失败: {e}",
+        }
+
+    if not data.get("ok"):
+        err_type = data.get("error_type", "")
+        err_msg = data.get("error", "")
+        if err_type == "denied":
+            return {
+                "ok": False,
+                "error": f"{to_sub} 的鲶鱼按 ALLOW.md 拒绝了这个问题: {err_msg}. "
+                         "请换个角度问, 或问员工有没有授权这类信息.",
+            }
+        return {
+            "ok": False,
+            "error": f"A2A 调用 ({err_type}): {err_msg}",
+        }
+
+    return {
+        "ok": True,
+        "answer": data.get("answer", ""),
+        "chunks_count": data.get("chunks_count", 0),
+        "summary": (
+            f"已通过 Plan D Federation 拿到 {to_sub} 的回答 "
+            f"({data.get('chunks_count', 0)} 个 chunk). 详见 answer 字段."
+        ),
+    }
+
+
+# ============================================================
+# catfish_skill_install — Skills Hub MVP 本机版 (五一 sprint Day 3)
+# ============================================================
+
+
+def skill_install(args: Dict[str, Any]) -> Dict[str, Any]:
+    """tool: 本机安装 skill — 从 source_dir 复制到 catfish/skills/<namespace>/<name>/.
+
+    跨实例 share 是 Phase 3 BL-D1 (中央 Skills Hub), 这里只做本机版.
+
+    args:
+        source_dir: 源目录, 绝对路径或 ~/...
+        namespace: 默认 'personal'
+        overwrite: 默认 False
+    """
+    source = (args.get("source_dir") or "").strip()
+    namespace = (args.get("namespace") or "personal").strip()
+    overwrite = bool(args.get("overwrite", False))
+
+    if not source:
+        return {"ok": False, "error": "source_dir 必填"}
+
+    # 展开 ~
+    source_path = Path(source).expanduser().resolve()
+
+    # 安全检查: 不允许从系统目录装.
+    # 注意: macOS 上 /etc 是 /private/etc 的 symlink, resolve 后变 /private/etc,
+    # 所以 blocklist 同时含 / 和 /private/ 两套.
+    _system_prefixes = ["/etc", "/usr", "/bin", "/sbin", "/System", "/Library/System"]
+    blocked_prefixes = _system_prefixes + [f"/private{p}" for p in _system_prefixes]
+    str_source = str(source_path)
+    if any(str_source.startswith(p) for p in blocked_prefixes):
+        return {
+            "ok": False,
+            "error": f"安全考虑: 不允许从系统目录安装 ({source_path})",
+        }
+
+    if not source_path.is_dir():
+        return {"ok": False, "error": f"source_dir 不存在或不是目录: {source_path}"}
+
+    # 必须含 SKILL.md
+    skill_md = source_path / "SKILL.md"
+    if not skill_md.exists():
+        return {
+            "ok": False,
+            "error": f"{source_path}/SKILL.md 不存在 — 不是合法 skill 目录",
+        }
+
+    # 解析 SKILL.md 拿 name (用于决定安装目标路径)
+    metadata = _read_skill_metadata(skill_md)
+    # _read_skill_metadata 不返 name, 这里 mini parse 一下
+    skill_name = ""
+    try:
+        text = skill_md.read_text(encoding="utf-8")
+        if text.startswith("---"):
+            end = text.find("\n---", 3)
+            if end > 0:
+                for line in text[3:end].strip().split("\n"):
+                    line = line.strip()
+                    if line.startswith("name:") and not line.startswith(" "):
+                        _, _, val = line.partition(":")
+                        skill_name = val.strip().strip("'\"")
+                        break
+    except Exception as e:
+        return {"ok": False, "error": f"读 SKILL.md 失败: {e}"}
+
+    if not skill_name:
+        return {
+            "ok": False,
+            "error": "SKILL.md frontmatter 缺 name 字段, 无法决定安装路径",
+        }
+
+    # namespace 安全 (不允许 .. / 跨目录)
+    if ".." in namespace or "/" in namespace:
+        return {"ok": False, "error": f"namespace 不允许 '..' 或 '/' ({namespace})"}
+
+    # 目标路径: catfish/skills/<namespace>/<skill_name>/
+    root = _catfish_skills_root()
+    if root is None:
+        return {"ok": False, "error": "找不到 catfish skills 目录"}
+
+    target_dir = root / namespace / skill_name
+    audit_event: Dict[str, Any] = {
+        "ts": datetime.utcnow().isoformat() + "Z",
+        "event_type": "install",
+        "skill_path": f"{namespace}/{skill_name}",
+        "skill_version": metadata["version"],
+        "source_dir": str(source_path),
+        "overwrite": overwrite,
+    }
+
+    # 同名已存在?
+    if target_dir.exists():
+        if not overwrite:
+            audit_event.update({
+                "ok": False,
+                "error_msg": "skill 已存在, overwrite=false",
+            })
+            _write_skill_audit(audit_event)
+            return {
+                "ok": False,
+                "error": (
+                    f"skill {namespace}/{skill_name} 已存在. "
+                    "想覆盖请传 overwrite=true (会先 backup 到 skill-trash)."
+                ),
+            }
+        # overwrite: 先 backup
+        ts = int(time.time())
+        trash_root = Path.home() / ".catfish" / "skill-trash"
+        trash_root.mkdir(parents=True, exist_ok=True)
+        backup_dir = trash_root / f"{ts}-{skill_name}-replaced"
+        try:
+            shutil.move(str(target_dir), str(backup_dir))
+            audit_event["backup_path"] = str(backup_dir)
+        except Exception as e:
+            audit_event.update({
+                "ok": False,
+                "error_msg": f"backup 失败: {e}",
+            })
+            _write_skill_audit(audit_event)
+            return {"ok": False, "error": f"backup 旧 skill 失败: {e}"}
+
+    # 复制
+    try:
+        target_dir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(str(source_path), str(target_dir))
+    except Exception as e:
+        audit_event.update({
+            "ok": False,
+            "error_msg": f"复制失败: {e}",
+        })
+        _write_skill_audit(audit_event)
+        return {"ok": False, "error": f"复制 skill 失败: {e}"}
+
+    audit_event.update({
+        "ok": True,
+        "installed_path": str(target_dir),
+    })
+    _write_skill_audit(audit_event)
+
+    return {
+        "ok": True,
+        "installed_path": f"{namespace}/{skill_name}",
+        "summary": (
+            f"已安装 skill {namespace}/{skill_name} (v{metadata['version']}) "
+            f"从 {source_path}. 仪表盘下次刷新会出现, gateway 重新扫到后 LLM 也能调."
+            + (f" 旧版备份: {audit_event.get('backup_path')}" if overwrite else "")
+        ),
+    }
+
+
+# ============================================================
+# catfish_skill_delete — 安全删除 skill (五一 sprint Day 2)
+# ============================================================
+
+
+def skill_delete(args: Dict[str, Any]) -> Dict[str, Any]:
+    """tool: 删除 catfish 工程审定 skill 整个目录.
+
+    设计:
+    - 必须 confirm=True (防误删)
+    - 删除前先复制到 ~/.catfish/skill-trash/<unix-ts>-<basename>/ (30 天内可恢复)
+    - audit jsonl 记 event_type=delete
+
+    args:
+        skill_path: 'department/leadership-briefing'
+        reason: 删除原因 (写 audit)
+        confirm: True (硬要求, 防误删)
+    """
+    skill_path = (args.get("skill_path") or "").strip().strip("/")
+    reason = (args.get("reason") or "").strip()
+    confirm = bool(args.get("confirm", False))
+
+    if not skill_path:
+        return {"ok": False, "error": "skill_path 必填"}
+    if ".." in skill_path.split("/"):
+        return {"ok": False, "error": "skill_path 不允许 '..' 越界"}
+    if not reason:
+        return {"ok": False, "error": "reason 必填 (写 audit log)"}
+    if not confirm:
+        return {
+            "ok": False,
+            "error": (
+                "confirm 必须 true. 这是不可逆操作 (虽然 30 天内可从 trash 恢复). "
+                "员工没明确说删, 不要自己判断 confirm=true."
+            ),
+        }
+
+    root = _catfish_skills_root()
+    if root is None:
+        return {"ok": False, "error": "找不到 catfish skills 目录"}
+
+    skill_dir = root / skill_path
+    if not skill_dir.is_dir():
+        return {"ok": False, "error": f"skill 不存在: {skill_path}"}
+
+    # 备份到 ~/.catfish/skill-trash/<unix-ts>-<basename>/
+    ts = int(time.time())
+    basename = skill_dir.name
+    trash_root = Path.home() / ".catfish" / "skill-trash"
+    trash_root.mkdir(parents=True, exist_ok=True)
+    backup_dir = trash_root / f"{ts}-{basename}"
+
+    audit_event: Dict[str, Any] = {
+        "ts": datetime.utcnow().isoformat() + "Z",
+        "event_type": "delete",
+        "skill_path": skill_path,
+        "reason": reason[:500],
+    }
+
+    try:
+        shutil.move(str(skill_dir), str(backup_dir))
+        # 读 metadata 记到 audit (虽然 skill 已经移走, 但 backup_dir 里 SKILL.md 还在)
+        metadata = _read_skill_metadata(backup_dir / "SKILL.md")
+        audit_event.update({
+            "ok": True,
+            "skill_version": metadata["version"],
+            "deprecated": metadata["deprecated"],
+            "backup_path": str(backup_dir),
+        })
+        _write_skill_audit(audit_event)
+
+        return {
+            "ok": True,
+            "deleted_path": skill_path,
+            "backup_path": str(backup_dir),
+            "summary": (
+                f"已删除 skill {skill_path} (备份在 {backup_dir}, 30 天内可恢复). "
+                f"重启 Companion 后仪表盘也会移除. 原因: {reason}"
+            ),
+        }
+    except Exception as e:
+        audit_event.update({
+            "ok": False,
+            "error_type": type(e).__name__,
+            "error_msg": str(e)[:500],
+        })
+        _write_skill_audit(audit_event)
+        return {
+            "ok": False,
+            "error": f"删除 {skill_path} 失败: {e!r}",
+        }
 
 
 # ============================================================
@@ -1863,4 +2464,10 @@ def dispatch_native(name: str, args: Dict[str, Any]) -> Any:
         return skill_backup(args)
     if name == "catfish_run_skill":
         return run_skill(args)
+    if name == "catfish_skill_install":
+        return skill_install(args)
+    if name == "catfish_skill_delete":
+        return skill_delete(args)
+    if name == "catfish_a2a_ask":
+        return a2a_ask(args)
     raise ValueError(f"unknown native tool: {name}")

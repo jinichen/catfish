@@ -19,9 +19,15 @@ pub fn run() {
             #[cfg(desktop)]
             tray::install(app.handle())?;
 
-            // 调试需要时手动打开 DevTools:右键页面 → Inspect Element,
-            // 或者在 lib.rs 里临时加 window.open_devtools() 重新编译。
-            // 之前为了 debug 自动开过,但日常用不需要。
+            // 五一 sprint Day 1: dev build 启动自动开 DevTools (debug_assertions 只在 cargo run / tauri dev 为 true).
+            // release build (cargo build --release / tauri build) 不开, 不影响员工端.
+            #[cfg(debug_assertions)]
+            {
+                use tauri::Manager;
+                if let Some(window) = app.get_webview_window("main") {
+                    window.open_devtools();
+                }
+            }
 
             // 后台静默拉起 gateway + tool-bridge —— 不让员工手动按"启动"。
             // tool-bridge 没起来 = 聊天工具列表为空 = Gemini 退化到 native tool_code。
@@ -89,6 +95,15 @@ pub fn run() {
             // file (Phase 2 优雅下载: skill 生成的 .docx/.xlsx/.pptx 在 Finder 显示)
             commands::file::reveal_in_finder,
             commands::file::open_file,
+            // file_parse (五一 sprint Day 1: 文件上传解析 PDF/Excel/Word/CSV/TXT/MD)
+            commands::file_parse::parse_file,
+            commands::file_parse::parse_file_from_b64,
+            // skill_audit (五一 sprint Day 2: skill 调用审计 + 30 天未用统计)
+            commands::skill_audit::skill_audit_summary,
+            // speech (五一 sprint Day 1 方案 C+: ffmpeg 录 + Whisper.cpp 转, 全本地)
+            commands::speech::speech_start_recording,
+            commands::speech::speech_stop_and_transcribe,
+            commands::speech::speech_cancel_recording,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

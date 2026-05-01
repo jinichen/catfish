@@ -60,6 +60,27 @@ class SkillMeta:
     script_py_path: Path | None
     """同目录下的 script.py (如果存在). tool-bridge run_skill 会执行它."""
 
+    # ── 五一 sprint Day 2: Skill 全生命周期 4 步 ──
+
+    version: str = "0.1.0"
+    """SemVer 版本字符串, 例: '1.2.3'. 没填默认 '0.1.0'.
+
+    用途:
+    - audit log 记录调用时的版本, 便于追溯 (鸿波改 SKILL.md 后看哪个 session 用了旧版)
+    - 客户 IT 审 skill 时按版本对照
+    - Phase 2 Skills Hub 拉新 skill 时按版本兼容性检查
+    """
+
+    deprecated: bool = False
+    """是否下线. 设 true 后:
+    - format_skills_block 在 LLM 看到时显示 ⚠️ 警告 + 不推荐调用
+    - catfish_run_skill 调用时 result 加 'deprecated_warning' 字段提示员工
+    """
+
+    deprecated_reason: str = ""
+    """下线原因, 例: '改用 v2 的 leadership-briefing-strict' 或 '客户合规变更, 不再使用'.
+    deprecated=true 时建议填, 让员工/LLM 知道为啥下线 + 替代方案."""
+
 
 # ── 找 skills root ──────────────────────────────────────────────
 
@@ -96,8 +117,14 @@ def _find_skills_root() -> Path | None:
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.+?)\n---\s*\n?", re.DOTALL)
 
 
-def _parse_skill_md(skill_md: Path) -> tuple[str, str] | None:
-    """从 SKILL.md frontmatter 拿 (name, description). 拿不到返 None."""
+def _parse_skill_md(skill_md: Path) -> dict[str, Any] | None:
+    """从 SKILL.md frontmatter 拿 {name, description, version, deprecated, deprecated_reason}.
+
+    拿不到 (没 frontmatter / 缺 name / yaml 失败) 返 None.
+
+    五一 sprint Day 2: 加 version/deprecated/deprecated_reason 字段解析,
+    老 skill 没填的字段走 SkillMeta 默认值 (version=0.1.0, deprecated=False).
+    """
     try:
         text = skill_md.read_text(encoding="utf-8")
     except Exception as e:
@@ -115,13 +142,28 @@ def _parse_skill_md(skill_md: Path) -> tuple[str, str] | None:
         logger.warning("%s frontmatter yaml 解析失败: %s", skill_md, e)
         return None
 
-    name = front.get("name", "").strip()
-    description = front.get("description", "").strip()
+    name = str(front.get("name", "")).strip()
+    description = str(front.get("description", "")).strip()
     if not name or not description:
         logger.debug("%s frontmatter 缺 name 或 description", skill_md)
         return None
 
-    return name, description
+    # version: SemVer 字符串. 老 skill 没填默认 "0.1.0".
+    version = str(front.get("version", "0.1.0")).strip() or "0.1.0"
+
+    # deprecated: bool. 没填默认 False.
+    deprecated_raw = front.get("deprecated", False)
+    deprecated = bool(deprecated_raw) if deprecated_raw is not None else False
+
+    deprecated_reason = str(front.get("deprecated_reason", "")).strip()
+
+    return {
+        "name": name,
+        "description": description,
+        "version": version,
+        "deprecated": deprecated,
+        "deprecated_reason": deprecated_reason,
+    }
 
 
 # ── 主入口 ──────────────────────────────────────────────────────
@@ -156,16 +198,18 @@ def discover_skills() -> list[SkillMeta]:
         parsed = _parse_skill_md(skill_md)
         if parsed is None:
             continue
-        name, description = parsed
 
         script_py = skill_md.parent / "script.py"
         results.append(
             SkillMeta(
                 skill_path=skill_path,
-                name=name,
-                description=description,
+                name=parsed["name"],
+                description=parsed["description"],
                 skill_md_path=skill_md,
                 script_py_path=script_py if script_py.exists() else None,
+                version=parsed["version"],
+                deprecated=parsed["deprecated"],
+                deprecated_reason=parsed["deprecated_reason"],
             )
         )
 
@@ -223,7 +267,19 @@ def format_skills_block(skills: list[SkillMeta]) -> str:
         "",
     ]
     for s in skills:
-        lines.append(f"### `{s.skill_path}` — {s.name}")
+        # 五一 sprint Day 2: 显示版本 + 下线警告
+        version_tag = f" `v{s.version}`" if s.version != "0.1.0" else ""
+        if s.deprecated:
+            lines.append(f"### `{s.skill_path}` — {s.name}{version_tag}  ⚠️ DEPRECATED")
+            lines.append("")
+            if s.deprecated_reason:
+                lines.append(f"**⚠️ 此 skill 已下线**: {s.deprecated_reason}")
+                lines.append("")
+                lines.append("除非员工明确要求, 否则不要调此 skill.")
+            else:
+                lines.append("**⚠️ 此 skill 已下线, 不推荐调用.**")
+        else:
+            lines.append(f"### `{s.skill_path}` — {s.name}{version_tag}")
         lines.append("")
         lines.append(s.description)
         lines.append("")

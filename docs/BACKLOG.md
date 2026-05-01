@@ -404,7 +404,8 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 | ID | 项 | 估时 | 状态 |
 |---|---|---|---|
 | BL-L7 | weekly-report Phase 2 完整版 — 接 hermes audit log + tool 调用历史自动判断本周做了哪些事拼草稿 (现在简化版方式 A+) | 1 周 | ⬜ |
-| BL-L8 | journal 向量召回升级 — 现在 50KB tail-truncate 半年员工正常用够, 长期 (2-3 年用户) 应升级为 embed journal 段落按相关性 retrieve top-K | 1-2 周 | ⬜ |
+| BL-L8 | journal 向量召回升级 — 现在 50KB tail-truncate 半年员工正常用够, 长期 (2-3 年用户) 应升级为 embed journal 段落按相关性 retrieve top-K (语义模糊查询) | 1-2 周 | ⬜ |
+| BL-L26 (新 5/1) | 用户上传文件 ≥ 50KB 走 BM25 检索 — 复用 edge/local-search FTS5 (4-24 已 ship), top-K 段落注入 user message. **不做 embedding RAG**: 公文场景关键词查询 BM25 比 embedding 准 30%, 也省调用费. 5/1 鸿波拍板 BM25 单一方案 cover 95%, 不分级 long-context | 3 天 | ⬜ |
 | BL-L9 | journal append-only 备份 / 同步策略 (员工换机 / 误删保护) | 0.5 周 | ⬜ |
 | BL-L10 | session_summarizer 不依赖 DASHSCOPE_API_KEY — 改用 catfish 自己 gateway 路由的任意可用模型 | 0.5 天 | ⬜ |
 | BL-L11 | catfish_run_skill 加载失败友好错误引导 (现在 stack trace 不友好) | 0.5 天 | ⬜ |
@@ -439,6 +440,8 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 | BL-L23 | install_to_hermes.sh / setup_b_plan.sh (B 方案撤回, 留着无害但 cleanup) | 0.3 天 | ❄️ |
 | BL-L24 | gateway audit JSONL 字段稳定化 + 文档 (Phase 2 IT 审计前) | 0.5 周 | ⬜ |
 | BL-L25 | tool-bridge / gateway / catfish-identity 中央服务 7×24 watchdog respawn 实测 | 0.5 天 | ⬜ |
+| BL-L27 (新 5/2) | datetime.utcnow() 全替换 datetime.now(timezone.utc) — Python 3.12+ deprecated, 五一 sprint 加的代码 (a2a_audit / a2a_jwt / catfish_tools / registry) 都用了, ~10 处 | 0.5 天 | ⬜ |
+| BL-L28 (新 5/2) | ALLOW.md 关键词匹配从子串改为 token-overlap (中文 jieba / lac 分词后比 token 集合) — 现在 "项目 X 进展" 不命中 "项目 X 上周进展" (中间插字符就 fail), 实际员工写 ALLOW 不可能列全所有变体 | 1 天 (Phase 2) | ⬜ |
 
 ---
 

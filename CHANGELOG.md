@@ -1513,6 +1513,114 @@ LLM 应用最深的痛点 — 每个 session 是孤岛, 模型不知道员工"�
 
 ---
 
+## 2026-05-01 ~ 2026-05-05 (五一 5 天 sprint)
+
+鸿波东京休假, 我 (鲶鱼) 帮他推进 Phase 2 核心 5 大功能跃迁. 鸿波本机周末抽空 build / 测.
+
+### Day 1 · 5/1 — 多模态 (语音 + 文件) ★ 核心痛点
+
+**前 4 条路全踩坑** (~5 小时):
+1. SFSpeechRecognizer + objc Rust → dev binary 不是 .app, NSException 崩 (砍)
+2. macOS 系统 dictation (双击 🌐) → WKWebView 内 textarea 不是 NSTextField, 文字不进鲶鱼 (砍)
+3. WKWebView getUserMedia → 默认禁用 mediaDevices API (砍)
+4. ffmpeg 子进程录音 → dev binary 没麦克风权限, .app rebuild → Info.plist 缺 NSMicrophoneUsageDescription (修)
+5. **方案 C+ ship**: ffmpeg subprocess 录 wav → whisper-cli 转 → 文字进 textarea
+
+**最终 ship**:
+- `speech.rs` — `find_executable` 探 brew 路径绕过 GUI app PATH 限制. ffmpeg avfoundation 录 16kHz mono. whisper-cli 调 ggml 模型 (优先 large-v3 > medium > small). 加 prompt context 提升公文术语命中.
+- ChatInput `🎤` 按钮: 红脉冲录音中, ⏳ 转写中, append 到 textarea
+- **Whisper 中文准确率**: small 差 → 升级 medium (1.4G 实测可用) → large-v3 (2.9GB, M4 16GB 内存最佳, 鸿波 5/1 没下完)
+
+**文件上传 ship**:
+- `commands/file_parse.rs` Rust → Python helper `scripts/parse_file.py` (pypdfium2/openpyxl/python-docx/csv/txt/md, 50KB 截断防 token 爆)
+- ChatInput 📎 接受 PDF/Excel/Word/CSV/TXT/MD, FileChip 渲染 (📕/📊/📝 + N千字)
+- `Attachment` 类型扩展 `kind: image | file`, file 走 `text` 字段
+- `lib/chat.ts::toWire` 拼 file text 到 user content 末尾 (`=== 附件: xxx ===` 分隔)
+- state.db 占位: `[📄 N 份文档 (xxx.pdf) — in-memory, 切会话不保留]`
+- **鸿波 5/1 实测 ✅**: 拖 .pdf 进, 鲶鱼能引用文档内容回答
+
+**踩坑复盘**:
+- macOS dev binary 跟 .app bundle 权限模型差异巨大 (麦克风 / sandbox / TCC.db). 验证语音必须 .app build, dev mode 不行
+- WKWebView 跟 NSTextField 焦点模型不同: 系统 dictation 找的是 NSTextField firstResponder, web textarea 拿不到
+- macOS GUI app 的 PATH 不含 /opt/homebrew/bin (brew 路径). 调 subprocess 必须硬编码探测路径
+
+### Day 2 · 5/2 — Skill 全生命周期 4 步
+
+补 5 个 skill 生命周期 (BL-L14~L17 + BL-C15) — 之前 5/10 步 (设计/加载/调用/inject/guard) 已 ship, 补:
+
+- **版本管理** (BL-L14): SKILL.md frontmatter 加 `version: "x.y.z"` 字段, `SkillMeta.version`, `format_skills_block` 显示 `v1.1.0` 标. 老 skill 默认 0.1.0 兼容.
+- **下线 / deprecation** (BL-L15): `deprecated: true/false` + `deprecated_reason`. `format_skills_block` 标 ⚠️ DEPRECATED 警告 + LLM 不推荐调. `catfish_run_skill` 调 deprecated skill 时 result 加 `deprecated_warning`.
+- **删除** (BL-L16): 新 tool `catfish_skill_delete(skill_path, reason, confirm)`. 删前 backup 到 `~/.catfish/skill-trash/<ts>-<name>/` (30 天可恢复). 必填 `confirm: true` 防误删.
+- **完整审计** (BL-L17): tool-bridge 加 `_write_skill_audit` helper, `run_skill` / `skill_delete` 都写 `~/.catfish/skill_audit.jsonl` (ts, skill_path, version, ok, duration_ms, files, error_msg). 不存原始 params (PII 保护).
+- **Companion SkillAuditCard** (BL-C15): Tauri Rust `skill_audit.rs` 读 jsonl 聚合 (今日次数 / top 5 skills / 最近失败 / 30 天未用 / 平均耗时). React 卡片在 Dashboard 中央.
+
+**现有 skill 加版本**: leadership-briefing v1.1.0, weekly-report v1.0.0.
+
+### Day 3 · 5/3 — Skills Hub MVP + Plan D 协议设计
+
+- **`catfish_skill_install`** (Skills Hub MVP 本机版, BL-D1 简化): 从指定目录复制到 `skills/<namespace>/<name>/`. 同名 skill 已存在必须 `overwrite=true` (自动 backup 到 trash). 安全检查 (拒绝从 /etc /usr 系统目录装). namespace 默认 `personal` (员工本人装的).
+- **`docs/PLAN-D-PROTOCOL.md`** (480+ 行): Plan D Federation 协议 v0.1 完整 spec. 11 章 — 协议风格 (MCP JSON-RPC over SSE) / JWT 互信 / ALLOW.md 默认 DENY / Audit 双方记录 / Registry yaml / 单机 mock 验证 / 跨机真测留 5/6+. 关键设计决策签名 (鸿波 4-30 拍板) 写进文档底部.
+
+### Day 4 · 5/4 — Plan D registry + A 端 + B 端 实施
+
+**Registry** (BL-M4.1):
+- `central/identity-server/registry.py`: `POST /registry/register` (catfish 实例自报家门) + `GET /registry/lookup?sub=...` (拿 endpoint+jwks_uri) + `GET /registry/list` (调试). yaml store, `last_seen` 2 分钟超时算离线. mount 到 catfish-identity app.
+
+**A2A Auth + Audit** (BL-M4.2/M4.3 共用):
+- `a2a_jwt.py`: `sign_a2a_token` (RS256, 5min, jti 防重放), `verify_a2a_token` (registry lookup → fetch jwks → 验签 + 验 aud + 验 jti), `lookup_remote_agent` httpx 调中央 registry, JWKS 5min 缓存
+- `a2a_audit.py`: `~/.catfish/a2a_audit.jsonl` append-only (tool-bridge skill_audit.jsonl 模板)
+- `a2a_allow.py`: 极简 markdown 解析 (不引 yaml-parser, 防依赖). `check_allow(question, config, from_sub, from_attrs, purpose)` → (allowed, reason). deny 优先 + allow 段 + 默认拒. 关键词子串匹配, 不用 LLM.
+
+**B 端** (BL-M4.3):
+- `a2a_server.py`: `POST /a2a/ask` SSE endpoint. 流程 — 验 JWT (verify_a2a_token) → 限流 (10/min/from_sub) → check_allow → 转 LLM 流式 (litellm qwen-flash, 没 DASHSCOPE_API_KEY 走 mock) → SSE chunk → audit. JSON-RPC 错误码 -32001~-32005.
+
+**A 端** (BL-M4.2):
+- `a2a_client.py`: `ask_remote_agent` 异步生成器, lookup → online check → sign → POST SSE → 解析 chunk → yield. 失败抛 PermissionError / ConnectionError / RuntimeError. 跟 B 同时 audit.
+- `app.py` 加 `POST /a2a/internal/ask` (gateway 内部 endpoint, 简化版收完整 SSE 一次返). tool-bridge 通过 HTTP 调它触发 A2A.
+
+**Tool 暴露** (BL-M5):
+- tool-bridge `catfish_a2a_ask` 工具: `to_sub` + `question` + `purpose` + `context_hint`. 调 gateway `/a2a/internal/ask`. denied 友好提示员工.
+
+### Day 5 · 5/5 — 单机 mock + demo
+
+- **`scripts/plan_d_mock_init.sh`**: 初始化 ~/.catfish-alice + ~/.catfish-bob 双 home, 各自 RSA keypair (openssl genpkey), 各自 ALLOW.md 模板 (alice 限制宽 / bob 限制严), registry yaml 占位. 输出 4 个终端启动命令 + curl 测试样例.
+- **mock demo 流程**: T1 启 catfish-identity registry, T2/T3 启 alice/bob gateway, T4 register 双方 + curl 调 `alice → bob` 验证 SSE + audit jsonl 双方各一条. **实际 mock 测试留鸿波 5/5 在本机跑** (sandbox 限制).
+
+### Day 1-5 总账 (代码 ship)
+
+| 模块 | 文件 |
+|---|---|
+| Day 1 多模态 | speech.rs / file_parse.rs / parse_file.py / FileChip / chat.ts toWire / types/chat.ts |
+| Day 2 Skill 生命周期 | skills_loader.py (version/deprecated) / catfish_tools.py (audit/install/delete) / skill_audit.rs / SkillAuditCard.tsx |
+| Day 3 Hub MVP + Plan D 设计 | catfish_tools.py (skill_install) / docs/PLAN-D-PROTOCOL.md |
+| Day 4 Plan D 实施 | identity-server/registry.py / gateway/a2a_jwt.py / a2a_allow.py / a2a_server.py / a2a_client.py / a2a_audit.py / app.py 路由 / catfish_tools.py (a2a_ask) |
+| Day 5 mock | scripts/plan_d_mock_init.sh |
+| **代码新增** | ~3500 行 (Rust ~600 + Python ~2200 + React/TS ~400 + 文档 ~300) |
+
+### 遗留 (鸿波 5/5 / 5/6 起手)
+
+- **Day 1 ⚠️ 真机彩排**: 重 build .app + 测 🎤 medium 准确率 + 测 📎 文件上传 (鸿波 5/1 测 ✅)
+- **Day 2 ⚠️ 真机验证**: 重 build .app 看 SkillAuditCard 仪表盘. catfish_skill_delete 手动调试 1 次 (确认 skill 真移到 trash, ALLOW.md 也跟着移)
+- **Day 3 ⚠️ Skills Hub MVP 调试**: 真造一个测试 skill 目录, 调 `catfish_skill_install` 看仪表盘
+- **Day 4-5 ⚠️ Plan D 单机 mock 测试**:
+  - 跑 `scripts/plan_d_mock_init.sh`
+  - 4 个 terminal 起服务
+  - alice register + bob register
+  - alice 调 bob 看 SSE 流 / audit / ALLOW 命中
+  - 跨员工真测留 5/6+ 公司双机
+- **5/6 上班后**:
+  - Journal 向量召回 (BL-L8, 用公司 bge-m3)
+  - Plan D 跨 2 台真机测试 (公司 SSO 多账号)
+  - 第 3 个 catfish skill (annual-summary 或 project-approval) for demo
+
+### 五一总结
+
+鸿波在东京休假, 我推完了 Day 2-5 的代码 (8 大模块 ~3500 行). 但**所有 Day 2-5 代码都没真机验证** — 我们只验证了 Day 1 文件上传. Plan D 是大架构变动, 5/5 mock 测试**必跑**, 不跑直接交付有炸雷风险.
+
+5 月 demo 不演 Plan D (Phase 3 Q4 ship 是承诺, 别打脸). Plan D 这次 ship 是技术 ready + spec 清晰, 给 demo 后客户技术对接看 ("我们已经写好协议 + 单机验证, 12 月跨员工真协作").
+
+---
+
 ## 记录规则
 
 - 每天收工时补一条

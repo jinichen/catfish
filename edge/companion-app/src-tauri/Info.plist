@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- 麦克风权限 (五一 sprint Day 1 方案 C+: ffmpeg subprocess 录音, whisper.cpp 转文字) -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>鲶鱼需要麦克风做语音输入, ffmpeg 录到本地后用 Whisper.cpp 转文字, 数据不上传.</string>
+
+    <!-- 用户文档权限 (Phase 1 文件上传 Day 1 下午需要) -->
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>鲶鱼需要读你的文档来帮你处理 (PDF/Excel/Word).</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>鲶鱼需要读你的下载文件夹.</string>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>鲶鱼需要读你的桌面文件 (生成的报告也保存在这里).</string>
+
+    <!-- AppleScript 触发系统 dictation (方案 B Day 1, osascript 用) -->
+    <key>NSAppleEventsUsageDescription</key>
+    <string>鲶鱼需要发 AppleScript 事件来触发 macOS 系统听写功能.</string>
+</dict>
+</plist>

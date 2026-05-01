@@ -1,5 +1,7 @@
 ---
 name: leadership-briefing
+version: "1.1.0"
+deprecated: false
 description: |-
   ⭐ 生成公司 / 集团领导汇报 / 决策事项 .docx 文档. 严格按真实公文样式 (鸿波 PDF 样板复刻).
 

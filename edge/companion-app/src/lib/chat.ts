@@ -113,18 +113,36 @@ function toWire(messages: ChatMessage[]): OpenAIWireMessage[] {
         })),
       };
     }
-    // user 带图片附件 → 用 OpenAI multimodal content array
+    // user 带附件 → 图片走 multipart image_url, 文档把提取的 text 拼到 text part
     if (m.role === "user" && m.attachments && m.attachments.length > 0) {
+      const fileAttachments = m.attachments.filter((a) => a.kind === "file");
+      const imageAttachments = m.attachments.filter((a) => a.kind === "image");
+
+      // 拼文档内容到第一个 text part. 用 ===分隔便于模型识别边界.
+      let textContent = m.content || "";
+      if (fileAttachments.length > 0) {
+        const fileBlocks = fileAttachments
+          .map((a) => {
+            const truncNote = a.truncated ? " [已截断, 仅显示前 50KB]" : "";
+            return `\n\n=== 附件: ${a.name}${truncNote} ===\n${a.text || ""}`;
+          })
+          .join("");
+        textContent = `${textContent}${fileBlocks}`;
+      }
+
+      // 没图片附件: 直接返普通 string content (兼容非 vision 模型)
+      if (imageAttachments.length === 0) {
+        return { role: "user", content: textContent };
+      }
+
+      // 有图片附件: 走 multipart array
       const parts: OpenAIContentPart[] = [];
-      // 文字第一个 (即使是空字符串也保留, 让模型知道员工没写文字描述)
-      parts.push({ type: "text", text: m.content || "" });
-      for (const att of m.attachments) {
-        if (att.kind === "image") {
-          parts.push({
-            type: "image_url",
-            image_url: { url: `data:${att.mimeType};base64,${att.base64}` },
-          });
-        }
+      parts.push({ type: "text", text: textContent });
+      for (const att of imageAttachments) {
+        parts.push({
+          type: "image_url",
+          image_url: { url: `data:${att.mimeType};base64,${att.base64}` },
+        });
       }
       return { role: "user", content: parts };
     }

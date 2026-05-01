@@ -88,6 +88,11 @@ def create_app() -> FastAPI:
         )
     )
 
+    # 五一 sprint Day 4 (BL-M4.1): Plan D · Catfish Federation registry
+    # 各 catfish 实例 (Alice / Bob / ...) 通过这个 registry 互相发现 + 拿 jwks
+    from .registry import build_registry_router  # noqa: PLC0415
+    app.include_router(build_registry_router())
+
     @app.get("/healthz")
     async def healthz() -> dict:
         """liveness probe."""

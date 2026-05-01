@@ -22,24 +22,35 @@ export interface ToolCall {
   error?: string;
 }
 
-/** 用户附件 —— v0.1 只支持 image, 后续扩 file / audio / video。
+/** 用户附件 —— image / file (PDF/Excel/Word/CSV/TXT/MD).
  *
- * MVP 选型: data 走 base64 完整放内存, 不写磁盘也不进 state.db
- * (state.db 只存"[📎 N 张图片]"占位符)。优点: 实现简单、跨进程零感知;
- * 代价: 切会话再回来图片消失 (只剩文字)。后续要持久化再迁。
+ * MVP 选型:
+ *   - image: data 走 base64 完整放内存, 跟 vision LLM 协议直接对齐
+ *   - file: 文件提取的纯文本 (text 字段), 后端 (Tauri Rust → Python helper) 解析
+ *           不传 base64 给 LLM (LLM 看不懂 PDF 二进制)
+ *
+ * 都不写磁盘也不进 state.db (state.db 只存"[📎 N]"占位).
+ * 切会话回来附件消失 (只剩文字).
  */
-export type AttachmentKind = "image";
+export type AttachmentKind = "image" | "file";
 
 export interface Attachment {
   kind: AttachmentKind;
-  /** MIME 类型, 如 "image/png" / "image/jpeg" */
+  /** MIME 类型, 如 "image/png" / "application/pdf" */
   mimeType: string;
-  /** 文件名(显示用), 没有就是 "pasted-image.png" 这种 */
+  /** 文件名(显示用), 例 "汇报模板.docx" */
   name: string;
-  /** base64 编码的内容(不含 data URI 前缀, gateway 那边拼) */
-  base64: string;
   /** 字节大小, 给 UI 显示用 */
   sizeBytes: number;
+
+  /** image 才有: base64 编码 (不含 data URI 前缀, gateway 那边拼) */
+  base64?: string;
+
+  /** file 才有: 提取出的纯文本内容 (50KB 截断, 防 token 爆) */
+  text?: string;
+
+  /** file 才有: 是否被截断 */
+  truncated?: boolean;
 }
 
 export interface ChatMessage {

@@ -1,4 +1,4 @@
-/** 仪表盘 tab —— Identity + 服务状态 + Quota + Catalog + Skills/MCP + Learning + Audit */
+/** 仪表盘 tab —— Identity + 服务状态 + Quota + Catalog + Skills/MCP + Learning + Audit + SkillAudit (五一 D2) */
 
 import IdentityCard from "./IdentityCard";
 import ServicesCard from "./ServicesCard";
@@ -7,6 +7,7 @@ import CatalogCard from "./CatalogCard";
 import SkillsMcpCard from "./SkillsMcpCard";
 import LearningCard from "./LearningCard";
 import AuditCard from "./AuditCard";
+import SkillAuditCard from "./SkillAuditCard";
 
 export default function DashboardTab() {
   return (
@@ -23,6 +24,7 @@ export default function DashboardTab() {
       <CatalogCard />
       <SkillsMcpCard />
       <LearningCard />
+      <SkillAuditCard />
       <AuditCard />
     </div>
   );

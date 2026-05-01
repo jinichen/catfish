@@ -43,6 +43,12 @@ button {
   51%, 100% { opacity: 0; }
 }
 
+/* 录音中按钮心跳呼吸 — ChatInput 🎤 (五一 sprint Day 1) */
+@keyframes catfish-pulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.45); }
+  50%      { transform: scale(1.06); box-shadow: 0 0 0 6px rgba(220, 38, 38, 0); }
+}
+
 /* react-markdown 默认间距 */
 .markdown-body p {
   margin: 0 0 var(--space-2) 0;

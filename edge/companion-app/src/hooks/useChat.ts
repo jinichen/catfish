@@ -533,10 +533,21 @@ export function useChat(initialModel: string) {
       };
       const requestMessages = [...useChatStore.getState().messages, userMsg];
       addMessage(userMsg);
-      // 持久化到 state.db: 图片不落库, 只存文字 + 占位符 (恢复时只剩文字)
+      // 持久化到 state.db: 附件不落库 (图片 base64 / 文件 text 都太大), 只存文字 + 占位
+      const imgN = attachments.filter((a) => a.kind === "image").length;
+      const fileN = attachments.filter((a) => a.kind === "file").length;
+      const placeholderParts: string[] = [];
+      if (imgN > 0) placeholderParts.push(`📎 ${imgN} 张图`);
+      if (fileN > 0) {
+        const fileNames = attachments
+          .filter((a) => a.kind === "file")
+          .map((a) => a.name)
+          .join(", ");
+        placeholderParts.push(`📄 ${fileN} 份文档 (${fileNames})`);
+      }
       const persistContent =
-        attachments.length > 0
-          ? `${trimmed}${trimmed ? "\n" : ""}[📎 ${attachments.length} 张图片 — Companion in-memory, 切会话不保留]`
+        placeholderParts.length > 0
+          ? `${trimmed}${trimmed ? "\n" : ""}[${placeholderParts.join(" + ")} — in-memory, 切会话不保留]`
           : trimmed;
       void persistMessage({ ...userMsg, content: persistContent, attachments: undefined });
       setIsStreaming(true);

@@ -148,6 +148,15 @@ async def lifespan(app: FastAPI):
 
     refresh_task = asyncio.create_task(_refresh_loop())
 
+    # 五一 sprint Day 5 (B 方案): 启动时自动 register 到 catfish-identity registry.
+    # 这样别的 catfish 实例 (Plan D Federation) 能通过 lookup 找到本机.
+    # 失败不阻塞启动 (a2a 不可用, 其他功能正常).
+    try:
+        from .a2a_self_register import self_register  # noqa: PLC0415
+        await self_register()
+    except Exception as e:
+        logger.warning("a2a_self_register 失败 (Plan D A2A 不可用): %s", e)
+
     yield
 
     refresh_task.cancel()
@@ -174,6 +183,58 @@ app.add_middleware(
     allow_methods=["*"],      # 含 OPTIONS / POST / GET 等
     allow_headers=["*"],      # 含 Authorization / Content-Type / X-Catfish-* 等
 )
+
+
+# 五一 sprint Day 4 (BL-M4.3): Plan D · A2A SSE endpoint (B 端).
+# /a2a/ask 接收其他 catfish 实例的问询, 验 JWT + 隐私拦截 + 转 LLM 流式返流.
+try:
+    from .a2a_server import build_a2a_router  # noqa: PLC0415
+    app.include_router(build_a2a_router())
+    logger.info("a2a_server: /a2a/ask SSE endpoint 已挂载")
+except Exception as e:
+    logger.warning("a2a_server 挂载失败 (Plan D 不可用): %s", e)
+
+
+# Plan D · A 端内部 endpoint — tool-bridge 通过 HTTP 调这个触发 A2A.
+# 简化版: 收完整 SSE 流, 一次返给 tool-bridge (不流式 UX, Phase 2 升级 Companion 直连 SSE).
+@app.post("/a2a/internal/ask")
+async def a2a_internal_ask(req: dict) -> dict:
+    """tool-bridge → gateway: 帮我问 to_sub 这个问题.
+
+    body: {from_sub, to_sub, question, purpose?, context_hint?, max_tokens?}
+    返: {ok, answer, audit_id_remote, error?}
+    """
+    from .a2a_client import ask_remote_agent  # noqa: PLC0415
+
+    from_sub = (req.get("from_sub") or "").strip()
+    to_sub = (req.get("to_sub") or "").strip()
+    question = (req.get("question") or "").strip()
+    if not from_sub or not to_sub or not question:
+        return {"ok": False, "error": "from_sub / to_sub / question 必填"}
+
+    chunks: list[str] = []
+    try:
+        async for chunk in ask_remote_agent(
+            from_sub=from_sub,
+            to_sub=to_sub,
+            question=question,
+            purpose=req.get("purpose", ""),
+            context_hint=req.get("context_hint", ""),
+            max_tokens=int(req.get("max_tokens") or 500),
+        ):
+            chunks.append(chunk)
+    except PermissionError as e:
+        return {"ok": False, "error": str(e), "error_type": "denied"}
+    except ConnectionError as e:
+        return {"ok": False, "error": str(e), "error_type": "connection"}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "error_type": "internal"}
+
+    return {
+        "ok": True,
+        "answer": "".join(chunks),
+        "chunks_count": len(chunks),
+    }
 
 
 # Health
