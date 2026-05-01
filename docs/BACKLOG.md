@@ -442,6 +442,90 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 
 ---
 
+## ★★ M · 五一 5 天 sprint (5/1 ~ 5/5) — Phase 2 核心功能跃迁
+
+> **创建**: 2026-04-30 晚, 五一假期 5 天 (5/1 周五 ~ 5/5 周二) 全力做 Phase 2 5 大核心功能.
+> **目标**: 5 项中 4 项完整 ship + 1 项 (Skills Hub) MVP, **Plan D 协议 B 真实现 (单机 mock 验证)**.
+> **不在 5 天内的**: Journal 向量召回 (5/6+ 用公司 bge-m3 验), Plan D 跨 2 台真机测试 (5/6+ 公司多账号), RBAC/Quota/Win 跨平台 (Phase 1 末).
+
+### M.0 关键设计决策 (4-30 鸿波拍板)
+
+| 项 | 选项 | 备注 |
+|---|---|---|
+| Plan D 协议风格 | **B** MCP-style streaming (JSON-RPC 2.0 over SSE) | FastAPI 原生 SSE 不复杂, 跟 MCP 生态对接长期价值大 |
+| 隐私 spec 格式 | **A** ALLOW.md (默认 DENY) | 国央企合规默认显式授权 |
+| Registry 存哪 | **A** catfish-identity yaml 表 | 复用现有 SSO 基础, 1 天能完成 |
+
+### M.1 Day 1 · 5/1 周五 — 多模态 (9h, ship 完整)
+
+| ID | 项 | 时长 | 状态 |
+|---|---|---|---|
+| BL-M1.1 | macOS 原生听写接入 (Companion 🎤 → Tauri Rust → NSSpeechRecognizer) | 4h | ⬜ |
+| BL-M1.2 | 文件上传 UI (Companion 拖拽 / 选择 → FilePill chip) | 1h | ⬜ |
+| BL-M1.3 | 文件解析后端 (PDF pypdf / Excel openpyxl / Word python-docx → inject system prompt 顶部) | 4h | ⬜ |
+
+### M.2 Day 2 · 5/2 周六 — Skill 全生命周期 4 步 (9h, ship 完整)
+
+| ID | 项 | 时长 | 状态 |
+|---|---|---|---|
+| BL-M2.1 | Skill 版本管理 (SKILL.md frontmatter `version` 字段 + catfish_run_skill 加载兼容性检查) | 2h | ⬜ (= BL-L14) |
+| BL-M2.2 | Skill 下线 / deprecation (`deprecated: true` + 调用时 warning banner) | 2h | ⬜ (= BL-L15) |
+| BL-M2.3 | Skill 删除 (`catfish_skill_delete` 工具 + 仪表盘清理 + 提示员工) | 2h | ⬜ (= BL-L16) |
+| BL-M2.4 | Skill 完整审计 (`~/.catfish/skill_audit.jsonl` + Companion SkillAuditCard) | 3h | ⬜ (= BL-L17 + BL-C15) |
+
+### M.3 Day 3 · 5/3 周日 — Skills Hub MVP + Plan D 协议设计 (9h)
+
+| ID | 项 | 时长 | 状态 |
+|---|---|---|---|
+| BL-M3.1 | Skills Hub MVP 本机版 (`catfish_skill_install` 工具 + 仪表盘"已装/可装" 列表) | 5h | ⬜ (= BL-D1 简化, BL-L18) |
+| BL-M3.2 | Plan D 协议 spec (`docs/PLAN-D-PROTOCOL.md`): MCP JSON-RPC 2.0 over SSE + JWT 互信 + ALLOW.md format + audit spec | 4h | ⬜ |
+
+### M.4 Day 4 · 5/4 周一 — Plan D registry + A 端 + B 端 (10h)
+
+| ID | 项 | 时长 | 状态 |
+|---|---|---|---|
+| BL-M4.1 | Registry (catfish-identity `registry.yaml` + 路由查询 endpoint `/registry/lookup`) | 3h | ⬜ |
+| BL-M4.2 | A 端 (Companion 生成 A2A JWT + 调 SSE + UI 流式显示 B 鲶鱼回答) | 3h | ⬜ |
+| BL-M4.3 | B 端 (gateway `POST /a2a/ask` SSE endpoint + JWT 验签 + 隐私拦截 + 转 LLM + 流式返流) | 4h | ⬜ |
+
+### M.5 Day 5 · 5/5 周二 — Plan D 隐私 + audit + mock + demo (9-10h, ship 完整)
+
+| ID | 项 | 时长 | 状态 |
+|---|---|---|---|
+| BL-M5.1 | ALLOW.md spec + 关键词/正则匹配拦截器 (默认 DENY, 不用 LLM 判断) | 2h | ⬜ |
+| BL-M5.2 | A2A audit 双方记录 (A 调用记 A audit, B 应答记 B audit, 中央 gateway metadata) | 2h | ⬜ |
+| BL-M5.3 | 单机 mock 2 员工 (env `CATFISH_HOME=~/.catfish-alice` / `~/.catfish-bob`, 2 端口 / 2 SOUL/USER) | 4h | ⬜ |
+| BL-M5.4 | 真 A2A demo (Alice 鲶鱼问 Bob 鲶鱼"项目 X 上周进展", Bob 鲶鱼 ALLOW 项目 X 状态, 流式答) + 测试 + 文档 | 5h | ⬜ |
+| BL-M5.5 | commit + push + CHANGELOG 五一 sprint 总结 + BACKLOG ✅ 同步 | 1h | ⬜ |
+
+### M.6 5 天总账 (预期 ship)
+
+```
+完整 ship (代码 + 测试 + 文档):
+  ✅ 多模态语音 (macOS 原生听写)               BL-I1
+  ✅ 多模态文件上传 (PDF/Excel/Word)           BL-I2
+  ✅ Skill 版本管理                           BL-L14
+  ✅ Skill 下线 / deprecation                  BL-L15
+  ✅ Skill 删除                                BL-L16
+  ✅ Skill 完整审计                            BL-L17
+  ✅ Skills Hub 本机版 MVP                     BL-D1 (简化), BL-L18
+  ✅ ★ Plan D B 协议真实现 (单机 mock)         BL-E17 雏形 (单机), BL-E18 协议层
+
+5/6 上班后做:
+  ⬜ Journal 向量召回 (用公司 bge-m3)          BL-L8
+  ⬜ Plan D 跨 2 台真机 federation 测试        BL-E18 完整
+```
+
+### M.7 关键风险
+
+🟥 **macOS 听写 Tauri Rust 调用没集成过** — Day 1 上午 4h 调不通就 fallback Whisper.cpp (whisper-node)
+🟥 **SSE + JWT 跨实例验证调试容易踩坑** — Day 4 留 1h 余裕做 wireshark / curl 抓包
+🟥 **单机 mock 端口/路径冲突** — Day 4 末测一遍, 不要拖到 Day 5 才发现
+🟧 **5 月 demo 不演 Plan D** — Phase 3 Q4 ship 承诺别打脸, 这次 ship 是技术 ready 给 demo 后客户技术对接看
+🟧 **5 天连续 9-10h 高强度** — 每天早 9 晚 7 + 中午 1h 午休, 不熬夜
+
+---
+
 ## 总览统计 (v2)
 
 ```

@@ -51,6 +51,15 @@ Phase 4 · 集团级 agent mesh         [░░░░░░░░░░]  0% · 
 - ✅ Companion 仪表盘 (AuditCard / 模型分布 / catfish skills 显示)
 
 **待办 (demo 前必做, 5-1 ~ 5-15)**
+
+★ **五一 5 天 sprint (5/1~5/5) — Phase 2 核心功能跃迁** ← 详见 BACKLOG §M
+- 🔵 Day 1 多模态 (语音 macOS 原生听写 + 文件 PDF/Excel/Word)
+- 🔵 Day 2 Skill 全生命周期 4 步 (版本/下线/删除/审计)
+- 🔵 Day 3 Skills Hub MVP + Plan D 协议设计
+- 🔵 Day 4 Plan D registry + A 端 + B 端 (MCP JSON-RPC over SSE + JWT 互信)
+- 🔵 Day 5 Plan D 隐私 ALLOW.md + audit + 单机 mock 2 员工 + A2A demo
+
+5 月 demo 准备:
 - 🔴 真机彩排 ×2 (demo 前 3 天 + 前 1 天, 计时录屏复盘) ← BL-X8 / L1
 - 🔴 demo 前 7 天积累真实 employee_journal.md (没内容场景 4 演不出来) ← BL-L2
 - 🔴 实录 3 个 1 分钟真实 case 视频 ← BL-L19
@@ -59,6 +68,7 @@ Phase 4 · 集团级 agent mesh         [░░░░░░░░░░]  0% · 
 - 🟠 部门汇报模板 + EIS 截图带回来 ← BL-L3 / L4
 - 🟠 第 3 个 catfish skill (annual-summary 或 project-approval) ← BL-L6
 - 🟠 SSO 接入文档收尾 (给客户 IT 自助接入) ← BL-L21
+- 🟠 Journal 向量召回 (5/6 上班后用公司 bge-m3 验) ← BL-L8
 
 **风险**
 - 🟥 真机彩排没做过, **场景 4 跨 session 记忆**没在客户场景演过, 现场翻车概率不低
@@ -227,6 +237,7 @@ Phase 4 · 集团级 agent mesh         [░░░░░░░░░░]  0% · 
 | W17 (4-21~27) | 75% | 10% | 5% | gateway P0 + 仪表盘 + Companion v1 | hermes venv proxy |
 | W18 (4-28~5-4) | 85% | 15% | 8% | SSO 全链路 + Skill 系统 + 业务 skill | tool 调用模型选择 |
 | **W19 (4-29~5-5)** | **90%** | **20%** | **10%** | ★ 跨 session 上下文 + leadership 4 段 + 双 backend 错别字 + 演讲稿全套 + BACKLOG v2 + MATRIX | 真机彩排没做 |
+| **W19a (五一 sprint 5/1~5/5)** | **95%** (目标) | **35%** (目标) | **15%** (目标 ★) | 多模态 (语音+文件) + Skill 全生命周期 4 步 + Skills Hub MVP + **Plan D B 协议真实现 (单机 mock)** | macOS 听写 / SSE+JWT 跨实例 调试 |
 | W20 (5-6~12) | 95% (目标) | 25% | 12% | demo 前彩排 + journal 积累 + PPT + 视频 + SSO 客户文档 | (待) |
 | W21 (5-13~19) | 100% (目标) | 30% | 15% | 5 月 demo 完成 1-3 家客户 + PoC 邀请 | (待) |
 
