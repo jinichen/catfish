@@ -11,6 +11,10 @@
     "core:event:allow-unlisten",
     "core:webview:default",
     "core:window:default",
-    "shell:default"
+    "shell:default",
+    "global-shortcut:default",
+    "global-shortcut:allow-register",
+    "global-shortcut:allow-unregister",
+    "global-shortcut:allow-is-registered"
   ]
 }

@@ -13,11 +13,64 @@ mod tray;
 pub fn run() {
     env_logger::init();
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
-        .setup(|app| {
+    // 五一 sprint 5/5: Cmd+Shift+Space 召唤主窗口浮窗.
+    // 设计:
+    //   - 已显示并聚焦  → 隐藏 (再按一次收起)
+    //   - 已显示未聚焦  → 居中 + 置顶 + 抢焦
+    //   - 已隐藏        → 显示 + 居中 + 置顶 + 抢焦
+    // 全局快捷键, 任何 app 都能召唤鲶鱼.
+    #[cfg(desktop)]
+    let toggle_shortcut = tauri_plugin_global_shortcut::Shortcut::new(
+        Some(tauri_plugin_global_shortcut::Modifiers::SUPER | tauri_plugin_global_shortcut::Modifiers::SHIFT),
+        tauri_plugin_global_shortcut::Code::Space,
+    );
+
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init());
+
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(move |app, shortcut, event| {
+                    use tauri::Manager;
+                    use tauri_plugin_global_shortcut::ShortcutState;
+                    if shortcut == &toggle_shortcut && event.state() == ShortcutState::Pressed {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let visible = window.is_visible().unwrap_or(false);
+                            let focused = window.is_focused().unwrap_or(false);
+                            if visible && focused {
+                                let _ = window.hide();
+                            } else {
+                                let _ = window.show();
+                                let _ = window.center();
+                                let _ = window.set_always_on_top(true);
+                                let _ = window.unminimize();
+                                let _ = window.set_focus();
+                            }
+                        }
+                    }
+                })
+                .build(),
+        );
+    }
+
+    builder
+        .setup(move |app| {
             #[cfg(desktop)]
             tray::install(app.handle())?;
+
+            // 注册全局快捷键 Cmd+Shift+Space (浮窗召唤)
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_global_shortcut::GlobalShortcutExt;
+                if let Err(e) = app.global_shortcut().register(toggle_shortcut) {
+                    log::warn!("注册 Cmd+Shift+Space 失败 (已被其他 app 占用?): {e}");
+                } else {
+                    log::info!("已注册全局快捷键 Cmd+Shift+Space → 召唤鲶鱼浮窗");
+                }
+            }
 
             // 五一 sprint Day 1: dev build 启动自动开 DevTools (debug_assertions 只在 cargo run / tauri dev 为 true).
             // release build (cargo build --release / tauri build) 不开, 不影响员工端.
