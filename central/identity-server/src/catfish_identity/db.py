@@ -28,13 +28,14 @@ from typing import Any, AsyncIterator
 
 from pathlib import Path
 
-import asyncpg
 import yaml
 
 logger = logging.getLogger("catfish.db")
 
 
-_POOL: asyncpg.Pool | None = None
+# asyncpg 懒 import: dev / 单测 (没 PG 配置 / 没装 asyncpg) 走 yaml fallback,
+# 不应该顶层 import 让 db.py 整个模块炸. 五一 sprint 5/2 收尾改.
+_POOL = None  # type: ignore[var-annotated]
 _CONFIG_CACHE: dict | None = None
 
 
@@ -102,10 +103,11 @@ def db_pool_config() -> dict:
     }
 
 
-async def get_pool() -> asyncpg.Pool | None:
-    """全局连接池. 没配 DB URL 返 None.
+async def get_pool():
+    """全局连接池. 没配 DB URL 或没装 asyncpg 返 None.
 
     第一次调用时 lazy 创建, 后续复用.
+    asyncpg 懒 import — 没装也能跑, 静默走 yaml/sqlite fallback (五一 5/2 收尾).
     """
     global _POOL
     if _POOL is not None:
@@ -113,6 +115,12 @@ async def get_pool() -> asyncpg.Pool | None:
 
     url = db_url()
     if not url:
+        return None
+
+    try:
+        import asyncpg  # lazy
+    except ImportError:
+        logger.warning("asyncpg 未装, fallback yaml/sqlite. (pip install asyncpg)")
         return None
 
     try:
@@ -145,6 +153,8 @@ def _mask_url(url: str) -> str:
 # ── 启动时创建 schema (idempotent) ──────────────────────────
 
 
+# identity-server 自己的表: users + registry_agents.
+# gateway 的 quota_events / gateway_audit 由 gateway alembic 管 (五一 sprint 5/2 收尾分家).
 SCHEMA_SQL = """
 -- Users (catfish-identity)
 CREATE TABLE IF NOT EXISTS users (
@@ -170,20 +180,6 @@ CREATE TABLE IF NOT EXISTS registry_agents (
     last_seen       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_registry_last_seen ON registry_agents(last_seen);
-
--- Quota events (gateway)
-CREATE TABLE IF NOT EXISTS quota_events (
-    id              BIGSERIAL PRIMARY KEY,
-    ts_ms           BIGINT NOT NULL,
-    user_email      TEXT NOT NULL,
-    department      TEXT NOT NULL DEFAULT '',
-    model           TEXT NOT NULL,
-    tokens_in       BIGINT NOT NULL DEFAULT 0,
-    tokens_out      BIGINT NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS idx_quota_ts_user  ON quota_events(ts_ms, user_email);
-CREATE INDEX IF NOT EXISTS idx_quota_ts_model ON quota_events(ts_ms, model);
-CREATE INDEX IF NOT EXISTS idx_quota_ts_dept  ON quota_events(ts_ms, department);
 """
 
 

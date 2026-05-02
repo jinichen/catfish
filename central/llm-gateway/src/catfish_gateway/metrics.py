@@ -75,8 +75,62 @@ def _set_audit_path(path: Path | None) -> None:
     _audit_path = path
 
 
-def _persist_record(record: dict) -> None:
-    """写一行 JSONL 到 audit 文件. 失败永远不抛."""
+def _use_pg() -> bool:
+    """有 CATFISH_DB_URL → PG. CATFISH_AUDIT_PATH 仍优先走 jsonl (单测 / 客户特意要 jsonl)."""
+    if os.environ.get("CATFISH_AUDIT_PATH"):
+        return False
+    return bool(os.environ.get("CATFISH_DB_URL", "").strip())
+
+
+def _pg_conn():
+    """psycopg sync 连接, 一次性. 五一 sprint 5/2 收尾加."""
+    import psycopg  # 懒 import
+    return psycopg.connect(os.environ["CATFISH_DB_URL"])
+
+
+def _persist_record_pg(record: dict) -> bool:
+    """PG 写一行到 gateway_audit 表. 返 True 成功. 失败 caller fallback jsonl."""
+    try:
+        with _pg_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO gateway_audit
+                       (ts_ms, user_email, model, tokens_in, tokens_out, tokens_total,
+                        latency_ms, ttft_ms, status, error_code, error_msg,
+                        auth_method, security_concerns, extra)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb)""",
+                    (
+                        int(record.get("ts", time.time())) * 1000,
+                        record.get("user", ""),
+                        record.get("model", ""),
+                        int(record.get("prompt_tokens", 0)),
+                        int(record.get("completion_tokens", 0)),
+                        int(record.get("total_tokens", 0)),
+                        int(round(record.get("latency_ms", 0))),
+                        int(record["ttft_ms"]) if record.get("ttft_ms") is not None else None,
+                        record.get("status", "ok"),
+                        "",  # error_code 暂不拆 (老 jsonl 没拆)
+                        record.get("error", "")[:500],
+                        "unknown",  # auth_method 暂不传 (caller 还没传过来, 后续拓展)
+                        json.dumps(
+                            [record["security_concern"]] if record.get("security_concern") else []
+                        ),
+                        json.dumps({k: v for k, v in record.items() if k not in {
+                            "ts", "type", "user", "model",
+                            "prompt_tokens", "completion_tokens", "total_tokens",
+                            "latency_ms", "ttft_ms", "status", "error", "security_concern",
+                        }}),
+                    ),
+                )
+            conn.commit()
+        return True
+    except Exception as e:
+        logger.warning("metrics: PG 写 gateway_audit 失败: %s", e)
+        return False
+
+
+def _persist_record_jsonl(record: dict) -> None:
+    """老 jsonl 路径 (sqlite/dev fallback). 失败永远不抛."""
     try:
         line = json.dumps(record, ensure_ascii=False) + "\n"
     except Exception:  # noqa: BLE001
@@ -90,8 +144,20 @@ def _persist_record(record: dict) -> None:
             with path.open("a", encoding="utf-8") as f:
                 f.write(line)
     except OSError as e:
-        # 磁盘满 / 权限错 / 路径不存在 — 不影响 LLM 请求主流程
         logger.warning("metrics: 写 %s 失败: %s", path, e)
+
+
+def _persist_record(record: dict) -> None:
+    """五一 sprint 5/2 收尾: PG 主, jsonl 兜底.
+
+    PG 配置了走 PG; PG 失败 fallback jsonl 不丢数据; 没 PG 走 jsonl 老路径.
+    """
+    if _use_pg():
+        if _persist_record_pg(record):
+            return
+        # PG 失败 — 兜到 jsonl 别丢
+        logger.warning("metrics: PG 失败, fallback jsonl")
+    _persist_record_jsonl(record)
 
 
 def log_request_metadata(
@@ -162,6 +228,8 @@ def read_events(
 ) -> list[dict]:
     """读 audit log, 给上层 (admin 后台 / 客户 IT 自审 / billing) 用.
 
+    五一 sprint 5/2 收尾: PG 配了从 PG 读 (索引快 100x), 否则 jsonl 老路径.
+
     Args:
         since_unix: 只要 ts >= 这个 unix 秒的事件. None = 所有
         user_filter: 只看某个 user id 的事件. None = 所有
@@ -174,6 +242,15 @@ def read_events(
 
     永远不抛. 读失败返空列表.
     """
+    if _use_pg():
+        return _read_events_pg(
+            since_unix=since_unix,
+            user_filter=user_filter,
+            model_filter=model_filter,
+            status_filter=status_filter,
+            limit=limit,
+        )
+
     path = audit_path()
     if not path.is_file():
         return []
@@ -205,4 +282,82 @@ def read_events(
         if status_filter and event.get("status") != status_filter:
             continue
         out.append(event)
+    return out
+
+
+def _read_events_pg(
+    *,
+    since_unix: int | None,
+    user_filter: str | None,
+    model_filter: str | None,
+    status_filter: str | None,
+    limit: int,
+) -> list[dict]:
+    """PG 路径 — 走索引, where + order by + limit 都在 DB 侧, 比 jsonl 快很多."""
+    where = []
+    params: list = []
+    if since_unix is not None:
+        where.append("ts_ms >= %s")
+        params.append(since_unix * 1000)
+    if user_filter:
+        where.append("user_email = %s")
+        params.append(user_filter)
+    if model_filter:
+        where.append("model = %s")
+        params.append(model_filter)
+    if status_filter:
+        where.append("status = %s")
+        params.append(status_filter)
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    sql = (
+        f"SELECT ts_ms, user_email, model, tokens_in, tokens_out, tokens_total, "
+        f"       latency_ms, ttft_ms, status, error_msg, security_concerns, extra "
+        f"FROM gateway_audit {where_sql} "
+        f"ORDER BY ts_ms DESC LIMIT %s"
+    )
+    params.append(limit)
+
+    try:
+        with _pg_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+    except Exception as e:
+        logger.warning("metrics: PG 读 gateway_audit 失败: %s", e)
+        return []
+
+    out = []
+    for row in rows:
+        ts_ms, user, model, tin, tout, ttot, lat, ttft, status, err, concerns, extra = row
+        # 还原成 jsonl 老格式 (跟 _persist_record_jsonl 写的一致), caller 不知道 backend 切了
+        ev: dict = {
+            "ts": int(ts_ms / 1000),
+            "type": "llm_request",
+            "user": user,
+            "model": model,
+            "prompt_tokens": tin,
+            "completion_tokens": tout,
+            "total_tokens": ttot,
+            "latency_ms": float(lat),
+            "status": status,
+        }
+        if ttft is not None:
+            ev["ttft_ms"] = float(ttft)
+        if err:
+            ev["error"] = err
+        # PG 里 concerns 是 jsonb 数组; jsonl 老格式只存第一个 (字符串). 取第一保兼容.
+        if concerns:
+            try:
+                arr = concerns if isinstance(concerns, list) else json.loads(concerns)
+                if arr:
+                    ev["security_concern"] = arr[0]
+            except Exception:
+                pass
+        if extra:
+            try:
+                e_dict = extra if isinstance(extra, dict) else json.loads(extra)
+                ev.update({k: v for k, v in e_dict.items() if k not in ev})
+            except Exception:
+                pass
+        out.append(ev)
     return out

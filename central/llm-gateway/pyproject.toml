@@ -18,6 +18,13 @@ dependencies = [
     "python-dotenv>=1.0.0",
     # 五一 sprint 5/2 BL-L28: ALLOW.md 关键词匹配的中文分词
     "jieba>=0.42.0",
+    # 五一 sprint 5/2 收尾: gateway 自己的 PG 池 (跟 identity-server 共享 PG 实例)
+    "asyncpg>=0.29.0",
+    # quota / audit 走 sync sqlite OR sync PG. 用 psycopg3 替代 psycopg2 (现代 + 性能好).
+    "psycopg[binary]>=3.1",
+    # alembic migration (替代 idempotent CREATE TABLE)
+    "alembic>=1.13",
+    "sqlalchemy>=2.0",
 ]
 
 [project.optional-dependencies]

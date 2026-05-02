@@ -1,4 +1,4 @@
-"""Quota · 三维配额限流 — 五一 sprint 5/3 (BL-D9).
+"""Quota · 三维配额限流 — 五一 sprint 5/3 (BL-D9) + 5/2 收尾 PG migration.
 
 # 设计 (docs/QUOTA-DESIGN.md v0.1)
 
@@ -9,13 +9,20 @@
 
 # Sliding window
 
-sqlite 存近 1h / 近 7 天 token 用量 events. 每分钟 / 每天窗口实时累加.
-~/.catfish/quota.db, 每查 < 1ms.
+存 1h / 近 7 天 token 用量 events. 每分钟 / 每天窗口实时累加.
+
+# 双 backend (五一 sprint 5/2 收尾加)
+
+- **PG (生产)**: env CATFISH_DB_URL 配 → quota_events 表, 跨 gateway 实例共享
+- **sqlite (dev / 单测)**: ~/.catfish/quota.db 兜底, 没 PG 配置时走
+
+切换透明 — 公共 API (record_usage / sum_*_since / top_users / audit_summary_dept)
+不变, 内部 _use_pg() 检测后分发. 表名 schema 一致 (PG: quota_events, sqlite: 同名).
 
 # 估算 vs 真实
 
 请求来时用 estimated tokens (粗估 4 字符 = 1 token, 至少 1000) 检查 quota.
-请求完成后用 response.usage 真实 tokens 记到 sqlite.
+请求完成后用 response.usage 真实 tokens 记到存储.
 """
 
 from __future__ import annotations
@@ -31,6 +38,42 @@ from typing import Any
 import yaml
 
 logger = logging.getLogger("catfish.gateway.quota")
+
+
+# ── Backend 选择 (PG 主, sqlite 兜底) ─────────────────────────
+
+
+def _use_pg() -> bool:
+    """有 CATFISH_DB_URL → PG. CATFISH_QUOTA_DB env (sqlite override) 仍优先 (单测用).
+
+    单测里 conftest 设 CATFISH_QUOTA_DB → 走 sqlite, 不依赖真 PG.
+    """
+    if os.environ.get("CATFISH_QUOTA_DB"):
+        return False  # 单测显式 sqlite 路径
+    return bool(os.environ.get("CATFISH_DB_URL", "").strip())
+
+
+_PG_CONN_INFO: str | None = None  # 缓存连接字符串, 避免重读 env
+
+
+def _pg_conninfo() -> str:
+    """psycopg 连接字符串. lazy 缓存."""
+    global _PG_CONN_INFO
+    if _PG_CONN_INFO is not None:
+        return _PG_CONN_INFO
+    url = os.environ.get("CATFISH_DB_URL", "").strip()
+    _PG_CONN_INFO = url
+    return url
+
+
+def _pg_conn():
+    """开一个 psycopg sync 连接. 一次性, caller close.
+
+    不用池: quota 写量不大 (每个 LLM 请求 1 次 INSERT), 连接开销可接受.
+    后续要池化加 psycopg_pool.
+    """
+    import psycopg  # 懒 import, 没装 PG 也能跑 sqlite mode
+    return psycopg.connect(_pg_conninfo())
 
 
 def _quota_db_path() -> Path:
@@ -201,45 +244,80 @@ def record_usage(
     tokens_in: int,
     tokens_out: int,
 ) -> None:
-    """请求完成后记真实 token 用量. 失败静默不影响主流程."""
+    """请求完成后记真实 token 用量. 失败静默不影响主流程.
+
+    PG (CATFISH_DB_URL 配) 主路径, sqlite 兜底.
+    """
+    ts_ms = int(time.time() * 1000)
+
+    if _use_pg():
+        try:
+            with _pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO quota_events (ts_ms, user_email, department, model, tokens_in, tokens_out) "
+                        "VALUES (%s, %s, %s, %s, %s, %s)",
+                        (ts_ms, user_email, department, model,
+                         int(tokens_in), int(tokens_out)),
+                    )
+                conn.commit()
+            return
+        except Exception as e:
+            logger.warning("record_usage PG 失败 (fallback sqlite): %s", e)
+            # 不 return — 继续走 sqlite 兜底, 别丢数据
+
     try:
         conn = _get_conn()
         with conn:
             conn.execute(
                 "INSERT INTO quota_events VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    int(time.time() * 1000),
-                    user_email,
-                    department,
-                    model,
-                    int(tokens_in),
-                    int(tokens_out),
-                ),
+                (ts_ms, user_email, department, model,
+                 int(tokens_in), int(tokens_out)),
             )
         conn.close()
     except Exception as e:
-        logger.warning("record_usage 失败: %s", e)
+        logger.warning("record_usage sqlite 失败: %s", e)
 
 
-def _sum_tokens(where_clause: str, params: tuple[Any, ...]) -> int:
-    """通用 sum 查询. cutoff_ms 在 params 里."""
+def _sum_tokens(where_clause_sqlite: str, where_clause_pg: str, params: tuple[Any, ...]) -> int:
+    """通用 sum 查询. PG / sqlite 双 backend, where 子句 placeholder 不同 (? vs %s).
+
+    cutoff_ms 在 params 里. PG 走 ts_ms 字段, sqlite 老 schema 字段名 ts.
+    """
+    if _use_pg():
+        try:
+            with _pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"SELECT COALESCE(SUM(tokens_in + tokens_out), 0) "
+                        f"FROM quota_events WHERE {where_clause_pg}",
+                        params,
+                    )
+                    row = cur.fetchone()
+            return int((row[0] if row else 0) or 0)
+        except Exception as e:
+            logger.warning("_sum_tokens PG 失败 (where=%s): %s", where_clause_pg, e)
+            return 0
+
     try:
         conn = _get_conn()
         cur = conn.execute(
-            f"SELECT COALESCE(SUM(tokens_in + tokens_out), 0) FROM quota_events WHERE {where_clause}",
+            f"SELECT COALESCE(SUM(tokens_in + tokens_out), 0) "
+            f"FROM quota_events WHERE {where_clause_sqlite}",
             params,
         )
         result = cur.fetchone()[0]
         conn.close()
         return int(result or 0)
     except Exception as e:
-        logger.warning("_sum_tokens 失败 (where=%s): %s", where_clause, e)
+        logger.warning("_sum_tokens sqlite 失败 (where=%s): %s", where_clause_sqlite, e)
         return 0
 
 
 def sum_tokens_user_since(user_email: str, cutoff_ms: int) -> int:
     return _sum_tokens(
         "user_email = ? AND ts >= ?",
+        "user_email = %s AND ts_ms >= %s",
         (user_email, cutoff_ms),
     )
 
@@ -247,6 +325,7 @@ def sum_tokens_user_since(user_email: str, cutoff_ms: int) -> int:
 def sum_tokens_model_since(model: str, cutoff_ms: int) -> int:
     return _sum_tokens(
         "model = ? AND ts >= ?",
+        "model = %s AND ts_ms >= %s",
         (model, cutoff_ms),
     )
 
@@ -254,8 +333,162 @@ def sum_tokens_model_since(model: str, cutoff_ms: int) -> int:
 def sum_tokens_dept_since(department: str, cutoff_ms: int) -> int:
     return _sum_tokens(
         "department = ? AND ts >= ?",
+        "department = %s AND ts_ms >= %s",
         (department, cutoff_ms),
     )
+
+
+# ── 部门级聚合 (manager / admin Dashboard 用) ─────────────────
+#
+# 五一 sprint 5/2 RBAC: manager 看本部门 quota / audit, admin 全权.
+# 双 backend (PG 主, sqlite 兜底). 五一 sprint 5/2 收尾加 PG.
+
+
+def top_users_in_department(
+    department: str, cutoff_ms: int, limit: int = 10
+) -> list[dict]:
+    """部门内 top N 员工今日 token 用量 (从大到小). PG / sqlite 双 backend."""
+    if _use_pg():
+        try:
+            with _pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT user_email, SUM(tokens_in + tokens_out) AS used
+                           FROM quota_events
+                           WHERE department = %s AND ts_ms >= %s
+                           GROUP BY user_email
+                           ORDER BY used DESC
+                           LIMIT %s""",
+                        (department, cutoff_ms, limit),
+                    )
+                    rows = cur.fetchall()
+            return [{"user_email": r[0], "tokens_used": int(r[1] or 0)} for r in rows]
+        except Exception as e:
+            logger.warning("top_users_in_department PG 失败: %s", e)
+            return []
+
+    try:
+        conn = _get_conn()
+        cur = conn.execute(
+            """SELECT user_email, SUM(tokens_in + tokens_out) AS used
+               FROM quota_events
+               WHERE department = ? AND ts >= ?
+               GROUP BY user_email
+               ORDER BY used DESC
+               LIMIT ?""",
+            (department, cutoff_ms, limit),
+        )
+        rows = cur.fetchall()
+        conn.close()
+        return [{"user_email": r[0], "tokens_used": int(r[1] or 0)} for r in rows]
+    except Exception as e:
+        logger.warning("top_users_in_department sqlite 失败: %s", e)
+        return []
+
+
+def audit_summary_dept_since(department: str, cutoff_ms: int) -> dict:
+    """部门级 audit 聚合 — 给 /api/audit/department/{dept}. PG / sqlite 双 backend.
+
+    返:
+      - request_count: 部门今日请求总数
+      - total_tokens:  部门今日 token 总数
+      - by_model:      [{model, count, total_tokens}]
+      - by_user:       [{user_email, count, total_tokens}] (top 10)
+    """
+    empty = {
+        "request_count": 0,
+        "total_tokens": 0,
+        "by_model": [],
+        "by_user": [],
+    }
+
+    if _use_pg():
+        try:
+            with _pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT COUNT(*), COALESCE(SUM(tokens_in + tokens_out), 0)
+                           FROM quota_events WHERE department = %s AND ts_ms >= %s""",
+                        (department, cutoff_ms),
+                    )
+                    row = cur.fetchone()
+                    request_count = int(row[0] or 0)
+                    total_tokens = int(row[1] or 0)
+
+                    cur.execute(
+                        """SELECT model, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS used
+                           FROM quota_events WHERE department = %s AND ts_ms >= %s
+                           GROUP BY model ORDER BY used DESC LIMIT 20""",
+                        (department, cutoff_ms),
+                    )
+                    by_model = [
+                        {"model": r[0], "count": int(r[1]), "total_tokens": int(r[2] or 0)}
+                        for r in cur.fetchall()
+                    ]
+
+                    cur.execute(
+                        """SELECT user_email, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS used
+                           FROM quota_events WHERE department = %s AND ts_ms >= %s
+                           GROUP BY user_email ORDER BY used DESC LIMIT 10""",
+                        (department, cutoff_ms),
+                    )
+                    by_user = [
+                        {"user_email": r[0], "count": int(r[1]), "total_tokens": int(r[2] or 0)}
+                        for r in cur.fetchall()
+                    ]
+            return {
+                "request_count": request_count,
+                "total_tokens": total_tokens,
+                "by_model": by_model,
+                "by_user": by_user,
+            }
+        except Exception as e:
+            logger.warning("audit_summary_dept_since PG 失败: %s", e)
+            return empty
+
+    try:
+        conn = _get_conn()
+        cur = conn.execute(
+            """SELECT COUNT(*), COALESCE(SUM(tokens_in + tokens_out), 0)
+               FROM quota_events WHERE department = ? AND ts >= ?""",
+            (department, cutoff_ms),
+        )
+        row = cur.fetchone()
+        request_count = int(row[0] or 0)
+        total_tokens = int(row[1] or 0)
+
+        cur = conn.execute(
+            """SELECT model, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS used
+               FROM quota_events WHERE department = ? AND ts >= ?
+               GROUP BY model ORDER BY used DESC LIMIT 20""",
+            (department, cutoff_ms),
+        )
+        by_model = [
+            {"model": r[0], "count": int(r[1]), "total_tokens": int(r[2] or 0)}
+            for r in cur.fetchall()
+        ]
+
+        cur = conn.execute(
+            """SELECT user_email, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS used
+               FROM quota_events WHERE department = ? AND ts >= ?
+               GROUP BY user_email ORDER BY used DESC LIMIT 10""",
+            (department, cutoff_ms),
+        )
+        by_user = [
+            {"user_email": r[0], "count": int(r[1]), "total_tokens": int(r[2] or 0)}
+            for r in cur.fetchall()
+        ]
+
+        conn.close()
+        return {
+            "request_count": request_count,
+            "total_tokens": total_tokens,
+            "by_model": by_model,
+            "by_user": by_user,
+        }
+    except Exception as e:
+        logger.warning("audit_summary_dept_since sqlite 失败: %s", e)
+        return empty
 
 
 # ── 检查接口 ────────────────────────────────────────────────
