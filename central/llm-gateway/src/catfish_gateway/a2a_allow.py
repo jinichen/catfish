@@ -154,9 +154,64 @@ def parse_allow_md(text: str) -> AllowConfig:
     return config
 
 
+# jieba 优先, 没装就回退子串. 模块级 cache 避免每次 check_allow 都 import.
+_JIEBA = None
+_JIEBA_TRIED = False
+
+
+def _get_jieba():
+    """懒加载 jieba. 返 module 或 None (没装)."""
+    global _JIEBA, _JIEBA_TRIED
+    if _JIEBA_TRIED:
+        return _JIEBA
+    _JIEBA_TRIED = True
+    try:
+        import jieba  # type: ignore
+        # 静默 jieba 启动 log (logging.INFO 默认输出 "Building prefix dict...")
+        jieba.setLogLevel(logging.WARNING)
+        _JIEBA = jieba
+    except ImportError:
+        logger.warning(
+            "jieba 未安装, ALLOW.md 关键词匹配走子串回退 (中文场景准确率低). "
+            "建议: pip install jieba"
+        )
+        _JIEBA = None
+    return _JIEBA
+
+
+def _tokenize(text: str) -> set[str]:
+    """jieba 分词 → 小写 token 集合 (去重 + 过滤空白)."""
+    jieba = _get_jieba()
+    if jieba is None:
+        # 回退: 按非字母数字切, 当作粗糙 token
+        import re as _re
+        toks = _re.split(r"\W+", text.lower())
+        return {t for t in toks if t}
+    tokens = jieba.lcut(text.lower())
+    return {t for t in (s.strip() for s in tokens) if t}
+
+
 def _matches_keyword(question: str, keyword: str) -> bool:
-    """检查 question 是否包含 keyword. 简单子串匹配, 大小写不敏感."""
-    return keyword.lower() in question.lower()
+    """token-overlap 匹配 — keyword 全部 token 都在 question 中即命中.
+
+    BL-L28 (五一 sprint 5/2 加, 替代旧版子串匹配).
+    旧子串匹配在中文有缺陷: '项目 X 进展' 不命中 '项目 X 上周进展' (中间插字符就 fail).
+
+    新逻辑:
+      - jieba 分词 question + keyword
+      - keyword 的所有 token 是 question token 集合的子集 → 命中
+      - 例 keyword='项目 X 进展' tokens={项目, X, 进展}
+           question='项目 X 上周进展' tokens={项目, X, 上周, 进展}
+           subset → 命中 ✅
+      - 例 keyword='项目 X', question='项目 Y' (不同标识符) → 不命中 ✅
+
+    回退: jieba 没装时按 \\W+ 粗略切词 (英文够用, 中文勉强).
+    """
+    kw_tokens = _tokenize(keyword)
+    if not kw_tokens:
+        return False
+    q_tokens = _tokenize(question)
+    return kw_tokens.issubset(q_tokens)
 
 
 def _matches_constraint(constraint: dict[str, str], from_attrs: dict[str, str]) -> bool:

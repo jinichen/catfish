@@ -27,7 +27,7 @@ import sqlite3
 import subprocess
 import tempfile
 import time
-from datetime import datetime, time as dtime, timedelta
+from datetime import datetime, time as dtime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -2044,7 +2044,7 @@ def run_skill(args: Dict[str, Any]) -> Dict[str, Any]:
     # 真调 — 计时 + audit
     started_at = time.time()
     audit_event: Dict[str, Any] = {
-        "ts": datetime.utcnow().isoformat() + "Z",
+        "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "skill_path": skill_path,
         "skill_version": metadata["version"],
         "deprecated": metadata["deprecated"],
@@ -2273,7 +2273,7 @@ def skill_install(args: Dict[str, Any]) -> Dict[str, Any]:
 
     target_dir = root / namespace / skill_name
     audit_event: Dict[str, Any] = {
-        "ts": datetime.utcnow().isoformat() + "Z",
+        "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "event_type": "install",
         "skill_path": f"{namespace}/{skill_name}",
         "skill_version": metadata["version"],
@@ -2394,7 +2394,7 @@ def skill_delete(args: Dict[str, Any]) -> Dict[str, Any]:
     backup_dir = trash_root / f"{ts}-{basename}"
 
     audit_event: Dict[str, Any] = {
-        "ts": datetime.utcnow().isoformat() + "Z",
+        "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "event_type": "delete",
         "skill_path": skill_path,
         "reason": reason[:500],

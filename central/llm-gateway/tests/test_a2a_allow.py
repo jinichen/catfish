@@ -167,3 +167,38 @@ def test_empty_question_default_deny(config: AllowConfig) -> None:
     """空 question 不命中任何关键词 → 默认拒."""
     allowed, _ = check_allow("", config)
     assert allowed is False
+
+
+# ── BL-L28: token-overlap (中文分词) 匹配 ────────────────────
+
+
+def test_token_overlap_chinese_insertion(config: AllowConfig) -> None:
+    """BL-L28: 关键词 '项目 X 进展' 在 question 中间插字符也命中.
+
+    旧子串匹配下 '项目 X 上周进展' 不命中 '项目 X 进展' (子串失败),
+    新 token-overlap 应命中.
+    """
+    allowed, reason = check_allow("项目 X 上周进展怎么样", config)
+    assert allowed is True
+    assert "项目 X 进展" in reason
+
+
+def test_token_overlap_chinese_no_space(config: AllowConfig) -> None:
+    """中文连写 (无空格) 也应正确分词命中."""
+    config2 = parse_allow_md("## 公开\n- 项目X进展\ndeny:\n")
+    allowed, _ = check_allow("项目X上周进展", config2)
+    assert allowed is True
+
+
+def test_token_overlap_different_identifier_not_match(config: AllowConfig) -> None:
+    """同结构但 X→Y 不同标识符, 不应匹配."""
+    # config 只允许 '项目 X 进展', 不允许 '项目 Y 进展'
+    allowed, _ = check_allow("项目 Y 上周进展怎么样", config)
+    # 'Y' token 不在 keyword token 集合, 主关键词的全 subset 检查 fail
+    assert allowed is False
+
+
+def test_token_overlap_word_in_sentence(config: AllowConfig) -> None:
+    """单词关键词嵌在长句中, 命中 (子串就行, token 也行)."""
+    allowed, _ = check_allow("我下周想问下你周报怎么写", config)
+    assert allowed is True  # '周报' token 命中
