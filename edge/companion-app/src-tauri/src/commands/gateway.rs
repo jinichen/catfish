@@ -45,9 +45,14 @@ pub async fn gateway_start() -> Result<(), String> {
             // gateway 自己读 PORT 环境变量决定监听端口; 我们把 endpoints 配置
             // 透传过去, 保证前后端口一致 (员工只用配一个 CATFISH_GATEWAY_PORT)
             ("PORT".into(), ep.gateway_port.to_string()),
-            // 五一 sprint 5/2 修: 显式 CATFISH_ENV=dev, 防父进程 (Mac.app launch 环境)
-            // 透传 prod 污染 gateway, 导致 /api/dev/users 切换器 404. 见 autostart.rs.
-            ("CATFISH_ENV".into(), "dev".into()),
+            // 五一 sprint 5/2: 默认 dev, opt-in prod 走 CATFISH_AUTOSTART_ENV. 见 autostart.rs.
+            (
+                "CATFISH_ENV".into(),
+                std::env::var("CATFISH_AUTOSTART_ENV")
+                    .ok()
+                    .filter(|v| !v.is_empty())
+                    .unwrap_or_else(|| "dev".to_string()),
+            ),
             // gateway 内部仍可走代理调外网模型，所以 HTTPS_PROXY 透传
             // gateway 自己的 network.py 会处理代理可达性
         ],

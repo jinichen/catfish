@@ -59,10 +59,20 @@ pub async fn ensure_gateway_running() {
     };
 
     let ep = endpoints::endpoints();
-    // 五一 sprint 5/2 修: 显式传 CATFISH_ENV=dev, 让 dev 多账号 + /api/dev/users 可用.
-    // 不显式传时 Companion 父进程若有 CATFISH_ENV=prod (Mac.app 启动环境继承),
-    // 会污染 gateway, /api/dev/users 返 404, 切换器拉空.
-    // 客户生产部署是另起 gateway (不通过 Companion autostart), 互不干扰.
+    // 五一 sprint 5/2: Companion autostart 默认 dev 模式 (本机 demo / 测试).
+    //
+    // 切回 prod (演示真 SSO 登录 / 客户验收) 两种方式:
+    //   1. 设 CATFISH_AUTOSTART_ENV=prod 启 Companion (临时, 重启 Companion 生效)
+    //      $ CATFISH_AUTOSTART_ENV=prod open /Applications/Catfish\ Companion.app
+    //   2. 真生产部署 — 别用 Companion autostart, 远程 gateway + VITE_CATFISH_GATEWAY_URL
+    //
+    // 不直接读 CATFISH_ENV: 因为 Mac .app 父进程可能继承 launchctl/shell 设的 prod,
+    // 误污染 dev 体验 (历史踩坑). 用独立 var CATFISH_AUTOSTART_ENV 显式 opt-in.
+    let autostart_env = std::env::var("CATFISH_AUTOSTART_ENV")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "dev".to_string());
+    log::info!("autostart: gateway 将以 CATFISH_ENV={autostart_env} 启动");
     let cfg = process::SpawnConfig {
         program: python,
         args: vec!["-m".into(), "catfish_gateway.app".into()],
@@ -70,7 +80,7 @@ pub async fn ensure_gateway_running() {
         working_dir: dir,
         env: vec![
             ("PORT".into(), ep.gateway_port.to_string()),
-            ("CATFISH_ENV".into(), "dev".into()),
+            ("CATFISH_ENV".into(), autostart_env),
         ],
     };
 
