@@ -2,16 +2,20 @@ import { useEffect } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import AuthBanner from "./components/AuthBanner";
-import BrandHeader from "./components/BrandHeader";
+import DevUserSwitcher from "./components/DevUserSwitcher";
 import LoginGate from "./components/LoginGate";
 import TabBar from "./components/TabBar";
 import ChatTab from "./tabs/Chat/ChatTab";
 import ConsoleTab from "./tabs/Console/ConsoleTab";
 import DashboardTab from "./tabs/Dashboard/DashboardTab";
 import { useUIStore } from "./store/ui";
+import { useProactiveScheduler } from "./hooks/useProactiveScheduler";
 
 export default function App() {
   const activeTab = useUIStore((s) => s.activeTab);
+
+  // BL-E13 主动闲聊: 每分钟看一次, 9:30 / 14:00 / 17:30 自动 macOS 通知 + 起话题.
+  useProactiveScheduler();
 
   // 五一 sprint 5/5: Esc 隐藏浮窗 (配合 Cmd+Shift+Space 召唤)
   // 输入框聚焦时 Esc 由组件自己处理 (e.g. 关闭弹层); 这里只在 body 聚焦时拦截.
@@ -41,11 +45,13 @@ export default function App() {
 function AppShell({ activeTab }: { activeTab: string }) {
   // "会话" tab 已并入 "对话" 左侧 sidebar (P0-3.1).
   // 对话 tab 自己管 padding/scroll, 不复用 .app-main padding
+  // 品牌 (鲶鱼 Companion) 已在 macOS 原生标题栏显示, 应用内不再加 BrandHeader.
+  // 版本号 v0.1.0 移到 Dashboard IdentityCard 的"版本"行.
   if (activeTab === "chat") {
     return (
       <div className="app-shell">
         <AuthBanner />
-        <BrandHeader />
+        <DevUserSwitcher />
         <TabBar />
         <main style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
           <ChatTab />
@@ -57,7 +63,7 @@ function AppShell({ activeTab }: { activeTab: string }) {
   return (
     <div className="app-shell">
       <AuthBanner />
-      <BrandHeader />
+      <DevUserSwitcher />
       <TabBar />
       <main className="app-main">
         {activeTab === "console" && <ConsoleTab />}

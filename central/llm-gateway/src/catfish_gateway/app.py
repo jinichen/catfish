@@ -409,6 +409,20 @@ async def api_dev_users() -> dict[str, Any]:
     return {"users": list_dev_users()}
 
 
+# /api/proactive/starter — 主动闲聊 BL-E13 C-MVP (五一 sprint 5/2 收尾)
+#
+# Companion 调这个拿一句 LLM 生成的 starter, 显示在 Dashboard 卡 / macOS 通知里.
+
+
+@app.get("/api/proactive/starter")
+async def api_proactive_starter(
+    user: User = Depends(get_current_user),  # noqa: ARG001  鉴权但不用 user 字段
+) -> dict[str, Any]:
+    """返一个上下文感知的 starter (引用员工 journal + 时段). 失败返 fallback 模板."""
+    from . import proactive
+    return await proactive.generate_starter()
+
+
 # Capability-probe stubs
 #
 # Clients like Hermes probe well-known paths to figure out what kind of

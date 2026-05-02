@@ -15,6 +15,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ClipboardEvent, type DragEvent, type ChangeEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Attachment } from "../../types/chat";
+import { useUIStore } from "../../store/ui";  // BL-E13 主动闲聊 prefill
 
 interface Props {
   isStreaming: boolean;
@@ -131,6 +132,21 @@ export default function ChatInput({
   useEffect(() => {
     taRef.current?.focus();
   }, []);
+
+  // 主动闲聊 BL-E13: 从 ProactiveCard / 通知点击塞过来的 starter, 预填到输入框.
+  // 用 zustand store 跨组件传, mount 后消费一次 (避免组件重渲再填入).
+  const consumePrefill = useUIStore((s) => s.consumeChatPrefill);
+  const pendingPrefill = useUIStore((s) => s.pendingChatPrefill);
+  useEffect(() => {
+    if (pendingPrefill) {
+      const v = consumePrefill();
+      if (v) {
+        setText(v);
+        // 微延迟聚焦, 让 textarea 渲染好
+        setTimeout(() => taRef.current?.focus(), 0);
+      }
+    }
+  }, [pendingPrefill, consumePrefill]);
 
   // 🎤 录音逻辑 — ffmpeg 子进程录 + Whisper.cpp 转 (方案 C+ Day 1, 全本地)
   // 按下 🎤: invoke speech_start_recording → Rust 启 ffmpeg avfoundation 录 wav

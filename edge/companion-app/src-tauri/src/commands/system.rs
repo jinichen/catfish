@@ -53,7 +53,33 @@ pub async fn open_terminal(cwd: Option<String>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn notify(_title: String, _body: String) -> Result<(), String> {
-    // TODO: 走 tauri-plugin-notification（要加依赖）
-    Err("not implemented".into())
+pub async fn notify(title: String, body: String) -> Result<(), String> {
+    // 五一 sprint 5/2 收尾 BL-E13 主动闲聊: macOS 通知用 osascript 发, 不引 tauri-plugin-notification 新依赖.
+    // Linux / Windows 后续按需扩展 (notify-send / Win toast).
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        // osascript 字符串里 " 要 escape, 防 starter 含双引号炸
+        let safe_title = title.replace('"', "\\\"");
+        let safe_body = body.replace('"', "\\\"");
+        let script = format!(
+            "display notification \"{}\" with title \"{}\" sound name \"Glass\"",
+            safe_body, safe_title,
+        );
+        let status = Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .status()
+            .map_err(|e| format!("osascript 启动失败: {e}"))?;
+        if !status.success() {
+            return Err(format!("osascript 退出非 0: {status}"));
+        }
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (title, body);
+        Err("notify: 当前平台未实现 (只有 macOS)".into())
+    }
 }
