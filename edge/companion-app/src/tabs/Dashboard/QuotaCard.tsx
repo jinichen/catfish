@@ -1,12 +1,45 @@
-/** 个人配额 —— 本月已用 / 上限 / 进度条 */
+/** 个人配额 —— 三维 quota (用户分钟 / 用户日 / 部门日)
+ *
+ * 数据来源: gateway GET /api/quota/me (五一 sprint 5/3, BL-D9).
+ * limit=0 → 不限 (内网员工常态), 不画进度条.
+ */
+
+import { useEffect, useState } from "react";
 
 import { formatTokens } from "../../lib/format";
-
-// MVP 阶段先用 placeholder 数据，等中央 quota 服务接通后替换
-const MOCK = { used: 1_240_000, limit: 5_000_000 };
+import { fetchQuotaMe, type QuotaMe } from "../../lib/quota";
 
 export default function QuotaCard() {
-  const pct = (MOCK.used / MOCK.limit) * 100;
+  const [data, setData] = useState<QuotaMe | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const q = await fetchQuotaMe();
+        if (!cancelled) {
+          setData(q);
+          setError(null);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : String(e));
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    void load();
+    // 30s 刷一次, 仪表盘不需要更频繁
+    const t = window.setInterval(() => void load(), 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(t);
+    };
+  }, []);
+
   return (
     <div
       style={{
@@ -17,51 +50,121 @@ export default function QuotaCard() {
       }}
     >
       <h3 style={{ marginBottom: "var(--space-3)" }}>本月配额</h3>
-      <div
-        style={{
-          fontSize: 24,
-          fontWeight: 600,
-          fontFamily: "var(--font-mono)",
-        }}
-      >
-        {formatTokens(MOCK.used)}
-        <span
-          style={{
-            fontSize: 14,
-            color: "var(--catfish-text-muted)",
-            fontWeight: 400,
-          }}
-        >
-          {" "}
-          / {formatTokens(MOCK.limit)} tok
-        </span>
-      </div>
+
+      {loading && !data && <SkeletonRow />}
+      {error && !data && (
+        <div style={{ fontSize: 13, color: "var(--catfish-text-muted)" }}>
+          quota 服务未就绪 ({error})
+        </div>
+      )}
+      {data && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
+          <QuotaRow label="近 1 分钟" w={data.minute} />
+          <QuotaRow label="今日 (滑动 24h)" w={data.day} primary />
+          {data.department && (
+            <QuotaRow
+              label={`部门 · ${data.department} 今日`}
+              w={data.department_day}
+              dim
+            />
+          )}
+        </div>
+      )}
+
       <div
         style={{
           marginTop: "var(--space-3)",
-          height: 6,
-          background: "var(--catfish-border)",
-          borderRadius: 3,
-          overflow: "hidden",
-        }}
-      >
-        <div
-          style={{
-            width: `${pct}%`,
-            height: "100%",
-            background: "var(--catfish-cyan)",
-          }}
-        />
-      </div>
-      <div
-        style={{
-          marginTop: "var(--space-2)",
           fontSize: 11,
           color: "var(--catfish-text-muted)",
         }}
       >
-        TODO: 接入中央 quota 服务，目前为 placeholder
+        实时取自 gateway · /api/quota/me · 30s 刷新 · limit 0 = 不限
       </div>
     </div>
+  );
+}
+
+function QuotaRow({
+  label,
+  w,
+  primary,
+  dim,
+}: {
+  label: string;
+  w: { used: number; limit: number };
+  primary?: boolean;
+  dim?: boolean;
+}) {
+  const unlimited = w.limit === 0;
+  const pct = unlimited ? 0 : Math.min((w.used / w.limit) * 100, 100);
+  const valueFontSize = primary ? 22 : 15;
+  return (
+    <div style={{ opacity: dim ? 0.85 : 1 }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "baseline",
+          marginBottom: 4,
+        }}
+      >
+        <span style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>{label}</span>
+        <span
+          style={{
+            fontSize: valueFontSize,
+            fontWeight: primary ? 600 : 500,
+            fontFamily: "var(--font-mono)",
+          }}
+        >
+          {formatTokens(w.used)}
+          <span
+            style={{
+              fontSize: 12,
+              color: "var(--catfish-text-muted)",
+              fontWeight: 400,
+            }}
+          >
+            {" "}
+            / {unlimited ? "不限" : `${formatTokens(w.limit)} tok`}
+          </span>
+        </span>
+      </div>
+      {!unlimited && (
+        <div
+          style={{
+            height: primary ? 6 : 4,
+            background: "var(--catfish-border)",
+            borderRadius: 3,
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              width: `${pct}%`,
+              height: "100%",
+              background:
+                pct > 90
+                  ? "var(--catfish-danger, #d33)"
+                  : pct > 70
+                    ? "var(--catfish-warning, #d70)"
+                    : "var(--catfish-cyan)",
+            }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SkeletonRow() {
+  return (
+    <div
+      style={{
+        height: 50,
+        background: "var(--catfish-border)",
+        borderRadius: 4,
+        opacity: 0.4,
+      }}
+    />
   );
 }

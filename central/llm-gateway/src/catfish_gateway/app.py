@@ -246,6 +246,56 @@ async def health() -> dict[str, str]:
     return {"status": "ok", "service": "catfish-gateway"}
 
 
+# Quota — 五一 sprint 5/3, BL-D9
+#
+# 给 Companion Dashboard 的 QuotaCard 用. 返当前用户三维 quota:
+#   - per-user 1 minute
+#   - per-user 1 day
+#   - per-department 1 day (没设部门或无部门 quota → limit=0=不限)
+#
+# limit=0 在 Companion 侧渲染成 "不限".
+
+
+@app.get("/api/quota/me")
+async def quota_me(user: User = Depends(get_current_user)) -> dict[str, Any]:
+    from . import quota  # 懒 import 避免顶层循环
+
+    config = quota.load_quota_config()
+    user_q = config.per_user_for(user.sub)
+
+    now_ms = int(time.time() * 1000)
+    minute_cutoff = now_ms - 60_000
+    day_cutoff = now_ms - 86_400_000
+
+    used_minute = quota.sum_tokens_user_since(user.sub, minute_cutoff)
+    used_day = quota.sum_tokens_user_since(user.sub, day_cutoff)
+
+    dept_used_day = 0
+    dept_limit_day = 0
+    if user.department:
+        dept_used_day = quota.sum_tokens_dept_since(user.department, day_cutoff)
+        dept_q = config.department_quotas.get(user.department)
+        if dept_q is not None:
+            dept_limit_day = dept_q.tokens_per_day
+
+    return {
+        "user_email": user.sub,
+        "department": user.department,
+        "minute": {
+            "used": used_minute,
+            "limit": user_q.tokens_per_minute,  # 0 = 不限
+        },
+        "day": {
+            "used": used_day,
+            "limit": user_q.tokens_per_day,
+        },
+        "department_day": {
+            "used": dept_used_day,
+            "limit": dept_limit_day,
+        },
+    }
+
+
 # Capability-probe stubs
 #
 # Clients like Hermes probe well-known paths to figure out what kind of
