@@ -150,11 +150,11 @@ def _mask_url(url: str) -> str:
     return re.sub(r"(://[^:]+:)([^@]+)(@)", r"\1***\3", url)
 
 
-# ── 启动时创建 schema (idempotent) ──────────────────────────
-
-
-# identity-server 自己的表: users + registry_agents.
-# gateway 的 quota_events / gateway_audit 由 gateway alembic 管 (五一 sprint 5/2 收尾分家).
+# ── dev fallback schema (五一 sprint 5/2 收尾改) ─────────────
+#
+# 生产部署: 跑 `alembic upgrade head` 建表, init_schema 不再需要.
+# Dev / 单测: 这个 SCHEMA_SQL 仍然兜底自动建表 (省去 alembic 步骤).
+# 用 IF NOT EXISTS 跟 alembic 并存不冲突.
 SCHEMA_SQL = """
 -- Users (catfish-identity)
 CREATE TABLE IF NOT EXISTS users (

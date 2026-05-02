@@ -1,12 +1,12 @@
-"""Alembic env — gateway schema migration runner.
+"""Alembic env — identity-server schema migration runner.
 
-URL 优先级 (跟 catfish_gateway.db.db_url 对齐):
+URL 优先级 (跟 catfish_identity.db.db_url 对齐):
   1. env CATFISH_DB_URL
-  2. central/llm-gateway/config/database.yaml 的 url 字段
-  3. 都没 → 报错退出 (alembic 必须有 PG, sqlite fallback 不走 alembic)
+  2. central/identity-server/config/database.yaml 的 url 字段
+  3. 都没 → 报错退出 (alembic 必须 PG, yaml fallback 不走 alembic)
 
-注意: 不走 alembic.ini 的 configparser, 直接 create_engine(url) 避开
-%XX 插值问题 (URL 里 URL-encoded password 含 %21 等).
+跟 gateway alembic/env.py 一致, 用 create_engine(url) 绕开 alembic.ini configparser
+防 URL 里 %XX (URL-encoded password) 被当变量插值.
 """
 
 from __future__ import annotations
@@ -18,9 +18,9 @@ from pathlib import Path
 from alembic import context
 from sqlalchemy import create_engine, pool
 
-# 加 src 到 path 复用 catfish_gateway.db.db_url
+# 加 src 到 path 复用 catfish_identity.db.db_url
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from catfish_gateway.db import db_url  # noqa: E402
+from catfish_identity.db import db_url  # noqa: E402
 
 config = context.config
 
@@ -33,25 +33,21 @@ if not url:
         "alembic 需要 PG URL. 设 CATFISH_DB_URL 或填 config/database.yaml 的 url 字段."
     )
 
-# SQLAlchemy 默认 'postgresql://' → psycopg2, 我们装的是 psycopg3 (psycopg[binary]).
-# 把 URL scheme 改成 'postgresql+psycopg://' 让 SQLAlchemy 走 psycopg3.
-# psycopg2 在 macOS 装麻烦 (要 libpq), psycopg3 binary 自带, 选 psycopg3.
+# psycopg3 driver (跟 gateway 一致, psycopg2 在 macOS 装麻烦)
 if url.startswith("postgresql://"):
     url = "postgresql+psycopg://" + url[len("postgresql://"):]
 elif url.startswith("postgres://"):
     url = "postgresql+psycopg://" + url[len("postgres://"):]
 
-# 没用 SQLAlchemy ORM (gateway 直接 SQL), 所以 metadata = None.
-target_metadata = None
+target_metadata = None  # 没用 ORM, 手写 op.execute
 
 
 # 各服务独立 version table 防共享 PG 时 alembic_version 撞.
-# gateway 用 alembic_version_gateway, identity-server 用 alembic_version_identity.
-_VERSION_TABLE = "alembic_version_gateway"
+# identity-server 用 alembic_version_identity, gateway 用 alembic_version_gateway.
+_VERSION_TABLE = "alembic_version_identity"
 
 
 def run_migrations_offline() -> None:
-    """生成 SQL 不连 DB ('offline' 模式)."""
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -64,11 +60,7 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    """连 DB 直接跑 ('online' 模式, 默认).
-
-    用 create_engine(url) 绕开 alembic.ini configparser, 防 URL 里 %XX
-    被当成变量插值 (PG 密码 URL-encoded 后含 %21 等会炸).
-    """
+    """绕开 configparser 防 URL %XX 插值炸 (gateway 已踩过)."""
     connectable = create_engine(url, poolclass=pool.NullPool)
     with connectable.connect() as connection:
         context.configure(
