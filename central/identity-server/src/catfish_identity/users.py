@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import bcrypt
@@ -55,22 +55,44 @@ _TIMING_DUMMY_HASH: bytes = bcrypt.hashpw(
 
 @dataclass
 class IdentityUser:
-    """注册用户. 内部数据结构, 不直接 expose JSON."""
+    """注册用户. 内部数据结构, 不直接 expose JSON.
+
+    五一 sprint 5/2 加 RBAC (BL-D8): role + managed_departments.
+    跟旧 tier 字段并存 (老配置兼容), 优先级 role > tier.
+    """
 
     email: str
     password_hash: str
     name: str = ""
     department: str = ""
-    tier: str = "employee"  # 'employee' | 'admin'
+    tier: str = "employee"  # 旧字段 'employee' | 'admin', 兼容老 yaml
+    # ── RBAC (5/2 加, BL-D8) ──
+    role: str = ""  # admin / manager / employee. 空 = 用 tier 兜底
+    managed_departments: list[str] = field(default_factory=list)
+
+    def effective_role(self) -> str:
+        """实际生效的 role. 优先 role 字段, 兜底 tier."""
+        if self.role:
+            return self.role
+        if self.tier == "admin":
+            return "admin"
+        return "employee"
 
     def to_oidc_claims(self) -> dict:
-        """渲染成 OIDC ID Token 的 claims (不含密码 hash)."""
+        """渲染成 OIDC ID Token 的 claims (不含密码 hash).
+
+        加 RBAC 字段 role / managed_departments, gateway / Companion 直接验.
+        """
+        role = self.effective_role()
+        managed = self.managed_departments if role == "manager" else []
         return {
             "email": self.email,
             "email_verified": True,
             "name": self.name or self.email.split("@")[0],
             "department": self.department,
             "tier": self.tier,
+            "role": role,
+            "managed_departments": managed,
         }
 
 
@@ -121,17 +143,111 @@ class UserRegistry:
             if not email or not password_hash:
                 logger.warning("跳过缺 email/password_hash 的 user: %r", raw)
                 continue
+            # role 安全: 只接受白名单值, 防 yaml 误填
+            role = str(raw.get("role", "")).strip().lower()
+            if role and role not in ("admin", "manager", "employee"):
+                logger.warning(
+                    "user %s role=%s 不在白名单, fallback 到 employee", email, role
+                )
+                role = ""
+            managed = raw.get("managed_departments") or []
+            if not isinstance(managed, list):
+                managed = []
             loaded[email] = IdentityUser(
                 email=email,
                 password_hash=password_hash,
                 name=raw.get("name", ""),
                 department=raw.get("department", ""),
                 tier=raw.get("tier", "employee"),
+                role=role,
+                managed_departments=[str(d) for d in managed],
             )
         self._users = loaded
         logger.info(
             "users.yaml 加载: %d 个用户 (path=%s)", len(loaded), self.users_path
         )
+
+    async def seed_pg_from_yaml_if_empty(self) -> int:
+        """首次启动 PG 是空的, 把 yaml 加载的 users 灌进 PG.
+
+        返插入了多少条. 0 = PG 已有数据 (跳过) / PG 不可用. 幂等.
+        """
+        from .db import get_pool  # noqa: PLC0415
+
+        pool = await get_pool()
+        if pool is None:
+            return 0
+        try:
+            async with pool.acquire() as conn:
+                count = await conn.fetchval("SELECT COUNT(*) FROM users")
+                if count and count > 0:
+                    return 0  # PG 已有数据, 不动
+
+                if not self._users:
+                    return 0  # yaml 也空
+
+                import json as _json  # noqa: PLC0415
+                for u in self._users.values():
+                    await conn.execute(
+                        "INSERT INTO users (email, password_hash, name, department, "
+                        "tier, role, managed_departments) "
+                        "VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)",
+                        u.email, u.password_hash, u.name, u.department,
+                        u.tier, u.role, _json.dumps(u.managed_departments),
+                    )
+                logger.info("PG users 首次 seed: 从 yaml 灌 %d 条", len(self._users))
+                return len(self._users)
+        except Exception as e:
+            logger.warning("seed_pg_from_yaml 失败: %s", e)
+            return 0
+
+    async def reload_from_pg(self) -> bool:
+        """从 PG users 表加载, 覆盖现有内存 dict.
+
+        catfish-identity app startup 时调一次. PG 没配置 / 失败时返 False,
+        保留 yaml 加载的结果.
+
+        五一 sprint 5/4 (BL-D17 部分): 中央用户存 PG, yaml 留 dev/test fallback.
+        """
+        from .db import get_pool  # noqa: PLC0415
+
+        pool = await get_pool()
+        if pool is None:
+            return False
+        try:
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT email, password_hash, name, department, tier, "
+                    "role, managed_departments FROM users"
+                )
+        except Exception as e:
+            logger.warning("PG users 加载失败, 保留 yaml: %s", e)
+            return False
+
+        loaded: dict[str, IdentityUser] = {}
+        for row in rows:
+            managed = row["managed_departments"]
+            # asyncpg 的 jsonb 字段返 list 或 str, 兼容
+            if isinstance(managed, str):
+                import json as _json  # noqa: PLC0415
+                managed = _json.loads(managed)
+            if not isinstance(managed, list):
+                managed = []
+            email = (row["email"] or "").strip().lower()
+            if not email or not row["password_hash"]:
+                continue
+            loaded[email] = IdentityUser(
+                email=email,
+                password_hash=row["password_hash"],
+                name=row["name"] or "",
+                department=row["department"] or "",
+                tier=row["tier"] or "employee",
+                role=row["role"] or "",
+                managed_departments=[str(d) for d in managed],
+            )
+        self._users = loaded
+        logger.info("PG users 加载: %d 个用户 (覆盖 yaml)", len(loaded))
+        return True
 
     def find(self, email: str) -> IdentityUser | None:
         """按 email 查 user. email 大小写不敏感."""

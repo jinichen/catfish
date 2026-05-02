@@ -66,21 +66,25 @@ run_pytest_files() {
 # ── 1. gateway 单元测 (新增 4 个测试文件) ─────────────────────
 
 run_pytest_files \
-  "Gateway · a2a_allow + a2a_jwt + a2a_audit + skills_loader_version" \
+  "Gateway · a2a + skills_loader + rbac + quota" \
   "${ROOT}/central/llm-gateway/src" \
   "${ROOT}/central/llm-gateway" \
   tests/test_a2a_allow.py \
   tests/test_a2a_audit.py \
   tests/test_a2a_jwt.py \
-  tests/test_skills_loader_version.py
+  tests/test_skills_loader_version.py \
+  tests/test_rbac.py \
+  tests/test_quota.py
 
 # ── 2. identity-server 单元测 ────────────────────────────────
 
 run_pytest_files \
-  "Identity-server · registry" \
+  "Identity-server · registry + users (RBAC) + PG 集成" \
   "${ROOT}/central/identity-server/src" \
   "${ROOT}/central/identity-server" \
-  tests/test_registry.py
+  tests/test_registry.py \
+  tests/test_users.py \
+  tests/test_pg_integration.py
 
 # ── 3. tool-bridge 单元测 ────────────────────────────────────
 

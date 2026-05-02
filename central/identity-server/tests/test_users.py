@@ -113,6 +113,108 @@ users:
     assert "password_hash" not in claims
 
 
+# ── RBAC (五一 sprint 5/2 加, BL-D8) ────────────────────────
+
+
+def test_role_field_loaded(tmp_path) -> None:
+    """yaml 里 role 字段透传."""
+    pwd_hash = hash_password("x")
+    _write_yaml(tmp_path, f"""
+users:
+  - email: alice@x.com
+    password_hash: {pwd_hash}
+    department: 研发部
+    role: manager
+    managed_departments:
+      - 研发部
+      - 测试部
+""")
+    reg = UserRegistry(users_path=tmp_path / "users.yaml")
+    user = reg.find("alice@x.com")
+    assert user.role == "manager"
+    assert user.managed_departments == ["研发部", "测试部"]
+    assert user.effective_role() == "manager"
+
+
+def test_role_default_employee(tmp_path) -> None:
+    """没填 role → effective_role = employee (老 yaml 兼容)."""
+    pwd_hash = hash_password("x")
+    _write_yaml(tmp_path, f"""
+users:
+  - email: bob@x.com
+    password_hash: {pwd_hash}
+""")
+    reg = UserRegistry(users_path=tmp_path / "users.yaml")
+    user = reg.find("bob@x.com")
+    assert user.role == ""
+    assert user.effective_role() == "employee"
+
+
+def test_legacy_tier_admin_maps_to_role_admin(tmp_path) -> None:
+    """老 yaml 没 role 但 tier=admin → effective_role = admin."""
+    pwd_hash = hash_password("x")
+    _write_yaml(tmp_path, f"""
+users:
+  - email: ceo@x.com
+    password_hash: {pwd_hash}
+    tier: admin
+""")
+    reg = UserRegistry(users_path=tmp_path / "users.yaml")
+    user = reg.find("ceo@x.com")
+    assert user.effective_role() == "admin"
+
+
+def test_role_whitelist_rejects_invalid(tmp_path) -> None:
+    """role 白名单只接受 admin/manager/employee, 其他 fallback 到默认."""
+    pwd_hash = hash_password("x")
+    _write_yaml(tmp_path, f"""
+users:
+  - email: hack@x.com
+    password_hash: {pwd_hash}
+    role: superhacker
+""")
+    reg = UserRegistry(users_path=tmp_path / "users.yaml")
+    user = reg.find("hack@x.com")
+    assert user.role == ""  # superhacker 被拒, 清空
+    assert user.effective_role() == "employee"
+
+
+def test_oidc_claims_include_rbac(tmp_path) -> None:
+    """to_oidc_claims 把 role / managed_departments 一起带出."""
+    pwd_hash = hash_password("x")
+    _write_yaml(tmp_path, f"""
+users:
+  - email: m@x.com
+    password_hash: {pwd_hash}
+    department: 研发部
+    role: manager
+    managed_departments:
+      - 研发部
+""")
+    reg = UserRegistry(users_path=tmp_path / "users.yaml")
+    claims = reg.find("m@x.com").to_oidc_claims()
+    assert claims["role"] == "manager"
+    assert claims["managed_departments"] == ["研发部"]
+
+
+def test_oidc_claims_admin_no_managed_departments(tmp_path) -> None:
+    """admin 的 managed_departments 在 claims 里返 [] (隐式全权)."""
+    pwd_hash = hash_password("x")
+    _write_yaml(tmp_path, f"""
+users:
+  - email: a@x.com
+    password_hash: {pwd_hash}
+    role: admin
+    managed_departments:
+      - 不应该出现
+""")
+    reg = UserRegistry(users_path=tmp_path / "users.yaml")
+    claims = reg.find("a@x.com").to_oidc_claims()
+    assert claims["role"] == "admin"
+    # admin 的 managed_departments 在 claims 里清空 (admin 隐式全权, 不需要列)
+    assert claims["managed_departments"] == []
+
+
 def test_to_oidc_claims_default_name_from_email(tmp_path) -> None:
     """没 name 时 fallback 到 email 前缀"""
     pwd_hash = hash_password("x")

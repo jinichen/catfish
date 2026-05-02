@@ -138,9 +138,9 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 |---|---|---|---|
 | BL-D6 | SSO 真接入 (替换 dev token) | ✅ 4-28 | catfish-identity OIDC server + 飞书 adapter + Companion JWT + dev_token fallback ~600 行, 端到端通 |
 | BL-D7 | 中央审计日志 (token 数 / 延迟 / 不含对话内容) | ✅ 4-22~28 | gateway audit JSONL ship, AuditCard 已显示 |
-| BL-D8 | RBAC 系统 (#32 提到一部分) | ⬜ | 1 周 |
-| BL-D9 | Quota 系统 (#32 提到一部分) | ⬜ | 1 周 |
-| BL-D17 (新) | IDP UserStore 抽象 + PG/LDAP backend (现 yaml 短期够用) | ⬜ | 3-5 天 (Phase 2 起前) |
+| BL-D8 | RBAC 系统 (3 角色: admin/manager/employee) | 🔵 5/2 MVP | spec + middleware + 单元 16 测过. UI 完整 + 部门 audit/quota endpoint Phase 2 接力 |
+| BL-D9 | Quota 系统 (三维: per-user/model/department, sliding window sqlite) | 🔵 5/3 MVP | spec + quota.py 核心 + 单元 17 测过. /v1/quota/me endpoint + manager UI Phase 2 接力 |
+| BL-D17 (新) | IDP UserStore 抽象 + PG/LDAP backend (现 yaml 短期够用) | 🔵 5/4 PG MVP | users + registry → PG (asyncpg + auto seed yaml). schema migration init_schema. quota / audit JSONL 留 sqlite Phase 2 接力 |
 
 ### D.3 Companion UI 二期 (来自 IDEAS § Companion UI 形态)
 
