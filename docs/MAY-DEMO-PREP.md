@@ -34,7 +34,7 @@
 
 ### 顺手 30 秒录像
 
-- [ ] 屏幕录制: 你正常用 catfish 干活的过程 (登录 / 截图 / 抓数据 任意一个场景)
+- [ ] 屏幕录制: 你正常用鲶鱼干活的过程 (登录 / 截图 / 抓数据 任意一个场景)
 - 路径: cmd+shift+5 → 选录制窗口 → 30s 即可
 - 用途: 5 月 demo PPT 嵌入 "真实使用" 片段
 
@@ -80,7 +80,7 @@
 
 ### ★ 跨 session 记忆 (4-30 新增, 场景 4 必备)
 
-- [ ] **演示前 7 天**: 真实用 catfish 工作 (跑 demo 准备 / 写代码 / 写 PPT 等), 确保 `~/.catfish/employee_journal.md` 至少有 5-10 段 session 摘要 (没内容客户看不到效果)
+- [ ] **演示前 7 天**: 真实用鲶鱼工作 (跑 demo 准备 / 写代码 / 写 PPT 等), 确保 `~/.catfish/employee_journal.md` 至少有 5-10 段 session 摘要 (没内容客户看不到效果)
 - [ ] `~/.hermes/state.db` 至少 5 个 session 有 message_count > 3 (档1 才注入)
 - [ ] DASHSCOPE_API_KEY 配在 hermes venv `.env` 里, session_summarizer 后台异步总结正常
 - [ ] `tail -20 ~/.catfish/employee_journal.md` 看最近总结质量 (主题简洁 / 第三人称 / 抓重点)
@@ -164,7 +164,7 @@
 ## 六、demo 当天检查清单 (上场前 1 小时)
 
 - [ ] 笔记本电量满 + 充电器
-- [ ] 关掉所有非 catfish 窗口 (减少演示分心)
+- [ ] 关掉所有非鲶鱼窗口 (减少演示分心)
 - [ ] Catfish Companion / catfish-identity / gateway / tool-bridge 全绿
 - [ ] 网络 (公司 WiFi + VPN 测)
 - [ ] dev_token 备用 (万一 SSO 现场抽风, 切 dev_token 不影响其他)
@@ -182,7 +182,7 @@
 | gateway 挂了 | watchdog 5s 内重启, 不行手动 `pkill -9 -f catfish_gateway` 让 watchdog 拉 |
 | 私有 LLM 不通 | fallback 链自动切 qwen-flash (公网), demo 时讲"看, 容灾自动切" 反而是卖点 |
 | Catfish Chrome 不响应 | Companion 控制台 → Chrome 卡片 → 重启 |
-| 演示中模型答错 | 别慌. 说"模型偶尔会错, 关键是我们能审计 / 能纠错 / 能换模型. 这就是 catfish 中央 gateway 的价值." |
+| 演示中模型答错 | 别慌. 说"模型偶尔会错, 关键是我们能审计 / 能纠错 / 能换模型. 这就是鲶鱼中央 gateway 的价值." |
 | 模型自数错 (人数 / 行数) | 说"这就是为什么我们强制 execute_code, 我现在演示一下精确版" → 重跑用 `统计`关键词触发 stats_guard |
 | 场景 4 鲶鱼记不起来 | "看, employee_journal 里这条 session 还没被后台总结 — 异步设计不阻塞主流程. 我直接 cat 给大家看已总结的几段 (引用别的真实 session)" → 现场打开 markdown 让客户看记忆颗粒度 |
 | 客户怀疑跨 session 是上传云端 | 当场终端 `cat ~/.catfish/employee_journal.md` + `ls ~/.catfish/` 给客户看. "这是文件本体, 在我笔记本上, 没有任何云端备份." |

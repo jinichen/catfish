@@ -28,6 +28,42 @@
 | `model_tools.py` 等内部模块名 | (不提) |
 | `JSONL` / `unix socket` 等技术术语 | (不提, 用人话) |
 
+---
+
+## 鲶鱼 vs Catfish (五一 sprint 5/2 加)
+
+**主名 = 鲶鱼 (中文场景), 副名 = Catfish (技术术语 / 国际场景)**.
+
+### 用法
+
+| 场景 | 用 | 例 |
+|---|---|---|
+| 客户对话 / 销售物料 / 演讲口语 | **鲶鱼** | "鲶鱼帮你写汇报" / "鲶鱼是企业 LLM 中台" |
+| Companion UI 中文文案 | **鲶鱼 / 小鲶** | "跟小鲶说话…" / "鲶鱼平台" |
+| PPT 封面 / 文档标题 | **鲶鱼 (Catfish)** | "陈鸿波 / 鲶鱼平台 (Catfish)" |
+| 工程代码 / 包名 / 路径 | **catfish** (英文) | `catfish-gateway` / `~/.catfish/` |
+| 工具名 / API | **catfish_xxx** (英文) | `catfish_run_skill` / `catfish_a2a_ask` |
+| Phase 3 产品名 | **Catfish Federation** (专有名) | "12 个月 ship Catfish Federation" |
+| Companion .app 标题 | **鲶鱼 Companion** | (window 顶部) |
+
+### 红线 — 对外中文叙述里**绝对不**单独说 "catfish"
+
+| ❌ 不说 | ✅ 改说 |
+|---|---|
+| "用 catfish 干活" | "用鲶鱼干活" |
+| "catfish 帮你..." | "鲶鱼帮你..." / "小鲶帮你..." |
+| "关掉非 catfish 窗口" | "关掉非鲶鱼窗口" |
+| "catfish 中央 gateway" | "鲶鱼中央 gateway" |
+| "Catfish 平台是一个..." | "鲶鱼平台是一个 (catfish-gateway 中央网关 + ...)" |
+
+**规则**: 中文叙述里出现孤立 catfish 字样 = 错. 写代码模块/路径/工具名时保留英文 = 对.
+
+### 触发场景的安全规则
+
+写文案时心里默念: "客户读这一句, 会不会觉得在看技术文档?". 觉得太技术 → 改鲶鱼.
+
+---
+
 ## 触点分类 — 哪些是"对外"?
 
 ### 必须遵守 (员工/客户能直接看到)
