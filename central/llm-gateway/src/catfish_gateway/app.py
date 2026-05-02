@@ -70,6 +70,7 @@ from .identity_inject import (  # noqa: E402
     inject_identity_if_needed,
 )
 from .metrics import log_request_metadata  # noqa: E402
+from . import quota as _quota_module  # noqa: E402  五一 sprint 5/2 收尾: chat 后写 quota_events
 
 # Global setup
 
@@ -294,6 +295,118 @@ async def quota_me(user: User = Depends(get_current_user)) -> dict[str, Any]:
             "limit": dept_limit_day,
         },
     }
+
+
+# /api/me — 当前用户信息 (Companion 用来按角色 conditional render Dashboard)
+#
+# 五一 sprint 5/2 RBAC.
+
+
+@app.get("/api/me")
+async def api_me(user: User = Depends(get_current_user)) -> dict[str, Any]:
+    """返当前 user 元信息. Companion useMe() 调."""
+    return {
+        "email": user.sub,
+        "department": user.department,
+        "role": user.role,
+        "managed_departments": user.managed_departments or [],
+        "auth_method": user.auth_method,
+    }
+
+
+# /api/quota/department/{dept} — manager / admin 看本部门 quota 聚合
+#
+# 包含: 部门日 quota 用量 + 限额 + top N 员工 token 用量.
+# RBAC: admin 全权, manager 限 managed_departments.
+
+
+@app.get("/api/quota/department/{department}")
+async def api_quota_department(
+    department: str,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """部门级 quota 聚合 — manager 改 / 看本部门."""
+    from . import quota  # 懒 import
+
+    if not user.can_manage_department(department):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"role={user.role} 无权访问部门 {department} 的 quota. "
+                f"managed_departments={user.managed_departments}"
+            ),
+        )
+
+    config = quota.load_quota_config()
+    now_ms = int(time.time() * 1000)
+    day_cutoff = now_ms - 86_400_000
+
+    dept_used_day = quota.sum_tokens_dept_since(department, day_cutoff)
+    dept_q = config.department_quotas.get(department)
+    dept_limit_day = dept_q.tokens_per_day if dept_q else 0
+
+    # Top 员工 (按今日用量)
+    top_users = quota.top_users_in_department(department, day_cutoff, limit=10)
+
+    return {
+        "department": department,
+        "day": {
+            "used": dept_used_day,
+            "limit": dept_limit_day,  # 0 = 不限
+        },
+        "top_users": top_users,  # [{user_email, tokens_used}]
+        "viewer_role": user.role,
+    }
+
+
+# /api/audit/department/{dept} — manager / admin 看本部门 audit 聚合
+#
+# 包含: 总请求数 / 总 token / 模型分布 / top 员工 (匿名化看部门级).
+# RBAC: admin 全权, manager 限 managed_departments.
+
+
+@app.get("/api/audit/department/{department}")
+async def api_audit_department(
+    department: str,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """部门级 audit 聚合 — manager 看本部门员工总用量分布."""
+    from . import quota  # 懒 import (audit 数据从 quota_events sqlite 也能算)
+
+    if not user.can_manage_department(department):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"role={user.role} 无权访问部门 {department} 的 audit. "
+                f"managed_departments={user.managed_departments}"
+            ),
+        )
+
+    now_ms = int(time.time() * 1000)
+    day_cutoff = now_ms - 86_400_000
+
+    summary = quota.audit_summary_dept_since(department, day_cutoff)
+    return {
+        "department": department,
+        "since_ms": day_cutoff,
+        **summary,  # request_count / total_tokens / by_model / by_user
+        "viewer_role": user.role,
+    }
+
+
+# /api/dev/users — 列出 dev 测试账号 (Companion 切换器用)
+#
+# 五一 sprint 5/2. 仅 dev 模式 (CATFISH_ENV != prod) 启用. 生产环境 404.
+# 不需要 auth — 列表本身就是为了让没登录的人选账号. 包含 token 字段, dev 模式安全.
+
+
+@app.get("/api/dev/users")
+async def api_dev_users() -> dict[str, Any]:
+    """返 dev_users.yaml 配置的所有测试账号. 生产模式返 404."""
+    if os.environ.get("CATFISH_ENV", "dev").lower() == "prod":
+        raise HTTPException(status_code=404, detail="not found")
+    from .auth.dev_token import list_dev_users
+    return {"users": list_dev_users()}
 
 
 # Capability-probe stubs
@@ -555,6 +668,7 @@ async def _stream_chat_completion(
     body: dict,
     *,
     user_sub: str,
+    user_dept: str,  # 五一 sprint 5/2 RBAC: quota.record_usage 需要部门
     model_name: str,
     model,
     security_concern: str | None = None,
@@ -656,6 +770,15 @@ async def _stream_chat_completion(
             error=err,
             security_concern=security_concern,
         )
+        # 五一 sprint 5/2 收尾: 同步写 quota_events. ok 才记 (error 时 tokens=0).
+        if status_str == "ok" and (prompt_tokens > 0 or completion_tokens > 0):
+            _quota_module.record_usage(
+                user_email=user_sub,
+                department=user_dept,
+                model=actual_model_name,
+                tokens_in=prompt_tokens,
+                tokens_out=completion_tokens,
+            )
 
 
 # _friendly_upstream_error 抽到 errors.py (无 litellm 依赖, 测试可独立 import).
@@ -667,6 +790,7 @@ async def _invoke_chat_completion(
     body: dict,
     *,
     user_sub: str,
+    user_dept: str = "",  # 五一 sprint 5/2 RBAC: quota.record_usage 用
     model_name: str,
     model,
     security_concern: str | None = None,
@@ -699,16 +823,26 @@ async def _invoke_chat_completion(
 
     usage = getattr(response, "usage", None)
     prompt_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
+    completion_tokens = getattr(usage, "completion_tokens", 0) if usage else 0
     _check_context_usage(used_model, prompt_tokens, user_sub)
     log_request_metadata(
         user=user_sub,
         model=used_model.name,
         prompt_tokens=prompt_tokens,
-        completion_tokens=getattr(usage, "completion_tokens", 0) if usage else 0,
+        completion_tokens=completion_tokens,
         latency_ms=(time.time() - start) * 1000,
         status="ok",
         security_concern=security_concern,
     )
+    # 五一 sprint 5/2 收尾: 同步写 quota_events. ok 才记 (error 时 tokens=0).
+    if prompt_tokens > 0 or completion_tokens > 0:
+        _quota_module.record_usage(
+            user_email=user_sub,
+            department=user_dept,
+            model=used_model.name,
+            tokens_in=prompt_tokens,
+            tokens_out=completion_tokens,
+        )
     return response.model_dump() if hasattr(response, "model_dump") else response
 
 
@@ -842,13 +976,15 @@ async def chat_completions(
     if is_stream:
         return StreamingResponse(
             _stream_chat_completion(
-                body, user_sub=user.sub, model_name=model_name, model=model,
+                body, user_sub=user.sub, user_dept=user.department,
+                model_name=model_name, model=model,
                 security_concern=security_concern,
             ),
             media_type="text/event-stream",
         )
     return await _invoke_chat_completion(
-        body, user_sub=user.sub, model_name=model_name, model=model,
+        body, user_sub=user.sub, user_dept=user.department,
+        model_name=model_name, model=model,
         security_concern=security_concern,
     )
 
@@ -890,13 +1026,23 @@ async def embeddings(
         )
         raise  # unreachable
     usage = getattr(response, "usage", None)
+    prompt_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
     log_request_metadata(
         user=user.sub,
         model=model_name,
-        prompt_tokens=getattr(usage, "prompt_tokens", 0) if usage else 0,
+        prompt_tokens=prompt_tokens,
         latency_ms=(time.time() - start) * 1000,
         status="ok",
     )
+    # 五一 sprint 5/2 收尾: 同步写 quota_events (embedding 也算 token 用量).
+    if prompt_tokens > 0:
+        _quota_module.record_usage(
+            user_email=user.sub,
+            department=user.department,
+            model=model_name,
+            tokens_in=prompt_tokens,
+            tokens_out=0,
+        )
     return response.model_dump() if hasattr(response, "model_dump") else response
 
 
