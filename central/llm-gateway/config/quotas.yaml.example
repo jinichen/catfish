@@ -1,0 +1,57 @@
+# 鲶鱼 Quota · 三维配额配置 — 五一 sprint 5/3 (BL-D9, docs/QUOTA-DESIGN.md).
+#
+# 用法:
+#   1. cp quotas.yaml.example quotas.yaml
+#   2. 改下面的数值 + 重启 gateway (Companion watchdog 5s 自动拉)
+#   3. 仪表盘"本月配额"卡片立刻反映新限额
+#
+# 三维 (任一超就拒, friendly_quota_message 提示切到 catfish-private-main):
+#   - per_user:       员工每分钟 / 每天 token (defaults + overrides)
+#   - per_model:      模型粒度全员每天 (公网 LLM 控成本)
+#   - per_department: 部门聚合每天 (manager 改自己部门)
+#
+# 0 = 不限. 内网 LLM (catfish-private-main) + 内部员工建议 0/0/0 (管够).
+
+defaults:
+  # 默认每个员工的限额
+  per_user:
+    tokens_per_minute: 100000      # 10w/min, 大概一次长对话上限
+    tokens_per_day: 1000000        # 100w/day, 一天高强度用够
+
+  # 模型粒度限额 (主要给公网付费 LLM 控钱用)
+  per_model:
+    "Qwen3.6-Flash":
+      tokens_per_day: 5000000      # 500w/day 全员合计, 通义千问公共付费
+    "Gemini 3.1 Pro Preview":
+      tokens_per_day: 2000000      # 200w/day, Pro 贵, 控严
+    "Gemini 3.1 Flash-Lite Preview":
+      tokens_per_day: 10000000     # 1000w/day, Flash-Lite 便宜放开
+    # 内网模型不写 = 不限
+    # "qwen_v3_5_122b_a10b": ...
+
+  # 部门粒度限额
+  per_department:
+    "研发部":
+      tokens_per_day: 30000000     # 3000w/day, 工程师重度用
+    "财务部":
+      tokens_per_day: 5000000      # 500w/day, 用得少
+    "市场部":
+      tokens_per_day: 10000000     # 1000w/day
+    "人力资源部":
+      tokens_per_day: 5000000
+
+# 个别用户/部门 override (优先级高于 defaults)
+overrides:
+  users:
+    # CEO / 高管放宽
+    "ceo@ffcs.cn":
+      tokens_per_minute: 1000000   # 100w/min, 实质不限
+      tokens_per_day: 100000000    # 1 亿/day
+    # demo 演示员工故意压低用来触发 quota 提示
+    # "demo@ffcs.cn":
+    #   tokens_per_minute: 5000
+
+  departments:
+    # 战略部门临时放宽 (季末赶活)
+    # "研发部":
+    #   tokens_per_day: 80000000

@@ -136,3 +136,6 @@ central/llm-gateway/config/models.yaml
 # 数据库连接 (含密码), 五一 sprint 5/4 加. .example 进 git, 真实 yaml 不进
 central/identity-server/config/database.yaml
 central/llm-gateway/config/database.yaml
+
+# Quota 限额, 每客户不同 (CEO 邮箱 / 部门名 / 公网 LLM 预算). .example 进 git.
+central/llm-gateway/config/quotas.yaml
