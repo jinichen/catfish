@@ -59,12 +59,19 @@ pub async fn ensure_gateway_running() {
     };
 
     let ep = endpoints::endpoints();
+    // 五一 sprint 5/2 修: 显式传 CATFISH_ENV=dev, 让 dev 多账号 + /api/dev/users 可用.
+    // 不显式传时 Companion 父进程若有 CATFISH_ENV=prod (Mac.app 启动环境继承),
+    // 会污染 gateway, /api/dev/users 返 404, 切换器拉空.
+    // 客户生产部署是另起 gateway (不通过 Companion autostart), 互不干扰.
     let cfg = process::SpawnConfig {
         program: python,
         args: vec!["-m".into(), "catfish_gateway.app".into()],
         log_path,
         working_dir: dir,
-        env: vec![("PORT".into(), ep.gateway_port.to_string())],
+        env: vec![
+            ("PORT".into(), ep.gateway_port.to_string()),
+            ("CATFISH_ENV".into(), "dev".into()),
+        ],
     };
 
     match process::spawn_detached(cfg) {
