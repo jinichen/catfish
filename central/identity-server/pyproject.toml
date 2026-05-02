@@ -17,6 +17,9 @@ dependencies = [
     "cryptography>=43.0.0",
     "python-dotenv>=1.0.0",
     "python-multipart>=0.0.20",  # /authorize POST form
+    # 五一 sprint 5/4 BL-D17: 中央 PG 存储 (users + registry_agents).
+    # CATFISH_DB_URL 设了走 PG, 没设 yaml fallback (兼容老部署 + 单测).
+    "asyncpg>=0.29.0",
 ]
 
 [project.optional-dependencies]

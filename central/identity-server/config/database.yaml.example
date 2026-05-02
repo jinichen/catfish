@@ -1,0 +1,34 @@
+# 中央数据库连接配置 — 五一 sprint 5/4 (BL-D17).
+#
+# catfish-identity + gateway 共享同一个 PG 实例 + 不同表:
+#   catfish-identity: users, registry_agents
+#   gateway:          quota_events, gateway_audit
+#
+# 用法:
+#   1. cp database.yaml.example database.yaml
+#   2. 改 url 字段成你的 PG 连接
+#   3. 启 catfish-identity / gateway 自动用
+#
+# 优先级 (db.py db_url() 实现):
+#   1. env CATFISH_DB_URL (跨进程统一最优先, 给 docker-compose / k8s 用)
+#   2. config/database.yaml 的 url 字段
+#   3. 都没 → 走 yaml/sqlite fallback (单测 / 单机 dev 模式)
+
+database:
+  # 完整 PostgreSQL URL. 注意密码含 ! / @ / : 等特殊字符必须 URL encode.
+  # 例: 密码 7954672aA! → 7954672aA%21
+  url: ""  # 例: postgresql://catfish:PASSWORD%21@localhost:5432/catfish
+
+  # 连接池 (asyncpg.create_pool 参数)
+  pool:
+    min_size: 1
+    max_size: 10
+    timeout_seconds: 10
+    command_timeout_seconds: 10
+
+# 单机 mock / dev 模式 (没 PG 时走 yaml fallback):
+#   - users → config/users.yaml
+#   - registry → ~/.catfish-identity/registry.yaml
+#   - quota_events → ~/.catfish/quota.db (sqlite)
+#
+# 切换方式: database.url 留空 + 不设 CATFISH_DB_URL.

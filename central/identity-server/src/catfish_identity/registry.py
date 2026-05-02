@@ -95,7 +95,11 @@ class RegistryEntry:
 
 
 def _load_registry() -> dict[str, RegistryEntry]:
-    """从 yaml 加载. 文件不存在返空 dict."""
+    """从 yaml 加载 (sync). 文件不存在返空 dict.
+
+    PG 模式由 _load_registry_async 走 (async, 优先 PG fallback yaml).
+    sync 路径仅 unit test / dev mode.
+    """
     path = _registry_path()
     if not path.exists():
         return {}
@@ -121,6 +125,89 @@ def _load_registry() -> dict[str, RegistryEntry]:
             last_seen_iso=entry.get("last_seen", ""),
         )
     return result
+
+
+async def _load_registry_async() -> dict[str, RegistryEntry]:
+    """优先 PG, fallback yaml. catfish-identity app 内 endpoint 用这个 (async)."""
+    from .db import get_pool  # noqa: PLC0415
+
+    pool = await get_pool()
+    if pool is None:
+        return _load_registry()  # yaml fallback
+
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT sub, catfish_endpoint, jwks_uri, public_pem, "
+                "department, capabilities, last_seen FROM registry_agents"
+            )
+    except Exception as e:
+        logger.warning("PG registry 读取失败, fallback yaml: %s", e)
+        return _load_registry()
+
+    result: dict[str, RegistryEntry] = {}
+    for row in rows:
+        capabilities = row["capabilities"]
+        if isinstance(capabilities, str):
+            import json as _json  # noqa: PLC0415
+            capabilities = _json.loads(capabilities)
+        if not isinstance(capabilities, list):
+            capabilities = []
+        last_seen = row["last_seen"]
+        last_seen_iso = last_seen.isoformat() if last_seen else ""
+        result[row["sub"]] = RegistryEntry(
+            sub=row["sub"],
+            catfish_endpoint=row["catfish_endpoint"] or "",
+            jwks_uri=row["jwks_uri"] or "",
+            public_pem=row["public_pem"] or "",
+            department=row["department"] or "",
+            capabilities=[str(c) for c in capabilities],
+            last_seen_iso=last_seen_iso,
+        )
+    return result
+
+
+async def _save_registry_async(entries: dict[str, RegistryEntry]) -> bool:
+    """优先 PG (UPSERT), fallback yaml. 返 True 写 PG, False 写 yaml."""
+    from .db import get_pool  # noqa: PLC0415
+    import json as _json  # noqa: PLC0415
+
+    pool = await get_pool()
+    if pool is None:
+        _save_registry(entries)
+        return False
+
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                # 简化: 全删全插 (适合 < 100 个 agent 的场景, Phase 2 改成 UPSERT 单条)
+                await conn.execute("TRUNCATE registry_agents")
+                for sub, e in entries.items():
+                    last_seen = None
+                    if e.last_seen_iso:
+                        try:
+                            last_seen = datetime.fromisoformat(
+                                e.last_seen_iso.replace("Z", "+00:00")
+                            )
+                        except Exception:
+                            last_seen = datetime.now(timezone.utc)
+                    await conn.execute(
+                        "INSERT INTO registry_agents (sub, catfish_endpoint, jwks_uri, "
+                        "public_pem, department, capabilities, last_seen) "
+                        "VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)",
+                        sub,
+                        e.catfish_endpoint,
+                        e.jwks_uri,
+                        e.public_pem,
+                        e.department,
+                        _json.dumps(e.capabilities),
+                        last_seen or datetime.now(timezone.utc),
+                    )
+        return True
+    except Exception as ex:
+        logger.warning("PG registry 写失败, fallback yaml: %s", ex)
+        _save_registry(entries)
+        return False
 
 
 def _save_registry(entries: dict[str, RegistryEntry]) -> None:
@@ -217,27 +304,21 @@ def build_registry_router() -> APIRouter:
         register 时:
           - jwks_uri 不填 → 默认 = 中央的 /registry/agents/<sub>/jwks.json
           - public_pem 必填 (生产) / mock 阶段缺也接受 (回退到全局 catfish-identity jwks)
-        """
-        # TODO 真生产应该验 JWT (来自合法 catfish-identity 签的 access token)
-        # 单机 mock 跳过验证, 留 Phase 2 加 (BL Q3 加 mTLS)
 
+        五一 sprint 5/4: 优先写 PG, fallback yaml.
+        """
         if not req.sub or not req.catfish_endpoint:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="sub, catfish_endpoint 必填",
             )
 
-        # jwks_uri 默认指向中央 per-agent endpoint
-        # 假设中央 catfish-identity 暴露在请求方所到的 host:port (能从 request 拿)
-        # 简化处理: register 没传 jwks_uri 就空着, lookup 时拼出 host (单机 mock 假设
-        # 中央 8998, 真生产 issuer URL 来自 catfish-identity 配置)
         jwks_uri = req.jwks_uri
         if not jwks_uri:
-            # 留 mock 用 — 真生产应该用 catfish-identity 的 issuer URL
             issuer = os.environ.get("CATFISH_REGISTRY_ISSUER", "http://127.0.0.1:8998")
             jwks_uri = f"{issuer.rstrip('/')}/registry/agents/{req.sub}/jwks.json"
 
-        entries = _load_registry()
+        entries = await _load_registry_async()
         now_iso = datetime.now(timezone.utc).isoformat()
 
         entries[req.sub] = RegistryEntry(
@@ -250,13 +331,14 @@ def build_registry_router() -> APIRouter:
             last_seen_iso=now_iso,
         )
 
-        _save_registry(entries)
+        wrote_pg = await _save_registry_async(entries)
         logger.info(
-            "registry register: sub=%s endpoint=%s pub_key_len=%d capabilities=%s",
+            "registry register: sub=%s endpoint=%s pub_key_len=%d capabilities=%s store=%s",
             req.sub,
             req.catfish_endpoint,
             len(req.public_pem),
             req.capabilities,
+            "PG" if wrote_pg else "yaml",
         )
 
         return RegisterResponse(
@@ -268,7 +350,7 @@ def build_registry_router() -> APIRouter:
     @router.get("/lookup", response_model=LookupResponse)
     async def lookup(sub: str = Query(..., description="员工 SSO sub")) -> LookupResponse:
         """A 调 B 前先 lookup, 拿 B 的 catfish_endpoint + jwks_uri."""
-        entries = _load_registry()
+        entries = await _load_registry_async()
         if sub not in entries:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -291,7 +373,7 @@ def build_registry_router() -> APIRouter:
 
         别的 agent (B) 验 (A) 签的 JWT 时 fetch 这个 endpoint 拿 A 的公钥.
         """
-        entries = _load_registry()
+        entries = await _load_registry_async()
         if sub not in entries:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -317,7 +399,7 @@ def build_registry_router() -> APIRouter:
     @router.get("/list", response_model=list[LookupResponse])
     async def list_agents() -> list[LookupResponse]:
         """列所有 registered agents (调试 + 仪表盘用)."""
-        entries = _load_registry()
+        entries = await _load_registry_async()
         return [
             LookupResponse(
                 sub=e.sub,

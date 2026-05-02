@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import logging
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
@@ -59,19 +60,36 @@ def create_app() -> FastAPI:
 
     依赖通过闭包注入到 router (不用 fastapi global state, 测试可以构造小 app).
     """
-    app = FastAPI(
-        title="Catfish Identity",
-        description="自建 OIDC server, 给 catfish-gateway 提供 SSO.",
-        version="0.1.0",
-        # 生产部署关 docs (避免暴露端点列表给攻击者)
-        docs_url="/__internal/docs" if os.environ.get("CATFISH_ENV") == "dev" else None,
-        redoc_url=None,
-    )
-
     issuer = _issuer_url()
     signer = JwtSigner()
     registry = UserRegistry()
     code_store = _CodeStore()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        # 五一 sprint 5/4 (BL-D17): PG 模式下启动时 init schema + 从 PG 加载 users
+        from .db import init_schema, close_pool  # noqa: PLC0415
+        ok = await init_schema()
+        if ok:
+            # 首次启动 PG 空 → 从 yaml seed (一次性). 后续 yaml 改不影响 PG.
+            seeded = await registry.seed_pg_from_yaml_if_empty()
+            if seeded:
+                logger.info("PG 首次 seed %d 个用户从 yaml", seeded)
+            await registry.reload_from_pg()
+            logger.info("PG 模式: schema OK, users 加载 %d", len(registry))
+        else:
+            logger.info("PG 未配置 (CATFISH_DB_URL), users 用 yaml fallback (%d 个)", len(registry))
+        yield
+        await close_pool()
+
+    app = FastAPI(
+        title="Catfish Identity",
+        description="自建 OIDC server, 给 catfish-gateway 提供 SSO.",
+        version="0.1.0",
+        docs_url="/__internal/docs" if os.environ.get("CATFISH_ENV") == "dev" else None,
+        redoc_url=None,
+        lifespan=lifespan,
+    )
 
     if len(registry) == 0:
         logger.warning(
