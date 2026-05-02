@@ -16,8 +16,9 @@ pub fn run() {
     // 五一 sprint 5/5: Cmd+Shift+Space 召唤主窗口浮窗.
     // 设计:
     //   - 已显示并聚焦  → 隐藏 (再按一次收起)
-    //   - 已显示未聚焦  → 居中 + 置顶 + 抢焦
-    //   - 已隐藏        → 显示 + 居中 + 置顶 + 抢焦
+    //   - 已显示未聚焦  → 抢焦
+    //   - 已隐藏/最小化 → 解最小化 + 显示 + 居中 + 抢焦
+    // 配套: dock 单击鲶鱼图标会发 RunEvent::Reopen, 在文件末尾的 .run() 闭包里接.
     // 全局快捷键, 任何 app 都能召唤鲶鱼.
     #[cfg(desktop)]
     let toggle_shortcut = tauri_plugin_global_shortcut::Shortcut::new(
@@ -36,19 +37,24 @@ pub fn run() {
                 .with_handler(move |app, shortcut, event| {
                     use tauri::Manager;
                     use tauri_plugin_global_shortcut::ShortcutState;
-                    if shortcut == &toggle_shortcut && event.state() == ShortcutState::Pressed {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let visible = window.is_visible().unwrap_or(false);
-                            let focused = window.is_focused().unwrap_or(false);
-                            if visible && focused {
-                                let _ = window.hide();
-                            } else {
-                                let _ = window.show();
-                                let _ = window.center();
-                                let _ = window.set_always_on_top(true);
-                                let _ = window.unminimize();
-                                let _ = window.set_focus();
-                            }
+                    // 只在 Pressed 时响应 (Released 也会触发, 不去重就抖)
+                    if shortcut != &toggle_shortcut || event.state() != ShortcutState::Pressed {
+                        return;
+                    }
+                    if let Some(window) = app.get_webview_window("main") {
+                        let visible = window.is_visible().unwrap_or(false);
+                        let focused = window.is_focused().unwrap_or(false);
+                        if visible && focused {
+                            // 已经在前台 → 收起 (再按一次召唤 toggle)
+                            let _ = window.hide();
+                        } else {
+                            // 召唤: 解最小化 → 显示 → 居中 → 抢焦
+                            // 注意: 不调 set_always_on_top, 否则 macOS 上窗口被提到
+                            // NSFloatingWindowLevel, 最小化按钮失效, dock 单击也不响应.
+                            let _ = window.unminimize();
+                            let _ = window.show();
+                            let _ = window.center();
+                            let _ = window.set_focus();
                         }
                     }
                 })
@@ -158,6 +164,32 @@ pub fn run() {
             commands::speech::speech_stop_and_transcribe,
             commands::speech::speech_cancel_recording,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // 五一 sprint 5/5: dock 单击 / 主菜单"激活"鲶鱼时, 把隐藏窗口拉回来.
+            //
+            // 背景: 浮窗 UX 下 Cmd+Shift+Space 会调 window.hide(), 之后用户
+            // 点 dock 上的鲶鱼图标默认不会重开 (Tauri 不暴露默认 reopen 行为).
+            // macOS NSApplicationDelegate applicationShouldHandleReopen 会派发
+            // tauri::RunEvent::Reopen, 这里接住, has_visible_windows=false 时
+            // 把主窗口拽出来 + 抢焦.
+            //
+            // 注: RunEvent::Reopen 只 macOS 有, Linux/Win 没这个变体, 故 cfg = macos.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { has_visible_windows, .. } = event {
+                if !has_visible_windows {
+                    use tauri::Manager;
+                    if let Some(window) = app_handle.get_webview_window("main") {
+                        let _ = window.unminimize();
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = (app_handle, event);
+            }
+        });
 }
