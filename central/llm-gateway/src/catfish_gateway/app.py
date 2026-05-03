@@ -1071,6 +1071,47 @@ async def chat_completions(
     # 没用 Gemini 模型 / 客户端不传 system 都会跳过, 无副作用
     body = harden_for_gemini(body, model)
 
+    # ── Quota 阻断 (BL-D9 完整 ship, 5/2 收尾) ────────────────
+    # 真实接 chat: 在 LLM 调用前查 quota, 超了直接 429 + friendly message.
+    # 估算用 quota.estimate_tokens(prompt 文本拼接), 4 字符 ≈ 1 token, 至少 1000.
+    # check_quota 任一维度超 (user_minute / user_day / model_day / dept_day) 即拒.
+    try:
+        prompt_text = "\n".join(
+            (m.get("content") or "") if isinstance(m.get("content"), str)
+            else "" for m in (body.get("messages") or [])
+            if isinstance(m, dict)
+        )
+        estimated = _quota_module.estimate_tokens(prompt_text)
+        qc = _quota_module.check_quota(
+            user_email=user.sub,
+            department=user.department,
+            model=model_name,
+            est_tokens=estimated,
+        )
+        if not qc.allowed:
+            friendly = _quota_module.friendly_quota_message(qc, user.sub, model_name)
+            logger.info(
+                "quota deny: user=%s model=%s dimension=%s current=%d limit=%d",
+                user.sub, model_name, qc.dimension, qc.current, qc.limit,
+            )
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": "quota_exceeded",
+                    "message": friendly,
+                    "dimension": qc.dimension,
+                    "current": qc.current,
+                    "limit": qc.limit,
+                    "reset_at": qc.reset_at,
+                    "model": model_name,
+                },
+            )
+    except HTTPException:
+        raise  # 上面 429 直接抛
+    except Exception as e:
+        # quota 子系统挂了不该影响主流程, 不阻断 chat
+        logger.warning("check_quota 调用炸 (allow chat): %s", e)
+
     # 注意: 这里传 body (而不是预构建的 params) 给 _invoke / _stream
     # 因为 fallback 时换模型, params 里的 api_base / api_key / 等都得重新构建
     is_stream = bool(body.get("stream", False))

@@ -363,6 +363,14 @@ export function useChat(initialModel: string) {
 
       const collectedToolCalls = refs.calls;
 
+      // 五一 sprint 5/2 修: streamChat 的 onError 已经把 status 设成 'error',
+      // 这里别无条件覆盖回 'done', 否则 quota 超限 / 鉴权错 / 上游 503 等错误
+      // UI 显不出来 (踩过坑).
+      const currentStatus = useChatStore
+        .getState()
+        .messages.find((m) => m.id === assistantId)?.status;
+      const isError = currentStatus === "error";
+
       // 把 tool_calls 挂到当前 assistant 消息上
       const finalAssistant: ChatMessage = {
         ...assistantMsg,
@@ -371,9 +379,11 @@ export function useChat(initialModel: string) {
             ?.content || "",
         tool_calls:
           collectedToolCalls.length > 0 ? collectedToolCalls : undefined,
-        status: "done",
+        status: isError ? "error" : "done",
       };
-      if (collectedToolCalls.length > 0) {
+      if (isError) {
+        // streamChat onError 已经处理了 status + error 字段, 这里不动
+      } else if (collectedToolCalls.length > 0) {
         updateMessage(assistantId, {
           status: "done",
           tool_calls: collectedToolCalls,

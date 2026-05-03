@@ -10,14 +10,14 @@
 
 ```
 Phase 1 · 单员工 AI 副手           [█████████░] 95% · 5 月 demo + 1 PoC 客户
-Phase 2 · 团队版 (SSO/RBAC/Win)    [█████░░░░░] 50% · 五一 sprint 完整 ship Phase 2 后端
+Phase 2 · 团队版 (SSO/RBAC/Win)    [██████░░░░] 60% · 五一 sprint Phase 2 后端 100% + 阻断 + UI
 Phase 3 · ★ Federation             [███░░░░░░░] 30% · 五一 sprint Plan D MVP, Q4 ship
 Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 2027 Q2+
 ```
 
 > 📈 5/2 收尾后大幅推进:
 >   - Phase 1: 92% → 95% (+ project-approval skill / 主动闲聊 / Quota 真接 chat)
->   - Phase 2: 35% → 50% (+ Dashboard 角色化 / 多账号 / PG 完整双写 / alembic 双服务)
+>   - Phase 2: 35% → 60% (+ Dashboard 角色化 / 多账号 / PG 完整双写 / alembic 双服务 / Quota 100% / Manager PUT UI / Admin 全局)
 
 ---
 
@@ -105,18 +105,20 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 
 - ⬜ Manager 改本部门 quota PUT 端点 (现 read-only) · 1 周
 - ⬜ Admin 全局聚合卡 · 0.5 周
 
-#### #7 Quota [Phase 2, 90%]  ★ 5/2 完整 ship
-> 三维滑动窗口 (用户/模型/部门) + 实时 chat 接通.
+#### #7 Quota [Phase 2, 100%]  ★ 5/2 完整 ship
+> 三维滑动窗口 (用户/模型/部门) + 实时 chat 接通 + manager UI.
 - ✅ sliding window sqlite + check_quota (4 维度)
 - ✅ /api/quota/me 端点 + Dashboard QuotaCard 实时
-- ✅ /api/quota/department/{dept} 部门聚合 + top 10 员工
+- ✅ /api/quota/department/{dept} GET 部门聚合 + top 10 员工
+- ✅ /api/quota/department/{dept} PUT manager 改限额 (写 quotas.yaml)
+- ✅ /api/quota/global admin 全员 top departments
 - ✅ quotas.yaml.example + path 修正
 - ✅ 双 backend (PG / sqlite, 自动 fallback 不丢数据)
 - ✅ chat completions 主流程接 record_usage (PG 双写)
-- ✅ 23 单测过 (含 5 部门聚合)
-- ⬜ check_quota 真接 chat 阻断 (现只读不写阻断) · 0.5 周
-- ⬜ Quota 超限 friendly 提示在 Companion UI · 0.5 周
-- ⬜ Manager 后台改 quota PUT 界面 · 1 周
+- ✅ **chat 入口接 check_quota 阻断 (5/2 完整 ship): 超额返 429 + friendly 话术**
+- ✅ **Companion 识别 429 显友好 banner ("你今日 X 用满了, 切到 Y")**
+- ✅ **DepartmentQuotaCard 加 inline QuotaEditor (manager 直接 input + 保存)**
+- ✅ 28 单测过 (含 5 部门聚合 + 3 update_department_quota + 2 全局聚合)
 
 #### #9 PG 中央数据库 [Phase 2, 95%]  ★ 5/2 完整 ship
 > users + registry + quota_events + gateway_audit 全走 PG, fallback 完整.

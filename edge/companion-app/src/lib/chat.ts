@@ -14,6 +14,7 @@
 import type { ChatMessage, ToolCall } from "../types/chat";
 import { config } from "./env";
 import { gatewayGetDevToken } from "./tauri";
+import { getOverrideToken } from "./me";
 
 interface SendChatParams {
   model: string;
@@ -51,14 +52,21 @@ export interface ChatStreamDoneInfo {
   usage?: ChatUsage;
 }
 
-/** Token 缓存 —— 第一次调 gateway 时通过 Tauri Rust 读 .env 拿真 token,后续复用。 */
-let _cachedToken: string | null = null;
+/** Token 缓存 —— 第一次调 gateway 时通过 Tauri Rust 读 .env 拿真 token,后续复用。
+ *
+ * 五一 sprint 5/2 加多账号支持: 切换器选的 token (localStorage) 优先级高于 .env.
+ */
+let _cachedEnvToken: string | null = null;
 
 async function getToken(): Promise<string> {
-  if (_cachedToken) return _cachedToken;
+  // 1. 切换器优先 (DevUserSwitcher 写 localStorage)
+  const override = getOverrideToken();
+  if (override) return override;
+  // 2. .env 兜底
+  if (_cachedEnvToken) return _cachedEnvToken;
   try {
     const token = await gatewayGetDevToken();
-    _cachedToken = token;
+    _cachedEnvToken = token;
     return token;
   } catch (e) {
     console.warn("[catfish chat] 读 dev token 失败,用 fallback:", e);
@@ -67,7 +75,7 @@ async function getToken(): Promise<string> {
 }
 
 export function _clearTokenCache(): void {
-  _cachedToken = null;
+  _cachedEnvToken = null;
 }
 
 // ── OpenAI 兼容线格式 ──
@@ -211,6 +219,25 @@ export async function streamChat(params: SendChatParams): Promise<void> {
   }
 
   if (!resp.ok) {
+    // Quota 超限 (429): gateway 返 detail.message 已是 friendly 中文话术
+    // ("你今日 Pro 用满了, 切到 catfish-private-main 继续").
+    // 直接展示, 不再加 'HTTP 429:' 前缀污染 UX.
+    if (resp.status === 429) {
+      let friendlyMsg = "Quota 超限. 切到 catfish-private-main (内网模型) 继续聊.";
+      try {
+        const errJson = await resp.json();
+        const d = errJson?.detail;
+        if (typeof d === "object" && d?.message) {
+          friendlyMsg = d.message;
+        } else if (typeof d === "string") {
+          friendlyMsg = d;
+        }
+      } catch {
+        /* keep default */
+      }
+      onError(`⚠️ ${friendlyMsg}`);
+      return;
+    }
     let detail = "";
     try {
       const errJson = await resp.json();

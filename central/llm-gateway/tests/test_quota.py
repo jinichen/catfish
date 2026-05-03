@@ -280,3 +280,171 @@ def test_friendly_message_per_model_day() -> None:
     msg = quota.friendly_quota_message(qc, "alice@x.com", "gemini-pro")
     assert "gemini-pro" in msg
     assert "qwen-flash" in msg or "private-main" in msg
+
+
+# ── 部门级聚合 (5/2 RBAC manager Dashboard 用) ────────────────
+
+
+def test_top_users_in_department_basic(tmp_path: Path) -> None:
+    """top_users_in_department 按 token 用量降序返 top N 员工."""
+    quota.record_usage("alice@x.com", "研发部", "qwen", 1000, 500)
+    quota.record_usage("bob@x.com", "研发部", "qwen", 800, 200)
+    quota.record_usage("carol@x.com", "研发部", "qwen", 100, 0)
+    cutoff = int(time.time() * 1000) - 86_400_000
+
+    top = quota.top_users_in_department("研发部", cutoff, limit=10)
+    assert len(top) == 3
+    assert top[0] == {"user_email": "alice@x.com", "tokens_used": 1500}
+    assert top[1] == {"user_email": "bob@x.com", "tokens_used": 1000}
+    assert top[2] == {"user_email": "carol@x.com", "tokens_used": 100}
+
+
+def test_top_users_department_isolation(tmp_path: Path) -> None:
+    """部门隔离: 销售部员工不出现在研发部 top."""
+    quota.record_usage("alice@x.com", "研发部", "qwen", 1000, 0)
+    quota.record_usage("david@x.com", "销售部", "qwen", 9999, 0)
+    cutoff = int(time.time() * 1000) - 86_400_000
+
+    top_dev = quota.top_users_in_department("研发部", cutoff)
+    assert len(top_dev) == 1
+    assert top_dev[0]["user_email"] == "alice@x.com"
+
+    top_sales = quota.top_users_in_department("销售部", cutoff)
+    assert len(top_sales) == 1
+    assert top_sales[0]["user_email"] == "david@x.com"
+
+
+def test_top_users_limit(tmp_path: Path) -> None:
+    """limit 截断 top N."""
+    for i in range(15):
+        quota.record_usage(f"user{i}@x.com", "研发部", "qwen", 100 * (i + 1), 0)
+    cutoff = int(time.time() * 1000) - 86_400_000
+
+    top = quota.top_users_in_department("研发部", cutoff, limit=5)
+    assert len(top) == 5
+    # 最大的应该在前 (user14 = 1500)
+    assert top[0]["tokens_used"] == 1500
+
+
+def test_audit_summary_dept_basic(tmp_path: Path) -> None:
+    """audit_summary_dept_since 返 request_count / total_tokens / by_model / by_user."""
+    quota.record_usage("alice@x.com", "研发部", "qwen", 1000, 500)
+    quota.record_usage("bob@x.com", "研发部", "qwen", 800, 200)
+    quota.record_usage("alice@x.com", "研发部", "gemini", 300, 100)
+    cutoff = int(time.time() * 1000) - 86_400_000
+
+    s = quota.audit_summary_dept_since("研发部", cutoff)
+    assert s["request_count"] == 3
+    assert s["total_tokens"] == 2900
+
+    # by_model 按 token 降序
+    assert len(s["by_model"]) == 2
+    assert s["by_model"][0]["model"] == "qwen"
+    assert s["by_model"][0]["count"] == 2
+    assert s["by_model"][0]["total_tokens"] == 2500
+    assert s["by_model"][1]["model"] == "gemini"
+
+    # by_user 按 token 降序
+    assert len(s["by_user"]) == 2
+    assert s["by_user"][0]["user_email"] == "alice@x.com"
+    assert s["by_user"][0]["total_tokens"] == 1900
+
+
+def test_audit_summary_dept_empty(tmp_path: Path) -> None:
+    """空部门返 0 + 空数组."""
+    cutoff = int(time.time() * 1000) - 86_400_000
+    s = quota.audit_summary_dept_since("不存在的部门", cutoff)
+    assert s["request_count"] == 0
+    assert s["total_tokens"] == 0
+    assert s["by_model"] == []
+    assert s["by_user"] == []
+
+
+# ── update_department_quota (5/2 RBAC manager PUT) ──────────
+
+
+def test_update_department_quota_creates_yaml(tmp_path: Path) -> None:
+    """yaml 不存在 → 创建并写入."""
+    yaml_path = tmp_path / "quotas.yaml"
+    import os
+    os.environ["CATFISH_QUOTAS_PATH"] = str(yaml_path)
+
+    ok = quota.update_department_quota("研发部", 30_000_000)
+    assert ok
+    assert yaml_path.exists()
+
+    config = quota.load_quota_config()
+    dq = config.department_quotas.get("研发部")
+    assert dq is not None
+    assert dq.tokens_per_day == 30_000_000
+
+
+def test_update_department_quota_handles_none_section(tmp_path: Path) -> None:
+    """yaml 'departments:' 后只有注释 (None) 时也能正确处理."""
+    yaml_path = tmp_path / "quotas.yaml"
+    yaml_path.write_text("""
+overrides:
+  departments:
+    # comment only, value None
+""")
+    import os
+    os.environ["CATFISH_QUOTAS_PATH"] = str(yaml_path)
+
+    ok = quota.update_department_quota("engineering", 50_000_000)
+    assert ok
+    text = yaml_path.read_text()
+    assert "engineering" in text
+    assert "50000000" in text
+
+
+def test_update_department_quota_overwrite(tmp_path: Path) -> None:
+    """已有 dept override → 更新."""
+    yaml_path = tmp_path / "quotas.yaml"
+    import os
+    os.environ["CATFISH_QUOTAS_PATH"] = str(yaml_path)
+
+    quota.update_department_quota("研发部", 30_000_000)
+    quota.update_department_quota("研发部", 80_000_000)  # 改
+
+    config = quota.load_quota_config()
+    assert config.department_quotas["研发部"].tokens_per_day == 80_000_000
+
+
+# ── 全局聚合 (5/2 RBAC admin) ────────────────────────────────
+
+
+def test_top_departments(tmp_path: Path) -> None:
+    """全局 top N 部门按 token 降序."""
+    quota.record_usage("a@x.com", "研发部", "qwen", 1000, 500)
+    quota.record_usage("b@x.com", "研发部", "qwen", 800, 200)
+    quota.record_usage("c@x.com", "销售部", "gemini", 5000, 0)
+    quota.record_usage("d@x.com", "财务部", "qwen", 100, 100)
+
+    cutoff = int(time.time() * 1000) - 86_400_000
+    top = quota.top_departments(cutoff, limit=10)
+    assert len(top) == 3
+    assert top[0]["department"] == "销售部"
+    assert top[0]["tokens_used"] == 5000
+    assert top[1]["department"] == "研发部"
+    assert top[1]["tokens_used"] == 2500
+    assert top[2]["department"] == "财务部"
+
+
+def test_audit_summary_global(tmp_path: Path) -> None:
+    """全员聚合 - 4 数字 + 3 维分布."""
+    quota.record_usage("a@x.com", "研发部", "qwen", 1000, 500)
+    quota.record_usage("b@x.com", "研发部", "qwen", 800, 200)
+    quota.record_usage("c@x.com", "销售部", "gemini", 5000, 0)
+
+    cutoff = int(time.time() * 1000) - 86_400_000
+    s = quota.audit_summary_global_since(cutoff)
+
+    assert s["request_count"] == 3
+    assert s["total_tokens"] == 7500
+    assert s["active_users"] == 3
+    assert s["active_departments"] == 2
+
+    # 部门 / 模型 / 员工 都应该有
+    assert len(s["by_department"]) == 2
+    assert len(s["by_model"]) == 2
+    assert len(s["by_user"]) == 3
