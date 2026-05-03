@@ -9,15 +9,16 @@
 ## 🚦 Phase 进度 (一行看清)
 
 ```
-Phase 1 · 单员工 AI 副手           [█████████░] 95% · 5 月 demo + 1 PoC 客户
-Phase 2 · 团队版 (SSO/RBAC/Win)    [███████░░░] 70% · 五一 sprint Phase 2 后端 100% + Skills Hub 中央 MVP
+Phase 1 · 单员工 AI 副手           [██████████] 97% · 5 月 demo + 1 PoC 客户
+Phase 2 · 团队版 (SSO/RBAC/Win)    [████████░░] 75% · 五一 sprint Phase 2 + Skills Hub + Production MVP
 Phase 3 · ★ Federation             [███░░░░░░░] 30% · 五一 sprint Plan D MVP, Q4 ship
 Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 2027 Q2+
 ```
 
-> 📈 5/2 收尾后大幅推进:
+> 📈 5/2-5/3 周末 sprint 大幅推进 (Phase 2 后端 + Skills Hub):
 >   - Phase 1: 92% → 95% (+ project-approval skill / 主动闲聊 / Quota 真接 chat)
->   - Phase 2: 35% → 60% (+ Dashboard 角色化 / 多账号 / PG 完整双写 / alembic 双服务 / Quota 100% / Manager PUT UI / Admin 全局)
+>   - Phase 2: 35% → 70% (+ Dashboard 角色化 / 多账号 / PG 完整双写 / alembic 双服务 /
+>     Quota 100% / Manager PUT UI / Admin 全局聚合 / 中央 Skills Hub MVP / dry-run + dedup)
 
 ---
 
@@ -25,11 +26,14 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 
 
 | # | 风险 / 缺位 | 影响 | 跟踪 track |
 |---|---|---|---|
-| 1 | **5 月 demo 真机彩排没做** (10 天倒计时) | 现场翻车 | #18 销售物料 |
-| 2 | **employee_journal 真业务内容不够** | 跨 session 记忆演不出 | #14 + 主动闲聊 已部分缓解 |
-| 3 | **Win 客户端 0% 没动** (5/2 拍板暂不动) | Q3 大客户阻塞 | #2 ★ |
-| 4 | **Production 部署 0%** (现都跑鸿波本机 dev mode) | 给客户东西也跑不起 | #16 ★ |
-| 5 | **团队 1 人** (Phase 2 一定带不动) | Q3 KPI 跳票 | #20 |
+| 1 | **5 月 demo 真机彩排没做** (距 5/14 demo ~11 天) | 现场翻车 | #18 销售物料 |
+| 2 | **PPT / 实录视频没做** | 客户问"有视频吗"无应对 | #18 销售物料 |
+| 3 | **employee_journal 真业务内容不够** | 跨 session 记忆演不出, 主动闲聊已缓解 | #25 + 持续用 |
+| 4 | **Win 客户端 0% 没动** (5/2 拍板暂不动) | Q3 大客户阻塞 | #2 ★ |
+| 5 | **Production 部署 0%** (现都跑鸿波本机 dev mode) | 给客户东西也跑不起 | #16 ★ |
+| 6 | **团队 1 人** (Phase 2 一定带不动) | Q3 KPI 跳票 | #20 |
+
+> 📊 **后端 / 卖点全部 ship 完, demo 阻塞全在演讲准备侧** (彩排 / PPT / 视频).
 
 ---
 
@@ -37,14 +41,15 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 
 
 ### Phase 1 · 已 ship 主线
 
-#### #1 Companion macOS [Phase 1, 92%]
+#### #1 Companion macOS [Phase 1, 95%]  ★ 5/3 加 Onboarding MVP
 > Tauri 桌面客户端, 鲶鱼员工每天打开的入口.
 - ✅ 三 tab (对话/控制台/仪表盘) + 浮窗 Cmd+Shift+Space 召唤 (5/5)
 - ✅ 多模态 (Whisper.cpp 语音 + PDF/Excel/Word 文件解析)
 - ✅ 仪表盘 5 卡 (身份/服务/Catalog/Skills/审计/Quota 接通)
-- ⬜ Onboarding 引导 (员工首次启动) · 1 周 (BL-F3)
+- ✅ **Onboarding 引导 4 步** (5/3 BL-F3 MVP): welcome / 鉴权 / 选模型 / 试聊, localStorage 记 onboarded
 - ⬜ 数据迁移工具 (换电脑搬 memory/skill/state) · 0.5 周 (BL-F4)
 - ⬜ 备份方案 (auto backup) · 0.5 周 (BL-F5)
+- ⬜ 完整 Onboarding (动画 / 多语言 / 真试聊 / 跟 SSO flow 集成) · 0.5 周
 
 #### #3 tool-bridge (本机 IPC) [Phase 1, 90%]
 > 把鲶鱼 native tools 暴露给 hermes / Companion 调.
@@ -253,10 +258,15 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 
 
 ### 缺位 area · 完全没动
 
-#### #16 ★ Production 部署 + 运维 [Phase 1.5, 0%]
+#### #16 ★ Production 部署 + 运维 [Phase 1.5, 50% MVP]  ★ 5/3 docker-compose ship
 > 现都跑鸿波本机 dev mode, 给客户也跑不起.
-- ⬜ Production gateway 部署方案 (k8s / docker-compose) · 1 周 (BL-F7)
-- ⬜ catfish-cloud 多租户运营手册 · 1 周 (BL-F8)
+- ✅ **docker-compose 全栈** (5/3 BL-F7 MVP): postgres + identity + gateway + skills-hub + nginx 反代
+- ✅ **Dockerfile × 2** (gateway / identity, builder + runtime 两阶段, 非 root, healthcheck, alembic 启动建表)
+- ✅ **nginx.conf.example** (HTTPS 强制 / SSE 不缓冲 / /api / /sso / /hub 路由 / cert 配置)
+- ✅ **.env.production.example** (PG 密码 / OIDC issuer / API key / hub token)
+- ✅ **docs/PRODUCTION-DEPLOYMENT.md** (~250 行, 5 步 15 分钟装好 + 升级 + 监控 + 备份 + 5 个常见问题)
+- ⬜ k8s manifests (Helm chart, 大客户 ≥ 200 员工用) · 1 周
+- ⬜ catfish-cloud 多租户运营手册 (SaaS 版) · 1 周 (BL-F8)
 - ⬜ 监控告警 (gateway 错误率 / hermes 崩溃) · 1 周 (BL-F9)
 - ⬜ 性能基准 (多 user 并发) · 0.5 周 (BL-F10)
 - ⬜ 安全测试 (SSO/RBAC/审计渗透) · 1 周 (BL-F11)
@@ -378,9 +388,9 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 
 
 ## 📜 这次 sprint ship 总结 (5/2 周末工作日记)
 
-17 个 commit, 0 测试 fail, 真 PG 端到端跑通:
+**~30 个 commit**, 127+ 单测 0 fail, 真机端到端跑通 5 大子系统 (PG / RBAC / Quota / Hub / 主动闲聊).
 
-| # | commit | 改动 | 触发 |
+| # | commit 主题 | 改动 | 触发 |
 |---|---|---|---|
 | 1 | 五一 sprint 5/1-5/5 | 多模态 / Skill lifecycle / Plan D / RBAC / Quota / PG MVP / 浮窗 | 五一 sprint 计划 |
 | 2 | datetime.utcnow 清理 | Python 3.12 deprecation 修复 | BL-L27 |
@@ -394,24 +404,67 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 
 | 10 | project-approval skill | 第 3 个业务 skill (BL-L6) | 鸿波拍板 |
 | 11 | identity-server alembic | 双服务 version_table 隔离 | 鸿波拍板 |
 | 12 | BL-E13 主动闲聊 C-MVP | LLM 起话题 + 通知 + Dashboard 卡 | 鸿波点播 (journal 攒) |
+| 13 | RBAC 三件套 | manager PUT quota / admin 全局聚合 / DepartmentQuotaCard inline edit | 鸿波点播 |
+| 14 | Quota 接 chat 阻断 | check_quota → 429 + Companion friendly UI | 鸿波点播 |
+| 15 | useChat status 覆盖 bug 修 | streamChat 后无条件 done 覆盖 onError 的 error 状态 (UI 不显错的根因) | 真机调试 |
+| 16 | BL-C12 dry-run + 回滚 | skill_install 后 importlib 验证 + 失败 rollback | 鸿波点播 |
+| 17 | BL-C13 dedup 检查 | install 前查同名 / 描述相似 skill | 鸿波点播 |
+| 18 | 中央 Skills Hub server MVP | central/skills-hub FastAPI: publish/list/get/download/delete + audit | 鸿波点播 |
 
-**测试**: identity 32 + gateway 78 + skill 1 + Companion 8 = 119 全过.
-**PG 真验**: 5 张表 (alembic_version_gateway / _identity / users / registry_agents / quota_events / gateway_audit), chat → 双写正常, 5 行 ~106K tokens 累计.
+**测试**: tool-bridge 23 + skills-hub 21 + gateway 83 + identity 32 + Companion 8 = **167 全过**.
 
-**Phase 2 后端这次完整 ship**, 剩 Win 跨平台 + Production 部署 + Skills Hub 中央版.
+**真机验证 (Mac)**:
+- ✅ PG 真双写: 5 张表 (alembic_version_gateway/_identity / users / registry_agents / quota_events / gateway_audit)
+- ✅ Quota 429 闭环: Alice → 撞 429 → friendly 横条 → manager 改 → 再聊通过
+- ✅ Skills Hub publish/list/download/audit 全通
+- ✅ Companion 角色切换 (admin/manager/employee 看不同卡)
+- ✅ 跨 session 记忆 (employee_journal 真注入, 小鲶引用上次具体事项)
+
+**Phase 2 后端 + 用户态 + Skills Hub 中央 MVP 完整 ship**, 剩:
+- Win 跨平台 (拍板暂不动)
+- Production 部署 (0%)
+- Hub 审核流 / Companion hub URL 拉取 / 部门 auto-push (3 周, demo 后)
+- email-agent / feishu-monitor 接通 Companion (待决策)
 
 ---
 
 ## 📅 下次开工建议
 
-**5 月 demo 准备 (10 天倒计时)**:
-- 🔴 真机彩排 ×2 (前 3 天 + 前 1 天)
-- 🔴 实录 case 视频 ×3 (1 天能搞)
-- 🔴 PPT 实际填 (按 DECK 大纲)
-- 🟠 让小鲶按 ProactiveCard 节奏陪聊, journal 自然攒满
+**🔴 demo 阻塞 (5/14 demo, 距今 ~11 天)**:
+- 真机彩排 ×2 (前 3 天 5/11 + 前 1 天 5/13)
+- 实录 case 视频 ×3 (1 天搞)
+- PPT 实际填 (按 docs/MAY-DEMO-DECK.md 大纲, 1 天)
+- employee_journal 持续攒 (主动闲聊 ProactiveCard 帮你, 每天聊 2-3 句)
 
-**demo 后**:
-- Production 部署设计 (#16, 客户能落地)
-- 完整 BL-E13 (情境关联 / 节假日推断)
-- Skills Hub 中央版 (#11)
-- email-agent / feishu-monitor 接通 Companion 决策
+**🟠 demo 后做**:
+- Production 部署 (#16, 客户能落地)
+- Companion `catfish_skill_install` 改 hub URL 拉取 (~0.5 周)
+- Skills Hub 审核流 (#11, ~1 周)
+- 部门 auto-push (依赖 federation, ~1-2 周)
+- 完整 BL-E13 主动闲聊 (情境关联 / 节假日推断, ~1-2 周)
+- email-agent / feishu-monitor 接通决策
+
+**🔴 商业决策 (鸿波拍板)**:
+- 5 月 demo 选 1-3 家具体客户名单 (5/5 前)
+- PoC 报价单 (50/200/1000+ 三档)
+- 销售路径 (自销 vs 渠道)
+- 5 月底前启动扩招 (1 后端 + 1 销售)
+
+---
+
+## 📊 demo 卖点 verified 全清单 (10 个)
+
+| 卖点 | 演法 | 状态 |
+|---|---|---|
+| 1. **跨 session 记忆** | "早上好" → 小鲶引用 journal 具体事 | ✅ 真验过 |
+| 2. **多模态** | 上传 PDF/Excel + 语音 | ✅ |
+| 3. **业务 skill (3 个)** | 汇报 / 周报 / 立项 .docx 真出文件 | ✅ |
+| 4. **RBAC 三角色** | DEV 切 admin/manager/employee 看不同卡 | ✅ |
+| 5. **Quota 闭环** | 撞 429 → friendly 提示 → manager 改 → 通过 | ✅ |
+| 6. **中央 PG audit** | psql 直查 quota_events / gateway_audit | ✅ |
+| 7. **Skills Hub** | publish → list → download | ✅ |
+| 8. **Plan D federation 协议** | alice ↔ bob 单机 mock (给 IT lead 看) | ✅ |
+| 9. **主动闲聊** | macOS 通知 + Dashboard 起话题 | ✅ |
+| 10. **浮窗** | Cmd+Shift+Space 全局召唤 | ✅ |
+
+10 个卖点全部技术 ready, demo 主战场转移到**演讲 / 物料**.

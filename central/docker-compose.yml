@@ -1,0 +1,140 @@
+# 鲶鱼中央服务全栈 docker-compose (五一 sprint 5/2 收尾 BL-F7).
+#
+# 一句话起 全套中央 server: postgres + identity + gateway + skills-hub.
+#
+# 用法 (客户 IT 部署):
+#   1. cp .env.production.example .env
+#   2. 改 .env 里的密码 / OIDC issuer / API key
+#   3. docker compose up -d
+#   4. tail -f logs:  docker compose logs -f gateway
+#
+# 健康检查:
+#   curl http://localhost:8999/healthz       # gateway
+#   curl http://localhost:8998/.well-known/openid-configuration  # identity
+#   curl http://localhost:8997/healthz       # skills-hub
+#
+# 升级:
+#   docker compose pull && docker compose up -d
+#   alembic 自动跑 migration (Dockerfile CMD 已串)
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: catfish-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${PG_USER:-catfish}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_DB: ${PG_DB:-catfish}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"   # 只本机暴露, 防外网直接连 PG
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-catfish} -d ${PG_DB:-catfish}"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  identity:
+    build:
+      context: ./identity-server
+      dockerfile: Dockerfile
+    image: catfish-identity:0.1.0
+    container_name: catfish-identity
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      CATFISH_DB_URL: postgresql://${PG_USER:-catfish}:${PG_PASSWORD}@postgres:5432/${PG_DB:-catfish}
+      CATFISH_ENV: prod
+      CATFISH_IDENTITY_PORT: 8998
+      # OIDC 配置 (跟 gateway 共享)
+      CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://identity:8998}
+    ports:
+      - "127.0.0.1:8998:8998"
+    volumes:
+      - ./identity-server/config:/app/config:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8998/.well-known/openid-configuration"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  gateway:
+    build:
+      context: ./llm-gateway
+      dockerfile: Dockerfile
+    image: catfish-gateway:0.1.0
+    container_name: catfish-gateway
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      identity:
+        condition: service_started
+    environment:
+      CATFISH_DB_URL: postgresql://${PG_USER:-catfish}:${PG_PASSWORD}@postgres:5432/${PG_DB:-catfish}
+      CATFISH_ENV: prod
+      PORT: 8999
+      CATFISH_CONFIG: /app/config/models.yaml
+      # OIDC: 验真 SSO token, 不走 dev_token
+      CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://identity:8998}
+      CATFISH_OIDC_AUDIENCE: ${CATFISH_OIDC_AUDIENCE:-catfish-gateway}
+      # API keys (公网 LLM, 私网 LLM 用 base_url)
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    ports:
+      - "8999:8999"  # gateway 对员工 Companion 暴露, 反代 nginx 处理 SSL
+    volumes:
+      - ./llm-gateway/config:/app/config:ro
+      - gateway_data:/home/catfish/.catfish  # quota.db (sqlite fallback) / audit jsonl
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8999/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  skills-hub:
+    build:
+      context: ./skills-hub
+      dockerfile: Dockerfile
+    image: catfish-skills-hub:0.1.0
+    container_name: catfish-skills-hub
+    restart: unless-stopped
+    environment:
+      CATFISH_HUB_DEV_TOKEN: ${SKILLS_HUB_TOKEN:-}
+      CATFISH_HUB_ROOT: /data/hub
+      PORT: 8997
+    ports:
+      - "127.0.0.1:8997:8997"   # 只内网, 走 nginx 暴露
+    volumes:
+      - hubdata:/data/hub
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8997/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  # nginx 反代: SSL 卸载 + 路由 / -> gateway, /sso/ -> identity, /hub/ -> skills-hub
+  # 客户改 nginx.conf.example → nginx.conf 配域名 + Let's Encrypt cert
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: catfish-nginx
+    restart: unless-stopped
+    depends_on:
+      - gateway
+      - identity
+      - skills-hub
+    ports:
+      - "443:443"
+      - "80:80"  # http → 301 https
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs:ro  # cert.pem + key.pem (Let's Encrypt 或自签)
+
+volumes:
+  pgdata:
+  gateway_data:
+  hubdata:

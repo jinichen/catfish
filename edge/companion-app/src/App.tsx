@@ -4,6 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import AuthBanner from "./components/AuthBanner";
 import DevUserSwitcher from "./components/DevUserSwitcher";
 import LoginGate from "./components/LoginGate";
+import OnboardingWizard from "./components/OnboardingWizard";
 import TabBar from "./components/TabBar";
 import ChatTab from "./tabs/Chat/ChatTab";
 import ConsoleTab from "./tabs/Console/ConsoleTab";
@@ -35,9 +36,13 @@ export default function App() {
 
   // SSO Phase 1C: LoginGate 包整个 App. 没登录时挡住, 让员工先点登录.
   // dev_token 模式下 try_load_session 自动返已登录, gate 直接放过.
+  //
+  // OnboardingWizard 五一 sprint 5/2 BL-F3 加: 首次启动 4 步引导, 走完写 localStorage,
+  // 不再显. 任何步骤"稍后再说" 也写 onboarded=true.
   return (
     <LoginGate>
       <AppShell activeTab={activeTab} />
+      <OnboardingWizard />
     </LoginGate>
   );
 }

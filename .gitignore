@@ -139,3 +139,11 @@ central/llm-gateway/config/database.yaml
 
 # Quota 限额, 每客户不同 (CEO 邮箱 / 部门名 / 公网 LLM 预算). .example 进 git.
 central/llm-gateway/config/quotas.yaml
+
+# Dev 多角色测试账号, 每开发机不同 (五一 sprint 5/2 RBAC). .example 进 git.
+central/llm-gateway/config/dev_users.yaml
+
+# 生产部署 (五一 sprint 5/2 BL-F7). .example 进 git, 真 .env / cert / nginx 配置不进.
+central/.env
+central/nginx.conf
+central/certs/

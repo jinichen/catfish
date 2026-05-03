@@ -1,24 +1,19 @@
-# catfish-gateway 生产镜像 (五一 sprint 5/2 收尾 BL-F7).
+# catfish-identity 生产镜像 (五一 sprint 5/2 收尾 BL-F7).
 #
-# 多阶段构建 — builder 装依赖, runtime 只带最终 venv + 源码.
-# Python 3.12, alpine 太瘦 (litellm/cryptography 编译麻烦), 用 slim.
-# 跟客户 IT 演 demo: docker pull catfish-gateway:0.1.0 → docker run, 一句话启.
+# 跟 gateway 同模式: builder + runtime 两阶段, 非 root, healthz, alembic 启动建表.
 
 FROM python:3.12-slim AS builder
 
 WORKDIR /build
 
-# 系统依赖 (psycopg / cryptography 编译用)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# 拷源码先 (利用 docker layer cache)
 COPY pyproject.toml README.md ./
 COPY src ./src
 
-# 装到 /opt/venv (干净虚拟环境, 跟系统 Python 隔离)
 RUN python -m venv /opt/venv && \
     /opt/venv/bin/pip install --no-cache-dir --upgrade pip && \
     /opt/venv/bin/pip install --no-cache-dir .
@@ -27,14 +22,12 @@ RUN python -m venv /opt/venv && \
 # ── runtime ──
 FROM python:3.12-slim AS runtime
 
-# 运行时依赖 (psycopg 二进制, ca-certificates 给 https 给 LLM API, curl 给 healthcheck)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq5 \
         ca-certificates \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
-# 非 root 用户 (生产最佳实践, 防容器逃逸提权)
 RUN useradd --create-home --shell /bin/bash --uid 1000 catfish
 
 COPY --from=builder /opt/venv /opt/venv
@@ -45,18 +38,17 @@ COPY --chown=catfish:catfish config /app/config
 
 ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONPATH=/app/src
-ENV PORT=8999
+ENV PORT=8998
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV CATFISH_IDENTITY_PORT=8998
 
 WORKDIR /app
 USER catfish
 
-EXPOSE 8999
+EXPOSE 8998
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD curl -fsS http://localhost:${PORT}/healthz || exit 1
+    CMD curl -fsS http://localhost:${PORT}/.well-known/openid-configuration || exit 1
 
-# 生产启动: 先 alembic upgrade head 建表, 再启 gateway.
-# 容器入口 用 sh -c 串两个命令, 失败 (alembic 错) container 退出, k8s/docker-compose 重启.
-CMD ["sh", "-c", "alembic upgrade head && python -m catfish_gateway.app"]
+CMD ["sh", "-c", "alembic upgrade head && python -m catfish_identity.app"]

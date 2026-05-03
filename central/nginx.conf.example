@@ -1,0 +1,100 @@
+# 鲶鱼 nginx 反代配置 (五一 sprint 5/2 收尾 BL-F7).
+#
+# 用法:
+#   1. cp nginx.conf.example nginx.conf
+#   2. 改 server_name 成你的域名
+#   3. 申请 Let's Encrypt cert (certbot) 放 ./certs/
+#   4. docker compose restart nginx
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    # 基础
+    sendfile on;
+    keepalive_timeout 65;
+    client_max_body_size 50M;   # 给 chat / file upload 留足
+
+    # 日志格式 (含 X-Forwarded-For + 上游耗时)
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                    '$status $body_bytes_sent "$http_referer" '
+                    '"$http_user_agent" "$http_x_forwarded_for" '
+                    'upstream=$upstream_addr ut=$upstream_response_time';
+
+    access_log /var/log/nginx/access.log main;
+    error_log /var/log/nginx/error.log warn;
+
+    # gzip 压缩 (audit JSON / catalog 大)
+    gzip on;
+    gzip_types application/json text/plain;
+
+    # ── HTTP → HTTPS 强制跳 ──
+    server {
+        listen 80;
+        server_name catfish.example.com;
+        return 301 https://$host$request_uri;
+    }
+
+    # ── HTTPS 主入口 ──
+    server {
+        listen 443 ssl http2;
+        server_name catfish.example.com;
+
+        # Let's Encrypt cert (certbot --nginx 申请)
+        ssl_certificate     /etc/nginx/certs/fullchain.pem;
+        ssl_certificate_key /etc/nginx/certs/privkey.pem;
+
+        # SSL 安全配置 (Mozilla intermediate, 兼容大部分客户)
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers HIGH:!aNULL:!MD5;
+        ssl_prefer_server_ciphers off;
+        ssl_session_cache shared:SSL:10m;
+        ssl_session_timeout 10m;
+
+        # ── /api/* + /v1/* → gateway ──
+        # Companion 走这个调 chat / quota / audit / me / proactive 等
+        location ~ ^/(api|v1|healthz)/ {
+            proxy_pass http://gateway:8999;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+
+            # SSE / streaming 不缓冲 (chat/completions 流式)
+            proxy_buffering off;
+            proxy_cache off;
+            proxy_read_timeout 300s;
+            proxy_send_timeout 300s;
+        }
+
+        # ── /sso/* → identity (OIDC) ──
+        # /authorize / /token / /.well-known/openid-configuration 等
+        location ~ ^/sso/ {
+            rewrite ^/sso/(.*)$ /$1 break;
+            proxy_pass http://identity:8998;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+        }
+
+        # ── /hub/* → skills-hub ──
+        # manager 发 skill / 员工拉 skill
+        location ~ ^/hub/ {
+            rewrite ^/hub/(.*)$ /$1 break;
+            proxy_pass http://skills-hub:8997;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+            client_max_body_size 100M;  # skill multipart 可能含大文件
+        }
+
+        # 根路径 — 默认丢给 gateway (可自定义首页)
+        location / {
+            return 200 "🐟 catfish gateway alive\n";
+            add_header Content-Type text/plain;
+        }
+    }
+}
