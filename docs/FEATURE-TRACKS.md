@@ -10,7 +10,7 @@
 
 ```
 Phase 1 · 单员工 AI 副手           [█████████░] 95% · 5 月 demo + 1 PoC 客户
-Phase 2 · 团队版 (SSO/RBAC/Win)    [██████░░░░] 60% · 五一 sprint Phase 2 后端 100% + 阻断 + UI
+Phase 2 · 团队版 (SSO/RBAC/Win)    [███████░░░] 70% · 五一 sprint Phase 2 后端 100% + Skills Hub 中央 MVP
 Phase 3 · ★ Federation             [███░░░░░░░] 30% · 五一 sprint Plan D MVP, Q4 ship
 Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 2027 Q2+
 ```
@@ -146,13 +146,18 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 
 - ⬜ skill 创建后立即 dry-run 验证, 失败回滚 · 0.5 天 (BL-C12)
 - ⬜ skill 创建前重复检查 · 0.3 天 (BL-C13)
 
-#### #11 Skills Hub (中央托管) [Phase 2, 30%]
+#### #11 Skills Hub (中央托管) [Phase 2, 70%]  ★ 5/2 中央 server MVP
 > 组织级技能市场, 让员工分享 skill, 部门集体学习.
 - ✅ 本机版 MVP (skill_install 工具) (5/3)
-- ✅ central/skills-hub 目录 (★ 但只有 README stub)
-- ⬜ 真实中央 hub server (FastAPI + skill 仓库 + 审核流) · 3-4 周
-- ⬜ 部门级 skill auto-推 · 1-2 周
-- ⬜ Federation 化 (跟 #8 联动) · 2 周
+- ✅ **中央 hub server FastAPI MVP** (5/2): publish / list / get / download / delete + audit
+- ✅ **dry-run 验证** (5/2 BL-C12): skill_install 后 import 检查 + 失败 rollback
+- ✅ **dedup 检查** (5/2 BL-C13): install 前查同名 / 描述相似的 skill, force_install 跳
+- ✅ 文件系统存储 (~/.catfish-hub/), 多 version 共存, audit jsonl
+- ✅ 21 storage 测过 + 6 dry-run/dedup 测过
+- ⬜ 审核流 (manager publish → admin approve → live) · 1 周 (现 MVP 直发)
+- ⬜ Companion catfish_skill_install 改 hub URL 拉取 (现只本机 source_dir) · 0.5 周
+- ⬜ 部门级 skill auto-推 · 1-2 周 (依赖 #8 federation 协议)
+- ⬜ PG 存储替代文件 (Phase 2.5) · 1 周
 
 #### #2 ★ Companion Windows [Phase 2, 0% · 5/2 决策: 暂不动]
 > 大客户都用 Win, 没 Win 客户端 = Q3 大客户阻塞.
