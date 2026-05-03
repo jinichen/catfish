@@ -16,6 +16,7 @@ import AuditCard from "./AuditCard";
 import SkillAuditCard from "./SkillAuditCard";
 import DepartmentQuotaCard from "./DepartmentQuotaCard";
 import DepartmentAuditCard from "./DepartmentAuditCard";
+import AdminGlobalCard from "./AdminGlobalCard";
 import ProactiveCard from "./ProactiveCard";
 import { useMe } from "../../hooks/useMe";
 
@@ -60,6 +61,9 @@ export default function DashboardTab() {
         managedDepts.map((dept) => (
           <DepartmentAuditCard key={`a-${dept}`} department={dept} />
         ))}
+
+      {/* 管理员 — 全局聚合 (admin only) */}
+      {role === "admin" && <AdminGlobalCard />}
     </div>
   );
 }

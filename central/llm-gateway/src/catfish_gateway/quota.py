@@ -132,6 +132,54 @@ class QuotaConfig:
         return self.department_quotas.get(dept, DepartmentQuota(tokens_per_day=0))
 
 
+def update_department_quota(department: str, tokens_per_day: int) -> bool:
+    """改部门 quota → 写 quotas.yaml (overrides.departments). 五一 sprint 5/2 RBAC manager 用.
+
+    行为:
+    - 文件不存在 → 创建默认骨架
+    - 已有 overrides.departments.<dept> → 更新
+    - 没有 → 加进去
+    - tokens_per_day=0 表示不限
+
+    返 True 成功, False 失败 (yaml 写错 / 权限问题).
+
+    线程安全: 简单文件锁 (不并发 manager 多人同时改 dev 单机够用),
+    Phase 2 上 PG 后改成 PG 表 + UPSERT 更稳.
+    """
+    p = _quota_config_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+
+    # 读现有
+    data: dict
+    if p.exists():
+        try:
+            with p.open(encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+        except Exception as e:
+            logger.warning("update_department_quota: yaml 解析失败 %s: %s", p, e)
+            return False
+    else:
+        data = {}
+
+    # 改 overrides.departments.<dept>
+    overrides = data.setdefault("overrides", {})
+    depts = overrides.setdefault("departments", {})
+    depts[department] = {"tokens_per_day": int(tokens_per_day)}
+
+    # 写回 (utf-8, allow_unicode 保留中文部门名)
+    try:
+        with p.open("w", encoding="utf-8") as f:
+            yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+        logger.info(
+            "update_department_quota: %s tokens_per_day=%d (写 %s)",
+            department, tokens_per_day, p,
+        )
+        return True
+    except Exception as e:
+        logger.warning("update_department_quota 写入失败 %s: %s", p, e)
+        return False
+
+
 def load_quota_config(path: Path | None = None) -> QuotaConfig:
     """从 yaml 加载. 文件不存在走全部默认 (per-user 限, model/dept 不限)."""
     p = path or _quota_config_path()
@@ -488,6 +536,204 @@ def audit_summary_dept_since(department: str, cutoff_ms: int) -> dict:
         }
     except Exception as e:
         logger.warning("audit_summary_dept_since sqlite 失败: %s", e)
+        return empty
+
+
+# ── 全局聚合 (admin Dashboard 用) ────────────────────────────
+#
+# 五一 sprint 5/2 RBAC: admin 看全员/全部门/全模型. 双 backend (PG / sqlite).
+
+
+def top_departments(cutoff_ms: int, limit: int = 10) -> list[dict]:
+    """全局 top N 部门今日 token 用量. PG / sqlite 双 backend."""
+    if _use_pg():
+        try:
+            with _pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT department, COUNT(*) AS req, SUM(tokens_in + tokens_out) AS tokens
+                           FROM quota_events
+                           WHERE ts_ms >= %s AND department <> ''
+                           GROUP BY department
+                           ORDER BY tokens DESC
+                           LIMIT %s""",
+                        (cutoff_ms, limit),
+                    )
+                    rows = cur.fetchall()
+            return [
+                {"department": r[0], "request_count": int(r[1] or 0), "tokens_used": int(r[2] or 0)}
+                for r in rows
+            ]
+        except Exception as e:
+            logger.warning("top_departments PG 失败: %s", e)
+            return []
+
+    try:
+        conn = _get_conn()
+        cur = conn.execute(
+            """SELECT department, COUNT(*) AS req, SUM(tokens_in + tokens_out) AS tokens
+               FROM quota_events
+               WHERE ts >= ? AND department != ''
+               GROUP BY department
+               ORDER BY tokens DESC
+               LIMIT ?""",
+            (cutoff_ms, limit),
+        )
+        rows = cur.fetchall()
+        conn.close()
+        return [
+            {"department": r[0], "request_count": int(r[1] or 0), "tokens_used": int(r[2] or 0)}
+            for r in rows
+        ]
+    except Exception as e:
+        logger.warning("top_departments sqlite 失败: %s", e)
+        return []
+
+
+def audit_summary_global_since(cutoff_ms: int) -> dict:
+    """全局聚合 — admin /api/audit/global 用. 跟 audit_summary_dept_since 同结构, 不限部门."""
+    empty = {
+        "request_count": 0,
+        "total_tokens": 0,
+        "active_users": 0,
+        "active_departments": 0,
+        "by_model": [],
+        "by_department": [],
+        "by_user": [],
+    }
+
+    if _use_pg():
+        try:
+            with _pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT COUNT(*), COALESCE(SUM(tokens_in + tokens_out), 0),
+                                  COUNT(DISTINCT user_email),
+                                  COUNT(DISTINCT department) FILTER (WHERE department <> '')
+                           FROM quota_events WHERE ts_ms >= %s""",
+                        (cutoff_ms,),
+                    )
+                    row = cur.fetchone()
+                    request_count = int(row[0] or 0)
+                    total_tokens = int(row[1] or 0)
+                    active_users = int(row[2] or 0)
+                    active_departments = int(row[3] or 0)
+
+                    cur.execute(
+                        """SELECT model, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS tk
+                           FROM quota_events WHERE ts_ms >= %s
+                           GROUP BY model ORDER BY tk DESC LIMIT 20""",
+                        (cutoff_ms,),
+                    )
+                    by_model = [
+                        {"model": r[0], "count": int(r[1]), "total_tokens": int(r[2] or 0)}
+                        for r in cur.fetchall()
+                    ]
+
+                    cur.execute(
+                        """SELECT department, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS tk
+                           FROM quota_events WHERE ts_ms >= %s AND department <> ''
+                           GROUP BY department ORDER BY tk DESC LIMIT 20""",
+                        (cutoff_ms,),
+                    )
+                    by_department = [
+                        {"department": r[0], "count": int(r[1]), "total_tokens": int(r[2] or 0)}
+                        for r in cur.fetchall()
+                    ]
+
+                    cur.execute(
+                        """SELECT user_email, department, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS tk
+                           FROM quota_events WHERE ts_ms >= %s
+                           GROUP BY user_email, department ORDER BY tk DESC LIMIT 10""",
+                        (cutoff_ms,),
+                    )
+                    by_user = [
+                        {
+                            "user_email": r[0],
+                            "department": r[1],
+                            "count": int(r[2]),
+                            "total_tokens": int(r[3] or 0),
+                        }
+                        for r in cur.fetchall()
+                    ]
+            return {
+                "request_count": request_count,
+                "total_tokens": total_tokens,
+                "active_users": active_users,
+                "active_departments": active_departments,
+                "by_model": by_model,
+                "by_department": by_department,
+                "by_user": by_user,
+            }
+        except Exception as e:
+            logger.warning("audit_summary_global_since PG 失败: %s", e)
+            return empty
+
+    # sqlite fallback
+    try:
+        conn = _get_conn()
+        cur = conn.execute(
+            """SELECT COUNT(*), COALESCE(SUM(tokens_in + tokens_out), 0),
+                      COUNT(DISTINCT user_email),
+                      COUNT(DISTINCT department)
+               FROM quota_events WHERE ts >= ? AND department != ''""",
+            (cutoff_ms,),
+        )
+        row = cur.fetchone()
+        request_count = int(row[0] or 0)
+        total_tokens = int(row[1] or 0)
+        active_users = int(row[2] or 0)
+        active_departments = int(row[3] or 0)
+
+        cur = conn.execute(
+            """SELECT model, COUNT(*), SUM(tokens_in + tokens_out)
+               FROM quota_events WHERE ts >= ?
+               GROUP BY model ORDER BY 3 DESC LIMIT 20""",
+            (cutoff_ms,),
+        )
+        by_model = [
+            {"model": r[0], "count": int(r[1]), "total_tokens": int(r[2] or 0)}
+            for r in cur.fetchall()
+        ]
+
+        cur = conn.execute(
+            """SELECT department, COUNT(*), SUM(tokens_in + tokens_out)
+               FROM quota_events WHERE ts >= ? AND department != ''
+               GROUP BY department ORDER BY 3 DESC LIMIT 20""",
+            (cutoff_ms,),
+        )
+        by_department = [
+            {"department": r[0], "count": int(r[1]), "total_tokens": int(r[2] or 0)}
+            for r in cur.fetchall()
+        ]
+
+        cur = conn.execute(
+            """SELECT user_email, department, COUNT(*), SUM(tokens_in + tokens_out)
+               FROM quota_events WHERE ts >= ?
+               GROUP BY user_email, department ORDER BY 4 DESC LIMIT 10""",
+            (cutoff_ms,),
+        )
+        by_user = [
+            {
+                "user_email": r[0],
+                "department": r[1],
+                "count": int(r[2]),
+                "total_tokens": int(r[3] or 0),
+            }
+            for r in cur.fetchall()
+        ]
+        conn.close()
+        return {
+            "request_count": request_count,
+            "total_tokens": total_tokens,
+            "active_users": active_users,
+            "active_departments": active_departments,
+            "by_model": by_model,
+            "by_department": by_department,
+            "by_user": by_user,
+        }
+    except Exception as e:
+        logger.warning("audit_summary_global_since sqlite 失败: %s", e)
         return empty
 
 

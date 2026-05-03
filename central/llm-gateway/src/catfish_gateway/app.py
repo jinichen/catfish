@@ -394,6 +394,102 @@ async def api_audit_department(
     }
 
 
+# /api/quota/department/{dept} PUT — manager / admin 改本部门 quota
+#
+# 五一 sprint 5/2 收尾 RBAC: 写 quotas.yaml 的 overrides.departments.<dept>.tokens_per_day
+# Body: { "tokens_per_day": int }   (0 表示不限)
+# 改完 gateway 下一次请求自动加载新 yaml (load_quota_config 每次重读, 无 cache).
+
+
+@app.put("/api/quota/department/{department}")
+async def api_quota_department_update(
+    department: str,
+    body: dict,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """改部门日 quota. RBAC: admin 全权 / manager 限 managed_departments."""
+    from . import quota
+
+    if not user.can_manage_department(department):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"role={user.role} 无权改部门 {department} quota. "
+                f"managed_departments={user.managed_departments}"
+            ),
+        )
+
+    if not isinstance(body, dict) or "tokens_per_day" not in body:
+        raise HTTPException(status_code=400, detail="body 缺 tokens_per_day")
+    try:
+        tokens_per_day = int(body["tokens_per_day"])
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="tokens_per_day 必须是整数")
+    if tokens_per_day < 0:
+        raise HTTPException(status_code=400, detail="tokens_per_day 不能负")
+
+    ok = quota.update_department_quota(department, tokens_per_day)
+    if not ok:
+        raise HTTPException(status_code=500, detail="写 quotas.yaml 失败, 看 gateway log")
+
+    return {
+        "department": department,
+        "tokens_per_day": tokens_per_day,
+        "updated_by": user.sub,
+        "ok": True,
+    }
+
+
+# /api/quota/global + /api/audit/global — admin 全员 / 全部门 / 全模型聚合
+#
+# RBAC: 严格 admin only. manager 看不到全局, 只看 managed_departments.
+
+
+def _require_admin(user: User) -> None:
+    if not user.is_admin():
+        raise HTTPException(
+            status_code=403,
+            detail=f"role={user.role} 不能访问全局聚合 (admin only)",
+        )
+
+
+@app.get("/api/quota/global")
+async def api_quota_global(
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """全员 quota 聚合 — admin 看 top 部门 / top 用户 / 总用量."""
+    from . import quota
+    _require_admin(user)
+
+    now_ms = int(time.time() * 1000)
+    day_cutoff = now_ms - 86_400_000
+
+    return {
+        "since_ms": day_cutoff,
+        "top_departments": quota.top_departments(day_cutoff, limit=10),
+        "viewer_role": user.role,
+    }
+
+
+@app.get("/api/audit/global")
+async def api_audit_global(
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """全员 audit 聚合 — admin 看请求总数 / 模型分布 / 部门分布 / top 员工."""
+    from . import quota
+    _require_admin(user)
+
+    now_ms = int(time.time() * 1000)
+    day_cutoff = now_ms - 86_400_000
+
+    summary = quota.audit_summary_global_since(day_cutoff)
+    return {
+        "since_ms": day_cutoff,
+        **summary,
+        "viewer_role": user.role,
+    }
+
+
 # /api/dev/users — 列出 dev 测试账号 (Companion 切换器用)
 #
 # 五一 sprint 5/2. 仅 dev 模式 (CATFISH_ENV != prod) 启用. 生产环境 404.

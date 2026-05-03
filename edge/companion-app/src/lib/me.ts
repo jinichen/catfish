@@ -137,6 +137,105 @@ export async function fetchDevUsers(): Promise<DevUser[] | null> {
   }
 }
 
+// ── Manager: 改部门 quota (BL-D8 RBAC manager 第二轮) ────────
+
+
+export async function updateDepartmentQuota(
+  dept: string,
+  tokensPerDay: number,
+): Promise<{ ok: boolean; tokens_per_day?: number; detail?: string }> {
+  const token = await (async () => {
+    const o = getOverrideToken();
+    if (o) return o;
+    try {
+      return await gatewayGetDevToken();
+    } catch {
+      return "dev-token-local";
+    }
+  })();
+  const url = `${config.gatewayUrl}/api/quota/department/${encodeURIComponent(dept)}`;
+  const resp = await fetch(url, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ tokens_per_day: tokensPerDay }),
+  });
+  if (!resp.ok) {
+    let detail = `HTTP ${resp.status}`;
+    try {
+      const j = await resp.json();
+      detail = j.detail || detail;
+    } catch {
+      /* ignore */
+    }
+    return { ok: false, detail };
+  }
+  const j = await resp.json();
+  return { ok: true, tokens_per_day: j.tokens_per_day };
+}
+
+
+// ── Admin: 全局聚合 (BL-D8 RBAC admin 视图) ─────────────────
+
+
+export interface GlobalQuota {
+  since_ms: number;
+  top_departments: { department: string; request_count: number; tokens_used: number }[];
+  viewer_role: Role;
+}
+
+
+export async function fetchGlobalQuota(): Promise<GlobalQuota | null> {
+  const token = await (async () => {
+    const o = getOverrideToken();
+    if (o) return o;
+    try {
+      return await gatewayGetDevToken();
+    } catch {
+      return "dev-token-local";
+    }
+  })();
+  const resp = await fetch(`${config.gatewayUrl}/api/quota/global`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!resp.ok) return null;
+  return (await resp.json()) as GlobalQuota;
+}
+
+
+export interface GlobalAudit {
+  since_ms: number;
+  request_count: number;
+  total_tokens: number;
+  active_users: number;
+  active_departments: number;
+  by_model: { model: string; count: number; total_tokens: number }[];
+  by_department: { department: string; count: number; total_tokens: number }[];
+  by_user: { user_email: string; department: string; count: number; total_tokens: number }[];
+  viewer_role: Role;
+}
+
+
+export async function fetchGlobalAudit(): Promise<GlobalAudit | null> {
+  const token = await (async () => {
+    const o = getOverrideToken();
+    if (o) return o;
+    try {
+      return await gatewayGetDevToken();
+    } catch {
+      return "dev-token-local";
+    }
+  })();
+  const resp = await fetch(`${config.gatewayUrl}/api/audit/global`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!resp.ok) return null;
+  return (await resp.json()) as GlobalAudit;
+}
+
+
 // ── 主动闲聊 (BL-E13 C-MVP) ──────────────────────────────────
 
 export interface ProactiveStarter {
