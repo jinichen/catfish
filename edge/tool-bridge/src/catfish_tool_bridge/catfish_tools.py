@@ -2195,6 +2195,159 @@ def a2a_ask(args: Dict[str, Any]) -> Dict[str, Any]:
 # ============================================================
 
 
+def _list_existing_skills() -> List[Dict[str, Any]]:
+    """枚举所有已装 skill, 返 [{path, name, description}].
+
+    给 dedup 检查 (BL-C13) 用. path 形如 "department/leadership-briefing".
+    """
+    root = _catfish_skills_root()
+    if root is None or not root.exists():
+        return []
+    out: List[Dict[str, Any]] = []
+    try:
+        for ns_dir in root.iterdir():
+            if not ns_dir.is_dir() or ns_dir.name.startswith("."):
+                continue
+            for skill_dir in ns_dir.iterdir():
+                if not skill_dir.is_dir() or skill_dir.name.startswith("."):
+                    continue
+                skill_md = skill_dir / "SKILL.md"
+                if not skill_md.exists():
+                    continue
+                # mini parse: name + description 第一行
+                name = skill_dir.name
+                description_first_line = ""
+                try:
+                    text = skill_md.read_text(encoding="utf-8")
+                    if text.startswith("---"):
+                        end = text.find("\n---", 3)
+                        if end > 0:
+                            for line in text[3:end].strip().split("\n"):
+                                ls = line.strip()
+                                if ls.startswith("name:"):
+                                    name = ls.partition(":")[2].strip().strip("'\"")
+                                if ls.startswith("description:"):
+                                    description_first_line = ls.partition(":")[2].strip().strip("|").strip()
+                                    if not description_first_line:
+                                        # description: |- 多行, 找下一非空行
+                                        idx = text[3:end].split("\n").index(line)
+                                        rest = text[3:end].split("\n")[idx + 1:]
+                                        for rl in rest:
+                                            if rl.strip() and not rl.strip().startswith("#"):
+                                                description_first_line = rl.strip()
+                                                break
+                                    break
+                except Exception:
+                    pass
+                out.append({
+                    "path": f"{ns_dir.name}/{skill_dir.name}",
+                    "name": name,
+                    "description": description_first_line[:300],
+                })
+    except Exception as e:
+        logger.warning("_list_existing_skills 失败: %s", e)
+    return out
+
+
+def _check_skill_dedup(new_name: str, new_description: str) -> List[Dict[str, Any]]:
+    """BL-C13 重复检查 — 找跟新 skill 名/描述高度相似的已装 skill.
+
+    简单 heuristic (够 demo 用):
+    - name 完全相同 → 命中
+    - description 前 50 字相同 → 命中
+    - name 含彼此 (e.g. 'weekly-report' vs 'weekly-report-v2') → 命中
+
+    返 [{path, name, similarity_reason}], 空 = 无重复.
+    Phase 2 升级用 embedding 语义相似度.
+    """
+    if not new_name and not new_description:
+        return []
+    new_name_lower = (new_name or "").lower().strip()
+    new_desc_short = (new_description or "")[:50].strip()
+
+    hits: List[Dict[str, Any]] = []
+    for existing in _list_existing_skills():
+        ex_name = existing["name"].lower()
+        ex_desc = existing["description"][:50]
+
+        reason = ""
+        if new_name_lower and ex_name and new_name_lower == ex_name:
+            reason = f"name 完全相同 ({new_name})"
+        elif (
+            new_name_lower and ex_name
+            and len(new_name_lower) >= 4 and len(ex_name) >= 4
+            and (new_name_lower in ex_name or ex_name in new_name_lower)
+        ):
+            reason = f"name 互含 ({new_name} ↔ {existing['name']})"
+        elif new_desc_short and ex_desc and new_desc_short == ex_desc:
+            reason = "description 前 50 字相同"
+
+        if reason:
+            hits.append({
+                "path": existing["path"],
+                "name": existing["name"],
+                "similarity_reason": reason,
+            })
+    return hits
+
+
+def _dry_run_skill(skill_dir: Path) -> Dict[str, Any]:
+    """BL-C12 dry-run 验证 — 试图 import skill 的 script.py 检查基础健康.
+
+    检查:
+    1. script.py 存在
+    2. 能 import (语法 OK + 顶层依赖能 resolve)
+    3. 至少有一个 render_xxx / run / main / 入口函数 (常见命名)
+
+    返 {"ok": True} 或 {"ok": False, "error": "...", "stage": "..."}.
+    不真跑 render — render 需 docx 等重依赖, 而且要参数, MVP 不验.
+    """
+    script_path = skill_dir / "script.py"
+    if not script_path.exists():
+        # 不是所有 skill 都有 script.py (有些 skill 可能纯 prompt 模板)
+        # 没 script.py 视为无侵入 skill, dry-run 通过
+        return {"ok": True, "note": "no script.py, skipping import check"}
+
+    # 用 importlib.spec_from_file_location 加载, 模块名加 prefix 防撞
+    import importlib.util
+    spec_name = f"_dryrun_{skill_dir.parent.name}_{skill_dir.name}".replace("-", "_")
+    try:
+        spec = importlib.util.spec_from_file_location(spec_name, script_path)
+        if spec is None or spec.loader is None:
+            return {
+                "ok": False,
+                "error": f"无法加载 {script_path}",
+                "stage": "spec_from_file_location",
+            }
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": f"{type(e).__name__}: {e}",
+            "stage": "import_module",
+        }
+
+    # 找入口函数: render_xxx / run / main / execute
+    entry_names = [n for n in dir(module) if not n.startswith("_") and callable(getattr(module, n, None))]
+    entry_funcs = [
+        n for n in entry_names
+        if n.startswith("render_") or n in ("run", "main", "execute", "render")
+    ]
+    if not entry_funcs:
+        return {
+            "ok": False,
+            "error": f"没找到入口函数 (render_xxx / run / main / execute), 只有 {entry_names[:5]}",
+            "stage": "entry_function",
+        }
+
+    return {
+        "ok": True,
+        "entry_functions": entry_funcs[:3],
+        "note": f"导入 OK, 找到入口 {entry_funcs[0]}",
+    }
+
+
 def skill_install(args: Dict[str, Any]) -> Dict[str, Any]:
     """tool: 本机安装 skill — 从 source_dir 复制到 catfish/skills/<namespace>/<name>/.
 
@@ -2262,6 +2415,45 @@ def skill_install(args: Dict[str, Any]) -> Dict[str, Any]:
             "error": "SKILL.md frontmatter 缺 name 字段, 无法决定安装路径",
         }
 
+    # ── BL-C13 dedup 检查 (五一 sprint 5/2 收尾) ──────────────
+    # overwrite=True 跳过 dedup (员工显式说要覆盖). force_install=True 也跳过 (LLM 明确知重了还要装).
+    if not overwrite and not args.get("force_install"):
+        # 取 SKILL.md 第一行 description
+        new_desc = ""
+        try:
+            text = skill_md.read_text(encoding="utf-8")
+            if text.startswith("---"):
+                end = text.find("\n---", 3)
+                if end > 0:
+                    for raw_line in text[3:end].strip().split("\n"):
+                        ls = raw_line.strip()
+                        if ls.startswith("description:"):
+                            v = ls.partition(":")[2].strip().strip("|").strip()
+                            if v:
+                                new_desc = v
+                            break
+        except Exception:
+            pass
+
+        dups = _check_skill_dedup(skill_name, new_desc)
+        if dups:
+            audit_event_dedup = {
+                "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "event_type": "install_dedup_blocked",
+                "skill_path": f"{namespace}/{skill_name}",
+                "duplicates": dups,
+            }
+            _write_skill_audit(audit_event_dedup)
+            return {
+                "ok": False,
+                "error": (
+                    f"检测到 {len(dups)} 个高度相似 skill: "
+                    + ", ".join(f"{d['path']} ({d['similarity_reason']})" for d in dups)
+                    + ". 想强制装传 force_install=true; 想覆盖具体某个传 overwrite=true."
+                ),
+                "duplicates": dups,
+            }
+
     # namespace 安全 (不允许 .. / 跨目录)
     if ".." in namespace or "/" in namespace:
         return {"ok": False, "error": f"namespace 不允许 '..' 或 '/' ({namespace})"}
@@ -2324,20 +2516,50 @@ def skill_install(args: Dict[str, Any]) -> Dict[str, Any]:
         _write_skill_audit(audit_event)
         return {"ok": False, "error": f"复制 skill 失败: {e}"}
 
+    # ── BL-C12 dry-run 验证 (五一 sprint 5/2 收尾) ──────────────
+    # 复制完立即试 import script.py + 找入口函数, 失败 rollback (删 target_dir).
+    # 保护 LLM 装坏 skill 后整个 catfish 链路炸. skip_dry_run=true 跳过 (老 skill / 不带 script).
+    if not args.get("skip_dry_run"):
+        dry = _dry_run_skill(target_dir)
+        if not dry.get("ok"):
+            # rollback: 删 target_dir
+            try:
+                shutil.rmtree(target_dir)
+            except Exception as rm_e:
+                logger.warning("dry-run 失败后 rollback 删目录失败: %s", rm_e)
+            audit_event.update({
+                "ok": False,
+                "error_msg": f"dry-run 失败 ({dry.get('stage')}): {dry.get('error')}",
+                "rolled_back": True,
+            })
+            _write_skill_audit(audit_event)
+            return {
+                "ok": False,
+                "error": (
+                    f"skill 装上后 dry-run 验证失败 (stage={dry.get('stage')}): "
+                    f"{dry.get('error')}. 已 rollback 删目录, 不影响其他 skill."
+                ),
+                "dry_run": dry,
+            }
+        audit_event["dry_run"] = dry
+
     audit_event.update({
         "ok": True,
         "installed_path": str(target_dir),
     })
     _write_skill_audit(audit_event)
 
+    dry_note = audit_event.get("dry_run", {}).get("note", "")
     return {
         "ok": True,
         "installed_path": f"{namespace}/{skill_name}",
         "summary": (
             f"已安装 skill {namespace}/{skill_name} (v{metadata['version']}) "
-            f"从 {source_path}. 仪表盘下次刷新会出现, gateway 重新扫到后 LLM 也能调."
+            f"从 {source_path}. dry-run 通过 ({dry_note}). "
+            f"仪表盘下次刷新会出现, gateway 重新扫到后 LLM 也能调."
             + (f" 旧版备份: {audit_event.get('backup_path')}" if overwrite else "")
         ),
+        "dry_run": audit_event.get("dry_run", {}),
     }
 
 

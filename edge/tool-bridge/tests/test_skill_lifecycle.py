@@ -282,6 +282,8 @@ def test_skill_install_overwrite(tmp_path: Path, monkeypatch) -> None:
     skill_install({"source_dir": str(src), "namespace": "personal"})
 
     # 不带 overwrite 装第二次 → 拒
+    # 五一 sprint 5/2 加 BL-C13 dedup, 现在拒的话术是"检测到 ... 高度相似 skill" (name 完全相同),
+    # 不再是老的"已存在". force_install=true 跳过 dedup 才会触发原"已存在"路径.
     src2 = tmp_path / "v2"
     src2.mkdir()
     (src2 / "SKILL.md").write_text(
@@ -289,7 +291,16 @@ def test_skill_install_overwrite(tmp_path: Path, monkeypatch) -> None:
     )
     result = skill_install({"source_dir": str(src2), "namespace": "personal"})
     assert result["ok"] is False
-    assert "已存在" in result["error"]
+    assert ("已存在" in result["error"]) or ("高度相似" in result["error"])
+
+    # 强制 force_install (跳过 dedup) → 撞 target_dir 已存在 → 拒老消息
+    result_force = skill_install({
+        "source_dir": str(src2),
+        "namespace": "personal",
+        "force_install": True,
+    })
+    assert result_force["ok"] is False
+    assert "已存在" in result_force["error"]
 
     # overwrite=True 装成功
     result2 = skill_install({
@@ -354,3 +365,155 @@ def test_run_skill_writes_audit_on_failure(tmp_path: Path, monkeypatch) -> None:
     assert result["ok"] is False
     # 注意: skill 不存在的情况是早期返回 (root 检查后 skill_dir.is_dir 失败), 在写
     # audit 之前. 这里只验证不 crash 即可.
+
+
+# ── BL-C12 dry-run 验证 + BL-C13 dedup (五一 sprint 5/2 收尾) ──
+
+
+def test_skill_install_dry_run_passes_with_valid_script(tmp_path: Path, monkeypatch) -> None:
+    """script.py 有效 + 入口 render_xxx → dry-run 通过."""
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    monkeypatch.setenv("CATFISH_SKILLS_DIR", str(skills))
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    src = tmp_path / "valid_skill"
+    src.mkdir()
+    (src / "SKILL.md").write_text(
+        '---\nname: valid_test\nversion: "1.0.0"\ndescription: test\n---\n',
+        encoding="utf-8",
+    )
+    (src / "script.py").write_text(
+        "def render_test(**kwargs):\n    return {'ok': True}\n",
+        encoding="utf-8",
+    )
+
+    result = skill_install({"source_dir": str(src), "namespace": "personal"})
+    assert result["ok"] is True
+    assert result["dry_run"]["ok"] is True
+    assert "render_test" in result["dry_run"]["entry_functions"]
+
+
+def test_skill_install_dry_run_rolls_back_on_syntax_error(tmp_path: Path, monkeypatch) -> None:
+    """script.py 语法错 → dry-run 失败 → rollback 删 target_dir."""
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    monkeypatch.setenv("CATFISH_SKILLS_DIR", str(skills))
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    src = tmp_path / "bad_skill"
+    src.mkdir()
+    (src / "SKILL.md").write_text(
+        '---\nname: bad_test\nversion: "1.0.0"\ndescription: bad\n---\n',
+        encoding="utf-8",
+    )
+    (src / "script.py").write_text(
+        "def render_bad(\n    syntax error here\n",  # 故意语法错
+        encoding="utf-8",
+    )
+
+    result = skill_install({"source_dir": str(src), "namespace": "personal"})
+    assert result["ok"] is False
+    assert "dry-run" in result["error"]
+    # rollback 验证: target_dir 真的被删了
+    assert not (skills / "personal" / "bad_test").exists()
+
+
+def test_skill_install_dry_run_rolls_back_on_no_entry(tmp_path: Path, monkeypatch) -> None:
+    """script.py 没入口函数 (没 render_xxx / run / main) → dry-run 失败 + rollback."""
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    monkeypatch.setenv("CATFISH_SKILLS_DIR", str(skills))
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    src = tmp_path / "no_entry"
+    src.mkdir()
+    (src / "SKILL.md").write_text(
+        '---\nname: no_entry_test\nversion: "1.0.0"\ndescription: noent\n---\n',
+        encoding="utf-8",
+    )
+    (src / "script.py").write_text(
+        "def helper():\n    pass\nMY_CONST = 1\n",  # 只 helper, 无 render/run/main
+        encoding="utf-8",
+    )
+
+    result = skill_install({"source_dir": str(src), "namespace": "personal"})
+    assert result["ok"] is False
+    assert "入口" in result["error"]
+    assert not (skills / "personal" / "no_entry_test").exists()
+
+
+def test_skill_install_skip_dry_run(tmp_path: Path, monkeypatch) -> None:
+    """skip_dry_run=True → 不验, 装坏 skill 也通过 (老 skill 兼容用)."""
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    monkeypatch.setenv("CATFISH_SKILLS_DIR", str(skills))
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    src = tmp_path / "skip"
+    src.mkdir()
+    (src / "SKILL.md").write_text(
+        '---\nname: skip_test\nversion: "1.0.0"\ndescription: skip\n---\n',
+        encoding="utf-8",
+    )
+    (src / "script.py").write_text("def helper():\n    pass\n", encoding="utf-8")
+
+    result = skill_install({
+        "source_dir": str(src), "namespace": "personal", "skip_dry_run": True,
+    })
+    assert result["ok"] is True
+
+
+def test_skill_install_dedup_blocks_same_name(tmp_path: Path, monkeypatch) -> None:
+    """同名 skill (跨 namespace) → dedup 命中 → 拒装."""
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    monkeypatch.setenv("CATFISH_SKILLS_DIR", str(skills))
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    # 装到 dept namespace
+    src1 = tmp_path / "s1"
+    src1.mkdir()
+    (src1 / "SKILL.md").write_text(
+        '---\nname: leadership_briefing\nversion: "1.0.0"\ndescription: dept brief\n---\n',
+        encoding="utf-8",
+    )
+    skill_install({"source_dir": str(src1), "namespace": "department"})
+
+    # 试装到 personal namespace, 同名
+    src2 = tmp_path / "s2"
+    src2.mkdir()
+    (src2 / "SKILL.md").write_text(
+        '---\nname: leadership_briefing\nversion: "2.0.0"\ndescription: my brief\n---\n',
+        encoding="utf-8",
+    )
+    result = skill_install({"source_dir": str(src2), "namespace": "personal"})
+    assert result["ok"] is False
+    assert "高度相似" in result["error"]
+    assert len(result["duplicates"]) == 1
+    assert result["duplicates"][0]["name"] == "leadership_briefing"
+
+
+def test_skill_install_force_install_skips_dedup(tmp_path: Path, monkeypatch) -> None:
+    """force_install=True 跳过 dedup, 即使重名也装 (因 namespace 不同, 不撞 target_dir)."""
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    monkeypatch.setenv("CATFISH_SKILLS_DIR", str(skills))
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    src1 = tmp_path / "s1"
+    src1.mkdir()
+    (src1 / "SKILL.md").write_text(
+        '---\nname: weekly\nversion: "1.0.0"\ndescription: dept\n---\n', encoding="utf-8",
+    )
+    skill_install({"source_dir": str(src1), "namespace": "department"})
+
+    src2 = tmp_path / "s2"
+    src2.mkdir()
+    (src2 / "SKILL.md").write_text(
+        '---\nname: weekly\nversion: "2.0.0"\ndescription: my\n---\n', encoding="utf-8",
+    )
+    result = skill_install({
+        "source_dir": str(src2), "namespace": "personal", "force_install": True,
+    })
+    assert result["ok"] is True
