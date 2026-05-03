@@ -87,7 +87,8 @@ async function fireOne(time: string): Promise<void> {
   try {
     const s = await fetchProactiveStarter();
     if (!s || !s.starter) return;
-    await sendNotification("🐟 小鲶想跟你聊一句", s.starter);
+    // 五一 sprint 5/3 BL-D11: macOS 通知左侧已有 app icon (新 mark), 标题去 🐟 冗余
+    await sendNotification("小鲶想跟你聊一句", s.starter);
     markFired(time);
   } catch (e) {
     console.warn("[proactive] fire 失败:", e);

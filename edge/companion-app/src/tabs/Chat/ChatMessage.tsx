@@ -107,23 +107,19 @@ function AssistantBubble({
         marginBottom: "var(--space-4)",
       }}
     >
-      <div
+      {/* 五一 sprint 5/3 BL-D11: 占位 🐟 emoji 换成正式小鲶头像 (avatar-circle.svg).
+          头像本身是圆形带暖米底, 不再需要外层 background. width/height 固定 28x28. */}
+      <img
+        src="/catfish-avatar.svg"
+        alt="小鲶"
+        width={28}
+        height={28}
         style={{
           flexShrink: 0,
-          width: 28,
-          height: 28,
           borderRadius: "50%",
-          background: "var(--catfish-cyan-dim)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontSize: 14,
-          color: "white",
+          display: "block",
         }}
-        aria-hidden
-      >
-        🐟
-      </div>
+      />
       <div
         style={{
           flex: 1,

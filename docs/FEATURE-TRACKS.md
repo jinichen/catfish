@@ -1,6 +1,6 @@
 # 鲶鱼 · Feature Tracks (主入口)
 
-> **快照**: 2026-05-03 · **维护人**: 鸿波 · **更新**: 每周日晚 + 重大 ship 时
+> **快照**: 2026-05-03 (晚间) · **维护人**: 鸿波 · **更新**: 每周日晚 + 重大 ship 时
 > **角色**: 这是**唯一**的"我们在做啥 / 还差啥 / 在哪个 phase"主入口.
 > 其他 doc 角色见底部 § 文档地图.
 
@@ -9,16 +9,19 @@
 ## 🚦 Phase 进度 (一行看清)
 
 ```
-Phase 1 · 单员工 AI 副手           [██████████] 97% · 5 月 demo + 1 PoC 客户
-Phase 2 · 团队版 (SSO/RBAC/Win)    [████████░░] 75% · 五一 sprint Phase 2 + Skills Hub + Production MVP
+Phase 1 · 单员工 AI 副手           [██████████] 99% · 5 月 demo + 1 PoC 客户
+Phase 2 · 团队版 (SSO/RBAC/Win)    [████████░░] 78% · 五一 sprint Phase 2 + Skills Hub + Production MVP + brand
 Phase 3 · ★ Federation             [███░░░░░░░] 30% · 五一 sprint Plan D MVP, Q4 ship
 Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 2027 Q2+
 ```
 
-> 📈 5/2-5/3 周末 sprint 大幅推进 (Phase 2 后端 + Skills Hub):
->   - Phase 1: 92% → 95% (+ project-approval skill / 主动闲聊 / Quota 真接 chat)
->   - Phase 2: 35% → 70% (+ Dashboard 角色化 / 多账号 / PG 完整双写 / alembic 双服务 /
->     Quota 100% / Manager PUT UI / Admin 全局聚合 / 中央 Skills Hub MVP / dry-run + dedup)
+> 📈 5/2-5/3 周末 sprint 大幅推进 (Phase 2 后端 + Skills Hub + brand kit):
+>   - Phase 1: 92% → 99% (+ project-approval skill / 主动闲聊 / Quota 真接 chat / brand kit v1)
+>   - Phase 2: 35% → 78% (+ Dashboard 角色化 / 多账号 / PG 完整双写 / alembic 双服务 /
+>     Quota 100% / Manager PUT UI / Admin 全局聚合 / 中央 Skills Hub MVP / dry-run + dedup /
+>     SSO 登录页 brand 升级 + 防泄漏)
+>   - 5/3 晚加: 完整 brand kit (mascot / mark / app icon / 47 个 PNG / BRAND.md / tokens 升级 /
+>     6 处占位 🐟 全替换 / 防 hermes 泄漏 dispatch scrub + SOUL 铁律)
 
 ---
 
@@ -253,6 +256,29 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 
 - ⬜ 配置 UI (时段 / 频率 / 模板) · 0.5 周
 - ⬜ 跨 session 深度情境关联 (journal 结构化解析) · 1-2 周
 - **完整 BL-E13**: 1-2 周, demo 后做
+
+#### #26 ★ 品牌视觉身份 (brand kit v1) [Phase 1, 90%]  ★ 5/3 晚 ship 完整套件
+> 之前 logo / 配色 / 头像全是 🐟 emoji 占位. 5 月 demo 客户看到必扣分. 今晚一次到位 ship.
+- ✅ **5 件套 SVG** (`branding/`): logo-mascot (完整吉祥物 480x480) + logo-mark (极简圆形 256x256) +
+  logo-mark-mono (单色反白) + avatar-circle (聊天头像) + app-icon-master (macOS squircle)
+- ✅ **47 个 app icon 全套** (`render_icons.py` 一键): macOS .icns + Windows .ico (multi-size embedded) +
+  iOS 18 个尺寸 + Android 5 密度 mipmap × 3 类 + Windows tiles 9 个 + favicon
+- ✅ **BRAND.md 速查** (`edge/identity/`, 跟 SOUL.md 同级): 角色定位 + 4 件套用途表 + 配色 +
+  字体 + 净空区 + 用法红线 + 文案语调 + 应用清单 + 改 brand SOP
+- ✅ **配色升级** (`tokens.css`): 旧 #06b6d4 亮青 → #0E5F66 墨青 + 暖橙 #F47B3D + 暖米 #FAF1E4
+  (深色模式同步) - 6 个新 CSS 变量
+- ✅ **6 处占位 🐟 → 正式 mascot** (Companion 前端): LoginGate / OnboardingWizard /
+  ChatPanel / ChatTab / LearningCard / useProactiveScheduler 通知
+- ✅ **SSO 登录页 brand 升级** (identity-server): 内联 mark SVG (无静态文件依赖) + 全页色升级 +
+  暖橙 CTA + favicon (data: URI) + Cache-Control no-store 防浏览器缓存老 HTML
+- ✅ **Demo PPT 封面** (`branding/demo-cover.pptx`): 深青底 + 大字"鲶鱼 Catfish" +
+  暖橙锚点 slogan + 三行卖点 (本机算力 / 公文报表 / 审计合规)
+- ✅ **品牌铁律** (SOUL.md 加章节): 禁止小鲶向员工说 "hermes / ~/.hermes / 未初始化", 必说"鲶鱼内置存储"
+- ✅ **dispatch 层 brand scrub** (adapter.py): hermes memory_* 工具响应里的 ~/.hermes 路径 +
+  hermes 字眼自动过滤再给 LLM (audit log 留原文); 11 个测试覆盖
+- ⬜ 桌面壁纸 / 名片 / 邮件签名模板 (P1, demo 后) · 0.5 周
+- ⬜ H5 介绍页 (P2) · 1 周
+- 见 `edge/identity/BRAND.md` (完整速查) + `branding/` (源文件)
 
 ---
 

@@ -161,9 +161,20 @@ class OIDCProvider(AuthProvider):
             logger.debug("拒绝 access_token 当 id_token 用 (sub=%s)", sub)
             return None
 
+        # 五一 sprint 5/2 RBAC: 从 OIDC claims 读 role + managed_departments.
+        # catfish-identity IdentityUser.to_oidc_claims 已透传 (5/2 改).
+        managed_raw = payload.get("managed_departments", [])
+        if isinstance(managed_raw, str):
+            managed_list = [d.strip() for d in managed_raw.split(",") if d.strip()]
+        elif isinstance(managed_raw, list):
+            managed_list = [str(d) for d in managed_raw if d]
+        else:
+            managed_list = []
         return User(
             sub=sub,
             department=payload.get("department", ""),
             tier=payload.get("tier", "employee"),
+            role=payload.get("role", "employee"),
+            managed_departments=managed_list,
             auth_method=self.name,
         )

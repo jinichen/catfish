@@ -44,6 +44,27 @@ def _r():
 # tools/list
 # ============================================================
 
+# 五一 sprint 5/3 收尾: hermes 工具响应里含 ~/.hermes/... 路径, LLM 看到困惑后
+# 跟员工说"memory tool 不可用因为 hermes 没初始化, 存到 ~/.hermes/...", 暴露品牌.
+#
+# **不能直接屏蔽** — memory_save 是真跨 session 永久记忆能力, 屏了鲶鱼就丢这个.
+# 改用响应包裹: tool 真返回原样写存储, 但给 LLM 看的 response 把 hermes 字眼 + 路径
+# 都过滤掉, LLM 不再因 path 困惑.
+#
+# 见 dispatch_tool 处理.
+#
+# 这些 hermes tool 名字本身可能也得 rebrand, 但改名涉及 hermes 内部映射, 风险大,
+# Phase 2 后做.
+
+# Hermes 暴露品牌字眼的工具 — 调度后 response 走 sanitizer.
+_HERMES_TOOLS_NEEDS_BRAND_SCRUB = {
+    "memory",
+    "memory_save",
+    "memory_load",
+    "memory_search",
+}
+
+
 def list_tools() -> List[Dict[str, Any]]:
     """返回 OpenAI tool calling 兼容的 tool definitions。
 
@@ -76,6 +97,51 @@ def list_tools() -> List[Dict[str, Any]]:
         except Exception as e:
             logger.warning("list_tools: skip %s — %s", name, e)
     return out
+
+
+# ── 品牌脱敏 (五一 sprint 5/3 加) ───────────────────────────────
+
+
+def _scrub_brand_leaks(text: str) -> str:
+    """从 tool response 文字里清掉 hermes 字眼 + 内部路径, 防 LLM 看到后向员工泄漏.
+
+    替换 (大小写敏感, hermes 大小写都换):
+      - ~/.hermes/...       → 鲶鱼本机存储
+      - /Users/.../.hermes  → 鲶鱼本机存储
+      - hermes / Hermes     → 鲶鱼  (注意: 工具名 hermes_xxx 不动, 只换独立词)
+    """
+    import re as _re
+    # 先换路径 (优先级高于单词替换)
+    text = _re.sub(r"~/\.hermes(/[^\s'\")]*)?", "鲶鱼本机存储", text)
+    text = _re.sub(r"/Users/[^/\s]+/\.hermes(/[^\s'\")]*)?", "鲶鱼本机存储", text)
+    text = _re.sub(r"/home/[^/\s]+/\.hermes(/[^\s'\")]*)?", "鲶鱼本机存储", text)
+    # 再换独立的 hermes 词 (\b 词边界, 防误伤 hermes_xxx 工具名)
+    text = _re.sub(r"\bhermes\b", "鲶鱼", text, flags=_re.IGNORECASE)
+    return text
+
+
+def scrub_brand_in_result(tool_name: str, result: Any) -> Any:
+    """对会泄漏品牌字眼的 hermes tool 响应做脱敏.
+
+    其他 tool 不动 (避免误伤 catfish_skill_install 等真路径返回).
+    """
+    if tool_name not in _HERMES_TOOLS_NEEDS_BRAND_SCRUB:
+        return result
+    if isinstance(result, str):
+        return _scrub_brand_leaks(result)
+    if isinstance(result, dict):
+        out: Dict[str, Any] = {}
+        for k, v in result.items():
+            if isinstance(v, str):
+                out[k] = _scrub_brand_leaks(v)
+            elif isinstance(v, (dict, list)):
+                out[k] = scrub_brand_in_result(tool_name, v)
+            else:
+                out[k] = v
+        return out
+    if isinstance(result, list):
+        return [scrub_brand_in_result(tool_name, item) for item in result]
+    return result
 
 
 # ============================================================
@@ -174,6 +240,23 @@ async def dispatch_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         latency_ms=latency_ms,
         extra=audit_extra or None,
     )
+
+    # 五一 sprint 5/3: hermes memory_* 工具响应里含 ~/.hermes/... 路径 + 'hermes'
+    # 字眼, LLM 看到后向员工泄漏品牌. audit 已经写了原始 (内部审计需要), 这里只对
+    # 给 LLM 看的 result 和 error 做脱敏. 其他 tool 不动.
+    if name in _HERMES_TOOLS_NEEDS_BRAND_SCRUB:
+        if result.get("result") is not None:
+            try:
+                result["result"] = scrub_brand_in_result(name, result["result"])
+            except Exception:
+                logger.exception("scrub_brand_in_result failed for %s — leaving raw", name)
+        # 失败路径 (raise 后 _do_dispatch 把 exception message 塞 error 字段),
+        # error 里也常带 ~/.hermes / hermes 字眼, 必须脱敏
+        if isinstance(result.get("error"), str):
+            try:
+                result["error"] = _scrub_brand_leaks(result["error"])
+            except Exception:
+                pass
     return result
 
 

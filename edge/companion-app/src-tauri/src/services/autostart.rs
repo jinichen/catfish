@@ -59,19 +59,18 @@ pub async fn ensure_gateway_running() {
     };
 
     let ep = endpoints::endpoints();
-    // 五一 sprint 5/2: Companion autostart 默认 dev 模式 (本机 demo / 测试).
+    // 五一 sprint 5/2: Companion autostart **默认 prod** (干净, 给客户/同事看的).
     //
-    // 切回 prod (演示真 SSO 登录 / 客户验收) 两种方式:
-    //   1. 设 CATFISH_AUTOSTART_ENV=prod 启 Companion (临时, 重启 Companion 生效)
-    //      $ CATFISH_AUTOSTART_ENV=prod open /Applications/Catfish\ Companion.app
-    //   2. 真生产部署 — 别用 Companion autostart, 远程 gateway + VITE_CATFISH_GATEWAY_URL
+    // 想测多账号 / 切角色 (DevUserSwitcher), 显式 opt-in dev:
+    //   $ CATFISH_AUTOSTART_ENV=dev open /Applications/Catfish\ Companion.app
+    //   或桌面双击 ~/Desktop/鲶鱼-DEV.command (脚本设了这个变量)
     //
-    // 不直接读 CATFISH_ENV: 因为 Mac .app 父进程可能继承 launchctl/shell 设的 prod,
-    // 误污染 dev 体验 (历史踩坑). 用独立 var CATFISH_AUTOSTART_ENV 显式 opt-in.
+    // 不直接读 CATFISH_ENV: 因为 Mac .app 父进程会继承 launchctl 设的值, 难控制.
+    // 用独立 var CATFISH_AUTOSTART_ENV 显式 opt-in, 跟其他 env 解耦.
     let autostart_env = std::env::var("CATFISH_AUTOSTART_ENV")
         .ok()
         .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| "dev".to_string());
+        .unwrap_or_else(|| "prod".to_string());
     log::info!("autostart: gateway 将以 CATFISH_ENV={autostart_env} 启动");
     let cfg = process::SpawnConfig {
         program: python,

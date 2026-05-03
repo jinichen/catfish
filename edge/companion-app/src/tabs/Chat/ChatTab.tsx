@@ -116,7 +116,11 @@ export default function ChatTab() {
               minWidth: 0,
             }}
           >
-            <span>🐟 对话</span>
+            {/* 五一 sprint 5/3 BL-D11: 占位 🐟 → 小尺寸正式头像 */}
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <img src="/catfish-avatar.svg" alt="" width={18} height={18} style={{ display: "block" }} />
+              对话
+            </span>
             {persistedSessionId && (
               <span
                 title={persistedSessionId}

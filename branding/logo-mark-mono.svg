@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  小鲶 · 单色 mark (反白 / 灰阶 / 印刷)
+  用途: PPT 黑底页角标 / 公文章戳 / 单色印刷物 / 邮件签名
+  色: currentColor — 父元素的 color 决定渲染色, 反白可用 fill="white"
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256"
+     fill="none" stroke="currentColor">
+  <!-- 圆环 -->
+  <circle cx="128" cy="128" r="118" stroke-width="10"/>
+
+  <!-- 上须曲线 -->
+  <path d="M 175 90 Q 125 70 90 100 Q 60 130 80 160" stroke-width="11"
+        stroke-linecap="round"/>
+
+  <!-- 下须曲线 (虚化, 用 dasharray 区分) -->
+  <path d="M 175 165 Q 125 185 90 155 Q 60 125 80 95" stroke-width="11"
+        stroke-linecap="round" stroke-dasharray="4 8"/>
+
+  <!-- 须尖锚点 -->
+  <circle cx="80" cy="160" r="10" fill="currentColor" stroke="none"/>
+
+  <!-- 眼 -->
+  <circle cx="175" cy="128" r="13" fill="currentColor" stroke="none"/>
+</svg>

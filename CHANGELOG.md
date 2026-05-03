@@ -1627,3 +1627,226 @@ LLM 应用最深的痛点 — 每个 session 是孤岛, 模型不知道员工"�
 - 完成 / 踩坑 / 遗留 / 明天起手式 四栏
 - 完成优先写"事实"（做了什么），不写"感受"
 - 踩坑写"现象 + 原因 + 解法"便于未来参考
+
+---
+
+## 2026-05-02 ~ 2026-05-03 (周末加班 sprint - Phase 2 后端冲刺到 70%)
+
+五一 sprint 收尾, 鸿波东京回来周末两天连续 ~30 小时高强度. 我 (鲶鱼) 配合 ship.
+**主线**: Phase 2 后端 RBAC / Quota / PG / Skills Hub 全套到生产可用 + 修一堆 demo 阻塞 bug.
+
+### 5/2 周六 ship (15 commit)
+
+**清理 + FEATURE-TRACKS 主入口**:
+- BL-L27 datetime.utcnow → datetime.now(timezone.utc) (3 处, Python 3.12 deprecation)
+- BL-L28 ALLOW.md 关键词从子串改 jieba token-overlap (中文场景"项目X进展" 不命中"项目X上周进展" 修)
+- 新建 docs/FEATURE-TRACKS.md (~250 行, 24 个 track + 6 个发现的暗角:
+  email-agent / feishu-monitor 实际有真代码, 5 个 central 服务全 stub)
+- PROJECT-STATUS.md 标 deprecated, BACKLOG.md 加 redirect
+
+**RBAC + Quota 全栈 ship**:
+- User dataclass 加 role + managed_departments + can_manage_department
+- /api/me + /api/quota/department/{dept} + /api/audit/department/{dept}
+- DepartmentQuotaCard / DepartmentAuditCard (manager 看本部门聚合)
+- DashboardTab 按 role conditional render (employee 8 卡 / manager +部门 / admin +全局)
+
+**多账号测试基础设施**:
+- dev_users.yaml + DevUserSwitcher 顶部黄条 (admin/3 manager/3 employee 跨 4 部门)
+- localStorage 记选中 token, 切换器自动 reload
+- /api/dev/users 端点 (prod 模式 404 自动隐藏)
+- autostart 默认 prod (.env CATFISH_AUTOSTART_ENV=dev opt-in)
+
+**PG migration 完整**:
+- gateway 新建 db.py (镜像 identity-server, asyncpg 懒 import 防沙盒炸)
+- quota.py + metrics.py 双 backend (PG 主 / sqlite jsonl 兜底, PG 失败自动 fallback 不丢)
+- alembic 双服务 (gateway + identity-server) 各自 migration + version_table 隔离
+- ★ chat completions 真接 record_usage (之前 PG 表永远空的根因)
+- 真机端到端跑通: 5 张表 + chat → 双写正常
+
+### 5/3 周日 ship (15 commit)
+
+**第 3 个业务 skill (BL-L6)**:
+- skills/department/project-approval/ — 复用 leadership-briefing 渲染层 (importlib spec 加载防 'script' 模块名撞)
+- 4 段固定: 背景与必要性 / 方案与预算 / 风险分析 / 进度与立项建议
+- 触发词: 立项 / 可研 / 申报项目 / 报项目
+
+**identity-server 也迁 alembic**:
+- 跟 gateway 对齐: alembic.ini + env.py + 初始 migration
+- 关键: 各服务独立 alembic_version_gateway / _identity 防共享 PG 撞
+
+**BL-E13 主动闲聊 C-MVP**:
+- gateway proactive.py: 读 journal tail + 时段 + qwen-flash 生成上下文 starter
+- ProactiveCard Dashboard 第一张卡, 30min 自动换
+- useProactiveScheduler 9:30/14:00/17:30 macOS 通知
+- Tauri notify() osascript 实现 (无新依赖)
+
+**RBAC 三件套 + Quota 阻断 chat**:
+- PUT /api/quota/department/{dept} (manager 改限额, 写 yaml + 自动 reload)
+- GET /api/quota/global + /api/audit/global (admin 全局聚合)
+- AdminGlobalCard (admin only, 整行)
+- DepartmentQuotaCard 加 inline QuotaEditor (manager 直接 input + 保存)
+- chat completions 入口 check_quota → 429 + friendly 中文话术
+- Companion chat.ts 识别 429 显友好 banner
+
+**修关键 UI bug** (真机调试 2 小时定位):
+- useChat.ts 在 await streamChat() 后**无条件** updateMessage(status: 'done')
+  覆盖了 onError 设的 'error' 状态 → quota / 503 / 鉴权 等错都 UI 不显
+- 修法: 先看当前 status, 是 error 就不动, 否则才改 done
+
+**Skills Hub MVP 完整**:
+- BL-C12 dry-run + rollback (skill_install 后 importlib 加载 + 找入口函数)
+- BL-C13 dedup 检查 (install 前查同名 / 描述相似)
+- 中央 Skills Hub server (新建 central/skills-hub/, FastAPI):
+  * publish / list / get (latest+指定版) / download_file / delete + audit
+  * 文件系统存储 ~/.catfish-hub/, 多 version 共存, 路径越界保护
+  * Companion 改 hub URL 拉取 留下次
+
+### 测试 (167 全过)
+
+| 子系统 | 单测数 |
+|---|---|
+| tool-bridge skill_lifecycle | 23 (+6 dry-run/dedup) |
+| skills-hub storage | 21 (新加) |
+| gateway quota / dev_token / a2a / metrics / skills_loader | 83 |
+| identity-server users / registry | 32 |
+| Companion (skill smoke) | 8 |
+
+### 真机端到端验证 (Mac, May 3)
+
+✅ PG 真双写: 5 张表 + chat → quota_events + gateway_audit 各 1 条新行
+✅ Quota 429 闭环: Alice (研发部, limit=1000) chat → 红色横条 → manager 改 0 → 再聊通过
+✅ Skills Hub: publish leadership-briefing v1.1.0 → list 返 1 条 → download SKILL.md 真返全文 → audit 真记
+✅ Companion 角色切换: admin (个人 + 全局) / manager (个人 + 部门) / employee (只个人)
+✅ 跨 session 记忆: 小鲶 "早, 鸿波. 最近资质汇报和周报都交付完了, 今天准备干啥?" (引用 journal 真业务)
+
+### Phase 进度 (周末翻倍)
+
+```
+Phase 1: 92% → 95%  (+ project-approval / 主动闲聊 / Quota 真接 chat)
+Phase 2: 35% → 70%  (RBAC UI / 多账号 / PG 双写完整 / alembic 双服务 /
+                     Quota 100% / Manager UI / Admin 全局 / Skills Hub MVP / dry-run+dedup)
+Phase 3: 30%        (Plan D 五一 ship 后未变, Q4)
+```
+
+### 踩坑复盘
+
+1. **alembic 跨服务共用 PG** → alembic_version 表会撞, 各服务用 `alembic_version_gateway` / `_identity` version_table 隔离
+2. **alembic 配 URL 含 PG 密码 URL-encoded %21** → configparser 把 % 当变量插值前缀触发 ValueError. 修: 走 create_engine(url) 绕开 configparser
+3. **SQLAlchemy 默认 'postgresql://'** → psycopg2, 但我们装 psycopg3. URL 改 'postgresql+psycopg://'
+4. **yaml.safe_load 'departments:' 后只有注释 → None**, setdefault 不替换 None, 必须显式 isinstance 检查
+5. **Companion 默认 prod / DEV opt-in 反了几次**: 最终拍板默认 prod (装的 .app 给客户/同事看), DEV 走桌面 .command 启动器
+6. **useChat 状态覆盖 bug** (上面有详细). 真机调试 2 小时, DevTools Network 看到 429 + 完整 JSON, 但 UI 空 → 顺着代码追到 await 后无条件 updateMessage 'done'
+
+### 累计 commit (周末)
+
+~30 commit. 全部 push 上 main. 0 测试 fail.
+
+### 5/2-5/3 sprint 总结
+
+Phase 2 后端 + 用户态完整 ship, demo 卖点 10 个全部技术 verified.
+**剩 demo 阻塞全在演讲准备侧** (彩排 / PPT / 实录视频), 5/14 demo 还有 11 天.
+
+### 遗留 (demo 后做)
+
+- Companion catfish_skill_install 改支持 hub URL 拉取 (~0.5 周)
+- Skills Hub 审核流 manager → admin → live (~1 周)
+- 部门级 skill auto-push (依赖 federation, ~1-2 周)
+- Federation 真实化 (跨 2 台真机 / mTLS / HA, ~5-6 周)
+- Production 部署设计 (~1 周)
+- 完整 BL-E13 主动闲聊 (情境关联 / 节假日推断, ~1-2 周)
+- email-agent / feishu-monitor 接通 Companion 决策
+
+### 5/14 demo 倒计时 11 天
+
+🔴 真机彩排 ×2 (5/11 + 5/13)
+🔴 实录 case 视频 ×3 (1 天搞)
+🟡 PPT 实际填 (大纲 + 封面已有, 内页待填, 0.5-1 天)
+🟠 employee_journal 持续攒 (每天聊 2-3 句真业务)
+
+---
+
+## 2026-05-03 (周日晚) 加班 sprint - 完整 brand kit v1 + 防泄漏
+
+周末 sprint 后再加 ~6 小时, 把"形象"这块短板一次到位 ship.
+**触发**: 鸿波看到员工聊天里小鲶说"memory 工具不可用 ~/.hermes/memories/" 暴露 hermes 内部品牌, 决定从根上修.
+**主线**: (1) brand 防泄漏 (2) 完整 brand kit v1 (3) UI 彻底去 emoji 占位.
+
+### Brand 防泄漏 (BL-D9)
+
+- **SOUL.md 加品牌铁律**: 禁止小鲶说 hermes / ~/.hermes / "未初始化" 等暴露内部品牌的话; 列正确替代词 (鲶鱼 / 小鲶 / 鲶鱼内置存储)
+- **catfish_remember tool 描述强化**: 升 P0, 写明跨 session 永久记忆也用这个; 如果 memory_save 不可用 **务必**用它替代, 不要跟员工说"memory tool 不可用"
+- **adapter dispatch 层 brand scrub** (新核心): hermes memory_* (memory/save/load/search) 工具响应里的 ~/.hermes/* 路径 + 独立 hermes 词被自动替换成 "鲶鱼本机存储"/"鲶鱼" 再给 LLM. **audit log 仍写原文** (内部审计要看), 只改 LLM 视野里的 result/error 字段
+- 11 个新测试覆盖: 4 种路径形态 + 工具名 hermes_xxx 不误伤 + str/dict/list/嵌套 dict + dispatch 整链路 + 失败路径 error 字段也脱敏
+- **核心反复**: 第一版直接屏蔽 hermes memory_* 工具不让 LLM 看到 → 鸿波拍 stop ("会不会影响鲶鱼记忆能力?") → 改用响应包裹方案. 关键点: hermes memory_save 是真的跨 session 永久存储, 屏了就丢这能力
+
+### 完整 brand kit v1 (BL-D11)
+
+**5 件套 SVG** (`branding/`):
+- `logo-mascot.svg`: 完整吉祥物 480x480, 圆胖鲶鱼 + 双须 + 大眼 + 腮红 + 微笑, Onboarding/banner 用
+- `logo-mark.svg`: 极简圆形 256x256, 双须 S 曲线 + 鱼眼锚点, favicon/PPT 角标
+- `logo-mark-mono.svg`: currentColor 单色版, 反白印刷
+- `avatar-circle.svg`: 头部特写圆形 256x256, 聊天气泡用
+- `app-icon-master.svg`: macOS Big Sur+ squircle (1024x1024, rx=228 ≈ 22.37%)
+
+**47 个 app icon 一键渲染** (`render_icons.py`, cairosvg + Pillow + icnsutil):
+- macOS .icns (multi-size 16~1024 embedded)
+- Windows .ico (multi-size 16/32/48/64/128/256)
+- iOS 18 个尺寸 (20/29/40/60/76/83.5/512 各 @1x/@2x/@3x)
+- Android mipmap 5 密度 × 3 类 (ic_launcher / round / foreground)
+- Windows tiles 9 个 + StoreLogo + 4 个 Tauri 顶层 PNG
+- 替换 src-tauri/icons/* 全套 (47 文件)
+
+**配色升级** (`tokens.css`):
+- 旧 `#06b6d4` 亮青 → `#0E5F66` 墨青 (主色)
+- 加 `#F47B3D` 暖橙 (CTA / 在线指示, 10% 用量)
+- 加 `#FAF1E4` 暖米 (聊天卡背景, 替代纯白)
+- 状态色复用主色亮青 ok / 暖琥珀 warn / 暖红 err — 跟 brand 协调
+- 深色模式同步 (墨青底 #131C1F + 暖米文字 #E8E4DC, 不用纯黑/纯白)
+
+**BRAND.md 速查** (`edge/identity/`, 跟 SOUL.md 同级权威):
+- 角色定位 + 4 件套用途表 + 配色系 (主/辅/中性各表) + 字体阶梯
+- 净空区 / 最小尺寸 / 用法红线 (× 不要拉伸/不要换色/不要旋转/不要加投影)
+- 文案语调 (用"你"不用"您") + 应用清单 + 改 brand SOP
+- 旧 `companion-app/docs/BRANDING.md` 改纯 redirect, 防分裂
+
+**Demo PPT 封面** (`branding/demo-cover.pptx`, pptxgenjs):
+- 深青底 + 大字"鲶鱼" + 亮青斜体 "Catfish"
+- 暖橙锚点 + "企业级 AI 助理 · Companion for SOE"
+- 三行 slogan 关键词加粗 (本机算力 / 公文报表审批 / 审计合规)
+- 右上角水底气泡装饰 + 底部双 footer (公司角标 + 版本日期)
+
+### UI 占位 emoji 大扫荡 (6 处 + 1 通知)
+
+| 位置 | 原 | 现 |
+|---|---|---|
+| LoginGate 标题 | "🐟 鲶鱼 Companion" | 36px mascot + 标题分行 |
+| Onboarding 大图 | 60px 🐟 | 96px 完整吉祥物 |
+| Onboarding 列表 🐠 | 跟"鲶鱼"易混 | ✨ 中性 emoji |
+| ChatPanel 空状态 | 56px 🐟 | 120px 完整吉祥物 |
+| ChatTab "🐟 对话" | 18px 🐟 | 18px 圆头像 |
+| LearningCard 标题 | "🐟 鲶鱼今天学到的" | 20px 圆头像 + 标题 |
+| useProactive 通知标题 | "🐟 小鲶想..." | "小鲶想..." (icon 已在通知左侧) |
+
+### SSO 登录页 (identity-server) brand 升级
+
+- 内联 32px mark SVG (无静态文件部署依赖)
+- 全页配色升级 (墨青渐变底 + 暖橙 CTA + 输入框聚焦亮青光晕)
+- favicon: 内联 SVG data: URI (macOS Big Sur+ 给本地端口的默认蓝鱼 emoji 替代)
+- **Cache-Control no-store + Pragma + Expires 三件套** (修真机问题: 用户 dev 看新页 / build 看老页 — 根因是浏览器启发式缓存了无 cache 头的 HTML)
+- 53/56 测试通过 (3 跳过, 0 失败)
+
+### 踩坑
+
+1. **直接屏蔽 hermes memory tool 错了**: 第一版加白名单从 LLM 工具清单移除. 鸿波及时拍停: "会不会影响鲶鱼记忆能力?". 反思: hermes memory_save 是真跨 session 永久存储, 屏了不只是品牌问题, 是丢能力. 改用响应包裹 = audit 留原文 + LLM 看脱敏版, 两全
+2. **icnsutil type code 映射**: 16=is32 / 32=il32 / 64=icp6 / 128=ic07 / ... 不查文档纯靠记会写错
+3. **Tauri 沙箱 path.resolve**: build_pptx_cover.js 用 `path.resolve(__dirname, "..")` 在不同目录跑 ROOT 不一样, 第一次直接炸. 改用绝对路径
+4. **dev 看新 / build 看老 不是部署问题**: 真因是浏览器缓存. 加 no-store 头解决, 不是分别配置 dev/prod identity-server
+5. **配色升级影响范围**: tokens.css 改 `--catfish-cyan` 一处, 全应用 ~50 处引用同步换. 这就是 token 的价值
+
+### 累计 commit (5/3 晚)
+
+5 个 commit: (1) 多账号 dev mode + 部门审计 (上 session 没提) (2) brand 防泄漏 (3) brand kit 全套 (4) UI emoji 替换 + SSO 升级 (5) 文档更新
+
+### 5/3 晚总结
+
+形象短板补上, demo 客户看的"第一眼"不再是 🐟 emoji. 后端 100% 卖点 + 前端 100% brand 一致 = demo 阻塞只剩演讲侧 (彩排/视频/PPT 内页).

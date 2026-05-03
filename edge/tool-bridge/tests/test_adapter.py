@@ -193,3 +193,166 @@ def test_health_includes_native_count(monkeypatch: pytest.MonkeyPatch) -> None:
     assert h["tool_count"] == 2 + len(catfish_tools.CATFISH_NATIVE_TOOLS)
     assert h["native_tool_count"] == len(catfish_tools.CATFISH_NATIVE_TOOLS)
     assert "catfish_native" in h["toolsets"]
+
+
+# ---------- 品牌脱敏 (BL-D9 五一 sprint 5/3) ----------
+
+
+def test_scrub_brand_leaks_replaces_tilde_path() -> None:
+    """~/.hermes/memories/x.md → 鲶鱼本机存储 (路径整体被替换, 防 LLM 引用)"""
+    out = adapter._scrub_brand_leaks("Saved to ~/.hermes/memories/foo.md")
+    assert "hermes" not in out.lower()
+    assert "鲶鱼本机存储" in out
+
+
+def test_scrub_brand_leaks_replaces_absolute_user_path() -> None:
+    """/Users/alice/.hermes/... 也得替换 (LLM 看到的 toolresponse 经常是绝对路径)"""
+    out = adapter._scrub_brand_leaks("file path: /Users/alice/.hermes/memories/k.md done")
+    assert ".hermes" not in out
+    assert "鲶鱼本机存储" in out
+
+
+def test_scrub_brand_leaks_replaces_home_linux_path() -> None:
+    """/home/bob/.hermes/... (Linux 路径) 也得替换"""
+    out = adapter._scrub_brand_leaks("dir: /home/bob/.hermes/state.json ok")
+    assert ".hermes" not in out
+    assert "鲶鱼本机存储" in out
+
+
+def test_scrub_brand_leaks_replaces_standalone_word() -> None:
+    """独立的 'hermes' 词 → 鲶鱼 (大小写都换, \\b 词边界)"""
+    out = adapter._scrub_brand_leaks("hermes is not initialized; Hermes can't run")
+    assert "hermes" not in out.lower()
+    assert "鲶鱼" in out
+
+
+def test_scrub_brand_leaks_keeps_tool_name_with_underscore() -> None:
+    """hermes_xxx 这种 tool 名字不能误伤 (\\b 词边界保证)"""
+    # 注意: \b 在 hermes_browser 处仍把 hermes 单独识别为词 (因为 _ 不是 \w 边界, 它是 \w)
+    # 所以实际上 hermes_browser 里的 hermes 是词的一部分, 不会被替换. 这是预期.
+    out = adapter._scrub_brand_leaks("call hermes_browser_goto next")
+    # 工具名整体保留
+    assert "hermes_browser_goto" in out
+
+
+def test_scrub_brand_in_result_skips_non_target_tools() -> None:
+    """非 hermes memory_* tool 的响应不动, 避免误伤 catfish_skill_install 真路径"""
+    raw = {"path": "/Users/x/.hermes/foo", "msg": "saved hermes record"}
+    out = adapter.scrub_brand_in_result("catfish_skill_install", raw)
+    assert out == raw  # 完全不动
+
+
+def test_scrub_brand_in_result_str_target_tool() -> None:
+    """memory_save 返回纯字符串, 直接脱敏"""
+    out = adapter.scrub_brand_in_result(
+        "memory_save", "Saved to ~/.hermes/memories/x.md by hermes"
+    )
+    assert "hermes" not in out.lower()
+    assert ".hermes" not in out
+    assert "鲶鱼" in out
+
+
+def test_scrub_brand_in_result_dict_target_tool() -> None:
+    """memory_save 返回 dict 时, 递归把字符串字段都脱敏, 非字符串原样"""
+    raw = {
+        "path": "/Users/alice/.hermes/memories/k.md",
+        "size": 123,
+        "msg": "hermes ok",
+    }
+    out = adapter.scrub_brand_in_result("memory_save", raw)
+    assert ".hermes" not in out["path"]
+    assert "hermes" not in out["msg"].lower()
+    assert out["size"] == 123  # 数字字段不动
+
+
+def test_scrub_brand_in_result_nested_dict() -> None:
+    """嵌套 dict 也得递归脱敏"""
+    raw = {
+        "outer": {
+            "inner": {
+                "p": "~/.hermes/state",
+                "x": [1, 2],
+            },
+        },
+    }
+    out = adapter.scrub_brand_in_result("memory_save", raw)
+    assert ".hermes" not in out["outer"]["inner"]["p"]
+    assert out["outer"]["inner"]["x"] == [1, 2]
+
+
+def test_scrub_brand_in_result_list_target_tool() -> None:
+    """memory_search 通常返回 list[dict], 每条都得脱敏"""
+    raw = [
+        {"name": "k1", "path": "/Users/a/.hermes/memories/k1.md"},
+        {"name": "k2", "path": "/Users/a/.hermes/memories/k2.md"},
+    ]
+    out = adapter.scrub_brand_in_result("memory_search", raw)
+    for item in out:
+        assert ".hermes" not in item["path"]
+
+
+def test_dispatch_tool_scrubs_brand_for_hermes_memory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """整链路 dispatch: hermes memory_save 返回含 hermes 路径, dispatch 后给 LLM 的 result 已脱敏"""
+
+    class _MemFakeRegistry(_FakeRegistry):
+        async def dispatch(self, name: str, args: Dict[str, Any]) -> Any:  # type: ignore[override]
+            # 模拟 hermes memory_save 真实返回
+            return {
+                "ok": True,
+                "path": "/Users/alice/.hermes/memories/k.md",
+                "msg": "saved hermes record",
+            }
+
+    fake = _MemFakeRegistry(["memory_save"])
+    fake_module = types.SimpleNamespace(registry=fake)
+    monkeypatch.setattr(adapter, "_registry_module", fake_module)
+
+    result = asyncio.run(adapter.dispatch_tool("memory_save", {"key": "k", "value": "v"}))
+    assert result["ok"] is True
+    inner = result["result"]
+    # 关键: LLM 看到的 path 字段已经没有 .hermes / hermes
+    assert ".hermes" not in inner["path"]
+    assert "hermes" not in inner["msg"].lower()
+    assert "鲶鱼" in inner["msg"] or "鲶鱼本机存储" in inner["path"]
+
+
+def test_dispatch_tool_does_not_scrub_other_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """非 _HERMES_TOOLS_NEEDS_BRAND_SCRUB 的工具响应原样保留, 防误伤"""
+
+    class _PathFakeRegistry(_FakeRegistry):
+        async def dispatch(self, name: str, args: Dict[str, Any]) -> Any:  # type: ignore[override]
+            # 假设这是某个真要返回 hermes 路径的非 memory 工具
+            return {"path": "/Users/alice/.hermes/foo"}
+
+    fake = _PathFakeRegistry(["some_other_tool"])
+    fake_module = types.SimpleNamespace(registry=fake)
+    monkeypatch.setattr(adapter, "_registry_module", fake_module)
+
+    result = asyncio.run(adapter.dispatch_tool("some_other_tool", {}))
+    assert result["ok"] is True
+    # 非目标工具, 路径保持原样
+    assert result["result"]["path"] == "/Users/alice/.hermes/foo"
+
+
+def test_dispatch_tool_scrubs_error_field_for_hermes_memory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """memory_save 失败时, error 字段里的 hermes 字眼也得脱敏 (LLM 会读 error 给员工解释)"""
+
+    class _ErrFakeRegistry(_FakeRegistry):
+        async def dispatch(self, name: str, args: Dict[str, Any]) -> Any:  # type: ignore[override]
+            raise RuntimeError("hermes memory backend at ~/.hermes/memories not initialized")
+
+    fake = _ErrFakeRegistry(["memory_save"])
+    fake_module = types.SimpleNamespace(registry=fake)
+    monkeypatch.setattr(adapter, "_registry_module", fake_module)
+
+    result = asyncio.run(adapter.dispatch_tool("memory_save", {}))
+    assert result["ok"] is False
+    err = result["error"] or ""
+    assert "hermes" not in err.lower()
+    assert ".hermes" not in err

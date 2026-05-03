@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  小鲶 · macOS app icon 大师档
+  规范: macOS Big Sur+ 圆角方形 (squircle), 圆角半径 ≈ 22.37% × 边长
+  尺寸: 1024x1024 (master), 渲染时 cairosvg 缩放到 1024/512/256/128/64/32
+  注: 内边距留 ≈ 100px 防 Dock 自动圆角裁剪到内容
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1A8A95"/>
+      <stop offset="60%" stop-color="#0E5F66"/>
+      <stop offset="100%" stop-color="#083A40"/>
+    </linearGradient>
+    <linearGradient id="whiskerGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FAF1E4"/>
+      <stop offset="100%" stop-color="#FFFFFF"/>
+    </linearGradient>
+  </defs>
+
+  <!-- macOS squircle 底 (228px 圆角 ≈ 22.37%) -->
+  <rect x="0" y="0" width="1024" height="1024" rx="228" ry="228" fill="url(#bgGrad)"/>
+
+  <!-- 上须曲线 (S 形, 米色) -->
+  <path d="M 720 360 Q 500 280 360 400 Q 240 520 320 640"
+        stroke="url(#whiskerGrad)" stroke-width="48" fill="none" stroke-linecap="round"/>
+
+  <!-- 下须曲线 (S 形, 半透明) -->
+  <path d="M 720 660 Q 500 740 360 620 Q 240 500 320 380"
+        stroke="#FAF1E4" stroke-width="48" fill="none" stroke-linecap="round" opacity="0.5"/>
+
+  <!-- 须尖锚点 (暖橙, 视觉记忆点) -->
+  <circle cx="320" cy="640" r="44" fill="#F47B3D"/>
+  <circle cx="312" cy="632" r="14" fill="#FAF1E4" opacity="0.7"/>
+
+  <!-- 鱼眼 (右侧, 暗示鱼头朝右) -->
+  <circle cx="720" cy="512" r="56" fill="#FAF1E4"/>
+  <circle cx="730" cy="524" r="28" fill="#1A2E33"/>
+  <circle cx="738" cy="516" r="10" fill="#FFFFFF"/>
+</svg>

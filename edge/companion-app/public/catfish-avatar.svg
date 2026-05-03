@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  小鲶 · 圆形聊天头像
+  用途: Companion ChatBubble 助手头像 / 通知中心图标 / 在线状态点
+  设计: mascot 头部特写 (大眼 + 双须 + 微笑), 圆形裁切, 暖米色背景
+       适合 32x32 ~ 256x256 各种小尺寸渲染清晰
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <radialGradient id="bgRad" cx="30%" cy="30%" r="80%">
+      <stop offset="0%" stop-color="#FAF1E4"/>
+      <stop offset="100%" stop-color="#E8DCC4"/>
+    </radialGradient>
+    <radialGradient id="bodyRad" cx="40%" cy="35%" r="70%">
+      <stop offset="0%" stop-color="#1A8A95"/>
+      <stop offset="100%" stop-color="#0A464C"/>
+    </radialGradient>
+  </defs>
+
+  <!-- 暖米底 -->
+  <circle cx="128" cy="128" r="124" fill="url(#bgRad)"/>
+
+  <!-- 头部 (略大于 mascot 比例, 突出脸) -->
+  <ellipse cx="138" cy="138" rx="92" ry="80" fill="url(#bodyRad)"/>
+
+  <!-- 腹部高光 -->
+  <ellipse cx="138" cy="170" rx="75" ry="40" fill="#FAF1E4" opacity="0.4"/>
+
+  <!-- 上须 (从左侧伸出) -->
+  <path d="M 60 130 Q 25 110 15 75" stroke="#0E5F66" stroke-width="6"
+        fill="none" stroke-linecap="round"/>
+  <circle cx="15" cy="75" r="8" fill="#F47B3D"/>
+
+  <!-- 下须 -->
+  <path d="M 60 155 Q 25 175 15 210" stroke="#0E5F66" stroke-width="6"
+        fill="none" stroke-linecap="round"/>
+  <circle cx="15" cy="210" r="8" fill="#F47B3D"/>
+
+  <!-- 眼睛 -->
+  <circle cx="92" cy="115" r="22" fill="#FFFFFF"/>
+  <circle cx="98" cy="120" r="13" fill="#1A2E33"/>
+  <circle cx="102" cy="115" r="4.5" fill="#FFFFFF"/>
+
+  <!-- 腮红 -->
+  <ellipse cx="78" cy="160" rx="13" ry="7" fill="#F47B3D" opacity="0.5"/>
+
+  <!-- 嘴 (微笑) -->
+  <path d="M 65 145 Q 75 158 90 154" stroke="#0A464C" stroke-width="3"
+        fill="none" stroke-linecap="round"/>
+</svg>

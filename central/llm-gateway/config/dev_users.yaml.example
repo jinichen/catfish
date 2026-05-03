@@ -1,0 +1,75 @@
+# Dev 测试账号配置 — 五一 sprint 5/2 RBAC.
+#
+# 多角色测试: admin / manager (单/多部门) / employee (各部门).
+# 每个账号一个独立 token, dev_token provider 按 token 匹配返用户.
+#
+# 用法:
+#   1. cp dev_users.yaml.example dev_users.yaml
+#   2. (可选) 改部门名 / 加更多测试员工
+#   3. 重启 gateway, Companion Dashboard 顶部出现"切换测试账号"下拉
+#   4. 选账号 → 立即看到该角色的 Dashboard
+#
+# 生产环境 (env CATFISH_ENV=prod) 不会加载这文件, 只走真 OIDC.
+# Companion 也在 prod 模式不显示切换器.
+
+users:
+  # ── 管理员 ────────────────────────────────────
+  - email: admin@catfish.dev
+    token: dev-admin
+    name: "鲶鱼管理员"
+    department: 总裁办
+    role: admin
+    managed_departments: []   # admin 全权, 不需要 managed_departments
+
+  # ── 经理 (单部门) ─────────────────────────────
+  - email: zhang-eng@catfish.dev
+    token: dev-manager-eng
+    name: "张研发"
+    department: 研发部
+    role: manager
+    managed_departments: ["研发部"]
+
+  - email: li-sales@catfish.dev
+    token: dev-manager-sales
+    name: "李销售"
+    department: 销售部
+    role: manager
+    managed_departments: ["销售部"]
+
+  # ── 经理 (多部门, 跨部门管理) ──────────────────
+  - email: wang-vp@catfish.dev
+    token: dev-manager-vp
+    name: "王副总"
+    department: 总裁办
+    role: manager
+    managed_departments: ["研发部", "产品部", "运营部"]
+
+  # ── 员工 (各部门, 测部门隔离) ──────────────────
+  - email: alice@catfish.dev
+    token: dev-employee-alice
+    name: "Alice"
+    department: 研发部
+    role: employee
+    managed_departments: []
+
+  - email: bob@catfish.dev
+    token: dev-employee-bob
+    name: "Bob"
+    department: 研发部
+    role: employee
+    managed_departments: []
+
+  - email: carol@catfish.dev
+    token: dev-employee-carol
+    name: "Carol"
+    department: 销售部
+    role: employee
+    managed_departments: []
+
+# 兼容: 老的 'dev-token-local' 还能用, 走默认 admin (back-compat 给单测用).
+default:
+  email: dev-user@catfish.dev
+  name: "Dev User (默认)"
+  department: engineering
+  role: admin
+  managed_departments: ["engineering", "product"]

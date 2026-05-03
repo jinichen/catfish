@@ -92,7 +92,14 @@ function EmptyState() {
         color: "var(--catfish-text-muted)",
       }}
     >
-      <div style={{ fontSize: 56, marginBottom: "var(--space-3)" }}>🐟</div>
+      {/* 五一 sprint 5/3 BL-D11: 占位 🐟 → 正式吉祥物 (空对话状态最显眼, 用最大的 mascot) */}
+      <img
+        src="/catfish-mascot.svg"
+        alt="小鲶"
+        width={120}
+        height={120}
+        style={{ marginBottom: "var(--space-3)" }}
+      />
       <div style={{ fontSize: 18, color: "var(--catfish-text)", marginBottom: 6 }}>
         我是小鲶
       </div>

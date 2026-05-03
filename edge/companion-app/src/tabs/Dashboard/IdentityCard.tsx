@@ -1,6 +1,10 @@
-/** 当前身份 —— 系统用户 / SOUL 来源 / 运行时主题 / 活动会话 */
+/** 当前身份 —— 系统用户 / SOUL 来源 / 运行时主题 / 活动会话 / 鲶鱼版本 */
 
 import { useIdentity } from "../../hooks/useIdentity";
+
+// 版本号 — 跟 src-tauri/Cargo.toml + package.json 同步.
+// (BrandHeader 拿掉后, 版本展示挪到这里)
+const COMPANION_VERSION = "v0.1.0";
 
 export default function IdentityCard() {
   const { identity, error } = useIdentity();
@@ -35,6 +39,7 @@ export default function IdentityCard() {
           ) : (
             <Row label="活动会话" value="(无)" />
           )}
+          <Row label="鲶鱼版本" value={COMPANION_VERSION} mono />
         </>
       )}
     </Card>

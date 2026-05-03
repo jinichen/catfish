@@ -151,7 +151,10 @@ export default function OnboardingWizard() {
 function StepWelcome({ onNext, onSkip }: { onNext: () => void; onSkip: () => void }) {
   return (
     <>
-      <div style={{ fontSize: 60, textAlign: "center", marginBottom: 12 }}>🐟</div>
+      {/* 五一 sprint 5/3 BL-D11: 60px 🐟 → 96px 正式吉祥物, brand 一致 */}
+      <div style={{ textAlign: "center", marginBottom: 12 }}>
+        <img src="/catfish-mascot.svg" alt="小鲶" width={96} height={96} style={{ display: "inline-block" }} />
+      </div>
       <h2 style={{ textAlign: "center", margin: "0 0 var(--space-3) 0" }}>
         欢迎使用 鲶鱼 Companion
       </h2>
@@ -169,7 +172,8 @@ function StepWelcome({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
         <li>📝 写汇报 / 周报 / 立项材料 — 一句话生成 .docx</li>
         <li>💾 跨 session 记忆 — 它记得你最近做了什么</li>
         <li>🔐 数据全在你本机, 中央只看用量不看内容</li>
-        <li>🐠 越用越懂你, journal 自动总结你的工作</li>
+        {/* 🐠 是观赏鱼 emoji, 跟"鲶鱼"品牌容易混淆 → 换中性 ✨ */}
+        <li>✨ 越用越懂你, journal 自动总结你的工作</li>
       </ul>
       <p style={{ fontSize: 12, color: "var(--catfish-text-muted)", marginTop: "var(--space-3)" }}>
         4 步设置, 大概 1 分钟.

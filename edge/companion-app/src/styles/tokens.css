@@ -1,20 +1,33 @@
-/* 鲶鱼品牌设计 token —— 只在这里定义，全应用引用 var(--xxx)。 */
+/* 鲶鱼品牌设计 token —— 只在这里定义，全应用引用 var(--xxx)。
+ * 五一 sprint 5/3 BL-D11: 配色升级到正式 brand kit (深青 + 暖橙).
+ *   旧 #06b6d4 亮青 → #0E5F66 墨青, 跟 app icon / 吉祥物 / PPT 统一.
+ *   暖橙 #F47B3D 新增 (10% 用量), 用于 CTA / 在线指示 / 高亮.
+ *   暖米 #FAF1E4 新增, 用作聊天卡 / hover 背景 (替代纯白).
+ */
 
 :root {
-  /* —— 配色 —— */
-  --catfish-cyan: #06b6d4;        /* 主色：鲶鱼青 */
-  --catfish-cyan-dim: #0891b2;
-  --catfish-bg: #fafaf9;          /* 浅米灰，不刺眼 */
-  --catfish-bg-elevated: #ffffff;
-  --catfish-border: #e7e5e4;
-  --catfish-text: #1c1917;
-  --catfish-text-muted: #78716c;
+  /* —— 配色 主色系 (墨青) —— */
+  --catfish-cyan: #0E5F66;        /* 主色：墨青 (深青) */
+  --catfish-cyan-dim: #0A464C;    /* 主色暗 (按钮 hover / 边框) */
+  --catfish-cyan-bright: #1A8A95; /* 主色亮 (链接 / 高光) */
 
-  /* —— 状态色 —— */
-  --status-ok: #10b981;
-  --status-warn: #f59e0b;
-  --status-err: #ef4444;
-  --status-idle: #a8a29e;
+  /* —— 配色 辅色系 (暖橙, ≤10% 用量) —— */
+  --catfish-orange: #F47B3D;      /* 辅色：暖橙 (CTA / 在线 / 锚点) */
+  --catfish-orange-soft: #F89866; /* 辅色淡 (hover / 浅徽章) */
+
+  /* —— 配色 中性 —— */
+  --catfish-bg: #FAF7F2;          /* 暖米底, 比纯白柔和 */
+  --catfish-bg-elevated: #FFFFFF;
+  --catfish-bg-cream: #FAF1E4;    /* 暖米卡片背景 (聊天气泡 / 浅徽章) */
+  --catfish-border: #E7E1D6;      /* 暖灰边框 */
+  --catfish-text: #1A2E33;        /* 主文字 (深青墨, 不用纯黑) */
+  --catfish-text-muted: #6B7775;  /* 弱文字 */
+
+  /* —— 状态色 (跟 brand 协调, ok=主色青, 不抢镜) —— */
+  --status-ok: #1A8A95;           /* 复用主色亮青, 一致感 */
+  --status-warn: #E8A33D;         /* 暖琥珀, 跟 brand 暖橙系一致 */
+  --status-err: #D9534F;          /* 略带暖意的红, 不刺眼 */
+  --status-idle: #A8A29E;
 
   /* —— 间距 —— */
   --space-1: 4px;
@@ -39,10 +52,16 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --catfish-bg: #1c1917;
-    --catfish-bg-elevated: #292524;
-    --catfish-border: #44403c;
-    --catfish-text: #fafaf9;
-    --catfish-text-muted: #a8a29e;
+    /* 深色模式: 主色提亮 (墨青在深底太重), 暖橙调柔 */
+    --catfish-cyan: #1A8A95;       /* 提到亮青, 暗底可读 */
+    --catfish-cyan-dim: #0E5F66;
+    --catfish-cyan-bright: #2DABB6;
+    --catfish-orange: #F89866;      /* 暖橙调柔, 不刺眼 */
+    --catfish-bg: #131C1F;          /* 偏冷的深青墨, 跟 brand 一致, 不用纯灰 */
+    --catfish-bg-elevated: #1C2A2E;
+    --catfish-bg-cream: #2A3438;    /* 深模下"米色卡"换成深青卡 */
+    --catfish-border: #2E3F44;
+    --catfish-text: #E8E4DC;        /* 暖米色文字, 不用纯白 */
+    --catfish-text-muted: #8A9692;
   }
 }

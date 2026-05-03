@@ -1,5 +1,11 @@
 # 鲶鱼 · 全量 Backlog
 
+> ⚠️ **看进度 / 下一步去 [`docs/FEATURE-TRACKS.md`](FEATURE-TRACKS.md)** (2026-05-03 加).
+> 本 BACKLOG.md 留作工程颗粒度 (BL-ID 编号) 历史归档, 不再加新 section.
+> 新任务直接进 FEATURE-TRACKS 对应 track 的 ⬜ 列表.
+>
+> ---
+>
 > **版本**: v2, 2026-04-30 升级 (v1 = 2026-04-27 创建)
 > **维护人**: 鸿波
 > **跟 Task Tracker 的关系**: Task tracker (Cowork tasks) 只装 sprint 内 (~1-2 周内做) 的事;

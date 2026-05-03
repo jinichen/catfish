@@ -61,7 +61,11 @@ export default function LoginGate({ children }: LoginGateProps) {
           textAlign: "center",
         }}
       >
-        <h2 style={{ margin: "0 0 6px 0" }}>🐟 鲶鱼 Companion</h2>
+        {/* 五一 sprint 5/3 BL-D11: 占位 🐟 emoji 换正式 mascot */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, margin: "0 0 6px 0" }}>
+          <img src="/catfish-mascot.svg" alt="" width={36} height={36} style={{ display: "block" }} />
+          <h2 style={{ margin: 0 }}>鲶鱼 Companion</h2>
+        </div>
         <p
           style={{
             color: "var(--catfish-text-muted)",

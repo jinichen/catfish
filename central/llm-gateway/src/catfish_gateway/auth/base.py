@@ -35,7 +35,9 @@ class User:
     Attributes:
         sub: SSO user id. Phase 1 用 email (决策 3).
         department: 部门. Phase 2 RBAC 用.
-        tier: 'employee' | 'admin'. Phase 2 RBAC 用.
+        tier: 'employee' | 'admin'. (legacy, Phase 2 改用 role)
+        role: 'admin' | 'manager' | 'employee'. 五一 sprint 5/2 加, 替代 tier.
+        managed_departments: manager 管的部门列表 (空表示啥都不管, manager 必须配).
         auth_method: 'dev_token' | 'oidc' | 等. 给 audit log 看.
                      Phase 1A: 现有调用都不传, 默认 'unknown', 兼容旧行为.
     """
@@ -43,12 +45,32 @@ class User:
     sub: str
     department: str = ""
     tier: str = "employee"
+    role: str = "employee"
+    managed_departments: list[str] = None  # type: ignore[assignment]
     auth_method: str = "unknown"
+
+    def __post_init__(self) -> None:
+        if self.managed_departments is None:
+            self.managed_departments = []
 
     def can_access(self, model) -> bool:
         # P0: 任何认证用户能调任何模型
         # Phase 2: 部门 + 模型敏感度 (RBAC)
         return True
+
+    def is_admin(self) -> bool:
+        return self.role == "admin"
+
+    def is_manager(self) -> bool:
+        return self.role == "manager"
+
+    def can_manage_department(self, dept: str) -> bool:
+        """RBAC: manager 限 managed_departments, admin 全权."""
+        if self.is_admin():
+            return True
+        if self.is_manager():
+            return dept in (self.managed_departments or [])
+        return False
 
 
 class AuthProvider(ABC):

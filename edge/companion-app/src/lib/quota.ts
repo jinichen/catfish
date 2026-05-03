@@ -10,6 +10,7 @@
 
 import { gatewayGetDevToken } from "./tauri";
 import { config } from "./env";
+import { getOverrideToken } from "./me";
 
 export interface QuotaWindow {
   used: number;
@@ -24,13 +25,17 @@ export interface QuotaMe {
   department_day: QuotaWindow;
 }
 
-let _cachedToken: string | null = null;
+let _cachedEnvToken: string | null = null;
 
 async function getToken(): Promise<string> {
-  if (_cachedToken) return _cachedToken;
+  // 切换器优先
+  const override = getOverrideToken();
+  if (override) return override;
+  // .env 兜底
+  if (_cachedEnvToken) return _cachedEnvToken;
   try {
     const t = await gatewayGetDevToken();
-    _cachedToken = t;
+    _cachedEnvToken = t;
     return t;
   } catch {
     return "dev-token-local"; // 跟 chat.ts 一致, fallback 让 gateway 走匿名/dev 兼容

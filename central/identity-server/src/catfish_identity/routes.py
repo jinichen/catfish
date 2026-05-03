@@ -179,7 +179,17 @@ def make_router(
             state=state,
             nonce=nonce,
         )
-        return HTMLResponse(content=html)
+        # 五一 sprint 5/3 BL-D11: 强制不缓存. 之前漏设 Cache-Control 头, 浏览器对登录页
+        # 启发式缓存, 改 brand 后用户在 prod build 仍看老 HTML. no-store + must-revalidate
+        # 双保险, 兼容老 IE / 国产浏览器.
+        return HTMLResponse(
+            content=html,
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
+        )
 
     @router.post("/authorize")
     async def authorize_submit(
@@ -203,7 +213,16 @@ def make_router(
                 nonce=nonce,
                 error="email 或密码错误",
             )
-            return HTMLResponse(content=html, status_code=401)
+            # 同样不缓存 (失败重试也得拿最新 HTML)
+            return HTMLResponse(
+                content=html,
+                status_code=401,
+                headers={
+                    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
+                },
+            )
 
         record = code_store.issue(
             user=user,
@@ -344,34 +363,67 @@ def _render_login_page(
     error_html = (
         f'<div class="error">{_html_escape(error)}</div>' if error else ""
     )
+    # 五一 sprint 5/3 BL-D11: 升级 SSO 登录页 brand
+    #   - 占位 🐟 emoji → 内联 mark SVG (无需挂静态文件)
+    #   - 配色全换墨青 #0E5F66 / 暖橙 #F47B3D / 暖米 #FAF1E4
+    #   - 跟 BRAND.md 一致
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <title>鲶鱼 · 登录</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- 五一 sprint 5/3 BL-D11: 内联 favicon (data: URI), 防 macOS 给本地端口配默认鱼 emoji.
+       SVG 是 logo-mark 简化版, 跟登录卡片里的 mark 同源. -->
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,
+    <svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256'>
+      <circle cx='128' cy='128' r='120' fill='%230E5F66'/>
+      <path d='M 175 90 Q 125 70 90 100 Q 60 130 80 160' stroke='%23FAF1E4' stroke-width='14' fill='none' stroke-linecap='round'/>
+      <circle cx='80' cy='160' r='14' fill='%23F47B3D'/>
+      <circle cx='175' cy='128' r='16' fill='%23FAF1E4'/>
+      <circle cx='178' cy='131' r='8' fill='%231A2E33'/>
+    </svg>">
   <style>
-    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
-           background: #0f1419; color: #e6e6e6; margin: 0;
+    body {{ font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+           background: linear-gradient(180deg, #0E5F66 0%, #0A464C 100%); color: #FAF1E4; margin: 0;
            display: flex; min-height: 100vh; align-items: center; justify-content: center; }}
-    .card {{ background: #1a1f26; border: 1px solid #2a3038; border-radius: 8px;
-            padding: 32px; width: 360px; }}
-    h1 {{ font-size: 20px; margin: 0 0 6px 0; color: #4eb3d3; }}
-    .sub {{ color: #888; font-size: 13px; margin-bottom: 24px; }}
-    label {{ display: block; font-size: 12px; color: #aaa; margin: 12px 0 4px; }}
-    input {{ width: 100%; padding: 10px; border: 1px solid #2a3038; border-radius: 4px;
-             background: #0f1419; color: #e6e6e6; box-sizing: border-box; font-size: 14px; }}
-    button {{ width: 100%; margin-top: 20px; padding: 11px; background: #4eb3d3;
-              color: #0f1419; border: 0; border-radius: 4px; font-size: 14px;
-              font-weight: 600; cursor: pointer; }}
-    button:hover {{ background: #6cc7e0; }}
-    .error {{ color: #f87171; font-size: 12px; margin: 8px 0; }}
-    .footer {{ color: #666; font-size: 11px; margin-top: 18px; text-align: center; }}
+    .card {{ background: #1C2A2E; border: 1px solid #2E3F44; border-radius: 12px;
+            padding: 36px 32px; width: 360px; box-shadow: 0 8px 32px rgba(0,0,0,0.25); }}
+    .brand {{ display: flex; align-items: center; gap: 12px; margin: 0 0 6px 0; }}
+    .brand svg {{ flex-shrink: 0; }}
+    h1 {{ font-size: 22px; margin: 0; color: #FAF1E4; font-weight: 500; }}
+    .sub {{ color: #8A9692; font-size: 13px; margin-bottom: 24px; }}
+    label {{ display: block; font-size: 12px; color: #A8B0AD; margin: 14px 0 4px; }}
+    input {{ width: 100%; padding: 11px; border: 1px solid #2E3F44; border-radius: 6px;
+             background: #131C1F; color: #FAF1E4; box-sizing: border-box; font-size: 14px; }}
+    input:focus {{ outline: none; border-color: #1A8A95; box-shadow: 0 0 0 3px rgba(26,138,149,0.2); }}
+    button {{ width: 100%; margin-top: 22px; padding: 12px; background: #F47B3D;
+              color: #FFFFFF; border: 0; border-radius: 6px; font-size: 14px;
+              font-weight: 500; cursor: pointer; transition: background 0.15s; }}
+    button:hover {{ background: #F89866; }}
+    .error {{ color: #E59995; font-size: 12px; margin: 8px 0; }}
+    .footer {{ color: #6B7775; font-size: 11px; margin-top: 18px; text-align: center; }}
   </style>
 </head>
 <body>
   <form class="card" method="POST" action="/authorize">
-    <h1>🐟 鲶鱼登录</h1>
+    <div class="brand">
+      <!-- 内联 logo-mark SVG (跟 branding/logo-mark.svg 同源, 256→32 缩放) -->
+      <svg width="32" height="32" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <defs>
+          <linearGradient id="lg" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#1A8A95"/><stop offset="100%" stop-color="#0A464C"/>
+          </linearGradient>
+        </defs>
+        <circle cx="128" cy="128" r="120" fill="url(#lg)"/>
+        <path d="M 175 90 Q 125 70 90 100 Q 60 130 80 160" stroke="#FAF1E4" stroke-width="12" fill="none" stroke-linecap="round"/>
+        <path d="M 175 165 Q 125 185 90 155 Q 60 125 80 95" stroke="#FAF1E4" stroke-width="12" fill="none" stroke-linecap="round" opacity="0.55"/>
+        <circle cx="80" cy="160" r="11" fill="#F47B3D"/>
+        <circle cx="175" cy="128" r="14" fill="#FAF1E4"/>
+        <circle cx="178" cy="131" r="7" fill="#1A2E33"/>
+      </svg>
+      <h1>鲶鱼登录</h1>
+    </div>
     <div class="sub">公司账号登录鲶鱼工作台</div>
     {error_html}
     <input type="hidden" name="client_id" value="{_html_escape(client_id)}">
