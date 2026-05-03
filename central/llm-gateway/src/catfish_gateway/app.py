@@ -401,10 +401,16 @@ async def api_audit_department(
 # 改完 gateway 下一次请求自动加载新 yaml (load_quota_config 每次重读, 无 cache).
 
 
+from pydantic import BaseModel as _BaseModel  # 局部 import 防顶层污染
+
+class _DeptQuotaUpdate(_BaseModel):
+    tokens_per_day: int
+
+
 @app.put("/api/quota/department/{department}")
 async def api_quota_department_update(
     department: str,
-    body: dict,
+    body: _DeptQuotaUpdate,
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     """改部门日 quota. RBAC: admin 全权 / manager 限 managed_departments."""
@@ -419,22 +425,16 @@ async def api_quota_department_update(
             ),
         )
 
-    if not isinstance(body, dict) or "tokens_per_day" not in body:
-        raise HTTPException(status_code=400, detail="body 缺 tokens_per_day")
-    try:
-        tokens_per_day = int(body["tokens_per_day"])
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="tokens_per_day 必须是整数")
-    if tokens_per_day < 0:
+    if body.tokens_per_day < 0:
         raise HTTPException(status_code=400, detail="tokens_per_day 不能负")
 
-    ok = quota.update_department_quota(department, tokens_per_day)
+    ok = quota.update_department_quota(department, body.tokens_per_day)
     if not ok:
         raise HTTPException(status_code=500, detail="写 quotas.yaml 失败, 看 gateway log")
 
     return {
         "department": department,
-        "tokens_per_day": tokens_per_day,
+        "tokens_per_day": body.tokens_per_day,
         "updated_by": user.sub,
         "ok": True,
     }

@@ -162,8 +162,18 @@ def update_department_quota(department: str, tokens_per_day: int) -> bool:
         data = {}
 
     # 改 overrides.departments.<dept>
-    overrides = data.setdefault("overrides", {})
-    depts = overrides.setdefault("departments", {})
+    # 注意: yaml 里 'overrides:' / 'departments:' 后只有注释时 safe_load 返 None,
+    # setdefault 不会替换 None, 必须显式判断 (踩过坑).
+    overrides = data.get("overrides")
+    if not isinstance(overrides, dict):
+        overrides = {}
+        data["overrides"] = overrides
+
+    depts = overrides.get("departments")
+    if not isinstance(depts, dict):
+        depts = {}
+        overrides["departments"] = depts
+
     depts[department] = {"tokens_per_day": int(tokens_per_day)}
 
     # 写回 (utf-8, allow_unicode 保留中文部门名)
