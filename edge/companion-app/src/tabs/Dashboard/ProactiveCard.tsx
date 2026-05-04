@@ -12,6 +12,7 @@ import { useEffect, useState } from "react";
 
 import { fetchProactiveStarter, type ProactiveStarter } from "../../lib/me";
 import { useUIStore } from "../../store/ui";
+import { useAgentStore } from "../../store/agent";
 
 const REFRESH_MS = 30 * 60 * 1000;  // 30 分钟
 
@@ -20,6 +21,8 @@ export default function ProactiveCard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const startProactiveChat = useUIStore((s) => s.startProactiveChat);
+  // BL-E11 后续: 按钮用员工自定义名 ("跟老李聊聊 →")
+  const agentName = useAgentStore((s) => s.name);
 
   const load = async () => {
     setLoading(true);
@@ -114,7 +117,7 @@ export default function ProactiveCard() {
                 fontWeight: 500,
               }}
             >
-              跟小鲶聊聊 →
+              跟{agentName}聊聊 →
             </button>
           </div>
 

@@ -88,7 +88,10 @@ async function fireOne(time: string): Promise<void> {
     const s = await fetchProactiveStarter();
     if (!s || !s.starter) return;
     // 五一 sprint 5/3 BL-D11: macOS 通知左侧已有 app icon (新 mark), 标题去 🐟 冗余
-    await sendNotification("小鲶想跟你聊一句", s.starter);
+    // BL-E11: 标题用员工自定义名字 (默认 "小鲶")
+    const { useAgentStore } = await import("../store/agent");
+    const agentName = useAgentStore.getState().name || "小鲶";
+    await sendNotification(`${agentName}想跟你聊一句`, s.starter);
     markFired(time);
   } catch (e) {
     console.warn("[proactive] fire 失败:", e);

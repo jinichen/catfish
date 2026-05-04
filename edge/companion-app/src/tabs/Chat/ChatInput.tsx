@@ -16,6 +16,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ClipboardEvent, t
 import { invoke } from "@tauri-apps/api/core";
 import type { Attachment } from "../../types/chat";
 import { useUIStore } from "../../store/ui";  // BL-E13 主动闲聊 prefill
+import { useAgentStore } from "../../store/agent";  // BL-E11 后续: 员工自定义名
 
 interface Props {
   isStreaming: boolean;
@@ -109,6 +110,8 @@ export default function ChatInput({
   onCancel,
   onReset,
 }: Props) {
+  // BL-E11 后续: placeholder 用员工自定义名 ("跟老李说话…")
+  const agentName = useAgentStore((s) => s.name);
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [attachError, setAttachError] = useState<string | null>(null);
@@ -433,7 +436,7 @@ export default function ChatInput({
           placeholder={
             attachments.length > 0
               ? "加点说明 (可空) — Enter 发送"
-              : "跟小鲶说话…  (Enter 发送 · Shift+Enter 换行 · 📎/粘贴/拖入加图)"
+              : `跟${agentName}说话…  (Enter 发送 · Shift+Enter 换行 · 📎/粘贴/拖入加图)`
           }
           rows={1}
           style={{

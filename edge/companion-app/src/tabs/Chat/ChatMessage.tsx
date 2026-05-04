@@ -5,6 +5,7 @@ import type { ChatMessage as Msg } from "../../types/chat";
 import ChatToolCall from "./ChatToolCall";
 import { extractFilePaths } from "../../lib/path_detect";
 import { FilePillList } from "../../components/FilePill";
+import { useAgentStore } from "../../store/agent";
 
 interface Props {
   msg: Msg;
@@ -93,6 +94,8 @@ function AssistantBubble({
   msg: Msg;
   showCaret: boolean;
 }) {
+  // BL-E11 后续: 头像 alt 用员工自定义名 (默认 "小鲶")
+  const agentName = useAgentStore((s) => s.name);
   const isError = msg.status === "error";
   // 助手把生成的文件路径拼在了 markdown 里 (eg "已生成 /Users/.../report.docx").
   // 提一组 FilePill 出来 — 但只在内容稳定后(非流式)做, 否则路径还没写完就误识别.
@@ -107,11 +110,12 @@ function AssistantBubble({
         marginBottom: "var(--space-4)",
       }}
     >
-      {/* 五一 sprint 5/3 BL-D11: 占位 🐟 emoji 换成正式小鲶头像 (avatar-circle.svg).
-          头像本身是圆形带暖米底, 不再需要外层 background. width/height 固定 28x28. */}
+      {/* 五一 sprint 5/3 BL-D11: 占位 🐟 emoji 换成正式头像 (avatar-circle.svg).
+          头像本身是圆形带暖米底, 不再需要外层 background. width/height 固定 28x28.
+          BL-E11 后续: alt 用员工自定义名 (老李/小赵/...) — 屏读员工的命名 */}
       <img
         src="/catfish-avatar.svg"
-        alt="小鲶"
+        alt={agentName}
         width={28}
         height={28}
         style={{

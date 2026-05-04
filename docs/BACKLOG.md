@@ -195,16 +195,17 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 
 | ID | IDEAS# | 项 | 估时 | 前置 |
 |---|---|---|---|---|
-| BL-E11 | #10 | agent 命名权 — 员工给鲶鱼起名 (小雷/老李/阿呆), 改头像 | 1 天 | personality 系统 |
+| BL-E11 | #10 | agent 命名权 — 员工给鲶鱼起名 + 3 档人设 (gentle/direct/roast) | ✅ 5/3 | (Onboarding StepName + AgentPrefsCard + gateway preamble + 11 处 UI 自指换 dynamic name) |
 | BL-E12 | #11 | 鲶鱼周末不干活 (节假日/晚 10 点后自动说"明天再帮") | 0.5 天 | cron + prompt 开关 |
-| BL-E13 | #12 | 鲶鱼主动闲聊 — 周五下午主动问"上周报销审批了没" | 1-2 周 | Memory + 员工状态推断 |
+| BL-E13 | #12 | 鲶鱼主动闲聊 — 周五下午主动问"上周报销审批了没" | 🟡 5/2 MVP | (9:30/14:00/17:30 macOS 通知 ship; 见 BL-E13-FIX 修复待办) |
+| BL-E13-FIX | (新, 5/4) | proactive 三件套修复: catch-up 补发 + 加宽时段窗口 + 通知权限引导 | 0.5 天 | demo 前必做; 现实测概率 3 个 slot 全 miss (员工不在前台) |
 
 ### E.4 🎪 纯娱乐 / 毒舌型
 
 | ID | IDEAS# | 项 | 估时 | 前置 |
 |---|---|---|---|---|
-| BL-E14 | #13 | 鲶鱼吐槽 PPT — 上传 PPT 毒舌点评 | 3-5 天 | PPTX parser + critical personality |
-| BL-E15 | #14 | "领导来了"快捷键 — 一键切假装认真写代码 | 1 天 | Companion |
+| BL-E14 | #13 | 鲶鱼吐槽 PPT — 上传 PPT 毒舌点评 | 3-5 天 | PPTX parser + critical personality. **demo 后下周开** (5/15+) |
+| BL-E15 | #14 | 专注模式快捷键 (前 "领导来了" — 央企语境改名) — Cmd+Shift+F 全屏伪 IDE | ✅ 5/3 | (FocusModeView + Tauri 全局快捷键 + TabBar 入口) |
 | BL-E16 | #15 | 社交健康检查 — 扫 IM 记录分析人际 | 1-2 周 | Slack/IM 适配器 + 员工授权 |
 
 ### E.5 🌐 组织协作型 (Plan D)
@@ -218,7 +219,7 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 
 | ID | IDEAS# | 项 | 估时 | 前置 |
 |---|---|---|---|---|
-| BL-E19 | #17 | 鲶鱼的"情绪" — 偶尔说"今天问的东西很有意思"建立关系 | 1-2 天 | Memory |
+| BL-E19 | #17 | 鲶鱼的"情绪" / 关系建立 | ✅ 5/3 | (SOUL "情绪铁律" 5✅+6❌+ 频率纪律 / session_meta 时间感 / Dashboard RelationCard 透明可删) |
 | BL-E20 | #18 | "昨晚喝多了"模式 — 从本地 IM 缓存读出昨晚发了啥 | 3-5 天 | Companion + IM 本地访问 |
 
 ### E.7 🎨 Evolver 启发的
@@ -241,6 +242,35 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 | ID | IDEAS# | 项 | 估时 | 备注 |
 |---|---|---|---|---|
 | BL-E26 | #24 | Hermes 自定义 skill namespace (catfish 独立 namespace 不混 productivity) | ✅ 4-29 (绕路) | catfish skill 走独立 catfish_run_skill 工具 + skills/<namespace>/<skill>/ 目录, 不混入 hermes namespace. 实质等价 |
+
+---
+
+## M · 记忆纪律 / 记忆是资产 / 越用越懂 (新, 2026-05-04 鸿波 explicit 拍板)
+
+> **产品哲学** (鸿波 5/4 跟小鲶共识): 记忆是资产, 记错了**更新 > 删除**, 保留版本历史作为成长痕迹.
+> **2026-05-04 晚扩**: 加"越用越懂员工偏好" 维度 — feedback / 性格 / 工作模式 / 文书风格 4 个层次.
+
+### M.1 记忆覆盖 (改不删, 留版本)
+
+| ID | 项 | 估时 / 状态 | 备注 |
+|---|---|---|---|
+| BL-MM1 | 记忆覆盖纪律 — SOUL 加章节"覆盖前先 read 旧值, 写时把旧值塞进新值的 inline 备注里, 跟员工说话必 quote'旧 X → 新 Y'" | ✅ 5/4 | 0 后端代码改动. 工具底层不动也能模拟版本感 (read-then-write + inline annotation pattern) |
+| BL-MM2 | catfish_remember 后端版本化 — `session_facts.json` schema 从 `{key: value}` 改 `{key: [{value, ts, ...}]}` + 工具返回加 `previous_value` 字段 | ⬜ 5/8 后议程, ~0.7 天 | BL-MM1 是 prompt 级缓兵之计, MM2 是真实施 |
+| BL-MM3 | hermes memory_save 包一层版本化 (在 adapter.py, BL-D9 思路扩展) — read-modify-write 双调用模拟版本数组, 跟 hermes 0.10/0.12 兼容 | ⬜ 5/15 起 hermes 升级窗口一并做, ~0.5 天 | 跟 hermes 升级强相关, 同期处理 |
+| BL-MM4 | Dashboard "记忆版本历史"卡 — 列所有 key, 点开看时间线 + 两版本 diff (像 git log) | ⬜ demo 后, 1-2 天 | 真客户演示卖点: "鲶鱼对你的认知怎么演化" |
+
+### M.2 主动学习 / feedback / 越用越懂员工
+
+> 鸿波 5/4 问: "小鯰能不能不断的越来越了解用户的性格、工作模式、生活模式、文书性格?"
+> 现状: 没有显式 feedback 机制, 学习只能靠 LLM 自觉. 4 维全部 partial 或 ❌.
+> 4 个工作量等级方案 — A 已 ship, B/C/D 排 5/8 后启动.
+
+| ID | 项 | 估时 / 状态 | 备注 |
+|---|---|---|---|
+| BL-MM5 | 主动学习员工偏好 (SOUL 章节) — 4 类信号 + 频率纪律 (3+ 次同 pattern 才主动问) + 落盘格式 + ❌ 禁止 (不评论生活/情绪) | ✅ 5/4 | 0 后端代码. **方案 A**. 跟 BL-MM1 区分: MM1 被动 correction, MM5 主动学 preference |
+| BL-MM6 | 显式 feedback UI — ChatBubble 加 👍 / 👎 / "改一下" 按钮 + `/api/feedback` + `~/.catfish/feedback.jsonl` + Dashboard "你给我的反馈" 卡 | ⬜ 5/8 后启动, ~2-3 天 | **方案 B**. 客户演示加分 ("能给反馈"), 跟 BL-MM5 配合: 显式信号补 LLM 自觉的不足 |
+| BL-MM7 | 结构化用户画像 — `~/.catfish/user_profile.json` (writing_style / work_pattern / personality_traits + evidence_count) + 满 N 次主动问 + Dashboard 卡可调可锁 | ⬜ 5/8 后启动, ~1 周 | **方案 C**. 真"自进化"故事, 客户能看 user_profile.json 知道"鲶鱼真在学我" |
+| BL-MM8 | 文书风格 fingerprint — 员工历史文档抽风格指纹, 写新文档前调 fingerprint 调整生成参数, "本次按你 5 月 XX 那篇汇报风格写" | ⬜ 6 月起, ~1-2 周 | **方案 D**. 央企文书场景刚需. 解决"每次写汇报小鲶都从零猜". 前置: 历史文档积累 (cold start 问题) |
 
 ---
 

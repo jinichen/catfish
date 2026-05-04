@@ -1,0 +1,236 @@
+# ============================================================
+# 鲶鱼网关 · 模型清单
+# ============================================================
+# tier:           private | public
+# mode:           chat | embedding
+# upstream.model: LiteLLM 完整名（必须带 provider 前缀）
+#                 e.g. openai/xxx  gemini/gemini-2.5-pro  bedrock/xxx
+#
+# fallback（P1 实现，字段先预留）：
+#   fallback:
+#     on_errors: [502, 503, 504, 429, timeout]  # 触发切换的错误码
+#     chain: [备用模型 A, 备用模型 B]          # 按顺序尝试
+#     max_hops: 2                              # 最多切几次
+#
+# env-var 插值:
+#   字符串值里写 ${VAR} 或 ${VAR:-default}, 加载时从 os.environ 替换。
+#   敏感信息 (内网 hostname / UUID / base URL) 不直接写进 yaml,
+#   而是通过 .env 注入。详见 .env.example。
+# ============================================================
+
+version: 1
+
+models:
+
+  # ---------- 内部 · 主力通用 ----------
+  - name: catfish-private-main
+    tier: private
+    display_name: "qwen_v3_5_122b_a10b· 主力"
+    mode: chat
+    default: true
+
+    upstream:
+      model: openai/qwen_v3_5_122b_a10b
+      # api_base 完整 URL 走 env 注入,避免 hostname/UUID 进版本库
+      api_base: ${INTERNAL_LLM_BASE_QWEN_MAIN}
+      api_key_env: INTERNAL_LLM_KEY
+      # 私有 LLM (10.10.40.102) MoE active 10B + 24K prompt 时 TTFT 常 60s+,
+      # 默认 60s 太紧, 给 180s 喘息. 真超时 fallback chain (qwen-flash) 兜底.
+      # 踩过坑 2026-04-28 鸿波 demo: 反复 ReadTimeout 卡 demo.
+      timeout: 180
+
+    # 上游管理员确认实际支持 250K tokens。
+    # 我们对员工承诺 128K（官方主流 Qwen 3.5 心智 + 一倍以上安全余量）。
+    # 长上下文（>128K）场景推荐员工切 catfish-public-gemini-pro（2M）。
+    context_window: 128000
+    supports_tool_use: true
+    supports_streaming: true
+    supports_vision: true
+    recommended_for: [general, chat, tool_use, code]
+    cost_tier: free
+
+    # 内网 LLM 平台偶发 502 / endpoint 维护 / UUID 重启失效时,
+    # 主力模型不能直接挂死员工 — 落到公共模型保业务。
+    # 顺序: 内网公共备份 (qwen-flash) → 外网 (gemini-flash) → 不再降级。
+    # 注: 公共模型在 .env 里没配 key 时会自动跳过, 不会傻等。
+    fallback:
+      on_errors: [429, 502, 503, 504, "timeout", "connection error", "connection refused"]
+      chain: [catfish-public-qwen-flash, catfish-public-gemini-flash]
+      max_hops: 2
+
+  # ---------- 内部 · 多模态 ----------
+  - name: catfish-private-vision
+    tier: private
+    display_name: "Qwen3-VL 30B (A3B MoE) · 多模态"
+    mode: chat
+
+    upstream:
+      model: openai/qwen_v3_vl_moe_30b_a3b
+      api_base: ${INTERNAL_LLM_BASE_QWEN_VISION}
+      api_key_env: INTERNAL_LLM_KEY
+      # 多模态模型图像/视频处理偏慢, MoE active 3B 也比稳定模型 TTFT 长.
+      # 给 180s 跟 main 对齐, 跟公共多模态 (timeout: 90) 区分 (公共更快).
+      timeout: 180
+
+    # 多模态模型相比主力模型 context 略窄些，留 64K 员工承诺。
+    # 真实支持大概率也是 128K+ 量级，视后续压测调整。
+    context_window: 64000
+    supports_tool_use: true
+    supports_streaming: true
+    supports_vision: true
+    recommended_for: [vision, ocr, image_analysis]
+    cost_tier: free
+
+    # 内网 vision endpoint 不可达时 (10.10.40.x VPN 抖动 / 平台维护) 直接落到
+    # 公共多模态. qwen-flash 256K 也支持视觉, gemini-flash 是兜底。
+    # 视觉模型必须有 chain — 没有的话员工传图就直接挂, 没有体面降级。
+    fallback:
+      on_errors: [429, 502, 503, 504, "timeout", "connection error", "connection refused"]
+      chain: [catfish-private-main, catfish-public-qwen-flash, catfish-public-gemini-flash]
+      max_hops: 2
+
+  # ---------- 内部 · Embedding ----------
+  # ⚠️ TODO: 替换为 bge-m3 在平台上的实际部署 UUID
+  - name: catfish-private-embed
+    tier: private
+    display_name: "BGE-M3 · Embedding"
+    mode: embedding
+
+    upstream:
+      model: openai/bge-m3
+      api_base: ${INTERNAL_LLM_BASE_BGE_M3}
+      api_key_env: INTERNAL_LLM_KEY
+
+    cost_tier: free
+
+  # ---------- 公共 · 阿里云百炼 Qwen3.6-Flash ----------
+  # DashScope OpenAI 兼容端点。没配 DASHSCOPE_API_KEY 时不出现在 catalog。
+  # 模型详情: https://bailian.console.aliyun.com/model-market/detail/qwen3.6-flash
+  #   - 256K 上下文
+  #   - 多模态: 文本 + 图像 + 视频 + 音频输入
+  #   - function calling
+  #   - 重点提升 agentic coding 能力
+  #   - 价格: 输入 ¥1.2/M tok, 输出 ¥7.2/M tok
+  # 用途:
+  #   - 内网 Qwen (catfish-private-main) 不可达时的公共备份
+  #   - Gemini 免费配额耗尽时的 fallback
+  #   - 出差 / 公司外网络场景
+  - name: catfish-public-qwen-flash
+    # 历史: 一度改成 catfish-public-ds4-pro, 但 fallback chain (line 53/81/157/182)
+    # 都引用 catfish-public-qwen-flash, 改名导致 gateway 启动 warn
+    # "fallback chain refers to unknown model: catfish-public-qwen-flash" — 整个
+    # fallback 系统失效. 2026-04-28 修回, 不要再改 name (除非同步改 4 条 chain).
+    tier: public
+    display_name: "Qwen3.6-Flash · 通义千问快速多模态（公共付费）"
+    mode: chat
+
+    upstream:
+      # ⚠️ TODO 鸿波验证: 这个 model 名 'qwen3.6-max-preview' 在 dashscope
+      # 真实存在吗? 实际 dashscope 多模态 Qwen 系列常见命名:
+      #   qwen-vl-max-latest / qwen-vl-plus-latest (Qwen-VL 视觉系列)
+      #   qwen-max-latest / qwen-plus-latest / qwen-turbo-latest (Qwen 文本)
+      # 如果 'qwen3.6-max-preview' 不存在, fallback 真触发时会撞 404.
+      # 验证方法: 拿 DASHSCOPE_API_KEY 用 curl 测一下:
+      #   curl https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions \
+      #     -H "Authorization: Bearer $DASHSCOPE_API_KEY" \
+      #     -d '{"model":"qwen3.6-max-preview","messages":[{"role":"user","content":"hi"}]}'
+      model: openai/qwen3.6-35b-a3b
+      api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api_key_env: DASHSCOPE_API_KEY
+      timeout: 90  # 多模态请求图像/视频处理偏慢, 给宽裕
+
+    context_window: 262144  # 256K
+    supports_tool_use: true
+    supports_streaming: true
+    supports_vision: true
+    recommended_for: [general, chat, tool_use, vision, code, fast, fallback]
+    cost_tier: paid
+
+  # ---------- 公共 · DEEPSEEK V4 ----------
+  # DEEKSEEK OpenAI 兼容端点。没配 DEEPSEEK_API_KEY 时不出现在 catalog。
+  # 模型详情: 
+  #   - 256K 上下文
+  #   - function calling
+  #   - 重点提升 agentic coding 能力
+  #   - 价格: 输入 ¥1/M tok, 输出 ¥2/M tok
+  # 用途:
+  #   - 内网 Qwen (catfish-private-main) 不可达时的公共备份
+  #   - Gemini 免费配额耗尽时的 fallback
+  #   - 出差 / 公司外网络场景
+  - name: catfish-public-deepseek-flash
+    tier: public
+    display_name: "Deepseek-v4-flash · Deepseek V4 flash（公共付费）"
+    mode: chat
+
+    upstream:
+      model: openai/deepseek-v4-flash
+      api_base: https://api.deepseek.com/v1
+      api_key_env: DEEPSEEK_API_KEY
+      timeout: 90
+
+    context_window: 262144  # 256K
+    supports_tool_use: true
+    supports_streaming: true
+    supports_vision: false
+    recommended_for: [general, chat, tool_use, code, fast, fallback]
+    cost_tier: paid 
+
+  # ---------- 公共 · Gemini 3.1 Pro（长上下文） ----------
+  # 200 万 token 上下文，适合长文档分析、跨会话回溯、复杂推理
+  # 如果 GEMINI_API_KEY 未设置，此模型不会出现在员工 catalog 中
+  - name: catfish-public-gemini-pro
+    tier: public
+    display_name: "Gemini 3.1 Pro Preview · 长上下文（公共付费）"
+    mode: chat
+
+    upstream:
+      model: gemini/gemini-3.1-pro-preview
+      api_key_env: GEMINI_API_KEY
+      # Gemini 3 系列在 temperature < 1.0 时可能陷入循环或推理质量下降
+      # 官方建议固定 1.0，不管客户端传什么
+      param_overrides:
+        temperature: 1.0
+      # Preview 模型冷启动偏慢，给足时间
+      timeout: 180
+
+    context_window: 2000000
+    supports_tool_use: true
+    supports_streaming: true
+    supports_vision: true
+    recommended_for: [long_context, complex_reasoning, vision, research]
+    cost_tier: paid
+
+    # 撞 429 / 503 / timeout 时自动落回 Qwen3.6-Flash
+    # (Qwen 没配 key 时自动跳过, 直接返回错误给客户端)
+    fallback:
+      on_errors: [429, 502, 503, 504, "timeout", "connection error", "connection refused"]
+      chain: [catfish-public-qwen-flash, catfish-private-main]
+      max_hops: 2
+
+  # ---------- 公共 · Gemini 2.5 Flash（快速/便宜） ----------
+  - name: catfish-public-gemini-flash
+    tier: public
+    display_name: "Gemini 3.1 Flash-Lite Preview · 快速响应（公共付费）"
+    mode: chat
+
+    upstream:
+      model: gemini/gemini-3.1-flash-lite-preview
+      api_key_env: GEMINI_API_KEY
+      # Gemini 3 系列必须 temperature = 1.0，详见 pro 配置
+      param_overrides:
+        temperature: 1.0
+      # Preview 模型冷启动偏慢，给足时间
+      timeout: 180
+
+    context_window: 1000000
+    supports_tool_use: true
+    supports_streaming: true
+    supports_vision: true
+    # Gemini Flash 是免费层, 配额最容易耗尽, 必须有 fallback
+    fallback:
+      on_errors: [429, 502, 503, 504, "timeout", "connection error", "connection refused"]
+      chain: [catfish-public-qwen-flash, catfish-private-main]
+      max_hops: 2
+    recommended_for: [fast, cheap, general, bulk]
+    cost_tier: paid
+

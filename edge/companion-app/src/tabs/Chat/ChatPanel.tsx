@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import ChatMessage from "./ChatMessage";
 import ChatInput from "./ChatInput";
 import type { Attachment, ChatMessage as Msg } from "../../types/chat";
+import { useAgentStore } from "../../store/agent";
 
 interface Props {
   messages: Msg[];
@@ -80,6 +81,8 @@ export default function ChatPanel({
 }
 
 function EmptyState() {
+  // BL-E11 命名权: 空状态 "我是小鲶" → 用员工自定义的名字 (默认 "小鲶")
+  const agentName = useAgentStore((s) => s.name);
   return (
     <div
       style={{
@@ -95,13 +98,13 @@ function EmptyState() {
       {/* 五一 sprint 5/3 BL-D11: 占位 🐟 → 正式吉祥物 (空对话状态最显眼, 用最大的 mascot) */}
       <img
         src="/catfish-mascot.svg"
-        alt="小鲶"
+        alt={agentName}
         width={120}
         height={120}
         style={{ marginBottom: "var(--space-3)" }}
       />
       <div style={{ fontSize: 18, color: "var(--catfish-text)", marginBottom: 6 }}>
-        我是小鲶
+        我是{agentName}
       </div>
       <div style={{ fontSize: 13, lineHeight: 1.6, maxWidth: 360 }}>
         你的鲶鱼平台数字副手。

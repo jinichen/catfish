@@ -1,6 +1,7 @@
-/** 顶部三 tab 切换条。 */
+/** 顶部三 tab 切换条 + BL-E15 专注模式按钮 */
 
 import { useUIStore, type TabId } from "../store/ui";
+import { useFocusStore } from "../store/focus";
 
 // 注: "会话" tab 已并入 "对话" 的左侧 sidebar (P0-3.1), 这里不再列出
 const TABS: { id: TabId; label: string }[] = [
@@ -12,6 +13,7 @@ const TABS: { id: TabId; label: string }[] = [
 export default function TabBar() {
   const activeTab = useUIStore((s) => s.activeTab);
   const setActiveTab = useUIStore((s) => s.setActiveTab);
+  const enterFocus = useFocusStore((s) => s.toggle);
 
   return (
     <nav
@@ -21,33 +23,56 @@ export default function TabBar() {
         borderBottom: "1px solid var(--catfish-border)",
         background: "var(--catfish-bg-elevated)",
         paddingLeft: "var(--space-4)",
+        paddingRight: "var(--space-3)",
       }}
     >
-      {TABS.map((t) => {
-        const active = activeTab === t.id;
-        return (
-          <button
-            key={t.id}
-            onClick={() => setActiveTab(t.id)}
-            style={{
-              padding: "var(--space-3) var(--space-4)",
-              border: "none",
-              background: "transparent",
-              fontSize: 13,
-              color: active
-                ? "var(--catfish-cyan-dim)"
-                : "var(--catfish-text-muted)",
-              borderBottom: active
-                ? "2px solid var(--catfish-cyan)"
-                : "2px solid transparent",
-              fontWeight: active ? 600 : 400,
-              transition: "color 0.15s",
-            }}
-          >
-            {t.label}
-          </button>
-        );
-      })}
+      <div style={{ display: "flex", flex: 1 }}>
+        {TABS.map((t) => {
+          const active = activeTab === t.id;
+          return (
+            <button
+              key={t.id}
+              onClick={() => setActiveTab(t.id)}
+              style={{
+                padding: "var(--space-3) var(--space-4)",
+                border: "none",
+                background: "transparent",
+                fontSize: 13,
+                color: active
+                  ? "var(--catfish-cyan-dim)"
+                  : "var(--catfish-text-muted)",
+                borderBottom: active
+                  ? "2px solid var(--catfish-cyan)"
+                  : "2px solid transparent",
+                fontWeight: active ? 600 : 400,
+                transition: "color 0.15s",
+              }}
+            >
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* BL-E15: 专注模式入口, 不知道快捷键的员工也能用. 跟 tab 视觉分离 */}
+      <button
+        type="button"
+        onClick={enterFocus}
+        title="进入专注模式 (Cmd+Shift+F)"
+        style={{
+          alignSelf: "center",
+          padding: "4px 10px",
+          background: "transparent",
+          border: "1px solid var(--catfish-border)",
+          borderRadius: 4,
+          fontSize: 11,
+          color: "var(--catfish-text-muted)",
+          cursor: "pointer",
+          fontFamily: "inherit",
+        }}
+      >
+        ⏸ 专注
+      </button>
     </nav>
   );
 }

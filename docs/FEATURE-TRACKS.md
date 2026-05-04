@@ -1,6 +1,6 @@
 # 鲶鱼 · Feature Tracks (主入口)
 
-> **快照**: 2026-05-03 (晚间) · **维护人**: 鸿波 · **更新**: 每周日晚 + 重大 ship 时
+> **快照**: 2026-05-04 (周一深夜) · **维护人**: 鸿波 · **更新**: 每周日晚 + 重大 ship 时
 > **角色**: 这是**唯一**的"我们在做啥 / 还差啥 / 在哪个 phase"主入口.
 > 其他 doc 角色见底部 § 文档地图.
 
@@ -15,13 +15,24 @@ Phase 3 · ★ Federation             [███░░░░░░░] 30% · �
 Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 2027 Q2+
 ```
 
-> 📈 5/2-5/3 周末 sprint 大幅推进 (Phase 2 后端 + Skills Hub + brand kit):
->   - Phase 1: 92% → 99% (+ project-approval skill / 主动闲聊 / Quota 真接 chat / brand kit v1)
+> 📈 5/2-5/3 周末 sprint 大幅推进 (Phase 2 后端 + Skills Hub + brand kit + 关系建立):
+>   - Phase 1: 92% → 99% (+ project-approval skill / 主动闲聊 / Quota 真接 chat / brand kit v1 /
+>     命名权 / 专注模式 / 情绪关系建立)
 >   - Phase 2: 35% → 78% (+ Dashboard 角色化 / 多账号 / PG 完整双写 / alembic 双服务 /
 >     Quota 100% / Manager PUT UI / Admin 全局聚合 / 中央 Skills Hub MVP / dry-run + dedup /
 >     SSO 登录页 brand 升级 + 防泄漏)
->   - 5/3 晚加: 完整 brand kit (mascot / mark / app icon / 47 个 PNG / BRAND.md / tokens 升级 /
->     6 处占位 🐟 全替换 / 防 hermes 泄漏 dispatch scrub + SOUL 铁律)
+>   - 5/3 晚 1 (brand): 完整 brand kit (mascot / mark / app icon / 47 个 PNG / BRAND.md /
+>     tokens 升级 / 6 处占位 🐟 全替换 / 防 hermes 泄漏 dispatch scrub + SOUL 铁律)
+>   - 5/3 晚 2 (人格 sprint, 4 个里 ship 3 个): **BL-E11** 命名权 (员工自定义鲶鱼名 + 3 档人设) +
+>     **BL-E15** 专注模式 (Cmd+Shift+F 全屏伪 IDE) + **BL-E19** 关系建立 (SOUL 情绪铁律 + session_meta
+>     时间感 + Dashboard "鲶鱼对你的印象" 透明可删) — 留 BL-E14 PPT 吐槽下周做.
+>     ⚠ 注: 5/3 commit 把 E19 误叫 E16, 实际 BACKLOG BL-E16 是"社交健康检查". 后续以 E19 为准
+>   - 5/4 晚 1 (Onboarding 同事感): BL-E11 后续 — 11 处 UI 自指 ("鲶鱼" / "小鲶") 全换员工自定义 dynamic name
+>   - 5/4 晚 2 (Hermes 升级研究 + Curator 分析): 不动代码, 写 `docs/HERMES-UPGRADE.md` ~430 行 — 含
+>     0.10→0.12 完整 changelog 摘要 + 4 层补丁脆性评估 + Curator 接口 verified + 集成方案 5 步 +
+>     5/8 后议程时间表
+>   - 5/4 晚 3 (记忆纪律): **BL-MM1** SOUL 加"覆盖前 read-then-write + quote 旧值"铁律 (~130 行).
+>     0 代码, 修小鲶之前对话里"夸了'现在就能做'"问题
 
 ---
 
@@ -240,7 +251,7 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 
 - ✅ Companion 默认 prod, DEV 模式 opt-in (CATFISH_AUTOSTART_ENV=dev) ★ 5/2
 - ⬜ 浮窗版 (无标题栏 / 居中悬浮) 单独 UX · 1 周
 - ⬜ 选中即翻译 Cmd+Shift+T · 1-2 天 (BL-E5)
-- ⬜ "领导来了" 一键切假装代码 · 1 天 (BL-E15)
+- ✅ 专注模式 (前 "领导来了") · 5/3 ship (BL-E15, 见 #27)
 - ⬜ menubar 状态指示 · 0.5 周
 
 #### #25 ★ 主动闲聊 (BL-E13) [Phase 1, 30% C-MVP]  ★ 5/2 ship MVP
@@ -251,10 +262,16 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 
 - ✅ "跟小鲶聊聊 →" 按钮 → 切 chat tab + 输入框预填 starter (zustand)
 - ✅ useProactiveScheduler hook: 9:30 / 14:00 / 17:30 自动 macOS 通知 (localStorage 防重)
 - ✅ Tauri notify() 用 osascript display notification (无新依赖)
+- ⚠ **BL-E13-FIX (5/4 鸿波反馈"还是不能自动聊天")**: 现实测概率 3 个 slot 全 miss (员工不在前台). 修复 demo 前必做:
+  - ⬜ catch-up 逻辑: mount 时补发当天已过期但未 fire 的 slot (~10 分钟)
+  - ⬜ 加宽时段窗口: 9:30 → 08:00-10:00, 14:00 → 12:00-14:00, 17:30 → 17:00-19:00 (~20 分钟)
+  - ⬜ 通知权限引导: 第一次启动主动调一次空通知触发 macOS 权限弹窗 + LoginGate 提示开权限 (~5 分钟)
+  - **合计 ~40 分钟, 0 风险, demo 前做**
 - ⬜ 节假日 / 晚 10 点不打扰 (推断状态) · 1 周
 - ⬜ snooze / 拒绝机制 (现 localStorage 开关) · 0.5 周
 - ⬜ 配置 UI (时段 / 频率 / 模板) · 0.5 周
 - ⬜ 跨 session 深度情境关联 (journal 结构化解析) · 1-2 周
+- ⬜ Phase 2.5: 真主动 (AI 行为信号触发, 不死时间) · 1-2 周, demo 后
 - **完整 BL-E13**: 1-2 周, demo 后做
 
 #### #26 ★ 品牌视觉身份 (brand kit v1) [Phase 1, 90%]  ★ 5/3 晚 ship 完整套件
@@ -279,6 +296,53 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 
 - ⬜ 桌面壁纸 / 名片 / 邮件签名模板 (P1, demo 后) · 0.5 周
 - ⬜ H5 介绍页 (P2) · 1 周
 - 见 `edge/identity/BRAND.md` (完整速查) + `branding/` (源文件)
+
+#### #27 ★ 人格 sprint (BL-E11 + E15 + E16) [Phase 1, 75%]  ★ 5/3 晚 ship 3/4
+> "鲶鱼不是 IT 工具, 是有性格 / 站员工这边 / 记得你的同事" — 跟 ChatGPT/Copilot 区分点.
+> 4 个 demo 杀器 ship 3 个 (留 BL-E14 PPT 吐槽下周做).
+- ✅ **BL-E11 命名权** (1 天): 员工 Onboarding 第 2 步给鲶鱼起名 + 3 档人设 (温柔/直爽/毒舌);
+  yaml 持久化 + Tauri commands + zustand store + Dashboard AgentPrefsCard 改名;
+  X-Catfish-Agent-Name/Personality header 让 gateway 拼 personalization preamble 在 SOUL 前面;
+  9 Rust 单测 + 12 Python 单测
+- ✅ **BL-E15 专注模式** (1 天, 央企语境从"领导来了"改名): Cmd+Shift+F 全屏伪 IDE;
+  状态行/计时/底栏/光标都拟真 (GitHub Dark 配色);
+  TabBar 加"⏸ 专注"按钮 (不知快捷键的员工也能用); Esc/快捷键/按钮 3 种退出
+- ✅ **BL-E16 鲶鱼情绪 / 关系建立** (1.5 天):
+  SOUL.md 加"情绪 / 关系建立"铁律 (5 类 ✅ 适合做 + 6 类 ❌ 不做 + 频率: 每 5-10 session 1 次);
+  session_meta.py 持久化 last_chat_at + today_count, 给 LLM 时间感 ("3 天没找我"/"今天第 5 次");
+  Dashboard "鲶鱼对你的印象" 卡 (透明 + 一键清空, 防 creepy);
+  17 Python 单测 + 7 Rust 单测
+- ⬜ **BL-E14 鲶鱼吐槽 PPT** (3-5 天, 留下周): pptx parser + critical personality + 拖放 UI
+- 见 `docs/IDEAS.md` § 10/13/14/17 + `docs/BACKLOG.md` BL-E11/E14/E15/E19 (E16 是另外的"社交健康检查")
+
+#### #28 ★ 记忆纪律 / 记忆是资产 / 越用越懂 (BL-MM1~MM8) [Phase 1.5, 25%]  ★ 5/4 晚拍板 + ship MM1+MM5
+> 鸿波 5/4 共识: **记忆是资产, 错了 update > 删除, 留版本作为成长痕迹**.
+> 5/4 晚扩: 加"越用越懂员工偏好" 维度 (鸿波问"feedback / 性格 / 工作模式 / 文书风格"); 4 维全 partial 或 ❌, 4 个工作量等级方案 A 已 ship, B/C/D 排 5/8 后启动.
+
+**M.1 记忆覆盖 (改不删, 留版本):**
+- ✅ **BL-MM1 记忆覆盖纪律 (SOUL 章节)** (5/4): 0 后端改动. 走 read-then-write + 把旧值 inline 塞进新值的备注里, 模拟版本感. 4 个 ❌ 禁止 (空说"改了"/编旧值/blind overwrite/不告知)
+- ⬜ **BL-MM2 catfish_remember 后端真版本化** (~0.7 天, 5/8 后议程): `session_facts.json` schema 改 `{key: [{value, ts, ...}]}` + 工具返回加 `previous_value` 字段
+- ⬜ **BL-MM3 hermes memory_save 包一层版本化** (~0.5 天, 5/15 hermes 升级窗口一并): adapter.py read-modify-write 双调用模拟, BL-D9 思路扩展
+- ⬜ **BL-MM4 Dashboard 记忆版本历史卡** (~1-2 天, demo 后): 列所有 key + 时间线 + 两版本 diff (像 git log). **真客户卖点**: "鲶鱼对你的认知怎么演化"
+
+**M.2 主动学习 / feedback / 越用越懂员工:**
+- ✅ **BL-MM5 主动学习员工偏好 (SOUL 章节)** (5/4 晚, **方案 A**): 0 后端代码. 4 类信号 (强显式立即落盘 / 弱显式攒 3 次主动问 / 强隐式不主动学 / 弱隐式不学) + 频率纪律 (每 session 1 次封顶) + 落盘结构化模板 + ❌ 禁止 (不评论生活/情绪/不假装观察). 跟 BL-MM1 区分: MM1 被动 correction, MM5 主动学 preference
+- ⬜ **BL-MM6 显式 feedback UI** (~2-3 天, **方案 B**, 5/8 后): ChatBubble 加 👍/👎/"改一下" 按钮 + `/api/feedback` + `~/.catfish/feedback.jsonl` + Dashboard "你给我的反馈" 卡
+- ⬜ **BL-MM7 结构化用户画像** (~1 周, **方案 C**, 5/8 后): `~/.catfish/user_profile.json` (writing_style / work_pattern / personality_traits + evidence_count) + 满 N 次主动确认 + Dashboard 卡可调可锁. 真"自进化"故事卖点
+- ⬜ **BL-MM8 文书风格 fingerprint** (~1-2 周, **方案 D**, 6 月起): 员工历史文档抽风格指纹, 写新文档前调用. 解决"每次写汇报小鲶都从零猜" 央企痛点
+
+- 见 `edge/identity/SOUL.md § 记忆覆盖纪律 + § 主动学习员工偏好` + `docs/BACKLOG.md § M`
+
+#### #29 ★ Hermes 升级 + Curator 集成 [Phase 1.5, 30% 研究完成]  ★ 5/4 晚研究, 5/8 后启动议程
+> NousResearch hermes-agent 升 0.12.0. 我们 0.10.0. 完整研究 + 集成方案归档, demo 前不动.
+- ✅ **0.10→0.12 changelog 完整摘要** (5/4): 0.11 React/Ink CLI 重写 + Profile 系统 + Transport ABC. 0.12 后台 Curator + 57% 冷启 + 多 provider
+- ✅ **catfish 4 层补丁脆性评估**: apply_brand_patch.py 468 行 AST 🔴 高 / rebrand.sh 183 行 sed 🔴 高 / string-map.yaml 84 行 🔴 高 / dispatch scrub (BL-D9) 🟢 低
+- ✅ **Curator 接口 verified** (源码 quote): `curator.enabled: false` 一行 disable, 4 个参数 yaml 可调, Strict invariant *only touches agent-created skills*, **never auto-deletes — only archives**, pin 可豁免, `.curator_state` 可外部写
+- ✅ **Curator vs Skills Hub 集成方案 5 步**: 不禁用, 默认开 + 保守参数 + 装时 pin 双保险 + Onboarding 知情同意 + Phase 2.5 反向数据流 → admin 看公司级 skill 健康热图
+- ⬜ **5/8 后 verify 2 件**: `tools/skill_usage.is_agent_created()` 判定逻辑 + `skill_manage` pin API
+- ⬜ **5/15-5/22 升级实施** (走 HERMES-UPGRADE.md § 5 阶段 B): brand patch 重构 字符串 → 三层运行时拦截 (wrapper subprocess + Shell Hook + 兜底 source patch). 估计 468 行能裁到 50-100 行
+- ⬜ **Q3 上游 PR i18n hook**: 给 NousResearch 提 PR, 一劳永逸
+- 完整方案见 `docs/HERMES-UPGRADE.md` (430 行, 含时间表 / 风险表 / 升级回归 checklist)
 
 ---
 

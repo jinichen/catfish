@@ -15,6 +15,7 @@ import type { ChatMessage, ToolCall } from "../types/chat";
 import { config } from "./env";
 import { gatewayGetDevToken } from "./tauri";
 import { getOverrideToken } from "./me";
+import { useAgentStore } from "../store/agent";
 
 interface SendChatParams {
   model: string;
@@ -202,6 +203,19 @@ export async function streamChat(params: SendChatParams): Promise<void> {
     return;
   }
 
+  // BL-E11 命名权: 把当前员工自定义的 agent name + personality 带过去, gateway
+  // 拼 personalization preamble 在 SOUL 前面 (非默认值才发, 省 header 大小).
+  const agentSnap = useAgentStore.getState();
+  const agentHeaders: Record<string, string> = {};
+  if (agentSnap.loaded) {
+    if (agentSnap.name && agentSnap.name !== "小鲶" && agentSnap.name !== "Catfish") {
+      agentHeaders["X-Catfish-Agent-Name"] = agentSnap.name;
+    }
+    if (agentSnap.personality && agentSnap.personality !== "gentle") {
+      agentHeaders["X-Catfish-Agent-Personality"] = agentSnap.personality;
+    }
+  }
+
   let resp: Response;
   try {
     resp = await fetch(url, {
@@ -209,6 +223,7 @@ export async function streamChat(params: SendChatParams): Promise<void> {
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
+        ...agentHeaders,
       },
       body: JSON.stringify(body),
       signal,

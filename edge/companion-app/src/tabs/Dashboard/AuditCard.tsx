@@ -16,9 +16,12 @@
 import { useAudit } from "../../hooks/useAudit";
 import { formatTokens } from "../../lib/format";
 import type { AuditSummary } from "../../types/audit";
+import { useAgentStore } from "../../store/agent";
 
 export default function AuditCard() {
   const { summary, error } = useAudit();
+  // BL-E11 后续: 提示语用员工自定义名
+  const agentName = useAgentStore((s) => s.name);
 
   return (
     <div
@@ -56,7 +59,7 @@ export default function AuditCard() {
 
       {summary && summary.request_count === 0 && (
         <div style={{ fontSize: 13, color: "var(--catfish-text-muted)" }}>
-          今天还没请求 — 跟小鲶聊点什么试试.
+          今天还没请求 — 跟{agentName}聊点什么试试.
         </div>
       )}
 

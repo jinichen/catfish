@@ -12,6 +12,7 @@
 import { useUIStore } from "../../store/ui";
 import { useServicesStore } from "../../store/services";
 import { useServiceStatus } from "../../hooks/useServiceStatus";
+import { useAgentStore } from "../../store/agent";
 import StatusDot from "../../components/StatusDot";
 import type { ServiceId, ServiceStatus } from "../../types/service";
 
@@ -21,33 +22,39 @@ interface ServiceRow {
   why: string; // tooltip / 副标题: 为啥这个服务对员工重要
 }
 
-const SERVICES: ServiceRow[] = [
-  {
-    id: "gateway",
-    name: "LLM Gateway",
-    why: "所有 LLM 请求经它, 没起来 = 聊天用不了",
-  },
-  {
-    id: "tool_bridge",
-    name: "Tool Bridge",
-    why: "暴露 60+ 工具给小鲶, 没起来 = 小鲶无工具瞎答",
-  },
-  {
-    id: "chrome",
-    name: "Catfish Chrome",
-    why: "浏览器自动化 (browser_navigate 等), 不需要可不起",
-  },
-  {
-    id: "local_search",
-    name: "Local Search",
-    why: "本地文件全文搜索, 不需要可不起",
-  },
-];
+// BL-E11 后续: tool_bridge 的 why 提到 agent, 用员工自定义名拼出.
+// 数量恒定 (4 行), useServiceStatus hook 顺序稳定 — 跟原静态 const 等价.
+function buildServices(agentName: string): ServiceRow[] {
+  return [
+    {
+      id: "gateway",
+      name: "LLM Gateway",
+      why: "所有 LLM 请求经它, 没起来 = 聊天用不了",
+    },
+    {
+      id: "tool_bridge",
+      name: "Tool Bridge",
+      why: `暴露 60+ 工具给${agentName}, 没起来 = ${agentName}无工具瞎答`,
+    },
+    {
+      id: "chrome",
+      name: "Catfish Chrome",
+      why: "浏览器自动化 (browser_navigate 等), 不需要可不起",
+    },
+    {
+      id: "local_search",
+      name: "Local Search",
+      why: "本地文件全文搜索, 不需要可不起",
+    },
+  ];
+}
 
 export default function ServicesCard() {
   // 注: 不在这里 for 循环调 useServiceStatus —— React hooks 规则不允许。
-  // 每行组件 ServiceRowItem 自己调 hook, 数量恒定 (SERVICES 是静态 const)。
+  // 每行组件 ServiceRowItem 自己调 hook, 数量恒定 (buildServices 永远返 4 行)。
   const setActiveTab = useUIStore((s) => s.setActiveTab);
+  const agentName = useAgentStore((s) => s.name);
+  const SERVICES = buildServices(agentName);
 
   return (
     <section

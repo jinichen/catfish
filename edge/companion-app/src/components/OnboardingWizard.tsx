@@ -1,10 +1,11 @@
 /** Onboarding 引导 — 员工首次启动 Companion 走这个 (五一 sprint 5/2 收尾 BL-F3 MVP).
  *
- * 4 步:
+ * 5 步 (5/3 晚 BL-E11 加"起名"在第 2 步):
  *   1. Welcome (鲶鱼是啥, 一句话)
- *   2. 鉴权 (SSO 登录 / dev_token 兜底)
- *   3. 选默认模型
- *   4. 试聊一句 + 完成
+ *   2. ★ 命名权 + 选人设 (员工给鲶鱼起名 + 3 档人设, BL-E11)
+ *   3. 鉴权 (SSO 登录 / dev_token 兜底)
+ *   4. 选默认模型
+ *   5. 试聊一句 + 完成
  *
  * 触发: localStorage["catfish:onboarded"] !== "true" → 首次显示
  * 跳过: 任何步骤都能 "稍后" 跳过, 写 onboarded=true 不再显
@@ -16,6 +17,8 @@ import { useEffect, useState } from "react";
 
 import { fetchCatalog } from "../lib/tauri";
 import { useUIStore } from "../store/ui";
+import { useAgentStore } from "../store/agent";
+import { PERSONALITY_LABELS, type Personality } from "../lib/agent";
 
 const _STORAGE_KEY = "catfish:onboarded";
 
@@ -100,7 +103,7 @@ export default function OnboardingWizard() {
           color: "var(--catfish-text)",
         }}
       >
-        {/* 步骤指示 */}
+        {/* 步骤指示 (5/3 晚 BL-E11: 4 → 5 步) */}
         <div
           style={{
             display: "flex",
@@ -109,11 +112,11 @@ export default function OnboardingWizard() {
             justifyContent: "center",
           }}
         >
-          {[0, 1, 2, 3].map((i) => (
+          {[0, 1, 2, 3, 4].map((i) => (
             <div
               key={i}
               style={{
-                width: 32,
+                width: 28,
                 height: 4,
                 borderRadius: 2,
                 background:
@@ -126,11 +129,12 @@ export default function OnboardingWizard() {
         </div>
 
         {step === 0 && <StepWelcome onNext={next} onSkip={close} />}
-        {step === 1 && <StepAuth onNext={next} onBack={back} onSkip={close} />}
-        {step === 2 && (
+        {step === 1 && <StepName onNext={next} onBack={back} onSkip={close} />}
+        {step === 2 && <StepAuth onNext={next} onBack={back} onSkip={close} />}
+        {step === 3 && (
           <StepModel models={models} onNext={next} onBack={back} onSkip={close} />
         )}
-        {step === 3 && (
+        {step === 4 && (
           <StepTryChat
             onFinish={() => {
               close();
@@ -145,7 +149,7 @@ export default function OnboardingWizard() {
   );
 }
 
-// ── 4 个 step ──────────────────────────────────────────────────
+// ── 5 个 step (5/3 晚 BL-E11 加"起名"在第 2 步) ─────────────────
 
 
 function StepWelcome({ onNext, onSkip }: { onNext: () => void; onSkip: () => void }) {
@@ -176,9 +180,120 @@ function StepWelcome({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
         <li>✨ 越用越懂你, journal 自动总结你的工作</li>
       </ul>
       <p style={{ fontSize: 12, color: "var(--catfish-text-muted)", marginTop: "var(--space-3)" }}>
-        4 步设置, 大概 1 分钟.
+        5 步设置, 大概 1 分钟.
       </p>
       <Buttons onNext={onNext} nextLabel="开始 →" onSkip={onSkip} />
+    </>
+  );
+}
+
+// BL-E11 命名权 (五一 sprint 5/3 晚) — Onboarding Step 2 (新)
+function StepName({
+  onNext,
+  onBack,
+  onSkip,
+}: {
+  onNext: () => void;
+  onBack: () => void;
+  onSkip: () => void;
+}) {
+  const currentName = useAgentStore((s) => s.name);
+  const currentPersonality = useAgentStore((s) => s.personality);
+  const updateAgentPrefs = useAgentStore((s) => s.updateAgentPrefs);
+  const [name, setName] = useState(currentName);
+  const [personality, setPersonality] = useState<Personality>(currentPersonality);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const handleSaveAndNext = async () => {
+    setSaving(true);
+    setErr(null);
+    try {
+      await updateAgentPrefs(name.trim() || "小鲶", personality);
+      onNext();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <>
+      <h2 style={{ textAlign: "center", margin: "0 0 var(--space-3) 0" }}>
+        给我起个名字
+      </h2>
+      <p style={{ fontSize: 13, lineHeight: 1.6, color: "var(--catfish-text-muted)", marginBottom: "var(--space-4)" }}>
+        默认叫"小鲶". 你想叫"老李 / 阿强 / Penny / 数智小李 / 什么都行". 之后聊天 / 通知 / Dashboard 都用这名字 — 让我成为<strong>你的</strong>同事.
+      </p>
+
+      <label style={{ display: "block", fontSize: 12, color: "var(--catfish-text-muted)", marginBottom: 4 }}>
+        名字
+      </label>
+      <input
+        type="text"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        maxLength={32}
+        placeholder="小鲶"
+        style={{
+          width: "100%",
+          padding: "10px 12px",
+          fontSize: 14,
+          border: "1px solid var(--catfish-border)",
+          borderRadius: "var(--radius-md)",
+          background: "var(--catfish-bg)",
+          color: "var(--catfish-text)",
+          boxSizing: "border-box",
+          marginBottom: "var(--space-4)",
+        }}
+      />
+
+      <label style={{ display: "block", fontSize: 12, color: "var(--catfish-text-muted)", marginBottom: 6 }}>
+        说话风格
+      </label>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {(Object.keys(PERSONALITY_LABELS) as Personality[]).map((p) => {
+          const meta = PERSONALITY_LABELS[p];
+          const selected = personality === p;
+          return (
+            <button
+              key={p}
+              type="button"
+              onClick={() => setPersonality(p)}
+              style={{
+                textAlign: "left",
+                padding: "10px 12px",
+                border: `1.5px solid ${selected ? "var(--catfish-cyan)" : "var(--catfish-border)"}`,
+                borderRadius: "var(--radius-md)",
+                background: selected ? "var(--catfish-bg-cream)" : "var(--catfish-bg)",
+                cursor: "pointer",
+                color: "var(--catfish-text)",
+              }}
+            >
+              <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 2 }}>
+                {meta.label}
+              </div>
+              <div style={{ fontSize: 12, color: "var(--catfish-text-muted)", lineHeight: 1.5 }}>
+                {meta.desc}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {err && (
+        <div style={{ color: "var(--status-err)", fontSize: 12, marginTop: 8 }}>
+          保存失败: {err}
+        </div>
+      )}
+
+      <Buttons
+        onNext={handleSaveAndNext}
+        onBack={onBack}
+        onSkip={onSkip}
+        nextLabel={saving ? "保存中…" : "保存 →"}
+      />
     </>
   );
 }

@@ -10,9 +10,12 @@
 import { useLearning } from "../../hooks/useLearning";
 import { formatTokens } from "../../lib/format";
 import type { TodayLearningStats } from "../../types/learning";
+import { useAgentStore } from "../../store/agent";
 
 export default function LearningCard() {
   const { stats, error } = useLearning();
+  // BL-E11 后续: 标题 + 自指段都用员工自定义名
+  const agentName = useAgentStore((s) => s.name);
 
   return (
     <div
@@ -35,7 +38,7 @@ export default function LearningCard() {
         {/* 五一 sprint 5/3 BL-D11: 占位 🐟 → 小尺寸正式头像 */}
         <h3 style={{ margin: 0, display: "inline-flex", alignItems: "center", gap: 8 }}>
           <img src="/catfish-avatar.svg" alt="" width={20} height={20} style={{ display: "block" }} />
-          鲶鱼今天学到的
+          {agentName}今天学到的
         </h3>
         <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
           每 30s 自动刷新
@@ -146,9 +149,9 @@ export default function LearningCard() {
                   lineHeight: 1.5,
                 }}
               >
-                📌 顶层 = 稳定身份档案 (小鲶启动时自动加载, 永远记得)
+                📌 顶层 = 稳定身份档案 ({agentName}启动时自动加载, 永远记得)
                 <br />
-                📝 memories/ = 对话中动态学到的, 按主题片段 (小鲶按需检索)
+                📝 memories/ = 对话中动态学到的, 按主题片段 ({agentName}按需检索)
               </div>
               <ul style={listStyle}>
                 {stats.memories.map((m) => {
@@ -213,7 +216,7 @@ export default function LearningCard() {
               lineHeight: 1.5,
             }}
           >
-            小鲶自动记录你的偏好, 把复杂工作流抽象成可复用 skill。
+            {agentName}自动记录你的偏好, 把复杂工作流抽象成可复用 skill。
             这块每天都在变, 是鲶鱼 "self-evolution" 的真证据。
           </div>
         </>

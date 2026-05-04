@@ -18,6 +18,8 @@ import DepartmentQuotaCard from "./DepartmentQuotaCard";
 import DepartmentAuditCard from "./DepartmentAuditCard";
 import AdminGlobalCard from "./AdminGlobalCard";
 import ProactiveCard from "./ProactiveCard";
+import AgentPrefsCard from "./AgentPrefsCard";
+import RelationCard from "./RelationCard";
 import { useMe } from "../../hooks/useMe";
 
 export default function DashboardTab() {
@@ -41,6 +43,10 @@ export default function DashboardTab() {
 
       {/* 全员可见 — 个人维度 */}
       <IdentityCard />
+      {/* BL-E11: 改鲶鱼名 + 人设, Onboarding 走完后想改也来这 */}
+      <AgentPrefsCard />
+      {/* BL-E16: 鲶鱼对你的印象 — 透明可删, 防 creepy */}
+      <RelationCard />
       <ServicesCard />
       <QuotaCard />
       <CatalogCard />
