@@ -321,18 +321,39 @@ async def _stream_llm_answer(
                 yield _sse_event("message", _jsonrpc_chunk(req.id, chunk))
             yield _sse_event("done", _jsonrpc_done(req.id, audit_id, chunks_count))
         else:
-            # 真 LLM streaming
+            # 真 LLM streaming.
+            # BL-F14: 不写死模型, 用 pick_internal_model("a2a_aux") 按 tag 选 (private 优先).
+            # a2a 走特殊 SSE 链路, 不走 gateway loopback (跟 summarizer/proactive 不同),
+            # 直接用 LiteLLM, 但 model + api_base + api_key 都从 catalog 来.
+            from .config import load_config  # noqa: PLC0415
+            from .internal_models import pick_internal_model  # noqa: PLC0415
+            config = load_config()
+            chosen_model = pick_internal_model("a2a_aux", config)
+            if chosen_model is None:
+                # 退化到 mock 答 (catalog 没可用模型)
+                mock_answer = (
+                    f"[mock 回答 — catalog 没可用 chat 模型, A2A LLM 调用跳过] "
+                    f"{params.from_sub} 问 '{params.question}'."
+                )
+                for chunk in _split_into_chunks(mock_answer):
+                    chunks_count += 1
+                    yield _sse_event("message", _jsonrpc_chunk(req.id, chunk))
+                yield _sse_event("done", _jsonrpc_done(req.id, audit_id, chunks_count))
+                # audit + return 走 finally / 后续, 但这里直接 return 防再走 LiteLLM 路径
+                return
+
             response = await litellm.acompletion(
-                model="openai/qwen3.5-flash-2026-02-23",
+                model=chosen_model.upstream.model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                api_base="https://dashscope.aliyuncs.com/compatible-mode/v1",
-                api_key=api_key,
+                api_base=chosen_model.upstream.api_base,
+                api_key=chosen_model.upstream.api_key,
                 temperature=0.3,
                 max_tokens=params.max_tokens,
                 stream=True,
+                timeout=chosen_model.upstream.timeout,
             )
             async for delta in response:
                 content = ""

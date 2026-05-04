@@ -46,7 +46,13 @@ models:
     supports_tool_use: true
     supports_streaming: true
     supports_vision: true
-    recommended_for: [general, chat, tool_use, code]
+    # 5/4 BL-F14 内部用例 tag (pick_internal_model 按 tag + private 优先选).
+    # 内网首选 = 数据不出公司. 内网挂了才用 public 兜底:
+    #   summarizer        — 跨 session 总结 journal
+    #   proactive_starter — BL-E13 主动闲聊起话题
+    #   a2a_aux           — A2A federation 辅助任务
+    recommended_for: [general, chat, tool_use, code,
+                      summarizer, proactive_starter, a2a_aux]
     cost_tier: free
 
     # 内网 LLM 平台偶发 502 / endpoint 维护 / UUID 重启失效时,
@@ -143,7 +149,9 @@ models:
     supports_tool_use: true
     supports_streaming: true
     supports_vision: true
-    recommended_for: [general, chat, tool_use, vision, code, fast, fallback]
+    # BL-F14: 公网 qwen-flash 是内部用例的 public fallback (内网挂了才用)
+    recommended_for: [general, chat, tool_use, vision, code, fast, fallback,
+                      summarizer, proactive_starter, a2a_aux]
     cost_tier: paid
 
   # ---------- 公共 · DEEPSEEK V4 ----------
@@ -176,8 +184,10 @@ models:
     supports_tool_use: true
     supports_streaming: true
     supports_vision: false
-    recommended_for: [general, chat, tool_use, code, fast, fallback]
-    cost_tier: paid 
+    # BL-F14: deepseek 也作为 public 内部用例 fallback (qwen 挂了用这)
+    recommended_for: [general, chat, tool_use, code, fast, fallback,
+                      summarizer, proactive_starter, a2a_aux]
+    cost_tier: paid
 
   # ---------- 公共 · Gemini 3.1 Pro（长上下文） ----------
   # 200 万 token 上下文，适合长文档分析、跨会话回溯、复杂推理

@@ -168,27 +168,50 @@ async def generate_starter() -> dict[str, Any]:
     now = datetime.now()
     journal_tail = _read_journal_tail()
 
-    api_key = os.environ.get("DASHSCOPE_API_KEY", "").strip()
-    if not api_key:
+    # BL-F14: 不写死模型, 按 use_case tag 选 (private 优先, 内网挂了用 public).
+    # catalog 改了不用动这里. 全无可用模型 → 走 fallback 模板.
+    from .config import load_config  # 懒 import
+    from .internal_models import pick_internal_model  # 懒 import
+    config = load_config()
+    chosen_model = pick_internal_model("proactive_starter", config)
+    if chosen_model is None:
         return {
             "starter": _fallback_starter(now),
-            "context_hint": "fallback (没配 DASHSCOPE_API_KEY)",
+            "context_hint": "fallback (catalog 没可用 chat 模型, 全部 api key 没配?)",
             "source": "fallback",
         }
 
+    # gateway loopback HTTP (跟 summarizer 同模式, BL-F12)
+    import httpx  # 懒 import
+    port = os.environ.get("PORT", "8999")
+    gateway_url = os.environ.get(
+        "CATFISH_GATEWAY_INTERNAL_URL",
+        f"http://127.0.0.1:{port}/v1/chat/completions",
+    )
+    dev_token = os.environ.get("CATFISH_DEV_TOKEN", "dev-token-local")
+    user_prompt = _build_user_prompt(journal_tail, now)
+
     try:
-        import litellm  # 懒 import
-        user_prompt = _build_user_prompt(journal_tail, now)
-        response = await litellm.acompletion(
-            model="openai/qwen3.5-flash-2026-02-23",
-            messages=[{"role": "user", "content": user_prompt}],
-            api_base="https://dashscope.aliyuncs.com/compatible-mode/v1",
-            api_key=api_key,
-            temperature=0.7,  # 比 summarizer 高一点, 让话术不死板
-            max_tokens=120,
-            timeout=15,
-        )
-        text = (response.choices[0].message.content or "").strip()
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(
+                gateway_url,
+                headers={
+                    "Authorization": f"Bearer {dev_token}",
+                    "X-Catfish-Skip-Identity": "true",  # 防 SOUL/journal 二次注入死循环
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": chosen_model.name,
+                    "messages": [{"role": "user", "content": user_prompt}],
+                    "temperature": 0.7,  # 比 summarizer 高, 让话术不死板
+                    "max_tokens": 120,
+                    "stream": False,
+                },
+            )
+        if resp.status_code != 200:
+            raise RuntimeError(f"gateway 返 {resp.status_code}: {resp.text[:200]}")
+        data = resp.json()
+        text = (data.get("choices", [{}])[0].get("message", {}).get("content", "") or "").strip()
         # 清掉可能的 markdown 装饰
         text = text.strip("`\"'*-> \n")
         if not text:

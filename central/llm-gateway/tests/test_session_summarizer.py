@@ -122,8 +122,9 @@ async def test_request_includes_skip_identity_header(fake_msgs):
 
 @pytest.mark.asyncio
 async def test_request_uses_catalog_model_name(fake_msgs):
-    """关键: 用 catalog 模型名 catfish-public-qwen-flash, 不写死上游真名.
-    gateway 看到 catalog 名自动走 fallback chain (qwen 挂时 gemini-flash 接管).
+    """关键: 用 catalog 模型名 (跟 yaml 里 name 一致), 不写死上游真名.
+    BL-F14 改后: 走 pick_internal_model('summarizer'), 实际选啥跟 catalog 走.
+    我们只 verify: 模型名是 catalog name 形态 (不是 upstream 'openai/xxx' 形态).
     """
     fake_resp = _mock_response(
         200, json_body={"choices": [{"message": {"content": "ok"}}]}
@@ -138,9 +139,15 @@ async def test_request_uses_catalog_model_name(fake_msgs):
 
     call_args = mock_client.post.call_args
     json_body = call_args.kwargs.get("json") or {}
-    assert json_body.get("model") == "catfish-public-qwen-flash"
-    # 不该写死成上游模型名 (e.g. openai/qwen3.5-flash-...)
-    assert "/" not in json_body["model"]
+    model_name = json_body.get("model", "")
+    # 必须是 catalog 名 (catfish-xxx-yyy 形态), 不是上游 'openai/xxx' / 'gemini/xxx'
+    assert model_name.startswith("catfish-"), (
+        f"模型名 {model_name!r} 不是 catalog 名形态. picker 应返 catalog 模型, "
+        "不是上游真名. 走 gateway loopback 必须用 catalog 名才能复用 fallback."
+    )
+    assert "/" not in model_name, (
+        "catalog 名不应含 '/'. 写死 'openai/xxx' 是 BL-F14 之前的旧写法."
+    )
 
 
 @pytest.mark.asyncio

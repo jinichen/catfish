@@ -204,10 +204,27 @@ async def _summarize_with_llm(
 
     import os  # noqa: PLC0415
     import httpx  # noqa: PLC0415
+    from .config import load_config  # noqa: PLC0415
+    from .internal_models import pick_internal_model  # noqa: PLC0415
 
-    # gateway loopback URL — 跟自己同进程, 但走 HTTP 才能复用 fallback / quota / metrics
+    # BL-F14: 不写死模型名, 按 use_case tag 选 (private 优先, 内网挂了用 public).
+    # catalog 改了不用动代码.
+    config = load_config()
+    chosen_model = pick_internal_model("summarizer", config)
+    if chosen_model is None:
+        logger.info(
+            "summarize_with_llm 跳过 session=%s: catalog 没可用 chat 模型 (api keys 全没配?)",
+            session_id,
+        )
+        return None
+
+    # gateway loopback URL — 跟自己同进程, 但走 HTTP 才能复用 fallback / quota / metrics.
+    # 拆 gateway 部署时 (BL-F8 SaaS) 通过 CATFISH_GATEWAY_INTERNAL_URL env 注入新 URL.
     port = os.environ.get("PORT", "8999")
-    gateway_url = f"http://127.0.0.1:{port}/v1/chat/completions"
+    gateway_url = os.environ.get(
+        "CATFISH_GATEWAY_INTERNAL_URL",
+        f"http://127.0.0.1:{port}/v1/chat/completions",
+    )
     dev_token = os.environ.get("CATFISH_DEV_TOKEN", "dev-token-local")
 
     try:
@@ -220,8 +237,8 @@ async def _summarize_with_llm(
                     "Content-Type": "application/json",
                 },
                 json={
-                    # 走 catalog 模型名, gateway 看到撞错自动 fallback (qwen → gemini-flash)
-                    "model": "catfish-public-qwen-flash",
+                    # catalog 模型名 (按 tag 选出), gateway 看到撞错自动走它的 fallback chain
+                    "model": chosen_model.name,
                     "messages": [{"role": "user", "content": user_prompt}],
                     "temperature": 0.3,
                     "max_tokens": 600,

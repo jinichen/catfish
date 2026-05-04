@@ -2094,9 +2094,54 @@ for attr in ("module_level_aclient", "module_level_client",
 
 完美清理不保证 (LiteLLM 内部多个 client 可能有未公开的), 但能减少 80% 的 warning. 真彻底要等 LiteLLM 2.x 全切 httpx.
 
-#### 5/4 深夜 总结 (BL-D11 + BL-F12 + BL-F13)
+#### BL-F14 内部 LLM 用例选模型 (~1 小时, 鸿波 5/4 深夜继续拍板)
 
-5/4 累计动后端代码 3 件: tools_sanitizer (DeepSeek schema 兼容) + session_summarizer (走 loopback) + aiohttp cleanup. 全 ship 后 **514/514 测试通过, 0 fail**. demo 路径 0 风险.
+**问题** (鸿波延伸 BL-F12 修完后的反思): 我刚把 summarizer 从 `model="openai/qwen3.5-flash"` 改成 `model="catfish-public-qwen-flash"` (catalog 名), 但**还是写死**. 鸿波: "这种太容易出问题了, 还是固定模型". 真问题: gateway 内部 3 个 LLM 调用 (summarizer / proactive / a2a_server) 都各自写死模型名, **catalog 改了 .py 跟着改**.
+
+**正确做法**: catalog 加 use_case tag, picker 按 tag + private 优先选, env 可强制 override.
+
+**新模块** `internal_models.py`:
+```python
+def pick_internal_model(use_case: str, config: Config) -> Model | None:
+    """优先级:
+    1. env CATFISH_<USE_CASE>_MODEL (per-deployment 强制)
+    2. catalog tag 匹配 + tier=private 优先 + 可达
+    3. 兜底: 任何 chat + 可达, 仍 private 优先
+    4. 都没: None
+    """
+```
+
+**为啥 private 优先** (鸿波 5/4 explicit): 跟 catfish "数据不出公司" 卖点一致. 内部用例 (尤其 summarizer 看 journal / proactive 看 employee 工作上下文) 数据敏感度高, **必须先用内网部署**, 内网挂了才用公网兜底.
+
+**catalog yaml 改动**:
+```yaml
+- name: catfish-private-main
+  recommended_for: [general, chat, tool_use, code,
+                    summarizer, proactive_starter, a2a_aux]   # ← 加 3 tag
+
+- name: catfish-public-qwen-flash
+  recommended_for: [general, chat, fast, fallback,
+                    summarizer, proactive_starter, a2a_aux]   # ← public fallback
+
+- name: catfish-public-deepseek-flash
+  recommended_for: [general, chat, code, fallback,
+                    summarizer, proactive_starter, a2a_aux]   # ← 也作为 public fallback
+```
+
+**3 个 caller 改造**:
+- `session_summarizer.py`: 用 `pick_internal_model("summarizer", config)` 选模型, gateway loopback HTTP
+- `proactive.py`: 用 `pick_internal_model("proactive_starter", config)`, 同样 loopback (BL-F12 同模式), 顺手补 skip-identity 防 SOUL/journal 二次注入循环
+- `a2a_server.py`: 用 `pick_internal_model("a2a_aux", config)` 选, 但 a2a 走特殊 SSE 链路, 仍直调 LiteLLM (model + api_base + api_key 全从 chosen_model.upstream 来, 不写死)
+
+**测试**: +14 picker case (env override / env 不存在的模型降级 / tag + private 优先 / tag 命中 public 兜底 / private 不可达切 public / 不同 use_case 选不同模型 / 兜底任何 chat / embedding 模型不被选 / 完全没可用返 None / 未注册 use_case 不报错) + 修 summarizer 老 case 期望 (从写死 'catfish-public-qwen-flash' 改成 verify catalog 名形态).
+
+**528/528 通过** (5/4 累计 +22 测试: BL-D11 +7, BL-F12 +8, BL-F14 +14, 修老期望 +1).
+
+#### 5/4 深夜 总结 (BL-D11 + BL-F12 + BL-F13 + BL-F14)
+
+5/4 累计动后端代码 4 件: tools_sanitizer (DeepSeek schema 兼容) + session_summarizer (走 loopback) + aiohttp cleanup + internal_models picker (use_case tag + private 优先). 全 ship 后 **528/528 测试通过, 0 fail**. demo 路径 0 风险.
+
+**架构进步**: catalog yaml 真正成为"模型唯一真源". 改 yaml 加/删/改名 → 内部 LLM 调用自动跟. 拆 gateway / catfish-cloud SaaS 部署只改 env 不改代码.
 
 ### 5/4 晚 — 主动学习鸿波"feedback / 越用越懂"问题答案
 
