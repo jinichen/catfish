@@ -163,10 +163,14 @@ models:
     mode: chat
 
     upstream:
-      model: openai/deepseek-v4-flash
+      model: deepseek/deepseek-v4-flash
       api_base: https://api.deepseek.com/v1
       api_key_env: DEEPSEEK_API_KEY
       timeout: 90
+      # param_overrides:
+      #   extra_body:
+      #     thinking:
+      #       type: disabled
 
     context_window: 262144  # 256K
     supports_tool_use: true

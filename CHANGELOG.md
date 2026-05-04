@@ -2018,14 +2018,44 @@ ServicesCard 的 SERVICES const 从 module-level 改成 component-internal `buil
 
 ### 5/4 总结
 
-原计划"休", 实际**做完 5 件事, 没动后端代码**:
+原计划"休", 实际**做完 7 件事, 唯一动代码的是 tools_sanitizer 修 DeepSeek 兼容**:
 1. UI 同事感 (11 处 dynamic name) — 员工自定义名渗透到所有自指
-2. Hermes 升级研究 + Curator 集成方案完整归档 — 5/8 后启动议程
+2. Hermes 升级研究 + Curator 集成方案完整归档 — 5/8 后启动议程 + 5/4 真机诊断 brand patch 状态 (8 备份装过 / dist 预编译 / 3 文件漏 / warm-lightmode skin 验证)
 3. 记忆纪律 BL-MM1 — 缓兵之计 ship, 真版本化 BL-MM2/MM3 排到 5/8 后
 4. BL-E13 主动闲聊诊断 + BL-E13-FIX 排进 demo 前
 5. **主动学习 BL-MM5 (方案 A)** — SOUL 加"主动学习员工偏好" 章节, 4 类信号 + 频率纪律 + 落盘格式. B/C/D (BL-MM6/MM7/MM8) 排 5/8 后启动
+6. **BL-E27 桌面状态浮宠** (Codex pet 同思路) — 鸿波看到 OpenAI Codex 加电子宠物问要不要做. 评估: demo 后 ship (8-11 天分 3 阶段). 跟 brand kit / BL-E11/E15/E19 人格 sprint 完美契合. 是 demo 下半场杀手锏
+7. **BL-D11 tools_sanitizer 加固 DeepSeek schema 严格兼容** — 鸿波加 deepseek-v4-flash 撞 400 BadRequest "Invalid schema for function 'browser_back': type must be 'object', got 'type: null'". DeepSeek 严格校验, OpenAI/Qwen/Gemini 容忍. gateway 兜底强制 `parameters.type='object'` + 补 `properties={}`. +7 测试 / 506/506 全过 / 0 副作用. **唯一动了后端代码的事**
+
+**还顺手归档进 BACKLOG/FEATURE-TRACKS/CHANGELOG**:
+- BL-FE3 (FE 章节新加): 前端原生支持 reasoning_content, 1-2 天, 5/15+
+- BL-F12 (F 章节加): session_summarizer 改 deepseek-flash 替代 Gemini (避免 free tier exhausted), 5 分钟, 5/8 后
+- BL-F13 (F 章节加): 修 aiohttp Unclosed client session 警告, 0.5 天, demo 后
 
 **5/14 demo 倒计时 10 天**. 5/5 起开 BL-E14 PPT 吐槽 + BL-E13-FIX (40 分钟先做掉).
+
+### 5/4 深夜 — DeepSeek schema 兼容修复 (BL-D11) 详情
+
+**问题症状**: 鸿波在 Companion 选 `catfish-public-deepseek-flash` 调用, 报 400. 错误堆栈:
+```
+litellm.BadRequestError: DeepseekException - {"error":{"message":"Invalid schema for function 'browser_back': schema must be a JSON Schema of 'type: \"object\"', got 'type: null'."}}
+```
+
+**误诊路径** (吃了 1 小时弯路):
+1. 第一猜: thinking 默认开, timeout 90s 不够 → 关 thinking
+2. 第二猜: streaming 解析 reasoning_content 报错 → 改 chat.ts
+3. **真正根因**: 看 gateway log 才发现是 tool schema 问题. DeepSeek 严格校验 `parameters.type` 必须 = 'object', 拒绝 None / 缺失. browser_back / 类似空参数工具被拒.
+
+**修复**: `tools_sanitizer.py` 加 3 条规则
+- params.type 是 None / 空 → 强制 'object'
+- params.type 已是 'object' 但缺 properties → 加 `{}`
+- params.type 是非 'object' (e.g. 'string') → log warn 不动 (客户端真错)
+
+**测试**: +7 个 deepseek 兼容 case (含 browser_back 真实重现) / 21/21 sanitizer 测试通过 / 506/506 gateway 全套通过.
+
+**副作用**: 0. 所有 tool 现在都被 sanitize 成同一标准 schema, 千问/Gemini/OpenAI/内网 qwen 收到的都是更规范但更兼容的 input. 等价于"宽容 provider 收到稍微更标准的 input".
+
+**踩坑教训**: 看 gateway log 比猜快 10 倍. 下次遇到上游 LLM 报错先 grep `[ERROR]` 看真错误, 别从症状反推.
 
 ### 5/4 晚 — 主动学习鸿波"feedback / 越用越懂"问题答案
 

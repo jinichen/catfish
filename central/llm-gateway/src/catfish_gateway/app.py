@@ -59,6 +59,7 @@ from .tool_capability_guard import route_to_tool_capable_if_needed  # noqa: E402
 from .employee_journal import inject_employee_journal  # noqa: E402
 from .inject_session_history import inject_session_history  # noqa: E402
 from .session_facts import inject_session_facts  # noqa: E402
+from . import session_meta  # noqa: E402  BL-E16 关系建立: tick + inject 时间元
 from .session_summarizer import trigger_background_summary  # noqa: E402
 from .skill_guard import inject_skill_guard  # noqa: E402
 from .skills_inject import inject_skills_catalog  # noqa: E402
@@ -66,6 +67,7 @@ from .stats_guard import inject_stats_guard  # noqa: E402
 from .fallback import should_fallback, with_fallback  # noqa: E402
 from .tools_sanitizer import sanitize_tools  # noqa: E402
 from .identity_inject import (  # noqa: E402
+    header_agent_prefs,
     header_skips_identity,
     inject_identity_if_needed,
 )
@@ -976,8 +978,15 @@ async def chat_completions(
 
     # 鲶鱼身份注入：客户端没传 system message 就自动加 SOUL + memory
     # Hermes 这种已自带 system 的不动；客户端可加 X-Catfish-Skip-Identity: true 强制跳过
+    # BL-E11 命名权: header X-Catfish-Agent-Name / -Personality 让员工改名 + 选人设
     skip = header_skips_identity(request.headers)
-    body["messages"] = inject_identity_if_needed(body.get("messages", []), skip=skip)
+    agent_name, agent_personality = header_agent_prefs(request.headers)
+    body["messages"] = inject_identity_if_needed(
+        body.get("messages", []),
+        skip=skip,
+        agent_name=agent_name,
+        agent_personality=agent_personality,
+    )
 
     # session_facts 注入: 把员工本 session 内明确告诉过的硬事实 (catfish_remember
     # 写到 ~/.catfish/session_facts.json) 拼到最后一条 system message 末尾.
@@ -1012,6 +1021,26 @@ async def chat_completions(
     # 档 2: 注入 ~/.catfish/employee_journal.md 内容 (LLM 总结过的关键决策 /
     #       偏好 / 里程碑), 模型看到员工"过去几天究竟讲了啥决定了啥"
     body["messages"] = inject_employee_journal(body["messages"])
+
+    # BL-E16 关系建立: 注入 session_meta (距上次 N 天 N 小时 / 今天第几次)
+    # 让 LLM 知道时间感, 跨天回来时能自然说"好几天没找我了".
+    # 同时 tick: 写本次 chat 时间, 累计 today_count.
+    try:
+        meta_block = session_meta.build_meta_block()
+        if meta_block:
+            # 找已有的 system message 拼到末尾; 没有则前插一条
+            inserted = False
+            for m in body["messages"]:
+                if m.get("role") == "system":
+                    m["content"] = (m.get("content") or "") + "\n\n---\n\n" + meta_block
+                    inserted = True
+                    break
+            if not inserted:
+                body["messages"].insert(0, {"role": "system", "content": meta_block})
+        session_meta.tick()
+    except Exception as e:
+        logger.warning("session_meta inject/tick 失败 (无关键路径): %s", e)
+
     # 后台触发: 异步总结 1 个最近结束但没总结过的 session, append 到 journal.
     # fire-and-forget, 不阻塞当前请求, 失败静默. 让 journal 自动持续填充.
     try:

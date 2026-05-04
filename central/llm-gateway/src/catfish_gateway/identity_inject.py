@@ -137,6 +137,8 @@ def inject_identity_if_needed(
     messages: list[dict[str, Any]],
     *,
     skip: bool = False,
+    agent_name: str = "",
+    agent_personality: str = "",
 ) -> list[dict[str, Any]]:
     """如果 messages 里没 system message 且 skip=False, 在前面插 SOUL+memory 作为 system。
 
@@ -145,6 +147,11 @@ def inject_identity_if_needed(
         Hermes 这种已自注入 system 的客户端理论上不需要 skip
         (它发的 messages 第一条就是 system, 我们检测到就不动了)。
         skip 留给"故意不要 catfish 人格"的边缘场景。
+
+    agent_name / agent_personality (BL-E11 五一 sprint 5/3):
+        员工自定义"小鲶"叫啥 + 人设. 默认空 = 用 SOUL 默认 (小鲶 + 温柔同事).
+        非空时在 SOUL 前插 personalization preamble, 优先级高于 SOUL 默认人格.
+        头通过 X-Catfish-Agent-Name / X-Catfish-Agent-Personality 由 Companion 传.
     """
     if skip:
         return messages or []
@@ -158,7 +165,63 @@ def inject_identity_if_needed(
         # 员工还没装 SOUL.md / 没 memory, 静默跳过
         return messages or []
 
+    # BL-E11: 如果员工改名 / 改人设, 拼 preamble 在 SOUL 前面
+    preamble = build_personalization_preamble(agent_name, agent_personality)
+    if preamble:
+        content = preamble + "\n\n---\n\n" + content
+
     return [{"role": "system", "content": content}] + (messages or [])
+
+
+# ─────────────────────────────────────────────
+# BL-E11 命名权 + 人设 (五一 sprint 5/3)
+# ─────────────────────────────────────────────
+
+# 3 档预设人设 — 简单, 不爆改 SOUL.md
+_PERSONALITY_PRESETS: dict[str, str] = {
+    "gentle": "",  # 默认, 跟 SOUL.md 一致, 不加 preamble
+    "direct": (
+        "**人设调整: 直爽风格.** 你说话更短, 不绕弯, 不堆套话. "
+        "答完该答的就停, 不追问废话. 不用 emoji. "
+        "出错直接说哪儿错了 + 怎么改, 不道歉一长串."
+    ),
+    "roast": (
+        "**人设调整: 略带毒舌风格.** 你性子直, 看到员工写得不好/想得不周到时会**轻度吐槽**, "
+        "再给建设性建议 (吐槽 1 句 + 建议 2 句的比例). "
+        "目标不是伤人是让员工记住要点. 关键边界: 涉及员工敏感话题 (健康/家庭/收入) 不吐槽, 切回温柔模式."
+    ),
+}
+
+
+def build_personalization_preamble(agent_name: str, agent_personality: str) -> str:
+    """生成"员工偏好覆盖 SOUL 默认"的 preamble.
+
+    agent_name: 员工给"小鲶"起的别名 (e.g. "老李"). 空 / "小鲶" / "Catfish" 都不动.
+    agent_personality: gentle (默认, 不加) / direct (直爽) / roast (毒舌).
+
+    都默认值 → 返空字符串, 不插 preamble (省 token + 不污染 prompt).
+    """
+    name = (agent_name or "").strip()
+    pers = (agent_personality or "").strip().lower()
+
+    # 完全默认 → 不动
+    is_default_name = name in ("", "小鲶", "Catfish", "catfish")
+    is_default_pers = pers in ("", "gentle")
+    if is_default_name and is_default_pers:
+        return ""
+
+    parts: list[str] = ["# 员工偏好 (优先级最高, 覆盖下面 SOUL 默认人格)"]
+    if not is_default_name:
+        parts.append(
+            f"**员工给你起的名字: {name}** (默认名 '小鲶' 是 brand fallback). "
+            f"这位员工偏好叫你 '{name}'. 在对话中你说自己叫 {name}, "
+            f"不要再说'我是小鲶' / '我是 Catfish'. 介绍自己用 '我是 {name}, 鲶鱼平台的 AI 副手'."
+        )
+    if not is_default_pers and pers in _PERSONALITY_PRESETS:
+        preset = _PERSONALITY_PRESETS[pers]
+        if preset:
+            parts.append(preset)
+    return "\n\n".join(parts)
 
 
 def header_skips_identity(headers) -> bool:
@@ -170,3 +233,20 @@ def header_skips_identity(headers) -> bool:
     """
     val = headers.get("x-catfish-skip-identity", "")
     return val.lower() in ("true", "1", "yes")
+
+
+def header_agent_prefs(headers) -> tuple[str, str]:
+    """从 FastAPI request.headers 取员工自定义的 agent name / personality.
+
+    BL-E11. Header:
+        X-Catfish-Agent-Name        (e.g. "老李")
+        X-Catfish-Agent-Personality (gentle / direct / roast)
+
+    返 (name, personality), 都默认 "" (gateway 会按 SOUL 默认走).
+    """
+    name = headers.get("x-catfish-agent-name", "").strip()
+    personality = headers.get("x-catfish-agent-personality", "").strip().lower()
+    # 防员工传进 personality 不在白名单, 静默 fallback gentle
+    if personality and personality not in _PERSONALITY_PRESETS:
+        personality = "gentle"
+    return name, personality

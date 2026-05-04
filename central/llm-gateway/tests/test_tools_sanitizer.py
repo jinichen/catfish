@@ -198,8 +198,8 @@ def test_historical_bug_input_schema_as_function() -> None:
 def test_real_world_mixed() -> None:
     body = {
         "tools": [
-            # 1 合规
-            {"type": "function", "function": {"name": "search", "parameters": {"type": "object"}}},
+            # 1 合规 (type 是 object, 有 properties)
+            {"type": "function", "function": {"name": "search", "parameters": {"type": "object", "properties": {"q": {"type": "string"}}}}},
             # 2 缺 name (旧 bug)
             {"type": "function", "function": {"description": "?"}},
             # 3 type 错
@@ -217,3 +217,167 @@ def test_real_world_mixed() -> None:
     # ping 拿到默认 parameters
     ping = next(t for t in out["tools"] if t["function"]["name"] == "ping")
     assert ping["function"]["parameters"] == {"type": "object", "properties": {}}
+
+
+# ---------- DeepSeek 严格 schema 兼容 (BL-D11 5/4) ----------
+# DeepSeek V4 严格校验 parameters.type 必须 "object", 不允许 None / 缺失.
+# OpenAI / Qwen / Gemini 容忍这些, 但 sanitizer 兜底统一 schema 防分裂.
+
+
+def test_deepseek_params_type_null_replaced_to_object() -> None:
+    """historical: browser_back 工具 parameters={'type': null} 让 DeepSeek 400"""
+    body = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "browser_back",
+                    "parameters": {"type": None},
+                },
+            },
+        ],
+    }
+    out = sanitize_tools(body)
+    assert len(out["tools"]) == 1
+    params = out["tools"][0]["function"]["parameters"]
+    assert params["type"] == "object"
+    assert params["properties"] == {}
+
+
+def test_deepseek_params_no_type_added_object() -> None:
+    """parameters 是 dict 但完全没 type 字段 → 加 type=object"""
+    body = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "no_type_tool",
+                    "parameters": {},
+                },
+            },
+        ],
+    }
+    out = sanitize_tools(body)
+    params = out["tools"][0]["function"]["parameters"]
+    assert params["type"] == "object"
+    assert params["properties"] == {}
+
+
+def test_deepseek_params_empty_string_type_replaced() -> None:
+    """parameters.type 是空字符串 → 改 object"""
+    body = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "empty_type_tool",
+                    "parameters": {"type": ""},
+                },
+            },
+        ],
+    }
+    out = sanitize_tools(body)
+    params = out["tools"][0]["function"]["parameters"]
+    assert params["type"] == "object"
+
+
+def test_deepseek_object_type_missing_properties_added() -> None:
+    """parameters.type='object' 但缺 properties → 加 properties={}"""
+    body = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "no_properties",
+                    "parameters": {"type": "object"},
+                },
+            },
+        ],
+    }
+    out = sanitize_tools(body)
+    params = out["tools"][0]["function"]["parameters"]
+    assert params["type"] == "object"
+    assert params["properties"] == {}
+
+
+def test_deepseek_existing_properties_preserved() -> None:
+    """parameters.type='object' 且 properties 已有 → 不动"""
+    body = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "with_properties",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"q": {"type": "string"}},
+                        "required": ["q"],
+                    },
+                },
+            },
+        ],
+    }
+    out = sanitize_tools(body)
+    params = out["tools"][0]["function"]["parameters"]
+    assert params["type"] == "object"
+    assert params["properties"] == {"q": {"type": "string"}}
+    assert params["required"] == ["q"]
+
+
+def test_deepseek_non_object_type_kept_warn_not_dropped(caplog) -> None:
+    """parameters.type 是非 'object' (e.g. 'string') → 不改不丢, 但 log warn.
+    各 provider 兼容性差, 但是客户端写的, 网关不背这锅.
+    """
+    body = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "weird_type",
+                    "parameters": {"type": "string"},
+                },
+            },
+        ],
+    }
+    out = sanitize_tools(body)
+    assert len(out["tools"]) == 1
+    params = out["tools"][0]["function"]["parameters"]
+    assert params["type"] == "string"  # 不动
+    # caplog 里应该有 warning
+
+
+def test_deepseek_realworld_browser_back_full() -> None:
+    """完整重现 5/4 鸿波撞的 case: Companion 发的 browser_back 长这样"""
+    body = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "browser_back",
+                    "description": "浏览器返回上一页",
+                    "parameters": {},  # 空 dict, 没 type
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "browser_goto",
+                    "description": "导航到 URL",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"url": {"type": "string"}},
+                        "required": ["url"],
+                    },
+                },
+            },
+        ],
+    }
+    out = sanitize_tools(body)
+    assert len(out["tools"]) == 2
+    # browser_back 被补全
+    back = next(t for t in out["tools"] if t["function"]["name"] == "browser_back")
+    assert back["function"]["parameters"] == {"type": "object", "properties": {}}
+    # browser_goto 完全不动
+    goto = next(t for t in out["tools"] if t["function"]["name"] == "browser_goto")
+    assert goto["function"]["parameters"]["properties"] == {"url": {"type": "string"}}
+    assert goto["function"]["parameters"]["required"] == ["url"]

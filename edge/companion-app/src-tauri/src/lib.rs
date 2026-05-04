@@ -26,6 +26,15 @@ pub fn run() {
         tauri_plugin_global_shortcut::Code::Space,
     );
 
+    // BL-E15 专注模式快捷键 (五一 sprint 5/3 晚) — Cmd+Shift+F.
+    // 触发后给前端发 "catfish:focus_mode_toggle" 事件, App.tsx 切伪 IDE 视图.
+    // 跟召唤快捷键独立, 互不影响.
+    #[cfg(desktop)]
+    let focus_shortcut = tauri_plugin_global_shortcut::Shortcut::new(
+        Some(tauri_plugin_global_shortcut::Modifiers::SUPER | tauri_plugin_global_shortcut::Modifiers::SHIFT),
+        tauri_plugin_global_shortcut::Code::KeyF,
+    );
+
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init());
@@ -35,27 +44,44 @@ pub fn run() {
         builder = builder.plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
-                    use tauri::Manager;
+                    use tauri::{Emitter, Manager};
                     use tauri_plugin_global_shortcut::ShortcutState;
                     // 只在 Pressed 时响应 (Released 也会触发, 不去重就抖)
-                    if shortcut != &toggle_shortcut || event.state() != ShortcutState::Pressed {
+                    if event.state() != ShortcutState::Pressed {
                         return;
                     }
-                    if let Some(window) = app.get_webview_window("main") {
-                        let visible = window.is_visible().unwrap_or(false);
-                        let focused = window.is_focused().unwrap_or(false);
-                        if visible && focused {
-                            // 已经在前台 → 收起 (再按一次召唤 toggle)
-                            let _ = window.hide();
-                        } else {
-                            // 召唤: 解最小化 → 显示 → 居中 → 抢焦
-                            // 注意: 不调 set_always_on_top, 否则 macOS 上窗口被提到
-                            // NSFloatingWindowLevel, 最小化按钮失效, dock 单击也不响应.
+                    // 召唤快捷键 Cmd+Shift+Space
+                    if shortcut == &toggle_shortcut {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let visible = window.is_visible().unwrap_or(false);
+                            let focused = window.is_focused().unwrap_or(false);
+                            if visible && focused {
+                                // 已经在前台 → 收起 (再按一次召唤 toggle)
+                                let _ = window.hide();
+                            } else {
+                                // 召唤: 解最小化 → 显示 → 居中 → 抢焦
+                                // 注意: 不调 set_always_on_top, 否则 macOS 上窗口被提到
+                                // NSFloatingWindowLevel, 最小化按钮失效, dock 单击也不响应.
+                                let _ = window.unminimize();
+                                let _ = window.show();
+                                let _ = window.center();
+                                let _ = window.set_focus();
+                            }
+                        }
+                        return;
+                    }
+                    // BL-E15 专注模式 Cmd+Shift+F → 给前端发事件 (toggle, 不区分开/关).
+                    // 顺手把窗口拉到前台 (没显示就显示), 切完员工立刻看到伪 IDE.
+                    if shortcut == &focus_shortcut {
+                        if let Some(window) = app.get_webview_window("main") {
                             let _ = window.unminimize();
                             let _ = window.show();
-                            let _ = window.center();
                             let _ = window.set_focus();
+                            if let Err(e) = window.emit("catfish:focus_mode_toggle", ()) {
+                                log::warn!("emit focus_mode_toggle 失败: {e}");
+                            }
                         }
+                        return;
                     }
                 })
                 .build(),
@@ -67,7 +93,7 @@ pub fn run() {
             #[cfg(desktop)]
             tray::install(app.handle())?;
 
-            // 注册全局快捷键 Cmd+Shift+Space (浮窗召唤)
+            // 注册全局快捷键 Cmd+Shift+Space (浮窗召唤) + Cmd+Shift+F (BL-E15 专注模式)
             #[cfg(desktop)]
             {
                 use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -75,6 +101,11 @@ pub fn run() {
                     log::warn!("注册 Cmd+Shift+Space 失败 (已被其他 app 占用?): {e}");
                 } else {
                     log::info!("已注册全局快捷键 Cmd+Shift+Space → 召唤鲶鱼浮窗");
+                }
+                if let Err(e) = app.global_shortcut().register(focus_shortcut) {
+                    log::warn!("注册 Cmd+Shift+F 失败 (已被其他 app 占用?): {e}");
+                } else {
+                    log::info!("已注册全局快捷键 Cmd+Shift+F → 切专注模式");
                 }
             }
 
@@ -163,6 +194,12 @@ pub fn run() {
             commands::speech::speech_start_recording,
             commands::speech::speech_stop_and_transcribe,
             commands::speech::speech_cancel_recording,
+            // BL-E11 命名权 (五一 sprint 5/3 晚): 员工自定义鲶鱼名 + 人设
+            commands::agent::get_agent_prefs,
+            commands::agent::set_agent_prefs,
+            // BL-E16 关系建立 (五一 sprint 5/3 晚): "鲶鱼对你的印象" 透明 + 清空
+            commands::relation::relation_summary,
+            commands::relation::relation_forget,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

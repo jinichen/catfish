@@ -243,6 +243,38 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 |---|---|---|---|---|
 | BL-E26 | #24 | Hermes 自定义 skill namespace (catfish 独立 namespace 不混 productivity) | ✅ 4-29 (绕路) | catfish skill 走独立 catfish_run_skill 工具 + skills/<namespace>/<skill>/ 目录, 不混入 hermes namespace. 实质等价 |
 
+### E.10 🐟 桌面状态浮宠 (Codex pet 同思路, 鸿波 5/4 拍板归档)
+
+> **背景**: 鸿波 5/4 看到 OpenAI Codex 加了"电子宠物" (桌面悬浮动画显 AI 状态), 问"我们要不要做". 评估: **应该做, demo 后 ship**.
+> **跟 brand kit 完美契合**: 我们 5/3 做的 mascot SVG (圆胖鲶鱼 + 双须) 物化到桌面.
+> **跟 BL-E11/E15/E19 (人格 sprint) 同思路**: AI 从"工具" → "在场的存在".
+
+| ID | 阶段 | 估时 | 何时 | 范围 |
+|---|---|---|---|---|
+| BL-E27.1 | MVP — 4 状态浮窗 + 双击唤起 | 2-3 天 | 5/22-5/24 (demo 后第 1 周) | Tauri secondary window 80×80 透明 + always on top + 不抢 focus; mascot SVG + CSS 游动动画; 4 状态 (idle/thinking/running/done); 单击 popover, 双击唤 Companion; 右键菜单 (隐藏/切位置/设置) |
+| BL-E27.2 | Polish — 拖拽 + persona 联动 | 3-5 天 | 5/25-5/30 | 拖拽 4 屏角 + localStorage 持久化; 鱼眼跟随鼠标 ("它在看你"); 跟 BL-E11 3 档 personality 联动 (gentle/direct/roast 不同游动节奏); idle 时呼吸感 |
+| BL-E27.3 | 联动 — 主动闲聊 + 专注模式 + 全屏检测 | 2-3 天 | 6 月初 | BL-E13 触发时桌宠**游到屏幕中央** + 弹起话题; BL-E15 专注模式时淡出; 检测全屏/视频会议自动隐藏; 隐私模式一键 invisible |
+
+**MVP 4 状态视觉:**
+- **idle**: 静止 + 慢飘 (30 秒一次轻微扭尾)
+- **thinking**: 头顶冒小气泡 (BL-E16 关系建立时也用)
+- **running tool**: 旋转图标 + 浮 tool 名 tooltip
+- **done**: 闪 ✓ + 1 秒回 idle
+
+**demo 现场怎么用** (彩排彩排时演练, 不是 demo 当天即兴):
+- 上半场 (15 min, 硬实力 RBAC/Quota/审计) → **桌宠隐藏** (太轻佻减分)
+- 下半场 (5 min, 同事感 BL-E11/E15/E19) → **召唤桌宠**
+  - 起名"小老李" → 桌宠出现 + 名牌
+  - 让它写汇报 → thinking 气泡
+  - Cmd+Tab 切走 → 持续在场
+  - 30s 后 done 闪 ✓ → 切回看文档
+  - 主动闲聊触发 → 桌宠**游到屏幕中央** + 弹话题
+
+**风险点 (5/8 议程时拍板):**
+- macOS Tauri 多窗口实测有坑 (always-on-top vs Mission Control 行为, 多屏幕)
+- 央企严肃场景的"轻佻"风险 → MVP 默认开 + Onboarding 加 toggle "我喜欢桌宠 / 不喜欢"
+- 视频会议屏幕共享时**必须自动隐藏** (BL-E27.3 重要), 防客户开会时桌宠飘进屏幕被领导看到
+
 ---
 
 ## M · 记忆纪律 / 记忆是资产 / 越用越懂 (新, 2026-05-04 鸿波 explicit 拍板)
@@ -289,6 +321,26 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 | BL-F9 | 监控告警: gateway 错误率 / tool-bridge 健康 / hermes 进程崩溃 | ⬜ | 1 周 |
 | BL-F10 | 性能基准测试 (gateway 多 user 并发) | ⬜ | 0.5 周 |
 | BL-F11 | 安全测试 (SSO / RBAC / 审计日志渗透测试) | ⬜ | 1 周 |
+| BL-F12 | session_summarizer 改用 deepseek-flash 替代 Gemini Flash (Gemini 免费配额耗尽撞 'free tier exhausted') | ⬜ 5/8 后 | 5 分钟 (改 1 行 model + 测) |
+| BL-F13 | 修 aiohttp Unclosed client session 警告 (gateway 关闭时 async cleanup 漏 close session) | ⬜ demo 后 | 0.5 天 |
+
+---
+
+## FE · Companion 前端待办
+
+> 5/4 鸿波加 deepseek-v4-flash 时发现的前端 reasoning_content 处理缺失. 单独立 FE 章节, 跟 D 工程后端 / E P3 远期 区分.
+
+| ID | 项 | 状态 | 估时 |
+|---|---|---|---|
+| BL-FE1 | 真主动桌宠 (跟 BL-E27 联动, 看 BL-E27.3) | 见 BL-E27 | — |
+| BL-FE2 | Dashboard 记忆版本卡 (BL-MM4) | 见 BL-MM4 | — |
+| BL-FE3 | **前端原生支持 reasoning_content** — Claude Sonnet 风格 collapsible "深度思考" 段; ChatBubble 加可折叠 reasoning 显示; useChat 加 onReasoning callback; lib/chat.ts 解析 SSE chunk 时 dispatch reasoning_content 跟 content 分开累积 | ⬜ 5/15+ | 1-2 天 |
+| BL-FE4 | Dashboard "你给我的反馈" 卡 (BL-MM6 显式 feedback UI 配套) | 见 BL-MM6 | — |
+| BL-FE5 | Dashboard "鲶鱼对你的认知"画像卡 (BL-MM7 user_profile.json 配套) | 见 BL-MM7 | — |
+
+**BL-FE3 详情**: deepseek-v4-flash thinking 默认开, stream 时 `delta.content=null, delta.reasoning_content="..."`. Companion 当前 `chat.ts:376` 只看 `delta.content` (null 跳过), reasoning 全丢. 演示 thinking 模型时聊天框一直空 / 撞 timeout. 修法: 加 `onReasoning(text)` callback + ChatMessage 折叠 UI ("点击展开思考过程"). 跟 BL-MM6 BL-FE4 同期做最佳.
+
+**对其他模型影响**: 0 副作用. 千问 / 内网 qwen 默认无 reasoning_content, if-check 走原路径; Gemini 3 / OpenAI o1+ / Claude Sonnet 4.5+ 也有 reasoning_content, 改后能正确显. **demo 后 5/15 做, 配合 deepseek-flash 重新打开 thinking.**
 
 ---
 

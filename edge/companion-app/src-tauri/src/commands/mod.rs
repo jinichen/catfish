@@ -8,6 +8,7 @@
 //!   - 每个 #[tauri::command] 必须返回 Result<T, String>，
 //!     错误统一序列化成字符串给前端
 
+pub mod agent;
 pub mod audit;
 pub mod auth;
 pub mod chrome;
@@ -19,6 +20,7 @@ pub mod identity;
 pub mod learning;
 pub mod local_search;
 pub mod logs;
+pub mod relation;
 pub mod session_write;
 pub mod sessions;
 pub mod skill_audit;

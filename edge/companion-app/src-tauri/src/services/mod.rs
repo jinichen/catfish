@@ -3,6 +3,7 @@
 //! 凡是涉及子进程生命周期、跨平台路径解析这类"基础设施"代码都进这里，
 //! commands/ 调它，前端不能直接 invoke。
 
+pub mod agent_prefs;
 pub mod autostart;
 pub mod catfish_paths;
 pub mod endpoints;

@@ -33,6 +33,10 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 
 >     5/8 后议程时间表
 >   - 5/4 晚 3 (记忆纪律): **BL-MM1** SOUL 加"覆盖前 read-then-write + quote 旧值"铁律 (~130 行).
 >     0 代码, 修小鲶之前对话里"夸了'现在就能做'"问题
+>   - 5/4 深夜 4 (DeepSeek tool schema 兼容): **BL-D11** tools_sanitizer 加固 — DeepSeek V4 严格校验
+>     `parameters.type` 必须 'object', 拒绝 None / 缺失. browser_back 等空参数工具被拒.
+>     gateway sanitizer 兜底强制 type='object' + 缺 properties → {}. **+7 测试 / 506/506 全过 / 0 副作用**.
+>     demo 后 BL-FE3 加前端 reasoning_content 原生支持, 配合 deepseek thinking 重开
 
 ---
 
@@ -313,7 +317,13 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 
   Dashboard "鲶鱼对你的印象" 卡 (透明 + 一键清空, 防 creepy);
   17 Python 单测 + 7 Rust 单测
 - ⬜ **BL-E14 鲶鱼吐槽 PPT** (3-5 天, 留下周): pptx parser + critical personality + 拖放 UI
-- 见 `docs/IDEAS.md` § 10/13/14/17 + `docs/BACKLOG.md` BL-E11/E14/E15/E19 (E16 是另外的"社交健康检查")
+- ⬜ **BL-E27 桌面状态浮宠** (5/4 鸿波看到 Codex pet 拍板归档, demo 后 5/22 起 ship, 8-11 天分散 3 周):
+  - BL-E27.1 MVP 4 状态浮窗 + 双击唤起 (2-3 天, 5/22-5/24)
+  - BL-E27.2 Polish 拖拽 + 鱼眼跟随 + persona 联动 (3-5 天, 5/25-5/30)
+  - BL-E27.3 联动 BL-E13/E15 + 全屏自动隐藏 (2-3 天, 6 月初)
+  - **brand 资产物化** — 我们 5/3 做的 mascot SVG 真在桌面游, 是品牌资产最大化使用
+  - **demo 杀手锏** — 下半场"看小老李在角落游来游去, 写好了游过来告诉我"
+- 见 `docs/IDEAS.md` § 10/13/14/17 + `docs/BACKLOG.md` BL-E11/E14/E15/E19/E27 (E16 是另外的"社交健康检查")
 
 #### #28 ★ 记忆纪律 / 记忆是资产 / 越用越懂 (BL-MM1~MM8) [Phase 1.5, 25%]  ★ 5/4 晚拍板 + ship MM1+MM5
 > 鸿波 5/4 共识: **记忆是资产, 错了 update > 删除, 留版本作为成长痕迹**.

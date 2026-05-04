@@ -158,3 +158,124 @@ def test_header_skip_false():
 
 def test_header_missing():
     assert identity_inject.header_skips_identity({}) is False
+
+
+# ─── BL-E11 命名权 + 人设 (五一 sprint 5/3) ───
+
+
+def test_personalization_preamble_default_returns_empty():
+    """全默认 (空 / 小鲶 / gentle) → 不加 preamble, 省 token"""
+    assert identity_inject.build_personalization_preamble("", "") == ""
+    assert identity_inject.build_personalization_preamble("小鲶", "gentle") == ""
+    assert identity_inject.build_personalization_preamble("Catfish", "") == ""
+
+
+def test_personalization_preamble_custom_name_only():
+    """员工改名 '老李', 人设默认 → preamble 只含改名段"""
+    out = identity_inject.build_personalization_preamble("老李", "")
+    assert "员工偏好" in out
+    assert "老李" in out
+    assert "我是 老李" in out
+    assert "我是小鲶" in out  # 提示模型不要再说这句
+    # 不该含人设段 (默认 gentle 无 preset)
+    assert "直爽" not in out
+    assert "毒舌" not in out
+
+
+def test_personalization_preamble_custom_personality_direct():
+    """选 direct 风格, 名字默认"""
+    out = identity_inject.build_personalization_preamble("", "direct")
+    assert "直爽" in out
+    assert "短" in out  # direct preset 提到说话短
+    # 不该含改名段
+    assert "起的名字" not in out
+
+
+def test_personalization_preamble_custom_personality_roast():
+    """选 roast 毒舌风格"""
+    out = identity_inject.build_personalization_preamble("", "roast")
+    assert "毒舌" in out
+    assert "敏感话题" in out  # 关键边界提示
+
+
+def test_personalization_preamble_both_name_and_personality():
+    """名字 + 人设都改"""
+    out = identity_inject.build_personalization_preamble("老李", "roast")
+    assert "老李" in out
+    assert "毒舌" in out
+    # preamble 头一致
+    assert out.startswith("# 员工偏好")
+
+
+def test_personalization_preamble_unknown_personality_fallback():
+    """传未知 personality → 静默忽略 (不抛错, 不加 preset 段)"""
+    out = identity_inject.build_personalization_preamble("老李", "weirdmood")
+    assert "老李" in out
+    # 未知 personality 不该泄进 prompt
+    assert "weirdmood" not in out
+
+
+def test_header_agent_prefs_full():
+    """header 都给齐"""
+    h = {"x-catfish-agent-name": "老李", "x-catfish-agent-personality": "direct"}
+    name, pers = identity_inject.header_agent_prefs(h)
+    assert name == "老李"
+    assert pers == "direct"
+
+
+def test_header_agent_prefs_partial():
+    """只给 name"""
+    name, pers = identity_inject.header_agent_prefs({"x-catfish-agent-name": "小赵"})
+    assert name == "小赵"
+    assert pers == ""
+
+
+def test_header_agent_prefs_empty():
+    """都不给 → 双空"""
+    assert identity_inject.header_agent_prefs({}) == ("", "")
+
+
+def test_header_agent_prefs_unknown_personality_silent_fallback():
+    """member 用客户端传了不在白名单的 personality → 静默 fallback gentle"""
+    h = {"x-catfish-agent-personality": "tsundere"}
+    _, pers = identity_inject.header_agent_prefs(h)
+    assert pers == "gentle"  # 不抛错, 不让 weird 值泄到 preamble 函数
+
+
+def test_inject_identity_with_agent_name(tmp_path, monkeypatch):
+    """端到端: 注入 SOUL 时, agent_name 触发 preamble 在前"""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    soul = tmp_path / ".hermes" / "SOUL.md"
+    soul.parent.mkdir(parents=True)
+    soul.write_text("# 你是小鲶\n你是 catfish 平台的 AI 副手.", encoding="utf-8")
+    identity_inject._cache.clear()  # 清缓存
+
+    out = identity_inject.inject_identity_if_needed(
+        [{"role": "user", "content": "你好"}],
+        agent_name="老李",
+        agent_personality="direct",
+    )
+    # 第 0 条是 system, 含 preamble + SOUL
+    assert out[0]["role"] == "system"
+    sys_content = out[0]["content"]
+    assert "员工偏好" in sys_content
+    assert "老李" in sys_content
+    assert "直爽" in sys_content
+    # SOUL 在 preamble 之后
+    soul_idx = sys_content.find("你是小鲶")
+    pream_idx = sys_content.find("员工偏好")
+    assert pream_idx < soul_idx
+    # user 消息原样保留
+    assert out[1]["role"] == "user"
+
+
+def test_inject_identity_default_no_preamble(tmp_path, monkeypatch):
+    """默认参数 → 不加 preamble (省 token)"""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    soul = tmp_path / ".hermes" / "SOUL.md"
+    soul.parent.mkdir(parents=True)
+    soul.write_text("SOUL 内容", encoding="utf-8")
+    identity_inject._cache.clear()
+
+    out = identity_inject.inject_identity_if_needed([{"role": "user", "content": "hi"}])
+    assert "员工偏好" not in out[0]["content"]

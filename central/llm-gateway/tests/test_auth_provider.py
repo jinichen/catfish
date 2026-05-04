@@ -32,12 +32,16 @@ from catfish_gateway.auth import (
 class TestDevTokenProviderBasic:
     def test_happy_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CATFISH_DEV_TOKEN", "secret123")
+        # 五一 sprint 5/2 多账号 dev mode: 没配 dev_users.yaml 时 sub 改 email 形态
+        # (dev-user@catfish.dev), 跟 SSO 的 sub 形态对齐. 老测试期望 "dev-user" 已过期.
+        monkeypatch.delenv("CATFISH_DEV_USERS_FILE", raising=False)
         p = DevTokenProvider()
         user = p.verify_bearer("Bearer secret123")
         assert user is not None
-        assert user.sub == "dev-user"
+        assert user.sub == "dev-user@catfish.dev"
         assert user.department == "engineering"
-        assert user.tier == "employee"
+        # 多账号 dev mode: 默认 dev-user 提到 admin tier (方便本机测 RBAC 全功能)
+        assert user.tier == "admin"
         assert user.auth_method == "dev_token"
 
     def test_default_token_when_env_unset(
