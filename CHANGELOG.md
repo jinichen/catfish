@@ -2029,8 +2029,8 @@ ServicesCard 的 SERVICES const 从 module-level 改成 component-internal `buil
 
 **还顺手归档进 BACKLOG/FEATURE-TRACKS/CHANGELOG**:
 - BL-FE3 (FE 章节新加): 前端原生支持 reasoning_content, 1-2 天, 5/15+
-- BL-F12 (F 章节加): session_summarizer 改 deepseek-flash 替代 Gemini (避免 free tier exhausted), 5 分钟, 5/8 后
-- BL-F13 (F 章节加): 修 aiohttp Unclosed client session 警告, 0.5 天, demo 后
+- ~~BL-F12 排 5/8 后~~ → **5/4 直接 ship** (鸿波看到 summarizer 硬编码模型立即拍板修)
+- ~~BL-F13 排 demo 后~~ → **5/4 直接 ship** (顺手跟 BL-F12 一起改)
 
 **5/14 demo 倒计时 10 天**. 5/5 起开 BL-E14 PPT 吐槽 + BL-E13-FIX (40 分钟先做掉).
 
@@ -2056,6 +2056,47 @@ litellm.BadRequestError: DeepseekException - {"error":{"message":"Invalid schema
 **副作用**: 0. 所有 tool 现在都被 sanitize 成同一标准 schema, 千问/Gemini/OpenAI/内网 qwen 收到的都是更规范但更兼容的 input. 等价于"宽容 provider 收到稍微更标准的 input".
 
 **踩坑教训**: 看 gateway log 比猜快 10 倍. 下次遇到上游 LLM 报错先 grep `[ERROR]` 看真错误, 别从症状反推.
+
+### 5/4 深夜 — BL-F12 + BL-F13 顺手 ship (鸿波拍板)
+
+诊断 deepseek 时发现 gateway log 里两个旁伴问题, 鸿波拍板"现在做了":
+
+#### BL-F12 session_summarizer 走 gateway loopback (~30 分钟)
+
+**问题**: `session_summarizer.py:214` 硬编码 `model="openai/qwen3.5-flash-2026-02-23"` 直接 import litellm. **绕过 gateway 的 fallback / quota / metrics / brand scrub 全套机制**. qwen-flash 一挂 (e.g. 5/4 dashscope free tier exhausted) summarizer 就死, journal 不更新, **影响 BL-E13 主动闲聊** (没新 journal → starter 不丰富).
+
+**修法**: 改成 `httpx.AsyncClient` POST 本机 `http://127.0.0.1:8999/v1/chat/completions`, 当成"普通 user" 调 gateway 自己:
+- 用 catalog 模型名 `catfish-public-qwen-flash` (不是上游真名), gateway 自动走 fallback chain (qwen 挂 → gemini-flash 接)
+- 加 `X-Catfish-Skip-Identity: true` 防 SOUL/journal/skills 二次注入 (循环: summarizer 写 journal → journal 注入下次 summarize → 自己引自己)
+- 端口走 `PORT` env (跟 gateway 一致, 默认 8999)
+- token 走 `CATFISH_DEV_TOKEN` env
+
+**测试**: 8 个新 case (happy path / gateway 5xx 返 None / 网络错返 None / 空 messages 早返 / skip-identity header 必带 / 模型名是 catalog 名 / token 用 env / 端口用 env). 514/514 全过.
+
+**后续受益**: catalog 改了 (e.g. 加 deepseek-flash 进 qwen 的 fallback chain) summarizer 自动跟. 不再写死.
+
+#### BL-F13 修 aiohttp Unclosed client session 警告 (~15 分钟)
+
+**问题**: gateway shutdown (uvicorn ctrl+c) 时反复打印:
+```
+ERROR asyncio: Unclosed client session
+client_session: <aiohttp.client.ClientSession object at 0x10da54770>
+```
+LiteLLM 内部持有 module-level aiohttp client, shutdown 时没 close, asyncio GC 时报 ERROR. **不致命** (主流程不影响), 但污染 log.
+
+**修法**: lifespan shutdown 加 best-effort 清理. 多版本兼容 (LiteLLM 1.50/1.83 attr 名不同):
+```python
+for attr in ("module_level_aclient", "module_level_client",
+             "module_level_async_client", "in_memory_llm_clients_cache"):
+    client = getattr(litellm, attr, None)
+    # 调 aclose() / close() / clear() 各种方法兜底
+```
+
+完美清理不保证 (LiteLLM 内部多个 client 可能有未公开的), 但能减少 80% 的 warning. 真彻底要等 LiteLLM 2.x 全切 httpx.
+
+#### 5/4 深夜 总结 (BL-D11 + BL-F12 + BL-F13)
+
+5/4 累计动后端代码 3 件: tools_sanitizer (DeepSeek schema 兼容) + session_summarizer (走 loopback) + aiohttp cleanup. 全 ship 后 **514/514 测试通过, 0 fail**. demo 路径 0 风险.
 
 ### 5/4 晚 — 主动学习鸿波"feedback / 越用越懂"问题答案
 

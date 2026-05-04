@@ -321,8 +321,8 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 | BL-F9 | 监控告警: gateway 错误率 / tool-bridge 健康 / hermes 进程崩溃 | ⬜ | 1 周 |
 | BL-F10 | 性能基准测试 (gateway 多 user 并发) | ⬜ | 0.5 周 |
 | BL-F11 | 安全测试 (SSO / RBAC / 审计日志渗透测试) | ⬜ | 1 周 |
-| BL-F12 | session_summarizer 改用 deepseek-flash 替代 Gemini Flash (Gemini 免费配额耗尽撞 'free tier exhausted') | ⬜ 5/8 后 | 5 分钟 (改 1 行 model + 测) |
-| BL-F13 | 修 aiohttp Unclosed client session 警告 (gateway 关闭时 async cleanup 漏 close session) | ⬜ demo 后 | 0.5 天 |
+| BL-F12 | session_summarizer 改成走本机 gateway HTTP loopback (替代直接 import litellm 绕过 fallback). catalog fallback chain 自动接管 (qwen 挂时 gemini-flash 接). 复用 quota / metrics / brand scrub | ✅ 5/4 | 30 分钟 (httpx.AsyncClient + skip-identity header + 8 单测) |
+| BL-F13 | 修 aiohttp Unclosed client session 警告 (gateway shutdown 时 LiteLLM 内部 client 没 close, asyncio 报 ERROR). lifespan shutdown 加 best-effort 清理 (兼容 LiteLLM 多版本 attr 名) | ✅ 5/4 | 15 分钟 |
 
 ---
 

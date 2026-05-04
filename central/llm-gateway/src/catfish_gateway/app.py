@@ -167,6 +167,35 @@ async def lifespan(app: FastAPI):
         await refresh_task
     except asyncio.CancelledError:
         pass
+
+    # BL-F13 (5/4): 清 LiteLLM 内部 aiohttp / httpx client, 减少 "Unclosed client session"
+    # warning. LiteLLM 1.50+ 用 httpx 主路径但仍持有少量 aiohttp module-level client,
+    # uvicorn ctrl+c 时这些没 close, asyncio 报 ERROR. 不致命但污染 log.
+    # best-effort: 多个属性名兼容 LiteLLM 版本.
+    try:
+        for attr in ("module_level_aclient", "module_level_client",
+                     "module_level_async_client", "in_memory_llm_clients_cache"):
+            client = getattr(litellm, attr, None)
+            if client is None:
+                continue
+            close = getattr(client, "aclose", None) or getattr(client, "close", None)
+            if close is not None:
+                try:
+                    result = close()
+                    if asyncio.iscoroutine(result):
+                        await result
+                except Exception:
+                    pass  # 个别 client cleanup 失败不影响其他
+            # cache-like 对象
+            clear = getattr(client, "clear", None)
+            if clear is not None:
+                try:
+                    clear()
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.debug("LiteLLM client cleanup (best-effort): %s", e)
+
     logger.info("catfish-gateway shutting down")
 
 

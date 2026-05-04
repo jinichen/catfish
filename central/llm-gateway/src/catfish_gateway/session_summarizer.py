@@ -180,7 +180,15 @@ async def _summarize_with_llm(
 ) -> str | None:
     """调 LLM 总结. 失败返 None.
 
-    用 catfish-public-qwen-flash (国内可达). 如果不可达自动 fallback (gateway 自带 fallback chain).
+    走本机 gateway HTTP (BL-F12 5/4 鸿波 explicit 拍板, 之前直接 import litellm 绕过 gateway):
+    - 自动 fallback (catalog 里 catfish-public-qwen-flash 的 chain: qwen → gemini-flash)
+    - 复用 quota / metrics / brand scrub
+    - catalog 改了 summarizer 跟着改, 不再写死模型名
+    - 跟主 chat 同一套机制, 一个改全跟
+
+    跟主 chat 区分:
+    - 加 X-Catfish-Skip-Identity: true 防 SOUL/journal/skills/session_history 等再次注入
+      (我们就是在生成 journal 内容, 让 LLM 反过来引一遍 journal 是循环)
     """
     if not messages_pairs:
         return None
@@ -194,33 +202,41 @@ async def _summarize_with_llm(
 
     user_prompt = _SUMMARY_PROMPT + f"\n\n会话历史:\n\n{context}"
 
-    # 调 LiteLLM 总结. 用 catalog 里 catfish-public-qwen-flash 的真实后端模型名.
-    # 没 DASHSCOPE_API_KEY 直接早返, 不打扰主流程.
     import os  # noqa: PLC0415
+    import httpx  # noqa: PLC0415
 
-    api_key = os.environ.get("DASHSCOPE_API_KEY", "").strip()
-    if not api_key:
-        logger.info(
-            "summarize_with_llm 跳过 session=%s: DASHSCOPE_API_KEY 未设, 总结功能禁用",
-            session_id,
-        )
-        return None
+    # gateway loopback URL — 跟自己同进程, 但走 HTTP 才能复用 fallback / quota / metrics
+    port = os.environ.get("PORT", "8999")
+    gateway_url = f"http://127.0.0.1:{port}/v1/chat/completions"
+    dev_token = os.environ.get("CATFISH_DEV_TOKEN", "dev-token-local")
 
     try:
-        import litellm  # noqa: PLC0415
-
-        response = await litellm.acompletion(
-            # 跟 catalog (config/models.yaml) catfish-public-qwen-flash 一致
-            model="openai/qwen3.5-flash-2026-02-23",
-            messages=[{"role": "user", "content": user_prompt}],
-            api_base="https://dashscope.aliyuncs.com/compatible-mode/v1",
-            api_key=api_key,
-            temperature=0.3,
-            max_tokens=600,
-            timeout=30,
-        )
-        text = response.choices[0].message.content or ""
-        return text.strip()
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                gateway_url,
+                headers={
+                    "Authorization": f"Bearer {dev_token}",
+                    "X-Catfish-Skip-Identity": "true",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    # 走 catalog 模型名, gateway 看到撞错自动 fallback (qwen → gemini-flash)
+                    "model": "catfish-public-qwen-flash",
+                    "messages": [{"role": "user", "content": user_prompt}],
+                    "temperature": 0.3,
+                    "max_tokens": 600,
+                    "stream": False,
+                },
+            )
+            if resp.status_code != 200:
+                logger.warning(
+                    "summarize_with_llm session=%s: gateway 返 %d: %s",
+                    session_id, resp.status_code, resp.text[:300],
+                )
+                return None
+            data = resp.json()
+            text = data.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+            return text.strip() or None
     except Exception as e:
         logger.warning(
             "summarize_with_llm 失败 session=%s: %s", session_id, e
