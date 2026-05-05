@@ -16,12 +16,14 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shutil
 import sys
 from pathlib import Path
 
-HERMES_ROOT = Path.home() / ".hermes" / "hermes-agent"
+# HERMES_DIR env 优先 (B.3 测试 + admin 场景), 默认 ~/.hermes/hermes-agent
+HERMES_ROOT = Path(os.environ.get("HERMES_DIR") or (Path.home() / ".hermes" / "hermes-agent"))
 BACKUP_SUFFIX = ".before-catfish"
 
 
@@ -47,19 +49,10 @@ RULES: list[tuple[str, str, str, str]] = [
         "goodbye: '再见 🐟',",
         "theme.ts: exit message",
     ),
-    # ---------- TS: ui-tui/src/bootBanner.ts ----------
-    (
-        "ui-tui/src/bootBanner.ts",
-        "⚕ Nous Research · Messenger of the Digital Gods",
-        "🐟 鲶鱼平台 · 员工的数字副手",
-        "bootBanner: tagline",
-    ),
-    (
-        "ui-tui/src/bootBanner.ts",
-        "⚕ NOUS HERMES",
-        "🐟 CATFISH",
-        "bootBanner: fallback ASCII",
-    ),
+    # ---------- TS: ui-tui/src/bootBanner.ts (5/5 删除) ----------
+    # hermes 0.11+ 起 bootBanner.ts 文件被删, 字符串迁到 branding.tsx 下面.
+    # 5/5 阶段 A.3 dry-run 在 0.12 上验证: branding.tsx 规则已覆盖该字符串.
+    # 删了原 2 条 (避免 SKIP 警告), 内容靠 branding.tsx 那 2 条规则同步.
     # ---------- TS: ui-tui/src/components/branding.tsx ----------
     (
         "ui-tui/src/components/branding.tsx",
@@ -72,6 +65,17 @@ RULES: list[tuple[str, str, str, str]] = [
         " · Nous Research",
         " · 鲶鱼平台",
         "branding: model row suffix",
+    ),
+    # 0.12 真机检查 (5/5 B.2 brand check 抓到漏点): 当终端列数 < LOGO_WIDTH 时
+    # branding.tsx 的 Banner 组件不渲染 ASCII 大字, fallback 到一行 Text:
+    #   {t.brand.icon} NOUS HERMES
+    # 之前 bootBanner.ts 的"NOUS HERMES → CATFISH" 字符串以为已被 branding.tsx
+    # 现有 2 条规则覆盖 (tagline + model row), 实际**没**覆盖这条 fallback. 必须独加.
+    (
+        "ui-tui/src/components/branding.tsx",
+        "{t.brand.icon} NOUS HERMES",
+        "{t.brand.icon} 鲶鱼",
+        "branding: ASCII fallback when terminal too narrow (LOGO_WIDTH 不够)",
     ),
     # ---------- TS: ui-tui/src/components/appLayout.tsx ----------
     # ⚕ 在这里作为状态栏前缀，改成 🐟
@@ -125,13 +129,73 @@ RULES: list[tuple[str, str, str, str]] = [
         'base = f"鲶鱼 v{VERSION} ({RELEASE_DATE})"',
         "banner.py: 启动 banner 标题",
     ),
-    # ---------- banner.py agent_name fallback（line 519）----------
+    # ---------- banner.py agent_name fallback (5/5 删除) ----------
+    # hermes 0.11+ 起这条字面量没了 (skin fallback 路径换实现).
+    # 5/5 阶段 A.3 dry-run: MISS 不致命 - agent_name 主路径还在 skin_engine.py 4 处全命中.
+    # 删了原规则避免 MISS 警告.
+
+    # ---------- 0.12 新增: cli.py default skin banner ----------
+    # hermes 0.12 cli.py:1727-1728 把 default skin 的 banner line 写死了
+    # ⚠️ 顺序: 长字面量先 replace (line1), 再 replace 短的 (tiny_line).
+    # 否则 tiny_line 的 "⚕ NOUS HERMES" 会先把 line1 里的 "⚕ NOUS HERMES" 部分改了.
     (
-        "hermes_cli/banner.py",
-        'agent_name = _skin_branding("agent_name", "Hermes Agent")',
-        'agent_name = _skin_branding("agent_name", "鲶鱼")',
-        "banner.py: agent_name skin fallback",
+        "cli.py",
+        '"⚕ NOUS HERMES - AI Agent Framework"',
+        '"🐟 鲶鱼 - 员工的数字副手"',
+        "cli.py: default skin banner line1 (0.12 新加)",
     ),
+    (
+        "cli.py",
+        '"⚕ NOUS HERMES"',
+        '"🐟 鲶鱼"',
+        "cli.py: default skin banner tiny_line (0.12 新加)",
+    ),
+
+    # ---------- 0.12 新增: cli.py goodbye 副本 ----------
+    # cli.py:9343-9345 在 hermes_cli/skin_engine.py 之外又写了一份 goodbye fallback.
+    # 用精确的赋值/调用左侧绑死, 防跟 skin_engine.py 的 '"goodbye": "Goodbye! ⚕"'
+    # 字面量重叠 (那条是 'goodbye": ' 前缀, 这两条是 get_active_goodbye(...) 跟
+    # goodbye = ...).
+    (
+        "cli.py",
+        'get_active_goodbye("Goodbye! ⚕")',
+        'get_active_goodbye("再见 🐟")',
+        "cli.py: get_active_goodbye 的 default 入参 (0.12 新加)",
+    ),
+    (
+        "cli.py",
+        'goodbye = "Goodbye! ⚕"',
+        'goodbye = "再见 🐟"',
+        "cli.py: goodbye fallback 赋值 (0.12 新加)",
+    ),
+
+    # ---------- 0.12 新增: hermes_cli/main.py --version 输出 ----------
+    # hermes 0.12 加 cmd_version 子命令在 main.py:5099 直接 print 版本字符串.
+    # 跟 banner.py:327 那条 'f"Hermes Agent v{VERSION}..."' 用的不是同一个变量
+    # (main.py 用 __version__ / __release_date__, banner.py 用 VERSION / RELEASE_DATE),
+    # 所以是独立字面量, 必须单独加规则.
+    (
+        "hermes_cli/main.py",
+        'print(f"Hermes Agent v{__version__} ({__release_date__})")',
+        'print(f"鲶鱼 v{__version__} ({__release_date__})")',
+        "main.py: --version 子命令输出 (0.12 新加)",
+    ),
+
+    # ---------- 0.12 新增: rl_cli.py 退出语 ----------
+    # rl_cli 是 RL 训练用的入口, 普通员工不直接进, 但脱敏一致性还是要改.
+    (
+        "rl_cli.py",
+        '"\\n👋 Goodbye!"',
+        '"\\n👋 再见!"',
+        "rl_cli.py: 正常退出语 (0.12 新加)",
+    ),
+    (
+        "rl_cli.py",
+        '"\\n\\n👋 Interrupted. Goodbye!"',
+        '"\\n\\n👋 中断. 再见!"',
+        "rl_cli.py: 中断退出语 (0.12 新加)",
+    ),
+
     # ---------- skin_engine.py skin 品牌字符串（同一字符串多处一次性替换）----------
     # default / mono / slate / light 四个 skin 都有 `"agent_name": "Hermes Agent"`
     # content.replace() 会把所有 occurrences 都改掉

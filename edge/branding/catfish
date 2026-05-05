@@ -30,6 +30,10 @@ CATFISH_GATEWAY_PORT="${CATFISH_GATEWAY_PORT:-8999}"
 CATFISH_CHROME_DEBUG_HOST="${CATFISH_CHROME_DEBUG_HOST:-127.0.0.1}"
 CATFISH_CHROME_DEBUG_PORT="${CATFISH_CHROME_DEBUG_PORT:-9222}"
 
+# brand patch 自愈相关 (B.3 五一 sprint 5/5)
+CATFISH_REPO_ROOT="${CATFISH_REPO_ROOT:-}"  # 不设则启动时自动定位
+CATFISH_BRAND_PATCH_AUTO_HEAL="${CATFISH_BRAND_PATCH_AUTO_HEAL:-1}"  # 1=自动 re-apply, 0=只警告
+
 # ---------- 代理环境净化 ----------
 # 背景: hermes 的 httpx client 只看 HTTPS_PROXY (无视 NO_PROXY), 员工 shell 里
 #       常设 HTTPS_PROXY=127.0.0.1:7890 (Clash/Mihomo) → hermes 把"调网关"的
@@ -94,6 +98,79 @@ try:
 except Exception:
     pass
 PY
+}
+
+# ---------- brand patch 自愈 (B.3 五一 sprint 5/5) ----------
+# 背景: hermes 升级 (0.10 → 0.12 等) 后, ~/.hermes/hermes-agent 内容被替换,
+#       apply_brand_patch.py 之前 patch 过的字串又恢复成 "Hermes Agent" / "Nous Research".
+#       员工敲 catfish 第一次, 看到 hermes 字眼 = brand 泄漏.
+# 方案: 启动前跑 hermes_brand_check.sh, fail 时自动调 apply_brand_patch.py --apply
+#       让员工无感的 self-heal. 升级后第一次启动多 1-2 秒, 之后 NOOP (patch 已 apply).
+# 容错:
+#   - check 脚本不存在 / patch 脚本不存在 → 跳过 (不阻塞启动)
+#   - re-apply 后还 fail → 警告员工但不阻塞 (员工能进 hermes, 只是会看到 brand 字眼)
+#   - CATFISH_BRAND_PATCH_AUTO_HEAL=0 → 只 check 不 apply (CI/admin 场景)
+# 性能: brand check 全 grep, 28 个 file 总 < 100KB, 100ms 量级. 不显著拖慢启动.
+
+# 定位 catfish 仓库根 (含 edge/hermes-fork/apply_brand_patch.py)
+locate_catfish_repo() {
+    if [ -n "$CATFISH_REPO_ROOT" ] && [ -d "$CATFISH_REPO_ROOT/edge/hermes-fork" ]; then
+        echo "$CATFISH_REPO_ROOT"
+        return 0
+    fi
+    # 从这个脚本所在目录往上找
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local d="$script_dir"
+    while [ "$d" != "/" ]; do
+        if [ -d "$d/edge/hermes-fork" ] && [ -d "$d/tests" ]; then
+            echo "$d"
+            return 0
+        fi
+        d="$(dirname "$d")"
+    done
+    # 找不到
+    return 1
+}
+
+ensure_brand_patch() {
+    local repo
+    if ! repo="$(locate_catfish_repo)"; then
+        return 0  # 找不到仓库 (员工可能装的二进制版, 不是源码克隆), 跳过
+    fi
+
+    local check_sh="$repo/tests/hermes_brand_check.sh"
+    local patch_py="$repo/edge/hermes-fork/apply_brand_patch.py"
+
+    [ -f "$check_sh" ] || return 0
+    [ -f "$patch_py" ] || return 0
+    command -v python3 >/dev/null 2>&1 || return 0
+
+    # 跑 check (静默)
+    if HERMES_DIR="${HERMES_DIR:-$HOME/.hermes/hermes-agent}" bash "$check_sh" >/dev/null 2>&1; then
+        return 0  # patch 状态 OK, NOOP
+    fi
+
+    # check 失败 → 看是不是要自愈
+    if [ "$CATFISH_BRAND_PATCH_AUTO_HEAL" = "0" ]; then
+        echo "${YELLOW:-}brand patch 漂移. 跑 catfish brand-fix 修复, 或 unset CATFISH_BRAND_PATCH_AUTO_HEAL 让 catfish 自动修.${RESET:-}" >&2
+        return 0
+    fi
+
+    # 自动 re-apply
+    echo "${DIM:-}brand patch 漂移 (hermes 升级了?), 自动修中…${RESET:-}" >&2
+    if python3 "$patch_py" --apply >/dev/null 2>&1; then
+        # re-apply 后再 check 一次确认
+        if HERMES_DIR="${HERMES_DIR:-$HOME/.hermes/hermes-agent}" bash "$check_sh" >/dev/null 2>&1; then
+            echo "${GREEN:-}brand patch 已自愈.${RESET:-}" >&2
+            return 0
+        fi
+    fi
+
+    # re-apply 失败 / re-apply 后 check 仍 fail
+    echo "${YELLOW:-}brand patch 自愈失败. hermes 可能又升级了, RULES 需更新." >&2
+    echo "诊断: bash $check_sh 看哪条 FAIL.${RESET:-}" >&2
+    return 0  # 不阻塞启动 — 员工能进 hermes, 只是会看到部分 hermes 字眼
 }
 
 # ---------- 颜色（可被 NO_COLOR / 非 tty 关掉）----------
@@ -215,6 +292,61 @@ cmd_doctor() {
             echo "    ${YELLOW}WARN${RESET} ~/.local/bin 不在 PATH（catfish-* 命令找不到）"
             ;;
     esac
+    echo
+    echo "${BOLD}[Brand patch]${RESET}"
+    cmd_brand_check_quiet
+}
+
+# B.3 五一 sprint 5/5 — brand patch 手动跑入口
+
+cmd_brand_check_quiet() {
+    local repo
+    if ! repo="$(locate_catfish_repo)"; then
+        echo "    ${YELLOW}SKIP${RESET} 找不到 catfish 仓库根 (二进制装?)"
+        return 0
+    fi
+    local check_sh="$repo/tests/hermes_brand_check.sh"
+    if [ ! -f "$check_sh" ]; then
+        echo "    ${YELLOW}缺${RESET} $check_sh 不存在"
+        return 0
+    fi
+    if HERMES_DIR="${HERMES_DIR:-$HOME/.hermes/hermes-agent}" bash "$check_sh" >/dev/null 2>&1; then
+        echo "    ${GREEN}OK${RESET} brand patch 完整, hermes 升级也安全"
+    else
+        echo "    ${YELLOW}WARN${RESET} brand patch 有泄漏. 跑 catfish brand-fix 修复"
+    fi
+}
+
+cmd_brand_check() {
+    local repo
+    if ! repo="$(locate_catfish_repo)"; then
+        echo "${YELLOW}找不到 catfish 仓库根. 设 CATFISH_REPO_ROOT=<path> 或在 catfish 源码内跑${RESET}" >&2
+        return 1
+    fi
+    local check_sh="$repo/tests/hermes_brand_check.sh"
+    if [ ! -f "$check_sh" ]; then
+        echo "${YELLOW}缺 $check_sh${RESET}" >&2
+        return 1
+    fi
+    HERMES_DIR="${HERMES_DIR:-$HOME/.hermes/hermes-agent}" bash "$check_sh"
+}
+
+cmd_brand_fix() {
+    local repo
+    if ! repo="$(locate_catfish_repo)"; then
+        echo "${YELLOW}找不到 catfish 仓库根. 设 CATFISH_REPO_ROOT=<path>${RESET}" >&2
+        return 1
+    fi
+    local patch_py="$repo/edge/hermes-fork/apply_brand_patch.py"
+    if [ ! -f "$patch_py" ]; then
+        echo "${YELLOW}缺 $patch_py${RESET}" >&2
+        return 1
+    fi
+    echo "${BOLD}=== brand patch fix ===${RESET}"
+    python3 "$patch_py" --apply
+    echo
+    echo "${BOLD}=== verify ===${RESET}"
+    cmd_brand_check
 }
 
 # ---------- 主分发 ----------
@@ -236,16 +368,28 @@ main() {
             cmd_doctor "$@"
             exit 0
             ;;
+        brand-check)
+            shift
+            cmd_brand_check "$@"
+            exit $?
+            ;;
+        brand-fix)
+            shift
+            cmd_brand_fix "$@"
+            exit $?
+            ;;
         --raw)
             shift
             nuke_proxy_for_hermes
             ensure_skin
+            ensure_brand_patch
             exec "$HERMES_BIN" "$@"
             ;;
         --no-banner)
             shift
             nuke_proxy_for_hermes
             ensure_skin
+            ensure_brand_patch
             exec "$HERMES_BIN" "$@"
             ;;
         -h|--help)
@@ -257,17 +401,21 @@ ${BOLD}catfish${RESET} - 鲶鱼平台员工入口
     catfish --no-banner        不打 banner 直接进 hermes
     catfish --raw              透传给底层 hermes，不加任何包装
     catfish status             看平台整体状态（gateway / Chrome / 搜索 / SOUL / Hermes）
-    catfish doctor             深度自检
+    catfish doctor             深度自检 (含 brand patch 状态)
+    catfish brand-check        手动跑 brand patch 完整性检查 (升级 hermes 后跑)
+    catfish brand-fix          自动 re-apply brand patch (hermes 升级后第一次跑)
     catfish version            看版本
     catfish <hermes 子命令>    透传给 hermes（chat / model / mcp / sessions ...）
 
 环境变量:
-    CATFISH_KEEP_PROXY=1        不要 unset HTTPS_PROXY/HTTP_PROXY (默认 unset 防代理劫持 localhost)
-    CATFISH_BRAND_SKIN=1        保留 hermes 当前 skin (默认强制 default 防深色终端不可读)
-    CATFISH_DEFAULT_SKIN=<name> 自选要切的 skin 名 (默认 "default", 也可设 "dark" / "daylight" / 等)
-    CATFISH_GATEWAY_HOST        默认 127.0.0.1
-    CATFISH_GATEWAY_PORT        默认 8999
-    CATFISH_CHROME_DEBUG_PORT   默认 9222
+    CATFISH_KEEP_PROXY=1            不要 unset HTTPS_PROXY/HTTP_PROXY (默认 unset 防代理劫持 localhost)
+    CATFISH_BRAND_SKIN=1            保留 hermes 当前 skin (默认强制 default 防深色终端不可读)
+    CATFISH_DEFAULT_SKIN=<name>     自选要切的 skin 名 (默认 "default", 也可设 "dark" / "daylight" / 等)
+    CATFISH_BRAND_PATCH_AUTO_HEAL=0 启动时不自动 re-apply brand patch (CI/admin 场景, 默认 1=自愈)
+    CATFISH_REPO_ROOT=<path>        catfish 仓库根 (默认从脚本位置自动定位, 二进制装时设)
+    CATFISH_GATEWAY_HOST            默认 127.0.0.1
+    CATFISH_GATEWAY_PORT            默认 8999
+    CATFISH_CHROME_DEBUG_PORT       默认 9222
 
 一切问题先跑 catfish doctor 看哪条红 / 黄。
 EOF
@@ -275,10 +423,11 @@ EOF
             ;;
     esac
 
-    # 默认：打 banner，净化代理 env，确保 skin 兼容当前终端，进入 hermes
+    # 默认: 打 banner, 净化代理 env, 确保 skin 兼容当前终端, brand patch 自愈, 进入 hermes
     banner
     nuke_proxy_for_hermes
     ensure_skin
+    ensure_brand_patch
     exec "$HERMES_BIN" "$@"
 }
 
