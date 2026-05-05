@@ -43,6 +43,29 @@ pub fn run() {
         Some(tauri_plugin_global_shortcut::Modifiers::SUPER | tauri_plugin_global_shortcut::Modifiers::SHIFT),
         tauri_plugin_global_shortcut::Code::KeyP,
     );
+    // BL-E27 4 屏角快捷键 (5/5 凌晨拖拽 NSPanel 不工作的妥协):
+    // Option+Shift+1 左上 / 2 右上 / 3 左下 / 4 右下.
+    // ⚠️ 不用 Cmd+Shift+3/4/5 — 跟 macOS 截屏快捷键冲突.
+    #[cfg(desktop)]
+    let pet_corner_tl = tauri_plugin_global_shortcut::Shortcut::new(
+        Some(tauri_plugin_global_shortcut::Modifiers::ALT | tauri_plugin_global_shortcut::Modifiers::SHIFT),
+        tauri_plugin_global_shortcut::Code::Digit1,
+    );
+    #[cfg(desktop)]
+    let pet_corner_tr = tauri_plugin_global_shortcut::Shortcut::new(
+        Some(tauri_plugin_global_shortcut::Modifiers::ALT | tauri_plugin_global_shortcut::Modifiers::SHIFT),
+        tauri_plugin_global_shortcut::Code::Digit2,
+    );
+    #[cfg(desktop)]
+    let pet_corner_bl = tauri_plugin_global_shortcut::Shortcut::new(
+        Some(tauri_plugin_global_shortcut::Modifiers::ALT | tauri_plugin_global_shortcut::Modifiers::SHIFT),
+        tauri_plugin_global_shortcut::Code::Digit3,
+    );
+    #[cfg(desktop)]
+    let pet_corner_br = tauri_plugin_global_shortcut::Shortcut::new(
+        Some(tauri_plugin_global_shortcut::Modifiers::ALT | tauri_plugin_global_shortcut::Modifiers::SHIFT),
+        tauri_plugin_global_shortcut::Code::Digit4,
+    );
 
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
@@ -106,6 +129,48 @@ pub fn run() {
                         }
                         return;
                     }
+                    // BL-E27 4 屏角 Cmd+Shift+1/2/3/4 — 拖拽不工作的妥协.
+                    // 复用 pet_move_corner 命令逻辑 (避免 Rust 重写).
+                    let corner: Option<&str> = if shortcut == &pet_corner_tl {
+                        Some("tl")
+                    } else if shortcut == &pet_corner_tr {
+                        Some("tr")
+                    } else if shortcut == &pet_corner_bl {
+                        Some("bl")
+                    } else if shortcut == &pet_corner_br {
+                        Some("br")
+                    } else {
+                        None
+                    };
+                    if let Some(corner) = corner {
+                        if let Some(pet) = app.get_webview_window("pet") {
+                            // inline 实现, 避免 async 嵌套
+                            if let Ok(Some(monitor)) = pet.current_monitor() {
+                                let m_size = monitor.size();
+                                let m_pos = monitor.position();
+                                const W: i32 = 120;
+                                const H: i32 = 120;
+                                const MARGIN: i32 = 16;
+                                let (x, y) = match corner {
+                                    "tl" => (m_pos.x + MARGIN, m_pos.y + MARGIN),
+                                    "tr" => (m_pos.x + m_size.width as i32 - W - MARGIN, m_pos.y + MARGIN),
+                                    "bl" => (m_pos.x + MARGIN, m_pos.y + m_size.height as i32 - H - MARGIN),
+                                    "br" => (
+                                        m_pos.x + m_size.width as i32 - W - MARGIN,
+                                        m_pos.y + m_size.height as i32 - H - MARGIN,
+                                    ),
+                                    _ => unreachable!(),
+                                };
+                                let _ = pet.set_position(tauri::PhysicalPosition::new(x, y));
+                                // 顺手 show, 员工按这快捷键多半是想看到桌宠
+                                let _ = pet.show();
+                                log::info!("Option+Shift+{} (corner {}): 桌宠移到 ({}, {})",
+                                    match corner { "tl" => 1, "tr" => 2, "bl" => 3, "br" => 4, _ => 0 },
+                                    corner, x, y);
+                            }
+                        }
+                        return;
+                    }
                 })
                 .build(),
         );
@@ -134,6 +199,20 @@ pub fn run() {
                     log::warn!("注册 Cmd+Shift+P 失败 (已被其他 app 占用?): {e}");
                 } else {
                     log::info!("已注册全局快捷键 Cmd+Shift+P → 切桌宠显示/隐藏");
+                }
+                // 4 屏角快捷键 (拖拽妥协方案), 用 Option+Shift+1/2/3/4 避开
+                // macOS 截屏快捷键 (Cmd+Shift+3/4/5).
+                for (sc, label) in [
+                    (pet_corner_tl, "Option+Shift+1 → 桌宠左上"),
+                    (pet_corner_tr, "Option+Shift+2 → 桌宠右上"),
+                    (pet_corner_bl, "Option+Shift+3 → 桌宠左下"),
+                    (pet_corner_br, "Option+Shift+4 → 桌宠右下"),
+                ] {
+                    if let Err(e) = app.global_shortcut().register(sc) {
+                        log::warn!("注册 {label} 失败: {e}");
+                    } else {
+                        log::info!("已注册全局快捷键 {label}");
+                    }
                 }
             }
 
@@ -240,10 +319,11 @@ pub fn run() {
             commands::feedback::feedback_record,
             commands::feedback::feedback_summary,
             commands::feedback::feedback_clear,
-            // BL-E27 spike (5/5 凌晨): 桌宠副窗 toggle + 点击唤主窗
+            // BL-E27 spike (5/5 凌晨): 桌宠副窗 toggle + 点击唤主窗 + 4 屏角切换
             commands::pet::pet_show,
             commands::pet::pet_hide,
             commands::pet::pet_clicked,
+            commands::pet::pet_move_corner,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

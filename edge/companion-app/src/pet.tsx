@@ -74,47 +74,33 @@ function Pet() {
     };
   }, []);
 
-  /** 区分 click vs drag — 鸿波报 5/5 凌晨 "拖拽失败":
-   *  原方案 data-tauri-drag-region 在 NSPanel + acceptFirstMouse:false 不工作.
-   *  改: mousedown 立即 invoke getCurrentWindow().startDragging() (Tauri webview API).
-   *  这样 mousedown 进入 macOS dragging session, 移动鼠标真拖窗, 不动 mouseup 仍回 click. */
-  const downRef = React.useRef<{ x: number; y: number; t: number; moved: boolean } | null>(null);
+  /** 5/5 鸿波"拖不动" 两轮失败后, 拖拽暂时撤销 — Tauri 2 NSPanel +
+   *  transparent + alwaysOnTop 三件套下 data-tauri-drag-region / startDragging /
+   *  setPosition 三条 webview API 均不响应.
+   *
+   *  替代方案: Option+Shift+1/2/3/4 全局快捷键切 4 屏角 (Rust 端 lib.rs 处理).
+   *  BL-E27.1 真做时 (5/22) 用 Rust objc2 NSPanel 私有 API 修真拖拽. */
+  const downRef = React.useRef<{ t: number } | null>(null);
 
-  const onMouseDown = async (e: React.MouseEvent) => {
-    downRef.current = { x: e.clientX, y: e.clientY, t: Date.now(), moved: false };
-    // 主动开 dragging session — 不指望 data-tauri-drag-region 的 attr magic.
-    // 没移动 mouseup 仍回 click 路径.
-    try {
-      await getCurrentWindow().startDragging();
-    } catch (err) {
-      console.warn("startDragging 失败:", err);
-    }
+  const onPointerDown = (_e: React.PointerEvent) => {
+    downRef.current = { t: Date.now() };
   };
 
-  const onMouseMove = (e: React.MouseEvent) => {
-    if (downRef.current) {
-      const dx = Math.abs(e.clientX - downRef.current.x);
-      const dy = Math.abs(e.clientY - downRef.current.y);
-      if (dx > 5 || dy > 5) downRef.current.moved = true;
-    }
-  };
-
-  const onMouseUp = async () => {
+  const onPointerUp = async () => {
     const d = downRef.current;
     downRef.current = null;
     if (!d) return;
     const dt = Date.now() - d.t;
-    // 没动 + 时间短 = click → 唤主窗
-    if (!d.moved && dt < 500) {
+    if (dt < 500) {
       await invoke("pet_clicked").catch((err) => console.warn("pet_clicked:", err));
     }
   };
 
   return (
     <div
-      onMouseDown={onMouseDown}
-      onMouseMove={onMouseMove}
-      onMouseUp={onMouseUp}
+      onPointerDown={onPointerDown}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
       style={{
         width: 120,
         height: 120,
@@ -122,10 +108,10 @@ function Pet() {
         alignItems: "center",
         justifyContent: "center",
         pointerEvents: "auto",
-        cursor: "grab",
+        cursor: "pointer",
         transition: "transform 200ms ease",
       }}
-      title="单击唤鲶鱼 · 拖动可移位置"
+      title="点击唤主窗 · ⌥⇧1/2/3/4 切 4 屏角"
       onMouseEnter={(e) => {
         e.currentTarget.style.transform = "scale(1.1)";
       }}

@@ -137,11 +137,11 @@ export default function AgentPrefsCard() {
                 隐藏
               </button>
               <span style={{ fontSize: 10, color: "var(--catfish-text-muted)", marginLeft: 4 }}>
-                (快捷键 ⌘⇧P)
+                (开/关 ⌘⇧P)
               </span>
             </div>
             <div style={{ fontSize: 10, color: "var(--catfish-text-muted)", marginTop: 4, lineHeight: 1.5 }}>
-              桌宠在屏幕右下角浮动 · 点鲶鱼唤主窗 · 周围空白能穿透到桌面
+              点鲶鱼唤主窗 · 空白处穿透到桌面 · ⌥⇧1/2/3/4 切 4 屏角
             </div>
           </div>
         </>
