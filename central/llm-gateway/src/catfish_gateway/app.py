@@ -1009,9 +1009,13 @@ async def chat_completions(
     config: Config = app.state.config
     model = _resolve_model(config, model_name)
 
-    # is_internal_call = (
-    #     request.headers.get("x-catfish-internal", "").lower() in ("true", "1", "yes")
-    # )
+    # BL-F17 (5/5): 早早判定 internal call, 让后面所有 inject 阶段 (session_meta tick /
+    # prompt_security detector / 等) 都能跳过 internal 调用. 这条**必须**在 line 1074
+    # session_meta tick 之前赋值, 否则 UnboundLocalError. (5/5 17:13 鸿波报 P0,
+    # 之前不知谁不小心注释了, 导致 chat_completions 全 500.)
+    is_internal_call = (
+        request.headers.get("x-catfish-internal", "").lower() in ("true", "1", "yes")
+    )
 
     if not user.can_access(model):
         raise HTTPException(status_code=403, detail=f"access denied to model: {model_name}")
@@ -1162,6 +1166,8 @@ async def chat_completions(
     # 不该消耗员工 quota. 员工 1M/天 预算应该给员工**主对话**用, 不是给后台总结烧.
     # 鸿波 5/5 凌晨 explicit: "summarizer 不要去限制用户的 quota 这才是合理的".
     # 注: 不跳 audit log (透明仍要记, 只标 internal=true 区分).
+    # 注: 这一行跟 line ~1012 的赋值是冗余 (留作 defensive — 防早期赋值被改回去 crash).
+    #     Python 重新绑定同名 local var 同值无害.
     is_internal_call = (
         request.headers.get("x-catfish-internal", "").lower() in ("true", "1", "yes")
     )

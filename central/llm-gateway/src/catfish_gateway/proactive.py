@@ -213,16 +213,51 @@ async def generate_starter() -> dict[str, Any]:
                 )
             if resp.status_code == 200:
                 data = resp.json()
-                text = (data.get("choices", [{}])[0].get("message", {}).get("content", "") or "").strip()
+                # BL-F19+ (5/5 18:30 鸿波报"切到 deepseek 成功但仍 fallback"):
+                # DeepSeek V4 thinking mode 时 content 可能空 (内容在 reasoning_content).
+                # 而我们之前只读 content, 拿到空字符串 → 后面 ValueError.
+                # 改: 优先 content, fallback reasoning_content (deepseek thinking 答案).
+                # 注: reasoning_content 可能含 <think> tag, strip 装饰后还能用.
+                msg = data.get("choices", [{}])[0].get("message", {}) if data.get("choices") else {}
+                text = (
+                    (msg.get("content") or "")
+                    or (msg.get("reasoning_content") or "")
+                ).strip()
                 if attempt_idx > 1:
-                    logger.info("generate_starter 切到第 %d 候选 %s 成功", attempt_idx, chosen_model.name)
+                    logger.info(
+                        "generate_starter 切到第 %d 候选 %s 成功 (text=%d 字)",
+                        attempt_idx, chosen_model.name, len(text),
+                    )
+                # 如果 text 仍为空 (200 但 content + reasoning_content 都空, 罕见),
+                # 不 break, 切下一个候选试.
+                if not text:
+                    last_error = f"200 但 content 空 ({chosen_model.name})"
+                    logger.warning(
+                        "generate_starter %s 200 但 content+reasoning_content 都空, 切下一个",
+                        chosen_model.name,
+                    )
+                    continue
                 break
-            if resp.status_code == 429:
-                logger.info("generate_starter %s 撞 429 quota, 切下一个候选", chosen_model.name)
-                last_error = f"429 quota: {chosen_model.name}"
+            # BL-F19 (5/5 18:00 鸿波报"小鲶不能自动聊天" 修):
+            # 之前只 429 切候选, 5xx 直接 break 不切. 实际场景:
+            #   candidate 1 catfish-private-main → VPN 断 → 502
+            #   candidate 2 catfish-public-qwen-flash → DashScope 免费层 403 → 502
+            #   原代码: candidate 1 502 → break → 不试 candidate 3+ deepseek-flash (健康)
+            # 改成所有 retriable 错误 (429 + 5xx) 都切候选, 跟 BL-F15 后的 summarizer 一致.
+            # 4xx (除 429) 客户端错误 (auth bad / schema 等) break — 切了也是同样错.
+            if resp.status_code == 429 or 500 <= resp.status_code < 600:
+                last_error = f"{resp.status_code} ({chosen_model.name})"
+                logger.info(
+                    "generate_starter %s 返 %d (retriable), 切下一个候选",
+                    chosen_model.name, resp.status_code,
+                )
                 continue
+            # 4xx (auth / schema 等) — 切了也是同错, 直接 break
             last_error = f"{resp.status_code}"
-            logger.warning("generate_starter %s 返 %d, 不再切", chosen_model.name, resp.status_code)
+            logger.warning(
+                "generate_starter %s 返 %d (非 retriable), 不再切",
+                chosen_model.name, resp.status_code,
+            )
             break
         except Exception as e:
             last_error = f"{type(e).__name__}"
