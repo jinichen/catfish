@@ -49,6 +49,12 @@ pub async fn pet_clicked(app: AppHandle) -> Result<(), String> {
 
 /// 把桌宠移到屏幕 4 个角之一 (5/5 鸿波报"拖拽完全不动" 妥协方案).
 /// corner: "tl" | "tr" | "bl" | "br" (top-left/right, bottom-left/right).
+///
+/// 5/5 鸿波二次报"3/4 出屏幕": Retina 屏 monitor.size() 返**物理像素** (2880x1800),
+/// setPosition 物理坐标导致桌宠被定到 logical (1440x900) 屏外. 修: 用 LogicalPosition
+/// + 物理 size 除以 scale_factor 得 logical 尺寸. 顶部留 30px (menu bar),
+/// 底部留 80px (dock 默认估值, 不准但比贴底好).
+///
 /// BL-E27.1 真做 (5/22) 时用 NSPanel objc2 修真拖拽, 那时这命令仍保留作为补充.
 #[tauri::command]
 pub async fn pet_move_corner(app: AppHandle, corner: String) -> Result<(), String> {
@@ -59,26 +65,43 @@ pub async fn pet_move_corner(app: AppHandle, corner: String) -> Result<(), Strin
         .current_monitor()
         .map_err(|e| format!("拿屏幕失败: {e}"))?
         .ok_or_else(|| "找不到当前 monitor".to_string())?;
-    let m_size = monitor.size();
-    let m_pos = monitor.position();
-    // 桌宠窗口尺寸 (跟 tauri.conf.json 一致, 120x120)
+    let m_size = monitor.size();           // PhysicalSize (Retina 2x = 2880x1800)
+    let m_pos = monitor.position();        // PhysicalPosition
+    let scale = monitor.scale_factor();    // 2.0 on Retina, 1.0 on non-Retina
+    // 物理坐标 → logical (员工真实看到的)
+    let logical_w = (m_size.width as f64 / scale) as i32;
+    let logical_h = (m_size.height as f64 / scale) as i32;
+    let logical_pos_x = (m_pos.x as f64 / scale) as i32;
+    let logical_pos_y = (m_pos.y as f64 / scale) as i32;
+
+    // 桌宠窗口 logical 尺寸 (tauri.conf.json width: 120 是 logical, Tauri 默认 logical)
     const W: i32 = 120;
     const H: i32 = 120;
-    // 边距, 别完全贴边 (留 16px)
     const MARGIN: i32 = 16;
+    // macOS 顶部 menu bar 24-30px, 底部 dock 默认 80-100px (员工设置可变, 估个保守值)
+    const TOP_RESERVED: i32 = 32;
+    const BOTTOM_RESERVED: i32 = 80;
 
     let (x, y) = match corner.as_str() {
-        "tl" => (m_pos.x + MARGIN, m_pos.y + MARGIN),
-        "tr" => (m_pos.x + m_size.width as i32 - W - MARGIN, m_pos.y + MARGIN),
-        "bl" => (m_pos.x + MARGIN, m_pos.y + m_size.height as i32 - H - MARGIN),
+        "tl" => (logical_pos_x + MARGIN, logical_pos_y + TOP_RESERVED),
+        "tr" => (
+            logical_pos_x + logical_w - W - MARGIN,
+            logical_pos_y + TOP_RESERVED,
+        ),
+        "bl" => (
+            logical_pos_x + MARGIN,
+            logical_pos_y + logical_h - H - BOTTOM_RESERVED,
+        ),
         "br" => (
-            m_pos.x + m_size.width as i32 - W - MARGIN,
-            m_pos.y + m_size.height as i32 - H - MARGIN,
+            logical_pos_x + logical_w - W - MARGIN,
+            logical_pos_y + logical_h - H - BOTTOM_RESERVED,
         ),
         other => return Err(format!("无效 corner: {other}, 用 tl/tr/bl/br")),
     };
-    pet.set_position(tauri::PhysicalPosition::new(x, y))
+    pet.set_position(tauri::LogicalPosition::new(x as f64, y as f64))
         .map_err(|e| format!("set_position 失败: {e}"))?;
-    log::info!("pet_move_corner({corner}): ({x}, {y})");
+    log::info!(
+        "pet_move_corner({corner}): logical ({x}, {y}) on {logical_w}x{logical_h} (scale {scale})",
+    );
     Ok(())
 }

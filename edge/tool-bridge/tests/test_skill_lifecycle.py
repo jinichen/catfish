@@ -517,3 +517,128 @@ def test_skill_install_force_install_skips_dedup(tmp_path: Path, monkeypatch) ->
         "source_dir": str(src2), "namespace": "personal", "force_install": True,
     })
     assert result["ok"] is True
+
+
+# ── BL-D1 Skills Hub 第 1 件 (5/5 ship): hub URL 拉取 ──
+
+
+def test_skill_install_validates_inputs(tmp_path: Path, monkeypatch) -> None:
+    """source_dir 跟 hub_skill 互斥, 都不传报错, 都传也报错."""
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    monkeypatch.setenv("CATFISH_SKILLS_DIR", str(skills))
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    # 都不传
+    r = skill_install({})
+    assert r["ok"] is False
+    assert "source_dir" in r["error"] or "hub_skill" in r["error"]
+
+    # 都传
+    r = skill_install({"source_dir": "/tmp/x", "hub_skill": "shared/x@latest"})
+    assert r["ok"] is False
+    assert "互斥" in r["error"]
+
+
+def test_install_from_hub_parses_hub_skill(tmp_path: Path, monkeypatch) -> None:
+    """hub_skill = 'ns/name@version' 格式校验. 缺 namespace 应错."""
+    from catfish_tool_bridge.catfish_tools import _install_from_hub
+
+    # 没斜杠
+    r = _install_from_hub("not-a-path", "http://localhost:9001")
+    assert r["ok"] is False
+    assert "ns/name@version" in r["error"]
+
+    # 缺 name
+    r = _install_from_hub("ns/", "http://localhost:9001")
+    assert r["ok"] is False
+    assert "缺" in r["error"] or "格式" in r["error"]
+
+
+def test_install_from_hub_unreachable(tmp_path: Path, monkeypatch) -> None:
+    """hub server 不可达 → 友好 error (不 raise)."""
+    from catfish_tool_bridge.catfish_tools import _install_from_hub
+
+    # 用一个肯定不通的端口
+    r = _install_from_hub("shared/test@latest", "http://127.0.0.1:1")
+    assert r["ok"] is False
+    assert "不可达" in r["error"] or "URLError" in r["error"] or "失败" in r["error"]
+
+
+def test_skill_install_hub_mode_mock(tmp_path: Path, monkeypatch) -> None:
+    """模拟 hub 拉取: monkeypatch _install_from_hub 返一个 staging dir 假装拉成功,
+    然后走原 install 流程 (dedup + dry-run + 复制).
+    """
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    monkeypatch.setenv("CATFISH_SKILLS_DIR", str(skills))
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    # 准备 staging 目录 (模拟 hub 拉到的内容)
+    staging_root = tmp_path / ".catfish" / "skill-staging"
+    staging_root.mkdir(parents=True, exist_ok=True)
+    staging = staging_root / "fakeuuid"
+    staging.mkdir()
+    (staging / "SKILL.md").write_text(
+        '---\nname: hub-skill\nversion: "1.0.0"\ndescription: 来自 hub\n---\n',
+        encoding="utf-8",
+    )
+
+    # mock _install_from_hub 直接返这个 staging
+    from catfish_tool_bridge import catfish_tools
+    monkeypatch.setattr(catfish_tools, "_install_from_hub", lambda *_a, **_kw: {
+        "ok": True,
+        "staging_dir": str(staging),
+        "hub_namespace": "shared",
+        "hub_name": "hub-skill",
+        "hub_version": "1.0.0",
+    })
+
+    result = skill_install({
+        "hub_skill": "shared/hub-skill@latest",
+        "skip_dry_run": True,  # 没 script.py, 跳 dry-run
+    })
+    assert result["ok"] is True, f"hub install 应成功: {result}"
+    assert result["source"] == "hub"
+    assert result["hub_meta"]["hub_skill"] == "shared/hub-skill@latest"
+    assert result["hub_meta"]["hub_namespace"] == "shared"
+    # hub namespace 自动用 (没显式传)
+    assert "shared/hub-skill" in result["installed_path"]
+    # 真复制了
+    assert (skills / "shared" / "hub-skill" / "SKILL.md").exists()
+    # staging 用完已清掉 (防 ~/.catfish/skill-staging/ 堆积)
+    assert not staging.exists()
+
+
+def test_skill_install_hub_namespace_override(tmp_path: Path, monkeypatch) -> None:
+    """员工显式传 namespace 时, override hub 自带的 namespace."""
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    monkeypatch.setenv("CATFISH_SKILLS_DIR", str(skills))
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    staging = tmp_path / ".catfish" / "skill-staging" / "fakeuuid2"
+    staging.mkdir(parents=True)
+    (staging / "SKILL.md").write_text(
+        '---\nname: ns-test\nversion: "1.0.0"\ndescription: x\n---\n',
+        encoding="utf-8",
+    )
+
+    from catfish_tool_bridge import catfish_tools
+    monkeypatch.setattr(catfish_tools, "_install_from_hub", lambda *_a, **_kw: {
+        "ok": True,
+        "staging_dir": str(staging),
+        "hub_namespace": "shared",  # hub 那边是 shared
+        "hub_name": "ns-test",
+        "hub_version": "1.0.0",
+    })
+
+    result = skill_install({
+        "hub_skill": "shared/ns-test@1.0.0",
+        "namespace": "personal",  # 员工显式说要装到 personal
+        "skip_dry_run": True,
+    })
+    assert result["ok"] is True
+    # 装到员工指定的 personal, 不是 hub 的 shared
+    assert (skills / "personal" / "ns-test" / "SKILL.md").exists()
+    assert not (skills / "shared" / "ns-test").exists()

@@ -145,9 +145,12 @@ pub fn relation_summary() -> Result<RelationView, String> {
     if jp.exists() {
         let content = fs::read_to_string(&jp).unwrap_or_default();
         view.journal_size_bytes = content.len() as u64;
-        // 5/5 鸿波拍板: 5 太少, 加到 30 条 (前端 max-height + scroll 装得下).
-        // 30 条覆盖大约 2-3 周的工作记录, 老于这个员工大概率不感兴趣.
-        view.recent_entries = parse_journal(&content, 30);
+        // 5/5 鸿波拍板:
+        //   v1 (5/5 早): 5 → 30 条
+        //   v2 (5/5 凌晨): "不要只限 30 条, 要能垂直滚动看到所有" → 10000 (实际全量)
+        // 跟 sessions_list MAX_SESSIONS=10000 同上限. journal 一年也就几百条,
+        // 远 < 10K. 前端 RelationCard 已有 max-height + overflow:auto 支撑滚动.
+        view.recent_entries = parse_journal(&content, 10000);
     }
 
     // session_meta

@@ -77,7 +77,11 @@ export default function MemoryHistoryCard() {
   };
 
   useEffect(() => {
+    // 5/5 鸿波报"不会立即更新" 跟 RelationCard 同步加 30s polling
     void refresh();
+    const id = setInterval(() => void refresh(), 30_000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const clearKey = async (key: string) => {

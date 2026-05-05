@@ -144,29 +144,47 @@ pub fn run() {
                     };
                     if let Some(corner) = corner {
                         if let Some(pet) = app.get_webview_window("pet") {
-                            // inline 实现, 避免 async 嵌套
+                            // 5/5 鸿波二报"3/4 出屏幕" 修: 用 logical 坐标. Retina 2x 屏
+                            // monitor.size() 返物理像素 (2880x1800), 直接用 setPosition
+                            // 桌宠会被定位到 logical (1440x900) 屏外.
                             if let Ok(Some(monitor)) = pet.current_monitor() {
                                 let m_size = monitor.size();
                                 let m_pos = monitor.position();
+                                let scale = monitor.scale_factor();
+                                let logical_w = (m_size.width as f64 / scale) as i32;
+                                let logical_h = (m_size.height as f64 / scale) as i32;
+                                let logical_pos_x = (m_pos.x as f64 / scale) as i32;
+                                let logical_pos_y = (m_pos.y as f64 / scale) as i32;
                                 const W: i32 = 120;
                                 const H: i32 = 120;
                                 const MARGIN: i32 = 16;
+                                const TOP_RESERVED: i32 = 32;     // menu bar
+                                const BOTTOM_RESERVED: i32 = 80;  // dock 估值
                                 let (x, y) = match corner {
-                                    "tl" => (m_pos.x + MARGIN, m_pos.y + MARGIN),
-                                    "tr" => (m_pos.x + m_size.width as i32 - W - MARGIN, m_pos.y + MARGIN),
-                                    "bl" => (m_pos.x + MARGIN, m_pos.y + m_size.height as i32 - H - MARGIN),
+                                    "tl" => (logical_pos_x + MARGIN, logical_pos_y + TOP_RESERVED),
+                                    "tr" => (
+                                        logical_pos_x + logical_w - W - MARGIN,
+                                        logical_pos_y + TOP_RESERVED,
+                                    ),
+                                    "bl" => (
+                                        logical_pos_x + MARGIN,
+                                        logical_pos_y + logical_h - H - BOTTOM_RESERVED,
+                                    ),
                                     "br" => (
-                                        m_pos.x + m_size.width as i32 - W - MARGIN,
-                                        m_pos.y + m_size.height as i32 - H - MARGIN,
+                                        logical_pos_x + logical_w - W - MARGIN,
+                                        logical_pos_y + logical_h - H - BOTTOM_RESERVED,
                                     ),
                                     _ => unreachable!(),
                                 };
-                                let _ = pet.set_position(tauri::PhysicalPosition::new(x, y));
-                                // 顺手 show, 员工按这快捷键多半是想看到桌宠
+                                let _ = pet.set_position(
+                                    tauri::LogicalPosition::new(x as f64, y as f64),
+                                );
                                 let _ = pet.show();
-                                log::info!("Option+Shift+{} (corner {}): 桌宠移到 ({}, {})",
+                                log::info!(
+                                    "Option+Shift+{} (corner {}): logical ({}, {}) on {}x{} scale {}",
                                     match corner { "tl" => 1, "tr" => 2, "bl" => 3, "br" => 4, _ => 0 },
-                                    corner, x, y);
+                                    corner, x, y, logical_w, logical_h, scale,
+                                );
                             }
                         }
                         return;

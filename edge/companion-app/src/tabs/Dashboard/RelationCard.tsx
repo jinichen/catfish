@@ -44,7 +44,14 @@ export default function RelationCard() {
   };
 
   useEffect(() => {
+    // 5/5 鸿波报"不会立即更新最新数据" 修: 加 30s polling.
+    // gateway 后台 summarizer 每聊几句异步 append journal, 不刷一直显旧的.
     void refresh();
+    const id = setInterval(() => void refresh(), 30_000);
+    return () => clearInterval(id);
+    // refresh 是普通 closure (不 stale, 因为内部 setView/setError 用 setter),
+    // deps 空数组, 跟 mount/unmount 同周期
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const forget = async () => {

@@ -424,20 +424,25 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_skill_install",
         "description": (
-            "本机安装一个 skill — 从一个目录复制到 catfish/skills/<namespace>/<skill-name>/. "
-            "Skills Hub MVP (五一 sprint Day 3, 跨实例 share 是 Phase 3 BL-D1).\n\n"
+            "本机安装一个 skill — 两种来源二选一:\n"
+            "  (A) 本机目录 source_dir (例 ~/Downloads/x-skill/) — Day 3 MVP, 同事拿目录给员工的场景\n"
+            "  (B) 中央 Skills Hub hub_skill (例 'shared/feishu-expense@latest') — Phase 2 (5/5 ship)\n\n"
             "✅ 调用场景:\n"
-            "  - 员工说 '把这个 skill 装上' / '安装 X skill' (员工提供目录路径)\n"
-            "  - 员工拿了同事的 skill 目录, 想装到自己 catfish\n\n"
+            "  - 员工说 '装 hub 里的 X skill' / '从 hub 拿 Y' → 用 hub_skill\n"
+            "  - 员工说 '把这个 skill 装上' (给本地目录) → 用 source_dir\n\n"
             "❌ 不该调用:\n"
             "  - 员工没明确要求安装\n"
             "  - source_dir 在系统目录 (/etc, /usr 等) — 安全考虑拒绝\n\n"
+            "**Hub 模式格式**:\n"
+            "  hub_skill: 'namespace/name@version', 例 'shared/feishu-expense@1.0.0'.\n"
+            "  version 写 'latest' 拿最新版.\n"
+            "  hub_url: 默认 env CATFISH_HUB_URL 或 http://127.0.0.1:9001.\n\n"
             "**安装规则**:\n"
-            "  1. source_dir 必须含 SKILL.md (必须), script.py (可选, 没 script 也行就只 LLM 看 spec)\n"
-            "  2. SKILL.md frontmatter 的 name 字段 → 决定安装到 <namespace>/<name>/\n"
-            "  3. 同名 skill 已存在 → 必须 overwrite=true 才覆盖, 否则拒绝\n"
-            "  4. 安装后自动 audit log + 仪表盘自动出现 (skills_loader 下次扫描就看到)\n\n"
-            "**返回**: {ok, installed_path, error}.\n"
+            "  1. SKILL.md 必须 (script.py 可选)\n"
+            "  2. SKILL.md frontmatter 的 name 字段 → 决定安装路径 <namespace>/<name>/\n"
+            "  3. 同名已存在 → 必须 overwrite=true 才覆盖\n"
+            "  4. 安装后自动 dry-run 验证 + audit log + 仪表盘出现\n\n"
+            "**返回**: {ok, installed_path, error, source: 'local'|'hub'}.\n"
             "**audit**: ~/.catfish/skill_audit.jsonl event_type=install."
         ),
         "input_schema": {
@@ -446,16 +451,32 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
                 "source_dir": {
                     "type": "string",
                     "description": (
-                        "源目录绝对路径或 ~ 开头. 必须含 SKILL.md. "
-                        "例: '~/Downloads/my-new-skill/' 或 '/tmp/shared-skill/'"
+                        "(模式 A) 本机源目录绝对路径或 ~ 开头. 必须含 SKILL.md. "
+                        "例: '~/Downloads/my-new-skill/' 或 '/tmp/shared-skill/'. "
+                        "跟 hub_skill 互斥, 二选一."
+                    ),
+                },
+                "hub_skill": {
+                    "type": "string",
+                    "description": (
+                        "(模式 B) Skills Hub 中央路径, 'namespace/name@version' 格式. "
+                        "例 'shared/feishu-expense@latest' 或 'productivity/eis-export@1.0.0'. "
+                        "跟 source_dir 互斥, 二选一."
+                    ),
+                },
+                "hub_url": {
+                    "type": "string",
+                    "description": (
+                        "(模式 B 用) Skills Hub server base URL. "
+                        "默认 env CATFISH_HUB_URL, 没设默认 http://127.0.0.1:9001."
                     ),
                 },
                 "namespace": {
                     "type": "string",
                     "description": (
-                        "安装到的 namespace, 例 'department' / 'personal' / 'shared'. "
-                        "默认 'personal' (员工本人安装的). "
-                        "工程审定 skill 装 'department' (鸿波 / 工程团队)."
+                        "安装到本机的 namespace, 例 'department' / 'personal' / 'shared'. "
+                        "默认 'personal' (员工本人装的). "
+                        "Hub 模式不写时, 默认走 hub_skill 自带的 namespace."
                     ),
                     "default": "personal",
                 },
@@ -468,7 +489,7 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
                     "default": False,
                 },
             },
-            "required": ["source_dir"],
+            "required": [],
         },
         "emoji": "📦",
         "toolset": "catfish_native",
@@ -2479,22 +2500,173 @@ def _dry_run_skill(skill_dir: Path) -> Dict[str, Any]:
     }
 
 
-def skill_install(args: Dict[str, Any]) -> Dict[str, Any]:
-    """tool: 本机安装 skill — 从 source_dir 复制到 catfish/skills/<namespace>/<name>/.
+def _install_from_hub(
+    hub_skill: str,
+    hub_url: str,
+) -> Dict[str, Any]:
+    """从 Skills Hub server 拉 skill 到 ~/.catfish/skill-staging/<uuid>/.
 
-    跨实例 share 是 Phase 3 BL-D1 (中央 Skills Hub), 这里只做本机版.
+    成功返 {ok: True, staging_dir, hub_namespace, hub_name, hub_version}.
+    失败返 {ok: False, error}.
+
+    流程:
+      1. parse 'ns/name@version' → ns / name / version (version='latest' 默认)
+      2. GET {hub_url}/skills/{ns}/{name}/{version} 拿元信息 + 文件列表
+      3. mkdir staging dir
+      4. 对每个 file, GET {hub_url}/.../files/{path} 写到 staging
+      5. 返 staging_dir, caller 走原 install 流程 (dedup + dry-run + 复制)
+    """
+    import json as _json  # noqa: PLC0415
+    import urllib.request  # noqa: PLC0415
+    import urllib.error  # noqa: PLC0415
+    import uuid as _uuid  # noqa: PLC0415
+
+    # parse 'ns/name@version'
+    if "/" not in hub_skill:
+        return {"ok": False, "error": f"hub_skill 格式错: 期望 'ns/name@version', 拿到 {hub_skill!r}"}
+    ns_part, _, after_slash = hub_skill.partition("/")
+    if "@" in after_slash:
+        name_part, _, version_part = after_slash.partition("@")
+    else:
+        name_part = after_slash
+        version_part = "latest"
+    ns_part = ns_part.strip()
+    name_part = name_part.strip()
+    version_part = version_part.strip() or "latest"
+    if not ns_part or not name_part:
+        return {"ok": False, "error": f"hub_skill 缺 namespace 或 name: {hub_skill!r}"}
+
+    hub_url = hub_url.rstrip("/")
+
+    # 1. 拿元信息
+    meta_url = f"{hub_url}/skills/{ns_part}/{name_part}/{version_part}"
+    try:
+        with urllib.request.urlopen(meta_url, timeout=10) as resp:
+            meta = _json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return {
+                "ok": False,
+                "error": f"hub 里找不到 {hub_skill}. URL: {meta_url}",
+            }
+        return {"ok": False, "error": f"hub GET 元信息失败 ({e.code}): {meta_url}"}
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        return {
+            "ok": False,
+            "error": (
+                f"hub 不可达 ({type(e).__name__}: {e}). 检查 {hub_url} 是否启动 "
+                "(docker compose ps skills-hub) 或网络."
+            ),
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"hub 元信息解析失败: {type(e).__name__}: {e}"}
+
+    files_list = meta.get("files") or []
+    if not files_list:
+        return {"ok": False, "error": f"hub {hub_skill} 元信息里没 files 列表"}
+
+    # 2. 创 staging 目录
+    staging_root = Path.home() / ".catfish" / "skill-staging"
+    staging_root.mkdir(parents=True, exist_ok=True)
+    staging = staging_root / _uuid.uuid4().hex
+    staging.mkdir(parents=True, exist_ok=True)
+
+    # 3. 逐个下载文件
+    real_version = meta.get("version") or version_part
+    for file_path in files_list:
+        if not isinstance(file_path, str) or ".." in file_path or file_path.startswith("/"):
+            # 防 zip-slip 类路径越界
+            continue
+        file_url = (
+            f"{hub_url}/skills/{ns_part}/{name_part}/{real_version}/files/{file_path}"
+        )
+        try:
+            with urllib.request.urlopen(file_url, timeout=20) as resp:
+                content = resp.read()
+        except Exception as e:
+            # 清 staging 防部分文件残留
+            import shutil as _sh  # noqa: PLC0415
+            _sh.rmtree(staging, ignore_errors=True)
+            return {
+                "ok": False,
+                "error": f"hub 下载 {file_path} 失败 ({type(e).__name__}: {e})",
+            }
+        target = staging / file_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+
+    # 4. 验证关键文件
+    if not (staging / "SKILL.md").exists():
+        import shutil as _sh  # noqa: PLC0415
+        _sh.rmtree(staging, ignore_errors=True)
+        return {
+            "ok": False,
+            "error": f"hub 拿到的 {hub_skill} 缺 SKILL.md (元信息里 files={files_list})",
+        }
+
+    return {
+        "ok": True,
+        "staging_dir": str(staging),
+        "hub_namespace": ns_part,
+        "hub_name": name_part,
+        "hub_version": real_version,
+    }
+
+
+def skill_install(args: Dict[str, Any]) -> Dict[str, Any]:
+    """tool: 本机安装 skill — 两种来源:
+      (A) source_dir 本机目录 (Day 3 MVP)
+      (B) hub_skill 'ns/name@version' (5/5 ship, BL-D1 Skills Hub 第 1 件)
 
     args:
-        source_dir: 源目录, 绝对路径或 ~/...
-        namespace: 默认 'personal'
+        source_dir: 模式 A 的本机源目录, 跟 hub_skill 互斥
+        hub_skill: 模式 B 的 hub 路径
+        hub_url: 模式 B 的 hub server base URL, 默认 env CATFISH_HUB_URL or http://127.0.0.1:9001
+        namespace: 安装到本机的 namespace, 默认 'personal'
         overwrite: 默认 False
     """
     source = (args.get("source_dir") or "").strip()
+    hub_skill = (args.get("hub_skill") or "").strip()
     namespace = (args.get("namespace") or "personal").strip()
     overwrite = bool(args.get("overwrite", False))
 
-    if not source:
-        return {"ok": False, "error": "source_dir 必填"}
+    # 模式互斥
+    if source and hub_skill:
+        return {
+            "ok": False,
+            "error": "source_dir 跟 hub_skill 互斥, 二选一",
+        }
+    if not source and not hub_skill:
+        return {
+            "ok": False,
+            "error": "必须传 source_dir (本机目录) 或 hub_skill (hub 路径) 之一",
+        }
+
+    install_source: str  # 'local' | 'hub'
+    hub_meta: Dict[str, Any] = {}
+
+    # 模式 B: hub URL — 先拉到 staging 目录, 当 source_dir 用
+    if hub_skill:
+        hub_url_raw = (args.get("hub_url") or "").strip()
+        if not hub_url_raw:
+            hub_url_raw = os.environ.get("CATFISH_HUB_URL") or "http://127.0.0.1:9001"
+        hub_result = _install_from_hub(hub_skill, hub_url_raw)
+        if not hub_result.get("ok"):
+            return hub_result  # 错误透传
+        source = hub_result["staging_dir"]
+        install_source = "hub"
+        hub_meta = {
+            "hub_skill": hub_skill,
+            "hub_url": hub_url_raw,
+            "hub_namespace": hub_result["hub_namespace"],
+            "hub_name": hub_result["hub_name"],
+            "hub_version": hub_result["hub_version"],
+        }
+        # hub 自带 namespace 时, 如果员工没 explicit 传 namespace, 用 hub 的
+        if "namespace" not in args or not args.get("namespace"):
+            namespace = hub_result["hub_namespace"]
+    else:
+        install_source = "local"
 
     # 展开 ~
     source_path = Path(source).expanduser().resolve()
@@ -2677,16 +2849,31 @@ def skill_install(args: Dict[str, Any]) -> Dict[str, Any]:
     audit_event.update({
         "ok": True,
         "installed_path": str(target_dir),
+        "install_source": install_source,  # 'local' | 'hub'
+        **({"hub_meta": hub_meta} if hub_meta else {}),
     })
     _write_skill_audit(audit_event)
 
+    # 5/5 BL-D1 第 1 件: hub 模式下 staging 目录用完清掉, 防 ~/.catfish/skill-staging/ 堆积
+    if install_source == "hub" and source_path.parent.name == "skill-staging":
+        try:
+            import shutil as _sh  # noqa: PLC0415
+            _sh.rmtree(source_path, ignore_errors=True)
+        except Exception:
+            pass
+
     dry_note = audit_event.get("dry_run", {}).get("note", "")
+    source_label = (
+        f"hub {hub_meta.get('hub_skill')}" if install_source == "hub" else str(source_path)
+    )
     return {
         "ok": True,
         "installed_path": f"{namespace}/{skill_name}",
+        "source": install_source,
+        **({"hub_meta": hub_meta} if hub_meta else {}),
         "summary": (
             f"已安装 skill {namespace}/{skill_name} (v{metadata['version']}) "
-            f"从 {source_path}. dry-run 通过 ({dry_note}). "
+            f"从 {source_label}. dry-run 通过 ({dry_note}). "
             f"仪表盘下次刷新会出现, gateway 重新扫到后 LLM 也能调."
             + (f" 旧版备份: {audit_event.get('backup_path')}" if overwrite else "")
         ),
