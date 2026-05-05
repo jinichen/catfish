@@ -124,6 +124,14 @@ pub fn run() {
             // 员工卡死. 见 services/watchdog.rs.
             services::watchdog::schedule_watchdog();
 
+            // BL-E27 spike (5/5 凌晨): macOS 透明窗 — 不依赖 unsafe NSWindow 调用.
+            // 单纯 transparent:true 在某些 macOS 版本仍白底, macOSPrivateApi:true (config 顶层加)
+            // 让 Tauri 用 NSPanel 替代 NSWindow, NSPanel 默认 backgroundColor=clear,
+            // 配合 pet.html body { background: transparent } 真透明.
+            //
+            // 如果 macOSPrivateApi 还不够 (5/5 鸿波报"白底"), 5/22 BL-E27.1 真做时
+            // 加 tauri-plugin-window-vibrancy crate 用 setBackgroundColor:clearColor.
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -204,6 +212,10 @@ pub fn run() {
             commands::feedback::feedback_record,
             commands::feedback::feedback_summary,
             commands::feedback::feedback_clear,
+            // BL-E27 spike (5/5 凌晨): 桌宠副窗 toggle + 点击唤主窗
+            commands::pet::pet_show,
+            commands::pet::pet_hide,
+            commands::pet::pet_clicked,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

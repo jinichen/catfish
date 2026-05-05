@@ -8,6 +8,16 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react()],
 
+  // 5/5 BL-E27 spike: 多入口 (主 Companion + 桌宠副窗 pet.html)
+  build: {
+    rollupOptions: {
+      input: {
+        main: "index.html",
+        pet: "pet.html",
+      },
+    },
+  },
+
   // Prevent vite from obscuring rust errors
   clearScreen: false,
   server: {

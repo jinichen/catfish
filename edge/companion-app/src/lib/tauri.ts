@@ -121,6 +121,10 @@ export const feedbackSummary = () =>
 
 export const feedbackClear = () => rawInvoke<void>("feedback_clear");
 
+// ── BL-E27 spike: 桌宠副窗 ─────────────────────────────────
+export const petShow = () => rawInvoke<void>("pet_show");
+export const petHide = () => rawInvoke<void>("pet_hide");
+
 // ── sessions (write) —— Plan C Week 2 持久化 ──
 export interface SessionCreateInput {
   model: string;

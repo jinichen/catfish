@@ -7,6 +7,7 @@ import { useState } from "react";
 
 import { PERSONALITY_LABELS, type Personality } from "../../lib/agent";
 import { useAgentStore } from "../../store/agent";
+import { petShow, petHide } from "../../lib/tauri";
 
 export default function AgentPrefsCard() {
   const name = useAgentStore((s) => s.name);
@@ -91,6 +92,52 @@ export default function AgentPrefsCard() {
           <Row label="风格" value={PERSONALITY_LABELS[personality]?.label ?? personality} />
           <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 6, lineHeight: 1.5 }}>
             {PERSONALITY_LABELS[personality]?.desc}
+          </div>
+          {/* BL-E27 spike (5/5 凌晨): 桌宠开关. 临时放这里, 后续 BL-E27.1 ship 时
+              移到 Onboarding consent toggle. */}
+          <div
+            style={{
+              marginTop: "var(--space-3)",
+              paddingTop: "var(--space-2)",
+              borderTop: "1px dashed var(--catfish-border)",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+            }}
+          >
+            <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
+              🐟 桌宠 (实验):
+            </span>
+            <button
+              type="button"
+              onClick={() => void petShow().catch((e) => alert("show 失败: " + e))}
+              style={{
+                fontSize: 11,
+                padding: "3px 10px",
+                border: "1px solid var(--catfish-border)",
+                borderRadius: 4,
+                background: "var(--catfish-bg-cream)",
+                color: "var(--catfish-text)",
+                cursor: "pointer",
+              }}
+            >
+              显示
+            </button>
+            <button
+              type="button"
+              onClick={() => void petHide().catch((e) => alert("hide 失败: " + e))}
+              style={{
+                fontSize: 11,
+                padding: "3px 10px",
+                border: "1px solid var(--catfish-border)",
+                borderRadius: 4,
+                background: "transparent",
+                color: "var(--catfish-text-muted)",
+                cursor: "pointer",
+              }}
+            >
+              隐藏
+            </button>
           </div>
         </>
       ) : (
