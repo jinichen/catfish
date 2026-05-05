@@ -1,72 +1,147 @@
-/** 桌宠副窗入口 (BL-E27 spike, 5/5 凌晨)
+/** 桌宠副窗入口 (BL-E27 五一 sprint 5/5 凌晨, 一次到位版).
  *
- * 跟主 Companion (main.tsx) 平行的副入口. tauri.conf.json 里 label="pet"
- * 的 window 加载 /pet.html, 这里渲染.
+ * 4 件事一次完成 (5/5 鸿波 "为什么喜欢留一块"):
+ *   1. 4 状态联 LLM 真实状态 (idle / thinking / running / done) — listen
+ *      'catfish:agent_status' 事件 (主窗 useChat / tool dispatch 时 emit)
+ *   2. 鼠标穿透 (空白透到桌面) — body pointer-events: none
+ *   3. 拖拽 — 鲶鱼容器加 data-tauri-drag-region, mousedown 不动=click,
+ *      移动 >5px = drag (Tauri 自动切)
+ *   4. 位置持久化 — getCurrentWindow().onMoved 存 localStorage,
+ *      启动 restore (跨会话/重启位置不丢)
  *
- * MVP spike 范围:
- *   - 透明 80×80 区域显示一个鲶鱼 SVG
- *   - CSS keyframes 慢扭尾巴 (idle 状态)
- *   - 单击 → invoke('pet_clicked') → 主窗口聚焦 (TODO 阶段 2)
- *   - 双击 → 同上 (差别先不做, 实操中员工双击概率低)
- *
- * 容错:
- *   - 整个 body pointer-events: none, 只 mascot 容器恢复 auto
- *   - 这样点击窗口的"空白"会穿透到桌面 (Finder 桌面图标可点)
+ * 5/5 spike 验证后, 这一份就是 BL-E27.1 的真 ship.
  */
 
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow, PhysicalPosition } from "@tauri-apps/api/window";
+
+type AgentStatus = "idle" | "thinking" | "running" | "done";
+
+const POS_KEY = "catfish_pet_position";
 
 function Pet() {
-  // BL-E27 spike: idle 状态. 后续 BL-E27.1 加 thinking/running/done 4 状态.
-  const [status] = React.useState<"idle" | "thinking" | "running" | "done">(
-    "idle",
-  );
+  const [status, setStatus] = React.useState<AgentStatus>("idle");
 
-  const onClick = async () => {
+  // 启动: 恢复上次位置 + 监听位移
+  React.useEffect(() => {
+    const win = getCurrentWindow();
+
+    // 恢复 localStorage 存的位置
     try {
-      // TODO BL-E27.1: 真实现 — 把 main window 拉到前台.
-      // 现 spike 只 log 一下, 验证点击事件能到.
-      await invoke("pet_clicked").catch((e) => console.warn("pet_clicked:", e));
+      const raw = localStorage.getItem(POS_KEY);
+      if (raw) {
+        const { x, y } = JSON.parse(raw) as { x: number; y: number };
+        if (typeof x === "number" && typeof y === "number") {
+          void win.setPosition(new PhysicalPosition(x, y));
+        }
+      }
     } catch (e) {
-      console.error(e);
+      console.warn("pet position restore 失败", e);
+    }
+
+    // 监听位移 — 员工拖完桌宠后存位置, 下次启动还原
+    const unlistenPromise = win.onMoved((e) => {
+      try {
+        const { x, y } = e.payload;
+        localStorage.setItem(POS_KEY, JSON.stringify({ x, y }));
+      } catch (err) {
+        console.warn("pet position save 失败", err);
+      }
+    });
+
+    return () => {
+      void unlistenPromise.then((u) => u());
+    };
+  }, []);
+
+  // 监听主窗 emit 的 LLM 状态事件
+  React.useEffect(() => {
+    const unlistenPromise = listen<AgentStatus>("catfish:agent_status", (e) => {
+      const newStatus = e.payload;
+      if (["idle", "thinking", "running", "done"].includes(newStatus)) {
+        setStatus(newStatus);
+        // done 状态自动 2 秒后回 idle (跳完一下歇着)
+        if (newStatus === "done") {
+          setTimeout(() => setStatus("idle"), 2000);
+        }
+      }
+    });
+    return () => {
+      void unlistenPromise.then((u) => u());
+    };
+  }, []);
+
+  /** 区分 click vs drag — 鸿波报 5/5 凌晨 "拖拽失败":
+   *  原方案 data-tauri-drag-region 在 NSPanel + acceptFirstMouse:false 不工作.
+   *  改: mousedown 立即 invoke getCurrentWindow().startDragging() (Tauri webview API).
+   *  这样 mousedown 进入 macOS dragging session, 移动鼠标真拖窗, 不动 mouseup 仍回 click. */
+  const downRef = React.useRef<{ x: number; y: number; t: number; moved: boolean } | null>(null);
+
+  const onMouseDown = async (e: React.MouseEvent) => {
+    downRef.current = { x: e.clientX, y: e.clientY, t: Date.now(), moved: false };
+    // 主动开 dragging session — 不指望 data-tauri-drag-region 的 attr magic.
+    // 没移动 mouseup 仍回 click 路径.
+    try {
+      await getCurrentWindow().startDragging();
+    } catch (err) {
+      console.warn("startDragging 失败:", err);
+    }
+  };
+
+  const onMouseMove = (e: React.MouseEvent) => {
+    if (downRef.current) {
+      const dx = Math.abs(e.clientX - downRef.current.x);
+      const dy = Math.abs(e.clientY - downRef.current.y);
+      if (dx > 5 || dy > 5) downRef.current.moved = true;
+    }
+  };
+
+  const onMouseUp = async () => {
+    const d = downRef.current;
+    downRef.current = null;
+    if (!d) return;
+    const dt = Date.now() - d.t;
+    // 没动 + 时间短 = click → 唤主窗
+    if (!d.moved && dt < 500) {
+      await invoke("pet_clicked").catch((err) => console.warn("pet_clicked:", err));
     }
   };
 
   return (
     <div
-      onClick={onClick}
+      onMouseDown={onMouseDown}
+      onMouseMove={onMouseMove}
+      onMouseUp={onMouseUp}
       style={{
-        // 整个区域居中放 mascot. 80×80 给 SVG, 周围留 20px 防裁切.
         width: 120,
         height: 120,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        // 关键: 这一层 pointer-events 恢复 auto (mascot 接点击),
-        // body 仍 none (窗口空白透明区不拦鼠标).
         pointerEvents: "auto",
-        cursor: "pointer",
-        // 加 hover 视觉反馈, 让员工知道这是可交互的, 不是装饰
+        cursor: "grab",
         transition: "transform 200ms ease",
       }}
+      title="单击唤鲶鱼 · 拖动可移位置"
       onMouseEnter={(e) => {
         e.currentTarget.style.transform = "scale(1.1)";
       }}
       onMouseLeave={(e) => {
         e.currentTarget.style.transform = "scale(1)";
       }}
-      title="点击唤醒鲶鱼"
     >
       <img
         src="/catfish-mascot.svg"
         alt="鲶鱼"
         width={80}
         height={80}
+        draggable={false}
         style={{
           display: "block",
-          // CSS animation: 慢扭尾巴 (idle). 每 30s 一次, 防分散注意力.
+          willChange: "transform",
           animation:
             status === "idle"
               ? "pet-idle-wiggle 4s ease-in-out infinite"
@@ -75,8 +150,6 @@ function Pet() {
               : status === "running"
               ? "pet-running-spin 2s linear infinite"
               : "pet-done-bounce 0.5s ease-out",
-          // GPU 加速防 CPU 飘
-          willChange: "transform",
         }}
       />
       <style>

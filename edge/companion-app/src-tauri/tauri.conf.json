@@ -45,7 +45,7 @@
         "focus": false,
         "visible": false,
         "shadow": false,
-        "acceptFirstMouse": false,
+        "acceptFirstMouse": true,
         "dragDropEnabled": false
       }
     ],

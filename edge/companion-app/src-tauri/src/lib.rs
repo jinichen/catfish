@@ -35,6 +35,15 @@ pub fn run() {
         tauri_plugin_global_shortcut::Code::KeyF,
     );
 
+    // BL-E27 桌宠快捷键 (五一 sprint 5/5 凌晨) — Cmd+Shift+P (Pet).
+    // 切显示 / 隐藏桌宠副窗. 鸿波 spike 后反馈"是不是有快捷键关闭" → 加这条.
+    // 行为: visible → hide; hidden → show.
+    #[cfg(desktop)]
+    let pet_shortcut = tauri_plugin_global_shortcut::Shortcut::new(
+        Some(tauri_plugin_global_shortcut::Modifiers::SUPER | tauri_plugin_global_shortcut::Modifiers::SHIFT),
+        tauri_plugin_global_shortcut::Code::KeyP,
+    );
+
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init());
@@ -83,6 +92,20 @@ pub fn run() {
                         }
                         return;
                     }
+                    // BL-E27 桌宠 Cmd+Shift+P → toggle pet 副窗显示/隐藏
+                    if shortcut == &pet_shortcut {
+                        if let Some(pet) = app.get_webview_window("pet") {
+                            let visible = pet.is_visible().unwrap_or(false);
+                            if visible {
+                                let _ = pet.hide();
+                                log::info!("Cmd+Shift+P: 桌宠隐藏");
+                            } else {
+                                let _ = pet.show();
+                                log::info!("Cmd+Shift+P: 桌宠显示");
+                            }
+                        }
+                        return;
+                    }
                 })
                 .build(),
         );
@@ -106,6 +129,11 @@ pub fn run() {
                     log::warn!("注册 Cmd+Shift+F 失败 (已被其他 app 占用?): {e}");
                 } else {
                     log::info!("已注册全局快捷键 Cmd+Shift+F → 切专注模式");
+                }
+                if let Err(e) = app.global_shortcut().register(pet_shortcut) {
+                    log::warn!("注册 Cmd+Shift+P 失败 (已被其他 app 占用?): {e}");
+                } else {
+                    log::info!("已注册全局快捷键 Cmd+Shift+P → 切桌宠显示/隐藏");
                 }
             }
 

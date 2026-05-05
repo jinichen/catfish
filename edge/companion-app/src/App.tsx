@@ -15,12 +15,16 @@ import { useUIStore } from "./store/ui";
 import { useAgentStore } from "./store/agent";
 import { useFocusStore } from "./store/focus";
 import { useProactiveScheduler } from "./hooks/useProactiveScheduler";
+import { usePetStatusBroadcast } from "./hooks/usePetStatusBroadcast";
 
 export default function App() {
   const activeTab = useUIStore((s) => s.activeTab);
   const loadAgentPrefs = useAgentStore((s) => s.loadAgentPrefs);
   const focusActive = useFocusStore((s) => s.active);
   const toggleFocus = useFocusStore((s) => s.toggle);
+
+  // BL-E27 一次到位: 桌宠状态联动 LLM (idle/thinking/running/done)
+  usePetStatusBroadcast();
 
   // BL-E11 命名权: 启动拉一次 agent prefs (员工自定义鲶鱼名 + 人设),
   // ChatPanel / Onboarding / 通知等多处 UI 共用. Onboarding 改了立即更新 store.
