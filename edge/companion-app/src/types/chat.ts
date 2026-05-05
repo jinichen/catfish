@@ -46,11 +46,18 @@ export interface Attachment {
   /** image 才有: base64 编码 (不含 data URI 前缀, gateway 那边拼) */
   base64?: string;
 
-  /** file 才有: 提取出的纯文本内容 (50KB 截断, 防 token 爆) */
-  text?: string;
+  // 5/5 重构 (preview-only mode): 不再塞全文进 prompt. file attach 只放 preview
+  // (~5K 字), 完整数据 LLM 调 execute_code 走 pandas/openpyxl/pypdfium2 读.
 
-  /** file 才有: 是否被截断 */
-  truncated?: boolean;
+  /** file 才有: parser 类型 — "excel" | "pdf" | "word" | "csv" | "text" */
+  fileKind?: string;
+  /** file 才有: preview 文本 (~5K 字, sheet 列表 + 列头 + 前 N 行 / 前 N 页 / 前 N 段) */
+  previewText?: string;
+  /** file 才有: 结构化元信息. excel: {sheets, row_counts}; pdf: {page_count}; etc */
+  meta?: Record<string, unknown>;
+  /** file 才有: 原文件 absolute path (~/.catfish/uploads/<ts>-<name>),
+   *  LLM 用 execute_code 调 pandas/openpyxl 读完整数据. 永远有 (preview-only mode 下没截断概念). */
+  keptPath?: string;
 }
 
 export interface ChatMessage {

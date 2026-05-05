@@ -98,6 +98,101 @@ interface OpenAIWireMessage {
   tool_call_id?: string;
 }
 
+/** 拼 file attachment 进 prompt (5/5 preview-only 重构).
+ *
+ * 给 LLM 看的不是数据本身, 是个**导航**:
+ *   - 文件类型 / sheet / 行数 / 页数 等 meta
+ *   - 前 N 行 / 前 N 页 / 前 N 段 preview
+ *   - 完整文件路径
+ *   - **强制**说明: 真分析必须 execute_code, 不要基于 preview 猜
+ *
+ * 这样不管 12 个月 Excel 还是 100 页 PDF 都能稳, 任意大小都 scalable.
+ */
+function formatFileAttachment(att: {
+  name: string;
+  fileKind?: string;
+  previewText?: string;
+  meta?: Record<string, unknown>;
+  keptPath?: string;
+}): string {
+  const kind = att.fileKind || "file";
+  const meta = att.meta || {};
+
+  // meta 简短描述, 给 LLM 一眼看出"这文件多大"
+  let metaLine = "";
+  if (kind === "excel") {
+    const sheets = (meta.sheets as string[] | undefined) || [];
+    const counts = (meta.row_counts as Record<string, number> | undefined) || {};
+    const totalRows = Object.values(counts).reduce((a, b) => a + b, 0);
+    metaLine = `Excel · ${sheets.length} 个 sheet (${sheets.join(", ")}) · 共 ${totalRows} 行`;
+  } else if (kind === "pdf") {
+    metaLine = `PDF · ${meta.page_count ?? "?"} 页`;
+  } else if (kind === "word") {
+    metaLine = `Word · ${meta.paragraph_count ?? "?"} 段` +
+      (meta.table_count ? ` · ${meta.table_count} 表格` : "");
+  } else if (kind === "csv") {
+    metaLine = `CSV · ${meta.total_rows ?? "?"} 行`;
+  } else if (kind === "text") {
+    metaLine = `纯文本 · ${meta.total_chars ?? "?"} 字`;
+  } else {
+    metaLine = "文件";
+  }
+
+  const codeHint = (() => {
+    if (kind === "excel") {
+      return (
+        `\n# 推荐: 用 pandas 读完整数据\n` +
+        `import pandas as pd\n` +
+        `xls = pd.ExcelFile("${att.keptPath}")\n` +
+        `print(xls.sheet_names)\n` +
+        `df = pd.read_excel("${att.keptPath}", sheet_name="<sheet名>")\n` +
+        `# 然后 df.head() / df.describe() / df.groupby() ...`
+      );
+    }
+    if (kind === "pdf") {
+      return (
+        `\n# 推荐: 用 pypdfium2 读全文\n` +
+        `import pypdfium2 as pdfium\n` +
+        `pdf = pdfium.PdfDocument("${att.keptPath}")\n` +
+        `for i in range(len(pdf)):\n` +
+        `    print(pdf[i].get_textpage().get_text_range())`
+      );
+    }
+    if (kind === "word") {
+      return (
+        `\n# 推荐: 用 python-docx 读全文 + 表格\n` +
+        `from docx import Document\n` +
+        `doc = Document("${att.keptPath}")\n` +
+        `for p in doc.paragraphs: print(p.text)\n` +
+        `for t in doc.tables: ...`
+      );
+    }
+    if (kind === "csv") {
+      return (
+        `\n# 推荐: pandas 读\n` +
+        `import pandas as pd\n` +
+        `df = pd.read_csv("${att.keptPath}")\n` +
+        `# df.describe() / df.groupby() ...`
+      );
+    }
+    return (
+      `\n# 推荐: 直接 open 读\n` +
+      `with open("${att.keptPath}", encoding="utf-8") as f:\n` +
+      `    data = f.read()`
+    );
+  })();
+
+  return (
+    `\n\n=== 附件: ${att.name} (${metaLine}) ===\n` +
+    `[完整文件: ${att.keptPath}]\n\n` +
+    `--- preview (仅前部分, 用 execute_code 读完整) ---\n` +
+    `${att.previewText || "(空)"}\n` +
+    `--- /preview ---\n\n` +
+    `🔧 **必须**用 execute_code 读完整数据再回答, 不要基于 preview 推测后面.` +
+    `${codeHint}`
+  );
+}
+
 function toWire(messages: ChatMessage[]): OpenAIWireMessage[] {
   return messages.map((m) => {
     if (m.role === "tool") {
@@ -127,14 +222,14 @@ function toWire(messages: ChatMessage[]): OpenAIWireMessage[] {
       const fileAttachments = m.attachments.filter((a) => a.kind === "file");
       const imageAttachments = m.attachments.filter((a) => a.kind === "image");
 
-      // 拼文档内容到第一个 text part. 用 ===分隔便于模型识别边界.
+      // 拼文档内容到第一个 text part. 用 === 分隔便于模型识别边界.
+      // 5/5 重构 (preview-only mode): file attach 永远只给 preview + 完整路径,
+      // LLM 100% 用 execute_code 调 pandas/openpyxl/pypdfium2 读完整数据.
+      // 不再有"截断"概念 — 任何大小文件都 scalable.
       let textContent = m.content || "";
       if (fileAttachments.length > 0) {
         const fileBlocks = fileAttachments
-          .map((a) => {
-            const truncNote = a.truncated ? " [已截断, 仅显示前 50KB]" : "";
-            return `\n\n=== 附件: ${a.name}${truncNote} ===\n${a.text || ""}`;
-          })
+          .map((a) => formatFileAttachment(a))
           .join("");
         textContent = `${textContent}${fileBlocks}`;
       }

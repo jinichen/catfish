@@ -69,26 +69,31 @@ async function fileToAttachment(file: File): Promise<Attachment> {
     };
   }
 
-  // 文档: 写到 /tmp → invoke('parse_file') → 拿提取的纯文本
-  // (用 Tauri 的 fs API 写, 不直接走 OS subprocess; 简单做法用 base64 → Rust 写)
-  const arrayBuffer = await file.arrayBuffer();
-  const bytes = new Uint8Array(arrayBuffer);
-  // 先存到一个 tmp 路径. 用 Rust 端 helper 写 (避免在前端 polyfill fs).
-  // 但我们没有 write_tmp_file command, 这里走简化路径:
-  // base64 → Rust command 'parse_file_from_b64' 内部写 tmp + 解析 + 删 tmp
-  // (留 P2 重构. MVP 直接 base64 一次过)
-  let binary = "";
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  const fileB64 = btoa(binary);
+  // 文档: base64 → Rust command 'parse_file_from_b64' 内部写 tmp + 解析 + 删 tmp
+  // 5/5 鸿波报"上传 Excel 没反应" 修: 之前用 String.fromCharCode + 循环 + btoa,
+  // 几 MB 文件会卡死主线程 30+ 秒, UI 看起来"没反应". 改用 FileReader.readAsDataURL
+  // (浏览器原生异步, V8 优化), 抠 data URI 后面的 base64 部分.
+  const fileB64 = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUri = reader.result as string;
+      // dataUri = "data:<mime>;base64,<b64-content>"
+      const comma = dataUri.indexOf(",");
+      resolve(comma >= 0 ? dataUri.slice(comma + 1) : dataUri);
+    };
+    reader.onerror = () => reject(reader.error || new Error("FileReader 失败"));
+    reader.readAsDataURL(file);
+  });
 
+  // 5/5 重构: parse_file 改 preview-only, 返 preview_text + kept_path + meta
   const result = await invoke<{
     filename: string;
     ext: string;
-    char_count: number;
-    truncated: boolean;
-    text: string;
+    kind: string;
+    preview_text: string;
+    preview_chars: number;
+    meta: Record<string, unknown>;
+    kept_path: string;
   }>("parse_file_from_b64", {
     fileB64,
     filename: file.name || "upload",
@@ -99,8 +104,10 @@ async function fileToAttachment(file: File): Promise<Attachment> {
     mimeType: file.type || "application/octet-stream",
     name: result.filename,
     sizeBytes: file.size,
-    text: result.text,
-    truncated: result.truncated,
+    fileKind: result.kind,
+    previewText: result.preview_text,
+    meta: result.meta,
+    keptPath: result.kept_path,
   };
 }
 
@@ -116,6 +123,9 @@ export default function ChatInput({
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [attachError, setAttachError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
+  // 5/5 鸿波报"上传 Excel 没反应" 修: 大文件 base64 + Python 解析需要几秒,
+  // 之前 UI 0 反馈, 员工以为坏了. 加个 "正在解析..." 状态.
+  const [isParsingFile, setIsParsingFile] = useState(false);
   // 🎤 语音录音状态 (方案 C+ 五一 sprint Day 1: Whisper.cpp 本地, ffmpeg subprocess 录)
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -196,16 +206,24 @@ export default function ChatInput({
       setAttachError(`最多 ${MAX_ATTACHMENTS} 张图, 删几张再加`);
       return;
     }
-    const next: Attachment[] = [];
-    for (const f of arr) {
-      try {
-        next.push(await fileToAttachment(f));
-      } catch (e) {
-        setAttachError((e as Error).message);
-        return;
+    setIsParsingFile(true);
+    try {
+      const next: Attachment[] = [];
+      for (const f of arr) {
+        try {
+          next.push(await fileToAttachment(f));
+        } catch (e) {
+          // 5/5 鸿波报: 之前 throw 在 catch 里 setAttachError 后 return,
+          // setIsParsingFile(false) 没在 finally 里 → UI 卡在"解析中".
+          // 现在 try-finally 兜住, 必出 finally 关 spinner.
+          setAttachError((e as Error).message || String(e));
+          return;
+        }
       }
+      setAttachments((cur) => [...cur, ...next]);
+    } finally {
+      setIsParsingFile(false);
     }
-    setAttachments((cur) => [...cur, ...next]);
   }
 
   function removeAttachment(idx: number): void {
@@ -354,6 +372,23 @@ export default function ChatInput({
           }}
         >
           ⚠ {attachError}
+        </div>
+      )}
+
+      {/* 5/5 文件解析进行中 (Excel / 大 PDF 几秒级, 之前 0 反馈员工以为坏了) */}
+      {isParsingFile && (
+        <div
+          style={{
+            color: "var(--catfish-cyan)",
+            fontSize: 12,
+            marginBottom: "var(--space-2)",
+            background: "var(--catfish-cyan-dim)",
+            padding: "var(--space-1) var(--space-2)",
+            borderRadius: "var(--radius-sm)",
+            display: "inline-block",
+          }}
+        >
+          📎 正在解析文件…
         </div>
       )}
 
@@ -507,6 +542,38 @@ function fileEmoji(name: string): string {
   return "📄";
 }
 
+/** 把 meta 转成简短显示文案. excel: "5 sheets · 365 行"; pdf: "12 页"; etc */
+function metaSummary(att: Attachment): string {
+  const sizeKb = Math.max(1, Math.round(att.sizeBytes / 1024));
+  const sizeLabel = sizeKb >= 1024
+    ? `${(sizeKb / 1024).toFixed(1)} MB`
+    : `${sizeKb} KB`;
+  const m = att.meta || {};
+  const kind = att.fileKind;
+
+  if (kind === "excel") {
+    const sheets = (m.sheets as string[] | undefined) || [];
+    const counts = (m.row_counts as Record<string, number> | undefined) || {};
+    const totalRows = Object.values(counts).reduce((a, b) => a + b, 0);
+    return `${sheets.length} sheet · ${totalRows} 行 · ${sizeLabel}`;
+  }
+  if (kind === "pdf") {
+    return `${m.page_count ?? "?"} 页 · ${sizeLabel}`;
+  }
+  if (kind === "word") {
+    const tables = m.table_count ?? 0;
+    const tableLabel = tables ? ` · ${tables} 表格` : "";
+    return `${m.paragraph_count ?? "?"} 段${tableLabel} · ${sizeLabel}`;
+  }
+  if (kind === "csv") {
+    return `${m.total_rows ?? "?"} 行 · ${sizeLabel}`;
+  }
+  if (kind === "text") {
+    return `${m.total_chars ?? "?"} 字 · ${sizeLabel}`;
+  }
+  return sizeLabel;
+}
+
 function FileChip({
   attachment,
   onRemove,
@@ -514,9 +581,7 @@ function FileChip({
   attachment: Attachment;
   onRemove: () => void;
 }) {
-  const sizeKb = Math.max(1, Math.round(attachment.sizeBytes / 1024));
-  const charCount = attachment.text?.length ?? 0;
-  const truncated = attachment.truncated;
+  const summary = metaSummary(attachment);
   return (
     <div
       style={{
@@ -528,9 +593,9 @@ function FileChip({
         border: "1px solid var(--catfish-border)",
         borderRadius: "var(--radius-md)",
         fontSize: 12,
-        maxWidth: 280,
+        maxWidth: 320,
       }}
-      title={`${attachment.name} · ${sizeKb} KB · ${charCount} 字${truncated ? " (已截断)" : ""}`}
+      title={`${attachment.name}\n${summary}\n完整文件: ${attachment.keptPath || "(未保留)"}`}
     >
       <span style={{ fontSize: 16 }}>{fileEmoji(attachment.name)}</span>
       <span
@@ -538,13 +603,13 @@ function FileChip({
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
-          maxWidth: 200,
+          maxWidth: 180,
         }}
       >
         {attachment.name}
       </span>
       <span style={{ color: "var(--catfish-text-muted)", fontSize: 11 }}>
-        {truncated ? `${(charCount / 1000).toFixed(0)}K 字 (截断)` : `${(charCount / 1000).toFixed(0)}K 字`}
+        {summary}
       </span>
       <button
         onClick={onRemove}

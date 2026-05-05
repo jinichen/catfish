@@ -183,10 +183,19 @@ models:
       api_base: https://api.deepseek.com/v1
       api_key_env: DEEPSEEK_API_KEY
       timeout: 90
-      # param_overrides:
-      #   extra_body:
-      #     thinking:
-      #       type: disabled
+      # 5/5 BL-D11+ 鸿波报: deepseek thinking mode 多轮对话 (含 tool call) 时
+      # 要求 client 把上轮 assistant 的 reasoning_content 也传回去,
+      # catfish gateway 没透传 → 第二轮 400 BadRequest
+      # "reasoning_content must be passed back". 见 5/5 20:01 log.
+      # 真修法 = gateway streaming 时保留 + messages 透传 reasoning_content,
+      # 工作量 ~半天 (跟 BL-MM3 一起 5/15+ hermes 升级窗口做).
+      # 短期: 关 thinking, deepseek 当普通 chat. 没 reasoning_content 字段就不
+      # 触发兼容 bug. 影响: 失去 deepseek 推理能力, 但是它是 fallback (主力 qwen-private),
+      # 实际损失不大.
+      param_overrides:
+        extra_body:
+          thinking:
+            type: disabled
 
     context_window: 1000000  # 1M
     supports_tool_use: true

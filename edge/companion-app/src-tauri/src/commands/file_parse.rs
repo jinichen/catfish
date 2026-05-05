@@ -3,11 +3,12 @@
 //! # 设计
 //!
 //! 前端 ChatInput 拖入 / 点 📎 选 PDF/Excel/Word/CSV/TXT/MD →
-//!   File → ArrayBuffer → 写 /tmp/catfish-upload-<uuid>.<ext> →
-//!   invoke('parse_file', { tmp_path }) →
-//!   Rust 调 Python helper (用 hermes/gateway venv) →
-//!   返 { filename, ext, char_count, truncated, text } →
-//!   前端 push 到 attachments[] (kind="file"), 用户发送时跟图片一起带给 LLM.
+//!   File → FileReader.readAsDataURL → base64 →
+//!   invoke('parse_file_from_b64', { fileB64, filename }) →
+//!   Rust 写 /tmp + 调 Python helper (用 hermes/gateway venv) →
+//!   返 { filename, ext, kind, preview_text, preview_chars, meta, kept_path } →
+//!   Rust **永远** mv 原文件到 ~/.catfish/uploads/<ts>-<filename> (preview-only mode) →
+//!   前端 push 到 attachments[] (kind="file"), 发送时拼 preview + path + execute_code 提示.
 //!
 //! # 为什么走 Python 不直接 Rust
 //!
@@ -24,9 +25,18 @@ use serde::{Deserialize, Serialize};
 pub struct ParseFileResult {
     pub filename: String,
     pub ext: String,
-    pub char_count: usize,
-    pub truncated: bool,
-    pub text: String,
+    /// kind: "excel" | "pdf" | "word" | "csv" | "text"
+    pub kind: String,
+    /// preview 内容 (~5K 字, 给 LLM 看个梗概), 不放完整数据
+    pub preview_text: String,
+    /// preview 字符数 (UI chip 显示用)
+    pub preview_chars: usize,
+    /// 结构化元信息 (sheet 名 / 行数 / 页数 / 等), 给 LLM 拼 execute_code 用.
+    /// 透明 JSON, parse_file.py 各 parser 自己定义字段.
+    pub meta: serde_json::Value,
+    /// 原文件保留路径 (永远有, ~/.catfish/uploads/<ts>-<name>).
+    /// LLM 100% 用 execute_code 读完整数据 — 不再有"截断"概念.
+    pub kept_path: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -91,10 +101,21 @@ fn find_parse_script() -> Option<PathBuf> {
     None
 }
 
-/// 接收前端写的 /tmp 文件路径, 调 Python 解析, 返结构化结果.
-#[tauri::command]
-pub async fn parse_file(tmp_path: String) -> Result<ParseFileResult, String> {
-    let path = PathBuf::from(&tmp_path);
+/// Python 输出的 JSON (无 kept_path, 由 Rust 端填).
+#[derive(Debug, Deserialize)]
+struct ParseFileFromPython {
+    filename: String,
+    ext: String,
+    kind: String,
+    preview_text: String,
+    preview_chars: usize,
+    meta: serde_json::Value,
+}
+
+/// 接收前端写的 /tmp 文件路径, 调 Python 解析, 返 (preview, meta).
+/// 不返回 kept_path — 由 caller (parse_file_from_b64) 决定文件去向.
+async fn parse_file_inner(tmp_path: &str) -> Result<ParseFileFromPython, String> {
+    let path = PathBuf::from(tmp_path);
     if !path.exists() {
         return Err(format!("文件不存在: {tmp_path}"));
     }
@@ -110,37 +131,48 @@ pub async fn parse_file(tmp_path: String) -> Result<ParseFileResult, String> {
 
     let output = std::process::Command::new(&py)
         .arg(&script)
-        .arg(&tmp_path)
+        .arg(tmp_path)
         .output()
         .map_err(|e| format!("Python 调用失败: {e}"))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-    // Python helper 不论成功失败都打 JSON. 但万一 import 出错或 segfault, stderr 有内容
     if stdout.trim().is_empty() {
-        return Err(format!(
-            "Python 解析没输出. stderr: {stderr}"
-        ));
+        return Err(format!("Python 解析没输出. stderr: {stderr}"));
     }
 
-    // 先试解析 error JSON
     if let Ok(err) = serde_json::from_str::<ParseError>(&stdout) {
         return Err(err.error);
     }
 
-    // 再试解析正常 result
-    let result: ParseFileResult = serde_json::from_str(&stdout).map_err(|e| {
+    let result: ParseFileFromPython = serde_json::from_str(&stdout).map_err(|e| {
         format!(
             "Python 输出 JSON 解析失败: {e}\nstdout: {stdout}\nstderr: {stderr}"
         )
     })?;
 
     log::info!(
-        "parse_file: ✅ {} ({} chars, truncated={})",
-        result.filename, result.char_count, result.truncated
+        "parse_file: ✅ {} ({}, preview {} chars)",
+        result.filename, result.kind, result.preview_chars,
     );
     Ok(result)
+}
+
+/// 老接口保留 (前端不直接调, 留作 admin/test 用).
+/// 5/5 重构后行为: 返 preview-only result, kept_path 是空 (caller 决定保留).
+#[tauri::command]
+pub async fn parse_file(tmp_path: String) -> Result<ParseFileResult, String> {
+    let inner = parse_file_inner(&tmp_path).await?;
+    Ok(ParseFileResult {
+        filename: inner.filename,
+        ext: inner.ext,
+        kind: inner.kind,
+        preview_text: inner.preview_text,
+        preview_chars: inner.preview_chars,
+        meta: inner.meta,
+        kept_path: tmp_path,  // 用 tmp_path 占位, caller 自己决定保留
+    })
 }
 
 /// 接收 base64 文件内容 + 文件名, 写 tmp + 调 Python 解析 + 清理 tmp.
@@ -175,12 +207,60 @@ pub async fn parse_file_from_b64(
     std::fs::write(&tmp, &bytes).map_err(|e| format!("写 tmp 失败: {e}"))?;
     log::info!("parse_file_from_b64: 写 {} ({} bytes)", tmp.display(), bytes.len());
 
-    let result = parse_file(tmp.to_string_lossy().to_string()).await;
-    let _ = std::fs::remove_file(&tmp); // 清理 tmp 不论成功失败
+    // parse Python (preview-only)
+    let inner = match parse_file_inner(&tmp.to_string_lossy()).await {
+        Ok(r) => r,
+        Err(e) => {
+            // 解析失败也删 tmp
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
+    };
 
-    // 用前端送的真名替换 sanitize 出的 uuid 名字
-    result.map(|mut r| {
-        r.filename = filename;
-        r
+    // 5/5 重构: 永远把原文件 mv 到 ~/.catfish/uploads/. 不再有"截断"概念,
+    // LLM 100% 调 execute_code 用 pandas/openpyxl/pypdfium2 读完整数据.
+    // 文件命名: <unix-ts>-<原 filename>, 多次同名上传不冲突.
+    let home = std::env::var("HOME").unwrap_or_default();
+    let uploads_dir = std::path::PathBuf::from(&home).join(".catfish").join("uploads");
+    std::fs::create_dir_all(&uploads_dir)
+        .map_err(|e| format!("uploads dir 建失败: {e}"))?;
+
+    let safe = filename.replace(['/', '\\', '\0'], "_");
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let kept = uploads_dir.join(format!("{ts}-{safe}"));
+
+    // mv 优先 (同分区秒级), 跨分区 fallback cp + rm
+    let kept_str = match std::fs::rename(&tmp, &kept) {
+        Ok(_) => kept.to_string_lossy().to_string(),
+        Err(e_rename) => match std::fs::copy(&tmp, &kept) {
+            Ok(_) => {
+                let _ = std::fs::remove_file(&tmp);
+                kept.to_string_lossy().to_string()
+            }
+            Err(e_copy) => {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(format!(
+                    "保留原文件失败 (rename: {e_rename}, copy: {e_copy})"
+                ));
+            }
+        },
+    };
+
+    log::info!(
+        "parse_file_from_b64: ✅ 保留 {} (LLM 用 execute_code 读完整数据)",
+        kept_str,
+    );
+
+    Ok(ParseFileResult {
+        filename,
+        ext: inner.ext,
+        kind: inner.kind,
+        preview_text: inner.preview_text,
+        preview_chars: inner.preview_chars,
+        meta: inner.meta,
+        kept_path: kept_str,
     })
 }
