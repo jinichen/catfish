@@ -2219,3 +2219,38 @@ quota check 真应该移进 `with_fallback`, 让 chain 里每个模型都查 quo
 **0 后端代码改, 0 测试 fail.**
 
 后续方案 B/C/D 进 BACKLOG (BL-MM6/MM7/MM8) + FEATURE-TRACKS #28 子条目, 5/8 后启动.
+
+
+## 2026-05-05 凌晨 — BL-MM2 catfish_remember 后端版本化
+
+**背景**: BL-MM1 SOUL 纪律 5/4 ship 后, "记忆覆盖时 quote 旧值"全靠模型自觉. 工具底层是 `Dict[str, str]`, 同 key 二次写直接 silent overwrite, 旧值彻底丢, 模型就算想 quote 也无值可 quote. SOUL § "工具底层暂不存版本数组 (5/4 现状), 你怎么补救" 一段也写明这是临时方案, 工具升级后撤销.
+
+原计划 5/8 做, 鸿波拍板"原计划 8 号的记忆覆盖、主动学习先完成", 5/5 凌晨 ship 后端版本数组那一刀.
+
+**改动**:
+
+1. `edge/tool-bridge/.../catfish_tools.py` `remember_fact()`:
+   - 磁盘 schema v2: `{key: [{"value", "ts", "prev_value"}, ...]}`, list 末尾是 current
+   - 同 key 不同 value → push 新 revision (prev_value = 旧 current_value), 不再 silent overwrite
+   - 同 key 同 value → no-op 直接返 `no_change=true`, 防重复 tool call 灌脏 history
+   - revision list 超 5 条 → 截掉最早的, 防文件膨胀 (单 key 最多 5 版)
+   - 返回值新增 `previous_value` + `revision_count`, 模型能拿到旧值再 quote
+   - summary 在 update 场景显式提示 BL-MM1 纪律: "你回员工时**必须**主动 quote 旧值"
+
+2. `central/llm-gateway/.../session_facts.py` 配套读取/渲染:
+   - `read_session_facts()` 返回类型变 `dict[str, list[dict]]`, 带 revision 信息
+   - `render_facts_block()` 多 revision 时显式列 "上次值: X (已更新 N 次)" + 点名 BL-MM1 纪律, 让模型在 system prompt 末尾就看到旧值
+
+3. **向后兼容**: 旧 schema `{"key": "string"}` 自动迁移到单 revision list, 员工不需要手动迁文件. `_normalize_revision()` 容错损坏的 list entry, 保留合法的.
+
+4. **SOUL.md** § "工具底层暂不存版本数组 (5/4 现状)" 删除, 替换成 § "catfish_remember 已支持版本数组 (BL-MM2, 5/5 晚)" — 纪律变简单: 直接调 catfish_remember 后端会记账, 但 quote 旧值的"礼貌"还是模型的活儿. memory_save (跨 session) 仍要靠 inline 备注 (BL-MM3 排到 hermes 升级后).
+
+**测试**:
+- 新 `tool-bridge/tests/test_remember_fact.py` 13 条 (validation / 首次写 / push revision / 三连更新 prev_value 链 / 同值 no-op / max revision 截断 / 旧 schema 自动迁移 / 50 key 满后允许 update 拒绝 new / 损坏文件)
+- `gateway/tests/test_session_facts.py` 加 3 条 (v2 schema 直读 / 损坏 revision 过滤 / 多 revision 渲染含上次值 + BL-MM1 提示)
+- 全套绿: gateway **542 passed** (+3), tool-bridge **214 passed** (+13)
+
+**遗留**:
+- BL-MM3 hermes memory_save 包装版本化 — 等 hermes 0.10→0.12 升级 (5/15+) 后做
+- BL-MM4 Dashboard 记忆版本卡 (展示 history + diff) — ~2h, 5/5 早上做
+- BL-MM6 显式 feedback UI — ~3-4h, 5/5 早上做

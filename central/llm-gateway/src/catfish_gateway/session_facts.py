@@ -25,6 +25,23 @@ session_facts inject 在最后, 这样在 system prompt 里离 messages 最近, 
 =========================
 gateway 永不抛 — 文件不存在就 inject 空字符串 (不动 messages).
 文件损坏 (非 JSON / 非 dict) 也忽略, log warn 让 ops 看到.
+
+# Schema v2 (BL-MM2 五一 sprint 5/5 晚)
+=====================================
+catfish_remember 改成版本化 (不 silent overwrite). 磁盘格式:
+    {
+      "key1": [
+        {"value": "v1", "ts": 1714867200.0, "prev_value": null},
+        {"value": "v2", "ts": 1714867260.0, "prev_value": "v1"}
+      ],
+      ...
+    }
+list 末尾是 current. 这里读出来后 inject 时:
+  - 单 revision → 普通 "- key: value"
+  - 多 revision → "- key: <current> (已更新 N 次, 上次值: <prev>)"
+让模型显式看到旧值, 配合 SOUL BL-MM1 复述纪律.
+
+向后兼容旧 schema {"key": "string_value"} — 当作单 revision 处理.
 """
 
 from __future__ import annotations
@@ -37,6 +54,9 @@ from typing import Any
 
 logger = logging.getLogger("catfish.gateway.session_facts")
 
+# revision = {"value": str, "ts": float, "prev_value": str | None}
+# FactsMap = dict[str, list[revision]]
+
 
 def _facts_path() -> Path:
     """~/.catfish/session_facts.json. 跟 tool-bridge SESSION_FACTS_PATH 同步."""
@@ -44,33 +64,81 @@ def _facts_path() -> Path:
     return Path(home) / ".catfish" / "session_facts.json"
 
 
-def read_session_facts() -> dict[str, str]:
-    """读 session_facts. 文件不存在 / 损坏 → 空 dict."""
+def _normalize_revision(r: Any) -> dict[str, Any] | None:
+    """把磁盘上一条 revision 规整成 {value, ts, prev_value}. 不合法返 None."""
+    if not isinstance(r, dict):
+        return None
+    val = r.get("value")
+    if not isinstance(val, str):
+        return None
+    ts = r.get("ts")
+    if not isinstance(ts, (int, float)):
+        ts = 0.0
+    prev = r.get("prev_value")
+    if prev is not None and not isinstance(prev, str):
+        prev = None
+    return {"value": val, "ts": float(ts), "prev_value": prev}
+
+
+def read_session_facts() -> dict[str, list[dict[str, Any]]]:
+    """读 session_facts, 返回 v2 schema (key → revision list).
+
+    向后兼容旧 schema (string value): 包成单 revision list.
+    文件不存在 / 损坏 → 空 dict.
+    """
     path = _facts_path()
     if not path.exists():
         return {}
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        if not isinstance(data, dict):
-            logger.warning(
-                "session_facts 文件不是 dict (%s) — 忽略. path=%s",
-                type(data).__name__, path,
-            )
-            return {}
-        # 只保留 str -> str
-        return {
-            str(k): str(v)
-            for k, v in data.items()
-            if isinstance(k, str) and isinstance(v, str)
-        }
     except (OSError, ValueError, json.JSONDecodeError) as e:
         logger.warning("读 session_facts 失败 (%s) — 忽略. path=%s", e, path)
         return {}
+    if not isinstance(data, dict):
+        logger.warning(
+            "session_facts 文件不是 dict (%s) — 忽略. path=%s",
+            type(data).__name__, path,
+        )
+        return {}
+
+    out: dict[str, list[dict[str, Any]]] = {}
+    for k, v in data.items():
+        if not isinstance(k, str):
+            continue
+        if isinstance(v, str):
+            # 旧 schema: 单 string. 包成单 revision (ts=0 表示未知).
+            out[k] = [{"value": v, "ts": 0.0, "prev_value": None}]
+        elif isinstance(v, list):
+            revs = []
+            for r in v:
+                norm = _normalize_revision(r)
+                if norm is not None:
+                    revs.append(norm)
+            if revs:
+                out[k] = revs
+        # 其他类型跳过
+    return out
 
 
-def render_facts_block(facts: dict[str, str]) -> str:
-    """把 facts dict 渲染成 system prompt 末尾的文本块."""
+def _current(revisions: list[dict[str, Any]]) -> str:
+    """从 revision list 取当前值. 空 list → 空串."""
+    if not revisions:
+        return ""
+    val = revisions[-1].get("value", "")
+    return val if isinstance(val, str) else ""
+
+
+def _safe_inline(s: str) -> str:
+    """防 markdown 注入: 反引号 + 换行可能破坏 prompt 结构."""
+    return s.replace("\n", " ").replace("`", "'")
+
+
+def render_facts_block(facts: dict[str, list[dict[str, Any]]]) -> str:
+    """把 facts (revision list) 渲染成 system prompt 末尾的文本块.
+
+    多 revision 时显示 "上次值: X", 让模型按 SOUL BL-MM1 quote 旧值.
+    """
     if not facts:
         return ""
     lines = [
@@ -79,10 +147,27 @@ def render_facts_block(facts: dict[str, str]) -> str:
         "这些是员工在本 session 内明确告诉你的事实, 你**必须遵守**, 不要再问 / 不要忘 / 不要瞎猜:",
         "",
     ]
-    for key, value in sorted(facts.items()):
-        # 防 markdown 注入: value 里有反引号 / 换行可能破坏 prompt 结构, escape 一下
-        safe_value = value.replace("\n", " ").replace("`", "'")
-        lines.append(f"- **{key}**: {safe_value}")
+    for key, revisions in sorted(facts.items()):
+        if not revisions:
+            continue
+        current_val = _safe_inline(_current(revisions))
+        rev_count = len(revisions)
+        if rev_count <= 1:
+            lines.append(f"- **{key}**: {current_val}")
+        else:
+            # 多 revision: 显式给模型看上次值, 配合 BL-MM1 复述纪律.
+            prev = revisions[-1].get("prev_value")
+            if isinstance(prev, str) and prev:
+                prev_safe = _safe_inline(prev)
+                lines.append(
+                    f"- **{key}**: {current_val} "
+                    f"_(已更新 {rev_count} 次, 上次值: `{prev_safe}` — "
+                    f"按 BL-MM1 纪律, 回员工时主动 quote 旧值)_"
+                )
+            else:
+                lines.append(
+                    f"- **{key}**: {current_val} _(已更新 {rev_count} 次)_"
+                )
     lines.append("")
     lines.append(
         "员工要更新这些事实 → 调 catfish_remember(key, value) 重存. "

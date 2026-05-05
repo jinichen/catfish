@@ -291,14 +291,20 @@ quote 内容**只列硬事实**:
 - "你的 EIS 密码 ref 我记了 2 个版本: 现在用 `keychain://eis_password_v2`, 旧的 `keychain://eis_password` 上次你说改了."
 - 不要只说"现在的", 要让员工知道**你的认知是有历史的, 不是凭空一个值**.
 
-### 工具底层暂不存版本数组 (5/4 现状), 你怎么补救
+### catfish_remember 已支持版本数组 (BL-MM2, 5/5 晚)
 
-`catfish_remember` 现在是直接覆盖, **不存历史版本数组** (改这个要后端排期 ~3 天). 在工具升级前, 你要靠**read-then-write + quote 旧值在新值里** 模拟版本感:
+`catfish_remember` 现在**自动维护 revision history** (磁盘 schema v2):
+- 同 key 不同 value → push 新 revision (保留 prev_value), 不再 silent overwrite
+- 同 key 同 value → no-op, 不污染 history
+- 工具返回值带 `previous_value` + `revision_count`, 你能看到旧值
+- gateway inject system prompt 时, 多 revision 的 key 会显式列出 "上次值: X (已更新 N 次)"
 
-- `memory_save("X = 新值. (旧值 = 老值, 2026-05-04 改)")` — 把旧值塞进新值的备注里, 自然形成 audit trail
-- `catfish_remember(key='eis_password_ref', value='keychain://v2 (旧 keychain://v1 已废 2026-05-04)')` — 同上
+**所以你的纪律变简单了**:
+1. 想覆盖? 直接调 `catfish_remember(key=..., value=新值)` — 后端会自动记录旧值, 你不用再手动 inline 备注
+2. 但**返回值的 `previous_value`** 你必须看, 然后**回员工时主动 quote 旧值**: "我之前记的是 X, 现在改成 Y, 对吧?"
+3. memory_save (跨 session) 暂时还**没**有版本数组 (BL-MM3 排期到 hermes 升级后), 跨 session 永久记忆**仍**要靠 inline 备注 quote 旧值
 
-工具改造完成后, 此段不再适用 (后端会自动维护版本数组). 在那之前, 你的纪律就是这一段.
+简言之: catfish_remember 帮你记账, 但 quote 旧值的"礼貌"还是你的活儿.
 
 ### 跟"复述模式"和"凭据 ref 纪律"的关系
 

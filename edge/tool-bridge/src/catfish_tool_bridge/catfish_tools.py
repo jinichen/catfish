@@ -1655,46 +1655,122 @@ def skill_backup(args: Dict[str, Any]) -> Dict[str, Any]:
 #
 # 边界:
 #   - key 1-100 字符, value 1-1000 字符 (防滥用)
-#   - 同 key 覆盖 (员工说 "EIS 改 https 了" 重存即可)
+#   - 同 key **保留版本** (BL-MM2 五一 sprint 5/5 晚): 不再 silent overwrite,
+#     新值 push 到 revision list, 保留 prev_value, 显示 "已更新 N 次".
+#     SOUL BL-MM1 要求模型 quote 旧值, 这里给到工程支持: gateway inject 时
+#     带上 "上次值: X", 模型就算自觉性差也能看到.
 #   - 单文件全局 (Phase 1 单用户单进程; SSO 上来后加 user_id 区分)
 #   - 文件不存在 = 没有 facts, gateway inject 跳过
+#
+# Schema (v2, 2026-05-05):
+#   {
+#     "key1": [
+#       {"value": "v1", "ts": 1714867200.0, "prev_value": null},
+#       {"value": "v2", "ts": 1714867260.0, "prev_value": "v1"},
+#     ],
+#     ...
+#   }
+#   list 顺序: [0] 最早, [-1] 最新 (current). value = revisions[-1]["value"].
+#
+# 向后兼容:
+#   旧 schema {"key": "value"} (string) 会被 _read_session_facts 自动迁移到
+#   单 revision list 形态, 写回时落新 schema. 员工不需要手动迁.
 
 SESSION_FACTS_PATH = Path.home() / ".catfish" / "session_facts.json"
 _FACTS_KEY_MAX_LEN = 100
 _FACTS_VALUE_MAX_LEN = 1000
 _FACTS_MAX_ENTRIES = 50  # 防内存爆: 超过 50 个 key 拒绝再加
+_FACTS_MAX_REVISIONS_PER_KEY = 5  # BL-MM2: 同 key 最多保留 5 个历史版本, 老的截掉
+
+# 类型 alias
+Revision = Dict[str, Any]  # {"value": str, "ts": float, "prev_value": str | None}
+FactsMap = Dict[str, List[Revision]]
 
 
-def _read_session_facts() -> Dict[str, str]:
-    """读 session_facts.json. 文件不存在 / 损坏 → 空 dict."""
+def _normalize_revision(r: Any) -> Optional[Revision]:
+    """把磁盘上一条 revision 规整成合法形态. 不合法返 None."""
+    if not isinstance(r, dict):
+        return None
+    val = r.get("value")
+    if not isinstance(val, str):
+        return None
+    val = val[:_FACTS_VALUE_MAX_LEN]
+    ts = r.get("ts")
+    if not isinstance(ts, (int, float)):
+        ts = 0.0
+    prev = r.get("prev_value")
+    if prev is not None and not isinstance(prev, str):
+        prev = None
+    if isinstance(prev, str):
+        prev = prev[:_FACTS_VALUE_MAX_LEN]
+    return {"value": val, "ts": float(ts), "prev_value": prev}
+
+
+def _read_session_facts() -> FactsMap:
+    """读 session_facts.json, 规整成 v2 schema (revision list).
+
+    兼容:
+      - 文件不存在 / JSON 损坏 → 返空 dict
+      - 旧 schema {"key": "value"} → 自动迁移到单 revision list
+      - 新 schema {"key": [{...}, ...]} → 校验每条 revision
+
+    不会写盘 (read-only). 真正落盘是下次 _write_session_facts 时.
+    """
     if not SESSION_FACTS_PATH.exists():
         return {}
     try:
-        import json
         with open(SESSION_FACTS_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
-        if not isinstance(data, dict):
-            return {}
-        # 只保留 str -> str (防文件被乱写)
-        return {
-            str(k)[:_FACTS_KEY_MAX_LEN]: str(v)[:_FACTS_VALUE_MAX_LEN]
-            for k, v in data.items()
-            if isinstance(k, str) and isinstance(v, str)
-        }
     except Exception:
         return {}
+    if not isinstance(data, dict):
+        return {}
+
+    out: FactsMap = {}
+    for k, v in data.items():
+        if not isinstance(k, str):
+            continue
+        k = k[:_FACTS_KEY_MAX_LEN]
+        if isinstance(v, str):
+            # 旧 schema: 单 string. 包成单 revision (ts=0 表示未知).
+            out[k] = [{"value": v[:_FACTS_VALUE_MAX_LEN], "ts": 0.0, "prev_value": None}]
+        elif isinstance(v, list):
+            revs: List[Revision] = []
+            for r in v:
+                norm = _normalize_revision(r)
+                if norm is not None:
+                    revs.append(norm)
+            if revs:
+                # 截到最近 N 个 (防文件被乱塞)
+                if len(revs) > _FACTS_MAX_REVISIONS_PER_KEY:
+                    revs = revs[-_FACTS_MAX_REVISIONS_PER_KEY:]
+                out[k] = revs
+        # 其他类型 (int/dict/None) 跳过
+    return out
 
 
-def _write_session_facts(facts: Dict[str, str]) -> None:
+def _write_session_facts(facts: FactsMap) -> None:
     """写回 session_facts.json. 失败抛, 让 caller 处理 (返回 error)."""
-    import json
     SESSION_FACTS_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(SESSION_FACTS_PATH, "w", encoding="utf-8") as f:
         json.dump(facts, f, ensure_ascii=False, indent=2)
 
 
+def _current_value(revisions: List[Revision]) -> Optional[str]:
+    """从 revision list 取当前值. 空 list → None."""
+    if not revisions:
+        return None
+    return revisions[-1].get("value")
+
+
 def remember_fact(args: Dict[str, Any]) -> Dict[str, Any]:
-    """tool: 记一个 session 内的硬事实."""
+    """tool: 记一个 session 内的硬事实 (BL-MM2: 版本化, 不 silent overwrite).
+
+    - 新 key → push 第一条 revision (prev_value=None)
+    - 旧 key + 同值 → no-op, 不算更新, 不 push 新 revision (防重复 tool call 灌脏数据)
+    - 旧 key + 新值 → push 新 revision (prev_value=旧 current_value),
+                      revision list 超 _FACTS_MAX_REVISIONS_PER_KEY 时截掉最早的
+    """
     key = (args.get("key") or "").strip()
     value = (args.get("value") or "").strip()
     if not key:
@@ -1707,7 +1783,10 @@ def remember_fact(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"type": "error", "error": f"value 太长 (>{_FACTS_VALUE_MAX_LEN} 字符)"}
 
     facts = _read_session_facts()
-    if key not in facts and len(facts) >= _FACTS_MAX_ENTRIES:
+    existing = facts.get(key)
+    is_existing = existing is not None and len(existing) > 0
+
+    if not is_existing and len(facts) >= _FACTS_MAX_ENTRIES:
         return {
             "type": "error",
             "error": (
@@ -1716,24 +1795,74 @@ def remember_fact(args: Dict[str, Any]) -> Dict[str, Any]:
                 "告诉你哪些可以删."
             ),
         }
-    is_overwrite = key in facts
-    facts[key] = value
+
+    prev_value: Optional[str] = _current_value(existing) if is_existing else None
+
+    # 同值再调一次 = no-op, 不污染 revision history
+    if is_existing and prev_value == value:
+        revs_existing = existing or []
+        return {
+            "type": "ok",
+            "key": key,
+            "value_preview": value[:100] + ("…" if len(value) > 100 else ""),
+            "total_facts": len(facts),
+            "overwrite": False,
+            "no_change": True,
+            "previous_value": None,  # 同值, 没有"上次值"概念
+            "revision_count": len(revs_existing),
+            "summary": (
+                f"'{key}' 已是这个值, 不重复记. "
+                f"当前 {len(facts)} 条 session_facts."
+            ),
+        }
+
+    new_rev: Revision = {
+        "value": value,
+        "ts": time.time(),
+        "prev_value": prev_value,
+    }
+    if is_existing:
+        revs = list(existing or [])
+        revs.append(new_rev)
+        # 截到最近 N 个
+        if len(revs) > _FACTS_MAX_REVISIONS_PER_KEY:
+            revs = revs[-_FACTS_MAX_REVISIONS_PER_KEY:]
+        facts[key] = revs
+    else:
+        facts[key] = [new_rev]
+
     try:
         _write_session_facts(facts)
     except Exception as e:
         return {"type": "error", "error": f"写 session_facts 失败: {e}"}
+
+    revision_count = len(facts[key])
+    if is_existing:
+        verb = "更新"
+        # 给模型显式 prev_value, 配合 SOUL BL-MM1 quote 旧值纪律
+        prev_preview = (prev_value[:80] + "…") if prev_value and len(prev_value) > 80 else (prev_value or "")
+        summary = (
+            f"更新了 '{key}' (第 {revision_count} 版). 上次值: {prev_preview!r}. "
+            f"按 BL-MM1 纪律, 你回员工时**必须**主动 quote 旧值 (\"我之前记的是 X, 现在改成 Y\"), "
+            f"不要装作从来没记过."
+        )
+    else:
+        verb = "记住"
+        summary = (
+            f"记住了 '{key}' (首次). "
+            f"当前 {len(facts)} 条 session_facts. "
+            f"gateway 会在每次 chat 自动 inject 到 system prompt 末尾."
+        )
 
     return {
         "type": "ok",
         "key": key,
         "value_preview": value[:100] + ("…" if len(value) > 100 else ""),
         "total_facts": len(facts),
-        "overwrite": is_overwrite,
-        "summary": (
-            f"{'更新' if is_overwrite else '记住'}了 '{key}'. "
-            f"当前 {len(facts)} 条 session_facts. "
-            f"gateway 会在每次 chat 自动 inject 到 system prompt 末尾."
-        ),
+        "overwrite": is_existing,
+        "previous_value": prev_value,
+        "revision_count": revision_count,
+        "summary": summary,
     }
 
 

@@ -1,8 +1,8 @@
 """session_facts 单测.
 
 覆盖:
-  - read_session_facts: 文件不存在 / 损坏 / 正常各种情况
-  - render_facts_block: 空 / 含特殊字符
+  - read_session_facts: 文件不存在 / 损坏 / 正常各种情况 / v2 schema 兼容
+  - render_facts_block: 空 / 含特殊字符 / 多 revision
   - inject_session_facts: 没 system / 有 system / facts 空 / multimodal system
 """
 from __future__ import annotations
@@ -12,6 +12,11 @@ import json
 import pytest
 
 from catfish_gateway import session_facts
+
+
+# v2 schema helper: 包成单 revision list (跟旧 dict[str,str] 等价的形态)
+def _wrap(value: str, prev_value: str | None = None, ts: float = 0.0) -> list[dict]:
+    return [{"value": value, "ts": ts, "prev_value": prev_value}]
 
 
 # ============================================================
@@ -24,14 +29,37 @@ def test_read_no_file_returns_empty(tmp_path, monkeypatch: pytest.MonkeyPatch) -
     assert session_facts.read_session_facts() == {}
 
 
-def test_read_normal_file(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_read_legacy_schema_string_value(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """BL-MM2 兼容: 旧文件 {key: "string"} → 包成单 revision."""
     monkeypatch.setenv("HOME", str(tmp_path))
     fp = tmp_path / ".catfish" / "session_facts.json"
     fp.parent.mkdir(parents=True)
     fp.write_text(json.dumps({"eis_url": "http://eis.ffcs.cn"}, ensure_ascii=False))
 
     facts = session_facts.read_session_facts()
-    assert facts == {"eis_url": "http://eis.ffcs.cn"}
+    assert facts == {
+        "eis_url": [{"value": "http://eis.ffcs.cn", "ts": 0.0, "prev_value": None}]
+    }
+
+
+def test_read_v2_schema_revision_list(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """BL-MM2: v2 schema 直接读 revision list."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    fp = tmp_path / ".catfish" / "session_facts.json"
+    fp.parent.mkdir(parents=True)
+    fp.write_text(json.dumps({
+        "eis_url": [
+            {"value": "https://old.eis", "ts": 100.0, "prev_value": None},
+            {"value": "http://eis.ffcs.cn", "ts": 200.0, "prev_value": "https://old.eis"},
+        ],
+    }, ensure_ascii=False))
+
+    facts = session_facts.read_session_facts()
+    assert "eis_url" in facts
+    revs = facts["eis_url"]
+    assert len(revs) == 2
+    assert revs[-1]["value"] == "http://eis.ffcs.cn"
+    assert revs[-1]["prev_value"] == "https://old.eis"
 
 
 def test_read_corrupt_json(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -55,14 +83,34 @@ def test_read_non_dict_root(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_read_filters_non_string(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """value 不是 str → 跳过 (例如有人写了 int / null)"""
+    """value 不是 str / list → 跳过 (例如有人写了 int / null)"""
     monkeypatch.setenv("HOME", str(tmp_path))
     fp = tmp_path / ".catfish" / "session_facts.json"
     fp.parent.mkdir(parents=True)
     fp.write_text(json.dumps({"good": "ok", "bad": 42, "null_v": None}))
 
     facts = session_facts.read_session_facts()
-    assert facts == {"good": "ok"}
+    assert facts == {"good": _wrap("ok")}
+
+
+def test_read_filters_bad_revisions_in_list(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """v2 list 里有非 dict 项 → 跳过, 保留合法的."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    fp = tmp_path / ".catfish" / "session_facts.json"
+    fp.parent.mkdir(parents=True)
+    fp.write_text(json.dumps({
+        "k": [
+            "not a dict",
+            {"value": "good", "ts": 1.0, "prev_value": None},
+            {"no_value": "missing field"},
+            42,
+        ],
+    }))
+
+    facts = session_facts.read_session_facts()
+    assert "k" in facts
+    assert len(facts["k"]) == 1
+    assert facts["k"][0]["value"] == "good"
 
 
 # ============================================================
@@ -74,24 +122,42 @@ class TestRenderFactsBlock:
     def test_empty_facts(self) -> None:
         assert session_facts.render_facts_block({}) == ""
 
-    def test_normal(self) -> None:
+    def test_normal_single_revision(self) -> None:
         text = session_facts.render_facts_block({
-            "eis_url": "http://eis.ffcs.cn",
-            "pwd_ref": "keychain://eis_password",
+            "eis_url": _wrap("http://eis.ffcs.cn"),
+            "pwd_ref": _wrap("keychain://eis_password"),
         })
         assert "eis_url" in text
         assert "http://eis.ffcs.cn" in text
         assert "pwd_ref" in text
         assert "硬事实" in text  # 有标题语境
+        # 单 revision 不应该出现"已更新 N 次"
+        assert "已更新" not in text
+
+    def test_multi_revision_shows_prev_value(self) -> None:
+        """BL-MM2: 多 revision 时显式给模型看上次值, 配合 SOUL BL-MM1 quote 旧值纪律."""
+        text = session_facts.render_facts_block({
+            "eis_url": [
+                {"value": "https://old.eis", "ts": 100.0, "prev_value": None},
+                {"value": "http://eis.ffcs.cn", "ts": 200.0, "prev_value": "https://old.eis"},
+            ],
+        })
+        # 当前值在
+        assert "http://eis.ffcs.cn" in text
+        # 提示已更新 2 次
+        assert "已更新 2 次" in text
+        # 上次值显式列出 (BL-MM1)
+        assert "https://old.eis" in text
+        assert "上次值" in text
 
     def test_value_with_newlines_replaced(self) -> None:
-        text = session_facts.render_facts_block({"x": "line1\nline2"})
+        text = session_facts.render_facts_block({"x": _wrap("line1\nline2")})
         # value 里换行被替换成空格防破坏 prompt 结构
         assert "\nline2" not in text
         assert "line1 line2" in text
 
     def test_value_with_backticks_replaced(self) -> None:
-        text = session_facts.render_facts_block({"x": "use `code`"})
+        text = session_facts.render_facts_block({"x": _wrap("use `code`")})
         # 反引号被替换成单引号
         assert "`code`" not in text
         assert "'code'" in text
