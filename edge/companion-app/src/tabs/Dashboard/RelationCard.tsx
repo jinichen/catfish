@@ -108,24 +108,32 @@ export default function RelationCard() {
 
       {view && (
         <>
-          {/* 时间感 */}
-          {(view.last_chat_human || view.today_count) && (
-            <div
-              style={{
-                fontSize: 12,
-                color: "var(--catfish-text-muted)",
-                marginBottom: "var(--space-3)",
-                lineHeight: 1.6,
-              }}
-            >
-              {view.last_chat_human && (
-                <div>距上次找我: <strong style={{ color: "var(--catfish-text)" }}>{view.last_chat_human}前</strong></div>
-              )}
-              {view.today_count !== null && view.today_count > 0 && (
-                <div>今天第 <strong style={{ color: "var(--catfish-text)" }}>{view.today_count}</strong> 次找我</div>
-              )}
-            </div>
-          )}
+          {/* 时间感.
+              5/5 鸿波拍板 fix: 之前 `(a || view.today_count) && (...)`, 当 today_count=0
+              时 (a || 0) = 0, React 把字面量 "0" 渲染到 UI 上 (用户看到只有一个孤零零的"0").
+              改 explicit boolean 计算, 防 React 渲染 falsy 数字. */}
+          {(() => {
+            const hasLast = !!view.last_chat_human;
+            const hasCount = view.today_count !== null && view.today_count > 0;
+            if (!hasLast && !hasCount) return null;
+            return (
+              <div
+                style={{
+                  fontSize: 12,
+                  color: "var(--catfish-text-muted)",
+                  marginBottom: "var(--space-3)",
+                  lineHeight: 1.6,
+                }}
+              >
+                {hasLast && (
+                  <div>距上次找我: <strong style={{ color: "var(--catfish-text)" }}>{view.last_chat_human}前</strong></div>
+                )}
+                {hasCount && (
+                  <div>今天第 <strong style={{ color: "var(--catfish-text)" }}>{view.today_count}</strong> 次找我</div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* 最近条目 */}
           {view.recent_entries.length === 0 ? (
@@ -140,36 +148,22 @@ export default function RelationCard() {
               还没有印象 — 多跟我聊几次, 我会记住你的工作.
             </div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+                // 5/5 鸿波拍板: 加滚动. 之前最多显 5 条, 老的看不到.
+                // backend 现在拉 30 条, 前端 360px 高度 + 滚动, 能查 2-3 周.
+                maxHeight: 360,
+                overflowY: "auto",
+                paddingRight: 4,  // 给滚动条留余地
+              }}
+            >
+              {/* 5/5 鸿波拍板隐私 fix: 默认只显标题, 不显正文 (有些 session 涉及私事
+                  不该 in-glance 暴露在 Dashboard). 点击标题展开看正文 */}
               {view.recent_entries.map((e, i) => (
-                <div
-                  key={i}
-                  style={{
-                    fontSize: 12,
-                    background: "var(--catfish-bg-cream)",
-                    border: "1px solid var(--catfish-border)",
-                    borderRadius: "var(--radius-sm)",
-                    padding: "8px 10px",
-                  }}
-                >
-                  <div style={{ fontWeight: 500, color: "var(--catfish-text)", marginBottom: 4 }}>
-                    {e.title}
-                  </div>
-                  <div
-                    style={{
-                      color: "var(--catfish-text-muted)",
-                      lineHeight: 1.5,
-                      maxHeight: 60,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      display: "-webkit-box",
-                      WebkitBoxOrient: "vertical",
-                      WebkitLineClamp: 3,
-                    }}
-                  >
-                    {e.body || "(空)"}
-                  </div>
-                </div>
+                <RelationEntry key={i} title={e.title} body={e.body} />
               ))}
             </div>
           )}
@@ -243,6 +237,65 @@ export default function RelationCard() {
             )}
           </div>
         </>
+      )}
+    </div>
+  );
+}
+
+
+/** 单条 journal 条目: 默认显标题 + 摘要 (前 100 字), 点击看全文.
+ *  5/5 鸿波拍板: 之前默认折叠只显标题, 用户得一条条点开太烦. 改成默认露摘要,
+ *  全文长时再点击展开. 隐私敏感的话员工自己用"清空印象"按钮删. */
+function RelationEntry({ title, body }: { title: string; body: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const SNIPPET_LEN = 100;
+  const hasMore = body.length > SNIPPET_LEN;
+  const snippet = hasMore ? body.slice(0, SNIPPET_LEN) + "…" : body;
+
+  return (
+    <div
+      style={{
+        fontSize: 12,
+        background: "var(--catfish-bg-cream)",
+        border: "1px solid var(--catfish-border)",
+        borderRadius: "var(--radius-sm)",
+        padding: "8px 10px",
+        cursor: hasMore ? "pointer" : "default",
+      }}
+      onClick={() => hasMore && setExpanded((e) => !e)}
+      title={hasMore ? "点击展开全文" : ""}
+    >
+      <div
+        style={{
+          fontWeight: 500,
+          color: "var(--catfish-text)",
+          marginBottom: body ? 4 : 0,
+        }}
+      >
+        {title}
+      </div>
+      {body && (
+        <div
+          style={{
+            color: "var(--catfish-text-muted)",
+            lineHeight: 1.6,
+            whiteSpace: "pre-wrap",
+          }}
+        >
+          {expanded ? body : snippet}
+        </div>
+      )}
+      {hasMore && (
+        <div
+          style={{
+            fontSize: 10,
+            color: "var(--catfish-text-muted)",
+            textAlign: "right",
+            marginTop: 4,
+          }}
+        >
+          {expanded ? "收起 ↑" : "展开 ↓"}
+        </div>
       )}
     </div>
   );

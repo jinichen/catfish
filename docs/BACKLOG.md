@@ -324,6 +324,9 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 | BL-F12 | session_summarizer 改成走本机 gateway HTTP loopback (替代直接 import litellm 绕过 fallback). catalog fallback chain 自动接管 (qwen 挂时 gemini-flash 接). 复用 quota / metrics / brand scrub | ✅ 5/4 | 30 分钟 (httpx.AsyncClient + skip-identity header + 8 单测) |
 | BL-F13 | 修 aiohttp Unclosed client session 警告 (gateway shutdown 时 LiteLLM 内部 client 没 close, asyncio 报 ERROR). lifespan shutdown 加 best-effort 清理 (兼容 LiteLLM 多版本 attr 名) | ✅ 5/4 | 15 分钟 |
 | BL-F14 | 内部 LLM 用例选模型 (`pick_internal_model`): catalog 加 use_case tag (summarizer/proactive_starter/a2a_aux), private 优先 public 兜底, env 可强制 override. summarizer/proactive/a2a_server 三处不再写死模型. **拆 gateway 部署 / catalog 改名 / 删模型 都不用动 .py 代码** | ✅ 5/4 | 1 小时 (新模块 internal_models.py + 改 3 caller + 14 单测) |
+| BL-F15 | 修 quota_exceeded 死循环: gateway quota check 在 with_fallback 之前抛 429, fallback chain 不接, summarizer 死循环 hammer. 治标: picker 返候选列表 + summarizer 收 429 切下一个候选 + session 5 分钟冷却防 hammer | ✅ 5/5 凌晨 | 1 小时 (pick_internal_models_ordered + summarizer 候选 try + cool down + 10 单测) |
+| BL-F16 | **治本** quota check 移进 with_fallback: 让主对话也享受"模型级 quota fallback" — 主模型 quota 满时自动切 chain 下一个, 不直接 429 给员工. 影响 chat_completions 主路径, 风险中, 排 demo 后 | ⬜ 5/15+ | 2-3 小时 (改 app.py 的 quota check 位置 + with_fallback 加 quota-aware 跳过 + 测试) |
+| BL-F17 | internal use case 跳 quota check (X-Catfish-Internal header): summarizer/proactive/a2a 是后台 housekeeping, 不该消耗员工 user_day quota. gateway 看到 header 跳 quota check + 跳 record_usage. audit log 仍写 (透明). 鸿波 5/5: "summarizer 不要去限制用户的 quota 这才是合理的" | ✅ 5/5 凌晨 | 30 分钟 (3 处 record_usage 跳过 + summarizer/proactive 加 header + 1 单测) |
 
 ---
 

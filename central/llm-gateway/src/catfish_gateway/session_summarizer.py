@@ -175,6 +175,36 @@ _SUMMARY_PROMPT = """你是员工的工作日记写手. 下面是员工跟鲶鱼
 """
 
 
+# BL-F15 (5/5): session 级失败冷却, 防 quota_exceeded 死循环
+# session_id → 重试时间戳 (epoch 秒). 在此时间前不再尝试 summarize 该 session.
+_SESSION_COOL_DOWN: dict[str, float] = {}
+_COOL_DOWN_SECONDS = 300  # 5 分钟
+
+
+# 5/5 凌晨修 race condition: 每条 chat 都 fire trigger_background_summary, 多个并发 task
+# 查 _list_unjournaled 都看到 session X 没 journaled, 同时跑 summarize, 各自 append, mark
+# 来不及拦. 鸿波看到 1 个 session_id 被总结了 6 次, journal 6 条重复条目.
+# 修: in-memory 锁, 进 summarize 前查锁, 已在跑就 skip.
+_CURRENTLY_SUMMARIZING: set[str] = set()
+
+
+def _is_session_cooling_down(session_id: str) -> bool:
+    import time  # noqa: PLC0415
+    until = _SESSION_COOL_DOWN.get(session_id)
+    if until is None:
+        return False
+    if time.time() >= until:
+        # 过期清理
+        _SESSION_COOL_DOWN.pop(session_id, None)
+        return False
+    return True
+
+
+def _mark_session_cool_down(session_id: str) -> None:
+    import time  # noqa: PLC0415
+    _SESSION_COOL_DOWN[session_id] = time.time() + _COOL_DOWN_SECONDS
+
+
 async def _summarize_with_llm(
     session_id: str, started_at: float, messages_pairs: list[tuple[str, str]]
 ) -> str | None:
@@ -189,8 +219,19 @@ async def _summarize_with_llm(
     跟主 chat 区分:
     - 加 X-Catfish-Skip-Identity: true 防 SOUL/journal/skills/session_history 等再次注入
       (我们就是在生成 journal 内容, 让 LLM 反过来引一遍 journal 是循环)
+
+    BL-F15 (5/5): 修 quota_exceeded 死循环
+    - 真问题: gateway quota check 在 with_fallback 之前抛 429, fallback chain 不接.
+      summarizer 一直撞主模型 quota → 撞错 → 立即被下一条 chat 触发又跑 → 死循环
+    - 修法 1: 用 picker 的**候选列表**, 收到 429 就切下一个 (绕过 quota check 限制)
+    - 修法 2: 全候选都 429 → 标 session 5 分钟冷却, 不再 hammer
+    - 长期: BL-F16 把 quota check 移进 with_fallback (demo 后)
     """
     if not messages_pairs:
+        return None
+
+    # BL-F15: 冷却中的 session 不重试, 防 hammer
+    if _is_session_cooling_down(session_id):
         return None
 
     # 拼上下文
@@ -205,21 +246,19 @@ async def _summarize_with_llm(
     import os  # noqa: PLC0415
     import httpx  # noqa: PLC0415
     from .config import load_config  # noqa: PLC0415
-    from .internal_models import pick_internal_model  # noqa: PLC0415
+    from .internal_models import pick_internal_models_ordered  # noqa: PLC0415
 
-    # BL-F14: 不写死模型名, 按 use_case tag 选 (private 优先, 内网挂了用 public).
-    # catalog 改了不用动代码.
+    # BL-F14 + F15: 拿候选列表 (不只 1 个), 第 1 个撞 quota 就切第 2 个.
+    # 顺序: tag+private → tag+public → 兜底 private → 兜底 public.
     config = load_config()
-    chosen_model = pick_internal_model("summarizer", config)
-    if chosen_model is None:
+    candidates = pick_internal_models_ordered("summarizer", config)
+    if not candidates:
         logger.info(
             "summarize_with_llm 跳过 session=%s: catalog 没可用 chat 模型 (api keys 全没配?)",
             session_id,
         )
         return None
 
-    # gateway loopback URL — 跟自己同进程, 但走 HTTP 才能复用 fallback / quota / metrics.
-    # 拆 gateway 部署时 (BL-F8 SaaS) 通过 CATFISH_GATEWAY_INTERNAL_URL env 注入新 URL.
     port = os.environ.get("PORT", "8999")
     gateway_url = os.environ.get(
         "CATFISH_GATEWAY_INTERNAL_URL",
@@ -227,38 +266,65 @@ async def _summarize_with_llm(
     )
     dev_token = os.environ.get("CATFISH_DEV_TOKEN", "dev-token-local")
 
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(
-                gateway_url,
-                headers={
-                    "Authorization": f"Bearer {dev_token}",
-                    "X-Catfish-Skip-Identity": "true",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    # catalog 模型名 (按 tag 选出), gateway 看到撞错自动走它的 fallback chain
-                    "model": chosen_model.name,
-                    "messages": [{"role": "user", "content": user_prompt}],
-                    "temperature": 0.3,
-                    "max_tokens": 600,
-                    "stream": False,
-                },
-            )
-            if resp.status_code != 200:
-                logger.warning(
-                    "summarize_with_llm session=%s: gateway 返 %d: %s",
-                    session_id, resp.status_code, resp.text[:300],
+    last_error: str | None = None
+    for attempt_idx, chosen_model in enumerate(candidates, start=1):
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(
+                    gateway_url,
+                    headers={
+                        "Authorization": f"Bearer {dev_token}",
+                        "X-Catfish-Skip-Identity": "true",
+                        "X-Catfish-Internal": "true",  # BL-F17: 跳 quota check + 不算 user_day
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": chosen_model.name,
+                        "messages": [{"role": "user", "content": user_prompt}],
+                        "temperature": 0.3,
+                        "max_tokens": 600,
+                        "stream": False,
+                    },
                 )
-                return None
-            data = resp.json()
-            text = data.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
-            return text.strip() or None
-    except Exception as e:
-        logger.warning(
-            "summarize_with_llm 失败 session=%s: %s", session_id, e
-        )
-        return None
+                if resp.status_code == 200:
+                    data = resp.json()
+                    text = data.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+                    if attempt_idx > 1:
+                        logger.info(
+                            "summarize_with_llm session=%s 切换到第 %d 候选 %s 成功",
+                            session_id, attempt_idx, chosen_model.name,
+                        )
+                    return text.strip() or None
+                # 429 quota_exceeded → 切下一个候选 (BL-F15 关键)
+                if resp.status_code == 429:
+                    logger.info(
+                        "summarize_with_llm session=%s: %s 撞 429 quota, 切下一个候选 (剩 %d)",
+                        session_id, chosen_model.name, len(candidates) - attempt_idx,
+                    )
+                    last_error = f"429 quota: {chosen_model.name}"
+                    continue
+                # 其他错码 (400/500/etc) — 大概率不是模型问题, 不切, 直接放弃
+                last_error = f"{resp.status_code}: {resp.text[:200]}"
+                logger.warning(
+                    "summarize_with_llm session=%s: gateway 返 %d (%s), 不再切候选",
+                    session_id, resp.status_code, chosen_model.name,
+                )
+                break
+        except Exception as e:
+            last_error = f"exception: {type(e).__name__}: {e}"
+            logger.warning(
+                "summarize_with_llm session=%s 候选 %s 异常 %s, 切下一个",
+                session_id, chosen_model.name, e,
+            )
+            continue
+
+    # 所有候选都失败 → 标记冷却, 防下次 chat 立即又来 hammer
+    logger.warning(
+        "summarize_with_llm session=%s 全 %d 候选都失败, 标记 %ds 冷却. 最后错: %s",
+        session_id, len(candidates), _COOL_DOWN_SECONDS, last_error,
+    )
+    _mark_session_cool_down(session_id)
+    return None
 
 
 async def summarize_one_session(
@@ -275,6 +341,18 @@ async def summarize_one_session(
     防止"同主题不同 session" 难区分.
     """
     date_str = datetime.fromtimestamp(started_at).strftime("%Y-%m-%d %H:%M")
+
+    # 5/5 凌晨修 race condition: 多 chat 并发 fire trigger_background_summary,
+    # 都查到同一 session 没 journaled → 都跑 summarize → journal 重复条目.
+    # in-memory 锁: 已在跑就 skip 不再开第 2 个 task.
+    if session_id in _CURRENTLY_SUMMARIZING:
+        logger.debug(
+            "summarize_one_session skip session=%s: 已有 task 在跑 (race condition 防御)",
+            session_id,
+        )
+        return False
+    _CURRENTLY_SUMMARIZING.add(session_id)
+
     logger.info(
         "summarize_one_session: session=%s, msg=%d, started=%s",
         session_id,
@@ -282,31 +360,35 @@ async def summarize_one_session(
         date_str,
     )
 
-    msgs = _read_session_messages(session_id)
-    if not msgs:
-        # 没消息可读 — mark 防再扫到 (这种 session 永远总结不了)
-        _mark_journaled(session_id)
-        return False
-
-    summary = await _summarize_with_llm(session_id, started_at, msgs)
-    if summary is None or not summary.strip():
-        # LLM 调用失败 — **不 mark**, 留给下次重试 (可能是网络抖 / API key 问题)
-        # 鸿波 4-30 踩过坑: 提前 mark 导致 litellm 没装这种环境问题把 10 个
-        # session 永久 mark, 永远不再总结. 改成只有真生成了才 mark.
-        return False
-
-    # gateway 加日期前缀 + session id 后缀, 让 LLM 不能脑补错时间
-    sid_short = session_id[-6:] if len(session_id) > 6 else session_id
-    full_entry = f"## {date_str} · session `…{sid_short}`\n\n{summary.strip()}\n"
-
     try:
-        append_to_journal(full_entry)
-        # 只有 journal 真写入了, 才 mark
-        _mark_journaled(session_id)
-        return True
-    except Exception as e:
-        logger.warning("append_to_journal 失败 session=%s: %s", session_id, e)
-        return False
+        msgs = _read_session_messages(session_id)
+        if not msgs:
+            # 没消息可读 — mark 防再扫到 (这种 session 永远总结不了)
+            _mark_journaled(session_id)
+            return False
+
+        summary = await _summarize_with_llm(session_id, started_at, msgs)
+        if summary is None or not summary.strip():
+            # LLM 调用失败 — **不 mark**, 留给下次重试 (可能是网络抖 / API key 问题)
+            # 鸿波 4-30 踩过坑: 提前 mark 导致 litellm 没装这种环境问题把 10 个
+            # session 永久 mark, 永远不再总结. 改成只有真生成了才 mark.
+            return False
+
+        # gateway 加日期前缀 + session id 后缀, 让 LLM 不能脑补错时间
+        sid_short = session_id[-6:] if len(session_id) > 6 else session_id
+        full_entry = f"## {date_str} · session `…{sid_short}`\n\n{summary.strip()}\n"
+
+        try:
+            append_to_journal(full_entry)
+            # 只有 journal 真写入了, 才 mark
+            _mark_journaled(session_id)
+            return True
+        except Exception as e:
+            logger.warning("append_to_journal 失败 session=%s: %s", session_id, e)
+            return False
+    finally:
+        # 必移除锁, 即使中间挂了 (防 session 永久不能再 summarize)
+        _CURRENTLY_SUMMARIZING.discard(session_id)
 
 
 async def trigger_background_summary(

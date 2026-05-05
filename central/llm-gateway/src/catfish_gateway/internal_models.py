@@ -75,6 +75,49 @@ def _sort_private_first(models: list["ModelConfig"]) -> list["ModelConfig"]:
     return sorted(models, key=lambda m: 0 if m.tier == "private" else 1)
 
 
+def pick_internal_models_ordered(
+    use_case: str, config: "Config"
+) -> list["ModelConfig"]:
+    """返**按优先级排序**的候选列表 (private 优先, tag 匹配优先).
+
+    BL-F15 (5/5): summarizer/proactive 收到 429 quota_exceeded 时按这个列表切下一个.
+    架构 bug 兜底: gateway quota check 在 with_fallback 之前, 直接抛 429, fallback
+    chain 不会接. caller 自己按候选列表 try.
+
+    返回顺序:
+      1. tag 匹配 + private (按 yaml 顺序)
+      2. tag 匹配 + public (按 yaml 顺序)
+      3. 兜底 + private (无 tag 但能 chat 的)
+      4. 兜底 + public
+
+    env override 强制选某个: 只返这一个, 不再列其他.
+    都不可达: 返空列表.
+
+    跟 pick_internal_model() 关系: 后者是返这个列表的第一个 (或 None).
+    """
+    # env override 强制
+    env_model_name = os.environ.get(_env_key(use_case), "").strip()
+    if env_model_name:
+        for m in config.models:
+            if m.name == env_model_name and _is_chat_available(m):
+                return [m]
+        # env 指了但不可用 → 走 tag 选 (不返空, 让 caller 仍有候选)
+
+    tagged_private = []
+    tagged_public = []
+    fallback_private = []
+    fallback_public = []
+    for m in config.models:
+        if not _is_chat_available(m):
+            continue
+        has_tag = use_case in (m.recommended_for or [])
+        if has_tag:
+            (tagged_private if m.tier == "private" else tagged_public).append(m)
+        else:
+            (fallback_private if m.tier == "private" else fallback_public).append(m)
+    return tagged_private + tagged_public + fallback_private + fallback_public
+
+
 def pick_internal_model(use_case: str, config: "Config") -> "ModelConfig | None":
     """按 use_case tag + private 优先选模型.
 

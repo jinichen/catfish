@@ -61,7 +61,7 @@ models:
     # 注: 公共模型在 .env 里没配 key 时会自动跳过, 不会傻等。
     fallback:
       on_errors: [429, 502, 503, 504, "timeout", "connection error", "connection refused"]
-      chain: [catfish-public-qwen-flash, catfish-public-gemini-flash]
+      chain: [catfish-public-qwen-flash, catfish-public-deepseek-flash, catfish-public-gemini-flash]
       max_hops: 2
 
   # ---------- 内部 · 多模态 ----------
@@ -154,6 +154,14 @@ models:
                       summarizer, proactive_starter, a2a_aux]
     cost_tier: paid
 
+    # 5/4 BL-F14 加: qwen-flash 自己也得有 chain.
+    # 之前没配, picker 选 qwen-flash 时撞错就死. 现在: qwen 挂 → deepseek → gemini.
+    # 内部用例 (summarizer/proactive) 走 picker 时, 内网不可达就选这条, 必须再有兜底.
+    fallback:
+      on_errors: [429, 502, 503, 504, "timeout", "connection error", "connection refused"]
+      chain: [catfish-public-deepseek-flash, catfish-public-gemini-flash]
+      max_hops: 2
+
   # ---------- 公共 · DEEPSEEK V4 ----------
   # DEEKSEEK OpenAI 兼容端点。没配 DEEPSEEK_API_KEY 时不出现在 catalog。
   # 模型详情: 
@@ -180,7 +188,7 @@ models:
       #     thinking:
       #       type: disabled
 
-    context_window: 262144  # 256K
+    context_window: 1000000  # 1M
     supports_tool_use: true
     supports_streaming: true
     supports_vision: false
@@ -188,6 +196,13 @@ models:
     recommended_for: [general, chat, tool_use, code, fast, fallback,
                       summarizer, proactive_starter, a2a_aux]
     cost_tier: paid
+
+    # 5/4 BL-F14 加: deepseek 自己也得有 chain.
+    # picker 用 env override 强制选 deepseek 时, 撞错有兜底 (qwen-flash → gemini-flash).
+    fallback:
+      on_errors: [429, 502, 503, 504, "timeout", "connection error", "connection refused"]
+      chain: [catfish-public-qwen-flash, catfish-public-gemini-flash]
+      max_hops: 2
 
   # ---------- 公共 · Gemini 3.1 Pro（长上下文） ----------
   # 200 万 token 上下文，适合长文档分析、跨会话回溯、复杂推理

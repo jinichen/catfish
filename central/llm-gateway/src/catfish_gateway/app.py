@@ -813,6 +813,7 @@ async def _stream_chat_completion(
     model_name: str,
     model,
     security_concern: str | None = None,
+    is_internal: bool = False,  # BL-F17 (5/5): internal 调用跳 record_usage
 ) -> AsyncIterator[str]:
     """SSE async generator for streaming chat completions, with fallback chain.
 
@@ -912,7 +913,13 @@ async def _stream_chat_completion(
             security_concern=security_concern,
         )
         # 五一 sprint 5/2 收尾: 同步写 quota_events. ok 才记 (error 时 tokens=0).
-        if status_str == "ok" and (prompt_tokens > 0 or completion_tokens > 0):
+        # BL-F17 (5/5): internal 调用跳 record_usage, 不算到员工 user_day quota.
+        # audit log 仍写 (透明), 只 quota 跳过.
+        if (
+            status_str == "ok"
+            and (prompt_tokens > 0 or completion_tokens > 0)
+            and not is_internal
+        ):
             _quota_module.record_usage(
                 user_email=user_sub,
                 department=user_dept,
@@ -935,6 +942,7 @@ async def _invoke_chat_completion(
     model_name: str,
     model,
     security_concern: str | None = None,
+    is_internal: bool = False,  # BL-F17 (5/5): internal 调用跳 record_usage
 ) -> dict[str, Any]:
     """Non-streaming chat completion path, with fallback chain support."""
     start = time.time()
@@ -976,7 +984,8 @@ async def _invoke_chat_completion(
         security_concern=security_concern,
     )
     # 五一 sprint 5/2 收尾: 同步写 quota_events. ok 才记 (error 时 tokens=0).
-    if prompt_tokens > 0 or completion_tokens > 0:
+    # BL-F17 (5/5): internal 调用跳 record_usage (audit log 仍写, 只 quota 跳).
+    if (prompt_tokens > 0 or completion_tokens > 0) and not is_internal:
         _quota_module.record_usage(
             user_email=user_sub,
             department=user_dept,
@@ -999,6 +1008,10 @@ async def chat_completions(
 
     config: Config = app.state.config
     model = _resolve_model(config, model_name)
+
+    # is_internal_call = (
+    #     request.headers.get("x-catfish-internal", "").lower() in ("true", "1", "yes")
+    # )
 
     if not user.can_access(model):
         raise HTTPException(status_code=403, detail=f"access denied to model: {model_name}")
@@ -1054,21 +1067,26 @@ async def chat_completions(
     # BL-E16 关系建立: 注入 session_meta (距上次 N 天 N 小时 / 今天第几次)
     # 让 LLM 知道时间感, 跨天回来时能自然说"好几天没找我了".
     # 同时 tick: 写本次 chat 时间, 累计 today_count.
-    try:
-        meta_block = session_meta.build_meta_block()
-        if meta_block:
-            # 找已有的 system message 拼到末尾; 没有则前插一条
-            inserted = False
-            for m in body["messages"]:
-                if m.get("role") == "system":
-                    m["content"] = (m.get("content") or "") + "\n\n---\n\n" + meta_block
-                    inserted = True
-                    break
-            if not inserted:
-                body["messages"].insert(0, {"role": "system", "content": meta_block})
-        session_meta.tick()
-    except Exception as e:
-        logger.warning("session_meta inject/tick 失败 (无关键路径): %s", e)
+    #
+    # BL-F17 后续 (5/5 凌晨 39060 次事故): internal 调用也跳 tick, 不然 summarizer
+    # 死循环时 today_count 暴涨 (5/4 凌晨 dev-user 跳到 39060). 跟 quota 同思路:
+    # 后台 housekeeping 不算"员工今天找了我".
+    if not is_internal_call:
+        try:
+            meta_block = session_meta.build_meta_block()
+            if meta_block:
+                # 找已有的 system message 拼到末尾; 没有则前插一条
+                inserted = False
+                for m in body["messages"]:
+                    if m.get("role") == "system":
+                        m["content"] = (m.get("content") or "") + "\n\n---\n\n" + meta_block
+                        inserted = True
+                        break
+                if not inserted:
+                    body["messages"].insert(0, {"role": "system", "content": meta_block})
+            session_meta.tick()
+        except Exception as e:
+            logger.warning("session_meta inject/tick 失败 (无关键路径): %s", e)
 
     # 后台触发: 异步总结 1 个最近结束但没总结过的 session, append 到 journal.
     # fire-and-forget, 不阻塞当前请求, 失败静默. 让 journal 自动持续填充.
@@ -1081,16 +1099,21 @@ async def chat_completions(
     # Prompt 安全检测: 扫 user messages 看是否含明文密码 / 凭据.
     # 不拦截 (员工知道在干嘛), 只 log warn + audit 标记, 让员工 IT 事后能查谁在何时
     # 把密码写进 prompt — 推荐他们用 secret_ref 替代.
-    from .prompt_security import detect_credentials_in_messages  # noqa: PLC0415
-    credential_hits = detect_credentials_in_messages(body.get("messages", []))
-    if credential_hits:
-        logger.warning(
-            "user=%s 在 prompt 里检测到密码 / 凭据明文 (%d 处). "
-            "建议员工用 secret_ref (keychain:// 或 env://) 替代. user_sub=%s",
-            user.sub, len(credential_hits), user.sub,
-        )
-        # 把 hits 暂存到 request state, 让后面 audit log 能拿到
-        request.state.credential_hits = credential_hits
+    #
+    # BL-F18 (5/5): internal call (summarizer/proactive/a2a) 跳 detector.
+    # 这些是后台 housekeeping, 拼的 prompt 是已经存进系统的内容 (journal / facts),
+    # 不是员工**这次**说的, 不该计入"今日安全事件". 跟 BL-F17 quota skip 同思路.
+    if not is_internal_call:
+        from .prompt_security import detect_credentials_in_messages  # noqa: PLC0415
+        credential_hits = detect_credentials_in_messages(body.get("messages", []))
+        if credential_hits:
+            logger.warning(
+                "user=%s 在 prompt 里检测到密码 / 凭据明文 (%d 处). "
+                "建议员工用 secret_ref (keychain:// 或 env://) 替代. user_sub=%s",
+                user.sub, len(credential_hits), user.sub,
+            )
+            # 把 hits 暂存到 request state, 让后面 audit log 能拿到
+            request.state.credential_hits = credential_hits
 
     # 含图自动 reroute 到 vision 模型: 防止主力模型 (非 vision) 收到 image_url
     # 直接被上游 protobuf 解析炸 BadRequest 400. in-place 改 body["model"].
@@ -1133,42 +1156,57 @@ async def chat_completions(
     # 真实接 chat: 在 LLM 调用前查 quota, 超了直接 429 + friendly message.
     # 估算用 quota.estimate_tokens(prompt 文本拼接), 4 字符 ≈ 1 token, 至少 1000.
     # check_quota 任一维度超 (user_minute / user_day / model_day / dept_day) 即拒.
-    try:
-        prompt_text = "\n".join(
-            (m.get("content") or "") if isinstance(m.get("content"), str)
-            else "" for m in (body.get("messages") or [])
-            if isinstance(m, dict)
+    #
+    # BL-F17 (5/5): X-Catfish-Internal: true → 跳 quota check.
+    # 内部 housekeeping (summarizer / proactive / a2a) 是后台总结/起话题/辅助 任务,
+    # 不该消耗员工 quota. 员工 1M/天 预算应该给员工**主对话**用, 不是给后台总结烧.
+    # 鸿波 5/5 凌晨 explicit: "summarizer 不要去限制用户的 quota 这才是合理的".
+    # 注: 不跳 audit log (透明仍要记, 只标 internal=true 区分).
+    is_internal_call = (
+        request.headers.get("x-catfish-internal", "").lower() in ("true", "1", "yes")
+    )
+    if is_internal_call:
+        logger.info(
+            "internal call: user=%s model=%s 跳 quota check (X-Catfish-Internal)",
+            user.sub, model_name,
         )
-        estimated = _quota_module.estimate_tokens(prompt_text)
-        qc = _quota_module.check_quota(
-            user_email=user.sub,
-            department=user.department,
-            model=model_name,
-            est_tokens=estimated,
-        )
-        if not qc.allowed:
-            friendly = _quota_module.friendly_quota_message(qc, user.sub, model_name)
-            logger.info(
-                "quota deny: user=%s model=%s dimension=%s current=%d limit=%d",
-                user.sub, model_name, qc.dimension, qc.current, qc.limit,
+    else:
+        try:
+            prompt_text = "\n".join(
+                (m.get("content") or "") if isinstance(m.get("content"), str)
+                else "" for m in (body.get("messages") or [])
+                if isinstance(m, dict)
             )
-            raise HTTPException(
-                status_code=429,
-                detail={
-                    "error": "quota_exceeded",
-                    "message": friendly,
-                    "dimension": qc.dimension,
-                    "current": qc.current,
-                    "limit": qc.limit,
-                    "reset_at": qc.reset_at,
-                    "model": model_name,
-                },
+            estimated = _quota_module.estimate_tokens(prompt_text)
+            qc = _quota_module.check_quota(
+                user_email=user.sub,
+                department=user.department,
+                model=model_name,
+                est_tokens=estimated,
             )
-    except HTTPException:
-        raise  # 上面 429 直接抛
-    except Exception as e:
-        # quota 子系统挂了不该影响主流程, 不阻断 chat
-        logger.warning("check_quota 调用炸 (allow chat): %s", e)
+            if not qc.allowed:
+                friendly = _quota_module.friendly_quota_message(qc, user.sub, model_name)
+                logger.info(
+                    "quota deny: user=%s model=%s dimension=%s current=%d limit=%d",
+                    user.sub, model_name, qc.dimension, qc.current, qc.limit,
+                )
+                raise HTTPException(
+                    status_code=429,
+                    detail={
+                        "error": "quota_exceeded",
+                        "message": friendly,
+                        "dimension": qc.dimension,
+                        "current": qc.current,
+                        "limit": qc.limit,
+                        "reset_at": qc.reset_at,
+                        "model": model_name,
+                    },
+                )
+        except HTTPException:
+            raise  # 上面 429 直接抛
+        except Exception as e:
+            # quota 子系统挂了不该影响主流程, 不阻断 chat
+            logger.warning("check_quota 调用炸 (allow chat): %s", e)
 
     # 注意: 这里传 body (而不是预构建的 params) 给 _invoke / _stream
     # 因为 fallback 时换模型, params 里的 api_base / api_key / 等都得重新构建
@@ -1188,6 +1226,7 @@ async def chat_completions(
                 body, user_sub=user.sub, user_dept=user.department,
                 model_name=model_name, model=model,
                 security_concern=security_concern,
+                is_internal=is_internal_call,  # BL-F17: 透传, 跳 record_usage
             ),
             media_type="text/event-stream",
         )
@@ -1195,6 +1234,7 @@ async def chat_completions(
         body, user_sub=user.sub, user_dept=user.department,
         model_name=model_name, model=model,
         security_concern=security_concern,
+        is_internal=is_internal_call,  # BL-F17: 透传, 跳 record_usage
     )
 
 

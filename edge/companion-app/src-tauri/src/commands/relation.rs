@@ -44,36 +44,91 @@ fn meta_path() -> Result<PathBuf, String> {
     Ok(home_dir()?.join(".catfish").join("session_meta.json"))
 }
 
-/// 把 journal markdown 切成 entry 列表 (按 `## ` 开头切), 倒序, 最多 N 条.
+/// 把 journal markdown 切成 entry 列表.
+///
+/// journal 格式 (gateway 写的):
+/// ```
+/// ## 2026-05-04 14:30 · session `…abc123`     <- ## 是 meta 头 (日期 + session id)
+///
+/// ### 资质周报草稿                              <- ### 是 LLM 写的真主题
+/// 鸿波让我写本周周报. 协商 4 段格式...           <- 正文
+///
+/// ## 2026-05-04 13:00 · session `…xyz`
+/// ### 跟领导沟通邮件
+/// ...
+/// ```
+///
+/// 5/5 鸿波拍板:
+/// - 标题用 ### (LLM 写的主题), 不用 ## (没意义的 session id 字符串)
+/// - 同 meta (日期+session_id) 重复条目去重 (race condition 时代留下的污染),
+///   留**正文最长**那条 (最完整)
+/// - 倒序 (最新在前, 按 meta 字符串 DESC, "YYYY-MM-DD" 字母序 == 时间序)
+/// - 截最近 N 条
 fn parse_journal(content: &str, max_entries: usize) -> Vec<JournalEntry> {
-    let mut entries: Vec<JournalEntry> = Vec::new();
-    let mut current_title: Option<String> = None;
-    let mut current_body: Vec<String> = Vec::new();
+    struct Raw {
+        meta: String,    // ## 行 (date + session id), 既做去重 key 也做时间排序
+        title: String,   // ### 行 (LLM 主题), 找不到 fallback meta
+        body: String,
+    }
 
+    // 1. 解析所有 raw entries
+    let mut raws: Vec<Raw> = Vec::new();
+    let mut current: Option<Raw> = None;
     for line in content.lines() {
-        if let Some(title) = line.strip_prefix("## ") {
-            if let Some(t) = current_title.take() {
-                entries.push(JournalEntry {
-                    title: t,
-                    body: current_body.join("\n").trim().to_string(),
-                });
-                current_body.clear();
+        if let Some(meta) = line.strip_prefix("## ") {
+            if let Some(r) = current.take() {
+                raws.push(r);
             }
-            current_title = Some(title.trim().to_string());
-        } else if current_title.is_some() {
-            current_body.push(line.to_string());
+            current = Some(Raw {
+                meta: meta.trim().to_string(),
+                title: String::new(),
+                body: String::new(),
+            });
+            continue;
+        }
+        if let Some(r) = current.as_mut() {
+            // 第一个 ### 抽成 title, 之后的 ### 仍当 body 一部分 (Markdown 内嵌的)
+            if r.title.is_empty() {
+                if let Some(t) = line.strip_prefix("### ") {
+                    r.title = t.trim().to_string();
+                    continue;
+                }
+            }
+            if !r.body.is_empty() {
+                r.body.push('\n');
+            }
+            r.body.push_str(line);
         }
     }
-    if let Some(t) = current_title.take() {
-        entries.push(JournalEntry {
-            title: t,
-            body: current_body.join("\n").trim().to_string(),
-        });
+    if let Some(r) = current.take() {
+        raws.push(r);
     }
-    // 倒序 (最新在前) + 截断
-    entries.reverse();
-    entries.truncate(max_entries);
-    entries
+
+    // 2. dedup by meta — 留 body 最长的
+    let mut by_meta: std::collections::HashMap<String, Raw> = std::collections::HashMap::new();
+    for r in raws.into_iter() {
+        let body_len = r.body.len();
+        match by_meta.get(&r.meta) {
+            Some(existing) if existing.body.len() >= body_len => {}
+            _ => {
+                by_meta.insert(r.meta.clone(), r);
+            }
+        }
+    }
+
+    // 3. sort by meta DESC (yaml meta 形如 "YYYY-MM-DD HH:MM · session …", 字母序 == 时间序)
+    let mut sorted: Vec<Raw> = by_meta.into_values().collect();
+    sorted.sort_by(|a, b| b.meta.cmp(&a.meta));
+
+    // 4. truncate + 转 JournalEntry
+    sorted.truncate(max_entries);
+    sorted
+        .into_iter()
+        .map(|r| JournalEntry {
+            title: if r.title.is_empty() { r.meta.clone() } else { r.title },
+            body: r.body.trim().to_string(),
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -90,7 +145,9 @@ pub fn relation_summary() -> Result<RelationView, String> {
     if jp.exists() {
         let content = fs::read_to_string(&jp).unwrap_or_default();
         view.journal_size_bytes = content.len() as u64;
-        view.recent_entries = parse_journal(&content, 5);
+        // 5/5 鸿波拍板: 5 太少, 加到 30 条 (前端 max-height + scroll 装得下).
+        // 30 条覆盖大约 2-3 周的工作记录, 老于这个员工大概率不感兴趣.
+        view.recent_entries = parse_journal(&content, 30);
     }
 
     // session_meta
@@ -206,23 +263,58 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_journal_extracts_titles_in_reverse() {
-        let md = "## 2026-05-01 资质周报\n讨论了 X.\n\n## 2026-05-02 安全检查\n协商 Y.\n";
+    fn parse_journal_extracts_llm_title_not_meta() {
+        // 5/5 鸿波拍板: title 应该是 LLM 写的 ### 主题, 不是 ## meta 行
+        let md = "## 2026-05-01 14:30 · session `…abc`\n\n### 资质周报草稿\n讨论 X.\n\n## 2026-05-02 09:00 · session `…def`\n\n### 安全检查清单\n协商 Y.\n";
         let entries = parse_journal(md, 5);
         assert_eq!(entries.len(), 2);
-        assert!(entries[0].title.contains("安全检查"));  // 倒序
-        assert!(entries[1].title.contains("资质周报"));
+        // 倒序 (5/2 在前)
+        assert_eq!(entries[0].title, "安全检查清单");
+        assert_eq!(entries[1].title, "资质周报草稿");
+    }
+
+    #[test]
+    fn parse_journal_falls_back_to_meta_when_no_llm_title() {
+        // ### 缺时, 用 ## meta 当 title (老格式 / LLM 没写好的兜底)
+        let md = "## 2026-05-01 直接正文没主题\n讨论了 X.\n";
+        let entries = parse_journal(md, 5);
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].title.contains("2026-05-01"));
+    }
+
+    #[test]
+    fn parse_journal_dedupes_same_meta_keeps_longest() {
+        // race condition 时代: 同一 session 写了 3 次, 留 body 最长的那条
+        let md = "## 2026-05-03 17:26 · session `…dfe`\n\n### 短的\nshort\n\n## 2026-05-03 17:26 · session `…dfe`\n\n### 长的\nthis is much much longer body content here.\n\n## 2026-05-03 17:26 · session `…dfe`\n\n### 中等\nmedium\n";
+        let entries = parse_journal(md, 5);
+        assert_eq!(entries.len(), 1, "同 meta 应去重成 1 条");
+        assert_eq!(entries[0].title, "长的");  // body 最长那条的 title
+    }
+
+    #[test]
+    fn parse_journal_sorts_by_meta_desc() {
+        let md = "## 2026-05-01 09:00 · session `…aaa`\n### 早\n.\n\n## 2026-05-03 17:26 · session `…ccc`\n### 晚\n.\n\n## 2026-05-02 12:00 · session `…bbb`\n### 中\n.\n";
+        let entries = parse_journal(md, 5);
+        assert_eq!(entries.len(), 3);
+        // meta 字符串倒序 == 时间倒序 (因为 YYYY-MM-DD 字母序 == 时间序)
+        assert_eq!(entries[0].title, "晚");   // 5/3 最新
+        assert_eq!(entries[1].title, "中");   // 5/2
+        assert_eq!(entries[2].title, "早");   // 5/1 最老
     }
 
     #[test]
     fn parse_journal_truncates() {
         let mut md = String::new();
         for i in 0..10 {
-            md.push_str(&format!("## entry {}\nbody {}\n\n", i, i));
+            // 用真 meta 形态, sort 才有意义
+            md.push_str(&format!("## 2026-05-{:02} 12:00 · session `…s{}`\n### entry {}\nbody {}\n\n", i + 1, i, i, i));
         }
         let entries = parse_journal(&md, 3);
         assert_eq!(entries.len(), 3);
-        assert!(entries[0].title.contains("entry 9"));
+        // 取最近 3 条 (i=9, 8, 7)
+        assert_eq!(entries[0].title, "entry 9");
+        assert_eq!(entries[1].title, "entry 8");
+        assert_eq!(entries[2].title, "entry 7");
     }
 
     #[test]

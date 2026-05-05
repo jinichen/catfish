@@ -2143,6 +2143,61 @@ def pick_internal_model(use_case: str, config: Config) -> Model | None:
 
 **架构进步**: catalog yaml 真正成为"模型唯一真源". 改 yaml 加/删/改名 → 内部 LLM 调用自动跟. 拆 gateway / catfish-cloud SaaS 部署只改 env 不改代码.
 
+---
+
+## 2026-05-05 凌晨 - BL-F15 修 quota_exceeded 死循环
+
+**鸿波 5/4 深夜真机验证发现死循环**: gateway log 里反复刷:
+```
+quota deny: user=dev-user model=catfish-private-main current=1224884 limit=1000000
+INFO: POST /v1/chat/completions 429 Too Many Requests
+WARNING: summarize_with_llm session=... gateway 返 429
+```
+
+每秒几十次. 鸿波"怎么没切吗?"
+
+### 真问题 (架构 bug)
+
+```
+client request → quota check (主模型, 写死) → 直接抛 429
+                                              ↑
+                                   根本没机会进 with_fallback
+                                   fallback chain (qwen/deepseek/gemini) 不会接
+```
+
+加上 summarizer 没冷却, 每次 chat 都 trigger summarize, 每次 summarize 撞 429, 立即被下一条 chat 又 trigger. **死循环 hammer**.
+
+### 治标 (BL-F15, 1 小时, ship)
+
+绕过架构 bug, 让 summarizer/proactive 自己有"客户端候选 fallback":
+
+1. **picker 加 `pick_internal_models_ordered`** 返候选**列表** (按 private→public + tag 排序), 不是单个
+2. **summarizer/proactive 改候选 try**: 主候选 429 quota 切下一个候选试. 全 429 才放弃
+3. **session 5 分钟冷却**: 全候选都 429 后, 标 session 进冷却. 5 分钟内不再 trigger summarize. 防 hammer
+
+代码量: ~50 行 + 10 新单测 (候选切换 / 冷却 / 过期清理 / 500 不切候选).
+
+### 治本 (BL-F16, 排 demo 后)
+
+quota check 真应该移进 `with_fallback`, 让 chain 里每个模型都查 quota, 跳过没 quota 的, 用第一个有 quota 的. 这样主对话也享受 "模型级 quota fallback" — 员工 catfish-private-main quota 满时自动切 qwen-flash, 不再直接 429.
+
+工作量 2-3 小时, 影响 chat_completions 主路径, 风险中, 排 5/15+ demo 后做.
+
+### 测试
+
+- 538/538 通过 (5/4 起累计 +32 测试)
+- BL-F15 新增 10 case (候选切换 / 全候选 429 标冷却 / 冷却中跳 / 冷却过期重置 / 500 不切 / 候选列表顺序 / env override 单元素 / env 不存在降级 / 全无可用返空 / 不可达模型不进列表)
+
+### 5/4-5/5 凌晨累计 (5 个后端 fix)
+
+- BL-D11 tools_sanitizer 加固 DeepSeek schema
+- BL-F12 summarizer 走 gateway loopback
+- BL-F13 lifespan LiteLLM client cleanup
+- BL-F14 pick_internal_model use_case tag + private 优先
+- BL-F15 picker 候选列表 + cool down (修 quota 死循环)
+
+**538 测试全过 / 0 fail / demo 路径 0 风险.** 真该睡了.
+
 ### 5/4 晚 — 主动学习鸿波"feedback / 越用越懂"问题答案
 
 鸿波问"小鯰能不能不断的越来越了解用户的性格、工作模式、生活模式、文书性格?". 评估现状: **没有显式 feedback 机制, 4 维全 partial 或 ❌**.

@@ -168,13 +168,12 @@ async def generate_starter() -> dict[str, Any]:
     now = datetime.now()
     journal_tail = _read_journal_tail()
 
-    # BL-F14: 不写死模型, 按 use_case tag 选 (private 优先, 内网挂了用 public).
-    # catalog 改了不用动这里. 全无可用模型 → 走 fallback 模板.
+    # BL-F14 + F15: 候选列表 (private 优先), 收到 429 切下一个绕 quota check.
     from .config import load_config  # 懒 import
-    from .internal_models import pick_internal_model  # 懒 import
+    from .internal_models import pick_internal_models_ordered  # 懒 import
     config = load_config()
-    chosen_model = pick_internal_model("proactive_starter", config)
-    if chosen_model is None:
+    candidates = pick_internal_models_ordered("proactive_starter", config)
+    if not candidates:
         return {
             "starter": _fallback_starter(now),
             "context_hint": "fallback (catalog 没可用 chat 模型, 全部 api key 没配?)",
@@ -191,31 +190,50 @@ async def generate_starter() -> dict[str, Any]:
     dev_token = os.environ.get("CATFISH_DEV_TOKEN", "dev-token-local")
     user_prompt = _build_user_prompt(journal_tail, now)
 
+    last_error: str | None = None
+    text = ""
+    for attempt_idx, chosen_model in enumerate(candidates, start=1):
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                resp = await client.post(
+                    gateway_url,
+                    headers={
+                        "Authorization": f"Bearer {dev_token}",
+                        "X-Catfish-Skip-Identity": "true",  # 防 SOUL/journal 二次注入死循环
+                        "X-Catfish-Internal": "true",  # BL-F17: 主动闲聊不消耗员工 quota
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": chosen_model.name,
+                        "messages": [{"role": "user", "content": user_prompt}],
+                        "temperature": 0.7,
+                        "max_tokens": 120,
+                        "stream": False,
+                    },
+                )
+            if resp.status_code == 200:
+                data = resp.json()
+                text = (data.get("choices", [{}])[0].get("message", {}).get("content", "") or "").strip()
+                if attempt_idx > 1:
+                    logger.info("generate_starter 切到第 %d 候选 %s 成功", attempt_idx, chosen_model.name)
+                break
+            if resp.status_code == 429:
+                logger.info("generate_starter %s 撞 429 quota, 切下一个候选", chosen_model.name)
+                last_error = f"429 quota: {chosen_model.name}"
+                continue
+            last_error = f"{resp.status_code}"
+            logger.warning("generate_starter %s 返 %d, 不再切", chosen_model.name, resp.status_code)
+            break
+        except Exception as e:
+            last_error = f"{type(e).__name__}"
+            logger.warning("generate_starter %s 异常 %s, 切下一个", chosen_model.name, e)
+            continue
+
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.post(
-                gateway_url,
-                headers={
-                    "Authorization": f"Bearer {dev_token}",
-                    "X-Catfish-Skip-Identity": "true",  # 防 SOUL/journal 二次注入死循环
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": chosen_model.name,
-                    "messages": [{"role": "user", "content": user_prompt}],
-                    "temperature": 0.7,  # 比 summarizer 高, 让话术不死板
-                    "max_tokens": 120,
-                    "stream": False,
-                },
-            )
-        if resp.status_code != 200:
-            raise RuntimeError(f"gateway 返 {resp.status_code}: {resp.text[:200]}")
-        data = resp.json()
-        text = (data.get("choices", [{}])[0].get("message", {}).get("content", "") or "").strip()
         # 清掉可能的 markdown 装饰
         text = text.strip("`\"'*-> \n")
         if not text:
-            raise ValueError("LLM 返空")
+            raise ValueError(f"全候选 ({len(candidates)}) 都失败, 最后错: {last_error}")
         return {
             "starter": text[:120],
             "context_hint": (
@@ -226,10 +244,10 @@ async def generate_starter() -> dict[str, Any]:
             "source": "llm",
         }
     except Exception as e:
-        logger.warning("generate_starter LLM 失败, fallback: %s", e)
+        logger.warning("generate_starter 全候选失败 fallback 模板: %s", e)
         return {
             "starter": _fallback_starter(now),
-            "context_hint": f"fallback (LLM err: {type(e).__name__})",
+            "context_hint": f"fallback (last_error={last_error})",
             "source": "fallback",
         }
 

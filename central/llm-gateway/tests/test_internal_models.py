@@ -242,3 +242,79 @@ def test_unknown_use_case_still_works(monkeypatch):
     # 没 tag 匹配 → 兜底任何 chat + 可达, private 优先
     assert chosen is not None
     assert chosen.name == "catfish-private-main"
+
+
+# ─── BL-F15 候选列表 (5/5 修 quota_exceeded 死循环) ───
+
+
+def test_pick_ordered_returns_list_in_priority(monkeypatch):
+    """候选列表顺序: tag+private → tag+public → 兜底+private → 兜底+public"""
+    from catfish_gateway.internal_models import pick_internal_models_ordered
+
+    monkeypatch.delenv("CATFISH_SUMMARIZER_MODEL", raising=False)
+    cfg = _basic_catalog()
+    ordered = pick_internal_models_ordered("summarizer", cfg)
+    names = [m.name for m in ordered]
+    # tag + private 第一: catfish-private-main
+    # tag + public: catfish-public-qwen-flash → catfish-public-deepseek-flash
+    # 兜底 (没 summarizer tag 但 chat + 可达): catfish-private-vision (private), gemini-pro (public)
+    assert names[0] == "catfish-private-main"  # tag+private
+    assert "catfish-public-qwen-flash" in names
+    assert "catfish-public-deepseek-flash" in names
+    # 顺序: private 优先, 同 tier yaml 顺序
+    qwen_idx = names.index("catfish-public-qwen-flash")
+    deepseek_idx = names.index("catfish-public-deepseek-flash")
+    assert qwen_idx < deepseek_idx  # qwen 在 yaml 里早于 deepseek
+    # tag+public 在 兜底+private 之前
+    private_vision_idx = names.index("catfish-private-vision")
+    assert qwen_idx < private_vision_idx
+
+
+def test_pick_ordered_env_override_returns_only_one(monkeypatch):
+    """env 强制时只返该模型 (caller 不该再切其他)"""
+    from catfish_gateway.internal_models import pick_internal_models_ordered
+
+    monkeypatch.setenv("CATFISH_SUMMARIZER_MODEL", "catfish-public-deepseek-flash")
+    cfg = _basic_catalog()
+    ordered = pick_internal_models_ordered("summarizer", cfg)
+    assert len(ordered) == 1
+    assert ordered[0].name == "catfish-public-deepseek-flash"
+
+
+def test_pick_ordered_env_unknown_falls_back_to_full_list(monkeypatch):
+    """env 指了不存在的模型 → 走完整候选列表 (不返空, caller 还能 try)"""
+    from catfish_gateway.internal_models import pick_internal_models_ordered
+
+    monkeypatch.setenv("CATFISH_SUMMARIZER_MODEL", "nonexistent")
+    cfg = _basic_catalog()
+    ordered = pick_internal_models_ordered("summarizer", cfg)
+    # 列表非空, 第一个仍是 private + tag
+    assert len(ordered) > 0
+    assert ordered[0].name == "catfish-private-main"
+
+
+def test_pick_ordered_empty_when_no_chat_models(monkeypatch):
+    """全没可用 → 返空列表"""
+    from catfish_gateway.internal_models import pick_internal_models_ordered
+
+    monkeypatch.delenv("CATFISH_SUMMARIZER_MODEL", raising=False)
+    cfg = FakeConfig(models=[
+        FakeModel("only-embed", "private", "embedding", []),
+    ])
+    ordered = pick_internal_models_ordered("summarizer", cfg)
+    assert ordered == []
+
+
+def test_pick_ordered_skips_unavailable(monkeypatch):
+    """不可达的模型不该出现在候选里"""
+    from catfish_gateway.internal_models import pick_internal_models_ordered
+
+    monkeypatch.delenv("CATFISH_SUMMARIZER_MODEL", raising=False)
+    cfg = FakeConfig(models=[
+        FakeModel("private-down", "private", "chat", ["summarizer"], available=False),
+        FakeModel("public-up", "public", "chat", ["summarizer"], available=True),
+    ])
+    ordered = pick_internal_models_ordered("summarizer", cfg)
+    names = [m.name for m in ordered]
+    assert "private-down" not in names
+    assert "public-up" in names

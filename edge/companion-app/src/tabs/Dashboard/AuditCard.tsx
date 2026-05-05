@@ -349,7 +349,9 @@ function SecurityRow({
           marginBottom: "var(--space-1)",
         }}
       >
-        ⚠ 今日安全事件:
+        {/* 5/5 鸿波拍板: "今日安全事件 × 434" 看着吓人. 实际是 chat history 重发
+            同一句话被检测多次, 不是真威胁. 改"今日检测到 N 类提醒"中性表述. */}
+        💡 今日检测到的提醒类型:
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)" }}>
         {concerns.map((c) => (
@@ -365,12 +367,26 @@ function SecurityRow({
             }}
             title={getConcernHelp(c.kind)}
           >
-            {c.kind} × {c.count}
+            {/* 不显次数 (大概率是 chat history 重发引起的同一事件多算).
+                只显类型, hover 看说明. */}
+            {kindLabel(c.kind)}
           </span>
         ))}
       </div>
+      <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 6 }}>
+        提示: 同一句话在多次对话上下文里会重复触发, 不是新事件. 当成"待修建议"看, 别紧张.
+      </div>
     </div>
   );
+}
+
+function kindLabel(kind: string): string {
+  /** 把内部 event kind 翻成员工能看懂的话术 */
+  const labels: Record<string, string> = {
+    prompt_credential_detected: "建议改用 secret_ref",
+    credential_field_filled: "浏览器密码字段被填",
+  };
+  return labels[kind] ?? kind;
 }
 
 function getConcernHelp(kind: string): string {

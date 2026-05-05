@@ -109,15 +109,10 @@ pub fn run() {
                 }
             }
 
-            // 五一 sprint Day 1: dev build 启动自动开 DevTools (debug_assertions 只在 cargo run / tauri dev 为 true).
-            // release build (cargo build --release / tauri build) 不开, 不影响员工端.
-            #[cfg(debug_assertions)]
-            {
-                use tauri::Manager;
-                if let Some(window) = app.get_webview_window("main") {
-                    window.open_devtools();
-                }
-            }
+            // 5/5 鸿波拍板: 取消自动 open_devtools.
+            // 之前 dev mode 启动自动弹 DevTools, 鸿波每次都得手动关.
+            // 真要调试: dev mode 下 Cmd+Option+I 手动开.
+            // release mode 默认就关 (tauri 2 release feature 默认关 devtools).
 
             // 后台静默拉起 gateway + tool-bridge —— 不让员工手动按"启动"。
             // tool-bridge 没起来 = 聊天工具列表为空 = Gemini 退化到 native tool_code。

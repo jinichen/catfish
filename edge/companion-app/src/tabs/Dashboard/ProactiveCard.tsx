@@ -58,8 +58,10 @@ export default function ProactiveCard() {
     >
       <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)", marginBottom: "var(--space-3)" }}>
         <h3 style={{ margin: 0 }}>📝 今日话题</h3>
+        {/* 5/5 鸿波拍板: 不暴露内部状态. 'LLM 不可用' / 'fallback' 这种术语员工没意义,
+            改成更口语的友好话术. 真要看 source 走 dev tools / metrics 看 audit log. */}
         <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
-          {starter?.source === "llm" ? "AI 按 journal 生成" : starter?.source === "fallback" ? "模板 (LLM 不可用)" : "..."}
+          {starter?.source === "llm" ? `${agentName}帮你想的` : starter?.source === "fallback" ? "默认话题" : "..."}
         </span>
         <button
           onClick={() => void load()}
@@ -121,8 +123,10 @@ export default function ProactiveCard() {
             </button>
           </div>
 
+          {/* 5/5 鸿波拍板: 删 "闲聊为了攒 demo 卖点" — 这是开发期内部 placeholder,
+              不该到生产 UI. 留中性的"30 分钟换一次"提示员工话题会自动刷新. */}
           <div style={{ marginTop: "var(--space-3)", fontSize: 11, color: "var(--catfish-text-muted)" }}>
-            读 journal 上下文 · 30 分钟换一次 · 闲聊为了攒 demo 卖点
+            30 分钟自动换一次
           </div>
         </>
       )}
