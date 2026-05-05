@@ -12,7 +12,12 @@ use chrono::DateTime;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
-const MAX_SESSIONS: usize = 100;
+/// 5/5 鸿波拍板: 之前 MAX_SESSIONS=100 让 sidebar 永远显"100", 误解为总数.
+/// 改全量拉, sidebar 已有 overflow: auto 支持垂直滚动.
+/// 安全上限 10000 防 sqlite 瞎查 (sessions 历史几千条, sqlite ORDER BY started_at
+/// 索引秒回; IPC ~200B/条 × 10000 = 2MB, Tauri webview 接得住).
+/// 真到 10K 上限时 UX 也得改 (virtualize) — 但现在远远没到.
+const MAX_SESSIONS: usize = 10000;
 /// 单条消息内容截断 —— 避免几万字的长文档把 IPC 撑爆
 const MAX_MESSAGE_CHARS: usize = 4000;
 
@@ -281,6 +286,24 @@ pub async fn sessions_list() -> Result<Vec<SessionMeta>, String> {
     tokio::task::spawn_blocking(list_blocking)
         .await
         .map_err(|e| format!("内部错误: {e}"))?
+}
+
+/// 5/5 鸿波报"会话计数永远显 100" 修: sessions_list 有 MAX_SESSIONS=100 上限,
+/// 但 state.db 里实际可能几百个 session. UI 要区分"显示数 vs 总数".
+/// 这个命令返 sessions 表真实总行数 (轻量, 单 SQL COUNT(*)).
+#[tauri::command]
+pub async fn sessions_count() -> Result<u64, String> {
+    tokio::task::spawn_blocking(count_blocking)
+        .await
+        .map_err(|e| format!("内部错误: {e}"))?
+}
+
+fn count_blocking() -> Result<u64, String> {
+    let conn = open_db()?;
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
+        .map_err(|e| format!("SQL count 失败: {e}"))?;
+    Ok(count.max(0) as u64)
 }
 
 #[tauri::command]

@@ -154,6 +154,7 @@ pub fn run() {
             commands::logs::stop_tail,
             // sessions (read)
             commands::sessions::sessions_list,
+            commands::sessions::sessions_count,
             commands::sessions::sessions_get,
             // sessions (write) —— Plan C Week 2 持久化
             commands::session_write::session_create,
@@ -195,6 +196,14 @@ pub fn run() {
             // BL-E16 关系建立 (五一 sprint 5/3 晚): "鲶鱼对你的印象" 透明 + 清空
             commands::relation::relation_summary,
             commands::relation::relation_forget,
+            // BL-MM4 v1 (5/5 晚): "鲶鱼记的硬事实" 版本卡 (跟 BL-MM2 配套)
+            commands::memory_history::memory_history_summary,
+            commands::memory_history::memory_history_clear_key,
+            commands::memory_history::memory_history_forget_all,
+            // BL-MM6 (5/5 晚): 显式 feedback 👍/👎/改 + ~/.catfish/feedback.jsonl
+            commands::feedback::feedback_record,
+            commands::feedback::feedback_summary,
+            commands::feedback::feedback_clear,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

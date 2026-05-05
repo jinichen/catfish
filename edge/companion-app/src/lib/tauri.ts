@@ -75,8 +75,51 @@ export const stopTailLogs = (service: string) =>
 
 // ── sessions (read) ──────────────────────────────────────
 export const listSessions = () => rawInvoke<SessionMeta[]>("sessions_list");
+/** 5/5: sessions_list 受 MAX_SESSIONS=100 限制, 这个返 state.db 真实总行数. */
+export const countSessions = () => rawInvoke<number>("sessions_count");
 export const getSession = (id: string) =>
   rawInvoke<SessionDetail>("sessions_get", { id });
+
+// ── BL-MM6 feedback (5/5 晚) ───────────────────────────────
+export type FeedbackKind = "thumb_up" | "thumb_down" | "edit";
+
+export interface FeedbackEvent {
+  ts: number;
+  kind: FeedbackKind;
+  session_id: string;
+  message_id: string;
+  preview: string;
+  comment?: string;
+}
+
+export interface FeedbackSummary {
+  total: number;
+  thumb_up: number;
+  thumb_down: number;
+  edit: number;
+  recent_negative: FeedbackEvent[];
+  file_size_bytes: number;
+}
+
+export const feedbackRecord = (args: {
+  kind: FeedbackKind;
+  sessionId: string;
+  messageId: string;
+  preview: string;
+  comment?: string;
+}) =>
+  rawInvoke<void>("feedback_record", {
+    kind: args.kind,
+    sessionId: args.sessionId,
+    messageId: args.messageId,
+    preview: args.preview,
+    comment: args.comment,
+  });
+
+export const feedbackSummary = () =>
+  rawInvoke<FeedbackSummary>("feedback_summary");
+
+export const feedbackClear = () => rawInvoke<void>("feedback_clear");
 
 // ── sessions (write) —— Plan C Week 2 持久化 ──
 export interface SessionCreateInput {

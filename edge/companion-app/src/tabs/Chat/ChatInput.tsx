@@ -256,21 +256,25 @@ export default function ChatInput({
     }
   }
 
-  /** 粘贴: 看剪贴板里有没有图片(截屏后直接 Cmd+V) */
+  /** 粘贴: 看剪贴板里有没有图片(截屏后直接 Cmd+V) 或文件(从 Finder 复制).
+   *
+   * 5/5 鸿波报"文件粘贴不行" 修: 之前只过滤 image/* MIME, 文档 (PDF/Excel/Word)
+   * 被忽略. 改成所有 kind="file" 都收, 让 fileToAttachment 自己 classifyFile,
+   * 不支持的格式会 throw 显示在 attachError. */
   function onPaste(e: ClipboardEvent<HTMLTextAreaElement>) {
     const items = Array.from(e.clipboardData?.items ?? []);
-    const imageFiles: File[] = [];
+    const pastedFiles: File[] = [];
     for (const it of items) {
-      if (it.kind === "file" && it.type.startsWith("image/")) {
+      if (it.kind === "file") {
         const f = it.getAsFile();
-        if (f) imageFiles.push(f);
+        if (f) pastedFiles.push(f);
       }
     }
-    if (imageFiles.length > 0) {
+    if (pastedFiles.length > 0) {
       e.preventDefault(); // 阻止把二进制乱码塞进 textarea
-      void addFiles(imageFiles);
+      void addFiles(pastedFiles);
     }
-    // 没图就走默认 (粘贴文本)
+    // 没文件就走默认 (粘贴文本)
   }
 
   /** 拖放: dragover/drop 在最外层 div 上挂, 防止默认行为 (浏览器会打开图片) */
@@ -413,7 +417,7 @@ export default function ChatInput({
         <button
           onClick={onPickFile}
           disabled={isStreaming || attachments.length >= MAX_ATTACHMENTS}
-          title="加图片 (粘贴 / 拖放也可以)"
+          title="加图片或文档 (PDF/Excel/Word/CSV/TXT) — 也可拖入或截图后 Cmd+V"
           style={{
             padding: "6px 10px",
             border: "1px solid var(--catfish-border)",
@@ -471,7 +475,7 @@ export default function ChatInput({
           placeholder={
             attachments.length > 0
               ? "加点说明 (可空) — Enter 发送"
-              : `跟${agentName}说话…  (Enter 发送 · Shift+Enter 换行 · 📎/粘贴/拖入加图)`
+              : `跟${agentName}说话…  (Enter 发送 · 拖入文件 / 截图 Cmd+V / 点 📎 加附件)`
           }
           rows={1}
           style={{

@@ -6,6 +6,7 @@ import ChatToolCall from "./ChatToolCall";
 import { extractFilePaths } from "../../lib/path_detect";
 import { FilePillList } from "../../components/FilePill";
 import { useAgentStore } from "../../store/agent";
+import FeedbackButtons from "./FeedbackButtons";
 
 interface Props {
   msg: Msg;
@@ -179,6 +180,14 @@ function AssistantBubble({
           >
             ✗ {friendlyError(msg.error)}
           </div>
+        )}
+        {/* BL-MM6 feedback 按钮: 流式中不显, 防员工误点未完成消息.
+            内容空 + 没 tool_calls + 不报错 时也不显 (点空消息无意义). */}
+        {!showCaret && (msg.content || msg.tool_calls?.length || isError) && (
+          <FeedbackButtons
+            messageId={msg.id}
+            preview={msg.content || (msg.tool_calls?.[0]?.name ?? "(空)")}
+          />
         )}
       </div>
     </div>

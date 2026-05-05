@@ -20,6 +20,8 @@ import AdminGlobalCard from "./AdminGlobalCard";
 import ProactiveCard from "./ProactiveCard";
 import AgentPrefsCard from "./AgentPrefsCard";
 import RelationCard from "./RelationCard";
+import MemoryHistoryCard from "./MemoryHistoryCard";
+import FeedbackSummaryCard from "./FeedbackSummaryCard";
 import { useMe } from "../../hooks/useMe";
 
 export default function DashboardTab() {
@@ -47,6 +49,10 @@ export default function DashboardTab() {
       <AgentPrefsCard />
       {/* BL-E16: 鲶鱼对你的印象 — 透明可删, 防 creepy */}
       <RelationCard />
+      {/* BL-MM4 v1: 鲶鱼记的硬事实 + 版本历史 (跟 catfish_remember/BL-MM2 配套) */}
+      <MemoryHistoryCard />
+      {/* BL-MM6: 你给鲶鱼的反馈 — ChatBubble 下面 👍/👎/改 按钮的汇总卡 */}
+      <FeedbackSummaryCard />
       <ServicesCard />
       <QuotaCard />
       <CatalogCard />

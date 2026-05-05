@@ -344,57 +344,69 @@ function SecurityRow({
     >
       <div
         style={{
-          fontSize: 12,
-          color: "var(--catfish-text-muted)",
-          marginBottom: "var(--space-1)",
+          fontSize: 13,
+          color: "var(--catfish-text)",
+          marginBottom: "var(--space-2)",
+          fontWeight: 500,
         }}
       >
-        {/* 5/5 鸿波拍板: "今日安全事件 × 434" 看着吓人. 实际是 chat history 重发
-            同一句话被检测多次, 不是真威胁. 改"今日检测到 N 类提醒"中性表述. */}
-        💡 今日检测到的提醒类型:
+        {/* 5/5 鸿波两轮反馈:
+            v1 "今日安全事件 ×434" 看着吓人 → 改"提醒类型"中性化 (5/5 早)
+            v2 "提醒类型 + 建议改用 secret_ref" 仍看不懂 → 改员工话 (5/5 晚) */}
+        💡 鲶鱼小贴士
       </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
         {concerns.map((c) => (
-          <span
+          <div
             key={c.kind}
             style={{
               fontSize: 12,
-              fontFamily: "var(--font-mono)",
-              padding: "2px 8px",
+              padding: "var(--space-2) var(--space-3)",
               background: "var(--catfish-bg-elevated)",
               border: "1px solid var(--catfish-border)",
-              borderRadius: 4,
+              borderRadius: "var(--radius-sm)",
+              lineHeight: 1.5,
             }}
-            title={getConcernHelp(c.kind)}
           >
-            {/* 不显次数 (大概率是 chat history 重发引起的同一事件多算).
-                只显类型, hover 看说明. */}
-            {kindLabel(c.kind)}
-          </span>
+            {kindBody(c.kind)}
+          </div>
         ))}
       </div>
-      <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 6 }}>
-        提示: 同一句话在多次对话上下文里会重复触发, 不是新事件. 当成"待修建议"看, 别紧张.
+      <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 8 }}>
+        ℹ️ 这些不是错误, 也不影响使用. 同一句话在多次对话里会重复触发, 数字不用较真.
       </div>
     </div>
   );
 }
 
-function kindLabel(kind: string): string {
-  /** 把内部 event kind 翻成员工能看懂的话术 */
-  const labels: Record<string, string> = {
-    prompt_credential_detected: "建议改用 secret_ref",
-    credential_field_filled: "浏览器密码字段被填",
-  };
-  return labels[kind] ?? kind;
-}
-
-function getConcernHelp(kind: string): string {
-  const map: Record<string, string> = {
-    prompt_credential_detected:
-      "员工 prompt 含明文密码 / token. 建议改 secret_ref (keychain://).",
-  };
-  return map[kind] ?? kind;
+/** 把内部 event kind 翻成员工能看懂的人话.
+ *
+ * 5/5 鸿波: 'prompt_credential_detected / 建议改用 secret_ref' 是工程术语堆砌,
+ * 员工看不懂. 改成"我做了啥, 鲶鱼建议我下次咋做"的口语化描述.
+ */
+function kindBody(kind: string): JSX.Element {
+  if (kind === "prompt_credential_detected") {
+    return (
+      <span>
+        <strong>你今天打字时直接发过密码/token</strong> — 不影响使用, 但<strong>下次更安全的做法</strong>:
+        告诉鲶鱼&nbsp;<code style={{
+          background: "var(--catfish-bg-cream)",
+          padding: "0 4px",
+          borderRadius: 3,
+          fontSize: 11,
+        }}>用 keychain://eis_password 登录</code>
+        &nbsp;(密码留在你 macOS Keychain 里, 不进对话, 不进日志).
+      </span>
+    );
+  }
+  if (kind === "credential_field_filled") {
+    return (
+      <span>
+        <strong>浏览器自动填了密码字段</strong> — 鲶鱼帮你跑浏览器任务时, Keychain 里的密码被填进网页表单了, 已记录到审计日志.
+      </span>
+    );
+  }
+  return <span>{kind}</span>;
 }
 
 function formatLatencyMs(ms: number): string {

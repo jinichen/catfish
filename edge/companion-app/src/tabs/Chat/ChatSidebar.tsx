@@ -19,7 +19,7 @@
  */
 
 import { useEffect, useState, useCallback } from "react";
-import { listSessions, openTerminal } from "../../lib/tauri";
+import { listSessions, countSessions, openTerminal } from "../../lib/tauri";
 import type { SessionMeta } from "../../types/session";
 
 interface Props {
@@ -43,13 +43,20 @@ export default function ChatSidebar({
   busy = false,
 }: Props) {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
+  // 5/5 鸿波: sessions 列表受 MAX_SESSIONS=100 限制, totalCount 是 state.db 真实总数
+  const [totalCount, setTotalCount] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const list = await listSessions();
+      // 并发拉, count 失败也不阻塞 list
+      const [list, count] = await Promise.all([
+        listSessions(),
+        countSessions().catch(() => null),
+      ]);
       setSessions(list);
+      setTotalCount(count);
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -96,7 +103,20 @@ export default function ChatSidebar({
           justifyContent: "space-between",
         }}
       >
-        <span>会话 · {sessions.length}</span>
+        <span
+          title={
+            totalCount !== null && totalCount > sessions.length
+              ? `state.db 共 ${totalCount} 条, 此处展示 ${sessions.length} 条 (安全上限 10000)`
+              : `共 ${sessions.length} 条会话`
+          }
+        >
+          会话 · {sessions.length}
+          {totalCount !== null && totalCount > sessions.length && (
+            <span style={{ color: "var(--catfish-text-muted)", fontWeight: 400 }}>
+              {" "}/ 共 {totalCount}
+            </span>
+          )}
+        </span>
         <button
           onClick={() => refresh()}
           title="刷新"

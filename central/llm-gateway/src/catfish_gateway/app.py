@@ -57,6 +57,7 @@ from .gemini_guard import harden_for_gemini  # noqa: E402
 from .multimodal_guard import route_to_vision_if_needed  # noqa: E402
 from .tool_capability_guard import route_to_tool_capable_if_needed  # noqa: E402
 from .employee_journal import inject_employee_journal  # noqa: E402
+from .feedback_inject import inject_feedback  # noqa: E402  BL-MM6
 from .inject_session_history import inject_session_history  # noqa: E402
 from .session_facts import inject_session_facts  # noqa: E402
 from . import session_meta  # noqa: E402  BL-E16 关系建立: tick + inject 时间元
@@ -81,6 +82,33 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("catfish.gateway")
+
+# 5/5 鸿波报"日志文件不存在": 之前 gateway log 只到 stdout, 关掉 terminal 就丢了.
+# 加 file handler 写 ~/Library/Logs/catfish/gateway.log (跟 macOS 习惯一致).
+# 用 RotatingFileHandler 防无限增长 — 单文件 10MB, 保留 5 个轮替.
+# CATFISH_LOG_FILE env 可换路径; CATFISH_LOG_FILE=- 表示禁用文件日志 (CI 用).
+def _setup_file_logging() -> None:
+    log_file = os.environ.get("CATFISH_LOG_FILE")
+    if log_file == "-":
+        return  # 显式禁用
+    if not log_file:
+        home = os.environ.get("HOME") or os.path.expanduser("~")
+        log_file = os.path.join(home, "Library", "Logs", "catfish", "gateway.log")
+    try:
+        from logging.handlers import RotatingFileHandler  # noqa: PLC0415
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        h = RotatingFileHandler(log_file, maxBytes=10 * 1024 * 1024, backupCount=5)
+        h.setFormatter(logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+        ))
+        # 加到 root logger, 所有 catfish.* / uvicorn / litellm 日志都进文件
+        logging.getLogger().addHandler(h)
+        logger.info("file logging → %s (10MB × 5 rotation)", log_file)
+    except Exception as e:
+        logger.warning("file logging 启用失败 (继续仅 stdout): %s", e)
+
+
+_setup_file_logging()
 
 # Silence LiteLLM's verbose mode -- we don't want it printing prompts.
 litellm.set_verbose = False
@@ -529,9 +557,14 @@ async def api_audit_global(
 
 @app.get("/api/dev/users")
 async def api_dev_users() -> dict[str, Any]:
-    """返 dev_users.yaml 配置的所有测试账号. 生产模式返 404."""
+    """返 dev_users.yaml 配置的所有测试账号.
+
+    5/5 鸿波: 之前 prod 返 404, gateway log 每次 Companion 启动刷一条 404.
+    改 prod 返 200 + 空列表 — 语义更对 ('prod 无 dev users' 而不是 'endpoint 不存在'),
+    log 也干净. Companion DevUserSwitcher 拿空 list 自己 hide.
+    """
     if os.environ.get("CATFISH_ENV", "dev").lower() == "prod":
-        raise HTTPException(status_code=404, detail="not found")
+        return {"users": []}
     from .auth.dev_token import list_dev_users
     return {"users": list_dev_users()}
 
@@ -1067,6 +1100,12 @@ async def chat_completions(
     # 档 2: 注入 ~/.catfish/employee_journal.md 内容 (LLM 总结过的关键决策 /
     #       偏好 / 里程碑), 模型看到员工"过去几天究竟讲了啥决定了啥"
     body["messages"] = inject_employee_journal(body["messages"])
+
+    # 档 3 (BL-MM6 5/5): 注入员工最近 7 天 negative feedback (👎 / 改).
+    #       跟 BL-MM5 主动学习 (软纪律) 配合, 这条是显式 + 工程级 — 员工 explicit
+    #       点了 button 才入, 比 LLM 自觉观察的权重高. internal call 也 inject —
+    #       summarizer / proactive 用一致风格, 也要尊重员工 feedback.
+    body["messages"] = inject_feedback(body["messages"])
 
     # BL-E16 关系建立: 注入 session_meta (距上次 N 天 N 小时 / 今天第几次)
     # 让 LLM 知道时间感, 跨天回来时能自然说"好几天没找我了".

@@ -22,7 +22,8 @@
         "fullscreen": false,
         "minimizable": true,
         "maximizable": true,
-        "closable": true
+        "closable": true,
+        "dragDropEnabled": false
       }
     ],
     "security": {

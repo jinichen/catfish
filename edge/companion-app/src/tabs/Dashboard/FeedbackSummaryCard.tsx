@@ -1,41 +1,55 @@
-/** Dashboard 卡 — "鲶鱼对你的印象" (BL-E16 五一 sprint 5/3 晚)
+/** Dashboard 卡 — "你给小鲶的反馈" (BL-MM6 五一 sprint 5/5 晚)
  *
- * 设计立场: 鲶鱼"记得"你的事, 员工**必须**能看到 + 删除, 否则就 creepy.
- *   - 显示最近 5 条 employee_journal 总结 (LLM 已经在每次 chat 看到这些)
- *   - 显示"今天第 N 次 / 距上次 N 天 N 小时"
- *   - "清空印象" 按钮 (rm journal + meta) — 隐私逃生口
+ * 跟 ChatMessage 下面的 👍/👎/改 按钮配套. 这张卡:
+ *   - 总数 + 三种 feedback 比例 (👍 N · 👎 N · 改 N)
+ *   - 最近 5 条 negative (👎 / 改) 评论 — 让员工 review 自己提过啥意见
+ *   - 文件大小 + 路径
+ *   - "清空 feedback" 按钮 (隐私逃生口)
  *
- * 不调 gateway, 直接读本机文件 (Tauri command).
+ * 不调 gateway, 直接读 ~/.catfish/feedback.jsonl (Tauri command).
  */
 
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-
 import { useAgentStore } from "../../store/agent";
+import {
+  feedbackSummary,
+  feedbackClear,
+  type FeedbackSummary,
+  type FeedbackEvent,
+} from "../../lib/tauri";
 
-interface JournalEntry {
-  title: string;
-  body: string;
+function humanTime(ts: number): string {
+  if (!ts || ts <= 0) return "时间未知";
+  const now = Date.now() / 1000;
+  const diff = now - ts;
+  if (diff < 60) return "刚刚";
+  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
+  if (diff < 86400 * 2) return "昨天";
+  if (diff < 86400 * 7) return `${Math.floor(diff / 86400)} 天前`;
+  const d = new Date(ts * 1000);
+  return `${d.getFullYear()}-${(d.getMonth() + 1)
+    .toString()
+    .padStart(2, "0")}-${d.getDate().toString().padStart(2, "0")}`;
 }
 
-interface RelationView {
-  recent_entries: JournalEntry[];
-  last_chat_human: string | null;
-  today_count: number | null;
-  journal_size_bytes: number;
+function kindLabel(kind: string): { emoji: string; text: string; color: string } {
+  if (kind === "thumb_up") return { emoji: "👍", text: "好评", color: "var(--catfish-cyan)" };
+  if (kind === "thumb_down") return { emoji: "👎", text: "不好", color: "var(--status-warn, orange)" };
+  if (kind === "edit") return { emoji: "✏️", text: "想要不一样", color: "var(--catfish-text)" };
+  return { emoji: "?", text: kind, color: "var(--catfish-text-muted)" };
 }
 
-export default function RelationCard() {
-  // BL-E11 后续: 标题 + 提示语用员工自定义名
+export default function FeedbackSummaryCard() {
   const agentName = useAgentStore((s) => s.name);
-  const [view, setView] = useState<RelationView | null>(null);
+  const [view, setView] = useState<FeedbackSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const refresh = async () => {
     try {
-      const v = await invoke<RelationView>("relation_summary");
+      const v = await feedbackSummary();
       setView(v);
       setError(null);
     } catch (e) {
@@ -47,10 +61,10 @@ export default function RelationCard() {
     void refresh();
   }, []);
 
-  const forget = async () => {
+  const clearAll = async () => {
     setBusy(true);
     try {
-      await invoke("relation_forget");
+      await feedbackClear();
       setConfirming(false);
       await refresh();
     } catch (e) {
@@ -80,11 +94,10 @@ export default function RelationCard() {
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
           <h3 style={{ margin: 0, display: "inline-flex", alignItems: "center", gap: 8 }}>
             <img src="/catfish-avatar.svg" alt="" width={20} height={20} style={{ display: "block" }} />
-            {agentName}对你的印象
+            你给{agentName}的反馈
           </h3>
-          {/* 5/5 鸿波: '印象' vs '硬事实' 区分不清, 加副标题让员工一眼看懂 */}
           <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", paddingLeft: 28 }}>
-            我帮你总结过的对话主题 (像日记)
+            👍/👎/改 历史 (我会看, 越用越懂你)
           </span>
         </div>
         <button
@@ -110,66 +123,57 @@ export default function RelationCard() {
         </div>
       )}
 
-      {!view && !error && <div style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>读取中…</div>}
+      {!view && !error && (
+        <div style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>读取中…</div>
+      )}
 
-      {view && (
+      {view && view.total === 0 && (
+        <div
+          style={{
+            fontSize: 12,
+            color: "var(--catfish-text-muted)",
+            fontStyle: "italic",
+            padding: "var(--space-3) 0",
+          }}
+        >
+          还没反馈过我 — 我说话时, 消息下方有 👍/👎/改 按钮,
+          你点一下我会记住你的偏好, 之后回话照着改.
+        </div>
+      )}
+
+      {view && view.total > 0 && (
         <>
-          {/* 时间感.
-              5/5 鸿波拍板 fix: 之前 `(a || view.today_count) && (...)`, 当 today_count=0
-              时 (a || 0) = 0, React 把字面量 "0" 渲染到 UI 上 (用户看到只有一个孤零零的"0").
-              改 explicit boolean 计算, 防 React 渲染 falsy 数字. */}
-          {(() => {
-            const hasLast = !!view.last_chat_human;
-            const hasCount = view.today_count !== null && view.today_count > 0;
-            if (!hasLast && !hasCount) return null;
-            return (
-              <div
-                style={{
-                  fontSize: 12,
-                  color: "var(--catfish-text-muted)",
-                  marginBottom: "var(--space-3)",
-                  lineHeight: 1.6,
-                }}
-              >
-                {hasLast && (
-                  <div>距上次找我: <strong style={{ color: "var(--catfish-text)" }}>{view.last_chat_human}前</strong></div>
-                )}
-                {hasCount && (
-                  <div>今天第 <strong style={{ color: "var(--catfish-text)" }}>{view.today_count}</strong> 次找我</div>
-                )}
-              </div>
-            );
-          })()}
+          {/* 总数 + 三种比例 */}
+          <div
+            style={{
+              display: "flex",
+              gap: "var(--space-3)",
+              marginBottom: "var(--space-3)",
+              fontSize: 13,
+            }}
+          >
+            <Stat emoji="👍" count={view.thumb_up} color="var(--catfish-cyan)" />
+            <Stat emoji="👎" count={view.thumb_down} color="var(--status-warn, orange)" />
+            <Stat emoji="✏️ 改" count={view.edit} color="var(--catfish-text)" />
+          </div>
 
-          {/* 最近条目 */}
-          {view.recent_entries.length === 0 ? (
-            <div
-              style={{
-                fontSize: 12,
-                color: "var(--catfish-text-muted)",
-                fontStyle: "italic",
-                padding: "var(--space-3) 0",
-              }}
-            >
-              还没有印象 — 多跟我聊几次, 我会记住你的工作.
-            </div>
-          ) : (
+          {/* 最近 negative 评论 */}
+          {view.recent_negative.length > 0 && (
             <div
               style={{
                 display: "flex",
                 flexDirection: "column",
-                gap: 8,
-                // 5/5 鸿波拍板: 加滚动. 之前最多显 5 条, 老的看不到.
-                // backend 现在拉 30 条, 前端 360px 高度 + 滚动, 能查 2-3 周.
-                maxHeight: 360,
+                gap: 6,
+                maxHeight: 240,
                 overflowY: "auto",
-                paddingRight: 4,  // 给滚动条留余地
+                paddingRight: 4,
               }}
             >
-              {/* 5/5 鸿波拍板隐私 fix: 默认只显标题, 不显正文 (有些 session 涉及私事
-                  不该 in-glance 暴露在 Dashboard). 点击标题展开看正文 */}
-              {view.recent_entries.map((e, i) => (
-                <RelationEntry key={i} title={e.title} body={e.body} />
+              <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginBottom: 2 }}>
+                最近的"不好" / "想改"反馈:
+              </div>
+              {view.recent_negative.map((ev, i) => (
+                <NegEntry key={i} ev={ev} />
               ))}
             </div>
           )}
@@ -187,7 +191,7 @@ export default function RelationCard() {
               color: "var(--catfish-text-muted)",
             }}
           >
-            <span>共 {(view.journal_size_bytes / 1024).toFixed(1)} KB</span>
+            <span>共 {view.total} 条 · {(view.file_size_bytes / 1024).toFixed(1)} KB</span>
             {!confirming ? (
               <button
                 type="button"
@@ -202,13 +206,13 @@ export default function RelationCard() {
                   cursor: "pointer",
                 }}
               >
-                清空印象
+                清空反馈
               </button>
             ) : (
               <span style={{ display: "inline-flex", gap: 6 }}>
                 <button
                   type="button"
-                  onClick={forget}
+                  onClick={clearAll}
                   disabled={busy}
                   style={{
                     background: "var(--status-err)",
@@ -248,16 +252,23 @@ export default function RelationCard() {
   );
 }
 
+function Stat({ emoji, count, color }: { emoji: string; count: number; color: string }) {
+  return (
+    <div
+      style={{
+        display: "inline-flex",
+        alignItems: "baseline",
+        gap: 6,
+      }}
+    >
+      <span style={{ fontSize: 16 }}>{emoji}</span>
+      <span style={{ fontSize: 18, fontWeight: 600, color }}>{count}</span>
+    </div>
+  );
+}
 
-/** 单条 journal 条目: 默认显标题 + 摘要 (前 100 字), 点击看全文.
- *  5/5 鸿波拍板: 之前默认折叠只显标题, 用户得一条条点开太烦. 改成默认露摘要,
- *  全文长时再点击展开. 隐私敏感的话员工自己用"清空印象"按钮删. */
-function RelationEntry({ title, body }: { title: string; body: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const SNIPPET_LEN = 100;
-  const hasMore = body.length > SNIPPET_LEN;
-  const snippet = hasMore ? body.slice(0, SNIPPET_LEN) + "…" : body;
-
+function NegEntry({ ev }: { ev: FeedbackEvent }) {
+  const k = kindLabel(ev.kind);
   return (
     <div
       style={{
@@ -265,42 +276,35 @@ function RelationEntry({ title, body }: { title: string; body: string }) {
         background: "var(--catfish-bg-cream)",
         border: "1px solid var(--catfish-border)",
         borderRadius: "var(--radius-sm)",
-        padding: "8px 10px",
-        cursor: hasMore ? "pointer" : "default",
+        padding: "6px 10px",
       }}
-      onClick={() => hasMore && setExpanded((e) => !e)}
-      title={hasMore ? "点击展开全文" : ""}
     >
-      <div
-        style={{
-          fontWeight: 500,
-          color: "var(--catfish-text)",
-          marginBottom: body ? 4 : 0,
-        }}
-      >
-        {title}
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
+        <span style={{ color: k.color, fontSize: 11 }}>
+          {k.emoji} {k.text}
+        </span>
+        <span style={{ fontSize: 10, color: "var(--catfish-text-muted)" }}>
+          {humanTime(ev.ts)}
+        </span>
       </div>
-      {body && (
-        <div
-          style={{
-            color: "var(--catfish-text-muted)",
-            lineHeight: 1.6,
-            whiteSpace: "pre-wrap",
-          }}
-        >
-          {expanded ? body : snippet}
+      {ev.comment ? (
+        <div style={{ color: "var(--catfish-text)", lineHeight: 1.5 }}>{ev.comment}</div>
+      ) : (
+        <div style={{ color: "var(--catfish-text-muted)", fontStyle: "italic", fontSize: 11 }}>
+          (没写理由)
         </div>
       )}
-      {hasMore && (
+      {ev.preview && (
         <div
           style={{
+            marginTop: 4,
             fontSize: 10,
             color: "var(--catfish-text-muted)",
-            textAlign: "right",
-            marginTop: 4,
+            paddingLeft: 8,
+            borderLeft: "2px solid var(--catfish-border)",
           }}
         >
-          {expanded ? "收起 ↑" : "展开 ↓"}
+          原文: {ev.preview.length > 80 ? ev.preview.slice(0, 80) + "…" : ev.preview}
         </div>
       )}
     </div>
