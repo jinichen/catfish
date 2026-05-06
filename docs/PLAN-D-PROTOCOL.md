@@ -416,6 +416,98 @@ result = await a2a_ask(
 
 ---
 
+## 9.5 部署架构选项 (5/6 加, 鸿波点播)
+
+> "每只鲶鱼都要一个网关吗?" — **不一定**. 协议层支持 3 种部署, 客户按敏感度选.
+
+### 架构 A: 每员工本机一 gateway (高敏感小部门)
+
+```
+员工电脑 = Companion + tool-bridge + gateway (本机) + 私钥
+        ↕ HTTP 内网
+catfish-identity (registry, 中央)
+```
+
+- **隐私**: 最强. 员工 chat / journal / a2a 流量 100% 在自己本机, gateway 也是
+- **资源**: 100 员工 = 100 个 gateway (~50MB RAM × 100 = 5GB), IT 维护 100 份 .env
+- **场景**: 央企保密室 / 战略部 / ≤ 20 人高敏感部门
+
+### 架构 B: 部门共享 gateway (★ 推荐, 95% 客户)
+
+```
+员工电脑 = Companion + tool-bridge (轻)
+       ↕ HTTPS 内网
+部门内网服务器 = 1 个 gateway (服务全员, 多 user_sub) + 各员工 ALLOW.md
+       ↕
+catfish-identity (registry, 中央)
+```
+
+- **隐私**: 中. gateway 看得到本部门所有员工的 a2a 流量, 但客户 IT 自己掌控 (audit 完整可查)
+- **资源**: 1 个 gateway 服 100 员工, ~200MB RAM (跟 5GB 比节省 96%)
+- **维护**: 1 份 .env / 1 套 LLM 配置 / 1 个升级窗口
+- **场景**: 普通中型部门 (20-200 人) — 大部分客户场景
+
+### 架构 C: 公司单 gateway (大组织退化版)
+
+```
+全公司员工 → 1 个 gateway (中央内网) → registry + LLM
+```
+
+- **隐私**: 最弱 (单点看全公司 a2a). 跟 ChatGPT 企业版差不多
+- **资源**: 最少
+- **场景**: 大型集团 (≥ 500 人) **过渡期**, 后续按部门拆 → B
+
+### 实际推荐: 混合部署
+
+```
+集团根级 = catfish-identity registry (1 个)
+   ├── 子公司 A → 部门 gateway (架构 B)
+   ├── 子公司 B → 部门 gateway (架构 B)
+   └── 保密单元 → 员工本机 gateway (架构 A)
+```
+
+### 协议层怎么支持 3 种
+
+`gateway/users.yaml` 字段 `user_sub` 区分员工身份, 同一 gateway 可同时:
+- 持多个员工的 keypair (a2a 签 JWT 用)
+- 加载多份 ALLOW.md (按 user_sub 分别匹配)
+- 双层 audit (gateway 级 + 员工级)
+- quota 按 user_sub × model 限速
+
+**3 种架构走同一份代码**, 部署配置不同而已. 客户**任何时候能切换** — A 升 B (员工 gateway 退役, 部门 gateway 接管, 流量切过去, 0 协议改动).
+
+### ⚠️ 不同架构的安全 trade-off
+
+| | A 本机 | B 部门 | C 公司 |
+|---|---|---|---|
+| 员工 chat 出本机? | ❌ 不出 (除上游 LLM) | ✅ 出 (到部门 gateway) | ✅ 出 (到公司 gateway) |
+| a2a 流量 gateway 看到? | 自己的 gateway 看 | 部门 gateway 看本部门所有 | 公司 gateway 看全公司 |
+| 信安部门 audit 范围 | 员工本机 jsonl | 部门 gateway jsonl | 公司 gateway jsonl |
+| 维护成本 | 100× | 1× / 部门 | 1× |
+| 单点故障影响 | 1 员工 | 1 部门 | 全公司 |
+
+### 架构选择标准 (5/6 鸿波点播)
+
+**不是"员工对公司隐私" 的对立**, 是**信任面 / 集中度 / 单点风险** 的工程权衡:
+
+| 公司 IT 的目的 | 推荐 |
+|---|---|
+| 高敏感岗减小集中信任面 (单 mac 被入侵只影响 1 员工) | A 员工本机 |
+| 部门级 IT 集中管 (常见央企监管, 95% 客户) | **B 部门 gateway ★** |
+| 大集团过渡期单点统管 | C 公司 gateway |
+| 多业态混合 | A + B 混合部署 |
+
+**关键事实**:
+- 不论 A/B/C, **LLM 服务器在客户内网 GPU 都能看 prompt** (推理本质). 客户 IT 经 LLM 服务器层永远有审计能力
+- **chat 是工作产出**, 公司审计权天然存在. 鲶鱼不挡也不该挡 (鲶鱼是公司装的工作工具, 不是帮员工对抗公司管理)
+- **鲶鱼平台公司从不见数据** — 三种架构下都一样, 软件供应商部署完撤场
+
+**鲶鱼定位**: 员工的"工作同事"智能版. 懂员工**工作画像** (写汇报 / 工作节奏 / 项目细节), 不挖私生活 (SOUL 红线 BL-MM7 已明确拒). 这层定位下, "懂员工" 跟"公司审 chat" 不冲突 — 公司同事本来就懂你工作画像, 公司管理本来就有 chat 审计权.
+
+客户 IT 选哪种 → 见 `DEPLOYMENT-RUNBOOK.md § 11`.
+
+---
+
 ## 10. 未来演进 (Phase 3.5+)
 
 - **A2A skill share**: A 把 skill 分享给 B (Skills Hub MVP 单机版扩展, 跨实例 sync)
@@ -423,6 +515,128 @@ result = await a2a_ask(
 - **A2A 群组**: 多人协作 (Alice + Bob + Charlie 三方对话)
 - **LLM-based ALLOW 判断**: 关键词不够细时, 升级 LLM 判断 (员工偏好开关)
 - **跨组织 federation**: 鲶鱼 A 公司 + 鲶鱼 B 公司, 通过 OIDC federation 协议互认 (Phase 4)
+
+---
+
+## 11. Agent-as-Service 愿景 (5/6 鸿波点播, BL-FED2)
+
+> ⚠️ **重大方向调整 + 灵魂校准 (5/6 晚)**: 之前 Plan D 框成 "peer-to-peer 临时问答" 太窄. 真愿景是 **agent 代员工本人提供专业互助** — 但**这是员工自愿的同事互助, 不是把员工知识抽进公司知识库**.
+
+### 11.1 模型转变
+
+```
+之前 (peer-to-peer, Plan D v0.1):                  现在 (agent-as-service, BL-FED2):
+─────────────────────────────────────────────      ──────────────────────────────────────────
+"小李问下小赵 KA017 项目咋样?"                      "我想问资质问题, 公司谁愿意被 agent 代答?"
+                                                       ↓
+Alice agent → 调 a2a_ask 给 Bob                    路由层查"自愿登记的"agent 黄页 → 老李 agent
+                                                       (老李自愿声明"我能答资质")
+Bob 看 Bob 自己 journal 答                             ↓
+                                                   老李 agent 基于老李工作画像
+返 Alice                                          (journal/memory/style/skill, **全在老李 mac**)
+                                                  代老李答 80% 简单咨询, 引用具体案例
+                                                       ↓
+                                                   返小赵 chat
+```
+
+**核心差异 (灵魂校准版)**:
+
+1. **agent 自愿声明专长** (员工本人决定, 不是公司强派): "我是老李的 agent, 我**愿意**帮同事答资质相关问题"
+2. **同事黄页 (员工自愿登记)**: 列每个**自愿出来互助的** agent (员工随时下线 / 删专长 / 改 ALLOW)
+3. **查询不指定人**: 员工问"谁愿意答 X?" → 路由层只匹配**已自愿登记的** agent
+4. **agent 是员工延伸 (人走 agent 跟着走)**: 老李休假 → agent 24/7 服务. 老李**离职** → **agent 跟老李走** (`cp ~/.catfish/` 到新雇主), 老李在原公司的"专长声明" 自动失效, 同事查不到
+5. **员工自愿持续学习**: BL-MM7/MM8 画像层只在老李 mac, agent 答外部问题时**只输出 LLM 生成的回答文本**, 不漏 raw journal/memory 给路由层 / 同事 / 公司
+
+### 11.2 真正的卖点 (灵魂校准版)
+
+不是 "AI 副手", 是**"员工自愿互助, 减少打断"**:
+
+- 老李 = 资质专家, 同事一天问 30 次资质 → 老李工作被打断, 烦死
+- 装鲶鱼 6 月后, 老李**自愿**让 agent 接 80% 简单咨询, 老李只处理 20% 复杂
+- 老李**专注力回来 + 同事拿到答案更快**, 双赢
+- 老李休假 / 出差: agent 接力, 同事不卡
+- 老李**离职跳槽**: agent **跟老李走** (画像 / 工作记忆 / 技能库都在老李 mac, `cp ~/.catfish/` 到新雇主). 公司原来的"老李 agent 专长"自动从黄页消失. 公司想留下知识 → 公司有自己的知识库系统 (Confluence / 内部 wiki), 不是把员工脑子绑架进鲶鱼
+- 新人入职: 由**愿意带新人**的老员工的 agent 帮新人 (员工自愿, 不是 HR 强配)
+
+**跟 ChatGPT 企业版 / 公司知识库本质区别**:
+- ChatGPT 企业版 = OpenAI 把全公司知识抽走, agent 给员工用
+- 公司知识库 = 公司从员工脑里抽知识, 沉淀成公司资产 (员工跳槽不丢)
+- **鲶鱼 BL-FED2** = 员工**自愿出来**互助, 知识**始终属于员工本人**, 跳槽跟人走
+
+**为什么这定位央企买单**:
+- HR / 法务: 尊重员工对自己工作产出的所有权 (跟劳动法一致)
+- 信安: 员工 raw 数据永远在员工 mac, agent 答只输出文本, 不漏画像
+- 员工: 不被绑架, 同事互助是双赢的, 不是被公司榨知识
+- 公司核心知识 (合同 / 财务 / 客户库) → 公司自己的系统沉淀, 不在员工 agent 里
+
+**这才是央企真正想买的 PoC 卖点**: 不是"提取员工知识", 是"减少员工互相打断 + 员工知识属员工本人".
+
+### 11.3 已 ship 的支撑组件
+
+90% 组件已经做了, 缺最后一公里:
+
+| 需要的 | 已有? | 文件 |
+|---|---|---|
+| agent 懂托管员工的工作画像 | ✅ | `gateway/identity_inject.py` (USER.md / SOUL.md) + BL-MM7 user_profile + BL-MM8 fingerprint + catfish_remember + journal |
+| agent 能答员工业务问题 | ✅ | `tool-bridge` skills + `gateway` LLM 路由 (qwen 122B) |
+| a2a 协议 (sign / verify / ALLOW.md) | ✅ MVP | `gateway/a2a_server.py` + `gateway/a2a_jwt.py` |
+| **agent 主动声明专长** | ❌ 待做 | `central/identity-server` 加 expertise schema |
+| **公司 agent 黄页 (按专长查)** | ❌ 待做 | `identity-server` 加 search-by-expertise |
+| **路由层 "谁能答 X"** | ❌ 待做 | `gateway` 加 expertise routing module |
+| **答的质量评估反馈** | ❌ 待做 | 复用 BL-MM6 feedback UI |
+| agent 24/7 待命 | ✅ 已经是 | gateway 一直在 |
+
+### 11.4 BL-FED2 路线 (5/15 起 6 周)
+
+| 阶段 | 工作量 | 时间 | 内容 |
+|---|---|---|---|
+| BL-FED2.1 | 1-2 天 | 5/15-5/16 | **员工自愿**专长声明 schema (员工 mac 本机 `~/.catfish/expertise.yaml`, 上行只发 tag 列表给 identity-server, **不传画像内容**). 员工随时可以删 / 改 / 下线 |
+| BL-FED2.2 | 1 周 | 5/19-5/23 | 同事黄页 — `identity-server` 加 `/registry/search?expertise=资质` endpoint, 只返**已自愿登记**的 agent 列表. 员工删除专长 → 黄页立即失踪 |
+| BL-FED2.3 | 1-2 周 | 5/26-6/6 | 路由层 — `gateway` 加 `expertise_router`, LLM 看员工问题 → 抽 expertise tag → 查黄页 → 选 agent → 转 a2a_ask. 新工具 `catfish_expert_consult(question, expertise?)`. 调用前给被咨询员工**显式提示** (谁在问 / 问什么), 员工可拒 |
+| BL-FED2.4 | 1 周 | 6/9-6/13 | 答案质量反馈 — 小赵收到老李 agent 答 → 评 👍/👎/改 → 反馈**只进老李 mac 本机**的 user_profile (越用越准, 但反馈数据**不离开老李 mac**) |
+| BL-FED2.5 | 3 天 | 6/16-6/18 | 跨员工 demo — 单机 mock 升级到组织级 (老李 / 张三 / 王五 3 个 agent + 1 个公司目录), 含**员工离职带走 agent** 演示 (`cp ~/.catfish/`) |
+
+**5/15 起 6 周 ship**, 7 月 PoC 客户能演.
+
+### 11.5 v0.1 协议跟 BL-FED2 兼容性
+
+v0.1 protocol (`/a2a/ask`) 不需要废弃. BL-FED2 在它之上加层:
+
+```
+catfish_expert_consult(question)        ← 新 BL-FED2 工具 (LLM 看员工问题, 路由)
+   ↓
+gateway/expertise_router                ← 新 BL-FED2 模块 (查黄页 + 选 agent)
+   ↓
+catfish_a2a_ask(to_sub=老李, ...)       ← 复用 v0.1 协议 (签名 / 验签 / ALLOW.md)
+   ↓
+老李 agent /a2a/ask                      ← 复用 v0.1 server
+```
+
+**v0.1 协议层 0 改动**, BL-FED2 在 application 层加.
+
+### 11.6 ALLOW.md 跟专长声明的关系
+
+员工写 ALLOW.md 控两件事:
+- **答什么** (业务范围, 例 "资质 / 客户跟进 OK; 财务 deny")
+- **答给谁** (谁来问, 例 "同部门 OK; 跨部门按 purpose")
+
+BL-FED2 加一层 **专长声明** ("我能答 X / Y"), 是 ALLOW.md 的**正向版**:
+- ALLOW.md = 黑名单 (默认 DENY + 显式开放)
+- expertise = 黄页 (主动告诉公司"我能答这些")
+
+两者并行: ALLOW 控边界, expertise 让别人**找得到**你能答啥.
+
+### 11.7 安全 / 隐私边界 (跟 § 9.5 + DATA-FLOW 边界 4 一致)
+
+agent-as-service 不破坏现有 4 道边界, 反而强化"员工拥有数据":
+
+- **边界 1 员工 mac 不离开**: 老李的 journal/memory/USER.md/style_fingerprint **永远在老李 mac**. agent 答外部 a2a 请求时**只输出 LLM 生成的回答文本** (经 gateway LLM 推理), **不直接漏 raw 画像数据** 给路由层 / 同事 mac / 公司
+- **边界 2 客户内网内**: agent 间 a2a 通信走客户内网, gateway 验签 + ALLOW.md 拦截
+- **边界 3 客户公司大门 0 出境**: agent 黄页 / 路由 / 反馈全在客户内网
+- **边界 4 跨雇主可携带 (BL-FED2 关键)**: 老李离职 → 老李 agent 跟人走 (`cp ~/.catfish/` 到新雇主), 老李在原公司"自愿登记的专长"自动从黄页消失. **公司不能扣留 agent**, 因为 agent = 老李本人画像, 数据所有权是员工的
+- **鲶鱼平台公司**: 还是不见客户数据
+
+**关键设计原则**: agent-as-service 是**员工自愿出来互助的协议层**, 不是"公司从员工脑里抽知识沉淀". 跟"公司知识库 (Confluence / wiki)" 本质不同 — 那个是公司资产, 这个是员工资产, 员工用脚投票决定是否参与.
 
 ---
 

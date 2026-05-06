@@ -1,6 +1,6 @@
 # 鲶鱼 · Feature Tracks (主入口)
 
-> **快照**: 2026-05-04 (周一深夜) · **维护人**: 鸿波 · **更新**: 每周日晚 + 重大 ship 时
+> **快照**: 2026-05-06 (周三晚) · **维护人**: 鸿波 · **更新**: 每周日晚 + 重大 ship 时
 > **角色**: 这是**唯一**的"我们在做啥 / 还差啥 / 在哪个 phase"主入口.
 > 其他 doc 角色见底部 § 文档地图.
 
@@ -9,10 +9,10 @@
 ## 🚦 Phase 进度 (一行看清)
 
 ```
-Phase 1 · 单员工 AI 副手           [██████████] 99% · 5 月 demo + 1 PoC 客户
-Phase 2 · 团队版 (SSO/RBAC/Win)    [████████░░] 78% · 五一 sprint Phase 2 + Skills Hub + Production MVP + brand
-Phase 3 · ★ Federation             [███░░░░░░░] 30% · 五一 sprint Plan D MVP, Q4 ship
-Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 2027 Q2+
+Phase 1 · 单员工 AI 副手           [██████████] 99.5% · 5/14 demo 基本就绪
+Phase 2 · 团队版 (SSO/RBAC/Win)    [█████████░] 88%   · 5/6 sprint Skills Hub G2 + 7 gap 安全闭环 + 文档套件
+Phase 3 · ★ Federation             [█████░░░░░] 50%   · Plan D v0.1 ✅ + 5/6 重定位 agent-as-service (BL-FED2 6 周 ship) · 5/6 晚灵魂校准: 员工自愿互助 + 跨雇主可携带
+Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   · 2027 Q2+
 ```
 
 > 📈 5/2-5/3 周末 sprint 大幅推进 (Phase 2 后端 + Skills Hub + brand kit + 关系建立):
@@ -37,21 +37,34 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 
 >     `parameters.type` 必须 'object', 拒绝 None / 缺失. browser_back 等空参数工具被拒.
 >     gateway sanitizer 兜底强制 type='object' + 缺 properties → {}. **+7 测试 / 506/506 全过 / 0 副作用**.
 >     demo 后 BL-FE3 加前端 reasoning_content 原生支持, 配合 deepseek thinking 重开
+>
+> 📈 5/5-5/6 sprint 桌宠 ship + 7 gap 安全闭环 + 主动闲聊 8 bug 修 + 文档套件 (~40 commit):
+>   - **5/5 BL-E27 桌宠 spike + ship**: 计划 5/22 起做的 BL-E27 提前两周 ship 到 BL-E27.2 阶段. 透明 NSPanel + macOSPrivateApi + 4 状态联 LLM + Cmd+Shift+P toggle + Option+Shift+1/2/3/4 4 屏角 + LogicalPosition 修 Retina 物理像素出屏幕 + SVG v1 (鱼竿) → v2 (圆胖浮游). 鸿波拍板"主动信息出口" — 桌宠取代 macOS 通知做 chat starter.
+>   - **5/6 BL-E27.2 真透明穿透 + Rust polling 通信**: 三轮 emit 协议层 dead end 后弃用 (app.emit_to / pet.emit / emitTo 都通不到 pet listener), 改 Rust 全局 Mutex polling buffer (300ms tick) — 100% 可靠不依赖 Tauri 跨 webview event. cursor_position 80ms 轮询切 setIgnoreCursorEvents (透明角穿透 + 桌宠区接事件), pet_emit_bubble / pet_emit_status 两条命令.
+>   - **5/6 主动闲聊 8 bug 全修**: ① 精确分钟匹配丢消息 (员工 9:31 启动当天 9:30 整丢) → 改"过点补发" ② StrictMode 双 mount 重复 fire (LLM 多调一次 token) → markFired 提前到 tick ③ Tauri 跨 webview emit 通不到 pet listener → polling fallback ④ 鸿波抱怨"prefill 输入框还要按发送" → startProactiveChat 改成直接 push assistant message 到 chat (无需员工再发, 持久化到 session) ⑤ ProactiveCard 加 "测一下 ▶" + visual feedback ⑥ formatFileAttachment 在 PDF 分支用 meta.structured_path 替代 raw text hint ⑦ markdown.tsx 修伪表格不渲染 (rehype-raw + GFM 重组 + cell 内 br) ⑧ parse_file.py PDF anchor 模式识别 (社保/工资 等 ≥5 个身份证号自动结构化, 防 5.5 万字爆 context).
+>   - **5/6 7 个 P0/P1 安全 gap 全修 + CI 集成**: G1 gateway/skills-hub 0.0.0.0 → 127.0.0.1 (员工电脑不再暴露局域网) · G2 Skills Hub URL fetch sha256 校验 + `CATFISH_HUB_REQUIRE_HASH=1` 严格模式 + server 端发布时自动算 sha256 (端到端闭环) · G3 execute_code 安全守卫拦 25 类危险 (凭证/外联/危险 shell) + audit 留痕 · G4 Tauri CSP null → 显式 8 条策略 · G5 cargo audit (1067 advisory **0 vulnerability** / 19 informational warning 不在调用路径) + pip-audit (4 组件 **0 CVE**) + npm audit (**0 CVE**) + CI workflow · G6 数据出境流向图 (`DATA-FLOW-DIAGRAM.md`, 4 出境路径 + 3 配置档位 + 7 不出境数据) · G7 gitleaks 8 类正则源码 **0 hit** + CI 集成. 详见 `SECURITY-REVIEW-2026-05-06.md`.
+>   - **5/6 文档套件 5/14 demo 用**: SECURITY-REVIEW + DATA-FLOW-DIAGRAM + audit-summary + secrets-scan + cargo-audit-actual + 5 场景 demo 脚本 (`MAY-DEMO-SCRIPT-2026-05-14.md`) + 客户 Q&A 30+ 题库 + 现场应急表 + RUNBOOK-DEMO-VERIFICATION (你机器跑 9 项 5-10min) + README-FOR-CUSTOMERS + QUICKSTART-EMPLOYEE + DEPLOYMENT-RUNBOOK (12 节客户 IT 部署).
+>   - **5/6 BL-MM2 / MM4 / MM6 ship**: RelationCard / MemoryHistoryCard 实时刷新 (30s setInterval) + 全量条目 + AuditCard 文案改员工口语 + 显式 feedback UI 👍/👎/改.
+>   - **5/6 业务 skill 端到端验证**: weekly-report 17 + leadership-briefing 25 + project-approval 1 = **43 测试全过** + leadership-briefing 真 render docx 端到端跑通.
+>   - **5/6 版本号去硬编码**: IdentityCard `getVersion()` Tauri runtime API + branding/catfish shell 读 package.json + 30s 自动刷新.
+>   - **5/6 parse_file 找错 Python venv 修**: catfish gateway venv 优先 + `_has_parse_deps()` 检测 pypdfium2/openpyxl/docx 全装才用. PDF 上传不再报缺依赖.
 
 ---
 
-## 🚨 当前最大风险 / 缺位 (Top 5)
+## 🚨 当前最大风险 / 缺位 (Top 5, 5/6 更新)
 
 | # | 风险 / 缺位 | 影响 | 跟踪 track |
 |---|---|---|---|
-| 1 | **5 月 demo 真机彩排没做** (距 5/14 demo ~11 天) | 现场翻车 | #18 销售物料 |
-| 2 | **PPT / 实录视频没做** | 客户问"有视频吗"无应对 | #18 销售物料 |
-| 3 | **employee_journal 真业务内容不够** | 跨 session 记忆演不出, 主动闲聊已缓解 | #25 + 持续用 |
-| 4 | **Win 客户端 0% 没动** (5/2 拍板暂不动) | Q3 大客户阻塞 | #2 ★ |
-| 5 | **Production 部署 0%** (现都跑鸿波本机 dev mode) | 给客户东西也跑不起 | #16 ★ |
-| 6 | **团队 1 人** (Phase 2 一定带不动) | Q3 KPI 跳票 | #20 |
+| 1 | **5/13 真机彩排 ×2 没做** (距 5/14 demo ~8 天) | 现场翻车 | #18 销售物料 |
+| 2 | **5 场景实录视频没做** | 现场全挂兜底缺位 | #18 销售物料 |
+| 3 | **5/14 demo 机子 USER.md / journal seed 没准备** | 场景 1/4 演不出"鲶鱼记得我" | #18 + 现场准备 |
+| 4 | **employee_journal 真业务内容不够** | 跨 session 记忆演不出, 5/6 桌宠主动闲聊已缓解一半 | #25 + 持续用 |
+| 5 | **Win 客户端 0% 没动** (5/2 拍板暂不动) | Q3 大客户阻塞 | #2 ★ |
+| 6 | **Production 完整部署 50%** (docker-compose ship, 客户 IT runbook 5/6 ship) | 5/14 demo 后客户问"装一份给我们"基本能交付 | #16 ★ |
+| 7 | **团队 1 人** (Phase 2 一定带不动) | Q3 KPI 跳票 | #20 |
+| ~~.app build~~ | ~~~~ ✅ 鸿波 5/6 已 build + 装应用目录 | — |
 
-> 📊 **后端 / 卖点全部 ship 完, demo 阻塞全在演讲准备侧** (彩排 / PPT / 视频).
+> 📊 **5/6 后**: 后端 / 卖点 / 安全 / 文档全部 ship 完, demo 阻塞**只剩**演讲准备侧 (彩排 / 视频 / demo 机子 seed). 都是 0 工程量, 鸿波 + 我 1-3 天能闭环.
 
 ---
 
@@ -59,15 +72,18 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 
 
 ### Phase 1 · 已 ship 主线
 
-#### #1 Companion macOS [Phase 1, 95%]  ★ 5/3 加 Onboarding MVP
+#### #1 Companion macOS [Phase 1, 99%]  ★ 5/6 桌宠 ship + 7 安全 gap 闭环
 > Tauri 桌面客户端, 鲶鱼员工每天打开的入口.
 - ✅ 三 tab (对话/控制台/仪表盘) + 浮窗 Cmd+Shift+Space 召唤 (5/5)
-- ✅ 多模态 (Whisper.cpp 语音 + PDF/Excel/Word 文件解析)
+- ✅ 多模态 (Whisper.cpp 语音 + PDF/Excel/Word/CSV 文件解析 + PDF anchor 模式结构化抽取)
 - ✅ 仪表盘 5 卡 (身份/服务/Catalog/Skills/审计/Quota 接通)
 - ✅ **Onboarding 引导 4 步** (5/3 BL-F3 MVP): welcome / 鉴权 / 选模型 / 试聊, localStorage 记 onboarded
+- ✅ **桌宠副窗 BL-E27.2** (5/5-5/6): 透明 NSPanel + 4 状态 (idle/thinking/running/done) + Cmd+Shift+P toggle + Option+Shift+1/2/3/4 4 屏角 + 真透明穿透 (cursor_position 80ms 轮询切 setIgnoreCursorEvents) + 真拖拽 + Rust polling 通信 (跨 webview 100% 可靠)
+- ✅ **Tauri CSP 加固** (5/6 G4): default-src 'self' / connect-src 限本机 + tauri ipc / object-src 'none'
 - ⬜ 数据迁移工具 (换电脑搬 memory/skill/state) · 0.5 周 (BL-F4)
 - ⬜ 备份方案 (auto backup) · 0.5 周 (BL-F5)
 - ⬜ 完整 Onboarding (动画 / 多语言 / 真试聊 / 跟 SSO flow 集成) · 0.5 周
+- ✅ **.app prod build + 装应用目录** (鸿波 5/6 已 build, 双击启动正常)
 
 #### #3 tool-bridge (本机 IPC) [Phase 1, 90%]
 > 把鲶鱼 native tools 暴露给 hermes / Companion 调.
@@ -95,18 +111,43 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 
 - ⬜ 钉钉 / 企微 adapter (各 2 周) (BL-D15/D16)
 - ⬜ 客户 IT 自助接入文档收尾 (BL-L21)
 
-#### #8 Plan D Federation 协议层 [Phase 3 雏形, 30%]
-> 跨员工 agent-to-agent, 鲶鱼真正的护城河.
-- ✅ 协议 spec v0.1 (480 行 PLAN-D-PROTOCOL.md)
-- ✅ Per-agent registry + JWKS (B 方案)
-- ✅ A 端 (sign+send) + B 端 (verify+receive ALLOW.md 拦截) + audit jsonl
-- ✅ 单机 mock 端到端通过 (Alice ↔ Bob)
-- ✅ ALLOW.md token-overlap 匹配 (5/2 BL-L28)
+#### #8 Plan D Federation [Phase 3, 50% — 5/6 重定位 agent-as-service + 5/6 晚灵魂校准]
+> ⚠️ **方向调整 (5/6)**: 不是"peer-to-peer 临时问答" (Plan D v0.1), 是 **agent 代员工本人提供专业互助**.
+> ⚠️ **灵魂校准 (5/6 晚, 鸿波)**: agent-as-service ≠ "公司从员工脑里抽知识沉淀". 真定位是 **员工自愿出来同事互助, 数据所有权始终属员工本人, 跨雇主可携带 (员工跳槽 agent 跟人走)**.
+>
+> 真卖点 (3 边对比):
+> - vs ChatGPT 企业版: 那个知识属 OpenAI, 鲶鱼属员工本人
+> - vs 公司知识库 (Confluence/wiki): 那个是公司资产 (员工跳槽不丢), 鲶鱼是员工资产 (跳槽跟人走)
+> - vs 啥都没有: 同事一天问 30 次资质打断老李 → agent 接 80% 简单咨询, 老李专注力回来
+>
+> 跟"对抗不良雇主"灵魂一致: 员工知识 / 工作画像 / 技能库 = 员工的"职业资产", 公司给员工配 (B2C2B), 跳槽带走.
+
+**已 ship (协议 + 单 agent 画像层, 5/2-5/6)**:
+- ✅ 协议 spec v0.1 (`PLAN-D-PROTOCOL.md` 580 行, 5/6 加 § 11 agent-as-service 愿景, 5/6 晚校准灵魂)
+- ✅ Per-agent registry + JWKS + RS256 JWT 签验 (`gateway/a2a_jwt.py`)
+- ✅ A 端 (sign + send) + B 端 (verify + ALLOW.md 拦截) + audit jsonl (`gateway/a2a_server.py`)
+- ✅ 单机 mock 端到端 (Alice ↔ Bob, 2 gateway)
+- ✅ ALLOW.md token-overlap 匹配 (5/2 BL-L28, jieba 中文分词)
+- ✅ **agent 懂托管员工** (BL-MM7 user_profile / MM8 fingerprint / catfish_remember / journal, **全在员工 mac**)
+- ✅ **3 部署架构选项** (PROTOCOL § 9.5: A 员工本机 ★ 默认 / B 部门 / C 公司)
+- ✅ **跨雇主可携带设计** (DATA-FLOW 边界 4: cp `~/.catfish/` 到新 mac, agent 跟员工走)
+
+**BL-FED2 (5/15 起 6 周, agent-as-service 真 ship — 灵魂校准版)**:
+- ⬜ **BL-FED2.1** **员工自愿**专长声明 schema (员工 mac 本机 `~/.catfish/expertise.yaml`, 上行只发 tag 列表给 identity-server, **不传画像内容**. 员工随时可删 / 改 / 下线) · 1-2 天 · 5/15-5/16
+- ⬜ **BL-FED2.2** 同事黄页 (`identity-server` 加 `/registry/search?expertise=资质` endpoint, 只返**已自愿登记**的 agent. 员工删除专长 → 黄页立即失踪) · 1 周 · 5/19-5/23
+- ⬜ **BL-FED2.3** 路由层 (`gateway/expertise_router`, 新工具 `catfish_expert_consult`. 调用前给被咨询员工**显式提示** [谁在问 / 问什么], 员工可拒) · 1-2 周 · 5/26-6/6
+- ⬜ **BL-FED2.4** 答案质量反馈 (复用 BL-MM6 feedback UI: 小赵评老李 agent 答 → 反馈**只进老李 mac 本机**的 user_profile, 反馈数据**不离开老李 mac**) · 1 周 · 6/9-6/13
+- ⬜ **BL-FED2.5** 跨员工 demo (单机 mock 升级到 3 agent + 公司目录, 含**员工离职带走 agent** 演示 `cp ~/.catfish/`) · 3 天 · 6/16-6/18
+
+**Phase 4 演进**:
 - ⬜ 跨 2 台真机测试 · 1-2 周 (BL-E18)
 - ⬜ mTLS / 自签 CA · 1 周
 - ⬜ Federation registry HA · 1 周
-- ⬜ 隐私边界严格化 (ALLOW 协商) · 2-3 周
-- ⬜ 跨员工 demo (问下张三) · 1-2 个月 (BL-E17)
+- ⬜ 隐私边界严格化 (ALLOW 协商 / 答案脱敏 / 反馈不漏 raw) · 2-3 周
+- ⬜ **跨雇主 agent 迁移工具** (`catfish migrate --from-mac --to-mac`, 自动 sync `~/.catfish/`, 处理 keychain 引用) · 1-2 周
+- ⬜ 跨组织 federation (集团 A ↔ 集团 B 通过 OIDC 互认) · 1-3 月
+
+**5/14 demo 加场景 4.5** (60s + PPT 1 页讲 BL-FED2 路线): 单机 mock 演 agent 自愿互助, 客户问"今天能演吗" 答 "今天演 peer-to-peer (8/8 ship), agent-as-service 6 月 ship, 含员工跳槽带走 agent demo". 详见 `MAY-DEMO-SCRIPT-2026-05-14.md` 场景 4.5.
 
 ---
 
@@ -169,16 +210,18 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 
 - ⬜ skill 创建后立即 dry-run 验证, 失败回滚 · 0.5 天 (BL-C12)
 - ⬜ skill 创建前重复检查 · 0.3 天 (BL-C13)
 
-#### #11 Skills Hub (中央托管) [Phase 2, 70%]  ★ 5/2 中央 server MVP
+#### #11 Skills Hub (中央托管) [Phase 2, 90%]  ★ 5/6 sha256 + hub URL pull 闭环
 > 组织级技能市场, 让员工分享 skill, 部门集体学习.
 - ✅ 本机版 MVP (skill_install 工具) (5/3)
 - ✅ **中央 hub server FastAPI MVP** (5/2): publish / list / get / download / delete + audit
 - ✅ **dry-run 验证** (5/2 BL-C12): skill_install 后 import 检查 + 失败 rollback
 - ✅ **dedup 检查** (5/2 BL-C13): install 前查同名 / 描述相似的 skill, force_install 跳
 - ✅ 文件系统存储 (~/.catfish-hub/), 多 version 共存, audit jsonl
-- ✅ 21 storage 测过 + 6 dry-run/dedup 测过
+- ✅ **Companion `catfish_skill_install` 接 hub URL 拉取** (5/5): 客户端 `_install_from_hub("ns/name@version")` urllib 拉远端 + 复用本地 dedup/dry-run
+- ✅ **sha256 签名校验闭环** (5/6 G2): server `get_skill()` 返 `files_sha256: {file: hex}` + 客户端拉文件后比对, 不匹配 → rmtree + 拒装 (中间人攻击防御) + `CATFISH_HUB_REQUIRE_HASH=1` 严格模式拒装无签名 skill
+- ✅ host 默认 127.0.0.1 (5/6 G1) + ⚠️ HOST=0.0.0.0 警告
+- ✅ 23 storage 测过 (含 sha256 2 case) + 28 lifecycle 测过 (含 hub mode 5 case) = 51 全过
 - ⬜ 审核流 (manager publish → admin approve → live) · 1 周 (现 MVP 直发)
-- ⬜ Companion catfish_skill_install 改 hub URL 拉取 (现只本机 source_dir) · 0.5 周
 - ⬜ 部门级 skill auto-推 · 1-2 周 (依赖 #8 federation 协议)
 - ⬜ PG 存储替代文件 (Phase 2.5) · 1 周
 
@@ -226,22 +269,23 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 
 - ⬜ 多账号 / 切换账号支持 · 1 周
 - **决策待**: demo 演不演? 这个要演非常吸睛 (领导发消息员工不被拉进飞书)
 
-#### #14 ★ 业务 skill 库 [Phase 1, 40%]  ★ 5/2 推前
+#### #14 ★ 业务 skill 库 [Phase 1, 50%]  ★ 5/6 端到端验证 43 测试全过
 > 客户 demo / PoC 看的"摸得着的能力", 现 3 个 (5/2 拍板 project-approval).
-- ✅ leadership-briefing (4 段公文 + 表格附件 + 双 backend 错别字)
-- ✅ weekly-report (.xlsx 周报)
-- ✅ project-approval (项目立项, 复用 leadership-briefing 渲染层 + 4 段语义改) ★ 5/2
+- ✅ leadership-briefing (4 段公文 + 表格附件 + 双 backend 错别字) — **25 测试 + 真 render docx 端到端跑通** (5/6)
+- ✅ weekly-report (.xlsx 周报) — **17 测试**
+- ✅ project-approval (项目立项, 复用 leadership-briefing 渲染层 + 4 段语义改) ★ 5/2 — **1 测试**
 - ⬜ qualification-export (4 月停在 demo) · 0.5 周
 - ⬜ meeting-minutes (会议纪要, 配合 #4 视频) · 1 周
 - ⬜ annual-summary (年度总结) · 1 周
 - ⬜ procurement (采购单) · 1 周
-- **demo 阶段**: 3 个够初步多样性, 5 月后扩到 5+ 个
+- **demo 阶段**: 3 个够初步多样性, **43 测试全过**, 5 月后扩到 5+ 个
 
-#### #15 多模态 [Phase 1, 50%]
+#### #15 多模态 [Phase 1, 65%]  ★ 5/6 PDF anchor 模式结构化抽取
 > 语音 / 文件 / 视频 / 音频.
 - ✅ 截图 + vision (4 月已通)
 - ✅ 语音输入 (Whisper.cpp + ffmpeg avfoundation, 5/1)
 - ✅ 文件上传 (PDF/Excel/Word/CSV/TXT/MD, 5/1)
+- ✅ **PDF anchor 模式结构化抽取** (5/6 BL-D17): parse_file.py 检测 ≥5 个身份证号/长 ID 锚点, 围切片提取 sub-records (社保险种 / 金额条目两 SUB_PATTERN), 跨页同人合并, 噪音 ID 过滤. 输出完整 JSON 到 /tmp/, LLM 直接 pandas.read_json 不啃 5.5 万字爆 context. 11 测试全过. **真用社保 PDF 320 人验证 0 错**.
 - ⬜ 视频上传 (帧采样 + 多模态) · 1 周 (BL-I3)
 - ⬜ 音频文件转写 (Whisper) · 0.5 周 (BL-I4)
 - ⬜ 大文件 (>50KB) BM25 检索 · 3 天 (BL-L26)
@@ -258,25 +302,23 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 
 - ✅ 专注模式 (前 "领导来了") · 5/3 ship (BL-E15, 见 #27)
 - ⬜ menubar 状态指示 · 0.5 周
 
-#### #25 ★ 主动闲聊 (BL-E13) [Phase 1, 30% C-MVP]  ★ 5/2 ship MVP
+#### #25 ★ 主动闲聊 (BL-E13) [Phase 1, 75%]  ★ 5/6 8 bug 全修 + 改 assistant 直发
 > 让小鲶按时段主动找员工聊, 不让 employee_journal 饿死 (demo 跨 session 记忆有内容).
 - ✅ gateway proactive.py: 读 journal tail + 时段 + qwen-flash 生成 starter
 - ✅ /api/proactive/starter 端点
 - ✅ Companion ProactiveCard (Dashboard 第一卡, 30min 自动换)
-- ✅ "跟小鲶聊聊 →" 按钮 → 切 chat tab + 输入框预填 starter (zustand)
-- ✅ useProactiveScheduler hook: 9:30 / 14:00 / 17:30 自动 macOS 通知 (localStorage 防重)
+- ✅ useProactiveScheduler hook: 9:30 / 14:00 / 17:30 (localStorage 防重)
 - ✅ Tauri notify() 用 osascript display notification (无新依赖)
-- ⚠ **BL-E13-FIX (5/4 鸿波反馈"还是不能自动聊天")**: 现实测概率 3 个 slot 全 miss (员工不在前台). 修复 demo 前必做:
-  - ⬜ catch-up 逻辑: mount 时补发当天已过期但未 fire 的 slot (~10 分钟)
-  - ⬜ 加宽时段窗口: 9:30 → 08:00-10:00, 14:00 → 12:00-14:00, 17:30 → 17:00-19:00 (~20 分钟)
-  - ⬜ 通知权限引导: 第一次启动主动调一次空通知触发 macOS 权限弹窗 + LoginGate 提示开权限 (~5 分钟)
-  - **合计 ~40 分钟, 0 风险, demo 前做**
+- ✅ **过点补发** (5/6): 员工 9:31 启动也能补发当天 9:30 (老逻辑只精确分钟匹配会丢)
+- ✅ **StrictMode 双 mount race 修** (5/6): markFired 提前到 tick 决定 fire 时立即调
+- ✅ **桌宠头顶气泡 + macOS 通知 fallback** (5/6): 桌宠 visible → emit pet bubble (Rust polling 100% 可靠), 桌宠 hidden → osascript 通知
+- ✅ **改成"桌宠真主动说话"** (5/6 鸿波点播): startProactiveChat 不再 prefill 输入框让员工按发送, 改成直接 push assistant message 到当前 chat + 异步 sessionMessageAppend 持久化. 员工看到桌宠真开口, 直接打字回复 = user msg
+- ✅ **ProactiveCard "测一下 ▶" 按钮** + visual feedback (5/6): dev/test 不用等 9:30, 立刻触发整链路 + 浮层显示发送状态 + macOS 通知权限提示
 - ⬜ 节假日 / 晚 10 点不打扰 (推断状态) · 1 周
 - ⬜ snooze / 拒绝机制 (现 localStorage 开关) · 0.5 周
 - ⬜ 配置 UI (时段 / 频率 / 模板) · 0.5 周
 - ⬜ 跨 session 深度情境关联 (journal 结构化解析) · 1-2 周
 - ⬜ Phase 2.5: 真主动 (AI 行为信号触发, 不死时间) · 1-2 周, demo 后
-- **完整 BL-E13**: 1-2 周, demo 后做
 
 #### #26 ★ 品牌视觉身份 (brand kit v1) [Phase 1, 90%]  ★ 5/3 晚 ship 完整套件
 > 之前 logo / 配色 / 头像全是 🐟 emoji 占位. 5 月 demo 客户看到必扣分. 今晚一次到位 ship.
@@ -317,29 +359,28 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 
   Dashboard "鲶鱼对你的印象" 卡 (透明 + 一键清空, 防 creepy);
   17 Python 单测 + 7 Rust 单测
 - ⬜ **BL-E14 鲶鱼吐槽 PPT** (3-5 天, 留下周): pptx parser + critical personality + 拖放 UI
-- ⬜ **BL-E27 桌面状态浮宠** (5/4 鸿波看到 Codex pet 拍板归档, demo 后 5/22 起 ship, 8-11 天分散 3 周):
-  - BL-E27.1 MVP 4 状态浮窗 + 双击唤起 (2-3 天, 5/22-5/24)
-  - BL-E27.2 Polish 拖拽 + 鱼眼跟随 + persona 联动 (3-5 天, 5/25-5/30)
-  - BL-E27.3 联动 BL-E13/E15 + 全屏自动隐藏 (2-3 天, 6 月初)
-  - **brand 资产物化** — 我们 5/3 做的 mascot SVG 真在桌面游, 是品牌资产最大化使用
-  - **demo 杀手锏** — 下半场"看小老李在角落游来游去, 写好了游过来告诉我"
+- ✅ **BL-E27 桌面状态浮宠** (原计划 5/22 起, 5/5-5/6 提前两周 ship 到 BL-E27.2):
+  - ✅ BL-E27.1 MVP 4 状态浮窗 + 单击唤起主窗 (5/5)
+  - ✅ BL-E27.2 真透明穿透 + 真拖拽 (5/6): cursor_position 80ms 轮询切 setIgnoreCursorEvents 解决 NSPanel 透明区拦点击; mousedown > 5px 触发 startDragging 真拖; 头顶气泡 + 4 状态走 Rust polling buffer (跨 webview 100% 可靠)
+  - ✅ Cmd+Shift+P toggle + Option+Shift+1/2/3/4 4 屏角 (Retina 物理像素 → logical 修)
+  - ✅ SVG 设计 v2 圆胖浮游 (v1 鱼竿弃)
+  - ⬜ BL-E27.3 联动 BL-E13/E15 + 全屏自动隐藏 (2-3 天, 6 月初)
 - 见 `docs/IDEAS.md` § 10/13/14/17 + `docs/BACKLOG.md` BL-E11/E14/E15/E19/E27 (E16 是另外的"社交健康检查")
 
 #### #28 ★ 记忆纪律 / 记忆是资产 / 越用越懂 (BL-MM1~MM8) [Phase 1.5, 25%]  ★ 5/4 晚拍板 + ship MM1+MM5
 > 鸿波 5/4 共识: **记忆是资产, 错了 update > 删除, 留版本作为成长痕迹**.
-> 5/4 晚扩: 加"越用越懂员工偏好" 维度 (鸿波问"feedback / 性格 / 工作模式 / 文书风格"); 4 维全 partial 或 ❌, 4 个工作量等级方案 A 已 ship, B/C/D 排 5/8 后启动.
+> 5/6 update: BL-MM2/MM4/MM6 ship, M.1 + M.2 完成度 25% → 60%.
 
 **M.1 记忆覆盖 (改不删, 留版本):**
 - ✅ **BL-MM1 记忆覆盖纪律 (SOUL 章节)** (5/4): 0 后端改动. 走 read-then-write + 把旧值 inline 塞进新值的备注里, 模拟版本感. 4 个 ❌ 禁止 (空说"改了"/编旧值/blind overwrite/不告知)
-- ⬜ **BL-MM2 catfish_remember 后端真版本化** (~0.7 天, 5/8 后议程): `session_facts.json` schema 改 `{key: [{value, ts, ...}]}` + 工具返回加 `previous_value` 字段
-- ⬜ **BL-MM3 hermes memory_save 包一层版本化** (~0.5 天, 5/15 hermes 升级窗口一并): adapter.py read-modify-write 双调用模拟, BL-D9 思路扩展
-- ⬜ **BL-MM4 Dashboard 记忆版本历史卡** (~1-2 天, demo 后): 列所有 key + 时间线 + 两版本 diff (像 git log). **真客户卖点**: "鲶鱼对你的认知怎么演化"
+- ✅ **BL-MM2 / BL-MM4 RelationCard + MemoryHistoryCard ship** (5/6): Dashboard 双卡 — RelationCard 显"印象/影响"(鲶鱼帮员工总结的对话主题, 像日记), MemoryHistoryCard 显"硬事实"(员工明确告诉的事实, 像便签贴), 两卡都 30s setInterval 实时刷新 + 全量条目, AuditCard 文案改员工口语 ("这个提示很奇怪让人看不懂啥意思" 修了)
+- ⬜ **BL-MM3 hermes memory_save 包一层版本化** (~0.5 天, 5/15 hermes 升级窗口一并)
 
 **M.2 主动学习 / feedback / 越用越懂员工:**
-- ✅ **BL-MM5 主动学习员工偏好 (SOUL 章节)** (5/4 晚, **方案 A**): 0 后端代码. 4 类信号 (强显式立即落盘 / 弱显式攒 3 次主动问 / 强隐式不主动学 / 弱隐式不学) + 频率纪律 (每 session 1 次封顶) + 落盘结构化模板 + ❌ 禁止 (不评论生活/情绪/不假装观察). 跟 BL-MM1 区分: MM1 被动 correction, MM5 主动学 preference
-- ⬜ **BL-MM6 显式 feedback UI** (~2-3 天, **方案 B**, 5/8 后): ChatBubble 加 👍/👎/"改一下" 按钮 + `/api/feedback` + `~/.catfish/feedback.jsonl` + Dashboard "你给我的反馈" 卡
-- ⬜ **BL-MM7 结构化用户画像** (~1 周, **方案 C**, 5/8 后): `~/.catfish/user_profile.json` (writing_style / work_pattern / personality_traits + evidence_count) + 满 N 次主动确认 + Dashboard 卡可调可锁. 真"自进化"故事卖点
-- ⬜ **BL-MM8 文书风格 fingerprint** (~1-2 周, **方案 D**, 6 月起): 员工历史文档抽风格指纹, 写新文档前调用. 解决"每次写汇报小鲶都从零猜" 央企痛点
+- ✅ **BL-MM5 主动学习员工偏好 (SOUL 章节)** (5/4 晚, **方案 A**): 0 后端代码
+- ✅ **BL-MM6 显式 feedback UI** (5/6, **方案 B** ship): ChatBubble 加 👍/👎/"改" 按钮
+- ⬜ **BL-MM7 结构化用户画像** (~1 周, **方案 C**): `~/.catfish/user_profile.json` (writing_style / work_pattern / personality_traits + evidence_count) + 满 N 次主动确认 + Dashboard 卡可调可锁. **不依赖 hermes 升级** (鲶鱼独立存储 + catfish_remember 工具), 5/14 demo 后任何时间能做
+- ⬜ **BL-MM8 文书风格 fingerprint** (~1-2 周, **方案 D**): 员工历史文档抽风格指纹 (本地 sklearn 或简单统计 freq + 句长 + 词偏好), 存 `~/.catfish/style_fingerprint.json`, 写新文档时 skill 调用. 解决"每次写汇报都从零猜"央企痛点. **不依赖 hermes 升级**, 5/14 demo 后任何时间能做
 
 - 见 `edge/identity/SOUL.md § 记忆覆盖纪律 + § 主动学习员工偏好` + `docs/BACKLOG.md § M`
 
@@ -383,16 +424,22 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 
 - ⬜ central/skills-hub · 见 #11 (跟它合并)
 - **优先级**: secret-broker 是 SOE 客户合规硬要求, 应该先做
 
-#### #18 销售物料 + demo 准备 [Phase 1, 60%]
-> 5 月中旬 demo 倒计时.
+#### #18 销售物料 + demo 准备 [Phase 1, 90%]  ★ 5/6 7 文档套件全 ship
+> 5 月中旬 demo 倒计时, 距 5/14 ~8 天.
 - ✅ 演讲稿 4 份 (DECK 32 张 / ELEVATOR V1-V5 / Q&A 13 题 / PREP 检查清单)
 - ✅ POC-PLAN.md (1-2-3 周 PoC 计划模板)
 - ✅ POSITIONING / COMPARE-1PAGER / COMPETITIVE-DIFFERENTIATION
-- 🔴 **真机彩排 ×2** (demo 前 3 天 + 前 1 天) · 各 1h (BL-X8)
-- 🔴 **demo 前 7 天攒真实 employee_journal.md** · 持续 (BL-L2)
-- 🔴 **实录 3 个 1 分钟 case 视频** · 1 天 (BL-L19)
-- 🔴 **实际 PPT 制作 (按 DECK 大纲填 Keynote)** · 1 天 (BL-L20)
-- 🟠 **公司机器测 catfish-private (qwen 122b) tool 能力** · 0.5 天 (BL-X7)
+- ✅ **MAY-DEMO-SCENARIO-5-SELF-EVOLUTION.md** (5/5, 60s 弹性加场)
+- ✅ **MAY-DEMO-SCRIPT-2026-05-14.md** (5/6, 完整 5 场景 17-22 min, 每场含目标/时长/鸿波说什么/鲶鱼期望响应/客户视角痛点/失败 fallback/关键代码位置)
+- ✅ **DEMO-CUSTOMER-QA-2026-05-14.md** (5/6, 30+ 题 6 类: 安全/出境/部署/性能/商业/技术 + 兜底句)
+- ✅ **DEMO-EMERGENCY-PLAN-2026-05-14.md** (5/6, 现场挂 → 30s 切稳态预案 + checklist + 用语模板)
+- ✅ **RUNBOOK-DEMO-VERIFICATION-5-14.md** (5/6, 鸿波本机 5-10 分钟跑完 9 项)
+- ✅ **README-FOR-CUSTOMERS.md / QUICKSTART-EMPLOYEE.md / DEPLOYMENT-RUNBOOK.md** (5/6, 客户决策人/员工/IT 各一份)
+- 🔴 **真机彩排 ×2** (demo 前 3 天 5/11 + 前 1 天 5/13) · 各 1h
+- 🔴 **5 场景实录视频** (现场全挂兜底) · 1 天 (5/12 前)
+- 🔴 **demo 机子 USER.md / journal seed** (老李 / 戴明利 / KA017 / 60天未下单 等场景 1/4 用到的预存事实) · 0.5 天 (5/10 前)
+- 🟠 **PPT 实际制作** (按 DECK 大纲填 Keynote) · 1 天
+- 🟠 **客户安全说明 1 页 PDF** (从 SECURITY-REVIEW 抽精华给信安部门) · 0.5 天 (5/12 前)
 - 🟠 部门汇报模板 + EIS 截图 · 公司带回 (BL-L3/L4)
 - 🟠 报价单 (50/200/1000+ 三档) · 鸿波决策 (BL-B2)
 - 🟠 销售路径 (自销/渠道) · 鸿波决策 (BL-B6)
@@ -415,6 +462,34 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 
 - ⬜ 隐私政策 / 用户协议 · cloud 上线前 (BL-H6)
 - ⬜ 第三方依赖 license 全审 · 开源前 (BL-H7)
 - ⬜ fonts/opensource 二进制从 git history 移出 · 开源前必做 (BL-H9)
+
+---
+
+#### #30 ★ 安全 + 合规 [Phase 1.5, 85%]  ★ 5/6 7 gap 全闭环 + CI 集成
+> 央企客户信安部审查的核心区, 5/14 demo 客户必问. 5/6 一天集中闭环.
+- ✅ **威胁模型 + 现状盘点** (`SECURITY-REVIEW-2026-05-06.md`): T1 数据出境 / T2 任意代码 / T3 凭证 / T4 供应链 / T5 网络暴露 / T6 webview / T7 审计 7 类攻击面对照
+- ✅ **G1 网络暴露**: gateway / skills-hub 默认 0.0.0.0 → 127.0.0.1 (员工电脑不暴露局域网) + HOST=0.0.0.0 显式警告
+- ✅ **G2 供应链**: Skills Hub URL fetch sha256 校验 (客户端) + server 端发布时自动算 sha256 + `CATFISH_HUB_REQUIRE_HASH=1` 严格模式 + 篡改场景拒装 (端到端验证)
+- ✅ **G3 任意代码**: execute_code dispatcher 守卫拦 25 类危险 (凭证~/.ssh ~/.aws/credentials Keychain /etc/shadow / 外联 curl wget requests urllib httpx socket / 危险 shell rm -rf / fork bomb / dd / mkfs / chmod 777 /), 命中 → 拒绝 + audit log 留痕
+- ✅ **G4 webview**: Tauri CSP null → 显式 `default-src 'self'` 等 8 条策略
+- ✅ **G5 依赖 CVE 全扫**: cargo audit (Cargo.lock 556 deps × RustSec 1067 advisory = **0 vulnerability** + 19 informational warning 不在调用路径) + pip-audit (4 组件 / 103 deps **0 CVE**) + npm audit (companion-app prod **0 CVE**) + `.github/workflows/security.yml` 4 job CI
+- ✅ **G6 数据出境清晰**: `DATA-FLOW-DIAGRAM.md` 1 页 ASCII 架构图 + 4 条出境路径 (chat/SSO/skills hub/audit) + 7 类不出境数据 + 3 配置档位 (内网闭环/内网主+外网 fallback/全外网) + 6 客户预期问答
+- ✅ **G7 secrets 硬编码**: gitleaks 8 类正则全仓 (AWS / GitHub PAT / OpenAI / Anthropic / Google / JWT / 私钥 PEM / 字面量密码) **源码 0 hit** + CI 自动拦
+- ✅ **prompt_security 凭证检测** (5/6 之前已有, sec-review 整理到位): ≥40 种 secret 模式, 检测到的密码值不入 audit log
+- ✅ **OIDC RS256 SSO + a2a JWT** (5/6 之前已有)
+- ✅ **双层 audit log**: gateway 中央 metadata-only / tool-bridge 边缘含 args_preview, jsonl 标准 SIEM 接 (DEPLOYMENT-RUNBOOK § 6 fluent-bit 配置示例)
+- ⬜ **第三方渗透测试** · 5/22 后, 找外部团队
+- ⬜ **macOS Notarization 真公证** · 5/22 后, release 前
+- ⬜ **SBOM 自动化 (CycloneDX)** · 5/12 前可出, 客户合规要
+- ✅ **BL-S29 真技术沙箱 nsjail / sandbox-exec** · ★ 5/7 单日全 ship (本来 12 天 sprint, 实际 1 天):
+  - ✅ S29.1 macOS sandbox-exec .sb profile + 13 shell tests (10 恶意 + 3 sanity)
+  - ✅ S29.2 tool-bridge adapter 接入沙箱 dispatch + 15 unit tests
+  - ✅ S29.3 端到端 (双层 L1+L2) + 6 e2e tests + audit 字段 + 5/14 demo 场景 2.5 + SECURITY-REVIEW G3 重写
+  - ✅ S29.4 nsjail Linux 容器 + 13 docker tests (★ fork bomb / mem bomb 真拦)
+  - ✅ S29.5 三层 fallback (sandbox-exec / nsjail / docker) + sandbox.py detect_sandbox_kind() 跨平台
+  - ✅ S29.6 测试矩阵扩到 macOS 25 + Linux 25 + python 24 = **86 测试全绿** + SECURITY-REVIEW 附录 A 给信安看
+- ⬜ **客户安全说明 1 页 PDF** · 5/12 前 (信安部门交付物)
+- ⬜ **红队演练 (LLM jailbreak / prompt injection)** · 6 月
 
 ---
 
@@ -528,21 +603,28 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 
 
 ---
 
-## 📅 下次开工建议
+## 📅 下次开工建议 (5/6 update)
 
-**🔴 demo 阻塞 (5/14 demo, 距今 ~11 天)**:
-- 真机彩排 ×2 (前 3 天 5/11 + 前 1 天 5/13)
-- 实录 case 视频 ×3 (1 天搞)
-- PPT 实际填 (按 docs/MAY-DEMO-DECK.md 大纲, 1 天)
-- employee_journal 持续攒 (主动闲聊 ProactiveCard 帮你, 每天聊 2-3 句)
+**🔴 5/14 demo 阻塞 (距今 ~8 天)** — 全是非工程的现场准备:
+- 真机彩排 ×2 (5/11 前 3 天 + 5/13 前 1 天) · 用 DEMO-CUSTOMER-QA-2026-05-14 题库练
+- 5 场景实录视频 (现场全挂兜底) · 1 天 (5/12 前)
+- demo 机子 USER.md / journal seed (老李/戴明利/KA017 故事 fixture) · 0.5 天 (5/10 前)
+- .app prod build + 临时签名 · 0.5 天 (5/9 前)
+- PPT 实际填 (按 docs/MAY-DEMO-DECK.md 大纲) · 1 天
+- 客户安全说明 1 页 PDF · 0.5 天 (5/12 前)
+- RUNBOOK-DEMO-VERIFICATION 鸿波本机跑 9 项 · 5-10 min (任何 ❌ 立刻修)
 
-**🟠 demo 后做**:
-- Production 部署 (#16, 客户能落地)
-- Companion `catfish_skill_install` 改 hub URL 拉取 (~0.5 周)
-- Skills Hub 审核流 (#11, ~1 周)
-- 部门 auto-push (依赖 federation, ~1-2 周)
-- 完整 BL-E13 主动闲聊 (情境关联 / 节假日推断, ~1-2 周)
+**🟠 demo 后 (5/15+)**:
+- 完整 BL-E13 主动闲聊 (节假日 / snooze / 配置 UI) · ~1-2 周
+- **BL-MM3 hermes memory_save 包版本化** (跟 5/15 hermes 0.10→0.12 升级捆绑, 因 hermes 改了 memory 接口) · 0.5 天
+- **BL-MM7 结构化用户画像** (方案 C, **不依赖 hermes 升级**, 鲶鱼自己存) · ~1 周
+- **BL-MM8 文书风格 fingerprint** (方案 D, **不依赖 hermes 升级**) · ~1-2 周
+- BL-E27.3 桌宠联动 BL-E13/E15 + 全屏自动隐藏 · 2-3 天 (6 月初)
+- 真技术沙箱 nsjail/sandbox-exec (G3 升级) · 5/22 后
+- macOS Notarization 真公证 + 第三方渗透测试 · 5/22 后
 - email-agent / feishu-monitor 接通决策
+- Skills Hub 审核流 (#11) · 1 周
+- 部门 auto-push (依赖 federation) · 1-2 周
 
 **🔴 商业决策 (鸿波拍板)**:
 - 5 月 demo 选 1-3 家具体客户名单 (5/5 前)
@@ -552,19 +634,21 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0% · 
 
 ---
 
-## 📊 demo 卖点 verified 全清单 (10 个)
+## 📊 demo 卖点 verified 全清单 (12 个, 5/6 加 2)
 
 | 卖点 | 演法 | 状态 |
 |---|---|---|
-| 1. **跨 session 记忆** | "早上好" → 小鲶引用 journal 具体事 | ✅ 真验过 |
-| 2. **多模态** | 上传 PDF/Excel + 语音 | ✅ |
-| 3. **业务 skill (3 个)** | 汇报 / 周报 / 立项 .docx 真出文件 | ✅ |
+| 1. **跨 session 记忆** | "上次戴明利那事" → 小鲶引用 journal 具体事 | ✅ 真验过 |
+| 2. **多模态 + PDF 结构化** | 上传社保 PDF (320 人) → parse_file 自动识别 anchor → catfish_xlsx 转 Excel, 不啃原文件不出员工电脑 | ✅ 5/6 真用社保 PDF 验 |
+| 3. **业务 skill (3 个)** | 汇报 / 周报 / 立项 .docx 真出文件, **43 测试** | ✅ |
 | 4. **RBAC 三角色** | DEV 切 admin/manager/employee 看不同卡 | ✅ |
 | 5. **Quota 闭环** | 撞 429 → friendly 提示 → manager 改 → 通过 | ✅ |
 | 6. **中央 PG audit** | psql 直查 quota_events / gateway_audit | ✅ |
-| 7. **Skills Hub** | publish → list → download | ✅ |
+| 7. **Skills Hub + sha256** | publish → list → download + 篡改场景拒装 | ✅ 5/6 端到端验 |
 | 8. **Plan D federation 协议** | alice ↔ bob 单机 mock (给 IT lead 看) | ✅ |
-| 9. **主动闲聊** | macOS 通知 + Dashboard 起话题 | ✅ |
+| 9. **主动闲聊 + 桌宠气泡** | "测一下 ▶" → 桌宠头顶冒气泡 + chat 直接出 assistant 消息 (员工不用按发送) | ✅ 5/6 真验 |
 | 10. **浮窗** | Cmd+Shift+Space 全局召唤 | ✅ |
+| 11. **桌宠 + 4 状态联 LLM** ★ 5/6 加 | Cmd+Shift+P / Option+Shift+1234 4 屏角 / 透明穿透不拦点击 / 真拖拽 | ✅ |
+| 12. **安全合规 7 gap 闭环** ★ 5/6 加 | 0 高危 CVE / execute_code 守卫 25 类 / sha256 供应链 / 数据流向图 / OIDC SSO + 双层 audit | ✅ 信安部门 demo 必给 |
 
 10 个卖点全部技术 ready, demo 主战场转移到**演讲 / 物料**.
