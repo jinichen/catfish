@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -198,12 +199,19 @@ def get_skill(namespace: str, name: str, version: str = "latest") -> dict | None
         except Exception as e:
             logger.warning("读 %s 失败: %s", skill_md, e)
 
-    # 列文件
+    # 列文件 + 算 sha256 (5/6 安全 G2: 客户端拉文件时校验防中间人/篡改)
     files: list[str] = []
+    files_sha256: dict[str, str] = {}
     for child in sorted(version_dir.rglob("*")):
         if child.is_file():
-            rel = child.relative_to(version_dir)
-            files.append(str(rel))
+            rel = str(child.relative_to(version_dir))
+            files.append(rel)
+            try:
+                # skill 文件最大几 MB (绝大多数 KB 级), 直接 read_bytes 算 hash
+                files_sha256[rel] = hashlib.sha256(child.read_bytes()).hexdigest()
+            except OSError as e:
+                # 读不了就不放 hash, 客户端会当 unsigned 处理
+                logger.warning("sha256 算 %s 失败: %s", child, e)
 
     return {
         "namespace": namespace,
@@ -212,6 +220,7 @@ def get_skill(namespace: str, name: str, version: str = "latest") -> dict | None
         "description": meta.get("description", ""),
         "deprecated": meta.get("deprecated", False),
         "files": files,
+        "files_sha256": files_sha256,  # 5/6 G2: 客户端 _install_from_hub 比对
         "skill_md": skill_md_text,
     }
 

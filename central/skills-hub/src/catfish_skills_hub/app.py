@@ -210,7 +210,15 @@ async def audit_endpoint(
 def run() -> None:
     import uvicorn  # noqa: PLC0415
     port = int(os.environ.get("PORT", "8997"))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    # 5/6 安全 P0 G1: 默认仅本机. 客户内网部署 hub 服务器才显式 HOST=0.0.0.0.
+    host = os.environ.get("HOST", "127.0.0.1")
+    if host == "0.0.0.0":
+        print(
+            f"[skills-hub] ⚠️ HOST=0.0.0.0 — hub 暴露到所有网卡, 仅服务器部署用.",
+            flush=True,
+        )
+    print(f"[skills-hub] starting on {host}:{port}", flush=True)
+    uvicorn.run(app, host=host, port=port)
 
 
 if __name__ == "__main__":

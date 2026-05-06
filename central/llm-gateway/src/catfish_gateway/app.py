@@ -583,6 +583,31 @@ async def api_proactive_starter(
     return await proactive.generate_starter()
 
 
+# 5/6 BL-E13.5 真主动 Phase B: 信号触发的针对性 starter
+@app.post("/api/proactive/contextual")
+async def api_proactive_contextual(
+    body: dict[str, Any],
+    user: User = Depends(get_current_user),  # noqa: ARG001
+) -> dict[str, Any]:
+    """信号触发的 starter. body = {signal_kind: str, context: dict}.
+
+    signal_kind: 'silence' | 'deadline' | 'focus'
+    context: 各 kind 不同, 见 proactive.py _SIGNAL_KIND_PROMPTS
+
+    失败返 source='fallback', frontend 用本地模板兜底.
+    """
+    from . import proactive
+    signal_kind = (body.get("signal_kind") or "").strip()
+    context = body.get("context") or {}
+    if not signal_kind or not isinstance(context, dict):
+        return {
+            "starter": "",
+            "context_hint": "missing signal_kind or context",
+            "source": "fallback",
+        }
+    return await proactive.generate_contextual_starter(signal_kind, context)
+
+
 # Capability-probe stubs
 #
 # Clients like Hermes probe well-known paths to figure out what kind of
@@ -1352,12 +1377,22 @@ def run():
     # Intentional lazy import: uvicorn only needed when launching as a script.
     import uvicorn  # noqa: PLC0415
 
-    host = os.environ.get("HOST", "0.0.0.0")
+    # 5/6 安全 P0 G1: 默认仅本机 (127.0.0.1). 私有部署服务器才显式 HOST=0.0.0.0,
+    # 防员工电脑跑 gateway 时同公司局域网扫端口蹭 quota.
+    host = os.environ.get("HOST", "127.0.0.1")
     port_str = os.environ.get("PORT", "8000")
     port = int(port_str)
     port_source = "env PORT" if "PORT" in os.environ else "default"
+    host_source = "env HOST" if "HOST" in os.environ else "default(127.0.0.1)"
+    if host == "0.0.0.0":
+        print(
+            f"[catfish] ⚠️ HOST=0.0.0.0 — gateway 暴露到所有网卡 (局域网可访问). "
+            f"仅服务器部署用. 员工电脑应改回 127.0.0.1.",
+            flush=True,
+        )
     print(
-        f"[catfish] starting uvicorn on {host}:{port} (PORT={port_str}, source={port_source})",
+        f"[catfish] starting uvicorn on {host}:{port} "
+        f"(HOST source={host_source}, PORT={port_str} source={port_source})",
         flush=True,
     )
     uvicorn.run(

@@ -49,6 +49,47 @@ def test_publish_skill_basic() -> None:
     assert result["files_count"] == 2
 
 
+# 5/6 G2: get_skill 返 files_sha256 给客户端 _install_from_hub 比对
+def test_get_skill_returns_files_sha256() -> None:
+    import hashlib
+
+    skill_md = _skill_md("hash-test", "1.0.0")
+    script = b"print('hello')\n"
+    storage.publish_skill(
+        "personal",
+        {"SKILL.md": skill_md, "script.py": script},
+        published_by="a@x.com",
+    )
+    info = storage.get_skill("personal", "hash-test", "1.0.0")
+    assert info is not None
+    assert "files_sha256" in info
+    fsh = info["files_sha256"]
+    assert set(fsh.keys()) == {"SKILL.md", "script.py"}
+    # hash 必须跟原文件实际 sha256 完全一致
+    assert fsh["SKILL.md"] == hashlib.sha256(skill_md).hexdigest()
+    assert fsh["script.py"] == hashlib.sha256(script).hexdigest()
+    # hex 64 长度小写
+    for h in fsh.values():
+        assert len(h) == 64 and h.islower()
+
+
+def test_get_skill_sha256_changes_on_content_change() -> None:
+    """同 name 不同 version, 内容不同 → sha256 不同 (防 hub 文件被换)."""
+    storage.publish_skill(
+        "personal",
+        {"SKILL.md": _skill_md("v-test", "1.0.0"), "x.py": b"a=1\n"},
+        published_by="a@x.com",
+    )
+    storage.publish_skill(
+        "personal",
+        {"SKILL.md": _skill_md("v-test", "1.1.0"), "x.py": b"a=2\n"},
+        published_by="a@x.com",
+    )
+    h1 = storage.get_skill("personal", "v-test", "1.0.0")["files_sha256"]["x.py"]
+    h2 = storage.get_skill("personal", "v-test", "1.1.0")["files_sha256"]["x.py"]
+    assert h1 != h2
+
+
 def test_publish_skill_missing_skill_md() -> None:
     result = storage.publish_skill("personal", {"x.py": b"x"}, published_by="a@x.com")
     assert result["ok"] is False

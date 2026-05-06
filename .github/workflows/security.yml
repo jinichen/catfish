@@ -1,0 +1,76 @@
+name: Security audit
+
+# 5/6 BL-SEC: 依赖 CVE / secrets 扫描. 5/14 demo 前必须全绿.
+# 触发: 每次 push 到 main + 每个 PR + 每天 09:00 UTC schedule.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  schedule:
+    - cron: '0 9 * * *'
+
+jobs:
+  python-audit:
+    name: pip-audit (4 components)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project:
+          - central/llm-gateway
+          - central/skills-hub
+          - edge/tool-bridge
+          - edge/local-search
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - name: install pip-audit
+        run: pip install pip-audit tomli
+      - name: pyproject → requirements
+        run: |
+          python -c "
+          import tomli
+          d = tomli.load(open('${{ matrix.project }}/pyproject.toml','rb'))
+          for x in d['project']['dependencies']:
+              print(x.split(';')[0].strip())
+          " > /tmp/req.txt
+      - name: pip-audit
+        run: pip-audit -r /tmp/req.txt --no-deps --strict
+
+  npm-audit:
+    name: npm audit (companion-app)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: install
+        working-directory: edge/companion-app
+        run: npm ci
+      - name: audit
+        working-directory: edge/companion-app
+        # 仅 prod deps, audit-level=high 阻断 high/critical CVE
+        run: npm audit --omit=dev --audit-level=high
+
+  cargo-audit:
+    name: cargo audit (Tauri)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: edge/companion-app/src-tauri
+
+  gitleaks:
+    name: gitleaks (secrets scan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

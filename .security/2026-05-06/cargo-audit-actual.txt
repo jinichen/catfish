@@ -1,0 +1,64 @@
+$ cargo audit
+    Fetching advisory database from `https://github.com/RustSec/advisory-db.git`
+      Loaded 1067 security advisories (from /Users/chenhongbo/.cargo/advisory-db)
+    Updating crates.io index
+    Scanning Cargo.lock for vulnerabilities (556 crate dependencies)
+
+== 结果 ==
+Vulnerabilities: 0
+Warnings: 19 (informational: unmaintained / unsound)
+
+== 19 个 warning 分类 ==
+
+A. GTK3 bindings unmaintained (10 个) — Linux 平台间接依赖, macOS 不走
+   - RUSTSEC-2024-0411 gdkwayland-sys
+   - RUSTSEC-2024-0412 gdk
+   - RUSTSEC-2024-0413 atk
+   - RUSTSEC-2024-0414 gdkx11-sys
+   - RUSTSEC-2024-0415 gtk
+   - RUSTSEC-2024-0416 atk-sys
+   - RUSTSEC-2024-0417 gdkx11
+   - RUSTSEC-2024-0418 gdk-sys
+   - RUSTSEC-2024-0419 gtk3-macros
+   - RUSTSEC-2024-0420 gtk-sys
+
+B. unic-* unmaintained (5 个) — Unicode 库, urlpattern → tauri-utils 间接
+   - RUSTSEC-2025-0075 unic-char-range
+   - RUSTSEC-2025-0080 unic-common
+   - RUSTSEC-2025-0081 unic-char-property
+   - RUSTSEC-2025-0098 unic-ucd-version
+   - RUSTSEC-2025-0100 unic-ucd-ident
+
+C. 其他 unmaintained (2 个) — build-time / hash 工具
+   - RUSTSEC-2024-0370 proc-macro-error (build-time 宏)
+   - RUSTSEC-2025-0057 fxhash (selectors → kuchikiki → tauri-utils 间接)
+
+D. unsound (2 个, 跟手动比对完全一致) — 不在鲶鱼调用路径
+   - RUSTSEC-2024-0429 glib 0.18.5
+     · 受影响: VariantStrIter::next/nth/last (NULL deref)
+     · 鲶鱼: macOS 不走 GTK/WebKit Linux, 不暴露
+   - RUSTSEC-2026-0097 rand 0.7.3
+     · 触发条件: 自定义 logger + 在 logger 内调 rand::rng()
+     · 鲶鱼: 用 env_logger 标准, 不暴露
+
+== 诊断 ==
+
+* unmaintained != vulnerable
+  RustSec 给"长期没新版本"的 crate 标 unmaintained. 不是漏洞,
+  只是提醒未来若发现 CVE 不会有上游修复. Tauri 上游正在
+  迁 GTK3 → GTK4 + 替换 unic-* (urlpattern 上游 PR 已开).
+
+* macOS 不暴露
+  GTK 系列 + libappindicator 是 Linux/X11 GUI bindings,
+  Tauri macOS target 不编译这些 (只编 webkitgtk-sys 的 stub).
+
+* unsound 两个
+  跟 5/6 上午沙箱手动 RustSec advisory-db 比对结果一致.
+  glib::VariantStrIter 鲶鱼 Rust 代码无主动调用.
+  rand::rng() 鲶鱼用 env_logger 标准 logger, 不在 logger 内调 rand.
+
+== 给客户结论 ==
+
+556 crate, 0 vulnerability, 0 RCE. 19 个 informational warning
+全是 unmaintained / unsound 提示, 跟 GTK3 → GTK4 上游迁移有关,
+鲶鱼 macOS target 不暴露这些路径.
