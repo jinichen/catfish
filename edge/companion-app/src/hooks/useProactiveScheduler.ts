@@ -16,7 +16,9 @@
 import { useEffect } from "react";
 
 import { fetchProactiveStarter } from "../lib/me";
-import { sendNotification } from "../lib/tauri";
+
+import { sendNotification, petIsVisible, petEmitBubble } from "../lib/tauri";
+import { useUIStore } from "../store/ui";
 
 const TIMES_LOCAL = ["09:30", "14:00", "17:30"];
 const _ENABLED_KEY = "catfish:proactive_enabled";
@@ -55,13 +57,6 @@ function saveFiredMap(m: Record<string, string[]>): void {
   }
 }
 
-function alreadyFiredToday(time: string): boolean {
-  const m = loadFiredMap();
-  const key = todayKey();
-  const list = m[key] || [];
-  return list.includes(time);
-}
-
 function markFired(time: string): void {
   const m = loadFiredMap();
   const key = todayKey();
@@ -85,32 +80,104 @@ function nowHHMM(): string {
 
 async function fireOne(time: string): Promise<void> {
   try {
+    console.log(`[proactive] fireOne(${time}): 拉 starter...`);
     const s = await fetchProactiveStarter();
-    if (!s || !s.starter) return;
-    // 五一 sprint 5/3 BL-D11: macOS 通知左侧已有 app icon (新 mark), 标题去 🐟 冗余
-    // BL-E11: 标题用员工自定义名字 (默认 "小鲶")
+    if (!s || !s.starter) {
+      console.warn(
+        `[proactive] fireOne(${time}): fetchProactiveStarter 没返 starter, 跳过. 检查 gateway /me/proactive_starter 接口或 LLM 配置.`,
+        s,
+      );
+      // 5/6 fix: 已经 markFired 了, 不还原. 网络瞬挂的话员工今天这条就丢了 —
+      // tradeoff: 防 StrictMode 双 mount 重复 fire (LLM 多花 token + 双气泡 spam)
+      // > "瞬时网络挂导致今天那 1 条丢" (员工还有 dashboard 卡 + 下个时段补).
+      return;
+    }
+    console.log(`[proactive] fireOne(${time}): starter="${s.starter.slice(0, 60)}..."`);
     const { useAgentStore } = await import("../store/agent");
     const agentName = useAgentStore.getState().name || "小鲶";
-    await sendNotification(`${agentName}想跟你聊一句`, s.starter);
-    markFired(time);
+
+    // 5/6 鸿波: 桌宠 = 主动信息统一出口, 不再砸 macOS 通知刷屏.
+    //
+    // 流程:
+    //   1. 总是 prefill chat input (员工开 Companion 时一眼看到 starter, 改一下就发)
+    //   2. 桌宠 visible → emit pet_bubble (桌宠头顶冒气泡, 桌宠 idle → thinking)
+    //      桌宠 hidden  → 兜底 macOS 通知 (员工自己关了桌宠, 不能漏消息)
+    useUIStore.getState().startProactiveChat(s.starter);
+
+    let usedBubble = false;
+    try {
+      const visible = await petIsVisible();
+      console.log(`[proactive] 桌宠 visible=${visible}`);
+      if (visible) {
+        // 5/6: emitTo frontend 跨窗目测不可靠, 走 Rust 命令 (app.emit_to) 100% 准
+        const diag = await petEmitBubble(s.starter, agentName);
+        console.log("[proactive] pet_emit_bubble Rust 返回诊断:", diag);
+        usedBubble = true;
+      }
+    } catch (e) {
+      console.warn("[proactive] pet_is_visible 失败, fallback macOS 通知:", e);
+    }
+    if (!usedBubble) {
+      console.log(`[proactive] 桌宠不可见, 走 macOS 通知 fallback`);
+      await sendNotification(`${agentName}想跟你聊一句`, s.starter);
+    }
+    // 5/6 fix: markFired 已在 tick() 决定 fire 时立即标过, 这里不重复.
+    console.log(`[proactive] fireOne(${time}): ✅ 完成 (usedBubble=${usedBubble})`);
   } catch (e) {
-    console.warn("[proactive] fire 失败:", e);
+    console.warn(`[proactive] fireOne(${time}) 失败:`, e);
   }
+}
+
+/** 5/6 鸿波报"主动闲聊好像有问题": 老 tick 只在 cur === '09:30'/'14:00'/'17:30'
+ *  那一精确分钟触发. 员工 9:31 才打开 Companion → 9:30 那条整天丢. 这 =
+ *  "主动闲聊看似没工作". 修成"过点补发":
+ *
+ *    遍历 TIMES_LOCAL, 找到 "今天还没发 + 当前时间 ≥ schedule time" 的最近一条 fire.
+ *    一次只发一个 (防员工跨午夜启动一口气发 3 条).
+ *    跨日 firedToday 自然清空 (todayKey 不同).
+ *
+ *  时间字符串比较: "HH:MM" lexicographic 顺序就是时间顺序, 直接 >= 即可.
+ */
+function _hhmmGE(a: string, b: string): boolean {
+  return a >= b;
 }
 
 /** 每分钟看一次, 到点了就发. 简单 polling, 不用 cron. */
 export function useProactiveScheduler(): void {
   useEffect(() => {
-    if (!isEnabled()) return;
+    if (!isEnabled()) {
+      console.log("[proactive] disabled (localStorage:catfish:proactive_enabled=false)");
+      return;
+    }
 
     const tick = () => {
       const cur = nowHHMM();
-      if (!TIMES_LOCAL.includes(cur)) return;
-      if (alreadyFiredToday(cur)) return;
-      void fireOne(cur);
+      const m = loadFiredMap();
+      const today = todayKey();
+      const firedToday = new Set(m[today] || []);
+
+      // 找"今天该发但还没发"的最近一条
+      // TIMES_LOCAL 升序, 反向遍历找最近过点的没发的
+      for (let i = TIMES_LOCAL.length - 1; i >= 0; i--) {
+        const t = TIMES_LOCAL[i];
+        if (firedToday.has(t)) continue;
+        if (_hhmmGE(cur, t)) {
+          console.log(`[proactive] fire ${t} (now=${cur}, missed pickup)`);
+          // 5/6 fix: markFired **立即**标 — 防 React StrictMode dev mode 双 mount
+          // 让 useEffect 跑两次时, 第二次 tick 看到 firedToday 已含, 不重复 fire.
+          // (老代码 markFired 在 fireOne 末尾, await 期间第二个 tick 抢着进来, LLM
+          //  调两次 + 员工双气泡/双通知 spam)
+          markFired(t);
+          void fireOne(t);
+          return; // 一次只发一个
+        }
+      }
     };
 
-    // mount 立即看一下 (员工 9:30 重启 Companion 还是该收到)
+    console.log(
+      `[proactive] scheduler 启动, times=${TIMES_LOCAL.join(",")} (mount @ ${nowHHMM()})`,
+    );
+    // mount 立即看一下 (员工任何时间打开都能补发当天最近过点的那条)
     tick();
     const t = window.setInterval(tick, 60_000);  // 每分钟看一次
     return () => window.clearInterval(t);

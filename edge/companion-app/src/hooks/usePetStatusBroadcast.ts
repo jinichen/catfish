@@ -12,8 +12,8 @@
  */
 
 import { useEffect, useRef } from "react";
-import { emit } from "@tauri-apps/api/event";
 
+import { petEmitStatus } from "../lib/tauri";
 import { useChatStore } from "../store/chat";
 
 type AgentStatus = "idle" | "thinking" | "running" | "done";
@@ -47,8 +47,9 @@ export function usePetStatusBroadcast(): void {
 
     if (lastStatusRef.current !== nextStatus) {
       lastStatusRef.current = nextStatus;
-      emit("catfish:agent_status", nextStatus).catch((e) =>
-        console.warn("emit agent_status failed:", e),
+      // 5/6: 走 Rust 命令 emit_to 桌宠 (frontend emitTo 不可靠)
+      petEmitStatus(nextStatus).catch((e) =>
+        console.warn("pet_emit_status failed:", e),
       );
     }
   }, [messages, isStreaming]);

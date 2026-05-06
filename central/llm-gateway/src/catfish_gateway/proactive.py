@@ -287,4 +287,173 @@ async def generate_starter() -> dict[str, Any]:
         }
 
 
-__all__ = ["generate_starter"]
+# ============================================================
+# BL-E13.5 真主动 Phase B (5/6) — 信号触发的针对性 starter
+# ============================================================
+#
+# 跟 generate_starter (死时间 9:30/14:00/17:30) 并存. 这个函数是给
+# useProactiveTriggers 调的: 收到 signal_kind + context, 让 LLM 看着写
+# 针对性 starter (而不是泛"今天怎么样").
+#
+# 跟死时间版区别:
+#   - generate_starter: journal + 时段 → 通用 starter
+#   - generate_contextual_starter: + signal 类型 + 触发上下文 → 强相关 starter
+#     例: "你 30 分钟前说要弄上会材料, 卡哪我帮看看?" 这种
+#
+# 失败 fallback: 用 frontend 自己拼的本地模板 (frontend 已有), gateway 这边
+# 返 {source: "fallback"} 让 frontend 知道走本地模板.
+
+
+_SIGNAL_KIND_PROMPTS = {
+    "silence": (
+        "员工 {minutes_ago} 分钟前说了一句 \"{last_user_text}\" 然后没下文了 "
+        "(命中动词关键词 {action_hits}). 你想关心一下他卡哪没. "
+        "1 句话, 引用他原话里的具体事 (不是泛问), 像同事走过去问."
+    ),
+    "deadline": (
+        "员工的 employee_journal 里提到的某个事 deadline 是 {days_until} 天后 "
+        "({date_str}). journal 上下文片段: \"{journal_excerpt}\". "
+        "你想提醒一下, 1 句话, 引用具体事项, 问还差啥."
+    ),
+    "focus": (
+        "员工刚切回 Companion (离开 {minutes_away} 分钟). "
+        "走前最后一句是 \"{last_user_text}\". "
+        "你想自然地接上, 1 句话, 像他刚回来你抬头问一句, 不要太正式."
+    ),
+}
+
+
+def _build_contextual_user_prompt(
+    signal_kind: str,
+    context: dict[str, Any],
+    now: datetime,
+) -> str:
+    """根据 signal 类型 + context 拼 LLM prompt."""
+    weekday_zh = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][now.weekday()]
+    template = _SIGNAL_KIND_PROMPTS.get(signal_kind, "")
+    try:
+        signal_desc = template.format(**{k: str(v) for k, v in context.items()})
+    except KeyError as e:
+        signal_desc = f"signal {signal_kind} 缺 context 字段 {e}"
+
+    return f"""你是鲶鱼 (catfish), 员工的 AI 副手. 现在是 {weekday_zh} {now.hour}:00.
+
+# 触发上下文 (你为什么现在主动开口)
+
+{signal_desc}
+
+# 要求
+
+1. **同事语气, 不端架子**. 不说"亲爱的"/"请汇报". 像他身边一个熟人.
+2. **必须引用具体事** — 触发上下文里的员工原话 / 项目名 / 日期等. 不要泛问.
+3. **不超过 30 字**. 1 句话, 一个具体问题或一句关心.
+4. **不堆套话**. 不"很高兴帮你"/"有什么需要".
+5. **直接说话**, 别介绍自己 ("我是小鲶, 来看看你..."). 同事不会每次都自报家门.
+
+直接输出 1 句, 不要前后缀, 不要 markdown."""
+
+
+async def generate_contextual_starter(
+    signal_kind: str,
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    """生成信号触发的针对性 starter.
+
+    Args:
+      signal_kind: 'silence' | 'deadline' | 'focus'
+      context: signal 触发时的上下文 (frontend 拼好传过来)
+        silence: {minutes_ago, last_user_text, action_hits}
+        deadline: {days_until, date_str, journal_excerpt}
+        focus: {minutes_away, last_user_text}
+
+    返:
+      {starter, context_hint, source: 'llm' | 'fallback'}
+    """
+    now = datetime.now()
+
+    # 校验 signal_kind
+    if signal_kind not in _SIGNAL_KIND_PROMPTS:
+        return {
+            "starter": "",  # frontend 走本地模板
+            "context_hint": f"unknown signal_kind: {signal_kind}",
+            "source": "fallback",
+        }
+
+    # 候选模型 (跟死时间版同, 复用 proactive_starter use_case)
+    from .config import load_config  # noqa: PLC0415
+    from .internal_models import pick_internal_models_ordered  # noqa: PLC0415
+    config = load_config()
+    candidates = pick_internal_models_ordered("proactive_starter", config)
+    if not candidates:
+        return {
+            "starter": "",
+            "context_hint": "fallback (catalog 没可用 chat 模型)",
+            "source": "fallback",
+        }
+
+    import httpx  # noqa: PLC0415
+    port = os.environ.get("PORT", "8999")
+    gateway_url = os.environ.get(
+        "CATFISH_GATEWAY_INTERNAL_URL",
+        f"http://127.0.0.1:{port}/v1/chat/completions",
+    )
+    dev_token = os.environ.get("CATFISH_DEV_TOKEN", "dev-token-local")
+    user_prompt = _build_contextual_user_prompt(signal_kind, context, now)
+
+    last_error: str | None = None
+    text = ""
+    for attempt_idx, chosen_model in enumerate(candidates, start=1):
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                # 8s timeout — 信号触发 starter 没必要等长 (frontend 5s 兜底也够)
+                resp = await client.post(
+                    gateway_url,
+                    headers={
+                        "Authorization": f"Bearer {dev_token}",
+                        "X-Catfish-Skip-Identity": "true",
+                        "X-Catfish-Internal": "true",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": chosen_model.name,
+                        "messages": [{"role": "user", "content": user_prompt}],
+                        "temperature": 0.6,  # 信号触发更稳, 比死时间低一点
+                        "max_tokens": 80,
+                        "stream": False,
+                    },
+                )
+            if resp.status_code == 200:
+                data = resp.json()
+                msg = data.get("choices", [{}])[0].get("message", {}) if data.get("choices") else {}
+                text = (
+                    (msg.get("content") or "")
+                    or (msg.get("reasoning_content") or "")
+                ).strip()
+                if not text:
+                    last_error = f"200 但 content 空 ({chosen_model.name})"
+                    continue
+                break
+            if resp.status_code == 429 or 500 <= resp.status_code < 600:
+                last_error = f"{resp.status_code} ({chosen_model.name})"
+                continue
+            last_error = f"{resp.status_code}"
+            break
+        except Exception as e:
+            last_error = f"{type(e).__name__}"
+            continue
+
+    text = text.strip("`\"'*-> \n")
+    if text:
+        return {
+            "starter": text[:120],
+            "context_hint": f"signal={signal_kind}, llm via {len(candidates)} candidates",
+            "source": "llm",
+        }
+    return {
+        "starter": "",
+        "context_hint": f"fallback (signal={signal_kind}, last_error={last_error})",
+        "source": "fallback",
+    }
+
+
+__all__ = ["generate_starter", "generate_contextual_starter"]

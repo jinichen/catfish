@@ -24,8 +24,9 @@
         pointer-events: none;
         background: transparent !important;
       }
-      /* 防 React DevStrictMode wrapper / 任何中间层加 bg */
-      #pet-root > * {
+      /* 防 React DevStrictMode wrapper / 任何中间层加 bg.
+         注: 不影响 bubble 的内部 background (那是嵌套子元素 inline style). */
+      #pet-root {
         background: transparent !important;
       }
     </style>

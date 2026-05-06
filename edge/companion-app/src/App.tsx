@@ -15,6 +15,7 @@ import { useUIStore } from "./store/ui";
 import { useAgentStore } from "./store/agent";
 import { useFocusStore } from "./store/focus";
 import { useProactiveScheduler } from "./hooks/useProactiveScheduler";
+import { useProactiveTriggers } from "./hooks/useProactiveTriggers";
 import { usePetStatusBroadcast } from "./hooks/usePetStatusBroadcast";
 
 export default function App() {
@@ -32,8 +33,11 @@ export default function App() {
     void loadAgentPrefs();
   }, [loadAgentPrefs]);
 
-  // BL-E13 主动闲聊: 每分钟看一次, 9:30 / 14:00 / 17:30 自动 macOS 通知 + 起话题.
+  // BL-E13 主动闲聊 (死时间兜底): 9:30 / 14:00 / 17:30
   useProactiveScheduler();
+
+  // 5/6 BL-E13.5 真主动 Phase A: chat 沉默 / journal deadline / focus 切换 信号触发
+  useProactiveTriggers();
 
   // BL-E15 专注模式: 监听 Tauri 后端 emit 的 toggle 事件 (Cmd+Shift+F 触发).
   // 切到 store, App 顶层根据 active 决定渲染 FocusModeView 还是正常 AppShell.

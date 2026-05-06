@@ -123,6 +123,9 @@ pub fn run() {
                                 let _ = pet.hide();
                                 log::info!("Cmd+Shift+P: 桌宠隐藏");
                             } else {
+                                // 5/6 BL-E27.2: 默认 ignore=true (透明区穿透),
+                                // hover tracker 80ms 后会在鲶鱼区切回 false
+                                let _ = pet.set_ignore_cursor_events(true);
                                 let _ = pet.show();
                                 log::info!("Cmd+Shift+P: 桌宠显示");
                             }
@@ -155,8 +158,8 @@ pub fn run() {
                                 let logical_h = (m_size.height as f64 / scale) as i32;
                                 let logical_pos_x = (m_pos.x as f64 / scale) as i32;
                                 let logical_pos_y = (m_pos.y as f64 / scale) as i32;
-                                const W: i32 = 120;
-                                const H: i32 = 120;
+                                const W: i32 = 200;  // 5/6 桌宠窗 120 → 200 留气泡空间
+                                const H: i32 = 200;
                                 const MARGIN: i32 = 16;
                                 const TOP_RESERVED: i32 = 32;     // menu bar
                                 const BOTTOM_RESERVED: i32 = 80;  // dock 估值
@@ -179,6 +182,8 @@ pub fn run() {
                                 let _ = pet.set_position(
                                     tauri::LogicalPosition::new(x as f64, y as f64),
                                 );
+                                // 5/6 BL-E27.2: 默认 ignore=true, hover tracker 80ms 修
+                                let _ = pet.set_ignore_cursor_events(true);
                                 let _ = pet.show();
                                 log::info!(
                                     "Option+Shift+{} (corner {}): logical ({}, {}) on {}x{} scale {}",
@@ -248,6 +253,11 @@ pub fn run() {
             // skill_watcher / config_watcher 主动退进程后必须有人接锅, 否则
             // 员工卡死. 见 services/watchdog.rs.
             services::watchdog::schedule_watchdog();
+
+            // 5/6 BL-E27.2: 桌宠 hover tracker — 80ms 一次轮询鼠标位置,
+            // 切 set_ignore_cursor_events 让透明区真透 (附近点击穿到桌面),
+            // 桌宠区接事件 (能点能拖). 见 services/pet_hover.rs.
+            services::pet_hover::schedule_pet_hover_tracker(app.handle().clone());
 
             // BL-E27 spike (5/5 凌晨): macOS 透明窗 — 不依赖 unsafe NSWindow 调用.
             // 单纯 transparent:true 在某些 macOS 版本仍白底, macOSPrivateApi:true (config 顶层加)
@@ -329,6 +339,7 @@ pub fn run() {
             // BL-E16 关系建立 (五一 sprint 5/3 晚): "鲶鱼对你的印象" 透明 + 清空
             commands::relation::relation_summary,
             commands::relation::relation_forget,
+            commands::relation::journal_read_raw,
             // BL-MM4 v1 (5/5 晚): "鲶鱼记的硬事实" 版本卡 (跟 BL-MM2 配套)
             commands::memory_history::memory_history_summary,
             commands::memory_history::memory_history_clear_key,
@@ -340,8 +351,16 @@ pub fn run() {
             // BL-E27 spike (5/5 凌晨): 桌宠副窗 toggle + 点击唤主窗 + 4 屏角切换
             commands::pet::pet_show,
             commands::pet::pet_hide,
+            commands::pet::pet_is_visible,
             commands::pet::pet_clicked,
             commands::pet::pet_move_corner,
+            commands::pet::pet_set_bubble_visible,
+            commands::pet::pet_start_drag,
+            commands::pet::pet_emit_bubble,
+            commands::pet::pet_emit_status,
+            commands::pet::pet_pop_bubble,
+            commands::pet::pet_pop_status,
+            commands::pet::pet_log,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
