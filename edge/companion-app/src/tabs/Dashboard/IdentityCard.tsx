@@ -1,13 +1,24 @@
 /** 当前身份 —— 系统用户 / SOUL 来源 / 运行时主题 / 活动会话 / 鲶鱼版本 */
 
-import { useIdentity } from "../../hooks/useIdentity";
+import { useEffect, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 
-// 版本号 — 跟 src-tauri/Cargo.toml + package.json 同步.
-// (BrandHeader 拿掉后, 版本展示挪到这里)
-const COMPANION_VERSION = "v0.1.0";
+import { useIdentity } from "../../hooks/useIdentity";
 
 export default function IdentityCard() {
   const { identity, error } = useIdentity();
+  // 5/5 鸿波: 版本号去硬编码, 走 Tauri getVersion API 运行时读 tauri.conf.json.
+  // 发版时只改 tauri.conf.json (build 真源头) + Cargo.toml + package.json 三处,
+  // UI 跟着自动变, 不再 IdentityCard 里单独维护一份.
+  const [version, setVersion] = useState<string>("…");
+  useEffect(() => {
+    getVersion()
+      .then((v) => setVersion(`v${v}`))
+      .catch((e) => {
+        console.warn("getVersion 失败:", e);
+        setVersion("(未知)");
+      });
+  }, []);
 
   return (
     <Card title="身份">
@@ -39,7 +50,7 @@ export default function IdentityCard() {
           ) : (
             <Row label="活动会话" value="(无)" />
           )}
-          <Row label="鲶鱼版本" value={COMPANION_VERSION} mono />
+          <Row label="鲶鱼版本" value={version} mono />
         </>
       )}
     </Card>

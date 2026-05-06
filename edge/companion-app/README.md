@@ -79,3 +79,42 @@ npm run tauri:build     # 打包（macOS .dmg / Windows .msi）
 🚧 **骨架阶段** —— 目录已建，配置文件占位，业务代码尚未填充。
 
 下一步：填 `src-tauri/src/commands/gateway.rs`（最简单的 health 探测）作为第一个能跑的 invoke 路径，验证 Rust ↔ React 通路。
+
+
+## 发版 / 版本号同步 (5/5 鸿波"是不是硬编码"修)
+
+版本号有 **3 处 build 元数据需手动同步**（任何前端 / Rust / Tauri 项目通用做法）：
+
+```
+src-tauri/tauri.conf.json    "version": "0.x.y"   ← Tauri app bundle 真源头
+src-tauri/Cargo.toml         version = "0.x.y"    ← Rust crate
+package.json                 "version": "0.x.y"   ← npm
+```
+
+**运行时显示**全部从这 3 个里读，不再单独维护：
+
+- `IdentityCard` 的"鲶鱼版本" 走 `@tauri-apps/api/app::getVersion()` 读 `tauri.conf.json`
+- `edge/branding/catfish` shell 入口 `_resolve_catfish_version` 从仓库找 `package.json`
+
+发版步骤 (例 0.1.0 → 0.2.0)：
+
+```bash
+# 1. 改 3 处 build 元数据
+sed -i '' 's/"version": "0\.1\.0"/"version": "0.2.0"/' \
+    src-tauri/tauri.conf.json package.json
+sed -i '' 's/^version = "0\.1\.0"$/version = "0.2.0"/' \
+    src-tauri/Cargo.toml
+
+# 2. 验证 3 处一致
+grep -E '"version"|^version' \
+    src-tauri/tauri.conf.json package.json src-tauri/Cargo.toml
+
+# 3. tauri build → 桌面 app 用新版, IdentityCard / catfish CLI 自动跟随
+npm run tauri:build
+
+# 4. tag + commit
+git commit -am "release v0.2.0"
+git tag -a v0.2.0 -m "..."
+```
+
+未来可加 `scripts/bump-version.sh` 一行脚本同步 3 处, 但 demo 前不做.

@@ -20,7 +20,28 @@ set -euo pipefail
 
 # ---------- 配置 ----------
 
-CATFISH_VERSION="0.1.0"
+# 版本号: 5/5 鸿波"是不是硬编码"修, 改读 Companion package.json (跟 Tauri 同步源).
+# 找不到 fallback "0.1.0+local" 让员工知道是 dev 装/没找到.
+_resolve_catfish_version() {
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local d="$script_dir"
+    while [ "$d" != "/" ]; do
+        local pkg="$d/edge/companion-app/package.json"
+        if [ -f "$pkg" ]; then
+            # macOS BSD sed 不支持 \K, 用 awk 抽 "version": "x.y.z"
+            local v
+            v="$(awk -F'"' '/"version"[[:space:]]*:/ {print $4; exit}' "$pkg" 2>/dev/null)"
+            if [ -n "$v" ]; then
+                echo "$v"
+                return 0
+            fi
+        fi
+        d="$(dirname "$d")"
+    done
+    echo "0.1.0+local"
+}
+CATFISH_VERSION="${CATFISH_VERSION:-$(_resolve_catfish_version)}"
 CATFISH_HOME="${CATFISH_HOME:-$HOME/.catfish}"
 HERMES_BIN="${HERMES_BIN:-hermes}"
 
