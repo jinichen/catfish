@@ -120,10 +120,10 @@ function Pet() {
       }}
     >
       <img
-        src="/catfish-mascot.svg"
+        src="/catfish-pet.svg"
         alt="鲶鱼"
         width={80}
-        height={80}
+        height={112}
         draggable={false}
         style={{
           display: "block",

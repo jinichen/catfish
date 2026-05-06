@@ -18,13 +18,19 @@
 
 | 文件 | 用途 | 关键特征 |
 |------|------|---------|
-| `logo-mascot.svg` | Onboarding 引导 / 启动闪屏 / 对外 banner / 名片 | 完整身体 + 双须 + 大眼 + 腮红, 480x480 |
+| `logo-mascot.svg` | Onboarding 引导 / 启动闪屏 / 对外 banner / 名片 | 完整身体 + 双须 + 大眼 + 腮红, 480x480 (横游姿态) |
+| `pet-mascot.svg` | **桌宠** (BL-E27, 5/5 ship) — 屏幕角落浮宠 | **站立** + **持鱼竿** + 钩上挂迷你小鱼 (员工赋权 + 自我反讽 meta), 100x140 竖直比 |
 | `logo-mark.svg` | favicon / PPT 角标 / 文档抬头 | 圆形 + 双须 S 曲线 + 鱼眼锚点, 256x256 |
 | `logo-mark-mono.svg` | 单色印刷 / 反白 / 邮件签名 | currentColor 单色, 缩放无失真 |
 | `avatar-circle.svg` | Companion 聊天头像 / 通知图标 | 头部特写, 28x28 ~ 256x256 都清晰 |
 | `app-icon-master.svg` | macOS/iOS/Windows/Android app icon | macOS squircle 圆角方形 + 极简 mark |
 
-**双轨制:** 吉祥物 (`mascot/avatar`) 走亲和路线, 给员工日常看; mark (`logo-mark/app-icon`) 走专业路线, 给 IT/PPT/正式场合看. 同一品牌但场景分离.
+**三轨制 (5/5 加桌宠):**
+- **吉祥物 mascot/avatar** 走亲和路线, 给员工 Onboarding / Dashboard 头像 (圆胖萌)
+- **桌宠 pet-mascot** 走克制路线, 服务屏幕角落小尺寸 (站立 + 持竿, 跟主 mascot 区分语境)
+- **mark/app-icon** 走专业路线, 给 IT / PPT / 正式场合 (单色简洁)
+
+**为啥桌宠独立**: 桌宠 120x120 px 区, 横游姿态塞方框两侧浪费. 站立姿态自然填满 + 屏幕小尺寸下识别强 + 隐喻"员工驾驭 AI". 跟 Onboarding 圆胖萌的语境也区分清楚.
 
 ---
 
