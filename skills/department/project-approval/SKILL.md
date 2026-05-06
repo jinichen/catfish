@@ -41,6 +41,8 @@ description: |-
   ✅ 必触发关键词: 立项 / 立项申请 / 立项报告 / 项目立项 / 可研 / 可研报告 / 项目可行性 / 项目申请 / 项目立项书 / 立项材料 / 申报材料 / 项目方案 / 项目预算申请 / 申请项目 / 报项目 / 项目立项请示 / 写一份立项 / 提交立项
 
   ❌ 不触发: 周报 → weekly-report / 月度汇报 / 决策事项 → leadership-briefing / 内部说明 → docx skill / PPT 立项汇报 → pptx
+
+  ⚠️ **调用本 skill 前必读员工画像** (BL-MM7/MM8): 先调 `catfish_user_profile_get` + `catfish_style_fingerprint_get`. 立项的语气尤其受员工风格影响 (有的偏严谨保守, 有的偏激进推动): personality.feedback_style + writing_style.tone 决定 § 3 风险分析的措辞强度; 高频词 (业务领域) 优先用; 偏列表的员工 § 4 进度计划用 ordered_list 不用大段 paragraph. 详见 SOUL.md § BL-MM8.
 ---
 
 # project-approval — 项目立项 / 立项申请 skill

@@ -127,6 +127,13 @@ function formatFileAttachment(att: {
     metaLine = `Excel · ${sheets.length} 个 sheet (${sheets.join(", ")}) · 共 ${totalRows} 行`;
   } else if (kind === "pdf") {
     metaLine = `PDF · ${meta.page_count ?? "?"} 页`;
+    // 5/6 BL-D17: parse_file.py 自动识别到结构化表格 (anchor + sub-records 模式).
+    // metaLine 加上"已抽 N 条", LLM 看一眼就知道不用再读 raw text.
+    if (meta.structured_path && typeof meta.structured_count === "number") {
+      const cols = (meta.structured_columns as string[] | undefined)?.join(", ") || "";
+      metaLine += ` · ✅ 已自动抽 ${meta.structured_count} 条结构化记录` +
+        (cols ? ` (${cols})` : "");
+    }
   } else if (kind === "word") {
     metaLine = `Word · ${meta.paragraph_count ?? "?"} 段` +
       (meta.table_count ? ` · ${meta.table_count} 表格` : "");
@@ -150,6 +157,24 @@ function formatFileAttachment(att: {
       );
     }
     if (kind === "pdf") {
+      // 5/6 BL-D17: 有 structured_path → 直接读 JSON, 不要再啃 raw text 爆 context.
+      // (pypdfium2 全文读对大表格 PDF 一定爆: 5万+ 字 = 8万+ tokens)
+      const sp = meta.structured_path as string | undefined;
+      if (sp && typeof meta.structured_count === "number") {
+        return (
+          `\n# 已自动抽出 ${meta.structured_count} 条结构化记录, ` +
+          `直接读 JSON 写 Excel — 不要再用 pypdfium2 读 raw text (大 PDF 5万+字会爆 context)\n` +
+          `import pandas as pd\n` +
+          `df = pd.read_json("${sp}")  # 完整 ${meta.structured_count} 条\n` +
+          `# df 列: ${(meta.structured_columns as string[] | undefined)?.join(", ") || "见 df.columns"}\n` +
+          `# 子记录在 _sub 列 (list of dict). 要展平成行式 Excel:\n` +
+          `import pandas as pd, json\n` +
+          `recs = json.load(open("${sp}", encoding="utf-8"))\n` +
+          `flat = [{**{k: v for k, v in r.items() if k != "_sub"}, **s}\n` +
+          `        for r in recs for s in (r.get("_sub") or [{}])]\n` +
+          `pd.DataFrame(flat).to_excel("output.xlsx", index=False)`
+        );
+      }
       return (
         `\n# 推荐: 用 pypdfium2 读全文\n` +
         `import pypdfium2 as pdfium\n` +

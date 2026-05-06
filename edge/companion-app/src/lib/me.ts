@@ -264,3 +264,51 @@ export async function fetchProactiveStarter(): Promise<ProactiveStarter | null> 
     return null;
   }
 }
+
+/** 5/6 BL-E13.5 真主动 Phase B: 信号触发的针对性 starter.
+ *
+ * signal_kind: 'silence' | 'deadline' | 'focus'
+ * context: 各 signal 类型对应字段, 跟 gateway proactive._SIGNAL_KIND_PROMPTS 对齐
+ *
+ * 5s timeout — 信号触发不能等太久, 超时 / gateway 挂 → 返 null,
+ * caller (useProactiveTriggers) 用本地模板兜底.
+ */
+export async function fetchContextualStarter(
+  signalKind: "silence" | "deadline" | "focus",
+  context: Record<string, unknown>,
+): Promise<ProactiveStarter | null> {
+  try {
+    const token = await (async () => {
+      const o = getOverrideToken();
+      if (o) return o;
+      try {
+        return await gatewayGetDevToken();
+      } catch {
+        return "dev-token-local";
+      }
+    })();
+    const url = `${config.gatewayUrl}/api/proactive/contextual`;
+    const ctrl = new AbortController();
+    const t = window.setTimeout(() => ctrl.abort(), 5000);
+    try {
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ signal_kind: signalKind, context }),
+        signal: ctrl.signal,
+      });
+      if (!resp.ok) return null;
+      const data = (await resp.json()) as ProactiveStarter;
+      // gateway 返 source=fallback + starter 空 — 让 caller 用本地模板
+      if (!data.starter) return null;
+      return data;
+    } finally {
+      window.clearTimeout(t);
+    }
+  } catch {
+    return null;
+  }
+}

@@ -124,6 +124,7 @@ export const feedbackClear = () => rawInvoke<void>("feedback_clear");
 // ── BL-E27 spike: 桌宠副窗 ─────────────────────────────────
 export const petShow = () => rawInvoke<void>("pet_show");
 export const petHide = () => rawInvoke<void>("pet_hide");
+export const petIsVisible = () => rawInvoke<boolean>("pet_is_visible");
 
 // ── sessions (write) —— Plan C Week 2 持久化 ──
 export interface SessionCreateInput {
@@ -197,6 +198,20 @@ export const openTerminal = (cwd?: string) =>
   rawInvoke<void>("open_terminal", { cwd });
 export const sendNotification = (title: string, body: string) =>
   rawInvoke<void>("notify", { title, body });
+
+// ── 桌宠跨窗通信 (5/6: Tauri 跨 webview event 不通, 走 Rust polling buffer) ─
+export interface PetEmitBubbleDiag {
+  pet_window_exists: boolean;
+  pet_visible: boolean;
+  /** 已 push 到 polling buffer, pet.tsx 300ms 内拉走 */
+  queued: boolean;
+}
+/** 主窗调: 桌宠头顶冒气泡, 8s 后自动收. */
+export const petEmitBubble = (text: string, agentName?: string) =>
+  rawInvoke<PetEmitBubbleDiag>("pet_emit_bubble", { text, agentName });
+/** 主窗调: 切桌宠 4 状态 (idle / thinking / running / done). */
+export const petEmitStatus = (status: "idle" | "thinking" | "running" | "done") =>
+  rawInvoke<void>("pet_emit_status", { status });
 
 // ── file (Phase 2 优雅下载: skill 生成的文件,在 Finder 打开/显示) ───
 /** 在 Finder/资源管理器里高亮选中文件 (macOS: open -R). */

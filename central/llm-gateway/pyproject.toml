@@ -25,6 +25,11 @@ dependencies = [
     # alembic migration (替代 idempotent CREATE TABLE)
     "alembic>=1.13",
     "sqlalchemy>=2.0",
+    # 5/6 文件上传 parse_file.py 依赖 (Companion src-tauri/scripts 调用 gateway venv 跑).
+    # PDF / Excel / Word 三件套, weekly-report skill 也用.
+    "pypdfium2>=4.0",
+    "openpyxl>=3.1",
+    "python-docx>=1.1",
 ]
 
 [project.optional-dependencies]

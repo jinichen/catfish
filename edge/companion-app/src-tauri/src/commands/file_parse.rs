@@ -44,7 +44,14 @@ struct ParseError {
     error: String,
 }
 
-/// 探测 Python 解释器. 优先用鲶鱼自带 venv (依赖已装), 兜底系统 python3.
+/// 探测 Python 解释器.
+///
+/// 5/6 鸿波报"在 gateway 装了 pypdfium2 还报错": Root cause = 之前 hermes venv
+/// 优先, 但 hermes venv 不一定装 catfish 解析依赖 (pypdfium2/openpyxl/python-docx).
+///
+/// 修: catfish gateway venv 优先 (我们文档明确要求装这里); 同时**检测每个候选
+/// 是否真有依赖** — pypdfium2 / openpyxl / docx 都齐, 才用; 缺任意一个就跳下一个.
+/// 这样不管员工装哪个 venv, 哪个真齐就用哪个.
 fn find_python() -> Option<PathBuf> {
     if let Ok(custom) = std::env::var("CATFISH_PYTHON") {
         let p = PathBuf::from(custom);
@@ -54,22 +61,47 @@ fn find_python() -> Option<PathBuf> {
     }
     let home = std::env::var("HOME").ok()?;
     let candidates = [
-        // hermes venv (Python 3.11, 一直有 pip install pypdfium2/openpyxl/docx)
-        format!("{home}/.hermes/hermes-agent/venv/bin/python"),
-        // catfish gateway venv (Python 3.12, 4-30 weekly-report skill 验过依赖)
+        // catfish gateway venv (Python 3.12) - parse_file.py 依赖文档里明确装这里
         format!("{home}/person_task/catfish/central/llm-gateway/venv/bin/python"),
+        // hermes venv (Python 3.11) - 兜底
+        format!("{home}/.hermes/hermes-agent/venv/bin/python"),
         // 系统 brew Python (M4)
         "/opt/homebrew/bin/python3".to_string(),
         // 系统 python3
         "/usr/bin/python3".to_string(),
     ];
+
+    // 先找依赖齐的 (pypdfium2 + openpyxl + docx 全装)
+    for c in &candidates {
+        let p = PathBuf::from(c);
+        if p.exists() && _has_parse_deps(&p) {
+            log::info!("find_python: 依赖齐, 用 {}", p.display());
+            return Some(p);
+        }
+    }
+    // 都不齐 — 退而求其次, 用第一个存在的 (parse_file.py 跑时报具体缺啥)
     for c in &candidates {
         let p = PathBuf::from(c);
         if p.exists() {
+            log::warn!(
+                "find_python: 没找到依赖齐的 venv, 退而用 {} (员工 PDF/Excel 上传可能报缺依赖)",
+                p.display(),
+            );
             return Some(p);
         }
     }
     None
+}
+
+/// 检测 Python 候选是否装了 parse_file.py 三大依赖 (pypdfium2 / openpyxl / docx).
+///
+/// 一次 subprocess 调用, ~100ms, 只在启动找 Python 时跑一次. 不影响每次 parse 性能.
+fn _has_parse_deps(py: &PathBuf) -> bool {
+    let out = std::process::Command::new(py)
+        .arg("-c")
+        .arg("import pypdfium2, openpyxl, docx")
+        .output();
+    matches!(out, Ok(o) if o.status.success())
 }
 
 /// 找 parse_file.py 脚本. 跟 Tauri binary 同 bundle 里 (Resources 目录).

@@ -2254,3 +2254,121 @@ quota check 真应该移进 `with_fallback`, 让 chain 里每个模型都查 quo
 - BL-MM3 hermes memory_save 包装版本化 — 等 hermes 0.10→0.12 升级 (5/15+) 后做
 - BL-MM4 Dashboard 记忆版本卡 (展示 history + diff) — ~2h, 5/5 早上做
 - BL-MM6 显式 feedback UI — ~3-4h, 5/5 早上做
+
+
+## 2026-05-06（周二）— G1-G7 安全 GAP 闭环 + BL-MM7/MM8 + 真主动 Phase A/B + Plan D 重定位
+
+**鸿波 5/6 一句"5个GAP一次性修复，为什么又拖"** — 7 个安全 P0/P1 一气呵成 ship.
+
+### 完成 (一天工作量)
+
+**A. 安全 7 GAP 闭环 (G1-G7)**:
+- G1 gateway HOST 默认 127.0.0.1 (强制本地, 不再 0.0.0.0 暴露)
+- G2 supply chain sha256 校验 + `CATFISH_HUB_REQUIRE_HASH=1` 严格模式拒装无签名 skill
+- G3 execute_code 安全守卫 25 类正则 (凭证 / 外联 / 危险 shell, 5/7 BL-S29 加 OS 沙箱)
+- G4 Tauri CSP `null` → 白名单 (default-src 'self' + connect-src 127.0.0.1:* tauri:)
+- G5 依赖 CVE 全 0 + CI 集成 (cargo audit / pip-audit / npm audit / gitleaks)
+- G6 数据流向图 `DATA-FLOW-DIAGRAM.md` 1 页
+- G7 secrets 扫源码 0 hit + CI gitleaks
+
+**B. BL-MM7 用户画像 + BL-MM8 风格指纹 (员工"越用越懂"完整链路)**:
+- `tool-bridge/user_profile.py` — 4 工具 (get/propose/confirm/clear), ALLOWED_FIELDS + NO_PROPOSE_FIELDS 红线 (健康 / 财务 / 关系 / 政治 / 宗教不主动学), 3 evidence 阈值
+- `tool-bridge/style_fingerprint.py` — 3 工具 (get/refresh/clear), jieba 中文分词 + char-2gram fallback, 时间衰减 (30/90/180 天)
+- `Dashboard UserProfileCard` + `StyleFingerprintCard` (员工自己看自己被学了什么 + 一键 clear)
+- SOUL.md § "user_profile 怎么用" + § "style_fingerprint 是写文档前必备"
+
+**C. 真主动 Phase A + B (员工不打字, 鲶鱼自己开口)**:
+- Phase A 信号触发: `triggers.ts` 4 函数 (silence / deadline / focus_return / shouldStaySilent), 16 测试通过
+- Phase B LLM context 化: `gateway/proactive.py` `generate_contextual_starter(signal_kind, context)`, 3 SIGNAL_KIND_PROMPTS, 8 测试
+- `useProactiveTriggers.ts` 1 分钟 tick, fetchContextualStarter 5s timeout, fallback 本地模板
+- 桌宠 polling 跨 webview 解决方案 (Tauri 2 emit/emitTo 不可靠, 改 Rust Mutex 缓冲 + 300ms tick)
+
+**D. Plan D 重定位 + 灵魂校准**:
+- 鸿波点播: peer-to-peer → agent-as-service ("公司谁愿答 X?")
+- 5/6 晚灵魂校准: 鲶鱼 = 员工的"职业资产", 公司给员工配 (B2C2B), 数据所有权属员工本人, 跳槽带走 (cp `~/.catfish/`)
+- 8 份文档刷: README-FOR-CUSTOMERS / SECURITY-REVIEW § 1.5 / DATA-FLOW-DIAGRAM 边界 4 / DEPLOYMENT-RUNBOOK § 11 / DEMO-CUSTOMER-QA B 节 + B7 新增 / PLAN-D-PROTOCOL § 11 / MAY-DEMO-SCRIPT 场景 4.5 / FEATURE-TRACKS #8
+
+**E. 文档矩阵给客户**:
+- README-FOR-CUSTOMERS.md (1 页快速了解)
+- SECURITY-REVIEW-2026-05-06.md (P0/P1/P2 gap + 修复)
+- DATA-FLOW-DIAGRAM.md (4 边界 + 出境 4 路径 + 不出境 7 类)
+- DEPLOYMENT-RUNBOOK.md (3 部署架构 A/B/C)
+- DEMO-CUSTOMER-QA-2026-05-14.md (30 问预案)
+
+### 测试
+- gateway 542 + 8 = 550 passed
+- tool-bridge 227 + 26 (MM7+MM8) = 253 passed
+- companion 16 (triggers) + 8 (proactive) = 全绿
+
+### 遗留 (5/7 上手)
+- BL-S29 真技术沙箱 (G3 升级 OS 级隔离) — 5/7 鸿波"一次性做完", 12 天压成 1 天
+- demo dryrun + Q&A 30 问背稿 — 5/8 起
+
+
+## 2026-05-07（周三）凌晨 — BL-S29 真技术沙箱 12 天压 1 天 ship
+
+**鸿波 5/6 拍板"一次性做完, 不要再分批"** — BL-S29.1 / S29.2 / S29.3 / S29.4 / S29.5 / S29.6 全部一日 ship.
+
+### 完成 (单日 sprint)
+
+**BL-S29.1 macOS sandbox-exec profile**:
+- `edge/tool-bridge/sandbox-profiles/catfish_execute.sb` (133 行 SBPL)
+- 默认 allow + 5 类关键 deny (网络 / 写持久化 / 读敏感路径 / iokit / sysctl-write)
+- HOME 重定向到 TASK_DIR (双层防御 L1: LLM 用 ~/ 解析到沙箱里)
+- `tests/sandbox/test_sandbox_exec.sh` — 25 恶意 case + 6 sanity (扩展前 13)
+
+**BL-S29.2 tool-bridge adapter 接入沙箱**:
+- `edge/tool-bridge/src/catfish_tool_bridge/sandbox.py` (~230 行, 跨平台抽象)
+- `adapter.py` `_do_dispatch` 拦截分支: env `CATFISH_SANDBOX_EXEC=1` 时 execute_code 走沙箱不去 hermes
+- 沙箱内 env 干净 (剥 GITHUB_TOKEN 等员工 mac secret)
+- audit 加 `sandbox_used` / `sandbox_kind` 字段, jq 一行命令查
+- `tests/test_sandbox_module.py` — 18 unit tests
+
+**BL-S29.3 端到端 + demo 场景就绪**:
+- `tests/test_e2e_sandbox.py` — 6 e2e 测试 (L1 字符串规则 + L2 沙箱 + audit + 沙箱关闭兜底)
+- `MAY-DEMO-SCRIPT-2026-05-14.md` 新加场景 2.5 — 30s 信安部门必演 (Demo A/B/C, 沙箱 chr 绕过 L1 后被 L2 拦)
+- SECURITY-REVIEW G3 重写 — 双层防御机制图 + 86 测试矩阵附录 A
+
+**BL-S29.4 Linux nsjail**:
+- `edge/tool-bridge/sandbox-profiles/catfish_execute.cfg` (140 行 protobuf)
+- 比 macOS 强一档: clone_newnet / chroot 等价 mount tmpfs / **rlimit_nproc=10 真拦 fork bomb** ★ / **rlimit_as=512MB 真拦 mem bomb** ★
+- `tests/sandbox/Dockerfile.nsjail` + `test_nsjail.sh` — 25 恶意 + 6 sanity, docker run --privileged 验证
+- mac 上 docker 跑 13/13 (扩展后 31/31 还没鸿波重测) 通过
+
+**BL-S29.5 三层 fallback**:
+- `sandbox.py detect_sandbox_kind()` macOS sandbox-exec → Linux nsjail → Docker → None
+- `_build_docker_args()` docker 兜底层 (--network=none + --read-only + --pids-limit=20 + --cap-drop=ALL)
+- 3 fallback chain unit tests
+
+**BL-S29.6 测试矩阵扩展 + 文档**:
+- macOS 25 恶意扩展 (加 11-25: base64/eval/glob obfuscation + ps aux/dscl/osascript 跨进程 + Application Support/cron/sudoers.d 持久化 + chmod/setuid 加权)
+- Linux 25 恶意扩展 (加 11-25: dlopen/setns/kexec_load 内核级 + /proc 探测 + mount syscall)
+- SECURITY-REVIEW 附录 A — 56+24 case 矩阵 + 客户独立审计步骤 + 三层 fallback 架构图 + 央企信安 5 问预案
+
+### 真发现并修的 production bug
+- **macOS `/etc` 是 symlink → `/private/etc`**, SBPL 不解析 symlink, 原 `(literal "/etc/passwd")` 拦不住真路径访问. 修后 8 个高敏感文件双等价 deny
+- **macOS 26 (Tahoe) sandbox-exec 默认 deny 一切**, 必须显式 `(allow default)` 才能 process-exec (早期 macOS 默认 allow)
+- **nsjail master 删了顶层 chroot 字段**, 用 mount root tmpfs 替代
+- **测试 case 9 fork bomb** 没沙箱兜底真把鸿波 mac 卡死 (RLIMIT_NPROC 满, 重启 mac 才恢复). 改成 LaunchDaemons 写测试
+
+### 测试矩阵 (累计 86 测试矩阵)
+- macOS sandbox-exec: 25 恶意 + 6 sanity = 31 (shell)
+- Linux nsjail (docker): 25 恶意 + 6 sanity = 31 (shell)
+- python unit: 18 (sandbox + adapter wiring + fallback chain)
+- python e2e: 6 (双层防御 + audit + 兜底)
+                                                           ─────
+                                                           86 测试全绿
+
+### 文档刷
+- SECURITY-REVIEW G3 重写 + 附录 A
+- README-FOR-CUSTOMERS 信安 5 件 → 6 件
+- MAY-DEMO-SCRIPT 场景 2.5 (30s 信安必演) + demo 节奏调整
+- FEATURE-TRACKS BL-S29 6 步全 ✅
+- sandbox-profiles README (macOS / Linux 双平台部署 + Docker 测试)
+
+### 遗留 (5/8 起)
+- demo 5+1 场景 dryrun (跑通时间精确控制) — 5/8-5/9
+- 场景 4.5 PPT 1 页 (BL-FED2 路线图) — 5/10-5/11
+- Q&A 30 问背稿 — 5/12
+- 客户安全说明 1 页 PDF — 5/13
+- 5/14 demo 当天

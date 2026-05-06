@@ -1,11 +1,16 @@
-"""测试 scripts/parse_file.py — Day 1 文件上传 Python helper.
+"""测试 scripts/parse_file.py.
+
+5/6 BL-D17: schema 已从旧版 {text, truncated, char_count} 切到新版
+{preview_text, preview_chars, kind, meta}, 测试同步对齐.
+
+PDF 多了一个结构化表格识别 path (anchor + sub-records), 也加了 case.
 
 覆盖:
-- .pdf / .xlsx / .docx / .csv / .txt / .md 各格式
-- 50KB 截断 (truncated 标记)
+- .pdf / .xlsx / .docx / .csv / .txt / .md 各格式 (新 schema)
 - 不支持格式返 error JSON
 - 文件不存在返 error JSON
 - 空文件 / 空 sheet 处理
+- PDF 结构化模式 (≥5 个 18 位 ID → 自动出 JSON 抽取文件)
 
 跑法:
     cd ~/person_task/catfish/edge/companion-app/src-tauri
@@ -65,9 +70,10 @@ def test_txt_basic(tmp_path: Path) -> None:
     out = _run(f)
     assert out["filename"] == "hello.txt"
     assert out["ext"] == ".txt"
-    assert out["truncated"] is False
-    assert "Hello 世界" in out["text"]
-    assert "第二行" in out["text"]
+    assert out["kind"] == "text"
+    assert "Hello 世界" in out["preview_text"]
+    assert "第二行" in out["preview_text"]
+    assert out["meta"]["total_chars"] == len("Hello 世界\n第二行")
 
 
 def test_md_basic(tmp_path: Path) -> None:
@@ -75,18 +81,17 @@ def test_md_basic(tmp_path: Path) -> None:
     f.write_text("# 标题\n\n正文内容", encoding="utf-8")
     out = _run(f)
     assert out["ext"] == ".md"
-    assert "# 标题" in out["text"]
+    assert out["kind"] == "text"
+    assert "# 标题" in out["preview_text"]
 
 
-def test_truncation(tmp_path: Path) -> None:
-    """大文件超 50KB → truncated=true."""
+def test_text_truncation_marker(tmp_path: Path) -> None:
+    """文本超 PREVIEW_MAX_CHARS (5000) → preview 含截断提示, meta.total_chars 是原长."""
     f = tmp_path / "large.txt"
-    # 写 60KB (超过 MAX_CHARS=50000)
-    f.write_text("a" * 60000, encoding="utf-8")
+    f.write_text("a" * 8000, encoding="utf-8")
     out = _run(f)
-    assert out["truncated"] is True
-    assert out["char_count"] == 60000
-    assert len(out["text"]) == 50000  # 截断到 MAX_CHARS
+    assert out["meta"]["total_chars"] == 8000
+    assert "用 execute_code" in out["preview_text"]
 
 
 # ── csv ─────────────────────────────────────────────────────────
@@ -97,8 +102,10 @@ def test_csv_basic(tmp_path: Path) -> None:
     f.write_text("姓名,部门,工号\n张三,研发,001\n李四,销售,002\n", encoding="utf-8")
     out = _run(f)
     assert out["ext"] == ".csv"
-    assert "张三" in out["text"]
-    assert "研发" in out["text"]
+    assert out["kind"] == "csv"
+    assert "张三" in out["preview_text"]
+    assert "研发" in out["preview_text"]
+    assert out["meta"]["total_rows"] == 3  # header + 2 数据
 
 
 # ── docx ────────────────────────────────────────────────────────
@@ -122,11 +129,11 @@ def test_docx_basic(tmp_path: Path) -> None:
 
     out = _run(f)
     assert out["ext"] == ".docx"
-    assert "第一段中文内容" in out["text"]
-    assert "第二段" in out["text"]
-    # 表格内容也提取
-    assert "项目" in out["text"]
-    assert "X" in out["text"]
+    assert out["kind"] == "word"
+    assert "第一段中文内容" in out["preview_text"]
+    assert "第二段" in out["preview_text"]
+    assert "项目" in out["preview_text"]
+    assert "X" in out["preview_text"]
 
 
 # ── xlsx ────────────────────────────────────────────────────────
@@ -151,17 +158,19 @@ def test_xlsx_basic(tmp_path: Path) -> None:
 
     out = _run(f)
     assert out["ext"] == ".xlsx"
-    assert "Sheet1" in out["text"]
-    assert "Sheet2" in out["text"]
-    assert "项目" in out["text"]
-    assert "1000" in out["text"]
+    assert out["kind"] == "excel"
+    assert "Sheet1" in out["preview_text"]
+    assert "Sheet2" in out["preview_text"]
+    assert "项目" in out["preview_text"]
+    assert "1000" in out["preview_text"]
+    assert out["meta"]["sheets"] == ["Sheet1", "Sheet2"]
 
 
-# ── pdf ─────────────────────────────────────────────────────────
+# ── pdf (普通模式) ──────────────────────────────────────────────
 
 
 def test_pdf_basic(tmp_path: Path) -> None:
-    """造一个最简 PDF (用 reportlab), 验文本提取."""
+    """简 PDF (无主键 ID 锚点) → 走原 preview 5 页路径, 不进结构化模式."""
     pytest.importorskip("reportlab")
     from reportlab.pdfgen import canvas
 
@@ -176,24 +185,72 @@ def test_pdf_basic(tmp_path: Path) -> None:
 
     out = _run(f)
     assert out["ext"] == ".pdf"
-    assert "Hello PDF World" in out["text"]
-    assert "Page 2" in out["text"]
+    assert out["kind"] == "pdf"
+    assert "Hello PDF World" in out["preview_text"]
+    assert "Page 2" in out["preview_text"]
+    # 没主键 ID → 不应触发结构化模式
+    assert "structured_path" not in out["meta"]
+    assert out["meta"]["page_count"] == 2
 
 
-def test_pdf_empty_returns_placeholder(tmp_path: Path) -> None:
-    """没文本的 PDF (扫描版) 返默认提示."""
+def test_pdf_empty(tmp_path: Path) -> None:
+    """没文本的 PDF (扫描版) — 不报 error, preview 含'空' 标记."""
     pytest.importorskip("pypdfium2")
     pytest.importorskip("reportlab")
     from reportlab.pdfgen import canvas
 
     f = tmp_path / "empty.pdf"
     c = canvas.Canvas(str(f))
-    c.showPage()  # 空白页
+    c.showPage()
     c.save()
 
     out = _run(f)
     assert out["ext"] == ".pdf"
-    # 空白 PDF 应该返 "无可提取文本" 提示, 不报 error
     assert "error" not in out
-    # text 字段含提示
-    assert "扫描" in out["text"] or "无可提取" in out["text"] or len(out["text"]) >= 0
+    # 走 preview 路径, "空" / "扫描" 标记
+    assert "空" in out["preview_text"] or "扫描" in out["preview_text"]
+
+
+# ── pdf (结构化模式) ────────────────────────────────────────────
+
+
+def test_pdf_structured_mode_anchors(tmp_path: Path) -> None:
+    """≥5 个 18 位身份证 ID 的 PDF → 走 anchor 模式, 出 JSON 文件."""
+    pytest.importorskip("pypdfium2")
+    pytest.importorskip("reportlab")
+    from reportlab.pdfgen import canvas
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    # 中文要 TTF, 不一定有, 用纯英文测 ID 锚点逻辑
+    f = tmp_path / "social.pdf"
+    c = canvas.Canvas(str(f))
+    # 5 个假身份证号 (前 17 位数字 + 结尾 X 或数字), 每个前面加假名
+    fake_records = [
+        ("Zhang San",  "11010119900101001X"),
+        ("Li Si",      "11010119910202002X"),
+        ("Wang Wu",    "11010119920303003X"),
+        ("Zhao Liu",   "11010119930404004X"),
+        ("Sun Qi",     "11010119940505005X"),
+        ("Zhou Ba",    "11010119950606006X"),
+    ]
+    y = 800
+    for name, sid in fake_records:
+        c.drawString(50, y, f"1 {name} {sid}")
+        y -= 20
+    c.save()
+
+    out = _run(f)
+    assert out["ext"] == ".pdf"
+    assert "error" not in out
+    # 应该走 anchor 模式
+    assert "structured_path" in out["meta"]
+    assert out["meta"]["structured_count"] >= 5
+    # JSON 文件应该真存在
+    sp = Path(out["meta"]["structured_path"])
+    assert sp.exists()
+    data = json.loads(sp.read_text(encoding="utf-8"))
+    assert len(data) >= 5
+    # 每条至少有 序号/姓名/身份证号 三字段
+    assert "身份证号" in data[0]
+    sp.unlink(missing_ok=True)

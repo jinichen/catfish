@@ -168,6 +168,25 @@ pub fn relation_summary() -> Result<RelationView, String> {
     Ok(view)
 }
 
+/// 5/6 BL-E13.5 真主动 Phase A: 给 useProactiveTriggers 用的 raw journal 文本.
+/// recent_entries 是 LLM summary 已抽象, 信号触发器要原文扫 deadline 关键词.
+/// 限大小 (≤ 200KB), 防异常大 journal 卡死.
+#[tauri::command]
+pub fn journal_read_raw() -> Result<String, String> {
+    let jp = journal_path()?;
+    if !jp.exists() {
+        return Ok(String::new());
+    }
+    let content = fs::read_to_string(&jp)
+        .map_err(|e| format!("读 journal 失败: {e}"))?;
+    const MAX: usize = 200_000;
+    if content.len() > MAX {
+        Ok(content[content.len() - MAX..].to_string())
+    } else {
+        Ok(content)
+    }
+}
+
 /// 清空 journal + meta (员工"我不想让鲶鱼记着我了" 逃生口).
 /// 文件删失败仍返 ok (可能本来就没有), 失败 logger.warn 即可.
 #[tauri::command]

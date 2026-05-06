@@ -1,141 +1,124 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  小鲶 · 桌宠形象 (BL-E27 五一 sprint 5/5 凌晨)
+  小鲶 · 桌宠形象 v2 (5/6 早 鸿波反馈不够圆胖/鱼竿乱/站姿别扭后重画)
 
-  设计哲学:
-    持鱼竿的站立鲶鱼 — 员工赋权 + 自我反讽 meta 梗.
-    鲶鱼变成钓鱼的, 隐喻"员工是驾驭 AI 的主体, 不是被工具用".
+  v1 → v2 改动:
+    × 砍掉鱼竿 + 小鱼 (小尺寸下细节看不清, 反而乱)
+    × 砍掉 V 字尾鳍当"脚"站立 (站姿别扭)
+    ✓ 改"浮在水里"姿态: 顶部小气泡 + 尾鳍横展身后
+    ✓ 鱼身改接近圆形 (33x36 比例, 主 mascot 圆胖萌的精髓)
+    ✓ 腮红+暖橙高光更明显 (整体不偏冷)
 
-  跟主 mascot (catfish-mascot.svg) 区分:
-    - 主 mascot: 圆胖横游姿态, 服务 Onboarding / Dashboard 头像 (亲切萌)
-    - 桌宠 pet:  竖直站立持竿, 服务屏幕角落小尺寸 (克制 + 有梗)
+  跟主 mascot (logo-mascot.svg) 区分:
+    - 主 mascot 480x480 横游 (Onboarding/头像, 大尺寸亲切)
+    - 桌宠 100x120 浮游 + 紧凑 (屏幕角落小尺寸, 单只可识别)
 
-  视觉要素:
-    - 尾鳍朝下作"脚"站立
-    - 圆胖鱼身, 跟主 mascot 同色系 (深青 #0E5F66 → #1A8A95)
-    - 两根标志性长须 (鲶鱼物种特征)
-    - 一根须卷起握鱼竿
-    - 鱼竿伸向右上, 钩子挂迷你小鱼 (meta 梗)
-    - 大圆眼 + 微笑
-
-  尺寸:
-    viewBox 100x140 竖直比 5:7, 适配桌宠 120x120 webview
-    (鲶鱼实际高 ~110, 鱼竿斜伸出顶部 ~30, 总占满)
+  尺寸: viewBox 100x120 给桌宠 120x120 webview, 留小气泡空间
 -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 140" width="100" height="140">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 120" width="100" height="120">
   <defs>
-    <!-- 身体渐变: 顶深底浅, 站立姿态体积感 -->
+    <!-- 身体渐变: 顶深底浅, 圆胖体积感 -->
     <radialGradient id="petBodyGrad" cx="50%" cy="35%" r="65%">
       <stop offset="0%" stop-color="#1A8A95"/>
-      <stop offset="60%" stop-color="#0E5F66"/>
+      <stop offset="55%" stop-color="#0E5F66"/>
       <stop offset="100%" stop-color="#0A464C"/>
     </radialGradient>
-    <!-- 腹部高光 (站立时朝前) -->
+    <!-- 腹部高光 (暖白, 更亲切) -->
     <linearGradient id="petBellyGrad" x1="0%" y1="0%" x2="0%" y2="100%">
       <stop offset="0%" stop-color="#FAF1E4" stop-opacity="0"/>
-      <stop offset="100%" stop-color="#FAF1E4" stop-opacity="0.65"/>
+      <stop offset="100%" stop-color="#FAF1E4" stop-opacity="0.85"/>
     </linearGradient>
-    <!-- 鱼竿木纹 -->
-    <linearGradient id="rodGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#8B5A2B"/>
-      <stop offset="100%" stop-color="#5C3A1A"/>
+    <!-- 尾鳍渐变 -->
+    <linearGradient id="petTailGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0A464C"/>
+      <stop offset="100%" stop-color="#062E33"/>
     </linearGradient>
   </defs>
 
   <!-- ============================================
-       尾鳍 (作"脚"站立, 在最底)
+       浮起小气泡 (顶部, 营造"悬浮在水里"感)
        ============================================ -->
-  <!-- 左尾叶 -->
-  <path d="M 38 110 Q 28 130 32 138 Q 40 134 44 122 Z"
-        fill="#0A464C" stroke="#062E33" stroke-width="0.5" stroke-linejoin="round"/>
-  <!-- 右尾叶 -->
-  <path d="M 62 110 Q 72 130 68 138 Q 60 134 56 122 Z"
-        fill="#0A464C" stroke="#062E33" stroke-width="0.5" stroke-linejoin="round"/>
-  <!-- 尾鳍中央 (竖直支撑) -->
-  <ellipse cx="50" cy="118" rx="6" ry="14" fill="#0E5F66"/>
+  <circle cx="22" cy="12" r="3.5" fill="#FAF1E4" opacity="0.55" stroke="#1A8A95" stroke-width="0.4"/>
+  <circle cx="80" cy="18" r="2.5" fill="#FAF1E4" opacity="0.5" stroke="#1A8A95" stroke-width="0.3"/>
+  <circle cx="14" cy="32" r="2" fill="#FAF1E4" opacity="0.4"/>
+  <circle cx="86" cy="38" r="2.5" fill="#FAF1E4" opacity="0.45"/>
 
   <!-- ============================================
-       身体 (圆胖椭圆, 站立)
+       尾鳍 (在身体右后, 横展, 不当"脚")
        ============================================ -->
-  <ellipse cx="50" cy="68" rx="32" ry="40" fill="url(#petBodyGrad)"
+  <path d="M 78 60
+           Q 92 50 96 58
+           Q 95 68 92 72
+           Q 88 78 78 72 Z"
+        fill="url(#petTailGrad)" stroke="#062E33" stroke-width="0.6" stroke-linejoin="round"/>
+  <!-- 尾鳍纹路 -->
+  <path d="M 82 60 Q 88 60 92 56" fill="none" stroke="#1A8A95" stroke-width="0.5" opacity="0.6"/>
+  <path d="M 82 70 Q 88 72 92 70" fill="none" stroke="#1A8A95" stroke-width="0.5" opacity="0.6"/>
+
+  <!-- ============================================
+       侧鳍 (左下小一片, 漂浮感)
+       ============================================ -->
+  <path d="M 22 80
+           Q 12 86 14 96
+           Q 22 92 28 88 Z"
+        fill="#0A464C" stroke="#062E33" stroke-width="0.5" stroke-linejoin="round"/>
+
+  <!-- ============================================
+       身体 (圆胖椭圆, 近 1:1 比例 - v1 32x40 → v2 33x36 更圆)
+       ============================================ -->
+  <ellipse cx="48" cy="65" rx="33" ry="36" fill="url(#petBodyGrad)"
            stroke="#062E33" stroke-width="0.8"/>
-  <!-- 腹部高光 -->
-  <ellipse cx="50" cy="78" rx="22" ry="26" fill="url(#petBellyGrad)"/>
-
-  <!-- 侧鳍 (左右两小片, 作"手臂"基)  -->
-  <path d="M 18 70 Q 8 75 12 88 Q 20 82 22 78 Z"
-        fill="#0A464C" stroke="#062E33" stroke-width="0.5"/>
-  <path d="M 82 70 Q 92 75 88 88 Q 80 82 78 78 Z"
-        fill="#0A464C" stroke="#062E33" stroke-width="0.5"/>
+  <!-- 腹部高光 (大面积, 占下半 60%) -->
+  <ellipse cx="48" cy="78" rx="24" ry="22" fill="url(#petBellyGrad)"/>
 
   <!-- ============================================
-       眼睛 (大圆, 信任感)
+       眼睛 (大圆, 信任感 + 萌)
        ============================================ -->
   <!-- 左眼白 -->
-  <circle cx="38" cy="55" r="9" fill="#FFFFFF" stroke="#062E33" stroke-width="0.6"/>
-  <!-- 左瞳 -->
-  <circle cx="40" cy="56" r="4.5" fill="#062E33"/>
+  <circle cx="36" cy="55" r="9.5" fill="#FFFFFF" stroke="#062E33" stroke-width="0.7"/>
+  <!-- 左瞳 (向中间偏一点, 看着活灵活现) -->
+  <circle cx="38.5" cy="56" r="5" fill="#062E33"/>
   <!-- 左眼高光 -->
-  <circle cx="41.5" cy="54.5" r="1.4" fill="#FFFFFF"/>
+  <circle cx="40.5" cy="54" r="1.7" fill="#FFFFFF"/>
 
   <!-- 右眼白 -->
-  <circle cx="62" cy="55" r="9" fill="#FFFFFF" stroke="#062E33" stroke-width="0.6"/>
+  <circle cx="60" cy="55" r="9.5" fill="#FFFFFF" stroke="#062E33" stroke-width="0.7"/>
   <!-- 右瞳 -->
-  <circle cx="60" cy="56" r="4.5" fill="#062E33"/>
+  <circle cx="57.5" cy="56" r="5" fill="#062E33"/>
   <!-- 右眼高光 -->
-  <circle cx="61.5" cy="54.5" r="1.4" fill="#FFFFFF"/>
+  <circle cx="59.5" cy="54" r="1.7" fill="#FFFFFF"/>
 
   <!-- ============================================
-       嘴 (微笑)
+       嘴 (微笑, 略宽一点显萌)
        ============================================ -->
-  <path d="M 42 76 Q 50 82 58 76"
-        fill="none" stroke="#062E33" stroke-width="1.5" stroke-linecap="round"/>
-  <!-- 腮红 (橙色高光, 跟主 mascot 一致) -->
-  <ellipse cx="30" cy="74" rx="4" ry="2.5" fill="#F4A460" opacity="0.6"/>
-  <ellipse cx="70" cy="74" rx="4" ry="2.5" fill="#F4A460" opacity="0.6"/>
+  <path d="M 40 78 Q 48 86 56 78"
+        fill="none" stroke="#062E33" stroke-width="1.8" stroke-linecap="round"/>
+  <!-- 小腹白 (嘴下方一点, 显得肉感更强) -->
+  <ellipse cx="48" cy="83" rx="3" ry="1.5" fill="#FAF1E4" opacity="0.4"/>
 
   <!-- ============================================
-       须 (鲶鱼标志性, 两根长须)
-       左须自然垂下 (探询)
-       右须卷起握鱼竿 (持物)
+       腮红 (暖橙, 比 v1 更大更明显, 整体不偏冷)
        ============================================ -->
-  <!-- 左须: 从左嘴角往下弯 -->
-  <path d="M 40 78 Q 22 88 18 102 Q 16 110 22 112"
-        fill="none" stroke="#0A464C" stroke-width="2" stroke-linecap="round"/>
-  <!-- 左须尖: 暖橙高光 -->
-  <circle cx="22" cy="112" r="1.8" fill="#F4A460"/>
-
-  <!-- 右须: 从右嘴角伸出, 卷曲, 握住鱼竿底部 -->
-  <path d="M 60 78 Q 78 78 86 70 Q 92 62 88 56"
-        fill="none" stroke="#0A464C" stroke-width="2" stroke-linecap="round"/>
+  <ellipse cx="26" cy="72" rx="5" ry="3.5" fill="#F4A460" opacity="0.65"/>
+  <ellipse cx="70" cy="72" rx="5" ry="3.5" fill="#F4A460" opacity="0.65"/>
 
   <!-- ============================================
-       鱼竿 (从右须末端伸出, 斜向右上)
+       须 (两根标志性长须, 自然垂下两侧, 像水母触手飘动)
        ============================================ -->
-  <line x1="88" y1="56" x2="60" y2="8"
-        stroke="url(#rodGrad)" stroke-width="2.2" stroke-linecap="round"/>
-  <!-- 竿尖装饰 (浅色环, 显出"是工具") -->
-  <circle cx="60" cy="8" r="1.2" fill="#F4A460"/>
+  <!-- 左须 -->
+  <path d="M 36 82
+           Q 22 92 18 104
+           Q 16 112 22 114"
+        fill="none" stroke="#0A464C" stroke-width="2.2" stroke-linecap="round"/>
+  <!-- 左须尖橙色高光 -->
+  <circle cx="22" cy="114" r="1.8" fill="#F4A460"/>
 
-  <!-- ============================================
-       鱼线 + 钩子 + 迷你小鱼 (meta 梗)
-       ============================================ -->
-  <!-- 鱼线 (细虚线, 从竿尖垂下到右上方挂着小鱼) -->
-  <line x1="60" y1="8" x2="78" y2="22"
-        stroke="#062E33" stroke-width="0.5" stroke-dasharray="1,1.5"/>
-
-  <!-- 钩 (小钩子) -->
-  <path d="M 78 22 L 78 25 Q 78 28 75 28"
-        fill="none" stroke="#062E33" stroke-width="0.8" stroke-linecap="round"/>
-
-  <!-- 迷你小鱼 (被钓的, 跟主鲶鱼颜色区分 - 浅金/橙色) -->
-  <g transform="translate(75, 28) scale(0.8)">
-    <!-- 小鱼身 -->
-    <ellipse cx="0" cy="0" rx="6" ry="3.5" fill="#F4A460" stroke="#8B5A2B" stroke-width="0.4"/>
-    <!-- 小鱼尾 -->
-    <path d="M 6 0 L 10 -2.5 L 10 2.5 Z" fill="#F4A460" stroke="#8B5A2B" stroke-width="0.4"/>
-    <!-- 小鱼眼 -->
-    <circle cx="-3" cy="-0.5" r="0.8" fill="#062E33"/>
-  </g>
+  <!-- 右须 (跟左须对称, 但弯向另一边) -->
+  <path d="M 60 82
+           Q 74 92 78 104
+           Q 80 112 74 114"
+        fill="none" stroke="#0A464C" stroke-width="2.2" stroke-linecap="round"/>
+  <!-- 右须尖橙色高光 -->
+  <circle cx="74" cy="114" r="1.8" fill="#F4A460"/>
 
 </svg>

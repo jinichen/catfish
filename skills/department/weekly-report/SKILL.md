@@ -20,6 +20,8 @@ description: |-
   ✅ 必触发关键词: 周报 / 本周工作 / 本周总结 / 写周报 / 一周工作汇总 / 这周做了什么 / 周报材料
 
   ❌ 不触发: 给领导的正式汇报 → leadership-briefing skill / 月度年度总结 → 用 leadership-briefing 写
+
+  ⚠️ **调用本 skill 前必读员工画像** (BL-MM7/MM8): 先调 `catfish_user_profile_get` + `catfish_style_fingerprint_get`. 周报"本周进度"/"下周计划" cell 内措辞要模仿员工历史风格: 偏短句员工就别写整段; 偏列表员工的 cell 用"1. xxx 2. yyy"格式; 高频词 (员工口头禅) 优先用. 详见 SOUL.md § BL-MM8.
 ---
 
 # weekly-report — 员工周报 skill
