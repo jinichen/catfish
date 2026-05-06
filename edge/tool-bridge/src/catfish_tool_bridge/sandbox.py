@@ -1,0 +1,368 @@
+"""
+sandbox.py — BL-S29.2 macOS sandbox-exec 包装.
+
+LLM 通过 hermes/tool-bridge 调 execute_code/python/bash/shell_exec 时,
+adapter._do_dispatch 走完字符串规则 (_check_execute_code_security) 后, 如果
+CATFISH_SANDBOX_EXEC=1 启用沙箱模式, 就**不**转给 hermes dispatch, 改本模块
+直接用 sandbox-exec 在员工 mac 本机起隔离子进程跑代码.
+
+设计:
+- stateless: 每次调 = 新 python/bash 进程, 新 TASK_DIR (LLM 不能跨 step 共享变量).
+  Stateful session 是 P2/P3 事, 不阻塞 5/14 demo.
+- 默认 allow + 5 类关键 deny (网络/写持久化/读凭证/iokit/sysctl-write), 看 catfish_execute.sb
+- 5/19 BL-S29.5 加 nsjail (Linux) + Docker fallback.
+
+单测 / e2e 测在 tests/sandbox/test_sandbox_exec.sh.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import platform as _platform
+import shutil
+import signal
+import subprocess
+import tempfile
+import time
+from pathlib import Path
+from typing import Any, Dict, Tuple
+
+logger = logging.getLogger(__name__)
+
+# 沙箱 profile 路径: 优先看 env, 否则用 catfish 仓库默认路径.
+# __file__ = .../edge/tool-bridge/src/catfish_tool_bridge/sandbox.py
+# parents[2] = .../edge/tool-bridge/   ← 这里有 sandbox-profiles/ 子目录
+_PROFILE_DIR = Path(__file__).resolve().parents[2] / "sandbox-profiles"
+_DEFAULT_PROFILE_MACOS = _PROFILE_DIR / "catfish_execute.sb"
+_DEFAULT_PROFILE_LINUX = _PROFILE_DIR / "catfish_execute.cfg"
+
+
+def _resolve_profile_path(*, kind: str | None = None) -> Path:
+    """找到沙箱 profile.
+
+    Args:
+        kind: "sandbox-exec" | "nsjail" | None (按 platform 自选)
+
+    优先级:
+        1. env CATFISH_SANDBOX_PROFILE 显式指定
+        2. macOS → catfish_execute.sb
+        3. Linux → catfish_execute.cfg
+    """
+    env_path = os.environ.get("CATFISH_SANDBOX_PROFILE")
+    if env_path:
+        p = Path(env_path).expanduser().resolve()
+        if not p.is_file():
+            raise FileNotFoundError(f"CATFISH_SANDBOX_PROFILE 指向的文件不存在: {p}")
+        return p
+
+    if kind is None:
+        kind = "sandbox-exec" if _platform.system() == "Darwin" else "nsjail"
+
+    if kind == "sandbox-exec":
+        candidate = _DEFAULT_PROFILE_MACOS
+    elif kind == "nsjail":
+        candidate = _DEFAULT_PROFILE_LINUX
+    else:
+        raise ValueError(f"未知 sandbox kind: {kind!r}")
+
+    if not candidate.is_file():
+        raise FileNotFoundError(
+            f"沙箱 profile 不存在: {candidate}. "
+            f"用 env CATFISH_SANDBOX_PROFILE 指定路径."
+        )
+    return candidate
+
+
+def is_sandbox_enabled() -> bool:
+    """env CATFISH_SANDBOX_EXEC=1 启用 (5/14 demo 期间默认开)."""
+    return os.environ.get("CATFISH_SANDBOX_EXEC", "0") == "1"
+
+
+def detect_sandbox_kind() -> str | None:
+    """按 platform 选沙箱后端. 三层 fallback 顺序:
+
+    macOS: sandbox-exec → docker → None
+    Linux: nsjail → docker → None
+    其他:  docker → None
+
+    docker 是兜底层, 只在 sandbox-exec / nsjail 都不在时启用 (不期望生产用,
+    主要给"客户 Linux 真机临时没 nsjail" 等极端场景兜底). 真生产部署应该装
+    nsjail / 用 macOS sandbox-exec.
+
+    None = 三层都不可用, run_in_sandbox 拒绝跑.
+    """
+    sys_name = _platform.system()
+    if sys_name == "Darwin":
+        if shutil.which("sandbox-exec"):
+            return "sandbox-exec"
+    elif sys_name == "Linux":
+        if shutil.which("nsjail"):
+            return "nsjail"
+    # 兜底层: docker (如果 daemon 在跑)
+    if _is_docker_available():
+        return "docker"
+    return None
+
+
+def _is_docker_available() -> bool:
+    """检测 docker 是否可用 (装了 + daemon 在跑).
+    探测方式: docker ps 返 0 = daemon 在; 非 0 = 装了但 daemon 没起.
+    """
+    if not shutil.which("docker"):
+        return False
+    try:
+        # 短超时探测, 不阻塞 dispatch (鲁棒性)
+        r = subprocess.run(
+            ["docker", "ps", "-q"],
+            capture_output=True, timeout=2,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def is_sandbox_supported() -> bool:
+    """macOS 有 sandbox-exec, Linux 有 nsjail, 兜底 docker, 任意一个就算支持."""
+    return detect_sandbox_kind() is not None
+
+
+def _build_macos_sandbox_args(profile: Path, task_dir: Path) -> list[str]:
+    """组 macOS sandbox-exec 命令前缀."""
+    home = os.path.expanduser("~")
+    return [
+        "sandbox-exec",
+        "-f", str(profile),
+        "-D", f"TASK_DIR={task_dir}",
+        "-D", f"HOME_SSH={home}/.ssh",
+        "-D", f"HOME_AWS={home}/.aws",
+        "-D", f"HOME_GNUPG={home}/.gnupg",
+        "-D", f"HOME_CONFIG={home}/.config",
+        "-D", f"HOME_KEYCHAINS={home}/Library/Keychains",
+        "-D", f"HOME_DOCUMENTS={home}/Documents",
+        "-D", f"HOME_DESKTOP={home}/Desktop",
+        "-D", f"HOME_DOWNLOADS={home}/Downloads",
+        "-D", f"HOME_CATFISH={home}/.catfish",
+    ]
+
+
+def _build_nsjail_args(profile: Path, task_dir: Path) -> list[str]:
+    """组 Linux nsjail 命令前缀.
+
+    nsjail 用 --config 装 cfg 模板, 调用方按 task 注入 TASK_DIR 的 bindmount.
+    架构 (arm64 vs x86_64) 不同, mount 列表加额外 --bindmount_ro 指定 lib64 等.
+    """
+    args = [
+        "nsjail",
+        "--config", str(profile),
+        # TASK_DIR 注入: 沙箱内 /tmp/task 是员工的 task_dir
+        "--bindmount", f"{task_dir}:/tmp/task",
+        # 沙箱内当前目录 = TASK_DIR (跟 macOS cwd 对齐)
+        "--cwd", "/tmp/task",
+    ]
+    # x86_64 上 /lib64 必需; arm64 上没有这个目录, mandatory:false 已经容错了
+    return args
+
+
+def _build_docker_args(task_dir: Path, timeout_s: int) -> list[str]:
+    """组 docker fallback 命令前缀.
+
+    第三层兜底: 沙箱后端 (sandbox-exec/nsjail) 都不在时, 用 docker 隔离.
+    比 nsjail 更重 (启动 ~1s, vs nsjail ~50ms), 但接近的隔离强度.
+
+    参数:
+        --rm                自动清理容器
+        --network=none      网络全断 (= nsjail clone_newnet)
+        --read-only         rootfs 只读 (= nsjail mount tmpfs)
+        --tmpfs /tmp        /tmp 可写 (装 task_dir mount)
+        --memory=512m       内存上限 (= nsjail rlimit_as)
+        --cpus=1            CPU 限 1 核 (= nsjail rlimit_cpu)
+        --pids-limit=20     进程数上限 (fork bomb 防护)
+        --user=65534:65534  以 nobody 身份跑 (no setuid)
+        --cap-drop=ALL      丢所有 Linux capabilities
+        --security-opt=no-new-privileges  防 setuid 提权
+        --workdir /tmp/task 沙箱内 cwd
+    """
+    return [
+        "docker", "run", "--rm",
+        "--network=none",
+        "--read-only",
+        "--tmpfs", "/tmp:rw,size=128m,exec",
+        "-v", f"{task_dir}:/tmp/task:rw",
+        "--memory=512m",
+        "--memory-swap=512m",
+        "--cpus=1",
+        "--pids-limit=20",
+        "--user=65534:65534",
+        "--cap-drop=ALL",
+        "--security-opt=no-new-privileges:true",
+        "--workdir", "/tmp/task",
+        "-e", "HOME=/tmp/task",
+        "-e", "PATH=/usr/bin:/bin",
+        # 镜像: 极简 python (~50MB), 客户内网部署时改成内网 registry 镜像
+        "python:3.11-slim",
+    ]
+
+
+def run_in_sandbox(
+    code: str,
+    *,
+    lang: str = "python",
+    timeout_s: int = 30,
+    max_output_bytes: int = 200_000,
+) -> Dict[str, Any]:
+    """在 macOS sandbox-exec 隔离的子进程里跑代码.
+
+    Args:
+        code: 要跑的代码 (python/bash 文本)
+        lang: "python" | "bash" | "sh"
+        timeout_s: 超时秒, 超时 SIGKILL (没用 perl alarm, 子进程超时由 subprocess.run 的 timeout 处理)
+        max_output_bytes: stdout/stderr 各自截断阈值, 防 LLM 拿到天量输出
+
+    Returns:
+        dict: {
+            ok: bool,                      # rc == 0 算成功
+            sandbox_used: True,            # 标志位, audit 字段
+            sandbox_kind: "sandbox-exec",  # macOS 是 sandbox-exec, Linux 5/19 后 nsjail
+            stdout: str (可能截断),
+            stderr: str (可能截断),
+            rc: int,
+            elapsed_ms: float,
+            timed_out: bool,
+        }
+    """
+    sandbox_kind = detect_sandbox_kind()
+    if sandbox_kind is None:
+        return {
+            "ok": False,
+            "sandbox_used": False,
+            "sandbox_kind": None,
+            "stdout": "",
+            "stderr": (
+                "沙箱不可用: macOS 需要 sandbox-exec / Linux 需要 nsjail. "
+                "5/19 BL-S29.5 后会加 Docker fallback."
+            ),
+            "rc": -1,
+            "elapsed_ms": 0.0,
+            "timed_out": False,
+        }
+
+    # docker fallback 不需要 profile 文件 (用 docker run flags 直接配)
+    if sandbox_kind != "docker":
+        profile = _resolve_profile_path(kind=sandbox_kind)
+    else:
+        profile = None
+
+    # 选解释器
+    interpreter_map = {
+        "python": "/usr/bin/python3",
+        "py": "/usr/bin/python3",
+        "bash": "/bin/bash",
+        "sh": "/bin/sh",
+    }
+    interpreter = interpreter_map.get(lang.lower())
+    if interpreter is None:
+        return {
+            "ok": False,
+            "sandbox_used": False,
+            "sandbox_kind": None,
+            "stdout": "",
+            "stderr": f"不支持的 lang: {lang!r} (支持: python/bash/sh)",
+            "rc": -1,
+            "elapsed_ms": 0.0,
+            "timed_out": False,
+        }
+
+    # 创 TASK_DIR (沙箱内唯一可写的工作目录)
+    task_dir = Path(tempfile.mkdtemp(prefix="catfish-sandbox-"))
+
+    try:
+        # 选不同沙箱后端的命令前缀
+        if sandbox_kind == "sandbox-exec":
+            sandbox_argv = _build_macos_sandbox_args(profile, task_dir)
+            argv = sandbox_argv + [interpreter, "-c", code]
+        elif sandbox_kind == "nsjail":
+            sandbox_argv = _build_nsjail_args(profile, task_dir)
+            # nsjail 用 -- 分隔沙箱参数和命令
+            argv = sandbox_argv + ["--", interpreter, "-c", code]
+        elif sandbox_kind == "docker":
+            # docker fallback: python:3.11-slim 镜像内的 /usr/local/bin/python3
+            # 不用 caller 传的 /usr/bin/python3 (容器内可能没有), 让 docker 镜像决定
+            container_interpreter = {
+                "python": "python3",
+                "py": "python3",
+                "bash": "bash",     # python:3.11-slim 镜像不带 bash, 用 sh
+                "sh": "sh",
+            }.get(lang.lower(), "python3")
+            sandbox_argv = _build_docker_args(task_dir, timeout_s)
+            argv = sandbox_argv + [container_interpreter, "-c", code]
+        else:
+            raise RuntimeError(f"未知 sandbox kind: {sandbox_kind!r}")
+
+        start = time.time()
+        timed_out = False
+        try:
+            # cwd=TASK_DIR 让 LLM 写相对路径文件直接落在沙箱目录
+            # (nsjail 已经在 cfg 里设了 --cwd /tmp/task, sandbox-exec 靠 cwd 参数)
+            proc = subprocess.run(
+                argv,
+                capture_output=True,
+                timeout=timeout_s,
+                cwd=str(task_dir),
+                env={
+                    # 给沙箱内进程一个干净 env, 不漏员工 mac 上的 secret 环境变量
+                    # (例如 GITHUB_TOKEN / OPENAI_API_KEY 这些 LLM 不该见的)
+                    # 注: nsjail 在 cfg 里也设了 envar, 但 keep_env:false 让 nsjail
+                    # 不继承 caller env. 这里我们给一个最小集兜底.
+                    "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+                    "HOME": str(task_dir),  # 沙箱内 HOME 指向 TASK_DIR, 防 LLM 用 ~/ 偷文件
+                    "TMPDIR": "/tmp",
+                    "LANG": os.environ.get("LANG", "en_US.UTF-8"),
+                },
+            )
+            rc = proc.returncode
+            stdout = proc.stdout.decode("utf-8", errors="replace")
+            stderr = proc.stderr.decode("utf-8", errors="replace")
+        except subprocess.TimeoutExpired as e:
+            timed_out = True
+            rc = -signal.SIGKILL.value  # 约定: 超时返 -SIGKILL
+            stdout = (e.stdout or b"").decode("utf-8", errors="replace")
+            stderr = (e.stderr or b"").decode("utf-8", errors="replace") + \
+                     f"\n[catfish-sandbox] 超时 {timeout_s}s, 进程被 SIGKILL"
+
+        elapsed_ms = (time.time() - start) * 1000.0
+
+        # 截断防止 LLM 拿到 100MB 输出 (恶意代码会塞)
+        if len(stdout) > max_output_bytes:
+            stdout = stdout[:max_output_bytes] + f"\n... [truncated {len(stdout) - max_output_bytes} bytes]"
+        if len(stderr) > max_output_bytes:
+            stderr = stderr[:max_output_bytes] + f"\n... [truncated {len(stderr) - max_output_bytes} bytes]"
+
+        return {
+            "ok": rc == 0 and not timed_out,
+            "sandbox_used": True,
+            "sandbox_kind": sandbox_kind,   # "sandbox-exec" (macOS) | "nsjail" (Linux)
+            "stdout": stdout,
+            "stderr": stderr,
+            "rc": rc,
+            "elapsed_ms": round(elapsed_ms, 2),
+            "timed_out": timed_out,
+        }
+    finally:
+        # 清理 TASK_DIR (即使 LLM 在沙箱里写了文件)
+        try:
+            shutil.rmtree(task_dir, ignore_errors=True)
+        except Exception:
+            logger.warning("清理沙箱 TASK_DIR 失败: %s", task_dir, exc_info=True)
+
+
+def detect_lang_from_tool_name(tool_name: str) -> str | None:
+    """根据工具名推断 lang. 不认识返回 None (caller 不应调沙箱)."""
+    n = tool_name.lower()
+    if n in ("python", "execute_code"):
+        return "python"
+    if n == "bash":
+        return "bash"
+    if n in ("sh", "shell_exec"):
+        return "sh"
+    return None

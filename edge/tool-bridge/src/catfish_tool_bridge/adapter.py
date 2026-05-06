@@ -14,12 +14,13 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import os
 import traceback
 from typing import Any, Dict, List
 
 import time
 
-from . import audit, catfish_tools, skill_watcher
+from . import audit, catfish_tools, sandbox, skill_watcher
 
 logger = logging.getLogger("catfish.tool_bridge.adapter")
 
@@ -194,6 +195,88 @@ def _check_execute_code_misuse(name: str, args: Dict[str, Any]) -> str | None:
     )
 
 
+# 5/6 安全 P1 G3: execute_code 安全守卫.
+#
+# 真正的 sandbox 在 hermes 那边 (我们这边只是 dispatcher), 但能在 dispatcher 层
+# 拦"明显不合规"的脚本: 越权 path / 外联 / 危险 shell / 凭证读取.
+# 不绝对完备 (能被 obfuscate 绕), 但显式拦截 = "鲶鱼明确禁止这种行为", audit 留痕.
+#
+# 命中时:
+#   - 默认: 返回 error (LLM 看到, 不执行)
+#   - env CATFISH_EXEC_GUARD=warn: 只 log, 不拦 (开发期调试用)
+_EXECUTE_CODE_DANGEROUS_PATTERNS: tuple[tuple[str, str], ...] = (
+    # ── 凭证 / 敏感目录 ────────────────────────────
+    ("~/.ssh", "读员工 SSH 私钥 — 严禁"),
+    ("/.ssh/id_", "读员工 SSH 私钥 — 严禁"),
+    ("~/.aws/credentials", "读 AWS 凭证 — 严禁"),
+    ("~/.docker/config.json", "读 Docker registry 凭证 — 严禁"),
+    ("/library/keychains", "读 macOS Keychain — 严禁 (用 secret_resolver / keychain://)"),
+    ("/etc/shadow", "读 Linux 密码 hash — 严禁"),
+    ("/etc/passwd", "读系统账户清单 — 严禁"),
+    ("netrc", "读 ~/.netrc 凭证 — 严禁"),
+    # ── 网络外联 (data exfil 风险) ────────────────
+    ("curl http", "外联网络 — 严禁 (用 catfish_browser_* / catfish_fetch_url, 走 audit)"),
+    ("curl -x", "外联网络 — 严禁"),
+    ("wget http", "外联网络 — 严禁"),
+    ("requests.get(", "Python 外联网络 — 严禁 (走 catfish_fetch_url 留 audit)"),
+    ("requests.post(", "Python 外联网络 — 严禁"),
+    ("urllib.request.urlopen(", "Python 外联网络 — 严禁"),
+    ("urllib2.urlopen(", "Python 外联网络 — 严禁"),
+    ("httpx.get(", "Python 外联网络 — 严禁"),
+    ("httpx.post(", "Python 外联网络 — 严禁"),
+    ("aiohttp.clientsession", "Python 外联网络 — 严禁"),
+    ("socket.connect(", "Python raw socket — 严禁"),
+    # ── 危险 shell ──────────────────────────────
+    ("rm -rf /", "递归删根目录 — 严禁"),
+    ("rm -rf ~", "递归删 home — 严禁"),
+    (":(){:|:&};:", "fork bomb — 严禁"),
+    ("dd if=/dev/", "raw disk 操作 — 严禁"),
+    ("mkfs.", "格式化 — 严禁"),
+    ("> /dev/sd", "写裸盘 — 严禁"),
+    ("chmod 777 /", "全盘权限放开 — 严禁"),
+)
+
+
+def _check_execute_code_security(name: str, args: Dict[str, Any]) -> str | None:
+    """检测 execute_code 脚本里的危险操作 (越权/外联/凭证). 命中返回 error 字符串.
+
+    限定 execute_code / shell_exec / python / bash 工具.
+    跟 _check_execute_code_misuse 协同: misuse 拦"调错 catfish 工具" (功能错),
+    security 拦"做坏事" (安全错).
+
+    env CATFISH_EXEC_GUARD=warn 只 log 不拦 (开发期 / 信任环境用).
+    """
+    if name not in {"execute_code", "shell_exec", "python", "bash"}:
+        return None
+    text_parts: list[str] = []
+    for key in ("code", "command", "input", "script", "args"):
+        v = args.get(key)
+        if isinstance(v, str):
+            text_parts.append(v)
+        elif isinstance(v, list):
+            text_parts.extend(str(x) for x in v if isinstance(x, str))
+    text = "\n".join(text_parts).lower()
+    if not text:
+        return None
+
+    hits = [(p, reason) for p, reason in _EXECUTE_CODE_DANGEROUS_PATTERNS if p.lower() in text]
+    if not hits:
+        return None
+
+    pattern, reason = hits[0]
+    mode = (os.environ.get("CATFISH_EXEC_GUARD") or "deny").strip().lower()
+    msg = (
+        f"🛡️ execute_code 安全守卫拦截: 检测到 {pattern!r} — {reason}. "
+        f"鲶鱼禁止 LLM 通过 execute_code 做这些. "
+        f"如需读特定文件/调 API, 用对应的 catfish_* 工具走 audit log."
+    )
+    if mode == "warn":
+        # warn 模式只记录不拦 (默认 deny, 开发期调试可设 warn)
+        logger.warning("[exec_guard:warn] %s | text 前 200 字: %s", msg, text[:200])
+        return None
+    return msg
+
+
 async def dispatch_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     """调用一个 tool。
 
@@ -220,6 +303,29 @@ async def dispatch_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             "stderr": None,
         }
 
+    # 5/6 安全 G3 守卫: execute_code 危险操作 (越权/外联/凭证) → 拒绝 + audit 留痕.
+    sec_msg = _check_execute_code_security(name, args)
+    if sec_msg:
+        # 写 audit 留痕 — 客户信安部门能查到"谁在 X 时间试图越权"
+        try:
+            audit.write_event(
+                tool=name,
+                ok=False,
+                args=args,
+                error=sec_msg,
+                latency_ms=0.0,
+                extra={"security_block": "exec_guard"},
+            )
+        except Exception:
+            pass  # audit 写失败不影响拦截
+        return {
+            "ok": False,
+            "tool": name,
+            "result": None,
+            "error": sec_msg,
+            "stderr": None,
+        }
+
     start = time.time()
     result = await _do_dispatch(name, args)
     latency_ms = (time.time() - start) * 1000
@@ -229,8 +335,18 @@ async def dispatch_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     # 让 IT 事后能 grep 谁在啥时候填了密码字段.
     audit_extra: dict[str, Any] = {}
     inner_result = result.get("result")
-    if isinstance(inner_result, dict) and "security_audit" in inner_result:
-        audit_extra["security_audit"] = inner_result["security_audit"]
+    if isinstance(inner_result, dict):
+        if "security_audit" in inner_result:
+            audit_extra["security_audit"] = inner_result["security_audit"]
+        # BL-S29.2 (5/7): 沙箱字段进 audit log, 客户信安能 grep
+        # `cat ~/.hermes/.catfish_audit.jsonl | jq 'select(.sandbox_used == true)'`
+        # 看哪次 execute_code 真在沙箱里跑过.
+        if "sandbox_used" in inner_result:
+            audit_extra["sandbox_used"] = inner_result["sandbox_used"]
+        if "sandbox_kind" in inner_result:
+            audit_extra["sandbox_kind"] = inner_result["sandbox_kind"]
+        if inner_result.get("timed_out"):
+            audit_extra["sandbox_timed_out"] = True
 
     audit.write_event(
         tool=name,
@@ -275,6 +391,68 @@ async def _do_dispatch(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
                 "error": f"{type(e).__name__}: {e}",
                 "traceback": traceback.format_exc()[:2000],
             }
+
+    # ============================================================
+    # BL-S29.2 (5/7): execute_code/python/bash/sh 走 macOS sandbox-exec
+    # 隔离子进程, 不再转给 hermes dispatch.
+    #
+    # 启用条件: env CATFISH_SANDBOX_EXEC=1 + macOS + sandbox-exec 在 PATH
+    # 不启用 / 非 macOS / 沙箱不支持 → 走原 hermes dispatch (兼容)
+    # 5/19 BL-S29.5 加 nsjail (Linux) + Docker fallback 双层 fallback
+    # ============================================================
+    sandbox_lang = sandbox.detect_lang_from_tool_name(name)
+    if (
+        sandbox_lang is not None
+        and sandbox.is_sandbox_enabled()
+        and sandbox.is_sandbox_supported()
+    ):
+        # 拿代码体: 不同 hermes 工具字段名不一样, 兜底逐个看
+        code = (
+            args.get("code")
+            or args.get("script")
+            or args.get("command")
+            or args.get("input")
+            or ""
+        )
+        if not code:
+            return {
+                "ok": False, "tool": name, "result": None,
+                "error": f"沙箱模式: 工具 {name} 调用未提供 code/script/command 字段",
+            }
+        timeout_s = int(args.get("timeout_s") or args.get("timeout") or 30)
+        try:
+            sb_result = await asyncio.to_thread(
+                sandbox.run_in_sandbox,
+                code,
+                lang=sandbox_lang,
+                timeout_s=timeout_s,
+            )
+        except Exception as e:
+            logger.exception("sandbox dispatch crashed: %s", name)
+            return {
+                "ok": False, "tool": name, "result": None,
+                "error": f"sandbox crash: {type(e).__name__}: {e}",
+                "traceback": traceback.format_exc()[:2000],
+            }
+        # 把沙箱结果包装成跟 hermes execute_code 兼容的形状, LLM 看不出区别
+        return {
+            "ok": sb_result["ok"],
+            "tool": name,
+            "result": {
+                "stdout": sb_result["stdout"],
+                "stderr": sb_result["stderr"],
+                "returncode": sb_result["rc"],
+                "elapsed_ms": sb_result["elapsed_ms"],
+                "timed_out": sb_result["timed_out"],
+                # 这俩字段进 audit, 客户信安能看到 "这次 execute_code 跑在沙箱里"
+                "sandbox_used": sb_result["sandbox_used"],
+                "sandbox_kind": sb_result["sandbox_kind"],
+            },
+            "error": None if sb_result["ok"] else (
+                f"代码非 0 退出 (rc={sb_result['rc']})"
+                + (" [timeout]" if sb_result["timed_out"] else "")
+            ),
+        }
 
     r = _r()
     if name not in r.get_all_tool_names():

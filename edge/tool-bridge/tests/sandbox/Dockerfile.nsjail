@@ -1,0 +1,54 @@
+# =====================================================================
+# Dockerfile.nsjail — 容器化 nsjail 测试环境
+#
+# 用途:
+#   1. mac 上 docker run 跑 Linux nsjail 测试, 不依赖客户内网真机
+#   2. 客户 IT 拿这个 Dockerfile 直接验我们的沙箱能不能在他们 Linux 跑
+#   3. CI 集成 (GitHub Actions Linux runner)
+#
+# 用法:
+#   cd ~/person_task/catfish/edge/tool-bridge/tests/sandbox
+#   docker build -f Dockerfile.nsjail -t catfish-nsjail-test ..
+#   docker run --rm --privileged catfish-nsjail-test
+#
+# ⚠️ --privileged 是 nsjail 在容器内需要 (要创 namespace), 这是测试环境.
+#    生产部署到客户内网真机时 nsjail 直接跑, 不需要 docker.
+# =====================================================================
+
+FROM ubuntu:22.04
+
+# 装 nsjail 编译依赖 + python3 (沙箱内用)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git build-essential pkg-config \
+      libprotobuf-dev protobuf-compiler \
+      libnl-route-3-dev \
+      libcap-dev \
+      bison flex \
+      python3 python3-pip \
+      curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# 编 nsjail (master 分支稳定版)
+RUN git clone --depth 1 https://github.com/google/nsjail.git /tmp/nsjail \
+    && cd /tmp/nsjail \
+    && make \
+    && cp nsjail /usr/local/bin/nsjail \
+    && chmod +x /usr/local/bin/nsjail \
+    && rm -rf /tmp/nsjail
+
+# 验证 nsjail 装好
+RUN nsjail --help 2>&1 | head -3
+
+# 装 catfish-tool-bridge (editable, 源码挂进容器)
+WORKDIR /app
+COPY pyproject.toml /app/
+COPY src /app/src
+COPY sandbox-profiles /app/sandbox-profiles
+COPY tests /app/tests
+# Ubuntu 22 自带 pip 22 + setuptools 57, 不支持 PEP 660 editable install.
+# 升级到现代版本后再装 editable.
+RUN pip3 install --upgrade pip setuptools wheel \
+    && pip3 install -e .
+
+# 默认入口: 跑 nsjail 测试
+CMD ["bash", "/app/tests/sandbox/test_nsjail.sh"]

@@ -1,0 +1,110 @@
+;; =====================================================================
+;; catfish_execute.sb — macOS sandbox-exec profile for execute_code
+;;
+;; 用途: 包裹 LLM 通过 hermes/tool-bridge 触发的 python/bash/shell_exec
+;;       — 让员工 mac 上 LLM 跑的代码即使绕过 _check_execute_code_security
+;;       (字符串匹配的 25 类规则), 也无权读 ~/.ssh / 外联 / fork bomb.
+;;
+;; 用法: sandbox-exec -f catfish_execute.sb \
+;;                    -D TASK_DIR=/path/to/sandbox/<id> \
+;;                    -D HOME_PATH=$HOME \
+;;                    /usr/bin/python3 -c '...'
+;;
+;; 设计: 默认 allow + 5 类关键 deny (覆盖 80% 风险).
+;;       SBPL 1 "最后规则胜出" 语义, deny 写后面覆盖 allow default.
+;;
+;; ⚠️ macOS 26 (Tahoe) 起, sandbox-exec **默认 deny 一切**, 必须显式
+;;     (allow default) 才能让 process-exec 通过. 早期 macOS 默认 allow,
+;;     这文件兼容到 macOS 12+.
+;; =====================================================================
+
+(version 1)
+
+;; ---------------------------------------------------------------------
+;; 0. 兜底 — 默认 allow 一切 (macOS 26+ 必需, 早期版本无影响)
+;;    后面的 deny 规则会按"最后规则胜出"语义覆盖这条.
+;; ---------------------------------------------------------------------
+(allow default)
+
+;; ---------------------------------------------------------------------
+;; 1. 网络 — 全断 (沙箱核心: 防 LLM 偷数据外传)
+;; ---------------------------------------------------------------------
+(deny network*)
+(deny network-outbound)
+(deny network-inbound)
+(deny network-bind)
+
+;; ---------------------------------------------------------------------
+;; 2. 文件写 — 默认 deny, 白名单 TASK_DIR / /tmp / /dev/null|stdout|stderr
+;;     防 LLM 改 ~/.zshrc 植后门 / 写 LaunchAgents 持久化 / 改 /etc/hosts
+;; ---------------------------------------------------------------------
+(deny file-write*)
+(allow file-write*
+  (subpath (param "TASK_DIR"))
+  (subpath "/private/tmp")
+  (subpath "/private/var/folders")
+  (literal "/dev/null")
+  (literal "/dev/stdout")
+  (literal "/dev/stderr")
+  (literal "/dev/dtracehelper")
+  (literal "/dev/tty"))
+
+;; ---------------------------------------------------------------------
+;; 3. 文件读 — 黑名单敏感路径 (默认 allow, 让 python stdlib 加载顺畅)
+;;     防 LLM 偷 ssh 私钥 / Keychain / 员工文档 / 鲶鱼 journal / 系统密码
+;;
+;;     用 -D HOME_PATH=$HOME 传, 不用 string-append (SBPL 1 兼容性最好)
+;;     调用方拼好完整路径再传 -D
+;; ---------------------------------------------------------------------
+(deny file-read*
+  (subpath (param "HOME_SSH"))         ; $HOME/.ssh
+  (subpath (param "HOME_AWS"))         ; $HOME/.aws
+  (subpath (param "HOME_GNUPG"))       ; $HOME/.gnupg
+  (subpath (param "HOME_CONFIG"))      ; $HOME/.config
+  (subpath (param "HOME_KEYCHAINS"))   ; $HOME/Library/Keychains
+  (subpath (param "HOME_DOCUMENTS"))   ; $HOME/Documents
+  (subpath (param "HOME_DESKTOP"))     ; $HOME/Desktop
+  (subpath (param "HOME_DOWNLOADS"))   ; $HOME/Downloads
+  (subpath (param "HOME_CATFISH"))     ; $HOME/.catfish (鲶鱼自己的 journal/memory)
+  ;; ⚠️ macOS 的 /etc 是 symlink → /private/etc, SBPL 不解析 symlink,
+  ;;     必须两个路径都列, 否则 LLM 走真路径 (/private/etc/X) 能绕.
+  (literal "/etc/passwd")
+  (literal "/private/etc/passwd")
+  (literal "/etc/shadow")
+  (literal "/private/etc/shadow")
+  (literal "/etc/master.passwd")           ; 这个真存加密 hash, 比 passwd 更敏感
+  (literal "/private/etc/master.passwd")
+  (literal "/etc/sudoers")
+  (literal "/private/etc/sudoers")
+  (subpath "/etc/sudoers.d")
+  (subpath "/private/etc/sudoers.d")
+  (subpath "/etc/ssl/private")
+  (subpath "/private/etc/ssl/private")
+  (subpath "/etc/ssh")                     ; ssh host keys
+  (subpath "/private/etc/ssh")
+  (subpath "/var/db/sudo")
+  (subpath "/private/var/db/sudo")
+  (subpath "/var/root")                    ; root 的 home, 含 ~/.ssh /.aws 等
+  (subpath "/private/var/root"))
+
+;; ---------------------------------------------------------------------
+;; 4. iokit — 设备访问全断 (防 LLM 偷开摄像头 / USB 设备列举)
+;;
+;;     ⚠️ 不用 device-camera / device-microphone (SBPL 5+ 私有动词, macOS 拒识)
+;;     iokit-open 是 SBPL 1 标准, 拦设备 IO 一刀.
+;; ---------------------------------------------------------------------
+(deny iokit-open)
+
+;; ---------------------------------------------------------------------
+;; 5. sysctl — 不能写 (防关 SIP / 改 kernel 参数)
+;; ---------------------------------------------------------------------
+(deny sysctl-write)
+
+;; ---------------------------------------------------------------------
+;; 6. 进程跨边界 signal / mach 特权端口
+;;     ⚠️ 不用 mach-priv-host-port / mach-priv-task-port (SBPL 5+ 私有)
+;;     SBPL 1 没有干净的"禁跨进程 signal"的写法, 5/19 BL-S29.6 上 nsjail 时由
+;;     pid namespace 真隔离. 这里依赖默认 allow + iokit/sysctl-write 已覆盖核心风险.
+;; ---------------------------------------------------------------------
+
+;; END catfish_execute.sb
