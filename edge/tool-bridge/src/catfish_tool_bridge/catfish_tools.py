@@ -76,6 +76,175 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ── BL-MM7 user_profile (5/6) — 跨 session 长期画像, 跟 catfish_remember 区分 ──
+    {
+        "name": "catfish_user_profile_get",
+        "description": (
+            "★ 读员工长期画像 (writing_style / work_pattern / personality 等). "
+            "**跨 session 持久**, 跟 catfish_remember 不同 — 那个是 session 内硬事实.\n\n"
+            "✅ 调用时机: chat 开始时调一次 (拿当前画像注入对话风格), 或员工问 "
+            "'你怎么看我' / '你了解我吗' 时.\n\n"
+            "返回字段含 evidence_count / locked / proposed_value, 帮你判断:\n"
+            "  - locked=true: 员工锁了, 不能 propose 改\n"
+            "  - proposed_value 非空: 员工还没 confirm, 别拿这个值当真\n"
+            "  - evidence_count: 越大越可信\n\n"
+            "❌ 别在每次回复都调 — chat 开始 1 次就够, 后续从 system prompt 拿."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+        "emoji": "👤",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_user_profile_propose",
+        "description": (
+            "★ 看到员工言行能推断出 trait 时, 调这个累积 evidence (不立即写)\n"
+            "**累积 ≥ 3 次同 value 的独立 evidence** 后, 工具会返 'should_confirm', "
+            "你才该跟员工自然语言确认 ('我感觉你写汇报偏直接, 对吗?'); 员工说同意, "
+            "你才调 catfish_user_profile_confirm 落盘.\n\n"
+            "✅ 允许的 field (枚举 value):\n"
+            "  - writing_style.tone: formal / casual / 直接 / 委婉 / 幽默\n"
+            "  - writing_style.length_pref: 短 / 中 / 长\n"
+            "  - writing_style.bullet_pref: 列表 / 段落 / 混合\n"
+            "  - work_pattern.peak_hours: 自由文本 (例 '9-12 / 14-18')\n"
+            "  - work_pattern.task_pref: 列清单 / 看图表 / 纯文字 / 对照表\n"
+            "  - work_pattern.review_pref: 先看摘要 / 全量看 / 只看异常\n"
+            "  - personality.pace: 急 / 缓\n"
+            "  - personality.feedback_style: 大点拨 / 细节确认 / 结果导向\n"
+            "  - personality.deference: 平等 / 尊重正式 / 随意\n\n"
+            "❌ 红线字段 (严禁 propose, 员工自己 confirm 才能存):\n"
+            "  - personal.health / .financial / .relationship / .political / .religious / .family\n\n"
+            "❌ 不该调用:\n"
+            "  - 员工一次行为就推断 ('员工今天打字快 → personality.pace=急') — 太武断, 累 3 次再说\n"
+            "  - 编造 evidence — 必须 quote 真实对话片段\n"
+            "  - 评论员工生活 — 红线\n\n"
+            "频率: 每 session ≤ 1 次主动 propose (满阈值后), 防 spam."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "field": {"type": "string", "description": "字段名, 例 'writing_style.tone'"},
+                "value": {"type": "string", "description": "推断的值"},
+                "evidence": {
+                    "type": "string",
+                    "description": "本次 evidence — quote 员工原话或具体对话上下文 (1-500 字)",
+                },
+            },
+            "required": ["field", "value", "evidence"],
+        },
+        "emoji": "🔍",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_user_profile_confirm",
+        "description": (
+            "★ 把员工确认过的画像 trait 落盘. 两种触发:\n"
+            "  1. propose 后员工自然语言说同意 ('对', '是', '说得对'), 你调这个落盘\n"
+            "  2. 员工 Dashboard UserProfileCard 直接编辑 (UI 触发)\n\n"
+            "locked=true: 员工要求'锁住别再改' — 之后 propose 此字段会被拒\n"
+            "覆盖语义: 同 field 再 confirm 会覆盖, 旧值返在 previous_value\n\n"
+            "❌ 不该调用:\n"
+            "  - 员工没明确说同意 — 别假定 (silence ≠ consent)\n"
+            "  - 红线字段员工没显式说 — 别帮员工 confirm 健康/感情/政治/宗教等"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "field": {"type": "string"},
+                "value": {"type": "string"},
+                "locked": {"type": "boolean", "description": "默认 false, true=锁住不再 propose"},
+            },
+            "required": ["field", "value"],
+        },
+        "emoji": "✅",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_user_profile_clear",
+        "description": (
+            "★ 清除画像. field 给值 = 清那一个; field 为空 = 清全部.\n\n"
+            "✅ 调用场景:\n"
+            "  - 员工说 '清掉你对我的所有印象' → clear({}) 全部清\n"
+            "  - 员工说 '别记我急性子那条' → clear({field: 'personality.pace'})\n\n"
+            "❌ 不该调用:\n"
+            "  - 自作主张 — 必须员工显式说"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "field": {
+                    "type": "string",
+                    "description": "字段名, 空字符串 = 清全部",
+                },
+            },
+            "required": [],
+        },
+        "emoji": "🗑️",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    # ── BL-MM8 style_fingerprint (5/6) — 写文档时模仿员工历史风格 ──
+    {
+        "name": "catfish_style_fingerprint_get",
+        "description": (
+            "★ 读员工文书风格指纹 — 写汇报/周报/立项前调一次, 拿到风格描述\n"
+            "(平均句长 / 高频词 / 标点偏好 / 列表 vs 散文 / 样本句) 注入 system prompt,\n"
+            "让 LLM 模仿员工历史文档语气. 跟 user_profile 互补 (前者显式 trait, 这个隐式特征).\n\n"
+            "✅ 调用时机:\n"
+            "  - leadership-briefing / weekly-report / project-approval skill render 前\n"
+            "  - 员工说 '帮我按我习惯的风格写一份...' 时\n\n"
+            "❌ 别在 chat 普通问答时调 — 风格指纹是给写正式文档用的, 闲聊不需要.\n\n"
+            "返回 exists=false 表示员工还没生成过 fingerprint, 调 refresh 触发一次扫描."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+        "emoji": "✍️",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_style_fingerprint_refresh",
+        "description": (
+            "★ 重新扫描员工历史文档目录, 重建文书风格指纹.\n\n"
+            "默认扫: ~/Documents/work/, ~/.catfish/output/.\n"
+            "支持: .md / .txt / .docx (其他类型跳过).\n"
+            "约束: 跳过 < 200 字 / > 5MB / 隐藏文件; 最多扫 500 个文件.\n"
+            "时间衰减: 30 天内权重 1.0, 90 天 0.5, 180 天 0.25, 更老 0.1.\n\n"
+            "✅ 调用时机:\n"
+            "  - 员工说 '更新一下你对我写作风格的认识'\n"
+            "  - 员工写完一份新汇报后, 主动 refresh (10-20 个文档变化时)\n"
+            "  - 第一次启动 (员工 onboarding 时)\n\n"
+            "❌ 频率: 不要每次写文档前都 refresh — 文档没变前指纹一样, 浪费 IO.\n"
+            "    一周一次或员工显式要求时再调."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "source_dirs": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "可选, 自定义扫描目录列表; 默认 ['~/Documents/work', '~/.catfish/output']",
+                },
+            },
+            "required": [],
+        },
+        "emoji": "🔄",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_style_fingerprint_clear",
+        "description": (
+            "★ 清掉文书风格指纹 (员工 reset 用).\n\n"
+            "✅ 员工说 '别用我的历史风格了' / '从零开始重新认识我的写作'.\n"
+            "❌ 自作主张别清."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+        "emoji": "🗑️",
+        "toolset": "catfish_native",
+        "available": True,
+    },
     {
         "name": "catfish_today_summary",
         "description": (
@@ -2565,13 +2734,33 @@ def _install_from_hub(
     if not files_list:
         return {"ok": False, "error": f"hub {hub_skill} 元信息里没 files 列表"}
 
+    # 5/6 安全 P0 G2: 供应链防护. hub 元信息可附 files_sha256 字典:
+    #   { "SKILL.md": "abc123...", "compute.py": "def456..." }
+    # 客户端拉完每个文件 sha256, 跟 meta 对比, 不匹配 → rmtree + 拒装.
+    # meta 没 files_sha256 → 当未签名处理: 严格模式 (CATFISH_HUB_REQUIRE_HASH=1) 拒装,
+    # 默认模式只记 audit warning + 返回 unsigned=true.
+    files_sha256: dict = meta.get("files_sha256") or {}
+    require_hash_env = (os.environ.get("CATFISH_HUB_REQUIRE_HASH") or "").strip() == "1"
+    if require_hash_env and not files_sha256:
+        return {
+            "ok": False,
+            "error": (
+                f"hub {hub_skill} 元信息没提供 files_sha256, "
+                "CATFISH_HUB_REQUIRE_HASH=1 严格模式下拒装. "
+                "联系 hub 维护者发布签名版本, 或临时取消 CATFISH_HUB_REQUIRE_HASH."
+            ),
+        }
+    unsigned = not files_sha256
+
+    import hashlib as _hashlib  # noqa: PLC0415
+
     # 2. 创 staging 目录
     staging_root = Path.home() / ".catfish" / "skill-staging"
     staging_root.mkdir(parents=True, exist_ok=True)
     staging = staging_root / _uuid.uuid4().hex
     staging.mkdir(parents=True, exist_ok=True)
 
-    # 3. 逐个下载文件
+    # 3. 逐个下载文件 + sha256 校验
     real_version = meta.get("version") or version_part
     for file_path in files_list:
         if not isinstance(file_path, str) or ".." in file_path or file_path.startswith("/"):
@@ -2591,6 +2780,21 @@ def _install_from_hub(
                 "ok": False,
                 "error": f"hub 下载 {file_path} 失败 ({type(e).__name__}: {e})",
             }
+        # sha256 校验 (有 expected hash 才校, 没 expected 走 unsigned 流程)
+        expected = files_sha256.get(file_path)
+        if expected:
+            actual = _hashlib.sha256(content).hexdigest()
+            if actual.lower() != str(expected).lower():
+                import shutil as _sh  # noqa: PLC0415
+                _sh.rmtree(staging, ignore_errors=True)
+                return {
+                    "ok": False,
+                    "error": (
+                        f"hub {hub_skill} 文件 {file_path} sha256 不匹配. "
+                        f"预期 {expected}, 实际 {actual}. "
+                        f"中间人攻击或 hub 被篡改, 拒装."
+                    ),
+                }
         target = staging / file_path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
@@ -2610,6 +2814,7 @@ def _install_from_hub(
         "hub_namespace": ns_part,
         "hub_name": name_part,
         "hub_version": real_version,
+        "unsigned": unsigned,  # 5/6 G2: 没 sha256 校验时为 True
     }
 
 
@@ -3010,4 +3215,27 @@ def dispatch_native(name: str, args: Dict[str, Any]) -> Any:
         return skill_delete(args)
     if name == "catfish_a2a_ask":
         return a2a_ask(args)
+    # 5/6 BL-MM7 user profile (长期画像, 跨 session)
+    if name == "catfish_user_profile_get":
+        from . import user_profile  # noqa: PLC0415
+        return user_profile.user_profile_get(args)
+    if name == "catfish_user_profile_propose":
+        from . import user_profile  # noqa: PLC0415
+        return user_profile.user_profile_propose(args)
+    if name == "catfish_user_profile_confirm":
+        from . import user_profile  # noqa: PLC0415
+        return user_profile.user_profile_confirm(args)
+    if name == "catfish_user_profile_clear":
+        from . import user_profile  # noqa: PLC0415
+        return user_profile.user_profile_clear(args)
+    # 5/6 BL-MM8 文书风格 fingerprint
+    if name == "catfish_style_fingerprint_get":
+        from . import style_fingerprint  # noqa: PLC0415
+        return style_fingerprint.style_fingerprint_get(args)
+    if name == "catfish_style_fingerprint_refresh":
+        from . import style_fingerprint  # noqa: PLC0415
+        return style_fingerprint.style_fingerprint_refresh(args)
+    if name == "catfish_style_fingerprint_clear":
+        from . import style_fingerprint  # noqa: PLC0415
+        return style_fingerprint.style_fingerprint_clear(args)
     raise ValueError(f"unknown native tool: {name}")

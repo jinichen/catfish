@@ -22,6 +22,8 @@ import AgentPrefsCard from "./AgentPrefsCard";
 import RelationCard from "./RelationCard";
 import MemoryHistoryCard from "./MemoryHistoryCard";
 import FeedbackSummaryCard from "./FeedbackSummaryCard";
+import UserProfileCard from "./UserProfileCard";
+import StyleFingerprintCard from "./StyleFingerprintCard";
 import { useMe } from "../../hooks/useMe";
 
 export default function DashboardTab() {
@@ -51,6 +53,10 @@ export default function DashboardTab() {
       <RelationCard />
       {/* BL-MM4 v1: 鲶鱼记的硬事实 + 版本历史 (跟 catfish_remember/BL-MM2 配套) */}
       <MemoryHistoryCard />
+      {/* BL-MM7 (5/6): 鲶鱼对你的长期画像 (writing_style / work_pattern / personality) */}
+      <UserProfileCard />
+      {/* BL-MM8 (5/6): 鲶鱼学到的你的文书风格 (从你历史文档抽的统计, 写汇报时模仿) */}
+      <StyleFingerprintCard />
       {/* BL-MM6: 你给鲶鱼的反馈 — ChatBubble 下面 👍/👎/改 按钮的汇总卡 */}
       <FeedbackSummaryCard />
       <ServicesCard />
