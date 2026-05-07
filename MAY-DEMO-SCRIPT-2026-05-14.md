@@ -420,7 +420,7 @@ $ hermes gateway setup
 
 ★ 是中国 IM 全栈, 5 个 (飞书/微信/企微/钉钉/QQ).
 
-### 演法 (现场配 Telegram, 鸿波手机演真双向, 5 分钟)
+### 演法 (5/8-5/12 真配飞书 + 企微, 5/14 当天演真双向, 3 分钟)
 
 **鸿波说**:
 ```
@@ -428,40 +428,54 @@ $ hermes gateway setup
 切到终端给你看一下.
 ```
 
-**演 1: 切终端跑 hermes gateway setup**
+**演 1: 切终端 `hermes gateway status`**
 
-客户看到 19 platform 列表 — 飞书/微信/钉钉/企微/QQ 全在. 鸿波说:
-
-```
-这 19 个 IM 鲶鱼底层 hermes 都内置. 你们公司用飞书就选 Feishu,
-用企业微信就选 WeCom, 5 分钟配通. 不需要我们改代码.
-```
-
-**演 2: 现场选 Telegram 配** (Telegram 配最快, 飞书需要客户内网 OAuth)
-
-```
-[选 Telegram → 输入 bot token (鸿波提前申请好的) → 输入 allowed_users → 完成]
-$ hermes gateway run
-✓ Telegram listener started
+```bash
+$ hermes gateway status
+✓ Feishu connected (websocket)
+✓ WeCom connected (websocket)
+✓ State.db: 192 sessions, 1843 messages
 ```
 
-**演 3: 鸿波拿手机** Telegram 发消息
+鸿波: "我已经接通飞书 + 企微. 不需要 ngrok / 公网 IP / SSL 证书 — hermes WebSocket 模式, 央企内网部署友好."
+
+**演 2: 鸿波拿手机, 飞书 app 发消息**
 
 ```
-[手机 Telegram] 鸿波: 给我列今天的任务
-[终端 hermes gateway log] 收到 telegram message from chenhongbo
-                          → 转 catfish gateway (qwen)
-                          → 鲶鱼回复
-[手机 Telegram] 鲶鱼: 今天 14:00 王总例会, 16:00 季度复盘. 还有任务吗?
+[手机飞书] 鸿波: 今天 KA017 进度怎样
+[mac 终端 hermes log] [feishu] received from chenhongbo: 今天 KA017 进度...
+                      → catfish gateway (qwen-122b 122B)
+                      → BL-A1 5 大保护链经过
+[手机飞书] 鲶鱼: KA017 已完成 4 步, 详见 ~/Documents/KA017.docx (5 月 6 日 14:23 生成)
 ```
 
-**演 4: 切回 Companion 看历史**
-
-打开 Companion → 仪表盘 → 会话 sidebar 里出现刚才 Telegram 那段对话, 跟手机看一样.
+**演 3: 鸿波切到企业微信 app, 同一鲶鱼**
 
 ```
-鸿波: 看, Companion 跟 Telegram 是同一份历史. 你回家用 mac 接着问, 出差用手机, 上班开飞书 — 全是同一个鲶鱼.
+[手机企微] 鸿波: 给我刚才那个 docx 的摘要
+[mac 终端 hermes log] [wecom] received from chenhongbo: ...
+                      hermes 看到 state.db 里飞书刚才那段对话, 知道是哪个 docx
+[手机企微] 鲶鱼: KA017 docx 摘要: 1. 资质 4 项 ... 2. 人员 5 人 ...
 ```
+
+**演 4: 切回 Companion (mac 桌面)**
+
+打开 Companion → 仪表盘 / 对话 tab → sidebar 看到刚才飞书 + 企微的两段对话, 全是同一份历史.
+
+```
+鸿波: 看, 一份 chat 历史 (~/.hermes/state.db), 三个入口:
+       - mac 桌面 Companion
+       - 手机飞书
+       - 手机企微
+     再加上你公司用什么, 钉钉 / Telegram / 微信都可以接, 5 分钟一个.
+     这才叫 unified inbox.
+```
+
+### 备用演法 (如果 5/13 飞书或企微某个没配通)
+
+- 飞书未通 → 演 Telegram (5/8 申请 BotFather token, 5 分钟搞定)
+- 企微未通 → 演 钉钉 (类似 OAuth 流程)
+- 都未通 → 演 hermes gateway setup wizard 19 列表 + Companion + state.db 共享原理 (静态展示, 不演真双向)
 
 ### 客户视角痛点 (击中)
 

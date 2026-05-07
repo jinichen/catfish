@@ -312,20 +312,37 @@ function SessionRow({
   );
 }
 
+// 5/7 BL-D14: 多入口区分 (Companion / CLI / 飞书 / 微信 / 企微 / Telegram)
+const SOURCE_BADGE: Record<string, { color: string; label: string; emoji: string }> = {
+  companion: { color: "#2563eb", label: "Companion 桌面", emoji: "🐟" },
+  cli: { color: "#6b7280", label: "终端 CLI", emoji: "⌨" },
+  weixin: { color: "#10b981", label: "微信", emoji: "💬" },
+  feishu: { color: "#7c3aed", label: "飞书", emoji: "🪽" },
+  lark: { color: "#7c3aed", label: "Lark", emoji: "🪽" },
+  wecom: { color: "#f59e0b", label: "企业微信", emoji: "💼" },
+  dingtalk: { color: "#0ea5e9", label: "钉钉", emoji: "📌" },
+  telegram: { color: "#3b82f6", label: "Telegram", emoji: "📱" },
+  discord: { color: "#5865f2", label: "Discord", emoji: "💬" },
+  slack: { color: "#4a154b", label: "Slack", emoji: "💼" },
+  qq: { color: "#1da1f2", label: "QQ", emoji: "🐧" },
+};
+
 function SourceBadge({ source }: { source?: string }) {
   if (!source) return null;
-  const isCompanion = source === "companion";
+  const meta = SOURCE_BADGE[source.toLowerCase()] || {
+    color: "var(--catfish-text-muted)",
+    label: source,
+    emoji: "❓",
+  };
   return (
     <span
-      title={isCompanion ? "Companion 起的对话" : "终端起的对话"}
+      title={meta.label + " 起的对话"}
       style={{
         display: "inline-block",
         width: 6,
         height: 6,
         borderRadius: "50%",
-        background: isCompanion
-          ? "var(--catfish-accent, #2563eb)"
-          : "var(--catfish-text-muted)",
+        background: meta.color,
         flexShrink: 0,
       }}
     />

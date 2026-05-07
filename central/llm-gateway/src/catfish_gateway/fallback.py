@@ -56,6 +56,18 @@ _ERROR_KEYWORDS = {
         "apiconnectionerror",
     ),
     "connection refused": ("connection refused", "connect call failed"),
+    # 5/7 鸿波微信演 demo 时撞: dashscope qwen "free tier only" 模式配额烧光,
+    # 抛 AllocationQuota.FreeTierOnly + APIError 不在 fallback 列表 → fallback 链停.
+    # 加进 "free tier" 关键字让 fallback 链跳到 deepseek / gemini 兜底.
+    "free tier": (
+        "free tier",
+        "free tier of the model has been exhausted",
+        "allocationquota.freetieronly",
+        "freetieronly",
+    ),
+    # 5/7 同样 dashscope upstream 502 时 catfish-public-qwen-flash 报 "upstream error"
+    # 也应该跳到下一个 candidate (deepseek-flash / gemini-flash)
+    "upstream error": ("upstream error", "upstream timeout"),
 }
 
 
