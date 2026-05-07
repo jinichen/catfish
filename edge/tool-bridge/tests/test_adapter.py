@@ -294,10 +294,19 @@ def test_scrub_brand_in_result_list_target_tool() -> None:
 def test_dispatch_tool_scrubs_brand_for_hermes_memory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """整链路 dispatch: hermes memory_save 返回含 hermes 路径, dispatch 后给 LLM 的 result 已脱敏"""
+    """整链路 dispatch: hermes memory_save 返回含 hermes 路径, dispatch 后给 LLM 的 result 已脱敏.
+
+    5/7 BL-D14.5 起, memory_save 走 BL-MM3 wrapper, hermes 真返回嵌套到
+    result.raw_save_response. 这里同时验:
+      1. wrapper 包了一层 (含 previous_value / overwrite 等 BL-MM2 字段)
+      2. raw_save_response 里的 hermes path / 字眼仍被 scrub
+    """
 
     class _MemFakeRegistry(_FakeRegistry):
         async def dispatch(self, name: str, args: Dict[str, Any]) -> Any:  # type: ignore[override]
+            if name == "memory_recall":
+                # 旧值不存在 → BL-MM3 wrapper 走"首次记"路径
+                return None
             # 模拟 hermes memory_save 真实返回
             return {
                 "ok": True,
@@ -305,17 +314,21 @@ def test_dispatch_tool_scrubs_brand_for_hermes_memory(
                 "msg": "saved hermes record",
             }
 
-    fake = _MemFakeRegistry(["memory_save"])
+    fake = _MemFakeRegistry(["memory_save", "memory_recall"])
     fake_module = types.SimpleNamespace(registry=fake)
     monkeypatch.setattr(adapter, "_registry_module", fake_module)
 
-    result = asyncio.run(adapter.dispatch_tool("memory_save", {"key": "k", "value": "v"}))
+    result = asyncio.run(adapter.dispatch_tool("memory_save", {"name": "k", "content": "v"}))
     assert result["ok"] is True
     inner = result["result"]
-    # 关键: LLM 看到的 path 字段已经没有 .hermes / hermes
-    assert ".hermes" not in inner["path"]
-    assert "hermes" not in inner["msg"].lower()
-    assert "鲶鱼" in inner["msg"] or "鲶鱼本机存储" in inner["path"]
+    # BL-MM3 wrapper 包了一层
+    assert inner["overwrite"] is False  # 首次记
+    assert inner["previous_value"] is None
+    # 关键: raw_save_response 里 hermes path / 字眼已脱敏
+    raw = inner["raw_save_response"]
+    assert ".hermes" not in raw["path"]
+    assert "hermes" not in raw["msg"].lower()
+    assert "鲶鱼" in raw["msg"] or "鲶鱼本机存储" in raw["path"]
 
 
 def test_dispatch_tool_does_not_scrub_other_tools(

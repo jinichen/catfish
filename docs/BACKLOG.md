@@ -288,7 +288,7 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 |---|---|---|---|
 | BL-MM1 | 记忆覆盖纪律 — SOUL 加章节"覆盖前先 read 旧值, 写时把旧值塞进新值的 inline 备注里, 跟员工说话必 quote'旧 X → 新 Y'" | ✅ 5/4 | 0 后端代码改动. 工具底层不动也能模拟版本感 (read-then-write + inline annotation pattern) |
 | BL-MM2 | catfish_remember 后端版本化 — `session_facts.json` schema 从 `{key: value}` 改 `{key: [{value, ts, prev_value}, ...]}` + 工具返回加 `previous_value`/`revision_count` + gateway inject 时显式列上次值 | ✅ 5/5 凌晨 | 13 条 tool-bridge 测试 + 3 条 gateway 测试. 旧 schema 自动迁移. 单 key 最多保留 5 版. SOUL § "工具底层暂不存版本数组" 删除, 换成 BL-MM2 纪律 |
-| BL-MM3 | hermes memory_save 包一层版本化 (在 adapter.py, BL-D9 思路扩展) — read-modify-write 双调用模拟版本数组, 跟 hermes 0.10/0.12 兼容 | ⬜ 5/15 起 hermes 升级窗口一并做, ~0.5 天 | 跟 hermes 升级强相关, 同期处理 |
+| BL-MM3 | hermes memory_save 包一层版本化 (在 adapter.py, BL-D9 思路扩展) — read-modify-write 双调用模拟版本数组, 跟 hermes 0.10/0.12 兼容 | ✅ 5/7 (跟 BL-D14.5 hermes 0.12 升级提前一并完成) | adapter.py `_memory_save_versioned` wrapper, 28 单测; SOUL § 561 已更新; `CATFISH_DISABLE_MM3=1` 可回退 |
 | BL-MM4 | Dashboard "记忆版本历史"卡 — 列所有 key, 点开看时间线 + 两版本 diff (像 git log) | ⬜ demo 后, 1-2 天 | 真客户演示卖点: "鲶鱼对你的认知怎么演化" |
 
 ### M.2 主动学习 / feedback / 越用越懂员工

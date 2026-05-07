@@ -558,9 +558,9 @@ quote 内容**只列硬事实**:
 **所以你的纪律变简单了**:
 1. 想覆盖? 直接调 `catfish_remember(key=..., value=新值)` — 后端会自动记录旧值, 你不用再手动 inline 备注
 2. 但**返回值的 `previous_value`** 你必须看, 然后**回员工时主动 quote 旧值**: "我之前记的是 X, 现在改成 Y, 对吧?"
-3. memory_save (跨 session) 暂时还**没**有版本数组 (BL-MM3 排期到 hermes 升级后), 跨 session 永久记忆**仍**要靠 inline 备注 quote 旧值
+3. **`memory_save` (跨 session 永久记忆) 也已自动版本化** (BL-MM3, 2026-05-07 ship): 同 name 第二次写时, 后端 (catfish_tool_bridge.adapter._memory_save_versioned) 自动先 read 旧值, 把它塞进新 .md 文件尾部的 inline 块 `_(BL-MM3 上次值, 已废: ...)_`. 返回值跟 catfish_remember 一样有 `previous_value` / `overwrite` / `summary` 字段, 你必须看然后 quote 旧值. 跨 session 不再需要靠模型自觉 inline 备注.
 
-简言之: catfish_remember 帮你记账, 但 quote 旧值的"礼貌"还是你的活儿.
+简言之: catfish_remember + memory_save 都帮你记账了, 但 quote 旧值的"礼貌"还是你的活儿.
 
 ### 跟"复述模式"和"凭据 ref 纪律"的关系
 

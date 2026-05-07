@@ -2372,3 +2372,70 @@ quota check 真应该移进 `with_fallback`, 让 chain 里每个模型都查 quo
 - Q&A 30 问背稿 — 5/12
 - 客户安全说明 1 页 PDF — 5/13
 - 5/14 demo 当天
+---
+
+## 2026-05-07（周三）下午 — BL-D14.5 hermes 0.12 升级保护 + BL-MM3 提前 ship
+
+5/7 凌晨 BL-S29 沙箱压一日 ship 之后, 下午顺势把 hermes 0.10→0.12 升级 + BL-MM3 跨 session 记忆版本化两件原本排到 5/15 的活儿一并提前完成.
+
+### BL-D14.5 hermes brand patch 升级保护
+
+**问题**: hermes 0.10→0.12 升级后, 我们的 brand patch (~/.hermes/hermes-agent/ 上的 23 条字符串替换) 被冲突盖回去, stash c50376b 留了一堆 conflict. 员工每次 `hermes update` 都要重跑 install.sh, 不会有人记得.
+
+**解法**: git hooks 自动重跑品牌补丁. 每次 git pull / merge / rebase / checkout 后, git 自动调 `.git/hooks/post-merge` (或对应 hook), hook 一行调 `apply_brand_patch.py --apply`. 因为补丁是幂等的 (DONE/PATCH/MISS 三态), 重复跑无副作用.
+
+**3 个新子命令** (`apply_brand_patch.py`):
+- `--install-hooks` — 装 post-merge / post-rewrite / post-checkout 三个 hook, 员工自己装过的会被 chain 在前面备份 .before-catfish
+- `--uninstall-hooks` — 卸 catfish hook, 还原员工原 hook
+- `--verify` — 检查 4 个关键文件 (banner.py / skin_engine.py / cli.py / branding.tsx) 品牌字串完好性, 退化 exit 1
+
+`install.sh` / `uninstall.sh` 连带改了, 一次 `bash install.sh -y` 把补丁 + hook 都装上.
+
+**测试**: 假 hermes-agent fixture 11 step 全 PASS (fresh apply → verify → idempotent re-apply → 模拟 0.13 升级覆盖 → hook 自动触发 → verify OK → 卸载 → 员工原 hook 自动 chain → 重装 DONE 不重复).
+
+**实机**: 5/7 下午员工实跑 stash drop + install.sh -y + ui-tui rebuild, 全套鲶鱼品牌生效.
+
+### BL-MM3 hermes memory_save 包版本化
+
+**问题**: hermes memory_save 默认 silent overwrite, 同 name 第二次写直接覆盖, LLM 看不到旧值, 跨 session 永久记忆"改不删, 留版本"纪律 (BL-MM1) 落不下来. SOUL § 561 之前免责说"跨 session 仍要靠模型自觉 inline 备注".
+
+**解法**: read-modify-write wrapper 在 `adapter.py` 加 `_memory_save_versioned`:
+1. 调 memory_recall 读旧值
+2. 拼新 content + inline 备注 `_(BL-MM3 上次值, 已废, ts=...: ...)_`
+3. 调真 hermes memory_save 写
+4. 返字段对齐 BL-MM2 (previous_value / overwrite / no_change / read_old_ok / summary)
+
+**剥旧 inline 块**: read 回来的 old_text 含上一轮 inline 备注块, 必须先剥再跟新值比 — 否则 inline 块每次叠一层越积越长.
+
+**兜底**:
+- read 失败 (memory_recall 抛 / 不可用) → read_old_ok=False, 按"首次记"路径继续 write, 不阻塞 chat
+- 同值再写 → no_change=True, 不污染 inline 块
+- args 兼容 `{name, content}` (hermes 原生) 跟 `{key, value}` (catfish 习惯)
+- env `CATFISH_DISABLE_MM3=1` 一键回退原行为, 灰度 / 调试用
+
+**测试**: `tests/test_memory_save_versioned.py` 28 单测全 PASS:
+- 首次 / 覆盖 / 同值 / read 失败 / write 失败 / args 兼容 / 旧 inline 块剥离 / 长旧值截断 / dispatch_tool 整链路 + scrub_brand / DISABLE_MM3 env / _extract_recall_text / _strip_old_inline_block helper
+
+整 tool-bridge 套件: **302 passed, 30 skipped, 0 failed**.
+
+**SOUL.md § 561 改写**: "memory_save 跨 session 暂没版本数组" → "memory_save 也已自动版本化 (BL-MM3, 5/7 ship), 后端帮你记账, 你只管 quote 旧值".
+
+### 文档刷
+- SOUL.md § 561 (跨 session 版本化纪律更新)
+- BACKLOG.md M.1 BL-MM3 标 ✅
+- FEATURE-TRACKS.md M.1 BL-MM3 ✅, demo 后栏目划掉
+- HERMES-UPGRADE-PHASE-C-RUNBOOK.md § 7 标 ship + ship 后清单 BL-MM3 [x]
+- README hermes-fork 加"升级保护"章节
+
+### 价值
+- 员工不用记得 "升级后要重 patch"
+- SOUL § 561 免责删, 故事干净: "鲶鱼记得你跟它说过的所有事 — session 内 + 跨 session 都自动版本化, 改了会告诉你旧值"
+- 5/14 demo 风险面减一个 (本来 5/15+ 才升级, 再 patch, 再做 BL-MM3, 现在 demo 前都好了)
+
+### 遗留 (5/8 起)
+- BL-D14.1 飞书 OAuth (前置, IT 批准)
+- BL-D14.6 5/14 demo 场景 2.8 真飞书 dryrun
+- 5+5 demo dryrun 跑通 (5/9-5/12)
+- Plan D 4.5 PPT 1 页 (5/12)
+- 客户安全说明 1 页 PDF (5/13)
+- Q&A 30 问 background (5/12-5/13)

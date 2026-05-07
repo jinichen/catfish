@@ -66,6 +66,191 @@ _HERMES_TOOLS_NEEDS_BRAND_SCRUB = {
 }
 
 
+# ============================================================
+# BL-MM3 (5/7): hermes memory_save 包一层版本化
+# ============================================================
+#
+# 背景: hermes memory_save 默认是 silent overwrite — 同 name 第二次写直接覆盖,
+#       LLM 看不到旧值, 跨 session 永久记忆"改不删, 留版本"纪律 (BL-MM1) 落不下来.
+#
+# 方案: read-modify-write 双调用模拟版本数组 — 在 dispatch 层包一层 wrapper:
+#       1. 先 memory_recall 取旧值
+#       2. 拼新 content + inline 旧值备注 ("---\n_(BL-MM3 上次值, 已废: ...)_)
+#       3. 调真 hermes memory_save 写
+#       4. 返字段对齐 BL-MM2 (previous_value / overwrite / no_change / summary),
+#          让 SOUL § BL-MM1 "回员工时主动 quote 旧值" 纪律生效
+#
+# 兼容:
+#   - hermes 0.10/0.11/0.12 memory_save 接口都是 (name, content), 无变化
+#   - read 失败 (memory_recall 抛 / 不可用) → 兜底按"首次记"处理, 不阻塞写
+#   - 同值再写 → 仍调 memory_save (因为 hermes 可能有 ts 元数据), 但不加 inline 备注
+#
+# 跟 BL-MM2 (catfish_remember) 区别:
+#   BL-MM2 → 当前 session 内事实 (~/.catfish/session_facts.json), 真存版本数组
+#   BL-MM3 → 跨 session 永久记忆 (~/.hermes/memories/*.md), 单 .md 文件 + inline 备注
+#   两个一起用 = "session 内硬事实 + 跨 session 偏好" 双层版本化记忆.
+
+# inline 备注前缀, 测试 / verify 用同一个常量
+_MM3_INLINE_PREFIX = "_(BL-MM3 上次值, 已废"
+_MM3_INLINE_MAX_OLD_LEN = 200  # 旧值塞 inline 时截到这么长
+
+
+def _extract_recall_text(raw: Any) -> str:
+    """从 hermes memory_recall 返回里提取文本.
+
+    hermes 0.10-0.12 memory_recall 返回 shape 不固定:
+      - dict: {"content": "..."} / {"text": "..."} / {"value": "..."}
+      - list: [{"content": "..."}, ...]  (取第一个的 content)
+      - str:  直接是文本
+      - None / 空 dict: 没找到
+    """
+    if raw is None:
+        return ""
+    if isinstance(raw, str):
+        return raw
+    if isinstance(raw, dict):
+        for k in ("content", "text", "value", "result"):
+            v = raw.get(k)
+            if isinstance(v, str) and v.strip():
+                return v
+        return ""
+    if isinstance(raw, list):
+        if not raw:
+            return ""
+        first = raw[0]
+        if isinstance(first, str):
+            return first
+        if isinstance(first, dict):
+            return _extract_recall_text(first)
+        return ""
+    return ""
+
+
+def _strip_old_inline_block(content: str) -> str:
+    """剥掉上一轮 BL-MM3 加的 inline 备注块, 取出"真新值".
+
+    每次 versioned save 都会拼上 `\\n\\n---\\n_(BL-MM3 上次值...)_` 备注.
+    下次再写时, 我们 read 回来的 old_text 是"含上轮备注的版本",
+    要把上轮备注剥掉, 不然 inline 块会越叠越长.
+    """
+    if not content:
+        return content
+    marker = f"\n\n---\n{_MM3_INLINE_PREFIX}"
+    idx = content.find(marker)
+    if idx == -1:
+        return content
+    return content[:idx].rstrip()
+
+
+async def _memory_save_versioned(args: Dict[str, Any]) -> Dict[str, Any]:
+    """BL-MM3: hermes memory_save 包一层版本化.
+
+    返回标准 dispatch shape: {"ok", "tool", "result", "error"}.
+
+    args 兼容两种字段名:
+      hermes 原生: {"name": "...", "content": "..."}
+      catfish 习惯: {"key": "...", "value": "..."} (兼容旧测试)
+    """
+    name = (args.get("name") or args.get("key") or "").strip()
+    new_content = args.get("content") if args.get("content") is not None else args.get("value")
+    if isinstance(new_content, str):
+        new_content = new_content.strip()
+    if not name:
+        return {
+            "ok": False, "tool": "memory_save", "result": None,
+            "error": "memory_save 需要 name (或 key) — BL-MM3 wrapper 拿不到 name 没法 read 旧值",
+        }
+    if not new_content or not isinstance(new_content, str):
+        return {
+            "ok": False, "tool": "memory_save", "result": None,
+            "error": "memory_save 需要 content (或 value) 字符串",
+        }
+
+    r = _r()
+
+    # 1. read 旧值 (失败兜底: 按"首次记"处理, 不阻塞 write)
+    old_text_raw = ""
+    read_failed = False
+    try:
+        if "memory_recall" in r.get_all_tool_names():
+            disp = r.dispatch
+            if inspect.iscoroutinefunction(disp):
+                old_resp = await disp("memory_recall", {"query": name})
+            else:
+                old_resp = await asyncio.to_thread(disp, "memory_recall", {"query": name})
+            old_text_raw = _extract_recall_text(old_resp)
+    except Exception as e:
+        logger.info("memory_save_versioned: read 旧值失败 (%s), 按首次记兜底", e)
+        read_failed = True
+        old_text_raw = ""
+
+    # 剥掉上一轮的 inline 备注块, 拿到"上一轮的真新值"
+    old_text = _strip_old_inline_block(old_text_raw)
+
+    # 2. 拼新 content
+    is_overwrite = bool(old_text)
+    no_change = is_overwrite and old_text.strip() == new_content.strip()
+    if is_overwrite and not no_change:
+        prev_truncated = old_text[:_MM3_INLINE_MAX_OLD_LEN].replace("\n", " ")
+        ellipsis = "…" if len(old_text) > _MM3_INLINE_MAX_OLD_LEN else ""
+        wrapped_content = (
+            f"{new_content}\n\n"
+            f"---\n"
+            f"{_MM3_INLINE_PREFIX}, ts={time.strftime('%Y-%m-%d %H:%M')}: "
+            f"{prev_truncated}{ellipsis})_"
+        )
+    else:
+        # 首次 / 同值 → 不加 inline 块
+        wrapped_content = new_content
+
+    # 3. 调真 hermes memory_save (传 name + content, 兼容历史 args 里的额外字段)
+    save_args = {k: v for k, v in args.items() if k not in ("key", "value")}
+    save_args["name"] = name
+    save_args["content"] = wrapped_content
+    try:
+        disp = r.dispatch
+        if inspect.iscoroutinefunction(disp):
+            raw_save = await disp("memory_save", save_args)
+        else:
+            raw_save = await asyncio.to_thread(disp, "memory_save", save_args)
+    except Exception as e:
+        logger.exception("memory_save_versioned: write 失败 (name=%s)", name)
+        return {
+            "ok": False, "tool": "memory_save", "result": None,
+            "error": f"{type(e).__name__}: {e}",
+        }
+
+    # 4. 包装返回 — 字段对齐 BL-MM2 (previous_value / overwrite / no_change / summary)
+    if no_change:
+        summary = (
+            f"'{name}' 跨 session 记忆已是这个值, 没改写历史. "
+            f"(读旧值后发现 == 新值)"
+        )
+    elif is_overwrite:
+        prev_preview = old_text[:80] + ("…" if len(old_text) > 80 else "")
+        summary = (
+            f"更新了跨 session 记忆 '{name}'. 上次值: {prev_preview!r}. "
+            f"按 BL-MM1 纪律, 你回员工时**必须**主动 quote 旧值 "
+            f"(\"我之前记的是 X, 现在改成 Y\"), 不要装作从来没记过."
+        )
+    else:
+        suffix = " (read_old 失败已兜底)" if read_failed else ""
+        summary = f"记下了跨 session 记忆 '{name}' (首次){suffix}."
+
+    result_payload: Dict[str, Any] = {
+        "type": "ok",
+        "name": name,
+        "previous_value": old_text if old_text else None,
+        "overwrite": is_overwrite,
+        "no_change": no_change,
+        "read_old_ok": not read_failed,
+        "summary": summary,
+        # 真 hermes 返回也带回 (供 LLM 看到 path/状态; 主流程会经 scrub_brand 脱敏)
+        "raw_save_response": raw_save,
+    }
+    return {"ok": True, "tool": "memory_save", "result": result_payload, "error": None}
+
+
 def list_tools() -> List[Dict[str, Any]]:
     """返回 OpenAI tool calling 兼容的 tool definitions。
 
@@ -460,6 +645,14 @@ async def _do_dispatch(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             "ok": False, "tool": name, "result": None,
             "error": f"unknown tool: {name}",
         }
+
+    # ============================================================
+    # BL-MM3 (5/7): memory_save 走版本化 wrapper, 不直打 hermes
+    # ============================================================
+    # wrapper 内部用 r.dispatch 调真 memory_save / memory_recall, 不会死循环.
+    # disable 开关: env CATFISH_DISABLE_MM3=1 (调试时跳过 wrapper, 直打 hermes)
+    if name == "memory_save" and os.environ.get("CATFISH_DISABLE_MM3") != "1":
+        return await _memory_save_versioned(args)
 
     # 用 toolset 维度判可用性 (而不是 check_tool_availability，因为它返回 tuple)
     toolset = r.get_toolset_for_tool(name)

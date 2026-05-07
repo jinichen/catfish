@@ -349,7 +349,13 @@ diff /tmp/upgrade-snapshots/skills-before.txt /tmp/hermes-skills-after.txt
 
 ---
 
-## 7. BL-MM3 hermes memory_save 包版本化 (~0.5 天)
+## 7. BL-MM3 hermes memory_save 包版本化 ✅ 已 ship (5/7, 跟 BL-D14.5 一起)
+
+> **状态**: 跟 BL-D14.5 hermes 0.12 升级提前一起 ship 了, 不再阻塞这个阶段 C runbook.
+> 实现位置: `edge/tool-bridge/src/catfish_tool_bridge/adapter.py` 的 `_memory_save_versioned`.
+> 测试: `tests/test_memory_save_versioned.py` (28 测试 PASS).
+> 回退开关: `CATFISH_DISABLE_MM3=1` 跳过 wrapper, 直打 hermes (调试 / 灰度用).
+> 下面设计稿留作历史参考, 但已落地代码请直接看 adapter.py 注释 § BL-MM3.
 
 ### 7.1 设计
 
@@ -539,7 +545,7 @@ hermes --version
 - [ ] CHECKLIST 第 1-3 节机器验证全过
 - [ ] CHECKLIST 第 4-12 节人工目检 ≥ 95% 过 (允许 ≤ 5% warn, 0 fail)
 - [ ] 1 整天员工真用催 dogfood, 0 报 brand 泄漏 / chat 500 / 主动闲聊不来
-- [ ] BL-MM3 ship + 测试过
+- [x] BL-MM3 ship + 测试过 ✅ (5/7 提前一并完成, 28 单测全 PASS)
 - [ ] Curator config 写 + 验证 catfish skill 没动
 
 任一不满足: **不上线给同事**, 留单人 dogfood 状态修.

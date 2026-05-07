@@ -394,7 +394,7 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 **M.1 记忆覆盖 (改不删, 留版本):**
 - ✅ **BL-MM1 记忆覆盖纪律 (SOUL 章节)** (5/4): 0 后端改动. 走 read-then-write + 把旧值 inline 塞进新值的备注里, 模拟版本感. 4 个 ❌ 禁止 (空说"改了"/编旧值/blind overwrite/不告知)
 - ✅ **BL-MM2 / BL-MM4 RelationCard + MemoryHistoryCard ship** (5/6): Dashboard 双卡 — RelationCard 显"印象/影响"(鲶鱼帮员工总结的对话主题, 像日记), MemoryHistoryCard 显"硬事实"(员工明确告诉的事实, 像便签贴), 两卡都 30s setInterval 实时刷新 + 全量条目, AuditCard 文案改员工口语 ("这个提示很奇怪让人看不懂啥意思" 修了)
-- ⬜ **BL-MM3 hermes memory_save 包一层版本化** (~0.5 天, 5/15 hermes 升级窗口一并)
+- ✅ **BL-MM3 hermes memory_save 包一层版本化** (5/7, 跟 BL-D14.5 hermes 0.12 升级提前一并 ship): `adapter.py:_memory_save_versioned` read-modify-write wrapper, 28 单测全 PASS, SOUL § 561 更新跨 session 也版本化了, `CATFISH_DISABLE_MM3=1` 可回退原行为
 
 **M.2 主动学习 / feedback / 越用越懂员工:**
 - ✅ **BL-MM5 主动学习员工偏好 (SOUL 章节)** (5/4 晚, **方案 A**): 0 后端代码
@@ -650,7 +650,7 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 
 **🟠 demo 后 (5/15+)**:
 - 完整 BL-E13 主动闲聊 (节假日 / snooze / 配置 UI) · ~1-2 周
-- **BL-MM3 hermes memory_save 包版本化** (跟 5/15 hermes 0.10→0.12 升级捆绑, 因 hermes 改了 memory 接口) · 0.5 天
+- ~~**BL-MM3 hermes memory_save 包版本化** (跟 5/15 hermes 0.10→0.12 升级捆绑)~~ ✅ 5/7 提前完成 (跟 BL-D14.5 一起)
 - **BL-MM7 结构化用户画像** (方案 C, **不依赖 hermes 升级**, 鲶鱼自己存) · ~1 周
 - **BL-MM8 文书风格 fingerprint** (方案 D, **不依赖 hermes 升级**) · ~1-2 周
 - BL-E27.3 桌宠联动 BL-E13/E15 + 全屏自动隐藏 · 2-3 天 (6 月初)
