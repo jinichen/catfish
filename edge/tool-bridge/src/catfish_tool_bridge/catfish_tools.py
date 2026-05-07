@@ -772,6 +772,19 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "available": True,
     },
     {
+        "name": "catfish_task_list",
+        "description": (
+            "★ 列出当前所有后台任务 (running / completed / failed). "
+            "Dashboard TasksCard 用这个刷新, LLM 也能调.\n\n"
+            "返 {tasks: [{task_id, kind, label, status, elapsed_s, ...}, ...]}.\n\n"
+            "调用时机: 员工说 '现在有什么任务在跑' / '后台都做啥呢'."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+        "emoji": "📋",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
         "name": "catfish_task_result",
         "description": (
             "★ 取后台任务**结果** (含 result / error). 任务必须 status=completed/failed.\n\n"
@@ -3331,6 +3344,9 @@ def dispatch_native(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_task_status":
         from . import task_manager  # noqa: PLC0415
         return task_manager.manager().status_dict(args.get("task_id") or "")
+    if name == "catfish_task_list":
+        from . import task_manager  # noqa: PLC0415
+        return {"tasks": task_manager.manager().list_active()}
     if name == "catfish_task_result":
         from . import task_manager  # noqa: PLC0415
         return task_manager.manager().result_dict(args.get("task_id") or "")

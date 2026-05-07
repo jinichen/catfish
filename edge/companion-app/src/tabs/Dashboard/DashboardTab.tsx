@@ -24,6 +24,7 @@ import MemoryHistoryCard from "./MemoryHistoryCard";
 import FeedbackSummaryCard from "./FeedbackSummaryCard";
 import UserProfileCard from "./UserProfileCard";
 import StyleFingerprintCard from "./StyleFingerprintCard";
+import TasksCard from "./TasksCard";
 import { useMe } from "../../hooks/useMe";
 
 export default function DashboardTab() {
@@ -44,6 +45,9 @@ export default function DashboardTab() {
     >
       {/* 主动闲聊 BL-E13: 醒目放第一个, 鼓励员工先聊一句再做事 */}
       <ProactiveCard />
+
+      {/* BL-A2.4 (5/7): 后台任务 — 长任务在跑时员工能看到状态 + 完成自动消失 */}
+      <TasksCard />
 
       {/* 全员可见 — 个人维度 */}
       <IdentityCard />
