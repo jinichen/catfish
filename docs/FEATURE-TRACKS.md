@@ -654,7 +654,7 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 - ~~**BL-MM7 结构化用户画像** · ~1 周~~ ✅ 5/6 提前 ship (跟 MM6/feedback 同日)
 - ~~**BL-MM8 文书风格 fingerprint** · ~1-2 周~~ ✅ 5/6 提前 ship (跟 MM7 同日)
 - BL-E27.3 桌宠联动 BL-E13/E15 + 全屏自动隐藏 · 2-3 天 (6 月初)
-- 真技术沙箱 nsjail/sandbox-exec (G3 升级) · 5/22 后
+- ~~真技术沙箱 nsjail/sandbox-exec (G3 升级) · 5/22 后~~ ✅ 5/7 凌晨 ship (12 天压 1 天, BL-S29 全套, 86 测试矩阵)
 - macOS Notarization 真公证 + 第三方渗透测试 · 5/22 后
 - email-agent / feishu-monitor 接通决策
 - Skills Hub 审核流 (#11) · 1 周

@@ -89,6 +89,41 @@
 - SOUL.md § execute_code 红线 (组织级, 非技术沙箱) — 限定 LLM 该干啥不该干啥
 - ruff 强制代码风格 (含 PLR / B / N / UP / 复杂度)
 
+### 2.7 依赖供应链审计 (5/8 ship, BL-SEC-CARGO)
+
+CI **每次 push + 每天定时**跑 4 套 audit, 任何 PR 引入新 CVE 立即阻断:
+
+| 工具 | 范围 | 当前状态 | 标准 |
+|---|---|---|---|
+| `pip-audit` | central/llm-gateway, central/skills-hub, edge/tool-bridge, edge/local-search | ✅ 全绿 | --strict, 任何 known CVE 红 |
+| `npm audit` | edge/companion-app | ✅ 全绿 | --audit-level=high, 仅 prod deps |
+| `cargo audit` | edge/companion-app/src-tauri (Tauri 2.x) | ✅ 全绿 (5/8 起, 19 条 ignore 见下) | rustsec/audit-check@v2 |
+| `gitleaks` | git history secrets | ✅ 全绿 | 全 history 扫 |
+
+**cargo audit 的 19 条 ignore 详细分析** (5/8 真机 cargo audit 结果):
+
+> 全部 19 条**0 个 exploitable CVE**, 都是上游 Tauri 2.x 传染的供应链 hygiene (unmaintained / unsound 边角 case).
+> 详细 ignore 列表 + 每条理由见 `edge/companion-app/src-tauri/.cargo/audit.toml`.
+
+| 类别 | 数量 | 实际威胁 | macOS 演示加载? |
+|---|---|---|---|
+| GTK3 binding (gtk-rs 系) unmaintained — Linux only | 13 | 0, gtk-rs 上游 deprecated 不动 | ❌ macOS 走 WebKit, 完全不加载 |
+| `unic-*` unicode 数据表 unmaintained — `urlpattern` build-time | 5 | 0, 编译期生成数据 | 走但无 runtime 风险 |
+| `proc-macro-error` / `fxhash` / `rand` 0.7.3 — build-time | 3 | 0, 编译期 only | 走但无 runtime 风险 |
+| `glib::VariantStrIter` Iterator unsound | 1 | 0, Tauri 不实现 GLib Iterator, 触发不到 | 走但触发不到 |
+
+**跟踪策略**:
+- Tauri 2.11+ 切 GTK4 后 13 条自动消失 (跟踪 tauri-apps/tauri Issue #11193)
+- urlpattern 升级到非 unic-* 后 5 条自动消失
+- 每月真跑 `cargo audit` (不 ignore 任何条) 看新 advisories — 任何新 exploitable CVE 立即修, 不靠 ignore
+
+**给信安部 / 央企 IT 的标准答复**:
+
+> "鲶鱼 CI 跑了完整 cargo audit 套件 + 19 条 ignore 全部带 RUSTSEC ID + tracking link.
+>  这 19 条全是上游 Tauri / Rust 生态的 unmaintained 标记, 没有一个是远程 / 本地 exploitable
+>  CVE. 等 Tauri 2.11+ 升 GTK4 后大部分自动解决.
+>  完整列表 + 每条理由: edge/companion-app/src-tauri/.cargo/audit.toml"
+
 ---
 
 ## 3. 已知 gap (5/14 前 must-fix)

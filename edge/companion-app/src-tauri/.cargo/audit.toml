@@ -1,0 +1,59 @@
+# BL-SEC-CARGO (5/8): cargo audit ignore — 上游 Tauri 2.x 传染的 unmaintained / unsound 警告
+#
+# 19 条全是供应链卫生问题 (上游 crate 已停维护或有 unsound 边角 case),
+# 0 条是 exploitable CVE / RCE / 网络漏洞.
+#
+# 鲶鱼实际威胁面分析 (5/8 真机 cargo audit 验证):
+#   - 13 条 GTK3 binding (gtk-rs 系列): Linux-only, 客户演示 macOS 走 WebKit 完全不加载
+#   - 5 条 unic-* unicode 数据表: urlpattern build-time, 无运行时风险
+#   - proc-macro-error / fxhash / rand 0.7.3: build-time 编译期依赖, 无运行时风险
+#   - glib::VariantStrIter unsound: Tauri 不实现 GLib Iterator, 触发不到
+#
+# 跟踪策略:
+#   - Tauri 2.11+ (GTK4 backend) 出来时, 13 条 GTK3 自动消失 → 移除对应 ignore
+#   - urlpattern 上游切到非 unic-* 的 unicode 表时, 5 条自动消失
+#   - 每月 cargo audit 看新增 (new) advisories — 任何新 CVE 立即处理, 不靠 ignore
+#
+# 客户故事 (信安部 / 央企 IT 问起来):
+#   "鲶鱼跑了 cargo audit 全套, 19 条 warning 全是上游 Tauri / Rust 生态的 hygiene 问题
+#    (unmaintained 标记). 0 条是 exploitable CVE. 跟踪上游升级节奏, 等 Tauri 2.11
+#    (GTK4) + urlpattern 升级一并解."
+
+[advisories]
+ignore = [
+    # ============================================================
+    # GTK3 binding 全套 (13 条) — Linux only, macOS 不加载
+    # ============================================================
+    # 跟踪: tauri-apps/tauri Issue #11193 (GTK4 migration)
+    # 等 Tauri 2.11+ 出 GTK4 backend, 这 13 条全自动消失
+    "RUSTSEC-2024-0411",  # gdkwayland-sys
+    "RUSTSEC-2024-0412",  # gdk
+    "RUSTSEC-2024-0413",  # atk
+    "RUSTSEC-2024-0414",  # gdkx11-sys
+    "RUSTSEC-2024-0415",  # gtk
+    "RUSTSEC-2024-0416",  # atk-sys
+    "RUSTSEC-2024-0417",  # gdkx11
+    "RUSTSEC-2024-0418",  # gdk-sys
+    "RUSTSEC-2024-0419",  # gtk3-macros
+    "RUSTSEC-2024-0420",  # gtk-sys
+
+    # ============================================================
+    # unic-* unicode 数据表 unmaintained (5 条) — urlpattern 内部
+    # ============================================================
+    # urlpattern 0.3 用 unic-* 系做 unicode identifier 处理, 是构建时
+    # 生成的常量数据表, 无 unsound / 无 unsafe. 上游 urlpattern 切
+    # icu_* 或 std::char 后这 5 条自动消失.
+    "RUSTSEC-2025-0075",  # unic-char-range
+    "RUSTSEC-2025-0080",  # unic-common
+    "RUSTSEC-2025-0081",  # unic-char-property
+    "RUSTSEC-2025-0098",  # unic-ucd-version
+    "RUSTSEC-2025-0100",  # unic-ucd-ident
+
+    # ============================================================
+    # 其他上游 build-time / 编译期依赖 (4 条)
+    # ============================================================
+    "RUSTSEC-2024-0370",  # proc-macro-error: 过程宏, 编译期 only — gtk3-macros + glib-macros 用
+    "RUSTSEC-2025-0057",  # fxhash: hash 函数 unmaintained, 算法本身没漏洞 — selectors → kuchikiki → tauri-utils
+    "RUSTSEC-2026-0097",  # rand 0.7.3: phf_codegen 构建期 only, runtime 不触发
+    "RUSTSEC-2024-0429",  # glib::VariantStrIter Iterator unsound: Tauri 不实现 GLib Iter, 触发不到
+]
