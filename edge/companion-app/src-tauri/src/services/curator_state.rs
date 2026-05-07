@@ -14,7 +14,7 @@
 use anyhow::{anyhow, Result};
 use serde::Serialize;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// 给前端的 view (跟原 .curator_state JSON 字段名保持一致, 多加 `never_run` 标记).
 #[derive(Debug, Clone, Serialize)]
@@ -53,13 +53,12 @@ fn state_path() -> Result<PathBuf> {
         .join(".curator_state"))
 }
 
-/// 读 .curator_state. 文件不存在 / 解析失败 → 返 never_run 默认.
-pub fn load() -> Result<CuratorStateView> {
-    let path = state_path()?;
+/// 读 .curator_state. 文件不存在 / 解析失败 → 返 never_run 默认. (内部版, 测试直接调.)
+pub fn load_at(path: &Path) -> Result<CuratorStateView> {
     if !path.exists() {
         return Ok(CuratorStateView::default());
     }
-    let raw = match fs::read_to_string(&path) {
+    let raw = match fs::read_to_string(path) {
         Ok(r) => r,
         Err(_) => return Ok(CuratorStateView::default()),
     };
@@ -102,92 +101,81 @@ pub fn load() -> Result<CuratorStateView> {
     })
 }
 
+/// 公开版: 用默认 state_path() (env 解析). 生产代码用这个.
+pub fn load() -> Result<CuratorStateView> {
+    load_at(&state_path()?)
+}
+
 #[cfg(test)]
 mod tests {
+    // 跟 curator_config 一样: 测试直接调 load_at(&path), 不动 env, parallel-safe.
     use super::*;
     use tempfile::TempDir;
 
-    fn with_temp<F: FnOnce()>(f: F) {
-        let tmp = TempDir::new().unwrap();
-        let prev = std::env::var("HERMES_HOME").ok();
-        std::env::set_var("HERMES_HOME", tmp.path());
-        f();
-        if let Some(p) = prev {
-            std::env::set_var("HERMES_HOME", p);
-        } else {
-            std::env::remove_var("HERMES_HOME");
-        }
+    fn st_path(tmp: &TempDir) -> PathBuf {
+        tmp.path().join(".curator_state")
     }
 
     #[test]
     fn load_never_run_when_file_missing() {
-        with_temp(|| {
-            let v = load().unwrap();
-            assert!(v.never_run);
-            assert_eq!(v.run_count, 0);
-            assert!(v.last_run_at.is_none());
-        });
+        let tmp = TempDir::new().unwrap();
+        let v = load_at(&st_path(&tmp)).unwrap();
+        assert!(v.never_run);
+        assert_eq!(v.run_count, 0);
+        assert!(v.last_run_at.is_none());
     }
 
     #[test]
     fn load_parses_valid_state() {
-        with_temp(|| {
-            let path = state_path().unwrap();
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(
-                &path,
-                r#"{"last_run_at":"2026-05-07T03:14:00Z","last_run_duration_seconds":12.4,"last_run_summary":"Archived 2 stale skills","paused":false,"run_count":3}"#,
-            )
-            .unwrap();
-            let v = load().unwrap();
-            assert!(!v.never_run);
-            assert_eq!(v.last_run_at.as_deref(), Some("2026-05-07T03:14:00Z"));
-            assert_eq!(v.run_count, 3);
-            assert_eq!(v.last_run_duration_seconds, Some(12.4));
-            assert!(v.last_run_summary.unwrap().contains("Archived 2"));
-        });
+        let tmp = TempDir::new().unwrap();
+        let p = st_path(&tmp);
+        fs::write(
+            &p,
+            r#"{"last_run_at":"2026-05-07T03:14:00Z","last_run_duration_seconds":12.4,"last_run_summary":"Archived 2 stale skills","paused":false,"run_count":3}"#,
+        )
+        .unwrap();
+        let v = load_at(&p).unwrap();
+        assert!(!v.never_run);
+        assert_eq!(v.last_run_at.as_deref(), Some("2026-05-07T03:14:00Z"));
+        assert_eq!(v.run_count, 3);
+        assert_eq!(v.last_run_duration_seconds, Some(12.4));
+        assert!(v.last_run_summary.unwrap().contains("Archived 2"));
     }
 
     #[test]
     fn load_scrubs_hermes_path_in_summary() {
-        with_temp(|| {
-            let path = state_path().unwrap();
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(
-                &path,
-                r#"{"last_run_at":"2026-05-07T03:14:00Z","last_run_summary":"Archived ~/.hermes/skills/old_script","paused":false,"run_count":1}"#,
-            )
-            .unwrap();
-            let v = load().unwrap();
-            let summary = v.last_run_summary.unwrap();
-            assert!(!summary.contains("~/.hermes"));
-            assert!(summary.contains("鲶鱼本机存储"));
-        });
+        let tmp = TempDir::new().unwrap();
+        let p = st_path(&tmp);
+        fs::write(
+            &p,
+            r#"{"last_run_at":"2026-05-07T03:14:00Z","last_run_summary":"Archived ~/.hermes/skills/old_script","paused":false,"run_count":1}"#,
+        )
+        .unwrap();
+        let v = load_at(&p).unwrap();
+        let summary = v.last_run_summary.unwrap();
+        assert!(!summary.contains("~/.hermes"));
+        assert!(summary.contains("鲶鱼本机存储"));
     }
 
     #[test]
     fn load_returns_default_on_corrupt_json() {
-        with_temp(|| {
-            let path = state_path().unwrap();
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(&path, "not valid json {{{").unwrap();
-            let v = load().unwrap();
-            assert!(v.never_run);
-        });
+        let tmp = TempDir::new().unwrap();
+        let p = st_path(&tmp);
+        fs::write(&p, "not valid json {{{").unwrap();
+        let v = load_at(&p).unwrap();
+        assert!(v.never_run);
     }
 
     #[test]
     fn load_handles_missing_optional_fields() {
-        with_temp(|| {
-            let path = state_path().unwrap();
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            // 只有 last_run_at, 别的都没 (Curator 第一次跑后状态)
-            fs::write(&path, r#"{"last_run_at":"2026-05-07T03:14:00Z"}"#).unwrap();
-            let v = load().unwrap();
-            assert!(!v.never_run);
-            assert_eq!(v.run_count, 0); // missing → 0
-            assert_eq!(v.paused, false); // missing → false
-            assert!(v.last_run_summary.is_none());
-        });
+        let tmp = TempDir::new().unwrap();
+        let p = st_path(&tmp);
+        // 只有 last_run_at, 别的都没 (Curator 第一次跑后状态)
+        fs::write(&p, r#"{"last_run_at":"2026-05-07T03:14:00Z"}"#).unwrap();
+        let v = load_at(&p).unwrap();
+        assert!(!v.never_run);
+        assert_eq!(v.run_count, 0); // missing → 0
+        assert_eq!(v.paused, false); // missing → false
+        assert!(v.last_run_summary.is_none());
     }
 }

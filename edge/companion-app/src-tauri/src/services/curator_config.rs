@@ -16,7 +16,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value as YamlValue;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// 鲶鱼推荐的保守默认 (跟 hermes 默认对比注释见 RUNBOOK § 6).
 pub const DEFAULT_ENABLED: bool = true;
@@ -72,13 +72,12 @@ fn yaml_path() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".hermes").join("config.yaml"))
 }
 
-/// 读 curator 段, 缺字段补默认.
-pub fn load() -> Result<CuratorConfig> {
-    let path = yaml_path()?;
+/// 读 curator 段, 缺字段补默认. (内部版, 测试直接调, 避免 env var 并发污染.)
+pub fn load_at(path: &Path) -> Result<CuratorConfig> {
     if !path.exists() {
         return Ok(CuratorConfig::default());
     }
-    let raw = fs::read_to_string(&path)
+    let raw = fs::read_to_string(path)
         .with_context(|| format!("读 {} 失败", path.display()))?;
     let v: YamlValue = serde_yaml::from_str(&raw)
         .with_context(|| format!("解析 {} 失败 (yaml 语法错)", path.display()))?;
@@ -100,8 +99,13 @@ pub fn load() -> Result<CuratorConfig> {
     })
 }
 
-/// 保存 curator 段, 不破坏 yaml 其他段 (atomic 写).
-pub fn save(cfg: &CuratorConfig) -> Result<()> {
+/// 公开版: 用默认 yaml_path() (env 解析). 生产代码用这个.
+pub fn load() -> Result<CuratorConfig> {
+    load_at(&yaml_path()?)
+}
+
+/// 保存 curator 段, 不破坏 yaml 其他段 (atomic 写). (内部版, 测试直接调.)
+pub fn save_at(path: &Path, cfg: &CuratorConfig) -> Result<()> {
     // 校验: 关系约束
     if cfg.archive_after_days <= cfg.stale_after_days {
         return Err(anyhow!(
@@ -117,14 +121,13 @@ pub fn save(cfg: &CuratorConfig) -> Result<()> {
         ));
     }
 
-    let path = yaml_path()?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("创建目录 {} 失败", parent.display()))?;
     }
 
     let mut root: YamlValue = if path.exists() {
-        let raw = fs::read_to_string(&path)
+        let raw = fs::read_to_string(path)
             .with_context(|| format!("读 {} 失败", path.display()))?;
         serde_yaml::from_str(&raw).unwrap_or_else(|_| YamlValue::Mapping(Default::default()))
     } else {
@@ -160,9 +163,14 @@ pub fn save(cfg: &CuratorConfig) -> Result<()> {
     let out = serde_yaml::to_string(&root).context("序列化 yaml 失败")?;
     let tmp = path.with_extension("yaml.tmp");
     fs::write(&tmp, out).with_context(|| format!("写临时文件 {} 失败", tmp.display()))?;
-    fs::rename(&tmp, &path)
+    fs::rename(&tmp, path)
         .with_context(|| format!("rename {} → {} 失败", tmp.display(), path.display()))?;
     Ok(())
+}
+
+/// 公开版: 用默认 yaml_path() (env 解析). 生产代码用这个.
+pub fn save(cfg: &CuratorConfig) -> Result<()> {
+    save_at(&yaml_path()?, cfg)
 }
 
 /// 如果 ~/.hermes/config.yaml 没 curator 段, 写入鲶鱼保守默认.
@@ -173,163 +181,151 @@ pub fn save(cfg: &CuratorConfig) -> Result<()> {
 ///
 /// 已有 curator 段 → 不动 (尊重员工已 tune 过的值, 哪怕值跟我们默认不一样).
 ///
-/// 返 Ok(true) = 真写了, Ok(false) = 已存在不动.
-pub fn ensure_default() -> Result<bool> {
-    let path = yaml_path()?;
+/// 返 Ok(true) = 真写了, Ok(false) = 已存在不动. (内部版, 测试直接调.)
+pub fn ensure_default_at(path: &Path) -> Result<bool> {
     if path.exists() {
-        let raw = fs::read_to_string(&path)?;
+        let raw = fs::read_to_string(path)?;
         let v: YamlValue = serde_yaml::from_str(&raw).unwrap_or(YamlValue::Mapping(Default::default()));
         if v.get("curator").is_some() {
             return Ok(false);
         }
     }
-    save(&CuratorConfig::default())?;
+    save_at(path, &CuratorConfig::default())?;
     Ok(true)
+}
+
+/// 公开版: 用默认 yaml_path() (env 解析). 生产代码 (lib.rs setup) 用这个.
+pub fn ensure_default() -> Result<bool> {
+    ensure_default_at(&yaml_path()?)
 }
 
 #[cfg(test)]
 mod tests {
+    // 测试用 _at 系列, 直接传 Path, 不动 env, 完全 parallel-safe.
+    // (env 路径 yaml_path() 用于生产代码, 测试不走那条路)
     use super::*;
     use tempfile::TempDir;
 
-    fn with_temp_hermes<F: FnOnce()>(f: F) {
-        let tmp = TempDir::new().unwrap();
-        let prev = std::env::var("HERMES_HOME").ok();
-        std::env::set_var("HERMES_HOME", tmp.path());
-        f();
-        if let Some(p) = prev {
-            std::env::set_var("HERMES_HOME", p);
-        } else {
-            std::env::remove_var("HERMES_HOME");
-        }
+    fn cfg_path(tmp: &TempDir) -> PathBuf {
+        tmp.path().join("config.yaml")
     }
 
     #[test]
     fn load_returns_conservative_default_when_yaml_missing() {
-        with_temp_hermes(|| {
-            let cfg = load().unwrap();
-            assert_eq!(cfg.enabled, true);
-            assert_eq!(cfg.stale_after_days, 60);
-            assert_eq!(cfg.archive_after_days, 180);
-            assert_eq!(cfg.min_idle_hours, 4);
-            assert_eq!(cfg.interval_hours, 168);
-        });
+        let tmp = TempDir::new().unwrap();
+        let cfg = load_at(&cfg_path(&tmp)).unwrap();
+        assert_eq!(cfg.enabled, true);
+        assert_eq!(cfg.stale_after_days, 60);
+        assert_eq!(cfg.archive_after_days, 180);
+        assert_eq!(cfg.min_idle_hours, 4);
+        assert_eq!(cfg.interval_hours, 168);
     }
 
     #[test]
     fn load_returns_default_when_yaml_no_curator_section() {
-        with_temp_hermes(|| {
-            let path = yaml_path().unwrap();
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(&path, "other_section:\n  foo: bar\n").unwrap();
-            let cfg = load().unwrap();
-            assert_eq!(cfg, CuratorConfig::default());
-        });
+        let tmp = TempDir::new().unwrap();
+        let p = cfg_path(&tmp);
+        fs::write(&p, "other_section:\n  foo: bar\n").unwrap();
+        let cfg = load_at(&p).unwrap();
+        assert_eq!(cfg, CuratorConfig::default());
     }
 
     #[test]
     fn load_reads_existing_curator_section() {
-        with_temp_hermes(|| {
-            let path = yaml_path().unwrap();
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(
-                &path,
-                "curator:\n  enabled: false\n  stale_after_days: 30\n  archive_after_days: 90\n",
-            )
-            .unwrap();
-            let cfg = load().unwrap();
-            assert_eq!(cfg.enabled, false);
-            assert_eq!(cfg.stale_after_days, 30);
-            assert_eq!(cfg.archive_after_days, 90);
-            // 缺字段补默认
-            assert_eq!(cfg.interval_hours, 168);
-        });
+        let tmp = TempDir::new().unwrap();
+        let p = cfg_path(&tmp);
+        fs::write(
+            &p,
+            "curator:\n  enabled: false\n  stale_after_days: 30\n  archive_after_days: 90\n",
+        )
+        .unwrap();
+        let cfg = load_at(&p).unwrap();
+        assert_eq!(cfg.enabled, false);
+        assert_eq!(cfg.stale_after_days, 30);
+        assert_eq!(cfg.archive_after_days, 90);
+        // 缺字段补默认
+        assert_eq!(cfg.interval_hours, 168);
     }
 
     #[test]
     fn save_writes_and_round_trips() {
-        with_temp_hermes(|| {
-            let cfg = CuratorConfig {
-                enabled: false,
-                interval_hours: 24,
-                min_idle_hours: 8,
-                stale_after_days: 90,
-                archive_after_days: 365,
-            };
-            save(&cfg).unwrap();
-            let loaded = load().unwrap();
-            assert_eq!(cfg, loaded);
-        });
+        let tmp = TempDir::new().unwrap();
+        let p = cfg_path(&tmp);
+        let cfg = CuratorConfig {
+            enabled: false,
+            interval_hours: 24,
+            min_idle_hours: 8,
+            stale_after_days: 90,
+            archive_after_days: 365,
+        };
+        save_at(&p, &cfg).unwrap();
+        let loaded = load_at(&p).unwrap();
+        assert_eq!(cfg, loaded);
     }
 
     #[test]
     fn save_preserves_other_yaml_sections() {
-        with_temp_hermes(|| {
-            let path = yaml_path().unwrap();
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(
-                &path,
-                "models:\n  default: gpt-4\nproviders:\n  openai:\n    base_url: https://x\n",
-            )
-            .unwrap();
-            save(&CuratorConfig::default()).unwrap();
-            let raw = fs::read_to_string(&path).unwrap();
-            assert!(raw.contains("models:"));
-            assert!(raw.contains("default: gpt-4"));
-            assert!(raw.contains("providers:"));
-            assert!(raw.contains("curator:"));
-            assert!(raw.contains("stale_after_days: 60"));
-        });
+        let tmp = TempDir::new().unwrap();
+        let p = cfg_path(&tmp);
+        fs::write(
+            &p,
+            "models:\n  default: gpt-4\nproviders:\n  openai:\n    base_url: https://x\n",
+        )
+        .unwrap();
+        save_at(&p, &CuratorConfig::default()).unwrap();
+        let raw = fs::read_to_string(&p).unwrap();
+        assert!(raw.contains("models:"));
+        assert!(raw.contains("default: gpt-4"));
+        assert!(raw.contains("providers:"));
+        assert!(raw.contains("curator:"));
+        assert!(raw.contains("stale_after_days: 60"));
     }
 
     #[test]
     fn save_rejects_bad_archive_smaller_than_stale() {
-        with_temp_hermes(|| {
-            let cfg = CuratorConfig {
-                enabled: true,
-                interval_hours: 168,
-                min_idle_hours: 4,
-                stale_after_days: 100,
-                archive_after_days: 50,
-            };
-            let err = save(&cfg).unwrap_err();
-            assert!(err.to_string().contains("archive"));
-        });
+        let tmp = TempDir::new().unwrap();
+        let cfg = CuratorConfig {
+            enabled: true,
+            interval_hours: 168,
+            min_idle_hours: 4,
+            stale_after_days: 100,
+            archive_after_days: 50,
+        };
+        let err = save_at(&cfg_path(&tmp), &cfg).unwrap_err();
+        assert!(err.to_string().contains("archive"));
     }
 
     #[test]
     fn save_rejects_zero_intervals() {
-        with_temp_hermes(|| {
-            let mut cfg = CuratorConfig::default();
-            cfg.interval_hours = 0;
-            assert!(save(&cfg).is_err());
-            cfg.interval_hours = 168;
-            cfg.min_idle_hours = 0;
-            assert!(save(&cfg).is_err());
-        });
+        let tmp = TempDir::new().unwrap();
+        let p = cfg_path(&tmp);
+        let mut cfg = CuratorConfig::default();
+        cfg.interval_hours = 0;
+        assert!(save_at(&p, &cfg).is_err());
+        cfg.interval_hours = 168;
+        cfg.min_idle_hours = 0;
+        assert!(save_at(&p, &cfg).is_err());
     }
 
     #[test]
     fn ensure_default_writes_when_missing() {
-        with_temp_hermes(|| {
-            assert_eq!(ensure_default().unwrap(), true);
-            // 第二次调 → 已存在不动
-            assert_eq!(ensure_default().unwrap(), false);
-            let cfg = load().unwrap();
-            assert_eq!(cfg, CuratorConfig::default());
-        });
+        let tmp = TempDir::new().unwrap();
+        let p = cfg_path(&tmp);
+        assert_eq!(ensure_default_at(&p).unwrap(), true);
+        // 第二次调 → 已存在不动
+        assert_eq!(ensure_default_at(&p).unwrap(), false);
+        let cfg = load_at(&p).unwrap();
+        assert_eq!(cfg, CuratorConfig::default());
     }
 
     #[test]
     fn ensure_default_does_not_overwrite_user_tuned() {
-        with_temp_hermes(|| {
-            let path = yaml_path().unwrap();
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            // 员工自己 tune 过 (stale=14)
-            fs::write(&path, "curator:\n  enabled: true\n  stale_after_days: 14\n").unwrap();
-            assert_eq!(ensure_default().unwrap(), false);
-            let cfg = load().unwrap();
-            assert_eq!(cfg.stale_after_days, 14); // 没被覆盖成 60
-        });
+        let tmp = TempDir::new().unwrap();
+        let p = cfg_path(&tmp);
+        // 员工自己 tune 过 (stale=14)
+        fs::write(&p, "curator:\n  enabled: true\n  stale_after_days: 14\n").unwrap();
+        assert_eq!(ensure_default_at(&p).unwrap(), false);
+        let cfg = load_at(&p).unwrap();
+        assert_eq!(cfg.stale_after_days, 14); // 没被覆盖成 60
     }
 }
