@@ -17,7 +17,7 @@
 //! - 鲶鱼 hermes/gateway venv 已经装这几个库 (4-30 weekly-report skill 验过)
 //! - 走 subprocess 简单稳定, 不用 PyO3 内嵌 Python (开发期复杂度高)
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -37,6 +37,11 @@ pub struct ParseFileResult {
     /// 原文件保留路径 (永远有, ~/.catfish/uploads/<ts>-<name>).
     /// LLM 100% 用 execute_code 读完整数据 — 不再有"截断"概念.
     pub kept_path: String,
+    /// BL-L26 (5/7): 大文件 (≥50KB 全文) 的 BM25 sidecar 路径 (含全文纯文本).
+    /// 前端发消息时调 attachment_bm25_search(parsed_text_path, query) 取相关段落
+    /// 替换 preview 注入 user message. 小文件没这字段.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parsed_text_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -107,25 +112,26 @@ fn _has_parse_deps(py: &PathBuf) -> bool {
 /// 找 parse_file.py 脚本. 跟 Tauri binary 同 bundle 里 (Resources 目录).
 /// dev 模式从源码 src-tauri/scripts/parse_file.py 找.
 fn find_parse_script() -> Option<PathBuf> {
-    // 1. dev 模式 — 源码相对路径
+    find_script("parse_file.py")
+}
+
+/// 找 Python 脚本 (跟 parse_file 同目录).
+/// BL-L26 (5/7): 抽出共享 attachment_bm25.py 复用同一查找逻辑.
+fn find_script(name: &str) -> Option<PathBuf> {
     if let Ok(cwd) = std::env::current_dir() {
-        // tauri dev 启动时 cwd = src-tauri/, 脚本在 scripts/parse_file.py
-        let p = cwd.join("scripts").join("parse_file.py");
+        let p = cwd.join("scripts").join(name);
         if p.exists() {
             return Some(p);
         }
-        // 或者 cwd = companion-app/, 脚本在 src-tauri/scripts/parse_file.py
-        let p = cwd.join("src-tauri").join("scripts").join("parse_file.py");
+        let p = cwd.join("src-tauri").join("scripts").join(name);
         if p.exists() {
             return Some(p);
         }
     }
-    // 2. release 模式 — .app/Contents/Resources/scripts/parse_file.py
-    //    (需要 tauri.conf.json 把 scripts 目录打进 bundle, Phase 2 再做)
-    //    暂时硬编码用户路径兜底
     if let Ok(home) = std::env::var("HOME") {
         let p = PathBuf::from(home)
-            .join("person_task/catfish/edge/companion-app/src-tauri/scripts/parse_file.py");
+            .join("person_task/catfish/edge/companion-app/src-tauri/scripts")
+            .join(name);
         if p.exists() {
             return Some(p);
         }
@@ -142,6 +148,10 @@ struct ParseFileFromPython {
     preview_text: String,
     preview_chars: usize,
     meta: serde_json::Value,
+    /// BL-L26 (5/7): Python 端写的 sidecar 路径 (相对 /tmp/<uuid>.<ext>.parsed.txt).
+    /// Rust 端会跟着 kept_path mv 一起搬, 改成 ~/.catfish/uploads/<ts>-<name>.parsed.txt.
+    #[serde(default)]
+    parsed_text_path: Option<String>,
 }
 
 /// 接收前端写的 /tmp 文件路径, 调 Python 解析, 返 (preview, meta).
@@ -204,6 +214,7 @@ pub async fn parse_file(tmp_path: String) -> Result<ParseFileResult, String> {
         preview_chars: inner.preview_chars,
         meta: inner.meta,
         kept_path: tmp_path,  // 用 tmp_path 占位, caller 自己决定保留
+        parsed_text_path: inner.parsed_text_path,
     })
 }
 
@@ -286,6 +297,28 @@ pub async fn parse_file_from_b64(
         kept_str,
     );
 
+    // BL-L26 (5/7): 如果 Python 写了 BM25 sidecar (大文件 ≥50KB), 跟着 kept_path 搬.
+    // sidecar 命名: <kept_path>.parsed.txt (跟 kept 同目录, 同 ts 前缀)
+    let parsed_text_path = if let Some(py_sidecar) = inner.parsed_text_path.as_deref() {
+        let target = uploads_dir.join(format!("{ts}-{safe}.parsed.txt"));
+        match std::fs::rename(py_sidecar, &target) {
+            Ok(_) => Some(target.to_string_lossy().to_string()),
+            Err(e) => {
+                log::warn!(
+                    "BL-L26: 搬 BM25 sidecar 失败 ({}), 大文件 fallback 走 preview: {}",
+                    py_sidecar, e,
+                );
+                // 不阻塞主流程, 大文件就走 preview (跟没 sidecar 一样, 体验略降但 chat 仍工作)
+                None
+            }
+        }
+    } else {
+        None
+    };
+    if let Some(ref p) = parsed_text_path {
+        log::info!("BL-L26: ✅ BM25 sidecar 就绪 → {p}");
+    }
+
     Ok(ParseFileResult {
         filename,
         ext: inner.ext,
@@ -294,5 +327,127 @@ pub async fn parse_file_from_b64(
         preview_chars: inner.preview_chars,
         meta: inner.meta,
         kept_path: kept_str,
+        parsed_text_path,
+    })
+}
+
+
+// ============================================================
+// BL-L26 (5/7): 大文件 BM25 段落检索
+// ============================================================
+//
+// 前端发消息时, 如果 message 含 attachment 且 attachment.parsedTextPath != null
+// (parse_file_from_b64 写出来的 sidecar), 调这个 command 取 top-K 跟员工问题相关
+// 的段落, 拼到 user message 里取代 preview.
+//
+// 设计:
+//   - Python helper attachment_bm25.py 是单进程 stateless (不缓存, 每次都重切+打分)
+//   - 100KB 文件实测 ~30-80ms, 一次 chat 消息开销可接受
+//   - sidecar 不存在 / Python 失败 → 返空 passages 数组 + reason; 前端 fallback 走 preview
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttachmentPassage {
+    pub text: String,
+    pub score: f64,
+    pub ord: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttachmentBm25Result {
+    pub passages: Vec<AttachmentPassage>,
+    pub total_passages: u32,
+    pub query_strategy: String,
+    /// 失败原因 (sidecar 不存在 / Python 出错). 成功时空字符串.
+    pub error: String,
+}
+
+#[tauri::command]
+pub async fn attachment_bm25_search(
+    parsed_text_path: String,
+    query: String,
+    top_k: Option<u32>,
+) -> Result<AttachmentBm25Result, String> {
+    let k = top_k.unwrap_or(5).clamp(1, 20);
+
+    // sidecar 不存在 → 直接返空, 不报错 (前端 fallback)
+    if !Path::new(&parsed_text_path).exists() {
+        return Ok(AttachmentBm25Result {
+            passages: vec![],
+            total_passages: 0,
+            query_strategy: "no_sidecar".to_string(),
+            error: format!("sidecar 不存在: {parsed_text_path}"),
+        });
+    }
+
+    let py = find_python().ok_or_else(|| {
+        "Python 解释器找不到. 设 env CATFISH_PYTHON=/path/to/python".to_string()
+    })?;
+    let script = find_script("attachment_bm25.py").ok_or_else(|| {
+        "attachment_bm25.py 脚本找不到".to_string()
+    })?;
+
+    log::info!(
+        "BL-L26 bm25_search: kept={}, query={:?}, top_k={}",
+        parsed_text_path, query.chars().take(30).collect::<String>(), k,
+    );
+
+    let output = std::process::Command::new(&py)
+        .arg(&script)
+        .arg("--text-path").arg(&parsed_text_path)
+        .arg("--query").arg(&query)
+        .arg("--top-k").arg(k.to_string())
+        .output()
+        .map_err(|e| format!("attachment_bm25 调用失败: {e}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if stdout.trim().is_empty() {
+        // Python 没输出 / 崩了 — 返空, 前端 fallback
+        log::warn!("BL-L26: bm25 helper 没输出. stderr: {stderr}");
+        return Ok(AttachmentBm25Result {
+            passages: vec![],
+            total_passages: 0,
+            query_strategy: "helper_crashed".to_string(),
+            error: format!("python helper 没输出: {stderr}"),
+        });
+    }
+
+    // helper 报错也返结构化错误, 不让 chat 挂
+    if let Ok(err) = serde_json::from_str::<ParseError>(&stdout) {
+        return Ok(AttachmentBm25Result {
+            passages: vec![],
+            total_passages: 0,
+            query_strategy: "helper_error".to_string(),
+            error: err.error,
+        });
+    }
+
+    #[derive(Deserialize)]
+    struct PyOut {
+        passages: Vec<PyPassage>,
+        total_passages: u32,
+        query_strategy: String,
+    }
+    #[derive(Deserialize)]
+    struct PyPassage {
+        text: String,
+        score: f64,
+        ord: u32,
+    }
+
+    let parsed: PyOut = serde_json::from_str(&stdout).map_err(|e| {
+        format!("BL-L26: bm25 helper 输出 JSON 解析失败: {e}\nstdout: {stdout}")
+    })?;
+
+    Ok(AttachmentBm25Result {
+        passages: parsed.passages.into_iter().map(|p| AttachmentPassage {
+            text: p.text,
+            score: p.score,
+            ord: p.ord,
+        }).collect(),
+        total_passages: parsed.total_passages,
+        query_strategy: parsed.query_strategy,
+        error: String::new(),
     })
 }

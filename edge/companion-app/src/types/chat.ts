@@ -58,6 +58,15 @@ export interface Attachment {
   /** file 才有: 原文件 absolute path (~/.catfish/uploads/<ts>-<name>),
    *  LLM 用 execute_code 调 pandas/openpyxl 读完整数据. 永远有 (preview-only mode 下没截断概念). */
   keptPath?: string;
+
+  /** BL-L26 (5/7): 大文件 (≥50KB 全文) 的 BM25 sidecar 路径.
+   *  发消息时调 attachment_bm25_search(parsedTextPath, query) 取 top-K 段落,
+   *  在 toWire() 里替换 previewText 注入 user message. 小文件没这字段. */
+  parsedTextPath?: string;
+
+  /** BL-L26: BM25 检索结果 (上面 parsedTextPath 跑出来的 top-K 段落).
+   *  useChat send 时填充, toWire 拼进 user message 文本块. */
+  bm25Passages?: Array<{ text: string; score: number; ord: number }>;
 }
 
 export interface ChatMessage {

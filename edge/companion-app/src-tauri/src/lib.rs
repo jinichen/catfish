@@ -336,6 +336,8 @@ pub fn run() {
             // file_parse (五一 sprint Day 1: 文件上传解析 PDF/Excel/Word/CSV/TXT/MD)
             commands::file_parse::parse_file,
             commands::file_parse::parse_file_from_b64,
+            // BL-L26 (5/7): 大文件 (≥50KB) BM25 段落检索
+            commands::file_parse::attachment_bm25_search,
             // skill_audit (五一 sprint Day 2: skill 调用审计 + 30 天未用统计)
             commands::skill_audit::skill_audit_summary,
             // speech (五一 sprint Day 1 方案 C+: ffmpeg 录 + Whisper.cpp 转, 全本地)

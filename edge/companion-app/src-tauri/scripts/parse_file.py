@@ -461,6 +461,95 @@ def parse_text_preview(path: Path) -> tuple[str, dict[str, Any]]:
 
 
 # ============================================================
+# BL-L26 (5/7): 抽全文 (供 BM25 sidecar 用)
+# ============================================================
+#
+# preview 是给 LLM 一眼看梗概用的, 大文件 (>=50KB) BM25 检索需要全文.
+# 这里独立一套 extract_full_text 函数, 不动现有 parser, 也不让 preview 路径
+# 因 BM25 而变.
+#
+# 哪些格式做 sidecar:
+#   PDF / Word / Text (md/log/markdown/txt) — 纯文本, BM25 直接打分有效
+#   CSV / Excel — 表格数据, BM25 不太搭 (LLM 应走 pandas.read_csv 路径); 跳过.
+#
+# 为啥不直接复用 parser:
+#   1. parser 早就 _truncate 过, 拿不回全文
+#   2. preview 含 markup ("## Sheet: xxx"), 索引这些 markup 没意义
+#   3. BL-L26 是新特性, 隔离实现 / 测试容易
+
+# 触发 sidecar 的最小字节数 (utf-8 bytes, 不是 char)
+SIDECAR_MIN_BYTES = 50 * 1024
+
+
+def extract_full_text_pdf(path: Path) -> str:
+    """跨页全文."""
+    import pypdfium2 as pdfium  # noqa: PLC0415
+    pdf = pdfium.PdfDocument(str(path))
+    pieces: list[str] = []
+    for i in range(len(pdf)):
+        page = pdf[i]
+        textpage = page.get_textpage()
+        chunk = textpage.get_text_range() or ""
+        if chunk:
+            pieces.append(chunk)
+    return "\n\n".join(pieces)
+
+
+def extract_full_text_docx(path: Path) -> str:
+    """全段 + 表格扁平化."""
+    from docx import Document  # noqa: PLC0415
+    doc = Document(str(path))
+    pieces: list[str] = [p.text for p in doc.paragraphs if p.text.strip()]
+    for t in doc.tables:
+        for row in t.rows:
+            cells = [c.text for c in row.cells if c.text.strip()]
+            if cells:
+                pieces.append(" | ".join(cells))
+    return "\n\n".join(pieces)
+
+
+def extract_full_text_plain(path: Path) -> str:
+    """txt / md / markdown / log: 全文读出."""
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+_FULL_TEXT_EXTRACTORS = {
+    "pdf": extract_full_text_pdf,
+    "word": extract_full_text_docx,
+    "text": extract_full_text_plain,
+}
+
+
+def maybe_write_sidecar(path: Path, kind: str) -> str | None:
+    """如果 (1) kind 支持全文抽取 (2) 全文 utf-8 字节数 ≥ SIDECAR_MIN_BYTES,
+    把全文写到 `<path>.parsed.txt`, 返 sidecar 路径; 否则返 None.
+
+    异常: 抽全文失败 (PDF 损坏 / 编码错) 不抛, 静默返 None — 大文件 fallback 走 preview.
+    """
+    extractor = _FULL_TEXT_EXTRACTORS.get(kind)
+    if extractor is None:
+        return None
+    try:
+        text = extractor(path)
+    except Exception as e:
+        # 抽全文失败 — preview 路径正常, 只是没 BM25 加成
+        print(f"[parse_file] 抽全文失败 (BM25 sidecar 跳过): {e}", file=sys.stderr)
+        return None
+    if not text:
+        return None
+    encoded = text.encode("utf-8", errors="replace")
+    if len(encoded) < SIDECAR_MIN_BYTES:
+        return None
+    sidecar = path.with_suffix(path.suffix + ".parsed.txt")
+    try:
+        sidecar.write_bytes(encoded)
+        return str(sidecar)
+    except Exception as e:
+        print(f"[parse_file] 写 sidecar 失败: {e}", file=sys.stderr)
+        return None
+
+
+# ============================================================
 # 主 dispatcher
 # ============================================================
 
@@ -516,6 +605,12 @@ def main() -> int:
         "preview_chars": len(preview_text),
         "meta": meta,
     }
+
+    # BL-L26 (5/7): 大文件 (≥50KB 全文) 写 sidecar 供 BM25 检索. 小文件返 None.
+    sidecar_path = maybe_write_sidecar(path, kind)
+    if sidecar_path is not None:
+        result["parsed_text_path"] = sidecar_path
+
     print(json.dumps(result, ensure_ascii=False))
     return 0
 

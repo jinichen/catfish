@@ -12,6 +12,7 @@
  */
 
 import { useCallback, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useChatStore } from "../store/chat";
 import { streamChat, type OpenAITool } from "../lib/chat";
 import {
@@ -532,12 +533,48 @@ export function useChat(initialModel: string) {
         }
       }
 
+      // 0.7 BL-L26 (5/7): 大文件 (parsedTextPath 存在) → BM25 取 top-K 段落,
+      //    塞到 attachment.bm25Passages, toWire 时替代 preview 注入.
+      //    每个附件并发跑, 失败不阻塞 (返空数组 → fallback 走 preview).
+      const bm25Targets = attachments.filter(
+        (a) => a.kind === "file" && a.parsedTextPath,
+      );
+      const enrichedAttachments: Attachment[] = await (async () => {
+        if (bm25Targets.length === 0) return attachments;
+        const enriched = await Promise.all(
+          attachments.map(async (a) => {
+            if (a.kind !== "file" || !a.parsedTextPath) return a;
+            try {
+              type Bm25Out = {
+                passages: Array<{ text: string; score: number; ord: number }>;
+                total_passages: number;
+                query_strategy: string;
+                error: string;
+              };
+              const r = await invoke<Bm25Out>("attachment_bm25_search", {
+                parsedTextPath: a.parsedTextPath,
+                query: trimmed,
+                topK: 5,
+              });
+              if (r.error) {
+                console.warn("[BL-L26] bm25_search 软失败:", r.error);
+              }
+              return { ...a, bm25Passages: r.passages };
+            } catch (e) {
+              console.warn("[BL-L26] bm25_search 异常 (fallback preview):", e);
+              return a;
+            }
+          }),
+        );
+        return enriched;
+      })();
+
       // 1. push user message (带 attachments, in-memory only)
       const userMsg: ChatMessage = {
         id: uuid(),
         role: "user",
         content: trimmed,
-        attachments: attachments.length > 0 ? attachments : undefined,
+        attachments: enrichedAttachments.length > 0 ? enrichedAttachments : undefined,
         ts: nowIso(),
         status: "done",
       };

@@ -86,6 +86,7 @@ async function fileToAttachment(file: File): Promise<Attachment> {
   });
 
   // 5/5 重构: parse_file 改 preview-only, 返 preview_text + kept_path + meta
+  // 5/7 BL-L26: 大文件 (≥50KB 全文) 多返一个 parsed_text_path (BM25 sidecar)
   const result = await invoke<{
     filename: string;
     ext: string;
@@ -94,6 +95,7 @@ async function fileToAttachment(file: File): Promise<Attachment> {
     preview_chars: number;
     meta: Record<string, unknown>;
     kept_path: string;
+    parsed_text_path?: string;
   }>("parse_file_from_b64", {
     fileB64,
     filename: file.name || "upload",
@@ -108,6 +110,7 @@ async function fileToAttachment(file: File): Promise<Attachment> {
     previewText: result.preview_text,
     meta: result.meta,
     keptPath: result.kept_path,
+    parsedTextPath: result.parsed_text_path,
   };
 }
 

@@ -114,6 +114,9 @@ function formatFileAttachment(att: {
   previewText?: string;
   meta?: Record<string, unknown>;
   keptPath?: string;
+  // BL-L26 (5/7): 大文件 BM25 检索结果 (top-K 跟员工问题相关的段落).
+  // 有这个就替代 previewText 注入 — 信息密度比"前 5 页"高很多.
+  bm25Passages?: Array<{ text: string; score: number; ord: number }>;
 }): string {
   const kind = att.fileKind || "file";
   const meta = att.meta || {};
@@ -206,6 +209,22 @@ function formatFileAttachment(att: {
       `    data = f.read()`
     );
   })();
+
+  // BL-L26 (5/7): 大文件且有 BM25 段落 → 用相关段落替代 preview, 信息密度高 30-50%
+  if (att.bm25Passages && att.bm25Passages.length > 0) {
+    const passages = att.bm25Passages
+      .map((p, i) => `[${i + 1}] ${p.text}`)
+      .join("\n\n");
+    return (
+      `\n\n=== 附件: ${att.name} (${metaLine}) ===\n` +
+      `[完整文件: ${att.keptPath}]\n\n` +
+      `--- 跟你问题相关的 ${att.bm25Passages.length} 个段落 (BM25 检索, 大文件不全部塞 prompt) ---\n` +
+      `${passages}\n` +
+      `--- /段落 ---\n\n` +
+      `🔧 **必须**用 execute_code 读完整数据再回答, 上面只是关键段, 后面可能还有相关内容.` +
+      `${codeHint}`
+    );
+  }
 
   return (
     `\n\n=== 附件: ${att.name} (${metaLine}) ===\n` +

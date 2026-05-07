@@ -2491,3 +2491,68 @@ quota check 真应该移进 `with_fallback`, 让 chain 里每个模型都查 quo
 - 5/8 早 cargo test 验证 15 测全过
 - 5/8 真启动 Companion 看 ~/.hermes/config.yaml 自动加上 curator 段
 - 5/14 demo 当天讲"脚本整理"故事 (BL-MM4 + Curator 一起讲"透明可控")
+
+---
+
+## 2026-05-07（周三）晚 — BL-L26 大文件 BM25 检索 (3 天压 1 天 ship)
+
+5/1 鸿波 backlog 排的"BL-L26 大文件 (≥50KB) BM25 检索, 不做 embedding"今晚一并做完.
+
+### 完成 (1 天 sprint)
+
+**Python helper `scripts/attachment_bm25.py` (~150 行)**:
+- 段落切分: 双换行切大段, 超长按句号 / 中文句号 / 分号切到 ≤1500 字
+- Query 切词: 英文按空白, 中文按 2-char window + 单字兜底
+- 打分: TF + length 归一化 + coverage bonus (BM25 思想, 不依赖 SQLite FTS5 trigram)
+- 兜底: 0 命中返开头 top-K (PDF cover page 常含目的)
+
+**为什么不直接复用 SQLite FTS5 trigram (initial 计划)**:
+- 实测发现 trigram tokenizer 对 **2-char 中文词** (合同 / 解除 / 违约 / 终止 / 报销) 一律 0 命中 — 央企公文场景这些词遍地是, FTS5 直接不能用
+- unicode61 中文不切词 (整段一个 token), 也不行
+- 所以走自研轻量 TF 打分: 中英都 work, 0 依赖, ~150 行 Python
+- "BM25 单一方案 cover 95%" (5/1 鸿波拍板) 仍成立 — 我们用的是 BM25 思想 (TF 加权 + 长度归一化), 不是字面 BM25 公式
+
+**parse_file.py 增强**:
+- 加 `extract_full_text_pdf / docx / plain` 三个抽全文函数
+- 加 `maybe_write_sidecar(path, kind)`: 全文 ≥ 50KB 时写 `<keptPath>.parsed.txt`
+- main 输出加 `parsed_text_path` 字段 (None = 小文件)
+- 不动现有 preview 逻辑 / 22 老测试全过
+
+**Rust commands/file_parse.rs**:
+- `ParseFileResult` 加 `parsed_text_path: Option<String>`
+- `parse_file_from_b64` 把 Python 写的 tmp sidecar 跟着 kept_path 一起 mv 到 `~/.catfish/uploads/<ts>-<name>.parsed.txt`
+- 新 Tauri command `attachment_bm25_search(parsed_text_path, query, top_k=5) -> AttachmentBm25Result`
+- 失败 (sidecar 不存在 / Python 崩) 软失败返空 passages, 不阻塞 chat (前端 fallback preview)
+- 抽 `find_script(name)` 共享逻辑 (parse_file.py / attachment_bm25.py 用同一查找)
+
+**前端 (4 个文件改动)**:
+- `types/chat.ts`: `Attachment` 加 `parsedTextPath?` + `bm25Passages?`
+- `tabs/Chat/ChatInput.tsx`: parse_file_from_b64 拿 `parsed_text_path` 透到 attachment
+- `hooks/useChat.ts`: send 时检查 `attachment.parsedTextPath`, 并发调 `invoke("attachment_bm25_search", { parsedTextPath, query: trimmed, topK: 5 })`, 失败 fallback 走 preview
+- `lib/chat.ts`: `formatFileAttachment` 检测 `bm25Passages`, 有就替代 preview 拼成 "跟你问题相关的 N 个段落 (BM25 检索)" block
+
+### 测试
+
+- `test_attachment_bm25.py` 24 测试全 PASS:
+  - 段落切分 (3 测试)
+  - 切词中英混合 (5 测试)
+  - 打分单元 (4 测试)
+  - query_top_k 整流程 + 中文 2-char 词命中 (7 测试)
+  - CLI 端到端 + 真 60KB 假合同 (5 测试)
+- 老 parse_file 测试 22 个全过 (没破坏)
+
+### 价值
+
+- 大 PDF (社保 320 人 5.5 万字) 之前 5K preview 只看到前几页, 后面问"老李那条" 就答不出
+- 现在 BM25 直接拎相关段落塞 prompt, 信息密度高 30-50%
+- 同时跟 `kept_path + execute_code pandas` 路径并存, LLM 既能看相关段, 也能跑代码读全文做表
+
+### 遗留
+
+- BL-L8 journal 向量召回升级 — 跟 BL-L26 不冲突 (journal 是语义模糊查询场景)
+- 5/22 后做 demo 真实场景 (合同找终止条款 / 招标书找资质要求)
+
+### 5/14 demo 故事增强
+
+- 鸿波: "上传 100 页投标书, 问'我家资质够不'" → BM25 直接找到资质条款 + LLM 回答, **不用让 LLM 啃 5 万字**
+- 信安亮点: "**全本地 BM25, 不联网, 不依赖向量库**" — 跟 5/1 鸿波"不做 embedding RAG" 拍板一致

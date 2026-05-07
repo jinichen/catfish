@@ -308,7 +308,7 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 - ✅ **PDF anchor 模式结构化抽取** (5/6 BL-D17): parse_file.py 检测 ≥5 个身份证号/长 ID 锚点, 围切片提取 sub-records (社保险种 / 金额条目两 SUB_PATTERN), 跨页同人合并, 噪音 ID 过滤. 输出完整 JSON 到 /tmp/, LLM 直接 pandas.read_json 不啃 5.5 万字爆 context. 11 测试全过. **真用社保 PDF 320 人验证 0 错**.
 - ⬜ 视频上传 (帧采样 + 多模态) · 1 周 (BL-I3)
 - ⬜ 音频文件转写 (Whisper) · 0.5 周 (BL-I4)
-- ⬜ 大文件 (>50KB) BM25 检索 · 3 天 (BL-L26)
+- ✅ **大文件 (≥50KB) BM25 检索** · 5/7 ship (BL-L26) — 1 天压完: parse_file.py 写 sidecar `<keptPath>.parsed.txt` (PDF/Word/Text 全文), Tauri command `attachment_bm25_search` 调 attachment_bm25.py 取 top-K 段落 (TF + 长度归一化, 中文 2-char window 解决 trigram FTS5 不能命中央企 2 字词的痛). useChat.send 自动 enrich, formatFileAttachment 用 BM25 段落代替 5K preview. 24 单测 PASS
 
 #### #17 浮窗 / 全局 UX [Phase 1, 80%]  ★ 5/2 加系统通知
 > 让员工随时召唤鲶鱼 (类 Spotlight).
