@@ -1,4 +1,6 @@
-# BL-SEC-CARGO (5/8): cargo audit ignore — 上游 Tauri 2.x 传染的 unmaintained / unsound 警告
+# BL-SEC-CARGO (5/8): cargo audit ignore — 上游 Tauri 2.x 传染的 unmaintained / unsound 警告.
+# 位置约束: 必须在 working-directory 根 (src-tauri/audit.toml). rustsec/audit-check@v2
+#           读这一处, 不读 .cargo/audit.toml (那是 cargo-audit CLI 默认, 不是 GH Action).
 #
 # 19 条全是供应链卫生问题 (上游 crate 已停维护或有 unsound 边角 case),
 # 0 条是 exploitable CVE / RCE / 网络漏洞.

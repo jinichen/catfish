@@ -103,7 +103,7 @@ CI **每次 push + 每天定时**跑 4 套 audit, 任何 PR 引入新 CVE 立即
 **cargo audit 的 19 条 ignore 详细分析** (5/8 真机 cargo audit 结果):
 
 > 全部 19 条**0 个 exploitable CVE**, 都是上游 Tauri 2.x 传染的供应链 hygiene (unmaintained / unsound 边角 case).
-> 详细 ignore 列表 + 每条理由见 `edge/companion-app/src-tauri/.cargo/audit.toml`.
+> 详细 ignore 列表 + 每条理由见 `edge/companion-app/src-tauri/audit.toml`.
 
 | 类别 | 数量 | 实际威胁 | macOS 演示加载? |
 |---|---|---|---|
@@ -122,7 +122,7 @@ CI **每次 push + 每天定时**跑 4 套 audit, 任何 PR 引入新 CVE 立即
 > "鲶鱼 CI 跑了完整 cargo audit 套件 + 19 条 ignore 全部带 RUSTSEC ID + tracking link.
 >  这 19 条全是上游 Tauri / Rust 生态的 unmaintained 标记, 没有一个是远程 / 本地 exploitable
 >  CVE. 等 Tauri 2.11+ 升 GTK4 后大部分自动解决.
->  完整列表 + 每条理由: edge/companion-app/src-tauri/.cargo/audit.toml"
+>  完整列表 + 每条理由: edge/companion-app/src-tauri/audit.toml"
 
 ---
 

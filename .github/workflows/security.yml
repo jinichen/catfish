@@ -57,13 +57,20 @@ jobs:
   cargo-audit:
     name: cargo audit (Tauri)
     runs-on: ubuntu-latest
+    # 5/8 BL-SEC-CARGO: rustsec/audit-check@v2 要写 GitHub Checks API 显示
+    # annotations, 默认 GITHUB_TOKEN 没 checks:write 权限会报
+    # "Resource not accessible by integration".
+    permissions:
+      contents: read
+      checks: write
+      issues: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       # 5/8 BL-SEC-CARGO: ignore 19 个上游 Tauri 2.x GTK3 binding /
       # unmaintained crate 警告. 全是供应链 hygiene, 0 个 exploitable CVE.
       # 等 Tauri 2.11+ 切 GTK4 后自动消除大部分.
-      # ignore 详细列表 + 理由见 edge/companion-app/src-tauri/.cargo/audit.toml.
+      # ignore 详细列表 + 理由见 edge/companion-app/src-tauri/audit.toml.
       - uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
