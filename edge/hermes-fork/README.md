@@ -31,9 +31,40 @@ hermes-fork (这层)        → 实际跑起来的 UI 视觉
 1. 用 **patch 文件**记录所有要改的位置
 2. `install.sh` 应用补丁（备份原文件）
 3. `uninstall.sh` 还原原文件
-4. `hermes update` 后需要重新 `install.sh`（脚本会处理冲突）
+4. **git hooks 自动重 patch** —— 5/7 BL-D14.5 起, install.sh 会同时装
+   `post-merge / post-rewrite / post-checkout` 三个 git hook 到 `~/.hermes/hermes-agent/.git/hooks/`,
+   每次 `hermes update` / `git pull` / `git merge` / `git rebase` 后 git 会自动调用我们的 hook,
+   重跑 `apply_brand_patch.py --apply`. 因为 RULES 是幂等的, 重复运行无副作用.
+   员工不用记得"升级后要重 patch", 也不会被 hermes 升级偶发覆盖。
 
 补丁内容只改字符串字面量，不动逻辑。最低风险。
+
+## 升级保护 (5/7 BL-D14.5)
+
+```
+git pull (员工 / hermes update / cron)
+  └→ git 自动调 .git/hooks/post-merge
+       └→ python3 apply_brand_patch.py --apply
+            ├→ 已 patched 字符串 → DONE (跳过)
+            ├→ 0.13/0.14 新增字符串没规则 → MISS (打日志, 不挂)
+            └→ 真覆盖了的 → PATCH (重新打回去)
+```
+
+新增三条命令:
+
+```bash
+# 装钩子 (install.sh 默认会装, 这是单独装的入口)
+python3 apply_brand_patch.py --install-hooks
+
+# 卸钩子 (uninstall.sh 会带着卸)
+python3 apply_brand_patch.py --uninstall-hooks
+
+# 验证品牌完好 (升级后兜底, CI 用)
+python3 apply_brand_patch.py --verify
+```
+
+`--verify` 检查 4 个关键文件 (banner.py / skin_engine.py / cli.py / branding.tsx) 的关键字串。
+任何一处发现 hermes 原字面量回归就 exit 1 + 提示重跑。
 
 ## License 声明
 

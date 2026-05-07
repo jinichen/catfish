@@ -12,6 +12,13 @@
     python3 apply_brand_patch.py            # dry-run，看会改什么
     python3 apply_brand_patch.py --apply    # 真的改
     python3 apply_brand_patch.py --revert   # 还原
+    python3 apply_brand_patch.py --verify   # 检查 branding 还在不在（CI / hook 用）
+    python3 apply_brand_patch.py --install-hooks  # 装 git hooks 到 ~/.hermes/hermes-agent/.git/hooks/
+
+未来 hermes 升级保护 (5/7 BL-D14.5):
+    --install-hooks 会装 3 个 git hook (post-merge / post-checkout / post-rewrite),
+    每次 git pull / merge / rebase 后自动重跑 --apply, 让升级不再撞品牌补丁.
+    install.sh 默认会调 --install-hooks, 一次装好长期生效.
 """
 from __future__ import annotations
 
@@ -507,10 +514,252 @@ def revert() -> int:
     return 0
 
 
+# ============================================================
+# verify: 检查 branding 还在不在 (CI / hook 用)
+# ============================================================
+#
+# 思路: 找几个**显眼到员工一眼能看出问题**的关键字符串. 任意一条还是英文 hermes
+#      字面量, 就报错退出 1. hook 据此决定要不要重跑 --apply.
+#
+# 选关键字标准:
+#   - 出现在启动 banner / 退出语 / 状态栏 — 员工每天看
+#   - 改了之后字符串完全不一样 — 不会跟其他东西误命中
+#   - 跨多个 hermes 版本都稳定存在 — 不会因为 0.13 把它删了报假错
+
+VERIFY_MARKERS: list[tuple[str, list[str], list[str]]] = [
+    # (rel_path, must_contain_any_of, must_NOT_contain_any_of)
+    (
+        "hermes_cli/banner.py",
+        ["鲶鱼"],
+        [
+            'base = f"Hermes Agent v{VERSION}',  # banner 标题没改
+            'HERMES_AGENT_LOGO = """',  # 大字 LOGO 没清
+        ],
+    ),
+    (
+        "hermes_cli/skin_engine.py",
+        ["鲶鱼", "再见 🐟"],
+        [
+            '"agent_name": "Hermes Agent"',
+            '"goodbye": "Goodbye! ⚕"',
+        ],
+    ),
+    (
+        "cli.py",
+        ["鲶鱼", "再见 🐟"],
+        [
+            '"⚕ NOUS HERMES"',
+            'goodbye = "Goodbye! ⚕"',
+        ],
+    ),
+    (
+        "ui-tui/src/components/branding.tsx",
+        ["鲶鱼平台"],
+        ["Nous Research · Messenger of the Digital Gods"],
+    ),
+]
+
+
+def verify() -> int:
+    """branding 完好性检查. 返回 0 = OK, 1 = 退化/缺失."""
+    bad = 0
+    for rel_path, musts, must_nots in VERIFY_MARKERS:
+        target = HERMES_ROOT / rel_path
+        if not target.exists():
+            # 文件被 hermes 升级删了 — 不算 catfish 的错, warning 但不挂
+            print(f"  WARN  {rel_path}: 文件不存在 (hermes 可能改结构了)")
+            continue
+        try:
+            content = _read(target)
+        except Exception as e:
+            print(f"  WARN  {rel_path}: 读不出来 ({e})")
+            continue
+        for needle in musts:
+            if needle not in content:
+                print(f"  FAIL  {rel_path}: 期望含 {needle!r} 但没有 (品牌退化)")
+                bad += 1
+        for stink in must_nots:
+            if stink in content:
+                print(f"  FAIL  {rel_path}: 出现了 {stink!r} (hermes 原字符串回归)")
+                bad += 1
+    if bad == 0:
+        print("  OK    catfish branding 完好 ({} 个文件检查通过)".format(len(VERIFY_MARKERS)))
+        return 0
+    print()
+    print(f"❌ 发现 {bad} 处品牌退化 — 需要 `python3 apply_brand_patch.py --apply` 修复")
+    return 1
+
+
+# ============================================================
+# install_hooks: 在 ~/.hermes/hermes-agent/.git/hooks/ 安装自动重 patch 钩子
+# ============================================================
+#
+# 5/7 BL-D14.5 设计:
+#   场景: 员工 / 同事 / cron 跑 `hermes update` 或 `cd ~/.hermes/hermes-agent && git pull`
+#         上游 hermes 改了 banner.py / branding.tsx, catfish 品牌补丁被覆盖,
+#         员工下次启动看到 "Hermes Agent" 大字, 跟产品故事不符.
+#
+#   解法: git 每次 merge / pull / rebase / checkout 后自动跑这个脚本 --apply,
+#         把品牌补丁打回去. 因为 RULES 是幂等的 (已 patched 跳过), 重复运行无副作用.
+#
+#   钩子选 3 个:
+#     post-merge    git pull (默认 merge 模式) / git merge 后跑
+#     post-rewrite  git pull --rebase / git rebase 后跑
+#     post-checkout 切分支 / git checkout -b 后跑 (catch worktree 操作)
+#
+#   钩子内容: 一行 exec — 调用本脚本 --apply, stderr 收掉, 失败不阻塞 git 操作.
+
+HOOK_NAMES = ["post-merge", "post-rewrite", "post-checkout"]
+HOOK_MARKER = "# managed by catfish/edge/hermes-fork/apply_brand_patch.py (BL-D14.5)"
+
+
+def _hook_body(patch_script: Path) -> str:
+    """生成 hook 脚本内容. patch_script 是 apply_brand_patch.py 的绝对路径."""
+    return f"""#!/usr/bin/env bash
+{HOOK_MARKER}
+# 每次 git merge / pull / rebase / checkout 后自动重跑 catfish 品牌补丁,
+# 让 hermes 升级不会再覆盖鲶鱼品牌. 失败不阻塞 git 操作 (品牌不是 git 的事).
+set +e
+PATCH_PY={shlex_quote(str(patch_script))}
+if [ -f "$PATCH_PY" ]; then
+    # 静默重跑 — 已 patched 的会被自动跳过 (幂等).
+    # 只在真有改动 / 失败时打印, 平常 git pull 输出干净.
+    OUT=$(python3 "$PATCH_PY" --apply 2>&1)
+    EC=$?
+    if [ $EC -ne 0 ] || echo "$OUT" | grep -qE '(MISS|ERROR|FAIL)'; then
+        echo "🐟 catfish brand patch: 检测到 hermes 升级带来的新字符串"
+        echo "$OUT" | grep -E '(PATCH|MISS|FAIL|ERROR)' | head -20
+        echo "🐟 完整输出: python3 $PATCH_PY"
+    fi
+fi
+exit 0
+"""
+
+
+def shlex_quote(s: str) -> str:
+    """简化版 shlex.quote, 避免 import."""
+    if not s or any(c in s for c in " \t\"'$`\\!"):
+        return "'" + s.replace("'", "'\\''") + "'"
+    return s
+
+
+def install_hooks(patch_script: Path | None = None) -> int:
+    """在 hermes-agent/.git/hooks/ 装 post-merge/rewrite/checkout 钩子.
+
+    - 已存在 catfish 钩子 → 覆盖 (确保 patch_script 路径是最新的)
+    - 已存在非 catfish 钩子 (员工自己写的) → 备份成 <name>.before-catfish 再装
+    - 没有 .git 目录 → 报错退出 (hermes 安装方式不一样, 钩子方案不适用)
+    """
+    git_dir = HERMES_ROOT / ".git"
+    if not git_dir.exists():
+        print(f"❌ {git_dir} 不存在 — hermes 不是 git clone 安装的, 钩子方案跳过")
+        print("   建议: 改成手动跑 install.sh -y 兜底, 或者改 hermes 安装方式")
+        return 1
+
+    # git submodule / worktree 时 .git 是文件而不是目录, 内容是 "gitdir: ..."
+    if git_dir.is_file():
+        try:
+            line = git_dir.read_text(encoding="utf-8").strip()
+            if line.startswith("gitdir:"):
+                actual = line.split(":", 1)[1].strip()
+                git_dir = (HERMES_ROOT / actual).resolve()
+        except Exception as e:
+            print(f"❌ 解析 .git 文件失败: {e}")
+            return 1
+
+    hooks_dir = git_dir / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+
+    if patch_script is None:
+        patch_script = Path(__file__).resolve()
+
+    body = _hook_body(patch_script)
+
+    installed = 0
+    for name in HOOK_NAMES:
+        hook = hooks_dir / name
+        if hook.exists():
+            existing = hook.read_text(encoding="utf-8", errors="replace")
+            if HOOK_MARKER in existing:
+                # 已经是 catfish hook, 检查 patch 路径有没有更新
+                if str(patch_script) in existing:
+                    print(f"  DONE  {name} 已装 (路径正确)")
+                    continue
+                # 路径变了 — 覆盖
+                hook.write_text(body, encoding="utf-8")
+                hook.chmod(0o755)
+                print(f"  PATCH {name} 路径更新")
+                installed += 1
+                continue
+            # 员工自己装的钩子 — 备份再 chained
+            backup = hook.with_suffix(hook.suffix + BACKUP_SUFFIX)
+            if not backup.exists():
+                shutil.copy2(hook, backup)
+            # 在原钩子基础上 append catfish 部分
+            chained = existing.rstrip() + "\n\n" + body
+            hook.write_text(chained, encoding="utf-8")
+            hook.chmod(0o755)
+            print(f"  PATCH {name} 已装 (chained 在原钩子后, 备份 .before-catfish)")
+            installed += 1
+        else:
+            hook.write_text(body, encoding="utf-8")
+            hook.chmod(0o755)
+            print(f"  INSTALL {name}")
+            installed += 1
+
+    print()
+    print(f"装了 {installed} 个 git hook 到 {hooks_dir}")
+    print("以后 hermes 升级 (git pull / merge / rebase) 后会自动重跑品牌补丁.")
+    print("验证: cd ~/.hermes/hermes-agent && git pull --quiet && python3 {} --verify".format(
+        Path(__file__).name,
+    ))
+    return 0
+
+
+def uninstall_hooks() -> int:
+    """卸载 catfish 钩子 (恢复 .before-catfish 备份, 或删除纯 catfish 的)."""
+    git_dir = HERMES_ROOT / ".git"
+    if git_dir.is_file():
+        line = git_dir.read_text(encoding="utf-8").strip()
+        if line.startswith("gitdir:"):
+            git_dir = (HERMES_ROOT / line.split(":", 1)[1].strip()).resolve()
+    hooks_dir = git_dir / "hooks"
+    if not hooks_dir.exists():
+        print("没装过钩子")
+        return 0
+
+    removed = 0
+    for name in HOOK_NAMES:
+        hook = hooks_dir / name
+        if not hook.exists():
+            continue
+        content = hook.read_text(encoding="utf-8", errors="replace")
+        if HOOK_MARKER not in content:
+            continue
+        backup = hook.with_suffix(hook.suffix + BACKUP_SUFFIX)
+        if backup.exists():
+            shutil.copy2(backup, hook)
+            backup.unlink()
+            print(f"  RESTORE {name} (从 .before-catfish 还原)")
+        else:
+            hook.unlink()
+            print(f"  REMOVE {name}")
+        removed += 1
+    print(f"卸了 {removed} 个钩子")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true", help="真的应用替换（默认 dry-run）")
     parser.add_argument("--revert", action="store_true", help="还原所有 .before-catfish 备份")
+    parser.add_argument("--verify", action="store_true",
+                        help="检查 branding 是否完好 (CI / hook 用, 退化 exit 1)")
+    parser.add_argument("--install-hooks", action="store_true",
+                        help="装 git hooks 到 ~/.hermes/hermes-agent/.git/hooks/ "
+                             "(post-merge/rewrite/checkout, 自动重跑 patch)")
+    parser.add_argument("--uninstall-hooks", action="store_true",
+                        help="卸 catfish 钩子, 恢复原钩子 (如果之前 chain 过)")
     args = parser.parse_args()
 
     if not HERMES_ROOT.exists():
@@ -519,6 +768,19 @@ def main() -> int:
 
     if args.revert:
         return revert()
+    if args.verify:
+        print(f"=== Catfish brand verify ===")
+        print(f"目标目录：{HERMES_ROOT}")
+        print()
+        return verify()
+    if args.install_hooks:
+        print(f"=== 装 catfish git hooks ===")
+        print(f"目标目录：{HERMES_ROOT}")
+        print()
+        return install_hooks()
+    if args.uninstall_hooks:
+        print(f"=== 卸 catfish git hooks ===")
+        return uninstall_hooks()
 
     mode = "APPLY" if args.apply else "DRY-RUN"
     print(f"=== Catfish brand patch ({mode}) ===")

@@ -48,8 +48,14 @@ echo -e "${BOLD}[2/3] 应用补丁${RESET}"
 python3 "$PATCH_PY" --apply
 echo
 
-# 4. 检查是否需要 rebuild ui-tui
-echo -e "${BOLD}[3/3] 检查 TS 是否需要 rebuild${RESET}"
+# 4. 装 git hooks (5/7 BL-D14.5: 防 hermes 升级再覆盖品牌)
+echo -e "${BOLD}[3/4] 装 git hooks (post-merge / post-rewrite / post-checkout)${RESET}"
+echo "    以后 hermes 升级 / git pull 后会自动重跑品牌补丁, 不用手动."
+python3 "$PATCH_PY" --install-hooks
+echo
+
+# 5. 检查是否需要 rebuild ui-tui
+echo -e "${BOLD}[4/4] 检查 TS 是否需要 rebuild${RESET}"
 UI_TUI="$HERMES_ROOT/ui-tui"
 if [ -d "$UI_TUI/dist" ]; then
     echo -e "    ${YELLOW}警告${RESET}：$UI_TUI/dist 存在，说明 hermes 跑的是编译产物"
@@ -84,8 +90,17 @@ cat <<EOF
     很可能 ui-tui 是预编译 dist，需要 rebuild：
         cd $UI_TUI && npm install && npm run build
 
-卸载（还原所有 .before-catfish 备份）：
+验证品牌完好（CI / 升级后用）：
+    python3 $PATCH_PY --verify
+    # 退出 0 = 品牌完好, 退出 1 = 退化, 提示重跑 --apply
+
+升级 hermes 后（hooks 已自动处理, 这里是兜底）：
+    cd ~/.hermes/hermes-agent && git pull        # hooks 会自动重跑 patch
+    python3 $PATCH_PY --verify                   # 验证一下
+
+卸载（还原所有 .before-catfish 备份 + 卸 hooks）：
     python3 $PATCH_PY --revert
+    python3 $PATCH_PY --uninstall-hooks
     # 或者整个用 uninstall.sh：
     bash $SCRIPT_DIR/uninstall.sh
 EOF

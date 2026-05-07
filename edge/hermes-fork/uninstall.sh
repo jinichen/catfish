@@ -7,6 +7,9 @@ PATCH_PY="$SCRIPT_DIR/apply_brand_patch.py"
 
 echo "=== Catfish brand patch uninstaller ==="
 python3 "$PATCH_PY" --revert
+echo
+echo "--- 卸 git hooks ---"
+python3 "$PATCH_PY" --uninstall-hooks
 
 echo
 echo "还原完成。重启 hermes 看到的应该是原始 Nous Research/Hermes 字样。"
