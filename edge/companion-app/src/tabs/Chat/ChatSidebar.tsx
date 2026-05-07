@@ -76,6 +76,21 @@ export default function ChatSidebar({
     };
   }, [refresh, refreshKey]);
 
+  // 5/7 BL-D14: 自动 polling sidebar (5s 一次), 让微信 / 飞书 / 企微进来的
+  // 新消息自动出现, 不用员工手动点刷新.
+  // 5s 间隔权衡:
+  //   - 太快 (1s) → CPU/IO 浪费, sidebar 抖动
+  //   - 太慢 (30s) → 跨 IM 切换时员工感觉卡 (微信发完切 Companion 没看到)
+  //   - 5s → 跟人手动点刷新差不多速度, 不卡
+  // SQLite 读 ~10K 条 sessions 200ms 内, 5s 一次完全 OK.
+  useEffect(() => {
+    const POLL_MS = 5000;
+    const t = window.setInterval(() => {
+      void refresh();
+    }, POLL_MS);
+    return () => window.clearInterval(t);
+  }, [refresh]);
+
   return (
     <aside
       style={{

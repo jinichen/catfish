@@ -271,12 +271,12 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 - ✅ QQ Bot / Yuanbao (元宝)
 - ✅ Telegram / Discord / Slack / WhatsApp / Signal / Email / SMS / iMessage / IRC / Mattermost / Matrix / Microsoft Teams
 
-**catfish 自有 (edge/feishu-monitor/, 5/2 ship 60%)** — 留作 hermes gateway 不可用时 fallback:
-- ✅ Chrome CDP 9222 → MutationObserver → Python daemon (单向监听)
-- ✅ osascript 通知 / Hermes inbox / 草稿生成 (~/.catfish/feishu-drafts/)
-- ✅ tests (test_relevance) + scripts/install.sh
-- 优点: 无需 OAuth + 无需公网 webhook (员工 mac 自己开飞书 Web)
-- 缺点: 单向只读 + 依赖 Chrome 在跑 + 草稿要员工手动复制粘贴
+**catfish/edge/feishu-monitor/ (CDP 模式) — 🪦 deprecated 5/7 决定砍, 5/22 后 git rm**:
+- ❌ hermes gateway feishu (WebSocket) 全覆盖, CDP 单向 + 需 Chrome 完全劣势
+- ❌ 维护两套代码增加复杂度, 客户故事变乱
+- ❌ 鸿波 5/7 拍板 "原来这个飞书没意义了不是吗" — 砍
+- 5/22 后 git rm edge/feishu-monitor/ + 删 src/ tests/ scripts/
+- (短期 5/14 demo 前不删代码, 怕动了别的, 但文档不再提)
 
 **5/14 demo 决策 (5/7 鸿波拍板)**:
 - 演 hermes gateway setup wizard (展示 19 platform 列表, 客户看到飞书/微信/钉钉/企微全有)
@@ -284,10 +284,10 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 - 跟客户讲: "你们生产用就选飞书, 一样流程, 我们底层是 hermes 不重写"
 
 **5/14 后路线**:
-- ⬜ BL-D14 hermes feishu gateway 内部测试 (鸿波公司飞书机器人申请) · 1-2 周
-- ⬜ BL-D15 / BL-D16 (钉钉 / 企微) — 不再单独做, 直接用 hermes 内置
-- ⬜ catfish/edge/feishu-monitor 改 fallback 角色 (员工没 OAuth 时仍能用) · 0.5 周
-- ⬜ 跟 hermes brand patch 冲突 fix (5/7 update 时撞了, 5/8+ 修)
+- ⬜ BL-D14 hermes feishu/wecom/weixin gateway 真接通 (5/8 IT 凭证 → 5/13 dryrun) · 1 周
+- ⬜ BL-D15 / BL-D16 (钉钉) — 不再单独做, 直接用 hermes 内置
+- 🪦 catfish/edge/feishu-monitor (CDP) — 5/22 后 git rm, 5/7 鸿波拍板砍
+- ⬜ 跟 hermes brand patch 冲突 fix (5/7 update 时撞了, 5/8+ 修, BL-D14.5)
 
 #### #14 ★ 业务 skill 库 [Phase 1, 50%]  ★ 5/6 端到端验证 43 测试全过
 > 客户 demo / PoC 看的"摸得着的能力", 现 3 个 (5/2 拍板 project-approval).
