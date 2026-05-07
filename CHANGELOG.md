@@ -2556,3 +2556,33 @@ quota check 真应该移进 `with_fallback`, 让 chain 里每个模型都查 quo
 
 - 鸿波: "上传 100 页投标书, 问'我家资质够不'" → BM25 直接找到资质条款 + LLM 回答, **不用让 LLM 啃 5 万字**
 - 信安亮点: "**全本地 BM25, 不联网, 不依赖向量库**" — 跟 5/1 鸿波"不做 embedding RAG" 拍板一致
+
+---
+
+## 2026-05-07（周三）深夜 — docs 修订: BL-MM7/MM8 状态修正 (实际已 ship)
+
+### 起因
+鸿波: "你再仔细看下鲶鱼的代码, 1-4 是不是都 ship 了?"
+
+我之前回答 hermes "deepening model of who you are" 时,把鲶鱼对应的 4 层 (硬事实/工作习惯/文书风格/性格关系) 状态报错:
+- 说 BL-MM7 是 "5/8 后启动"
+- 说 BL-MM8 是 "6 月起做"
+
+### 真实状态 (跑代码 + 测试验证)
+两个**当天 5/6 鸿波"直接开始"拍板后立即 ship 完了**, 是文档没更新.
+
+| BL | 文件 | 行数 | 测试 | Dashboard 卡 |
+|---|---|---|---|---|
+| MM7 | edge/tool-bridge/.../user_profile.py | 317 | 19 PASS | UserProfileCard.tsx 接进 DashboardTab |
+| MM8 | edge/tool-bridge/.../style_fingerprint.py | 454 | 20 PASS | StyleFingerprintCard.tsx 接进 DashboardTab |
+
+跟 MM2/MM3 (硬事实记忆) + MM5/MM6 (主动学 + feedback) 一起, 鲶鱼的 "深度模型" 4 层全 ship.
+
+### 改了
+- BACKLOG.md M.2 BL-MM7 / MM8 状态 ⬜ → ✅ 5/6
+- FEATURE-TRACKS.md M.2 同步
+- FEATURE-TRACKS.md "demo 后" 栏目划掉 MM7/MM8 (已经在 demo 前完成)
+
+### 为什么 doc 错了
+5/6 G1-G7 安全 GAP 闭环那天 sprint 高强度, MM7/MM8 ship 完没回头改 docs/.
+未来 SOUL 加纪律: "ship 一个 BL 必同时改 docs/ 状态, 不留尾".

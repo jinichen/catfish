@@ -399,8 +399,8 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 **M.2 主动学习 / feedback / 越用越懂员工:**
 - ✅ **BL-MM5 主动学习员工偏好 (SOUL 章节)** (5/4 晚, **方案 A**): 0 后端代码
 - ✅ **BL-MM6 显式 feedback UI** (5/6, **方案 B** ship): ChatBubble 加 👍/👎/"改" 按钮
-- ⬜ **BL-MM7 结构化用户画像** (~1 周, **方案 C**): `~/.catfish/user_profile.json` (writing_style / work_pattern / personality_traits + evidence_count) + 满 N 次主动确认 + Dashboard 卡可调可锁. **不依赖 hermes 升级** (鲶鱼独立存储 + catfish_remember 工具), 5/14 demo 后任何时间能做
-- ⬜ **BL-MM8 文书风格 fingerprint** (~1-2 周, **方案 D**): 员工历史文档抽风格指纹 (本地 sklearn 或简单统计 freq + 句长 + 词偏好), 存 `~/.catfish/style_fingerprint.json`, 写新文档时 skill 调用. 解决"每次写汇报都从零猜"央企痛点. **不依赖 hermes 升级**, 5/14 demo 后任何时间能做
+- ✅ **BL-MM7 结构化用户画像** (5/6 鸿波"直接开始"拍板当天 ship, **方案 C**): `~/.catfish/user_profile.json` (writing_style / work_pattern.peak_hours/task_pref/review_pref / personality_traits + evidence_count). 3 次 evidence 才 propose, 红线字段严禁 LLM propose, 员工可 lock. user_profile.py 317 行 + UserProfileCard.tsx + 19 单测 PASS
+- ✅ **BL-MM8 文书风格 fingerprint** (5/6 跟 MM7 同日 ship, **方案 D**): 员工历史文档抽: 句长 / 段落数 / 词频 (jieba 分词 + char-level n-gram 兜底) / 标点偏好 / 列表-散文比例 / 3-5 样本句. 存 `~/.catfish/style_fingerprint.json`, 写新文档时 skill 调用. style_fingerprint.py 454 行 + StyleFingerprintCard.tsx + 20 单测 PASS
 
 - 见 `edge/identity/SOUL.md § 记忆覆盖纪律 + § 主动学习员工偏好` + `docs/BACKLOG.md § M`
 
@@ -651,8 +651,8 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 **🟠 demo 后 (5/15+)**:
 - 完整 BL-E13 主动闲聊 (节假日 / snooze / 配置 UI) · ~1-2 周
 - ~~**BL-MM3 hermes memory_save 包版本化** (跟 5/15 hermes 0.10→0.12 升级捆绑)~~ ✅ 5/7 提前完成 (跟 BL-D14.5 一起)
-- **BL-MM7 结构化用户画像** (方案 C, **不依赖 hermes 升级**, 鲶鱼自己存) · ~1 周
-- **BL-MM8 文书风格 fingerprint** (方案 D, **不依赖 hermes 升级**) · ~1-2 周
+- ~~**BL-MM7 结构化用户画像** · ~1 周~~ ✅ 5/6 提前 ship (跟 MM6/feedback 同日)
+- ~~**BL-MM8 文书风格 fingerprint** · ~1-2 周~~ ✅ 5/6 提前 ship (跟 MM7 同日)
 - BL-E27.3 桌宠联动 BL-E13/E15 + 全屏自动隐藏 · 2-3 天 (6 月初)
 - 真技术沙箱 nsjail/sandbox-exec (G3 升级) · 5/22 后
 - macOS Notarization 真公证 + 第三方渗透测试 · 5/22 后

@@ -301,8 +301,8 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 |---|---|---|---|
 | BL-MM5 | 主动学习员工偏好 (SOUL 章节) — 4 类信号 + 频率纪律 (3+ 次同 pattern 才主动问) + 落盘格式 + ❌ 禁止 (不评论生活/情绪) | ✅ 5/4 | 0 后端代码. **方案 A**. 跟 BL-MM1 区分: MM1 被动 correction, MM5 主动学 preference |
 | BL-MM6 | 显式 feedback UI — ChatBubble 加 👍 / 👎 / "改一下" 按钮 + `/api/feedback` + `~/.catfish/feedback.jsonl` + Dashboard "你给我的反馈" 卡 | ⬜ 5/8 后启动, ~2-3 天 | **方案 B**. 客户演示加分 ("能给反馈"), 跟 BL-MM5 配合: 显式信号补 LLM 自觉的不足 |
-| BL-MM7 | 结构化用户画像 — `~/.catfish/user_profile.json` (writing_style / work_pattern / personality_traits + evidence_count) + 满 N 次主动问 + Dashboard 卡可调可锁 | ⬜ 5/8 后启动, ~1 周 | **方案 C**. 真"自进化"故事, 客户能看 user_profile.json 知道"鲶鱼真在学我" |
-| BL-MM8 | 文书风格 fingerprint — 员工历史文档抽风格指纹, 写新文档前调 fingerprint 调整生成参数, "本次按你 5 月 XX 那篇汇报风格写" | ⬜ 6 月起, ~1-2 周 | **方案 D**. 央企文书场景刚需. 解决"每次写汇报小鲶都从零猜". 前置: 历史文档积累 (cold start 问题) |
+| BL-MM7 | 结构化用户画像 — `~/.catfish/user_profile.json` (writing_style / work_pattern / personality_traits + evidence_count) + 满 N 次主动问 + Dashboard 卡可调可锁 | ✅ 5/6 (鸿波"BL-MM7、MM8 直接开始"拍板当天 ship) | edge/tool-bridge/src/catfish_tool_bridge/user_profile.py (317 行) + UserProfileCard.tsx + 19 单测 PASS. 3 次 evidence 才 propose / 红线字段 (健康/财务/感情) 严禁 LLM propose / 员工 lock 防 LLM 改 / Dashboard 一键清空 |
+| BL-MM8 | 文书风格 fingerprint — 员工历史文档抽风格指纹, 写新文档前调 fingerprint 调整生成参数, "本次按你 5 月 XX 那篇汇报风格写" | ✅ 5/6 (跟 MM7 同日 ship) | edge/tool-bridge/src/catfish_tool_bridge/style_fingerprint.py (454 行) + StyleFingerprintCard.tsx + 20 单测 PASS. 抽: 句长 / 段落数 / 词频 (jieba 中文分词 + char-level n-gram 兜底) / 标点偏好 / 列表-散文比例 / 3-5 样本句. 时间衰减 |
 
 ---
 
