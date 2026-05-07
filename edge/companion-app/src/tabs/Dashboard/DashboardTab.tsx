@@ -1,9 +1,20 @@
-/** 仪表盘 tab — 按角色 conditional render (五一 sprint 5/2 RBAC).
+/** 仪表盘 tab — 5/7 优化分组折叠 (鸿波反馈"内容太多").
  *
- * 视图分层:
- *   employee:  Identity + Services + Quota + Catalog + Skills + Learning + SkillAudit + Audit
- *   manager:   employee 全部 + 每个 managed_department × (DepartmentQuota + DepartmentAudit)
- *   admin:     manager 视图 + (将来) 全员 / 全模型 / 全部门聚合卡 (P2)
+ * 18 张卡分 5-7 组:
+ *   "今日" (开): Proactive + Tasks
+ *   "我自己" (开): Identity + AgentPrefs
+ *   "鲶鱼对你的认识" (开): Relation + Memory + UserProfile + StyleFingerprint + Feedback
+ *   "服务" (收): Services + Quota + Catalog + SkillsMcp
+ *   "审计/学习" (收): Learning + SkillAudit + Audit
+ *   "部门管理" (manager/admin only, 开): DepartmentQuota + DepartmentAudit
+ *   "全局" (admin only, 收): AdminGlobal
+ *
+ * localStorage 记员工偏好.
+ *
+ * 视图分层 (跟 RBAC 配合):
+ *   employee:  前 5 组
+ *   manager:   employee + 部门组
+ *   admin:     manager + 全局组
  */
 
 import IdentityCard from "./IdentityCard";
@@ -25,6 +36,7 @@ import FeedbackSummaryCard from "./FeedbackSummaryCard";
 import UserProfileCard from "./UserProfileCard";
 import StyleFingerprintCard from "./StyleFingerprintCard";
 import TasksCard from "./TasksCard";
+import CollapsibleSection from "./CollapsibleSection";
 import { useMe } from "../../hooks/useMe";
 
 export default function DashboardTab() {
@@ -39,53 +51,98 @@ export default function DashboardTab() {
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "repeat(2, 1fr)",
-        gap: "var(--space-4)",
+        gridTemplateColumns: "1fr",
+        gap: "var(--space-2)",
       }}
     >
-      {/* 主动闲聊 BL-E13: 醒目放第一个, 鼓励员工先聊一句再做事 */}
-      <ProactiveCard />
+      {/* 第一组: 今日 — 主动闲聊 + 后台任务 (高频, 默认开, 顶部) */}
+      <CollapsibleSection
+        id="today"
+        title="🔥 今日"
+        count={2}
+      >
+        <ProactiveCard />
+        <TasksCard />
+      </CollapsibleSection>
 
-      {/* BL-A2.4 (5/7): 后台任务 — 长任务在跑时员工能看到状态 + 完成自动消失 */}
-      <TasksCard />
+      {/* 第二组: 我自己 — 身份 + 鲶鱼名/人设 (默认开) */}
+      <CollapsibleSection
+        id="me"
+        title="👤 我自己"
+        count={2}
+      >
+        <IdentityCard />
+        <AgentPrefsCard />
+      </CollapsibleSection>
 
-      {/* 全员可见 — 个人维度 */}
-      <IdentityCard />
-      {/* BL-E11: 改鲶鱼名 + 人设, Onboarding 走完后想改也来这 */}
-      <AgentPrefsCard />
-      {/* BL-E16: 鲶鱼对你的印象 — 透明可删, 防 creepy */}
-      <RelationCard />
-      {/* BL-MM4 v1: 鲶鱼记的硬事实 + 版本历史 (跟 catfish_remember/BL-MM2 配套) */}
-      <MemoryHistoryCard />
-      {/* BL-MM7 (5/6): 鲶鱼对你的长期画像 (writing_style / work_pattern / personality) */}
-      <UserProfileCard />
-      {/* BL-MM8 (5/6): 鲶鱼学到的你的文书风格 (从你历史文档抽的统计, 写汇报时模仿) */}
-      <StyleFingerprintCard />
-      {/* BL-MM6: 你给鲶鱼的反馈 — ChatBubble 下面 👍/👎/改 按钮的汇总卡 */}
-      <FeedbackSummaryCard />
-      <ServicesCard />
-      <QuotaCard />
-      <CatalogCard />
-      <SkillsMcpCard />
-      <LearningCard />
-      <SkillAuditCard />
-      <AuditCard />
+      {/* 第三组: 鲶鱼对你的认识 — 透明性 (默认开, 员工要能看清楚被学了什么) */}
+      <CollapsibleSection
+        id="rel"
+        title="🐟 鲶鱼对你的认识"
+        count={5}
+      >
+        <RelationCard />
+        <MemoryHistoryCard />
+        <UserProfileCard />
+        <StyleFingerprintCard />
+        <FeedbackSummaryCard />
+      </CollapsibleSection>
 
-      {/* 经理 / 管理员 — 部门维度 */}
+      {/* 第四组: 服务 — gateway / quota / catalog / skills (默认收, 不常看) */}
+      <CollapsibleSection
+        id="services"
+        title="⚙️ 服务 / 配额"
+        defaultCollapsed
+        count={4}
+      >
+        <ServicesCard />
+        <QuotaCard />
+        <CatalogCard />
+        <SkillsMcpCard />
+      </CollapsibleSection>
+
+      {/* 第五组: 审计 / 学习 — 历史 + skill audit + tool audit (默认收) */}
+      <CollapsibleSection
+        id="audit"
+        title="📜 审计 / 学习"
+        defaultCollapsed
+        count={3}
+      >
+        <LearningCard />
+        <SkillAuditCard />
+        <AuditCard />
+      </CollapsibleSection>
+
+      {/* 第六组: 部门管理 — manager/admin only (默认开, 进 dashboard 是为了管这个) */}
+      {isManagerOrAdmin && managedDepts.length > 0 && (
+        <CollapsibleSection
+          id="dept"
+          title="🏢 部门管理"
+          count={managedDepts.length * 2}
+        >
+          {managedDepts.map((dept) => (
+            <DepartmentQuotaCard key={`q-${dept}`} department={dept} />
+          ))}
+          {managedDepts.map((dept) => (
+            <DepartmentAuditCard key={`a-${dept}`} department={dept} />
+          ))}
+        </CollapsibleSection>
+      )}
       {isManagerOrAdmin && managedDepts.length === 0 && (
         <ManagerNoDeptHint role={role} />
       )}
-      {isManagerOrAdmin &&
-        managedDepts.map((dept) => (
-          <DepartmentQuotaCard key={`q-${dept}`} department={dept} />
-        ))}
-      {isManagerOrAdmin &&
-        managedDepts.map((dept) => (
-          <DepartmentAuditCard key={`a-${dept}`} department={dept} />
-        ))}
 
-      {/* 管理员 — 全局聚合 (admin only) */}
-      {role === "admin" && <AdminGlobalCard />}
+      {/* 第七组: 全局 — admin only (默认收) */}
+      {role === "admin" && (
+        <CollapsibleSection
+          id="admin"
+          title="🌐 全局聚合"
+          defaultCollapsed
+          count={1}
+        >
+          <AdminGlobalCard />
+        </CollapsibleSection>
+      )}
     </div>
   );
 }
