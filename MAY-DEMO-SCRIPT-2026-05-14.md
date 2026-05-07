@@ -399,6 +399,99 @@ audit:
 
 ---
 
+## 场景 2.8 · Hermes Unified Inbox (45 s, 5/7 鸿波核弹级发现) ★
+
+**目标**: 客户最常说"AI 都绑死员工 mac, 出差就用不了" — 这场 45 秒演**鲶鱼是 unified inbox**, 飞书/微信/钉钉/企微/QQ 全内置, 客户感知"这不是单 SaaS app, 是真企业级跨设备 Agent".
+
+### 关键发现 (5/7 验证 hermes v0.12.0 真支持)
+
+```bash
+$ hermes gateway setup
+◆ Messaging Platforms (19 个全列出来):
+  📱 Telegram          📡 Signal              💬 BlueBubbles (iMessage)
+  💬 Discord           📧 Email               🐧 QQ Bot
+  💼 Slack             📱 SMS (Twilio)        💎 Yuanbao (元宝)
+  🔐 Matrix            💬 DingTalk          ★ 💬 IRC
+  💬 Mattermost      ★ 🪽 Feishu / Lark      💼 Microsoft Teams
+  📲 WhatsApp        ★ 💬 WeCom (Enterprise WeChat)
+                     ★ 💬 WeCom Callback (Self-Built App)
+                     ★ 💬 Weixin / WeChat
+```
+
+★ 是中国 IM 全栈, 5 个 (飞书/微信/企微/钉钉/QQ).
+
+### 演法 (现场配 Telegram, 鸿波手机演真双向, 5 分钟)
+
+**鸿波说**:
+```
+你们说 "AI 都是 ChatGPT 那样的 SaaS, 绑死浏览器", 鲶鱼不是.
+切到终端给你看一下.
+```
+
+**演 1: 切终端跑 hermes gateway setup**
+
+客户看到 19 platform 列表 — 飞书/微信/钉钉/企微/QQ 全在. 鸿波说:
+
+```
+这 19 个 IM 鲶鱼底层 hermes 都内置. 你们公司用飞书就选 Feishu,
+用企业微信就选 WeCom, 5 分钟配通. 不需要我们改代码.
+```
+
+**演 2: 现场选 Telegram 配** (Telegram 配最快, 飞书需要客户内网 OAuth)
+
+```
+[选 Telegram → 输入 bot token (鸿波提前申请好的) → 输入 allowed_users → 完成]
+$ hermes gateway run
+✓ Telegram listener started
+```
+
+**演 3: 鸿波拿手机** Telegram 发消息
+
+```
+[手机 Telegram] 鸿波: 给我列今天的任务
+[终端 hermes gateway log] 收到 telegram message from chenhongbo
+                          → 转 catfish gateway (qwen)
+                          → 鲶鱼回复
+[手机 Telegram] 鲶鱼: 今天 14:00 王总例会, 16:00 季度复盘. 还有任务吗?
+```
+
+**演 4: 切回 Companion 看历史**
+
+打开 Companion → 仪表盘 → 会话 sidebar 里出现刚才 Telegram 那段对话, 跟手机看一样.
+
+```
+鸿波: 看, Companion 跟 Telegram 是同一份历史. 你回家用 mac 接着问, 出差用手机, 上班开飞书 — 全是同一个鲶鱼.
+```
+
+### 客户视角痛点 (击中)
+
+- **不绑死设备**: ChatGPT 在浏览器, 你出差只能掏手机连 OpenAI 账号 (数据出境)
+- **数据本地**: hermes state.db 在客户内网服务器, 不在 OpenAI
+- **跨 IM 无缝**: 飞书 / 微信 / 钉钉 你们公司用哪个鲶鱼接哪个
+
+### 关键卖点
+
+| | ChatGPT 企业版 | 鲶鱼 |
+|---|---|---|
+| 跨设备同步 | OpenAI 账号 (数据出境) | hermes state.db 客户内网 |
+| IM 入口 | 网页 / 各 app | 19 内置 platform |
+| 飞书 / 微信 / 钉钉 / 企微 | ❌ 没 | ✅ 选项里现成 |
+| 出差用手机 | 只能用 OpenAI | 飞书 / 微信都行 |
+
+### 5/14 demo 失败 fallback
+
+- **Telegram 配不通** (网络 / token 错): 切预录视频 (你 5/13 dryrun 时录)
+- **客户问"为啥不演飞书"**: 答 "飞书 OAuth 要你们 IT 审批, 现场配不动. 但选项就在这, 客户内网部署后照着 setup 选 Feishu, 一样.我们 5/13 dryrun 测过."
+- **客户怀疑跨设备同步**: 演鸿波手机 Telegram 历史 → Companion 看到 → 反过来 Companion 输入手机 Telegram 看到
+
+### 准备 (5/8-5/13)
+
+- 5/8: 申请 Telegram bot token (`@BotFather` 5 分钟搞定 + 允许 chenhongbo 用户)
+- 5/10: 5/13 dryrun 真跑 setup 一次, 确保流畅
+- 可选: 5/8-5/13 申请鸿波公司飞书机器人, 如果通了 5/14 演飞书更杀手
+
+---
+
 ## 场景 3 · 主动闲聊 + 桌宠 (2 min)
 
 **目标**: 鲶鱼**主动出现** — 这是跟 ChatGPT 最直观差别, 客户 30 秒 get.

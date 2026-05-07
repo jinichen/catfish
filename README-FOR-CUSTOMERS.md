@@ -85,6 +85,23 @@
 
 详细见 [部署 runbook](./DEPLOYMENT-RUNBOOK.md)
 
+## 鲶鱼是 Unified Inbox — 不绑死员工 mac ★ 5/7 鸿波点出
+
+> Hermes (鲶鱼底层) v0.12.0 内置 **19 个 messaging platform**, 含 **飞书 / 企业微信 / 微信 / 钉钉 / QQ / Telegram / Discord / Slack / WhatsApp / Signal / Email / SMS / iMessage / Microsoft Teams** 等. Companion 桌面 app + 这些 IM 平台**共享同一份 chat 历史** (`~/.hermes/state.db` SQLite), 客户内网部署.
+
+| | ChatGPT 企业版 | 鲶鱼 |
+|---|---|---|
+| 入口 | 网页 / app (单一) | Companion 桌面 + 19 IM 平台 (统一收件箱) |
+| 跨设备同步 | OpenAI 账号同步 (数据出客户内网) | hermes state.db (客户内网托管) |
+| 飞书 / 微信 / 钉钉 / 企微 | ❌ | ✅ 上游 hermes 内置, 客户配 OAuth 即用 |
+| 数据所有权 | OpenAI | 员工本人 (~/.hermes/, 跳槽带走) |
+
+**5/14 demo 现场演** (鸿波手机 Telegram 真双向, 30s):
+1. Companion 演完 → 切终端 `hermes gateway setup`
+2. 客户看到 19 platform 列表 (含飞书/微信/钉钉)
+3. 现场配 Telegram (5 分钟) → 鸿波手机发消息 → 鲶鱼真回
+4. "你们生产用飞书就选 Feishu, 同样 5 分钟. 不重写代码."
+
 ## 真 Agent 不是 Copilot — 5/8 ship 5 大保护链 ★ BL-A1+A2
 
 > 客户最常问 "AI 都是 chat 助手, 真能干活吗?" — 鲶鱼跟 ChatGPT/Cursor 的本质区别.

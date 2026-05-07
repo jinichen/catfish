@@ -258,16 +258,36 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 - ⬜ Companion 邮件 tab GUI · 1 周 (BL-D13)
 - **决策待**: demo 演不演这个? 真演就要彻底接通 + 1-2 周工作
 
-#### #13 ★ feishu-monitor [Phase 1, ~60%]
-> ⚠️ **PROJECT-STATUS 漏掉**, 实际有 src/ + tests/ + scripts/. 飞书消息 CDP 实时过滤 + 草稿.
-- ✅ src/ (cdp_client / monitor / handlers / config / relevance / cli)
-- ✅ tests (test_relevance)
-- ✅ scripts/ + install.sh / uninstall.sh
-- ✅ 工作原理: catfish Chrome → CDP 9222 → MutationObserver JS → Python daemon → 三处理器 (osascript 通知 / Hermes inbox / 草稿生成)
-- ⬜ 跟 Companion 状态接通 (Dashboard 看监控状态) · 0.5 周
-- ⬜ 草稿质量验证 (实测员工接受率) · 持续
-- ⬜ 多账号 / 切换账号支持 · 1 周
-- **决策待**: demo 演不演? 这个要演非常吸睛 (领导发消息员工不被拉进飞书)
+#### #13 ★ feishu / 微信 / 钉钉 / 企微 — Hermes Unified Inbox [Phase 1, 重定位 5/7]
+> ⚠️ **5/7 鸿波关键发现**: hermes v0.12.0 内置 19 个 messaging platform, 含 **DingTalk / Feishu/Lark / WeCom (企微) / Weixin / QQ Bot / Yuanbao** 中国 IM 全栈. 之前 catfish 自己写的 `edge/feishu-monitor/` (CDP 模式) 是重复造轮子, 应切到 hermes gateway.
+>
+> **架构**: Companion + hermes CLI + hermes gateway (19 platform) 全部共享 `~/.hermes/state.db` SQLite. 一份 chat 历史, 多入口访问.
+
+**hermes gateway 内置支持** (5/7 验证 hermes v0.12.0):
+- ✅ 飞书 / Lark
+- ✅ 企业微信 (WeCom + WeCom Callback Self-Built)
+- ✅ 微信 (Weixin / WeChat)
+- ✅ 钉钉 (DingTalk)
+- ✅ QQ Bot / Yuanbao (元宝)
+- ✅ Telegram / Discord / Slack / WhatsApp / Signal / Email / SMS / iMessage / IRC / Mattermost / Matrix / Microsoft Teams
+
+**catfish 自有 (edge/feishu-monitor/, 5/2 ship 60%)** — 留作 hermes gateway 不可用时 fallback:
+- ✅ Chrome CDP 9222 → MutationObserver → Python daemon (单向监听)
+- ✅ osascript 通知 / Hermes inbox / 草稿生成 (~/.catfish/feishu-drafts/)
+- ✅ tests (test_relevance) + scripts/install.sh
+- 优点: 无需 OAuth + 无需公网 webhook (员工 mac 自己开飞书 Web)
+- 缺点: 单向只读 + 依赖 Chrome 在跑 + 草稿要员工手动复制粘贴
+
+**5/14 demo 决策 (5/7 鸿波拍板)**:
+- 演 hermes gateway setup wizard (展示 19 platform 列表, 客户看到飞书/微信/钉钉/企微全有)
+- 现场配 Telegram 演真双向 (5 分钟, 鸿波手机演)
+- 跟客户讲: "你们生产用就选飞书, 一样流程, 我们底层是 hermes 不重写"
+
+**5/14 后路线**:
+- ⬜ BL-D14 hermes feishu gateway 内部测试 (鸿波公司飞书机器人申请) · 1-2 周
+- ⬜ BL-D15 / BL-D16 (钉钉 / 企微) — 不再单独做, 直接用 hermes 内置
+- ⬜ catfish/edge/feishu-monitor 改 fallback 角色 (员工没 OAuth 时仍能用) · 0.5 周
+- ⬜ 跟 hermes brand patch 冲突 fix (5/7 update 时撞了, 5/8+ 修)
 
 #### #14 ★ 业务 skill 库 [Phase 1, 50%]  ★ 5/6 端到端验证 43 测试全过
 > 客户 demo / PoC 看的"摸得着的能力", 现 3 个 (5/2 拍板 project-approval).
