@@ -243,6 +243,162 @@ audit:
 
 ---
 
+## 场景 2.6 · 真 Agent 自完成 (60 s, 信安+员工双向必演) ★ 5/7 BL-A1 ship
+
+**目标**: 央企客户最常说"AI 都是 chat 助手, 真能干活吗?" — 这场 60 秒演**真 Agent**: 员工说 1 句话, 鲶鱼自己干完, 中间 0 人工干预.
+
+### 准备 (5/13 前)
+
+- 演示机预先 build catfish-companion-app 装好 (含 5/7 ship 的 BL-A1.1-A1.4)
+- 演示前 ~/.catfish/ 备好真实测试 docx (例如《资质管理办法-2024.docx》, 30 段, 200KB)
+- 屏幕开 2 tab: A 跑 chat, B `tail -f ~/.hermes/.catfish_audit.jsonl | jq .`
+
+### 鸿波说
+
+```
+修订《资质管理办法》, 同类归并 + 主责部门新逻辑, 改昨天的草稿, 我等结果.
+```
+
+### 鲶鱼期望响应 (Agent 自完成 4 步)
+
+**Step 1: plan (3 秒)**
+```
+鲶鱼: 我先 search 找原稿, read 看完整内容, 改 3-5 处, save 覆盖原文件, verify 后报告. 估计 30 秒.
+```
+
+**Step 2: 自动跑 4-5 个 tool 链 (员工看着但不催)**
+```
+[catfish_local_search query="资质管理办法 docx"]
+  → ~/Documents/资质管理办法-2024.docx ✓
+
+[read_file path="~/Documents/资质管理办法-2024.docx"]
+  → 32 段, 含 "牵头部门 / 主责部门 / 成本管理" 等节 ✓
+
+[execute_code: 真改 docx]
+  doc = Document(原稿)
+  for p in doc.paragraphs:
+      if "原归原部门" in p.text:
+          p.text = p.text.replace("原归原部门", "同类归并主责部门")
+  doc.save(原稿)
+  print(f"已保存 {os.path.getsize(原稿)} 字节")
+  → 已保存 218354 字节 ✓
+
+[verify: os.path.exists + getsize]
+  → 文件存在 + 218KB 合理 ✓
+```
+
+**Step 3: chat 报员工 (10 秒后)**
+```
+鲶鱼: 修订完成. 路径 ~/Documents/资质管理办法-2024.docx (32 段, 218KB).
+       主要变更 3 处:
+       1. 牵头部门: 综合市场部 → 企业发展与风控部
+       2. 主责部门: 加 "同类归并" 原则 (新增资质按业务领域归并)
+       3. 成本管理: 部门申请补助 → 公司全额承担专项计划内
+       
+       要不要看具体段落?
+```
+
+**Step 4: 整个过程员工没催过一次** ★ 这是真 Agent vs Copilot 的关键
+
+### Tab B audit log 实时演
+
+```json
+{"ts":"...","tool":"catfish_local_search","ok":true,"sandbox_used":false}
+{"ts":"...","tool":"read_file","ok":true}
+{"ts":"...","tool":"execute_code","ok":true,"sandbox_used":true,"sandbox_kind":"sandbox-exec"}
+```
+
+3 行 audit, 客户看到 "鲶鱼真调了 3 个工具, 不是嘴说完成".
+
+### 关键卖点
+
+- **Agent vs Copilot 一句话**: "Copilot 等你敲键盘, Agent 接到任务自己干完通知你"
+- **5/7 ship 4 大保护**:
+  - L1 auto-continue: 输出长不会断 (BL-A1.1)
+  - L2 tool retry hint: 失败自己换思路 (BL-A1.2)
+  - L3 self-critique: 嘴说完成没真做时被工程拦 (BL-A1.3)
+  - L4 DAG plan: 主动规划 + verify (BL-A1.4 SOUL 纪律)
+- **39 测试覆盖**: 央企信安要的可重现性, 客户拿仓库自己 pytest 跑
+
+### 失败 fallback
+
+- 现场 chat 不响应 → 切预录视频 (15s 录屏)
+- 失败 1 步 → demo 走 self-critique hint 演示 (LLM 自己 retry, 客户看到"工程兜底"反而更厉害)
+
+---
+
+## 场景 2.7 · 多任务并发 + 完成通知 (45 s, BL-A2 杀手级) ★ 5/7 ship
+
+**目标**: 演**真 Agent 不锁住员工** — 长任务后台跑, 员工同时问别的, 完成桌宠通知. 这是 ChatGPT / Cursor / 任何 chat 助手都做不到的.
+
+### 准备
+
+- 同场景 2.6 演示机
+- 桌宠开着 (屏幕角落)
+
+### 鸿波说
+
+```
+修订《资质管理办法》同上, 后台跑. 顺便查一下戴明利电话.
+```
+
+### 鲶鱼期望响应 (并发 Agent)
+
+**3 秒内同时干两件事**:
+
+```
+鲶鱼: 启动两个任务:
+   📋 后台 task_a3f4: 修订《资质管理办法》 (估 30s)
+   🔍 前台: 戴明利电话查询
+   
+   戴明利电话查到了: 138-XXXX-1234 (从 5/3 catfish_remember 取的)
+   修订办法在跑, 完成会通知你. 想问别的吗?
+```
+
+**audit log (Tab B)**:
+```json
+{"tool":"catfish_run_task","ok":true,"task_id":"task_a3f4","label":"修订《资质管理办法》"}
+{"tool":"session_search","ok":true,"query":"戴明利"}
+{"tool":"catfish_remember","ok":true,"key":"daiminli_phone"}
+```
+
+**鸿波这时打字** (任务还没完, 演员工不被锁):
+```
+另外帮我看下今天日程
+```
+
+鲶鱼:
+```
+今天 14:00 跟王总例会, 16:00 季度复盘. 还在跑修订任务 (task_a3f4 已 18s).
+```
+
+**任务完成 (~30 秒后)**:
+- macOS 顶部 banner notification 弹: "鲶鱼 · 任务完成: 修订《资质管理办法》完成 (32s)"
+- 桌宠 (屏幕角落) bubble: "资质办法改完了 ✓"
+- 员工点桌宠 → chat 跳出任务结果消息
+
+### 关键卖点 (跟 ChatGPT 区别)
+
+| | ChatGPT 企业版 | Cursor / Copilot | **鲶鱼** |
+|---|---|---|---|
+| 长任务时 chat 是否锁 | 锁 | 锁 | ✅ 不锁 |
+| 同时多任务 | ❌ | ❌ | ✅ 并发 |
+| 完成主动通知 | ❌ | ❌ | ✅ 桌宠 + 系统通知 |
+| 任务状态查询 | ❌ | ❌ | ✅ catfish_task_status |
+
+### 关键数字 (鸿波背)
+
+- task_manager: 16 测试, 12 个核心 + 4 通知
+- catfish_run_task / catfish_task_status / catfish_task_result 3 个新工具
+- 通知 2 通道: macOS osascript + 桌宠 ~/.catfish/pet_pending_bubbles.jsonl
+
+### 失败 fallback
+
+- 桌宠通知不弹 → osascript 通知一定弹 (mac 系统级, 不依赖 catfish)
+- 后台任务卡 → catfish_task_status 查 status, 必要时手动 catfish_task_result 取部分结果
+
+---
+
 ## 场景 3 · 主动闲聊 + 桌宠 (2 min)
 
 **目标**: 鲶鱼**主动出现** — 这是跟 ChatGPT 最直观差别, 客户 30 秒 get.
@@ -458,9 +614,11 @@ agent peer-to-peer       agent-as-service               跨组织 federation
 |---|---|---|---|
 | 0:00-1:00 | 开场 | 自我介绍 + 鲶鱼定位 1 句 | — |
 | 1:00-4:00 | 场景 1 | chat 演示 | 解释 USER.md 注入 + journal 引用 |
-| 4:00-7:30 | 场景 2 | PDF 上传 (3.5 min, 紧凑些) | **重点讲安全** (preview-only / 不传完整) |
-| 7:30-8:00 | **场景 2.5** ★ | execute_code 沙箱 3 micro-demo | **信安部门必演**: L1+L2 双层拦, audit 真写, 34 测试全绿 |
-| 8:00-10:00 | 场景 3 | 桌宠主动 | 解释主动调度 + 信号触发 |
+| 4:00-7:00 | 场景 2 | PDF 上传 (3 min, 更紧凑) | **重点讲安全** (preview-only / 不传完整) |
+| 7:00-7:30 | **场景 2.5** ★ | execute_code 沙箱 3 micro-demo | **信安必演**: L1+L2 双层拦, audit 真写, 86 测试 |
+| 7:30-8:30 | **场景 2.6** ★★ | 真 Agent 自完成 (1 句话→4 步→完成) | **客户最 wow**: Copilot vs Agent 灵魂区别, BL-A1 4 测试保护链 |
+| 8:30-9:15 | **场景 2.7** ★★ | 多任务并发 + 桌宠通知 | **ChatGPT 做不到**: 长任务后台 + 员工同时问别的 + 完成通知 |
+| 9:15-11:15 | 场景 3 | 桌宠主动 | 解释主动调度 + 信号触发 |
 | 10:00-13:00 | 场景 4 | 跨 session 记忆 | 解释 catfish_remember + audit log 透明 |
 | 13:00-14:00 | **场景 4.5** ★ | Agent-as-Service mock + PPT 路线 | **真护城河**: 员工自愿互助, 数据属员工本人, 跨雇主可携带. 90% 组件已 ship, 6 周 ship 路由层 |
 | 14:00-15:00 | 场景 5 (弹性) | 写 skill | Self-Evolution: 鲶鱼自己长本事 |

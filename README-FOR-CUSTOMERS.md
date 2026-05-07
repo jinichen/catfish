@@ -85,6 +85,30 @@
 
 详细见 [部署 runbook](./DEPLOYMENT-RUNBOOK.md)
 
+## 真 Agent 不是 Copilot — 5/8 ship 5 大保护链 ★ BL-A1+A2
+
+> 客户最常问 "AI 都是 chat 助手, 真能干活吗?" — 鲶鱼跟 ChatGPT/Cursor 的本质区别.
+
+| | 普通 LLM 助手 (ChatGPT/Cursor/Copilot) | 鲶鱼 Agent |
+|---|---|---|
+| 输出长撞 token 上限 | 截断, 等员工说"继续" | ✅ auto-continue 自动续 (BL-A1.1) |
+| Tool 失败 | 报错给员工"工具不可用" | ✅ 看错误 retry / 换工具 (BL-A1.2) |
+| 嘴说"已生成"没真做 | 经常发生 | ✅ self-critique 工程拦 (BL-A1.3) |
+| 复杂任务规划 | 直接调一个 tool 撞墙 | ✅ DAG plan 先 + 一步 verify (BL-A1.4) |
+| 长任务时 chat 锁住 | 锁 (员工等 30 秒) | ✅ 后台跑, 员工同时问别的 (BL-A2.1) |
+| 任务状态查询 | ❌ | ✅ catfish_task_status (BL-A2.2) |
+| 完成主动通知 | ❌ | ✅ 桌宠 bubble + macOS 通知 (BL-A2.3) |
+
+**测试覆盖 55 个**:
+- Gateway 39 (auto-continue 12 + tool retry 13 + self-critique 14)
+- Tool-bridge 16 (task_manager 12 + 通知 4)
+
+**5/14 demo 杀手场景**:
+- 场景 2.6: 员工说"修订《资质管理办法》" → 鲶鱼 4 步自完成, 中间 0 干预
+- 场景 2.7: 员工同时问 2 件事 → 长任务后台跑 + 短任务前台答 + 完成桌宠通知
+
+详细见 [MAY-DEMO-SCRIPT 场景 2.6 / 2.7](./MAY-DEMO-SCRIPT-2026-05-14.md)
+
 ## 给信安部门的 6 件事
 
 1. **依赖 CVE 全 0** — Python 4 组件 / npm prod / Rust 1067 advisory 全过, [扫描报告](./.security/2026-05-06/audit-summary.md)

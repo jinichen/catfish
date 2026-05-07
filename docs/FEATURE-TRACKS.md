@@ -481,6 +481,20 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 - ⬜ **第三方渗透测试** · 5/22 后, 找外部团队
 - ⬜ **macOS Notarization 真公证** · 5/22 后, release 前
 - ⬜ **SBOM 自动化 (CycloneDX)** · 5/12 前可出, 客户合规要
+- ✅ **BL-A1+A2 真 Agent (单任务自完成 + 多任务并发)** · ★ 5/7 单日 ship (本来 6+5 天 sprint):
+  - ✅ A1.1 gateway auto-continue on finish_reason=length (12 测试)
+  - ✅ A1.2 tool 失败 retry hint 注入 (13 测试)
+  - ✅ A1.3 self-critique 幻觉完成检测 (14 测试)
+  - ✅ A1.4 DAG step plan 铁律 (SOUL.md, 软纪律, 真后端 DAG planner 5/22 后)
+  - ✅ A2.1 chat 非阻塞 + task_manager + 3 工具 (catfish_run_task / status / result, 12 测试)
+  - ✅ A2.2 任务状态查询 (跟 A2.1 一起 ship, catfish_task_status)
+  - ✅ A2.3 任务完成通知 (桌宠 bubble queue + macOS osascript, 4 测试)
+  - ⬜ A1.5 e2e 真 docx 30 页 (留 5/13 dryrun 真跑验)
+  - ⬜ A1.6 文档收口 (✅ 场景 2.6/2.7 已加, README/SECURITY ✅, FEATURE-TRACKS ← 在加)
+  - ⬜ A2.4 Dashboard TasksCard (P1, 5/22 后)
+  - ⬜ A2.5 e2e 并发 demo (留 5/13 dryrun)
+  - **5/14 demo 杀手场景**: 2.6 (单任务 Agent 自完成) + 2.7 (多任务并发)
+
 - ✅ **BL-S29 真技术沙箱 nsjail / sandbox-exec** · ★ 5/7 单日全 ship (本来 12 天 sprint, 实际 1 天):
   - ✅ S29.1 macOS sandbox-exec .sb profile + 13 shell tests (10 恶意 + 3 sanity)
   - ✅ S29.2 tool-bridge adapter 接入沙箱 dispatch + 15 unit tests

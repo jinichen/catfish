@@ -1002,16 +1002,36 @@ async def _invoke_chat_completion(
     security_concern: str | None = None,
     is_internal: bool = False,  # BL-F17 (5/5): internal 调用跳 record_usage
 ) -> dict[str, Any]:
-    """Non-streaming chat completion path, with fallback chain support."""
+    """Non-streaming chat completion path, with fallback chain support.
+
+    BL-A1.1 (5/8): 加 auto-continue on finish_reason=length. LLM 输出被
+    max_tokens 截时自动续写, 直到 stop / tool_calls / 5 次上限. 让员工不需要
+    手动说"继续", 真 Agent 行为.
+    """
+    from . import auto_continue  # noqa: PLC0415  lazy import 防循环
+
     start = time.time()
     config: Config = app.state.config
 
-    async def _call(candidate_model):
-        params = _build_litellm_params(body, candidate_model)
-        return await litellm.acompletion(**params)
+    # 给 with_fallback 用的 inner caller — 一次 LLM 调用 (含 fallback chain)
+    used_model_holder: list = [model]  # 用 list 当 mutable 容器, 让闭包能写
+
+    async def _invoker_with_fallback(call_body: dict):
+        async def _call(candidate_model):
+            params = _build_litellm_params(call_body, candidate_model)
+            return await litellm.acompletion(**params)
+        resp, used, _attempts = await with_fallback(config, model, _call)
+        used_model_holder[0] = used  # 续写跨次都记最新 used_model
+        return resp
 
     try:
-        response, used_model, _attempts = await with_fallback(config, model, _call)
+        response, continuation_count = await auto_continue.call_with_auto_continue(
+            body,
+            invoker=_invoker_with_fallback,
+            # internal 调用 (summarizer / proactive / a2a 辅助) 关 auto-continue:
+            # 它们 max_tokens 是有意设短的 (600/120/80), 续写没意义 + 浪费 quota.
+            enable=not is_internal,
+        )
     except Exception as e:
         _raise_upstream_error(
             e,
@@ -1021,6 +1041,15 @@ async def _invoke_chat_completion(
             log_context="chat completion failed",
         )
         raise  # unreachable; satisfies type checker
+
+    used_model = used_model_holder[0]
+
+    if continuation_count > 0:
+        logger.info(
+            "auto-continue: user=%s model=%s 续写 %d 次完成 (latency_ms=%.0f)",
+            user_sub, used_model.name, continuation_count,
+            (time.time() - start) * 1000,
+        )
 
     if used_model is not model:
         logger.info(
@@ -1131,6 +1160,20 @@ async def chat_completions(
     #       点了 button 才入, 比 LLM 自觉观察的权重高. internal call 也 inject —
     #       summarizer / proactive 用一致风格, 也要尊重员工 feedback.
     body["messages"] = inject_feedback(body["messages"])
+
+    # BL-A1.2 (5/8): 检测 messages 历史里 LLM 连续多次同 tool 失败 → 注入 hint
+    # 让 LLM 换思路, 不要重复同样错误. 真 Agent retry 行为.
+    # 跟 SOUL.md 软纪律配合 — 软纪律失效时工程兜底.
+    if not is_internal_call:
+        from . import tool_retry_hint  # noqa: PLC0415  lazy import
+        body["messages"] = tool_retry_hint.inject_tool_retry_hint(body["messages"])
+
+    # BL-A1.3 (5/8): 检测 LLM "幻觉完成" — 说"已生成 X" 但前面没调 execute_code.
+    # 注入 hint 强制下次调用时真做工具调用, 不要嘴说.
+    # 鸿波 4-29 demo 反复翻车的真因, 5/14 demo 必修.
+    if not is_internal_call:
+        from . import self_critique  # noqa: PLC0415  lazy import
+        body["messages"] = self_critique.inject_completion_critique_hint(body["messages"])
 
     # BL-E16 关系建立: 注入 session_meta (距上次 N 天 N 小时 / 今天第几次)
     # 让 LLM 知道时间感, 跨天回来时能自然说"好几天没找我了".

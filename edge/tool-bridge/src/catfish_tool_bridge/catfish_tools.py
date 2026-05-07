@@ -710,6 +710,88 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ── BL-A2.1 (5/8) — 后台任务 (chat 不阻塞 + 员工继续问别的) ──
+    {
+        "name": "catfish_run_task",
+        "description": (
+            "★ 启动后台任务, 立即返 task_id, 不阻塞 chat. 员工可继续问别的事.\n\n"
+            "✅ 调用时机:\n"
+            "  - 员工要写长 docx (>30 段) → 后台跑, 先返 task_id\n"
+            "  - 多步流程 (search + read + edit + save) 估计 >10s → 后台跑\n"
+            "  - 员工同时问多件事 → 一件后台一件前台\n\n"
+            "❌ 不调用:\n"
+            "  - 短查询 (查电话 / 算 1+1) — 直接 execute_code, 不需要 task\n"
+            "  - 员工等结果的 Q&A (单 step 答完就好)\n\n"
+            "kind 枚举:\n"
+            "  - 'execute_code': 跑 python/bash. payload={code, lang, timeout_s}\n"
+            "  (其他 kind 5/22 后扩)\n\n"
+            "label: 给员工看的人类可读描述 (例 '修订《资质管理办法》'). "
+            "返 task_id 后, 跟员工说 '我后台在跑 [label] [task_id], 你可以问别的'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": ["execute_code"],
+                    "description": "任务类型枚举",
+                },
+                "payload": {
+                    "type": "object",
+                    "description": "任务参数, 跟 kind 对应",
+                },
+                "label": {
+                    "type": "string",
+                    "description": "给员工看的描述 (1-100 字)",
+                },
+            },
+            "required": ["kind", "payload"],
+        },
+        "emoji": "🪄",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_task_status",
+        "description": (
+            "★ 查后台任务状态. 员工问 '那个修订办法做到哪了?' 时调.\n\n"
+            "返字段: status (pending/running/completed/failed/not_found), "
+            "elapsed_s, label, error.\n\n"
+            "✅ 别每秒 poll — 员工问的时候才查. 任务完成后桌宠会自动通知 "
+            "(BL-A2.3), 你不需要主动 poll."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "task_xxxxxxxx"},
+            },
+            "required": ["task_id"],
+        },
+        "emoji": "🔍",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_task_result",
+        "description": (
+            "★ 取后台任务**结果** (含 result / error). 任务必须 status=completed/failed.\n\n"
+            "比 catfish_task_status 多返 result 字段. 任务还在 running 时调返 status=running, "
+            "result 没有 — 你应该跟员工说 '还在跑, 完成会通知你'.\n\n"
+            "调用时机:\n"
+            "  - 桌宠通知 '修订办法完了' 后, 你可以调这个拿结果, 转给员工\n"
+            "  - 员工催 '好了没' 时调."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+            },
+            "required": ["task_id"],
+        },
+        "emoji": "📦",
+        "toolset": "catfish_native",
+        "available": True,
+    },
 ]
 
 
@@ -3238,4 +3320,18 @@ def dispatch_native(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_style_fingerprint_clear":
         from . import style_fingerprint  # noqa: PLC0415
         return style_fingerprint.style_fingerprint_clear(args)
+    # 5/8 BL-A2.1: 后台任务 (chat 不阻塞)
+    if name == "catfish_run_task":
+        from . import task_manager  # noqa: PLC0415
+        return task_manager.submit_typed_task(
+            kind=args.get("kind") or "execute_code",
+            payload=args.get("payload") or {},
+            label=args.get("label") or "",
+        )
+    if name == "catfish_task_status":
+        from . import task_manager  # noqa: PLC0415
+        return task_manager.manager().status_dict(args.get("task_id") or "")
+    if name == "catfish_task_result":
+        from . import task_manager  # noqa: PLC0415
+        return task_manager.manager().result_dict(args.get("task_id") or "")
     raise ValueError(f"unknown native tool: {name}")
