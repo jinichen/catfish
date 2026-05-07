@@ -141,22 +141,73 @@ dispatch 响应过滤        →   adapter.py:scrub_brand_in_result (已有, 扩
 - BL-E11 / E15 / E16 / 主动闲聊 / Quota / RBAC / Skills Hub / SSO / brand 全验
 - 真机 hermes 0.12 vs catfish 全栈跑 1 整天
 
-### 阶段 D (5/28 ~ 5/30): 文档 + 提 PR
+### 阶段 D (5/28 ~ 5/30): 文档 (issue 推到 Q3)
 
 - 整理 `HERMES-UPGRADE-PLAYBOOK.md` (下次升级流程 SOP)
-- 给 NousResearch 提 issue 请求 i18n / branding hook (引用我们的用例 — 中国市场 SOE 客户需要本地化)
+- ~~给 NousResearch 提 issue 请求 i18n / branding hook~~ → **5/7 修订: 推到 Q3**, 投 issue 不投 PR, 详见 § 6
 
 ---
 
-## 6. 长期 (Q3+): 上游 i18n hook + 完全解耦
+## 6. 长期 (Q3+): 投 issue 探路, **不预投** PR  (5/7 修订)
 
-**目标**: 让 hermes 升级跟 catfish brand 完全解耦, 每次升级 30 分钟搞定.
+**修订背景** (2026-05-07):
 
-- 给 NousResearch 提 PR 加 `branding.toml` / `i18n.toml` 配置: 用户提供一个文件, hermes 加载时读, 替换所有 banner / lifecycle string. 类似 gettext.
-- 我们的 catfish brand 变成 `branding.toml` 一个文件, **0 行 source patch**.
-- hermes 升级 → catfish brand 不动, 只可能要补几个新加的 string key.
+5/7 BL-D14.5 ship 完之后我们这端已经够稳:
+- `apply_brand_patch.py` 23 条规则覆盖 banner / Goodbye / ⚕→🐟 全部表面
+- `post-merge / post-rewrite / post-checkout` git hooks 自动重 patch (每次 `git pull` / `hermes update` 触发)
+- `--verify` 命令做 CI 回归
+- `dispatch_tool` 运行时 brand scrub 兜底
+- 0.10 → 0.12 实测 **86% 规则直接命中** (19/22), 远好于 5/4 文档预估的"全断"
+- MISS 规则优雅降级, 不阻塞员工
 
-**估投入**: 给 hermes 提 PR 1-2 周, upstream merge 周期 2-4 周, 总 1.5 月. 但**一劳永逸**.
+所以上游 PR 不再是**必须**项, **降级到 nice-to-have**.
+
+### 不预投 PR 的理由
+
+1. **拒收风险高**: NousResearch 路线图主线是 messaging (19 平台) + RL training, **i18n / vendor branding 不在路线图**. 提 PR 大概率拒或 review 半年没动静.
+
+2. **超出 i18n 范围**: 我们要的不只是翻译, 是**完整 vendor 重定制** — 清空 ASCII LOGO / 重写 `build_welcome_banner` 整函数 / 替换 tips 列表. 这是品牌商化, 不是国际化. 上游不会接受 vendor-specific hook.
+
+3. **维护成本对比**:
+   - 上游 PR 路径: 写 1-2 周 + review 2-4 周 (大概率拒) = **1.5 月**, 还可能白干
+   - 我们这端继续维护: 每次 hermes 升级补 1-3 条新规则 ≈ **30 分钟 / 升级**
+   - 一年 4 次升级 ≈ 2 小时维护. PR 路径 1.5 月 + 拒收风险, **ROI 不划算**
+
+4. **理论 vs 现实**: 即使有 i18n hook, 上游加新 tab / 新菜单 / 新 lifecycle event 时**仍要 fallback patch**. "完全解耦" 是空中楼阁, 真碰到 hermes 大改 (0.11 React/Ink 重写那种), patch 也要重写.
+
+### Q3 实际计划
+
+| 步 | 干啥 | 投入 |
+|---|---|---|
+| 1 | 给 NousResearch 提 **issue** 探意愿 | **5 分钟** |
+| 2a | 上游说 "sounds good, send PR" | 那时再投 1-2 周做 PR (有 buy-in 大概率 merge) |
+| 2b | 上游说 "not in scope" / 几个月不回 | 维持 git hooks 路线, 不浪费时间 |
+| 3 | 持续维护 `apply_brand_patch.py` | 每次 hermes 升级 30 分钟 |
+
+### Issue 模板 (Q3 真发时用)
+
+```
+Title: Vendor branding / customization hook for downstream rebrand?
+
+Body:
+We're building a Chinese SOE-targeted product on top of hermes-agent.
+We currently maintain ~23 string-replace rules in a post-merge git hook
+to rebrand banner / Goodbye / UI symbols.
+
+Would you consider a `branding.toml` config or a `pre_render_banner`
+lifecycle hook to make downstream rebrand easier? Happy to contribute
+a PR if there's interest.
+
+Use case: hermes 0.10 → 0.12 brand patch survived 86% (19/22 rules),
+but the 14% that broke (deleted bootBanner.ts / new cli.py default skin
+banner) cost us ~1 hour of patch surgery. A first-class hook would
+let us bring that to ~5 minutes per release.
+```
+
+### Risk
+
+- **0 风险**: 不投 PR 我们这端方案不变, 5/14 demo / 央企客户 onboarding 都不依赖 PR
+- **机会成本**: issue 不被回应也只损失 5 分钟
 
 ---
 
@@ -317,7 +368,7 @@ Curator 跑完输出员工本机 skill 健康度 → 上传 catfish Hub `/api/sk
 | **5/15 ~ 5/22 (demo 后第 1 周)** | 真升级 hermes 0.12 + 实施步骤 1+2+3. 同时走 § 5 阶段 B brand patch 重构 |
 | **5/23 ~ 6/5** | 完整回归 (`HERMES-UPGRADE-CHECKLIST.md`). 全栈跑 1 整天 |
 | **6 月** | 步骤 4: Dashboard "整理记录"卡 |
-| **Q3** | 步骤 5: 反向数据流 + 上游 PR i18n hook |
+| **Q3** | 步骤 5: 反向数据流 + 上游 issue (5/7 修订: 不预投 PR, 详见 § 6) |
 
 ### 8.7 风险 mitigation 表 (含 Curator)
 

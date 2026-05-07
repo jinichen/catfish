@@ -412,7 +412,7 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 - ✅ **Curator vs Skills Hub 集成方案 5 步**: 不禁用, 默认开 + 保守参数 + 装时 pin 双保险 + Onboarding 知情同意 + Phase 2.5 反向数据流 → admin 看公司级 skill 健康热图
 - ⬜ **5/8 后 verify 2 件**: `tools/skill_usage.is_agent_created()` 判定逻辑 + `skill_manage` pin API
 - ⬜ **5/15-5/22 升级实施** (走 HERMES-UPGRADE.md § 5 阶段 B): brand patch 重构 字符串 → 三层运行时拦截 (wrapper subprocess + Shell Hook + 兜底 source patch). 估计 468 行能裁到 50-100 行
-- ⬜ **Q3 上游 PR i18n hook**: 给 NousResearch 提 PR, 一劳永逸
+- ⬜ **Q3 上游 issue (不预投 PR)**: 5/7 修订 — git hooks 方案 ship 后我们这端已够稳, 上游 PR 降级到 nice-to-have. Q3 投个 issue 探 NousResearch 意愿 (5 分钟), 有 buy-in 再投 PR; 没回应就维持 git hooks 路线 (每次升级 30 分钟补规则). 详见 `HERMES-UPGRADE.md § 6`
 - 完整方案见 `docs/HERMES-UPGRADE.md` (430 行, 含时间表 / 风险表 / 升级回归 checklist)
 
 ---
