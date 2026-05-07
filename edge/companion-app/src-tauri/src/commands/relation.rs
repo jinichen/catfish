@@ -170,7 +170,10 @@ pub fn relation_summary() -> Result<RelationView, String> {
 
 /// 5/6 BL-E13.5 真主动 Phase A: 给 useProactiveTriggers 用的 raw journal 文本.
 /// recent_entries 是 LLM summary 已抽象, 信号触发器要原文扫 deadline 关键词.
-/// 限大小 (≤ 200KB), 防异常大 journal 卡死.
+/// 限大小 (≤ 200KB tail), 防异常大 journal 卡死.
+///
+/// 5/7 修 bug: byte slice 必须落在 UTF-8 char boundary, 不能切到中文 / emoji 中间.
+/// 鸿波 journal 580KB 时, content.len()-MAX=392690 正好落在 '原' 的字节中间, panic.
 #[tauri::command]
 pub fn journal_read_raw() -> Result<String, String> {
     let jp = journal_path()?;
@@ -180,11 +183,16 @@ pub fn journal_read_raw() -> Result<String, String> {
     let content = fs::read_to_string(&jp)
         .map_err(|e| format!("读 journal 失败: {e}"))?;
     const MAX: usize = 200_000;
-    if content.len() > MAX {
-        Ok(content[content.len() - MAX..].to_string())
-    } else {
-        Ok(content)
+    if content.len() <= MAX {
+        return Ok(content);
     }
+    // 算 tail 起点 (期望 byte 位置), 然后向前找最近的 char boundary
+    // 防止落在多字节字符中间 panic.
+    let mut start = content.len() - MAX;
+    while start < content.len() && !content.is_char_boundary(start) {
+        start += 1;
+    }
+    Ok(content[start..].to_string())
 }
 
 /// 清空 journal + meta (员工"我不想让鲶鱼记着我了" 逃生口).
