@@ -36,6 +36,7 @@ import FeedbackSummaryCard from "./FeedbackSummaryCard";
 import UserProfileCard from "./UserProfileCard";
 import StyleFingerprintCard from "./StyleFingerprintCard";
 import TasksCard from "./TasksCard";
+import CuratorCard from "./CuratorCard";
 import CollapsibleSection from "./CollapsibleSection";
 import { useMe } from "../../hooks/useMe";
 
@@ -99,6 +100,8 @@ export default function DashboardTab() {
         <QuotaCard />
         <CatalogCard />
         <SkillsMcpCard />
+        {/* 5/7 BL-CR: Curator 集成 — 老脚本自动整理 (hermes 0.12 自带) */}
+        <CuratorCard />
       </CollapsibleSection>
 
       {/* 第五组: 审计 / 学习 — 历史 + skill audit + tool audit (默认收) */}

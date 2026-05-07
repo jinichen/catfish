@@ -1,0 +1,16 @@
+# BL-CR Curator 集成 步骤 1 (5/7) — 鲶鱼推荐的保守 Curator 默认.
+#
+# Curator 是 hermes 0.12 加的"自动整理工", 默认参数对央企/SOE 太激进
+# (30 天 stale / 90 天 archive / 2h idle), 季度脚本会被冤打.
+# 这份 snippet 由 install.sh 自动追加到 ~/.hermes/config.yaml,
+# 已有 curator 段不动 (尊重员工已 tune 过的值).
+#
+# 也由 Companion 启动时调 services::curator_config::ensure_default() 兜底,
+# 双保险 — 即使没跑 install.sh, 第一次启动也会自动写入.
+
+curator:
+  enabled: true              # 不想要? 仪表盘"脚本整理"卡一键关
+  interval_hours: 168        # 1 周一次 (默认值, 不激进)
+  min_idle_hours: 4          # 你 idle 4 小时才开始 (hermes 默认 2 太激进, 午休就触发)
+  stale_after_days: 60       # 60 天没用才标"久未使用" (hermes 默认 30, 季度脚本会被冤)
+  archive_after_days: 180    # 180 天才归档到不可见 (hermes 默认 90, 半年保险)

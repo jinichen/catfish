@@ -14,6 +14,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 
 import { fetchCatalog } from "../lib/tauri";
 import { useUIStore } from "../store/ui";
@@ -112,7 +113,7 @@ export default function OnboardingWizard() {
             justifyContent: "center",
           }}
         >
-          {[0, 1, 2, 3, 4].map((i) => (
+          {[0, 1, 2, 3, 4, 5].map((i) => (
             <div
               key={i}
               style={{
@@ -134,7 +135,9 @@ export default function OnboardingWizard() {
         {step === 3 && (
           <StepModel models={models} onNext={next} onBack={back} onSkip={close} />
         )}
-        {step === 4 && (
+        {/* 5/7 BL-CR: Curator consent toggle (步骤 3 of 集成方案) */}
+        {step === 4 && <StepCurator onNext={next} onBack={back} onSkip={close} />}
+        {step === 5 && (
           <StepTryChat
             onFinish={() => {
               close();
@@ -414,6 +417,119 @@ function StepModel({
         默认模型在 仪表盘 → 身份卡 / 对话 tab 顶部下拉切.
       </p>
       <Buttons onNext={onNext} onBack={onBack} onSkip={onSkip} />
+    </>
+  );
+}
+
+
+// BL-CR Curator 集成 (5/7) — Onboarding step 5 (5 of 6)
+//
+// 给员工一个明确的 "让小鲶定期帮我整理脚本" 开关. 默认勾.
+// 不勾 → 写 ~/.hermes/config.yaml 的 curator.enabled: false.
+//
+// 跟"自动归档"的恐慌情绪对冲: 重点强调
+//   - 永不真删 (archive 是搬到不可见, 不是 rm)
+//   - 鲶鱼自带的 skill 不在范围内
+//   - 你随时能在仪表盘 → 脚本整理 卡片关掉
+function StepCurator({
+  onNext,
+  onBack,
+  onSkip,
+}: {
+  onNext: () => void;
+  onBack: () => void;
+  onSkip: () => void;
+}) {
+  const [enabled, setEnabled] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // 进 step 时读现有配置 (员工可能之前已经设过)
+  useEffect(() => {
+    void (async () => {
+      try {
+        const cfg = await invoke<{ enabled: boolean }>("get_curator_config");
+        setEnabled(cfg.enabled);
+      } catch {
+        // 没读到无所谓, 默认勾
+      }
+    })();
+  }, []);
+
+  const handleNext = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      // 把当前选择写进 ~/.hermes/config.yaml
+      // (其他 4 个参数走我们保守默认, 跟 ensure_default 一致)
+      await invoke("set_curator_config", {
+        enabled,
+        intervalHours: 168,
+        minIdleHours: 4,
+        staleAfterDays: 60,
+        archiveAfterDays: 180,
+      });
+      onNext();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <>
+      <h3 style={{ marginTop: 0 }}>3️⃣ 脚本整理</h3>
+      <p style={{ fontSize: 13, lineHeight: 1.6, color: "var(--catfish-text-muted)" }}>
+        鲶鱼可以定期帮你整理工作脚本 — 长时间没用的归档, 长得像的合并.
+        <br />
+        <strong>永不真删, 都能恢复.</strong> 鲶鱼自带的 skill 不在范围内.
+      </p>
+
+      <label
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 10,
+          padding: "var(--space-3)",
+          background: "var(--catfish-bg)",
+          border: "1px solid var(--catfish-border)",
+          borderRadius: 6,
+          marginTop: "var(--space-3)",
+          cursor: "pointer",
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(e) => setEnabled(e.target.checked)}
+          style={{ marginTop: 2 }}
+        />
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 500 }}>
+            让小鲶定期帮我整理工作脚本 (推荐)
+          </div>
+          <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 4, lineHeight: 1.5 }}>
+            · 60 天没用 → 标记"久未使用" (你能看到)
+            <br />· 180 天没用 → 归档到不可见 (能恢复)
+            <br />· 你 idle 4 小时才开始干, 一周最多跑一次
+            <br />· 仪表盘 "脚本整理" 卡随时关
+          </div>
+        </div>
+      </label>
+
+      {error && (
+        <div style={{ color: "var(--status-err)", fontSize: 12, marginTop: 8 }}>
+          保存失败: {error}
+        </div>
+      )}
+
+      <Buttons
+        onNext={handleNext}
+        nextLabel={saving ? "保存中…" : "下一步 →"}
+        onBack={onBack}
+        onSkip={onSkip}
+      />
     </>
   );
 }

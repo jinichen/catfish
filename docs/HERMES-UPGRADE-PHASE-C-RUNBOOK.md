@@ -275,9 +275,23 @@ curl -s http://127.0.0.1:8999/v1/catalog | python3 -c "import sys,json; d=json.l
 
 ---
 
-## 6. Curator 4 步集成 (1-2 小时)
+## 6. Curator 4 步集成 ✅ 已 ship (5/7)
 
-> 详细方案见 `docs/HERMES-UPGRADE.md § 8`. 5/5 阶段 A.2 verify 后简化为 4 步.
+> **状态**: 跟 BL-D14.5 / BL-MM3 同日提前 ship. 详细方案见 `docs/HERMES-UPGRADE.md § 8`.
+> 实现位置:
+>   - `edge/companion-app/src-tauri/src/services/curator_config.rs` (10 单测)
+>   - `edge/companion-app/src-tauri/src/services/curator_state.rs` (5 单测)
+>   - `edge/companion-app/src-tauri/src/commands/curator.rs` (4 Tauri 命令)
+>   - `edge/companion-app/src/tabs/Dashboard/CuratorCard.tsx` (Dashboard 卡)
+>   - `edge/companion-app/src/components/OnboardingWizard.tsx` (StepCurator 第 5 步)
+>   - `edge/hermes-fork/curator-config-snippet.yaml` + `install.sh` (客户部署 自动 append)
+>
+> 双保险触发:
+>   1. install.sh 装鲶鱼时把 yaml snippet 追加到 `~/.hermes/config.yaml`
+>   2. Companion 启动 setup 调 `services::curator_config::ensure_default()` 兜底
+>      (防员工跳过 install.sh 直接跑 Companion 的 dev 流)
+>
+> 下面的方案稿留作历史参考.
 
 ### 6.1 步骤 1: 写保守 config
 

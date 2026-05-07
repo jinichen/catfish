@@ -6,6 +6,8 @@
 pub mod agent_prefs;
 pub mod autostart;
 pub mod catfish_paths;
+pub mod curator_config;
+pub mod curator_state;
 pub mod endpoints;
 pub mod oauth;
 pub mod pet_hover;

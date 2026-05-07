@@ -204,6 +204,15 @@ pub fn run() {
             #[cfg(desktop)]
             tray::install(app.handle())?;
 
+            // 5/7 BL-CR: 启动时确保 ~/.hermes/config.yaml 有保守 curator 段
+            // (hermes 0.12 默认 30/90/2h 太激进, 我们 patch 成 60/180/4h).
+            // 已存在 curator 段 → 不动 (尊重员工 tune 过的值).
+            match services::curator_config::ensure_default() {
+                Ok(true) => log::info!("BL-CR: 写入鲶鱼保守 curator 默认配置 (60d stale / 180d archive / 4h idle)"),
+                Ok(false) => log::debug!("BL-CR: ~/.hermes/config.yaml 已有 curator 段, 不动"),
+                Err(e) => log::warn!("BL-CR: ensure_curator_default 失败 (不阻塞启动): {e}"),
+            }
+
             // 注册全局快捷键 Cmd+Shift+Space (浮窗召唤) + Cmd+Shift+F (BL-E15 专注模式)
             #[cfg(desktop)]
             {
@@ -336,6 +345,11 @@ pub fn run() {
             // BL-E11 命名权 (五一 sprint 5/3 晚): 员工自定义鲶鱼名 + 人设
             commands::agent::get_agent_prefs,
             commands::agent::set_agent_prefs,
+            // BL-CR Curator 集成 (5/7): hermes 0.12 自动整理脚本配置 + 状态展示
+            commands::curator::get_curator_config,
+            commands::curator::set_curator_config,
+            commands::curator::ensure_curator_default,
+            commands::curator::get_curator_state,
             // BL-E16 关系建立 (五一 sprint 5/3 晚): "鲶鱼对你的印象" 透明 + 清空
             commands::relation::relation_summary,
             commands::relation::relation_forget,

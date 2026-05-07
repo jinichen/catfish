@@ -49,13 +49,38 @@ python3 "$PATCH_PY" --apply
 echo
 
 # 4. 装 git hooks (5/7 BL-D14.5: 防 hermes 升级再覆盖品牌)
-echo -e "${BOLD}[3/4] 装 git hooks (post-merge / post-rewrite / post-checkout)${RESET}"
+echo -e "${BOLD}[3/5] 装 git hooks (post-merge / post-rewrite / post-checkout)${RESET}"
 echo "    以后 hermes 升级 / git pull 后会自动重跑品牌补丁, 不用手动."
 python3 "$PATCH_PY" --install-hooks
 echo
 
+# 4.5 BL-CR Curator 集成 步骤 1 (5/7): 写保守 curator 默认到 ~/.hermes/config.yaml
+echo -e "${BOLD}[4/5] 配 Curator 保守默认 (老脚本自动整理)${RESET}"
+HERMES_CFG="$HOME/.hermes/config.yaml"
+SNIPPET="$SCRIPT_DIR/curator-config-snippet.yaml"
+if [ -f "$HERMES_CFG" ] && grep -q "^curator:" "$HERMES_CFG"; then
+    echo -e "    ${YELLOW}已有 curator 段${RESET}: 不动 (尊重员工 tune 过的值)"
+elif [ -f "$SNIPPET" ]; then
+    mkdir -p "$(dirname "$HERMES_CFG")"
+    # 文件不存在就创建空
+    [ -f "$HERMES_CFG" ] || touch "$HERMES_CFG"
+    # 追加 snippet (头空一行避免跟现有内容粘到一起)
+    {
+        # 如果文件非空且最后一行非空, 加换行
+        if [ -s "$HERMES_CFG" ]; then
+            echo
+        fi
+        cat "$SNIPPET"
+    } >> "$HERMES_CFG"
+    echo -e "    ${GREEN}✓ 已写${RESET} curator 段到 $HERMES_CFG (60d stale / 180d archive / 4h idle)"
+    echo "    Companion 仪表盘'脚本整理'卡能随时改 / 关."
+else
+    echo -e "    ${YELLOW}跳过${RESET}: 找不到 $SNIPPET (异常情况)"
+fi
+echo
+
 # 5. 检查是否需要 rebuild ui-tui
-echo -e "${BOLD}[4/4] 检查 TS 是否需要 rebuild${RESET}"
+echo -e "${BOLD}[5/5] 检查 TS 是否需要 rebuild${RESET}"
 UI_TUI="$HERMES_ROOT/ui-tui"
 if [ -d "$UI_TUI/dist" ]; then
     echo -e "    ${YELLOW}警告${RESET}：$UI_TUI/dist 存在，说明 hermes 跑的是编译产物"

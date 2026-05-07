@@ -2439,3 +2439,55 @@ quota check 真应该移进 `with_fallback`, 让 chain 里每个模型都查 quo
 - Plan D 4.5 PPT 1 页 (5/12)
 - 客户安全说明 1 页 PDF (5/13)
 - Q&A 30 问 background (5/12-5/13)
+
+---
+
+## 2026-05-07（周三）下午晚 — BL-CR Curator 集成 4 步一把梭
+
+继 BL-D14.5 (hermes 0.12 升级保护) + BL-MM3 (memory_save 版本化) 之后, 鸿波要求"一次性别再分批", 把原本排 5/15+ 的 Curator 集成也拉前一并 ship.
+
+### 完成 (单日)
+
+**Step 1 保守 config (60d/180d/4h, 防央企季度脚本被冤打)**:
+- `edge/companion-app/src-tauri/src/services/curator_config.rs` (~250 行)
+  - `load() / save() / ensure_default()` 三函数
+  - 用 serde_yaml::Value 全量读 → patch curator 段 → atomic 写, **不破坏 yaml 其他段**
+  - 校验: `archive_after_days > stale_after_days` + 时间参数 > 0
+  - **10 单测**: missing/no-curator-section/有现成段/round-trip/preserve-other-sections/校验失败/ensure-default
+- `edge/hermes-fork/curator-config-snippet.yaml` + `install.sh` (新 [4/5] 节)
+  - 装鲶鱼时自动 append 到 `~/.hermes/config.yaml`, 已有 curator 段不动
+- Companion `.setup()` 调 `ensure_default()`, 启动兜底 (防员工跳过 install.sh)
+
+**Step 2 (取消)**: catfish skill 物理隔离, 不需要自动 pin.
+
+**Step 3 Onboarding consent toggle**:
+- `OnboardingWizard.tsx` step 数 5 → 6, 第 5 步 (`StepCurator`) 加 "让小鲶定期帮我整理工作脚本" 复选框
+- 进 step 时读现有 enabled, 不勾掉 → set_curator_config(enabled=false)
+- 文案明示: 永不真删 / 鲶鱼自带 skill 不在范围 / Dashboard 随时关
+
+**Step 4 Dashboard "脚本整理"卡**:
+- `commands/curator.rs` (4 个 Tauri 命令: get_config / set_config / ensure_default / get_state)
+- `services/curator_state.rs` (~150 行) 读 `~/.hermes/skills/.curator_state` JSON
+  - 解析 last_run_at / last_run_summary / paused / run_count
+  - **summary 字段顺手脱敏 `~/.hermes` → `鲶鱼本机存储`** (跟 adapter.scrub_brand_in_result 一致)
+  - 文件不存在 / JSON 损坏 → 返 never_run 默认 (不抛)
+  - **5 单测**
+- `tabs/Dashboard/CuratorCard.tsx` (~200 行)
+  - 30s polling, 跟 RelationCard / MemoryHistoryCard 一致
+  - 状态点 (绿/黄/灰) + "上次整理" 摘要 + 配置摘要 + "关闭/开启" 一键切换
+  - 加进 "🛠 服务 / 模型 / 工具" 那组 (DashboardTab.tsx)
+
+### 价值
+- demo 风险面 -1: 防 5/14 前 Curator 默认参数 (30d/90d/2h) 把鸿波 mac 上某个 demo skill 误归档
+- 5/14 demo 故事干净: "鲶鱼自动整理脚本, 透明可控 — 仪表盘看, 一键关, 永不真删"
+- 客户部署即生效: install.sh 装鲶鱼时一并写好保守 config
+
+### 测试
+- Rust unit: curator_config 10 + curator_state 5 = 15 新测
+- 待跑 cargo test (sandbox 没 cargo, 5/8 早实机跑)
+- Companion 跑起来 brace check 已过, TS imports OK
+
+### 遗留
+- 5/8 早 cargo test 验证 15 测全过
+- 5/8 真启动 Companion 看 ~/.hermes/config.yaml 自动加上 curator 段
+- 5/14 demo 当天讲"脚本整理"故事 (BL-MM4 + Curator 一起讲"透明可控")
