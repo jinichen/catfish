@@ -13,6 +13,9 @@ vite.config.js
 # Tauri
 src-tauri/target/
 # Cargo.lock 应该 commit (二进制项目锁版本)，不忽略
+# BL-WIN1 (5/8): cross-build 时 tauri-build 生成 target-specific schema
+# (e.g. windows-schema.json), 跟 mac-schema.json 是平台特化的产物, 不入库
+src-tauri/gen/schemas/
 
 # editor
 .vscode/*

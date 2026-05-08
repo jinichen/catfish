@@ -26,8 +26,14 @@
 //! - 下载 ggml-small.bin (~466MB) 到 ~/.catfish/whisper-models/
 //! - macOS 麦克风权限 (首次会弹系统对话框)
 
+// BL-WIN1.3 (5/8): 这些 imports 只 macOS speech impl 用 (PathBuf / Child / Mutex /
+// OnceLock 都被 RecordingState + recording_slot 用), Windows stub 不用. cfg gate
+// 防 cross-build unused_imports warning.
+#[cfg(target_os = "macos")]
 use std::path::PathBuf;
+#[cfg(target_os = "macos")]
 use std::process::Child;
+#[cfg(target_os = "macos")]
 use std::sync::{Mutex, OnceLock};
 use tauri::Window;
 
