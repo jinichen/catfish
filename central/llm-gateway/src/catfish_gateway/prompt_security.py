@@ -56,20 +56,26 @@ import re
 from typing import List
 
 # 常见密码 / 凭据模式
+#
+# BL-FIX13 (5/8): 中文 separator 必须是 是/为/: 之一 (不是 \s), 否则
+# "请输入密码" / "用户名、密码、" 这种正常陈述句都撞误报. 之前 [是为:\s]+ 是 bug
+# (把 \s 塞进 separator 集合, 跟 docstring 设计意图不符 — 设计是
+# `密码[是为:][\s]*\S+`, 实际代码把 \s 塞进集合放宽了, 跟没限一样).
 _CREDENTIAL_PATTERNS = [
     # 中文 — "密码是 xxx" / "密码: xxx" / "密码为 xxx"
-    re.compile(r"密码[是为:\s]+\S+", re.IGNORECASE),
-    re.compile(r"密钥[是为:\s]+\S+", re.IGNORECASE),
-    re.compile(r"口令[是为:\s]+\S+", re.IGNORECASE),
+    # separator 必须是 是/为/: , 后面允许有空格再跟非空字符 (>=4 字符防"密码: 1" 这种太短)
+    re.compile(r"密码[是为:]\s*\S{4,}", re.IGNORECASE),
+    re.compile(r"密钥[是为:]\s*\S{4,}", re.IGNORECASE),
+    re.compile(r"口令[是为:]\s*\S{4,}", re.IGNORECASE),
     # 英文 — "password = xxx" / "password: xxx"
-    re.compile(r"password\s*[:=]\s*\S+", re.IGNORECASE),
-    re.compile(r"passwd\s*[:=]\s*\S+", re.IGNORECASE),
-    re.compile(r"\bpwd\s*[:=]\s*\S+", re.IGNORECASE),
-    re.compile(r"api[_-]?key\s*[:=]\s*\S+", re.IGNORECASE),
-    re.compile(r"\bsecret\s*[:=]\s*\S+", re.IGNORECASE),
-    re.compile(r"\btoken\s*[:=]\s*\S+", re.IGNORECASE),
+    re.compile(r"password\s*[:=]\s*\S{4,}", re.IGNORECASE),
+    re.compile(r"passwd\s*[:=]\s*\S{4,}", re.IGNORECASE),
+    re.compile(r"\bpwd\s*[:=]\s*\S{4,}", re.IGNORECASE),
+    re.compile(r"api[_-]?key\s*[:=]\s*\S{4,}", re.IGNORECASE),
+    re.compile(r"\bsecret\s*[:=]\s*\S{4,}", re.IGNORECASE),
+    re.compile(r"\btoken\s*[:=]\s*\S{4,}", re.IGNORECASE),
     # OAuth Authorization header
-    re.compile(r"Authorization\s*:\s*Bearer\s+\S+", re.IGNORECASE),
+    re.compile(r"Authorization\s*:\s*Bearer\s+\S{4,}", re.IGNORECASE),
 ]
 
 

@@ -63,7 +63,8 @@ class TestEnglishPatterns:
         assert len(hits) >= 1
 
     def test_pwd(self) -> None:
-        hits = detect_credentials_in_text("pwd: foo")
+        # BL-FIX13: 密码 >=4 字符防"pwd: 1" 这种太短的撞不真实场景
+        hits = detect_credentials_in_text("pwd: foobar")
         assert len(hits) >= 1
 
     def test_api_key(self) -> None:
@@ -135,10 +136,11 @@ def test_messages_user_only() -> None:
 
 def test_messages_multiple_users() -> None:
     """多条 user 消息合并去重"""
+    # BL-FIX13: 密码值 >=4 字符
     msgs = [
-        {"role": "user", "content": "密码是 abc"},
+        {"role": "user", "content": "密码是 abcdef"},
         {"role": "assistant", "content": "好"},
-        {"role": "user", "content": "密码: def"},
+        {"role": "user", "content": "密码: defghi"},
     ]
     hits = detect_credentials_in_messages(msgs)
     # 同一个 pattern 多次撞 → 去重 (set), 但每个 pattern 名字算一个
@@ -160,10 +162,11 @@ def test_messages_empty() -> None:
 
 def test_messages_multimodal() -> None:
     """user content 是 multimodal list (text + image), 只扫 text part"""
+    # BL-FIX13: 密码值 >=4 字符
     msgs = [{
         "role": "user",
         "content": [
-            {"type": "text", "text": "密码是 abc"},
+            {"type": "text", "text": "密码是 abcdef"},
             {"type": "image_url", "image_url": {"url": "data:..."}},
         ],
     }]
@@ -198,3 +201,62 @@ def test_warning_message_format() -> None:
 def test_warning_message_single_hit() -> None:
     msg = make_warning_message(["密码:"])
     assert "1 处" in msg
+
+
+# ============================================================
+# BL-FIX13 (5/8) — regex 太宽误报修, 防 "用户名、密码、 验证码" 这种正常陈述句撞
+# ============================================================
+#
+# 鸿波反馈: 我今天没有输入明文, 为什么还有这个提示? 诊断: 旧 regex 把 \s 塞
+# 进 separator 集合 ([是为:\s]+), "请输入密码 然后" / "用户名、密码、" 之类
+# 正常陈述都撞. 修法: separator 必须是 是/为/: 之一, \s 只允许在外侧, 同时
+# 密码值 >=4 字符防短词撞.
+
+
+def test_no_false_positive_normal_chinese_chenshu() -> None:
+    """'请输入密码 然后点击登录' 是正常说话, 不该撞"""
+    text = "请输入密码 然后点击登录"
+    hits = detect_credentials_in_text(text)
+    assert hits == [], f"BL-FIX13 regression: '{text}' 不该撞但撞了 {hits}"
+
+
+def test_no_false_positive_password_with_punctuation_only() -> None:
+    """'用户名、密码、 验证码' (中文顿号) 不该撞"""
+    text = "登录EIS: 1. 输入用户名、密码、 验证码; 2. 点登录"
+    hits = detect_credentials_in_text(text)
+    assert hits == [], f"BL-FIX13 regression: '{text}' 不该撞"
+
+
+def test_no_false_positive_password_question() -> None:
+    """'忘记密码 怎么办' / '密码 不对' 不该撞"""
+    for text in [
+        "忘记密码 怎么办",
+        "我密码 不对啊",
+        "密码 (用 keychain)",
+    ]:
+        hits = detect_credentials_in_text(text)
+        assert hits == [], f"BL-FIX13: '{text}' 不该撞 ({hits})"
+
+
+def test_no_false_positive_short_value() -> None:
+    """密码值 <4 字符不撞 (太短不真实, 'pwd: 1' / '密码是 a')"""
+    for text in ["pwd: 1", "密码是 a", "token = 12"]:
+        hits = detect_credentials_in_text(text)
+        assert hits == [], f"BL-FIX13 短值 '{text}' 不该撞"
+
+
+def test_still_catches_real_credentials() -> None:
+    """真的明文密码 (>=4 字符 + 明确 separator) 必须还能逮到"""
+    cases = [
+        "密码是 jiniaA1+abc",
+        "密码: longPassword123",
+        "密码为 ffcs2026!",
+        "password=jiniaA1+abc",
+        "passwd: longPassword",
+        "api_key = sk-abcdef123456",
+        "token: ghp_abcdef1234567890",
+        "Authorization: Bearer xxxxyyyyzzzzaaaa",
+    ]
+    for text in cases:
+        hits = detect_credentials_in_text(text)
+        assert len(hits) >= 1, f"BL-FIX13 真凭据没逮到: '{text}'"
