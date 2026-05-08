@@ -1,0 +1,24 @@
+# BL-WIN1 (5/8): mac → Windows GNU cross-build linker 配置.
+#
+# 用 mingw-w64 当 linker (brew install mingw-w64). MSVC target (msvc) 需要
+# windows host SDK + link.exe, 在 mac 上跑不了, 所以走 GNU target 路线.
+#
+# 用法:
+#   rustup target add x86_64-pc-windows-gnu
+#   brew install mingw-w64
+#   cargo build --release --target x86_64-pc-windows-gnu
+#
+# 输出:
+#   target/x86_64-pc-windows-gnu/release/catfish-companion-app.exe
+#
+# 注意:
+#   - 这是 raw .exe, 不含 MSI / NSIS installer (那个需要 wix / makensis)
+#   - 真机跑前需要装 WebView2 Runtime (Win11 自带, Win10 可能要装)
+#   - 代码签名 (Authenticode) 需要 Windows + signtool, 不能 cross
+
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
+ar = "x86_64-w64-mingw32-ar"
+
+# Windows GNU 默认 link 静态 libgcc / pthread, 否则真机跑时找不到 dll.
+rustflags = ["-C", "link-args=-static-libgcc"]
