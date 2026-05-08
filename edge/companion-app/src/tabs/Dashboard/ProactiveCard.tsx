@@ -58,6 +58,11 @@ export default function ProactiveCard() {
         border: "1px solid var(--catfish-border)",
         borderRadius: "var(--radius-md)",
         padding: "var(--space-4)",
+        // BL-FIX15 (5/8): 撑满 grid cell, 跟同行的 TasksCard 高度对齐
+        height: "100%",
+        boxSizing: "border-box",
+        display: "flex",
+        flexDirection: "column",
       }}
     >
       <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)", marginBottom: "var(--space-3)" }}>

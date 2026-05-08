@@ -90,7 +90,12 @@ export default function TasksCard() {
         border: "1px solid var(--catfish-border)",
         borderRadius: "var(--radius-md)",
         padding: "var(--space-4)",
-        marginBottom: "var(--space-4)",
+        // BL-FIX15 (5/8): 撑满 grid cell + 去 marginBottom (跟 ProactiveCard 对齐)
+        // 之前的 marginBottom 是早期没 grid 时残留, 现在 grid 自带 gap 不需要
+        height: "100%",
+        boxSizing: "border-box",
+        display: "flex",
+        flexDirection: "column",
       }}
     >
       <div
