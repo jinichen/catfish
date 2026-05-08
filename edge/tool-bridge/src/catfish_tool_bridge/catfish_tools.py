@@ -1597,8 +1597,14 @@ def _run_with_hard_timeout(fn: Any, args: Dict[str, Any], hard_timeout_sec: floa
     用法 — 在 browser_* 入口套一层:
         def browser_xxx(args):
             return _run_with_hard_timeout(_browser_xxx_impl, args)
+
+    BL-FIX11 (5/8): 不用 ``with ThreadPoolExecutor()`` —— 那个的 ``__exit__``
+    默认 ``shutdown(wait=True)`` 会**等卡死线程结束才返回**, timeout 等于没用.
+    改成裸 executor + finally ``shutdown(wait=False)`` 让卡死线程后台跑去 (mac
+    重启 GC), daemon 立刻继续服务别的请求.
     """
-    with _futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="catfish_pw") as pool:
+    pool = _futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="catfish_pw")
+    try:
         future = pool.submit(fn, args)
         try:
             return future.result(timeout=hard_timeout_sec)
@@ -1614,6 +1620,9 @@ def _run_with_hard_timeout(fn: Any, args: Dict[str, Any], hard_timeout_sec: floa
                     f"用 'text=...' / 'role=...' 文字匹配, 或者 Companion 控制台重启 Chrome."
                 ),
             }
+    finally:
+        # BL-FIX11: wait=False 关键, 不等卡死线程结束 — 否则 shutdown 自己卡, daemon 死
+        pool.shutdown(wait=False)
 
 
 def _connect_playwright_browser(playwright):

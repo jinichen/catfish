@@ -1515,3 +1515,31 @@ def test_browser_snapshot_routes_through_hard_timeout(monkeypatch: pytest.Monkey
 
     catfish_tools.browser_snapshot({})
     assert called["impl"] is True
+
+
+def test_run_with_hard_timeout_actually_returns_quickly() -> None:
+    """BL-FIX11: 硬超时之后 wrapper 真的快速返回 (不被 shutdown(wait=True) 锁住).
+
+    FIX10 用 `with ThreadPoolExecutor()` 退出时默认等线程结束, timeout 等于没用.
+    这个 test 检测 wrapper 整体执行时间 < hard_timeout * 2, 防 regression.
+    """
+    import time as _time
+    import threading as _threading
+
+    stop_event = _threading.Event()
+
+    def stuck_fn(_args: Any) -> Dict[str, Any]:
+        # 卡 60s, 远超 timeout
+        stop_event.wait(timeout=60.0)
+        return {"type": "ok", "result": "should not reach"}
+
+    start = _time.monotonic()
+    result = catfish_tools._run_with_hard_timeout(stuck_fn, {}, hard_timeout_sec=1.0)
+    elapsed = _time.monotonic() - start
+
+    # 关键 assert: wrapper 1s 后必须返, 不能等到 stuck_fn 自己结束 (60s)
+    assert elapsed < 3.0, f"wrapper 卡了 {elapsed}s, BL-FIX11 没生效"
+    assert result["type"] == "error"
+    assert "硬超时" in result["error"]
+    # cleanup
+    stop_event.set()
