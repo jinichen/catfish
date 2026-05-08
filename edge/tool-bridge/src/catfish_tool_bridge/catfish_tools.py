@@ -434,6 +434,9 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
             "**双路径**: 优先 Playwright `page.accessibility.snapshot()`; 新版 Playwright "
             "(>=1.50) accessibility 已废弃, 自动 fallback `page.evaluate()` 走 JS 扫 "
             "button/input/a/[role]. 返回里 `snapshot_method` 字段会标明实际走哪条.\n\n"
+            "**⚠️ max_elements 用默认 500 别主动减小**. 找不到要点的元素时**加大到 1000**, "
+            "不是减小. 减小只会让你少看到关键按钮 (尤其登录 / 提交 这类常被 nav/footer link "
+            "挤出 top N). 截断时 `truncated=true` + `hint_for_llm` 字段会提示你怎么改.\n\n"
             "返回字段:\n"
             "  - title: 页面 title\n"
             "  - url: 页面 url (真实 location.href)\n"
@@ -441,15 +444,19 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
             "      role (button/textbox/link...) + name (label/placeholder/innerText) + "
             "depth + selector_hint (#id / tag[name=...] / tag.cls)\n"
             "  - snapshot_method: 'accessibility' / 'dom_evaluate'\n"
-            "  - 页面太大时 elements 会被截断到 max_elements (默认 200)"
+            "  - truncated: bool, 超 max_elements 时 true\n"
+            "  - hint_for_llm: 截断时的下一步建议 (加大 max_elements 重调)"
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "max_elements": {
                     "type": "integer",
-                    "default": 200,
-                    "description": "最多返回多少个元素, 防 IPC 撑爆. 默认 200",
+                    "default": 500,
+                    "description": (
+                        "最多返回多少个元素, 防 IPC 撑爆. 默认 500, cap 1000. "
+                        "⚠️ 找不到元素时加大不是减小. 首次调用建议不传, 用默认值."
+                    ),
                 },
             },
             "required": [],
@@ -1883,9 +1890,14 @@ def browser_snapshot(args: Dict[str, Any]) -> Dict[str, Any]:
          扫 button/input/a/[role] 拿可见可交互元素列表, 跟 a11y 输出格式兼容
 
     返回里多个 ``snapshot_method`` 字段标明走哪条路径, 方便 audit / debug.
+
+    BL-FIX9 (5/8): default 200 → 500, cap 500 → 1000. 鸿波 5/8 点的真因 — LLM 偷
+    懒主动选 max_elements=50, CAS 登录页 nav / footer link 把登录 button 挤出 50,
+    LLM 看不到只能截图找 → 撞 Playwright sync 卡死. 默认大点 + truncated 时返
+    hint_for_llm 引导加大不是减小, 这条链上无解.
     """
-    max_elements = int(args.get("max_elements") or 200)
-    max_elements = max(10, min(max_elements, 500))
+    max_elements = int(args.get("max_elements") or 500)
+    max_elements = max(10, min(max_elements, 1000))
 
     try:
         sync_playwright = _import_playwright()
@@ -1957,7 +1969,7 @@ def browser_snapshot(args: Dict[str, Any]) -> Dict[str, Any]:
                 f"[via {snapshot_method}]"
             )
             if truncated:
-                summary += " — 截断到上限, 想看更多 scroll 后再 snapshot"
+                summary += f" — 截断到 {max_elements}, 加大 max_elements 看全部"
 
             result: Dict[str, Any] = {
                 "type": "ok",
@@ -1969,6 +1981,15 @@ def browser_snapshot(args: Dict[str, Any]) -> Dict[str, Any]:
                 "snapshot_method": snapshot_method,
                 "summary": summary,
             }
+            if truncated:
+                # BL-FIX9: 显式给 LLM 下一步建议, 防它偷懒减小或者去截图找
+                next_max = min(max_elements * 2, 1000)
+                result["hint_for_llm"] = (
+                    f"⚠️ elements 被截断了 (实际 >={max_elements}). 找不到要点"
+                    f"的按钮 / link 时, **重调本工具加大 max_elements 到 {next_max}** "
+                    f"(不是减小, 不是去截图). 如果 max_elements 已经到 1000, 改用 "
+                    f"selector='text=登录' 这种文字匹配直接 click, 不用先看 element."
+                )
             if a11y_error and snapshot_method == "dom_evaluate":
                 result["accessibility_fallback_reason"] = a11y_error
             return result

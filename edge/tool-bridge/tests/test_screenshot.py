@@ -1362,3 +1362,75 @@ def test_dispatch_browser_screenshot_routes(monkeypatch: pytest.MonkeyPatch) -> 
     result = catfish_tools.dispatch_native("catfish_browser_screenshot", {})
     assert result["type"] == "error"
     assert "playwright" in result["error"]
+
+
+# ============================================================
+# BL-FIX9 (5/8) — snapshot truncated 时返 hint_for_llm 引导加大
+# ============================================================
+#
+# 现网坑 (鸿波 5/8 点出): LLM 偷懒主动选 max_elements=50, CAS 登录页 nav / footer
+# link 多, 登录 button 挤出 50, LLM 看不到 → 想截图 → 撞 Playwright sync 卡死.
+# 修法: 默认 200→500 cap 500→1000, truncated 时显式返 hint_for_llm 引导加大不减小.
+
+
+def test_snapshot_truncated_returns_hint_for_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """超 max_elements → truncated=true + hint_for_llm 字段, 引导加大"""
+    fake_dom = [
+        {"role": "button", "name": f"btn-{i}", "depth": 1, "selector_hint": f"#b{i}"}
+        for i in range(60)
+    ]
+    page = _FakePage(accessibility=None, evaluate_return=fake_dom)
+    _patch_connect(monkeypatch, page)
+
+    result = catfish_tools.browser_snapshot({"max_elements": 50})
+    assert result["truncated"] is True
+    assert "hint_for_llm" in result
+    hint = result["hint_for_llm"]
+    # hint 含 "加大" / "max_elements" / 下一档值
+    assert "加大" in hint
+    assert "max_elements" in hint
+    assert "100" in hint  # 50 * 2 = 100, 下一档建议
+    # 截断时 summary 也提示
+    assert "加大" in result["summary"]
+
+
+def test_snapshot_not_truncated_no_hint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """没截断 → 不返 hint_for_llm, summary 也不提加大"""
+    fake_dom = [
+        {"role": "textbox", "name": "用户名", "depth": 5, "selector_hint": "#name"},
+        {"role": "textbox", "name": "密码", "depth": 5, "selector_hint": "#pwd"},
+    ]
+    page = _FakePage(accessibility=None, evaluate_return=fake_dom)
+    _patch_connect(monkeypatch, page)
+
+    result = catfish_tools.browser_snapshot({"max_elements": 50})
+    assert result["truncated"] is False
+    assert "hint_for_llm" not in result
+
+
+def test_snapshot_default_500_not_200() -> None:
+    """BL-FIX9 默认 max_elements 500 (从 200 bump 上来)"""
+    tool = next(
+        t for t in catfish_tools.CATFISH_NATIVE_TOOLS
+        if t["name"] == "catfish_browser_snapshot"
+    )
+    max_props = tool["input_schema"]["properties"]["max_elements"]
+    assert max_props["default"] == 500
+
+
+def test_snapshot_cap_1000_not_500(monkeypatch: pytest.MonkeyPatch) -> None:
+    """BL-FIX9 cap 从 500 bump 到 1000"""
+    page = _FakePage(accessibility=None, evaluate_return=[])
+    _patch_connect(monkeypatch, page)
+    # 给 5000 — 应该被 cap 到 1000 不是 500
+    # 怎么验证? 看 hint 里 next_max 的值. 设 max_elements=600 一定截断, hint 说加到 1000
+    fake_dom = [
+        {"role": "button", "name": f"btn-{i}", "depth": 1, "selector_hint": f"#b{i}"}
+        for i in range(700)
+    ]
+    page = _FakePage(accessibility=None, evaluate_return=fake_dom)
+    _patch_connect(monkeypatch, page)
+    result = catfish_tools.browser_snapshot({"max_elements": 600})
+    assert result["truncated"] is True
+    # 600 * 2 = 1200, 但 cap 1000, 所以 hint 含 1000
+    assert "1000" in result["hint_for_llm"]
