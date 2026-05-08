@@ -108,7 +108,17 @@ async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWri
 
 
 async def serve_forever(socket_path: Path) -> None:
-    # 每次启动先把残留 socket 清掉(防上次 crash 留下的死文件)
+    """启动 IPC server.
+
+    Unix: socket_path 是 unix domain socket 文件 (chmod 600 owner-only).
+    Windows: BL-WIN8 (5/8) — Windows 没 unix socket, 改走 TCP localhost
+             随机端口. socket_path 这时不再是 socket, 而是一个**端口号文件** —
+             里面存 ASCII 端口号 (e.g. "54321"), Companion Rust 客户端读这
+             个文件拿到端口去 connect("127.0.0.1:<port>"). 语义上跟 Unix
+             socket path 一样 — '一个文件代表 RPC 端点'. 只是 Windows 上要
+             多一步 'open + read line + parse int'.
+    """
+    # 每次启动先把残留 socket / port 文件清掉(防上次 crash 留下的死文件)
     if socket_path.exists():
         try:
             socket_path.unlink()
@@ -121,19 +131,48 @@ async def serve_forever(socket_path: Path) -> None:
     # 可能 5-10 MB, 默认 64KB 会让 readline 抛 LimitOverrunError。
     # 上限 12MB raw + base64 1.33x ≈ 16MB, 跟 catfish_tools._MAX_SCREENSHOT_BYTES
     # 配套, 保险起见多留点。
-    server = await asyncio.start_unix_server(
-        _handle_client,
-        str(socket_path),
-        limit=16 * 1024 * 1024,
-    )
-    os.chmod(socket_path, 0o600)  # 只员工自己能连
-    logger.info("listening on %s", socket_path)
+    is_windows = os.name == "nt"
+    if is_windows:
+        # BL-WIN8: TCP localhost + 随机端口. 用 0 让 OS 分配避免冲突.
+        server = await asyncio.start_server(
+            _handle_client,
+            host="127.0.0.1",
+            port=0,
+            limit=16 * 1024 * 1024,
+        )
+        # 拿到 OS 分配的端口
+        sockets = server.sockets or ()
+        if not sockets:
+            raise RuntimeError("BL-WIN8: TCP server start 后拿不到 sockets")
+        actual_port = sockets[0].getsockname()[1]
+        # 端口号写到 socket_path (这时它是 port 文件不是 socket)
+        socket_path.write_text(str(actual_port), encoding="ascii")
+        try:
+            # ACL: Windows 上 chmod 不完全支持, 但 0o600 至少把 'Users' 组的
+            # default ACL 收紧 (依赖 cygwin/git-bash 路径行为). 失败 silent.
+            os.chmod(socket_path, 0o600)
+        except OSError:
+            pass
+        endpoint_desc = f"tcp://127.0.0.1:{actual_port} (port file: {socket_path})"
+        logger.info(
+            "BL-WIN8 listening on TCP localhost port %d, port file %s",
+            actual_port, socket_path,
+        )
+    else:
+        server = await asyncio.start_unix_server(
+            _handle_client,
+            str(socket_path),
+            limit=16 * 1024 * 1024,
+        )
+        os.chmod(socket_path, 0o600)  # 只员工自己能连
+        endpoint_desc = str(socket_path)
+        logger.info("listening on %s", socket_path)
 
     hermes_count = len(adapter._r().get_all_tool_names())
     native_count = len(catfish_tools.CATFISH_NATIVE_TOOLS)
     print("─" * 60, flush=True)
     print("🐟 catfish-tool-bridge", flush=True)
-    print(f"   socket : {socket_path}", flush=True)
+    print(f"   endpoint: {endpoint_desc}", flush=True)
     print(f"   tools  : {hermes_count + native_count} 个 "
           f"(hermes {hermes_count} + catfish 原生 {native_count})", flush=True)
     print("─" * 60, flush=True)

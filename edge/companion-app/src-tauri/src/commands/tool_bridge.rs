@@ -5,25 +5,23 @@
 //! 复用 hermes-agent 的 venv，因为 tool 依赖（markitdown / browser /
 //! mcp / ...）都在那个 venv 里装好了。
 
-// BL-WIN1: Duration 只 cfg(unix) call_rpc + RPC_TIMEOUT 用
-#[cfg(unix)]
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-// BL-WIN1 (5/8): Unix domain socket 只 unix 平台有, Windows 等价是 named pipe
-// (\\.\pipe\xxx). 现在 tool-bridge 只支持 unix socket, Windows build 暂走 stub
-// (call_rpc 直接返 friendly error). 真 Windows IPC 留 BL-WIN8 实现 named pipes.
-#[cfg(unix)]
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+// BL-WIN8 (5/8): IPC 跨平台 — Unix 走 unix domain socket, Windows 走 TCP
+// localhost (随机端口). Python tool-bridge 端启动时, Windows 会把端口号写到
+// socket_path 里, Rust 这边读出来 connect TCP. 跟 named pipe 比 TCP 多一跳
+// 但实现简单, 测试容易. 不影响安全 (loopback 出不了本机).
 #[cfg(unix)]
 use tokio::net::UnixStream;
+#[cfg(not(unix))]
+use tokio::net::TcpStream;
 
 use crate::commands::types::ServiceStatus;
 use crate::services::{catfish_paths, process};
 
-// BL-WIN1 (5/8): RPC_TIMEOUT 只 unix call_rpc 用, Windows stub 直接返 error 没用到
-#[cfg(unix)]
 const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 跟 Python tool-bridge 协议对齐 —— 字段都是 snake_case,
@@ -175,34 +173,45 @@ pub async fn tool_bridge_call_tool(
 // internal: unix socket NDJSON RPC
 // ============================================================
 
-#[cfg(not(unix))]
-async fn call_rpc(_method: &str, _params: Value) -> Result<Value, String> {
-    // BL-WIN1: Windows 暂没接 IPC, 所有 RPC 直接返 friendly error.
-    // tool-bridge daemon 在 Windows 上跑不起来 (没 unix socket), 所以前端
-    // 调任何 tool 都该被 frontend 拦掉, 这里是兜底. BL-WIN8 真接 named pipe.
-    Err(
-        "tool-bridge 暂未支持 Windows (Unix socket only). \
-         真要 Windows 跑等 BL-WIN8 接 named pipe 之后."
-            .to_string(),
-    )
-}
-
-#[cfg(unix)]
 async fn call_rpc(method: &str, params: Value) -> Result<Value, String> {
-    let socket_path = catfish_paths::tool_bridge_socket()
-        .ok_or_else(|| "找不到 socket 路径".to_string())?;
-    if !socket_path.exists() {
-        return Err("tool-bridge socket 不存在 — 还没启动？".into());
+    let endpoint_path = catfish_paths::tool_bridge_socket()
+        .ok_or_else(|| "找不到 endpoint 路径".to_string())?;
+    if !endpoint_path.exists() {
+        return Err("tool-bridge endpoint 不存在 — 还没启动？".into());
     }
 
     // 连接 + 读写都要 timeout，避免 RPC 挂死把 Companion 卡住
+    // BL-WIN8: 平台分流
+    //   Unix: endpoint_path 是 unix socket 文件本体, 直接 UnixStream::connect
+    //   Windows: endpoint_path 文件内容是 ASCII 端口号, 读出来 TcpStream::connect
+    #[cfg(unix)]
     let stream = tokio::time::timeout(
         Duration::from_secs(2),
-        UnixStream::connect(&socket_path),
+        UnixStream::connect(&endpoint_path),
     )
     .await
     .map_err(|_| "连接 tool-bridge 超时".to_string())?
     .map_err(|e| format!("连接失败: {e}"))?;
+
+    #[cfg(not(unix))]
+    let stream = {
+        // 读端口号文件
+        let port_str = tokio::fs::read_to_string(&endpoint_path)
+            .await
+            .map_err(|e| format!("读 endpoint 文件失败: {e}"))?;
+        let port: u16 = port_str
+            .trim()
+            .parse()
+            .map_err(|e| format!("endpoint 文件内容不是端口号 ({port_str:?}): {e}"))?;
+        let addr = format!("127.0.0.1:{port}");
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            TcpStream::connect(&addr),
+        )
+        .await
+        .map_err(|_| format!("连接 tool-bridge {addr} 超时"))?
+        .map_err(|e| format!("连接失败 ({addr}): {e}"))?
+    };
 
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);

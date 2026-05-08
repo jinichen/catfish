@@ -109,7 +109,12 @@ pub fn tool_bridge_log_path() -> Option<PathBuf> {
     companion_state_dir().map(|d| d.join("tool-bridge.log"))
 }
 
-/// tool-bridge 的 unix socket 路径（与 Python 端 default 对齐）
+/// tool-bridge 的 endpoint 文件路径 (与 Python 端 default 对齐).
+///
+/// Unix: 这个路径就是 unix domain socket 文件本体.
+/// Windows: BL-WIN8 (5/8) — Windows 没 unix socket, 文件内容改成 ASCII 端口号
+///   (e.g. "54321"), 客户端读出来 connect("127.0.0.1:<port>"). 命名仍叫
+///   .sock 以保持 mac/win 行为一致, Python 端 default 也是这条.
 pub fn tool_bridge_socket() -> Option<PathBuf> {
     home_dir().map(|h| h.join(".catfish").join("tool-bridge.sock"))
 }
