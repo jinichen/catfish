@@ -214,10 +214,11 @@ def test_column_widths(real_sample):
 # ── 文件名 + 路径 ───────────────────────────────────────────────
 
 
-def test_default_output_path_uses_desktop_with_date(tmp_path, monkeypatch):
-    """没传 output_path → ~/Desktop/周报-<员工>-<YYYYMMDD>.xlsx, 日期从 week_label 抽."""
+def test_default_output_path_uses_catfish_output_with_date(tmp_path, monkeypatch):
+    """BL-FIX12: 默认 ~/.catfish/output/<日期>/<时间>_周报-<员工>/周报-<员工>-<YYYYMMDD>.xlsx,
+    不再丢 ~/Desktop/. 日期从 week_label 抽."""
     fake_home = tmp_path / "fakehome"
-    (fake_home / "Desktop").mkdir(parents=True)
+    fake_home.mkdir(parents=True)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
 
     result = render_weekly_report(
@@ -227,15 +228,22 @@ def test_default_output_path_uses_desktop_with_date(tmp_path, monkeypatch):
             {"category": "项目 A", "this_week": "做了 X", "next_week": "继续 X"},
         ],
     )
-    expected = fake_home / "Desktop" / "周报-张三-20260424.xlsx"
-    assert result["xlsx"] == str(expected.resolve())
-    assert expected.exists()
+    out_path = Path(result["xlsx"])
+    # 反向: 不能在桌面
+    assert "Desktop" not in str(out_path), f"BL-FIX12 regression: 又跑桌面了 {out_path}"
+    # 正向: 在 ~/.catfish/output/ 下, 文件名含员工 + 日期
+    assert ".catfish" in str(out_path)
+    assert "output" in str(out_path)
+    assert "周报-张三-20260424.xlsx" == out_path.name
+    # 上一级目录名含 "周报-张三"
+    assert "周报-张三" in out_path.parent.name
+    assert out_path.exists()
 
 
 def test_default_output_uses_today_when_no_date_in_label(tmp_path, monkeypatch):
     """week_label 里没日期 → 用当天 (YYYYMMDD)."""
     fake_home = tmp_path / "h"
-    (fake_home / "Desktop").mkdir(parents=True)
+    fake_home.mkdir(parents=True)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
 
     from datetime import datetime
@@ -246,6 +254,9 @@ def test_default_output_uses_today_when_no_date_in_label(tmp_path, monkeypatch):
     )
     today = datetime.now().strftime("%Y%m%d")
     assert today in result["xlsx"]
+    # BL-FIX12: 也要在 .catfish/output 下, 不在 Desktop
+    assert ".catfish" in result["xlsx"]
+    assert "Desktop" not in result["xlsx"]
 
 
 # ── 输入兼容 + 边界 ─────────────────────────────────────────────

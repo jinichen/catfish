@@ -68,8 +68,12 @@ def _resolve_output_path(
     """决定输出路径.
 
     - 有 output_path → 用它
-    - 无 → ~/Desktop/周报-<员工>-<YYYYMMDD>.xlsx
+    - 无 → ``~/.catfish/output/<日期>/<时间>_周报-<员工>/周报-<员工>-<YYYYMMDD>.xlsx``
       日期从 week_label 抽取 (匹配 YYYYMMDD / YYYY-MM-DD / YYYY年MM月DD日 等)
+
+    BL-FIX12 (5/8): 之前默认丢 ``~/Desktop/`` 桌面, 鸿波反馈"乱". 改成 catfish
+    标准归档目录 ``~/.catfish/output/``, 跟 leadership-briefing / project-approval
+    一致. 员工要找文件, 一个目录全包.
     """
     if output_path:
         p = Path(os.path.expanduser(output_path))
@@ -79,8 +83,15 @@ def _resolve_output_path(
 
     # 抽日期 - 优先匹配末尾的 YYYYMMDD
     date_str = _extract_date_yyyymmdd(week_label) or datetime.now().strftime("%Y%m%d")
-    fname = f"周报-{_slugify(employee_name)}-{date_str}.xlsx"
-    return (Path.home() / "Desktop" / fname).resolve()
+    employee_slug = _slugify(employee_name)
+    fname = f"周报-{employee_slug}-{date_str}.xlsx"
+
+    now = datetime.now()
+    date_dir = now.strftime("%Y-%m-%d")
+    time_dir = now.strftime("%H%M%S") + f"_周报-{employee_slug}"
+    return (
+        Path.home() / ".catfish" / "output" / date_dir / time_dir / fname
+    ).resolve()
 
 
 _DATE_RES = [
@@ -137,9 +148,12 @@ def render_weekly_report(
 
     返回:
         {
-          "xlsx": "/Users/.../Desktop/周报-X-YYYYMMDD.xlsx",
+          "xlsx": "/Users/.../.catfish/output/2026-05-08/170305_周报-陈鸿波/周报-陈鸿波-20260508.xlsx",
           "files": ["...xlsx"],   # Companion 用这个生成 FilePill
         }
+
+    BL-FIX12: 默认输出到 ``~/.catfish/output/<日期>/<时间>_周报-<员工>/`` 不再
+    散桌面. 跟其他 skill (leadership-briefing / project-approval) 一致归档.
     """
     if not items:
         raise ValueError("items 不能为空 — 至少要有 1 条本周事项")

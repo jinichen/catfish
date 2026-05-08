@@ -10,7 +10,7 @@ description: |-
   - 表头加粗 + 浅蓝底纹
   - 多行单元格自动高度 (员工把"1. xxx 2. yyy 3. zzz" 写进同一格能正常换行显示)
   - 边框全实线 0.5pt
-  - 文件名: `周报-<员工>-<日期>.xlsx`, 默认输出 `~/Desktop/`
+  - 文件名: `周报-<员工>-<日期>.xlsx`, 默认输出 `~/.catfish/output/<日期>/<时间>_周报-<员工>/` (BL-FIX12, 不再散桌面)
 
   **辅助提取本周内容**:
   - LLM 反问员工 5-8 件事 (按"合规/资质/安全/其它" 等类别)
@@ -166,10 +166,10 @@ result = render_weekly_report(
             "note": "",
         },
     ],
-    output_path=None,   # None → ~/Desktop/周报-陈鸿波-20260424.xlsx
+    output_path=None,   # None → ~/.catfish/output/<日期>/<时间>_周报-陈鸿波/周报-陈鸿波-20260424.xlsx
 )
 # result -> {
-#   "xlsx": "/Users/.../Desktop/周报-陈鸿波-20260424.xlsx",
+#   "xlsx": "/Users/.../.catfish/output/2026-04-24/170305_周报-陈鸿波/周报-陈鸿波-20260424.xlsx",
 #   "files": [...],   # Companion 自动渲染 FilePill
 # }
 ```
@@ -188,7 +188,7 @@ result = render_weekly_report(
 | `items[].next_week` | str | 否 | 下周计划 (默认 "持续中") |
 | `items[].deadline` | str | 否 | 计划完成时间 (默认空) |
 | `items[].note` | str | 否 | 备注 (默认空) |
-| `output_path` | str | 否 | None → 自动 `~/Desktop/周报-<员工>-<YYYYMMDD>.xlsx` |
+| `output_path` | str | 否 | None → 自动 `~/.catfish/output/<日期>/<时间>_周报-<员工>/周报-<员工>-<YYYYMMDD>.xlsx` (BL-FIX12) |
 
 ---
 
