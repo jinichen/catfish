@@ -381,3 +381,148 @@ def test_deepseek_realworld_browser_back_full() -> None:
     goto = next(t for t in out["tools"] if t["function"]["name"] == "browser_goto")
     assert goto["function"]["parameters"]["properties"] == {"url": {"type": "string"}}
     assert goto["function"]["parameters"]["required"] == ["url"]
+
+
+# ============================================================
+# BL-FIX4 (5/8) — hermes builtin browser_* 跟 catfish_browser_* 撞时去重
+# ============================================================
+#
+# 现网坑: hermes builtin 暴露 browser_back / browser_cdp / browser_click /
+# browser_vision / ... 一族, 同时 tool-bridge 暴露 catfish_browser_goto /
+# catfish_browser_snapshot / catfish_browser_click / catfish_browser_fill 一族.
+# LLM 看见两套都能调, 走 hermes browser_vision (训练分布最熟), 但 catfish 没配
+# vision provider → tool 返 error → LLM 懵, 整轮 BadRequest 400.
+# 修法: tools_sanitizer 看到任何 catfish_browser_* 就丢所有 hermes 一族 (browser_*
+# 开头但没 catfish_ 前缀的). LLM 只看一套.
+
+
+def test_dedupe_hermes_browser_when_catfish_present() -> None:
+    """有 catfish_browser_* → hermes builtin browser_* 一律丢"""
+    body = {
+        "tools": [
+            # hermes builtin (5 个, 都该被丢)
+            {"type": "function", "function": {"name": "browser_back",
+             "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "browser_cdp",
+             "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "browser_click",
+             "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "browser_vision",
+             "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "browser_screenshot",
+             "parameters": {"type": "object", "properties": {}}}},
+            # catfish 一族 (4 个, 该留)
+            {"type": "function", "function": {"name": "catfish_browser_goto",
+             "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "catfish_browser_snapshot",
+             "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "catfish_browser_click",
+             "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "catfish_browser_fill",
+             "parameters": {"type": "object", "properties": {}}}},
+            # 非 browser_ 前缀的, 不动
+            {"type": "function", "function": {"name": "memory_save",
+             "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "skill_run",
+             "parameters": {"type": "object", "properties": {}}}},
+        ],
+    }
+    out = sanitize_tools(body)
+    names = [t["function"]["name"] for t in out["tools"]]
+    # 5 个 hermes browser_* 全丢
+    assert "browser_back" not in names
+    assert "browser_cdp" not in names
+    assert "browser_click" not in names
+    assert "browser_vision" not in names
+    assert "browser_screenshot" not in names
+    # 4 个 catfish_browser_* 全留
+    assert "catfish_browser_goto" in names
+    assert "catfish_browser_snapshot" in names
+    assert "catfish_browser_click" in names
+    assert "catfish_browser_fill" in names
+    # 非 browser_ 一族不影响
+    assert "memory_save" in names
+    assert "skill_run" in names
+    # 总数: 11 - 5 = 6
+    assert len(out["tools"]) == 6
+
+
+def test_no_dedupe_when_no_catfish_browser() -> None:
+    """没 catfish_browser_* — hermes browser_* 保留, 不动"""
+    body = {
+        "tools": [
+            {"type": "function", "function": {"name": "browser_back",
+             "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "browser_vision",
+             "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "memory_save",
+             "parameters": {"type": "object", "properties": {}}}},
+        ],
+    }
+    out = sanitize_tools(body)
+    names = [t["function"]["name"] for t in out["tools"]]
+    # 全留
+    assert "browser_back" in names
+    assert "browser_vision" in names
+    assert "memory_save" in names
+    assert len(out["tools"]) == 3
+
+
+def test_dedupe_only_drops_hermes_browser_prefix() -> None:
+    """只丢 'browser_' 开头的, 不丢别的"""
+    body = {
+        "tools": [
+            {"type": "function", "function": {"name": "catfish_browser_goto",
+             "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "browse_url",  # 不带 _ 后缀, 不丢
+             "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "my_browser_thing",  # 中间含 browser_, 不丢
+             "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "browser_click",  # 撞, 丢
+             "parameters": {"type": "object", "properties": {}}}},
+        ],
+    }
+    out = sanitize_tools(body)
+    names = [t["function"]["name"] for t in out["tools"]]
+    assert "catfish_browser_goto" in names
+    assert "browse_url" in names
+    assert "my_browser_thing" in names
+    assert "browser_click" not in names  # 唯一被丢的
+
+
+def test_dedupe_logs_count(caplog: object) -> None:
+    """日志里要 log 丢了多少 hermes browser_*"""
+    import logging as _logging  # noqa: PLC0415
+    body = {
+        "tools": [
+            {"type": "function", "function": {"name": "catfish_browser_goto",
+             "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "browser_back",
+             "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "browser_vision",
+             "parameters": {"type": "object", "properties": {}}}},
+        ],
+    }
+    with caplog.at_level(_logging.INFO, logger="catfish.gateway.tools_sanitizer"):  # type: ignore[attr-defined]
+        sanitize_tools(body)
+    matched = [r for r in caplog.records if "BL-FIX4" in r.getMessage()]  # type: ignore[attr-defined]
+    assert len(matched) >= 1
+    assert "deduped 2" in matched[0].getMessage()
+
+
+def test_dedupe_has_catfish_helper() -> None:
+    """_has_catfish_browser_tools 单独覆盖"""
+    from catfish_gateway.tools_sanitizer import _has_catfish_browser_tools
+
+    # 有 catfish_browser_*
+    assert _has_catfish_browser_tools([
+        {"type": "function", "function": {"name": "catfish_browser_goto"}},
+    ])
+    # 没
+    assert not _has_catfish_browser_tools([
+        {"type": "function", "function": {"name": "browser_back"}},
+    ])
+    # 空
+    assert not _has_catfish_browser_tools([])
+    # 脏数据不爆
+    assert not _has_catfish_browser_tools([None, "string", {"function": "not-dict"}])  # type: ignore[list-item]
