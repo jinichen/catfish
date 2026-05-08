@@ -13,6 +13,7 @@ pub mod audit;
 pub mod auth;
 pub mod chrome;
 pub mod curator;
+pub mod endpoints;
 pub mod feedback;
 pub mod file;
 pub mod file_parse;

@@ -203,9 +203,15 @@ oidc:
   # OAuth scope. 决定 IdP 返哪些 claim.
   scope: openid email profile
 
-# Phase 2 扩展段 (现在不读, 但写在这预留位置):
+# BL-WIN9 / DEPLOY1 (5/8): 网关地址配置 — 客户网关装中央服务器时改这里.
+# 优先级: yaml > env (CATFISH_GATEWAY_HOST/PORT) > default 127.0.0.1:8999.
+#
+# 单机部署 (开发 / demo): 网关跟 Companion 同机, 注释掉这段, 走 default.
+# 集中部署 (生产): 取消下面注释, 改 gateway_url 指你网关服务器.
 # endpoints:
-#   gateway_url: http://127.0.0.1:8999
+#   gateway_url: http://10.10.40.50:8999       # 客户网关地址
+#   chrome_debug_url: http://127.0.0.1:9222    # Chrome 一般还在本机, 不动
+
 # audit:
 #   max_log_size_mb: 100
 "#;

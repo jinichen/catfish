@@ -347,6 +347,8 @@ pub fn run() {
             // BL-E11 命名权 (五一 sprint 5/3 晚): 员工自定义鲶鱼名 + 人设
             commands::agent::get_agent_prefs,
             commands::agent::set_agent_prefs,
+            // BL-WIN9 / DEPLOY1 (5/8): 暴露 yaml 配置的 endpoints 给前端动态读
+            commands::endpoints::get_runtime_endpoints,
             // BL-CR Curator 集成 (5/7): hermes 0.12 自动整理脚本配置 + 状态展示
             commands::curator::get_curator_config,
             commands::curator::set_curator_config,
