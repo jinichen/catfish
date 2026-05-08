@@ -1,5 +1,32 @@
 # Companion 部署 — 网关地址配置 (BL-WIN9 / DEPLOY1, 5/8)
 
+## 部署形态分两种 (按客户需求选)
+
+### 形态 A: 纯聊天 — Windows 端只装 Companion .exe
+
+中央服务器:
+- catfish-gateway (Python 8999)
+- catfish-identity (Python 8998, SSO)
+
+员工 Windows:
+- 只装 Companion .exe (含 yaml 配置)
+- **能聊天 / 看仪表盘 / 用 SSO 登录**
+- ❌ **浏览器自动化 / skill 跑不了** (tool-bridge 不在本机)
+
+适合:第一波给客户演聊天能力, 不演自动化.
+
+### 形态 B: 完整 — Windows 端 Companion + 本机 tool-bridge + Chrome
+
+中央服务器: 同上.
+员工 Windows:
+- Companion .exe
+- Python 3.10+ + tool-bridge (本机 daemon)
+- Chrome (浏览器自动化用)
+
+适合:演 EIS 登录 / 验证码识别 / catfish_browser_* 这种真自动化场景.
+
+---
+
 ## 场景: 网关装到中央服务器, 员工 mac/Windows 都连这一台
 
 ```
@@ -26,8 +53,11 @@
 
 ## 配置方法 (mac + Windows 同款)
 
-员工电脑装好 Companion 之后, 第一次启动会自动生成
-`~/.catfish/companion.yaml` (mac) 或 `%USERPROFILE%\.catfish\companion.yaml` (Windows),
+员工电脑装好 Companion 之后, **第一次启动会自动生成**
+- mac: `~/.catfish/companion.yaml`
+- Windows: `%USERPROFILE%\.catfish\companion.yaml`
+  (实际地址例: `C:\Users\chenhongbo\.catfish\companion.yaml`)
+
 内容形如:
 
 ```yaml
@@ -54,6 +84,24 @@ endpoints:
 ```
 
 **重启 Companion 即生效** — 不需要重新打包 .app/.exe.
+
+### Windows 改 yaml 的具体步骤
+
+1. **打开文件管理器** → 地址栏粘贴 `%USERPROFILE%\.catfish` 回车
+   - (员工看不到 .catfish 文件夹的话: View → Show → Hidden items 打开)
+2. **双击 `companion.yaml`** — 选 "记事本" / VS Code / Notepad++ 都行
+3. **修改后 Ctrl+S 保存**
+4. **完全退出 Companion** (右下角系统托盘 → 鲶鱼图标 → 退出, 或 Task Manager kill `catfish-companion-app.exe`)
+5. **重新双击 .exe** — 启动后控制台 (View → Developer → Inspect Element → Console) 能看到:
+   ```
+   [BL-WIN9] gatewayUrl: http://127.0.0.1:8999 → http://10.10.40.50:8999 (来自 ~/.catfish/companion.yaml)
+   ```
+
+如果改完没生效:
+- 缩进检查: yaml 必须 2 空格, 不是 tab
+- `endpoints:` 这行**最左对齐**, 没缩进
+- `gateway_url:` 缩进 2 空格 (在 endpoints 里)
+- 没多空行 / 没全角空格
 
 ---
 
