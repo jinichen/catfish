@@ -424,14 +424,20 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_browser_snapshot",
         "description": (
-            "拿当前页面的结构化 DOM snapshot (含 visible text + role + ref). 给模型当"
-            "「上下文」用 — 想点哪个按钮先 snapshot 看 ref. 走 Playwright `page.accessibility.snapshot()`"
-            ", 是 accessibility tree 不是 raw HTML, 模型友好.\n\n"
+            "拿当前页面的结构化 DOM snapshot (含 visible text + role + selector_hint). 给模型"
+            "当「上下文」用 — 想点哪个按钮先 snapshot 看 selector_hint, 直接拿来填 "
+            "browser_click(selector=...) / browser_fill(selector=...).\n\n"
+            "**双路径**: 优先 Playwright `page.accessibility.snapshot()`; 新版 Playwright "
+            "(>=1.50) accessibility 已废弃, 自动 fallback `page.evaluate()` 走 JS 扫 "
+            "button/input/a/[role]. 返回里 `snapshot_method` 字段会标明实际走哪条.\n\n"
             "返回字段:\n"
             "  - title: 页面 title\n"
             "  - url: 页面 url (真实 location.href)\n"
-            "  - elements: 可见 / 可交互元素列表 (含 role / name / ref / text 摘要)\n"
-            "  - 页面太大时 elements 会被截断到 200 个, 提示员工 scroll / 缩小范围"
+            "  - elements: 可见 / 可交互元素列表, 每个含:\n"
+            "      role (button/textbox/link...) + name (label/placeholder/innerText) + "
+            "depth + selector_hint (#id / tag[name=...] / tag.cls)\n"
+            "  - snapshot_method: 'accessibility' / 'dom_evaluate'\n"
+            "  - 页面太大时 elements 会被截断到 max_elements (默认 200)"
         ),
         "input_schema": {
             "type": "object",
@@ -1824,7 +1830,16 @@ def browser_fill(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def browser_snapshot(args: Dict[str, Any]) -> Dict[str, Any]:
-    """走 Playwright `page.accessibility.snapshot()` 拿结构化 DOM."""
+    """拿当前页面结构化 DOM. 优先 Playwright accessibility, 失败 fallback 到 DOM evaluate.
+
+    BL-FIX3 (5/8): EIS 登录 demo 撞 ``page.accessibility`` 在新版 Playwright 上 None,
+    LLM 看到 ``AttributeError`` 直接放弃, 跟员工说"工具坏了". 修法 — 双路径:
+      1. 先试 ``page.accessibility.snapshot()`` (老版 Playwright, 数据最干净)
+      2. 失败 (None / AttributeError / 抛异常) → fallback ``page.evaluate()`` 走 JS
+         扫 button/input/a/[role] 拿可见可交互元素列表, 跟 a11y 输出格式兼容
+
+    返回里多个 ``snapshot_method`` 字段标明走哪条路径, 方便 audit / debug.
+    """
     max_elements = int(args.get("max_elements") or 200)
     max_elements = max(10, min(max_elements, 500))
 
@@ -1840,33 +1855,186 @@ def browser_snapshot(args: Dict[str, Any]) -> Dict[str, Any]:
             except RuntimeError as e:
                 return {"type": "error", "error": str(e)}
 
+            # 先拿 title / url — 这俩失败说明 page 本身坏了, 直接退出
             try:
                 title = page.title()
                 url = page.url
-                # accessibility snapshot 给模型用比 raw HTML 友好得多
-                a11y = page.accessibility.snapshot()
-
-                # 把 a11y tree 平铺成 element 列表 (限制深度防爆)
-                elements: List[Dict[str, Any]] = []
-                _flatten_a11y(a11y, elements, max_count=max_elements)
-
-                truncated = len(elements) >= max_elements
+            except Exception as e:
                 return {
-                    "type": "ok",
-                    "title": title,
-                    "url": url,
-                    "elements": elements[:max_elements],
-                    "element_count": len(elements),
-                    "truncated": truncated,
-                    "summary": (
-                        f"页面 '{title}' ({url}) 有 {len(elements)} 个可见元素"
-                        + (" — 截断到 200, 想看更多 scroll 后再 snapshot" if truncated else "")
+                    "type": "error",
+                    "error": (
+                        f"读 page.title/url 失败 (page 不可用): "
+                        f"{type(e).__name__}: {e}. "
+                        f"Chrome 标签页是不是被员工关了? Companion 重启 Chrome 再试."
                     ),
                 }
+
+            elements: List[Dict[str, Any]] = []
+            snapshot_method = "unknown"
+            a11y_error: Optional[str] = None
+
+            # 路径 1: accessibility tree (老版 Playwright, 输出最干净)
+            try:
+                a11y_module = getattr(page, "accessibility", None)
+                if a11y_module is not None:
+                    a11y = a11y_module.snapshot()
+                    if a11y:
+                        _flatten_a11y(a11y, elements, max_count=max_elements)
+                        if elements:
+                            snapshot_method = "accessibility"
+                else:
+                    a11y_error = "page.accessibility 属性不存在 (Playwright >=1.50 已移除)"
             except Exception as e:
-                return {"type": "error", "error": f"snapshot 失败: {type(e).__name__}: {e}"}
+                a11y_error = f"{type(e).__name__}: {e}"
+                import logging as _logging  # noqa: PLC0415
+                _logging.getLogger("catfish.tool_bridge").warning(
+                    "BL-FIX3 accessibility.snapshot 失败 → fallback DOM evaluate: %s",
+                    a11y_error,
+                )
+
+            # 路径 2: DOM evaluate fallback (新版 Playwright 走这, 也是 a11y 拿不到时兜底)
+            if not elements:
+                try:
+                    elements = _evaluate_dom_snapshot(page, max_count=max_elements)
+                    snapshot_method = "dom_evaluate"
+                except Exception as e:
+                    return {
+                        "type": "error",
+                        "error": (
+                            f"snapshot 失败 — accessibility ({a11y_error}) 和 "
+                            f"DOM evaluate ({type(e).__name__}: {e}) 都不可用. "
+                            f"页面 title={title!r} url={url!r}"
+                        ),
+                    }
+
+            truncated = len(elements) >= max_elements
+            summary = (
+                f"页面 '{title}' ({url}) 有 {len(elements)} 个可见元素 "
+                f"[via {snapshot_method}]"
+            )
+            if truncated:
+                summary += " — 截断到上限, 想看更多 scroll 后再 snapshot"
+
+            result: Dict[str, Any] = {
+                "type": "ok",
+                "title": title,
+                "url": url,
+                "elements": elements[:max_elements],
+                "element_count": len(elements),
+                "truncated": truncated,
+                "snapshot_method": snapshot_method,
+                "summary": summary,
+            }
+            if a11y_error and snapshot_method == "dom_evaluate":
+                result["accessibility_fallback_reason"] = a11y_error
+            return result
     except Exception as e:
         return {"type": "error", "error": f"playwright snapshot 异常: {type(e).__name__}: {e}"}
+
+
+# DOM-based fallback. ``page.accessibility.snapshot()`` 在新版 Playwright (>=1.50)
+# 已废弃 / 返 None, 这条路走 ``page.evaluate(JS)`` 直接扫 DOM 拿可见可交互元素.
+# 输出 schema 跟 _flatten_a11y 兼容: {role, name, depth} + 多个 selector_hint
+# 给模型抓 selector 用.
+_DOM_SNAPSHOT_JS = r"""
+(maxCount) => {
+    const out = [];
+    function visible(el) {
+        const rect = el.getBoundingClientRect();
+        if (rect.width < 1 || rect.height < 1) return false;
+        const cs = getComputedStyle(el);
+        return cs.display !== 'none' && cs.visibility !== 'hidden' && cs.opacity !== '0';
+    }
+    function role(el) {
+        const r = el.getAttribute('role');
+        if (r) return r;
+        const tag = el.tagName.toUpperCase();
+        if (tag === 'A') return 'link';
+        if (tag === 'BUTTON') return 'button';
+        if (tag === 'INPUT') {
+            const t = (el.getAttribute('type') || 'text').toLowerCase();
+            if (t === 'checkbox') return 'checkbox';
+            if (t === 'radio') return 'radio';
+            if (t === 'submit' || t === 'button') return 'button';
+            if (t === 'password') return 'textbox';
+            return 'textbox';
+        }
+        if (tag === 'TEXTAREA') return 'textbox';
+        if (tag === 'SELECT') return 'combobox';
+        if (tag === 'IMG') return 'img';
+        if (tag === 'FORM') return 'form';
+        if (tag === 'LABEL') return 'label';
+        if (/^H[1-6]$/.test(tag)) return 'heading';
+        return tag.toLowerCase();
+    }
+    function name(el) {
+        const candidates = [
+            el.getAttribute('aria-label'),
+            el.getAttribute('placeholder'),
+            el.getAttribute('name'),
+            el.getAttribute('title'),
+            el.getAttribute('alt'),
+            (el.innerText || '').trim(),
+            el.getAttribute('value'),
+        ];
+        for (const c of candidates) {
+            if (c) return String(c).trim().slice(0, 100);
+        }
+        return '';
+    }
+    function selectorHint(el) {
+        if (el.id) return '#' + el.id;
+        const nm = el.getAttribute('name');
+        if (nm) return el.tagName.toLowerCase() + '[name="' + nm + '"]';
+        const cls = (el.className || '').toString().split(/\s+/).filter(Boolean).slice(0, 2).join('.');
+        if (cls) return el.tagName.toLowerCase() + '.' + cls;
+        return el.tagName.toLowerCase();
+    }
+    function depthOf(el) {
+        let d = 0;
+        let cur = el;
+        while (cur.parentElement) { d += 1; cur = cur.parentElement; }
+        return d;
+    }
+    const all = document.querySelectorAll(
+        'button, a, input, textarea, select, [role], h1, h2, h3, h4, h5, h6, label, form, img'
+    );
+    for (const el of all) {
+        if (out.length >= maxCount) break;
+        if (!visible(el)) continue;
+        const r = role(el);
+        const n = name(el);
+        // 没 name 的 generic / div / span 跳过, 跟 a11y 行为一致
+        const interesting = ['button', 'link', 'textbox', 'checkbox', 'radio',
+                             'combobox', 'menuitem', 'tab', 'heading', 'img', 'form'];
+        if (!n && interesting.indexOf(r) === -1) continue;
+        out.push({
+            role: r,
+            name: n,
+            depth: depthOf(el),
+            selector_hint: selectorHint(el),
+        });
+    }
+    return out;
+}
+"""
+
+
+def _evaluate_dom_snapshot(page: Any, max_count: int = 200) -> List[Dict[str, Any]]:
+    """跑 JS 拿可见可交互元素列表. 跟 _flatten_a11y 输出格式兼容 + 多 selector_hint."""
+    raw = page.evaluate(_DOM_SNAPSHOT_JS, max_count) or []
+    # 防 JS 端塞了脏 / 非 dict
+    out: List[Dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        out.append({
+            "role": str(item.get("role", "")),
+            "name": str(item.get("name", ""))[:100],
+            "depth": int(item.get("depth", 0)),
+            "selector_hint": str(item.get("selector_hint", ""))[:200],
+        })
+    return out
 
 
 def _flatten_a11y(

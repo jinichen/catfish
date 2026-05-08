@@ -782,6 +782,252 @@ def test_flatten_a11y_recursive() -> None:
 
 
 # ============================================================
+# BL-FIX3 (5/8) — browser_snapshot DOM fallback
+# ============================================================
+#
+# 5/8 EIS 登录 demo 撞 page.accessibility 在新版 Playwright 上 None / 抛 AttributeError,
+# LLM 看到 "工具坏了" 直接放弃. 修法 — 双路径: a11y → fallback page.evaluate().
+# 这组 test 覆盖:
+#   - _evaluate_dom_snapshot 输出归一化 (脏 / 非 dict 过滤掉)
+#   - browser_snapshot accessibility=None → 走 dom_evaluate
+#   - browser_snapshot accessibility 抛异常 → 走 dom_evaluate + 记 fallback_reason
+#   - browser_snapshot a11y 拿到东西 → 不进 dom_evaluate
+#   - page.title() 抛 → friendly error
+
+
+from typing import Optional  # noqa: E402  (used by BL-FIX3 fakes below)
+
+
+class _FakeAccessibility:
+    """模拟 page.accessibility — snapshot() 行为可定制"""
+
+    def __init__(self, snapshot_return: Any = None, raise_exc: Optional[Exception] = None) -> None:
+        self._ret = snapshot_return
+        self._raise = raise_exc
+
+    def snapshot(self) -> Any:
+        if self._raise is not None:
+            raise self._raise
+        return self._ret
+
+
+class _FakePage:
+    """模拟 Playwright Page — 给 browser_snapshot 用"""
+
+    def __init__(
+        self,
+        title: str = "测试页面",
+        url: str = "http://example.com",
+        accessibility: Any = "MISSING",  # sentinel: 默认有 a11y; None 表示 page.accessibility=None
+        evaluate_return: Optional[List[Dict[str, Any]]] = None,
+        evaluate_raise: Optional[Exception] = None,
+        title_raise: Optional[Exception] = None,
+    ) -> None:
+        self._title = title
+        self.url = url
+        self._title_raise = title_raise
+        self._evaluate_return = evaluate_return or []
+        self._evaluate_raise = evaluate_raise
+        if accessibility == "MISSING":
+            # 默认: a11y 模块存在, snapshot 返空 dict
+            self.accessibility = _FakeAccessibility(snapshot_return={"role": "WebArea", "children": []})
+        elif accessibility is None:
+            # 模拟新版 Playwright 移除 accessibility — 不设置这个属性
+            pass
+        else:
+            self.accessibility = accessibility
+
+    def title(self) -> str:
+        if self._title_raise is not None:
+            raise self._title_raise
+        return self._title
+
+    def evaluate(self, _js: str, *_args: Any) -> Any:
+        if self._evaluate_raise is not None:
+            raise self._evaluate_raise
+        return self._evaluate_return
+
+
+def _patch_connect(monkeypatch: pytest.MonkeyPatch, page: _FakePage) -> None:
+    """把 _import_playwright + _connect_playwright_browser 都打桩, 直接给 fake page."""
+    class _FakeP:
+        def __enter__(self) -> "_FakeP":
+            return self
+
+        def __exit__(self, *_a: Any) -> None:
+            return None
+
+    def fake_sync_playwright() -> _FakeP:
+        return _FakeP()
+
+    def fake_import() -> Any:
+        return fake_sync_playwright
+
+    def fake_connect(_p: Any) -> Any:
+        return (None, None, page)
+
+    monkeypatch.setattr(catfish_tools, "_import_playwright", fake_import)
+    monkeypatch.setattr(catfish_tools, "_connect_playwright_browser", fake_connect)
+
+
+def test_evaluate_dom_snapshot_normalizes_dirty_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    """JS 端塞了脏数据 (非 dict / missing keys) — 归一化, 不爆"""
+    raw = [
+        {"role": "button", "name": "提交", "depth": 5, "selector_hint": "#submit"},
+        "garbage string",  # 非 dict
+        None,
+        {"role": "textbox"},  # missing keys
+    ]
+
+    class _FakeP:
+        def evaluate(self, _js: str, *_args: Any) -> Any:
+            return raw
+
+    out = catfish_tools._evaluate_dom_snapshot(_FakeP(), max_count=200)
+    # garbage / None 过滤掉, 剩 2 条
+    assert len(out) == 2
+    assert out[0] == {"role": "button", "name": "提交", "depth": 5, "selector_hint": "#submit"}
+    assert out[1]["role"] == "textbox"
+    assert out[1]["name"] == ""
+    assert out[1]["depth"] == 0
+
+
+def test_evaluate_dom_snapshot_returns_empty_on_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """JS 返 None / undefined — 安全返 []"""
+    class _FakeP:
+        def evaluate(self, _js: str, *_args: Any) -> Any:
+            return None
+
+    out = catfish_tools._evaluate_dom_snapshot(_FakeP(), max_count=200)
+    assert out == []
+
+
+def test_browser_snapshot_falls_back_when_accessibility_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """新版 Playwright 没 page.accessibility — fallback 到 dom_evaluate"""
+    fake_dom = [
+        {"role": "textbox", "name": "用户名", "depth": 5, "selector_hint": 'input[name="username"]'},
+        {"role": "button", "name": "登录", "depth": 4, "selector_hint": "#submit"},
+    ]
+    page = _FakePage(accessibility=None, evaluate_return=fake_dom)
+    _patch_connect(monkeypatch, page)
+
+    result = catfish_tools.browser_snapshot({})
+    assert result["type"] == "ok"
+    assert result["snapshot_method"] == "dom_evaluate"
+    assert result["element_count"] == 2
+    assert result["elements"][0]["name"] == "用户名"
+    assert "accessibility_fallback_reason" in result
+
+
+def test_browser_snapshot_falls_back_when_accessibility_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """page.accessibility.snapshot() 抛异常 — fallback dom_evaluate + 记 reason"""
+    fake_dom = [{"role": "button", "name": "确定", "depth": 3, "selector_hint": "#ok"}]
+    page = _FakePage(
+        accessibility=_FakeAccessibility(raise_exc=AttributeError("snapshot removed")),
+        evaluate_return=fake_dom,
+    )
+    _patch_connect(monkeypatch, page)
+
+    result = catfish_tools.browser_snapshot({})
+    assert result["type"] == "ok"
+    assert result["snapshot_method"] == "dom_evaluate"
+    assert "AttributeError" in result["accessibility_fallback_reason"]
+    assert "snapshot removed" in result["accessibility_fallback_reason"]
+
+
+def test_browser_snapshot_uses_a11y_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """page.accessibility 拿到非空 tree — 走 a11y 路径, 不进 dom_evaluate"""
+    a11y_tree = {
+        "role": "form",
+        "name": "登录",
+        "children": [{"role": "textbox", "name": "用户名", "children": []}],
+    }
+    page = _FakePage(
+        accessibility=_FakeAccessibility(snapshot_return=a11y_tree),
+        evaluate_return=[{"should": "not be used"}],
+    )
+    _patch_connect(monkeypatch, page)
+
+    result = catfish_tools.browser_snapshot({})
+    assert result["type"] == "ok"
+    assert result["snapshot_method"] == "accessibility"
+    # 没 fallback_reason
+    assert "accessibility_fallback_reason" not in result
+    # 元素来自 a11y 树, 不是 evaluate
+    names = [e["name"] for e in result["elements"]]
+    assert "登录" in names
+    assert "用户名" in names
+
+
+def test_browser_snapshot_a11y_returns_none_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """page.accessibility.snapshot() 返 None (Chrome 拒答场景) — 走 dom_evaluate"""
+    page = _FakePage(
+        accessibility=_FakeAccessibility(snapshot_return=None),
+        evaluate_return=[{"role": "button", "name": "登录", "depth": 2, "selector_hint": "button"}],
+    )
+    _patch_connect(monkeypatch, page)
+
+    result = catfish_tools.browser_snapshot({})
+    assert result["type"] == "ok"
+    assert result["snapshot_method"] == "dom_evaluate"
+
+
+def test_browser_snapshot_both_paths_fail_returns_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """a11y + dom_evaluate 都炸 — 友好 error 给 LLM, 含 url / title"""
+    page = _FakePage(
+        accessibility=_FakeAccessibility(raise_exc=RuntimeError("a11y boom")),
+        evaluate_raise=RuntimeError("evaluate boom"),
+    )
+    _patch_connect(monkeypatch, page)
+
+    result = catfish_tools.browser_snapshot({})
+    assert result["type"] == "error"
+    assert "a11y boom" in result["error"]
+    assert "evaluate boom" in result["error"]
+    assert "测试页面" in result["error"]  # title 出现
+
+
+def test_browser_snapshot_title_fail_returns_friendly_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """page.title() 抛 — page 本身坏了, 早退提示员工重启 Chrome"""
+    page = _FakePage(title_raise=RuntimeError("Target closed"))
+    _patch_connect(monkeypatch, page)
+
+    result = catfish_tools.browser_snapshot({})
+    assert result["type"] == "error"
+    assert "Target closed" in result["error"]
+    assert "Chrome" in result["error"]  # 暗示重启 chrome
+
+
+def test_browser_snapshot_truncates_to_max_elements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """超 max_elements 截断 + 标 truncated"""
+    fake_dom = [
+        {"role": "button", "name": f"btn-{i}", "depth": 1, "selector_hint": f"#b{i}"}
+        for i in range(50)
+    ]
+    page = _FakePage(accessibility=None, evaluate_return=fake_dom)
+    _patch_connect(monkeypatch, page)
+
+    result = catfish_tools.browser_snapshot({"max_elements": 10})
+    assert result["type"] == "ok"
+    assert len(result["elements"]) == 10
+    assert result["truncated"] is True
+
+
+# ============================================================
 # catfish_skill_backup (Skill lifecycle 阶段 5 防御)
 # ============================================================
 
