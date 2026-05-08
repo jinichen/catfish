@@ -5,6 +5,8 @@
 //! 复用 hermes-agent 的 venv，因为 tool 依赖（markitdown / browser /
 //! mcp / ...）都在那个 venv 里装好了。
 
+// BL-WIN1: Duration 只 cfg(unix) call_rpc + RPC_TIMEOUT 用
+#[cfg(unix)]
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -20,6 +22,8 @@ use tokio::net::UnixStream;
 use crate::commands::types::ServiceStatus;
 use crate::services::{catfish_paths, process};
 
+// BL-WIN1 (5/8): RPC_TIMEOUT 只 unix call_rpc 用, Windows stub 直接返 error 没用到
+#[cfg(unix)]
 const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 跟 Python tool-bridge 协议对齐 —— 字段都是 snake_case,

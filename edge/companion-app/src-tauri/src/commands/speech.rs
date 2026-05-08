@@ -32,6 +32,8 @@ use std::sync::{Mutex, OnceLock};
 use tauri::Window;
 
 /// 全局录音状态. 一次只能录一段.
+/// BL-WIN1 (5/8): cfg(macos) — Windows 走 stub, 不用这个 state.
+#[cfg(target_os = "macos")]
 struct RecordingState {
     /// ffmpeg 子进程 (kill 用)
     child: Child,
@@ -39,6 +41,7 @@ struct RecordingState {
     wav_path: PathBuf,
 }
 
+#[cfg(target_os = "macos")]
 fn recording_slot() -> &'static Mutex<Option<RecordingState>> {
     static SLOT: OnceLock<Mutex<Option<RecordingState>>> = OnceLock::new();
     SLOT.get_or_init(|| Mutex::new(None))
