@@ -186,11 +186,14 @@ def _has_productive_tool_call_recent(messages: list, depth: int = _SCAN_DEPTH) -
 
 
 def has_existing_hint(messages: list) -> bool:
-    """是否已注入过 BL-A1.3 hint."""
+    """是否已注入过 BL-A1.3 hint.
+
+    BL-FIX8 (5/8): 兼容老 system role + 新 user role 两种历史.
+    """
     for msg in messages[-15:]:
         if not isinstance(msg, dict):
             continue
-        if msg.get("role") != "system":
+        if msg.get("role") not in ("system", "user"):
             continue
         content = msg.get("content")
         if isinstance(content, str) and _HINT_MARKER in content:
@@ -243,11 +246,15 @@ def inject_completion_critique_hint(messages: list) -> list:
         return messages
 
     # 触发: LLM 说"已完成"但没真调 tool
+    # BL-FIX8 (5/8): role 改 user 不用 system. 跟 BL-FIX6 tool_retry_hint 同款 —
+    # Qwen Go gRPC adapter 中段 system 撞**空 reason 400**, 改 user 则等价于"员工
+    # 又说一句", OpenAI 标准接受.
     new_messages = list(messages)
     hint = _HINT_TEMPLATE.format(quoted_promise=promise_keyword or "已完成")
-    new_messages.append({"role": "system", "content": hint})
+    new_messages.append({"role": "user", "content": hint})
     logger.info(
-        "self-critique hint injected: promise_keyword=%r, no productive tool_call in tail",
+        "self-critique hint injected (role=user, BL-FIX8): promise_keyword=%r, "
+        "no productive tool_call in tail",
         promise_keyword,
     )
     return new_messages

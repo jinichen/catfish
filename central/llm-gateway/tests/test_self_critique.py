@@ -66,7 +66,8 @@ class TestSelfCritique(unittest.TestCase):
         ]
         result = self_critique.inject_completion_critique_hint(msgs)
         self.assertEqual(len(result), len(msgs) + 1)
-        self.assertEqual(result[-1]["role"], "system")
+        # BL-FIX8 (5/8): role 改 user, 防 Qwen Go gRPC adapter 中段 system 撞 400
+        self.assertEqual(result[-1]["role"], "user")
         self.assertIn(self_critique._HINT_MARKER, result[-1]["content"])
         # hint 含 quoted promise
         self.assertIn("已生成", result[-1]["content"])
