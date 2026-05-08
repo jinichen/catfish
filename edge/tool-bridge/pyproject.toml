@@ -16,6 +16,19 @@ dependencies = []
 [project.scripts]
 catfish-tool-bridge = "catfish_tool_bridge.__main__:main"
 
+# 5/8: dev 依赖 — 测试套件 import skill 内部 (department/*/script.py),
+# 这些 skill 用 python-docx / openpyxl / pypdfium2.
+# 生产部署 tool-bridge 跟 hermes 共 venv (hermes 已装这些), 不需要 deps.
+# 但**单独建 tool-bridge/venv** 跑测试时, 需要 pip install -e '.[dev]'.
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "python-docx>=1.0",  # leadership-briefing / weekly-report skill 用
+    "openpyxl>=3.0",     # excel skill 用
+    "pypdfium2>=4.0",    # pdf 解析用
+]
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
