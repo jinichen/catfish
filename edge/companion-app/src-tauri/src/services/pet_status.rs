@@ -35,7 +35,7 @@
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -57,6 +57,8 @@ pub struct PetStatusSummary {
 }
 
 fn catfish_dir() -> Result<PathBuf> {
+    // 5/8 注: 仅生产代码用 env. 测试**禁用 env**, 直接用 _at(path) 内部版,
+    // 防 parallel test stomp env (跟 5/7 BL-CR 同样的 race 问题).
     if let Ok(home) = std::env::var("CATFISH_HOME") {
         return Ok(PathBuf::from(home));
     }
@@ -66,19 +68,16 @@ fn catfish_dir() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".catfish"))
 }
 
-fn bubble_jsonl_path() -> Result<PathBuf> {
-    Ok(catfish_dir()?.join("pet_pending_bubbles.jsonl"))
+fn bubble_jsonl_path_in(dir: &Path) -> PathBuf {
+    dir.join("pet_pending_bubbles.jsonl")
 }
 
-fn seen_ts_path() -> Result<PathBuf> {
-    Ok(catfish_dir()?.join("pet_status_seen_ts.json"))
+fn seen_ts_path_in(dir: &Path) -> PathBuf {
+    dir.join("pet_status_seen_ts.json")
 }
 
-fn read_seen_ts() -> f64 {
-    let path = match seen_ts_path() {
-        Ok(p) => p,
-        Err(_) => return 0.0,
-    };
+fn read_seen_ts_at(dir: &Path) -> f64 {
+    let path = seen_ts_path_in(dir);
     if !path.exists() {
         return 0.0;
     }
@@ -93,8 +92,8 @@ fn read_seen_ts() -> f64 {
     v.get("seen_ts").and_then(|x| x.as_f64()).unwrap_or(0.0)
 }
 
-fn write_seen_ts(ts: f64) -> Result<()> {
-    let path = seen_ts_path()?;
+fn write_seen_ts_at(dir: &Path, ts: f64) -> Result<()> {
+    let path = seen_ts_path_in(dir);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).context("建 ~/.catfish/ 目录失败")?;
     }
@@ -121,10 +120,10 @@ struct BubbleEvent {
     task_status: Option<String>,
 }
 
-/// 读 pet_pending_bubbles.jsonl + seen_ts → 返 PetStatusSummary
-pub fn read_status_summary() -> Result<PetStatusSummary> {
-    let seen_ts = read_seen_ts();
-    let bubbles_path = bubble_jsonl_path()?;
+/// 读 pet_pending_bubbles.jsonl + seen_ts → 返 PetStatusSummary (内部版, 测试用)
+pub fn read_status_summary_at(dir: &Path) -> Result<PetStatusSummary> {
+    let seen_ts = read_seen_ts_at(dir);
+    let bubbles_path = bubble_jsonl_path_in(dir);
     if !bubbles_path.exists() {
         return Ok(PetStatusSummary {
             color: PetStatusColor::Default,
@@ -177,33 +176,32 @@ pub fn read_status_summary() -> Result<PetStatusSummary> {
     })
 }
 
-/// 单击桌宠后调 — 把当前时间写到 seen_ts.json, 下次 read_status_summary
-/// 算"老 bubble 已看", 桌宠回 default 颜色.
-pub fn mark_all_seen() -> Result<f64> {
+/// 内部版: 单击桌宠后调, 把当前时间写到指定目录 seen_ts.json.
+pub fn mark_all_seen_at(dir: &Path) -> Result<f64> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0);
-    write_seen_ts(now)?;
+    write_seen_ts_at(dir, now)?;
     Ok(now)
+}
+
+/// 公开版: 用默认 catfish_dir() (env 解析). 生产代码 (commands/pet.rs) 用这个.
+pub fn read_status_summary() -> Result<PetStatusSummary> {
+    read_status_summary_at(&catfish_dir()?)
+}
+
+/// 公开版: 用默认 catfish_dir(). pet_clicked 调.
+pub fn mark_all_seen() -> Result<f64> {
+    mark_all_seen_at(&catfish_dir()?)
 }
 
 #[cfg(test)]
 mod tests {
+    // 测试用 _at(path) 内部版直接传 TempDir, 不动 env, parallel-safe.
+    // (5/8 跟 5/7 BL-CR 同问题: env::set_var 是 process-global, 多测试 stomp)
     use super::*;
     use tempfile::TempDir;
-
-    fn with_temp_home<F: FnOnce(&TempDir)>(f: F) {
-        let tmp = TempDir::new().unwrap();
-        let prev = std::env::var("CATFISH_HOME").ok();
-        std::env::set_var("CATFISH_HOME", tmp.path());
-        f(&tmp);
-        if let Some(p) = prev {
-            std::env::set_var("CATFISH_HOME", p);
-        } else {
-            std::env::remove_var("CATFISH_HOME");
-        }
-    }
 
     fn write_bubble(tmp: &TempDir, ts: f64, status: &str) {
         let path = tmp.path().join("pet_pending_bubbles.jsonl");
@@ -225,98 +223,89 @@ mod tests {
 
     #[test]
     fn no_bubbles_returns_default() {
-        with_temp_home(|_tmp| {
-            let s = read_status_summary().unwrap();
-            assert_eq!(s.color, PetStatusColor::Default);
-            assert_eq!(s.unseen_completed, 0);
-            assert_eq!(s.unseen_failed, 0);
-        });
+        let tmp = TempDir::new().unwrap();
+        let s = read_status_summary_at(tmp.path()).unwrap();
+        assert_eq!(s.color, PetStatusColor::Default);
+        assert_eq!(s.unseen_completed, 0);
+        assert_eq!(s.unseen_failed, 0);
     }
 
     #[test]
     fn unseen_completed_returns_completed() {
-        with_temp_home(|tmp| {
-            write_bubble(tmp, 1000.0, "completed");
-            write_bubble(tmp, 2000.0, "completed");
-            let s = read_status_summary().unwrap();
-            assert_eq!(s.color, PetStatusColor::Completed);
-            assert_eq!(s.unseen_completed, 2);
-            assert_eq!(s.unseen_failed, 0);
-            assert_eq!(s.last_event_ts, 2000.0);
-        });
+        let tmp = TempDir::new().unwrap();
+        write_bubble(&tmp, 1000.0, "completed");
+        write_bubble(&tmp, 2000.0, "completed");
+        let s = read_status_summary_at(tmp.path()).unwrap();
+        assert_eq!(s.color, PetStatusColor::Completed);
+        assert_eq!(s.unseen_completed, 2);
+        assert_eq!(s.unseen_failed, 0);
+        assert_eq!(s.last_event_ts, 2000.0);
     }
 
     #[test]
     fn unseen_failed_takes_priority_over_completed() {
-        with_temp_home(|tmp| {
-            write_bubble(tmp, 1000.0, "completed");
-            write_bubble(tmp, 1500.0, "failed");
-            write_bubble(tmp, 2000.0, "completed");
-            let s = read_status_summary().unwrap();
-            assert_eq!(s.color, PetStatusColor::Failed);
-            assert_eq!(s.unseen_completed, 2);
-            assert_eq!(s.unseen_failed, 1);
-        });
+        let tmp = TempDir::new().unwrap();
+        write_bubble(&tmp, 1000.0, "completed");
+        write_bubble(&tmp, 1500.0, "failed");
+        write_bubble(&tmp, 2000.0, "completed");
+        let s = read_status_summary_at(tmp.path()).unwrap();
+        assert_eq!(s.color, PetStatusColor::Failed);
+        assert_eq!(s.unseen_completed, 2);
+        assert_eq!(s.unseen_failed, 1);
     }
 
     #[test]
     fn mark_all_seen_clears_old_events() {
-        with_temp_home(|tmp| {
-            write_bubble(tmp, 1000.0, "completed");
-            write_bubble(tmp, 1500.0, "failed");
-            // 在 1500 之后调用 mark_all_seen
-            std::thread::sleep(std::time::Duration::from_millis(10));
-            let seen_ts = mark_all_seen().unwrap();
-            assert!(seen_ts > 1500.0);
+        let tmp = TempDir::new().unwrap();
+        write_bubble(&tmp, 1000.0, "completed");
+        write_bubble(&tmp, 1500.0, "failed");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let seen_ts = mark_all_seen_at(tmp.path()).unwrap();
+        assert!(seen_ts > 1500.0);
 
-            let s = read_status_summary().unwrap();
-            assert_eq!(s.color, PetStatusColor::Default, "老 bubble 都该已看");
-            assert_eq!(s.unseen_completed, 0);
-            assert_eq!(s.unseen_failed, 0);
-        });
+        let s = read_status_summary_at(tmp.path()).unwrap();
+        assert_eq!(s.color, PetStatusColor::Default, "老 bubble 都该已看");
+        assert_eq!(s.unseen_completed, 0);
+        assert_eq!(s.unseen_failed, 0);
     }
 
     #[test]
     fn mark_seen_then_new_event_shows_color() {
-        with_temp_home(|tmp| {
-            write_bubble(tmp, 1000.0, "completed");
-            mark_all_seen().unwrap();
-            // 等 mark 落盘后再写新事件
-            std::thread::sleep(std::time::Duration::from_millis(10));
-            let now_plus = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs_f64()
-                + 100.0;
-            write_bubble(tmp, now_plus, "failed");
-            let s = read_status_summary().unwrap();
-            assert_eq!(s.color, PetStatusColor::Failed);
-            assert_eq!(s.unseen_failed, 1);
-        });
+        let tmp = TempDir::new().unwrap();
+        write_bubble(&tmp, 1000.0, "completed");
+        mark_all_seen_at(tmp.path()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let now_plus = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64()
+            + 100.0;
+        write_bubble(&tmp, now_plus, "failed");
+        let s = read_status_summary_at(tmp.path()).unwrap();
+        assert_eq!(s.color, PetStatusColor::Failed);
+        assert_eq!(s.unseen_failed, 1);
     }
 
     #[test]
     fn ignores_malformed_lines() {
-        with_temp_home(|tmp| {
-            let path = tmp.path().join("pet_pending_bubbles.jsonl");
-            fs::write(
-                &path,
-                "{\"ts\":1000,\"task_status\":\"completed\"}\nNOT JSON\n{\"ts\":2000,\"task_status\":\"failed\"}\n",
-            )
-            .unwrap();
-            let s = read_status_summary().unwrap();
-            assert_eq!(s.color, PetStatusColor::Failed);
-            assert_eq!(s.unseen_completed, 1);
-            assert_eq!(s.unseen_failed, 1);
-        });
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("pet_pending_bubbles.jsonl");
+        fs::write(
+            &path,
+            "{\"ts\":1000,\"task_status\":\"completed\"}\nNOT JSON\n{\"ts\":2000,\"task_status\":\"failed\"}\n",
+        )
+        .unwrap();
+        let s = read_status_summary_at(tmp.path()).unwrap();
+        assert_eq!(s.color, PetStatusColor::Failed);
+        assert_eq!(s.unseen_completed, 1);
+        assert_eq!(s.unseen_failed, 1);
     }
 
     #[test]
     fn unknown_task_status_counts_as_neither() {
-        with_temp_home(|tmp| {
-            write_bubble(tmp, 1000.0, "weird_state");
-            let s = read_status_summary().unwrap();
-            assert_eq!(s.color, PetStatusColor::Default);
-        });
+        let tmp = TempDir::new().unwrap();
+        write_bubble(&tmp, 1000.0, "weird_state");
+        let s = read_status_summary_at(tmp.path()).unwrap();
+        assert_eq!(s.color, PetStatusColor::Default);
     }
 }
