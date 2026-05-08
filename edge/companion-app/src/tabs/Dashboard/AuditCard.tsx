@@ -13,6 +13,8 @@
  *   - 单条 trace (这是 dashboard 不是 log viewer)
  */
 
+import * as React from "react";
+
 import { useAudit } from "../../hooks/useAudit";
 import { formatTokens } from "../../lib/format";
 import type { AuditSummary } from "../../types/audit";
@@ -313,12 +315,48 @@ function ModelRow({
   );
 }
 
+// BL-FIX14 (5/8): 鸿波反馈"提示还在 / UI 需优化".
+// - 阈值 3: 1-2 次撞 (常见误报) 不显示, 防 prompt_security regex 误报刷屏
+// - 显示"今天 N 次": 员工看到"4 次撞" vs "200 次撞" 自己判轻重
+// - dismiss: localStorage 记今天 dismiss 哪种 kind, 当天不再显示
+//   (隔天会自动恢复, 因为 metrics 也是按天计数)
+const _TIP_MIN_COUNT = 3;
+
+function _dismissKey(kind: string): string {
+  // 按 kind+今天日期 存. 隔天自动失效, 不需要清理.
+  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  return `catfish.audit.tip.dismissed.${today}.${kind}`;
+}
+
+function _isDismissedToday(kind: string): boolean {
+  try {
+    return window.localStorage.getItem(_dismissKey(kind)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function _markDismissed(kind: string): void {
+  try {
+    window.localStorage.setItem(_dismissKey(kind), "1");
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
 function SecurityRow({
   concerns,
 }: {
   concerns: { kind: string; count: number }[];
 }) {
-  if (concerns.length === 0) {
+  // BL-FIX14: dismiss 状态 — 强制 re-render 用
+  const [dismissTick, setDismissTick] = React.useState(0);
+  // BL-FIX14: 阈值过滤 + dismiss 过滤
+  const visible = concerns.filter(
+    (c) => c.count >= _TIP_MIN_COUNT && !_isDismissedToday(c.kind),
+  );
+
+  if (visible.length === 0) {
     return (
       <div
         style={{
@@ -333,6 +371,7 @@ function SecurityRow({
       </div>
     );
   }
+  void dismissTick; // 避免 lint 警告 — 仅用于触发 re-render
   return (
     <div
       style={{
@@ -356,7 +395,7 @@ function SecurityRow({
         💡 鲶鱼小贴士
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
-        {concerns.map((c) => (
+        {visible.map((c) => (
           <div
             key={c.kind}
             style={{
@@ -366,14 +405,49 @@ function SecurityRow({
               border: "1px solid var(--catfish-border)",
               borderRadius: "var(--radius-sm)",
               lineHeight: 1.5,
+              position: "relative",
             }}
           >
+            {/* BL-FIX14: 右上角 dismiss × */}
+            <button
+              type="button"
+              aria-label="今天不再提示"
+              title="今天不再提示 (隔天自动恢复)"
+              onClick={() => {
+                _markDismissed(c.kind);
+                setDismissTick((t) => t + 1);
+              }}
+              style={{
+                position: "absolute",
+                top: 4,
+                right: 6,
+                background: "transparent",
+                border: "none",
+                color: "var(--catfish-text-muted)",
+                cursor: "pointer",
+                fontSize: 14,
+                padding: 0,
+                lineHeight: 1,
+              }}
+            >
+              ×
+            </button>
             {kindBody(c.kind)}
+            {/* BL-FIX14: 显示触发次数, 让员工自己 judge 轻重 */}
+            <div
+              style={{
+                marginTop: 4,
+                fontSize: 10,
+                color: "var(--catfish-text-muted)",
+              }}
+            >
+              基于今天 {c.count} 次检测 (1 次说话被 N 轮对话重复扫到, 属正常)
+            </div>
           </div>
         ))}
       </div>
       <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 8 }}>
-        ℹ️ 这些不是错误, 也不影响使用. 同一句话在多次对话里会重复触发, 数字不用较真.
+        ℹ️ 这些不是错误, 也不影响使用. 阈值 ≥{_TIP_MIN_COUNT} 才显示 (BL-FIX14).
       </div>
     </div>
   );
