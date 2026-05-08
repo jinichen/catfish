@@ -1168,3 +1168,197 @@ def test_dispatch_skill_backup_routes_correctly() -> None:
     result = catfish_tools.dispatch_native("catfish_skill_backup", {})
     assert result["type"] == "error"
     assert "skill_name" in result["error"]
+
+
+# ============================================================
+# BL-FIX7 (5/8) — catfish_browser_screenshot (Playwright 截浏览器)
+# ============================================================
+#
+# 之前 LLM 想看浏览器内容 (验证码 / 按钮) 只剩 catfish_screenshot (mac screencapture),
+# 不对路 / 要权限 / 容易失败. BL-FIX7 加 Playwright page.screenshot 直截 Chrome tab.
+# 同 connect_over_cdp 链路, 0 权限, 直接返 data_uri.
+
+
+class _FakeLocator:
+    def __init__(self, screenshot_bytes: bytes = b"\x89PNG\r\n\x1a\n", raise_on_wait: Optional[Exception] = None) -> None:
+        self._png = screenshot_bytes
+        self._raise = raise_on_wait
+
+    def wait_for(self, **_kw: Any) -> None:
+        if self._raise is not None:
+            raise self._raise
+
+    def screenshot(self, **_kw: Any) -> bytes:
+        return self._png
+
+
+class _FakeBrowserPage:
+    """模拟 Page — 给 browser_screenshot 用"""
+
+    def __init__(
+        self,
+        title: str = "登录页",
+        url: str = "http://eis.ffcs.cn/cas/login",
+        screenshot_bytes: bytes = b"\x89PNG\r\n\x1a\n" + b"X" * 200,
+        screenshot_raise: Optional[Exception] = None,
+        title_raise: Optional[Exception] = None,
+        locator_factory: Optional[Any] = None,
+    ) -> None:
+        self._title = title
+        self.url = url
+        self._screenshot_bytes = screenshot_bytes
+        self._screenshot_raise = screenshot_raise
+        self._title_raise = title_raise
+        self._locator_factory = locator_factory
+
+    def title(self) -> str:
+        if self._title_raise is not None:
+            raise self._title_raise
+        return self._title
+
+    def screenshot(self, **_kw: Any) -> bytes:
+        if self._screenshot_raise is not None:
+            raise self._screenshot_raise
+        return self._screenshot_bytes
+
+    def locator(self, _selector: str) -> Any:
+        if self._locator_factory is not None:
+            return self._locator_factory()
+        return _FakeLocator()
+
+
+def _patch_browser_connect(monkeypatch: pytest.MonkeyPatch, page: _FakeBrowserPage) -> None:
+    """打桩 _import_playwright + _connect_playwright_browser, 注入 fake page."""
+    class _FakeP:
+        def __enter__(self) -> "_FakeP":
+            return self
+        def __exit__(self, *_a: Any) -> None:
+            return None
+
+    def fake_sync_playwright() -> _FakeP:
+        return _FakeP()
+
+    def fake_import() -> Any:
+        return fake_sync_playwright
+
+    def fake_connect(_p: Any) -> Any:
+        return (None, None, page)
+
+    monkeypatch.setattr(catfish_tools, "_import_playwright", fake_import)
+    monkeypatch.setattr(catfish_tools, "_connect_playwright_browser", fake_connect)
+
+
+def test_browser_screenshot_in_native_tools() -> None:
+    """catfish_browser_screenshot 必须出现在工具列表里"""
+    names = [t["name"] for t in catfish_tools.CATFISH_NATIVE_TOOLS]
+    assert "catfish_browser_screenshot" in names
+
+
+def test_browser_screenshot_no_required_fields() -> None:
+    """所有字段可选 (selector / full_page / timeout)"""
+    tool = next(
+        t for t in catfish_tools.CATFISH_NATIVE_TOOLS
+        if t["name"] == "catfish_browser_screenshot"
+    )
+    assert tool["input_schema"]["required"] == []
+
+
+def test_browser_screenshot_viewport_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """默认 (无 selector, full_page=false) → page.screenshot, 返 data_uri"""
+    fake_png = b"\x89PNG\r\n\x1a\n" + b"A" * 1000
+    page = _FakeBrowserPage(screenshot_bytes=fake_png)
+    _patch_browser_connect(monkeypatch, page)
+
+    result = catfish_tools.browser_screenshot({})
+    assert result["type"] == "image"
+    assert result["format"] == "png"
+    assert result["capture"] == "viewport"
+    assert result["data_uri"].startswith("data:image/png;base64,")
+    # base64 解出来 == 原始 bytes
+    assert base64.b64decode(result["data"]) == fake_png
+    assert result["title"] == "登录页"
+    assert "eis.ffcs.cn" in result["url"]
+
+
+def test_browser_screenshot_full_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    """full_page=true → capture='full_page'"""
+    page = _FakeBrowserPage()
+    _patch_browser_connect(monkeypatch, page)
+
+    result = catfish_tools.browser_screenshot({"full_page": True})
+    assert result["type"] == "image"
+    assert result["capture"] == "full_page"
+
+
+def test_browser_screenshot_with_selector(monkeypatch: pytest.MonkeyPatch) -> None:
+    """selector 给了 → 用 locator.screenshot, capture 标记为 element"""
+    fake_captcha = b"\x89PNG\r\n\x1a\n" + b"C" * 500
+    page = _FakeBrowserPage(
+        locator_factory=lambda: _FakeLocator(screenshot_bytes=fake_captcha),
+    )
+    _patch_browser_connect(monkeypatch, page)
+
+    result = catfish_tools.browser_screenshot({"selector": "#captchaImg"})
+    assert result["type"] == "image"
+    assert "element[#captchaImg]" in result["capture"]
+    assert base64.b64decode(result["data"]) == fake_captcha
+
+
+def test_browser_screenshot_screenshot_fails_returns_friendly_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """page.screenshot 抛异常 → friendly error, 含 selector / full_page 信息"""
+    page = _FakeBrowserPage(
+        screenshot_raise=RuntimeError("Target closed"),
+    )
+    _patch_browser_connect(monkeypatch, page)
+
+    result = catfish_tools.browser_screenshot({"full_page": True})
+    assert result["type"] == "error"
+    assert "Target closed" in result["error"]
+    assert "full_page=True" in result["error"]
+
+
+def test_browser_screenshot_locator_wait_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """元素截图: locator.wait_for 抛 (元素找不到) → friendly error"""
+    page = _FakeBrowserPage(
+        locator_factory=lambda: _FakeLocator(raise_on_wait=TimeoutError("element not visible")),
+    )
+    _patch_browser_connect(monkeypatch, page)
+
+    result = catfish_tools.browser_screenshot({"selector": "#nonexistent"})
+    assert result["type"] == "error"
+    assert "element not visible" in result["error"]
+    assert "#nonexistent" in result["error"]
+
+
+def test_browser_screenshot_too_large_returns_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """图太大 (>12MB) → 拒回 (防 IPC 撑爆)"""
+    huge = b"\x89PNG" + b"X" * (15 * 1024 * 1024)  # 15 MB
+    page = _FakeBrowserPage(screenshot_bytes=huge)
+    _patch_browser_connect(monkeypatch, page)
+
+    result = catfish_tools.browser_screenshot({})
+    assert result["type"] == "error"
+    assert "太大" in result["error"]
+
+
+def test_browser_screenshot_title_fail_friendly_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """page.title() 抛 → 提示 Chrome 标签可能关了"""
+    page = _FakeBrowserPage(title_raise=RuntimeError("Target closed"))
+    _patch_browser_connect(monkeypatch, page)
+
+    result = catfish_tools.browser_screenshot({})
+    assert result["type"] == "error"
+    assert "Target closed" in result["error"]
+    assert "标签页" in result["error"]
+
+
+def test_dispatch_browser_screenshot_routes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """dispatch_native 能路由 catfish_browser_screenshot → browser_screenshot"""
+    def fake_import() -> object:
+        raise RuntimeError("缺 playwright")
+    monkeypatch.setattr(catfish_tools, "_import_playwright", fake_import)
+    result = catfish_tools.dispatch_native("catfish_browser_screenshot", {})
+    assert result["type"] == "error"
+    assert "playwright" in result["error"]

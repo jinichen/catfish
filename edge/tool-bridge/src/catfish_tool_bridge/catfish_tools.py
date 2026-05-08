@@ -268,16 +268,20 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_screenshot",
         "description": (
-            "拍员工屏幕一张图, 返回 base64 PNG. 给视觉模型 (Qwen3.5 122B / Qwen3-VL / "
-            "Gemini vision / Qwen-Flash 多模态) 看员工 GUI 上的内容. \n\n"
-            "✅ 调用场景:\n"
-            "  - 员工说「这个报错是什么意思」「我屏幕上 X 是什么」\n"
-            "  - 员工说「截屏看下」「你看一下我这边」\n"
-            "  - GUI 调试: 看一个软件按钮在哪 / 一个对话框在说什么\n"
-            "  - 表格/图片识别: 员工用 Excel/Numbers 时不想复制粘贴\n\n"
+            "拍员工**整个 mac 屏幕** 一张图, 返回 base64 PNG. 跨 app / 跨窗口场景用. "
+            "给视觉模型 (Qwen3.5 122B / Qwen3-VL / Gemini vision / Qwen-Flash 多模态) "
+            "看员工 GUI 上的内容. \n\n"
+            "⚠️ **看浏览器内容用 catfish_browser_screenshot, 不是这个**. 验证码 / 网页"
+            "按钮 / 弹窗 / 页面布局 → 一律 `catfish_browser_screenshot` (Playwright 直截 "
+            "Chrome tab, 不要权限不会失败). 这条 `catfish_screenshot` 走 mac screencapture, "
+            "需要屏幕录制权限, 跨窗口场景才用.\n\n"
+            "✅ 调用场景 (跨 app):\n"
+            "  - 员工说「这个报错是什么意思」「我屏幕上 X 是什么」 (非浏览器内)\n"
+            "  - 员工说「截屏看下」「你看一下我这边」 (非浏览器内)\n"
+            "  - GUI 调试: 看 Finder / Excel / 别的 app 的按钮 / 对话框\n"
+            "  - 跨窗口: 浏览器 + 别的 app 一起看\n\n"
             "❌ 不该调用:\n"
-            "  - 看网页内容 → 用 catfish-browser-task / browser_vision 跟 Chrome 直接交互, "
-            "不要绕去截图\n"
+            "  - **看浏览器内容 → catfish_browser_screenshot** (验证码 / 网页都走那个)\n"
             "  - 看本地文件 → 用 read_file\n"
             "  - 员工没明确要求看屏幕但你「想看一下」——不要主动截\n\n"
             "🔒 默认 mode=fullscreen: 拍员工主屏当前内容. 0 权限 0 打扰. "
@@ -451,6 +455,46 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
             "required": [],
         },
         "emoji": "🔍",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_browser_screenshot",
+        "description": (
+            "截**浏览器当前 tab** 的图. 走 Playwright `page.screenshot()`, 返 data:image "
+            "base64 让模型直接看. 看**验证码 / 按钮位置 / 页面布局 / 弹窗内容** 都走这个.\n\n"
+            "⚠️ 区别于 `catfish_screenshot` — 那个走 mac screencapture, 截整个屏幕 "
+            "(含其他 app / 跨窗口); 这个只截当前 Chrome tab, 没权限弹窗 / 不需要员工框选.\n\n"
+            "默认 viewport-only (员工屏幕能看到的部分), full_page=true 截整个滚动长度. "
+            "页面 5KB ~ 200KB 之间, base64 后 ~280KB, IPC 完全 OK.\n\n"
+            "selector 给的话只截那一个元素 (e.g. selector='#captchaImg' 只截验证码图片), "
+            "不给则整个 viewport. 元素截图常见用法: 验证码 → selector='#captchaImg' / "
+            "'img.captcha' / 'role=img[name=\"验证码\"]'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "description": (
+                        "可选 — Playwright selector. 给了只截这个元素 (推荐验证码场景), "
+                        "不给截整个 viewport"
+                    ),
+                },
+                "full_page": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "true=截整个滚动长度 (含 fold 下面), false=只截 viewport",
+                },
+                "timeout_seconds": {
+                    "type": "number",
+                    "default": 10.0,
+                    "description": "等元素 / 页面加载的最长时间, 默认 10s",
+                },
+            },
+            "required": [],
+        },
+        "emoji": "📸",
         "toolset": "catfish_native",
         "available": True,
     },
@@ -2064,6 +2108,102 @@ def _flatten_a11y(
         if len(out) >= max_count:
             break
         _flatten_a11y(child, out, max_count=max_count, depth=depth + 1)
+
+
+def browser_screenshot(args: Dict[str, Any]) -> Dict[str, Any]:
+    """截浏览器当前 tab 的图. 走 Playwright `page.screenshot()`, 返 data:image base64.
+
+    BL-FIX7 (5/8): 之前 hermes builtin browser_screenshot 被 BL-FIX4 dedupe 一刀切
+    丢了, LLM 想看浏览器内容只剩 catfish_screenshot (mac screencapture), 不对路 /
+    要权限 / 容易失败. 这条直接拿 Playwright 的 page.screenshot, 跟 browser_goto /
+    fill / click 同一个 connect_over_cdp 链路, **不需要 mac 截屏权限**.
+
+    LLM 拿到 data_uri 之后, 经 gateway BL-FIX2 multimodal_tool_unwrap 重组到 user
+    multipart, 上游 Qwen 主力直接看图回答.
+    """
+    selector = (args.get("selector") or "").strip()
+    full_page = bool(args.get("full_page", False))
+    timeout_ms = int(float(args.get("timeout_seconds") or 10.0) * 1000)
+    timeout_ms = max(1000, min(timeout_ms, 60_000))
+
+    try:
+        sync_playwright = _import_playwright()
+    except RuntimeError as e:
+        return {"type": "error", "error": str(e)}
+
+    try:
+        with sync_playwright() as p:
+            try:
+                browser, context, page = _connect_playwright_browser(p)
+            except RuntimeError as e:
+                return {"type": "error", "error": str(e)}
+
+            try:
+                title = page.title()
+                url = page.url
+            except Exception as e:
+                return {
+                    "type": "error",
+                    "error": (
+                        f"读 page.title/url 失败 (page 不可用): "
+                        f"{type(e).__name__}: {e}. "
+                        f"Chrome 标签页是不是被员工关了?"
+                    ),
+                }
+
+            try:
+                if selector:
+                    # 元素截图 — locator + screenshot
+                    locator = page.locator(selector)
+                    locator.wait_for(state="visible", timeout=timeout_ms)
+                    png_bytes = locator.screenshot(timeout=timeout_ms)
+                    capture_kind = f"element[{selector}]"
+                else:
+                    # viewport / full_page 截图
+                    png_bytes = page.screenshot(
+                        full_page=full_page, timeout=timeout_ms
+                    )
+                    capture_kind = "full_page" if full_page else "viewport"
+            except Exception as e:
+                return {
+                    "type": "error",
+                    "error": (
+                        f"截图失败: {type(e).__name__}: {e}. "
+                        f"selector={selector!r} full_page={full_page}"
+                    ),
+                }
+
+            size = len(png_bytes)
+            # 跟 catfish_screenshot 同样的 12MB 上限, 防 IPC 撑爆
+            if size > _MAX_SCREENSHOT_BYTES:
+                return {
+                    "type": "error",
+                    "error": (
+                        f"截图太大 ({size // (1024*1024)} MB > "
+                        f"{_MAX_SCREENSHOT_BYTES // (1024*1024)} MB 上限). "
+                        f"加 selector 截单个元素, 或 full_page=false"
+                    ),
+                }
+
+            b64 = base64.b64encode(png_bytes).decode("ascii")
+            return {
+                "type": "image",
+                "format": "png",
+                "encoding": "base64",
+                "data": b64,
+                "data_uri": f"data:image/png;base64,{b64}",
+                "size_bytes": size,
+                "captured_at": _unix_to_iso(time.time()),
+                "capture": capture_kind,
+                "title": title,
+                "url": url,
+                "summary": (
+                    f"浏览器截图完成 ({capture_kind}, {size // 1024} KB), "
+                    f"页面: {title} ({url})"
+                ),
+            }
+    except Exception as e:
+        return {"type": "error", "error": f"playwright browser_screenshot 异常: {type(e).__name__}: {e}"}
 
 
 # ============================================================
@@ -3734,6 +3874,8 @@ def dispatch_native(name: str, args: Dict[str, Any]) -> Any:
         return browser_fill(args)
     if name == "catfish_browser_snapshot":
         return browser_snapshot(args)
+    if name == "catfish_browser_screenshot":
+        return browser_screenshot(args)
     if name == "catfish_skill_backup":
         return skill_backup(args)
     if name == "catfish_run_skill":
