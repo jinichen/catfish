@@ -45,6 +45,8 @@ models:
     context_window: 128000
     supports_tool_use: true
     supports_streaming: true
+    # Qwen3.5 122B MoE 实测**支持视觉** (5/8 鸿波真上传 EIS 截图验证, 识别准确).
+    # 不要再误改成 false — 我之前 5/8 凌晨踩过坑.
     supports_vision: true
     # 5/4 BL-F14 内部用例 tag (pick_internal_model 按 tag + private 优先选).
     # 内网首选 = 数据不出公司. 内网挂了才用 public 兜底:
