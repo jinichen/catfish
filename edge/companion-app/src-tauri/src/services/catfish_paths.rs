@@ -188,20 +188,58 @@ pub fn hermes_config_path() -> Option<PathBuf> {
     home_dir().map(|h| h.join(".hermes").join("config.yaml"))
 }
 
-/// 找 Chrome 二进制（Mac 优先，Windows 备选）
+/// 找 Chrome 二进制 (mac / Windows / Linux 全平台).
+///
+/// BL-WIN3 (5/8): Windows 候选扩到 7 条 — Per-user 安装 (%LOCALAPPDATA%\Google),
+/// 标准 Program Files (双架构), Edge 作为最后备选 (Win11 自带, Chromium 内核
+/// 兼容 Playwright). mac 候选不变. 通过环境变量动态查 (LOCALAPPDATA / ProgramFiles
+/// / ProgramFiles(x86)) 免硬编盘符. 用 ``CATFISH_CHROME_BIN`` env 强制覆盖.
 pub fn find_chrome() -> Option<PathBuf> {
-    let candidates: &[&str] = &[
-        // macOS
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta",
-        "/Applications/Google Chrome Dev.app/Contents/MacOS/Google Chrome Dev",
-        "/Applications/Chromium.app/Contents/MacOS/Chromium",
-        // Windows（开发期主要 Mac 跑）
-        "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-        "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-    ];
-    candidates
-        .iter()
-        .map(PathBuf::from)
-        .find(|p| p.exists())
+    // 1. env 强制覆盖 (员工 / 开发者用)
+    if let Ok(custom) = std::env::var("CATFISH_CHROME_BIN") {
+        let p = PathBuf::from(custom);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+
+    // 2. 平台候选清单
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    // macOS
+    candidates.push("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome".into());
+    candidates.push("/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta".into());
+    candidates.push("/Applications/Google Chrome Dev.app/Contents/MacOS/Google Chrome Dev".into());
+    candidates.push("/Applications/Chromium.app/Contents/MacOS/Chromium".into());
+    if let Some(home) = home_dir() {
+        // mac per-user: ~/Applications/Google Chrome.app/...
+        candidates.push(home.join("Applications/Google Chrome.app/Contents/MacOS/Google Chrome"));
+    }
+
+    // Windows
+    if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
+        // Per-user 安装 (现在 Windows 主流)
+        candidates.push(PathBuf::from(&local_appdata).join("Google/Chrome/Application/chrome.exe"));
+        candidates.push(PathBuf::from(&local_appdata).join("Google/Chrome SxS/Application/chrome.exe")); // Canary
+    }
+    if let Ok(pf) = std::env::var("ProgramFiles") {
+        candidates.push(PathBuf::from(&pf).join("Google/Chrome/Application/chrome.exe"));
+        // Edge 作为 fallback (Win11 自带 Chromium 内核)
+        candidates.push(PathBuf::from(&pf).join("Microsoft/Edge/Application/msedge.exe"));
+    }
+    if let Ok(pf86) = std::env::var("ProgramFiles(x86)") {
+        candidates.push(PathBuf::from(&pf86).join("Google/Chrome/Application/chrome.exe"));
+        candidates.push(PathBuf::from(&pf86).join("Microsoft/Edge/Application/msedge.exe"));
+    }
+    // Hard-coded fallback (env 没设的极端情况)
+    candidates.push("C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe".into());
+    candidates.push("C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe".into());
+
+    // Linux (开发用, 非主目标)
+    candidates.push("/usr/bin/google-chrome".into());
+    candidates.push("/usr/bin/google-chrome-stable".into());
+    candidates.push("/usr/bin/chromium".into());
+    candidates.push("/usr/bin/chromium-browser".into());
+
+    candidates.into_iter().find(|p| p.exists())
 }

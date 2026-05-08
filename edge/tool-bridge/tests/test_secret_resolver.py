@@ -162,13 +162,58 @@ def test_keychain_timeout(
 
 
 # ============================================================
-# wincred:// scheme (Phase 1 末尾批量做)
+# wincred:// scheme (BL-WIN2 Windows Credential Manager)
 # ============================================================
 
 
-def test_wincred_not_implemented_yet() -> None:
-    with pytest.raises(secret_resolver.SecretResolveError, match="还没实现"):
+def test_wincred_on_non_windows_returns_friendly_error() -> None:
+    """BL-WIN2 (5/8): 非 Windows 平台调 wincred:// 给友好提示, 不再说'还没实现'"""
+    # 这条测试在 mac/Linux CI 跑, platform.system() != Windows
+    if __import__("platform").system() == "Windows":
+        # 真 Windows 上 wincred 应该尝试 keyring/PowerShell, 跳过此测试
+        return
+    with pytest.raises(secret_resolver.SecretResolveError, match="只在 Windows"):
         secret_resolver.resolve_secret("wincred://eis_password")
+
+
+def test_wincred_uses_keyring_when_available(monkeypatch) -> None:
+    """BL-WIN2: 模拟 Windows + keyring 装好了 → 调 keyring.get_password"""
+    import platform
+    monkeypatch.setattr(platform, "system", lambda: "Windows")
+
+    # 注入假 keyring 模块
+    fake_keyring = type("FakeKeyring", (), {})()
+    calls = []
+
+    def fake_get(service, username):
+        calls.append((service, username))
+        if service == "catfish" and username == "eis_password":
+            return "fake_password_from_wincred"
+        return None
+
+    fake_keyring.get_password = fake_get  # type: ignore[attr-defined]
+
+    import sys
+    monkeypatch.setitem(sys.modules, "keyring", fake_keyring)
+
+    pwd = secret_resolver._resolve_wincred("eis_password")
+    assert pwd == "fake_password_from_wincred"
+    assert ("catfish", "eis_password") in calls
+
+
+def test_wincred_keyring_not_found_friendly_error(monkeypatch) -> None:
+    """keyring 装了但 entry 找不到 → 友好提示让员工 cmdkey 存密码"""
+    import platform
+    monkeypatch.setattr(platform, "system", lambda: "Windows")
+
+    fake_keyring = type("FakeKeyring", (), {})()
+    fake_keyring.get_password = lambda *_a, **_kw: None  # 永远 None  # type: ignore[attr-defined]
+
+    import sys
+    monkeypatch.setitem(sys.modules, "keyring", fake_keyring)
+
+    with pytest.raises(secret_resolver.SecretResolveError, match="cmdkey|没找到"):
+        secret_resolver._resolve_wincred("nonexistent")
 
 
 # ============================================================

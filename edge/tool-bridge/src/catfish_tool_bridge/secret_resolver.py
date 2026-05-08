@@ -158,11 +158,88 @@ def _resolve_keychain(name: str) -> str:
 
 
 def _resolve_wincred(name: str) -> str:
-    """从 Windows Credential Manager 拉密码 (Phase 1 末尾批量做)."""
-    raise SecretResolveError(
-        f"wincred:// 还没实现 (Phase 1 末尾跟 Win 跨平台一起做). "
-        f"当前用 env://{name.upper()} 替代."
+    """从 Windows Credential Manager 拉密码 (BL-WIN2, 5/8).
+
+    优先用 ``keyring`` Python 包 (跨平台抽象, Windows 上走 wincred backend).
+    keyring 装不上时 fallback 走 PowerShell ``Get-Secret`` (PowerShell 7
+    + Microsoft.PowerShell.SecretManagement). 都失败抛 friendly error.
+
+    要求员工先存进 Credential Manager:
+      cmdkey /generic:<name> /user:%USERNAME% /pass:<password>
+    或 PowerShell:
+      $cred = Get-Credential
+      cmdkey /generic:<name> /user:$cred.UserName /pass:$cred.GetNetworkCredential().Password
+    """
+    if platform.system() != "Windows":
+        raise SecretResolveError(
+            f"wincred:// 只在 Windows 支持. 当前系统: {platform.system()}. "
+            "macOS 用 keychain://, 其他平台用 env://"
+        )
+
+    # 路径 1: 优先用 Python keyring 包 (官方推荐, win32cred 包装)
+    try:
+        import keyring  # noqa: PLC0415
+
+        pwd = keyring.get_password("catfish", name)
+        if pwd:
+            return pwd
+        # service='catfish' 找不到, 试 service=name (不带 catfish prefix 也接受)
+        pwd = keyring.get_password(name, os.environ.get("USERNAME", "user"))
+        if pwd:
+            return pwd
+        raise SecretResolveError(
+            f"Windows Credential Manager 里没找到 service='catfish' target='{name}'. "
+            f"先存:\n"
+            f"  cmdkey /generic:catfish:{name} /user:%USERNAME% /pass:<密码>\n"
+            f"或 PowerShell:\n"
+            f"  python -c \"import keyring; keyring.set_password('catfish','{name}','<密码>')\""
+        )
+    except ImportError:
+        pass  # 没装 keyring, 走 fallback 路径
+
+    # 路径 2 (fallback): PowerShell + Microsoft.PowerShell.SecretManagement
+    if not shutil.which("powershell.exe"):
+        raise SecretResolveError(
+            "Windows Credential Manager 读取失败: 既没装 Python `keyring` 包, "
+            "也找不到 powershell.exe.\n"
+            "推荐: pip install keyring (跨平台 secret backend, 自动用 wincred)"
+        )
+
+    ps_script = (
+        f"$ErrorActionPreference='Stop';"
+        f"try {{ "
+        f"  $s = Get-Secret -Name 'catfish:{name}' -AsPlainText -ErrorAction Stop; "
+        f"  Write-Output $s "
+        f"}} catch {{ "
+        f"  Write-Error $_.Exception.Message; exit 44 "
+        f"}}"
     )
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Command", ps_script],
+            timeout=5,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.TimeoutExpired:
+        raise SecretResolveError("PowerShell Get-Secret 超时")
+    except OSError as e:
+        raise SecretResolveError(f"启动 powershell 失败: {e}")
+
+    if result.returncode != 0:
+        raise SecretResolveError(
+            f"Get-Secret 'catfish:{name}' 失败. "
+            f"先装 SecretManagement 模块 + 存密码:\n"
+            f"  Install-Module Microsoft.PowerShell.SecretManagement -Scope CurrentUser\n"
+            f"  Install-Module Microsoft.PowerShell.SecretStore -Scope CurrentUser\n"
+            f"  Register-SecretVault -Name catfish -ModuleName Microsoft.PowerShell.SecretStore -DefaultVault\n"
+            f"  Set-Secret -Name 'catfish:{name}' -Secret '<密码>'"
+        )
+
+    pwd = result.stdout.rstrip("\r\n")
+    if not pwd:
+        raise SecretResolveError(f"Credential Manager 里 'catfish:{name}' 是空的")
+    return pwd
 
 
 def is_secret_ref(value: Optional[str]) -> bool:

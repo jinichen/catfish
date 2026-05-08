@@ -7,11 +7,18 @@ requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Catfish Platform Team" }]
 
-# 运行时依赖只有 stdlib（asyncio 起 unix socket，json 解协议）。
+# 运行时依赖:
+#   - 主路径: stdlib only (asyncio unix socket / TCP localhost on Win, json 协议)
+#   - BL-WIN2 (5/8): Windows 平台条件依赖 keyring (Win Credential Manager
+#     wrapper). mac/Linux 用不到, 通过 sys_platform marker 只 Win 装. 没
+#     keyring 时 secret_resolver 会 fallback 到 PowerShell Get-Secret, 但
+#     keyring 体验更好 (1 个调用 vs 子进程).
 # hermes-agent 不在 dependencies 里 —— 我们通过 sys.path 引用员工本机
 # 装好的 hermes-agent，不重复安装；catfish-tool-bridge 跑在 hermes-agent 的
 # 同一个 venv 里，所有 tool 依赖（markitdown / browser / mcp / ...）天然解决
-dependencies = []
+dependencies = [
+    "keyring >= 24; sys_platform == 'win32'",
+]
 
 [project.scripts]
 catfish-tool-bridge = "catfish_tool_bridge.__main__:main"
