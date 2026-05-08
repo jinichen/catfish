@@ -2726,3 +2726,97 @@ quota check 真应该移进 `with_fallback`, 让 chain 里每个模型都查 quo
 - BL-I3.2 视频帧 vision 描述 (推后, vision 调用费)
 - BL-MM10 LLM 接入 (6/15 PoC 1 个月时按数据调)
 - Dashboard ProposedSkillsCard / "我对你认识的演化" 子卡 (P2)
+
+---
+
+## 2026-05-08（周四）凌晨二轮 — BL-E27.4 + BL-MM11 + BL-MM12 一次性 ship
+
+### 起因 (5/8 凌晨鸿波抱怨)
+
+macOS 通知中心累积一周"任务完成 / 任务失败" 通知, 截图非常乱, 鸿波一句"很不直观".
+我建议: 桌宠头加颜色 indicator + 单击打开 Companion 看详情, 替代 macOS 通知主通道.
+鸿波说"现在就做", 还要带上 BL-MM11 / MM12 / Phase 3 一起.
+
+我 push back: Phase 3 真做要 1-2 周 + 跟 demo 撞, mock 版有信安风险. 改 PPT 路线图. 鸿波拍板 ✅.
+
+### BL-E27.4 ✅ 桌宠状态颜色 + 单击重置 + macOS 通知降级
+
+**桌宠头颜色 indicator** (新):
+- services/pet_status.rs ~250 行 + 8 单测全过
+- 4 状态 (优先级红 > 绿 > 蓝 > 默认):
+  - 🔴 红: 任务失败未看 (脉动 1.4s)
+  - 🟢 绿: 任务完成未看 (脉动 2.5s)
+  - 🟦 蓝: 后台运行 (P2, MVP 不触发)
+  - default: 不显
+- 数字徽章 (>1 个未看显数字, ≥10 显 "9+")
+- 5 秒 polling, 数据源 ~/.catfish/pet_pending_bubbles.jsonl + ~/.catfish/pet_status_seen_ts.json
+- 单击桌宠 (pet_clicked) 自动调 mark_all_seen → 清 unseen
+
+**macOS 通知规则收紧** (BL-A2.3 重写):
+- 失败 → 始终发 (除非测试任务)
+- 成功 → 仅 ≥ 30s 才发 (短任务用桌宠颜色就够)
+- 测试任务过滤 (kind 含 '_test' / label 含 '测试')
+- 同 label 1 小时内去重 (防 demo 反复跑刷屏)
+- 桌宠 bubble 通道仍全发 (主通道, 颜色聚合)
+
+**测试**: task_manager.py 加 11 新单测 (包括 _is_test_task / _should_send_macos_notify / 去重 / 不同 label 独立 / 1h 后重置), 26/26 PASS.
+
+### BL-MM11 ✅ skill 级 👍/👎/改 评分
+
+跟 BL-MM6 区别: MM6 给消息评分, MM11 给 skill 评分, 共存.
+
+- commands/skill_feedback.rs (4 Tauri 命令): record / summary / clear + aggregate_for_skill (给 BL-MM12 用)
+- ~/.catfish/skill_quality.jsonl event_type=skill_feedback append-only
+- SkillFeedbackButtons.tsx 复用 BL-MM6 UI 模式 + 三档状态 (idle / writing / saved)
+- ChatMessage.tsx 检测 catfish_run_skill 结束的 tool_call 自动渲染按钮
+
+**Schema**: `{ts, kind, skill_path, skill_call_ts?, session_id, comment?}`
+
+### BL-MM12 ✅ 综合质量分数 0-100
+
+公式 (合计 100 分):
+- 50 × success_rate (audit ok / total)
+- 30 × normalized_freq (`log(1+n) / log(1+max_n)` 防"用 100 次拿满")
+- 20 × explicit_feedback_ratio (BL-MM11 up / (up+down), 0 反馈给中性 0.5 = 10 分)
+
+**4 档颜色** (优 ≥ 80 / 良 ≥ 60 / 中 ≥ 40 / 差 < 40):
+- 🟢 绿优秀
+- 🟦 蓝合格
+- 🟡 黄一般
+- 🔴 红差
+
+SkillAuditCard 新增"📊 综合质量分" 区, top 5 skill 按分降序, 鼠标悬停看公式明细.
+
+**测试**: 6 单测 (空 / 全成功 / 全失败 / 降序 / 公式断言 / 跳空 path).
+
+### BL-D Phase 3 — 不写代码, 改 PPT 路线图
+
+5/8 凌晨拍板:
+- 真做要 1-2 周 federation, 推 Q3
+- mock 数据有信安风险, 拒
+- 5/14 demo 用 PPT 1 页静态截图讲 Q3 路线图 (Plan D 4.5 PPT 配套, 5/12 跟其他 PPT 一起做)
+
+### 测试统计
+
+新加: BL-E27.4 11 单测 + BL-MM11 (无单测, UI 集成) + BL-MM12 6 单测 = 17 个
+工时实际: 桌宠 ~3h + MM11 ~1h + MM12 ~1h = ~5 小时一晚上
+
+### 5/14 demo 演示话术 (新)
+
+之前 (BL-A2.3 单纯 macOS 通知): "鲶鱼跑完任务发系统通知" — 客户: 嗯一堆烦.
+
+之后:
+> "鲶鱼是同事不是工具 — 不会每件小事打扰你. 你看 (指桌宠头上绿点),
+>  鲶鱼悄悄做完 3 件事. 点一下 (单击桌宠), Companion 弹出来,
+>  Dashboard 一目了然. 没问题就关掉, 桌宠又安静了.
+>  这才是同事的样子."
+
+加上 SkillAuditCard 综合质量分:
+> "鲶鱼对每个 skill 都打 0-100 分, 优良中差 4 档. 公式公开 (50%成功率
+>  +30%频次+20%员工显式打分). 哪个 skill 用得少, 哪个用得不爽, 一目了然."
+
+### 遗留
+
+- BL-D Phase 3 PPT 路线图 (5/12 跟 Plan D 4.5 一起画)
+- skill 级 feedback UI 测试 (Companion 真启动验证按钮位置)
+- ProposedSkillsCard P2 (BL-MM9 提案历史 Dashboard 卡)

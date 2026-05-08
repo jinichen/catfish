@@ -377,6 +377,13 @@ pub fn run() {
             commands::pet::pet_pop_bubble,
             commands::pet::pet_pop_status,
             commands::pet::pet_log,
+            // BL-E27.4 (5/8): 桌宠状态颜色 indicator + 单击重置
+            commands::pet::pet_status_summary,
+            commands::pet::pet_status_clear,
+            // BL-MM11 (5/8): skill 级 👍/👎/改 评分
+            commands::skill_feedback::skill_feedback_record,
+            commands::skill_feedback::skill_feedback_summary,
+            commands::skill_feedback::skill_feedback_clear,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

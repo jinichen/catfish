@@ -27,10 +27,23 @@ interface BubbleState {
   ts: number;
 }
 
+// BL-E27.4 (5/8): 桌宠状态颜色 indicator
+type PetStatusColor = "default" | "running" | "completed" | "failed";
+interface PetStatusSummary {
+  color: PetStatusColor;
+  unseen_completed: number;
+  unseen_failed: number;
+  last_event_ts: number;
+  seen_ts: number;
+}
+
 function Pet() {
   const [status, setStatus] = React.useState<AgentStatus>("idle");
   // 5/6 鸿波: 桌宠 = 主动信息出口. 主窗 emit 'catfish:pet_bubble' 时桌宠头顶冒气泡.
   const [bubble, setBubble] = React.useState<BubbleState | null>(null);
+  // 5/8 BL-E27.4: 桌宠状态颜色 (任务完成/失败 unseen)
+  const [statusColor, setStatusColor] = React.useState<PetStatusColor>("default");
+  const [unseenCount, setUnseenCount] = React.useState<number>(0);
 
   // 启动: 恢复上次位置 + 监听位移
   React.useEffect(() => {
@@ -115,6 +128,24 @@ function Pet() {
       }
     };
     const t = window.setInterval(tick, 300);
+    void tick(); // 立即跑一次
+    return () => window.clearInterval(t);
+  }, []);
+
+  // 5/8 BL-E27.4: 桌宠状态颜色 5 秒 polling.
+  // 数据源: ~/.catfish/pet_pending_bubbles.jsonl + seen_ts.json
+  // 单击桌宠后, pet_clicked 自动调 mark_all_seen → 颜色回 default.
+  React.useEffect(() => {
+    const tick = async () => {
+      try {
+        const s = await invoke<PetStatusSummary>("pet_status_summary");
+        setStatusColor(s.color);
+        setUnseenCount(s.unseen_failed + s.unseen_completed);
+      } catch {
+        /* 静默 — Companion 还没起 / Rust 调用失败, 下次 tick 再试 */
+      }
+    };
+    const t = window.setInterval(tick, 5000);
     void tick(); // 立即跑一次
     return () => window.clearInterval(t);
   }, []);
@@ -272,7 +303,15 @@ function Pet() {
           cursor: "pointer",
           transition: "transform 200ms ease",
         }}
-        title="点击唤主窗 · ⌥⇧1/2/3/4 切 4 屏角"
+        title={
+          statusColor === "failed"
+            ? `${unseenCount} 个未看 (含失败) · 点击查看`
+            : statusColor === "completed"
+            ? `${unseenCount} 个未看 · 点击查看`
+            : statusColor === "running"
+            ? "后台任务运行中"
+            : "点击唤主窗 · ⌥⇧1/2/3/4 切 4 屏角"
+        }
         onMouseEnter={(e) => {
           e.currentTarget.style.transform = "translateX(-50%) scale(1.08)";
         }}
@@ -299,6 +338,68 @@ function Pet() {
                 : "pet-done-bounce 0.5s ease-out",
           }}
         />
+        {/* 5/8 BL-E27.4: 桌宠头部状态颜色 indicator
+            优先级: 红 (failed) > 绿 (completed) > 蓝 (running) > 默认 (隐藏)
+            位置: 右上角 (跟头部齐), 大小 14x14 让员工 1m 外能看清 */}
+        {statusColor !== "default" && (
+          <div
+            style={{
+              position: "absolute",
+              top: 4,
+              right: 6,
+              width: 14,
+              height: 14,
+              borderRadius: "50%",
+              background:
+                statusColor === "failed"
+                  ? "#dc2626"   // 红: 任务失败未看
+                  : statusColor === "completed"
+                  ? "#10b981"   // 绿: 任务完成未看
+                  : "#3b82f6",  // 蓝: 后台运行 (P2 现在不会触发)
+              boxShadow:
+                statusColor === "failed"
+                  ? "0 0 0 2px rgba(220, 38, 38, 0.3), 0 0 6px rgba(220, 38, 38, 0.7)"
+                  : statusColor === "completed"
+                  ? "0 0 0 2px rgba(16, 185, 129, 0.3), 0 0 6px rgba(16, 185, 129, 0.7)"
+                  : "0 0 0 2px rgba(59, 130, 246, 0.3)",
+              animation:
+                statusColor === "failed"
+                  ? "pet-status-pulse-red 1.4s ease-in-out infinite"
+                  : statusColor === "completed"
+                  ? "pet-status-pulse-green 2.5s ease-in-out infinite"
+                  : "pet-status-pulse-blue 2s ease-in-out infinite",
+              zIndex: 2,
+              pointerEvents: "none", // 不挡桌宠 click
+            }}
+            aria-label={`${unseenCount} 个未看`}
+          />
+        )}
+        {/* 数字徽章 — 多于 1 个未看时显示数字 (≤ 9, 超出显示 9+) */}
+        {statusColor !== "default" && unseenCount > 1 && (
+          <div
+            style={{
+              position: "absolute",
+              top: 0,
+              right: 0,
+              minWidth: 18,
+              height: 18,
+              padding: "0 4px",
+              borderRadius: 9,
+              background: "rgba(0, 0, 0, 0.85)",
+              color: "white",
+              fontSize: 10,
+              fontWeight: 700,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              zIndex: 3,
+              pointerEvents: "none",
+              boxShadow: "0 1px 3px rgba(0,0,0,0.4)",
+            }}
+          >
+            {unseenCount > 9 ? "9+" : unseenCount}
+          </div>
+        )}
       </div>
       <style>
         {`
@@ -323,6 +424,19 @@ function Pet() {
           @keyframes pet-bubble-in {
             0% { opacity: 0; transform: translateY(8px) scale(0.9); }
             100% { opacity: 1; transform: translateY(0) scale(1); }
+          }
+          /* BL-E27.4 (5/8) — 桌宠头颜色 indicator 三档脉动 */
+          @keyframes pet-status-pulse-red {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.25); opacity: 0.85; }
+          }
+          @keyframes pet-status-pulse-green {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.12); opacity: 0.92; }
+          }
+          @keyframes pet-status-pulse-blue {
+            0%, 100% { transform: scale(1); opacity: 0.9; }
+            50% { transform: scale(1.08); opacity: 1; }
           }
         `}
       </style>

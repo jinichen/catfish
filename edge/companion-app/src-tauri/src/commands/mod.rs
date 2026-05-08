@@ -28,6 +28,7 @@ pub mod relation;
 pub mod session_write;
 pub mod sessions;
 pub mod skill_audit;
+pub mod skill_feedback;
 pub mod skills;
 pub mod speech;
 pub mod system;

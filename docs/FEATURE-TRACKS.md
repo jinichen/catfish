@@ -404,6 +404,8 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 - ✅ **BL-MM8 文书风格 fingerprint** (5/6 跟 MM7 同日 ship, **方案 D**): 员工历史文档抽: 句长 / 段落数 / 词频 (jieba 分词 + char-level n-gram 兜底) / 标点偏好 / 列表-散文比例 / 3-5 样本句. 存 `~/.catfish/style_fingerprint.json`, 写新文档时 skill 调用. style_fingerprint.py 454 行 + StyleFingerprintCard.tsx + 20 单测 PASS
 - ✅ **BL-MM9 agent 自动抽 skill** (5/8 凌晨 ship, 鸿波"一次性别再分批"): catfish_propose_skill 工具 + 20 单测 PASS + SOUL § BL-MM9 纪律 (3 次门槛 / 红线 / 限流 24h / session ≤5). 跟 hermes "creates skills from experience" 对标但加**员工 confirm 门槛** + ~/.catfish/skill_proposals.jsonl 透明 audit trail
 - ✅ **BL-MM10 memory 自精炼 loop MVP** (5/8 凌晨 ship, MVP 规则版): memory_distill.py + 24 单测 PASS. 抽 work_pattern.peak_hours (时间戳分布) + writing_style.bullet_pref (列表 vs 散文比例) + 红线过滤 + 24h 限流. **6/15 PoC 1 个月时**接入 LLM 真抽 (现在留 hook), 走 BL-MM7 confirm 流程
+- ✅ **BL-MM11 skill 级 👍/👎/改 评分** (5/8 ship, 鸿波"一起做"): skill_feedback.rs + SkillFeedbackButtons.tsx 复用 BL-MM6 UI 模式. 一条 assistant 消息含 catfish_run_skill 时, 对每个 skill 独立加按钮. 写 ~/.catfish/skill_quality.jsonl, 给 BL-MM12 公式用
+- ✅ **BL-MM12 综合质量分数 0-100** (5/8 ship): skill_audit.rs `compute_quality_scores` 公式 = 50×success_rate + 30×log-normalized_freq + 20×explicit_feedback_ratio. 6 单测 PASS. SkillAuditCard 加 quality_scores 区, 优/良/中/差 4 档颜色, 鼠标悬停看公式明细
 
 - 见 `edge/identity/SOUL.md § 记忆覆盖纪律 + § 主动学习员工偏好` + `docs/BACKLOG.md § M`
 

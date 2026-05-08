@@ -11,6 +11,17 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
+interface SkillQualityScore {
+  skill_path: string;
+  score: number;          // 0-100
+  call_count: number;
+  success_rate: number;   // 0-1
+  thumbs_up: number;
+  thumbs_down: number;
+  edits: number;
+  breakdown: string;      // "成功率 50/50 + 频次 30/30 + 显式反馈 20/20 = 100 分"
+}
+
 interface SkillAuditSummary {
   today_count: number;
   today_ok_count: number;
@@ -25,6 +36,23 @@ interface SkillAuditSummary {
   // 💤 调用过但近 30 天没调. 老 skill 评估
   stale_30d: string[];
   avg_duration_ms: number;
+  // BL-MM12 (5/8): 综合质量分数 0-100, 按分降序
+  quality_scores: SkillQualityScore[];
+}
+
+/** 0-100 分对应颜色 — 央企体验: 优秀 / 合格 / 一般 / 差 4 档 */
+function scoreColor(score: number): string {
+  if (score >= 80) return "#10b981"; // 绿: 优秀
+  if (score >= 60) return "#3b82f6"; // 蓝: 合格
+  if (score >= 40) return "#f59e0b"; // 黄: 一般
+  return "#dc2626";                   // 红: 差
+}
+
+function scoreLabel(score: number): string {
+  if (score >= 80) return "优";
+  if (score >= 60) return "良";
+  if (score >= 40) return "中";
+  return "差";
 }
 
 export default function SkillAuditCard() {
@@ -159,6 +187,58 @@ export default function SkillAuditCard() {
           {/* 平均耗时 — 只在有调用时显示 */}
           {summary.avg_duration_ms > 0 && (
             <div>平均耗时: {(summary.avg_duration_ms / 1000).toFixed(1)}s</div>
+          )}
+
+          {/* BL-MM12 (5/8) 综合质量分数 — top 5 skill 按分降序 */}
+          {summary.quality_scores && summary.quality_scores.length > 0 && (
+            <div style={{ marginTop: 8, paddingTop: 6, borderTop: "1px dashed var(--catfish-border)" }}>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                📊 综合质量分 (BL-MM12, top {Math.min(5, summary.quality_scores.length)})
+              </div>
+              {summary.quality_scores.slice(0, 5).map((q) => (
+                <div
+                  key={q.skill_path}
+                  title={q.breakdown}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    marginBottom: 2,
+                    fontSize: 11,
+                  }}
+                >
+                  <span
+                    style={{
+                      display: "inline-block",
+                      minWidth: 32,
+                      padding: "1px 5px",
+                      background: scoreColor(q.score),
+                      color: "white",
+                      borderRadius: 3,
+                      fontWeight: 600,
+                      fontSize: 10,
+                      textAlign: "center",
+                    }}
+                  >
+                    {q.score} {scoreLabel(q.score)}
+                  </span>
+                  <code style={{ fontSize: 11, flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {q.skill_path}
+                  </code>
+                  <span style={{ color: "var(--catfish-text-muted)", fontSize: 10 }}>
+                    {q.call_count} 次
+                    {q.thumbs_up + q.thumbs_down > 0 && (
+                      <span style={{ marginLeft: 4 }}>
+                        👍{q.thumbs_up} 👎{q.thumbs_down}
+                      </span>
+                    )}
+                  </span>
+                </div>
+              ))}
+              <div style={{ fontSize: 10, color: "var(--catfish-text-muted)", marginTop: 2 }}>
+                公式: 50×成功率 + 30×频次(归一化) + 20×员工评分. 鼠标悬停看明细.
+              </div>
+            </div>
           )}
 
           {/* 完全空状态 — 一行简短提示 */}

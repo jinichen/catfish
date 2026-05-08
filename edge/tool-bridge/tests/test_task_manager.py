@@ -231,21 +231,25 @@ class TestTaskNotification(unittest.TestCase):
             os.environ.pop("HOME", None)
         shutil.rmtree(self._tmphome, ignore_errors=True)
 
-    def test_short_task_no_notification(self):
-        """任务 < 3 秒不通知 (员工还在等, 不打扰)."""
+    def test_short_task_writes_bubble_but_no_macos_notify(self):
+        """BL-E27.4 (5/8) 重写: 短任务也写桌宠 bubble (主通道), 但不发 macOS 通知.
+
+        行为变化原因: 鸿波 5/8 凌晨拍板 — 桌宠状态着色是主通道, macOS 通知降级到辅
+        (失败 / ≥30s 长任务才发系统通知). 桌宠通道全发, 颜色聚合多个通知到一个 dot.
+        """
         async def _t():
             mgr = task_manager.manager()
 
             async def runner():
                 return "fast"
 
-            task = mgr.submit("test", "短任务", runner)
+            task = mgr.submit("test_short", "短任务", runner)
             await task._async_task
 
         _run(_t())
-        # bubble jsonl 应该没创建 (fast task 不通知)
+        # 桌宠 bubble: 即使短任务也写 (主通道)
         bubble_file = Path(self._tmphome) / ".catfish" / "pet_pending_bubbles.jsonl"
-        self.assertFalse(bubble_file.exists(), "短任务不该写 bubble")
+        self.assertTrue(bubble_file.exists(), "短任务也该写桌宠 bubble (BL-E27.4)")
 
     def test_long_task_writes_bubble(self):
         """任务 >= 3 秒 + completed 写 bubble."""
@@ -292,7 +296,11 @@ class TestTaskNotification(unittest.TestCase):
         self.assertIn("没做成", content)
 
     def test_notify_disabled_via_env(self):
-        """env CATFISH_TASK_NOTIFY=0 整个通道关."""
+        """env CATFISH_TASK_NOTIFY=0 关 macOS 通知通道, 但桌宠 bubble (主通道) 仍发.
+
+        BL-E27.4 (5/8) 重写: env 只控 macOS 通知, 桌宠由 CATFISH_PET_BUBBLE 控.
+        想全关请同时设两个 env, 或改用 BL-E15 专注模式 (临时屏蔽).
+        """
         old = os.environ.get("CATFISH_TASK_NOTIFY")
         os.environ["CATFISH_TASK_NOTIFY"] = "0"
         try:
@@ -303,17 +311,113 @@ class TestTaskNotification(unittest.TestCase):
                     await asyncio.sleep(3.1)
                     return "x"
 
-                task = mgr.submit("test", "test", runner)
+                task = mgr.submit("real_kind", "real label", runner)
                 await task._async_task
 
             _run(_t())
             bubble_file = Path(self._tmphome) / ".catfish" / "pet_pending_bubbles.jsonl"
-            self.assertFalse(bubble_file.exists())
+            # bubble 仍写 (主通道)
+            self.assertTrue(bubble_file.exists(), "BL-E27.4: env 只关 macOS, bubble 主通道仍发")
         finally:
             if old is None:
                 os.environ.pop("CATFISH_TASK_NOTIFY", None)
             else:
                 os.environ["CATFISH_TASK_NOTIFY"] = old
+
+
+# ============================================================
+# BL-E27.4 (5/8) 通知收紧规则单测
+# ============================================================
+
+
+class TestBLE274NotifyRules(unittest.TestCase):
+    """直接测 _should_send_macos_notify / _is_test_task 函数级行为."""
+
+    def setUp(self):
+        # 每个 test 重置全局 dedup state
+        task_manager._RECENT_NOTIFY_BY_LABEL.clear()
+
+    @staticmethod
+    def _mk_task(kind: str, label: str | None, status: str, error: str | None = None):
+        """造一个 Task 对象 (跳 mgr.submit, 直接构造测 _notify_task_done 调路径)."""
+        t = task_manager.Task(
+            task_id="test-id",
+            kind=kind,
+            label=label,
+            status=status,
+        )
+        t.started_at = 0.0
+        t.finished_at = 0.0
+        t.error = error
+        return t
+
+    def test_is_test_task_recognizes_kind_test(self):
+        cases_yes = ["test_short", "_test_long", "test", "fake_test_kind"]
+        for k in cases_yes:
+            t = self._mk_task(k, "label", "completed")
+            self.assertTrue(task_manager._is_test_task(t), f"kind={k} 应判测试")
+
+    def test_is_test_task_recognizes_label_test(self):
+        cases_yes = ["测试任务", "Test something", "test foobar"]
+        for label in cases_yes:
+            t = self._mk_task("real_kind", label, "completed")
+            self.assertTrue(task_manager._is_test_task(t), f"label={label!r} 应判测试")
+
+    def test_is_test_task_real_work_passes(self):
+        cases_no = [
+            ("write_docx", "周报"),
+            ("parse_pdf", "解析合同"),
+            ("modify", "修订《资质管理办法》"),
+        ]
+        for kind, label in cases_no:
+            t = self._mk_task(kind, label, "completed")
+            self.assertFalse(task_manager._is_test_task(t), f"{kind}/{label} 不该判测试")
+
+    def test_test_task_blocks_macos_notify_even_for_failure(self):
+        """测试任务 + failed → 仍不发 macOS (避免 demo 反复跑刷屏)"""
+        t = self._mk_task("test_long", "长任务测试", "failed", error="boom")
+        self.assertFalse(task_manager._should_send_macos_notify(t, elapsed=10.0))
+
+    def test_real_failed_task_always_notifies(self):
+        """真业务 failed → 始终发 macOS"""
+        t = self._mk_task("write_docx", "周报", "failed", error="模板找不到")
+        self.assertTrue(task_manager._should_send_macos_notify(t, elapsed=5.0))
+
+    def test_real_success_short_no_macos_notify(self):
+        """真业务 completed 但 < 30s → 不发 macOS (桌宠 bubble 通道走)"""
+        t = self._mk_task("write_docx", "周报", "completed")
+        self.assertFalse(task_manager._should_send_macos_notify(t, elapsed=10.0))
+
+    def test_real_success_long_macos_notify(self):
+        """真业务 completed ≥ 30s → 发 macOS"""
+        t = self._mk_task("modify", "修订办法", "completed")
+        self.assertTrue(task_manager._should_send_macos_notify(t, elapsed=35.0))
+
+    def test_dedup_same_label_within_1h(self):
+        """同 label 1h 内 → 第二次失败也不发 macOS"""
+        t1 = self._mk_task("write_docx", "周报", "failed", error="x")
+        self.assertTrue(task_manager._should_send_macos_notify(t1, elapsed=5.0))
+        # 再来同 label
+        t2 = self._mk_task("write_docx", "周报", "failed", error="y")
+        self.assertFalse(task_manager._should_send_macos_notify(t2, elapsed=5.0),
+                         "同 label 1h 内不重复发")
+
+    def test_dedup_different_label_independent(self):
+        """不同 label 互不影响"""
+        t1 = self._mk_task("write_docx", "周报", "failed", error="x")
+        t2 = self._mk_task("write_docx", "立项材料", "failed", error="y")
+        self.assertTrue(task_manager._should_send_macos_notify(t1, elapsed=5.0))
+        self.assertTrue(task_manager._should_send_macos_notify(t2, elapsed=5.0))
+
+    def test_dedup_window_resets_after_1h(self):
+        """超 1h 后同 label 又能发"""
+        import time as _time
+        t1 = self._mk_task("write_docx", "周报", "failed", error="x")
+        self.assertTrue(task_manager._should_send_macos_notify(t1, elapsed=5.0))
+        # 模拟 1h+ 过去 — 直接改 _RECENT_NOTIFY_BY_LABEL
+        task_manager._RECENT_NOTIFY_BY_LABEL["周报"] = _time.time() - 3700
+        t2 = self._mk_task("write_docx", "周报", "failed", error="y")
+        self.assertTrue(task_manager._should_send_macos_notify(t2, elapsed=5.0))
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ import { extractFilePaths } from "../../lib/path_detect";
 import { FilePillList } from "../../components/FilePill";
 import { useAgentStore } from "../../store/agent";
 import FeedbackButtons from "./FeedbackButtons";
+import SkillFeedbackButtons from "./SkillFeedbackButtons";
 
 interface Props {
   msg: Msg;
@@ -188,6 +189,25 @@ function AssistantBubble({
             messageId={msg.id}
             preview={msg.content || (msg.tool_calls?.[0]?.name ?? "(空)")}
           />
+        )}
+        {/* BL-MM11 (5/8) skill 级 feedback: 一条消息含 catfish_run_skill 时,
+            对每个调用的 skill 加一行 👍/👎/改 按钮, 写 ~/.catfish/skill_quality.jsonl.
+            跟 BL-MM6 共存 — 整体回答打分 + 单 skill 打分独立. */}
+        {!showCaret && msg.tool_calls && msg.tool_calls.length > 0 && (
+          <>
+            {msg.tool_calls
+              .filter((tc) => tc.name === "catfish_run_skill" && tc.status === "done")
+              .map((tc) => {
+                const skillPath = (tc.args?.skill_path as string | undefined) ?? "";
+                if (!skillPath) return null;
+                return (
+                  <SkillFeedbackButtons
+                    key={`sf-${tc.id}`}
+                    skillPath={skillPath}
+                  />
+                );
+              })}
+          </>
         )}
       </div>
     </div>

@@ -11,5 +11,6 @@ pub mod curator_state;
 pub mod endpoints;
 pub mod oauth;
 pub mod pet_hover;
+pub mod pet_status;
 pub mod process;
 pub mod watchdog;

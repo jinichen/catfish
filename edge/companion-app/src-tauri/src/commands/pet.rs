@@ -77,7 +77,11 @@ pub async fn pet_clicked(app: AppHandle) -> Result<(), String> {
     let _ = main.unminimize();
     let _ = main.show();
     let _ = main.set_focus();
-    log::info!("pet_clicked: 主窗口已唤醒");
+    // 5/8 BL-E27.4: 单击桌宠 = 员工已看 → 写 seen_ts.json 重置颜色 indicator
+    if let Err(e) = crate::services::pet_status::mark_all_seen() {
+        log::warn!("BL-E27.4: pet_status mark_all_seen 失败 (不阻塞): {e}");
+    }
+    log::info!("pet_clicked: 主窗口已唤醒, status 已 mark seen");
     Ok(())
 }
 
@@ -247,4 +251,22 @@ pub async fn pet_move_corner(app: AppHandle, corner: String) -> Result<(), Strin
         "pet_move_corner({corner}): logical ({x}, {y}) on {logical_w}x{logical_h} (scale {scale})",
     );
     Ok(())
+}
+
+
+// ============================================================
+// BL-E27.4 (5/8) — 桌宠状态颜色 indicator
+// ============================================================
+
+/// 拿桌宠当前状态颜色摘要 (供 pet.tsx 5s polling).
+/// 4 状态: default / running / completed / failed (优先级 红>绿>蓝>默认).
+#[tauri::command]
+pub fn pet_status_summary() -> Result<crate::services::pet_status::PetStatusSummary, String> {
+    crate::services::pet_status::read_status_summary().map_err(|e| e.to_string())
+}
+
+/// 显式清 unseen 标记 (一般 pet_clicked 自动调, 这里给 Dashboard 备用入口).
+#[tauri::command]
+pub fn pet_status_clear() -> Result<f64, String> {
+    crate::services::pet_status::mark_all_seen().map_err(|e| e.to_string())
 }
