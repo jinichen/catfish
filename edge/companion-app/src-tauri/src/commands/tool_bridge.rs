@@ -9,7 +9,12 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+// BL-WIN1 (5/8): Unix domain socket 只 unix 平台有, Windows 等价是 named pipe
+// (\\.\pipe\xxx). 现在 tool-bridge 只支持 unix socket, Windows build 暂走 stub
+// (call_rpc 直接返 friendly error). 真 Windows IPC 留 BL-WIN8 实现 named pipes.
+#[cfg(unix)]
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+#[cfg(unix)]
 use tokio::net::UnixStream;
 
 use crate::commands::types::ServiceStatus;
@@ -166,6 +171,19 @@ pub async fn tool_bridge_call_tool(
 // internal: unix socket NDJSON RPC
 // ============================================================
 
+#[cfg(not(unix))]
+async fn call_rpc(_method: &str, _params: Value) -> Result<Value, String> {
+    // BL-WIN1: Windows 暂没接 IPC, 所有 RPC 直接返 friendly error.
+    // tool-bridge daemon 在 Windows 上跑不起来 (没 unix socket), 所以前端
+    // 调任何 tool 都该被 frontend 拦掉, 这里是兜底. BL-WIN8 真接 named pipe.
+    Err(
+        "tool-bridge 暂未支持 Windows (Unix socket only). \
+         真要 Windows 跑等 BL-WIN8 接 named pipe 之后."
+            .to_string(),
+    )
+}
+
+#[cfg(unix)]
 async fn call_rpc(method: &str, params: Value) -> Result<Value, String> {
     let socket_path = catfish_paths::tool_bridge_socket()
         .ok_or_else(|| "找不到 socket 路径".to_string())?;
