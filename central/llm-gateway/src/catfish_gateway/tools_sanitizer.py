@@ -161,4 +161,121 @@ def sanitize_tools(body: dict[str, Any]) -> dict[str, Any]:
         )
 
     body["tools"] = cleaned
+
+    # BL-FIX5 (5/8): 同步扫消息历史 — assistant.tool_calls 里 name 在 deduped 集
+    # 合的剔掉, 对应 tool message 一起丢. 防 BL-FIX4 部署前的旧轮次撞 Qwen Go gRPC
+    # adapter 的"assistant 调过的 tool name 必须在 tools 列表里"校验 → 空 reason 400.
+    if deduped_hermes_browser:
+        _scrub_messages_for_dropped_tools(body, set(deduped_hermes_browser))
+
     return body
+
+
+def _scrub_messages_for_dropped_tools(
+    body: dict[str, Any], dropped_names: set[str]
+) -> None:
+    """把 messages 历史里 name 在 dropped_names 的 assistant.tool_calls 剔掉,
+    对应的 tool message (匹配 tool_call_id) 也丢. 原地修改 body["messages"].
+
+    Qwen Go gRPC adapter 校验 assistant 的 tool_calls.name 必须在 tools 列表里,
+    BL-FIX4 dedupe 之后历史里 BL-FIX4 部署前的轮次会撞这个校验 → 空 reason 400.
+    这里把残留扫一遍, 所以 BL-FIX4 + BL-FIX5 是一对的.
+
+    不动假设:
+      - assistant.content 非空 (含文字) 时, 即便 tool_calls 全 drop 也保留 message
+        (留住 assistant 的解释文字)
+      - assistant.content 为空 / None 且 tool_calls 全 drop → 整条 assistant message
+        丢, 不留空壳
+      - tool message 没 tool_call_id (异常) → 不动
+      - 不是 assistant / tool 的 message → 不动
+    """
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return
+
+    dropped_call_ids: set[str] = set()
+    scrubbed_assistants = 0
+    dropped_assistants = 0
+
+    # 第一遍: 处理 assistant.tool_calls, 收集要丢的 tool_call_id
+    new_messages: list[Any] = []
+    for msg in messages:
+        if not isinstance(msg, dict):
+            new_messages.append(msg)
+            continue
+        if msg.get("role") != "assistant":
+            new_messages.append(msg)
+            continue
+
+        tool_calls = msg.get("tool_calls")
+        if not isinstance(tool_calls, list) or not tool_calls:
+            new_messages.append(msg)
+            continue
+
+        # 过滤 — 留下 name 不在 dropped_names 的
+        kept_calls: list[Any] = []
+        for tc in tool_calls:
+            if not isinstance(tc, dict):
+                kept_calls.append(tc)
+                continue
+            fn = tc.get("function")
+            name = fn.get("name") if isinstance(fn, dict) else None
+            if isinstance(name, str) and name in dropped_names:
+                # 收集 tool_call_id 给第二遍用
+                tcid = tc.get("id")
+                if isinstance(tcid, str):
+                    dropped_call_ids.add(tcid)
+                continue  # 这条 tool_call drop
+            kept_calls.append(tc)
+
+        if len(kept_calls) == len(tool_calls):
+            # 没一条被 drop, 原样留
+            new_messages.append(msg)
+            continue
+
+        scrubbed_assistants += 1
+        # 有 tool_call 被 drop → 改写 message
+        rewritten = dict(msg)
+        if kept_calls:
+            rewritten["tool_calls"] = kept_calls
+            new_messages.append(rewritten)
+        else:
+            # 全 drop. 看 content 有没有
+            content = msg.get("content")
+            has_text = isinstance(content, str) and content.strip()
+            if has_text:
+                # 保留 message 文字部分, 删掉 tool_calls
+                rewritten.pop("tool_calls", None)
+                new_messages.append(rewritten)
+            else:
+                # 空 content + 没 tool_calls → 整条丢, 否则留空壳更糟
+                dropped_assistants += 1
+                continue
+
+    # 第二遍: 把 tool_call_id 在 dropped_call_ids 的 tool message 也丢
+    final_messages: list[Any] = []
+    dropped_tool_msgs = 0
+    for msg in new_messages:
+        if not isinstance(msg, dict):
+            final_messages.append(msg)
+            continue
+        if msg.get("role") != "tool":
+            final_messages.append(msg)
+            continue
+        tcid = msg.get("tool_call_id")
+        if isinstance(tcid, str) and tcid in dropped_call_ids:
+            dropped_tool_msgs += 1
+            continue
+        final_messages.append(msg)
+
+    body["messages"] = final_messages
+
+    if scrubbed_assistants or dropped_assistants or dropped_tool_msgs:
+        logger.info(
+            "BL-FIX5 history scrub: 改写 assistant=%d, 丢 assistant=%d, "
+            "丢 orphan tool msg=%d (因 BL-FIX4 dedupe 了 %s 等)",
+            scrubbed_assistants,
+            dropped_assistants,
+            dropped_tool_msgs,
+            ", ".join(sorted(dropped_names)[:3]),
+        )

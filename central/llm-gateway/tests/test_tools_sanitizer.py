@@ -526,3 +526,234 @@ def test_dedupe_has_catfish_helper() -> None:
     assert not _has_catfish_browser_tools([])
     # 脏数据不爆
     assert not _has_catfish_browser_tools([None, "string", {"function": "not-dict"}])  # type: ignore[list-item]
+
+
+# ============================================================
+# BL-FIX5 (5/8) — 历史 scrub: 删 deduped name 的 assistant.tool_calls + 对应 tool msg
+# ============================================================
+#
+# 现网坑: BL-FIX4 部署后, 历史里仍有部署前的 hermes browser_vision / browser_back
+# tool_call. Qwen Go gRPC adapter 校验 assistant.tool_calls.name 必须在 tools 列表
+# → 找不到 → 空 reason 400. 修法: dedupe 时同步扫 messages.
+
+
+def _make_assistant_tool_call(call_id: str, name: str, args: str = "{}") -> dict:
+    return {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{
+            "id": call_id,
+            "type": "function",
+            "function": {"name": name, "arguments": args},
+        }],
+    }
+
+
+def test_scrub_history_drops_assistant_with_deduped_only_tool_call() -> None:
+    """assistant 只调过 deduped name + 没 content → 整条 message 丢"""
+    body = {
+        "messages": [
+            {"role": "user", "content": "登录 EIS"},
+            _make_assistant_tool_call("c1", "browser_vision"),
+            {"role": "tool", "content": "{error: ...}", "tool_call_id": "c1"},
+            {"role": "user", "content": "再试"},
+        ],
+        "tools": [
+            {"type": "function", "function": {"name": "catfish_browser_goto",
+             "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "browser_vision",
+             "parameters": {"type": "object", "properties": {}}}},
+        ],
+    }
+    out = sanitize_tools(body)
+    msgs = out["messages"]
+    # browser_vision assistant + 对应 tool msg 都被丢, user 留
+    roles = [m["role"] for m in msgs]
+    assert roles == ["user", "user"]
+    assert msgs[0]["content"] == "登录 EIS"
+    assert msgs[1]["content"] == "再试"
+
+
+def test_scrub_history_keeps_assistant_with_text_content() -> None:
+    """assistant 有 content 文字 + tool_calls 全 drop → 保留 message, 删 tool_calls"""
+    msg = _make_assistant_tool_call("c1", "browser_vision")
+    msg["content"] = "我看下这个页面"
+    body = {
+        "messages": [
+            {"role": "user", "content": "登录 EIS"},
+            msg,
+            {"role": "tool", "content": "err", "tool_call_id": "c1"},
+        ],
+        "tools": [
+            {"type": "function", "function": {"name": "catfish_browser_goto",
+             "parameters": {"type": "object", "properties": {}}}},
+            # browser_vision 必须在 tools 里才会触发 dedupe → 触发 scrub
+            {"type": "function", "function": {"name": "browser_vision",
+             "parameters": {"type": "object", "properties": {}}}},
+        ],
+    }
+    out = sanitize_tools(body)
+    msgs = out["messages"]
+    # tool msg 丢 (orphan), assistant 留但删了 tool_calls
+    roles = [m["role"] for m in msgs]
+    assert roles == ["user", "assistant"]
+    assistant_msg = msgs[1]
+    assert assistant_msg["content"] == "我看下这个页面"
+    assert "tool_calls" not in assistant_msg or not assistant_msg.get("tool_calls")
+
+
+def test_scrub_history_partial_tool_calls_drop() -> None:
+    """assistant 有多条 tool_calls — 只 drop deduped name, 留其他"""
+    body = {
+        "messages": [
+            {"role": "user", "content": "干两步"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "c1", "type": "function",
+                     "function": {"name": "browser_vision", "arguments": "{}"}},
+                    {"id": "c2", "type": "function",
+                     "function": {"name": "catfish_browser_goto",
+                                  "arguments": '{"url":"http://x"}'}},
+                ],
+            },
+            {"role": "tool", "content": "vision err", "tool_call_id": "c1"},
+            {"role": "tool", "content": "{ok}", "tool_call_id": "c2"},
+        ],
+        "tools": [
+            {"type": "function", "function": {"name": "catfish_browser_goto",
+             "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "browser_vision",
+             "parameters": {"type": "object", "properties": {}}}},
+        ],
+    }
+    out = sanitize_tools(body)
+    msgs = out["messages"]
+    # user + assistant (一条 tool_call 留) + tool c2 留
+    roles = [m["role"] for m in msgs]
+    assert roles == ["user", "assistant", "tool"]
+    # assistant.tool_calls 只剩 catfish_browser_goto
+    assistant = msgs[1]
+    assert len(assistant["tool_calls"]) == 1
+    assert assistant["tool_calls"][0]["function"]["name"] == "catfish_browser_goto"
+    # 对应 tool c2 留
+    assert msgs[2]["tool_call_id"] == "c2"
+
+
+def test_scrub_history_drops_orphan_tool_messages() -> None:
+    """assistant.tool_calls 整条丢之后, 对应 tool message (匹配 id) 也要丢"""
+    body = {
+        "messages": [
+            _make_assistant_tool_call("c1", "browser_back"),
+            _make_assistant_tool_call("c2", "browser_vision"),
+            {"role": "tool", "content": "back ok", "tool_call_id": "c1"},
+            {"role": "tool", "content": "vision err", "tool_call_id": "c2"},
+            {"role": "tool", "content": "no parent", "tool_call_id": "c-orphan"},
+            {"role": "user", "content": "继续"},
+        ],
+        "tools": [
+            {"type": "function", "function": {"name": "catfish_browser_goto",
+             "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "browser_back",
+             "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "browser_vision",
+             "parameters": {"type": "object", "properties": {}}}},
+        ],
+    }
+    out = sanitize_tools(body)
+    msgs = out["messages"]
+    # 两个 assistant 全丢 (因为 c1=browser_back, c2=browser_vision 都 deduped)
+    # tool c1, c2 丢 (对应 deduped); tool c-orphan 留 (不在 dropped_call_ids 里)
+    roles = [m["role"] for m in msgs]
+    assert roles == ["tool", "user"]
+    assert msgs[0]["tool_call_id"] == "c-orphan"
+    assert msgs[1]["content"] == "继续"
+
+
+def test_scrub_history_no_dedupe_means_no_scrub() -> None:
+    """没触发 dedupe → 历史不动"""
+    body = {
+        "messages": [
+            _make_assistant_tool_call("c1", "browser_vision"),
+            {"role": "tool", "content": "ok", "tool_call_id": "c1"},
+        ],
+        "tools": [
+            # 没 catfish_browser_*, dedupe 不触发
+            {"type": "function", "function": {"name": "browser_vision",
+             "parameters": {"type": "object", "properties": {}}}},
+        ],
+    }
+    out = sanitize_tools(body)
+    msgs = out["messages"]
+    assert len(msgs) == 2
+    assert msgs[0]["tool_calls"][0]["function"]["name"] == "browser_vision"
+
+
+def test_scrub_history_empty_messages_safe() -> None:
+    """body 没 messages 字段 → 不爆"""
+    body = {
+        "tools": [
+            {"type": "function", "function": {"name": "catfish_browser_goto",
+             "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "browser_vision",
+             "parameters": {"type": "object", "properties": {}}}},
+        ],
+    }
+    # 不爆即可
+    out = sanitize_tools(body)
+    assert "messages" not in out
+
+
+def test_scrub_history_idempotent() -> None:
+    """跑两次结果一样 — 第二次 messages 已经是干净的"""
+    body = {
+        "messages": [
+            _make_assistant_tool_call("c1", "browser_vision"),
+            {"role": "tool", "content": "err", "tool_call_id": "c1"},
+            {"role": "user", "content": "继续"},
+        ],
+        "tools": [
+            {"type": "function", "function": {"name": "catfish_browser_goto",
+             "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "browser_vision",
+             "parameters": {"type": "object", "properties": {}}}},
+        ],
+    }
+    once = sanitize_tools(body)
+    once_msgs = list(once["messages"])
+    # 再来一次
+    twice = sanitize_tools({
+        "messages": once_msgs,
+        "tools": [
+            {"type": "function", "function": {"name": "catfish_browser_goto",
+             "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "browser_vision",
+             "parameters": {"type": "object", "properties": {}}}},
+        ],
+    })
+    assert twice["messages"] == once_msgs
+
+
+def test_scrub_history_logs(caplog: object) -> None:
+    """日志里能看到 'BL-FIX5 history scrub' 计数"""
+    import logging as _logging  # noqa: PLC0415
+    body = {
+        "messages": [
+            _make_assistant_tool_call("c1", "browser_vision"),
+            {"role": "tool", "content": "err", "tool_call_id": "c1"},
+        ],
+        "tools": [
+            {"type": "function", "function": {"name": "catfish_browser_goto",
+             "parameters": {"type": "object", "properties": {}}}},
+            {"type": "function", "function": {"name": "browser_vision",
+             "parameters": {"type": "object", "properties": {}}}},
+        ],
+    }
+    with caplog.at_level(_logging.INFO, logger="catfish.gateway.tools_sanitizer"):  # type: ignore[attr-defined]
+        sanitize_tools(body)
+    matched = [r for r in caplog.records if "BL-FIX5" in r.getMessage()]  # type: ignore[attr-defined]
+    assert len(matched) >= 1
+    msg = matched[0].getMessage()
+    assert "丢 assistant=1" in msg
+    assert "丢 orphan tool msg=1" in msg
