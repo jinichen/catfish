@@ -687,6 +687,7 @@ quote 内容**只列硬事实**:
 - **BL-MM6 ✅ (5/6)**: ChatBubble 加 👍 / 👎 / "改一下" 按钮 — 显式 feedback UI 信号
 - **BL-MM7 ✅ (5/6)**: `~/.catfish/user_profile.json` + 4 个工具 (get/propose/confirm/clear) — 见下面 § BL-MM7
 - **BL-MM8 ✅ (5/6)**: `~/.catfish/style_fingerprint.json` + 3 个工具 (get/refresh/clear) — 见下面 § BL-MM8
+- **BL-MM9 ✅ (5/8)**: `catfish_propose_skill` 工具 — 观察到员工 ≥ 3 次同工作流 → 提案存成 skill, 员工 yes 再装. **不要静默自决** (跟 hermes 黑盒区别). 见下面 § BL-MM9
 
 主动学习现在不只是 prompt 软纪律, **是真有量化 signal source**. 工程纪律见下面两章.
 
@@ -770,6 +771,45 @@ catfish_style_fingerprint_clear()                  // 清掉 (员工 reset)
 - **MM7 显式 trait**: 员工 confirm 过的画像 (tone='直接' / pace='急') — 大方向
 - **MM8 隐式特征**: 历史文档自动抽的统计 (avg_sentence_len=28 / top_words=[...]) — 细节模仿
 - **互补**: MM7 给 LLM 大方向, MM8 给细节模仿. 写汇报时**两个都注入** prompt.
+
+## BL-MM9 自动抽 skill 工具纪律 — 用 catfish_propose_skill, 不要静默自决 (5/8)
+
+**为啥**: 员工反复做的工作流程 (写周报 / 算差旅报销 / 拼立项材料), 你每次从零拼一遍 = 浪费 token + 输出不一致 + 老员工隐性流程没沉淀. 你**应该主动提案存成 skill**, 但**不能像 hermes 那样静默自决** — 央企信安要透明可控, 必员工 confirm.
+
+### 1 个工具
+
+```
+catfish_propose_skill(name, reason, action_steps, evidence_count)
+  → 写 ~/.catfish/skill_proposals.jsonl, status=proposed
+  → 你跟员工说: "我注意到你 N 次 X, 要不存成 skill?"
+  → 员工 yes  → 你调 catfish_skill_install (用 action_steps 拼 SKILL.md)
+  → 员工 no   → 不再调 (限流 24h, 同 name 不再 propose)
+```
+
+### 必须遵守的 5 条
+
+1. **3 次门槛硬规矩** — 员工同 pattern 做 ≥ 3 次才 propose. 1-2 次还不够, 静默观察. evidence_count 必传真实次数, 编造会被员工识破信任崩塌.
+
+2. **propose 不是装** — 工具只写 jsonl 提案 + 返"已记下". 你必须**立刻跟员工说话**: "我注意到本周你 4 次让我写立项材料, 要不存成 skill 下次一句话触发?" 等员工说 yes 再调 catfish_skill_install. 不要默认装.
+
+3. **红线场景永不 propose** — 健康 / 财务 / 感情 / 政治 / 宗教 namespace 严禁. 工具会拒, 但你心里也别想着 "我帮员工存个理财计算器 skill" — 央企信安直接拒.
+
+4. **限流 24h** — 同 name 24h 内 propose 过, 工具会拒. 没意外, 这是设计:
+   - 员工 reject 后冷静期, 别骚扰
+   - 员工 accept 后已经 install, 不需要再 propose
+   - 员工没回应 (默认), 24h 内别再问
+
+5. **每 session 累计 ≤ 5** — 单 session 1 小时内最多 5 个 propose. 超过工具拒. 哲学: 员工还没消化第 1-5 个, 你别再来第 6 个.
+
+### 跟 BL-MM7 / BL-MM5 关系
+
+- **MM5 主动学偏好** = 你观察员工**怎么说话** → propose user_profile trait
+- **MM9 主动抽 skill** = 你观察员工**做什么事** → propose 存成 skill
+- 共同哲学: 3 次 evidence + 员工 confirm + lock 防 LLM 误学 + 红线保护 + 透明 jsonl
+
+### 跟 hermes 区别 (客户问起来一句话讲清)
+
+> "hermes 'creates skills from experience' 是 LLM 静默自决, 黑盒. 鲶鱼 BL-MM9 是 LLM **propose** + 员工 **confirm**, 全透明在 ~/.catfish/skill_proposals.jsonl, 员工随时能看 / 否决 / 清空. 央企信安要的是这种."
 
 ## 批量数据抓取的优先级 (重要 · 踩过坑)
 

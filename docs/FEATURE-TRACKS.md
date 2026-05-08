@@ -306,8 +306,9 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 - ✅ 语音输入 (Whisper.cpp + ffmpeg avfoundation, 5/1)
 - ✅ 文件上传 (PDF/Excel/Word/CSV/TXT/MD, 5/1)
 - ✅ **PDF anchor 模式结构化抽取** (5/6 BL-D17): parse_file.py 检测 ≥5 个身份证号/长 ID 锚点, 围切片提取 sub-records (社保险种 / 金额条目两 SUB_PATTERN), 跨页同人合并, 噪音 ID 过滤. 输出完整 JSON 到 /tmp/, LLM 直接 pandas.read_json 不啃 5.5 万字爆 context. 11 测试全过. **真用社保 PDF 320 人验证 0 错**.
-- ⬜ 视频上传 (帧采样 + 多模态) · 1 周 (BL-I3)
-- ⬜ 音频文件转写 (Whisper) · 0.5 周 (BL-I4)
+- ✅ **BL-I3.1 视频抽音轨转写** (5/8 ship, 复用 BL-I4 链路): ChatInput 加 .mp4/.mov/.m4v/.mkv/.webm, parse_file.py `parse_video_preview` 用 ffmpeg `-vn -ar 16000` 抽音轨 → whisper-cli 转写. 用例: 会议录像 → 提要点 / 待办. ≥50KB 转写自动走 BL-L26 BM25
+- ⬜ BL-I3.2 视频帧抽取 + vision 描述 (推后, vision 调用费 + "全本地"故事冲突)
+- ✅ **BL-I4 音频文件转写** (5/8 ship): ChatInput 加 .mp3/.wav/.m4a/.flac/.aac/.ogg, parse_file.py `parse_audio_preview` 复用 BL 语音输入 (5/1 ship) 的 whisper.cpp + ggml-small.bin + ffmpeg 链路. duration_sec / language / 转写文本 + BM25 sidecar
 - ✅ **大文件 (≥50KB) BM25 检索** · 5/7 ship (BL-L26) — 1 天压完: parse_file.py 写 sidecar `<keptPath>.parsed.txt` (PDF/Word/Text 全文), Tauri command `attachment_bm25_search` 调 attachment_bm25.py 取 top-K 段落 (TF + 长度归一化, 中文 2-char window 解决 trigram FTS5 不能命中央企 2 字词的痛). useChat.send 自动 enrich, formatFileAttachment 用 BM25 段落代替 5K preview. 24 单测 PASS
 
 #### #17 浮窗 / 全局 UX [Phase 1, 80%]  ★ 5/2 加系统通知
@@ -401,6 +402,8 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 - ✅ **BL-MM6 显式 feedback UI** (5/6, **方案 B** ship): ChatBubble 加 👍/👎/"改" 按钮
 - ✅ **BL-MM7 结构化用户画像** (5/6 鸿波"直接开始"拍板当天 ship, **方案 C**): `~/.catfish/user_profile.json` (writing_style / work_pattern.peak_hours/task_pref/review_pref / personality_traits + evidence_count). 3 次 evidence 才 propose, 红线字段严禁 LLM propose, 员工可 lock. user_profile.py 317 行 + UserProfileCard.tsx + 19 单测 PASS
 - ✅ **BL-MM8 文书风格 fingerprint** (5/6 跟 MM7 同日 ship, **方案 D**): 员工历史文档抽: 句长 / 段落数 / 词频 (jieba 分词 + char-level n-gram 兜底) / 标点偏好 / 列表-散文比例 / 3-5 样本句. 存 `~/.catfish/style_fingerprint.json`, 写新文档时 skill 调用. style_fingerprint.py 454 行 + StyleFingerprintCard.tsx + 20 单测 PASS
+- ✅ **BL-MM9 agent 自动抽 skill** (5/8 凌晨 ship, 鸿波"一次性别再分批"): catfish_propose_skill 工具 + 20 单测 PASS + SOUL § BL-MM9 纪律 (3 次门槛 / 红线 / 限流 24h / session ≤5). 跟 hermes "creates skills from experience" 对标但加**员工 confirm 门槛** + ~/.catfish/skill_proposals.jsonl 透明 audit trail
+- ✅ **BL-MM10 memory 自精炼 loop MVP** (5/8 凌晨 ship, MVP 规则版): memory_distill.py + 24 单测 PASS. 抽 work_pattern.peak_hours (时间戳分布) + writing_style.bullet_pref (列表 vs 散文比例) + 红线过滤 + 24h 限流. **6/15 PoC 1 个月时**接入 LLM 真抽 (现在留 hook), 走 BL-MM7 confirm 流程
 
 - 见 `edge/identity/SOUL.md § 记忆覆盖纪律 + § 主动学习员工偏好` + `docs/BACKLOG.md § M`
 
@@ -653,6 +656,8 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 - ~~**BL-MM3 hermes memory_save 包版本化** (跟 5/15 hermes 0.10→0.12 升级捆绑)~~ ✅ 5/7 提前完成 (跟 BL-D14.5 一起)
 - ~~**BL-MM7 结构化用户画像** · ~1 周~~ ✅ 5/6 提前 ship (跟 MM6/feedback 同日)
 - ~~**BL-MM8 文书风格 fingerprint** · ~1-2 周~~ ✅ 5/6 提前 ship (跟 MM7 同日)
+- ~~⭐ **BL-MM9 agent 自动抽 skill**~~ ✅ **5/8 凌晨提前 ship** (鸿波"一次性别再分批") — 20 单测 PASS, SOUL § BL-MM9 纪律 (3 次门槛 / 红线 / 限流)
+- ~~⭐ **BL-MM10 memory 自精炼 loop**~~ ✅ **5/8 凌晨 MVP ship** — 24 单测 PASS. MVP 规则版 (peak_hours + bullet_pref). LLM 真抽 hook 留, 6/15 PoC 时接入
 - BL-E27.3 桌宠联动 BL-E13/E15 + 全屏自动隐藏 · 2-3 天 (6 月初)
 - ~~真技术沙箱 nsjail/sandbox-exec (G3 升级) · 5/22 后~~ ✅ 5/7 凌晨 ship (12 天压 1 天, BL-S29 全套, 86 测试矩阵)
 - macOS Notarization 真公证 + 第三方渗透测试 · 5/22 后

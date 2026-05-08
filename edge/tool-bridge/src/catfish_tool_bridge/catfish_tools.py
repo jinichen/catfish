@@ -22,6 +22,7 @@ import base64
 import json
 import os
 import platform
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -802,6 +803,68 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
             "required": ["task_id"],
         },
         "emoji": "📦",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    # ── BL-MM9 (5/8) — agent 自动抽 skill ──
+    {
+        "name": "catfish_propose_skill",
+        "description": (
+            "把员工反复做的工作流程**提案**成 skill, 等员工确认再装. **不直接装**.\n\n"
+            "✅ 调用场景 (3+ 次同 pattern 必调, 跟 BL-MM7 三 evidence 门槛同哲学):\n"
+            "  - 员工本周已经第 3 次让你写 '项目立项材料' 用类似结构 → propose 'project-proposal'\n"
+            "  - 员工反复粘贴差旅报销单让你算金额 → propose 'travel-expense-calc'\n"
+            "  - 员工每周一让你查 audit log 拼周报 → propose 'weekly-report-from-audit'\n\n"
+            "❌ 不该调用 (跟 hermes 黑盒自决 区别):\n"
+            "  - 员工只做过 1-2 次 → 还不到 pattern, 静默观察\n"
+            "  - 红线场景: 健康 / 财务 / 感情 / 政治 / 宗教 — 永远不 propose 这类 skill\n"
+            "  - 员工已经 reject 过同类 propose — 别骚扰\n\n"
+            "**调用后**: 写 ~/.catfish/skill_proposals.jsonl, append 一条 (员工可看). "
+            "**返回给 LLM 的话术**: '已记下提案, 我现在跟员工说: \"我注意到这周你 X 次 Y, "
+            "要不我把流程存成 skill 下次直接调? 你说装我就装.\"' 等员工说 yes 再调 catfish_skill_install.\n\n"
+            "**audit**: ~/.catfish/skill_proposals.jsonl event_type=propose, accepted/rejected 由后续事件追加.\n\n"
+            "**返回**: {ok, proposal_id, total_proposals, summary}."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": (
+                        "拟用作 skill name (kebab-case, 简短描述性). "
+                        "例: 'project-proposal' / 'travel-expense-calc' / 'weekly-report-from-audit'."
+                    ),
+                },
+                "reason": {
+                    "type": "string",
+                    "description": (
+                        "为什么觉得该提案 — 1-2 句, 含**具体观察证据** "
+                        "(例: '本周 5/5/5/6/5/8 三次让我写项目立项材料, 结构相似 (背景/目标/团队/预算/里程碑)'). "
+                        "员工看了能直接确认或反驳."
+                    ),
+                },
+                "action_steps": {
+                    "type": "string",
+                    "description": (
+                        "skill 大致做啥的 3-5 步 markdown bullets. "
+                        "例: '1. 读员工提供的项目背景\\n2. 拉历史立项材料样本\\n"
+                        "3. 按公司模板拼 6 段 (背景/目标/团队/预算/里程碑/风险)\\n"
+                        "4. 输出到 ~/.catfish/output/<ts>-立项-<项目>.docx'. "
+                        "员工 accept 后 LLM 用这个 outline 调 catfish_skill_install."
+                    ),
+                },
+                "evidence_count": {
+                    "type": "integer",
+                    "description": (
+                        "你观察到员工做这事的次数 (≥3 才该 propose). "
+                        "用作员工判断 '是不是真该存成 skill' 的硬数字依据."
+                    ),
+                    "minimum": 3,
+                },
+            },
+            "required": ["name", "reason", "action_steps", "evidence_count"],
+        },
+        "emoji": "💡",
         "toolset": "catfish_native",
         "available": True,
     },
@@ -2152,6 +2215,203 @@ def remember_fact(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ============================================================
+# BL-MM9 (5/8) — catfish_propose_skill: agent 自动抽 skill (员工 confirm 门槛)
+# ============================================================
+#
+# 跟 hermes "creates skills from experience" 对标但加员工 confirm 门槛 — 跟
+# BL-MM7 user_profile 三 evidence + lock 同哲学.
+#
+# 流程:
+#   1. LLM chat 中观察到员工反复做某事 (≥3 次同 pattern)
+#   2. LLM 调 catfish_propose_skill(name, reason, action_steps, evidence_count)
+#   3. 工具写一行 JSON 到 ~/.catfish/skill_proposals.jsonl, 状态 status=proposed
+#   4. LLM 跟员工说 '我注意到你 N 次 X, 要不存成 skill?'
+#   5a. 员工 yes → LLM 调 catfish_skill_install (带上 reason / action_steps)
+#       同时再调 catfish_propose_skill 把 status 改 accepted (传同 name)
+#   5b. 员工 no → LLM 调 catfish_propose_skill 把 status 改 rejected
+#       (员工 reject 过同 name 后, LLM 别再 propose, 写 SOUL 纪律)
+#
+# 限流防骚扰:
+#   - 同 name 同 status 已 ≤24h 内 propose 过 → 拒绝再 propose
+#   - 同 session 累计 propose ≥ 3 → 提醒 LLM 节制
+#
+# 红线:
+#   - 健康 / 财务 / 感情 / 政治 / 宗教 namespace skill 严禁 propose (跟 BL-MM7 红线一致)
+#   - SOUL § 红线字段 章节会用 prompt 明确告诉 LLM
+
+SKILL_PROPOSALS_PATH = Path.home() / ".catfish" / "skill_proposals.jsonl"
+_PROPOSAL_REDLINE_KEYWORDS = (
+    "health", "medical", "diagnos", "drug",  # 健康
+    "salary", "loan", "debt", "finance",     # 财务
+    "love", "dating", "marriage", "divorce", # 感情
+    "politic", "election", "govern",         # 政治
+    "religion", "buddh", "christ", "muslim", # 宗教
+    "健康", "病", "诊", "药",
+    "工资", "贷款", "债", "理财",
+    "恋爱", "结婚", "离婚",
+    "政治", "选举",
+    "宗教", "基督", "佛", "伊斯兰",
+)
+_PROPOSAL_RECENT_HOURS = 24       # 同 name 24h 内不重复 propose
+_PROPOSAL_PER_SESSION_LIMIT = 5   # 单 session 最多 propose 5 个 skill (防骚扰)
+
+
+def _read_proposals_history() -> list[Dict[str, Any]]:
+    """读 ~/.catfish/skill_proposals.jsonl, 返 list of dict (jsonl, 一行一条)."""
+    if not SKILL_PROPOSALS_PATH.exists():
+        return []
+    out: list[Dict[str, Any]] = []
+    try:
+        with open(SKILL_PROPOSALS_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        return []
+    return out
+
+
+def _append_proposal_event(event: Dict[str, Any]) -> None:
+    """append 一条 event 到 ~/.catfish/skill_proposals.jsonl (atomic 不重要, 多 LLM 不并发写)."""
+    SKILL_PROPOSALS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(SKILL_PROPOSALS_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+
+def _is_redline_skill_name(name: str, reason: str) -> bool:
+    """检查 skill name + reason 是否触红线 (健康/财务/感情/政治/宗教)."""
+    text = (name + " " + reason).lower()
+    return any(kw in text for kw in _PROPOSAL_REDLINE_KEYWORDS)
+
+
+def propose_skill(args: Dict[str, Any]) -> Dict[str, Any]:
+    """tool: BL-MM9 (5/8) — LLM 提案一个 skill 给员工确认.
+
+    校验:
+      - name / reason / action_steps 都必填
+      - evidence_count ≥ 3
+      - name kebab-case (避免奇怪字符)
+      - 红线字段拒绝
+      - 同 name 24h 内已 propose 过 → 拒绝
+      - 单 session 累计 ≥ 5 → 拒绝 (防骚扰)
+    """
+    name = (args.get("name") or "").strip()
+    reason = (args.get("reason") or "").strip()
+    action_steps = (args.get("action_steps") or "").strip()
+    try:
+        evidence_count = int(args.get("evidence_count") or 0)
+    except (TypeError, ValueError):
+        evidence_count = 0
+
+    # validation
+    if not name:
+        return {"type": "error", "error": "name 必填"}
+    if not re.match(r"^[a-z0-9][a-z0-9-]{1,49}$", name):
+        return {
+            "type": "error",
+            "error": (
+                "name 必须 kebab-case, 1-50 字符, 字母数字开头 (例: 'project-proposal'). "
+                f"收到: {name!r}"
+            ),
+        }
+    if not reason or len(reason) < 10:
+        return {"type": "error", "error": "reason 必填且 ≥ 10 字 (含具体观察证据)"}
+    if not action_steps or len(action_steps) < 20:
+        return {"type": "error", "error": "action_steps 必填且 ≥ 20 字 (3-5 步说明 skill 干啥)"}
+    if evidence_count < 3:
+        return {
+            "type": "error",
+            "error": (
+                f"evidence_count={evidence_count} < 3. "
+                "BL-MM9 哲学: 员工做 ≥3 次同 pattern 才 propose, 1-2 次还不算 pattern, 静默观察."
+            ),
+        }
+
+    # 红线检查
+    if _is_redline_skill_name(name, reason):
+        return {
+            "type": "error",
+            "error": (
+                "skill 名 / 理由触红线 (健康/财务/感情/政治/宗教). "
+                "鲶鱼不 propose 这类 skill — SOUL § 红线字段 已禁."
+            ),
+        }
+
+    # 限流: 同 name 24h 内已 propose
+    history = _read_proposals_history()
+    now_ts = time.time()
+    cutoff = now_ts - _PROPOSAL_RECENT_HOURS * 3600
+    recent_same_name = [
+        e for e in history
+        if e.get("name") == name
+        and e.get("ts", 0) >= cutoff
+        and e.get("event_type") == "proposed"
+        and e.get("status") == "proposed"  # 还没被员工 accept/reject
+    ]
+    if recent_same_name:
+        return {
+            "type": "error",
+            "error": (
+                f"已经在 24h 内 propose 过 '{name}' (proposal_id={recent_same_name[-1].get('proposal_id')}), "
+                "等员工 accept/reject 后再 propose, 别骚扰."
+            ),
+        }
+
+    # 限流: 单 session 累计 (用最近 1 小时近似 session)
+    one_hour_ago = now_ts - 3600
+    recent_in_session = [
+        e for e in history
+        if e.get("ts", 0) >= one_hour_ago
+        and e.get("event_type") == "proposed"
+    ]
+    if len(recent_in_session) >= _PROPOSAL_PER_SESSION_LIMIT:
+        return {
+            "type": "error",
+            "error": (
+                f"最近 1 小时已 propose {len(recent_in_session)} 个 skill (上限 {_PROPOSAL_PER_SESSION_LIMIT}). "
+                "员工还没 confirm 之前别再 propose, 让员工先选."
+            ),
+        }
+
+    # 写 jsonl
+    proposal_id = f"prop_{int(now_ts)}_{name}"
+    event = {
+        "event_type": "proposed",
+        "proposal_id": proposal_id,
+        "name": name,
+        "reason": reason,
+        "action_steps": action_steps,
+        "evidence_count": evidence_count,
+        "status": "proposed",  # accepted / rejected 由后续事件追加
+        "ts": now_ts,
+        "ts_iso": _unix_to_iso(now_ts),
+    }
+    try:
+        _append_proposal_event(event)
+    except OSError as e:
+        return {"type": "error", "error": f"写 skill_proposals.jsonl 失败: {e}"}
+
+    total_proposed = sum(1 for e in history if e.get("event_type") == "proposed") + 1
+    return {
+        "type": "ok",
+        "proposal_id": proposal_id,
+        "name": name,
+        "total_proposals": total_proposed,
+        "summary": (
+            f"已记下提案 '{name}' (基于 {evidence_count} 次员工行为). "
+            f"现在跟员工说: '我注意到你最近 {evidence_count} 次 {reason[:50]}, "
+            f"要不我把这个流程存成 skill, 下次你说一句就触发? 你说装我就装.' "
+            f"等员工说 yes 再调 catfish_skill_install. 员工 reject 时再调本工具传 status='rejected' 关单."
+        ),
+    }
+
+
+# ============================================================
 # catfish_run_skill —— 调用 catfish/skills/ 下工程审定 skill
 # ============================================================
 #
@@ -3288,6 +3548,8 @@ def is_native(name: str) -> bool:
 def dispatch_native(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_remember":
         return remember_fact(args)
+    if name == "catfish_propose_skill":
+        return propose_skill(args)
     if name == "catfish_today_summary":
         return collect_today_summary()
     if name == "catfish_screenshot":

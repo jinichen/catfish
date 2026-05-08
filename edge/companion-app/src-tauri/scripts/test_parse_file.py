@@ -226,3 +226,86 @@ def test_excel_huge_does_not_dump_full_data(tmp_path: Path, has_openpyxl: bool) 
     assert "row_data_0999" not in r["preview_text"]
     # 提示用 execute_code
     assert "execute_code" in r["preview_text"]
+
+
+# ============================================================
+# BL-I4 audio + BL-I3.1 video — 5/8 ship
+# ============================================================
+#
+# 真转写需要 ffmpeg + whisper-cli + ggml-small.bin 模型 (~466MB),
+# CI 跑不到 — 这里只测 PARSERS 注册 + import + module 内可纯 Python 测的部分.
+# 真音频转写测试用 manual_test_audio.sh (员工 mac 真录音 → run_parse 看输出).
+
+
+def test_audio_extensions_registered() -> None:
+    """所有支持的音频扩展都在 PARSERS dict, kind='audio'"""
+    sys.path.insert(0, str(THIS.parent))
+    import parse_file as pf
+    expected = [".mp3", ".wav", ".m4a", ".flac", ".aac", ".ogg"]
+    for ext in expected:
+        assert ext in pf.PARSERS, f"audio 扩展 {ext} 没注册"
+        kind, parser = pf.PARSERS[ext]
+        assert kind == "audio"
+        assert parser is pf.parse_audio_preview
+
+
+def test_video_extensions_registered() -> None:
+    """所有支持的视频扩展都在 PARSERS dict, kind='video'"""
+    sys.path.insert(0, str(THIS.parent))
+    import parse_file as pf
+    expected = [".mp4", ".mov", ".m4v", ".mkv", ".webm"]
+    for ext in expected:
+        assert ext in pf.PARSERS, f"video 扩展 {ext} 没注册"
+        kind, parser = pf.PARSERS[ext]
+        assert kind == "video"
+        assert parser is pf.parse_video_preview
+
+
+def test_audio_video_in_full_text_extractors() -> None:
+    """audio/video 在 _FULL_TEXT_EXTRACTORS 里, 大文件 (≥50KB 转写) 走 BM25 sidecar"""
+    sys.path.insert(0, str(THIS.parent))
+    import parse_file as pf
+    assert "audio" in pf._FULL_TEXT_EXTRACTORS
+    assert "video" in pf._FULL_TEXT_EXTRACTORS
+    # 都指向同一个抽全文函数 (内部用 _transcribe_audio_to_text)
+    assert pf._FULL_TEXT_EXTRACTORS["audio"] is pf.extract_full_text_audio
+    assert pf._FULL_TEXT_EXTRACTORS["video"] is pf.extract_full_text_audio
+
+
+def test_transcribe_missing_ffmpeg_raises_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ffmpeg 没装时报清楚错, 让员工知道装啥"""
+    sys.path.insert(0, str(THIS.parent))
+    import parse_file as pf
+    monkeypatch.setattr(pf, "_find_executable", lambda name: None)
+    with pytest.raises(RuntimeError, match=r"ffmpeg"):
+        pf._transcribe_audio_to_text(Path("/tmp/fake.mp3"))
+
+
+def test_transcribe_missing_whisper_raises_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ffmpeg 装了但 whisper-cli 没装"""
+    sys.path.insert(0, str(THIS.parent))
+    import parse_file as pf
+
+    def fake_which(name: str) -> str | None:
+        return "/usr/bin/ffmpeg" if name == "ffmpeg" else None
+
+    monkeypatch.setattr(pf, "_find_executable", fake_which)
+    with pytest.raises(RuntimeError, match=r"whisper-cli"):
+        pf._transcribe_audio_to_text(Path("/tmp/fake.mp3"))
+
+
+def test_transcribe_missing_model_raises_clear_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """ffmpeg + whisper-cli 都装了, 但模型没下载"""
+    sys.path.insert(0, str(THIS.parent))
+    import parse_file as pf
+
+    def fake_which(name: str) -> str | None:
+        return f"/usr/bin/{name}"
+
+    monkeypatch.setattr(pf, "_find_executable", fake_which)
+    # 把 whisper 模型路径指到一个空 tmpdir
+    monkeypatch.setattr(pf.Path, "home", lambda: tmp_path)
+    with pytest.raises(RuntimeError, match=r"whisper.*模型"):
+        pf._transcribe_audio_to_text(Path("/tmp/fake.mp3"))

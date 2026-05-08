@@ -303,6 +303,8 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 | BL-MM6 | 显式 feedback UI — ChatBubble 加 👍 / 👎 / "改一下" 按钮 + `/api/feedback` + `~/.catfish/feedback.jsonl` + Dashboard "你给我的反馈" 卡 | ⬜ 5/8 后启动, ~2-3 天 | **方案 B**. 客户演示加分 ("能给反馈"), 跟 BL-MM5 配合: 显式信号补 LLM 自觉的不足 |
 | BL-MM7 | 结构化用户画像 — `~/.catfish/user_profile.json` (writing_style / work_pattern / personality_traits + evidence_count) + 满 N 次主动问 + Dashboard 卡可调可锁 | ✅ 5/6 (鸿波"BL-MM7、MM8 直接开始"拍板当天 ship) | edge/tool-bridge/src/catfish_tool_bridge/user_profile.py (317 行) + UserProfileCard.tsx + 19 单测 PASS. 3 次 evidence 才 propose / 红线字段 (健康/财务/感情) 严禁 LLM propose / 员工 lock 防 LLM 改 / Dashboard 一键清空 |
 | BL-MM8 | 文书风格 fingerprint — 员工历史文档抽风格指纹, 写新文档前调 fingerprint 调整生成参数, "本次按你 5 月 XX 那篇汇报风格写" | ✅ 5/6 (跟 MM7 同日 ship) | edge/tool-bridge/src/catfish_tool_bridge/style_fingerprint.py (454 行) + StyleFingerprintCard.tsx + 20 单测 PASS. 抽: 句长 / 段落数 / 词频 (jieba 中文分词 + char-level n-gram 兜底) / 标点偏好 / 列表-散文比例 / 3-5 样本句. 时间衰减 |
+| BL-MM9 | **agent 自动抽 skill** — 鲶鱼监测员工反复做的事 (3+ 次同 pattern), 主动 propose "这个流程我帮你存成 skill 吧?", 员工确认后写 catfish/skills/. 不让 LLM 静默自决, 必员工确认 | ✅ **5/8 凌晨 ship** (鸿波"一次性别再分批"提前) | catfish_tools.py `propose_skill` + `~/.catfish/skill_proposals.jsonl` + 20 单测 PASS + SOUL § BL-MM9 纪律 (3 次门槛 / 红线 / 24h 限流 / session ≤5). 跟 hermes 对标但加员工 confirm 门槛 |
+| BL-MM10 | **memory 自精炼 loop** — 老 employee_journal 跨 chunk LLM 总结 → 提炼 user_profile traits (level 1 具体事实 → level 2 性格模型) + 老 user_profile evidence 累 100+ 后浓缩, 释放 attention. 时间衰减权重 + lock 字段不动 | ✅ **5/8 凌晨 MVP ship** (规则版, 6/15 PoC 时接 LLM) | central/llm-gateway/.../memory_distill.py + 24 单测 PASS. 抽 work_pattern.peak_hours (时间戳分布) + writing_style.bullet_pref (列表 vs 散文). 红线过滤 + 24h 限流. LLM 真抽 hook 留 |
 
 ---
 
@@ -385,8 +387,9 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 |---|---|---|---|---|
 | BL-I1 | 语音输入 (Cowork 风格), ASR 选型 (Whisper.cpp / qwen-audio / 阿里云 / macOS 原生听写) | ⬜ | 决策 + 1.5-2 天 | 4 种方案待拍板 |
 | BL-I2 | 文件上传 — PDF/Excel/Word 提取后 inject (P1) | ⬜ | 1-1.5 天 | — |
-| BL-I3 | 视频上传 (帧采样 + 多模态) | ⬜ | 1 周 | — |
-| BL-I4 | 音频文件上传 + 转写 | ⬜ | 0.5 周 | I1 选型后 |
+| BL-I3.1 | 视频抽音轨转写 (会议录像 → 要点) | ✅ 5/8 ship | 2 小时 | 复用 BL-I4 链路, ffmpeg `-vn -ar 16000` |
+| BL-I3.2 | 视频帧抽取 + vision 描述 | ⬜ 推后 | 1 天 | vision 调用费 + "全本地"故事冲突, demo 后看 |
+| BL-I4 | 音频文件上传 + 转写 | ✅ 5/8 ship | 半天 | parse_audio_preview + whisper.cpp + ggml-small.bin (5/1 已装) + BM25 sidecar |
 | BL-I5 | catfish-roleplay 之外更多角色化 skill (面试官 / 客户 / 投资人) | ⬜ | 0.5 周/角色 | catfish-roleplay 模板 |
 | BL-I6 | catfish-search 增强 (FTS5 + 向量, 现是 FTS) | ⬜ | 1 周 | embedding 模型可用 |
 

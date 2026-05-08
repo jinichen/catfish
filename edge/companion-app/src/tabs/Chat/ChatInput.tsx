@@ -410,7 +410,7 @@ export default function ChatInput({
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/*,.pdf,.xlsx,.xls,.docx,.csv,.txt,.md,.markdown,.log"
+          accept="image/*,.pdf,.xlsx,.xls,.docx,.csv,.txt,.md,.markdown,.log,.mp3,.wav,.m4a,.flac,.aac,.ogg,.mp4,.mov,.m4v,.mkv,.webm"
           multiple
           onChange={onFileInputChange}
           style={{ display: "none" }}

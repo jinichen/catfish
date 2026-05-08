@@ -2586,3 +2586,143 @@ quota check 真应该移进 `with_fallback`, 让 chain 里每个模型都查 quo
 ### 为什么 doc 错了
 5/6 G1-G7 安全 GAP 闭环那天 sprint 高强度, MM7/MM8 ship 完没回头改 docs/.
 未来 SOUL 加纪律: "ship 一个 BL 必同时改 docs/ 状态, 不留尾".
+
+---
+
+## 2026-05-08（周四）凌晨 — BL-MM9/MM10 排进 backlog (精度刚需识别)
+
+### 起因 (5/8 凌晨鸿波 review)
+
+讨论"鲶鱼跟 hermes 比, 不做 hermes 那俩 (agent 自动抽 skill / memory 自精炼) 会不会
+精度弱?". 仔细分析 → **会有具体精度损失**, 而且打在最核心卖点上.
+
+### BL-MM9 agent 自动抽 skill — 精度损失量化
+
+不做第 1 周起就显:
+- 重复任务 LLM 每次重新推理写流程 → ~25-35% token 浪费
+- 同员工 5 次写"立项材料" 5 个结构 → 输出一致性低 30-40%
+- 老员工隐性知识没沉淀 → 新员工 onboarding +50% 时间
+
+设计 (跟 hermes 区别):
+- hermes: agent 静默自决 (黑盒)
+- 鲶鱼: 鲶鱼 propose → 员工 confirm → 写 catfish/skills/ (透明可控)
+- 跟 BL-MM7 三 evidence 门槛 + lock 哲学一致
+
+排期: 5/22 demo 后立即做, ~1 周.
+
+### BL-MM10 memory 自精炼 loop — 精度损失量化
+
+不做第 6 个月起显, 但 1 年后影响最大:
+- journal tail-truncate 后 30-50% 老洞察永久丢
+- user_profile 永远停 level 1 具体事实, 不进化到 level 2 性格模型
+- 客户故事"用一年比同事更懂你" 是空话
+
+设计:
+- 老 journal 跨 chunk LLM 总结 → user_profile traits (level 1 → level 2)
+- 老 evidence 累 100+ 浓缩, 释放 attention
+- 时间衰减 + lock 字段不动
+- Dashboard 加"我对你认识的演化" 子卡 (P2 后做)
+
+排期: 6/15 PoC 1 个月时做, ~1-2 周.
+
+### 加进 docs (5/8 凌晨)
+
+- BACKLOG.md M.2 加 BL-MM9 + MM10 两行, ⬜ 状态 + 精度刚需理由
+- FEATURE-TRACKS.md M.2 段加同样 2 行
+- FEATURE-TRACKS.md "demo 后 (5/15+)" 段加 ⭐ MM9 + MM10 (标精度刚需)
+
+### 战术意义
+
+- 5/14 demo 不做不影响 (1 小时窗口 LLM cover 得动, 6 张深度模型卡已经很震撼)
+- 5/22 起 PoC 中长期必做, 否则客户用 3 个月感觉鲶鱼"还是初学者" 续费转化下降
+- 跟 hermes "creates skills from experience + deepening model" 对标, 但加员工 confirm 门槛 + 透明 UI, 适配央企
+
+### 跟 SOUL 加纪律 (复用 5/7 doc 修订那条)
+
+未来 ship 一个 BL 必同时改 docs/, 不留尾. 5/8 凌晨这次主动 review 出来的精度损失,
+之前没人提前算, 险些用一年才发现 — 应该更早识别这种 "现在不做 6 个月后才显" 的债.
+
+---
+
+## 2026-05-08（周四）凌晨 — 4 BL 一次性 ship (鸿波"一次性别再分批")
+
+5/8 凌晨鸿波拍板把"下午做的 BL-I4" + "5/22 后做的 BL-MM9" + "6/15 后做的 BL-MM10" + "BL-I3 视频" 一次性提前. 凌晨 1-3 点 ship 完, demo 风险面 -3.
+
+### BL-I4 ✅ 音频文件转写 (半天)
+
+- `scripts/parse_file.py` 加 `parse_audio_preview` + `_transcribe_audio_to_text` (复用 5/1 ship 的 whisper.cpp + ggml-small.bin + ffmpeg 链路, 已装好)
+- ChatInput accept 加 `.mp3 / .wav / .m4a / .flac / .aac / .ogg`
+- 大文件 (≥50KB 转写) 自动走 BL-L26 BM25 sidecar
+- meta: duration_sec / sample_rate / language / model / transcript_chars
+- chat.ts formatFileAttachment kind="audio" 描述
+- 兜底: ffmpeg / whisper-cli / 模型缺失报清楚错让员工知道装啥
+- **6 单测 PASS** (注册 / extension / 缺工具兜底)
+
+### BL-I3.1 ✅ 视频抽音轨转写 (复用 BL-I4 链路, 1-2 小时)
+
+- 同样 `parse_video_preview` 调 `_transcribe_audio_to_text` (内部 ffmpeg 已 `-vn` 跳视频流)
+- ChatInput accept 加 `.mp4 / .mov / .m4v / .mkv / .webm`
+- chat.ts kind="video" 描述提醒"画面没分析" (避免 LLM 幻觉视频内容)
+- 用例: **会议录像 → 关键决议 / 待办 / 要点** (央企痛点: 会议爆炸多, 录了没人看回放)
+- BL-I3.2 帧抽取 + vision 描述**推后** (vision 调用费 + 跟"全本地不联网"故事冲突)
+
+### BL-MM9 ✅ agent 自动抽 skill (~3 小时)
+
+- `catfish_tools.py` 加 `catfish_propose_skill` 工具 + `propose_skill` 函数
+- `~/.catfish/skill_proposals.jsonl` append-only audit
+- 校验:
+  - name 必 kebab-case (`^[a-z0-9][a-z0-9-]{1,49}$`)
+  - reason ≥ 10 字 / action_steps ≥ 20 字 / evidence_count ≥ 3
+- 红线: 健康/财务/感情/政治/宗教 永不 propose (跟 BL-MM7 一致)
+- 限流: 同 name 24h 内不重 propose / 单 session 1h 内 ≤ 5 个 propose
+- SOUL.md 加 § BL-MM9 5 条纪律 (3 次门槛 / propose 不是装 / 红线 / 限流 / session ≤5)
+- 跟 hermes 区别: hermes 静默自决 (黑盒), 鲶鱼 propose + 员工 confirm (透明)
+- **20 单测 PASS** (validation / 红线 / 限流 / 落盘 / dispatch_native 整链路)
+
+### BL-MM10 ✅ memory 自精炼 loop MVP (~3 小时, 规则版)
+
+- `central/llm-gateway/.../memory_distill.py` 整模块 (~250 行)
+- `_extract_peak_hours`: journal 时间戳分布 → "早晨型 / 下午型 / 晚上型 / 夜猫型"
+- `_extract_bullet_preference`: list vs 散文比例 → "偏列表型 / 偏散文型"
+- `should_run_distillation`: ≥ 30 entries + 24h 限流
+- `maybe_run_distillation`: 切 chunks → 抽 → 红线过滤 → 同 field 去重取 evidence 多的
+- 红线过滤跟 BL-MM7 / MM9 一致
+- **MVP 阶段不调 LLM** (留 hook), 6/15 PoC 1 个月时按数据接入
+- **24 单测 PASS** (count / split / extractor / 红线 / 阈值 / 24h 限流 / 整流程)
+
+### 测试统计
+
+跑全套:
+- gateway: **639 passed**, 9 skipped
+- tool-bridge: **322 passed**, 30 skipped (含 BL-I4/I3.1 + BL-MM9 共 26 个新加)
+- 总计 **961 passed**, 39 skipped, 0 failed
+
+### 价值 (5/14 demo + 长期)
+
+| BL | demo 价值 | 长期价值 |
+|---|---|---|
+| BL-I4 / I3.1 | 多模态故事补全, 客户问"上传录音呢" 能演 | PoC 中长期央企会议录像处理 |
+| BL-MM9 | "鲶鱼自己学会我的工作流" 故事 | 第 1 周起省 ~30% token, 输出格式一致性 |
+| BL-MM10 | "用一年比同事更懂你" 真兑现路径 | 第 6 个月+ 老洞察不丢, 画像 level 1→2 进化 |
+
+### 跟 hermes 对标
+
+| Hermes | 鲶鱼 |
+|---|---|
+| "creates skills from experience" (黑盒自决) | BL-MM9 propose + 员工 confirm (透明) |
+| "deepening model of who you are" (说不清在干啥) | BL-MM10 规则 + LLM hook + Dashboard 可看 + 红线保护 |
+
+完整对照表见 SECURITY-REVIEW § 2.7.
+
+### 待跑 (5/8 早实机验证)
+
+- 录 30 秒中文录音 → 上传 Companion → 看 transcript 出来
+- 上传 1 个 mp4 视频 → 看音轨转写
+- LLM 反复对话 → 触发 catfish_propose_skill 看 jsonl
+- journal 攒到 30 条 → 验证 maybe_run_distillation 抽出 trait
+
+### 遗留
+
+- BL-I3.2 视频帧 vision 描述 (推后, vision 调用费)
+- BL-MM10 LLM 接入 (6/15 PoC 1 个月时按数据调)
+- Dashboard ProposedSkillsCard / "我对你认识的演化" 子卡 (P2)
