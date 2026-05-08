@@ -1228,11 +1228,33 @@ async def chat_completions(
             request.state.credential_hits = credential_hits
 
     # 5/8 BL-FIX2: 把 role=tool 含 image 重组成 user multipart message.
-    # catfish_screenshot 等工具返 base64 image 在 tool result content 里, 上游 Qwen
-    # 不接受 role=tool 含 multimodal → 撞 protobuf 400. 在这层重组, 上下游互通.
-    # 在 multimodal_guard 之前跑 — 重组完后含图 message 已是 user multipart, guard
-    # 检测含图触发 reroute 到 vision 才正确.
+    # 详见 multimodal_tool_unwrap.py.
     if body.get("messages"):
+        # 5/8 BL-FIX2 debug: 跑前 dump 一下 messages 概况, 真撞 400 时能定位
+        # 是不是 tool message 含图 (该 unwrap) / 还是别的格式问题.
+        msgs_in = body["messages"]
+        n_total = len(msgs_in) if isinstance(msgs_in, list) else 0
+        n_tool = sum(
+            1 for m in msgs_in
+            if isinstance(m, dict) and m.get("role") == "tool"
+        )
+        n_tool_with_image_marker = sum(
+            1 for m in msgs_in
+            if isinstance(m, dict)
+            and m.get("role") == "tool"
+            and isinstance(m.get("content"), str)
+            and ("data:image/" in m.get("content", "") or '"data_uri"' in m.get("content", ""))
+        )
+        n_user_multipart = sum(
+            1 for m in msgs_in
+            if isinstance(m, dict)
+            and m.get("role") == "user"
+            and isinstance(m.get("content"), list)
+        )
+        logger.info(
+            "BL-FIX2 pre-unwrap: total=%d, tool_msgs=%d, tool_with_image_marker=%d, user_multipart=%d",
+            n_total, n_tool, n_tool_with_image_marker, n_user_multipart,
+        )
         body["messages"] = unwrap_tool_images(body["messages"])
 
     # 含图自动 reroute 到 vision 模型: 防止主力模型 (非 vision) 收到 image_url
