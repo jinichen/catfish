@@ -193,11 +193,15 @@ def _detect_consecutive_failures(messages: list) -> tuple[int, str | None, str]:
 
 
 def has_existing_hint(messages: list) -> bool:
-    """检查 messages 是否已经含 BL-A1.2 hint, 防重复注入."""
+    """检查 messages 是否已经含 BL-A1.2 hint, 防重复注入.
+
+    BL-FIX6 (5/8): 历史 hint 可能是老版的 role=system, 也可能是新版的 role=user.
+    两者都得检测 — 防 BL-FIX6 部署后老 system hint 还在历史里时重复注入.
+    """
     for msg in messages[-15:]:  # 倒数 15 条范围检查
         if not isinstance(msg, dict):
             continue
-        if msg.get("role") != "system":
+        if msg.get("role") not in ("system", "user"):
             continue
         content = msg.get("content")
         if isinstance(content, str) and _HINT_MARKER in content:
@@ -206,10 +210,15 @@ def has_existing_hint(messages: list) -> bool:
 
 
 def inject_tool_retry_hint(messages: list) -> list:
-    """检测 messages 含连续 tool 失败 → 在末尾插入一条 system hint.
+    """检测 messages 含连续 tool 失败 → 在末尾插入一条 hint.
 
     返回新 messages 列表, 不修改原引用.
     没触发时返回原 list (不复制).
+
+    BL-FIX6 (5/8): hint 角色从 system 改成 user. 原因 — Qwen Go gRPC adapter 严格
+    校验 role 顺序: system 只接受头部 (含连续多条), 中段 (assistant/tool 之后) 出现
+    system 撞**空 reason 400**. 改 user 之后跟"员工说一句"等价, 标准 OpenAI 流接受.
+    has_existing_hint 也同步扫 user/system 两种 role.
     """
     if not messages:
         return messages
@@ -230,9 +239,10 @@ def inject_tool_retry_hint(messages: list) -> list:
     )
 
     new_messages = list(messages)
-    new_messages.append({"role": "system", "content": hint})
+    # BL-FIX6: role=user, 不是 system. 中段 system 撞 Qwen 400.
+    new_messages.append({"role": "user", "content": hint})
     logger.info(
-        "tool-retry hint injected: tool=%s consecutive=%d level=%s",
+        "tool-retry hint injected (role=user, BL-FIX6): tool=%s consecutive=%d level=%s",
         tool_name, count,
         "STRONG" if count >= THRESHOLD_GIVEUP else "LIGHT",
     )

@@ -81,7 +81,8 @@ class TestToolRetryHint(unittest.TestCase):
         result = tool_retry_hint.inject_tool_retry_hint(msgs)
         # 应该多了一条 system hint
         self.assertEqual(len(result), len(msgs) + 1)
-        self.assertEqual(result[-1]["role"], "system")
+        # BL-FIX6 (5/8): role 改 user, 防 Qwen Go gRPC adapter 中段 system 撞 400
+        self.assertEqual(result[-1]["role"], "user")
         hint = result[-1]["content"]
         # LIGHT hint 含工具名 + error
         self.assertIn("read_file", hint)
@@ -100,7 +101,8 @@ class TestToolRetryHint(unittest.TestCase):
             msgs.append(_tool_fail("write_file", "disk full"))
 
         result = tool_retry_hint.inject_tool_retry_hint(msgs)
-        self.assertEqual(result[-1]["role"], "system")
+        # BL-FIX6 (5/8): role 改 user, 防 Qwen Go gRPC adapter 中段 system 撞 400
+        self.assertEqual(result[-1]["role"], "user")
         hint = result[-1]["content"]
         self.assertIn("write_file", hint)
         # STRONG hint 出现关键词
@@ -200,3 +202,50 @@ class TestExtractStatus(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestBLFIX6HintRoleIsUser(unittest.TestCase):
+    """BL-FIX6 (5/8): hint role 必须是 user, 防 Qwen Go gRPC adapter 中段 system 撞 400"""
+
+    def test_hint_injected_as_user_role(self):
+        """注入的 hint message 必须是 role=user"""
+        msgs = [
+            _user("do X"),
+            _assistant_calling("foo"),
+            _tool_fail("foo", "err"),
+            _assistant_calling("foo"),
+            _tool_fail("foo", "err"),
+        ]
+        result = tool_retry_hint.inject_tool_retry_hint(msgs)
+        last = result[-1]
+        self.assertEqual(last["role"], "user")
+        self.assertNotEqual(last["role"], "system")
+        # marker 还在
+        self.assertIn(tool_retry_hint._HINT_MARKER, last["content"])
+
+    def test_existing_user_hint_blocks_re_injection(self):
+        """老历史里有 user role 的 hint, 不重复注入"""
+        msgs = [
+            _user("do X"),
+            _assistant_calling("foo"),
+            _tool_fail("foo", "err"),
+            _assistant_calling("foo"),
+            _tool_fail("foo", "err"),
+            {"role": "user", "content": tool_retry_hint._HINT_MARKER + "\n旧 hint"},
+        ]
+        result = tool_retry_hint.inject_tool_retry_hint(msgs)
+        # 没新增
+        self.assertEqual(len(result), len(msgs))
+
+    def test_existing_system_hint_blocks_re_injection(self):
+        """兼容老 BL-A1.2 部署留下的 system role hint, 不重复注入"""
+        msgs = [
+            _user("do X"),
+            _assistant_calling("foo"),
+            _tool_fail("foo", "err"),
+            _assistant_calling("foo"),
+            _tool_fail("foo", "err"),
+            {"role": "system", "content": tool_retry_hint._HINT_MARKER + "\n老 hint"},
+        ]
+        result = tool_retry_hint.inject_tool_retry_hint(msgs)
+        self.assertEqual(len(result), len(msgs))
