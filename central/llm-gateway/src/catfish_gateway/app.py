@@ -55,6 +55,7 @@ from .catalog import build_catalog  # noqa: E402
 from .config import Config, load_config  # noqa: E402
 from .gemini_guard import harden_for_gemini  # noqa: E402
 from .multimodal_guard import route_to_vision_if_needed  # noqa: E402
+from .multimodal_tool_unwrap import unwrap_tool_images  # noqa: E402
 from .tool_capability_guard import route_to_tool_capable_if_needed  # noqa: E402
 from .employee_journal import inject_employee_journal  # noqa: E402
 from .feedback_inject import inject_feedback  # noqa: E402  BL-MM6
@@ -1225,6 +1226,14 @@ async def chat_completions(
             )
             # 把 hits 暂存到 request state, 让后面 audit log 能拿到
             request.state.credential_hits = credential_hits
+
+    # 5/8 BL-FIX2: 把 role=tool 含 image 重组成 user multipart message.
+    # catfish_screenshot 等工具返 base64 image 在 tool result content 里, 上游 Qwen
+    # 不接受 role=tool 含 multimodal → 撞 protobuf 400. 在这层重组, 上下游互通.
+    # 在 multimodal_guard 之前跑 — 重组完后含图 message 已是 user multipart, guard
+    # 检测含图触发 reroute 到 vision 才正确.
+    if body.get("messages"):
+        body["messages"] = unwrap_tool_images(body["messages"])
 
     # 含图自动 reroute 到 vision 模型: 防止主力模型 (非 vision) 收到 image_url
     # 直接被上游 protobuf 解析炸 BadRequest 400. in-place 改 body["model"].
