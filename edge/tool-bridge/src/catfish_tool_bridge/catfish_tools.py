@@ -268,25 +268,28 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_screenshot",
         "description": (
-            "拍员工屏幕一张图, 返回 base64 PNG. 给视觉模型 (Qwen3-VL / Gemini "
-            "vision / Qwen-Flash 多模态) 看员工 GUI 上的内容. \n\n"
+            "拍员工屏幕一张图, 存到 /tmp/catfish-shot-<ts>.png. **不直接给你看图** — "
+            "返回的 result 只含 path + size_bytes + summary, **不含 base64**.\n\n"
+            "**为啥不返图给你**: 上游 LLM 平台 (Qwen / DeepSeek / 等) OpenAI 兼容 adapter "
+            "**不接受 role=tool 的 multimodal content** — 把 base64 image 塞进 tool 结果 "
+            "会让 protobuf 解析炸 BadRequest 400 (5/8 鸿波 demo 撞过). OpenAI 标准 "
+            "multipart image 只能在 role=user.\n\n"
+            "**那怎么让你看图**? 看场景选工具:\n"
+            "  - 浏览器场景 (Chrome 网页) → 调 `catfish_browser_vision` "
+            "(内部独立 vision LLM, 不污染主 chat, 直接给你**文字答案**)\n"
+            "  - 桌面应用场景 → 截图存了, 跟员工说 'path 在 /tmp/...', "
+            "员工自己打开看 (5/14 demo 后 BL-VISION 加桌面 vision 工具)\n"
+            "  - 员工已直传图 (chat 里拖图) → 直接看 user 消息里的 multipart image, "
+            "不需要再调本工具\n\n"
             "✅ 调用场景:\n"
-            "  - 员工说「这个报错是什么意思」「我屏幕上 X 是什么」\n"
-            "  - 员工说「截屏看下」「你看一下我这边」\n"
-            "  - GUI 调试: 看一个软件按钮在哪 / 一个对话框在说什么\n"
-            "  - 表格/图片识别: 员工用 Excel/Numbers 时不想复制粘贴\n\n"
+            "  - 员工说「截屏看下」「你看一下我这边」 → 截图存盘 + 提示员工看 path\n"
+            "  - GUI 调试需要保存当前画面给员工 / 给后续 catfish_browser_vision 当输入\n\n"
             "❌ 不该调用:\n"
-            "  - 看网页内容 → 用 catfish-browser-task 跟 Chrome 直接交互, "
-            "不要绕去截图\n"
+            "  - 看网页内容 → 直接用 `catfish_browser_vision`, 不要绕去截图\n"
             "  - 看本地文件 → 用 read_file\n"
-            "  - 员工没明确要求看屏幕但你「想看一下」——不要主动截\n\n"
-            "🔒 默认 mode=fullscreen: 拍员工主屏当前内容. 0 权限 0 打扰. "
-            "浏览器场景 Chrome 一般占主屏, 拍下来给视觉模型看就够; "
-            "桌面应用类似 (员工正在用的窗口就是前台主屏内容). \n"
-            "其他模式: interactive=员工框选区域 (员工要精确选一小块时), "
-            "window=员工点选窗口 (交互式). \n\n"
-            "调用前要在 reason 字段一句话说明为啥要截图, 这句话会写入日志, "
-            "员工也会看到."
+            "  - 员工没明确要求看屏幕但你「想看一下」 — 不要主动截\n"
+            "  - 想自己分析图内容 → 你看不到图, 别调 (会回'我看不到图'让员工困惑)\n\n"
+            "🔒 默认 mode=fullscreen. 调用前 reason 一句话说明为啥, 员工看得见."
         ),
         "input_schema": {
             "type": "object",
@@ -1471,21 +1474,30 @@ def capture_screenshot(args: Dict[str, Any]) -> Dict[str, Any]:
             ),
         }
 
-    raw = out_path.read_bytes()
-    b64 = base64.b64encode(raw).decode("ascii")
-
+    # 5/8 BL-FIX (鸿波报"视觉模型功能失效"): 返回**不含 base64 data** 的元信息.
+    # 之前返 data + data_uri, useChat 把整 dict JSON.stringify 塞进 role=tool 的
+    # content (~500KB string), 上游 Qwen 平台 OpenAI 兼容 adapter protobuf 解析炸
+    # → BadRequest 400 (空 reason/message, Go gRPC 风格). 鸿波 5/8 demo 撞.
+    #
+    # OpenAI 标准: role=tool 的 content 必须是 string 文本, 不能含 image.
+    # multipart image 只能在 role=user. 想让 LLM "看图分析" 用 catfish_browser_vision
+    # (浏览器内置 vision tool, 内部独立调 vision 模型, 不污染主 chat).
+    #
+    # 保留 path 给员工查 / debug. base64 仍写到 /tmp 文件 (size_bytes 真实), 但**不返回**.
+    size = out_path.stat().st_size
     result: Dict[str, Any] = {
-        "type": "image",
-        "format": "png",
-        "encoding": "base64",
-        "data": b64,
-        "data_uri": f"data:image/png;base64,{b64}",
+        "type": "screenshot_saved",  # 不再返 image content, 改名提醒 LLM 它**不直接看到图**
         "path": str(out_path),
         "size_bytes": size,
         "captured_at": _unix_to_iso(time.time()),
         "mode": mode,
         "reason": reason,
-        "summary": f"截图完成 ({mode}, {size // 1024} KB), 路径: {out_path}",
+        "summary": (
+            f"截图已存 {out_path} ({size // 1024} KB). "
+            f"我**没有把图回传给你看** (上游 protobuf 不接受 tool 角色含图). "
+            f"想让我分析图内容, 用 catfish_browser_vision 工具 (浏览器场景), "
+            f"或员工手动打开图查看."
+        ),
     }
     if fallback_note:
         result["platform_note"] = fallback_note

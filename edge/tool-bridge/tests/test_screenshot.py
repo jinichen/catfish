@@ -141,14 +141,18 @@ def test_macos_interactive_success(
         {"mode": "interactive", "reason": "看下报错"}
     )
 
-    assert result["type"] == "image"
-    assert result["format"] == "png"
+    # 5/8 BL-FIX2: type 从 "image" 改 "screenshot_saved" (不再返 base64 data,
+    # 上游 tool 角色不接受 multimodal content). 详见 capture_screenshot docstring.
+    assert result["type"] == "screenshot_saved"
+    # base64 data + data_uri 字段已删 (避免上游 protobuf 撞 400)
+    assert "data" not in result, "BL-FIX2: 不再返 base64 data"
+    assert "data_uri" not in result, "BL-FIX2: 不再返 data_uri"
     assert result["mode"] == "interactive"
     assert result["reason"] == "看下报错"
-    # base64 解码后应该能拿回原始字节
-    assert base64.b64decode(result["data"]) == _FAKE_PNG_BYTES
-    assert result["data_uri"].startswith("data:image/png;base64,")
+    # BL-FIX2: 不再返 format/data/data_uri, 改成 path + size_bytes 给员工自己开图
     assert result["size_bytes"] == len(_FAKE_PNG_BYTES)
+    # 真实 PNG 字节落在磁盘
+    assert Path(result["path"]).read_bytes() == _FAKE_PNG_BYTES
     # 文件应该真的留在 tmp_path 下
     assert Path(result["path"]).exists()
     # screencapture 命令必须含 -i (interactive)
@@ -266,7 +270,12 @@ def test_macos_window_mode_uses_W_flag(
     result = catfish_tools.capture_screenshot(
         {"mode": "window", "reason": "看下 Foxmail 窗口"}
     )
-    assert result["type"] == "image"
+    # 5/8 BL-FIX2: type 从 "image" 改 "screenshot_saved" (不再返 base64 data,
+    # 上游 tool 角色不接受 multimodal content). 详见 capture_screenshot docstring.
+    assert result["type"] == "screenshot_saved"
+    # base64 data + data_uri 字段已删 (避免上游 protobuf 撞 400)
+    assert "data" not in result, "BL-FIX2: 不再返 base64 data"
+    assert "data_uri" not in result, "BL-FIX2: 不再返 data_uri"
     cmd_used = mock_sub.run.call_args[0][0]
     assert "-W" in cmd_used  # 窗口选择标志
     assert "-i" in cmd_used  # 也要 interactive (员工点哪个窗口)
@@ -301,7 +310,12 @@ def test_macos_fullscreen_mode_no_i_flag(
     result = catfish_tools.capture_screenshot(
         {"mode": "fullscreen", "reason": "员工要求全屏截"}
     )
-    assert result["type"] == "image"
+    # 5/8 BL-FIX2: type 从 "image" 改 "screenshot_saved" (不再返 base64 data,
+    # 上游 tool 角色不接受 multimodal content). 详见 capture_screenshot docstring.
+    assert result["type"] == "screenshot_saved"
+    # base64 data + data_uri 字段已删 (避免上游 protobuf 撞 400)
+    assert "data" not in result, "BL-FIX2: 不再返 base64 data"
+    assert "data_uri" not in result, "BL-FIX2: 不再返 data_uri"
     cmd_used = mock_sub.run.call_args[0][0]
     assert "-i" not in cmd_used  # 全屏模式不要 -i
 
