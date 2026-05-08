@@ -278,7 +278,10 @@ pub async fn skill_audit_summary() -> Result<SkillAuditSummary, String> {
 ///   explicit_feedback (20 分权重): up / (up + down). 0 反馈 → 中性 0.5 (10/20 分).
 ///
 /// 0 调用的 skill 不进结果 (没数据无意义).
-pub fn compute_quality_scores(run_events: &[&AuditEvent]) -> Vec<SkillQualityScore> {
+///
+/// visibility: `pub(crate)` — 仅 crate 内部 (skill_audit_summary + tests) 用,
+/// 不暴露到外部 (AuditEvent 是 module-private 私结构).
+pub(crate) fn compute_quality_scores(run_events: &[&AuditEvent]) -> Vec<SkillQualityScore> {
     use std::collections::HashMap;
 
     // 聚合每个 skill 的 (call_count, ok_count)
