@@ -1579,6 +1579,43 @@ def _chrome_base() -> str:
     return _os.environ.get("CATFISH_CHROME_BASE", "http://127.0.0.1:9222")
 
 
+# BL-FIX10 (5/8): Playwright sync API 卡死时 ignore 自带 timeout 参数, 拖死整个
+# tool-bridge daemon (单线程). 用 concurrent.futures ThreadPoolExecutor + 硬
+# timeout 兜底, 卡了直接返 error 给 LLM, daemon 继续服务别的请求.
+#
+# 副作用: 卡死的线程没法真杀 (Python 没有"杀线程"原语), 会泄漏直到下次 daemon 重启.
+# 接受这个代价 — Companion watchdog 5s 检 tool-bridge 死活, 累计太多线程时
+# Tauri restart_tool_bridge 命令一刀切. 以后真要根治得改 multiprocessing pool.
+import concurrent.futures as _futures  # noqa: E402
+
+_BROWSER_HARD_TIMEOUT_SEC = 30.0
+
+
+def _run_with_hard_timeout(fn: Any, args: Dict[str, Any], hard_timeout_sec: float = _BROWSER_HARD_TIMEOUT_SEC) -> Dict[str, Any]:
+    """在线程池里跑 fn(args), 硬超时直接返 error. 不真杀线程 (Python 限制).
+
+    用法 — 在 browser_* 入口套一层:
+        def browser_xxx(args):
+            return _run_with_hard_timeout(_browser_xxx_impl, args)
+    """
+    with _futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="catfish_pw") as pool:
+        future = pool.submit(fn, args)
+        try:
+            return future.result(timeout=hard_timeout_sec)
+        except _futures.TimeoutError:
+            # 硬超时 — 返 error, 线程仍在跑 (没法真杀), 让 daemon 继续服务别的请求
+            tool_name = getattr(fn, "__name__", "browser_tool")
+            return {
+                "type": "error",
+                "error": (
+                    f"{tool_name} 硬超时 ({hard_timeout_sec}s) — Playwright 卡住没响应. "
+                    f"page 状态可能不稳定 (navigation 中 / iframe 重载 / Chrome 没响应). "
+                    f"建议: catfish_browser_snapshot 看页面当前结构, 或者改 selector "
+                    f"用 'text=...' / 'role=...' 文字匹配, 或者 Companion 控制台重启 Chrome."
+                ),
+            }
+
+
 def _connect_playwright_browser(playwright):
     """connect_over_cdp 复用 Companion 起的 Chrome.
 
@@ -1637,6 +1674,11 @@ _NET_LAYER_ERRORS = (
 
 
 def browser_goto(args: Dict[str, Any]) -> Dict[str, Any]:
+    """硬 timeout 兜底 wrapper, 调 _impl. 防 Playwright 卡死锁住整个 daemon."""
+    return _run_with_hard_timeout(_browser_goto_impl, args)
+
+
+def _browser_goto_impl(args: Dict[str, Any]) -> Dict[str, Any]:
     """走 Playwright `page.goto()`. connect_over_cdp 复用员工已登录 Chrome.
 
     https→http 自动 fallback (踩过坑 2026-04-28):
@@ -1721,6 +1763,11 @@ def browser_goto(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def browser_click(args: Dict[str, Any]) -> Dict[str, Any]:
+    """硬 timeout 兜底 wrapper, 调 _impl. 防 Playwright 卡死锁住整个 daemon."""
+    return _run_with_hard_timeout(_browser_click_impl, args)
+
+
+def _browser_click_impl(args: Dict[str, Any]) -> Dict[str, Any]:
     """走 Playwright `page.click()`. auto-waiting 等元素出现 + visible + clickable."""
     selector = (args.get("selector") or "").strip()
     if not selector:
@@ -1768,6 +1815,11 @@ def browser_click(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def browser_fill(args: Dict[str, Any]) -> Dict[str, Any]:
+    """硬 timeout 兜底 wrapper, 调 _impl. 防 Playwright 卡死锁住整个 daemon."""
+    return _run_with_hard_timeout(_browser_fill_impl, args)
+
+
+def _browser_fill_impl(args: Dict[str, Any]) -> Dict[str, Any]:
     """走 Playwright `page.fill()`. 自动清空原值再填.
 
     历史:
@@ -1881,6 +1933,11 @@ def browser_fill(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def browser_snapshot(args: Dict[str, Any]) -> Dict[str, Any]:
+    """硬 timeout 兜底 wrapper, 调 _impl. 防 Playwright 卡死锁住整个 daemon."""
+    return _run_with_hard_timeout(_browser_snapshot_impl, args)
+
+
+def _browser_snapshot_impl(args: Dict[str, Any]) -> Dict[str, Any]:
     """拿当前页面结构化 DOM. 优先 Playwright accessibility, 失败 fallback 到 DOM evaluate.
 
     BL-FIX3 (5/8): EIS 登录 demo 撞 ``page.accessibility`` 在新版 Playwright 上 None,
@@ -2132,6 +2189,11 @@ def _flatten_a11y(
 
 
 def browser_screenshot(args: Dict[str, Any]) -> Dict[str, Any]:
+    """硬 timeout 兜底 wrapper, 调 _impl. 防 Playwright 卡死锁住整个 daemon."""
+    return _run_with_hard_timeout(_browser_screenshot_impl, args)
+
+
+def _browser_screenshot_impl(args: Dict[str, Any]) -> Dict[str, Any]:
     """截浏览器当前 tab 的图. 走 Playwright `page.screenshot()`, 返 data:image base64.
 
     BL-FIX7 (5/8): 之前 hermes builtin browser_screenshot 被 BL-FIX4 dedupe 一刀切

@@ -1434,3 +1434,84 @@ def test_snapshot_cap_1000_not_500(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result["truncated"] is True
     # 600 * 2 = 1200, 但 cap 1000, 所以 hint 含 1000
     assert "1000" in result["hint_for_llm"]
+
+
+# ============================================================
+# BL-FIX10 (5/8) — Playwright hard timeout wrapper
+# ============================================================
+#
+# 现网坑: tool-bridge 单线程, Playwright sync API 卡死时 ignore 自带 timeout 参数,
+# 拖死整个 daemon → Companion 停止按钮失效. 套 ThreadPoolExecutor + 硬超时, 卡了
+# 直接返 error, 线程泄漏接受 (没法真杀, mac 重启 GC).
+
+
+def test_run_with_hard_timeout_normal_case() -> None:
+    """正常返回 — 不到 timeout, 直接返结果"""
+    def fast_fn(_args: Any) -> Dict[str, Any]:
+        return {"type": "ok", "result": "fast"}
+
+    result = catfish_tools._run_with_hard_timeout(fast_fn, {}, hard_timeout_sec=2.0)
+    assert result == {"type": "ok", "result": "fast"}
+
+
+def test_run_with_hard_timeout_hits_timeout() -> None:
+    """卡住超过 timeout — 返 error, 不抛"""
+    import time as _time
+    def slow_fn(_args: Any) -> Dict[str, Any]:
+        _time.sleep(5.0)  # 比 timeout 长
+        return {"type": "ok", "result": "never reached"}
+
+    result = catfish_tools._run_with_hard_timeout(slow_fn, {}, hard_timeout_sec=0.5)
+    assert result["type"] == "error"
+    assert "硬超时" in result["error"]
+    assert "0.5s" in result["error"]
+    # 提示里要有 LLM 下一步建议
+    assert "snapshot" in result["error"] or "selector" in result["error"]
+
+
+def test_run_with_hard_timeout_inner_exception() -> None:
+    """inner fn 抛异常 — 异常透传 (不是 timeout 路径)"""
+    def boom_fn(_args: Any) -> Dict[str, Any]:
+        raise RuntimeError("inner boom")
+
+    import pytest as _pytest
+    with _pytest.raises(RuntimeError, match="inner boom"):
+        catfish_tools._run_with_hard_timeout(boom_fn, {}, hard_timeout_sec=2.0)
+
+
+def test_browser_goto_routes_through_hard_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """browser_goto 公开函数走 hard timeout wrapper, 不直接调 _impl"""
+    called = {"impl": False}
+    def fake_impl(_args: Any) -> Dict[str, Any]:
+        called["impl"] = True
+        return {"type": "ok", "marker": "via_impl"}
+    monkeypatch.setattr(catfish_tools, "_browser_goto_impl", fake_impl)
+
+    result = catfish_tools.browser_goto({"url": "http://x"})
+    assert called["impl"] is True
+    assert result["marker"] == "via_impl"
+
+
+def test_browser_screenshot_routes_through_hard_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """browser_screenshot 也走 wrapper (跟 goto / click / fill / snapshot 一起套)"""
+    called = {"impl": False}
+    def fake_impl(_args: Any) -> Dict[str, Any]:
+        called["impl"] = True
+        return {"type": "image", "marker": "via_impl"}
+    monkeypatch.setattr(catfish_tools, "_browser_screenshot_impl", fake_impl)
+
+    result = catfish_tools.browser_screenshot({})
+    assert called["impl"] is True
+    assert result["marker"] == "via_impl"
+
+
+def test_browser_snapshot_routes_through_hard_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """browser_snapshot 走 wrapper"""
+    called = {"impl": False}
+    def fake_impl(_args: Any) -> Dict[str, Any]:
+        called["impl"] = True
+        return {"type": "ok", "elements": []}
+    monkeypatch.setattr(catfish_tools, "_browser_snapshot_impl", fake_impl)
+
+    catfish_tools.browser_snapshot({})
+    assert called["impl"] is True
