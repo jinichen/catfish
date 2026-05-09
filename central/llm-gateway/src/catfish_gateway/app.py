@@ -1408,6 +1408,16 @@ async def chat_completions(
         from . import self_critique  # noqa: PLC0415  lazy import
         body["messages"] = self_critique.inject_completion_critique_hint(body["messages"])
 
+    # BL-FIX24 (5/9): 检测 LLM 重复跑同一段 productive tool_call (execute_code
+    # 跑同一份 code 5 次产同一文件). 鸿波 5/9 demo 现场死循环 — 鲶鱼真做事
+    # 但记不住做过 + 主动问 "需要再做一次?" 拉员工回 "立刻执行" 又重做.
+    # 跟 self_critique 互补 — 一个治"该做没做", 一个治"做了又做".
+    if not is_internal_call:
+        from . import duplicate_tool_call_guard  # noqa: PLC0415  lazy import
+        body["messages"] = duplicate_tool_call_guard.inject_duplicate_guard_hint(
+            body["messages"]
+        )
+
     # BL-E16 关系建立: 注入 session_meta (距上次 N 天 N 小时 / 今天第几次)
     # 让 LLM 知道时间感, 跨天回来时能自然说"好几天没找我了".
     # 同时 tick: 写本次 chat 时间, 累计 today_count.
