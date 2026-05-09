@@ -54,7 +54,12 @@ export default function DashboardTab() {
       style={{
         display: "grid",
         gridTemplateColumns: "1fr",
-        gap: "var(--space-2)",
+        // BL-FIX20 (5/8): 0 gap, 各 section 自带 marginTop, 跟新标题样式更协调
+        gap: 0,
+        // 全宽控制, 防过宽屏看着空 (1400px 内容居中, 留两侧空气)
+        maxWidth: 1600,
+        margin: "0 auto",
+        width: "100%",
       }}
     >
       {/* 第一组: 今日 — 主动闲聊 + 后台任务 (高频, 默认开, 顶部) */}

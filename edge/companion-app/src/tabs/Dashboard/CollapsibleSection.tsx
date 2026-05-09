@@ -58,12 +58,14 @@ export default function CollapsibleSection({
   };
 
   return (
-    <div
+    <section
       style={{
         gridColumn: "1 / -1",
-        marginTop: "var(--space-2)",
+        marginTop: "var(--space-3)",
       }}
     >
+      {/* BL-FIX20 (5/8): 标题更轻 — 去 border-bottom, 减字号, hover 才高亮.
+          5-7 组叠起来视觉不嘈杂, 留更多注意力给卡片内容 */}
       <button
         onClick={toggle}
         type="button"
@@ -71,27 +73,34 @@ export default function CollapsibleSection({
           width: "100%",
           background: "transparent",
           border: "none",
-          padding: "var(--space-2) 0",
-          fontSize: "var(--text-sm)",
-          fontWeight: 600,
-          color: "var(--catfish-text)",
+          padding: "6px 0",
+          fontSize: "var(--text-xs)",
+          fontWeight: 500,
+          color: "var(--catfish-text-muted)",
+          textTransform: "uppercase",
+          letterSpacing: "0.04em",
           textAlign: "left",
           cursor: "pointer",
           display: "flex",
           alignItems: "center",
-          gap: "var(--space-2)",
-          borderBottom: "1px solid var(--catfish-border)",
-          marginBottom: "var(--space-3)",
+          gap: "8px",
+          marginBottom: "var(--space-2)",
         }}
         aria-expanded={!collapsed}
+        onMouseEnter={(e) => (e.currentTarget.style.color = "var(--catfish-text)")}
+        onMouseLeave={(e) =>
+          (e.currentTarget.style.color = "var(--catfish-text-muted)")
+        }
       >
         <span
           style={{
             display: "inline-block",
             transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)",
             transition: "transform 0.15s ease",
-            fontSize: "10px",
+            fontSize: "9px",
+            opacity: 0.6,
           }}
+          aria-hidden
         >
           ▼
         </span>
@@ -102,9 +111,12 @@ export default function CollapsibleSection({
               fontSize: "var(--text-xs)",
               color: "var(--catfish-text-muted)",
               fontWeight: 400,
+              opacity: 0.7,
+              textTransform: "none",
+              letterSpacing: 0,
             }}
           >
-            · {count} 项
+            · {count}
           </span>
         )}
       </button>
@@ -112,16 +124,18 @@ export default function CollapsibleSection({
         <div
           style={{
             display: "grid",
-            // BL-FIX19 (5/8): minmax(0, 1fr) 不是 1fr — 默认 grid item min size
-            // 是 'auto' = min-content, 长 URL / 长路径会撑爆 cell 让 grid 变宽.
-            // minmax(0, 1fr) 强制最小 0, cells 平分剩余空间, 内容自动 wrap.
-            gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-            gap: "var(--space-4)",
+            // BL-FIX19 (5/8): minmax(0, 1fr) — 默认 grid item min size 是
+            // min-content, 长 URL / 长路径会撑爆 cell. minmax(0, 1fr) 强制最小 0.
+            // BL-FIX20 (5/8): 加响应式 — 宽屏 (>1400px) 自动 3 列, 窄屏 1 列, 中屏 2 列.
+            //   auto-fit + minmax(280px, 1fr) 让 grid 自动决定列数, 280 是单卡最小
+            //   可读宽度 (再窄文字挤).
+            gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+            gap: "var(--space-3)",
           }}
         >
           {children}
         </div>
       )}
-    </div>
+    </section>
   );
 }
