@@ -34,10 +34,16 @@ models:
       # api_base 完整 URL 走 env 注入,避免 hostname/UUID 进版本库
       api_base: ${INTERNAL_LLM_BASE_QWEN_MAIN}
       api_key_env: INTERNAL_LLM_KEY
-      # 私有 LLM (10.10.40.102) MoE active 10B + 24K prompt 时 TTFT 常 60s+,
-      # 默认 60s 太紧, 给 180s 喘息. 真超时 fallback chain (qwen-flash) 兜底.
-      # 踩过坑 2026-04-28 鸿波 demo: 反复 ReadTimeout 卡 demo.
-      timeout: 180
+      # BL-FIX24-config (5/9): 180 → 300. 鸿波 5/9 demo 流水显示 14:28→14:31
+      # 撞 180s timeout 触发 fallback 切公网 deepseek (公网保密性破坏 +
+      # ttft 187s 比 private 慢). 真根因 — Qwen3.5 122B MoE active 10B
+      # 在 79 messages + 5 万字 journal 长 context 推理 ≥ 180s 是真的需要,
+      # 不是上游挂. 调 300s 给 5 分钟裕量, 让 private-main 在保密链路完成
+      # 推理, 不动不动就 fallback 到公网.
+      # 踩过坑历史:
+      #   2026-04-28 demo: 反复 ReadTimeout (60s→180s 修)
+      #   2026-05-09 demo: 长 context docx 撞 180s 切 DS (180s→300s 修)
+      timeout: 300
 
     # 上游管理员确认实际支持 250K tokens。
     # 我们对员工承诺 128K（官方主流 Qwen 3.5 心智 + 一倍以上安全余量）。
