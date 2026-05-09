@@ -133,6 +133,12 @@ async def lifespan(app: FastAPI):
     token_preview = dev_token[:4] + "..." + dev_token[-4:] if len(dev_token) > 8 else "<short>"
     logger.info("mode=%s  dev_token_preview=%s", env_mode, token_preview)
 
+    # BL-FIX37 (5/10): gateway 内部 loopback (proactive_starter / session_summarizer)
+    # 用 internal-only token 调自己 /v1/chat/completions, 修 BL-FIX29 关掉员工
+    # dev_token 后内部调用 401 的副作用. 没显式配 → 自动生成 32B random.
+    from .auth.dev_token import ensure_internal_dev_token  # noqa: PLC0415
+    ensure_internal_dev_token()
+
     logger.info("catfish-gateway starting with %d model(s):", len(config.models))
     for m in config.models:
         logger.info(

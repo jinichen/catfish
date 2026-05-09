@@ -264,7 +264,11 @@ async def _summarize_with_llm(
         "CATFISH_GATEWAY_INTERNAL_URL",
         f"http://127.0.0.1:{port}/v1/chat/completions",
     )
-    dev_token = os.environ.get("CATFISH_DEV_TOKEN", "dev-token-local")
+    # BL-FIX37 (5/10): internal-only token. BL-FIX29 关员工 dev_token 后, 必须
+    # 用 ensure_internal_dev_token() 拿 internal random, 否则 session_summarizer
+    # 调 gateway loopback 401 → employee_journal 不再更新.
+    from .auth.dev_token import ensure_internal_dev_token  # 懒 import
+    dev_token = ensure_internal_dev_token()
 
     last_error: str | None = None
     for attempt_idx, chosen_model in enumerate(candidates, start=1):

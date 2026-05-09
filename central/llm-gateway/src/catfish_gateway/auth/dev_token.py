@@ -1,4 +1,4 @@
-"""DevTokenProvider — dev 环境多角色测试 + 生产兜底.
+"""DevTokenProvider — dev 环境多角色测试 + 生产兜底 + gateway 内部 loopback.
 
 # 用在哪里
 
@@ -8,6 +8,11 @@
      客户 IT 第一次接 SSO 撞坑时, 临时用 dev_token 进 Companion 排查.
      Companion UI 必须显 warning banner "你在用 dev token, 不是真 SSO" (Phase 1C).
      audit log 必须标 auth_method='dev_token' (gateway 已支持 security_concern 字段).
+  3. **(BL-FIX37, 5/10)** gateway 内部 loopback (proactive_starter / session_summarizer
+     用 httpx 调自己 /v1/chat/completions 时), 用 ensure_internal_dev_token() 拿一个
+     启动时随机生成的 internal-only token. 跟员工 dev_token (1/2 类) 完全分开,
+     外部抓不到 (在进程内存, 重启即变, 不写 .env 文件). 修 BL-FIX29 关掉员工
+     dev_token 后 gateway 自己调自己也 401 的副作用.
 
 # 决策对齐
 
@@ -26,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -38,6 +44,31 @@ logger = logging.getLogger("catfish.gateway.auth.dev_token")
 
 #: 默认 dev token. 生产环境员工应该 explicit 设 CATFISH_DEV_TOKEN, 不依赖默认.
 _DEFAULT_DEV_TOKEN = "dev-token-local"
+
+#: BL-FIX37 (5/10): gateway 内部 loopback 专用 token env. 区别于员工
+#: CATFISH_DEV_TOKEN (那条已在 BL-FIX29 关掉). 启动时若没设, ensure_internal_dev_token
+#: 自动 secrets.token_urlsafe(32) 生成并 export 到 process env. 外部抓不到 (不写
+#: .env 文件, 重启 gateway 即变), 只 gateway 自己 + 它派生的 internal loopback (proactive
+#: / session_summarizer) 知道.
+_INTERNAL_DEV_TOKEN_ENV = "CATFISH_INTERNAL_DEV_TOKEN"
+
+
+def ensure_internal_dev_token() -> str:
+    """gateway 启动时调一次. 没设 → 生成 random 写 process env 返之.
+    已设 (用户显式配了) → 直接返. proactive / session_summarizer 调这个拿 token.
+    """
+    cur = os.environ.get(_INTERNAL_DEV_TOKEN_ENV, "").strip()
+    if cur:
+        return cur
+    new = secrets.token_urlsafe(32)
+    os.environ[_INTERNAL_DEV_TOKEN_ENV] = new
+    logger.info("BL-FIX37: 自动生成 internal dev token (32B random, 仅进程内存, 不写文件)")
+    return new
+
+
+def _internal_dev_token() -> str | None:
+    """读当前 internal dev token, 没设返 None (gateway 还没启动 ensure)."""
+    return os.environ.get(_INTERNAL_DEV_TOKEN_ENV, "").strip() or None
 
 
 @dataclass
@@ -177,6 +208,21 @@ class DevTokenProvider(AuthProvider):
         token = authorization[7:].strip()
         if not token:
             return None
+
+        # 0. BL-FIX37 (5/10): gateway 内部 loopback token 最优先 (32B random,
+        # 启动时生成, 进程内存, 外部抓不到). proactive_starter / session_summarizer
+        # 用这个调 /v1/chat/completions 自己, 修 BL-FIX29 副作用.
+        # 安全: token 是 32 字节 url-safe base64 ≈ 256 bit 熵, 暴力枚举不可行.
+        internal = _internal_dev_token()
+        if internal and token == internal:
+            return User(
+                sub="internal:gateway-loopback",
+                department="",
+                tier="internal",
+                role="admin",  # internal 有 admin 权限 (它是 gateway 自己)
+                managed_departments=[],
+                auth_method="internal_loopback",
+            )
 
         # 1. yaml 多账号匹配 (五一 sprint 5/2)
         cfg = _load_dev_config()

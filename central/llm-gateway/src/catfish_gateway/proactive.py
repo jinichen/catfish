@@ -187,7 +187,12 @@ async def generate_starter() -> dict[str, Any]:
         "CATFISH_GATEWAY_INTERNAL_URL",
         f"http://127.0.0.1:{port}/v1/chat/completions",
     )
-    dev_token = os.environ.get("CATFISH_DEV_TOKEN", "dev-token-local")
+    # BL-FIX37 (5/10): 用 internal-only token, 不再走员工 CATFISH_DEV_TOKEN.
+    # BL-FIX29 关掉员工 dev_token 通道后, 老 dev_token 这条链 401, gateway 自己
+    # 调自己也挂. 现在用启动时随机生成的 internal token, dev_token.py 优先匹配
+    # 它返 internal User. 安全: 32B random 在进程内存, 重启即变, 外部抓不到.
+    from .auth.dev_token import ensure_internal_dev_token  # 懒 import
+    dev_token = ensure_internal_dev_token()
     user_prompt = _build_user_prompt(journal_tail, now)
 
     last_error: str | None = None
@@ -397,7 +402,9 @@ async def generate_contextual_starter(
         "CATFISH_GATEWAY_INTERNAL_URL",
         f"http://127.0.0.1:{port}/v1/chat/completions",
     )
-    dev_token = os.environ.get("CATFISH_DEV_TOKEN", "dev-token-local")
+    # BL-FIX37 (5/10): internal-only token, 跟 generate_starter 同款.
+    from .auth.dev_token import ensure_internal_dev_token  # 懒 import
+    dev_token = ensure_internal_dev_token()
     user_prompt = _build_contextual_user_prompt(signal_kind, context, now)
 
     last_error: str | None = None
