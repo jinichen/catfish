@@ -1264,12 +1264,16 @@ def test_browser_screenshot_no_required_fields() -> None:
 
 
 def test_browser_screenshot_viewport_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    """默认 (无 selector, full_page=false) → page.screenshot, 返 data_uri"""
+    """默认 (无 selector, full_page=false) → page.screenshot, 返 data_uri.
+
+    BL-FIX17 (5/8): 默认 compress=auto 走 Pillow downscale + JPEG. 这条 test 传
+    compress='none' 保留旧行为 (PNG 原图) 验证 base64 round-trip.
+    """
     fake_png = b"\x89PNG\r\n\x1a\n" + b"A" * 1000
     page = _FakeBrowserPage(screenshot_bytes=fake_png)
     _patch_browser_connect(monkeypatch, page)
 
-    result = catfish_tools.browser_screenshot({})
+    result = catfish_tools.browser_screenshot({"compress": "none"})
     assert result["type"] == "image"
     assert result["format"] == "png"
     assert result["capture"] == "viewport"
@@ -1281,11 +1285,11 @@ def test_browser_screenshot_viewport_default(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_browser_screenshot_full_page(monkeypatch: pytest.MonkeyPatch) -> None:
-    """full_page=true → capture='full_page'"""
+    """full_page=true → capture='full_page'. BL-FIX17 用 compress='none' 跳 Pillow."""
     page = _FakeBrowserPage()
     _patch_browser_connect(monkeypatch, page)
 
-    result = catfish_tools.browser_screenshot({"full_page": True})
+    result = catfish_tools.browser_screenshot({"full_page": True, "compress": "none"})
     assert result["type"] == "image"
     assert result["capture"] == "full_page"
 
@@ -1333,12 +1337,15 @@ def test_browser_screenshot_locator_wait_fails(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_browser_screenshot_too_large_returns_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """图太大 (>12MB) → 拒回 (防 IPC 撑爆)"""
+    """图太大 (>12MB) → 拒回 (防 IPC 撑爆).
+    BL-FIX17 (5/8): compress='none' 跳过 Pillow, 直接走 12MB hard cap 检查.
+    auto 模式下 Pillow 压缩会先做 800KB target check 报另一种 error, 测不到 12MB cap.
+    """
     huge = b"\x89PNG" + b"X" * (15 * 1024 * 1024)  # 15 MB
     page = _FakeBrowserPage(screenshot_bytes=huge)
     _patch_browser_connect(monkeypatch, page)
 
-    result = catfish_tools.browser_screenshot({})
+    result = catfish_tools.browser_screenshot({"compress": "none"})
     assert result["type"] == "error"
     assert "太大" in result["error"]
 
@@ -1703,3 +1710,125 @@ def test_find_by_text_routes_through_hard_timeout(
     monkeypatch.setattr(catfish_tools, "_browser_find_by_text_impl", fake_impl)
     catfish_tools.browser_find_by_text({"text": "test"})
     assert called["impl"] is True
+
+
+# ============================================================
+# BL-FIX17 (5/8) — 截图智能压缩
+# ============================================================
+#
+# 现网 (鸿波 5/8): catfish_browser_screenshot 返 4.4MB Base64 → IPC + LLM
+# context (3-4K tokens) + vision 推理三连卡死. 修法: viewport / full_page
+# 自动 downscale + JPEG, element 截图保 PNG 不压.
+
+
+def _make_fake_png(width: int = 800, height: int = 600, color: tuple = (255, 0, 0)) -> bytes:
+    """生成一张真 PNG (用 PIL), 给压缩测试用"""
+    from PIL import Image
+    import io
+    img = Image.new("RGB", (width, height), color)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_compress_element_keeps_png(monkeypatch: pytest.MonkeyPatch) -> None:
+    """selector 给元素 → 保 PNG 不压"""
+    fake_png = _make_fake_png(200, 100)  # 元素一般小
+
+    page = _FakeBrowserPage(
+        locator_factory=lambda: _FakeLocator(screenshot_bytes=fake_png),
+    )
+    _patch_browser_connect(monkeypatch, page)
+
+    result = catfish_tools.browser_screenshot({"selector": "#captchaImg"})
+    assert result["type"] == "image"
+    assert result["format"] == "png"
+    assert result["compress_strategy"] == "element_keep_png"
+    assert result["compression_ratio"] == 1.0
+    assert result["downscaled"] is False
+
+
+def test_compress_viewport_uses_jpeg(monkeypatch: pytest.MonkeyPatch) -> None:
+    """无 selector + 默认 compress=auto → JPEG"""
+    fake_png = _make_fake_png(1920, 1080)  # 大 viewport
+    page = _FakeBrowserPage(screenshot_bytes=fake_png)
+    _patch_browser_connect(monkeypatch, page)
+
+    result = catfish_tools.browser_screenshot({})
+    assert result["type"] == "image"
+    assert result["format"] == "jpeg"
+    assert result["data_uri"].startswith("data:image/jpeg;base64,")
+    assert result["compression_ratio"] > 1.0  # 真压了
+    assert result["compress_strategy"] == "viewport_jpeg"
+
+
+def test_compress_viewport_downscales_large(monkeypatch: pytest.MonkeyPatch) -> None:
+    """4K 输入 → downscale 到 max 1280px"""
+    fake_png = _make_fake_png(2560, 1440)  # retina 4K
+    page = _FakeBrowserPage(screenshot_bytes=fake_png)
+    _patch_browser_connect(monkeypatch, page)
+
+    result = catfish_tools.browser_screenshot({})
+    assert result["type"] == "image"
+    assert result["downscaled"] is True
+    assert "1280" in (result["compress_strategy"] + str(result.get("downscaled_to") or ""))
+
+
+def test_compress_full_page_uses_1600(monkeypatch: pytest.MonkeyPatch) -> None:
+    """full_page=true → max 1600px (比 viewport 1280 大)"""
+    fake_png = _make_fake_png(2560, 4000)  # 长图
+    page = _FakeBrowserPage(screenshot_bytes=fake_png)
+    _patch_browser_connect(monkeypatch, page)
+
+    result = catfish_tools.browser_screenshot({"full_page": True})
+    assert result["type"] == "image"
+    assert result["compress_strategy"] == "fullpage_jpeg"
+
+
+def test_compress_none_keeps_original(monkeypatch: pytest.MonkeyPatch) -> None:
+    """compress='none' → 原 PNG 不压"""
+    fake_png = _make_fake_png(1920, 1080)
+    page = _FakeBrowserPage(screenshot_bytes=fake_png)
+    _patch_browser_connect(monkeypatch, page)
+
+    result = catfish_tools.browser_screenshot({"compress": "none"})
+    assert result["type"] == "image"
+    assert result["format"] == "png"
+    assert result["compress_strategy"] == "none_explicit"
+    assert result["compression_ratio"] == 1.0
+
+
+def test_compress_returns_size_meta(monkeypatch: pytest.MonkeyPatch) -> None:
+    """返结果含 size_kb_before / size_kb_after / compression_ratio"""
+    fake_png = _make_fake_png(1920, 1080)
+    page = _FakeBrowserPage(screenshot_bytes=fake_png)
+    _patch_browser_connect(monkeypatch, page)
+
+    result = catfish_tools.browser_screenshot({})
+    assert "size_kb_before" in result
+    assert "size_kb_after" in result
+    assert "compression_ratio" in result
+    assert result["size_kb_after"] < result["size_kb_before"]
+
+
+def test_compress_realistic_size_under_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    """realistic 4K viewport 压完 < 800KB target (核心 demo 跑得动)"""
+    fake_png = _make_fake_png(2560, 1440, color=(120, 130, 140))  # 灰渐变 PNG 大
+    page = _FakeBrowserPage(screenshot_bytes=fake_png)
+    _patch_browser_connect(monkeypatch, page)
+
+    result = catfish_tools.browser_screenshot({})
+    assert result["type"] == "image"
+    # 800 KB cap
+    assert result["size_kb_after"] < 800
+
+
+def test_summary_mentions_format_and_ratio(monkeypatch: pytest.MonkeyPatch) -> None:
+    """summary 含 'JPEG' + '压缩 Nx', 让 LLM 看到压了多少"""
+    fake_png = _make_fake_png(1920, 1080)
+    page = _FakeBrowserPage(screenshot_bytes=fake_png)
+    _patch_browser_connect(monkeypatch, page)
+
+    result = catfish_tools.browser_screenshot({})
+    assert "JPEG" in result["summary"]
+    assert "压缩" in result["summary"]

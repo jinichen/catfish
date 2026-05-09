@@ -472,11 +472,15 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
             "base64 让模型直接看. 看**验证码 / 按钮位置 / 页面布局 / 弹窗内容** 都走这个.\n\n"
             "⚠️ 区别于 `catfish_screenshot` — 那个走 mac screencapture, 截整个屏幕 "
             "(含其他 app / 跨窗口); 这个只截当前 Chrome tab, 没权限弹窗 / 不需要员工框选.\n\n"
-            "默认 viewport-only (员工屏幕能看到的部分), full_page=true 截整个滚动长度. "
-            "页面 5KB ~ 200KB 之间, base64 后 ~280KB, IPC 完全 OK.\n\n"
-            "selector 给的话只截那一个元素 (e.g. selector='#captchaImg' 只截验证码图片), "
-            "不给则整个 viewport. 元素截图常见用法: 验证码 → selector='#captchaImg' / "
-            "'img.captcha' / 'role=img[name=\"验证码\"]'."
+            "**BL-FIX17 (5/8): 自动智能压缩** — viewport / full_page 截图自动 downscale + JPEG, "
+            "vision 模型一样能识别但**省 90% size + token + 推理时间**. 默认 ~150-300KB:\n"
+            "  - selector 给元素 (例 `#captchaImg`): 不缩 PNG (元素本来就小, 保真重要)\n"
+            "  - viewport 默认: max 1280px 边 + JPEG q=80, ~200KB\n"
+            "  - full_page: max 1600px 边 + JPEG q=75, ~400KB\n"
+            "  - 压完 >800KB: 自动降 q=60 重压. 还不行返 error 让 LLM 改 selector\n"
+            "  - compress='none' 强制保留原 PNG (员工显式说'要原图'才传)\n\n"
+            "**返回字段加** size_kb_before / size_kb_after / compression_ratio / format, "
+            "LLM 看到知道压缩了多少."
         ),
         "input_schema": {
             "type": "object",
@@ -484,8 +488,8 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
                 "selector": {
                     "type": "string",
                     "description": (
-                        "可选 — Playwright selector. 给了只截这个元素 (推荐验证码场景), "
-                        "不给截整个 viewport"
+                        "可选 — Playwright selector. 给了只截这个元素 (推荐验证码场景, 保真 PNG 不压), "
+                        "不给截整个 viewport (会自动 downscale + JPEG)"
                     ),
                 },
                 "full_page": {
@@ -497,6 +501,15 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
                     "type": "number",
                     "default": 10.0,
                     "description": "等元素 / 页面加载的最长时间, 默认 10s",
+                },
+                "compress": {
+                    "type": "string",
+                    "enum": ["auto", "none"],
+                    "default": "auto",
+                    "description": (
+                        "auto (默认, 推荐): 视情况 downscale + JPEG, 跑得快不卡死. "
+                        "none: 不压, 保留原 PNG (员工要看小字 / 高保真证据用, 后果自负 size 4MB+)"
+                    ),
                 },
             },
             "required": [],
@@ -2338,13 +2351,125 @@ def browser_screenshot(args: Dict[str, Any]) -> Dict[str, Any]:
     return _run_with_hard_timeout(_browser_screenshot_impl, args)
 
 
+# BL-FIX17 (5/8): 截图智能压缩参数
+_SCREENSHOT_TARGET_KB = 800           # 硬 cap, 超过自动降 quality 重压
+_SCREENSHOT_VIEWPORT_MAX_PX = 1280    # viewport max 边
+_SCREENSHOT_FULLPAGE_MAX_PX = 1600    # full_page max 边
+_SCREENSHOT_VIEWPORT_QUALITY = 80     # JPEG quality (viewport)
+_SCREENSHOT_FULLPAGE_QUALITY = 75     # JPEG quality (full_page)
+_SCREENSHOT_FALLBACK_QUALITY = 60     # 重压 quality
+
+
+def _compress_screenshot(
+    png_bytes: bytes,
+    *,
+    is_element: bool,
+    full_page: bool,
+) -> tuple[bytes, str, Dict[str, Any]]:
+    """智能压缩截图. 返 (压完 bytes, format 'png'/'jpeg', meta).
+
+    BL-FIX17 (5/8): 4MB 截图卡死 LLM (IPC + context + vision 推理三连卡).
+    自动 downscale + JPEG, vision 一样能识别但省 90% size.
+
+    策略:
+      - is_element=True (有 selector): 不压 PNG (元素本来就小, 保真重要)
+      - viewport: max 1280px + JPEG q=80
+      - full_page: max 1600px + JPEG q=75
+      - 压完仍 >800KB → 降 q=60 重压
+      - 仍 >800KB → 抛 ValueError, 让 caller 报 error 给 LLM 改策略
+    """
+    size_before = len(png_bytes)
+
+    # 元素截图: 不压, 直接返
+    if is_element:
+        return png_bytes, "png", {
+            "size_kb_before": round(size_before / 1024, 1),
+            "size_kb_after": round(size_before / 1024, 1),
+            "compression_ratio": 1.0,
+            "downscaled": False,
+            "compress_strategy": "element_keep_png",
+        }
+
+    try:
+        from PIL import Image  # noqa: PLC0415
+    except ImportError:
+        # PIL 没装 (极少见, hermes venv 一般有), fallback 不压返原图
+        return png_bytes, "png", {
+            "size_kb_before": round(size_before / 1024, 1),
+            "size_kb_after": round(size_before / 1024, 1),
+            "compression_ratio": 1.0,
+            "downscaled": False,
+            "compress_strategy": "no_pil_fallback",
+            "warning": "PIL 没装, 没压. pip install Pillow.",
+        }
+
+    import io  # noqa: PLC0415
+    img = Image.open(io.BytesIO(png_bytes))
+    orig_w, orig_h = img.size
+
+    max_px = _SCREENSHOT_FULLPAGE_MAX_PX if full_page else _SCREENSHOT_VIEWPORT_MAX_PX
+    quality = _SCREENSHOT_FULLPAGE_QUALITY if full_page else _SCREENSHOT_VIEWPORT_QUALITY
+
+    # downscale (保比例, 长边到 max_px)
+    long_edge = max(orig_w, orig_h)
+    downscaled = False
+    if long_edge > max_px:
+        scale = max_px / long_edge
+        new_w = round(orig_w * scale)
+        new_h = round(orig_h * scale)
+        img = img.resize((new_w, new_h), Image.LANCZOS)
+        downscaled = True
+
+    # 转 RGB (JPEG 不支持 alpha)
+    if img.mode in ("RGBA", "LA", "P"):
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        bg.paste(img, mask=img.split()[-1] if img.mode != "P" else None)
+        img = bg
+
+    # 编 JPEG
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=quality, optimize=True)
+    out_bytes = buf.getvalue()
+
+    # 压完仍 >800KB → 降 quality 重压
+    if len(out_bytes) > _SCREENSHOT_TARGET_KB * 1024:
+        buf2 = io.BytesIO()
+        img.save(buf2, format="JPEG", quality=_SCREENSHOT_FALLBACK_QUALITY, optimize=True)
+        out_bytes = buf2.getvalue()
+        quality = _SCREENSHOT_FALLBACK_QUALITY
+
+    size_after = len(out_bytes)
+    if size_after > _SCREENSHOT_TARGET_KB * 1024:
+        # 第二次还不行 — 让 caller 报 error
+        raise ValueError(
+            f"截图压缩后仍 {size_after // 1024} KB > {_SCREENSHOT_TARGET_KB} KB. "
+            f"原图 {orig_w}x{orig_h} {size_before // 1024} KB. "
+            f"建议: 加 selector 截特定元素 (元素截图不压保真), "
+            f"或 full_page=false 只截 viewport."
+        )
+
+    return out_bytes, "jpeg", {
+        "size_kb_before": round(size_before / 1024, 1),
+        "size_kb_after": round(size_after / 1024, 1),
+        "compression_ratio": round(size_before / max(size_after, 1), 2),
+        "downscaled": downscaled,
+        "downscaled_to": f"{img.size[0]}x{img.size[1]}" if downscaled else None,
+        "orig_size": f"{orig_w}x{orig_h}",
+        "jpeg_quality": quality,
+        "compress_strategy": "viewport_jpeg" if not full_page else "fullpage_jpeg",
+    }
+
+
 def _browser_screenshot_impl(args: Dict[str, Any]) -> Dict[str, Any]:
     """截浏览器当前 tab 的图. 走 Playwright `page.screenshot()`, 返 data:image base64.
 
     BL-FIX7 (5/8): 之前 hermes builtin browser_screenshot 被 BL-FIX4 dedupe 一刀切
-    丢了, LLM 想看浏览器内容只剩 catfish_screenshot (mac screencapture), 不对路 /
-    要权限 / 容易失败. 这条直接拿 Playwright 的 page.screenshot, 跟 browser_goto /
-    fill / click 同一个 connect_over_cdp 链路, **不需要 mac 截屏权限**.
+    丢了, LLM 想看浏览器内容只剩 catfish_screenshot (mac screencapture), 不对路.
+    这条直接拿 Playwright 的 page.screenshot, 跟 browser_goto / fill / click 同
+    一个 connect_over_cdp 链路, **不需要 mac 截屏权限**.
+
+    BL-FIX17 (5/8): 自动智能压缩 — viewport / full_page 自动 downscale + JPEG,
+    省 90% size + token + 推理时间. element 截图保 PNG 不压.
 
     LLM 拿到 data_uri 之后, 经 gateway BL-FIX2 multimodal_tool_unwrap 重组到 user
     multipart, 上游 Qwen 主力直接看图回答.
@@ -2353,6 +2478,7 @@ def _browser_screenshot_impl(args: Dict[str, Any]) -> Dict[str, Any]:
     full_page = bool(args.get("full_page", False))
     timeout_ms = int(float(args.get("timeout_seconds") or 10.0) * 1000)
     timeout_ms = max(1000, min(timeout_ms, 60_000))
+    compress_mode = (args.get("compress") or "auto").strip().lower()
 
     try:
         sync_playwright = _import_playwright()
@@ -2381,13 +2507,11 @@ def _browser_screenshot_impl(args: Dict[str, Any]) -> Dict[str, Any]:
 
             try:
                 if selector:
-                    # 元素截图 — locator + screenshot
                     locator = page.locator(selector)
                     locator.wait_for(state="visible", timeout=timeout_ms)
                     png_bytes = locator.screenshot(timeout=timeout_ms)
                     capture_kind = f"element[{selector}]"
                 else:
-                    # viewport / full_page 截图
                     png_bytes = page.screenshot(
                         full_page=full_page, timeout=timeout_ms
                     )
@@ -2401,32 +2525,69 @@ def _browser_screenshot_impl(args: Dict[str, Any]) -> Dict[str, Any]:
                     ),
                 }
 
-            size = len(png_bytes)
-            # 跟 catfish_screenshot 同样的 12MB 上限, 防 IPC 撑爆
+            # BL-FIX17: 智能压缩
+            if compress_mode == "none":
+                # 员工显式要原图
+                final_bytes = png_bytes
+                final_format = "png"
+                compress_meta = {
+                    "size_kb_before": round(len(png_bytes) / 1024, 1),
+                    "size_kb_after": round(len(png_bytes) / 1024, 1),
+                    "compression_ratio": 1.0,
+                    "compress_strategy": "none_explicit",
+                }
+            else:
+                # auto (默认): 智能压缩
+                try:
+                    final_bytes, final_format, compress_meta = _compress_screenshot(
+                        png_bytes,
+                        is_element=bool(selector),
+                        full_page=full_page,
+                    )
+                except ValueError as e:
+                    return {
+                        "type": "error",
+                        "error": str(e),
+                    }
+
+            size = len(final_bytes)
+            # 12MB hard cap (防 IPC 撑爆 — 跟 catfish_screenshot 一致)
             if size > _MAX_SCREENSHOT_BYTES:
                 return {
                     "type": "error",
                     "error": (
                         f"截图太大 ({size // (1024*1024)} MB > "
                         f"{_MAX_SCREENSHOT_BYTES // (1024*1024)} MB 上限). "
-                        f"加 selector 截单个元素, 或 full_page=false"
+                        f"加 selector 截单个元素, 或 compress='auto'"
                     ),
                 }
 
-            b64 = base64.b64encode(png_bytes).decode("ascii")
+            b64 = base64.b64encode(final_bytes).decode("ascii")
+            mime = "image/jpeg" if final_format == "jpeg" else "image/png"
             return {
                 "type": "image",
-                "format": "png",
+                "format": final_format,
                 "encoding": "base64",
                 "data": b64,
-                "data_uri": f"data:image/png;base64,{b64}",
+                "data_uri": f"data:{mime};base64,{b64}",
                 "size_bytes": size,
                 "captured_at": _unix_to_iso(time.time()),
                 "capture": capture_kind,
                 "title": title,
                 "url": url,
+                # BL-FIX17: 压缩 meta
+                "size_kb_before": compress_meta.get("size_kb_before"),
+                "size_kb_after": compress_meta.get("size_kb_after"),
+                "compression_ratio": compress_meta.get("compression_ratio"),
+                "downscaled": compress_meta.get("downscaled", False),
+                "downscaled_to": compress_meta.get("downscaled_to"),
+                "orig_size": compress_meta.get("orig_size"),
+                "compress_strategy": compress_meta.get("compress_strategy"),
                 "summary": (
-                    f"浏览器截图完成 ({capture_kind}, {size // 1024} KB), "
+                    f"浏览器截图完成 ({capture_kind}, "
+                    f"{compress_meta.get('size_kb_after', size // 1024)} KB "
+                    f"{final_format.upper()}, "
+                    f"压缩 {compress_meta.get('compression_ratio', 1)}x), "
                     f"页面: {title} ({url})"
                 ),
             }
