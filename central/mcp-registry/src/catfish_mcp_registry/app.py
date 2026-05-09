@@ -181,7 +181,13 @@ def main() -> None:
     import uvicorn
 
     host = os.environ.get("HOST", "127.0.0.1")
-    port = int(os.environ.get("PORT", "8997"))
+    # 端口约定 (5/9):
+    #   8998 catfish-identity     (OIDC + a2a registry)
+    #   8999 catfish-gateway      (LLM 主网关)
+    #   8997 catfish-skills-hub   (历史占)
+    #   8996 catfish-mcp-registry (本服务, 5/9 加, 避 skills-hub)
+    #   8995 catfish-secret-broker (BL-G6 Phase 2)
+    port = int(os.environ.get("PORT", "8996"))
     uvicorn.run(
         "catfish_mcp_registry.app:app",
         host=host,

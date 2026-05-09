@@ -111,7 +111,8 @@ export default function DashboardTab() {
         <CuratorCard />
         {/* BL-D3 (5/9): MCP 连接器仓库 Phase 1, 只读列表 (Jira/GitLab/FS/Time).
             Phase 2/3 接订阅 + OAuth + pod-per-user 拉起. 真接 mcp-registry
-            服务 (gateway 反向代理 /v1/mcp/registry → mcp-registry:8997). */}
+            服务 (gateway 反向代理 /v1/mcp/registry → mcp-registry:8996, 跟
+            skills-hub 8997 错开). */}
         <McpRegistryCard />
       </CollapsibleSection>
 

@@ -272,7 +272,8 @@ except Exception as e:
 
 # BL-D3 (5/9) Phase 1 收尾: mcp-registry 反向代理 router.
 # Companion 走单一 origin (gateway) 调 /v1/mcp/*, gateway 透传到 mcp-registry
-# 上游 (yaml mcp_registry.upstream_url, 默认 :8997). 注入 X-Catfish-User-Sub /
+# 上游 (yaml mcp_registry.upstream_url, 默认 :8996, 跟 skills-hub 8997 错开).
+# 注入 X-Catfish-User-Sub /
 # Dept / Role header 让上游做部门权限过滤. dept 由 gateway 从 JWT 抽出, 不让
 # Companion 自己改 (防绕权限).
 try:

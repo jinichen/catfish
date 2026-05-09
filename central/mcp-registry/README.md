@@ -9,7 +9,7 @@
 ## Phase 1 (5/9 ship) — 在做啥
 
 ```
-catfish-mcp-registry FastAPI 服务 (默认 :8997)
+catfish-mcp-registry FastAPI 服务 (默认 :8996)
   ├─ GET /health                  健康 + manifest 数
   ├─ GET /v1/mcp/registry         列连接器 (按 X-Catfish-User-Dept 部门过滤)
   └─ GET /v1/mcp/manifest/{id}    单连接器详情 (含 OAuth / mcp_command 内部字段)
@@ -32,14 +32,14 @@ cd central/mcp-registry
 python3.12 -m venv venv && source venv/bin/activate
 pip install -e .
 
-# 启服务 (默认 127.0.0.1:8997)
+# 启服务 (默认 127.0.0.1:8996)
 python -m catfish_mcp_registry.app
 
 # 验证
-curl http://127.0.0.1:8997/health
-curl http://127.0.0.1:8997/v1/mcp/registry            # 全员可见: filesystem + time
+curl http://127.0.0.1:8996/health
+curl http://127.0.0.1:8996/v1/mcp/registry            # 全员可见: filesystem + time
 curl -H "X-Catfish-User-Dept: engineering" \
-     http://127.0.0.1:8997/v1/mcp/registry            # 工程部门可见全 4 个
+     http://127.0.0.1:8996/v1/mcp/registry            # 工程部门可见全 4 个
 ```
 
 ## 测试
@@ -58,14 +58,14 @@ python -m pytest tests/ -v
 ```yaml
 # central/llm-gateway/config.yaml (新加)
 mcp_registry:
-  upstream_url: http://127.0.0.1:8997
+  upstream_url: http://127.0.0.1:8996
   prefix: /v1/mcp
 ```
 
 gateway 收到 `/v1/mcp/*` 请求 → 透传到 mcp-registry, 同时把员工的 `dept`
 从 JWT 抽出加到 `X-Catfish-User-Dept` header.
 
-(Phase 1 dev 也可直连 8997, McpRegistryCard 走 `config.gatewayUrl` 默认 8999, 还得在 gateway 加反代.)
+(Phase 1 dev 也可直连 8996, McpRegistryCard 走 `config.gatewayUrl` 默认 8999, 还得在 gateway 加反代.)
 
 ---
 

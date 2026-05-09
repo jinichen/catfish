@@ -148,15 +148,16 @@ class McpRegistryConfig(BaseModel):
     并把员工的 dept (从 JWT 抽出) 加到 X-Catfish-User-Dept header,
     让 mcp-registry 做部门权限过滤.
 
-    上游 mcp-registry 服务默认跑在 :8997, dev/prod 通过 yaml 配:
+    上游 mcp-registry 服务默认跑在 :8996 (跟 skills-hub 8997 错开), dev/prod
+    通过 yaml 配:
 
         mcp_registry:
-          upstream_url: http://127.0.0.1:8997
+          upstream_url: http://127.0.0.1:8996
           enabled: true
           timeout: 10
     """
 
-    upstream_url: str = "http://127.0.0.1:8997"
+    upstream_url: str = "http://127.0.0.1:8996"
     enabled: bool = True
     timeout: int = 10  # 秒, registry 操作都很快, 10s 够
 
