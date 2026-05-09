@@ -84,19 +84,101 @@ export default function LearningCard() {
               value={formatTokens(stats.totalTokensToday)}
             />
             <Stat
-              label="新增 skill"
+              label="今日 ship skill"
               value={stats.newSkillsCount.toString()}
               highlight={stats.newSkillsCount > 0}
             />
           </div>
 
+          {/* BL-MM9-followup (5/9): proposed skills 跟 newSkills 区分.
+              鸿波 5/9: '今天不是有新增 SKILL 吗? 为什么记录没有?' — 真情况
+              是 LLM 嘴说要做但没真调 propose_skill tool (plan-only),
+              所以 newSkills 跟 proposedSkillsToday 都 0. 区分:
+                newSkills > 0          → 真 ship (有 SKILL.md 文件)
+                proposedSkillsToday>0  → LLM 真调 propose 写 jsonl, 等 accept
+                两者都 0 但 LLM 说 "已保存" → plan-only, BL-FIX23 L5 该兜
+          */}
+          {stats.proposedSkillsTodayCount > 0 && (
+            <div
+              style={{
+                marginBottom: "var(--space-3)",
+                padding: "8px 12px",
+                background: "var(--catfish-bg)",
+                border: "1px dashed var(--catfish-cyan)",
+                borderRadius: 6,
+                fontSize: 12,
+              }}
+            >
+              <div style={{ marginBottom: 6, color: "var(--catfish-cyan)", fontWeight: 600 }}>
+                💡 今天 {agentName}提议的 skill ({stats.proposedSkillsTodayCount}, 等你确认)
+              </div>
+              <ul style={{ ...listStyle, marginTop: 4 }}>
+                {stats.proposedSkillsToday.map((p) => (
+                  <li
+                    key={p.fullName}
+                    style={{
+                      display: "flex",
+                      gap: "var(--space-2)",
+                      padding: "2px 0",
+                      fontSize: 11,
+                      alignItems: "center",
+                    }}
+                  >
+                    <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>
+                      {p.fullName}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: 10,
+                        padding: "1px 6px",
+                        background:
+                          p.status === "accepted"
+                            ? "var(--catfish-cyan)"
+                            : p.status === "rejected"
+                              ? "var(--catfish-text-muted)"
+                              : "transparent",
+                        border:
+                          p.status === "proposed"
+                            ? "1px solid var(--catfish-text-muted)"
+                            : "none",
+                        color:
+                          p.status === "accepted"
+                            ? "var(--catfish-bg)"
+                            : "var(--catfish-text-muted)",
+                        borderRadius: 3,
+                      }}
+                    >
+                      {p.status === "proposed"
+                        ? "待确认"
+                        : p.status === "accepted"
+                          ? "已采纳"
+                          : "已拒绝"}
+                    </span>
+                    <span
+                      style={{
+                        color: "var(--catfish-text-muted)",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        flex: 1,
+                      }}
+                      title={p.description}
+                    >
+                      {p.description}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           {/* 软技能维度 (#46) */}
           <SoftSkillSection stats={stats} />
 
-          {/* 今天新增的 skill */}
+          {/* 今天真 ship 的 skill */}
           {stats.newSkills.length > 0 && (
             <Section
-              title={`今天新增 / 修改的 skill (${stats.newSkills.length})`}
+              title={`今天真 ship skill (${stats.newSkills.length}, 已写 SKILL.md)`}
             >
               <ul style={listStyle}>
                 {stats.newSkills.map((s) => (

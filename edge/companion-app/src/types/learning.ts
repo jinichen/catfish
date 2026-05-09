@@ -13,11 +13,29 @@ export interface NewSkill {
   modifiedAt: string;
 }
 
+/** BL-MM9 propose_skill 提议 (jsonl event log → 一条).
+ *
+ * 跟 NewSkill 区分: NewSkill 是真 ship 文件 (~/.hermes/skills/), ProposedSkill
+ * 是 LLM 调 propose_skill tool 写到 ~/.catfish/skill_proposals.jsonl 等员工 accept.
+ * 鸿波 5/9 反馈 '今天不是有新增 SKILL 吗?' — 真情况经常是 LLM 嘴说没真调 tool
+ * (plan-only). UI 区分这三层.
+ */
+export interface ProposedSkill {
+  fullName: string;
+  description: string;
+  proposedAt: string;
+  /** "proposed" / "accepted" / "rejected" */
+  status: string;
+}
+
 export interface TodayLearningStats {
   memories: MemoryFile[];
   memoriesUpdatedToday: number;
   newSkills: NewSkill[];
   newSkillsCount: number;
+  /** BL-MM9-followup (5/9): 今天 LLM propose_skill 写到 jsonl 的 (未 ship) */
+  proposedSkillsToday: ProposedSkill[];
+  proposedSkillsTodayCount: number;
   sessionsToday: number;
   toolCallsToday: number;
   totalTokensToday: number;

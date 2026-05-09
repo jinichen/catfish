@@ -44,6 +44,22 @@ pub struct NewSkill {
     pub modified_at: String,
 }
 
+/// LLM propose_skill 提议的 skill (jsonl event log 一行 → 一个 ProposedSkill).
+///
+/// 跟 NewSkill 字段重叠但语义不同 — proposed 没真创建文件, 等员工 accept.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposedSkill {
+    /// e.g. "personal/qualification-briefing"
+    pub full_name: String,
+    /// LLM 说的 description (员工还没审, 可能不准)
+    pub description: String,
+    /// 提议时间 ISO
+    pub proposed_at: String,
+    /// 状态: proposed / accepted / rejected (后续事件追加在 jsonl)
+    pub status: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TodayLearningStats {
@@ -51,9 +67,20 @@ pub struct TodayLearningStats {
     pub memories: Vec<MemoryFile>,
     pub memories_updated_today: u32,
 
-    /// 今天新增 / 修改的 skill (按 mtime)
+    /// 今天新增 / 修改的 skill (按 mtime, ~/.hermes/skills/ 真 ship 文件)
     pub new_skills: Vec<NewSkill>,
     pub new_skills_count: u32,
+
+    /// 今天 LLM 提议但还未 ship 的 skill (BL-MM9 propose_skill, 写
+    /// ~/.catfish/skill_proposals.jsonl, 等员工 accept).
+    /// 跟 new_skills 区分 — proposed 是 LLM 想做的 + 员工还没确认.
+    /// 鸿波 5/9 反馈 '今天不是有新增 SKILL 吗?' — 真情况是 LLM 嘴说要做但
+    /// 没真调 propose_skill tool, 也没创建文件. 这字段帮员工区分:
+    ///   new_skills_count > 0 → 真 ship
+    ///   proposed_skills_today_count > 0 → LLM 调了 propose 等你 accept
+    ///   都 0 → 鲶鱼 plan-only 嘴说 (BL-FIX23 L5 该兜场景)
+    pub proposed_skills_today: Vec<ProposedSkill>,
+    pub proposed_skills_today_count: u32,
 
     /// 今天启动的会话数 (跨 cli + companion)
     pub sessions_today: u32,
@@ -242,6 +269,95 @@ fn collect_new_skills(home: &PathBuf) -> Vec<NewSkill> {
         }
     }
     out.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
+    out
+}
+
+/// 扫 ~/.catfish/skill_proposals.jsonl, 拿今天 propose 事件 (BL-MM9).
+///
+/// jsonl 每行 = 一条事件:
+///   {event_type: "propose", skill_namespace, skill_name, description, ts}
+///   {event_type: "accept" | "reject", skill_namespace, skill_name, ts}
+///
+/// 同 (ns, name) 多次事件: 取最新 status (proposed/accepted/rejected). 只
+/// 显示 ts 是今天的 propose (跟 new_skills 今天 mtime 同语义).
+///
+/// 鸿波 5/9 5次诊断推动后加 — 让员工区分 "真 ship skill" vs "LLM 提议未 ship"
+/// vs "鲶鱼嘴说没真调 propose (plan-only)". 三种情况分别对应:
+///   new_skills > 0           → 真 ship
+///   proposed_skills_today > 0 → LLM 真调 propose 写了 jsonl, 等员工 accept
+///   两者都 0 但 LLM 说 '已保存' → plan-only, BL-FIX23 L5 该兜
+fn collect_proposed_skills_today(home: &PathBuf) -> Vec<ProposedSkill> {
+    let path = home.join(".catfish").join("skill_proposals.jsonl");
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    use std::collections::HashMap;
+    // (ns, name) → (status, last_event_ts, description, propose_ts)
+    let mut latest: HashMap<String, ProposedSkill> = HashMap::new();
+    let today_start = today_start_unix();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let event_type = json
+            .get("event_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let ns = json
+            .get("skill_namespace")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let name = json
+            .get("skill_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if ns.is_empty() || name.is_empty() {
+            continue;
+        }
+        let ts = json.get("ts").and_then(|v| v.as_str()).unwrap_or("");
+        let key = format!("{ns}/{name}");
+
+        if event_type == "propose" {
+            // 用 chrono parse iso8601 → unix; 解析失败保险跳过
+            let propose_unix = chrono::DateTime::parse_from_rfc3339(ts)
+                .map(|d| d.timestamp() as f64)
+                .unwrap_or(0.0);
+            // 只算今天 propose 的, 跟 new_skills 今天 mtime 一致
+            if propose_unix < today_start {
+                continue;
+            }
+            let description = json
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(无 description)")
+                .to_string();
+            latest.insert(
+                key,
+                ProposedSkill {
+                    full_name: format!("{ns}/{name}"),
+                    description,
+                    proposed_at: ts.to_string(),
+                    status: "proposed".to_string(),
+                },
+            );
+        } else if event_type == "accept" || event_type == "reject" {
+            // 已存在的 propose 加状态. 否则跳过 (accept 之前必先 propose, 数据
+            // 不完整就忽略).
+            if let Some(p) = latest.get_mut(&key) {
+                p.status = if event_type == "accept" {
+                    "accepted".to_string()
+                } else {
+                    "rejected".to_string()
+                };
+            }
+        }
+    }
+    let mut out: Vec<ProposedSkill> = latest.into_values().collect();
+    out.sort_by(|a, b| b.proposed_at.cmp(&a.proposed_at));
     out
 }
 
@@ -673,6 +789,11 @@ pub async fn learning_today_stats() -> Result<TodayLearningStats, String> {
         let new_skills = collect_new_skills(&home);
         let new_skills_count = new_skills.len() as u32;
 
+        // BL-MM9-followup (5/9): 扫 propose_skill jsonl, 区分 'LLM 真调
+        // propose tool 写了 jsonl 等员工 accept' vs 'LLM plan-only 嘴说没真做'
+        let proposed_skills_today = collect_proposed_skills_today(&home);
+        let proposed_skills_today_count = proposed_skills_today.len() as u32;
+
         let (sessions_today, tool_calls_today, total_tokens_today) =
             collect_db_stats(&home);
 
@@ -692,6 +813,8 @@ pub async fn learning_today_stats() -> Result<TodayLearningStats, String> {
             memories_updated_today,
             new_skills,
             new_skills_count,
+            proposed_skills_today,
+            proposed_skills_today_count,
             sessions_today,
             tool_calls_today,
             total_tokens_today,
