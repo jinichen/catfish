@@ -439,10 +439,85 @@ async def oauth_callback(
     if use_mock:
         access_token = body.mock_token or f"mock-token-{secrets.token_hex(8)}"
     else:
-        # Phase 2.1 真 token exchange (后续做):
-        # async with httpx.AsyncClient() as client:
-        #     r = await client.post(manifest.oauth.token_url, data={...code...})
-        access_token = body.code  # 占位
+        # Phase 2.1 (5/9): 真 OAuth2 token exchange. 调 manifest.oauth.token_url
+        # 用 authorization_code grant 换 access_token. client_id/secret 从 env
+        # 读 (跟 manifest.oauth.required_env 对齐).
+        manifest = _registry(request).get(sub["connector_id"])
+        if manifest is None or manifest.oauth is None:
+            raise HTTPException(
+                status_code=500,
+                detail="connector OAuth 配置丢了 (subscribe 时还在, callback 时没了?)",
+            )
+        client_id_env = next(
+            (k for k in manifest.oauth.required_env if "CLIENT_ID" in k.upper()), None,
+        )
+        client_secret_env = next(
+            (k for k in manifest.oauth.required_env if "CLIENT_SECRET" in k.upper()), None,
+        )
+        client_id = os.environ.get(client_id_env or "", "")
+        client_secret = os.environ.get(client_secret_env or "", "")
+        if not client_id or not client_secret:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"真 OAuth 模式需 env {client_id_env} + {client_secret_env}, "
+                    f"未配置. 改回 mock 或补 env."
+                ),
+            )
+        redirect_uri = os.environ.get(
+            "CATFISH_MCP_OAUTH_REDIRECT_URI",
+            "http://127.0.0.1:8996/v1/mcp/oauth/mock-callback",
+        )
+        try:
+            async with httpx.AsyncClient(timeout=15) as oauth_client:
+                token_resp = await oauth_client.post(
+                    manifest.oauth.token_url,
+                    data={
+                        "grant_type": "authorization_code",
+                        "code": body.code,
+                        "client_id": client_id,
+                        "client_secret": client_secret,
+                        "redirect_uri": redirect_uri,
+                    },
+                    headers={
+                        "Accept": "application/json",
+                        "Content-Type": "application/x-www-form-urlencoded",
+                    },
+                )
+        except httpx.RequestError as e:
+            db.write_audit(
+                user_sub=user_sub,
+                connector_id=sub["connector_id"],
+                action="oauth_failed",
+                meta={"reason": "token_endpoint_unreachable", "error": str(e)},
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=f"OAuth token endpoint 不可达 ({manifest.oauth.token_url}): {e}",
+            ) from e
+        if token_resp.status_code != 200:
+            db.write_audit(
+                user_sub=user_sub,
+                connector_id=sub["connector_id"],
+                action="oauth_failed",
+                meta={
+                    "reason": "token_exchange_failed",
+                    "status": token_resp.status_code,
+                    "body_preview": token_resp.text[:300],
+                },
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=f"token exchange 失败 {token_resp.status_code}: "
+                f"{token_resp.text[:200]}",
+            )
+        token_data = token_resp.json()
+        access_token = token_data.get("access_token")
+        if not access_token:
+            raise HTTPException(
+                status_code=502,
+                detail=f"token endpoint 返回无 access_token 字段: {token_data}",
+            )
 
     token_ref = f"{sub['connector_id']}-oauth-{user_sub.replace('@', '-at-')}"
     try:

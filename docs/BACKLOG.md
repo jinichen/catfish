@@ -134,8 +134,11 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 |---|---|---|---|
 | BL-D1 | Skills Hub 中央服务 — 员工贡献 skill 回中央, 类比 GitHub Marketplace | ⬜ | 3-4 周 |
 | BL-D2 | Secret Broker 中央服务 — 凭据中转, 让员工不暴露 token | ⬜ | 2-3 周 |
-| BL-D3 | **MCP Registry 中央服务** — 企业 MCP 连接器注册表 (员工订阅 / 管理员审批 / OAuth via Secret Broker / 部门权限 / pod-per-user 隔离). 第一批 4 个 (Jira / GitLab / Filesystem / Time, 社区现成 MCP server). spec 见 `docs/MCP-REGISTRY-DESIGN.md` | 🔵 5/15-29 (鸿波 5/9 拍板方案 B) | 2 周 (Phase 1 基础设施 1 周 + Phase 2 OAuth 0.5 周 + Phase 3 Agent 加载 0.5 周). 跟 BL-G6 Secret Broker 同期启动 |
-| BL-G6 | **Secret Broker** — KMS 加密的 token 存储中央服务. mac keychain dev / aws kms prod. GET /v1/secret/{ref} + POST. 给 BL-D3 提供 OAuth token 存储 | 🔵 5/15-21 (跟 BL-D3 同期) | 0.5 周, 见 BL-D3 spec |
+| BL-D3 Phase 1 | **MCP Registry 服务** — FastAPI :8996 + 4 manifest yaml (jira/gitlab/filesystem/time) + gateway 反代 /v1/mcp/* + Companion Dashboard 卡只读 + 部门权限过滤 | ✅ **5/9 ship** (鸿波 '现在就开始做不要拖') | 33 单测. 跳静态 MVP 直接 ship 真服务 |
+| BL-D3 Phase 2 | **订阅 + OAuth + secret-broker** — POST/DELETE/GET subscribe + OAuth start/callback (mock 模式 demo / real 模式 token exchange) + Companion 订阅按钮真接通 + ✓已订阅徽章. 数据库 PG 主存储 (跟 gateway/identity 同套, 鸿波 '为什么不统一 PG' 后改) + sqlite fallback + alembic migration | ✅ **5/9 ship** (鸿波 '剩下的一点做完') | 39 单测. 跟 BL-G6 secret-broker 同期 ship |
+| BL-D3 Phase 2.1 | **真 OAuth token exchange** — 框架已就位 (env CATFISH_MCP_OAUTH_MODE=real 启), 接 Atlassian/GitLab 真 client_id/secret 验证待 demo 后做 | 🔵 5/22+ | 代码已 ship, 缺真 OAuth app 注册 |
+| BL-D3 Phase 3 | **Agent 动态加载 + pod-per-user** — gateway 调 /v1/mcp/subscribed → 注入 LLM tool 列表 / docker pod-per-user 拉 mcp-server-* / tool call 路由到 pod | ⬜ 5/26-29 (demo 后) | 1-2 周, 真 demo "员工说看 Jira" 返真数据 |
+| BL-G6 | **Secret Broker** — keyring 后端 (mac Keychain / Win wincred / Linux libsecret) + 5 endpoint + 内存兜底. KMS / Vault prod 留后续. 给 BL-D3 Phase 2 提供 OAuth token 存储 | ✅ **5/9 ship** Phase 2 dev MVP | 16 单测. 端口 8995. prod KMS / Vault 升级留 5/22+ |
 | BL-D4 | 中央 Telemetry — 业务数据收集 (token / 延迟 metadata, **不含对话内容**) | 🔵 (部分) | gateway audit JSONL 已写, telemetry server 收集还没建 |
 | BL-D5 | catfish-distribution — SaaS 多租户分发管理 | ⬜ | 3-4 周 |
 
