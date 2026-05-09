@@ -105,32 +105,47 @@ function ServiceRowItem({ row }: { row: ServiceRow }) {
   useServiceStatus(row.id);
   const status = useServicesStore((s) => s.statuses[row.id]);
   const dotKind = dotKindFor(status);
+  // BL-FIX18 (5/8): 不用 HTML title tooltip — native tooltip 浏览器自己定位
+  // (跟随鼠标), 不受卡片边界控制, 横穿到右边 '本月配额' 卡片. 改成 inline
+  // 副标题展示, 鸿波反馈"宽度出界了". 4 个服务垂直空间够, 不需要悬浮.
   return (
     <div
-      title={row.why}
       style={{
         display: "flex",
-        alignItems: "center",
-        gap: 10,
+        flexDirection: "column",
+        gap: 2,
         padding: "6px 0",
         borderBottom: "1px solid var(--catfish-border)",
       }}
     >
-      <StatusDot status={dotKind} />
-      <span style={{ flex: 1, fontSize: 13, fontWeight: 500 }}>{row.name}</span>
-      <span
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <StatusDot status={dotKind} />
+        <span style={{ flex: 1, fontSize: 13, fontWeight: 500 }}>{row.name}</span>
+        <span
+          style={{
+            fontSize: 11,
+            color: "var(--catfish-text-muted)",
+            fontFamily: "var(--font-mono)",
+            textOverflow: "ellipsis",
+            overflow: "hidden",
+            whiteSpace: "nowrap",
+            maxWidth: 200,
+          }}
+        >
+          {compactStatusText(status)}
+        </span>
+      </div>
+      {/* BL-FIX18: why 改 inline 副标题, 不再 native tooltip 出界 */}
+      <div
         style={{
-          fontSize: 11,
+          fontSize: 10,
           color: "var(--catfish-text-muted)",
-          fontFamily: "var(--font-mono)",
-          textOverflow: "ellipsis",
-          overflow: "hidden",
-          whiteSpace: "nowrap",
-          maxWidth: 200,
+          paddingLeft: 18, // 跟 StatusDot 宽 (8px) + gap (10px) 对齐
+          lineHeight: 1.4,
         }}
       >
-        {compactStatusText(status)}
-      </span>
+        {row.why}
+      </div>
     </div>
   );
 }
