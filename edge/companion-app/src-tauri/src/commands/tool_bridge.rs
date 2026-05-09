@@ -73,6 +73,27 @@ pub async fn tool_bridge_start() -> Result<(), String> {
     // 让 Python 能 import catfish_tool_bridge —— 通过 PYTHONPATH 指向 src/
     let pythonpath = dir.join("src").to_string_lossy().to_string();
 
+    // BL-D3 Phase 3.1 (5/9): 注入 MCP registry / Secret Broker / 员工身份 env,
+    // 让 tool-bridge 启动时能调 gateway /v1/mcp/subscribed 拉员工真订阅, 自动
+    // spawn jira/gitlab 等 mcp servers. 没登录 (没 token) 时 tool-bridge fallback
+    // 走硬编码 autostart (CATFISH_MCP_AUTOSTART='time').
+    let gateway_url = std::env::var("CATFISH_GATEWAY_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:8999".to_string());
+    let secret_broker_url = std::env::var("CATFISH_SECRET_BROKER_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:8995".to_string());
+    let mut env_pairs: Vec<(String, String)> = vec![
+        ("PYTHONPATH".into(), pythonpath),
+        ("CATFISH_MCP_REGISTRY_URL".into(), gateway_url.clone()),
+        ("CATFISH_SECRET_BROKER_URL".into(), secret_broker_url),
+    ];
+    // 员工身份 (登录后才有, 没登录时不传 → tool-bridge fallback 路径 2)
+    if let Some(token) = crate::services::oauth::current_access_token() {
+        env_pairs.push(("CATFISH_USER_JWT".into(), token));
+    }
+    if let Some(sub) = crate::services::oauth::current_user_sub() {
+        env_pairs.push(("CATFISH_USER_SUB".into(), sub));
+    }
+
     let cfg = process::SpawnConfig {
         program: python,
         args: vec![
@@ -83,7 +104,7 @@ pub async fn tool_bridge_start() -> Result<(), String> {
         ],
         log_path,
         working_dir: dir,
-        env: vec![("PYTHONPATH".into(), pythonpath)],
+        env: env_pairs,
     };
 
     let handle = process::spawn_detached(cfg).map_err(|e| format!("启动失败: {e}"))?;

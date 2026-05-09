@@ -348,6 +348,12 @@ pub fn current_access_token() -> Option<String> {
     load_from_keyring(KEYRING_USERNAME_ACCESS).ok().flatten()
 }
 
+/// BL-D3 Phase 3.1 (5/9): 拿当前员工 sub (email) — tool-bridge spawn 时注入,
+/// 用作 secret-broker rev key + audit. dev_token 时返 'dev-user@catfish.dev'.
+pub fn current_user_sub() -> Option<String> {
+    try_load_session().map(|s| s.email)
+}
+
 /// 登出: 清 Keychain. dev_token 模式下不动 env (那是员工 explicit 设的).
 pub fn logout() -> Result<()> {
     let _ = delete_from_keyring(KEYRING_USERNAME_ACCESS);

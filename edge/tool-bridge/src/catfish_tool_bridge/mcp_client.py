@@ -336,14 +336,35 @@ async def shutdown_all() -> None:
 
 
 async def autostart_default_servers() -> None:
-    """启动时自动接的 mcp servers (env CATFISH_MCP_AUTOSTART 控制).
+    """启动时自动接的 mcp servers (BL-D3 Phase 3.1, 5/9).
 
-    默认只启 time (轻量, 无 OAuth, 验 stack). 5/15+ 真接员工订阅:
-    调 gateway /v1/mcp/subscribed 拿列表, 按 manifest 启.
+    优先级:
+    1. **真接 mcp-registry 员工订阅** (生产路径, 推荐):
+       env CATFISH_MCP_REGISTRY_URL + CATFISH_USER_JWT 都设 →
+       调 gateway /v1/mcp/subscribed 拉员工 active 订阅 → 对每个调
+       /v1/mcp/manifest/{id} 拿 mcp_command + auth + 从 secret-broker
+       拉 OAuth token (oauth2 时) → spawn subprocess.
 
-    env CATFISH_MCP_AUTOSTART="time,filesystem" 显式控制.
-    env CATFISH_MCP_AUTOSTART="" 禁用 (保守 default 留给鸿波 5/14 demo 决定).
+    2. **硬编码 fallback** (dev 没配 registry 时):
+       CATFISH_MCP_AUTOSTART='time,filesystem' (默认 'time')
+       不接 registry, 直接 spawn 已知 connector.
+
+    3. **CATFISH_MCP_AUTOSTART=''** 完全禁用.
     """
+    # 路径 1: 真接 mcp-registry
+    registry_url = os.environ.get("CATFISH_MCP_REGISTRY_URL", "").strip()
+    user_jwt = os.environ.get("CATFISH_USER_JWT", "").strip()
+    if registry_url and user_jwt:
+        try:
+            await _autostart_from_registry(registry_url, user_jwt)
+            return
+        except Exception as e:
+            logger.warning(
+                "mcp 真接 registry 失败 (%s), fallback 到硬编码 autostart",
+                e,
+            )
+
+    # 路径 2: 硬编码 fallback (dev / Companion 没注入 env 时)
     autostart = os.environ.get("CATFISH_MCP_AUTOSTART", "time").strip()
     if not autostart:
         logger.info("mcp autostart 禁用 (CATFISH_MCP_AUTOSTART 为空)")
@@ -353,20 +374,194 @@ async def autostart_default_servers() -> None:
     for cid in connectors:
         cmd, env = _default_command_for(cid)
         if cmd is None:
-            logger.warning("mcp %s 没默认启动命令, 跳过. 5/15+ 接 mcp-registry 拉 manifest.", cid)
+            logger.warning(
+                "mcp %s 没默认启动命令, 跳过. 配 CATFISH_MCP_REGISTRY_URL "
+                "+ CATFISH_USER_JWT 走 registry 路径拉 manifest.",
+                cid,
+            )
             continue
         ok = await register_connector(cid, cmd, env)
         if ok:
-            logger.info("mcp autostart ok: %s", cid)
+            logger.info("mcp autostart ok: %s (硬编码 fallback)", cid)
+
+
+async def _autostart_from_registry(registry_url: str, user_jwt: str) -> None:
+    """真路径 (BL-D3 Phase 3.1, 5/9): 调 gateway /v1/mcp/subscribed 拿订阅 →
+    对每个调 /v1/mcp/manifest/{id} → 解 mcp_command + auth → spawn.
+
+    auth_type=oauth2 时调 secret-broker 拿 token 注入 env. token 没拿到
+    跳过该 connector (员工还没完成 OAuth flow).
+    """
+    import urllib.parse  # noqa: PLC0415
+    import urllib.request  # noqa: PLC0415
+
+    def http_get_json(path: str, timeout: float = 10) -> Any:
+        url = registry_url.rstrip("/") + path
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {user_jwt}",
+                "Accept": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    # 1. 拉员工 active 订阅
+    subs_resp = await asyncio.to_thread(
+        http_get_json, "/v1/mcp/subscribed?status_filter=active",
+    )
+    subs = subs_resp.get("subscriptions", [])
+    if not subs:
+        logger.info("mcp registry 拉订阅 ok, 但员工 0 个 active 订阅 — 跳 autostart")
+        return
+    logger.info(
+        "mcp 真接 registry: 员工 %d 个 active 订阅 (%s)",
+        len(subs),
+        ", ".join(s.get("connector_id", "?") for s in subs[:5]),
+    )
+
+    # 2. 对每个 subscription 拉 manifest + 启动
+    secret_broker_url = os.environ.get(
+        "CATFISH_SECRET_BROKER_URL", "http://127.0.0.1:8995",
+    )
+    user_sub = os.environ.get("CATFISH_USER_SUB", "")
+
+    for sub in subs:
+        cid = sub.get("connector_id", "")
+        if not cid:
+            continue
+        try:
+            manifest_resp = await asyncio.to_thread(
+                http_get_json, f"/v1/mcp/manifest/{cid}",
+            )
+            manifest = manifest_resp.get("manifest") or {}
+            await _spawn_from_manifest(
+                manifest,
+                user_sub=user_sub,
+                secret_broker_url=secret_broker_url,
+                token_ref=sub.get("oauth_token_ref"),
+            )
+        except Exception as e:
+            logger.warning(
+                "mcp connector %s 启动失败 (跳过, 不阻塞其他): %s", cid, e,
+            )
+
+
+async def _spawn_from_manifest(
+    manifest: dict,
+    *,
+    user_sub: str,
+    secret_broker_url: str,
+    token_ref: str | None,
+) -> None:
+    """从 manifest 解 mcp_command + 解 ${SECRET_REF:xxx} / ${ENV_VAR} 占位 + spawn."""
+    cid = manifest.get("id", "")
+    if not cid:
+        raise ValueError("manifest 缺 id")
+    mcp_cmd_obj = manifest.get("mcp_command") or {}
+    cmd_type = mcp_cmd_obj.get("type", "uvx")
+    package = mcp_cmd_obj.get("package", "")
+    args = mcp_cmd_obj.get("args") or []
+    env_template = mcp_cmd_obj.get("env") or {}
+
+    # 命令解析 — 现在只支持 uvx (5/14 demo 4 connector 都是 uvx).
+    # docker / npx 留 5/15+ Phase 3.2.
+    if cmd_type == "uvx":
+        uvx = shutil.which("uvx") or shutil.which("uv")
+        if not uvx:
+            logger.warning(
+                "mcp %s: uvx 未装, 跳过. 装: curl -LsSf https://astral.sh/uv/install.sh | sh",
+                cid,
+            )
+            return
+        command = [uvx, package, *args]
+    else:
+        logger.warning("mcp %s: 命令类型 %s 暂不支持 (只 uvx). Phase 3.2 加.", cid, cmd_type)
+        return
+
+    # 解 env — 替换 ${SECRET_REF:xxx} 跟 ${ENV_VAR}
+    resolved_env: dict[str, str] = {}
+    skip_due_to_missing_secret = False
+    for k, v in env_template.items():
+        if not isinstance(v, str):
+            resolved_env[k] = str(v)
+            continue
+        # ${SECRET_REF:jira-oauth} → 从 secret-broker 拉
+        if v.startswith("${SECRET_REF:") and v.endswith("}"):
+            ref_template = v[len("${SECRET_REF:"):-1]
+            # token_ref 优先 (subscription 里写好的真 ref), 否则用 manifest 模板
+            actual_ref = token_ref or f"{ref_template}-{user_sub.replace('@', '-at-')}"
+            secret_value = await _fetch_secret(
+                secret_broker_url, actual_ref, user_sub,
+            )
+            if secret_value is None:
+                logger.warning(
+                    "mcp %s: secret '%s' 没拿到 (员工还没完成 OAuth?), 跳过该 connector",
+                    cid, actual_ref,
+                )
+                skip_due_to_missing_secret = True
+                break
+            resolved_env[k] = secret_value
+        # ${ENV_VAR} → 从 process env 拉 (例 ${JIRA_URL})
+        elif v.startswith("${") and v.endswith("}"):
+            env_name = v[2:-1]
+            env_value = os.environ.get(env_name, "")
+            if not env_value:
+                logger.warning(
+                    "mcp %s: env %s 未设, 跳过该 connector",
+                    cid, env_name,
+                )
+                skip_due_to_missing_secret = True
+                break
+            resolved_env[k] = env_value
+        else:
+            resolved_env[k] = v
+
+    if skip_due_to_missing_secret:
+        return
+
+    ok = await register_connector(cid, command, resolved_env)
+    if ok:
+        logger.info("mcp registry-driven autostart ok: %s", cid)
+
+
+async def _fetch_secret(
+    broker_url: str, ref: str, user_sub: str,
+) -> str | None:
+    """同步调 secret-broker GET /v1/secret/{ref} 拿 value. 失败 / 404 返 None."""
+    import urllib.error  # noqa: PLC0415
+    import urllib.request  # noqa: PLC0415
+
+    def _do_get() -> str | None:
+        url = f"{broker_url.rstrip('/')}/v1/secret/{ref}"
+        req = urllib.request.Request(
+            url, headers={"X-Catfish-User-Sub": user_sub or "tool-bridge"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                return data.get("value")
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None
+            logger.warning("secret-broker get %s 错: %d %s", ref, e.code, e.reason)
+            return None
+        except Exception as e:
+            logger.warning("secret-broker 不可达 %s: %s", broker_url, e)
+            return None
+
+    return await asyncio.to_thread(_do_get)
 
 
 def _default_command_for(cid: str) -> tuple[list[str] | None, dict]:
-    """硬编码第一批 connector 启动命令 (5/14 demo 用). 5/15+ 改读 mcp-registry manifest."""
+    """硬编码第一批 connector 启动命令 (Phase 3 fallback). Phase 3.1 后优先走
+    _autostart_from_registry, 这里只在 dev / 没 JWT 时兜底."""
     uvx = shutil.which("uvx") or shutil.which("uv")
     if cid == "time":
         if uvx:
             return ([uvx, "mcp-server-time"], {})
-        return (None, {})  # 没 uvx, 跳过
+        return (None, {})
     if cid == "filesystem":
         if uvx:
             home = os.path.expanduser("~/.catfish/output")
