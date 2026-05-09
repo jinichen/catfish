@@ -134,7 +134,8 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 |---|---|---|---|
 | BL-D1 | Skills Hub 中央服务 — 员工贡献 skill 回中央, 类比 GitHub Marketplace | ⬜ | 3-4 周 |
 | BL-D2 | Secret Broker 中央服务 — 凭据中转, 让员工不暴露 token | ⬜ | 2-3 周 |
-| BL-D3 | MCP Registry 中央服务 — 内部 MCP server 注册中心 | ⬜ | 2-3 周 |
+| BL-D3 | **MCP Registry 中央服务** — 企业 MCP 连接器注册表 (员工订阅 / 管理员审批 / OAuth via Secret Broker / 部门权限 / pod-per-user 隔离). 第一批 4 个 (Jira / GitLab / Filesystem / Time, 社区现成 MCP server). spec 见 `docs/MCP-REGISTRY-DESIGN.md` | 🔵 5/15-29 (鸿波 5/9 拍板方案 B) | 2 周 (Phase 1 基础设施 1 周 + Phase 2 OAuth 0.5 周 + Phase 3 Agent 加载 0.5 周). 跟 BL-G6 Secret Broker 同期启动 |
+| BL-G6 | **Secret Broker** — KMS 加密的 token 存储中央服务. mac keychain dev / aws kms prod. GET /v1/secret/{ref} + POST. 给 BL-D3 提供 OAuth token 存储 | 🔵 5/15-21 (跟 BL-D3 同期) | 0.5 周, 见 BL-D3 spec |
 | BL-D4 | 中央 Telemetry — 业务数据收集 (token / 延迟 metadata, **不含对话内容**) | 🔵 (部分) | gateway audit JSONL 已写, telemetry server 收集还没建 |
 | BL-D5 | catfish-distribution — SaaS 多租户分发管理 | ⬜ | 3-4 周 |
 

@@ -499,8 +499,8 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 #### #19 中央服务 stub (5 个未实现) [Phase 2, 0%]
 > README 写了定位 + P0/P1, 全无代码.
 - ⬜ central/distribution · 安装包托管 + 签名 · 1-2 周
-- ⬜ central/mcp-registry · 企业 MCP 连接器仓库 · 2-3 周
-- ⬜ central/secret-broker · 凭据短期令牌化 (员工不持长期 key) · 2-3 周
+- 🔵 central/mcp-registry · 企业 MCP 连接器仓库 · **5/15-29 (鸿波 5/9 拍板方案 B, 跳静态 MVP 直接做完整版)**. spec `docs/MCP-REGISTRY-DESIGN.md`. Phase 1 registry 服务 + Dashboard 卡 (1 周) → Phase 2 OAuth + Secret Broker 集成 (0.5 周) → Phase 3 Agent 动态加载 + pod-per-user (0.5 周). 第一批 4 连接器 (Jira / GitLab / Filesystem / Time, 社区现成 MCP server). 飞书 / 钉钉 / Confluence 排 6 月.
+- 🔵 central/secret-broker · 凭据短期令牌化 (员工不持长期 key) · **5/15-21 (跟 mcp-registry 同期启)**. KMS 加密 (mac keychain dev / aws kms prod). 给 mcp-registry OAuth token 存储用.
 - ⬜ central/telemetry · 匿名遥测聚合 · 1 周
 - ⬜ central/skills-hub · 见 #11 (跟它合并)
 - **优先级**: secret-broker 是 SOE 客户合规硬要求, 应该先做
