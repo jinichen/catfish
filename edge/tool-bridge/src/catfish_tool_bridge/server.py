@@ -168,13 +168,31 @@ async def serve_forever(socket_path: Path) -> None:
         endpoint_desc = str(socket_path)
         logger.info("listening on %s", socket_path)
 
+    # BL-D3 Phase 3 (5/9): MCP server autostart. 启动时 spawn 配置好的 mcp
+    # servers (默认 time, 可 env CATFISH_MCP_AUTOSTART 改). 失败不阻塞 daemon
+    # 启动 — mcp 不可用时 catfish 原生 + hermes 工具仍正常用.
+    from . import mcp_client  # noqa: PLC0415  延迟 import 避免循环
+    try:
+        await mcp_client.autostart_default_servers()
+    except Exception as e:
+        logger.warning("mcp autostart 整体失败 (不阻塞 daemon 启动): %s", e)
+
     hermes_count = len(adapter._r().get_all_tool_names())
     native_count = len(catfish_tools.CATFISH_NATIVE_TOOLS)
+    mcp_tool_count = sum(
+        len(c.tools) for c in mcp_client._CLIENTS.values()
+    )
+    mcp_server_count = len(mcp_client._CLIENTS)
     print("─" * 60, flush=True)
     print("🐟 catfish-tool-bridge", flush=True)
     print(f"   endpoint: {endpoint_desc}", flush=True)
-    print(f"   tools  : {hermes_count + native_count} 个 "
-          f"(hermes {hermes_count} + catfish 原生 {native_count})", flush=True)
+    print(
+        f"   tools  : {hermes_count + native_count + mcp_tool_count} 个 "
+        f"(hermes {hermes_count} + catfish 原生 {native_count}"
+        + (f" + mcp {mcp_tool_count} from {mcp_server_count} servers" if mcp_tool_count else "")
+        + ")",
+        flush=True,
+    )
     print("─" * 60, flush=True)
 
     # 起 watcher daemons: 监控关键文件变化 → graceful 重启
@@ -182,8 +200,15 @@ async def serve_forever(socket_path: Path) -> None:
     skill_watcher.start()    # 监 ~/.hermes/skills/  → 加载新 skill
     config_watcher.start()   # 监 ~/.hermes/config.yaml → 拿新 cdp_url / model 配置
 
-    async with server:
-        await server.serve_forever()
+    try:
+        async with server:
+            await server.serve_forever()
+    finally:
+        # 优雅关闭 mcp servers (subprocess 资源)
+        try:
+            await mcp_client.shutdown_all()
+        except Exception:
+            logger.exception("mcp shutdown_all 失败 (best-effort)")
 
 
 def init_and_serve(socket_path: Path) -> None:

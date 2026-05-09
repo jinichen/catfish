@@ -255,10 +255,18 @@ def list_tools() -> List[Dict[str, Any]]:
     """返回 OpenAI tool calling 兼容的 tool definitions。
 
     输出顺序: catfish 原生 tools 排前面 (优先曝光给 LLM, prompt 里它们更早被
-    扫到), 然后是 hermes 的 builtin tools 按字母序。
+    扫到), 然后 mcp servers 已注册的 tools (BL-D3 Phase 3, 5/9), 最后是
+    hermes 的 builtin tools 按字母序。
     """
     r = _r()
     out: List[Dict[str, Any]] = list(catfish_tools.CATFISH_NATIVE_TOOLS)
+
+    # BL-D3 Phase 3 (5/9): 加 MCP server 暴露的 tools (subprocess 启动的).
+    # 名带 mcp_<connector>_ 前缀, dispatch_tool 自动路由到 mcp_client.
+    from . import mcp_client  # noqa: PLC0415  延迟 import
+    mcp_tools = mcp_client.list_all_tools_as_native_schema()
+    if mcp_tools:
+        out.extend(mcp_tools)
 
     names = sorted(r.get_all_tool_names())
     for name in names:
@@ -571,6 +579,22 @@ async def _do_dispatch(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             return {"ok": True, "tool": name, "result": raw, "error": None}
         except Exception as e:
             logger.exception("native dispatch failed: %s", name)
+            return {
+                "ok": False, "tool": name, "result": None,
+                "error": f"{type(e).__name__}: {e}",
+                "traceback": traceback.format_exc()[:2000],
+            }
+
+    # BL-D3 Phase 3 (5/9): MCP server tools — 名以 mcp_<connector>_ 开头.
+    # tool-bridge 启动时 spawn 的 mcp server (subprocess + stdio JSON-RPC),
+    # 透传 tools/call 拿结果.
+    from . import mcp_client  # noqa: PLC0415  延迟 import 防循环
+    if mcp_client.is_mcp_tool(name):
+        try:
+            raw = await mcp_client.dispatch_mcp_tool(name, args)
+            return {"ok": True, "tool": name, "result": raw, "error": None}
+        except Exception as e:
+            logger.exception("mcp dispatch failed: %s", name)
             return {
                 "ok": False, "tool": name, "result": None,
                 "error": f"{type(e).__name__}: {e}",
