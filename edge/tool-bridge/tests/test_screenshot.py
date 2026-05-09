@@ -1543,3 +1543,163 @@ def test_run_with_hard_timeout_actually_returns_quickly() -> None:
     assert "硬超时" in result["error"]
     # cleanup
     stop_event.set()
+
+
+# ============================================================
+# BL-FIX16 (5/8) — catfish_browser_find_by_text 文字直接定位元素
+# ============================================================
+#
+# 现网坑 (鸿波 5/8 晚): CAS 登录页登录按钮不是标准 <button>, snapshot DOM evaluate
+# 拿不到, LLM 找不到 → 卡死. 这条工具按文字找, 不挑 tag.
+
+
+def test_find_by_text_in_native_tools() -> None:
+    """catfish_browser_find_by_text 必须在 CATFISH_NATIVE_TOOLS"""
+    names = [t["name"] for t in catfish_tools.CATFISH_NATIVE_TOOLS]
+    assert "catfish_browser_find_by_text" in names
+
+
+def test_find_by_text_required_field() -> None:
+    """text 字段必填"""
+    tool = next(
+        t for t in catfish_tools.CATFISH_NATIVE_TOOLS
+        if t["name"] == "catfish_browser_find_by_text"
+    )
+    assert "text" in tool["input_schema"]["required"]
+
+
+def test_find_by_text_empty_text_returns_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """text 空 → error"""
+    page = _FakePage()
+    _patch_connect(monkeypatch, page)
+    result = catfish_tools.browser_find_by_text({"text": ""})
+    assert result["type"] == "error"
+    assert "text" in result["error"]
+
+
+def test_find_by_text_finds_login_button(monkeypatch: pytest.MonkeyPatch) -> None:
+    """JS evaluate 返候选列表 — 按 score 倒序"""
+    fake_results = [
+        {
+            "selector_hint": "a.login-btn",
+            "tag_name": "a",
+            "text": "登录",
+            "x": 100,
+            "y": 200,
+            "width": 80,
+            "height": 30,
+            "score": 20,
+        },
+        {
+            "selector_hint": "div.login-link",
+            "tag_name": "div",
+            "text": "用户登录",
+            "x": 50,
+            "y": 100,
+            "width": 100,
+            "height": 25,
+            "score": 5,
+        },
+    ]
+    page = _FakePage(evaluate_return=fake_results)
+    _patch_connect(monkeypatch, page)
+
+    result = catfish_tools.browser_find_by_text({"text": "登录"})
+    assert result["type"] == "ok"
+    assert result["element_count"] == 2
+    assert result["search_text"] == "登录"
+    assert result["exact"] is False
+    # 第 1 个候选拿 selector_hint
+    assert result["elements"][0]["selector_hint"] == "a.login-btn"
+    assert result["elements"][0]["tag_name"] == "a"
+    # summary 含 selector
+    assert "a.login-btn" in result["summary"]
+
+
+def test_find_by_text_no_match_returns_friendly_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """没找到候选 → element_count=0 + 友好提示, 不报错"""
+    page = _FakePage(evaluate_return=[])
+    _patch_connect(monkeypatch, page)
+
+    result = catfish_tools.browser_find_by_text({"text": "登录"})
+    assert result["type"] == "ok"
+    assert result["element_count"] == 0
+    # summary 含 '没找到' + 引导改用 screenshot
+    assert "没找到" in result["summary"]
+    assert "screenshot" in result["summary"]
+
+
+def test_find_by_text_evaluate_raises_returns_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """page.evaluate 抛 → friendly error, 不抛异常"""
+    page = _FakePage(evaluate_raise=RuntimeError("evaluate boom"))
+    _patch_connect(monkeypatch, page)
+
+    result = catfish_tools.browser_find_by_text({"text": "登录"})
+    assert result["type"] == "error"
+    assert "evaluate boom" in result["error"]
+
+
+def test_find_by_text_exact_param_passed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """exact 参数传给 page.evaluate, 默认 false"""
+    captured_args: list = []
+
+    class _CapturingPage(_FakePage):
+        def evaluate(self, _js: str, *args: Any) -> Any:
+            captured_args.extend(args)
+            return []
+
+    _patch_connect(monkeypatch, _CapturingPage())
+
+    result = catfish_tools.browser_find_by_text({"text": "登录", "exact": True})
+    assert result["type"] == "ok"
+    # 第 1 个 args 是 params dict
+    assert captured_args[0]["text"] == "登录"
+    assert captured_args[0]["exact"] is True
+
+
+def test_find_by_text_max_results_clamped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """max_results clamp 到 [1, 20]"""
+    captured: list = []
+
+    class _CapPage(_FakePage):
+        def evaluate(self, _js: str, *args: Any) -> Any:
+            captured.append(args[0])
+            return []
+
+    _patch_connect(monkeypatch, _CapPage())
+    catfish_tools.browser_find_by_text({"text": "x", "max_results": 100})
+    assert captured[0]["maxCount"] == 20  # clamp 到 20
+
+    # max_results=-1 走 max(1, ...) clamp (0 走 'or 5' 默认 fallback, 不算 clamp 边界)
+    catfish_tools.browser_find_by_text({"text": "x", "max_results": -1})
+    assert captured[1]["maxCount"] == 1  # clamp 到 1
+
+
+def test_dispatch_routes_find_by_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    """dispatch_native('catfish_browser_find_by_text', ...) → browser_find_by_text"""
+    page = _FakePage(evaluate_return=[])
+    _patch_connect(monkeypatch, page)
+
+    result = catfish_tools.dispatch_native(
+        "catfish_browser_find_by_text", {"text": "test"}
+    )
+    assert result["type"] == "ok"
+
+
+def test_find_by_text_routes_through_hard_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """browser_find_by_text 也走 BL-FIX10 wrapper"""
+    called = {"impl": False}
+
+    def fake_impl(_args: Any) -> Dict[str, Any]:
+        called["impl"] = True
+        return {"type": "ok", "element_count": 0, "elements": []}
+
+    monkeypatch.setattr(catfish_tools, "_browser_find_by_text_impl", fake_impl)
+    catfish_tools.browser_find_by_text({"text": "test"})
+    assert called["impl"] is True

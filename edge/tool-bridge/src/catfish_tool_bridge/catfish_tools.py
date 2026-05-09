@@ -506,6 +506,57 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "available": True,
     },
     {
+        "name": "catfish_browser_find_by_text",
+        "description": (
+            "**按文字直接找元素**, 走 Playwright `page.get_by_text()` / locator + 兜底.\n\n"
+            "**为啥要这条**: snapshot 查得到 `<button>登录</button>` 这种标准元素, "
+            "但 CAS / 央企老页面常用**非标准**按钮 (`<a class=\"login-btn\">登录</a>` / "
+            "`<div onclick>登录</div>` / `<input type=\"image\">`), DOM evaluate / accessibility "
+            "tree 都拿不到 — 但**用户眼里就是个登录按钮**, 文字是 '登录'. 这条工具直接按文字 "
+            "找, 不挑元素 tag.\n\n"
+            "✅ 调用场景:\n"
+            "  - snapshot 里没看到登录按钮但你确定页面上有 (按文字 '登录' 找)\n"
+            "  - 客户内网系统的图标按钮没 alt 文字, 但有相邻文字标签 (按文字 '提交' / '保存' 找)\n"
+            "  - 员工说 '点那个写着 X 的'\n\n"
+            "**返**: 找到 N 个候选 element, 每个含 selector_hint (Playwright 选择器) + "
+            "tag_name + bounding box. LLM 拿第 1 个 selector_hint 直接 catfish_browser_click "
+            "传进去就行.\n\n"
+            "**找不到** 时 (返 element_count=0) 别再硬找, 直接告诉员工 '页面上没有写 X 的元素', "
+            "或者改用 catfish_browser_screenshot(full_page=false) 让员工看一眼.\n\n"
+            "**注**: 文字必须**完全 / 部分 匹配元素的 visible text** (含 input value / "
+            "aria-label / placeholder). 'login' 找不到 '登录' (不同字符), 文字给中文就用中文."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": (
+                        "要找的元素文字 (中文 / 英文 / 数字都行). 例: '登录' / '提交' / "
+                        "'下一步' / 'Submit'."
+                    ),
+                },
+                "exact": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "true=完全匹配 (text='登录' 不匹配 '登录用户'); "
+                        "false=部分匹配 (默认, 更宽松). 优先 false."
+                    ),
+                },
+                "max_results": {
+                    "type": "integer",
+                    "default": 5,
+                    "description": "最多返回多少候选, 默认 5. 同名按钮多 (例'提交') 加大",
+                },
+            },
+            "required": ["text"],
+        },
+        "emoji": "🔎",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
         "name": "catfish_skill_backup",
         "description": (
             "更新 / 删除一个 skill 之前**必须**调这个 tool 做 backup. "
@@ -2381,6 +2432,191 @@ def _browser_screenshot_impl(args: Dict[str, Any]) -> Dict[str, Any]:
             }
     except Exception as e:
         return {"type": "error", "error": f"playwright browser_screenshot 异常: {type(e).__name__}: {e}"}
+
+
+# ============================================================
+# BL-FIX16 (5/8) — catfish_browser_find_by_text: 文字直接定位元素
+# ============================================================
+#
+# CAS / 央企老页面常用非标准登录按钮 (`<a class="login-btn">登录</a>` / `<div onclick>` /
+# `<input type="image">`), snapshot 里 DOM evaluate / accessibility tree 都找不到.
+# 但**用户眼里就是个登录按钮**, 文字是 '登录'. 这条工具按文字找, 不挑 tag.
+#
+# 实现走 Playwright `page.get_by_text()` (内置部分匹配 + 优先 visible 元素), 失败
+# fallback page.evaluate JS 全 DOM 扫. 返多个候选 (selector_hint + tag + bbox), LLM
+# 拿第 1 个直接 click.
+
+def browser_find_by_text(args: Dict[str, Any]) -> Dict[str, Any]:
+    """硬 timeout 兜底 wrapper, 调 _impl. 防 Playwright 卡死锁住整个 daemon."""
+    return _run_with_hard_timeout(_browser_find_by_text_impl, args)
+
+
+_FIND_BY_TEXT_JS = r"""
+(params) => {
+    const wantedText = params.text;
+    const exact = !!params.exact;
+    const maxCount = params.maxCount || 5;
+
+    function visible(el) {
+        const rect = el.getBoundingClientRect();
+        if (rect.width < 1 || rect.height < 1) return false;
+        const cs = getComputedStyle(el);
+        return cs.display !== 'none' && cs.visibility !== 'hidden' && cs.opacity !== '0';
+    }
+    function elText(el) {
+        // 优先 innerText (visible only), fallback aria-label / placeholder / value
+        const t = (el.innerText || '').trim();
+        if (t) return t;
+        return (el.getAttribute('aria-label') ||
+                el.getAttribute('placeholder') ||
+                el.getAttribute('value') ||
+                el.getAttribute('title') ||
+                el.getAttribute('alt') ||
+                '').trim();
+    }
+    function selectorHint(el) {
+        if (el.id) return '#' + el.id;
+        const nm = el.getAttribute('name');
+        if (nm) return el.tagName.toLowerCase() + '[name="' + nm + '"]';
+        // BL-FIX16: 加 text/role 兜底, Playwright selector 兼容
+        const txt = (el.innerText || '').trim().slice(0, 30);
+        if (txt) return 'text=' + JSON.stringify(txt);
+        const cls = (el.className || '').toString().split(/\s+/).filter(Boolean).slice(0, 2).join('.');
+        if (cls) return el.tagName.toLowerCase() + '.' + cls;
+        return el.tagName.toLowerCase();
+    }
+    function isCandidateTag(el) {
+        // 比 snapshot 更宽 — 把所有可点击候选都收: button / a / input / div[onclick] /
+        // [role=button] / [class*=btn] / [class*=button] / img[onclick]
+        const tag = el.tagName.toUpperCase();
+        if (['BUTTON', 'A', 'INPUT', 'TEXTAREA'].includes(tag)) return true;
+        if (el.hasAttribute('onclick')) return true;
+        if (el.getAttribute('role') === 'button' || el.getAttribute('role') === 'link') return true;
+        const cls = (el.className || '').toString().toLowerCase();
+        if (cls.includes('btn') || cls.includes('button') || cls.includes('login')) return true;
+        if (tag === 'IMG' && el.hasAttribute('onclick')) return true;
+        return false;
+    }
+
+    // 扫所有 element (限制深度防爆), 收文字匹配的
+    const all = document.querySelectorAll('*');
+    const out = [];
+    for (const el of all) {
+        if (out.length >= maxCount * 3) break;  // 多收 3 倍, 后面排序去重
+        if (!visible(el)) continue;
+        if (!isCandidateTag(el)) continue;
+        const text = elText(el);
+        if (!text) continue;
+        const matches = exact ? (text === wantedText) : text.includes(wantedText);
+        if (!matches) continue;
+        const rect = el.getBoundingClientRect();
+        out.push({
+            selector_hint: selectorHint(el),
+            tag_name: el.tagName.toLowerCase(),
+            text: text.slice(0, 100),
+            x: Math.round(rect.x),
+            y: Math.round(rect.y),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+            // 评分: 完全匹配 +10, 短文字 +5 (按钮通常文字短), 在 viewport 内 +5
+            score: (text === wantedText ? 10 : 0) +
+                   (text.length <= 20 ? 5 : 0) +
+                   (rect.y >= 0 && rect.y < window.innerHeight ? 5 : 0),
+        });
+    }
+    // 按 score 倒序, 取 top maxCount
+    out.sort((a, b) => b.score - a.score);
+    return out.slice(0, maxCount);
+}
+"""
+
+
+def _browser_find_by_text_impl(args: Dict[str, Any]) -> Dict[str, Any]:
+    """文字直接定位元素. 返候选列表 (含 selector_hint).
+
+    BL-FIX16 (5/8): 鸿波 'CAS 还是找不到登录按钮造成卡死'. 真因 — CAS 登录按钮
+    不是标准 <button>, snapshot DOM evaluate 拿不到. 这条按文字找, 不挑 tag.
+    """
+    text = (args.get("text") or "").strip()
+    if not text:
+        return {"type": "error", "error": "text 必填 (要找的元素文字)"}
+    exact = bool(args.get("exact", False))
+    max_results = int(args.get("max_results") or 5)
+    max_results = max(1, min(max_results, 20))
+
+    try:
+        sync_playwright = _import_playwright()
+    except RuntimeError as e:
+        return {"type": "error", "error": str(e)}
+
+    try:
+        with sync_playwright() as p:
+            try:
+                browser, context, page = _connect_playwright_browser(p)
+            except RuntimeError as e:
+                return {"type": "error", "error": str(e)}
+
+            try:
+                title = page.title()
+                url = page.url
+            except Exception as e:
+                return {
+                    "type": "error",
+                    "error": (
+                        f"读 page.title/url 失败 (page 不可用): "
+                        f"{type(e).__name__}: {e}"
+                    ),
+                }
+
+            # 走 page.evaluate JS 全扫 (比 page.get_by_text 兼容性更好, 回退一招)
+            try:
+                raw = page.evaluate(
+                    _FIND_BY_TEXT_JS,
+                    {"text": text, "exact": exact, "maxCount": max_results},
+                )
+            except Exception as e:
+                return {
+                    "type": "error",
+                    "error": (
+                        f"page.evaluate 失败: {type(e).__name__}: {e}. "
+                        f"页面 title={title!r}"
+                    ),
+                }
+
+            elements: List[Dict[str, Any]] = []
+            if isinstance(raw, list):
+                for item in raw:
+                    if not isinstance(item, dict):
+                        continue
+                    elements.append({
+                        "selector_hint": str(item.get("selector_hint", ""))[:200],
+                        "tag_name": str(item.get("tag_name", "")),
+                        "text": str(item.get("text", ""))[:100],
+                        "x": int(item.get("x", 0)),
+                        "y": int(item.get("y", 0)),
+                        "width": int(item.get("width", 0)),
+                        "height": int(item.get("height", 0)),
+                    })
+
+            return {
+                "type": "ok",
+                "title": title,
+                "url": url,
+                "search_text": text,
+                "exact": exact,
+                "elements": elements,
+                "element_count": len(elements),
+                "summary": (
+                    f"找到 {len(elements)} 个含 '{text}' 的可点击元素. "
+                    f"第 1 个 selector: {elements[0]['selector_hint'] if elements else '(无)'}. "
+                    f"直接 catfish_browser_click(selector=...) 传它就行."
+                    if elements
+                    else f"页面 {title!r} 上没找到含 '{text}' 的可点击元素. "
+                    f"试 exact=false / 改文字 / 或者直接 catfish_browser_screenshot 让员工看一眼."
+                ),
+            }
+    except Exception as e:
+        return {"type": "error", "error": f"playwright find_by_text 异常: {type(e).__name__}: {e}"}
 
 
 # ============================================================
@@ -4266,6 +4502,8 @@ def dispatch_native(name: str, args: Dict[str, Any]) -> Any:
         return browser_snapshot(args)
     if name == "catfish_browser_screenshot":
         return browser_screenshot(args)
+    if name == "catfish_browser_find_by_text":
+        return browser_find_by_text(args)
     if name == "catfish_skill_backup":
         return skill_backup(args)
     if name == "catfish_run_skill":
