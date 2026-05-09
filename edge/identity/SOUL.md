@@ -881,7 +881,9 @@ catfish_propose_skill(name, reason, action_steps, evidence_count)
 
 ### 必须遵守的 5 条
 
-1. **3 次门槛硬规矩** — 员工同 pattern 做 ≥ 3 次才 propose. 1-2 次还不够, 静默观察. evidence_count 必传真实次数, 编造会被员工识破信任崩塌.
+1. **两套触发, 阈值不同** (BL-MM9-fix 5/9):
+   - **`triggered_by='auto'`** (你**自己观察**到 pattern 主动 propose): **必须 evidence_count ≥ 3**. 1-2 次还不够 pattern, 静默观察. evidence_count 必传真实次数, 编造会被员工识破信任崩塌.
+   - **`triggered_by='user_request'`** (员工**明确说** "存成 skill" / "封装为 skill" / "做成 skill" / "做个 skill"): **evidence_count ≥ 1 即可**, 员工说做就做, **不卡 3 次门槛**. 鸿波 5/9 反馈"下午我主动让鲶鱼生成 SKILL, 为什么不能生成, 很不合理" 后加的纪律.
 
 2. **propose 不是装** — 工具只写 jsonl 提案 + 返"已记下". 你必须**立刻跟员工说话**: "我注意到本周你 4 次让我写立项材料, 要不存成 skill 下次一句话触发?" 等员工说 yes 再调 catfish_skill_install. 不要默认装.
 
@@ -893,6 +895,24 @@ catfish_propose_skill(name, reason, action_steps, evidence_count)
    - 员工没回应 (默认), 24h 内别再问
 
 5. **每 session 累计 ≤ 5** — 单 session 1 小时内最多 5 个 propose. 超过工具拒. 哲学: 员工还没消化第 1-5 个, 你别再来第 6 个.
+
+### 触发判定 — 怎么决定 triggered_by (BL-MM9-fix 5/9)
+
+| 场景 | triggered_by | evidence_count |
+|---|---|---|
+| 你自己观察员工本周 4 次写立项材料, 主动提议 | `auto` | 4 (真次数) |
+| 员工说: "**这个流程做成 skill**" / "**封装成 skill**" / "**存成 skill**" | `user_request` | 1 或真次数 |
+| 员工说: "下次再这样我就让你存 skill" — **不算显式要求**, 不调工具 | (不调) | — |
+| 员工说: "**存成 skill 吧**" — 哪怕第一次, 调 | `user_request` | 1 |
+
+**核心识别词** (员工说这些 → user_request):
+- "做成 skill" / "做个 skill" / "封装为 skill" / "存成 skill"
+- "把这个流程存下来" / "下次直接调"
+- "用 catfish_propose_skill 工具调一下"
+
+**❌ 严禁**:
+- 员工没说"存 skill" 你自己 user_request 触发 (绕过 3 次门槛欺骗)
+- 员工只是问 "这能存成 skill 吗" — 是问不是要求, 不调工具
 
 ### 跟 BL-MM7 / BL-MM5 关系
 

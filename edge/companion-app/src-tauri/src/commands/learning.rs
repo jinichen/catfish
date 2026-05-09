@@ -318,10 +318,18 @@ fn collect_proposed_skills_today(home: &PathBuf) -> Vec<ProposedSkill> {
         if ns.is_empty() || name.is_empty() {
             continue;
         }
-        let ts = json.get("ts").and_then(|v| v.as_str()).unwrap_or("");
+        // BL-MM9-fix (5/9): ts 字段兼容 — propose_skill 写 ts_iso (str) + ts (unix),
+        // Tauri accept 写 ts (str). 优先 ts_iso, 次选 ts (str).
+        let ts = json
+            .get("ts_iso")
+            .and_then(|v| v.as_str())
+            .or_else(|| json.get("ts").and_then(|v| v.as_str()))
+            .unwrap_or("");
         let key = format!("{ns}/{name}");
 
-        if event_type == "propose" {
+        if event_type == "propose" || event_type == "proposed" {
+            // BL-MM9-fix (5/9): catfish_propose_skill 写 'proposed', 兼容
+            // 其他历史可能写 'propose'. 两者都接.
             // 用 chrono parse iso8601 → unix; 解析失败保险跳过
             let propose_unix = chrono::DateTime::parse_from_rfc3339(ts)
                 .map(|d| d.timestamp() as f64)
@@ -330,9 +338,12 @@ fn collect_proposed_skills_today(home: &PathBuf) -> Vec<ProposedSkill> {
             if propose_unix < today_start {
                 continue;
             }
+            // description 兼容: 'description' 字段优先 (Tauri accept 命令写),
+            // 'reason' 字段次选 (catfish_propose_skill tool 写)
             let description = json
                 .get("description")
                 .and_then(|v| v.as_str())
+                .or_else(|| json.get("reason").and_then(|v| v.as_str()))
                 .unwrap_or("(无 description)")
                 .to_string();
             latest.insert(
@@ -344,11 +355,12 @@ fn collect_proposed_skills_today(home: &PathBuf) -> Vec<ProposedSkill> {
                     status: "proposed".to_string(),
                 },
             );
-        } else if event_type == "accept" || event_type == "reject" {
+        } else if event_type == "accept" || event_type == "accepted"
+            || event_type == "reject" || event_type == "rejected" {
             // 已存在的 propose 加状态. 否则跳过 (accept 之前必先 propose, 数据
             // 不完整就忽略).
             if let Some(p) = latest.get_mut(&key) {
-                p.status = if event_type == "accept" {
+                p.status = if event_type == "accept" || event_type == "accepted" {
                     "accepted".to_string()
                 } else {
                     "rejected".to_string()
@@ -829,11 +841,16 @@ fn append_proposal_event(
         .split_once('/')
         .ok_or_else(|| "full_name 格式错".to_string())?;
     let now_iso = chrono::Utc::now().to_rfc3339();
+    // BL-MM9-fix (5/9): 字段对齐 propose_skill (catfish_tools.py) 写的 schema:
+    // skill_namespace + skill_name + ts (iso). event_type 跟 propose_skill
+    // 写的 'proposed' 区分 — 这里是 'accept' / 'reject'.
     let mut entry = serde_json::json!({
         "event_type": event_type,
         "skill_namespace": ns,
         "skill_name": name,
+        "name": name,        // 兼容 propose_skill 旧字段
         "ts": now_iso,
+        "ts_iso": now_iso,   // propose_skill 也有这字段
     });
     if let Some(c) = comment {
         entry["comment"] = serde_json::Value::String(c);

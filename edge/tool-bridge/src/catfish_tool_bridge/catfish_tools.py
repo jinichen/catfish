@@ -976,10 +976,26 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
                 "evidence_count": {
                     "type": "integer",
                     "description": (
-                        "你观察到员工做这事的次数 (≥3 才该 propose). "
-                        "用作员工判断 '是不是真该存成 skill' 的硬数字依据."
+                        "你观察到员工做这事的次数. 两套阈值 (跟 triggered_by 配套):\n"
+                        "  - triggered_by='auto' (你自己观察 propose): **必须 ≥3**, "
+                        "不到 3 次不算 pattern, 静默观察.\n"
+                        "  - triggered_by='user_request' (员工显式说 '存成 skill'): **≥1 即可**, "
+                        "员工说做就做不卡阈值."
                     ),
-                    "minimum": 3,
+                    "minimum": 1,
+                },
+                "triggered_by": {
+                    "type": "string",
+                    "enum": ["auto", "user_request"],
+                    "description": (
+                        "BL-MM9-fix (5/9): 区分两种触发场景, 决定 evidence_count 校验严不严.\n"
+                        "  - 'auto': 你自己观察员工反复做后主动 propose. 必须 evidence_count ≥3 防骚扰.\n"
+                        "  - 'user_request': 员工**明确说**'封装为 skill' / '存成 skill' / '做成 skill', "
+                        "你跟着调. evidence_count ≥1 即可.\n"
+                        "鸿波 5/9 反馈: '下午我主动让鲶鱼生成 SKILL, 为什么不能生成, 很不合理'. "
+                        "员工显式触发不该卡 3 次门槛."
+                    ),
+                    "default": "auto",
                 },
             },
             "required": ["name", "reason", "action_steps", "evidence_count"],
@@ -3180,15 +3196,22 @@ def propose_skill(args: Dict[str, Any]) -> Dict[str, Any]:
 
     校验:
       - name / reason / action_steps 都必填
-      - evidence_count ≥ 3
+      - triggered_by='auto' → evidence_count ≥3 (BL-MM9 防骚扰)
+      - triggered_by='user_request' → evidence_count ≥1 (员工显式触发不卡)
       - name kebab-case (避免奇怪字符)
       - 红线字段拒绝
       - 同 name 24h 内已 propose 过 → 拒绝
       - 单 session 累计 ≥ 5 → 拒绝 (防骚扰)
+
+    BL-MM9-fix (5/9): 鸿波 '下午我主动让鲶鱼生成 SKILL, 为什么不能生成, 很不合理' —
+    加 triggered_by 区分两种场景, user_request 跳 3 次门槛.
     """
     name = (args.get("name") or "").strip()
     reason = (args.get("reason") or "").strip()
     action_steps = (args.get("action_steps") or "").strip()
+    triggered_by = (args.get("triggered_by") or "auto").strip().lower()
+    if triggered_by not in ("auto", "user_request"):
+        triggered_by = "auto"  # 不识别的值兜底当 auto (严格模式)
     try:
         evidence_count = int(args.get("evidence_count") or 0)
     except (TypeError, ValueError):
@@ -3209,14 +3232,18 @@ def propose_skill(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"type": "error", "error": "reason 必填且 ≥ 10 字 (含具体观察证据)"}
     if not action_steps or len(action_steps) < 20:
         return {"type": "error", "error": "action_steps 必填且 ≥ 20 字 (3-5 步说明 skill 干啥)"}
-    if evidence_count < 3:
-        return {
-            "type": "error",
-            "error": (
-                f"evidence_count={evidence_count} < 3. "
-                "BL-MM9 哲学: 员工做 ≥3 次同 pattern 才 propose, 1-2 次还不算 pattern, 静默观察."
-            ),
-        }
+    # 阈值校验 — 两套, 看 triggered_by
+    min_evidence = 3 if triggered_by == "auto" else 1
+    if evidence_count < min_evidence:
+        if triggered_by == "auto":
+            err = (
+                f"evidence_count={evidence_count} < 3 (auto 模式). "
+                "BL-MM9 哲学: 你自己观察员工 ≥3 次同 pattern 才该 propose, 1-2 次静默观察. "
+                "如果是员工**明确说**'存成 skill', triggered_by 改 'user_request' 即可放行."
+            )
+        else:
+            err = f"evidence_count={evidence_count} < 1 — 至少 1 次实际操作"
+        return {"type": "error", "error": err}
 
     # 红线检查
     if _is_redline_skill_name(name, reason):
@@ -3266,14 +3293,21 @@ def propose_skill(args: Dict[str, Any]) -> Dict[str, Any]:
 
     # 写 jsonl
     proposal_id = f"prop_{int(now_ts)}_{name}"
+    # BL-MM9-fix (5/9): 字段对齐 learning.rs 期待的 schema (namespace/name 拆开)
+    # + 加 description 字段给 Dashboard 渲染 + triggered_by 留 audit. 'name' 字段
+    # 留旧值兼容老 propose_skill caller (但 learning.rs 现在认 skill_name).
     event = {
-        "event_type": "proposed",
+        "event_type": "proposed",  # learning.rs 看 'propose' 也兼容下
         "proposal_id": proposal_id,
-        "name": name,
+        "skill_namespace": "personal",   # propose_skill 默认放 personal/, accept 后落 ~/.hermes/skills/personal/
+        "skill_name": name,
+        "name": name,                     # 旧字段兼容
+        "description": reason,            # learning.rs Dashboard 显示用
         "reason": reason,
         "action_steps": action_steps,
         "evidence_count": evidence_count,
-        "status": "proposed",  # accepted / rejected 由后续事件追加
+        "triggered_by": triggered_by,     # 'auto' | 'user_request' 留 audit
+        "status": "proposed",
         "ts": now_ts,
         "ts_iso": _unix_to_iso(now_ts),
     }
