@@ -46,6 +46,7 @@ from .network import precheck_and_setup  # noqa: E402, PLC0415
 
 _NETWORK_STATUS = precheck_and_setup()
 
+import httpx  # noqa: E402
 import litellm  # noqa: E402
 from fastapi import Depends, FastAPI, HTTPException, Request  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
@@ -181,6 +182,13 @@ async def lifespan(app: FastAPI):
 
     refresh_task = asyncio.create_task(_refresh_loop())
 
+    # BL-D3 (5/9) Phase 1 收尾: mcp-registry 反向代理用的 httpx client.
+    # 长 lifecycle 单例, 复用连接池. lifespan close 时 aclose. 跑在 gateway
+    # 同 process 不另起服务 — Companion 走 gateway 单 origin /v1/mcp/*.
+    app.state.mcp_registry_client = httpx.AsyncClient(
+        timeout=config.mcp_registry.timeout,
+    )
+
     # 五一 sprint Day 5 (B 方案): 启动时自动 register 到 catfish-identity registry.
     # 这样别的 catfish 实例 (Plan D Federation) 能通过 lookup 找到本机.
     # 失败不阻塞启动 (a2a 不可用, 其他功能正常).
@@ -197,6 +205,12 @@ async def lifespan(app: FastAPI):
         await refresh_task
     except asyncio.CancelledError:
         pass
+
+    # BL-D3 (5/9) Phase 1 收尾: 关 mcp-registry httpx client
+    try:
+        await app.state.mcp_registry_client.aclose()
+    except Exception as e:
+        logger.debug("mcp_registry_client aclose: %s", e)
 
     # BL-F13 (5/4): 清 LiteLLM 内部 aiohttp / httpx client, 减少 "Unclosed client session"
     # warning. LiteLLM 1.50+ 用 httpx 主路径但仍持有少量 aiohttp module-level client,
@@ -255,6 +269,18 @@ try:
     logger.info("a2a_server: /a2a/ask SSE endpoint 已挂载")
 except Exception as e:
     logger.warning("a2a_server 挂载失败 (Plan D 不可用): %s", e)
+
+# BL-D3 (5/9) Phase 1 收尾: mcp-registry 反向代理 router.
+# Companion 走单一 origin (gateway) 调 /v1/mcp/*, gateway 透传到 mcp-registry
+# 上游 (yaml mcp_registry.upstream_url, 默认 :8997). 注入 X-Catfish-User-Sub /
+# Dept / Role header 让上游做部门权限过滤. dept 由 gateway 从 JWT 抽出, 不让
+# Companion 自己改 (防绕权限).
+try:
+    from .mcp_registry_proxy import router as mcp_registry_router  # noqa: PLC0415
+    app.include_router(mcp_registry_router)
+    logger.info("mcp_registry_proxy: /v1/mcp/* 反代已挂载")
+except Exception as e:
+    logger.warning("mcp_registry_proxy 挂载失败 (BL-D3 反代不可用): %s", e)
 
 
 # Plan D · A 端内部 endpoint — tool-bridge 通过 HTTP 调这个触发 A2A.

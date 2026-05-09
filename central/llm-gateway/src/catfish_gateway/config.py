@@ -141,9 +141,30 @@ class ModelConfig(BaseModel):
     fallback: FallbackConfig | None = None
 
 
+class McpRegistryConfig(BaseModel):
+    """BL-D3 (5/9): 反向代理 mcp-registry 服务的配置.
+
+    gateway 收到 /v1/mcp/* 请求 → 透传到 upstream_url + /v1/mcp/*,
+    并把员工的 dept (从 JWT 抽出) 加到 X-Catfish-User-Dept header,
+    让 mcp-registry 做部门权限过滤.
+
+    上游 mcp-registry 服务默认跑在 :8997, dev/prod 通过 yaml 配:
+
+        mcp_registry:
+          upstream_url: http://127.0.0.1:8997
+          enabled: true
+          timeout: 10
+    """
+
+    upstream_url: str = "http://127.0.0.1:8997"
+    enabled: bool = True
+    timeout: int = 10  # 秒, registry 操作都很快, 10s 够
+
+
 class Config(BaseModel):
     version: int = 1
     models: list[ModelConfig]
+    mcp_registry: McpRegistryConfig = Field(default_factory=McpRegistryConfig)
 
     def get_model(self, name: str) -> ModelConfig | None:
         for m in self.models:
