@@ -504,6 +504,11 @@ export async function streamChat(params: SendChatParams): Promise<void> {
             choices?: Array<{
               delta?: {
                 content?: string;
+                // BL-FIX23 L2 (5/9): Qwen3.5 / DeepSeek thinking / Claude Sonnet 4.5+
+                // 推理模式 stream 时 delta.content=null, delta.reasoning_content="...".
+                // 之前只看 content 导致鲶鱼"半截就停" — 思考阶段全丢, 员工只看到
+                // 开头 plan 句被截. 现在落到 onDelta 一起渲染 (后续 BL-FE3 区分思考).
+                reasoning_content?: string;
                 tool_calls?: Array<{
                   index?: number;
                   id?: string;
@@ -523,6 +528,11 @@ export async function streamChat(params: SendChatParams): Promise<void> {
 
           const delta = choice.delta;
           if (delta?.content) onDelta(delta.content);
+          // BL-FIX23 L2 (5/9): reasoning_content 也渲染, 防"半截就停"的核心修法.
+          // 鸿波 5/9 抱怨 Qwen3.5 122B 长 context 推理时输出 reasoning_content 不是
+          // content, Companion 只读 content 导致看着像"嘴说完话停了". 先让员工看到
+          // 思考过程, 不丢内容. demo 后 BL-FE3 加折叠 UI 把思考分开展示.
+          if (delta?.reasoning_content) onDelta(delta.reasoning_content);
 
           // 累积 tool_calls 块
           if (delta?.tool_calls) {

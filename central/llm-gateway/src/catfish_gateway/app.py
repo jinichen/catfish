@@ -933,6 +933,11 @@ async def _stream_chat_completion(
         # 后续 chunks 流出去 —— 这阶段挂了不再 fallback.
         # 用 _stream_with_keepalive 包装: 上游 chunk 间隔 > 30s 时插 SSE comment
         # 防客户端/中间代理 timeout 断开. 私有 LLM tool calling 思考阶段尤其需要.
+        # BL-FIX23 L3 (5/9): debug 计数器, 看上游 chunks 真发了啥. 鸿波 5/9 抱怨
+        # '半截就停' 真因是 Companion 只读 delta.content, Qwen 切 reasoning_content
+        # 后内容全丢. 这里采样统计 content/reasoning_content/tool_calls 分布,
+        # 出问题时一眼能看出来上游的输出形态.
+        chunk_stats = {"total": 0, "content": 0, "reasoning": 0, "tool_calls": 0, "empty": 0}
         async for chunk in _stream_with_keepalive(iterator):
             if chunk == "__keepalive__":
                 # SSE comment 行, 客户端会忽略, 但 TCP 连接保活.
@@ -943,8 +948,37 @@ async def _stream_chat_completion(
                 usage = data.get("usage") or {}
                 prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
                 completion_tokens = usage.get("completion_tokens", completion_tokens)
+                # BL-FIX23 L3: 采样 delta 形态分布 (debug 用)
+                choices = data.get("choices") or []
+                if choices:
+                    delta = choices[0].get("delta") or {}
+                    chunk_stats["total"] += 1
+                    has_any = False
+                    if delta.get("content"):
+                        chunk_stats["content"] += 1
+                        has_any = True
+                    if delta.get("reasoning_content"):
+                        chunk_stats["reasoning"] += 1
+                        has_any = True
+                    if delta.get("tool_calls"):
+                        chunk_stats["tool_calls"] += 1
+                        has_any = True
+                    if not has_any:
+                        chunk_stats["empty"] += 1
             yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
+        # BL-FIX23 L3: 流末尾打 chunk 形态分布. 鸿波抱怨'半截就停'时看这条 →
+        # reasoning > 0 但 content = 0 → 100% 是前端没读 reasoning_content.
+        if chunk_stats["total"] > 0:
+            logger.info(
+                "chunk stats: model=%s total=%d content=%d reasoning=%d tool_calls=%d empty=%d",
+                used_model.name,
+                chunk_stats["total"],
+                chunk_stats["content"],
+                chunk_stats["reasoning"],
+                chunk_stats["tool_calls"],
+                chunk_stats["empty"],
+            )
     except Exception as e:  # noqa: BLE001
         status_str = "error"
         err = str(e)
