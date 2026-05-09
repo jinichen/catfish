@@ -733,6 +733,13 @@ def _build_litellm_params(body: dict, model) -> dict:
             "timeout": model.upstream.timeout,
         }
     )
+    # BL-FIX23 L4a (5/9): 客户端没传 max_tokens 时强制兜底 4096. 鸿波 5/9 报
+    # '半截就停' 真因: Qwen vLLM 默认 max_tokens 太小 (~600 token), 长 docx
+    # 输出被截 finish_reason=length, streaming 路径 BL-A1.1 auto-continue
+    # 没覆盖, 直接 stream 结束. 兜底 4K 让大多数任务一次完成. 续写 streaming
+    # 版 BL-A1.2 后续做.
+    if "max_tokens" not in params or params["max_tokens"] is None:
+        params["max_tokens"] = 4096
     if model.upstream.api_base:
         params["api_base"] = model.upstream.api_base
 
@@ -933,11 +940,12 @@ async def _stream_chat_completion(
         # 后续 chunks 流出去 —— 这阶段挂了不再 fallback.
         # 用 _stream_with_keepalive 包装: 上游 chunk 间隔 > 30s 时插 SSE comment
         # 防客户端/中间代理 timeout 断开. 私有 LLM tool calling 思考阶段尤其需要.
-        # BL-FIX23 L3 (5/9): debug 计数器, 看上游 chunks 真发了啥. 鸿波 5/9 抱怨
-        # '半截就停' 真因是 Companion 只读 delta.content, Qwen 切 reasoning_content
-        # 后内容全丢. 这里采样统计 content/reasoning_content/tool_calls 分布,
-        # 出问题时一眼能看出来上游的输出形态.
+        # BL-FIX23 L3+L4b (5/9): debug 计数器 + finish_reason 跟踪. 鸿波 5/9
+        # 抱怨'半截就停' 三轮诊断后定位 — 真因是 Qwen vLLM max_tokens 默认太小,
+        # streaming 路径 BL-A1.1 auto-continue 没接 (auto_continue.py 自己注释
+        # 说了 5/8 后续做). 这里加 finish_reason 跟踪让下次出问题一眼定位.
         chunk_stats = {"total": 0, "content": 0, "reasoning": 0, "tool_calls": 0, "empty": 0}
+        last_finish_reason: str | None = None
         async for chunk in _stream_with_keepalive(iterator):
             if chunk == "__keepalive__":
                 # SSE comment 行, 客户端会忽略, 但 TCP 连接保活.
@@ -951,7 +959,8 @@ async def _stream_chat_completion(
                 # BL-FIX23 L3: 采样 delta 形态分布 (debug 用)
                 choices = data.get("choices") or []
                 if choices:
-                    delta = choices[0].get("delta") or {}
+                    choice0 = choices[0]
+                    delta = choice0.get("delta") or {}
                     chunk_stats["total"] += 1
                     has_any = False
                     if delta.get("content"):
@@ -965,20 +974,43 @@ async def _stream_chat_completion(
                         has_any = True
                     if not has_any:
                         chunk_stats["empty"] += 1
+                    # BL-FIX23 L4b: 跟踪 finish_reason. 看到 'length' = max_tokens
+                    # 截了, 真根因. streaming auto-continue (BL-A1.2) 没做之前
+                    # 至少能从日志一眼看出来.
+                    if choice0.get("finish_reason"):
+                        last_finish_reason = choice0["finish_reason"]
             yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
-        # BL-FIX23 L3: 流末尾打 chunk 形态分布. 鸿波抱怨'半截就停'时看这条 →
-        # reasoning > 0 但 content = 0 → 100% 是前端没读 reasoning_content.
+        # BL-FIX23 L3+L4b: 流末尾打 chunk 形态分布 + finish_reason. 鸿波抱怨
+        # '半截就停' 时看这条:
+        #   reasoning>0 content=0   → 前端没读 reasoning_content (BL-FE3 配套)
+        #   finish_reason=length    → max_tokens 截了, BL-A1.2 streaming
+        #                              auto-continue 该排上 / 或 client 传更大
+        #                              max_tokens
+        #   finish_reason=stop      → LLM 自然结束, 内容真完了 (鸿波看着像截
+        #                              其实是模型自己觉得说完了, SOUL 纪律层修)
         if chunk_stats["total"] > 0:
             logger.info(
-                "chunk stats: model=%s total=%d content=%d reasoning=%d tool_calls=%d empty=%d",
+                "chunk stats: model=%s total=%d content=%d reasoning=%d "
+                "tool_calls=%d empty=%d finish_reason=%s",
                 used_model.name,
                 chunk_stats["total"],
                 chunk_stats["content"],
                 chunk_stats["reasoning"],
                 chunk_stats["tool_calls"],
                 chunk_stats["empty"],
+                last_finish_reason,
             )
+            # BL-FIX23 L4b: finish_reason=length 时 WARNING 级别, 让运维看到
+            # max_tokens 截这条 P0. 5/14 demo 前别让员工感受到.
+            if last_finish_reason == "length":
+                logger.warning(
+                    "finish_reason=length: model=%s max_tokens 截了, 鸿波抱怨"
+                    "'半截就停' 真因. streaming auto-continue 还没接 (BL-A1.2). "
+                    "L4a 已强制 max_tokens=4096 兜底, 还撞说明 4K 也不够 → "
+                    "调大或者真做 BL-A1.2.",
+                    used_model.name,
+                )
     except Exception as e:  # noqa: BLE001
         status_str = "error"
         err = str(e)
