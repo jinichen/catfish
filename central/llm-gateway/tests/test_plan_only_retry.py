@@ -31,11 +31,20 @@ def test_plan_only_future_intent_triggers():
     assert _is_plan_only_content("我现在重新调整内容区")
 
 
-def test_plan_only_short_content_no_trigger():
-    """很短 content (< 10 字) 不触发, 防误判."""
+def test_plan_only_short_ack_no_trigger():
+    """简单 ack ('好' / 'OK' / 'thanks') 不含承诺关键词 → 不触发, 防误判.
+
+    含承诺关键词的 (如 '已生成 docx') 即使短也要触发 — 这是 LLM
+    plan-only 的典型形态, 外层 4 条 AND (没 tool_call + 反馈 + retries)
+    保证不会误兜.
+    """
     assert not _is_plan_only_content("好")
     assert not _is_plan_only_content("OK")
-    assert not _is_plan_only_content("已生成")  # 7 字, 不触发
+    assert not _is_plan_only_content("thanks")
+    assert not _is_plan_only_content("收到")
+    # '已生成' 短 (3 字) 但含关键词 → 触发. 外层会拿 cumulative_has_tool_call
+    # 过滤真做了的 case.
+    assert _is_plan_only_content("已生成")
 
 
 def test_plan_only_no_keyword_no_trigger():

@@ -918,8 +918,13 @@ _MAX_PLAN_ONLY_RETRIES = 2
 
 
 def _is_plan_only_content(content: str) -> bool:
-    """累积 content 是 plan-only (含承诺/未来意图词且没真做)."""
-    if not content or len(content) < 10:
+    """累积 content 是 plan-only (含承诺/未来意图词).
+
+    不限长度 — 关键词本身够 specific (e.g. '已生成' / '我立刻'), 不会误判
+    一般 ack ('好' / 'OK'). 触发还要外层 4 条 AND (没 tool_call + user 反馈
+    + retries 未满), 这层只判内容形态.
+    """
+    if not content or not isinstance(content, str):
         return False
     for kw in _PLAN_ONLY_PROMISE_KEYWORDS:
         if kw in content:
