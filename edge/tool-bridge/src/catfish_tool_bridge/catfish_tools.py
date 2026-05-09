@@ -924,6 +924,91 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ── BL-MM13 (5/8) — 老 skill 自进化: propose 改进版本 ──
+    {
+        "name": "catfish_propose_skill_revision",
+        "description": (
+            "提议**修改一个已存在的 skill** (基于 audit log + BL-MM11 员工反馈观察到的问题). "
+            "跟 catfish_propose_skill (抽**新** skill) 区别 — 这条改**老** skill 内容. "
+            "**不直接改**, 等员工 accept 才落地, 跟 BL-MM9 一脉相承.\n\n"
+            "✅ 调用场景:\n"
+            "  - 员工 BL-MM11 给某 skill ≥2 个 👎 + 改动评论 ('太啰嗦' / '少这一步') → propose revision\n"
+            "  - skill audit 失败率 ≥30% 持续 5 次 (员工反复重试同 skill) → propose 加 try-catch\n"
+            "  - 员工 BL-MM12 综合质量分 < 40 (差) 持续 7 天 → propose 重写\n\n"
+            "❌ 不该调用:\n"
+            "  - 员工没反馈 / skill 用得少 (<5 次) → 数据不够, 静默\n"
+            "  - 红线: 健康 / 财务 / 感情 / 政治 / 宗教 namespace skill 永不 propose 改\n"
+            "  - 员工已经 reject 过同 skill 的 revision (24h 内) — 别骚扰\n\n"
+            "**调用后**: 写 ~/.catfish/skill_revisions.jsonl, append 一条. 员工 Dashboard "
+            "SkillRevisionCard 能看到, 点 ✅ 采纳 → catfish 调 BL-MM3 备份老版 → 写新版到 "
+            "skill_path 下. 点 ❌ 拒绝 → 标 dismissed, 24h 内不再 propose.\n\n"
+            "**返**: {ok, revision_id, summary}."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "skill_path": {
+                    "type": "string",
+                    "description": (
+                        "要改的 skill 路径 (相对 catfish/skills/), kebab-case 命名空间. "
+                        "例: 'department/weekly-report' / 'department/leadership-briefing'."
+                    ),
+                },
+                "current_version": {
+                    "type": "string",
+                    "description": (
+                        "当前 skill 版本号 (从 SKILL.md frontmatter 读). 例 '0.3.2'. "
+                        "防 LLM 拿到 stale skill 内容做改, 跟 catfish 实际版本不一致."
+                    ),
+                },
+                "proposed_version": {
+                    "type": "string",
+                    "description": (
+                        "提议的新版本号 (SemVer bump). 大改 → minor (0.3.2 → 0.4.0); 修 bug → patch "
+                        "(0.3.2 → 0.3.3); 不向后兼容 → major. 必须 > current_version."
+                    ),
+                },
+                "reason": {
+                    "type": "string",
+                    "description": (
+                        "为什么改 — 必含**具体观察证据**: BL-MM11 反馈 / audit 失败 / 质量分. "
+                        "例: '员工 5/8 5/9 5/10 三次 👎 + 评论 \"太啰嗦\", 看 audit 4 次 timeout '"
+                        "原因没 catch InvalidArgument. 改: 删第 3 段 + 加 try-except.' "
+                        "员工看了能直接确认或反驳, ≥30 字."
+                    ),
+                },
+                "diff_summary": {
+                    "type": "string",
+                    "description": (
+                        "改动概览 (3-8 句 markdown bullets, 让员工一眼看明白). "
+                        "例: '- SKILL.md: 删第 3 段冗余说明\\n"
+                        "- script.py: render_xxx 加 try/except 兜 InvalidArgument\\n"
+                        "- 输出: 不再含 \"附件 (供参考)\" 那段员工说没用'. "
+                        "完整 patch 在 LLM 后续生成 SKILL.md/script.py 时给, 这里只做 summary."
+                    ),
+                },
+                "evidence_summary": {
+                    "type": "string",
+                    "description": (
+                        "数据依据汇总: feedback 多少条 (👎 N, 评论 M) / audit 失败几次 / "
+                        "质量分趋势. 例: 'BL-MM11: 5 个 👎 / 3 个改动评论. audit: 12 次调用 4 次失败 (33%). "
+                        "BL-MM12 score: 35 (差) 持续 9 天.'"
+                    ),
+                },
+            },
+            "required": [
+                "skill_path",
+                "current_version",
+                "proposed_version",
+                "reason",
+                "diff_summary",
+                "evidence_summary",
+            ],
+        },
+        "emoji": "🔧",
+        "toolset": "catfish_native",
+        "available": True,
+    },
 ]
 
 
@@ -2816,6 +2901,217 @@ def propose_skill(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ============================================================
+# BL-MM13 (5/8) — propose_skill_revision: agent 自进化老 skill
+# ============================================================
+#
+# 跟 BL-MM9 propose_skill 一脉相承, 但操作对象不同:
+#   - MM9: 抽**新** skill (员工反复做 → 提议存)
+#   - MM13: 改**老** skill 内容 (员工反馈 / audit 失败 → 提议改)
+#
+# 流程:
+#   1. LLM 看 BL-MM11 feedback + audit + BL-MM12 quality_score 找问题 skill
+#   2. LLM 调 catfish_propose_skill_revision(skill_path, current_v, proposed_v,
+#      reason, diff_summary, evidence_summary)
+#   3. 工具校验 + 写 ~/.catfish/skill_revisions.jsonl, status=proposed
+#   4. Dashboard SkillRevisionCard (BL-MM14) 列出, 员工 click 采纳/拒绝
+#   5. 采纳 → Tauri 调 BL-MM3 备份老版 + 写新版到 skill_path
+#   6. 拒绝 → 标 dismissed, 24h 内不重 propose 同 skill
+#
+# 限流防骚扰 (跟 MM9 一致):
+#   - 同 skill_path 24h 内 已 proposed 过 → 拒
+#   - 单 session ≥ 3 个 revision propose → 拒 (一次别改太多)
+#
+# 红线 (跟 MM7/MM9 一致):
+#   - 健康 / 财务 / 感情 / 政治 / 宗教 namespace skill 严禁 propose 改
+
+SKILL_REVISIONS_PATH = Path.home() / ".catfish" / "skill_revisions.jsonl"
+_REVISION_RECENT_HOURS = 24       # 同 skill_path 24h 内不重复 propose
+_REVISION_PER_SESSION_LIMIT = 3   # 单 session 最多 propose 3 个 revision
+
+
+def _read_revisions_history() -> list[Dict[str, Any]]:
+    """读 ~/.catfish/skill_revisions.jsonl, 返 list of dict."""
+    if not SKILL_REVISIONS_PATH.exists():
+        return []
+    out: list[Dict[str, Any]] = []
+    try:
+        with open(SKILL_REVISIONS_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        return []
+    return out
+
+
+def _append_revision_event(event: Dict[str, Any]) -> None:
+    """append 一条 event 到 ~/.catfish/skill_revisions.jsonl."""
+    SKILL_REVISIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(SKILL_REVISIONS_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+
+_SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+
+
+def _semver_tuple(v: str) -> Optional[tuple[int, int, int]]:
+    m = _SEMVER_RE.match(v.strip())
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2)), int(m.group(3))
+
+
+def propose_skill_revision(args: Dict[str, Any]) -> Dict[str, Any]:
+    """tool: BL-MM13 (5/8) — LLM 提议改进一个已存在的 skill.
+
+    校验:
+      - skill_path / current_version / proposed_version / reason / diff_summary /
+        evidence_summary 都必填
+      - skill_path kebab-case 含 '/' 命名空间 (`department/weekly-report` 形式)
+      - SemVer 严格 (current 和 proposed 都 X.Y.Z)
+      - proposed_version > current_version
+      - reason ≥ 30 字, diff_summary ≥ 30 字, evidence_summary ≥ 20 字
+      - 红线 namespace 拒
+      - 同 skill_path 24h 内已 propose → 拒
+      - 单 session ≥ 3 → 拒
+    """
+    skill_path = (args.get("skill_path") or "").strip()
+    current_v = (args.get("current_version") or "").strip()
+    proposed_v = (args.get("proposed_version") or "").strip()
+    reason = (args.get("reason") or "").strip()
+    diff_summary = (args.get("diff_summary") or "").strip()
+    evidence_summary = (args.get("evidence_summary") or "").strip()
+
+    # validation: 必填
+    if not skill_path:
+        return {"type": "error", "error": "skill_path 必填"}
+    if not re.match(r"^[a-z0-9][a-z0-9-]*(/[a-z0-9][a-z0-9-]*)+$", skill_path):
+        return {
+            "type": "error",
+            "error": (
+                "skill_path 必须 kebab-case 含 '/' (例 'department/weekly-report'). "
+                f"收到: {skill_path!r}"
+            ),
+        }
+
+    # SemVer
+    cur_t = _semver_tuple(current_v)
+    prop_t = _semver_tuple(proposed_v)
+    if cur_t is None:
+        return {"type": "error", "error": f"current_version 不是 SemVer X.Y.Z: {current_v!r}"}
+    if prop_t is None:
+        return {"type": "error", "error": f"proposed_version 不是 SemVer X.Y.Z: {proposed_v!r}"}
+    if prop_t <= cur_t:
+        return {
+            "type": "error",
+            "error": (
+                f"proposed_version {proposed_v} 必须 > current_version {current_v}. "
+                "改动要 bump 版本号才能让员工区分新旧."
+            ),
+        }
+
+    if len(reason) < 30:
+        return {"type": "error", "error": "reason ≥ 30 字 (含具体观察 / feedback / audit 数据)"}
+    if len(diff_summary) < 30:
+        return {"type": "error", "error": "diff_summary ≥ 30 字 (3-8 句 markdown bullets)"}
+    if len(evidence_summary) < 20:
+        return {
+            "type": "error",
+            "error": "evidence_summary ≥ 20 字 (BL-MM11 / audit / BL-MM12 数据汇总)",
+        }
+
+    # 红线 — 复用 MM9 _is_redline_skill_name 检查 (路径 + reason)
+    if _is_redline_skill_name(skill_path, reason):
+        return {
+            "type": "error",
+            "error": (
+                "skill_path / 理由触红线 (健康/财务/感情/政治/宗教). "
+                "鲶鱼不 propose 改这类 skill — SOUL § 红线字段 已禁."
+            ),
+        }
+
+    # 限流: 同 skill_path 24h 内已 propose
+    history = _read_revisions_history()
+    now_ts = time.time()
+    cutoff = now_ts - _REVISION_RECENT_HOURS * 3600
+    recent_same = [
+        e for e in history
+        if e.get("skill_path") == skill_path
+        and e.get("ts", 0) >= cutoff
+        and e.get("event_type") == "proposed"
+        and e.get("status") == "proposed"
+    ]
+    if recent_same:
+        return {
+            "type": "error",
+            "error": (
+                f"已经在 24h 内 propose 过 '{skill_path}' 的改进 "
+                f"(revision_id={recent_same[-1].get('revision_id')}), "
+                "等员工 accept/reject 后再 propose 新一轮, 别骚扰."
+            ),
+        }
+
+    # 限流: 单 session 累计 (近 1 小时)
+    one_hour_ago = now_ts - 3600
+    recent_in_session = [
+        e for e in history
+        if e.get("ts", 0) >= one_hour_ago
+        and e.get("event_type") == "proposed"
+    ]
+    if len(recent_in_session) >= _REVISION_PER_SESSION_LIMIT:
+        return {
+            "type": "error",
+            "error": (
+                f"最近 1 小时已 propose {len(recent_in_session)} 个 revision "
+                f"(上限 {_REVISION_PER_SESSION_LIMIT}). 一次别改太多, 让员工先消化."
+            ),
+        }
+
+    # 写 jsonl
+    revision_id = (
+        f"rev_{int(now_ts)}_{skill_path.replace('/', '-')}_{proposed_v}"
+    )
+    event = {
+        "event_type": "proposed",
+        "revision_id": revision_id,
+        "skill_path": skill_path,
+        "current_version": current_v,
+        "proposed_version": proposed_v,
+        "reason": reason,
+        "diff_summary": diff_summary,
+        "evidence_summary": evidence_summary,
+        "status": "proposed",
+        "ts": now_ts,
+        "ts_iso": _unix_to_iso(now_ts),
+    }
+    try:
+        _append_revision_event(event)
+    except OSError as e:
+        return {"type": "error", "error": f"写 skill_revisions.jsonl 失败: {e}"}
+
+    total = sum(1 for e in history if e.get("event_type") == "proposed") + 1
+    return {
+        "type": "ok",
+        "revision_id": revision_id,
+        "skill_path": skill_path,
+        "current_version": current_v,
+        "proposed_version": proposed_v,
+        "total_revisions": total,
+        "summary": (
+            f"已记下改进提议: '{skill_path}' v{current_v} → v{proposed_v}. "
+            f"现在跟员工说: '这个 skill 最近 {evidence_summary[:80]}. "
+            f"我建议改 {diff_summary[:80]}. 你看 Dashboard 决定采不采纳.' "
+            f"员工 accept 走 catfish_skill_install + BL-MM3 自动备份老版."
+        ),
+    }
+
+
+# ============================================================
 # catfish_run_skill —— 调用 catfish/skills/ 下工程审定 skill
 # ============================================================
 #
@@ -3954,6 +4250,8 @@ def dispatch_native(name: str, args: Dict[str, Any]) -> Any:
         return remember_fact(args)
     if name == "catfish_propose_skill":
         return propose_skill(args)
+    if name == "catfish_propose_skill_revision":
+        return propose_skill_revision(args)
     if name == "catfish_today_summary":
         return collect_today_summary()
     if name == "catfish_screenshot":

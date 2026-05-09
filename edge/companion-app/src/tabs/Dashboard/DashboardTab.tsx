@@ -25,6 +25,7 @@ import SkillsMcpCard from "./SkillsMcpCard";
 import LearningCard from "./LearningCard";
 import AuditCard from "./AuditCard";
 import SkillAuditCard from "./SkillAuditCard";
+import SkillRevisionCard from "./SkillRevisionCard";
 import DepartmentQuotaCard from "./DepartmentQuotaCard";
 import DepartmentAuditCard from "./DepartmentAuditCard";
 import AdminGlobalCard from "./AdminGlobalCard";
@@ -104,15 +105,18 @@ export default function DashboardTab() {
         <CuratorCard />
       </CollapsibleSection>
 
-      {/* 第五组: 审计 / 学习 — 历史 + skill audit + tool audit (默认收) */}
+      {/* 第五组: 审计 / 学习 — 历史 + skill audit + skill revision + tool audit (默认收) */}
       <CollapsibleSection
         id="audit"
         title="📜 审计 / 学习"
         defaultCollapsed
-        count={3}
+        count={4}
       >
         <LearningCard />
         <SkillAuditCard />
+        {/* BL-MM14 / MM15 (5/8): skill 改进提议 + 有效性跟踪. 跟 SkillAuditCard 配套 —
+            SkillAuditCard 显示分数, SkillRevisionCard 处理改进 */}
+        <SkillRevisionCard />
         <AuditCard />
       </CollapsibleSection>
 

@@ -30,6 +30,7 @@ pub mod session_write;
 pub mod sessions;
 pub mod skill_audit;
 pub mod skill_feedback;
+pub mod skill_revision;
 pub mod skills;
 pub mod speech;
 pub mod system;

@@ -2820,3 +2820,138 @@ SkillAuditCard 新增"📊 综合质量分" 区, top 5 skill 按分降序, 鼠�
 - BL-D Phase 3 PPT 路线图 (5/12 跟 Plan D 4.5 一起画)
 - skill 级 feedback UI 测试 (Companion 真启动验证按钮位置)
 - ProposedSkillsCard P2 (BL-MM9 提案历史 Dashboard 卡)
+
+---
+
+## 2026-05-08（周五）— BL-FIX 14 个 (修视觉 demo 端到端) + Windows 客户端 8 个 BL (从 0 到 demo-ready)
+
+> 一天 24 个 commit. 起点: 5/8 早桌宠 / MM11/12 ship 完看似收工; 终点: 凌晨 1 点
+> Windows 客户端从 "未启动" 走到 "30MB exe + yaml 配置 + 中央部署文档齐了".
+> 中段挤出 14 个 BL-FIX 修视觉模型 EIS 登录 demo 整链 (验证码自动识别真跑通).
+
+### 上半天 (8:00-16:00) · 视觉 demo 链路全修 (BL-FIX2~15, 14 个)
+
+5/14 demo 卖点之一: 员工说"登录 EIS", catfish 自动打开 → snapshot → fill 用户名/密码 → **截验证码图给主力 LLM 识别** → fill → click 登录. 5/8 早第一次端到端跑撞 BadRequest 400 (空 reason, Go gRPC 风格), 一路追到 12 处 bug, 最后 16:30 真跑通 (Qwen 主力识别验证码 "S2CB" 准确). 一日加 1 路打补丁:
+
+| BL | 修了啥 | 测试 |
+|---|---|---|
+| **FIX2** | gateway `multimodal_tool_unwrap`: tool 含图 (data_uri) 重组到下条 user multipart message. Qwen Go gRPC adapter 不接受 role=tool 的 multimodal content, 导致空 reason 400. 改写 tool message 留路径 + 元数据, 紧接插一条 `role=user content=[{type:text}, {type:image_url}]`. LLM 行为完全不变, 上游 protobuf 兼容. | 17 单测 |
+| **FIX3** | tool-bridge `browser_snapshot` 加 DOM evaluate fallback. 新版 Playwright (>=1.50) `page.accessibility` 已废弃 / 返 None, LLM 看 `AttributeError` 直接放弃. 双路径: a11y 优先 → 失败 fallback `page.evaluate()` 走 JS 扫 button/input/a/[role], 输出 schema 对齐 + 加 selector_hint. | 9 单测 |
+| **FIX4** | gateway `tools_sanitizer` 去重 hermes builtin browser_*. catfish_browser_* + hermes browser_* (browser_back / browser_cdp / browser_vision / ...) 同时暴露, LLM 训练分布走 hermes browser_vision (最熟), 但我们没配 vision provider → tool error → LLM 懵 → 400. 修法: 看到 catfish_browser_* 就一刀切丢所有 browser_* 不带 catfish_ 前缀的 12 条. | 5 单测 |
+| **FIX5** | gateway 历史 `tool_calls` scrub. FIX4 dedupe 之后, 部署前历史 messages 里 hermes browser_* tool_calls 残留, Qwen 校验 "assistant 调过的 name 必须在 tools 里" → 找不到 → 空 reason 400. 修法: dedupe 同步扫历史, 把 deduped name 的 tool_calls 剔掉 + 对应 tool message 一起丢. assistant 有 content 留 message 删 tool_calls, 空 content 整条丢. | 8 单测 |
+| **FIX6** | gateway `tool_retry_hint` role: system → user. Qwen Go gRPC adapter 严格校验 role 顺序: system 只接受头部, 中段 (assistant/tool 之后) 出现 system → 空 reason 400. 改 user 等价于"员工又说一句话", OpenAI 标准接受. | 3 单测 |
+| **FIX7** | tool-bridge 加 `catfish_browser_screenshot` (Playwright `page.screenshot()`). 鸿波诊断: "之前都用 Playwright 截图给模型就能识别, 是不是想复杂了?" 真因 — BL-FIX4 一刀切丢 hermes 时连带砍了 `browser_screenshot` 这条 Playwright 路径. LLM 想看浏览器内容只剩 catfish_screenshot (mac screencapture, 要权限不对路). 补一条 Playwright `page.screenshot()`, 同 connect_over_cdp 链路, selector 给 element 截图. | 10 单测 |
+| **FIX8** | gateway `self_critique` 同款 role=system → user (FIX6 漏修的). | 14 单测 |
+| **FIX9** | tool-bridge `browser_snapshot` 默认 max_elements 200 → 500, cap 500 → 1000. **鸿波第二次诊断真因**: LLM 偷懒主动选 max_elements=50, CAS 登录页 nav/footer link 多, 登录 button 挤出 50, LLM 看不到只能截图找 → 撞 Playwright sync 卡死. 改默认大点 + truncated 时返 `hint_for_llm` 字段引导加大不是减小. tool description 也写明"找不到加大不是减小". | 4 单测 |
+| **FIX10** | tool-bridge Playwright 硬 timeout wrapper. tool-bridge 单线程, Playwright sync API 卡死时 ignore 自带 timeout, 拖死整个 daemon → Companion 停止按钮失效. 用 concurrent.futures ThreadPoolExecutor + future.result(timeout=) 强制硬超时. | 6 单测 |
+| **FIX11** | 修 FIX10 自身 bug. `with ThreadPoolExecutor()` 退出时默认 `shutdown(wait=True)` 等卡死线程结束才返回 — timeout 等于没用. 改裸 executor + finally `shutdown(wait=False)` leak 卡死线程. **加一个真硬 timeout test 防 regression** (1s timeout vs 60s stuck_fn, assert wrapper 总时间 < 3s). | 1 单测 |
+| **FIX12** | weekly-report skill 输出路径 ~/Desktop → ~/.catfish/output/`<日期>/<时间>_周报-<员工>/`. 鸿波: "生成的文件不要放在桌面上, 乱的很". 跟 leadership-briefing / project-approval 归档对齐. | 17 单测 |
+| **FIX13** | gateway `prompt_security` regex 误报修. 鸿波: "我今天没输入明文为啥提示密码泄漏?". 真因 — 中文 regex `密码[是为:\s]+\S+` 把 `\s` 塞进 separator 集合, 跟 docstring 设计意图 (`密码[是为:][\s]*\S+`) 不符. 后果: "用户名、密码、 验证码" 这种正常陈述句撞误报. 改 separator 必须是 是/为/: 之一, \s 在外侧, 密码值 ≥4 字符防短词. | 5 单测 |
+| **FIX14** | Companion `AuditCard` UI 优化: tip 阈值 ≥3 才显示 (1-2 次撞不报) + 显示"今天 N 次"计数 + 加右上角 × dismiss + localStorage 按 kind+date 存 (隔天自动失效). 文案改"阈值 ≥3 才显示". | tsc clean |
+| **FIX15** | Companion `ProactiveCard` / `TasksCard` 高度对齐. 鸿波: "高度不一样". 加 `height: 100%` + `boxSizing: border-box` + flex column, TasksCard 删 marginBottom. | tsc clean |
+
+**视觉链 真跑通时刻** (16:30):
+```
+LLM catfish_browser_goto → browser_snapshot 找到 #captchaImg
+→ catfish_browser_screenshot(selector="#captchaImg")
+→ tool 返 data_uri → BL-FIX2 unwrap → role=user multipart
+→ Qwen3.5 122B 主力直接识别: "S2CB"
+→ catfish_browser_fill #captcha S2CB → click 登录
+```
+
+5/14 demo 卖点 "员工只说'登录 EIS', catfish 自动识别验证码" 这一步**真验证过**.
+
+### 下半天 (16:00-23:00) · Windows 客户端从 0 到 demo-ready (BL-WIN1~9.2, 8 个 BL)
+
+鸿波 Tokyo 9pm: "现在去把 Windows 客户端完成". 范围拍板 C (只先试 cross-build), 后追加:
+
+| BL | 修了啥 |
+|---|---|
+| **WIN1** | mac → Windows cross-build 配置: `.cargo/config.toml` x86_64-pc-windows-gnu linker = mingw-w64 + `-static-libgcc` 防 dll 缺. `scripts/build-windows.sh` 一键脚本: 检 rustup target / brew install mingw-w64 / npm build / cargo build. README-windows.md 部署形态 / 步骤 / 已知限制 / demo 策略. |
+| **WIN1.1** | `tool_bridge.rs` UnixStream cfg(unix) gate. Cross-build 第一个错: `error[E0432]: unresolved import 'tokio::net::UnixStream'`, Windows 没 unix domain socket. 加 cfg gate, Windows 暂走 stub. |
+| **WIN1.2** | speech.rs RecordingState/recording_slot/RPC_TIMEOUT 加 cfg(macos)/cfg(unix) gate, 清 3 个 dead-code warning. |
+| **WIN8** | tool-bridge IPC TCP localhost (替代 unix socket). Python server.py: os.name=='nt' 时走 `asyncio.start_server('127.0.0.1', port=0)`, 端口写到 `socket_path` (port 文件). Rust call_rpc cfg 分流: Unix UnixStream::connect, Windows 读 port 文件 → TcpStream::connect. 跟 named pipe 比 TCP 简单调试容易, loopback 安全等价 unix socket 600. |
+| **WIN3** | Companion `find_chrome()` Windows 候选扩 12 条: per-user `%LOCALAPPDATA%\Google\Chrome` (Win 主流) + 双架构 `Program Files` + Edge fallback (Win11 自带 Chromium 内核). 加 `CATFISH_CHROME_BIN` env 强制覆盖. |
+| **WIN2** | tool-bridge `secret_resolver._resolve_wincred` 真实现. 优先 Python `keyring` 包 (跨平台 wincred backend) → fallback PowerShell Get-Secret (SecretManagement) → 都失败给员工**完整 cmdkey + Set-Secret 教程**. pyproject.toml 加 `keyring>=24; sys_platform == 'win32'` 平台条件依赖. |
+| **WIN1.3** | speech.rs PathBuf/Child/Mutex/OnceLock 加 cfg(macos) gate, 清 3 个 unused_imports warning. .gitignore 加 `src-tauri/gen/schemas/` (cross-build 平台特化产物). |
+| **WIN9 / DEPLOY1** | **网关地址走 yaml 配置** (鸿波 "网关装到其他服务器, mac/Win 怎么设地址?"). 之前前端 `VITE_CATFISH_GATEWAY_URL` build-time 锁死, mac/Win 双击 .app/.exe 都不读 shell env. 修法 3 端联动: (1) Rust `endpoints.rs` 加 yaml 解析 (优先级 yaml > env > default); (2) 新加 Tauri command `get_runtime_endpoints` 暴露给前端; (3) 前端 `env.ts` `bootstrapEndpoints()` 启动时 invoke 写回 `config.gatewayUrl`; (4) `main.tsx` 包 ReactDOM.render. 客户改 `~/.catfish/companion.yaml` 重启就生效, 不需要重新打包. |
+| **WIN9.1** | `README-deploy.md` 补 Windows 具体步骤 (鸿波 "我没看出来"): 部署形态 A (纯聊天 只 .exe + yaml) vs B (完整 .exe+Python tool-bridge+Chrome) + 实际路径例 `C:\Users\chenhongbo\.catfish\companion.yaml` + 文件管理器 `%USERPROFILE%\.catfish` + 记事本 + 完全退出 Companion (托盘退出) + 双击重启 + 控制台 BL-WIN9 日志验证. |
+| **WIN9.2** | yaml 默认 audience 'test' → 'catfish-companion'. 鸿波问"client_id/audience/scope 要设吗?"顺手 audit 默认 yaml — 发现 `audience: test` 跟 catfish-identity 实际签的 `audience=client_id='catfish-companion'` 不匹配, 生产部署会 401 aud mismatch. 改默认值 + 三个字段加详细注释 (本机 demo / catfish-identity 中央 / 企业 SSO 三种场景). |
+
+### Cross-build 最终态
+
+```
+$ ./scripts/build-windows.sh
+cargo build --release --target x86_64-pc-windows-gnu
+   Finished `release` profile [optimized] target(s) in 26.92s
+✓ catfish-companion-app.exe  ~30 MB  0 error  0 warning
+```
+
+### Windows 客户能力清单
+
+✅ Companion UI / chat / 仪表盘 / SSO 登录 (cfg(windows) 已写)
+✅ 浏览器自动化 catfish_browser_* (Playwright + Chrome 找到, BL-WIN3)
+✅ 截图工具 catfish_screenshot (PIL.ImageGrab)
+✅ catfish_browser_screenshot (Playwright, 跨平台)
+✅ Skill 跑 (docx/pptx/xlsx/pdf 全跨平台)
+✅ secret_ref="wincred://eis_password" 跟 keychain:// 体验对齐 (BL-WIN2)
+✅ 网关地址 yaml 配置 (mac/Win 同款, 不需要重新打包, BL-WIN9)
+❌ 语音录入 (whisper.cpp 只 mac, Windows 走 stub)
+❌ outlook_win.py (BL-WIN4 未做, demo 用不到)
+❌ MSI / NSIS installer + 签名 (BL-WIN6 未做, raw .exe 拷过去能跑)
+
+### 测试统计 (一天加)
+
+- gateway: 661 → 677 (+16: BL-FIX2 17 / FIX5 8 / FIX6 3 / FIX8 14 / FIX13 5)
+- tool-bridge: 341 → 364 (+23: BL-FIX3 9 / FIX7 10 / FIX9 4 / FIX10 6 / FIX11 1 / WIN2 2)
+- weekly-report: 17 (BL-FIX12 防 regression)
+- companion: tsc 0 error / cargo cross-build 0 error 0 warning
+- **合计**: 1058+ tests passing
+
+### 鸿波诊断功劳 (今天点的真因)
+
+我打了 18 个补丁追症状, 鸿波 4 次 "你想复杂了" 直指根因:
+
+1. **BL-FIX7**: "之前都用 Playwright 截图给模型就能识别, 是不是把问题想复杂了?" → 加 catfish_browser_screenshot
+2. **BL-FIX9**: "max_elements=50 这个不够呢?" → 默认 bump 到 500
+3. **BL-FIX13**: "我今天没输入明文为啥提示?" → regex bug
+4. **BL-FIX12**: "生成的文件不要放在桌面上" → 归档到 .catfish/output
+
+教训记到 5/14 之后 BL-A 鲁棒性 sprint:
+- 一刀切去重前先看 LLM 还有没有等价能力 tool, 没有就先补再去
+- 默认参数也是 LLM 行为的一部分, audit 要包含
+- 写守卫 / 检测类 regex 写完跑反向 test (这条不该撞但撞了吗)
+
+### 5/8 commit 列表 (24 个)
+
+```
+800dd53 BL-WIN9.1 deploy README Windows 步骤
+0f2a715 BL-FIX15 仪表盘卡片高度对齐
+c415d9c BL-FIX14 audit tip 阈值 + dismiss
+... (省略中间, git log --oneline 5/8 开始 24 commit)
+1e34b2c BL-WIN1.3 speech.rs imports cfg gate
+9a5179f BL-WIN8 tool-bridge IPC TCP localhost
+a62d8e0 BL-WIN1.2 dead-code warning clean
+94a6c26 BL-WIN1.1 UnixStream cfg gate
+2aee03f BL-WIN1 cross-build 配置 + 脚本
+```
+
+### 遗留 (5/9 起做)
+
+**5/14 demo 之前必须**:
+- BL-D Phase 3 跨员工 PPT 路线图 (5/12 跟 Plan D 4.5 一起)
+- 5/13 真机彩排 ×2 (现在 demo 链通了, 可以彩排)
+- 5 场景实录视频 (5/12-13)
+- demo 机子 USER.md / journal seed 准备
+
+**Windows 真要上线**:
+- BL-WIN4 outlook_win.py (pywin32 COM)
+- BL-WIN5 daemon_windows.py (Windows Service)
+- BL-WIN6 MSI / NSIS installer + Authenticode 签名
+- BL-WIN7 sandbox AppContainer
+
+**鲁棒性 (BL-A 系列, 5/14 之后)**:
+- ProviderProfile (按上游 adapter 规则差异化 normalize)
+- ToolCatalog 白名单 (hermes builtin 全经 catfish 转译)
+- final_normalizer (chain 末尾按目标 provider 校验 + 修)
+- provider conformance test 套

@@ -191,16 +191,25 @@ impl OidcConfig {
 # 改完重启 Companion 即可生效. 员工不需要敲 launchctl setenv 这种命令.
 
 oidc:
-  # SSO 端点 (catfish-identity 本地 / 客户自建 OIDC / 飞书等)
+  # SSO 端点 (改这里). 三种典型场景:
+  #   - 本机 demo:        http://127.0.0.1:8998
+  #   - catfish-identity 中央:  http://10.10.40.50:8998
+  #   - 企业 SSO (Azure AD/Okta/飞书): IT 给的 issuer URL
   issuer: http://127.0.0.1:8998
 
-  # OIDC client 标识. catfish-identity 不严格校验, 客户自建 SSO 要跟 IT 确认
+  # OIDC client 标识. catfish-identity 用默认就行, 企业 SSO 改成 IT 给的 GUID/App ID.
   client_id: catfish-companion
 
-  # JWT 的 audience claim. catfish-identity 演示用 'test'; 真生产改为 client_id.
-  audience: test
+  # JWT audience claim — 必须跟 IdP 签 token 时填的 aud 一致, 否则 aud mismatch 401.
+  # BL-WIN9.2 (5/8): catfish-identity 默认 audience = client_id, 所以这里也跟着填
+  # 'catfish-companion' (而不是历史默认的 'test'). 之前默认 'test' 是早期 demo 残留,
+  # 跟 catfish-identity 实际签的对不上, 改这条是修隐性 bug.
+  audience: catfish-companion
 
-  # OAuth scope. 决定 IdP 返哪些 claim.
+  # OAuth scope. 决定 IdP 返哪些 claim. OIDC 标准三件套, 几乎不需要改.
+  #   openid:  标识这是 OIDC 流 (必须)
+  #   email:   拿员工邮箱 (catfish 用来识别员工)
+  #   profile: 拿员工姓名 / 头像
   scope: openid email profile
 
 # BL-WIN9 / DEPLOY1 (5/8): 网关地址配置 — 客户网关装中央服务器时改这里.

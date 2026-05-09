@@ -1,6 +1,6 @@
 # 鲶鱼 · Feature Tracks (主入口)
 
-> **快照**: 2026-05-06 (周三晚) · **维护人**: 鸿波 · **更新**: 每周日晚 + 重大 ship 时
+> **快照**: 2026-05-08 (周五深夜) · **维护人**: 鸿波 · **更新**: 每周日晚 + 重大 ship 时
 > **角色**: 这是**唯一**的"我们在做啥 / 还差啥 / 在哪个 phase"主入口.
 > 其他 doc 角色见底部 § 文档地图.
 
@@ -9,8 +9,8 @@
 ## 🚦 Phase 进度 (一行看清)
 
 ```
-Phase 1 · 单员工 AI 副手           [██████████] 99.5% · 5/14 demo 基本就绪
-Phase 2 · 团队版 (SSO/RBAC/Win)    [█████████░] 88%   · 5/6 sprint Skills Hub G2 + 7 gap 安全闭环 + 文档套件
+Phase 1 · 单员工 AI 副手           [██████████] 99.8% · 5/14 demo 视觉链 ✅ 验证 (Qwen 主力识码 "S2CB")
+Phase 2 · 团队版 (SSO/RBAC/Win)    [█████████░] 95%   · 5/8 Windows 客户端从 0 到 demo-ready (cross-build .exe + IPC TCP + Chrome 路径 + wincred + yaml 配置)
 Phase 3 · ★ Federation             [█████░░░░░] 50%   · Plan D v0.1 ✅ + 5/6 重定位 agent-as-service (BL-FED2 6 周 ship) · 5/6 晚灵魂校准: 员工自愿互助 + 跨雇主可携带
 Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   · 2027 Q2+
 ```
@@ -38,6 +38,30 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 >     gateway sanitizer 兜底强制 type='object' + 缺 properties → {}. **+7 测试 / 506/506 全过 / 0 副作用**.
 >     demo 后 BL-FE3 加前端 reasoning_content 原生支持, 配合 deepseek thinking 重开
 >
+> 📈 **5/8 (周五一日 24 commit)** — 视觉 demo 14 BL-FIX 端到端 + Windows 客户端从 0 到 demo-ready 8 BL-WIN:
+>   - **上半天 (BL-FIX2-15, 14 个 BL)**: 5/14 demo 卖点 "员工说'登录 EIS', catfish 自动识别验证码" — 早 8 点撞 BadRequest 400 (空 reason Go gRPC 风格), 一路追到 12 处 bug. 16:30 真跑通 (Qwen3.5 122B 主力识码 "S2CB" 准确). 关键修法:
+>     - **FIX2** `multimodal_tool_unwrap` (gateway): tool 含图重组到 user multipart message — Qwen Go gRPC adapter 不接受 role=tool 含 multimodal, 改写 tool 留路径元数据 + 紧接插 user multipart [{type:text}, {type:image_url}]. **基础设施级修法**, 任何含图的 tool 都走这条.
+>     - **FIX4 + FIX5**: dedupe hermes builtin browser_* 12 条 + 同步 scrub 历史 tool_calls (LLM 训练分布最熟 hermes browser_vision, 但 catfish 没配 vision provider → 撞 400). 一刀切去重, 历史里残留 tool_call 也清.
+>     - **FIX6 + FIX8**: tool_retry_hint / self_critique role 'system → user' (Qwen 中段 system 撞 400, 末尾 user 等价于"员工又说一句").
+>     - **FIX7** `catfish_browser_screenshot` (鸿波诊断 "之前都用 Playwright 截图给模型就能识别"): 加 Playwright `page.screenshot()` 工具, 同 connect_over_cdp 链路, 替代 hermes 一刀切丢的 browser_screenshot.
+>     - **FIX9** snapshot max_elements 200→500 cap 1000 + truncated hint_for_llm (鸿波诊断 "max_elements=50 不够吧"): LLM 偷懒减小, CAS 登录 nav link 多, 登录 button 挤出. 默认大 + truncated 引导加大不减小. tool description 写明.
+>     - **FIX10 + FIX11**: Playwright 硬 timeout wrapper. tool-bridge 单线程被卡死时 Companion 停止按钮也失效. ThreadPoolExecutor + future.result(timeout=) + finally shutdown(wait=False) leak 卡死线程. FIX10 写错被自己 with 块 shutdown(wait=True) 等死, FIX11 修 — **加真硬 timeout test 防 regression**.
+>     - **FIX13** prompt_security regex 误报修 (鸿波 "我今天没输入明文为啥提示?"): 中文 `密码[是为:\s]+\S+` 把 \s 塞进 separator 集合, 跟 docstring 设计 (`密码[是为:][\s]*\S+`) 不符. "用户名、密码、 验证码" 这种正常陈述句撞误报. 改 separator 必须 是/为/: 之一.
+>     - **FIX12** weekly-report 不丢桌面 (鸿波 "生成的文件不要放在桌面上, 乱的很"): 默认 ~/Desktop/ → ~/.catfish/output/<日期>/<时间>_周报-<员工>/, 跟其他 skill 归档对齐.
+>     - **FIX14 + FIX15** (Companion UI): audit tip 阈值≥3+计数+dismiss / ProactiveCard / TasksCard 高度对齐.
+>     - 测试: gateway 661 → 677 (+16) / tool-bridge 341 → 364 (+23) / weekly-report 17, 全过.
+>   - **下半天 (BL-WIN1-9.2, 8 个 BL)** — 鸿波 Tokyo 9pm "现在去把 Windows 客户端完成". Windows 客户端从 0 到 demo-ready:
+>     - **WIN1** mac → Windows cross-build (`.cargo/config.toml` mingw-w64 + scripts/build-windows.sh): 出 30MB `catfish-companion-app.exe`, 0 error 0 warning (经 WIN1.1/1.2/1.3 一路修 cfg(unix) gate / dead-code).
+>     - **WIN8** tool-bridge IPC TCP localhost 替代 unix socket: Python server.py `os.name=='nt'` 时走 `asyncio.start_server('127.0.0.1', port=0)` + 端口写文件; Rust call_rpc cfg 分流 UnixStream/TcpStream. 跟 named pipe 比 TCP 简单, loopback 安全等价.
+>     - **WIN3** Chrome 路径自动检测扩 12 候选 (per-user `%LOCALAPPDATA%\Google` + 双架构 Program Files + Edge Win11 fallback) + `CATFISH_CHROME_BIN` env 强制覆盖.
+>     - **WIN2** secret_resolver `wincred://` 真实现: 优先 Python keyring → fallback PowerShell Get-Secret → friendly error 含 cmdkey/Set-Secret 教程. pyproject.toml 加 `keyring>=24; sys_platform == 'win32'`.
+>     - **WIN9 / DEPLOY1** 网关地址走 yaml 配置 (鸿波 "网关装中央服务器 mac/Win 怎么设地址?"): mac .app + Win .exe 双击启动**都不读 shell env**, 走 `~/.catfish/companion.yaml`. 3 端联动 — Rust endpoints.rs 加 yaml 解析 + 新 Tauri command `get_runtime_endpoints` + 前端 `bootstrapEndpoints()` 启动写回 config.gatewayUrl. 客户改 yaml 重启即生效, 不需要重新打包.
+>     - **WIN9.1** README-deploy 补 Windows 具体步骤 (鸿波 "我没看出来"): 部署形态 A (纯聊天 只 .exe + yaml) vs B (完整 .exe+Python+Chrome) + Windows 路径例 + 文件管理器步骤 + console.info 验证.
+>     - **WIN9.2** yaml 默认 audience 'test' → 'catfish-companion' (生产部署会 401 aud mismatch 隐性 bug, 顺手修).
+>     - Windows 真机能跑: chat / 仪表盘 / SSO / 浏览器自动化 / 截图 / skill / wincred / yaml 配置. 还差: outlook (WIN4) / Windows Service daemon (WIN5) / MSI 签名 (WIN6) / sandbox (WIN7) — 真上线分批做.
+>   - 测试 1058+ passing (gateway 677 + tool-bridge 364 + weekly-report 17 + cross-build clean).
+>   - 鸿波诊断功劳: 18 个补丁里 4 个 (FIX7/9/12/13) 是鸿波直接指根因, 比我顺症状追快. 教训: tool 描述 + 默认参数也是 LLM 行为的一部分, audit 要包含; 一刀切去重前先看 LLM 还有没有等价能力 tool, 没有就先补再去.
+
 > 📈 5/5-5/6 sprint 桌宠 ship + 7 gap 安全闭环 + 主动闲聊 8 bug 修 + 文档套件 (~40 commit):
 >   - **5/5 BL-E27 桌宠 spike + ship**: 计划 5/22 起做的 BL-E27 提前两周 ship 到 BL-E27.2 阶段. 透明 NSPanel + macOSPrivateApi + 4 状态联 LLM + Cmd+Shift+P toggle + Option+Shift+1/2/3/4 4 屏角 + LogicalPosition 修 Retina 物理像素出屏幕 + SVG v1 (鱼竿) → v2 (圆胖浮游). 鸿波拍板"主动信息出口" — 桌宠取代 macOS 通知做 chat starter.
 >   - **5/6 BL-E27.2 真透明穿透 + Rust polling 通信**: 三轮 emit 协议层 dead end 后弃用 (app.emit_to / pet.emit / emitTo 都通不到 pet listener), 改 Rust 全局 Mutex polling buffer (300ms tick) — 100% 可靠不依赖 Tauri 跨 webview event. cursor_position 80ms 轮询切 setIgnoreCursorEvents (透明角穿透 + 桌宠区接事件), pet_emit_bubble / pet_emit_status 两条命令.
@@ -51,20 +75,20 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 
 ---
 
-## 🚨 当前最大风险 / 缺位 (Top 5, 5/6 更新)
+## 🚨 当前最大风险 / 缺位 (Top 5, 5/8 更新)
 
 | # | 风险 / 缺位 | 影响 | 跟踪 track |
 |---|---|---|---|
-| 1 | **5/13 真机彩排 ×2 没做** (距 5/14 demo ~8 天) | 现场翻车 | #18 销售物料 |
+| 1 | **5/13 真机彩排 ×2 没做** (距 5/14 demo ~6 天) | 现场翻车 | #18 销售物料 |
 | 2 | **5 场景实录视频没做** | 现场全挂兜底缺位 | #18 销售物料 |
 | 3 | **5/14 demo 机子 USER.md / journal seed 没准备** | 场景 1/4 演不出"鲶鱼记得我" | #18 + 现场准备 |
 | 4 | **employee_journal 真业务内容不够** | 跨 session 记忆演不出, 5/6 桌宠主动闲聊已缓解一半 | #25 + 持续用 |
-| 5 | **Win 客户端 0% 没动** (5/2 拍板暂不动) | Q3 大客户阻塞 | #2 ★ |
-| 6 | **Production 完整部署 50%** (docker-compose ship, 客户 IT runbook 5/6 ship) | 5/14 demo 后客户问"装一份给我们"基本能交付 | #16 ★ |
+| ~~5 Win 客户端 0%~~ | ~~~~ 5/8 突击 8 BL ship 到 demo-ready (cross-build .exe 0 error / IPC TCP / Chrome 路径 / wincred / yaml 配置). 真机验证 + outlook + MSI 签名留 BL-WIN4-7. | #2 ★ |
+| 5 (新) | **Windows 真机端到端验证** (cross-build .exe 没在 Windows 实跑过) | 现场客户演 Windows 抓瞎 | #2 (5/12 之前) |
+| 6 | **Production 完整部署 50% → 75%** (5/8 加 yaml 配置 + 中央/单机部署形态文档) | 5/14 demo 后客户问"装一份给我们"基本能交付 | #16 ★ |
 | 7 | **团队 1 人** (Phase 2 一定带不动) | Q3 KPI 跳票 | #20 |
-| ~~.app build~~ | ~~~~ ✅ 鸿波 5/6 已 build + 装应用目录 | — |
 
-> 📊 **5/6 后**: 后端 / 卖点 / 安全 / 文档全部 ship 完, demo 阻塞**只剩**演讲准备侧 (彩排 / 视频 / demo 机子 seed). 都是 0 工程量, 鸿波 + 我 1-3 天能闭环.
+> 📊 **5/8 后**: Windows 客户端从"未启动"跨到"代码 ship + 文档齐 + cross-build 0 error", Phase 2 占比 88% → 95%. demo 链 (验证码自动识别) 真验证. 阻塞**只剩演讲准备侧**: 彩排 / 视频 / demo 机子 seed / Windows 真机验证. 都是工程量小的事, 5/9-13 能闭环.
 
 ---
 
@@ -225,18 +249,26 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 - ⬜ 部门级 skill auto-推 · 1-2 周 (依赖 #8 federation 协议)
 - ⬜ PG 存储替代文件 (Phase 2.5) · 1 周
 
-#### #2 ★ Companion Windows [Phase 2, 0% · 5/2 决策: 暂不动]
+#### #2 ★ Companion Windows [Phase 2, 80% · 5/8 突击 8 BL 跨到 demo-ready]
 > 大客户都用 Win, 没 Win 客户端 = Q3 大客户阻塞.
-> **5/2 鸿波拍板**: 暂不开工, 等 PoC 客户出现 Win 需求再做 (避免 1 人团队分心).
-> 凭据安全模型已设计好 (Rust `keyring` crate 跨平台 → Mac Keychain / Win Credential Manager).
-- ⬜ Tauri Win build 验证 · 1 天 (BL-C2)
-- ⬜ IPC TCP 替代 Unix socket (Win 没 unix socket) · 2 天 (BL-C3)
-- ⬜ Win Credential Manager 实测 (keyring crate 抽象, 代码不改) · 1 天 (BL-C4)
-- ⬜ msi 安装包 + 自动更新 · 1 周 (BL-F2)
-- ⬜ 全部路径用 std::path::PathBuf, 测试在 Win 跑通 · 1 周
-- **估时**: 4-5 天集中 + 1 周 msi/部署
-- **触发**: PoC / demo 客户明确说"Win 必须" → 启动这条 track
-- **风险**: hermes / Whisper.cpp / ffmpeg 在 Win 是否能跑全没验过
+> **5/8 鸿波 Tokyo 9pm 拍板做** — 一晚 8 BL ship 到 demo-ready 形态.
+> 凭据安全模型已对齐 (Rust `keyring` crate / Python `keyring`+wincred 跨平台).
+- ✅ **BL-WIN1** mac → Win cross-build (mingw-w64 / `cargo build --target x86_64-pc-windows-gnu`) — 出 30MB `catfish-companion-app.exe`, 0 error 0 warning. `scripts/build-windows.sh` 一键脚本.
+- ✅ **BL-WIN1.1/1.2/1.3** cfg(unix)/cfg(macos) gate 修 5 个编译错+warning (UnixStream / RecordingState / dead-code imports).
+- ✅ **BL-WIN8** tool-bridge IPC TCP localhost 替代 Unix socket — Python server.py `os.name=='nt'` 时走 `asyncio.start_server('127.0.0.1', port=0)`, 端口写文件; Rust call_rpc cfg 分流 UnixStream/TcpStream.
+- ✅ **BL-WIN3** Chrome 路径检测扩 12 候选 (per-user `%LOCALAPPDATA%\Google` + 双架构 Program Files + Edge Win11 fallback) + `CATFISH_CHROME_BIN` env 强制覆盖.
+- ✅ **BL-WIN2** secret_resolver `wincred://` 真实现 — Python `keyring` 包 (跨平台 wincred backend) + PowerShell Get-Secret fallback + 完整 cmdkey/Set-Secret 教程. `keyring>=24; sys_platform == 'win32'` 平台条件依赖.
+- ✅ **BL-WIN9 / DEPLOY1** 网关地址走 yaml 配置 — mac .app + Win .exe 双击启动**都不读 shell env**, 走 `~/.catfish/companion.yaml`. 3 端联动: Rust endpoints.rs 加 yaml 解析 + Tauri command `get_runtime_endpoints` + 前端 `bootstrapEndpoints()` startup 写回. 客户改 yaml 重启即生效.
+- ✅ **BL-WIN9.1** README-deploy 补 Windows 具体步骤 (部署形态 A 纯聊天 vs B 完整 / `%USERPROFILE%\.catfish\companion.yaml` 路径 / 文件管理器+记事本+完全退出+重启验证).
+- ✅ **BL-WIN9.2** yaml 默认 audience 'test' → 'catfish-companion' (修隐性 401 aud mismatch).
+- ⬜ **BL-WIN4** outlook_win.py (pywin32 COM) · 1-2 天 — demo 用不到, 客户上线用
+- ⬜ **BL-WIN5** daemon_windows.py (Windows Service / startup folder) · 0.5 天
+- ⬜ **BL-WIN6** MSI / NSIS installer + Authenticode 签名 · 0.5 天 (要 Windows 真机 + 证书)
+- ⬜ **BL-WIN7** sandbox AppContainer (代替 sandbox-exec) · 2-3 天 — 安全侧, 不阻塞 demo
+- ⬜ **BL-WIN10** Windows 真机端到端验证 (Parallels / VMware / 同事机) — 5/12 之前必做
+- **估时已 ship**: 4 小时 (5/8 晚 7-11pm) · **剩**: WIN4-7 真上线分批 + WIN10 真机验证
+- **触发**: 5/8 鸿波拍板"现在做" → 一晚 ship 完
+- **能力清单 (Win 真机能跑)**: chat / 仪表盘 / SSO 登录 / 浏览器自动化 catfish_browser_* / Playwright 截图 / skill (docx/pptx/xlsx/pdf) / wincred 密码 / yaml 配置网关地址
 
 ---
 

@@ -386,6 +386,11 @@ pub fn run() {
             commands::skill_feedback::skill_feedback_record,
             commands::skill_feedback::skill_feedback_summary,
             commands::skill_feedback::skill_feedback_clear,
+            // BL-MM14 / MM15 (5/8): skill revision proposals + 改进有效性跟踪
+            commands::skill_revision::skill_revision_summary,
+            commands::skill_revision::skill_revision_accept,
+            commands::skill_revision::skill_revision_reject,
+            commands::skill_revision::skill_revision_check_effectiveness,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
