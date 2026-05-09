@@ -14,6 +14,7 @@ import os
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -871,6 +872,91 @@ async def _stream_with_keepalive(iterator, interval_secs: float = _KEEPALIVE_INT
             return
 
 
+# BL-FIX23 L5 (5/9): 鸿波拍板"方案 C, 不要考虑别的". gateway 检测 plan-only
+# finish_reason=stop 自动重发, 客户端无感. 三次诊断后真根因: Qwen3.5 122B
+# 长 context (79 messages, 5万字 journal) + RLHF "礼貌等确认" 模式 — LLM 收
+# self_critique hint 后**还是** finish_reason=stop, 嘴上说要做但没 emit tool_call.
+# SOUL 纪律治不了 (RLHF > system prompt), self_critique 已经 inject 但模型不听.
+# L5 真招: gateway 内部起新一轮 acompletion 加硬 hint, 把新 stream 接到原 SSE.
+#
+# 触发条件 (4 条都满足):
+#   1. finish_reason == "stop" (LLM 自然结束, 不是 length/tool_calls)
+#   2. 累积没 emit 任何 productive tool_call (execute_code / catfish_run_skill / ...)
+#   3. 累积 content 是 plan-only (含承诺关键词或未来意图词)
+#   4. 上一条 user message 是反馈 (短消息或含反馈关键词)
+# 防死循环: 重发上限 2 次. 每次重发记 WARNING.
+_PLAN_ONLY_PROMISE_KEYWORDS = (
+    # 完成承诺 (跟 self_critique 一致, 不再 import 防循环)
+    "已生成", "已保存", "已完成", "已创建", "已修改", "已写入",
+    "已输出", "已写好", "已经生成", "已经保存", "已经完成",
+    # 未来意图 (LLM 经常说"我立刻..."然后停)
+    "立刻", "我现在", "现在重新", "我马上", "马上动手", "重新生成",
+    "我立即", "立即生成", "现在生成", "现在调整", "重新调整",
+)
+_PLAN_ONLY_FEEDBACK_KEYWORDS = (
+    # 短反馈词 (员工提细节调整时常见)
+    "改", "调整", "错了", "漏", "继续", "做啊", "干完", "干一半",
+    "还有", "不对", "不要", "再改", "重做", "没做完", "怎么", "还是",
+    "完成", "写完", "做完",
+)
+_PLAN_ONLY_PRODUCTIVE_TOOLS = {
+    "execute_code", "python", "bash", "shell_exec", "sh",
+    "catfish_run_skill", "write_file", "edit_file", "create_file",
+    "save_file", "tauri_save_file", "memory_save", "catfish_remember",
+}
+_PLAN_ONLY_HARD_HINT = (
+    "[BL-FIX23 L5 plan-only-retry]\n"
+    "你刚回了一段话但**没 emit 任何 tool_call**. 员工要的是真做事不是嘴上承诺.\n\n"
+    "立刻发起 tool_call 真做出来:\n"
+    "- 写文档/改文档 → execute_code 调 python-docx 直接读写文件\n"
+    "- 跑 skill → catfish_run_skill\n"
+    "- 写文件 → write_file / tauri_save_file\n\n"
+    "**一个字解释都不要发**, 直接 tool_call. "
+    "鸿波刚才已经反馈了这正是他要的 — '怎么干一半就停了'."
+)
+_MAX_PLAN_ONLY_RETRIES = 2
+
+
+def _is_plan_only_content(content: str) -> bool:
+    """累积 content 是 plan-only (含承诺/未来意图词且没真做)."""
+    if not content or len(content) < 10:
+        return False
+    for kw in _PLAN_ONLY_PROMISE_KEYWORDS:
+        if kw in content:
+            return True
+    return False
+
+
+def _last_user_message_is_feedback(messages: list) -> bool:
+    """上一条 user message 看起来是反馈 (短消息或含反馈词)."""
+    if not messages:
+        return False
+    # 倒序找最近的 user message (跳过 tool / assistant)
+    for msg in reversed(messages):
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content", "")
+        # multipart 取 text 部分
+        if isinstance(content, list):
+            content = " ".join(
+                p.get("text", "")
+                for p in content
+                if isinstance(p, dict) and p.get("type") == "text"
+            )
+        if not isinstance(content, str):
+            return False
+        # 短消息 (< 30 字, 一般是反馈) 或 含反馈关键词
+        if len(content) < 30:
+            return True
+        for kw in _PLAN_ONLY_FEEDBACK_KEYWORDS:
+            if kw in content:
+                return True
+        return False  # 长 user message + 没反馈词 → 不是反馈
+    return False
+
+
 async def _stream_chat_completion(
     body: dict,
     *,
@@ -886,6 +972,10 @@ async def _stream_chat_completion(
     Fallback 时机:
         在 "acompletion + 首 chunk" 阶段失败 → 切下一个模型重试
         已开始流之后挂掉 → 没法切, 直接转 SSE error 返回 (中途换模型会乱掉客户端解析)
+
+    BL-FIX23 L5 (5/9): plan-only retry — finish_reason=stop + 没 tool_call +
+    plan-only content + 上一条 user 是反馈 → 内部起新 acompletion 强制重发,
+    最多 2 次. 客户端无感, 看着像鲶鱼自己续写.
     """
     start = time.time()
     ttft_ms: float | None = None  # 首 token / 首 chunk 延迟, fallback 后会被覆盖成实际值
@@ -928,89 +1018,160 @@ async def _stream_chat_completion(
                 "stream served by fallback: requested=%s used=%s",
                 model.name, used_model.name,
             )
-        # 写出首 chunk (可能是 None, 表示流空)
-        if first_chunk is not None:
-            data = first_chunk.model_dump() if hasattr(first_chunk, "model_dump") else first_chunk
-            if isinstance(data, dict):
-                usage = data.get("usage") or {}
-                prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
-                completion_tokens = usage.get("completion_tokens", completion_tokens)
-            yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
-        # 后续 chunks 流出去 —— 这阶段挂了不再 fallback.
-        # 用 _stream_with_keepalive 包装: 上游 chunk 间隔 > 30s 时插 SSE comment
-        # 防客户端/中间代理 timeout 断开. 私有 LLM tool calling 思考阶段尤其需要.
-        # BL-FIX23 L3+L4b (5/9): debug 计数器 + finish_reason 跟踪. 鸿波 5/9
-        # 抱怨'半截就停' 三轮诊断后定位 — 真因是 Qwen vLLM max_tokens 默认太小,
-        # streaming 路径 BL-A1.1 auto-continue 没接 (auto_continue.py 自己注释
-        # 说了 5/8 后续做). 这里加 finish_reason 跟踪让下次出问题一眼定位.
-        chunk_stats = {"total": 0, "content": 0, "reasoning": 0, "tool_calls": 0, "empty": 0}
-        last_finish_reason: str | None = None
-        async for chunk in _stream_with_keepalive(iterator):
-            if chunk == "__keepalive__":
-                # SSE comment 行, 客户端会忽略, 但 TCP 连接保活.
-                yield ": keepalive\n\n"
-                continue
-            data = chunk.model_dump() if hasattr(chunk, "model_dump") else chunk
-            if isinstance(data, dict):
-                usage = data.get("usage") or {}
-                prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
-                completion_tokens = usage.get("completion_tokens", completion_tokens)
-                # BL-FIX23 L3: 采样 delta 形态分布 (debug 用)
-                choices = data.get("choices") or []
-                if choices:
-                    choice0 = choices[0]
-                    delta = choice0.get("delta") or {}
-                    chunk_stats["total"] += 1
-                    has_any = False
-                    if delta.get("content"):
-                        chunk_stats["content"] += 1
-                        has_any = True
-                    if delta.get("reasoning_content"):
-                        chunk_stats["reasoning"] += 1
-                        has_any = True
-                    if delta.get("tool_calls"):
-                        chunk_stats["tool_calls"] += 1
-                        has_any = True
-                    if not has_any:
-                        chunk_stats["empty"] += 1
-                    # BL-FIX23 L4b: 跟踪 finish_reason. 看到 'length' = max_tokens
-                    # 截了, 真根因. streaming auto-continue (BL-A1.2) 没做之前
-                    # 至少能从日志一眼看出来.
-                    if choice0.get("finish_reason"):
-                        last_finish_reason = choice0["finish_reason"]
-            yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
-        yield "data: [DONE]\n\n"
-        # BL-FIX23 L3+L4b: 流末尾打 chunk 形态分布 + finish_reason. 鸿波抱怨
-        # '半截就停' 时看这条:
-        #   reasoning>0 content=0   → 前端没读 reasoning_content (BL-FE3 配套)
-        #   finish_reason=length    → max_tokens 截了, BL-A1.2 streaming
-        #                              auto-continue 该排上 / 或 client 传更大
-        #                              max_tokens
-        #   finish_reason=stop      → LLM 自然结束, 内容真完了 (鸿波看着像截
-        #                              其实是模型自己觉得说完了, SOUL 纪律层修)
-        if chunk_stats["total"] > 0:
-            logger.info(
-                "chunk stats: model=%s total=%d content=%d reasoning=%d "
-                "tool_calls=%d empty=%d finish_reason=%s",
-                used_model.name,
-                chunk_stats["total"],
-                chunk_stats["content"],
-                chunk_stats["reasoning"],
-                chunk_stats["tool_calls"],
-                chunk_stats["empty"],
-                last_finish_reason,
-            )
-            # BL-FIX23 L4b: finish_reason=length 时 WARNING 级别, 让运维看到
-            # max_tokens 截这条 P0. 5/14 demo 前别让员工感受到.
-            if last_finish_reason == "length":
-                logger.warning(
-                    "finish_reason=length: model=%s max_tokens 截了, 鸿波抱怨"
-                    "'半截就停' 真因. streaming auto-continue 还没接 (BL-A1.2). "
-                    "L4a 已强制 max_tokens=4096 兜底, 还撞说明 4K 也不够 → "
-                    "调大或者真做 BL-A1.2.",
+        # BL-FIX23 L5 (5/9): plan-only retry 跨次累积状态. 一次 stream 跑完
+        # 后看是不是 plan-only stop, 是的话不发 [DONE], 起新一轮 acompletion
+        # 加硬 hint, 把新 chunks 接到原 SSE 流上, 客户端无感.
+        cumulative_content = ""
+        cumulative_has_tool_call = False
+        plan_only_retries = 0
+        current_body = body  # 第一轮用原 body, retry 时 deepcopy 加 hint
+
+        while True:  # outer plan-only retry loop
+            # ── 跑一轮 stream attempt ────────────────────────────────────
+            chunk_stats = {"total": 0, "content": 0, "reasoning": 0, "tool_calls": 0, "empty": 0}
+            last_finish_reason: str | None = None
+            attempt_content = ""
+            attempt_has_tool_call = False
+
+            # 写出首 chunk (只第一轮 retry 有 first_chunk, 后续重发都从 iterator 起)
+            if first_chunk is not None:
+                data = first_chunk.model_dump() if hasattr(first_chunk, "model_dump") else first_chunk
+                if isinstance(data, dict):
+                    usage = data.get("usage") or {}
+                    prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
+                    completion_tokens = usage.get("completion_tokens", completion_tokens)
+                    # 也对 first_chunk 做 stat 累积 (跟下面的 async for 一致)
+                    choices = data.get("choices") or []
+                    if choices:
+                        choice0 = choices[0]
+                        delta = choice0.get("delta") or {}
+                        chunk_stats["total"] += 1
+                        has_any = False
+                        if delta.get("content"):
+                            chunk_stats["content"] += 1
+                            attempt_content += delta["content"]
+                            has_any = True
+                        if delta.get("reasoning_content"):
+                            chunk_stats["reasoning"] += 1
+                            has_any = True
+                        if delta.get("tool_calls"):
+                            chunk_stats["tool_calls"] += 1
+                            attempt_has_tool_call = True
+                            has_any = True
+                        if not has_any:
+                            chunk_stats["empty"] += 1
+                        if choice0.get("finish_reason"):
+                            last_finish_reason = choice0["finish_reason"]
+                yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+                first_chunk = None  # 用过了, 后续 retry 不再有首 chunk 特殊处理
+
+            # 后续 chunks 流出去 —— 这阶段挂了不再 fallback.
+            # 用 _stream_with_keepalive 包装: 上游 chunk 间隔 > 30s 时插 SSE comment
+            # 防客户端/中间代理 timeout 断开.
+            async for chunk in _stream_with_keepalive(iterator):
+                if chunk == "__keepalive__":
+                    # SSE comment 行, 客户端会忽略, 但 TCP 连接保活.
+                    yield ": keepalive\n\n"
+                    continue
+                data = chunk.model_dump() if hasattr(chunk, "model_dump") else chunk
+                if isinstance(data, dict):
+                    usage = data.get("usage") or {}
+                    prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
+                    completion_tokens = usage.get("completion_tokens", completion_tokens)
+                    # BL-FIX23 L3: 采样 delta 形态分布 (debug 用)
+                    choices = data.get("choices") or []
+                    if choices:
+                        choice0 = choices[0]
+                        delta = choice0.get("delta") or {}
+                        chunk_stats["total"] += 1
+                        has_any = False
+                        if delta.get("content"):
+                            chunk_stats["content"] += 1
+                            attempt_content += delta["content"]
+                            has_any = True
+                        if delta.get("reasoning_content"):
+                            chunk_stats["reasoning"] += 1
+                            has_any = True
+                        if delta.get("tool_calls"):
+                            chunk_stats["tool_calls"] += 1
+                            attempt_has_tool_call = True
+                            has_any = True
+                        if not has_any:
+                            chunk_stats["empty"] += 1
+                        # BL-FIX23 L4b: 跟踪 finish_reason.
+                        if choice0.get("finish_reason"):
+                            last_finish_reason = choice0["finish_reason"]
+                yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+            # ── 一轮 stream 跑完, 累积状态 ───────────────────────────────
+            cumulative_content += attempt_content
+            cumulative_has_tool_call = cumulative_has_tool_call or attempt_has_tool_call
+
+            # BL-FIX23 L3+L4b: 流末尾打 chunk 形态分布 + finish_reason.
+            #   reasoning>0 content=0   → 前端没读 reasoning_content (BL-FE3 配套)
+            #   finish_reason=length    → max_tokens 截了, BL-A1.2 streaming
+            #                              auto-continue 该排上 / 或 client 传更大
+            #                              max_tokens
+            #   finish_reason=stop      → LLM 自然结束 (BL-FIX23 L5 看是不是 plan-only)
+            if chunk_stats["total"] > 0:
+                logger.info(
+                    "chunk stats: model=%s total=%d content=%d reasoning=%d "
+                    "tool_calls=%d empty=%d finish_reason=%s "
+                    "(retry=%d cum_content=%d cum_tc=%s)",
                     used_model.name,
+                    chunk_stats["total"],
+                    chunk_stats["content"],
+                    chunk_stats["reasoning"],
+                    chunk_stats["tool_calls"],
+                    chunk_stats["empty"],
+                    last_finish_reason,
+                    plan_only_retries,
+                    len(cumulative_content),
+                    cumulative_has_tool_call,
                 )
+                if last_finish_reason == "length":
+                    logger.warning(
+                        "finish_reason=length: model=%s max_tokens 截了 (L4a 兜底 4096 "
+                        "还撞 → 调大 / 真做 BL-A1.2 streaming auto-continue).",
+                        used_model.name,
+                    )
+
+            # ── BL-FIX23 L5: plan-only retry 触发判定 ──────────────────
+            should_retry = (
+                last_finish_reason == "stop"
+                and not cumulative_has_tool_call
+                and _is_plan_only_content(cumulative_content)
+                and _last_user_message_is_feedback(current_body.get("messages") or [])
+                and plan_only_retries < _MAX_PLAN_ONLY_RETRIES
+            )
+            if not should_retry:
+                yield "data: [DONE]\n\n"
+                break
+
+            # ── 触发 plan-only retry: 起新一轮 acompletion + 注入硬 hint ─
+            plan_only_retries += 1
+            logger.warning(
+                "BL-FIX23 L5 plan-only retry %d/%d: model=%s 检测 finish_reason=stop + "
+                "0 tool_call + plan-only content (%d 字) + user 反馈 → 重发硬 hint",
+                plan_only_retries,
+                _MAX_PLAN_ONLY_RETRIES,
+                used_model.name,
+                len(cumulative_content),
+            )
+            # deepcopy current_body 防原 body 被改 (chat_completions 调用方还会用)
+            current_body = deepcopy(current_body)
+            messages = current_body.setdefault("messages", [])
+            # 把这一轮的 assistant 输出补到 messages (LLM 看到自己说过啥)
+            messages.append({"role": "assistant", "content": attempt_content})
+            # 加 user 硬 hint, "立刻 emit tool_call 一字不解释"
+            messages.append({"role": "user", "content": _PLAN_ONLY_HARD_HINT})
+            # 重新 acompletion (同 used_model, 不再 fallback — fallback 链已在最初做过)
+            params = _build_litellm_params(current_body, used_model)
+            response = await litellm.acompletion(**params)
+            iterator = response.__aiter__()
+            # 不再有特殊 first_chunk, 直接进 outer while 下一轮 async for
+            # (continue 自动从 outer while 顶上跑下一轮 stream attempt)
     except Exception as e:  # noqa: BLE001
         status_str = "error"
         err = str(e)
