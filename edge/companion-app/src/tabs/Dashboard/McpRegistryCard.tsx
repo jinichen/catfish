@@ -1,14 +1,15 @@
-/** Dashboard 卡 — MCP 连接器仓库 (BL-D3 Phase 1, 5/9 ship)
+/** Dashboard 卡 — MCP 连接器仓库 (BL-D3 Phase 1+2, 5/9 ship)
  *
- * 列出可用 MCP 连接器 (按部门权限过滤). Phase 1 只读展示,
- * Phase 2 接订阅按钮 + OAuth flow, Phase 3 真接 mcp pod.
+ * 列出可用 MCP 连接器 (按部门权限过滤). Phase 2 (5/9 加) 加订阅 / OAuth flow.
  *
- * 走 catfish-gateway 转发 GET /v1/mcp/registry. gateway 透传
- * X-Catfish-User-Dept (从 JWT 抽出) → mcp-registry 部门过滤.
+ * Phase 1: GET /v1/mcp/registry 列连接器
+ * Phase 2: POST /v1/mcp/subscribe (auth_type=none → 直 active; oauth2 → 跳浏览器)
+ *          POST /v1/mcp/oauth/start → authorize_url
+ *          POST /v1/mcp/oauth/callback → 写 secret-broker → active
+ *          DELETE /v1/mcp/subscribe/{id} → revoked
+ * Phase 3 (后续): Agent 动态加载 + pod-per-user
  *
- * 跟 SkillsMcpCard 区别:
- *   - SkillsMcpCard: 列鲶鱼自带 skill / 当前会话已注入的 mcp tool (运行时)
- *   - McpRegistryCard (本卡): 列**企业可订阅**的连接器目录 (静态目录)
+ * 走 catfish-gateway 转发, gateway 注入 X-Catfish-User-Dept/Sub.
  */
 
 import { useEffect, useState } from "react";
@@ -65,20 +66,21 @@ export default function McpRegistryCard() {
   const [data, setData] = useState<RegistryResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [flash, setFlash] = useState<string | null>(null);
+
+  const showFlash = (msg: string, ms = 3000) => {
+    setFlash(msg);
+    window.setTimeout(() => setFlash(null), ms);
+  };
 
   const refresh = async () => {
     try {
-      // gateway 转发到 mcp-registry. 路径走 /v1/mcp/registry, gateway 已配
-      // 反向代理 (同 BL-D3 Phase 1 计划). dev 时如果 gateway 没配, 直连
-      // 127.0.0.1:8997 兜底.
       const url = `${config.gatewayUrl}/v1/mcp/registry`;
-      const res = await fetch(url, {
-        credentials: "include",
-      });
+      const res = await fetch(url, { credentials: "include" });
       if (!res.ok) {
-        // 404 / 502 都意味着 mcp-registry 没启或 gateway 没配反代
         if (res.status === 404 || res.status === 502) {
-          setError("mcp-registry 未启动 (Phase 1 dev: python -m catfish_mcp_registry.app)");
+          setError("mcp-registry 未启动 (dev: python -m catfish_mcp_registry.app)");
         } else {
           setError(`HTTP ${res.status}`);
         }
@@ -97,6 +99,110 @@ export default function McpRegistryCard() {
     const id = setInterval(() => void refresh(), 60_000);
     return () => clearInterval(id);
   }, []);
+
+  const subscribe = async (c: ConnectorListItem, ev: React.MouseEvent) => {
+    ev.stopPropagation();
+    setBusyId(c.id);
+    try {
+      const res = await fetch(`${config.gatewayUrl}/v1/mcp/subscribe`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ connector_id: c.id }),
+      });
+      if (!res.ok) {
+        showFlash(`订阅失败: HTTP ${res.status}`);
+        return;
+      }
+      const json = (await res.json()) as {
+        next_step: "oauth" | "ready";
+        subscription: { id: string };
+      };
+      if (json.next_step === "ready") {
+        showFlash(`已订阅 ${c.name}`);
+        await refresh();
+        return;
+      }
+      // OAuth flow — 启 oauth/start 拿 authorize_url
+      const startRes = await fetch(`${config.gatewayUrl}/v1/mcp/oauth/start`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subscription_id: json.subscription.id }),
+      });
+      if (!startRes.ok) {
+        showFlash(`OAuth start 失败: HTTP ${startRes.status}`);
+        return;
+      }
+      const startJson = (await startRes.json()) as { authorize_url: string; state: string };
+      // mock 模式 dev: 直接 callback 自动完成 (前端模拟员工已授权)
+      if (startJson.authorize_url.includes("mock-callback")) {
+        const cbRes = await fetch(`${config.gatewayUrl}/v1/mcp/oauth/callback`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            state: startJson.state,
+            code: "mock-code",
+            mock_token: `mock-${c.id}-token`,
+          }),
+        });
+        if (cbRes.ok) {
+          showFlash(`已订阅 ${c.name} (mock OAuth 完成)`);
+          await refresh();
+        } else {
+          showFlash(`OAuth callback 失败: HTTP ${cbRes.status}`);
+        }
+        return;
+      }
+      // 真 OAuth (Phase 2.1+): 浏览器跳转
+      window.open(startJson.authorize_url, "_blank");
+      showFlash(`授权窗口已打开, 完成后自动激活`);
+    } catch (e) {
+      showFlash(`订阅出错: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const unsubscribe = async (c: ConnectorListItem, ev: React.MouseEvent) => {
+    ev.stopPropagation();
+    setBusyId(c.id);
+    try {
+      // 找 sub id (从 /v1/mcp/subscribed)
+      const subsRes = await fetch(`${config.gatewayUrl}/v1/mcp/subscribed`, {
+        credentials: "include",
+      });
+      if (!subsRes.ok) {
+        showFlash(`查我的订阅失败: HTTP ${subsRes.status}`);
+        return;
+      }
+      const subsJson = (await subsRes.json()) as {
+        subscriptions: { id: string; connector_id: string; status: string }[];
+      };
+      const mine = subsJson.subscriptions.find(
+        (s) => s.connector_id === c.id && s.status === "active",
+      );
+      if (!mine) {
+        showFlash(`未找到 ${c.name} 的活跃订阅`);
+        return;
+      }
+      const r = await fetch(
+        `${config.gatewayUrl}/v1/mcp/subscribe/${mine.id}`,
+        { method: "DELETE", credentials: "include" },
+      );
+      if (r.ok) {
+        showFlash(`已取消订阅 ${c.name}`);
+        await refresh();
+      } else {
+        showFlash(`取消失败: HTTP ${r.status}`);
+      }
+    } catch (e) {
+      showFlash(`取消出错: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusyId(null);
+    }
+  };
 
   return (
     <div
@@ -129,11 +235,11 @@ export default function McpRegistryCard() {
                 borderRadius: 4,
               }}
             >
-              Phase 1 · 只读目录
+              Phase 2 · 订阅可用
             </span>
           </h3>
           <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", paddingLeft: 28 }}>
-            企业可订阅的 MCP 连接器 (Jira / GitLab / Filesystem / ...) — Phase 2 接订阅按钮
+            企业可订阅的 MCP 连接器 (Jira / GitLab / Filesystem / Time) — 展开订阅
           </span>
         </div>
         <button
@@ -156,6 +262,22 @@ export default function McpRegistryCard() {
       {error && (
         <div style={{ color: "var(--status-err)", fontSize: 12, marginBottom: 8 }}>
           读取失败: {error}
+        </div>
+      )}
+
+      {flash && (
+        <div
+          style={{
+            color: "var(--catfish-cyan)",
+            fontSize: 12,
+            marginBottom: 8,
+            padding: "4px 8px",
+            background: "var(--catfish-bg)",
+            border: "1px dashed var(--catfish-cyan)",
+            borderRadius: 4,
+          }}
+        >
+          {flash}
         </div>
       )}
 
@@ -222,6 +344,20 @@ export default function McpRegistryCard() {
                     </span>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    {c.subscribed && (
+                      <span
+                        style={{
+                          fontSize: 10,
+                          color: "var(--catfish-bg)",
+                          background: "var(--catfish-cyan)",
+                          padding: "1px 6px",
+                          borderRadius: 3,
+                          fontWeight: 600,
+                        }}
+                      >
+                        ✓ 已订阅
+                      </span>
+                    )}
                     <span
                       style={{
                         fontSize: 10,
@@ -294,24 +430,55 @@ export default function McpRegistryCard() {
                       </div>
                     </div>
                     <div style={{ marginTop: 8, paddingTop: 6, borderTop: "1px dashed var(--catfish-border)" }}>
-                      <button
-                        type="button"
-                        disabled
-                        style={{
-                          width: "100%",
-                          padding: "4px 8px",
-                          border: "1px solid var(--catfish-border)",
-                          borderRadius: 4,
-                          background: "var(--catfish-bg-elevated)",
-                          color: "var(--catfish-text-muted)",
-                          fontSize: 11,
-                          cursor: "not-allowed",
-                          opacity: 0.6,
-                        }}
-                        title="Phase 2 (5/22+) 才接通"
-                      >
-                        订阅 (Phase 2 接通)
-                      </button>
+                      {c.subscribed ? (
+                        <button
+                          type="button"
+                          onClick={(ev) => unsubscribe(c, ev)}
+                          disabled={busyId === c.id}
+                          style={{
+                            width: "100%",
+                            padding: "4px 8px",
+                            border: "1px solid var(--status-err)",
+                            borderRadius: 4,
+                            background: "transparent",
+                            color: "var(--status-err)",
+                            fontSize: 11,
+                            cursor: busyId === c.id ? "wait" : "pointer",
+                            opacity: busyId === c.id ? 0.5 : 1,
+                          }}
+                        >
+                          {busyId === c.id ? "处理中…" : "✕ 取消订阅"}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={(ev) => subscribe(c, ev)}
+                          disabled={busyId === c.id}
+                          style={{
+                            width: "100%",
+                            padding: "4px 8px",
+                            border: "1px solid var(--catfish-cyan)",
+                            borderRadius: 4,
+                            background: "var(--catfish-cyan)",
+                            color: "var(--catfish-bg)",
+                            fontSize: 11,
+                            cursor: busyId === c.id ? "wait" : "pointer",
+                            opacity: busyId === c.id ? 0.5 : 1,
+                            fontWeight: 600,
+                          }}
+                          title={
+                            c.auth_type === "oauth2" || c.auth_type === "api_key"
+                              ? "需 OAuth 授权 (Phase 2 mock 模式 dev: 自动完成)"
+                              : "免授权连接器 (path_allowlist / none), 直接订阅"
+                          }
+                        >
+                          {busyId === c.id
+                            ? "订阅中…"
+                            : c.auth_type === "oauth2"
+                            ? "订阅 (需授权)"
+                            : "订阅"}
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}

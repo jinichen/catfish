@@ -1,13 +1,19 @@
-"""pytest fixtures (BL-D3 Phase 1)."""
+"""pytest fixtures (BL-D3 Phase 1+2)."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
 
-from catfish_mcp_registry.app import app
-from catfish_mcp_registry.loader import ManifestRegistry
+# 默认 mock 模式 OAuth, 不真接外部 (Phase 2 单测专用)
+os.environ.setdefault("CATFISH_MCP_OAUTH_MODE", "mock")
+
+from catfish_mcp_registry.app import app  # noqa: E402
+from catfish_mcp_registry.db import SubscriptionDB  # noqa: E402
+from catfish_mcp_registry.loader import ManifestRegistry  # noqa: E402
 
 
 @pytest.fixture
@@ -24,7 +30,40 @@ def registry(manifests_dir: Path) -> ManifestRegistry:
 
 
 @pytest.fixture
-def client(registry: ManifestRegistry):
-    """FastAPI TestClient — registry 直接挂到 app.state, 跳 lifespan."""
+def db() -> SubscriptionDB:
+    """每测一个独立内存 db, 不互相污染."""
+    return SubscriptionDB(Path(":memory:"))
+
+
+@pytest.fixture
+def secret_client_mock():
+    """mock httpx client for secret-broker — 不真起服务. 默认 set 都成功."""
+    mock = AsyncMock()
+    # post → 200
+    import httpx
+    mock.post.return_value = httpx.Response(200, json={"ref": "x", "exists": True})
+    mock.get.return_value = httpx.Response(404, content=b'{"detail":"not found"}')
+    mock.delete.return_value = httpx.Response(200, json={"ref": "x", "exists": False})
+    return mock
+
+
+@pytest.fixture
+def client(
+    registry: ManifestRegistry,
+    db: SubscriptionDB,
+    secret_client_mock,
+):
+    """FastAPI TestClient — registry/db/secret_client 都挂 app.state, 跳 lifespan."""
     app.state.registry = registry
+    app.state.db = db
+    app.state.secret_client = secret_client_mock
     return TestClient(app)
+
+
+@pytest.fixture
+def auth_headers() -> dict[str, str]:
+    """gateway 注入的员工身份 (单测模拟)."""
+    return {
+        "X-Catfish-User-Sub": "alice@catfish.dev",
+        "X-Catfish-User-Dept": "engineering",
+    }

@@ -121,3 +121,60 @@ class HealthResponse(BaseModel):
     version: str
     manifests_loaded: int
     extras: dict[str, Any] = Field(default_factory=dict)
+
+
+# ── Phase 2 (5/9): subscription / oauth schemas ──────────────────────
+
+
+class SubscriptionView(BaseModel):
+    """单个订阅 (mcp_subscriptions 一行)."""
+
+    id: str
+    user_sub: str
+    connector_id: str
+    status: Literal["pending_oauth", "active", "revoked"]
+    oauth_token_ref: str | None = None
+    subscribed_at: str  # iso
+    # connector 元信息 join 进来给 Companion 渲染 (减一次往返)
+    connector_name: str | None = None
+    connector_version: str | None = None
+
+
+class SubscribeRequest(BaseModel):
+    connector_id: str = Field(..., min_length=1, max_length=100)
+
+
+class SubscribeResponse(BaseModel):
+    subscription: SubscriptionView
+    next_step: Literal["oauth", "ready"]
+    """oauth = 还要去授权; ready = 直接可用 (auth_type=none/path_allowlist)."""
+    oauth_start_url: str | None = None
+
+
+class OAuthStartRequest(BaseModel):
+    subscription_id: str
+
+
+class OAuthStartResponse(BaseModel):
+    """OAuth flow 第一步返 — Phase 2 dev mock 模式: 直接返 mock callback URL,
+    Companion 跳转后立即模拟成功. Phase 2 真接 Jira/GitLab 时 redirect 到 provider.
+    """
+
+    authorize_url: str
+    state: str  # 也写到 mcp_subscriptions.oauth_state, callback 用
+
+
+class OAuthCallbackRequest(BaseModel):
+    state: str
+    code: str  # provider 返的 authorization code
+    # mock 模式 dev 用 (Phase 2 真 OAuth 后从 token endpoint 拿)
+    mock_token: str | None = None
+
+
+class OAuthCallbackResponse(BaseModel):
+    subscription: SubscriptionView
+
+
+class SubscriptionListResponse(BaseModel):
+    subscriptions: list[SubscriptionView]
+    total: int

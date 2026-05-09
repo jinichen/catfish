@@ -1,34 +1,50 @@
-"""catfish-mcp-registry FastAPI 服务 (BL-D3 Phase 1, 5/9 ship).
+"""catfish-mcp-registry FastAPI 服务 (BL-D3 Phase 1+2, 5/9 ship).
 
 Phase 1 endpoints:
   GET  /health               健康 + 加载几个 manifest
-  GET  /v1/mcp/registry      列连接器 (按部门过滤)
+  GET  /v1/mcp/registry      列连接器 (按部门过滤, 含订阅状态/订阅人数)
   GET  /v1/mcp/manifest/{id} 单连接器详情 (含 OAuth / mcp_command 内部字段)
 
-Phase 2+ 加:
-  POST /v1/mcp/subscribe / DELETE / GET subscribed
-  POST /v1/mcp/oauth/start / callback
+Phase 2 (5/9 加):
+  POST   /v1/mcp/subscribe              员工订阅 (auth_type=none → 直 active;
+                                                 oauth2 → pending_oauth)
+  DELETE /v1/mcp/subscribe/{sub_id}     取消订阅 (status=revoked, secret 删)
+  GET    /v1/mcp/subscribed             我订阅的列表
+  POST   /v1/mcp/oauth/start            返 authorize_url (Phase 2 mock 模式 dev)
+  POST   /v1/mcp/oauth/callback         OAuth code → exchange → 写 secret-broker
+                                        → mark active
 
-鉴权: Phase 1 直接信任 X-Catfish-User-Sub / X-Catfish-User-Dept header
-(走 catfish-gateway 转发, 网关已 verify JWT). Phase 2+ 加 OIDC.
+鉴权: 信任 X-Catfish-User-Sub / X-Catfish-User-Dept header (走 catfish-gateway
+转发, 网关已 verify JWT 注入). 直连本服务 dev 时也可手填.
 """
 from __future__ import annotations
 
 import logging
 import os
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import __version__
+from . import __version__, secret_broker_client
+from .db import make_db
 from .loader import ManifestRegistry
 from .models import (
     ConnectorListItem,
     HealthResponse,
     ManifestResponse,
+    OAuthCallbackRequest,
+    OAuthCallbackResponse,
+    OAuthStartRequest,
+    OAuthStartResponse,
     RegistryResponse,
+    SubscribeRequest,
+    SubscribeResponse,
+    SubscriptionListResponse,
+    SubscriptionView,
 )
 
 logger = logging.getLogger("catfish.mcp_registry")
@@ -52,15 +68,27 @@ def _default_manifests_dir() -> Path:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """startup: 扫 manifests/*.yaml. shutdown: 啥也不用关 (内存 only)."""
+    """startup: 扫 manifests/*.yaml + 起 sqlite db + httpx client (Phase 2)."""
     registry = ManifestRegistry(_default_manifests_dir())
     count = registry.load_all()
     app.state.registry = registry
+
+    # Phase 2 (5/9): 持久化 + secret-broker 客户端
+    app.state.db = make_db()
+    app.state.secret_client = httpx.AsyncClient(timeout=10)
+
     logger.info(
-        "catfish-mcp-registry v%s startup: %d manifests loaded from %s",
-        __version__, count, registry.manifests_dir,
+        "catfish-mcp-registry v%s startup: %d manifests, db=%s, secret-broker=%s",
+        __version__,
+        count,
+        app.state.db.db_path,
+        secret_broker_client.get_url(),
     )
     yield
+    try:
+        await app.state.secret_client.aclose()
+    except Exception as e:
+        logger.debug("secret_client aclose: %s", e)
     logger.info("catfish-mcp-registry shutdown")
 
 
@@ -88,8 +116,16 @@ def _registry(request: Request) -> ManifestRegistry:
     return request.app.state.registry
 
 
-def _manifest_to_list_item(manifest) -> ConnectorListItem:
-    """McpManifest → ConnectorListItem (列表展示, 不含 OAuth / mcp_command)."""
+def _manifest_to_list_item(
+    manifest,
+    *,
+    subscribed: bool = False,
+    subscriber_count: int = 0,
+) -> ConnectorListItem:
+    """McpManifest → ConnectorListItem (列表展示, 不含 OAuth / mcp_command).
+
+    Phase 2 (5/9): join 订阅状态 + 订阅人数 (db 查).
+    """
     return ConnectorListItem(
         id=manifest.id,
         name=manifest.name,
@@ -101,9 +137,32 @@ def _manifest_to_list_item(manifest) -> ConnectorListItem:
         auth_type=manifest.auth_type,
         tools=manifest.tools,
         ui=manifest.ui,
-        subscribed=False,  # Phase 2+ join DB
-        subscriber_count=0,
+        subscribed=subscribed,
+        subscriber_count=subscriber_count,
     )
+
+
+def _sub_row_to_view(row: dict, manifest=None) -> SubscriptionView:
+    """db row → API view, 可选 join manifest 元信息."""
+    return SubscriptionView(
+        id=row["id"],
+        user_sub=row["user_sub"],
+        connector_id=row["connector_id"],
+        status=row["status"],
+        oauth_token_ref=row.get("oauth_token_ref"),
+        subscribed_at=row["subscribed_at"],
+        connector_name=manifest.name if manifest else None,
+        connector_version=manifest.version if manifest else None,
+    )
+
+
+def _require_user_sub(x_catfish_user_sub: str | None) -> str:
+    if not x_catfish_user_sub:
+        raise HTTPException(
+            status_code=401,
+            detail="missing X-Catfish-User-Sub (gateway 应注入或 dev 直连请手填)",
+        )
+    return x_catfish_user_sub
 
 
 # ── endpoints ────────────────────────────────────────────────────────
@@ -125,22 +184,41 @@ async def health(request: Request) -> HealthResponse:
 async def list_connectors(
     request: Request,
     x_catfish_user_dept: str | None = Header(default=None),
+    x_catfish_user_sub: str | None = Header(default=None),
     status_filter: str | None = None,
 ) -> RegistryResponse:
-    """列可用 MCP 连接器 (按部门过滤).
+    """列可用 MCP 连接器 (按部门过滤, 含订阅状态).
 
     Header: X-Catfish-User-Dept = 当前员工部门 (gateway 从 JWT inject).
     没传 dept 时只返 allowed_dept 空 (= 全员可见) 的连接器, 防漏管控.
 
+    Phase 2 (5/9): X-Catfish-User-Sub 也透传, 用来 join 订阅状态. 没传时
+    subscribed=False / subscriber_count 仍真返 (匿名也能看 demo 数字).
+
     Query: ?status_filter=active|preview|deprecated 选择性过滤状态.
     """
     registry = _registry(request)
+    db = request.app.state.db
     matched = registry.list_for_dept(x_catfish_user_dept)
 
     if status_filter:
         matched = [m for m in matched if m.status == status_filter]
 
-    items = [_manifest_to_list_item(m) for m in matched]
+    # Phase 2: 拿当前员工已订阅的 connector_id 集
+    user_sub_ids: set[str] = set()
+    if x_catfish_user_sub:
+        for sub in db.list_user_subscriptions(x_catfish_user_sub):
+            if sub["status"] == "active":
+                user_sub_ids.add(sub["connector_id"])
+
+    items = [
+        _manifest_to_list_item(
+            m,
+            subscribed=(m.id in user_sub_ids),
+            subscriber_count=db.count_subscribers(m.id),
+        )
+        for m in matched
+    ]
     return RegistryResponse(
         connectors=items,
         total=len(items),
@@ -174,6 +252,229 @@ async def get_manifest(
         )
 
     return ManifestResponse(manifest=manifest)
+
+
+# ── Phase 2 (5/9): 订阅 / OAuth endpoints ────────────────────────────
+
+
+@app.post("/v1/mcp/subscribe", response_model=SubscribeResponse)
+async def subscribe(
+    body: SubscribeRequest,
+    request: Request,
+    x_catfish_user_sub: str | None = Header(default=None),
+    x_catfish_user_dept: str | None = Header(default=None),
+) -> SubscribeResponse:
+    """订阅 connector.
+
+    auth_type=none / path_allowlist → 直接 status='active' (不需 OAuth).
+    auth_type=oauth2 / api_key      → status='pending_oauth', next_step='oauth'.
+
+    部门权限校验: connector.allowed_dept 非空且员工 dept 不在列 → 403.
+    """
+    user_sub = _require_user_sub(x_catfish_user_sub)
+    registry = _registry(request)
+    db = request.app.state.db
+
+    manifest = registry.get(body.connector_id)
+    if manifest is None:
+        raise HTTPException(status_code=404, detail=f"connector {body.connector_id} 不存在")
+
+    # 部门权限
+    if manifest.allowed_dept and (
+        not x_catfish_user_dept or x_catfish_user_dept not in manifest.allowed_dept
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail=f"connector {manifest.id} 仅 {manifest.allowed_dept} 部门可订阅",
+        )
+
+    auth_required = manifest.auth_type in ("oauth2", "api_key")
+    sub_row = db.create_subscription(user_sub, manifest.id, auth_required)
+    db.write_audit(
+        user_sub=user_sub,
+        connector_id=manifest.id,
+        action="subscribe",
+        meta={"auth_type": manifest.auth_type, "auth_required": auth_required},
+    )
+
+    view = _sub_row_to_view(sub_row, manifest)
+    if sub_row["status"] == "active":
+        return SubscribeResponse(subscription=view, next_step="ready", oauth_start_url=None)
+    return SubscribeResponse(
+        subscription=view,
+        next_step="oauth",
+        oauth_start_url=f"/v1/mcp/oauth/start (POST subscription_id={sub_row['id']})",
+    )
+
+
+@app.delete("/v1/mcp/subscribe/{subscription_id}", response_model=SubscriptionView)
+async def unsubscribe(
+    subscription_id: str,
+    request: Request,
+    x_catfish_user_sub: str | None = Header(default=None),
+) -> SubscriptionView:
+    """取消订阅. 标 revoked + 删 secret-broker 里的 token (best-effort)."""
+    user_sub = _require_user_sub(x_catfish_user_sub)
+    db = request.app.state.db
+
+    sub = db.get_subscription_by_id(subscription_id)
+    if sub is None:
+        raise HTTPException(status_code=404, detail=f"subscription {subscription_id} 不存在")
+    if sub["user_sub"] != user_sub:
+        # 不是你的 subscription, 防员工取消别人的
+        raise HTTPException(status_code=403, detail="无权操作他人订阅")
+
+    db.revoke(subscription_id)
+
+    # 删 secret-broker token (best-effort, 失败不阻塞 unsubscribe)
+    if sub.get("oauth_token_ref"):
+        try:
+            await secret_broker_client.delete_secret(
+                request.app.state.secret_client,
+                ref=sub["oauth_token_ref"],
+                user_sub=user_sub,
+            )
+        except secret_broker_client.SecretBrokerError as e:
+            logger.warning("secret-broker delete 失败 (不影响 unsubscribe): %s", e)
+
+    db.write_audit(
+        user_sub=user_sub,
+        connector_id=sub["connector_id"],
+        action="unsubscribe",
+    )
+    sub_after = db.get_subscription_by_id(subscription_id)
+    manifest = _registry(request).get(sub["connector_id"])
+    return _sub_row_to_view(sub_after, manifest)  # type: ignore[arg-type]
+
+
+@app.get("/v1/mcp/subscribed", response_model=SubscriptionListResponse)
+async def my_subscriptions(
+    request: Request,
+    x_catfish_user_sub: str | None = Header(default=None),
+    status_filter: str | None = None,
+) -> SubscriptionListResponse:
+    """我订阅的列表 (默认所有 status, ?status_filter=active 过滤)."""
+    user_sub = _require_user_sub(x_catfish_user_sub)
+    db = request.app.state.db
+    registry = _registry(request)
+    rows = db.list_user_subscriptions(user_sub, status=status_filter)
+    views = [
+        _sub_row_to_view(r, registry.get(r["connector_id"]))
+        for r in rows
+    ]
+    return SubscriptionListResponse(subscriptions=views, total=len(views))
+
+
+@app.post("/v1/mcp/oauth/start", response_model=OAuthStartResponse)
+async def oauth_start(
+    body: OAuthStartRequest,
+    request: Request,
+    x_catfish_user_sub: str | None = Header(default=None),
+) -> OAuthStartResponse:
+    """启 OAuth flow — 返 authorize_url 给 Companion 跳转浏览器.
+
+    Phase 2 dev mock 模式: 返一个本服务的 mock callback URL, Companion 跳转
+    后调 /v1/mcp/oauth/callback 立即模拟成功. 真接 Jira/GitLab 时返 provider
+    的真 authorize_url.
+    """
+    user_sub = _require_user_sub(x_catfish_user_sub)
+    db = request.app.state.db
+    registry = _registry(request)
+
+    sub = db.get_subscription_by_id(body.subscription_id)
+    if sub is None:
+        raise HTTPException(status_code=404, detail=f"subscription {body.subscription_id} 不存在")
+    if sub["user_sub"] != user_sub:
+        raise HTTPException(status_code=403, detail="无权操作他人订阅")
+    if sub["status"] != "pending_oauth":
+        raise HTTPException(
+            status_code=400,
+            detail=f"subscription 状态={sub['status']}, 不需 OAuth 或已完成",
+        )
+
+    manifest = registry.get(sub["connector_id"])
+    if manifest is None or manifest.oauth is None:
+        raise HTTPException(status_code=400, detail="connector 无 OAuth 配置")
+
+    state = sub.get("oauth_state") or secrets.token_urlsafe(24)
+    # Phase 2 dev mock: 返本服务 mock callback URL, Companion 一跳就完成.
+    # 真接时返 manifest.oauth.authorize_url 拼 client_id/redirect_uri/state.
+    use_mock = os.environ.get("CATFISH_MCP_OAUTH_MODE", "mock") == "mock"
+    if use_mock:
+        authorize_url = (
+            f"http://127.0.0.1:8996/v1/mcp/oauth/mock-callback?state={state}"
+        )
+    else:
+        # 真 OAuth (Phase 2.1 后续)
+        authorize_url = manifest.oauth.authorize_url
+    return OAuthStartResponse(authorize_url=authorize_url, state=state)
+
+
+@app.post("/v1/mcp/oauth/callback", response_model=OAuthCallbackResponse)
+async def oauth_callback(
+    body: OAuthCallbackRequest,
+    request: Request,
+    x_catfish_user_sub: str | None = Header(default=None),
+) -> OAuthCallbackResponse:
+    """OAuth callback — code 换 token + 写 secret-broker + mark active.
+
+    Phase 2 dev mock 模式: body.mock_token 直接当 access_token 存. 真接时用
+    code 调 manifest.oauth.token_url exchange.
+    """
+    user_sub = _require_user_sub(x_catfish_user_sub)
+    db = request.app.state.db
+
+    sub = db.find_by_oauth_state(body.state)
+    if sub is None:
+        raise HTTPException(status_code=400, detail="invalid or expired state")
+    if sub["user_sub"] != user_sub:
+        raise HTTPException(status_code=403, detail="state 不属于当前员工")
+    if sub["status"] != "pending_oauth":
+        raise HTTPException(
+            status_code=400, detail=f"subscription 状态={sub['status']}, 重复回调"
+        )
+
+    # mock 模式: body.mock_token 直接当 access_token; 真接: code → exchange
+    use_mock = os.environ.get("CATFISH_MCP_OAUTH_MODE", "mock") == "mock"
+    if use_mock:
+        access_token = body.mock_token or f"mock-token-{secrets.token_hex(8)}"
+    else:
+        # Phase 2.1 真 token exchange (后续做):
+        # async with httpx.AsyncClient() as client:
+        #     r = await client.post(manifest.oauth.token_url, data={...code...})
+        access_token = body.code  # 占位
+
+    token_ref = f"{sub['connector_id']}-oauth-{user_sub.replace('@', '-at-')}"
+    try:
+        await secret_broker_client.set_secret(
+            request.app.state.secret_client,
+            ref=token_ref,
+            value=access_token,
+            user_sub=user_sub,
+        )
+    except secret_broker_client.SecretBrokerError as e:
+        db.write_audit(
+            user_sub=user_sub,
+            connector_id=sub["connector_id"],
+            action="oauth_failed",
+            meta={"reason": "secret_broker", "error": str(e)},
+        )
+        raise HTTPException(
+            status_code=502, detail=f"secret-broker 写 token 失败: {e}",
+        ) from e
+
+    sub_after = db.mark_active(sub["id"], oauth_token_ref=token_ref)
+    db.write_audit(
+        user_sub=user_sub,
+        connector_id=sub["connector_id"],
+        action="oauth_complete",
+        meta={"token_ref": token_ref},
+    )
+
+    manifest = _registry(request).get(sub["connector_id"])
+    return OAuthCallbackResponse(
+        subscription=_sub_row_to_view(sub_after, manifest)  # type: ignore[arg-type]
+    )
 
 
 def main() -> None:
