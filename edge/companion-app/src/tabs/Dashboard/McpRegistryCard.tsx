@@ -14,6 +14,7 @@
 
 import { useEffect, useState } from "react";
 import { config } from "../../lib/env";
+import { getToken } from "../../lib/me";
 
 interface ConnectorTool {
   name: string;
@@ -76,11 +77,16 @@ export default function McpRegistryCard() {
 
   const refresh = async () => {
     try {
+      const token = await getToken();
       const url = `${config.gatewayUrl}/v1/mcp/registry`;
-      const res = await fetch(url, { credentials: "include" });
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       if (!res.ok) {
-        if (res.status === 404 || res.status === 502) {
-          setError("mcp-registry 未启动 (dev: python -m catfish_mcp_registry.app)");
+        if (res.status === 502) {
+          setError("mcp-registry 未启动 (dev: python -m catfish_mcp_registry.app, port 8996)");
+        } else if (res.status === 401) {
+          setError("鉴权失败 — 请重新登录");
         } else {
           setError(`HTTP ${res.status}`);
         }
@@ -104,10 +110,14 @@ export default function McpRegistryCard() {
     ev.stopPropagation();
     setBusyId(c.id);
     try {
+      const token = await getToken();
+      const authHeaders = {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      };
       const res = await fetch(`${config.gatewayUrl}/v1/mcp/subscribe`, {
         method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders,
         body: JSON.stringify({ connector_id: c.id }),
       });
       if (!res.ok) {
@@ -123,11 +133,9 @@ export default function McpRegistryCard() {
         await refresh();
         return;
       }
-      // OAuth flow — 启 oauth/start 拿 authorize_url
       const startRes = await fetch(`${config.gatewayUrl}/v1/mcp/oauth/start`, {
         method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders,
         body: JSON.stringify({ subscription_id: json.subscription.id }),
       });
       if (!startRes.ok) {
@@ -135,12 +143,10 @@ export default function McpRegistryCard() {
         return;
       }
       const startJson = (await startRes.json()) as { authorize_url: string; state: string };
-      // mock 模式 dev: 直接 callback 自动完成 (前端模拟员工已授权)
       if (startJson.authorize_url.includes("mock-callback")) {
         const cbRes = await fetch(`${config.gatewayUrl}/v1/mcp/oauth/callback`, {
           method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
+          headers: authHeaders,
           body: JSON.stringify({
             state: startJson.state,
             code: "mock-code",
@@ -155,7 +161,6 @@ export default function McpRegistryCard() {
         }
         return;
       }
-      // 真 OAuth (Phase 2.1+): 浏览器跳转
       window.open(startJson.authorize_url, "_blank");
       showFlash(`授权窗口已打开, 完成后自动激活`);
     } catch (e) {
@@ -169,9 +174,10 @@ export default function McpRegistryCard() {
     ev.stopPropagation();
     setBusyId(c.id);
     try {
-      // 找 sub id (从 /v1/mcp/subscribed)
+      const token = await getToken();
+      const authHeader = { Authorization: `Bearer ${token}` };
       const subsRes = await fetch(`${config.gatewayUrl}/v1/mcp/subscribed`, {
-        credentials: "include",
+        headers: authHeader,
       });
       if (!subsRes.ok) {
         showFlash(`查我的订阅失败: HTTP ${subsRes.status}`);
@@ -189,7 +195,7 @@ export default function McpRegistryCard() {
       }
       const r = await fetch(
         `${config.gatewayUrl}/v1/mcp/subscribe/${mine.id}`,
-        { method: "DELETE", credentials: "include" },
+        { method: "DELETE", headers: authHeader },
       );
       if (r.ok) {
         showFlash(`已取消订阅 ${c.name}`);

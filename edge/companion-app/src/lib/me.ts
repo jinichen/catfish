@@ -51,7 +51,8 @@ export function setOverrideToken(token: string | null): void {
 
 let _cachedEnvToken: string | null = null;
 
-async function getToken(): Promise<string> {
+/** BL-D3 Phase 3.1 (5/9): export 给 McpRegistryCard 等其他卡复用. */
+export async function getToken(): Promise<string> {
   // 1. 切换器选的覆盖优先
   const override = getOverrideToken();
   if (override) return override;
