@@ -8,9 +8,8 @@
  * limit=0 表示不限 (内网 LLM + 内部员工常态).
  */
 
-import { gatewayGetDevToken } from "./tauri";
 import { config } from "./env";
-import { getOverrideToken } from "./me";
+import { getToken } from "./me";
 
 export interface QuotaWindow {
   used: number;
@@ -25,22 +24,9 @@ export interface QuotaMe {
   department_day: QuotaWindow;
 }
 
-let _cachedEnvToken: string | null = null;
-
-async function getToken(): Promise<string> {
-  // 切换器优先
-  const override = getOverrideToken();
-  if (override) return override;
-  // .env 兜底
-  if (_cachedEnvToken) return _cachedEnvToken;
-  try {
-    const t = await gatewayGetDevToken();
-    _cachedEnvToken = t;
-    return t;
-  } catch {
-    return "dev-token-local"; // 跟 chat.ts 一致, fallback 让 gateway 走匿名/dev 兼容
-  }
-}
+// BL-FIX35 (5/10): 删本文件自己的 getToken (第 3 份 copy-paste, 漏 OAuth
+// keychain → 配额卡 401). 改用 me.ts 的统一 getToken (OAuth 优先, dev_token
+// 兜底). 全 app token 链路从此一处定义.
 
 export async function fetchQuotaMe(): Promise<QuotaMe> {
   const token = await getToken();

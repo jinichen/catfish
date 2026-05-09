@@ -771,6 +771,20 @@ def _build_litellm_params(body: dict, model) -> dict:
     if model.upstream.api_base:
         params["api_base"] = model.upstream.api_base
 
+    # BL-FIX34 (5/10 鸿波诊断): streaming 默认上游不送 usage chunk, gateway
+    # 抽 prompt_tokens / completion_tokens 永远 0, audit 写 status=ok tokens=0,
+    # quota_events 因 token=0 不记 (record_usage 的 if 条件: tokens>0). 改:
+    # streaming 时自动注入 stream_options.include_usage=True, 让 OpenAI 兼容
+    # 上游 (deepseek / vLLM v0.5+ Qwen) 在 [DONE] 前送一个 usage chunk.
+    # Gemini / Anthropic 的 litellm 包装器 silently ignore 这字段, 无副作用.
+    if params.get("stream"):
+        so = params.get("stream_options")
+        if not isinstance(so, dict):
+            so = {}
+        if "include_usage" not in so:
+            so["include_usage"] = True
+        params["stream_options"] = so
+
     # Apply per-model forced overrides (e.g. Gemini 3 requires temperature=1.0)
     if model.upstream.param_overrides:
         before = {k: params.get(k) for k in model.upstream.param_overrides}

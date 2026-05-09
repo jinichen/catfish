@@ -167,15 +167,9 @@ export async function updateDepartmentQuota(
   dept: string,
   tokensPerDay: number,
 ): Promise<{ ok: boolean; tokens_per_day?: number; detail?: string }> {
-  const token = await (async () => {
-    const o = getOverrideToken();
-    if (o) return o;
-    try {
-      return await gatewayGetDevToken();
-    } catch {
-      return "dev-token-local";
-    }
-  })();
+  // BL-FIX35 (5/10): 复用统一 getToken (OAuth keychain 优先, dev_token 兜底).
+  // 老 inline 各自 copy-paste, 漏 OAuth → 配额/audit/proactive 卡都 401.
+  const token = await getToken();
   const url = `${config.gatewayUrl}/api/quota/department/${encodeURIComponent(dept)}`;
   const resp = await fetch(url, {
     method: "PUT",
@@ -211,15 +205,9 @@ export interface GlobalQuota {
 
 
 export async function fetchGlobalQuota(): Promise<GlobalQuota | null> {
-  const token = await (async () => {
-    const o = getOverrideToken();
-    if (o) return o;
-    try {
-      return await gatewayGetDevToken();
-    } catch {
-      return "dev-token-local";
-    }
-  })();
+  // BL-FIX35 (5/10): 复用统一 getToken (OAuth keychain 优先, dev_token 兜底).
+  // 老 inline 各自 copy-paste, 漏 OAuth → 配额/audit/proactive 卡都 401.
+  const token = await getToken();
   const resp = await fetch(`${config.gatewayUrl}/api/quota/global`, {
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -242,15 +230,9 @@ export interface GlobalAudit {
 
 
 export async function fetchGlobalAudit(): Promise<GlobalAudit | null> {
-  const token = await (async () => {
-    const o = getOverrideToken();
-    if (o) return o;
-    try {
-      return await gatewayGetDevToken();
-    } catch {
-      return "dev-token-local";
-    }
-  })();
+  // BL-FIX35 (5/10): 复用统一 getToken (OAuth keychain 优先, dev_token 兜底).
+  // 老 inline 各自 copy-paste, 漏 OAuth → 配额/audit/proactive 卡都 401.
+  const token = await getToken();
   const resp = await fetch(`${config.gatewayUrl}/api/audit/global`, {
     headers: { Authorization: `Bearer ${token}` },
   });

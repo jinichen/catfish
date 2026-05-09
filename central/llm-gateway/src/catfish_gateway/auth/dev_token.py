@@ -184,18 +184,12 @@ class DevTokenProvider(AuthProvider):
             if u.token == token:
                 return _user_from_dev(u)
 
-        # 2. 兜底: env CATFISH_DEV_TOKEN (老 'dev-token-local' 走这里)
-        if token == self._env_token():
-            if cfg.default is not None:
-                return _user_from_dev(cfg.default)
-            # 没 yaml 也没 default — 走最最老兼容 (admin / engineering)
-            return User(
-                sub="dev-user",
-                department="engineering",
-                tier="employee",
-                role="admin",
-                managed_departments=["engineering", "product"],
-                auth_method="dev_token",
-            )
+        # 2. 兜底: env CATFISH_DEV_TOKEN (5/9 改, 仅当 yaml 显式给 default 才生效)
+        # 老逻辑就算 yaml 没 default 段还有一层 hardcoded "dev-user" 兜底, 导致
+        # 任意 token 都能解成 admin user, 偷渡过 gateway 把所有 chat 挂虚构 user
+        # 名下. 现在: 没 yaml default = 没兜底, 直接 return None → gateway 转
+        # 给下一个 provider (OIDC), 没真登录就 401, 强制走 SSO.
+        if token == self._env_token() and cfg.default is not None:
+            return _user_from_dev(cfg.default)
 
         return None

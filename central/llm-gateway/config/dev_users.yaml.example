@@ -11,6 +11,11 @@
 #
 # 生产环境 (env CATFISH_ENV=prod) 不会加载这文件, 只走真 OIDC.
 # Companion 也在 prod 模式不显示切换器.
+#
+# ⚠️ BL-FIX29 (5/10): 老 default 段把任何不在 users 列表的 token 都解成虚构
+# 'dev-user@catfish.dev', 真员工 chenhongbo@ffcs.cn 在 PG quota_events 永远 0.
+# 已删 default 段, dev_token.py 兜底 hardcoded user 也删. 个人开发**强烈推荐**
+# 直接走真 OIDC (不复制此文件), 客户 demo 时再按需打开 multi-role 测试.
 
 users:
   # ── 管理员 ────────────────────────────────────
@@ -66,10 +71,11 @@ users:
     role: employee
     managed_departments: []
 
-# 兼容: 老的 'dev-token-local' 还能用, 走默认 admin (back-compat 给单测用).
-default:
-  email: dev-user@catfish.dev
-  name: "Dev User (默认)"
-  department: engineering
-  role: admin
-  managed_departments: ["engineering", "product"]
+# BL-FIX28/29 (5/10): default 段已删. 任何不在 users 列表里的 token (含
+# 'dev-token-local' / .env CATFISH_DEV_TOKEN) 一律 verify 返 None → gateway
+# 走 OIDC provider → 没真登录就 401 → Companion LoginGate 弹 → 强制走真 SSO.
+#
+# 历史: 老 default 段把任意未匹配 token 都解成 'dev-user@catfish.dev', 导致
+#   - 真员工身份在 PG quota_events 永远 0 (全挂虚构 user)
+#   - 任何拿到 .env 的人能假冒成 admin (安全风险)
+# 现在策略: 显式列出测试账号才能用, 不留兜底通道.

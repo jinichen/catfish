@@ -11,6 +11,8 @@
  * tool calling: 客户端传 tools 参数,LLM 决定调哪个 → 我们执行 → 回传继续。
  */
 
+import { invoke } from "@tauri-apps/api/core";
+
 import type { ChatMessage, ToolCall } from "../types/chat";
 import { config } from "./env";
 import { gatewayGetDevToken } from "./tauri";
@@ -53,13 +55,28 @@ export interface ChatStreamDoneInfo {
   usage?: ChatUsage;
 }
 
-/** Token 缓存 —— 第一次调 gateway 时通过 Tauri Rust 读 .env 拿真 token,后续复用。
+/** Token 缓存 —— OAuth access_token / dev token 兜底.
+ *
+ * BL-FIX30 (5/9 鸿波诊断): chat.ts 之前完全不读 OAuth keychain, 真员工
+ * OIDC 登录后 chat 还是用 dev_token, gateway 关掉 dev_token 通道后直接 401.
+ * BL-FIX26 (me.ts) 同款修, chat 这条路漏了. 优先级跟 me.ts getToken 对齐:
+ *   0. OAuth keychain access_token (登录员工真 token, 最优先)
+ *   1. localStorage 切换器 override (dev 多账号测试)
+ *   2. .env CATFISH_DEV_TOKEN (单 token 兜底, 现已注释 → 抛错跳到 3)
+ *   3. fallback 'dev-token-local' (gateway 已拒, 触发 LoginGate 重登录)
  *
  * 五一 sprint 5/2 加多账号支持: 切换器选的 token (localStorage) 优先级高于 .env.
  */
 let _cachedEnvToken: string | null = null;
 
 async function getToken(): Promise<string> {
+  // 0. OAuth keychain access_token (BL-FIX30 5/9, 跟 me.ts 同序)
+  try {
+    const oauth = await invoke<string | null>("auth_get_access_token");
+    if (oauth) return oauth;
+  } catch {
+    // Tauri command 不可用 (Web mode dev) → fallback
+  }
   // 1. 切换器优先 (DevUserSwitcher 写 localStorage)
   const override = getOverrideToken();
   if (override) return override;

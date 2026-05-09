@@ -3211,3 +3211,148 @@ af880b0 docs(5/9): 回写 BL-FIX23 五层 + BL-FIX24
 - 真 demo "员工说看 Jira 任务" 返真数据
 
 工作量 1-2 周, 不阻塞 5/14 demo. demo 演 "Dashboard 列连接器 + 订阅按钮 mock OAuth 完整闭环" 已经够卖点.
+
+---
+
+## 2026-05-10（周日凌晨）— BL-FIX27~35 认证全链路打通: 8 路修, 1 个真根因, 7 个被它误导的下游
+
+> 鸿波 5/9 23:00 起 Dashboard 截图: `quota 服务未就绪 (HTTP 401)` + `quota_events` 全是 `dev-user@catfish.dev` (5/2 起所有 chat 都挂虚构 user). 真员工 chenhongbo@ffcs.cn 在 PG 里**永远 0**. 启动彻夜诊断, 凌晨 1 点收尾, 全链路 OAuth + 真员工 + audit + quota_events + dashboard quota 闭环.
+>
+> **教训记在前面**: 第一处真根因是 `oauth.rs save_to_keyring` 在 unsigned dev binary 下 `keyring crate set_password` 报 success 但**实际不写** macOS Keychain (silent no-op, 不弹"允许访问 Keychain"系统弹窗). log 一直打 `OAuth login OK: user=chenhongbo@ffcs.cn`, 但 `security find-generic-password` 永远 NoEntry. 我前 5 次绕路 (FIX26/28/29/30/31) 全是被这条绿灯 log 引导的下游误判. 鸿波两次提示 "PG 还是 0 / keychain 还是空" 我没及时停下回头审视存储后端, 浪费了他 2 小时. **下次类似 "save 看似成功但 read 永远空" 的现象, 直接怀疑存储后端本身, 不要先假设链路下游.**
+
+### 全链路 8 个 FIX (按发现顺序)
+
+| BL | 文件 | 性质 |
+|---|---|---|
+| FIX27 | `central/llm-gateway/.env` 加 `CATFISH_DB_URL` (dotenv 自动 load) | 独立必要修 |
+| FIX28 | `central/llm-gateway/config/dev_users.yaml` 删 `default:` 段 | 安全清理 |
+| FIX29 | `dev_users.yaml users[]` 清空 + `.env CATFISH_DEV_TOKEN` 注释 + `dev_token.py` 删 hardcoded `dev-user` 兜底 | dev_token 通道彻底关闭 |
+| FIX30 | `edge/companion-app/src/lib/chat.ts` getToken 加 `invoke('auth_get_access_token')` priority 0 | BL-FIX26 漏的镜像路径 |
+| FIX31 | `oauth.rs current_access_token()` 改读 `KEYRING_USERNAME_ID` (gateway oidc.py 拒 `token_use=access`) | OIDC 设计差异 |
+| **FIX32** | **`oauth.rs` 三个存储函数从 keyring 改写文件 `~/.catfish/oauth/{access_token,id_token,user_info}` chmod 600** | **真根因 — keyring crate 在 unsigned dev binary silent no-op** |
+| FIX33 | `.env CATFISH_OIDC_AUDIENCE=test` → `catfish-companion` (BL-WIN9.2 yaml 改了 .env 漏改) | audience claim 配置不一致 |
+| FIX34 | `app.py _build_litellm_params` streaming 时注入 `stream_options.include_usage=True` | OpenAI 兼容协议 streaming 默认不送 usage chunk |
+| FIX35 | `me.ts` 5 处 inline 收口 + `quota.ts` 第 3 份 getToken 删 → 全 app token 链路统一调 `me.getToken()` | copy-paste 导致漏修 OAuth |
+
+共 9 处改动 (FIX29 含 3 处 cleanup), 5 个文件 + 4 处独立修.
+
+### 真根因深度分析: macOS Keychain unsigned silent no-op (BL-FIX32)
+
+**现象**:
+- 鸿波点登录 → 浏览器 SSO 登录 → 浏览器显示 "✅ 登录成功"
+- Companion 进 Dashboard, IdentityCard 显示 chenhongbo@ffcs.cn
+- log 打 `OAuth login OK: user=chenhongbo@ffcs.cn dept=engineering`
+- 但 `security find-generic-password -s "catfish.companion.oauth" -a "access_token" -w` 永远 `NoEntry`
+- Companion 发 chat → 401 "鉴权失败 (401), 检查 dev token"
+
+**机理**: `oauth.rs run_login_flow` 第 305-310 行 `save_to_keyring(...)?` 三次调 `keyring::Entry::set_password`. macOS Keychain Services API 在**unsigned binary** (cargo dev `target/debug/catfish-companion-app` 没 codesign) 下:
+- 不抛错
+- 不弹"允许访问 Keychain"系统弹窗
+- 但实际**不写入** login keychain
+
+`?` 操作符没看到 Err, log 继续往下打 `OAuth login OK`. setState(s) 把 React state 设 authenticated=true → LoginGate 跳过. 但 `current_access_token()` 读 keychain 永远 None → me.ts/chat.ts 全部 fallback dev_token → gateway 401.
+
+**5 个误判** (按时间序):
+1. FIX26 改 `me.ts getToken` 加 OAuth priority — 看起来对, 但 `auth_get_access_token` 内部读不到 keychain, 等同于没改
+2. FIX28 改 `dev_users.yaml default` → chenhongbo — 治标不治本 (任何拿到 .env 的人都能假冒成 chenhongbo, 安全漏洞)
+3. FIX29 关掉 dev_token 全部通道 — 正确清理但**不解决 keychain 空**, 反而让 chat 直接 401 暴露问题
+4. FIX30 改 `chat.ts getToken` 镜像 FIX26 — 同理, keychain 空时仍 fallback
+5. FIX31 改 `oauth.rs current_access_token` 改读 id_token — 路径对了, 但 keychain 空, 仍读不到
+
+**真证据收集到 FIX32 才看清**:
+```bash
+# log 这条 OK
+[INFO] catfish_companion_lib::services::oauth] OAuth login OK: user=chenhongbo@ffcs.cn dept=engineering
+# 但 keychain 真查 NoEntry
+$ security find-generic-password -s "catfish.companion.oauth" -a "id_token" -w | wc -c
+       0
+```
+
+`?` propagate Err 在 save_to_keyring 之后还能打 `OAuth login OK` → 唯一可能: **set_password 报 success 但没真写**.
+
+**修法**: dev 流程绕开 macOS Keychain, 改文件存储 `~/.catfish/oauth/<name>` 0600 mode. 立即可用, 不依赖 codesign. 函数名沿用 `save_to_keyring / load_from_keyring / delete_from_keyring` 减小改动面, callers 一行不动. 真上线 (`cargo tauri build --release` + Apple Developer ID sign) 后再切回 keychain (那时弹窗 + 真写入都正常).
+
+### gateway 端配套修
+
+- **BL-FIX27 dotenv 加载漏**: 老 gateway 进程没 `CATFISH_DB_URL`, lsof 看不到 PG 连接, `record_usage` 静默 no-op (sqlite 路径 `~/.catfish/quota.db` 都没建出来). 改 `.env` 加 `CATFISH_DB_URL=postgresql://catfish:7954672aA%21@localhost/catfish` (% encode `!`) — gateway dotenv 启动时 load, psycopg 真连 PG.
+- **BL-FIX29 dev_token 路径全关**: `dev_users.yaml default:` 段把任何不在 users 列表的 token 都解成 'dev-user@catfish.dev' (5/2 起所有 chat 走这条 → 501 dev-user 行). `dev_token.py` 兜底 hardcoded `User(sub='dev-user', ...)` 也删. yaml `users[]` 清空. 现在 `DevTokenProvider.verify_bearer` 永远返 None, gateway 走 OIDC, 没真登录就 401, 强制 LoginGate.
+- **BL-FIX33 audience 配置不一致**: BL-WIN9.2 (4/30) 当时改 `companion.yaml` 默认 audience `test` → `catfish-companion`, 但 `.env` 这行**没同步改**, dotenv `override=False` 让 .env 覆盖默认. identity-server 颁发 id_token aud=`catfish-companion` (跟 Companion authorize client_id 一致), gateway 校验 aud=`test` → PyJWT InvalidAudienceError → 401. 改 .env 一行同步.
+- **BL-FIX34 streaming usage 抽 0**: gateway 流式 chat 收到上游 chunk, 但 OpenAI 兼容协议 (deepseek / vLLM Qwen) 默认**不送 usage chunk**, 必须显式 `stream_options.include_usage=True`. 老 `_build_litellm_params` 没注入. audit 写 status=ok tokens_total=0, `record_usage` if 条件 `tokens>0` 跳过, quota_events 不记. 加 streaming 自动注入. Gemini / Anthropic 的 litellm 包装器 silently ignore, 无副作用.
+
+### Companion 端配套修
+
+- **BL-FIX30 chat.ts**: 跟 me.ts 同款加 `invoke('auth_get_access_token')` priority 0
+- **BL-FIX31 oauth.rs**: `current_access_token` 读 `KEYRING_USERNAME_ID` (id_token) 而非 access_token. 因为 gateway/auth/oidc.py:159 显式拒 `token_use=access` (安全设计, access_token 不该当 id_token 用). catfish 这套就是把 id_token 当 gateway API auth (跟 OAuth 标准略偏).
+- **BL-FIX35 token 链路统一**: `me.ts` 5 处 inline + `quota.ts` 第 3 份 getToken 全收口到 `me.getToken()`. 之前每处都是 copy-paste, 加 OAuth priority 时漏改 6 处 → 配额卡 / Quota 卡 / Audit 卡 / Proactive 卡都还在 401. 现在全 app token 链路一处定义.
+
+### 验证证据 (5/10 凌晨)
+
+```sql
+-- BL-FIX27 验证 (curl 非流式, BL-FIX32/33 修完后第一次成功)
+chenhongbo@ffcs.cn | catfish-public-deepseek-flash | tokens_in=60458 tokens_out=4 | 00:44:56
+
+-- BL-FIX34 验证 (Companion 流式 chat, stream_options 注入后)
+chenhongbo@ffcs.cn | catfish-public-deepseek-flash | tokens_in=83488 tokens_out=8 | 00:59:12
+```
+
+`gateway_audit` 表同步出现真员工 chenhongbo@ffcs.cn 的 status=ok 行, 不再是历史 dev-user 全表.
+
+### 全链路最终路径
+
+```
+点登录 → 浏览器 SSO (127.0.0.1:8998) → 输 chenhongbo@ffcs.cn / catfish123
+   ↓
+identity-server 颁 id_token { sub:chenhongbo, aud:catfish-companion, iss:127.0.0.1:8998 }
+   ↓
+oauth.rs save 到 ~/.catfish/oauth/{access_token,id_token,user_info} (0600)  [FIX32]
+   ↓
+Companion 启动: try_load_session 读 user_info 文件 → 已登录 → 跳 LoginGate
+   ↓
+chat / quota / audit / proactive → me.getToken() [FIX35 统一]
+   ↓ priority 0: invoke('auth_get_access_token')
+oauth.rs current_access_token → 读 ~/.catfish/oauth/id_token  [FIX31]
+   ↓
+fetch gateway POST /v1/chat/completions Bearer <id_token>
+   ↓
+gateway oidc.py: aud=catfish-companion 通过 ✓ [FIX33], iss 通过, 验签通过
+   ↓
+chat 流式: litellm.acompletion stream_options.include_usage=True [FIX34]
+   ↓
+上游送 usage chunk → gateway 抽 prompt_tokens / completion_tokens
+   ↓
+log_request_metadata → PG gateway_audit (user=chenhongbo, tokens>0)
+   ↓
+record_usage → PG quota_events (chenhongbo, tokens_in/out)
+   ↓
+Dashboard /api/quota/me 读 PG → 显示真今日用量
+```
+
+### Token 存储 dev/prod 分流后续
+
+- **dev** (`cargo tauri dev` unsigned binary): 走 `~/.catfish/oauth/` 文件 (BL-FIX32 现状)
+- **prod** (`cargo tauri build --release` + Apple Developer ID sign / Win Authenticode): 应该切回 keychain (那时 set_password 真写入 + 弹用户授权弹窗)
+- 后续加 `#[cfg(debug_assertions)]` 区分两条路径, 或者 prod build 加 try keyring → fallback file (silent fail 检测: save 后立即 load 验证)
+
+### 5/10 凌晨 commit 列表 (待 push)
+
+```
+xxxxxxx BL-FIX35 (5/10): me.ts 5 处 inline + quota.ts 第 3 份 getToken 全统一
+xxxxxxx BL-FIX34 (5/10): streaming chat usage tokens 抽取 (audit tokens=0 修)
+xxxxxxx BL-FIX33 (5/10): .env CATFISH_OIDC_AUDIENCE test→catfish-companion
+xxxxxxx BL-FIX32 (5/10): oauth.rs token 存储改文件 (绕开 macOS Keychain unsigned silent fail)  ⭐ 真根因
+xxxxxxx BL-FIX31 (5/10): oauth.rs current_access_token 改返 id_token
+xxxxxxx BL-FIX30 (5/10): chat.ts getToken 也加 OAuth 优先 (BL-FIX26 漏的第二路径)
+xxxxxxx BL-FIX29 (5/10): dev_users.yaml 清空 + dev_token 通道彻底关闭
+xxxxxxx BL-FIX28 (5/10): dev_users.yaml default 段处理 → 删
+xxxxxxx BL-FIX27 (5/10): gateway 启动注入 CATFISH_DB_URL (修配额永远 0)
+```
+
+### 鸿波诊断功劳 (5/10 段)
+
+1. **5/9 23:00 截图发问**: "为什么放在 sqlite, 这个奇怪" — 推动我去查 PG 路径, 发现 quota_events 全是 dev-user
+2. **拒绝绕路**: "你应该把所有的测试账号删除, 也没用测试通道" — 砍掉 FIX28 治标方案, 强制走真 OIDC, 暴露 keychain silent fail (FIX32)
+3. **"还是一样的错"**: 两次提示我离真根因更远, 推动我加 watch keychain + RUST_LOG=debug 抓证据
+4. **"你要不猜谜语了, 要仔细的分析"**: 强制让我停下基于 log 推理, 让 npm run tauri dev tee 到日志看 OAuth 真实步骤, 才看清 `OAuth login OK` 这条绿灯 log 跟 keychain NoEntry 的矛盾 → 锁定 FIX32
+5. **"编译的警告要处理"**: `KEYRING_SERVICE never used` 警告也清掉, 收尾干净
+
+5/14 demo 主线全部就位. dashboard 配额 / audit / OIDC / streaming usage 全链路真员工身份, 不再是 dev-user 虚构 user. 接下来都是 polish.

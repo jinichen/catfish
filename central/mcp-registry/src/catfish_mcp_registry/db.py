@@ -171,11 +171,33 @@ class SubscriptionDB:
             conn.executescript(_SQLITE_SCHEMA)
         logger.info("mcp_registry sqlite init: %s", self._sqlite_path)
 
+    def _pg_clean_url(self) -> str:
+        """BL-D3 fix4 (5/9): 剥 SQLAlchemy driver prefix 给 psycopg.connect 用.
+
+        env CATFISH_DB_URL 跨 service 共享, alembic (SQLAlchemy) 要的是
+        `postgresql+psycopg://...`, 但 psycopg.connect 直接吃不认 driver
+        前缀的格式 (它就是 psycopg 自己, 走 libpq 不走 SQLAlchemy 注册表).
+
+        统一逻辑:
+          postgresql+psycopg://... → postgresql://...   (SQLAlchemy → libpq)
+          postgresql://...         → 原样
+          postgres://...           → postgresql://...   (老格式, libpq 兼容)
+
+        这样 alembic env.py 和 db.py 共用同一份 env 变量, 各自做自己的
+        归一化, 不互相打架.
+        """
+        url = self._pg_url
+        if url.startswith("postgresql+psycopg://"):
+            return "postgresql://" + url[len("postgresql+psycopg://"):]
+        if url.startswith("postgres://"):
+            return "postgresql://" + url[len("postgres://"):]
+        return url
+
     def _init_pg_schema(self) -> None:
         """PG schema 由 alembic 管. 这里只 ping 一下确认连得上."""
         try:
             import psycopg  # noqa: PLC0415
-            with psycopg.connect(self._pg_url, connect_timeout=5) as conn:
+            with psycopg.connect(self._pg_clean_url(), connect_timeout=5) as conn:
                 with conn.cursor() as cur:
                     cur.execute("SELECT 1")
             logger.info(
@@ -193,7 +215,11 @@ class SubscriptionDB:
     def _pg_conn(self):
         import psycopg  # noqa: PLC0415  延迟 import
         from psycopg.rows import dict_row  # noqa: PLC0415
-        conn = psycopg.connect(self._pg_url, row_factory=dict_row, autocommit=True)
+        # BL-D3 fix4 (5/9): 走 _pg_clean_url 剥 +psycopg driver prefix,
+        # psycopg.connect 不认 SQLAlchemy 风格 URL.
+        conn = psycopg.connect(
+            self._pg_clean_url(), row_factory=dict_row, autocommit=True,
+        )
         try:
             yield conn
         finally:

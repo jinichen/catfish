@@ -49,7 +49,10 @@ use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
-const KEYRING_SERVICE: &str = "catfish.companion.oauth";
+// BL-FIX32 (5/9): token 存储从 macOS Keychain 改文件 (~/.catfish/oauth/<name>),
+// keyring crate 不再用. 老 KEYRING_SERVICE 删. 下面三个仍叫 KEYRING_USERNAME_*
+// 是因为 save/load/delete 函数签名 + callers 不动, 现在它们是**文件名**,
+// 不是 keychain entry name. 语义改了, 命名沿用减改动.
 const KEYRING_USERNAME_ACCESS: &str = "access_token";
 const KEYRING_USERNAME_ID: &str = "id_token";
 const KEYRING_USERNAME_USER_INFO: &str = "user_info";
@@ -314,11 +317,26 @@ pub async fn run_login_flow(cfg: &OidcConfig) -> Result<AuthSession> {
 }
 
 /// Companion 启动时调. 优先级:
-///   1. CATFISH_DEV_TOKEN 设了 → 用 dev_token, 跳过 OAuth (决策 6 兜底)
-///   2. Keychain 有未过期 access_token → 用之
+///   1. Keychain 有未过期 access_token → 用之 (登录员工的真身份)
+///   2. CATFISH_DEV_TOKEN 设了 → 用 dev_token (没登录时的开发兜底)
 ///   3. 都没有 → 返 None, UI 弹登录
+///
+/// BL-FIX28 (5/9): 优先级翻转. 老序列让 dev_token 比 keychain 优先, OIDC
+/// 登录的员工 (chenhongbo@ffcs.cn) Companion 还是用 dev_token 调 gateway,
+/// gateway 解码 → 'dev-user@catfish.dev', quota / audit / chat 全挂虚构 user.
+/// 跟 me.ts BL-FIX26 的优先级对齐: 真 token 优先, env 兜底.
 pub fn try_load_session() -> Option<AuthSession> {
-    // dev_token 兜底
+    // 1. Keychain 找真登录态 (OIDC)
+    if let Ok(Some(raw)) = load_from_keyring(KEYRING_USERNAME_USER_INFO) {
+        if let Ok(session) = serde_json::from_str::<AuthSession>(&raw) {
+            let now = chrono::Utc::now().timestamp();
+            if session.expires_at > now {
+                return Some(session);
+            }
+            log::info!("Keychain access_token 过期, fallback 到 dev_token / 弹登录");
+        }
+    }
+    // 2. dev_token 兜底 (没登录 / token 过期)
     if dev_token_from_env().is_some() {
         return Some(AuthSession {
             email: "dev-user".into(),
@@ -329,23 +347,29 @@ pub fn try_load_session() -> Option<AuthSession> {
             expires_at: chrono::Utc::now().timestamp() + 86400 * 365,
         });
     }
-    // Keychain 找
-    let raw = load_from_keyring(KEYRING_USERNAME_USER_INFO).ok()??;
-    let session: AuthSession = serde_json::from_str(&raw).ok()?;
-    let now = chrono::Utc::now().timestamp();
-    if session.expires_at <= now {
-        log::info!("Keychain access_token 过期, 需要重新登录");
-        return None;
-    }
-    Some(session)
+    // 3. 都没 → UI 弹登录
+    None
 }
 
-/// 拿 access_token (给 gateway 调用用). dev_token 模式下返 dev_token 字符串.
+/// 拿 token 给 gateway 调用. **返 id_token 不是 access_token**.
+///
+/// BL-FIX31 (5/9 鸿波诊断): catfish gateway OIDC validator 显式拒绝
+/// token_use=access 的真 access_token (auth/oidc.py:159 安全设计 — access_token
+/// 一般不该被当 id_token 用). catfish 这套把 id_token 当 gateway API auth,
+/// 所以 keychain 里要返 id_token. Tauri 命令名 auth_get_access_token 是沿用
+/// OAuth 习惯命名, 真实语义是 "gateway 收的那个 token".
+///
+/// BL-FIX28 (5/9): 优先 Keychain, dev_token 兜底. 跟 try_load_session 同序.
+/// BL-FIX26 (me.ts) 翻转优先级前提是这个函数返真 OIDC token, 而不是 access_token.
 pub fn current_access_token() -> Option<String> {
-    if let Some(dev) = dev_token_from_env() {
-        return Some(dev);
+    // 1. Keychain id_token (OIDC 真登录的, gateway 接受)
+    if let Ok(Some(tok)) = load_from_keyring(KEYRING_USERNAME_ID) {
+        if !tok.is_empty() {
+            return Some(tok);
+        }
     }
-    load_from_keyring(KEYRING_USERNAME_ACCESS).ok().flatten()
+    // 2. dev_token 兜底 (.env CATFISH_DEV_TOKEN, 仅 dev 模式)
+    dev_token_from_env()
 }
 
 /// BL-D3 Phase 3.1 (5/9): 拿当前员工 sub (email) — tool-bridge spawn 时注入,
@@ -550,34 +574,69 @@ fn open_in_browser(url: &str) -> Result<()> {
 }
 
 // ============================================================
-// Keychain wrappers
+// Token storage — 文件系统 (BL-FIX32, 5/9)
 // ============================================================
+//
+// 历史: 老实现用 macOS Keychain (keyring crate). 在 unsigned dev binary
+// (cargo run target/debug, 没 codesign) 跑时, set_password 报 success 但实
+// 际不写 login keychain — silent no-op. 用户从来不会看到那个"允许访问 Keychain"
+// 的系统弹窗 (真写入 OAuth login OK 但 security CLI 一行都查不到 entry).
+//
+// 用户登录走完: log 打 'OAuth login OK: user=chenhongbo@ffcs.cn', 但 chat
+// 调 invoke('auth_get_access_token') 永远返 None, 全链路 fallback dev_token,
+// gateway 401. 中招过五六次都没看出是 keyring silent fail.
+//
+// 现在: 直接写 ~/.catfish/oauth/{access_token,id_token,user_info} 三个文件,
+// chmod 600. dev 流程立即可用. 真 release build (cargo tauri build --release
+// + Apple Developer ID sign) 后再切回 keyring (那时弹窗 + 真写入都正常).
+//
+// 函数名仍叫 _to_keyring/from_keyring/_keyring 不改, callers 全不动.
+
+fn _oauth_storage_dir() -> Result<std::path::PathBuf> {
+    let home = std::env::var("HOME").context("$HOME 未设置")?;
+    let dir = std::path::PathBuf::from(home).join(".catfish").join("oauth");
+    std::fs::create_dir_all(&dir).context("建 ~/.catfish/oauth 目录失败")?;
+    // 目录权限 0700, 防别的用户读
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
+    Ok(dir)
+}
 
 fn save_to_keyring(username: &str, value: &str) -> Result<()> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, username)
-        .with_context(|| format!("打开 keyring entry 失败: {username}"))?;
-    entry
-        .set_password(value)
-        .with_context(|| format!("写 keyring 失败: {username}"))?;
+    let path = _oauth_storage_dir()?.join(username);
+    std::fs::write(&path, value)
+        .with_context(|| format!("写 token 文件失败: {}", path.display()))?;
+    // 单文件权限 0600
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("chmod 600 失败: {}", path.display()))?;
+    }
+    log::debug!("oauth token saved: {} ({} bytes)", username, value.len());
     Ok(())
 }
 
 fn load_from_keyring(username: &str) -> Result<Option<String>> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, username)?;
-    match entry.get_password() {
-        Ok(v) => Ok(Some(v)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(e.into()),
+    let path = _oauth_storage_dir()?.join(username);
+    if !path.exists() {
+        return Ok(None);
     }
+    let s = std::fs::read_to_string(&path)
+        .with_context(|| format!("读 token 文件失败: {}", path.display()))?;
+    Ok(Some(s))
 }
 
 fn delete_from_keyring(username: &str) -> Result<()> {
-    let entry = keyring::Entry::new(KEYRING_SERVICE, username)?;
-    match entry.delete_credential() {
-        Ok(()) => Ok(()),
-        Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(e.into()),
+    let path = _oauth_storage_dir()?.join(username);
+    if path.exists() {
+        std::fs::remove_file(&path)
+            .with_context(|| format!("删 token 文件失败: {}", path.display()))?;
     }
+    Ok(())
 }
 
 // Phase 2 给 caller 可见的 Arc 包装, 避免 lifetime 问题. 现在 OidcConfig 是
