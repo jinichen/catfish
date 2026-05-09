@@ -15,7 +15,11 @@ dependencies = [
     "httpx>=0.27.0",
     "PyJWT[crypto]>=2.9.0",
     "python-dotenv>=1.0.0",
-    # Phase 2 (5/9): sqlite 持久化 (stdlib, 无依赖). PG 留 Phase 4 prod.
+    # Phase 2 (5/9 改): PG 主存储, 跟 catfish-gateway / identity 统一. sqlite
+    # fallback (stdlib) 给 dev / 单测 / 单机部署.
+    "psycopg[binary]>=3.1",
+    "alembic>=1.13",
+    "sqlalchemy>=2.0",
 ]
 
 [project.optional-dependencies]

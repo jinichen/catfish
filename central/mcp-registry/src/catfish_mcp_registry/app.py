@@ -78,10 +78,10 @@ async def lifespan(app: FastAPI):
     app.state.secret_client = httpx.AsyncClient(timeout=10)
 
     logger.info(
-        "catfish-mcp-registry v%s startup: %d manifests, db=%s, secret-broker=%s",
+        "catfish-mcp-registry v%s startup: %d manifests, db backend=%s, secret-broker=%s",
         __version__,
         count,
-        app.state.db.db_path,
+        app.state.db.backend,
         secret_broker_client.get_url(),
     )
     yield

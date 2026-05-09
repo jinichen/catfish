@@ -31,8 +31,11 @@ def registry(manifests_dir: Path) -> ManifestRegistry:
 
 @pytest.fixture
 def db() -> SubscriptionDB:
-    """每测一个独立内存 db, 不互相污染."""
-    return SubscriptionDB(Path(":memory:"))
+    """每测一个独立 sqlite :memory: db (单测不依赖 PG, fallback 走 sqlite).
+
+    集成测试 (真 PG) 在 tests/integration/ 单独跑, 需 docker postgres + alembic.
+    """
+    return SubscriptionDB(backend="sqlite", sqlite_path=Path(":memory:"))
 
 
 @pytest.fixture
