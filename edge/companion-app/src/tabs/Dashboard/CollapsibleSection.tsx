@@ -112,7 +112,10 @@ export default function CollapsibleSection({
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(2, 1fr)",
+            // BL-FIX19 (5/8): minmax(0, 1fr) 不是 1fr — 默认 grid item min size
+            // 是 'auto' = min-content, 长 URL / 长路径会撑爆 cell 让 grid 变宽.
+            // minmax(0, 1fr) 强制最小 0, cells 平分剩余空间, 内容自动 wrap.
+            gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
             gap: "var(--space-4)",
           }}
         >

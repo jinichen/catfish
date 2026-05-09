@@ -28,8 +28,13 @@ body {
 
 .app-main {
   flex: 1;
-  overflow: auto;
+  /* BL-FIX19 (5/8): overflow-x hidden 强制 fit viewport, 鸿波反馈 '不要
+     左右移动才能看完整'. 长路径 / 长 URL 自动 wrap 不撑出去. y 仍 auto. */
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: var(--space-6);
+  /* 长内容自动断行兜底 (子组件没设 min-width: 0 的也能收着) */
+  min-width: 0;
 }
 
 button {
