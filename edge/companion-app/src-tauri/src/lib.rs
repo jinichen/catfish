@@ -321,6 +321,9 @@ pub fn run() {
             commands::skills::list_mcp_servers,
             // self-evolution: 鲶鱼今天学了什么
             commands::learning::learning_today_stats,
+            // BL-MM9-accept (5/9): skill proposal accept/reject 按钮
+            commands::learning::skill_proposal_accept,
+            commands::learning::skill_proposal_reject,
             commands::audit::audit_summary,
             // SSO Phase 1C: OAuth flow + Keychain
             commands::auth::auth_whoami,

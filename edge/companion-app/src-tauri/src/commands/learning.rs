@@ -778,6 +778,77 @@ mod tests {
 // Tauri command
 // ============================================================
 
+/// BL-MM9-accept (5/9): 员工点 [接受] 标记一个 skill proposal 为 accepted.
+///
+/// 注: **本命令只标 jsonl 'accepted' event** (跟 BL-MM14 SkillRevisionCard
+/// 同模式), 不真创建 SKILL.md 文件. 真创建要 LLM 拿 proposal 内容调
+/// catfish_skill_install (有 SKILL.md + 可选 script.py 内容生成).
+///
+/// 员工点 [接受] 后在 chat tab 跟鲶鱼说 "装 personal/qualification-briefing"
+/// 让 LLM 真创建文件. UI 引导见 LearningCard flash.
+#[derive(Debug, serde::Deserialize)]
+pub struct AcceptProposalArgs {
+    /// "personal/qualification-briefing"
+    pub full_name: String,
+}
+
+#[tauri::command]
+pub fn skill_proposal_accept(args: AcceptProposalArgs) -> Result<(), String> {
+    if args.full_name.is_empty() || !args.full_name.contains('/') {
+        return Err("full_name 必填且应是 'namespace/name' 格式".to_string());
+    }
+    append_proposal_event(&args.full_name, "accept", None)
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct RejectProposalArgs {
+    pub full_name: String,
+    /// 拒绝理由 (可选, 例 '我已经有类似 skill')
+    pub comment: Option<String>,
+}
+
+#[tauri::command]
+pub fn skill_proposal_reject(args: RejectProposalArgs) -> Result<(), String> {
+    if args.full_name.is_empty() || !args.full_name.contains('/') {
+        return Err("full_name 必填且应是 'namespace/name' 格式".to_string());
+    }
+    append_proposal_event(&args.full_name, "reject", args.comment)
+}
+
+fn append_proposal_event(
+    full_name: &str,
+    event_type: &str,
+    comment: Option<String>,
+) -> Result<(), String> {
+    let home = home_dir().ok_or_else(|| "找不到 home 目录".to_string())?;
+    let path = home.join(".catfish").join("skill_proposals.jsonl");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
+    }
+    let (ns, name) = full_name
+        .split_once('/')
+        .ok_or_else(|| "full_name 格式错".to_string())?;
+    let now_iso = chrono::Utc::now().to_rfc3339();
+    let mut entry = serde_json::json!({
+        "event_type": event_type,
+        "skill_namespace": ns,
+        "skill_name": name,
+        "ts": now_iso,
+    });
+    if let Some(c) = comment {
+        entry["comment"] = serde_json::Value::String(c);
+    }
+    let line = serde_json::to_string(&entry).map_err(|e| format!("序列化失败: {}", e))?;
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| format!("打开 jsonl 失败 {:?}: {}", path, e))?;
+    writeln!(f, "{}", line).map_err(|e| format!("写 jsonl 失败: {}", e))?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn learning_today_stats() -> Result<TodayLearningStats, String> {
     tokio::task::spawn_blocking(|| {

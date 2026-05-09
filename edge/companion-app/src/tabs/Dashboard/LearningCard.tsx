@@ -7,6 +7,8 @@
  *   - 今天更新的 memory 列表 (有则展开)
  */
 
+import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useLearning } from "../../hooks/useLearning";
 import { formatTokens } from "../../lib/format";
 import type { TodayLearningStats } from "../../types/learning";
@@ -16,6 +18,42 @@ export default function LearningCard() {
   const { stats, error } = useLearning();
   // BL-E11 后续: 标题 + 自指段都用员工自定义名
   const agentName = useAgentStore((s) => s.name);
+  const [busyName, setBusyName] = useState<string | null>(null);
+  const [flash, setFlash] = useState<string | null>(null);
+
+  const showFlash = (msg: string, ms = 6000) => {
+    setFlash(msg);
+    window.setTimeout(() => setFlash(null), ms);
+  };
+
+  const acceptProposal = async (fullName: string) => {
+    setBusyName(fullName);
+    try {
+      await invoke("skill_proposal_accept", { args: { fullName } });
+      showFlash(
+        `✅ 已标记接受 ${fullName}. 现在去对话 tab 跟${agentName}说: "装 ${fullName}" — ${agentName}会真创建 SKILL.md 文件.`,
+      );
+      // 刷新立刻看不到, useLearning 30s polling 自动更新
+    } catch (e) {
+      showFlash(`接受失败: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusyName(null);
+    }
+  };
+
+  const rejectProposal = async (fullName: string) => {
+    setBusyName(fullName);
+    try {
+      await invoke("skill_proposal_reject", {
+        args: { fullName, comment: null },
+      });
+      showFlash(`已拒绝 ${fullName} 提议. ${agentName}近期不再 propose 同款.`);
+    } catch (e) {
+      showFlash(`拒绝失败: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusyName(null);
+    }
+  };
 
   return (
     <div
@@ -50,6 +88,24 @@ export default function LearningCard() {
           读取失败: {error}
         </div>
       )}
+
+      {flash && (
+        <div
+          style={{
+            color: "var(--catfish-cyan)",
+            fontSize: 12,
+            marginBottom: 8,
+            padding: "6px 10px",
+            background: "var(--catfish-bg)",
+            border: "1px dashed var(--catfish-cyan)",
+            borderRadius: 4,
+            lineHeight: 1.5,
+          }}
+        >
+          {flash}
+        </div>
+      )}
+
       {!stats && !error && <div>加载中…</div>}
 
       {stats && (
@@ -119,9 +175,10 @@ export default function LearningCard() {
                     style={{
                       display: "flex",
                       gap: "var(--space-2)",
-                      padding: "2px 0",
+                      padding: "4px 0",
                       fontSize: 11,
                       alignItems: "center",
+                      borderBottom: "1px dashed var(--catfish-border)",
                     }}
                   >
                     <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>
@@ -166,6 +223,45 @@ export default function LearningCard() {
                     >
                       {p.description}
                     </span>
+                    {p.status === "proposed" && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => acceptProposal(p.fullName)}
+                          disabled={busyName === p.fullName}
+                          style={{
+                            padding: "2px 8px",
+                            border: "1px solid var(--catfish-cyan)",
+                            borderRadius: 3,
+                            background: "var(--catfish-cyan)",
+                            color: "var(--catfish-bg)",
+                            fontSize: 10,
+                            fontWeight: 600,
+                            cursor: busyName === p.fullName ? "wait" : "pointer",
+                            opacity: busyName === p.fullName ? 0.5 : 1,
+                          }}
+                        >
+                          ✅ 接受
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => rejectProposal(p.fullName)}
+                          disabled={busyName === p.fullName}
+                          style={{
+                            padding: "2px 8px",
+                            border: "1px solid var(--catfish-text-muted)",
+                            borderRadius: 3,
+                            background: "transparent",
+                            color: "var(--catfish-text-muted)",
+                            fontSize: 10,
+                            cursor: busyName === p.fullName ? "wait" : "pointer",
+                            opacity: busyName === p.fullName ? 0.5 : 1,
+                          }}
+                        >
+                          ✕ 拒
+                        </button>
+                      </>
+                    )}
                   </li>
                 ))}
               </ul>
