@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+import urllib.parse
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -156,13 +157,25 @@ def _sub_row_to_view(row: dict, manifest=None) -> SubscriptionView:
     )
 
 
+def _decode_header(value: str | None) -> str | None:
+    """BL-D3 fix2 (5/9): gateway proxy 注入 header 时 percent-encode 中文 dept.
+    这里 unquote 还原. ASCII 不变."""
+    if value is None:
+        return None
+    try:
+        return urllib.parse.unquote(value)
+    except Exception:
+        return value
+
+
 def _require_user_sub(x_catfish_user_sub: str | None) -> str:
-    if not x_catfish_user_sub:
+    decoded = _decode_header(x_catfish_user_sub)
+    if not decoded:
         raise HTTPException(
             status_code=401,
             detail="missing X-Catfish-User-Sub (gateway 应注入或 dev 直连请手填)",
         )
-    return x_catfish_user_sub
+    return decoded
 
 
 # ── endpoints ────────────────────────────────────────────────────────
@@ -197,6 +210,10 @@ async def list_connectors(
 
     Query: ?status_filter=active|preview|deprecated 选择性过滤状态.
     """
+    # BL-D3 fix2 (5/9): gateway proxy percent-encode 中文 dept (HTTP header 必 ASCII)
+    x_catfish_user_dept = _decode_header(x_catfish_user_dept)
+    x_catfish_user_sub = _decode_header(x_catfish_user_sub)
+
     registry = _registry(request)
     db = request.app.state.db
     matched = registry.list_for_dept(x_catfish_user_dept)
@@ -237,6 +254,9 @@ async def get_manifest(
 
     部门权限校验: 不在 allowed_dept (非空时) → 403.
     """
+    # BL-D3 fix2 (5/9): 中文 dept percent-encode 还原
+    x_catfish_user_dept = _decode_header(x_catfish_user_dept)
+
     registry = _registry(request)
     manifest = registry.get(connector_id)
     if manifest is None:
@@ -272,6 +292,9 @@ async def subscribe(
     部门权限校验: connector.allowed_dept 非空且员工 dept 不在列 → 403.
     """
     user_sub = _require_user_sub(x_catfish_user_sub)
+    # BL-D3 fix2 (5/9): 中文 dept percent-encode 还原
+    x_catfish_user_dept = _decode_header(x_catfish_user_dept)
+
     registry = _registry(request)
     db = request.app.state.db
 

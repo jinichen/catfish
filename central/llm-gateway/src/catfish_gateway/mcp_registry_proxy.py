@@ -16,6 +16,7 @@ Phase 2+ 会加更多 endpoint (/v1/mcp/subscribe POST/DELETE), 这层透明转�
 from __future__ import annotations
 
 import logging
+import urllib.parse
 from typing import Any
 
 import httpx
@@ -49,6 +50,23 @@ _HOP_BY_HOP_HEADERS = {
     "host",  # 必须重写, httpx 自己加
     "content-length",  # httpx 自己算
 }
+
+
+def _safe_header_value(value: str) -> str:
+    """BL-D3 fix2 (5/9): HTTP header 值 ASCII-safe.
+
+    catfish 部门 / 用户名可能含中文 (e.g. '企业发展与风控部'), HTTP/1.1
+    header 标准只允许 latin-1, httpx 严格用 ASCII. 全 ASCII 则原样, 否则
+    URL-encode (RFC 3986 percent-encoding, UTF-8 字节). 上游 mcp-registry
+    端读 header 时 urllib.parse.unquote 还原.
+
+    safe='@.-_/' — 让常见 ASCII 字符不被 escape, 可读性更好.
+    """
+    if not value:
+        return ""
+    if all(ord(c) < 128 for c in value):
+        return value
+    return urllib.parse.quote(value, safe="@.-_/+")
 
 
 def _filter_request_headers(headers: Any) -> dict[str, str]:
@@ -91,10 +109,13 @@ async def _proxy(
 
     upstream_url = f"{cfg.upstream_url.rstrip('/')}{upstream_path}"
     headers = _filter_request_headers(request.headers)
-    # 注入员工身份 — 不让 Companion 自己伪造 dept 绕权限
-    headers["X-Catfish-User-Sub"] = user.sub or ""
-    headers["X-Catfish-User-Dept"] = user.department or ""
-    headers["X-Catfish-User-Role"] = user.role or "employee"
+    # 注入员工身份 — 不让 Companion 自己伪造 dept 绕权限.
+    # BL-D3 fix2 (5/9): user.department / sub 可能含中文 (例 '企业发展与风控部'),
+    # HTTP header 默认 ASCII (httpx 严格), 必须 percent-encode (RFC 5987 风格).
+    # mcp-registry 端读 header 时 urllib.parse.unquote 还原.
+    headers["X-Catfish-User-Sub"] = _safe_header_value(user.sub or "")
+    headers["X-Catfish-User-Dept"] = _safe_header_value(user.department or "")
+    headers["X-Catfish-User-Role"] = _safe_header_value(user.role or "employee")
 
     body = await request.body()
     client: httpx.AsyncClient = request.app.state.mcp_registry_client
