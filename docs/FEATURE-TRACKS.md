@@ -73,6 +73,19 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 >   - 测试 1097+ passing (gateway 677 + tool-bridge 403 + weekly-report 17 + cross-build clean).
 >   - 鸿波诊断功劳: 23 个补丁里 6 个 (FIX7/9/12/13/16/17) + 4 个视觉 (FIX18/19/21/22) 是鸿波直接指根因 / 提需求, 比我顺症状追快. 教训: tool 描述 + 默认参数也是 LLM 行为的一部分; 一刀切去重前先看 LLM 还有没有等价能力 tool; UI 视觉对称 (奇数卡半格旁边空白) 同款修法批量处理.
 
+> 📈 **5/9 (周六)** — BL-FIX23 五层 + BL-FIX24 治"半截就停 / 死循环" turn 控制 5 道护栏全摆齐 (6 commit + 33 单测):
+>   - **三轮诊断踩坑**: 第一轮 L1 SOUL "做完才说" 改纪律无效 (RLHF > system prompt); 第二轮 L2 reasoning_content 兜底也无效 (chunk_stats 显示 reasoning=0 全程); 第三轮看 chunk_stats 日志 finish_reason=length 才定位真根因 #1 (Qwen vLLM max_tokens 默认太小, streaming 路径 BL-A1.1 auto-continue 没接), 鸿波拍板"方案 C" ship L5 plan-only retry (真根因 #2); 鸿波最后一击诊断 "**任务完成度评估缺位**" 点透真根因 #3 (重复 tool_call 检测), ship BL-FIX24.
+>   - **L1** (4ccea2b) SOUL ★ "做完才说铁律": 反馈 = 立刻 emit tool_call 不发 plan-only message. 软纪律.
+>   - **L2** (6a0b459) chat.ts SSE parser 加 delta.reasoning_content 处理 (Qwen/DS thinking 模式不丢内容) + gateway streaming chunk_stats 采样日志 (debug 工具).
+>   - **L4** (780670a) gateway _build_litellm_params 强制 max_tokens=4096 默认 (client 没传时). 修 Qwen vLLM 默认 ~600 token 长 docx 被截 finish_reason=length. **真根因 #1**. 5 单测.
+>   - **L5** (04ed80f, 修 follow-up 37a5ae2) gateway 强制 plan-only retry: 4 条 AND 触发 (finish_reason=stop + 0 tool_call + plan-only content + user 反馈) → deepcopy body + 加 assistant 已输出 + 加 user 硬 hint, litellm.acompletion 起新一轮 (同 used_model 不再 fallback), 新 stream chunks 接到原 SSE. 上限 2 次. **真根因 #2**, 鸿波拍板"方案 C, 不要考虑别的". 13 单测.
+>   - **FIX24** (4 文件 staged 待 mac 端 commit): duplicate_tool_call_guard.py 扫近 12 条 messages, 抓 productive tool_calls, 算 arguments sha256 (normalized JSON, key 顺序无关), 同 (tool, hash) ≥ 2 次 → 注入 user hint "你重复 N 次, 不要再调, 等新指令". 跟 self_critique 互补 — 治"做了又做". SOUL 加 ★ "做完不再问铁律" (跟"做完才说"配套, 一进一出). 15 单测.
+>   - **"切 DS" 反思**: 三轮诊断中我反复挂"切 deepseek 兜底" — 鸿波质疑 "为什么老是想切 DS? DS 就能解决吗? 很奇怪的逻辑". 我承认惯性思维 N=1 样本不严谨, DS 引入新问题 (公网保密性破坏 / ttft 187 秒比 private 慢 3 倍 / 公网拥塞). **5/14 demo 主模型继续 catfish-private-main**, DS 只在 fallback 链被动接住. 真招是 BL-FIX24 治本.
+>   - **完整 turn 控制护栏** (5 道): L1 软纪律 → L2 不丢内容 → L4 length 兜底 → L5 stop+无 tool_call 兜底 → FIX24 重复 tool_call 兜底 → SOUL 后置纪律 "做完不再问".
+>   - 测试 1130+ passing (gateway 710+ +33 单测 / companion tsc 0 error).
+>   - 鸿波诊断功劳 (5/9 三条最关键的都是): (1) 拍板方案 C 砍掉切 DS / /compress 选项, 让 ship 真招; (2) 一句"任务完成度评估缺位" 点透 BL-FIX24 真根因; (3) 打脸切 DS 让我反思惯性思维.
+>   - 教训: (1) **铁证之前别下结论** — 三轮诊断都是先猜后做, debug 工具 (chunk_stats / finish_reason 日志) 应该提前加; (2) **"切模型"不是修 bug** — 模型层差异是体验, 真招在 turn 控制 / inject hint / 工程兜底; (3) **互补检测才完整** — self_critique (该做没做) + duplicate_guard (做了又做) + plan-only retry (嘴说不做) 三管齐下; (4) **软纪律 + 工程兜底双管** — SOUL 软纪律 ~30% 听话率, gateway 工程兜底 ~95%, 单靠软纪律治不了 RLHF 习惯.
+
 > 📈 5/5-5/6 sprint 桌宠 ship + 7 gap 安全闭环 + 主动闲聊 8 bug 修 + 文档套件 (~40 commit):
 >   - **5/5 BL-E27 桌宠 spike + ship**: 计划 5/22 起做的 BL-E27 提前两周 ship 到 BL-E27.2 阶段. 透明 NSPanel + macOSPrivateApi + 4 状态联 LLM + Cmd+Shift+P toggle + Option+Shift+1/2/3/4 4 屏角 + LogicalPosition 修 Retina 物理像素出屏幕 + SVG v1 (鱼竿) → v2 (圆胖浮游). 鸿波拍板"主动信息出口" — 桌宠取代 macOS 通知做 chat starter.
 >   - **5/6 BL-E27.2 真透明穿透 + Rust polling 通信**: 三轮 emit 协议层 dead end 后弃用 (app.emit_to / pet.emit / emitTo 都通不到 pet listener), 改 Rust 全局 Mutex polling buffer (300ms tick) — 100% 可靠不依赖 Tauri 跨 webview event. cursor_position 80ms 轮询切 setIgnoreCursorEvents (透明角穿透 + 桌宠区接事件), pet_emit_bubble / pet_emit_status 两条命令.

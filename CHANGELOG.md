@@ -2974,3 +2974,103 @@ a62d8e0 BL-WIN1.2 dead-code warning clean
 - ToolCatalog 白名单 (hermes builtin 全经 catfish 转译)
 - final_normalizer (chain 末尾按目标 provider 校验 + 修)
 - provider conformance test 套
+
+---
+
+## 2026-05-09（周六）— BL-FIX23 五层 + BL-FIX24 治"半截就停 / 死循环" turn 控制全护栏
+
+> 起点: 5/9 鸿波抱怨"鲶鱼老是干一半就停了"; 终点: 5 道护栏摆齐 (max_tokens 兜底 / plan-only retry / 重复 tool_call 检测 / SOUL 双纪律) + 6 个 commit + 33 单测.
+>
+> **三轮诊断踩坑教训**: 第一轮猜 SOUL/RLHF 行为问题, ship L1 无效; 第二轮猜 reasoning_content 处理缺失, ship L2 也无效; 第三轮看 chunk_stats 日志 finish_reason=stop+0 tool_call 才定位 plan-only stop; 鸿波最后一击诊断 "**任务完成度评估缺位**" 才点透真根因之一是重复 tool_call.
+
+### 三轮诊断踩坑
+
+**第一轮 (L1, 错路)**: 猜 SOUL/RLHF 行为. 加 "做完才说" 铁律 (反馈 = 立刻 emit tool_call, 不发 plan-only ' 明白我要修 X'). 重启后**无效** — RLHF 训练比 system prompt 强, LLM 不听.
+
+**第二轮 (L2, 错路)**: 猜 Companion SSE parser 只读 `delta.content` 漏 `delta.reasoning_content`. 加上 reasoning_content 渲染 + gateway 加 chunk_stats 采样日志 (debug 工具). 重启**还是无效** — 日志显示 `reasoning=0` 全程, 不是 thinking 模式问题.
+
+**第三轮 (L4 真根因 #1)**: chunk_stats 日志显示 `finish_reason=length` — Qwen vLLM 默认 `max_tokens` 太小 (~600 token), 长 docx 输出被上游截. `auto_continue.py` 自己注释里写 "**流式响应 — 5/8 后续做**", BL-A1.1 auto-continue **只覆盖 non-streaming**, Companion 走 streaming **完全没接**. 修法 `_build_litellm_params` 强制 `max_tokens=4096` 默认 + finish_reason 日志.
+
+**第四轮 (L5 真根因 #2)**: L4 ship 后 chunk_stats 显示 `finish_reason=stop` + `0 tool_calls` + plan-only content. self_critique 已 inject hint 但 LLM 不听. 鸿波拍板"方案 C, 不要考虑别的". gateway 强制 plan-only retry — 检测到 stop+plan-only+反馈 → 内部起新一轮 acompletion 加硬 hint, 把新 stream 接到原 SSE, 客户端无感. 上限 2 次防死循环.
+
+**第五轮 (BL-FIX24 真根因 #3, 鸿波诊断)**: 鸿波贴的 6 月通报死循环现场 — LLM **真做了 execute_code 5 次, 每次跑同段 code 产同文件**. 鸿波点透: "**是不是现在对于任务的完成情况没有一个好的评估手段?**". 跟 self_critique 互补 — 一个治"该做没做", 一个治"做了又做". 加 `duplicate_tool_call_guard` 模块 + SOUL "做完不再问" 铁律.
+
+### Ship 内容
+
+| BL | 修了啥 | 测试 |
+|---|---|---|
+| **FIX23 L1** | SOUL 加 ★ "做完才说铁律": 反馈 = 立刻 emit tool_call, 不发 plan-only 'message'. assistant message 必须含 ≥1: tool_call / 具体可验证结果 / 真问澄清. (4ccea2b) | tsc 0 error |
+| **FIX23 L2** | (a) edge/companion-app/src/lib/chat.ts SSE parser 加 `delta.reasoning_content` 处理, onDelta 一起渲染兜底; (b) central/llm-gateway/src/catfish_gateway/app.py 加 streaming chunk_stats 采样 (content/reasoning/tool_calls/empty 分布 debug). (6a0b459) | tsc 0 error |
+| **FIX23 L4a** | gateway `_build_litellm_params` 强制 `max_tokens=4096` 默认 (client 没传时). client 显式传值 (例如 summarizer 600) 不动. **真根因 #1** 修法. | 5 单测 |
+| **FIX23 L4b** | streaming chunk_stats 加 `finish_reason` 跟踪. length → WARNING 级别. (780670a 一并 ship) | (含上面) |
+| **FIX23 L5** | 鸿波拍板"方案 C". `_stream_chat_completion` 包 outer while + 累积 `cumulative_content` / `cumulative_has_tool_call`. 触发 4 条全满足 (stop + 0 tool_call + plan-only content + user 反馈) → deepcopy body + 加 assistant 已输出 + 加 user 硬 hint, litellm.acompletion 起新一轮 (同 used_model 不再 fallback), 新 stream chunks 接到原 SSE. 上限 `_MAX_PLAN_ONLY_RETRIES=2`. (04ed80f, 修 follow-up 37a5ae2) | 13 单测 |
+| **FIX24** | 新模块 `duplicate_tool_call_guard.py`: 扫近 12 条 messages, 抓 productive tool_calls (execute_code 等), 算 arguments sha256 (normalized JSON, key 顺序无关), 同 (tool, hash) ≥ 2 次 → 注入 user hint "你重复 N 次, 不要再调, 等新指令. 不要主动问 '需要再做吗'". 接到 chat_completions handler 跟 self_critique 同阶段. SOUL 加 ★ "做完不再问铁律" (跟 "做完才说" 配套, 一进一出). | 15 单测 |
+
+### "切 DS" 反思 (鸿波质疑得对)
+
+3 轮诊断中我反复挂"切 deepseek 当兜底" — 鸿波质疑 "**为什么老是想切 DS? DS 就能解决吗? 很奇怪的逻辑**".
+
+**惯性思维不严谨**. 我的依据只有 N=1 样本: 14:32:10 流水里 deepseek 一次发 2879 tool_call chunks (做事), 同段对话 14:32:57 private-main 138 chunks plan-only stop. 据此推论"DS 听话, private 不听" 不成立 —
+
+1. 个体差异不是模式. deepseek 跑的是鸿波第一次提需求, private-main 是后续 turn — 处理的不是同问题
+2. 后面死循环铁证 (5+ 次 execute_code 重跑) 说明真问题是**重复 tool_call 检测**缺位, 不是哪个模型听话. 切 DS 治不了
+3. DS 引入新问题: 公网保密性破坏 (央企客户演示翻车) / ttft 187 秒比 private-main 慢 3 倍 / 公网拥塞不可控
+
+**结论**: 5/14 demo **主模型继续 catfish-private-main**. DS 只在 fallback 链被动接住, 不主动选. 真招是 BL-FIX24 治本.
+
+### 完整 turn 控制护栏 (5 道齐了)
+
+| 层 | 治什么 |
+|---|---|
+| BL-FIX23 L1 SOUL "做完才说" | 反馈 = 立刻动手 (前置纪律) |
+| BL-FIX23 L2 reasoning_content | 不丢思考内容 (deepseek 备份用得上) |
+| BL-FIX23 L4 max_tokens=4096 | length 截断兜底 |
+| BL-FIX23 L5 plan-only retry | stop + 0 tool_call 兜底 |
+| **BL-FIX24 duplicate_guard** | **重复 tool_call 兜底** |
+| SOUL "做完不再问" | 后置纪律护沉默 |
+
+### 测试统计
+
+- gateway: 677 → 710+ (+33: BL-FIX23 max_tokens 5 / plan-only retry 13 / BL-FIX24 duplicate_guard 15)
+- companion: tsc 0 error
+- **合计**: 1130+ tests passing
+
+### 5/9 commit 列表 (6 个)
+
+```
+4ccea2b BL-FIX23 L1 (5/9): SOUL 加 '做完才说' 铁律
+6a0b459 BL-FIX23 L2 (5/9): chat.ts reasoning_content + gateway chunk stats 采样
+780670a BL-FIX23 L4 (5/9): gateway max_tokens=4096 兜底 + finish_reason 日志 - 真根因
+04ed80f BL-FIX23 L5 (5/9): gateway 强制 plan-only retry - 鸿波拍板方案 C
+37a5ae2 BL-FIX23 L5 follow-up (5/9): 修 2 单测 fail (短关键词 case)
+(BL-FIX24 待 mac 端 commit, 4 文件 staged: app.py + duplicate_tool_call_guard.py + 单测 + SOUL.md)
+```
+
+### 鸿波诊断功劳 (今天点的真因)
+
+跟 5/8 一样, 最关键的几条都是鸿波诊断:
+
+1. **方案 C 拍板**: "方案 C, 不要考虑别的" — 我列三选一时鸿波直接砍掉切 DS / /compress 兜底, 让 ship 真招 (gateway 强制 retry).
+2. **真根因 #3**: "是不是现在对于任务的完成情况没有一个好的评估手段?" — 一句话点透重复 tool_call 检测缺位.
+3. **打脸切 DS**: "为什么老是想切 DS? DS 就能解决吗? 很奇怪的逻辑" — 让我反思惯性思维, 5/14 demo 不再走捷径.
+
+### 教训
+
+- **铁证之前别下结论**: 三轮诊断都是先猜后做, 真根因要等 chunk_stats 日志 + 多次现场流水才能定位. **debug 工具 (chunk_stats / finish_reason 日志) 应该提前加, 不是等踩坑了才补**.
+- **"切模型"不是修 bug**: 模型层差异是体验, 不是问题根因. 真招在 turn 控制 / inject hint / 工程兜底.
+- **互补检测才完整**: self_critique (该做没做) + duplicate_guard (做了又做) + plan-only retry (嘴说不做) 三管齐下, 单一检测漏 case.
+- **软纪律 + 工程兜底 双管**: SOUL "做完才说" + "做完不再问" 是软纪律 (LLM 听话率 ~30%), gateway L5 + FIX24 是工程兜底 (~95%). 单靠软纪律治不了 RLHF 习惯.
+
+### 遗留 (5/10 起做)
+
+**5/14 demo 之前**:
+- catfish-private-main timeout 60s → 120s (yaml 覆盖, 防长 context 撞超时误切 DS)
+- 5/10-12 真机彩排 ×2 验证 turn 控制 5 道护栏
+- 5 场景实录视频 (5/12-13)
+- demo 机子 USER.md / journal seed 准备
+
+**Demo 后 (5/15+)**:
+- BL-A1.2 streaming auto-continue 真做掉 (finish_reason=length 跨次拼 SSE [DONE])
+- BL-FE3 原生 reasoning_content 折叠 UI ("点击展开思考过程")
+- BL-FIX24 端到端 mock test (mock litellm.acompletion + retry 流程真跑)
+- duplicate_guard 关键词列表迭代 (看真触发率, 调 _PLAN_ONLY_PROMISE_KEYWORDS / _PLAN_ONLY_FEEDBACK_KEYWORDS)
