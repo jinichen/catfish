@@ -92,6 +92,10 @@ export default function CuratorCard() {
   return (
     <div
       style={{
+        // BL-FIX22 (5/8): 鸿波反馈 '脚本整理也是同样的问题'. CuratorCard 是
+        // section 第 5 张奇数, 2 列 grid 下变成单独半格旁边空白. 跟 SkillRevisionCard
+        // FIX21 同款修法 — 整卡 gridColumn '1 / -1' 全宽.
+        gridColumn: "1 / -1",
         background: "var(--catfish-bg-elevated)",
         border: "1px solid var(--catfish-border)",
         borderRadius: "var(--radius-md)",
