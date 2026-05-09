@@ -177,6 +177,35 @@ export default function SkillRevisionCard() {
   }
 
   const totalAll = data.pending.length + data.effectiveness_due.length;
+  const isEmpty = totalAll === 0 && data.total_proposed === 0;
+
+  // BL-FIX21 (5/8): 空状态 collapsed 成 1 行 banner 全宽展示, 跟其他 card 不
+  // 撞高度差. 鸿波反馈 'SKILL 改进提议半截很难看'.
+  if (isEmpty) {
+    return (
+      <div
+        style={{
+          gridColumn: "1 / -1", // 全宽, 跨所有列
+          background: "var(--catfish-bg)",
+          border: "1px dashed var(--catfish-border)",
+          borderRadius: "var(--radius-sm)",
+          padding: "8px 14px",
+          fontSize: 12,
+          color: "var(--catfish-text-muted)",
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+        }}
+      >
+        <span style={{ fontSize: 14 }}>🔧</span>
+        <span>
+          <strong style={{ color: "var(--catfish-text)" }}>Skill 改进提议</strong> ·
+          鲶鱼观察 BL-MM11 反馈 + audit 失败 + BL-MM12 质量分,
+          发现可改的 skill 自动提议. 暂时无待处理.
+        </span>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -262,12 +291,7 @@ export default function SkillRevisionCard() {
         </div>
       )}
 
-      {totalAll === 0 && data.total_proposed === 0 && (
-        <div style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>
-          还没有改进提议. 鲶鱼会观察 BL-MM11 反馈 + audit 失败 + BL-MM12 质量分,
-          发现可改的 skill 自动提议. 你 Dashboard 看到再决定采不采纳.
-        </div>
-      )}
+      {/* BL-FIX21 (5/8): 全空状态走顶部 isEmpty 早返, 这里不再渲染 */}
 
       {/* 待采纳 pending */}
       {data.pending.length > 0 && (
