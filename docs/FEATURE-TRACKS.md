@@ -38,7 +38,7 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 >     gateway sanitizer 兜底强制 type='object' + 缺 properties → {}. **+7 测试 / 506/506 全过 / 0 副作用**.
 >     demo 后 BL-FE3 加前端 reasoning_content 原生支持, 配合 deepseek thinking 重开
 >
-> 📈 **5/8 (周五一日 24 commit)** — 视觉 demo 14 BL-FIX 端到端 + Windows 客户端从 0 到 demo-ready 8 BL-WIN:
+> 📈 **5/8 (周五一日 33+ commit)** — 视觉 demo 14 BL-FIX + Windows 客户端 8 BL-WIN + skill 自进化闭环 MM13/14/15 + 收尾 7 BL-FIX (UI 整体优化):
 >   - **上半天 (BL-FIX2-15, 14 个 BL)**: 5/14 demo 卖点 "员工说'登录 EIS', catfish 自动识别验证码" — 早 8 点撞 BadRequest 400 (空 reason Go gRPC 风格), 一路追到 12 处 bug. 16:30 真跑通 (Qwen3.5 122B 主力识码 "S2CB" 准确). 关键修法:
 >     - **FIX2** `multimodal_tool_unwrap` (gateway): tool 含图重组到 user multipart message — Qwen Go gRPC adapter 不接受 role=tool 含 multimodal, 改写 tool 留路径元数据 + 紧接插 user multipart [{type:text}, {type:image_url}]. **基础设施级修法**, 任何含图的 tool 都走这条.
 >     - **FIX4 + FIX5**: dedupe hermes builtin browser_* 12 条 + 同步 scrub 历史 tool_calls (LLM 训练分布最熟 hermes browser_vision, 但 catfish 没配 vision provider → 撞 400). 一刀切去重, 历史里残留 tool_call 也清.
@@ -59,8 +59,19 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 >     - **WIN9.1** README-deploy 补 Windows 具体步骤 (鸿波 "我没看出来"): 部署形态 A (纯聊天 只 .exe + yaml) vs B (完整 .exe+Python+Chrome) + Windows 路径例 + 文件管理器步骤 + console.info 验证.
 >     - **WIN9.2** yaml 默认 audience 'test' → 'catfish-companion' (生产部署会 401 aud mismatch 隐性 bug, 顺手修).
 >     - Windows 真机能跑: chat / 仪表盘 / SSO / 浏览器自动化 / 截图 / skill / wincred / yaml 配置. 还差: outlook (WIN4) / Windows Service daemon (WIN5) / MSI 签名 (WIN6) / sandbox (WIN7) — 真上线分批做.
->   - 测试 1058+ passing (gateway 677 + tool-bridge 364 + weekly-report 17 + cross-build clean).
->   - 鸿波诊断功劳: 18 个补丁里 4 个 (FIX7/9/12/13) 是鸿波直接指根因, 比我顺症状追快. 教训: tool 描述 + 默认参数也是 LLM 行为的一部分, audit 要包含; 一刀切去重前先看 LLM 还有没有等价能力 tool, 没有就先补再去.
+>   - **深夜 23:00-2:00 (BL-MM13/14/15 + 收尾 BL-FIX16-22, 10 个 BL)** — 鸿波"现在就开始做 13、14、15 一起完成不留尾巴". skill 自进化对称半边补齐:
+>     - **MM13** `catfish_propose_skill_revision` 工具 (~150 行 + 14 单测): SemVer 校验 + red-line 字段冻 + 24h ≤3/session 限频. 写 `~/.catfish/skill_revisions.jsonl` 等员工 accept, **不直接改 skill 文件**. 跟 MM9 propose_new_skill 对称.
+>     - **MM14** Dashboard `SkillRevisionCard` (~455 行) 三段 UI: pending / effectiveness_due / recent_resolved. 30s polling. accept 时 fetch 当前 quality_score 存 baseline. 4 Tauri commands.
+>     - **MM15** 14 天有效性跟踪: accept 后比当前 quality_score vs baseline. ≥+10 improved (✅ 真改善) / ≤-10 regressed (❌ 反而坏了, 建议回退) / 中间 neutral. **闭环成立**: 鲶鱼自己看到回退建议会主动反向 propose, 不是只发声.
+>     - **FIX16** `catfish_browser_find_by_text` (鸿波 "还是一样找不到登录按钮"): CAS 登录 button 是非标准 `<a class="btn" onclick>`, snapshot a11y 不报. JS evaluate 扫 button/a/[onclick]/[role=button]/[class*=btn] 按可见文字匹配, LLM 直接 find_by_text("登录") → selector → click.
+>     - **FIX17** `catfish_browser_screenshot` 智能压缩 (鸿波 "截图必须要压缩否则一定卡死"): 4MB PNG 经 IPC → context → LLM 一连串撑爆. 三档: element 不压, viewport max 1280px JPEG q80, full_page max 1600px JPEG q75. 超 800KB 降级 q60. +9 单测.
+>     - **FIX18** ServicesCard tooltip 出界改 inline 副标题 (HTML native `title=` 冒出去糊到 QuotaCard).
+>     - **FIX19** Dashboard 内容控制框内 (鸿波 "不要左右移动"): `.app-main` overflow-x: hidden + grid 改 `minmax(0, 1fr)` 强制最小 0, 长 URL 不再撑爆.
+>     - **FIX20** 仪表盘 UI 整体优化 (鸿波 "内容太多"): 响应式 grid `repeat(auto-fit, minmax(280px, 1fr))` (宽 3 列 / 中 2 列 / 窄 1 列) + section 标题 uppercase 轻量 + maxWidth 1600 居中.
+>     - **FIX21** SkillRevisionCard 空状态全宽 banner (鸿波 "半截很难看"): `gridColumn: '1 / -1'`.
+>     - **FIX22** CuratorCard 整卡全宽 (鸿波 "脚本整理也是同样的问题"): 跟 FIX21 同款修法.
+>   - 测试 1097+ passing (gateway 677 + tool-bridge 403 + weekly-report 17 + cross-build clean).
+>   - 鸿波诊断功劳: 23 个补丁里 6 个 (FIX7/9/12/13/16/17) + 4 个视觉 (FIX18/19/21/22) 是鸿波直接指根因 / 提需求, 比我顺症状追快. 教训: tool 描述 + 默认参数也是 LLM 行为的一部分; 一刀切去重前先看 LLM 还有没有等价能力 tool; UI 视觉对称 (奇数卡半格旁边空白) 同款修法批量处理.
 
 > 📈 5/5-5/6 sprint 桌宠 ship + 7 gap 安全闭环 + 主动闲聊 8 bug 修 + 文档套件 (~40 commit):
 >   - **5/5 BL-E27 桌宠 spike + ship**: 计划 5/22 起做的 BL-E27 提前两周 ship 到 BL-E27.2 阶段. 透明 NSPanel + macOSPrivateApi + 4 状态联 LLM + Cmd+Shift+P toggle + Option+Shift+1/2/3/4 4 屏角 + LogicalPosition 修 Retina 物理像素出屏幕 + SVG v1 (鱼竿) → v2 (圆胖浮游). 鸿波拍板"主动信息出口" — 桌宠取代 macOS 通知做 chat starter.

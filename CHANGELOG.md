@@ -2823,11 +2823,13 @@ SkillAuditCard 新增"📊 综合质量分" 区, top 5 skill 按分降序, 鼠�
 
 ---
 
-## 2026-05-08（周五）— BL-FIX 14 个 (修视觉 demo 端到端) + Windows 客户端 8 个 BL (从 0 到 demo-ready)
+## 2026-05-08（周五）— BL-FIX 21 个 + Windows 8 BL + 自进化闭环 MM13/14/15 (一日 33+ commit)
 
-> 一天 24 个 commit. 起点: 5/8 早桌宠 / MM11/12 ship 完看似收工; 终点: 凌晨 1 点
-> Windows 客户端从 "未启动" 走到 "30MB exe + yaml 配置 + 中央部署文档齐了".
-> 中段挤出 14 个 BL-FIX 修视觉模型 EIS 登录 demo 整链 (验证码自动识别真跑通).
+> 起点: 5/8 早桌宠 / MM11/12 ship 完看似收工; 终点: 5/9 凌晨 2 点.
+> 三个大块: (1) 14 个 BL-FIX 修视觉模型 EIS 登录 demo 整链 (验证码自动识别真跑通);
+> (2) Windows 客户端从 "未启动" 走到 "30MB exe + yaml 配置 + 中央部署文档齐了";
+> (3) skill 自进化闭环 BL-MM13/14/15 (propose → accept → 14 天有效性跟踪 → 回退建议).
+> 收尾 7 个 BL-FIX (16~22) 修视觉端到端 + Dashboard UI 整体优化 (鸿波"内容太多").
 
 ### 上半天 (8:00-16:00) · 视觉 demo 链路全修 (BL-FIX2~15, 14 个)
 
@@ -2878,6 +2880,23 @@ LLM catfish_browser_goto → browser_snapshot 找到 #captchaImg
 | **WIN9.1** | `README-deploy.md` 补 Windows 具体步骤 (鸿波 "我没看出来"): 部署形态 A (纯聊天 只 .exe + yaml) vs B (完整 .exe+Python tool-bridge+Chrome) + 实际路径例 `C:\Users\chenhongbo\.catfish\companion.yaml` + 文件管理器 `%USERPROFILE%\.catfish` + 记事本 + 完全退出 Companion (托盘退出) + 双击重启 + 控制台 BL-WIN9 日志验证. |
 | **WIN9.2** | yaml 默认 audience 'test' → 'catfish-companion'. 鸿波问"client_id/audience/scope 要设吗?"顺手 audit 默认 yaml — 发现 `audience: test` 跟 catfish-identity 实际签的 `audience=client_id='catfish-companion'` 不匹配, 生产部署会 401 aud mismatch. 改默认值 + 三个字段加详细注释 (本机 demo / catfish-identity 中央 / 企业 SSO 三种场景). |
 
+### 深夜 (23:00-2:00) · 自进化闭环 BL-MM13/14/15 + 收尾 BL-FIX16~22
+
+鸿波 5/8 晚: "现在就开始做 13、14、15 一起完成, 不要留尾巴". MM9 之前补的是 "鲶鱼提议新 skill", 今天补对称半边 "鲶鱼改进老 skill + 跟踪是否真改善".
+
+| BL | 修了啥 |
+|---|---|
+| **MM13** | tool-bridge `catfish_propose_skill_revision` 工具 (~150 行). 跟 MM9 propose_new_skill 一脉相承: SemVer 校验 (旧 → 新版本只能 +1 patch/minor) + red-line filter (敏感字段不能改) + 限频 (24h 内 ≤3/session, 防 LLM 刷). 写 `~/.catfish/skill_revisions.jsonl` 事件流, 内容 = `{ skill_id, current_version, proposed_version, diff, rationale, ts }`. **不直接改 skill 文件**, 只是建议, 等员工 accept 才落. |
+| **MM14** | Companion Dashboard `SkillRevisionCard` (~455 行). 三段 UI: pending (待处理) / effectiveness_due (14 天到期, 等评定) / recent_resolved (最近 accept/reject). 30s polling. accept 时自动 fetch 当前 quality_score 存为 baseline. Tauri commands: skill_revision_summary / accept / reject / check_effectiveness. |
+| **MM15** | 改进有效性跟踪. accept 后 14 天 daemon 自动 check_effectiveness: 比当前 quality_score 跟 baseline. ≥ +10 标 improved (✅ 真改善), ≤ -10 标 regressed (❌ 反而坏了, 建议回退), 中间 neutral (⚪️ 不显著). 鲶鱼自己看到回退建议会主动 propose_skill_revision 反向 patch. **闭环成立**: 不是只发声, 是带反馈的进化. |
+| **FIX16** | tool-bridge `catfish_browser_find_by_text` 文字定位元素. 鸿波: "还是一样找不到登录按钮, 造成卡死". CAS 登录页 button 是非标准 `<a class="btn btn-primary" onclick="...">登录</a>`, snapshot 的 a11y 树根本不报. JS evaluate 扫 `button / a / [onclick] / [role=button] / [class*=btn]` 按可见文字匹配. LLM 直接 catfish_browser_find_by_text(text="登录") → 拿 selector → click. |
+| **FIX17** | tool-bridge `catfish_browser_screenshot` 智能压缩. 鸿波诊断: "现在已经发现一个严重问题, 截图必须要压缩, 要不然一定卡死" (4MB PNG 经 IPC → context → 主力 LLM 一连串撑爆). 三档策略: element 级 PNG 不压 (一般已经小); viewport 级 max 1280px + JPEG q80; full_page 级 max 1600px + JPEG q75. 超 800KB 降级 q60, 仍超 raise. 测试新加 6 case + 老 3 case 给 compress="none" 跳 PIL. |
+| **FIX18** | Companion `ServicesCard` tooltip 出界. 鸿波截图: native `title=row.why` HTML tooltip 从卡片冒出去糊到旁边 QuotaCard. 改 inline 副标题 (服务名下方一行 muted 12px), 删 native title. |
+| **FIX19** | Dashboard 内容控制在框内. 鸿波: "要控制到框里, 不要左右移动才能看完整". 双根因: (a) `.app-main { overflow: auto }` 默认放任 h-scroll, 改 `overflow-x: hidden` + `overflow-y: auto`; (b) CSS Grid `1fr` 默认 `minmax(min-content, 1fr)`, 长 URL/路径撑爆 cell, 改 `minmax(0, 1fr)` 强制最小 0. |
+| **FIX20** | 仪表盘 UI 整体优化 (鸿波 "内容太多"). 三层加固: (a) `CollapsibleSection` 改响应式 grid `repeat(auto-fit, minmax(280px, 1fr))` — 宽屏 3 列 / 中屏 2 列 / 窄屏 1 列, 不再硬编码 2 列; (b) section 标题去 border-bottom, 改 uppercase + letter-spacing + muted 11px, hover 才高亮 (5-7 组叠起来视觉收得住); (c) `DashboardTab` 加 `maxWidth: 1600` + `margin: 0 auto`, 超宽屏内容居中, 不再左浮空白. |
+| **FIX21** | `SkillRevisionCard` 空状态全宽 banner. 鸿波: "SKILL 改进提议, 半截很难看". 当 totalAll=0 且 total_proposed=0 显示一行虚线 banner ("暂时无待处理建议"), `gridColumn: '1 / -1'` 全宽, 不再单独半格旁边空白. |
+| **FIX22** | `CuratorCard` 整卡全宽 (跟 FIX21 同款). 鸿波: "脚本整理也是同样的问题". CuratorCard 是服务/配额 section 第 5 张奇数, 2 列 grid 下变成单独半格. 整卡 `gridColumn: '1 / -1'` 全宽. |
+
 ### Cross-build 最终态
 
 ```
@@ -2903,10 +2922,10 @@ cargo build --release --target x86_64-pc-windows-gnu
 ### 测试统计 (一天加)
 
 - gateway: 661 → 677 (+16: BL-FIX2 17 / FIX5 8 / FIX6 3 / FIX8 14 / FIX13 5)
-- tool-bridge: 341 → 364 (+23: BL-FIX3 9 / FIX7 10 / FIX9 4 / FIX10 6 / FIX11 1 / WIN2 2)
+- tool-bridge: 341 → 403 (+62: BL-FIX3 9 / FIX7 10 / FIX9 4 / FIX10 6 / FIX11 1 / WIN2 2 / FIX16 7 / FIX17 9 / MM13 14)
 - weekly-report: 17 (BL-FIX12 防 regression)
 - companion: tsc 0 error / cargo cross-build 0 error 0 warning
-- **合计**: 1058+ tests passing
+- **合计**: 1097+ tests passing
 
 ### 鸿波诊断功劳 (今天点的真因)
 
@@ -2922,7 +2941,7 @@ cargo build --release --target x86_64-pc-windows-gnu
 - 默认参数也是 LLM 行为的一部分, audit 要包含
 - 写守卫 / 检测类 regex 写完跑反向 test (这条不该撞但撞了吗)
 
-### 5/8 commit 列表 (24 个)
+### 5/8 commit 列表 (33+ 个)
 
 ```
 800dd53 BL-WIN9.1 deploy README Windows 步骤
