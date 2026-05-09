@@ -1,0 +1,57 @@
+# GitLab MCP 连接器 manifest (BL-D3 Phase 1, 5/9 ship)
+id: gitlab
+name: GitLab
+version: "0.6.1"
+description: GitLab — 看 MR / 评论 / pipeline / issue / 仓库文件
+provider: gitlab
+status: active
+
+allowed_dept:
+  - engineering
+  - devops
+  - qa
+
+mcp_command:
+  type: uvx
+  package: mcp-server-gitlab
+  args: []
+  env:
+    GITLAB_URL: "${GITLAB_URL}"
+    GITLAB_OAUTH_TOKEN: "${SECRET_REF:gitlab-oauth}"
+
+tools:
+  - name: gitlab_search_repos
+    description: 搜代码库
+  - name: gitlab_get_file
+    description: 看文件内容
+  - name: gitlab_list_mrs
+    description: 列 merge request
+  - name: gitlab_get_mr
+    description: 看 MR 详情 + diff
+  - name: gitlab_comment_mr
+    description: 给 MR 加评论
+  - name: gitlab_list_issues
+    description: 列 issue
+  - name: gitlab_create_issue
+    description: 创建 issue
+  - name: gitlab_pipeline_status
+    description: 看 pipeline 状态
+
+auth_type: oauth2
+oauth:
+  authorize_url: "${GITLAB_URL}/oauth/authorize"
+  token_url: "${GITLAB_URL}/oauth/token"
+  scopes:
+    - read_repository
+    - read_api
+    - write_repository
+  required_env:
+    - GITLAB_URL
+    - GITLAB_CLIENT_ID
+    - GITLAB_CLIENT_SECRET
+
+ui:
+  icon: gitlab.svg
+  category: 代码协作
+  vendor: GitLab
+  homepage: https://gitlab.com

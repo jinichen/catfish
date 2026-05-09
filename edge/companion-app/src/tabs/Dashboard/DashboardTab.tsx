@@ -38,6 +38,7 @@ import UserProfileCard from "./UserProfileCard";
 import StyleFingerprintCard from "./StyleFingerprintCard";
 import TasksCard from "./TasksCard";
 import CuratorCard from "./CuratorCard";
+import McpRegistryCard from "./McpRegistryCard";
 import CollapsibleSection from "./CollapsibleSection";
 import { useMe } from "../../hooks/useMe";
 
@@ -100,7 +101,7 @@ export default function DashboardTab() {
         id="services"
         title="⚙️ 服务 / 配额"
         defaultCollapsed
-        count={4}
+        count={6}
       >
         <ServicesCard />
         <QuotaCard />
@@ -108,6 +109,10 @@ export default function DashboardTab() {
         <SkillsMcpCard />
         {/* 5/7 BL-CR: Curator 集成 — 老脚本自动整理 (hermes 0.12 自带) */}
         <CuratorCard />
+        {/* BL-D3 (5/9): MCP 连接器仓库 Phase 1, 只读列表 (Jira/GitLab/FS/Time).
+            Phase 2/3 接订阅 + OAuth + pod-per-user 拉起. 真接 mcp-registry
+            服务 (gateway 反向代理 /v1/mcp/registry → mcp-registry:8997). */}
+        <McpRegistryCard />
       </CollapsibleSection>
 
       {/* 第五组: 审计 / 学习 — 历史 + skill audit + skill revision + tool audit (默认收) */}

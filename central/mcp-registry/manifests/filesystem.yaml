@@ -1,0 +1,49 @@
+# Filesystem MCP 连接器 manifest (BL-D3 Phase 1, 5/9 ship)
+#
+# 员工本机文件读写 — 不走 OAuth, 用 secret_ref 配 allowed_paths
+# (跟 hermes 自带 file tool 不同, 这条走 mcp 协议, 让 gateway 能审计)
+id: filesystem
+name: 本地文件
+version: "0.4.0"
+description: 员工本机文件读写 — 跨平台 (mac/Win), 路径白名单管控
+provider: anthropic-official
+status: active
+
+allowed_dept: []   # 空列表 = 全员可订阅
+
+mcp_command:
+  type: uvx
+  package: mcp-server-filesystem
+  args:
+    # 路径白名单, 不走 OAuth 但管控访问范围
+    - "${ALLOWED_PATHS}"   # 默认 ~/.catfish/output/ + ~/Documents/, 员工可改
+  env: {}
+
+tools:
+  - name: fs_read
+    description: 读文件
+  - name: fs_write
+    description: 写文件
+  - name: fs_list_dir
+    description: 列目录
+  - name: fs_search
+    description: 按文件名搜
+
+# 不走 OAuth, 走 path 白名单
+auth_type: path_allowlist
+path_config:
+  default_paths:
+    - "~/.catfish/output"
+    - "~/Documents"
+  configurable: true   # 员工 Dashboard 自定义可加路径
+  forbidden_paths:
+    - "~/.ssh"
+    - "~/Library/Keychains"
+    - "/etc"
+    - "/var"
+
+ui:
+  icon: filesystem.svg
+  category: 本地文件
+  vendor: Anthropic Official
+  homepage: https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem

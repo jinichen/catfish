@@ -1,0 +1,60 @@
+# Jira MCP 连接器 manifest (BL-D3 Phase 1, 5/9 ship)
+#
+# 用社区现成 mcp-server-jira (uvx 一行启动). Phase 2 接 OAuth, Phase 3 拉 pod.
+id: jira
+name: Jira
+version: "0.5.2"
+description: Atlassian Jira issue tracking — 看任务 / 创建 issue / 更新状态 / 评论
+provider: atlassian
+status: active   # active / preview / deprecated
+
+# 哪些部门可订阅 (catfish-identity 部门权限). 空列表 = 全员可订阅.
+allowed_dept:
+  - engineering
+  - product
+  - qa
+  - devops
+
+# MCP server 拉起命令 (Phase 3 用)
+mcp_command:
+  type: uvx
+  package: mcp-server-jira
+  args: []
+  env:
+    JIRA_URL: "${JIRA_URL}"
+    JIRA_OAUTH_TOKEN: "${SECRET_REF:jira-oauth}"
+
+# 暴露的 tools (Phase 3 gateway 注入到 LLM tool list)
+tools:
+  - name: jira_search
+    description: 按 JQL 搜 issue
+  - name: jira_get_issue
+    description: 拿单个 issue 详情
+  - name: jira_create
+    description: 创建 issue
+  - name: jira_update
+    description: 改 issue 状态 / 字段
+  - name: jira_comment
+    description: 给 issue 加评论
+  - name: jira_transitions
+    description: 列 issue 可做的 status transition
+
+# OAuth 配置 (Phase 2 用)
+auth_type: oauth2
+oauth:
+  authorize_url: "https://${JIRA_INSTANCE}.atlassian.net/oauth/authorize"
+  token_url: "https://auth.atlassian.com/oauth/token"
+  scopes:
+    - read:jira-work
+    - write:jira-work
+  required_env:
+    - JIRA_INSTANCE   # 例 'mycompany'
+    - JIRA_CLIENT_ID
+    - JIRA_CLIENT_SECRET   # 走 secret-broker, 不入库
+
+# Companion UI 元信息
+ui:
+  icon: jira.svg
+  category: 项目管理
+  vendor: Atlassian
+  homepage: https://www.atlassian.com/software/jira

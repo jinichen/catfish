@@ -1,0 +1,31 @@
+# Time MCP 连接器 manifest (BL-D3 Phase 1, 5/9 ship)
+#
+# 极轻量, 验证 stack — 启 pod 拉 list_tools 跑通就行, 演示 mcp 链路
+id: time
+name: 时间 / 时区
+version: "0.3.0"
+description: 时间 / 时区转换 / 当前时刻 — 极轻量演示连接器
+provider: anthropic-official
+status: active
+
+allowed_dept: []   # 全员
+
+mcp_command:
+  type: uvx
+  package: mcp-server-time
+  args: []
+  env: {}
+
+tools:
+  - name: get_current_time
+    description: 拿当前时间 (指定时区)
+  - name: convert_time
+    description: 时区转换
+
+auth_type: none
+
+ui:
+  icon: time.svg
+  category: 工具
+  vendor: Anthropic Official
+  homepage: https://github.com/modelcontextprotocol/servers/tree/main/src/time
