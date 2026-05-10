@@ -252,15 +252,11 @@ export interface ProactiveStarter {
 /** 拉一个上下文感知的 starter. gateway 用 journal + 时段 + LLM 生成. */
 export async function fetchProactiveStarter(): Promise<ProactiveStarter | null> {
   try {
-    const token = await (async () => {
-      const o = getOverrideToken();
-      if (o) return o;
-      try {
-        return await gatewayGetDevToken();
-      } catch {
-        return "dev-token-local";
-      }
-    })();
+    // BL-FIX35.1 (5/10): 这两个 inline 之前 BL-FIX35 漏改 (replace_all 字面字符串
+    // 因为这两处缩进多 2 格在 try 里没匹配上). 鸿波报"今日话题拉不到", devtools
+    // 看到 /api/proactive/starter 401, curl 用 OAuth id_token 同端点 200 — 实证
+    // 走的是老 dev_token 路径. 现在改用统一 getToken (OAuth keychain 优先).
+    const token = await getToken();
     const url = `${config.gatewayUrl}/api/proactive/starter`;
     const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
     if (!resp.ok) return null;
@@ -283,15 +279,8 @@ export async function fetchContextualStarter(
   context: Record<string, unknown>,
 ): Promise<ProactiveStarter | null> {
   try {
-    const token = await (async () => {
-      const o = getOverrideToken();
-      if (o) return o;
-      try {
-        return await gatewayGetDevToken();
-      } catch {
-        return "dev-token-local";
-      }
-    })();
+    // BL-FIX35.1 (5/10): 同 fetchProactiveStarter, BL-FIX35 漏改的镜像 inline.
+    const token = await getToken();
     const url = `${config.gatewayUrl}/api/proactive/contextual`;
     const ctrl = new AbortController();
     const t = window.setTimeout(() => ctrl.abort(), 5000);
