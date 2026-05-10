@@ -1,29 +1,38 @@
-"""Skills Hub 存储层 — MVP: 文件系统, Phase 2 改 PG.
+"""Skills Hub 存储层 — BL-D2 Phase 2 PG 统一 (5/10).
 
-# 目录布局
+# 双层存储 (跟 mcp-registry 同模式)
 
-  <CATFISH_HUB_ROOT>/                        ← 默认 ~/.catfish-hub/
-  ├── skills/
-  │   └── <namespace>/
-  │       └── <name>/
-  │           └── <version>/
-  │               ├── SKILL.md
-  │               ├── script.py (可选)
-  │               └── ...其他文件
-  ├── manifest.json                          ← 全局 skill 清单 (cache, lazy 重建)
-  └── audit.jsonl                            ← 发布 / 删除 / 拉取 audit
+  PG (元数据):                                     FS (文件内容):
+    skills_versions                                <CATFISH_HUB_ROOT>/skills/
+      id, namespace, name, version,                  └── <namespace>/
+      description, published_by,                         └── <name>/
+      published_at, content_dir,                             └── <version>/
+      file_count, total_bytes,                                   ├── SKILL.md
+      deprecated, subscribe_count,                               ├── script.py
+      rating_avg, rating_count                                   └── ...
+    skills_audit
+      id, ts_ms, action, namespace,
+      name, version, by_user, meta JSONB
 
-# 设计
+  PG 提供: 索引快查 / cross-service join / 真生产备份审计.
+  FS 提供: 文件内容 (small skill, 1MB 内). Phase 3 切对象存储 S3/MinIO 时只
+  改 _content_url() 函数返 's3://bucket/key' 即可.
 
-- 一个 skill 多版本: skills/department/leadership-briefing/1.0.0/, 1.1.0/, 2.0.0/
-- 安全: namespace / name / version 都过路径检查 (无 .. / /)
-- 审计: 任何写操作 (publish / delete) 都 append audit.jsonl
+# Backend 选择 (跟 mcp-registry db.py 同)
 
-无审核流 (Phase 2 加 publish → pending → admin approve → live), MVP 直接 live.
+  env CATFISH_DB_URL 设了 → PG (psycopg sync, autocommit)
+  没设 → 纯 FS + jsonl audit (dev / 单测兼容)
+
+# 安全 / 验证
+
+- namespace / name / version 路径检查 (无 .. / /)
+- 文件 sha256 (跟客户端比对防中间人)
+- 任何写操作走 audit (PG skills_audit 或 jsonl fallback)
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -37,6 +46,46 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger("catfish.skills_hub.storage")
+
+
+# ── PG backend (BL-D2 Phase 2 5/10) ─────────────────────────────────────
+
+
+def _pg_url() -> str | None:
+    """env CATFISH_DB_URL → PG, 否则 None (走 FS only)."""
+    return os.environ.get("CATFISH_DB_URL", "").strip() or None
+
+
+def _pg_clean_url(url: str) -> str:
+    """剥 SQLAlchemy driver prefix 给 psycopg.connect 用 (跟 mcp-registry 同).
+
+    alembic 用 postgresql+psycopg://, libpq 直连不认前缀.
+    """
+    if url.startswith("postgresql+psycopg://"):
+        return "postgresql://" + url[len("postgresql+psycopg://"):]
+    if url.startswith("postgres://"):
+        return "postgresql://" + url[len("postgres://"):]
+    return url
+
+
+@contextlib.contextmanager
+def _pg_conn():
+    """开 psycopg sync 连接 + autocommit + dict_row. caller 用完自动 close."""
+    import psycopg  # noqa: PLC0415  懒 import, 没装 psycopg 也能跑 FS 模式
+    from psycopg.rows import dict_row  # noqa: PLC0415
+
+    url = _pg_url()
+    if not url:
+        raise RuntimeError("CATFISH_DB_URL 没设, _pg_conn 不应被调用")
+    conn = psycopg.connect(_pg_clean_url(url), row_factory=dict_row, autocommit=True)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def _use_pg() -> bool:
+    return _pg_url() is not None
 
 _NAME_RE = re.compile(r"^[a-zA-Z0-9_\-]{1,64}$")
 _VERSION_RE = re.compile(r"^[a-zA-Z0-9._\-+]{1,32}$")
@@ -82,14 +131,48 @@ class SkillVersion:
 
 
 def _write_audit(event: dict) -> None:
-    """append 一行 jsonl. 失败静默不影响主流程."""
+    """写一行 audit. PG 主, jsonl 兜底.
+
+    BL-D2 Phase 2 (5/10): PG skills_audit 表是真源, jsonl 留 dev/无 PG 时兜底.
+    跟 catfish-gateway gateway_audit / mcp-registry mcp_audit 同模式.
+    失败静默不影响主流程.
+    """
+    # 1. PG (优先)
+    if _use_pg():
+        try:
+            with _pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """INSERT INTO skills_audit
+                           (ts_ms, action, namespace, name, version, by_user, meta)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)""",
+                        (
+                            int(time.time() * 1000),
+                            event.get("event") or event.get("action") or "unknown",
+                            event.get("namespace"),
+                            event.get("name"),
+                            event.get("version"),
+                            event.get("published_by") or event.get("deleted_by") or event.get("by_user") or "?",
+                            json.dumps(
+                                {k: v for k, v in event.items()
+                                 if k not in ("event", "namespace", "name", "version",
+                                              "published_by", "deleted_by", "by_user", "ts")},
+                                ensure_ascii=False,
+                            ),
+                        ),
+                    )
+            return
+        except Exception as e:
+            logger.warning("audit 写 PG 失败 (fallback jsonl): %s", e)
+
+    # 2. jsonl 兜底
     try:
         path = _audit_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(event, ensure_ascii=False) + "\n")
     except Exception as e:
-        logger.warning("audit 写失败: %s", e)
+        logger.warning("audit 写 jsonl 失败: %s", e)
 
 
 def _parse_skill_md(skill_md_text: str) -> dict:
@@ -122,7 +205,58 @@ def _parse_skill_md(skill_md_text: str) -> dict:
 
 
 def list_skills(namespace_filter: str | None = None) -> list[dict]:
-    """列出所有发布过的 skill (按 namespace/name 分组, 各取最新版本)."""
+    """列已发布 skill (按 ns/name 分组, 各取最新版本).
+
+    BL-D2 Phase 2 (5/10): PG 优先 (索引快, dashboard 列 100+ skill 也秒级).
+    PG 失败 / 没配 → FS 扫描兜底.
+    """
+    # 1. PG 优先 (按 namespace+name groupby, 取每组最新 published_at 的 version)
+    if _use_pg():
+        try:
+            with _pg_conn() as conn:
+                with conn.cursor() as cur:
+                    sql = """
+                        SELECT DISTINCT ON (namespace, name)
+                            namespace, name, version, description, deprecated,
+                            published_by, published_at, file_count, total_bytes,
+                            subscribe_count, rating_avg, rating_count
+                        FROM skills_versions
+                        {where}
+                        ORDER BY namespace, name, published_at DESC
+                    """
+                    if namespace_filter:
+                        cur.execute(
+                            sql.format(where="WHERE namespace = %s"),
+                            (namespace_filter,),
+                        )
+                    else:
+                        cur.execute(sql.format(where=""))
+                    rows = list(cur.fetchall())
+            out = []
+            for r in rows:
+                published_at = r.get("published_at")
+                out.append({
+                    "namespace": r["namespace"],
+                    "name": r["name"],
+                    "latest_version": r["version"],
+                    "all_versions": [r["version"]],  # FS 兜底才扫全部, PG 模式只返最新
+                    "description": r.get("description") or "",
+                    "deprecated": bool(r.get("deprecated")),
+                    "published_by": r.get("published_by"),
+                    "published_at": (
+                        published_at.isoformat() if published_at else None
+                    ),
+                    "file_count": r.get("file_count") or 0,
+                    "total_bytes": r.get("total_bytes") or 0,
+                    "subscribe_count": r.get("subscribe_count") or 0,
+                    "rating_avg": r.get("rating_avg"),
+                    "rating_count": r.get("rating_count") or 0,
+                })
+            return out
+        except Exception as e:
+            logger.warning("list_skills PG 失败 (fallback FS 扫描): %s", e)
+
+    # 2. FS 扫描兜底 (原逻辑, dev / 没 PG 时用)
     out: list[dict] = []
     root = _skills_dir()
     if not root.exists():
@@ -309,6 +443,31 @@ def publish_skill(
             pass
         return {"ok": False, "error": f"写文件失败: {e}"}
 
+    # BL-D2 Phase 2 (5/10): 写元数据进 PG skills_versions. 失败仍返成功 (FS
+    # 已写入, 下次 list_skills FS 兜底也能扫到), 但 log warning. 真生产看 PG
+    # warning 应立即报警.
+    description = meta.get("description", "")[:500]
+    total_bytes = sum(len(c) for c in files.values())
+    content_dir_rel = f"{namespace}/{name}/{version}"
+    if _use_pg():
+        try:
+            with _pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """INSERT INTO skills_versions
+                           (namespace, name, version, description, published_by,
+                            content_dir, file_count, total_bytes, deprecated)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                           ON CONFLICT (namespace, name, version) DO NOTHING""",
+                        (
+                            namespace, name, version, description, published_by,
+                            content_dir_rel, len(written), total_bytes,
+                            bool(meta.get("deprecated", False)),
+                        ),
+                    )
+        except Exception as e:
+            logger.warning("publish PG 元数据写失败 (FS 已写, list_skills 仍能扫到): %s", e)
+
     _write_audit({
         "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "event": "publish",
@@ -354,6 +513,20 @@ def delete_skill_version(
     except Exception:
         pass
 
+    # BL-D2 Phase 2 (5/10): 删 PG skills_versions row (硬删, 因为 FS 也物理删).
+    # 真上线如果想保留历史可改 deprecated=true. 现在硬删跟 FS 一致.
+    if _use_pg():
+        try:
+            with _pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM skills_versions "
+                        "WHERE namespace=%s AND name=%s AND version=%s",
+                        (namespace, name, version),
+                    )
+        except Exception as e:
+            logger.warning("delete PG row 失败 (FS 已删): %s", e)
+
     _write_audit({
         "ts": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "event": "delete_version",
@@ -371,7 +544,40 @@ def delete_skill_version(
 
 
 def read_audit(limit: int = 100) -> list[dict]:
-    """读最近 N 行 audit (倒序). 给 admin 看历史."""
+    """读最近 N 行 audit (倒序). PG 优先, jsonl fallback (BL-D2 Phase 2 5/10)."""
+    # 1. PG 优先
+    if _use_pg():
+        try:
+            with _pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT ts_ms, action, namespace, name, version,
+                                  by_user, meta
+                           FROM skills_audit ORDER BY ts_ms DESC LIMIT %s""",
+                        (limit,),
+                    )
+                    rows = list(cur.fetchall())
+            out = []
+            for r in rows:
+                ts_iso = datetime.fromtimestamp(
+                    r["ts_ms"] / 1000.0, tz=timezone.utc,
+                ).isoformat().replace("+00:00", "Z")
+                event = {
+                    "ts": ts_iso,
+                    "event": r["action"],
+                    "namespace": r["namespace"],
+                    "name": r["name"],
+                    "version": r["version"],
+                    "by_user": r["by_user"],
+                }
+                if r.get("meta"):
+                    event.update(r["meta"])
+                out.append(event)
+            return out
+        except Exception as e:
+            logger.warning("读 PG audit 失败 (fallback jsonl): %s", e)
+
+    # 2. jsonl 兜底
     path = _audit_path()
     if not path.exists():
         return []
