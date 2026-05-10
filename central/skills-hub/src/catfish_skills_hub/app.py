@@ -38,11 +38,32 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
+
+# BL-D2 Phase 2 (5/10): load .env 在 import storage 之前, 让 CATFISH_DB_URL 等
+# 注入 process env. 跟 gateway / mcp-registry 同模式. dotenv optional —
+# 没装也能跑, 只是要手动 export.
+def _load_dotenv() -> Path | None:
+    try:
+        from dotenv import load_dotenv  # noqa: PLC0415  懒 import
+    except ImportError:
+        return None
+    for p in [
+        Path.cwd() / ".env",
+        Path(__file__).resolve().parent.parent.parent / ".env",
+    ]:
+        if p.exists():
+            load_dotenv(p, override=False)
+            return p
+    return None
+
+
+_ENV_FILE_LOADED = _load_dotenv()
 
 from . import __version__
 from . import storage

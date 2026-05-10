@@ -30,6 +30,29 @@ import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
+
+# BL-D3 fix5 (5/10 鸿波诊断): 之前依赖在 pyproject 但 app.py 没 load_dotenv,
+# 启动 `python -m catfish_mcp_registry.app` 不读 .env, CATFISH_DB_URL 落空,
+# db.py 走 sqlite fallback (~/.catfish/mcp_registry.db). 跟 gateway / skills-hub
+# 同款补上.
+def _load_dotenv() -> Path | None:
+    try:
+        from dotenv import load_dotenv  # noqa: PLC0415  懒 import
+    except ImportError:
+        return None
+    for p in [
+        Path.cwd() / ".env",
+        Path(__file__).resolve().parent.parent.parent / ".env",
+    ]:
+        if p.exists():
+            load_dotenv(p, override=False)
+            return p
+    return None
+
+
+_ENV_FILE_LOADED = _load_dotenv()
+
+
 from . import __version__, secret_broker_client
 from .db import make_db
 from .loader import ManifestRegistry
