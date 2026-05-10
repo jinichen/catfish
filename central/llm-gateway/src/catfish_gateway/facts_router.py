@@ -1,0 +1,366 @@
+"""事实补丁系统 — BL-Q3-FACT P0 MVP (5/10 鸿波 'a16z continual learning 启发, 现在就做').
+
+# 设计
+
+详 docs/CATFISH-FACT-PATCH-DESIGN.md (BL-Q3-FACT v0.1 设计草案).
+
+# Pipeline (5 步)
+
+  1. upload     员工 IT/合规上传变更文件 (multipart PDF/Word/MD/TXT/邮件)
+                → 存 ~/.catfish/facts/<id>/raw.<ext> + 返 fact_id (status=uploaded)
+  2. extract    LLM 解析变更文件 → 提"事实点"列表 (title/summary/keywords/raw_quotes)
+                → 落 ~/.catfish/facts/<id>/fact.json (status=extracted)
+  3. find-impact 拉 skills-hub 全部 skill, LLM 找受影响候选 (附 confidence)
+                → 落 ~/.catfish/facts/<id>/impacts.jsonl (status=analyzed)
+  4. generate-patches  对每个高 confidence 受影响 skill, 调 BL-MM13
+                catfish_propose_skill_revision 生成 patch
+                → 落 ~/.catfish/facts/<id>/patches.jsonl (status=patches_ready)
+  5. approve    走 SkillRevisionCard 审批 (复用 BL-MM14, 不在本 router 实现)
+
+# P0 范围
+
+- PG 暂用 jsonl 临时落 (~/.catfish/facts/<fact_id>/), Q3 P1 迁 PG.
+- 只做单 skill 独立分析, 跨 skill 依赖图留 Q3 P1.
+- 不做自动扫公司知识库, 全手动上传.
+- RBAC: admin / sysadmin 才能上传/分析, employee 看不到.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import time
+import uuid
+from pathlib import Path
+from typing import Any
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+
+from .auth import User, get_current_user
+
+logger = logging.getLogger("catfish.gateway.facts")
+
+router = APIRouter(prefix="/api/facts", tags=["facts"])
+
+# ── 落盘位置 ─────────────────────────────────────
+# ~/.catfish/facts/<fact_id>/
+#   raw.<ext>           原始上传文件
+#   meta.json           fact_change 元信息
+#   fact.json           LLM 解析出的事实点
+#   impacts.jsonl       受影响 skill 列表 (每行一个 impact 记录)
+#   patches.jsonl       生成的 patch 列表 (每行一个)
+#   audit.jsonl         本 fact 的所有操作审计
+
+FACTS_DIR = Path(os.environ.get("CATFISH_FACTS_DIR", "")) if os.environ.get("CATFISH_FACTS_DIR") else (
+    Path.home() / ".catfish" / "facts"
+)
+FACTS_DIR.mkdir(parents=True, exist_ok=True)
+
+# ── 文件大小 / 类型限制 ─────────────────────────
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB (政策文件一般几页 PDF, 远不到)
+ALLOWED_EXTS = {".pdf", ".docx", ".doc", ".md", ".markdown", ".txt"}
+
+
+# ── RBAC ────────────────────────────────────────
+def _require_admin(user: User) -> None:
+    """admin 或 sysadmin 才能动 facts 系统 (P2 加合规专属角色)."""
+    if not user.is_admin():  # is_admin() 已含 sysadmin (BL-ARCH1 P2)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"role={user.role} 不能访问 FACT 系统 (需 admin / sysadmin)",
+        )
+
+
+# ── 文件操作 helpers ───────────────────────────
+def _fact_dir(fact_id: str) -> Path:
+    """单个 fact 的存放目录, 不存在自动建."""
+    # 简单防注入: fact_id 必须是 UUID 格式
+    try:
+        uuid.UUID(fact_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"fact_id 格式错: {e}") from e
+    d = FACTS_DIR / fact_id
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _audit(fact_id: str, action: str, by_user: str, meta: dict | None = None) -> None:
+    """追加一条操作审计到 audit.jsonl."""
+    audit_path = _fact_dir(fact_id) / "audit.jsonl"
+    rec = {
+        "ts_ms": int(time.time() * 1000),
+        "action": action,
+        "by_user": by_user,
+        "meta": meta or {},
+    }
+    with audit_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+
+def _read_meta(fact_id: str) -> dict:
+    p = _fact_dir(fact_id) / "meta.json"
+    if not p.exists():
+        raise HTTPException(status_code=404, detail=f"fact {fact_id} 不存在")
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+def _write_meta(fact_id: str, meta: dict) -> None:
+    (_fact_dir(fact_id) / "meta.json").write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+# ── Endpoint 1: POST /api/facts/upload ─────────
+@router.post("/upload")
+async def upload_fact(
+    file: UploadFile = File(...),
+    title: str = Form(""),
+    effective_date: str = Form(""),  # ISO 日期, 空表示"立即生效"
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """上传变更文件 (PDF/Word/MD/TXT). 返 fact_id, status=uploaded."""
+    _require_admin(user)
+
+    # 文件类型检查
+    filename = file.filename or "unknown"
+    ext = Path(filename).suffix.lower()
+    if ext not in ALLOWED_EXTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的文件类型 {ext}. 支持: {', '.join(sorted(ALLOWED_EXTS))}",
+        )
+
+    # 读 + size 校验
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        mb = len(content) / 1024 / 1024
+        raise HTTPException(
+            status_code=413,
+            detail=f"文件太大 ({mb:.1f} MB > {MAX_UPLOAD_BYTES / 1024 / 1024:.0f} MB)",
+        )
+    if len(content) < 100:
+        raise HTTPException(status_code=400, detail="文件太小, 可能是空文件")
+
+    # 生成 fact_id + 存盘
+    fact_id = str(uuid.uuid4())
+    fact_dir = _fact_dir(fact_id)
+    raw_path = fact_dir / f"raw{ext}"
+    raw_path.write_bytes(content)
+
+    # 写 meta.json
+    now_ms = int(time.time() * 1000)
+    meta = {
+        "id": fact_id,
+        "title": title or filename,
+        "original_filename": filename,
+        "raw_path": str(raw_path),
+        "ext": ext,
+        "size_bytes": len(content),
+        "effective_date": effective_date or None,
+        "uploaded_by": user.sub,
+        "uploaded_at_ms": now_ms,
+        "status": "uploaded",  # uploaded → extracted → analyzed → patches_ready → approved/dismissed
+    }
+    _write_meta(fact_id, meta)
+    _audit(fact_id, "upload", user.sub, {"filename": filename, "size": len(content)})
+
+    logger.info(
+        "facts.upload: id=%s by=%s file=%s size=%d ext=%s",
+        fact_id, user.sub, filename, len(content), ext,
+    )
+    return {"fact_id": fact_id, "status": "uploaded", "meta": meta}
+
+
+# ── Endpoint 2: GET /api/facts ──────────────────
+@router.get("")
+async def list_facts(
+    user: User = Depends(get_current_user),
+    limit: int = 50,
+) -> dict[str, Any]:
+    """列所有已上传的 fact (admin/sysadmin 看全部)."""
+    _require_admin(user)
+
+    items: list[dict] = []
+    if FACTS_DIR.exists():
+        # 按目录 mtime 倒序 (最新的上)
+        dirs = sorted(
+            (d for d in FACTS_DIR.iterdir() if d.is_dir()),
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
+        )
+        for d in dirs[:limit]:
+            try:
+                meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+                # 加几个 derived 字段方便前端
+                impacts_count = _count_jsonl(d / "impacts.jsonl")
+                patches_count = _count_jsonl(d / "patches.jsonl")
+                meta["impacts_count"] = impacts_count
+                meta["patches_count"] = patches_count
+                items.append(meta)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("facts.list: 跳过坏目录 %s: %s", d, e)
+                continue
+    return {"facts": items, "count": len(items)}
+
+
+def _count_jsonl(p: Path) -> int:
+    if not p.exists():
+        return 0
+    return sum(1 for _ in p.open("r", encoding="utf-8"))
+
+
+# ── Endpoint 3: GET /api/facts/{fact_id} ────────
+@router.get("/{fact_id}")
+async def get_fact(
+    fact_id: str,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """获取 fact 详情 (meta + 事实点 + 受影响 skill + patches)."""
+    _require_admin(user)
+
+    meta = _read_meta(fact_id)
+    fact_dir = _fact_dir(fact_id)
+
+    # 事实点 (extract 阶段产物)
+    fact_json_path = fact_dir / "fact.json"
+    facts = json.loads(fact_json_path.read_text(encoding="utf-8")) if fact_json_path.exists() else None
+
+    # 受影响 skill (find-impact 阶段产物)
+    impacts = _read_jsonl(fact_dir / "impacts.jsonl")
+
+    # patches (generate-patches 阶段产物)
+    patches = _read_jsonl(fact_dir / "patches.jsonl")
+
+    # audit
+    audit = _read_jsonl(fact_dir / "audit.jsonl")
+
+    return {
+        "meta": meta,
+        "facts": facts,
+        "impacts": impacts,
+        "patches": patches,
+        "audit": audit,
+    }
+
+
+def _read_jsonl(p: Path) -> list[dict]:
+    if not p.exists():
+        return []
+    out = []
+    for line in p.open("r", encoding="utf-8"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            out.append(json.loads(line))
+        except json.JSONDecodeError as e:
+            logger.warning("jsonl 坏行 %s: %s", p, e)
+    return out
+
+
+# ── Endpoint 4: POST /api/facts/{fact_id}/extract ──────
+# 调 LLM 解析变更文件 → 提取事实点
+# 实现细节放 facts_pipeline.py (本 router 只管 HTTP, pipeline 管 LLM 逻辑)
+
+@router.post("/{fact_id}/extract")
+async def extract_fact(
+    fact_id: str,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """LLM 解析变更文件 → 提事实点列表. 更新 status=extracted."""
+    _require_admin(user)
+    meta = _read_meta(fact_id)
+    if meta["status"] not in {"uploaded", "extracted"}:
+        # 已经分析过的也允许重跑 (extract 是幂等的, 后续 stage 会覆盖)
+        logger.info("facts.extract: 重跑 fact %s (旧 status=%s)", fact_id, meta["status"])
+
+    from .facts_pipeline import run_extract  # noqa: PLC0415 (避免循环依赖)
+    facts = await run_extract(meta)
+
+    fact_dir = _fact_dir(fact_id)
+    (fact_dir / "fact.json").write_text(
+        json.dumps(facts, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    meta["status"] = "extracted"
+    meta["extracted_at_ms"] = int(time.time() * 1000)
+    _write_meta(fact_id, meta)
+    _audit(fact_id, "extract", user.sub, {"facts_count": len(facts.get("facts", []))})
+
+    return {"fact_id": fact_id, "status": "extracted", "facts": facts}
+
+
+# ── Endpoint 5: POST /api/facts/{fact_id}/analyze ──────
+# 找受影响 skill + 生成 patches (合并 P0 简化为一步, P1 拆开)
+
+@router.post("/{fact_id}/analyze")
+async def analyze_fact(
+    fact_id: str,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """LLM 找受影响 skill + 生成 patches. 更新 status=patches_ready.
+
+    前置: fact 已 extract (有 fact.json). 否则自动先跑 extract.
+    """
+    _require_admin(user)
+    meta = _read_meta(fact_id)
+    fact_dir = _fact_dir(fact_id)
+
+    # 自动 extract (如果还没)
+    if not (fact_dir / "fact.json").exists():
+        from .facts_pipeline import run_extract  # noqa: PLC0415
+        facts = await run_extract(meta)
+        (fact_dir / "fact.json").write_text(
+            json.dumps(facts, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        meta["status"] = "extracted"
+        _write_meta(fact_id, meta)
+        _audit(fact_id, "extract (auto)", user.sub, {"facts_count": len(facts.get("facts", []))})
+
+    facts = json.loads((fact_dir / "fact.json").read_text(encoding="utf-8"))
+
+    from .facts_pipeline import run_find_impact, run_generate_patches  # noqa: PLC0415
+
+    impacts = await run_find_impact(meta, facts, user)
+    with (fact_dir / "impacts.jsonl").open("w", encoding="utf-8") as f:
+        for imp in impacts:
+            f.write(json.dumps(imp, ensure_ascii=False) + "\n")
+    _audit(fact_id, "find_impact", user.sub, {"impacts_count": len(impacts)})
+
+    patches = await run_generate_patches(meta, facts, impacts, user)
+    with (fact_dir / "patches.jsonl").open("w", encoding="utf-8") as f:
+        for p in patches:
+            f.write(json.dumps(p, ensure_ascii=False) + "\n")
+    _audit(fact_id, "generate_patches", user.sub, {"patches_count": len(patches)})
+
+    meta["status"] = "patches_ready"
+    meta["analyzed_at_ms"] = int(time.time() * 1000)
+    meta["impacts_count"] = len(impacts)
+    meta["patches_count"] = len(patches)
+    _write_meta(fact_id, meta)
+
+    return {
+        "fact_id": fact_id,
+        "status": "patches_ready",
+        "impacts_count": len(impacts),
+        "patches_count": len(patches),
+        "impacts": impacts,
+        "patches": patches,
+    }
+
+
+# ── Endpoint 6: DELETE /api/facts/{fact_id} ────────
+@router.delete("/{fact_id}")
+async def delete_fact(
+    fact_id: str,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """删除一个 fact (软删, 改 status=dismissed, 不真删文件方便审计)."""
+    _require_admin(user)
+    meta = _read_meta(fact_id)
+    meta["status"] = "dismissed"
+    meta["dismissed_at_ms"] = int(time.time() * 1000)
+    meta["dismissed_by"] = user.sub
+    _write_meta(fact_id, meta)
+    _audit(fact_id, "dismiss", user.sub)
+    return {"fact_id": fact_id, "status": "dismissed"}

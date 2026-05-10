@@ -316,6 +316,15 @@ try:
 except Exception as e:
     logger.warning("admin_proxy 挂载失败: %s", e)
 
+# BL-Q3-FACT P0 MVP (5/10): 事实补丁系统 — 政策变更 → diff → 找受影响 skill → 生成 patch
+# 数据落 ~/.catfish/facts/<id>/ (jsonl 临时, Q3 P1 迁 PG).
+try:
+    from .facts_router import router as facts_router  # noqa: PLC0415
+    app.include_router(facts_router)
+    logger.info("facts_router: /api/facts/* 已挂载 (BL-Q3-FACT P0 MVP)")
+except Exception as e:
+    logger.warning("facts_router 挂载失败: %s", e)
+
 
 # Plan D · A 端内部 endpoint — tool-bridge 通过 HTTP 调这个触发 A2A.
 # 简化版: 收完整 SSE 流, 一次返给 tool-bridge (不流式 UX, Phase 2 升级 Companion 直连 SSE).

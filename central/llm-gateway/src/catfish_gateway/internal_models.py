@@ -57,6 +57,8 @@ KNOWN_USE_CASES = frozenset({
     "summarizer",         # session_summarizer 跨 session 总结
     "proactive_starter",  # BL-E13 主动闲聊 starter
     "a2a_aux",            # A2A federation 辅助任务
+    # BL-Q3-FACT (5/10): 事实补丁系统 — 解析政策文件 + 找受影响 skill + 生成 patch
+    "fact_analyzer",
 })
 
 
