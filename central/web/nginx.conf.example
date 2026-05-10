@@ -1,0 +1,68 @@
+# catfish-web nginx 部署配置示例 (BL-ARCH1 5/10).
+#
+# 真实部署: 把 catfish-web 静态 dist/ + gateway 反代放一起, 客户访问 catfish.client.com:
+#
+#   /              → 静态 web app (catfish-web/dist)
+#   /api/*         → 反代 gateway :8999/api/*
+#   /v1/*          → 反代 gateway :8999/v1/* (chat / hub / mcp 反代链)
+#
+# OIDC issuer 地址 (catfish-identity 真生产建议跑 :8998 内网或客户自建 SSO)
+# 反代到 /sso/* 也可, 看客户网络.
+
+server {
+    listen 80;
+    server_name catfish.client.com;
+    # 真生产强制 https, 这里 dev/lan 简化.
+    # listen 443 ssl http2;
+    # ssl_certificate /etc/nginx/ssl/catfish.crt;
+    # ssl_certificate_key /etc/nginx/ssl/catfish.key;
+
+    # 静态 web app — vite build 出的 dist/
+    root /var/www/catfish-web/dist;
+    index index.html;
+
+    # /v1/* /api/* 反代 gateway
+    location /v1/ {
+        proxy_pass http://127.0.0.1:8999;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # SSE / 长连接 (chat 流式)
+        proxy_buffering off;
+        proxy_read_timeout 600s;
+        # 大文件 (multipart upload skill)
+        client_max_body_size 100M;
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:8999;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # OIDC SSO 反代 (catfish-identity, 真生产可换客户自建)
+    location /sso/ {
+        proxy_pass http://127.0.0.1:8998/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # SPA fallback — 所有 /skills/x/y, /admin/users 等都返 index.html, 由 react-router 接管
+    location / {
+        try_files $uri $uri/ /index.html;
+        # 静态资源缓存 1h, index.html 不缓存
+        add_header Cache-Control "public, max-age=3600";
+    }
+
+    location = /index.html {
+        add_header Cache-Control "no-cache, must-revalidate";
+    }
+}

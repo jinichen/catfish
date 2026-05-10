@@ -129,8 +129,10 @@ def require_user(
 
 
 def require_admin(user: dict = Depends(require_user)) -> dict:
-    """role=admin 才能 delete. manager / employee 拒."""
-    if user.get("role") != "admin":
+    """role=admin 或 sysadmin 才能 delete. manager / employee 拒.
+    BL-ARCH1 P2 (5/10): sysadmin 继承 admin 权限.
+    """
+    if user.get("role") not in ("admin", "sysadmin"):
         raise HTTPException(
             status_code=403,
             detail=f"admin only (你是 {user.get('role')})",

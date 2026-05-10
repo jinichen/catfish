@@ -19,8 +19,10 @@ users:
     password_hash: $2b$12$lurtJgClagy68sidF76/uux2DvJwbYzNlbOBMHOIvmJNQG2N2WvM2
     name: 陈鸿波
     department: engineering
-    tier: admin
+    tier: sysadmin             # BL-ARCH1 P1 (5/10): 系统超级管理员
+    role: sysadmin             # 跟 tier 一致, 显式表达
     # 密码: catfish123 (demo only, 真实部署立即改)
+    # sysadmin 权限: 管 admin 账号 / 改系统配置 / 服务管理 / 备份恢复
 
   - email: demo@ffcs.cn
     password_hash: $2b$12$qAldu2EfoyoGA92KRqIYU.Ln5n6WAj1yMyTYdqL7g4vD1lkhwbPEK

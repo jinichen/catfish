@@ -33,14 +33,41 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+
+# BL-D6 fix2 (5/10 鸿波 'catfish_identity 数据库连接参数没有写入 .env 吗?'):
+# 跟 mcp-registry (BL-D3 fix5) / skills-hub (BL-D2) 同款隐性 bug — pyproject 写
+# python-dotenv 依赖 + .env 5/9 就建了, 但 app.py 没调 _load_dotenv, 启动 ENV
+# 不读. 必须在 import .users (它 import .db 起 PG pool) 之前 load.
+def _load_dotenv() -> Path | None:
+    try:
+        from dotenv import load_dotenv  # noqa: PLC0415
+    except ImportError:
+        return None
+    for p in [
+        Path.cwd() / ".env",
+        Path(__file__).resolve().parent.parent.parent / ".env",
+    ]:
+        if p.exists():
+            load_dotenv(p, override=False)
+            return p
+    return None
+
+
+_ENV_FILE_LOADED = _load_dotenv()
+
 
 from .jwt_signer import JwtSigner
 from .routes import _CodeStore, make_router
 from .users import UserRegistry
 
 logger = logging.getLogger("catfish.identity")
+if _ENV_FILE_LOADED:
+    logger.info("loaded .env from: %s", _ENV_FILE_LOADED)
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8998
@@ -91,6 +118,31 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # BL-ARCH1 (5/10): CORS — 给 catfish-web (浏览器 PKCE flow) 调
+    # /.well-known/openid-configuration / /jwks 用. dev 默认 localhost:5173 (vite)
+    # + 127.0.0.1:5173 + 任意 origin (regex). 生产应改成具体 origin 列表.
+    cors_origins_env = os.environ.get("CATFISH_IDENTITY_CORS_ORIGINS", "").strip()
+    if cors_origins_env:
+        cors_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+    else:
+        # dev 默认: vite 5173 + nginx 80/443 + 任何 localhost
+        cors_origins = [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost",
+            "http://127.0.0.1",
+        ]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:[0-9]+)?",
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["*"],
+        max_age=3600,
+    )
+    logger.info("CORS allowed origins: %s (+ localhost regex)", cors_origins)
+
     if len(registry) == 0:
         logger.warning(
             "用户注册表是空的! catfish-identity 没意义跑. "
@@ -110,6 +162,11 @@ def create_app() -> FastAPI:
     # 各 catfish 实例 (Alice / Bob / ...) 通过这个 registry 互相发现 + 拿 jwks
     from .registry import build_registry_router  # noqa: PLC0415
     app.include_router(build_registry_router())
+
+    # BL-ARCH1 P1 (5/10): admin 用户管理 endpoints (catfish-web /admin/users)
+    from .admin_router import make_admin_router  # noqa: PLC0415
+    app.include_router(make_admin_router(registry))
+    logger.info("admin_router: /admin/users CRUD 已挂载")
 
     @app.get("/healthz")
     async def healthz() -> dict:

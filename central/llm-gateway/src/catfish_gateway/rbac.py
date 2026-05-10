@@ -68,7 +68,9 @@ class Permission(str, Enum):
 
 
 #: 角色 → 拥有的 Permission 集合.
+#: BL-ARCH1 P2 (5/10): 加 sysadmin (跟 admin 同权, identity-server P1 引入).
 ROLE_PERMISSIONS: dict[str, set[Permission]] = {
+    "sysadmin": set(Permission),  # 超级管理员, 全权 (跟 admin 同, identity 那边它还能改 admin)
     "admin": set(Permission),  # 全权
     "manager": {
         Permission.AUDIT_VIEW_SELF,
@@ -104,8 +106,9 @@ def has_permission_for_department(
     if not has_permission(role, perm):
         return False, f"role={role} 没有 {perm.value} 权限"
 
-    # 2. department 维度 (admin 隐式全权, manager 限 managed_departments)
-    if role == "admin":
+    # 2. department 维度 (admin / sysadmin 隐式全权, manager 限 managed_departments)
+    # BL-ARCH1 P2 (5/10): sysadmin 也走 admin 这条
+    if role in ("admin", "sysadmin"):
         return True, ""
     if role == "manager":
         managed = user.get("managed_departments") or []
@@ -174,7 +177,8 @@ def require_self_or_department_admin():
     async def dep(request: Request) -> dict[str, Any]:
         user = _user_from_request(request)
         role = user.get("role", "employee")
-        if role not in ("admin", "manager"):
+        # BL-ARCH1 P2 (5/10): sysadmin 跟 admin 同权
+        if role not in ("admin", "manager", "sysadmin"):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"role={role} 不能访问部门级资源",

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  小鲶 · 极简几何 mark
+  用途: macOS app icon / favicon / PPT 角标 / 文档抬头 / 名片角
+  设计: 圆形容器 (信任/包容) + 两根须曲线交错 (鲶鱼 + 隐喻"C" for Catfish + 流动感)
+       须尖暖橙小圆点 = 触角探询的视觉锚点
+  色: 深青底 + 暖橙点缀; 单色版本在 mark-mono 里
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1A8A95"/>
+      <stop offset="100%" stop-color="#0A464C"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 圆形背景 (深青) -->
+  <circle cx="128" cy="128" r="120" fill="url(#bgGrad)"/>
+
+  <!-- 上须曲线 (从右下到左上 S 形, 米色) -->
+  <path d="M 175 90 Q 125 70 90 100 Q 60 130 80 160"
+        stroke="#FAF1E4" stroke-width="12" fill="none" stroke-linecap="round"/>
+
+  <!-- 下须曲线 (从右上到左下 S 形) -->
+  <path d="M 175 165 Q 125 185 90 155 Q 60 125 80 95"
+        stroke="#FAF1E4" stroke-width="12" fill="none" stroke-linecap="round"
+        opacity="0.55"/>
+
+  <!-- 须尖锚点 (暖橙) -->
+  <circle cx="80" cy="160" r="11" fill="#F47B3D"/>
+  <circle cx="78" cy="158" r="3.5" fill="#FAF1E4" opacity="0.7"/>
+
+  <!-- 鱼眼 (右侧, 暗示"鱼头"朝右) -->
+  <circle cx="175" cy="128" r="14" fill="#FAF1E4"/>
+  <circle cx="178" cy="131" r="7" fill="#1A2E33"/>
+  <circle cx="180" cy="129" r="2.5" fill="#FFFFFF"/>
+</svg>

@@ -36,7 +36,9 @@ class User:
         sub: SSO user id. Phase 1 用 email (决策 3).
         department: 部门. Phase 2 RBAC 用.
         tier: 'employee' | 'admin'. (legacy, Phase 2 改用 role)
-        role: 'admin' | 'manager' | 'employee'. 五一 sprint 5/2 加, 替代 tier.
+        role: 'sysadmin' | 'admin' | 'manager' | 'employee'.
+              五一 sprint 5/2 加 manager/employee, 5/10 BL-ARCH1 P1 加 sysadmin.
+              继承: sysadmin > admin > manager > employee.
         managed_departments: manager 管的部门列表 (空表示啥都不管, manager 必须配).
         auth_method: 'dev_token' | 'oidc' | 等. 给 audit log 看.
                      Phase 1A: 现有调用都不传, 默认 'unknown', 兼容旧行为.
@@ -58,15 +60,25 @@ class User:
         # Phase 2: 部门 + 模型敏感度 (RBAC)
         return True
 
+    def is_sysadmin(self) -> bool:
+        """BL-ARCH1 P1 (5/10): 超级管理员, identity-server users.yaml tier=sysadmin."""
+        return self.role == "sysadmin"
+
     def is_admin(self) -> bool:
-        return self.role == "admin"
+        """admin 或更高 (sysadmin) — BL-ARCH1 P2 (5/10) 让 sysadmin 继承 admin 权限.
+
+        ⚠ 'admin 或更高'语义 (跟 catfish-web RoleGate 一致), 不是'恰好 admin'.
+        如要严格 admin 用 ``role == "admin"``.
+        """
+        return self.role in ("admin", "sysadmin")
 
     def is_manager(self) -> bool:
+        """恰好 manager (不含 admin / sysadmin). 沿用历史语义 (5/2 BL-D8 引入)."""
         return self.role == "manager"
 
     def can_manage_department(self, dept: str) -> bool:
-        """RBAC: manager 限 managed_departments, admin 全权."""
-        if self.is_admin():
+        """RBAC: manager 限 managed_departments, admin / sysadmin 全权."""
+        if self.is_admin():  # 包含 sysadmin
             return True
         if self.is_manager():
             return dept in (self.managed_departments or [])

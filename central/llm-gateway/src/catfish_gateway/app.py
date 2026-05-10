@@ -308,6 +308,14 @@ try:
 except Exception as e:
     logger.warning("skills_hub_proxy 挂载失败 (BL-D2 反代不可用): %s", e)
 
+# BL-ARCH1 P1 (5/10): identity-server admin 反代, /api/admin/* → :8998
+try:
+    from .admin_proxy import router as admin_router  # noqa: PLC0415
+    app.include_router(admin_router)
+    logger.info("admin_proxy: /api/admin/* 反代已挂载")
+except Exception as e:
+    logger.warning("admin_proxy 挂载失败: %s", e)
+
 
 # Plan D · A 端内部 endpoint — tool-bridge 通过 HTTP 调这个触发 A2A.
 # 简化版: 收完整 SSE 流, 一次返给 tool-bridge (不流式 UX, Phase 2 升级 Companion 直连 SSE).

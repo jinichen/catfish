@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- BL-ARCH1 P3 (5/10): favicon 跨端统一 — 跟 Companion / Dock 同 catfish-logo.svg.
+         之前指 /catfish.svg (不存在 → 404 + 浏览器 tab 显示默认图). -->
+    <link rel="icon" type="image/svg+xml" href="/catfish-logo.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>鲶鱼 · 中央门户</title>
+    <style>
+      :root {
+        --bg: #fafaf7;
+        --bg-elev: #ffffff;
+        --bg-secondary: #f5f5f0;
+        --border: #e3e3dc;
+        --text: #1f1f1f;
+        --text-muted: #6b6b66;
+        --accent: #2d8a87;
+        --status-ok: #2d8a87;
+        --status-warn: #c97e1c;
+        --status-err: #c43f3f;
+        --radius-sm: 4px;
+        --radius-md: 8px;
+        --space-1: 4px;
+        --space-2: 8px;
+        --space-3: 12px;
+        --space-4: 16px;
+        --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo,
+          Consolas, "Liberation Mono", monospace;
+      }
+      html, body { margin: 0; padding: 0; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Microsoft YaHei", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        font-size: 14px;
+        line-height: 1.5;
+      }
+      a { color: var(--accent); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

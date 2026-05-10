@@ -58,6 +58,8 @@ class IdentityUser:
     """注册用户. 内部数据结构, 不直接 expose JSON.
 
     五一 sprint 5/2 加 RBAC (BL-D8): role + managed_departments.
+    BL-ARCH1 P1 (5/10) 加 admin 管理字段: locked / deleted_at / created_by /
+    last_login_at / must_change_password.
     跟旧 tier 字段并存 (老配置兼容), 优先级 role > tier.
     """
 
@@ -65,15 +67,29 @@ class IdentityUser:
     password_hash: str
     name: str = ""
     department: str = ""
-    tier: str = "employee"  # 旧字段 'employee' | 'admin', 兼容老 yaml
+    tier: str = "employee"  # 旧字段 'employee' | 'admin' | 'sysadmin', 兼容老 yaml
     # ── RBAC (5/2 加, BL-D8) ──
-    role: str = ""  # admin / manager / employee. 空 = 用 tier 兜底
+    role: str = ""  # sysadmin / admin / manager / employee. 空 = 用 tier 兜底
     managed_departments: list[str] = field(default_factory=list)
+    # ── admin 管理字段 (5/10 加, BL-ARCH1 P1) ──
+    locked: bool = False
+    locked_at: str | None = None  # ISO datetime, None = 未锁
+    locked_by: str | None = None  # 谁锁的 (admin email)
+    deleted_at: str | None = None  # 软删时间, None = 活跃
+    created_at: str | None = None
+    created_by: str = "system"
+    last_login_at: str | None = None
+    must_change_password: bool = False
 
     def effective_role(self) -> str:
-        """实际生效的 role. 优先 role 字段, 兜底 tier."""
+        """实际生效的 role. 优先 role 字段, 兜底 tier.
+
+        BL-ARCH1 P1 (5/10): tier='sysadmin' 视为 role='sysadmin' (最高权限).
+        """
         if self.role:
             return self.role
+        if self.tier == "sysadmin":
+            return "sysadmin"
         if self.tier == "admin":
             return "admin"
         return "employee"
@@ -144,8 +160,9 @@ class UserRegistry:
                 logger.warning("跳过缺 email/password_hash 的 user: %r", raw)
                 continue
             # role 安全: 只接受白名单值, 防 yaml 误填
+            # BL-ARCH1 P1 (5/10): + sysadmin (系统管理员一档, 超 admin)
             role = str(raw.get("role", "")).strip().lower()
-            if role and role not in ("admin", "manager", "employee"):
+            if role and role not in ("sysadmin", "admin", "manager", "employee"):
                 logger.warning(
                     "user %s role=%s 不在白名单, fallback 到 employee", email, role
                 )
@@ -217,8 +234,10 @@ class UserRegistry:
         try:
             async with pool.acquire() as conn:
                 rows = await conn.fetch(
-                    "SELECT email, password_hash, name, department, tier, "
-                    "role, managed_departments FROM users"
+                    "SELECT email, password_hash, name, department, tier, role, "
+                    "managed_departments, locked, locked_at, locked_by, deleted_at, "
+                    "created_at, created_by, last_login_at, must_change_password "
+                    "FROM users"
                 )
         except Exception as e:
             logger.warning("PG users 加载失败, 保留 yaml: %s", e)
@@ -244,6 +263,15 @@ class UserRegistry:
                 tier=row["tier"] or "employee",
                 role=row["role"] or "",
                 managed_departments=[str(d) for d in managed],
+                # BL-ARCH1 P1 (5/10) admin 字段
+                locked=bool(row.get("locked", False)),
+                locked_at=row["locked_at"].isoformat() if row.get("locked_at") else None,
+                locked_by=row.get("locked_by"),
+                deleted_at=row["deleted_at"].isoformat() if row.get("deleted_at") else None,
+                created_at=row["created_at"].isoformat() if row.get("created_at") else None,
+                created_by=row.get("created_by") or "system",
+                last_login_at=row["last_login_at"].isoformat() if row.get("last_login_at") else None,
+                must_change_password=bool(row.get("must_change_password", False)),
             )
         self._users = loaded
         logger.info("PG users 加载: %d 个用户 (覆盖 yaml)", len(loaded))
@@ -259,13 +287,21 @@ class UserRegistry:
         """验证 email + password. 通过返 user, 失败返 None.
 
         bcrypt 比对耗时常数 (~100ms 默认), 防 timing attack.
-        Phase 2: 加 失败计数 + 锁账户.
+        BL-ARCH1 P1 (5/10): 加 locked / deleted_at 检查.
         """
         user = self.find(email)
         if user is None:
             # 即使 user 不存在, 也走一次 bcrypt 比对 (用合法的 dummy hash),
             # 避免 timing attack 暴露 user 是否存在.
             bcrypt.checkpw(b"dummy", _TIMING_DUMMY_HASH)
+            return None
+        if user.locked:
+            bcrypt.checkpw(b"dummy", _TIMING_DUMMY_HASH)
+            logger.info("用户 %s 已锁, 拒绝登录", email)
+            return None
+        if user.deleted_at:
+            bcrypt.checkpw(b"dummy", _TIMING_DUMMY_HASH)
+            logger.info("用户 %s 已删除, 拒绝登录", email)
             return None
         try:
             ok = bcrypt.checkpw(
@@ -279,6 +315,388 @@ class UserRegistry:
 
     def __len__(self) -> int:
         return len(self._users)
+
+    # ── BL-ARCH1 P1 (5/10) admin CRUD ──────────────────────────────
+
+    async def list_users(
+        self,
+        *,
+        include_deleted: bool = False,
+        department_filter: str | None = None,
+        role_filter: str | None = None,
+    ) -> list[IdentityUser]:
+        """列所有 user. PG 优先 (有完整字段), 内存 fallback (yaml only).
+
+        admin UI 用, 支持按部门 / role 过滤.
+        """
+        from .db import get_pool  # noqa: PLC0415
+        import json as _json  # noqa: PLC0415
+
+        pool = await get_pool()
+        if pool is not None:
+            try:
+                async with pool.acquire() as conn:
+                    sql = (
+                        "SELECT email, password_hash, name, department, tier, role, "
+                        "managed_departments, locked, locked_at, locked_by, deleted_at, "
+                        "created_at, created_by, last_login_at, must_change_password "
+                        "FROM users"
+                    )
+                    where = []
+                    params = []
+                    if not include_deleted:
+                        where.append("deleted_at IS NULL")
+                    if department_filter:
+                        where.append(f"department = ${len(params) + 1}")
+                        params.append(department_filter)
+                    if role_filter:
+                        where.append(f"(role = ${len(params) + 1} OR (role = '' AND tier = ${len(params) + 1}))")
+                        params.append(role_filter)
+                    if where:
+                        sql += " WHERE " + " AND ".join(where)
+                    sql += " ORDER BY created_at DESC NULLS LAST, email"
+                    rows = await conn.fetch(sql, *params)
+            except Exception as e:
+                logger.warning("list_users PG 失败 (fallback 内存): %s", e)
+                rows = []
+            if rows:
+                out = []
+                for r in rows:
+                    managed = r["managed_departments"]
+                    if isinstance(managed, str):
+                        managed = _json.loads(managed)
+                    if not isinstance(managed, list):
+                        managed = []
+                    out.append(IdentityUser(
+                        email=r["email"], password_hash=r["password_hash"],
+                        name=r["name"] or "", department=r["department"] or "",
+                        tier=r["tier"] or "employee", role=r["role"] or "",
+                        managed_departments=[str(d) for d in managed],
+                        locked=bool(r["locked"]),
+                        locked_at=r["locked_at"].isoformat() if r["locked_at"] else None,
+                        locked_by=r["locked_by"],
+                        deleted_at=r["deleted_at"].isoformat() if r["deleted_at"] else None,
+                        created_at=r["created_at"].isoformat() if r["created_at"] else None,
+                        created_by=r["created_by"] or "system",
+                        last_login_at=r["last_login_at"].isoformat() if r["last_login_at"] else None,
+                        must_change_password=bool(r["must_change_password"]),
+                    ))
+                return out
+        # 内存 fallback (yaml only, 没 PG 时)
+        users = list(self._users.values())
+        if department_filter:
+            users = [u for u in users if u.department == department_filter]
+        if role_filter:
+            users = [u for u in users if u.effective_role() == role_filter]
+        return users
+
+    async def create_user(
+        self,
+        *,
+        email: str,
+        password: str,
+        name: str = "",
+        department: str = "",
+        role: str = "employee",
+        managed_departments: list[str] | None = None,
+        created_by: str = "system",
+        must_change_password: bool = True,
+    ) -> tuple[bool, str]:
+        """创建新 user. 写 PG + 内存. 返 (ok, error_msg).
+
+        密码现场 bcrypt hash. 默认 must_change_password=True 强制首次改密.
+        """
+        from .db import get_pool  # noqa: PLC0415
+        import json as _json  # noqa: PLC0415
+
+        email = email.strip().lower()
+        if not email or "@" not in email:
+            return False, "email 不合法"
+        if email in self._users:
+            existing = self._users[email]
+            if existing.deleted_at is None:
+                return False, f"email {email} 已存在"
+        if role and role not in ("sysadmin", "admin", "manager", "employee"):
+            return False, f"role {role} 不在白名单"
+        if not password or len(password) < 8:
+            return False, "密码至少 8 位"
+
+        password_hash = bcrypt.hashpw(
+            password.encode("utf-8"), bcrypt.gensalt(rounds=12)
+        ).decode("utf-8")
+        managed = managed_departments or []
+        # tier 跟 role 同步 (兼容老 OIDC claims)
+        tier = role if role in ("sysadmin", "admin") else "employee"
+
+        pool = await get_pool()
+        if pool is not None:
+            try:
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        "INSERT INTO users (email, password_hash, name, department, "
+                        "tier, role, managed_departments, created_by, must_change_password) "
+                        "VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)",
+                        email, password_hash, name, department, tier, role,
+                        _json.dumps(managed), created_by, must_change_password,
+                    )
+                    await conn.execute(
+                        "INSERT INTO users_audit (ts_ms, action, target_email, by_email, meta) "
+                        "VALUES ((EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT, "
+                        "'create', $1, $2, $3::jsonb)",
+                        email, created_by, _json.dumps({"role": role, "department": department}),
+                    )
+            except Exception as e:
+                return False, f"PG 写失败: {e}"
+
+        self._users[email] = IdentityUser(
+            email=email, password_hash=password_hash, name=name,
+            department=department, tier=tier, role=role,
+            managed_departments=[str(d) for d in managed],
+            created_by=created_by,
+            must_change_password=must_change_password,
+        )
+        return True, ""
+
+    async def update_user(
+        self,
+        target_email: str,
+        *,
+        by_email: str,
+        name: str | None = None,
+        department: str | None = None,
+        role: str | None = None,
+        managed_departments: list[str] | None = None,
+    ) -> tuple[bool, str]:
+        """改 user 元信息. 不动密码 / 锁状态 — 那俩走专门 endpoint."""
+        from .db import get_pool  # noqa: PLC0415
+        import json as _json  # noqa: PLC0415
+
+        target_email = target_email.strip().lower()
+        user = self._users.get(target_email)
+        if user is None or user.deleted_at:
+            return False, f"用户 {target_email} 不存在 / 已删"
+        if role and role not in ("sysadmin", "admin", "manager", "employee"):
+            return False, f"role {role} 不在白名单"
+
+        sets = []
+        params = []
+        meta: dict = {}
+        if name is not None and name != user.name:
+            sets.append(f"name = ${len(params) + 1}")
+            params.append(name)
+            meta["name"] = name
+            user.name = name
+        if department is not None and department != user.department:
+            sets.append(f"department = ${len(params) + 1}")
+            params.append(department)
+            meta["department"] = department
+            user.department = department
+        if role is not None and role != user.role:
+            tier = role if role in ("sysadmin", "admin") else "employee"
+            sets.append(f"role = ${len(params) + 1}")
+            params.append(role)
+            sets.append(f"tier = ${len(params) + 1}")
+            params.append(tier)
+            meta["role"] = role
+            user.role = role
+            user.tier = tier
+        if managed_departments is not None:
+            sets.append(f"managed_departments = ${len(params) + 1}::jsonb")
+            params.append(_json.dumps(managed_departments))
+            meta["managed_departments"] = managed_departments
+            user.managed_departments = [str(d) for d in managed_departments]
+
+        if not sets:
+            return True, ""
+
+        sets.append("updated_at = NOW()")
+        pool = await get_pool()
+        if pool is not None:
+            try:
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        f"UPDATE users SET {', '.join(sets)} WHERE email = ${len(params) + 1}",
+                        *params, target_email,
+                    )
+                    await conn.execute(
+                        "INSERT INTO users_audit (ts_ms, action, target_email, by_email, meta) "
+                        "VALUES ((EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT, "
+                        "'update', $1, $2, $3::jsonb)",
+                        target_email, by_email, _json.dumps(meta),
+                    )
+            except Exception as e:
+                return False, f"PG 写失败: {e}"
+        return True, ""
+
+    async def lock_user(
+        self,
+        target_email: str,
+        *,
+        by_email: str,
+        locked: bool,
+    ) -> tuple[bool, str]:
+        """锁 / 解锁 user. locked=True 后 verify_password 拒登."""
+        from .db import get_pool  # noqa: PLC0415
+        import json as _json  # noqa: PLC0415
+
+        target_email = target_email.strip().lower()
+        user = self._users.get(target_email)
+        if user is None or user.deleted_at:
+            return False, f"用户 {target_email} 不存在"
+        # 防自锁 sysadmin
+        if user.effective_role() == "sysadmin" and locked:
+            sysadmins = [u for u in self._users.values()
+                         if u.effective_role() == "sysadmin" and not u.deleted_at and not u.locked]
+            if len(sysadmins) <= 1 and target_email in [u.email for u in sysadmins]:
+                return False, "不能锁最后一个 sysadmin (防自锁)"
+
+        pool = await get_pool()
+        if pool is not None:
+            try:
+                async with pool.acquire() as conn:
+                    if locked:
+                        await conn.execute(
+                            "UPDATE users SET locked = TRUE, locked_at = NOW(), locked_by = $1 "
+                            "WHERE email = $2",
+                            by_email, target_email,
+                        )
+                    else:
+                        await conn.execute(
+                            "UPDATE users SET locked = FALSE, locked_at = NULL, locked_by = NULL "
+                            "WHERE email = $1",
+                            target_email,
+                        )
+                    await conn.execute(
+                        "INSERT INTO users_audit (ts_ms, action, target_email, by_email, meta) "
+                        "VALUES ((EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT, $1, $2, $3, $4::jsonb)",
+                        "lock" if locked else "unlock",
+                        target_email, by_email, _json.dumps({}),
+                    )
+            except Exception as e:
+                return False, f"PG 写失败: {e}"
+        user.locked = locked
+        user.locked_by = by_email if locked else None
+        return True, ""
+
+    async def delete_user(
+        self,
+        target_email: str,
+        *,
+        by_email: str,
+    ) -> tuple[bool, str]:
+        """软删 user. 设 deleted_at, 不真删 row (audit 链不能断)."""
+        from .db import get_pool  # noqa: PLC0415
+        import json as _json  # noqa: PLC0415
+
+        target_email = target_email.strip().lower()
+        user = self._users.get(target_email)
+        if user is None or user.deleted_at:
+            return False, f"用户 {target_email} 不存在 / 已删"
+        # 防删 sysadmin
+        if user.effective_role() == "sysadmin":
+            sysadmins = [u for u in self._users.values()
+                         if u.effective_role() == "sysadmin" and not u.deleted_at]
+            if len(sysadmins) <= 1:
+                return False, "不能删最后一个 sysadmin (系统至少留一个)"
+
+        pool = await get_pool()
+        if pool is not None:
+            try:
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE users SET deleted_at = NOW() WHERE email = $1",
+                        target_email,
+                    )
+                    await conn.execute(
+                        "INSERT INTO users_audit (ts_ms, action, target_email, by_email, meta) "
+                        "VALUES ((EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT, "
+                        "'delete', $1, $2, $3::jsonb)",
+                        target_email, by_email, _json.dumps({}),
+                    )
+            except Exception as e:
+                return False, f"PG 写失败: {e}"
+        from datetime import datetime, timezone
+        user.deleted_at = datetime.now(timezone.utc).isoformat()
+        return True, ""
+
+    async def reset_password(
+        self,
+        target_email: str,
+        *,
+        by_email: str,
+        new_password: str,
+        force_change: bool = True,
+    ) -> tuple[bool, str]:
+        """重置密码. admin / sysadmin 给员工换临时密码, 默认强制下次登录改."""
+        from .db import get_pool  # noqa: PLC0415
+        import json as _json  # noqa: PLC0415
+
+        target_email = target_email.strip().lower()
+        user = self._users.get(target_email)
+        if user is None or user.deleted_at:
+            return False, f"用户 {target_email} 不存在"
+        if not new_password or len(new_password) < 8:
+            return False, "新密码至少 8 位"
+
+        new_hash = bcrypt.hashpw(
+            new_password.encode("utf-8"), bcrypt.gensalt(rounds=12)
+        ).decode("utf-8")
+
+        pool = await get_pool()
+        if pool is not None:
+            try:
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE users SET password_hash = $1, password_changed_at = NOW(), "
+                        "must_change_password = $2 WHERE email = $3",
+                        new_hash, force_change, target_email,
+                    )
+                    await conn.execute(
+                        "INSERT INTO users_audit (ts_ms, action, target_email, by_email, meta) "
+                        "VALUES ((EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT, "
+                        "'reset_password', $1, $2, $3::jsonb)",
+                        target_email, by_email, _json.dumps({"force_change": force_change}),
+                    )
+            except Exception as e:
+                return False, f"PG 写失败: {e}"
+        user.password_hash = new_hash
+        user.must_change_password = force_change
+        return True, ""
+
+    async def list_audit(self, limit: int = 100) -> list[dict]:
+        """查 users_audit 表 (admin 看历史). PG only."""
+        from .db import get_pool  # noqa: PLC0415
+
+        pool = await get_pool()
+        if pool is None:
+            return []
+        try:
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT ts_ms, action, target_email, by_email, meta "
+                    "FROM users_audit ORDER BY ts_ms DESC LIMIT $1",
+                    limit,
+                )
+        except Exception as e:
+            logger.warning("list_audit 失败: %s", e)
+            return []
+        out = []
+        for r in rows:
+            meta = r["meta"] or {}
+            if isinstance(meta, str):
+                import json as _json  # noqa: PLC0415
+                try:
+                    meta = _json.loads(meta)
+                except Exception:
+                    meta = {}
+            out.append({
+                "ts_ms": r["ts_ms"],
+                "action": r["action"],
+                "target_email": r["target_email"],
+                "by_email": r["by_email"],
+                "meta": meta,
+            })
+        return out
 
 
 def hash_password(password: str) -> str:

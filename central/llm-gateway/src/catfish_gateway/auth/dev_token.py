@@ -152,10 +152,11 @@ def _load_dev_config() -> _DevConfig:
 
 
 def _user_from_dev(d: _DevUser, auth_method: str = "dev_token") -> User:
+    # BL-ARCH1 P2 (5/10): sysadmin 也映射 tier=admin (legacy 字段, sysadmin 含 admin 全权).
     return User(
         sub=d.email,
         department=d.department,
-        tier="admin" if d.role == "admin" else "employee",
+        tier="admin" if d.role in ("admin", "sysadmin") else "employee",
         role=d.role,
         managed_departments=list(d.managed_departments),
         auth_method=auth_method,
