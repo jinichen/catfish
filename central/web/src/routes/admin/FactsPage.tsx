@@ -388,10 +388,24 @@ function FactDetailPage() {
       )}
 
       {detail.patches.length > 0 && (
-        <Card title={`✏️ 生成的 patches · ${detail.patches.length} 个 (待审批)`}>
+        <Card
+          title={`✏️ 生成的 patches · ${detail.patches.length} 个 · ${
+            detail.patches.filter((p) => p.status === "pending").length
+          } 待审批 / ${
+            detail.patches.filter((p) => p.status === "approved").length
+          } 已采纳 / ${
+            detail.patches.filter((p) => p.status === "rejected").length
+          } 已拒绝`}
+        >
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {detail.patches.map((p, i) => (
-              <PatchCard key={i} patch={p} />
+              <PatchCard
+                key={i}
+                patch={p}
+                patchIdx={i}
+                factId={id || ""}
+                onChanged={() => void refresh()}
+              />
             ))}
           </div>
         </Card>
@@ -453,8 +467,58 @@ function ImpactRow({ imp }: { imp: SkillImpact }) {
   );
 }
 
-function PatchCard({ patch }: { patch: SkillPatch }) {
+function PatchCard({
+  patch,
+  patchIdx,
+  factId,
+  onChanged,
+}: {
+  patch: SkillPatch;
+  patchIdx: number;
+  factId: string;
+  onChanged: () => void;
+}) {
   const [expanded, setExpanded] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [actionErr, setActionErr] = useState<string | null>(null);
+
+  const handleApprove = async () => {
+    if (busy) return;
+    if (!confirm(
+      `采纳后会立即在 SkillsHub 发布新版本 ${patch.skill_namespace}/${patch.skill_name}.\n\n` +
+      `version 会自动改成 <原 v>.fact-<id 前 8 位>, 不会覆盖现有版本.\n\n` +
+      "继续?",
+    )) return;
+    setBusy(true);
+    setActionErr(null);
+    try {
+      const res = await factsApi.approvePatch(factId, patchIdx);
+      alert(`✓ 已发布新版本: ${res.published_version}\nSkillsHub: ${res.hub_result.namespace}/${res.hub_result.name}/${res.hub_result.version}`);
+      onChanged();
+    } catch (e) {
+      setActionErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleReject = async () => {
+    if (busy) return;
+    if (!confirm("拒绝这个 patch? 标 rejected, 不会发布. 之后可重新分析重新生成 patch.")) return;
+    setBusy(true);
+    setActionErr(null);
+    try {
+      await factsApi.rejectPatch(factId, patchIdx);
+      onChanged();
+    } catch (e) {
+      setActionErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const isApproved = patch.status === "approved";
+  const isRejected = patch.status === "rejected";
   return (
     <div
       style={{
@@ -537,20 +601,35 @@ function PatchCard({ patch }: { patch: SkillPatch }) {
         </pre>
       </details>
 
-      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-        <button
-          style={btnPrimary}
-          onClick={() => alert("P0 MVP 还没接 SkillRevisionCard 落盘, Day 3 接通. 当前只是预览.")}
-        >
-          采纳 (Day 3 接通)
-        </button>
-        <button
-          style={btnSecondary}
-          onClick={() => alert("P0 MVP 不实现拒绝, Day 3 加")}
-        >
-          拒绝
-        </button>
+      <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
+        {isApproved ? (
+          <span style={{ ...btnSecondary, color: "#16a34a", cursor: "default" }}>
+            ✓ 已采纳, 发布版本 {(patch as SkillPatch & { published_version?: string }).published_version || "(未知)"}
+          </span>
+        ) : isRejected ? (
+          <span style={{ ...btnSecondary, color: "#888", cursor: "default" }}>
+            ✗ 已拒绝
+          </span>
+        ) : (
+          <>
+            <button
+              style={busy ? { ...btnPrimary, opacity: 0.5, cursor: "wait" } : btnPrimary}
+              onClick={() => void handleApprove()}
+              disabled={busy}
+            >
+              {busy ? "处理中…" : "采纳 → 发布到 SkillsHub"}
+            </button>
+            <button
+              style={busy ? { ...btnSecondary, opacity: 0.5, cursor: "wait" } : btnSecondary}
+              onClick={() => void handleReject()}
+              disabled={busy}
+            >
+              拒绝
+            </button>
+          </>
+        )}
       </div>
+      {actionErr && <div style={errBox}>{actionErr}</div>}
     </div>
   );
 }

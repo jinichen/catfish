@@ -364,3 +364,181 @@ async def delete_fact(
     _write_meta(fact_id, meta)
     _audit(fact_id, "dismiss", user.sub)
     return {"fact_id": fact_id, "status": "dismissed"}
+
+
+# ── Endpoint 7: POST /api/facts/{fact_id}/patches/{patch_idx}/approve ────────
+# 真接通 SkillRevision — 把 patch 写入 SkillsHub 作为该 skill 的新版本
+# version 强制加 .fact-<fact_id[:8]> 后缀避免跟现有版本撞 + 留追溯链.
+
+import re as _re  # noqa: E402
+
+import httpx as _httpx  # noqa: E402
+
+
+@router.post("/{fact_id}/patches/{patch_idx}/approve")
+async def approve_patch(
+    fact_id: str,
+    patch_idx: int,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """采纳一个 patch — 写入 SkillsHub 发布新版本 skill.
+
+    实现:
+      1. 读 patches.jsonl 第 patch_idx 条
+      2. 在 full_new_content frontmatter 强制改 version (加 .fact-<fact_id[:8]> 后缀)
+      3. multipart POST 到 skills-hub /skills/<namespace>
+      4. 标该 patch status=approved + 改 fact meta
+      5. audit
+    """
+    _require_admin(user)
+    fact_dir = _fact_dir(fact_id)
+    patches_path = fact_dir / "patches.jsonl"
+    if not patches_path.exists():
+        raise HTTPException(status_code=404, detail="patches.jsonl 不存在")
+
+    patches = _read_jsonl(patches_path)
+    if patch_idx < 0 or patch_idx >= len(patches):
+        raise HTTPException(status_code=404, detail=f"patch_idx {patch_idx} 越界 (共 {len(patches)} 条)")
+    patch = patches[patch_idx]
+
+    if patch.get("status") == "approved":
+        return {"fact_id": fact_id, "patch_idx": patch_idx, "status": "approved", "note": "已经采纳过"}
+
+    # 强制改 frontmatter 的 version: <原 v>.fact-<fact_id[:8]>
+    base_version = patch.get("skill_version_base", "1.0")
+    fact_short = fact_id.replace("-", "")[:8]
+    new_version = f"{base_version}.fact-{fact_short}"
+
+    new_content = _bump_version_in_skill_md(patch["full_new_content"], new_version)
+    namespace = patch["skill_namespace"]
+    skill_name = patch["skill_name"]
+
+    # multipart POST 到 skills-hub
+    # 用 internal token (BL-FIX37) 调本地服务, 不需要员工 OIDC
+    files_for_post = {"files": ("SKILL.md", new_content.encode("utf-8"), "text/markdown")}
+    headers = {
+        "X-Catfish-User-Sub": user.sub,
+        "X-Catfish-User-Dept": user.department or "",
+        "X-Catfish-User-Role": user.role or "employee",
+    }
+    skills_hub_base = "http://127.0.0.1:8997"
+    try:
+        async with _httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                f"{skills_hub_base}/skills/{namespace}",
+                files=files_for_post,
+                headers=headers,
+            )
+        if resp.status_code != 200:
+            raise HTTPException(
+                status_code=502,
+                detail=f"skills-hub publish 失败 (status={resp.status_code}): {resp.text[:300]}",
+            )
+        hub_result = resp.json()
+    except _httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"调 skills-hub 失败 (服务没起?): {e}") from e
+
+    # 改 patch 状态
+    patch["status"] = "approved"
+    patch["approved_at_ms"] = int(time.time() * 1000)
+    patch["approved_by"] = user.sub
+    patch["published_version"] = new_version
+    patch["hub_result"] = hub_result
+    patches[patch_idx] = patch
+    with patches_path.open("w", encoding="utf-8") as f:
+        for p in patches:
+            f.write(json.dumps(p, ensure_ascii=False) + "\n")
+
+    # 改 fact meta — 看是否全 approve 了
+    approved_count = sum(1 for p in patches if p.get("status") == "approved")
+    if approved_count == len(patches):
+        meta = _read_meta(fact_id)
+        meta["status"] = "approved"
+        meta["approved_at_ms"] = int(time.time() * 1000)
+        _write_meta(fact_id, meta)
+
+    _audit(fact_id, "approve_patch", user.sub, {
+        "patch_idx": patch_idx,
+        "skill": f"{namespace}/{skill_name}",
+        "new_version": new_version,
+    })
+    logger.info(
+        "facts.approve: fact=%s patch=%d skill=%s/%s v=%s",
+        fact_id, patch_idx, namespace, skill_name, new_version,
+    )
+    return {
+        "fact_id": fact_id,
+        "patch_idx": patch_idx,
+        "status": "approved",
+        "published_version": new_version,
+        "hub_result": hub_result,
+    }
+
+
+# ── Endpoint 8: POST /api/facts/{fact_id}/patches/{patch_idx}/reject ────────
+
+@router.post("/{fact_id}/patches/{patch_idx}/reject")
+async def reject_patch(
+    fact_id: str,
+    patch_idx: int,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """拒绝一个 patch — 只标 status=rejected, 不发布."""
+    _require_admin(user)
+    fact_dir = _fact_dir(fact_id)
+    patches_path = fact_dir / "patches.jsonl"
+    if not patches_path.exists():
+        raise HTTPException(status_code=404, detail="patches.jsonl 不存在")
+
+    patches = _read_jsonl(patches_path)
+    if patch_idx < 0 or patch_idx >= len(patches):
+        raise HTTPException(status_code=404, detail=f"patch_idx {patch_idx} 越界")
+    patch = patches[patch_idx]
+    patch["status"] = "rejected"
+    patch["rejected_at_ms"] = int(time.time() * 1000)
+    patch["rejected_by"] = user.sub
+    patches[patch_idx] = patch
+    with patches_path.open("w", encoding="utf-8") as f:
+        for p in patches:
+            f.write(json.dumps(p, ensure_ascii=False) + "\n")
+
+    _audit(fact_id, "reject_patch", user.sub, {
+        "patch_idx": patch_idx,
+        "skill": f"{patch.get('skill_namespace')}/{patch.get('skill_name')}",
+    })
+    return {"fact_id": fact_id, "patch_idx": patch_idx, "status": "rejected"}
+
+
+def _bump_version_in_skill_md(skill_md: str, new_version: str) -> str:
+    """改 SKILL.md frontmatter 的 version 行为 new_version. 没 frontmatter 就在头部加.
+
+    SKILL.md 格式约定 (跟 storage._parse_skill_md 一致):
+      ---
+      name: xxx
+      version: 1.0
+      description: ...
+      ---
+      正文...
+
+    或不带 fence (顶部直接 key: value).
+    """
+    # 标准 frontmatter (--- 包围) 的 version: 改掉
+    if skill_md.lstrip().startswith("---"):
+        # 找两条 --- 之间的内容
+        m = _re.match(r"^(\s*---\n)(.*?)(\n---\n)(.*)$", skill_md, _re.DOTALL)
+        if m:
+            head, fm, end_fence, body = m.groups()
+            new_fm, n = _re.subn(
+                r"^(\s*version\s*:\s*).*$",
+                rf"\g<1>{new_version}",
+                fm,
+                count=1,
+                flags=_re.MULTILINE,
+            )
+            if n == 0:
+                # 没找到 version 行, 在 fm 末尾追加
+                new_fm = fm.rstrip() + f"\nversion: {new_version}\n"
+            return head + new_fm + end_fence + body
+
+    # 无 frontmatter — 简单在最顶上加一段
+    return f"---\nversion: {new_version}\n---\n\n{skill_md}"

@@ -138,4 +138,27 @@ export const factsApi = {
     api.delete<{ fact_id: string; status: FactStatus }>(
       `/api/facts/${encodeURIComponent(id)}`,
     ),
+
+  // BL-Q3-FACT P0 MVP Day 3 (5/10): 真接通 SkillsHub publish
+  approvePatch: (factId: string, patchIdx: number) =>
+    api.post<{
+      fact_id: string;
+      patch_idx: number;
+      status: "approved";
+      published_version: string;
+      hub_result: { namespace: string; name: string; version: string; files_count: number };
+    }>(
+      `/api/facts/${encodeURIComponent(factId)}/patches/${patchIdx}/approve`,
+      {},
+    ),
+
+  rejectPatch: (factId: string, patchIdx: number) =>
+    api.post<{
+      fact_id: string;
+      patch_idx: number;
+      status: "rejected";
+    }>(
+      `/api/facts/${encodeURIComponent(factId)}/patches/${patchIdx}/reject`,
+      {},
+    ),
 };
