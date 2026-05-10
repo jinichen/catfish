@@ -18,6 +18,8 @@ import {
 } from "../lib/me";
 import { UsersPage } from "./admin/UsersPage";
 import { SystemPage } from "./admin/SystemPage";
+// BL-Q3-FACT P0 MVP Day 2 (5/10): 事实补丁系统 UI
+import { FactsPage } from "./admin/FactsPage";
 
 export function AdminPage() {
   // BL-ARCH1 P1 (5/10): admin 默认能进, sysadmin 看 system. /admin/users 内部不再
@@ -28,6 +30,7 @@ export function AdminPage() {
         <Route index element={<AdminHome />} />
         <Route path="users/*" element={<UsersPage />} />
         <Route path="system/*" element={<SystemPage />} />
+        <Route path="facts/*" element={<FactsPage />} />
         <Route path="quota" element={<AdminQuota />} />
         <Route path="billing" element={<AdminBilling />} />
       </Routes>
@@ -78,6 +81,8 @@ function AdminHome() {
         }}
       >
         <NavTile to="/admin/users" icon="👥" title="用户管理" desc="创建 / 改 role / 锁 / 删 / 重置密码" />
+        {/* BL-Q3-FACT P0 MVP (5/10): 事实补丁系统 — 政策变更自动同步到员工 skill */}
+        <NavTile to="/admin/facts" icon="📋" title="政策同步 (FACT)" desc="政策变更 → 找受影响 skill → 生成 patch" />
         <NavTile to="/admin/quota" icon="🎯" title="配额规则" desc="defaults / per_model / per_dept" />
         <NavTile to="/admin/billing" icon="💰" title="Billing" desc="月报 / 按部门成本分摊" />
         <NavTile to="/audit" icon="📜" title="审计大查询" desc="跨员工 / 跨部门" />

@@ -82,4 +82,8 @@ export const api = {
     request<T>(path, { ...opts, method: "PUT", body }),
   delete: <T>(path: string, opts?: FetchOpts) =>
     request<T>(path, { ...opts, method: "DELETE" }),
+  // BL-Q3-FACT (5/10): 文件上传走 multipart/form-data, body 直接给 FormData
+  // request() 已经识别 FormData 跳过 JSON.stringify (line 44-46).
+  postFormData: <T>(path: string, formData: FormData, opts?: FetchOpts) =>
+    request<T>(path, { ...opts, method: "POST", body: formData }),
 };
