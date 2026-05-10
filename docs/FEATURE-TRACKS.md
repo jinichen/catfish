@@ -9,10 +9,14 @@
 ## 🚦 Phase 进度 (一行看清)
 
 ```
-Phase 1 · 单员工 AI 副手           [██████████] 99.8% · 5/14 demo 视觉链 ✅ 验证 (Qwen 主力识码 "S2CB")
-Phase 2 · 团队版 (SSO/RBAC/Win)    [█████████░] 95%   · 5/8 Windows 客户端从 0 到 demo-ready (cross-build .exe + IPC TCP + Chrome 路径 + wincred + yaml 配置)
+Phase 1 · 单员工 AI 副手           [██████████] 99.9% · 5/10 凌晨 OAuth 全链路真打通 (chenhongbo / quota / audit / streaming / 画像 6 项)
+Phase 2 · 团队版 (SSO/RBAC/Win)    [██████████] 99%   · 5/10 凌晨 4 个中央 service PG 统一 (identity / gateway / mcp-registry / skills-hub) + Skills Hub 集成闭环
 Phase 3 · ★ Federation             [█████░░░░░] 50%   · Plan D v0.1 ✅ + 5/6 重定位 agent-as-service (BL-FED2 6 周 ship) · 5/6 晚灵魂校准: 员工自愿互助 + 跨雇主可携带
 Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   · 2027 Q2+
+
+★ 5/10 凌晨架构决策 (BL-ARCH1): 5/15 起做 catfish-web 中央门户 (Skills Hub 全广场 / MCP 市场 /
+  Manager 视图 / Admin 后台 / billing 月报). Companion 瘦身留 "我的"视角 (Identity / Quota /
+  画像 / 我的 skill). 客户端注重体验, 中央走 web — 跟 VSCode+GitHub / Cursor+cursor.sh 同模式.
 ```
 
 > 📈 5/2-5/3 周末 sprint 大幅推进 (Phase 2 后端 + Skills Hub + brand kit + 关系建立):
@@ -72,6 +76,24 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 >     - **FIX22** CuratorCard 整卡全宽 (鸿波 "脚本整理也是同样的问题"): 跟 FIX21 同款修法.
 >   - 测试 1097+ passing (gateway 677 + tool-bridge 403 + weekly-report 17 + cross-build clean).
 >   - 鸿波诊断功劳: 23 个补丁里 6 个 (FIX7/9/12/13/16/17) + 4 个视觉 (FIX18/19/21/22) 是鸿波直接指根因 / 提需求, 比我顺症状追快. 教训: tool 描述 + 默认参数也是 LLM 行为的一部分; 一刀切去重前先看 LLM 还有没有等价能力 tool; UI 视觉对称 (奇数卡半格旁边空白) 同款修法批量处理.
+
+> 📈 **5/10 (周日凌晨 23:00-04:30 五个半小时)** — OAuth 全链路真打通 + 4 个中央 service PG 统一收尾 + Skills Hub 集成闭环 + 架构反思定调 (18 件事, ~3000 行新增):
+>   - **18 件事一夜**: BL-FIX27~38 (12 个 OAuth/quota/认证修) + BL-FIX35.1 (漏改 inline 补) + BL-D2 (Skills Hub 4 件并发: gateway 反代 + Companion Card + publish 工具 + OIDC 鉴权) + BL-D2 Phase 2 (skills-hub 元数据迁 PG) + BL-D3 fix5 (mcp-registry / skills-hub _load_dotenv 隐性 bug) + BL-FIX36 (SOUL BL-MM5 段 memory_save → catfish_user_profile_propose + 历史 660 条偏好句子 journal 迁移脚本 v2 winner-only confirm) + 架构决策 BL-ARCH1.
+>   - **真根因 BL-FIX32 ⭐**: macOS Keychain 在 unsigned dev binary (cargo run target/debug, 没 codesign) 下 keyring crate set_password **报 success 但实际 silent no-op**. log 一直打 "OAuth login OK", 但 security find-generic-password 永远 NoEntry. 前 5 次绕路 (FIX26/28/29/30/31) 全是被这条绿灯 log 引导的下游误判. 改文件存储 ~/.catfish/oauth/ 0600 绕开. **教训: "save 看似成功但 read 永远空" 直接怀疑存储后端本身, 不要先假设链路下游**.
+>   - **OAuth 端到端真闭环**: Companion 点登录 → 浏览器 SSO (127.0.0.1:8998) → identity-server 颁 id_token (sub=chenhongbo@ffcs.cn, aud=catfish-companion) → ~/.catfish/oauth/ 文件存 → me.getToken/chat.getToken priority 0 → gateway OIDC 验签通过 → litellm streaming + stream_options.include_usage=True → PG quota_events / gateway_audit 真员工身份落盘. 5/2 起 8 天所有 chat 挂 dev-user@catfish.dev 的虚构 user 全清.
+>   - **4 个中央 service PG 统一**: identity (users / registry_agents) + gateway (quota_events / gateway_audit) + mcp-registry (mcp_subscriptions / mcp_audit) + **skills-hub (skills_versions / skills_audit, 5/10 凌晨新加)** 共享同一 catfish PG, 4 个 alembic_version_* 版本表共存. **设计**: 元数据 PG (索引 / cross-service join), 文件内容继续 FS, Phase 3 切 S3/MinIO 改 _content_url 一行.
+>   - **Skills Hub 集成闭环 (BL-D2)**: 5/2 后端 887 行 ship 但 10 个集成口子全断, 鸿波 5/10 "做完了吗?" 触发审计. 4 件并发: gateway/skills_hub_proxy.py 反代 + skills-hub require_user 信 X-Catfish-User-* + Companion SkillsHubCard.tsx + tool-bridge catfish_skill_publish (含 6 类凭据正则扫描拒上传). 验证 publish 真员工 chenhongbo 落 PG.
+>   - **画像 6 项真显示 (BL-FIX36)**: 真因 SOUL.md BL-MM5 段 (5/4 写, 教用 memory_save) + BL-MM7 段 (5/6 加, 教用 catfish_user_profile_propose) **两套并存 8 天**, LLM 偏向先看到的 BL-MM5 → 偏好全写 hermes memory (其实也没写, 实际只在 employee_journal "员工偏好 X" 句子里), user_profile.json 一字未写. A 改 SOUL 4 处示例 + 9 字段映射表; B 写 migrate_journal_to_profile.py 30 条规则 + winner-only confirm + 收紧"长" 规则, 660 句迁出 6 个 confirm trait (急 / 直接 / 结果导向 / 短 / 对照表 / 先看摘要), 完美贴合鸿波风格.
+>   - **架构反思 BL-ARCH1 / 2 (鸿波 4:00 challenge)**: "中央复杂, 都塞客户端不合适?" → "方案 B 都中央化是不是跟初衷背离?" → "中央功能 WEB 化, 助手客户端化". 业界标杆 (VSCode + GitHub / Cursor + cursor.sh / 1Password + 1password.com / Slack + admin.slack.com) 都是 **客户端 = "我"的体验, web = "组织/管理"的体验**. 决策: 5/15 起做 catfish-web 中央门户 (Skills Hub 全广场 / MCP 市场 / Manager 视图 / Admin 后台), Companion 瘦身留 10 个左右"我的"卡 (Identity / Quota / 画像 / 我的 skill / 桌宠 / 快捷键 / 语音). 客户端跟初衷对齐 (本机 / 离线 / 数据不出端), web 是中央门户.
+>   - **鸿波诊断 7 条** (5/10 凌晨):
+>     1. "为什么放在 sqlite, 这个奇怪" → 推动查 PG 路径, 发现 quota_events 全 dev-user
+>     2. "你应该把所有的测试账号删除, 也没用测试通道" → 砍 FIX28 治标方案, 强制走真 OIDC, 暴露 keychain silent fail (FIX32 真根因)
+>     3. "你要不猜谜语了, 要仔细的分析" → 强制让我停下基于 log 推理, 让 npm run tauri dev tee 到日志看 OAuth 真实步骤, 才看清 "OAuth login OK" 跟 keychain NoEntry 的矛盾
+>     4. "central/skills-hub 做完了吗?" → 触发 10 个集成口子审计 + BL-D2 4 件并发 ship
+>     5. "数据库是不是也要切到 PG?" → BL-D2 Phase 2 PG 统一收尾
+>     6. "数据库连接没有写到 .env?" → BL-D3 fix5 隐性 bug (mcp-registry 5/9 起一直跑 sqlite 没人发现)
+>     7. "中央很复杂, 都塞客户端不合适?" + "方案 B 跟初衷背离?" + "中央 WEB 化, 助手客户端化" → BL-ARCH1/2 架构演进路径定调
+>   - 测试 / 验证: PG 4 个 service 9 张表全跑通 / curl publish hello-pg 200 / dashboard 画像 6 项真显示 / Companion release dmg 已 bundle / 5/14 demo 主线全就位.
 
 > 📈 **5/9 (周六)** — BL-FIX23 五层 + BL-FIX24 治"半截就停 / 死循环" turn 控制 5 道护栏全摆齐 (6 commit + 33 单测):
 >   - **三轮诊断踩坑**: 第一轮 L1 SOUL "做完才说" 改纪律无效 (RLHF > system prompt); 第二轮 L2 reasoning_content 兜底也无效 (chunk_stats 显示 reasoning=0 全程); 第三轮看 chunk_stats 日志 finish_reason=length 才定位真根因 #1 (Qwen vLLM max_tokens 默认太小, streaming 路径 BL-A1.1 auto-continue 没接), 鸿波拍板"方案 C" ship L5 plan-only retry (真根因 #2); 鸿波最后一击诊断 "**任务完成度评估缺位**" 点透真根因 #3 (重复 tool_call 检测), ship BL-FIX24.

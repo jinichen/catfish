@@ -3356,3 +3356,148 @@ xxxxxxx BL-FIX27 (5/10): gateway 启动注入 CATFISH_DB_URL (修配额永远 0)
 5. **"编译的警告要处理"**: `KEYRING_SERVICE never used` 警告也清掉, 收尾干净
 
 5/14 demo 主线全部就位. dashboard 配额 / audit / OIDC / streaming usage 全链路真员工身份, 不再是 dev-user 虚构 user. 接下来都是 polish.
+
+---
+
+## 2026-05-10（周日凌晨续）— BL-FIX36~38 + 35.1 + D2 (Skills Hub 集成) + D2 Phase 2 (PG 统一) + D3 fix5 + 架构反思
+
+> 鸿波 5/10 凌晨 1-4:30 一连串提问推着继续: 画像卡 0 项 → SOUL 双指令冲突 → 历史迁移 → 今日话题拉不到 → BL-FIX29 副作用 → quota 撞顶 → fetchProactiveStarter 漏改 → skills-hub 集成断 → skills-hub 该不该 PG → .env 自动加载隐性 bug → 架构反思 (Companion 太重 / web 化 vs 初衷).
+>
+> 凌晨 5h 又 ship 7 个 BL + 1 条架构决策, 共今晚一夜 18 件事. 5/14 demo 5 个中央 service PG 统一 + Skills Hub 集成全闭环 + 架构演进路径定调.
+
+### BL-FIX36 SOUL.md BL-MM5 段 memory_save → catfish_user_profile_propose + 历史迁移脚本
+
+**真因**: 5/4 SOUL BL-MM5 教 LLM 用 `memory_save` 落盘偏好, 5/6 BL-MM7 ship `catfish_user_profile_*` 真后端但 BL-MM5 段没改示例. LLM 8 天 200+ 会话**两个都没用** — 偏好只在 session_summarizer 后台跑写进 employee_journal.md "员工偏好 X" 句子里 (660 行匹配), `~/.catfish/user_profile.json` 一字未写, 画像卡 0 项.
+
+**修法**:
+- A: SOUL.md BL-MM5 4 处 `memory_save` 示例改 `catfish_user_profile_propose/confirm` + 顶部加 5/10 跳转提示 + 9 字段映射表 + 详细调用模板
+- B: `edge/tool-bridge/scripts/migrate_journal_to_profile.py` 一次性脚本 — 30 条规则 classify journal "员工偏好 X" 句子到 9 个 user_profile 字段. v2 修两 bug (1) 同 field 多 value 冲突时只 confirm winner 防互相覆盖 (2) "长" 规则太宽 (`偏好.*展开` 命中"周报详细展开"非偏好句) → 收紧成 `偏好.*长篇|偏好.*详尽|偏好.*完整列出|偏好.*面面俱到`
+
+**结果**: 6 个 winner 字段 confirm 落盘, 完美贴合鸿波风格 — 急 / 直接 / 结果导向 / 短 / 对照表 / 先看摘要. 2 个待确认 (尊重正式 / 列表). dashboard 画像卡 30s 后真显示 6 项 trait.
+
+### BL-FIX35.1 fetchProactiveStarter / fetchContextualStarter 两处 inline 漏改
+
+**真因**: BL-FIX35 用 `replace_all=true` 一次性替换 5 处 inline, 但 `fetchProactiveStarter` / `fetchContextualStarter` 这两处缩进**多 2 格** (在 try 块里), 字面字符串没匹配上漏改. devtools network 实证 `/api/proactive/starter` 返 401, 同 token curl 200 — 直接证据 Companion 走老 dev_token 路径. 现在补上, 改用统一 `getToken()`.
+
+### BL-FIX37 internal-only token 通道 (修 BL-FIX29 副作用)
+
+**现象**: 今日话题卡显示 "拉不到话题, 看 gateway 起没起". curl `/api/proactive/starter` 返 `source=fallback context_hint='last_error=401'` — gateway **自己内部** loopback chat 401 了.
+
+**真因**: `proactive.py:190` 内部 loopback 用 `os.environ['CATFISH_DEV_TOKEN']`, BL-FIX29 关掉员工 dev_token 通道后, gateway 自己调自己也连带挂. `session_summarizer.py` 同理 (写 employee_journal 也挂, 解释了为啥 5/10 凌晨之后 journal 不再更新).
+
+**修法**: `auth/dev_token.py` 加 `ensure_internal_dev_token()` — gateway 启动时若没设 `CATFISH_INTERNAL_DEV_TOKEN` env, 自动 `secrets.token_urlsafe(32)` 生成进 process env. `verify_bearer` 优先匹配它返 `internal:gateway-loopback` User. proactive.py / session_summarizer.py 改用这个 token. 真员工 dev_token 通道仍关 (BL-FIX29 不退). internal token 进程内存重启即变, 外部抓不到.
+
+### BL-FIX38 quotas.yaml 默认 100K/min → 1M/min
+
+**反向证明**: 鸿波 5/10 chat 撞 `85,202/100,000 token/分钟`. 这恰好**证明 BL-FIX27/35 修通了** — 真员工 chenhongbo 名下被 PG quota_events 真限速 (5/9 前所有 chat 挂 dev-user 不限). 但 demo / 调试 100K/min 太低, 一次 chat 60K prompt 就撞顶. quotas.yaml `defaults.per_user` 100K/min → 1M/min, 1M/day → 10M/day, 跟 ceo override 持平.
+
+### BL-D2 Skills Hub 集成 (5/10 凌晨 4 件并发 ship)
+
+> 鸿波 5/10 "central/skills-hub 做完了吗?". 审计发现 5/2 后端 887 行 ship 但 10 个集成口子全断 (gateway 没反代 / 鉴权 dev_token 死链 / Companion 没卡 / 没 publish 工具 / 没 PG / 没 Dockerfile / 没评分 / 没 scanner / 没 CLI / 没单测).
+
+5/14 demo "员工分享 skill 到 hub" 卖点要 4 件齐:
+
+- **B1 gateway 反代** `central/llm-gateway/src/catfish_gateway/skills_hub_proxy.py` (新): 复刻 `mcp_registry_proxy` 模板, `/v1/hub/*` 反代 :8997, 注入 `X-Catfish-User-Sub/-Dept/-Role`. `config.py` + `SkillsHubConfig`. `app.py` lifespan 起 httpx client + include_router.
+
+- **B2 hub 鉴权改信任 X-Catfish-User-* header**: `skills-hub/app.py` `require_token` → `require_user`. dev_token 留 fallback (curl 测试用). `require_admin` 检查 role=admin. 修 BL-FIX29 副作用 (员工 dev_token 关后 hub 整个 401).
+
+- **B3 Companion `SkillsHubCard.tsx`** (新): Dashboard 新卡, 按 namespace 分组列 skill, 走 gateway `/v1/hub/skills`, 跟 `McpRegistryCard` 同模式 (1min 刷新, 502/401 错误处理).
+
+- **B4 tool-bridge `catfish_skill_publish`** (新 `skill_publish.py`): LLM 工具, 扫 skill 目录 + **6 类凭据正则扫描** (password/api_key/sk-*/AIza*/RSA private key) 撞到拒绝, multipart upload 走 gateway, OAuth `id_token` 从 `~/.catfish/oauth/id_token` 读 (BL-FIX32 路径), `published_by`= 真员工 sub.
+
+### BL-D2 Phase 2 PG 统一 (skills-hub 元数据迁 PG)
+
+> 鸿波 5/10 "数据库是不是也要切到 PG?". 跟 BL-D3 Phase 2 PG 统一架构对齐.
+
+5/9 mcp-registry 已迁, 5/10 skills-hub 跟上, **4 个中央 service 现在共享同一 catfish PG**:
+
+```
+identity:     users, registry_agents
+gateway:      quota_events, gateway_audit
+mcp-registry: mcp_subscriptions, mcp_audit
+skills-hub:   skills_versions, skills_audit  ← 5/10 凌晨 ship
+alembic_version_{identity,gateway,mcp_registry,skills_hub} 4 个版本表共存
+```
+
+**设计**: 元数据 PG (索引快查 + cross-service join + 真生产备份), 文件内容继续 FS (`~/.catfish-hub/skills/<ns>/<n>/<v>/`), Phase 3 切对象存储 S3/MinIO 改 `_content_url` 一行即可.
+
+文件:
+- `alembic.ini + alembic/env.py + script.mako` 复刻 mcp-registry, BL-D3 fix4 同款绕 configparser % 隐性 bug, `_VERSION_TABLE = alembic_version_skills_hub`
+- `alembic/versions/202605101200_init_skills.py`: `skills_versions` (id, namespace, name, version, description, published_by, published_at, content_dir, file_count, total_bytes, deprecated, **subscribe_count, rating_avg, rating_count** P3 评分留位) + `skills_audit` (id, ts_ms, action, namespace, name, version, by_user, meta JSONB) + 6 个索引
+- `storage.py`: `_pg_url/_pg_clean_url/_pg_conn/_use_pg` helpers, publish 写 PG row, delete 删 row, list_skills PG 优先 (`DISTINCT ON` 取每 ns/name 最新版), read_audit PG 优先 jsonl 兜底, `_write_audit` PG INSERT 主路径
+- `pyproject.toml`: + `psycopg[binary] / alembic / sqlalchemy / python-dotenv`
+
+### BL-D3 fix5 + BL-D2 dotenv 自动加载 (`数据库连接没写到 .env?`)
+
+> 鸿波: skills-hub / mcp-registry 都没 `_load_dotenv`, 启动不读 .env 全靠手动 export. 跟 gateway 同模板补齐.
+
+**意外发现 5/9 BL-D3 Phase 2 隐性 bug**: mcp-registry app.py 一直没 `_load_dotenv`, 5/9 改 yaml + alembic 那次其实**没真接通 PG** — log 之前应该是 `db backend=sqlite` 走 `~/.catfish/mcp_registry.db` fallback. 5/10 fix5 后 log 实锤 `db backend=pg, mcp_registry PG 连通性 ok`.
+
+文件:
+- `skills-hub/.env` (新, 不进 git) + `.env.example`
+- `skills-hub/app.py`: `_load_dotenv` 在 import storage 之前 override=False (BL-FIX32 同款)
+- `skills-hub/pyproject.toml`: + `python-dotenv>=1.0.0`
+- `mcp-registry/app.py`: BL-D3 fix5 修同款隐性 bug
+- `mcp-registry/.env.example` (新)
+
+### 架构反思 (5/10 凌晨 4:00 鸿波 challenge)
+
+> "中央已经很复杂了, 所有的都塞在客户端是不是不合适了?" → "方案 B 都中央化了是不是和我们的初衷背离?" → "中央的功能 WEB 化, 助手的功能还是客户端化, 用户管理 / Skill Hub 这些考虑 web 化, 客户端注重用户体验"
+
+**鸿波这条产品判断对得很** — 跟业界标杆一致 (VSCode + GitHub / Cursor + cursor.sh / 1Password + 1password.com / Slack + admin.slack.com): **客户端 = "我"的体验, web = "组织/管理"的体验**.
+
+**Companion 当前职责膨胀** 20+ 卡 + Tauri Rust + React TS + 5 个语言运行时 + 4-6GB 内存基本盘 + 改一行卡要全员重 build dmg. 跟初衷 (本机数据 / 凭据本机 / 离线 / 员工自治) **没冲突** 但**职责混乱**.
+
+**职责拆分原则定调** (5/10 凌晨决):
+
+```
+留 Companion (10 个左右, "我"的视角, 桌面感):
+  Identity / Services / Quota (今日单数字) / Catalog
+  UserProfile / Relation / MemoryHistory / StyleFingerprint
+  Learning / SkillRevision / Tasks / Curator / Proactive
+  我装的 skill / mcp 列表 (操作类必本机)
+
+搬 catfish-web (中央门户, 跨员工 / 管理 / 探索):
+  Skills Hub 全公司广场 + 详情 + publish UI + 评分排行
+  MCP 连接器市场 + IT 配 OAuth credentials
+  部门视图 (Manager: 本部门 quota / audit / top员工)
+  Admin 后台 (用户管理 / 配额 / 全公司 audit / billing / dev_users 编辑)
+  历史 audit 大查询
+
+边界 (两边都有, 视角不同):
+  今日 quota: Companion 一个数 / web 趋势图 + 模型分布
+  Skills Hub: Companion "我已装" + 链接 / web "全广场"
+  订阅 mcp: Companion 操作 / web 浏览
+```
+
+**5/14 demo 不动现状** — Companion 演卖点够. **5/15 起做 BL-ARCH1**.
+
+### 5/10 凌晨完整 commit 列表 (15 个)
+
+```
+BL-D3 fix5 + BL-D2 dotenv 自动加载 (skills-hub / mcp-registry 启动 read .env)
+BL-D2 Phase 2 (5/10): skills-hub 元数据迁 PG (4 个中央 service PG 统一收尾)
+BL-D2 (5/10): Skills Hub 集成 (gateway 反代 + OIDC + Card + publish 工具)
+BL-FIX37+38 (5/10): internal-only token 通道 + quota 100K→1M
+BL-FIX35.1 (5/10): fetchProactiveStarter / fetchContextualStarter 两处 inline 补上
+BL-FIX27~36 (5/10): OAuth 全链路 + Keychain unsigned silent fail + 画像 0 项
+```
+
+### 5/10 凌晨战绩
+
+- **18 件事一夜** (BL-FIX 12 + BL-D2 集成 + BL-D2 Phase 2 + BL-D3 fix5 + 架构决策 + SOUL 修 + journal 历史迁移)
+- **4 个中央 service PG 统一**: identity / gateway / mcp-registry / skills-hub
+- **OAuth 端到端真打通**: 真员工 chenhongbo / id_token / quota / audit / streaming
+- **画像 6 项真显示**: 历史 660 条偏好句子迁完
+- **Skills Hub 集成闭环**: 反代 + 鉴权 + Card + publish 工具 + PG 元数据 + dotenv
+- **架构演进路径定调**: BL-ARCH1 catfish-web 中央门户 (5/15 起做)
+
+### 鸿波诊断功劳 (5/10 凌晨续段)
+
+1. "画像怎么也是空的" → 推动 SOUL 双指令冲突的 BL-FIX36 真因诊断
+2. "话题怎么也出问题了？话题不是用本地的数据吗" → 推动 BL-FIX37 内部 loopback dev_token 副作用诊断
+3. "central/skills-hub 做完了吗?" → 触发 10 个集成口子审计 + BL-D2 4 件并发 ship
+4. "数据库是不是也要切到 PG?" → BL-D2 Phase 2 PG 统一收尾
+5. "数据库连接没有写到 .env?" → BL-D3 fix5 隐性 bug (mcp-registry 5/9 实际跑 sqlite 一直没人发现)
+6. "中央很复杂, 都塞客户端不合适?" → "方案 B 都中央化是不是跟初衷背离?" → 架构反思 BL-ARCH1/2 定调
+7. "Skills Hub 还差什么没做?" → 12 个剩余缺口分类 (5/14 必做 5 个 / 5/26+ 7 个)

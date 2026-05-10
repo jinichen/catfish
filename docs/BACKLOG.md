@@ -659,10 +659,36 @@ J  品牌 / VI            4 项   (3 ⬜ + 1 ✅)         · Phase 2 前
 K  ★ 4-28~30 ship 快照  30 项  (30 ✅)               · 已完成 (回写)
 L  ★ 4-30 当前缺口      25 项  (24 ⬜ + 1 ❄️)        · 5 月 demo 前 / PoC / 后续
 
+M  ★ 5/10 架构反思     3 项   (2 ⬜ + 1 ❄️)         · 5/15 起做 (BL-ARCH1/2/3)
+
 阻塞 / 等鸿波           8 项   (8 🚧)               · 解锁后归类
 
-合计 ~186 项 (v1 = 121 项, v2 +65 项)
-其中已完成 ~35 项 (✅), 进行中 3 项 (🔵)
+合计 ~189 项 (v1 = 121 项, v2 +65 项, v3 +3 项)
+其中已完成 ~80 项 (✅), 5/10 凌晨一夜 +18 项 (FIX27~38 + 35.1 + D2 + D2 Phase 2 + D3 fix5 + 架构决策)
+```
+
+### §M · 5/10 凌晨架构反思 (新)
+
+> 5/10 凌晨 4:00 鸿波 challenge 触发. **客户端 = "我"的体验, web = "组织/管理"的体验** (业界 VSCode + GitHub / Cursor + cursor.sh / 1Password + 1password.com / Slack + admin.slack.com 标杆).
+
+| ID | 项 | 状态 | 估时 | 依赖 |
+|---|---|---|---|---|
+| BL-ARCH1 | **catfish-web 中央门户 (新项目)** — Skills Hub 全广场 + publish UI / MCP 市场 + IT 配 OAuth credentials / Manager 视图 (本部门 quota/audit/team) / Admin 后台 (用户/部门/全公司 audit/billing/dev_users 编辑/identity users.yaml 编辑) / 历史 audit 大查询 | ⬜ | 3 周 | demo 后启动 (5/15+) |
+| BL-ARCH2 | **Companion 瘦身** (BL-ARCH1 配套) — 砍 DepartmentQuota / Audit / SkillAudit / SkillsHub 浏览 / McpRegistry 浏览 5 个卡, 留 10 个 "我的" 视角卡. 加 "去 web 看 →" 锚点 | ⬜ | 2 天 | BL-ARCH1 启动 |
+| BL-ARCH3 | **catfish-edge-daemon (可选, 性能评估后定)** — Tauri Companion 瘦身后 watchdog/OAuth/文件 IO 拆出来成本机系统服务 (launchd/systemd), Tauri ↔ daemon localhost:8994 HTTP. ❄️ 暂不做, 先看 BL-ARCH1 落地后 Companion 还多重 | ❄️ | 1-2 周 | BL-ARCH1 完成 + 性能评估 |
+
+**为啥不做"全中央 web 化" (rejected)**: 跟 catfish 初衷冲突 (离线 / 员工感 / 央企心理 / 数据归属感 / Hermes 集成本机). BL-ARCH1 拆"管理类" 去 web (本来就该 web — 跨员工 / 跨部门 / IT 操作), Companion 留"我的" 功能 (本来就该本机 — 桌宠 / 快捷键 / 我的画像 / 我装的 skill).
+
+**Phase 时间线**:
+```
+5/14 demo:                       不动现状, Companion 重也演得动 (主线已通)
+5/15 起 (3 周, BL-ARCH1+ARCH2):
+  W1: catfish-web 搭 + OIDC + 复用 SkillsHub / McpRegistry / Audit 三卡
+  W2: admin 后台 (用户/配额/审计大查询)
+  W3: manager 视图 + billing 月报 + nginx 部署
+  Companion 同步瘦身 2 天 (砍 5 卡 + 加链接)
+
+6 月+: BL-ARCH3 评估 (Companion 瘦身后还多重决定要不要拆 daemon)
 ```
 
 ---
@@ -708,6 +734,7 @@ BACKLOG.md (本)        ─→  全量积压 (每周 review)            →   �
 
 > v1 = 2026-04-27 全量 backlog 快照 (121 项, 121 ⬜).
 > **v2 = 2026-04-30 升级**: 修 v1 漂移问题, 回写 4-28~30 ship 30 项, 新增 25 项缺口, 总计 186 项. 已 ship ~35 项 (✅).
+> **v3 = 2026-05-10 凌晨**: §M 加 BL-ARCH1/2/3 架构反思 (鸿波 4:00 challenge, 客户端瘦身 + 中央门户 web 化). 5/10 凌晨一夜 ship 18 件 (BL-FIX27~38 + 35.1 + D2 + D2 Phase 2 + D3 fix5 + 架构决策). 已 ship ~80 项, 4 个中央 service PG 统一收尾.
 >
 > 后续按"维护规则" §4 持续更新 — **每天收工时回写 ✅, 严禁再漂**.
 > 重大优先级调整 (例如 P3 提到 P1 / 整段砍掉) 在 git log commit message 里写明原因.
