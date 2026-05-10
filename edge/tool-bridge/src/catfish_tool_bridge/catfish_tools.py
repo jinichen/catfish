@@ -1089,6 +1089,45 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ── BL-D2 (5/10) Skills Hub publish ─────────────────────────────
+    {
+        "name": "catfish_skill_publish",
+        "description": (
+            "★ 把员工本机的 skill 发布到中央 Skills Hub (全公司共享).\n\n"
+            "✅ 调用时机:\n"
+            "  - 员工说'把这个 skill 发布到 hub' / '分享给团队'\n"
+            "  - 你观察员工把同一 skill 改了 ≥ 3 次稳定后, propose 发布\n"
+            "  - 员工 confirm 后才调 (跟 user_profile 同纪律, 不静默自决)\n\n"
+            "input:\n"
+            "  - skill_path: 本机 skill 目录, 必须含 SKILL.md (例 ~/.hermes/skills/my-skill)\n"
+            "  - namespace: hub 上分类 (例 'department' / 'personal' / 'finance')\n"
+            "    用员工部门时, 找 catfish_today_summary 的 department 字段\n\n"
+            "成功返:\n"
+            "  {ok:true, namespace, name, version, published_at, hub_url}\n"
+            "失败返:\n"
+            "  {ok:false, error}\n\n"
+            "❌ 别在没员工 explicit 确认时调用. 别把含敏感 path / 凭据的 skill 发上去 — "
+            "publish 前要 grep 是否含 password / api_key / token 字眼.\n\n"
+            "底层: 走 gateway /v1/hub/skills/{namespace} POST multipart, 跟 mcp-registry 同套 OIDC 鉴权."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "skill_path": {
+                    "type": "string",
+                    "description": "本机 skill 目录路径, 必须含 SKILL.md",
+                },
+                "namespace": {
+                    "type": "string",
+                    "description": "hub 上 namespace (例 'department' / 'personal')",
+                },
+            },
+            "required": ["skill_path", "namespace"],
+        },
+        "emoji": "🚀",
+        "toolset": "catfish_native",
+        "available": True,
+    },
 ]
 
 
@@ -4749,4 +4788,8 @@ def dispatch_native(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_task_result":
         from . import task_manager  # noqa: PLC0415
         return task_manager.manager().result_dict(args.get("task_id") or "")
+    # BL-D2 (5/10) Skills Hub publish
+    if name == "catfish_skill_publish":
+        from . import skill_publish  # noqa: PLC0415
+        return skill_publish.skill_publish(args)
     raise ValueError(f"unknown native tool: {name}")

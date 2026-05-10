@@ -162,10 +162,28 @@ class McpRegistryConfig(BaseModel):
     timeout: int = 10  # 秒, registry 操作都很快, 10s 够
 
 
+class SkillsHubConfig(BaseModel):
+    """BL-D2 (5/10): 反向代理 catfish-skills-hub 服务. 跟 mcp_registry 同模式.
+
+    gateway 收 /v1/hub/* → 上游 :8997. 注入 X-Catfish-User-Sub/-Dept/-Role,
+    上游 hub (BL-D2 改造后) 信任 header 不再自己验 dev_token.
+
+        skills_hub:
+          upstream_url: http://127.0.0.1:8997
+          enabled: true
+          timeout: 30   # publish multipart 可能稍慢, 给 30s
+    """
+
+    upstream_url: str = "http://127.0.0.1:8997"
+    enabled: bool = True
+    timeout: int = 30  # 秒, publish multipart 文件传输可能超 10s
+
+
 class Config(BaseModel):
     version: int = 1
     models: list[ModelConfig]
     mcp_registry: McpRegistryConfig = Field(default_factory=McpRegistryConfig)
+    skills_hub: SkillsHubConfig = Field(default_factory=SkillsHubConfig)
 
     def get_model(self, name: str) -> ModelConfig | None:
         for m in self.models:

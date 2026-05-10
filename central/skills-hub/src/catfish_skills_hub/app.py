@@ -11,10 +11,20 @@
   DELETE /skills/{namespace}/{name}/{version}       删版本 (admin only)
   GET  /audit?limit=                                发布 / 删除审计
 
-# Auth
+# Auth (BL-D2 5/10 改 — Phase 2)
 
-跟 catfish-gateway 共享 dev_token (CATFISH_HUB_DEV_TOKEN env), 简化 MVP.
-Phase 2 走真 OIDC + RBAC (admin only delete, manager+ publish).
+不再自己验 dev_token. Phase 1 是 dev_token MVP, BL-FIX29 把员工 dev_token 通道
+关掉之后, 老 require_token 永远 401, hub 跟 catfish 主链路完全断.
+
+新模式: **信任 gateway 反代注入的 X-Catfish-User-Sub / -Dept / -Role header**.
+
+  Companion → gateway /v1/hub/* (OIDC 验)  → skills_hub_proxy 注入 X-Catfish-User-* → hub /skills/*
+
+跟 mcp-registry 同模式 (BL-D3 Phase 1). hub 不直接接受外部 Bearer (只信内网
+gateway). 直接 curl hub :8997 不带 X-Catfish 头会被拒.
+
+向后兼容: 老 `CATFISH_HUB_DEV_TOKEN` env 仍保留, 给开发期 curl 测试用 (设了就开
+fallback 通道, 没设则只信 X-Catfish-User-Sub header).
 
 # 启动
 
@@ -54,30 +64,56 @@ app.add_middleware(
 )
 
 
-# ── Auth (MVP: 共享 dev_token) ─────────────────────────────────
+# ── Auth (BL-D2 5/10: 信 gateway 反代 X-Catfish-User-* header) ─────
 
 
-def _expected_token() -> str:
-    return os.environ.get("CATFISH_HUB_DEV_TOKEN", "dev-token-local").strip()
+def _decode_header(value: str) -> str:
+    """gateway mcp_registry_proxy._safe_header_value 的反向 — 把 percent-encoded
+    UTF-8 中文恢复. 跟 mcp-registry app.py 同模式."""
+    if not value:
+        return ""
+    try:
+        import urllib.parse as _p
+        return _p.unquote(value)
+    except Exception:
+        return value
 
 
-def require_token(authorization: str | None = Header(default=None)) -> str:
-    """简单 bearer 验. 返 token (MVP 没真 user, 用 token preview 当 published_by)."""
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="missing/invalid Authorization Bearer")
-    token = authorization[7:].strip()
-    if token != _expected_token():
-        raise HTTPException(status_code=401, detail="invalid token")
-    # 给个可读身份 (token 前 8 字符 hash 一下当 user id)
-    return f"hub-user-{token[:8]}"
+def require_user(
+    x_catfish_user_sub: str | None = Header(default=None, alias="X-Catfish-User-Sub"),
+    x_catfish_user_dept: str | None = Header(default=None, alias="X-Catfish-User-Dept"),
+    x_catfish_user_role: str | None = Header(default=None, alias="X-Catfish-User-Role"),
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """信 gateway 注入身份, 或 dev_token fallback (向后兼容).
+
+    返 {sub, dept, role}. published_by 用 sub.
+    """
+    if x_catfish_user_sub:
+        return {
+            "sub": _decode_header(x_catfish_user_sub),
+            "dept": _decode_header(x_catfish_user_dept or ""),
+            "role": _decode_header(x_catfish_user_role or "employee"),
+        }
+    # 向后兼容: 直 curl 测试时还能用 CATFISH_HUB_DEV_TOKEN 走老路
+    expected = os.environ.get("CATFISH_HUB_DEV_TOKEN", "").strip()
+    if expected and authorization and authorization.lower().startswith("bearer "):
+        token = authorization[7:].strip()
+        if token == expected:
+            return {"sub": f"hub-dev-{token[:8]}", "dept": "", "role": "admin"}
+    raise HTTPException(
+        status_code=401,
+        detail="未通过 gateway 反代 (缺 X-Catfish-User-Sub) 且 CATFISH_HUB_DEV_TOKEN 未设/不匹配",
+    )
 
 
-def require_admin_token(authorization: str | None = Header(default=None)) -> str:
-    """MVP: admin token = bearer + env CATFISH_HUB_ADMIN_TOKEN. 不设就跟 dev_token 同."""
-    user = require_token(authorization)
-    admin_token = os.environ.get("CATFISH_HUB_ADMIN_TOKEN", "").strip()
-    if admin_token and authorization[7:].strip() != admin_token:
-        raise HTTPException(status_code=403, detail="admin only")
+def require_admin(user: dict = Depends(require_user)) -> dict:
+    """role=admin 才能 delete. manager / employee 拒."""
+    if user.get("role") != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail=f"admin only (你是 {user.get('role')})",
+        )
     return user
 
 
@@ -149,7 +185,7 @@ async def download_skill_file(
 async def publish_skill_endpoint(
     namespace: str,
     files: list[UploadFile],
-    user: str = Depends(require_token),
+    user: dict = Depends(require_user),
 ) -> dict:
     """发布 skill — multipart files. 必须含 SKILL.md.
 
@@ -175,7 +211,7 @@ async def publish_skill_endpoint(
     if "SKILL.md" not in file_map:
         raise HTTPException(status_code=400, detail="必须含 SKILL.md 文件")
 
-    result = storage.publish_skill(namespace, file_map, published_by=user)
+    result = storage.publish_skill(namespace, file_map, published_by=user["sub"])
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error", "publish 失败"))
     return result
@@ -187,11 +223,11 @@ async def delete_skill_version_endpoint(
     name: str,
     version: str,
     reason: str = "",
-    user: str = Depends(require_admin_token),
+    user: dict = Depends(require_admin),
 ) -> dict:
     """admin 删 skill 版本 (rare, 一般 deprecate 不删)."""
     result = storage.delete_skill_version(
-        namespace, name, version, deleted_by=user, reason=reason,
+        namespace, name, version, deleted_by=user["sub"], reason=reason,
     )
     if not result.get("ok"):
         raise HTTPException(status_code=404, detail=result.get("error", "删除失败"))
@@ -201,7 +237,7 @@ async def delete_skill_version_endpoint(
 @app.get("/audit")
 async def audit_endpoint(
     limit: int = 100,
-    user: str = Depends(require_admin_token),  # noqa: ARG001
+    user: dict = Depends(require_admin),  # noqa: ARG001
 ) -> dict:
     """admin 看发布 / 删除审计 (倒序最近 N 条)."""
     return {"events": storage.read_audit(limit=limit), "limit": limit}

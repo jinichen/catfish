@@ -39,6 +39,7 @@ import StyleFingerprintCard from "./StyleFingerprintCard";
 import TasksCard from "./TasksCard";
 import CuratorCard from "./CuratorCard";
 import McpRegistryCard from "./McpRegistryCard";
+import SkillsHubCard from "./SkillsHubCard";
 import CollapsibleSection from "./CollapsibleSection";
 import { useMe } from "../../hooks/useMe";
 
@@ -114,6 +115,11 @@ export default function DashboardTab() {
             服务 (gateway 反向代理 /v1/mcp/registry → mcp-registry:8996, 跟
             skills-hub 8997 错开). */}
         <McpRegistryCard />
+
+        {/* BL-D2 (5/10): Skills Hub — 中央 skill 市场, 员工自愿 publish 共享.
+            数据走 gateway /v1/hub/* → skills-hub:8997. 跟 mcp-registry 同套
+            OIDC 反代鉴权 (BL-FIX29 之后不再用 dev_token). */}
+        <SkillsHubCard />
       </CollapsibleSection>
 
       {/* 第五组: 审计 / 学习 — 历史 + skill audit + skill revision + tool audit (默认收) */}

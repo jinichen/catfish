@@ -195,6 +195,11 @@ async def lifespan(app: FastAPI):
         timeout=config.mcp_registry.timeout,
     )
 
+    # BL-D2 (5/10): skills-hub 反代 httpx client, 同模式
+    app.state.skills_hub_client = httpx.AsyncClient(
+        timeout=config.skills_hub.timeout,
+    )
+
     # 五一 sprint Day 5 (B 方案): 启动时自动 register 到 catfish-identity registry.
     # 这样别的 catfish 实例 (Plan D Federation) 能通过 lookup 找到本机.
     # 失败不阻塞启动 (a2a 不可用, 其他功能正常).
@@ -217,6 +222,12 @@ async def lifespan(app: FastAPI):
         await app.state.mcp_registry_client.aclose()
     except Exception as e:
         logger.debug("mcp_registry_client aclose: %s", e)
+
+    # BL-D2 (5/10): 关 skills-hub httpx client
+    try:
+        await app.state.skills_hub_client.aclose()
+    except Exception as e:
+        logger.debug("skills_hub_client aclose: %s", e)
 
     # BL-F13 (5/4): 清 LiteLLM 内部 aiohttp / httpx client, 减少 "Unclosed client session"
     # warning. LiteLLM 1.50+ 用 httpx 主路径但仍持有少量 aiohttp module-level client,
@@ -288,6 +299,14 @@ try:
     logger.info("mcp_registry_proxy: /v1/mcp/* 反代已挂载")
 except Exception as e:
     logger.warning("mcp_registry_proxy 挂载失败 (BL-D3 反代不可用): %s", e)
+
+# BL-D2 (5/10): skills-hub 反代, /v1/hub/* → :8997. 注入 X-Catfish-User-* header.
+try:
+    from .skills_hub_proxy import router as skills_hub_router  # noqa: PLC0415
+    app.include_router(skills_hub_router)
+    logger.info("skills_hub_proxy: /v1/hub/* 反代已挂载")
+except Exception as e:
+    logger.warning("skills_hub_proxy 挂载失败 (BL-D2 反代不可用): %s", e)
 
 
 # Plan D · A 端内部 endpoint — tool-bridge 通过 HTTP 调这个触发 A2A.
