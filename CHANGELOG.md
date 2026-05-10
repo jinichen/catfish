@@ -3501,3 +3501,367 @@ BL-FIX27~36 (5/10): OAuth 全链路 + Keychain unsigned silent fail + 画像 0 �
 5. "数据库连接没有写到 .env?" → BL-D3 fix5 隐性 bug (mcp-registry 5/9 实际跑 sqlite 一直没人发现)
 6. "中央很复杂, 都塞客户端不合适?" → "方案 B 都中央化是不是跟初衷背离?" → 架构反思 BL-ARCH1/2 定调
 7. "Skills Hub 还差什么没做?" → 12 个剩余缺口分类 (5/14 必做 5 个 / 5/26+ 7 个)
+
+---
+
+## 2026-05-10（周日下午/夜晚）— BL-ARCH1 全程 ship + BL-ARCH1 P1 完整用户管理 + BL-ARCH2 Companion 瘦身
+
+> 凌晨架构反思定调后, 鸿波下午: "现在是下午三点, 为什么不能做, 你不要管 15 号的演示, 现在开始去完成调整". → 一天合计 ~4.5K 行 ship, 比原计划 (3 周 ARCH1 + 2 天 ARCH2) **提前 21 天**.
+
+### BL-ARCH1 P0 catfish-web 中央门户 (新项目, ~2.5K 行 TS)
+
+**项目骨架**:
+- `central/web/` 新建: `package.json` (vite + react 18 + ts + zustand + react-router-dom + oidc-client-ts) / `vite.config.ts` (5173 端口, 跟 identity-server 8998 / gateway 8999 错开) / `tsconfig.json` / `index.html`
+- `central/web/Dockerfile` + `nginx.conf.example` + `README.md` (deploy: nginx 反代 / OIDC redirect_uri 白名单 / build VITE_ env)
+
+**lib client 层** (跟 Companion `src/lib/` 同模板):
+- `lib/env.ts`: `gatewayUrl` / `webUrl` / OIDC issuer 配置, build-time + runtime 双优先级
+- `lib/auth.ts`: oidc-client-ts UserManager, PKCE flow (popup + redirect 都支持), token refresh, logout, `getAccessToken()` 给 fetch 用
+- `lib/api.ts`: `apiFetch()` 统一加 `Authorization: Bearer <id_token>` (跟 gateway 一致, BL-FIX31 同款)
+- `lib/me.ts`: `fetchMe()` / `fetchMyQuota()` / `fetchGlobalQuota()` / `fetchGlobalAudit()` + 类型定义
+- `lib/hub.ts`: skills-hub 全广场 (list/get/install/uninstall/rate)
+- `lib/mcp.ts`: mcp-registry 市场 (list/subscribe/unsubscribe/credentials)
+
+**components**:
+- `Card.tsx` + `Row.tsx`: 跟 Companion CSS variables 对齐 (var(--space-*)/var(--text)/var(--accent))
+- `NavBar.tsx`: top nav, 按 role 显示链接 (employee 看我的/Skills/MCP, manager+ 加部门/审计, admin+ 加 Admin, sysadmin 加 🔐 系统), 顶右显示当前用户 + role badge + 退登
+- `RoleGate.tsx`: `<RoleGate require="admin">{children}</RoleGate>`, **role 继承** (sysadmin 通过 admin/manager 守卫, admin 通过 manager 守卫)
+
+**store**:
+- `store/auth.ts`: zustand 持久化当前 me 信息 (login/logout/refresh)
+
+**routes** (跟 NavBar 对齐):
+- `HomePage.tsx`: 登录/未登录态分流, 已登录 redirect /me
+- `MePage.tsx`: 我的 quota + 装的 skill + mcp + 历史 audit (轻量, 跟 Companion 信息平行 web 端)
+- `SkillsHubPage.tsx`: 全公司 skill 广场 (filter / search / detail / install / publish entry)
+- `McpMarketPage.tsx`: MCP 连接器市场 (Jira/GitLab/FS/Time + IT 配 OAuth credentials)
+- `ManagerPage.tsx`: 本部门 quota + audit + 团队 (manager+, P1 完善)
+- `AdminPage.tsx`: 全公司聚合 dashboard + NavTile (用户/配额/billing/审计/系统) + 嵌套 `users/*` `system/*`
+- `AuditPage.tsx`: 跨员工 / 跨部门 / 时间段大查询 (manager+)
+
+**identity-server 配套修**:
+- `BL-D6 fix1`: `app.py` + `CORSMiddleware` (浏览器 PKCE flow 必须), dev 默认 localhost:5173 + 任意 localhost regex, 生产配 `CATFISH_IDENTITY_CORS_ORIGINS` env
+- `BL-D6 fix2`: `_load_dotenv` 在 import users/db 之前 (跟 mcp-registry / skills-hub 同款隐性 bug, 5/9 .env 建了但 app.py 没读). `python-dotenv` 加 pyproject 依赖.
+
+### BL-ARCH1 P1 完整用户管理 + 超级管理员 sysadmin (~1.7K 行)
+
+> 鸿波: "你现在进入第二段, 要有完整的用户管理, 要设计一个超级管理员, 作为整个系统的管理员".
+
+**数据 schema** (`central/identity-server/alembic/versions/20260510_002_users_admin_fields.py`):
+- `users` 加 8 字段: `locked / locked_at / locked_by / deleted_at / created_by / last_login_at / password_changed_at / must_change_password`
+- 新表 `users_audit`: `id / ts_ms / action / target_email / by_user / meta JSONB / ip` (操作链路全记)
+- role 字段 enum 加 `sysadmin`
+
+**identity-server 实现**:
+- `users.py` `IdentityUser` dataclass 加 8 admin 字段 + role allowed sysadmin
+- 加 6 个 admin 方法 (用 async PG): `list_users / create_user / update_user / lock_user / delete_user (软删, deleted_at IS NULL) / reset_password / list_audit`
+- `verify_password` 检查 `locked / deleted_at` (锁号 / 删号都拒登)
+- bcrypt 12 rounds
+- `admin_router.py` 9 endpoints + Pydantic v2 schemas (CreateUserReq / UpdateUserReq / LockUserReq / ResetPasswordReq / UserBrief), RBAC 装饰器 `require_admin_or_above` + `require_sysadmin`
+- **防自锁**: 不能删 / 锁最后一个 sysadmin, 不能删 / 锁自己 (全在 admin_router 校验, sysadmin 也不例外)
+- `app.py` include admin_router
+
+**gateway 配套**:
+- `central/llm-gateway/src/catfish_gateway/admin_proxy.py` (~156 行): 反代 `/api/admin/*` → identity:8998, 跟 hub_proxy / mcp_proxy 同模板, 注入 `X-Catfish-User-Sub/-Dept/-Role` 头
+
+**catfish-web 用户管理 UI**:
+- `lib/admin.ts`: adminApi client 10 方法 + Role / UserBrief / MeAsAdmin types
+- `routes/admin/UsersPage.tsx` (~725 行): List + Create + Detail + Edit views, role/department/status 三维 filter, 支持"含已删", 操作按钮 (锁/重置密码/编辑/删) + 状态徽章
+- `routes/admin/SystemPage.tsx` (~261 行, sysadmin only): 服务状态自检 (gateway/identity/skills-hub/mcp-registry) + 操作审计 jsonl tail + 危险操作区 (清缓存/重启服务 stub)
+- `AdminPage.tsx`: 嵌 `users/*` `system/*` 路由
+- `NavBar.tsx`: 加 🔐 系统 tab (sysadmin only)
+- `RoleGate.tsx`: sysadmin > admin > manager > employee 继承
+
+**users.yaml 配置**:
+- `chenhongbo@ffcs.cn` `tier: admin → sysadmin`
+- 配套 SQL: `UPDATE users SET tier='sysadmin', role='sysadmin' WHERE email='chenhongbo@ffcs.cn'` (PG 5/9 seed 已固化为 admin 必须显式改)
+
+**验证通过**: 浏览器 chenhongbo PKCE 登录 → NavBar 出 🔐 系统 + sysadmin badge → /admin/users CRUD 全行 → /admin/system 看服务状态 + audit log.
+
+### BL-ARCH2 Companion 瘦身 (~150 行净改动 + 7 张卡 import 拿掉)
+
+> 鸿波架构反思第二轮: "中央的功能 WEB 化, 助手的功能还是客户端化". → BL-ARCH1 中央门户 ship 后, Companion 同步砍管理类卡.
+
+**砍掉 7 张** (从 Dashboard import 移除, .tsx 文件保留给回滚):
+- `McpRegistryCard` → web `/mcp` 浏览
+- `SkillsHubCard` → web `/skills` 浏览
+- `SkillAuditCard` → web `/admin` 跨员工 skill 评分聚合
+- `AuditCard` → web `/audit` 历史大查询
+- `DepartmentQuotaCard` → web `/manager` 部门 quota
+- `DepartmentAuditCard` → web `/manager` 部门 audit
+- `AdminGlobalCard` → web `/admin` 全公司聚合
+
+**留下 14 张** ("我的"视角, 全员看, 不再按 role 分支):
+- 今日 (2): Proactive + Tasks
+- 我自己 (2): Identity + AgentPrefs
+- 鲶鱼对你的认识 (5): Relation + MemoryHistory + UserProfile + StyleFingerprint + Feedback
+- 服务/配额 (5): Services + Quota (单数字) + Catalog + SkillsMcp (我装的) + Curator
+- 学习/改进 (2): Learning + SkillRevision (我提的)
+
+**新增 WebPortalLink banner** (`tabs/Dashboard/WebPortalLink.tsx`):
+- 顶部一行轻 banner, 按 role 过滤锚点 (我的总览 / Skills Hub / MCP 市场 / 部门 / 审计 / Admin / 🔐 系统)
+- target=_blank rel=noopener, 跟 catfish-web NavBar role 继承一致
+- `config.webUrl` 新加 (`lib/env.ts`): VITE_CATFISH_WEB_URL > dev localhost:5173 > prod gateway origin (nginx 同域), Rust 侧后续可加 yaml `endpoints.web_url` 透传
+
+**类型对齐**:
+- `lib/me.ts` `Role` 加 `sysadmin` ("sysadmin" | "admin" | "manager" | "employee")
+- `lib/env.ts` runtime endpoints 增 `web_url?: string` 字段 (Rust 侧可选 ship)
+
+**TS 全 build 通过**: `tsc -b` 无错.
+
+### 5/10 全天战绩
+
+- **ARCH1 P0+P1 + ARCH2 一天 ship** (~4.5K 行, 提前 21 天)
+- **catfish-web 项目从 0 到完整可用**: 8 路由 + RBAC + sysadmin 用户管理 + 操作审计
+- **identity-server 升级**: users 表 8 字段 + users_audit + admin_router 9 endpoints + sysadmin role
+- **gateway 加 /api/admin/* 反代**: 跟 /v1/hub/* /v1/mcp/* 同模板
+- **Companion 瘦身**: 砍 7 张管理类卡, 加 1 张 WebPortalLink, 14 张"我的"卡留. 视图分层逻辑去掉 (manager/admin 也走 web 看管理).
+- **职责拆分定调落地**: 客户端 = 我的体验, web = 组织/管理体验. 跟业界标杆对齐.
+
+### 鸿波诊断功劳 (5/10 下午/夜晚)
+
+1. "现在是下午三点, 为什么不能做, 你不要管 15 号的演示" → 触发 ARCH1 当天 ship (本来计划 5/15 起 3 周)
+2. "你按照 BL-ARCH1, BL-ARCH2 的顺序去完成中央和本地的改造, 现在开始" → 双线并发推进
+3. "要有完整的用户管理, 要设计一个超级管理员" → BL-ARCH1 P1 sysadmin 角色 + 操作审计 + 防自锁全套设计
+4. "catfish_identity 数据库连接参数没有写入 .env 吗?" → 第三次发现同款 _load_dotenv 隐性 bug (gateway 早做对了, mcp-registry / skills-hub / identity 三个都漏)
+5. "中央门户的链接全部无效" → BL-ARCH2 fix1 真因: Tauri webview 默认吞 `<a target="_blank">`, 必须程序化 shell.open. 第一次跨 Tauri 暴露 (Companion 之前没有真正"开外链"场景, 只有 markdown 链接代码同款 bug 一直没人点)
+
+### BL-ARCH2 fix1 中央门户链接打不开 (5/10 夜)
+
+> 鸿波: "中央门户的链接全部无效". WebPortalLink 用 `<a target="_blank">` 在 Tauri webview 里被吞 (Tauri v2 默认不让内嵌 webview 跳外链, 也不在系统浏览器开). 必须程序化调 `@tauri-apps/plugin-shell` 的 `open()` 函数才能真在系统浏览器打开.
+
+文件:
+- `tabs/Dashboard/WebPortalLink.tsx`: 加 `openInSystemBrowser(url)` helper, 动态 import `@tauri-apps/plugin-shell` `open()` (动态避免非 Tauri 环境也加载), 失败兜底 `window.open(url, "_blank")`. 链接 `<a>` 加 `onClick` `e.preventDefault()` + 调 helper. href 仍保留 (鼠标悬停状态栏 / 中键 / 复制链接 都能用).
+- `lib/markdown.tsx`: 同款修 — chat 里 LLM 输出的 markdown 链接也走 shell.open (这个 bug 一直存在, 只是没人在 Companion 里点过 markdown 链接). 内联 onClick 简化版.
+- `src-tauri/capabilities/default.json`: 显式加 `shell:allow-open` (`shell:default` 在 plugin-shell 2.x 一般已含, 但显式更稳, 防版本升级里默认 scope 收紧).
+
+**为啥 WebPortalLink 是第一次暴露**: Companion 之前只在 IdentityCard `Open issuer` 那种少数地方会触发, 大多走 invoke 调 Rust. WebPortalLink 一下加 7 个外链 + 用户高频点 → 第一次发现这个跨 Tauri 的隐性 bug. 顺手把 markdown 链接修了 (用户一直没反馈但理论上同款问题).
+
+验证: 鸿波在 Companion Dashboard 顶部点 "我的总览 / Skills Hub / Admin" 等按钮, 应该都能在系统浏览器打开 catfish-web 对应路由. 如还失败 → check log `[WebPortalLink] shell.open 失败` (会 fallback window.open).
+
+### BL-ARCH2 fix2 中央门户硬编码 + 重登 + 白屏 (5/10 夜, 鸿波三连诊断)
+
+> 鸿波: "你是不是用了硬编码? 还有为什么还要再登录一次, 每次进入页面都要再刷新才能看到内容, 不要就是白屏". 一句话三个真问题.
+
+**fix2-A: 硬编码 webUrl** — `lib/env.ts` 默认 `localhost:5173` 写死, 没让 yaml 配置:
+- `src-tauri/src/services/endpoints.rs`: `Endpoints` struct 加 `web_url: String` 字段 + `web_base()` 方法; `EndpointsYaml` 加 `web_url / web_host / web_port` 三字段; `build()` 加推导逻辑 — yaml.web_url > yaml.host+port > env CATFISH_WEB_URL > 自动 (gateway 本机 → web 也本机 :5173 vite, gateway 远程 → web 跟 gateway 同 host nginx 同域).
+- `src-tauri/src/commands/endpoints.rs`: `RuntimeEndpoints` struct 加 `web_url: String`, command 返 `ep.web_base()`.
+- 前端 `lib/env.ts` `bootstrapEndpoints` 已经准备接 `web_url` 字段 (5/10 早做的), 现在 Rust 端真返回. 客户改 `~/.catfish/companion.yaml` `endpoints.web_url: https://catfish.client.com` 重启 Companion 就生效.
+
+**fix2-B: 每次都要重登 (sessionStorage 关 tab 丢)** — `central/web/src/lib/auth.ts` 改 localStorage:
+- `userStore: new WebStorageStateStore({ store: window.localStorage })`: token + userinfo 持久化, 跨 tab + 重启浏览器仍登录, 直到 token 过期 (跟 IdP 配置一致, 默认 1 小时).
+- `stateStore: new WebStorageStateStore({ store: window.localStorage })`: PKCE state (signinRedirect 临时存 verifier) 也走 localStorage, 避免新 tab 跳回 callback 时 sessionStorage 找不到 state 报错.
+- XSS 风险: catfish-web 是内部门户 + CSP 严格 + 没 user-generated HTML, 可控.
+- 注: Companion ↔ web 不共享 token (Tauri vs 浏览器隔离). Phase 1 接受第一次需登, 后续 IdP cookie SSO. (Phase 2 加 token transfer)
+
+**fix2-C: 白屏需刷新** — `central/web/src/App.tsx` AuthCallback navigate 前主动 setMe:
+- 真因: 5/10 v1 AuthCallback 只 handleCallback (signin 拿 token) 然后 navigate, 不 fetchMe. App.tsx 重渲染但 useEffect 依赖 `[setMe, setError]` 引用稳定 → 不会 re-run; `me` 还是 null → 进 "正在跳转登录页…" 分支看着像白屏. F5 刷新 → 主 useEffect 重跑 → fetchMe → me 有了 → 渲染主路由.
+- 修法 1: AuthCallback 在 `navigate(returnTo)` 之前主动 `await fetchMe()` + `setMe(meInfo)`. 这样 navigate 后 App 渲染时 store 里已经有 me, 直接进主路由.
+- 修法 2: App 主 useEffect 依赖加 `me` (`[me, setMe, setError]`), me 有了就 return 不重跑, me 没就兜底跑一次 (callback 失败 / token 过期等场景).
+- 修法 3: useAuthStore 用选择器订阅 (`useAuthStore((s) => s.me)` 等), me 变就重渲, 不再卡死.
+
+**附带 schema 修**:
+- `central/web/src/lib/me.ts` `Role` 加 `sysadmin` (跟 lib/admin.ts 对齐, 5/10 P1 时只改了 admin.ts 漏了 me.ts → NavBar / RoleGate / UsersPage 各处 sysadmin 比较 TS 报错).
+- `central/web/src/vite-env.d.ts` 新建 — vite import.meta.env 类型补全 + VITE_OIDC_* 列出来. 之前 tsc 用 `Property 'env' does not exist on type 'ImportMeta'` 报错.
+- `central/web/src/routes/AuditPage.tsx` + `routes/admin/SystemPage.tsx`: 删 `Row` unused import.
+
+验证: `tsc -p tsconfig.json --noEmit` web + companion 双端 build clean. 鸿波试: (1) 改 `~/.catfish/companion.yaml` 加 `endpoints.web_url: http://localhost:5173` 重启 Companion, log 出 `[BL-ARCH2] webUrl: ... → http://localhost:5173 (来自 ~/.catfish/companion.yaml)`; (2) 浏览器关 tab 重开点 Companion 链接, 不应再要重登; (3) 点链接打开新页面, 不应再白屏 — 直接看到内容.
+
+### 鸿波诊断功劳 (5/10 ARCH2 fix1+fix2)
+
+8. "中央门户的链接全部无效" → BL-ARCH2 fix1 真因: Tauri webview 默认吞 `<a target="_blank">`, 必须 shell.open
+9. "你是不是用了硬编码 / 为什么还要再登录一次 / 每次进入页面都要刷新才能看到内容" → 一句话三连击, 全命中: webUrl 硬编码没 yaml / sessionStorage 关 tab 丢 / AuthCallback 不主动 setMe 导致白屏
+
+### BL-ARCH2 fix3 webUrl prod fallback 走错 gateway → 全部 404 (5/10 夜)
+
+> 鸿波截图: 浏览器地址栏 `127.0.0.1`, 内容 `{"detail":"Not Found"}` (FastAPI 风格). "全部失效".
+
+**真因诊断**: BL-ARCH2 v1 `lib/env.ts` 默认 fallback:
+```ts
+if (env.DEV) return DEFAULT_WEB_URL_DEV;       // localhost:5173 (vite dev)
+return readGatewayUrlBuildTime();              // ← 错: gateway origin 8999 (prod)
+```
+Companion 是 build 出来的二进制 (`env.DEV = false`), 走第二条 → webUrl=`http://127.0.0.1:8999`. WebPortalLink 链接拼成 `http://127.0.0.1:8999/admin/users` 等, **打到 gateway 上但 gateway 没注册这些 path** → FastAPI 返 `{"detail":"Not Found"}`.
+
+**为啥 gateway origin 不能当 fallback**: gateway 跟 web 是两个独立 FastAPI/vite 服务, 同 origin 只有 nginx 反代了 web 路径才成立 (e.g. `/v1/* → gateway, /* → web`). 通用客户部署是 web/gateway 各占自己子域 (web `catfish.client.com`, gateway 内部 `gateway.catfish.client.com`), 必须 yaml 显式配 web_url. 自动 fallback 到 gateway → 链接全 404.
+
+**修法** (前端 + Rust 双端去掉 gateway fallback):
+- `edge/companion-app/src/lib/env.ts`: 删 `if (env.DEV) ... return readGatewayUrlBuildTime()` 分支, dev/prod 默认都用 `DEFAULT_WEB_URL_DEV` (localhost:5173). prod 客户**必须**改 yaml.endpoints.web_url override (bootstrapEndpoints 跑后会替换).
+- `edge/companion-app/src-tauri/src/services/endpoints.rs`: 删 "gateway 远程 → web 跟 gateway 同 host" 推导, 默认始终 `127.0.0.1:5173` (跟前端对齐). 客户必须 yaml 显式配 / env CATFISH_WEB_URL override.
+
+**验证步骤**:
+1. 改 `~/.catfish/companion.yaml` 加:
+   ```yaml
+   endpoints:
+     web_url: http://localhost:5173
+   ```
+2. 重启 Companion (前端 + Rust 都得重启, Rust 改了 endpoints.rs 要 cargo build)
+3. log 出 `[BL-ARCH2] webUrl: ... → http://localhost:5173 (来自 ~/.catfish/companion.yaml)`
+4. 点 Dashboard 顶部 banner 任一链接 → 打开浏览器到 `http://localhost:5173/admin/users` 等, 不再 404.
+
+**鸿波诊断功劳 #10**: "全部失效" + 截图 → 一图锁定真因. 没截图我可能继续 debug shell.open / capabilities 浪费时间, 截图直接看到 FastAPI 404 + 127.0.0.1 → 立刻知道 webUrl 走错 host 到 gateway.
+
+### BL-ARCH2 fix4 catfish-web 没起来的友好提示 + vite host (5/10 夜)
+
+> 鸿波: "还是一样的". 第二张截图: Safari "无法连接服务器 127.0.0.1:5173/me". webUrl 修对了 (走 5173) 但 catfish-web vite dev server 根本没起 → 浏览器无声失败.
+
+**修法 1 — vite.config.ts host + strictPort**:
+- `central/web/vite.config.ts`: 加 `host: "0.0.0.0"` (听 127.0.0.1 + localhost + 局域网, Companion 默认开 127.0.0.1) + `strictPort: true` (5173 被占就报错而不是偷偷换 5174 让 Companion 永远跳错).
+
+**修法 2 — WebPortalLink 心跳检测 + offline 提示**:
+- `tabs/Dashboard/WebPortalLink.tsx` 加 `pingWeb(webBase)` (fetch GET / mode=no-cors timeout=2s, 不抛错就算在线), 启动跑一次 + 15s 一次轮询.
+- 状态 `checking / online / offline`, banner 显示彩色 dot + 文字 (绿/红/灰).
+- offline 时: banner 背景变淡红, 链接灰掉 + cursor=not-allowed + onClick 直接 return (不让点开浏览器看"无法连接"). 文字提示: `未运行 (http://localhost:5173) — 启动: cd central/web && npm run dev`.
+- online 时: 维持原样.
+
+**为啥心跳, 不是只 onClick 检测**: 鸿波看到 banner 时就该知道在线/离线 (跟 Companion 各 service status 一样的 UX), 而不是点完才发现. 心跳 15s 比 ServicesCard 的 3s 慢很多 — 中央 web 不像 gateway/identity 那样高频要看, 节省网络.
+
+验证步骤 (鸿波 5/10 夜):
+1. 不起 catfish-web → Companion Dashboard 顶部 banner 变红色, 显示"未运行 + 启动命令"
+2. `cd central/web && npm run dev` 启动 vite
+3. ~15s 内 banner 变绿色 "在线", 链接变蓝色可点
+4. 点 "我的总览" → Safari 打开 `http://localhost:5173/me`, web 走 PKCE OIDC 登录
+
+### BL-ARCH1 P2 sysadmin 在 gateway / RBAC 全链路继承 admin (5/10 夜)
+
+> 鸿波: "是不是第三段没完成的问题?" + 截图 /audit 报"拉取 audit 失败 (没权限或后端报错)". 真因: BL-ARCH1 P1 时 identity-server 加了 sysadmin role, **但 gateway 的 RBAC 检查没同步** — `User.is_admin()` 写死 `role == "admin"`, sysadmin 不通过 → /api/audit/global 403.
+
+**改 5 处** (sysadmin 继承 admin 权限):
+- `auth/base.py`:
+  - 加 `is_sysadmin()` (严格 sysadmin)
+  - `is_admin()` 从 `role == "admin"` 改 `role in ("admin", "sysadmin")` — sysadmin 隐式拥有 admin 全权
+  - `is_manager()` 沿用历史"恰好 manager"语义不变 (避免 can_manage_department 误判)
+  - `can_manage_department()` 注释更新, admin/sysadmin 全权 (走 is_admin 已含)
+- `rbac.py`:
+  - `ROLE_PERMISSIONS` 加 `"sysadmin": set(Permission)` (跟 admin 同, identity 那边它还能改 admin 用户)
+  - `has_permission_for_department` admin 分支扩 `("admin", "sysadmin")`
+  - `require_self_or_department_admin` 同款扩
+- `auth/dev_token.py` `_user_from_dev`:
+  - `tier="admin" if d.role == "admin" else "employee"` → `tier="admin" if d.role in ("admin", "sysadmin") else "employee"` (legacy tier 字段也对齐)
+- `central/skills-hub/src/catfish_skills_hub/app.py` `require_admin`:
+  - `user.get("role") != "admin"` → `user.get("role") not in ("admin", "sysadmin")` (skill delete 端点 sysadmin 也能用)
+
+**验证 (sandbox python 跑了 5 个断言)**:
+```
+sysadmin: is_sysadmin=T, is_admin=T (继承), is_manager=F, can_manage('eng')=T
+admin: is_admin=T, is_sysadmin=F, is_manager=F, can_manage('eng')=T
+manager: is_admin=F, is_manager=T, can_manage('eng')=T (在列表内), can_manage('hr')=F
+employee: is_admin=F, is_manager=F, can_manage('eng')=F
+rbac.has_permission('sysadmin', AUDIT_VIEW_ALL) = True
+```
+
+**没改 OIDC provider** (`auth/oidc.py`): role 直接从 catfish-identity claims 透传 (`payload.get("role", "employee")`), identity-server 那边已经把 sysadmin 写进 OIDC claims (5/10 P1 改 to_oidc_claims 时 sysadmin 已支持). 这边不需要改.
+
+**没改 mcp-registry**: 没有 admin-only 端点, 全员能看 (跟 Skills Hub 不同). 后续如果加管理操作再补.
+
+**鸿波诊断功劳 #11**: "是不是第三段没完成的问题?" — 一句话直接锁定到 P1 ship 漏的 RBAC 同步, 没让我去乱猜 audit 是不是 quota_events 表没数据 / gateway 路由没注册 之类无关方向. 这种"我在 P 段提了 X 字段, 是不是后面没跟着改" 是新功能 ship 后最容易漏的尾巴, 鸿波直觉非常准.
+
+### BL-ARCH1 P3 LOGO 跨端统一 + sysadmin tile (5/10 夜)
+
+> 鸿波: "LOGO 要统一, 现在这个页面 LOGO 不对". catfish-web NavBar 用 🐟 emoji, Companion 用 catfish-logo.svg / catfish-avatar.svg. brand 不一致.
+
+**修法**:
+- `central/web/public/catfish-{logo,avatar,mascot}.svg`: 从 `edge/companion-app/public/` 复制三个 SVG (1.5KB / 1.9KB / 4.5KB). 单 source = edge/companion-app 那份 (历史最早 5/3 BL-D11 ship 的吉祥物), 改设计两边同步, P4 可抽 brand 包统一.
+- `central/web/index.html`: favicon 从写错的 `/catfish.svg` (404) → `/catfish-logo.svg`. 浏览器 tab 也跟 Companion / Dock 一致.
+- `central/web/src/components/NavBar.tsx`: 顶左 brand 从 `🐟 鲶鱼·中央门户` → `<img src="/catfish-logo.svg" 24x24> 鲶鱼 · 中央门户`. flex + gap 8 排齐.
+- `central/web/src/routes/HomePage.tsx`: 欢迎 Card 标题从 `欢迎, chenhongbo 👋` → 加同款 logo 20x20. tile icons (👤 🛠️ 🔌 等) 是功能图标不动.
+- `central/web/src/components/Card.tsx`: `title: string` → `title: ReactNode` (HomePage 把 logo 塞标题里要 JSX, 不只是字符串).
+- HomePage 同步加 sysadmin tile (路由 `/admin/system`, 跟 NavBar / RoleGate 一致). 之前只 admin 能看 Admin tile, sysadmin 反而看不到 "系统管理" 入口.
+- HomePage 的 `isManagerOrAdmin` / `isAdmin` 也加 sysadmin (BL-ARCH1 P2 同款 role 继承漏修, 凡是写死 role 比较的地方都要补).
+
+验证: `tsc -p tsconfig.json --noEmit` clean. 浏览器刷 catfish-web → 顶左小蓝色鱼 logo, tab 也是, 跟 Companion app 一致.
+
+**鸿波诊断功劳 #12**: "LOGO 要统一" — 一句话, 两端 brand 不一致这种细节我自己忙着搬功能不会主动补, 鸿波从用户视角立刻看出来.
+
+### BL-VOICE2 Piper local TTS — 让鲶鱼说话 (5/10 夜)
+
+> 鸿波看到 hermes-agent.nousresearch.com TTS 文档 piper 段 (虽然当前页面没列, GitHub issue 8508 + search 确认 hermes 实际支持 10 个 TTS provider 含 Piper): "这么好玩的东西, 没有理由不现在开始, 你说呢".
+
+**为啥选 Piper** (跟央企客户场景天然契合):
+- 100% 本地 CPU 跑, 数据不出员工电脑 (跟"敏感对话不上云"对齐)
+- 无 API key + 免费 (采购友好)
+- 中文 zh_CN 多 voice (huayan 女声 / bizhao 男声) × 4 quality (x_low/low/medium/high)
+- 模型 ~30MB (medium), ~80MB (high), 比 whisper-large-v3 (3GB) 小一个量级
+- 跟 whisper.cpp STT 同模板: subprocess + ~/.catfish/<...>-voices/ 缓存 → 双向都本地, 数据归属感闭环
+
+**P0 ship 文件** (mac only, Win 后续):
+
+| 文件 | 行数 | 作用 |
+|---|---|---|
+| `edge/companion-app/src-tauri/src/commands/tts.rs` | ~310 | piper subprocess + 模型探测 + tts_synthesize/tts_status 两个 Tauri command |
+| `edge/companion-app/src/lib/tts.ts` | ~95 | 前端 invoke + Audio 播放, 全局只一个"当前播放"避免多条同时响 |
+| `edge/companion-app/src/components/TTSButton.tsx` | ~115 | 🔊 喇叭按钮组件 (idle/loading/playing/error 四态), 点击 → 合成 → 播放, 再点暂停 |
+| `edge/companion-app/docs/PIPER-TTS-SETUP.md` | ~150 | 部署文档: brew install + 下载 voice 模型 + 故障排查 + 集成点索引 |
+
+**集成点改动** (5 处):
+- `src-tauri/src/commands/mod.rs` 加 `pub mod tts;`
+- `src-tauri/src/lib.rs` invoke_handler 注册 `tts_synthesize` + `tts_status`
+- `src-tauri/tauri.conf.json` CSP 加 `media-src 'self' asset: ...`, 新加 `assetProtocol.scope` 含 `/tmp/catfish-tts-*.wav` (5 种 path 变体覆盖 mac /tmp /private/tmp + Win $TEMP)
+- `src/tabs/Chat/ChatMessage.tsx` AssistantBubble 在 FeedbackButtons 旁边加 `<TTSButton text={msg.content} />`, 流式中不显, 空内容不显
+
+**关键设计决策**:
+
+1. **subprocess + stdin 喂 text** (跟 whisper.cpp 同模板, 不用 piper Python 包装):
+   ```rust
+   echo "text" | piper --model voice.onnx --output_file /tmp/<uuid>.wav
+   ```
+   优点: 不依赖 Python venv, 二进制直接调; 跟 whisper-cli 部署体验一致.
+
+2. **Tauri assetProtocol scope 严格白名单**: 只允许 `/tmp/catfish-tts-*.wav` 这种我们自己的临时文件路径, 不开放整个 `/tmp/` 防滥用.
+
+3. **全局唯一 Audio 实例 + token 防 race**: 员工连续点 3 个消息的喇叭, lib/tts.ts 用 module-level `_currentToken` 自增, 旧合成的 callback 进来发现 token 不对自动丢弃, 不会出现合成晚到+前面已停的"幽灵播放".
+
+4. **5000 字截断**: 防 LLM 一次返一篇文章合成几分钟卡死, log warn 给员工提示.
+
+5. **失败引导详细到命令行**: piper 没装 / voice 模型缺失时, error message 直接给 `brew install piper-tts` + curl 命令, 员工不需要查文档.
+
+**未做 (P1+)**:
+- BL-VOICE2-WIN: Windows 打包 piper.exe 到 .exe bundle resource (跟 BL-WIN9 同模板)
+- BL-VOICE2-PET: 桌宠 catfish-pet.svg 嘴巴帧动画跟音频时长同步 ("会说话的桌宠")
+- BL-VOICE2-PRO: Proactive 闲聊触发 → 自动播 (员工 opt-in, 默认关)
+- BL-VOICE2-AGENT: AgentPrefsCard 加 voice 选择器 (huayan/bizhao) + 试听按钮 + tts.enabled toggle
+
+**鸿波部署一句话**:
+```bash
+brew install piper-tts
+mkdir -p ~/.catfish/piper-voices && cd ~/.catfish/piper-voices
+curl -L -O https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx
+curl -L -O https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx.json
+# 重启 Companion → AI 回答右下角 🔊 → 鲶鱼说话
+```
+
+**鸿波诊断功劳 #13**: "这么好玩的东西没理由不现在做" — 又一个跟 BL-ARCH1/ARCH2 一脉相承的 "demo 后再说" 砍掉的判断. STT 5/1 已经搭了基础设施 (find_executable / 模型缓存 / 错误引导), 再加 TTS 工作量 1 天 vs 等 demo 后启动 1-2 周. 卖点上"会说话的桌宠"对央企演示加分明显.
+
+### BL-VOICE3 拖音频文件转文字 attachment (5/10 夜)
+
+> 鸿波拖 .mp3 → 提示 "不支持: audio/mpeg". 之前只做了 🎤 录音 (5/1 BL-D-VOICE), 没做拖音频文件. 央企"会议录音 → 文字纪要"是高频真需求, 工作量 1 天值得做.
+
+**改动 4 处**:
+- `src-tauri/src/commands/speech.rs` 加 `transcribe_audio_from_b64` (~120 行): base64 解码 → tmp 文件 → ffmpeg 转 16kHz mono wav → 复用 `run_whisper_cpp` → 清理 → 返 `{text, duration_sec, original_filename}`. 跟 STT 录音对称, 复用现有 ffmpeg/whisper.cpp 基础设施.
+- `src-tauri/src/lib.rs` 注册新 command.
+- `src/tabs/Chat/ChatInput.tsx`: classifyFile 加 audio 分支 (`.mp3 .m4a .wav .aac .ogg .flac .opus .wma` + audio/* MIME), audio 单独放宽 100MB 大小 (会议录音常见 30+ MB), `parseLabel` 区分 "正在解析文件" vs "🎙 正在转录音频…(可能要几十秒)", FileChip metaSummary 显示 "🎵 5分20秒 · 转录 1234 字".
+- `src/lib/chat.ts` audio 分支早 return — 不要 "用 execute_code 读完整" 提示 (转录就是全文, 没原文件给 LLM 读).
+
+LLM 看到的格式 (跟 BL-I4 5/8 预留接口对接):
+```
+=== 附件: meeting.mp3 (音频 · 1820 秒 · 5234 字转写 (whisper.cpp)) ===
+--- 完整转录文字 (whisper.cpp 本地) ---
+今天我们讨论了下个季度的部署计划...(完整 5234 字)
+--- /转录 ---
+```
+
+数据流 100% 本地 — 跟 STT 录音对称: 拖音频 → ffmpeg → whisper.cpp → 文字, 全程不离开员工电脑. 央企"会议保密"场景天然适配.
+
+### BL-SEC2 gitleaks 误报豁免 (5/10 夜)
+
+> 鸿波: CI security audit run #36 报 "leaks found: 3", 全是误报: 单测里的 fake `ghp_abcdef...` token + skills-hub docstring 里的 curl example "Authorization: Bearer dev-token-local".
+
+**修法** (双层防御):
+- `.gitleaks.toml`: 继承默认 rules + 全局 allowlist
+  - 路径白名单 13 条: `tests/`、`docs/`、`README.md`、`CHANGELOG.md`、`SOUL.md`、`.env.example`、`.gitleaks*` 等
+  - regex 白名单 17 条: `dev-token-local`、`fake-jwt`、`Bearer $TOKEN`、`Bearer <jwt>`、`ghp_abcdef\w+`、`xxxxyyyyzzzz\w+`、`replace_with` 等已知 placeholder
+- `.gitleaksignore`: 精确 fingerprint 豁免 — CI 报的 2 条历史 commit fingerprint 直接列入
+
+真凭据 (e.g. 完整 36-hex `ghp_xxxxx` 或 `sk-OXXXXX`) 仍然被默认 rules 逮到, 不影响安全性. 只豁免明显的占位符 / 单测 fixture.
+
+下次 CI run 这 3 条应该不再报. 如果还报: gitleaks-action@v2 默认会读 `.gitleaks.toml`, 但若 config 没生效要 check action env 是否需要显式 `--config-path` 参数.

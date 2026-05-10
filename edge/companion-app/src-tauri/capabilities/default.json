@@ -12,6 +12,7 @@
     "core:webview:default",
     "core:window:default",
     "shell:default",
+    "shell:allow-open",
     "global-shortcut:default",
     "global-shortcut:allow-register",
     "global-shortcut:allow-unregister",

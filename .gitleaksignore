@@ -1,0 +1,20 @@
+# gitleaks 历史 commit fingerprint 豁免 — BL-SEC2 (5/10).
+#
+# 用途: 精确豁免特定 commit 里已经合并的误报 leak.
+# 跟 .gitleaks.toml 双层防御: toml 走 path/regex 一般规则, 这里走具体 fingerprint.
+#
+# 格式: <commit_sha>:<file_path>:<rule_id>:<line>
+# (跟 gitleaks scan 输出的 fingerprint 一致, 直接复制粘贴)
+#
+# 添加新 fingerprint 前先确认是误报 — 真泄漏的 secret 应该 revoke + git filter-branch
+# 重写历史, 而不是 ignore.
+
+# CI run #36 (5/10) 的 3 个误报:
+
+# 1. tests/test_prompt_security.py:257 — 单测里的 "token: ghp_abcdef1234567890"
+#    用来验 BL-FIX13 detect_credentials_in_text 函数能逮到这种 pattern, 不是真 token.
+96e5179a189c7186fd1481bbd04cbebad485a1b1:central/llm-gateway/tests/test_prompt_security.py:generic-api-key:257
+
+# 2. skills-hub app.py 旧版 line 156 的 curl docstring
+#    (现在迁到 line 216, 但 commit blob 里旧版仍触发 curl-auth-header 规则)
+2762b2486b6a1b8bfc7c82503273e49382543dfb:central/skills-hub/src/catfish_skills_hub/app.py:curl-auth-header:156
