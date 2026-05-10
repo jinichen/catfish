@@ -14,7 +14,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
-tauri = { version = "2.0", features = ["macos-private-api", "tray-icon"] }
+tauri = { version = "2.0", features = ["protocol-asset", "macos-private-api", "tray-icon"] }
 tauri-plugin-shell = "2.0"
 # 五一 sprint 5/5: 全局快捷键 (Cmd+Shift+Space 召唤浮窗)
 tauri-plugin-global-shortcut = "2.0"

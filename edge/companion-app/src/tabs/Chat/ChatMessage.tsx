@@ -8,6 +8,8 @@ import { FilePillList } from "../../components/FilePill";
 import { useAgentStore } from "../../store/agent";
 import FeedbackButtons from "./FeedbackButtons";
 import SkillFeedbackButtons from "./SkillFeedbackButtons";
+// BL-VOICE2 (5/10): TTS 喇叭按钮, 鸿波 "这么好玩的东西没理由不现在做"
+import TTSButton from "../../components/TTSButton";
 
 interface Props {
   msg: Msg;
@@ -182,13 +184,26 @@ function AssistantBubble({
             ✗ {friendlyError(msg.error)}
           </div>
         )}
-        {/* BL-MM6 feedback 按钮: 流式中不显, 防员工误点未完成消息.
-            内容空 + 没 tool_calls + 不报错 时也不显 (点空消息无意义). */}
+        {/* BL-MM6 feedback 按钮 + BL-VOICE2 TTS 喇叭: 流式中不显, 防员工误点未完成消息.
+            内容空 + 没 tool_calls + 不报错 时也不显 (点空消息无意义).
+            TTS 只在有真正文本时显示 (纯 tool_calls 不需要听). */}
         {!showCaret && (msg.content || msg.tool_calls?.length || isError) && (
-          <FeedbackButtons
-            messageId={msg.id}
-            preview={msg.content || (msg.tool_calls?.[0]?.name ?? "(空)")}
-          />
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "var(--space-2)",
+              marginTop: "var(--space-2)",
+            }}
+          >
+            <FeedbackButtons
+              messageId={msg.id}
+              preview={msg.content || (msg.tool_calls?.[0]?.name ?? "(空)")}
+            />
+            {msg.content && msg.content.trim().length > 0 && (
+              <TTSButton text={msg.content} size={16} />
+            )}
+          </div>
         )}
         {/* BL-MM11 (5/8) skill 级 feedback: 一条消息含 catfish_run_skill 时,
             对每个调用的 skill 加一行 👍/👎/改 按钮, 写 ~/.catfish/skill_quality.jsonl.

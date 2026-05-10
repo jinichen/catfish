@@ -202,13 +202,26 @@ export function Markdown({ text }: Props) {
           ),
           // <br> 单独 style 一下, 让表格里的换行显得自然
           br: () => <br />,
-          // 链接外开（Tauri webview 里默认会在内嵌打开，要让用户在系统浏览器开）
+          // 链接外开 — Tauri webview 默认吞 <a target="_blank">, 必须程序化
+          // 调 shell.open 才能真在系统浏览器开 (BL-ARCH2 fix1, 5/10 鸿波反馈).
           a: ({ children, href }) => (
             <a
               href={href}
               target="_blank"
               rel="noopener noreferrer"
-              style={{ color: "var(--catfish-cyan-dim)" }}
+              onClick={(e) => {
+                if (!href) return;
+                e.preventDefault();
+                void (async () => {
+                  try {
+                    const { open } = await import("@tauri-apps/plugin-shell");
+                    await open(href);
+                  } catch {
+                    try { window.open(href, "_blank", "noopener,noreferrer"); } catch { /* ignore */ }
+                  }
+                })();
+              }}
+              style={{ color: "var(--catfish-cyan-dim)", cursor: "pointer" }}
             >
               {children}
             </a>

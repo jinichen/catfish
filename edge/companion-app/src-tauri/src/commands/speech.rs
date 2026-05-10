@@ -285,6 +285,143 @@ fn whisper_model_path() -> Result<PathBuf, String> {
     ))
 }
 
+// ===== BL-VOICE3 (5/10): 拖音频文件转录 =====
+//
+// 跟 speech_stop_and_transcribe 逻辑共享 run_whisper_cpp + whisper_model_path,
+// 但输入源不同 — 这条是从员工拖进来的 base64 解码 + ffmpeg 转 16kHz mono wav,
+// 而 speech_stop 是 ffmpeg 实时录音.
+//
+// 流程:
+//   前端 base64(mp3/wav/m4a/...) + filename → invoke
+//     → 写 base64 到 tmp 原始文件
+//     → ffmpeg 转 → /tmp/catfish-audio-<uuid>.wav (16kHz mono PCM)
+//     → run_whisper_cpp → text
+//     → 清理 tmp
+//     → 返 { text, duration_sec, original_filename }
+
+#[cfg(target_os = "macos")]
+#[derive(Debug, serde::Serialize)]
+pub struct TranscribeResult {
+    pub text: String,
+    pub duration_sec: Option<f64>,
+    pub original_filename: String,
+}
+
+/// BL-VOICE3 (5/10): 把员工拖进来的 audio 文件转文字.
+///
+/// 接受常见格式: mp3 / m4a / wav / aac / ogg / flac / opus 等 ffmpeg 都吃.
+/// 内部统一转 16 kHz mono PCM wav 喂 whisper.cpp.
+///
+/// 注意: 大文件 (> 30 分钟会议录音) 会跑很久, 鸿波要在前端给"转录中…" loading.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub async fn transcribe_audio_from_b64(
+    _window: Window,
+    file_b64: String,
+    filename: String,
+) -> Result<TranscribeResult, String> {
+    use base64::Engine;
+
+    // 1. 解 base64 → 写 tmp 原始文件 (保留扩展名让 ffmpeg 自动识别)
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(file_b64.trim())
+        .map_err(|e| format!("base64 解码失败: {e}"))?;
+
+    if bytes.len() < 1024 {
+        return Err(format!("音频文件过小 ({} bytes), 不像有效音频", bytes.len()));
+    }
+
+    let uuid = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+
+    // 用原文件扩展名 (mp3 / m4a / wav 等), ffmpeg 自动识别
+    let ext = std::path::Path::new(&filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("bin")
+        .to_lowercase();
+    let raw_path = std::env::temp_dir().join(format!("catfish-audio-raw-{uuid}.{ext}"));
+    let wav_path = std::env::temp_dir().join(format!("catfish-audio-{uuid}.wav"));
+    let txt_out = wav_path.with_extension("wav.txt");
+
+    std::fs::write(&raw_path, &bytes).map_err(|e| format!("写 tmp 失败: {e}"))?;
+    log::info!(
+        "transcribe_audio_from_b64: {} ({} KB) → {} → {}",
+        filename, bytes.len() / 1024, raw_path.display(), wav_path.display()
+    );
+
+    // 2. ffmpeg 转 16kHz mono PCM wav (whisper.cpp 要求格式)
+    let ffmpeg_bin = find_executable("ffmpeg").ok_or_else(|| {
+        "ffmpeg 找不到. 请装: brew install ffmpeg".to_string()
+    })?;
+
+    let ffmpeg_result = std::process::Command::new(&ffmpeg_bin)
+        .args([
+            "-y",
+            "-hide_banner",
+            "-loglevel", "error",
+            "-i", raw_path.to_str().unwrap(),
+            "-ar", "16000",
+            "-ac", "1",
+            "-c:a", "pcm_s16le",
+        ])
+        .arg(&wav_path)
+        .output();
+
+    // 不论成败先清原始文件
+    let _ = std::fs::remove_file(&raw_path);
+
+    match ffmpeg_result {
+        Ok(out) if out.status.success() => {}
+        Ok(out) => {
+            let _ = std::fs::remove_file(&wav_path);
+            return Err(format!(
+                "ffmpeg 转码失败: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&wav_path);
+            return Err(format!("ffmpeg 调用失败: {e}"))
+        }
+    }
+
+    // 3. 拿 wav 时长 (PCM s16le 16kHz mono 公式: bytes / (16000 * 2))
+    let duration_sec = std::fs::metadata(&wav_path)
+        .ok()
+        .map(|m| (m.len().saturating_sub(44) as f64) / (16000.0 * 2.0));
+
+    // 4. whisper.cpp 转文字 (跟 speech_stop_and_transcribe 复用)
+    let model_path = whisper_model_path()?;
+    let text = run_whisper_cpp(&wav_path, &txt_out, &model_path)
+        .inspect_err(|_| {
+            let _ = std::fs::remove_file(&wav_path);
+            let _ = std::fs::remove_file(&txt_out);
+        })?;
+
+    // 5. 清理
+    let _ = std::fs::remove_file(&wav_path);
+    let _ = std::fs::remove_file(&txt_out);
+
+    if text.trim().is_empty() {
+        return Err("没识别出文字 (音频太短 / 没人声 / 模型跟不上?)".to_string());
+    }
+
+    log::info!(
+        "transcribe_audio_from_b64: ✅ {} 秒音频 → {} 字",
+        duration_sec.unwrap_or(0.0),
+        text.chars().count()
+    );
+
+    Ok(TranscribeResult {
+        text,
+        duration_sec,
+        original_filename: filename,
+    })
+}
+
 // ===== 非 macOS stub =====
 
 #[cfg(not(target_os = "macos"))]
@@ -303,4 +440,22 @@ pub async fn speech_stop_and_transcribe(_window: Window) -> Result<String, Strin
 #[tauri::command]
 pub fn speech_cancel_recording(_window: Window) -> Result<(), String> {
     Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+#[derive(Debug, serde::Serialize)]
+pub struct TranscribeResult {
+    pub text: String,
+    pub duration_sec: Option<f64>,
+    pub original_filename: String,
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub async fn transcribe_audio_from_b64(
+    _window: Window,
+    _file_b64: String,
+    _filename: String,
+) -> Result<TranscribeResult, String> {
+    Err("音频转录 Phase 2 加 Win/Linux".to_string())
 }

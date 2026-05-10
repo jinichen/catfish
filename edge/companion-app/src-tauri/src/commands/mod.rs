@@ -35,4 +35,6 @@ pub mod skills;
 pub mod speech;
 pub mod system;
 pub mod tool_bridge;
+// BL-VOICE2 (5/10): Piper local TTS, 跟 speech.rs (whisper STT) 对称
+pub mod tts;
 pub mod types;

@@ -26,29 +26,86 @@ interface Props {
 }
 
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024; // 20MB 单文件 (PDF 平均, 图片够)
+// BL-VOICE3 (5/10): 音频走 ffmpeg → wav → whisper, 大会议录音常见 30+ MB, 单独放宽到 100MB
+const MAX_AUDIO_BYTES = 100 * 1024 * 1024;
 const MAX_ATTACHMENTS = 6; // 单条消息最多 6 个附件, 防员工误拖整个文件夹
 
 const SUPPORTED_FILE_EXTS = [".pdf", ".xlsx", ".xls", ".docx", ".csv", ".txt", ".md", ".markdown", ".log"];
+// BL-VOICE3 (5/10): 拖音频转文字 — ffmpeg 都吃, whisper.cpp 转中文 (公文 prompt)
+const SUPPORTED_AUDIO_EXTS = [".mp3", ".m4a", ".wav", ".aac", ".ogg", ".flac", ".opus", ".wma"];
 
-/** 看文件是图片还是可解析文档. 都不是就 throw. */
-function classifyFile(file: File): "image" | "file" {
+/** 看文件是图片 / 文档 / 音频. 都不是就 throw. */
+function classifyFile(file: File): "image" | "file" | "audio" {
   if (file.type.startsWith("image/")) return "image";
   const lowerName = (file.name || "").toLowerCase();
+  // BL-VOICE3: audio MIME 优先 ext 名 (Tauri 拖入有时 type='', 单靠 ext)
+  if (
+    file.type.startsWith("audio/") ||
+    SUPPORTED_AUDIO_EXTS.some((ext) => lowerName.endsWith(ext))
+  ) {
+    return "audio";
+  }
   if (SUPPORTED_FILE_EXTS.some((ext) => lowerName.endsWith(ext))) {
     return "file";
   }
   throw new Error(
-    `不支持: ${file.type || file.name}. 支持: 图片 / PDF / Excel / Word / CSV / TXT / MD`
+    `不支持: ${file.type || file.name}. 支持: 图片 / PDF / Excel / Word / CSV / TXT / MD / 音频 (mp3/m4a/wav/...)`
   );
 }
 
-/** File → Attachment. 图片走 base64; 文档走 Tauri parse_file → text. */
+/** File → Attachment. 图片走 base64; 文档走 Tauri parse_file → text;
+ *  音频走 transcribe_audio_from_b64 → 转录文字当 previewText (BL-VOICE3 5/10). */
 async function fileToAttachment(file: File): Promise<Attachment> {
-  if (file.size > MAX_ATTACHMENT_BYTES) {
-    const mb = (file.size / 1024 / 1024).toFixed(1);
-    throw new Error(`文件太大 (${mb}MB > 20MB)`);
-  }
   const kind = classifyFile(file);
+
+  // 大小限制: 音频放宽到 100MB (会议录音常见 30+ MB), 其他 20MB
+  const maxBytes = kind === "audio" ? MAX_AUDIO_BYTES : MAX_ATTACHMENT_BYTES;
+  if (file.size > maxBytes) {
+    const mb = (file.size / 1024 / 1024).toFixed(1);
+    const limitMb = (maxBytes / 1024 / 1024).toFixed(0);
+    throw new Error(`文件太大 (${mb}MB > ${limitMb}MB)`);
+  }
+
+  // BL-VOICE3 (5/10): 音频路径
+  if (kind === "audio") {
+    // 读 base64 (跟 file 分支同模板, FileReader.readAsDataURL 异步, V8 优化)
+    const fileB64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUri = reader.result as string;
+        const comma = dataUri.indexOf(",");
+        resolve(comma >= 0 ? dataUri.slice(comma + 1) : dataUri);
+      };
+      reader.onerror = () => reject(reader.error || new Error("FileReader 失败"));
+      reader.readAsDataURL(file);
+    });
+
+    const result = await invoke<{
+      text: string;
+      duration_sec: number | null;
+      original_filename: string;
+    }>("transcribe_audio_from_b64", {
+      fileB64,
+      filename: file.name || "audio",
+    });
+
+    // 把转录文字塞进 previewText, LLM 像读 PDF 一样直接拿到全文.
+    // BL-VOICE3 (5/10): meta 字段对齐 chat.ts formatFileAttachment 已有 audio 分支
+    // (transcript_chars / model — 5/8 BL-I4 留的预留接口, 现在真接通).
+    return {
+      kind: "file",
+      mimeType: file.type || "audio/mpeg",
+      name: file.name || "audio",
+      sizeBytes: file.size,
+      fileKind: "audio",
+      previewText: result.text,
+      meta: {
+        duration_sec: result.duration_sec,
+        transcript_chars: result.text.length,
+        model: "whisper.cpp",
+      },
+    };
+  }
 
   if (kind === "image") {
     // 图片: FileReader → base64 (gateway 拼 data URI 给 vision 模型)
@@ -128,7 +185,10 @@ export default function ChatInput({
   const [isDragOver, setIsDragOver] = useState(false);
   // 5/5 鸿波报"上传 Excel 没反应" 修: 大文件 base64 + Python 解析需要几秒,
   // 之前 UI 0 反馈, 员工以为坏了. 加个 "正在解析..." 状态.
+  // BL-VOICE3 (5/10): 音频转录耗时更长 (30 分钟会议录音可能跑 1-2 分钟),
+  // 用 parseLabel 区分 "正在解析文件" vs "正在转录音频".
   const [isParsingFile, setIsParsingFile] = useState(false);
+  const [parseLabel, setParseLabel] = useState<string>("正在解析文件…");
   // 🎤 语音录音状态 (方案 C+ 五一 sprint Day 1: Whisper.cpp 本地, ffmpeg subprocess 录)
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -213,6 +273,15 @@ export default function ChatInput({
     try {
       const next: Attachment[] = [];
       for (const f of arr) {
+        // BL-VOICE3 (5/10): 音频转录可能跑 30s+, 用专属 label 安抚员工
+        try {
+          const isAudio =
+            f.type.startsWith("audio/") ||
+            SUPPORTED_AUDIO_EXTS.some((ext) => (f.name || "").toLowerCase().endsWith(ext));
+          setParseLabel(isAudio ? "🎙 正在转录音频…(可能要几十秒, 取决于音频长度)" : "正在解析文件…");
+        } catch {
+          setParseLabel("正在解析文件…");
+        }
         try {
           next.push(await fileToAttachment(f));
         } catch (e) {
@@ -382,7 +451,8 @@ export default function ChatInput({
         </div>
       )}
 
-      {/* 5/5 文件解析进行中 (Excel / 大 PDF 几秒级, 之前 0 反馈员工以为坏了) */}
+      {/* 5/5 文件解析进行中 (Excel / 大 PDF 几秒级, 之前 0 反馈员工以为坏了)
+          BL-VOICE3 (5/10): 音频走 whisper, 几十秒级别, label 区分提示 */}
       {isParsingFile && (
         <div
           style={{
@@ -395,7 +465,7 @@ export default function ChatInput({
             display: "inline-block",
           }}
         >
-          📎 正在解析文件…
+          📎 {parseLabel}
         </div>
       )}
 
@@ -577,6 +647,17 @@ function metaSummary(att: Attachment): string {
   }
   if (kind === "text") {
     return `${m.total_chars ?? "?"} 字 · ${sizeLabel}`;
+  }
+  // BL-VOICE3 (5/10): 音频转录后显示时长 + 转录字数 (字段名跟 chat.ts 对齐)
+  if (kind === "audio") {
+    const sec = m.duration_sec as number | null | undefined;
+    const chars = m.transcript_chars as number | undefined;
+    const durLabel = sec
+      ? sec >= 60
+        ? `${Math.floor(sec / 60)}分${Math.round(sec % 60)}秒`
+        : `${Math.round(sec)}秒`
+      : "?";
+    return `🎵 ${durLabel} · 转录 ${chars ?? "?"} 字 · ${sizeLabel}`;
   }
   return sizeLabel;
 }

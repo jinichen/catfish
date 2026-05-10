@@ -59,7 +59,19 @@
         "font-src": "'self' data:",
         "frame-src": "'self'",
         "object-src": "'none'",
-        "base-uri": "'self'"
+        "base-uri": "'self'",
+        "media-src": "'self' asset: http://asset.localhost blob: data:"
+      },
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$TEMP/catfish-tts-*.wav",
+          "$TEMP/catfish-tts-*-*.wav",
+          "/tmp/catfish-tts-*.wav",
+          "/tmp/catfish-tts-*-*.wav",
+          "/private/tmp/catfish-tts-*.wav",
+          "/private/tmp/catfish-tts-*-*.wav"
+        ]
       }
     }
   },

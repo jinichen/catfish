@@ -162,10 +162,19 @@ function formatFileAttachment(att: {
   } else if (kind === "text") {
     metaLine = `纯文本 · ${meta.total_chars ?? "?"} 字`;
   } else if (kind === "audio") {
-    // BL-I4 (5/8): 音频转写
+    // BL-I4 (5/8) 预留 → BL-VOICE3 (5/10) 真接通: 音频走 whisper.cpp 转录
+    // 跟其他 file kind 不同 — previewText 已经是**全文转录** (不是预览),
+    // 没有 keptPath 给 LLM 读完整, 所以下面走 audio early return 不加 codeHint.
     const dur = meta.duration_sec as number | undefined;
     const chars = meta.transcript_chars as number | undefined;
     metaLine = `音频 · ${dur ? `${dur.toFixed(0)} 秒 · ` : ""}${chars ?? "?"} 字转写 (${meta.model ?? "whisper"})`;
+    // 音频专属格式: 不要 "用 execute_code 读完整" 提示 (转录就是全文)
+    return (
+      `\n\n=== 附件: ${att.name} (${metaLine}) ===\n` +
+      `--- 完整转录文字 (whisper.cpp 本地) ---\n` +
+      `${att.previewText || "(空)"}\n` +
+      `--- /转录 ---`
+    );
   } else if (kind === "video") {
     // BL-I3.1 (5/8): 视频抽音轨转写
     const dur = meta.duration_sec as number | undefined;

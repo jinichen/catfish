@@ -18,6 +18,9 @@
 
 const DEFAULT_GATEWAY_HOST = "127.0.0.1";
 const DEFAULT_GATEWAY_PORT = 8999;
+// BL-ARCH2 (5/10): catfish-web 中央门户. dev vite 5173, 生产一般跟 gateway
+// 同域 nginx (https://catfish.client.com), 客户可改 yaml.endpoints.web_url.
+const DEFAULT_WEB_URL_DEV = "http://localhost:5173";
 
 function readGatewayUrlBuildTime(): string {
   const env = import.meta.env;
@@ -37,12 +40,33 @@ function readGatewayUrlBuildTime(): string {
   return `http://${host}:${port}`;
 }
 
+function readWebUrlBuildTime(): string {
+  // BL-ARCH2 fix3 (5/10): web 中央门户 URL. 优先级 (高→低):
+  //   1. VITE_CATFISH_WEB_URL (build-time)
+  //   2. 默认 localhost:5173 (vite dev), prod 客户**必须**改 yaml.endpoints.web_url
+  //
+  // ⚠ 不再 fallback gateway origin — gateway 跟 web 是两个独立服务, 同 origin
+  // 只有 nginx 反代了 web/ 路径才成立, 鸿波 5/10 反馈"全部失效"就是这个 bug:
+  // build 后 env.DEV=false → 走老 fallback gateway:8999 → FastAPI 返 Not Found.
+  //
+  // bootstrapEndpoints() 启动会从 ~/.catfish/companion.yaml 读真实 web_url
+  // 覆盖, 客户改 yaml 重启 Companion 即生效.
+  const env = import.meta.env;
+  const explicit = env.VITE_CATFISH_WEB_URL;
+  if (typeof explicit === "string" && explicit.length > 0) {
+    return explicit.replace(/\/+$/, "");
+  }
+  return DEFAULT_WEB_URL_DEV;
+}
+
 export const isDev = import.meta.env.DEV;
 export const isProd = import.meta.env.PROD;
 
-// config 字段不再 const — bootstrapEndpoints() 启动时改 gatewayUrl
+// config 字段不再 const — bootstrapEndpoints() 启动时改 gatewayUrl / webUrl
 export const config = {
   gatewayUrl: readGatewayUrlBuildTime(),
+  // BL-ARCH2 (5/10): 中央门户基址. 仪表盘 "去 web 看 →" 锚点用.
+  webUrl: readWebUrlBuildTime(),
   pollIntervalMs: 3000,
 };
 
@@ -58,6 +82,7 @@ export async function bootstrapEndpoints(): Promise<void> {
     const result = (await invoke("get_runtime_endpoints")) as {
       gateway_url: string;
       chrome_debug_url: string;
+      web_url?: string;  // BL-ARCH2 (5/10): 可选, Rust 侧后续 ship
     };
     if (result?.gateway_url) {
       const oldUrl = config.gatewayUrl;
@@ -66,6 +91,16 @@ export async function bootstrapEndpoints(): Promise<void> {
         // eslint-disable-next-line no-console
         console.info(
           `[BL-WIN9] gatewayUrl: ${oldUrl} → ${config.gatewayUrl} (来自 ~/.catfish/companion.yaml)`,
+        );
+      }
+    }
+    if (result?.web_url) {
+      const oldWeb = config.webUrl;
+      config.webUrl = result.web_url.replace(/\/+$/, "");
+      if (oldWeb !== config.webUrl) {
+        // eslint-disable-next-line no-console
+        console.info(
+          `[BL-ARCH2] webUrl: ${oldWeb} → ${config.webUrl} (来自 ~/.catfish/companion.yaml)`,
         );
       }
     }

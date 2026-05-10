@@ -32,6 +32,11 @@ const DEFAULT_GATEWAY_HOST: &str = "127.0.0.1";
 const DEFAULT_GATEWAY_PORT: u16 = 8999;
 const DEFAULT_CHROME_HOST: &str = "127.0.0.1";
 const DEFAULT_CHROME_PORT: u16 = 9222;
+// BL-ARCH2 fix2 (5/10): catfish-web 中央门户. 不再前端硬编码 localhost:5173,
+// 走跟 gateway 同款 yaml 配置. 默认 dev 5173 (vite), 生产改 nginx 同域 (跟
+// gateway 同 origin) 或独立 web 服务器, 通过 yaml endpoints.web_url override.
+const DEFAULT_WEB_HOST: &str = "127.0.0.1";
+const DEFAULT_WEB_PORT: u16 = 5173;
 
 #[derive(Debug, Clone)]
 pub struct Endpoints {
@@ -39,6 +44,9 @@ pub struct Endpoints {
     pub gateway_port: u16,
     pub chrome_host: String,
     pub chrome_port: u16,
+    /// BL-ARCH2 fix2 (5/10): 完整 web URL (包含 scheme), 用 String 而非
+    /// host/port 因为生产可能 https + 路径前缀 (e.g. https://catfish.client.com).
+    pub web_url: String,
 }
 
 impl Endpoints {
@@ -48,6 +56,10 @@ impl Endpoints {
 
     pub fn chrome_base(&self) -> String {
         format!("http://{}:{}", self.chrome_host, self.chrome_port)
+    }
+
+    pub fn web_base(&self) -> String {
+        self.web_url.clone()
     }
 }
 
@@ -88,6 +100,14 @@ struct EndpointsYaml {
     chrome_debug_url: Option<String>,
     chrome_debug_host: Option<String>,
     chrome_debug_port: Option<u16>,
+    /// BL-ARCH2 fix2 (5/10): 中央 web 门户 URL.
+    ///   dev:  http://localhost:5173 (vite, 默认)
+    ///   prod: https://catfish.client.com (nginx 同域 / 跟 gateway 同 host 不同 path)
+    /// 不设 → 自动从 gateway 推 (gateway 是 127.0.0.1 时假设 web 也本机, 端口 5173;
+    /// gateway 是远程时假设 web 跟 gateway 同 host, port 80/443).
+    web_url: Option<String>,
+    web_host: Option<String>,
+    web_port: Option<u16>,
 }
 
 fn yaml_path() -> Option<std::path::PathBuf> {
@@ -169,11 +189,40 @@ fn build() -> Endpoints {
         read_port("CATFISH_CHROME_DEBUG_PORT", DEFAULT_CHROME_PORT),
     ));
 
+    // BL-ARCH2 fix2 (5/10): web URL — yaml.web_url > yaml.host+port > env > 推导.
+    // 推导规则: gateway 是 localhost/127.0.0.1 → web 也本机 :5173 (vite dev);
+    //          gateway 是远程 → web 跟 gateway 同 host (假设 nginx 同域反代),
+    //          但 port 留空让 URL 用默认 (生产一般 443/80, 不带 port).
+    let web_url = (|| -> Option<String> {
+        let y = yaml.as_ref()?;
+        if let Some(url) = &y.web_url {
+            log::info!("BL-ARCH2 endpoints: web 走 yaml web_url={}", url);
+            return Some(url.trim_end_matches('/').to_string());
+        }
+        let h = y.web_host.clone()?;
+        let p = y.web_port?;
+        log::info!("BL-ARCH2 endpoints: web 走 yaml host={} port={}", h, p);
+        Some(format!("http://{}:{}", h, p))
+    })()
+    .or_else(|| std::env::var("CATFISH_WEB_URL").ok().map(|s| s.trim_end_matches('/').to_string()))
+    .unwrap_or_else(|| {
+        // BL-ARCH2 fix3 (5/10): 默认本机 5173 (vite). 不再假设 "gateway 远程 →
+        // web 跟 gateway 同 host" — gateway 跟 web 是两个独立服务, 同 origin
+        // 只有 nginx 反代了 web/ 路径才成立, 一般客户分开部 (web 走 80/443
+        // 自己的子域 e.g. catfish.client.com), 必须 yaml 显式配 web_url.
+        // 自动 fallback 到 gateway origin 会变成"链接全 404" (鸿波反馈).
+        let h = read_host("CATFISH_WEB_HOST", DEFAULT_WEB_HOST);
+        let p = read_port("CATFISH_WEB_PORT", DEFAULT_WEB_PORT);
+        format!("http://{}:{}", h, p)
+    });
+    log::info!("BL-ARCH2 endpoints: web_url={}", web_url);
+
     Endpoints {
         gateway_host,
         gateway_port,
         chrome_host,
         chrome_port,
+        web_url,
     }
 }
 

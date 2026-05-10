@@ -17,7 +17,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { gatewayGetDevToken } from "./tauri";
 import { config } from "./env";
 
-export type Role = "admin" | "manager" | "employee";
+// BL-ARCH1 P1 (5/10): 加 sysadmin (catfish-identity 超级管理员).
+//   sysadmin > admin > manager > employee, RoleGate 在 web 侧做继承.
+//   Companion 这边只用来给 WebPortalLink 决定是否显示 "🔐 系统管理" 锚点.
+export type Role = "sysadmin" | "admin" | "manager" | "employee";
 
 export interface MeInfo {
   email: string;

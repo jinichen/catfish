@@ -18,6 +18,10 @@ pub struct RuntimeEndpoints {
     pub gateway_url: String,
     /// Chrome CDP base URL.
     pub chrome_debug_url: String,
+    /// BL-ARCH2 fix2 (5/10): catfish-web 中央门户 URL (Dashboard "去 web 看 →"
+    /// 锚点用). yaml endpoints.web_url > 推导 (本机→localhost:5173, 远程→
+    /// gateway 同 host).
+    pub web_url: String,
 }
 
 /// 给前端拉当前 endpoints. 优先级 yaml > env > default (跟 Rust 端 services::endpoints 一致).
@@ -27,5 +31,6 @@ pub fn get_runtime_endpoints() -> Result<RuntimeEndpoints, String> {
     Ok(RuntimeEndpoints {
         gateway_url: ep.gateway_base(),
         chrome_debug_url: ep.chrome_base(),
+        web_url: ep.web_base(),
     })
 }

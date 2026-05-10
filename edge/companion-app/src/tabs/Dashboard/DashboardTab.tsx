@@ -1,20 +1,33 @@
-/** 仪表盘 tab — 5/7 优化分组折叠 (鸿波反馈"内容太多").
+/** 仪表盘 tab — 5/10 BL-ARCH2 瘦身版 (鸿波架构反思).
  *
- * 18 张卡分 5-7 组:
- *   "今日" (开): Proactive + Tasks
- *   "我自己" (开): Identity + AgentPrefs
- *   "鲶鱼对你的认识" (开): Relation + Memory + UserProfile + StyleFingerprint + Feedback
- *   "服务" (收): Services + Quota + Catalog + SkillsMcp
- *   "审计/学习" (收): Learning + SkillAudit + Audit
- *   "部门管理" (manager/admin only, 开): DepartmentQuota + DepartmentAudit
- *   "全局" (admin only, 收): AdminGlobal
+ * 历史:
+ *   5/7  BL-D-DASH:  18 张卡分组折叠
+ *   5/8  BL-FIX19~22: UI 抗溢出 / 全宽对齐
+ *   5/9  BL-D2/D3:   加 SkillsHub + McpRegistry 浏览卡 (后又被砍)
+ *   5/10 BL-ARCH1:   catfish-web 中央门户 ship
+ *   5/10 BL-ARCH2:   ✂ 砍 7 张管理类卡, 留 14 张 "我的" 视角
  *
- * localStorage 记员工偏好.
+ * 砍掉 (挪去 catfish-web /admin / /audit / /manager / /skills / /mcp):
+ *   ❌ McpRegistryCard         → /mcp        市场浏览
+ *   ❌ SkillsHubCard           → /skills     市场浏览
+ *   ❌ SkillAuditCard          → /admin      跨员工 skill 评分聚合
+ *   ❌ AuditCard               → /audit      历史大查询 (跨员工)
+ *   ❌ DepartmentQuotaCard     → /manager    部门 quota (manager+)
+ *   ❌ DepartmentAuditCard     → /manager    部门 audit (manager+)
+ *   ❌ AdminGlobalCard         → /admin      全公司聚合
  *
- * 视图分层 (跟 RBAC 配合):
- *   employee:  前 5 组
- *   manager:   employee + 部门组
- *   admin:     manager + 全局组
+ * 留下 (14 张, 全 "我的" 视角, 离线友好):
+ *   今日:    Proactive + Tasks
+ *   我自己:  Identity + AgentPrefs
+ *   我的画像:Relation + MemoryHistory + UserProfile + StyleFingerprint + Feedback
+ *   服务:    Services + Quota + Catalog + SkillsMcp (我装的) + Curator
+ *   学习:    Learning + SkillRevision (我提的改进)
+ *
+ * 视图分层:
+ *   全员 14 张卡都看 (manager / admin / sysadmin 也走 web 看管理类).
+ *   顶部 WebPortalLink banner 按 role 过滤 web 锚点.
+ *
+ * 注: 7 张被砍的卡 .tsx 文件保留在仓库 (Tab 不再 import), 给 ARCH3 / 回滚留路.
  */
 
 import IdentityCard from "./IdentityCard";
@@ -23,12 +36,7 @@ import QuotaCard from "./QuotaCard";
 import CatalogCard from "./CatalogCard";
 import SkillsMcpCard from "./SkillsMcpCard";
 import LearningCard from "./LearningCard";
-import AuditCard from "./AuditCard";
-import SkillAuditCard from "./SkillAuditCard";
 import SkillRevisionCard from "./SkillRevisionCard";
-import DepartmentQuotaCard from "./DepartmentQuotaCard";
-import DepartmentAuditCard from "./DepartmentAuditCard";
-import AdminGlobalCard from "./AdminGlobalCard";
 import ProactiveCard from "./ProactiveCard";
 import AgentPrefsCard from "./AgentPrefsCard";
 import RelationCard from "./RelationCard";
@@ -38,18 +46,12 @@ import UserProfileCard from "./UserProfileCard";
 import StyleFingerprintCard from "./StyleFingerprintCard";
 import TasksCard from "./TasksCard";
 import CuratorCard from "./CuratorCard";
-import McpRegistryCard from "./McpRegistryCard";
-import SkillsHubCard from "./SkillsHubCard";
 import CollapsibleSection from "./CollapsibleSection";
-import { useMe } from "../../hooks/useMe";
+import WebPortalLink from "./WebPortalLink";
 
 export default function DashboardTab() {
-  const { me } = useMe();
-
-  // role 没拿到 (loading / 鉴权失败) → 默认按 employee 渲染, 不卡 UI
-  const role = me?.role ?? "employee";
-  const managedDepts = me?.managed_departments ?? [];
-  const isManagerOrAdmin = role === "manager" || role === "admin";
+  // BL-ARCH2 (5/10): role 不再决定 Dashboard 卡片, manager/admin 也走 web 看管理.
+  // 顶部 WebPortalLink 按 role 显示锚点; useMe 在内部用, 这里不再分支.
 
   return (
     <div
@@ -64,6 +66,9 @@ export default function DashboardTab() {
         width: "100%",
       }}
     >
+      {/* BL-ARCH2 (5/10): 顶部 banner — "去中央门户 →" 按 role 显示锚点 */}
+      <WebPortalLink />
+
       {/* 第一组: 今日 — 主动闲聊 + 后台任务 (高频, 默认开, 顶部) */}
       <CollapsibleSection
         id="today"
@@ -97,95 +102,36 @@ export default function DashboardTab() {
         <FeedbackSummaryCard />
       </CollapsibleSection>
 
-      {/* 第四组: 服务 — gateway / quota / catalog / skills (默认收, 不常看) */}
+      {/* 第四组: 服务 — gateway / quota / catalog / 我装的 skill+mcp / curator (默认收) */}
       <CollapsibleSection
         id="services"
         title="⚙️ 服务 / 配额"
         defaultCollapsed
-        count={6}
+        count={5}
       >
         <ServicesCard />
         <QuotaCard />
         <CatalogCard />
+        {/* SkillsMcpCard = 我装的 skill / mcp 列表 (跟广场浏览不同, 留这里).
+            广场: catfish-web /skills /mcp. */}
         <SkillsMcpCard />
         {/* 5/7 BL-CR: Curator 集成 — 老脚本自动整理 (hermes 0.12 自带) */}
         <CuratorCard />
-        {/* BL-D3 (5/9): MCP 连接器仓库 Phase 1, 只读列表 (Jira/GitLab/FS/Time).
-            Phase 2/3 接订阅 + OAuth + pod-per-user 拉起. 真接 mcp-registry
-            服务 (gateway 反向代理 /v1/mcp/registry → mcp-registry:8996, 跟
-            skills-hub 8997 错开). */}
-        <McpRegistryCard />
-
-        {/* BL-D2 (5/10): Skills Hub — 中央 skill 市场, 员工自愿 publish 共享.
-            数据走 gateway /v1/hub/* → skills-hub:8997. 跟 mcp-registry 同套
-            OIDC 反代鉴权 (BL-FIX29 之后不再用 dev_token). */}
-        <SkillsHubCard />
       </CollapsibleSection>
 
-      {/* 第五组: 审计 / 学习 — 历史 + skill audit + skill revision + tool audit (默认收) */}
+      {/* 第五组: 学习 — 我的 learning + 我提的 skill 改进 (默认收).
+          BL-ARCH2: SkillAuditCard (跨员工 skill 评分聚合) / AuditCard (历史大查询)
+          已挪去 web /admin / /audit. */}
       <CollapsibleSection
-        id="audit"
-        title="📜 审计 / 学习"
+        id="learn"
+        title="📚 学习 / 改进"
         defaultCollapsed
-        count={4}
+        count={2}
       >
         <LearningCard />
-        <SkillAuditCard />
-        {/* BL-MM14 / MM15 (5/8): skill 改进提议 + 有效性跟踪. 跟 SkillAuditCard 配套 —
-            SkillAuditCard 显示分数, SkillRevisionCard 处理改进 */}
+        {/* BL-MM14 / MM15 (5/8): skill 改进提议 + 有效性跟踪 */}
         <SkillRevisionCard />
-        <AuditCard />
       </CollapsibleSection>
-
-      {/* 第六组: 部门管理 — manager/admin only (默认开, 进 dashboard 是为了管这个) */}
-      {isManagerOrAdmin && managedDepts.length > 0 && (
-        <CollapsibleSection
-          id="dept"
-          title="🏢 部门管理"
-          count={managedDepts.length * 2}
-        >
-          {managedDepts.map((dept) => (
-            <DepartmentQuotaCard key={`q-${dept}`} department={dept} />
-          ))}
-          {managedDepts.map((dept) => (
-            <DepartmentAuditCard key={`a-${dept}`} department={dept} />
-          ))}
-        </CollapsibleSection>
-      )}
-      {isManagerOrAdmin && managedDepts.length === 0 && (
-        <ManagerNoDeptHint role={role} />
-      )}
-
-      {/* 第七组: 全局 — admin only (默认收) */}
-      {role === "admin" && (
-        <CollapsibleSection
-          id="admin"
-          title="🌐 全局聚合"
-          defaultCollapsed
-          count={1}
-        >
-          <AdminGlobalCard />
-        </CollapsibleSection>
-      )}
-    </div>
-  );
-}
-
-function ManagerNoDeptHint({ role }: { role: string }) {
-  return (
-    <div
-      style={{
-        gridColumn: "1 / -1",
-        background: "var(--catfish-bg-elevated)",
-        border: "1px dashed var(--catfish-border)",
-        borderRadius: "var(--radius-md)",
-        padding: "var(--space-4)",
-        fontSize: 13,
-        color: "var(--catfish-text-muted)",
-      }}
-    >
-      你是 <strong>{role}</strong>, 但 <code>managed_departments</code> 为空 —
-      联系 IT 在 catfish-identity 用户配置里加上你管的部门, 这里就会出"部门 quota / 部门审计"卡片.
     </div>
   );
 }
