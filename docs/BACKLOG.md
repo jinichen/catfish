@@ -673,23 +673,98 @@ M  ★ 5/10 架构反思     3 项   (2 ⬜ + 1 ❄️)         · 5/15 起做 (
 
 | ID | 项 | 状态 | 估时 | 依赖 |
 |---|---|---|---|---|
-| BL-ARCH1 | **catfish-web 中央门户 (新项目)** — Skills Hub 全广场 + publish UI / MCP 市场 + IT 配 OAuth credentials / Manager 视图 (本部门 quota/audit/team) / Admin 后台 (用户/部门/全公司 audit/billing/dev_users 编辑/identity users.yaml 编辑) / 历史 audit 大查询 | ⬜ | 3 周 | demo 后启动 (5/15+) |
-| BL-ARCH2 | **Companion 瘦身** (BL-ARCH1 配套) — 砍 DepartmentQuota / Audit / SkillAudit / SkillsHub 浏览 / McpRegistry 浏览 5 个卡, 留 10 个 "我的" 视角卡. 加 "去 web 看 →" 锚点 | ⬜ | 2 天 | BL-ARCH1 启动 |
+| BL-ARCH1 | **catfish-web 中央门户 (新项目)** — Skills Hub 全广场 + publish UI / MCP 市场 + IT 配 OAuth credentials / Manager 视图 (本部门 quota/audit/team) / Admin 后台 (用户/部门/全公司 audit/billing/dev_users 编辑/identity users.yaml 编辑) / 历史 audit 大查询 | ✅ 5/10 | 3 周 → 1 天 | P0+P1 一夜 ship |
+| BL-ARCH1 P1 | **完整用户管理 + sysadmin 超级管理员** — identity-server `users` 加 8 字段 (locked / deleted_at / created_by / last_login_at / must_change_password 等) + `users_audit` 表 + 9 个 admin endpoints (CRUD / 锁 / 重置密码 / 审计) + RBAC (sysadmin > admin > manager > employee) + gateway `/api/admin/*` 反代 + catfish-web `/admin/users` & `/admin/system` 两套页面. 防自锁 / 软删除 / bcrypt 12. | ✅ 5/10 | 1 天 | BL-ARCH1 |
+| BL-ARCH2 | **Companion 瘦身** (BL-ARCH1 配套) — 砍 7 张管理类卡 (DepartmentQuota / DepartmentAudit / Audit / SkillAudit / SkillsHub 浏览 / McpRegistry 浏览 / AdminGlobal), 留 14 张 "我的" 视角卡 (Identity / AgentPrefs / Quota / Catalog / SkillsMcp(我装的) / Curator / Services / Proactive / Tasks / Relation / Memory / UserProfile / StyleFingerprint / Feedback / Learning / SkillRevision). 顶部加 WebPortalLink banner 按 role 显示 web 锚点 (/me /skills /mcp /manager /audit /admin /admin/system) | ✅ 5/10 | 2 天 → 30 分钟 | BL-ARCH1 |
 | BL-ARCH3 | **catfish-edge-daemon (可选, 性能评估后定)** — Tauri Companion 瘦身后 watchdog/OAuth/文件 IO 拆出来成本机系统服务 (launchd/systemd), Tauri ↔ daemon localhost:8994 HTTP. ❄️ 暂不做, 先看 BL-ARCH1 落地后 Companion 还多重 | ❄️ | 1-2 周 | BL-ARCH1 完成 + 性能评估 |
+| BL-VOICE2 P0 | **Piper local TTS — 让鲶鱼说话** (mac, 5/10 鸿波 "这么好玩的没理由不现在做"). subprocess 调 piper 二进制 (跟 whisper.cpp 同模板), 中文 voice ~30MB, 100% 本地数据不出公司. 文件: `commands/tts.rs` + `lib/tts.ts` + `TTSButton.tsx` + ChatMessage 集成 + Tauri assetProtocol scope. 部署: `brew install piper-tts` + curl voice. | ✅ 5/10 | 1 天 | BL-FIX23 (chat 流式稳定) |
+| BL-VOICE2-WIN | Piper Windows 打包 — piper.exe 内置 .exe bundle resource, find_executable 走 Tauri resource path (跟 BL-WIN9 同模板) | ⬜ | 1 天 | BL-VOICE2 P0 |
+| BL-VOICE2-PET | 桌宠"说话"动画 — catfish-pet.svg 加嘴巴帧 + 跟音频时长同步 cycle (员工看到桌宠真在说话, 央企演示加分明显) | ⬜ | 1-2 天 | BL-VOICE2 P0 |
+| BL-VOICE2-PRO | Proactive 闲聊触发 → 自动播 (员工 opt-in, 默认关). 配合 BL-VOICE2-PET 桌宠动画做"会主动找你说话的鲶鱼" | ⬜ | 半天 | BL-VOICE2-PET |
+| BL-VOICE2-AGENT | AgentPrefsCard 加 voice 选择器 (huayan/bizhao) + 试听按钮 + tts.enabled toggle | ⬜ | 半天 | BL-VOICE2 P0 |
 
 **为啥不做"全中央 web 化" (rejected)**: 跟 catfish 初衷冲突 (离线 / 员工感 / 央企心理 / 数据归属感 / Hermes 集成本机). BL-ARCH1 拆"管理类" 去 web (本来就该 web — 跨员工 / 跨部门 / IT 操作), Companion 留"我的" 功能 (本来就该本机 — 桌宠 / 快捷键 / 我的画像 / 我装的 skill).
 
-**Phase 时间线**:
+**Phase 时间线** (实际 vs. 原计划):
 ```
-5/14 demo:                       不动现状, Companion 重也演得动 (主线已通)
-5/15 起 (3 周, BL-ARCH1+ARCH2):
-  W1: catfish-web 搭 + OIDC + 复用 SkillsHub / McpRegistry / Audit 三卡
-  W2: admin 后台 (用户/配额/审计大查询)
-  W3: manager 视图 + billing 月报 + nginx 部署
-  Companion 同步瘦身 2 天 (砍 5 卡 + 加链接)
+原计划:
+  5/14 demo:                     不动现状, Companion 重也演得动 (主线已通)
+  5/15 起 (3 周, BL-ARCH1+ARCH2):
+    W1: catfish-web 搭 + OIDC + 复用 SkillsHub / McpRegistry / Audit 三卡
+    W2: admin 后台 (用户/配额/审计大查询)
+    W3: manager 视图 + billing 月报 + nginx 部署
+    Companion 同步瘦身 2 天 (砍 5 卡 + 加链接)
+  6 月+: BL-ARCH3 评估 (Companion 瘦身后还多重决定要不要拆 daemon)
 
+实际 (5/10 鸿波 "现在就做, 不用管 demo"):
+  5/10 凌晨/午:  BL-D6/BL-D2/D3 PG 统一 + 4 service _load_dotenv 修
+  5/10 下午:     BL-ARCH1 P0 catfish-web 搭 (~2.5K 行 TS, NavBar/RoleGate/8 路由)
+  5/10 傍晚:     BL-ARCH1 P1 完整用户管理 + sysadmin (~1.7K 行, 9 endpoints + 2 页面)
+  5/10 夜:       BL-ARCH2 Companion 瘦身 (砍 7 卡 + WebPortalLink banner)
+  → ARCH1+ARCH2 一天合计 ~4.5K 行 ship, 提前 21 天
+
+5/14 demo: 中央 web + Companion 瘦身版双线展示 (sysadmin 用户管理 + 我的桌宠).
 6 月+: BL-ARCH3 评估 (Companion 瘦身后还多重决定要不要拆 daemon)
 ```
+
+### §N · 5/10 夜 a16z continual learning 启发 (H2 评估)
+
+> 鸿波 5/10 夜读 a16z《Why We Need Continual Learning》(2026-04-22) 后定调:
+> **"常变是这类企业、政府的常态"** — catfish 卖点不应停在"接 LLM",
+> 而是"跟得上你们公司变化的伙伴". 三个延伸方向, 5/14 demo + 6 月数据反馈
+> 后再评估启动顺序. 当前 ❄️ deferred, 不开 task 不分散收尾精力.
+
+| ID | 项 | 状态 | 估时 | 客户痛感 | 优先级 |
+|---|---|---|---|---|---|
+| BL-Q3-FACT | **事实补丁系统** — 政策/标准变更 → diff → 标记受影响 skill → LLM 重写 → 走 SkillRevision 审批. 5/10 夜鸿波认可"真卖点", 设计文档 ship 见 [`docs/CATFISH-FACT-PATCH-DESIGN.md`](./CATFISH-FACT-PATCH-DESIGN.md) | ✏️ 设计完成 | 1-2 周 | ✅ 高 (季度更新) | **P0 候选** |
+| BL-Q3-SWARM | skill 协调器 — 长 agent loop 拆多 skill 子 context, 互不污染 | ❄️ 观察 | 3-4 周 | ❌ 低 | 等数据 |
+| BL-Q4-GRAPH | skill 之间 RAG — skill 引用其他 skill 输出 | ❄️ 观察 | 2-3 周 | ❌ 低 | 锦上添花 |
+
+#### BL-Q3-FACT 设计草稿 (鸿波 5/10 夜认可的"真卖点")
+
+**问题域**:
+- 央企/政府每季度有政策/标准/流程变更 (ISO27001 新版本 / 国资委新规 / 财务制度调整)
+- skill 是某时间点的"上次做法"固化 → 政策一变 skill 输出建议过时 → 客户信任崩
+- 通用 LLM 也帮不上忙 (训练 cutoff + 不知道客户内部新规)
+- catfish 当前没解, **是 BL-MM13/14/15 skill_revision 体系最自然的下一步**
+
+**解题思路** (复用 BL-MM13/14/15 已有基础设施):
+1. **触发**: IT / 合规人员上传"变更说明"文件 (PDF / Word / 飞书纪要), 或者
+   定期扫公司知识库 / 政策门户 (BL-D3 mcp 接公司内部系统)
+2. **diff**: LLM 比对新文件 vs 已有 skill 中的"假设" (e.g. skill_run_briefing
+   假设"周报按 X 模板", 新规改成 Y 模板)
+3. **标记受影响 skill**: 用 SkillsHub 元数据 (subscribe_count + 内容 grep + LLM 语义匹配)
+   找出引用了旧假设的 skill, 标 "可能受新规影响"
+4. **LLM 重写候选**: 对每个受影响 skill, 自动生成改进 patch
+   (catfish_propose_skill_revision 现成工具 + 政策上下文 prompt)
+5. **走审批流**: 进 SkillRevisionCard / catfish-web /admin 待审, 合规审查通过后落盘
+6. **追踪有效性**: BL-MM15 14 天监测分数, 没提升回退
+
+**P0 范围 (1-2 周, 复用现有)**:
+- IT 手动上传"变更说明"触发 (不做自动扫)
+- 单 skill diff (不做跨 skill 依赖)
+- 走现有 SkillRevision 审批流, 不另起 UI
+
+**P1 范围 (Q4 +)**:
+- 定期扫公司知识库 (mcp)
+- 跨 skill 依赖图 (BL-Q4-GRAPH 联动)
+- 合规专属审批 workflow (跟 sysadmin 用户管理同款)
+
+**5/14 demo 故事线**:
+> 客户问 "那以后 ISO27001 改了 / 我们流程变了, skill 不就过时了吗?"
+> 答 "对, 这是通用 LLM 永远解不了的问题 — 它的训练数据停在某个时间点.
+>      catfish 不一样, 我们 Q3 启动事实补丁系统: 您的合规部门把变更说明
+>      给鲶鱼一看, 它会标出所有可能受影响的 skill, 自动生成改进版给您审批.
+>      这套机制其实今天的 skill_revision 已经在跑 (演示 LearningCard
+>      pending → accept → 14 天追踪) — Q3 加上"政策触发"那个入口就完整了."
+
+**为啥这是真护城河**:
+- 文章 a16z 论点: "weights 不让自动学是因为合规边界 — 一旦自动学就丧失 auditability"
+- catfish 不动 weights, 改 skill 文件 — **白盒 + 全程可审 + 走人工审批节点**
+- 通用 LLM (ChatGPT / Claude / 国内闭源) 都做不到这个, 因为他们没"member 公司"概念
+- 这是 catfish "白盒 continual learning" 在央企场景的杀手级落地
+
+---
 
 ---
 

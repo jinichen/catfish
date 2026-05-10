@@ -60,6 +60,9 @@ dist-ssr/
 .vite/
 *.tsbuildinfo
 
+# nohup runtime log (skills-hub / mcp-registry / 各 service 启动脚本会用)
+nohup.out
+
 # 包管理器锁文件保留（lock 应该 commit）—— 不忽略 package-lock.json / pnpm-lock.yaml
 
 # ============================================================
