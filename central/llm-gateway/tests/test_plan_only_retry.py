@@ -226,3 +226,143 @@ def test_l7_mixed_completion_plus_intent_with_tool():
     assert _has_future_intent(content)
     # 决策: last_is_tool=True + completion=True + future=True
     # → real_completion = (completion AND NOT future) = False → 不 block, 应 retry
+
+
+# ─── BL-FIX23 L8 — 反向判定 task-complete (修 L7 keyword 太严) ──────
+
+
+def test_l8_task_complete_real_cases():
+    """L8 新 helper _is_task_complete_claim 应识别真完成态."""
+    from catfish_gateway.app import _is_task_complete_claim
+    # 任务完成
+    assert _is_task_complete_claim("任务完成")
+    assert _is_task_complete_claim("已完成全部检查")
+    assert _is_task_complete_claim("整理完毕, 共 5 项")
+    # 查询型空结果
+    assert _is_task_complete_claim("没有待办")
+    assert _is_task_complete_claim("0 项待办")
+    assert _is_task_complete_claim("未发现异常")
+    # 终态失败
+    assert _is_task_complete_claim("登录失败, 密码错误")
+    assert _is_task_complete_claim("权限不足, 无法访问")
+    # 等用户决策
+    assert _is_task_complete_claim("请问是否需要继续?")
+    assert _is_task_complete_claim("是否继续下一步?")
+    assert _is_task_complete_claim("请你确认 X 后我继续")
+
+
+def test_l8_step_reports_NOT_task_complete():
+    """L8 关键: 鸿波 EIS 场景 — '已识别验证码' 这种 step 报告不算 task complete.
+
+    L7 用 _has_completion_claim 把这个误判成完成态 (因为 '已识别' 含 '已'),
+    L8 用更严的 _is_task_complete_claim, 步骤进度词不再误伤.
+    """
+    from catfish_gateway.app import _is_task_complete_claim
+    # 鸿波 EIS 真实卡死 case
+    assert not _is_task_complete_claim("已识别验证码 '2fW2'")
+    assert not _is_task_complete_claim("登录页面已加载, 验证码为 XYZ")
+    # 其它 step 报告
+    assert not _is_task_complete_claim("已截图当前页面")
+    assert not _is_task_complete_claim("已点击登录按钮")
+    assert not _is_task_complete_claim("已导航到 X")
+    assert not _is_task_complete_claim("看到登录页了")
+    assert not _is_task_complete_claim("现在自动填入用户名")
+
+
+def test_l8_empty_or_none():
+    from catfish_gateway.app import _is_task_complete_claim
+    assert not _is_task_complete_claim("")
+    assert not _is_task_complete_claim(None)  # type: ignore[arg-type]
+
+
+# L8 决策矩阵 — 用纯 Python 重现 should_retry 逻辑, 不需要 stream mock
+def _retry_decision_l8(
+    *, last_is_tool, task_complete, user_feedback, plan_only,
+    too_repetitive=False, retries=0, max_retries=1,
+):
+    """精确重现 app.py L8 的 should_retry 计算, 用于单测覆盖决策矩阵."""
+    mid_task_after_tool = last_is_tool and not task_complete
+    feedback_plan_only = (not last_is_tool) and user_feedback and plan_only
+    return (
+        retries < max_retries
+        and not too_repetitive
+        and (mid_task_after_tool or feedback_plan_only)
+    )
+
+
+def test_l8_eis_step_report_should_retry():
+    """鸿波 EIS 真实 case: tool 之后 '已识别验证码 XXXX'.
+
+    L7 因 _is_plan_only_content=False 不 retry (LLM 卡死).
+    L8 因 last_is_tool=True + task_complete=False → retry.
+    """
+    r = _retry_decision_l8(
+        last_is_tool=True, task_complete=False,
+        user_feedback=False, plan_only=False,
+    )
+    assert r
+
+
+def test_l8_real_completion_blocks_retry():
+    """tool 之后 '已检查完毕, 0 项待办' — 真完成不 retry."""
+    r = _retry_decision_l8(
+        last_is_tool=True, task_complete=True,
+        user_feedback=False, plan_only=False,
+    )
+    assert not r
+
+
+def test_l8_ask_user_blocks_retry():
+    """tool 之后 '请你确认 X' — 等用户回答, 不 retry."""
+    r = _retry_decision_l8(
+        last_is_tool=True, task_complete=True,  # "请问/请你确认" 在 task_complete 列表
+        user_feedback=False, plan_only=False,
+    )
+    assert not r
+
+
+def test_l8_too_repetitive_blocks_retry():
+    """死循环保险 Jaccard ≥ 0.55 仍 block."""
+    r = _retry_decision_l8(
+        last_is_tool=True, task_complete=False,
+        user_feedback=False, plan_only=False,
+        too_repetitive=True,
+    )
+    assert not r
+
+
+def test_l8_legacy_feedback_path_still_works():
+    """老 L5 path: 没跑过 tool, 用户反馈 + plan-only → retry."""
+    r = _retry_decision_l8(
+        last_is_tool=False, task_complete=False,
+        user_feedback=True, plan_only=True,
+    )
+    assert r
+
+
+def test_l8_general_chat_no_retry():
+    """一般对话 (没 tool 没反馈) 不 retry."""
+    r = _retry_decision_l8(
+        last_is_tool=False, task_complete=False,
+        user_feedback=False, plan_only=False,
+    )
+    assert not r
+
+
+def test_l8_retry_limit():
+    """到 retry 上限 (1) 之后不再 retry, 防 L6 死循环."""
+    r = _retry_decision_l8(
+        last_is_tool=True, task_complete=False,
+        user_feedback=False, plan_only=False,
+        retries=1, max_retries=1,
+    )
+    assert not r
+
+
+def test_l8_no_tool_no_feedback_no_retry():
+    """干净对话 — 没 tool 没反馈, 即使 LLM 说 plan-only 也不 retry (没场景需要)."""
+    r = _retry_decision_l8(
+        last_is_tool=False, task_complete=False,
+        user_feedback=False, plan_only=True,  # plan_only 但没反馈触发
+    )
+    assert not r
