@@ -1005,6 +1005,23 @@ _PLAN_ONLY_PROMISE_KEYWORDS = (
     # 未来意图 (LLM 经常说"我立刻..."然后停)
     "立刻", "我现在", "现在重新", "我马上", "马上动手", "重新生成",
     "我立即", "立即生成", "现在生成", "现在调整", "重新调整",
+    # BL-FIX23 L7 (5/11): mid-task plan-only stop — LLM 跑完 tool 之后说"我下一步去 X"
+    # 但没真调 tool. 鸿波实测: tool → "现在自动填入用户名" stop. 加进 promise 词触发 retry.
+    "接下来", "下一步", "现在自动", "现在填", "我去", "我准备", "现在调用",
+    "继续", "继续做", "继续执行",
+)
+
+# BL-FIX23 L7 (5/11): 拆 promise 词为两类, last_is_tool 时只在"真完成态"才不 retry,
+# "未来意图"还要继续 retry (mid-task 不能让它停).
+_PLAN_ONLY_COMPLETION_KEYWORDS = (
+    "已生成", "已保存", "已完成", "已创建", "已修改", "已写入",
+    "已输出", "已写好", "已经生成", "已经保存", "已经完成",
+)
+_PLAN_ONLY_FUTURE_INTENT_KEYWORDS = (
+    "立刻", "我现在", "现在重新", "我马上", "马上动手", "重新生成",
+    "我立即", "立即生成", "现在生成", "现在调整", "重新调整",
+    "接下来", "下一步", "现在自动", "现在填", "我去", "我准备", "现在调用",
+    "继续", "继续做", "继续执行",
 )
 _PLAN_ONLY_FEEDBACK_KEYWORDS = (
     # 短反馈词 (员工提细节调整时常见)
@@ -1018,14 +1035,16 @@ _PLAN_ONLY_PRODUCTIVE_TOOLS = {
     "save_file", "tauri_save_file", "memory_save", "catfish_remember",
 }
 _PLAN_ONLY_HARD_HINT = (
-    "[BL-FIX23 L5 plan-only-retry]\n"
+    "[BL-FIX23 L7 plan-only-retry]\n"
     "你刚回了一段话但**没 emit 任何 tool_call**. 员工要的是真做事不是嘴上承诺.\n\n"
     "立刻发起 tool_call 真做出来:\n"
     "- 写文档/改文档 → execute_code 调 python-docx 直接读写文件\n"
     "- 跑 skill → catfish_run_skill\n"
-    "- 写文件 → write_file / tauri_save_file\n\n"
-    "**一个字解释都不要发**, 直接 tool_call. "
-    "鸿波刚才已经反馈了这正是他要的 — '怎么干一半就停了'."
+    "- 写文件 → write_file / tauri_save_file\n"
+    "- 浏览器自动化 → catfish_browser_fill / catfish_browser_click / catfish_browser_goto\n\n"
+    "**一个字解释都不要发**, 直接 tool_call.\n\n"
+    "特别注意 — 如果你刚说了 '现在自动填入X' / '接下来去做 Y' / '我去 X', 那就立刻\n"
+    "调对应的 tool, 不要再来一句话报告进度然后停下. 员工说: '怎么干一半就停了'."
 )
 # BL-FIX23 L6 (5/11): retry 上限 2 → 1. 鸿波 5/11 演示前夜遇到 24+ 轮 L5 retry
 # 死循环 (每次 HTTP request retry counter 都从 0 起, 总累积 ≥ 24 次同样的
@@ -1115,6 +1134,32 @@ def _is_plan_only_content(content: str) -> bool:
     if not content or not isinstance(content, str):
         return False
     for kw in _PLAN_ONLY_PROMISE_KEYWORDS:
+        if kw in content:
+            return True
+    return False
+
+
+def _has_completion_claim(content: str) -> bool:
+    """BL-FIX23 L7 (5/11): 内容含"已生成 / 已完成"类完成态词.
+
+    last_is_tool + 完成态 → 真做完了汇报, 别 retry (避免死循环, L6 原意).
+    """
+    if not content or not isinstance(content, str):
+        return False
+    for kw in _PLAN_ONLY_COMPLETION_KEYWORDS:
+        if kw in content:
+            return True
+    return False
+
+
+def _has_future_intent(content: str) -> bool:
+    """BL-FIX23 L7 (5/11): 内容含"现在去 / 接下来 / 下一步"类未来意图词.
+
+    last_is_tool + 未来意图 → mid-task plan-only stop, 应该 retry (鸿波 5/11 真实场景).
+    """
+    if not content or not isinstance(content, str):
+        return False
+    for kw in _PLAN_ONLY_FUTURE_INTENT_KEYWORDS:
         if kw in content:
             return True
     return False
@@ -1330,34 +1375,48 @@ async def _stream_chat_completion(
                         used_model.name,
                     )
 
-            # ── BL-FIX23 L5+L6: plan-only retry 触发判定 ──────────────────
-            # L6 (5/11) 新加 3 条 "不 retry" 保险, 修死循环:
-            #   (1) messages 末尾是 tool result → 上一轮已经 tool, LLM 现在汇报合理
-            #   (2) 当前内容跟历史 assistant 高度相似 (Jaccard ≥ 0.55) → LLM 在重复
-            #   (3) retry 上限 2 → 1, 单 request 内 1 次足够
+            # ── BL-FIX23 L5+L6+L7: plan-only retry 触发判定 ──────────────────
+            # L6 (5/11) 加 3 条死循环保险, last_is_tool 一刀切 block.
+            # L7 (5/11) 拆 last_is_tool 二分:
+            #   - 真完成态 (已生成/已完成) + last_is_tool → block (跟 L6 一致)
+            #   - 未来意图 (现在去/接下来/我去) + last_is_tool → **应 retry**
+            #     (鸿波实测: tool → '现在自动填入用户名' stop, 中途断了, 该 retry)
+            # 另: 老 L5 要求 user 反馈, L7 把 'last_is_tool + 未来意图' 也当合法触发场景.
             msgs_for_check = current_body.get("messages") or []
             last_is_tool = _last_role_is_tool_result(msgs_for_check)
             too_repetitive = _assistant_history_too_repetitive(msgs_for_check, cumulative_content)
+            has_future_intent = _has_future_intent(cumulative_content)
+            has_completion = _has_completion_claim(cumulative_content)
+            # L7: 真完成态 (有完成词 + 没未来意图) — 别 retry, 避免死循环.
+            real_completion_after_tool = (
+                last_is_tool and has_completion and not has_future_intent
+            )
+            # L7: 触发场景 — 老 L5 (用户反馈后 stop) 或 新 L7 (mid-task tool 后说要继续)
+            triggering_scenario = (
+                _last_user_message_is_feedback(msgs_for_check)
+                or (last_is_tool and has_future_intent)
+            )
             should_retry = (
                 last_finish_reason == "stop"
                 and not cumulative_has_tool_call
                 and _is_plan_only_content(cumulative_content)
-                and _last_user_message_is_feedback(msgs_for_check)
                 and plan_only_retries < _MAX_PLAN_ONLY_RETRIES
-                and not last_is_tool          # L6 fix1
-                and not too_repetitive        # L6 fix2
+                and not too_repetitive            # L6 死循环保险保留
+                and not real_completion_after_tool  # L7 替代 L6 的 'not last_is_tool'
+                and triggering_scenario           # L7 新增: mid-task 也算
             )
             if not should_retry:
-                # 留 log 方便 debug — 为啥这次没 retry (主要是 L6 新加的 2 条决策点)
+                # 留 log 方便 debug
                 if (
                     last_finish_reason == "stop"
                     and not cumulative_has_tool_call
                     and _is_plan_only_content(cumulative_content)
                 ):
                     logger.info(
-                        "BL-FIX23 L6 skip retry: last_is_tool=%s too_repetitive=%s "
-                        "retries=%d/%d (避免死循环)",
-                        last_is_tool, too_repetitive,
+                        "BL-FIX23 L7 skip retry: last_is_tool=%s future_intent=%s "
+                        "completion=%s real_done=%s too_repetitive=%s retries=%d/%d",
+                        last_is_tool, has_future_intent, has_completion,
+                        real_completion_after_tool, too_repetitive,
                         plan_only_retries, _MAX_PLAN_ONLY_RETRIES,
                     )
                 yield "data: [DONE]\n\n"

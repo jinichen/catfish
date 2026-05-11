@@ -124,11 +124,105 @@ def test_feedback_skips_assistant_and_tool():
 
 def test_hard_hint_marker_present():
     """硬 hint 含 marker, 防回归."""
-    assert "[BL-FIX23 L5 plan-only-retry]" in _PLAN_ONLY_HARD_HINT
+    # L7 (5/11): marker 从 L5 升 L7, 防止误更
+    assert "[BL-FIX23 L7 plan-only-retry]" in _PLAN_ONLY_HARD_HINT
     assert "tool_call" in _PLAN_ONLY_HARD_HINT
     assert "execute_code" in _PLAN_ONLY_HARD_HINT
 
 
-def test_max_retries_is_2():
-    """重发上限固定 2 次, 防死循环."""
-    assert _MAX_PLAN_ONLY_RETRIES == 2
+def test_max_retries_is_1():
+    """L6 改: 单 request 内 retry 上限 1 次 (避免死循环)."""
+    assert _MAX_PLAN_ONLY_RETRIES == 1
+
+
+# ─── BL-FIX23 L7 新加 helpers ────────────────────────────────────────────
+
+
+def test_has_future_intent_triggers():
+    """未来意图词 — 鸿波 5/11 场景 'tool → 现在自动填入用户名 stop'."""
+    from catfish_gateway.app import _has_future_intent
+    assert _has_future_intent("现在自动填入用户名")
+    assert _has_future_intent("接下来我去打开浏览器")
+    assert _has_future_intent("下一步是检查待办")
+    assert _has_future_intent("我去验证一下")
+    assert _has_future_intent("继续执行后续步骤")
+    assert _has_future_intent("我现在重新生成")
+
+
+def test_has_future_intent_no_trigger_on_completion():
+    """完成态词不算未来意图 (避免误判)."""
+    from catfish_gateway.app import _has_future_intent
+    assert not _has_future_intent("已生成 docx")
+    assert not _has_future_intent("数据已经完成调整")
+
+
+def test_has_future_intent_empty():
+    from catfish_gateway.app import _has_future_intent
+    assert not _has_future_intent("")
+    assert not _has_future_intent(None)  # type: ignore[arg-type]
+
+
+def test_has_completion_claim_triggers():
+    """完成态词 — 真做完了汇报."""
+    from catfish_gateway.app import _has_completion_claim
+    assert _has_completion_claim("文档已生成")
+    assert _has_completion_claim("已保存到 ~/Desktop")
+    assert _has_completion_claim("已完成全部修改")
+    assert _has_completion_claim("已经写入数据库")
+
+
+def test_has_completion_no_trigger_on_future():
+    """未来意图不算完成态."""
+    from catfish_gateway.app import _has_completion_claim
+    assert not _has_completion_claim("现在自动填入用户名")
+    assert not _has_completion_claim("我立刻调整")
+    assert not _has_completion_claim("接下来去 X")
+
+
+def test_has_completion_empty():
+    from catfish_gateway.app import _has_completion_claim
+    assert not _has_completion_claim("")
+    assert not _has_completion_claim(None)  # type: ignore[arg-type]
+
+
+# ─── L7 决策矩阵 (real_completion_after_tool 计算) ─────────────────────
+#
+# 4 个维度组合, 每个 case 一个测试覆盖 helper 行为:
+#
+# | last_is_tool | future_intent | completion | 应 retry? | 场景               |
+# |--------------|---------------|------------|-----------|--------------------|
+# | False        | False         | False      | 不 (无触发) | 一般闲聊            |
+# | False        | True          | False      | (看用户反馈) | 老 L5 路径          |
+# | True         | True          | False      | **是**     | 鸿波 mid-task case  |
+# | True         | False         | True       | **不**     | 真做完汇报          |
+# | True         | True          | True       | **是**    | 混合: "已生成 X, 接下来 Y" |
+
+
+def test_l7_mid_task_future_intent_with_tool():
+    """鸿波 5/11 真实场景: tool → '现在自动填入' stop → 应识别为 mid-task."""
+    from catfish_gateway.app import _has_future_intent, _has_completion_claim
+    content = "验证码识别为 2fW2. 现在自动填入用户名."
+    assert _has_future_intent(content)
+    assert not _has_completion_claim(content)
+    # 决策: last_is_tool=True + future_intent=True + completion=False
+    # → real_completion_after_tool = False → 不被 block, 应 retry
+
+
+def test_l7_real_completion_after_tool():
+    """真做完场景: tool → '已完成检查, 无待办' → 不应 retry."""
+    from catfish_gateway.app import _has_future_intent, _has_completion_claim
+    content = "已完成检查, 系统中共 0 项未处理待办."
+    assert _has_completion_claim(content)
+    assert not _has_future_intent(content)
+    # 决策: last_is_tool=True + completion=True + future=False
+    # → real_completion_after_tool = True → 应 block (避免死循环)
+
+
+def test_l7_mixed_completion_plus_intent_with_tool():
+    """混合: tool → '已生成 X, 接下来去做 Y' → 还在 mid-task, 应 retry."""
+    from catfish_gateway.app import _has_future_intent, _has_completion_claim
+    content = "已生成验证码图片, 接下来去填表单"
+    assert _has_completion_claim(content)
+    assert _has_future_intent(content)
+    # 决策: last_is_tool=True + completion=True + future=True
+    # → real_completion = (completion AND NOT future) = False → 不 block, 应 retry
