@@ -1169,6 +1169,83 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ── BL-Q3-WEBSKILL (5/11) 视觉定位 — 找页面元素位置 ───────────────
+    {
+        "name": "catfish_browser_locate",
+        "description": (
+            "★ **视觉找页面元素的位置坐标**. 给自然语言描述 + 截图, vision 模型返\n"
+            "{x, y, width, height, center, confidence, reasoning}.\n\n"
+            "**为啥要这个**: LLM 看截图大概知道按钮在哪, 但 122b 视觉估坐标常偏 50-100 像素.\n"
+            "专用 vision 模型 (catfish-private-vision) 更准. 返回直接喂\n"
+            "catfish_browser_click(coordinates=[center.x, center.y]).\n\n"
+            "**典型场景**:\n"
+            "  - 找登录按钮 (find_by_text 撞 placeholder 时改走视觉)\n"
+            "  - 找弹窗的 'X' 关闭 (没文字, 只能视觉)\n"
+            "  - 找列表里的某个图标 / 颜色块\n"
+            "  - 验证码输入框跟普通输入框混在一起时定位\n\n"
+            "**调用模式**:\n"
+            "  1. selector 指定区域: 在某元素区域内找 (e.g. modal 内, 表单内)\n"
+            "  2. full_page=true: 截全页找 (慢, 但找不在 viewport 的元素时用)\n"
+            "  3. 都不传: 截 viewport (默认, 最快)\n"
+            "  4. image_b64 直传: 调试用 / 已有图\n\n"
+            "**hint 通过 query 自然语言传**: query='页面顶部的蓝色登录按钮' / "
+            "query='验证码输入框, 在密码框下方' — 越具体, vision 模型越准.\n\n"
+            "**返回**:\n"
+            "  {ok: bool, found: bool, x/y/width/height: int, center: {x, y},\n"
+            "   confidence: 0-1, reasoning: 'xx 颜色 yy 位置', model, attempts}\n\n"
+            "  - found=true + confidence ≥ 0.6 → 直接点 center\n"
+            "  - found=true + confidence < 0.6 → 看 reasoning 决定要不要试 / 重新截图\n"
+            "  - found=false → vision 没找到, 换 query 描述或 catfish_browser_snapshot 看 DOM\n\n"
+            "**跟 catfish_browser_find_by_text 配合**:\n"
+            "  - 有文字 → 优先 find_by_text (DOM 精确)\n"
+            "  - 没文字 / 文字歧义 (placeholder 撞) → 走 locate (视觉)\n\n"
+            "**跟 catfish_recognize_captcha 区别**:\n"
+            "  - captcha: 识字符 (OCR), 返字符串\n"
+            "  - locate:  定位置 (空间), 返坐标\n"
+            "  - 同 vision 模型, 不同 prompt"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "自然语言描述要找的元素. 例: '蓝色登录按钮' / "
+                        "'验证码输入框, 在密码框下方' / '右上角的关闭 X'. "
+                        "**越具体, 准确率越高**."
+                    ),
+                },
+                "selector": {
+                    "type": "string",
+                    "description": (
+                        "可选, 只截某元素区域内找. 例: 'form.login-form' 截表单内. "
+                        "不传则全 viewport (或 full_page)."
+                    ),
+                },
+                "image_b64": {
+                    "type": "string",
+                    "description": "可选, 直传 base64 PNG (不含 data: prefix). 调试用.",
+                },
+                "full_page": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "true=截整页 (含 scroll 区域, 慢), false=只截 viewport (默认, 快). "
+                        "selector / image_b64 传了则忽略这个."
+                    ),
+                },
+                "max_retry": {
+                    "type": "integer",
+                    "default": 1,
+                    "description": "模型偶发返 garbage 时重试, 默认 1, 最大 3.",
+                },
+            },
+            "required": ["query"],
+        },
+        "emoji": "🎯",
+        "toolset": "catfish_native",
+        "available": True,
+    },
     # ── BL-Q3-WEBSKILL (5/11) 验证码 OCR ──────────────────────────
     {
         "name": "catfish_recognize_captcha",
@@ -5147,4 +5224,8 @@ def dispatch_native(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_recognize_captcha":
         from . import recognize_captcha  # noqa: PLC0415
         return recognize_captcha.recognize_captcha(args)
+    # BL-Q3-WEBSKILL (5/11) 视觉定位元素
+    if name == "catfish_browser_locate":
+        from . import browser_locate  # noqa: PLC0415
+        return browser_locate.locate(args)
     raise ValueError(f"unknown native tool: {name}")

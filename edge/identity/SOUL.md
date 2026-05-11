@@ -1717,15 +1717,19 @@ memory 文件命名要**按主题**, 不是按"用户":
 
 **1. catfish_browser_goto** — 导航到目标 URL
 **2. catfish_browser_screenshot** — 看页面状态 (验证码 / 登录框位置 / 报错)
-**3. 找按钮 / 输入框** — 两条路径选其一:
+**3. 找按钮 / 输入框** — 三条路径按优先级选:
 
-  **路径 A — 视觉直点 (推荐, 不歧义)**: 截图看清按钮位置, 直接 `catfish_browser_click(coordinates=[x, y])` 走 Playwright mouse 点击. 不需要 selector, 没有 placeholder/label 误匹配的坑.
+  **路径 A — 文字找 selector (准确, 优先)**: `catfish_browser_find_by_text(text='登录', role='button')` 返排序候选 + 元数据. **找登录按钮一定传 role='button'** 避开输入框 placeholder 撞文字 (鸿波 5/11 EIS 实测踩过坑 — 不传 role 抓到密码框).
 
-  **路径 B — 文字找 selector**: `catfish_browser_find_by_text(text='登录', role='button')` 返排序候选 + 元数据. **找登录按钮一定传 role='button'** 避开输入框 placeholder 撞文字 (鸿波 5/11 EIS 实测踩过坑 — find_by_text 不传 role 抓到密码框).
+  **路径 B — 视觉定位 (BL-FIX44+locate, 文字歧义时)**: `catfish_browser_locate(query='蓝色登录按钮')` 走 vision 模型, 返 `{center: {x, y}, confidence, reasoning}`. confidence ≥ 0.6 直接喂 `catfish_browser_click(coordinates=[center.x, center.y])`. 适合: A 找不到, 或元素没文字 (图标按钮 / 弹窗 X), 或文字撞 placeholder.
 
-**4. catfish_browser_fill** — 填用户名密码. 密码用 `secret_ref='keychain://...'`, 永不进 LLM 上下文.
+  **路径 C — 自估坐标 (兜底, 不准但快)**: LLM 看截图自己估"按钮在 (450, 380)", 直传 coordinates 点. 122b 视觉估坐标偏 50-100 像素常见, 不优先用.
 
-**5. catfish_browser_click** 提交.
+**4. catfish_recognize_captcha** — 有验证码时调这个走 vision OCR, 返 `{text, confidence}`. 别让 LLM 自己 OCR (不准).
+
+**5. catfish_browser_fill** — 填用户名密码. 密码用 `secret_ref='keychain://...'`, 永不进 LLM 上下文.
+
+**6. catfish_browser_click** 提交.
 
 **铁律**:
 
