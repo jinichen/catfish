@@ -1238,6 +1238,52 @@ def _last_user_message_is_feedback(messages: list) -> bool:
     return False
 
 
+async def _fake_sse_response(
+    text: str,
+    *,
+    model_name: str = "catfish-client-cmd",
+) -> AsyncIterator[str]:
+    """模拟一条 SSE 流式 response, 不调 LLM. 给 /goal 等 client-side 命令用.
+
+    BL-HERMES013-3 (5/11): 借鉴 Hermes 0.13 client-side slash commands —
+    /goal 这种命令不该走 LLM (耗 quota / 引入 LLM 解析歧义), gateway 直接
+    拦截 + 返 fake SSE response 模拟 LLM 输出. Companion 端协议无感.
+
+    OpenAI streaming chat completion SSE 格式:
+      data: {"choices": [{"delta": {"role": "assistant"}}], ...}
+      data: {"choices": [{"delta": {"content": "..."}}], ...}
+      ...
+      data: {"choices": [{"finish_reason": "stop", "delta": {}}], ...}
+      data: [DONE]
+    """
+    import uuid  # noqa: PLC0415
+
+    chat_id = f"chatcmpl-cmd-{uuid.uuid4().hex[:12]}"
+    created = int(time.time())
+
+    def _chunk(delta: dict, finish: str | None = None) -> str:
+        payload = {
+            "id": chat_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model_name,
+            "choices": [{
+                "index": 0,
+                "delta": delta,
+                "finish_reason": finish,
+            }],
+        }
+        return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    # role chunk
+    yield _chunk({"role": "assistant"})
+    # 整段 content (一次发, 不切片 — slash 命令响应都短)
+    yield _chunk({"content": text})
+    # finish
+    yield _chunk({}, finish="stop")
+    yield "data: [DONE]\n\n"
+
+
 async def _stream_chat_completion(
     body: dict,
     *,
@@ -1649,6 +1695,22 @@ async def chat_completions(
     if model.mode != "chat":
         raise HTTPException(status_code=400, detail=f"model {model_name} is not a chat model")
 
+    # BL-HERMES013-3 (5/11): /goal Ralph loop client-side commands.
+    # 检测最后一条 user message 是不是 /goal 命令. 是的话直接返 fake SSE response,
+    # 不调 LLM, 不计 quota. 借鉴 Hermes 0.13 client-side slash commands 设计.
+    if not is_internal_call:
+        from .session_goals import detect_goal_command  # noqa: PLC0415
+        is_goal_cmd, goal_response = detect_goal_command(body.get("messages", []))
+        if is_goal_cmd and goal_response:
+            logger.info(
+                "/goal command intercepted (user=%s): %s",
+                user.sub, goal_response[:60]
+            )
+            return StreamingResponse(
+                _fake_sse_response(goal_response, model_name=model_name),
+                media_type="text/event-stream",
+            )
+
     # 鲶鱼身份注入：客户端没传 system message 就自动加 SOUL + memory
     # Hermes 这种已自带 system 的不动；客户端可加 X-Catfish-Skip-Identity: true 强制跳过
     # BL-E11 命名权: header X-Catfish-Agent-Name / -Personality 让员工改名 + 选人设
@@ -1700,6 +1762,13 @@ async def chat_completions(
     #       点了 button 才入, 比 LLM 自觉观察的权重高. internal call 也 inject —
     #       summarizer / proactive 用一致风格, 也要尊重员工 feedback.
     body["messages"] = inject_feedback(body["messages"])
+
+    # 档 4 (BL-HERMES013-3 5/11): 注入员工 /goal 锁定目标. 借鉴 Hermes 0.13 Ralph
+    # loop. 单文件 ~/.catfish/session_goal.txt, 员工 /goal xxx 设, 每轮自动 inject
+    # 到 system 末尾, LLM 跑偏时被持续拉回. 跟 L7/L8/FIX46 (事后纠偏) 互补 — goal
+    # 是**事前锚定**.
+    from .session_goals import inject_session_goal  # noqa: PLC0415
+    body["messages"] = inject_session_goal(body["messages"])
 
     # BL-A1.2 (5/8): 检测 messages 历史里 LLM 连续多次同 tool 失败 → 注入 hint
     # 让 LLM 换思路, 不要重复同样错误. 真 Agent retry 行为.

@@ -205,8 +205,11 @@ def log_request_metadata(
         # 区分上游慢 (TTFT 长) vs 输出长 (latency 长 但 TTFT 正常). 关键运维信号.
         record["ttft_ms"] = round(ttft_ms, 1)
     if error:
-        # Truncate to avoid accidentally leaking upstream prompt echoes in errors
-        record["error"] = error[:200]
+        # Truncate to avoid accidentally leaking upstream prompt echoes in errors.
+        # BL-HERMES013-1 (5/11): scrub credential patterns 在 truncate 前一道,
+        # 修上游 LLM 回显 prompt 片段含 'password=xxx' 等模式时漏到 audit log.
+        from .prompt_security import scrub_credentials_in_text  # noqa: PLC0415
+        record["error"] = scrub_credentials_in_text(error)[:200]
     if security_concern:
         # 标记字段, 例 'prompt_credential_detected'. 不含真密码值, 只标记类型.
         record["security_concern"] = security_concern[:100]

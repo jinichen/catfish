@@ -101,6 +101,25 @@ def detect_credentials_in_text(text: str) -> List[str]:
     return hits
 
 
+def scrub_credentials_in_text(text: str) -> str:
+    """脱敏: 把检测到的凭据匹配 substring 替成 `[REDACTED:credential]`.
+
+    BL-HERMES013-1 (5/11 借鉴 Hermes 0.13 "default-on secret redaction"):
+    catfish audit 从 day 1 就**永不写 prompt 内容** (见 metrics.py 文档),
+    但 error trace 字段 `error[:200]` 可能含 upstream LLM provider 回显的
+    部分 prompt. 在写入 error 前调这个 scrub 一次, 把 password=xxx /
+    密码: xxx 等模式替掉.
+
+    永远不抛.
+    """
+    if not text or not isinstance(text, str):
+        return text or ""
+    out = text
+    for p in _CREDENTIAL_PATTERNS:
+        out = p.sub("[REDACTED:credential]", out)
+    return out
+
+
 def detect_credentials_in_messages(messages: List[dict]) -> List[str]:
     """扫 OpenAI-style messages 数组里所有 user content, 检测密码模式.
 
