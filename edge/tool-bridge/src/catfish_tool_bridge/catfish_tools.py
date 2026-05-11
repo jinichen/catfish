@@ -1169,6 +1169,56 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ── BL-Q3-WEBSKILL (5/11) 验证码 OCR ──────────────────────────
+    {
+        "name": "catfish_recognize_captcha",
+        "description": (
+            "★ 识别页面上的验证码图. 走 gateway loopback + vision 模型 (catfish-private-vision) OCR. "
+            "比 LLM 自己 OCR 准, 不占员工 quota.\n\n"
+            "**调用场景**:\n"
+            "  - 登录页有验证码 (CAS / EIS / 政府系统常见)\n"
+            "  - 表单提交需要验证码 (反 bot)\n"
+            "  - skill 脚本需要确定性识别 (跳过 LLM 推理)\n\n"
+            "**两种喂图模式 (二选一)**:\n"
+            "  1. selector='#captchaImg' (推荐): 工具自己 Playwright 截图, LLM 不需要先 screenshot\n"
+            "  2. image_b64='iVBORw...': 传 base64 (无 data: prefix), 你已经有图的场景\n\n"
+            "**hint 可选 (强烈推荐传)**: 'numeric_4' / 'alphanumeric_4' / 'numeric_5' / 'numeric_6' / "
+            "'alphanumeric_5' / 'alphanumeric_6' / 'chinese' / 任意自然语言. 帮 vision 收紧搜索空间, "
+            "也用来算 confidence (长度对不上 confidence 降).\n\n"
+            "**返**: {ok, text, confidence: 0-1, model, attempts, raw_response}.\n"
+            "  - ok=True + text='2fW2' + confidence=0.85 → 直接 catfish_browser_fill 填进去\n"
+            "  - ok=False → 重截 / 换 hint / 让员工手动填\n\n"
+            "**重试**: max_retry 控 (默认 1, 最大 3). 模型偶发失败时 retry 一次 + 重新算 confidence."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "description": "验证码图片元素的 CSS selector, 例 '#captchaImg' / 'img.captcha'",
+                },
+                "image_b64": {
+                    "type": "string",
+                    "description": "base64 PNG/JPG (不含 data: 前缀). 跟 selector 二选一.",
+                },
+                "hint": {
+                    "type": "string",
+                    "description": (
+                        "可选, 帮 vision 模型. 'numeric_4' (4 位数字) / 'alphanumeric_4' (4 位字母数字) / "
+                        "'numeric_5' / 'numeric_6' / 'alphanumeric_5' / 'alphanumeric_6' / 'chinese' / 自然语言"
+                    ),
+                },
+                "max_retry": {
+                    "type": "integer",
+                    "default": 1,
+                    "description": "模型偶发失败时重试次数, 默认 1, 最大 3.",
+                },
+            },
+        },
+        "emoji": "🔢",
+        "toolset": "catfish_native",
+        "available": True,
+    },
     # ── BL-Q3-ARCHIVE (5/11) tool message archive 读回 ──────────────
     {
         "name": "catfish_read_tool_archive",
@@ -5093,4 +5143,8 @@ def dispatch_native(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_read_tool_archive":
         from . import read_tool_archive  # noqa: PLC0415
         return read_tool_archive.read_tool_archive(args)
+    # BL-Q3-WEBSKILL (5/11) 验证码 OCR
+    if name == "catfish_recognize_captcha":
+        from . import recognize_captcha  # noqa: PLC0415
+        return recognize_captcha.recognize_captcha(args)
     raise ValueError(f"unknown native tool: {name}")
