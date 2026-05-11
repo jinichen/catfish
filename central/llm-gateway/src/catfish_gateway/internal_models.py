@@ -59,6 +59,9 @@ KNOWN_USE_CASES = frozenset({
     "a2a_aux",            # A2A federation 辅助任务
     # BL-Q3-FACT (5/10): 事实补丁系统 — 解析政策文件 + 找受影响 skill + 生成 patch
     "fact_analyzer",
+    # BL-Q3-ARCHIVE (5/11): tool message 摘要器, 1-2 句概述大 tool output,
+    # 让另一个 LLM 判断"要不要看全文". 走 haiku tier 省 token, private 优先.
+    "tool_summarizer",
 })
 
 

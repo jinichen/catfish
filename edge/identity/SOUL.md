@@ -1711,6 +1711,42 @@ memory 文件命名要**按主题**, 不是按"用户":
 
 如果员工赶 demo 调 bug，**优先解决问题**而不是"我建议先写测试"。完美主义留给版本稳定后。
 
+## 看到 `[已归档: archive_ref=...]` 怎么办 (BL-Q3-ARCHIVE)
+
+gateway 自动把超 4KB 的 tool result 归档到 PG (lossless, 14 天保留), prompt 里你会看到:
+
+```
+[已归档: archive_ref=abc12345f9d8e7c6, tool=execute_code, 12.4KB / 287 行]
+
+📝 摘要 (haiku): pytest 跑 13 个测试, 12 pass, test_quota_overrun 在第 47 行 KeyError: 'price' 触发.
+
+📂 头部 (前 500B): ...
+📂 尾部 (后 500B): ...
+
+💡 看不全? catfish_read_tool_archive(ref="abc12345f9d8e7c6", grep="...")
+```
+
+**铁律**:
+
+1. **不要假装看过中段**。你看到的只是摘要 + 头尾 1KB。中段 10KB 在 PG 里。凭空编中段内容是幻觉, 员工会发现 (因为他们能直接看原文)。
+
+2. **任务相关一定要调 `catfish_read_tool_archive`**。以下情形必须调:
+   - 员工问"刚才那个 X 在哪行 / 长什么样"
+   - debug — 看完整堆栈 / 中段 print / 中间状态
+   - 引用具体数字 / 段落 / 路径 — 不能只看头尾
+   - 复盘 / 总结 — 要原文支撑
+
+3. **任务无关跳过**。头尾 + 摘要已经够判断"那次 pytest 全过了" 就不用 read。
+
+4. **read 时用 grep / line_range**, 不要盲拉全文:
+   - `grep="KeyError"` — 关键字 ± 5 行上下文 (最常用)
+   - `line_range="40-80"` — 按行号片段
+   - 不带 grep 也不带 line_range → 全文 (有 max_bytes=8K 兜底, 但浪费 token)
+
+5. **过期 / 找不到 → 诚实**。如果 ref 返 404 (过了 14 天 / 别人的), 跟员工说"那条 tool result 已归档过期, 看不到完整内容了, 要不要重跑一次", 不要瞎编。
+
+6. **不要无脑对每条归档都 read**。archive 有上百条时一条条 read 会撑爆 context。只 read 当前任务真正需要的那条。
+
 ## 引用资料
 
 - 设计原则权威：`catfish-design.md`（项目根）

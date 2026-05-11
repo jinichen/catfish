@@ -1128,6 +1128,55 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ── BL-Q3-ARCHIVE (5/11) tool message archive 读回 ──────────────
+    {
+        "name": "catfish_read_tool_archive",
+        "description": (
+            "★ 读 gateway 已归档的 tool output 内容 (lossless 全文 in PG, 14 天保留).\n\n"
+            "**触发**: prompt 里出现 `[已归档: archive_ref=...]` 且任务相关需要原文.\n\n"
+            "✅ 必须调用:\n"
+            "  - 员工问'刚才那个 X 在哪行 / 长什么样' → 用 grep 召回原文\n"
+            "  - debug — 报错堆栈 / 中段 print / 中间状态 → 用 grep='Error'/'fail'\n"
+            "  - 引用具体数字 / 段落 → 用 line_range 拿原文\n"
+            "  - 复盘 / 总结 — 要原文支撑, 不能凭空编中段\n\n"
+            "❌ 不该调用:\n"
+            "  - 头尾 + 摘要已经够判断 (e.g. '上次 pytest 全过了' 类问题)\n"
+            "  - 任务跟 archive 无关\n"
+            "  - **不要无脑拉全文** — 大文件直接撑 context, 务必用 grep 或 line_range\n\n"
+            "三种调用模式:\n"
+            "  1. catfish_read_tool_archive(ref='abc12345') — 全文 (max_bytes 上限 8K)\n"
+            "  2. catfish_read_tool_archive(ref='abc12345', line_range='40-80') — 按行号\n"
+            "  3. catfish_read_tool_archive(ref='abc12345', grep='KeyError') — 关键字 ± 5 行\n\n"
+            "底层: 走 gateway POST /api/tool-archives/read, 鉴权同 chat (OIDC).\n"
+            "返 {ref, content, total_lines, total_bytes, tool_name, summary}.\n"
+            "404 = ref 不存在或 14 天过期; 403 = 不是你的 archive."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ref": {
+                    "type": "string",
+                    "description": "archive 引用, 16 字 sha256 (从 prompt 里的 archive_ref= 取)",
+                },
+                "line_range": {
+                    "type": "string",
+                    "description": "可选, 行号范围 'N-M' 或单行 'N' (1-indexed, e.g. '40-80')",
+                },
+                "grep": {
+                    "type": "string",
+                    "description": "可选, 子串关键字, 召回匹配行 ± 5 行上下文 (推荐用)",
+                },
+                "max_bytes": {
+                    "type": "integer",
+                    "description": "可选, 返回字节上限, 默认 8000, 硬上限 32K",
+                },
+            },
+            "required": ["ref"],
+        },
+        "emoji": "📂",
+        "toolset": "catfish_native",
+        "available": True,
+    },
 ]
 
 
@@ -4792,4 +4841,8 @@ def dispatch_native(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_skill_publish":
         from . import skill_publish  # noqa: PLC0415
         return skill_publish.skill_publish(args)
+    # BL-Q3-ARCHIVE (5/11) tool message archive 读回
+    if name == "catfish_read_tool_archive":
+        from . import read_tool_archive  # noqa: PLC0415
+        return read_tool_archive.read_tool_archive(args)
     raise ValueError(f"unknown native tool: {name}")

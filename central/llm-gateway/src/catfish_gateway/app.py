@@ -209,7 +209,26 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("a2a_self_register 失败 (Plan D A2A 不可用): %s", e)
 
+    # BL-Q3-ARCHIVE (5/11): tool message archive 后台 haiku 摘要 worker.
+    # 异步扫 tool_archives 表 (summary IS NULL), 调 gateway loopback chat 走
+    # tool_summarizer use_case (haiku tier=private). 失败 silent, 不阻塞 chat.
+    archive_summary_task = None
+    try:
+        from .tool_archive.summary_worker import start_summary_worker  # noqa: PLC0415
+        archive_summary_task = start_summary_worker()
+        if archive_summary_task is not None:
+            logger.info("BL-Q3-ARCHIVE summary_worker 已启动")
+    except Exception as e:
+        logger.warning("BL-Q3-ARCHIVE summary_worker 启动失败 (archive 仍能写, 只是不摘要): %s", e)
+
     yield
+
+    if archive_summary_task is not None:
+        archive_summary_task.cancel()
+        try:
+            await archive_summary_task
+        except asyncio.CancelledError:
+            pass
 
     refresh_task.cancel()
     try:
@@ -324,6 +343,17 @@ try:
     logger.info("facts_router: /api/facts/* 已挂载 (BL-Q3-FACT P0 MVP)")
 except Exception as e:
     logger.warning("facts_router 挂载失败: %s", e)
+
+# BL-Q3-ARCHIVE (5/11): tool message archive 路由.
+# /api/tool-archives/read  — LLM 调 catfish_read_tool_archive 工具走这条
+# /api/tool-archives/{ref} — admin 自查 / debug 用
+# /api/tool-archives/gc    — 手动 GC (sysadmin)
+try:
+    from .tool_archive.router import router as tool_archive_router  # noqa: PLC0415
+    app.include_router(tool_archive_router)
+    logger.info("tool_archive_router: /api/tool-archives/* 已挂载 (BL-Q3-ARCHIVE)")
+except Exception as e:
+    logger.warning("tool_archive_router 挂载失败: %s", e)
 
 
 # Plan D · A 端内部 endpoint — tool-bridge 通过 HTTP 调这个触发 A2A.
@@ -1678,14 +1708,16 @@ async def chat_completions(
         )
         body["messages"] = unwrap_tool_images(body["messages"])
 
-        # BL-FIX41 (5/11): 单条 role=tool content 字节级硬截断.
-        # 真实 case: 鸿波 demo 前夜 log 显示 tool_msgs=63 累积 100-200KB
-        # 把 128K context 烧到 117-125% overflow. 改 2KB/条上限,
-        # 50 条 × 2KB = 100KB 留 28KB 给 system + journal + user.
-        # 保前 1KB + 后 1KB + 中间替成 "...[已截断 N 字]...".
-        # 消息数量不变, 保 Hermes ReAct chain 完整 (assistant ↔ tool 配对).
-        from .tool_msg_truncator import truncate_tool_messages  # noqa: PLC0415
-        body["messages"] = truncate_tool_messages(body["messages"])
+        # BL-Q3-ARCHIVE (5/11): tool message 内容 archive + 摘要双层.
+        # 替代 BL-FIX41 硬切 — lossless 保留, LLM 主动 catfish_read_tool_archive
+        # 召回中段. 含 features.is_archive_enabled() 灰度开关 (默认开). archive
+        # 写挂 → 自动降级 FIX41 硬切 (兜底). 内部用 derive_session_id 自动从
+        # first user message hash 派生 session_id, 同会话稳定.
+        from .tool_archive import prepare_tool_messages  # noqa: PLC0415
+        body["messages"] = prepare_tool_messages(
+            body["messages"],
+            user_email=user.email,
+        )
 
     # 含图自动 reroute 到 vision 模型: 防止主力模型 (非 vision) 收到 image_url
     # 直接被上游 protobuf 解析炸 BadRequest 400. in-place 改 body["model"].
