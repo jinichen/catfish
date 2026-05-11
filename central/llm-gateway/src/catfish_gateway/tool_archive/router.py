@@ -52,7 +52,7 @@ def _check_access(row: dict, user: User) -> None:
     """archive 只能 owner 读. admin/sysadmin 全公司可读 (审计)."""
     if user.is_admin():  # admin / sysadmin
         return
-    if row.get("user_email") != user.email:
+    if row.get("user_email") != user.sub:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="不能读别人的 archive",
@@ -85,7 +85,7 @@ async def read_archive(
 
     logger.info(
         "read_archive ref=%s user=%s mode=%s out_bytes=%d",
-        req.ref, user.email,
+        req.ref, user.sub,
         "grep" if req.grep else ("line_range" if req.line_range else "full"),
         len(body.encode("utf-8")),
     )

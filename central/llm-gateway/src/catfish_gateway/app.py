@@ -1716,7 +1716,7 @@ async def chat_completions(
         from .tool_archive import prepare_tool_messages  # noqa: PLC0415
         body["messages"] = prepare_tool_messages(
             body["messages"],
-            user_email=user.email,
+            user_email=user.sub,  # User.sub = email (决策 3)
         )
 
     # 含图自动 reroute 到 vision 模型: 防止主力模型 (非 vision) 收到 image_url
