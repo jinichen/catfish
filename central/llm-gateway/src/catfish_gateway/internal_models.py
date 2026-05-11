@@ -62,6 +62,9 @@ KNOWN_USE_CASES = frozenset({
     # BL-Q3-ARCHIVE (5/11): tool message 摘要器, 1-2 句概述大 tool output,
     # 让另一个 LLM 判断"要不要看全文". 走 haiku tier 省 token, private 优先.
     "tool_summarizer",
+    # BL-Q3-WEBSKILL (5/11): 验证码 OCR — 走 vision 模型识别 base64 截图,
+    # 让 catfish_recognize_captcha 工具用. 私有 vision 优先 (catfish-private-vision).
+    "captcha_ocr",
 })
 
 
