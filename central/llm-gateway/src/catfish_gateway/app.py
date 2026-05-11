@@ -1748,6 +1748,7 @@ async def chat_completions(
                 department=user.department,
                 model=model_name,
                 est_tokens=estimated,
+                role=user.role,  # BL-FIX39 (5/11): admin / sysadmin 跳 quota
             )
             if not qc.allowed:
                 friendly = _quota_module.friendly_quota_message(qc, user.sub, model_name)

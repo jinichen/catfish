@@ -777,12 +777,21 @@ def check_quota(
     model: str,
     est_tokens: int,
     config: QuotaConfig | None = None,
+    role: str | None = None,
 ) -> QuotaCheck:
     """请求来时调一次, 返 allowed=False 触发 429.
 
     检查顺序: per_user_minute → per_user_day → per_model_day → per_department_day.
     任一超 → 立刻拒, 不查后面的.
+
+    BL-FIX39 (5/11): role in (admin, sysadmin) → 直接 allowed=True 跳所有检查.
+    系统管理员场景: 演 demo / 应急处理 / 跨员工 debug 时不能被 quota 卡住.
+    quota_events 仍会记录 (后续审计能看 admin 用了多少 token, 只是不拒).
     """
+    # BL-FIX39: admin / sysadmin 跳 quota
+    if role in ("admin", "sysadmin"):
+        return QuotaCheck(allowed=True)
+
     if config is None:
         config = load_quota_config()
 

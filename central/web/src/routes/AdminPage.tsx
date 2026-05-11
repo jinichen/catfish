@@ -181,12 +181,16 @@ function AdminQuota() {
           配额规则在 <code>central/llm-gateway/config/quotas.yaml</code>.
           P1 加 web 编辑 UI (defaults / per_model / per_dept / per_user override).
         </p>
-        <p>当前默认 (BL-FIX38, 5/10):</p>
+        <p>当前默认:</p>
         <ul style={{ paddingLeft: 20 }}>
-          <li>per_user: 1M tok/min, 10M tok/day</li>
+          <li><b>admin / sysadmin: 跳所有 quota 检查</b> (BL-FIX39, 5/11) — 系统管理员演示 / 应急 / debug 不被限速</li>
+          <li>per_user: 1M tok/min, 10M tok/day (BL-FIX38, 5/10)</li>
           <li>ceo override: 同上</li>
           <li>engineering / 研发部: tokens_per_day=0 (不限)</li>
         </ul>
+        <p style={{ fontSize: 12, marginTop: 8 }}>
+          注: admin / sysadmin 跳检查但仍写 quota_events 表 (审计能看到 token 用量, 只是不拒请求).
+        </p>
       </div>
     </Card>
   );
