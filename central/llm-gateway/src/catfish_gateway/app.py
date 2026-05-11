@@ -997,7 +997,82 @@ _PLAN_ONLY_HARD_HINT = (
     "**一个字解释都不要发**, 直接 tool_call. "
     "鸿波刚才已经反馈了这正是他要的 — '怎么干一半就停了'."
 )
-_MAX_PLAN_ONLY_RETRIES = 2
+# BL-FIX23 L6 (5/11): retry 上限 2 → 1. 鸿波 5/11 演示前夜遇到 24+ 轮 L5 retry
+# 死循环 (每次 HTTP request retry counter 都从 0 起, 总累积 ≥ 24 次同样的
+# 'execute_code 生成文档' → 'plan-only stop' → retry).
+# 单次 request 内 retry 1 次足够 — 1 次还 plan-only 就接受是"等反馈"不是偷懒.
+_MAX_PLAN_ONLY_RETRIES = 1
+
+# BL-FIX23 L6: Jaccard 阈值 — 当前 attempt content 跟历史 assistant 消息相似度
+# 超过这个值就**不再 retry** (LLM 已经在重复说话, 再 retry 一定再说一遍).
+_REPETITIVE_JACCARD_THRESHOLD = 0.55
+
+
+def _jaccard_bigram(s1: str, s2: str) -> float:
+    """字符 bigram Jaccard 系数 — 粗糙但快的相似度判定. 0~1, 1 = 完全相同."""
+    if not s1 or not s2:
+        return 0.0
+    # 取前 200 字 (足够指纹 + 避免长文本计算开销)
+    s1 = s1[:200]
+    s2 = s2[:200]
+    if len(s1) < 2 or len(s2) < 2:
+        return 0.0
+    bg1 = {s1[i : i + 2] for i in range(len(s1) - 1)}
+    bg2 = {s2[i : i + 2] for i in range(len(s2) - 1)}
+    if not bg1 or not bg2:
+        return 0.0
+    return len(bg1 & bg2) / len(bg1 | bg2)
+
+
+def _assistant_history_too_repetitive(messages: list, current_content: str) -> bool:
+    """BL-FIX23 L6 (5/11): 历史里有 assistant message 跟当前内容高度相似 → 死循环征兆.
+
+    防 24+ 轮"已生成请检查" + execute_code 反复跑同样动作的 case (鸿波 5/11 实测).
+
+    判定: 当前 content ≥ 50 字 + 历史里有任一 assistant msg 跟当前 Jaccard > 阈值.
+    Jaccard 用字符 bigram 集合, 取前 200 字, 中文敏感.
+    """
+    if not current_content or len(current_content) < 50:
+        return False
+    if not messages:
+        return False
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("role") != "assistant":
+            continue
+        prev = msg.get("content", "")
+        if isinstance(prev, list):
+            # multipart, 取 text 部分
+            prev = " ".join(
+                p.get("text", "")
+                for p in prev
+                if isinstance(p, dict) and p.get("type") == "text"
+            )
+        if not isinstance(prev, str) or len(prev) < 50:
+            continue
+        if _jaccard_bigram(prev, current_content) >= _REPETITIVE_JACCARD_THRESHOLD:
+            return True
+    return False
+
+
+def _last_role_is_tool_result(messages: list) -> bool:
+    """BL-FIX23 L6 (5/11): 最后一条 message 是 tool 结果 (说明上一轮已经调过 tool,
+    LLM 现在是看完工具结果在汇报, 不应该再 retry 让它"又干一遍").
+
+    一次 request 末尾 tool result + LLM 输出 "已完成" 是合理流程, 不是 plan-only 偷懒.
+    """
+    if not messages:
+        return False
+    for msg in reversed(messages):
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role")
+        if role == "tool":
+            return True
+        if role in {"user", "assistant", "system"}:
+            return False
+    return False
 
 
 def _is_plan_only_content(content: str) -> bool:
@@ -1225,15 +1300,36 @@ async def _stream_chat_completion(
                         used_model.name,
                     )
 
-            # ── BL-FIX23 L5: plan-only retry 触发判定 ──────────────────
+            # ── BL-FIX23 L5+L6: plan-only retry 触发判定 ──────────────────
+            # L6 (5/11) 新加 3 条 "不 retry" 保险, 修死循环:
+            #   (1) messages 末尾是 tool result → 上一轮已经 tool, LLM 现在汇报合理
+            #   (2) 当前内容跟历史 assistant 高度相似 (Jaccard ≥ 0.55) → LLM 在重复
+            #   (3) retry 上限 2 → 1, 单 request 内 1 次足够
+            msgs_for_check = current_body.get("messages") or []
+            last_is_tool = _last_role_is_tool_result(msgs_for_check)
+            too_repetitive = _assistant_history_too_repetitive(msgs_for_check, cumulative_content)
             should_retry = (
                 last_finish_reason == "stop"
                 and not cumulative_has_tool_call
                 and _is_plan_only_content(cumulative_content)
-                and _last_user_message_is_feedback(current_body.get("messages") or [])
+                and _last_user_message_is_feedback(msgs_for_check)
                 and plan_only_retries < _MAX_PLAN_ONLY_RETRIES
+                and not last_is_tool          # L6 fix1
+                and not too_repetitive        # L6 fix2
             )
             if not should_retry:
+                # 留 log 方便 debug — 为啥这次没 retry (主要是 L6 新加的 2 条决策点)
+                if (
+                    last_finish_reason == "stop"
+                    and not cumulative_has_tool_call
+                    and _is_plan_only_content(cumulative_content)
+                ):
+                    logger.info(
+                        "BL-FIX23 L6 skip retry: last_is_tool=%s too_repetitive=%s "
+                        "retries=%d/%d (避免死循环)",
+                        last_is_tool, too_repetitive,
+                        plan_only_retries, _MAX_PLAN_ONLY_RETRIES,
+                    )
                 yield "data: [DONE]\n\n"
                 break
 
