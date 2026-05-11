@@ -33,10 +33,19 @@ SUMMARY_TIMEOUT_SEC = 30.0
 SUMMARY_MAX_TOKENS = 200
 
 
-async def _summarize_one(content: str, tool_name: str | None) -> tuple[str | None, str | None]:
+async def _summarize_one(
+    content: str,
+    tool_name: str | None,
+    origin_model: str | None = None,
+) -> tuple[str | None, str | None]:
     """返 (summary, model_name). 失败时 summary=None.
 
     走 gateway loopback chat (跟 session_summarizer 同款).
+
+    模型选择顺序 (BL-Q3-ARCHIVE fix2, 5/11):
+      1. origin_model (chat 用啥 summary 也用啥, 私有部署 token 不要钱)
+      2. catalog 里 tool_summarizer tag 模型 (有人标注的话)
+      3. 兜底 — 任意 chat + private 优先
     """
     if not features.summary_enabled():
         return None, None  # 摘要全局关 — caller 也不会调到这里
@@ -52,11 +61,28 @@ async def _summarize_one(content: str, tool_name: str | None) -> tuple[str | Non
         logger.warning("summary_worker load_config 失败: %s", e)
         return None, None
 
+    # 先按 catalog tag / 兜底, 拿到一个完整的候选 fallback chain
     candidates = pick_internal_models_ordered("tool_summarizer", config)
+
+    # origin_model 顶到最前面 (如果在 catalog 里 + 可达)
+    if origin_model:
+        origin_obj = next(
+            (m for m in config.models
+             if m.name == origin_model and m.mode == "chat" and m.upstream.is_available),
+            None,
+        )
+        if origin_obj:
+            # 去重: 候选已含 origin_model 就只移到最前; 不含就 prepend
+            candidates = [origin_obj] + [c for c in candidates if c.name != origin_model]
+            logger.debug(
+                "summary_worker: origin_model=%s 顶到候选首位 (chat 同款)",
+                origin_model,
+            )
+
     if not candidates:
         logger.warning(
-            "summary_worker: catalog 没 tool_summarizer 可用模型 — 跳过. "
-            "建议至少给一个 haiku/flash 模型 recommended_for 加 tool_summarizer tag."
+            "summary_worker: catalog 一个可用 chat 模型都没 — 跳过. "
+            "(没 tool_summarizer tag + 兜底也空, api key 全没配?)"
         )
         return None, None
 
@@ -129,9 +155,10 @@ async def _process_one(row: dict) -> None:
     ref = row["ref"]
     content = row["content"]
     tool_name = row.get("tool_name")
+    origin_model = row.get("origin_model")  # BL-Q3-ARCHIVE fix2
     t0 = time.time()
     try:
-        summary, model = await _summarize_one(content, tool_name)
+        summary, model = await _summarize_one(content, tool_name, origin_model)
         if summary:
             db.update_summary(ref, summary=summary, model=model)
             logger.info(

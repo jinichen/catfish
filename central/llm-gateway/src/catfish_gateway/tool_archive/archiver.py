@@ -98,6 +98,7 @@ def archive_tool_messages(
     *,
     user_email: str,
     session_id: str,
+    origin_model: str | None = None,
     threshold: int | None = None,
 ) -> list[dict[str, Any]]:
     """对超阈值的 role=tool message 写 archive + 替换 content.
@@ -105,6 +106,8 @@ def archive_tool_messages(
     返回新 list (deepcopy). 不改原 messages.
 
     threshold None → 从 features.threshold_bytes() 取.
+    origin_model: 当前 chat 用的 model name. summary_worker 摘要时优先用同款.
+                  (鸿波 5/11 决策: 私有部署 token 不要钱, 用 chat 同款最省事)
     """
     if not messages:
         return messages
@@ -136,6 +139,7 @@ def archive_tool_messages(
             "content": content,
             "content_bytes": nbytes,
             "lines": _count_lines(content),
+            "origin_model": origin_model,  # 5/11 fix2: chat 用啥模型 summary 也用啥
         })
 
         if not ok:
@@ -180,6 +184,7 @@ def prepare_tool_messages(
     user_email: str,
     session_id: str | None = None,
     conversation_id: str | None = None,
+    origin_model: str | None = None,
 ) -> list[dict[str, Any]]:
     """gateway app.py 调的统一入口.
 
@@ -189,6 +194,7 @@ def prepare_tool_messages(
       disabled            → FIX41 硬切 (老路径)
 
     session_id 没传 → 自动按 user_email + first user message hash 派生
+    origin_model: 当前 chat 用的 model name, summary_worker 优先用同款 (BL-Q3-ARCHIVE fix2).
     """
     if not features.is_archive_enabled(user_email):
         # 老路径 — FIX41 硬切. import 延后避免循环.
@@ -202,6 +208,7 @@ def prepare_tool_messages(
     try:
         return archive_tool_messages(
             messages, user_email=user_email, session_id=sid,
+            origin_model=origin_model,
         )
     except Exception as e:  # noqa: BLE001
         logger.warning(

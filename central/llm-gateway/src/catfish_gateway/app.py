@@ -1717,6 +1717,7 @@ async def chat_completions(
         body["messages"] = prepare_tool_messages(
             body["messages"],
             user_email=user.sub,  # User.sub = email (决策 3)
+            origin_model=model_name,  # fix2: summary_worker 用 chat 同款模型
         )
 
     # 含图自动 reroute 到 vision 模型: 防止主力模型 (非 vision) 收到 image_url

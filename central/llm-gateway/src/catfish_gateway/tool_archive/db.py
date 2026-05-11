@@ -94,11 +94,13 @@ def _pg_upsert(row: dict) -> bool:
                     ref, session_id, user_email, tool_call_id, tool_name,
                     content, content_bytes, lines,
                     summary, summary_model, summary_at, summary_error,
+                    origin_model,
                     created_at, expires_at
                 ) VALUES (
                     %s, %s, %s, %s, %s,
                     %s, %s, %s,
                     %s, %s, %s, %s,
+                    %s,
                     %s, %s
                 )
                 ON CONFLICT (ref) DO NOTHING
@@ -116,6 +118,7 @@ def _pg_upsert(row: dict) -> bool:
                     row.get("summary_model"),
                     row.get("summary_at"),
                     row.get("summary_error"),
+                    row.get("origin_model"),
                     row.get("created_at", datetime.now(timezone.utc)),
                     row.get(
                         "expires_at",
@@ -172,6 +175,7 @@ def _pg_get(ref: str) -> dict | None:
                 SELECT ref, session_id, user_email, tool_call_id, tool_name,
                        content, content_bytes, lines,
                        summary, summary_model, summary_at, summary_error,
+                       origin_model,
                        created_at, expires_at
                 FROM tool_archives
                 WHERE ref = %s AND expires_at > NOW()
@@ -185,6 +189,7 @@ def _pg_get(ref: str) -> dict | None:
                 "ref", "session_id", "user_email", "tool_call_id", "tool_name",
                 "content", "content_bytes", "lines",
                 "summary", "summary_model", "summary_at", "summary_error",
+                "origin_model",
                 "created_at", "expires_at",
             ]
             return dict(zip(cols, r))
@@ -234,7 +239,7 @@ def pick_unsummarized(limit: int = 10) -> list[dict]:
             with _pg_conn() as conn, conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT ref, content, tool_name
+                    SELECT ref, content, tool_name, origin_model
                     FROM tool_archives
                     WHERE summary IS NULL AND summary_error IS NULL
                     ORDER BY created_at
@@ -244,7 +249,13 @@ def pick_unsummarized(limit: int = 10) -> list[dict]:
                 )
                 rows = cur.fetchall()
                 return [
-                    {"ref": r[0], "content": r[1], "tool_name": r[2]} for r in rows
+                    {
+                        "ref": r[0],
+                        "content": r[1],
+                        "tool_name": r[2],
+                        "origin_model": r[3],
+                    }
+                    for r in rows
                 ]
         except Exception as e:  # noqa: BLE001
             logger.warning("pg pick_unsummarized 失败: %s", e)
@@ -267,6 +278,7 @@ def pick_unsummarized(limit: int = 10) -> list[dict]:
                     "ref": body["ref"],
                     "content": body["content"],
                     "tool_name": body.get("tool_name"),
+                    "origin_model": body.get("origin_model"),
                 })
                 if len(out) >= limit:
                     return out
