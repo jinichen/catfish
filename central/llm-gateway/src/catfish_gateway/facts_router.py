@@ -38,6 +38,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 
 from .auth import User, get_current_user
+from . import facts_db  # BL-Q3-FACT PG 统一 (5/10): PG 主 + jsonl 兜底
 
 logger = logging.getLogger("catfish.gateway.facts")
 
@@ -86,7 +87,13 @@ def _fact_dir(fact_id: str) -> Path:
 
 
 def _audit(fact_id: str, action: str, by_user: str, meta: dict | None = None) -> None:
-    """追加一条操作审计到 audit.jsonl."""
+    """追加一条操作审计 — PG 主, jsonl 兜底.
+
+    BL-Q3-FACT PG 统一 (5/10): 跟 mcp-registry / skills-hub 同模板, 双写防失败.
+    PG 失败 → 仍写 jsonl (本地 debug + 离线), 不阻塞业务.
+    """
+    facts_db.pg_audit(fact_id, action, by_user, meta)
+    # jsonl 永远写 (PG 失败兜底 + 本地可读 + dev 模式不要求 PG)
     audit_path = _fact_dir(fact_id) / "audit.jsonl"
     rec = {
         "ts_ms": int(time.time() * 1000),
@@ -106,9 +113,12 @@ def _read_meta(fact_id: str) -> dict:
 
 
 def _write_meta(fact_id: str, meta: dict) -> None:
+    """写 meta.json (jsonl 端) + upsert PG fact_changes 表."""
     (_fact_dir(fact_id) / "meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    # PG 同步 (失败不阻塞, log warn — facts_db 内部已 try/except)
+    facts_db.pg_upsert_fact(meta)
 
 
 # ── Endpoint 1: POST /api/facts/upload ─────────
@@ -178,9 +188,19 @@ async def list_facts(
     user: User = Depends(get_current_user),
     limit: int = 50,
 ) -> dict[str, Any]:
-    """列所有已上传的 fact (admin/sysadmin 看全部)."""
+    """列所有已上传的 fact (admin/sysadmin 看全部).
+
+    BL-Q3-FACT PG 统一 (5/10): PG 主, jsonl 兜底.
+    PG 可用 → 用 SQL 查 (有索引快); 不可用 → 扫 jsonl 目录.
+    """
     _require_admin(user)
 
+    # 优先走 PG
+    pg_items = facts_db.pg_list_facts(limit=limit)
+    if pg_items is not None:
+        return {"facts": pg_items, "count": len(pg_items), "source": "pg"}
+
+    # PG 不可用 (dev / 没配 CATFISH_DB_URL / PG 挂) → jsonl 兜底
     items: list[dict] = []
     if FACTS_DIR.exists():
         # 按目录 mtime 倒序 (最新的上)
@@ -201,7 +221,7 @@ async def list_facts(
             except Exception as e:  # noqa: BLE001
                 logger.warning("facts.list: 跳过坏目录 %s: %s", d, e)
                 continue
-    return {"facts": items, "count": len(items)}
+    return {"facts": items, "count": len(items), "source": "jsonl"}
 
 
 def _count_jsonl(p: Path) -> int:
@@ -216,9 +236,19 @@ async def get_fact(
     fact_id: str,
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """获取 fact 详情 (meta + 事实点 + 受影响 skill + patches)."""
+    """获取 fact 详情. PG 主, jsonl 兜底.
+
+    BL-Q3-FACT PG 统一 (5/10): SQL 一次拉全部 (meta + facts + impacts + patches + audit)
+    比 jsonl 多次 read 快. PG 不可用 → jsonl 兜底.
+    """
     _require_admin(user)
 
+    # 优先 PG
+    pg_detail = facts_db.pg_get_fact_detail(fact_id)
+    if pg_detail is not None:
+        return pg_detail
+
+    # jsonl 兜底
     meta = _read_meta(fact_id)
     fact_dir = _fact_dir(fact_id)
 
@@ -282,6 +312,8 @@ async def extract_fact(
     (fact_dir / "fact.json").write_text(
         json.dumps(facts, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    # BL-Q3-FACT PG 统一 (5/10): 同步 facts_json 到 PG
+    facts_db.pg_write_facts_json(fact_id, facts)
     meta["status"] = "extracted"
     meta["extracted_at_ms"] = int(time.time() * 1000)
     _write_meta(fact_id, meta)
@@ -313,6 +345,7 @@ async def analyze_fact(
         (fact_dir / "fact.json").write_text(
             json.dumps(facts, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+        facts_db.pg_write_facts_json(fact_id, facts)  # BL-Q3-FACT PG 统一
         meta["status"] = "extracted"
         _write_meta(fact_id, meta)
         _audit(fact_id, "extract (auto)", user.sub, {"facts_count": len(facts.get("facts", []))})
@@ -325,12 +358,14 @@ async def analyze_fact(
     with (fact_dir / "impacts.jsonl").open("w", encoding="utf-8") as f:
         for imp in impacts:
             f.write(json.dumps(imp, ensure_ascii=False) + "\n")
+    facts_db.pg_replace_impacts(fact_id, impacts)  # BL-Q3-FACT PG 统一
     _audit(fact_id, "find_impact", user.sub, {"impacts_count": len(impacts)})
 
     patches = await run_generate_patches(meta, facts, impacts, user)
     with (fact_dir / "patches.jsonl").open("w", encoding="utf-8") as f:
         for p in patches:
             f.write(json.dumps(p, ensure_ascii=False) + "\n")
+    facts_db.pg_replace_patches(fact_id, patches)  # BL-Q3-FACT PG 统一
     _audit(fact_id, "generate_patches", user.sub, {"patches_count": len(patches)})
 
     meta["status"] = "patches_ready"
@@ -439,8 +474,9 @@ async def approve_patch(
         raise HTTPException(status_code=502, detail=f"调 skills-hub 失败 (服务没起?): {e}") from e
 
     # 改 patch 状态
+    now_ms = int(time.time() * 1000)
     patch["status"] = "approved"
-    patch["approved_at_ms"] = int(time.time() * 1000)
+    patch["approved_at_ms"] = now_ms
     patch["approved_by"] = user.sub
     patch["published_version"] = new_version
     patch["hub_result"] = hub_result
@@ -448,13 +484,19 @@ async def approve_patch(
     with patches_path.open("w", encoding="utf-8") as f:
         for p in patches:
             f.write(json.dumps(p, ensure_ascii=False) + "\n")
+    # BL-Q3-FACT PG 统一 (5/10): 同步 patch 状态到 PG
+    facts_db.pg_update_patch_status(
+        fact_id, patch_idx, status="approved",
+        approved_at_ms=now_ms, approved_by=user.sub,
+        published_version=new_version,
+    )
 
     # 改 fact meta — 看是否全 approve 了
     approved_count = sum(1 for p in patches if p.get("status") == "approved")
     if approved_count == len(patches):
         meta = _read_meta(fact_id)
         meta["status"] = "approved"
-        meta["approved_at_ms"] = int(time.time() * 1000)
+        meta["approved_at_ms"] = now_ms
         _write_meta(fact_id, meta)
 
     _audit(fact_id, "approve_patch", user.sub, {
@@ -494,13 +536,19 @@ async def reject_patch(
     if patch_idx < 0 or patch_idx >= len(patches):
         raise HTTPException(status_code=404, detail=f"patch_idx {patch_idx} 越界")
     patch = patches[patch_idx]
+    now_ms = int(time.time() * 1000)
     patch["status"] = "rejected"
-    patch["rejected_at_ms"] = int(time.time() * 1000)
+    patch["rejected_at_ms"] = now_ms
     patch["rejected_by"] = user.sub
     patches[patch_idx] = patch
     with patches_path.open("w", encoding="utf-8") as f:
         for p in patches:
             f.write(json.dumps(p, ensure_ascii=False) + "\n")
+    # BL-Q3-FACT PG 统一 (5/10): 同步 reject 状态到 PG
+    facts_db.pg_update_patch_status(
+        fact_id, patch_idx, status="rejected",
+        rejected_at_ms=now_ms, rejected_by=user.sub,
+    )
 
     _audit(fact_id, "reject_patch", user.sub, {
         "patch_idx": patch_idx,
