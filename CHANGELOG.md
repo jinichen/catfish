@@ -3865,3 +3865,175 @@ LLM 看到的格式 (跟 BL-I4 5/8 预留接口对接):
 真凭据 (e.g. 完整 36-hex `ghp_xxxxx` 或 `sk-OXXXXX`) 仍然被默认 rules 逮到, 不影响安全性. 只豁免明显的占位符 / 单测 fixture.
 
 下次 CI run 这 3 条应该不再报. 如果还报: gitleaks-action@v2 默认会读 `.gitleaks.toml`, 但若 config 没生效要 check action env 是否需要显式 `--config-path` 参数.
+
+---
+
+## 2026-05-11（周一）— BL-FIX23 L6/L7/L8 + Q3-ARCHIVE 双层 + Q3-WEBSKILL 视觉双子 + 5/14 demo 路线大重置
+
+5/14 demo 前夜实测一晚, 撞 5 类 LLM agent 卡顿 → 修 13 处, 同时把 demo 主轴从 "AI 多智能" 重新校准成 **"员工教 AI 一次, AI 凝固成 skill"**. 跟 BL-Q3-FACT (政策→skill 补丁) 同源, 形成 Q3 完整产品线 **BL-Q3-WEBSKILL** (浏览器流程→skill).
+
+### Q3-ARCHIVE — tool message archive 双层 (替代 BL-FIX41 硬切)
+
+**起因**: 5/11 早 BL-FIX40 上 employee_journal 注入 15KB cap + BL-FIX41 tool 消息 2KB 硬切之后, log 仍 `context overflow: prompt_tokens=149623 (117%)`. 鸿波: "还是会有卡住的问题". 真根因: tool_msgs=63 累积 100-200KB.
+
+**鸿波拍板** "直接上 Q3, 不要考虑别的" — 跳过 LLM-only 摘要中间态, 直接做 lossless archive + 摘要双层.
+
+- **设计文档** `docs/CATFISH-Q3-ARCHIVE-DESIGN.md` 18 段 + FAQ.
+- **实施** (~1300 行):
+  - Alembic `20260511_003` — `tool_archives` 表 + 5 索引
+  - `catfish_gateway/tool_archive/` 包 8 文件 (archiver / db / prompts / reader / router / summary_worker / features / __init__)
+  - 阈值 4KB, ref = sha256(content + tool_call_id)[:16], 头 500B + 尾 500B + (异步 haiku 摘要)
+  - tool-bridge `read_tool_archive.py` — LLM 调 `catfish_read_tool_archive(ref, grep / line_range)` 召回中段
+  - SOUL.md 加"看到 [已归档: archive_ref=...] 怎么办" 6 条铁律
+  - PG 主 + jsonl 兜底 (跟 facts_db / mcp-registry 同模板)
+  - 31 单测全过
+  - 实测: 199 messages / 63 tool_msgs / 258KB → 112KB, 省 ~36K tokens (lossless)
+- **Fix 1** (User.email → User.sub): mac 实测 chat 500, User dataclass 字段是 sub (= email 决策 3) 不是 email
+- **Fix 2** (summary 用 chat 同款模型): 鸿波 "私有部署 token 不要钱, summary 直接用 chat 同款模型". 新加 `origin_model` 列 (alembic 20260511_004), summary_worker 优先用 archive 的 origin_model
+
+### BL-FIX23 L6/L7/L8 — plan-only retry 三轮迭代修 turn 控制 (5/9 后续)
+
+**L6 (早)** — 死循环紧急修:
+- Jaccard bigram 检测当前 attempt 跟历史 assistant 相似度 ≥ 0.55 → block retry
+- `_last_role_is_tool_result` 检测最近 message 是 role=tool → block (避免 tool 后又 retry 反复跑 tool)
+- retry 上限 2 → 1
+
+**L7 (晚)** — 拆"未来意图" vs "完成态":
+- `_PLAN_ONLY_COMPLETION_KEYWORDS` ("已生成 / 已完成") vs `_PLAN_ONLY_FUTURE_INTENT_KEYWORDS` ("立刻 / 现在 / 接下来 / 我去")
+- `real_completion_after_tool = last_is_tool AND has_completion AND NOT has_future_intent` → 跳 retry
+- 加 mid-task 触发: `last_is_tool AND has_future_intent` → retry (鸿波"tool → '现在自动填入用户名' stop" 场景)
+- 11 单测
+
+**L8 (深夜)** — 反向判定:
+- L7 撞鸿波第二次反馈: LLM 说"已识别验证码 'XXXX', 请确认" — 中性陈述句**不踩 keyword list**, `_is_plan_only_content=False`, retry 不触发
+- L8 改反向逻辑: 不问"是 plan-only?", 改问"是真任务完成?"
+- 新 helper `_is_task_complete_claim` + `_TASK_COMPLETE_KEYWORDS` ("任务完成 / 0 项 / 登录失败 / 请你确认")
+- 新决策: `(last_is_tool AND NOT task_complete) → retry`, 不再要求 plan-only keyword 匹配
+- 决策矩阵 4 case 全过. 9 个新单测 + 20 个老 case 不破
+
+### BL-FIX42 — 历史截图折叠 (修 Tauri fetch idle timeout)
+
+**起因**: 鸿波 "一截图就卡". log: `tool_with_image_marker=4 重组 4 条 → user multipart`, `latency=108s status=ok ttft=28s`. gateway 跑完了, **Companion macOS / Tauri fetch idle 60-120s 默认超时 abort**.
+
+**修法**: `tool_archive/image_folder.py` 在 `unwrap_tool_images` 之后, 保留最近 1 张图, 老图 `image_url` part 替成 `[历史截图已折叠]`. env `CATFISH_HISTORY_IMAGE_FOLDING_ENABLED` (默认开).
+
+实测 sandbox: 4 张图 → 1 张, prompt ~75% 减.
+
+### BL-FIX44 — 浏览器自动化彻底修 (鸿波"不是够不够的问题, 是要彻底解决问题")
+
+**起因**: `catfish_browser_find_by_text(text='登录')` 在 EIS 抓到密码框 placeholder 含"登录"翻车. 鸿波拍板**不打补丁, 真根因解决**.
+
+**真根因诊断**: 工具链断点 — screenshot 给视觉但没 selector, click 要 selector 但不给视觉, LLM 在中间硬桥. 修法两步:
+
+- **`catfish_browser_click` 加 `coordinates` 参数**: LLM 看截图直传 `[x, y]` 走 `page.mouse.click(x, y)`. 完全绕开 selector 歧义.
+- **`catfish_browser_find_by_text` 返排序候选 + 元数据**: 每个候选含 `selector / tag / role / match_type / is_clickable / bounds / center / score / in_viewport`. `top_recommendation` 给最佳猜测. 加 `role` 参数过滤 (`role='button'` 避开 placeholder).
+- 排序权重透明 (JS 内): role 匹配 +50, clickable +30, innerText match +20, placeholder match +3 (低分), size log 比例 +0~15...
+- SOUL.md 加"浏览器自动化纪律"段, 三条路径优先级 (find_by_text 优先 / locate / 自估坐标 兜底)
+- ~300 行改动, EIS 真实场景排序矩阵 Python 重现验证 (登录按钮 67 > 密码框 20 不传 role, 117 vs 0 传 role=button)
+
+### BL-Q3-WEBSKILL — 浏览器流程→skill 产品线起点
+
+**鸿波战略反思 (5/11 深夜)**: "一直打补丁治症状不治病. 真路线: LLM agent 教学一次 → 凝固成 skill, 后续走确定脚本." EIS 重复任务不该让 LLM 每次推理.
+
+**两个原子工具 ship**:
+
+- **`catfish_recognize_captcha`** (~250 行): 子 LLM 工具走 vision OCR (`catfish-private-vision`). 不让 LLM 自己 OCR (122b 视觉 OCR 不稳). selector / image_b64 二选一, hint 帮 confidence. internal_models 加 `captcha_ocr` use_case.
+- **`catfish_browser_locate`** (~330 行): 自然语言找元素位置 (跟 captcha 同模板). 解决"LLM 看截图但 selector 找不准". 返 `{x, y, w, h, center, confidence, reasoning}`. PNG header 直接解尺寸 (无 PIL), strict JSON 输出, 校验坐标在图内防幻觉, clamp 防溢出. 10 sandbox 单测全过.
+
+**视觉双子完整**:
+
+| 工具 | 任务 | 输出 |
+|------|------|------|
+| `recognize_captcha` | OCR 字符 | `"2fW2"` |
+| `browser_locate` | 找元素位置 | `{x, y, w, h, center, confidence}` |
+| `browser_click(coordinates)` | 点坐标 | `mode: 'coordinates'` |
+
+**eis-login skill 骨架**: `docs/samples/eis-login-skill/SKILL.md` ~300 行 (frontmatter + 8 步流程 + 失败矩阵 + session-renewal 段 + 教学路径). 草版, 5/12 鸿波内网测后填真实 selector → publish hub.
+
+### BL-FIX45 — 错误自动恢复 UX (3 类一起)
+
+**起因**: 鸿波撞 Gemini Flash-Lite 上游 500 红框, 让员工手动换模型. 还有 OAuth token 过期 401, EIS session 中途失效. 都是 UX 死角.
+
+- **A: 401 auto re-auth** (`chat.ts`): 检测 401 → 调 tauri `auth_login` → 弹浏览器 OAuth → 拿新 token → silent 重发. retry 上限 1, 防死循环.
+- **B: 500/502/503/504 auto fallback model** (`chat.ts`): 检测 5xx → fetchCatalog → 找下一个 chat + reachable 模型 → silent 切 + 提示"模型 X 不可达, 切到 Y 重试". retry 上限 2.
+- **C: skill session-renewal** (`eis-login SKILL.md`): 检测 url 跳回 /login 或 step 8 抓不到 dashboard → 跑 step 2-7 子集自动重登 → 回原步骤继续. renewal 上限 2.
+
+跟 L7/L8 (该 act 没 act) 反向修 — 401/500 时本来应该有 retry 路径但只显示红框, 现在自动救场.
+
+### BL-FIX46 — 请示停顿铁律 (修 LLM 过度行动)
+
+**起因**: 鸿波让 LLM 总结今天工作, LLM 答完后说"要不要继续看待办?", **立刻自己 catfish_browser_screenshot()** — 完全没等回答, 还折腾浏览器状态发现 EIS session 丢了, 越救越乱.
+
+**跟 L7/L8 反向问题**:
+- L7/L8: 该 act 没 act (LLM 中途 stop)
+- FIX46: **不该 act 却 act** (LLM 自作主张)
+
+**修法**: SOUL.md 加"请示停顿铁律" (跟 L1 "做完才说" + FIX24 "做完不再问" 三条互补):
+
+- 句末"要不要 X?" / "需要我..." / "是否..." / 任何带"?"指向员工决策 → 必须 stop
+- 不能跟着 emit tool_call act on 自己的建议
+- 列了 ✅ 合理请示 (路径模糊 / 高风险 / 涉及凭据) vs ❌ 假请示 ("你要看截图吗?" / "需要继续吗?")
+
+工程上不工程拦截 (容易误杀真合理"问 + 一气呵成"), 纯 SOUL 软纪律.
+
+### 5/14 demo 路线大重置 — 从 "AI 多智能" → "员工教 AI 一次, AI 凝固成 skill"
+
+鸿波 5/11 多次点醒, 我最后才转过来. 战略框架:
+
+- **Catfish 真定位**: ChatGPT/Claude 帮你做一次, **catfish 帮你做一次 + 凝固成你的资产** (publish hub, 全公司复用)
+- **传统 RPA (UiPath/用友) 差异**: IT 写脚本 3 天-3 周; catfish 员工教学 10 分钟, AI 自动生成 SKILL.md
+- **Tools 跨页面通用** (一套搞定 EIS / OA / 政务网 / 银行公司网银): goto / snapshot / find_by_text / recognize_captcha / browser_locate / click / fill — 不用 per page 改代码
+- **Skills per page 但 AI 自动写**: 通过 LLM agent 教学一次 → catfish_skill_from_demo (Q3 P1) 自动生成 SKILL.md
+- **页面改版自动适应**: skill 跑失败 → 自动降级 LLM agent + 通用工具 → 走通 → 跟老 skill diff → patch 走 BL-Q3-FACT 审批流程
+- **ROI**: 100 流程 × 1000 员工 = 600 万 RPA 部署成本节省 / 年 + 员工日常时间节省 8.3 万小时 / 年
+
+**demo 主轴改成**: "员工教鲶鱼一个新内网流程, 鲶鱼当场凝固成 skill, 同部门员工立即可用". 比 Q3-FACT (IT 视角) 打动力强 10 倍, 央企 CEO / HR / 业务部门都 get.
+
+### 完整今日 ship 清单 (13 commit)
+
+1. **BL-FIX23 L6** (bae1f8f) — retry 死循环修 (Jaccard + 上限 + last_is_tool 一刀切)
+2. **BL-FIX39** (65127db) — admin/sysadmin 跳 quota 检查 (超级用户不限额)
+3. **BL-FIX40** (20c6bc4) — employee_journal 注入硬上限 15KB
+4. **BL-FIX41** (b53c89a) — tool 消息内容硬截断 2KB (临时方案, 后被 Q3-ARCHIVE 替代)
+5. **BL-Q3-ARCHIVE** — tool message archive + 摘要双层 (大块, 1300 行 + 31 单测)
+6. **BL-Q3-ARCHIVE fix1** — User.email → User.sub
+7. **BL-Q3-ARCHIVE fix2** (alembic 20260511_004) — summary 用 chat 同款模型
+8. **BL-FIX23 L7** — 拆 last_is_tool 二分 (完成态 vs 未来意图)
+9. **BL-FIX42** — 历史截图折叠 (修 Companion fetch idle timeout)
+10. **BL-FIX44** (f79f38e) — 浏览器自动化彻底修 (coords click + find_by_text 返候选)
+11. **BL-FIX23 L8** (1e0e330) — 反向判定 task-complete (修 L7 keyword 太严)
+12. **BL-Q3-WEBSKILL** (ac0e4ce) — recognize_captcha + eis-login skill 骨架
+13. **BL-Q3-WEBSKILL-locate** — browser_locate 视觉定位工具
+14. **BL-FIX45** — 错误自动恢复 UX (401/500/skill-session)
+15. **BL-FIX46** — 请示停顿铁律 (SOUL 加段)
+
+### 鸿波诊断功劳 (5/11 三次关键)
+
+1. **"不是够不够的问题, 是要彻底解决问题"** — 拍板 BL-FIX44 走真根因路线 (coordinates click) 而不是又一个补丁. 视觉双子产品线的起点.
+2. **"一直打补丁治症状不治病, 本来想做的就是教导一次生成 skill"** — 拍板 BL-Q3-WEBSKILL 产品线. demo 主轴重定位.
+3. **"过度思考问题"** — 5/11 深夜实测 LLM 自作主张接着干, 点透 FIX46 真根因 (turn 控制双向, 反方向问题).
+
+### 教训
+
+1. **打补丁 vs 治本**: L5-L8 累积 4 层都在改进 LLM agent 路径. 鸿波 5/11 反思后, 才看清 LLM agent 不该是用户日常路径, 它是"教 catfish 新流程"的一次性工具. **skill 才是终态资产**.
+2. **Keyword 列表的局限**: L5/L7 用 keyword 检测 plan-only 内容. 不全 (LLM 话术无穷). L8 改反向判定 task_complete, 列表精短 + 高特异性, 更稳.
+3. **视觉双子设计**: vision LLM 不只能 OCR (字符识别), 也能空间定位 (返坐标). 两个 prompt + 同模型 = 两条不同工具线. 不要塞一个工具.
+4. **Turn 控制双向**: LLM 卡顿可能是"该 act 没 act" (L7/L8 修) **也可能是**"不该 act 却 act" (FIX46 修). 软纪律 + 工程兜底两路都要.
+5. **彻底修 vs 凑合用**: 5/11 第一遍我加了 L5/L6/L7 + FIX42 仍然撞 LLM 卡, 鸿波点 "彻底修" 之后才走到 BL-FIX44 + WEBSKILL 真路线. 工程师惯性思维: 看到 bug → 补丁; 鸿波视角: 看到 bug → 是不是工具/产品定位错了.
+
+### 5/12 内网测路径 (鸿波明天)
+
+```
+[A 401 auto-reauth] 清 keychain → 发消息 → 期望弹浏览器登录窗
+[B 500 auto-fallback] 选 Gemini Flash-Lite → 发消息 → 期望切到 catfish-private-main
+[C 视觉定位] LLM agent 跑 EIS 登录:
+   1. browser_goto(http://eis.ffcs.cn)
+   2. screenshot(full_page=false)
+   3. recognize_captcha(selector='#captchaImg', hint='alphanumeric_4')
+   4. find_by_text(text='登录', role='button') 或 browser_locate(query='蓝色登录按钮')
+   5. fill 用户名 / 密码(secret_ref) / 验证码
+   6. click(coordinates=[center.x, center.y])
+   7. 跳转后 snapshot 抓待办
+[D skill 凝固] 跑通后 → 填回 docs/samples/eis-login-skill/SKILL.md 真实 selector → publish hub
+[E demo 故事] 5/13 彩排 → 5/14 主轴讲 "员工教 catfish 一次, 全公司秒开"
+```

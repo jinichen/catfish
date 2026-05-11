@@ -1,6 +1,6 @@
 # 鲶鱼 · Feature Tracks (主入口)
 
-> **快照**: 2026-05-08 (周五深夜) · **维护人**: 鸿波 · **更新**: 每周日晚 + 重大 ship 时
+> **快照**: 2026-05-11 (周一深夜) · **维护人**: 鸿波 · **更新**: 每周日晚 + 重大 ship 时
 > **角色**: 这是**唯一**的"我们在做啥 / 还差啥 / 在哪个 phase"主入口.
 > 其他 doc 角色见底部 § 文档地图.
 
@@ -17,6 +17,11 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 ★ 5/10 凌晨架构决策 (BL-ARCH1): 5/15 起做 catfish-web 中央门户 (Skills Hub 全广场 / MCP 市场 /
   Manager 视图 / Admin 后台 / billing 月报). Companion 瘦身留 "我的"视角 (Identity / Quota /
   画像 / 我的 skill). 客户端注重体验, 中央走 web — 跟 VSCode+GitHub / Cursor+cursor.sh 同模式.
+
+★ 5/11 深夜战略重置 (BL-Q3-WEBSKILL): demo 主轴从 "AI 多智能" 调整为
+  "员工教 catfish 一次, catfish 凝固成 skill, 全公司秒开". 跟 BL-Q3-FACT (政策→skill 补丁)
+  同源, 形成 Q3 完整产品线. LLM agent 定位降为"教学一次"工具, skill 是终态资产.
+  跟传统 RPA (UiPath/用友) 差异: IT 写脚本 3 周 → 员工教学 10 分钟 AI 自动生成 SKILL.md.
 ```
 
 > 📈 5/2-5/3 周末 sprint 大幅推进 (Phase 2 后端 + Skills Hub + brand kit + 关系建立):
@@ -94,6 +99,19 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 >     6. "数据库连接没有写到 .env?" → BL-D3 fix5 隐性 bug (mcp-registry 5/9 起一直跑 sqlite 没人发现)
 >     7. "中央很复杂, 都塞客户端不合适?" + "方案 B 跟初衷背离?" + "中央 WEB 化, 助手客户端化" → BL-ARCH1/2 架构演进路径定调
 >   - 测试 / 验证: PG 4 个 service 9 张表全跑通 / curl publish hello-pg 200 / dashboard 画像 6 项真显示 / Companion release dmg 已 bundle / 5/14 demo 主线全就位.
+
+> 📈 **5/11 (周一深夜)** — 一晚 ship 13 commit: BL-Q3-ARCHIVE 双层 + BL-FIX23 L6/L7/L8 + BL-FIX42/44/45/46 + BL-Q3-WEBSKILL (recognize_captcha + browser_locate + eis-login skill 骨架) + demo 主轴重定位:
+>   - **BL-Q3-ARCHIVE 完整 ship** (设计文档 18 段 + 1300 行实施 + 31 单测): tool message 超 4KB → 写 PG (lossless) + 头 500B + 尾 500B + 异步 haiku 摘要, LLM 调 `catfish_read_tool_archive(ref, grep / line_range)` 召回. 替代 BL-FIX41 硬切 (5/11 早 ship 的临时方案). 实测 199 messages / 63 tool_msgs / 258KB → 112KB, 省 ~36K tokens lossless. 跟 mcp-registry / skills-hub / facts_db 同 PG+jsonl 双写模板. Alembic 新表 + 后续 fix2 加 origin_model 列让 summary_worker 用 chat 同款模型 (私有部署 token 不要钱, 不绕 catalog tag).
+>   - **BL-FIX23 L6/L7/L8 三轮迭代修 plan-only retry**: L6 死循环紧急修 (Jaccard + 上限 + last_is_tool 一刀切); L7 拆 last_is_tool 二分 (未来意图 vs 完成态); L8 反向判定 — 不问"是 plan-only?" 改问"是真任务完成?" (鸿波"已识别验证码 'XXXX'" 中性陈述句没踩 keyword list 暴露 L7 漏洞). 死循环保险全保留 (retries < 1, Jaccard ≥ 0.55). 决策矩阵 4 case + 29 单测全过.
+>   - **BL-FIX42 历史截图折叠**: 多张截图累积 prompt 5-10MB → 122b 推理 60-108s → Companion macOS/Tauri fetch idle 默认超时 abort. 修法保留最近 1 张图, 老图 image_url part 替成 `[历史截图已折叠]`. 实测 4 张 → 1 张 prompt 减 75%.
+>   - **BL-FIX44 浏览器自动化彻底修** (鸿波"不是够不够的问题, 是要彻底解决问题"): 真根因诊断 — 工具链断点 (screenshot 给视觉但没 selector, click 要 selector 但不给视觉, LLM 中间硬桥). 两步组合: (1) `catfish_browser_click` 加 `coordinates=[x,y]` 走 `page.mouse.click` 完全绕开 selector 歧义; (2) `catfish_browser_find_by_text` 返排序候选 + 元数据 (selector / role / match_type / is_clickable / bounds / center / score), top_recommendation 给最佳猜测, 加 `role='button'` 避开 placeholder 撞文字. 排序权重透明 (JS 内): role +50 / clickable +30 / innerText +20 / placeholder +3. EIS 真实场景 Python 重现验证 (登录按钮 67 vs 密码框 20 不传 role, 117 vs 0 传 role=button).
+>   - **BL-Q3-WEBSKILL 视觉双子**: `catfish_recognize_captcha` (~250 行) 走 vision OCR 不让 LLM 自己 OCR + `catfish_browser_locate` (~330 行) 自然语言找元素位置 (返 `{x, y, w, h, center, confidence, reasoning}`). 配合 BL-FIX44 coords click, 形成完整视觉驱动浏览器自动化链路 (recognize_captcha → OCR / browser_locate → 找位置 / click(coordinates) → 点). PNG header 直接解尺寸无 PIL 依赖, strict JSON 输出, 校验坐标在图内防幻觉. 10 单测全过.
+>   - **eis-login skill 骨架** (`docs/samples/eis-login-skill/SKILL.md` ~300 行): frontmatter + 8 步流程 + 失败处理矩阵 + session-renewal 段 (BL-FIX45 C). 草版, 5/12 鸿波内网测后填真实 selector → publish hub. **5/14 demo 主轴示范案例**.
+>   - **BL-FIX45 错误自动恢复 UX** (3 类一起): A. chat.ts 检测 401 → 调 tauri auth_login 弹浏览器 OAuth → 拿新 token → silent 重发 (retries < 1); B. 检测 500/502/503/504 → fetchCatalog 找下一个可达 chat 模型 → silent 切 + 友好提示 (retries < 2); C. eis-login SKILL.md 加 session-renewal 段 — skill 跑到一半检测页面跳回 /login → 自动跑 step 2-7 子集重登 → 回原步骤继续 (renewal < 2).
+>   - **BL-FIX46 请示停顿铁律**: 鸿波点透 — LLM 答完后说"要不要继续看待办?" 立刻自己 `screenshot()` 没等回答, 越救越乱. 跟 L7/L8 反向问题 (该 act 没 act vs 不该 act 却 act). SOUL.md 加段, 跟 L1 "做完才说" + FIX24 "做完不再问" 三条 turn 控制铁律互补. 句末"要不要 X?" / "需要我..." / "?" 指向员工决策 → 必须 stop, 不能 emit tool_call act on 自己建议.
+>   - **demo 主轴重定位** (鸿波 5/11 深夜战略反思): 从 "AI 多智能 (LLM agent 跑通流程)" 调整为 "员工教 catfish 一次, catfish 凝固成 skill". 跟传统 RPA 差异: IT 3 周 → 员工 10 分钟. 跟 BL-Q3-FACT 同源, 形成 Q3 完整产品线 BL-Q3-WEBSKILL. ROI: 100 流程 × 1000 员工 = 600 万 RPA 部署成本节省/年 + 员工日常时间 8.3 万小时/年.
+>   - **鸿波诊断功劳 (5/11 三次关键)**: (1) "彻底解决问题" — 拍板 BL-FIX44 走真根因路线; (2) "本来想做的就是教导一次生成 skill" — 拍板 Q3-WEBSKILL 产品线 + demo 主轴; (3) "过度思考" — 点透 FIX46 turn 控制反方向问题.
+>   - **教训**: (1) 打补丁 vs 治本 — L5-L8 累积 4 层都改进 LLM agent 路径, 鸿波 5/11 反思后才看清 LLM agent 不该是用户日常路径; (2) Keyword 列表局限 — L5/L7 plan-only keyword 抓不全, L8 反向判定 task_complete 更稳; (3) 视觉双子设计 — OCR 跟空间定位用同模型不同 prompt 拆两个工具线; (4) Turn 控制双向 — 软纪律 + 工程兜底两路都要; (5) 工程师惯性 → 鸿波视角差 — 工程师看 bug 加补丁, 鸿波看是不是工具/产品定位错了.
 
 > 📈 **5/9 (周六)** — BL-FIX23 五层 + BL-FIX24 治"半截就停 / 死循环" turn 控制 5 道护栏全摆齐 (6 commit + 33 单测):
 >   - **三轮诊断踩坑**: 第一轮 L1 SOUL "做完才说" 改纪律无效 (RLHF > system prompt); 第二轮 L2 reasoning_content 兜底也无效 (chunk_stats 显示 reasoning=0 全程); 第三轮看 chunk_stats 日志 finish_reason=length 才定位真根因 #1 (Qwen vLLM max_tokens 默认太小, streaming 路径 BL-A1.1 auto-continue 没接), 鸿波拍板"方案 C" ship L5 plan-only retry (真根因 #2); 鸿波最后一击诊断 "**任务完成度评估缺位**" 点透真根因 #3 (重复 tool_call 检测), ship BL-FIX24.
