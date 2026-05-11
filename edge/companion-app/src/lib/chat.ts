@@ -33,6 +33,15 @@ interface SendChatParams {
   /** 任何错误 */
   onError: (msg: string) => void;
   signal?: AbortSignal;
+  /** BL-FIX45 (5/11) 内部递归用 — 错误恢复 retry 计数, 防死循环.
+   *  外部调用方不应传, 仅 streamChat 自己 retry 时传.
+   *  reauth (401 修): 最多 1 次 OAuth refresh
+   *  fallback (500 修): 最多 2 次切模型
+   */
+  _retryCounters?: {
+    reauth?: number;
+    fallback?: number;
+  };
 }
 
 export interface OpenAITool {
@@ -428,6 +437,99 @@ export async function streamChat(params: SendChatParams): Promise<void> {
       onError(`⚠️ ${friendlyMsg}`);
       return;
     }
+
+    // ── BL-FIX45 A (5/11): 401 auto re-auth ───────────────────────
+    // Token 过期 (SSO id_token 默认 1h). 之前显示 'HTTP 401' 红框, 员工得手动
+    // 关 Companion 重开. 现在: 自动调 auth_login (Tauri command) 弹浏览器走
+    // OAuth flow → 拿新 token → silent 重发原请求. 最多 1 次 re-auth retry 防死循环.
+    if (resp.status === 401) {
+      const reauthCount = params._retryCounters?.reauth ?? 0;
+      if (reauthCount === 0) {
+        onDelta("\n⏳ catfish 登录已过期, 正在重新登录 (浏览器会弹一下)...\n");
+        try {
+          await invoke("auth_login");
+        } catch (e) {
+          onError(
+            `重新登录失败: ${stringify(e)}. ` +
+              "请点 Companion 右上角头像手动登录."
+          );
+          return;
+        }
+        // 用新 token 重发同请求 (递归一次)
+        return streamChat({
+          ...params,
+          _retryCounters: { ...params._retryCounters, reauth: 1 },
+        });
+      }
+      // 已经 retry 过仍 401 — IdP / 配置真有问题, 不再循环
+      onError(
+        "🔐 登录刷新后仍 401. 可能 IdP 不可达或 SSO 配置错. 检查 catfish-identity 服务."
+      );
+      return;
+    }
+
+    // ── BL-FIX45 B (5/11): 500/502/503/504 auto fallback model ─────
+    // 上游 LLM 服务挂 (例 Gemini 偶发 500 / DeepSeek timeout). 之前红框让员工
+    // 手动换模型, 现在: 自动从 catalog 拿下一个可达 chat 模型, silent 切 + 提示
+    // "Gemini 挂了, 切到 X 重试中". 最多 2 次 fallback 防死循环.
+    if ([500, 502, 503, 504].includes(resp.status)) {
+      const fallbackCount = params._retryCounters?.fallback ?? 0;
+      if (fallbackCount < 2) {
+        // 拿 catalog 下一个可达 chat 模型
+        let nextModel: string | null = null;
+        try {
+          const { fetchCatalog } = await import("./tauri");
+          const catalog = await fetchCatalog();
+          const allModels = (catalog as { models?: Array<{ name: string; mode?: string; reachable?: boolean }> })
+            .models || [];
+          const triedSet = new Set<string>([model]);
+          // 把之前 fallback 试过的也排掉 (从 stringified _retryCounters 反推不好做, 简化: 排当前 model)
+          const candidates = allModels.filter(
+            (m) =>
+              m.mode === "chat" &&
+              m.reachable !== false &&
+              !triedSet.has(m.name),
+          );
+          if (candidates.length > 0) {
+            nextModel = candidates[0].name;
+          }
+        } catch {
+          /* fetchCatalog 失败 → 没法 fallback */
+        }
+
+        if (nextModel) {
+          onDelta(
+            `\n⚠️ 模型 \`${model}\` 暂时不可达 (HTTP ${resp.status}), ` +
+              `自动切到 \`${nextModel}\` 重试...\n`,
+          );
+          return streamChat({
+            ...params,
+            model: nextModel,
+            _retryCounters: {
+              ...params._retryCounters,
+              fallback: fallbackCount + 1,
+            },
+          });
+        }
+      }
+      // 没 fallback / 已经 retry 2 次 → friendly error
+      let detail = "";
+      try {
+        const errJson = await resp.json();
+        detail = errJson?.detail?.message || JSON.stringify(errJson);
+      } catch {
+        detail = await resp.text().catch(() => "");
+      }
+      onError(
+        `⚠️ \`${model}\` 上游 ${resp.status} 不可达. ` +
+          (fallbackCount >= 2
+            ? "已尝试 fallback 切模型仍失败, 请稍后重试."
+            : "没有其它可用模型, 检查代理 / 网络.") +
+          (detail ? ` 详细: ${detail.slice(0, 200)}` : ""),
+      );
+      return;
+    }
+
     let detail = "";
     try {
       const errJson = await resp.json();

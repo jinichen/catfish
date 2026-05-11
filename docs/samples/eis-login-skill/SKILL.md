@@ -206,6 +206,48 @@ catfish_browser_snapshot(
 | 用户名 / 密码错            | 返 `{ok: false, login_ok: false, error: "登录被拒, 检查凭据"}` |
 | 跳转超时 (10s 没跳)        | 截图 + 返 `{ok: false, error: "登录后未跳转, 可能页面变更", screenshot_path: "..."}` |
 | 待办区找不到 (EIS 改版)    | login_ok=true 但 todos=[], `warning: "待办区 DOM 变更, 需要更新 skill"` |
+| **EIS session 中途失效**  | **自动跑 session-renewal 子流程** (见下节, BL-FIX45 C 5/11) |
+
+## Session-renewal (BL-FIX45 C, 5/11)
+
+**场景**: skill 第一次成功登录后, 进入 dashboard 抓待办, 但 EIS 可能因为 server-side
+session timeout / 多端登录踢人 / cookie 过期, 中途跳回登录页. 跑后续步骤会撞错.
+
+**检测**:
+
+```
+每个步骤执行前 (从 step 7 开始) 调:
+  state = catfish_browser_get_url()
+  if state.url contains '/login' or '/auth' or page.title contains '登录':
+    → session_expired = True
+    → 跳 session-renewal 流程
+```
+
+更轻量版本: 步骤 8 (拉待办) 失败时, 截图 + `catfish_browser_locate(query='登录按钮')`
+找到登录按钮 → 说明跳回登录页了 → 触发 renewal.
+
+**Renewal 子流程** (复用 step 2-7 子集):
+
+```
+SESSION-RENEWAL:
+  1. screenshot 看清当前页面 (确认是登录页)
+  2. recognize_captcha (新验证码图)
+  3. fill 用户名 + 密码(secret_ref) + 验证码
+  4. click 登录
+  5. 等跳转 dashboard
+  6. 回到原本失败的那一步重试 (e.g. 抓待办)
+
+renewal 失败 (重试 1 次还失败):
+  → 返 {ok: false, error: "session 续期失败, 可能 EIS 限制并发登录"}
+```
+
+**Renewal 计数器**: skill 单次执行最多 renewal 2 次, 防死循环. 第 3 次直接报错.
+
+**为啥不在 step 1 就预防**: session 失效是偶发, 大多数 skill 跑不会撞. 检测 +
+按需 renewal 比每次主动 ping login state 高效.
+
+**SOUL.md 同步纪律**: LLM agent 跑 skill 时如果发现页面回到登录页, 直接走 renewal
+不要去问员工 "我看到登录页了, 要重登吗?" — 这就是 skill 的存在意义.
 
 ## 实施状态 (5/11 草版)
 
