@@ -1023,6 +1023,27 @@ _PLAN_ONLY_FUTURE_INTENT_KEYWORDS = (
     "接下来", "下一步", "现在自动", "现在填", "我去", "我准备", "现在调用",
     "继续", "继续做", "继续执行",
 )
+
+# BL-FIX23 L8 (5/11): "任务真完成"特征词. 列表精短 + 高特异性, 避免误判
+# step 完成态 (e.g. "已加载" / "已识别" — 这些是步骤汇报, task 还没完).
+# 反向: 刚跑过 tool 又没踩这个列表 = 任务还在中途, 应 retry.
+#
+# 鸿波 5/11 实测: LLM 说 "已识别验证码 '2fW2', 请确认" → step report, 不在
+# 这个列表, 视为中途停 → retry 让它继续填表单.
+_TASK_COMPLETE_KEYWORDS = (
+    # 任务完成态
+    "任务完成", "任务结束", "已完成全部", "全部完成", "都做完", "整理完毕",
+    "处理完毕", "汇报完毕", "结束流程",
+    # 查询型任务: 结果是 0 / 空
+    "没有待办", "无待办", "0 项", "0项", "无新待办", "无需处理",
+    "没有数据", "结果为空", "未发现",
+    # 用户主动结束 / 已退出态
+    "已退出", "已登出", "已关闭", "会话结束",
+    # 终态失败 (无法继续)
+    "无法登录", "登录失败", "无法访问", "权限不足", "账号被锁",
+    # 等用户决策 (明确等输入, 不应自动 retry)
+    "请问", "请你确认", "需要你提供", "是否继续", "是否需要", "请选择",
+)
 _PLAN_ONLY_FEEDBACK_KEYWORDS = (
     # 短反馈词 (员工提细节调整时常见)
     "改", "调整", "错了", "漏", "继续", "做啊", "干完", "干一半",
@@ -1160,6 +1181,28 @@ def _has_future_intent(content: str) -> bool:
     if not content or not isinstance(content, str):
         return False
     for kw in _PLAN_ONLY_FUTURE_INTENT_KEYWORDS:
+        if kw in content:
+            return True
+    return False
+
+
+def _is_task_complete_claim(content: str) -> bool:
+    """BL-FIX23 L8 (5/11): 内容含任务真完成 / 等用户决策的特征词.
+
+    比 _has_completion_claim 严 — '已生成 X.docx' (step) 不算, '任务完成' 才算.
+    L8 反向逻辑: last_is_tool + 没踩这个列表 = 还在中途, 应 retry.
+
+    包括三类:
+      1. 任务完成态 ('任务完成' / '全部完成' / '处理完毕')
+      2. 查询型空结果 ('0 项' / '无待办' / '未发现')
+      3. 终态失败 / 等用户决策 ('登录失败' / '请问' / '是否继续')
+
+    用户的反馈交互模式 (LLM "请确认 X" 等用户回话) 也算"task 暂停在等输入",
+    不 retry (跟"任务完成"一样应该停在这里, 等用户).
+    """
+    if not content or not isinstance(content, str):
+        return False
+    for kw in _TASK_COMPLETE_KEYWORDS:
         if kw in content:
             return True
     return False
@@ -1375,48 +1418,42 @@ async def _stream_chat_completion(
                         used_model.name,
                     )
 
-            # ── BL-FIX23 L5+L6+L7: plan-only retry 触发判定 ──────────────────
-            # L6 (5/11) 加 3 条死循环保险, last_is_tool 一刀切 block.
-            # L7 (5/11) 拆 last_is_tool 二分:
-            #   - 真完成态 (已生成/已完成) + last_is_tool → block (跟 L6 一致)
-            #   - 未来意图 (现在去/接下来/我去) + last_is_tool → **应 retry**
-            #     (鸿波实测: tool → '现在自动填入用户名' stop, 中途断了, 该 retry)
-            # 另: 老 L5 要求 user 反馈, L7 把 'last_is_tool + 未来意图' 也当合法触发场景.
+            # ── BL-FIX23 L5+L6+L7+L8: plan-only retry 触发判定 ─────────────
+            # 演化简史:
+            #   L5: finish=stop + 0 tool_call + plan-only keyword + 用户反馈 → retry
+            #   L6: 加 3 条死循环保险 (上限 1 / Jaccard / last_is_tool 一刀切跳)
+            #   L7: 拆 last_is_tool 二分 (完成态 vs 未来意图)
+            #   L8 (5/11): keyword-based 检测太严. LLM 说"已识别验证码 'XXXX'" 这类
+            #              中性陈述句没踩 plan-only keyword list, retry 不触发.
+            #              改反向判定 — last_is_tool + 没明确"任务完成" → 必 retry.
             msgs_for_check = current_body.get("messages") or []
             last_is_tool = _last_role_is_tool_result(msgs_for_check)
             too_repetitive = _assistant_history_too_repetitive(msgs_for_check, cumulative_content)
-            has_future_intent = _has_future_intent(cumulative_content)
-            has_completion = _has_completion_claim(cumulative_content)
-            # L7: 真完成态 (有完成词 + 没未来意图) — 别 retry, 避免死循环.
-            real_completion_after_tool = (
-                last_is_tool and has_completion and not has_future_intent
-            )
-            # L7: 触发场景 — 老 L5 (用户反馈后 stop) 或 新 L7 (mid-task tool 后说要继续)
-            triggering_scenario = (
-                _last_user_message_is_feedback(msgs_for_check)
-                or (last_is_tool and has_future_intent)
+            task_complete = _is_task_complete_claim(cumulative_content)
+            # L8 Path A: 刚跑过 tool, 又没说"任务完成 / 等用户" → 中途停, retry
+            # 不再要求 _is_plan_only_content (太严, 抓不全话术), 改用 task_complete 反判
+            mid_task_after_tool = last_is_tool and not task_complete
+            # L8 Path B: 老 L5 反馈路径 (没跑过 tool, 用户反馈, LLM plan-only)
+            feedback_plan_only = (
+                not last_is_tool
+                and _last_user_message_is_feedback(msgs_for_check)
+                and _is_plan_only_content(cumulative_content)
             )
             should_retry = (
                 last_finish_reason == "stop"
                 and not cumulative_has_tool_call
-                and _is_plan_only_content(cumulative_content)
                 and plan_only_retries < _MAX_PLAN_ONLY_RETRIES
-                and not too_repetitive            # L6 死循环保险保留
-                and not real_completion_after_tool  # L7 替代 L6 的 'not last_is_tool'
-                and triggering_scenario           # L7 新增: mid-task 也算
+                and not too_repetitive            # 死循环保险保留 (Jaccard)
+                and (mid_task_after_tool or feedback_plan_only)
             )
             if not should_retry:
-                # 留 log 方便 debug
-                if (
-                    last_finish_reason == "stop"
-                    and not cumulative_has_tool_call
-                    and _is_plan_only_content(cumulative_content)
-                ):
+                # 留 log 方便 debug — 解释为啥没 retry
+                if last_finish_reason == "stop" and not cumulative_has_tool_call:
                     logger.info(
-                        "BL-FIX23 L7 skip retry: last_is_tool=%s future_intent=%s "
-                        "completion=%s real_done=%s too_repetitive=%s retries=%d/%d",
-                        last_is_tool, has_future_intent, has_completion,
-                        real_completion_after_tool, too_repetitive,
+                        "BL-FIX23 L8 skip retry: last_is_tool=%s task_complete=%s "
+                        "too_repetitive=%s mid_task=%s feedback=%s retries=%d/%d",
+                        last_is_tool, task_complete, too_repetitive,
+                        mid_task_after_tool, feedback_plan_only,
                         plan_only_retries, _MAX_PLAN_ONLY_RETRIES,
                     )
                 yield "data: [DONE]\n\n"
@@ -1425,11 +1462,13 @@ async def _stream_chat_completion(
             # ── 触发 plan-only retry: 起新一轮 acompletion + 注入硬 hint ─
             plan_only_retries += 1
             logger.warning(
-                "BL-FIX23 L5 plan-only retry %d/%d: model=%s 检测 finish_reason=stop + "
-                "0 tool_call + plan-only content (%d 字) + user 反馈 → 重发硬 hint",
+                "BL-FIX23 L8 plan-only retry %d/%d: model=%s last_is_tool=%s "
+                "task_complete=%s content=%d 字 → 重发硬 hint",
                 plan_only_retries,
                 _MAX_PLAN_ONLY_RETRIES,
                 used_model.name,
+                last_is_tool,
+                task_complete,
                 len(cumulative_content),
             )
             # deepcopy current_body 防原 body 被改 (chat_completions 调用方还会用)
