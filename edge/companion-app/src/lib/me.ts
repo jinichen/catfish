@@ -92,12 +92,67 @@ export async function getToken(): Promise<string> {
   }
 }
 
+/**
+ * BL-FIX45 A+ (5/11): 统一 fetch wrapper, 401 自动 reauth + silent retry.
+ *
+ * 鸿波 5/11 截图: 仪表盘"今日话题"显示"拉不到话题, 看 gateway 起没起". 真因是
+ * /api/proactive/starter 返 401 (OAuth token 过期), Companion 没自动 reauth.
+ *
+ * 原 BL-FIX45 A 只改 chat.ts inline 处理 401. 但 me.ts 里 fetchMe / fetchProactiveStarter /
+ * fetchQuota / fetchDevUsers 等十几条 inline fetch 各自都没处理 401.
+ *
+ * 这个 wrapper 把"加 Authorization header + 检测 401 + 自动 reauth + 重发"一次封装,
+ * 所有调 gateway 的 API 都改走它. 不再每条 inline 复制粘贴.
+ *
+ * 用法:
+ *   const resp = await fetchWithAuth(url, { method: "POST", body: ... });
+ *   if (!resp.ok) ...
+ *
+ * 行为:
+ *   - 自动加 Authorization: Bearer <token>
+ *   - 收 401 → 调 tauri auth_login (浏览器 OAuth flow) → 拿新 token → 重发一次
+ *   - retry 上限 1 (防死循环, IdP 挂时还会失败但不无限循环)
+ *   - 其它错码 (200/404/500/etc) 原样返, caller 自己处理
+ *
+ * 不处理 (调用方自己):
+ *   - 5xx 上游错 (chat.ts BL-FIX45 B 有 fallback 逻辑, 其它 API 看情况)
+ *   - 429 quota (各 caller 有 friendly msg)
+ *   - 网络断 (caller catch)
+ */
+export async function fetchWithAuth(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+  opts: { skipReauth?: boolean } = {},
+): Promise<Response> {
+  const doRequest = async (token: string): Promise<Response> => {
+    const headers = new Headers(init?.headers || {});
+    headers.set("Authorization", `Bearer ${token}`);
+    return fetch(input, { ...init, headers });
+  };
+
+  let token = await getToken();
+  let resp = await doRequest(token);
+
+  if (resp.status === 401 && !opts.skipReauth) {
+    // 401 → 触发 OAuth re-auth (弹浏览器)
+    try {
+      await invoke("auth_login");
+    } catch {
+      // auth_login 失败 (用户关浏览器 / IdP 不可达) → 原 401 透传给 caller
+      return resp;
+    }
+    // 拿新 token 重发一次, 不再 retry (防死循环)
+    token = await getToken();
+    resp = await doRequest(token);
+  }
+
+  return resp;
+}
+
 export async function fetchMe(): Promise<MeInfo> {
-  const token = await getToken();
+  // BL-FIX45 A+ (5/11): 走 fetchWithAuth, 401 自动 reauth.
   const url = `${config.gatewayUrl}/api/me`;
-  const resp = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const resp = await fetchWithAuth(url);
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return (await resp.json()) as MeInfo;
 }
@@ -110,11 +165,9 @@ export interface DepartmentQuota {
 }
 
 export async function fetchDepartmentQuota(dept: string): Promise<DepartmentQuota> {
-  const token = await getToken();
+  // BL-FIX45 A+ (5/11): 走 fetchWithAuth, 401 自动 reauth.
   const url = `${config.gatewayUrl}/api/quota/department/${encodeURIComponent(dept)}`;
-  const resp = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const resp = await fetchWithAuth(url);
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return (await resp.json()) as DepartmentQuota;
 }
@@ -130,11 +183,9 @@ export interface DepartmentAudit {
 }
 
 export async function fetchDepartmentAudit(dept: string): Promise<DepartmentAudit> {
-  const token = await getToken();
+  // BL-FIX45 A+ (5/11): 走 fetchWithAuth, 401 自动 reauth.
   const url = `${config.gatewayUrl}/api/audit/department/${encodeURIComponent(dept)}`;
-  const resp = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const resp = await fetchWithAuth(url);
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return (await resp.json()) as DepartmentAudit;
 }
@@ -170,14 +221,11 @@ export async function updateDepartmentQuota(
   dept: string,
   tokensPerDay: number,
 ): Promise<{ ok: boolean; tokens_per_day?: number; detail?: string }> {
-  // BL-FIX35 (5/10): 复用统一 getToken (OAuth keychain 优先, dev_token 兜底).
-  // 老 inline 各自 copy-paste, 漏 OAuth → 配额/audit/proactive 卡都 401.
-  const token = await getToken();
+  // BL-FIX45 A+ (5/11): 走 fetchWithAuth, 401 自动 reauth.
   const url = `${config.gatewayUrl}/api/quota/department/${encodeURIComponent(dept)}`;
-  const resp = await fetch(url, {
+  const resp = await fetchWithAuth(url, {
     method: "PUT",
     headers: {
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ tokens_per_day: tokensPerDay }),
@@ -208,12 +256,8 @@ export interface GlobalQuota {
 
 
 export async function fetchGlobalQuota(): Promise<GlobalQuota | null> {
-  // BL-FIX35 (5/10): 复用统一 getToken (OAuth keychain 优先, dev_token 兜底).
-  // 老 inline 各自 copy-paste, 漏 OAuth → 配额/audit/proactive 卡都 401.
-  const token = await getToken();
-  const resp = await fetch(`${config.gatewayUrl}/api/quota/global`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  // BL-FIX45 A+ (5/11): 走 fetchWithAuth, 401 自动 reauth.
+  const resp = await fetchWithAuth(`${config.gatewayUrl}/api/quota/global`);
   if (!resp.ok) return null;
   return (await resp.json()) as GlobalQuota;
 }
@@ -233,12 +277,8 @@ export interface GlobalAudit {
 
 
 export async function fetchGlobalAudit(): Promise<GlobalAudit | null> {
-  // BL-FIX35 (5/10): 复用统一 getToken (OAuth keychain 优先, dev_token 兜底).
-  // 老 inline 各自 copy-paste, 漏 OAuth → 配额/audit/proactive 卡都 401.
-  const token = await getToken();
-  const resp = await fetch(`${config.gatewayUrl}/api/audit/global`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  // BL-FIX45 A+ (5/11): 走 fetchWithAuth, 401 自动 reauth.
+  const resp = await fetchWithAuth(`${config.gatewayUrl}/api/audit/global`);
   if (!resp.ok) return null;
   return (await resp.json()) as GlobalAudit;
 }
@@ -255,13 +295,10 @@ export interface ProactiveStarter {
 /** 拉一个上下文感知的 starter. gateway 用 journal + 时段 + LLM 生成. */
 export async function fetchProactiveStarter(): Promise<ProactiveStarter | null> {
   try {
-    // BL-FIX35.1 (5/10): 这两个 inline 之前 BL-FIX35 漏改 (replace_all 字面字符串
-    // 因为这两处缩进多 2 格在 try 里没匹配上). 鸿波报"今日话题拉不到", devtools
-    // 看到 /api/proactive/starter 401, curl 用 OAuth id_token 同端点 200 — 实证
-    // 走的是老 dev_token 路径. 现在改用统一 getToken (OAuth keychain 优先).
-    const token = await getToken();
+    // BL-FIX45 A+ (5/11): 走 fetchWithAuth — 鸿波截图 '今日话题拉不到' 真因是
+    // OAuth token 过期 401, Companion 没自动 reauth. 现在 wrapper 自动 reauth + 重发.
     const url = `${config.gatewayUrl}/api/proactive/starter`;
-    const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const resp = await fetchWithAuth(url);
     if (!resp.ok) return null;
     return (await resp.json()) as ProactiveStarter;
   } catch {
@@ -282,16 +319,14 @@ export async function fetchContextualStarter(
   context: Record<string, unknown>,
 ): Promise<ProactiveStarter | null> {
   try {
-    // BL-FIX35.1 (5/10): 同 fetchProactiveStarter, BL-FIX35 漏改的镜像 inline.
-    const token = await getToken();
+    // BL-FIX45 A+ (5/11): 走 fetchWithAuth, 401 自动 reauth.
     const url = `${config.gatewayUrl}/api/proactive/contextual`;
     const ctrl = new AbortController();
     const t = window.setTimeout(() => ctrl.abort(), 5000);
     try {
-      const resp = await fetch(url, {
+      const resp = await fetchWithAuth(url, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ signal_kind: signalKind, context }),

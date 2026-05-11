@@ -11,12 +11,10 @@
  * tool calling: 客户端传 tools 参数,LLM 决定调哪个 → 我们执行 → 回传继续。
  */
 
-import { invoke } from "@tauri-apps/api/core";
-
 import type { ChatMessage, ToolCall } from "../types/chat";
 import { config } from "./env";
 import { gatewayGetDevToken } from "./tauri";
-import { getOverrideToken } from "./me";
+import { getOverrideToken, fetchWithAuth } from "./me";
 import { useAgentStore } from "../store/agent";
 
 interface SendChatParams {
@@ -35,11 +33,10 @@ interface SendChatParams {
   signal?: AbortSignal;
   /** BL-FIX45 (5/11) 内部递归用 — 错误恢复 retry 计数, 防死循环.
    *  外部调用方不应传, 仅 streamChat 自己 retry 时传.
-   *  reauth (401 修): 最多 1 次 OAuth refresh
    *  fallback (500 修): 最多 2 次切模型
+   *  401 reauth 已由 fetchWithAuth wrapper 内部处理, 这里不再计数 (BL-FIX45 A+ 5/11).
    */
   _retryCounters?: {
-    reauth?: number;
     fallback?: number;
   };
 }
@@ -379,14 +376,6 @@ export async function streamChat(params: SendChatParams): Promise<void> {
     // tool_choice 默认 auto,让 LLM 自己决定要不要调
   }
 
-  let token: string;
-  try {
-    token = await getToken();
-  } catch (e) {
-    onError(`读 dev token 失败: ${stringify(e)}`);
-    return;
-  }
-
   // BL-E11 命名权: 把当前员工自定义的 agent name + personality 带过去, gateway
   // 拼 personalization preamble 在 SOUL 前面 (非默认值才发, 省 header 大小).
   const agentSnap = useAgentStore.getState();
@@ -400,13 +389,14 @@ export async function streamChat(params: SendChatParams): Promise<void> {
     }
   }
 
+  // BL-FIX45 A+ (5/11): 走 fetchWithAuth — 401 自动 reauth + retry, 不再 inline 处理.
+  // Authorization header 由 wrapper 自动加.
   let resp: Response;
   try {
-    resp = await fetch(url, {
+    resp = await fetchWithAuth(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
         ...agentHeaders,
       },
       body: JSON.stringify(body),
@@ -438,32 +428,12 @@ export async function streamChat(params: SendChatParams): Promise<void> {
       return;
     }
 
-    // ── BL-FIX45 A (5/11): 401 auto re-auth ───────────────────────
-    // Token 过期 (SSO id_token 默认 1h). 之前显示 'HTTP 401' 红框, 员工得手动
-    // 关 Companion 重开. 现在: 自动调 auth_login (Tauri command) 弹浏览器走
-    // OAuth flow → 拿新 token → silent 重发原请求. 最多 1 次 re-auth retry 防死循环.
+    // ── BL-FIX45 A+ (5/11): 401 由 fetchWithAuth wrapper 自动 reauth + retry ──
+    // 走到这里说明 wrapper retry 一次仍 401 — IdP 真挂或员工取消登录.
     if (resp.status === 401) {
-      const reauthCount = params._retryCounters?.reauth ?? 0;
-      if (reauthCount === 0) {
-        onDelta("\n⏳ catfish 登录已过期, 正在重新登录 (浏览器会弹一下)...\n");
-        try {
-          await invoke("auth_login");
-        } catch (e) {
-          onError(
-            `重新登录失败: ${stringify(e)}. ` +
-              "请点 Companion 右上角头像手动登录."
-          );
-          return;
-        }
-        // 用新 token 重发同请求 (递归一次)
-        return streamChat({
-          ...params,
-          _retryCounters: { ...params._retryCounters, reauth: 1 },
-        });
-      }
-      // 已经 retry 过仍 401 — IdP / 配置真有问题, 不再循环
       onError(
-        "🔐 登录刷新后仍 401. 可能 IdP 不可达或 SSO 配置错. 检查 catfish-identity 服务."
+        "🔐 登录刷新后仍 401. 可能 IdP 不可达 / SSO 配置错 / 你关闭了浏览器登录窗. " +
+          "检查 catfish-identity 服务或点右上角头像手动登录."
       );
       return;
     }
