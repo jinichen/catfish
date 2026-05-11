@@ -51,8 +51,18 @@ logger = logging.getLogger("catfish.gateway.employee_journal")
 #: journal 文件路径
 JOURNAL_PATH = Path.home() / ".catfish" / "employee_journal.md"
 
-#: 文件最大字节数 (50KB ≈ 12K 中文 token, 全注入 system prompt 可控)
-MAX_BYTES = 50_000
+#: 文件落盘最大字节数 (journal 历史归档, 不进 prompt 也保留)
+MAX_FILE_BYTES = 50_000
+
+#: 注入 prompt 时的硬上限 (BL-FIX40, 5/11).
+#: 鸿波 5/11 实测: 50KB journal × 5 轮 chat = 250KB tokens 累积超 128K 上限,
+#: context overflow 134% gateway log 报警. 改硬上限 15KB ≈ 3K-5K tokens.
+#: 截断从尾部 (保留最新), 找下一个 `## ` 段边界保段完整.
+#: 长期: Q3 加 LLM cache 摘要 (老段压缩, 新段全量), 现在先硬切扛住.
+INJECT_MAX_BYTES = 15_000
+
+# 老名字保留兼容 (其他地方还在引用)
+MAX_BYTES = MAX_FILE_BYTES
 
 
 def journal_path() -> Path:
@@ -60,8 +70,12 @@ def journal_path() -> Path:
     return JOURNAL_PATH
 
 
-def read_journal() -> str:
-    """读 journal, 超过 MAX_BYTES 从**尾部**截断 (保留最新).
+def read_journal(*, for_injection: bool = True) -> str:
+    """读 journal, 超过上限从**尾部**截断 (保留最新).
+
+    BL-FIX40 (5/11): 区分两种上限.
+      for_injection=True (默认): 进 prompt, 走 INJECT_MAX_BYTES (15KB).
+      for_injection=False: 文件归档读, 走 MAX_FILE_BYTES (50KB, 跟历史落盘对齐).
 
     异常 (文件不存在 / 读失败) → 返空字符串.
     """
@@ -74,15 +88,27 @@ def read_journal() -> str:
         logger.warning("读 employee_journal.md 失败: %s", e)
         return ""
 
-    # 从尾部截断保留最新 (按字符近似, 不完美但够用)
+    limit = INJECT_MAX_BYTES if for_injection else MAX_FILE_BYTES
     encoded = text.encode("utf-8")
-    if len(encoded) > MAX_BYTES:
-        # 回退到字符级截断 (避免半个 utf-8 字符)
-        text = text[-MAX_BYTES:]
+    if len(encoded) > limit:
+        # 从尾部截断保留最新 (按字符近似, 不完美但够用)
+        # 中文一字符 ≈ 3 bytes, 所以字符级截断 limit 字符约 = 3×limit bytes,
+        # 还是会超. 改 byte 级再 decode 兜底.
+        truncated_bytes = encoded[-limit:]
+        try:
+            text = truncated_bytes.decode("utf-8", errors="ignore")
+        except Exception:  # noqa: BLE001
+            text = text[-limit // 3:]  # fallback 按字符近似
         # 找下一个 ## 段开始, 避免半段
         idx = text.find("\n## ")
         if idx > 0:
             text = text[idx + 1:]
+        if for_injection:
+            logger.warning(
+                "BL-FIX40: employee_journal 截断 %d → %d 字节 (注入上限). "
+                "原 journal 已超 INJECT_MAX_BYTES, 仅保留尾部最新段.",
+                len(encoded), len(text.encode("utf-8")),
+            )
     return text
 
 
