@@ -1767,6 +1767,18 @@ async def chat_completions(
         )
         body["messages"] = unwrap_tool_images(body["messages"])
 
+        # BL-FIX42 (5/11): 历史截图折叠 — 防多张截图累积 prompt 5-10MB 让上游
+        # 122b 推理 60-120s, 客户端 idle timeout abort. 真根因诊断:
+        # tool_with_image_marker=4 → 重组 4 条 → user multipart base64 累积 →
+        # latency 108s status=ok 但 Companion fetch idle 超时早已 abort.
+        # 修法: 保留最近 1 张图 (LLM 当前必须看), 老图替成文本占位.
+        from .tool_archive.image_folder import (  # noqa: PLC0415
+            fold_history_images,
+            is_folding_enabled,
+        )
+        if is_folding_enabled():
+            body["messages"] = fold_history_images(body["messages"])
+
         # BL-Q3-ARCHIVE (5/11): tool message 内容 archive + 摘要双层.
         # 替代 BL-FIX41 硬切 — lossless 保留, LLM 主动 catfish_read_tool_archive
         # 召回中段. 含 features.is_archive_enabled() 灰度开关 (默认开). archive
