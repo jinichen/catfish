@@ -352,30 +352,47 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_browser_click",
         "description": (
-            "点击页面上一个元素. 走 Playwright `page.click()` 内置 auto-waiting: 等元素"
-            "出现 + visible + enabled + 不被遮挡, 默认 30s 内自动 retry. 比 hermes "
-            "browser_click 失败率低一个数量级. \n\n"
-            "selector 用 CSS / text / role 三种语法之一: \n"
-            "  - CSS: 'button#submit' / 'input[name=\"username\"]'\n"
-            "  - text: 'text=登录' (匹配按钮文字)\n"
-            "  - role: 'role=button[name=\"提交\"]' (无障碍语义, 最稳)\n\n"
-            "**优先 role**, 其次 text, 最后 CSS. role 不依赖样式 / DOM 结构, 页面改版"
-            "也不容易挂. 实在拿不到 role / text 才退到 CSS."
+            "点击页面元素. 两种模式 (二选一):\n\n"
+            "**模式 1 — coordinates (5/11 BL-FIX44 新加, 推荐用于截图场景)**\n"
+            "  传 coordinates=[x, y] 像素坐标, 走 Playwright mouse.click 直点.\n"
+            "  ★ 当你刚 catfish_browser_screenshot 截了图, 视觉上看到按钮位置时用这个\n"
+            "  ★ 完全绕开 selector 歧义 (避免抓到 placeholder/label 这种坑)\n"
+            "  ★ 注意: 没 auto-waiting, 页面得已经渲染好\n"
+            "  例: catfish_browser_click(coordinates=[450, 380])\n\n"
+            "**模式 2 — selector (老模式, 适合无截图 / DOM 稳定的场景)**\n"
+            "  走 Playwright `page.click(selector)` 内置 auto-waiting (等出现 + visible + clickable).\n"
+            "  selector 用 CSS / role 语法:\n"
+            "    - CSS: 'button#submit' / 'input[name=\"username\"]'\n"
+            "    - role: 'role=button[name=\"提交\"]' (无障碍语义, 最稳)\n"
+            "    - text: 'text=登录' (易歧义, 不推荐)\n"
+            "  优先 role= 其次 CSS, **避免 text=** (鸿波 5/11 实测撞 placeholder 翻车).\n\n"
+            "**怎么选**:\n"
+            "  - 刚截了图 → coordinates (直接, 无歧义)\n"
+            "  - 调过 catfish_browser_find_by_text → 用返的 top.selector (精确)\n"
+            "  - 知道 DOM 结构 → selector\n"
+            "  - 都不知道 → 先 catfish_browser_screenshot 看一眼\n\n"
+            "**报错**: 提示在 error 字段, 还会建议改用哪条路径."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "selector": {
                     "type": "string",
-                    "description": "Playwright selector. 优先 role= / text=, fallback CSS",
+                    "description": "Playwright selector (CSS / role=). 跟 coordinates 二选一.",
+                },
+                "coordinates": {
+                    "type": "array",
+                    "description": "[x, y] 像素坐标, 看截图找位置时用. 跟 selector 二选一. 例 [450, 380].",
+                    "items": {"type": "integer"},
+                    "minItems": 2,
+                    "maxItems": 2,
                 },
                 "timeout_seconds": {
                     "type": "number",
                     "default": 30.0,
-                    "description": "等元素可点击的最长时间, 默认 30s",
+                    "description": "selector 模式等元素可点击的最长时间, 默认 30s. coordinates 模式忽略.",
                 },
             },
-            "required": ["selector"],
         },
         "emoji": "🖱",
         "toolset": "catfish_native",
@@ -521,23 +538,40 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_browser_find_by_text",
         "description": (
-            "**按文字直接找元素**, 走 Playwright `page.get_by_text()` / locator + 兜底.\n\n"
-            "**为啥要这条**: snapshot 查得到 `<button>登录</button>` 这种标准元素, "
-            "但 CAS / 央企老页面常用**非标准**按钮 (`<a class=\"login-btn\">登录</a>` / "
-            "`<div onclick>登录</div>` / `<input type=\"image\">`), DOM evaluate / accessibility "
-            "tree 都拿不到 — 但**用户眼里就是个登录按钮**, 文字是 '登录'. 这条工具直接按文字 "
-            "找, 不挑元素 tag.\n\n"
-            "✅ 调用场景:\n"
-            "  - snapshot 里没看到登录按钮但你确定页面上有 (按文字 '登录' 找)\n"
-            "  - 客户内网系统的图标按钮没 alt 文字, 但有相邻文字标签 (按文字 '提交' / '保存' 找)\n"
-            "  - 员工说 '点那个写着 X 的'\n\n"
-            "**返**: 找到 N 个候选 element, 每个含 selector_hint (Playwright 选择器) + "
-            "tag_name + bounding box. LLM 拿第 1 个 selector_hint 直接 catfish_browser_click "
-            "传进去就行.\n\n"
-            "**找不到** 时 (返 element_count=0) 别再硬找, 直接告诉员工 '页面上没有写 X 的元素', "
-            "或者改用 catfish_browser_screenshot(full_page=false) 让员工看一眼.\n\n"
-            "**注**: 文字必须**完全 / 部分 匹配元素的 visible text** (含 input value / "
-            "aria-label / placeholder). 'login' 找不到 '登录' (不同字符), 文字给中文就用中文."
+            "**按文字找元素, 返排序候选 + 元数据**, LLM 看 role/match_type/clickable 挑.\n\n"
+            "**BL-FIX44 (5/11) 重写**: 老版返单个 element 容易抓错 (placeholder 撞文字). "
+            "新版返**多个候选**, 每个含完整元数据让 LLM 判断, top_recommendation 给最佳猜测.\n\n"
+            "**返回结构**:\n"
+            "```json\n"
+            "{\n"
+            "  \"elements\": [  // 按 score 倒序\n"
+            "    {\n"
+            "      \"selector\": \"role=button[name=\\\"登录\\\"]\",  // 直接喂 click 的 selector\n"
+            "      \"tag\": \"button\",         // HTML tag\n"
+            "      \"role\": \"button\",        // ARIA role (显式或隐式)\n"
+            "      \"text\": \"登 录\",         // 实际匹配到的文字\n"
+            "      \"match_type\": \"innerText\",  // innerText/value/aria-label/placeholder/title/alt\n"
+            "      \"is_clickable\": true,     // 真可点 vs 普通文本\n"
+            "      \"bounds\": {\"x\":450,\"y\":380,\"w\":120,\"h\":40},\n"
+            "      \"center\": {\"x\":510,\"y\":400},  // 供 click coordinates 直点\n"
+            "      \"in_viewport\": true,\n"
+            "      \"score\": 95\n"
+            "    }\n"
+            "  ],\n"
+            "  \"top_recommendation\": <同上, 第 1 个 clickable 候选>,\n"
+            "  \"summary\": \"找到 N 个含 'X' 的元素. 推荐: ...\"\n"
+            "}\n"
+            "```\n\n"
+            "**怎么挑**:\n"
+            "  1. 看 top_recommendation 是不是 role=button + is_clickable + match_type=innerText\n"
+            "     → 是的话直接用 top.selector 或 top.center 坐标 click\n"
+            "  2. 不是 → 扫 elements 列表, **优先选** is_clickable=true 且 match_type=innerText 的\n"
+            "  3. 都是 placeholder 匹配 (输入框) → 不是按钮, 重传 role='button' 过滤\n\n"
+            "**找登录按钮专用模式**: 传 role='button', 候选只剩真按钮, 避开 placeholder 坑.\n"
+            "  catfish_browser_find_by_text(text='登录', role='button')\n\n"
+            "**找不到** (element_count=0) → 别硬找, 改 catfish_browser_screenshot 看视觉, "
+            "再用 catfish_browser_click(coordinates=[x,y]) 直点.\n\n"
+            "**文字匹配**: 子串/精确 (exact 参数). 'login' 不匹配 '登录'. 中文给中文."
         ),
         "input_schema": {
             "type": "object",
@@ -547,6 +581,13 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
                     "description": (
                         "要找的元素文字 (中文 / 英文 / 数字都行). 例: '登录' / '提交' / "
                         "'下一步' / 'Submit'."
+                    ),
+                },
+                "role": {
+                    "type": "string",
+                    "description": (
+                        "可选, ARIA role 过滤. 'button' / 'link' / 'textbox' / 'checkbox' / "
+                        "'menuitem' / 'tab' 等. 找真按钮一定传 'button' 避开 placeholder 坑."
                     ),
                 },
                 "exact": {
@@ -559,8 +600,8 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
                 },
                 "max_results": {
                     "type": "integer",
-                    "default": 5,
-                    "description": "最多返回多少候选, 默认 5. 同名按钮多 (例'提交') 加大",
+                    "default": 10,
+                    "description": "最多返回多少候选, 默认 10. 同名按钮多 (例'提交') 加大. 上限 30.",
                 },
             },
             "required": ["text"],
@@ -2030,12 +2071,52 @@ def browser_click(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _browser_click_impl(args: Dict[str, Any]) -> Dict[str, Any]:
-    """走 Playwright `page.click()`. auto-waiting 等元素出现 + visible + clickable."""
+    """走 Playwright `page.click()`. auto-waiting 等元素出现 + visible + clickable.
+
+    BL-FIX44 (5/11) 加 coordinates 路径: LLM 截图看到位置直接传 [x,y], 不依赖 selector.
+    走 page.mouse.click(x, y), 完全绕开 selector 歧义.
+
+    Args:
+      selector: Playwright selector (优先, 老路径不变)
+      coordinates: [x, y] 整数像素坐标. 跟 selector 二选一.
+                   LLM 拿截图看到按钮位置时用这个 — 没有 selector 歧义.
+      timeout_seconds: selector 等待超时, coordinates 模式不用 (鼠标点立即触发).
+    """
     selector = (args.get("selector") or "").strip()
-    if not selector:
-        return {"type": "error", "error": "selector 必填"}
+    coordinates = args.get("coordinates")
     timeout_ms = int(float(args.get("timeout_seconds") or 30.0) * 1000)
     timeout_ms = max(1000, min(timeout_ms, 120_000))
+
+    # 校验: 二选一
+    if not selector and not coordinates:
+        return {
+            "type": "error",
+            "error": "selector 跟 coordinates 至少传一个. "
+                     "看到截图直接传 coordinates=[x,y]; 有可靠 selector 传 selector.",
+        }
+
+    # coordinates 校验
+    coord_xy = None
+    if coordinates:
+        try:
+            if isinstance(coordinates, dict):
+                cx, cy = int(coordinates.get("x")), int(coordinates.get("y"))
+            elif isinstance(coordinates, (list, tuple)) and len(coordinates) == 2:
+                cx, cy = int(coordinates[0]), int(coordinates[1])
+            else:
+                raise ValueError("不是 [x,y] 列表或 {x,y} 字典")
+            if cx < 0 or cy < 0 or cx > 10000 or cy > 10000:
+                return {
+                    "type": "error",
+                    "error": f"坐标超合理范围 ({cx},{cy}). 应该是页面 pixel 坐标, 0-3000 量级.",
+                }
+            coord_xy = (cx, cy)
+        except Exception as e:  # noqa: BLE001
+            return {
+                "type": "error",
+                "error": f"coordinates 格式错: {type(e).__name__}: {e}. "
+                         "应该是 [x, y] 像素整数, 例 [450, 380].",
+            }
 
     try:
         sync_playwright = _import_playwright()
@@ -2049,26 +2130,45 @@ def _browser_click_impl(args: Dict[str, Any]) -> Dict[str, Any]:
             except RuntimeError as e:
                 return {"type": "error", "error": str(e)}
 
+            # 优先级: selector 传了 → 走 selector (老路径); 没传 → 走 coordinates
             try:
-                page.click(selector, timeout=timeout_ms)
-                # 点击后页面可能跳, 等一下 + 拿新 url + title
-                page.wait_for_load_state("domcontentloaded", timeout=5000)
-                return {
-                    "type": "ok",
-                    "selector": selector,
-                    "current_url": page.url,
-                    "current_title": page.title(),
-                    "summary": f"✓ 点击 '{selector}' 成功. 当前页面: {page.title()}",
-                }
+                if selector:
+                    page.click(selector, timeout=timeout_ms)
+                    page.wait_for_load_state("domcontentloaded", timeout=5000)
+                    return {
+                        "type": "ok",
+                        "mode": "selector",
+                        "selector": selector,
+                        "current_url": page.url,
+                        "current_title": page.title(),
+                        "summary": f"✓ 点击 '{selector}' 成功. 当前页面: {page.title()}",
+                    }
+                else:
+                    # coordinates 模式: page.mouse.click(x, y)
+                    cx, cy = coord_xy
+                    page.mouse.click(cx, cy)
+                    page.wait_for_load_state("domcontentloaded", timeout=5000)
+                    return {
+                        "type": "ok",
+                        "mode": "coordinates",
+                        "coordinates": [cx, cy],
+                        "current_url": page.url,
+                        "current_title": page.title(),
+                        "summary": (
+                            f"✓ 点击坐标 ({cx},{cy}) 成功. 当前页面: {page.title()}. "
+                            "注: 坐标点击没 auto-waiting, 如果页面没反应可能是点空了 — "
+                            "重新截图确认位置."
+                        ),
+                    }
             except Exception as e:
-                # Playwright 的 timeout / element not found 都是常见错, friendly 化
                 err_str = str(e)
                 if "Timeout" in err_str or "timeout" in err_str:
                     return {
                         "type": "error",
                         "error": (
                             f"等不到元素 '{selector}' 可点击 (超时 {timeout_ms}ms). "
-                            "selector 写错? 元素被 modal 遮住? 先 catfish_browser_snapshot 看 DOM"
+                            "selector 写错? 元素被 modal 遮住? 先 catfish_browser_snapshot 看 DOM, "
+                            "或者 screenshot 看视觉 + 用 coordinates 直点."
                         ),
                     }
                 return {"type": "error", "error": f"click 失败: {type(e).__name__}: {e}"}
@@ -2718,9 +2818,19 @@ def browser_find_by_text(args: Dict[str, Any]) -> Dict[str, Any]:
 
 _FIND_BY_TEXT_JS = r"""
 (params) => {
+    // BL-FIX44 (5/11) 重写: 返**全维度候选元数据 + 综合排序**, 让 LLM 自己判断挑哪个.
+    // 之前版本只返 selector_hint, 撞 placeholder/label 同字符就翻车 (鸿波 EIS 登录场景).
+    //
+    // 新返字段:
+    //   - selector: Playwright 最稳的 selector (优先 #id, 再 [name], 再 role/text 组合)
+    //   - tag, role (ARIA), match_type (innerText/placeholder/aria-label/value/title/alt)
+    //   - text (匹配到的文字), is_clickable (有 click handler 或 interactive role/tag)
+    //   - bounds {x,y,w,h}, center {x,y} (供 catfish_browser_click coordinates 直点)
+    //   - score (综合排序权重, 透明可解释)
     const wantedText = params.text;
     const exact = !!params.exact;
-    const maxCount = params.maxCount || 5;
+    const maxCount = params.maxCount || 10;
+    const wantedRole = (params.role || '').toLowerCase();  // 'button' / 'link' / null
 
     function visible(el) {
         const rect = el.getBoundingClientRect();
@@ -2728,68 +2838,141 @@ _FIND_BY_TEXT_JS = r"""
         const cs = getComputedStyle(el);
         return cs.display !== 'none' && cs.visibility !== 'hidden' && cs.opacity !== '0';
     }
-    function elText(el) {
-        // 优先 innerText (visible only), fallback aria-label / placeholder / value
-        const t = (el.innerText || '').trim();
-        if (t) return t;
-        return (el.getAttribute('aria-label') ||
-                el.getAttribute('placeholder') ||
-                el.getAttribute('value') ||
-                el.getAttribute('title') ||
-                el.getAttribute('alt') ||
-                '').trim();
+
+    // 返 [text, match_type] — 哪个属性匹配的, 优先级 innerText > value > aria-label > placeholder > title > alt
+    function matchedText(el, wanted, exact) {
+        const tries = [
+            ['innerText', (el.innerText || '').trim()],
+            ['value', (el.value || el.getAttribute('value') || '').trim()],
+            ['aria-label', (el.getAttribute('aria-label') || '').trim()],
+            ['placeholder', (el.getAttribute('placeholder') || '').trim()],
+            ['title', (el.getAttribute('title') || '').trim()],
+            ['alt', (el.getAttribute('alt') || '').trim()],
+        ];
+        for (const [mt, t] of tries) {
+            if (!t) continue;
+            const m = exact ? (t === wanted) : t.includes(wanted);
+            if (m) return [t, mt];
+        }
+        return [null, null];
     }
-    function selectorHint(el) {
-        if (el.id) return '#' + el.id;
+
+    // 显式 ARIA role 或隐式 (button/a/input[submit]/...).
+    function getRole(el) {
+        const explicit = el.getAttribute('role');
+        if (explicit) return explicit.toLowerCase();
+        const tag = el.tagName.toUpperCase();
+        if (tag === 'BUTTON') return 'button';
+        if (tag === 'A' && el.hasAttribute('href')) return 'link';
+        if (tag === 'INPUT') {
+            const t = (el.type || 'text').toLowerCase();
+            if (t === 'submit' || t === 'button' || t === 'reset' || t === 'image') return 'button';
+            if (t === 'checkbox') return 'checkbox';
+            if (t === 'radio') return 'radio';
+            return 'textbox';
+        }
+        if (tag === 'TEXTAREA') return 'textbox';
+        if (tag === 'SELECT') return 'combobox';
+        return '';
+    }
+
+    // 是否真可点击 — 有原生 interactive 行为或显式 click handler.
+    function isClickable(el) {
+        const tag = el.tagName.toUpperCase();
+        if (['BUTTON', 'A', 'INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return true;
+        if (el.hasAttribute('onclick')) return true;
+        const r = (el.getAttribute('role') || '').toLowerCase();
+        if (['button', 'link', 'menuitem', 'tab'].includes(r)) return true;
+        // cursor:pointer 也是 click 信号
+        try {
+            if (getComputedStyle(el).cursor === 'pointer') return true;
+        } catch (e) {}
+        return false;
+    }
+
+    // 构造最稳的 Playwright selector. 注意: 不用 'text=' (歧义), 优先 #id / [name] / role-name.
+    function bestSelector(el, matchType, matchedTextVal) {
+        if (el.id) return '#' + CSS.escape(el.id);
         const nm = el.getAttribute('name');
-        if (nm) return el.tagName.toLowerCase() + '[name="' + nm + '"]';
-        // BL-FIX16: 加 text/role 兜底, Playwright selector 兼容
-        const txt = (el.innerText || '').trim().slice(0, 30);
-        if (txt) return 'text=' + JSON.stringify(txt);
+        if (nm) return el.tagName.toLowerCase() + '[name=' + JSON.stringify(nm) + ']';
+        // role + name (Playwright 1.27+ 支持 'role=button[name="登录"]')
+        const role = getRole(el);
+        if (role && matchType === 'innerText' && matchedTextVal && matchedTextVal.length <= 50) {
+            return 'role=' + role + '[name=' + JSON.stringify(matchedTextVal) + ']';
+        }
+        // tag + class 兜底
         const cls = (el.className || '').toString().split(/\s+/).filter(Boolean).slice(0, 2).join('.');
         if (cls) return el.tagName.toLowerCase() + '.' + cls;
         return el.tagName.toLowerCase();
     }
-    function isCandidateTag(el) {
-        // 比 snapshot 更宽 — 把所有可点击候选都收: button / a / input / div[onclick] /
-        // [role=button] / [class*=btn] / [class*=button] / img[onclick]
-        const tag = el.tagName.toUpperCase();
-        if (['BUTTON', 'A', 'INPUT', 'TEXTAREA'].includes(tag)) return true;
-        if (el.hasAttribute('onclick')) return true;
-        if (el.getAttribute('role') === 'button' || el.getAttribute('role') === 'link') return true;
-        const cls = (el.className || '').toString().toLowerCase();
-        if (cls.includes('btn') || cls.includes('button') || cls.includes('login')) return true;
-        if (tag === 'IMG' && el.hasAttribute('onclick')) return true;
-        return false;
+
+    function inViewport(rect) {
+        return rect.top < window.innerHeight && rect.bottom > 0 &&
+               rect.left < window.innerWidth && rect.right > 0;
     }
 
-    // 扫所有 element (限制深度防爆), 收文字匹配的
+    // 扫所有元素 (限制只看可见 + 文字匹配的)
     const all = document.querySelectorAll('*');
     const out = [];
     for (const el of all) {
-        if (out.length >= maxCount * 3) break;  // 多收 3 倍, 后面排序去重
+        if (out.length >= 200) break;  // 硬上限, 防大页面爆
         if (!visible(el)) continue;
-        if (!isCandidateTag(el)) continue;
-        const text = elText(el);
-        if (!text) continue;
-        const matches = exact ? (text === wantedText) : text.includes(wantedText);
-        if (!matches) continue;
+        const [matched, matchType] = matchedText(el, wantedText, exact);
+        if (!matched) continue;
+
         const rect = el.getBoundingClientRect();
+        const role = getRole(el);
+        const clickable = isClickable(el);
+
+        // 综合排序: 透明可解释
+        let score = 0;
+        // 1. 用户显式指定 role → 同 role 大加分, 不同 -10 排到末尾 (但仍返, 不丢)
+        if (wantedRole) {
+            if (role === wantedRole) score += 50;
+            else score -= 20;
+        }
+        // 2. clickable > 不可点
+        if (clickable) score += 30;
+        // 3. match_type 优先级 (innerText 最强, alt 最弱)
+        const mtBonus = {
+            'innerText': 20, 'value': 15, 'aria-label': 12,
+            'placeholder': 3, 'title': 2, 'alt': 1,
+        };
+        score += mtBonus[matchType] || 0;
+        // 4. exact match + 10
+        if (matched === wantedText) score += 10;
+        // 5. 元素大小: 登录按钮通常 ≥ 100×40, log scale
+        const area = Math.max(1, rect.width * rect.height);
+        score += Math.min(15, Math.log2(area) | 0);
+        // 6. 在 viewport 内 +5
+        if (inViewport(rect)) score += 5;
+        // 7. 文字越长越可能是误匹配 (placeholder 长描述 vs 按钮短文字)
+        if (matched.length > 20) score -= 5;
+        if (matched.length > 50) score -= 10;
+
         out.push({
-            selector_hint: selectorHint(el),
-            tag_name: el.tagName.toLowerCase(),
-            text: text.slice(0, 100),
-            x: Math.round(rect.x),
-            y: Math.round(rect.y),
-            width: Math.round(rect.width),
-            height: Math.round(rect.height),
-            // 评分: 完全匹配 +10, 短文字 +5 (按钮通常文字短), 在 viewport 内 +5
-            score: (text === wantedText ? 10 : 0) +
-                   (text.length <= 20 ? 5 : 0) +
-                   (rect.y >= 0 && rect.y < window.innerHeight ? 5 : 0),
+            selector: bestSelector(el, matchType, matched),
+            tag: el.tagName.toLowerCase(),
+            role: role || null,
+            text: matched.slice(0, 100),
+            match_type: matchType,
+            is_clickable: clickable,
+            bounds: {
+                x: Math.round(rect.x),
+                y: Math.round(rect.y),
+                w: Math.round(rect.width),
+                h: Math.round(rect.height),
+            },
+            center: {
+                x: Math.round(rect.x + rect.width / 2),
+                y: Math.round(rect.y + rect.height / 2),
+            },
+            in_viewport: inViewport(rect),
+            score: score,
         });
     }
-    // 按 score 倒序, 取 top maxCount
+
+    // score 倒序
     out.sort((a, b) => b.score - a.score);
     return out.slice(0, maxCount);
 }
@@ -2797,17 +2980,28 @@ _FIND_BY_TEXT_JS = r"""
 
 
 def _browser_find_by_text_impl(args: Dict[str, Any]) -> Dict[str, Any]:
-    """文字直接定位元素. 返候选列表 (含 selector_hint).
+    """文字直接定位元素. 返**排序候选 + 元数据**, LLM 看 role/match_type/clickable 挑.
 
-    BL-FIX16 (5/8): 鸿波 'CAS 还是找不到登录按钮造成卡死'. 真因 — CAS 登录按钮
-    不是标准 <button>, snapshot DOM evaluate 拿不到. 这条按文字找, 不挑 tag.
+    BL-FIX44 (5/11) 重写: 单元素 → 候选列表 + 元数据. 修鸿波 EIS 实测 —
+    find_by_text 抓到密码框 placeholder 含 '登录' 翻车. 老版 selector_hint='text=登录'
+    天然歧义, 新版返 role/match_type/is_clickable, LLM 自己判断.
+
+    Args:
+      text: 要找的文字 (必填)
+      exact: 完全匹配 (默认 False, 子串匹配)
+      role: ARIA role 过滤 ('button' / 'link' / 'textbox' / ...). 显式指定时
+            同 role 大加分, 不同 -20. 不传则不过滤.
+      max_results: 返回数量 (默认 10)
+
+    BL-FIX16 (5/8) 历史: CAS 登录非标准, find_by_text 不挑 tag 找文字. L44 保留.
     """
     text = (args.get("text") or "").strip()
     if not text:
         return {"type": "error", "error": "text 必填 (要找的元素文字)"}
     exact = bool(args.get("exact", False))
-    max_results = int(args.get("max_results") or 5)
-    max_results = max(1, min(max_results, 20))
+    max_results = int(args.get("max_results") or 10)
+    max_results = max(1, min(max_results, 30))
+    role_filter = (args.get("role") or "").strip().lower()  # BL-FIX44 新加
 
     try:
         sync_playwright = _import_playwright()
@@ -2837,7 +3031,12 @@ def _browser_find_by_text_impl(args: Dict[str, Any]) -> Dict[str, Any]:
             try:
                 raw = page.evaluate(
                     _FIND_BY_TEXT_JS,
-                    {"text": text, "exact": exact, "maxCount": max_results},
+                    {
+                        "text": text,
+                        "exact": exact,
+                        "maxCount": max_results,
+                        "role": role_filter,
+                    },
                 )
             except Exception as e:
                 return {
@@ -2854,14 +3053,68 @@ def _browser_find_by_text_impl(args: Dict[str, Any]) -> Dict[str, Any]:
                     if not isinstance(item, dict):
                         continue
                     elements.append({
-                        "selector_hint": str(item.get("selector_hint", ""))[:200],
-                        "tag_name": str(item.get("tag_name", "")),
+                        "selector": str(item.get("selector", ""))[:200],
+                        "tag": str(item.get("tag", "")),
+                        "role": item.get("role"),
                         "text": str(item.get("text", ""))[:100],
-                        "x": int(item.get("x", 0)),
-                        "y": int(item.get("y", 0)),
-                        "width": int(item.get("width", 0)),
-                        "height": int(item.get("height", 0)),
+                        "match_type": str(item.get("match_type", "")),
+                        "is_clickable": bool(item.get("is_clickable", False)),
+                        "bounds": item.get("bounds") or {},
+                        "center": item.get("center") or {},  # 供 coordinates click 用
+                        "in_viewport": bool(item.get("in_viewport", False)),
+                        "score": int(item.get("score", 0)),
                     })
+
+            # 顶部推荐: score 最高 + clickable (如果有 clickable 的话)
+            top = None
+            if elements:
+                clickables = [e for e in elements if e["is_clickable"]]
+                top = clickables[0] if clickables else elements[0]
+
+            # 构造给 LLM 的 summary — 解释 top 是怎么挑出来的
+            summary_parts: list[str] = []
+            if not elements:
+                summary_parts.append(
+                    f"页面 {title!r} 上没找到含 '{text}' 的元素."
+                )
+                if role_filter:
+                    summary_parts.append(
+                        f"过滤 role='{role_filter}' 可能太严, 去掉再试一次, "
+                        "或者直接 catfish_browser_screenshot 看一眼页面真实结构."
+                    )
+                else:
+                    summary_parts.append(
+                        "试 exact=false / 改文字, 或 catfish_browser_screenshot 让员工看一眼."
+                    )
+            else:
+                summary_parts.append(
+                    f"找到 {len(elements)} 个含 '{text}' 的元素."
+                )
+                if top:
+                    mt_zh = {
+                        "innerText": "正文",
+                        "value": "value 属性",
+                        "aria-label": "aria-label",
+                        "placeholder": "placeholder",
+                        "title": "title",
+                        "alt": "alt",
+                    }.get(top.get("match_type", ""), top.get("match_type", ""))
+                    summary_parts.append(
+                        f"推荐: tag={top['tag']} role={top['role']} "
+                        f"match={mt_zh} clickable={top['is_clickable']} "
+                        f"size={top['bounds'].get('w')}x{top['bounds'].get('h')}."
+                    )
+                    summary_parts.append(
+                        f"如果这是要的, 直接 catfish_browser_click(selector={top['selector']!r}) "
+                        f"或 catfish_browser_click(coordinates=[{top['center'].get('x')}, "
+                        f"{top['center'].get('y')}])."
+                    )
+                    # 检查 top 是不是 placeholder 匹配, 提醒可能不是真按钮
+                    if top.get("match_type") == "placeholder":
+                        summary_parts.append(
+                            "⚠ top 候选匹配的是 placeholder (输入框提示文字), 不是真按钮. "
+                            "想找按钮请传 role='button' 重试, 或看下面候选挑 clickable+role=button 的."
+                        )
 
             return {
                 "type": "ok",
@@ -2869,16 +3122,11 @@ def _browser_find_by_text_impl(args: Dict[str, Any]) -> Dict[str, Any]:
                 "url": url,
                 "search_text": text,
                 "exact": exact,
+                "role_filter": role_filter or None,
                 "elements": elements,
                 "element_count": len(elements),
-                "summary": (
-                    f"找到 {len(elements)} 个含 '{text}' 的可点击元素. "
-                    f"第 1 个 selector: {elements[0]['selector_hint'] if elements else '(无)'}. "
-                    f"直接 catfish_browser_click(selector=...) 传它就行."
-                    if elements
-                    else f"页面 {title!r} 上没找到含 '{text}' 的可点击元素. "
-                    f"试 exact=false / 改文字 / 或者直接 catfish_browser_screenshot 让员工看一眼."
-                ),
+                "top_recommendation": top,
+                "summary": "\n".join(summary_parts),
             }
     except Exception as e:
         return {"type": "error", "error": f"playwright find_by_text 异常: {type(e).__name__}: {e}"}

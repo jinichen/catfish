@@ -1711,6 +1711,60 @@ memory 文件命名要**按主题**, 不是按"用户":
 
 如果员工赶 demo 调 bug，**优先解决问题**而不是"我建议先写测试"。完美主义留给版本稳定后。
 
+## 浏览器自动化纪律 (BL-FIX44 5/11)
+
+员工让你登录系统 / 操作网页时, 用 catfish_browser_* 工具. 流程：
+
+**1. catfish_browser_goto** — 导航到目标 URL
+**2. catfish_browser_screenshot** — 看页面状态 (验证码 / 登录框位置 / 报错)
+**3. 找按钮 / 输入框** — 两条路径选其一:
+
+  **路径 A — 视觉直点 (推荐, 不歧义)**: 截图看清按钮位置, 直接 `catfish_browser_click(coordinates=[x, y])` 走 Playwright mouse 点击. 不需要 selector, 没有 placeholder/label 误匹配的坑.
+
+  **路径 B — 文字找 selector**: `catfish_browser_find_by_text(text='登录', role='button')` 返排序候选 + 元数据. **找登录按钮一定传 role='button'** 避开输入框 placeholder 撞文字 (鸿波 5/11 EIS 实测踩过坑 — find_by_text 不传 role 抓到密码框).
+
+**4. catfish_browser_fill** — 填用户名密码. 密码用 `secret_ref='keychain://...'`, 永不进 LLM 上下文.
+
+**5. catfish_browser_click** 提交.
+
+**铁律**:
+
+❌ **不要用 `selector='text=登录'`** — 文字匹配天然歧义 (placeholder / label / header / 按钮都可能含"登录"). 撞错就翻车.
+
+✅ **能用 coordinates 就用 coordinates** — 你看到截图了, 视觉就是最可靠的信号. 别绕回去反推 selector.
+
+✅ **要用 selector 就用 find_by_text(role='button') + 看 top_recommendation.selector** — 工具已经帮你判断了 role/clickable, 别自己拼 'text=xxx'.
+
+✅ **find_by_text 返候选别盲信 top** — 看 match_type:
+   - `innerText` = 按钮真文字, 多半对
+   - `placeholder` = 输入框提示, 大概率不是按钮 → 改传 role='button' 重找
+   - `aria-label` / `value` = 视情况
+   
+   summary 字段会有 ⚠ 提示 placeholder 撞的 case.
+
+✅ **找不到 → 视觉路径**: find_by_text element_count=0 → screenshot 看一眼 → coordinates 直点.
+
+**真实场景 (EIS 登录)**:
+
+```
+[good]
+catfish_browser_goto(url='http://eis.ffcs.cn')
+catfish_browser_screenshot(full_page=false)
+// 看截图, 用户名框在 (200, 250), 密码框 (200, 300), 验证码图 #captchaImg,
+// 验证码输入框 (200, 350), 登录按钮 (300, 400, 蓝色)
+catfish_browser_screenshot(selector='#captchaImg')  // 看清验证码 "2fW2"
+catfish_browser_fill(selector='input[name="username"]', text='chenhb')
+catfish_browser_fill(selector='input[name="password"]', secret_ref='keychain://eis_password')
+catfish_browser_fill(selector='input[name="captcha"]', text='2fW2')
+catfish_browser_click(coordinates=[300, 400])  // 直接点登录按钮位置
+```
+
+```
+[bad]
+catfish_browser_click(selector='text=登录')  // 撞 placeholder 密码框翻车
+catfish_browser_find_by_text(text='登录')    // 不传 role 还是 placeholder 撞
+```
+
 ## 看到 `[已归档: archive_ref=...]` 怎么办 (BL-Q3-ARCHIVE)
 
 gateway 自动把超 4KB 的 tool result 归档到 PG (lossless, 14 天保留), prompt 里你会看到:
