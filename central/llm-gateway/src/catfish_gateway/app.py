@@ -1678,6 +1678,15 @@ async def chat_completions(
         )
         body["messages"] = unwrap_tool_images(body["messages"])
 
+        # BL-FIX41 (5/11): 单条 role=tool content 字节级硬截断.
+        # 真实 case: 鸿波 demo 前夜 log 显示 tool_msgs=63 累积 100-200KB
+        # 把 128K context 烧到 117-125% overflow. 改 2KB/条上限,
+        # 50 条 × 2KB = 100KB 留 28KB 给 system + journal + user.
+        # 保前 1KB + 后 1KB + 中间替成 "...[已截断 N 字]...".
+        # 消息数量不变, 保 Hermes ReAct chain 完整 (assistant ↔ tool 配对).
+        from .tool_msg_truncator import truncate_tool_messages  # noqa: PLC0415
+        body["messages"] = truncate_tool_messages(body["messages"])
+
     # 含图自动 reroute 到 vision 模型: 防止主力模型 (非 vision) 收到 image_url
     # 直接被上游 protobuf 解析炸 BadRequest 400. in-place 改 body["model"].
     rerouted_model, vision_hint = route_to_vision_if_needed(
