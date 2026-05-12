@@ -8,8 +8,8 @@
   - 各 employee 自己机器 ~/.catfish/expertise.yaml 里 status=confirmed 的 tag
   - gateway self_register 上报时带过来 (隐私边界: 只 confirmed, 不带 evidence)
 
-Revision ID: 20260512_002
-Revises: 20260502_001
+Revision ID: 20260512_003
+Revises: 20260510_002
 Create Date: 2026-05-12
 """
 from __future__ import annotations
@@ -20,8 +20,8 @@ from alembic import op
 import sqlalchemy as sa  # noqa: F401  (alembic 习惯 import)
 
 
-revision: str = "20260512_002"
-down_revision: Union[str, None] = "20260502_001"
+revision: str = "20260512_003"
+down_revision: Union[str, None] = "20260510_002"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
