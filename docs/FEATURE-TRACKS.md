@@ -11,7 +11,7 @@
 ```
 Phase 1 · 单员工 AI 副手           [██████████] 100%  · 5/12 BL-MM9-FREEZE-v2 教学→凝固→复用闭环跑通 (eis-login 2.3s 复用 + eis-checkin SOP 第二次验证)
 Phase 2 · 团队版 (SSO/RBAC/Win)    [██████████] 99%   · 5/10 凌晨 4 个中央 service PG 统一 + 5/12 GitHub Actions CI 落地 (1257 测试零失败)
-Phase 3 · ★ Federation             [█████████░] 90%   · Plan D v0.1 ✅ + 5/6 重定位 + 5/12 BL-FED2.1-2.5 全 ship ✅ (5 个 sub 一日内连发, 5/14 demo 就绪)
+Phase 3 · ★ Federation             [█████████░] 95%   · Plan D v0.1 ✅ + 5/6 重定位 + 5/12 BL-FED2.1-2.6 全 ship ✅ (6 个 sub 一日内连发 + demo 真跑通, 剩 5% 是实时 Companion 弹窗 P1)
 Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   · 2027 Q2+
 
 ★★★ 5/12 真闭环跑通 (BL-MM9-FREEZE-v2): catfish 卖点 "员工教一次 → 凝固成 skill → 下次秒开"

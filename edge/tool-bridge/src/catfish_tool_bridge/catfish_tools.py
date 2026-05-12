@@ -1592,6 +1592,58 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ── BL-FED2.6 (5/12 鸿波拍板末) a2a 协助通知 ──
+    {
+        "name": "catfish_list_a2a_help",
+        "description": (
+            "★ 看你**通过 Plan D Federation 帮过哪些同事** (反馈环主动审计). "
+            "BL-FED2.4 反馈环已经在 ~/.catfish/a2a_notifications.jsonl 累积了你被问过的"
+            "每次记录, 这个 tool 是员工主动**查**这个清单的入口.\n\n"
+            "✅ 调用场景:\n"
+            "  - 员工问 '今天我帮过谁?' → hours_back=24\n"
+            "  - 员工问 '最近一周我都被问了哪些事?' → hours_back=168\n"
+            "  - 员工问 '小李最近问过我啥?' → from_sub='lijun@ffcs.cn'\n"
+            "  - 员工问 '有人问过我资质方面的事吗?' → tag_substr='资质'\n\n"
+            "❌ 不调用:\n"
+            "  - 员工问'今天我自己干了啥' → 不是 a2a 协助, 走 employee_journal\n\n"
+            "返参重点 (展示给员工):\n"
+            "  - total: 符合条件的总数\n"
+            "  - by_sub: {sub: count} — 谁问得多\n"
+            "  - by_purpose: {purpose: count} — 哪个领域被问得多\n"
+            "  - items: 最近 N 条详细 (含 ts/question/answer_preview/duration)\n"
+            "  - summary: 一句话归纳, 直接念给员工\n\n"
+            "🔒 隐私: jsonl 只在员工自己 mac, 中央不存. 这个 tool 也不外发任何数据."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "hours_back": {
+                    "type": "integer",
+                    "description": "过去多少小时 (默认 24). 0/null = 全部.",
+                },
+                "unseen_only": {
+                    "type": "boolean",
+                    "description": "只看未读 (Companion 徽章用)",
+                },
+                "from_sub": {
+                    "type": "string",
+                    "description": "按问问的同事 SSO sub 过滤",
+                },
+                "tag_substr": {
+                    "type": "string",
+                    "description": "按 purpose 子串过滤 (例 '资质' 命中 'expert_consult:资质审核')",
+                },
+                "max_items": {
+                    "type": "integer",
+                    "description": "返多少条详细 (默认 50, 上限 200)",
+                },
+            },
+            "required": [],
+        },
+        "emoji": "📨",
+        "toolset": "catfish_native",
+        "available": True,
+    },
     # ── BL-FED2.3 (5/12 鸿波拍板) 跨员工路由 ──
     {
         "name": "catfish_expert_consult",
@@ -5736,6 +5788,10 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_expert_consult":
         from . import expert_consult  # noqa: PLC0415
         return expert_consult.tool_expert_consult(args)
+    # BL-FED2.6 (5/12) a2a 协助通知主动审计
+    if name == "catfish_list_a2a_help":
+        from . import a2a_notifications  # noqa: PLC0415
+        return a2a_notifications.tool_list_a2a_help(args)
     raise ValueError(f"unknown native tool: {name}")
 
 

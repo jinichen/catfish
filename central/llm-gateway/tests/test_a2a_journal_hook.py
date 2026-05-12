@@ -178,3 +178,46 @@ def test_format_has_required_fields(isolated_home: Path):
     assert "- chunks:" in content
     # ## 段落 prefix (跟 employee_journal 其他段一致)
     assert content.lstrip().startswith("## ")
+
+
+# ── BL-FED2.6 — 同步写 a2a_notifications.jsonl ──────────────
+
+
+def test_notification_jsonl_written(isolated_home: Path, monkeypatch):
+    """journal hook 成功时同步写 a2a_notifications.jsonl 一行 JSON."""
+    import os
+    notif_path = isolated_home / ".catfish" / "a2a_notifications.jsonl"
+    monkeypatch.setenv("CATFISH_HOME", str(isolated_home / ".catfish"))
+    append_a2a_help_entry(
+        from_sub="alice@ffcs.cn",
+        question="资质审核怎么搞",
+        purpose="expert_consult:资质审核",
+        answer_preview="走 OA",
+        chunks_count=3,
+        duration_ms=500,
+    )
+    assert notif_path.exists()
+    import json as _json
+    lines = notif_path.read_text(encoding="utf-8").strip().split("\n")
+    assert len(lines) == 1
+    entry = _json.loads(lines[0])
+    assert entry["from_sub"] == "alice@ffcs.cn"
+    assert entry["question"] == "资质审核怎么搞"
+    assert entry["purpose"] == "expert_consult:资质审核"
+    assert entry["chunks_count"] == 3
+    assert entry["duration_ms"] == 500
+    assert entry["seen"] is False
+    assert "ts" in entry
+
+
+def test_notification_multiple_calls_append(isolated_home: Path, monkeypatch):
+    monkeypatch.setenv("CATFISH_HOME", str(isolated_home / ".catfish"))
+    notif_path = isolated_home / ".catfish" / "a2a_notifications.jsonl"
+    for i, sub in enumerate(["alice@x", "bob@x", "charlie@x"]):
+        append_a2a_help_entry(
+            from_sub=sub,
+            question=f"q{i}",
+            chunks_count=i,
+        )
+    lines = notif_path.read_text(encoding="utf-8").strip().split("\n")
+    assert len(lines) == 3

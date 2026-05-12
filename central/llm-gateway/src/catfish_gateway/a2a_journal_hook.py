@@ -32,8 +32,11 @@ audit 是 ops 视角 (谁调谁, 多少 chunk, 多少 ms), 给运维看. journal
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger("catfish.gateway.a2a_journal_hook")
@@ -43,6 +46,52 @@ logger = logging.getLogger("catfish.gateway.a2a_journal_hook")
 _ANSWER_PREVIEW_CHARS = 100
 # 问题截断 — 跟 audit 一致
 _QUESTION_TRUNCATE_CHARS = 200
+
+
+def _notifications_path() -> Path:
+    """BL-FED2.6 通知 jsonl 路径. 跟 employee_journal 同走 CATFISH_HOME.
+
+    优先 CATFISH_HOME/a2a_notifications.jsonl, fallback ~/.catfish/a2a_notifications.jsonl.
+    """
+    catfish_home = os.environ.get("CATFISH_HOME", "").strip()
+    if catfish_home:
+        return Path(catfish_home).expanduser() / "a2a_notifications.jsonl"
+    return Path.home() / ".catfish" / "a2a_notifications.jsonl"
+
+
+def _append_notification(
+    *,
+    from_sub: str,
+    question: str,
+    purpose: str,
+    answer_preview: str,
+    chunks_count: int,
+    duration_ms: int,
+    timestamp: datetime,
+) -> bool:
+    """BL-FED2.6 — 同步写 ~/.catfish/a2a_notifications.jsonl 一行 JSON.
+
+    给 Companion / catfish_list_a2a_help tool 读. 失败静默不影响 journal 写入.
+    """
+    p = _notifications_path()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "ts": timestamp.isoformat(),
+            "from_sub": from_sub,
+            "question": (question or "")[:_QUESTION_TRUNCATE_CHARS],
+            "purpose": purpose or "",
+            "answer_preview": (answer_preview or "")[:_ANSWER_PREVIEW_CHARS],
+            "chunks_count": chunks_count,
+            "duration_ms": duration_ms,
+            "seen": False,  # Companion 看过后置 true (BL-FED2.6-FU 留)
+        }
+        with p.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.warning("BL-FED2.6 notification 写失败 (静默): %s", e)
+        return False
 
 
 def append_a2a_help_entry(
@@ -96,6 +145,16 @@ def append_a2a_help_entry(
         logger.info(
             "BL-FED2.4: a2a-help journal 追加 from=%s purpose=%s chunks=%d",
             from_sub, purpose, chunks_count,
+        )
+        # BL-FED2.6: 同步写 notification jsonl (Companion / list_a2a_help tool 读)
+        _append_notification(
+            from_sub=from_sub,
+            question=question,
+            purpose=purpose,
+            answer_preview=preview,
+            chunks_count=chunks_count,
+            duration_ms=duration_ms,
+            timestamp=(timestamp or datetime.now()),
         )
         return True
     except Exception as e:  # noqa: BLE001

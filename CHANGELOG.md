@@ -3868,7 +3868,7 @@ LLM 看到的格式 (跟 BL-I4 5/8 预留接口对接):
 
 ---
 
-## 2026-05-12（周二）— BL-MM9-FREEZE-v2 教学→凝固→复用真闭环 + BL-COMPANION-UX1/UX2 + CI 落地 + BL-FED2.1-2.5 全链路 ship (Federation 5/5)
+## 2026-05-12（周二）— BL-MM9-FREEZE-v2 + BL-COMPANION-UX1/UX2 + CI + BL-FED2.1-2.6 全 ship (Federation 6/6) + 真跑通 demo
 
 5/11 夜里把 Q3-WEBSKILL 视觉双子 (recognize_captcha / browser_locate) ship 了, 5/12 一整天做真活儿: **真把"员工教鲶鱼一次 → 凝固成可执行 skill → 下次秒开"闭环建出来**. 早上叠补丁撞 12 次坑, 中午鸿波拍板"不要小打小闹要彻底解决", 下午彻底重做, **13:26:39 凝固出第一个干净 eis-login skill, 复用 2.3 秒秒过 — BL-MM9 卖点从 PPT 概念变成可演示资产**. 同时修了 Companion "锁死" UX 问题, 落地 GitHub Actions CI, 补 60 个单元测试 + 修 22 个预存 fail.
 
@@ -4226,10 +4226,71 @@ central:
 
 Federation Phase 3 从 50% → 90% 一日内, 5/14 demo 准备就绪.
 
+### BL-FED2.6 — a2a 通知 jsonl + catfish_list_a2a_help 主动审计 tool (5/12 鸿波末班车)
+
+**真问题**: BL-FED2.4 反馈环让 bob 答完 alice 后自动写 journal, 但**员工怎么知道自己今天帮过谁**? 实时 Companion 弹窗 (BL-FED2.3-FU) 是大改动 (涉及 Tauri 通知 channel + 阻塞 LLM), 鸿波没时间一晚做完. 退而求其次走**事后主动审计** — 员工想知道时主动问鲶鱼.
+
+**链路**:
+```
+gateway a2a_journal_hook (BL-FED2.4) → 答完同步写两份:
+  1. ~/.catfish/employee_journal.md   (markdown, expertise extract 用)
+  2. ~/.catfish/a2a_notifications.jsonl (jsonl, Companion/tool 用)
+        ↓
+员工问"今天我帮过谁?" → LLM 调 catfish_list_a2a_help → 列出
+```
+
+**新模块 `a2a_notifications.py`** (tool-bridge, ~165 行 + 17 单测):
+- `load_notifications()`: 读 jsonl, 坏行跳过
+- `filter_notifications()`: hours_back / unseen_only / from_sub / tag_substr 四维过滤
+- `tool_list_a2a_help()`: tool 入口, 返 by_sub / by_purpose 分组 + items 倒序截断
+- 路径走 CATFISH_HOME 联动 (跟 employee_journal 一致, 多 agent demo 不撞)
+
+**gateway 改动** (a2a_journal_hook.py 升级):
+- 新 `_notifications_path()` + `_append_notification()`: jsonl 一行 JSON 追加
+- `append_a2a_help_entry()` 成功路径**同步**调 `_append_notification()` (journal 失败时也不写 notification, 保持原子性)
+- 失败静默 — 不影响主流程
+
+**catfish_tools.py schema**:
+- 新 `catfish_list_a2a_help` schema, LLM 友好描述 4 个典型调用场景
+- ❌ 反面例: 员工问"今天我自己干了啥" → 不是 a2a 协助, 走 employee_journal 不要这个工具
+- 隐私边界声明: jsonl 只在员工 mac, tool 不外发数据
+
+**Companion 5/13 wire UI 留 hook (BL-FED2.6-FU)**:
+- Companion Rust 端 `commands/a2a_notifications.rs` 直接读 jsonl, 算 unseen 算徽章数字
+- 点徽章 → 调本 tool → 渲染卡片
+- 员工标"撤销" → 加一行 `decision: deny` → 后续 BL-FED2.4-FU 做"自动加 ALLOW.md deny rule" 自学习
+
+**测试**: tool-bridge 534 (517 → 534, +17 BL-FED2.6), gateway 830 (828 → 830, +2 notification write), 0 regression.
+
+### 5/12 真闭环全测 (终账目)
+
+| 项目 | 测试数 | 状态 |
+|---|---|---|
+| tool-bridge | 534 passed / 30 skipped | ✅ 0 failed |
+| gateway | 830 passed / 9 skipped | ✅ 0 failed |
+| identity-server | 65 passed / 3 skipped | ✅ 0 failed |
+| **总计** | **1429 passed / 42 skipped** | ✅ **0 failed** |
+
+**fed_demo.sh 真跑通**: 13/13 ✅ on 鸿波 mac. 跨员工真闭环跑通, alice 问 → 黄页 → 路由 bob → bob 答 → bob journal 加 [a2a-help] → 后续 extract 自动加权.
+
+### Federation Phase 3: 50% → 95% (5/12 一日 6 连发)
+
+| sub | 模块 | tests | 状态 |
+|---|---|---|---|
+| 2.1 | expertise auto-extract | +25 | ✅ |
+| 2.2 | by-expertise endpoint + alembic | +24 | ✅ |
+| 2.3 | catfish_expert_consult 路由 | +31 | ✅ |
+| 2.4 | a2a_journal_hook 反馈环 | +11 | ✅ |
+| 2.5 | fed_demo.sh 3-agent E2E | +3 + **真跑通** | ✅ |
+| 2.6 | a2a 通知 + list_a2a_help tool | +19 | ✅ |
+
+剩 5% = **BL-FED2.3-FU 实时 Companion 弹窗** (前置阻塞 + UI), 留 5/14 后做 (5/13 优先准备 demo).
+
 **接下来 (5/13 收尾)**:
-- 跑 fed_demo.sh 真链路验一遍 (鸿波 mac)
-- 准备 5/14 demo 脚本 (BL-FED2.x 占 1-2 个场景)
-- BL-FED2.3-followup: 实时 Companion 弹窗给被咨询员工 (二次确认, 当前 ALLOW.md 软策略, P1)
+- 准备 5/14 demo 脚本 (BL-FED2.x 占 1-2 个场景, fed_demo.sh 真跑通已给资产)
+- Companion 5/13 UI wire: 读 a2a_notifications.jsonl 显示徽章 (BL-FED2.6-FU)
+- BL-FED2.3-FU: 实时 Companion 弹窗 (前置二次确认, P1, 5/14 后)
+- BL-FED2.4-FU: 员工撤销 → 自动加 ALLOW.md deny rule (闭环自学习)
 
 ---
 
