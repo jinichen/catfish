@@ -119,16 +119,30 @@ from typing import Any
 logger = logging.getLogger("catfish.skill.{name_slug}")
 
 
-def _call(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
-    """走 catfish dispatch 调原生 tool. 返 result dict."""
+def _call(tool_name: str, args: dict[str, Any], retries: int = 2, retry_delay: float = 2.5) -> dict[str, Any]:
+    """走 catfish dispatch 调原生 tool. 返 result dict.
+
+    BL-MM9-FREEZE cold-start fix (5/12): 第一次跑 skill 时 chrome / 上游 LLM
+    都可能 cold, 第一步 goto 撞冷启动失败. _call 自带 retry — 失败时 sleep
+    后重试, 把 cold start 期间撑过去.
+    """
     from catfish_tool_bridge.catfish_tools import dispatch_native  # noqa: PLC0415
-    try:
-        r = dispatch_native(tool_name, args)
-        if not isinstance(r, dict):
-            return {{"ok": True, "raw": r}}
-        return r
-    except Exception as e:
-        return {{"ok": False, "error": repr(e)}}
+    last_result: dict[str, Any] = {{"ok": False, "error": "not attempted"}}
+    for attempt in range(retries + 1):
+        try:
+            r = dispatch_native(tool_name, args)
+            if not isinstance(r, dict):
+                return {{"ok": True, "raw": r}}
+            # 成功 → 立即返
+            if r.get("ok", True):
+                return r
+            last_result = r
+        except Exception as e:
+            last_result = {{"ok": False, "error": repr(e)}}
+        if attempt < retries:
+            logger.info("_call retry %d/%d for %s: %s", attempt + 1, retries, tool_name, last_result.get("error", "?"))
+            _time.sleep(retry_delay)
+    return last_result
 
 
 def render_{fn_name}(
