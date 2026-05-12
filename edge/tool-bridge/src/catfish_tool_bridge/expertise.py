@@ -230,6 +230,7 @@ _EXTRACT_PROMPT = """你是员工专长抽取助手. 读员工的工作日记 (e
 3. **confidence 0-1** — 高频 + 多样化提及 = 高 confidence (>0.8). 偶尔提到 = 低 (<0.5, 跳过别返).
 4. **evidence_count** 整数 — journal 里相关 entry 数粗估.
 5. **aliases** 0-3 个同义词 / 缩写 (例 "资质管理" 加 ["资质", "证书申报"]).
+6. **[a2a-help] 标签的 entry 加权** (BL-FED2.4 反馈环): 这是员工**真实被同事咨询**的事实, 比员工自己日记自夸更可靠. 每个 [a2a-help] 算 evidence_count +3 (相当于自己干 3 次). 出现 2 次同主题 [a2a-help] → 该 tag confidence 应 ≥0.85.
 
 # 输入: 员工 journal
 

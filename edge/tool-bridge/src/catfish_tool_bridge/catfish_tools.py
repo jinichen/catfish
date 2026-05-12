@@ -1545,7 +1545,7 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_extract_expertise",
         "description": (
-            "★ 从 ~/.hermes/memories/employee_journal.md 自动抽员工专长 tag, "
+            "★ 从 ~/.catfish/employee_journal.md 自动抽员工专长 tag, "
             "写到 ~/.catfish/expertise.yaml. **隐私边界**: yaml 留员工本机, "
             "中央 registry 只看 confirmed 后的 tag 字符串, 不看 evidence/aliases.\n\n"
             "✅ 调用场景:\n"
@@ -5744,11 +5744,20 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
 # ─────────────────────────────────────────────────────────────
 
 def _load_employee_journal() -> str:
-    """读 ~/.hermes/memories/employee_journal.md.
+    """读 employee_journal.
+
+    BL-FED2.4 (5/12) 修 path bug: 真路径 ~/.catfish/employee_journal.md (跟
+    gateway employee_journal.py / session_summarizer / proactive.py 对齐).
+    BL-FED2.1 第一版误写成 ~/.hermes/memories/employee_journal.md —
+    用 hermes USER.md 的命名约定错搬过来.
+
+    fallback: 老 path ~/.hermes/employee_journal.md (proactive.py 也有同款兼容).
 
     没有则返空串 (调用方会返 ok=False + '没东西可抽').
     """
-    journal_path = _hermes_dir() / "memories" / "employee_journal.md"
+    catfish_path = _home() / ".catfish" / "employee_journal.md"
+    fallback_path = _home() / ".hermes" / "employee_journal.md"
+    journal_path = catfish_path if catfish_path.exists() else fallback_path
     if not journal_path.exists():
         return ""
     try:

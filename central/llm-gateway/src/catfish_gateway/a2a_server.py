@@ -288,6 +288,9 @@ async def _stream_llm_answer(
     """
     params = req.params
     chunks_count = 0
+    # BL-FED2.4 (5/12) 累积答案前 N 字符做 journal 摘要 (完整 answer 不留)
+    answer_buffer = ""
+    _ANSWER_BUFFER_MAX = 200
 
     # 构建 prompt
     system_prompt = (
@@ -318,6 +321,8 @@ async def _stream_llm_answer(
             )
             for chunk in _split_into_chunks(mock_answer):
                 chunks_count += 1
+                if len(answer_buffer) < _ANSWER_BUFFER_MAX:
+                    answer_buffer += chunk
                 yield _sse_event("message", _jsonrpc_chunk(req.id, chunk))
             yield _sse_event("done", _jsonrpc_done(req.id, audit_id, chunks_count))
         else:
@@ -337,9 +342,31 @@ async def _stream_llm_answer(
                 )
                 for chunk in _split_into_chunks(mock_answer):
                     chunks_count += 1
+                    if len(answer_buffer) < _ANSWER_BUFFER_MAX:
+                        answer_buffer += chunk
                     yield _sse_event("message", _jsonrpc_chunk(req.id, chunk))
                 yield _sse_event("done", _jsonrpc_done(req.id, audit_id, chunks_count))
-                # audit + return 走 finally / 后续, 但这里直接 return 防再走 LiteLLM 路径
+                # BL-FED2.4: 这条早 return 路径也要写 audit + journal hook (跟正常路径同)
+                _duration_ms = int((time.time() - started_at) * 1000)
+                write_audit({
+                    "direction": "inbound",
+                    "from_sub": params.from_sub,
+                    "question": params.question[:200],
+                    "status": "ok",
+                    "allow_match": allow_match,
+                    "jti": jti,
+                    "audit_id": audit_id,
+                    "duration_ms": _duration_ms,
+                    "total_chunks": chunks_count,
+                })
+                _try_append_a2a_journal(
+                    from_sub=params.from_sub,
+                    question=params.question,
+                    purpose=getattr(params, "purpose", "") or "",
+                    answer_preview=answer_buffer,
+                    chunks_count=chunks_count,
+                    duration_ms=_duration_ms,
+                )
                 return
 
             response = await litellm.acompletion(
@@ -363,10 +390,13 @@ async def _stream_llm_answer(
                     content = ""
                 if content:
                     chunks_count += 1
+                    if len(answer_buffer) < _ANSWER_BUFFER_MAX:
+                        answer_buffer += content
                     yield _sse_event("message", _jsonrpc_chunk(req.id, content))
             yield _sse_event("done", _jsonrpc_done(req.id, audit_id, chunks_count))
 
         # audit 成功
+        _duration_ms = int((time.time() - started_at) * 1000)
         write_audit({
             "direction": "inbound",
             "from_sub": params.from_sub,
@@ -375,9 +405,20 @@ async def _stream_llm_answer(
             "allow_match": allow_match,
             "jti": jti,
             "audit_id": audit_id,
-            "duration_ms": int((time.time() - started_at) * 1000),
+            "duration_ms": _duration_ms,
             "total_chunks": chunks_count,
         })
+
+        # BL-FED2.4 (5/12) — A2A 反馈环: B 自己 journal 加一条 [a2a-help] 记录
+        # 失败静默, 不影响 a2a 主流程
+        _try_append_a2a_journal(
+            from_sub=params.from_sub,
+            question=params.question,
+            purpose=getattr(params, "purpose", "") or "",
+            answer_preview=answer_buffer,
+            chunks_count=chunks_count,
+            duration_ms=_duration_ms,
+        )
 
     except Exception as e:
         logger.warning("a2a LLM 推理失败: %s", e)
@@ -400,6 +441,33 @@ async def _stream_llm_answer(
 def _split_into_chunks(text: str, chunk_size: int = 30) -> list[str]:
     """把 mock 文本分段, 模拟流式 chunk."""
     return [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
+
+
+def _try_append_a2a_journal(
+    *,
+    from_sub: str,
+    question: str,
+    purpose: str,
+    answer_preview: str,
+    chunks_count: int,
+    duration_ms: int,
+) -> None:
+    """BL-FED2.4 反馈环 — wrapper, 完全 swallow 异常 (a2a 主流程不能因 journal 失败崩).
+
+    journal hook 真实现在 a2a_journal_hook.py.
+    """
+    try:
+        from .a2a_journal_hook import append_a2a_help_entry  # noqa: PLC0415
+        append_a2a_help_entry(
+            from_sub=from_sub,
+            question=question,
+            purpose=purpose,
+            answer_preview=answer_preview,
+            chunks_count=chunks_count,
+            duration_ms=duration_ms,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("BL-FED2.4 journal hook 异常 (静默): %s", e)
 
 
 __all__ = ["build_a2a_router"]

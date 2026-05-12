@@ -11,7 +11,7 @@
 ```
 Phase 1 · 单员工 AI 副手           [██████████] 100%  · 5/12 BL-MM9-FREEZE-v2 教学→凝固→复用闭环跑通 (eis-login 2.3s 复用 + eis-checkin SOP 第二次验证)
 Phase 2 · 团队版 (SSO/RBAC/Win)    [██████████] 99%   · 5/10 凌晨 4 个中央 service PG 统一 + 5/12 GitHub Actions CI 落地 (1257 测试零失败)
-Phase 3 · ★ Federation             [████████░░] 80%   · Plan D v0.1 ✅ + 5/6 重定位 + 5/12 BL-FED2.1 自动抽 + 2.2 黄页 endpoint + 2.3 跨员工路由 ✅ (2.4-2.5 待办)
+Phase 3 · ★ Federation             [█████████░] 90%   · Plan D v0.1 ✅ + 5/6 重定位 + 5/12 BL-FED2.1-2.5 全 ship ✅ (5 个 sub 一日内连发, 5/14 demo 就绪)
 Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   · 2027 Q2+
 
 ★★★ 5/12 真闭环跑通 (BL-MM9-FREEZE-v2): catfish 卖点 "员工教一次 → 凝固成 skill → 下次秒开"
@@ -246,8 +246,8 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 - ✅ **BL-FED2.1** **员工自愿**专长声明 schema (员工 mac 本机 `~/.catfish/expertise.yaml`, 上行只发 tag 列表给 identity-server, **不传画像内容**. 员工随时可删 / 改 / 下线) · 1-2 天 · 5/15-5/16 → **5/12 鸿波拍板"专长从 journal 自动抽"提前完成**: `expertise.py` (~530 行 + 25 单测) 接 LLM 抽 tag, `tool_extract / list / confirm` 3 个 native tool, `export_for_registry()` 隐私阀门 (只返 confirmed tag 串), 接 catfish-private-main 走 gateway loopback. 全测 483 passed.
 - ✅ **BL-FED2.2** 同事黄页 (`identity-server` 加 `/registry/search?expertise=资质` endpoint, 只返**已自愿登记**的 agent. 员工删除专长 → 黄页立即失踪) · 1 周 · 5/19-5/23 → **5/12 提前完成**: identity-server `/registry/by-expertise?tag=X[&online_only=true]` endpoint, 大小写不敏感匹配, 在线员工排序优先, 不返 jwks_uri/public_pem (隐私). gateway self_register 读 `~/.catfish/expertise.yaml` confirmed tag 上报. 加 alembic migration `20260512_002_registry_expertise` (JSONB + GIN 索引). identity-server 65 / gateway 817 测试零失败.
 - ✅ **BL-FED2.3** 路由层 (`gateway/expertise_router`, 新工具 `catfish_expert_consult`. 调用前给被咨询员工**显式提示** [谁在问 / 问什么], 员工可拒) · 1-2 周 · 5/26-6/6 → **5/12 提前完成**: `expert_consult.py` (~260 行 + 31 单测) 走 by-expertise 自动路由 + 复用 a2a_ask 链路 (含 ALLOW.md 拦截). 路由策略: 排除自己 / 优先在线 / preferred_sub 强转 / 全离线友好降级. 实时 Companion 弹窗确认作为 P1 留 BL-FED2.4 后做 (当前由 ALLOW.md 软策略守护). tool-bridge 514 测试零失败.
-- ⬜ **BL-FED2.4** 答案质量反馈 (复用 BL-MM6 feedback UI: 小赵评老李 agent 答 → 反馈**只进老李 mac 本机**的 user_profile, 反馈数据**不离开老李 mac**) · 1 周 · 6/9-6/13
-- ⬜ **BL-FED2.5** 跨员工 demo (单机 mock 升级到 3 agent + 公司目录, 含**员工离职带走 agent** 演示 `cp ~/.catfish/`) · 3 天 · 6/16-6/18
+- ✅ **BL-FED2.4** 答案质量反馈 (复用 BL-MM6 feedback UI: 小赵评老李 agent 答 → 反馈**只进老李 mac 本机**的 user_profile, 反馈数据**不离开老李 mac**) · 1 周 · 6/9-6/13 → **5/12 提前完成 (但用更轻的形式)**: 不再走 feedback UI 而是直接走 **a2a_journal_hook** — 被问者答完自动在自己 journal 写 [a2a-help] 条目, 下次 extract 加权. 隐私同向 (只进被问者 mac, 不外泄). gateway 加 a2a_journal_hook.py (~80 行 + 11 测试), expertise.py extract prompt 升级识别 [a2a-help] 加权.
+- ✅ **BL-FED2.5** 跨员工 demo (单机 mock 升级到 3 agent + 公司目录, 含**员工离职带走 agent** 演示 `cp ~/.catfish/`) · 3 天 · 6/16-6/18 → **5/12 提前完成**: `scripts/fed_demo.sh` 一键起 4 进程 (identity + 3 gateway), 7 步验全链路含隐私边界 assertion + 反馈环 assertion. Sandbox 友好版 `test_fed25_e2e_chain.py` 3 测试覆盖代码层 (pending/rejected tag 不可路由的隐私防御).
 
 **Phase 4 演进**:
 - ⬜ 跨 2 台真机测试 · 1-2 周 (BL-E18)

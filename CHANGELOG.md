@@ -3868,7 +3868,7 @@ LLM 看到的格式 (跟 BL-I4 5/8 预留接口对接):
 
 ---
 
-## 2026-05-12（周二）— BL-MM9-FREEZE-v2 教学→凝固→复用真闭环 + BL-COMPANION-UX1/UX2 + CI 落地 + 1257 测试网 + BL-FED2.1 专长自动抽 + BL-FED2.2 黄页 endpoint + BL-FED2.3 跨员工路由
+## 2026-05-12（周二）— BL-MM9-FREEZE-v2 教学→凝固→复用真闭环 + BL-COMPANION-UX1/UX2 + CI 落地 + BL-FED2.1-2.5 全链路 ship (Federation 5/5)
 
 5/11 夜里把 Q3-WEBSKILL 视觉双子 (recognize_captcha / browser_locate) ship 了, 5/12 一整天做真活儿: **真把"员工教鲶鱼一次 → 凝固成可执行 skill → 下次秒开"闭环建出来**. 早上叠补丁撞 12 次坑, 中午鸿波拍板"不要小打小闹要彻底解决", 下午彻底重做, **13:26:39 凝固出第一个干净 eis-login skill, 复用 2.3 秒秒过 — BL-MM9 卖点从 PPT 概念变成可演示资产**. 同时修了 Companion "锁死" UX 问题, 落地 GitHub Actions CI, 补 60 个单元测试 + 修 22 个预存 fail.
 
@@ -4158,9 +4158,78 @@ central:
 
 **测试**: tool-bridge 514 passed (483 → 514, +31 BL-FED2.3 + 0 regression), gateway / identity-server 不变.
 
-**接下来**:
-- BL-FED2.4 反馈环 (A 问 B 之后, B 的 journal 自动追加事件, 下次 extract 触发新 tag "<X>咨询")
-- BL-FED2.5 5/14 demo (3 个 mock agent + 黄页查 + A2A 问答全跑通)
+### BL-FED2.4 — A2A 反馈环 (被问者 journal 自动追加, 5/12 一气呵成)
+
+**真问题**: BL-FED2.3 跑通 alice 问 bob, 但 bob 帮 alice 这次**没留痕迹** — 下次 bob 跑 extract_expertise 时, journal 里只有 bob 自己的工作记录, expertise tag 不会自动成长 (自学习闭环断了).
+
+**解法**: a2a_server.py `_stream_llm_answer` 流答完后追一条**结构化 `[a2a-help]` 条目**到 bob 自己的 `~/.catfish/employee_journal.md`:
+```markdown
+## 2026-05-12 14:30 - [a2a-help] 协助 alice@ffcs.cn
+- 主题: expert_consult:资质审核
+- 问题: 资质审核怎么搞? 客户周三要交材料
+- 答案摘要: 走 OA 工单, 类目选合规审查, 附材料 PDF...
+- chunks: 5, duration: 1234ms
+```
+
+**隐私边界**:
+- 写在 **bob 自己 mac** (~/.catfish/employee_journal.md), 不是中央
+- 问题截断 200 字符 (跟 audit 一致)
+- 答案只记前 100 字符摘要, **不留完整 answer** (流式答完 SSE 关了就该消失)
+- 失败静默 — a2a 主流程不能因 journal 写盘失败而 500
+
+**新模块 `a2a_journal_hook.py`** (gateway 加, ~80 行 + 11 单测):
+- `append_a2a_help_entry(from_sub, question, purpose, answer_preview, chunks_count, duration_ms, timestamp=None)`
+- 完整字段 / 截断 / placeholder / 缺字段返 False / IO 失败静默 等都有测试
+
+**a2a_server.py 改动**:
+- 三处流式分支 (no API key mock / catalog 无 mock / 真 LLM streaming) 都加 `answer_buffer` 累积前 200 字符
+- 流答完 + audit_id ok 之后调 `_try_append_a2a_journal()` (wrapper 全 swallow 异常)
+- 早 return 路径 (catalog 无 mock) 也补了 audit + journal hook, 跟主路径对齐
+
+**expertise.py extract prompt 升级**:
+- `_EXTRACT_PROMPT` 加第 6 条: "**[a2a-help] 标签 entry 加权**: 真实被同事咨询的事实比员工自夸更可靠, 每条 evidence_count +3, 出现 2 次同主题 → confidence ≥0.85"
+- 这样 BL-FED2.1 抽取下次跑时, [a2a-help] 事件会**自动加强**对应 tag → 形成自学习闭环
+
+**附带修 BL-FED2.1 path bug**:
+- `catfish_tools.py:_load_employee_journal` 原写成 `~/.hermes/memories/employee_journal.md` (跟 hermes USER.md 命名混了)
+- 真路径是 `~/.catfish/employee_journal.md` (跟 gateway employee_journal.py / session_summarizer / proactive.py 对齐)
+- 加 fallback 兼容老 path `~/.hermes/employee_journal.md` (proactive.py 也有同款 fallback)
+
+### BL-FED2.5 — 跨员工 demo 脚本 (3 agent E2E)
+
+**fed_demo.sh** (~280 行 shell):
+- 自动 init **charlie** home (复用 plan_d_mock_init.sh 模式 — RSA keypair + ALLOW.md + expertise.yaml)
+- 起 identity-server (18998) + alice (18999) + bob (19999) + charlie (20999) 4 个进程
+- 7 步验证全链路:
+  1. 3 个 agent 自动 self_register + bob/charlie expertise 字段已上报 (BL-FED2.2 数据流)
+  2. GET /registry/by-expertise?tag=资质审核 → bob (matched_count=1)
+  3. GET by-expertise?tag=合同审查 → charlie
+  4. **🔒 隐私边界 assertion**: by-expertise 响应不含 jwks_uri/public_pem/catfish_endpoint
+  5. GET by-expertise?tag=完全没人懂 → matched_count=0
+  6. alice → /a2a/internal/ask → bob ('资质审核怎么搞?') → ok
+  7. **🔄 BL-FED2.4 反馈环 assertion**: bob employee_journal.md 多了 [a2a-help] 条目, 含 alice@ffcs.cn + expert_consult:资质审核 + 问题摘要
+
+**Sandbox-friendly mini E2E** (`test_fed25_e2e_chain.py` 3 测试):
+- 不真起端口/LLM, 跑代码链路 — CI 也能跑
+- chain 1: BL-FED2.1 写 yaml → BL-FED2.2 gateway 读 confirmed → mock registry by-expertise → BL-FED2.3 路由到 bob → mock a2a 返答案. 验证 `routed_to=bob`, `purpose=expert_consult:资质审核` (自动加前缀), `from_sub=alice@ffcs.cn` env 透传
+- chain 2: **pending tag 不可路由** — bob yaml 写 pending, gateway 读为空 list → 黄页 matched_count=0 → 路由失败 (隐私防御)
+- chain 3: **rejected tag 不可路由** — 同上
+
+**全测**: tool-bridge 517 (483 → 517, +34 BL-FED2.3-2.5), gateway 828 (817 → 828, +11 BL-FED2.4), identity-server 65, **总 zero failed**.
+
+### 5/12 真闭环 — 全 Federation Phase 3 一日 ship 完整路线
+- 早上 8-12 点: BL-MM9-FREEZE-v2 教学→凝固→复用闭环 (eis-login 2.3s 复用)
+- 中午 12-13 点: BL-COMPANION-UX1/UX2 (streaming 不锁死)
+- 下午 14-17 点: 60 单元测试 + 修 22 预存 fail + GitHub Actions CI
+- 晚上 18-20 点: BL-MM9-FREEZE-v2.1/v2.2 (chrome 状态预检 + 嵌套 skill)
+- 深夜 20-23 点: **BL-FED2.1 - 2.5 五连发** (expertise 自动抽 → 黄页 endpoint → 跨员工路由 → 反馈环 → 3 agent demo)
+
+Federation Phase 3 从 50% → 90% 一日内, 5/14 demo 准备就绪.
+
+**接下来 (5/13 收尾)**:
+- 跑 fed_demo.sh 真链路验一遍 (鸿波 mac)
+- 准备 5/14 demo 脚本 (BL-FED2.x 占 1-2 个场景)
+- BL-FED2.3-followup: 实时 Companion 弹窗给被咨询员工 (二次确认, 当前 ALLOW.md 软策略, P1)
 
 ---
 
