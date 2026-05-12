@@ -1,6 +1,6 @@
 # 鲶鱼 · Feature Tracks (主入口)
 
-> **快照**: 2026-05-11 (周一深夜) · **维护人**: 鸿波 · **更新**: 每周日晚 + 重大 ship 时
+> **快照**: 2026-05-12 (周二深夜) · **维护人**: 鸿波 · **更新**: 每周日晚 + 重大 ship 时
 > **角色**: 这是**唯一**的"我们在做啥 / 还差啥 / 在哪个 phase"主入口.
 > 其他 doc 角色见底部 § 文档地图.
 
@@ -9,19 +9,25 @@
 ## 🚦 Phase 进度 (一行看清)
 
 ```
-Phase 1 · 单员工 AI 副手           [██████████] 99.9% · 5/10 凌晨 OAuth 全链路真打通 (chenhongbo / quota / audit / streaming / 画像 6 项)
-Phase 2 · 团队版 (SSO/RBAC/Win)    [██████████] 99%   · 5/10 凌晨 4 个中央 service PG 统一 (identity / gateway / mcp-registry / skills-hub) + Skills Hub 集成闭环
-Phase 3 · ★ Federation             [█████░░░░░] 50%   · Plan D v0.1 ✅ + 5/6 重定位 agent-as-service (BL-FED2 6 周 ship) · 5/6 晚灵魂校准: 员工自愿互助 + 跨雇主可携带
+Phase 1 · 单员工 AI 副手           [██████████] 100%  · 5/12 BL-MM9-FREEZE-v2 教学→凝固→复用闭环跑通 (eis-login 2.3s 复用 + eis-checkin SOP 第二次验证)
+Phase 2 · 团队版 (SSO/RBAC/Win)    [██████████] 99%   · 5/10 凌晨 4 个中央 service PG 统一 + 5/12 GitHub Actions CI 落地 (1257 测试零失败)
+Phase 3 · ★ Federation             [█████░░░░░] 50%   · Plan D v0.1 ✅ + 5/6 重定位 agent-as-service (BL-FED2 6 周 ship)
 Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   · 2027 Q2+
 
-★ 5/10 凌晨架构决策 (BL-ARCH1): 5/15 起做 catfish-web 中央门户 (Skills Hub 全广场 / MCP 市场 /
-  Manager 视图 / Admin 后台 / billing 月报). Companion 瘦身留 "我的"视角 (Identity / Quota /
-  画像 / 我的 skill). 客户端注重体验, 中央走 web — 跟 VSCode+GitHub / Cursor+cursor.sh 同模式.
+★★★ 5/12 真闭环跑通 (BL-MM9-FREEZE-v2): catfish 卖点 "员工教一次 → 凝固成 skill → 下次秒开"
+  从 PPT 概念变成可演示资产. trace_recorder + skill_freeze 两个新模块, 显式 teach session
+  边界 (start/end 物理隔离), 凝固出可执行 script.py + SKILL.md, 自动同步 hermes.
+  **eis-login 复用 2.3 秒秒过**. v2.1 chrome 状态预检 + v2.2 嵌套调 skill (eis-checkin 6 句
+  替代 11 句). SOUL.md 加 ★★★ 教学边界铁律 + skill 失败不许降级铁律. 教学 SOP 文档
+  (3 个完整例子) + 60 单元测试 + GitHub Actions CI workflow + Companion UX1/UX2
+  (streaming 中不再"锁死"). 1257 测试零失败.
 
-★ 5/11 深夜战略重置 (BL-Q3-WEBSKILL): demo 主轴从 "AI 多智能" 调整为
-  "员工教 catfish 一次, catfish 凝固成 skill, 全公司秒开". 跟 BL-Q3-FACT (政策→skill 补丁)
-  同源, 形成 Q3 完整产品线. LLM agent 定位降为"教学一次"工具, skill 是终态资产.
-  跟传统 RPA (UiPath/用友) 差异: IT 写脚本 3 周 → 员工教学 10 分钟 AI 自动生成 SKILL.md.
+★ 5/10 凌晨架构决策 (BL-ARCH1): 5/15 起做 catfish-web 中央门户. Companion 瘦身.
+
+★ 5/11 深夜战略重置 (BL-Q3-WEBSKILL): demo 主轴 "员工教 catfish 一次, catfish 凝固成 skill,
+  全公司秒开". 5/12 真把这条路打通: 上午撞 12 次坑 → 中午鸿波拍板"彻底解决, 不要小打小闹"
+  → 下午彻底重做 → 13:30 跑通真闭环. 跟传统 RPA (UiPath/用友) 差异: IT 写脚本 3 周 →
+  员工教学 10 分钟自动生成 script.py + SKILL.md.
 ```
 
 > 📈 5/2-5/3 周末 sprint 大幅推进 (Phase 2 后端 + Skills Hub + brand kit + 关系建立):
@@ -99,6 +105,22 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 >     6. "数据库连接没有写到 .env?" → BL-D3 fix5 隐性 bug (mcp-registry 5/9 起一直跑 sqlite 没人发现)
 >     7. "中央很复杂, 都塞客户端不合适?" + "方案 B 跟初衷背离?" + "中央 WEB 化, 助手客户端化" → BL-ARCH1/2 架构演进路径定调
 >   - 测试 / 验证: PG 4 个 service 9 张表全跑通 / curl publish hello-pg 200 / dashboard 画像 6 项真显示 / Companion release dmg 已 bundle / 5/14 demo 主线全就位.
+
+> 📈 **5/12 (周二一整天)** — BL-MM9-FREEZE-v2 真闭环跑通 + BL-COMPANION-UX1/UX2 + CI + 60 单元测试 + 修 22 个预存 fail. 一天清出一周量的活儿:
+>   - **BL-MM9-FREEZE 教学→凝固→复用真闭环**: 5/11 写过的 eis-login SKILL.md 其实是我代笔手工凝固. 5/12 鸿波拍板"鲶鱼能不能跑一遍就凝固成 skill, 这才是 BL-MM9 真承诺". 早上叠 fix 撞 12 次坑 (procedural skill 路径 / cold start / chrome 状态 / 死循环 retry) → 鸿波 11:30 拍板"不要小打小闹, 要彻底解决" → 中午一次性 commit BL-MM9-FREEZE v1 (删 BL-FIX47 / 加 CATFISH_LEAN_INJECT 总开关 / 新建 trace_recorder + skill_freeze + 3 个新 tool) → 12:21 测试又撞坑 (LLM 没主动调 catfish_teach_start, 7 步白教) → v2 加 SOUL.md ★★★ 教学边界铁律 (强触发关键词自动 teach_start) + skill 失败铁律 (不许 LLM 降级手工) → 13:14:34 鸿波第二次教学 7 步 ok=7/7 干净凝固 → 13:30 新会话一句话"上 EIS 看待办" → catfish_run_skill 2.3 秒报告 6 条待办. **BL-MM9 卖点正式从 PPT 变成可演示资产**.
+>   - **trace_recorder.py + skill_freeze.py 两个新模块** (~900 行): 显式 teach session 边界 (start_session / end_session), 物理隔离教学 vs 复用/探索. 模板化 script.py 生成 (走 dispatch_native 复用 catfish_browser_* 内部基建, 不自己开 Playwright). captcha 数据流依赖识别 (`fill('#captcha', 'cT92')` 改成 `text=captcha_text` 变量). secret_ref 透传, 明文密码拒凝固 (#pwd selector + 8-32 字符 + 含数字字母启发拒). 嵌套 _DepthGuard 防 script.py 内部 dispatch 又被录.
+>   - **v2.1 chrome 状态预检** (5/12 鸿波 13:38 撞坑修): script.py 第一步 goto 插入 actual_url 校验. chrome 已登录 redirect 到非预期 URL → 报清楚错误 + 引导员工重启 chrome, 不再继续 fill 撞 30s timeout.
+>   - **v2.2 嵌套调 skill** (rapid skill 扩展): trace_recorder RECORDED_TOOLS 加 catfish_run_skill, freeze 引擎模板化 `_call("catfish_run_skill", ...)`. eis-checkin 教学 11 句 → 6 句, 第一句 `catfish_run_skill('department/eis-login')` 替代 7 步登录. eis-login 升级后所有依赖它的 skill 自动升级.
+>   - **CATFISH_LEAN_INJECT 总开关**: 教学场景关掉 10 个干扰 inject (session_facts / stats_guard / skill_guard / session_history / employee_journal / feedback / tool_retry_hint / self_critique / duplicate_tool_call_guard / BL-FIX23 L8 retry). 保留 5 个核心 (identity / skills_catalog / session_goal / session_meta / prompt_security). 默认 LEAN=0 不破老行为.
+>   - **3 个新 native tool**: `catfish_teach_start` / `catfish_teach_end` / `catfish_freeze_skill` (+ `_inspect` / `_rotate` 辅助). SOUL.md 加 ★★★ 教学边界铁律段 (强触发关键词清单 / 自检 3 秒 / 正反例 5/12 12:21 撞坑写进 ❌ 案例).
+>   - **真凝固出来的 2 个 skill 落 git**: eis-login (13:26:39, steps 1-7 ok=7/7) + eis-checkin (16:11:17, 8 步 ok=8/8, SOP v1 第二次验证).
+>   - **教学 SOP v1.1 文档** (`docs/TEACHING-SOP.md`, 305 行): 5 步 SOP + 3 个完整教学剧本 (eis-checkin v2.2 嵌套写法 / eis-checkout 改 1 行 / 高级模板 复用 eis-login 教别的 EIS 操作) + 常见坑 9 项对照表 (每个今天撞的坑对应 SOP 哪步漏了 + 怎么避).
+>   - **BL-COMPANION-UX1 streaming 中 "⏹ 停下接着发"**: 鸿波 14:00 抱怨"对话内容区可以滚动, 其他都不能操作". 修法 ChatInput 三态按钮 + useChat.cancelAndSend (abort → sleep 200ms → send 新). Enter 键同款.
+>   - **BL-COMPANION-UX2 左侧列表 streaming 中可切换**: 点别的会话 → 自动 cancel 当前 stream + 等 200ms cleanup + loadSession. "+ 新对话"按钮同理. 列表 tooltip + 底部小字提示.
+>   - **GitHub Actions CI workflow** (`.github/workflows/ci.yml`): 3 个 job (tool-bridge 458 tests / gateway 799 tests / companion tsc+vite build) + ci-pass gate. PR / push main 自动跑, 并发取消老 run.
+>   - **单元测试 60 个新加**: trace_recorder (21) / skill_freeze (23, 含 v2.1/v2.2 增强) / lean_inject (17). 修 22 个预存 fail (沙箱无 psycopg / yaml.default 段 / sysadmin 角色 / internal_dev_token / _has_completion_claim '已经'). **tool-bridge 458 passed + gateway 799 passed = 1257 测试零失败**.
+>   - **鸿波诊断功劳 (5/12 五次关键)**: (1) 上午 "你这样改代码的方式, 其他的也不能达到目标？" — 打破我叠补丁惯性; (2) "不要管 5/14 的事, 没用的代码要删掉" — 拍板真活儿; (3) "彻底解决" — v1 翻车后拍板 v2 显式 session 边界; (4) 12:21 撞坑 "我们能不能跑一遍就凝固成 skill" — 把 v2 推到 SOUL.md 铁律层; (5) "下次新 skill 是不是都要规范教法不然撞坑?" — 拍板写 SOP 文档.
+>   - **教训**: (1) **打补丁 vs 治本 — 5/11 撞坑 13 次 + 5/12 上午 12 次, 都是 LLM agent 路径加补丁. 鸿波两天连续看出"工具/产品定位错了 不是 bug 数量问题"**; (2) **trace 必须有边界 — append-only 单文件 + 时间窗口取的设计在 LLM 探索 / 复用 / 多对话场景下必败. start/end session 物理隔离才是 MVP 真最小**; (3) **铁律比软纪律稳 — SOUL.md 教学边界铁律比 tool description 提示有效得多, 12:21 失败 / 13:14 成功就是这条**; (4) **测试网兜底 — 早上 12 次撞坑很多是"改一行没人替你看着". 60 个单元测试 + CI = 改代码不再裸奔**; (5) **文档 + 例子要并行 — SOP 单纯文字员工记不住, 配 3 个可复制粘贴例子才能用**.
 
 > 📈 **5/11 (周一深夜)** — 一晚 ship 13 commit: BL-Q3-ARCHIVE 双层 + BL-FIX23 L6/L7/L8 + BL-FIX42/44/45/46 + BL-Q3-WEBSKILL (recognize_captcha + browser_locate + eis-login skill 骨架) + demo 主轴重定位:
 >   - **BL-Q3-ARCHIVE 完整 ship** (设计文档 18 段 + 1300 行实施 + 31 单测): tool message 超 4KB → 写 PG (lossless) + 头 500B + 尾 500B + 异步 haiku 摘要, LLM 调 `catfish_read_tool_archive(ref, grep / line_range)` 召回. 替代 BL-FIX41 硬切 (5/11 早 ship 的临时方案). 实测 199 messages / 63 tool_msgs / 258KB → 112KB, 省 ~36K tokens lossless. 跟 mcp-registry / skills-hub / facts_db 同 PG+jsonl 双写模板. Alembic 新表 + 后续 fix2 加 origin_model 列让 summary_worker 用 chat 同款模型 (私有部署 token 不要钱, 不绕 catalog tag).

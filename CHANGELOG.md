@@ -3868,6 +3868,162 @@ LLM 看到的格式 (跟 BL-I4 5/8 预留接口对接):
 
 ---
 
+## 2026-05-12（周二）— BL-MM9-FREEZE-v2 教学→凝固→复用真闭环 + BL-COMPANION-UX1/UX2 + CI 落地 + 1257 测试网
+
+5/11 夜里把 Q3-WEBSKILL 视觉双子 (recognize_captcha / browser_locate) ship 了, 5/12 一整天做真活儿: **真把"员工教鲶鱼一次 → 凝固成可执行 skill → 下次秒开"闭环建出来**. 早上叠补丁撞 12 次坑, 中午鸿波拍板"不要小打小闹要彻底解决", 下午彻底重做, **13:26:39 凝固出第一个干净 eis-login skill, 复用 2.3 秒秒过 — BL-MM9 卖点从 PPT 概念变成可演示资产**. 同时修了 Companion "锁死" UX 问题, 落地 GitHub Actions CI, 补 60 个单元测试 + 修 22 个预存 fail.
+
+### 一日时间线 (撞坑 → 拍板 → 真活)
+
+| 时段 | 事件 |
+|---|---|
+| 早上 8-11 点 | 接着 5/11 末 BL-FIX47 procedural skill 思路, 加 fix 试图救 EIS 教学. 撞 5+ 次死循环 (`catfish_run_skill` 超时 / LLM 反复调失败 / duplicate guard 拦 / cold start). |
+| **鸿波拍板 1**: "你这样改代码的方式, 是不是就算这个过了, 其他的也不能达到我们预设的目标？" | |
+| 11 点 | 承认补丁堆叠不解决根本. 提议: 不再叠 fix, 删过度凝固文件, 真做"自动凝固管道". |
+| **鸿波拍板 2**: "不要管 5/14 的事, 你只要达到我们的目标, 这几天如果没用的代码就要删掉." | |
+| 12:00-12:30 | 一次性 commit BL-MM9-FREEZE: 删 BL-FIX47 / 加 CATFISH_LEAN_INJECT 总开关 / 新建 trace_recorder + skill_freeze + 3 个新 tool. |
+| 12:21 | 鸿波按文档教学撞坑: LLM 没主动调 catfish_teach_start. 教学 7 步全没录, teach_end 报"无 active session". |
+| **鸿波拍板 3**: "彻底解决问题" | |
+| 12:30-13:00 | 升级 v2: SOUL.md 加教学边界铁律 (强触发关键词自动 teach_start), trace_recorder 改成 session-based 物理隔离, catfish_run_skill 失败铁律不许 LLM 降级手工. |
+| 13:14:34 | 鸿波第二次教学, 干净 7 步 ok=7/7. 跟 12:20 那次 11 步污染版形成鲜明对比. |
+| 13:26:39 | 用同一 archive 重新凝固出**真新版** script.py (schema 兼容 + retry). 也就是当前 eis-login. |
+| 13:30 (新会话复用) | 一句话 "上 EIS 看下今天的待办" → catfish_run_skill 调凝固版 → **2.3 秒报告 6 条待办**. **BL-MM9 闭环正式跑通**. |
+| 14-16 点 | 写教学 SOP v1 文档 (含 eis-checkin / eis-checkout 完整例子). 鸿波 16:11 按 SOP 真教了 eis-checkin, 8 步 ok=8/8 干净凝固 (SOP 第二次真实验证). |
+| 15:00-16:00 | 修 Companion "锁死" UX (BL-COMPANION-UX1 + UX2): streaming 中输入框三态按钮 + 左侧列表可切换 (自动 abort 当前 stream). |
+| 17:00-18:00 | 补 60 个单元测试 (trace_recorder 21 / skill_freeze 23 / lean_inject 17) + 修 22 个预存 fail. tool-bridge 458 passed / gateway 799 passed. |
+| 18:00 | GitHub Actions CI workflow 落地. 3 个 job (tool-bridge / gateway / companion) + ci-pass gate. |
+| 19:00-20:00 | BL-MM9-FREEZE-v2 增强: v2.1 chrome 状态预检 (修 13:38 chrome 已登录撞 fill timeout 坑) + v2.2 嵌套调 skill (eis-checkin 教学 11 句 → 6 句, 第一句 catfish_run_skill('eis-login') 替代 7 步登录). |
+
+### BL-MM9-FREEZE — 教学→凝固→复用闭环 (catfish 真卖点)
+
+**真问题**: 5/11 写过 `skills/department/eis-login/SKILL.md` 是**我代笔手工凝固**. 鸿波 5/12 问"鲶鱼能不能跑一遍就凝固成 skill?" — 这才是 BL-MM9 真承诺.
+
+**v1 设计 (12 点版)**:
+- `trace_recorder.py` 新模块: 拦截 `catfish_browser_*` / `recognize_captcha` / `browser_locate` 调用顺序写 `~/.catfish/traces/active.jsonl`. 嵌套 `_DepthGuard` 防复用 script.py 内部 dispatch 又被录.
+- `skill_freeze.py` 新模块: `freeze_skill(name, namespace, description, ...)` 读 trace 模板化生成 `script.py` (走 dispatch_native 复用 catfish_browser_* 内部基建, 不自己开 Playwright) + `SKILL.md`. captcha 数据流依赖识别 (`fill('#captcha', 'cT92')` 改成 `text=captcha_text` 变量). secret_ref 透传, 明文密码拒凝固.
+- 3 个新 tool: `catfish_freeze_inspect` / `catfish_freeze_skill` / `catfish_freeze_rotate` (rotate 当前 trace 防下次撞).
+
+**v1 翻车 (12:20)**: trace_recorder 把 LLM 失败试错 + 复用降级手工的所有步骤都录, 凝固出 11 步污染版 (4 次重复 goto + 错 selector). 鸿波: "不能小打小闹, 要彻底解决."
+
+**v2 设计 (12:30 版)** — 显式 teach session 边界:
+- `trace_recorder` 重写: 加 `start_session(name)` / `end_session()`, **没 active session 时 record 静默跳过**. 状态持久化 `~/.catfish/traces/_state.json` 跨 tool-bridge 重启. start_session 自动 rotate 残留 active.jsonl.
+- `freeze_skill` 改成只从 `_last_completed.json` 拿 archive, 拒 active session 期间凝固, 拒空 trace.
+- 2 个新 tool: `catfish_teach_start` / `catfish_teach_end`.
+- SOUL.md 加 ★★★ **教学边界铁律** (跟"做完才说" / "请示停顿" / "/goal" 同级): 看到 "教你 X / 凝固成 skill / 记一下" 等强触发词 → **LLM 第一动作必须** catfish_teach_start. 自检 3 秒.
+- `catfish_run_skill` description 加 **skill 失败铁律**: skill 返 ok=false 时**绝对不能**自己降级调 catfish_browser_*, 必须报告员工 + 问 1/2/3 (再试 / 重教 / 手工接管 explicit).
+
+**v2.1 (晚 5/12)** — chrome 状态预检:
+- script.py 第一步 goto 模板化时插入 `actual_url` 校验. 如果 chrome 已登录 redirect 到非预期 URL → 报清楚错误而不是继续 fill 撞 timeout: `chrome 状态不符: 期望从 X 起步, 实际在 Y. 建议: 重启 Catfish Chrome`. 修 13:38 鸿波撞坑根因.
+
+**v2.2 (晚 5/12)** — 嵌套调 skill:
+- `trace_recorder.RECORDED_TOOLS` 加 `catfish_run_skill`. 教学时调凝固 skill 也录.
+- `skill_freeze._emit_step` 加 catfish_run_skill 分支模板化成 `_call("catfish_run_skill", {"skill_path": ..., "params": ...})`.
+- eis-checkin 教学 11 句 → 6 句, 第一句 `catfish_run_skill('department/eis-login')` 替代 7 步登录. eis-login 升级所有依赖它的 skill 自动升级.
+
+**真凝固出来的 skill (今天落 git 的)**:
+- `skills/department/eis-login/` — 13:26:39 凝固, steps 1-7 ok=7/7, **2.3 秒复用**
+- `skills/department/eis-checkin/` — 16:11:17 凝固, 8 步 ok=8/8 (SOP v1 第二次验证)
+
+### BL-COMPANION-UX1 — streaming 中 "⏹ 停下接着发"
+
+鸿波 14:00 抱怨"对话内容区可以滚动, 其他部分都不能操作". 14 分钟一次 LLM 调用 UI 全锁.
+
+**修法**: 输入框三态按钮:
+- 非 streaming + 有内容 → "发送" (青)
+- streaming + 有内容 → "⏹ 停下接着发" (青, 一键 abort + 发新)
+- streaming + 没内容 → "停止" (橙, 单纯 abort)
+
+`useChat.cancelAndSend(text, atts)`: abort → sleep 200ms 让 send finally cleanup → send 新消息.
+
+Enter 键同步处理 — streaming 中按 Enter 也走 cancelAndSend.
+
+### BL-COMPANION-UX2 — 左侧列表 streaming 中可切换
+
+老行为: streaming 时左侧会话列表整个 disabled. 鸿波: "都不能操作".
+
+**新行为**: 点别的会话 → 自动 cancel 当前 stream + 等 200ms cleanup + loadSession. "+ 新对话"按钮同理. 列表项 tooltip 提示"切换会话 — 自动停止当前 LLM 流", streaming 时列表底部小字"⏳ 流式中, 切换会停止当前".
+
+### 教学 SOP v1.1 文档 (docs/TEACHING-SOP.md, 305 行)
+
+鸿波撞 12 次坑后总结的规范:
+1. **准备** — 重启 Catfish Chrome 干净起点
+2. **开场** — 一句话触发 teach_start (强触发关键词)
+3. **教学** — 逐步明确指令, 密码用 secret_ref, 禁止 LLM 自主探索
+4. **收尾** — 一句话 teach_end + freeze_skill
+5. **验证** — 新会话 + 干净 chrome + 一句话触发
+
+**3 个完整例子**: eis-checkin (v2.2 嵌套写法) / eis-checkout (改 1 行) / 高级模板 (复用 eis-login 教其它 EIS 操作).
+
+**常见坑对照表 9 项**: 每个今天撞的坑对应 SOP 哪步漏了 + 怎么避.
+
+**BL-MM10 backlog**: Companion UI 教学模式按钮 (▶️ 开始教学 / ⏹ 结束教学 + 状态条 + 每步弹小确认), 物理边界替代 SOP 软兜底. 3-5 天.
+
+### GitHub Actions CI 落地
+
+`.github/workflows/ci.yml` — 3 个 job + ci-pass gate:
+- `tool-bridge`: 458 tests pass (Python 3.10, ignore e2e_sandbox)
+- `gateway`: 799 tests pass (Python 3.10, ignore a2a_jwt 需 cryptography)
+- `companion`: tsc strict + vite build (Node 20, 不跑 tauri build)
+- `ci-pass`: needs all, 任一失败 → 红
+
+PR / push main 自动跑. 并发取消 (同 PR 多次 push 取消老 run). Python + Node 都带 cache.
+
+### 单元测试 60 个 (新加) + 修 22 个预存 fail
+
+**新加**:
+- `test_trace_recorder.py` (21): session 状态机 / record 隔离 / 嵌套 depth_guard / 大字段截断 / read_session_traces 过滤 / 新 catfish_run_skill 在 RECORDED_TOOLS
+- `test_skill_freeze.py` (23): teach 全流程 / 拒 active / 安全 (明文密码) / script.py syntax / schema 兼容 / 参数推断 / captcha 数据流 / v2.1 状态预检 / v2.2 嵌套 skill
+- `test_lean_inject.py` (17): LEAN env 开关 / 9 个 gated inject / 3 个核心保留 / L8 retry gated / 严格 ==1
+
+**修预存 fail 22 个**:
+- tool-bridge 3 个: browser_click schema (BL-FIX44 二选一) / find_by_text selector_hint → selector / clamp 上限 20 → 30
+- gateway 19 个: metrics_audit × 11 (沙箱无 psycopg, 加 delenv CATFISH_DB_URL 强制 jsonl) / dev_token + auth_provider × 5 (BL-security 5/9 yaml.default 段) / auth_oidc × 1 / rbac sysadmin 角色 / session_summarizer 改 internal_dev_token / **_PLAN_ONLY_COMPLETION_KEYWORDS 加 "已经写入"**
+
+### 测试状态 (一日终)
+
+```
+tool-bridge: 458 passed,  0 failed, 18 skipped
+gateway:     799 passed,  0 failed,  9 skipped
+total:      1257 测试零失败 (CI 兜底)
+```
+
+### CATFISH_LEAN_INJECT 总开关 (顺手清干扰)
+
+教学场景下, 鲶鱼应该专注学一个系统, 不需要看员工画像 / 7 天历史 / 反馈 / stats_guard / retry-hint. 这些 inject 互相打架, prompt 30K+ 让 LLM 不可预测.
+
+env 开关 `CATFISH_LEAN_INJECT=1` 关掉 10 个 inject:
+- inject_session_facts / stats_guard / skill_guard / session_history / employee_journal / feedback / tool_retry_hint / self_critique / duplicate_tool_call_guard / BL-FIX23 L8 retry
+
+**保留**: identity / skills_catalog / session_goal / session_meta / prompt_security / BL-Q3-ARCHIVE.
+
+默认 LEAN=0 不破老行为. 教学 / demo 路径起 gateway 时 `export CATFISH_LEAN_INJECT=1`.
+
+### 部署
+
+```bash
+# gateway 重启 (读新 app.py + SOUL.md)
+export CATFISH_LEAN_INJECT=1
+python -m catfish_gateway.app
+
+# tool-bridge 重启 (读新 trace_recorder + skill_freeze + catfish_tools)
+pkill -9 -f catfish_tool_bridge && sleep 8
+
+# Companion UX1/UX2 改动需 build
+cd edge/companion-app && npm run tauri:build
+```
+
+### 后续 backlog
+
+| 项 | 优先级 |
+|---|---|
+| 教 eis-checkout (5 分钟, SOP 改 1 行) | P0 |
+| BL-MM10 Companion UI 教学模式按钮 (物理边界替 SOP 软兜底) | P1 (3-5 天) |
+| skill v2.3 流程分支 (if X then Y) | P2 |
+| skill 跨员工共享 (Skills Hub 接 catfish_freeze_skill 发布) | P2 |
+| e2e 真 chrome 测试 (今天单元测 + mock, 没真 chrome 走一遍) | P3 |
+| Companion vitest 套件 (前端覆盖率 ≈ 0) | P3 |
+
+---
+
 ## 2026-05-11（周一）— BL-FIX23 L6/L7/L8 + Q3-ARCHIVE 双层 + Q3-WEBSKILL 视觉双子 + 5/14 demo 路线大重置
 
 5/14 demo 前夜实测一晚, 撞 5 类 LLM agent 卡顿 → 修 13 处, 同时把 demo 主轴从 "AI 多智能" 重新校准成 **"员工教 AI 一次, AI 凝固成 skill"**. 跟 BL-Q3-FACT (政策→skill 补丁) 同源, 形成 Q3 完整产品线 **BL-Q3-WEBSKILL** (浏览器流程→skill).
