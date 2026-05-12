@@ -250,7 +250,16 @@ start_gateway() {
   echo ""
   echo "🎀 启动 ${name} gateway (port ${port})"
   cd "${HOME}/person_task/catfish/central/llm-gateway"
+  # ★ Demo 故意 unset 上游 LLM key 让 a2a_server.py 走 mock 答案路径 (split_into_chunks
+  #   产生明确的 [mock 回答 — 没 DASHSCOPE_API_KEY ...] 字符串). 这样 demo 不依赖
+  #   外部 LLM 后端可达, 全链路 (a2a + ALLOW + journal hook) 跑通.
+  #   想真 LLM 测试用 scripts/plan_d_e2e_test.sh 或 export CATFISH_FED_DEMO_USE_REAL_LLM=1.
+  local llm_overrides="DASHSCOPE_API_KEY="
+  if [[ "${CATFISH_FED_DEMO_USE_REAL_LLM:-}" == "1" ]]; then
+    llm_overrides=""  # 透传 shell 里的真 key
+  fi
   env \
+    ${llm_overrides} \
     CATFISH_HOME="${home}" \
     CATFISH_USER_SUB="${sub}" \
     CATFISH_GATEWAY_URL="http://127.0.0.1:${port}" \
