@@ -130,7 +130,13 @@ def _persist_record_pg(record: dict) -> bool:
 
 
 def _persist_record_jsonl(record: dict) -> None:
-    """老 jsonl 路径 (sqlite/dev fallback). 失败永远不抛."""
+    """老 jsonl 路径 (sqlite/dev fallback). 失败永远不抛.
+
+    BL-HERMES013-4 (5/12): atomic 写 — write + flush + fsync.
+    没 fsync 时 OS page cache 可能残留 buffer (跑机器 SIGKILL 或断电会丢最后几条
+    audit). 加 fsync 让每条 audit 真落盘 (代价: ~1ms per write, 跟 LLM 调
+    几秒的延迟比可忽略). PG 主路径已是 commit() 走 ACID, 不动.
+    """
     try:
         line = json.dumps(record, ensure_ascii=False) + "\n"
     except Exception:  # noqa: BLE001
@@ -143,6 +149,12 @@ def _persist_record_jsonl(record: dict) -> None:
         with _write_lock:
             with path.open("a", encoding="utf-8") as f:
                 f.write(line)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    # 一些 FS (例 NFS / tmpfs) 不支持 fsync, 不抛
+                    pass
     except OSError as e:
         logger.warning("metrics: 写 %s 失败: %s", path, e)
 

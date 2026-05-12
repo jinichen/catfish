@@ -209,6 +209,20 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("a2a_self_register 失败 (Plan D A2A 不可用): %s", e)
 
+    # BL-HERMES013-4 (5/12 鸿波拍板): 启动时 reap 上次崩前没流完的 in-flight stream.
+    # 写一条 'interrupted_resumed' audit 留痕迹, 然后 unlink 文件 (防累积).
+    # 失败不阻塞启动 (audit 写不成也只是少一条记录, 文件总会被清).
+    try:
+        from . import inflight_streams  # noqa: PLC0415
+        reaped = inflight_streams.reap_interrupted()
+        if reaped > 0:
+            logger.info(
+                "BL-HERMES013-4: 启动 reap 清掉 %d 个 interrupted in-flight stream",
+                reaped,
+            )
+    except Exception as e:
+        logger.warning("BL-HERMES013-4 reap_interrupted 失败 (静默): %s", e)
+
     # BL-Q3-ARCHIVE (5/11): tool message archive 后台 haiku 摘要 worker.
     # 异步扫 tool_archives 表 (summary IS NULL), 调 gateway loopback chat 走
     # tool_summarizer use_case (haiku tier=private). 失败 silent, 不阻塞 chat.
@@ -1316,6 +1330,20 @@ async def _stream_chat_completion(
     config: Config = app.state.config
     attempts_log: list[str] = []
 
+    # BL-HERMES013-4 (5/12): in-flight tracking — 流开始 mark, 结束 chain
+    # 跑 InflightCleanupTransform unlink. gateway 真崩 (SIGKILL) 文件留下,
+    # 启动时 reap_interrupted 写一条 'interrupted_resumed' audit 替补.
+    import uuid as _uuid  # noqa: PLC0415
+    from . import inflight_streams  # noqa: PLC0415
+    request_id = _uuid.uuid4().hex
+    inflight_streams.mark_started(
+        request_id,
+        user=user_sub,
+        model=model_name,
+        message_count=len(body.get("messages") or []),
+        extra={"is_internal": is_internal},
+    )
+
     try:
         # 用 fallback 链找一个能拿到首 chunk 的模型
         async def _start_stream(candidate_model):
@@ -1547,12 +1575,15 @@ async def _stream_chat_completion(
         friendly = _friendly_upstream_error(err)
         yield f"data: {json.dumps({'error': friendly})}\n\n"
     finally:
-        # metrics 用实际用的 model_name (fallback 时跟客户端请求的不一样)
+        # BL-HERMES013-5 (5/12): 散点 audit/quota/context inline 调用 重构成
+        # output_transforms ABC plugin chain (借鉴 Hermes 0.13 transform_llm_output).
+        # 默认 chain: ContextUsageTransform → AuditTransform → QuotaTransform.
+        # 后续加新 hook (in-flight 持久化 / 客户定制脱敏) 只改 build_default_chain.
+        from . import output_transforms  # noqa: PLC0415
         actual_model_name = used_model.name if used_model is not None else model_name
-        if used_model is not None and prompt_tokens > 0:
-            _check_context_usage(used_model, prompt_tokens, user_sub)
-        log_request_metadata(
+        ctx = output_transforms.OutputCtx(
             user=user_sub,
+            department=user_dept,
             model=actual_model_name,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -1561,22 +1592,11 @@ async def _stream_chat_completion(
             status=status_str,
             error=err,
             security_concern=security_concern,
+            is_internal=is_internal,
+            used_model=used_model,
+            request_id=request_id,
         )
-        # 五一 sprint 5/2 收尾: 同步写 quota_events. ok 才记 (error 时 tokens=0).
-        # BL-F17 (5/5): internal 调用跳 record_usage, 不算到员工 user_day quota.
-        # audit log 仍写 (透明), 只 quota 跳过.
-        if (
-            status_str == "ok"
-            and (prompt_tokens > 0 or completion_tokens > 0)
-            and not is_internal
-        ):
-            _quota_module.record_usage(
-                user_email=user_sub,
-                department=user_dept,
-                model=actual_model_name,
-                tokens_in=prompt_tokens,
-                tokens_out=completion_tokens,
-            )
+        output_transforms.DEFAULT_CHAIN.run(ctx)
 
 
 # _friendly_upstream_error 抽到 errors.py (无 litellm 依赖, 测试可独立 import).

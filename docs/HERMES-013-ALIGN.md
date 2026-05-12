@@ -47,9 +47,9 @@
 
 | # | 项 | 工作量 | 当前状态 |
 |---|---|---|---|
-| 1 | **gateway atomic session persistence + 重启 auto-resume** | 1 天 | ⬜ **未做**, demo 前是大风险点 (gateway 崩一次员工对话丢). 5/13 优先评估 |
+| 1 | **gateway atomic session persistence + 重启 auto-resume** | 1 天 | ✅ **已 ship** BL-HERMES013-4 (5/12 末班车): audit fsync + inflight_streams.py + InflightCleanupTransform + lifespan reap |
 | 2 | **`/goal` Ralph loop** | 2 天 | ✅ **已 ship** BL-HERMES013-3 |
-| 3 | **`transform_llm_output` plugin hook 重构** | 半天 | ⬜ 未做, 5/18 升级 sprint 一并做 |
+| 3 | **`transform_llm_output` plugin hook 重构** | 半天 | ✅ **已 ship** BL-HERMES013-5 (5/12 末班车): output_transforms.py 4 个 transform + ABC chain |
 
 ## 6. 升不升 hermes 本体的判断
 
@@ -96,9 +96,10 @@
 
 跑前 prereq: `docs/HERMES-UPGRADE-PHASE-C-RUNBOOK.md` 的 brand patch 幂等流程 (11 step fixture 已验过 0.13 升级覆盖路径, 见 CHANGELOG 5/7 段).
 
-## 8. 5/12 早上拍板已 ship 的 3 件 (BL-HERMES013-borrow 系列)
+## 8. 已 ship 的 5 件 (BL-HERMES013-1..5)
 
-push 脚本: `bash scripts/sync-bl-hermes013-borrow.sh`
+5/11 早 ship 1-3 三件 (push: `scripts/sync-bl-hermes013-borrow.sh`).
+5/12 末追加 ship 4-5 两件 (atomic + ABC hook).
 
 ### [BL-HERMES013-1] Audit credential scrub (~10 行)
 
@@ -119,6 +120,31 @@ push 脚本: `bash scripts/sync-bl-hermes013-borrow.sh`
 - `app.py` chat_completions 早期拦截命令 → `_fake_sse_response` 返假 SSE (不调 LLM, 不计 quota)
 - inject pipeline 加 `inject_session_goal` (在 inject_feedback 之后, system 末尾)
 - `edge/identity/SOUL.md:450` 加 "★ /goal 锁定目标铁律" 段
+
+### [BL-HERMES013-4] gateway atomic session persistence (~250 行 + 19 单测, 5/12 末)
+
+- audit jsonl 加 fsync — `metrics.py:_persist_record_jsonl` write + flush + fsync
+  (PG 已 commit() 走 ACID 不动)
+- 新模块 `central/llm-gateway/src/catfish_gateway/inflight_streams.py`:
+  - `mark_started(request_id, user, model, ...)` — atomic write (tmp + rename + fsync) `~/.catfish/inflight_streams/<request_id>.json`
+  - `mark_finished(request_id)` — unlink
+  - `list_inflight()` — 扫目录返残留
+  - `reap_interrupted(audit_writer=None)` — 写 'interrupted_resumed' audit + unlink
+  - 路径走 CATFISH_HOME 联动 (跟 employee_journal / a2a_notifications 一致)
+- `_stream_chat_completion` 流头加 `mark_started`, finally 走 `InflightCleanupTransform` (BL-HERMES013-5 chain 末位)
+- `lifespan` startup 跑 `reap_interrupted` 写 audit + unlink 残留
+- 5/13 后 Companion 可读 audit 表 status=interrupted_resumed → 给员工 banner
+
+### [BL-HERMES013-5] transform_llm_output ABC plugin hook (~180 行 + 18 单测, 5/12 末)
+
+- 新模块 `central/llm-gateway/src/catfish_gateway/output_transforms.py`:
+  - `OutputCtx` (frozen dataclass) — 所有 transform 共享, 不准改
+  - `LLMOutputTransform` Protocol — name + on_complete + on_error
+  - 4 个内置 transform: `ContextUsageTransform` / `AuditTransform` / `QuotaTransform` / `InflightCleanupTransform`
+  - `TransformChain` — 顺序执行, 失败静默不传染
+  - `build_default_chain()` 顺序: ContextUsage → Audit → Quota → InflightCleanup
+- `app.py:_stream_chat_completion` finally 重构: 23 行 inline → 1 行 `DEFAULT_CHAIN.run(ctx)`
+- 后续加新 hook (客户定制脱敏 / 流量染色 / etc) 只改 build_default_chain, app.py 不动
 
 ## 9. 反思
 

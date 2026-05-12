@@ -3868,7 +3868,7 @@ LLM 看到的格式 (跟 BL-I4 5/8 预留接口对接):
 
 ---
 
-## 2026-05-12（周二）— BL-MM9-FREEZE-v2 + BL-COMPANION-UX1/UX2 + CI + BL-FED2.1-2.6 全 ship (Federation 6/6) + 真跑通 demo
+## 2026-05-12（周二）— BL-MM9-FREEZE-v2 + BL-COMPANION-UX1/UX2 + CI + BL-FED2.1-2.6 全 ship + Hermes 0.13 借鉴 BL-HERMES013-4/5 (atomic + ABC hook)
 
 5/11 夜里把 Q3-WEBSKILL 视觉双子 (recognize_captcha / browser_locate) ship 了, 5/12 一整天做真活儿: **真把"员工教鲶鱼一次 → 凝固成可执行 skill → 下次秒开"闭环建出来**. 早上叠补丁撞 12 次坑, 中午鸿波拍板"不要小打小闹要彻底解决", 下午彻底重做, **13:26:39 凝固出第一个干净 eis-login skill, 复用 2.3 秒秒过 — BL-MM9 卖点从 PPT 概念变成可演示资产**. 同时修了 Companion "锁死" UX 问题, 落地 GitHub Actions CI, 补 60 个单元测试 + 修 22 个预存 fail.
 
@@ -4286,9 +4286,84 @@ gateway a2a_journal_hook (BL-FED2.4) → 答完同步写两份:
 
 剩 5% = **BL-FED2.3-FU 实时 Companion 弹窗** (前置阻塞 + UI), 留 5/14 后做 (5/13 优先准备 demo).
 
+### BL-HERMES013-5 — transform_llm_output ABC plugin hook 重构 (5/12 末班车)
+
+**真问题**: audit / quota / context check 三件 inline 在 `_stream_chat_completion` finally 块, 后续加新 hook (in-flight 持久化 / 客户定制脱敏) 必须直接改 finally — 容易撞. 5/12 早上对 Hermes 0.13 拍板 "借鉴 transform_llm_output plugin hook" 的事 (docs/HERMES-013-ALIGN.md § 5 第 3 件, ROI 拍板"半天工作量").
+
+**新模块 `output_transforms.py`** (~180 行 + 18 单测):
+- `OutputCtx` (frozen dataclass) — 流式响应结束时全部 metadata, transform 不准改 (防顺序依赖)
+- `LLMOutputTransform` (Protocol) — name + on_complete + on_error
+- `ContextUsageTransform` — 包 _check_context_usage (BL-FIX23-L4 警告也走 audit)
+- `AuditTransform` — 包 metrics.log_request_metadata (双路径 PG + jsonl, BL-HERMES013-1 脱敏自带)
+- `QuotaTransform` — 包 quota.record_usage, **只**在 status=ok + 非 internal + 有 token 时计 (跟 BL-F17 5/5 原行为一致)
+- `TransformChain` — 顺序执行, 一个失败 log warning + 跳到下一个 (跟 audit 失败不阻塞 chat 一致)
+
+**重构 `app.py:_stream_chat_completion` finally** (1549-1579 → 17 行):
+- 23 行 inline 散点 → 1 行 `output_transforms.DEFAULT_CHAIN.run(ctx)`
+- 后续加新 hook 只改 build_default_chain, app.py 不动
+
+### BL-HERMES013-4 — gateway atomic session persistence + auto-resume (5/12 末班车)
+
+**真问题**: gateway SIGKILL/OOM/断电时 SSE 流断, 客户端只能重发 messages → LLM 重答 (浪费 token + 用户感觉副手"忘事"). audit jsonl 写盘**无 fsync**, OS buffer 残留 → 崩了最后几条 audit 也丢. 5/12 早上对 Hermes 0.13 拍板 "atomic session persistence + 重启 auto-resume" 的事 (docs/HERMES-013-ALIGN.md § 5 第 1 件, ROI 拍板"1 天工作量, demo 前最重要").
+
+**实施 (轻量级 — 不强求 client 续传, 只做痕迹留档 + 重启检测)**:
+
+1. **audit jsonl 加 fsync** (`metrics.py:_persist_record_jsonl`):
+   - 之前: write + close (OS page cache 残留)
+   - 现在: write + flush + os.fsync(fd)
+   - 代价 ~1ms/条 vs LLM 几秒延迟可忽略
+   - PG 主路径已 commit() 走 ACID, 不动
+   - tmpfs/NFS 不支持 fsync 时 OSError 静默 (生产 ext4/xfs 不影响)
+
+2. **新模块 `inflight_streams.py`** (~150 行 + 19 单测):
+   - `mark_started(request_id, user, model, ...)` — stream 开始原子写 (tmp + rename + fsync) `~/.catfish/inflight_streams/<request_id>.json`
+   - `mark_finished(request_id)` — stream 完成 unlink (失败静默)
+   - `list_inflight()` — 扫目录, 返残留 + 路径
+   - `reap_interrupted(audit_writer=None)` — 默认走 metrics.log_request_metadata 写一条 `status=interrupted_resumed` audit + unlink. audit 失败仍 unlink (防累积)
+   - 路径走 CATFISH_HOME 联动 (跟 employee_journal / a2a_notifications 一致, 多 agent 不撞)
+
+3. **新 `InflightCleanupTransform`** (output_transforms.py):
+   - on_complete + on_error 都 unlink — Python 跑到这里说明 generator 至少完成 try/except (上游 LLM 报错不算 "interrupted", 真崩才是 finally 不跑)
+   - 注册进 `build_default_chain` 末位: `ContextUsage → Audit → Quota → InflightCleanup`
+   - 顺序保护: audit + quota 都跑完才 unlink, 崩在 audit 之前文件留下 → 重启 reap 写 'interrupted' audit 替补
+
+4. **`_stream_chat_completion` 流头加 mark_started**:
+   - import uuid + inflight_streams, 生成 request_id
+   - 失败静默 (写盘失败不阻塞 LLM 调用)
+   - request_id 进 OutputCtx, finally chain 跑 cleanup transform 时 unlink
+
+5. **gateway lifespan startup 加 reap_interrupted**:
+   - a2a_self_register 后跑
+   - 残留 → 写 audit 'interrupted_resumed' + unlink
+   - 5/13 后 Companion 可以从 audit 表查这条 → 给员工 banner "上次请求 X 没流完, 重发?"
+
+**测试**: gateway 867 passed (830 → 867, +37: 18 output_transforms + 19 inflight_streams). 0 regression.
+
+### Hermes 0.13 5 件已 ship 总账 (5/11-5/12)
+
+| ID | 借鉴 | catfish 落地 |
+|---|---|---|
+| BL-HERMES013-1 | default-on secret redaction | `prompt_security.py` scrub_credentials, metrics.py log error 前 scrub |
+| BL-HERMES013-2 | Browser cloud-metadata SSRF deny | `catfish_tools.py` _check_ssrf_safe 7 deny + 8 allow + 4 边界 |
+| BL-HERMES013-3 | `/goal` Ralph loop | `session_goals.py` + SOUL.md 铁律段, /goal 不计 quota |
+| BL-HERMES013-4 | atomic session persistence + auto-resume | audit fsync + `inflight_streams.py` + InflightCleanupTransform + lifespan reap |
+| BL-HERMES013-5 | transform_llm_output ABC plugin hook | `output_transforms.py` ChainOf{Context, Audit, Quota, InflightCleanup} |
+
+剩 docs/HERMES-013-ALIGN.md 短期 4 件中: ✅ /goal (3) + ✅ transform_llm_output (5) + ✅ atomic session (4); ⬜ context counter UI / allowlist 命名 (P2 留 BL-RBAC).
+
+### 5/12 真闭环全测 (终账目 v2)
+
+| 项目 | 测试数 | 状态 |
+|---|---|---|
+| tool-bridge | 534 passed / 30 skipped | ✅ 0 failed |
+| gateway | 867 passed / 9 skipped | ✅ 0 failed (+37 BL-HERMES013-4/5) |
+| identity-server | 65 passed / 3 skipped | ✅ 0 failed |
+| **总计** | **1466 passed / 42 skipped** | ✅ **0 failed** |
+
 **接下来 (5/13 收尾)**:
 - 准备 5/14 demo 脚本 (BL-FED2.x 占 1-2 个场景, fed_demo.sh 真跑通已给资产)
 - Companion 5/13 UI wire: 读 a2a_notifications.jsonl 显示徽章 (BL-FED2.6-FU)
+- Companion 5/13 UI wire: 读 audit 表 status=interrupted_resumed 给"上次请求未完成" banner (BL-HERMES013-4-FU)
 - BL-FED2.3-FU: 实时 Companion 弹窗 (前置二次确认, P1, 5/14 后)
 - BL-FED2.4-FU: 员工撤销 → 自动加 ALLOW.md deny rule (闭环自学习)
 
