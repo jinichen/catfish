@@ -118,20 +118,31 @@ fi
 git fetch origin main 2>&1 | tail -3 || echo "(fetch 失败, 继续)"
 
 # 1) 删除反目标文件 (git rm 触发本地删)
+#
+# ⚠ 重要: skills/department/eis-login/ **不删** — 那是鸿波 5/12 10:39:42
+# 用 catfish_freeze_skill 真凝固出来的成果 (script.py + SKILL.md). 这正是
+# 我们要保的东西.
+#
+# 沙箱测试残留 (eis-login-test / eis-login-v2test) 不在 git 跟踪里 (是我
+# 端到端验证 freeze 引擎时落到 mount 路径下的, 鸿波本地能看到但不在 commit),
+# 用 rm -rf 清掉, 不走 git rm.
+#
 echo "─── git rm 反目标文件 ───"
-git rm -rf skills/department/eis-login 2>&1 | tail -3 || echo "  (skill 不存在, skip)"
-git rm -rf skills/department/eis-login-test 2>&1 | tail -3 || echo "  (test1 不存在, skip)"
-git rm -rf skills/department/eis-login-v2test 2>&1 | tail -3 || echo "  (test2 不存在, skip)"
 git rm -rf skills/personal 2>&1 | tail -3 || echo "  (personal 不存在, skip)"
 git rm -rf docs/samples/eis-login-skill 2>&1 | tail -3 || echo "  (sample 不存在, skip)"
 git rm -f scripts/sync-bl-fix47-procedural-skill.sh 2>&1 | tail -3 || echo "  (sync 不存在, skip)"
 
-# 同步清 hermes 端可能残留的同名 skill
-HERMES_SKILL=~/.hermes/skills/productivity/catfish-eis-login
-if [ -d "$HERMES_SKILL" ]; then
-    rm -rf "$HERMES_SKILL"
-    echo "  cleaned $HERMES_SKILL"
-fi
+# 清沙箱测试残留 (不走 git, 直接 rm)
+echo "─── 清沙箱测试残留 (eis-login-test / eis-login-v2test) ───"
+rm -rf skills/department/eis-login-test skills/department/eis-login-v2test 2>/dev/null || true
+# 同步清 hermes 端的测试残留
+rm -rf ~/.hermes/skills/productivity/catfish-eis-login-test \
+       ~/.hermes/skills/productivity/catfish-eis-login-v2test 2>/dev/null || true
+echo "  ✓ 测试残留清完"
+echo ""
+echo "  保留 (这是你的成果, 不动):"
+echo "    skills/department/eis-login/  (5/12 10:39:42 凝固)"
+echo "    ~/.hermes/skills/productivity/catfish-eis-login/"
 
 # 2) 改动的现有文件
 echo "─── git add 改动的文件 ───"
@@ -143,6 +154,10 @@ echo "─── git add 新文件 ───"
 git add edge/tool-bridge/src/catfish_tool_bridge/trace_recorder.py
 git add edge/tool-bridge/src/catfish_tool_bridge/skill_freeze.py
 git add scripts/sync-bl-mm9-freeze.sh
+
+# 4) 鸿波真凝固出来的 eis-login (5/12 10:39:42, 闭环成果) — 加进 commit
+echo "─── git add 鸿波 5/12 凝固成果 ───"
+git add skills/department/eis-login/ 2>&1 | tail -3 || echo "  (eis-login 不存在?)"
 
 # 4) 文档 (如果存在改动)
 [ -f CHANGELOG.md ] && git add CHANGELOG.md
@@ -200,7 +215,19 @@ read_traces / session_summary / rotate API.
 is_recorded(name) → 包 trace → 调 _dispatch_native_inner (原 dispatch
 body 改名). 其它 tool 原路径.
 
-## 3) skill_freeze.py (新, ~470 行) 凝固引擎
+## 3a) trace_recorder 嵌套 bugfix (5/12 鸿波复用阶段发现)
+
+复用阶段, LLM 调 catfish_run_skill → script.py 内部用 dispatch_native
+调 catfish_browser_* → 又被 trace_recorder 拦截 → 把复用一次跑的步骤
+写回 trace → 下次 freeze 会撞混 (混入复用步骤当成教学).
+
+修法 (trace_recorder.py + catfish_tools.py dispatch wrapper):
+  - thread-local depth counter
+  - dispatch wrapper 每次进 with trace_recorder.record_depth_guard()
+  - 只在 depth==1 (最外层 LLM 调用) 时 record
+  - script.py 内部嵌套 dispatch (depth>=2) 跳过 — script 行为不污染教学 trace
+
+## 3b) skill_freeze.py (新, ~470 行) 凝固引擎
 
 freeze_skill(name, ns, description, ...) 读 trace 模板化生成:
   - goto/fill/click → 经 dispatch_native 路由 (不自己开 Playwright, 复用

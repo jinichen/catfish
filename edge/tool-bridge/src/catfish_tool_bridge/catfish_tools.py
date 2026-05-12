@@ -5360,29 +5360,37 @@ def dispatch_native(name: str, args: Dict[str, Any]) -> Any:
     from . import trace_recorder  # noqa: PLC0415
 
     if trace_recorder.is_recorded(name):
-        _t0 = time.time()
-        _err: Exception | None = None
-        try:
-            result = _dispatch_native_inner(name, args)
-            _ok = bool(result.get("ok", True)) if isinstance(result, dict) else True
-            return result
-        except Exception as e:
-            _err = e
-            _ok = False
-            raise
-        finally:
-            _dur = int((time.time() - _t0) * 1000)
-            trace_recorder.record(
-                tool_name=name,
-                args=args or {},
-                result=(
-                    locals().get("result")
-                    if _err is None
-                    else {"ok": False, "error": repr(_err)}
-                ),
-                ok=_ok,
-                duration_ms=_dur,
-            )
+        # BL-MM9-FREEZE-bugfix (5/12): 嵌套深度判定. 教学路径走最外层 dispatch
+        # (员工教 LLM, LLM 调 catfish_browser_* → wrapper depth=1 → 录).
+        # 复用路径走 catfish_run_skill → script.py 内部用 dispatch_native 调
+        # catfish_browser_* → wrapper depth>=2 → **不录** (script 行为不该污染
+        # 教学 trace, 否则下次 freeze 撞混).
+        with trace_recorder.record_depth_guard():
+            should_record = trace_recorder.is_outermost()
+            _t0 = time.time()
+            _err: Exception | None = None
+            try:
+                result = _dispatch_native_inner(name, args)
+                _ok = bool(result.get("ok", True)) if isinstance(result, dict) else True
+                return result
+            except Exception as e:
+                _err = e
+                _ok = False
+                raise
+            finally:
+                if should_record:
+                    _dur = int((time.time() - _t0) * 1000)
+                    trace_recorder.record(
+                        tool_name=name,
+                        args=args or {},
+                        result=(
+                            locals().get("result")
+                            if _err is None
+                            else {"ok": False, "error": repr(_err)}
+                        ),
+                        ok=_ok,
+                        duration_ms=_dur,
+                    )
     else:
         return _dispatch_native_inner(name, args)
 

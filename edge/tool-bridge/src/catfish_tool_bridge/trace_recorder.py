@@ -41,12 +41,49 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 import uuid
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger("catfish.tool_bridge.trace_recorder")
+
+# ─── 嵌套深度跟踪 ──────────────────────────────────────────────────────
+#
+# BL-MM9-FREEZE-bugfix (5/12): 复用阶段, LLM 调 catfish_run_skill →
+# script.py 内部用 dispatch_native 调 catfish_browser_* → 又被 trace_recorder
+# 拦截 → 把"复用一次跑的步骤"写回 trace → 下次 freeze 撞混.
+#
+# 修法: thread-local depth counter. 只在最外层 dispatch (depth == 1, 即
+# 真 LLM 教学调用) 时 record. script.py 内部嵌套 dispatch (depth >= 2) 跳过.
+#
+# `record_depth_guard()` 上下文管理器, dispatch_native wrapper 用它包.
+# ─── ─────────────────────────────────────────────────────────────────
+
+_local = threading.local()
+
+
+class _DepthGuard:
+    """记录嵌套层级的 contextmanager. 最外层 depth=1, 嵌套 depth>=2."""
+    def __enter__(self) -> int:
+        d = getattr(_local, "depth", 0) + 1
+        _local.depth = d
+        return d  # 当前层级
+
+    def __exit__(self, *args) -> None:
+        d = getattr(_local, "depth", 1)
+        _local.depth = max(d - 1, 0)
+
+
+def record_depth_guard() -> _DepthGuard:
+    """给 catfish_tools.dispatch_native wrapper 用. 每次进 wrapper 包一下."""
+    return _DepthGuard()
+
+
+def is_outermost() -> bool:
+    """当前是否在最外层 (depth == 1). dispatch wrapper 调它决定要不要 record."""
+    return getattr(_local, "depth", 0) <= 1
 
 #: trace 文件路径
 TRACE_DIR = Path.home() / ".catfish" / "traces"
