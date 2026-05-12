@@ -23,8 +23,14 @@ from catfish_gateway import metrics
 
 @pytest.fixture(autouse=True)
 def _isolate_audit_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """每个测试用独立 audit 文件."""
+    """每个测试用独立 audit 文件 + 强制走 jsonl (不走 PG).
+
+    5/12: 加 CATFISH_DB_URL delenv. metrics._use_pg() 默认看到 .env 里
+    CATFISH_DB_URL 就走 PG (沙箱无 psycopg, 失败也不 fallback 读 jsonl).
+    test 既然 monkeypatch _audit_path, 明确意图走 jsonl, 清掉 DB_URL.
+    """
     monkeypatch.delenv("CATFISH_AUDIT_PATH", raising=False)
+    monkeypatch.delenv("CATFISH_DB_URL", raising=False)
     monkeypatch.setattr(metrics, "_audit_path", tmp_path / "gateway_audit.jsonl")
     yield
 

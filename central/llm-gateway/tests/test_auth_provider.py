@@ -24,6 +24,21 @@ from catfish_gateway.auth import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _dev_users_yaml(tmp_path, monkeypatch):
+    """BL-security 5/9: yaml 必须有 default 段, env CATFISH_DEV_TOKEN 才兜底.
+    给每个 test 写 minimal yaml.default 让老兼容路径通."""
+    yaml_path = tmp_path / "dev_users.yaml"
+    yaml_path.write_text("""
+default:
+  email: dev-user@catfish.dev
+  name: Dev User
+  department: engineering
+  role: admin
+""", encoding="utf-8")
+    monkeypatch.setenv("CATFISH_DEV_USERS_PATH", str(yaml_path))
+
+
 # ============================================================
 # DevTokenProvider 行为
 # ============================================================

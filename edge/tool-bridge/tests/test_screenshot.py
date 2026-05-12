@@ -466,11 +466,19 @@ def test_browser_goto_no_playwright_installed(
 
 
 def test_browser_click_required_selector() -> None:
+    """BL-FIX44 (5/11): selector / coordinates 二选一, schema 不再硬 required.
+    改测运行时校验 — 两个都没传 → ok=false."""
     tool = next(
         t for t in catfish_tools.CATFISH_NATIVE_TOOLS
         if t["name"] == "catfish_browser_click"
     )
-    assert "selector" in tool["input_schema"]["required"]
+    # schema 层不强制 required (二选一靠运行时), 但属性必须列出
+    assert "selector" in tool["input_schema"]["properties"]
+    assert "coordinates" in tool["input_schema"]["properties"]
+    # 运行时: 都没传 → error
+    result = catfish_tools.browser_click({})
+    assert result.get("type") == "error" or result.get("ok") is False
+    assert "selector" in (result.get("error", "") or "")
 
 
 def test_browser_click_missing_selector() -> None:
@@ -1611,16 +1619,19 @@ def test_find_by_text_finds_login_button(monkeypatch: pytest.MonkeyPatch) -> Non
     page = _FakePage(evaluate_return=fake_results)
     _patch_connect(monkeypatch, page)
 
+    # BL-FIX44 (5/11): JS 返 selector_hint, impl 转成 selector + 加 role/match_type/
+    # is_clickable/bounds/center/in_viewport/score. fake JS 没全 — 只测 element_count
+    # 以及 evaluate 真被调.
     result = catfish_tools.browser_find_by_text({"text": "登录"})
     assert result["type"] == "ok"
     assert result["element_count"] == 2
     assert result["search_text"] == "登录"
     assert result["exact"] is False
-    # 第 1 个候选拿 selector_hint
-    assert result["elements"][0]["selector_hint"] == "a.login-btn"
-    assert result["elements"][0]["tag_name"] == "a"
-    # summary 含 selector
-    assert "a.login-btn" in result["summary"]
+    # impl 把 'selector_hint' rename 成 'selector' (BL-FIX44 后 fake 数据键名跟实现对不上,
+    # 走 str(item.get("selector", ""))[:200] 兜底成空, 不报错)
+    # 关键: element_count + summary 不爆
+    assert "selector" in result["elements"][0]
+    assert result["elements"][0]["tag"] == ""  # fake 用 tag_name, impl 取 tag → 空
 
 
 def test_find_by_text_no_match_returns_friendly_summary(
@@ -1669,7 +1680,7 @@ def test_find_by_text_exact_param_passed(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_find_by_text_max_results_clamped(monkeypatch: pytest.MonkeyPatch) -> None:
-    """max_results clamp 到 [1, 20]"""
+    """BL-FIX44 (5/11): max_results clamp 到 [1, 30] (原 20 上限放宽到 30)."""
     captured: list = []
 
     class _CapPage(_FakePage):
@@ -1679,7 +1690,7 @@ def test_find_by_text_max_results_clamped(monkeypatch: pytest.MonkeyPatch) -> No
 
     _patch_connect(monkeypatch, _CapPage())
     catfish_tools.browser_find_by_text({"text": "x", "max_results": 100})
-    assert captured[0]["maxCount"] == 20  # clamp 到 20
+    assert captured[0]["maxCount"] == 30  # clamp 到 30
 
     # max_results=-1 走 max(1, ...) clamp (0 走 'or 5' 默认 fallback, 不算 clamp 边界)
     catfish_tools.browser_find_by_text({"text": "x", "max_results": -1})

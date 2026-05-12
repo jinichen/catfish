@@ -172,10 +172,13 @@ async def test_request_uses_catalog_model_name(fake_msgs):
 
 @pytest.mark.asyncio
 async def test_request_uses_dev_token(fake_msgs, monkeypatch):
-    """auth header 用 CATFISH_DEV_TOKEN env"""
+    """BL-FIX37 (5/10): summarizer 用 ensure_internal_dev_token() 拿进程内 random,
+    不再走 CATFISH_DEV_TOKEN env. test 改成: 取出 internal token, 断言 header 用它."""
     from catfish_gateway import session_summarizer
+    from catfish_gateway.auth.dev_token import ensure_internal_dev_token
     session_summarizer._SESSION_COOL_DOWN.clear()
-    monkeypatch.setenv("CATFISH_DEV_TOKEN", "fake-test-token-xxx")
+    expected_token = ensure_internal_dev_token()
+    assert expected_token, "internal dev token 未生成"
 
     fake_resp = _mock_response(
         200, json_body={"choices": [{"message": {"content": "ok"}}]}
@@ -189,7 +192,7 @@ async def test_request_uses_dev_token(fake_msgs, monkeypatch):
         await _summarize_with_llm("sess_token", 0.0, fake_msgs)
 
     headers = mock_client.post.call_args.kwargs.get("headers") or {}
-    assert headers.get("Authorization") == "Bearer fake-test-token-xxx"
+    assert headers.get("Authorization") == f"Bearer {expected_token}"
 
 
 @pytest.mark.asyncio

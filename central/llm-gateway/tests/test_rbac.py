@@ -168,7 +168,8 @@ async def test_require_permission_no_token_401() -> None:
 
 
 def test_role_permissions_keys() -> None:
-    assert set(ROLE_PERMISSIONS.keys()) == {"admin", "manager", "employee"}
+    # BL-ARCH1 P2 (5/10) 加了 sysadmin
+    assert set(ROLE_PERMISSIONS.keys()) == {"admin", "sysadmin", "manager", "employee"}
 
 
 def test_admin_ge_manager_ge_employee() -> None:

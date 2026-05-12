@@ -333,10 +333,21 @@ def test_composite_all_lax_returns_lax() -> None:
 
 
 def test_composite_with_real_oidc_and_dev_token(
-    keypair, kid, jwks, issuer, audience, monkeypatch: pytest.MonkeyPatch
+    keypair, kid, jwks, issuer, audience, monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
 ) -> None:
     """真实组合: OIDC + dev_token. OIDC 通过用 OIDC, OIDC 失败 fallback dev_token."""
     monkeypatch.setenv("CATFISH_DEV_TOKEN", "dev-secret")
+    # BL-security 5/9: dev_token env 兜底需要 yaml.default 段
+    yaml_path = tmp_path / "dev_users.yaml"
+    yaml_path.write_text("""
+default:
+  email: dev-user@catfish.dev
+  name: Dev User
+  department: engineering
+  role: admin
+""", encoding="utf-8")
+    monkeypatch.setenv("CATFISH_DEV_USERS_PATH", str(yaml_path))
     composite = CompositeProvider([
         OIDCProvider(issuer=issuer, audience=audience, jwks_for_testing=jwks),
         DevTokenProvider(),

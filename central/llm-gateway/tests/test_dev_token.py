@@ -34,13 +34,36 @@ def _write_yaml(path: Path, content: str) -> None:
 
 
 def test_no_yaml_env_token_works(yaml_path: Path, monkeypatch) -> None:
-    """没 dev_users.yaml 时 env CATFISH_DEV_TOKEN 仍能用 (back-compat)."""
+    """5/9 BL-security: yaml 必须有 default 段, env token 才能兜底.
+
+    老兼容路径 (任意 token 都能解成 admin) 已废 (token 偷渡漏洞).
+    现在: 显式写 dev_users.yaml.default 才走兜底.
+    """
     monkeypatch.setenv("CATFISH_DEV_TOKEN", "my-env-token")
+    _write_yaml(yaml_path, """
+default:
+  email: dev-user@catfish.dev
+  name: Dev User
+  department: 默认部门
+  role: admin
+""")
     p = DevTokenProvider()
     user = p.verify_bearer("Bearer my-env-token")
     assert user is not None
-    assert user.role == "admin"  # 没 yaml default → 老兼容默认 admin
-    assert user.sub == "dev-user"
+    assert user.role == "admin"
+    assert user.sub == "dev-user@catfish.dev"
+
+
+def test_no_yaml_no_default_rejects(yaml_path: Path, monkeypatch) -> None:
+    """没 yaml.default 段时 env token → return None (强制走 SSO).
+
+    5/9 改的安全行为: 老 hardcoded 'dev-user' 兜底废, 防偷渡.
+    """
+    monkeypatch.setenv("CATFISH_DEV_TOKEN", "my-env-token")
+    # 不写 yaml — yaml_path 文件不存在 / cfg.default = None
+    p = DevTokenProvider()
+    user = p.verify_bearer("Bearer my-env-token")
+    assert user is None  # 没 default → 拒
 
 
 def test_yaml_admin_account(yaml_path: Path) -> None:
