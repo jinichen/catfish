@@ -145,6 +145,7 @@ echo "  ⚠ eis-login 走 v2 流程重新凝固 (catfish_teach_start → 教学 
 echo "─── git add 改动的文件 ───"
 git add central/llm-gateway/src/catfish_gateway/app.py
 git add edge/tool-bridge/src/catfish_tool_bridge/catfish_tools.py
+git add edge/identity/SOUL.md   # v2 教学边界铁律
 
 # 3) 新文件
 echo "─── git add 新文件 ───"
@@ -236,7 +237,19 @@ v2 设计 (trace_recorder.py 重写):
   不要做无关探索 (snapshot 看看 / 试试别的 selector) — 那会进凝固.
   只跑员工 explicit 指挥的步骤. 不确定就**问员工**.
 
-## 3b) skill 失败铁律 — 不许降级手工 (5/12 鸿波 v2 拍板)
+## 3b) SOUL.md 加教学边界铁律 (5/12 v2 拍板)
+
+12:21 鸿波撞坑: LLM 没主动调 catfish_teach_start, 直接 catfish_browser_*
+开干, 7 步全没录, teach_end 报 'no active session'. 这是 v2 设计仍然
+依赖 LLM 自觉的漏洞.
+
+修法: SOUL.md 加 ★★★ 教学边界铁律段, 跟 '做完才说' / '请示停顿' 同级:
+  - 强触发关键词清单 ('教你 X' / '凝固成 skill' / 等) → 看到立刻调 teach_start
+  - 弱触发场景 → 主动问员工是否教学
+  - 自检 3 秒: 调 catfish_browser_* 之前问 '我是不是在教学, 有没有 teach_start?'
+  - 正反例: 5/12 12:21 那次撞的坑写进 ❌ 案例, 提醒不要重犯
+
+## 3c) skill 失败铁律 — 不许降级手工 (5/12 鸿波 v2 拍板)
 
 11:41 LLM 调凝固 eis-login skill 冷启动失败 → 立刻"自己来" → 用错 selector
 → chrome 状态乱 → 越走越偏 → 污染了下次凝固.
