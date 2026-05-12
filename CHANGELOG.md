@@ -3868,7 +3868,7 @@ LLM 看到的格式 (跟 BL-I4 5/8 预留接口对接):
 
 ---
 
-## 2026-05-12（周二）— BL-MM9-FREEZE-v2 教学→凝固→复用真闭环 + BL-COMPANION-UX1/UX2 + CI 落地 + 1257 测试网 + BL-FED2.1 专长自动抽
+## 2026-05-12（周二）— BL-MM9-FREEZE-v2 教学→凝固→复用真闭环 + BL-COMPANION-UX1/UX2 + CI 落地 + 1257 测试网 + BL-FED2.1 专长自动抽 + BL-FED2.2 黄页 endpoint
 
 5/11 夜里把 Q3-WEBSKILL 视觉双子 (recognize_captcha / browser_locate) ship 了, 5/12 一整天做真活儿: **真把"员工教鲶鱼一次 → 凝固成可执行 skill → 下次秒开"闭环建出来**. 早上叠补丁撞 12 次坑, 中午鸿波拍板"不要小打小闹要彻底解决", 下午彻底重做, **13:26:39 凝固出第一个干净 eis-login skill, 复用 2.3 秒秒过 — BL-MM9 卖点从 PPT 概念变成可演示资产**. 同时修了 Companion "锁死" UX 问题, 落地 GitHub Actions CI, 补 60 个单元测试 + 修 22 个预存 fail.
 
@@ -4054,10 +4054,60 @@ cd edge/companion-app && npm run tauri:build
 **全测试**: tool-bridge 483 passed / 30 skipped / 0 failed.
 
 **接下来 (BL-FED2.x 待办)**:
-- BL-FED2.2 黄页 (identity-server `/api/employees/by-expertise?tag=资质`, 调 export_for_registry 拿员工 confirmed tag 列表)
 - BL-FED2.3 跨员工路由 (员工问"谁懂资质" → 黄页查 → A2A ask 转给老张)
 - BL-FED2.4 反馈环 (老张被问后, journal 自动追加 "今天帮小李解决资质问题" → 下次 extract 触发新 tag "资质咨询")
 - BL-FED2.5 跨员工 demo (5/14 演示前必跑通)
+
+### BL-FED2.2 — 黄页 endpoint /registry/by-expertise (5/12 鸿波拍板续)
+
+**真问题**: BL-FED2.1 把 confirmed 专长 tag 写到员工 mac 本机 `~/.catfish/expertise.yaml` 了, 但中央 identity-server 不知道哪些员工有什么 tag. 路由层 (BL-FED2.3) 没数据基础.
+
+**链路**:
+```
+employee mac:
+  ~/.catfish/expertise.yaml (status=confirmed 的 tag)
+        ↓
+  gateway lifespan 启动 → self_register
+        ↓ HTTPS 上报 (隐私边界: 只 confirmed tag 串)
+        ↓
+central:
+  identity-server /registry/register
+        ↓
+  registry_agents.expertise (PG JSONB / yaml)
+        ↑
+  GET /registry/by-expertise?tag=资质
+        ↓
+返 list[ByExpertiseMatch]:
+  {sub, department, expertise, online, last_seen}
+  (**不返** jwks_uri/public_pem/catfish_endpoint — 走 lookup 才出, 给员工
+   "拒接" 的二次窗口)
+```
+
+**identity-server 改动** (`registry.py` + `+12 tests`):
+- `RegistryEntry` 加 `expertise: list[str]` (跟 `capabilities` 平行: capabilities 是协议层 `["a2a.ask"]`, expertise 是业务层 `["资质", "外勤报销"]`)
+- `RegisterRequest` / `LookupResponse` 加 `expertise` 字段
+- 新 `ByExpertiseMatch` / `ByExpertiseResponse` schema (脱敏: 不带 jwks/pem/endpoint)
+- 新 endpoint `GET /registry/by-expertise?tag=X[&online_only=true]`:
+  - tag 大小写不敏感匹配
+  - 在线员工排在前 (last_seen 降序)
+  - 没 expertise 的 agent 不出现
+- yaml + PG 双路径都更新, PG 老 schema 自动降级 (没 expertise 列时空数组返)
+
+**alembic migration `20260512_002_registry_expertise.py`**:
+- `ALTER TABLE registry_agents ADD COLUMN expertise JSONB DEFAULT '[]'`
+- `CREATE INDEX idx_registry_expertise_gin USING GIN (expertise)` (tag 数 < 100 小集合 GIN 比 btree 优)
+
+**gateway self_register 改动** (`a2a_self_register.py` + `+12 tests`):
+- 新 `_load_confirmed_expertise()` 读 `~/.catfish/expertise.yaml` 手写解析 (不拉 PyYAML 依赖, 跟 tool-bridge expertise.py 对齐)
+- **隐私铁律**: 只返 status=confirmed, 不带 evidence/aliases/source, 失败/缺文件返 [] 不阻塞 register
+- dedup + 50 tag 上限 (防异常 yaml 撑爆 register payload)
+- 异常长 tag (>50 字符) 跳
+
+**E2E 验证**: tool-bridge `save_expertise()` 写 yaml → gateway `_load_confirmed_expertise()` 解 → 只返 confirmed (`资质管理`, `EIS Login`), pending/rejected 永远不出员工 mac.
+
+**测试**: identity-server 65 passed (53 → 65, +12), gateway 817 passed (805 → 817, +12).
+
+### 5/12 真闭环全测**: tool-bridge 483 / gateway 817 / identity-server 65 / 全 sprint 测试 1300+ 零失败.**
 
 ---
 

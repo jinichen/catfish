@@ -41,6 +41,89 @@ def _public_pem_path() -> Path:
     return _catfish_home() / "identity" / "public.pem"
 
 
+def _expertise_yaml_path() -> Path:
+    """BL-FED2.2 — ~/.catfish/expertise.yaml 路径 (跟 tool-bridge expertise.py 对齐)."""
+    return _catfish_home() / "expertise.yaml"
+
+
+def _load_confirmed_expertise() -> list[str]:
+    """读 ~/.catfish/expertise.yaml, 返 status=confirmed 的 tag 字符串列表.
+
+    **隐私边界**:
+      - 只返 confirmed (pending/rejected 永不出员工 mac)
+      - 不返 evidence_count / aliases / source / last_reviewed_at
+      - 用手写 yaml 解析, 不依赖 PyYAML, 跟 tool-bridge expertise.py 对齐 (避免
+        gateway 拉新依赖)
+
+    失败 (文件不在 / 解析坏 / 异常) 都返 [], 不阻塞 self_register.
+    """
+    p = _expertise_yaml_path()
+    if not p.exists():
+        return []
+    try:
+        text = p.read_text(encoding="utf-8")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("self_register: 读 expertise.yaml 失败: %s", e)
+        return []
+
+    # 简易解析 — yaml 文件格式: tags 是顶层 list, 每条 dict 含 tag/status.
+    # 跟 tool-bridge/expertise.py _yaml_dump 输出对齐:
+    #   tags:
+    #     - tag: 资质
+    #       status: confirmed
+    #       ...
+    out: list[str] = []
+    in_tag_block = False
+    cur_tag = ""
+    cur_status = ""
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        if not line or line.lstrip().startswith("#"):
+            continue
+        # 新 tag 块开始: "  - tag: XXX"
+        stripped = line.lstrip()
+        if stripped.startswith("- tag:"):
+            # flush 上一块
+            if in_tag_block and cur_tag and cur_status == "confirmed":
+                out.append(cur_tag)
+            cur_tag = _strip_yaml_str(stripped[len("- tag:"):].strip())
+            cur_status = ""
+            in_tag_block = True
+            continue
+        if in_tag_block and stripped.startswith("status:"):
+            cur_status = _strip_yaml_str(stripped[len("status:"):].strip())
+            continue
+        # 顶层 key (如 extracted_at:) 表示 tags 块外
+        if line and not line.startswith(" "):
+            if in_tag_block and cur_tag and cur_status == "confirmed":
+                out.append(cur_tag)
+            in_tag_block = False
+            cur_tag = ""
+            cur_status = ""
+    # 文件末尾 flush
+    if in_tag_block and cur_tag and cur_status == "confirmed":
+        out.append(cur_tag)
+
+    # 去重 + 限上限 (防异常多 tag 一次性塞 register, registry 不堪)
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for t in out:
+        if t and t not in seen and len(t) <= 50:
+            seen.add(t)
+            deduped.append(t)
+        if len(deduped) >= 50:
+            break
+    return deduped
+
+
+def _strip_yaml_str(s: str) -> str:
+    """剥 yaml 字符串的引号 (跟 tool-bridge/expertise.py _strip_yaml_str 对齐)."""
+    s = s.strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"'):
+        return s[1:-1]
+    return s
+
+
 async def self_register() -> bool:
     """启动时调用, register 到中央 registry.
 
@@ -81,6 +164,10 @@ async def self_register() -> bool:
     department = os.environ.get("CATFISH_DEPARTMENT", "")
     capabilities = ["a2a.ask"]
 
+    # BL-FED2.2 (5/12) 读 expertise (员工 confirmed 过的专长 tag) 上报到黄页.
+    # 隐私边界: 只 confirmed, 失败/缺文件返 [], 不阻塞 self_register.
+    expertise = _load_confirmed_expertise()
+
     # 显式算 jwks_uri 不依赖 registry 自动算 — 兼容老版 registry (jwks_uri 必填).
     jwks_uri = f"{registry_url}/registry/agents/{sub}/jwks.json"
 
@@ -91,6 +178,7 @@ async def self_register() -> bool:
         "public_pem": public_pem,
         "department": department,
         "capabilities": capabilities,
+        "expertise": expertise,
     }
 
     try:
