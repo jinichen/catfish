@@ -1016,6 +1016,8 @@ _PLAN_ONLY_PROMISE_KEYWORDS = (
 _PLAN_ONLY_COMPLETION_KEYWORDS = (
     "已生成", "已保存", "已完成", "已创建", "已修改", "已写入",
     "已输出", "已写好", "已经生成", "已经保存", "已经完成",
+    # 5/12: '已经写入' 跟 '已写入' 都该认 (test_plan_only_retry 漏 fix)
+    "已经写入", "已经创建", "已经修改", "已经输出",
 )
 _PLAN_ONLY_FUTURE_INTENT_KEYWORDS = (
     "立刻", "我现在", "现在重新", "我马上", "马上动手", "重新生成",
