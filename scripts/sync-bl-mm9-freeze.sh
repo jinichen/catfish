@@ -117,32 +117,29 @@ fi
 
 git fetch origin main 2>&1 | tail -3 || echo "(fetch 失败, 继续)"
 
-# 1) 删除反目标文件 (git rm 触发本地删)
+# 1) 删反目标文件 + 污染版 eis-login
 #
-# ⚠ 重要: skills/department/eis-login/ **不删** — 那是鸿波 5/12 10:39:42
-# 用 catfish_freeze_skill 真凝固出来的成果 (script.py + SKILL.md). 这正是
-# 我们要保的东西.
+# ⚠ 5/12 12:20 那次重新凝固的 eis-login 是污染版 (11 步含 4 次重复 goto + 错
+# selector "input[placeholder*='用户ID']"). 删掉. 鸿波走 v2 流程 (teach_start
+# → 教学 → teach_end → freeze) 重新凝固干净的.
 #
-# 沙箱测试残留 (eis-login-test / eis-login-v2test) 不在 git 跟踪里 (是我
-# 端到端验证 freeze 引擎时落到 mount 路径下的, 鸿波本地能看到但不在 commit),
-# 用 rm -rf 清掉, 不走 git rm.
+# 沙箱测试残留 (eis-login-test / eis-login-v2test) 也清.
 #
-echo "─── git rm 反目标文件 ───"
-git rm -rf skills/personal 2>&1 | tail -3 || echo "  (personal 不存在, skip)"
-git rm -rf docs/samples/eis-login-skill 2>&1 | tail -3 || echo "  (sample 不存在, skip)"
-git rm -f scripts/sync-bl-fix47-procedural-skill.sh 2>&1 | tail -3 || echo "  (sync 不存在, skip)"
+echo "─── git rm 反目标 + 污染文件 ───"
+git rm -rf skills/department/eis-login 2>&1 | tail -3 || echo "  (eis-login 不存在 / 已删)"
+git rm -rf skills/personal 2>&1 | tail -3 || echo "  (personal 不存在)"
+git rm -rf docs/samples/eis-login-skill 2>&1 | tail -3 || echo "  (sample 不存在)"
+git rm -f scripts/sync-bl-fix47-procedural-skill.sh 2>&1 | tail -3 || echo "  (sync 不存在)"
 
-# 清沙箱测试残留 (不走 git, 直接 rm)
-echo "─── 清沙箱测试残留 (eis-login-test / eis-login-v2test) ───"
+# 清测试残留 (不走 git)
+echo "─── 清沙箱测试残留 + hermes 同步残留 ───"
 rm -rf skills/department/eis-login-test skills/department/eis-login-v2test 2>/dev/null || true
-# 同步清 hermes 端的测试残留
-rm -rf ~/.hermes/skills/productivity/catfish-eis-login-test \
+rm -rf ~/.hermes/skills/productivity/catfish-eis-login \
+       ~/.hermes/skills/productivity/catfish-eis-login-test \
        ~/.hermes/skills/productivity/catfish-eis-login-v2test 2>/dev/null || true
-echo "  ✓ 测试残留清完"
+echo "  ✓ 测试 + 污染 + hermes 残留清完"
 echo ""
-echo "  保留 (这是你的成果, 不动):"
-echo "    skills/department/eis-login/  (5/12 10:39:42 凝固)"
-echo "    ~/.hermes/skills/productivity/catfish-eis-login/"
+echo "  ⚠ eis-login 走 v2 流程重新凝固 (catfish_teach_start → 教学 → teach_end → freeze)"
 
 # 2) 改动的现有文件
 echo "─── git add 改动的文件 ───"
@@ -155,15 +152,13 @@ git add edge/tool-bridge/src/catfish_tool_bridge/trace_recorder.py
 git add edge/tool-bridge/src/catfish_tool_bridge/skill_freeze.py
 git add scripts/sync-bl-mm9-freeze.sh
 
-# 4) 鸿波真凝固出来的 eis-login (5/12 10:39:42, 闭环成果) — 加进 commit
-echo "─── git add 鸿波 5/12 凝固成果 ───"
-git add skills/department/eis-login/ 2>&1 | tail -3 || echo "  (eis-login 不存在?)"
+# 4) eis-login 走 v2 流程重凝固, 不在本 commit 里 add — 等鸿波本地教学 + 凝固后单独 commit
 
 # 4) 文档 (如果存在改动)
 [ -f CHANGELOG.md ] && git add CHANGELOG.md
 [ -f docs/FEATURE-TRACKS.md ] && git add docs/FEATURE-TRACKS.md
 
-git commit -m "BL-MM9-FREEZE (5/12 鸿波拍板): 教学→凝固→复用闭环 + 删反目标文件
+git commit -m "BL-MM9-FREEZE-v2 (5/12 鸿波 '彻底解决' 拍板): 显式 teach session 边界
 
 # 鸿波 5/12 反思 (引发本 commit)
 
@@ -215,17 +210,43 @@ read_traces / session_summary / rotate API.
 is_recorded(name) → 包 trace → 调 _dispatch_native_inner (原 dispatch
 body 改名). 其它 tool 原路径.
 
-## 3a) trace_recorder 嵌套 bugfix (5/12 鸿波复用阶段发现)
+## 3a) v2 — 显式 teach session 边界 (彻底解决教学/复用/探索混入问题)
 
-复用阶段, LLM 调 catfish_run_skill → script.py 内部用 dispatch_native
-调 catfish_browser_* → 又被 trace_recorder 拦截 → 把复用一次跑的步骤
-写回 trace → 下次 freeze 会撞混 (混入复用步骤当成教学).
+v1 翻车: 5/12 早上一上午, 教学 trace 反复混入 LLM 探索 + 复用降级手工
+操作. 12:20 重新凝固 eis-login v2 把 11 步污染当教学凝进去, 产出垃圾
+skill (4 次重复 goto + 错 selector input[placeholder*='用户ID']).
 
-修法 (trace_recorder.py + catfish_tools.py dispatch wrapper):
-  - thread-local depth counter
-  - dispatch wrapper 每次进 with trace_recorder.record_depth_guard()
-  - 只在 depth==1 (最外层 LLM 调用) 时 record
-  - script.py 内部嵌套 dispatch (depth>=2) 跳过 — script 行为不污染教学 trace
+v2 设计 (trace_recorder.py 重写):
+  - 加 module-level _active session 状态, 持久化 ~/.catfish/traces/_state.json
+  - record() 只在 _active is not None 时写, 否则静默跳过
+  - start_session(name) → rotate 残留 active.jsonl, 开新 session
+  - end_session() → 归档 active.jsonl 到 session_<name>_<ts>.jsonl,
+                    写 _last_completed.json, 清 active
+  - 嵌套保护保留 (record_depth_guard / is_outermost): 复用阶段 script.py
+    内部 dispatch 即使 active 也跳过, 因为 depth>=2
+
+3 个新 tool (catfish_tools.py + skill_freeze.py):
+  - catfish_teach_start(name, description) — 开教学
+  - catfish_teach_end() — 关教学 + 归档
+  - catfish_freeze_skill 改成只拿 last_completed session 的 trace,
+    不再按时间窗口模糊取. 凝固前 session 必须 end.
+
+教学纪律 (写进 catfish_teach_start description):
+  调本工具后 → 每个业务 tool call 都进 trace.
+  不要做无关探索 (snapshot 看看 / 试试别的 selector) — 那会进凝固.
+  只跑员工 explicit 指挥的步骤. 不确定就**问员工**.
+
+## 3b) skill 失败铁律 — 不许降级手工 (5/12 鸿波 v2 拍板)
+
+11:41 LLM 调凝固 eis-login skill 冷启动失败 → 立刻"自己来" → 用错 selector
+→ chrome 状态乱 → 越走越偏 → 污染了下次凝固.
+
+修法 (catfish_run_skill description 强化):
+  skill 返 ok=false 时:
+    ❌ 不要自己调 catfish_browser_goto / fill / click 手工接管
+    ✓ 把失败原因清楚告诉员工 (skill 名 + error)
+    ✓ 问员工: '再试一次 / 重教 skill / 我手工?'
+    ✓ 员工 explicit 说手工 → 才允许调 catfish_browser_*
 
 ## 3b) skill_freeze.py (新, ~470 行) 凝固引擎
 
@@ -319,3 +340,40 @@ case $yn in
     } ;;
     *) echo "❎ 取消." ;;
 esac
+
+# ════════════════════════════════════════════════════════════════════
+# v2 凝固剧本 (鸿波本地, push 完后做)
+# ════════════════════════════════════════════════════════════════════
+#
+# 1) 重启 tool-bridge 读新代码:
+#    pkill -9 -f catfish_tool_bridge && sleep 8
+#
+# 2) 开新 Companion 对话, 一句话开教学:
+#    "我教你登 EIS, 名字 eis-login. 先调 catfish_teach_start."
+#    → LLM 调 catfish_teach_start(name='eis-login', description='登 EIS 一站式')
+#
+# 3) 鸿波一步步指挥 7 步, 每步明确给 LLM:
+#    "调 catfish_browser_goto('http://eis.ffcs.cn')"
+#    "调 catfish_browser_fill('#name', text='chenhb')"
+#    "调 catfish_browser_fill('#pwd', secret_ref='keychain://eis_password')"
+#    "调 catfish_recognize_captcha('#captchaImg', hint='alphanumeric_4')"
+#    "调 catfish_browser_fill('#captcha', text=<上一步识别结果>)"
+#    "调 catfish_browser_click('div.button-login')"
+#
+# 4) 教完, 一句话:
+#    "教完了, 调 catfish_teach_end, 然后 catfish_freeze_skill(
+#       name='eis-login', namespace='department',
+#       description='登录 EIS 一站式信息门户')"
+#
+# 5) 关掉教学会话.
+#
+# 6) 新会话测复用:
+#    "上 EIS 看下今天的待办" → LLM 应该立刻调 catfish_run_skill →
+#    凝固版跑通 → 报告待办.
+#
+# 7) skill 跑通后 git add + commit:
+#    git add skills/department/eis-login/
+#    git commit -m "BL-MM9-FREEZE-v2 落地: eis-login (干净凝固版)"
+#    git push
+#
+# ════════════════════════════════════════════════════════════════════

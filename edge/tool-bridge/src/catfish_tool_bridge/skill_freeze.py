@@ -519,14 +519,16 @@ def _slugify(s: str) -> str:
 def freeze_skill(args: dict[str, Any]) -> dict[str, Any]:
     """tool entry: catfish_freeze_skill.
 
+    BL-MM9-FREEZE-v2 (5/12): 只凝固**最近一个完成的 teach session** 的 trace,
+    不再按时间窗口模糊取. 凝固前 session 必须 end (catfish_teach_end), 否则拒.
+
     args:
       name: str, e.g. "eis-login"
       namespace: str, default "department"
       description: str
-      trace_since_unix: float | None — 起始时间, None=最近 1 小时
-      trace_until_unix: float | None — 截止时间
       overwrite: bool — 已存在的 skill 是否覆盖. 默认 false
       run_install: bool — 凝固后是否自动跑 install_to_hermes.sh. 默认 true
+      session_archive_path: str (可选, 调试用) — 显式指定某 session archive 凝固
     """
     name = (args.get("name") or "").strip()
     if not name or not re.match(r"^[a-z][a-z0-9\-]*$", name):
@@ -541,27 +543,55 @@ def freeze_skill(args: dict[str, Any]) -> dict[str, Any]:
             "error": f"namespace 必须是 department / personal / team, 不接受 {namespace!r}",
         }
     description = (args.get("description") or f"凝固 {name} 流程").strip()[:500]
-
-    since = args.get("trace_since_unix")
-    until = args.get("trace_until_unix")
-    if since is None:
-        since = time.time() - 3600  # 默认最近 1 小时
     overwrite = bool(args.get("overwrite", False))
     run_install = bool(args.get("run_install", True))
 
-    # 1) 读 trace
-    trace = trace_recorder.read_traces(
-        since_unix=since, until_unix=until, only_ok=True
-    )
-    if not trace:
+    # v2: 拒绝在 active session 期间凝固 (session 没 end 说明教学没完, 凝固
+    # 早了会拿不全步骤)
+    active = trace_recorder.get_active_session()
+    if active:
         return {
             "ok": False,
             "error": (
-                f"trace 为空 (since={since}, until={until}). 教学时是不是没调"
-                f"任何 catfish_browser_* / recognize_captcha? "
-                f"调 catfish_freeze_inspect 看 trace 状态."
+                f"当前还有 active teach session ({active.get('name')}, 始于 "
+                f"{active.get('started_at_iso')}). 先调 catfish_teach_end "
+                f"结束教学, 再凝固."
             ),
         }
+
+    # 1) 读 session trace (优先 args.session_archive_path → fallback last_completed)
+    session_path = args.get("session_archive_path")
+    if session_path:
+        trace = trace_recorder.read_session_traces(session_path, only_ok=True)
+        trace_path_used = str(session_path)
+        if not trace:
+            return {
+                "ok": False,
+                "error": f"显式 session archive 读不到 ok 步骤: {session_path}",
+            }
+    else:
+        last = trace_recorder.get_last_completed_session()
+        if not last or not last.get("archive_path"):
+            return {
+                "ok": False,
+                "error": (
+                    "没有 last_completed teach session 可凝固. 应该:\n"
+                    "  1. catfish_teach_start(name='" + name + "', description='...')\n"
+                    "  2. 员工指挥 LLM 跑教学步骤 (catfish_browser_*)\n"
+                    "  3. catfish_teach_end()\n"
+                    "  4. catfish_freeze_skill(name='" + name + "')"
+                ),
+            }
+        trace_path_used = last["archive_path"]
+        trace = trace_recorder.read_session_traces(trace_path_used, only_ok=True)
+        if not trace:
+            return {
+                "ok": False,
+                "error": (
+                    f"last_completed session ({last.get('name')}) 里没 ok 步骤. "
+                    f"教学时是不是 LLM 没调 catfish_browser_*? archive: {trace_path_used}"
+                ),
+            }
     # 排序
     trace.sort(key=lambda x: x.get("seq", 0))
 
@@ -610,7 +640,7 @@ def freeze_skill(args: dict[str, Any]) -> dict[str, Any]:
         name_slug=fn_name,
         fn_name=fn_name,
         description=description,
-        trace_path=str(trace_recorder.TRACE_PATH),
+        trace_path=trace_path_used,
         step_count=len(trace),
         params_block=_format_params_block(params),
     ) + "\n".join(body_lines) + _SCRIPT_FOOTER
@@ -623,7 +653,7 @@ def freeze_skill(args: dict[str, Any]) -> dict[str, Any]:
         description=description,
         fn_name=fn_name,
         trace=trace,
-        trace_path=str(trace_recorder.TRACE_PATH),
+        trace_path=trace_path_used,
         step_start=trace[0].get("seq", 0),
         step_end=trace[-1].get("seq", 0),
         ok_count=sum(1 for x in trace if x.get("ok")),
@@ -675,17 +705,23 @@ def freeze_skill(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def freeze_inspect(args: dict[str, Any]) -> dict[str, Any]:
-    """tool entry: catfish_freeze_inspect — 看 trace 状态, 决定能不能凝固."""
+    """tool entry: catfish_freeze_inspect — 查 trace + session 状态.
+
+    v2 输出:
+      - active_session: 当前是否有教学进行中, 多少步
+      - last_completed: 最近完成的教学 session, archive 路径 + 步骤数
+      - active_file: active.jsonl 文件状态
+    """
     summary = trace_recorder.session_summary()
-    since = args.get("since_unix")
-    if since is None:
-        since = time.time() - 3600
-    trace = trace_recorder.read_traces(since_unix=since, only_ok=True)
-    return {
-        "ok": True,
-        "trace_file": summary,
-        "recent_steps_in_window": len(trace),
-        "recent_steps_summary": [
+    active = summary.get("active_session")
+    last = summary.get("last_completed")
+    af = summary.get("active_file", {})
+
+    # 如果 active session 在, 列最近 30 步给员工看
+    recent_summary: list[dict[str, Any]] = []
+    if active:
+        trace = trace_recorder.read_traces(only_ok=True)
+        recent_summary = [
             {
                 "seq": x.get("seq"),
                 "tool": x.get("tool"),
@@ -693,17 +729,94 @@ def freeze_inspect(args: dict[str, Any]) -> dict[str, Any]:
                 "ts": x.get("ts"),
             }
             for x in trace[-30:]
-        ],
+        ]
+
+    # 友好 summary
+    if active:
+        s = (
+            f"📍 active 教学 session: '{active.get('name')}' (始于 "
+            f"{active.get('started_at_iso')}, 已录 {af.get('lines', 0)} 步). "
+            f"教学完调 catfish_teach_end 结束."
+        )
+    elif last:
+        s = (
+            f"📦 没 active 教学. 最近完成的: '{last.get('name')}' "
+            f"({last.get('step_count')} 步, archive={last.get('archive_path')}). "
+            f"调 catfish_freeze_skill(name='...') 凝固它."
+        )
+    else:
+        s = (
+            "❌ 没 active 教学, 也没 last_completed. 走 catfish_teach_start "
+            "开新教学."
+        )
+
+    return {
+        "ok": True,
+        "active_session": active,
+        "last_completed": last,
+        "active_file": af,
+        "recent_steps_summary": recent_summary,
+        "summary": s,
+    }
+
+
+def teach_start(args: dict[str, Any]) -> dict[str, Any]:
+    """tool entry: catfish_teach_start — 开始一次教学 session.
+
+    BL-MM9-FREEZE-v2 (5/12): 没 active session 时 catfish_browser_* 调用**不录**.
+    必须显式 start 才开始录. 教学跟复用/探索物理隔离.
+
+    args:
+      name: skill 名 (例 'eis-login'). 用于命名归档文件 + 凝固时识别.
+      description: 简介, 给 LLM 看的提示
+    """
+    name = (args.get("name") or "").strip()
+    description = (args.get("description") or "").strip()
+    state = trace_recorder.start_session(name=name, description=description)
+    return {
+        "ok": True,
+        "session_id": state.get("session_id"),
+        "name": state.get("name"),
+        "started_at_iso": state.get("started_at_iso"),
         "summary": (
-            f"trace 文件 {summary.get('lines', 0)} 行, 最近 1 小时内 "
-            f"{len(trace)} 步成功. 调 catfish_freeze_skill(name=..., "
-            f"description=...) 凝固."
+            f"📍 教学开始: '{state.get('name')}'. 接下来你调的每个 "
+            f"catfish_browser_* / catfish_recognize_captcha / catfish_browser_locate "
+            f"都会被录, 教学完调 catfish_teach_end. **教学期间不要做无关探索** — "
+            f"每个 tool call 都会进最终 skill."
         ),
     }
 
 
+def teach_end(args: dict[str, Any]) -> dict[str, Any]:
+    """tool entry: catfish_teach_end — 结束教学 session, 归档 trace.
+
+    args:
+      reason: 可选, 进归档元信息. 默认 'manual'
+    """
+    reason = (args.get("reason") or "manual").strip()
+    info = trace_recorder.end_session(reason=reason)
+    if not info.get("ok"):
+        return info
+    return {
+        **info,
+        "summary": (
+            f"✓ 教学结束: '{info.get('name')}' ({info.get('step_count')} 步, "
+            f"{info.get('duration_s')}s). archive={info.get('archive_path')}. "
+            f"下一步: catfish_freeze_skill(name='{info.get('name')}', "
+            f"namespace='department', description='...') 凝固."
+        ),
+    }
+
+
+# 兼容 v1 调用 (catfish_freeze_rotate). v2 不应该用了, 但保留兼容.
 def freeze_rotate(args: dict[str, Any]) -> dict[str, Any]:
-    """tool entry: catfish_freeze_rotate — 凝固完后清空 active trace."""
+    """tool entry: catfish_freeze_rotate (v1 legacy).
+
+    v2 下用 catfish_teach_end 替代. 留兼容: 如果 active session 在就 end_session,
+    否则 rotate active.jsonl.
+    """
+    if trace_recorder.is_session_active():
+        return teach_end({"reason": args.get("reason") or "rotate-legacy"})
     reason = (args.get("reason") or "post-freeze").strip()
     archive = trace_recorder.rotate(reason=reason)
     return {
@@ -716,4 +829,10 @@ def freeze_rotate(args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-__all__ = ["freeze_skill", "freeze_inspect", "freeze_rotate"]
+__all__ = [
+    "freeze_skill",
+    "freeze_inspect",
+    "teach_start",
+    "teach_end",
+    "freeze_rotate",
+]

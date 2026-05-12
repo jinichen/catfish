@@ -650,22 +650,31 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_run_skill",
         "description": (
-            "调用 catfish 工程审定 skill 生成合规文档 (公文 / 汇报 / 请示 / 模板 等). "
-            "**优先于自己写 Python 脚本** — gateway 在 system prompt 已经把可用 "
-            "skill 列表注入给你, 看到列表里有匹配的就调这个工具, 不要绕道.\n\n"
+            "调用 catfish 工程审定 skill (含**凝固后的浏览器自动化 skill** 如 "
+            "eis-login + **渲染类 skill** 如 weekly-report). 优先于自己写代码 / "
+            "自己 step-by-step 调 catfish_browser_* — gateway 在 system prompt "
+            "已经把可用 skill 列表注入给你, 看到列表里有匹配的**立即**调.\n\n"
             "✅ 调用场景:\n"
-            "  - 员工说'写一份给领导的请示件' → catfish_run_skill(skill_path="
+            "  - 员工说'登 EIS' / '上 EIS 看待办' → catfish_run_skill("
+            "skill_path='department/eis-login', params={'username': 'chenhb'})\n"
+            "  - 员工说'写给领导的请示件' → catfish_run_skill(skill_path="
             "'department/leadership-briefing', params={...})\n"
-            "  - 员工说'生成 X 月工作汇报材料' → 同上\n"
-            "  - 任何 catfish skill 列表覆盖的合规场景\n\n"
+            "  - 任何 skill 列表覆盖的场景\n\n"
             "❌ 不该调用:\n"
-            "  - skill 列表里没有的能力 → 老老实实走 execute_code 临时写代码\n"
-            "  - 不属于工程审定的 skill (~/.hermes/skills/ 那些自学 skill 不在这里调, "
-            "走 hermes-skill 入口)\n\n"
-            "**第一次不知道某 skill 的参数?** params={'_help': True} 调一次, "
-            "返回该 skill 的输入 schema 给你看. 然后第二次正式传完整 params.\n\n"
-            "**返回**: {ok: bool, files: [paths], summary: str, error: str | null}. "
-            "files 字段里的路径会被 Companion 自动渲染成可点击 pill 给员工."
+            "  - skill 列表里没有的能力 → 走 execute_code 临时写, **不要** 用 "
+            "catfish_browser_* 手工干 skill 该干的事\n\n"
+            "**第一次不知道参数?** params={'_help': True} 调一次拿 schema.\n\n"
+            "**★★★ skill 失败时的铁律 (BL-MM9-FREEZE-v2 5/12)** ★★★:\n"
+            "  如果本 tool 返 ok=false (例 EIS skill goto 冷启动失败), **绝对不要**\n"
+            "  自己调 catfish_browser_goto / fill / click 等手工接管 — skill 里的 "
+            "selector 是教学时验证过的, 你手工推的 selector 不可靠, 会污染 chrome "
+            "状态 + 走偏. **必须**:\n"
+            "    1. 把失败原因清楚告诉员工 (skill 名 + error 字段)\n"
+            "    2. 问员工: '要不要再试一次 / 重教这个 skill / 我手工接管?'\n"
+            "    3. 员工 explicit 说手工 → 才允许调 catfish_browser_*\n"
+            "  这是 catfish 凝固 skill 的核心承诺 — skill 失败 ≠ 你接手, skill 失败 "
+            "= 报告员工.\n\n"
+            "**返回**: {ok, files: [paths], summary, error}. files 自动渲染成 pill."
         ),
         "input_schema": {
             "type": "object",
@@ -1346,8 +1355,83 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "available": True,
     },
     # ════════════════════════════════════════════════════════════
-    # BL-MM9-FREEZE (5/12 鸿波拍板): 教学→凝固→复用闭环
+    # BL-MM9-FREEZE-v2 (5/12 鸿波拍板): 教学→凝固→复用闭环 (显式 session 边界)
     # ════════════════════════════════════════════════════════════
+    {
+        "name": "catfish_teach_start",
+        "description": (
+            "★★★ **开始一次教学 session** (BL-MM9-FREEZE-v2 5/12).\n\n"
+            "员工说'我要教你 X' / '教你做 Y' / '记一下接下来的步骤' / "
+            "'凝固成 skill 之前我先教你跑一遍' → **第一件事调本工具**.\n\n"
+            "**核心机制**: 没 active teach session 时, 你调任何 "
+            "catfish_browser_* / catfish_recognize_captcha / catfish_browser_locate "
+            "都**不会被录**. 调本工具后 → 进入教学模式 → 每个业务工具 call 都进"
+            "trace → 最终凝固成 skill 的 step.\n\n"
+            "✅ 调用场景:\n"
+            "  - '我教你登 EIS' → catfish_teach_start(name='eis-login')\n"
+            "  - '记一下接下来怎么走 OA 审批' → catfish_teach_start(name='oa-approval')\n"
+            "  - 任何'员工指挥你跑一遍, 之后要凝固成 skill'的场景\n\n"
+            "❌ 不要调用:\n"
+            "  - 员工只是问问题 / 不教学 → 不调\n"
+            "  - 你已经在 active session 里 (老 session 会被自动关掉, 但浪费)\n"
+            "  - 复用阶段 (调 catfish_run_skill) — 那是用 skill, 不是教 skill\n\n"
+            "**教学纪律**: 调完本工具后, 每个 tool call 都进 trace. **不要做无关"
+            "探索** (e.g. 'snapshot 看看页面长啥样') — 那会进凝固 skill. "
+            "只跑员工 explicit 指挥的步骤. 不确定就先**问员工**, 别自己探.\n\n"
+            "**返回**: {ok, session_id, name, started_at_iso, summary}"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": (
+                        "skill 名, 小写字母数字横线 (例 'eis-login'). 凝固时同名."
+                    ),
+                },
+                "description": {
+                    "type": "string",
+                    "description": "教学目的简介 (1-200 字), 给后续凝固时元数据用.",
+                },
+            },
+            "required": ["name"],
+        },
+        "emoji": "🎓",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_teach_end",
+        "description": (
+            "★★ **结束当前教学 session** (BL-MM9-FREEZE-v2 5/12).\n\n"
+            "员工说'教完了' / '就这些' / '可以凝固了' / 类似收尾意图 → 立刻调.\n\n"
+            "**作用**:\n"
+            "  - 归档当前 active.jsonl 到 session_<name>_<ts>.jsonl\n"
+            "  - 写 _last_completed.json 让 catfish_freeze_skill 能找到\n"
+            "  - 清除 active 状态 — 后续 tool call 不再被录\n\n"
+            "✅ 调用时机:\n"
+            "  - 员工 explicit 说教完了 / 可以凝固\n"
+            "  - 教学的最后一步完成后, 员工没说继续 — 主动问'教完了吗?', "
+            "员工确认就调\n\n"
+            "❌ 不要调用:\n"
+            "  - 没 active session — 调了会返 error\n"
+            "  - 教学中途, 员工没 explicit 说结束\n\n"
+            "**返回**: {ok, session_id, name, step_count, duration_s, archive_path, summary}"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "结束原因 (e.g. 'done' / 'aborted'), 进归档元信息.",
+                },
+            },
+            "required": [],
+        },
+        "emoji": "✅",
+        "toolset": "catfish_native",
+        "available": True,
+    },
     {
         "name": "catfish_freeze_inspect",
         "description": (
@@ -1377,44 +1461,35 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_freeze_skill",
         "description": (
-            "★★★ **教学→凝固管道的核心入口** (BL-MM9-FREEZE 5/12). "
-            "员工教鲶鱼跑完一个流程 (登录 EIS / 提交工单 / 走 OA 审批 等) "
-            "→ trace_recorder 自动录了每步 tool 调用 → 调本工具把 trace 凝固成"
-            "**可执行 skill** (script.py + SKILL.md), 落到 catfish/skills/<ns>/"
-            "<name>/, 自动同步到 hermes ~/.hermes/skills/productivity/"
-            "catfish-<name>/. 下次员工说同样需求 → catfish_run_skill 秒开.\n\n"
+            "★★★ **凝固最近一个完成的 teach session** 成可执行 skill (BL-MM9-FREEZE-v2).\n\n"
+            "**前置条件**: 必须先 catfish_teach_start → 教学 → catfish_teach_end "
+            "→ 才能 catfish_freeze_skill. 没 session 直接凝固会拒绝.\n\n"
             "✅ 调用时机:\n"
-            "  - 员工说 '凝固成 skill' / '保存成 skill' / '记下来下次自动跑' / "
-            "'把刚才的流程存成 skill'\n"
-            "  - 一个 LLM agent 完整教学 session 结束后\n\n"
+            "  - catfish_teach_end 调完后, 员工说'凝固成 skill'\n"
+            "  - 员工 explicit 给了 name + description\n\n"
             "❌ 不该调用:\n"
-            "  - 教学还没跑完 (trace 不完整) — 等员工说凝固再调\n"
-            "  - 教学有 fail step (验证码识错重试过 N 次最终没成功) — "
-            "freeze 引擎会拒绝, 先让员工把流程**完整跑成功**一遍再凝固\n\n"
+            "  - active session 还没 end → 拒\n"
+            "  - 没有 last_completed session → 拒\n"
+            "  - 旧 session trace 有 fail step / 包含 LLM 探索 → 调本工具前\n"
+            "    应该让员工**重教一次**, 把干净的 8 步教明白\n\n"
             "**参数**:\n"
-            "  - name: 'eis-login' / 'oa-leave-apply' 等. 小写字母数字横线, "
-            "字母开头\n"
-            "  - namespace: 'department' (默认, 部门共享) / 'personal' / 'team'\n"
-            "  - description: 1-500 字描述这个 skill 干啥, 模板生成 SKILL.md 用\n"
-            "  - trace_since_unix: 可选, 默认最近 1 小时. 多 LLM 教学一次就传\n"
-            "    上一次教学结束的时间.\n"
-            "  - overwrite: 同 name 已存在时是否覆盖. 默认 false. 改流程后 v2 凝固"
-            "传 true.\n\n"
-            "**返回**: {ok, name, namespace, skill_path, hermes_name, files[], "
-            "params[], install{...}, summary}\n\n"
+            "  - name: 'eis-login' 等. 跟 catfish_teach_start 传的一致就行.\n"
+            "  - namespace: 'department' (默认) / 'personal' / 'team'\n"
+            "  - description: 1-500 字描述\n"
+            "  - overwrite: 同名 skill 已存在时是否覆盖 (默认 false)\n"
+            "  - run_install: 凝固后自动跑 install_to_hermes.sh (默认 true)\n\n"
+            "**返回**: {ok, name, namespace, skill_path, hermes_name, files[], params[], install{...}, summary}\n\n"
             "**安全**:\n"
-            "  - trace 里有明文密码 → 拒绝凝固 + 提示员工用 secret_ref 重教一次\n"
-            "  - secret_ref 会原样保留在 script.py (不解析成明文)\n"
-            "  - captcha 识别结果 hard-code 自动改成实时调用 (不写死临时值)"
+            "  - trace 里 fill 含明文密码 → 拒凝固, 提示员工用 secret_ref 重教\n"
+            "  - secret_ref 原样保留在 script.py (不解析成明文)\n"
+            "  - captcha 识别结果 hard-code 自动改成实时调用"
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": (
-                        "skill 名, 小写字母数字横线 (例 'eis-login'). 字母开头."
-                    ),
+                    "description": "skill 名, 小写字母数字横线 (例 'eis-login'). 字母开头.",
                 },
                 "namespace": {
                     "type": "string",
@@ -1425,14 +1500,6 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
                     "type": "string",
                     "description": "skill 描述, 1-500 字, 进 SKILL.md frontmatter.",
                 },
-                "trace_since_unix": {
-                    "type": "number",
-                    "description": "trace 起始时间 (unix 秒). 默认最近 1 小时.",
-                },
-                "trace_until_unix": {
-                    "type": "number",
-                    "description": "trace 截止时间. 默认到现在.",
-                },
                 "overwrite": {
                     "type": "boolean",
                     "description": "已存在的 skill 是否覆盖. 默认 false.",
@@ -1440,6 +1507,10 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
                 "run_install": {
                     "type": "boolean",
                     "description": "凝固后自动跑 install_to_hermes.sh 同步. 默认 true.",
+                },
+                "session_archive_path": {
+                    "type": "string",
+                    "description": "调试用 — 显式指定某 session archive 文件路径. 一般不传.",
                 },
             },
             "required": ["name"],
@@ -5485,7 +5556,13 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_browser_locate":
         from . import browser_locate  # noqa: PLC0415
         return browser_locate.locate(args)
-    # BL-MM9-FREEZE (5/12 鸿波拍板) 教学→凝固管道
+    # BL-MM9-FREEZE-v2 (5/12 鸿波拍板) 教学→凝固→复用闭环 (显式 session 边界)
+    if name == "catfish_teach_start":
+        from . import skill_freeze  # noqa: PLC0415
+        return skill_freeze.teach_start(args)
+    if name == "catfish_teach_end":
+        from . import skill_freeze  # noqa: PLC0415
+        return skill_freeze.teach_end(args)
     if name == "catfish_freeze_inspect":
         from . import skill_freeze  # noqa: PLC0415
         return skill_freeze.freeze_inspect(args)
