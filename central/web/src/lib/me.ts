@@ -105,6 +105,64 @@ export async function fetchGlobalAudit(): Promise<GlobalAudit | null> {
   }
 }
 
+// ── BL-ADMIN-AUDIT (5/12 鸿波): 逐条 audit 历史 + 4 维筛选 + 分页 ─
+
+export interface AuditEvent {
+  ts: number;          // unix 秒
+  user: string;
+  department: string;
+  model: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  latency_ms: number;
+  ttft_ms?: number;
+  status: string;      // ok / error / interrupted_resumed (BL-HERMES013-4)
+  error?: string;
+  security_concern?: string;
+}
+
+export interface AuditEventsResponse {
+  events: AuditEvent[];
+  total: number;
+  limit: number;
+  offset: number;
+  since_ms: number;
+  filters: { dept: string; user: string; model: string; status: string };
+  viewer_role: Role;
+}
+
+export interface AuditEventsParams {
+  since_ms?: number;
+  dept?: string;
+  user_filter?: string;
+  model?: string;
+  status?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export async function fetchAuditEvents(
+  params: AuditEventsParams = {},
+): Promise<AuditEventsResponse | null> {
+  try {
+    const q = new URLSearchParams();
+    if (params.since_ms != null) q.set("since_ms", String(params.since_ms));
+    if (params.dept) q.set("dept", params.dept);
+    if (params.user_filter) q.set("user_filter", params.user_filter);
+    if (params.model) q.set("model", params.model);
+    if (params.status) q.set("status", params.status);
+    if (params.limit != null) q.set("limit", String(params.limit));
+    if (params.offset != null) q.set("offset", String(params.offset));
+    const qs = q.toString();
+    return await api.get<AuditEventsResponse>(
+      "/api/audit/events" + (qs ? "?" + qs : ""),
+    );
+  } catch {
+    return null;
+  }
+}
+
 // ── Manager: 改部门 quota ───────────────────────────
 
 export async function updateDepartmentQuota(

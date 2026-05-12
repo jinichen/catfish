@@ -239,18 +239,23 @@ def read_events(
     user_filter: str | None = None,
     model_filter: str | None = None,
     status_filter: str | None = None,
+    dept_filter: str | None = None,  # BL-ADMIN-AUDIT (5/12) 按部门过滤
     limit: int = 1000,
+    offset: int = 0,  # BL-ADMIN-AUDIT (5/12) 分页用
 ) -> list[dict]:
     """读 audit log, 给上层 (admin 后台 / 客户 IT 自审 / billing) 用.
 
     五一 sprint 5/2 收尾: PG 配了从 PG 读 (索引快 100x), 否则 jsonl 老路径.
+    BL-ADMIN-AUDIT (5/12 鸿波): 加 dept_filter + offset 给 /admin/quota/events 分页.
 
     Args:
         since_unix: 只要 ts >= 这个 unix 秒的事件. None = 所有
         user_filter: 只看某个 user id 的事件. None = 所有
         model_filter: 只看某个 model 的事件
         status_filter: 只看 status='ok' 或 'error' 等. None = 所有
+        dept_filter: 只看某个 department 的事件
         limit: 最多返回多少条 (从最新算起).
+        offset: 跳过前 N 条 (分页用)
 
     Returns:
         事件 dict 列表, 按时间倒序 (最新在前).
@@ -263,7 +268,9 @@ def read_events(
             user_filter=user_filter,
             model_filter=model_filter,
             status_filter=status_filter,
+            dept_filter=dept_filter,
             limit=limit,
+            offset=offset,
         )
 
     path = audit_path()
@@ -278,6 +285,7 @@ def read_events(
         return []
 
     out: list[dict] = []
+    skipped = 0
     for line in reversed(lines):
         if len(out) >= limit:
             break
@@ -296,6 +304,11 @@ def read_events(
             continue
         if status_filter and event.get("status") != status_filter:
             continue
+        if dept_filter and event.get("department") != dept_filter:
+            continue
+        if skipped < offset:
+            skipped += 1
+            continue
         out.append(event)
     return out
 
@@ -306,7 +319,9 @@ def _read_events_pg(
     user_filter: str | None,
     model_filter: str | None,
     status_filter: str | None,
+    dept_filter: str | None = None,
     limit: int,
+    offset: int = 0,
 ) -> list[dict]:
     """PG 路径 — 走索引, where + order by + limit 都在 DB 侧, 比 jsonl 快很多."""
     where = []
@@ -323,14 +338,19 @@ def _read_events_pg(
     if status_filter:
         where.append("status = %s")
         params.append(status_filter)
+    if dept_filter:
+        where.append("department = %s")
+        params.append(dept_filter)
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
     sql = (
-        f"SELECT ts_ms, user_email, model, tokens_in, tokens_out, tokens_total, "
-        f"       latency_ms, ttft_ms, status, error_msg, security_concerns, extra "
+        f"SELECT ts_ms, user_email, department, model, tokens_in, tokens_out, "
+        f"       tokens_total, latency_ms, ttft_ms, status, error_msg, "
+        f"       security_concerns, extra "
         f"FROM gateway_audit {where_sql} "
-        f"ORDER BY ts_ms DESC LIMIT %s"
+        f"ORDER BY ts_ms DESC LIMIT %s OFFSET %s"
     )
     params.append(limit)
+    params.append(max(0, int(offset)))
 
     try:
         with _pg_conn() as conn:
@@ -343,12 +363,13 @@ def _read_events_pg(
 
     out = []
     for row in rows:
-        ts_ms, user, model, tin, tout, ttot, lat, ttft, status, err, concerns, extra = row
+        ts_ms, user, dept, model, tin, tout, ttot, lat, ttft, status, err, concerns, extra = row
         # 还原成 jsonl 老格式 (跟 _persist_record_jsonl 写的一致), caller 不知道 backend 切了
         ev: dict = {
             "ts": int(ts_ms / 1000),
             "type": "llm_request",
             "user": user,
+            "department": dept or "",  # BL-ADMIN-AUDIT (5/12) 暴露 department 给 admin UI
             "model": model,
             "prompt_tokens": tin,
             "completion_tokens": tout,
@@ -376,3 +397,77 @@ def _read_events_pg(
                 pass
         out.append(ev)
     return out
+
+
+def count_events(
+    *,
+    since_unix: int | None = None,
+    user_filter: str | None = None,
+    model_filter: str | None = None,
+    status_filter: str | None = None,
+    dept_filter: str | None = None,
+) -> int:
+    """BL-ADMIN-AUDIT (5/12) — 跟 read_events 同筛选, 返总数 (分页 total).
+
+    PG 走 SELECT COUNT(*) (走索引快); jsonl 路径退化为读全表数.
+    永远不抛, 失败返 0.
+    """
+    if _use_pg():
+        where = []
+        params: list = []
+        if since_unix is not None:
+            where.append("ts_ms >= %s")
+            params.append(since_unix * 1000)
+        if user_filter:
+            where.append("user_email = %s")
+            params.append(user_filter)
+        if model_filter:
+            where.append("model = %s")
+            params.append(model_filter)
+        if status_filter:
+            where.append("status = %s")
+            params.append(status_filter)
+        if dept_filter:
+            where.append("department = %s")
+            params.append(dept_filter)
+        where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+        try:
+            with _pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(f"SELECT COUNT(*) FROM gateway_audit {where_sql}", params)
+                    row = cur.fetchone()
+                    return int(row[0]) if row else 0
+        except Exception as e:
+            logger.warning("metrics: PG count_events 失败: %s", e)
+            return 0
+
+    # jsonl fallback
+    path = audit_path()
+    if not path.is_file():
+        return 0
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            count = 0
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if since_unix is not None and event.get("ts", 0) < since_unix:
+                    continue
+                if user_filter and event.get("user") != user_filter:
+                    continue
+                if model_filter and event.get("model") != model_filter:
+                    continue
+                if status_filter and event.get("status") != status_filter:
+                    continue
+                if dept_filter and event.get("department") != dept_filter:
+                    continue
+                count += 1
+        return count
+    except OSError as e:
+        logger.warning("metrics: count jsonl 失败: %s", e)
+        return 0

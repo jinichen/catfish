@@ -664,6 +664,79 @@ async def api_audit_global(
     }
 
 
+@app.get("/api/audit/events")
+async def api_audit_events(
+    user: User = Depends(get_current_user),
+    since_ms: int | None = None,
+    dept: str | None = None,
+    user_filter: str | None = None,
+    model: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """BL-ADMIN-AUDIT (5/12 鸿波): 全员 audit 逐条历史 + 4 维度筛选 + 分页.
+
+    给 catfish-web /admin/quota/events 页用. RBAC 严格 admin only (sysadmin 走
+    User.is_admin() 通过).
+
+    Args:
+        since_ms: 只看 ts_ms >= 这个的 (默认 24h 前)
+        dept: department 过滤
+        user_filter: user_email 过滤 (param 名 user_filter 避开跟 user dependency 撞)
+        model: model 过滤
+        status: 'ok' / 'error' / 'interrupted_resumed' (BL-HERMES013-4)
+        limit: 1-200, 默认 50
+        offset: ≥0, 默认 0
+
+    Returns:
+        {events: [...], total: int, limit, offset, since_ms, viewer_role}
+    """
+    from . import metrics as _metrics
+    _require_admin(user)
+
+    # since_ms 默认 24h 前
+    if since_ms is None:
+        since_ms = int(time.time() * 1000) - 86_400_000
+    since_unix = since_ms // 1000
+
+    # 防御 limit / offset 边界
+    limit = max(1, min(200, int(limit)))
+    offset = max(0, int(offset))
+
+    events = _metrics.read_events(
+        since_unix=since_unix,
+        user_filter=user_filter or None,
+        model_filter=model or None,
+        status_filter=status or None,
+        dept_filter=dept or None,
+        limit=limit,
+        offset=offset,
+    )
+    total = _metrics.count_events(
+        since_unix=since_unix,
+        user_filter=user_filter or None,
+        model_filter=model or None,
+        status_filter=status or None,
+        dept_filter=dept or None,
+    )
+
+    return {
+        "events": events,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "since_ms": since_ms,
+        "filters": {
+            "dept": dept or "",
+            "user": user_filter or "",
+            "model": model or "",
+            "status": status or "",
+        },
+        "viewer_role": user.role,
+    }
+
+
 # /api/dev/users — 列出 dev 测试账号 (Companion 切换器用)
 #
 # 五一 sprint 5/2. 仅 dev 模式 (CATFISH_ENV != prod) 启用. 生产环境 404.
