@@ -40,9 +40,16 @@ export default function ChatTab() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
 
+  /** BL-COMPANION-UX2 (5/12): streaming 中点列表切换 → 先 abort 当前 stream
+   * 再 loadSession. 老行为是 sidebar 禁用切换, 体验差 (鸿波: "锁死").
+   */
   const handleSelect = useCallback(
     async (id: string) => {
       if (id === persistedSessionId) return; // 点的就是当前
+      if (isStreaming) {
+        cancel();                             // abort 当前 stream
+        await new Promise((r) => setTimeout(r, 200));  // 等 finally cleanup
+      }
       try {
         const detail = await getSession(id);
         loadSession(detail);
@@ -52,14 +59,19 @@ export default function ChatTab() {
         setLoadError(`切换失败: ${e}`);
       }
     },
-    [persistedSessionId, loadSession],
+    [persistedSessionId, loadSession, isStreaming, cancel],
   );
 
-  const handleNew = useCallback(() => {
+  /** BL-COMPANION-UX2 (5/12): streaming 中也能点"+ 新对话" → 先 abort 再 reset. */
+  const handleNew = useCallback(async () => {
     if (messages.length === 0 && !persistedSessionId) return;
+    if (isStreaming) {
+      cancel();
+      await new Promise((r) => setTimeout(r, 200));
+    }
     reset();
     setLoadError(null);
-  }, [messages.length, persistedSessionId, reset]);
+  }, [messages.length, persistedSessionId, reset, isStreaming, cancel]);
 
   /** 包一层 send: 完成后 bump refreshKey 让 sidebar 看到新会话 / 新 message_count */
   const handleSend = useCallback(

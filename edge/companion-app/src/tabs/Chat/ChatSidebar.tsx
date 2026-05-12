@@ -31,7 +31,8 @@ interface Props {
   onNew: () => void;
   /** 父组件可以在新发消息后主动 bump 这个值, 强制重拉列表 */
   refreshKey?: number;
-  /** 流式中禁用切换 / 新建, 防异步条件竞争 */
+  /** BL-COMPANION-UX2 (5/12): 不再禁用切换. 仅用于 UI 提示 ("切换会停止当前").
+   * 切换 / 新建逻辑由 ChatTab 处理 (cancel + 等 cleanup + loadSession). */
   busy?: boolean;
 }
 
@@ -197,8 +198,9 @@ export default function ChatSidebar({
               key={s.id}
               session={s}
               active={s.id === activeId}
-              disabled={busy && s.id !== activeId}
-              onClick={() => !busy && onSelect(s.id)}
+              disabled={false /* BL-COMPANION-UX2: streaming 中也允许点 */}
+              onClick={() => onSelect(s.id)}
+              streaming={busy}
             />
           ))}
       </div>
@@ -213,9 +215,21 @@ export default function ChatSidebar({
           gap: 6,
         }}
       >
+        {busy && (
+          <div
+            style={{
+              fontSize: 11,
+              color: "var(--catfish-text-muted)",
+              padding: "2px 6px",
+              textAlign: "center",
+            }}
+            title="切换会话 / 新建对话会自动停止当前 LLM 流"
+          >
+            ⏳ 流式中, 切换会停止当前
+          </div>
+        )}
         <button
-          onClick={() => !busy && onNew()}
-          disabled={busy}
+          onClick={() => onNew()}
           style={{
             width: "100%",
             padding: "8px 12px",
@@ -223,11 +237,11 @@ export default function ChatSidebar({
             borderRadius: "var(--radius-sm)",
             background: "var(--catfish-bg)",
             color: "var(--catfish-text)",
-            cursor: busy ? "not-allowed" : "pointer",
+            cursor: "pointer",
             fontSize: 13,
             fontWeight: 500,
-            opacity: busy ? 0.5 : 1,
           }}
+          title={busy ? "停止当前流 + 开新对话" : "新对话"}
         >
           + 新对话
         </button>
@@ -257,20 +271,27 @@ function SessionRow({
   active,
   disabled,
   onClick,
+  streaming = false,  // BL-COMPANION-UX2 (5/12): 提示用, 不再禁用
 }: {
   session: SessionMeta;
   active: boolean;
   disabled: boolean;
   onClick: () => void;
+  streaming?: boolean;
 }) {
   const title = session.title?.trim() || `(${session.id.slice(0, 17)})`;
   const subtitle = formatRelativeTime(session.startedAt);
 
+  // streaming hint: 鼠标悬停时提示 "点会停止当前流"
+  const titleHint = streaming && !active
+    ? "切换会话 — 自动停止当前 LLM 流"
+    : title;
   return (
     <div
       role="button"
       tabIndex={disabled ? -1 : 0}
       onClick={disabled ? undefined : onClick}
+      title={titleHint}
       onKeyDown={(e) => {
         if (disabled) return;
         if (e.key === "Enter" || e.key === " ") {

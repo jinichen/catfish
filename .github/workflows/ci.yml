@@ -1,0 +1,127 @@
+name: CI
+
+# 何时跑:
+#   - main / develop push
+#   - 所有 PR (合并前必过)
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  workflow_dispatch:  # 手动触发
+
+# 同一 PR 多次 push 时取消老 run, 省 CI 时间
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ════════════════════════════════════════════════════════════
+  # 1. tool-bridge Python tests (453 tests)
+  # ════════════════════════════════════════════════════════════
+  tool-bridge:
+    name: tool-bridge tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install pytest + deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-asyncio
+
+      - name: Run tool-bridge tests
+        working-directory: edge/tool-bridge
+        run: |
+          PYTHONPATH=src python -m pytest tests/ -v \
+            --ignore=tests/test_e2e_sandbox.py \
+            --ignore=tests/test_e2e_agent_workflow.py \
+            -p no:cacheprovider
+
+  # ════════════════════════════════════════════════════════════
+  # 2. gateway Python tests (799 tests)
+  # ════════════════════════════════════════════════════════════
+  gateway:
+    name: gateway tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-asyncio python-dotenv litellm fastapi httpx 'pydantic>=2'
+
+      - name: Run gateway tests
+        working-directory: central/llm-gateway
+        env:
+          # 测试隔离: CI 没真 PG / OIDC
+          CATFISH_DB_URL: ""
+        run: |
+          PYTHONPATH=src python -m pytest tests/ -v \
+            --ignore=tests/test_a2a_jwt.py \
+            -p no:cacheprovider
+
+  # ════════════════════════════════════════════════════════════
+  # 3. Companion 前端 — tsc strict + vite build
+  # ════════════════════════════════════════════════════════════
+  companion:
+    name: companion-app tsc + build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: edge/companion-app/package-lock.json
+
+      - name: Install deps
+        working-directory: edge/companion-app
+        run: npm ci --no-audit --no-fund
+
+      - name: TSC strict check (no emit)
+        working-directory: edge/companion-app
+        run: npx tsc --noEmit -p tsconfig.json
+
+      - name: Vite build (no tauri — 不要 Rust 工具链)
+        working-directory: edge/companion-app
+        run: npx vite build
+
+  # ════════════════════════════════════════════════════════════
+  # 4. 全套总结 — 所有 job 都过才算 CI 绿
+  # ════════════════════════════════════════════════════════════
+  ci-pass:
+    name: CI pass
+    runs-on: ubuntu-latest
+    needs: [tool-bridge, gateway, companion]
+    if: always()
+    steps:
+      - name: Check all jobs passed
+        run: |
+          if [ "${{ needs.tool-bridge.result }}" != "success" ] || \
+             [ "${{ needs.gateway.result }}" != "success" ] || \
+             [ "${{ needs.companion.result }}" != "success" ]; then
+            echo "❌ 至少一个 job 失败"
+            echo "  tool-bridge: ${{ needs.tool-bridge.result }}"
+            echo "  gateway:     ${{ needs.gateway.result }}"
+            echo "  companion:   ${{ needs.companion.result }}"
+            exit 1
+          fi
+          echo "✅ 全套 CI 绿"
