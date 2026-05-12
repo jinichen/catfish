@@ -42,14 +42,29 @@ session, 再看 content 知道每个讲啥.
 from __future__ import annotations
 
 import logging
+import os
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger("catfish.gateway.employee_journal")
 
-#: journal 文件路径
-JOURNAL_PATH = Path.home() / ".catfish" / "employee_journal.md"
+
+def _default_journal_path() -> Path:
+    """优先 CATFISH_HOME/employee_journal.md, fallback ~/.catfish/employee_journal.md.
+
+    BL-FED2.5 (5/12) — 单机多 agent demo 必须分用户存 journal. 老版直接用
+    Path.home() 在多 agent 共享 mac 时所有 gateway 写到同一个文件. 改成读
+    CATFISH_HOME (gateway 起来时设的) 让 alice/bob/charlie 各自独立 journal.
+    """
+    catfish_home = os.environ.get("CATFISH_HOME", "").strip()
+    if catfish_home:
+        return Path(catfish_home).expanduser() / "employee_journal.md"
+    return Path.home() / ".catfish" / "employee_journal.md"
+
+
+#: journal 文件路径 (导入时算一次的默认值, 实际运行 path 走 journal_path() 函数动态算)
+JOURNAL_PATH = _default_journal_path()
 
 #: 文件落盘最大字节数 (journal 历史归档, 不进 prompt 也保留)
 MAX_FILE_BYTES = 50_000
@@ -66,8 +81,11 @@ MAX_BYTES = MAX_FILE_BYTES
 
 
 def journal_path() -> Path:
-    """允许测试 monkeypatch."""
-    return JOURNAL_PATH
+    """journal 文件实际路径 — **每次都重算**, 跟 CATFISH_HOME 联动.
+
+    允许测试 monkeypatch (test_a2a_journal_hook.py 走这个钩子).
+    """
+    return _default_journal_path()
 
 
 def read_journal(*, for_injection: bool = True) -> str:
