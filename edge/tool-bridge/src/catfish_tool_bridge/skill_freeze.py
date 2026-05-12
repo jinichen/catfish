@@ -122,9 +122,12 @@ logger = logging.getLogger("catfish.skill.{name_slug}")
 def _call(tool_name: str, args: dict[str, Any], retries: int = 2, retry_delay: float = 2.5) -> dict[str, Any]:
     """走 catfish dispatch 调原生 tool. 返 result dict.
 
-    BL-MM9-FREEZE cold-start fix (5/12): 第一次跑 skill 时 chrome / 上游 LLM
-    都可能 cold, 第一步 goto 撞冷启动失败. _call 自带 retry — 失败时 sleep
-    后重试, 把 cold start 期间撑过去.
+    BL-MM9-FREEZE-v2 schema 兼容 (5/12 鸿波撞坑发现): browser_* 工具用老 schema
+    {{"type": "ok/error", "error": "..."}}, 没 `ok` 字段. freeze/recognize 等用
+    新 schema {{"ok": true/false, ...}}. _call 同时认两种, 不让 schema 不匹配让
+    script.py 把成功当失败 raise.
+
+    cold-start fix: 失败时 sleep 2.5s 重试最多 2 次, 撑过 chrome / 模型 cold.
     """
     from catfish_tool_bridge.catfish_tools import dispatch_native  # noqa: PLC0415
     last_result: dict[str, Any] = {{"ok": False, "error": "not attempted"}}
@@ -133,12 +136,22 @@ def _call(tool_name: str, args: dict[str, Any], retries: int = 2, retry_delay: f
             r = dispatch_native(tool_name, args)
             if not isinstance(r, dict):
                 return {{"ok": True, "raw": r}}
-            # 成功 → 立即返
-            if r.get("ok", True):
-                return r
-            last_result = r
+            # schema 兼容: 失败判定优先级:
+            #  1) r["type"] == "error" → 失败 (browser_* 老 schema)
+            #  2) r["ok"] is False → 失败 (新 schema)
+            #  3) 否则 → 成功
+            is_fail = (r.get("type") == "error") or (r.get("ok") is False)
+            if not is_fail:
+                # 成功 → 统一加 ok=True 给上游 script.py 用
+                out = dict(r)
+                out.setdefault("ok", True)
+                return out
+            last_result = dict(r)
+            last_result.setdefault("ok", False)
+            if not last_result.get("error"):
+                last_result["error"] = f"{{tool_name}} 失败 (无 error 详情)"
         except Exception as e:
-            last_result = {{"ok": False, "error": repr(e)}}
+            last_result = {{"ok": False, "error": f"{{tool_name}} 抛异常: {{type(e).__name__}}: {{e!r}}"}}
         if attempt < retries:
             logger.info("_call retry %d/%d for %s: %s", attempt + 1, retries, tool_name, last_result.get("error", "?"))
             _time.sleep(retry_delay)
