@@ -311,3 +311,89 @@ def test_snapshot_marked_as_skip():
     r = skill_freeze.freeze_skill({"name": "skip-test", "run_install": False})
     src = Path(r["files"][0]).read_text(encoding="utf-8")
     assert "skip (LLM-only): catfish_browser_snapshot" in src
+
+
+# ─── v2.1: chrome 状态预检 (5/12 鸿波 13:38 撞坑修) ────────────────────
+
+
+def test_first_goto_has_state_check():
+    """第一步 goto 模板化时插入 actual_url 校验, 防 chrome 已登录撞 fill 失败."""
+    from catfish_tool_bridge import skill_freeze
+    _seed_eis_trace()
+    skill_freeze.teach_end({})
+    r = skill_freeze.freeze_skill({"name": "state-check", "run_install": False})
+    src = Path(r["files"][0]).read_text(encoding="utf-8")
+    # 第一步 goto 必须含 actual_url 校验
+    assert "_actual_url" in src
+    assert "goto_state_check" in src
+    # 错误信息引导员工 (重启 chrome)
+    assert "chrome 状态不符" in src
+
+
+def test_only_first_goto_has_state_check():
+    """只有第一步 goto 加状态预检, 后续 goto (如果有) 不加, 避免误触."""
+    from catfish_tool_bridge import skill_freeze, trace_recorder
+    skill_freeze.teach_start({"name": "multi-goto"})
+    trace_recorder.record("catfish_browser_goto", {"url": "http://a"}, {"ok": True, "actual_url": "http://a"}, True, 100)
+    trace_recorder.record("catfish_browser_click", {"selector": "#btn"}, {"ok": True}, True, 100)
+    trace_recorder.record("catfish_browser_goto", {"url": "http://b"}, {"ok": True}, True, 100)
+    skill_freeze.teach_end({})
+    r = skill_freeze.freeze_skill({"name": "multi-goto", "run_install": False})
+    src = Path(r["files"][0]).read_text(encoding="utf-8")
+    # 只有 1 个状态预检 (第一步)
+    assert src.count("goto_state_check") == 1
+
+
+# ─── v2.2: 嵌套调 skill (eis-checkin 直接调 eis-login 不重教 7 步) ─────
+
+
+def test_nested_skill_call_emitted():
+    """trace 含 catfish_run_skill → script.py 模板化成嵌套 _call."""
+    from catfish_tool_bridge import skill_freeze, trace_recorder
+    skill_freeze.teach_start({"name": "nested"})
+    # 教学: 第一步调凝固好的 eis-login skill, 第二步点打卡按钮
+    trace_recorder.record(
+        "catfish_run_skill",
+        {"skill_path": "department/eis-login", "params": {"username": "chenhb"}},
+        {"ok": True, "captcha_attempts": 1, "duration_ms": 12000},
+        True, 12000,
+    )
+    trace_recorder.record(
+        "catfish_browser_click",
+        {"selector": "div.checkin-btn"},
+        {"ok": True}, True, 200,
+    )
+    skill_freeze.teach_end({})
+    r = skill_freeze.freeze_skill({
+        "name": "eis-checkin-nested",
+        "namespace": "department",
+        "description": "嵌套调 eis-login + 点打卡",
+        "run_install": False,
+    })
+    assert r["ok"] is True
+    src = Path(r["files"][0]).read_text(encoding="utf-8")
+    # 必须有 catfish_run_skill 嵌套调用
+    assert '_call("catfish_run_skill"' in src
+    assert "department/eis-login" in src
+    # last_step 标记
+    assert "run_skill:department/eis-login" in src
+    # syntax 必过
+    import ast
+    ast.parse(src)
+
+
+def test_nested_skill_failure_propagates():
+    """嵌套 skill 失败时, 外层 skill 也按铁律 raise _SkillStepFailure 报错."""
+    from catfish_tool_bridge import skill_freeze, trace_recorder
+    skill_freeze.teach_start({"name": "nested-fail"})
+    trace_recorder.record(
+        "catfish_run_skill",
+        {"skill_path": "department/eis-login", "params": {}},
+        {"ok": True}, True, 100,
+    )
+    skill_freeze.teach_end({})
+    r = skill_freeze.freeze_skill({"name": "nested-fail", "run_install": False})
+    src = Path(r["files"][0]).read_text(encoding="utf-8")
+    # 模板必须 raise _SkillStepFailure (跟普通 step 一致)
+    assert 'raise _SkillStepFailure("run_skill:department/eis-login"' in src
+    assert "嵌套 skill 失败" in src

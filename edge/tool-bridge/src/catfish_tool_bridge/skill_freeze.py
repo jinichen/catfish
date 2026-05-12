@@ -269,15 +269,33 @@ def _quote_str(s: str) -> str:
     return repr(s)
 
 
-def _emit_step(step: dict, prev_captcha_result: dict | None) -> tuple[list[str], dict | None]:
+def _emit_step(
+    step: dict,
+    prev_captcha_result: dict | None,
+    is_first_goto: bool = False,
+) -> tuple[list[str], dict | None]:
     """单个 trace step 模板化成 python 行(s).
 
     Returns: (lines, new_prev_captcha_result). new_prev 用于下一 step 判断
     captcha 数据流.
+
+    v2.1 (5/12): is_first_goto=True 时第一步 goto 加 chrome 状态预检 —
+    actual_url 跟 expected url 不一致 (e.g. chrome 已登录 redirect 到 dashboard)
+    → 报清楚错误而不是继续 fill 撞 timeout.
     """
     tool = step.get("tool")
     args = step.get("args") or {}
     result = step.get("result") or {}
+
+    # v2.2 (5/12): catfish_run_skill 嵌套调用 (例: eis-checkin 内部调 eis-login)
+    if tool == "catfish_run_skill":
+        skill_path = args.get("skill_path", "")
+        skill_params = args.get("params", {})
+        return [
+            f'        last_step = "run_skill:{skill_path}"',
+            f'        _r = _call("catfish_run_skill", {{"skill_path": {_quote_str(skill_path)}, "params": {skill_params!r}}})',
+            f'        if not _r.get("ok"): raise _SkillStepFailure("run_skill:{skill_path}", _r.get("error", "嵌套 skill 失败"))',
+        ], prev_captcha_result
 
     # 跳过类: snapshot / screenshot / find_by_text / locate 是"给 LLM 看"的
     if tool in {
@@ -292,11 +310,27 @@ def _emit_step(step: dict, prev_captcha_result: dict | None) -> tuple[list[str],
     if tool == "catfish_browser_goto":
         url = args.get("url") or ""
         wait_until = args.get("wait_until") or "load"
-        return [
+        lines = [
             f'        last_step = "goto:{url}"',
             f'        _r = _call("catfish_browser_goto", {{"url": {_quote_str(url)}, "wait_until": {_quote_str(wait_until)}}})',
             f'        if not _r.get("ok"): raise _SkillStepFailure("goto", _r.get("error", "goto 失败"))',
-        ], prev_captcha_result
+        ]
+        # v2.1 chrome 状态预检 (仅第一步 goto): 检查 actual_url 跟 expected
+        # 不一致 → chrome 已登录 redirect 到 dashboard → 报清楚错误.
+        if is_first_goto:
+            lines.append(
+                f'        _actual_url = _r.get("actual_url", "") or _r.get("raw", {{}}).get("actual_url", "")'
+            )
+            lines.append(
+                f'        if _actual_url and {_quote_str(url)} not in _actual_url and not _actual_url.startswith({_quote_str(url[:25])}):'
+            )
+            lines.append(
+                f'            # 期望从 {url} 起步, 实际 redirect 到别的地方 (例 chrome 已登录跳 dashboard)'
+            )
+            lines.append(
+                f'            raise _SkillStepFailure("goto_state_check", f"chrome 状态不符: 期望从 {url} 起步, 实际在 " + _actual_url + ". 建议: 关 Catfish Chrome 重启 (干净未登录态), 或调别的 skill 处理已登录场景.")'
+            )
+        return lines, prev_captcha_result
 
     # captcha 识别 — 用 retry loop 代替单次调用
     if tool == "catfish_recognize_captcha":
@@ -613,8 +647,16 @@ def freeze_skill(args: dict[str, Any]) -> dict[str, Any]:
     fn_name = _slugify(name)
     body_lines: list[str] = []
     prev_captcha = None
+    # v2.1 (5/12): 标记第一步 goto, 加 chrome 状态预检
+    first_goto_emitted = False
     for step in trace:
-        lines, prev_captcha = _emit_step(step, prev_captcha)
+        is_first_goto = (
+            not first_goto_emitted
+            and step.get("tool") == "catfish_browser_goto"
+        )
+        if is_first_goto:
+            first_goto_emitted = True
+        lines, prev_captcha = _emit_step(step, prev_captcha, is_first_goto=is_first_goto)
         body_lines.extend(lines)
 
     # 安全检查: body 里如果出现 'refused to bake plaintext password' → 中止

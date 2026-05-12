@@ -158,17 +158,19 @@ LLM 按 SOUL.md "skill 失败不降级手工" 铁律, 应该报告员工 + 问 1
 
 ---
 
-## 例子 1: eis-checkin (上班打卡) — 完整教学剧本
+## 例子 1: eis-checkin (上班打卡) — 嵌套调 eis-login (v2.2)
 
-**目标**: 凝固一个 skill, 员工说"上班打卡" → 鲶鱼自动登 EIS → 点上班打卡按钮 → 报告"已打卡 HH:MM".
+**目标**: 凝固 `eis-checkin` skill, **复用** 已凝固的 `eis-login`, 不重教 7 步登录.
+
+**v2.2 (5/12)**: trace_recorder 把 `catfish_run_skill` 加进白名单, 教学时调凝固后的 skill 也会被录, freeze 引擎模板化成嵌套 `_call("catfish_run_skill", ...)`. 一个 skill 可以站在另一个 skill 肩膀上.
 
 ### 准备
 
 ```bash
-# Keychain 已有 eis_password (从 eis-login 教学时设的)
-security find-generic-password -a chenhb -s eis_password  # 应该输出 password 元信息
+# 1) 确认 eis-login 已凝固
+ls ~/person_task/catfish/skills/department/eis-login/  # 应该看到 script.py + SKILL.md
 
-# 重启 chrome
+# 2) 重启 chrome (干净起点)
 pkill -f "Chromium.*remote-debugging-port=9222"
 sleep 3
 ```
@@ -176,51 +178,45 @@ sleep 3
 ### 教学剧本 (按顺序逐句发给 Companion)
 
 **句 1 (开场)**:
-> 我教你 EIS 上班打卡, 名字 eis-checkin, 描述 "登录 EIS 后点上班打卡按钮"
+> 我教你 EIS 上班打卡, 名字 eis-checkin, 描述 "调 eis-login skill 登入 + 点上班打卡按钮"
 
-LLM 调 `catfish_teach_start(name='eis-checkin', description='登录 EIS 后点上班打卡按钮')` → 回 "教学开始".
+LLM 调 `catfish_teach_start(name='eis-checkin', ...)`.
 
-**句 2 (导航到 EIS)**:
-> 调 catfish_browser_goto(url="http://eis.ffcs.cn", wait_until="load")
+**句 2 (登录 — 嵌套调 eis-login skill, **不重教 7 步**)**:
+> 调 catfish_run_skill(skill_path="department/eis-login", params={"username": "chenhb"})
 
-**句 3 (填用户名)**:
-> 调 catfish_browser_fill(selector="#name", text="chenhb")
+这一行替代了原来的 7 步 (goto / fill name / fill pwd / captcha / fill captcha / click login). freeze 引擎会把它模板化成 `_call("catfish_run_skill", {...})`, eis-checkin 跑时直接复用 eis-login 凝固版 script.py.
 
-**句 4 (填密码)**:
-> 调 catfish_browser_fill(selector="#pwd", secret_ref="keychain://eis_password")
-
-**句 5 (识别验证码)**:
-> 调 catfish_recognize_captcha(selector="#captchaImg", hint="alphanumeric_4")
-
-**句 6 (填验证码)**:
-> 调 catfish_browser_fill(selector="#captcha", text="<上一步识别结果>")
-
-LLM 把验证码识别 result 的 `text` 字段填进去. freeze 引擎识别到 "这是 captcha 数据流" 自动改成 `text=captcha_text` 变量.
-
-**句 7 (点登录)**:
-> 调 catfish_browser_click(selector="div.button-login")
-
-LLM 应该报"已跳转到 dashboard". 此时 chrome 在 `http://eis.ffcs.cn/login?code=...`.
-
-**句 8 (找上班打卡按钮)**:
+**句 3 (找上班打卡按钮)**:
 > 调 catfish_browser_find_by_text(text="上班打卡", role="button")
 
-LLM 返回找到的 selector, 例如 `top_recommendation.selector = "div.checkin-btn-morning"` (实际看你 EIS dashboard 的 DOM).
+LLM 返回 selector, 例如 `top_recommendation.selector = "div.checkin-btn-morning"`.
 
-**句 9 (点上班打卡)**:
-> 调 catfish_browser_click(selector="<上一步 top_recommendation.selector>")
+**句 4 (点上班打卡)**:
+> 调 catfish_browser_click(selector="<上一步 selector>")
 
-页面应该弹"打卡成功"提示, 或者按钮文字变成"已打卡 HH:MM".
+页面应该弹"打卡成功"或按钮文字变成"已打卡 HH:MM".
 
-**句 10 (截图确认)**:
+**句 5 (截图确认)**:
 > 调 catfish_browser_screenshot(compress="auto", full_page=false)
 
-看截图 — 如果按钮显示"已打卡 08:20"或类似 → 教学成功.
+看截图. 这步是 LLM-only, freeze 时 skip 不进 script.py.
 
-**句 11 (收尾)**:
-> 教完了, 调 catfish_teach_end. 然后 catfish_freeze_skill(name='eis-checkin', namespace='department', description='登录 EIS 后点上班打卡按钮, 返回打卡时间')
+**句 6 (收尾)**:
+> 教完了, 调 catfish_teach_end. 然后 catfish_freeze_skill(name='eis-checkin', namespace='department', description='登录 EIS 后点上班打卡按钮')
 
-LLM 调 teach_end → 报 step_count=10 (句 2-11 实际录的). 然后 freeze_skill → 落地. ⚠ 注意 step 10 screenshot 是为"确认成功"录的, 凝固时会被标 "skip (LLM-only)" — 不进 script.py. 实际 script.py 只 8 步可执行.
+LLM 两 tool call. step_count=5, 实际 script.py 只 3 步可执行 (run_skill + find_by_text 跳过 + click).
+
+### v2.1 chrome 状态预检 (5/12 加, 自动)
+
+freeze 模板第一步 goto 会自动加 actual_url 校验. 如果你跑 skill 时 chrome 已经登录了, redirect 到 dashboard, 期望从登录页起步, skill 报清楚错误而不是继续 fill #name 撞 timeout:
+
+```
+chrome 状态不符: 期望从 http://eis.ffcs.cn 起步, 实际在 http://eis.ffcs.cn/login?code=...
+建议: 关 Catfish Chrome 重启 (干净未登录态), 或调别的 skill 处理已登录场景.
+```
+
+当然在 v2.2 嵌套场景下, eis-checkin 第一步是 `catfish_run_skill('department/eis-login')` 而不是 `catfish_browser_goto`, 状态预检不触发 — eis-login 内部第一步是 goto, 预检在 eis-login 那一层做.
 
 ### 验证
 
@@ -244,14 +240,26 @@ LLM 应该:
 
 ## 例子 2: eis-checkout (下班打卡) — 跟上班几乎一样, 改 1 行
 
-跟 `eis-checkin` 完全相同流程, **只改 1 步**:
+跟 `eis-checkin` 完全相同流程 (5 步, v2.2 嵌套调 eis-login), **只改句 3**:
 
-句 8 改成:
 > 调 catfish_browser_find_by_text(text="下班打卡", role="button")
 
 其它都一样. 凝固后 LLM 看到 "下班打卡" / "下班" / "今天下班了" 等关键词触发.
 
-⚠ 注意: EIS 下班打卡按钮通常上班打卡之后才激活 (你截图里"下班打卡 下班" 是激活状态). 教学时确保已经打过上班卡, 否则按钮可能 disabled, click 失败.
+⚠ 注意: EIS 下班打卡按钮通常上班打卡之后才激活. 教学时确保已经打过上班卡, 否则按钮可能 disabled, click 失败.
+
+## 例子 3 (高级): 复用 eis-login 教其它 EIS 操作
+
+任何"先登录 EIS 再做 X"的流程都可以套这个模板:
+
+- `eis-list-todo-details` — 进每条待办看详情
+- `eis-submit-leave` — 提请假
+- `eis-list-projects` — 列我负责的项目
+
+**统一第一句**:
+> 调 catfish_run_skill(skill_path="department/eis-login", params={"username": "chenhb"})
+
+后续句根据具体业务. 教 X 个 EIS 操作 = X 个独立 skill, 共享 eis-login 凝固版.
 
 ---
 
@@ -303,3 +311,4 @@ UI 物理边界 = 员工不需要记 5 步 SOP, LLM 不需要靠 SOUL.md 软纪�
 更新历史:
 
 - **2026-05-12 v1**: 鸿波一天撞 12 次坑总结. 含 eis-checkin / eis-checkout 完整例子. (chenhongbo@ffcs.cn)
+- **2026-05-12 v1.1 (晚)**: v2.1 chrome 状态预检 + v2.2 嵌套调 skill 落地. 例子 1 改用嵌套 eis-login. 加例子 3 (高级 — 复用 eis-login 教别的 EIS 操作).

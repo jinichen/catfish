@@ -104,6 +104,10 @@ RECORDED_TOOLS = frozenset({
     "catfish_browser_find_by_text",
     "catfish_recognize_captcha",
     "catfish_browser_locate",
+    # v2.2 (5/12): 嵌套调 skill (eis-checkin 教学时直接 catfish_run_skill('eis-login'),
+    # 不重复教 7 步登录). 嵌套 depth_guard 保证 script.py 内部 dispatch 不再录,
+    # 不会循环污染.
+    "catfish_run_skill",
 })
 
 _MAX_FIELD_BYTES = 8000

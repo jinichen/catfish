@@ -157,13 +157,35 @@ def test_record_in_session_writes_with_metadata():
 
 
 def test_record_unrecorded_tool_skipped():
-    """非白名单 tool → 不录."""
+    """非白名单 tool (系统操作 / 后台 task) → 不录."""
     from catfish_tool_bridge import trace_recorder
     trace_recorder.start_session(name="x")
-    # catfish_remember 不在 RECORDED_TOOLS
+    # 系统操作类工具都不在 RECORDED_TOOLS:
     trace_recorder.record("catfish_remember", {"fact": "a"}, {"ok": True}, True, 100)
-    trace_recorder.record("catfish_run_skill", {"skill_path": "x"}, {"ok": True}, True, 100)
+    trace_recorder.record("catfish_user_profile_get", {}, {"ok": True}, True, 100)
+    trace_recorder.record("catfish_task_status", {"task_id": "x"}, {"ok": True}, True, 100)
+    trace_recorder.record("execute_code", {"code": "1+1"}, {"ok": True}, True, 100)
+    # v2.2 (5/12): catfish_run_skill 改成 RECORDED (嵌套调 skill 教学需要),
+    # 不在这条测试里. 见 test_record_catfish_run_skill_for_nested.
     assert not trace_recorder.TRACE_PATH.exists() or trace_recorder.TRACE_PATH.stat().st_size == 0
+
+
+def test_record_catfish_run_skill_for_nested():
+    """v2.2 (5/12): catfish_run_skill 进白名单, 支持嵌套调 skill 教学."""
+    from catfish_tool_bridge import trace_recorder
+    trace_recorder.start_session(name="nested")
+    trace_recorder.record(
+        "catfish_run_skill",
+        {"skill_path": "department/eis-login", "params": {"username": "chenhb"}},
+        {"ok": True, "captcha_attempts": 1},
+        True, 5000,
+    )
+    assert trace_recorder.TRACE_PATH.exists()
+    import json
+    line = trace_recorder.TRACE_PATH.read_text(encoding="utf-8").strip()
+    entry = json.loads(line)
+    assert entry["tool"] == "catfish_run_skill"
+    assert entry["args"]["skill_path"] == "department/eis-login"
 
 
 def test_seq_increments_monotonically():
