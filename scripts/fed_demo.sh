@@ -138,19 +138,36 @@ tags:
 YAML
 
   # bob ALLOW.md 必须放行 expert_consult:资质审核 这个新 purpose, 否则 a2a 会 denied
-  if ! grep -q 'expert_consult' "${BOB_HOME}/ALLOW.md" 2>/dev/null; then
-    cat >> "${BOB_HOME}/ALLOW.md" <<'EOF'
+  # ★ ALLOW.md 解析规则: 一个 ## section 只能挂一个 allow_purpose: 第二个会覆盖
+  #   所以每个 purpose 要起独立的 ## section.
+  # ★ keyword 匹配走 jieba token 子集 — "资质审核" 作 keyword tokens={资质, 审核}
+  #   能匹配 question "资质审核怎么搞? 客户周三要交材料" (tokens 包含资质+审核).
+  # 幂等重写: 先删旧 BL-FED2.3 段 (如果有), 再 append fresh, 避免上次错版本残留.
+  python3 - "${BOB_HOME}/ALLOW.md" <<'PYEOF'
+import re, sys
+p = sys.argv[1]
+with open(p, encoding="utf-8") as f:
+    t = f.read()
+# 删 BL-FED2.3 开头到下个 ## 或 EOF 之间的所有内容 (含本身)
+t = re.sub(r'\n## BL-FED2\.3 .*?(?=\n## |\Z)', '', t, flags=re.S)
+with open(p, "w", encoding="utf-8") as f:
+    f.write(t)
+PYEOF
 
-## BL-FED2.3 跨员工路由 (5/12) — 自动放行 expert_consult: 类 purpose
+  cat >> "${BOB_HOME}/ALLOW.md" <<'EOF'
+
+## BL-FED2.3 跨员工路由 — 资质审核
 allow_purpose: expert_consult:资质审核
-- 资质审核流程
-- 资质材料准备
+- 资质审核
+- 资质材料
 - 资质年审
+
+## BL-FED2.3 跨员工路由 — 外勤报销
 allow_purpose: expert_consult:外勤报销
+- 外勤报销
 - 报销标准
 - 报销流程
 EOF
-  fi
 }
 
 ensure_charlie() {
@@ -164,10 +181,10 @@ ensure_charlie() {
 - 合同审查
 - 合规咨询
 
-## BL-FED2.3 跨员工路由放行
+## BL-FED2.3 跨员工路由 — 合同审查
 allow_purpose: expert_consult:合同审查
-- 合同条款评估
-- 合同审查流程
+- 合同审查
+- 合同条款
 - 合规要点
 
 ## 显式拒绝
