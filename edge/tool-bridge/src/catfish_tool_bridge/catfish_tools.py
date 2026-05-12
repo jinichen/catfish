@@ -3040,7 +3040,15 @@ _FIND_BY_TEXT_JS = r"""
     }
 
     // 返 [text, match_type] — 哪个属性匹配的, 优先级 innerText > value > aria-label > placeholder > title > alt
+    //
+    // BL-FIX44-fix (5/12): 鸿波 EIS 实测 — 登录按钮真实文字是 '登 录' (中间空格),
+    // text='登录' 子串匹配失败. 改 normalize whitespace 比较 — 两侧 strip + 内部
+    // \s+ 折成空 (中文场景两字之间空格通常无意义), 再 substring 比.
+    function _norm(s) {
+        return (s || '').replace(/\s+/g, '').toLowerCase();
+    }
     function matchedText(el, wanted, exact) {
+        const wantedNorm = _norm(wanted);
         const tries = [
             ['innerText', (el.innerText || '').trim()],
             ['value', (el.value || el.getAttribute('value') || '').trim()],
@@ -3051,8 +3059,12 @@ _FIND_BY_TEXT_JS = r"""
         ];
         for (const [mt, t] of tries) {
             if (!t) continue;
-            const m = exact ? (t === wanted) : t.includes(wanted);
-            if (m) return [t, mt];
+            // 先试原始匹配 (保兼容); 没中再 norm-whitespace 匹配 (修 '登 录' 类按钮)
+            const m1 = exact ? (t === wanted) : t.includes(wanted);
+            if (m1) return [t, mt];
+            const tNorm = _norm(t);
+            const m2 = exact ? (tNorm === wantedNorm) : tNorm.includes(wantedNorm);
+            if (m2) return [t, mt];
         }
         return [null, null];
     }
