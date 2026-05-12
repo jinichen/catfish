@@ -142,9 +142,13 @@ export interface AuditEventsParams {
   offset?: number;
 }
 
+export type AuditEventsResult =
+  | { ok: true; data: AuditEventsResponse }
+  | { ok: false; error: string };
+
 export async function fetchAuditEvents(
   params: AuditEventsParams = {},
-): Promise<AuditEventsResponse | null> {
+): Promise<AuditEventsResult> {
   try {
     const q = new URLSearchParams();
     if (params.since_ms != null) q.set("since_ms", String(params.since_ms));
@@ -155,11 +159,14 @@ export async function fetchAuditEvents(
     if (params.limit != null) q.set("limit", String(params.limit));
     if (params.offset != null) q.set("offset", String(params.offset));
     const qs = q.toString();
-    return await api.get<AuditEventsResponse>(
+    const data = await api.get<AuditEventsResponse>(
       "/api/audit/events" + (qs ? "?" + qs : ""),
     );
-  } catch {
-    return null;
+    return { ok: true, data };
+  } catch (e: any) {
+    // 不再静默吞 — 让 UI 能显示"endpoint 不存在 / gateway 没重启"等真原因
+    const msg = e?.message ?? String(e);
+    return { ok: false, error: msg };
   }
 }
 

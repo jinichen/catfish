@@ -232,6 +232,7 @@ function AdminBilling() {
 function AdminQuotaEvents() {
   const PAGE_SIZE = 50;
   const [data, setData] = useState<AuditEventsResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   // 4 维筛选 + 时间窗口
   const [hoursBack, setHoursBack] = useState(24);
@@ -243,6 +244,7 @@ function AdminQuotaEvents() {
 
   const load = () => {
     setLoading(true);
+    setError(null);
     const since_ms = Date.now() - hoursBack * 3600 * 1000;
     fetchAuditEvents({
       since_ms,
@@ -253,7 +255,14 @@ function AdminQuotaEvents() {
       limit: PAGE_SIZE,
       offset: page * PAGE_SIZE,
     })
-      .then((d) => setData(d))
+      .then((r) => {
+        if (r.ok) {
+          setData(r.data);
+        } else {
+          setData(null);
+          setError(r.error);
+        }
+      })
       .finally(() => setLoading(false));
   };
 
@@ -371,13 +380,38 @@ function AdminQuotaEvents() {
         </div>
 
         {/* 结果 */}
-        {!data && <div style={{ color: "var(--text-muted)" }}>加载中…</div>}
-        {data && data.events.length === 0 && (
+        {loading && <div style={{ color: "var(--text-muted)" }}>加载中…</div>}
+        {!loading && error && (
+          <div
+            style={{
+              padding: 12,
+              background: "#fef2f2",
+              border: "1px solid #fecaca",
+              borderRadius: 6,
+              color: "#991b1b",
+              fontSize: 13,
+              lineHeight: 1.5,
+            }}
+          >
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>请求失败</div>
+            <div style={{ fontFamily: "monospace", fontSize: 12 }}>{error}</div>
+            <div style={{ marginTop: 10, color: "#7f1d1d" }}>
+              常见原因:
+              <ul style={{ paddingLeft: 20, margin: "4px 0 0 0" }}>
+                <li><b>404 not found</b>: gateway 还没重启 — 新 endpoint <code>/api/audit/events</code> 是这次加的, 跑 <code>pkill -f catfish_gateway && sleep 3</code> 然后重启 gateway</li>
+                <li><b>403 forbidden</b>: 当前 role 不是 admin / sysadmin (理论上你 sysadmin 不会撞到)</li>
+                <li><b>401 unauthorized</b>: OIDC token 过期, 退出重登</li>
+                <li><b>network error</b>: gateway 进程没起 / 端口换了</li>
+              </ul>
+            </div>
+          </div>
+        )}
+        {!loading && !error && data && data.events.length === 0 && (
           <div style={{ color: "var(--text-muted)", padding: 16, textAlign: "center" }}>
             没有匹配的事件 — 试试放宽时间范围 / 清空筛选
           </div>
         )}
-        {data && data.events.length > 0 && (
+        {!loading && !error && data && data.events.length > 0 && (
           <>
             <div style={{ color: "var(--text-muted)", fontSize: 12, marginBottom: 6 }}>
               共 {data.total.toLocaleString()} 条, 当前 {page * PAGE_SIZE + 1}–
