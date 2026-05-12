@@ -3868,7 +3868,7 @@ LLM 看到的格式 (跟 BL-I4 5/8 预留接口对接):
 
 ---
 
-## 2026-05-12（周二）— BL-MM9-FREEZE-v2 教学→凝固→复用真闭环 + BL-COMPANION-UX1/UX2 + CI 落地 + 1257 测试网
+## 2026-05-12（周二）— BL-MM9-FREEZE-v2 教学→凝固→复用真闭环 + BL-COMPANION-UX1/UX2 + CI 落地 + 1257 测试网 + BL-FED2.1 专长自动抽
 
 5/11 夜里把 Q3-WEBSKILL 视觉双子 (recognize_captcha / browser_locate) ship 了, 5/12 一整天做真活儿: **真把"员工教鲶鱼一次 → 凝固成可执行 skill → 下次秒开"闭环建出来**. 早上叠补丁撞 12 次坑, 中午鸿波拍板"不要小打小闹要彻底解决", 下午彻底重做, **13:26:39 凝固出第一个干净 eis-login skill, 复用 2.3 秒秒过 — BL-MM9 卖点从 PPT 概念变成可演示资产**. 同时修了 Companion "锁死" UX 问题, 落地 GitHub Actions CI, 补 60 个单元测试 + 修 22 个预存 fail.
 
@@ -4021,6 +4021,43 @@ cd edge/companion-app && npm run tauri:build
 | skill 跨员工共享 (Skills Hub 接 catfish_freeze_skill 发布) | P2 |
 | e2e 真 chrome 测试 (今天单元测 + mock, 没真 chrome 走一遍) | P3 |
 | Companion vitest 套件 (前端覆盖率 ≈ 0) | P3 |
+
+### BL-FED2.1 — 专长从 employee_journal 自动抽 (5/12 鸿波拍板)
+
+**真问题**: BL-FED2 黄页要落地, 卡在"专长 tag 哪里来". 5/11 设计是员工自填 (UI 圈圈), 5/12 鸿波两次拍板"专长从 journal 自动抽" — 鲶鱼每天写 journal 已经在记员工干啥, LLM 抽一遍就有 tag, 比让员工填靠谱也省力.
+
+**隐私边界 (P0 红线)**:
+- yaml `~/.catfish/expertise.yaml` **只**存员工本机, 中央 registry 不直读
+- 调 `export_for_registry()` 时**只**返 `status=confirmed` 的 tag 字符串, 不返 confidence/evidence/aliases/source — 中央拿到的是脱敏后的 tag 串列表
+- pending/rejected 的 tag 永远不出员工机器
+- 一切走 employee 自己的 OAuth token, identity-server 调本函数前必须验 sub 一致
+
+**新模块 `expertise.py`** (~530 行 + 25 个单测):
+- `extract_from_journal(text, llm_call_fn, max_tags=20)` — LLM 调用 (catfish-private-main, temp=0.1) 抽 tag, schema 校验 (tag 2-20 字符 / confidence < 0.4 跳过 / 去重 / 返非 JSON 自动 strip ```json fence``` / LLM 抛异常返空列表不传染)
+- `merge_with_existing(new, existing)` — confirmed 永不被覆盖 / rejected 不刷新 / pending 可被新一轮 pending 顶 / 大小写不敏感匹配
+- `tool_extract_expertise / tool_list_expertise / tool_confirm_expertise` — 3 个 native tool 入口
+- `export_for_registry()` — BL-FED2.2 黄页出口, 隐私阀门
+- 手写 yaml dump/load 避免拉 PyYAML 依赖 (tool-bridge 极简原则)
+
+**dispatch 接通** (catfish_tools.py):
+- `_load_employee_journal()` — 读 `~/.hermes/memories/employee_journal.md`, 不存在返空串 (extract 自然降级返 ok=False)
+- `_expertise_llm_call(prompt)` — 走 gateway loopback POST /v1/chat/completions, model=`catfish-private-main`, 复用 browser_locate 同一套 GATEWAY_URL + id_token 模式, 失败返空串 (扔回 extract 走"返非 JSON"分支)
+- 3 个 schema 进 CATFISH_NATIVE_TOOLS (含 P0 调用场景示例 + 隐私边界说明)
+
+**测试 25/25 pass** (test_expertise.py):
+- yaml 正反序列化 / 极端 (Unicode tag / 列表别名 / 空文件 / 损坏文件 / 嵌套引号)
+- extract 边界 (empty journal / markdown fence / 低 confidence / 长度越界 / 去重 / 无效 JSON / LLM 抛异常)
+- merge 规则 (confirmed 保留 / rejected 持久 / pending 被新 pending 覆盖 / 大小写不敏感)
+- 3 个 tool 入口 dry-run
+- export_for_registry 隐私边界 (只返 confirmed tag 串)
+
+**全测试**: tool-bridge 483 passed / 30 skipped / 0 failed.
+
+**接下来 (BL-FED2.x 待办)**:
+- BL-FED2.2 黄页 (identity-server `/api/employees/by-expertise?tag=资质`, 调 export_for_registry 拿员工 confirmed tag 列表)
+- BL-FED2.3 跨员工路由 (员工问"谁懂资质" → 黄页查 → A2A ask 转给老张)
+- BL-FED2.4 反馈环 (老张被问后, journal 自动追加 "今天帮小李解决资质问题" → 下次 extract 触发新 tag "资质咨询")
+- BL-FED2.5 跨员工 demo (5/14 演示前必跑通)
 
 ---
 

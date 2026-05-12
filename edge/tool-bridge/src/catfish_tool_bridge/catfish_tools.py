@@ -1541,6 +1541,98 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ── BL-FED2.1 (5/12 鸿波拍板) 专长从 employee_journal 自动抽 ──
+    {
+        "name": "catfish_extract_expertise",
+        "description": (
+            "★ 从 ~/.hermes/memories/employee_journal.md 自动抽员工专长 tag, "
+            "写到 ~/.catfish/expertise.yaml. **隐私边界**: yaml 留员工本机, "
+            "中央 registry 只看 confirmed 后的 tag 字符串, 不看 evidence/aliases.\n\n"
+            "✅ 调用场景:\n"
+            "  - 员工说 '看我都会啥' / '更新我的专长黄页' / '抽一下专长'\n"
+            "  - journal 累积 ≥1 周后第一次抽\n"
+            "  - 周复盘后想刷新黄页 (新干的活进 tag)\n\n"
+            "调完之后**必须**告诉员工有 N 个 tag 待 review, 让他用 catfish_confirm_expertise "
+            "通过/拒/改名. 没 confirm 的 tag 不会进 BL-FED2.2 黄页.\n\n"
+            "**参数**: max_tags (默认 20)"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "max_tags": {
+                    "type": "integer",
+                    "description": "最多抽多少个 tag (默认 20, 避免噪音).",
+                },
+            },
+            "required": [],
+        },
+        "emoji": "📚",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_list_expertise",
+        "description": (
+            "看 ~/.catfish/expertise.yaml 当前所有专长 tag 及 status. "
+            "可以按 status 过滤 (pending / confirmed / rejected).\n\n"
+            "**参数**: status_filter (可选)"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "status_filter": {
+                    "type": "string",
+                    "description": "过滤 status: 'pending' / 'confirmed' / 'rejected', 不填看全部.",
+                    "enum": ["pending", "confirmed", "rejected"],
+                },
+            },
+            "required": [],
+        },
+        "emoji": "📋",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_confirm_expertise",
+        "description": (
+            "员工 review 一个 expertise tag — 👍 通过 / 👎 拒 / ✏️ 改名 / 加同义词. "
+            "只有 status=confirmed 的 tag 才会进 BL-FED2.2 黄页, 是隐私边界的关键阀门.\n\n"
+            "✅ 调用场景:\n"
+            "  - 员工看完 catfish_list_expertise 后说 '资质这个对的' → status=confirmed\n"
+            "  - 员工说 '资质改成资质管理' → new_tag='资质管理'\n"
+            "  - 员工说 '加个简称叫 EIS' → add_aliases=['EIS']\n"
+            "  - 员工说 '不准确, 删了' → status=rejected\n\n"
+            "**参数**:\n"
+            "  - tag (必填): tag 名 (大小写不敏感)\n"
+            "  - status: pending / confirmed / rejected\n"
+            "  - new_tag: 改名 (2-20 字符)\n"
+            "  - add_aliases: list[str], 加同义词"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tag": {"type": "string", "description": "tag 名 (大小写不敏感)"},
+                "status": {
+                    "type": "string",
+                    "description": "新 status",
+                    "enum": ["pending", "confirmed", "rejected"],
+                },
+                "new_tag": {
+                    "type": "string",
+                    "description": "改 tag 名 (例 '资质' → '资质管理'), 2-20 字符",
+                },
+                "add_aliases": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "加同义词 (例 ['EIS', '工程信息系统'])",
+                },
+            },
+            "required": ["tag"],
+        },
+        "emoji": "✅",
+        "toolset": "catfish_native",
+        "available": True,
+    },
 ]
 
 
@@ -5572,4 +5664,82 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_freeze_rotate":
         from . import skill_freeze  # noqa: PLC0415
         return skill_freeze.freeze_rotate(args)
+    # BL-FED2.1 (5/12 鸿波拍板) 专长从 employee_journal 自动抽
+    if name == "catfish_extract_expertise":
+        from . import expertise  # noqa: PLC0415
+        return expertise.tool_extract_expertise(
+            args,
+            llm_call_fn=_expertise_llm_call,
+            journal_text=_load_employee_journal(),
+        )
+    if name == "catfish_list_expertise":
+        from . import expertise  # noqa: PLC0415
+        return expertise.tool_list_expertise(args)
+    if name == "catfish_confirm_expertise":
+        from . import expertise  # noqa: PLC0415
+        return expertise.tool_confirm_expertise(args)
     raise ValueError(f"unknown native tool: {name}")
+
+
+# ─────────────────────────────────────────────────────────────
+# BL-FED2.1 helpers — journal 加载 + LLM 调用
+# ─────────────────────────────────────────────────────────────
+
+def _load_employee_journal() -> str:
+    """读 ~/.hermes/memories/employee_journal.md.
+
+    没有则返空串 (调用方会返 ok=False + '没东西可抽').
+    """
+    journal_path = _hermes_dir() / "memories" / "employee_journal.md"
+    if not journal_path.exists():
+        return ""
+    try:
+        return journal_path.read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _expertise_llm_call(prompt: str) -> str:
+    """走 gateway loopback POST /v1/chat/completions, model=catfish-private-main.
+
+    复用 browser_locate 同一套 GATEWAY_URL + id_token 模式. 不抛异常 — 失败返
+    空串, 让 expertise.extract_from_journal 走"返非 JSON"分支自然降级.
+    """
+    try:
+        import httpx  # noqa: PLC0415
+    except ImportError:
+        return ""
+    try:
+        from .browser_locate import GATEWAY_URL, _read_id_token  # noqa: PLC0415
+    except Exception:  # noqa: BLE001
+        return ""
+    token = _read_id_token()
+    if not token:
+        return ""
+    try:
+        with httpx.Client(timeout=60.0) as client:
+            resp = client.post(
+                f"{GATEWAY_URL}/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "catfish-private-main",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.1,
+                    "max_tokens": 2000,
+                    "stream": False,
+                },
+            )
+        if resp.status_code != 200:
+            return ""
+        data = resp.json()
+        return (
+            data.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            or ""
+        )
+    except Exception:  # noqa: BLE001
+        return ""

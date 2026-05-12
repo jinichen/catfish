@@ -11,7 +11,7 @@
 ```
 Phase 1 · 单员工 AI 副手           [██████████] 100%  · 5/12 BL-MM9-FREEZE-v2 教学→凝固→复用闭环跑通 (eis-login 2.3s 复用 + eis-checkin SOP 第二次验证)
 Phase 2 · 团队版 (SSO/RBAC/Win)    [██████████] 99%   · 5/10 凌晨 4 个中央 service PG 统一 + 5/12 GitHub Actions CI 落地 (1257 测试零失败)
-Phase 3 · ★ Federation             [█████░░░░░] 50%   · Plan D v0.1 ✅ + 5/6 重定位 agent-as-service (BL-FED2 6 周 ship)
+Phase 3 · ★ Federation             [██████░░░░] 60%   · Plan D v0.1 ✅ + 5/6 重定位 agent-as-service + 5/12 BL-FED2.1 自动抽 ✅ (BL-FED2.2-2.5 待办)
 Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   · 2027 Q2+
 
 ★★★ 5/12 真闭环跑通 (BL-MM9-FREEZE-v2): catfish 卖点 "员工教一次 → 凝固成 skill → 下次秒开"
@@ -243,7 +243,7 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 - ✅ **跨雇主可携带设计** (DATA-FLOW 边界 4: cp `~/.catfish/` 到新 mac, agent 跟员工走)
 
 **BL-FED2 (5/15 起 6 周, agent-as-service 真 ship — 灵魂校准版)**:
-- ⬜ **BL-FED2.1** **员工自愿**专长声明 schema (员工 mac 本机 `~/.catfish/expertise.yaml`, 上行只发 tag 列表给 identity-server, **不传画像内容**. 员工随时可删 / 改 / 下线) · 1-2 天 · 5/15-5/16
+- ✅ **BL-FED2.1** **员工自愿**专长声明 schema (员工 mac 本机 `~/.catfish/expertise.yaml`, 上行只发 tag 列表给 identity-server, **不传画像内容**. 员工随时可删 / 改 / 下线) · 1-2 天 · 5/15-5/16 → **5/12 鸿波拍板"专长从 journal 自动抽"提前完成**: `expertise.py` (~530 行 + 25 单测) 接 LLM 抽 tag, `tool_extract / list / confirm` 3 个 native tool, `export_for_registry()` 隐私阀门 (只返 confirmed tag 串), 接 catfish-private-main 走 gateway loopback. 全测 483 passed.
 - ⬜ **BL-FED2.2** 同事黄页 (`identity-server` 加 `/registry/search?expertise=资质` endpoint, 只返**已自愿登记**的 agent. 员工删除专长 → 黄页立即失踪) · 1 周 · 5/19-5/23
 - ⬜ **BL-FED2.3** 路由层 (`gateway/expertise_router`, 新工具 `catfish_expert_consult`. 调用前给被咨询员工**显式提示** [谁在问 / 问什么], 员工可拒) · 1-2 周 · 5/26-6/6
 - ⬜ **BL-FED2.4** 答案质量反馈 (复用 BL-MM6 feedback UI: 小赵评老李 agent 答 → 反馈**只进老李 mac 本机**的 user_profile, 反馈数据**不离开老李 mac**) · 1 周 · 6/9-6/13
