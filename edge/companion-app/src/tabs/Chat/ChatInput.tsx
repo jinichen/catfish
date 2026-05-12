@@ -22,6 +22,8 @@ interface Props {
   isStreaming: boolean;
   onSend: (text: string, attachments: Attachment[]) => void;
   onCancel: () => void;
+  /** BL-COMPANION-UX1 (5/12 鸿波"锁死"修): streaming 中一键 abort + 发新消息 */
+  onCancelAndSend: (text: string, attachments: Attachment[]) => void;
   onReset: () => void;
 }
 
@@ -175,6 +177,7 @@ export default function ChatInput({
   isStreaming,
   onSend,
   onCancel,
+  onCancelAndSend,
   onReset,
 }: Props) {
   // BL-E11 后续: placeholder 用员工自定义名 ("跟老李说话…")
@@ -305,8 +308,13 @@ export default function ChatInput({
 
   function submit() {
     const t = text.trim();
-    if ((!t && attachments.length === 0) || isStreaming) return;
-    onSend(t, attachments);
+    if (!t && attachments.length === 0) return;
+    // BL-COMPANION-UX1 (5/12): streaming 中也允许发 — 一键 abort 当前 + 发新.
+    if (isStreaming) {
+      onCancelAndSend(t, attachments);
+    } else {
+      onSend(t, attachments);
+    }
     setText("");
     setAttachments([]);
     setAttachError(null);
@@ -377,7 +385,10 @@ export default function ChatInput({
     if (e.target) e.target.value = "";
   }
 
-  const canSend = !isStreaming && (text.trim().length > 0 || attachments.length > 0);
+  // BL-COMPANION-UX1 (5/12): streaming 中也允许"发送" (实际走 cancelAndSend).
+  // canSend = 有内容. 是否 streaming 由按钮文案/颜色区分.
+  const hasContent = text.trim().length > 0 || attachments.length > 0;
+  const canSend = hasContent;
 
   return (
     <div
@@ -567,9 +578,32 @@ export default function ChatInput({
           }}
           disabled={false /* 仍允许写下一个，发送按钮在 streaming 时变停止 */}
         />
-        {isStreaming ? (
+        {/* BL-COMPANION-UX1 (5/12 鸿波"锁死"修): 三态按钮.
+            - 非 streaming + 有内容       → "发送" (青)
+            - streaming + 有内容          → "⏹ 停下接着发" (青色一键 abort+发)
+            - streaming + 没内容          → "停止" (橙色, 单纯 abort) */}
+        {isStreaming && hasContent ? (
+          <button
+            onClick={submit}
+            title="停止当前流, 立刻发送新消息 (Enter 同效)"
+            style={{
+              padding: "var(--space-2) var(--space-3)",
+              border: "none",
+              borderRadius: "var(--radius-sm)",
+              background: "var(--catfish-cyan)",
+              color: "white",
+              fontSize: 13,
+              fontWeight: 500,
+              minWidth: 100,
+              cursor: "pointer",
+            }}
+          >
+            ⏹ 停下接着发
+          </button>
+        ) : isStreaming ? (
           <button
             onClick={onCancel}
+            title="停止当前流"
             style={{
               padding: "var(--space-2) var(--space-3)",
               border: "1px solid var(--status-warn)",

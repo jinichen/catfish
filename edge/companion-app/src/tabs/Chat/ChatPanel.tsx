@@ -13,6 +13,8 @@ interface Props {
   streamingId: string | null;
   onSend: (text: string, attachments: Attachment[]) => void;
   onCancel: () => void;
+  /** BL-COMPANION-UX1 (5/12): streaming 中一键 abort + 发新消息 */
+  onCancelAndSend: (text: string, attachments: Attachment[]) => void;
   onReset: () => void;
 }
 
@@ -22,6 +24,7 @@ export default function ChatPanel({
   streamingId,
   onSend,
   onCancel,
+  onCancelAndSend,
   onReset,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -74,6 +77,7 @@ export default function ChatPanel({
         isStreaming={isStreaming}
         onSend={onSend}
         onCancel={onCancel}
+        onCancelAndSend={onCancelAndSend}
         onReset={onReset}
       />
     </div>

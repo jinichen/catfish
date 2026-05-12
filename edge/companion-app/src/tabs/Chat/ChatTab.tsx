@@ -29,6 +29,7 @@ export default function ChatTab() {
     setModel,
     send,
     cancel,
+    cancelAndSend,  // BL-COMPANION-UX1 (5/12): 一键停止+发新消息
     reset,
   } = useChat(defaultModel);
 
@@ -67,6 +68,16 @@ export default function ChatTab() {
       setRefreshKey((k) => k + 1);
     },
     [send],
+  );
+
+  // BL-COMPANION-UX1 (5/12): streaming 中员工想发新消息, 一键 abort+发.
+  // 跟 handleSend 同款包装 (setRefreshKey 给 session 列表刷新).
+  const handleCancelAndSend = useCallback(
+    async (text: string, attachments: import("../../types/chat").Attachment[] = []) => {
+      await cancelAndSend(text, attachments);
+      setRefreshKey((k) => k + 1);
+    },
+    [cancelAndSend],
   );
 
   // 5/7 BL-D14: 当前选中的 session 也自动 polling — 5s 一次重拉 detail.
@@ -207,6 +218,7 @@ export default function ChatTab() {
             streamingId={streamingId}
             onSend={handleSend}
             onCancel={cancel}
+            onCancelAndSend={handleCancelAndSend}
             onReset={reset}
           />
         </div>

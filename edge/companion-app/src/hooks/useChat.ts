@@ -690,6 +690,26 @@ export function useChat(initialModel: string) {
     if (abortRef.current) abortRef.current.abort();
   }, []);
 
+  /** BL-COMPANION-UX1 (5/12 鸿波 "锁死" 抱怨): streaming 中员工想发新消息.
+   *
+   * 老行为: streaming 时按钮变"停止", 点了 abort 当前 stream 但 textarea 内容
+   * 没发送, 员工还得重打一次. UX 差.
+   *
+   * 新行为: 一键 abort + 发新消息. 内部:
+   *   1. abort 当前 stream (abortRef.current.abort())
+   *   2. 等 200ms 让 send() 的 finally cleanup 跑完 (isStreaming → false)
+   *   3. 调 send() 发新消息
+   */
+  const cancelAndSend = useCallback(
+    async (text: string, attachments: Attachment[]) => {
+      if (abortRef.current) abortRef.current.abort();
+      // 等 abort 把 state 清干净 (send 的 finally block, 设 isStreaming=false)
+      await new Promise((r) => setTimeout(r, 200));
+      await send(text, attachments);
+    },
+    [send],
+  );
+
   const reset = useCallback(() => {
     if (abortRef.current) abortRef.current.abort();
     if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
@@ -720,6 +740,7 @@ export function useChat(initialModel: string) {
     setModel: setModelInStore,
     send,
     cancel,
+    cancelAndSend,  // BL-COMPANION-UX1 (5/12): 一键停止+发新消息, 解锁死感
     reset,
   };
 }
