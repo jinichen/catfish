@@ -13,8 +13,7 @@
 
 import type { ChatMessage, ToolCall } from "../types/chat";
 import { config } from "./env";
-import { gatewayGetDevToken } from "./tauri";
-import { getOverrideToken, fetchWithAuth } from "./me";
+import { fetchWithAuth } from "./me";
 import { useAgentStore } from "../store/agent";
 
 interface SendChatParams {
@@ -73,34 +72,9 @@ export interface ChatStreamDoneInfo {
  *
  * 五一 sprint 5/2 加多账号支持: 切换器选的 token (localStorage) 优先级高于 .env.
  */
-let _cachedEnvToken: string | null = null;
-
-async function getToken(): Promise<string> {
-  // 0. OAuth keychain access_token (BL-FIX30 5/9, 跟 me.ts 同序)
-  try {
-    const oauth = await invoke<string | null>("auth_get_access_token");
-    if (oauth) return oauth;
-  } catch {
-    // Tauri command 不可用 (Web mode dev) → fallback
-  }
-  // 1. 切换器优先 (DevUserSwitcher 写 localStorage)
-  const override = getOverrideToken();
-  if (override) return override;
-  // 2. .env 兜底
-  if (_cachedEnvToken) return _cachedEnvToken;
-  try {
-    const token = await gatewayGetDevToken();
-    _cachedEnvToken = token;
-    return token;
-  } catch (e) {
-    console.warn("[catfish chat] 读 dev token 失败,用 fallback:", e);
-    return "dev-token-local";
-  }
-}
-
-export function _clearTokenCache(): void {
-  _cachedEnvToken = null;
-}
+// BL-FIX45 A+ (5/11): chat.ts 不再自己 getToken — 走 fetchWithAuth (me.ts).
+// 5/12 (companion build 修 TS strict): 删 getToken + _cachedEnvToken +
+// _clearTokenCache (整套已无 caller).
 
 // ── OpenAI 兼容线格式 ──
 
@@ -450,7 +424,7 @@ export async function streamChat(params: SendChatParams): Promise<void> {
         try {
           const { fetchCatalog } = await import("./tauri");
           const catalog = await fetchCatalog();
-          const allModels = (catalog as { models?: Array<{ name: string; mode?: string; reachable?: boolean }> })
+          const allModels = ((catalog as unknown) as { models?: Array<{ name: string; mode?: string; reachable?: boolean }> })
             .models || [];
           const triedSet = new Set<string>([model]);
           // 把之前 fallback 试过的也排掉 (从 stringified _retryCounters 反推不好做, 简化: 排当前 model)
