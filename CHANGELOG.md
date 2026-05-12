@@ -3868,7 +3868,7 @@ LLM 看到的格式 (跟 BL-I4 5/8 预留接口对接):
 
 ---
 
-## 2026-05-12（周二）— BL-MM9-FREEZE-v2 教学→凝固→复用真闭环 + BL-COMPANION-UX1/UX2 + CI 落地 + 1257 测试网 + BL-FED2.1 专长自动抽 + BL-FED2.2 黄页 endpoint
+## 2026-05-12（周二）— BL-MM9-FREEZE-v2 教学→凝固→复用真闭环 + BL-COMPANION-UX1/UX2 + CI 落地 + 1257 测试网 + BL-FED2.1 专长自动抽 + BL-FED2.2 黄页 endpoint + BL-FED2.3 跨员工路由
 
 5/11 夜里把 Q3-WEBSKILL 视觉双子 (recognize_captcha / browser_locate) ship 了, 5/12 一整天做真活儿: **真把"员工教鲶鱼一次 → 凝固成可执行 skill → 下次秒开"闭环建出来**. 早上叠补丁撞 12 次坑, 中午鸿波拍板"不要小打小闹要彻底解决", 下午彻底重做, **13:26:39 凝固出第一个干净 eis-login skill, 复用 2.3 秒秒过 — BL-MM9 卖点从 PPT 概念变成可演示资产**. 同时修了 Companion "锁死" UX 问题, 落地 GitHub Actions CI, 补 60 个单元测试 + 修 22 个预存 fail.
 
@@ -4054,9 +4054,9 @@ cd edge/companion-app && npm run tauri:build
 **全测试**: tool-bridge 483 passed / 30 skipped / 0 failed.
 
 **接下来 (BL-FED2.x 待办)**:
-- BL-FED2.3 跨员工路由 (员工问"谁懂资质" → 黄页查 → A2A ask 转给老张)
 - BL-FED2.4 反馈环 (老张被问后, journal 自动追加 "今天帮小李解决资质问题" → 下次 extract 触发新 tag "资质咨询")
 - BL-FED2.5 跨员工 demo (5/14 演示前必跑通)
+- BL-FED2.3-followup 二次确认 UI (当前 ALLOW.md 软策略, Companion 实时弹窗待 BL-MM10 之后)
 
 ### BL-FED2.2 — 黄页 endpoint /registry/by-expertise (5/12 鸿波拍板续)
 
@@ -4108,6 +4108,59 @@ central:
 **测试**: identity-server 65 passed (53 → 65, +12), gateway 817 passed (805 → 817, +12).
 
 ### 5/12 真闭环全测**: tool-bridge 483 / gateway 817 / identity-server 65 / 全 sprint 测试 1300+ 零失败.**
+
+### BL-FED2.3 — 跨员工路由 catfish_expert_consult (5/12 鸿波拍板续续)
+
+**真问题**: BL-FED2.1+2.2 已经把"谁懂啥"建好了, 但员工在 Companion 问"资质审核怎么搞?"时, LLM 还得手工:
+  - 调 `catfish_list_expertise` (查自己 — 答非所问)
+  - 或催员工自己去访 by-expertise endpoint (太硬核)
+
+**真卖点**: 一次 tool 调用搞定 — LLM 抽 tag → 自动黄页查 → 选员工 → A2A 委托 → 流式返答案.
+
+**新模块 `expert_consult.py`** (~260 行 + 31 个单测):
+
+调用链路:
+```
+员工问 "资质审核怎么搞?"
+  → LLM 抽 expertise_tag="资质审核"
+  → catfish_expert_consult(tag="资质审核", question="员工原话")
+       1. GET /registry/by-expertise?tag=资质审核
+       2. matches → _select_target (排除自己 / 优先在线 / 支持 preferred)
+       3. POST gateway /a2a/internal/ask (复用 a2a_ask 链路, ALLOW.md 自动拦截)
+       4. 返 {routed_to, routed_department, answer, matched_count, online_count, ...}
+```
+
+**路由策略** (`_select_target`):
+- `preferred_sub` 传了 → 必须问他 (不在线也强转, 员工可稍后回)
+- 没传 → 排除 from_sub (自己), 选第一个在线员工 (matches 已按 BL-FED2.2 排序)
+- 全离线 → 友好返候选 sub list, 让 LLM 告员工换时间问
+
+**错误传染**:
+- 黄页空 → ok=False, 列出原因 + 操作建议 (跑 extract_expertise/confirm_expertise)
+- 全离线 → ok=False, candidates + 建议
+- preferred_sub 不在黄页 → ok=False, 列候选
+- ALLOW.md denied → 透传拒答理由
+- gateway 调用失败 → 透传 (config/transport/denied 分类)
+
+**架构亮点**:
+- 不重写 a2a 协议, 复用 `gateway /a2a/internal/ask` 既有链路 (JWT 签验 + ALLOW.md 拦截 + JWKS 验证全继承)
+- HTTP wrapper 依赖注入式 (`http_get` / `http_post` 参数), 测试 mock 干净, 31 个单测覆盖所有边界 (路由策略 9 / HTTP wrapper 8 / E2E 14)
+- 默认 `purpose="expert_consult:<tag>"` (ALLOW.md 配 purpose 拦截友好)
+
+**tool schema** (`catfish_tools.py`):
+- `expertise_tag` (必填), `question` (必填), `preferred_sub` / `purpose` / `context_hint` (可选)
+- LLM 友好 description 写明 ✅/❌ 调用场景 (避免八卦/打听人, 鼓励真业务问题)
+
+**当前不做的 (P1 待办, BL-FED2.3-followup)**:
+- 调用前给被咨询员工**实时 Companion 弹窗**显式提示 [谁在问 / 问什么], 员工可拒
+- 当前由 ALLOW.md 软策略守护 (allow_to / allow_purpose / 关键词匹配)
+- 实时 UI 弹窗依赖 BL-MM10 教学按钮 + Companion notification 框架, 留 BL-FED2.4 之后做
+
+**测试**: tool-bridge 514 passed (483 → 514, +31 BL-FED2.3 + 0 regression), gateway / identity-server 不变.
+
+**接下来**:
+- BL-FED2.4 反馈环 (A 问 B 之后, B 的 journal 自动追加事件, 下次 extract 触发新 tag "<X>咨询")
+- BL-FED2.5 5/14 demo (3 个 mock agent + 黄页查 + A2A 问答全跑通)
 
 ---
 

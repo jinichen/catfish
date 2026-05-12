@@ -1592,6 +1592,60 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ── BL-FED2.3 (5/12 鸿波拍板) 跨员工路由 ──
+    {
+        "name": "catfish_expert_consult",
+        "description": (
+            "★★★ 跨员工路由 — 给定专长 tag, 自动黄页查 + A2A 委托给懂的同事. "
+            "BL-FED2.3 卖点: '员工问 X 怎么搞 → 鲶鱼自动找懂的同事问 → 流式返答案'.\n\n"
+            "✅ 调用场景:\n"
+            "  - 员工问 '资质审核怎么搞?' → expertise_tag='资质审核', question 透传员工原话\n"
+            "  - 员工问 '@bob 怎么处理这种发票?' (指定人) → preferred_sub='bob@ffcs.cn'\n"
+            "  - 员工问 '小李最近在忙啥' → 跟你无关, **不要**调本工具\n\n"
+            "❌ 不该调用:\n"
+            "  - 你自己能答的问题 (本机 LLM/skill 优先, 别什么都甩给同事)\n"
+            "  - 没人懂的领域 (会返 ok=false 黄页空)\n"
+            "  - 八卦/打听人 (走 ALLOW.md 会被拒, 别浪费配额)\n\n"
+            "**自动选目标策略**:\n"
+            "  1. preferred_sub 传了 → 必须问他 (不在线也强转)\n"
+            "  2. 没传 → 排除你自己, 选第一个在线员工 (匹配按 BL-FED2.2 排序: 在线优先)\n"
+            "  3. 全离线 → 返友好错误, 让员工换时间问 / 显式 preferred 强转\n\n"
+            "**返参重点**:\n"
+            "  - routed_to: 实际转给谁 (展示给员工 — '我帮你问了 bob@ffcs.cn')\n"
+            "  - answer: 同事鲶鱼的回答 (流式合并后)\n"
+            "  - matched_count / online_count: 黄页里多少候选 (帮员工建立信任)\n\n"
+            "**ALLOW.md 拒答**: 对方机器自动拦截 (隐私/八卦/超授权), 透传拒答理由."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "expertise_tag": {
+                    "type": "string",
+                    "description": "想问的领域 tag (大小写不敏感, 例 '资质审核' / '外勤报销')",
+                },
+                "question": {
+                    "type": "string",
+                    "description": "员工原话或精炼后的问题 (1-500 字符), 会透传给同事鲶鱼",
+                },
+                "preferred_sub": {
+                    "type": "string",
+                    "description": "(可选) 指定问谁 SSO sub, 不传走自动路由",
+                },
+                "purpose": {
+                    "type": "string",
+                    "description": "(可选) 用途分类, ALLOW.md 用 (例 'work_question' / 'compliance_check')",
+                },
+                "context_hint": {
+                    "type": "string",
+                    "description": "(可选) 背景说明 — 一两句话告诉对方鲶鱼为什么问 (例 '客户 X 周三要交资质材料')",
+                },
+            },
+            "required": ["expertise_tag", "question"],
+        },
+        "emoji": "📞",
+        "toolset": "catfish_native",
+        "available": True,
+    },
     {
         "name": "catfish_confirm_expertise",
         "description": (
@@ -5678,6 +5732,10 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_confirm_expertise":
         from . import expertise  # noqa: PLC0415
         return expertise.tool_confirm_expertise(args)
+    # BL-FED2.3 (5/12 鸿波拍板) 跨员工路由
+    if name == "catfish_expert_consult":
+        from . import expert_consult  # noqa: PLC0415
+        return expert_consult.tool_expert_consult(args)
     raise ValueError(f"unknown native tool: {name}")
 
 
