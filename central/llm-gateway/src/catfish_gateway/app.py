@@ -1485,8 +1485,12 @@ async def _stream_chat_completion(
                 and _last_user_message_is_feedback(msgs_for_check)
                 and _is_plan_only_content(cumulative_content)
             )
+            # BL-MM9-FREEZE (5/12): lean 模式直接 skip retry —
+            # 教学场景 LLM 自然停顿 (snapshot 看一下再想) 不该被 retry 拖.
+            _lean_retry_off = os.environ.get("CATFISH_LEAN_INJECT", "0") == "1"
             should_retry = (
-                last_finish_reason == "stop"
+                not _lean_retry_off
+                and last_finish_reason == "stop"
                 and not cumulative_has_tool_call
                 and plan_only_retries < _MAX_PLAN_ONLY_RETRIES
                 and not too_repetitive            # 死循环保险保留 (Jaccard)
@@ -1723,15 +1727,33 @@ async def chat_completions(
         agent_personality=agent_personality,
     )
 
+    # ────────────────────────────────────────────────────────────────────
+    # BL-MM9-FREEZE (5/12 鸿波拍板): CATFISH_LEAN_INJECT=1 模式总开关.
+    #
+    # 教学场景下, 鲶鱼应该是"专注学一个系统怎么操作", 不需要看员工画像 / 历史
+    # session / 反馈 / 周报偏好 / stats_guard / 各种 retry-hint. 这些 inject
+    # 互相打架, prompt 30K+ 字符让 LLM 行为不可预测.
+    #
+    # 一个 env 开关把所有非核心 inject 关掉. **保留**: identity (身份)
+    # + skills_catalog (LLM 看 skill 列表) + session_goal (员工锁定目标)
+    # + session_meta (时间感) + prompt_security (安全 detector).
+    # 上下文压缩 BL-Q3-ARCHIVE 在更前面, 跟 lean mode 配合, 不动.
+    #
+    # 默认 LEAN_INJECT=0 = 老行为, 不破坏现有部署.
+    # ────────────────────────────────────────────────────────────────────
+    _lean = os.environ.get("CATFISH_LEAN_INJECT", "0") == "1"
+
     # session_facts 注入: 把员工本 session 内明确告诉过的硬事实 (catfish_remember
     # 写到 ~/.catfish/session_facts.json) 拼到最后一条 system message 末尾.
     # 工程级 attention 兜底, 不依赖模型自觉 quote (SOUL.md 复述模式是软纪律).
-    body["messages"] = inject_session_facts(body["messages"])
+    if not _lean:
+        body["messages"] = inject_session_facts(body["messages"])
 
     # stats_guard 注入: 员工最近一句要求"统计 / 多少 / 合计" 等, 强制提醒模型
     # 必须 execute_code 用 Python 算, 不许自数. SOUL.md § 数据统计 = 代码统计
     # 配套硬规则. 鸿波 2026-04-29 反馈"软纪律已修正多次仍出错".
-    body["messages"] = inject_stats_guard(body["messages"])
+    if not _lean:
+        body["messages"] = inject_stats_guard(body["messages"])
 
     # ⚠️ 2026-04-30 一度禁用 → 立即撤回 (B 方案假设错了)
     #
@@ -1746,22 +1768,28 @@ async def chat_completions(
     #
     # B 方案做的 install_to_hermes.sh 复制 SKILL.md 到 hermes 路径无害, 留着备用 (作为
     # hermes 端"看得到 catfish skill 存在"的兜底). 但调用走 A 方案的 catfish_run_skill.
+    # skills_catalog 永远注入 — LLM 必须看到能调哪些 skill (含凝固后的)
     body["messages"] = inject_skills_catalog(body["messages"])
-    body["messages"] = inject_skill_guard(body["messages"], body)
+    # skill_guard 是工程级保护, lean 模式关 (鸿波 4-30 已说过"过度设计")
+    if not _lean:
+        body["messages"] = inject_skill_guard(body["messages"], body)
 
     # ── 跨 session 上下文 (鸿波 4-30 反馈"跨对话信息割裂, 不像真实个体") ──
-    # 档 1: 注入最近 7 天 session 元信息 (id / 时间 / 首条 user message), 模型
-    #       看到至少**意识到**有这些历史存在
-    body["messages"] = inject_session_history(body["messages"])
-    # 档 2: 注入 ~/.catfish/employee_journal.md 内容 (LLM 总结过的关键决策 /
-    #       偏好 / 里程碑), 模型看到员工"过去几天究竟讲了啥决定了啥"
-    body["messages"] = inject_employee_journal(body["messages"])
+    # lean 模式全关 — 教学场景不需要 7 天历史 / journal / 历史 feedback,
+    # 这些只会让 LLM 跑偏 (例: journal 里说"鸿波周三聚餐" 跟 EIS 教学无关)
+    if not _lean:
+        # 档 1: 注入最近 7 天 session 元信息 (id / 时间 / 首条 user message), 模型
+        #       看到至少**意识到**有这些历史存在
+        body["messages"] = inject_session_history(body["messages"])
+        # 档 2: 注入 ~/.catfish/employee_journal.md 内容 (LLM 总结过的关键决策 /
+        #       偏好 / 里程碑), 模型看到员工"过去几天究竟讲了啥决定了啥"
+        body["messages"] = inject_employee_journal(body["messages"])
 
-    # 档 3 (BL-MM6 5/5): 注入员工最近 7 天 negative feedback (👎 / 改).
-    #       跟 BL-MM5 主动学习 (软纪律) 配合, 这条是显式 + 工程级 — 员工 explicit
-    #       点了 button 才入, 比 LLM 自觉观察的权重高. internal call 也 inject —
-    #       summarizer / proactive 用一致风格, 也要尊重员工 feedback.
-    body["messages"] = inject_feedback(body["messages"])
+        # 档 3 (BL-MM6 5/5): 注入员工最近 7 天 negative feedback (👎 / 改).
+        #       跟 BL-MM5 主动学习 (软纪律) 配合, 这条是显式 + 工程级 — 员工 explicit
+        #       点了 button 才入, 比 LLM 自觉观察的权重高. internal call 也 inject —
+        #       summarizer / proactive 用一致风格, 也要尊重员工 feedback.
+        body["messages"] = inject_feedback(body["messages"])
 
     # 档 4 (BL-HERMES013-3 5/11): 注入员工 /goal 锁定目标. 借鉴 Hermes 0.13 Ralph
     # loop. 单文件 ~/.catfish/session_goal.txt, 员工 /goal xxx 设, 每轮自动 inject
@@ -1770,25 +1798,19 @@ async def chat_completions(
     from .session_goals import inject_session_goal  # noqa: PLC0415
     body["messages"] = inject_session_goal(body["messages"])
 
-    # BL-A1.2 (5/8): 检测 messages 历史里 LLM 连续多次同 tool 失败 → 注入 hint
-    # 让 LLM 换思路, 不要重复同样错误. 真 Agent retry 行为.
-    # 跟 SOUL.md 软纪律配合 — 软纪律失效时工程兜底.
-    if not is_internal_call:
+    # BL-A1.2 / A1.3 / FIX24 — lean 模式全关.
+    # 教学场景里 LLM 正常会"重复调"(再 snapshot 看 DOM 变化) / 中间停顿想一下 /
+    # 多步任务做完才说. 这些 retry-hint 系列误伤 → 教学卡死.
+    if not is_internal_call and not _lean:
+        # BL-A1.2: 连续多次同 tool 失败时换思路
         from . import tool_retry_hint  # noqa: PLC0415  lazy import
         body["messages"] = tool_retry_hint.inject_tool_retry_hint(body["messages"])
 
-    # BL-A1.3 (5/8): 检测 LLM "幻觉完成" — 说"已生成 X" 但前面没调 execute_code.
-    # 注入 hint 强制下次调用时真做工具调用, 不要嘴说.
-    # 鸿波 4-29 demo 反复翻车的真因, 5/14 demo 必修.
-    if not is_internal_call:
+        # BL-A1.3: "幻觉完成" hint
         from . import self_critique  # noqa: PLC0415  lazy import
         body["messages"] = self_critique.inject_completion_critique_hint(body["messages"])
 
-    # BL-FIX24 (5/9): 检测 LLM 重复跑同一段 productive tool_call (execute_code
-    # 跑同一份 code 5 次产同一文件). 鸿波 5/9 demo 现场死循环 — 鲶鱼真做事
-    # 但记不住做过 + 主动问 "需要再做一次?" 拉员工回 "立刻执行" 又重做.
-    # 跟 self_critique 互补 — 一个治"该做没做", 一个治"做了又做".
-    if not is_internal_call:
+        # BL-FIX24: 重复 productive tool_call guard
         from . import duplicate_tool_call_guard  # noqa: PLC0415  lazy import
         body["messages"] = duplicate_tool_call_guard.inject_duplicate_guard_hint(
             body["messages"]

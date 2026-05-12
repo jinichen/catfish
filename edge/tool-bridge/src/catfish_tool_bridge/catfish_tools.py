@@ -1345,6 +1345,131 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ════════════════════════════════════════════════════════════
+    # BL-MM9-FREEZE (5/12 鸿波拍板): 教学→凝固→复用闭环
+    # ════════════════════════════════════════════════════════════
+    {
+        "name": "catfish_freeze_inspect",
+        "description": (
+            "★ 查 trace 状态. 教学过程中员工想知道'我刚才让鲶鱼做的几步, 系统"
+            "都录下来了吗', 调这个看. 返回 trace 文件大小 / 最近窗口内的步骤"
+            "数 / 每个 tool 的调用次数. 凝固前先调一次, 确认 trace 长度合理.\n\n"
+            "✅ 调用场景:\n"
+            "  - 员工说'刚才教的几步录下来了吗?' → catfish_freeze_inspect\n"
+            "  - 凝固前 sanity check\n\n"
+            "**参数**: since_unix (可选, 默认 1 小时前). \n"
+            "**返回**: {ok, trace_file{lines/tools/...}, recent_steps_summary[...]}"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "since_unix": {
+                    "type": "number",
+                    "description": "起始 unix 时间戳 (秒). 默认 1 小时前.",
+                },
+            },
+            "required": [],
+        },
+        "emoji": "🔍",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_freeze_skill",
+        "description": (
+            "★★★ **教学→凝固管道的核心入口** (BL-MM9-FREEZE 5/12). "
+            "员工教鲶鱼跑完一个流程 (登录 EIS / 提交工单 / 走 OA 审批 等) "
+            "→ trace_recorder 自动录了每步 tool 调用 → 调本工具把 trace 凝固成"
+            "**可执行 skill** (script.py + SKILL.md), 落到 catfish/skills/<ns>/"
+            "<name>/, 自动同步到 hermes ~/.hermes/skills/productivity/"
+            "catfish-<name>/. 下次员工说同样需求 → catfish_run_skill 秒开.\n\n"
+            "✅ 调用时机:\n"
+            "  - 员工说 '凝固成 skill' / '保存成 skill' / '记下来下次自动跑' / "
+            "'把刚才的流程存成 skill'\n"
+            "  - 一个 LLM agent 完整教学 session 结束后\n\n"
+            "❌ 不该调用:\n"
+            "  - 教学还没跑完 (trace 不完整) — 等员工说凝固再调\n"
+            "  - 教学有 fail step (验证码识错重试过 N 次最终没成功) — "
+            "freeze 引擎会拒绝, 先让员工把流程**完整跑成功**一遍再凝固\n\n"
+            "**参数**:\n"
+            "  - name: 'eis-login' / 'oa-leave-apply' 等. 小写字母数字横线, "
+            "字母开头\n"
+            "  - namespace: 'department' (默认, 部门共享) / 'personal' / 'team'\n"
+            "  - description: 1-500 字描述这个 skill 干啥, 模板生成 SKILL.md 用\n"
+            "  - trace_since_unix: 可选, 默认最近 1 小时. 多 LLM 教学一次就传\n"
+            "    上一次教学结束的时间.\n"
+            "  - overwrite: 同 name 已存在时是否覆盖. 默认 false. 改流程后 v2 凝固"
+            "传 true.\n\n"
+            "**返回**: {ok, name, namespace, skill_path, hermes_name, files[], "
+            "params[], install{...}, summary}\n\n"
+            "**安全**:\n"
+            "  - trace 里有明文密码 → 拒绝凝固 + 提示员工用 secret_ref 重教一次\n"
+            "  - secret_ref 会原样保留在 script.py (不解析成明文)\n"
+            "  - captcha 识别结果 hard-code 自动改成实时调用 (不写死临时值)"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": (
+                        "skill 名, 小写字母数字横线 (例 'eis-login'). 字母开头."
+                    ),
+                },
+                "namespace": {
+                    "type": "string",
+                    "enum": ["department", "personal", "team"],
+                    "description": "namespace, 默认 department.",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "skill 描述, 1-500 字, 进 SKILL.md frontmatter.",
+                },
+                "trace_since_unix": {
+                    "type": "number",
+                    "description": "trace 起始时间 (unix 秒). 默认最近 1 小时.",
+                },
+                "trace_until_unix": {
+                    "type": "number",
+                    "description": "trace 截止时间. 默认到现在.",
+                },
+                "overwrite": {
+                    "type": "boolean",
+                    "description": "已存在的 skill 是否覆盖. 默认 false.",
+                },
+                "run_install": {
+                    "type": "boolean",
+                    "description": "凝固后自动跑 install_to_hermes.sh 同步. 默认 true.",
+                },
+            },
+            "required": ["name"],
+        },
+        "emoji": "🧊",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_freeze_rotate",
+        "description": (
+            "凝固完一个 skill 之后, 把 active trace 文件归档 (重命名带时间戳), "
+            "开始空白的新 trace. 防下次教学跟上次混. 通常在 catfish_freeze_skill "
+            "成功后调一次.\n\n"
+            "**参数**: reason (可选, e.g. 'post-freeze-eis-login')"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "归档理由 (进归档文件名).",
+                },
+            },
+            "required": [],
+        },
+        "emoji": "📦",
+        "toolset": "catfish_native",
+        "available": True,
+    },
 ]
 
 
@@ -4344,7 +4469,11 @@ def run_skill(args: Dict[str, Any]) -> Dict[str, Any]:
     if not script_py.exists():
         return {
             "ok": False,
-            "error": f"{skill_path}/script.py 不存在, 该 skill 没暴露代码入口",
+            "error": (
+                f"{skill_path}/script.py 不存在. catfish_run_skill 只调凝固"
+                f"好的 skill (有 script.py 的). 没凝固的工作流, 先让员工"
+                f"教学一遍, 再用 catfish_freeze_skill 自动生成."
+            ),
             "files": [],
             "summary": "",
         }
@@ -5225,6 +5354,41 @@ def is_native(name: str) -> bool:
 
 
 def dispatch_native(name: str, args: Dict[str, Any]) -> Any:
+    # BL-MM9-FREEZE (5/12): 业务流程 tool 自动 trace.
+    # 拦截白名单内 tool 调用前后记录到 ~/.catfish/traces/active.jsonl,
+    # 供 catfish_freeze_skill 凝固为 script.py + SKILL.md.
+    from . import trace_recorder  # noqa: PLC0415
+
+    if trace_recorder.is_recorded(name):
+        _t0 = time.time()
+        _err: Exception | None = None
+        try:
+            result = _dispatch_native_inner(name, args)
+            _ok = bool(result.get("ok", True)) if isinstance(result, dict) else True
+            return result
+        except Exception as e:
+            _err = e
+            _ok = False
+            raise
+        finally:
+            _dur = int((time.time() - _t0) * 1000)
+            trace_recorder.record(
+                tool_name=name,
+                args=args or {},
+                result=(
+                    locals().get("result")
+                    if _err is None
+                    else {"ok": False, "error": repr(_err)}
+                ),
+                ok=_ok,
+                duration_ms=_dur,
+            )
+    else:
+        return _dispatch_native_inner(name, args)
+
+
+def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
+    """原 dispatch_native body — 包了 trace wrapper 之后从这里调."""
     if name == "catfish_remember":
         return remember_fact(args)
     if name == "catfish_propose_skill":
@@ -5313,4 +5477,14 @@ def dispatch_native(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_browser_locate":
         from . import browser_locate  # noqa: PLC0415
         return browser_locate.locate(args)
+    # BL-MM9-FREEZE (5/12 鸿波拍板) 教学→凝固管道
+    if name == "catfish_freeze_inspect":
+        from . import skill_freeze  # noqa: PLC0415
+        return skill_freeze.freeze_inspect(args)
+    if name == "catfish_freeze_skill":
+        from . import skill_freeze  # noqa: PLC0415
+        return skill_freeze.freeze_skill(args)
+    if name == "catfish_freeze_rotate":
+        from . import skill_freeze  # noqa: PLC0415
+        return skill_freeze.freeze_rotate(args)
     raise ValueError(f"unknown native tool: {name}")
