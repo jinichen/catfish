@@ -69,12 +69,16 @@ JOURNAL_PATH = _default_journal_path()
 #: 文件落盘最大字节数 (journal 历史归档, 不进 prompt 也保留)
 MAX_FILE_BYTES = 50_000
 
-#: 注入 prompt 时的硬上限 (BL-FIX40, 5/11).
-#: 鸿波 5/11 实测: 50KB journal × 5 轮 chat = 250KB tokens 累积超 128K 上限,
-#: context overflow 134% gateway log 报警. 改硬上限 15KB ≈ 3K-5K tokens.
+#: 注入 prompt 时的硬上限 (BL-FIX40, 5/11; BL-FIX23-L8-overflow-fix 5/13 调小).
+#: 鸿波 5/11 实测: 50KB journal × 5 轮 chat = 250KB tokens 累积超 128K. 当时
+#: 改硬上限 15KB ≈ 3K-5K tokens.
+#: 5/13 鸿波合并 8 项资质又撞 167% overflow, journal 已涨到 644KB(!), 14.6KB
+#: 注入仍占 ~3.6K tokens × 5 轮 = 18K (14% context). 改 5KB ≈ 1.2K tokens.
+#: 损失: journal 越老段越长, 5KB 只够留**最近 3-5 个段**. 但本来上下文就紧,
+#: 副手主要看**最近** journal, 老段走 BL-MM5/MM7 长期画像 (catfish_user_profile).
 #: 截断从尾部 (保留最新), 找下一个 `## ` 段边界保段完整.
-#: 长期: Q3 加 LLM cache 摘要 (老段压缩, 新段全量), 现在先硬切扛住.
-INJECT_MAX_BYTES = 15_000
+#: 长期 P1: Q3 加 LLM cache 摘要 (老段压缩, 新段全量), 现在硬切扛住.
+INJECT_MAX_BYTES = 5_000
 
 # 老名字保留兼容 (其他地方还在引用)
 MAX_BYTES = MAX_FILE_BYTES
