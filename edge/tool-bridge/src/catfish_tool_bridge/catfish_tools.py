@@ -1688,6 +1688,85 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ── BL-REMINDER (5/13 鸿波"macOS 提醒联动") ──────────────────────
+    {
+        "name": "catfish_create_reminder",
+        "description": (
+            "★ 在 macOS Reminders.app 创建提醒 (用户管理的真 to-do, iCloud 同步到 iPhone/iPad). "
+            "**跟 notify (右上角横幅消息几秒消失) 互补** — Reminder 是用户能勾完成、跨设备的持久 to-do.\n\n"
+            "✅ 调用场景:\n"
+            "  - 员工 '提醒我明早 9 点交月报' → title='交月报' due_date_iso='2026-05-14T09:00:00'\n"
+            "  - 员工 '每周五晚 6 点提醒我备份' → title='备份' due_date_iso='2026-05-17T18:00:00' (Reminders.app 内自己设重复, AppleScript 一次性创建有限制)\n"
+            "  - 员工 '帮我记下下周三要给王总汇报' → title='给王总汇报' due_date_iso='...' body='Q2 进度 / 项目风险'\n"
+            "  - LLM 自己识别 '这是个待办' → 主动调 (e.g. 看到员工说 '别忘了... ' / '记得...')\n\n"
+            "❌ 不调用:\n"
+            "  - 一次性弹窗消息 (用 notify, 例如 '验证码已复制')\n"
+            "  - 当前会话内提示 (LLM 直接说就行)\n"
+            "  - 跨员工/跨人协作 (用 a2a_ask, Reminders 是私人)\n\n"
+            "参数:\n"
+            "  - title: 提醒标题 (必填, 短)\n"
+            "  - body: 备注详情 (可选, 长)\n"
+            "  - due_date_iso: ISO 8601 到期时间 (e.g. '2026-05-14T09:00:00'), 可选\n"
+            "  - list_name: 写到哪个 list (默认 '提醒事项'). 调 catfish_list_reminder_lists 看可用 list\n"
+            "  - priority: 0-9 (0=无, 1-3=高, 4-6=中, 7-9=低), 可选\n\n"
+            "返参:\n"
+            "  - ok: 成功返 true\n"
+            "  - reminder_name: 创建的提醒名 (回报员工时用)\n"
+            "  - error: 失败原因 (常见: 权限未给 — 系统设置 → 隐私 → 提醒事项 勾 Catfish Companion)\n\n"
+            "🔒 隐私: 100% 本机 + iCloud (用户自己的), catfish 不上行, 不存任何中央."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "提醒标题 (必填, 短描述)",
+                },
+                "body": {
+                    "type": "string",
+                    "description": "备注详情 (可选, 长描述)",
+                },
+                "due_date_iso": {
+                    "type": "string",
+                    "description": "ISO 8601 到期时间, e.g. '2026-05-14T09:00:00' (本地时区). 可选, 不传就是无截止",
+                },
+                "list_name": {
+                    "type": "string",
+                    "description": "写到哪个 list (默认 '提醒事项' 中文系统 / 'Reminders' 英文系统). 不知道传啥就先调 catfish_list_reminder_lists 看可用",
+                },
+                "priority": {
+                    "type": "integer",
+                    "description": "优先级 0-9 (0=无, 1-3=高, 4-6=中, 7-9=低)",
+                    "minimum": 0,
+                    "maximum": 9,
+                },
+            },
+            "required": ["title"],
+        },
+        "emoji": "⏰",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_list_reminder_lists",
+        "description": (
+            "列 macOS Reminders.app 所有 list 名 (用户分类如 '工作' / '家庭' / '购物'). "
+            "**第一次创建提醒前调** — 看员工有没自己分类的 list, 选合适的写. "
+            "默认 list '提醒事项' 总是存在.\n\n"
+            "✅ 调用场景:\n"
+            "  - LLM 第一次帮员工创建提醒前先看 list (避免乱写)\n"
+            "  - 员工说 '加到工作 list' → 先 list 看 '工作' 在不在\n\n"
+            "返参: list_names (数组, e.g. ['提醒事项', '工作', '家庭'])"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+        "emoji": "📋",
+        "toolset": "catfish_native",
+        "available": True,
+    },
     # ── BL-FIX-SESSION-SEARCH (5/13 鸿波"历史会话搜不到") ──────────────
     {
         "name": "catfish_search_sessions",
@@ -5889,6 +5968,13 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_list_my_outputs":
         from . import recent_outputs  # noqa: PLC0415
         return recent_outputs.tool_list_my_outputs(args)
+    # BL-REMINDER (5/13 鸿波"macOS 提醒联动")
+    if name == "catfish_create_reminder":
+        from . import reminders  # noqa: PLC0415
+        return reminders.tool_create_reminder(args)
+    if name == "catfish_list_reminder_lists":
+        from . import reminders  # noqa: PLC0415
+        return reminders.tool_list_reminder_lists(args)
     raise ValueError(f"unknown native tool: {name}")
 
 

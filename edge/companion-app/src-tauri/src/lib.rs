@@ -333,6 +333,9 @@ pub fn run() {
             // system
             commands::system::open_terminal,
             commands::system::notify,
+            // BL-REMINDER (5/13): macOS Reminders.app 集成
+            commands::system::create_reminder,
+            commands::system::list_reminder_lists,
             // file (Phase 2 优雅下载: skill 生成的 .docx/.xlsx/.pptx 在 Finder 显示)
             commands::file::reveal_in_finder,
             commands::file::open_file,

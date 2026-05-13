@@ -4774,3 +4774,55 @@ Session: 20260513_205614_08fef0
 - 升级实际工作量: **25 分钟** (准备分析 / 跑命令 / 截图验证)
 - 关键发现: **5/7 BL-D14.5 升级保护设计是真灵丹妙药** — git hook 自动重打 + MISS fallback + 函数级替换让升级几乎零摩擦
 - 后人 grep 入口加: `BL-HERMES-UPGRADE-013`
+
+#### 任务 #44 / #45 / #52 / #53 / #54: 169 项回归 + ACP 重评估 + BACKLOG 修订 + ACP /queue 等价
+
+**回归 (任务 #44)**: hermes 0.13 升级后跑 169 项 HERMES-UPGRADE-CHECKLIST, 全 PASS, 没退化.
+
+**ACP 重评估 (任务 #45)**: 我之前误把 ACP `/steer` + `/queue` 跟 BL-FIX23 同类砍掉, 鸿波 22:00 推翻, 拆开看:
+- `/queue` (排队等当前完成) — 用户主动语义, 不打断 stream, 跟 BL-FIX23 (gateway 猜) **不是一回事**, 0.5 天极低风险, 该做
+- `/steer` (in-flight prompt injection) — 跟 BL-FIX23 实现复杂度类似但触发源是用户而非 gateway, 谨慎设计可做, 2-3 天
+
+**BACKLOG 修订 (任务 #52 / #54)**: 5/14 启动 BL-RBAC + B (OAuth client credentials) 合一 sprint Day 1, ACP /steer + Multi-Agent Kanban 提到 5/15-5/18 跟 RBAC 并行. i18n 排到 5/23-5/26. 写入 `BACKLOG.md`.
+
+**ACP /queue 等价 ship (任务 #53, BL-HERMES013-RED-1A)** — 全前端实现, 0 gateway 改动:
+- `companion-app/src/store/chat.ts` — `queue` field + `enqueueMessage` / `dequeueMessage` / `removeQueuedMessage` / `clearQueue` actions, `reset()` 也清 queue
+- `companion-app/src/hooks/useChat.ts` — send() finally 块自动 dequeue 下一条 (`setTimeout 200ms` 给 React state 跟一下), 加 `enqueue` 回调返回
+- `companion-app/src/tabs/Chat/ChatInput.tsx` — streaming + hasContent 时按钮变成 `[⏳ 排队]` + `[⏹ 停下接着发]` 并排; 加 `QueuedMessagesStrip` 组件 (输入框下方显示已排队 msg + X 移除)
+- 20 单测全过 (`store/queue.test.ts`)
+- TypeScript tsc --noEmit exit=0
+
+#### 任务 #55: BL-REMINDER macOS Reminders.app 集成 (catfish_create_reminder native tool)
+
+鸿波 22:40 拍板 "我们现在的定时提醒能设置 macOS 的提醒联动了吗" → 走方案 2 (osascript Reminders.app, 跟 5/2 BL-E13 notify 同源同进程模式). 跟 notify 互补:
+
+| 工具 | 触发场景 | 持久性 |
+|---|---|---|
+| `notify` (5/2 BL-E13) | "现在告诉我 X 完了" | 几秒消失, 一次性 |
+| **`catfish_create_reminder` (新)** | "提醒我明早 9 点交月报" / "别忘了..." / "记得..." | macOS Reminders.app, iCloud 同步到 iPhone/iPad, 用户能勾完成 |
+
+**实现**:
+- `companion-app/src-tauri/src/commands/system.rs` — 新 Tauri command `create_reminder(title, body?, due_date_iso?, list_name?, priority?)` + `list_reminder_lists()`. osascript `tell application "Reminders"`, ISO 8601 → AppleScript date 字符串转换, properties record 拼装, TCC 权限错误友好化
+- `companion-app/src-tauri/src/lib.rs` — 注册 2 个新 command 到 `invoke_handler`
+- `tool-bridge/src/catfish_tool_bridge/catfish_tools.py` — 加 `catfish_create_reminder` + `catfish_list_reminder_lists` 到 `CATFISH_NATIVE_TOOLS` schema array (description 明确告诉 LLM 跟 notify 区别), `_dispatch_native_inner` 加 routing
+- `tool-bridge/src/catfish_tool_bridge/reminders.py` (新, ~200 行) — Python 侧实现 (跟 Tauri 平行, 因为 tool-bridge 跟 Companion 是不同进程, 各自 osascript 调用):
+  - `tool_create_reminder` / `tool_list_reminder_lists` (osascript subprocess + 10s timeout)
+  - `_convert_iso_to_applescript_date` (handle Z, +08:00, -05:00 offsets)
+  - `_escape_applescript_string` (escape `\\` 先, 再 escape `"`)
+  - 错误友好化: 权限未给 → `needs_permission: True`, list 不存在 → `list_not_found: <name>`
+  - 输入校验放 platform check **之前** (LLM 在非 macOS CI 上错调时也能拿到 "title 不能空" 而非平台错)
+- `tool-bridge/tests/test_reminders.py` (新, 24 单测) — 输入校验 / ISO 转换 (Z/offset/dashes preserved) / AppleScript escape (quote/backslash/both/中文不动) / 非 macOS 兜底 / mock osascript 权限拒绝 / list 不存在 / 成功 / minimal args / priority 钳到 0-9 / dispatch 路由 / schema 注册. 全过.
+
+**SOUL.md 加铁律** (`§606`): "提醒 / 通知 — notify vs catfish_create_reminder" — 出现 "提醒我..." / "别忘了..." / "记得..." / "明天 / 下周 / X 点 做 X" 句式优先 `catfish_create_reminder`, 不要只 `notify` (notify 几秒就消失员工真到时间会忘). 首次调用 macOS 弹 TCC 权限申请, `needs_permission: True` 时别重试, 告诉员工去系统设置勾上 Catfish Companion.
+
+**为什么两份实现 (Rust + Python)**: tool-bridge 给 LLM 调用走 (hermes adapter dispatch_native), Companion Tauri command 给 UI 直接调 (后续仪表盘可加"加 reminder" 按钮). 不同进程各自需要 osascript 调用, 不能互相代劳.
+
+**TODO 鸿波本机**:
+- Tauri build 后首次调用 `catfish_create_reminder` 会弹 macOS TCC 权限申请, 需要在 系统设置 → 隐私与安全性 → 提醒事项 勾上 Catfish Companion
+- 端到端验证: 跟 LLM 说 "提醒我明早 9 点交月报", LLM 应该调 `catfish_create_reminder(title='交月报', due_date_iso='2026-05-14T09:00:00')`, Reminders.app 出新条
+
+### 最终统计 (含 #44-#55, 5/13 收尾)
+
+- **55 个 task**: 49 completed + 6 pending (#46/#47/#48/#50/#51 排到后续 sprint, #55 含本段全部 ship)
+- 后人 grep 入口加: `BL-HERMES013-RED-1A` (ACP /queue 等价), `BL-REMINDER` (macOS Reminders.app 集成)
+- 教训: **不要把"图省事"判断当结论** — i18n / OAuth client credentials / ACP /queue 三件鸿波都推翻过我"砍掉"判断, 真重新评估都是该做的. 软件项目里"省事" 偷的不是工作量, 是产品力

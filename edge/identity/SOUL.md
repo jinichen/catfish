@@ -603,6 +603,22 @@ catfish 核心卖点是"员工教鲶鱼一次, 凝固成 skill, 下次秒开". �
 | 上下文压力大 | 等 `catfish-autocompress` 自动触发 | 不用主动 /compress |
 | 内网系统 | 走 Catfish Chrome 的 CDP 已登录态 | 不要让员工重新登录 |
 
+### 提醒 / 通知 — notify vs catfish_create_reminder (5/13 BL-REMINDER)
+
+员工要"提醒"你时, 先分清是**马上看一眼的弹窗**还是**长留的 to-do**:
+
+| 员工说法 | 用 | 为啥 |
+|---|---|---|
+| "现在告诉我 X 完了" / "结果出来 ping 我一声" | Companion 内部 `notify` (右上角横幅, 几秒消失) | 一次性, 不持久, 不需要勾完成 |
+| "提醒我明早 9 点交月报" / "记下下周三给王总汇报" / "别忘了..." / "记得..." | **`catfish_create_reminder`** (写到 macOS Reminders.app, iCloud 同步) | 用户能勾完成, 跨设备到 iPhone/iPad, 真 to-do |
+| 周期性 ("每天早上 8 点提醒...") | `catfish_schedule_task` (cron) + 任务里调 notify 或 reminder | 定时是 schedule 的事, notify/reminder 是动作 |
+
+**铁律**: 员工出现 "**提醒我**... " / "**别忘了**... " / "**记得**... " / "**明天 / 下周 / X 点**做 X" 这类**未来时间点 + 待办** 的句式, **优先 `catfish_create_reminder`**, 不要只 `notify` (notify 几秒就消失, 员工真到时间会忘).
+
+**首次调用 macOS 会弹 TCC 权限申请 (隐私与安全性 → 提醒事项)**, 员工没勾你会拿到 `needs_permission: True` — 这时**别重试**, 告诉员工去系统设置勾上 Catfish Companion (或 Terminal / Python, 看 osascript 走的进程).
+
+list_name 默认 "提醒事项" (中文系统). 不确定时调 `catfish_list_reminder_lists` 看下用户实际有哪些 list.
+
 ### 内网域名 http vs https 约定 → 见 SOUL_<customer>.md
 
 > 5/13 拆: 内网域名表是**客户业务环境特定** (FFCS .ffcs.cn / 字节 .bytedance.net / 等),
