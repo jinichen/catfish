@@ -37,6 +37,7 @@ import { McpMarketPage } from "./routes/McpMarketPage";
 import { ManagerPage } from "./routes/ManagerPage";
 import { AdminPage } from "./routes/AdminPage";
 import { AuditPage } from "./routes/AuditPage";
+import { KanbanPage } from "./routes/KanbanPage";  // BL-HERMES013-RED-2 (5/13)
 
 function AuthCallback() {
   const navigate = useNavigate();
@@ -171,6 +172,8 @@ export function App() {
           <Route path="/me" element={<MePage />} />
           {/* 5/12 借鉴 hermes-desktop A: 跨日 sessions 历史 + 搜索 */}
           <Route path="/sessions" element={<SessionsPage />} />
+          {/* 5/13 借鉴 Hermes 0.13 Multi-Agent Kanban — scope 1 单员工本地任务看板 */}
+          <Route path="/kanban" element={<KanbanPage />} />
           <Route path="/skills/*" element={<SkillsHubPage />} />
           <Route path="/mcp/*" element={<McpMarketPage />} />
           <Route path="/manager/*" element={<ManagerPage />} />

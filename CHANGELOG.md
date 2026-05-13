@@ -4872,8 +4872,61 @@ UX 跟 ACP /queue / cancelAndSend 三按钮并排, streaming + hasContent 时显
 
 **Multi-Agent Kanban catfish-web surface (#46)** 还 pending — 排明天 5/15-5/18 阶段做, 鸿波拍 "scope 1 优先 (catfish 自有 catfish_run_task / a2a / schedule_task 聚合) + 2 补 (有 hermes Kanban API 就嵌一个 tile)". 今晚不开新坑.
 
-### 最终统计 (含 #56, 5/13 真收尾)
+### 任务 #46: BL-HERMES013-RED-2 Multi-Agent Kanban — scope 1 单员工本地任务看板
 
-- **56 个 task**: 50 completed + 6 pending
-- 后人 grep 入口加: `BL-HERMES013-RED-1B` (ACP /steer 等价 — 路径 A 断流 + 续接)
-- ACP /queue + /steer 一起 ship 后, Companion 在长任务 stream 中给员工 4 种动作选项 (排队 / 改主意 / 停下接着发 / 自动续跑 toggle), UX 完整度跟 hermes 0.13 ACP IDE 体验对齐
+23:35 鸿波 "继续" → 接 Kanban. 我抛 reality check: catfish task_manager 是 **in-memory dict** 不跨进程, a2a 是 jsonl, 没有跨员工 task store (BACKLOG 排 5/22+ 才做持久化). 一晚 1h 拼跨员工 Multi-Agent Kanban 不现实 — 鸿波拍板 **scope 1 "我的任务" MVP** (单员工本地聚合).
+
+**实现** (4 文件改 + 2 新文件 + 22 新单测):
+
+后端 (catfish-gateway + tool-bridge):
+- `tool-bridge/src/catfish_tool_bridge/task_manager.py`:
+  - 加 `_tasks_jsonl_path()` (跟 a2a_notifications 同根 `~/.catfish/tasks.jsonl`)
+  - 加 `_persist_task_to_jsonl(task)` 在 `_run_wrapper` finally 里 append 一行 (不存 result 全部, 200 字 result_preview 摘要)
+  - 加 `read_tasks_from_jsonl(hours_back, limit)` 给 gateway 用 (倒序 + cutoff 过滤)
+- `central/llm-gateway/src/catfish_gateway/tasks_browse.py` (新, ~190 行):
+  - `list_my_tasks(hours_back, limit, sources)` — 聚合 `tasks.jsonl` (background) + `a2a_notifications.jsonl` (a2a_inbox) → 统一 TaskCard
+  - 状态映射: a2a 已答 → completed, 未答 → waiting; background 跟 task_manager status 直传; 未知 status 兜底 pending
+  - `status_summary(cards)` 给 UI 5 列徽章计数
+- `central/llm-gateway/src/catfish_gateway/app.py`:
+  - 加 `GET /api/tasks/me?hours_back=48&limit=200&source=` endpoint, 跟 `/api/sessions/me` 同模式 (走 `get_current_user` Depends + viewer 标记)
+
+前端 (catfish-web):
+- `central/web/src/lib/tasks.ts` (新): `TaskCard` / `TaskStatus` / `TaskSource` types + `fetchMyTasks(hoursBack, limit, source?)` + `KANBAN_COLUMNS` 常量 (5 列顺序 + emoji)
+- `central/web/src/routes/KanbanPage.tsx` (新, ~250 行):
+  - 顶部控制条: 时间窗下拉 (24h / 48h / 7天) + 5s 自动刷新 + "刷新: Ns 前" 指示
+  - 5 列横向 layout (overflow-x scroll), 每列固定 280px min-width, 标题含 emoji + 数量徽章
+  - 卡片左边框颜色按 source 分 (background = cyan, a2a_inbox = warn 橙)
+  - 卡片显: 🤖/📨 + kind / title (2 行 clamp) / from_sub (a2a) / preview / error / 时间 + 耗时
+  - 点击卡片 → alert 占位详情 (未来做 right drawer)
+  - **scope 1 限制说明卡** 醒目放底部, 让看的人知道边界 (单员工/单设备/重启丢 running)
+- `central/web/src/App.tsx`: `import KanbanPage` + 加 `<Route path="/kanban">` (在 sessions 后面)
+- `central/web/src/components/NavBar.tsx`: 加 `📊 看板` 链接 (在 📚 会话 之后, Skills Hub 之前)
+
+**单测** (gateway +15, tool-bridge +7, 共 22 新):
+- `tool-bridge/tests/test_task_manager.py` 加 `JsonlPersistenceTests` (7 test):
+  - persist completed/failed task 写 jsonl 一行
+  - read filters by hours_back / 倒序 (newest first) / 文件不存在不挂 / 坏行跳过 / 字符串 result preview
+- `central/llm-gateway/tests/test_tasks_browse.py` (新, 15 test):
+  - 空文件 / background only / a2a 已答→completed / 未答→waiting / 混合 source / source 过滤 / hours_back 过滤 / 倒序 / limit cap / status_summary 计数 / 坏 jsonl 行跳过 / unknown status 兜底 pending
+
+**结果**:
+- tool-bridge `test_task_manager.py`: 26 → **33 passed** (+7 jsonl tests)
+- gateway 全套: 908 → **923 passed**, 9 skipped (+15 tasks_browse, 0 回归)
+- TypeScript tsc --noEmit exit=0 (修了一个未用 status 参数 lint, 改注释掉)
+
+**scope 1 已知限制 (诚实公布)** — KanbanPage 底部说明卡也写了, 防后人误用:
+- 单员工 — 跨员工 (manager 看本部门 / admin 看全公司) 等 task_manager → SQLite 中心 DB 持久化, 排 BL-RBAC sprint 后
+- 单设备 — jsonl 在本机 ~/.catfish/, 不跨设备
+- "跑中"列弱 — task_manager status running 只在 in-memory, jsonl 只 finally 写最终态. 重启后 in-memory 丢, "跑中" 这一列只能看当前进程内 task_manager.list_active() 的, 不在本次 ship 范围
+
+**为什么拒绝两个分歧选项**:
+- 拒 "全栈 MVP 框架 + mock data" → 鸿波明确反对 "用户看不见的半成品 / 占位"
+- 拒 "等 task_manager 持久化做完再做 Kanban" → 错过 demo 价值, scope 1 (我的任务) 已经是真功能
+
+**Multi-Agent Kanban scope 2** (跟 hermes 0.13 自带 Kanban API 接, 把它当 tile 嵌入) 排 5/15-5/18 跟 RBAC sprint 并行, 先有 task_manager 中心 DB 持久化才能真做.
+
+### 最终统计 (含 #56 + #46, 5/13 真真收尾)
+
+- **56 个 task**: 51 completed + 5 pending (#47/#48/#50/#51 排后续 sprint, #46 含本段 scope 1 全 ship)
+- 后人 grep 入口加: `BL-HERMES013-RED-1B` (ACP /steer), **`BL-HERMES013-RED-2`** (Multi-Agent Kanban scope 1 — 单员工本地)
+- 5/13 一日净交付收尾: hermes 0.13 升级 + ACP /queue + ACP /steer + macOS Reminders + Multi-Agent Kanban scope 1 + BACKLOG sprint 修订 — 6 件大事一日 ship, 没靠加班"图省事", 全部含完整单测 + 文档 + 兜底

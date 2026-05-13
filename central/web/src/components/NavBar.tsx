@@ -23,6 +23,8 @@ export function NavBar() {
     { to: "/me", label: "我的", show: true },
     // 5/12 借鉴 hermes-desktop A: 跨日历史搜索
     { to: "/sessions", label: "📚 会话", show: true },
+    // 5/13 BL-HERMES013-RED-2: 多 agent 任务看板 (scope 1 单员工本地)
+    { to: "/kanban", label: "📊 看板", show: true },
     { to: "/skills", label: "Skills Hub", show: true },
     { to: "/mcp", label: "MCP 市场", show: true },
     { to: "/manager", label: "部门", show: isManagerOrAbove },

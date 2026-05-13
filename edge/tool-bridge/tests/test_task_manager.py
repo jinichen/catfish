@@ -420,5 +420,111 @@ class TestBLE274NotifyRules(unittest.TestCase):
         self.assertTrue(task_manager._should_send_macos_notify(t2, elapsed=5.0))
 
 
+class JsonlPersistenceTests(unittest.TestCase):
+    """BL-HERMES013-RED-2 (5/13): tasks.jsonl 持久化给 catfish-web Kanban 用."""
+
+    def setUp(self):
+        # 隔离 CATFISH_HOME 防污染真用户的 ~/.catfish/tasks.jsonl
+        self._tmp = Path(f"/tmp/catfish-test-jsonl-{os.getpid()}-{time.time_ns()}")
+        self._tmp.mkdir(parents=True, exist_ok=True)
+        self._old_home = os.environ.get("CATFISH_HOME")
+        os.environ["CATFISH_HOME"] = str(self._tmp)
+
+    def tearDown(self):
+        # 还原 CATFISH_HOME + 清 tmp
+        if self._old_home is None:
+            os.environ.pop("CATFISH_HOME", None)
+        else:
+            os.environ["CATFISH_HOME"] = self._old_home
+        try:
+            for f in self._tmp.glob("*"):
+                f.unlink()
+            self._tmp.rmdir()
+        except OSError:
+            pass
+
+    def _mk_task(self, **kw):
+        defaults = dict(
+            task_id="task_test1", kind="execute_code", label="测试", status="completed",
+            started_at=time.time() - 10, finished_at=time.time(), result=None, error=None,
+        )
+        defaults.update(kw)
+        return task_manager.Task(**defaults)
+
+    def test_persist_completed_task_writes_one_line(self):
+        t = self._mk_task(result={"stdout": "hi", "returncode": 0})
+        task_manager._persist_task_to_jsonl(t)
+        path = task_manager._tasks_jsonl_path()
+        self.assertTrue(path.exists(), f"{path} 应被创建")
+        lines = path.read_text(encoding="utf-8").strip().splitlines()
+        self.assertEqual(len(lines), 1)
+        rec = json.loads(lines[0])
+        self.assertEqual(rec["task_id"], "task_test1")
+        self.assertEqual(rec["status"], "completed")
+        self.assertIn("rc=0", rec["result_preview"])
+        self.assertIn("hi", rec["result_preview"])
+
+    def test_persist_failed_task_records_error(self):
+        t = self._mk_task(status="failed", error="OSError: boom")
+        task_manager._persist_task_to_jsonl(t)
+        rows = task_manager.read_tasks_from_jsonl(hours_back=None)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["status"], "failed")
+        self.assertEqual(rows[0]["error"], "OSError: boom")
+
+    def test_read_filters_by_hours_back(self):
+        """超 hours_back 的老任务应被过滤掉."""
+        t_new = self._mk_task(task_id="task_new1")
+        t_old = self._mk_task(task_id="task_old1", started_at=time.time() - 100 * 3600)
+        task_manager._persist_task_to_jsonl(t_new)
+        task_manager._persist_task_to_jsonl(t_old)
+        rows = task_manager.read_tasks_from_jsonl(hours_back=24)
+        ids = [r["task_id"] for r in rows]
+        self.assertIn("task_new1", ids)
+        self.assertNotIn("task_old1", ids)
+
+    def test_read_returns_newest_first(self):
+        """倒序 — 最新在前."""
+        for i, ts in enumerate([100, 200, 300]):
+            task_manager._persist_task_to_jsonl(
+                self._mk_task(task_id=f"task_{i}", started_at=time.time() - ts)
+            )
+        rows = task_manager.read_tasks_from_jsonl(hours_back=None)
+        # task_2 (started_at=time-300s) 写在最后, read 倒序后应该在第一
+        self.assertEqual(rows[0]["task_id"], "task_2")
+        self.assertEqual(rows[-1]["task_id"], "task_0")
+
+    def test_read_handles_missing_file(self):
+        """文件不存在不挂."""
+        # tearDown 会删, 这里手动验"还没创建" 状态
+        path = task_manager._tasks_jsonl_path()
+        if path.exists():
+            path.unlink()
+        rows = task_manager.read_tasks_from_jsonl()
+        self.assertEqual(rows, [])
+
+    def test_read_skips_corrupt_lines(self):
+        """坏行跳过, 不致命整个 read 挂."""
+        path = task_manager._tasks_jsonl_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            '{"task_id":"task_ok1","status":"completed","started_at":' + str(time.time()) + '}\n'
+            'not valid json at all\n'
+            '{"task_id":"task_ok2","status":"completed","started_at":' + str(time.time()) + '}\n',
+            encoding="utf-8",
+        )
+        rows = task_manager.read_tasks_from_jsonl()
+        ids = [r["task_id"] for r in rows]
+        self.assertEqual(set(ids), {"task_ok1", "task_ok2"})
+
+    def test_persist_string_result(self):
+        """result 是字符串也能 preview."""
+        t = self._mk_task(result="纯文字结果 " + "x" * 500)
+        task_manager._persist_task_to_jsonl(t)
+        rec = task_manager.read_tasks_from_jsonl()[0]
+        self.assertTrue(rec["result_preview"].startswith("纯文字结果"))
+        self.assertLessEqual(len(rec["result_preview"]), 200)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

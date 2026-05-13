@@ -57,6 +57,8 @@ import asyncio
 import json
 import logging
 import os
+import json
+import os
 import secrets
 import time
 from dataclasses import dataclass, field
@@ -144,6 +146,17 @@ class TaskManager:
                 except Exception:
                     logger.warning(
                         "task done 通知失败 (无关键路径): id=%s",
+                        task_id, exc_info=True,
+                    )
+                # BL-HERMES013-RED-2 (5/13): jsonl 持久化 — 写一行让重启后
+                # catfish-web Kanban 页面看得到. in-memory dict 重启就丢, 但
+                # jsonl 跨进程跨重启活. 不存 result (太大), 只存元数据 + error.
+                # 失败不阻塞 (swallow), 跟通知同优先级 (非关键路径).
+                try:
+                    _persist_task_to_jsonl(task)
+                except Exception:
+                    logger.warning(
+                        "task jsonl 持久化失败 (无关键路径): id=%s",
                         task_id, exc_info=True,
                     )
 
@@ -254,6 +267,116 @@ async def _runner_execute_code(payload: dict) -> dict:
 _KIND_RUNNERS: dict[str, Callable[[dict], Awaitable[dict]]] = {
     "execute_code": _runner_execute_code,
 }
+
+
+# BL-HERMES013-RED-2 (5/13): jsonl 持久化路径 — 跟 a2a_notifications 同模式
+# (CATFISH_HOME/tasks.jsonl, fallback ~/.catfish/tasks.jsonl).
+# catfish-gateway tasks_browse.py 读这个文件给 web /api/tasks/me 用.
+def _tasks_jsonl_path() -> Path:
+    """跟 a2a_notifications._notifications_path() 对齐 — 同根目录."""
+    catfish_home = os.environ.get("CATFISH_HOME", "").strip()
+    if catfish_home:
+        return Path(catfish_home).expanduser() / "tasks.jsonl"
+    return Path.home() / ".catfish" / "tasks.jsonl"
+
+
+def _persist_task_to_jsonl(task: Task) -> None:
+    """append 一行 jsonl 记录任务最终状态. 给 catfish-web Kanban 页用.
+
+    不存 result 全部 (太大, _MAX_RESULT_CHARS=100K), 只存 result 短摘要 + error.
+    任务 still running 时不写 (run_wrapper 只在 finally 调本函数, 此时 status 是
+    completed/failed 二选一).
+
+    格式跟 a2a_notifications.jsonl 类似, 给 tasks_browse.py 解析:
+    ```json
+    {
+      "task_id": "task_abc12345",
+      "kind": "execute_code",
+      "label": "修订《资质管理办法》",
+      "status": "completed",
+      "started_at": 1763061234.5,
+      "finished_at": 1763061334.7,
+      "elapsed_s": 100.2,
+      "error": null,
+      "result_preview": "(执行 87 行 Python, 输出 2.3 KB)"
+    }
+    ```
+    """
+    path = _tasks_jsonl_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    # result_preview: 取个 200 字摘要给 UI 卡片显示, 不存全部 result
+    result_preview = ""
+    if task.status == "completed" and task.result is not None:
+        try:
+            if isinstance(task.result, dict):
+                # execute_code 返 {stdout, stderr, returncode, ...}
+                stdout = str(task.result.get("stdout", ""))[:150]
+                rc = task.result.get("returncode", "?")
+                result_preview = f"rc={rc} stdout={stdout!r}"[:200]
+            elif isinstance(task.result, str):
+                result_preview = task.result[:200]
+            else:
+                result_preview = str(task.result)[:200]
+        except Exception:
+            result_preview = "(result 摘要生成失败)"
+
+    record = {
+        "task_id": task.task_id,
+        "kind": task.kind,
+        "label": task.label,
+        "status": task.status,
+        "started_at": task.started_at,
+        "finished_at": task.finished_at,
+        "elapsed_s": (
+            (task.finished_at or time.time()) - task.started_at
+        ),
+        "error": task.error,
+        "result_preview": result_preview,
+    }
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def read_tasks_from_jsonl(
+    hours_back: int | None = 24,
+    limit: int = 200,
+) -> list[dict]:
+    """供 catfish-gateway tasks_browse.py 读历史任务列表.
+
+    Args:
+        hours_back: 看过去几小时, None = 全部
+        limit: 最多返几条 (从 jsonl 末尾倒序读)
+
+    Returns:
+        list[dict] — 跟 _persist_task_to_jsonl 写的 record 同格式
+    """
+    path = _tasks_jsonl_path()
+    if not path.exists():
+        return []
+    cutoff = (
+        time.time() - hours_back * 3600 if hours_back is not None else None
+    )
+    rows: list[dict] = []
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue  # 跳坏行, 不致命
+                if cutoff is not None and rec.get("started_at", 0) < cutoff:
+                    continue
+                rows.append(rec)
+    except OSError as e:
+        logger.warning("read_tasks_from_jsonl: %s 读失败: %s", path, e)
+        return []
+    # 倒序 (最新在前) + cap limit
+    rows.reverse()
+    return rows[:limit]
 
 
 #: BL-E27.4 (5/8): macOS 通知去重 — 同 label 1 小时内已发过 → 不重复发.

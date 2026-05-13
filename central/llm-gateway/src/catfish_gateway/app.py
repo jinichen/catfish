@@ -571,6 +571,59 @@ async def api_sessions_detail(
     return detail
 
 
+# ── /api/tasks/me — Multi-Agent Kanban 单员工任务看板 (BL-HERMES013-RED-2 5/13) ──
+#
+# scope 1 (鸿波 5/13 22:35 拍板): 单员工本地任务聚合, 跨员工跨设备等 BL-RBAC sprint
+# 后做 task_manager 中心 DB 持久化再扩.
+#
+# 数据源:
+#  - ~/.catfish/tasks.jsonl              tool-bridge task_manager (catfish_run_task)
+#  - ~/.catfish/a2a_notifications.jsonl  a2a 收件 (BL-FED2.6, 别人来求助)
+#
+# 跟 hermes 0.13 自带 Multi-Agent Kanban API 不冲突 — 5/15-5/18 接 hermes Kanban
+# 的话当一个 tile 嵌进来 (scope 2 补).
+
+@app.get("/api/tasks/me")
+async def api_tasks_list(
+    user: User = Depends(get_current_user),
+    hours_back: int = 48,
+    limit: int = 200,
+    source: str = "",
+) -> dict[str, Any]:
+    """列员工自己本地的任务 (background + a2a_inbox 聚合).
+
+    Args:
+        hours_back: 看过去几小时, 默认 48 (周一看周五跨天).
+        limit: 最多返几张卡, 默认 200.
+        source: 过滤 source 逗号分隔 (空 = 全要), 例 "background" / "a2a_inbox".
+
+    Returns:
+        {
+          "cards": [TaskCard, ...],   # 倒序 (最新在前)
+          "summary": {pending: N, running: N, waiting: N, completed: N, failed: N},
+          "viewer": "<sub>",
+          ...
+        }
+    """
+    from . import tasks_browse  # noqa: PLC0415
+    sources_filter: list[str] | None = None
+    if source:
+        sources_filter = [s.strip() for s in source.split(",") if s.strip()]
+    cards = tasks_browse.list_my_tasks(
+        hours_back=max(1, int(hours_back)) if hours_back > 0 else None,
+        limit=max(1, min(1000, int(limit))),
+        sources=sources_filter,
+    )
+    return {
+        "cards": cards,
+        "summary": tasks_browse.status_summary(cards),
+        "total": len(cards),
+        "limit": max(1, min(1000, int(limit))),
+        "hours_back": int(hours_back),
+        "viewer": user.sub,
+    }
+
+
 # /api/quota/department/{dept} — manager / admin 看本部门 quota 聚合
 #
 # 包含: 部门日 quota 用量 + 限额 + top N 员工 token 用量.
