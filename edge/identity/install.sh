@@ -18,9 +18,11 @@ BACKUP="$HOME/.hermes/SOUL.md.before-catfish"
 
 # 5/13 拆分: 客户特定段独立文件 (CATFISH_CUSTOMER env 决定 gateway 注入哪份)
 # 默认 ffcs (兼容现有). 别家客户加 SOUL_BYD.md / SOUL_MEITUAN.md 同模式.
+# bash 3.2 (mac 默认) 不支持 ${VAR^^}, 用 tr 大写
 CUSTOMER="${CATFISH_CUSTOMER:-ffcs}"
-SOUL_CUSTOMER_SRC="$SCRIPT_DIR/SOUL_${CUSTOMER^^}.md"   # SOUL_FFCS.md
-SOUL_CUSTOMER_DST="$HOME/.hermes/SOUL_${CUSTOMER^^}.md"
+CUSTOMER_UPPER="$(echo "$CUSTOMER" | tr '[:lower:]' '[:upper:]')"
+SOUL_CUSTOMER_SRC="$SCRIPT_DIR/SOUL_${CUSTOMER_UPPER}.md"   # SOUL_FFCS.md
+SOUL_CUSTOMER_DST="$HOME/.hermes/SOUL_${CUSTOMER_UPPER}.md"
 
 GREEN='\033[32m'; YELLOW='\033[33m'; RESET='\033[0m'
 ok()   { echo -e "    ${GREEN}OK${RESET} $*"; }
