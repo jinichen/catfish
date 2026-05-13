@@ -1644,6 +1644,50 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ── BL-FIX-TIMEOUT-OUTPUTS (5/13 鸿波"做不出文档") ─────────────────
+    {
+        "name": "catfish_list_my_outputs",
+        "description": (
+            "★ 列你 (鲶鱼) 跨 session 写过的所有文件 (~/.catfish/output/), "
+            "按时间倒序. 上游 LLM 卡 / 反复幻觉 / 鸿波等不及刷时, **先调这个**"
+            "看有没已经写过, 别再 execute_code 重做.\n\n"
+            "✅ 调用场景:\n"
+            "  - 员工 '我刚才让你做的 xlsx 在哪?' → hours_back=2\n"
+            "  - 员工 '上次合并资质那个文件还在吗' (新对话) → hours_back=24 ext_filter=.xlsx\n"
+            "  - LLM 自己想确认 '我之前做过这个吗' (避免重做) → 主动调\n"
+            "  - 鸿波 '今天我让你写过哪些文档' → hours_back=24\n\n"
+            "❌ 不调用:\n"
+            "  - 员工自己上传的文件 (那在 ~/.catfish/uploads/, 不是 output)\n"
+            "  - 当前 session 内刚写的文件 (你应该记得, 不需要查目录)\n\n"
+            "返参:\n"
+            "  - count: 文件数\n"
+            "  - items: 每条 {path, name, size_human, mtime_iso, ext}\n"
+            "  - by_ext: {.xlsx: 3, .docx: 1, .md: 2}\n"
+            "  - summary: 一句话归纳, 念给员工知道有哪些可用文件\n\n"
+            "🔒 隐私: 只列员工本机 output 目录, 不上行中央."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "hours_back": {
+                    "type": "integer",
+                    "description": "过去多少小时 (默认 24, 0 = 全部时间约 1 年)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "最多返多少 (默认 20, 上限 100)",
+                },
+                "ext_filter": {
+                    "type": "string",
+                    "description": "只返某种类型 (例 '.xlsx' / '.docx' / '.md')",
+                },
+            },
+            "required": [],
+        },
+        "emoji": "📁",
+        "toolset": "catfish_native",
+        "available": True,
+    },
     # ── BL-FIX-SESSION-SEARCH (5/13 鸿波"历史会话搜不到") ──────────────
     {
         "name": "catfish_search_sessions",
@@ -5841,6 +5885,10 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_search_sessions":
         from . import sessions_search  # noqa: PLC0415
         return sessions_search.tool_search_sessions(args)
+    # BL-FIX-TIMEOUT-OUTPUTS (5/13 鸿波"做不出文档")
+    if name == "catfish_list_my_outputs":
+        from . import recent_outputs  # noqa: PLC0415
+        return recent_outputs.tool_list_my_outputs(args)
     raise ValueError(f"unknown native tool: {name}")
 
 

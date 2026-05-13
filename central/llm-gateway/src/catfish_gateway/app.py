@@ -1801,6 +1801,31 @@ async def _stream_chat_completion(
         )
         # 给客户端一个 friendly 错误 —— 把内部 trace 简化成人话
         friendly = _friendly_upstream_error(err)
+        # BL-FIX-TIMEOUT-OUTPUTS (5/13 鸿波"做不出文档"): 上游 LLM 卡 / timeout
+        # 时, 副手实际可能已经写过文件 (execute_code 早跑了), 列最近 ~/.catfish/output/
+        # 文件给员工看, 别让他以为"做不出来"实际"已经做了".
+        err_low = err.lower()
+        is_timeout_or_overload = (
+            "timeout" in err_low or "timed out" in err_low
+            or "overloaded" in err_low or "503" in err
+            or "broken pipe" in err_low or "connection error" in err_low
+        )
+        if is_timeout_or_overload:
+            try:
+                from . import recent_outputs  # noqa: PLC0415
+                outputs = recent_outputs.list_recent(hours_back=24, limit=5)
+                if outputs:
+                    friendly += "\n\n📁 **过去 24h 鲶鱼已写文件** (上游卡时她可能已经做过, 直接 open 看):\n"
+                    for o in outputs:
+                        friendly += f"  - `{o['path']}` ({o['size_human']}, {o['mtime_iso'][:16]})\n"
+                friendly += (
+                    "\n💡 上游模型可能拥堵, 试试:\n"
+                    "  - **切大模型**: 输入 `/model catfish-public-gemini-pro` (2M 上下文, 公网快)\n"
+                    "  - **新建会话** (Cmd+N): 减小 prompt 让上游推理更快\n"
+                    "  - 上游 catfish-private-main 是内网 122B Qwen, 长 prompt + 高负载下推理 5+ 分钟"
+                )
+            except Exception as _e:  # noqa: BLE001
+                logger.warning("BL-FIX-TIMEOUT-OUTPUTS: recent_outputs 失败 (静默): %s", _e)
         yield f"data: {json.dumps({'error': friendly})}\n\n"
     finally:
         # BL-HERMES013-5 (5/12): 散点 audit/quota/context inline 调用 重构成
