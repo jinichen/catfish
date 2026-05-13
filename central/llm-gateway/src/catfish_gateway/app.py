@@ -2066,11 +2066,38 @@ async def chat_completions(
         from . import self_critique  # noqa: PLC0415  lazy import
         body["messages"] = self_critique.inject_completion_critique_hint(body["messages"])
 
-        # BL-FIX24: 重复 productive tool_call guard
+        # BL-FIX24: 重复 productive tool_call guard (软纪律 — 注入 hint 给 LLM 看)
         from . import duplicate_tool_call_guard  # noqa: PLC0415  lazy import
         body["messages"] = duplicate_tool_call_guard.inject_duplicate_guard_hint(
             body["messages"]
         )
+
+        # BL-FIX24-hard-block (5/13 鸿波"没法生成文件"): 重复 ≥ 3 次硬拦截 — 直接
+        # SSE 推友好错误 + break, 不再发请求给 LLM. 软 hint 在 167% overflow 下
+        # 被 truncate LLM 看不到, 必须物理拦截.
+        hard_block = duplicate_tool_call_guard.detect_hard_block_duplicate(
+            body["messages"]
+        )
+        if hard_block is not None:
+            tool_name, count = hard_block
+            logger.error(
+                "BL-FIX24-hard-block: %s 重复 %d 次, 物理拦截 — 推友好错误,"
+                " 不发请求给 LLM. user=%s",
+                tool_name, count, user.sub,
+            )
+            friendly = duplicate_tool_call_guard.hard_block_friendly_error(
+                tool_name, count,
+            )
+            if is_stream:
+                async def _hard_block_stream():
+                    yield f"data: {json.dumps({'error': friendly})}\n\n"
+                    yield "data: [DONE]\n\n"
+                return StreamingResponse(
+                    _hard_block_stream(),
+                    media_type="text/event-stream",
+                )
+            else:
+                return {"error": friendly, "blocked_by": "BL-FIX24-hard-block"}
 
     # BL-E16 关系建立: 注入 session_meta (距上次 N 天 N 小时 / 今天第几次)
     # 让 LLM 知道时间感, 跨天回来时能自然说"好几天没找我了".

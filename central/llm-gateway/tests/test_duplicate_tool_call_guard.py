@@ -10,8 +10,11 @@ from __future__ import annotations
 
 from catfish_gateway.duplicate_tool_call_guard import (
     _DUP_THRESHOLD,
+    _HARD_BLOCK_THRESHOLD,
     _HINT_MARKER,
     _SCAN_DEPTH,
+    detect_hard_block_duplicate,
+    hard_block_friendly_error,
     inject_duplicate_guard_hint,
 )
 
@@ -213,3 +216,73 @@ def test_threshold_and_scan_depth_constants():
     """常量值合理, 防回归."""
     assert _DUP_THRESHOLD == 2  # 2 次就拦, 不放过 demo 现场症状
     assert _SCAN_DEPTH == 12   # 扫近 12 条, 覆盖 5 轮往返
+
+
+# ── BL-FIX24-hard-block (5/13 鸿波"没法生成文件") ─────────────
+
+
+def test_hard_block_threshold_constant():
+    """硬拦截 3 次 — 给软 hint 1 次机会, 仍重复就物理拦."""
+    assert _HARD_BLOCK_THRESHOLD == 3
+
+
+def test_hard_block_2_times_no_trigger():
+    """重复 2 次只触发软 hint, 不硬拦."""
+    msgs = [
+        _msg_assistant_tool_call("execute_code", '{"code":"print(1)"}'),
+        {"role": "tool", "content": "1"},
+        _msg_assistant_tool_call("execute_code", '{"code":"print(1)"}'),
+        {"role": "tool", "content": "1"},
+    ]
+    assert detect_hard_block_duplicate(msgs) is None
+
+
+def test_hard_block_3_times_triggers():
+    """重复 3 次硬拦, 返 (tool_name, count)."""
+    msgs = []
+    for _ in range(3):
+        msgs.append(_msg_assistant_tool_call("execute_code", '{"code":"x=1"}'))
+        msgs.append({"role": "tool", "content": "ok"})
+    result = detect_hard_block_duplicate(msgs)
+    assert result == ("execute_code", 3)
+
+
+def test_hard_block_4_times_returns_count_4():
+    msgs = []
+    for _ in range(4):
+        msgs.append(_msg_assistant_tool_call("execute_code", '{"code":"x"}'))
+        msgs.append({"role": "tool", "content": "ok"})
+    assert detect_hard_block_duplicate(msgs) == ("execute_code", 4)
+
+
+def test_hard_block_different_args_no_trigger():
+    """同 tool 不同 args 不触发硬拦 (跟软 hint 一致)."""
+    msgs = [
+        _msg_assistant_tool_call("execute_code", '{"code":"print(1)"}'),
+        {"role": "tool", "content": "ok"},
+        _msg_assistant_tool_call("execute_code", '{"code":"print(2)"}'),
+        {"role": "tool", "content": "ok"},
+        _msg_assistant_tool_call("execute_code", '{"code":"print(3)"}'),
+        {"role": "tool", "content": "ok"},
+    ]
+    assert detect_hard_block_duplicate(msgs) is None
+
+
+def test_hard_block_empty_messages():
+    assert detect_hard_block_duplicate([]) is None
+    assert detect_hard_block_duplicate(None) is None  # type: ignore
+
+
+def test_hard_block_friendly_error_includes_count_and_tool():
+    msg = hard_block_friendly_error("execute_code", 5)
+    assert "execute_code" in msg
+    assert "5" in msg
+    assert "重复检测" in msg or "已经写过" in msg
+
+
+def test_hard_block_friendly_error_gives_actions():
+    msg = hard_block_friendly_error("execute_code", 3)
+    # 给员工具体动作
+    assert "open" in msg or "Finder" in msg
+    assert "新建会话" in msg or "Cmd+N" in msg
+    assert "/model" in msg or "gemini" in msg.lower()

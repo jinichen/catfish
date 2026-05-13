@@ -79,6 +79,11 @@ _SCAN_DEPTH = 12
 # 重复触发阈值 (≥ 这个次数才注入 hint)
 _DUP_THRESHOLD = 2
 
+# BL-FIX24-hard-block (5/13 鸿波"没法生成文件"): 重复 ≥ 这个次数 chat_completions
+# 入口直接 SSE 推友好错误 + break, 不再发请求给 LLM (注入 hint 在 167% overflow
+# 下 LLM 看不到, 鸿波连续看到"反复重做"). 物理拦截比软纪律可靠.
+_HARD_BLOCK_THRESHOLD = 3
+
 # hint 防重复注入 marker
 _HINT_MARKER = "[BL-FIX24 duplicate-tool-call-guard]"
 
@@ -208,3 +213,45 @@ def inject_duplicate_guard_hint(messages: list) -> list:
     new_messages = list(messages)
     new_messages.append({"role": "user", "content": hint})
     return new_messages
+
+
+def detect_hard_block_duplicate(messages: list) -> tuple[str, int] | None:
+    """BL-FIX24-hard-block (5/13): 检测重复 ≥ _HARD_BLOCK_THRESHOLD (3) 次.
+
+    返 (tool_name, count) 触发硬拦截; None 不触发.
+
+    跟 inject_duplicate_guard_hint 区别:
+      - inject_*: 重复 ≥ 2 次注入 hint 给 LLM 看 (软, LLM 自觉)
+      - detect_hard_block_*: 重复 ≥ 3 次给 chat_completions 入口判, 直接断 (硬,
+        不依赖 LLM 自觉, 也不依赖 prompt 不超 context)
+
+    167% overflow 时 LLM 看不到 hint 仍重复调, 必须物理拦截.
+    """
+    if not messages or not isinstance(messages, list):
+        return None
+    extracted = _extract_productive_tool_calls(messages)
+    if len(extracted) < _HARD_BLOCK_THRESHOLD:
+        return None
+    counter: dict[tuple[str, str], int] = {}
+    for key in extracted:
+        counter[key] = counter.get(key, 0) + 1
+    worst = max(counter.items(), key=lambda kv: kv[1])
+    (tool_name, _hash), count = worst
+    if count < _HARD_BLOCK_THRESHOLD:
+        return None
+    return (tool_name, count)
+
+
+def hard_block_friendly_error(tool_name: str, count: int) -> str:
+    """硬拦截时给员工的 SSE error — 解释 + 给具体动作."""
+    return (
+        f"⚠️ 重复检测物理拦截: 鲶鱼最近 {count} 次都在调相同的 `{tool_name}` "
+        f"(参数 hash 一样, 等于跑同一段代码 N 次产同一个文件). 文件**已经写过**, "
+        f"她看不到自己的 tool 结果就反复重做.\n\n"
+        f"建议:\n"
+        f"  - **直接打开已写文件**: `open ~/.catfish/output/` 看 Finder 里最新文件\n"
+        f"  - **新建会话** (Cmd+N): 重置上下文, 让她从干净状态开始\n"
+        f"  - 切大上下文模型: /model catfish-public-gemini-pro (2M tokens)\n\n"
+        f"鸿波 5/9 反馈: \"是不是现在对于任务的完成情况没有一个好的评估手段?\". "
+        f"硬拦截避免她继续浪费 token 反复重做."
+    )
