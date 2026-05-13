@@ -16,6 +16,12 @@ SOUL_SRC="$SCRIPT_DIR/SOUL.md"
 SOUL_DST="$HOME/.hermes/SOUL.md"
 BACKUP="$HOME/.hermes/SOUL.md.before-catfish"
 
+# 5/13 拆分: 客户特定段独立文件 (CATFISH_CUSTOMER env 决定 gateway 注入哪份)
+# 默认 ffcs (兼容现有). 别家客户加 SOUL_BYD.md / SOUL_MEITUAN.md 同模式.
+CUSTOMER="${CATFISH_CUSTOMER:-ffcs}"
+SOUL_CUSTOMER_SRC="$SCRIPT_DIR/SOUL_${CUSTOMER^^}.md"   # SOUL_FFCS.md
+SOUL_CUSTOMER_DST="$HOME/.hermes/SOUL_${CUSTOMER^^}.md"
+
 GREEN='\033[32m'; YELLOW='\033[33m'; RESET='\033[0m'
 ok()   { echo -e "    ${GREEN}OK${RESET} $*"; }
 warn() { echo -e "    ${YELLOW}警告${RESET} $*"; }
@@ -50,6 +56,19 @@ fi
 
 ln -s "$SOUL_SRC" "$SOUL_DST"
 ok "$SOUL_DST → $SOUL_SRC"
+
+# 5/13: 同步装客户特定 SOUL (CATFISH_CUSTOMER=ffcs 装 SOUL_FFCS.md)
+if [ -f "$SOUL_CUSTOMER_SRC" ]; then
+    if [ -L "$SOUL_CUSTOMER_DST" ] && [ "$(readlink "$SOUL_CUSTOMER_DST")" = "$SOUL_CUSTOMER_SRC" ]; then
+        ok "客户特定 SOUL 已是最新软链 ($CUSTOMER)"
+    else
+        rm -f "$SOUL_CUSTOMER_DST"
+        ln -s "$SOUL_CUSTOMER_SRC" "$SOUL_CUSTOMER_DST"
+        ok "$SOUL_CUSTOMER_DST → $SOUL_CUSTOMER_SRC (客户=$CUSTOMER)"
+    fi
+else
+    warn "客户特定 SOUL 不存在: $SOUL_CUSTOMER_SRC (CATFISH_CUSTOMER=$CUSTOMER), 跳过"
+fi
 
 # heredoc 里混中文 + $var 在某些 bash 版本下会踩 set -u 的 Unicode 边界 bug，
 # 临时关掉 -u，EOF 后恢复。

@@ -81,6 +81,22 @@ def _read_soul() -> str:
     return _cache.read(_hermes_home() / "SOUL.md")
 
 
+def _read_soul_customer() -> str:
+    """5/13 拆分: 读客户特定 SOUL (~/.hermes/SOUL_<CUSTOMER>.md).
+
+    `CATFISH_CUSTOMER` env 决定挑哪份 (默认 'ffcs' 兼容现有部署).
+    业务环境特定段 (内网域名 / 系统简称 / 公文称谓) 应该写在这, 不污染通用 SOUL.
+
+    没配 / 文件不存在 → 返空, build_identity_content 静默跳过.
+    """
+    import os  # noqa: PLC0415
+    customer = (os.environ.get("CATFISH_CUSTOMER") or "ffcs").strip()
+    if not customer:
+        return ""
+    # 大写文件名: SOUL_FFCS.md (跟 install.sh ${CUSTOMER^^} 对齐)
+    return _cache.read(_hermes_home() / f"SOUL_{customer.upper()}.md")
+
+
 def _read_user_memory() -> str:
     return _cache.read(_hermes_home() / "USER.md")
 
@@ -108,6 +124,13 @@ def build_identity_content() -> str:
     soul = _read_soul().strip()
     if soul:
         parts.append(f"# Identity (SOUL)\n\n{soul}")
+
+    # 5/13 拆分: 客户特定段紧跟 CORE SOUL, 让 LLM 看到 "通用 + 客户" 一气呵成
+    soul_cust = _read_soul_customer().strip()
+    if soul_cust:
+        import os  # noqa: PLC0415
+        cust_label = (os.environ.get("CATFISH_CUSTOMER") or "ffcs").upper()
+        parts.append(f"# Identity (SOUL_{cust_label} — 客户业务环境)\n\n{soul_cust}")
 
     memory_blocks: list[str] = []
     user_mem = _read_user_memory().strip()
