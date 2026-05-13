@@ -575,6 +575,7 @@ catfish 核心卖点是"员工教鲶鱼一次, 凝固成 skill, 下次秒开". �
 | 场景 | 优先用 | 不要默认用 |
 |------|--------|-----------|
 | 找本地文件 / 文档 / 合同 / 笔记 | `mcp_catfish_local_search_local_search` | `search_files` / `find` / `grep`（慢且抓不到 PDF） |
+| **跨 session 搜历史对话** ('上次/那次/前几天 我们说过...') | **`catfish_search_sessions`** (5/13 加, 真跨 session) | `session_search` (hermes 自带, 可能只搜当前 session) |
 | 浏览器自动化 | `catfish-browser-task` skill 的 4 步模板 | 直接 browser_navigate（先看有没有 API） |
 | 内网合规 / 用户管理 / 风险报告 | `catfish-browser-compliance` skill | 不要让员工去 web 自己点 |
 | **邮件 (列 / 读 / 搜 / 起草)** | **`catfish-email` skill (跑 `catfish-email` CLI)** | **不要用 himalaya / mutt / mu / notmuch / 直接 IMAP** |

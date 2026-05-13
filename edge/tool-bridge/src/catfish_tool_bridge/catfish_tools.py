@@ -1644,6 +1644,51 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ── BL-FIX-SESSION-SEARCH (5/13 鸿波"历史会话搜不到") ──────────────
+    {
+        "name": "catfish_search_sessions",
+        "description": (
+            "★★★ 跨 session 搜员工本机 hermes 历史对话 (read-only sqlite). "
+            "**优先用这个不要用 hermes 自带 session_search** — 后者可能只搜当前 session.\n\n"
+            "✅ 调用场景:\n"
+            "  - 员工问 '上次那个资质 Excel 我们说了啥' → query='资质 Excel'\n"
+            "  - 员工问 '前两天讨论的 EIS 流程' → query='EIS' days_back=7\n"
+            "  - LLM 自己想找 '我之前给小李回的资质标准' → query='资质标准'\n"
+            "  - 任何 '那次/上次/之前/前几天' 类历史索引诉求\n\n"
+            "❌ 不调用:\n"
+            "  - 当前会话内的事实 (走 catfish_remember / session_facts)\n"
+            "  - 员工偏好/画像 (走 catfish_user_profile_get)\n"
+            "  - employee_journal 的事 (走该文件)\n\n"
+            "返参:\n"
+            "  - matches: 命中行 list, 每条 {session_id, session_title, role, "
+            "    snippet (±200 字符上下文), created_iso}\n"
+            "  - count: 总命中数\n"
+            "  - session_count: 跨多少 session\n"
+            "  - summary: 一句话归纳 (按 session 分组), 念给员工知道在哪些会话里找到\n\n"
+            "🔒 隐私: 直读员工 mac 本地 ~/.hermes/state.db, 不上行中央, 不跨员工."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "搜的关键字 (大小写不敏感, LIKE 字面匹配, 中文 OK)",
+                },
+                "days_back": {
+                    "type": "integer",
+                    "description": "搜过去多少天的会话 (默认 30, 长任务可加大到 90/180)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "最多返多少命中行 (默认 20, 上限 100)",
+                },
+            },
+            "required": ["query"],
+        },
+        "emoji": "🔍",
+        "toolset": "catfish_native",
+        "available": True,
+    },
     # ── BL-FED2.3 (5/12 鸿波拍板) 跨员工路由 ──
     {
         "name": "catfish_expert_consult",
@@ -5792,6 +5837,10 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_list_a2a_help":
         from . import a2a_notifications  # noqa: PLC0415
         return a2a_notifications.tool_list_a2a_help(args)
+    # BL-FIX-SESSION-SEARCH (5/13 鸿波"历史会话搜不到")
+    if name == "catfish_search_sessions":
+        from . import sessions_search  # noqa: PLC0415
+        return sessions_search.tool_search_sessions(args)
     raise ValueError(f"unknown native tool: {name}")
 
 
