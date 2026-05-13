@@ -1472,6 +1472,7 @@ async def _stream_chat_completion(
     model,
     security_concern: str | None = None,
     is_internal: bool = False,  # BL-F17 (5/5): internal 调用跳 record_usage
+    teaching_mode: bool = False,  # BL-LEAN-SESSION (5/13): session-level LEAN
 ) -> AsyncIterator[str]:
     """SSE async generator for streaming chat completions, with fallback chain.
 
@@ -1683,7 +1684,9 @@ async def _stream_chat_completion(
             # BL-FIX23-L8-fix (5/13 鸿波合并 8 项资质卡): LEAN 只跳 feedback retry,
             # mid_task 真断必 retry — 教学场景跟"跑长任务中间 LLM 自我反思短句"
             # 是两件事, mid_task=刚跑过 tool 的真断, 跟教学 stop 性质不一样.
-            _lean = os.environ.get("CATFISH_LEAN_INJECT", "0") == "1"
+            # BL-LEAN-SESSION (5/13): 优先看 session-level teaching_mode (Companion
+            # toggle 传 X-Catfish-Teaching-Mode header), env 仍兼容老部署.
+            _lean = teaching_mode or os.environ.get("CATFISH_LEAN_INJECT", "0") == "1"
             # mid_task 路径 LEAN 不影响 (真任务 stop 必 retry); feedback 路径 LEAN 仍跳
             trigger = mid_task_after_tool or (feedback_plan_only and not _lean)
             # 区分 retry 上限: mid_task 给 2 次 (长任务自我反思后续上),
@@ -1937,8 +1940,14 @@ async def chat_completions(
     # 上下文压缩 BL-Q3-ARCHIVE 在更前面, 跟 lean mode 配合, 不动.
     #
     # 默认 LEAN_INJECT=0 = 老行为, 不破坏现有部署.
+    # BL-LEAN-SESSION (5/13 鸿波拍板 "客户无法跑命令行"): 优先看请求 header
+    # X-Catfish-Teaching-Mode: 1 (Companion 教学模式 toggle 传), env 仍兼容.
+    # 跨 session 隔离, 教学完关 toggle 立刻回常态, 不需要重启 gateway.
     # ────────────────────────────────────────────────────────────────────
-    _lean = os.environ.get("CATFISH_LEAN_INJECT", "0") == "1"
+    _teaching_mode = request.headers.get("X-Catfish-Teaching-Mode") == "1"
+    _lean = _teaching_mode or os.environ.get("CATFISH_LEAN_INJECT", "0") == "1"
+    if _teaching_mode:
+        logger.info("BL-LEAN-SESSION: header 触发 teaching mode (lean inject ON)")
 
     # session_facts 注入: 把员工本 session 内明确告诉过的硬事实 (catfish_remember
     # 写到 ~/.catfish/session_facts.json) 拼到最后一条 system message 末尾.
@@ -2233,6 +2242,7 @@ async def chat_completions(
                 model_name=model_name, model=model,
                 security_concern=security_concern,
                 is_internal=is_internal_call,  # BL-F17: 透传, 跳 record_usage
+                teaching_mode=_teaching_mode,  # BL-LEAN-SESSION (5/13)
             ),
             media_type="text/event-stream",
         )

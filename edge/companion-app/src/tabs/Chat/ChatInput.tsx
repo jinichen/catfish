@@ -17,6 +17,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Attachment } from "../../types/chat";
 import { useUIStore } from "../../store/ui";  // BL-E13 主动闲聊 prefill
 import { useAgentStore } from "../../store/agent";  // BL-E11 后续: 员工自定义名
+import { useTeachingStore } from "../../store/teaching";  // BL-LEAN-SESSION (5/13)
 
 interface Props {
   isStreaming: boolean;
@@ -520,6 +521,13 @@ export default function ChatInput({
           📎
         </button>
 
+        {/* 🎓 教学模式 toggle (BL-LEAN-SESSION 5/13 鸿波拍板).
+            开启时这个 session 走 LEAN: 关 9 个干扰 inject (session_facts /
+            stats_guard / skill_guard / journal / feedback / 等), prompt 干净
+            适合教 catfish 新 skill (catfish_teach_start 流程). 关闭回常态.
+            跨 session 隔离, 不重启 gateway. */}
+        <TeachingToggleButton isStreaming={isStreaming} />
+
         {/* 🎤 语音输入按钮 — 方案 C 五一 sprint Day 1: Whisper.cpp 本地
            按一下开始录音, 再按一下停止 → 自动转文字填到 textarea. 数据 100% 本地. */}
         <button
@@ -814,5 +822,44 @@ function ThumbCard({
         ×
       </button>
     </div>
+  );
+}
+
+
+// ── BL-LEAN-SESSION (5/13 鸿波拍板 "客户无法跑命令行") ────────────
+//
+// 教学模式 toggle 按钮. 开启 → 这个 session 的 LLM 请求带
+// X-Catfish-Teaching-Mode: 1 header → gateway 走 LEAN (关 9 个 inject + L8
+// feedback retry, mid_task retry 不影响). 关闭 → 完整注入回常态.
+// 状态走 zustand store + localStorage 持久化, 跨 session 隔离.
+
+function TeachingToggleButton({ isStreaming }: { isStreaming: boolean }) {
+  const on = useTeachingStore((s) => s.on);
+  const toggle = useTeachingStore((s) => s.toggle);
+  return (
+    <button
+      onClick={toggle}
+      disabled={isStreaming}
+      title={
+        on
+          ? "🎓 教学模式 ON: 走 LEAN (关 9 个干扰 inject), 适合教新 skill. 点关闭回常态."
+          : "🎓 开启教学模式: 关掉 9 个干扰 inject 让 prompt 干净, 适合教 catfish 跑新流程 (catfish_teach_start). 不影响 mid-task retry."
+      }
+      style={{
+        padding: "6px 10px",
+        border: "1px solid " + (on ? "var(--catfish-cyan)" : "var(--catfish-border)"),
+        borderRadius: "var(--radius-sm)",
+        background: on ? "var(--catfish-cyan-dim)" : "transparent",
+        color: on ? "var(--catfish-cyan)" : "var(--catfish-text-muted)",
+        fontSize: 14,
+        fontWeight: on ? 600 : 400,
+        cursor: isStreaming ? "default" : "pointer",
+        lineHeight: 1,
+        minHeight: 36,
+        transition: "all 120ms ease",
+      }}
+    >
+      🎓
+    </button>
   );
 }

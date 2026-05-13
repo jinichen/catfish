@@ -27,9 +27,16 @@ def app_src() -> str:
 
 
 def test_lean_env_flag_exists(app_src):
-    """app.py 必须有 _lean = os.environ.get('CATFISH_LEAN_INJECT', '0') == '1'."""
+    """app.py 必须有 _lean 判定 — env CATFISH_LEAN_INJECT 或 BL-LEAN-SESSION (5/13)
+    header X-Catfish-Teaching-Mode: 1.
+    """
     assert 'CATFISH_LEAN_INJECT' in app_src
-    assert '_lean = os.environ.get("CATFISH_LEAN_INJECT", "0") == "1"' in app_src
+    # 5/13 BL-LEAN-SESSION: 优先 header, fallback env
+    assert 'X-Catfish-Teaching-Mode' in app_src, (
+        "BL-LEAN-SESSION (5/13): 应该有 header 路径让 Companion toggle 控制"
+    )
+    # _lean 仍然由 env 兜底 (老部署兼容)
+    assert 'os.environ.get("CATFISH_LEAN_INJECT", "0") == "1"' in app_src
 
 
 # ─── lean=1 时关掉的 inject (核心 — 教学/复用纯净) ────────────────────

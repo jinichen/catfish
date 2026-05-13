@@ -363,6 +363,19 @@ export async function streamChat(params: SendChatParams): Promise<void> {
     }
   }
 
+  // BL-LEAN-SESSION (5/13 鸿波拍板 "客户无法跑命令行"): 教学模式 toggle 开时
+  // 带 X-Catfish-Teaching-Mode: 1, gateway 关 9 个干扰 inject + feedback retry.
+  // 关时不带 header, 走完整注入 (副手"懂员工"). 跨 session 隔离, 不重启 gateway.
+  try {
+    // dynamic import 防止 zustand store 跟 chat.ts 模块加载顺序问题
+    const { useTeachingStore } = await import("../store/teaching");
+    if (useTeachingStore.getState().on) {
+      agentHeaders["X-Catfish-Teaching-Mode"] = "1";
+    }
+  } catch {
+    // store 没加载就忽略, 默认非教学
+  }
+
   // BL-FIX45 A+ (5/11): 走 fetchWithAuth — 401 自动 reauth + retry, 不再 inline 处理.
   // Authorization header 由 wrapper 自动加.
   let resp: Response;
