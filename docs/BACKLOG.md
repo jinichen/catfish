@@ -32,6 +32,65 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 
 ---
 
+## 5/14 - 6 月 sprint plan (5/13 22:10 鸿波拍板, hermes 0.13 升级后修订)
+
+> **背景**: 5/13 升 hermes 0.13 完成. 鸿波当晚 4 次推翻我的"图省事" 判断, 重新评估 #8 红利接入. 真实可做的工作量比早晨估的多, 但每件都对齐产品定位.
+
+### 5/14 (周四) — 升级尾巴 + 一个真功能
+
+| 项 | 工作量 | 备注 |
+|---|---|---|
+| BL-HERMES013-FIX-1: ui-tui rebuild (`npm run build`) — 状态栏 ⚕→🐟 | 5 分钟 | install.sh 步 5 已提示 |
+| BL-HERMES013-RED-1A: ACP `/queue` 等价 (Companion 排队下一条 send) | **0.5 天 全前端** | useChat outer loop 加 queue 数组, [DONE] 自动从 queue 拿下一条. 后端 0 改动. 跟 BL-COMPANION-UX1 "⏹ 停下接着发" 互补 (一个停一个排队) |
+| 8 项资质合并 → `catfish_run_skill` (今天反复卡的痛点根治) | 半天 | 把 5/13 鸿波 13+ 次卡的合并流程固化 |
+| 验证 Post-write delta lint (0 工作量) | 5 分钟 | hermes 内置, 用 write_file 自动享 |
+
+### 5/15-5/22 (8 天) — BL-RBAC P0 + hermes B 合一 sprint
+
+> 任务 #50 已落档. 详见 BL-D8 P0 接力清单 (本文件下方 D.2 段).
+
+核心做完: `allowed_models` per-dept/user / `allowed_tools` per-dept / `allowed_skills` per-dept / `allowed_channels/chats/rooms` (跟 hermes 0.13 命名对齐) / catfish-web `/admin/access` UI / catfish-identity OAuth client credentials grant / hermes-cli 注册成 client 走 catfish-gateway.
+
+### 5/23-5/26 — i18n 接入 (任务 #51)
+
+| 项 | 工作量 |
+|---|---|
+| catfish brand patch RULES 改 i18n 兼容 (字符串走 `_("...")`) | 1 天 |
+| 补 catfish 品牌字符串 zh-CN / en-US 翻译表 (其他 locale 按需) | 半天 |
+| Companion 加语言 toggle (zh/en) | 半天 |
+| hermes 0.13 i18n + catfish brand 端到端测试 | 1 天 |
+
+### 5/27-5/30 — ACP `/steer` + Multi-Agent Kanban catfish-web surface
+
+| 项 | 工作量 |
+|---|---|
+| BL-HERMES013-RED-1B: ACP `/steer` 等价 (in-flight 注入) | 2-3 天. 谨慎设计文档先 — 跟 BL-FIX23 触发源不同 (用户主动 vs gateway 猜) 但实现复杂度类似. 借鉴 hermes #18258 "对 idle session 退化普通 prompt" 减少误判面 |
+| BL-HERMES013-RED-2: Multi-Agent Kanban catfish-web dashboard 显示 | 1-2 天. catfish-web 加 widget 调 `hermes kanban` API, 不动 hermes 内部 |
+
+### 6 月+ — hermes 0.13 剩下红利按需
+
+- Checkpoints v2 (跟我们 inflight_streams 整合, 自动 pruning) — 1-2 天
+- SSE MCP transport + OAuth forwarding (跟 mcp_registry_proxy 整合) — 1 天
+- X-Hermes-Session-Key (memory provider 相关) — 0.5 天
+- Post-write delta lint (已 0 工作量享受)
+- 100 CLI tips (已享)
+
+### 明确不接 (5/13 拍板)
+
+- ❌ hermes 0.13 ACP client 改造 (catfish-Companion 改成 ACP IDE 集成) — IDE 集成 ≠ 桌面端, 场景不同
+- ❌ no_agent cron mode — hermes CLI 内部模式, catfish 不用
+- ❌ A 持久 dev token / C hermes 直连 OpenRouter — 都跟产品定位反着走 (任务 #50 拍板必须 B OAuth)
+
+### 5/13 总教训 (落档备忘)
+
+1. **gateway 不该猜 LLM 心思** — BL-FIX23 反复 7 轮全删, 净 -330 行
+2. **看到红利别急接, 先 audit 跟产品定位一致吗** — ACP / i18n / B-vs-A-vs-C 4 次重审让结论更精准
+3. **docs 跟代码同步是隐性 bug** — 5/4 起草的 HERMES-UPGRADE.md 标"暂停 0.10", 5/7 实际 ship 升级但 docs 没更新, 5/13 我误读差点重做
+4. **web_fetch 不可全信** — GitHub releases 用 lazy load, 顶部最新可能拿不到. 凭不完整 fetch 结果否定自己 docs 是更大的错
+5. **判断错误及时承认** — 5/13 我 4 次"想当然" 都被鸿波推翻. 倾向"避免新工作"的判断比"先 audit 再说"差很多
+
+---
+
 ## 阻塞 / 等鸿波 (今天才能解锁)
 
 | ID | 项 | 状态 | 阻塞 |
