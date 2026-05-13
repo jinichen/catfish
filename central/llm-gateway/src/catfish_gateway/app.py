@@ -488,6 +488,90 @@ async def api_me(user: User = Depends(get_current_user)) -> dict[str, Any]:
     }
 
 
+# ── /api/sessions/me/* — Sessions 浏览 + 跨日搜索 (5/12 借鉴 hermes-desktop A) ──
+#
+# 数据源: 员工自己 mac ~/.hermes/state.db (read-only sqlite, 跟 inject_session_history 同源).
+# 不需要 RBAC 二次校验 — db 本来就只有自己的 (gateway 跑在员工 mac, 物理隔离).
+# catfish-web 浏览器调本地 gateway (vite proxy / nginx 反代到 localhost:8999).
+
+
+@app.get("/api/sessions/me")
+async def api_sessions_list(
+    user: User = Depends(get_current_user),
+    days_back: int = 30,
+    q: str = "",
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """列员工自己的 hermes session 历史 + 跨日搜索 + 分页.
+
+    Args:
+        days_back: 看过去多少天的 session, 默认 30
+        q: 关键字 (任意 message content 含 q 命中, 大小写不敏感)
+        limit: 1-200 默认 50
+        offset: ≥0 默认 0
+    """
+    from . import sessions_browse  # noqa: PLC0415
+    return {
+        "sessions": sessions_browse.list_sessions(
+            days_back=days_back,
+            search_q=q,
+            limit=limit,
+            offset=offset,
+        ),
+        "total": sessions_browse.count_sessions(days_back=days_back, search_q=q),
+        "limit": max(1, min(200, int(limit))),
+        "offset": max(0, int(offset)),
+        "days_back": max(0, int(days_back)),
+        "q": q,
+        "viewer": user.sub,
+    }
+
+
+@app.get("/api/sessions/me/search")
+async def api_sessions_search(
+    q: str,
+    user: User = Depends(get_current_user),
+    days_back: int = 30,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """跨 session 全文搜索 — 命中行级别返 (跳到对应 session 用).
+
+    跟 /api/sessions/me?q=X 区别:
+      - list 是 session 级 (整个 session 含 q 即命中, 显示 session 卡片)
+      - search 是 message 级 (含 q 的具体行 + ±50 字符上下文)
+    """
+    from . import sessions_browse  # noqa: PLC0415
+    return {
+        "matches": sessions_browse.search_messages(
+            q=q, days_back=days_back, limit=limit,
+        ),
+        "q": q,
+        "viewer": user.sub,
+    }
+
+
+@app.get("/api/sessions/me/{session_id}")
+async def api_sessions_detail(
+    session_id: str,
+    user: User = Depends(get_current_user),
+    max_messages: int = 500,
+) -> dict[str, Any]:
+    """单个 session 详情 + messages 数组. 不存在返 404.
+
+    max_messages: 1-2000, 默认 500.
+    """
+    from . import sessions_browse  # noqa: PLC0415
+    detail = sessions_browse.get_session(session_id, max_messages=max_messages)
+    if detail is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"session {session_id} 不存在 (已被 hermes 清理 / id 错)",
+        )
+    detail["viewer"] = user.sub
+    return detail
+
+
 # /api/quota/department/{dept} — manager / admin 看本部门 quota 聚合
 #
 # 包含: 部门日 quota 用量 + 限额 + top N 员工 token 用量.

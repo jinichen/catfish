@@ -21,6 +21,8 @@ export function NavBar() {
 
   const links: Array<{ to: string; label: string; show: boolean }> = [
     { to: "/me", label: "我的", show: true },
+    // 5/12 借鉴 hermes-desktop A: 跨日历史搜索
+    { to: "/sessions", label: "📚 会话", show: true },
     { to: "/skills", label: "Skills Hub", show: true },
     { to: "/mcp", label: "MCP 市场", show: true },
     { to: "/manager", label: "部门", show: isManagerOrAbove },

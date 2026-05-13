@@ -31,6 +31,7 @@ import { useAuthStore } from "./store/auth";
 
 import { HomePage } from "./routes/HomePage";
 import { MePage } from "./routes/MePage";
+import { SessionsPage } from "./routes/SessionsPage";
 import { SkillsHubPage } from "./routes/SkillsHubPage";
 import { McpMarketPage } from "./routes/McpMarketPage";
 import { ManagerPage } from "./routes/ManagerPage";
@@ -168,6 +169,8 @@ export function App() {
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/me" element={<MePage />} />
+          {/* 5/12 借鉴 hermes-desktop A: 跨日 sessions 历史 + 搜索 */}
+          <Route path="/sessions" element={<SessionsPage />} />
           <Route path="/skills/*" element={<SkillsHubPage />} />
           <Route path="/mcp/*" element={<McpMarketPage />} />
           <Route path="/manager/*" element={<ManagerPage />} />
