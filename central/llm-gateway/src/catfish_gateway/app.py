@@ -1244,7 +1244,13 @@ _PLAN_ONLY_HARD_HINT = (
 # 死循环 (每次 HTTP request retry counter 都从 0 起, 总累积 ≥ 24 次同样的
 # 'execute_code 生成文档' → 'plan-only stop' → retry).
 # 单次 request 内 retry 1 次足够 — 1 次还 plan-only 就接受是"等反馈"不是偷懒.
-_MAX_PLAN_ONLY_RETRIES = 1
+_MAX_PLAN_ONLY_RETRIES = 1   # 老常量保留 (兼容引用)
+
+# BL-FIX23-L8-fix (5/13 鸿波合并 8 项资质 13+ 次 mid-task 卡): 区分 retry 上限.
+# - mid_task 路径 (刚跑完 tool 又 stop): 给 2 次, 长任务 LLM 自我反思短句后该续上
+# - feedback 路径 (用户反馈后 plan-only): 仍 1 次, 防 BL-FIX5 死循环
+_MAX_PLAN_ONLY_RETRIES_MID_TASK = 2
+_MAX_PLAN_ONLY_RETRIES_FEEDBACK = 1
 
 # BL-FIX23 L6: Jaccard 阈值 — 当前 attempt content 跟历史 assistant 消息相似度
 # 超过这个值就**不再 retry** (LLM 已经在重复说话, 再 retry 一定再说一遍).
@@ -1672,26 +1678,37 @@ async def _stream_chat_completion(
                 and _last_user_message_is_feedback(msgs_for_check)
                 and _is_plan_only_content(cumulative_content)
             )
-            # BL-MM9-FREEZE (5/12): lean 模式直接 skip retry —
-            # 教学场景 LLM 自然停顿 (snapshot 看一下再想) 不该被 retry 拖.
-            _lean_retry_off = os.environ.get("CATFISH_LEAN_INJECT", "0") == "1"
+            # BL-MM9-FREEZE (5/12): lean 模式跳 retry — 教学场景 LLM 自然停顿
+            # (snapshot 看一下再想) 不该被 retry 拖.
+            # BL-FIX23-L8-fix (5/13 鸿波合并 8 项资质卡): LEAN 只跳 feedback retry,
+            # mid_task 真断必 retry — 教学场景跟"跑长任务中间 LLM 自我反思短句"
+            # 是两件事, mid_task=刚跑过 tool 的真断, 跟教学 stop 性质不一样.
+            _lean = os.environ.get("CATFISH_LEAN_INJECT", "0") == "1"
+            # mid_task 路径 LEAN 不影响 (真任务 stop 必 retry); feedback 路径 LEAN 仍跳
+            trigger = mid_task_after_tool or (feedback_plan_only and not _lean)
+            # 区分 retry 上限: mid_task 给 2 次 (长任务自我反思后续上),
+            # feedback 仍 1 次 (防 BL-FIX5 死循环)
+            retry_max = (
+                _MAX_PLAN_ONLY_RETRIES_MID_TASK if mid_task_after_tool
+                else _MAX_PLAN_ONLY_RETRIES_FEEDBACK
+            )
             should_retry = (
-                not _lean_retry_off
-                and last_finish_reason == "stop"
+                last_finish_reason == "stop"
                 and not cumulative_has_tool_call
-                and plan_only_retries < _MAX_PLAN_ONLY_RETRIES
+                and plan_only_retries < retry_max
                 and not too_repetitive            # 死循环保险保留 (Jaccard)
-                and (mid_task_after_tool or feedback_plan_only)
+                and trigger
             )
             if not should_retry:
-                # 留 log 方便 debug — 解释为啥没 retry
+                # 留 log 方便 debug — 解释为啥没 retry (5/13 加 lean=%s + retry_max)
                 if last_finish_reason == "stop" and not cumulative_has_tool_call:
                     logger.info(
                         "BL-FIX23 L8 skip retry: last_is_tool=%s task_complete=%s "
-                        "too_repetitive=%s mid_task=%s feedback=%s retries=%d/%d",
+                        "too_repetitive=%s mid_task=%s feedback=%s lean=%s "
+                        "retries=%d/%d",
                         last_is_tool, task_complete, too_repetitive,
-                        mid_task_after_tool, feedback_plan_only,
-                        plan_only_retries, _MAX_PLAN_ONLY_RETRIES,
+                        mid_task_after_tool, feedback_plan_only, _lean,
+                        plan_only_retries, retry_max,
                     )
                 yield "data: [DONE]\n\n"
                 break
@@ -1699,10 +1716,11 @@ async def _stream_chat_completion(
             # ── 触发 plan-only retry: 起新一轮 acompletion + 注入硬 hint ─
             plan_only_retries += 1
             logger.warning(
-                "BL-FIX23 L8 plan-only retry %d/%d: model=%s last_is_tool=%s "
-                "task_complete=%s content=%d 字 → 重发硬 hint",
+                "BL-FIX23 L8 plan-only retry %d/%d (path=%s): model=%s "
+                "last_is_tool=%s task_complete=%s content=%d 字 → 重发硬 hint",
                 plan_only_retries,
-                _MAX_PLAN_ONLY_RETRIES,
+                retry_max,
+                "mid_task" if mid_task_after_tool else "feedback",
                 used_model.name,
                 last_is_tool,
                 task_complete,

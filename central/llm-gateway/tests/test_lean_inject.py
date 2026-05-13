@@ -114,23 +114,31 @@ def test_inject_is_lean_preserved(app_src, inject_name):
 # ─── BL-FIX23 L8 retry 也受 lean 控制 ─────────────────────────────────
 
 
-def test_plan_only_retry_respects_lean(app_src):
-    """BL-FIX23 L8 plan-only retry 在 lean 模式应该被跳过.
-
-    教学场景 LLM 自然停顿不该被 retry 拖.
+def test_plan_only_retry_lean_only_skips_feedback(app_src):
+    """BL-FIX23-L8-fix (5/13 鸿波合并 8 项资质卡): LEAN 只跳 feedback retry,
+    mid_task 真断必 retry. 教学跟"长任务中间 LLM 自我反思"是两件事.
     """
-    # _lean_retry_off env 开关存在
-    assert "_lean_retry_off" in app_src
     assert 'CATFISH_LEAN_INJECT' in app_src
 
-    # should_retry 表达式包含 `not _lean_retry_off`
-    # 找 should_retry 赋值的行 + 后面 10 行
+    # should_retry 表达式包含 trigger = mid_task or (feedback and not _lean)
     idx = app_src.find("should_retry = (")
     assert idx >= 0, "should_retry 表达式找不到"
-    block = app_src[idx:idx + 600]
-    assert "not _lean_retry_off" in block, (
-        "BL-FIX23 L8 should_retry 表达式没包 `not _lean_retry_off`"
+    # 往上找 trigger 定义
+    trigger_idx = app_src.rfind("trigger =", 0, idx)
+    assert trigger_idx >= 0, "trigger 表达式找不到"
+    block = app_src[trigger_idx:idx + 400]
+    # mid_task 不被 LEAN 影响
+    assert "mid_task_after_tool" in block
+    # feedback 才被 LEAN 拦
+    assert "feedback_plan_only and not _lean" in block, (
+        "LEAN 应该只跳 feedback retry, 不跳 mid_task retry"
     )
+
+
+def test_plan_only_retry_max_differs_by_path(app_src):
+    """BL-FIX23-L8-fix: mid_task 给 2 次 retry, feedback 仍 1 次."""
+    assert "_MAX_PLAN_ONLY_RETRIES_MID_TASK = 2" in app_src
+    assert "_MAX_PLAN_ONLY_RETRIES_FEEDBACK = 1" in app_src
 
 
 # ─── 默认行为兼容性 ──────────────────────────────────────────────────
