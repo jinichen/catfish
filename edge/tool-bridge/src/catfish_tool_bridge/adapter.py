@@ -41,6 +41,40 @@ def _r():
     return _registry_module.registry
 
 
+# ── BL-FIX-MCP-SHORTNAME (5/12 鸿波 Companion 截图) ─────────────────
+#
+# LLM 调短名 'local_search' (从 SOUL.md 学的), 实际全名 'mcp_catfish_local_search_local_search'.
+# dispatch 加 fallback: 短名 → 唯一长名命中改派, 歧义/无命中返友好 error 含候选.
+
+def _resolve_mcp_short_name(short: str, all_names) -> str | None:
+    """短名 → 唯一全名 (mcp_<server>_<short>). 多候选 / 无命中返 None.
+
+    匹配规则: 全名以 '_' + short 结尾且以 'mcp_' 开头.
+    """
+    if not short or "_" in short[:4]:  # 已经是全名 (mcp_xxx) / 不像短名
+        # 但还是检查精确匹配 (短名跟某个全名完全相等的极端情况让上层 fallback 走)
+        return None
+    suffix = "_" + short
+    matches = [
+        n for n in all_names
+        if isinstance(n, str) and n.startswith("mcp_") and n.endswith(suffix)
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    return None  # 0 或 ≥2 候选都不猜
+
+
+def _suggest_mcp_full_names(short: str, all_names) -> list[str]:
+    """unknown tool error 时给 LLM 提示用. 返**所有**后缀匹配的 mcp_ 全名."""
+    if not short:
+        return []
+    suffix = "_" + short
+    return sorted(
+        n for n in all_names
+        if isinstance(n, str) and n.startswith("mcp_") and n.endswith(suffix)
+    )
+
+
 # ============================================================
 # tools/list
 # ============================================================
@@ -664,11 +698,32 @@ async def _do_dispatch(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     r = _r()
-    if name not in r.get_all_tool_names():
-        return {
-            "ok": False, "tool": name, "result": None,
-            "error": f"unknown tool: {name}",
-        }
+    all_names = r.get_all_tool_names()
+    if name not in all_names:
+        # BL-FIX-MCP-SHORTNAME (5/12 鸿波 Companion 截图): LLM 调短名 'local_search'
+        # 时, 真名是 'mcp_catfish_local_search_local_search'. SOUL.md 多处用短名描述
+        # 教坏了 LLM. 加自动 suffix 匹配 — 短名 → 唯一长名命中改派, 歧义/无命中返
+        # 友好 error 含候选全名建议.
+        fallback = _resolve_mcp_short_name(name, all_names)
+        if fallback:
+            logger.info(
+                "BL-FIX-MCP-SHORTNAME: dispatch %r → %r (auto-suffix match)",
+                name, fallback,
+            )
+            name = fallback
+        else:
+            # 找候选给 LLM 提示用 (短名匹配后缀的所有 mcp_ 工具)
+            candidates = _suggest_mcp_full_names(name, all_names)
+            err_msg = f"unknown tool: {name}"
+            if candidates:
+                err_msg += (
+                    f". MCP 工具调用必须用全名, 你大概想调: {', '.join(candidates[:5])}"
+                )
+            return {
+                "ok": False, "tool": name, "result": None,
+                "error": err_msg,
+                "candidates": candidates[:5],
+            }
 
     # ============================================================
     # BL-MM3 (5/7): memory_save 走版本化 wrapper, 不直打 hermes

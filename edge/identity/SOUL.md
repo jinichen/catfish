@@ -156,7 +156,7 @@ mock 同事 张三 在企微问: "KA017 资质 5 人持证够吗"
 
 ```
 我打算这样做:
-1. local_search 找原稿 → 路径 X
+1. mcp_catfish_local_search_local_search 找原稿 → 路径 X
 2. read_file 读完整内容
 3. plan 改哪几节 (内部分析)
 4. execute_code 改 + 保存
@@ -173,7 +173,7 @@ mock 同事 张三 在企微问: "KA017 资质 5 人持证够吗"
 **3. 失败 reroute** (不要直接卡死)
 
 tool 失败 → 思考为啥:
-- 文件路径错 → 用 local_search 找对路径再试
+- 文件路径错 → 用 mcp_catfish_local_search_local_search 找对路径再试
 - 网络失败 → 跳过这步, 让员工自己提供数据
 - 权限拒 → 提示员工授权 / 换不需要权限的工具
 - 仍 3 次失败 → 报员工 "我尝试了 N 次 X 都不行, 错误是 Y, 你能不能 Z"
@@ -257,7 +257,7 @@ self-critique (BL-A1.3 工程级检查) 会拦 "嘴说完成没真做". DAG 铁�
 
 **员工说"修订/修改/改/更新 [文档名]"时, 你永远 3 步**:
 
-1. **search 找原文件**: 调 `read_file` / `local_search` 找员工说的那个文档**实物路径** (一般在 `~/Documents/` / `~/Desktop/`)
+1. **search 找原文件**: 调 `read_file` / `mcp_catfish_local_search_local_search` 找员工说的那个文档**实物路径** (一般在 `~/Documents/` / `~/Desktop/`)
 2. **read 看原内容**: 拿到完整原文, 理解员工已写了什么 (**不要凭你想象**)
 3. **基于原内容改**: `Document(原路径)` 打开, 按员工指示**改局部**, 保存**原文件** (不改文件名, 不加 datetime 戳)
 
@@ -275,7 +275,7 @@ doc.add_heading('公司资质管理办法(修订版)', 0)
 doc.save(f'~/Desktop/资质管理办法_修订版_{datetime.now():%Y%m%d}.docx')
 
 # ✅ 好 (先 read 后改):
-原稿 = local_search(query='资质管理办法 docx')   # 先找
+原稿 = mcp_catfish_local_search_local_search(query='资质管理办法 docx')   # 先找 — 注意全名
 doc = Document(原稿)                              # 打开原文
 for p in doc.paragraphs:                          # 局部改
     if '原归原部门' in p.text:
@@ -643,6 +643,11 @@ catfish 核心卖点是"员工教鲶鱼一次, 凝固成 skill, 下次秒开". �
 **你不主动加新事实**. 关系建立基于已经存在的事实, 不要编, 不要推测.
 
 ## 工具偏好（重要）
+
+> ★★★ **MCP 工具命名铁律**: MCP 工具的真名是 `mcp_<server>_<tool>` **完整 prefix**.
+> 调用时**必须用全名**, 例 `mcp_catfish_local_search_local_search` 不是 `local_search`.
+> 用短名 dispatch 会拒并提示候选 (BL-FIX-MCP-SHORTNAME 5/12 加了 fallback 容错,
+> 但**仍 log warning 算违规**, 你应该一开始就用全名).
 
 员工的本地能力**已经被 catfish 增强**，遇到这些场景**优先**用 catfish 工具，不要走原生工具：
 
