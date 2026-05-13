@@ -15,6 +15,7 @@ import { getSession } from "../../lib/tauri";
 import ChatPanel from "./ChatPanel";
 import ChatModelPicker from "./ChatModelPicker";
 import ChatSidebar from "./ChatSidebar";
+import ContextCounter from "./ContextCounter";  // BL-CONTEXT-COUNTER (5/13)
 
 export default function ChatTab() {
   const { catalog } = useCatalog();
@@ -206,7 +207,13 @@ export default function ChatTab() {
             )}
           </div>
 
-          <ChatModelPicker current={model} onChange={setModel} />
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+            {/* BL-CONTEXT-COUNTER (5/13): prompt_tokens / context_window 状态指示
+                配合 5/13 早上加的 _is_context_overflowed 监控, 让员工自己看到
+                当前会话烧到 context 多少, 接近上限主动 Cmd+N. 没数据时不渲染. */}
+            <ContextCounter />
+            <ChatModelPicker current={model} onChange={setModel} />
+          </div>
         </header>
 
         {loadError && (

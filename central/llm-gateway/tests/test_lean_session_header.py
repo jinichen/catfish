@@ -42,21 +42,22 @@ def test_header_or_env_short_circuit(app_src):
 
 
 def test_teaching_mode_propagated_to_stream(app_src):
-    """_stream_chat_completion 接 teaching_mode 参数, chat_completions 透传."""
-    # signature 含 teaching_mode: bool = False
-    assert "teaching_mode: bool = False" in app_src
-    # 调用处带 teaching_mode=_teaching_mode
-    assert "teaching_mode=_teaching_mode" in app_src
+    """已废 (5/13 鸿波"全部清干净"): teaching_mode 参数从 _stream_chat_completion
+    签名删了 (BL-FIX23 retry 没了它就 dead arg). _lean 控制 SOUL inject 在
+    chat_completions 入口 (1651 行) 已用过, 不需要透传给 stream."""
+    # signature 不再含 teaching_mode
+    assert "teaching_mode: bool = False" not in app_src, (
+        "teaching_mode dead arg 应已从 _stream_chat_completion 签名删除"
+    )
 
 
 def test_stream_uses_teaching_mode_for_retry(app_src):
-    """_stream_chat_completion 内的 _lean 也接 teaching_mode (BL-FIX23 L8 retry 路径)."""
-    # 找 retry 那段的 _lean 赋值, 应该是 teaching_mode or env
-    idx = app_src.find("BL-LEAN-SESSION (5/13): 优先看 session-level teaching_mode")
-    assert idx >= 0, "_stream_chat_completion 内没接 teaching_mode (retry 路径退化)"
-    # 后面 5 行内应该有 teaching_mode or os.environ.get(...)
-    block = app_src[idx:idx + 400]
-    assert "teaching_mode or os.environ.get" in block
+    """已废: BL-FIX23 retry 整套删了 (5/13 鸿波"乱七八糟"). teaching_mode 透传
+    也跟着删了. _teaching_mode / _lean 仍在 chat_completions 入口控 SOUL inject."""
+    assert "_teaching_mode" in app_src, (
+        "BL-LEAN-SESSION header 入口判定 _teaching_mode 应该还在"
+    )
+    assert "X-Catfish-Teaching-Mode" in app_src
 
 
 # ─── 默认行为 (无 header 无 env) ──────────────────────────────────────

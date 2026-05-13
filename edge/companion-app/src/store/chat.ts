@@ -23,6 +23,10 @@ interface ChatState {
   /** 写入 ~/.hermes/state.db 的 session id (Plan C Week 2 持久化)
    *  null = 还没创建 (lazy create on first send) */
   persistedSessionId: string | null;
+  /** BL-CONTEXT-COUNTER (5/13 借鉴 Hermes 0.13): 最近一轮 LLM 完成时的
+   *  prompt_tokens, 给状态栏 context counter 用 (xxK / 128K, 80% 黄, 95% 红).
+   *  reset / 切 session 时清零, 每次 onDone 时更新. */
+  lastPromptTokens: number | null;
 
   // ── actions ──
   setMessages: (msgs: ChatMessage[]) => void;
@@ -33,6 +37,7 @@ interface ChatState {
   setStreamingId: (id: string | null) => void;
   setModel: (m: string) => void;
   setPersistedSessionId: (id: string | null) => void;
+  setLastPromptTokens: (n: number | null) => void;
   /**
    * 把一个历史会话 (从 sessions_get 拿到的 SessionDetail) 灌进 store, 用于 resume。
    * - 把 DB 里的 SessionMessage[] 映射成 ChatMessage[]
@@ -102,6 +107,7 @@ export const useChatStore = create<ChatState>((set) => ({
   streamingId: null,
   model: "catfish-private-main",
   persistedSessionId: null,
+  lastPromptTokens: null,
 
   setMessages: (messages) => set({ messages }),
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
@@ -122,6 +128,8 @@ export const useChatStore = create<ChatState>((set) => ({
   setModel: (model) => set({ model }),
   setPersistedSessionId: (persistedSessionId) =>
     set({ persistedSessionId }),
+  setLastPromptTokens: (lastPromptTokens) =>
+    set({ lastPromptTokens }),
   loadSession: (detail) =>
     set({
       messages: detail.messages.map(dbMessageToChat),
@@ -136,5 +144,6 @@ export const useChatStore = create<ChatState>((set) => ({
       isStreaming: false,
       streamingId: null,
       persistedSessionId: null,
+      lastPromptTokens: null,  // BL-CONTEXT-COUNTER: 切会话清零
     }),
 }));

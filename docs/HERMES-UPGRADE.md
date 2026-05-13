@@ -1,11 +1,51 @@
-# Hermes 升级方案 (5/4 起草, 5/8 后启动议程, demo 后执行)
+# Hermes 升级方案 (5/4 起草, 5/7 0.12 升级 ship, 5/18 计划升 0.13)
 
-> **背景**: 鸿波 5/4 看到 NousResearch/hermes-agent 升到 0.12.0, 我们当前固定在 0.10.0.
-> demo (5/14) 前不动. 这份文档是"研究清楚再动"的产物 — 含 0.10 → 0.12 变更分析 +
-> 我们补丁层风险评估 + **未来 hermes 升级预留方案** (核心思路: 字符串 patch → runtime hook).
->
-> **状态 (5/4 23:30)**: 已完成 Curator 接口分析 + 集成方案设计 (见 § 8).
-> **暂停原因**: 5/4-5/8 demo 准备期. **5/8 后** 鸿波统一启动议程, 决定 verify 工作 + 升级时间. 不动代码, 不抓更多源码.
+> **5/13 状态对账** (鸿波"记录有问题"反馈后纠正): docs 之前停留在 5/4 起草态, 实际 5/7 已经把 0.10 → 0.12 升级 + 升级保护**全部 ship**, 现状是 hermes 0.12. 下面 § 1-§ 12 的 5/4 起草内容**不删, 留作历史**, **真实最新状态见 § 0** (本节).
+
+---
+
+## § 0 真实进度 (5/13 末态)
+
+| 节点 | 实际状态 |
+|---|---|
+| 5/4 起草 | docs 写完, 评估 0.10→0.12 风险 |
+| 5/5 阶段 A.1-A.4 | git tag `pre-hermes-upgrade-0.10` + dry-run + checklist 落档 |
+| 5/5 阶段 B.1-B.4 | brand patch 重构 (28 条) + brand check + self-heal |
+| **5/7 BL-D14.5 ship** | hermes 0.10 → 0.12 真升级 + 升级保护. 装 git hooks (post-merge / post-rewrite / post-checkout), `apply_brand_patch.py` 加 `--install-hooks` / `--verify` / MISS 不挂 fallback. **11 step fixture 测过 0.13 升级覆盖路径** (PASS) |
+| 5/7 BL-CR ship | Curator 集成 (`curator-config-snippet.yaml` 60d stale / 180d archive / 4h idle), `install.sh` 自动配保守默认 |
+| 5/8-5/14 | freeze, demo 准备 |
+| **5/18 计划** | 升 0.13. 工作量: **2-3 天** (不是早先估的 10-15 天 — 因 5/7 解耦完成). 详见 § 0.1. **不能"等 0.13.1 patch"** — hermes 不发 patch (5/13 核 GitHub releases 确认 v0.7-v0.13 全是 .0), 只能等社区跑一周看 P0 issue 不爆 |
+
+### § 0.1 升 0.13 真实工作量 (5/18 sprint)
+
+| Day | 工作 | 工作量 |
+|---|---|---|
+| Day 1 上午 | `cd ~/.hermes/hermes-agent && git pull` 升 0.13.x → git hook 自动跑 `apply_brand_patch.py --apply` → 看 MISS 日志, 补几条 0.13 新字符串规则到 RULES (估 5-10 条) | 半天 |
+| Day 1 下午 | 撞车点处理 (4 件): default-on secret redaction × `prompt_security.py` (关一边) / Atomic session × `inflight_streams.py` (二选一) / `transform_llm_output` × `output_transforms.py` (接上游接口, **删自己 ABC chain ~180 行**) / Playwright cloud-metadata × BL-HERMES013-2 (**删自己 ~80 行**) | 半天 |
+| Day 2 | 跑 169 项 `HERMES-UPGRADE-CHECKLIST.md` 回归 + catfish-policy 11 单测 | 1 天 |
+| Day 3 (可选) | 享受 0.13 红利: `/steer`+`/queue` 不打断 in-flight 指令 / Checkpoints v2 / SSE MCP / Multi-Agent Kanban Q3 准备 | 0.5-1 天 |
+
+净效果: 升级后能**删 ~260 行**自己代码 (output_transforms ABC + Playwright SSRF 跟 hermes 0.13 内置撞车). 详见 `HERMES-013-ALIGN.md` § 7.
+
+### § 0.2 关键代码证据 (避免后人再次照搬旧 docs 误导)
+
+- `edge/hermes-fork/apply_brand_patch.py` 行 144 / 152 / 158 / 170 / 188 — 已含 0.12 适配 (5/5 dry-run 验过)
+- `edge/hermes-fork/apply_brand_patch.py` 行 422 — `MISS` fallback (`找不到原字符串，可能 hermes 升级了`, **不致命**)
+- `edge/hermes-fork/README.md` 行 49 — `0.13/0.14 新增字符串没规则 → MISS (打日志, 不挂)`
+- `edge/hermes-fork/install.sh` 步 4 — 自动装 3 个 git hook (post-merge / post-rewrite / post-checkout)
+- `edge/hermes-fork/install.sh` 步 4.5 — 自动配 Curator 保守默认
+- `CHANGELOG.md` 5/7 段 BL-D14.5 — "假 hermes-agent fixture 11 step 全 PASS (... 模拟 0.13 升级覆盖 → hook 自动触发 → verify OK ...)"
+
+---
+
+## § 历史背景 (5/4 起草, 留作参考)
+
+**背景**: 鸿波 5/4 看到 NousResearch/hermes-agent 升到 0.12.0, 我们当前固定在 0.10.0.
+demo (5/14) 前不动. 这份文档是"研究清楚再动"的产物 — 含 0.10 → 0.12 变更分析 +
+我们补丁层风险评估 + **未来 hermes 升级预留方案** (核心思路: 字符串 patch → runtime hook).
+
+**状态 (5/4 23:30, ⚠️ 已过时, 见 § 0)**: 已完成 Curator 接口分析 + 集成方案设计 (见 § 8).
+**暂停原因 (⚠️ 已结束 5/7 提前 ship)**: ~~5/4-5/8 demo 准备期. **5/8 后** 鸿波统一启动议程, 决定 verify 工作 + 升级时间.~~
 
 ---
 

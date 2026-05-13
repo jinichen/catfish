@@ -148,7 +148,7 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 |---|---|---|---|
 | BL-D6 | SSO 真接入 (替换 dev token) | ✅ 4-28 | catfish-identity OIDC server + 飞书 adapter + Companion JWT + dev_token fallback ~600 行, 端到端通 |
 | BL-D7 | 中央审计日志 (token 数 / 延迟 / 不含对话内容) | ✅ 4-22~28 | gateway audit JSONL ship, AuditCard 已显示 |
-| BL-D8 | RBAC 系统 (3 角色: admin/manager/employee) | 🔵 5/2 MVP | spec + middleware + 单元 16 测过. UI 完整 + 部门 audit/quota endpoint Phase 2 接力 |
+| BL-D8 | RBAC 系统 (3 角色: admin/manager/employee) | 🔵 5/2 MVP + 5/10 sysadmin (BL-ARCH1 P1) | spec + middleware + 单元 16 测过. **Phase 2 接力清单 (5/13 鸿波拍板, 待 5/15-5/19 sprint)**: P0 (5 天) — `allowed_models` per-dept/user (普通员工只能内网, manager+ 才能 gemini-pro 付费) + `allowed_tools` per-dept (财务部不能 catfish_browser_*) + `allowed_skills` per-dept (eis-login 只给运维) + `allowed_channels/chats/rooms` 命名跟 Hermes 0.13 对齐 (HERMES-013-ALIGN §2) + catfish-web `/admin/access` UI; P1 (3 天) — 拒绝事件审计 (`denial_reason` 字段) + RBAC config 变更日志 (`rbac_audit`) + per-user override (TTL 自动失效) + `/admin/access/events` 审计页; P2 (4 天) — 客户独立 RBAC config (跟 SOUL_FFCS 同精神) + MCP connection access control (OAuth 哪些部门可见) + BL-F11 RBAC 渗透测试 |
 | BL-D9 | Quota 系统 (三维: per-user/model/department, sliding window sqlite) | 🔵 5/3 MVP | spec + quota.py 核心 + 单元 17 测过. /v1/quota/me endpoint + manager UI Phase 2 接力 |
 | BL-D17 (新) | IDP UserStore 抽象 + PG/LDAP backend (现 yaml 短期够用) | 🔵 5/4 PG MVP | users + registry → PG (asyncpg + auto seed yaml). schema migration init_schema. quota / audit JSONL 留 sqlite Phase 2 接力 |
 

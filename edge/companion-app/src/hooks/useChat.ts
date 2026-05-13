@@ -14,6 +14,11 @@
 import { useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useChatStore } from "../store/chat";
+import {
+  useAutoContinueStore,
+  MAX_AUTO_CONTINUES,
+  AUTO_CONTINUE_PROMPT,
+} from "../store/auto_continue";  // 5/13 鸿波"长程任务咋办" — gateway 删 BL-FIX23 后客户端补
 import { streamChat, type OpenAITool } from "../lib/chat";
 import {
   toolBridgeListTools,
@@ -340,12 +345,16 @@ export function useChat(initialModel: string) {
         onToolCalls: (calls) => {
           refs.calls = calls;
         },
-        onDone: () => {
+        onDone: (info) => {
           if (rafRef.current !== null) {
             cancelAnimationFrame(rafRef.current);
             rafRef.current = null;
           }
           flushPending();
+          // BL-CONTEXT-COUNTER (5/13): 把 usage.prompt_tokens 写 store, 状态栏渲染
+          if (info?.usage?.prompt_tokens != null) {
+            useChatStore.getState().setLastPromptTokens(info.usage.prompt_tokens);
+          }
         },
         onError: (err) => {
           if (rafRef.current !== null) {
@@ -612,6 +621,12 @@ export function useChat(initialModel: string) {
         // 鸿波 4-30 踩过坑: 第 1 轮 catfish_run_skill 已成功生成 .docx, 但模型继续
         // "再优化一版" args 一直 JSON 错, 烧完 10 轮上限. 早停让员工立刻看第一次成果.
         let consecutiveParseErrors = 0;
+        // 5/13 鸿波"长程任务咋办": 这次 send() 跑过 tool 没. 跑过才允许 auto-continue
+        // (用户首问得到答复就 stop 是正常的, 不该续; 跑过 tool 后 stop 是 mid-task
+        // 中途停, 才该续).
+        let hadToolCallThisSend = false;
+        // 自动续跑次数 — 上限 MAX_AUTO_CONTINUES (3), 防死循环
+        let autoContinues = 0;
 
         for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
           if (ctrl.signal.aborted) break;
@@ -652,7 +667,45 @@ export function useChat(initialModel: string) {
             consecutiveParseErrors = 0;
           }
 
-          if (!result.shouldContinue) break;
+          // 标记: 这次 send 跑过 tool 没
+          if (
+            lastMsg?.role === "assistant"
+            && (lastMsg.tool_calls?.length ?? 0) > 0
+          ) {
+            hadToolCallThisSend = true;
+          }
+
+          if (!result.shouldContinue) {
+            // 5/13 BL-AUTO-CONTINUE: LLM stop 没调 tool. 看要不要自动续跑.
+            // 触发条件 (4 条都满足):
+            //   1. toggle on (用户主动开)
+            //   2. 这次 send 之前跑过 tool (是 mid-task stop, 不是首问回答完)
+            //   3. 自动续跑次数 < 上限 (防死循环)
+            //   4. 没被用户 abort
+            const autoOn = useAutoContinueStore.getState().on;
+            const shouldAutoContinue =
+              autoOn
+              && hadToolCallThisSend
+              && autoContinues < MAX_AUTO_CONTINUES
+              && !ctrl.signal.aborted;
+            if (shouldAutoContinue) {
+              autoContinues++;
+              const continueMsg: ChatMessage = {
+                id: uuid(),
+                role: "user",
+                content: AUTO_CONTINUE_PROMPT,
+                ts: nowIso(),
+                status: "done",
+                // _autoContinue 标记 (UI 显淡色 + 角标 "🔄 自动续 N/3", 让员工看见)
+                _autoContinue: { round: autoContinues, max: MAX_AUTO_CONTINUES },
+              };
+              addMessage(continueMsg);
+              currentMessages = [...currentMessages, continueMsg];
+              void persistMessage(continueMsg);
+              continue;  // 跑下一轮
+            }
+            break;
+          }
 
           if (round === MAX_TOOL_ROUNDS - 1) {
             // 最后一轮还想继续,告诉用户达到上限

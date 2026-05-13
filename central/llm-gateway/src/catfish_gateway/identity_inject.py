@@ -97,6 +97,53 @@ def _read_soul_customer() -> str:
     return _cache.read(_hermes_home() / f"SOUL_{customer.upper()}.md")
 
 
+# ─── BL-SOUL-SCENARIO P2 (5/13 鸿波"完成 SOUL 优化 P2"): 按场景注入 ──────────
+#
+# SOUL.md 把高频踩坑细则拆出场景子文件, gateway 按当前 chat 的 tool 候选决定
+# 注入哪些, 不再永远全量灌. 简单 chat (不调浏览器/不写代码) 节省 ~3K token.
+#
+# 触发规则: tool 名 ↔ scenario file
+#   tool 名前缀 / 名字 → SOUL_<NAME>.md
+SCENARIO_RULES: list[tuple[tuple[str, ...], str, str]] = [
+    # (tool_name 触发模式, scenario 标签, 文件名)
+    # 模式匹配: 元组里任一字符串是 tool_name 的子串就触发
+    (("catfish_browser_", "browser_"), "BROWSER", "SOUL_BROWSER.md"),
+    (("execute_code", "python_exec", "shell_exec"), "EXECUTE_CODE",
+     "SOUL_EXECUTE_CODE.md"),
+]
+
+
+def _detect_scenarios(tools: list[dict[str, Any]] | None) -> list[tuple[str, str]]:
+    """从 OpenAI tools 列表 (chat_completions body['tools']) 抽 tool_name 集合,
+    按 SCENARIO_RULES 决定要注入哪些场景子文件.
+
+    返 [(scenario_label, filename), ...] 顺序跟 SCENARIO_RULES 一致.
+
+    tools 为 None / 空 → 返 []. tool 命中多种 scenario → 各 scenario 独立返一次.
+    """
+    if not tools or not isinstance(tools, list):
+        return []
+    tool_names: set[str] = set()
+    for t in tools:
+        if not isinstance(t, dict):
+            continue
+        fn = t.get("function") or {}
+        name = fn.get("name", "")
+        if isinstance(name, str) and name:
+            tool_names.add(name)
+    out: list[tuple[str, str]] = []
+    for patterns, label, filename in SCENARIO_RULES:
+        # 任一 tool_name 含 patterns 任一子串 → 触发
+        if any(any(p in n for p in patterns) for n in tool_names):
+            out.append((label, filename))
+    return out
+
+
+def _read_scenario(filename: str) -> str:
+    """读 ~/.hermes/<filename>, 失败返空 (静默)."""
+    return _cache.read(_hermes_home() / filename)
+
+
 def _read_user_memory() -> str:
     return _cache.read(_hermes_home() / "USER.md")
 
@@ -114,8 +161,13 @@ def _read_memory_dir() -> str:
     return "\n\n".join(parts)
 
 
-def build_identity_content() -> str:
-    """读 SOUL + USER memory + memories/, 拼成单个 system message 内容字符串。
+def build_identity_content(tools: list[dict[str, Any]] | None = None) -> str:
+    """读 SOUL + 按 tools 决定的场景段 + USER memory + memories/, 拼成单个 system
+    message 内容字符串。
+
+    tools (5/13 BL-SOUL-SCENARIO P2): chat_completions body['tools'], 用来决定
+    要不要注入 SOUL_BROWSER.md / SOUL_EXECUTE_CODE.md 等场景段. None / 空 → 不注入
+    场景段 (简单 chat 不调工具时省 token).
 
     返回空字符串说明无任何身份内容（员工还没装 SOUL.md / Hermes 还没写过 memory）。
     """
@@ -131,6 +183,12 @@ def build_identity_content() -> str:
         import os  # noqa: PLC0415
         cust_label = (os.environ.get("CATFISH_CUSTOMER") or "ffcs").upper()
         parts.append(f"# Identity (SOUL_{cust_label} — 客户业务环境)\n\n{soul_cust}")
+
+    # BL-SOUL-SCENARIO P2 (5/13): 按 tool 候选注入场景段
+    for label, filename in _detect_scenarios(tools):
+        content = _read_scenario(filename).strip()
+        if content:
+            parts.append(f"# Identity (SOUL_{label} — 场景纪律)\n\n{content}")
 
     memory_blocks: list[str] = []
     user_mem = _read_user_memory().strip()
@@ -162,6 +220,7 @@ def inject_identity_if_needed(
     skip: bool = False,
     agent_name: str = "",
     agent_personality: str = "",
+    tools: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """如果 messages 里没 system message 且 skip=False, 在前面插 SOUL+memory 作为 system。
 
@@ -183,7 +242,7 @@ def inject_identity_if_needed(
         # 客户端有自己的 system prompt, 尊重它的意图
         return messages
 
-    content = build_identity_content()
+    content = build_identity_content(tools=tools)
     if not content:
         # 员工还没装 SOUL.md / 没 memory, 静默跳过
         return messages or []

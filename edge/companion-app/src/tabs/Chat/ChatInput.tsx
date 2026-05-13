@@ -18,6 +18,7 @@ import type { Attachment } from "../../types/chat";
 import { useUIStore } from "../../store/ui";  // BL-E13 主动闲聊 prefill
 import { useAgentStore } from "../../store/agent";  // BL-E11 后续: 员工自定义名
 import { useTeachingStore } from "../../store/teaching";  // BL-LEAN-SESSION (5/13)
+import { useAutoContinueStore } from "../../store/auto_continue";  // BL-AUTO-CONTINUE (5/13)
 
 interface Props {
   isStreaming: boolean;
@@ -528,6 +529,13 @@ export default function ChatInput({
             跨 session 隔离, 不重启 gateway. */}
         <TeachingToggleButton isStreaming={isStreaming} />
 
+        {/* 🔄 自动续跑 toggle (BL-AUTO-CONTINUE 5/13 鸿波"长程任务咋办").
+            取代 gateway 删掉的 BL-FIX23 mid-task retry. 开启 → LLM 跑过 tool
+            后又 stop 没调下个 tool, Companion 自动发"继续" 续跑 (上限 3 轮).
+            适合长任务 (合并多个 Excel / 资质材料整理 / 长流程 skill 串联).
+            关闭回常态: LLM stop 就 stop, 自己打"继续". 跨 session 隔离. */}
+        <AutoContinueToggleButton isStreaming={isStreaming} />
+
         {/* 🎤 语音输入按钮 — 方案 C 五一 sprint Day 1: Whisper.cpp 本地
            按一下开始录音, 再按一下停止 → 自动转文字填到 textarea. 数据 100% 本地. */}
         <button
@@ -860,6 +868,47 @@ function TeachingToggleButton({ isStreaming }: { isStreaming: boolean }) {
       }}
     >
       🎓
+    </button>
+  );
+}
+
+
+// ── BL-AUTO-CONTINUE (5/13 鸿波"长程任务咋办") ──────────────────────
+//
+// 自动续跑 toggle. 取代 gateway 删掉的 BL-FIX23 mid-task retry. 开启时:
+//   - LLM 跑过 tool 又 stop 没调下个 tool → Companion 自动发"继续" 续跑
+//   - 上限 3 轮防死循环
+//   - 自动续的 user msg 在 UI 显淡色 + 🔄 角标, 让员工看见
+// 关闭时 (默认):
+//   - LLM stop 就 stop, 用户自己打"继续" — 跟 ChatGPT 一样
+
+function AutoContinueToggleButton({ isStreaming }: { isStreaming: boolean }) {
+  const on = useAutoContinueStore((s) => s.on);
+  const toggle = useAutoContinueStore((s) => s.toggle);
+  return (
+    <button
+      onClick={toggle}
+      disabled={isStreaming}
+      title={
+        on
+          ? "🔄 自动续跑 ON: LLM 跑过 tool 后停了不调下个 tool, Companion 自动发\"继续\" 续 (上限 3 轮). 点关闭回常态."
+          : "🔄 开启自动续跑: 长任务 (合并多 Excel / 资质材料整理) 时 LLM 中途停了, Companion 帮你自动发\"继续\" 接力. 不开就跟 ChatGPT 一样, 自己打\"继续\"."
+      }
+      style={{
+        padding: "6px 10px",
+        border: "1px solid " + (on ? "var(--catfish-cyan)" : "var(--catfish-border)"),
+        borderRadius: "var(--radius-sm)",
+        background: on ? "var(--catfish-cyan-dim)" : "transparent",
+        color: on ? "var(--catfish-cyan)" : "var(--catfish-text-muted)",
+        fontSize: 14,
+        fontWeight: on ? 600 : 400,
+        cursor: isStreaming ? "default" : "pointer",
+        lineHeight: 1,
+        minHeight: 36,
+        transition: "all 120ms ease",
+      }}
+    >
+      🔄
     </button>
   );
 }

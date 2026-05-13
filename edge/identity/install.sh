@@ -78,6 +78,25 @@ else
     warn "客户特定 SOUL 不存在: $SOUL_CUSTOMER_SRC (CATFISH_CUSTOMER=$CUSTOMER), 跳过"
 fi
 
+# 5/13 BL-SOUL-SCENARIO P2: 装场景子 SOUL (gateway 按 tool 候选自动注入)
+# 现有 2 个: SOUL_BROWSER (浏览器自动化), SOUL_EXECUTE_CODE (sandbox 红线).
+# 后续加新场景 (SOUL_SECRET / SOUL_SKILL) 加到这个数组就行.
+for SCENARIO_NAME in SOUL_BROWSER SOUL_EXECUTE_CODE; do
+    SCENARIO_SRC="$SCRIPT_DIR/${SCENARIO_NAME}.md"
+    SCENARIO_DST="$HOME/.hermes/${SCENARIO_NAME}.md"
+    if [ ! -f "$SCENARIO_SRC" ]; then
+        warn "$SCENARIO_NAME 源文件不存在: $SCENARIO_SRC, 跳过"
+        continue
+    fi
+    if [ -L "$SCENARIO_DST" ] && [ "$(readlink "$SCENARIO_DST")" = "$SCENARIO_SRC" ]; then
+        ok "$SCENARIO_NAME 已是最新软链"
+    else
+        rm -f "$SCENARIO_DST"
+        ln -s "$SCENARIO_SRC" "$SCENARIO_DST"
+        ok "$SCENARIO_DST → $SCENARIO_SRC"
+    fi
+done
+
 # heredoc 里混中文 + $var 在某些 bash 版本下会踩 set -u 的 Unicode 边界 bug，
 # 临时关掉 -u，EOF 后恢复。
 set +u

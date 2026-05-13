@@ -87,6 +87,9 @@ export interface ChatMessage {
   status?: "streaming" | "done" | "error";
   /** 错误消息(status=error 时填) */
   error?: string;
+  /** BL-AUTO-CONTINUE (5/13 鸿波"长程任务咋办"): 这条 user msg 是 Companion
+   *  自动续跑发的, UI 渲染要标记 (淡色 + "🔄 自动续 N/M" 角标). 用户原发的没这字段. */
+  _autoContinue?: { round: number; max: number };
 }
 
 /** 一次会话的运行时状态(目前 store 直接展开到顶层,这个 type 留给 Week 3 持久化) */

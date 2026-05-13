@@ -14,7 +14,6 @@ import os
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -1188,265 +1187,19 @@ async def _stream_with_keepalive(iterator, interval_secs: float = _KEEPALIVE_INT
             return
 
 
-# BL-FIX23 L5 (5/9): 鸿波拍板"方案 C, 不要考虑别的". gateway 检测 plan-only
-# finish_reason=stop 自动重发, 客户端无感. 三次诊断后真根因: Qwen3.5 122B
-# 长 context (79 messages, 5万字 journal) + RLHF "礼貌等确认" 模式 — LLM 收
-# self_critique hint 后**还是** finish_reason=stop, 嘴上说要做但没 emit tool_call.
-# SOUL 纪律治不了 (RLHF > system prompt), self_critique 已经 inject 但模型不听.
-# L5 真招: gateway 内部起新一轮 acompletion 加硬 hint, 把新 stream 接到原 SSE.
+# ─── BL-FIX23 plan-only retry 系列 全部 DELETED (5/13 鸿波"乱七八糟") ────
+# 历史 L5 (5/9) → L9 (5/13) 在 gateway 层堆 retry+灌 hint+物理强迫 tool_choice
+# guard, 副作用 > 收益 (overflow v1 误杀 tool_calls / hint 让 context 越涨越多).
+# 鸿波 5/13 拍板删干净 — gateway 只干净转发, LLM stop 就 stop, 客户端自己跟它说"继续".
+# LLM 不调工具属模型层/prompt 层问题, 不是 gateway 该治.
 #
-# 触发条件 (4 条都满足):
-#   1. finish_reason == "stop" (LLM 自然结束, 不是 length/tool_calls)
-#   2. 累积没 emit 任何 productive tool_call (execute_code / catfish_run_skill / ...)
-#   3. 累积 content 是 plan-only (含承诺关键词或未来意图词)
-#   4. 上一条 user message 是反馈 (短消息或含反馈关键词)
-# 防死循环: 重发上限 2 次. 每次重发记 WARNING.
-_PLAN_ONLY_PROMISE_KEYWORDS = (
-    # 完成承诺 (跟 self_critique 一致, 不再 import 防循环)
-    "已生成", "已保存", "已完成", "已创建", "已修改", "已写入",
-    "已输出", "已写好", "已经生成", "已经保存", "已经完成",
-    # 未来意图 (LLM 经常说"我立刻..."然后停)
-    "立刻", "我现在", "现在重新", "我马上", "马上动手", "重新生成",
-    "我立即", "立即生成", "现在生成", "现在调整", "重新调整",
-    # BL-FIX23 L7 (5/11): mid-task plan-only stop — LLM 跑完 tool 之后说"我下一步去 X"
-    # 但没真调 tool. 鸿波实测: tool → "现在自动填入用户名" stop. 加进 promise 词触发 retry.
-    "接下来", "下一步", "现在自动", "现在填", "我去", "我准备", "现在调用",
-    "继续", "继续做", "继续执行",
-)
-
-# BL-FIX23 L7 (5/11): 拆 promise 词为两类, last_is_tool 时只在"真完成态"才不 retry,
-# "未来意图"还要继续 retry (mid-task 不能让它停).
-_PLAN_ONLY_COMPLETION_KEYWORDS = (
-    "已生成", "已保存", "已完成", "已创建", "已修改", "已写入",
-    "已输出", "已写好", "已经生成", "已经保存", "已经完成",
-    # 5/12: '已经写入' 跟 '已写入' 都该认 (test_plan_only_retry 漏 fix)
-    "已经写入", "已经创建", "已经修改", "已经输出",
-)
-_PLAN_ONLY_FUTURE_INTENT_KEYWORDS = (
-    "立刻", "我现在", "现在重新", "我马上", "马上动手", "重新生成",
-    "我立即", "立即生成", "现在生成", "现在调整", "重新调整",
-    "接下来", "下一步", "现在自动", "现在填", "我去", "我准备", "现在调用",
-    "继续", "继续做", "继续执行",
-)
-
-# BL-FIX23 L8 (5/11): "任务真完成"特征词. 列表精短 + 高特异性, 避免误判
-# step 完成态 (e.g. "已加载" / "已识别" — 这些是步骤汇报, task 还没完).
-# 反向: 刚跑过 tool 又没踩这个列表 = 任务还在中途, 应 retry.
-#
-# 鸿波 5/11 实测: LLM 说 "已识别验证码 '2fW2', 请确认" → step report, 不在
-# 这个列表, 视为中途停 → retry 让它继续填表单.
-_TASK_COMPLETE_KEYWORDS = (
-    # 任务完成态
-    "任务完成", "任务结束", "已完成全部", "全部完成", "都做完", "整理完毕",
-    "处理完毕", "汇报完毕", "结束流程",
-    # 查询型任务: 结果是 0 / 空
-    "没有待办", "无待办", "0 项", "0项", "无新待办", "无需处理",
-    "没有数据", "结果为空", "未发现",
-    # 用户主动结束 / 已退出态
-    "已退出", "已登出", "已关闭", "会话结束",
-    # 终态失败 (无法继续)
-    "无法登录", "登录失败", "无法访问", "权限不足", "账号被锁",
-    # 等用户决策 (明确等输入, 不应自动 retry)
-    "请问", "请你确认", "需要你提供", "是否继续", "是否需要", "请选择",
-)
-_PLAN_ONLY_FEEDBACK_KEYWORDS = (
-    # 短反馈词 (员工提细节调整时常见)
-    "改", "调整", "错了", "漏", "继续", "做啊", "干完", "干一半",
-    "还有", "不对", "不要", "再改", "重做", "没做完", "怎么", "还是",
-    "完成", "写完", "做完",
-)
-_PLAN_ONLY_PRODUCTIVE_TOOLS = {
-    "execute_code", "python", "bash", "shell_exec", "sh",
-    "catfish_run_skill", "write_file", "edit_file", "create_file",
-    "save_file", "tauri_save_file", "memory_save", "catfish_remember",
-}
-_PLAN_ONLY_HARD_HINT = (
-    "[BL-FIX23 L7 plan-only-retry]\n"
-    "你刚回了一段话但**没 emit 任何 tool_call**. 员工要的是真做事不是嘴上承诺.\n\n"
-    "立刻发起 tool_call 真做出来:\n"
-    "- 写文档/改文档 → execute_code 调 python-docx 直接读写文件\n"
-    "- 跑 skill → catfish_run_skill\n"
-    "- 写文件 → write_file / tauri_save_file\n"
-    "- 浏览器自动化 → catfish_browser_fill / catfish_browser_click / catfish_browser_goto\n\n"
-    "**一个字解释都不要发**, 直接 tool_call.\n\n"
-    "特别注意 — 如果你刚说了 '现在自动填入X' / '接下来去做 Y' / '我去 X', 那就立刻\n"
-    "调对应的 tool, 不要再来一句话报告进度然后停下. 员工说: '怎么干一半就停了'."
-)
-# BL-FIX23 L6 (5/11): retry 上限 2 → 1. 鸿波 5/11 演示前夜遇到 24+ 轮 L5 retry
-# 死循环 (每次 HTTP request retry counter 都从 0 起, 总累积 ≥ 24 次同样的
-# 'execute_code 生成文档' → 'plan-only stop' → retry).
-# 单次 request 内 retry 1 次足够 — 1 次还 plan-only 就接受是"等反馈"不是偷懒.
-_MAX_PLAN_ONLY_RETRIES = 1   # 老常量保留 (兼容引用)
-
-# BL-FIX23-L8-fix (5/13 鸿波合并 8 项资质 13+ 次 mid-task 卡): 区分 retry 上限.
-# - mid_task 路径 (刚跑完 tool 又 stop): 给 2 次, 长任务 LLM 自我反思短句后该续上
-# - feedback 路径 (用户反馈后 plan-only): 仍 1 次, 防 BL-FIX5 死循环
-_MAX_PLAN_ONLY_RETRIES_MID_TASK = 2
-_MAX_PLAN_ONLY_RETRIES_FEEDBACK = 1
-
-# BL-FIX23 L6: Jaccard 阈值 — 当前 attempt content 跟历史 assistant 消息相似度
-# 超过这个值就**不再 retry** (LLM 已经在重复说话, 再 retry 一定再说一遍).
-_REPETITIVE_JACCARD_THRESHOLD = 0.55
-
-
-def _jaccard_bigram(s1: str, s2: str) -> float:
-    """字符 bigram Jaccard 系数 — 粗糙但快的相似度判定. 0~1, 1 = 完全相同."""
-    if not s1 or not s2:
-        return 0.0
-    # 取前 200 字 (足够指纹 + 避免长文本计算开销)
-    s1 = s1[:200]
-    s2 = s2[:200]
-    if len(s1) < 2 or len(s2) < 2:
-        return 0.0
-    bg1 = {s1[i : i + 2] for i in range(len(s1) - 1)}
-    bg2 = {s2[i : i + 2] for i in range(len(s2) - 1)}
-    if not bg1 or not bg2:
-        return 0.0
-    return len(bg1 & bg2) / len(bg1 | bg2)
-
-
-def _assistant_history_too_repetitive(messages: list, current_content: str) -> bool:
-    """BL-FIX23 L6 (5/11): 历史里有 assistant message 跟当前内容高度相似 → 死循环征兆.
-
-    防 24+ 轮"已生成请检查" + execute_code 反复跑同样动作的 case (鸿波 5/11 实测).
-
-    判定: 当前 content ≥ 50 字 + 历史里有任一 assistant msg 跟当前 Jaccard > 阈值.
-    Jaccard 用字符 bigram 集合, 取前 200 字, 中文敏感.
-    """
-    if not current_content or len(current_content) < 50:
-        return False
-    if not messages:
-        return False
-    for msg in messages:
-        if not isinstance(msg, dict):
-            continue
-        if msg.get("role") != "assistant":
-            continue
-        prev = msg.get("content", "")
-        if isinstance(prev, list):
-            # multipart, 取 text 部分
-            prev = " ".join(
-                p.get("text", "")
-                for p in prev
-                if isinstance(p, dict) and p.get("type") == "text"
-            )
-        if not isinstance(prev, str) or len(prev) < 50:
-            continue
-        if _jaccard_bigram(prev, current_content) >= _REPETITIVE_JACCARD_THRESHOLD:
-            return True
-    return False
-
-
-def _last_role_is_tool_result(messages: list) -> bool:
-    """BL-FIX23 L6 (5/11): 最后一条 message 是 tool 结果 (说明上一轮已经调过 tool,
-    LLM 现在是看完工具结果在汇报, 不应该再 retry 让它"又干一遍").
-
-    一次 request 末尾 tool result + LLM 输出 "已完成" 是合理流程, 不是 plan-only 偷懒.
-    """
-    if not messages:
-        return False
-    for msg in reversed(messages):
-        if not isinstance(msg, dict):
-            continue
-        role = msg.get("role")
-        if role == "tool":
-            return True
-        if role in {"user", "assistant", "system"}:
-            return False
-    return False
-
-
-def _is_plan_only_content(content: str) -> bool:
-    """累积 content 是 plan-only (含承诺/未来意图词).
-
-    不限长度 — 关键词本身够 specific (e.g. '已生成' / '我立刻'), 不会误判
-    一般 ack ('好' / 'OK'). 触发还要外层 4 条 AND (没 tool_call + user 反馈
-    + retries 未满), 这层只判内容形态.
-    """
-    if not content or not isinstance(content, str):
-        return False
-    for kw in _PLAN_ONLY_PROMISE_KEYWORDS:
-        if kw in content:
-            return True
-    return False
-
-
-def _has_completion_claim(content: str) -> bool:
-    """BL-FIX23 L7 (5/11): 内容含"已生成 / 已完成"类完成态词.
-
-    last_is_tool + 完成态 → 真做完了汇报, 别 retry (避免死循环, L6 原意).
-    """
-    if not content or not isinstance(content, str):
-        return False
-    for kw in _PLAN_ONLY_COMPLETION_KEYWORDS:
-        if kw in content:
-            return True
-    return False
-
-
-def _has_future_intent(content: str) -> bool:
-    """BL-FIX23 L7 (5/11): 内容含"现在去 / 接下来 / 下一步"类未来意图词.
-
-    last_is_tool + 未来意图 → mid-task plan-only stop, 应该 retry (鸿波 5/11 真实场景).
-    """
-    if not content or not isinstance(content, str):
-        return False
-    for kw in _PLAN_ONLY_FUTURE_INTENT_KEYWORDS:
-        if kw in content:
-            return True
-    return False
-
-
-def _is_task_complete_claim(content: str) -> bool:
-    """BL-FIX23 L8 (5/11): 内容含任务真完成 / 等用户决策的特征词.
-
-    比 _has_completion_claim 严 — '已生成 X.docx' (step) 不算, '任务完成' 才算.
-    L8 反向逻辑: last_is_tool + 没踩这个列表 = 还在中途, 应 retry.
-
-    包括三类:
-      1. 任务完成态 ('任务完成' / '全部完成' / '处理完毕')
-      2. 查询型空结果 ('0 项' / '无待办' / '未发现')
-      3. 终态失败 / 等用户决策 ('登录失败' / '请问' / '是否继续')
-
-    用户的反馈交互模式 (LLM "请确认 X" 等用户回话) 也算"task 暂停在等输入",
-    不 retry (跟"任务完成"一样应该停在这里, 等用户).
-    """
-    if not content or not isinstance(content, str):
-        return False
-    for kw in _TASK_COMPLETE_KEYWORDS:
-        if kw in content:
-            return True
-    return False
-
-
-def _last_user_message_is_feedback(messages: list) -> bool:
-    """上一条 user message 看起来是反馈 (短消息或含反馈词)."""
-    if not messages:
-        return False
-    # 倒序找最近的 user message (跳过 tool / assistant)
-    for msg in reversed(messages):
-        if not isinstance(msg, dict):
-            continue
-        if msg.get("role") != "user":
-            continue
-        content = msg.get("content", "")
-        # multipart 取 text 部分
-        if isinstance(content, list):
-            content = " ".join(
-                p.get("text", "")
-                for p in content
-                if isinstance(p, dict) and p.get("type") == "text"
-            )
-        if not isinstance(content, str):
-            return False
-        # 短消息 (< 30 字, 一般是反馈) 或 含反馈关键词
-        if len(content) < 30:
-            return True
-        for kw in _PLAN_ONLY_FEEDBACK_KEYWORDS:
-            if kw in content:
-                return True
-        return False  # 长 user message + 没反馈词 → 不是反馈
-    return False
+# 已删: _PLAN_ONLY_*_KEYWORDS, _TASK_COMPLETE_KEYWORDS, _PLAN_ONLY_HARD_HINT,
+# _MAX_PLAN_ONLY_RETRIES_*, _REPETITIVE_JACCARD_THRESHOLD, _jaccard_bigram,
+# _assistant_history_too_repetitive, _last_role_is_tool_result,
+# _is_plan_only_content, _has_completion_claim, _has_future_intent,
+# _is_task_complete_claim, _last_user_message_is_feedback.
+# 保留 _is_context_overflowed/_context_overflow_friendly_error (仅 metric/告警用,
+# 不再驱动 break).
 
 
 async def _fake_sse_response(
@@ -1504,7 +1257,9 @@ async def _stream_chat_completion(
     model,
     security_concern: str | None = None,
     is_internal: bool = False,  # BL-F17 (5/5): internal 调用跳 record_usage
-    teaching_mode: bool = False,  # BL-LEAN-SESSION (5/13): session-level LEAN
+    # BL-LEAN-SESSION teaching_mode 参数 已 DELETED (5/13 鸿波"全部清干净"):
+    # 之前给 BL-FIX23 retry 的 _lean gate 用. retry 删了它就 dead arg.
+    # _lean 控制 SOUL inject pipeline 那部分仍在 chat_completions 里 (1651), 不影响.
 ) -> AsyncIterator[str]:
     """SSE async generator for streaming chat completions, with fallback chain.
 
@@ -1572,226 +1327,102 @@ async def _stream_chat_completion(
                 model.name, used_model.name,
             )
 
-        # BL-FIX23 L5 (5/9): plan-only retry 跨次累积状态. 一次 stream 跑完
-        # 后看是不是 plan-only stop, 是的话不发 [DONE], 起新一轮 acompletion
-        # 加硬 hint, 把新 chunks 接到原 SSE 流上, 客户端无感.
+        # ── 干净转发 stream (5/13 鸿波"乱七八糟"反馈, 删掉 BL-FIX23 retry loop) ──
+        # 单轮 acompletion 跑完 → 转发所有 chunk → [DONE] 收尾. 不再判 plan-only,
+        # 不再 retry 灌 hint, 不再物理强迫 tool_choice. LLM stop 就 stop, 客户端
+        # 自己跟它说"继续". gateway 干净转发, 不猜 LLM 心思.
+        chunk_stats = {"total": 0, "content": 0, "reasoning": 0, "tool_calls": 0, "empty": 0}
+        last_finish_reason: str | None = None
         cumulative_content = ""
         cumulative_has_tool_call = False
-        plan_only_retries = 0
-        current_body = body  # 第一轮用原 body, retry 时 deepcopy 加 hint
 
-        while True:  # outer plan-only retry loop
-            # ── 跑一轮 stream attempt ────────────────────────────────────
-            chunk_stats = {"total": 0, "content": 0, "reasoning": 0, "tool_calls": 0, "empty": 0}
-            last_finish_reason: str | None = None
-            attempt_content = ""
-            attempt_has_tool_call = False
+        # 写出首 chunk (上面 with_fallback 拉到的那一个)
+        if first_chunk is not None:
+            data = first_chunk.model_dump() if hasattr(first_chunk, "model_dump") else first_chunk
+            if isinstance(data, dict):
+                usage = data.get("usage") or {}
+                prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
+                completion_tokens = usage.get("completion_tokens", completion_tokens)
+                choices = data.get("choices") or []
+                if choices:
+                    choice0 = choices[0]
+                    delta = choice0.get("delta") or {}
+                    chunk_stats["total"] += 1
+                    has_any = False
+                    if delta.get("content"):
+                        chunk_stats["content"] += 1
+                        cumulative_content += delta["content"]
+                        has_any = True
+                    if delta.get("reasoning_content"):
+                        chunk_stats["reasoning"] += 1
+                        has_any = True
+                    if delta.get("tool_calls"):
+                        chunk_stats["tool_calls"] += 1
+                        cumulative_has_tool_call = True
+                        has_any = True
+                    if not has_any:
+                        chunk_stats["empty"] += 1
+                    if choice0.get("finish_reason"):
+                        last_finish_reason = choice0["finish_reason"]
+            yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
-            # 写出首 chunk (只第一轮 retry 有 first_chunk, 后续重发都从 iterator 起)
-            if first_chunk is not None:
-                data = first_chunk.model_dump() if hasattr(first_chunk, "model_dump") else first_chunk
-                if isinstance(data, dict):
-                    usage = data.get("usage") or {}
-                    prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
-                    completion_tokens = usage.get("completion_tokens", completion_tokens)
-                    # 也对 first_chunk 做 stat 累积 (跟下面的 async for 一致)
-                    choices = data.get("choices") or []
-                    if choices:
-                        choice0 = choices[0]
-                        delta = choice0.get("delta") or {}
-                        chunk_stats["total"] += 1
-                        has_any = False
-                        if delta.get("content"):
-                            chunk_stats["content"] += 1
-                            attempt_content += delta["content"]
-                            has_any = True
-                        if delta.get("reasoning_content"):
-                            chunk_stats["reasoning"] += 1
-                            has_any = True
-                        if delta.get("tool_calls"):
-                            chunk_stats["tool_calls"] += 1
-                            attempt_has_tool_call = True
-                            has_any = True
-                        if not has_any:
-                            chunk_stats["empty"] += 1
-                        if choice0.get("finish_reason"):
-                            last_finish_reason = choice0["finish_reason"]
-                yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
-                first_chunk = None  # 用过了, 后续 retry 不再有首 chunk 特殊处理
+        # 后续 chunks. _stream_with_keepalive 包装: chunk 间隔 > 30s 时插 SSE
+        # comment 防客户端 / 中间代理 timeout 断开.
+        async for chunk in _stream_with_keepalive(iterator):
+            if chunk == "__keepalive__":
+                yield ": keepalive\n\n"
+                continue
+            data = chunk.model_dump() if hasattr(chunk, "model_dump") else chunk
+            if isinstance(data, dict):
+                usage = data.get("usage") or {}
+                prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
+                completion_tokens = usage.get("completion_tokens", completion_tokens)
+                choices = data.get("choices") or []
+                if choices:
+                    choice0 = choices[0]
+                    delta = choice0.get("delta") or {}
+                    chunk_stats["total"] += 1
+                    has_any = False
+                    if delta.get("content"):
+                        chunk_stats["content"] += 1
+                        cumulative_content += delta["content"]
+                        has_any = True
+                    if delta.get("reasoning_content"):
+                        chunk_stats["reasoning"] += 1
+                        has_any = True
+                    if delta.get("tool_calls"):
+                        chunk_stats["tool_calls"] += 1
+                        cumulative_has_tool_call = True
+                        has_any = True
+                    if not has_any:
+                        chunk_stats["empty"] += 1
+                    if choice0.get("finish_reason"):
+                        last_finish_reason = choice0["finish_reason"]
+            yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
-            # 后续 chunks 流出去 —— 这阶段挂了不再 fallback.
-            # 用 _stream_with_keepalive 包装: 上游 chunk 间隔 > 30s 时插 SSE comment
-            # 防客户端/中间代理 timeout 断开.
-            async for chunk in _stream_with_keepalive(iterator):
-                if chunk == "__keepalive__":
-                    # SSE comment 行, 客户端会忽略, 但 TCP 连接保活.
-                    yield ": keepalive\n\n"
-                    continue
-                data = chunk.model_dump() if hasattr(chunk, "model_dump") else chunk
-                if isinstance(data, dict):
-                    usage = data.get("usage") or {}
-                    prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
-                    completion_tokens = usage.get("completion_tokens", completion_tokens)
-                    # BL-FIX23 L3: 采样 delta 形态分布 (debug 用)
-                    choices = data.get("choices") or []
-                    if choices:
-                        choice0 = choices[0]
-                        delta = choice0.get("delta") or {}
-                        chunk_stats["total"] += 1
-                        has_any = False
-                        if delta.get("content"):
-                            chunk_stats["content"] += 1
-                            attempt_content += delta["content"]
-                            has_any = True
-                        if delta.get("reasoning_content"):
-                            chunk_stats["reasoning"] += 1
-                            has_any = True
-                        if delta.get("tool_calls"):
-                            chunk_stats["tool_calls"] += 1
-                            attempt_has_tool_call = True
-                            has_any = True
-                        if not has_any:
-                            chunk_stats["empty"] += 1
-                        # BL-FIX23 L4b: 跟踪 finish_reason.
-                        if choice0.get("finish_reason"):
-                            last_finish_reason = choice0["finish_reason"]
-                yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
-
-            # ── 一轮 stream 跑完, 累积状态 ───────────────────────────────
-            cumulative_content += attempt_content
-            cumulative_has_tool_call = cumulative_has_tool_call or attempt_has_tool_call
-
-            # BL-FIX23 L3+L4b: 流末尾打 chunk 形态分布 + finish_reason.
-            #   reasoning>0 content=0   → 前端没读 reasoning_content (BL-FE3 配套)
-            #   finish_reason=length    → max_tokens 截了, BL-A1.2 streaming
-            #                              auto-continue 该排上 / 或 client 传更大
-            #                              max_tokens
-            #   finish_reason=stop      → LLM 自然结束 (BL-FIX23 L5 看是不是 plan-only)
-            if chunk_stats["total"] > 0:
-                logger.info(
-                    "chunk stats: model=%s total=%d content=%d reasoning=%d "
-                    "tool_calls=%d empty=%d finish_reason=%s "
-                    "(retry=%d cum_content=%d cum_tc=%s)",
-                    used_model.name,
-                    chunk_stats["total"],
-                    chunk_stats["content"],
-                    chunk_stats["reasoning"],
-                    chunk_stats["tool_calls"],
-                    chunk_stats["empty"],
-                    last_finish_reason,
-                    plan_only_retries,
-                    len(cumulative_content),
-                    cumulative_has_tool_call,
-                )
-                if last_finish_reason == "length":
-                    logger.warning(
-                        "finish_reason=length: model=%s max_tokens 截了 (L4a 兜底 4096 "
-                        "还撞 → 调大 / 真做 BL-A1.2 streaming auto-continue).",
-                        used_model.name,
-                    )
-
-            # ── BL-FIX23 L5+L6+L7+L8: plan-only retry 触发判定 ─────────────
-            # 演化简史:
-            #   L5: finish=stop + 0 tool_call + plan-only keyword + 用户反馈 → retry
-            #   L6: 加 3 条死循环保险 (上限 1 / Jaccard / last_is_tool 一刀切跳)
-            #   L7: 拆 last_is_tool 二分 (完成态 vs 未来意图)
-            #   L8 (5/11): keyword-based 检测太严. LLM 说"已识别验证码 'XXXX'" 这类
-            #              中性陈述句没踩 plan-only keyword list, retry 不触发.
-            #              改反向判定 — last_is_tool + 没明确"任务完成" → 必 retry.
-            msgs_for_check = current_body.get("messages") or []
-            last_is_tool = _last_role_is_tool_result(msgs_for_check)
-            too_repetitive = _assistant_history_too_repetitive(msgs_for_check, cumulative_content)
-            task_complete = _is_task_complete_claim(cumulative_content)
-            # L8 Path A: 刚跑过 tool, 又没说"任务完成 / 等用户" → 中途停, retry
-            # 不再要求 _is_plan_only_content (太严, 抓不全话术), 改用 task_complete 反判
-            mid_task_after_tool = last_is_tool and not task_complete
-            # L8 Path B: 老 L5 反馈路径 (没跑过 tool, 用户反馈, LLM plan-only)
-            feedback_plan_only = (
-                not last_is_tool
-                and _last_user_message_is_feedback(msgs_for_check)
-                and _is_plan_only_content(cumulative_content)
-            )
-            # BL-FIX23-L8-overflow-fix (5/13 鸿波"谎报生成"): context > 95% window
-            # 时上游 silent truncate, LLM 看不到完整 tool result, retry 让 prompt
-            # 越涨越多. 强制 break + 推 SSE 友好错误, 不让 LLM 反复幻觉.
-            if _is_context_overflowed(used_model, prompt_tokens):
-                logger.error(
-                    "BL-FIX23 L8 skip retry — CONTEXT OVERFLOW: model=%s "
-                    "prompt_tokens=%d context_window=%d (%.0f%%) user=%s. "
-                    "推友好错误让员工新建会话 / 切 gemini-pro.",
-                    used_model.name, prompt_tokens,
-                    getattr(used_model, "context_window", 0) or 0,
-                    (prompt_tokens / (getattr(used_model, "context_window", 1) or 1)) * 100,
-                    user_sub,
-                )
-                friendly = _context_overflow_friendly_error(used_model, prompt_tokens)
-                yield f"data: {json.dumps({'error': friendly})}\n\n"
-                yield "data: [DONE]\n\n"
-                break
-
-            # BL-MM9-FREEZE (5/12): lean 模式跳 retry — 教学场景 LLM 自然停顿
-            # (snapshot 看一下再想) 不该被 retry 拖.
-            # BL-FIX23-L8-fix (5/13 鸿波合并 8 项资质卡): LEAN 只跳 feedback retry,
-            # mid_task 真断必 retry — 教学场景跟"跑长任务中间 LLM 自我反思短句"
-            # 是两件事, mid_task=刚跑过 tool 的真断, 跟教学 stop 性质不一样.
-            # BL-LEAN-SESSION (5/13): 优先看 session-level teaching_mode (Companion
-            # toggle 传 X-Catfish-Teaching-Mode header), env 仍兼容老部署.
-            _lean = teaching_mode or os.environ.get("CATFISH_LEAN_INJECT", "0") == "1"
-            # mid_task 路径 LEAN 不影响 (真任务 stop 必 retry); feedback 路径 LEAN 仍跳
-            trigger = mid_task_after_tool or (feedback_plan_only and not _lean)
-            # 区分 retry 上限: mid_task 给 2 次 (长任务自我反思后续上),
-            # feedback 仍 1 次 (防 BL-FIX5 死循环)
-            retry_max = (
-                _MAX_PLAN_ONLY_RETRIES_MID_TASK if mid_task_after_tool
-                else _MAX_PLAN_ONLY_RETRIES_FEEDBACK
-            )
-            should_retry = (
-                last_finish_reason == "stop"
-                and not cumulative_has_tool_call
-                and plan_only_retries < retry_max
-                and not too_repetitive            # 死循环保险保留 (Jaccard)
-                and trigger
-            )
-            if not should_retry:
-                # 留 log 方便 debug — 解释为啥没 retry (5/13 加 lean=%s + retry_max)
-                if last_finish_reason == "stop" and not cumulative_has_tool_call:
-                    logger.info(
-                        "BL-FIX23 L8 skip retry: last_is_tool=%s task_complete=%s "
-                        "too_repetitive=%s mid_task=%s feedback=%s lean=%s "
-                        "retries=%d/%d",
-                        last_is_tool, task_complete, too_repetitive,
-                        mid_task_after_tool, feedback_plan_only, _lean,
-                        plan_only_retries, retry_max,
-                    )
-                yield "data: [DONE]\n\n"
-                break
-
-            # ── 触发 plan-only retry: 起新一轮 acompletion + 注入硬 hint ─
-            plan_only_retries += 1
-            logger.warning(
-                "BL-FIX23 L8 plan-only retry %d/%d (path=%s): model=%s "
-                "last_is_tool=%s task_complete=%s content=%d 字 → 重发硬 hint",
-                plan_only_retries,
-                retry_max,
-                "mid_task" if mid_task_after_tool else "feedback",
+        # 流末尾 stat 日志 (debug 用 — 看 chunk 形态 + finish_reason)
+        if chunk_stats["total"] > 0:
+            logger.info(
+                "chunk stats: model=%s total=%d content=%d reasoning=%d "
+                "tool_calls=%d empty=%d finish_reason=%s (cum_content=%d cum_tc=%s)",
                 used_model.name,
-                last_is_tool,
-                task_complete,
+                chunk_stats["total"],
+                chunk_stats["content"],
+                chunk_stats["reasoning"],
+                chunk_stats["tool_calls"],
+                chunk_stats["empty"],
+                last_finish_reason,
                 len(cumulative_content),
+                cumulative_has_tool_call,
             )
-            # deepcopy current_body 防原 body 被改 (chat_completions 调用方还会用)
-            current_body = deepcopy(current_body)
-            messages = current_body.setdefault("messages", [])
-            # 把这一轮的 assistant 输出补到 messages (LLM 看到自己说过啥)
-            messages.append({"role": "assistant", "content": attempt_content})
-            # 加 user 硬 hint, "立刻 emit tool_call 一字不解释"
-            messages.append({"role": "user", "content": _PLAN_ONLY_HARD_HINT})
-            # 重新 acompletion (同 used_model, 不再 fallback — fallback 链已在最初做过)
-            params = _build_litellm_params(current_body, used_model)
-            response = await litellm.acompletion(**params)
-            iterator = response.__aiter__()
-            # 不再有特殊 first_chunk, 直接进 outer while 下一轮 async for
-            # (continue 自动从 outer while 顶上跑下一轮 stream attempt)
+            if last_finish_reason == "length":
+                logger.warning(
+                    "finish_reason=length: model=%s max_tokens 截了 (L4a 兜底 4096 "
+                    "还撞 → 调大 / 真做 BL-A1.2 streaming auto-continue).",
+                    used_model.name,
+                )
+
+        yield "data: [DONE]\n\n"
     except Exception as e:  # noqa: BLE001
         status_str = "error"
         err = str(e)
@@ -2000,6 +1631,9 @@ async def chat_completions(
         skip=skip,
         agent_name=agent_name,
         agent_personality=agent_personality,
+        # BL-SOUL-SCENARIO P2 (5/13): 透传 tools 让 inject 按 tool 候选注入
+        # SOUL_BROWSER.md / SOUL_EXECUTE_CODE.md 等场景段, 不再永远全量灌.
+        tools=body.get("tools"),
     )
 
     # ────────────────────────────────────────────────────────────────────
@@ -2082,7 +1716,12 @@ async def chat_completions(
     # BL-A1.2 / A1.3 / FIX24 — lean 模式全关.
     # 教学场景里 LLM 正常会"重复调"(再 snapshot 看 DOM 变化) / 中间停顿想一下 /
     # 多步任务做完才说. 这些 retry-hint 系列误伤 → 教学卡死.
-    if not is_internal_call and not _lean:
+    # BL-A1.2/A1.3 软 hint 注入. 跟 BL-FIX24 软 hint 同性质 — 只往 messages 加
+    # system msg, LLM 看见就听看不见就算, 不阻断流, 副作用小. 5/13 鸿波"全部清干净"
+    # 决策: 这两个保留 (跟 BL-FIX23 retry / BL-FIX24 hard-block 不同, 不会误杀
+    # 成功流). 加总开关 CATFISH_DISABLE_GATEWAY_HINTS=1 一键关 — 万一未来再撞坑.
+    _hints_disabled = os.environ.get("CATFISH_DISABLE_GATEWAY_HINTS", "0") == "1"
+    if not is_internal_call and not _lean and not _hints_disabled:
         # BL-A1.2: 连续多次同 tool 失败时换思路
         from . import tool_retry_hint  # noqa: PLC0415  lazy import
         body["messages"] = tool_retry_hint.inject_tool_retry_hint(body["messages"])
@@ -2091,40 +1730,11 @@ async def chat_completions(
         from . import self_critique  # noqa: PLC0415  lazy import
         body["messages"] = self_critique.inject_completion_critique_hint(body["messages"])
 
-        # BL-FIX24: 重复 productive tool_call guard (软纪律 — 注入 hint 给 LLM 看)
-        from . import duplicate_tool_call_guard  # noqa: PLC0415  lazy import
-        body["messages"] = duplicate_tool_call_guard.inject_duplicate_guard_hint(
-            body["messages"]
-        )
-
-        # BL-FIX24-hard-block (5/13 鸿波"没法生成文件"): 重复 ≥ 3 次硬拦截 — 直接
-        # SSE 推友好错误 + break, 不再发请求给 LLM. 软 hint 在 167% overflow 下
-        # 被 truncate LLM 看不到, 必须物理拦截.
-        hard_block = duplicate_tool_call_guard.detect_hard_block_duplicate(
-            body["messages"]
-        )
-        if hard_block is not None:
-            tool_name, count = hard_block
-            logger.error(
-                "BL-FIX24-hard-block: %s 重复 %d 次, 物理拦截 — 推友好错误,"
-                " 不发请求给 LLM. user=%s",
-                tool_name, count, user.sub,
-            )
-            friendly = duplicate_tool_call_guard.hard_block_friendly_error(
-                tool_name, count,
-            )
-            # is_stream 在 line 2330 才算, 这里直接看 body (修 5/13 NameError bug)
-            _hb_is_stream = bool(body.get("stream", False))
-            if _hb_is_stream:
-                async def _hard_block_stream():
-                    yield f"data: {json.dumps({'error': friendly})}\n\n"
-                    yield "data: [DONE]\n\n"
-                return StreamingResponse(
-                    _hard_block_stream(),
-                    media_type="text/event-stream",
-                )
-            else:
-                return {"error": friendly, "blocked_by": "BL-FIX24-hard-block"}
+        # ─── BL-FIX24 duplicate-tool-call guard 全部 DELETED (5/13 鸿波"乱七八糟") ──
+        # 历史: 软 hint (inject_duplicate_guard_hint) + 物理 hard-block (detect_hard_block_duplicate
+        # ≥3 次直接 SSE 推 error + break) 都删. 副作用: 长任务正常重复调 (例如批量
+        # 写多份文件) 会被误拦, 把正常流打成失败. duplicate_tool_call_guard.py 模块
+        # 本身保留, 不再被 chat_completions 入口调用.
 
     # BL-E16 关系建立: 注入 session_meta (距上次 N 天 N 小时 / 今天第几次)
     # 让 LLM 知道时间感, 跨天回来时能自然说"好几天没找我了".
@@ -2346,7 +1956,8 @@ async def chat_completions(
                 model_name=model_name, model=model,
                 security_concern=security_concern,
                 is_internal=is_internal_call,  # BL-F17: 透传, 跳 record_usage
-                teaching_mode=_teaching_mode,  # BL-LEAN-SESSION (5/13)
+                # teaching_mode 透传 已 DELETED (5/13): _stream_chat_completion 不再用.
+                # _teaching_mode / _lean 控制 SOUL inject 在上面 1651 行已用过.
             ),
             media_type="text/event-stream",
         )

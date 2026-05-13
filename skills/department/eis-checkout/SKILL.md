@@ -3,18 +3,18 @@ name: eis-checkout
 version: "0.1.0-frozen"
 deprecated: false
 description: |-
-  ⭐ 登录 EIS 后点下班按钮
+  ⭐ 登录 EIS 后点下班打卡按钮
 
-  ⚙️ 由 catfish_freeze_skill 自动凝固 (2026-05-13 10:48:18, BL-MM9-FREEZE).
-  源 trace: /Users/chenhongbo/.catfish/traces/session_eis-checkout_20260513_104752_81760c.jsonl (steps 1-3, ok=3/3).
+  ⚙️ 由 catfish_freeze_skill 自动凝固 (2026-05-13 17:52:05, BL-MM9-FREEZE).
+  源 trace: /Users/chenhongbo/.catfish/traces/session_eis-checkout_20260513_175146_430a7a.jsonl (steps 1-3, ok=3/3).
   **不要手改 script.py** — 业务流程变了走"再教一次"路径让管道重新凝固.
 
   调用入口: `render_eis_checkout()` (script.py).
 ---
 
-# eis-checkout — 登录 EIS 后点下班按钮
+# eis-checkout — 登录 EIS 后点下班打卡按钮
 
-> 凝固于 2026-05-13 10:48:18. 教学→凝固→复用闭环 (BL-MM9-FREEZE).
+> 凝固于 2026-05-13 17:52:05. 教学→凝固→复用闭环 (BL-MM9-FREEZE).
 
 ## 怎么调
 

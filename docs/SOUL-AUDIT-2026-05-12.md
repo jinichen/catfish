@@ -141,12 +141,12 @@ gateway 已有 `system_prompt_assembler` (rule-based). 加规则:
 
 # 7. 推荐落地顺序
 
-| 优先级 | 项 | 收益 | 风险 |
-|---|---|---|---|
-| **本周** | 方案 5 (合并 redundant 3 组) | 立刻省 ~30% token | 零风险 |
-| **下周** | 方案 2 (移 Skill lifecycle / Memory 细则到 docs/) | 再省 ~30% token | 低 (配 catfish_read_doc 让模型按需 read) |
-| **P2** | 方案 3 (gateway tool-候选感知注入) | 再省 ~15% token | 中 (改 system_prompt_assembler) |
-| **客户>2 时** | 方案 4 (SOUL_<customer>.md) | 别家客户 50% 起步 | 高 (维护两套需流程) |
+| 优先级 | 项 | 收益 | 风险 | 状态 |
+|---|---|---|---|---|
+| **本周** | 方案 5 (合并 redundant 3 组) | 立刻省 ~30% token | 零风险 | ✅ **5/13 ship** — 任务 #14/#15/#16 (turn 控制 -79 / memory -87 / Skill 移 docs -146) |
+| **下周** | 方案 2 (移 Skill lifecycle / Memory 细则到 docs/) | 再省 ~30% token | 低 (配 catfish_read_doc 让模型按需 read) | 🔵 **5/13 部分 ship** — Skill 生成 → `docs/SKILL-LIFECYCLE.md` (任务 #16). Memory 细则 → `docs/MEMORY-DISCIPLINE.md` 仍 ⬜ |
+| **P2** | 方案 3 (gateway tool-候选感知注入) | 再省 ~15% token | 中 (改 system_prompt_assembler) | ✅ **5/13 ship** — 任务 #35 (BL-SOUL-SCENARIO P2): `SOUL_BROWSER.md` (60L) + `SOUL_EXECUTE_CODE.md` (73L), `identity_inject.py` 加 `SCENARIO_RULES` + `_detect_scenarios(tools)`, install.sh for-loop 装. 15 单测过. 简单 chat (无 tools) -10% token. SOUL_SECRET / SOUL_SKILL 后续可加 |
+| **客户>2 时** | 方案 4 (SOUL_<customer>.md) | 别家客户 50% 起步 | 高 (维护两套需流程) | 🔵 **5/13 P0+P1 ship** — 任务 #17 (SOUL_FFCS.md 拆 + `CATFISH_CUSTOMER` env + install.sh 装客户软链). 别家客户 (SOUL_BYD / SOUL_GS / 等) 上线时按同模板加文件即可 |
 
 # 附: 当前 SOUL.md 跨段重复段落 (清晰证据)
 

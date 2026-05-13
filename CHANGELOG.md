@@ -4538,3 +4538,239 @@ gateway a2a_journal_hook (BL-FED2.4) → 答完同步写两份:
 [D skill 凝固] 跑通后 → 填回 docs/samples/eis-login-skill/SKILL.md 真实 selector → publish hub
 [E demo 故事] 5/13 彩排 → 5/14 主轴讲 "员工教 catfish 一次, 全公司秒开"
 ```
+
+---
+
+## 2026-05-13(周三)— Hermes013-borrow + SOUL 优化 + audit/sessions UI + B-rollback BL-FIX23/24 + Companion auto-continue toggle
+
+净 30 个 task, 但下午 7 个反复围绕"plan-only retry guard" 改 (加 → 误杀 → 修 → 再误杀 → 加总开关 → 全删), 鸿波明确反馈"乱七八糟"后**整套 BL-FIX23/24 物理删干净**, gateway 回到只干净转发. 替代方案: Companion 加 🔄 auto-continue toggle, 用户主动控. 教训记下: gateway 不该猜 LLM 心思, "策略层"的判断属于客户端 / SOUL prompt, 不属于 gateway.
+
+### 一日时间线
+
+| 时段 | 主线 |
+|---|---|
+| 上午 | Hermes013 借鉴收尾 (4/5 atomic + ABC hook 5/12 末已 ship), audit events UI + sessions search UI |
+| 中午 | SOUL.md 必要性审计 (2032 → 1706 行, -326 行) + 多客户分层 (拆 SOUL_FFCS.md) + LEAN 教学模式 toggle |
+| 下午 | 鸿波"合并 8 项资质卡 13 次" → 我开始堆 BL-FIX23/24 guard → 反复误杀 → 鸿波"乱七八糟" → 整套 B-rollback 删干净 |
+| 傍晚 | Companion 🔄 auto-continue toggle 替代删掉的 retry, 状态栏 context counter, SOUL 加"长任务做事到底"轻纪律 |
+
+### 净交付 (8 个真功能)
+
+| 项 | 落点 |
+|---|---|
+| **BL-HERMES013-4 atomic session 持久化** | `gateway/inflight_streams.py` (~150 行) + `metrics.py` fsync + lifespan reap_interrupted + 19 单测 |
+| **BL-HERMES013-5 transform_llm_output ABC plugin chain** | `gateway/output_transforms.py` (~180 行) — `OutputCtx` frozen + `LLMOutputTransform` Protocol + 4 内置 transform (ContextUsage / Audit / Quota / InflightCleanup) + 18 单测; `_stream_chat_completion` finally 23 行 inline → 1 行 chain.run |
+| **/admin/quota/events 历史日志页** | `central/web/AdminPage.tsx` 加 AdminQuotaEvents (5 filter + 表格 + CSV export + 分页) |
+| **A: /me/sessions 跨日搜索 + 恢复 UI** | 新 `central/web/SessionsPage.tsx` (~340 行, 1:2 grid + session-level / message-level 搜索 + 高亮) |
+| **BL-FIX-MCP-SHORTNAME** | dispatch 短名 → 全名 fallback + SOUL.md 修 |
+| **BL-LEAN-SESSION 教学模式 toggle** | Companion 🎓 button + `X-Catfish-Teaching-Mode` header + gateway session-level LEAN 控制 (替代 shell env 让客户能用) |
+| **catfish_search_sessions native tool** | `tool-bridge/sessions_search.py` (~150 行) — 跨 session sqlite LIKE 搜索 + 15 单测 |
+| **Companion 🔄 auto-continue toggle** | `companion/store/auto_continue.ts` + useChat outer loop 触发逻辑 + ChatInput 按钮 + UserBubble 淡色标记 + 12 单测 |
+
+### SOUL 优化 (减 326 行 / 多租户化)
+
+- 必要性审计 → `docs/SOUL-AUDIT-2026-05-12.md` (36 段 / 3 分类 / 5 方案)
+- 组 1: BL-MM5 + Memory 写入 3 段合并 (-87 行)
+- 组 2: Skill 生成 (193 行) → 移 `docs/SKILL-LIFECYCLE.md`, SOUL 留 30 行入口 (-146 行)
+- 组 3: turn 控制三段合并 (-79 行)
+- 拆 `SOUL_FFCS.md` (FFCS 内网 .ffcs.cn http 规则), gateway 按 `CATFISH_CUSTOMER` env 注入
+- `install.sh` 修 bash 3.2 兼容 (`tr` 替 `${VAR^^}`) + SOUL_NEEDS_LINK flag (customer SOUL 也安装)
+
+### Bug 修
+
+- `employee_journal` cap 15K → 5K (鸿波 644KB journal 撞 overflow 根因)
+- timeout 友好错误 + 列最近 ~/.catfish/output/ 文件给员工 (`recent_outputs.py` + `catfish_list_my_outputs` tool)
+- `BL-FIX24-hard-block NameError` (`is_stream` 用早了, line 2116 vs 2330) 修
+
+### ⚠️ B-rollback (整套 BL-FIX23/24 guard 删除, 鸿波"乱七八糟" 反馈)
+
+下午围绕"LLM stop 时该不该 retry / 重复调要不要拦" 反复改 7 轮:
+
+1. 加 BL-FIX23-L8 overflow break
+2. 加 BL-FIX24 duplicate hard-block 物理拦截
+3. 修 hard-block NameError
+4. v2 修 overflow gate (v1 误杀成功 tool_calls)
+5. 加 BL-FIX23-L9 tool_choice='required' 强迫
+6. revert L9 + 加总开关 `CATFISH_DISABLE_PLAN_ONLY_GUARDS`
+7. **B-rollback**: 鸿波"全部清干净" → 整套 BL-FIX23 retry / BL-FIX24 hard-block 物理删
+
+**B-rollback 净改动** (`app.py` -330 行):
+
+- 删: `_PLAN_ONLY_*_KEYWORDS`, `_TASK_COMPLETE_KEYWORDS`, `_PLAN_ONLY_HARD_HINT`, `_MAX_PLAN_ONLY_RETRIES_*`, `_REPETITIVE_JACCARD_THRESHOLD`, `_jaccard_bigram`, `_assistant_history_too_repetitive`, `_last_role_is_tool_result`, `_is_plan_only_content`, `_has_completion_claim`, `_has_future_intent`, `_is_task_complete_claim`, `_last_user_message_is_feedback`
+- 删: `chat_completions` 入口 BL-FIX24 hard-block 拦截 + `inject_duplicate_guard_hint` 调用
+- 删: outer `while True` retry loop → 平铺单轮 stream
+- 删: `_stream_chat_completion(teaching_mode=...)` dead arg
+- 删: `from copy import deepcopy` (没人用)
+- 保: `_is_context_overflowed` / `_context_overflow_friendly_error` (仅 metric/告警, 不再驱动 break)
+- 保: `self_critique` / `tool_retry_hint` (软 hint 副作用小, 加 `CATFISH_DISABLE_GATEWAY_HINTS=1` 总开关防再撞坑)
+- 保: `recent_outputs` timeout 兜底 (timeout 时列已写文件给员工)
+- `duplicate_tool_call_guard.py` 模块本身打 stub (沙箱不让 rm, 留 noop) — TODO 鸿波本机 `rm`
+
+### 替代方案 (B-rollback 后填补长任务能力)
+
+| 层级 | 方案 |
+|---|---|
+| 客户端 | Companion 🔄 auto-continue toggle (用户主动控, 上限 3 轮, 可见淡色 user msg) |
+| Prompt | SOUL.md 加 "1️⃣.5 长任务做事到底" 轻纪律 (跑过 tool 后别发"接下来我去 X" 再 stop) |
+| 监控 | Companion 状态栏加 ContextCounter (`📏 92K/128K · 72%`, >80% 黄, >95% 红) |
+
+### 反思 (today's 教训)
+
+- **gateway 不该猜 LLM 心思**. 监控/日志可以, 物理拦截/重发不行 — 误判把成功流打成失败的代价 > 续跑收益
+- **"策略层"的判断属于客户端**: 是不是要续跑 / 是不是要拦重复, 这种"看上下文做决定" 的事用户最清楚, 应该在客户端 toggle 里, 不应该 gateway 偷偷做
+- **同一块代码 24h 内改 ≥3 次, 强制停下来反思架构**, 不要继续打补丁 — 7 轮 patch 围绕同一问题最后全删, 净效果 0, 时间全浪费
+- **症状不可见的 patch 比症状本身更危险** — 用户看不到 gateway 里的 guard, 但 guard 误杀的代价 ("做不出文档") 用户看得见
+
+### 测试
+
+- 893 backend 测试 + 9 skip (全过)
+- 12 Companion auto_continue 测试 (全过)
+- TypeScript tsc --noEmit exit=0
+- `test_plan_only_retry.py` / `test_duplicate_tool_call_guard.py` 改 stub (TODO 鸿波本机 rm)
+
+### 傍晚追加 (#31-#36, CHANGELOG 中午写完后又做的 5+1 件)
+
+#### 🔴 任务 #31: 清 B-rollback 尾巴
+- **`duplicate_tool_call_guard.py` 模块本身打 noop stub** (沙箱 ACL 不让 rm, 留 noop fn 兜底老 import) — TODO 鸿波本机 `rm src/catfish_gateway/duplicate_tool_call_guard.py`
+- **`_stream_chat_completion(teaching_mode=...)` dead arg 删除** + 调用方 (1949 行) 一并改. teaching_mode 控 SOUL inject 在 chat_completions 入口 1651 行已用过, 不需透传给 stream
+- **self_critique / tool_retry_hint 模块 audit + 保留** (软 hint 副作用小, 跟 BL-FIX23 retry 不同), 加总开关 `CATFISH_DISABLE_GATEWAY_HINTS=1` 防再撞坑
+- 修 2 个 lean session 测试 (适配新签名)
+
+#### 🟢 任务 #33: SOUL 加"长任务做事到底"轻纪律 (替代删掉的 BL-FIX23 mid_task retry)
+- `SOUL.md §299` "1️⃣ 反馈即动手" 段下加 "**1️⃣.5 长任务做事到底**" 子段
+- 跑过一个 tool 后**不要发"接下来我去 X"再 stop** — 要么直接调下个 tool, 要么明说"任务完成, 等你下一步"
+- 含正反例 + 提到 Companion 🔄 toggle 是兜底 ("做事到底是基线, toggle 是兜底")
+
+#### 🟡 任务 #32: Companion 状态栏 ContextCounter (借鉴 Hermes 0.13)
+- 新组件 `tabs/Chat/ContextCounter.tsx`: `📏 92K/128K · 72%`, 4 档颜色 (绿/灰/黄/红 ≥95%)
+- 数据源: `chat store.lastPromptTokens` (useChat 在 onDone 时写) + `useCatalog().models[id].context_window`
+- 挂 ChatTab 头部 ChatModelPicker 旁边
+- Tooltip 给员工具体动作建议 (≥95% "立刻 Cmd+N / 切 gemini-pro 2M"; ≥80% "长任务跑完后建议 /compress"; <50% "从容")
+- Banner 折叠 — 已有 (Dashboard 用 `CollapsibleSection`, 5/7 BL-D-DASH 已做), 不重复实现
+- chat store 加 `lastPromptTokens` 字段 + `setLastPromptTokens` action + reset 时清零
+
+#### 🟢 任务 #35: SOUL 优化 P2 — 按场景注入 SOUL_<scenario>.md (BL-SOUL-SCENARIO P2)
+- 拆 SOUL.md 出 2 个高频场景子文件:
+  - `SOUL_BROWSER.md` (60 行) — 浏览器自动化纪律 (BL-FIX44 5/11), 只在 tools 含 `catfish_browser_*` 时载
+  - `SOUL_EXECUTE_CODE.md` (73 行) — execute_code sandbox 红线, 只在 tools 含 `execute_code` 时载
+- SOUL.md 主文件: 1728 → **1619 行** (-109 行), 两段留 3 行短指针 + 一句铁律
+- gateway `identity_inject.py` 加 `SCENARIO_RULES` (tool 名前缀 → 场景) + `_detect_scenarios()` + `_read_scenario()`. `build_identity_content(tools=...)` 接 tools 参数. `chat_completions` 透传 `body['tools']`
+- `install.sh` for-loop 装 SOUL_BROWSER / SOUL_EXECUTE_CODE 软链 (跟 SOUL_FFCS 一样幂等)
+- 15 新单测 (`test_identity_inject_scenario.py`): 触发规则 / 多场景 / 文件缺失 / 老调用兼容 / token 节省 assertion
+- **token 节省**: 简单 chat (无 tools, 估占 60%+ 流量) 永远不再载这两段, 实际 -10%
+
+#### 🔵 任务 #36: HERMES-013-ALIGN §2 状态对账 (docs 修)
+- §2 4 项里 3 项已 ship 但 docs 还标 ⬜ 误导后人. 修:
+  - 状态栏 counter + banner: ⬜ → ✅ **已 ship 5/13 BL-CONTEXT-COUNTER** (详细落点)
+  - `transform_llm_output`: ⬜ → ✅ **已 ship 5/12 末 BL-HERMES013-5** (详细落点)
+  - allowlist 命名: 仍 ⬜, 补一句 "5/13 拍板纳入 BL-RBAC P0 sprint, 跟 allowed_models / allowed_tools / allowed_skills 一起做"
+
+### 测试 (傍晚追加后)
+
+- 908 backend 测试 + 9 skip (全过, 比中午 +15 个新场景注入测试)
+- TypeScript tsc --noEmit exit=0
+
+### 明天 (5/14)
+
+- 🔵 把"8 项资质合并" 做成 catfish_run_skill (今天反复卡的痛点)
+- 🔴 BL-RBAC P0 sprint 启动 (5/15-5/19, 5 天) — `allowed_models / allowed_tools / allowed_skills / allowed_channels` per-department, 跟 HERMES-013-ALIGN §2 allowlist 命名一起
+- 🟢 (可选) 拆 SOUL_SECRET.md / SOUL_SKILL.md (P2 后续场景)
+
+### 收尾追加 (#38-#40): Hermes 升级 docs 大对账 + web_fetch 误判修正
+
+#### 任务 #38: Audit hermes 实际版本 + 解耦状态 (鸿波"记录有问题"反馈)
+
+我之前给"升 0.13 还要 10-15 天"的分析照搬 5/4 起草的旧 docs 错了. 鸿波纠正: 5/7 已升 0.12 + 解耦. 真实状态:
+
+- 5/7 BL-D14.5 已 ship `hermes 0.10 → 0.12 真升级` + 升级保护 (git hooks post-merge/post-rewrite/post-checkout 自动重打 brand patch + MISS fallback + `--verify` 命令)
+- 5/7 同日 BL-CR ship Curator 集成 (`curator-config-snippet.yaml` 60d/180d/4h, `install.sh` 自动配)
+- `apply_brand_patch.py` 行 144 / 152 / 158 / 170 / 188 已含 0.12 适配, 行 422 `MISS` fallback (找不到原字符串不致命)
+- `README.md` 行 49: "0.13/0.14 新增字符串没规则 → MISS (打日志, 不挂)"
+- CHANGELOG 5/7 段: "11 step fixture 全 PASS (... 模拟 0.13 升级覆盖 → hook 自动触发 → verify OK ...)"
+
+**真升 0.13 工作量**: 2-3 天 (不是 10-15 天)
+
+#### 任务 #39: 纠正 HERMES-UPGRADE 系列 docs
+
+3 个 docs 的过时状态修正:
+
+- `docs/HERMES-UPGRADE.md` — 头部加 § 0 真实进度 (5/13 末态), 历史段标 ⚠️ 已过时. § 0.1 升 0.13 详细 plan (Day 1 上午补规则 + 下午撞车点处理 / Day 2 169 项回归 / Day 3 享受红利). § 0.2 关键代码证据列出避免后人再次照搬旧 docs
+- `docs/HERMES-UPGRADE-CHECKLIST.md` — 头部"跑过的版本"列 5/7 0.10→0.12 ✅ + 5/18 计划 0.12→0.13 ⬜
+- `docs/HERMES-013-ALIGN.md` § 6 升级时间表改正 (列 5/7 已升 0.12 ✅), 风险表大幅降低 (brand patch 解耦后不再是风险). § 7 sprint plan 从 5 天缩到 2-3 天
+
+#### 任务 #40: 修 "等 0.13.1 patch" 错误假设 + 撤销我对 docs 的诬陷 (鸿波核 GitHub releases 反馈)
+
+我前面让鸿波核 hermes releases 后, **web_fetch GitHub releases 列表页拿到了不完整内容** (lazy load 漏顶部最新 2 个 release v0.13.0 + v0.12.0), grep 没命中就误判 "docs 引用不存在版本号". 鸿波给截图证明 0.12.0 (4/30 Curator) + 0.13.0 (5/7 Tenacity) **真实存在**, 我的诬陷错了 — CHANGELOG 5/4 / 5/7 / 5/12 段所有版本引用都是对的.
+
+但鸿波这个核对发现了**真错误**: **hermes 不发 patch (.x.1 / .x.2)**. 5 个 release v0.7-v0.13 全是 .0, 平均 5-7 天一个 minor. 我之前 docs / 我刚改的 § 0 里写"等 0.13.1 / 0.13.2 patch 出再升" 的策略**错了, hermes 没这个东西**. 改成"5/15-5/17 跑社区一周看 P0 issue 不爆再升", 不能等不存在的 patch:
+
+- `docs/HERMES-013-ALIGN.md` § 6 时间表 + 风险表注明 "hermes 不发 patch"
+- `docs/HERMES-UPGRADE.md` § 0 同上
+- 给后人留 grep 入口: `hermes 不发 patch` 关键短语
+
+### 最终统计
+
+- **40 个 task** 全 completed
+- 时间分布: 净交付 ~70% (Hermes013 / SOUL 优化 / UI / auto-continue / context counter / 场景注入 / docs 大对账 / hermes patch 假设修正), 内耗 ~30% (BL-FIX23/24 反复 7 轮全删)
+- 后人查 grep 入口: `BL-FIX23`, `BL-FIX24`, `BL-SOUL-SCENARIO P2`, `BL-CONTEXT-COUNTER`, `BL-AUTO-CONTINUE`, `BL-LEAN-SESSION`, `BL-D14.5` (hermes 升级保护), `hermes 不发 patch` (5/13 鸿波核 GitHub 确认)
+- **教训** (修正后):
+  1. **docs 跟代码不同步是隐性 bug** — 5/4 起草的 HERMES-UPGRADE.md 标"暂停 / 0.10", 5/7 实际 ship 了升级但 docs 没更新. 后续规则: 大功能 ship 必须同步更新 docs 状态
+  2. **web_fetch 不可全信** — GitHub releases 用 lazy load, 顶部最新 release 可能 fetch 不到. **凭 fetch 不完整结果就否定自己 docs 是更大的错** — 应该多源验证 (fetch single release page / 让用户看 GitHub 截图). 5/13 我犯了这个错, 鸿波给截图才纠正
+  3. **不要造无中生有的"假设"** — "等 0.13.1 patch" 我没核 hermes 是不是发 patch 就写, 鸿波核 GitHub 才发现 hermes 5 个 release 全是 .0
+
+#### 任务 #41 / #42: **真升级 hermes 0.10/0.12 → 0.13.0 (BL-HERMES-UPGRADE-013)**
+
+5/13 末鸿波拍板"现在升级", 实际工作量**~25 分钟** (而不是 docs 估的 2-3 天 — 5/7 BL-D14.5 解耦做得比想象更好).
+
+**升级步骤** (~/.hermes/hermes-agent):
+1. `git tag pre-hermes-upgrade-013-20260513-2043` 备份点
+2. `git checkout -f v2026.5.7` 强制切 0.13.0 release (HEAD = `498bfc7bc chore: release v0.13.0`)
+3. `apply_brand_patch.py --apply`: **26/27 patched, 1 MISS, 0 ERROR**
+4. `apply_brand_patch.py --verify`: **exit=0** (4 关键文件全过)
+
+**MISS 1 个良性** (任务 #42 已 close):
+- `MISS  banner.py: model row suffix` — 0.10 时代字符串 RULE `[dim {dim}]Nous Research[/]` 在 0.13 找不到 (重构了)
+- 但**另一条函数级 RULE** `banner.py: build_welcome_banner 已替换为极简版` 已 DONE — 整个函数被我们极简版覆盖, 0.13 banner.py line 418 实际渲染 `[bold]鲶鱼平台[/]`, 0 泄露
+- 教训: brand patch **函数级替换比字面量替换稳一万倍**, 跨版本不脆
+
+**真实跑出来的 0.13 启动 banner** (鸿波截图):
+```
+鲶鱼  v0.13.0 (2026.5.7) · upstream 942adf61
+鲶鱼平台
+30 tools · 0 MCP servers · /help 看全部命令
+Session: 20260513_205614_08fef0
+欢迎回来. 输入消息或 /help 看命令.
+✦ Tip: 浏览器任务直接说: "帮我去 Jira 看这 sprint 所有 close 的 ticket"
+```
+零 "Hermes Agent" / "Nous Research" / "⚕" / "Goodbye!" 泄露.
+
+**catfish-gateway 跟 0.13 兼容性验证**:
+- gateway 启动干净 (7 model 加载 + 6 路由挂载: a2a / mcp_registry / skills_hub / admin / facts / tool_archive)
+- 上游 LLM 自检: 4 公网模型 ✓ (qwen-flash / deepseek / gemini-pro / gemini-flash), 2 内网 ✗ (10.10.40.102 timeout — 鸿波家里没 VPN, 跟升级无关)
+- `GET /v1/catalog` 返 200 OK + 完整 JSON (7 model / context_window / recommended_for / 等)
+
+**catfish backend 909 测试 + tool-bridge 573 测试**: 跟升级前基线一致 (没退化).
+
+**不需要做的撞车点处理** (我之前估的 4 件实际没撞):
+- ❌ Default-on secret redaction × `prompt_security.py` — hermes 0.13 的在 hermes 进程内, 我们的在 catfish-gateway, 不同进程不撞
+- ❌ Atomic session persistence × `inflight_streams.py` — hermes 0.13 的是 hermes 自己 gateway sessions, 我们的是 catfish-gateway sessions, 不同表
+- ❌ `transform_llm_output` × `output_transforms.py` — hermes 0.13 hook 在 hermes 进程内 plugin, 我们 ABC chain 在 catfish-gateway, 完全不同
+- ❌ Playwright cloud-metadata × BL-HERMES013-2 — hermes 0.13 的在 hermes 内 Playwright, 我们的在 tool-bridge, 不同 browser session
+
+**教训**: 我之前估"撞车 4 件" 是误把"hermes 自己有 X" 当成"X 跟我们撞". 实际 catfish-gateway / tool-bridge / hermes 是 3 个独立进程, hermes 0.13 自带的功能跟我们各组件不冲突, 是平行存在 (双重防护没问题).
+
+**升级红利 (后续可挖)** — hermes 0.13 真升级后能拿到的新功能 (5/15+ Q3 评估接入):
+- Multi-Agent Kanban (durable + heartbeat + reclaim + zombie detection + hallucination gate)
+- ACP `/steer` + `/queue` (不打断 in-flight 指令注入)
+- Checkpoints v2 (single-store + real pruning + 磁盘 guardrail)
+- MCP SSE transport + OAuth forwarding
+- 100 新 CLI tips + 7 i18n locales (含中文)
+- Post-write delta lint (write_file 后自动 py/json/yaml 语法检查)
+- `no_agent` cron 模式 + 19 新平台 (Google Chat / Teams / 等)
+
+### 最终统计 (含 #41/#42 升级)
+
+- **42 个 task** 全 completed (40 → 42, 末加 hermes 0.13 升级 + brand patch MISS audit)
+- 升级实际工作量: **25 分钟** (准备分析 / 跑命令 / 截图验证)
+- 关键发现: **5/7 BL-D14.5 升级保护设计是真灵丹妙药** — git hook 自动重打 + MISS fallback + 函数级替换让升级几乎零摩擦
+- 后人 grep 入口加: `BL-HERMES-UPGRADE-013`

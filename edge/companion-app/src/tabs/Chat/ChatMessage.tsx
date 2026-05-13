@@ -33,6 +33,9 @@ export default function ChatMessage({ msg, showCaret = false }: Props) {
 
 function UserBubble({ msg }: { msg: Msg }) {
   const hasAttachments = msg.attachments && msg.attachments.length > 0;
+  // BL-AUTO-CONTINUE (5/13): Companion 自动续跑发的 user msg, UI 标记淡色 +
+  // 角标 "🔄 自动续 N/M", 让员工看见这是机器发的不是他自己发的.
+  const isAutoContinue = msg._autoContinue !== undefined;
   return (
     <div
       style={{
@@ -43,8 +46,12 @@ function UserBubble({ msg }: { msg: Msg }) {
     >
       <div
         style={{
-          background: "var(--catfish-cyan)",
-          color: "white",
+          background: isAutoContinue
+            ? "var(--catfish-cyan-dim)"  // 淡色, 区别于真用户消息
+            : "var(--catfish-cyan)",
+          color: isAutoContinue
+            ? "var(--catfish-cyan)"
+            : "white",
           padding: "var(--space-3) var(--space-4)",
           borderRadius: "var(--radius-md)",
           maxWidth: "75%",
@@ -55,8 +62,22 @@ function UserBubble({ msg }: { msg: Msg }) {
           display: "flex",
           flexDirection: "column",
           gap: hasAttachments && msg.content ? "var(--space-2)" : 0,
+          border: isAutoContinue ? "1px dashed var(--catfish-cyan)" : "none",
+          opacity: isAutoContinue ? 0.85 : 1,
         }}
+        title={isAutoContinue
+          ? `🔄 Companion 自动续跑 ${msg._autoContinue!.round}/${msg._autoContinue!.max} 轮 (toggle 开了, 长任务 LLM 中途停了, Companion 帮你发 "继续")`
+          : undefined}
       >
+        {isAutoContinue && (
+          <div style={{
+            fontSize: 11,
+            opacity: 0.8,
+            marginBottom: 2,
+          }}>
+            🔄 自动续跑 {msg._autoContinue!.round}/{msg._autoContinue!.max}
+          </div>
+        )}
         {/* 图片附件优先于文字, 视觉上更清楚 */}
         {hasAttachments && (
           <div

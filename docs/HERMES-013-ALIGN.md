@@ -18,12 +18,14 @@
 
 ## 2. 短期借鉴 (5/14 demo 前, 半天-2 天能做)
 
+> **5/13 末状态对账** (鸿波 5/13 收尾): 4 项里 3 项已 ship, 仅 allowlist 命名待 BL-RBAC sprint.
+
 | 项 | 工作量 | 状态 |
 |---|---|---|
 | **`/goal` Ralph loop** — agent 锁定目标多轮不偏 | 2 天 | ✅ **已 ship** BL-HERMES013-3 (`session_goals.py` ~250 行 + SOUL.md 铁律段) |
-| **状态栏 context compression counter + 启动 banner 折叠** (Companion UI) | 半天 | ⬜ 未做, 5/13 后 |
-| **`transform_llm_output` 插件钩子** — 接入即统一 audit/quota/脱敏 三条横切 | 半天 | ⬜ 未做, **5/18 升级 sprint Day 3** 优先 |
-| **`allowed_channels / allowed_chats / allowed_rooms` allowlist 命名** — 企业按部门限制副手, 配置 schema 跟生态一致 | 1 天 | ⬜ 未做, 跟 BL-RBAC P2 合并 |
+| **状态栏 context compression counter + 启动 banner 折叠** (Companion UI) | 半天 | ✅ **已 ship 5/13** BL-CONTEXT-COUNTER: `ContextCounter.tsx` (📏 92K/128K · 72%, 4 档颜色) 挂 ChatTab 头部 + tooltip 给具体动作建议 (≥95% Cmd+N / ≥80% /compress / 等). banner 折叠 5/7 已做 BL-D-DASH (`CollapsibleSection`) |
+| **`transform_llm_output` 插件钩子** — 接入即统一 audit/quota/脱敏 三条横切 | 半天 | ✅ **已 ship 5/12 末** BL-HERMES013-5: `output_transforms.py` (~180 行) ABC chain — `OutputCtx` frozen + `LLMOutputTransform` Protocol + 4 内置 transform (ContextUsage / Audit / Quota / InflightCleanup) + 18 单测. `_stream_chat_completion` finally 23 行 inline → 1 行 `DEFAULT_CHAIN.run(ctx)` |
+| **`allowed_channels / allowed_chats / allowed_rooms` allowlist 命名** — 企业按部门限制副手, 配置 schema 跟生态一致 | 1 天 | ⬜ 未做. 5/13 跟鸿波拍板**纳入 BL-RBAC P0 sprint** (5/15+, 5 天 P0 + 3 天 P1, 跟 `allowed_models` / `allowed_tools` / `allowed_skills` 一起做). 单独做意义不大, 跟 RBAC tool/model 控制同源, 必须一起做 schema 对齐. 详见 BACKLOG.md BL-D8 Phase 2 接力 |
 
 ## 3. Q3/Q4 中长期借鉴
 
@@ -53,24 +55,29 @@
 
 ## 6. 升不升 hermes 本体的判断
 
-**短期不升** (5/12-5/14 demo 前 freeze), 借鉴设计自实现.
+**5/13 鸿波"记录有问题"反馈后纠正**: 5/7 BL-D14.5 已升 0.12 + 解耦完成 (git hook 自动重打 brand patch / MISS fallback / Curator 集成 ship). 升 0.13 实际工作量 **2-3 天**, 不是早先估的 10-15 天.
 
-| 节点 | 该不该升 |
+| 节点 | 实际 / 计划 |
 |---|---|
-| 5/11 (拍板时) | 不升, freeze |
-| 5/12-5/14 | 不升, demo 准备 |
-| 5/15-5/17 | 看 0.13.1 / 0.13.2 patch release 出没出, 等 1-2 个 patch 再升 |
-| 5/18-5/22 | **升级 sprint** (跟 catfish-web 5/15+ 那波并行) |
-| 5/22+ | 0.13 默认基线, 借鉴 multi-agent kanban / checkpoints v2 |
+| 5/7 BL-D14.5 ship | ✅ **真升级到 0.12** + git hooks 升级保护 + Curator 集成 |
+| 5/8-5/14 | freeze, demo 准备 |
+| 5/15-5/17 | 准备 sprint, 跑社区一周观察 issue tracker. **注意: hermes 不发 patch (.x.1 / .x.2)** — 5/13 鸿波核 GitHub releases 确认, v0.7-v0.13 全是 .0. 不能"等 patch", 只能等社区跑一周看 P0 issue 没大爆雷再升 |
+| **5/18 (1 天)** | **升 0.13** — git pull + 补 5-10 条新字符串规则到 RULES + 4 件撞车点处理 (default redaction / atomic session / transform_llm_output / Playwright deny) |
+| **5/19 (1 天)** | 跑 169 项 `HERMES-UPGRADE-CHECKLIST.md` 回归 + catfish-policy 11 单测 |
+| 5/20+ (可选 0.5-1 天) | 享受 0.13 红利: `/steer`+`/queue` / Checkpoints v2 / SSE MCP / Multi-Agent Kanban Q3 准备 |
+| 5/22+ | 0.13 默认基线 |
 
-**升级风险表**:
+**升级风险表** (5/13 重估, 因 5/7 解耦完成大幅降低):
 
 | 风险 | 程度 |
 |---|---|
-| 0.13 release 5/7 → 现在才 4 天, 早期 bug 暴露窗口 | 高 |
-| catfish-policy plugin 4 条 matcher 兼容性 (shell/file_read/network/tool_name 跟 0.13 新 plugin surface) | 中 |
-| Default-on secret redaction 跟 catfish 自己 audit 脱敏**撞** | 中 |
-| Hermes 重写 session persistence (Checkpoints v2) 跟 catfish sessions 表存储模型对接 | 中 |
+| 0.13 release 5/7 → 5/13 才 6 天, 早期 bug 暴露窗口 | 中 — hermes **不发 patch** (5/13 核 GitHub 确认), 只能等社区跑一周看 P0 issue 不爆再升 |
+| catfish-policy plugin 4 条 matcher 兼容性 | 低 (5/7 11 step fixture 测过 0.13 覆盖路径) |
+| brand patch 重做 | ✅ **已解耦 5/7** (git hook 自动跑 + MISS fallback + 11 step fixture PASS), 不再是风险 |
+| Default-on secret redaction × catfish prompt_security | 低 (关一边即可, 我们的更精细) |
+| Atomic session persistence 撞我们 inflight_streams (5/12 ship) | 中 (二选一决策, 倾向用我们的因为 PG 集成完整) |
+| `transform_llm_output` 撞我们 output_transforms (5/12 ship) | 低 (接 hermes 上游接口, 删自己 ABC ~180 行) |
+| Playwright cloud-metadata × BL-HERMES013-2 | 低 (删自己 ~80 行用 hermes 内置) |
 | catfish-gateway custom endpoint 协议改动 | 低 |
 | Companion 桌面端 (不依赖 hermes 版本) | 0 |
 
@@ -87,12 +94,26 @@
 
 真要升级才能用的: **Multi-agent kanban (Q3) / Checkpoints v2 / SSE MCP transport**, 都不是 5/14 demo 必备.
 
-## 7. BL-HERMES-UPGRADE-013 升级 sprint 计划 (拟 5/18-5/22)
+## 7. BL-HERMES-UPGRADE-013 升级 sprint 计划 (5/18-5/19, **2-3 天**, 5/13 重估)
 
-- **Day 1** — 兼容性验证 (装 0.13 独立 venv, catfish-policy 11 单测, custom endpoint 测连通, skill 系统路径)
-- **Day 2** — 撞车点处理 (default-on redaction × catfish audit 合并 / 关一边, catfish-policy 接新 plugin surface, frontmatter slug 保护抄进 Skills Hub)
-- **Day 3-4** — 借鉴改造 (`transform_llm_output` ABC hook 重构 audit/quota/脱敏, sessions atomic write + auto-resume, Playwright deny cloud-metadata 跟 0.13 内置版对齐, audit 默认开脱敏)
-- **Day 5** — 集成测试 + 文档
+> **5/13 鸿波"记录有问题"反馈后纠正**: 之前列 5 天 sprint 是基于"brand patch 大重写 + Curator 评估" 的旧前提. 实际 5/7 BL-D14.5 已经把这两件做完 (git hooks 自动重打 / MISS fallback / Curator snippet ship), 升 0.13 工作量大幅减少.
+>
+> **借鉴的 5 件 (BL-HERMES013-1..5) 都已自实现**, 升 0.13 主要是把"自实现版" 跟"hermes 内置版"对齐 (能删自己代码 ~260 行).
+
+- **Day 1 上午 (半天)** — `cd ~/.hermes/hermes-agent && git pull` 升 0.13.x → git hook 自动跑 `apply_brand_patch.py --apply` → 看 MISS 日志补 5-10 条 0.13 新字符串规则到 RULES → `--verify` 过
+- **Day 1 下午 (半天)** — 撞车点处理 (4 件):
+  1. **Default-on secret redaction** × `prompt_security.py` — 关一边 (用我们的, 我们的更精细, BL-HERMES013-1)
+  2. **Atomic session persistence** × `inflight_streams.py` (5/12 ship) — 二选一 (倾向用我们的因 PG 集成完整)
+  3. **`transform_llm_output`** × `output_transforms.py` (5/12 ship) — 接 hermes 上游接口, **删自己 ABC chain ~180 行**
+  4. **Playwright cloud-metadata deny** × BL-HERMES013-2 — **删自己 ~80 行**用 hermes 内置
+- **Day 2 (1 天)** — 跑 169 项 `HERMES-UPGRADE-CHECKLIST.md` 回归 + catfish-policy 11 单测 + 修不通过项
+- **Day 3 (可选 0.5-1 天)** — 享受 0.13 红利 (评估接入):
+  - `/steer` + `/queue` 不打断的 in-flight 指令注入 (UX 升级, 长任务跑一半员工想插话不用先停)
+  - Checkpoints v2 跟我们 inflight_streams 整合, 能自动 pruning + 磁盘 guardrail
+  - SSE MCP transport + OAuth forwarding 跟我们 mcp_registry_proxy 整合
+  - Multi-Agent Kanban (Q3 期) — BL-FED2 升级方向
+  - Post-write delta lint — write_file 后自动 py/json/yaml 语法检查
+  - `no_agent` cron watchdog — 定时拉数据非空告警
 
 跑前 prereq: `docs/HERMES-UPGRADE-PHASE-C-RUNBOOK.md` 的 brand patch 幂等流程 (11 step fixture 已验过 0.13 升级覆盖路径, 见 CHANGELOG 5/7 段).
 

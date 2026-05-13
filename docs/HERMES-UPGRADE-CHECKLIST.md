@@ -1,13 +1,26 @@
 # Hermes 升级回归 Checklist
 
-> 升级 hermes (0.10 → 0.12 或后续版本) 后**必跑**的回归清单. 任一条 ❌, 不上线.
+> 升级 hermes 后**必跑**的回归清单. 任一条 ❌, 不上线.
 >
 > **使用方法**: 升级完, 按章节顺序逐条勾, 不通过的写到底部 issue list, 修完再跑.
 > 全 ✅ → 升级完成, 可以推 staging / 给客户用.
 
 **首次创建**: 2026-05-05 (5/5 阶段 A.4)
-**最后跑**: (升级时填)
-**升级版本**: 0.10 → 0.x (升级时填)
+
+**跑过的版本** (5/13 鸿波"记录有问题" 反馈后补落档):
+- ✅ **5/7 0.10 → 0.12** (BL-D14.5, 全 PASS), 同步 ship git hooks 升级保护 + Curator 集成
+- ✅ **5/13 21:01 0.12 → 0.13.0** (BL-HERMES-UPGRADE-013, 25 分钟内全 PASS):
+  - `git checkout -f v2026.5.7` 强制切, HEAD = `498bfc7bc chore: release v0.13.0`
+  - `apply_brand_patch.py --apply`: 26/27 patched, 1 MISS (良性 — 函数级 RULE `build_welcome_banner 已替换为极简版` DONE 覆盖了, banner.py line 418 实际渲染 `[bold]鲶鱼平台[/]`), 0 ERROR
+  - `apply_brand_patch.py --verify`: exit=0 (4 关键文件全过)
+  - `hermes --version`: "鲶鱼 v0.13.0 (2026.5.7)"
+  - TUI startup banner 截图: 完全鲶鱼, 0 "Hermes Agent / Nous Research / ⚕" 泄露
+  - catfish-gateway 跟 0.13 兼容: 7 model 加载 / 6 路由挂载 / 4 公网 LLM ✓ / `/v1/catalog` 200 OK
+  - backend 909 测试 + tool-bridge 573 测试: 跟升级前一致
+  - 所谓"4 件撞车点" 实际全部不撞 (hermes / catfish-gateway / tool-bridge 是 3 个独立进程, hermes 内置功能跟我们各组件平行存在)
+  - 详见 `CHANGELOG.md` 5/13 段任务 #41 / #42
+
+**升级版本**: 0.x → 0.x (每次升级填)
 
 ---
 
