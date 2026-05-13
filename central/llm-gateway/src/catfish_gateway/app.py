@@ -1076,6 +1076,38 @@ def _check_context_usage(model, prompt_tokens: int, user_sub: str) -> None:
         )
 
 
+# BL-FIX23-L8-overflow-fix (5/13 鸿波"谎报生成"): context > window 时上游 silent
+# truncate 输入, LLM 看不到完整 tool result, 反复"谎报生成成功". retry 让 prompt
+# 越涨越多形成死循环. 超阈值时强制 break + 推 SSE 友好错误.
+_CONTEXT_OVERFLOW_RETRY_THRESHOLD = 0.95  # ≥95% 视作即将/已超, 不再 retry
+
+
+def _is_context_overflowed(model, prompt_tokens: int) -> bool:
+    """prompt_tokens / context_window ≥ 95% → True (上游可能 silent truncate).
+
+    没 model.context_window 或 prompt_tokens=0 → False (退化为不判, 走原 retry 逻辑).
+    """
+    cw = getattr(model, "context_window", 0) or 0
+    if cw <= 0 or prompt_tokens <= 0:
+        return False
+    return (prompt_tokens / cw) >= _CONTEXT_OVERFLOW_RETRY_THRESHOLD
+
+
+def _context_overflow_friendly_error(model, prompt_tokens: int) -> str:
+    """给员工的 SSE error 提示 — 告诉他"会话太长, 怎么解."""
+    cw = getattr(model, "context_window", 0) or 0
+    pct = int((prompt_tokens / cw) * 100) if cw > 0 else 0
+    return (
+        f"⚠️ 会话上下文已用 {pct}% (>{int(_CONTEXT_OVERFLOW_RETRY_THRESHOLD*100)}% 阈值, "
+        f"{prompt_tokens:,} / {cw:,} tokens). 上游 LLM 可能截断输入, 看不到完整工具结果. "
+        f"鲶鱼之前的 execute_code 可能真做了 (文件已写盘), 但它看不到 tool 结果就反复重做.\n\n"
+        f"建议:\n"
+        f"  - **新建会话** (Cmd+N / 左侧 + 新对话): 上下文重置, 已写文件不丢\n"
+        f"  - 切大上下文模型: /model catfish-public-gemini-pro (2M tokens)\n"
+        f"  - /compress 压缩当前会话保留主题"
+    )
+
+
 def _http_code_for_upstream(err_msg: str) -> int:
     """Map an upstream error message to a sensible HTTP status code."""
     low = err_msg.lower()
@@ -1679,6 +1711,24 @@ async def _stream_chat_completion(
                 and _last_user_message_is_feedback(msgs_for_check)
                 and _is_plan_only_content(cumulative_content)
             )
+            # BL-FIX23-L8-overflow-fix (5/13 鸿波"谎报生成"): context > 95% window
+            # 时上游 silent truncate, LLM 看不到完整 tool result, retry 让 prompt
+            # 越涨越多. 强制 break + 推 SSE 友好错误, 不让 LLM 反复幻觉.
+            if _is_context_overflowed(used_model, prompt_tokens):
+                logger.error(
+                    "BL-FIX23 L8 skip retry — CONTEXT OVERFLOW: model=%s "
+                    "prompt_tokens=%d context_window=%d (%.0f%%) user=%s. "
+                    "推友好错误让员工新建会话 / 切 gemini-pro.",
+                    used_model.name, prompt_tokens,
+                    getattr(used_model, "context_window", 0) or 0,
+                    (prompt_tokens / (getattr(used_model, "context_window", 1) or 1)) * 100,
+                    user_sub,
+                )
+                friendly = _context_overflow_friendly_error(used_model, prompt_tokens)
+                yield f"data: {json.dumps({'error': friendly})}\n\n"
+                yield "data: [DONE]\n\n"
+                break
+
             # BL-MM9-FREEZE (5/12): lean 模式跳 retry — 教学场景 LLM 自然停顿
             # (snapshot 看一下再想) 不该被 retry 拖.
             # BL-FIX23-L8-fix (5/13 鸿波合并 8 项资质卡): LEAN 只跳 feedback retry,
