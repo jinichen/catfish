@@ -15,6 +15,7 @@ import type { ChatMessage, ToolCall } from "../types/chat";
 import { config } from "./env";
 import { fetchWithAuth } from "./me";
 import { useAgentStore } from "../store/agent";
+import { applySteerPrefix } from "./steer";  // BL-HERMES013-RED-1B (5/13 ACP /steer)
 
 interface SendChatParams {
   model: string;
@@ -293,6 +294,9 @@ function toWire(messages: ChatMessage[]): OpenAIWireMessage[] {
           .join("");
         textContent = `${textContent}${fileBlocks}`;
       }
+      // BL-HERMES013-RED-1B: /steer 中途插话 — 拼 STEER prefix 给 LLM 看,
+      // 防止 LLM 误以为前一轮 assistant 是它正常说完的.
+      textContent = applySteerPrefix(textContent, m._steered);
 
       // 没图片附件: 直接返普通 string content (兼容非 vision 模型)
       if (imageAttachments.length === 0) {
@@ -310,12 +314,21 @@ function toWire(messages: ChatMessage[]): OpenAIWireMessage[] {
       }
       return { role: "user", content: parts };
     }
+    // user 无附件 — 也要 detect _steered 拼 STEER prefix
+    if (m.role === "user") {
+      return {
+        role: "user",
+        content: applySteerPrefix(m.content || "", m._steered),
+      };
+    }
     return {
       role: m.role,
       content: m.content,
     };
   });
 }
+
+// applySteerPrefix 提到 lib/steer.ts 单独存放, 让 steer.test.ts 不用拉 env.ts.
 
 // ── 流式 tool_calls 累积 ──
 //

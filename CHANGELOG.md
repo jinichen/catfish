@@ -4826,3 +4826,54 @@ Session: 20260513_205614_08fef0
 - **55 个 task**: 49 completed + 6 pending (#46/#47/#48/#50/#51 排到后续 sprint, #55 含本段全部 ship)
 - 后人 grep 入口加: `BL-HERMES013-RED-1A` (ACP /queue 等价), `BL-REMINDER` (macOS Reminders.app 集成)
 - 教训: **不要把"图省事"判断当结论** — i18n / OAuth client credentials / ACP /queue 三件鸿波都推翻过我"砍掉"判断, 真重新评估都是该做的. 软件项目里"省事" 偷的不是工作量, 是产品力
+
+#### 任务 #56: BL-HERMES013-RED-1B ACP /steer 等价 (in-flight 插话改方向)
+
+22:55 鸿波拍板 "现在开始完成 ACP /steer 等价 + Multi-Agent Kanban catfish-web surface". 我用 AskUserQuestion 抛 3 个架构岔路口避免瞎做:
+
+1. **顺序**: 鸿波选 "先攻 /steer" (一晚做不完两件, 先做透一件)
+2. **/steer 实现路径**: 鸿波选 **A: 断流 + 续接** (推荐, 0 gateway 改动, 全前端)
+3. **Kanban scope**: 鸿波选 "1 优先 2 补" (catfish 自有任务看板为主, 把 hermes Kanban API 当 tile 嵌入), 排到 5/15-5/18
+
+**实现路径 A — 断流 + 续接** (`BL-HERMES013-RED-1B`):
+
+UX 跟 ACP /queue / cancelAndSend 三按钮并排, streaming + hasContent 时显:
+- `[⏳ 排队]` (青) — /queue 等价 (5/13 已 ship)
+- `[🎯 改主意]` (橙) — **/steer 等价 (本次新增)**
+- `[⏹ 停下接着发]` (青背景) — cancelAndSend (5/12 已 ship)
+
+三者语义区别 (鲶鱼区 LLM 体验关键):
+- /queue: 等当前完了再发, LLM 一气呵成跑完当前轮
+- /steer: 中途打断 + LLM 看到自己 partial 输出 + 新指令 综合考虑 (像跟人聊天打断"你说到 X, 我觉得不对应该 Y")
+- cancelAndSend: 中途打断 + 完全重问, LLM 看不到自己刚说的, 像撕掉重写
+
+**代码改动** (5 文件, 1 新文件, 1 新测试):
+
+- `companion-app/src/types/chat.ts` — `ChatMessage` 加 `_steered?: { atContent: string }` 字段
+- `companion-app/src/lib/steer.ts` (新) — `applySteerPrefix(content, steered)` 纯函数, 拼 `[STEER · 用户中途插话] (我打断你时你正说到 "...{tail 200}") 现在改方向, 综合考虑两边继续:\n\n{原话}` 给 LLM. 单文件单函数, 不依赖 lib/env (让 tsx test 能干净 import).
+- `companion-app/src/lib/chat.ts` — `toWire` user 分支 detect `m._steered` → call `applySteerPrefix` 拼 prefix; `import { applySteerPrefix }` from `./steer`
+- `companion-app/src/hooks/useChat.ts`:
+  - `send(content, attachments, metadata?)` 新加 `metadata?.steered` 参数, userMsg 上挂 `_steered: metadata?.steered`
+  - 新加 `steer(text)` 回调: (1) 拿 `streamingId` 对应 assistant 的 `content` 当 partial (2) `abortRef.current.abort()` (跟 cancel 同语义, finally 里 `!ctrl.signal.aborted` 短路 queue dequeue) (3) 等 200ms 让 finally cleanup (4) `await send(t, [], { steered: { atContent: partial } })`
+  - Hook return 加 `steer`
+- `companion-app/src/tabs/Chat/ChatTab.tsx` — `useChat` 解构加 `steer`, 透传给 `<ChatPanel onSteer={steer}>`
+- `companion-app/src/tabs/Chat/ChatPanel.tsx` — Props 加 `onSteer`, 透传给 `<ChatInput onSteer={onSteer}>`
+- `companion-app/src/tabs/Chat/ChatInput.tsx` — Props 加 `onSteer`, 加 `steerSubmit()` 函数 (校验 attachments=0, 调 `onSteer(t)` 后清空), 三按钮并排 (streaming + hasContent 时)
+- `companion-app/src/tabs/Chat/ChatMessage.tsx` — `UserBubble` detect `msg._steered` → 显 `🎯 中途插话改方向` 角标 + 橙色 (`status-warn`) 边框 + tooltip 显 LLM 当时被打断在哪儿 (末尾 60 字)
+
+**单测** (`companion-app/src/lib/steer.test.ts`, 19 测试全过):
+- `applySteerPrefix`: 无 _steered 透传 / 含 [STEER] 前缀 / 含 partial 内容 / 含用户原话 / 超 200 字截尾 (不含 201 个连续 a) / 末尾 200 个 a 在 / 空 partial 走兜底"打断了你, 你还没开口" / 全空白 partial 也兜底 / 中文 partial / 多行 partial / 用户原话自含 [STEER] 不被混淆
+- `ChatMessage` type: 接受 _steered 字段 / 不带时 undefined
+- store roundtrip: addMessage 保留 _steered / 普通 msg undefined / updateMessage 不丢 _steered / reset 清空
+
+**TypeScript tsc --noEmit exit=0**, 老 Companion 测试 (queue 20 / auto_continue 12) 全过没回归.
+
+**为什么不需要 gateway 改动 (路径 A 的关键)**: STEER prefix 在 Companion 端拼装直接发给 gateway, gateway 看到的就是普通 user message (内容里多了点 hint). 不存在 BL-FIX23 那种"gateway 猜 LLM 心思" 风险, 触发源是用户主动按按钮, gateway 永远不主动注入.
+
+**Multi-Agent Kanban catfish-web surface (#46)** 还 pending — 排明天 5/15-5/18 阶段做, 鸿波拍 "scope 1 优先 (catfish 自有 catfish_run_task / a2a / schedule_task 聚合) + 2 补 (有 hermes Kanban API 就嵌一个 tile)". 今晚不开新坑.
+
+### 最终统计 (含 #56, 5/13 真收尾)
+
+- **56 个 task**: 50 completed + 6 pending
+- 后人 grep 入口加: `BL-HERMES013-RED-1B` (ACP /steer 等价 — 路径 A 断流 + 续接)
+- ACP /queue + /steer 一起 ship 后, Companion 在长任务 stream 中给员工 4 种动作选项 (排队 / 改主意 / 停下接着发 / 自动续跑 toggle), UX 完整度跟 hermes 0.13 ACP IDE 体验对齐

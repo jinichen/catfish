@@ -32,6 +32,7 @@ export default function ChatTab() {
     cancel,
     cancelAndSend,  // BL-COMPANION-UX1 (5/12): 一键停止+发新消息
     enqueue,        // BL-HERMES013-RED-1A (5/13 ACP /queue): 排队下一条
+    steer,          // BL-HERMES013-RED-1B (5/13 ACP /steer): 中途插话改方向
     reset,
   } = useChat(defaultModel);
 
@@ -240,6 +241,7 @@ export default function ChatTab() {
             onCancel={cancel}
             onCancelAndSend={handleCancelAndSend}
             onEnqueue={enqueue}
+            onSteer={steer}
             onReset={reset}
           />
         </div>

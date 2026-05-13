@@ -17,6 +17,9 @@ interface Props {
   onCancelAndSend: (text: string, attachments: Attachment[]) => void;
   /** BL-HERMES013-RED-1A (5/13 ACP /queue): streaming 中排队下一条 */
   onEnqueue: (text: string) => void;
+  /** BL-HERMES013-RED-1B (5/13 ACP /steer): streaming 中中途插话改方向
+   *  (路径 A 断流 + 续接 — abort 当前 SSE 后用 partial content 续 send) */
+  onSteer: (text: string) => void;
   onReset: () => void;
 }
 
@@ -28,6 +31,7 @@ export default function ChatPanel({
   onCancel,
   onCancelAndSend,
   onEnqueue,
+  onSteer,
   onReset,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -82,6 +86,7 @@ export default function ChatPanel({
         onCancel={onCancel}
         onCancelAndSend={onCancelAndSend}
         onEnqueue={onEnqueue}
+        onSteer={onSteer}
         onReset={onReset}
       />
     </div>

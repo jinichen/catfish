@@ -36,6 +36,11 @@ function UserBubble({ msg }: { msg: Msg }) {
   // BL-AUTO-CONTINUE (5/13): Companion 自动续跑发的 user msg, UI 标记淡色 +
   // 角标 "🔄 自动续 N/M", 让员工看见这是机器发的不是他自己发的.
   const isAutoContinue = msg._autoContinue !== undefined;
+  // BL-HERMES013-RED-1B (5/13 ACP /steer): 中途插话发的 user msg, UI 标记
+  // 橙色边框 + 角标 "🎯 中途插话", 跟普通 user msg + 自动续 区分开.
+  // 用 partial content 末尾 30 字给 tooltip 显示 LLM 当时被打断在哪儿.
+  const isSteered = msg._steered !== undefined;
+  const steerTail = isSteered ? msg._steered!.atContent.trim().slice(-60) : "";
   return (
     <div
       style={{
@@ -46,10 +51,14 @@ function UserBubble({ msg }: { msg: Msg }) {
     >
       <div
         style={{
-          background: isAutoContinue
+          background: isSteered
+            ? "var(--status-warn-dim, rgba(255, 165, 0, 0.12))"
+            : isAutoContinue
             ? "var(--catfish-cyan-dim)"  // 淡色, 区别于真用户消息
             : "var(--catfish-cyan)",
-          color: isAutoContinue
+          color: isSteered
+            ? "var(--status-warn)"
+            : isAutoContinue
             ? "var(--catfish-cyan)"
             : "white",
           padding: "var(--space-3) var(--space-4)",
@@ -62,13 +71,30 @@ function UserBubble({ msg }: { msg: Msg }) {
           display: "flex",
           flexDirection: "column",
           gap: hasAttachments && msg.content ? "var(--space-2)" : 0,
-          border: isAutoContinue ? "1px dashed var(--catfish-cyan)" : "none",
-          opacity: isAutoContinue ? 0.85 : 1,
+          border: isSteered
+            ? "1px dashed var(--status-warn)"
+            : isAutoContinue
+            ? "1px dashed var(--catfish-cyan)"
+            : "none",
+          opacity: isAutoContinue || isSteered ? 0.92 : 1,
         }}
-        title={isAutoContinue
-          ? `🔄 Companion 自动续跑 ${msg._autoContinue!.round}/${msg._autoContinue!.max} 轮 (toggle 开了, 长任务 LLM 中途停了, Companion 帮你发 "继续")`
-          : undefined}
+        title={
+          isSteered
+            ? `🎯 你中途打断了 LLM 改方向 (ACP /steer 等价).${steerTail ? ` LLM 当时正说到: "...${steerTail}"` : ""}`
+            : isAutoContinue
+            ? `🔄 Companion 自动续跑 ${msg._autoContinue!.round}/${msg._autoContinue!.max} 轮 (toggle 开了, 长任务 LLM 中途停了, Companion 帮你发 "继续")`
+            : undefined
+        }
       >
+        {isSteered && (
+          <div style={{
+            fontSize: 11,
+            opacity: 0.85,
+            marginBottom: 2,
+          }}>
+            🎯 中途插话改方向
+          </div>
+        )}
         {isAutoContinue && (
           <div style={{
             fontSize: 11,

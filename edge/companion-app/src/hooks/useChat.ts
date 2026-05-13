@@ -501,7 +501,15 @@ export function useChat(initialModel: string) {
   );
 
   const send = useCallback(
-    async (content: string, attachments: Attachment[] = []) => {
+    async (
+      content: string,
+      attachments: Attachment[] = [],
+      // BL-HERMES013-RED-1B (5/13 ACP /steer): steer() 调 send 时挂这个 — 让
+      // user msg 携带 _steered 标记, toWire 拼 [STEER] prefix 给 LLM 看.
+      // UI bubble 看到这字段会显角标 "🎯 已插话改方向".
+      // 普通 send / cancelAndSend / enqueue 都不传, 只有 steer() 传.
+      metadata?: { steered?: { atContent: string } },
+    ) => {
       const trimmed = content.trim();
       // 文字+图片都为空才拒. 只发图(没文字)是允许的.
       if (!trimmed && attachments.length === 0) return;
@@ -586,6 +594,8 @@ export function useChat(initialModel: string) {
         attachments: enrichedAttachments.length > 0 ? enrichedAttachments : undefined,
         ts: nowIso(),
         status: "done",
+        // BL-HERMES013-RED-1B: 中途插话标记, 走 toWire 拼 STEER prefix
+        _steered: metadata?.steered,
       };
       const requestMessages = [...useChatStore.getState().messages, userMsg];
       addMessage(userMsg);
@@ -788,6 +798,49 @@ export function useChat(initialModel: string) {
     [],
   );
 
+  /** BL-HERMES013-RED-1B (5/13 借鉴 Hermes 0.13 ACP /steer): streaming 中
+   *  *中途插话* — 用户看 LLM 在 stream 觉得方向不对, 想立刻改方向.
+   *
+   *  跟 cancelAndSend 区别: cancelAndSend 是"我不要这个回答了, 重新问", LLM
+   *  看不到自己刚说的部分; steer 是"你思路不对, 我打断你, 但记得你刚说什么,
+   *  综合两边继续", LLM 看到自己 partial output + 新指令.
+   *
+   *  跟 /queue 区别: /queue 是排队等当前完, /steer 是当前轮就改.
+   *
+   *  路径 A (5/13 22:55 鸿波拍板): 断流 + 续接.
+   *    1. 拿当前 streaming 的 assistant message 已生成内容 (partial)
+   *    2. abort 当前 SSE
+   *    3. 等 200ms 让 finally cleanup (跟 cancelAndSend 同模式)
+   *    4. send 新轮, 在 user msg 上挂 _steered: { atContent: partial }
+   *       toWire 自动拼 "[STEER · 用户中途插话] (我打断你时你正说到 ...)" prefix
+   *
+   *  attachments 暂不支持 — steer 是文字插话场景, 加图通常该走 cancelAndSend.
+   */
+  const steer = useCallback(
+    async (text: string) => {
+      const t = text.trim();
+      if (!t) return;
+
+      // 1. 拿当前 streaming 的 partial content (UI 渲染中的 assistant content)
+      const state = useChatStore.getState();
+      const streamingId = state.streamingId;
+      const partialContent = streamingId
+        ? state.messages.find((m) => m.id === streamingId)?.content ?? ""
+        : "";
+
+      // 2. abort 当前 SSE — finally 块里 ctrl.signal.aborted 为 true,
+      //    queue dequeue 自动短路 (跟 cancel 同语义).
+      if (abortRef.current) abortRef.current.abort();
+
+      // 3. 等 finally cleanup 跑完 (isStreaming → false)
+      await new Promise((r) => setTimeout(r, 200));
+
+      // 4. send 新轮, 携带 _steered metadata
+      await send(t, [], { steered: { atContent: partialContent } });
+    },
+    [send],
+  );
+
   const reset = useCallback(() => {
     if (abortRef.current) abortRef.current.abort();
     if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
@@ -820,6 +873,7 @@ export function useChat(initialModel: string) {
     cancel,
     cancelAndSend,  // BL-COMPANION-UX1 (5/12): 一键停止+发新消息, 解锁死感
     enqueue,        // BL-HERMES013-RED-1A (5/13): ACP /queue 等价, 排队下一条
+    steer,          // BL-HERMES013-RED-1B (5/13): ACP /steer 等价, 中途插话
     reset,
   };
 }

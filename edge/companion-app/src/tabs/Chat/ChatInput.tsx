@@ -30,6 +30,11 @@ interface Props {
   /** BL-HERMES013-RED-1A (5/13 借鉴 Hermes 0.13 ACP /queue): streaming 中
    *  排队下一条, 等当前 [DONE] 自动 send. 跟 onCancelAndSend 互补 (一个停一个排队). */
   onEnqueue: (text: string) => void;
+  /** BL-HERMES013-RED-1B (5/13 借鉴 Hermes 0.13 ACP /steer): streaming 中
+   *  中途插话改方向 — abort 当前 + send 新轮带 _steered metadata, LLM 看到
+   *  partial content + 新指令综合考虑. 跟 cancelAndSend 区别: cancelAndSend
+   *  扔掉当前回答重问, steer 让 LLM 看自己刚说的部分 + 新方向接力. */
+  onSteer: (text: string) => void;
   onReset: () => void;
 }
 
@@ -185,6 +190,7 @@ export default function ChatInput({
   onCancel,
   onCancelAndSend,
   onEnqueue,
+  onSteer,
   onReset,
 }: Props) {
   // BL-E11 后续: placeholder 用员工自定义名 ("跟老李说话…")
@@ -337,6 +343,22 @@ export default function ChatInput({
       return;
     }
     onEnqueue(t);
+    setText("");
+    setAttachError(null);
+  }
+
+  /** BL-HERMES013-RED-1B (5/13): streaming 中"中途插话改方向" (ACP /steer 等价).
+   *  abort 当前 stream → send 新轮带 _steered metadata, LLM 看到自己 partial
+   *  output + 新指令综合考虑. 跟 cancelAndSend 区别: cancelAndSend 扔掉当前回答,
+   *  steer 让 LLM 看自己刚说的接力. 附件场景 → 让员工走 cancelAndSend 一键停止+发. */
+  function steerSubmit() {
+    const t = text.trim();
+    if (!t) return;
+    if (attachments.length > 0) {
+      setAttachError("插话改方向暂不支持附件 — 想带图改方向? 用 [⏹ 停下接着发] 重问.");
+      return;
+    }
+    onSteer(t);
     setText("");
     setAttachError(null);
   }
@@ -617,13 +639,17 @@ export default function ChatInput({
           }}
           disabled={false /* 仍允许写下一个，发送按钮在 streaming 时变停止 */}
         />
-        {/* BL-COMPANION-UX1 (5/12) + BL-HERMES013-RED-1A (5/13 ACP /queue):
+        {/* BL-COMPANION-UX1 (5/12) + BL-HERMES013-RED-1A (5/13 ACP /queue) +
+            BL-HERMES013-RED-1B (5/13 ACP /steer):
             按钮组 4 态:
             - 非 streaming + 有内容       → "发送" (青)
-            - streaming + 有内容          → [⏳ 排队] [⏹ 停下接着发] 并列
-              用户选: 排队 = 不打断当前等完, 停下接着发 = 中断当前立即发
+            - streaming + 有内容          → [⏳ 排队] [🎯 改主意] [⏹ 停下接着发] 三排
+              用户选:
+                ⏳ 排队     = 不打断当前等完再发 (next turn)
+                🎯 改主意   = 中途插话改方向, LLM 看到自己 partial 输出 + 新指令综合 (steer)
+                ⏹ 停下接着发 = 直接 abort 当前重新问, LLM 看不到自己刚说的部分 (cancelAndSend)
             - streaming + 没内容          → "停止" (橙色, 单纯 abort)
-            Enter 默认 ⏹ 停下接着发 (跟 BL-COMPANION-UX1 一致), 排队要点专门按钮 */}
+            Enter 默认 ⏹ 停下接着发 (跟 BL-COMPANION-UX1 一致), 排队 / 改主意要点专门按钮 */}
         {isStreaming && hasContent ? (
           <div style={{ display: "flex", gap: "var(--space-1)" }}>
             <button
@@ -644,8 +670,25 @@ export default function ChatInput({
               ⏳ 排队
             </button>
             <button
+              onClick={steerSubmit}
+              title="🎯 中途插话改方向 (借鉴 Hermes 0.13 ACP /steer). LLM 看到自己刚说的部分 + 你的新指令, 综合考虑继续 — 不像 [停下接着发] 那样扔掉当前回答重问. 暂不支持附件."
+              style={{
+                padding: "var(--space-2) var(--space-3)",
+                border: "1px solid var(--status-warn)",
+                borderRadius: "var(--radius-sm)",
+                background: "transparent",
+                color: "var(--status-warn)",
+                fontSize: 13,
+                fontWeight: 500,
+                minWidth: 80,
+                cursor: "pointer",
+              }}
+            >
+              🎯 改主意
+            </button>
+            <button
               onClick={submit}
-              title="停止当前流, 立刻发送新消息 (Enter 同效)"
+              title="停止当前流, 立刻发送新消息 (Enter 同效, LLM 看不到自己刚说的, 完全重新回答)"
               style={{
                 padding: "var(--space-2) var(--space-3)",
                 border: "none",

@@ -90,6 +90,13 @@ export interface ChatMessage {
   /** BL-AUTO-CONTINUE (5/13 鸿波"长程任务咋办"): 这条 user msg 是 Companion
    *  自动续跑发的, UI 渲染要标记 (淡色 + "🔄 自动续 N/M" 角标). 用户原发的没这字段. */
   _autoContinue?: { round: number; max: number };
+  /** BL-HERMES013-RED-1B (5/13 借鉴 Hermes 0.13 ACP /steer): 这条 user msg 是
+   *  用户在 LLM 还在 stream 时按 [🎯 改主意] 触发的 in-flight 插话 (路径 A:
+   *  断流 + 续接). atContent = LLM 被打断时已生成的内容 (前 200 字给 LLM 上下文).
+   *  toWire 拼 "[STEER · 用户中途插话] (我打断你时你正说到 ...)" prefix 给 LLM,
+   *  UI 渲染时 user bubble 显角标 "🎯 已插话改方向". 跟 /queue (排队等下一轮)
+   *  互补 — /steer 是当前轮就改, /queue 是等当前完了才发. */
+  _steered?: { atContent: string };
 }
 
 /** 一次会话的运行时状态(目前 store 直接展开到顶层,这个 type 留给 Week 3 持久化) */
