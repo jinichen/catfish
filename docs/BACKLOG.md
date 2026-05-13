@@ -32,40 +32,53 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 
 ---
 
-## 5/14 - 6 月 sprint plan (5/13 22:10 鸿波拍板, hermes 0.13 升级后修订)
+## 5/14 - 6 月 sprint plan (5/13 22:35 鸿波拍板修订, ACP /steer + Kanban 提前)
 
-> **背景**: 5/13 升 hermes 0.13 完成. 鸿波当晚 4 次推翻我的"图省事" 判断, 重新评估 #8 红利接入. 真实可做的工作量比早晨估的多, 但每件都对齐产品定位.
+> **背景**: 5/13 升 hermes 0.13 完成 + ACP /queue 等价 ship (BL-HERMES013-RED-1A). 鸿波当晚 4 次推翻我"图省事" 判断 (1 升级估时 / 2 i18n / 3 hermes 集成方案 / 4 ACP 砍掉) + 22:35 拍板 "ACP /steer + Kanban 提前到明天, BL-RBAC sprint 明天就启动".
+>
+> **修订原则**: 一天最多 2 件中等并行, 不要超载. 后端 RBAC sprint (8 天主线) 跟前端 ACP /steer + Kanban (4-5 天独立) **可并行不互相阻塞**, 但每天分配要清晰.
 
-### 5/14 (周四) — 升级尾巴 + 一个真功能
+### 5/14 (周四) — 升级尾巴 + 启动 3 件并行
 
-| 项 | 工作量 | 备注 |
+| 时段 | 项 | 工作量 |
 |---|---|---|
-| BL-HERMES013-FIX-1: ui-tui rebuild (`npm run build`) — 状态栏 ⚕→🐟 | 5 分钟 | install.sh 步 5 已提示 |
-| BL-HERMES013-RED-1A: ACP `/queue` 等价 (Companion 排队下一条 send) | **0.5 天 全前端** | useChat outer loop 加 queue 数组, [DONE] 自动从 queue 拿下一条. 后端 0 改动. 跟 BL-COMPANION-UX1 "⏹ 停下接着发" 互补 (一个停一个排队) |
-| 8 项资质合并 → `catfish_run_skill` (今天反复卡的痛点根治) | 半天 | 把 5/13 鸿波 13+ 次卡的合并流程固化 |
-| 验证 Post-write delta lint (0 工作量) | 5 分钟 | hermes 内置, 用 write_file 自动享 |
+| 上午 (4h) | BL-HERMES013-FIX-1: ui-tui rebuild (`npm install && npm run build`) — 状态栏 ⚕→🐟 | 5 分钟 (主要是 npm install 等待) |
+| 上午 | 验证 Post-write delta lint (0 改动, 验 hermes 0.13 自带) | 5 分钟 |
+| 上午 | **8 项资质合并 → catfish_run_skill** (今天反复卡的痛点根治) | 3.5 小时 |
+| 下午 (4h) | **BL-RBAC P0 + hermes B sprint Day 1** — 启动: catfish-identity OAuth client credentials grant 设计 + 启动实现 | 4 小时 (设计 1h + 第一段代码 3h) |
+| 同时 (碎片) | ACP /steer 设计文档 (不写代码, 想清楚再做) | 1h 间隙时间 |
 
-### 5/15-5/22 (8 天) — BL-RBAC P0 + hermes B 合一 sprint
+### 5/15-5/16 (周五 + 周六) — ACP /steer 实现 + RBAC sprint 前推
 
-> 任务 #50 已落档. 详见 BL-D8 P0 接力清单 (本文件下方 D.2 段).
+| 日期 | 主线 (RBAC sprint, 后端) | 副线 (ACP /steer + Kanban, 前端/桌面端) |
+|---|---|---|
+| 5/15 | RBAC Day 2: catfish-identity OAuth grant 实现完 + hermes-cli client 注册测试 | ACP /steer Day 1: gateway SSE 双向 channel 设计 + Companion UI 加 /steer 输入框 (前端打底) |
+| 5/16 | RBAC Day 3: `allowed_models` per-dept/user 数据模型 + DB schema | ACP /steer Day 2: gateway 接 Companion 推 in-flight prompt + 跟当前 stream 整合 |
 
-核心做完: `allowed_models` per-dept/user / `allowed_tools` per-dept / `allowed_skills` per-dept / `allowed_channels/chats/rooms` (跟 hermes 0.13 命名对齐) / catfish-web `/admin/access` UI / catfish-identity OAuth client credentials grant / hermes-cli 注册成 client 走 catfish-gateway.
+### 5/17-5/19 (周日 + 下周一二) — Kanban surface + RBAC 中段
+
+| 日期 | 主线 RBAC | 副线 |
+|---|---|---|
+| 5/17 | RBAC Day 4: `allowed_tools` per-dept (gateway sanitize_tools 接) | **Multi-Agent Kanban catfish-web Day 1**: 加 widget 调 `hermes kanban` API |
+| 5/18 | RBAC Day 5: `allowed_skills` per-dept (Skills Hub filter) | Kanban Day 2: dashboard surface + sortable + 端到端测试 |
+| 5/19 | RBAC Day 6: `allowed_channels/chats/rooms` (跟 hermes 0.13 命名对齐) + catfish-web `/admin/access` UI 启动 | ACP /steer 端到端测试 + bug fix |
+
+### 5/20-5/22 (周三-五) — RBAC 收尾
+
+| 日期 | RBAC sprint |
+|---|---|
+| 5/20 | Day 7: `/admin/access` UI 完整 |
+| 5/21 | Day 8: 测试 + 文档 |
+| 5/22 | 缓冲 / 漏项补 |
 
 ### 5/23-5/26 — i18n 接入 (任务 #51)
 
 | 项 | 工作量 |
 |---|---|
 | catfish brand patch RULES 改 i18n 兼容 (字符串走 `_("...")`) | 1 天 |
-| 补 catfish 品牌字符串 zh-CN / en-US 翻译表 (其他 locale 按需) | 半天 |
+| 补 catfish 品牌字符串 zh-CN / en-US 翻译表 | 半天 |
 | Companion 加语言 toggle (zh/en) | 半天 |
 | hermes 0.13 i18n + catfish brand 端到端测试 | 1 天 |
-
-### 5/27-5/30 — ACP `/steer` + Multi-Agent Kanban catfish-web surface
-
-| 项 | 工作量 |
-|---|---|
-| BL-HERMES013-RED-1B: ACP `/steer` 等价 (in-flight 注入) | 2-3 天. 谨慎设计文档先 — 跟 BL-FIX23 触发源不同 (用户主动 vs gateway 猜) 但实现复杂度类似. 借鉴 hermes #18258 "对 idle session 退化普通 prompt" 减少误判面 |
-| BL-HERMES013-RED-2: Multi-Agent Kanban catfish-web dashboard 显示 | 1-2 天. catfish-web 加 widget 调 `hermes kanban` API, 不动 hermes 内部 |
 
 ### 6 月+ — hermes 0.13 剩下红利按需
 
