@@ -2113,7 +2113,9 @@ async def chat_completions(
             friendly = duplicate_tool_call_guard.hard_block_friendly_error(
                 tool_name, count,
             )
-            if is_stream:
+            # is_stream 在 line 2330 才算, 这里直接看 body (修 5/13 NameError bug)
+            _hb_is_stream = bool(body.get("stream", False))
+            if _hb_is_stream:
                 async def _hard_block_stream():
                     yield f"data: {json.dumps({'error': friendly})}\n\n"
                     yield "data: [DONE]\n\n"
