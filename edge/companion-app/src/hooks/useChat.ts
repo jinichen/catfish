@@ -724,6 +724,19 @@ export function useChat(initialModel: string) {
         setStreamingId(null);
         setIsStreaming(false);
         abortRef.current = null;
+        // BL-HERMES013-RED-1A (5/13 借鉴 Hermes 0.13 ACP /queue): 当前 stream
+        // 完成后看 store.queue 有没排队消息. 有就 dequeue + 立即 send 下一条.
+        // 用户体验: 长任务跑完无缝接下一个问题, 不用手动按 send.
+        // 用 setTimeout 避免 React state 还没 flush 就 send (跟 cancelAndSend 同模式).
+        const queue = useChatStore.getState().queue;
+        if (queue.length > 0 && !ctrl.signal.aborted) {
+          setTimeout(() => {
+            const head = useChatStore.getState().dequeueMessage();
+            if (head) {
+              void send(head.text);
+            }
+          }, 200);
+        }
       }
     },
     [
@@ -763,6 +776,18 @@ export function useChat(initialModel: string) {
     [send],
   );
 
+  /** BL-HERMES013-RED-1A (5/13 借鉴 Hermes 0.13 ACP /queue): streaming 中
+   *  排队下一条. 不打断当前 stream, 等 [DONE] 后 useChat send finally 自动
+   *  dequeue + send. attachments 暂不支持 (in-memory 太大), 排队只能纯文字. */
+  const enqueue = useCallback(
+    (text: string) => {
+      const t = text.trim();
+      if (!t) return;
+      useChatStore.getState().enqueueMessage(t);
+    },
+    [],
+  );
+
   const reset = useCallback(() => {
     if (abortRef.current) abortRef.current.abort();
     if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
@@ -794,6 +819,7 @@ export function useChat(initialModel: string) {
     send,
     cancel,
     cancelAndSend,  // BL-COMPANION-UX1 (5/12): 一键停止+发新消息, 解锁死感
+    enqueue,        // BL-HERMES013-RED-1A (5/13): ACP /queue 等价, 排队下一条
     reset,
   };
 }

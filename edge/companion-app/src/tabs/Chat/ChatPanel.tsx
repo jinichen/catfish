@@ -15,6 +15,8 @@ interface Props {
   onCancel: () => void;
   /** BL-COMPANION-UX1 (5/12): streaming 中一键 abort + 发新消息 */
   onCancelAndSend: (text: string, attachments: Attachment[]) => void;
+  /** BL-HERMES013-RED-1A (5/13 ACP /queue): streaming 中排队下一条 */
+  onEnqueue: (text: string) => void;
   onReset: () => void;
 }
 
@@ -25,6 +27,7 @@ export default function ChatPanel({
   onSend,
   onCancel,
   onCancelAndSend,
+  onEnqueue,
   onReset,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -78,6 +81,7 @@ export default function ChatPanel({
         onSend={onSend}
         onCancel={onCancel}
         onCancelAndSend={onCancelAndSend}
+        onEnqueue={onEnqueue}
         onReset={onReset}
       />
     </div>

@@ -19,6 +19,7 @@ import { useUIStore } from "../../store/ui";  // BL-E13 主动闲聊 prefill
 import { useAgentStore } from "../../store/agent";  // BL-E11 后续: 员工自定义名
 import { useTeachingStore } from "../../store/teaching";  // BL-LEAN-SESSION (5/13)
 import { useAutoContinueStore } from "../../store/auto_continue";  // BL-AUTO-CONTINUE (5/13)
+import { useChatStore } from "../../store/chat";  // BL-HERMES013-RED-1A (5/13 ACP /queue)
 
 interface Props {
   isStreaming: boolean;
@@ -26,6 +27,9 @@ interface Props {
   onCancel: () => void;
   /** BL-COMPANION-UX1 (5/12 鸿波"锁死"修): streaming 中一键 abort + 发新消息 */
   onCancelAndSend: (text: string, attachments: Attachment[]) => void;
+  /** BL-HERMES013-RED-1A (5/13 借鉴 Hermes 0.13 ACP /queue): streaming 中
+   *  排队下一条, 等当前 [DONE] 自动 send. 跟 onCancelAndSend 互补 (一个停一个排队). */
+  onEnqueue: (text: string) => void;
   onReset: () => void;
 }
 
@@ -180,6 +184,7 @@ export default function ChatInput({
   onSend,
   onCancel,
   onCancelAndSend,
+  onEnqueue,
   onReset,
 }: Props) {
   // BL-E11 后续: placeholder 用员工自定义名 ("跟老李说话…")
@@ -319,6 +324,20 @@ export default function ChatInput({
     }
     setText("");
     setAttachments([]);
+    setAttachError(null);
+  }
+
+  /** BL-HERMES013-RED-1A (5/13): streaming 中"排队下一条". 不打断当前 stream,
+   *  排队消息暂不支持 attachments (in-memory 太大), 只能纯文字. */
+  function enqueueSubmit() {
+    const t = text.trim();
+    if (!t) return;
+    if (attachments.length > 0) {
+      setAttachError("排队消息暂不支持附件 (内存限制). 等当前任务跑完再发带附件的消息.");
+      return;
+    }
+    onEnqueue(t);
+    setText("");
     setAttachError(null);
   }
 
@@ -464,6 +483,10 @@ export default function ChatInput({
         </div>
       )}
 
+      {/* BL-HERMES013-RED-1A (5/13): queue 状态显示 — 排队中的消息列出 +
+          支持点 X 撤回. 当前 stream [DONE] 时 useChat 自动 dequeue + send */}
+      <QueuedMessagesStrip />
+
       {/* 5/5 文件解析进行中 (Excel / 大 PDF 几秒级, 之前 0 反馈员工以为坏了)
           BL-VOICE3 (5/10): 音频走 whisper, 几十秒级别, label 区分提示 */}
       {isParsingFile && (
@@ -594,28 +617,50 @@ export default function ChatInput({
           }}
           disabled={false /* 仍允许写下一个，发送按钮在 streaming 时变停止 */}
         />
-        {/* BL-COMPANION-UX1 (5/12 鸿波"锁死"修): 三态按钮.
+        {/* BL-COMPANION-UX1 (5/12) + BL-HERMES013-RED-1A (5/13 ACP /queue):
+            按钮组 4 态:
             - 非 streaming + 有内容       → "发送" (青)
-            - streaming + 有内容          → "⏹ 停下接着发" (青色一键 abort+发)
-            - streaming + 没内容          → "停止" (橙色, 单纯 abort) */}
+            - streaming + 有内容          → [⏳ 排队] [⏹ 停下接着发] 并列
+              用户选: 排队 = 不打断当前等完, 停下接着发 = 中断当前立即发
+            - streaming + 没内容          → "停止" (橙色, 单纯 abort)
+            Enter 默认 ⏹ 停下接着发 (跟 BL-COMPANION-UX1 一致), 排队要点专门按钮 */}
         {isStreaming && hasContent ? (
-          <button
-            onClick={submit}
-            title="停止当前流, 立刻发送新消息 (Enter 同效)"
-            style={{
-              padding: "var(--space-2) var(--space-3)",
-              border: "none",
-              borderRadius: "var(--radius-sm)",
-              background: "var(--catfish-cyan)",
-              color: "white",
-              fontSize: 13,
-              fontWeight: 500,
-              minWidth: 100,
-              cursor: "pointer",
-            }}
-          >
-            ⏹ 停下接着发
-          </button>
+          <div style={{ display: "flex", gap: "var(--space-1)" }}>
+            <button
+              onClick={enqueueSubmit}
+              title="排队等当前任务跑完, 自动发 (借鉴 Hermes 0.13 ACP /queue). 排队消息暂不支持附件."
+              style={{
+                padding: "var(--space-2) var(--space-3)",
+                border: "1px solid var(--catfish-cyan)",
+                borderRadius: "var(--radius-sm)",
+                background: "transparent",
+                color: "var(--catfish-cyan)",
+                fontSize: 13,
+                fontWeight: 500,
+                minWidth: 70,
+                cursor: "pointer",
+              }}
+            >
+              ⏳ 排队
+            </button>
+            <button
+              onClick={submit}
+              title="停止当前流, 立刻发送新消息 (Enter 同效)"
+              style={{
+                padding: "var(--space-2) var(--space-3)",
+                border: "none",
+                borderRadius: "var(--radius-sm)",
+                background: "var(--catfish-cyan)",
+                color: "white",
+                fontSize: 13,
+                fontWeight: 500,
+                minWidth: 100,
+                cursor: "pointer",
+              }}
+            >
+              ⏹ 停下接着发
+            </button>
+          </div>
         ) : isStreaming ? (
           <button
             onClick={onCancel}
@@ -881,6 +926,104 @@ function TeachingToggleButton({ isStreaming }: { isStreaming: boolean }) {
 //   - 自动续的 user msg 在 UI 显淡色 + 🔄 角标, 让员工看见
 // 关闭时 (默认):
 //   - LLM stop 就 stop, 用户自己打"继续" — 跟 ChatGPT 一样
+
+// ── BL-HERMES013-RED-1A (5/13 借鉴 Hermes 0.13 ACP /queue) ─────────
+//
+// 输框上方 strip — 显排队中的消息 (1+ 条时显示, 0 条时不渲染).
+// 每条显: ⏳ + 文本前 60 字 + X 撤回按钮.
+// 当前 stream [DONE] 触发 useChat send finally 自动 dequeue + send 第一条.
+
+function QueuedMessagesStrip() {
+  const queue = useChatStore((s) => s.queue);
+  const removeQueued = useChatStore((s) => s.removeQueuedMessage);
+  const clearQueue = useChatStore((s) => s.clearQueue);
+
+  if (queue.length === 0) return null;
+
+  return (
+    <div
+      style={{
+        marginBottom: "var(--space-2)",
+        padding: "var(--space-1) var(--space-2)",
+        background: "var(--catfish-cyan-dim)",
+        border: "1px dashed var(--catfish-cyan)",
+        borderRadius: "var(--radius-sm)",
+        fontSize: 11,
+        color: "var(--catfish-cyan)",
+      }}
+    >
+      <div style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        marginBottom: queue.length > 0 ? 4 : 0,
+      }}>
+        <span style={{ fontWeight: 600 }}>
+          ⏳ 排队 {queue.length} 条 (当前任务跑完自动发)
+        </span>
+        {queue.length > 1 && (
+          <button
+            onClick={clearQueue}
+            title="清空整个队列"
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "var(--catfish-cyan)",
+              cursor: "pointer",
+              fontSize: 11,
+              padding: "0 4px",
+            }}
+          >
+            清空
+          </button>
+        )}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+        {queue.map((q, i) => (
+          <div
+            key={q.id}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: 11,
+            }}
+          >
+            <span style={{ opacity: 0.6, minWidth: 14 }}>{i + 1}.</span>
+            <span
+              style={{
+                flex: 1,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                opacity: 0.85,
+              }}
+              title={q.text}
+            >
+              {q.text}
+            </span>
+            <button
+              onClick={() => removeQueued(q.id)}
+              title="撤回这一条排队"
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "var(--catfish-cyan)",
+                cursor: "pointer",
+                fontSize: 11,
+                padding: "0 4px",
+                opacity: 0.7,
+              }}
+            >
+              ×
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 
 function AutoContinueToggleButton({ isStreaming }: { isStreaming: boolean }) {
   const on = useAutoContinueStore((s) => s.on);

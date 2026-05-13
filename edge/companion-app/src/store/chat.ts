@@ -27,6 +27,11 @@ interface ChatState {
    *  prompt_tokens, 给状态栏 context counter 用 (xxK / 128K, 80% 黄, 95% 红).
    *  reset / 切 session 时清零, 每次 onDone 时更新. */
   lastPromptTokens: number | null;
+  /** BL-HERMES013-RED-1A (5/13 借鉴 Hermes 0.13 ACP /queue): streaming 中
+   *  用户排队的下一条消息. 当前 stream [DONE] → useChat 自动从 queue 取第一条
+   *  send. 跟 BL-COMPANION-UX1 ⏹ 停下接着发 互补 (一个停一个排队).
+   *  attachments 暂不支持 (内存) — 排队消息只能纯文字. */
+  queue: Array<{ id: string; text: string; ts: string }>;
 
   // ── actions ──
   setMessages: (msgs: ChatMessage[]) => void;
@@ -38,6 +43,11 @@ interface ChatState {
   setModel: (m: string) => void;
   setPersistedSessionId: (id: string | null) => void;
   setLastPromptTokens: (n: number | null) => void;
+  /** BL-HERMES013-RED-1A: queue 操作 */
+  enqueueMessage: (text: string) => void;
+  dequeueMessage: () => { id: string; text: string; ts: string } | undefined;
+  removeQueuedMessage: (id: string) => void;
+  clearQueue: () => void;
   /**
    * 把一个历史会话 (从 sessions_get 拿到的 SessionDetail) 灌进 store, 用于 resume。
    * - 把 DB 里的 SessionMessage[] 映射成 ChatMessage[]
@@ -108,6 +118,7 @@ export const useChatStore = create<ChatState>((set) => ({
   model: "catfish-private-main",
   persistedSessionId: null,
   lastPromptTokens: null,
+  queue: [],
 
   setMessages: (messages) => set({ messages }),
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
@@ -130,6 +141,31 @@ export const useChatStore = create<ChatState>((set) => ({
     set({ persistedSessionId }),
   setLastPromptTokens: (lastPromptTokens) =>
     set({ lastPromptTokens }),
+  enqueueMessage: (text) =>
+    set((s) => ({
+      queue: [
+        ...s.queue,
+        {
+          id: crypto.randomUUID
+            ? crypto.randomUUID()
+            : `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          text,
+          ts: new Date().toISOString(),
+        },
+      ],
+    })),
+  dequeueMessage: () => {
+    let head: { id: string; text: string; ts: string } | undefined;
+    set((s) => {
+      if (s.queue.length === 0) return s;
+      head = s.queue[0];
+      return { queue: s.queue.slice(1) };
+    });
+    return head;
+  },
+  removeQueuedMessage: (id) =>
+    set((s) => ({ queue: s.queue.filter((q) => q.id !== id) })),
+  clearQueue: () => set({ queue: [] }),
   loadSession: (detail) =>
     set({
       messages: detail.messages.map(dbMessageToChat),
@@ -145,5 +181,6 @@ export const useChatStore = create<ChatState>((set) => ({
       streamingId: null,
       persistedSessionId: null,
       lastPromptTokens: null,  // BL-CONTEXT-COUNTER: 切会话清零
+      queue: [],  // BL-HERMES013-RED-1A: 切会话清队列
     }),
 }));
