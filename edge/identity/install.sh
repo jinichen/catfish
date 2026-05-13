@@ -38,14 +38,18 @@ fi
 mkdir -p "$(dirname "$SOUL_DST")"
 
 # 备份现有 SOUL.md（仅当不是我们的软链时）
+# 5/13 重构: 不再 exit 0, 让客户特定 SOUL 也跑到 (老 install 在 SOUL.md 已是软链时
+# 直接 exit, 客户 SOUL 永远装不上). 改成"主 SOUL 已是最新就跳过软链, 但流程继续".
+SOUL_NEEDS_LINK=1
 if [ -L "$SOUL_DST" ]; then
     target="$(readlink "$SOUL_DST")"
     if [ "$target" = "$SOUL_SRC" ]; then
-        ok "已经是 catfish SOUL，无需重装"
-        exit 0
+        ok "$SOUL_DST 已是最新软链 (跳过)"
+        SOUL_NEEDS_LINK=0
+    else
+        # 是其他软链，删掉准备替换
+        rm "$SOUL_DST"
     fi
-    # 是其他软链，删掉准备替换
-    rm "$SOUL_DST"
 elif [ -f "$SOUL_DST" ]; then
     if [ ! -f "$BACKUP" ]; then
         cp "$SOUL_DST" "$BACKUP"
@@ -56,8 +60,10 @@ elif [ -f "$SOUL_DST" ]; then
     rm "$SOUL_DST"
 fi
 
-ln -s "$SOUL_SRC" "$SOUL_DST"
-ok "$SOUL_DST → $SOUL_SRC"
+if [ "$SOUL_NEEDS_LINK" = "1" ]; then
+    ln -s "$SOUL_SRC" "$SOUL_DST"
+    ok "$SOUL_DST → $SOUL_SRC"
+fi
 
 # 5/13: 同步装客户特定 SOUL (CATFISH_CUSTOMER=ffcs 装 SOUL_FFCS.md)
 if [ -f "$SOUL_CUSTOMER_SRC" ]; then
