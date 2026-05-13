@@ -32,36 +32,45 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 
 ---
 
-## 5/14 - 6 月 sprint plan (5/13 22:35 鸿波拍板修订, ACP /steer + Kanban 提前)
+## 5/14 - 6 月 sprint plan (5/13 真收尾 23:50 修订 — ACP /steer + Kanban scope 1 已提前 ship)
 
-> **背景**: 5/13 升 hermes 0.13 完成 + ACP /queue 等价 ship (BL-HERMES013-RED-1A). 鸿波当晚 4 次推翻我"图省事" 判断 (1 升级估时 / 2 i18n / 3 hermes 集成方案 / 4 ACP 砍掉) + 22:35 拍板 "ACP /steer + Kanban 提前到明天, BL-RBAC sprint 明天就启动".
+> **背景**: 5/13 一日 ship 6 件大事 — hermes 0.13 升级 + ACP /queue + ACP /steer + macOS Reminders + Multi-Agent Kanban scope 1 + BACKLOG 修订. 鸿波当晚 4 次推翻我"图省事" 判断 (升级估时 / i18n / hermes B 方案 / ACP 砍掉) + 1 次推 reality check 改方案 (Kanban scope 全功能 → scope 1 单员工本地). 副线 5/15-5/19 大幅腾出空间, 主线 RBAC sprint 可前推.
 >
-> **修订原则**: 一天最多 2 件中等并行, 不要超载. 后端 RBAC sprint (8 天主线) 跟前端 ACP /steer + Kanban (4-5 天独立) **可并行不互相阻塞**, 但每天分配要清晰.
+> **修订原则**: 一天最多 2 件中等并行, 不要超载. 后端 RBAC sprint (8 天主线) 不变, 副线 (前端/桌面端) 因 5/13 提前 ship 大量缩减, 部分 5/15-5/18 时间还给主线.
+
+### 5/13 真收尾 (23:50, 已 ship) — 4 commit
+
+| commit | 项 | 状态 |
+|---|---|---|
+| `4084bf9` | ACP /queue 等价 (RED-1A) + BACKLOG 5/14-6月 sprint plan | ✅ |
+| `a95c190` | macOS Reminders.app 集成 (BL-REMINDER) | ✅ |
+| `4d2795c` | ACP /steer 等价 (RED-1B) — 路径 A 断流+续接 | ✅ |
+| `dead4f7` | Multi-Agent Kanban scope 1 (RED-2 单员工本地) | ✅ |
 
 ### 5/14 (周四) — 升级尾巴 + 启动 3 件并行
 
 | 时段 | 项 | 工作量 |
 |---|---|---|
-| 上午 (4h) | BL-HERMES013-FIX-1: ui-tui rebuild (`npm install && npm run build`) — 状态栏 ⚕→🐟 | 5 分钟 (主要是 npm install 等待) |
+| 上午 (4h) | BL-HERMES013-FIX-1: ui-tui rebuild (`npm install && npm run build`) — 状态栏 ⚕→🐟 | 5 分钟 |
 | 上午 | 验证 Post-write delta lint (0 改动, 验 hermes 0.13 自带) | 5 分钟 |
-| 上午 | **8 项资质合并 → catfish_run_skill** (今天反复卡的痛点根治) | 3.5 小时 |
-| 下午 (4h) | **BL-RBAC P0 + hermes B sprint Day 1** — 启动: catfish-identity OAuth client credentials grant 设计 + 启动实现 | 4 小时 (设计 1h + 第一段代码 3h) |
-| 同时 (碎片) | ACP /steer 设计文档 (不写代码, 想清楚再做) | 1h 间隙时间 |
+| 上午 | **8 项资质合并 → catfish_run_skill** (5/13 反复卡的痛点根治) | 3.5 小时 |
+| 上午 (碎片) | ACP /steer + Kanban scope 1 真机验证: Companion build + 三按钮 / Reminders 权限 / Kanban 5 列加 fake data | 30 分钟 |
+| 下午 (4h) | **BL-RBAC P0 + hermes B sprint Day 1** — 启动: catfish-identity OAuth client credentials grant 设计 + 第一段代码 | 4 小时 (设计 1h + 代码 3h) |
 
-### 5/15-5/16 (周五 + 周六) — ACP /steer 实现 + RBAC sprint 前推
+### 5/15-5/16 (周五 + 周六) — RBAC sprint 全速 (副线腾空)
 
-| 日期 | 主线 (RBAC sprint, 后端) | 副线 (ACP /steer + Kanban, 前端/桌面端) |
+| 日期 | 主线 (RBAC sprint, 后端) | 副线 |
 |---|---|---|
-| 5/15 | RBAC Day 2: catfish-identity OAuth grant 实现完 + hermes-cli client 注册测试 | ACP /steer Day 1: gateway SSE 双向 channel 设计 + Companion UI 加 /steer 输入框 (前端打底) |
-| 5/16 | RBAC Day 3: `allowed_models` per-dept/user 数据模型 + DB schema | ACP /steer Day 2: gateway 接 Companion 推 in-flight prompt + 跟当前 stream 整合 |
+| 5/15 | RBAC Day 2: catfish-identity OAuth grant 实现完 + hermes-cli client 注册测试 + 单测 | (5/13 ACP /steer 已 ship, 副线放空给主线 — 多 4h) |
+| 5/16 | RBAC Day 3: `allowed_models` per-dept/user 数据模型 + DB schema + alembic migration | RED-2 scope 2 调研: hermes 0.13 真有 Multi-Agent Kanban API 吗? 看源码 + WebFetch |
 
-### 5/17-5/19 (周日 + 下周一二) — Kanban surface + RBAC 中段
+### 5/17-5/19 (周日 + 下周一二) — RBAC 中段 + Kanban scope 2 评估
 
 | 日期 | 主线 RBAC | 副线 |
 |---|---|---|
-| 5/17 | RBAC Day 4: `allowed_tools` per-dept (gateway sanitize_tools 接) | **Multi-Agent Kanban catfish-web Day 1**: 加 widget 调 `hermes kanban` API |
-| 5/18 | RBAC Day 5: `allowed_skills` per-dept (Skills Hub filter) | Kanban Day 2: dashboard surface + sortable + 端到端测试 |
-| 5/19 | RBAC Day 6: `allowed_channels/chats/rooms` (跟 hermes 0.13 命名对齐) + catfish-web `/admin/access` UI 启动 | ACP /steer 端到端测试 + bug fix |
+| 5/17 | RBAC Day 4: `allowed_tools` per-dept (gateway sanitize_tools 接) | **task_manager → SQLite 持久化设计** (Kanban scope 2 前置 — 跨员工跨设备需要这个) |
+| 5/18 | RBAC Day 5: `allowed_skills` per-dept (Skills Hub filter) | (空 / RBAC 主线超时 / 缓冲) |
+| 5/19 | RBAC Day 6: `allowed_channels/chats/rooms` (跟 hermes 0.13 命名对齐) + catfish-web `/admin/access` UI 启动 | (空) |
 
 ### 5/20-5/22 (周三-五) — RBAC 收尾
 

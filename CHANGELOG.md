@@ -4925,8 +4925,21 @@ UX 跟 ACP /queue / cancelAndSend 三按钮并排, streaming + hasContent 时显
 
 **Multi-Agent Kanban scope 2** (跟 hermes 0.13 自带 Kanban API 接, 把它当 tile 嵌入) 排 5/15-5/18 跟 RBAC sprint 并行, 先有 task_manager 中心 DB 持久化才能真做.
 
-### 最终统计 (含 #56 + #46, 5/13 真真收尾)
+### 鸿波本机验证 (5/13 23:50)
 
-- **56 个 task**: 51 completed + 5 pending (#47/#48/#50/#51 排后续 sprint, #46 含本段 scope 1 全 ship)
+鸿波 push + reload 后浏览器看 Kanban 红条 **"HTTP 404: Not Found"**. 我先怀疑是 vite proxy / 路由问题, 让鸿波 `curl http://localhost:8999/api/tasks/me` 直 hit gateway 验证. 返 **`{"detail":"missing Authorization header"}` (401)** — endpoint 注册成功, 只是缺 token. 真因: **catfish-gateway FastAPI 进程没重启**, 加新 endpoint 必须 kill + 拉起 (没用 `--reload`). 鸿波重启 gateway 后浏览器硬刷新, Kanban UI 5 列正常渲 4 个 (空) — 因为本地还没真任务, 这是正确状态. 给鸿波造了个 fake jsonl 数据 `~/.catfish/tasks.jsonl` 演示卡片渲染 (cyan 边 = background, 橙边 = a2a + failed).
+
+**收尾教训**: 加新 FastAPI endpoint 必须告诉用户重启 gateway 进程 — vite hot reload 只管前端, 后端 Python 进程不会自动 pick up. 应该在 dev workflow 文档里加一行"加新 @app.get/post 后必 pkill -f catfish_gateway 重启".
+
+### 最终统计 (含 #56 + #46 + 真机验证收尾, 5/13 真真真收尾 23:55)
+
+- **56 个 task**: 51 completed + 5 pending (#47/#48 ui-tui rebuild + model picker 排明天上午, #50 BL-RBAC + B sprint 排 5/14 下午启动, #51 i18n 排 5/23-5/26)
 - 后人 grep 入口加: `BL-HERMES013-RED-1B` (ACP /steer), **`BL-HERMES013-RED-2`** (Multi-Agent Kanban scope 1 — 单员工本地)
-- 5/13 一日净交付收尾: hermes 0.13 升级 + ACP /queue + ACP /steer + macOS Reminders + Multi-Agent Kanban scope 1 + BACKLOG sprint 修订 — 6 件大事一日 ship, 没靠加班"图省事", 全部含完整单测 + 文档 + 兜底
+- 4 commit (本地, 待 push):
+  - `4084bf9` ACP /queue + BACKLOG 5/14 sprint 修订
+  - `a95c190` BL-REMINDER macOS Reminders.app 集成
+  - `4d2795c` ACP /steer 等价 (路径 A 断流+续接)
+  - `dead4f7` Multi-Agent Kanban scope 1 (单员工本地)
+- 5/13 一日净交付: hermes 0.13 升级 (25 min, 不是估的 10-15 天) + ACP /queue + ACP /steer + macOS Reminders + Multi-Agent Kanban scope 1 + BACKLOG sprint 修订 + 真机验证 — **6 件大事一日 ship**, 全部含完整单测 + 文档 + 兜底, 没"图省事" patch
+- 测试统计: gateway **923 passed** (+15 tasks_browse, 0 回归), tool-bridge `test_task_manager` **33 passed** (+7 jsonl), Companion `steer.test` **19 passed** + `queue.test` 20 + `auto_continue.test` 12, TypeScript tsc --noEmit exit=0
+- **5/14 真机要做**: `git push` 推 4 commit + Companion build 看 [🎯 改主意] 三按钮 / Reminders 权限 / Kanban 5 列, 然后 BL-RBAC P0 + B sprint Day 1 启动
