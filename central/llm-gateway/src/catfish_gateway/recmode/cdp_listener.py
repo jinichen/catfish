@@ -93,6 +93,60 @@ class RecordingState:
     _bg_tasks: list[asyncio.Task] = field(default_factory=list)
 
 
+# ─── CDP 端点 discovery (5/15 1:50 修) ────────────────────
+
+
+async def _resolve_page_ws_url(chrome_ws: str) -> tuple[str, str]:
+    """从 chrome_ws (ws://host:port) 推 HTTP 端点 → 拿活跃 page 的完整 ws URL.
+
+    Chrome 在 --remote-debugging-port 暴露 HTTP:
+      GET /json/version  → 全局 webSocketDebuggerUrl (browser-level, 不能 enable Page)
+      GET /json          → tabs 列表, 每个 tab 含 webSocketDebuggerUrl (page-level)
+
+    RecMode 要监听 page 操作 (clicks / nav / DOM), 必须 page-level. 选第一个
+    type='page' 的 tab. 没 page → 友好错: 让用户先在 Chrome 里打开网页.
+
+    返 (page_ws_url, page_title) — title 给 log 用.
+    """
+    import httpx
+    http_url = chrome_ws.replace("ws://", "http://").replace("wss://", "https://").rstrip("/")
+    list_url = f"{http_url}/json"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(list_url)
+            resp.raise_for_status()
+            tabs = resp.json()
+    except Exception as e:
+        raise RuntimeError(
+            f"拉 Chrome tabs 列表失败 ({list_url}): {e}. "
+            f"Catfish Chrome 没起 / 端口不对? 跑 'curl {list_url}' 验一下."
+        ) from e
+
+    if not isinstance(tabs, list):
+        raise RuntimeError(
+            f"Chrome {list_url} 返回不是 list: {type(tabs).__name__}. "
+            f"端口可能被别的 process 占了 (不是 Chrome)."
+        )
+
+    page_tabs = [t for t in tabs if isinstance(t, dict) and t.get("type") == "page"]
+    if not page_tabs:
+        # 列出来给 debug
+        types = [t.get("type", "?") for t in tabs if isinstance(t, dict)]
+        raise RuntimeError(
+            f"Catfish Chrome 没打开任何网页 (tabs types: {types}). "
+            f"先在 Chrome 里打开一个网页 (任意 URL) 再录."
+        )
+
+    target = page_tabs[0]
+    ws_url = target.get("webSocketDebuggerUrl")
+    if not ws_url:
+        raise RuntimeError(
+            f"Chrome page 没 webSocketDebuggerUrl 字段: {target}. "
+            f"Chrome 版本太老? 升 Chrome 后重试."
+        )
+    return ws_url, target.get("title", "(no title)")
+
+
 # ─── CDP 协议低层 ──────────────────────────────────────────
 
 
@@ -345,13 +399,20 @@ class CDPRecordingSession:
                     "websockets 包未装. pip install websockets. "
                     "或 test 路径传 connect_ws=False."
                 )
+            # 5/15 1:50 鸿波报 'HTTP 404 server rejected WebSocket connection' 后修:
+            # CDP 不能直连 ws://localhost:9222 (那是 HTTP 端点不是 ws). 正确路径:
+            #   1. GET http://localhost:9222/json → 拿 tabs 列表
+            #   2. 选 type=page 的第一个 → 拿完整 webSocketDebuggerUrl
+            #   3. connect 那个完整 URL
+            page_ws_url, page_title = await _resolve_page_ws_url(chrome_ws)
             try:
-                state._ws = await websockets.connect(chrome_ws, max_size=20 * 1024 * 1024)  # 20MB 截图
+                state._ws = await websockets.connect(page_ws_url, max_size=20 * 1024 * 1024)
             except Exception as e:
                 raise RuntimeError(
-                    f"连 Catfish Chrome CDP 失败 ({chrome_ws}): {e}. "
-                    f"看 Catfish Chrome 是不是用 --remote-debugging-port=9222 启动了."
+                    f"连 Catfish Chrome page CDP 失败 ({page_ws_url}): {e}. "
+                    f"Chrome 还在跑吗?"
                 ) from e
+            logger.info("RecMode CDP 连上 page '%s' (%s)", page_title, page_ws_url)
             # 起 event loop (recv ws + dispatch handlers)
             state._bg_tasks.append(asyncio.create_task(_event_loop(state)))
             # 启用 CDP domain

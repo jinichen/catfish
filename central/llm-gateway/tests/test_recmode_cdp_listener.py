@@ -113,6 +113,72 @@ async def test_stop_unknown_session_rejected(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_resolve_page_ws_url_picks_first_page(monkeypatch):
+    """5/15 1:50 修: _resolve_page_ws_url 拉 /json 选 type=page tab 的 webSocketDebuggerUrl"""
+    import httpx
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+        def json(self):
+            return [
+                {"type": "background_page", "title": "ext"},
+                {"type": "page", "title": "EIS", "webSocketDebuggerUrl": "ws://localhost:9222/devtools/page/ABCD"},
+                {"type": "page", "title": "another", "webSocketDebuggerUrl": "ws://localhost:9222/devtools/page/EFGH"},
+            ]
+
+    class FakeClient:
+        def __init__(self, *a, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        async def get(self, url):
+            return FakeResp()
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+    url, title = await cdp_listener._resolve_page_ws_url("ws://localhost:9222")
+    assert url == "ws://localhost:9222/devtools/page/ABCD"
+    assert title == "EIS"
+
+
+@pytest.mark.asyncio
+async def test_resolve_page_ws_url_no_pages_friendly_error(monkeypatch):
+    """5/15: Chrome 没打开任何网页 → 友好错"""
+    import httpx
+
+    class FakeResp:
+        def raise_for_status(self): pass
+        def json(self):
+            return [{"type": "service_worker"}, {"type": "background_page"}]
+
+    class FakeClient:
+        def __init__(self, *a, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        async def get(self, url): return FakeResp()
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+    with pytest.raises(RuntimeError, match="先在 Chrome 里打开一个网页"):
+        await cdp_listener._resolve_page_ws_url("ws://localhost:9222")
+
+
+@pytest.mark.asyncio
+async def test_resolve_page_ws_url_chrome_unreachable(monkeypatch):
+    """5/15: Chrome 没起 → 友好错带 curl 提示"""
+    import httpx
+
+    class FakeClient:
+        def __init__(self, *a, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        async def get(self, url):
+            raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+    with pytest.raises(RuntimeError, match="Catfish Chrome 没起"):
+        await cdp_listener._resolve_page_ws_url("ws://localhost:9222")
+
+
+@pytest.mark.asyncio
 async def test_long_pause_detector_fires(tmp_path, monkeypatch):
     """直接调 _long_pause_detector 看会不会写 long_pause event (压时间).
 
