@@ -583,6 +583,76 @@ async def api_sessions_detail(
 # 跟 hermes 0.13 自带 Multi-Agent Kanban API 不冲突 — 5/15-5/18 接 hermes Kanban
 # 的话当一个 tile 嵌进来 (scope 2 补).
 
+# ── /api/learn/* — BL-LEARN-RECMODE 录屏+语音教学引擎 (5/14 v0 骨架) ──
+#
+# 设计文档: docs/LEARN-RECMODE-DESIGN.md
+# 流程: Companion 点 🎙 RecMode → POST /start → 用户操作 Catfish Chrome (CDP
+# listener 后台抓 events + 截图) → 用户点 ✅ 完成 → POST /stop → 后端综合
+# (events + 语音 + 截图 → catfish-private-main) → SKILL.md + main.py 落档.
+#
+# v0 骨架: start/stop/list 通, 真 CDP 连接 + 综合 aggregator 等 5/26 sprint
+# 真做时填. v0 已能让 Companion 端走通 UI 状态机.
+
+
+@app.post("/api/learn/start_recording")
+async def api_learn_start_recording(
+    body: dict,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """开 RecMode session — 连 Catfish Chrome CDP + 起后台 listener.
+
+    Body: {"session_id": str, "chrome_ws": str (可选, 默认 ws://localhost:9222)}
+
+    Returns: {session_id, started_at, output_dir}
+    """
+    from .recmode import cdp_listener  # noqa: PLC0415
+    session_id = (body.get("session_id") or "").strip()
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id 不能空")
+    chrome_ws = (body.get("chrome_ws") or "ws://localhost:9222").strip()
+    try:
+        info = await cdp_listener.start_recording(session_id, chrome_ws=chrome_ws)
+        info["viewer"] = user.sub
+        return info
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+
+
+@app.post("/api/learn/stop_recording")
+async def api_learn_stop_recording(
+    body: dict,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """停 RecMode session — flush events.jsonl + meta.json.
+
+    Body: {"session_id": str}
+
+    Returns: meta dict (events_count, keyframes_count, duration_s, output_dir)
+    """
+    from .recmode import cdp_listener  # noqa: PLC0415
+    session_id = (body.get("session_id") or "").strip()
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id 不能空")
+    try:
+        summary = await cdp_listener.stop_recording(session_id)
+        summary["viewer"] = user.sub
+        return summary
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@app.get("/api/learn/active")
+async def api_learn_active(
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """列当前在录的 RecMode session (调试 / 监控用)."""
+    from .recmode import cdp_listener  # noqa: PLC0415
+    return {
+        "active_session_ids": cdp_listener.list_active(),
+        "viewer": user.sub,
+    }
+
+
 @app.get("/api/tasks/me")
 async def api_tasks_list(
     user: User = Depends(get_current_user),

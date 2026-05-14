@@ -4964,6 +4964,61 @@ SOUL.md §606 三选一铁律 加默认值段:
 
 **验**: iPhone 打开 Calendar.app → 点 5/18 ISO 审核 Day1 → 看 "通知" 行有没东西. 有 → iPhone 到时间会响; 没 → 当前那个事件不响 (按上面修法之一处理).
 
+### 5/14 20:30-22:00 BL-LEARN-RECMODE v0 框架 ship (任务 #59 推进)
+
+鸿波 5/14 20:00 拍板 "把录屏训练的先完成", V1 mock 验证跳过 (Qwen3.5 中文识别 5/8 已实测准确).
+2h 推 RecMode 框架 3 块 + 25 单测.
+
+**ship 内容** (5/14 v0 骨架, 真 CDP 连接 + LLM 调用 5/26 sprint 真做):
+
+#### 1. CDP listener (`recmode/cdp_listener.py` ~280 行)
+- 走 ws://localhost:9222 监听 Catfish Chrome events (Page.frameNavigated /
+  DOM.documentUpdated / JS dialog / Network.responseReceived) — 不要 Chrome 扩展
+- keyframe 抽取: URL 切换 / DOM 大变化 / 长停顿 ≥3s 自动截图
+- 输出落 `~/.catfish/recordings/<session_id>/` (events.jsonl + screenshots/ + meta.json)
+- 30 min 安全上限 watchdog, 防忘点停录
+- v0: ws 真连接 + 截图捕获占位 (没装 websockets 包), 5/26 真做时填 (~50 行)
+- 6 单测 (start/stop roundtrip / events.jsonl + meta.json 落档 / module-level helper / dup start 拒 / unknown stop 拒 / long_pause 逻辑)
+
+#### 2. gateway endpoints (`/api/learn/start_recording /stop_recording /active`)
+- 走现有鉴权 (`get_current_user` Depends), 跟 sessions / tasks endpoint 同模式
+- POST start: 409 重复 / 400 缺 session_id; POST stop: 404 不存在; GET active 监控
+- 5 endpoint 测 (dependency_overrides 模式)
+
+#### 3. aggregator (`recmode/aggregator.py` ~330 行) — RecMode 核心引擎
+- `load_recording_inputs(session_dir)`: 读 events.jsonl + transcripts.jsonl + screenshots/
+- `build_messages(inputs)`: 构造 OpenAI multipart messages (system: SYSTEM_PROMPT + user: events 表 + 语音表 + N 张截图 base64)
+- `SYSTEM_PROMPT`: 严格 JSON schema (skill_name / namespace / steps / selector_hint / execute_code_segment / confidence / questions_for_user) + 6 条纪律 (selector 不硬编码 / execute_code 提取 / params 通用化 / 等)
+- `parse_llm_output(raw)`: 兼容 markdown 围栏 + 纯 JSON 两种格式, 抽 SkillOutput dataclass
+- `render_skill_md(skill, recording_meta)`: 输出人话 SKILL.md
+- `render_main_py(skill)`: 输出 Python skill main.py 骨架 (含 step 函数 + execute_code_segment)
+- `write_skill_files(skill)`: 落 SKILL.md + main.py + recmode_meta.json 到 `~/.catfish/skills/<namespace>/<name>/`
+- `aggregate_session(session_dir)`: 端到端入口 (read → llm → parse → write)
+- v0: `call_llm()` 抛 NotImplementedError, 5/26 真做时接 httpx POST /v1/chat/completions catfish-gateway (走自己 gateway 复用 RBAC + quota + fallback cap)
+- 13 单测 (load empty/full/坏行 / build_messages 结构 / parse 围栏+无围栏+找不到+坏 JSON / render md+meta / render main.py / write 全文件 / aggregate_session 端到端占位)
+
+**前置假设 (5/14 鸿波拍板)**: catfish-private-main (Qwen3.5 122B MoE A10B) `supports_vision: true`,
+5/8 鸿波亲测 EIS 截图识别准确, V1 验证跳过, 直接走主路径.
+
+**今晚 RecMode 进度对照设计文档 §9 sprint plan**:
+- ✅ Day 1 后端 CDP listener (骨架), 5/26 真接 ws + 截图
+- ✅ Day 2 gateway endpoints
+- ✅ Day 3 aggregator + prompt 模板 + skill 落档 (`call_llm` 占位)
+- ⏸ Companion RecMode UI (Tauri 端) — 5/26 真做
+- ⏸ 端到端联调 — 5/26 真做
+
+**测试**: gateway 943 → **961 passed** (+18 RecMode 相关 + +5 endpoint = +23, 见 5/14 18:00 段也 +14 fallback cap, 总今天净 +37 单测), 0 回归.
+
+**今晚 5/14 ship 总结** (含上一段 audit + fallback cap):
+
+| 时段 | 项 | 测试 |
+|---|---|---|
+| 18:30-19:30 | BL-FALLBACK-PROMPT-CAP ship (任务 #60) | +14 |
+| 19:30-20:00 | audit interrupted_resumed (任务 #61) + SOUL inject 量化 | 0 (audit 工具) |
+| 20:00-20:30 | 加 BL-MULTITURN-WINDOW (#62 排 sprint) | 0 |
+| 20:30-22:00 | RecMode v0 框架 (CDP listener + endpoints + aggregator) | +24 |
+| **共** | **3 ship + 2 audit + 1 BL 排期, 0 回归** | **+38** |
+
 ### 5/14 18:30-20:00 token 用量 audit + BL-FALLBACK-PROMPT-CAP ship + 2 个 BL 加 BACKLOG
 
 鸿波 5/14 下午醒来问 "每天 TOKEN 用量非常大, 是不是计费有问题". 1.5h audit 三段, 修一个真根因, 加两个 BL.
