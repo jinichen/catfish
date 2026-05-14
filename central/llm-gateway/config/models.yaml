@@ -165,8 +165,10 @@ models:
     # 5/4 BL-F14 加: qwen-flash 自己也得有 chain.
     # 之前没配, picker 选 qwen-flash 时撞错就死. 现在: qwen 挂 → deepseek → gemini.
     # 内部用例 (summarizer/proactive) 走 picker 时, 内网不可达就选这条, 必须再有兜底.
+    # BL-FALLBACK-500 (5/14 凌晨): 公网链加 500 — 鸿波撞 deepseek 500 没自动切, 排查
+    # 发现 trigger 历史漏 500. 公网到公网切没保密问题, 内网链不加 500 (防泄密).
     fallback:
-      on_errors: [429, 502, 503, 504, "timeout", "connection error", "connection refused", "rate limit", "free tier", "upstream error"]
+      on_errors: [429, 500, 502, 503, 504, "timeout", "connection error", "connection refused", "rate limit", "free tier", "upstream error"]
       chain: [catfish-public-deepseek-flash, catfish-public-gemini-flash]
       max_hops: 2
 
@@ -217,7 +219,8 @@ models:
     # 5/4 BL-F14 加: deepseek 自己也得有 chain.
     # picker 用 env override 强制选 deepseek 时, 撞错有兜底 (qwen-flash → gemini-flash).
     fallback:
-      on_errors: [429, 502, 503, 504, "timeout", "connection error", "connection refused", "rate limit", "free tier", "upstream error"]
+      # BL-FALLBACK-500 (5/14 凌晨): 公网链加 500 — 见 qwen-flash 同段注释.
+      on_errors: [429, 500, 502, 503, 504, "timeout", "connection error", "connection refused", "rate limit", "free tier", "upstream error"]
       chain: [catfish-public-qwen-flash, catfish-public-gemini-flash]
       max_hops: 2
 
@@ -248,8 +251,9 @@ models:
 
     # 撞 429 / 503 / timeout 时自动落回 Qwen3.6-Flash
     # (Qwen 没配 key 时自动跳过, 直接返回错误给客户端)
+    # BL-FALLBACK-500 (5/14 凌晨): 公网链加 500 — 见 qwen-flash 同段注释.
     fallback:
-      on_errors: [429, 502, 503, 504, "timeout", "connection error", "connection refused", "rate limit", "free tier", "upstream error"]
+      on_errors: [429, 500, 502, 503, 504, "timeout", "connection error", "connection refused", "rate limit", "free tier", "upstream error"]
       chain: [catfish-public-qwen-flash, catfish-private-main]
       max_hops: 2
 
@@ -273,8 +277,9 @@ models:
     supports_streaming: true
     supports_vision: true
     # Gemini Flash 是免费层, 配额最容易耗尽, 必须有 fallback
+    # BL-FALLBACK-500 (5/14 凌晨): 公网链加 500 — 见 qwen-flash 同段注释.
     fallback:
-      on_errors: [429, 502, 503, 504, "timeout", "connection error", "connection refused", "rate limit", "free tier", "upstream error"]
+      on_errors: [429, 500, 502, 503, 504, "timeout", "connection error", "connection refused", "rate limit", "free tier", "upstream error"]
       chain: [catfish-public-qwen-flash, catfish-private-main]
       max_hops: 2
     recommended_for: [fast, cheap, general, bulk]
