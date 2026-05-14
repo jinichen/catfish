@@ -63,6 +63,7 @@ _ENV_FILE_LOADED = _load_dotenv()
 
 from .clients import ClientRegistry
 from .jwt_signer import JwtSigner
+from .refresh_tokens import RefreshTokenStore
 from .routes import _CodeStore, make_router
 from .users import UserRegistry
 
@@ -96,6 +97,10 @@ def create_app() -> FastAPI:
     # ClientRegistry 加载 clients.yaml (没文件 → 空注册表, /token client_credentials
     # 返 503 cleanly degrade). 见 docs/RBAC-DESIGN.md §10/§12.
     client_registry = ClientRegistry()
+    # BL-IDENTITY-REFRESH-TOKEN (5/15 凌晨): refresh_token grant 让 access_token 过期
+    # 后无感续 (catfish login CLI / hermes-cli 用). sqlite 单文件存. 见
+    # refresh_tokens.py 模块顶部 doc.
+    refresh_token_store = RefreshTokenStore()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -161,6 +166,7 @@ def create_app() -> FastAPI:
             registry=registry,
             code_store=code_store,
             client_registry=client_registry,
+            refresh_token_store=refresh_token_store,
         )
     )
     if len(client_registry) > 0:

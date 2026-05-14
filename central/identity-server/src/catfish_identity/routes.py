@@ -38,6 +38,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from .clients import ClientRegistry
 from .jwt_signer import JwtSigner
+from .refresh_tokens import RefreshTokenStore
 from .users import IdentityUser, UserRegistry
 
 logger = logging.getLogger("catfish.identity.routes")
@@ -107,6 +108,7 @@ def make_router(
     registry: UserRegistry,
     code_store: _CodeStore,
     client_registry: ClientRegistry | None = None,
+    refresh_token_store: RefreshTokenStore | None = None,
 ) -> APIRouter:
     """构造 fastapi router. issuer 是 base URL (例 http://127.0.0.1:8998).
 
@@ -115,6 +117,10 @@ def make_router(
 
     BL-RBAC P0 + B sprint Day 1 (5/14): client_registry 可选, 为 None 时
     /token client_credentials grant 直接返 503 unsupported (cleanly degrade).
+
+    BL-IDENTITY-REFRESH-TOKEN (5/15): refresh_token_store 可选. 为 None 时
+    refresh_token grant 返 503 + authorization_code response 也不返 refresh_token
+    (老客户端兼容, 1h 后重 catfish login).
     """
     router = APIRouter()
 
@@ -266,6 +272,8 @@ def make_router(
         client_secret: str = Form(""),
         # client_credentials grant 字段 (服务调用用)
         scope: str = Form(""),
+        # refresh_token grant 字段 (BL-IDENTITY-REFRESH 5/15)
+        refresh_token: str = Form(""),
     ) -> JSONResponse:
         """OAuth 2.0 /token endpoint. 双 grant_type:
 
@@ -292,6 +300,7 @@ def make_router(
                 code_store=code_store,
                 signer=signer,
                 issuer=issuer,
+                refresh_token_store=refresh_token_store,
             )
         elif grant_type == "client_credentials":
             return _handle_client_credentials(
@@ -299,6 +308,16 @@ def make_router(
                 client_secret=client_secret,
                 scope=scope,
                 client_registry=client_registry,
+                signer=signer,
+                issuer=issuer,
+            )
+        elif grant_type == "refresh_token":
+            return _handle_refresh_token(
+                refresh_token_str=refresh_token,
+                client_id=client_id,
+                requested_scope=scope,
+                refresh_token_store=refresh_token_store,
+                registry=registry,
                 signer=signer,
                 issuer=issuer,
             )
@@ -310,7 +329,7 @@ def make_router(
                     "error": "unsupported_grant_type",
                     "error_description": (
                         f"grant_type={grant_type!r} 不支持. "
-                        f"支持: authorization_code, client_credentials"
+                        f"支持: authorization_code, client_credentials, refresh_token"
                     ),
                 },
             )
@@ -367,6 +386,7 @@ def _handle_authorization_code(
     code_store: _CodeStore,
     signer: JwtSigner,
     issuer: str,
+    refresh_token_store: RefreshTokenStore | None = None,
 ) -> JSONResponse:
     """authorization_code grant — 用户走 SSO 后浏览器换 id_token + access_token.
 
@@ -416,7 +436,7 @@ def _handle_authorization_code(
             },
         )
 
-    # 组装 ID Token (含 user claims)
+    # 组装 ID Token (含 user claims, audience=client_id 表示这 token 给 client 看)
     id_claims = record.user.to_oidc_claims()
     if record.nonce:
         id_claims["nonce"] = record.nonce
@@ -427,24 +447,196 @@ def _handle_authorization_code(
         claims=id_claims,
         ttl_seconds=_TOKEN_TTL_SECS,
     )
-    # access_token 也用 JWT (简化, Phase 2 改 opaque)
+    # access_token 也用 JWT (RFC 9068 JWT Profile for OAuth 2.0 Access Tokens).
+    # BL-LEAN-CHAT + BL-IDENTITY-REFRESH (5/15 凌晨): access_token 也带完整 user
+    # claims (email/name/department/role/managed_departments) — 这样 gateway 拿
+    # access_token 当 Bearer 时能直接还原用户身份, 不用再回查 /userinfo.
+    #
+    # **修正 5/14 之前的错配**: 老版本 access_token 只有 {scope, token_use=access},
+    # gateway 的 oidc.py 看 token_use=access 直接拒 (line 159-162). 导致 catfish
+    # login 拿的 access_token 用作 Bearer 时 401 invalid token. 现在 access_token
+    # 含完整 claims, gateway 接受逻辑也跟着改 (RBAC Day 2 那边).
+    #
+    # access_token 跟 id_token 区别:
+    #   - id_token: aud=client_id (告诉 client "用户是谁")
+    #   - access_token: aud=catfish-gateway (调用 protected resource server)
+    access_token_claims = dict(id_claims)
+    access_token_claims["scope"] = record.scope
+    access_token_claims["token_use"] = "access"
     access_token = signer.sign_id_token(
         issuer=issuer,
         subject=record.user.email,
-        audience=client_id,
-        claims={"scope": record.scope, "token_use": "access"},
+        audience=_SERVICE_TOKEN_AUDIENCE,  # catfish-gateway, 跟 service token 一致
+        claims=access_token_claims,
         ttl_seconds=_TOKEN_TTL_SECS,
     )
-    logger.info("token OK (auth_code): user=%s client=%s", record.user.email, client_id)
-    return JSONResponse(
-        {
-            "access_token": access_token,
-            "id_token": id_token,
-            "token_type": "Bearer",
-            "expires_in": _TOKEN_TTL_SECS,
-            "scope": record.scope,
-        }
+    # BL-IDENTITY-REFRESH-TOKEN (5/15): 如果配了 refresh_token_store, 同时签 refresh_token.
+    # 客户端 (catfish login CLI / hermes) 拿 refresh_token 在 access 过期时无感续.
+    response_body: dict = {
+        "access_token": access_token,
+        "id_token": id_token,
+        "token_type": "Bearer",
+        "expires_in": _TOKEN_TTL_SECS,
+        "scope": record.scope,
+    }
+    if refresh_token_store is not None:
+        rt = refresh_token_store.issue(
+            sub=record.user.email,
+            client_id=client_id,
+            scope=record.scope,
+        )
+        response_body["refresh_token"] = rt.token
+        response_body["refresh_expires_in"] = int(rt.expires_at - time.time())
+    logger.info(
+        "token OK (auth_code): user=%s client=%s refresh=%s",
+        record.user.email, client_id,
+        "yes" if refresh_token_store is not None else "no",
     )
+    return JSONResponse(response_body)
+
+
+def _handle_refresh_token(
+    *,
+    refresh_token_str: str,
+    client_id: str,
+    requested_scope: str,
+    refresh_token_store: RefreshTokenStore | None,
+    registry: UserRegistry,
+    signer: JwtSigner,
+    issuer: str,
+) -> JSONResponse:
+    """refresh_token grant — 拿 refresh_token 换新 access_token + 新 refresh_token.
+
+    OAuth 2.0 RFC 6749 §6. Rotation 模式 (一次性使用):
+      1. 验旧 refresh_token (exists / not revoked / not expired)
+      2. 验 client_id 跟旧 token 一致
+      3. 标旧 token revoked (一次性)
+      4. 签新 access_token + 新 refresh_token (chain 到旧 token via parent_token)
+      5. 返新对
+
+    requested_scope 可空 (= 复用旧 scope) 或 = 旧 scope 子集. 不允许扩.
+    """
+    if refresh_token_store is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "unsupported_grant_type",
+                "error_description": "refresh_token grant 未启用 (catfish-identity 未配 refresh_token_store)",
+            },
+        )
+
+    if not refresh_token_str:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_request",
+                "error_description": "refresh_token is required for refresh_token grant",
+            },
+        )
+
+    record = refresh_token_store.find(refresh_token_str)
+    if record is None:
+        logger.warning("refresh_token grant 失败: token 不存在 (client=%s)", client_id)
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_grant", "error_description": "refresh_token 无效"},
+        )
+    if record.is_revoked():
+        # 一次性使用 — 拿过的 token 再来 = 可能被回放. 触发 chain 全 revoke (Phase 2).
+        logger.warning(
+            "refresh_token grant 失败: token 已 revoked (sub=%s client=%s, 可能被回放)",
+            record.sub, record.client_id,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_grant", "error_description": "refresh_token 已用过 / 已吊销"},
+        )
+    if record.is_expired():
+        logger.info("refresh_token grant 失败: token 过期 (sub=%s)", record.sub)
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_grant", "error_description": "refresh_token 已过期, 重新登录"},
+        )
+    if record.client_id != client_id:
+        logger.warning(
+            "refresh_token grant 失败: client_id 不匹配 (token client=%s vs request client=%s)",
+            record.client_id, client_id,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_grant", "error_description": "client_id 不匹配 refresh_token"},
+        )
+
+    # scope 不许扩, 默认复用旧 scope
+    final_scope = record.scope
+    if requested_scope:
+        requested = set(requested_scope.split())
+        original = set(record.scope.split())
+        if not requested.issubset(original):
+            extra = requested - original
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "invalid_scope",
+                    "error_description": f"refresh 不允许扩 scope, 越权: {', '.join(sorted(extra))}",
+                },
+            )
+        final_scope = " ".join(sorted(requested))
+
+    # 找 user — refresh 跟原 sub 关联. user 可能被 admin 锁了/删了, 检查.
+    user = registry.find(record.sub)
+    if user is None:
+        # 原 user 没了 — 拒绝 refresh. revoke 这条防再用.
+        refresh_token_store.revoke(record.token)
+        logger.warning("refresh: sub=%s 已 不在 registry, 拒 + revoke", record.sub)
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_grant", "error_description": "user 不存在或已删除"},
+        )
+    if user.locked or user.deleted_at:
+        refresh_token_store.revoke(record.token)
+        logger.warning("refresh: sub=%s locked/deleted, 拒 + revoke", record.sub)
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_grant", "error_description": "user 已锁定或删除"},
+        )
+
+    # 标旧 token revoked (一次性使用)
+    refresh_token_store.revoke(record.token)
+
+    # 签新 access_token (跟 authorization_code 流程同模式 — 含 user claims, RFC 9068)
+    user_claims = user.to_oidc_claims()
+    access_token_claims = dict(user_claims)
+    access_token_claims["scope"] = final_scope
+    access_token_claims["token_use"] = "access"
+    access_token = signer.sign_id_token(
+        issuer=issuer,
+        subject=user.email,
+        audience=_SERVICE_TOKEN_AUDIENCE,
+        claims=access_token_claims,
+        ttl_seconds=_TOKEN_TTL_SECS,
+    )
+
+    # 签新 refresh_token (chain to 旧)
+    new_rt = refresh_token_store.issue(
+        sub=user.email,
+        client_id=client_id,
+        scope=final_scope,
+        parent_token=record.token,
+    )
+
+    logger.info(
+        "token OK (refresh): user=%s client=%s scope=%s",
+        user.email, client_id, final_scope,
+    )
+    return JSONResponse({
+        "access_token": access_token,
+        "refresh_token": new_rt.token,
+        "refresh_expires_in": int(new_rt.expires_at - time.time()),
+        "token_type": "Bearer",
+        "expires_in": _TOKEN_TTL_SECS,
+        "scope": final_scope,
+    })
 
 
 def _handle_client_credentials(

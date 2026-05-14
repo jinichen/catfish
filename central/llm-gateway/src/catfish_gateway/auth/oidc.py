@@ -153,16 +153,21 @@ class OIDCProvider(AuthProvider):
             logger.warning("OIDC token 通过验签但缺 sub claim, 拒绝")
             return None
 
-        # token_use=access 不该被当 ID token 用. 决策 5 + 安全考量.
-        # catfish-identity 给 access_token 加了 token_use='access' claim,
-        # 我们只接受没这个 claim 的 (id_token) 或 token_use='id'.
+        # BL-RBAC Day 2 + BL-IDENTITY-REFRESH (5/15): 三种 token_use 分流.
+        # catfish-identity 5/14 起 access_token 也含完整 user claims (RFC 9068).
+        #
+        #   token_use 缺省 / "id"   → id_token (老 OIDC 客户端)
+        #   token_use=access        → access_token (用户身份, sub=email) ← catfish login 用
+        #   token_use=service       → service token (服务身份, sub=client:<id>) ← hermes-cli/cron 用
+        #   token_use=其他          → 拒 (防奇怪 use claim)
         token_use = payload.get("token_use")
-        if token_use == "access":
-            logger.debug("拒绝 access_token 当 id_token 用 (sub=%s)", sub)
+        if token_use not in (None, "id", "access", "service"):
+            logger.debug("拒绝未知 token_use=%r (sub=%s)", token_use, sub)
             return None
 
         # 五一 sprint 5/2 RBAC: 从 OIDC claims 读 role + managed_departments.
         # catfish-identity IdentityUser.to_oidc_claims 已透传 (5/2 改).
+        # service token 5/14 起也透传 (clients.py to_token_claims 含 role=service).
         managed_raw = payload.get("managed_departments", [])
         if isinstance(managed_raw, str):
             managed_list = [d.strip() for d in managed_raw.split(",") if d.strip()]
@@ -174,6 +179,7 @@ class OIDCProvider(AuthProvider):
             sub=sub,
             department=payload.get("department", ""),
             tier=payload.get("tier", "employee"),
+            # role: service token 是 "service", 用户 token 是 admin/manager/employee
             role=payload.get("role", "employee"),
             managed_departments=managed_list,
             auth_method=self.name,

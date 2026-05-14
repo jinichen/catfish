@@ -201,11 +201,44 @@ def test_reject_empty_sub(provider, keypair, kid, issuer, audience) -> None:
     assert provider.verify_bearer(f"Bearer {token}") is None
 
 
-def test_reject_access_token_used_as_id_token(
+def test_accept_access_token_with_user_claims(
     provider, keypair, kid, issuer, audience
 ) -> None:
-    """catfish-identity 给 access_token 加 token_use='access', 不该当 id_token 用."""
+    """BL-IDENTITY-REFRESH (5/15): access_token 5/14 起含完整 user claims (RFC 9068),
+    应该被接受当用户身份 token 用. 老版本只有 {scope, token_use=access} 才拒绝.
+
+    catfish login 流程依赖这条 — login 拿的是 access_token, 用作 Bearer 调 gateway.
+    """
     payload = _valid_payload(issuer, audience, token_use="access")
+    token = _sign(keypair, kid, payload)
+    user = provider.verify_bearer(f"Bearer {token}")
+    assert user is not None
+    assert user.sub == payload["sub"]
+
+
+def test_accept_service_token(
+    provider, keypair, kid, issuer, audience
+) -> None:
+    """BL-RBAC Day 2 (5/15): token_use=service (hermes-cli/cron 等服务身份) 应被接受.
+
+    sub 用 client:<id> 前缀, role=service. gateway 后续按 user.role=='service' 分流
+    到 lean inject 路径 (BL-LEAN-CHAT)."""
+    payload = _valid_payload(
+        issuer, audience, token_use="service",
+        sub="client:hermes-cli", role="service",
+    )
+    token = _sign(keypair, kid, payload)
+    user = provider.verify_bearer(f"Bearer {token}")
+    assert user is not None
+    assert user.sub == "client:hermes-cli"
+    assert user.role == "service"
+
+
+def test_reject_unknown_token_use(
+    provider, keypair, kid, issuer, audience
+) -> None:
+    """token_use 不是 None/id/access/service → 拒 (防奇怪 use claim)."""
+    payload = _valid_payload(issuer, audience, token_use="bogus")
     token = _sign(keypair, kid, payload)
     assert provider.verify_bearer(f"Bearer {token}") is None
 
