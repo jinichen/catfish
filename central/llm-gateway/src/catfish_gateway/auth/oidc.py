@@ -60,7 +60,7 @@ class OIDCProvider(AuthProvider):
         self,
         *,
         issuer: str,
-        audience: str,
+        audience: str | list[str],
         jwks_uri: str | None = None,
         cache_ttl: int = 600,
         algorithms: list[str] | None = None,
@@ -68,7 +68,15 @@ class OIDCProvider(AuthProvider):
         jwks_for_testing: dict | None = None,
     ) -> None:
         self.issuer = issuer.rstrip("/")
-        self.audience = audience
+        # BL-COMPANION-AUTH (5/15 凌晨): audience 接 list, PyJWT.decode 原生支持
+        # 多 audience (token 的 aud 在 list 任一就过). 修我今晚把 access_token aud
+        # 从 catfish-companion (老) 改 catfish-gateway (新, RFC 9068) 后, 老 Companion
+        # 已存的 token (aud=catfish-companion) 被拒的副作用. 现在两边都接.
+        if isinstance(audience, str):
+            # 允许逗号分隔 env 配置, e.g. CATFISH_OIDC_AUDIENCE="catfish-gateway,catfish-companion"
+            self.audience: list[str] = [a.strip() for a in audience.split(",") if a.strip()]
+        else:
+            self.audience = list(audience)
         self.jwks_uri = jwks_uri or f"{self.issuer}/.well-known/jwks.json"
         self.algorithms = algorithms or ["RS256"]
         self._jwks_for_testing = jwks_for_testing

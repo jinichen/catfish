@@ -450,3 +450,72 @@ def test_make_provider_prod_with_explicit_jwks_uri(
     oidc = p.providers[0]
     assert isinstance(oidc, OIDCProvider)
     assert oidc.jwks_uri == "https://keys.alt.com/jwks.json"
+
+
+# ─── BL-COMPANION-AUTH (5/15 凌晨): 多 audience 支持 ─────
+
+
+def test_audience_list_accepts_multiple(issuer, kid, jwks, keypair):
+    """OIDCProvider audience 接 list, token 的 aud 在 list 任一就过."""
+    provider = OIDCProvider(
+        issuer=issuer,
+        audience=["catfish-companion", "catfish-gateway"],
+        jwks_for_testing=jwks,
+    )
+    # token aud=catfish-companion → 通
+    payload_c = _valid_payload(issuer, "catfish-companion")
+    user_c = provider.verify_bearer(f"Bearer {_sign(keypair, kid, payload_c)}")
+    assert user_c is not None
+    # token aud=catfish-gateway → 通
+    payload_g = _valid_payload(issuer, "catfish-gateway")
+    user_g = provider.verify_bearer(f"Bearer {_sign(keypair, kid, payload_g)}")
+    assert user_g is not None
+
+
+def test_audience_list_rejects_unknown(issuer, kid, jwks, keypair):
+    """token 的 aud 不在 list 任一 → 拒"""
+    provider = OIDCProvider(
+        issuer=issuer,
+        audience=["catfish-companion", "catfish-gateway"],
+        jwks_for_testing=jwks,
+    )
+    payload = _valid_payload(issuer, "some-other-app")
+    user = provider.verify_bearer(f"Bearer {_sign(keypair, kid, payload)}")
+    assert user is None
+
+
+def test_audience_string_comma_separated_parsed_as_list(issuer, kid, jwks, keypair):
+    """env CATFISH_OIDC_AUDIENCE='audA,audB' 字符串能解析成 list"""
+    provider = OIDCProvider(
+        issuer=issuer,
+        audience="catfish-companion,catfish-gateway",
+        jwks_for_testing=jwks,
+    )
+    assert provider.audience == ["catfish-companion", "catfish-gateway"]
+    payload_g = _valid_payload(issuer, "catfish-gateway")
+    user = provider.verify_bearer(f"Bearer {_sign(keypair, kid, payload_g)}")
+    assert user is not None
+
+
+def test_audience_single_string_still_works(issuer, kid, jwks, keypair):
+    """back-compat: 单一字符串 audience (原 API) 仍然工作"""
+    provider = OIDCProvider(
+        issuer=issuer,
+        audience="catfish-companion",  # 单一 str
+        jwks_for_testing=jwks,
+    )
+    assert provider.audience == ["catfish-companion"]
+    payload = _valid_payload(issuer, "catfish-companion")
+    user = provider.verify_bearer(f"Bearer {_sign(keypair, kid, payload)}")
+    assert user is not None
+
+
+def test_make_provider_prod_default_audience_includes_both(monkeypatch):
+    """make_auth_provider 默认应该接 catfish-companion + catfish-gateway 两 audience"""
+    monkeypatch.setenv("CATFISH_ENV", "prod")
+    monkeypatch.setenv("CATFISH_OIDC_ISSUER", "http://test")
+    monkeypatch.delenv("CATFISH_OIDC_AUDIENCE", raising=False)
+    p = make_auth_provider()
+    oidc = p.providers[0] if hasattr(p, "providers") else p
+    assert "catfish-companion" in oidc.audience
+    assert "catfish-gateway" in oidc.audience

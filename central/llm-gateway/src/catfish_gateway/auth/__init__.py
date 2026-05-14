@@ -85,7 +85,16 @@ def make_auth_provider() -> AuthProvider:
     if env == "prod":
         oidc_issuer = os.environ.get("CATFISH_OIDC_ISSUER", "").strip()
         if oidc_issuer:
-            audience = os.environ.get("CATFISH_OIDC_AUDIENCE", "catfish-companion")
+            # BL-COMPANION-AUTH (5/15 凌晨): 默认接两个 audience —
+            #   catfish-companion: Companion id_token (catfish-identity 老默认 aud=client_id)
+            #   catfish-gateway:   service token + RFC 9068 access_token (新, aud=resource server)
+            # env CATFISH_OIDC_AUDIENCE 逗号分隔可覆盖, e.g. "audA,audB"
+            # 修我 5/14 RBAC Day 2 把 access_token aud 改 catfish-gateway 后, Companion
+            # 老 token (aud=catfish-companion) 被拒 → quota 卡 401 的副作用.
+            audience = os.environ.get(
+                "CATFISH_OIDC_AUDIENCE",
+                "catfish-companion,catfish-gateway",
+            )
             jwks_uri_env = os.environ.get("CATFISH_OIDC_JWKS_URI", "").strip()
             oidc = OIDCProvider(
                 issuer=oidc_issuer,
