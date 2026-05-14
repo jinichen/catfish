@@ -91,6 +91,27 @@ function RecModeToolbarButton({ disabled }: { disabled?: boolean }) {
 // ─── setup 模态 ────────────────────────────────────────────
 
 
+// 5/14 鸿波 "你现在故意怠工" 反馈后: 全硬 hex 替 var, 不依赖 mac
+// dark/light theme 渲染. 这套 token 是 macOS Sonoma 14 设计语言.
+const T = {
+  cyan: "#06B6D4",          // catfish 主色, 实际可见 cyan 不是水绿
+  cyanHover: "#0891B2",
+  text: "#1d1d1f",          // macOS body primary
+  textSecondary: "#6e6e73", // macOS body secondary
+  textTertiary: "#86868b",
+  bgWhite: "#FFFFFF",
+  bgSurface: "#fbfbfd",     // 模态卡片背景, 比纯白多一点深度
+  bgInput: "#ffffff",
+  border: "#D2D2D7",        // macOS hairline 标准
+  borderFocus: "#06B6D4",
+  errorRed: "#ff3b30",      // macOS 系统错误红
+  shadow: "0 16px 48px rgba(0,0,0,0.16), 0 4px 12px rgba(0,0,0,0.06)",
+  closeBg: "#e5e5e7",
+  closeBgHover: "#d2d2d7",
+  systemFont: "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', sans-serif",
+};
+
+
 function SetupModal() {
   const setup = useRecModeStore((s) => s.setup);
   const setSetup = useRecModeStore((s) => s.setSetup);
@@ -99,6 +120,8 @@ function SetupModal() {
   const setError = useRecModeStore((s) => s.setError);
   const [submitting, setSubmitting] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [closeHover, setCloseHover] = useState(false);
+  const [submitHover, setSubmitHover] = useState(false);
 
   // 5/14 鸿波"UI 不是产品水平" 反馈后改: 用户输人话标题, 后端 LLM 综合时
   // 自动起 snake_case skill_name. 不暴露 snake_case / namespace 术语.
@@ -143,59 +166,95 @@ function SetupModal() {
 
   return (
     <ModalShell onClose={closeSetup}>
-      {/* 右上 X 关闭 (macOS 用户基础肌肉记忆) */}
+      <style>{`
+        @keyframes recmode-shake {
+          0%, 100% { transform: translateX(0); }
+          25% { transform: translateX(-6px); }
+          75% { transform: translateX(6px); }
+        }
+        @keyframes recmode-fade-in {
+          from { opacity: 0; transform: translateY(8px) scale(0.98); }
+          to   { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        @keyframes recmode-overlay-fade {
+          from { opacity: 0; }
+          to   { opacity: 1; }
+        }
+      `}</style>
+
+      {/* macOS NSCloseButton style — 圆形灰底 + 内部 SF-symbol-style ✕ */}
       <button
         onClick={closeSetup}
+        onMouseEnter={() => setCloseHover(true)}
+        onMouseLeave={() => setCloseHover(false)}
         title="关闭"
         style={{
           position: "absolute",
-          top: 12,
-          right: 12,
-          width: 28,
-          height: 28,
+          top: 16,
+          right: 16,
+          width: 22,
+          height: 22,
           borderRadius: "50%",
           border: "none",
-          background: "transparent",
-          color: "var(--catfish-text-muted)",
-          fontSize: 18,
+          background: closeHover ? T.closeBgHover : T.closeBg,
+          color: T.textSecondary,
+          fontSize: 11,
           cursor: "pointer",
           lineHeight: 1,
           padding: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          transition: "background 120ms ease",
         }}
+        aria-label="关闭"
       >
-        ×
+        <svg width="9" height="9" viewBox="0 0 9 9" fill="none">
+          <path d="M1 1 L8 8 M8 1 L1 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        </svg>
       </button>
 
-      {/* 标题 — 不要大 emoji (macOS 渲染 🎙 像老式电话, 难看). 直接清晰大字. */}
-      <div style={{ paddingTop: 4 }}>
-        <h3 style={{
-          margin: 0,
-          fontSize: 20,
-          fontWeight: 600,
-          color: "var(--catfish-text)",
-          letterSpacing: "-0.01em",
-        }}>
-          教鲶鱼一个新流程
-        </h3>
-        <p style={{
-          margin: "6px 0 0",
-          fontSize: 13,
-          color: "var(--catfish-text-muted)",
-          lineHeight: 1.5,
-        }}>
-          录一遍你正常操作, <strong style={{ color: "var(--catfish-text)", fontWeight: 600 }}>顺嘴说意图</strong>, 鲶鱼自动学
-        </p>
+      {/* 视觉锚 — macOS Sonoma 风的 badge: 浅 cyan 圆 + 白线条 mic 图标 */}
+      <div style={{
+        width: 56,
+        height: 56,
+        borderRadius: 14,
+        background: `linear-gradient(135deg, ${T.cyan}, ${T.cyanHover})`,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        marginBottom: 18,
+        boxShadow: `0 6px 16px ${T.cyan}40`,
+      }}>
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+          <line x1="12" y1="19" x2="12" y2="22" />
+        </svg>
       </div>
 
-      {/* 主输入 — placeholder 字大, 不再用 label (text input 已经自解释) */}
-      <div style={{ marginTop: 24 }}>
-        <style>{`
-          @keyframes recmode-shake {
-            0%, 100% { transform: translateX(0); }
-            25% { transform: translateX(-6px); }
-            75% { transform: translateX(6px); }
-          }
-        `}</style>
+      <h3 style={{
+        margin: 0,
+        fontSize: 19,
+        fontWeight: 600,
+        color: T.text,
+        letterSpacing: "-0.015em",
+        fontFamily: T.systemFont,
+      }}>
+        教鲶鱼一个新流程
+      </h3>
+      <p style={{
+        margin: "6px 0 0",
+        fontSize: 13,
+        color: T.textSecondary,
+        lineHeight: 1.5,
+        fontFamily: T.systemFont,
+      }}>
+        录一遍你正常操作, <strong style={{ color: T.text, fontWeight: 600 }}>顺嘴说意图</strong>, 鲶鱼自动学
+      </p>
+
+      {/* 主输入 — macOS native white bg + hairline border */}
+      <div style={{ marginTop: 22 }}>
         <input
           type="text"
           value={setup.name}
@@ -207,80 +266,92 @@ function SetupModal() {
           autoFocus
           style={{
             width: "100%",
-            padding: "12px 14px",
-            border: "1px solid " + (titleTrimmed && !titleValid ? "var(--status-err)" : "var(--catfish-border)"),
+            padding: "11px 14px",
+            border: `1px solid ${titleTrimmed && !titleValid ? T.errorRed : T.border}`,
             borderRadius: 8,
-            background: "var(--catfish-bg)",
-            color: "var(--catfish-text)",
-            fontSize: 15,
+            background: T.bgInput,
+            color: T.text,
+            fontSize: 14,
+            fontFamily: T.systemFont,
             outline: "none",
             boxSizing: "border-box",
-            transition: "border-color 120ms ease",
+            transition: "border-color 120ms ease, box-shadow 120ms ease",
             animation: shake ? "recmode-shake 0.4s ease" : undefined,
+          }}
+          onFocus={(e) => {
+            e.currentTarget.style.borderColor = T.borderFocus;
+            e.currentTarget.style.boxShadow = `0 0 0 3px ${T.cyan}25`;
+          }}
+          onBlur={(e) => {
+            e.currentTarget.style.borderColor = titleTrimmed && !titleValid ? T.errorRed : T.border;
+            e.currentTarget.style.boxShadow = "none";
           }}
         />
       </div>
 
-      {/* 示例 — 极小灰字, 不抢主输入注意力 */}
+      {/* 示例 inline 链接 (cyan, 简约) */}
       <div style={{
-        marginTop: 10,
-        display: "flex",
-        gap: 4,
-        flexWrap: "wrap",
-        alignItems: "center",
-        fontSize: 11,
-        color: "var(--catfish-text-muted)",
+        marginTop: 12,
+        fontSize: 12,
+        color: T.textTertiary,
+        fontFamily: T.systemFont,
+        lineHeight: 1.6,
       }}>
-        <span>没思路?</span>
+        没思路?{" "}
         {RECMODE_EXAMPLES.map((ex, i) => (
-          <button
-            key={i}
-            onClick={() => applyExample(i)}
-            title={ex.description}
-            style={{
-              padding: "2px 6px",
-              border: "none",
-              background: "transparent",
-              color: "var(--catfish-cyan)",
-              fontSize: 11,
-              cursor: "pointer",
-              textDecoration: "underline",
-              textUnderlineOffset: 2,
-            }}
-          >
-            {ex.title}
-          </button>
+          <span key={i}>
+            <button
+              onClick={() => applyExample(i)}
+              title={ex.description}
+              style={{
+                padding: 0,
+                border: "none",
+                background: "transparent",
+                color: T.cyan,
+                fontSize: 12,
+                fontFamily: T.systemFont,
+                cursor: "pointer",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = T.cyanHover; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = T.cyan; }}
+            >
+              {ex.title}
+            </button>
+            {i < RECMODE_EXAMPLES.length - 1 && <span style={{ color: T.textTertiary }}> · </span>}
+          </span>
         ))}
       </div>
 
-      {/* 高级选项 — 极淡, 几乎看不见, 真要的人才点 */}
-      <div style={{ marginTop: 28 }}>
+      {/* 高级选项 — 极淡, 真要的人才点 */}
+      <div style={{ marginTop: 24 }}>
         <button
           onClick={() => setShowAdvanced(!showAdvanced)}
           style={{
             background: "transparent",
             border: "none",
-            color: "var(--catfish-text-muted)",
-            fontSize: 11,
+            color: T.textTertiary,
+            fontSize: 12,
+            fontFamily: T.systemFont,
             cursor: "pointer",
             padding: 0,
-            opacity: 0.7,
           }}
         >
-          {showAdvanced ? "− 高级选项" : "+ 高级选项"}
+          {showAdvanced ? "▾ 高级选项" : "▸ 高级选项"}
         </button>
         {showAdvanced && (
-          <div style={{ marginTop: 8 }}>
+          <div style={{ marginTop: 10 }}>
             <select
               value={setup.namespace}
               onChange={(e) => setSetup({ namespace: e.target.value })}
               style={{
                 padding: "6px 10px",
-                border: "1px solid var(--catfish-border)",
+                border: `1px solid ${T.border}`,
                 borderRadius: 6,
-                background: "var(--catfish-bg)",
-                color: "var(--catfish-text)",
+                background: T.bgInput,
+                color: T.text,
                 fontSize: 12,
+                fontFamily: T.systemFont,
+                outline: "none",
               }}
             >
               <option value="personal">只我自己用</option>
@@ -291,23 +362,26 @@ function SetupModal() {
         )}
       </div>
 
-      {/* 按钮 — 主按钮 cyan 永远不 disabled (校验放 onStart, click 后才可能弹错), 副按钮 ghost 无边框 */}
+      {/* 按钮 bar — hairline 分隔 + 平衡视觉重量 (取消 ghost / 开始 cyan 实心) */}
       <div style={{
         display: "flex",
         gap: 8,
-        marginTop: 28,
+        marginTop: 24,
+        paddingTop: 18,
+        borderTop: `1px solid ${T.border}`,
         alignItems: "center",
       }}>
         <button
           onClick={closeSetup}
           disabled={submitting}
           style={{
-            padding: "10px 16px",
+            padding: "9px 18px",
             border: "none",
             borderRadius: 8,
             background: "transparent",
-            color: "var(--catfish-text-muted)",
+            color: T.textSecondary,
             fontSize: 14,
+            fontFamily: T.systemFont,
             cursor: submitting ? "default" : "pointer",
           }}
         >
@@ -316,21 +390,27 @@ function SetupModal() {
         <div style={{ flex: 1 }} />
         <button
           onClick={onStart}
+          onMouseEnter={() => setSubmitHover(true)}
+          onMouseLeave={() => setSubmitHover(false)}
           disabled={submitting}
           style={{
-            padding: "10px 22px",
+            padding: "9px 22px",
             border: "none",
             borderRadius: 8,
-            background: submitting ? "var(--catfish-text-muted)" : "var(--catfish-cyan)",
+            background: submitting
+              ? T.textTertiary
+              : (submitHover ? T.cyanHover : T.cyan),
             color: "white",
             fontSize: 14,
             fontWeight: 600,
+            fontFamily: T.systemFont,
             cursor: submitting ? "default" : "pointer",
-            opacity: titleValid ? 1 : 0.6,  // 不真 disabled, 灰一点暗示
-            transition: "opacity 120ms ease, background 120ms ease",
+            opacity: titleValid ? 1 : 0.7,
+            transition: "background 120ms ease, opacity 120ms ease",
+            boxShadow: titleValid ? `0 2px 6px ${T.cyan}40` : "none",
           }}
         >
-          {submitting ? "启动中..." : "开始录屏"}
+          {submitting ? "启动中…" : "开始录屏"}
         </button>
       </div>
     </ModalShell>
@@ -502,25 +582,30 @@ function ModalShell({ children, onClose }: { children: React.ReactNode; onClose:
       style={{
         position: "fixed",
         inset: 0,
-        background: "rgba(0,0,0,0.5)",
+        background: "rgba(0,0,0,0.32)",
+        backdropFilter: "blur(8px) saturate(150%)",
+        WebkitBackdropFilter: "blur(8px) saturate(150%)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         zIndex: 1000,
+        animation: "recmode-overlay-fade 200ms ease-out",
       }}
     >
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          position: "relative",  // 5/14 加: 让 SetupModal 右上 X 能 absolute 定位
-          background: "var(--catfish-bg-elevated)",
-          border: "1px solid var(--catfish-border)",
-          borderRadius: 12,
-          padding: "var(--space-5) var(--space-5) var(--space-4)",
-          maxWidth: 460,
-          width: "90%",
-          color: "var(--catfish-text)",
-          boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+          position: "relative",
+          background: T.bgSurface,
+          border: `1px solid ${T.border}`,
+          borderRadius: 14,
+          padding: "28px 28px 20px",
+          maxWidth: 440,
+          width: "92%",
+          color: T.text,
+          boxShadow: T.shadow,
+          fontFamily: T.systemFont,
+          animation: "recmode-fade-in 240ms cubic-bezier(0.32, 0.72, 0, 1)",
         }}
       >
         {children}
