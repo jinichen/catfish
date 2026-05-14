@@ -28,17 +28,23 @@ def test_header_name_x_catfish_teaching_mode(app_src):
 
 
 def test_header_or_env_short_circuit(app_src):
-    """_lean 判定: header == '1' OR env 'CATFISH_LEAN_INJECT' == '1' — 任一 True 即开."""
+    """_lean 判定: header == '1' OR env 'CATFISH_LEAN_INJECT' == '1' OR service token — 任一 True 即开.
+
+    BL-LEAN-CHAT (5/15): _lean 表达式拆多行, 加了第三个触发源 _service_lean,
+    所以这里改成扫一段 (5 行窗口) 而不是单行匹配.
+    """
     # 找 chat_completions 内 _teaching_mode 赋值
     assert '_teaching_mode = request.headers.get("X-Catfish-Teaching-Mode") == "1"' in app_src
-    # _lean = teaching_mode or env (两条都满足任一开)
-    # 找 _lean = _teaching_mode or os.environ.get(...) 模式
+    # _lean = teaching_mode or env (5 行内同时出现 _lean / _teaching_mode / CATFISH_LEAN_INJECT)
+    lines = app_src.splitlines()
     found = False
-    for line in app_src.splitlines():
-        if "_lean =" in line and "_teaching_mode" in line and "CATFISH_LEAN_INJECT" in line:
-            found = True
-            break
-    assert found, "chat_completions 内 _lean 应该是 _teaching_mode or env 短路"
+    for i, line in enumerate(lines):
+        if line.strip().startswith("_lean ="):
+            window = "\n".join(lines[i : i + 6])
+            if "_teaching_mode" in window and "CATFISH_LEAN_INJECT" in window:
+                found = True
+                break
+    assert found, "chat_completions 内 _lean 应该 5 行内含 _teaching_mode + CATFISH_LEAN_INJECT"
 
 
 def test_teaching_mode_propagated_to_stream(app_src):

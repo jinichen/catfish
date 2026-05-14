@@ -2225,6 +2225,13 @@ async def chat_completions(
     # Hermes 这种已自带 system 的不动；客户端可加 X-Catfish-Skip-Identity: true 强制跳过
     # BL-E11 命名权: header X-Catfish-Agent-Name / -Personality 让员工改名 + 选人设
     skip = header_skips_identity(request.headers)
+    # BL-LEAN-CHAT (5/15 凌晨): 服务 token (token_use=service, e.g. hermes-cli, cron, a2a)
+    # 自动 skip identity. 服务调用不需要"鲶鱼人格", 它跑批 / 跑 skill, 拿原始 LLM 答即可.
+    # 鸿波 5/14 端到端测时单 chat "1+1=?" 撞 35713 input tokens, 80% 来自 SOUL/identity.
+    # 这条让服务 token 自动 ultra-lean, 用户身份 (web Companion / employee SSO) 不动.
+    if user.role == "service":
+        skip = True
+        logger.info("BL-LEAN-CHAT: service token (sub=%s) auto-skip identity", user.sub)
     agent_name, agent_personality = header_agent_prefs(request.headers)
     body["messages"] = inject_identity_if_needed(
         body.get("messages", []),
@@ -2254,9 +2261,19 @@ async def chat_completions(
     # 跨 session 隔离, 教学完关 toggle 立刻回常态, 不需要重启 gateway.
     # ────────────────────────────────────────────────────────────────────
     _teaching_mode = request.headers.get("X-Catfish-Teaching-Mode") == "1"
-    _lean = _teaching_mode or os.environ.get("CATFISH_LEAN_INJECT", "0") == "1"
+    # BL-LEAN-CHAT (5/15): 服务 token (hermes-cli / cron / a2a) 也走 lean 模式 —
+    # 不需要 session_facts / journal / feedback / hints (这些都是给"用户"看的元数据,
+    # 服务调用没有"用户"). 跟上面 skip identity 一起把服务 chat 从 35K 砍到 ~3K.
+    _service_lean = (user.role == "service")
+    _lean = (
+        _teaching_mode
+        or os.environ.get("CATFISH_LEAN_INJECT", "0") == "1"
+        or _service_lean
+    )
     if _teaching_mode:
         logger.info("BL-LEAN-SESSION: header 触发 teaching mode (lean inject ON)")
+    if _service_lean and not _teaching_mode:
+        logger.info("BL-LEAN-CHAT: service token (sub=%s) auto-lean inject", user.sub)
 
     # session_facts 注入: 把员工本 session 内明确告诉过的硬事实 (catfish_remember
     # 写到 ~/.catfish/session_facts.json) 拼到最后一条 system message 末尾.
