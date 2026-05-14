@@ -105,8 +105,20 @@ function SetupModal() {
   const titleValid = isValidSkillTitle(setup.name);
   const titleTrimmed = setup.name.trim();
 
+  const [shake, setShake] = useState(false);
+
   async function onStart() {
-    if (!titleValid || submitting) return;
+    if (submitting) return;
+    if (!titleValid) {
+      // 不弹错 — input 抖一下 + focus, 视觉提示让用户填名字 (macOS 习惯)
+      setShake(true);
+      setTimeout(() => setShake(false), 400);
+      const inp = document.querySelector<HTMLInputElement>(
+        'input[placeholder^="例:"]',
+      );
+      inp?.focus();
+      return;
+    }
     setSubmitting(true);
     try {
       const sessionId = newRecModeSessionId();
@@ -154,82 +166,86 @@ function SetupModal() {
         ×
       </button>
 
-      {/* 居中视觉锚点: 大 emoji + 大标题 */}
-      <div style={{ textAlign: "center", padding: "var(--space-4) 0 var(--space-3)" }}>
-        <div style={{ fontSize: 48, lineHeight: 1, marginBottom: 8 }}>🎙</div>
-        <h3 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>
-          教鲶鱼学一个新流程
+      {/* 标题 — 不要大 emoji (macOS 渲染 🎙 像老式电话, 难看). 直接清晰大字. */}
+      <div style={{ paddingTop: 4 }}>
+        <h3 style={{
+          margin: 0,
+          fontSize: 20,
+          fontWeight: 600,
+          color: "var(--catfish-text)",
+          letterSpacing: "-0.01em",
+        }}>
+          教鲶鱼一个新流程
         </h3>
         <p style={{
-          margin: "8px 0 0",
+          margin: "6px 0 0",
           fontSize: 13,
           color: "var(--catfish-text-muted)",
+          lineHeight: 1.5,
         }}>
-          录一遍你正常操作 + <strong style={{ color: "var(--catfish-text)" }}>顺嘴说意图</strong>, 鲶鱼自动学
+          录一遍你正常操作, <strong style={{ color: "var(--catfish-text)", fontWeight: 600 }}>顺嘴说意图</strong>, 鲶鱼自动学
         </p>
       </div>
 
-      {/* 主输入: 给这个流程起个名字 (人话, 不是 snake_case) */}
-      <div style={{ marginTop: "var(--space-4)" }}>
-        <label style={{
-          display: "block",
-          fontSize: 13,
-          color: "var(--catfish-text)",
-          marginBottom: 6,
-          fontWeight: 500,
-        }}>
-          给这个流程起个名字
-        </label>
+      {/* 主输入 — placeholder 字大, 不再用 label (text input 已经自解释) */}
+      <div style={{ marginTop: 24 }}>
+        <style>{`
+          @keyframes recmode-shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-6px); }
+            75% { transform: translateX(6px); }
+          }
+        `}</style>
         <input
           type="text"
           value={setup.name}
           onChange={(e) => setSetup({ name: e.target.value })}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && titleValid && !submitting) onStart();
+            if (e.key === "Enter" && !submitting) onStart();
           }}
           placeholder="例: 检查 EIS 资质过期"
           autoFocus
           style={{
             width: "100%",
-            padding: "10px 12px",
+            padding: "12px 14px",
             border: "1px solid " + (titleTrimmed && !titleValid ? "var(--status-err)" : "var(--catfish-border)"),
-            borderRadius: "var(--radius-md)",
+            borderRadius: 8,
             background: "var(--catfish-bg)",
             color: "var(--catfish-text)",
-            fontSize: 14,
+            fontSize: 15,
             outline: "none",
             boxSizing: "border-box",
+            transition: "border-color 120ms ease",
+            animation: shake ? "recmode-shake 0.4s ease" : undefined,
           }}
         />
-        {titleTrimmed && !titleValid && (
-          <div style={{ fontSize: 11, color: "var(--status-err)", marginTop: 4 }}>
-            3-100 字
-          </div>
-        )}
       </div>
 
-      {/* 示例 prefill — 让用户秒懂 RecMode 适合啥场景 */}
+      {/* 示例 — 极小灰字, 不抢主输入注意力 */}
       <div style={{
-        marginTop: "var(--space-3)",
+        marginTop: 10,
         display: "flex",
-        gap: 6,
+        gap: 4,
         flexWrap: "wrap",
         alignItems: "center",
+        fontSize: 11,
+        color: "var(--catfish-text-muted)",
       }}>
-        <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>试试:</span>
+        <span>没思路?</span>
         {RECMODE_EXAMPLES.map((ex, i) => (
           <button
             key={i}
             onClick={() => applyExample(i)}
             title={ex.description}
             style={{
-              padding: "3px 8px",
-              border: "1px solid var(--catfish-border)",
-              borderRadius: 12,
+              padding: "2px 6px",
+              border: "none",
               background: "transparent",
-              color: "var(--catfish-text-muted)",
+              color: "var(--catfish-cyan)",
               fontSize: 11,
               cursor: "pointer",
+              textDecoration: "underline",
+              textUnderlineOffset: 2,
             }}
           >
             {ex.title}
@@ -237,37 +253,34 @@ function SetupModal() {
         ))}
       </div>
 
-      {/* 高级选项 (折叠, 默认 personal 普通用户不用看) */}
-      <div style={{ marginTop: "var(--space-4)" }}>
+      {/* 高级选项 — 极淡, 几乎看不见, 真要的人才点 */}
+      <div style={{ marginTop: 28 }}>
         <button
           onClick={() => setShowAdvanced(!showAdvanced)}
           style={{
             background: "transparent",
             border: "none",
             color: "var(--catfish-text-muted)",
-            fontSize: 12,
+            fontSize: 11,
             cursor: "pointer",
             padding: 0,
+            opacity: 0.7,
           }}
         >
-          {showAdvanced ? "▾" : "▸"} 高级选项
+          {showAdvanced ? "− 高级选项" : "+ 高级选项"}
         </button>
         {showAdvanced && (
-          <div style={{ marginTop: "var(--space-2)", paddingLeft: 16 }}>
-            <label style={{ display: "block", fontSize: 12, color: "var(--catfish-text-muted)", marginBottom: 4 }}>
-              共享范围
-            </label>
+          <div style={{ marginTop: 8 }}>
             <select
               value={setup.namespace}
               onChange={(e) => setSetup({ namespace: e.target.value })}
               style={{
-                width: "100%",
-                padding: "6px 8px",
+                padding: "6px 10px",
                 border: "1px solid var(--catfish-border)",
-                borderRadius: "var(--radius-sm)",
+                borderRadius: 6,
                 background: "var(--catfish-bg)",
                 color: "var(--catfish-text)",
-                fontSize: 13,
+                fontSize: 12,
               }}
             >
               <option value="personal">只我自己用</option>
@@ -278,35 +291,46 @@ function SetupModal() {
         )}
       </div>
 
-      {/* 大主按钮 + 灰副按钮 */}
+      {/* 按钮 — 主按钮 cyan 永远不 disabled (校验放 onStart, click 后才可能弹错), 副按钮 ghost 无边框 */}
       <div style={{
         display: "flex",
-        gap: "var(--space-2)",
-        marginTop: "var(--space-5)",
+        gap: 8,
+        marginTop: 28,
+        alignItems: "center",
       }}>
         <button
           onClick={closeSetup}
           disabled={submitting}
           style={{
-            ...btnStyle("secondary", submitting),
-            flex: "0 0 auto",
-            minWidth: 80,
+            padding: "10px 16px",
+            border: "none",
+            borderRadius: 8,
+            background: "transparent",
+            color: "var(--catfish-text-muted)",
+            fontSize: 14,
+            cursor: submitting ? "default" : "pointer",
           }}
         >
           取消
         </button>
+        <div style={{ flex: 1 }} />
         <button
           onClick={onStart}
-          disabled={!titleValid || submitting}
+          disabled={submitting}
           style={{
-            ...btnStyle("primary", !titleValid || submitting),
-            flex: 1,
-            padding: "10px var(--space-4)",
+            padding: "10px 22px",
+            border: "none",
+            borderRadius: 8,
+            background: submitting ? "var(--catfish-text-muted)" : "var(--catfish-cyan)",
+            color: "white",
             fontSize: 14,
-            fontWeight: 500,
+            fontWeight: 600,
+            cursor: submitting ? "default" : "pointer",
+            opacity: titleValid ? 1 : 0.6,  // 不真 disabled, 灰一点暗示
+            transition: "opacity 120ms ease, background 120ms ease",
           }}
         >
-          {submitting ? "启动中..." : "🔴 开始录屏"}
+          {submitting ? "启动中..." : "开始录屏"}
         </button>
       </div>
     </ModalShell>
