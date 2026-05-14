@@ -62,8 +62,11 @@ _TIMING_DUMMY_HASH: bytes = bcrypt.hashpw(
 _DEFAULT_GRANT_TYPES: tuple[str, ...] = ("client_credentials",)
 
 #: 白名单 grant_types. yaml 配的值不在这里直接拒 (防错配漏接 grant 类型).
+#: 5/14 evening: 加 authorization_code — hermes 0.13 `hermes model` 走浏览器交互
+#: 登录 (authorization_code flow), 不是 client_credentials. clients.yaml 的客户端要
+#: 同时支持两种 grant 才能既给员工交互登录, 又给跑批 service 身份.
 _KNOWN_GRANT_TYPES: frozenset[str] = frozenset(
-    {"client_credentials"}  # Phase 2+ 加: "authorization_code", "refresh_token"
+    {"client_credentials", "authorization_code"}  # Phase 2+ 加: "refresh_token"
 )
 
 #: service role 是固定值 — clients.yaml 里 role 字段如果没配自动填这个.

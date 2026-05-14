@@ -25,16 +25,26 @@
 #   - secret 给业务方时一次性给, 不留库 — 业务方自己存 .env / k8s secret
 
 clients:
-  # ── hermes-cli (5/14 BL-RBAC P0 + B sprint Day 1, 第一个真接 OAuth 的服务) ──
+  # ── hermes-cli (5/14 BL-RBAC P0 + B sprint Day 1+评估, 第一个真接 OAuth 的服务) ──
   - client_id: hermes-cli
     # demo secret: hermes-dev-secret-2026-please-change
     # 生产部署 IT 用上面 bcrypt 命令生成新 hash + 改这条 + 同步给业务方
     client_secret_hash: $2b$12$5LdhU49ZtK7EpYFYdTn4m.48yzoBrU0CasSHmpuY/CGjUKQsYpBcG
     name: Hermes CLI
     description: 鲶鱼 hermes 0.13 CLI — 跑 skill / 跑批 / agent loop
+    # 双 grant 支持:
+    #   - authorization_code: 员工 `hermes model` 时浏览器交互登录 (有 user 身份)
+    #   - client_credentials: 未来 hermes 跑批/cron/a2a 跑 service 身份 (无 user)
+    # 5/14 21:44 鸿波真测时撞 'No inference provider configured', 排查发现
+    # `hermes model` 走 authorization_code (浏览器), 我之前只配 client_credentials
+    # 是错配. 5/14 evening 修.
     allowed_grant_types:
+      - authorization_code
       - client_credentials
     allowed_scopes:
+      - openid                # OIDC 标准 scope (authorization_code 必需)
+      - email
+      - profile
       - chat.completions      # POST /v1/chat/completions
       - audit.write           # 写 audit event 用
       - tools.invoke          # 调 native tool / MCP
