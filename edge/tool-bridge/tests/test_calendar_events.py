@@ -246,6 +246,119 @@ def test_script_record_skips_optional_fields_when_empty():
     assert "description:" not in script
 
 
+# ─── alarm_minutes_before (5/14 1:00 加, 让 iPhone 真响) ─────────
+
+
+def test_normalize_alarms_default_15():
+    """None → [15] (默认 15 min 前提醒)."""
+    assert calendar_events._normalize_alarms(None) == [15]
+
+
+def test_normalize_alarms_int_to_list():
+    """单 int 自动包成 list."""
+    assert calendar_events._normalize_alarms(60) == [60]
+
+
+def test_normalize_alarms_empty_list_disables():
+    """显式空 list = 不提醒."""
+    assert calendar_events._normalize_alarms([]) == []
+
+
+def test_normalize_alarms_dedup_and_sort():
+    """去重 + 升序."""
+    assert calendar_events._normalize_alarms([60, 15, 60, 15]) == [15, 60]
+
+
+def test_normalize_alarms_clamps_to_28_days():
+    """超 40320 (28天) 钳."""
+    assert calendar_events._normalize_alarms([99999]) == [40320]
+
+
+def test_normalize_alarms_negative_clamped_to_zero():
+    """负数钳 0 (不接受'事件后' 的 trigger)."""
+    assert calendar_events._normalize_alarms([-30]) == [0]
+
+
+def test_normalize_alarms_skips_invalid_items():
+    """list 里有非数字 → 跳过, 不挂."""
+    assert calendar_events._normalize_alarms([15, "bad", 60, None]) == [15, 60]
+
+
+def test_normalize_alarms_invalid_type_falls_back_to_default():
+    """传 dict / str → 兜底 [15] (default)."""
+    assert calendar_events._normalize_alarms("not a list") == [15]
+    assert calendar_events._normalize_alarms({"15": True}) == [15]
+
+
+def test_script_includes_default_alarm_when_not_specified():
+    """没传 alarm_minutes_before → 默认拼 1 个 trigger interval:-15."""
+    with patch.object(calendar_events, "_is_macos", return_value=True), \
+         patch.object(calendar_events, "_run_osascript", return_value=(True, "test", "")) as mock_run:
+        calendar_events.tool_create_calendar_event({
+            "title": "默认提醒会议",
+            "start_iso": "2026-05-18T08:40:00",
+        })
+    script = mock_run.call_args[0][0]
+    assert "make new display alarm" in script
+    assert "trigger interval:-15" in script  # 默认 15 min 前
+
+
+def test_script_multi_alarms():
+    """传 [15, 60, 1440] → 拼 3 个 alarm (升序: -15, -60, -1440)."""
+    with patch.object(calendar_events, "_is_macos", return_value=True), \
+         patch.object(calendar_events, "_run_osascript", return_value=(True, "test", "")) as mock_run:
+        calendar_events.tool_create_calendar_event({
+            "title": "多重提醒",
+            "start_iso": "2026-05-18T08:40:00",
+            "alarm_minutes_before": [60, 1440, 15],  # 故意乱序
+        })
+    script = mock_run.call_args[0][0]
+    assert "trigger interval:-15" in script
+    assert "trigger interval:-60" in script
+    assert "trigger interval:-1440" in script
+
+
+def test_script_no_alarm_segment_when_explicit_empty_list():
+    """传 [] → 不拼 alarm 段 (静默事件)."""
+    with patch.object(calendar_events, "_is_macos", return_value=True), \
+         patch.object(calendar_events, "_run_osascript", return_value=(True, "test", "")) as mock_run:
+        calendar_events.tool_create_calendar_event({
+            "title": "静默会议",
+            "start_iso": "2026-05-18T08:40:00",
+            "alarm_minutes_before": [],
+        })
+    script = mock_run.call_args[0][0]
+    assert "make new display alarm" not in script
+    assert "tell newEvent" not in script
+
+
+def test_summary_includes_alarm_human_readable():
+    """summary 字段把分钟转人话."""
+    with patch.object(calendar_events, "_is_macos", return_value=True), \
+         patch.object(calendar_events, "_run_osascript", return_value=(True, "test", "")):
+        r = calendar_events.tool_create_calendar_event({
+            "title": "测试",
+            "start_iso": "2026-05-18T08:40:00",
+            "alarm_minutes_before": [15, 60, 1440],
+        })
+    assert "15 分钟前" in r["summary"]
+    assert "1 小时前" in r["summary"]
+    assert "1 天前" in r["summary"]
+    assert "iPhone" in r["summary"]
+
+
+def test_summary_warns_when_no_alarm():
+    """显式禁 alarm → summary 警告 'iPhone 不会响'."""
+    with patch.object(calendar_events, "_is_macos", return_value=True), \
+         patch.object(calendar_events, "_run_osascript", return_value=(True, "test", "")):
+        r = calendar_events.tool_create_calendar_event({
+            "title": "静默",
+            "start_iso": "2026-05-18T08:40:00",
+            "alarm_minutes_before": [],
+        })
+    assert "iPhone 不会响" in r["summary"] or "无 alarm" in r["summary"]
+
+
 def test_macos_list_calendars_success():
     """mock osascript 返 calendar 名字符串 → 解析成数组."""
     with patch.object(calendar_events, "_is_macos", return_value=True), \

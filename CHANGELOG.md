@@ -4925,6 +4925,45 @@ UX 跟 ACP /queue / cancelAndSend 三按钮并排, streaming + hasContent 时显
 
 **Multi-Agent Kanban scope 2** (跟 hermes 0.13 自带 Kanban API 接, 把它当 tile 嵌入) 排 5/15-5/18 跟 RBAC sprint 并行, 先有 task_manager 中心 DB 持久化才能真做.
 
+### 5/14 1:00 BL-CALENDAR 补丁 — alarm_minutes_before 参数 (让 iPhone 真响)
+
+鸿波 5/14 0:55 真机验证 5 个 ISO 会议建好后, 截图问 "我 iPhone 上会提醒吗, 提醒事项里是空的". 我答清: 提醒事项空 = 正确 (Calendar 跟 Reminders 不同 app); 但 **iPhone 会不会响取决于事件有没有 alarm**, 当前 tool 没传 alarm → 5 个事件都没 alarm → iPhone 不会响.
+
+抛 3 选项: A 加 alarm 参数 (治本) / B 配 macOS 默认提醒时间 / C 同时调 reminder. 鸿波拍 **A**.
+
+**实现** (calendar_events.py + catfish_tools.py + system.rs + 13 新单测):
+
+`calendar_events.py`:
+- 加 `_normalize_alarms(raw)` 纯函数: int → list[int], None → 默认 [15], 空 list → []  (显式不提醒), 去重升序, 钳 [0, 40320] (28 天 = Calendar 上限), 跳坏值不挂
+- `tool_create_calendar_event` 加 `alarm_minutes_before` 参数
+- AppleScript 拼 alarm 段: 创建 event 后 `tell newEvent ... make new display alarm at end of display alarms with properties {trigger interval:-15} ... end tell`. trigger interval 单位**分钟**, 负数 = 前 N 分钟
+- 返回值加 `alarm_minutes_before` 字段
+- summary 字段把分钟转**人话** (15→"15 分钟前", 60→"1 小时前", 1440→"1 天前"), 多个 alarm 逗号连. 没 alarm 时 **summary 警告 "⚠ 无 alarm — iPhone 不会响"** 让 LLM 看到自己漏传
+
+`catfish_tools.py` schema:
+- 加 `alarm_minutes_before` 字段 (type: array of integer, minimum=0, maximum=40320)
+- description **明确告诉 LLM**: "默认 [15] 一次. iCloud 同步后 **iPhone 会震动+弹通知**. 不传 alarm 的话, 事件存在但 iPhone 不响, 员工到时间会忘. 传 [15, 1440] = 15min + 1天 前两次提醒. 传 [] 显式不提醒."
+
+`system.rs` Rust Tauri:
+- `create_calendar_event` 加 `alarm_minutes_before: Option<Vec<u32>>` 参数
+- 同样 None → vec![15] 默认, 空 vec → 不拼 alarm, 钳 28 天上限 + dedup + sort
+- AppleScript 拼装跟 Python 同模式
+
+SOUL.md §606 三选一铁律 加默认值段:
+- "**calendar alarm_minutes_before 默认 [15]** (5/14 1:00 加) — 事件前 15 min iPhone 震动+弹通知. **不传 alarm = iPhone 不会响**, 员工到时间会忘. 重要会议传多个 [15, 1440] (15 min + 1 天前两次提醒). 显式不要提醒传 `[]`"
+
+**单测** (`test_calendar_events.py` 27 → **40 全过**, +13 alarm tests):
+- `_normalize_alarms`: 默认 [15] / int → list / 空 list 禁用 / 去重升序 / 28 天钳 / 负数 → 0 / 跳坏值 / 兜底 [15]
+- script: 默认拼 trigger -15 / 多 alarm 升序拼 / 显式 [] 不拼 alarm 段 / summary 含人话格式 / 无 alarm summary 警告
+
+**鸿波本机要做**:
+- 5 个已建的 ISO 会议**没 alarm** (是 BL-CALENDAR 补丁前建的). 两种修法:
+  - **删了重建** — 跟 LLM 说 "把 5/18-5/22 五个 ISO 现场审核会议删了重建, 这次加 [15, 1440] 提醒", LLM 会调 5 次 delete + 5 次 create_calendar_event 带 alarm
+  - **手动加 alarm** — Calendar.app 点每个事件 → "通知" 选 "活动开始时" / "15 分钟前" / "1 天前". 5 个会议 5 分钟点完
+- 之后新 ship 的 catfish_create_calendar_event 默认就有 15 min 前提醒
+
+**验**: iPhone 打开 Calendar.app → 点 5/18 ISO 审核 Day1 → 看 "通知" 行有没东西. 有 → iPhone 到时间会响; 没 → 当前那个事件不响 (按上面修法之一处理).
+
 ### 5/14 0:30 三轮 ship — BL-CALENDAR macOS Calendar.app 集成 (任务 #58)
 
 鸿波 5/14 0:30 写 osascript Python 脚本创建 ISO 现场审核会议 (5/18-5/22 5 个会议) 撞 AppleScript syntax error (`-2741: 预期是表达式等等, 却找到行的结尾`). 真因: AppleScript 不允许 record literal **跨行换行** — 鸿波脚本里 `make new event ... with properties {\n  name:...,\n  start date:...,\n  ...\n}` 解析器看到 `{` 后第一个换行就认为表达式终止. 修法: record 段必须**压一行**或用 `¬` 续行符.

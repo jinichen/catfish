@@ -1789,10 +1789,13 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
             "  - end_iso: ISO 8601 结束时间 (可选, 默认 start + 1h)\n"
             "  - location: 地点 (可选, e.g. '409 会议室' / '12 楼 1201')\n"
             "  - description: 详情备注 (可选, 长描述)\n"
-            "  - calendar_name: 写到哪个日历 (默认 '工作'). 调 catfish_list_calendars 看可用\n\n"
+            "  - calendar_name: 写到哪个日历 (默认 '工作'). 调 catfish_list_calendars 看可用\n"
+            "  - alarm_minutes_before: ★★ 事件前几分钟弹通知 (默认 [15] 即 15min 前 1 次).\n"
+            "    iCloud 同步后 **iPhone 会震动+弹通知**. 不传 alarm 的话, 事件存在但 iPhone 不响,\n"
+            "    员工到时间会忘. 传 [15, 1440] = 15min + 1天 前两次提醒. 传 [] 显式不提醒.\n\n"
             "返参:\n"
             "  - ok: True/False\n"
-            "  - event_summary, start_iso, end_iso, location, summary (UI 用)\n"
+            "  - event_summary, start_iso, end_iso, location, alarm_minutes_before, summary (UI 用)\n"
             "  - 失败时: needs_permission 或 calendar_not_found 字段方便兜底"
         ),
         "input_schema": {
@@ -1821,6 +1824,11 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
                 "calendar_name": {
                     "type": "string",
                     "description": "写到哪个日历 (默认 '工作' 中文系统; 'Work' 英文系统). 不知道传啥就调 catfish_list_calendars 看",
+                },
+                "alarm_minutes_before": {
+                    "type": "array",
+                    "items": {"type": "integer", "minimum": 0, "maximum": 40320},
+                    "description": "事件前几分钟弹通知 (默认 [15] 一次). e.g. [15, 60, 1440] = 15min/1h/1天前 三次. 传 [] 显式不提醒. iPhone 上震动+弹通知靠这字段, 不传 = 静默事件",
                 },
             },
             "required": ["title", "start_iso"],

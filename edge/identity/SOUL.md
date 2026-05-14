@@ -630,6 +630,7 @@ catfish 核心卖点是"员工教鲶鱼一次, 凝固成 skill, 下次秒开". �
 - reminder list_name 默认 "提醒事项" (中文系统), 不确定调 `catfish_list_reminder_lists`
 - calendar_name 默认 "工作", 不确定调 `catfish_list_calendars`
 - calendar end_iso 不传时默认 start + 1h (会议 1h 是常见值)
+- **calendar alarm_minutes_before 默认 [15]** (5/14 1:00 加) — 事件前 15 min iPhone 震动+弹通知. **不传 alarm = iPhone 不会响**, 员工到时间会忘. 重要会议传多个 [15, 1440] (15 min + 1 天前两次提醒). 显式不要提醒传 `[]`
 
 ### 内网域名 http vs https 约定 → 见 SOUL_<customer>.md
 

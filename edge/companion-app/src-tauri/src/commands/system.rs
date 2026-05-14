@@ -246,6 +246,8 @@ end tell"#;
 /// - location: 地点 (可选)
 /// - description: 详情备注 (可选)
 /// - calendar_name: 写到哪个日历 (默认 "工作")
+/// - alarm_minutes_before: 事件前几分钟弹通知 (默认 [15]). iPhone 上震动+弹通知靠这字段.
+///   传 [] 显式不提醒. 单值或多值都接受 (vec).
 ///
 /// 返回: 创建的 event summary (作引用 — Calendar.app 没稳定 ID API)
 #[tauri::command]
@@ -256,6 +258,7 @@ pub async fn create_calendar_event(
     location: Option<String>,
     description: Option<String>,
     calendar_name: Option<String>,
+    alarm_minutes_before: Option<Vec<u32>>,
 ) -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
@@ -319,14 +322,44 @@ pub async fn create_calendar_event(
             props.push(format!("description:\"{}\"", desc.replace('"', "\\\"")));
         }
 
+        // alarm 段 — 默认 [15] (15 min 前 1 次), None 也用默认.
+        // 显式禁用要传 vec![] (调用方明确传空).
+        let alarms: Vec<u32> = match alarm_minutes_before {
+            None => vec![15],
+            Some(v) => {
+                let mut clean: Vec<u32> = v.into_iter()
+                    .map(|m| m.min(40320))  // 钳到 28 天
+                    .collect();
+                clean.sort();
+                clean.dedup();
+                clean
+            }
+        };
+        let alarm_segment = if alarms.is_empty() {
+            String::new()
+        } else {
+            let mut s = String::from("\n    tell newEvent\n");
+            for m in &alarms {
+                // m=0 → trigger interval:0, m>0 → -m (前 m 分钟)
+                let trigger: i64 = if *m == 0 { 0 } else { -(*m as i64) };
+                s.push_str(&format!(
+                    "        make new display alarm at end of display alarms with properties {{trigger interval:{}}}\n",
+                    trigger,
+                ));
+            }
+            s.push_str("    end tell");
+            s
+        };
+
         let script = format!(
             r#"tell application "Calendar"
     set targetCal to first calendar whose name is "{}"
-    set newEvent to make new event at targetCal with properties {{{}}}
+    set newEvent to make new event at targetCal with properties {{{}}}{}
     return summary of newEvent
 end tell"#,
             safe_cal,
             props.join(", "),
+            alarm_segment,
         );
 
         let output = Command::new("osascript")
