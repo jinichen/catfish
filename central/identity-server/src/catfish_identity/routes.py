@@ -36,6 +36,7 @@ import jwt
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+from .clients import ClientRegistry
 from .jwt_signer import JwtSigner
 from .users import IdentityUser, UserRegistry
 
@@ -45,6 +46,11 @@ logger = logging.getLogger("catfish.identity.routes")
 _CODE_TTL_SECS = 300
 #: access token / id token 有效期 (秒)
 _TOKEN_TTL_SECS = 3600
+#: service token (client_credentials grant) 有效期 (秒)
+#: 跟 user token 同 1h. 服务客户端每 expire 重换 — 1h 短到不需要 refresh_token.
+_SERVICE_TOKEN_TTL_SECS = 3600
+#: service token 的 audience. gateway 验签时 aud=catfish-gateway 才接受.
+_SERVICE_TOKEN_AUDIENCE = "catfish-gateway"
 
 
 @dataclass
@@ -100,11 +106,15 @@ def make_router(
     signer: JwtSigner,
     registry: UserRegistry,
     code_store: _CodeStore,
+    client_registry: ClientRegistry | None = None,
 ) -> APIRouter:
     """构造 fastapi router. issuer 是 base URL (例 http://127.0.0.1:8998).
 
     设计: 把这几个依赖通过闭包传进去, 不用 fastapi global state, 测试可以单独
     构造小 router 验证.
+
+    BL-RBAC P0 + B sprint Day 1 (5/14): client_registry 可选, 为 None 时
+    /token client_credentials grant 直接返 503 unsupported (cleanly degrade).
     """
     router = APIRouter()
 
@@ -248,64 +258,62 @@ def make_router(
     @router.post("/token")
     async def token(
         grant_type: str = Form(...),
-        code: str = Form(...),
-        redirect_uri: str = Form(...),
+        # authorization_code grant 字段 (用户走 SSO 用)
+        code: str = Form(""),
+        redirect_uri: str = Form(""),
+        # 通用 client 字段
         client_id: str = Form(...),
-        client_secret: str = Form(""),  # noqa: ARG001 — Phase 1B-1 不验 secret, Phase 2 加
+        client_secret: str = Form(""),
+        # client_credentials grant 字段 (服务调用用)
+        scope: str = Form(""),
     ) -> JSONResponse:
-        """换 code 拿 id_token + access_token.
+        """OAuth 2.0 /token endpoint. 双 grant_type:
 
-        Phase 1B-1: client_secret 不验 (因为 demo / 我们没实现 client 注册).
-                   Phase 2 加 client registration + secret 验证.
+        # grant_type=authorization_code  (RFC 6749 §4.1)
+            用户走 SSO 后浏览器拿 code, 换 id_token + access_token.
+            参数: code, redirect_uri, client_id, [client_secret]
+            返: id_token + access_token + token_type + expires_in + scope
 
-        Returns:
-            OAuth 2.0 token response: access_token, id_token, token_type, expires_in
+        # grant_type=client_credentials  (RFC 6749 §4.4) — BL-RBAC Day 1 (5/14)
+            服务进程 (hermes-cli 等) 拿 client_id + client_secret 换 service token.
+            参数: client_id, client_secret, [scope]
+            返: access_token (含 token_use=service) + token_type + expires_in + scope
+            **不返 id_token** (服务调用没用户 sub).
+
+        Phase 1B-1: authorization_code 的 client_secret 不验 (demo).
+        Day 1 (5/14): client_credentials 的 client_secret **必须验** (服务身份硬要求).
         """
-        if grant_type != "authorization_code":
-            raise HTTPException(
-                status_code=400, detail=f"unsupported grant_type: {grant_type}"
+        if grant_type == "authorization_code":
+            return _handle_authorization_code(
+                code=code,
+                redirect_uri=redirect_uri,
+                client_id=client_id,
+                client_secret=client_secret,  # 不验, 占位接收
+                code_store=code_store,
+                signer=signer,
+                issuer=issuer,
             )
-
-        record = code_store.consume(code)
-        if record is None:
-            raise HTTPException(status_code=400, detail="invalid_grant: code 无效或已用过")
-
-        if record.client_id != client_id:
-            raise HTTPException(status_code=400, detail="invalid_grant: client_id 不匹配")
-        if record.redirect_uri != redirect_uri:
-            raise HTTPException(
-                status_code=400, detail="invalid_grant: redirect_uri 不匹配"
+        elif grant_type == "client_credentials":
+            return _handle_client_credentials(
+                client_id=client_id,
+                client_secret=client_secret,
+                scope=scope,
+                client_registry=client_registry,
+                signer=signer,
+                issuer=issuer,
             )
-
-        # 组装 ID Token (含 user claims)
-        id_claims = record.user.to_oidc_claims()
-        if record.nonce:
-            id_claims["nonce"] = record.nonce
-        id_token = signer.sign_id_token(
-            issuer=issuer,
-            subject=record.user.email,
-            audience=client_id,
-            claims=id_claims,
-            ttl_seconds=_TOKEN_TTL_SECS,
-        )
-        # access_token 也用 JWT (简化, Phase 2 改 opaque)
-        access_token = signer.sign_id_token(
-            issuer=issuer,
-            subject=record.user.email,
-            audience=client_id,
-            claims={"scope": record.scope, "token_use": "access"},
-            ttl_seconds=_TOKEN_TTL_SECS,
-        )
-        logger.info("token OK: user=%s client=%s", record.user.email, client_id)
-        return JSONResponse(
-            {
-                "access_token": access_token,
-                "id_token": id_token,
-                "token_type": "Bearer",
-                "expires_in": _TOKEN_TTL_SECS,
-                "scope": record.scope,
-            }
-        )
+        else:
+            # OAuth 2.0 标准错误格式 (RFC 6749 §5.2)
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "unsupported_grant_type",
+                    "error_description": (
+                        f"grant_type={grant_type!r} 不支持. "
+                        f"支持: authorization_code, client_credentials"
+                    ),
+                },
+            )
 
     # ============================================================
     # /userinfo  (access_token → user claims)
@@ -343,6 +351,225 @@ def make_router(
         return {"sub": sub, **user.to_oidc_claims()}
 
     return router
+
+
+# ============================================================
+# /token grant_type handlers (5/14 Day 1 拆出 — 双 grant 各自独立)
+# ============================================================
+
+
+def _handle_authorization_code(
+    *,
+    code: str,
+    redirect_uri: str,
+    client_id: str,
+    client_secret: str,  # noqa: ARG001 — Phase 1B-1 不验
+    code_store: _CodeStore,
+    signer: JwtSigner,
+    issuer: str,
+) -> JSONResponse:
+    """authorization_code grant — 用户走 SSO 后浏览器换 id_token + access_token.
+
+    Phase 1B-1 不验 client_secret. Phase 2 加 client registration + secret 验证.
+    """
+    if not code:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_request",
+                "error_description": "code is required for authorization_code grant",
+            },
+        )
+    if not redirect_uri:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_request",
+                "error_description": "redirect_uri is required for authorization_code grant",
+            },
+        )
+
+    record = code_store.consume(code)
+    if record is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_grant",
+                "error_description": "code 无效或已用过",
+            },
+        )
+
+    if record.client_id != client_id:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_grant",
+                "error_description": "client_id 不匹配",
+            },
+        )
+    if record.redirect_uri != redirect_uri:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_grant",
+                "error_description": "redirect_uri 不匹配",
+            },
+        )
+
+    # 组装 ID Token (含 user claims)
+    id_claims = record.user.to_oidc_claims()
+    if record.nonce:
+        id_claims["nonce"] = record.nonce
+    id_token = signer.sign_id_token(
+        issuer=issuer,
+        subject=record.user.email,
+        audience=client_id,
+        claims=id_claims,
+        ttl_seconds=_TOKEN_TTL_SECS,
+    )
+    # access_token 也用 JWT (简化, Phase 2 改 opaque)
+    access_token = signer.sign_id_token(
+        issuer=issuer,
+        subject=record.user.email,
+        audience=client_id,
+        claims={"scope": record.scope, "token_use": "access"},
+        ttl_seconds=_TOKEN_TTL_SECS,
+    )
+    logger.info("token OK (auth_code): user=%s client=%s", record.user.email, client_id)
+    return JSONResponse(
+        {
+            "access_token": access_token,
+            "id_token": id_token,
+            "token_type": "Bearer",
+            "expires_in": _TOKEN_TTL_SECS,
+            "scope": record.scope,
+        }
+    )
+
+
+def _handle_client_credentials(
+    *,
+    client_id: str,
+    client_secret: str,
+    scope: str,
+    client_registry: ClientRegistry | None,
+    signer: JwtSigner,
+    issuer: str,
+) -> JSONResponse:
+    """client_credentials grant — 服务进程换 service token (BL-RBAC Day 1, 5/14).
+
+    OAuth 2.0 RFC 6749 §4.4. 跟 hermes-cli 等服务用. 严格验:
+      - client_registry 必须配 (没配返 503 — 部署没启用)
+      - client_id + client_secret 必须 bcrypt 验过
+      - client.enabled 必须 true
+      - client.allowed_grant_types 必须含 "client_credentials"
+      - 请求 scope 必须 ⊆ client.allowed_scopes (越权返 invalid_scope)
+
+    返: access_token (token_use=service) + token_type + expires_in + scope.
+    **不返 id_token** — 服务调用没用户 sub.
+    """
+    if client_registry is None:
+        # 部署没装 client_credentials 支持. cleanly degrade 不挂.
+        # 5/21 之后 prod env 启动时会强制要求装 client_registry, 这里只是 dev fallback.
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "unsupported_grant_type",
+                "error_description": (
+                    "client_credentials grant 未启用 — "
+                    "catfish-identity 启动时未配 client_registry. "
+                    "见 docs/RBAC-DESIGN.md §10."
+                ),
+            },
+        )
+
+    if not client_secret:
+        # invalid_client (RFC 6749 §5.2) — 缺凭据
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "invalid_client",
+                "error_description": "client_secret is required for client_credentials grant",
+            },
+        )
+
+    client = client_registry.verify_secret(client_id, client_secret)
+    if client is None:
+        # invalid_client — client_id / secret / disabled 任一不过, 统一这个错
+        # (不暴露具体哪个原因, 防 enumeration)
+        logger.warning(
+            "client_credentials 失败: client_id=%s (unknown / wrong secret / disabled)",
+            client_id,
+        )
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": "invalid_client",
+                "error_description": "client 认证失败 (client_id / secret 错或 client 已禁用)",
+            },
+        )
+
+    # client 必须显式允许 client_credentials grant
+    if not client.supports_grant("client_credentials"):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "unauthorized_client",
+                "error_description": (
+                    f"client {client_id!r} 未在 allowed_grant_types 里包含 client_credentials"
+                ),
+            },
+        )
+
+    # scope 越权检查 — requested 必须 ⊆ allowed_scopes
+    requested_scopes = [s for s in scope.split() if s] if scope else []
+    bad = client.has_unauthorized_scope(requested_scopes)
+    if bad:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_scope",
+                "error_description": (
+                    f"client {client_id!r} 无权请求 scope: {', '.join(bad)}. "
+                    f"允许 scope: {', '.join(client.allowed_scopes)}"
+                ),
+            },
+        )
+
+    # 最终 scope (空 = 给 client 全集)
+    final_scopes = client.filter_scopes(requested_scopes)
+    final_scope_str = " ".join(final_scopes)
+
+    # 签 access_token (RS256, 跟 user token 同公钥 — gateway 不区分验签)
+    claims = client.to_token_claims(final_scope_str)
+    # 注意: signer.sign_id_token 会自己加 iat / exp / iss / sub / aud, 这里 claims
+    # 里的 sub 会被 signer 的 subject 参数覆盖 (传 client.to_token_claims 里的 sub).
+    access_token = signer.sign_id_token(
+        issuer=issuer,
+        subject=claims["sub"],  # client:hermes-cli
+        audience=_SERVICE_TOKEN_AUDIENCE,  # catfish-gateway
+        claims={
+            "client_id": claims["client_id"],
+            "token_use": claims["token_use"],
+            "scope": claims["scope"],
+            "role": claims["role"],
+            "department": claims["department"],
+        },
+        ttl_seconds=_SERVICE_TOKEN_TTL_SECS,
+    )
+    logger.info(
+        "token OK (client_credentials): client=%s scope=%s dept=%s",
+        client_id, final_scope_str, client.department,
+    )
+    return JSONResponse(
+        {
+            "access_token": access_token,
+            # **不返 id_token** — service 调用没 user sub
+            "token_type": "Bearer",
+            "expires_in": _SERVICE_TOKEN_TTL_SECS,
+            "scope": final_scope_str,
+        }
+    )
 
 
 # ============================================================

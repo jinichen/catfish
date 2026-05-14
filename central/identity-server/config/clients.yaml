@@ -1,0 +1,44 @@
+# Catfish Identity OAuth client 注册表
+#
+# 这个文件登记**服务**身份 (机器对机器), 跟 users.yaml (人) 平级.
+# 服务 (e.g. hermes-cli) 用 OAuth 2.0 client_credentials grant 拿 access_token,
+# 替代之前的 dev_token hack. 详见 docs/RBAC-DESIGN.md §10 + §12.
+#
+# 加 client (admin):
+#   1. 生成 secret hash:
+#      python3 -c 'import bcrypt; print(bcrypt.hashpw(b"YOUR_CLIENT_SECRET", bcrypt.gensalt()).decode())'
+#   2. 在下面加一条 dict (client_id / client_secret_hash 必填)
+#   3. 重启 catfish-identity (Phase 2 加 hot-reload)
+#
+# 字段说明:
+#   client_id:            URL 安全的字符串, e.g. "hermes-cli", "catfish-skills-hub"
+#   client_secret_hash:   bcrypt hash, 永不存明文
+#   allowed_grant_types:  目前只支持 ["client_credentials"]. authorization_code Phase 2 加
+#   allowed_scopes:       client 能拿哪些 scope. 越权请求被 /token 直接拒
+#   department:           虚拟部门 (用来 quota 归账, 跟人 user 一样)
+#   role:                 强制 = "service" (yaml 误填别的会被覆盖回 service)
+#   enabled:              false → 立即拒登录, 不删条目方便临时禁
+#
+# 安全:
+#   - 这文件含 secret hash, 不能进 public git. 跟 users.yaml 一样.
+#   - 生产部署: chmod 600 + 路径 ~/.catfish/identity-server/clients.yaml
+#   - secret 给业务方时一次性给, 不留库 — 业务方自己存 .env / k8s secret
+
+clients:
+  # ── hermes-cli (5/14 BL-RBAC P0 + B sprint Day 1, 第一个真接 OAuth 的服务) ──
+  - client_id: hermes-cli
+    # demo secret: hermes-dev-secret-2026-please-change
+    # 生产部署 IT 用上面 bcrypt 命令生成新 hash + 改这条 + 同步给业务方
+    client_secret_hash: $2b$12$5LdhU49ZtK7EpYFYdTn4m.48yzoBrU0CasSHmpuY/CGjUKQsYpBcG
+    name: Hermes CLI
+    description: 鲶鱼 hermes 0.13 CLI — 跑 skill / 跑批 / agent loop
+    allowed_grant_types:
+      - client_credentials
+    allowed_scopes:
+      - chat.completions      # POST /v1/chat/completions
+      - audit.write           # 写 audit event 用
+      - tools.invoke          # 调 native tool / MCP
+      - skills.run            # catfish_run_skill
+    department: infra
+    role: service
+    enabled: true

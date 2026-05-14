@@ -61,6 +61,7 @@ def _load_dotenv() -> Path | None:
 _ENV_FILE_LOADED = _load_dotenv()
 
 
+from .clients import ClientRegistry
 from .jwt_signer import JwtSigner
 from .routes import _CodeStore, make_router
 from .users import UserRegistry
@@ -91,6 +92,10 @@ def create_app() -> FastAPI:
     signer = JwtSigner()
     registry = UserRegistry()
     code_store = _CodeStore()
+    # BL-RBAC P0 + B sprint Day 1 (5/14): OAuth client_credentials grant.
+    # ClientRegistry 加载 clients.yaml (没文件 → 空注册表, /token client_credentials
+    # 返 503 cleanly degrade). 见 docs/RBAC-DESIGN.md §10/§12.
+    client_registry = ClientRegistry()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -155,8 +160,20 @@ def create_app() -> FastAPI:
             signer=signer,
             registry=registry,
             code_store=code_store,
+            client_registry=client_registry,
         )
     )
+    if len(client_registry) > 0:
+        logger.info(
+            "OAuth client_credentials grant: 加载 %d 个 client (path=%s)",
+            len(client_registry), client_registry.clients_path,
+        )
+    else:
+        logger.info(
+            "OAuth client_credentials grant: 未配 client (path=%s 不存在或空), "
+            "/token 此 grant 返 503 — dev 期间 hermes-cli 仍走 dev_token fallback.",
+            client_registry.clients_path,
+        )
 
     # 五一 sprint Day 4 (BL-M4.1): Plan D · Catfish Federation registry
     # 各 catfish 实例 (Alice / Bob / ...) 通过这个 registry 互相发现 + 拿 jwks
