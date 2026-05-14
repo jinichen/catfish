@@ -185,6 +185,16 @@ class Config(BaseModel):
     mcp_registry: McpRegistryConfig = Field(default_factory=McpRegistryConfig)
     skills_hub: SkillsHubConfig = Field(default_factory=SkillsHubConfig)
 
+    # BL-FALLBACK-PROMPT-CAP (5/14 鸿波 token audit 后加): 公网 fallback 拦大 prompt.
+    # 鸿波 5/14 audit 发现公网 deepseek fallback 51 次 / 2.9M tokens, avg 57K 比内网
+    # 40K 还重 — 内网慢一点就切公网, 公网更慢更贵. 加阈值: prompt 估算超这个值的请求,
+    # fallback 链跳过所有 tier=public 的 candidate (只在内网链 retry).
+    # 估算用 messages 字符数 / 2 (中英混保守估), 可能高估 50% 但安全侧靠公网钱.
+    # 设 0 = 关功能 (回到老行为, 任意 prompt 都允许 fallback 公网).
+    # 设 30000 = 默认 (鸿波 audit 30K 阈值合理, 大多数日常 chat 在内, 长任务 / 大附件
+    # 走超阈值不切公网).
+    max_fallback_prompt_tokens: int = 30000
+
     def get_model(self, name: str) -> ModelConfig | None:
         for m in self.models:
             if m.name == name:

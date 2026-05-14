@@ -100,6 +100,73 @@ def should_fallback(exc: Exception, on_errors: Iterable) -> bool:
     return False
 
 
+class LargePromptFallbackBlocked(Exception):
+    """BL-FALLBACK-PROMPT-CAP (5/14): 大 prompt + 内网失败 + 全公网被 cap 过滤 → 抛这个.
+
+    caller (chat_completions) 捕获后转友好 503: "内网暂时不可达 + 你的请求 ~67K 超
+    公网 fallback cap 30K, 公网更慢更贵不切. 1 分钟后重试或换大 context 模型."
+    """
+
+    def __init__(
+        self,
+        primary_name: str,
+        prompt_estimate: int,
+        cap: int,
+        last_exc: Exception,
+        blocked_chain: list[str],
+    ):
+        self.primary_name = primary_name
+        self.prompt_estimate = prompt_estimate
+        self.cap = cap
+        self.last_exc = last_exc
+        self.blocked_chain = blocked_chain
+        super().__init__(self.friendly_message())
+
+    def friendly_message(self) -> str:
+        return (
+            f"内网 LLM ({self.primary_name}) 暂时不可达 ({type(self.last_exc).__name__}: "
+            f"{str(self.last_exc)[:120]}), 你的请求 ~{self.prompt_estimate:,} tokens 超过"
+            f"公网 fallback 上限 {self.cap:,} (公网更慢更贵, 大 prompt 不切公网). "
+            f"建议: (1) 1-2 分钟后重试内网 (2) 主动切到 catfish-public-gemini-pro (2M context, "
+            f"自己选这个就接受公网) (3) 减少 prompt (如清空对话历史 / 不带附件). "
+            f"被跳过的公网 chain: {self.blocked_chain}"
+        )
+
+
+def estimate_prompt_tokens(messages: list[dict] | None) -> int:
+    """BL-FALLBACK-PROMPT-CAP (5/14): 粗估 prompt tokens 给 fallback cap 用.
+
+    没装 tiktoken (catfish 用 LiteLLM, 上游各家 tokenizer 不一), 用字符数 / 2 保守估:
+    - 英文 ~4 char/token (低估 → 偏安全, 触发 cap 偏多)
+    - 中文 ~1 char/token (高估 → 偏安全)
+    - 中英混 ~2-3 char/token, /2 是中间偏高估值
+
+    高估比低估安全 — 触发 cap 拦截多一点不会烧公网钱, 漏拦一次就是 57K avg 公网.
+
+    image_url 不算 (固定开销, vision 模型 token 计算靠上游).
+    """
+    if not messages:
+        return 0
+    total_chars = 0
+    for m in messages:
+        c = m.get("content")
+        if isinstance(c, str):
+            total_chars += len(c)
+        elif isinstance(c, list):
+            # multipart (vision) — 只算 text part, 不算 image_url
+            for part in c:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    total_chars += len(part.get("text", ""))
+        # tool_calls 字段也算
+        tcs = m.get("tool_calls") or []
+        for tc in tcs:
+            fn = tc.get("function") or {}
+            args = fn.get("arguments")
+            if isinstance(args, str):
+                total_chars += len(args)
+    return total_chars // 2
+
+
 def _extract_status_code(exc: Exception) -> int | None:
     """从 LiteLLM / httpx / generic 异常里提取 HTTP status code。
 
@@ -126,6 +193,7 @@ def _extract_status_code(exc: Exception) -> int | None:
 def resolve_chain(
     config: Config,
     primary: ModelConfig,
+    prompt_estimate: int = 0,
 ) -> list[ModelConfig]:
     """把 model.fallback.chain (字符串列表) 解析成 ModelConfig 列表。
 
@@ -133,9 +201,13 @@ def resolve_chain(
         - chain 里写错了找不到的 model name (warning 但不报错)
         - api_key 没配的 (走 fallback 是为了恢复, 没 key 显然不行)
         - 自身 (a -> a 这种循环写法)
+        - mode mismatch (chat vs embedding)
+        - **BL-FALLBACK-PROMPT-CAP (5/14)**: tier=public 且 prompt_estimate > config.max_fallback_prompt_tokens
     """
     if not primary.fallback or not primary.fallback.chain:
         return []
+    # getattr 兼容老 test (用 SimpleNamespace 没这字段) — 默认 0 = 关功能
+    cap = getattr(config, "max_fallback_prompt_tokens", 0)
     out: list[ModelConfig] = []
     for name in primary.fallback.chain:
         if name == primary.name:
@@ -163,6 +235,18 @@ def resolve_chain(
                 name, primary.mode, m.mode,
             )
             continue
+        # BL-FALLBACK-PROMPT-CAP: 大 prompt 不切公网 (公网更慢更贵, 不该兜底)
+        if (
+            cap > 0
+            and prompt_estimate > cap
+            and m.tier == "public"
+        ):
+            logger.warning(
+                "fallback chain skips %s (tier=public, prompt_estimate=%d > cap=%d). "
+                "BL-FALLBACK-PROMPT-CAP: 大 prompt 不切公网, 内网链 retry 失败就报错让用户重试.",
+                name, prompt_estimate, cap,
+            )
+            continue
         out.append(m)
     return out
 
@@ -176,11 +260,16 @@ async def with_fallback(
     config: Config,
     primary: ModelConfig,
     invoke_one,  # async (model: ModelConfig) -> Any
+    prompt_estimate: int = 0,  # BL-FALLBACK-PROMPT-CAP (5/14): caller 传的 prompt 估算
 ) -> tuple[Any, ModelConfig, list[str]]:
     """跑 primary, 失败按 chain 重试。
 
     invoke_one 是调用方的 closure: 接 ModelConfig 返回 result (or 抛异常)。
     我们这里只管 retry / chain 选择 / hops 计数, 不关心怎么调 LiteLLM。
+
+    BL-FALLBACK-PROMPT-CAP (5/14): 大 prompt (> config.max_fallback_prompt_tokens) 时,
+    fallback 链跳过所有 tier=public 的 candidate (公网更慢更贵, 不该兜底).
+    调用方用 estimate_prompt_tokens(messages) 算 prompt_estimate 传进来.
 
     返回:
         (result, model_used, attempts) —— 调用方需要知道实际用了哪个 model 写 metrics
@@ -207,8 +296,26 @@ async def with_fallback(
             raise
         last_exc: Exception = e
 
-    # fallback chain
-    candidates = resolve_chain(config, primary)
+    # fallback chain (BL-FALLBACK-PROMPT-CAP: 传 prompt_estimate 让 resolve_chain 过滤公网)
+    candidates = resolve_chain(config, primary, prompt_estimate=prompt_estimate)
+    # 边界: 全部 candidate 被 cap 过滤光 → 抛专门错误 (caller 转友好 503)
+    cap = getattr(config, "max_fallback_prompt_tokens", 0)
+    if not candidates and cap > 0 and prompt_estimate > cap:
+        # 区分 "chain 本来就空" vs "chain 被 cap 过滤光"
+        raw_chain_len = len(primary.fallback.chain) if primary.fallback else 0
+        if raw_chain_len > 0:
+            logger.warning(
+                "BL-FALLBACK-PROMPT-CAP: 大 prompt (%d > cap=%d) chain 全是公网被过滤光, "
+                "primary %s 失败后无 fallback. 抛 LargePromptFallbackBlocked.",
+                prompt_estimate, cap, primary.name,
+            )
+            raise LargePromptFallbackBlocked(
+                primary_name=primary.name,
+                prompt_estimate=prompt_estimate,
+                cap=cap,
+                last_exc=last_exc,
+                blocked_chain=list(primary.fallback.chain),
+            )
     max_hops = primary.fallback.max_hops if primary.fallback else 0
     for i, candidate in enumerate(candidates):
         if i >= max_hops:

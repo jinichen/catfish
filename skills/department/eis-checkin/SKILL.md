@@ -3,46 +3,38 @@ name: eis-checkin
 version: "0.1.0-frozen"
 deprecated: false
 description: |-
-  ⭐ 登录 EIS 后点上班打卡按钮, 返回打卡时间
+  ⭐ 登录 EIS 后点上班打卡按钮
 
-  ⚙️ 由 catfish_freeze_skill 自动凝固 (2026-05-12 16:11:17, BL-MM9-FREEZE).
-  源 trace: /Users/chenhongbo/.catfish/traces/session_eis-checkin_20260512_161115_f9138b.jsonl (steps 1-8, ok=8/8).
+  ⚙️ 由 catfish_freeze_skill 自动凝固 (2026-05-14 12:44:22, BL-MM9-FREEZE).
+  源 trace: /Users/chenhongbo/.catfish/traces/session_eis-checkin_20260514_124403_09ae4f.jsonl (steps 1-3, ok=4/4).
   **不要手改 script.py** — 业务流程变了走"再教一次"路径让管道重新凝固.
 
-  调用入口: `render_eis_checkin(username, password_ref, max_captcha_retry)` (script.py).
+  调用入口: `render_eis_checkin()` (script.py).
 ---
 
-# eis-checkin — 登录 EIS 后点上班打卡按钮, 返回打卡时间
+# eis-checkin — 登录 EIS 后点上班打卡按钮
 
-> 凝固于 2026-05-12 16:11:17. 教学→凝固→复用闭环 (BL-MM9-FREEZE).
+> 凝固于 2026-05-14 12:44:22. 教学→凝固→复用闭环 (BL-MM9-FREEZE).
 
 ## 怎么调
 
 ```
 catfish_run_skill(
   skill_path="department/eis-checkin",
-  params={"username": 'chenhb', "password_ref": 'keychain://eis_password', "max_captcha_retry": 3}
+  params={}
 )
 ```
 
 ## 凝固时的 8 步教学 trace
 
-  1. `catfish_browser_goto(http://eis.ffcs.cn)`
-  2. `catfish_browser_fill(#name)`
-  3. `catfish_browser_fill(#pwd)`
-  4. `catfish_recognize_captcha(#captchaImg)`
-  5. `catfish_browser_fill(#captcha)`
-  6. `catfish_browser_click(div.button-login)`
-  7. `catfish_browser_find_by_text(...)`
-  8. `catfish_browser_click(div.title)`
+  1. `catfish_run_skill(...)`
+  2. `catfish_run_skill(...)`
+  3. `catfish_browser_find_by_text(...)`
+  4. `catfish_browser_click(div.title)`
 
 ## 参数
 
-| 参数 | 类型 | 默认 |
-|---|---|---|
-| `username` | str | 'chenhb' |
-| `password_ref` | str | 'keychain://eis_password' |
-| `max_captcha_retry` | int | 3 |
+_(无参数)_
 
 ## 修改方式
 

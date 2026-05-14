@@ -4964,6 +4964,77 @@ SOUL.md §606 三选一铁律 加默认值段:
 
 **验**: iPhone 打开 Calendar.app → 点 5/18 ISO 审核 Day1 → 看 "通知" 行有没东西. 有 → iPhone 到时间会响; 没 → 当前那个事件不响 (按上面修法之一处理).
 
+### 5/14 18:30-20:00 token 用量 audit + BL-FALLBACK-PROMPT-CAP ship + 2 个 BL 加 BACKLOG
+
+鸿波 5/14 下午醒来问 "每天 TOKEN 用量非常大, 是不是计费有问题". 1.5h audit 三段, 修一个真根因, 加两个 BL.
+
+#### audit 数据 (从 gateway_audit PG 表 1 天)
+
+```
+总请求数: 453
+prompt token: 18,620,456 (avg 41,105, max 101,412)
+completion: 48,119
+by model:
+  catfish-private-main         388 req / 15.6M tokens (84%)  内网
+  catfish-public-deepseek-flash 51 req /  2.9M tokens (16%)  公网烧钱 ⚠
+  catfish-private-vision        14 req /   0.1M tokens (微量)
+status:
+  ok                  267 (59%)
+  interrupted_resumed 186 (41%)  ← 看似异常
+top 20 大请求: 全部 88K-101K, 全在 5/14 09:09-09:28 20 分钟内
+```
+
+#### 诊断 4 个发现
+
+**1. 计费逻辑没 bug** (grep gateway 代码确认): 单源从 LLM upstream usage chunks, 没重复计算. retry/fallback 只成功那次写 quota.
+
+**2. 公网 deepseek fallback 51 次 / avg 57K → 真根因 #1, 立刻修** ✅
+内网慢一点就切公网, 公网 avg 57K 比内网 40K 还重. **修: BL-FALLBACK-PROMPT-CAP** (任务 #60), 大 prompt (>30K) 失败时跳过公网 candidate, 只在内网链 retry.
+
+**3. interrupted_resumed 41% 看似异常 → 不是 bug, 不修** ✅
+是 BL-HERMES013-4 (5/12 ship) atomic session 设计行为: gateway 启动时 reap 上次崩前 in-flight stream 写一条 audit. 24h dev 阶段反复重启 gateway (我们昨晚加 BL-CALENDAR/Kanban/fallback cap 等 endpoint, 你都得 pkill 重启) 累积 186 条. 验证: `ls ~/.catfish/inflight_streams/` 当前残留 1 个 = cleanup 正常, 没累积 bug.
+
+**4. SOUL 28K = avg_prompt 68% 大头, 但内网 vLLM KV cache 已消化** 🟡
+audit_inject_size.py 跑出来: SOUL.md 28,067 tokens 每次都注 (68% avg). 但内网 Qwen 上游 (vLLM/SGLang) **大概率自带 prefix caching**, 同 prompt prefix 重复发只首次算全 GPU 时间, 之后增量算. **实际 GPU 开销没 sum_in 数字看着大**. 你本机看内网平台 vLLM 启动配置有 `--enable-prefix-caching` 就 confirm.
+
+**5. 真大头 = 5/14 09:00 那 20 个 88K-101K 请求** 🔴 → 真根因 #2, 排 sprint
+20 分钟内 1.9M tokens, 是某个长任务多轮 tool_calls 累积 messages history (上轮 tool result + 这轮再问 + 再 tool result + ...). 不是 SOUL 重复发. **修: BL-MULTITURN-WINDOW** (任务 #62), catfish_run_skill / useChat 跑超 5 轮后截断 messages history 只留 system + 第一条 user + last-N 轮. 减 40-60% 大任务 token. 1 天 ship.
+
+#### BL-FALLBACK-PROMPT-CAP (任务 #60) 实现
+
+新文件: `central/llm-gateway/scripts/audit_token_usage.py` (audit 工具, 一行跑出 4 段统计)
+新文件: `central/llm-gateway/scripts/audit_inject_size.py` (SOUL/journal/facts 注入大小量化)
+新文件: `central/llm-gateway/tests/test_fallback_prompt_cap.py` (14 单测)
+
+代码改动:
+- `config.py`: `Config.max_fallback_prompt_tokens: int = 30000` (新字段, 默认 30K, 设 0 关功能)
+- `fallback.py`:
+  - 新 `estimate_prompt_tokens(messages)` — 字符数 / 2 保守估 (中英混), tool_calls.arguments 也算, image_url 不算
+  - 新 `LargePromptFallbackBlocked` 异常 — 含 friendly_message() 给员工看
+  - `resolve_chain(config, primary, prompt_estimate=0)` — 加 `prompt_estimate` 参数, 大 prompt 时过滤 tier=public candidate
+  - `with_fallback(..., prompt_estimate=0)` — 加 `prompt_estimate` 参数, 全 candidate 被 cap 过滤光时抛 LargePromptFallbackBlocked
+  - `getattr(config, "max_fallback_prompt_tokens", 0)` 兼容老 SimpleNamespace 假 config 的 test
+- `app.py`:
+  - stream + non-stream 两条 chat completions 路径都接 `estimate_prompt_tokens(body['messages'])` 传给 with_fallback
+  - `_raise_upstream_error` 加分支: 捕获 `LargePromptFallbackBlocked` → 转 503 + 友好 detail (含 prompt_estimate / cap / blocked_chain), 不写 status=error 而是 status=fallback_capped 让 audit 区分
+
+测试: 14 新单测 (estimate 各场景 / resolve_chain 大小 prompt 过滤 / with_fallback 端到端 blocked + private 兜底 + 老 caller 兼容). 全过.
+gateway 全套: 923 → **937 passed** (+14, 0 回归).
+
+预期效果: 公网 deepseek fallback 占比从 16% → ~3%, 大 prompt 不再切公网, 减约 16% × 大请求占比 = ~10% 总 token (公网部分大头, 减明显). 同时给员工**清晰错误** "内网暂不可达 + 你 67K prompt 超公网 30K 上限, 1 分钟后重试或自己选 catfish-public-gemini-pro".
+
+#### audit 工具落档 (永久可复用)
+
+- `scripts/audit_token_usage.py` — 任意员工 / 任意时间窗 token 用量 4 段统计 (总量 / by model / top 20 / status). 自动加载 .env, 不需要 export DB URL. **kanban / dashboard 后续可视化前 admin 命令行手段**.
+- `scripts/audit_inject_size.py` — SOUL / 场景 SOUL / journal / facts 注入大小量化. 量 SOUL 改动后效果用.
+
+#### 教训
+
+1. **"用量大可能是真大不是 bug"** — audit 前先量化, 不靠感觉. 鸿波质疑 "是不是计费有问题" 是对的, 但不要**默认是 bug** (容易乱改 gateway 计费逻辑加更多坑). 数据驱动判.
+2. **dev 阶段反复重启 gateway 会污染 audit 数据** — 41% interrupted_resumed 不是用户体验问题, 是工程师反复 pkill. production 监控时要看 uptime 区分.
+3. **上游 GPU prefix cache 跟 gateway 算 token 是两回事** — 内网 Qwen sum_in 报 28K 不代表 GPU 真处理 28K, vLLM cache hit 后只增量算. 真要省 GPU 时间不一定要省 token.
+4. **真大头要看 outliers 不看 avg** — avg 41K 是 SOUL 拉的, 真烧的是 max 101K 那批长任务. 优先级 outlier > avg.
+
 ### 5/14 0:30 三轮 ship — BL-CALENDAR macOS Calendar.app 集成 (任务 #58)
 
 鸿波 5/14 0:30 写 osascript Python 脚本创建 ISO 现场审核会议 (5/18-5/22 5 个会议) 撞 AppleScript syntax error (`-2741: 预期是表达式等等, 却找到行的结尾`). 真因: AppleScript 不允许 record literal **跨行换行** — 鸿波脚本里 `make new event ... with properties {\n  name:...,\n  start date:...,\n  ...\n}` 解析器看到 `{` 后第一个换行就认为表达式终止. 修法: record 段必须**压一行**或用 `¬` 续行符.

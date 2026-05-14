@@ -101,6 +101,14 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 | Companion 加语言 toggle (zh/en) | 半天 |
 | hermes 0.13 i18n + catfish brand 端到端测试 | 1 天 |
 
+### 待评估 (5/14 1:50 加, 鸿波 "教学方式很不人性、也很难复制" 反思后)
+
+| ID | 项 | 状态 | 触发 |
+|---|---|---|---|
+| BL-LEARN-RECMODE | 录屏 + 语音教学引擎 — 用户正常操作 + 顺嘴说意图, 后端综合自动生成 skill (不让用户写 catfish API) | ⬜ 待评估 / 设计 ✅ | 设计文档 5/14 2:15 落 `docs/LEARN-RECMODE-DESIGN.md` (468 行, 12 章 + 2 附录). 5/19 V1-V4 验证通过后排 5/26-5/29 sprint (3-4 天). 详见 task #59. |
+
+种子数据: 鸿波 5/19 (周一) 手动检查 EIS 资质过期时录全程屏 + 🎤 语音 "为啥这么点", 那段录像作录屏教学引擎第一个 ground truth.
+
 ### 6 月+ — hermes 0.13 剩下红利按需
 
 - Checkpoints v2 (跟我们 inflight_streams 整合, 自动 pruning) — 1-2 天

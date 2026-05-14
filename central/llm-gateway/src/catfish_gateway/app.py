@@ -1190,6 +1190,37 @@ def _raise_upstream_error(
     """
     err_type = type(exc).__name__
     err_msg = str(exc)[:400]
+
+    # BL-FALLBACK-PROMPT-CAP (5/14): 大 prompt + 内网失败 + 公网被 cap 拦截 →
+    # 这是设计行为, 不是上游 bug. 转 503 + 友好消息, 不写 status=error 避免误算.
+    from .fallback import LargePromptFallbackBlocked  # noqa: PLC0415
+    if isinstance(exc, LargePromptFallbackBlocked):
+        log_request_metadata(
+            user=user_sub,
+            model=model_name,
+            latency_ms=latency_ms,
+            status="fallback_capped",  # 区别于 'error' 让 audit 看清是 cap 拦的
+            error=f"LargePromptFallbackBlocked: prompt={exc.prompt_estimate} cap={exc.cap}",
+        )
+        logger.warning(
+            "BL-FALLBACK-PROMPT-CAP triggered: %s prompt=%d cap=%d primary_err=%s",
+            model_name, exc.prompt_estimate, exc.cap, type(exc.last_exc).__name__,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "large_prompt_fallback_blocked",
+                "error_type": "LargePromptFallbackBlocked",
+                "message": exc.friendly_message(),
+                "friendly": exc.friendly_message(),
+                "model": model_name,
+                "prompt_estimate": exc.prompt_estimate,
+                "cap": exc.cap,
+                "blocked_chain": exc.blocked_chain,
+                "latency_ms": round(latency_ms, 1),
+            },
+        ) from exc
+
     log_request_metadata(
         user=user_sub,
         model=model_name,
@@ -1361,8 +1392,12 @@ async def _stream_chat_completion(
                 first = None
             return iterator, first
 
+        # BL-FALLBACK-PROMPT-CAP (5/14): 算 prompt 估算传给 with_fallback, 大 prompt
+        # 失败时跳过公网 candidate (公网更慢更贵, 不该兜底).
+        from .fallback import estimate_prompt_tokens  # noqa: PLC0415
+        prompt_estimate = estimate_prompt_tokens(body.get("messages") or [])
         (iterator, first_chunk), used_model, attempts_log = await with_fallback(
-            config, model, _start_stream,
+            config, model, _start_stream, prompt_estimate=prompt_estimate,
         )
         # 首 chunk 拿到 = 上游开始往外吐数据. 这就是 TTFT (time-to-first-token).
         # 注: 如果走了 fallback, 这里记的是"最终成功那个模型的 TTFT", 不算前面失败模型的等待.
@@ -1569,7 +1604,12 @@ async def _invoke_chat_completion(
         async def _call(candidate_model):
             params = _build_litellm_params(call_body, candidate_model)
             return await litellm.acompletion(**params)
-        resp, used, _attempts = await with_fallback(config, model, _call)
+        # BL-FALLBACK-PROMPT-CAP (5/14): 大 prompt 失败时跳过公网
+        from .fallback import estimate_prompt_tokens  # noqa: PLC0415
+        pe = estimate_prompt_tokens(call_body.get("messages") or [])
+        resp, used, _attempts = await with_fallback(
+            config, model, _call, prompt_estimate=pe,
+        )
         used_model_holder[0] = used  # 续写跨次都记最新 used_model
         return resp
 
