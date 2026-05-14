@@ -228,10 +228,41 @@ def test_write_skill_files(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_aggregate_session_call_llm_not_implemented(tmp_path):
-    """v0 call_llm 抛 NotImplementedError, 5/26 真做时接通."""
+async def test_aggregate_session_e2e_with_mock_llm(tmp_path, monkeypatch):
+    """端到端 mock call_llm 返一段 JSON → 真 parse → 真落 skill 文件."""
     sd = tmp_path / "rec_e2e"
     sd.mkdir()
     (sd / "events.jsonl").write_text('{"ts": 0, "kind": "click"}\n', encoding="utf-8")
-    with pytest.raises(NotImplementedError, match="未实现"):
-        await aggregator.aggregate_session(sd, skills_root=tmp_path)
+    (sd / "meta.json").write_text('{"session_id": "rec_e2e", "duration_s": 10}', encoding="utf-8")
+
+    fake_response = '{"skill_name": "test_skill", "namespace": "personal", "description": "测", "params_schema": [], "steps": [], "execute_code_segment": "print(1)", "output_schema": {}, "confidence": 0.5, "questions_for_user": []}'
+
+    async def fake_call_llm(messages, **kw):
+        return fake_response
+
+    monkeypatch.setattr(aggregator, "call_llm", fake_call_llm)
+    out = await aggregator.aggregate_session(sd, skills_root=tmp_path / "skills")
+    assert out["skill_name"] == "test_skill"
+    assert out["namespace"] == "personal"
+    assert (tmp_path / "skills" / "personal" / "test_skill" / "SKILL.md").exists()
+    assert (tmp_path / "skills" / "personal" / "test_skill" / "main.py").exists()
+
+
+@pytest.mark.asyncio
+async def test_call_llm_no_token_raises(monkeypatch):
+    """没 CATFISH_DEV_TOKEN 也没传 auth_token → friendly RuntimeError"""
+    monkeypatch.delenv("CATFISH_DEV_TOKEN", raising=False)
+    with pytest.raises(RuntimeError, match="auth token"):
+        await aggregator.call_llm([{"role": "user", "content": "test"}])
+
+
+@pytest.mark.asyncio
+async def test_call_llm_gateway_unreachable(monkeypatch):
+    """gateway 不可达 → friendly RuntimeError"""
+    monkeypatch.setenv("CATFISH_DEV_TOKEN", "fake")
+    with pytest.raises(RuntimeError, match="不可达"):
+        await aggregator.call_llm(
+            [{"role": "user", "content": "test"}],
+            gateway_url="http://127.0.0.1:1",  # 几乎不可能在用的端口
+            timeout_s=2.0,
+        )

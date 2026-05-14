@@ -240,15 +240,97 @@ def _format_transcripts_table(transcripts: list[dict]) -> str:
 # ─── 调 LLM (5/14 v0 占位) ─────────────────────────────────
 
 
-async def call_llm(messages: list[dict], model: str = "catfish-private-main") -> dict:
-    """v0 占位 — 5/26 真做时改 httpx POST /v1/chat/completions catfish-gateway.
+async def call_llm(
+    messages: list[dict],
+    model: str = "catfish-private-main",
+    *,
+    gateway_url: str | None = None,
+    auth_token: str | None = None,
+    timeout_s: float = 300.0,
+    temperature: float = 0.3,  # RecMode 综合要稳, 不要太创造
+    max_tokens: int = 8000,
+) -> str:
+    """调 catfish-private-main 综合录屏 → 输出 JSON 字符串 (caller 自己 parse_llm_output).
 
-    5/14 v0: 不真调, 返一个 mock 错误结构, 让 caller 知道这步还没接通.
+    走自己 gateway /v1/chat/completions (复用 RBAC + quota + fallback cap),
+    不直连 LiteLLM. gateway_url 默认 http://localhost:8999, auth_token 默认走
+    CATFISH_DEV_TOKEN env (跟 internal_models.py 的 a2a 调用同模式).
+
+    Args:
+        messages: build_messages(inputs) 输出
+        model: 模型 id (默认 catfish-private-main, multi-modal)
+        gateway_url: 默认 http://localhost:8999 (env CATFISH_GATEWAY_URL 覆盖)
+        auth_token: 默认 env CATFISH_DEV_TOKEN
+        timeout_s: 长 multipart messages 大约 60-180s, 给 300s
+        temperature: 0.3 (综合理解要稳, 不要太创造)
+        max_tokens: 8000 (SKILL.md JSON 一般 2-4K, 给 2x 余量)
+
+    Returns:
+        LLM 输出文本 (含可能 markdown 围栏的 JSON), caller 用 parse_llm_output 抽
+
+    Raises:
+        RuntimeError: gateway 不可达 / token 无 / LLM 错误
     """
-    raise NotImplementedError(
-        "BL-LEARN-RECMODE aggregator.call_llm v0 未实现. "
-        "5/26 sprint 接 httpx POST /v1/chat/completions 走自己 gateway."
+    import os
+    import httpx  # 5/14 装上 (pip install httpx)
+
+    gw = gateway_url or os.environ.get("CATFISH_GATEWAY_URL", "http://localhost:8999")
+    tok = auth_token or os.environ.get("CATFISH_DEV_TOKEN", "")
+    if not tok:
+        raise RuntimeError(
+            "RecMode aggregator.call_llm: 没 auth token. "
+            "设 CATFISH_DEV_TOKEN env 或 caller 显式传 auth_token."
+        )
+
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": False,  # RecMode 不需要 stream, 一次拿完整 JSON
+    }
+    headers = {
+        "Authorization": f"Bearer {tok}",
+        "Content-Type": "application/json",
+    }
+
+    logger.info(
+        "RecMode aggregator: 发 main %d messages (含 multipart 截图) → %s",
+        len(messages), gw,
     )
+    async with httpx.AsyncClient(timeout=timeout_s) as client:
+        try:
+            resp = await client.post(f"{gw}/v1/chat/completions", json=payload, headers=headers)
+        except httpx.HTTPError as e:
+            raise RuntimeError(
+                f"RecMode aggregator: gateway {gw} 不可达 ({e}). "
+                f"看 catfish-gateway 起没."
+            ) from e
+
+        if resp.status_code != 200:
+            # 把 gateway 友好错误透传 (e.g. 503 LargePromptFallbackBlocked / 429 quota)
+            try:
+                detail = resp.json()
+            except Exception:
+                detail = resp.text[:500]
+            raise RuntimeError(
+                f"RecMode aggregator: gateway 返 {resp.status_code}: {detail}"
+            )
+
+        data = resp.json()
+        choices = data.get("choices") or []
+        if not choices:
+            raise RuntimeError(f"RecMode aggregator: LLM 没返 choices: {data}")
+        msg = choices[0].get("message") or {}
+        content = msg.get("content", "")
+        if not content:
+            raise RuntimeError(f"RecMode aggregator: LLM 返空 content (可能被 max_tokens 截): {data}")
+        usage = data.get("usage") or {}
+        logger.info(
+            "RecMode aggregator: LLM done. prompt=%d completion=%d total=%d",
+            usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0), usage.get("total_tokens", 0),
+        )
+        return content
 
 
 # ─── 解析 LLM 输出 ──────────────────────────────────────────
@@ -422,15 +504,22 @@ def write_skill_files(
 # ─── 主入口 (gateway endpoint /api/learn/analyze 调) ───────
 
 
-async def aggregate_session(session_dir: Path, skills_root: Path | None = None) -> dict:
-    """端到端: 读 session → 调 LLM → 落 skill 文件.
+async def aggregate_session(
+    session_dir: Path,
+    skills_root: Path | None = None,
+    *,
+    gateway_url: str | None = None,
+    auth_token: str | None = None,
+) -> dict:
+    """端到端: 读 session → 调 LLM → parse → 落 skill 文件.
 
-    v0 不真调 LLM (call_llm 抛 NotImplementedError). 5/26 sprint 接通.
+    Caller (gateway endpoint /api/learn/analyze) 拿 auth_token 从当前 user
+    的 dev_token / OIDC token, 传给 call_llm 走自己 gateway.
     """
     inputs = load_recording_inputs(session_dir)
     messages = build_messages(inputs)
-    raw_response = await call_llm(messages)
-    skill = parse_llm_output(raw_response)
+    raw_text = await call_llm(messages, gateway_url=gateway_url, auth_token=auth_token)
+    skill = parse_llm_output(raw_text)
     meta_path = session_dir / "meta.json"
     recording_meta = json.loads(meta_path.read_text()) if meta_path.exists() else None
     skill_dir = write_skill_files(skill, skills_root=skills_root, recording_meta=recording_meta)

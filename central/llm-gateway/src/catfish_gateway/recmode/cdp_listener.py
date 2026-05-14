@@ -1,4 +1,4 @@
-"""BL-LEARN-RECMODE / CDP listener (5/14 v0 骨架).
+"""BL-LEARN-RECMODE / CDP listener (5/14 v1 真接 ws — 任务 #63).
 
 连 Catfish Chrome ws://localhost:9222 监听 events 落 JSONL + keyframe 截图.
 **不要 Chrome 扩展** — Catfish Chrome 已开 CDP (BL-CHROME), 后端直接订阅.
@@ -25,12 +25,14 @@ Events 捕获策略 (设计文档 §3.2):
 依赖:
     pip install websockets  (~1MB, asyncio CDP 客户端)
 
-5/14 v0: 骨架 + 主路径占位, 不接 Companion endpoint. 5/26 BL-LEARN-RECMODE
-sprint 真做时填充 Network 监听 + DOM diff 算法 + keyframe 抽取智能.
+5/14 v0 → v1 升级 (任务 #63): 真接 websockets ws + Page.captureScreenshot
++ event loop. 真用了, 不只是占位. Network 监听 + DOM diff summary 算法
+留 V2 (#68).
 """
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -38,6 +40,15 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+# websockets 包 — 5/14 装上 (pip install websockets, ~1MB).
+# import 时不挂, 真用 (start) 时才连 ws — 测试环境也能 import 这个模块.
+try:
+    import websockets  # type: ignore
+    _HAS_WS = True
+except ImportError:
+    websockets = None  # type: ignore
+    _HAS_WS = False
 
 logger = logging.getLogger("catfish.recmode.cdp")
 
@@ -73,16 +84,29 @@ class RecordingState:
     last_event_ts: float = 0.0
     last_keyframe_ts: float = 0.0
     chrome_ws: str = _DEFAULT_CHROME_WS
-    _ws = None  # websocket 连接, 不序列化
+    _ws: Any = None  # websockets connection
     _msg_id_counter: int = 0
     _stop_requested: bool = False
+    # 待响应的 send (id → asyncio.Future), 让 _cdp_send 能 await response
+    _pending_responses: dict[int, asyncio.Future] = field(default_factory=dict)
+    # 后台 tasks (event loop / detector / watchdog), stop 时取消
+    _bg_tasks: list[asyncio.Task] = field(default_factory=list)
 
 
 # ─── CDP 协议低层 ──────────────────────────────────────────
 
 
-async def _cdp_send(state: RecordingState, method: str, params: dict | None = None) -> dict:
-    """发一个 CDP request, 拿回 response (按 id 匹配)."""
+async def _cdp_send(
+    state: RecordingState,
+    method: str,
+    params: dict | None = None,
+    timeout: float = 10.0,
+) -> dict:
+    """发 CDP request, 等响应 (按 id 匹配, 超时抛 TimeoutError).
+
+    依赖 _event_loop 持续 recv ws messages, 把 id 命中的 future 完成.
+    test 路径下没起 _event_loop, 这函数会卡 → caller 用 mock.
+    """
     state._msg_id_counter += 1
     msg_id = state._msg_id_counter
     msg = {"id": msg_id, "method": method}
@@ -90,21 +114,45 @@ async def _cdp_send(state: RecordingState, method: str, params: dict | None = No
         msg["params"] = params
     if state._ws is None:
         raise RuntimeError("_cdp_send: ws 未连接")
-    await state._ws.send(json.dumps(msg))
-    # 简化 v0: 不做 id-based response 匹配, 让 caller 自己读. 完整版 5/26 加.
-    return {"id": msg_id}
+
+    fut: asyncio.Future = asyncio.get_running_loop().create_future()
+    state._pending_responses[msg_id] = fut
+    try:
+        await state._ws.send(json.dumps(msg))
+        return await asyncio.wait_for(fut, timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.warning("CDP send timeout: method=%s id=%d", method, msg_id)
+        raise
+    finally:
+        state._pending_responses.pop(msg_id, None)
 
 
 async def _capture_screenshot(state: RecordingState) -> str:
-    """触发 Page.captureScreenshot, 落 PNG, 返 keyframe_id."""
+    """真触发 Page.captureScreenshot, 落 PNG 到 screenshots/, 返 keyframe_id.
+
+    没 ws 连接时退化为 noop (只 ++ counter, 不真截图) — 给 test / 长停顿 detector
+    在没真 ws 时也能运行不挂.
+    """
     state.keyframe_count += 1
     kf_id = f"kf_{state.keyframe_count:04d}"
-    # v0: send 但不真等响应 (websocket 异步流是另一通道接). 占位结构.
-    # 完整版: parsed = await _cdp_request_response(state, "Page.captureScreenshot", {"format": "png"})
-    #         data = base64.b64decode(parsed["result"]["data"])
-    #         (state.output_dir / "screenshots" / f"{kf_id}.png").write_bytes(data)
     state.last_keyframe_ts = time.time()
-    logger.debug("CDP keyframe %s queued (session=%s)", kf_id, state.session_id)
+
+    if state._ws is None:
+        logger.debug("CDP keyframe %s noop (ws 未连)", kf_id)
+        return kf_id
+
+    try:
+        resp = await _cdp_send(state, "Page.captureScreenshot", {"format": "png"})
+        data_b64 = resp.get("result", {}).get("data", "")
+        if data_b64:
+            png_bytes = base64.b64decode(data_b64)
+            out_path = state.output_dir / "screenshots" / f"{kf_id}.png"
+            out_path.write_bytes(png_bytes)
+            logger.debug("CDP keyframe %s 落档 %d bytes", kf_id, len(png_bytes))
+        else:
+            logger.warning("CDP keyframe %s 拿到空 data, 跳过写盘", kf_id)
+    except Exception:  # noqa: BLE001
+        logger.warning("CDP keyframe %s 截图失败 (不致命)", kf_id, exc_info=True)
     return kf_id
 
 
@@ -203,6 +251,54 @@ async def _max_duration_watchdog(state: RecordingState) -> None:
         state._stop_requested = True
 
 
+# ─── event loop (recv ws + dispatch) ──────────────────────
+
+
+_CDP_EVENT_HANDLERS = {
+    "Page.frameNavigated": _on_page_navigated,
+    "DOM.documentUpdated": _on_dom_updated,
+    "Page.javascriptDialogOpening": _on_dialog_opening,
+    "Network.responseReceived": _on_network_response,
+}
+
+
+async def _event_loop(state: RecordingState) -> None:
+    """持续 recv ws messages — id 响应 → 完成 future; method event → dispatch.
+
+    退出条件: state._stop_requested 或 ws closed.
+    """
+    if state._ws is None:
+        return
+    try:
+        async for raw in state._ws:
+            if state._stop_requested:
+                break
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                logger.debug("CDP recv 坏 json: %r", raw[:80])
+                continue
+            # 响应 (含 id 字段)
+            if "id" in msg:
+                fut = state._pending_responses.get(msg["id"])
+                if fut and not fut.done():
+                    fut.set_result(msg)
+                continue
+            # event (含 method 字段)
+            method = msg.get("method")
+            params = msg.get("params") or {}
+            handler = _CDP_EVENT_HANDLERS.get(method)
+            if handler:
+                try:
+                    await handler(state, params)
+                except Exception:  # noqa: BLE001
+                    logger.warning("CDP handler %s 失败 (不致命)", method, exc_info=True)
+    except Exception:  # noqa: BLE001
+        # ws 断了 / closed
+        if not state._stop_requested:
+            logger.warning("CDP event_loop 异常退出 (ws closed?)", exc_info=True)
+
+
 # ─── 主入口 ────────────────────────────────────────────────
 
 
@@ -218,6 +314,7 @@ class CDPRecordingSession:
         session_id: str,
         chrome_ws: str = _DEFAULT_CHROME_WS,
         output_root: Path | None = None,
+        connect_ws: bool = True,
     ) -> "CDPRecordingSession":
         """开 RecMode session — 连 CDP ws + 起后台 detector tasks.
 
@@ -225,6 +322,7 @@ class CDPRecordingSession:
             session_id: 唯一 ID (caller 给)
             chrome_ws: Catfish Chrome 的 CDP endpoint
             output_root: 输出根目录 (默认 ~/.catfish/recordings/)
+            connect_ws: 是否真连 ws (test 路径传 False 跑骨架)
         """
         if output_root is None:
             catfish_home = os.environ.get("CATFISH_HOME", "").strip()
@@ -240,27 +338,58 @@ class CDPRecordingSession:
             chrome_ws=chrome_ws,
         )
 
-        # v0: 不真连 ws (依赖 websockets 包没装), 留接口给 5/26 真做.
-        # 完整版:
-        #   import websockets
-        #   state._ws = await websockets.connect(chrome_ws)
-        #   await _cdp_send(state, "Page.enable")
-        #   await _cdp_send(state, "DOM.enable")
-        #   await _cdp_send(state, "Network.enable")
-        #   asyncio.create_task(_event_loop(state))
-        #   asyncio.create_task(_long_pause_detector(state))
-        #   asyncio.create_task(_max_duration_watchdog(state))
+        # 真连 ws (除非 test 跳过)
+        if connect_ws:
+            if not _HAS_WS:
+                raise RuntimeError(
+                    "websockets 包未装. pip install websockets. "
+                    "或 test 路径传 connect_ws=False."
+                )
+            try:
+                state._ws = await websockets.connect(chrome_ws, max_size=20 * 1024 * 1024)  # 20MB 截图
+            except Exception as e:
+                raise RuntimeError(
+                    f"连 Catfish Chrome CDP 失败 ({chrome_ws}): {e}. "
+                    f"看 Catfish Chrome 是不是用 --remote-debugging-port=9222 启动了."
+                ) from e
+            # 起 event loop (recv ws + dispatch handlers)
+            state._bg_tasks.append(asyncio.create_task(_event_loop(state)))
+            # 启用 CDP domain
+            try:
+                await _cdp_send(state, "Page.enable", timeout=5.0)
+                await _cdp_send(state, "DOM.enable", timeout=5.0)
+                await _cdp_send(state, "Network.enable", timeout=5.0)
+                await _cdp_send(state, "Runtime.enable", timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.warning("CDP enable domains 超时 (继续, 部分 events 可能漏)")
+            # 起 detector + watchdog
+            state._bg_tasks.append(asyncio.create_task(_long_pause_detector(state)))
+            state._bg_tasks.append(asyncio.create_task(_max_duration_watchdog(state)))
+            # 立刻拍一张初始截图 (用户在哪页开始的)
+            await _capture_screenshot(state)
 
-        logger.info("RecMode session 开始: id=%s output=%s", session_id, output_dir)
+        logger.info(
+            "RecMode session 开始: id=%s output=%s ws=%s",
+            session_id, output_dir, "真连" if connect_ws and state._ws else "占位",
+        )
         return cls(state)
 
     async def stop(self) -> dict:
-        """停录 — 关 ws + flush events.jsonl + 写 meta.json."""
+        """停录 — 关 ws + 取消后台 tasks + flush events.jsonl + 写 meta.json."""
         self.state._stop_requested = True
-        # v0: 不真关 ws (因为 v0 没真连)
-        # 完整版:
-        #   if self.state._ws:
-        #       await self.state._ws.close()
+        # cancel 后台 tasks
+        for t in self.state._bg_tasks:
+            if not t.done():
+                t.cancel()
+        # 等 cancel 干净 (gather suppress CancelledError)
+        if self.state._bg_tasks:
+            await asyncio.gather(*self.state._bg_tasks, return_exceptions=True)
+        # 关 ws
+        if self.state._ws is not None:
+            try:
+                await self.state._ws.close()
+            except Exception:  # noqa: BLE001
+                pass
 
         # flush events
         events_path = self.state.output_dir / "events.jsonl"
@@ -306,16 +435,24 @@ class CDPRecordingSession:
 _active_sessions: dict[str, CDPRecordingSession] = {}
 
 
-async def start_recording(session_id: str, chrome_ws: str = _DEFAULT_CHROME_WS) -> dict:
-    """gateway endpoint /api/learn/start 调用. 重复 session_id → 错误."""
+async def start_recording(
+    session_id: str,
+    chrome_ws: str = _DEFAULT_CHROME_WS,
+    connect_ws: bool = True,
+) -> dict:
+    """gateway endpoint /api/learn/start 调用. 重复 session_id → 错误.
+
+    connect_ws=False 走测试 / dev 路径 (不真连 Catfish Chrome).
+    """
     if session_id in _active_sessions:
         raise ValueError(f"session {session_id} 已在录中, 重复 start")
-    sess = await CDPRecordingSession.start(session_id, chrome_ws=chrome_ws)
+    sess = await CDPRecordingSession.start(session_id, chrome_ws=chrome_ws, connect_ws=connect_ws)
     _active_sessions[session_id] = sess
     return {
         "session_id": session_id,
         "started_at": sess.state.started_at,
         "output_dir": str(sess.state.output_dir),
+        "ws_connected": sess.state._ws is not None,
     }
 
 

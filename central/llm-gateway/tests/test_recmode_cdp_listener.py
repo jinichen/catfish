@@ -22,8 +22,9 @@ async def test_start_stop_roundtrip(tmp_path):
     """v0: start → 加几个 mock events → stop → 看 events.jsonl + meta.json 落档"""
     sess = await cdp_listener.CDPRecordingSession.start(
         session_id="test_001",
-        chrome_ws="ws://localhost:9222",  # v0 不真连
+        chrome_ws="ws://localhost:9222",
         output_root=tmp_path,
+        connect_ws=False,  # 测试不真连
     )
 
     # mock 几个 events
@@ -73,6 +74,7 @@ async def test_screenshots_dir_created(tmp_path):
     await cdp_listener.CDPRecordingSession.start(
         session_id="test_002",
         output_root=tmp_path,
+        connect_ws=False,
     )
     assert (tmp_path / "test_002" / "screenshots").is_dir()
 
@@ -82,7 +84,7 @@ async def test_module_level_start_stop(tmp_path, monkeypatch):
     """gateway endpoint 用的 module-level helper"""
     monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
 
-    info = await cdp_listener.start_recording("rec_a")
+    info = await cdp_listener.start_recording("rec_a", connect_ws=False)
     assert info["session_id"] == "rec_a"
     assert "rec_a" in cdp_listener.list_active()
 
@@ -95,9 +97,9 @@ async def test_module_level_start_stop(tmp_path, monkeypatch):
 async def test_duplicate_start_rejected(tmp_path, monkeypatch):
     """同 session_id 重复 start → ValueError"""
     monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
-    await cdp_listener.start_recording("rec_dup")
+    await cdp_listener.start_recording("rec_dup", connect_ws=False)
     with pytest.raises(ValueError, match="已在录中"):
-        await cdp_listener.start_recording("rec_dup")
+        await cdp_listener.start_recording("rec_dup", connect_ws=False)
     # cleanup
     await cdp_listener.stop_recording("rec_dup")
 
@@ -116,7 +118,7 @@ async def test_long_pause_detector_fires(tmp_path, monkeypatch):
 
     完整版 5/26 sprint 才接真 ws + 真背景 task. v0 只验逻辑."""
     sess = await cdp_listener.CDPRecordingSession.start(
-        session_id="test_lp", output_root=tmp_path,
+        session_id="test_lp", output_root=tmp_path, connect_ws=False,
     )
     # 模拟 last_event_ts 是 5s 前 + 上次 keyframe 也是 5s 前
     sess.state.last_event_ts = time.time() - 5.0

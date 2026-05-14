@@ -51,7 +51,7 @@ def test_start_recording_missing_session_id(client):
 
 
 def test_start_then_active_then_stop_roundtrip(client):
-    r = client.post("/api/learn/start_recording", json={"session_id": "rec_e2e"})
+    r = client.post("/api/learn/start_recording", json={"session_id": "rec_e2e", "connect_ws": False})
     assert r.status_code == 200, r.text
     data = r.json()
     assert data["session_id"] == "rec_e2e"
@@ -62,7 +62,7 @@ def test_start_then_active_then_stop_roundtrip(client):
     assert r.status_code == 200
     assert "rec_e2e" in r.json()["active_session_ids"]
 
-    r = client.post("/api/learn/stop_recording", json={"session_id": "rec_e2e"})
+    r = client.post("/api/learn/stop_recording", json={"session_id": "rec_e2e", "connect_ws": False})
     assert r.status_code == 200
     summary = r.json()
     assert summary["session_id"] == "rec_e2e"
@@ -74,8 +74,8 @@ def test_start_then_active_then_stop_roundtrip(client):
 
 
 def test_duplicate_start_409(client):
-    client.post("/api/learn/start_recording", json={"session_id": "rec_dup"})
-    r = client.post("/api/learn/start_recording", json={"session_id": "rec_dup"})
+    client.post("/api/learn/start_recording", json={"session_id": "rec_dup", "connect_ws": False})
+    r = client.post("/api/learn/start_recording", json={"session_id": "rec_dup", "connect_ws": False})
     assert r.status_code == 409
     assert "已在录中" in r.json()["detail"]
 
@@ -89,3 +89,44 @@ def test_stop_nonexistent_404(client):
 def test_stop_missing_session_id(client):
     r = client.post("/api/learn/stop_recording", json={})
     assert r.status_code == 400
+
+
+def test_analyze_missing_session_id(client):
+    r = client.post("/api/learn/analyze", json={})
+    assert r.status_code == 400
+
+
+def test_analyze_session_dir_not_found(client):
+    r = client.post("/api/learn/analyze", json={"session_id": "rec_no_such"})
+    assert r.status_code == 404
+    assert "不存在" in r.json()["detail"]
+
+
+def test_analyze_e2e_with_mock_llm(client, tmp_path, monkeypatch):
+    """端到端 mock aggregator.call_llm → /api/learn/analyze 落 skill 文件."""
+    # 准备一个 fake recording session_dir
+    rec_dir = tmp_path / "recordings" / "rec_analyze"
+    rec_dir.mkdir(parents=True)
+    (rec_dir / "events.jsonl").write_text('{"ts": 0, "kind": "click"}\n', encoding="utf-8")
+    (rec_dir / "meta.json").write_text('{"session_id": "rec_analyze", "duration_s": 10}', encoding="utf-8")
+
+    fake_response = '{"skill_name": "rec_analyze_test", "namespace": "personal", "description": "测试", "params_schema": [], "steps": [], "execute_code_segment": "", "output_schema": {}, "confidence": 0.7, "questions_for_user": []}'
+
+    async def fake_call_llm(messages, **kw):
+        return fake_response
+
+    from catfish_gateway.recmode import aggregator
+    monkeypatch.setattr(aggregator, "call_llm", fake_call_llm)
+    monkeypatch.setenv("CATFISH_DEV_TOKEN", "fake")  # call_llm 不会用因为 mock 了
+
+    skills_root = tmp_path / "skills"
+    r = client.post("/api/learn/analyze", json={
+        "session_id": "rec_analyze",
+        "skills_root": str(skills_root),
+    })
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["skill_name"] == "rec_analyze_test"
+    assert out["namespace"] == "personal"
+    assert out["confidence"] == 0.7
+    assert (skills_root / "personal" / "rec_analyze_test" / "SKILL.md").exists()

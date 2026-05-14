@@ -610,12 +610,19 @@ async def api_learn_start_recording(
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id 不能空")
     chrome_ws = (body.get("chrome_ws") or "ws://localhost:9222").strip()
+    # connect_ws 可由 caller 关 (test / dev 不真连 Chrome 时), 默认真连
+    connect_ws = bool(body.get("connect_ws", True))
     try:
-        info = await cdp_listener.start_recording(session_id, chrome_ws=chrome_ws)
+        info = await cdp_listener.start_recording(
+            session_id, chrome_ws=chrome_ws, connect_ws=connect_ws,
+        )
         info["viewer"] = user.sub
         return info
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
+    except RuntimeError as e:
+        # ws 连接失败 / websockets 没装 → 503
+        raise HTTPException(status_code=503, detail=str(e)) from e
 
 
 @app.post("/api/learn/stop_recording")
@@ -639,6 +646,60 @@ async def api_learn_stop_recording(
         return summary
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@app.post("/api/learn/analyze")
+async def api_learn_analyze(
+    body: dict,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """触发 RecMode aggregator: 读 session_dir → 调 catfish-private-main →
+    解析 JSON → 落 SKILL.md + main.py 到 ~/.catfish/skills/<namespace>/<name>/.
+
+    Body: {"session_id": str, "skills_root": str (可选, 默认 ~/.catfish/skills)}
+
+    Returns: {skill_name, namespace, skill_dir, steps_count, confidence,
+              questions_for_user}
+
+    Caller (Companion): 录屏完点 ✅ → 先 POST /stop_recording → 再 POST /analyze
+    → 拿 skill_dir → 读 SKILL.md / main.py 显 preview UI 给用户 review.
+    """
+    from .recmode import aggregator, cdp_listener  # noqa: PLC0415
+    session_id = (body.get("session_id") or "").strip()
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id 不能空")
+
+    # 找 session_dir — caller 可显式传, 否则按 cdp_listener 默认路径推
+    skills_root_str = (body.get("skills_root") or "").strip()
+    skills_root = Path(skills_root_str).expanduser() if skills_root_str else None
+
+    catfish_home = os.environ.get("CATFISH_HOME", "").strip()
+    rec_root = (
+        Path(catfish_home).expanduser() / "recordings" if catfish_home
+        else Path.home() / ".catfish" / "recordings"
+    )
+    session_dir = rec_root / session_id
+    if not session_dir.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"session_dir {session_dir} 不存在. 先调 /start_recording 录一段.",
+        )
+
+    # auth_token 从 caller 透传 — 让 RecMode 走 caller 自己的 quota / RBAC.
+    # dev token 路径直接复用; OIDC 路径 5/26 加.
+    auth_token = os.environ.get("CATFISH_DEV_TOKEN", "")
+    try:
+        out = await aggregator.aggregate_session(
+            session_dir,
+            skills_root=skills_root,
+            auth_token=auth_token,
+        )
+        out["viewer"] = user.sub
+        return out
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
 
 @app.get("/api/learn/active")
