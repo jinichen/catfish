@@ -18,6 +18,8 @@ import {
   useRecModeStore,
   formatRecordingElapsed,
   isValidSkillName,
+  isValidSkillTitle,
+  RECMODE_EXAMPLES,
 } from "./recmode";
 
 let pass = 0;
@@ -112,6 +114,29 @@ check("isValidSkillName 拒短", isValidSkillName("ab") === false);
 check("isValidSkillName 拒中文", isValidSkillName("企业资质") === false);
 check("isValidSkillName 拒空格", isValidSkillName("eis check") === false);
 check("isValidSkillName 接 N 段下划线", isValidSkillName("a_b_c_d_e") === true);
+
+// ─── isValidSkillTitle (5/14 鸿波 UI 反馈后加, 人话标题校验) ──────
+
+console.log("[isValidSkillTitle 人话标题]");
+
+check("isValidSkillTitle 中文 OK", isValidSkillTitle("检查 EIS 资质过期") === true);
+check("isValidSkillTitle 英文 OK", isValidSkillTitle("EIS qual check") === true);
+check("isValidSkillTitle 中英混 OK", isValidSkillTitle("EIS 资质 check") === true);
+check("isValidSkillTitle 空格 OK", isValidSkillTitle("a b c") === true);
+check("isValidSkillTitle 拒空", isValidSkillTitle("") === false);
+check("isValidSkillTitle 拒纯空白", isValidSkillTitle("   ") === false);
+check("isValidSkillTitle 拒太短 (2 字)", isValidSkillTitle("ab") === false);
+check("isValidSkillTitle 接 3 字", isValidSkillTitle("abc") === true);
+check("isValidSkillTitle 接 100 字", isValidSkillTitle("a".repeat(100)) === true);
+check("isValidSkillTitle 拒 101 字", isValidSkillTitle("a".repeat(101)) === false);
+
+// ─── RECMODE_EXAMPLES (示例 prefill) ─────────────────────
+
+console.log("[RECMODE_EXAMPLES]");
+check("有 ≥ 3 个示例", RECMODE_EXAMPLES.length >= 3);
+check("每个示例 title 都 valid", RECMODE_EXAMPLES.every((e) => isValidSkillTitle(e.title)));
+check("每个示例 description 非空", RECMODE_EXAMPLES.every((e) => e.description.length > 0));
+check("EIS 资质 示例在", RECMODE_EXAMPLES.some((e) => e.title.includes("EIS")));
 
 // ─── 报告 ─────────────────────────────────────────────────
 

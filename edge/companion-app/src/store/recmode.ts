@@ -136,7 +136,36 @@ export function formatRecordingElapsed(startedAt: number | null): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-/** Helper: snake_case 校验 (RecMode 名字必 snake_case 跟 catfish skill 范式对齐) */
+/** Helper: snake_case 校验 (catfish skill 范式) — 给后端 / LLM 综合用, 不暴露 UI */
 export function isValidSkillName(name: string): boolean {
   return /^[a-z][a-z0-9_]*$/.test(name) && name.length >= 3 && name.length <= 60;
 }
+
+/** Helper: 人话标题校验 (5/14 鸿波"UI 不是产品水平" 反馈后加).
+ *
+ * 用户输人话 (中文 / 英文 / 混), 后端 LLM aggregator 综合时自动起 snake_case
+ * skill_name. 前端只校验 title 不过短 / 不过长 / 不全空白.
+ *
+ * 不暴露 snake_case 给普通员工 (HR / 财务 / 销售 看到术语就不学了, 跟 catfish
+ * 产品定位 "非开发者 AI 平台" 反着走).
+ */
+export function isValidSkillTitle(title: string): boolean {
+  const t = title.trim();
+  return t.length >= 3 && t.length <= 100;
+}
+
+/** 给 setup 模态的 "示例" 一键 prefill, 让用户秒懂 RecMode 适合啥场景 */
+export const RECMODE_EXAMPLES: { title: string; description: string }[] = [
+  {
+    title: "检查 EIS 资质过期",
+    description: "EIS 周一上午查企业资质快过期的, 90 天内到期的标记出来续期",
+  },
+  {
+    title: "周报数据汇总",
+    description: "每周五下午从 OA 拉本部门数据 → 生成 markdown 周报",
+  },
+  {
+    title: "新员工 onboarding",
+    description: "HR 新员工入职流程: 创建账号 / 加飞书群 / 发欢迎邮件",
+  },
+];

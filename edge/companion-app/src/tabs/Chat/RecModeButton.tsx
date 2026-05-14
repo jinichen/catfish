@@ -24,7 +24,8 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   useRecModeStore,
   formatRecordingElapsed,
-  isValidSkillName,
+  isValidSkillTitle,
+  RECMODE_EXAMPLES,
 } from "../../store/recmode";
 import {
   newRecModeSessionId,
@@ -97,21 +98,22 @@ function SetupModal() {
   const startRecording = useRecModeStore((s) => s.startRecording);
   const setError = useRecModeStore((s) => s.setError);
   const [submitting, setSubmitting] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
-  const nameValid = isValidSkillName(setup.name);
+  // 5/14 鸿波"UI 不是产品水平" 反馈后改: 用户输人话标题, 后端 LLM 综合时
+  // 自动起 snake_case skill_name. 不暴露 snake_case / namespace 术语.
+  const titleValid = isValidSkillTitle(setup.name);
+  const titleTrimmed = setup.name.trim();
 
   async function onStart() {
-    if (!nameValid || submitting) return;
+    if (!titleValid || submitting) return;
     setSubmitting(true);
     try {
       const sessionId = newRecModeSessionId();
-      // 先开 CDP listener (gateway 后端连 Catfish Chrome)
       await apiStartRecording(sessionId);
-      // 再开 ffmpeg 录音 (复用 BL-VOICE3)
       try {
         await invoke("speech_start_recording");
       } catch (e) {
-        // 录音失败不致命 — 没语音转写也能跑, 只是 main 综合时少一类信号
         console.warn("[recmode] speech_start_recording 失败 (继续, 没语音):", e);
       }
       startRecording(sessionId);
@@ -122,94 +124,189 @@ function SetupModal() {
     }
   }
 
+  function applyExample(idx: number) {
+    const ex = RECMODE_EXAMPLES[idx];
+    setSetup({ name: ex.title, description: ex.description });
+  }
+
   return (
     <ModalShell onClose={closeSetup}>
-      <h3 style={{ margin: "0 0 var(--space-3)", fontSize: 16 }}>
-        🎙 录屏教学 — 教鲶鱼学一个新流程
-      </h3>
-      <p style={{ fontSize: 13, color: "var(--catfish-text-muted)", marginBottom: "var(--space-4)" }}>
-        点开始后, 你正常操作 Catfish Chrome (登 EIS / 翻页 / 看数据) 同时
-        <strong>顺嘴说意图</strong> ("现在点这是为了 X" / "这个数字判 90 天内").
-        鲶鱼后端自动把你的操作 + 语音 + 截图 综合成一个 skill, 之后说短句"做 X" 就能调.
-      </p>
+      {/* 右上 X 关闭 (macOS 用户基础肌肉记忆) */}
+      <button
+        onClick={closeSetup}
+        title="关闭"
+        style={{
+          position: "absolute",
+          top: 12,
+          right: 12,
+          width: 28,
+          height: 28,
+          borderRadius: "50%",
+          border: "none",
+          background: "transparent",
+          color: "var(--catfish-text-muted)",
+          fontSize: 18,
+          cursor: "pointer",
+          lineHeight: 1,
+          padding: 0,
+        }}
+      >
+        ×
+      </button>
 
-      <FormRow label="名字 (snake_case)">
+      {/* 居中视觉锚点: 大 emoji + 大标题 */}
+      <div style={{ textAlign: "center", padding: "var(--space-4) 0 var(--space-3)" }}>
+        <div style={{ fontSize: 48, lineHeight: 1, marginBottom: 8 }}>🎙</div>
+        <h3 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>
+          教鲶鱼学一个新流程
+        </h3>
+        <p style={{
+          margin: "8px 0 0",
+          fontSize: 13,
+          color: "var(--catfish-text-muted)",
+        }}>
+          录一遍你正常操作 + <strong style={{ color: "var(--catfish-text)" }}>顺嘴说意图</strong>, 鲶鱼自动学
+        </p>
+      </div>
+
+      {/* 主输入: 给这个流程起个名字 (人话, 不是 snake_case) */}
+      <div style={{ marginTop: "var(--space-4)" }}>
+        <label style={{
+          display: "block",
+          fontSize: 13,
+          color: "var(--catfish-text)",
+          marginBottom: 6,
+          fontWeight: 500,
+        }}>
+          给这个流程起个名字
+        </label>
         <input
           type="text"
           value={setup.name}
           onChange={(e) => setSetup({ name: e.target.value })}
-          placeholder="eis_qualification_check"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && titleValid && !submitting) onStart();
+          }}
+          placeholder="例: 检查 EIS 资质过期"
+          autoFocus
           style={{
             width: "100%",
-            padding: "6px 8px",
-            border: "1px solid " + (setup.name && !nameValid ? "var(--status-err)" : "var(--catfish-border)"),
-            borderRadius: "var(--radius-sm)",
+            padding: "10px 12px",
+            border: "1px solid " + (titleTrimmed && !titleValid ? "var(--status-err)" : "var(--catfish-border)"),
+            borderRadius: "var(--radius-md)",
             background: "var(--catfish-bg)",
             color: "var(--catfish-text)",
-            fontFamily: "monospace",
-            fontSize: 13,
+            fontSize: 14,
+            outline: "none",
+            boxSizing: "border-box",
           }}
         />
-        {setup.name && !nameValid && (
-          <div style={{ fontSize: 11, color: "var(--status-err)", marginTop: 2 }}>
-            必须 snake_case (小写字母 / 数字 / 下划线), 3-60 字符
+        {titleTrimmed && !titleValid && (
+          <div style={{ fontSize: 11, color: "var(--status-err)", marginTop: 4 }}>
+            3-100 字
           </div>
         )}
-      </FormRow>
+      </div>
 
-      <FormRow label="namespace">
-        <select
-          value={setup.namespace}
-          onChange={(e) => setSetup({ namespace: e.target.value })}
+      {/* 示例 prefill — 让用户秒懂 RecMode 适合啥场景 */}
+      <div style={{
+        marginTop: "var(--space-3)",
+        display: "flex",
+        gap: 6,
+        flexWrap: "wrap",
+        alignItems: "center",
+      }}>
+        <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>试试:</span>
+        {RECMODE_EXAMPLES.map((ex, i) => (
+          <button
+            key={i}
+            onClick={() => applyExample(i)}
+            title={ex.description}
+            style={{
+              padding: "3px 8px",
+              border: "1px solid var(--catfish-border)",
+              borderRadius: 12,
+              background: "transparent",
+              color: "var(--catfish-text-muted)",
+              fontSize: 11,
+              cursor: "pointer",
+            }}
+          >
+            {ex.title}
+          </button>
+        ))}
+      </div>
+
+      {/* 高级选项 (折叠, 默认 personal 普通用户不用看) */}
+      <div style={{ marginTop: "var(--space-4)" }}>
+        <button
+          onClick={() => setShowAdvanced(!showAdvanced)}
           style={{
-            width: "100%",
-            padding: "6px 8px",
-            border: "1px solid var(--catfish-border)",
-            borderRadius: "var(--radius-sm)",
-            background: "var(--catfish-bg)",
-            color: "var(--catfish-text)",
-            fontSize: 13,
+            background: "transparent",
+            border: "none",
+            color: "var(--catfish-text-muted)",
+            fontSize: 12,
+            cursor: "pointer",
+            padding: 0,
           }}
         >
-          <option value="personal">personal — 我自己用</option>
-          <option value="department">department — 同部门共享</option>
-          <option value="public">public — 全公司可见</option>
-        </select>
-      </FormRow>
+          {showAdvanced ? "▾" : "▸"} 高级选项
+        </button>
+        {showAdvanced && (
+          <div style={{ marginTop: "var(--space-2)", paddingLeft: 16 }}>
+            <label style={{ display: "block", fontSize: 12, color: "var(--catfish-text-muted)", marginBottom: 4 }}>
+              共享范围
+            </label>
+            <select
+              value={setup.namespace}
+              onChange={(e) => setSetup({ namespace: e.target.value })}
+              style={{
+                width: "100%",
+                padding: "6px 8px",
+                border: "1px solid var(--catfish-border)",
+                borderRadius: "var(--radius-sm)",
+                background: "var(--catfish-bg)",
+                color: "var(--catfish-text)",
+                fontSize: 13,
+              }}
+            >
+              <option value="personal">只我自己用</option>
+              <option value="department">同部门可用</option>
+              <option value="public">全公司可用</option>
+            </select>
+          </div>
+        )}
+      </div>
 
-      <FormRow label="简述 (可选, 1-2 句)">
-        <textarea
-          value={setup.description}
-          onChange={(e) => setSetup({ description: e.target.value })}
-          placeholder="EIS 周一上午检查企业资质过期, 找 90 天内到期的"
-          rows={2}
-          style={{
-            width: "100%",
-            padding: "6px 8px",
-            border: "1px solid var(--catfish-border)",
-            borderRadius: "var(--radius-sm)",
-            background: "var(--catfish-bg)",
-            color: "var(--catfish-text)",
-            fontSize: 13,
-            resize: "vertical",
-          }}
-        />
-      </FormRow>
-
-      <div style={{ display: "flex", gap: "var(--space-2)", justifyContent: "flex-end", marginTop: "var(--space-4)" }}>
+      {/* 大主按钮 + 灰副按钮 */}
+      <div style={{
+        display: "flex",
+        gap: "var(--space-2)",
+        marginTop: "var(--space-5)",
+      }}>
         <button
           onClick={closeSetup}
           disabled={submitting}
-          style={btnStyle("secondary")}
+          style={{
+            ...btnStyle("secondary", submitting),
+            flex: "0 0 auto",
+            minWidth: 80,
+          }}
         >
           取消
         </button>
         <button
           onClick={onStart}
-          disabled={!nameValid || submitting}
-          style={btnStyle("primary", !nameValid || submitting)}
+          disabled={!titleValid || submitting}
+          style={{
+            ...btnStyle("primary", !titleValid || submitting),
+            flex: 1,
+            padding: "10px var(--space-4)",
+            fontSize: 14,
+            fontWeight: 500,
+          }}
         >
-          {submitting ? "启动中..." : "🔴 开始录屏 + 录音"}
+          {submitting ? "启动中..." : "🔴 开始录屏"}
         </button>
       </div>
     </ModalShell>
@@ -391,13 +488,15 @@ function ModalShell({ children, onClose }: { children: React.ReactNode; onClose:
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
+          position: "relative",  // 5/14 加: 让 SetupModal 右上 X 能 absolute 定位
           background: "var(--catfish-bg-elevated)",
           border: "1px solid var(--catfish-border)",
-          borderRadius: "var(--radius-md)",
-          padding: "var(--space-5)",
-          maxWidth: 480,
+          borderRadius: 12,
+          padding: "var(--space-5) var(--space-5) var(--space-4)",
+          maxWidth: 460,
           width: "90%",
           color: "var(--catfish-text)",
+          boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
         }}
       >
         {children}
@@ -424,18 +523,6 @@ function OverlayShell({ children, tone }: { children: React.ReactNode; tone?: "e
         color: "var(--catfish-text)",
       }}
     >
-      {children}
-    </div>
-  );
-}
-
-
-function FormRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div style={{ marginBottom: "var(--space-3)" }}>
-      <label style={{ display: "block", fontSize: 12, color: "var(--catfish-text-muted)", marginBottom: 4 }}>
-        {label}
-      </label>
       {children}
     </div>
   );
