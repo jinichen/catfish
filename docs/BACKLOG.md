@@ -92,7 +92,19 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 
 **已知 trade-off** (5/14 0:15 拍板接受): 中央 PG 起不来 / 没 VPN → 单机 KanbanPage 看不到任务. 单一 source of truth 优于双写一致性问题.
 
-### 5/26-5/29 — i18n 接入 (任务 #51, 推迟 3 天因 RED-2-PG 插队)
+### 5/26-5/30 — BL-LEARN-RECMODE MVP (任务 #59, 5/14 22:00 v0 框架已 ship)
+
+> **背景**: 5/14 ship v0 框架后 (CDP listener / 3 endpoints / aggregator 核心 / 25 单测), 真盘点剩余 5-9 天工作量, 比原设计估的 3-4 天多 50%. 5/14 鸿波拍板 A 方案: 按真实估调排 5/26-5/30 共 5 天 MVP, V2 优化 6/9+ 单独排.
+
+| 日期 | 项 | 任务 | 工作量 |
+|---|---|---|---|
+| 5/26 (Day 1) | cdp_listener 真接 websockets + Page.captureScreenshot + aggregator.call_llm httpx → catfish-gateway | #63 | 0.5-1 天 |
+| 5/27 (Day 2) | Companion RecMode UI 上半 — 🎙 按钮 + zustand store + 启停 + ffmpeg 录音 (复用 BL-VOICE3) | #64 | 1 天 |
+| 5/28 (Day 3) | Companion UI 下半 — preview 模态 + 错误状态机 + Skill preview ("跑一次试" / "保存" / "重录" 三按钮) | #65 | 1 天 |
+| 5/29 (Day 4) | 端到端联调 + 跑通第一个真 skill (eis-qualification-check, 鸿波录种子数据) + few-shot 例子加 SYSTEM_PROMPT | #66 | 1 天 |
+| 5/30 (Day 5) | 隐私 14 天自动删 + 漏项补 + RecMode v1 ship (CHANGELOG/BACKLOG 升级状态) | #67 | 0.5-1 天 |
+
+### 6/3-6/6 — i18n 接入 (任务 #51, RecMode 插队后再推 1 周)
 
 | 项 | 工作量 |
 |---|---|
@@ -100,6 +112,13 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 | 补 catfish 品牌字符串 zh-CN / en-US 翻译表 | 半天 |
 | Companion 加语言 toggle (zh/en) | 半天 |
 | hermes 0.13 i18n + catfish brand 端到端测试 | 1 天 |
+
+### 6/9+ — RecMode V2 + 其他优化 (任务 #68, #62 等)
+
+| 项 | 任务 | 工作量 |
+|---|---|---|
+| RecMode V2 — selector 漂移自动修复 (find_by_text 跑时 + main vision fallback) + DOM mutation summary 算法 | #68 | 1.5-2 天 |
+| BL-MULTITURN-WINDOW — catfish_run_skill 跑超 5 轮截断 messages history (减 40-60% 大任务 token) | #62 | 1 天 |
 
 ### 待评估 (5/14 1:50 加, 鸿波 "教学方式很不人性、也很难复制" 反思后)
 
