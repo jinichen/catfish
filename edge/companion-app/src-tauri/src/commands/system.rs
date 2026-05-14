@@ -228,3 +228,179 @@ end tell"#;
         Err("list_reminder_lists: 当前平台未实现 (只 macOS)".into())
     }
 }
+
+/// BL-CALENDAR (5/14 0:30 鸿波拍板): 在 macOS Calendar.app 创建**时间锚定的事件**.
+///
+/// 跟 5/13 BL-REMINDER (Reminders.app to-do) 互补:
+/// - reminder: 待办 (用户能勾完成, 截止时间)
+/// - **calendar event (本命令)**: 时间锚定事件 (会议 / 现场审核 / 行程, 带 location + 时长)
+///
+/// 用 osascript `tell app "Calendar"`. 首次调用 macOS 弹 TCC 权限申请 (隐私与安全性 → 日历).
+///
+/// 关键: AppleScript 的 record literal **不允许多行换行**, 必须压一行 (5/14 鸿波 ISO 审核脚本踩的坑).
+///
+/// 参数:
+/// - title: 事件标题 (必填)
+/// - start_iso: ISO 8601 开始时间 (必填)
+/// - end_iso: ISO 8601 结束时间 (可选, 默认 start + 1h)
+/// - location: 地点 (可选)
+/// - description: 详情备注 (可选)
+/// - calendar_name: 写到哪个日历 (默认 "工作")
+///
+/// 返回: 创建的 event summary (作引用 — Calendar.app 没稳定 ID API)
+#[tauri::command]
+pub async fn create_calendar_event(
+    title: String,
+    start_iso: String,
+    end_iso: Option<String>,
+    location: Option<String>,
+    description: Option<String>,
+    calendar_name: Option<String>,
+) -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        if title.trim().is_empty() {
+            return Err("title 不能空".into());
+        }
+        if start_iso.trim().is_empty() {
+            return Err("start_iso 不能空 (ISO 8601, e.g. '2026-05-18T08:40:00')".into());
+        }
+
+        // ISO -> AppleScript date 字符串 (砍 T / 时区后缀, 同 reminder 模式)
+        fn iso_to_applescript(iso: &str) -> String {
+            let s = iso.replace('T', " ");
+            let s = s.split('+').next().unwrap_or(&s);
+            let s = s.split('Z').next().unwrap_or(s);
+            s.trim().to_string()
+        }
+
+        let start_str = iso_to_applescript(&start_iso);
+
+        // end_iso 没传: 默认 start + 1h. Rust stdlib 没有易用的 datetime parsing
+        // (chrono 没在 Cargo.toml), 简单处理: 若 start_str 是 "YYYY-MM-DD HH:MM:SS"
+        // 把 HH+1 (跨天 / 跨月不严谨, 但 99% 场景够; 严谨场景 LLM 应该传 end_iso).
+        let end_str = match end_iso {
+            Some(e) if !e.trim().is_empty() => iso_to_applescript(&e),
+            _ => {
+                // 简易加 1h (LLM 一般会传 end_iso, 这只是兜底)
+                let parts: Vec<&str> = start_str.splitn(2, ' ').collect();
+                if parts.len() == 2 {
+                    let date_part = parts[0];
+                    let time_part = parts[1];
+                    let tparts: Vec<&str> = time_part.splitn(3, ':').collect();
+                    if tparts.len() >= 2 {
+                        if let Ok(h) = tparts[0].parse::<u32>() {
+                            let new_h = (h + 1) % 24;
+                            let mm = tparts[1];
+                            let ss = tparts.get(2).unwrap_or(&"00");
+                            format!("{} {:02}:{}:{}", date_part, new_h, mm, ss)
+                        } else { start_str.clone() }
+                    } else { start_str.clone() }
+                } else { start_str.clone() }
+            }
+        };
+
+        let safe_title = title.replace('"', "\\\"");
+        let safe_start = start_str.replace('"', "\\\"");
+        let safe_end = end_str.replace('"', "\\\"");
+        let cal = calendar_name.unwrap_or_else(|| "工作".to_string());
+        let safe_cal = cal.replace('"', "\\\"");
+
+        // 拼 properties record (压一行!)
+        let mut props = vec![
+            format!("summary:\"{}\"", safe_title),
+            format!("start date:date \"{}\"", safe_start),
+            format!("end date:date \"{}\"", safe_end),
+        ];
+        if let Some(loc) = location.as_ref().filter(|s| !s.trim().is_empty()) {
+            props.push(format!("location:\"{}\"", loc.replace('"', "\\\"")));
+        }
+        if let Some(desc) = description.as_ref().filter(|s| !s.trim().is_empty()) {
+            props.push(format!("description:\"{}\"", desc.replace('"', "\\\"")));
+        }
+
+        let script = format!(
+            r#"tell application "Calendar"
+    set targetCal to first calendar whose name is "{}"
+    set newEvent to make new event at targetCal with properties {{{}}}
+    return summary of newEvent
+end tell"#,
+            safe_cal,
+            props.join(", "),
+        );
+
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output()
+            .map_err(|e| format!("osascript 启动失败: {e}"))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("Not authorized") || stderr.contains("权限") {
+                return Err(format!(
+                    "Calendar.app 权限未给 — 系统设置 → 隐私与安全性 → 日历 → 勾上 Catfish Companion. 然后重试. (osascript stderr: {})",
+                    stderr.trim(),
+                ));
+            }
+            if stderr.contains("Can\u{2019}t get calendar") || stderr.contains("can't find") {
+                return Err(format!(
+                    "calendar \"{}\" 不存在 — 中文系统常见 \"工作\" / \"家庭\" / \"我的日历\", 英文 \"Work\" / \"Home\" / \"Calendar\". osascript: {}",
+                    cal, stderr.trim(),
+                ));
+            }
+            return Err(format!("osascript 失败: {}", stderr.trim()));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        return Ok(stdout);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (title, start_iso, end_iso, location, description, calendar_name);
+        Err("create_calendar_event: 当前平台未实现 (只 macOS, 走 Calendar.app)".into())
+    }
+}
+
+/// BL-CALENDAR: 列 macOS Calendar.app 所有日历名 (给 LLM 选 calendar 时用).
+#[tauri::command]
+pub async fn list_calendars() -> Result<Vec<String>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let script = r#"tell application "Calendar"
+    set lst to {}
+    repeat with C in calendars
+        set end of lst to name of C
+    end repeat
+    return lst
+end tell"#;
+
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(script)
+            .output()
+            .map_err(|e| format!("osascript 启动失败: {e}"))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("Not authorized") {
+                return Err("Calendar.app 权限未给 — 系统设置 → 隐私与安全性 → 日历".into());
+            }
+            return Err(format!("osascript 失败: {}", stderr.trim()));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let cals: Vec<String> = stdout
+            .split(", ")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        return Ok(cals);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("list_calendars: 当前平台未实现 (只 macOS)".into())
+    }
+}

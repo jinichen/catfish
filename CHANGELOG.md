@@ -4915,7 +4915,7 @@ UX 跟 ACP /queue / cancelAndSend 三按钮并排, streaming + hasContent 时显
 - TypeScript tsc --noEmit exit=0 (修了一个未用 status 参数 lint, 改注释掉)
 
 **scope 1 已知限制 (诚实公布)** — KanbanPage 底部说明卡也写了, 防后人误用:
-- 单员工 — 跨员工 (manager 看本部门 / admin 看全公司) 等 task_manager → SQLite 中心 DB 持久化, 排 BL-RBAC sprint 后
+- 单员工 — 跨员工 (manager 看本部门 / admin 看全公司) 等 task_manager → **中央 PG** 持久化 (跟 audit/quota/identity 同库, 不引入 SQLite — 鸿波 5/14 0:10 audit 修正), 排 BL-RBAC sprint 后
 - 单设备 — jsonl 在本机 ~/.catfish/, 不跨设备
 - "跑中"列弱 — task_manager status running 只在 in-memory, jsonl 只 finally 写最终态. 重启后 in-memory 丢, "跑中" 这一列只能看当前进程内 task_manager.list_active() 的, 不在本次 ship 范围
 
@@ -4924,6 +4924,95 @@ UX 跟 ACP /queue / cancelAndSend 三按钮并排, streaming + hasContent 时显
 - 拒 "等 task_manager 持久化做完再做 Kanban" → 错过 demo 价值, scope 1 (我的任务) 已经是真功能
 
 **Multi-Agent Kanban scope 2** (跟 hermes 0.13 自带 Kanban API 接, 把它当 tile 嵌入) 排 5/15-5/18 跟 RBAC sprint 并行, 先有 task_manager 中心 DB 持久化才能真做.
+
+### 5/14 0:30 三轮 ship — BL-CALENDAR macOS Calendar.app 集成 (任务 #58)
+
+鸿波 5/14 0:30 写 osascript Python 脚本创建 ISO 现场审核会议 (5/18-5/22 5 个会议) 撞 AppleScript syntax error (`-2741: 预期是表达式等等, 却找到行的结尾`). 真因: AppleScript 不允许 record literal **跨行换行** — 鸿波脚本里 `make new event ... with properties {\n  name:...,\n  start date:...,\n  ...\n}` 解析器看到 `{` 后第一个换行就认为表达式终止. 修法: record 段必须**压一行**或用 `¬` 续行符.
+
+鸿波拍板: **"现在直接加 catfish_create_calendar_event tool, 不让鲶鱼写"** — 跟 BL-REMINDER (5/13 ship) 平行场景, 时间锚定事件 (会议 / 现场审核 / 行程, 带 location + 时长) 走 Calendar.app, 跟 to-do 走 Reminders.app 互补.
+
+**实现** (5 文件改 + 2 新文件 + 27 单测):
+
+tool-bridge (LLM 用):
+- `tool-bridge/src/catfish_tool_bridge/calendar_events.py` (新, ~250 行):
+  - `tool_create_calendar_event(title, start_iso, end_iso?, location?, description?, calendar_name?)` — title + start_iso 必填, end_iso 默认 start + 1h, calendar_name 默认 "工作"
+  - `tool_list_calendars()`
+  - `_convert_iso_to_applescript_date` (砍 T / 时区, 复用 reminder 同模式)
+  - `_escape_applescript_string` (escape `\\` 先, 再 escape `"`)
+  - `_default_end_iso_from_start(start, hours=1.0)` — 用 stdlib datetime, 跨午夜跨月正确
+  - 错误友好化: `needs_permission: True` (TCC), `calendar_not_found: <name>` (中文/英文系统默认值不同)
+  - **关键: AppleScript record 在 Python 字符串里压一行** (注释里明确警告"鸿波 5/14 ISO 审核脚本踩的坑")
+- `tool-bridge/src/catfish_tool_bridge/catfish_tools.py`:
+  - 加 `catfish_create_calendar_event` + `catfish_list_calendars` schema 到 `CATFISH_NATIVE_TOOLS`
+  - description 明确告诉 LLM 跟 reminder/notify 区别 + **警告"❌ 不要在这里写 osascript Python 脚本拼 AppleScript record — 多行 record AppleScript 解析器不接受, 会报 syntax error. 直接调本 tool, 内部已正确处理"**
+  - `_dispatch_native_inner` 加 routing
+
+Companion (Tauri 给 UI 直接调):
+- `companion-app/src-tauri/src/commands/system.rs`:
+  - 新 `#[tauri::command] create_calendar_event(title, start_iso, end_iso?, location?, description?, calendar_name?)`
+  - 新 `list_calendars()`
+  - end_iso 默认: 简易加 1h (Rust 没引入 chrono, 手动 parse "HH:MM:SS" + 1, 跨天 modulo 24; LLM 一般会传 end_iso, 这只是 UI 直调兜底)
+  - TCC + calendar_not_found 错误友好化
+  - **record 段拼字符串保证单行** (跟 Python 同纪律)
+- `companion-app/src-tauri/src/lib.rs`: 注册 2 新 command
+
+SOUL.md §606 三选一铁律 (扩展 5/13 BL-REMINDER 段):
+- 表 3 行: notify (一次性弹窗) / reminder (待办无固定时长) / **calendar_event (有具体时间 + 通常带 location, 会议/现场审核/行程)**
+- 加铁律: "员工说 '5/18 上午 8:40 开会' 给具体时间 + 地点 句式, 优先 calendar_event 不要 reminder (reminder 没 location 字段, 会议体验差)"
+- 加铁律: **"不要让员工/自己写 osascript Python 脚本拼 AppleScript record — 多行 record AppleScript 解析器不接受会 syntax error (5/14 鸿波 ISO 审核脚本踩的坑根因). 直接调 tool, 内部已正确处理."**
+- TCC 权限处理跟 reminder 同模式 (needs_permission: True 别重试)
+
+**单测** (`tool-bridge/tests/test_calendar_events.py`, 27 全过):
+- 输入校验 (title / start_iso 必填; start_iso / end_iso 格式校验)
+- ISO 转换 (Z / +offset / -offset 4 测试)
+- AppleScript escape (quote / backslash / 中文不动 3 测试)
+- end_iso 默认 = start + 1h (含跨午夜跨月)
+- 非 macOS 兜底
+- mock osascript: 权限拒绝 / calendar 不存在 / 成功 minimal / 成功 full args
+- **`test_script_record_is_single_line`** — 关键回归测: 验证 `with properties { ... }` 段内不含 `\n`, 防后人改坏再撞 5/14 那个坑
+- 没传 location/description 时不出现在 record 里
+- list_calendars success / empty
+- dispatch through catfish_tools
+- schema 在 `NATIVE_TOOL_NAMES` + description 含 "reminder" / "iCloud" / "osascript" (验证警告完整)
+
+**结果**:
+- tool-bridge: 24 reminders + **27 calendar** + 33 task_manager = **84 passed** (相关 3 模块全过)
+- 没动 catfish-gateway / Companion 前端, 不需要回归 web/api 测试
+
+**为什么两份实现 (Python tool-bridge + Rust Tauri)**:
+跟 BL-REMINDER 同道理 — tool-bridge 给 LLM 调用, Tauri command 给 UI 直接调, 不同进程各自需要 osascript, 不能互相代劳.
+
+**TODO 鸿波本机**:
+- Tauri build 后首次调 `catfish_create_calendar_event` 弹 TCC, 系统设置 → 隐私与安全性 → **日历** → 勾上 Catfish Companion
+- 端到端测: 跟 LLM 说"在 409 会议室排 5/18-5/22 上午 8:40 开始的 ISO 现场审核会, 每天 8.5 小时", LLM 应该调 5 次 `catfish_create_calendar_event`, Calendar.app 出 5 个事件 + iCloud 同步
+
+**根因学到的事 (落档)**: 鸿波撞 syntax error 后我应该**第一时间想到提供 tool 而不是教他改脚本** — "教他改 record 单行写法" 是治标, "提供 tool" 是治本. LLM 写一次性 osascript 拼字符串永远会有这种细节坑 (中文 calendar 名 / 时间格式 / record 单行 / escape), 提供 tool 把这些坑一次性消化掉, 之后 LLM 不再写脚本.
+
+### 5/14 0:15 二轮 audit — RED-2 持久化方案修正 (PG 不是 SQLite, scope 1 是过渡品)
+
+鸿波 5/14 0:10 问 "中央端是不是用 SQLite?" — 我之前在 BACKLOG / CHANGELOG / KanbanPage 三处都写"task_manager → SQLite 持久化", 鸿波这一问让我去 audit 现状:
+
+- 中央 catfish-gateway 早就在用 **PostgreSQL** (asyncpg + 4 个 alembic migration: quota_audit / fact_patch / tool_archives / origin_model)
+- 我那行写"SQLite" 凭空多一套存储 + 两套迁移工具 + 失去 RBAC join 能力, 没道理
+
+**修正 PG 不是 SQLite, 4 条理由**:
+1. 不引入新存储 (PG 已经在跑)
+2. RBAC join 天然 (`JOIN tasks ON department=?`, 跟 quota_users / departments 同库)
+3. 多 worker / process 友好 (gateway 跑 uvicorn workers, SQLite 写锁全表卡)
+4. 跟 hermes 0.13 自带 Multi-Agent Kanban API 对位 (durable agent state 工业标准都是 PG)
+
+**追问关键决策 — scope 1 (jsonl) 跟 scope 2 (PG) 长留还是替换**: 用 AskUserQuestion 抛 3 选项 (长留两套 / PG 上线后删 / edge 双写). 鸿波选 **"PG 上线后 jsonl 删"** — 单一 source of truth, 接受中央 PG 起不来 / 没 VPN → 单机看不到任务的 trade-off.
+
+**调整结果**:
+- 加 task #57 BL-HERMES013-RED-2-PG: PG schema + edge push + 切 KanbanPage 数据源 + 删 jsonl 写入 (3 天)
+- BACKLOG 5/17 副线 "PG 持久化设计" 删 (改 5/16 副线只调研 hermes Kanban API 是不是 PG-based)
+- 5/22 RBAC P0 收尾后, **5/23-5/25 RED-2-PG** 真做 (FK 引用要 RBAC 表先 ready)
+- i18n 推 3 天 → 5/26-5/29
+- KanbanPage 底部说明卡 + tasks_browse docstring + CHANGELOG 三处文案改 "PG 上线后 jsonl 下线"
+
+**5/13 ship 的 jsonl scope 1 价值评估** (诚实公布): 5/14 - 5/25 期间 (~12 天) 单员工本地 KanbanPage 真功能, 之后 jsonl 写入路径删 (老数据 ~/.catfish/tasks.jsonl 不删 留作历史归档, KanbanPage UI / endpoint pattern 复用进 PG 版).
+
+**教训** (落档): BACKLOG 写关键架构决策时, **先 grep 一下现状** (`grep -r "DATABASE_URL\|asyncpg\|psycopg" src/`) 再下笔, 不要靠记忆乱写. 鸿波这种"中央端是不是用 SQLite?"的问句能逼出真 audit, 我应该自检触发.
 
 ### 鸿波本机验证 (5/13 23:50)
 

@@ -1767,6 +1767,84 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ── BL-CALENDAR (5/14 0:30 鸿波"ISO 现场审核会议 LLM 写脚本踩坑") ──
+    {
+        "name": "catfish_create_calendar_event",
+        "description": (
+            "★ 在 macOS Calendar.app 创建**时间锚定的事件** (会议 / 现场审核 / 行程, "
+            "带 location + 时长). iCloud 同步 iPhone/iPad/Apple Watch.\n\n"
+            "**跟 catfish_create_reminder 区别**:\n"
+            "  - 有**明确开始结束时间** + 通常带 location → **calendar_event** (这个工具)\n"
+            "  - 截止时间但只是提醒 / 没固定时长 → reminder\n"
+            "  - 完全没时间 ('记得给王总打电话') → reminder (无 due_date)\n\n"
+            "✅ 调用场景:\n"
+            "  - '5/18-5/22 上午 8:40 在 409 会议室开 ISO 现场审核会' → 调 5 次\n"
+            "  - '明天下午 3 点跟王总评审 Q2 进度, 12 楼 1201' → 一次, 带 location\n"
+            "  - '下周一中午 12:30 跟客户吃饭, 苏州工业园区 XX 餐厅' → 一次\n\n"
+            "❌ 不要在这里写 osascript Python 脚本拼 AppleScript record — 多行 record "
+            "AppleScript 解析器不接受, 会报 syntax error. **直接调本 tool**, 内部已正确处理.\n\n"
+            "参数:\n"
+            "  - title: 事件标题 (必填, 短描述)\n"
+            "  - start_iso: ISO 8601 开始时间 (必填, e.g. '2026-05-18T08:40:00')\n"
+            "  - end_iso: ISO 8601 结束时间 (可选, 默认 start + 1h)\n"
+            "  - location: 地点 (可选, e.g. '409 会议室' / '12 楼 1201')\n"
+            "  - description: 详情备注 (可选, 长描述)\n"
+            "  - calendar_name: 写到哪个日历 (默认 '工作'). 调 catfish_list_calendars 看可用\n\n"
+            "返参:\n"
+            "  - ok: True/False\n"
+            "  - event_summary, start_iso, end_iso, location, summary (UI 用)\n"
+            "  - 失败时: needs_permission 或 calendar_not_found 字段方便兜底"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "事件标题 (必填, 短描述, e.g. 'ISO 现场审核')",
+                },
+                "start_iso": {
+                    "type": "string",
+                    "description": "ISO 8601 开始时间 (必填), e.g. '2026-05-18T08:40:00'",
+                },
+                "end_iso": {
+                    "type": "string",
+                    "description": "ISO 8601 结束时间 (可选, 默认 start + 1h)",
+                },
+                "location": {
+                    "type": "string",
+                    "description": "地点 (可选), e.g. '409 会议室' / '12 楼 1201' / '苏州工业园区 XX 餐厅'",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "详情备注 (可选, 长描述)",
+                },
+                "calendar_name": {
+                    "type": "string",
+                    "description": "写到哪个日历 (默认 '工作' 中文系统; 'Work' 英文系统). 不知道传啥就调 catfish_list_calendars 看",
+                },
+            },
+            "required": ["title", "start_iso"],
+        },
+        "emoji": "📅",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_list_calendars",
+        "description": (
+            "列 macOS Calendar.app 所有日历名 (用户分类如 '工作' / '家庭' / '我的日历'). "
+            "**第一次创建事件前调** — 看员工有没自己分类的 calendar.\n\n"
+            "返参: calendar_names (数组, e.g. ['工作', '家庭', '我的日历'])"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+        "emoji": "📅",
+        "toolset": "catfish_native",
+        "available": True,
+    },
     # ── BL-FIX-SESSION-SEARCH (5/13 鸿波"历史会话搜不到") ──────────────
     {
         "name": "catfish_search_sessions",
@@ -5975,6 +6053,13 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_list_reminder_lists":
         from . import reminders  # noqa: PLC0415
         return reminders.tool_list_reminder_lists(args)
+    # BL-CALENDAR (5/14 0:30 鸿波"ISO 会议 LLM 写脚本踩坑")
+    if name == "catfish_create_calendar_event":
+        from . import calendar_events  # noqa: PLC0415
+        return calendar_events.tool_create_calendar_event(args)
+    if name == "catfish_list_calendars":
+        from . import calendar_events  # noqa: PLC0415
+        return calendar_events.tool_list_calendars(args)
     raise ValueError(f"unknown native tool: {name}")
 
 

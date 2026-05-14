@@ -144,15 +144,16 @@ export function KanbanPage() {
       {/* scope 1 提示, 让看到的人知道这版能力边界 */}
       <Card title="说明 — scope 1 限制 (5/13 BL-HERMES013-RED-2)">
         <div style={{ fontSize: 13, color: "var(--text-muted)", lineHeight: 1.6 }}>
-          这是<strong>单员工</strong> Kanban — 只看你本机 ~/.catfish/tasks.jsonl
-          (后台任务) + ~/.catfish/a2a_notifications.jsonl (你帮过谁) 两个数据源聚合.
+          <strong>这是过渡版</strong> (5/13 ship, 预计 5/25 后下线) — 当前只看你本机
+          ~/.catfish/tasks.jsonl (后台任务) + ~/.catfish/a2a_notifications.jsonl
+          (你帮过谁) 两个数据源.
           <br />
-          <strong>跨员工跨设备</strong> Kanban (manager 看本部门 / admin 看全公司)
-          需要 task_manager 改 SQLite 中心 DB 持久化, 排到 BL-RBAC sprint 之后
-          (5/22+, 跟 hermes 0.13 自带 Multi-Agent Kanban API 一起接).
+          <strong>5/23-5/25 BL-HERMES013-RED-2-PG 上线后</strong>: task_manager 改写中央 PG
+          (跟 audit/quota 同库), KanbanPage 切读 PG, jsonl 写入路径删. 加 "我的 / 本部门 /
+          全公司" 三视图 (按 role 显示). 老 jsonl 数据保留作历史归档不读.
           <br />
-          "跑中" 列只在当前 catfish 进程活, jsonl 只在任务结束 (completed / failed) 时写一行,
-          重启后跑中状态丢. 这是已知 scope 1 限制.
+          已知限制: "跑中" 列只在当前 catfish 进程活, jsonl 只在任务结束 (completed / failed)
+          时写一行, 重启后跑中状态丢 — PG 上线后改完 in-memory + 周期写 PG 解决.
         </div>
       </Card>
     </div>

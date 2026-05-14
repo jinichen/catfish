@@ -62,14 +62,14 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 | 日期 | 主线 (RBAC sprint, 后端) | 副线 |
 |---|---|---|
 | 5/15 | RBAC Day 2: catfish-identity OAuth grant 实现完 + hermes-cli client 注册测试 + 单测 | (5/13 ACP /steer 已 ship, 副线放空给主线 — 多 4h) |
-| 5/16 | RBAC Day 3: `allowed_models` per-dept/user 数据模型 + DB schema + alembic migration | RED-2 scope 2 调研: hermes 0.13 真有 Multi-Agent Kanban API 吗? 看源码 + WebFetch |
+| 5/16 | RBAC Day 3: `allowed_models` per-dept/user 数据模型 + DB schema + alembic migration | RED-2-PG 设计调研: 看 hermes 0.13 自带 Multi-Agent Kanban 是不是 PG-based + 字段约定 (供 5/23 真做时参考) |
 
-### 5/17-5/19 (周日 + 下周一二) — RBAC 中段 + Kanban scope 2 评估
+### 5/17-5/19 (周日 + 下周一二) — RBAC 中段
 
 | 日期 | 主线 RBAC | 副线 |
 |---|---|---|
-| 5/17 | RBAC Day 4: `allowed_tools` per-dept (gateway sanitize_tools 接) | **task_manager → SQLite 持久化设计** (Kanban scope 2 前置 — 跨员工跨设备需要这个) |
-| 5/18 | RBAC Day 5: `allowed_skills` per-dept (Skills Hub filter) | (空 / RBAC 主线超时 / 缓冲) |
+| 5/17 | RBAC Day 4: `allowed_tools` per-dept (gateway sanitize_tools 接) | (空 — RED-2-PG 必须等 5/22 RBAC P0 表 ready 后才能落 FK, 不能 5/17 并行) |
+| 5/18 | RBAC Day 5: `allowed_skills` per-dept (Skills Hub filter) | (空 / 主线缓冲) |
 | 5/19 | RBAC Day 6: `allowed_channels/chats/rooms` (跟 hermes 0.13 命名对齐) + catfish-web `/admin/access` UI 启动 | (空) |
 
 ### 5/20-5/22 (周三-五) — RBAC 收尾
@@ -78,9 +78,21 @@ v1 写于 4-27, 之后 3 天 (4-28 / 4-29 / 4-30) ship 了 23+ 项, 但没回写
 |---|---|
 | 5/20 | Day 7: `/admin/access` UI 完整 |
 | 5/21 | Day 8: 测试 + 文档 |
-| 5/22 | 缓冲 / 漏项补 |
+| 5/22 | 缓冲 / 漏项补 (尤其 quota_users / departments 表 ready 给 5/23 RED-2-PG 用 FK) |
 
-### 5/23-5/26 — i18n 接入 (任务 #51)
+### 5/23-5/25 — RED-2-PG 真做 (任务 #57, jsonl → PG)
+
+> **背景**: 5/13 ship 的 RED-2 scope 1 (jsonl 单员工本地) 是过渡品. 5/14 0:15 鸿波拍板 "PG 上线后 jsonl 删", 单一 source of truth. RBAC P0 完后才能落 FK 引用.
+
+| 日期 | 项 | 工作量 |
+|---|---|---|
+| 5/23 | **Day 1**: PG schema (`catfish_tasks` 表 — sub FK→quota_users, department FK→departments, kind/label/status/started_at/finished_at/error/result_preview/created_at) + alembic migration `005_catfish_tasks` + index `(sub, started_at)` `(department, started_at)` | 1 天 |
+| 5/24 | **Day 2**: edge `task_manager._run_wrapper` finally 改 push 到 `POST /api/tasks` (替代 jsonl 写入) + gateway 加 endpoint 接收 + RBAC 校验 sub | 1 天 |
+| 5/25 | **Day 3**: `tasks_browse.list_my_tasks` 切读 PG (不读 jsonl) + 加 `list_dept_tasks` (manager 看本部门, admin 全公司) + KanbanPage 加 toggle "我的 / 本部门 / 全公司" (按 role 显示) + 删 jsonl 相关注释 + 老 `~/.catfish/tasks.jsonl` 不删 (历史归档) | 1 天 |
+
+**已知 trade-off** (5/14 0:15 拍板接受): 中央 PG 起不来 / 没 VPN → 单机 KanbanPage 看不到任务. 单一 source of truth 优于双写一致性问题.
+
+### 5/26-5/29 — i18n 接入 (任务 #51, 推迟 3 天因 RED-2-PG 插队)
 
 | 项 | 工作量 |
 |---|---|

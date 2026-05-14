@@ -603,21 +603,33 @@ catfish 核心卖点是"员工教鲶鱼一次, 凝固成 skill, 下次秒开". �
 | 上下文压力大 | 等 `catfish-autocompress` 自动触发 | 不用主动 /compress |
 | 内网系统 | 走 Catfish Chrome 的 CDP 已登录态 | 不要让员工重新登录 |
 
-### 提醒 / 通知 — notify vs catfish_create_reminder (5/13 BL-REMINDER)
+### 提醒 / 通知 / 日历事件 三选一 (5/13 BL-REMINDER + 5/14 BL-CALENDAR)
 
-员工要"提醒"你时, 先分清是**马上看一眼的弹窗**还是**长留的 to-do**:
+员工要"通知 / 提醒 / 安排" 时, 按"是不是有具体时间 + 是不是会议"分三类:
 
-| 员工说法 | 用 | 为啥 |
+| 员工说法特征 | 用 | 落到哪 |
 |---|---|---|
-| "现在告诉我 X 完了" / "结果出来 ping 我一声" | Companion 内部 `notify` (右上角横幅, 几秒消失) | 一次性, 不持久, 不需要勾完成 |
-| "提醒我明早 9 点交月报" / "记下下周三给王总汇报" / "别忘了..." / "记得..." | **`catfish_create_reminder`** (写到 macOS Reminders.app, iCloud 同步) | 用户能勾完成, 跨设备到 iPhone/iPad, 真 to-do |
-| 周期性 ("每天早上 8 点提醒...") | `catfish_schedule_task` (cron) + 任务里调 notify 或 reminder | 定时是 schedule 的事, notify/reminder 是动作 |
+| "现在告诉我 X 完了" / "结果出来 ping 我一声" | Companion 内部 `notify` (右上角横幅, 几秒消失) | 系统通知 (不持久) |
+| "提醒我明早 9 点交月报" / "记下下周三给王总汇报" / "别忘了..." / "记得..." (没固定时长 / 不是会议) | **`catfish_create_reminder`** | macOS Reminders.app + iCloud 同步 iPhone/iPad |
+| **"5/18 上午 8:40 在 409 会议室开会"** / "明天下午 3 点跟王总评审, 12 楼 1201" / "下周一中午 12:30 跟客户吃饭, XX 餐厅" (有**明确开始结束时间** + **通常带 location**) | **`catfish_create_calendar_event`** | macOS Calendar.app + iCloud 同步 iPhone/iPad/Apple Watch |
+| 周期性 ("每天早上 8 点...") | `catfish_schedule_task` (cron) + 任务里调上面三个之一 | cron + 任意 |
 
-**铁律**: 员工出现 "**提醒我**... " / "**别忘了**... " / "**记得**... " / "**明天 / 下周 / X 点**做 X" 这类**未来时间点 + 待办** 的句式, **优先 `catfish_create_reminder`**, 不要只 `notify` (notify 几秒就消失, 员工真到时间会忘).
+**判断三选一的关键**:
+- **会议 / 现场审核 / 行程 = calendar event** (有时间锚点 + 多半带地点)
+- **待办 / 提醒做某事 = reminder** (有截止但不是"那个时间会发生", 是"那个时间之前要做完")
+- **临时弹窗 = notify**
 
-**首次调用 macOS 会弹 TCC 权限申请 (隐私与安全性 → 提醒事项)**, 员工没勾你会拿到 `needs_permission: True` — 这时**别重试**, 告诉员工去系统设置勾上 Catfish Companion (或 Terminal / Python, 看 osascript 走的进程).
+**铁律**:
+1. 员工说"提醒我..." / "别忘了..." / "记得..." / 未来时间 + 待办 句式, **优先 reminder**, 不要只 notify
+2. 员工说"5/18 上午 8:40 开会" / 给具体时间 + 地点 句式, **优先 calendar_event**, 不要只 reminder (reminder 没 location 字段, 会议体验差)
+3. **不要让员工/自己写 osascript Python 脚本** 拼 AppleScript record — 多行 record AppleScript 解析器不接受会 syntax error (5/14 鸿波 ISO 审核脚本踩的坑根因). **直接调 tool**, 内部已正确处理.
 
-list_name 默认 "提醒事项" (中文系统). 不确定时调 `catfish_list_reminder_lists` 看下用户实际有哪些 list.
+**TCC 权限**: 首次调 reminder / calendar 时 macOS 弹权限申请, 员工没勾你会拿到 `needs_permission: True` — **别重试**, 告诉员工去系统设置 → 隐私与安全性 → 提醒事项 / 日历 勾上 Catfish Companion.
+
+**默认值**:
+- reminder list_name 默认 "提醒事项" (中文系统), 不确定调 `catfish_list_reminder_lists`
+- calendar_name 默认 "工作", 不确定调 `catfish_list_calendars`
+- calendar end_iso 不传时默认 start + 1h (会议 1h 是常见值)
 
 ### 内网域名 http vs https 约定 → 见 SOUL_<customer>.md
 

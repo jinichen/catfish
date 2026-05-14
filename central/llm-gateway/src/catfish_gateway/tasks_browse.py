@@ -23,11 +23,18 @@
 - 跑中状态弱 (task_manager status running 只在 in-memory, jsonl 只在 finally 写
   最终态. 重启后 in-memory 丢, "跑中" 这一列只能看当前进程内 task_manager.list_active())
 
-# 5/14+ 待补 (BL-RBAC sprint 后)
+# 5/23-5/25 RED-2-PG 改造 (任务 #57, jsonl → PG 单一 source of truth)
 
-- task_manager 改 SQLite 持久化, "跑中" 状态跨重启活
-- 跨员工聚合 (manager 看本部门, admin 看全公司)
-- a2a outbox (我求过别人哪些) 也聚合进来
+5/14 0:15 鸿波拍板 "PG 上线后 jsonl 删" — 这个 tasks_browse.py 模块 5/25 后大改:
+
+- 删 _read_jsonl_lines / _tasks_jsonl_path 相关逻辑
+- 改 list_my_tasks 走 PG (asyncpg query, JOIN quota_users + departments)
+- 加 list_dept_tasks (manager 看本部门, admin 看全公司, RBAC join 天然)
+- a2a_inbox 聚合保留 (a2a 现状是 jsonl, 5/25 不动 a2a 路径)
+- KanbanPage 加视图 toggle "我的 / 本部门 / 全公司" (按 me.role 显示)
+
+trade-off (拍板接受): 中央 PG fail / 没 VPN → 看不到本机任务. 单一 source of truth
+优先于双写一致性问题.
 """
 from __future__ import annotations
 
