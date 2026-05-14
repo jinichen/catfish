@@ -319,13 +319,73 @@ def test_cmd_token_when_not_logged_in(tmp_auth_dir, capsys):
     assert "未登录" in captured.err
 
 
-def test_cmd_token_when_expired(tmp_auth_dir, capsys):
+def test_cmd_token_when_expired_no_refresh(tmp_auth_dir, capsys):
+    """过期 + 没 refresh_token → 让员工重 login"""
     expired = catfish.TokenStore(
         access_token="x", expires_at=int(time.time()) - 100,
         issuer="x", client_id="hermes-cli",
+        # 注意: refresh_token=None
     )
     catfish.save_token(expired)
     rc = catfish.cmd_token(args=None)
     captured = capsys.readouterr()
     assert rc == 1
     assert "过期" in captured.err
+    assert "refresh_token" in captured.err or "login" in captured.err
+
+
+def test_cmd_token_auto_refresh_when_expired(tmp_auth_dir, monkeypatch, capsys):
+    """BL-IDENTITY-REFRESH (5/15): 过期 + 有 refresh_token → 自动调 _do_refresh 续"""
+    expired = catfish.TokenStore(
+        access_token="OLD",
+        expires_at=int(time.time()) - 100,
+        issuer="http://test:8998",
+        client_id="hermes-cli",
+        refresh_token="OLD_REFRESH",
+        user_email="alice@x.com",
+        user_sub="alice@x.com",
+    )
+    catfish.save_token(expired)
+
+    # mock _do_refresh 返新 token
+    refreshed = catfish.TokenStore(
+        access_token="NEW_ACCESS_TOKEN",
+        expires_at=int(time.time()) + 3600,
+        issuer="http://test:8998",
+        client_id="hermes-cli",
+        refresh_token="NEW_REFRESH",
+        user_email="alice@x.com",
+        user_sub="alice@x.com",
+    )
+    monkeypatch.setattr(catfish, "_do_refresh", lambda store: refreshed)
+    monkeypatch.setattr(catfish, "_patch_hermes_config", lambda token: None)
+
+    rc = catfish.cmd_token(args=None)
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert captured.out.strip() == "NEW_ACCESS_TOKEN"
+    # 也验真存盘了
+    new_store = catfish.load_token()
+    assert new_store.access_token == "NEW_ACCESS_TOKEN"
+    assert new_store.refresh_token == "NEW_REFRESH"
+
+
+def test_cmd_token_refresh_failure_returns_error(tmp_auth_dir, monkeypatch, capsys):
+    """过期 + refresh 失败 (e.g. refresh_token 也过期了) → 返 1, 提示重 login"""
+    expired = catfish.TokenStore(
+        access_token="OLD",
+        expires_at=int(time.time()) - 100,
+        issuer="http://test:8998",
+        client_id="hermes-cli",
+        refresh_token="EXPIRED_REFRESH",
+    )
+    catfish.save_token(expired)
+
+    def _fail_refresh(store):
+        raise RuntimeError("refresh_token 已过期")
+    monkeypatch.setattr(catfish, "_do_refresh", _fail_refresh)
+
+    rc = catfish.cmd_token(args=None)
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "refresh 失败" in captured.err or "login" in captured.err

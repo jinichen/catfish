@@ -541,29 +541,103 @@ def cmd_logout(args) -> int:
 
 
 def cmd_token(args) -> int:
-    """输出当前 access_token. 给 shell 用 (e.g. curl -H "Authorization: Bearer $(catfish token)")."""
+    """输出当前 access_token. 给 shell 用 (e.g. curl -H "Authorization: Bearer $(catfish token)").
+
+    BL-IDENTITY-REFRESH-TOKEN (5/15): 如果 access_token 快过期 (60s 内) 且有 refresh_token,
+    自动透明 refresh. 员工 / hermes 不感知.
+    """
     store = load_token()
     if not store:
         print("ERROR: 未登录, 跑: catfish login", file=sys.stderr)
         return 1
     if store.is_expired():
-        print(f"ERROR: token 已过期 ({_fmt_expires(store.expires_at)}), 跑: catfish refresh", file=sys.stderr)
-        return 1
+        # 自动 refresh
+        if store.refresh_token:
+            try:
+                store = _do_refresh(store)
+                save_token(store)
+                _patch_hermes_config(store.access_token)
+            except Exception as e:
+                print(f"ERROR: refresh 失败 ({e}), 跑: catfish login", file=sys.stderr)
+                return 1
+        else:
+            print(
+                f"ERROR: token 已过期 ({_fmt_expires(store.expires_at)}) 且无 refresh_token, "
+                f"跑: catfish login",
+                file=sys.stderr,
+            )
+            return 1
     print(store.access_token)
     return 0
 
 
 def cmd_refresh(args) -> int:
-    """续 token. 现在 (没 refresh_token) 就是重做一次 login. 5/16+ 加 refresh_token grant 后真用 refresh."""
+    """续 token. 有 refresh_token 走 refresh grant 无感续, 没 refresh_token 退化到重 login."""
     store = load_token()
     if store and store.refresh_token:
-        # Phase 1C: 真 refresh_token grant (5/16+ 加)
-        print("(refresh_token grant 还没实现, 重做 login)")
+        try:
+            new_store = _do_refresh(store)
+            save_token(new_store)
+            _patch_hermes_config(new_store.access_token)
+            print(f"✓ token 已续 ({new_store.expires_in_secs()} 秒后过期, "
+                  f"{_fmt_expires(new_store.expires_at)})")
+            if store.user_email:
+                print(f"  员工: {store.user_email}")
+            return 0
+        except Exception as e:
+            print(f"❌ refresh 失败: {e}", file=sys.stderr)
+            print("退化到重做 login...", file=sys.stderr)
     else:
         print("(没 refresh_token, 重做 login — 浏览器会再开一次)")
-
-    # 退化到重 login
     return cmd_login(args)
+
+
+def _do_refresh(store: TokenStore) -> TokenStore:
+    """调 catfish-identity /token grant_type=refresh_token, 拿新 access + 新 refresh.
+
+    raise RuntimeError 如果 refresh 失败 (token 已 revoke / 过期 / network).
+    """
+    if not store.refresh_token:
+        raise RuntimeError("当前 token 没 refresh_token, 必须重新登录")
+
+    body = urllib.parse.urlencode({
+        "grant_type": "refresh_token",
+        "refresh_token": store.refresh_token,
+        "client_id": store.client_id,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        f"{store.issuer}/token",
+        data=body,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body_str = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"refresh 失败 (HTTP {e.code}): {body_str}") from e
+
+    new_access = data.get("access_token")
+    if not new_access:
+        raise RuntimeError(f"identity 没返新 access_token: {data}")
+
+    payload = _decode_jwt_payload(new_access)
+    expires_at = int(payload.get("exp") or (time.time() + data.get("expires_in", 3600)))
+
+    return TokenStore(
+        access_token=new_access,
+        # access_token RFC 9068 后含 user claims, 复用旧 store 的 email/sub 也对
+        id_token=store.id_token,
+        refresh_token=data.get("refresh_token", store.refresh_token),  # rotation 后是新的
+        expires_at=expires_at,
+        issuer=store.issuer,
+        client_id=store.client_id,
+        scope=data.get("scope", store.scope),
+        user_email=store.user_email or payload.get("email", ""),
+        user_sub=store.user_sub or payload.get("sub", ""),
+        saved_at=int(time.time()),
+    )
 
 
 def _fmt_expires(ts: int) -> str:
