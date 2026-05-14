@@ -234,7 +234,33 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("BL-Q3-ARCHIVE summary_worker 启动失败 (archive 仍能写, 只是不摘要): %s", e)
 
+    # BL-LEARN-RECMODE V2 #67 (5/15): 隐私 — 启动时清 14 天前 recordings,
+    # 后台 task 每 24h 重跑一次. 截图含业务数据不能永久留, 跟 macOS / iCloud
+    # 14 天回收同模式. opt-in '保留作 ground truth' 跳过.
+    recmode_cleanup_task = None
+    try:
+        from .recmode import cleanup as _recmode_cleanup  # noqa: PLC0415
+        # 启动时同步跑一次
+        stats0 = _recmode_cleanup.cleanup_old_recordings()
+        if stats0["scanned"] > 0:
+            logger.info(
+                "RecMode cleanup [startup]: scanned=%d deleted=%d kept_forever=%d freed=%.1f MB",
+                stats0["scanned"], stats0["deleted"], stats0["kept_forever"],
+                stats0["freed_bytes"] / 1024 / 1024,
+            )
+        # 起后台 daemon
+        recmode_cleanup_task = asyncio.create_task(_recmode_cleanup.cleanup_daemon())
+    except Exception as e:
+        logger.warning("RecMode cleanup 启动失败 (recordings 不会自动清): %s", e)
+
     yield
+
+    if recmode_cleanup_task is not None:
+        recmode_cleanup_task.cancel()
+        try:
+            await recmode_cleanup_task
+        except asyncio.CancelledError:
+            pass
 
     if archive_summary_task is not None:
         archive_summary_task.cancel()
@@ -812,14 +838,98 @@ async def api_learn_save_skill(
         backup = final_dir.with_name(f"{name}.bak.{int(time.time())}")
         final_dir.rename(backup)
     shutil.copytree(draft_dir, final_dir)
+
+    # V2 #67: opt-in '保留作 ground truth' — 用户勾了 keep_forever, 写 flag
+    # 到 session_dir 的 .keep_forever (cleanup 跳过整个 session_dir)
+    # + 写 _keep_forever: true 到 recmode_meta.json (双重保险)
+    keep_forever = bool(body.get("keep_forever", False))
+    if keep_forever:
+        # 找 draft_dir 上面的 session_dir (recordings/<sid>/skill_draft/<ns>/<name>/)
+        try:
+            session_dir = draft_dir.parent.parent.parent  # <ns> → skill_draft → <sid>
+            (session_dir / ".keep_forever").touch()
+            # 同时写到 recmode_meta.json
+            meta_path = final_dir / "recmode_meta.json"
+            if meta_path.exists():
+                import json as _json
+                meta = _json.loads(meta_path.read_text(encoding="utf-8"))
+                meta["_keep_forever"] = True
+                meta_path.write_text(
+                    _json.dumps(meta, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+        except Exception:  # noqa: BLE001
+            logger.warning("save_skill: keep_forever flag 写失败 (不致命)", exc_info=True)
+
     return {
         "ok": True,
         "final_dir": str(final_dir),
         "namespace": namespace,
         "name": name,
         "moved": True,
+        "keep_forever": keep_forever,
         "viewer": user.sub,
     }
+
+
+@app.post("/api/learn/repair_selector")
+async def api_learn_repair_selector(
+    body: dict,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """V2 #68 selector 漂移修复: skill 跑时 find_by_text(hint) 找不到 →
+    catfish_browser_runtime POST 这里, gateway 调 main vision 看截图找新 selector.
+
+    Body: {
+        "hint": {"text": "应用", "near_text": "通讯录", "role": "tab"},
+        "screenshot_b64": str,
+        "context": str (录制时语音转写, 可空)
+    }
+
+    Returns: {found, text, near_text, role, confidence, reason}
+    """
+    from .recmode import selector_repair  # noqa: PLC0415
+    hint = body.get("hint") or {}
+    screenshot = (body.get("screenshot_b64") or "").strip()
+    context = (body.get("context") or "").strip()
+    if not hint:
+        raise HTTPException(status_code=400, detail="hint 不能空")
+    if not screenshot:
+        raise HTTPException(status_code=400, detail="screenshot_b64 不能空 (vision 必须看图)")
+
+    auth_token = os.environ.get("CATFISH_DEV_TOKEN", "")
+    try:
+        out = await selector_repair.repair_selector(
+            hint=hint,
+            screenshot_b64=screenshot,
+            context=context,
+            auth_token=auth_token,
+        )
+        out["viewer"] = user.sub
+        return out
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+@app.post("/api/learn/cleanup")
+async def api_learn_cleanup(
+    body: dict,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """V2 #67: 手动触发 cleanup (admin / 测试用 — 不等 24h daemon).
+
+    Body: {"dry_run"?: bool (默认 false 真删), "ttl_days"?: int (默认 14)}
+    Returns: cleanup_old_recordings stats
+    """
+    from .recmode import cleanup as _recmode_cleanup  # noqa: PLC0415
+    dry_run = bool(body.get("dry_run", False))
+    ttl_days = int(body.get("ttl_days") or 14)
+    stats = _recmode_cleanup.cleanup_old_recordings(
+        ttl_seconds=ttl_days * 24 * 3600,
+        dry_run=dry_run,
+    )
+    stats["viewer"] = user.sub
+    return stats
 
 
 @app.post("/api/learn/test_skill")

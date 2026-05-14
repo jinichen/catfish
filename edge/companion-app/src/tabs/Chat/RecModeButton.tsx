@@ -154,10 +154,13 @@ function SetupModal() {
     try {
       const sessionId = newRecModeSessionId();
       await apiStartRecording(sessionId);
-      try {
-        await invoke("speech_start_recording");
-      } catch (e) {
-        console.warn("[recmode] speech_start_recording 失败 (继续, 没语音):", e);
+      // V2 #70: recordAudio 关时跳过 speech_start (隐私 / 没麦 场景)
+      if (setup.recordAudio) {
+        try {
+          await invoke("speech_start_recording");
+        } catch (e) {
+          console.warn("[recmode] speech_start_recording 失败 (继续, 没语音):", e);
+        }
       }
       startRecording(sessionId);
     } catch (e) {
@@ -347,25 +350,61 @@ function SetupModal() {
           {showAdvanced ? "▾ 高级选项" : "▸ 高级选项"}
         </button>
         {showAdvanced && (
-          <div style={{ marginTop: 10 }}>
-            <select
-              value={setup.namespace}
-              onChange={(e) => setSetup({ namespace: e.target.value })}
-              style={{
-                padding: "6px 10px",
-                border: `1px solid ${T.border}`,
-                borderRadius: 6,
-                background: T.bgInput,
-                color: T.text,
-                fontSize: 12,
+          <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 12 }}>
+            <div>
+              <label style={{ fontSize: 11, color: T.textSecondary, display: "block", marginBottom: 4, fontFamily: T.systemFont }}>
+                共享范围
+              </label>
+              <select
+                value={setup.namespace}
+                onChange={(e) => setSetup({ namespace: e.target.value })}
+                style={{
+                  padding: "6px 10px",
+                  border: `1px solid ${T.border}`,
+                  borderRadius: 6,
+                  background: T.bgInput,
+                  color: T.text,
+                  fontSize: 12,
+                  fontFamily: T.systemFont,
+                  outline: "none",
+                }}
+              >
+                <option value="personal">只我自己用</option>
+                <option value="department">同部门可用</option>
+                <option value="public">全公司可用</option>
+              </select>
+            </div>
+            {/* V2 #70: 录音 toggle */}
+            <label style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              fontSize: 12,
+              color: T.text,
+              fontFamily: T.systemFont,
+              cursor: "pointer",
+              userSelect: "none",
+            }}>
+              <input
+                type="checkbox"
+                checked={setup.recordAudio}
+                onChange={(e) => setSetup({ recordAudio: e.target.checked })}
+                style={{ accentColor: T.cyan, cursor: "pointer" }}
+              />
+              <span>同时录音 (顺嘴说意图, 鲶鱼综合质量更高)</span>
+            </label>
+            {!setup.recordAudio && (
+              <div style={{
+                fontSize: 11,
+                color: T.textTertiary,
+                marginLeft: 22,
                 fontFamily: T.systemFont,
-                outline: "none",
-              }}
-            >
-              <option value="personal">只我自己用</option>
-              <option value="department">同部门可用</option>
-              <option value="public">全公司可用</option>
-            </select>
+                lineHeight: 1.5,
+              }}>
+                ⚠ 关录音 = 鲶鱼只看操作 + 截图猜意图, 综合 SKILL.md 较机械.
+                隐私场景 / 没麦克风 / 嘈杂环境 才关.
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -467,25 +506,29 @@ function RecordingOverlay() {
     };
   }, [state, sessionId]);
 
+  // V2 #70: 拿录音 toggle 状态 (录屏开始时 setup.recordAudio 已落)
+  const isRecordingAudio = useRecModeStore((s) => s.isRecordingAudio);
+
   async function onFinish() {
     if (!sessionId || submitting) return;
     setSubmitting(true);
     try {
-      // 停 ffmpeg 录音 + 转写 → A 写 transcripts.jsonl
-      try {
-        const transcript = await invoke<string>("speech_stop_and_transcribe");
-        if (transcript && transcript.trim()) {
-          // A: 真写到 ~/.catfish/recordings/<sid>/transcripts.jsonl
-          const elapsedAtStop = startedAt
-            ? Math.floor(Date.now() / 1000) - startedAt
-            : 0;
-          await recordTranscript(sessionId, transcript, {
-            tsOffset: 0,  // 整段从 0 开始 (whisper 没分句 ts, RecMode 复用整段)
-            duration: elapsedAtStop,
-          });
+      // V2 #70: 没开录音就跳过 whisper (start 时也没起 ffmpeg)
+      if (isRecordingAudio) {
+        try {
+          const transcript = await invoke<string>("speech_stop_and_transcribe");
+          if (transcript && transcript.trim()) {
+            const elapsedAtStop = startedAt
+              ? Math.floor(Date.now() / 1000) - startedAt
+              : 0;
+            await recordTranscript(sessionId, transcript, {
+              tsOffset: 0,
+              duration: elapsedAtStop,
+            });
+          }
+        } catch (e) {
+          console.warn("[recmode] speech_stop / record_transcript 失败 (继续, 没语音):", e);
         }
-      } catch (e) {
-        console.warn("[recmode] speech_stop / record_transcript 失败 (继续, 没语音):", e);
       }
       // 停 CDP listener (flush events.jsonl + meta.json)
       await apiStopRecording(sessionId);

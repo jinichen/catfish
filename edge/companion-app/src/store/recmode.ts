@@ -28,12 +28,17 @@ export type RecModeState =
   | "error";
 
 export interface RecModeSetup {
-  /** snake_case skill name, e.g. eis_qualification_check */
+  /** 用户输的人话标题 (e.g. '检查 EIS 资质过期') — 后端 LLM 综合时起 snake_case skill_name */
   name: string;
   /** 'department' / 'personal' / 'public' */
   namespace: string;
   /** 简述 (1-2 句, 可选) */
   description: string;
+  /** 5/15 V2 (#70): 录屏期间是否同时录音 (默认 true).
+   *  关掉 = 只录操作 + 截图, LLM 综合时少了"为啥点这"的语音 — 隐私场景用. */
+  recordAudio: boolean;
+  /** 5/15 V2 (#67): 标记保留作 ground truth, 14 天清理跳过. preview 时勾选. */
+  keepForever: boolean;
 }
 
 export interface RecModeSkillPreview {
@@ -112,6 +117,8 @@ const DEFAULT_SETUP: RecModeSetup = {
   name: "",
   namespace: "personal",
   description: "",
+  recordAudio: true,    // V2 #70: 默认开 (核心信号)
+  keepForever: false,   // V2 #67: 默认 14 天清理
 };
 
 export const useRecModeStore = create<RecModeStateData>((set) => ({
@@ -130,14 +137,15 @@ export const useRecModeStore = create<RecModeStateData>((set) => ({
   setSetup: (s) =>
     set((cur) => ({ setup: { ...cur.setup, ...s } })),
   startRecording: (sessionId) =>
-    set({
+    set((cur) => ({
       state: "recording",
       sessionId,
       startedAt: Math.floor(Date.now() / 1000),
       keyframesCount: 0,
-      isRecordingAudio: true,
+      // V2 #70: 跟 setup.recordAudio 一致 (没开录音 → isRecordingAudio=false → onFinish 跳过 whisper)
+      isRecordingAudio: cur.setup.recordAudio,
       errorMessage: null,
-    }),
+    })),
   stopRecording: () => set({ state: "analyzing" }),
   startAnalyzing: () => set({ state: "analyzing" }),
   showPreview: (preview) =>
