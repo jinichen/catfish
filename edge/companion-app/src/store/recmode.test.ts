@@ -20,6 +20,7 @@ import {
   isValidSkillName,
   isValidSkillTitle,
   RECMODE_EXAMPLES,
+  classifyRecModeError,
 } from "./recmode";
 
 let pass = 0;
@@ -137,6 +138,38 @@ check("有 ≥ 3 个示例", RECMODE_EXAMPLES.length >= 3);
 check("每个示例 title 都 valid", RECMODE_EXAMPLES.every((e) => isValidSkillTitle(e.title)));
 check("每个示例 description 非空", RECMODE_EXAMPLES.every((e) => e.description.length > 0));
 check("EIS 资质 示例在", RECMODE_EXAMPLES.some((e) => e.title.includes("EIS")));
+
+// ─── classifyRecModeError (5/14 G 错分类) ───────────────
+
+console.log("[classifyRecModeError]");
+check("CDP/ws/9222/chrome → cdp_unavailable",
+  classifyRecModeError("ws connection refused on 9222") === "cdp_unavailable");
+check("Catfish Chrome 没起 → cdp_unavailable",
+  classifyRecModeError("CDP listener 连不上 Catfish Chrome") === "cdp_unavailable");
+check("whisper / ffmpeg → whisper_failed",
+  classifyRecModeError("whisper.cpp 跑挂") === "whisper_failed");
+check("speech_start_recording 失败 → whisper_failed",
+  classifyRecModeError("speech_start_recording 失败") === "whisper_failed");
+check("timeout → aggregator_timeout",
+  classifyRecModeError("LLM 综合超时 (300s)") === "aggregator_timeout");
+check("超时 → aggregator_timeout",
+  classifyRecModeError("aggregator 超时啦") === "aggregator_timeout");
+check("JSON parse → llm_parse_failed",
+  classifyRecModeError("LLM 输出 JSON parse 失败") === "llm_parse_failed");
+check("找不到 → llm_parse_failed",
+  classifyRecModeError("LLM 输出找不到 JSON") === "llm_parse_failed");
+check("network → network",
+  classifyRecModeError("network connection error") === "network");
+check("不可达 → network",
+  classifyRecModeError("gateway 不可达") === "network");
+check("未知 → unknown",
+  classifyRecModeError("奇怪的 wat") === "unknown");
+
+// 跑 setError 看自动分类生效
+useRecModeStore.getState().setError("ws connection failed");
+check("setError 自动分类 cdp_unavailable",
+  useRecModeStore.getState().errorCategory === "cdp_unavailable");
+useRecModeStore.getState().reset();
 
 // ─── 报告 ─────────────────────────────────────────────────
 

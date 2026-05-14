@@ -61,6 +61,15 @@ interface RecModeStateData {
   preview: RecModeSkillPreview | null;
   /** 友好错误消息 (state=error 时) */
   errorMessage: string | null;
+  /** 5/14 G: 错类型分类, 给 UI 显不同 hint + 修法引导 */
+  errorCategory:
+    | "cdp_unavailable"     // CDP ws 连不上 (Catfish Chrome 没起 / 端口错)
+    | "whisper_failed"       // ffmpeg / whisper.cpp 跑挂
+    | "aggregator_timeout"   // LLM 综合超时
+    | "llm_parse_failed"     // LLM 输出 JSON parse 错
+    | "network"              // gateway / network 通用错
+    | "unknown"              // 兜底
+    | null;
 
   // ── actions ──
   openSetup: () => void;
@@ -70,8 +79,33 @@ interface RecModeStateData {
   stopRecording: () => void;
   startAnalyzing: () => void;
   showPreview: (p: RecModeSkillPreview) => void;
-  setError: (msg: string) => void;
+  setError: (msg: string, category?: RecModeStateData["errorCategory"]) => void;
   reset: () => void;
+}
+
+/** Helper: 按错误消息内容自动分类 errorCategory.
+ *
+ * RecMode 的几类典型错: CDP ws 连不上 / whisper 挂 / aggregator timeout /
+ * LLM JSON parse fail / 通用网络. UI 根据分类给不同修法引导.
+ */
+export function classifyRecModeError(msg: string): RecModeStateData["errorCategory"] {
+  const m = msg.toLowerCase();
+  if (m.includes("ws") || m.includes("cdp") || m.includes("9222") || m.includes("chrome")) {
+    return "cdp_unavailable";
+  }
+  if (m.includes("whisper") || m.includes("ffmpeg") || m.includes("speech_") || m.includes("audio")) {
+    return "whisper_failed";
+  }
+  if (m.includes("timeout") || m.includes("超时")) {
+    return "aggregator_timeout";
+  }
+  if (m.includes("parse") || m.includes("json") || m.includes("找不到")) {
+    return "llm_parse_failed";
+  }
+  if (m.includes("network") || m.includes("fetch") || m.includes("connection") || m.includes("不可达")) {
+    return "network";
+  }
+  return "unknown";
 }
 
 const DEFAULT_SETUP: RecModeSetup = {
@@ -89,6 +123,7 @@ export const useRecModeStore = create<RecModeStateData>((set) => ({
   setup: { ...DEFAULT_SETUP },
   preview: null,
   errorMessage: null,
+  errorCategory: null,
 
   openSetup: () => set({ state: "setup" }),
   closeSetup: () => set({ state: "idle" }),
@@ -111,8 +146,12 @@ export const useRecModeStore = create<RecModeStateData>((set) => ({
       preview,
       errorMessage: null,
     }),
-  setError: (errorMessage) =>
-    set({ state: "error", errorMessage }),
+  setError: (errorMessage, category) =>
+    set({
+      state: "error",
+      errorMessage,
+      errorCategory: category ?? classifyRecModeError(errorMessage),
+    }),
   reset: () =>
     set({
       state: "idle",
@@ -123,6 +162,7 @@ export const useRecModeStore = create<RecModeStateData>((set) => ({
       setup: { ...DEFAULT_SETUP },
       preview: null,
       errorMessage: null,
+      errorCategory: null,
     }),
 }));
 

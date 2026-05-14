@@ -469,6 +469,26 @@ def list_active() -> list[str]:
     return list(_active_sessions.keys())
 
 
+def session_status(session_id: str) -> dict | None:
+    """RecMode F (5/14): polling 用 — 实时 keyframes / events 计数 + 录制时长.
+
+    Companion RecordingOverlay 每秒 polling 这个显 '⏱ 0:34 · 📸 8 keyframes · 📊 23 events'.
+    没找到 session 返 None.
+    """
+    sess = _active_sessions.get(session_id)
+    if sess is None:
+        return None
+    s = sess.state
+    return {
+        "session_id": s.session_id,
+        "started_at": s.started_at,
+        "elapsed_s": round(time.time() - s.started_at, 1),
+        "events_count": len(s.events),
+        "keyframes_count": s.keyframe_count,
+        "ws_connected": s._ws is not None,
+    }
+
+
 __all__ = [
     "CDPRecordingSession",
     "CDPEvent",

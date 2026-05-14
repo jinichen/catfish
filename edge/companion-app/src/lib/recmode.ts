@@ -105,3 +105,91 @@ export async function analyzeRecording(
 export async function listActiveRecordings(): Promise<{ active_session_ids: string[] }> {
   return _get<{ active_session_ids: string[] }>("/api/learn/active");
 }
+
+// ─── F: 录制中实时状态 polling ─────────────────────────────
+
+export interface RecordingStatus {
+  session_id: string;
+  started_at: number;
+  elapsed_s: number;
+  events_count: number;
+  keyframes_count: number;
+  ws_connected: boolean;
+}
+
+/** GET /api/learn/status/<sid> — 实时拿 keyframes / events 计数 + 录制时长. */
+export async function getRecordingStatus(sessionId: string): Promise<RecordingStatus> {
+  return _get<RecordingStatus>(`/api/learn/status/${encodeURIComponent(sessionId)}`);
+}
+
+// ─── A: Companion 把语音转写写到 transcripts.jsonl ──────────
+
+/** POST /api/learn/record_transcript — Companion 转写完调一下 gateway 落 jsonl. */
+export async function recordTranscript(
+  sessionId: string,
+  text: string,
+  options: { tsOffset?: number; duration?: number } = {},
+): Promise<{ ok: boolean; lines_count: number }> {
+  return _post("/api/learn/record_transcript", {
+    session_id: sessionId,
+    text,
+    ts_offset: options.tsOffset ?? 0,
+    duration: options.duration ?? 0,
+  });
+}
+
+// ─── B: 读 SKILL.md / main.py 内容给 preview UI ────────────
+
+export interface SkillContentResponse {
+  skill_dir: string;
+  skill_md: string;
+  main_py: string;
+  recmode_meta: any | null;
+}
+
+/** GET /api/learn/skill_content?skill_dir=... */
+export async function getSkillContent(skillDir: string): Promise<SkillContentResponse> {
+  return _get<SkillContentResponse>(
+    `/api/learn/skill_content?skill_dir=${encodeURIComponent(skillDir)}`,
+  );
+}
+
+// ─── C: 用户点保存把 draft mv 到正式 skills ────────────────
+
+export interface SaveSkillResponse {
+  ok: boolean;
+  final_dir: string;
+  namespace: string;
+  name: string;
+  moved: boolean;
+}
+
+/** POST /api/learn/save_skill */
+export async function saveSkill(draftDir: string): Promise<SaveSkillResponse> {
+  return _post<SaveSkillResponse>("/api/learn/save_skill", {
+    draft_dir: draftDir,
+  });
+}
+
+// ─── E: 跑一次试 ───────────────────────────────────────────
+
+export interface TestSkillResponse {
+  ok: boolean;
+  returncode?: number;
+  stdout?: string;
+  stderr?: string;
+  duration_s: number;
+  skill_path: string;
+  error?: string;
+}
+
+/** POST /api/learn/test_skill — 触发 catfish CLI 跑这个 skill 一次, 拿结果. */
+export async function testSkill(
+  skillDir: string,
+  params: Record<string, unknown> = {},
+): Promise<TestSkillResponse> {
+  return _post<TestSkillResponse>("/api/learn/test_skill", {
+    skill_dir: skillDir,
+    params,
+  });
+}

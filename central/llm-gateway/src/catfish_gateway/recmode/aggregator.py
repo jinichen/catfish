@@ -464,6 +464,14 @@ def render_main_py(skill: SkillOutput) -> str:
     parts.extend([
         '    return {"ok": True}',
         "",
+        "",
+        'if __name__ == "__main__":',
+        '    # 直接 python main.py {} 跑 — 给 RecMode "跑一次试" 用',
+        '    import json, sys',
+        '    params = json.loads(sys.argv[1]) if len(sys.argv) > 1 else {}',
+        '    result = main(params)',
+        '    print(json.dumps(result, ensure_ascii=False, indent=2))',
+        "",
     ])
     return "\n".join(parts)
 
@@ -510,11 +518,17 @@ async def aggregate_session(
     *,
     gateway_url: str | None = None,
     auth_token: str | None = None,
+    draft_only: bool = True,  # 5/14 RecMode C: 默认落 draft, 用户 review 后 /api/learn/save_skill 才正式
 ) -> dict:
     """端到端: 读 session → 调 LLM → parse → 落 skill 文件.
 
     Caller (gateway endpoint /api/learn/analyze) 拿 auth_token 从当前 user
     的 dev_token / OIDC token, 传给 call_llm 走自己 gateway.
+
+    draft_only=True (默认): 落到 session_dir/skill_draft/, 用户 preview 看完
+        点'保存'调 /api/learn/save_skill 才 mv 到正式 ~/.catfish/skills/.
+        重录时直接覆盖 draft, 不污染正式 skills 目录.
+    draft_only=False: 直接落正式 skills (老行为, test 用 / 自动化场景用)
     """
     inputs = load_recording_inputs(session_dir)
     messages = build_messages(inputs)
@@ -522,7 +536,14 @@ async def aggregate_session(
     skill = parse_llm_output(raw_text)
     meta_path = session_dir / "meta.json"
     recording_meta = json.loads(meta_path.read_text()) if meta_path.exists() else None
-    skill_dir = write_skill_files(skill, skills_root=skills_root, recording_meta=recording_meta)
+
+    if draft_only:
+        # 落 session_dir/skill_draft/ — 重录时覆盖. 用户点保存才 mv.
+        draft_root = session_dir / "skill_draft"
+        skill_dir = write_skill_files(skill, skills_root=draft_root, recording_meta=recording_meta)
+    else:
+        skill_dir = write_skill_files(skill, skills_root=skills_root, recording_meta=recording_meta)
+
     return {
         "skill_name": skill.skill_name,
         "namespace": skill.namespace,
@@ -530,6 +551,7 @@ async def aggregate_session(
         "steps_count": len(skill.steps),
         "confidence": skill.confidence,
         "questions_for_user": skill.questions_for_user,
+        "is_draft": draft_only,
     }
 
 

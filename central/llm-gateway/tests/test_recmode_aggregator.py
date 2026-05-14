@@ -241,11 +241,33 @@ async def test_aggregate_session_e2e_with_mock_llm(tmp_path, monkeypatch):
         return fake_response
 
     monkeypatch.setattr(aggregator, "call_llm", fake_call_llm)
-    out = await aggregator.aggregate_session(sd, skills_root=tmp_path / "skills")
+    # 测 draft_only=False 老行为 (直接落正式 skills)
+    out = await aggregator.aggregate_session(
+        sd, skills_root=tmp_path / "skills", draft_only=False,
+    )
     assert out["skill_name"] == "test_skill"
     assert out["namespace"] == "personal"
+    assert out["is_draft"] is False
     assert (tmp_path / "skills" / "personal" / "test_skill" / "SKILL.md").exists()
-    assert (tmp_path / "skills" / "personal" / "test_skill" / "main.py").exists()
+
+
+@pytest.mark.asyncio
+async def test_aggregate_session_draft_default(tmp_path, monkeypatch):
+    """5/14 RecMode C: 默认 draft_only=True 落 session_dir/skill_draft/"""
+    sd = tmp_path / "rec_draft"
+    sd.mkdir()
+    (sd / "events.jsonl").write_text('{"ts": 0, "kind": "click"}\n', encoding="utf-8")
+    (sd / "meta.json").write_text('{"session_id": "rec_draft"}', encoding="utf-8")
+    fake_response = '{"skill_name": "draft_x", "namespace": "personal", "description": "d", "params_schema": [], "steps": [], "execute_code_segment": "", "output_schema": {}, "confidence": 0.5, "questions_for_user": []}'
+
+    async def fake_call_llm(messages, **kw):
+        return fake_response
+
+    monkeypatch.setattr(aggregator, "call_llm", fake_call_llm)
+    out = await aggregator.aggregate_session(sd)  # 默认 draft_only=True
+    assert out["is_draft"] is True
+    # 落到 session_dir/skill_draft/personal/draft_x/
+    assert (sd / "skill_draft" / "personal" / "draft_x" / "SKILL.md").exists()
 
 
 @pytest.mark.asyncio

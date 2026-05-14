@@ -648,6 +648,250 @@ async def api_learn_stop_recording(
         raise HTTPException(status_code=404, detail=str(e)) from e
 
 
+@app.post("/api/learn/record_transcript")
+async def api_learn_record_transcript(
+    body: dict,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """RecMode A (5/14 ship): Companion 把 whisper.cpp 转写出来的字符串落到
+    `~/.catfish/recordings/<session_id>/transcripts.jsonl`, 给 aggregator 用.
+
+    BL-VOICE3 现状返字符串没写文件, 这是中间桥接 endpoint.
+
+    Body: {"session_id": str, "text": str, "ts_offset"?: float (默认 0,
+        相对 RecMode session 起始时间偏移), "duration"?: float}
+
+    Returns: {ok: True, transcripts_path: str, lines_count: int}
+    """
+    session_id = (body.get("session_id") or "").strip()
+    text = (body.get("text") or "").strip()
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id 不能空")
+    if not text:
+        return {"ok": True, "transcripts_path": "", "lines_count": 0, "skipped": "empty text"}
+    ts_offset = float(body.get("ts_offset") or 0.0)
+    duration = float(body.get("duration") or 0.0)
+
+    catfish_home = os.environ.get("CATFISH_HOME", "").strip()
+    rec_root = (
+        Path(catfish_home).expanduser() / "recordings" if catfish_home
+        else Path.home() / ".catfish" / "recordings"
+    )
+    sd = rec_root / session_id
+    if not sd.exists():
+        raise HTTPException(status_code=404, detail=f"session_dir {sd} 不存在")
+
+    path = sd / "transcripts.jsonl"
+    record = {"ts": ts_offset, "duration": duration, "text": text}
+    import json as _json
+    with path.open("a", encoding="utf-8") as f:
+        f.write(_json.dumps(record, ensure_ascii=False) + "\n")
+    lines_count = sum(1 for _ in path.open("r", encoding="utf-8"))
+    return {
+        "ok": True,
+        "transcripts_path": str(path),
+        "lines_count": lines_count,
+        "viewer": user.sub,
+    }
+
+
+@app.get("/api/learn/skill_content")
+async def api_learn_skill_content(
+    skill_dir: str,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """RecMode B (5/14 ship): preview UI 读 SKILL.md + main.py 文件内容显示.
+
+    Companion Tauri webview 沙箱读不了任意路径, 需要 endpoint 代理.
+    skill_dir 必须在 ~/.catfish/skills/ 或 ~/.catfish/recordings/ 下,
+    防 path traversal.
+
+    Query: ?skill_dir=/Users/.../personal/skill_x
+
+    Returns: {skill_md: str, main_py: str, recmode_meta: dict | None}
+    """
+    sd = Path(skill_dir).expanduser().resolve()
+    # path traversal 防御 — 必须在受信路径下
+    home = Path.home().resolve()
+    allowed_roots = [
+        home / ".catfish" / "skills",
+        home / ".catfish" / "recordings",
+    ]
+    catfish_home = os.environ.get("CATFISH_HOME", "").strip()
+    if catfish_home:
+        cf = Path(catfish_home).expanduser().resolve()
+        allowed_roots += [cf / "skills", cf / "recordings"]
+    if not any(str(sd).startswith(str(r)) for r in allowed_roots):
+        raise HTTPException(
+            status_code=403,
+            detail=f"skill_dir {sd} 不在受信路径下 (~/.catfish/skills/ 或 recordings/)",
+        )
+    if not sd.exists():
+        raise HTTPException(status_code=404, detail=f"skill_dir {sd} 不存在")
+
+    def _read_or_empty(p: Path) -> str:
+        try:
+            return p.read_text(encoding="utf-8") if p.exists() else ""
+        except OSError:
+            return ""
+
+    import json as _json
+    meta = None
+    meta_path = sd / "recmode_meta.json"
+    if meta_path.exists():
+        try:
+            meta = _json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            meta = None
+
+    return {
+        "skill_dir": str(sd),
+        "skill_md": _read_or_empty(sd / "SKILL.md"),
+        "main_py": _read_or_empty(sd / "main.py"),
+        "recmode_meta": meta,
+        "viewer": user.sub,
+    }
+
+
+@app.post("/api/learn/save_skill")
+async def api_learn_save_skill(
+    body: dict,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """RecMode C (5/14 ship): 用户 review preview 后点'保存', 把 draft skill
+    从 recordings/<sid>/skill_draft/ 移到 ~/.catfish/skills/<namespace>/<name>/.
+
+    Body: {"draft_dir": str, "namespace"?: str (覆盖 SKILL.md 默认),
+           "name"?: str (覆盖 SKILL.md 默认)}
+
+    Returns: {final_dir: str, moved: bool}
+    """
+    import shutil
+    draft_dir_str = (body.get("draft_dir") or "").strip()
+    if not draft_dir_str:
+        raise HTTPException(status_code=400, detail="draft_dir 不能空")
+    draft_dir = Path(draft_dir_str).expanduser().resolve()
+    home = Path.home().resolve()
+    catfish_home = os.environ.get("CATFISH_HOME", "").strip()
+    rec_root = (
+        Path(catfish_home).expanduser().resolve() / "recordings" if catfish_home
+        else home / ".catfish" / "recordings"
+    )
+    skills_root = (
+        Path(catfish_home).expanduser().resolve() / "skills" if catfish_home
+        else home / ".catfish" / "skills"
+    )
+    if not str(draft_dir).startswith(str(rec_root)):
+        raise HTTPException(status_code=403, detail=f"draft_dir 必须在 {rec_root} 下")
+    if not draft_dir.exists():
+        raise HTTPException(status_code=404, detail=f"draft_dir {draft_dir} 不存在")
+
+    # 从 SKILL.md / recmode_meta.json 读 namespace + name (caller 可覆盖)
+    meta_path = draft_dir / "recmode_meta.json"
+    namespace = (body.get("namespace") or "").strip()
+    name = (body.get("name") or "").strip()
+    if (not namespace or not name) and meta_path.exists():
+        import json as _json
+        try:
+            meta = _json.loads(meta_path.read_text(encoding="utf-8"))
+            raw = meta.get("raw_llm_json") or {}
+            namespace = namespace or raw.get("namespace", "personal")
+            name = name or raw.get("skill_name", "")
+        except Exception:
+            pass
+    if not namespace or not name:
+        raise HTTPException(
+            status_code=422,
+            detail="缺 namespace / name (recmode_meta.json 也没): 请显式传",
+        )
+
+    final_dir = skills_root / namespace / name
+    final_dir.parent.mkdir(parents=True, exist_ok=True)
+    if final_dir.exists():
+        # 已存在 (重名), 备份老的然后覆盖
+        backup = final_dir.with_name(f"{name}.bak.{int(time.time())}")
+        final_dir.rename(backup)
+    shutil.copytree(draft_dir, final_dir)
+    return {
+        "ok": True,
+        "final_dir": str(final_dir),
+        "namespace": namespace,
+        "name": name,
+        "moved": True,
+        "viewer": user.sub,
+    }
+
+
+@app.post("/api/learn/test_skill")
+async def api_learn_test_skill(
+    body: dict,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """RecMode E (5/14 ship): preview 'pen 跑一次试' 触发 — 走 hermes runtime
+    跑这个 skill, 拿结果回. 因 catfish_browser_* 等 tool 必须 hermes adapter
+    dispatch_native, 这里 spawn 一个 catfish-cli sub-process 跑.
+
+    简化 v1 策略: subprocess.run 跑 `catfish` CLI 一次, 喂 prompt 让它调
+    catfish_run_skill. 拿 stdout 返. 30s 超时.
+
+    Body: {"skill_dir": str, "params"?: dict}
+
+    Returns: {ok, output, duration_s}
+    """
+    import subprocess
+    skill_dir_str = (body.get("skill_dir") or "").strip()
+    params = body.get("params") or {}
+    if not skill_dir_str:
+        raise HTTPException(status_code=400, detail="skill_dir 不能空")
+    sd = Path(skill_dir_str).expanduser().resolve()
+    if not sd.exists():
+        raise HTTPException(status_code=404, detail=f"skill_dir {sd} 不存在")
+
+    # 从 skill_dir 推 namespace/name (路径形如 ~/.catfish/skills/personal/skill_x)
+    parts = sd.parts
+    if len(parts) < 2:
+        raise HTTPException(status_code=422, detail="skill_dir 路径格式不对")
+    name = parts[-1]
+    namespace = parts[-2]
+    skill_path_arg = f"{namespace}/{name}"
+
+    import json as _json
+    params_json = _json.dumps(params, ensure_ascii=False)
+    prompt = f"调 catfish_run_skill(skill_path='{skill_path_arg}', params={params_json}). 跑完总结结果."
+
+    start = time.time()
+    try:
+        proc = subprocess.run(
+            ["catfish", "-p", prompt],
+            capture_output=True,
+            text=True,
+            timeout=120.0,
+        )
+        duration = time.time() - start
+        return {
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "stdout": (proc.stdout or "")[:8000],
+            "stderr": (proc.stderr or "")[:2000],
+            "duration_s": round(duration, 1),
+            "skill_path": skill_path_arg,
+            "viewer": user.sub,
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "error": "skill 跑超 120s (改 prompt 加'你只跑一次 不要等' 减时间)",
+            "duration_s": 120.0,
+            "skill_path": skill_path_arg,
+            "viewer": user.sub,
+        }
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=500,
+            detail="catfish CLI 不在 PATH. 安装 catfish-cli 后再试 (or skill_dir 直接 python main.py 见 docs)",
+        )
+
+
 @app.post("/api/learn/analyze")
 async def api_learn_analyze(
     body: dict,
@@ -688,11 +932,15 @@ async def api_learn_analyze(
     # auth_token 从 caller 透传 — 让 RecMode 走 caller 自己的 quota / RBAC.
     # dev token 路径直接复用; OIDC 路径 5/26 加.
     auth_token = os.environ.get("CATFISH_DEV_TOKEN", "")
+    # RecMode C: 默认 draft_only — 落 session_dir/skill_draft/, 用户 review
+    # 后调 /api/learn/save_skill 才正式. caller 显式传 false 跳过 draft 流程.
+    draft_only = bool(body.get("draft_only", True))
     try:
         out = await aggregator.aggregate_session(
             session_dir,
             skills_root=skills_root,
             auth_token=auth_token,
+            draft_only=draft_only,
         )
         out["viewer"] = user.sub
         return out
@@ -712,6 +960,24 @@ async def api_learn_active(
         "active_session_ids": cdp_listener.list_active(),
         "viewer": user.sub,
     }
+
+
+@app.get("/api/learn/status/{session_id}")
+async def api_learn_status(
+    session_id: str,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """RecMode F (5/14): 单 session 实时状态 — Companion 录制浮层 polling.
+
+    返 elapsed_s + events_count + keyframes_count + ws_connected.
+    没在录中 → 404 (Companion 应停 polling).
+    """
+    from .recmode import cdp_listener  # noqa: PLC0415
+    s = cdp_listener.session_status(session_id)
+    if s is None:
+        raise HTTPException(status_code=404, detail=f"session {session_id} 没在录")
+    s["viewer"] = user.sub
+    return s
 
 
 @app.get("/api/tasks/me")
