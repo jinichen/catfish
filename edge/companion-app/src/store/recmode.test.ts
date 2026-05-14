@@ -1,0 +1,121 @@
+/** RecMode store 单测 (BL-LEARN-RECMODE Day 2 #64).
+ *
+ *   cd edge/companion-app
+ *   npx tsx src/store/recmode.test.ts
+ */
+
+const _store = new Map<string, string>();
+(globalThis as unknown as { localStorage: Storage }).localStorage = {
+  length: 0,
+  getItem: (k: string) => _store.get(k) ?? null,
+  setItem: (k: string, v: string) => { _store.set(k, v); },
+  removeItem: (k: string) => { _store.delete(k); },
+  clear: () => _store.clear(),
+  key: () => null,
+};
+
+import {
+  useRecModeStore,
+  formatRecordingElapsed,
+  isValidSkillName,
+} from "./recmode";
+
+let pass = 0;
+let fail = 0;
+
+function check(name: string, ok: boolean, info?: string): void {
+  if (ok) {
+    pass++;
+    console.log(`  ✓ ${name}`);
+  } else {
+    fail++;
+    console.error(`  ✗ ${name}${info ? ` — ${info}` : ""}`);
+  }
+}
+
+// ─── 初始 state ────────────────────────────────────────────
+
+console.log("[init]");
+useRecModeStore.getState().reset();
+check("初始 state idle", useRecModeStore.getState().state === "idle");
+check("初始 sessionId null", useRecModeStore.getState().sessionId === null);
+check("初始 setup namespace personal", useRecModeStore.getState().setup.namespace === "personal");
+
+// ─── 状态机 转换 ───────────────────────────────────────────
+
+console.log("[state machine]");
+
+useRecModeStore.getState().openSetup();
+check("openSetup → state=setup", useRecModeStore.getState().state === "setup");
+
+useRecModeStore.getState().setSetup({ name: "test_skill", description: "测试" });
+const s = useRecModeStore.getState().setup;
+check("setSetup 部分更新 name", s.name === "test_skill");
+check("setSetup 部分更新 description", s.description === "测试");
+check("setSetup 没动 namespace", s.namespace === "personal");
+
+useRecModeStore.getState().startRecording("rec_abc123");
+const r = useRecModeStore.getState();
+check("startRecording → state=recording", r.state === "recording");
+check("startRecording 设 sessionId", r.sessionId === "rec_abc123");
+check("startRecording 设 startedAt", r.startedAt !== null && r.startedAt > 0);
+check("startRecording 设 isRecordingAudio=true", r.isRecordingAudio === true);
+
+useRecModeStore.getState().stopRecording();
+check("stopRecording → state=analyzing", useRecModeStore.getState().state === "analyzing");
+
+useRecModeStore.getState().showPreview({
+  skill_name: "test_skill",
+  namespace: "personal",
+  skill_dir: "/tmp/skills/personal/test_skill",
+  steps_count: 5,
+  confidence: 0.85,
+  questions_for_user: ["参数 days 默认值?"],
+});
+const p = useRecModeStore.getState();
+check("showPreview → state=preview", p.state === "preview");
+check("showPreview 拿 confidence", p.preview?.confidence === 0.85);
+check("showPreview 拿 questions", p.preview?.questions_for_user.length === 1);
+
+useRecModeStore.getState().reset();
+check("reset → state=idle", useRecModeStore.getState().state === "idle");
+check("reset 清 sessionId", useRecModeStore.getState().sessionId === null);
+check("reset 清 setup", useRecModeStore.getState().setup.name === "");
+
+// ─── error 状态 ────────────────────────────────────────────
+
+console.log("[error state]");
+
+useRecModeStore.getState().startRecording("rec_err");
+useRecModeStore.getState().setError("CDP ws 连接失败 — Catfish Chrome 没起");
+const e = useRecModeStore.getState();
+check("setError → state=error", e.state === "error");
+check("setError 设 errorMessage", e.errorMessage?.includes("CDP ws") === true);
+
+useRecModeStore.getState().reset();
+
+// ─── helper functions ─────────────────────────────────────
+
+console.log("[helpers]");
+
+check("formatElapsed null → 0:00", formatRecordingElapsed(null) === "0:00");
+check("formatElapsed 0s", formatRecordingElapsed(Math.floor(Date.now() / 1000)) === "0:00");
+const tenSecAgo = Math.floor(Date.now() / 1000) - 10;
+check("formatElapsed 10s → 0:10", formatRecordingElapsed(tenSecAgo) === "0:10");
+const twoMinAgo = Math.floor(Date.now() / 1000) - 130;
+check("formatElapsed 2min10s → 2:10", formatRecordingElapsed(twoMinAgo) === "2:10");
+
+check("isValidSkillName eis_qual_check", isValidSkillName("eis_qual_check") === true);
+check("isValidSkillName 拒大写", isValidSkillName("EisQualCheck") === false);
+check("isValidSkillName 拒数字开头", isValidSkillName("1eis") === false);
+check("isValidSkillName 拒短", isValidSkillName("ab") === false);
+check("isValidSkillName 拒中文", isValidSkillName("企业资质") === false);
+check("isValidSkillName 拒空格", isValidSkillName("eis check") === false);
+check("isValidSkillName 接 N 段下划线", isValidSkillName("a_b_c_d_e") === true);
+
+// ─── 报告 ─────────────────────────────────────────────────
+
+console.log(`\n[recmode store 单测] pass=${pass} fail=${fail}`);
+if (fail > 0) {
+  process.exit(1);
+}

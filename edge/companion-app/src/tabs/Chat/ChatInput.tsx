@@ -20,6 +20,7 @@ import { useAgentStore } from "../../store/agent";  // BL-E11 后续: 员工自�
 import { useTeachingStore } from "../../store/teaching";  // BL-LEAN-SESSION (5/13)
 import { useAutoContinueStore } from "../../store/auto_continue";  // BL-AUTO-CONTINUE (5/13)
 import { useChatStore } from "../../store/chat";  // BL-HERMES013-RED-1A (5/13 ACP /queue)
+import RecModeButton from "./RecModeButton";  // BL-LEARN-RECMODE Day 2 (5/14 #64)
 
 interface Props {
   isStreaming: boolean;
@@ -580,6 +581,12 @@ export default function ChatInput({
             适合长任务 (合并多个 Excel / 资质材料整理 / 长流程 skill 串联).
             关闭回常态: LLM stop 就 stop, 自己打"继续". 跨 session 隔离. */}
         <AutoContinueToggleButton isStreaming={isStreaming} />
+
+        {/* 🎙 RecMode 录屏教学 (BL-LEARN-RECMODE Day 2 5/14 #64).
+            点开演示流程 + 顺嘴说意图 → 鲶鱼后端综合自动生成 skill,
+            之后说短句"做 X" 就能调. 跟 chat 流分离 — 录中 chat 仍可用,
+            只是 RecMode 浮层显示状态. */}
+        <RecModeButton disabled={isStreaming} />
 
         {/* 🎤 语音输入按钮 — 方案 C 五一 sprint Day 1: Whisper.cpp 本地
            按一下开始录音, 再按一下停止 → 自动转文字填到 textarea. 数据 100% 本地. */}
