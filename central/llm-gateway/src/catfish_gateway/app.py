@@ -2495,6 +2495,50 @@ async def chat_completions(
     # 没用 Gemini 模型 / 客户端不传 system 都会跳过, 无副作用
     body = harden_for_gemini(body, model)
 
+    # BL-COMPRESSION-GATEWAY (5/15 早): 长 session messages 历史压缩.
+    # 触发条件: estimate_tokens(messages) > model.context * 50%
+    # 保留: 头 2 条 (system/首条 user) + 尾 8 条 (最近上下文), 中间压成 1 句.
+    # 跳过:
+    #   - is_internal_call (gateway-loopback summarizer/proactive 等, 它们本来就短)
+    #   - service token (sub=client:xxx, 也是 1-shot 没历史)
+    #   - X-Catfish-Compression-Internal (本模块自调 LLM 时设, 防自递归)
+    # 5/15 早鸿波看 audit 撞 chenhongbo@ffcs.cn 单 chat 95K input — 70K 历史 +
+    # 25K inject. lean 已省 inject (#77), 历史这块就是 BL-COMPRESSION-GATEWAY 解.
+    _compression_internal = (
+        request.headers.get("X-Catfish-Compression-Internal", "").lower() == "true"
+    )
+    if (
+        not is_internal_call
+        and not _compression_internal
+        and user.role != "service"
+    ):
+        try:
+            from .conversation_compressor import maybe_compress_messages  # noqa: PLC0415
+            ctx_window = getattr(model, "context_window", None) or 128000
+            new_msgs, compress_stats = await maybe_compress_messages(
+                body.get("messages") or [],
+                user_sub=user.sub,
+                model_context_window=ctx_window,
+            )
+            if compress_stats:
+                body["messages"] = new_msgs
+                logger.info(
+                    "BL-COMPRESSION-GATEWAY: sub=%s 压 %d 条历史 → 摘要, "
+                    "token %d→%d (省 %d%%)",
+                    user.sub,
+                    compress_stats["compressed_count"],
+                    compress_stats["pre_token"],
+                    compress_stats["post_token"],
+                    compress_stats["saved_pct"],
+                )
+                # 把统计塞 request state 让 audit log 能记
+                request.state.compression_stats = compress_stats
+        except Exception as e:
+            logger.warning(
+                "compression hook 异常 (不阻塞主流程, 用原 messages): %s",
+                e,
+            )
+
     # ── Quota 阻断 (BL-D9 完整 ship, 5/2 收尾) ────────────────
     # 真实接 chat: 在 LLM 调用前查 quota, 超了直接 429 + friendly message.
     # 估算用 quota.estimate_tokens(prompt 文本拼接), 4 字符 ≈ 1 token, 至少 1000.
