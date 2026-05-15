@@ -302,6 +302,9 @@ function SessionRow({
   streaming?: boolean;
 }) {
   const [hover, setHover] = useState(false);
+  // BL-SESSION-MGMT C (5/15): 二次确认状态. 首次点 × → confirming=true (按钮变 "确定?"),
+  // 2 秒内再点 → 真删. 超时自动 reset. 替代 confirm() 浏览器原生对话框 (Tauri WebView 不稳).
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   // BL-SESSION-MGMT A (5/15): title 没生成时优先用首条 user message, 比裸 timestamp 友好.
   // 短 session (≤2 条) summarizer 不跑, title 永远 null, 之前显 (20260515_xxx) 你都不知道聊啥.
   const title =
@@ -360,37 +363,51 @@ function SessionRow({
         <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>
           {title}
         </span>
-        {/* BL-SESSION-MGMT C (5/15): hover 显 × 软删按钮 */}
+        {/* BL-SESSION-MGMT C (5/15): hover 显 × 软删按钮 + 两次点击确认 (Notion/Linear 模式).
+            首次点击 → confirmingDelete=true, 按钮变"确定?" + 计时 2 秒.
+            2 秒内再点 → 真调 onDelete.
+            2 秒超时自动 reset.
+            用 onMouseDown 而不是 onClick: 父 div 的 role=button + tabIndex 在 Tauri WebView
+            里偶发吃 click 事件, mouseDown 100% 触发. stopPropagation 防切 session. */}
         {hover && !disabled && (
           <button
             type="button"
-            onClick={(e) => {
-              e.stopPropagation();  // 防触发 onClick 切 session
-              if (confirm(`真删: ${title.slice(0, 40)}?\n\n(软删, 30 天内可恢复)`)) {
+            onMouseDown={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              if (confirmingDelete) {
+                console.log("[session-delete] confirm 真删 for", session.id);
                 onDelete(session.id);
+                setConfirmingDelete(false);
+              } else {
+                console.log("[session-delete] 第一次点, 等确认 for", session.id);
+                setConfirmingDelete(true);
+                // 2 秒超时自动 reset
+                setTimeout(() => setConfirmingDelete(false), 2000);
               }
             }}
-            title="软删这个 session (30 天内可恢复)"
+            onClick={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+            }}
+            title={confirmingDelete ? "再点一次真删" : "软删 (30 天内可 restore)"}
             style={{
               border: 0,
-              background: "transparent",
+              background: confirmingDelete
+                ? "var(--catfish-error, #dc2626)"
+                : "rgba(220, 38, 38, 0.12)",
+              color: confirmingDelete ? "white" : "var(--catfish-error, #dc2626)",
               cursor: "pointer",
-              fontSize: 14,
-              color: "var(--catfish-text-muted)",
-              padding: "2px 6px",
+              fontSize: confirmingDelete ? 11 : 16,
+              fontWeight: 600,
+              padding: confirmingDelete ? "3px 8px" : "2px 8px",
               borderRadius: 4,
               flexShrink: 0,
-            }}
-            onMouseEnter={(e) => {
-              (e.currentTarget.style as CSSStyleDeclaration).color = "var(--catfish-error, #dc2626)";
-              (e.currentTarget.style as CSSStyleDeclaration).background = "rgba(220,38,38,0.1)";
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget.style as CSSStyleDeclaration).color = "var(--catfish-text-muted)";
-              (e.currentTarget.style as CSSStyleDeclaration).background = "transparent";
+              lineHeight: 1,
+              whiteSpace: "nowrap",
             }}
           >
-            ×
+            {confirmingDelete ? "确定?" : "×"}
           </button>
         )}
       </div>
