@@ -154,9 +154,12 @@ export default function StyleFingerprintCard() {
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8, fontSize: 13, marginBottom: "var(--space-3)" }}>
             <div>📚 来源文档: <strong>{view.source_count ?? 0}</strong></div>
-            <div>📝 总字数: <strong>{view.stats.total_chars.toLocaleString()}</strong></div>
-            <div>📏 平均句长: <strong>{view.stats.avg_sentence_length.toFixed(1)} 字</strong></div>
-            <div>📊 句子总数: <strong>{view.stats.sentence_count}</strong></div>
+            {/* 5/15 鸿波撞 white screen — view.stats={} 空对象通过 truthy 检查
+                但内部字段 undefined → .toFixed/.toLocaleString 崩.
+                每个字段独立 nullish 兜底 '-'. */}
+            <div>📝 总字数: <strong>{view.stats.total_chars?.toLocaleString() ?? "-"}</strong></div>
+            <div>📏 平均句长: <strong>{typeof view.stats.avg_sentence_length === "number" ? `${view.stats.avg_sentence_length.toFixed(1)} 字` : "-"}</strong></div>
+            <div>📊 句子总数: <strong>{view.stats.sentence_count ?? "-"}</strong></div>
             <div>🕐 上次抽取: <strong>{humanTime(view.last_refreshed)}</strong></div>
             <div>🔧 jieba 分词: <strong>{view.had_jieba ? "✅" : "❌ (退 char fallback)"}</strong></div>
           </div>
