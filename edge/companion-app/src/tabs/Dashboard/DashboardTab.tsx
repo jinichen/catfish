@@ -33,6 +33,7 @@
 import IdentityCard from "./IdentityCard";
 import ServicesCard from "./ServicesCard";
 import QuotaCard from "./QuotaCard";
+import { SessionCleanupCard } from "./SessionCleanupCard";
 import CatalogCard from "./CatalogCard";
 import SkillsMcpCard from "./SkillsMcpCard";
 import LearningCard from "./LearningCard";
@@ -117,6 +118,8 @@ export default function DashboardTab() {
         <SkillsMcpCard />
         {/* 5/7 BL-CR: Curator 集成 — 老脚本自动整理 (hermes 0.12 自带) */}
         <CuratorCard />
+        {/* 5/15 BL-SESSION-MGMT C: 清理短 session (304 个会话累积痛点) */}
+        <SessionCleanupCard />
       </CollapsibleSection>
 
       {/* 第五组: 学习 — 我的 learning + 我提的 skill 改进 (默认收).

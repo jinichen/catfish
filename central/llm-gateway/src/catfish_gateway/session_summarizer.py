@@ -65,6 +65,57 @@ MAX_SESSIONS_PER_TRIGGER = 1
 MAX_MESSAGES_PER_SESSION = 30
 
 
+def _extract_short_title(summary: str) -> str:
+    """BL-SESSION-MGMT B (5/15): 从 summary 抽 ≤30 字短标题给 sidebar 显.
+
+    取首句 (中英文标点切), 截到 30 字. 没首句兜底用前 30 字.
+    """
+    import re  # noqa: PLC0415
+    if not summary or not summary.strip():
+        return ""
+    s = summary.strip()
+    # 第一个中/英文句子结束符为界 (含英文 `. `, 中文 。!？!?, 换行)
+    # 注意: 英文 `.` 用 `\. ` (后跟空格) 避免误切 ISO 9001 / 1.5 这种小数点
+    parts = re.split(r"[。!?！？\n]|\. ", s, maxsplit=1)
+    first = (parts[0] if parts else s).strip()
+    if not first:
+        return s[:30]
+    return first[:30]
+
+
+def _update_session_title(session_id: str, title: str) -> bool:
+    """BL-SESSION-MGMT B (5/15): 写 state.db sessions.title.
+
+    只 UPDATE WHERE title IS NULL OR title = '' — 不覆盖员工手起的 / hermes 已生成的名.
+    失败 silent 不阻塞主流程 (state.db 可能被 hermes 锁着).
+    """
+    if not STATE_DB.exists():
+        return False
+    try:
+        conn = sqlite3.connect(str(STATE_DB), timeout=2.0)
+        try:
+            cur = conn.execute(
+                "UPDATE sessions SET title = ? "
+                "WHERE id = ? AND (title IS NULL OR title = '')",
+                (title, session_id),
+            )
+            conn.commit()
+            updated = cur.rowcount > 0
+        finally:
+            conn.close()
+        if updated:
+            logger.info(
+                "session title 写回: session=%s title=%r", session_id, title[:50]
+            )
+        return updated
+    except sqlite3.Error as e:
+        logger.warning(
+            "update_session_title 失败 (sqlite busy?) session=%s: %s",
+            session_id, e,
+        )
+        return False
+
+
 def _read_journaled_ids() -> set[str]:
     """读已总结 session id 集合."""
     if not JOURNALED_MARKER.exists():
@@ -384,6 +435,13 @@ async def summarize_one_session(
 
         try:
             append_to_journal(full_entry)
+            # BL-SESSION-MGMT B (5/15): 顺手把短标题写回 state.db sessions.title,
+            # 让 Companion sidebar 显真主题 (不是裸 timestamp).
+            # 取 summary 第一句, ≤30 字. 只更新原本 title 为空的 session — 不覆盖
+            # 员工手起的名 / hermes 已生成的名.
+            short_title = _extract_short_title(summary)
+            if short_title:
+                _update_session_title(session_id, short_title)
             # 只有 journal 真写入了, 才 mark
             _mark_journaled(session_id)
             return True

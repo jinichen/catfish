@@ -308,6 +308,10 @@ pub fn run() {
             commands::sessions::sessions_list,
             commands::sessions::sessions_count,
             commands::sessions::sessions_get,
+            // sessions (delete) —— BL-SESSION-MGMT C (5/15)
+            commands::sessions::session_soft_delete,
+            commands::sessions::session_restore,
+            commands::sessions::sessions_bulk_delete_short,
             // sessions (write) —— Plan C Week 2 持久化
             commands::session_write::session_create,
             commands::session_write::session_message_append,

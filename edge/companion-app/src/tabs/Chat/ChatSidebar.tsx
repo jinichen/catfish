@@ -19,7 +19,7 @@
  */
 
 import { useEffect, useState, useCallback } from "react";
-import { listSessions, countSessions, openTerminal } from "../../lib/tauri";
+import { listSessions, countSessions, openTerminal, sessionSoftDelete } from "../../lib/tauri";
 import type { SessionMeta } from "../../types/session";
 
 interface Props {
@@ -200,6 +200,25 @@ export default function ChatSidebar({
               active={s.id === activeId}
               disabled={false /* BL-COMPANION-UX2: streaming 中也允许点 */}
               onClick={() => onSelect(s.id)}
+              onDelete={async (id) => {
+                // BL-SESSION-MGMT C (5/15): 软删 + 立即从 sidebar 移除 (乐观更新),
+                // 然后异步刷 sessions_list (实际从 state.db 重拉)
+                try {
+                  await sessionSoftDelete(id);
+                  setSessions((prev) => prev.filter((x) => x.id !== id));
+                  if (totalCount !== null) setTotalCount(totalCount - 1);
+                  // 如果删的是当前 active 的, 切到第一条 / 起新对话
+                  if (id === activeId) {
+                    const remaining = sessions.filter((x) => x.id !== id);
+                    if (remaining.length > 0) {
+                      onSelect(remaining[0].id);
+                    }
+                  }
+                } catch (e) {
+                  console.error("[session-delete] 失败:", e);
+                  alert(`删除失败: ${e}`);
+                }
+              }}
               streaming={busy}
             />
           ))}
@@ -271,15 +290,24 @@ function SessionRow({
   active,
   disabled,
   onClick,
+  onDelete,
   streaming = false,  // BL-COMPANION-UX2 (5/12): 提示用, 不再禁用
 }: {
   session: SessionMeta;
   active: boolean;
   disabled: boolean;
   onClick: () => void;
+  /** BL-SESSION-MGMT C (5/15): hover × 点了调, 父级处理软删 + refresh */
+  onDelete: (sessionId: string) => void;
   streaming?: boolean;
 }) {
-  const title = session.title?.trim() || `(${session.id.slice(0, 17)})`;
+  const [hover, setHover] = useState(false);
+  // BL-SESSION-MGMT A (5/15): title 没生成时优先用首条 user message, 比裸 timestamp 友好.
+  // 短 session (≤2 条) summarizer 不跑, title 永远 null, 之前显 (20260515_xxx) 你都不知道聊啥.
+  const title =
+    session.title?.trim()
+    || session.firstUserMessage?.trim()
+    || `(${session.id.slice(0, 17)})`;
   const subtitle = formatRelativeTime(session.startedAt);
 
   // streaming hint: 鼠标悬停时提示 "点会停止当前流"
@@ -292,6 +320,8 @@ function SessionRow({
       tabIndex={disabled ? -1 : 0}
       onClick={disabled ? undefined : onClick}
       title={titleHint}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
       onKeyDown={(e) => {
         if (disabled) return;
         if (e.key === "Enter" || e.key === " ") {
@@ -330,6 +360,39 @@ function SessionRow({
         <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>
           {title}
         </span>
+        {/* BL-SESSION-MGMT C (5/15): hover 显 × 软删按钮 */}
+        {hover && !disabled && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();  // 防触发 onClick 切 session
+              if (confirm(`真删: ${title.slice(0, 40)}?\n\n(软删, 30 天内可恢复)`)) {
+                onDelete(session.id);
+              }
+            }}
+            title="软删这个 session (30 天内可恢复)"
+            style={{
+              border: 0,
+              background: "transparent",
+              cursor: "pointer",
+              fontSize: 14,
+              color: "var(--catfish-text-muted)",
+              padding: "2px 6px",
+              borderRadius: 4,
+              flexShrink: 0,
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget.style as CSSStyleDeclaration).color = "var(--catfish-error, #dc2626)";
+              (e.currentTarget.style as CSSStyleDeclaration).background = "rgba(220,38,38,0.1)";
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget.style as CSSStyleDeclaration).color = "var(--catfish-text-muted)";
+              (e.currentTarget.style as CSSStyleDeclaration).background = "transparent";
+            }}
+          >
+            ×
+          </button>
+        )}
       </div>
       <div
         style={{

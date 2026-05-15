@@ -80,6 +80,29 @@ export const countSessions = () => rawInvoke<number>("sessions_count");
 export const getSession = (id: string) =>
   rawInvoke<SessionDetail>("sessions_get", { id });
 
+// ── sessions (delete) — BL-SESSION-MGMT C (5/15) ──────
+/** 软删 — 标 deleted_at, sidebar 立即隐藏. 30 天 grace 期可 restore. */
+export const sessionSoftDelete = (id: string) =>
+  rawInvoke<void>("session_soft_delete", { id });
+/** 恢复软删的 session. */
+export const sessionRestore = (id: string) =>
+  rawInvoke<void>("session_restore", { id });
+
+export interface BulkDeleteResult {
+  sessionIds: string[];  // preview 时全清单, 真删时前 50 个
+  total: number;
+  maxMessages: number;
+  maxAgeHours: number;
+}
+
+/** Bulk 软删短 session.
+ *  preview=true 只返清单不删 (UI 弹窗预览用), preview=false 真删. */
+export const sessionsBulkDeleteShort = (args: {
+  maxMessages: number;  // 默认建议 3
+  maxAgeHours: number;  // 默认建议 168 (7 天)
+  preview: boolean;
+}) => rawInvoke<BulkDeleteResult>("sessions_bulk_delete_short", args);
+
 // ── BL-MM6 feedback (5/5 晚) ───────────────────────────────
 export type FeedbackKind = "thumb_up" | "thumb_down" | "edit";
 

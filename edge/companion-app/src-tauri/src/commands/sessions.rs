@@ -40,6 +40,10 @@ pub struct SessionMeta {
     /// 给左侧 sidebar 区分来源加 badge 用
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// BL-SESSION-MGMT A (5/15): 首条 user message 前 80 字, 给 sidebar 在 title
+    /// 还没生成时当 fallback 显示, 比 timestamp `(20260515_xxx)` 友好多了.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_user_message: Option<String>,
 }
 
 /// 完整消息 —— 给 ChatPanel resume 历史用 (Plan C Week 3)
@@ -126,21 +130,35 @@ fn truncate(s: String) -> String {
 
 fn list_blocking() -> Result<Vec<SessionMeta>, String> {
     let conn = open_db()?;
+    // BL-SESSION-MGMT C (5/15): ALTER TABLE 加 deleted_at (幂等 — 已存在 SQLite 报
+    // duplicate column 我们 ignore). 老 hermes state.db 没这列, 第一次跑加, 后续略.
+    let _ = conn.execute(
+        "ALTER TABLE sessions ADD COLUMN deleted_at INTEGER",
+        [],
+    );
+    // BL-SESSION-MGMT A (5/15): JOIN 子查询拉每个 session 的首条 user message,
+    // sidebar 在 title 还没生成时用这条 fallback (避免显裸 timestamp).
+    // BL-SESSION-MGMT C: WHERE deleted_at IS NULL 默认过滤已软删的.
     let mut stmt = conn
         .prepare(
             r#"
             SELECT
-                id, title, model,
-                started_at, ended_at, end_reason,
-                message_count,
-                COALESCE(input_tokens, 0) +
-                COALESCE(output_tokens, 0) +
-                COALESCE(cache_read_tokens, 0) +
-                COALESCE(cache_write_tokens, 0) +
-                COALESCE(reasoning_tokens, 0) AS total_tokens,
-                source
-            FROM sessions
-            ORDER BY started_at DESC
+                s.id, s.title, s.model,
+                s.started_at, s.ended_at, s.end_reason,
+                s.message_count,
+                COALESCE(s.input_tokens, 0) +
+                COALESCE(s.output_tokens, 0) +
+                COALESCE(s.cache_read_tokens, 0) +
+                COALESCE(s.cache_write_tokens, 0) +
+                COALESCE(s.reasoning_tokens, 0) AS total_tokens,
+                s.source,
+                (SELECT m.content FROM messages m
+                 WHERE m.session_id = s.id AND m.role = 'user'
+                   AND m.content IS NOT NULL AND m.content != ''
+                 ORDER BY m.timestamp ASC, m.rowid ASC LIMIT 1) AS first_user_message
+            FROM sessions s
+            WHERE s.deleted_at IS NULL
+            ORDER BY s.started_at DESC
             LIMIT ?1
         "#,
         )
@@ -172,20 +190,25 @@ fn detail_blocking(id: String) -> Result<SessionDetail, String> {
 }
 
 fn meta_by_id(conn: &Connection, id: &str) -> Result<SessionMeta, String> {
+    // BL-SESSION-MGMT A (5/15): SELECT 跟 list_blocking 对齐, 多 col 9 first_user_message
     conn.query_row(
         r#"
         SELECT
-            id, title, model,
-            started_at, ended_at, end_reason,
-            message_count,
-            COALESCE(input_tokens, 0) +
-            COALESCE(output_tokens, 0) +
-            COALESCE(cache_read_tokens, 0) +
-            COALESCE(cache_write_tokens, 0) +
-            COALESCE(reasoning_tokens, 0) AS total_tokens,
-            source
-        FROM sessions
-        WHERE id = ?1
+            s.id, s.title, s.model,
+            s.started_at, s.ended_at, s.end_reason,
+            s.message_count,
+            COALESCE(s.input_tokens, 0) +
+            COALESCE(s.output_tokens, 0) +
+            COALESCE(s.cache_read_tokens, 0) +
+            COALESCE(s.cache_write_tokens, 0) +
+            COALESCE(s.reasoning_tokens, 0) AS total_tokens,
+            s.source,
+            (SELECT m.content FROM messages m
+             WHERE m.session_id = s.id AND m.role = 'user'
+               AND m.content IS NOT NULL AND m.content != ''
+             ORDER BY m.timestamp ASC, m.rowid ASC LIMIT 1) AS first_user_message
+        FROM sessions s
+        WHERE s.id = ?1
     "#,
         params![id],
         row_to_meta,
@@ -238,6 +261,17 @@ fn row_to_meta(row: &rusqlite::Row) -> rusqlite::Result<SessionMeta> {
         message_count: row.get::<_, i64>(6)?.max(0) as u32,
         total_tokens: row.get::<_, i64>(7)?.max(0) as u64,
         source: row.get(8)?,
+        // BL-SESSION-MGMT A (5/15): SQL col 9 是首条 user message (可能 None),
+        // 截前 80 字防超长 (e.g. 用户粘大段文档). 这只给 sidebar 显示用,
+        // 完整消息走 sessions_get.
+        first_user_message: row.get::<_, Option<String>>(9)?.map(|s| {
+            let t = s.trim();
+            if t.chars().count() > 80 {
+                t.chars().take(80).collect::<String>() + "…"
+            } else {
+                t.to_string()
+            }
+        }).filter(|s| !s.is_empty()),
     })
 }
 
@@ -311,4 +345,139 @@ pub async fn sessions_get(id: String) -> Result<SessionDetail, String> {
     tokio::task::spawn_blocking(move || detail_blocking(id))
         .await
         .map_err(|e| format!("内部错误: {e}"))?
+}
+
+// ============================================================
+// BL-SESSION-MGMT C (5/15): 删除 + bulk 清理
+// ============================================================
+
+/// 软删某 session — 标 deleted_at = now. UI 默认隐藏, 30 天后另起 cron 真删.
+/// 错误条件: session 不存在 / 已 deleted.
+#[tauri::command]
+pub async fn session_soft_delete(id: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || soft_delete_blocking(id))
+        .await
+        .map_err(|e| format!("内部错误: {e}"))?
+}
+
+fn soft_delete_blocking(id: String) -> Result<(), String> {
+    let conn = open_db()?;
+    // 幂等加列 (老 db 没 deleted_at)
+    let _ = conn.execute("ALTER TABLE sessions ADD COLUMN deleted_at INTEGER", []);
+    let rowcount = conn
+        .execute(
+            "UPDATE sessions SET deleted_at = strftime('%s', 'now') \
+             WHERE id = ?1 AND deleted_at IS NULL",
+            params![id],
+        )
+        .map_err(|e| format!("UPDATE 失败: {e}"))?;
+    if rowcount == 0 {
+        return Err(format!("session {id} 不存在或已删除"));
+    }
+    Ok(())
+}
+
+/// 恢复软删的 session (清 deleted_at). 让员工 oops 删错能 undo.
+#[tauri::command]
+pub async fn session_restore(id: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || restore_blocking(id))
+        .await
+        .map_err(|e| format!("内部错误: {e}"))?
+}
+
+fn restore_blocking(id: String) -> Result<(), String> {
+    let conn = open_db()?;
+    let _ = conn.execute("ALTER TABLE sessions ADD COLUMN deleted_at INTEGER", []);
+    let rowcount = conn
+        .execute(
+            "UPDATE sessions SET deleted_at = NULL WHERE id = ?1",
+            params![id],
+        )
+        .map_err(|e| format!("UPDATE 失败: {e}"))?;
+    if rowcount == 0 {
+        return Err(format!("session {id} 不存在"));
+    }
+    Ok(())
+}
+
+/// Bulk 软删 ≤max_messages 条 + 距今 ≤max_age_hours 的 session.
+/// preview=true: 只返要删的 id 清单, 不真删 (UI 弹窗预览用).
+/// preview=false: 真删, 返删了几个.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkDeleteResult {
+    /// preview 时返清单, 真删时返删了的 id (前 50 个)
+    pub session_ids: Vec<String>,
+    /// 总数 (即使 preview / 实际删的数 也都是这个总数)
+    pub total: u32,
+    /// 跟 sessions_bulk_delete_short 入参对齐, 让前端能展示用了什么条件
+    pub max_messages: u32,
+    pub max_age_hours: u32,
+}
+
+#[tauri::command]
+pub async fn sessions_bulk_delete_short(
+    max_messages: u32,
+    max_age_hours: u32,
+    preview: bool,
+) -> Result<BulkDeleteResult, String> {
+    tokio::task::spawn_blocking(move || {
+        bulk_delete_short_blocking(max_messages, max_age_hours, preview)
+    })
+    .await
+    .map_err(|e| format!("内部错误: {e}"))?
+}
+
+fn bulk_delete_short_blocking(
+    max_messages: u32,
+    max_age_hours: u32,
+    preview: bool,
+) -> Result<BulkDeleteResult, String> {
+    let conn = open_db()?;
+    let _ = conn.execute("ALTER TABLE sessions ADD COLUMN deleted_at INTEGER", []);
+
+    // 找候选: message_count <= max_messages AND age <= max_age_hours AND deleted_at IS NULL
+    let cutoff_secs = (max_age_hours as i64) * 3600;
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT id FROM sessions
+            WHERE message_count <= ?1
+              AND deleted_at IS NULL
+              AND started_at >= (strftime('%s', 'now') - ?2)
+            ORDER BY started_at DESC
+        "#,
+        )
+        .map_err(|e| format!("SQL prepare 失败: {e}"))?;
+
+    let ids: Vec<String> = stmt
+        .query_map(params![max_messages as i64, cutoff_secs], |row| row.get(0))
+        .map_err(|e| format!("SQL 查询失败: {e}"))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let total = ids.len() as u32;
+    let session_ids_for_return: Vec<String> = ids.iter().take(50).cloned().collect();
+
+    if !preview && !ids.is_empty() {
+        // 真删 — 一次性 UPDATE 用 IN
+        let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "UPDATE sessions SET deleted_at = strftime('%s', 'now') \
+             WHERE id IN ({placeholders}) AND deleted_at IS NULL"
+        );
+        let params_vec: Vec<&dyn rusqlite::ToSql> = ids
+            .iter()
+            .map(|id| id as &dyn rusqlite::ToSql)
+            .collect();
+        conn.execute(&sql, params_vec.as_slice())
+            .map_err(|e| format!("批量 UPDATE 失败: {e}"))?;
+    }
+
+    Ok(BulkDeleteResult {
+        session_ids: session_ids_for_return,
+        total,
+        max_messages,
+        max_age_hours,
+    })
 }

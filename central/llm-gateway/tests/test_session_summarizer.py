@@ -360,3 +360,82 @@ async def test_request_includes_internal_header(fake_msgs):
         "summarizer 后台 housekeeping 必须打 internal header, "
         "不该消耗员工 user_day quota (鸿波 5/5 explicit BL-F17)"
     )
+
+
+# ─── BL-SESSION-MGMT B (5/15): _extract_short_title + _update_session_title ──
+
+
+from catfish_gateway.session_summarizer import _extract_short_title, _update_session_title
+
+
+def test_extract_short_title_first_sentence():
+    summary = "员工要找 ISO 9001 资质. 已确认下次会议在 5/18, 由高江祥代表. 拍照存档."
+    assert _extract_short_title(summary) == "员工要找 ISO 9001 资质"
+
+
+def test_extract_short_title_english_punctuation():
+    summary = "User asked about quota usage. Decided to check audit log."
+    assert _extract_short_title(summary) == "User asked about quota usage"
+
+
+def test_extract_short_title_truncate_to_30():
+    summary = "员工 决定 把 这 个 很 长 很 长 很 长 很 长 很 长 很 长 的 话 一 直 写 下 去 没 标 点"
+    title = _extract_short_title(summary)
+    assert len(title) <= 30
+
+
+def test_extract_short_title_empty():
+    assert _extract_short_title("") == ""
+    assert _extract_short_title("   ") == ""
+
+
+def test_extract_short_title_no_punctuation():
+    """全无标点 — 截前 30 字"""
+    summary = "员工" * 20
+    title = _extract_short_title(summary)
+    assert len(title) <= 30
+    assert title.startswith("员工")
+
+
+def test_extract_short_title_chinese_punctuation():
+    summary = "员工要做周报！下面是要点。"
+    assert _extract_short_title(summary) == "员工要做周报"
+
+
+def test_update_session_title_db_missing(monkeypatch, tmp_path):
+    """state.db 不存在 → 返 False 不挂"""
+    from catfish_gateway import session_summarizer
+    monkeypatch.setattr(session_summarizer, "STATE_DB", tmp_path / "nope.db")
+    assert _update_session_title("sess_x", "test title") is False
+
+
+def test_update_session_title_real_write(monkeypatch, tmp_path):
+    """造个 fake state.db, 写 title, 验真写进去 + 只在 NULL/空时 update"""
+    import sqlite3
+    from catfish_gateway import session_summarizer
+
+    db = tmp_path / "state.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT)")
+    conn.execute("INSERT INTO sessions (id, title) VALUES (?, NULL)", ("sess_empty",))
+    conn.execute("INSERT INTO sessions (id, title) VALUES (?, '')", ("sess_blank",))
+    conn.execute("INSERT INTO sessions (id, title) VALUES (?, '已有名')", ("sess_named",))
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(session_summarizer, "STATE_DB", db)
+
+    # NULL → 写
+    assert _update_session_title("sess_empty", "新标题") is True
+    # 空字符串 → 写
+    assert _update_session_title("sess_blank", "新标题") is True
+    # 已有名 → 不覆盖, 返 False (rowcount=0)
+    assert _update_session_title("sess_named", "强改") is False
+
+    # 验数据库
+    conn = sqlite3.connect(str(db))
+    rows = dict(conn.execute("SELECT id, title FROM sessions").fetchall())
+    conn.close()
+    assert rows["sess_empty"] == "新标题"
+    assert rows["sess_blank"] == "新标题"
+    assert rows["sess_named"] == "已有名"  # 没被覆盖

@@ -20,6 +20,8 @@ export interface SessionMeta {
   totalTokens: number;
   /** "cli" / "companion" / undefined (老数据) —— sidebar 区分来源加 badge 用 */
   source?: string;
+  /** BL-SESSION-MGMT A (5/15): 首条 user message 前 80 字, title 没生成时 sidebar 用作 fallback. */
+  firstUserMessage?: string;
 }
 
 /** 单条消息 —— 跟 Rust SessionMessage 对齐, resume 时会 map 成 ChatMessage 灌进 store */
