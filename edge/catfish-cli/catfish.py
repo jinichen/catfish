@@ -426,21 +426,38 @@ def _patch_hermes_config(token: str) -> Optional[str]:
         return None
 
     cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-    custom_providers = cfg.get("custom_providers") or {}
+    custom_providers = cfg.get("custom_providers")
     if not custom_providers:
         logger.info("hermes config 没 custom_providers 段, 跳过")
         return None
 
-    # 找 catfish 那个 provider — 默认 name="Local (localhost:8999)", 也找 base_url 含 localhost:8999 的
+    # hermes 0.13 实际存 list-of-dict 格式 (5/15 鸿波端到端测发现, 之前我误判 dict).
+    # 兼容两种格式: list[dict] (hermes 0.13) 和 dict[name → config] (老版本可能).
     target = None
-    if HERMES_PROVIDER_NAME in custom_providers:
-        target = HERMES_PROVIDER_NAME
-    else:
-        for name, p in custom_providers.items():
-            base_url = (p or {}).get("base_url", "") if isinstance(p, dict) else ""
-            if "localhost:8999" in base_url or "127.0.0.1:8999" in base_url:
-                target = name
+    if isinstance(custom_providers, list):
+        # list-of-dict 格式 — 每个 dict 含 name + base_url + api_key + model
+        for entry in custom_providers:
+            if not isinstance(entry, dict):
+                continue
+            entry_name = entry.get("name", "") or entry.get("display_name", "")
+            base_url = entry.get("base_url", "") or ""
+            if entry_name == HERMES_PROVIDER_NAME or "localhost:8999" in base_url or "127.0.0.1:8999" in base_url:
+                entry["api_key"] = token
+                target = entry_name or "<unnamed>"
                 break
+    elif isinstance(custom_providers, dict):
+        # dict 格式 (老版本)
+        if HERMES_PROVIDER_NAME in custom_providers:
+            target = HERMES_PROVIDER_NAME
+        else:
+            for name, p in custom_providers.items():
+                base_url = (p or {}).get("base_url", "") if isinstance(p, dict) else ""
+                if "localhost:8999" in base_url or "127.0.0.1:8999" in base_url:
+                    target = name
+                    break
+        if target:
+            custom_providers[target] = custom_providers[target] or {}
+            custom_providers[target]["api_key"] = token
 
     if not target:
         logger.info(
@@ -449,10 +466,17 @@ def _patch_hermes_config(token: str) -> Optional[str]:
         )
         return None
 
-    # 更新 api_key
-    custom_providers[target] = custom_providers[target] or {}
-    custom_providers[target]["api_key"] = token
     cfg["custom_providers"] = custom_providers
+
+    # 5/15 鸿波端到端测发现: hermes 0.13 active 配置在顶层 'model:' 段, 不在
+    # custom_providers (那是配置库). 选 Custom endpoint 时 hermes 把配置复制到 model:
+    # 之后启动只读 model:. 我们必须**同时** patch model.api_key 才真生效.
+    model_section = cfg.get("model")
+    if isinstance(model_section, dict):
+        model_base_url = model_section.get("base_url", "") or ""
+        if "localhost:8999" in model_base_url or "127.0.0.1:8999" in model_base_url:
+            model_section["api_key"] = token
+            logger.info("同步 model.api_key (hermes 真用的 active 配置)")
 
     # 备份原文件 + 原子写
     backup = cfg_path.with_suffix(".yaml.bak")

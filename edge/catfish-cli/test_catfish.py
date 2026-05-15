@@ -256,6 +256,109 @@ def test_patch_hermes_config_no_catfish_provider(tmp_path, monkeypatch):
     assert cfg["custom_providers"]["Other"]["api_key"] == "x"
 
 
+def test_patch_hermes_config_list_format(tmp_path, monkeypatch):
+    """5/15 鸿波端到端测发现 — hermes 0.13 实际是 list-of-dict 格式, 不是 dict"""
+    yaml = pytest.importorskip("yaml")
+    cfg_path = tmp_path / "hermes.yaml"
+    cfg_path.write_text(yaml.safe_dump({
+        "custom_providers": [
+            {
+                "name": "Local (localhost:8999)",
+                "base_url": "http://localhost:8999/v1",
+                "api_key": "OLD_TOKEN",
+                "model": "catfish-public-deepseek-flash",
+            },
+        ],
+        "other_field": "preserved",
+    }))
+    monkeypatch.setenv("HERMES_CONFIG", str(cfg_path))
+
+    result = catfish._patch_hermes_config("NEW_TOKEN")
+    assert result == "Local (localhost:8999)"
+
+    new_cfg = yaml.safe_load(cfg_path.read_text())
+    assert isinstance(new_cfg["custom_providers"], list)  # 还是 list
+    assert new_cfg["custom_providers"][0]["api_key"] == "NEW_TOKEN"
+    assert new_cfg["custom_providers"][0]["base_url"] == "http://localhost:8999/v1"
+    assert new_cfg["other_field"] == "preserved"
+
+
+def test_patch_hermes_config_also_patches_model_api_key(tmp_path, monkeypatch):
+    """5/15 早鸿波端到端测发现 — hermes 0.13 active 配置在顶层 'model:' 段, 不只 custom_providers.
+    catfish login 必须**同时** patch model.api_key 才真生效, 否则 hermes 用顶层 model.api_key
+    (老 token) 调 gateway 401."""
+    yaml = pytest.importorskip("yaml")
+    cfg_path = tmp_path / "hermes.yaml"
+    cfg_path.write_text(yaml.safe_dump({
+        "model": {
+            "default": "catfish-public-deepseek-flash",
+            "provider": "custom",
+            "base_url": "http://localhost:8999/v1",
+            "api_key": "OLD_MODEL_TOKEN",
+        },
+        "custom_providers": [
+            {
+                "name": "Local (localhost:8999)",
+                "base_url": "http://localhost:8999/v1",
+                "api_key": "OLD_PROVIDER_TOKEN",
+                "model": "catfish-public-deepseek-flash",
+            },
+        ],
+    }))
+    monkeypatch.setenv("HERMES_CONFIG", str(cfg_path))
+
+    result = catfish._patch_hermes_config("NEW_TOKEN")
+    assert result is not None  # 找到 catfish provider
+    new_cfg = yaml.safe_load(cfg_path.read_text())
+    # 两层都更新
+    assert new_cfg["model"]["api_key"] == "NEW_TOKEN", "顶层 model.api_key 必须 patch"
+    assert new_cfg["custom_providers"][0]["api_key"] == "NEW_TOKEN", "custom_providers 也 patch"
+
+
+def test_patch_hermes_config_skips_model_section_for_other_provider(tmp_path, monkeypatch):
+    """model.base_url 不指 catfish gateway → 不动 model.api_key (防破坏别的 provider 配置)"""
+    yaml = pytest.importorskip("yaml")
+    cfg_path = tmp_path / "hermes.yaml"
+    cfg_path.write_text(yaml.safe_dump({
+        "model": {
+            "provider": "openrouter",
+            "base_url": "https://openrouter.ai/api/v1",
+            "api_key": "SHOULD_NOT_TOUCH",
+        },
+        "custom_providers": [
+            {
+                "name": "Local (localhost:8999)",
+                "base_url": "http://localhost:8999/v1",
+                "api_key": "OLD",
+            },
+        ],
+    }))
+    monkeypatch.setenv("HERMES_CONFIG", str(cfg_path))
+    result = catfish._patch_hermes_config("NEW")
+    assert result is not None
+    cfg = yaml.safe_load(cfg_path.read_text())
+    assert cfg["model"]["api_key"] == "SHOULD_NOT_TOUCH"  # 没动
+    assert cfg["custom_providers"][0]["api_key"] == "NEW"  # patch 了
+
+
+def test_patch_hermes_config_list_finds_by_base_url(tmp_path, monkeypatch):
+    """list 格式下, name 不匹配但 base_url 含 localhost:8999 也能找到"""
+    yaml = pytest.importorskip("yaml")
+    cfg_path = tmp_path / "hermes.yaml"
+    cfg_path.write_text(yaml.safe_dump({
+        "custom_providers": [
+            {"name": "MyCatfish", "base_url": "http://localhost:8999/v1", "api_key": "OLD"},
+            {"name": "Other", "base_url": "https://api.other.com", "api_key": "x"},
+        ],
+    }))
+    monkeypatch.setenv("HERMES_CONFIG", str(cfg_path))
+    result = catfish._patch_hermes_config("NEW")
+    assert result == "MyCatfish"
+    cfg = yaml.safe_load(cfg_path.read_text())
+    assert cfg["custom_providers"][0]["api_key"] == "NEW"
+    assert cfg["custom_providers"][1]["api_key"] == "x"  # Other 没动
+
+
 # ─── 命令 (status / logout / token) ─────────────────────
 
 
