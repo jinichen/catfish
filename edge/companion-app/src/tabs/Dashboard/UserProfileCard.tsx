@@ -146,6 +146,9 @@ export default function UserProfileCard() {
         border: "1px solid var(--catfish-border)",
         borderRadius: "var(--radius-md)",
         padding: "var(--space-4)",
+        // BL-USER-PROFILE-LIMIT-HEIGHT (5/16): 跟 RelationCard 视觉对称.
+        // alignSelf:start 不被 grid row stretch, fields 内部滚动看更多.
+        alignSelf: "start",
       }}
     >
       <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)", marginBottom: "var(--space-2)" }}>
@@ -171,6 +174,15 @@ export default function UserProfileCard() {
         </div>
       )}
 
+      {/* BL-USER-PROFILE-LIMIT-HEIGHT (5/16): fields 列表 maxHeight + 滚动, 跟
+          RelationCard entries 区视觉对称, 不让卡无限撑高. */}
+      <div
+        style={{
+          maxHeight: 360,
+          overflowY: "auto",
+          paddingRight: 4,
+        }}
+      >
       {fields.map((field) => {
         const f = profile[field];
         const display = f.value || f.proposed_value || "(空)";
@@ -234,6 +246,7 @@ export default function UserProfileCard() {
           </div>
         );
       })}
+      </div>{/* BL-USER-PROFILE-LIMIT-HEIGHT: 滚动 wrapper 闭合 */}
 
       {fields.length > 0 && (
         <div style={{ marginTop: "var(--space-3)", display: "flex", justifyContent: "flex-end" }}>
