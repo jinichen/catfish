@@ -9,7 +9,8 @@ import LoginGate from "./components/LoginGate";
 import OnboardingWizard from "./components/OnboardingWizard";
 import TabBar from "./components/TabBar";
 import ChatTab from "./tabs/Chat/ChatTab";
-import ConsoleTab from "./tabs/Console/ConsoleTab";
+// BL-CONSOLE-TAB-KILL (5/16): 控制台 tab 砍, ConsoleTab.tsx 源码留着作 git 历史.
+// import ConsoleTab from "./tabs/Console/ConsoleTab";
 import DashboardTab from "./tabs/Dashboard/DashboardTab";
 import { useUIStore } from "./store/ui";
 import { useAgentStore } from "./store/agent";
@@ -116,7 +117,7 @@ function AppShell({ activeTab }: { activeTab: string }) {
       <DevUserSwitcher />
       <TabBar />
       <main className="app-main">
-        {activeTab === "console" && <ConsoleTab />}
+        {/* BL-CONSOLE-TAB-KILL (5/16): {activeTab === "console" && <ConsoleTab />} */}
         {activeTab === "dashboard" && <DashboardTab />}
       </main>
     </div>

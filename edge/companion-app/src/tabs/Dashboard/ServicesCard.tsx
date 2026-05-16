@@ -9,12 +9,45 @@
  *   gateway 出问题时, 不该让员工跑去控制台才能发现。
  */
 
-import { useUIStore } from "../../store/ui";
 import { useServicesStore } from "../../store/services";
 import { useServiceStatus } from "../../hooks/useServiceStatus";
 import { useAgentStore } from "../../store/agent";
 import StatusDot from "../../components/StatusDot";
 import type { ServiceId, ServiceStatus } from "../../types/service";
+import {
+  gatewayStart,
+  gatewayStop,
+  chromeLaunch,
+  chromeKill,
+  localSearchStart,
+  localSearchStop,
+  toolBridgeStart,
+  toolBridgeStop,
+} from "../../lib/tauri";
+
+// BL-CONSOLE-TAB-KILL (5/16): 启停 action 表, 替代砍掉的控制台 tab.
+// 每个 ServiceId 知道自己怎么 start/stop. 重启 = stop + 800ms + start.
+const SERVICE_ACTIONS: Record<
+  ServiceId,
+  { start: () => Promise<unknown>; stop: () => Promise<unknown> }
+> = {
+  gateway: { start: gatewayStart, stop: gatewayStop },
+  chrome: { start: chromeLaunch, stop: chromeKill },
+  local_search: { start: localSearchStart, stop: localSearchStop },
+  tool_bridge: { start: toolBridgeStart, stop: toolBridgeStop },
+};
+
+async function restartService(id: ServiceId): Promise<void> {
+  const a = SERVICE_ACTIONS[id];
+  if (!a) return;
+  try {
+    await a.stop();
+  } catch {
+    /* stop 失败可能因为它已经挂, 不阻止重启 */
+  }
+  await new Promise((r) => setTimeout(r, 600));
+  await a.start();
+}
 
 interface ServiceRow {
   id: ServiceId;
@@ -49,10 +82,32 @@ function buildServices(agentName: string): ServiceRow[] {
   ];
 }
 
+// BL-CONSOLE-TAB-KILL (5/16): 卡内 batch + 单服务重启按钮的 style 常量.
+const batchBtnStyle: React.CSSProperties = {
+  fontSize: 11,
+  color: "var(--catfish-text-muted)",
+  background: "transparent",
+  border: "1px solid var(--catfish-border)",
+  borderRadius: "var(--radius-sm)",
+  cursor: "pointer",
+  padding: "2px 8px",
+};
+
+const rowBtnStyle: React.CSSProperties = {
+  fontSize: 14,
+  color: "var(--catfish-text-muted)",
+  background: "transparent",
+  border: "1px solid var(--catfish-border)",
+  borderRadius: "var(--radius-sm)",
+  cursor: "pointer",
+  padding: "2px 8px",
+  fontFamily: "var(--font-mono)",
+  lineHeight: 1,
+};
+
 export default function ServicesCard() {
   // 注: 不在这里 for 循环调 useServiceStatus —— React hooks 规则不允许。
   // 每行组件 ServiceRowItem 自己调 hook, 数量恒定 (buildServices 永远返 4 行)。
-  const setActiveTab = useUIStore((s) => s.setActiveTab);
   const agentName = useAgentStore((s) => s.name);
   const SERVICES = buildServices(agentName);
 
@@ -75,20 +130,59 @@ export default function ServicesCard() {
         }}
       >
         <strong>本地服务</strong>
-        <button
-          onClick={() => setActiveTab("console")}
-          title="跳到控制台启停服务 / 看日志"
-          style={{
-            fontSize: 11,
-            color: "var(--catfish-text-muted)",
-            background: "transparent",
-            border: 0,
-            cursor: "pointer",
-            padding: 0,
-          }}
-        >
-          控制台 →
-        </button>
+        {/* BL-CONSOLE-TAB-KILL (5/16): 一键 batch 操作, 替代砍掉的控制台 tab.
+            真要看 log 走 ~/Library/Logs/Catfish/*.log 文件. */}
+        <div style={{ display: "flex", gap: 4 }}>
+          <button
+            onClick={() => {
+              void Promise.allSettled([
+                gatewayStart(),
+                chromeLaunch(),
+                localSearchStart(),
+                toolBridgeStart(),
+              ]);
+            }}
+            title="一键启动 4 个本地服务"
+            style={batchBtnStyle}
+          >
+            全启
+          </button>
+          <button
+            onClick={() => {
+              void Promise.allSettled([
+                gatewayStop(),
+                chromeKill(),
+                localSearchStop(),
+                toolBridgeStop(),
+              ]);
+            }}
+            title="一键停止 4 个本地服务"
+            style={batchBtnStyle}
+          >
+            全停
+          </button>
+          <button
+            onClick={async () => {
+              await Promise.allSettled([
+                gatewayStop(),
+                chromeKill(),
+                localSearchStop(),
+                toolBridgeStop(),
+              ]);
+              await new Promise((r) => setTimeout(r, 800));
+              await Promise.allSettled([
+                gatewayStart(),
+                chromeLaunch(),
+                localSearchStart(),
+                toolBridgeStart(),
+              ]);
+            }}
+            title="一键全部重启"
+            style={batchBtnStyle}
+          >
+            全重启
+          </button>
+        </div>
       </header>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -129,11 +223,20 @@ function ServiceRowItem({ row }: { row: ServiceRow }) {
             textOverflow: "ellipsis",
             overflow: "hidden",
             whiteSpace: "nowrap",
-            maxWidth: 200,
+            maxWidth: 140,
           }}
         >
           {compactStatusText(status)}
         </span>
+        {/* BL-CONSOLE-TAB-KILL (5/16): 单服务重启按钮, 替代控制台单卡操作.
+            员工 90% 撞 bug 时想做的就是"重启这个服务", 直接前置. */}
+        <button
+          onClick={() => void restartService(row.id)}
+          title={`重启 ${row.name}`}
+          style={rowBtnStyle}
+        >
+          ↻
+        </button>
       </div>
       {/* BL-FIX18: why 改 inline 副标题, 不再 native tooltip 出界 */}
       <div

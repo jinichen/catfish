@@ -4,9 +4,12 @@ import { useUIStore, type TabId } from "../store/ui";
 import { useFocusStore } from "../store/focus";
 
 // 注: "会话" tab 已并入 "对话" 的左侧 sidebar (P0-3.1), 这里不再列出
+// BL-CONSOLE-TAB-KILL (5/16): 控制台 tab 砍, 90% 跟仪表盘"本地服务"卡重叠 + log
+// 对一般员工无用 (开发者用 tail -f ~/Library/Logs/Catfish/gateway.log 看). 启停
+// 操作挪到 ServicesCard 每行按钮. 真要看 log 走文件.
 const TABS: { id: TabId; label: string }[] = [
   { id: "chat", label: "对话" },
-  { id: "console", label: "控制台" },
+  // { id: "console", label: "控制台" },  // 5/16 砍
   { id: "dashboard", label: "仪表盘" },
 ];
 
