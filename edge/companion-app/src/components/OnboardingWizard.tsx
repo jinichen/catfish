@@ -139,9 +139,11 @@ export default function OnboardingWizard() {
         {step === 4 && <StepCurator onNext={next} onBack={back} onSkip={close} />}
         {step === 5 && (
           <StepTryChat
-            onFinish={() => {
+            onFinish={(seedMessage) => {
+              // BL-MEMORY-ONBOARDING-SEED (5/16): seedMessage 来自 StepTryChat 4 选 1
+              // (3 个教 memory 的引导句 + 1 个空话). 让新员工第一聊就 seed 基础 entries.
               close();
-              startProactiveChat("早, 这是我的第一句. 你能记住么?");
+              startProactiveChat(seedMessage);
             }}
             onSkip={close}
             onBack={back}
@@ -540,37 +542,62 @@ function StepTryChat({
   onBack,
   onSkip,
 }: {
-  onFinish: () => void;
+  onFinish: (seedMessage: string) => void;
   onBack: () => void;
   onSkip: () => void;
 }) {
+  // BL-MEMORY-ONBOARDING-SEED (5/16): 改成"教小鲶记基础事实"引导, 让新员工
+  // 第一次聊就 seed 几条 memory entries. 比"早, 第一句" 这种空话有用 10x.
+  const [picked, setPicked] = useState<string>(
+    "我在 [部门] 做 [角色], 项目主要是 [项目]. 记下来.",
+  );
+  const examples = [
+    "我在 [部门] 做 [角色], 项目主要是 [项目]. 记下来.",
+    "记下我的偏好: 公文我喜欢段落, 别给我列表.",
+    "记下我儿子叫 [名字], 在 [学校 / 单位].",
+    "早, 这是我的第一句. 你能记住么?",
+  ];
   return (
     <>
-      <h3 style={{ marginTop: 0 }}>3️⃣ 试聊一句</h3>
+      <h3 style={{ marginTop: 0 }}>3️⃣ 试聊 — 教小鲶记住你</h3>
       <p style={{ fontSize: 13, lineHeight: 1.6, color: "var(--catfish-text-muted)" }}>
-        最后一步: 跟鲶鱼说一句, 看看效果.
+        小鲶有跨 session 长期记忆 (在你本机 <code>~/.hermes/memories/USER.md</code>, 永不上传).
+        第一次聊建议**教它几条基础事实**, 今后它就懂你, 不用每次重复.
       </p>
-      <p style={{ fontSize: 13, lineHeight: 1.6, color: "var(--catfish-text-muted)" }}>
-        点 "开聊" 我会帮你打开对话 tab 并预填一句话, 你按 Enter 发就行.
+      <p style={{ fontSize: 12, color: "var(--catfish-text-muted)", marginTop: 8 }}>
+        选一句, 把 [...] 部分填上你的真实情况, 按 Enter 发. 小鲶会调 memory 工具记下来.
       </p>
-      <div
-        style={{
-          background: "var(--catfish-bg)",
-          border: "1px solid var(--catfish-border)",
-          borderRadius: 6,
-          padding: "var(--space-3)",
-          fontSize: 13,
-          fontFamily: "var(--font-mono)",
-          color: "var(--catfish-cyan)",
-          marginTop: "var(--space-3)",
-        }}
-      >
-        💬 早, 这是我的第一句. 你能记住么?
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: "var(--space-3)" }}>
+        {examples.map((ex) => (
+          <button
+            key={ex}
+            type="button"
+            onClick={() => setPicked(ex)}
+            style={{
+              textAlign: "left",
+              padding: "8px 10px",
+              border: `1.5px solid ${picked === ex ? "var(--catfish-cyan)" : "var(--catfish-border)"}`,
+              borderRadius: 6,
+              background: picked === ex ? "var(--catfish-bg-cream)" : "var(--catfish-bg)",
+              cursor: "pointer",
+              color: "var(--catfish-text)",
+              fontSize: 12,
+              fontFamily: "var(--font-mono)",
+            }}
+          >
+            💬 {ex}
+          </button>
+        ))}
       </div>
       <p style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: "var(--space-3)" }}>
-        以后你每次开 Companion, 仪表盘第一卡 "📝 今日话题" 会主动给你起话题, 不用想说啥.
+        发完后仪表盘"鲶鱼对你的认识 → 我的 hermes memory"卡能看到刚记的, 也能随时删.
       </p>
-      <Buttons onNext={onFinish} nextLabel="开聊 →" onBack={onBack} onSkip={onSkip} />
+      <Buttons
+        onNext={() => onFinish(picked)}
+        nextLabel="开聊 →"
+        onBack={onBack}
+        onSkip={onSkip}
+      />
     </>
   );
 }
