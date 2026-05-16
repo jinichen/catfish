@@ -56,8 +56,18 @@ export interface ToolCallResult {
 }
 export const toolBridgeListTools = () =>
   rawInvoke<ToolInfo[]>("tool_bridge_list_tools");
-export const toolBridgeCallTool = (name: string, args: Record<string, unknown>) =>
-  rawInvoke<ToolCallResult>("tool_bridge_call_tool", { name, args });
+// BL-TODO-BRIDGE-STORE (5/16): sessionId 可选, 用于 per-session stateful tool 注入
+// (hermes todo 工具按 session 各自 TodoStore). 不传 → backend 走 __default__ 全局 store.
+export const toolBridgeCallTool = (
+  name: string,
+  args: Record<string, unknown>,
+  sessionId?: string,
+) =>
+  rawInvoke<ToolCallResult>("tool_bridge_call_tool", {
+    name,
+    args,
+    sessionId,  // Tauri 命令 camelCase ↔ Rust snake_case 自动转换
+  });
 
 // ── health ───────────────────────────────────────────────
 export const fetchHealthz = () =>

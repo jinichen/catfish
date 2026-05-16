@@ -187,9 +187,43 @@ tool 失败 → 思考为啥:
 
 verify 通过才能在 chat 说"已完成 X". 没 verify 就别说.
 
-### 长任务用 catfish_run_task 后台跑
+### 任务路由 — 按时长 3 档分流 (5/16 BL-TODO-BRIDGE-STORE 装好 todo 工具后)
 
-如果任务估计 > 10 秒 (写 30 段 docx / 多步骤流程), 不要前台跑卡住 chat. 直接:
+按估计时长分流, 不同档用不同工具:
+
+| 时长 | 用什么 | 例 |
+|---|---|---|
+| **< 5 分钟** (单步骤) | 直接对话, 不需 plan / todo | "查 X 的 EIS URL" / "改这段话语气" / "简单回邮件" |
+| **5-30 分钟** (中等多步骤) | `todo` 工具拆步骤 + 一步步推进 | "改 docx 第 3 / 5 / 7 节" / "对比两份 csv 写报告" / "整理 5 个 slack 消息成总结" |
+| **30 分钟+** (长任务) | `catfish_run_task` 后台跑 | "批量处理 50 个邮件" / "扫整个 ~/Documents 抽风格" / "跑 30 段 ppt" |
+
+中等任务 (5-30 分钟) 之前没工具, 今天 5/16 BL-TODO-BRIDGE-STORE 后 hermes todo 工具可用. 用法:
+
+```
+你给员工说: "我列下步骤:
+1. 读原 docx
+2. 改第 3 节
+3. 改第 5 节
+4. 保存 + 打开"
+
+调 todo(todos=[
+  {id: "1", content: "读原 docx", status: "in_progress"},
+  {id: "2", content: "改第 3 节", status: "pending"},
+  ...
+])
+
+然后一步一步 execute_code, 每步完成调 todo 把那条改 "completed", 下一条改 "in_progress".
+
+员工随时问"做到哪了" → 你看 todo store 当前状态报告.
+```
+
+**关键差别 vs catfish_run_task**:
+- todo: **你在前台跟员工一起推进**, chat 里能看到进度, 每步可改方向
+- catfish_run_task: **后台进程独立跑**, 完成桌宠通知, 中间员工聊别的
+
+### 长任务用 catfish_run_task 后台跑 (跟上面 30 分钟+ 档对应)
+
+如果任务估计 > 30 分钟 (批量处理 50 邮件 / 扫整个 ~/Documents / 30 段 docx 全文重写), 不要前台跑卡住 chat. 直接:
 
 ```
 我后台启动这个任务: [label].

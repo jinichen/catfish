@@ -183,8 +183,14 @@ pub async fn tool_bridge_list_tools() -> Result<Vec<ToolInfo>, String> {
 pub async fn tool_bridge_call_tool(
     name: String,
     args: Value,
+    session_id: Option<String>,
 ) -> Result<ToolCallResult, String> {
-    let params = json!({ "name": name, "args": args });
+    // BL-TODO-BRIDGE-STORE (5/16): session_id 透传给 tool-bridge, 用于 per-session
+    // stateful tool 注入 (hermes todo 等). 可选 — 不传 → backend 走 __default__ 全局 store.
+    let mut params = json!({ "name": name, "args": args });
+    if let Some(sid) = session_id {
+        params["session_id"] = Value::String(sid);
+    }
     let val = call_rpc("tools/dispatch", params).await?;
     serde_json::from_value::<ToolCallResult>(val)
         .map_err(|e| format!("解析 tools/dispatch 失败: {e}"))
