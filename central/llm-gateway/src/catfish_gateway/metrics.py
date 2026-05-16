@@ -183,6 +183,10 @@ def log_request_metadata(
     status: str = "ok",
     error: str = "",
     security_concern: str | None = None,
+    # BL-CACHE-AUDIT (5/17): Anthropic prompt cache metrics. 默认 0 兼容
+    # 没拿到 cache_* 字段的 provider (OpenAI/DeepSeek/Gemini).
+    cache_creation_tokens: int = 0,
+    cache_read_tokens: int = 0,
 ) -> None:
     """Emit a single structured log line + persist 到 JSONL.
 
@@ -225,6 +229,12 @@ def log_request_metadata(
     if security_concern:
         # 标记字段, 例 'prompt_credential_detected'. 不含真密码值, 只标记类型.
         record["security_concern"] = security_concern[:100]
+
+    # BL-CACHE-AUDIT (5/17): 只有 Anthropic 系 model 才返这俩字段, 0 时不记
+    # 让 JSON 短一点, 客户 IT audit 看 cache hit 比例时 grep 这字段即可.
+    if cache_creation_tokens or cache_read_tokens:
+        record["cache_creation_tokens"] = cache_creation_tokens
+        record["cache_read_tokens"] = cache_read_tokens
 
     # 1. stderr log (实时可见, 给 ops 看)
     logger.info(json.dumps(record, ensure_ascii=False))

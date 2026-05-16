@@ -1691,6 +1691,28 @@ def _build_litellm_params(body: dict, model) -> dict:
     return params
 
 
+def _extract_nested_usage(usage, key: str) -> int:
+    """BL-CACHE-AUDIT (5/17): cache_* tokens 可能挂在 usage.prompt_tokens_details
+    或 usage 顶 (LiteLLM 不同 provider 不同). 试两个位置都拿不到返 0.
+    """
+    if usage is None:
+        return 0
+    details = getattr(usage, "prompt_tokens_details", None)
+    if details is not None:
+        v = getattr(details, key, None)
+        if v:
+            return int(v)
+        if isinstance(details, dict):
+            v = details.get(key)
+            if v:
+                return int(v)
+    if isinstance(usage, dict):
+        v = usage.get(key)
+        if v:
+            return int(v)
+    return 0
+
+
 def _check_context_usage(model, prompt_tokens: int, user_sub: str) -> None:
     """看本次请求的 prompt_tokens 相对 context_window 的占用。
 
@@ -1956,6 +1978,10 @@ async def _stream_chat_completion(
     ttft_ms: float | None = None  # 首 token / 首 chunk 延迟, fallback 后会被覆盖成实际值
     prompt_tokens = 0
     completion_tokens = 0
+    # BL-CACHE-AUDIT (5/17): streaming Anthropic prompt cache 字段, 末尾 chunk
+    # 的 usage 里抓. 不存在或非 Anthropic 时永远 0.
+    _stream_cache_creation = 0
+    _stream_cache_read = 0
     status_str = "ok"
     err = ""
     used_model = model
@@ -2035,6 +2061,13 @@ async def _stream_chat_completion(
                 usage = data.get("usage") or {}
                 prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
                 completion_tokens = usage.get("completion_tokens", completion_tokens)
+                # BL-CACHE-AUDIT (5/17): Anthropic cache tokens
+                _stream_cache_creation = (
+                    usage.get("cache_creation_input_tokens", _stream_cache_creation) or _stream_cache_creation
+                )
+                _stream_cache_read = (
+                    usage.get("cache_read_input_tokens", _stream_cache_read) or _stream_cache_read
+                )
                 choices = data.get("choices") or []
                 if choices:
                     choice0 = choices[0]
@@ -2069,6 +2102,13 @@ async def _stream_chat_completion(
                 usage = data.get("usage") or {}
                 prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
                 completion_tokens = usage.get("completion_tokens", completion_tokens)
+                # BL-CACHE-AUDIT (5/17): Anthropic cache tokens, final chunk usage
+                _stream_cache_creation = (
+                    usage.get("cache_creation_input_tokens", _stream_cache_creation) or _stream_cache_creation
+                )
+                _stream_cache_read = (
+                    usage.get("cache_read_input_tokens", _stream_cache_read) or _stream_cache_read
+                )
                 choices = data.get("choices") or []
                 if choices:
                     choice0 = choices[0]
@@ -2215,6 +2255,10 @@ async def _stream_chat_completion(
             is_internal=is_internal,
             used_model=used_model,
             request_id=request_id,
+            # BL-CACHE-AUDIT (5/17): streaming 路径同抓 cache tokens (final chunk
+            # usage 里). 抓不到 (非 Anthropic / fallback model) 默认 0.
+            cache_creation_tokens=_stream_cache_creation,
+            cache_read_tokens=_stream_cache_read,
         )
         output_transforms.DEFAULT_CHAIN.run(ctx)
 
@@ -2303,6 +2347,31 @@ async def _invoke_chat_completion(
     usage = getattr(response, "usage", None)
     prompt_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
     completion_tokens = getattr(usage, "completion_tokens", 0) if usage else 0
+    # BL-CACHE-AUDIT (5/17): Anthropic prompt cache hit metrics.
+    # Anthropic 在 usage 里返 cache_creation_input_tokens (首次写 cache 的 tokens)
+    # + cache_read_input_tokens (命中 cache 复用的 tokens). LiteLLM 透传到
+    # response.usage 上, 不同 model 字段位置可能不同 (有些挂 usage 顶, 有些挂
+    # prompt_tokens_details), 都试一遍.
+    cache_creation = (
+        getattr(usage, "cache_creation_input_tokens", 0)
+        or _extract_nested_usage(usage, "cache_creation_input_tokens")
+        or 0
+    ) if usage else 0
+    cache_read = (
+        getattr(usage, "cache_read_input_tokens", 0)
+        or _extract_nested_usage(usage, "cache_read_input_tokens")
+        or 0
+    ) if usage else 0
+    if cache_creation or cache_read:
+        # 命中率 = cache_read / (cache_read + non-cached prompt_tokens)
+        # 但 prompt_tokens 是总数 (含 cache_read), Anthropic 文档讲法不一, 都 log
+        logger.info(
+            "BL-CACHE-AUDIT: model=%s prompt=%d cache_create=%d cache_read=%d "
+            "(cache_read/prompt=%.0f%%) user=%s",
+            used_model.name, prompt_tokens, cache_creation, cache_read,
+            (cache_read / prompt_tokens * 100) if prompt_tokens else 0,
+            user_sub,
+        )
     _check_context_usage(used_model, prompt_tokens, user_sub)
     log_request_metadata(
         user=user_sub,
@@ -2312,6 +2381,8 @@ async def _invoke_chat_completion(
         latency_ms=(time.time() - start) * 1000,
         status="ok",
         security_concern=security_concern,
+        cache_creation_tokens=cache_creation,
+        cache_read_tokens=cache_read,
     )
     # 五一 sprint 5/2 收尾: 同步写 quota_events. ok 才记 (error 时 tokens=0).
     # BL-F17 (5/5): internal 调用跳 record_usage (audit log 仍写, 只 quota 跳).

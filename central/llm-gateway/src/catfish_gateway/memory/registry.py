@@ -31,6 +31,7 @@ Registry 是 process-wide singleton (gateway 进程内一份). 启动时 registe
 from __future__ import annotations
 
 import logging
+import os
 
 from . import InjectContext, MemoryProvider
 
@@ -232,13 +233,27 @@ class MemoryRegistry:
         "feedback": "feedback_memory",
     }
 
-    #: 维度顺序 + 中文标题 (markdown header)
+    #: 维度顺序 + 中文标题 (markdown header).
+    #:
+    #: BL-CACHE-AUDIT (5/17, hermes 0.14 #23828 Claude 1h prefix cache):
+    #: 顺序按"跨 chat 稳定性"排, stable 排前 unstable 排后. cache_control marker
+    #: 在 _STABLE_END_DIM 之后切, 让 Claude prompt cache 命到前段 (about_user +
+    #: project_facts), session_meta/feedback render 含 now() 不能放 cache 段.
+    #:
+    #: 顺序变更 (5/17 之前): about_user → recent_context → project_facts → feedback
+    #: → cache 全废, recent_context 一变后面全 bust.
     _DIMENSION_ORDER: list[tuple[str, str]] = [
+        # ─── stable ─── (cache_control: ephemeral marker 切在这之后) ───
         ("about_user", "## 关于员工本人 (跨 session 累积身份/关系/偏好)"),
-        ("recent_context", "## 最近上下文 (session 历史 / 时间感)"),
         ("project_facts", "## 项目 / 技术事实 (跨 session)"),
+        # ─── unstable (含 now() / time.time()) ────────────────────────
         ("feedback_memory", "## 员工给你的反馈 (改进信号)"),
+        ("recent_context", "## 最近上下文 (session 历史 / 时间感)"),
     ]
+
+    #: BL-CACHE-AUDIT (5/17): cache 切分点. 这维度结束之后 = stable 段 = 加
+    #: cache_control marker. 改 _DIMENSION_ORDER 时同步改这里.
+    _STABLE_END_DIM: str = "project_facts"
 
     def inject_unified(
         self,
@@ -313,30 +328,41 @@ class MemoryRegistry:
             else:
                 unmapped.append(content)
 
-        # 组装 markdown
-        parts: list[str] = [
+        # 组装 markdown — 拆 stable / unstable 两段, 中间是 cache 切分点
+        # BL-CACHE-AUDIT (5/17): stable 段 (about_user + project_facts) 加
+        # cache_control marker, Claude prompt cache 命中. unstable 段
+        # (feedback render "N 天前" + session_meta datetime.now()) 不缓存.
+        header_parts: list[str] = [
             "# 你对员工的完整认知 (BL-MEMORY-UNIFIED-INJECT 5/16 统一视图)",
             "",
             "下面按维度组织你对当前员工的所有 inject 信息. 写 memory 前查这个 + "
             "BL-MEMORY-CONFLICT-DETECT 纪律 (SOUL Memory 段) 防冲突.",
             "",
         ]
+        stable_parts: list[str] = []
+        unstable_parts: list[str] = []
+        crossed_stable_boundary = False
         for dim_key, dim_header in self._DIMENSION_ORDER:
             bucket = dim_buckets[dim_key]
-            if not bucket:
-                continue
-            parts.append(dim_header)
-            parts.append("")
-            parts.extend(bucket)
-            parts.append("")
-        # unmapped (skills_catalog / stats_guard 等非 memory 维度) 单独后面
+            if bucket:
+                target = unstable_parts if crossed_stable_boundary else stable_parts
+                target.append(dim_header)
+                target.append("")
+                target.extend(bucket)
+                target.append("")
+            if dim_key == self._STABLE_END_DIM:
+                crossed_stable_boundary = True
+        # unmapped (skills_catalog / stats_guard 等) 归 unstable (保守 — 它们可能有动态部分)
         if unmapped:
-            parts.append("## 其它系统状态")
-            parts.append("")
-            parts.extend(unmapped)
-            parts.append("")
+            unstable_parts.append("## 其它系统状态")
+            unstable_parts.append("")
+            unstable_parts.extend(unmapped)
+            unstable_parts.append("")
 
-        appended = "\n".join(parts)
+        stable_text = "\n".join(header_parts + stable_parts).rstrip()
+        unstable_text = "\n".join(unstable_parts).rstrip()
+        if not stable_text and not unstable_text:
+            return messages
 
         from copy import deepcopy  # noqa: PLC0415
 
@@ -344,17 +370,44 @@ class MemoryRegistry:
         cur = out[last_system_idx].get("content", "")
         if not isinstance(cur, str):
             return messages
-        out[last_system_idx]["content"] = cur.rstrip() + "\n\n" + appended
 
-        total_bytes = len(appended.encode("utf-8"))
-        active_dims = [
-            k for k in dim_buckets if dim_buckets[k]
-        ]
+        # BL-CACHE-AUDIT (5/17): 输出 system content 选择
+        # ─ env CATFISH_PROMPT_CACHE=0 → 老行为, 单 str content (兼容/回滚)
+        # ─ 默认 → content 转 list of 2 text blocks, stable 段加 cache_control
+        #   ephemeral. LiteLLM>=1.40 透传 cache_control 到 Anthropic API.
+        prompt_cache_on = os.environ.get("CATFISH_PROMPT_CACHE", "1") != "0"
+        if prompt_cache_on and stable_text:
+            # 系统原始 content + stable inject → 同一 block 标 cache_control
+            # (希望 SOUL.md 也跟员工无关稳定 — 通常是)
+            stable_combined = cur.rstrip() + "\n\n" + stable_text
+            blocks: list[dict] = [
+                {
+                    "type": "text",
+                    "text": stable_combined,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+            if unstable_text:
+                blocks.append({"type": "text", "text": unstable_text})
+            out[last_system_idx]["content"] = blocks
+        else:
+            # legacy 行为 / env opt-out / 没 stable 段都走单 str
+            appended = stable_text
+            if unstable_text:
+                appended = (appended + "\n\n" + unstable_text).strip() if appended else unstable_text
+            out[last_system_idx]["content"] = cur.rstrip() + "\n\n" + appended
+
+        total_bytes = len((stable_text + unstable_text).encode("utf-8"))
+        active_dims = [k for k in dim_buckets if dim_buckets[k]]
         logger.info(
-            "memory_registry unified: inject %d provider 分 %d 维度 (%s) + %d 未归类, 总 %d 字节",
+            "memory_registry unified: inject %d provider 分 %d 维度 (%s) + %d 未归类, "
+            "stable=%dB unstable=%dB cache_marker=%s",
             len(provider_outputs), len(active_dims),
-            ",".join(active_dims), len(unmapped), total_bytes,
+            ",".join(active_dims), len(unmapped),
+            len(stable_text.encode("utf-8")), len(unstable_text.encode("utf-8")),
+            prompt_cache_on and bool(stable_text),
         )
+        _ = total_bytes  # keep var for back-compat metrics path
 
         return out
 

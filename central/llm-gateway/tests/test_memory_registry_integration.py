@@ -256,7 +256,15 @@ def test_unified_inject_groups_by_dimension(tmp_path, monkeypatch):
         messages=msgs, last_user_message="教 EIS 怎么登录",
     )
     out = registry.inject_unified(ctx, msgs, enabled_names=None)
-    content = out[0]["content"]
+    raw_content = out[0]["content"]
+
+    # BL-CACHE-AUDIT (5/17): 默认 CATFISH_PROMPT_CACHE=1 system content 是 list of
+    # text blocks (stable 段 + unstable 段, 第一块带 cache_control). 测试合并文本
+    # 后断言. env=0 时仍 str — 兼容.
+    if isinstance(raw_content, list):
+        content = "\n".join(b.get("text", "") for b in raw_content if isinstance(b, dict))
+    else:
+        content = raw_content
 
     # 主 header
     assert "你对员工的完整认知" in content
@@ -271,6 +279,42 @@ def test_unified_inject_groups_by_dimension(tmp_path, monkeypatch):
         ]
     )
     assert has_any_dim, f"unified 输出无任何维度 header. content[:500]={content[:500]}"
+
+
+def test_unified_inject_cache_control_marker(tmp_path, monkeypatch):
+    """BL-CACHE-AUDIT (5/17): 默认 system content 是 list of 2 blocks, 前段含
+    stable 维度 (about_user / project_facts) 标 cache_control ephemeral, 后段
+    含 unstable (feedback / recent_context) 不标. Anthropic 1h prefix cache 命中
+    要求 cache_control marker — 没 marker 等于 0 命中, 钱白花.
+
+    env CATFISH_PROMPT_CACHE=0 时退回单 str (legacy 兼容). 同测.
+    """
+    monkeypatch.setenv("CATFISH_EXPOSE_REMEMBER", "1")
+    _seed_user_data(tmp_path, monkeypatch)
+    registry = _fresh_registry()
+
+    msgs = [
+        {"role": "system", "content": "你是鲶鱼."},
+        {"role": "user", "content": "教 EIS 怎么登录"},
+    ]
+    ctx = InjectContext(messages=msgs, last_user_message="教 EIS 怎么登录")
+
+    # 默认: PROMPT_CACHE 开 (env 不 set = "1")
+    out = registry.inject_unified(ctx, msgs, enabled_names=None)
+    content = out[0]["content"]
+    assert isinstance(content, list), f"expect list of blocks, got {type(content).__name__}"
+    assert len(content) >= 1
+    # 第一段必须标 cache_control: ephemeral (Anthropic 命 cache 的关键)
+    first = content[0]
+    assert first.get("type") == "text"
+    assert first.get("cache_control") == {"type": "ephemeral"}
+    # stable text 段含 system 原内容 + (任一稳定维度 header 当 seed 有数据)
+    assert "你是鲶鱼" in first.get("text", "")
+
+    # opt-out: env=0 退回 legacy 单 str
+    monkeypatch.setenv("CATFISH_PROMPT_CACHE", "0")
+    out_legacy = registry.inject_unified(ctx, msgs, enabled_names=None)
+    assert isinstance(out_legacy[0]["content"], str)
 
 
 def test_unified_internal_call_skipped(tmp_path, monkeypatch):

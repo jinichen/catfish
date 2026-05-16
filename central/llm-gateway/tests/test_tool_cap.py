@@ -52,7 +52,9 @@ def test_cap_keeps_always_on_first(monkeypatch):
     """超 cap 时, always-on 必须保留"""
     monkeypatch.setenv("CATFISH_MAX_TOOLS", "15")
     # 5 个 always-on + 20 个 other = 25 total, cap=15
-    always_on_names = ["execute_code", "read_file", "write_file", "clarify", "catfish_remember"]
+    # BL-MEMORY-CATFISH-REMEMBER-BLACKLIST (5/16): catfish_remember 已从 _ALWAYS_ON_TOOLS
+    # 移到 _HIDDEN_FROM_LLM (LLM 不再看到), 测试改用 memory 顶替 (hermes 0.13 统一工具).
+    always_on_names = ["execute_code", "read_file", "write_file", "clarify", "memory"]
     other_names = [f"random_tool_{i}" for i in range(20)]
     # 顺序故意打乱 — always-on 不在最前
     tools = (
@@ -120,8 +122,12 @@ def test_cap_minimum_10(monkeypatch):
 
 
 def test_always_on_set_basic_sanity():
-    """always-on 集应该至少含核心 5 个"""
-    must_have = {"execute_code", "read_file", "write_file", "clarify", "catfish_remember"}
+    """always-on 集应该至少含核心 5 个.
+
+    BL-MEMORY-CATFISH-REMEMBER-BLACKLIST (5/16): catfish_remember 已黑名单,
+    改测 memory (hermes 0.13 统一工具, 顶替 catfish_remember 跨 session 记忆角色).
+    """
+    must_have = {"execute_code", "read_file", "write_file", "clarify", "memory"}
     assert must_have.issubset(_ALWAYS_ON_TOOLS)
 
 

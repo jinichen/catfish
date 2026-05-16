@@ -70,6 +70,10 @@ class OutputCtx:
     used_model: Any = None
     # BL-HERMES013-4 持久化 hook 用: gateway-issued request id
     request_id: str = ""
+    # BL-CACHE-AUDIT (5/17): Anthropic prompt cache tokens. 非 Anthropic 系
+    # provider 永远 0, AuditTransform 见 0 不写字段.
+    cache_creation_tokens: int = 0
+    cache_read_tokens: int = 0
 
 
 # ─────────────────────────────────────────────────────────────
@@ -132,6 +136,9 @@ class AuditTransform:
             status=ctx.status,
             error=ctx.error,
             security_concern=ctx.security_concern,
+            # BL-CACHE-AUDIT (5/17): 透传 Anthropic prompt cache 字段
+            cache_creation_tokens=ctx.cache_creation_tokens,
+            cache_read_tokens=ctx.cache_read_tokens,
         )
 
 
