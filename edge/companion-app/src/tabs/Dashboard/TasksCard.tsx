@@ -83,6 +83,13 @@ export default function TasksCard() {
     return (b.started_at || 0) - (a.started_at || 0);
   });
 
+  // BL-TASKS-CARD-HIDE-WHEN-EMPTY (5/16): 99% 时间无任务, 空卡占地不值.
+  // 无任务 + 不 loading + 不 error → 整张卡不渲染, ProactiveCard 自动占满
+  // (grid auto-fit + minmax 280px 父布局会自适应). 真有任务时 pop 出来.
+  if (!loading && !error && tasks.length === 0) {
+    return null;
+  }
+
   return (
     <div
       style={{
