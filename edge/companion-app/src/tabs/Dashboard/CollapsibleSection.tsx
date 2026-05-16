@@ -61,11 +61,14 @@ export default function CollapsibleSection({
     <section
       style={{
         gridColumn: "1 / -1",
-        marginTop: "var(--space-3)",
+        // BL-DASHBOARD-UI-CLEANUP (5/16 鸿波"还是乱"): section 之间留更大空气
+        // 防 5 个 section 卡片叠一起没分隔
+        marginTop: "var(--space-5)",
       }}
     >
-      {/* BL-FIX20 (5/8): 标题更轻 — 去 border-bottom, 减字号, hover 才高亮.
-          5-7 组叠起来视觉不嘈杂, 留更多注意力给卡片内容 */}
+      {/* BL-FIX20 (5/8): 标题轻 → BL-DASHBOARD-UI-CLEANUP (5/16) 回调: 5 个 section
+          堆起来不够清晰. 加 border-bottom + 字号升一档 + 去 uppercase
+          (中文 emoji 标题 uppercase 没意义). */}
       <button
         onClick={toggle}
         type="button"
@@ -73,32 +76,27 @@ export default function CollapsibleSection({
           width: "100%",
           background: "transparent",
           border: "none",
-          padding: "6px 0",
-          fontSize: "var(--text-xs)",
-          fontWeight: 500,
-          color: "var(--catfish-text-muted)",
-          textTransform: "uppercase",
-          letterSpacing: "0.04em",
+          borderBottom: "1px solid var(--catfish-border)",
+          padding: "8px 0",
+          fontSize: 14,  // 11px → 14px, 视觉层级清晰
+          fontWeight: 600,
+          color: "var(--catfish-text)",
           textAlign: "left",
           cursor: "pointer",
           display: "flex",
           alignItems: "center",
           gap: "8px",
-          marginBottom: "var(--space-2)",
+          marginBottom: "var(--space-3)",
         }}
         aria-expanded={!collapsed}
-        onMouseEnter={(e) => (e.currentTarget.style.color = "var(--catfish-text)")}
-        onMouseLeave={(e) =>
-          (e.currentTarget.style.color = "var(--catfish-text-muted)")
-        }
       >
         <span
           style={{
             display: "inline-block",
             transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)",
             transition: "transform 0.15s ease",
-            fontSize: "9px",
-            opacity: 0.6,
+            fontSize: 10,
+            opacity: 0.5,
           }}
           aria-hidden
         >
@@ -108,12 +106,11 @@ export default function CollapsibleSection({
         {count !== undefined && (
           <span
             style={{
-              fontSize: "var(--text-xs)",
+              fontSize: 12,
               color: "var(--catfish-text-muted)",
               fontWeight: 400,
               opacity: 0.7,
-              textTransform: "none",
-              letterSpacing: 0,
+              marginLeft: 4,
             }}
           >
             · {count}

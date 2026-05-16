@@ -43,6 +43,63 @@ function formatRelative(iso: string): string {
   return new Date(t).toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
 }
 
+/** BL-DASHBOARD-UI-CLEANUP (5/16): hermes Curator daemon 的 last_run_summary 是
+ * raw 文本, 含 dev log ('auto: no changes; llm: skipped (no candidates)') +
+ * 长 tag 分类列表 ('software-development 11个 ...'). 直接渲染太工程感.
+ *
+ * 友好化策略:
+ *   1. 全是 "no changes / skipped / no candidates" 等无变化关键词 → 显示 "✓ 无变化"
+ *   2. 否则截首 80 字符 + "展开" 按钮
+ */
+function FriendlySummary({ raw }: { raw: string }) {
+  const [expanded, setExpanded] = useState(false);
+
+  // case 1: 全是无变化的 dev 信号 — 显示友好版
+  const lower = raw.toLowerCase();
+  const noChangeSignals = [
+    "no changes", "skipped", "no candidates", "nothing to do",
+  ];
+  const isNoChange =
+    noChangeSignals.some((s) => lower.includes(s)) &&
+    !lower.includes("archived") &&
+    !lower.includes("merged");
+
+  if (isNoChange) {
+    return (
+      <div style={{ color: "var(--catfish-text-muted)" }}>
+        ✓ 无变化 (无 stale skill 需整理)
+      </div>
+    );
+  }
+
+  // case 2: 有内容, 截断 + 展开
+  const SHORT_LIMIT = 80;
+  const isLong = raw.length > SHORT_LIMIT;
+
+  return (
+    <div style={{ color: "var(--catfish-text)" }}>
+      {expanded || !isLong ? raw : raw.slice(0, SHORT_LIMIT) + "…"}
+      {isLong && (
+        <button
+          type="button"
+          onClick={() => setExpanded(!expanded)}
+          style={{
+            marginLeft: 6,
+            background: "transparent",
+            border: "none",
+            color: "var(--catfish-cyan)",
+            cursor: "pointer",
+            fontSize: 11,
+            padding: 0,
+          }}
+        >
+          {expanded ? "收起" : "展开"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function CuratorCard() {
   const [cfg, setCfg] = useState<CuratorConfig | null>(null);
   const [state, setState] = useState<CuratorStateView | null>(null);
@@ -184,7 +241,7 @@ export default function CuratorCard() {
             </span>
           </div>
 
-          {/* 上次跑的状态 */}
+          {/* 上次跑的状态 (BL-DASHBOARD-UI-CLEANUP 5/16): 友好化 + 截断长 summary) */}
           {!state.never_run && state.last_run_at && (
             <div
               style={{
@@ -203,32 +260,30 @@ export default function CuratorCard() {
                 </strong>
               </div>
               {state.last_run_summary && (
-                <div style={{ color: "var(--catfish-text)" }}>
-                  {state.last_run_summary}
-                </div>
+                <FriendlySummary raw={state.last_run_summary} />
               )}
             </div>
           )}
 
-          {/* 配置摘要 — 让员工一眼看到规矩 */}
-          <div
+          {/* BL-DASHBOARD-UI-CLEANUP (5/16): 配置参数 3 行 → 折叠到 details, 默认收.
+              鸿波反馈"信息密度过高". 员工不常调这些参数, 折叠减少视觉噪声. */}
+          <details
             style={{
               fontSize: 11,
               color: "var(--catfish-text-muted)",
-              lineHeight: 1.7,
               marginBottom: "var(--space-3)",
             }}
           >
-            <div>
-              · {cfg.stale_after_days} 天没用 → 标记"久未使用"
+            <summary style={{ cursor: "pointer", marginBottom: 4 }}>
+              整理规则 (4 条)
+            </summary>
+            <div style={{ lineHeight: 1.7, paddingLeft: 16 }}>
+              <div>· {cfg.stale_after_days} 天没用 → 标记"久未使用"</div>
+              <div>· {cfg.archive_after_days} 天没用 → 归档到不可见 (能恢复)</div>
+              <div>· 你 idle {cfg.min_idle_hours} 小时才开始整理</div>
+              <div>· 每 {Math.round(cfg.interval_hours / 24)} 天最多跑一次</div>
             </div>
-            <div>
-              · {cfg.archive_after_days} 天没用 → 归档到不可见 (能恢复)
-            </div>
-            <div>
-              · 你 idle {cfg.min_idle_hours} 小时才开始整理 · 每 {Math.round(cfg.interval_hours / 24)} 天最多跑一次
-            </div>
-          </div>
+          </details>
 
           {/* 开关 */}
           <button
