@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  BL-HERMES-MEMORY-AUDIT (5/16) — 每天 18:00 跑 audit hermes vs catfish 记忆字节增长.
+
+  目的: 半切方案 spec Step 3-5 (砍 catfish compressor/distill/summarizer 换 hermes)
+  的**前置条件验证** — hermes 那边 (USER.md/memories/) 真在涨, 不是空表演.
+
+  KPI 1 判定 (跑 30 天后):
+    delta_hermes_30d / (delta_hermes + delta_catfish) ≥ 70%
+    ⇒ Step 3-5 可启动 (hermes 接管了主要写入)
+
+  数据: ~/Library/Logs/catfish/hermes-memory-audit.csv (一天一行)
+  日志: /tmp/catfish-hermes-audit.log (stdout/stderr)
+
+  装法:
+    cp ~/person_task/catfish/edge/catfish-cli/launchd/ai.catfish.hermes-audit.plist \
+       ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.catfish.hermes-audit.plist
+    launchctl kickstart gui/$(id -u)/ai.catfish.hermes-audit   # 立刻跑一次验证
+
+  卸法:
+    launchctl bootout gui/$(id -u)/ai.catfish.hermes-audit
+    rm ~/Library/LaunchAgents/ai.catfish.hermes-audit.plist
+
+  30 天后 plot:
+    python3 -c "
+      import pandas as pd
+      df = pd.read_csv('~/Library/Logs/catfish/hermes-memory-audit.csv',
+                       parse_dates=['date'])
+      df.plot(x='date', y=['hermes_user_md_bytes', 'catfish_journal_bytes'])
+    "
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.catfish.hermes-audit</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>/usr/bin/python3 $HOME/person_task/catfish/edge/catfish-cli/scripts/audit_hermes_memory.py &gt;&gt; /tmp/catfish-hermes-audit.log 2&gt;&amp;1</string>
+    </array>
+
+    <!-- 每天 18:00 跑一次. 选 18:00 是因为员工下班前是高峰用 catfish 阶段尾,
+         数据反映 1 天完整 chat 后的字节增长. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>18</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- 系统 sleep 后错过 18:00 → 醒来立刻跑一次 (防长假断采样) -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/catfish-hermes-audit.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/catfish-hermes-audit.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>Nice</key>
+    <integer>10</integer>
+</dict>
+</plist>
