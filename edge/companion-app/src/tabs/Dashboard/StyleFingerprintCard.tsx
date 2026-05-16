@@ -154,6 +154,13 @@ export default function StyleFingerprintCard() {
         border: "1px solid var(--catfish-border)",
         borderRadius: "var(--radius-md)",
         padding: "var(--space-4)",
+        // BL-STYLE-FP-EQUAL-HEIGHT (5/16 V4): 数据态卡跟 RelationCard /
+        // UserProfileCard 同高, 三卡 row 整齐. 空态保持单行紧凑 (alignSelf:start).
+        height: "min(480px, 50vh)",
+        boxSizing: "border-box",
+        display: "flex",
+        flexDirection: "column",
+        overflowY: "auto",
       }}
     >
       <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)", marginBottom: "var(--space-2)" }}>

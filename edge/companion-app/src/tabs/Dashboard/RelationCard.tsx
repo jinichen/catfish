@@ -74,11 +74,11 @@ export default function RelationCard() {
         border: "1px solid var(--catfish-border)",
         borderRadius: "var(--radius-md)",
         padding: "var(--space-4)",
-        // BL-RELATION-CARD-FILL-HEIGHT (5/16 V3): grid + flex 经典做法.
-        // 卡撑齐 row 高 (height: 100%) + 内部 flex column, entries 区 flex:1 撑满
-        // 剩余空间 + overflowY auto 内部滚动. 跟右侧 UserProfileCard row 同步等高,
-        // 数据多时滚动看更多.
-        height: "100%",
+        // BL-RELATION-CARD-FILL-HEIGHT (5/16 V4 终): 固定卡 height 480 (响应式
+        // 不超过 50vh). UserProfileCard 同高. 三卡 row 整齐. 内部 entries 区
+        // flex:1 撑满剩余 + overflow auto 滚动.
+        // V3 错: height:100% + flex:1 没 row 高度限制, entries 无限撑高.
+        height: "min(480px, 50vh)",
         boxSizing: "border-box",
         display: "flex",
         flexDirection: "column",

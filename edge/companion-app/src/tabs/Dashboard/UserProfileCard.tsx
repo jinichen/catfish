@@ -146,9 +146,9 @@ export default function UserProfileCard() {
         border: "1px solid var(--catfish-border)",
         borderRadius: "var(--radius-md)",
         padding: "var(--space-4)",
-        // BL-USER-PROFILE-LIMIT-HEIGHT (5/16 V3): 撑齐 row + flex column 跟
-        // RelationCard 同步. fields 区 flex:1 撑满剩余 + 内部滚动.
-        height: "100%",
+        // BL-USER-PROFILE-LIMIT-HEIGHT (5/16 V4): 固定 height 480 跟 RelationCard
+        // 同步, 三卡 row 整齐. fields 区 flex:1 撑满 + overflow auto 滚动.
+        height: "min(480px, 50vh)",
         boxSizing: "border-box",
         display: "flex",
         flexDirection: "column",
