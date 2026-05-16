@@ -47,7 +47,7 @@ class _StoreInjectionFakeRegistry:
 
     def get_all_tool_names(self) -> List[str]:
         # 让 adapter 走 r.dispatch 主分支 (name 在已知列表里)
-        return ["memory", "read_file", "catfish_search_sessions"]
+        return ["memory", "todo", "read_file", "catfish_search_sessions"]
 
     def get_entry(self, name: str) -> Any:
         return types.SimpleNamespace(description=f"fake {name}")
@@ -212,6 +212,79 @@ def test_get_memory_store_init_failure_marks_failed(monkeypatch: pytest.MonkeyPa
 # ============================================================
 # 4. _get_memory_store 成功路径 + cache
 # ============================================================
+
+
+# ============================================================
+# 5. BL-TODO-BRIDGE-STORE — todo 工具 per-session 注入
+# ============================================================
+
+
+def _reset_todo_store_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(adapter, "_todo_store_cache", {})
+    monkeypatch.setattr(adapter, "_todo_store_init_failed", False)
+
+
+def test_dispatch_todo_injects_store_kwarg_default_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """name='todo' + 无 session_id → 走 __default__ store, kw['store'] 注入."""
+    _reset_todo_store_cache(monkeypatch)
+    fake = _StoreInjectionFakeRegistry()
+    _install_fake_registry(monkeypatch, fake)
+
+    # mock TodoStore class
+    class _FakeTodoStore:
+        def __init__(self):
+            self._items = []
+
+    fake_module = types.SimpleNamespace(TodoStore=_FakeTodoStore)
+    monkeypatch.setitem(__import__("sys").modules, "tools.todo_tool", fake_module)
+
+    result = asyncio.run(adapter.dispatch_tool("todo", {"todos": []}))
+    assert result["ok"] is True
+    call = fake.dispatch_calls[0]
+    assert "store" in call["kwargs"]
+    assert isinstance(call["kwargs"]["store"], _FakeTodoStore)
+
+
+def test_dispatch_todo_per_session_isolated_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    """两次 dispatch 不同 session_id → 各自独立 TodoStore 实例."""
+    _reset_todo_store_cache(monkeypatch)
+    fake = _StoreInjectionFakeRegistry()
+    _install_fake_registry(monkeypatch, fake)
+
+    class _FakeTodoStore:
+        def __init__(self):
+            self._items = []
+
+    fake_module = types.SimpleNamespace(TodoStore=_FakeTodoStore)
+    monkeypatch.setitem(__import__("sys").modules, "tools.todo_tool", fake_module)
+
+    asyncio.run(adapter.dispatch_tool("todo", {}, session_id="sess-A"))
+    asyncio.run(adapter.dispatch_tool("todo", {}, session_id="sess-B"))
+
+    store_a = fake.dispatch_calls[0]["kwargs"]["store"]
+    store_b = fake.dispatch_calls[1]["kwargs"]["store"]
+    assert store_a is not store_b, "不同 session 应该各自独立 store, 实际共享"
+
+
+def test_dispatch_todo_same_session_reuses_store(monkeypatch: pytest.MonkeyPatch) -> None:
+    """两次 dispatch 同 session_id → 同一 TodoStore 实例 (跨调用记得 todos)."""
+    _reset_todo_store_cache(monkeypatch)
+    fake = _StoreInjectionFakeRegistry()
+    _install_fake_registry(monkeypatch, fake)
+
+    class _FakeTodoStore:
+        def __init__(self):
+            self._items = []
+
+    fake_module = types.SimpleNamespace(TodoStore=_FakeTodoStore)
+    monkeypatch.setitem(__import__("sys").modules, "tools.todo_tool", fake_module)
+
+    asyncio.run(adapter.dispatch_tool("todo", {}, session_id="sess-X"))
+    asyncio.run(adapter.dispatch_tool("todo", {}, session_id="sess-X"))
+
+    store_1 = fake.dispatch_calls[0]["kwargs"]["store"]
+    store_2 = fake.dispatch_calls[1]["kwargs"]["store"]
+    assert store_1 is store_2, "同 session 应该复用 store, 实际新建"
 
 
 def test_get_memory_store_caches_on_success(monkeypatch: pytest.MonkeyPatch) -> None:

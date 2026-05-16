@@ -51,6 +51,61 @@ _registry_module = None
 _memory_store_cache: Any = None
 _memory_store_init_failed = False
 
+# ============================================================
+# BL-TODO-BRIDGE-STORE (5/16 sprint follow-up)
+# ============================================================
+# hermes 0.13 todo_tool 同 memory_tool 模式 — handler 要 kw['store']=TodoStore.
+# 设计上 per-AIAgent / per-session (TodoStore 是纯 in-memory 不持久化), 所以
+# catfish 这边按 session_id 路由. session_id 缺失 → 走 __default__ 全局
+# singleton (兼容老客户端不传 session_id).
+#
+# LRU 简化: 上限 50 个 session 防 OOM. catfish 单员工本机, 实际峰值不会到.
+# ============================================================
+
+_TODO_STORE_DEFAULT_KEY = "__default__"
+_TODO_STORE_MAX_SESSIONS = 50
+_todo_store_cache: Dict[str, Any] = {}
+_todo_store_init_failed = False
+
+
+def _get_todo_store(session_id: Optional[str]):
+    """Per-session lazy TodoStore. session_id 缺失 → __default__ key 全局共享.
+
+    简化 LRU: 超 50 session 时随机 evict 一个 oldest key (dict insertion order).
+    """
+    global _todo_store_init_failed
+    if _todo_store_init_failed:
+        return None
+
+    key = session_id or _TODO_STORE_DEFAULT_KEY
+    if key in _todo_store_cache:
+        return _todo_store_cache[key]
+
+    # LRU evict
+    if len(_todo_store_cache) >= _TODO_STORE_MAX_SESSIONS:
+        oldest_key = next(iter(_todo_store_cache))
+        _todo_store_cache.pop(oldest_key, None)
+        logger.info(
+            "BL-TODO-BRIDGE-STORE: cache 满, evict session=%r", oldest_key,
+        )
+
+    try:
+        from tools.todo_tool import TodoStore  # noqa: PLC0415
+        store = TodoStore()
+        _todo_store_cache[key] = store
+        logger.info(
+            "BL-TODO-BRIDGE-STORE: 新建 TodoStore session=%r (cache 大小=%d)",
+            key, len(_todo_store_cache),
+        )
+        return store
+    except Exception as e:
+        logger.exception(
+            "BL-TODO-BRIDGE-STORE: TodoStore 初始化失败, todo 工具将持续返 disabled: %s",
+            e,
+        )
+        _todo_store_init_failed = True
+        return None
+
 
 def _read_hermes_memory_config() -> dict:
     """读 ~/.hermes/config.yaml 的 memory 段. 缺失 / 解析失败返空 dict.
@@ -593,7 +648,9 @@ def _check_execute_code_security(name: str, args: Dict[str, Any]) -> str | None:
     return msg
 
 
-async def dispatch_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+async def dispatch_tool(
+    name: str, args: Dict[str, Any], session_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """调用一个 tool。
 
     返回的字典固定 shape:
@@ -654,7 +711,7 @@ async def dispatch_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     start = time.time()
-    result = await _do_dispatch(name, args)
+    result = await _do_dispatch(name, args, session_id=session_id)
     latency_ms = (time.time() - start) * 1000
 
     # 写 audit (永远不抛, 不影响主流程返回).
@@ -833,12 +890,15 @@ def _resolve_tool_name_or_error(
     }
 
 
-def _build_extra_kwargs_for_hermes(name: str) -> Dict[str, Any]:
+def _build_extra_kwargs_for_hermes(
+    name: str, session_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """根据 tool name 决定要给 hermes registry.dispatch 透传哪些 kwargs.
 
-    BL-MEMORY-BRIDGE-STORE (5/16): hermes 0.13 memory 工具 handler 要
-    kw['store'] 注入 MemoryStore — 不然 hermes 返 'Memory is not available'.
-    todo 工具同模式, 但 catfish 当前没人调, 不做注入.
+    BL-MEMORY-BRIDGE-STORE (5/16): memory 工具 handler 要 kw['store']=MemoryStore.
+    BL-TODO-BRIDGE-STORE (5/16): todo 工具同模式, 但 store 是 per-session 的
+      (TodoStore in-memory 无持久化, hermes 设计 per-AIAgent). session_id 缺失
+      走 __default__ 全局 singleton (兼容老客户端).
     """
     extra_kw: Dict[str, Any] = {}
     if name == "memory":
@@ -847,14 +907,19 @@ def _build_extra_kwargs_for_hermes(name: str) -> Dict[str, Any]:
             extra_kw["store"] = mem_store
         # store 拿不到也照常 dispatch — hermes memory_tool 会自己返
         # "Memory is not available", 比我们这层拦截更对齐 hermes 错误格式.
+    elif name == "todo":
+        todo_store = _get_todo_store(session_id)
+        if todo_store is not None:
+            extra_kw["store"] = todo_store
     return extra_kw
 
 
 async def _dispatch_via_hermes_registry(
     name: str, args: Dict[str, Any], registry: Any,
+    session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """走 hermes registry.dispatch 主路径. 含 store 注入 + 结果截断 + memory 工具诊断 log."""
-    extra_kw = _build_extra_kwargs_for_hermes(name)
+    extra_kw = _build_extra_kwargs_for_hermes(name, session_id=session_id)
 
     try:
         dispatch_fn = registry.dispatch
@@ -893,7 +958,9 @@ async def _dispatch_via_hermes_registry(
         return _err_result(name, e)
 
 
-async def _do_dispatch(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+async def _do_dispatch(
+    name: str, args: Dict[str, Any], session_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """实际 dispatch 逻辑. 抽出来让 dispatch_tool 可以包 audit.
 
     5 个分支按优先级:
@@ -945,7 +1012,7 @@ async def _do_dispatch(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     # 5. hermes registry.dispatch 主路径
-    return await _dispatch_via_hermes_registry(name, args, r)
+    return await _dispatch_via_hermes_registry(name, args, r, session_id=session_id)
 
 
 def _truncate_for_ipc(value: Any, max_size: int) -> Any:

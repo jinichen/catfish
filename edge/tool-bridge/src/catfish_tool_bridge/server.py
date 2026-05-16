@@ -56,9 +56,13 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
     if method == "tools/dispatch":
         name = params.get("name")
         args = params.get("args") or {}
+        # BL-TODO-BRIDGE-STORE (5/16): session_id 可选, 用于 per-session stateful tool
+        # 注入 (hermes todo / 未来其它 per-session store). 客户端不传 → 走 __default__
+        # 全局 singleton, 行为兼容老客户端.
+        session_id = params.get("session_id")
         if not name:
             return _error(req_id, INVALID_PARAMS, "params.name 必填")
-        result = await adapter.dispatch_tool(name, args)
+        result = await adapter.dispatch_tool(name, args, session_id=session_id)
         return _success(req_id, result)
 
     if method == "health":
