@@ -55,12 +55,18 @@ class User:
     # 从 OIDCProvider 验 JWT 后塞 effective_allowed_models claim (identity 已经
     # 合并 user.allowed_models + dept.allowed_models 决议过).
     effective_allowed_models: list[str] = None  # type: ignore[assignment]
+    # BL-RBAC-DAY4 (5/17): allowed_tools from OIDC effective_allowed_tools claim.
+    # 跟 allowed_models 同语义. gateway tools_sanitizer 用它过滤 LLM tool 列表.
+    # ALWAYS_ON_TOOLS 永远兜底, 不被这个列表 drop.
+    effective_allowed_tools: list[str] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         if self.managed_departments is None:
             self.managed_departments = []
         if self.effective_allowed_models is None:
             self.effective_allowed_models = []
+        if self.effective_allowed_tools is None:
+            self.effective_allowed_tools = []
 
     def can_access(self, model) -> bool:
         """BL-RBAC-DAY3B (5/17): 真 RBAC. effective_allowed_models 空 = 全允许.
@@ -74,6 +80,23 @@ class User:
         # model 可以是 ModelConfig 或 model name str
         model_name = getattr(model, "name", None) or str(model)
         return model_name in self.effective_allowed_models
+
+    def can_use_tool(self, tool_name: str) -> bool:
+        """BL-RBAC-DAY4 (5/17): 真 RBAC. effective_allowed_tools 空 = 全允许.
+
+        跟 can_access(model) 同语义.
+
+        注: 此方法只判 RBAC 白名单. 不判 ALWAYS_ON_TOOLS — 那个由
+        tools_sanitizer 在调用前作为兜底层, 保证 LLM agent loop 底座工具
+        (memory / execute_code / read_file 等) 不会被 dept RBAC drop.
+        """
+        if self.is_sysadmin():
+            return True
+        if not self.effective_allowed_tools:
+            return True  # 空 list = 全允许 (无 dept 配置 / 开发期默认)
+        if not isinstance(tool_name, str) or not tool_name:
+            return False
+        return tool_name in self.effective_allowed_tools
 
     def is_sysadmin(self) -> bool:
         """BL-ARCH1 P1 (5/10): 超级管理员, identity-server users.yaml tier=sysadmin."""

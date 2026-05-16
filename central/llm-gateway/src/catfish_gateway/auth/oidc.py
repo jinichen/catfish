@@ -190,6 +190,12 @@ class OIDCProvider(AuthProvider):
             eam_list = [str(m) for m in eam_raw if m]
         else:
             eam_list = []
+        # BL-RBAC-DAY4 (5/17): effective_allowed_tools 同套路
+        eat_raw = payload.get("effective_allowed_tools", [])
+        if isinstance(eat_raw, list):
+            eat_list = [str(t) for t in eat_raw if t]
+        else:
+            eat_list = []
         return User(
             sub=sub,
             department=payload.get("department", ""),
@@ -199,4 +205,5 @@ class OIDCProvider(AuthProvider):
             managed_departments=managed_list,
             auth_method=self.name,
             effective_allowed_models=eam_list,
+            effective_allowed_tools=eat_list,
         )

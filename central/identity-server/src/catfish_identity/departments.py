@@ -40,10 +40,17 @@ class Department:
     description: str = ""
     created_at: str | None = None
     updated_at: str | None = None
+    # BL-RBAC-DAY4 (5/17): per-dept allowed_tools 白名单 (gateway tools_sanitizer 过滤).
+    # [] = 全允许 (开放默认); [t1, t2] = 只这俩 + ALWAYS_ON_TOOLS 兜底.
+    allowed_tools: list[str] = field(default_factory=list)
 
     def is_open(self) -> bool:
         """allowed_models 为空 = 全允许 (开放默认)."""
         return not self.allowed_models
+
+    def is_tools_open(self) -> bool:
+        """allowed_tools 为空 = 全允许."""
+        return not self.allowed_tools
 
     def to_dict(self) -> dict:
         return {
@@ -53,6 +60,7 @@ class Department:
             "description": self.description,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "allowed_tools": self.allowed_tools,
         }
 
 
@@ -78,7 +86,9 @@ class DepartmentRegistry:
             async with pool.acquire() as conn:
                 rows = await conn.fetch(
                     "SELECT name, allowed_models, quota_models_day, description, "
-                    "created_at, updated_at "
+                    "created_at, updated_at, "
+                    # BL-RBAC-DAY4 (5/17): allowed_tools 加入
+                    "allowed_tools "
                     "FROM departments"
                 )
         except Exception as e:
@@ -95,6 +105,15 @@ class DepartmentRegistry:
                     am = []
             if not isinstance(am, list):
                 am = []
+            # BL-RBAC-DAY4: allowed_tools 解析 (跟 allowed_models 同套路)
+            at = row.get("allowed_tools")
+            if isinstance(at, str):
+                try:
+                    at = json.loads(at)
+                except Exception:
+                    at = []
+            if not isinstance(at, list):
+                at = []
             loaded[row["name"]] = Department(
                 name=row["name"],
                 allowed_models=[str(m) for m in am],
@@ -102,6 +121,7 @@ class DepartmentRegistry:
                 description=row["description"] or "",
                 created_at=row["created_at"].isoformat() if row.get("created_at") else None,
                 updated_at=row["updated_at"].isoformat() if row.get("updated_at") else None,
+                allowed_tools=[str(t) for t in at],
             )
         self._cache = loaded
         self._loaded = True
@@ -161,3 +181,33 @@ async def get_effective_allowed_models(
         )
         return []
     return dept.allowed_models
+
+
+async def get_effective_allowed_tools(
+    user_email: str,
+    user_allowed_tools: list[str] | None,
+    user_department: str,
+) -> list[str]:
+    """BL-RBAC-DAY4 (5/17): 合并 user.allowed_tools + dept.allowed_tools.
+
+    决议规则跟 get_effective_allowed_models 完全一致:
+      1. user.allowed_tools is not None → 用 user 的 (override)
+      2. user.allowed_tools is None → 继承 dept.allowed_tools
+      3. dept 不存在 → 返 [] (上层 gateway 解读为"全允许")
+
+    返 [] = 全允许. 返 [t1, t2] = 只这俩 + gateway 端 ALWAYS_ON_TOOLS 兜底.
+    """
+    if user_allowed_tools is not None:
+        return user_allowed_tools
+
+    if not user_department:
+        return []
+
+    dept = await get_global_registry().get(user_department)
+    if dept is None:
+        logger.warning(
+            "user %s 的 department=%r 不在 departments 表, tools fallback 全允许",
+            user_email, user_department,
+        )
+        return []
+    return dept.allowed_tools

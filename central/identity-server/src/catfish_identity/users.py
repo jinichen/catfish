@@ -85,6 +85,10 @@ class IdentityUser:
     # [m1, m2] = 用户级 override 收紧只允许这俩.
     # gateway 拿到 user → 走 get_effective_allowed_models() 决议.
     allowed_models: list[str] | None = None
+    # ── RBAC Day 4 (5/17 加, BL-RBAC-DAY4) ──
+    # 跟 allowed_models 同套语义, tools 维度. None = 继承 dept; [] = 全允许 override;
+    # [t1, t2] = 收紧 (+ gateway 端 ALWAYS_ON_TOOLS 兜底 LLM agent loop 底座).
+    allowed_tools: list[str] | None = None
 
     def effective_role(self) -> str:
         """实际生效的 role. 优先 role 字段, 兜底 tier.
@@ -121,6 +125,8 @@ class IdentityUser:
             # BL-RBAC-DAY3B: 同步版本返的是 raw user.allowed_models, 不合并 dept.
             # gateway 应该走异步版的 effective_allowed_models claim.
             "allowed_models_raw": self.allowed_models,
+            # BL-RBAC-DAY4 (5/17): allowed_tools raw (gateway 走异步版拿 effective)
+            "allowed_tools_raw": self.allowed_tools,
         }
 
     async def to_oidc_claims_async(self) -> dict:
@@ -129,7 +135,10 @@ class IdentityUser:
         BL-RBAC-DAY3B (5/17): /token + /authorize 发 ID Token 时走这个, gateway
         验 token 后拿 effective_allowed_models claim 直接过滤 catalog + chat.
         """
-        from .departments import get_effective_allowed_models  # noqa: PLC0415
+        from .departments import (  # noqa: PLC0415
+            get_effective_allowed_models,
+            get_effective_allowed_tools,
+        )
 
         base = self.to_oidc_claims()
         effective = await get_effective_allowed_models(
@@ -138,6 +147,14 @@ class IdentityUser:
             user_department=self.department,
         )
         base["effective_allowed_models"] = effective
+        # BL-RBAC-DAY4 (5/17): 同步骤拿 effective_allowed_tools, gateway 验
+        # token 后直接拿这个 claim 过滤 LLM tool 列表 (tools_sanitizer).
+        effective_tools = await get_effective_allowed_tools(
+            user_email=self.email,
+            user_allowed_tools=self.allowed_tools,
+            user_department=self.department,
+        )
+        base["effective_allowed_tools"] = effective_tools
         return base
 
 
@@ -267,7 +284,9 @@ class UserRegistry:
                     "managed_departments, locked, locked_at, locked_by, deleted_at, "
                     "created_at, created_by, last_login_at, must_change_password, "
                     # BL-RBAC-DAY3A (5/17): allowed_models per-user 白名单
-                    "allowed_models "
+                    "allowed_models, "
+                    # BL-RBAC-DAY4 (5/17): allowed_tools per-user 白名单
+                    "allowed_tools "
                     "FROM users"
                 )
         except Exception as e:
@@ -296,6 +315,16 @@ class UserRegistry:
                     am = None
             if am is not None and not isinstance(am, list):
                 am = None
+            # BL-RBAC-DAY4 (5/17): allowed_tools 解析 (同 allowed_models 套路)
+            at = row.get("allowed_tools")
+            if isinstance(at, str):
+                import json as _json  # noqa: PLC0415
+                try:
+                    at = _json.loads(at)
+                except Exception:
+                    at = None
+            if at is not None and not isinstance(at, list):
+                at = None
             loaded[email] = IdentityUser(
                 email=email,
                 password_hash=row["password_hash"],
@@ -315,6 +344,8 @@ class UserRegistry:
                 must_change_password=bool(row.get("must_change_password", False)),
                 # BL-RBAC-DAY3A: per-user model 白名单 (None = 继承 dept)
                 allowed_models=[str(m) for m in am] if isinstance(am, list) else None,
+                # BL-RBAC-DAY4: per-user tools 白名单 (None = 继承 dept)
+                allowed_tools=[str(t) for t in at] if isinstance(at, list) else None,
             )
         self._users = loaded
         logger.info("PG users 加载: %d 个用户 (覆盖 yaml)", len(loaded))
@@ -382,7 +413,10 @@ class UserRegistry:
                     sql = (
                         "SELECT email, password_hash, name, department, tier, role, "
                         "managed_departments, locked, locked_at, locked_by, deleted_at, "
-                        "created_at, created_by, last_login_at, must_change_password "
+                        "created_at, created_by, last_login_at, must_change_password, "
+                        # BL-RBAC-DAY3A (5/17) allowed_models + DAY4 allowed_tools
+                        # (Day 3a 漏了 SELECT — parse 用 r.get 没 KeyError 但永远 None)
+                        "allowed_models, allowed_tools "
                         "FROM users"
                     )
                     where = []
@@ -419,6 +453,15 @@ class UserRegistry:
                             am = None
                     if am is not None and not isinstance(am, list):
                         am = None
+                    # BL-RBAC-DAY4: allowed_tools 解析
+                    at = r.get("allowed_tools")
+                    if isinstance(at, str):
+                        try:
+                            at = _json.loads(at)
+                        except Exception:
+                            at = None
+                    if at is not None and not isinstance(at, list):
+                        at = None
                     out.append(IdentityUser(
                         email=r["email"], password_hash=r["password_hash"],
                         name=r["name"] or "", department=r["department"] or "",
@@ -433,6 +476,7 @@ class UserRegistry:
                         last_login_at=r["last_login_at"].isoformat() if r["last_login_at"] else None,
                         must_change_password=bool(r["must_change_password"]),
                         allowed_models=[str(m) for m in am] if isinstance(am, list) else None,
+                        allowed_tools=[str(t) for t in at] if isinstance(at, list) else None,
                     ))
                 return out
         # 内存 fallback (yaml only, 没 PG 时)

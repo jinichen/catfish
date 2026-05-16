@@ -2651,7 +2651,9 @@ async def chat_completions(
 
     # 防御性清洗 tools 数组 —— 畸形 tool (例如缺 function.name) 直接丢, 不让
     # LiteLLM 转 Gemini functionDeclarations 时 KeyError 把整个请求挂掉。
-    body = sanitize_tools(body)
+    # BL-RBAC-DAY4 (5/17): 传 user, sanitizer 按 user.effective_allowed_tools
+    # 过滤 LLM tool 列表. sysadmin / 空 list / ALWAYS_ON 永远放行.
+    body = sanitize_tools(body, user=user)
 
     # Gemini 防退化: 在 system 末尾加禁用 native tool_code 的指令
     # 没用 Gemini 模型 / 客户端不传 system 都会跳过, 无副作用

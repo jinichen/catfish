@@ -189,11 +189,15 @@ def _has_catfish_browser_tools(tools: list[Any]) -> bool:
     return False
 
 
-def sanitize_tools(body: dict[str, Any]) -> dict[str, Any]:
+def sanitize_tools(body: dict[str, Any], user: Any = None) -> dict[str, Any]:
     """原地修 body["tools"] —— 丢畸形条目, 修补能补的字段。
 
     返回原 body (mutate in-place + return), 调用方习惯链式。
     body 里没 tools / 不是 list / 空数组 都直接返回, 不报错。
+
+    BL-RBAC-DAY4 (5/17): 可选 user 参. 给了就按 user.can_use_tool() 过滤
+    白名单, ALWAYS_ON_TOOLS 永远保留 (LLM agent loop 底座). user=None 则
+    不做 RBAC 过滤 (兼容老 caller / 内部 loopback / 测试).
     """
     tools = body.get("tools")
     if not isinstance(tools, list):
@@ -294,6 +298,42 @@ def sanitize_tools(body: dict[str, Any]) -> dict[str, Any]:
             ", ".join(sorted(deduped_hermes_browser)[:8]),
         )
 
+    # BL-RBAC-DAY4 (5/17): per-user/dept allowed_tools 白名单过滤.
+    # user.effective_allowed_tools 空 = 全允许 (开放默认 / 无 dept 配置).
+    # 非空 = 收紧, 只允许列出 tool. ALWAYS_ON_TOOLS 永远保留 (LLM agent loop 底座).
+    # sysadmin 永远绕过 (User.can_use_tool 已实现).
+    rbac_dropped: list[str] = []
+    if user is not None and hasattr(user, "can_use_tool"):
+        rbac_kept: list[dict[str, Any]] = []
+        for t in cleaned:
+            if not isinstance(t, dict):
+                rbac_kept.append(t)
+                continue
+            fn = t.get("function")
+            nm = fn.get("name") if isinstance(fn, dict) else None
+            if not isinstance(nm, str):
+                rbac_kept.append(t)
+                continue
+            # ALWAYS_ON_TOOLS 兜底: 不论 RBAC 怎么收紧都保留 LLM 底座
+            if nm in _ALWAYS_ON_TOOLS:
+                rbac_kept.append(t)
+                continue
+            if user.can_use_tool(nm):
+                rbac_kept.append(t)
+            else:
+                rbac_dropped.append(nm)
+        if rbac_dropped:
+            logger.info(
+                "BL-RBAC-DAY4: drop %d tools per user.allowed_tools "
+                "(sub=%s dept=%s effective_allowed_tools=%d): %s",
+                len(rbac_dropped),
+                getattr(user, "sub", "?"),
+                getattr(user, "department", "?"),
+                len(getattr(user, "effective_allowed_tools", []) or []),
+                ", ".join(rbac_dropped[:10]),
+            )
+        cleaned = rbac_kept
+
     # BL-TOOL-CAP (5/15 鸿波撞 Qwen 122B 83 tools 空 400): 超 cap 时砍低优先级.
     # 实测 Qwen 122B ≥50 tools 就开始撞空 400 (上游无具体错). 保留 always-on 核心
     # + 剩 slot 按顺序填, 超 cap 的 drop. env CATFISH_MAX_TOOLS 调阈值.
@@ -333,7 +373,9 @@ def sanitize_tools(body: dict[str, Any]) -> dict[str, Any]:
     # 合的剔掉, 对应 tool message 一起丢. 防 BL-FIX4 部署前的旧轮次撞 Qwen Go gRPC
     # adapter 的"assistant 调过的 tool name 必须在 tools 列表里"校验 → 空 reason 400.
     # BL-TOOL-CAP 同样的问题: 砍掉的 tool 在历史里有调用 → 撞校验 → 400. 一起 scrub.
-    all_dropped_names: set[str] = set(deduped_hermes_browser) | set(capped_dropped)
+    all_dropped_names: set[str] = (
+        set(deduped_hermes_browser) | set(capped_dropped) | set(rbac_dropped)
+    )
     if all_dropped_names:
         _scrub_messages_for_dropped_tools(body, all_dropped_names)
 
