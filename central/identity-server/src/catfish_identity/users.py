@@ -100,9 +100,13 @@ class IdentityUser:
         return "employee"
 
     def to_oidc_claims(self) -> dict:
-        """渲染成 OIDC ID Token 的 claims (不含密码 hash).
+        """渲染成 OIDC ID Token 的 claims (不含密码 hash). **sync 路径**, 不含 RBAC
+        Day 3b 的 effective_allowed_models (需要 async 决议 dept).
 
         加 RBAC 字段 role / managed_departments, gateway / Companion 直接验.
+
+        BL-RBAC-DAY3B (5/17): 老 caller 仍用这个, 但发 ID Token 应该走异步版
+        `to_oidc_claims_async()` 拿 effective_allowed_models. 见 routes.py.
         """
         role = self.effective_role()
         managed = self.managed_departments if role == "manager" else []
@@ -114,7 +118,27 @@ class IdentityUser:
             "tier": self.tier,
             "role": role,
             "managed_departments": managed,
+            # BL-RBAC-DAY3B: 同步版本返的是 raw user.allowed_models, 不合并 dept.
+            # gateway 应该走异步版的 effective_allowed_models claim.
+            "allowed_models_raw": self.allowed_models,
         }
+
+    async def to_oidc_claims_async(self) -> dict:
+        """异步版本, 含 effective_allowed_models (合并 user + dept).
+
+        BL-RBAC-DAY3B (5/17): /token + /authorize 发 ID Token 时走这个, gateway
+        验 token 后拿 effective_allowed_models claim 直接过滤 catalog + chat.
+        """
+        from .departments import get_effective_allowed_models  # noqa: PLC0415
+
+        base = self.to_oidc_claims()
+        effective = await get_effective_allowed_models(
+            user_email=self.email,
+            user_allowed_models=self.allowed_models,
+            user_department=self.department,
+        )
+        base["effective_allowed_models"] = effective
+        return base
 
 
 def _default_users_path() -> Path:

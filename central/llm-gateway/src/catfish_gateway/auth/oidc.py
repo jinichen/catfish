@@ -183,6 +183,13 @@ class OIDCProvider(AuthProvider):
             managed_list = [str(d) for d in managed_raw if d]
         else:
             managed_list = []
+        # BL-RBAC-DAY3B (5/17): effective_allowed_models 从 OIDC claim 拿
+        # (identity to_oidc_claims_async 合并了 user.allowed_models + dept.allowed_models)
+        eam_raw = payload.get("effective_allowed_models", [])
+        if isinstance(eam_raw, list):
+            eam_list = [str(m) for m in eam_raw if m]
+        else:
+            eam_list = []
         return User(
             sub=sub,
             department=payload.get("department", ""),
@@ -191,4 +198,5 @@ class OIDCProvider(AuthProvider):
             role=payload.get("role", "employee"),
             managed_departments=managed_list,
             auth_method=self.name,
+            effective_allowed_models=eam_list,
         )

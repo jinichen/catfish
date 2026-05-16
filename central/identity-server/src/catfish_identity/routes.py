@@ -292,7 +292,7 @@ def make_router(
         Day 1 (5/14): client_credentials 的 client_secret **必须验** (服务身份硬要求).
         """
         if grant_type == "authorization_code":
-            return _handle_authorization_code(
+            return await _handle_authorization_code(
                 code=code,
                 redirect_uri=redirect_uri,
                 client_id=client_id,
@@ -312,7 +312,7 @@ def make_router(
                 issuer=issuer,
             )
         elif grant_type == "refresh_token":
-            return _handle_refresh_token(
+            return await _handle_refresh_token(
                 refresh_token_str=refresh_token,
                 client_id=client_id,
                 requested_scope=scope,
@@ -377,7 +377,7 @@ def make_router(
 # ============================================================
 
 
-def _handle_authorization_code(
+async def _handle_authorization_code(
     *,
     code: str,
     redirect_uri: str,
@@ -437,7 +437,8 @@ def _handle_authorization_code(
         )
 
     # 组装 ID Token (含 user claims, audience=client_id 表示这 token 给 client 看)
-    id_claims = record.user.to_oidc_claims()
+    # BL-RBAC-DAY3B (5/17): 用 async 版本拿 effective_allowed_models (合并 user+dept)
+    id_claims = await record.user.to_oidc_claims_async()
     if record.nonce:
         id_claims["nonce"] = record.nonce
     id_token = signer.sign_id_token(
@@ -495,7 +496,7 @@ def _handle_authorization_code(
     return JSONResponse(response_body)
 
 
-def _handle_refresh_token(
+async def _handle_refresh_token(
     *,
     refresh_token_str: str,
     client_id: str,
@@ -605,7 +606,8 @@ def _handle_refresh_token(
     refresh_token_store.revoke(record.token)
 
     # 签新 access_token (跟 authorization_code 流程同模式 — 含 user claims, RFC 9068)
-    user_claims = user.to_oidc_claims()
+    # BL-RBAC-DAY3B (5/17): async 版本拿 effective_allowed_models
+    user_claims = await user.to_oidc_claims_async()
     access_token_claims = dict(user_claims)
     access_token_claims["scope"] = final_scope
     access_token_claims["token_use"] = "access"

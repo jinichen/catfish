@@ -50,15 +50,30 @@ class User:
     role: str = "employee"
     managed_departments: list[str] = None  # type: ignore[assignment]
     auth_method: str = "unknown"
+    # BL-RBAC-DAY3B (5/17): allowed_models from OIDC effective_allowed_models claim.
+    # [] = 全允许 (开放默认 / 无 dept 配置). [m1, m2] = 收紧只允许这俩.
+    # 从 OIDCProvider 验 JWT 后塞 effective_allowed_models claim (identity 已经
+    # 合并 user.allowed_models + dept.allowed_models 决议过).
+    effective_allowed_models: list[str] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         if self.managed_departments is None:
             self.managed_departments = []
+        if self.effective_allowed_models is None:
+            self.effective_allowed_models = []
 
     def can_access(self, model) -> bool:
-        # P0: 任何认证用户能调任何模型
-        # Phase 2: 部门 + 模型敏感度 (RBAC)
-        return True
+        """BL-RBAC-DAY3B (5/17): 真 RBAC. effective_allowed_models 空 = 全允许.
+
+        sysadmin 永远全允许 (绕过 RBAC, 用于运维 / 排错).
+        """
+        if self.is_sysadmin():
+            return True
+        if not self.effective_allowed_models:
+            return True  # 空 list = 全允许 (无 dept 配置 / 开发期默认)
+        # model 可以是 ModelConfig 或 model name str
+        model_name = getattr(model, "name", None) or str(model)
+        return model_name in self.effective_allowed_models
 
     def is_sysadmin(self) -> bool:
         """BL-ARCH1 P1 (5/10): 超级管理员, identity-server users.yaml tier=sysadmin."""
