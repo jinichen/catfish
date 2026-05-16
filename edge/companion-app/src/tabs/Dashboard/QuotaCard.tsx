@@ -59,15 +59,9 @@ export default function QuotaCard() {
       )}
       {data && (
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
-          <QuotaRow label="近 1 分钟" w={data.minute} />
+          {/* BL-QUOTA-CARD-SLIM (5/16): 砍"近 1 分钟" (没人在意秒级 burst) + 砍"部门今日"
+              (跟员工本人无关, 是 admin 关注的). 只留"今日滑动 24h" — 员工真在意的就这条. */}
           <QuotaRow label="今日 (滑动 24h)" w={data.day} primary />
-          {data.department && (
-            <QuotaRow
-              label={`部门 · ${data.department} 今日`}
-              w={data.department_day}
-              dim
-            />
-          )}
         </div>
       )}
 
