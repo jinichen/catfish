@@ -44,8 +44,13 @@ import QuotaCard from "./QuotaCard";
 // import { SessionCleanupCard } from "./SessionCleanupCard";
 import CatalogCard from "./CatalogCard";
 import SkillsMcpCard from "./SkillsMcpCard";
-import LearningCard from "./LearningCard";
-import SkillRevisionCard from "./SkillRevisionCard";
+// BL-LEARN-SECTION-KILL (5/16): 整个"学习/改进" section 砍 (两张卡都对一般员工无效).
+// - LearningCard: 4 个数字里 3 个是开发者维度 (tool_calls / ship_skill / token=0 bug),
+//   只"对话 24 次"对员工有点用 — ROI 太低不值留卡
+// - SkillRevisionCard: 99% 时间"暂时无待处理", 同 Curator 模式无内容
+// backend (LearningAggregator / SkillRevision) 仍跑, 真要看走"控制台"tab.
+// import LearningCard from "./LearningCard";
+// import SkillRevisionCard from "./SkillRevisionCard";
 import ProactiveCard from "./ProactiveCard";
 import AgentPrefsCard from "./AgentPrefsCard";
 import RelationCard from "./RelationCard";
@@ -146,19 +151,9 @@ export default function DashboardTab() {
             未来: sidebar 加 FTS5 搜索框替代 (P2). */}
       </CollapsibleSection>
 
-      {/* 第五组: 学习 — 我的 learning + 我提的 skill 改进 (默认收).
-          BL-ARCH2: SkillAuditCard (跨员工 skill 评分聚合) / AuditCard (历史大查询)
-          已挪去 web /admin / /audit. */}
-      <CollapsibleSection
-        id="learn"
-        title="📚 学习 / 改进"
-        defaultCollapsed
-        count={2}
-      >
-        <LearningCard />
-        {/* BL-MM14 / MM15 (5/8): skill 改进提议 + 有效性跟踪 */}
-        <SkillRevisionCard />
-      </CollapsibleSection>
+      {/* 第五组 "📚 学习/改进" 5/16 整组砍 (BL-LEARN-SECTION-KILL):
+          LearningCard 数字 3/4 是开发者维度 (tool_calls / ship_skill / token=0 bug),
+          SkillRevisionCard 99% 无待处理. backend 仍跑, 真要看走控制台 tab. */}
     </div>
   );
 }
