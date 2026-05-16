@@ -105,6 +105,48 @@ export default function StyleFingerprintCard() {
     }
   };
 
+  // BL-STYLE-FP-COMPACT-EMPTY (5/16): 99% 员工没点过"重新抽取", view.exists=false.
+  // 卡跟左边 RelationCard / UserProfileCard 撑齐高度 → 大块空白. 空时压缩成单行 hint
+  // (不占大卡空间), 真抽过样有数据时正常显示. 比 return null 好的是: 保留入口让员工
+  // 看到这功能存在, 想用时点按钮 (按 grid auto-fit reflow 会让 layout 稍紧).
+  if (!view?.exists && !error && !refreshing) {
+    return (
+      <div
+        style={{
+          background: "var(--catfish-bg-elevated)",
+          border: "1px solid var(--catfish-border)",
+          borderRadius: "var(--radius-md)",
+          padding: "var(--space-3) var(--space-4)",
+          alignSelf: "start",  // 不撑齐 row 高度, 只占内容自然高度
+          display: "flex",
+          alignItems: "center",
+          gap: "var(--space-3)",
+          minHeight: "auto",
+        }}
+      >
+        <span style={{ fontSize: 13 }}>
+          ✍️ {agentName}还没学过你的文书风格
+        </span>
+        <button
+          onClick={() => void refresh()}
+          style={{
+            marginLeft: "auto",
+            fontSize: 12,
+            padding: "4px 12px",
+            background: "var(--catfish-cyan)",
+            color: "white",
+            border: "none",
+            borderRadius: "var(--radius-sm)",
+            cursor: "pointer",
+          }}
+          title="扫描 ~/Documents/work/ + ~/.catfish/output/ 学你的文书风格"
+        >
+          学一下
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div
       style={{
@@ -141,12 +183,6 @@ export default function StyleFingerprintCard() {
       {error && (
         <div style={{ fontSize: 12, color: "var(--status-err)", marginBottom: "var(--space-2)" }}>
           {error}
-        </div>
-      )}
-
-      {!view?.exists && !error && (
-        <div style={{ fontSize: 13, color: "var(--catfish-text-muted)" }}>
-          {view?.hint || `还没抽过你的文书风格. 点 "重新抽取" 让${agentName}扫一下你的历史文档.`}
         </div>
       )}
 
