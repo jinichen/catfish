@@ -72,9 +72,14 @@ def _render_compact(facts: dict) -> str | None:
     if not facts:
         return None
     lines = [
-        "## 当前 session 已确认的硬事实 (员工明确告诉过, gateway 自动注入)",
+        "## 当前 session 内的临时事实 (gateway 自动注入)",
         "",
-        "这些是员工在本 session 内明确告诉你的事实, 你**必须遵守**, 不要再问 / 不要忘 / 不要瞎猜:",
+        "⚠️ **下面是仅本 session 内有效的临时速记** (catfish_remember 工具写的). "
+        "**session 结束这些事实就消失** — 如果其中有**跨 session 仍重要**的事实 "
+        "(例如员工名 / 项目背景 / 长期偏好), 你**必须**额外用 "
+        "`memory(action='add', key=..., value=...)` 写到永久记忆.",
+        "",
+        "你必须遵守这些事实, 不要再问 / 不要忘 / 不要瞎猜:",
         "",
     ]
     for key, revisions in sorted(facts.items()):
@@ -84,7 +89,6 @@ def _render_compact(facts: dict) -> str | None:
         lines.append(f"- **{key}**: {current_val}")
     lines.append("")
     lines.append(
-        "员工要更新这些事实 → 调 catfish_remember(key, value) 重存. "
-        "session 结束员工自己 rm ~/.catfish/session_facts.json 清空."
+        "⚠️ 这些是 session-only. **长期事实请用 memory 工具**, 不要继续用 catfish_remember."
     )
     return "\n".join(lines)

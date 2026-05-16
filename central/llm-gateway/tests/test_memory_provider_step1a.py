@@ -109,7 +109,9 @@ def test_session_facts_provider_with_data(tmp_path, monkeypatch):
     assert out is not None
     assert "EIS" in out
     assert "http://eis.example.com" in out
-    assert "硬事实" in out  # 渲染 block 文案
+    # BL-MEMORY-FULL-HERMES 文案: 强调 session-only + 引导用 memory
+    assert "临时事实" in out or "session 内" in out
+    assert "memory" in out  # nudge LLM 用 memory 工具
 
 
 def test_session_facts_provider_corrupt_json_returns_none(tmp_path, monkeypatch):
@@ -206,13 +208,12 @@ def test_session_history_provider_no_db_returns_none(monkeypatch):
 # ── 切换零行为验证 (跟原 inject 输出一致) ─────────────
 
 
-def test_session_facts_provider_output_matches_legacy_inject(tmp_path, monkeypatch):
-    """SessionFactsProvider 输出跟原 inject_session_facts 渲染同样内容."""
-    from catfish_gateway.session_facts import (
-        read_session_facts,
-        render_facts_block,
-    )
+def test_session_facts_provider_keys_render(tmp_path, monkeypatch):
+    """SessionFactsProvider 渲染 facts 的 key + value, 含 memory tool nudge.
 
+    BL-MEMORY-FULL-HERMES 改: 不再跟 legacy render_facts_block 完全一致 (我们删了
+    revision history + 加了 memory tool nudge). 只测关键 key/value 真出来.
+    """
     monkeypatch.setenv("HOME", str(tmp_path))
     cat_dir = tmp_path / ".catfish"
     cat_dir.mkdir()
@@ -220,6 +221,9 @@ def test_session_facts_provider_output_matches_legacy_inject(tmp_path, monkeypat
         "key1": [{"value": "v1", "ts": time.time(), "prev_value": None}],
     }))
 
-    provider_output = SessionFactsProvider().prefetch(InjectContext())
-    legacy_output = render_facts_block(read_session_facts())
-    assert provider_output == legacy_output
+    out = SessionFactsProvider().prefetch(InjectContext())
+    assert out is not None
+    assert "key1" in out
+    assert "v1" in out
+    # 加 nudge 引导员工 / LLM 用 memory 工具做长期存储
+    assert "memory" in out

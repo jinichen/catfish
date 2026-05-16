@@ -16,13 +16,26 @@ memories/) 真在写, 不是空表演.
   5. catfish ~/.catfish/distilled_facts.md (catfish memory_distill 写, 5/16 上线)
   6. catfish ~/.catfish/session_facts.json (员工 catfish_remember 工具记)
 
-# KPI 1 判定 (半切 spec)
+# KPI (BL-MEMORY-FULL-HERMES 2026-05-16 鸿波拍板 V2)
 
-  跨 session 记忆**写**的源: hermes ≥ 70%
-  ⇒ delta_hermes_30days / (delta_hermes + delta_catfish) ≥ 70%
+5/16 实盘发现 LLM 选 catfish_remember 不调 hermes memory. 鸿波诊断:
+catfish_remember 简陋 LLM 选简单的, 真方向是充分用 hermes memory 能力 (C 方向).
 
-  即: hermes 那边 30 天涨的字节, 应占两边总涨幅 ≥ 70%.
-  达不到 → hermes memory tool 没真起来, 不能进 Step 3-5.
+新 KPI 分 2 维:
+
+  KPI A — hermes memory 是否真活 (跨 session 增长):
+    delta(hermes_user_md + hermes_memories) 月增 > 0
+    ⇒ memory.add 真被 LLM 调过
+
+  KPI B — catfish_remember 是否正确收窄到 session-only:
+    catfish_facts 月增 → **应该接近 0** (session 结束员工清, 跨 session 不持久)
+    catfish_facts 如果持续涨 → LLM 仍误用 catfish_remember 当长期存储, SOUL 纪律失效
+
+  理想数据 (BL-MEMORY-FULL-HERMES 1 个月后):
+    hermes_user_md_bytes: ▲ 4KB → 30KB+   (员工长期画像真攒)
+    hermes_memories_files: ▲ 4 → 20+       (分主题 memory 文件出现)
+    catfish_facts_bytes: ≈ 0-2KB (session-only 速记, 不持久)
+    catfish_journal_bytes: 维持 (本来就跨 session, 但希望 hermes 接管后能砍)
 
 # 输出
 

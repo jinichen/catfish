@@ -1,9 +1,73 @@
-# MEMORY-HALFCUT-PLAN — 半切 hermes 记忆方案
+# MEMORY-HALFCUT-PLAN — 半切 hermes 记忆方案 (V1 DEPRECATED)
 
 > 作者: 副手 + 鸿波
-> 日期: 2026-05-16
-> 状态: **DRAFT** — 待鸿波 review 后定稿
-> 关联: BL-MEMORY-DIAGNOSIS, BL-MEMORY-DISTILL-LIVE, BL-MEMORY-FTS5-RECALL, BL-MEMORY-PROVIDER-ABC
+> 日期: 2026-05-16 (V1) / 2026-05-16 下午 (V2 更正)
+> 状态: **⚠️ V1 方向错, V2 是 BL-MEMORY-FULL-HERMES (C 方向真切)**
+> 关联: BL-MEMORY-DIAGNOSIS, BL-MEMORY-DISTILL-LIVE, BL-MEMORY-FTS5-RECALL, BL-MEMORY-PROVIDER-ABC, BL-MEMORY-FULL-HERMES
+
+---
+
+## ⚠️ V2 更正 (2026-05-16 下午, 鸿波拍板)
+
+V1 方向 (半切) **不对**. 实盘 5/16 13-14 时数据 + 鸿波 2 次反问点亮真方向:
+
+**鸿波 1**: "现在 catfish_remember 在用不是因为它好, 是因为它简单. 真 fix 是追平 catfish_remember 跟 hermes memory 的差距, 不是砍 hermes"
+
+**鸿波 2**: "你提的 wrapper 方案只是写表 (换存储位置), 没充分利用 hermes memory 的 4 action + consolidate + search + agent 自管能力"
+
+**鸿波 3**: "catfish 中央为什么要记员工写什么? 这逻辑奇怪 — 违反 SOUL 第 2 条 '中央永不记录对话内容'"
+
+V2 方向: **C — 真用 hermes memory 完整能力**, 跟 SOUL 第 1/2 条哲学完美对齐:
+
+- 长期事实 → hermes `memory(action="add", ...)` (跨 session 持久, agent 自管 consolidate)
+- 短期速记 → catfish_remember (仅本 session, 跨 session 失忆)
+- 数据全在员工本机, catfish 中央不存副本 (回归"边缘主权")
+- catfish 治理 (audit / quota / red line) 在 gateway 层做 (model 调用维度), 不做内容维度
+
+V1 (半切, 砍 4 留 5) **作废**. V2 详细规划见下面 "V2 真方向" 章节.
+
+V1 内容保留**作历史参考**, 标 (V1).
+
+---
+
+## V2 真方向 (BL-MEMORY-FULL-HERMES C 完整切)
+
+### V2 4 个原则
+
+1. **catfish 中央不存内容副本** — SOUL 第 2 条 "永不记录对话内容". 客户 IT "想看员工记了啥" 是违背哲学的伪需求.
+2. **长期记忆走 hermes memory 4 action 完整 API** — add / replace / remove / search. agent 自管 consolidate (满了自整理).
+3. **catfish_remember 收窄到 session-only** — tool description 标注 "**跨 session 必失忆**". SOUL 主动记忆纪律明确 "长期事实必须 memory.add 不要 catfish_remember".
+4. **catfish 治理只在调用维度** — gateway audit model 调用次数 / token / 延迟. 不 audit 内容. Red line 在 catfish_remember wrapper 加 (memory tool 是 hermes 自管, 我们不拦).
+
+### V2 实施清单 (5/16 下午 ship)
+
+- ✅ C1: SOUL.md BL-MEMORY-NUDGE 段重写 — 明确 long-term=memory / short=catfish_remember, 加 4 action 用法
+- ✅ C2: catfish_remember tool description 标 "**跨 session 必失忆**" 警告 + 列正反场景
+- ✅ C3: inject_session_facts 加 banner "下面是临时事实, 长期请用 memory"
+- ✅ C5: audit script KPI 改 — catfish_facts 越**少**越好 (session-only), hermes_memories 越**多**越好
+
+### V2 留 P1 (1-2 周后, 看观察期数据)
+
+- ⏳ C6: 砍 session_summarizer (catfish 后台扫总结) — 让 hermes 自管 consolidate
+- ⏳ C7: 砍 employee_journal (catfish 670KB 历史) — 迁到 hermes memories/ 分主题文件
+- ⏳ C8: 砍 memory_distill (5/16 早上刚上线的) — hermes auto-consolidate 接管
+
+### V2 观察期 (5/16 → 6/15)
+
+audit script 每天 18:00 跑. 6/15 看数据:
+
+| 指标 | 起点 (5/16) | 6/15 目标 (V2 健康) |
+|---|---|---|
+| `hermes_user_md_bytes` | 846 B | ≥ 5 KB (LLM 真在 memory.add) |
+| `hermes_memories_files` | 4 (含 0 字节占位) | ≥ 10 (分主题文件出现) |
+| `catfish_facts_bytes` | 9 KB | ≤ 2 KB (session 结束员工清, 不再累积) |
+| `catfish_journal_bytes` | 670 KB | 不再涨 (BL-MM 准备砍后台 summarizer) |
+
+KPI 任一不达标 → V2 也有问题, 重新评估.
+
+---
+
+## ⚠️ 下面是 V1 内容 (已作废, 留作历史参考)
 
 ---
 

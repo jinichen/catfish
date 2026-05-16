@@ -216,10 +216,10 @@ def test_registry_output_matches_legacy_inject_keys(tmp_path, monkeypatch):
     out = registry.inject_subset(ctx, msgs, enabled_names=None)
     content = out[0]["content"]
 
-    # Registry 输出关键 marker (BL-MEMORY-INJECT-OPTIMIZE 后文案微调)
+    # Registry 输出关键 marker (BL-MEMORY-FULL-HERMES 5/16 文案 V2)
     expected_markers = [
-        "当前 session 已确认的硬事实",  # session_facts
-        "员工长期记忆",  # employee_journal (二选一, distilled 模式新文案)
+        "session 内的临时事实",  # session_facts (V2: 标 session-only + nudge memory)
+        "员工长期记忆",  # employee_journal (二选一, distilled 模式)
         "员工最近给你的反馈",  # feedback
     ]
     for marker in expected_markers:
