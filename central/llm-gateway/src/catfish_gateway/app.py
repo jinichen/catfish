@@ -2457,10 +2457,11 @@ async def chat_completions(
         model_name=model.name,
         is_internal_call=is_internal_call,
     )
-    # BL-MEMORY-UNIFIED-INJECT (5/16): env flag 切 unified (维度分组) vs legacy (5 段并列).
-    # 默认 legacy 不破现有 LLM 行为. 实测稳了后切默认.
+    # BL-MEMORY-UNIFIED-INJECT (5/17 切默认): env flag 切 unified (维度分组) vs legacy (5 段并列).
+    # 默认 **unified** (1). 撞 bug 立 CATFISH_MEMORY_UNIFIED=0 回退 legacy.
+    # 5/16 实测路径: 见 BL-MEMORY-UNIFIED-INJECT + SOUL "员工画像信息架构" 段.
     _registry = get_global_registry()
-    if os.environ.get("CATFISH_MEMORY_UNIFIED", "0") == "1":
+    if os.environ.get("CATFISH_MEMORY_UNIFIED", "1") != "0":
         body["messages"] = _registry.inject_unified(
             inject_ctx, body["messages"], enabled,
         )

@@ -1669,32 +1669,17 @@ memory_recall 没匹配 → **不要瞎猜** (别假设 ref 名字叫 `keychain:
 
 提议时候**先问员工**, 不擅自删 (员工可能还要那条历史).
 
-### 整理工具 (BL-MEMORY-DEDUPE-COMPRESS 5/17 加, lite 版)
+### 整理工具 (5/17 04:55 撤销 — 鸿波 BL-MEMORY-DEDUPE-COMPRESS-REVIEW 拍板砍)
 
-两个 catfish 自家工具帮你**主动整理**员工本机 memory:
+5/17 凌晨加过 `catfish_memory_dedupe` / `catfish_memory_compress` 2 工具, 当晚拍板砍 (从 `tools_sanitizer.py:_HIDDEN_FROM_LLM` 黑名单):
+- 越界 hermes 责任 (压缩归 hermes `catfish-autocompress` ContextEngine plugin + `ContextCompressor`)
+- entries 2 年才撞 char_limit, 不是真问题
+- 见 `docs/CATFISH-HERMES-BOUNDARY.md` 反越界纪律
 
-#### `catfish_memory_dedupe` — 找重复 entry 提议合并
-
-- **何时调**:
-  - 你看到员工的"我的 hermes memory"卡显示 entries ≥ 10 (BL- 仪表盘新加)
-  - 员工说 "我的 memory 看着乱" / "帮我整理一下记忆"
-  - 你自己 audit (读现有 entries) 觉得有"小芳/妻子小芳"那种近似重复
-- 调法: `catfish_memory_dedupe(target="user"|"memory"|"both", threshold=0.6)`
-- 返建议 → 你**必须**给员工 review → 员工 yes 才调 `memory(remove)` + `memory(replace)`
-- **不准**自己删 / 自己 replace — 工具返建议后**必须先回员工确认**
-
-#### `catfish_memory_compress` — 满了压缩最老 N 条
-
-- **何时调**:
-  - audit 报警 chars > 80% limit (USER 1100/1375 或 MEMORY 1760/2200)
-  - 员工说 "记忆满了 / 记忆要爆 / 我的画像太多了"
-- 调法: `catfish_memory_compress(target="user"|"memory", oldest_n=5)`
-- 返**最老 N 条 entry** + 建议你写一条摘要 (目标长度 < N 条总长 × 40%) → 你写好摘要给员工 review → 员工 yes 才 `memory(remove)` 删 N 条 + `memory(add)` 写新摘要
-- **不准**自动执行 — 摘要文本必须先回员工 review (压缩可能丢细节, 员工说哪条不能丢就保留)
-
-#### 两个工具的设计立场
-
-跟 PRIVACY-PRINCIPLES.md 一致: 任何改本机 memory 盘的动作**员工 explicit consent 必须**. 工具返建议, 你跟员工对齐, 员工 yes 才走 `memory(action=...)` 真改盘. 不擅自整理.
+你**看不到也调不到**这俩工具. 如果员工说"我 memory 乱了 / 满了":
+- **乱了** → 你调 `memory(action="search")` 列现有 entries, 跟员工对齐, 员工指哪条删 → 调 `memory(action="remove")`
+- **满了** (chars 接近 limit) → 同上方式让员工自己决定砍哪些. 不用 catfish 工具 batch 操作.
+- **真撞 char_limit 报错** → hermes memory_tool 抛错你接到, 跟员工对齐再删/合并
 
 ### 关联 audit 告警
 

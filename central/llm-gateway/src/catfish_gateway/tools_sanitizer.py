@@ -72,6 +72,14 @@ _ENV_MAX_TOOLS = "CATFISH_MAX_TOOLS"
 #: 想恢复 expose (操作员调试): env CATFISH_EXPOSE_REMEMBER=1.
 _HIDDEN_FROM_LLM: frozenset[str] = frozenset({
     "catfish_remember",
+    # BL-MEMORY-DEDUPE-COMPRESS-REVIEW (5/17 04:55 凌晨, #61): 鸿波 5 次抓我
+    # over-engineer 后拍板砍这 2 工具暴露. 越界 hermes 责任 (压缩归 hermes
+    # catfish-autocompress + ContextCompressor), entries 2 年才撞 limit 不该
+    # 凌晨写. 留代码作 git 历史, LLM 看不到不会调.
+    # 想恢复 (真撞 limit 时): env CATFISH_EXPOSE_MEMORY_INTEGRITY=1 (未实现, 真要时
+    # 改 sanitizer if 加 env check).
+    "catfish_memory_dedupe",
+    "catfish_memory_compress",
 })
 
 #: Tier 1 — always-on 核心工具, 任何任务都该有, 永不 drop.
