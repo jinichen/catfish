@@ -45,7 +45,11 @@ import SkillRevisionCard from "./SkillRevisionCard";
 import ProactiveCard from "./ProactiveCard";
 import AgentPrefsCard from "./AgentPrefsCard";
 import RelationCard from "./RelationCard";
-import MemoryHistoryCard from "./MemoryHistoryCard";
+// BL-MEMORY-HISTORY-KILL (5/16): catfish_remember 5/16 A 黑名单后, session_facts.json
+// 不再被写, 这张卡数据已冻结 + 容易误导员工以为"小鲶还记着这些". 砍卡, 让员工知道
+// 真活的 fact 存储是 hermes memory (~/.hermes/memories/USER.md + MEMORY.md).
+// 关联: BL-MEMORY-CATFISH-REMEMBER-BLACKLIST, BL-MEMORY-BRIDGE-STORE, SOUL Memory 写入纪律段.
+// import MemoryHistoryCard from "./MemoryHistoryCard";
 import FeedbackSummaryCard from "./FeedbackSummaryCard";
 import UserProfileCard from "./UserProfileCard";
 import StyleFingerprintCard from "./StyleFingerprintCard";
@@ -94,14 +98,15 @@ export default function DashboardTab() {
         <AgentPrefsCard />
       </CollapsibleSection>
 
-      {/* 第三组: 鲶鱼对你的认识 — 透明性 (默认开, 员工要能看清楚被学了什么) */}
+      {/* 第三组: 鲶鱼对你的认识 — 透明性 (默认开, 员工要能看清楚被学了什么)
+          5/16 砍 MemoryHistoryCard (BL-MEMORY-HISTORY-KILL) 后 5 → 4. */}
       <CollapsibleSection
         id="rel"
         title="🐟 鲶鱼对你的认识"
-        count={5}
+        count={4}
       >
         <RelationCard />
-        <MemoryHistoryCard />
+        {/* <MemoryHistoryCard /> — 5/16 砍, 见 import 段注释 */}
         <UserProfileCard />
         <StyleFingerprintCard />
         <FeedbackSummaryCard />
