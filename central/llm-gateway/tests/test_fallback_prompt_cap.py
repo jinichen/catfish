@@ -83,8 +83,15 @@ def _mk_model(name, tier="public", api_key_env="OPENAI_API_KEY", chain=None, mod
     )
 
 
-def _mk_config(models, max_cap=30000):
-    cfg = Config(version=1, models=models, max_fallback_prompt_tokens=max_cap)
+def _mk_config(models, max_cap=30000, auto_fallback=True):
+    """BL-FALLBACK-TOGGLE (5/16): 默认 auto_fallback=True 让现有 prompt-cap 测试继续测.
+    单独覆盖 auto_fallback=False 时的行为在 test_fallback.py 加.
+    """
+    cfg = Config(
+        version=1, models=models,
+        max_fallback_prompt_tokens=max_cap,
+        auto_fallback=auto_fallback,
+    )
     return cfg
 
 

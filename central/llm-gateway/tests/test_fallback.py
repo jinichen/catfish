@@ -59,12 +59,57 @@ def _fb(chain, on_errors=None, max_hops=2):
     )
 
 
-def _config(*models):
+def _config(*models, auto_fallback=True):
+    """BL-FALLBACK-TOGGLE (5/16): 默认 auto_fallback=True 让现有测试继续测 fallback 行为.
+
+    单独有一个测试覆盖 auto_fallback=False 时 with_fallback 直抛, 不走 chain.
+    """
     by_name = {m.name: m for m in models}
     return SimpleNamespace(
         models=list(models),
         get_model=lambda n: by_name.get(n),
+        auto_fallback=auto_fallback,
     )
+
+
+# ---------- BL-FALLBACK-TOGGLE (默认关) ----------
+
+
+def test_fallback_disabled_by_default_raises_primary_error() -> None:
+    """auto_fallback=False (新默认) → primary 错直抛, 不走 chain."""
+    a = _model("a", fallback=SimpleNamespace(
+        chain=["b"], on_errors=[429], max_hops=2,
+    ))
+    b = _model("b")
+    cfg = _config(a, b, auto_fallback=False)  # 显式关
+
+    async def invoke(m):
+        if m.name == "a":
+            raise FakeRateLimit()
+        return f"served by {m.name}"
+
+    # 应该抛 FakeRateLimit, 不走 chain 到 b
+    with pytest.raises(FakeRateLimit):
+        asyncio.run(with_fallback(cfg, a, invoke))
+
+
+def test_fallback_enabled_via_env_override(monkeypatch) -> None:
+    """env CATFISH_AUTO_FALLBACK=1 → 即使 yaml 关也开."""
+    monkeypatch.setenv("CATFISH_AUTO_FALLBACK", "1")
+    a = _model("a", fallback=SimpleNamespace(
+        chain=["b"], on_errors=[429], max_hops=2,
+    ))
+    b = _model("b")
+    cfg = _config(a, b, auto_fallback=False)  # yaml 关, env 开
+
+    async def invoke(m):
+        if m.name == "a":
+            raise FakeRateLimit()
+        return f"served by {m.name}"
+
+    result, used, _ = asyncio.run(with_fallback(cfg, a, invoke))
+    assert used.name == "b"  # env 强制开了 fallback, 走到 b
+    assert result == "served by b"
 
 
 # ---------- should_fallback ----------

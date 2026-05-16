@@ -323,6 +323,11 @@ async def with_fallback(
     fallback 链跳过所有 tier=public 的 candidate (公网更慢更贵, 不该兜底).
     调用方用 estimate_prompt_tokens(messages) 算 prompt_estimate 传进来.
 
+    BL-FALLBACK-TOGGLE (2026-05-16 鸿波):
+      config.auto_fallback=False (默认) → 任何错都直抛, 不走 chain.
+      操作员/客户要恢复老 fallback 行为, 改 yaml `auto_fallback: true` 或
+      env `CATFISH_AUTO_FALLBACK=1`. 代码 + chain 配置都保留作 escape hatch.
+
     返回:
         (result, model_used, attempts) —— 调用方需要知道实际用了哪个 model 写 metrics
 
@@ -331,6 +336,13 @@ async def with_fallback(
     """
     attempts: list[str] = []  # 记录尝试过的 model name + 错误概述
 
+    # BL-FALLBACK-TOGGLE: env override 高于 yaml. 默认 False (不 fallback).
+    import os  # noqa: PLC0415
+    auto_fallback = (
+        os.environ.get("CATFISH_AUTO_FALLBACK", "").lower() in ("1", "true", "yes")
+        or bool(getattr(config, "auto_fallback", False))
+    )
+
     # 第一次: 主模型
     try:
         result = await invoke_one(primary)
@@ -338,6 +350,17 @@ async def with_fallback(
         return result, primary, attempts
     except Exception as e:
         attempts.append(f"{primary.name}=err:{type(e).__name__}")
+
+        # BL-FALLBACK-TOGGLE: 默认关 → 直接抛, 不进 chain.
+        if not auto_fallback:
+            logger.info(
+                "model=%s err=%s; auto_fallback=False (BL-FALLBACK-TOGGLE), "
+                "直接抛给客户端 — 不自动切其它 model. 想恢复 fallback: "
+                "yaml 加 auto_fallback: true 或 env CATFISH_AUTO_FALLBACK=1",
+                primary.name, type(e).__name__,
+            )
+            raise
+
         if not primary.fallback:
             raise
         if not should_fallback(e, primary.fallback.on_errors):
