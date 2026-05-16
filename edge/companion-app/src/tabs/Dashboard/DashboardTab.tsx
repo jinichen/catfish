@@ -63,7 +63,12 @@ import RelationCard from "./RelationCard";
 import UserProfileCard from "./UserProfileCard";
 import StyleFingerprintCard from "./StyleFingerprintCard";
 import TasksCard from "./TasksCard";
-import CuratorCard from "./CuratorCard";
+// BL-CURATOR-CARD-KILL (5/16): hermes 0.12 Curator daemon 透明性卡, 但价值低:
+// 1. catfish 自家 skill 在 catfish/skills/ 物理隔离, Curator 不动
+// 2. ~/.hermes/skills/ 员工基本不存东西, 99% 时间"无变化"
+// 3. 唯一操作"关闭自动整理"员工不知道也不会用
+// backend daemon 不动 (hermes 自家 housekeeping). 真要看状态去"控制台" tab.
+// import CuratorCard from "./CuratorCard";
 import CollapsibleSection from "./CollapsibleSection";
 import WebPortalLink from "./WebPortalLink";
 
@@ -127,7 +132,7 @@ export default function DashboardTab() {
         id="services"
         title="⚙️ 服务 / 配额"
         defaultCollapsed
-        count={5}
+        count={4}
       >
         <ServicesCard />
         <QuotaCard />
@@ -135,8 +140,7 @@ export default function DashboardTab() {
         {/* SkillsMcpCard = 我装的 skill / mcp 列表 (跟广场浏览不同, 留这里).
             广场: catfish-web /skills /mcp. */}
         <SkillsMcpCard />
-        {/* 5/7 BL-CR: Curator 集成 — 老脚本自动整理 (hermes 0.12 自带) */}
-        <CuratorCard />
+        {/* <CuratorCard /> — 5/16 砍 (BL-CURATOR-CARD-KILL), 见 import 段注释 */}
         {/* BL-SESSION-CLEANUP-KILL (5/16): SessionCleanupCard 已砍.
             原因: 治标不治本 / 跟 Curator 重叠 / 客户 demo 负面信号.
             未来: sidebar 加 FTS5 搜索框替代 (P2). */}
