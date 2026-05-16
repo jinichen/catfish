@@ -37,11 +37,13 @@
 
     <key>ProgramArguments</key>
     <array>
-        <!-- 注意: PATH 在 launchd 环境里很简陋, catfish 命令要给绝对路径.
-             用户可以改这条到自己 catfish-cli 安装位置. 默认假设 pipx 或 brew. -->
+        <!-- BL-HERMES-OIDC-AUTOREFRESH-FIX (5/16 实盘): catfish 是 shell alias,
+             launchd 不读 .zshrc/.bashrc 所以 `env catfish` 找不到. 改用 python3
+             绝对路径 + $HOME 展开 catfish.py 路径 (bash -c 会展开 $HOME).
+             如果 catfish 装在别处, 改这一行的 catfish.py 路径即可. -->
         <string>/bin/bash</string>
         <string>-c</string>
-        <string>/usr/bin/env catfish refresh &gt;&gt; /tmp/catfish-token-refresh.log 2&gt;&amp;1</string>
+        <string>/usr/bin/python3 $HOME/person_task/catfish/edge/catfish-cli/catfish.py refresh &gt;&gt; /tmp/catfish-token-refresh.log 2&gt;&amp;1</string>
     </array>
 
     <!-- 每 50 分钟跑一次 (access_token TTL 1h, 提前 10 min 刷) -->
