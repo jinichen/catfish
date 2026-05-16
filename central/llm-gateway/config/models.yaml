@@ -331,7 +331,7 @@ models:
     # NVIDIA NIM 各 model output cap 不公开统一, 等撞 400 看 error message.
     supports_tool_use: true
     supports_streaming: true
-    supports_vision: false
+    supports_vision: true
     # BL-NVIDIA-NIM-MANUAL-ONLY (5/15 22:55 鸿波): 'fallback' 标签也去掉 — NVIDIA 不
      # 当任何用例的兜底, 也不被 picker / fallback 选, 只能员工/客户在 companion 模型
      # 选择器手选. 推理 / 长指令场景从这清单挪走, 实际由内网 main + gemini-pro 兜.
