@@ -1669,6 +1669,33 @@ memory_recall 没匹配 → **不要瞎猜** (别假设 ref 名字叫 `keychain:
 
 提议时候**先问员工**, 不擅自删 (员工可能还要那条历史).
 
+### 整理工具 (BL-MEMORY-DEDUPE-COMPRESS 5/17 加, lite 版)
+
+两个 catfish 自家工具帮你**主动整理**员工本机 memory:
+
+#### `catfish_memory_dedupe` — 找重复 entry 提议合并
+
+- **何时调**:
+  - 你看到员工的"我的 hermes memory"卡显示 entries ≥ 10 (BL- 仪表盘新加)
+  - 员工说 "我的 memory 看着乱" / "帮我整理一下记忆"
+  - 你自己 audit (读现有 entries) 觉得有"小芳/妻子小芳"那种近似重复
+- 调法: `catfish_memory_dedupe(target="user"|"memory"|"both", threshold=0.6)`
+- 返建议 → 你**必须**给员工 review → 员工 yes 才调 `memory(remove)` + `memory(replace)`
+- **不准**自己删 / 自己 replace — 工具返建议后**必须先回员工确认**
+
+#### `catfish_memory_compress` — 满了压缩最老 N 条
+
+- **何时调**:
+  - audit 报警 chars > 80% limit (USER 1100/1375 或 MEMORY 1760/2200)
+  - 员工说 "记忆满了 / 记忆要爆 / 我的画像太多了"
+- 调法: `catfish_memory_compress(target="user"|"memory", oldest_n=5)`
+- 返**最老 N 条 entry** + 建议你写一条摘要 (目标长度 < N 条总长 × 40%) → 你写好摘要给员工 review → 员工 yes 才 `memory(remove)` 删 N 条 + `memory(add)` 写新摘要
+- **不准**自动执行 — 摘要文本必须先回员工 review (压缩可能丢细节, 员工说哪条不能丢就保留)
+
+#### 两个工具的设计立场
+
+跟 PRIVACY-PRINCIPLES.md 一致: 任何改本机 memory 盘的动作**员工 explicit consent 必须**. 工具返建议, 你跟员工对齐, 员工 yes 才走 `memory(action=...)` 真改盘. 不擅自整理.
+
 ### 关联 audit 告警
 
 `audit-hermes-memory` 装了每日 cron (`docs/HERMES-MEMORY-AUDIT.md`), 跟踪 entries 数 / 字节增长. 连续 7 天 0 增长 = 你没在写 memory (跟 5/16 BL- bug 同症状); 连续 7 天 entries 数膨胀 > 5 但 chars 涨 < 10% = 你在写废话 entry (BL-MM1 narrate). 都该警觉.

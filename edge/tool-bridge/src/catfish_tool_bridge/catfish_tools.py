@@ -1999,6 +1999,81 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ============================================================
+    # BL-MEMORY-DEDUPE-COMPRESS (5/17 凌晨, P2 #1+#2 lite 版)
+    # ============================================================
+    {
+        "name": "catfish_memory_dedupe",
+        "description": (
+            "扫描 hermes USER.md / MEMORY.md 找语义重复的 entry, 用 jieba 分词 + "
+            "Jaccard 相似度 ≥ 0.6 判定. 返**建议列表**给你 (LLM), 你跟员工确认后才"
+            "用 memory(action=remove) / memory(action=replace) 真改盘.\n\n"
+            "**何时调**:\n"
+            "- 仪表盘 '我的 hermes memory' 卡显示 entries 数 ≥ 10 时主动调一次\n"
+            "- 员工说 '我的 memory 看着乱' / '帮我整理一下记忆' 时调\n"
+            "- audit 日志显示 chars 涨但实际信息没增多 (BL-MM1 narrate 嫌疑) 时\n\n"
+            "**输入**:\n"
+            "  target: 'user' | 'memory' (扫哪个文件, 不传扫两个)\n"
+            "  threshold: 0.0-1.0 (默认 0.6, 越高越严)\n\n"
+            "**输出**: list of {entries: [...], suggested_merge: '...', similarity: 0.x}\n\n"
+            "**绝不**: 自己删 / 自己 replace. 必须先回员工 review."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "enum": ["user", "memory", "both"],
+                    "description": "扫哪个 hermes memory 文件",
+                    "default": "both",
+                },
+                "threshold": {
+                    "type": "number",
+                    "description": "Jaccard 相似度阈值 (0.0-1.0). 默认 0.6.",
+                    "default": 0.6,
+                },
+            },
+            "required": [],
+        },
+        "emoji": "🔍",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_memory_compress",
+        "description": (
+            "扫描 hermes USER.md / MEMORY.md 看 chars 使用率, 如果 > 80% limit "
+            "(USER 1100/1375 或 MEMORY 1760/2200), 提议把**最老的 N 条**合并成"
+            "一条摘要 entry. 返建议给你 (LLM), 跟员工确认后才真改盘.\n\n"
+            "**何时调**:\n"
+            "- audit script 报警 chars 接近 limit 时\n"
+            "- 员工说 '记忆满了 / 记忆要爆 / 我的画像太多了' 时\n\n"
+            "**输入**:\n"
+            "  target: 'user' | 'memory' (压哪个文件)\n"
+            "  oldest_n: 最老的 N 条作为压缩候选 (默认 5)\n\n"
+            "**输出**: {usage_pct, oldest_n_entries, suggested_summary, would_save_chars}\n\n"
+            "**绝不**: 自己执行 add+remove 压缩, 必须先回员工 review summary 文本."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "enum": ["user", "memory"],
+                    "description": "压哪个 hermes memory 文件",
+                },
+                "oldest_n": {
+                    "type": "integer",
+                    "description": "选最老的 N 条压缩 (默认 5)",
+                    "default": 5,
+                },
+            },
+            "required": ["target"],
+        },
+        "emoji": "🗜️",
+        "toolset": "catfish_native",
+        "available": True,
+    },
 ]
 
 
@@ -5779,6 +5854,175 @@ def skill_install(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ============================================================
+# BL-MEMORY-DEDUPE-COMPRESS (5/17 凌晨, P2 #1+#2 lite 版)
+# catfish_memory_dedupe / catfish_memory_compress — 给 LLM 主动调的整理工具
+# 走 jieba (catfish 已装) + heuristic, 不调 hermes LCM / 不用 embedding.
+# 真版本留白天清醒做.
+# ============================================================
+
+
+_HERMES_ENTRY_DELIM = "\n§\n"
+
+
+def _read_hermes_memory_entries(target: str) -> List[str]:
+    """读 hermes 0.13 ~/.hermes/memories/<USER|MEMORY>.md, 按 § 分隔解析."""
+    if target not in ("user", "memory"):
+        return []
+    filename = "USER.md" if target == "user" else "MEMORY.md"
+    path = Path.home() / ".hermes" / "memories" / filename
+    if not path.exists():
+        return []
+    try:
+        content = path.read_text(encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        return []
+    if not content.strip():
+        return []
+    return [s.strip() for s in content.split(_HERMES_ENTRY_DELIM) if s.strip()]
+
+
+def _jieba_tokens(text: str) -> set:
+    """jieba 分词 → 去停用词 → set. 用于 Jaccard."""
+    try:
+        import jieba  # noqa: PLC0415
+    except ImportError:
+        # jieba 没装 → fallback: 字符级 unigram
+        return set(text)
+    # 简易停用词 (中文常见 + 标点)
+    stopwords = {
+        "的", "了", "是", "在", "我", "你", "他", "她", "我们", "你们",
+        "和", "跟", "也", "都", "就", "这", "那", "有", "没", "不",
+        ",", "。", "?", "!", "、", " ", "\n", "(", ")", "—",
+    }
+    tokens = set(jieba.lcut(text))
+    return {t for t in tokens if t.strip() and t not in stopwords}
+
+
+def _jaccard_similarity(a: set, b: set) -> float:
+    """Jaccard 相似度 |a ∩ b| / |a ∪ b|."""
+    if not a or not b:
+        return 0.0
+    inter = len(a & b)
+    union = len(a | b)
+    return inter / union if union > 0 else 0.0
+
+
+def memory_dedupe(args: Dict[str, Any]) -> Dict[str, Any]:
+    """扫 hermes USER.md / MEMORY.md, 找 Jaccard 相似度 ≥ threshold 的 entry 对.
+
+    返建议给 LLM, 不真改盘 (员工 explicit consent 才动, 通过 memory tool).
+    """
+    target = args.get("target", "both")
+    threshold = float(args.get("threshold", 0.6))
+
+    targets_to_scan = ["user", "memory"] if target == "both" else [target]
+    all_suggestions: List[Dict[str, Any]] = []
+
+    for t in targets_to_scan:
+        entries = _read_hermes_memory_entries(t)
+        if len(entries) < 2:
+            continue
+        # 每对 entry 比 Jaccard
+        token_cache = {e: _jieba_tokens(e) for e in entries}
+        seen_pairs = set()
+        for i, e1 in enumerate(entries):
+            for j, e2 in enumerate(entries):
+                if i >= j:  # 不重复对
+                    continue
+                pair_key = (e1[:30], e2[:30])
+                if pair_key in seen_pairs:
+                    continue
+                seen_pairs.add(pair_key)
+                sim = _jaccard_similarity(token_cache[e1], token_cache[e2])
+                if sim >= threshold:
+                    # 选长的 entry 作为合并基础 (信息更全)
+                    longer, shorter = (e1, e2) if len(e1) >= len(e2) else (e2, e1)
+                    all_suggestions.append({
+                        "target": t,
+                        "entries": [e1, e2],
+                        "similarity": round(sim, 2),
+                        "suggested_keep": longer,
+                        "suggested_remove": shorter,
+                        "suggested_merge": (
+                            f"{longer} (合并: '{shorter}')" if longer != shorter else longer
+                        ),
+                    })
+
+    return {
+        "ok": True,
+        "scanned_targets": targets_to_scan,
+        "threshold": threshold,
+        "suggestions_count": len(all_suggestions),
+        "suggestions": all_suggestions,
+        "next_step_for_llm": (
+            "把 suggestions 列给员工 review, 员工 yes 才调 "
+            "memory(action='remove', old_text=suggested_remove) + "
+            "memory(action='replace', old_text=suggested_keep, content=suggested_merge). "
+            "员工 no → 不动."
+        ),
+    }
+
+
+def memory_compress(args: Dict[str, Any]) -> Dict[str, Any]:
+    """看 USER.md / MEMORY.md 使用率, 提议把最老 N 条合并成摘要.
+
+    不真改盘, 只返建议. 员工 yes 才动.
+    """
+    target = args.get("target")
+    oldest_n = int(args.get("oldest_n", 5))
+    if target not in ("user", "memory"):
+        return {
+            "ok": False,
+            "error": f"target 必须是 'user' 或 'memory', 收到: {target!r}",
+        }
+
+    char_limit = 1375 if target == "user" else 2200  # hermes 默认
+    entries = _read_hermes_memory_entries(target)
+    total_chars = sum(len(e) for e in entries)
+    usage_pct = (total_chars / char_limit * 100) if char_limit > 0 else 0
+
+    if usage_pct < 80:
+        return {
+            "ok": True,
+            "target": target,
+            "usage_pct": round(usage_pct, 1),
+            "char_limit": char_limit,
+            "total_chars": total_chars,
+            "entries_count": len(entries),
+            "action_needed": False,
+            "message": (
+                f"{target} 当前用 {usage_pct:.1f}% ({total_chars}/{char_limit} chars), "
+                f"< 80%, 不需要压缩. 等 entries 多了再叫我."
+            ),
+        }
+
+    # > 80% — 选最老 N 条 (entries 头部是老的, hermes 按 add 顺序写)
+    oldest = entries[: min(oldest_n, len(entries))]
+    oldest_chars = sum(len(e) for e in oldest)
+
+    return {
+        "ok": True,
+        "target": target,
+        "usage_pct": round(usage_pct, 1),
+        "char_limit": char_limit,
+        "total_chars": total_chars,
+        "entries_count": len(entries),
+        "action_needed": True,
+        "oldest_n": len(oldest),
+        "oldest_entries": oldest,
+        "oldest_chars": oldest_chars,
+        "would_save_chars_if_summary_under": int(oldest_chars * 0.4),
+        "next_step_for_llm": (
+            f"建议把 {target} 这 {len(oldest)} 条最老 entry (共 {oldest_chars} chars) "
+            f"合并成一条摘要 entry (目标 < {int(oldest_chars * 0.4)} chars). "
+            "你写好摘要后给员工 review: '我想把这 N 条压成 1 条摘要 X, 老的就删了'. "
+            "员工 yes → 调 memory(action='remove') 删 N 条, 再 "
+            "memory(action='add', content=摘要) 写新. 员工 no → 不动."
+        ),
+    }
+
+
+# ============================================================
 # catfish_skill_delete — 安全删除 skill (五一 sprint Day 2)
 # ============================================================
 
@@ -5958,6 +6202,11 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
         return skill_delete(args)
     if name == "catfish_a2a_ask":
         return a2a_ask(args)
+    # BL-MEMORY-DEDUPE-COMPRESS (5/17 凌晨)
+    if name == "catfish_memory_dedupe":
+        return memory_dedupe(args)
+    if name == "catfish_memory_compress":
+        return memory_compress(args)
     # 5/6 BL-MM7 user profile (长期画像, 跨 session)
     if name == "catfish_user_profile_get":
         from . import user_profile  # noqa: PLC0415
