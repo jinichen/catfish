@@ -54,6 +54,7 @@ import SkillsMcpCard from "./SkillsMcpCard";
 import ProactiveCard from "./ProactiveCard";
 import AgentPrefsCard from "./AgentPrefsCard";
 import RelationCard from "./RelationCard";
+import HermesMemoryCard from "./HermesMemoryCard";  // BL-DASHBOARD-HERMES-MEMORY-CARD (5/16)
 // BL-MEMORY-HISTORY-KILL (5/16): catfish_remember 5/16 A 黑名单后, session_facts.json
 // 不再被写, 这张卡数据已冻结 + 容易误导员工以为"小鲶还记着这些". 砍卡, 让员工知道
 // 真活的 fact 存储是 hermes memory (~/.hermes/memories/USER.md + MEMORY.md).
@@ -123,9 +124,10 @@ export default function DashboardTab() {
       <CollapsibleSection
         id="rel"
         title="🐟 鲶鱼对你的认识"
-        count={3}
+        count={4}
       >
         <RelationCard />
+        <HermesMemoryCard />  {/* BL-DASHBOARD-HERMES-MEMORY-CARD (5/16): hermes 真活 memory */}
         {/* <MemoryHistoryCard /> — 5/16 砍 (BL-MEMORY-HISTORY-KILL) */}
         <UserProfileCard />
         <StyleFingerprintCard />
