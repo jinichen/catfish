@@ -59,6 +59,15 @@ grep -E "Hermes|Nous Research|⚕|Goodbye!" /tmp/catfish_boot.txt
 - [ ] **`adapter.dispatch("memory_recall", {query:...})`** 返成功
 - [ ] **`adapter.get_schema(name)`** 对每个 tool 返合法 OpenAI tool schema (无 type=null bug, BL-D11)
 - [ ] **`adapter.get_emoji(name)`** 不抛 (升级新加的 tool 有 emoji 或返默认)
+- [ ] **🔥 行为级 contract test (5/16 RCA 教训)** —
+      `cd edge/tool-bridge && pytest tests/test_memory_store_injection.py -v`
+      期望 8/8 全过. 守住:
+        * memory 工具 dispatch 时 kw['store']=MemoryStore 注入 (5/3 hermes 升 0.13
+          时这条断了 6 周没察觉, 因为只测"调用成功" 没测"真写盘")
+        * todo 工具 per-session TodoStore 隔离
+        * MemoryStore / TodoStore init fail 兜底
+      升级**任何 hermes 版本**后必跑这条. 不过 = 立即回滚, 别上线.
+      详见 `RCA-MEMORY-PLUMBING-20260516.md`.
 
 ## 3. dispatch 响应 brand 脱敏 (~/.hermes 字样不漏给员工)
 

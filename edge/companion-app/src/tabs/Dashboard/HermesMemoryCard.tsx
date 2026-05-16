@@ -17,13 +17,32 @@
 
 import { useEffect, useState } from "react";
 
-import { hermesMemoryRead, type HermesMemoryView } from "../../lib/tauri";
+import {
+  hermesMemoryRead,
+  toolBridgeCallTool,
+  type HermesMemoryView,
+} from "../../lib/tauri";
 
 const REFRESH_MS = 30_000;  // 30s polling 跟其他卡一致
+
+/** BL-MEMORY-EDIT-UI (5/16 P0): 删 hermes memory entry.
+ * 走 toolBridgeCallTool memory(action=remove), 复用 BL-MEMORY-BRIDGE-STORE 全链路.
+ * hermes memory_tool 内部 atomic_replace + file lock 保证安全. */
+async function removeEntry(
+  target: "user" | "memory",
+  entryText: string,
+): Promise<void> {
+  await toolBridgeCallTool("memory", {
+    action: "remove",
+    target,
+    old_text: entryText,
+  });
+}
 
 export default function HermesMemoryCard() {
   const [view, setView] = useState<HermesMemoryView | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);  // 哪条正在删
 
   const load = async () => {
     try {
@@ -32,6 +51,21 @@ export default function HermesMemoryCard() {
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const handleRemove = async (target: "user" | "memory", entry: string) => {
+    if (!confirm(`删这条 memory?\n\n"${entry.slice(0, 60)}${entry.length > 60 ? "…" : ""}"\n\n删了之后 hermes USER.md / MEMORY.md 里就没了 (本机文件 atomic 写). 真删?`)) {
+      return;
+    }
+    setRemoving(entry);
+    try {
+      await removeEntry(target, entry);
+      await load();  // 刷新
+    } catch (e) {
+      alert(`删除失败: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setRemoving(null);
     }
   };
 
@@ -101,12 +135,16 @@ export default function HermesMemoryCard() {
             entries={view.user_entries}
             chars={userChars}
             limit={view.user_char_limit}
+            removing={removing}
+            onRemove={(e) => void handleRemove("user", e)}
           />
           <EntrySection
             label="MEMORY · 项目 / 技术"
             entries={view.memory_entries}
             chars={memoryChars}
             limit={view.memory_char_limit}
+            removing={removing}
+            onRemove={(e) => void handleRemove("memory", e)}
           />
         </div>
       )}
@@ -136,11 +174,15 @@ function EntrySection({
   entries,
   chars,
   limit,
+  removing,
+  onRemove,
 }: {
   label: string;
   entries: string[];
   chars: number;
   limit: number;
+  removing: string | null;
+  onRemove: (entry: string) => void;
 }) {
   const pct = limit > 0 ? Math.min((chars / limit) * 100, 100) : 0;
   return (
@@ -195,21 +237,45 @@ function EntrySection({
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          {entries.map((e, i) => (
-            <div
-              key={i}
-              style={{
-                fontSize: 12,
-                padding: "4px 8px",
-                background: "var(--catfish-bg)",
-                borderRadius: "var(--radius-sm)",
-                lineHeight: 1.5,
-                wordBreak: "break-word",
-              }}
-            >
-              {e}
-            </div>
-          ))}
+          {entries.map((e, i) => {
+            const isRemoving = removing === e;
+            return (
+              <div
+                key={i}
+                style={{
+                  fontSize: 12,
+                  padding: "4px 8px",
+                  background: "var(--catfish-bg)",
+                  borderRadius: "var(--radius-sm)",
+                  lineHeight: 1.5,
+                  wordBreak: "break-word",
+                  display: "flex",
+                  alignItems: "flex-start",
+                  gap: 6,
+                  opacity: isRemoving ? 0.4 : 1,
+                }}
+              >
+                <span style={{ flex: 1 }}>{e}</span>
+                <button
+                  type="button"
+                  onClick={() => onRemove(e)}
+                  disabled={isRemoving}
+                  title="删这条 memory (本机 hermes USER.md / MEMORY.md atomic 写)"
+                  style={{
+                    flexShrink: 0,
+                    background: "transparent",
+                    border: "none",
+                    color: "var(--catfish-text-muted)",
+                    cursor: isRemoving ? "default" : "pointer",
+                    fontSize: 11,
+                    padding: "0 4px",
+                  }}
+                >
+                  {isRemoving ? "..." : "🗑"}
+                </button>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
