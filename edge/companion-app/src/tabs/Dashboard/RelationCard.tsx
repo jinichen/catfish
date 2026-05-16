@@ -74,13 +74,11 @@ export default function RelationCard() {
         border: "1px solid var(--catfish-border)",
         borderRadius: "var(--radius-md)",
         padding: "var(--space-4)",
-        // BL-RELATION-CARD-FILL-HEIGHT (5/16): 撑满 row 高度 + flex 让 entries
-        // 滚动区占满剩余空间 (flex:1). 之前 entries 区 maxHeight: 360 hardcoded,
-        // 跟右侧 UserProfileCard 撑齐时下方一大块空白 — 数据多 (657KB) 但卡不展开.
-        height: "100%",
-        boxSizing: "border-box",
-        display: "flex",
-        flexDirection: "column",
+        // BL-RELATION-CARD-FILL-HEIGHT (5/16): 限制卡高度 + 不被 row stretch.
+        // 卡自然高度 (header + 时间 + entries 360 max + footer), entries 内部滚动
+        // 看更多. alignSelf: start 让卡不被 grid row stretch 撑高 (右侧 UserProfileCard
+        // 高度多于这卡时, 这卡保持自然高度, 不留下方空白).
+        alignSelf: "start",
       }}
     >
       <div
@@ -173,12 +171,10 @@ export default function RelationCard() {
                 display: "flex",
                 flexDirection: "column",
                 gap: 8,
-                // BL-RELATION-CARD-FILL-HEIGHT (5/16): flex:1 撑满卡剩余高度 (跟右侧
-                // UserProfileCard row 齐齐), 不再 hardcoded 360. 数据多 (657KB / 30 条)
-                // 时滚动看更多, 跟右卡 8 项视觉对称.
-                // 老逻辑: maxHeight 360 → 跟右卡撑齐时下方一大块空白.
-                flex: 1,
-                minHeight: 200,  // 兜底: row 很矮时不至于挤成 0
+                // 5/5 鸿波: backend 拉 30 条, 360px + 滚动看 2-3 周.
+                // BL-RELATION-CARD-FILL-HEIGHT (5/16): 保持 360 限制, 配合卡 alignSelf:
+                // start 让卡自然高度 (不撑齐 row), 下方不留空白.
+                maxHeight: 360,
                 overflowY: "auto",
                 paddingRight: 4,  // 给滚动条留余地
               }}
