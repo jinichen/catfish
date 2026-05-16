@@ -195,34 +195,102 @@ def _extract_query_tokens(text: str) -> list[str]:
     return deduped
 
 
-def get_relevant_sessions(
-    query: str, top_k: int = MAX_RELEVANT_SESSIONS
-) -> list[tuple[str, float, int, str | None, str | None]]:
-    """LIKE 子串召回相关 session 元信息.
+def _fts5_sanitize(text: str) -> str:
+    """FTS5 query syntax sanitize.
 
-    为什么 LIKE 不 FTS5: SQLite FTS5 默认 tokenizer 对中文行为跨版本不一致
-    (3.37 不分中文字, 3.40+ trigram 才行). hermes state.db messages 表几千行,
-    LIKE %t% AND ... 扫完 < 10ms, 跨版本稳定. 等 hermes 把 tokenizer 标准化
-    再切 FTS5 不抢这一步.
-
-    流程:
-      1. 抽 query tokens (去停用词 + 单字符 + 去重)
-      2. 多 token AND `m.content LIKE %t%` 子串搜索
-      3. 同 session 多次命中 → MAX(message.id) 取近期命中作分数
-      4. join sessions 表, 按"近期命中"倒序, 限 top_k
-
-    返回: 同 get_recent_sessions 形式. 没命中返空 (调用方 fallback 时间窗口).
-
-    安全: read-only 连接, 1 秒 timeout, 参数化绑定防 SQL 注入, 异常吞掉返空.
+    FTS5 对引号 / AND OR NOT NEAR / 圆括号 / 星号 敏感 — 直接传原文容易 'syntax error'.
+    处理:
+      1. 引号 / 反斜杠 / 圆括号 / 星号 / 加号 / 减号 替空格 (FTS5 reserved char)
+      2. AND OR NOT NEAR (大写) 替小写 (FTS5 只把大写当 operator)
     """
-    db_path = get_state_db_path()
-    if db_path is None:
-        return []
+    if not text:
+        return ""
+    s = re.sub(r'[\'"`\\()*+\-^]', " ", text)
+    s = re.sub(r"\b(AND|OR|NOT|NEAR)\b", lambda m: m.group(0).lower(), s)
+    return s.strip()
 
-    tokens = _extract_query_tokens(query)
-    if not tokens:
-        return []
 
+def _which_fts5_table(conn: sqlite3.Connection) -> str | None:
+    """检测 hermes state.db 有哪个 FTS5 表 (trigram 优先, fallback unicode61).
+
+    返表名 ('messages_fts_trigram' / 'messages_fts' / None).
+    没 FTS5 表 → 调用方 fallback LIKE.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='table' AND name IN ('messages_fts_trigram', 'messages_fts')"
+        ).fetchall()
+        names = {r[0] for r in rows}
+        if "messages_fts_trigram" in names:
+            return "messages_fts_trigram"  # 中文 trigram 优先
+        if "messages_fts" in names:
+            return "messages_fts"
+        return None
+    except sqlite3.Error:
+        return None
+
+
+def _query_via_fts5(
+    conn: sqlite3.Connection, table: str, tokens: list[str], top_k: int,
+) -> list[tuple] | None:
+    """走 FTS5 trigram / unicode61 表查询, 返 session 元信息列表.
+
+    成功返 rows (可能空), 失败返 None (调用方 fallback LIKE).
+
+    Query 构造: tokens 用 AND 连接 (FTS5 默认 AND, 显式写防 syntax 歧义).
+    Ranking: bm25() 越低越相关.
+    """
+    # 拼 query: 'tok1 AND tok2 AND tok3'. 单 token 直接传.
+    sanitized = [_fts5_sanitize(t) for t in tokens if t.strip()]
+    sanitized = [t for t in sanitized if t]
+    if not sanitized:
+        return None
+    fts_query = " AND ".join(sanitized) if len(sanitized) > 1 else sanitized[0]
+
+    sql = f"""
+        SELECT
+            s.id,
+            s.started_at,
+            s.message_count,
+            s.title,
+            (SELECT m2.content FROM messages m2
+             WHERE m2.session_id = s.id AND m2.role = 'user'
+             ORDER BY m2.id LIMIT 1) AS first_user_msg
+        FROM sessions s
+        INNER JOIN (
+            SELECT
+                m.session_id AS session_id,
+                MIN(bm25({table})) AS best_score
+            FROM {table}
+            INNER JOIN messages m ON {table}.rowid = m.id
+            WHERE {table} MATCH ?
+            GROUP BY m.session_id
+            ORDER BY best_score ASC
+            LIMIT ?
+        ) hits ON s.id = hits.session_id
+        WHERE s.message_count > 1
+        ORDER BY hits.best_score ASC
+    """
+    try:
+        rows = conn.execute(sql, (fts_query, top_k)).fetchall()
+        return rows
+    except sqlite3.Error as e:
+        # FTS5 syntax error / 其它 → caller fallback LIKE
+        logger.warning(
+            "FTS5 (%s) query 失败 (fallback LIKE): %s. q=%r",
+            table, e, fts_query[:80],
+        )
+        return None
+
+
+def _query_via_like(
+    conn: sqlite3.Connection, tokens: list[str], top_k: int,
+) -> list[tuple]:
+    """LIKE 子串搜索 (FTS5 失败 / 没 FTS5 表时的最终 fallback).
+
+    多 token AND `m.content LIKE %t%`. 按 MAX(m.id) 近期命中排序.
+    """
     like_clauses = " AND ".join(["m.content LIKE ?"] * len(tokens))
     like_params: list[str | int] = [f"%{t}%" for t in tokens]
     like_params.append(top_k)
@@ -250,23 +318,76 @@ def get_relevant_sessions(
         WHERE s.message_count > 1
         ORDER BY hits.last_hit_id DESC
     """
+    try:
+        return conn.execute(sql, like_params).fetchall()
+    except sqlite3.Error as e:
+        logger.warning("LIKE 召回失败: %s", e)
+        return []
+
+
+def get_relevant_sessions(
+    query: str, top_k: int = MAX_RELEVANT_SESSIONS
+) -> list[tuple[str, float, int, str | None, str | None]]:
+    """3 层降级召回相关 session 元信息.
+
+    BL-MEMORY-FTS5-REAL (5/16 鸿波 'Step 2 FTS5 真集成'): 改成 FTS5 优先 + LIKE 兜底.
+
+    流程:
+      1. 抽 query tokens (jieba 中文分词 + 去停用词 / 单字符)
+      2. 检测 hermes state.db FTS5 表 (鸿波本机有 messages_fts_trigram + messages_fts):
+         a. trigram 表存在 (sqlite 3.34+, 中文 3-gram) → 优先用
+         b. 否则 unicode61 表 (中文整段当 token, 准确度差但能跑)
+      3. FTS5 query (BM25 ranking, 越低越相关)
+      4. FTS5 0 hits 或 syntax error → fallback LIKE %t% AND ...
+      5. 都失败 → 返空, 调用方 fallback 时间窗口
+
+    跨 sqlite 版本兼容:
+      - 沙盒 3.37 没 trigram 表 / 中文 2 字符 query 不命中 — fallback LIKE
+      - 本机 3.40+ + hermes 创建 trigram 表 — FTS5 BM25 准
+      - 任意环境失败都不抛, 静默降级
+
+    返回: 同 get_recent_sessions 形式. 没命中返空.
+    """
+    db_path = get_state_db_path()
+    if db_path is None:
+        return []
+
+    tokens = _extract_query_tokens(query)
+    if not tokens:
+        return []
 
     try:
         conn = sqlite3.connect(
             f"file:{db_path}?mode=ro", uri=True, timeout=1.0
         )
-        rows = conn.execute(sql, like_params).fetchall()
-        conn.close()
+    except sqlite3.Error as e:
+        logger.warning("connect state.db 失败: %s", e)
+        return []
+
+    try:
+        # Layer 1: FTS5 (trigram 优先)
+        fts_table = _which_fts5_table(conn)
+        rows: list[tuple] = []
+        used_layer = "none"
+        if fts_table:
+            fts_rows = _query_via_fts5(conn, fts_table, tokens, top_k)
+            if fts_rows is not None and fts_rows:
+                rows = fts_rows
+                used_layer = f"fts5({fts_table})"
+
+        # Layer 2: LIKE fallback (FTS5 0 hits / 不可用)
+        if not rows:
+            rows = _query_via_like(conn, tokens, top_k)
+            if rows:
+                used_layer = "like"
+
         logger.info(
-            "BL-MEMORY-FTS5-RECALL: tokens=%r 命中 %d session",
-            tokens, len(rows),
+            "BL-MEMORY-FTS5-RECALL: tokens=%r 命中 %d session via %s",
+            tokens, len(rows), used_layer,
         )
         return rows
-    except sqlite3.Error as e:
-        logger.warning(
-            "inject_session_history LIKE 召回失败: %s (fallback 时间窗口)", e
-        )
-        return []
+    finally:
+        conn.close()
 
 
 def _extract_user_query(messages: list[dict[str, Any]]) -> str:
