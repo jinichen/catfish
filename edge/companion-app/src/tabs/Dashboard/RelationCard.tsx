@@ -174,11 +174,12 @@ export default function RelationCard() {
                 display: "flex",
                 flexDirection: "column",
                 gap: 8,
-                // BL-RELATION-CARD-FILL-HEIGHT (5/16 V3): flex:1 撑满卡内剩余高度
-                // (卡自身已撑齐 row), 跟右侧 UserProfileCard row 同步等高.
-                // overflowY auto 内部滚动看更多 entries.
+                // BL-RELATION-CARD-FILL-HEIGHT (5/16 V4 fix): flex:1 撑满卡内剩余高度,
+                // overflowY auto 内部滚动. minHeight:0 关键! flex item 默认 min-height:
+                // auto (= min-content), entries 内容 4500px 撑不出去导致 footer 被切.
+                // 显式 0 让 flex 能真压缩内容到剩余 slot, overflow 才生效.
                 flex: 1,
-                minHeight: 200,  // 兜底防挤
+                minHeight: 0,
                 overflowY: "auto",
                 paddingRight: 4,
               }}

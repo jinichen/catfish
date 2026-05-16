@@ -177,12 +177,12 @@ export default function UserProfileCard() {
         </div>
       )}
 
-      {/* BL-USER-PROFILE-LIMIT-HEIGHT (5/16 V3): fields 列表 flex:1 撑满卡内剩余
-          高度 (跟 RelationCard 同步等高) + 内部滚动看更多 evidence. */}
+      {/* BL-USER-PROFILE-LIMIT-HEIGHT (5/16 V4 fix): flex:1 撑满 + overflow:auto.
+          minHeight:0 关键 — flex item 默认 min-height:auto 不能压缩, 内容撑爆卡. */}
       <div
         style={{
           flex: 1,
-          minHeight: 200,
+          minHeight: 0,
           overflowY: "auto",
           paddingRight: 4,
         }}
