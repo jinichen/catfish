@@ -33,7 +33,11 @@
 import IdentityCard from "./IdentityCard";
 import ServicesCard from "./ServicesCard";
 import QuotaCard from "./QuotaCard";
-import { SessionCleanupCard } from "./SessionCleanupCard";
+// BL-SESSION-CLEANUP-KILL (5/16 鸿波 '没意义砍了吧'): SessionCleanupCard 砍.
+// 治标不治本 (删 13 个还有 291 个) + 客户 demo 负面信号 + 跟 Curator 重叠.
+// .tsx 文件保留 (跟 ARCH2 砍 7 张卡同模式), 真要回滚改 1 行 import 就回.
+// 未来根治: sidebar 加 FTS5 搜索框替代 (P2).
+// import { SessionCleanupCard } from "./SessionCleanupCard";
 import CatalogCard from "./CatalogCard";
 import SkillsMcpCard from "./SkillsMcpCard";
 import LearningCard from "./LearningCard";
@@ -118,8 +122,9 @@ export default function DashboardTab() {
         <SkillsMcpCard />
         {/* 5/7 BL-CR: Curator 集成 — 老脚本自动整理 (hermes 0.12 自带) */}
         <CuratorCard />
-        {/* 5/15 BL-SESSION-MGMT C: 清理短 session (304 个会话累积痛点) */}
-        <SessionCleanupCard />
+        {/* BL-SESSION-CLEANUP-KILL (5/16): SessionCleanupCard 已砍.
+            原因: 治标不治本 / 跟 Curator 重叠 / 客户 demo 负面信号.
+            未来: sidebar 加 FTS5 搜索框替代 (P2). */}
       </CollapsibleSection>
 
       {/* 第五组: 学习 — 我的 learning + 我提的 skill 改进 (默认收).
