@@ -288,23 +288,67 @@ function AssistantBubble({
   );
 }
 
-/** 把 LiteLLM / Vertex 那种长 traceback 错误压成员工能看的短文案 */
+/** 把 LiteLLM / Vertex 那种长 traceback 错误压成员工能看的短文案.
+ *
+ * BL-C8 (5/16): 这是**双保险兜底**. 主路径走 backend errors.py friendly 翻译
+ * (chat.ts 已优先读 detail.friendly), 这里只在 backend friendly 缺失 / 失败时
+ * 用关键词匹配兜一层.
+ *
+ * 跟 central/llm-gateway/src/catfish_gateway/errors.py 保持类别覆盖对齐, 不必
+ * 100% 重复翻译 (那是双倍维护负担), 只 catch 最常撞的几类.
+ */
 function friendlyError(err: string | undefined): string {
   if (!err) return "未知错误";
-  if (err.includes("UNAVAILABLE") || err.includes("503")) {
-    return "模型服务器临时高峰 (503),稍后重试或换个模型";
+  // 5xx 上游异常
+  if (err.includes("UNAVAILABLE") || err.includes("503") || err.includes("overloaded")) {
+    return "模型服务器临时高峰 (503), 稍后重试或换个模型";
   }
-  if (err.includes("Connection error") || err.includes("ServerDisconnected")) {
-    return "上游连接失败 — 检查 VPN / Clash / 内网,或换模型";
+  if (err.includes("502") || err.includes("Bad Gateway")) {
+    return "上游网关异常 (502) — 内网 LLM endpoint 可能失效, 切换模型";
   }
+  if (err.includes("504") || err.includes("Gateway Timeout")) {
+    return "上游网关超时 (504) — 上游慢, 稍后再试 / 换模型";
+  }
+  if (err.includes("500") || err.includes("InternalServerError") || err.includes("Internal Server Error")) {
+    return "上游内部错误 (500) — 上游服务自己挂了, 换模型或稍后试";
+  }
+  // 网络层
+  if (
+    err.includes("Connection error") ||
+    err.includes("ServerDisconnected") ||
+    err.includes("APIConnectionError") ||
+    err.includes("ConnectionError")
+  ) {
+    return "上游连接失败 — 检查 VPN / Clash / 内网, 或换模型";
+  }
+  if (err.includes("ConnectionRefused") || err.includes("connection refused")) {
+    return "网络层拒绝连接 — 内网服务没在跑 / VPN 没连上";
+  }
+  if (err.includes("Broken pipe") || err.includes("ClientOSError")) {
+    return "连接中途断了 — 网络抖动, 重试一次";
+  }
+  // 4xx 客户端错误
   if (err.includes("rate limit") || err.includes("429")) {
-    return "调用频率超限 (429),稍后重试";
+    return "调用频率超限 (429), 稍后重试";
   }
   if (err.includes("401") || err.includes("Unauthorized")) {
-    return "鉴权失败 (401),检查 dev token";
+    return "鉴权失败 (401), 检查登录状态";
+  }
+  if (err.includes("403") || err.includes("Forbidden")) {
+    return "没权限调这个模型 (403) — 公司账号未开通 / 区域受限";
+  }
+  if (err.includes("404") || err.includes("not found")) {
+    return "上游说没这个模型 (404) — 检查 models.yaml 配置";
+  }
+  if (err.includes("400") || err.includes("Bad Request") || err.includes("BadRequest")) {
+    return "请求格式错 (400) — 模型 / 参数 / 工具 schema 有一个不对";
+  }
+  // Provider 特有
+  if (err.includes("RESOURCE_EXHAUSTED") || err.includes("quota exceeded")) {
+    return "Gemini 免费配额今日耗尽 — 切到 Qwen 或明天再试";
   }
   if (err.includes("timeout") || err.includes("timed out")) {
-    return "请求超时";
+    return "请求超时 — 网络慢或上游慢, 稍后再试";
   }
   // 其他错误截短
   return err.length > 200 ? err.slice(0, 200) + "…" : err;

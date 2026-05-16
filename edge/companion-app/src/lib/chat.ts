@@ -504,10 +504,16 @@ export async function streamChat(params: SendChatParams): Promise<void> {
         }
       }
       // 没 fallback / 已经 retry 2 次 → friendly error
+      // BL-C8 (5/16): 优先用 backend errors.py friendly_upstream_error 翻译过的
+      // 中文短文案, fallback 才退到 message (技术 stack). 之前一直用 message,
+      // 员工看到的是 "InternalServerError: ... ServerDisconnectedError" 这种英文.
       let detail = "";
       try {
         const errJson = await resp.json();
-        detail = errJson?.detail?.message || JSON.stringify(errJson);
+        detail =
+          errJson?.detail?.friendly ||
+          errJson?.detail?.message ||
+          JSON.stringify(errJson);
       } catch {
         detail = await resp.text().catch(() => "");
       }
@@ -521,10 +527,14 @@ export async function streamChat(params: SendChatParams): Promise<void> {
       return;
     }
 
+    // BL-C8 (5/16): 底层 fallback 同样优先 backend friendly 翻译.
     let detail = "";
     try {
       const errJson = await resp.json();
-      detail = errJson?.detail?.message || JSON.stringify(errJson);
+      detail =
+        errJson?.detail?.friendly ||
+        errJson?.detail?.message ||
+        JSON.stringify(errJson);
     } catch {
       detail = await resp.text().catch(() => "");
     }
