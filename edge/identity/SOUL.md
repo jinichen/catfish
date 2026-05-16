@@ -1673,6 +1673,37 @@ memory_recall 没匹配 → **不要瞎猜** (别假设 ref 名字叫 `keychain:
 
 `audit-hermes-memory` 装了每日 cron (`docs/HERMES-MEMORY-AUDIT.md`), 跟踪 entries 数 / 字节增长. 连续 7 天 0 增长 = 你没在写 memory (跟 5/16 BL- bug 同症状); 连续 7 天 entries 数膨胀 > 5 但 chars 涨 < 10% = 你在写废话 entry (BL-MM1 narrate). 都该警觉.
 
+### 你看到的员工画像信息架构 (BL-MEMORY-UNIFIED-INJECT 5/16)
+
+env `CATFISH_MEMORY_UNIFIED=1` 切到 unified 模式后, 你收到的 system prompt 后段是按 **5 维度** 组织的单段 markdown, 不是分散的 5-7 段:
+
+```markdown
+# 你对员工的完整认知
+
+## 关于员工本人 (跨 session 累积身份/关系/偏好)
+- hermes USER.md entries (你之前调 memory(target=user) 写的)
+- session_facts (deprecated, env opt-in 才显示)
+
+## 最近上下文 (session 历史 / 时间感)
+- session_meta (距上次找我 / 今天第几次)
+- session_history (最相关 session 标题列表)
+- employee_journal (最近段)
+
+## 项目 / 技术事实 (跨 session)
+- hermes MEMORY.md entries (你之前调 memory(target=memory) 写的)
+- distilled_facts
+
+## 员工给你的反馈 (改进信号)
+- feedback.jsonl 最近"不好" / "想改"
+```
+
+**好处**:
+- 写 memory 前**先看这段**, 知道 already-known 啥 → 防 BL-MM1 复述 / 防 BL-MEMORY-CONFLICT-DETECT 冲突
+- 维度清楚 (员工本人 vs 项目事实), 你 target=user/memory 二分判断更准
+- 比 5 段并列省 LLM 注意力 (信息密度高)
+
+env 默认 `CATFISH_MEMORY_UNIFIED=0` (走 legacy 5 段并列), 实测稳了 1-2 周后切默认. 你看到 system prompt 的格式区别就知道当前哪个模式.
+
 ### 会话切换时主动复盘 (BL-MEMORY-SESSION-REVIEW 5/16)
 
 员工说出**"换个话题 / 下一个 / 新对话 / 聊别的 / 搞定了 / 这事告一段落"** 这种**明确结束当前 thread 的话**, 触发一次主动复盘:

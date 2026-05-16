@@ -206,6 +206,158 @@ class MemoryRegistry:
 
         return out
 
+    # ============================================================
+    # BL-MEMORY-UNIFIED-INJECT (5/16): 按维度分组 inject (统一画像视图)
+    # ============================================================
+    # 原 inject_all / inject_subset 是 5-7 段并列, LLM 看到的是分散信息.
+    # inject_unified 把 provider 输出按维度归类, 重组成单段 5 维度 markdown:
+    #   1. 关于员工本人 (USER)
+    #   2. 员工偏好 (employee_journal 推断的)
+    #   3. 最近上下文 (session_meta / session_history)
+    #   4. 项目事实 (MEMORY)
+    #   5. 反馈记忆
+    #
+    # env CATFISH_MEMORY_UNIFIED=1 切到此路径, 默认仍走 inject_all (legacy 并列).
+    # 切默认前实测稳定 1-2 周.
+    # ============================================================
+
+    #: provider name → dimension. 不在表里的 provider 走 legacy 行为 (跟在维度后).
+    _PROVIDER_DIMENSION_MAP: dict[str, str] = {
+        "hermes_user_memory": "about_user",
+        "session_facts": "about_user",  # deprecated 但 env opt-in 时归这
+        "session_meta": "recent_context",
+        "session_history": "recent_context",
+        "employee_journal": "recent_context",  # journal 内容偏最近, 暂归此
+        "hermes_memory": "project_facts",
+        "feedback": "feedback_memory",
+    }
+
+    #: 维度顺序 + 中文标题 (markdown header)
+    _DIMENSION_ORDER: list[tuple[str, str]] = [
+        ("about_user", "## 关于员工本人 (跨 session 累积身份/关系/偏好)"),
+        ("recent_context", "## 最近上下文 (session 历史 / 时间感)"),
+        ("project_facts", "## 项目 / 技术事实 (跨 session)"),
+        ("feedback_memory", "## 员工给你的反馈 (改进信号)"),
+    ]
+
+    def inject_unified(
+        self,
+        ctx: InjectContext,
+        messages: list[dict],
+        enabled_names: set[str] | None = None,
+    ) -> list[dict]:
+        """按维度组装的 inject. 比 inject_all 5 段并列更结构化.
+
+        实施: 调每个 provider 的 prefetch() 拿现有 markdown 输出, 然后按
+        _PROVIDER_DIMENSION_MAP 归类, 每个维度合并成单段. 不动 Provider 接口.
+        """
+        if ctx.is_internal_call:
+            return messages
+        if enabled_names is not None and not enabled_names:
+            return messages
+        # 选 providers (same as inject_subset)
+        all_providers = self.list_providers()
+        if enabled_names is None:
+            chosen = all_providers
+        else:
+            chosen = [p for p in all_providers if p.name in enabled_names]
+        return self._inject_unified_with_providers(ctx, messages, chosen)
+
+    def _inject_unified_with_providers(
+        self,
+        ctx: InjectContext,
+        messages: list[dict],
+        providers: list[MemoryProvider],
+    ) -> list[dict]:
+        """unified 版 _inject_with_providers — 按维度组装."""
+        if not messages or not providers:
+            return messages
+
+        last_system_idx = -1
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].get("role") == "system":
+                last_system_idx = i
+                break
+        if last_system_idx < 0:
+            return messages
+
+        # 收集每个 provider 输出 + 按 budget 截
+        provider_outputs: dict[str, str] = {}  # name → content
+        for provider in providers:
+            try:
+                content = provider.prefetch(ctx)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "memory_registry unified: provider %r 跳过: %s",
+                    provider.name, e,
+                )
+                continue
+            if not content:
+                continue
+            content_bytes = content.encode("utf-8")
+            if len(content_bytes) > provider.budget_bytes:
+                truncated = content_bytes[: provider.budget_bytes]
+                content = truncated.decode("utf-8", errors="ignore")
+            provider_outputs[provider.name] = content
+
+        if not provider_outputs:
+            return messages
+
+        # 按维度归类
+        dim_buckets: dict[str, list[str]] = {dim: [] for dim, _ in self._DIMENSION_ORDER}
+        unmapped: list[str] = []
+        for name, content in provider_outputs.items():
+            dim = self._PROVIDER_DIMENSION_MAP.get(name)
+            if dim and dim in dim_buckets:
+                dim_buckets[dim].append(content)
+            else:
+                unmapped.append(content)
+
+        # 组装 markdown
+        parts: list[str] = [
+            "# 你对员工的完整认知 (BL-MEMORY-UNIFIED-INJECT 5/16 统一视图)",
+            "",
+            "下面按维度组织你对当前员工的所有 inject 信息. 写 memory 前查这个 + "
+            "BL-MEMORY-CONFLICT-DETECT 纪律 (SOUL Memory 段) 防冲突.",
+            "",
+        ]
+        for dim_key, dim_header in self._DIMENSION_ORDER:
+            bucket = dim_buckets[dim_key]
+            if not bucket:
+                continue
+            parts.append(dim_header)
+            parts.append("")
+            parts.extend(bucket)
+            parts.append("")
+        # unmapped (skills_catalog / stats_guard 等非 memory 维度) 单独后面
+        if unmapped:
+            parts.append("## 其它系统状态")
+            parts.append("")
+            parts.extend(unmapped)
+            parts.append("")
+
+        appended = "\n".join(parts)
+
+        from copy import deepcopy  # noqa: PLC0415
+
+        out = deepcopy(messages)
+        cur = out[last_system_idx].get("content", "")
+        if not isinstance(cur, str):
+            return messages
+        out[last_system_idx]["content"] = cur.rstrip() + "\n\n" + appended
+
+        total_bytes = len(appended.encode("utf-8"))
+        active_dims = [
+            k for k in dim_buckets if dim_buckets[k]
+        ]
+        logger.info(
+            "memory_registry unified: inject %d provider 分 %d 维度 (%s) + %d 未归类, 总 %d 字节",
+            len(provider_outputs), len(active_dims),
+            ",".join(active_dims), len(unmapped), total_bytes,
+        )
+
+        return out
+
 
 #: process-wide singleton. gateway 启动时填.
 _GLOBAL_REGISTRY: MemoryRegistry = MemoryRegistry()

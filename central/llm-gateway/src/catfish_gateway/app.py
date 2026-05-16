@@ -2457,9 +2457,17 @@ async def chat_completions(
         model_name=model.name,
         is_internal_call=is_internal_call,
     )
-    body["messages"] = get_global_registry().inject_subset(
-        inject_ctx, body["messages"], enabled,
-    )
+    # BL-MEMORY-UNIFIED-INJECT (5/16): env flag 切 unified (维度分组) vs legacy (5 段并列).
+    # 默认 legacy 不破现有 LLM 行为. 实测稳了后切默认.
+    _registry = get_global_registry()
+    if os.environ.get("CATFISH_MEMORY_UNIFIED", "0") == "1":
+        body["messages"] = _registry.inject_unified(
+            inject_ctx, body["messages"], enabled,
+        )
+    else:
+        body["messages"] = _registry.inject_subset(
+            inject_ctx, body["messages"], enabled,
+        )
 
     # BL-COMPOUND-PLAN-EXECUTE (5/15 鸿波 '复合任务 agent 撑不住'): 复合任务
     # ('分析 + 生成 PPT') 检测命中 → 追加 plan-execute 铁律到同一段 system,

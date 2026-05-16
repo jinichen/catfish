@@ -1,4 +1,4 @@
-"""bootstrap_registry — gateway 启动时把 8 个内置 Provider 注册到全局 Registry.
+"""bootstrap_registry — gateway 启动时把 10 个内置 Provider 注册到全局 Registry.
 
 # 为啥不在 import 时自动注册
 
@@ -9,13 +9,15 @@ import 时自动注册会让测试 isolation 困难 (单测想 monkey-patch 某�
 # 顺序
 
 按 priority 升序:
-  20  session_facts
+  10  hermes_user_memory (BL-MEMORY-UNIFIED-INJECT 5/16 新加, 真画像最高优先)
+  20  session_facts (deprecated, 默认不 inject)
   30  session_meta (需 Python 3.11+)
   40  skills_catalog
   45  stats_guard
   50  session_history
   55  skill_guard
   60  employee_journal
+  65  hermes_memory (BL-MEMORY-UNIFIED-INJECT 5/16 新加, 项目事实)
   70  feedback
 
 注意 identity 不在 registry 里 — 它**创建** system message, Registry 是
@@ -29,6 +31,10 @@ import sys
 
 from .providers.employee_journal import EmployeeJournalProvider
 from .providers.feedback import FeedbackProvider
+from .providers.hermes_memory import (
+    HermesMemoryProvider,
+    HermesUserMemoryProvider,
+)
 from .providers.session_facts import SessionFactsProvider
 from .providers.session_history import SessionHistoryProvider
 from .providers.skill_guard import SkillGuardProvider
@@ -50,6 +56,10 @@ def bootstrap_registry(registry: MemoryRegistry | None = None) -> MemoryRegistry
     if registry is None:
         registry = get_global_registry()
 
+    # BL-MEMORY-UNIFIED-INJECT (5/16): hermes memory entries 之前没 provider
+    # inject, 完全靠 LLM 主动 search. 加双轨 (auto inject + LLM 可 search) 兜底.
+    registry.register(HermesUserMemoryProvider())  # priority 10 (最高)
+
     registry.register(SessionFactsProvider())
 
     if sys.version_info >= (3, 11):
@@ -67,6 +77,7 @@ def bootstrap_registry(registry: MemoryRegistry | None = None) -> MemoryRegistry
     registry.register(SessionHistoryProvider())
     registry.register(SkillGuardProvider())
     registry.register(EmployeeJournalProvider())
+    registry.register(HermesMemoryProvider())  # priority 65 (项目事实)
     registry.register(FeedbackProvider())
 
     logger.info(

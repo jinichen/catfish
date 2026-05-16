@@ -93,7 +93,12 @@ def _fresh_registry() -> MemoryRegistry:
 
 
 def test_normal_mode_injects_all_key_content(tmp_path, monkeypatch):
-    """普通模式 → 关键内容 (facts / journal / distilled / history / feedback) 都在."""
+    """普通模式 → 关键内容 (facts / journal / distilled / history / feedback) 都在.
+
+    BL-MEMORY-CATFISH-REMEMBER-BLACKLIST 后 session_facts 默认不 inject,
+    测试 opt-in env 才能看到 facts.
+    """
+    monkeypatch.setenv("CATFISH_EXPOSE_REMEMBER", "1")
     _seed_user_data(tmp_path, monkeypatch)
     registry = _fresh_registry()
 
@@ -127,6 +132,7 @@ def test_normal_mode_injects_all_key_content(tmp_path, monkeypatch):
 
 def test_normal_mode_priority_order(tmp_path, monkeypatch):
     """按 priority 升序拼接: facts(20) 在 history(50) 前, history 在 feedback(70) 前."""
+    monkeypatch.setenv("CATFISH_EXPOSE_REMEMBER", "1")  # facts 才 inject
     _seed_user_data(tmp_path, monkeypatch)
     registry = _fresh_registry()
 
@@ -202,7 +208,10 @@ def test_registry_output_matches_legacy_inject_keys(tmp_path, monkeypatch):
     """Registry 输出的关键 marker 跟 8 个旧 inject_X 拼起来的关键 marker 重叠.
 
     不字符级一致 (拼接 \\n 数等细节不同), 但关键 inject 标志都在.
+
+    BL-MEMORY-CATFISH-REMEMBER-BLACKLIST 后 facts 需 opt-in env 才 inject.
     """
+    monkeypatch.setenv("CATFISH_EXPOSE_REMEMBER", "1")
     _seed_user_data(tmp_path, monkeypatch)
     registry = _fresh_registry()
 
@@ -224,6 +233,60 @@ def test_registry_output_matches_legacy_inject_keys(tmp_path, monkeypatch):
     ]
     for marker in expected_markers:
         assert marker in content, f"marker {marker!r} 不在 Registry 输出"
+
+
+# ── BL-MEMORY-UNIFIED-INJECT (5/16): inject_unified 维度组装 ─────
+
+
+def test_unified_inject_groups_by_dimension(tmp_path, monkeypatch):
+    """inject_unified 输出含维度 markdown header (跟 inject_all 5 段并列对比).
+
+    验证: 调用后 system content 含 '你对员工的完整认知' 主 header + 至少
+    一个维度二级标题 (## 最近上下文 / ## 关于员工本人 / ## 员工给你的反馈).
+    """
+    monkeypatch.setenv("CATFISH_EXPOSE_REMEMBER", "1")
+    _seed_user_data(tmp_path, monkeypatch)
+    registry = _fresh_registry()
+
+    msgs = [
+        {"role": "system", "content": "你是鲶鱼."},
+        {"role": "user", "content": "教 EIS 怎么登录"},
+    ]
+    ctx = InjectContext(
+        messages=msgs, last_user_message="教 EIS 怎么登录",
+    )
+    out = registry.inject_unified(ctx, msgs, enabled_names=None)
+    content = out[0]["content"]
+
+    # 主 header
+    assert "你对员工的完整认知" in content
+    # 至少 1 个维度 header 出现 (具体哪几个看 _seed_user_data 喂的 provider)
+    has_any_dim = any(
+        h in content
+        for h in [
+            "## 关于员工本人",
+            "## 最近上下文",
+            "## 项目 / 技术事实",
+            "## 员工给你的反馈",
+        ]
+    )
+    assert has_any_dim, f"unified 输出无任何维度 header. content[:500]={content[:500]}"
+
+
+def test_unified_internal_call_skipped(tmp_path, monkeypatch):
+    """unified is_internal_call=True → 全跳, 返原 messages."""
+    _seed_user_data(tmp_path, monkeypatch)
+    registry = _fresh_registry()
+
+    msgs = [
+        {"role": "system", "content": "原"},
+        {"role": "user", "content": "hi"},
+    ]
+    ctx = InjectContext(
+        messages=msgs, last_user_message="hi", is_internal_call=True,
+    )
+    out = registry.inject_unified(ctx, msgs, enabled_names=None)
+    assert out == msgs
 
 
 # ── session_meta 单独测 (3.11+) ────────────────────
