@@ -54,7 +54,12 @@ import RelationCard from "./RelationCard";
 // 真活的 fact 存储是 hermes memory (~/.hermes/memories/USER.md + MEMORY.md).
 // 关联: BL-MEMORY-CATFISH-REMEMBER-BLACKLIST, BL-MEMORY-BRIDGE-STORE, SOUL Memory 写入纪律段.
 // import MemoryHistoryCard from "./MemoryHistoryCard";
-import FeedbackSummaryCard from "./FeedbackSummaryCard";
+// BL-FEEDBACK-CARD-KILL (5/16): FeedbackSummaryCard 是"透明性卡"但价值低 —
+// 反馈生效路径在 backend (inject_feedback provider 注入 system prompt 让 LLM 知道员工
+// 不喜欢啥), 员工不需要看见这个机制 (像看到自己脑子里的潜意识似的, 反而怪).
+// 单条不能撤回 / 改, 只有"清空反馈"按钮, 操作性也差.
+// 入口 (ChatMessage 每条下方 👍👎✏️改 按钮) 保留, 反馈仍生效, 只砍 Dashboard 展示.
+// import FeedbackSummaryCard from "./FeedbackSummaryCard";
 import UserProfileCard from "./UserProfileCard";
 import StyleFingerprintCard from "./StyleFingerprintCard";
 import TasksCard from "./TasksCard";
@@ -104,17 +109,17 @@ export default function DashboardTab() {
       </CollapsibleSection>
 
       {/* 第三组: 鲶鱼对你的认识 — 透明性 (默认开, 员工要能看清楚被学了什么)
-          5/16 砍 MemoryHistoryCard (BL-MEMORY-HISTORY-KILL) 后 5 → 4. */}
+          5/16 砍 MemoryHistoryCard + FeedbackSummaryCard 后 5 → 3. */}
       <CollapsibleSection
         id="rel"
         title="🐟 鲶鱼对你的认识"
-        count={4}
+        count={3}
       >
         <RelationCard />
-        {/* <MemoryHistoryCard /> — 5/16 砍, 见 import 段注释 */}
+        {/* <MemoryHistoryCard /> — 5/16 砍 (BL-MEMORY-HISTORY-KILL) */}
         <UserProfileCard />
         <StyleFingerprintCard />
-        <FeedbackSummaryCard />
+        {/* <FeedbackSummaryCard /> — 5/16 砍 (BL-FEEDBACK-CARD-KILL) */}
       </CollapsibleSection>
 
       {/* 第四组: 服务 — gateway / quota / catalog / 我装的 skill+mcp / curator (默认收) */}
