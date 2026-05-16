@@ -1596,6 +1596,8 @@ memory_recall 没匹配 → **不要瞎猜** (别假设 ref 名字叫 `keychain:
 
 > ⚠️ **5/16 重写**: hermes 0.13 升级 + BL-MEMORY-CATFISH-REMEMBER-BLACKLIST 后, 老接口路由表 (memory_save / multi-topic .md / catfish_remember) **全过时**.
 > 触发条件 / 自检 4 步 / narrate 红线 仍在 § BL-MM5 + § BL-MM1 详述, 这段只更新**新接口路由** + **target 二分语义** + **常见错误**.
+>
+> 🚨 **隐私原则强制纪律**: 详见 `docs/PRIVACY-PRINCIPLES.md` — 员工 memory 永远本机, 中心不采集除非员工 explicit 上传. 任何"跨员工同步 / 中心审计 memory" 提议都是反原则, 直接拒.
 
 ### 接口路由 — 5/16 现行
 
