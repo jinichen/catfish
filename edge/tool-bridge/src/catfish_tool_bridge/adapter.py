@@ -16,7 +16,8 @@ import inspect
 import logging
 import os
 import traceback
-from typing import Any, Dict, List
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 import time
 
@@ -26,6 +27,94 @@ logger = logging.getLogger("catfish.tool_bridge.adapter")
 
 # bootstrap 后由 server 注入
 _registry_module = None
+
+
+# ============================================================
+# BL-MEMORY-BRIDGE-STORE (5/16 鸿波 6h 实盘排查终点)
+# ============================================================
+# hermes 0.13 memory 工具 (tools/memory_tool.py:478) 要 dispatch 时 kw['store']
+# 注入一个 MemoryStore 实例. hermes CLI 走 AIAgent 注入, catfish tool-bridge
+# 是 stateless dispatch 一直没注入 → 工具返
+#   '{"error": "Memory is not available. ...", "success": false}'
+# 现象: ~/.hermes/MEMORY.md / USER.md 长期不更新 (USER.md 最后 5/3, 那时还有别的
+# 路径偶尔触发过). 5/16 鸿波在 6h 长摸排里逐层排除模型/sanitizer/dispatch/SOUL
+# 后定位.
+#
+# 修法: tool-bridge 启动后 lazy 构造一个 MemoryStore singleton, load_from_disk()
+# 读现有 entries, dispatch memory 时塞 kw['store']=store. 一次到位, hermes 升级
+# 不破 (MemoryStore signature 简单 + 默认值).
+#
+# 并发: hermes CLI 自己也是单 AIAgent 单 store, 我们仿同样的 in-memory + 文件锁
+# 模型, 不比 hermes 更不安全.
+# ============================================================
+
+_memory_store_cache: Any = None
+_memory_store_init_failed = False
+
+
+def _read_hermes_memory_config() -> dict:
+    """读 ~/.hermes/config.yaml 的 memory 段. 缺失 / 解析失败返空 dict.
+
+    返回的 dict 用 MemoryStore 默认值兜底 (memory_char_limit=2200, user_char_limit=1375).
+    """
+    cfg_path = Path.home() / ".hermes" / "config.yaml"
+    if not cfg_path.exists():
+        return {}
+    try:
+        import yaml  # noqa: PLC0415  # 延迟 import, 避免影响 tool-bridge 启动速度
+        with open(cfg_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        return data.get("memory") or {}
+    except Exception as e:
+        logger.warning(
+            "BL-MEMORY-BRIDGE-STORE: 读 ~/.hermes/config.yaml memory 段失败, "
+            "用 hermes 默认 char_limit: %s",
+            e,
+        )
+        return {}
+
+
+def _get_memory_store():
+    """Lazy + cache hermes MemoryStore singleton.
+
+    第一次调用时构造 + load_from_disk(), 后续返同一实例.
+    任何步骤失败 → 标 init_failed, 一直返 None (不反复重试免刷 log).
+    """
+    global _memory_store_cache, _memory_store_init_failed
+    if _memory_store_cache is not None:
+        return _memory_store_cache
+    if _memory_store_init_failed:
+        return None
+
+    try:
+        # hermes-agent 已经在 sys.path 里 (bootstrap.bootstrap() 启动时塞的)
+        from tools.memory_tool import MemoryStore  # noqa: PLC0415
+
+        cfg = _read_hermes_memory_config()
+        store = MemoryStore(
+            memory_char_limit=int(cfg.get("memory_char_limit", 2200)),
+            user_char_limit=int(cfg.get("user_char_limit", 1375)),
+        )
+        store.load_from_disk()
+        _memory_store_cache = store
+        logger.info(
+            "BL-MEMORY-BRIDGE-STORE: hermes MemoryStore 初始化成功 "
+            "(mem_limit=%d user_limit=%d, mem_entries=%d user_entries=%d)",
+            store.memory_char_limit,
+            store.user_char_limit,
+            len(store.memory_entries),
+            len(store.user_entries),
+        )
+        return store
+    except Exception as e:
+        logger.exception(
+            "BL-MEMORY-BRIDGE-STORE: MemoryStore 初始化失败, "
+            "memory tool 将持续返 disabled. 错: %s",
+            e,
+        )
+        _memory_store_init_failed = True
+        return None
+
 
 
 def install_registry(registry_module) -> None:
@@ -519,6 +608,17 @@ async def dispatch_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     # 重启 tool-bridge. 这是廉价操作 (一次 lock + 时间戳更新)。
     skill_watcher.mark_dispatch()
 
+    # BL-MEMORY-PLUMBING-DIAG (5/16): memory 工具入口/出口都打 log, 排
+    # "LLM 调了 memory action=add 但 ~/.hermes/memories/ 没动" 真因.
+    # 只对 hermes memory 这一个工具加 log, 不污染其它 tool 日志.
+    # 直接用 name == "memory" — _is_memory_tool 变量曾撞 _do_dispatch 不同
+    # 作用域闯出 NameError, 把所有 memory 调用 fail 掉了 (5/16 16:07 实盘 trap).
+    if name == "memory":
+        logger.info(
+            "BL-MEMORY-PLUMBING-DIAG dispatch IN: name=%s args=%s",
+            name, args,
+        )
+
     # 守卫: execute_code 沙箱误调用 catfish 工具 → 立即拒绝, 不让模型死等 timeout.
     misuse_msg = _check_execute_code_misuse(name, args)
     if misuse_msg:
@@ -603,137 +703,240 @@ async def dispatch_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-async def _do_dispatch(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
-    """实际 dispatch 逻辑. 抽出来让 dispatch_tool 可以包 audit."""
-    # 先看 catfish 原生 tool —— 这些不走 hermes registry, 也不要求 toolset
-    # 可用性检查 (它们就是 catfish 自己的代码, 一定在)
-    if catfish_tools.is_native(name):
-        try:
-            raw = await asyncio.to_thread(catfish_tools.dispatch_native, name, args)
-            return {"ok": True, "tool": name, "result": raw, "error": None}
-        except Exception as e:
-            logger.exception("native dispatch failed: %s", name)
-            return {
-                "ok": False, "tool": name, "result": None,
-                "error": f"{type(e).__name__}: {e}",
-                "traceback": traceback.format_exc()[:2000],
-            }
+# ============================================================
+# BL-LINT-B (5/16): _do_dispatch 拆 — 193 LOC → 路由 ~40 LOC + 5 个分支函数.
+# 风险低 (我有 test_memory_store_injection.py + test_memory_save_versioned.py
+# 守, 测试套 652 个 baseline 也跑). 不改语义, 只拆.
+# ============================================================
 
-    # BL-D3 Phase 3 (5/9): MCP server tools — 名以 mcp_<connector>_ 开头.
-    # tool-bridge 启动时 spawn 的 mcp server (subprocess + stdio JSON-RPC),
-    # 透传 tools/call 拿结果.
+
+def _err_result(name: str, e: Exception, prefix: str = "") -> Dict[str, Any]:
+    """统一的 dispatch error 返回 shape. 含 traceback 头 2000 字节用于 audit.
+
+    prefix 用于区分 error 来源 (e.g. "sandbox crash:"), 空 = 用 exc 默认格式.
+    """
+    msg = f"{type(e).__name__}: {e}"
+    if prefix:
+        msg = f"{prefix} {msg}"
+    return {
+        "ok": False,
+        "tool": name,
+        "result": None,
+        "error": msg,
+        "traceback": traceback.format_exc()[:2000],
+    }
+
+
+async def _dispatch_native_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    """catfish 原生 tool — 不走 hermes registry, 不查 toolset 可用性."""
+    try:
+        raw = await asyncio.to_thread(catfish_tools.dispatch_native, name, args)
+        return {"ok": True, "tool": name, "result": raw, "error": None}
+    except Exception as e:
+        logger.exception("native dispatch failed: %s", name)
+        return _err_result(name, e)
+
+
+async def _dispatch_mcp_tool(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    """BL-D3 Phase 3 (5/9): MCP server tools (mcp_<connector>_*) — 透传 tools/call."""
+    from . import mcp_client  # noqa: PLC0415  延迟 import 防循环
+    try:
+        raw = await mcp_client.dispatch_mcp_tool(name, args)
+        return {"ok": True, "tool": name, "result": raw, "error": None}
+    except Exception as e:
+        logger.exception("mcp dispatch failed: %s", name)
+        return _err_result(name, e)
+
+
+async def _dispatch_sandboxed_code(
+    name: str, args: Dict[str, Any], sandbox_lang: str,
+) -> Dict[str, Any]:
+    """BL-S29.2/29.5: execute_code/python/bash/sh 走平台沙箱 (macOS sandbox-exec /
+    Linux nsjail / Docker fallback) 隔离子进程, 不转给 hermes dispatch.
+
+    返回 shape 跟 hermes execute_code 兼容, LLM 看不出区别. 加 sandbox_used /
+    sandbox_kind 进 audit, 客户信安能 grep.
+    """
+    # 不同 hermes 工具字段名不一样, 兜底逐个看
+    code = (
+        args.get("code")
+        or args.get("script")
+        or args.get("command")
+        or args.get("input")
+        or ""
+    )
+    if not code:
+        return {
+            "ok": False, "tool": name, "result": None,
+            "error": f"沙箱模式: 工具 {name} 调用未提供 code/script/command 字段",
+        }
+    timeout_s = int(args.get("timeout_s") or args.get("timeout") or 30)
+    try:
+        sb_result = await asyncio.to_thread(
+            sandbox.run_in_sandbox,
+            code,
+            lang=sandbox_lang,
+            timeout_s=timeout_s,
+        )
+    except Exception as e:
+        logger.exception("sandbox dispatch crashed: %s", name)
+        return _err_result(name, e, prefix="sandbox crash:")
+
+    return {
+        "ok": sb_result["ok"],
+        "tool": name,
+        "result": {
+            "stdout": sb_result["stdout"],
+            "stderr": sb_result["stderr"],
+            "returncode": sb_result["rc"],
+            "elapsed_ms": sb_result["elapsed_ms"],
+            "timed_out": sb_result["timed_out"],
+            "sandbox_used": sb_result["sandbox_used"],
+            "sandbox_kind": sb_result["sandbox_kind"],
+        },
+        "error": None if sb_result["ok"] else (
+            f"代码非 0 退出 (rc={sb_result['rc']})"
+            + (" [timeout]" if sb_result["timed_out"] else "")
+        ),
+    }
+
+
+def _resolve_tool_name_or_error(
+    name: str, all_names: List[str],
+) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """name 不在 registry 时, 试 BL-FIX-MCP-SHORTNAME auto-suffix 匹配.
+
+    返回 (resolved_name, error_dict). 命中 → (resolved, None). 不命中 → (None, error_dict).
+    name 已在 registry → (name, None).
+    """
+    if name in all_names:
+        return name, None
+
+    fallback = _resolve_mcp_short_name(name, all_names)
+    if fallback:
+        logger.info(
+            "BL-FIX-MCP-SHORTNAME: dispatch %r → %r (auto-suffix match)",
+            name, fallback,
+        )
+        return fallback, None
+
+    candidates = _suggest_mcp_full_names(name, all_names)
+    err_msg = f"unknown tool: {name}"
+    if candidates:
+        err_msg += (
+            f". MCP 工具调用必须用全名, 你大概想调: {', '.join(candidates[:5])}"
+        )
+    return None, {
+        "ok": False, "tool": name, "result": None,
+        "error": err_msg,
+        "candidates": candidates[:5],
+    }
+
+
+def _build_extra_kwargs_for_hermes(name: str) -> Dict[str, Any]:
+    """根据 tool name 决定要给 hermes registry.dispatch 透传哪些 kwargs.
+
+    BL-MEMORY-BRIDGE-STORE (5/16): hermes 0.13 memory 工具 handler 要
+    kw['store'] 注入 MemoryStore — 不然 hermes 返 'Memory is not available'.
+    todo 工具同模式, 但 catfish 当前没人调, 不做注入.
+    """
+    extra_kw: Dict[str, Any] = {}
+    if name == "memory":
+        mem_store = _get_memory_store()
+        if mem_store is not None:
+            extra_kw["store"] = mem_store
+        # store 拿不到也照常 dispatch — hermes memory_tool 会自己返
+        # "Memory is not available", 比我们这层拦截更对齐 hermes 错误格式.
+    return extra_kw
+
+
+async def _dispatch_via_hermes_registry(
+    name: str, args: Dict[str, Any], registry: Any,
+) -> Dict[str, Any]:
+    """走 hermes registry.dispatch 主路径. 含 store 注入 + 结果截断 + memory 工具诊断 log."""
+    extra_kw = _build_extra_kwargs_for_hermes(name)
+
+    try:
+        dispatch_fn = registry.dispatch
+        if inspect.iscoroutinefunction(dispatch_fn):
+            raw = await dispatch_fn(name, args, **extra_kw)
+        else:
+            # to_thread 跑 sync dispatch 避免堵 asyncio loop. **extra_kw 透传给
+            # registry.dispatch(name, args, **kwargs) — hermes 接, lambda handler
+            # 内 kw.get('store') 拿到 MemoryStore.
+            raw = await asyncio.to_thread(
+                dispatch_fn, name, args, **extra_kw,
+            )
+
+        try:
+            max_size = registry.get_max_result_size(name)
+        except Exception:
+            max_size = 100_000  # 兜底 100KB
+        truncated = _truncate_for_ipc(raw, max_size)
+
+        if name == "memory":
+            # 截断打印, 避免长 result 撑爆 log
+            raw_repr = repr(raw)[:500] if raw is not None else "None"
+            logger.info(
+                "BL-MEMORY-PLUMBING-DIAG dispatch OUT ok: name=%s raw_type=%s raw=%s",
+                name, type(raw).__name__, raw_repr,
+            )
+        return {"ok": True, "tool": name, "result": truncated, "error": None}
+
+    except Exception as e:
+        if name == "memory":
+            logger.warning(
+                "BL-MEMORY-PLUMBING-DIAG dispatch OUT err: name=%s exc=%s: %s",
+                name, type(e).__name__, e,
+            )
+        logger.exception("dispatch_tool failed: %s", name)
+        return _err_result(name, e)
+
+
+async def _do_dispatch(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    """实际 dispatch 逻辑. 抽出来让 dispatch_tool 可以包 audit.
+
+    5 个分支按优先级:
+      1. catfish native (不走 hermes)
+      2. mcp server tools (透传 mcp_client)
+      3. sandbox 化的 execute_code (走平台沙箱)
+      4. memory_save BL-MM3 版本化 wrapper
+      5. hermes registry.dispatch 主路径 (含 store 注入)
+
+    任一分支命中 → 直接返结果. 其它情况落到分支 5.
+    """
+    # 1. catfish 原生 tool
+    if catfish_tools.is_native(name):
+        return await _dispatch_native_tool(name, args)
+
+    # 2. MCP server tool (BL-D3 Phase 3)
     from . import mcp_client  # noqa: PLC0415  延迟 import 防循环
     if mcp_client.is_mcp_tool(name):
-        try:
-            raw = await mcp_client.dispatch_mcp_tool(name, args)
-            return {"ok": True, "tool": name, "result": raw, "error": None}
-        except Exception as e:
-            logger.exception("mcp dispatch failed: %s", name)
-            return {
-                "ok": False, "tool": name, "result": None,
-                "error": f"{type(e).__name__}: {e}",
-                "traceback": traceback.format_exc()[:2000],
-            }
+        return await _dispatch_mcp_tool(name, args)
 
-    # ============================================================
-    # BL-S29.2 (5/7): execute_code/python/bash/sh 走 macOS sandbox-exec
-    # 隔离子进程, 不再转给 hermes dispatch.
-    #
-    # 启用条件: env CATFISH_SANDBOX_EXEC=1 + macOS + sandbox-exec 在 PATH
-    # 不启用 / 非 macOS / 沙箱不支持 → 走原 hermes dispatch (兼容)
-    # 5/19 BL-S29.5 加 nsjail (Linux) + Docker fallback 双层 fallback
-    # ============================================================
+    # 3. sandboxed execute_code (BL-S29.2/29.5)
     sandbox_lang = sandbox.detect_lang_from_tool_name(name)
     if (
         sandbox_lang is not None
         and sandbox.is_sandbox_enabled()
         and sandbox.is_sandbox_supported()
     ):
-        # 拿代码体: 不同 hermes 工具字段名不一样, 兜底逐个看
-        code = (
-            args.get("code")
-            or args.get("script")
-            or args.get("command")
-            or args.get("input")
-            or ""
-        )
-        if not code:
-            return {
-                "ok": False, "tool": name, "result": None,
-                "error": f"沙箱模式: 工具 {name} 调用未提供 code/script/command 字段",
-            }
-        timeout_s = int(args.get("timeout_s") or args.get("timeout") or 30)
-        try:
-            sb_result = await asyncio.to_thread(
-                sandbox.run_in_sandbox,
-                code,
-                lang=sandbox_lang,
-                timeout_s=timeout_s,
-            )
-        except Exception as e:
-            logger.exception("sandbox dispatch crashed: %s", name)
-            return {
-                "ok": False, "tool": name, "result": None,
-                "error": f"sandbox crash: {type(e).__name__}: {e}",
-                "traceback": traceback.format_exc()[:2000],
-            }
-        # 把沙箱结果包装成跟 hermes execute_code 兼容的形状, LLM 看不出区别
-        return {
-            "ok": sb_result["ok"],
-            "tool": name,
-            "result": {
-                "stdout": sb_result["stdout"],
-                "stderr": sb_result["stderr"],
-                "returncode": sb_result["rc"],
-                "elapsed_ms": sb_result["elapsed_ms"],
-                "timed_out": sb_result["timed_out"],
-                # 这俩字段进 audit, 客户信安能看到 "这次 execute_code 跑在沙箱里"
-                "sandbox_used": sb_result["sandbox_used"],
-                "sandbox_kind": sb_result["sandbox_kind"],
-            },
-            "error": None if sb_result["ok"] else (
-                f"代码非 0 退出 (rc={sb_result['rc']})"
-                + (" [timeout]" if sb_result["timed_out"] else "")
-            ),
-        }
+        return await _dispatch_sandboxed_code(name, args, sandbox_lang)
 
+    # 4 + 5: 需要 registry. 先解析 tool name (含 mcp 短名 fallback).
     r = _r()
     all_names = r.get_all_tool_names()
-    if name not in all_names:
-        # BL-FIX-MCP-SHORTNAME (5/12 鸿波 Companion 截图): LLM 调短名 'local_search'
-        # 时, 真名是 'mcp_catfish_local_search_local_search'. SOUL.md 多处用短名描述
-        # 教坏了 LLM. 加自动 suffix 匹配 — 短名 → 唯一长名命中改派, 歧义/无命中返
-        # 友好 error 含候选全名建议.
-        fallback = _resolve_mcp_short_name(name, all_names)
-        if fallback:
-            logger.info(
-                "BL-FIX-MCP-SHORTNAME: dispatch %r → %r (auto-suffix match)",
-                name, fallback,
-            )
-            name = fallback
-        else:
-            # 找候选给 LLM 提示用 (短名匹配后缀的所有 mcp_ 工具)
-            candidates = _suggest_mcp_full_names(name, all_names)
-            err_msg = f"unknown tool: {name}"
-            if candidates:
-                err_msg += (
-                    f". MCP 工具调用必须用全名, 你大概想调: {', '.join(candidates[:5])}"
-                )
-            return {
-                "ok": False, "tool": name, "result": None,
-                "error": err_msg,
-                "candidates": candidates[:5],
-            }
+    resolved_name, err = _resolve_tool_name_or_error(name, all_names)
+    if err is not None:
+        return err
+    assert resolved_name is not None  # for type checker
+    name = resolved_name
 
-    # ============================================================
-    # BL-MM3 (5/7): memory_save 走版本化 wrapper, 不直打 hermes
-    # ============================================================
-    # wrapper 内部用 r.dispatch 调真 memory_save / memory_recall, 不会死循环.
-    # disable 开关: env CATFISH_DISABLE_MM3=1 (调试时跳过 wrapper, 直打 hermes)
+    # 4. memory_save BL-MM3 版本化 wrapper (在 hermes dispatch 前拦截)
     if name == "memory_save" and os.environ.get("CATFISH_DISABLE_MM3") != "1":
         return await _memory_save_versioned(args)
 
-    # 用 toolset 维度判可用性 (而不是 check_tool_availability，因为它返回 tuple)
+    # toolset 可用性 check (用 toolset 维度判, check_tool_availability 返 tuple 不能直接用)
     toolset = r.get_toolset_for_tool(name)
     if toolset and not r.is_toolset_available(toolset):
         return {
@@ -741,32 +944,8 @@ async def _do_dispatch(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
             "error": f"toolset '{toolset}' 在当前环境不可用（依赖未装/env 未配/平台不支持）",
         }
 
-    try:
-        dispatch_fn = r.dispatch
-        if inspect.iscoroutinefunction(dispatch_fn):
-            raw = await dispatch_fn(name, args)
-        else:
-            # to_thread 跑 sync dispatch 避免堵 asyncio loop
-            raw = await asyncio.to_thread(dispatch_fn, name, args)
-
-        # hermes 的 max_result_size 是 per-tool 配置，需要传 name
-        try:
-            max_size = r.get_max_result_size(name)
-        except Exception:
-            max_size = 100_000  # 兜底 100KB
-        truncated = _truncate_for_ipc(raw, max_size)
-        return {
-            "ok": True, "tool": name, "result": truncated, "error": None,
-        }
-    except Exception as e:
-        logger.exception("dispatch_tool failed: %s", name)
-        return {
-            "ok": False,
-            "tool": name,
-            "result": None,
-            "error": f"{type(e).__name__}: {e}",
-            "traceback": traceback.format_exc()[:2000],
-        }
+    # 5. hermes registry.dispatch 主路径
+    return await _dispatch_via_hermes_registry(name, args, r)
 
 
 def _truncate_for_ipc(value: Any, max_size: int) -> Any:

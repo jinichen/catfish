@@ -59,12 +59,29 @@ _CATFISH_BROWSER_PREFIX = "catfish_browser_"
 _DEFAULT_MAX_TOOLS = 50
 _ENV_MAX_TOOLS = "CATFISH_MAX_TOOLS"
 
+#: BL-MEMORY-CATFISH-REMEMBER-BLACKLIST (5/16 鸿波 A 真切) — 永不暴露给 LLM 的工具.
+#:
+#: 5/16 实盘 Nemotron 49B 在 catfish_remember vs hermes memory 之间反复, 选了
+#: 错的 (session-only 的 catfish_remember 当跨 session 用). SOUL nudge V1/V2/V3
+#: 都没让模型听话. 鸿波拍板: 干脆从 LLM 工具列表彻底移除 catfish_remember, 让
+#: LLM 没选择, 强制走 hermes memory.
+#:
+#: catfish_remember tool 本身**保留**实现 (供员工 /remember 显式命令触发, 或
+#: gateway 内部 BL-MM1/MM2 流程). 只是不再 expose 给上游 LLM.
+#:
+#: 想恢复 expose (操作员调试): env CATFISH_EXPOSE_REMEMBER=1.
+_HIDDEN_FROM_LLM: frozenset[str] = frozenset({
+    "catfish_remember",
+})
+
 #: Tier 1 — always-on 核心工具, 任何任务都该有, 永不 drop.
 #: 这些是 LLM agent loop 的最底座 (执行代码 / 读文件 / 写文件 / 记忆 / 跨问 / 切片 /
 #: 求澄清 / 派任务). 砍了 LLM 干不了基本事.
 _ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
     # Catfish 核心 native
-    "catfish_remember",
+    # BL-MEMORY-CATFISH-REMEMBER-BLACKLIST (5/16): catfish_remember 移到 hidden,
+    # 不再给 LLM 看到 (强制走 hermes memory).
+    # "catfish_remember",  # ← 从 always-on 移除 (现在在 _HIDDEN_FROM_LLM)
     "catfish_search_sessions",
     "catfish_list_my_outputs",
     "catfish_user_profile_get",
@@ -91,10 +108,10 @@ _ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
     # 12 天没动 / memories/ 3 周没动 / project_catfish_facts.md 0 字节空文件.
     # 这是设计缺陷: memory 应该跟 catfish_remember 同优先级, 永不砍.
     # 加白名单后 LLM 每次 chat 都能看到 memory.add/replace/remove, 自然写 USER.md.
+    # 5/16 BL-MEMORY-PLUMBING-DIAG 实盘: hermes 0.13 把 4 个旧 memory tool
+    # 合一为 `memory` (action=add/replace/remove/search). 不再注册 memory_save
+    # / memory_load / memory_search — 老名字留着 always-on hit log 永远报 missing.
     "memory",
-    "memory_save",
-    "memory_load",
-    "memory_search",
 })
 
 
@@ -201,6 +218,17 @@ def sanitize_tools(body: dict[str, Any]) -> dict[str, Any]:
             dropped.append(f"#{idx}(function.name 非法: {name!r})")
             continue
 
+        # BL-MEMORY-CATFISH-REMEMBER-BLACKLIST (5/16 鸿波 A): 永不暴露 catfish_remember
+        # 给 LLM. 模型层硬不听 SOUL nudge, 这是釜底抽薪 — 没选择只能用 hermes memory.
+        # env CATFISH_EXPOSE_REMEMBER=1 操作员可一键还原 (调试用).
+        import os  # noqa: PLC0415
+        if (
+            name in _HIDDEN_FROM_LLM
+            and os.environ.get("CATFISH_EXPOSE_REMEMBER", "0") != "1"
+        ):
+            dropped.append(f"#{idx}(name={name}: BL-MEMORY-CATFISH-REMEMBER-BLACKLIST, 强制走 hermes memory)")
+            continue
+
         # BL-FIX4: 撞 hermes builtin browser_* — 跟 catfish_browser_* 同时存在时丢
         # ("browser_" 开头 + 不带 "catfish_" 前缀)
         if (
@@ -271,6 +299,27 @@ def sanitize_tools(body: dict[str, Any]) -> dict[str, Any]:
         )
     cleaned = capped_tools
     body["tools"] = cleaned
+
+    # BL-MEMORY-PLUMBING-DIAG (5/16): 暴露 always-on 实际命中. 排"LLM 调了 31 个
+    # tool 但 ~/.hermes/memories/ 没动" 真因 — 假设上游 list_tools() 没送
+    # memory_save (hermes registry 没注册), sanitizer 看不到也变不出来.
+    # 一次聊天 log 出 always-on 实际命中名字, 三秒看清是模型层还是 plumbing 层.
+    seen_always_on: list[str] = []
+    for t in cleaned:
+        if not isinstance(t, dict):
+            continue
+        fn = t.get("function")
+        nm = fn.get("name") if isinstance(fn, dict) else None
+        if isinstance(nm, str) and nm in _ALWAYS_ON_TOOLS:
+            seen_always_on.append(nm)
+    # hermes 0.13 只一个 `memory` 工具, 见到就 OK.
+    if "memory" not in seen_always_on:
+        logger.warning(
+            "BL-MEMORY-PLUMBING-DIAG: always-on 缺 `memory` "
+            "(hermes registry 没注册 → LLM 看不到 → 永远写不了 hermes memories). "
+            "实际命中 always-on (%d): %s",
+            len(seen_always_on), sorted(set(seen_always_on)),
+        )
 
     # BL-FIX5 (5/8): 同步扫消息历史 — assistant.tool_calls 里 name 在 deduped 集
     # 合的剔掉, 对应 tool message 一起丢. 防 BL-FIX4 部署前的旧轮次撞 Qwen Go gRPC

@@ -109,13 +109,22 @@ def _count_jsonl_lines(path: Path) -> int:
 
 
 def audit_snapshot(home: Path) -> dict[str, int | str]:
-    """采 6 大指标 + 时间戳, 返 dict (CSV 一行)."""
+    """采 6 大指标 + 时间戳, 返 dict (CSV 一行).
+
+    路径变更 5/16: hermes 0.13 memory 工具实际写入 ~/.hermes/memories/{USER,MEMORY}.md
+    (get_memory_dir() = get_hermes_home() / 'memories'). 老 ~/.hermes/USER.md 是
+    hermes 0.10-0.12 残留, 已不更新 (5/3 最后一次, 还是别的 catfish path 写的).
+    audit KPI 改看 memories/ 下两个真实文件 — CSV 列名沿用 hermes_user_md_bytes
+    但数据源换路径, 历史值有断层.
+    """
     hermes = home / ".hermes"
     catfish = home / ".catfish"
 
-    hermes_user_md = hermes / "USER.md"
-    hermes_soul_md = hermes / "SOUL.md"  # symlink, 跟踪 mtime 看 catfish 改没
     hermes_memories_dir = hermes / "memories"
+    # 5/16 改: 真实文件在 memories/ 下, 不是 hermes 根目录
+    hermes_user_md = hermes_memories_dir / "USER.md"
+    hermes_memory_md = hermes_memories_dir / "MEMORY.md"
+    hermes_soul_md = hermes / "SOUL.md"  # symlink, 跟踪 mtime 看 catfish 改没
 
     catfish_journal = catfish / "employee_journal.md"
     catfish_distilled = catfish / "distilled_facts.md"
@@ -127,8 +136,9 @@ def audit_snapshot(home: Path) -> dict[str, int | str]:
     return {
         "date": datetime.now().strftime("%Y-%m-%d"),
         "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-        # hermes 这边 (KPI 1 分子)
+        # hermes 这边 (KPI 1 分子) — 5/16 路径改 memories/ 下
         "hermes_user_md_bytes": _safe_bytes(hermes_user_md),
+        "hermes_memory_md_bytes": _safe_bytes(hermes_memory_md),
         "hermes_memories_bytes": memories_bytes,
         "hermes_memories_files": memories_files,
         "hermes_soul_mtime": _safe_mtime(hermes_soul_md),
@@ -162,7 +172,8 @@ def main() -> int:
     print(
         f"[{snapshot['timestamp']}] "
         f"hermes USER.md={snapshot['hermes_user_md_bytes']}B "
-        f"memories={snapshot['hermes_memories_bytes']}B/{snapshot['hermes_memories_files']}f | "
+        f"MEMORY.md={snapshot['hermes_memory_md_bytes']}B "
+        f"memories_total={snapshot['hermes_memories_bytes']}B/{snapshot['hermes_memories_files']}f | "
         f"catfish journal={snapshot['catfish_journal_bytes']}B "
         f"distilled={snapshot['catfish_distilled_bytes']}B "
         f"facts={snapshot['catfish_facts_bytes']}B "
