@@ -17,7 +17,10 @@ interface Props {
   title: string;
   defaultCollapsed?: boolean;
   children: ReactNode;
-  count?: number;  // 显示卡数量, 折叠时也能看到
+  /** BL-SECTION-COUNT-KILL (5/16): count prop 仍接收但不再渲染. 调用方传值不影响.
+   *  当时为了 5 类 widget 看起来有结构感, 砍卡后 count 一直变, 维护成本反而出来,
+   *  而且 dashboard widget 计数对员工没产品价值 (不是 list count). */
+  count?: number;
 }
 
 const STORAGE_PREFIX = "dashboard_section_";
@@ -45,7 +48,7 @@ export default function CollapsibleSection({
   title,
   defaultCollapsed = false,
   children,
-  count,
+  count: _count,  // BL-SECTION-COUNT-KILL: 接收不渲染 (兼容现有调用方传 count)
 }: Props) {
   const [collapsed, setCollapsed] = useState(() =>
     readCollapsed(id, defaultCollapsed)
@@ -103,19 +106,7 @@ export default function CollapsibleSection({
           ▼
         </span>
         <span>{title}</span>
-        {count !== undefined && (
-          <span
-            style={{
-              fontSize: 12,
-              color: "var(--catfish-text-muted)",
-              fontWeight: 400,
-              opacity: 0.7,
-              marginLeft: 4,
-            }}
-          >
-            · {count}
-          </span>
-        )}
+        {/* BL-SECTION-COUNT-KILL (5/16): "· N" 计数砍, 维护成本 > 价值 */}
       </button>
       {!collapsed && (
         <div
