@@ -43,6 +43,9 @@ export default function HermesMemoryCard() {
   const [view, setView] = useState<HermesMemoryView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);  // 哪条正在删
+  // BL-MEMORY-EDIT-UI fix (5/16): Tauri webview 默认禁 native confirm(), 改 inline
+  // 二次点击 — 点第 1 次 🗑 进 confirming 态 (按钮变红 ✓), 点第 2 次真删.
+  const [confirming, setConfirming] = useState<string | null>(null);
 
   const load = async () => {
     try {
@@ -55,15 +58,23 @@ export default function HermesMemoryCard() {
   };
 
   const handleRemove = async (target: "user" | "memory", entry: string) => {
-    if (!confirm(`删这条 memory?\n\n"${entry.slice(0, 60)}${entry.length > 60 ? "…" : ""}"\n\n删了之后 hermes USER.md / MEMORY.md 里就没了 (本机文件 atomic 写). 真删?`)) {
+    // 第 1 次点 → 进 confirming 态
+    if (confirming !== entry) {
+      setConfirming(entry);
+      // 3 秒后自动 reset confirming, 防误存
+      setTimeout(() => {
+        setConfirming((cur) => (cur === entry ? null : cur));
+      }, 3000);
       return;
     }
+    // 第 2 次点 → 真删
+    setConfirming(null);
     setRemoving(entry);
     try {
       await removeEntry(target, entry);
       await load();  // 刷新
     } catch (e) {
-      alert(`删除失败: ${e instanceof Error ? e.message : String(e)}`);
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setRemoving(null);
     }
@@ -136,6 +147,7 @@ export default function HermesMemoryCard() {
             chars={userChars}
             limit={view.user_char_limit}
             removing={removing}
+            confirming={confirming}
             onRemove={(e) => void handleRemove("user", e)}
           />
           <EntrySection
@@ -144,6 +156,7 @@ export default function HermesMemoryCard() {
             chars={memoryChars}
             limit={view.memory_char_limit}
             removing={removing}
+            confirming={confirming}
             onRemove={(e) => void handleRemove("memory", e)}
           />
         </div>
@@ -175,6 +188,7 @@ function EntrySection({
   chars,
   limit,
   removing,
+  confirming,
   onRemove,
 }: {
   label: string;
@@ -182,6 +196,7 @@ function EntrySection({
   chars: number;
   limit: number;
   removing: string | null;
+  confirming: string | null;
   onRemove: (entry: string) => void;
 }) {
   const pct = limit > 0 ? Math.min((chars / limit) * 100, 100) : 0;
@@ -239,13 +254,14 @@ function EntrySection({
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {entries.map((e, i) => {
             const isRemoving = removing === e;
+            const isConfirming = confirming === e;
             return (
               <div
                 key={i}
                 style={{
                   fontSize: 12,
                   padding: "4px 8px",
-                  background: "var(--catfish-bg)",
+                  background: isConfirming ? "var(--catfish-warn-bg, #fff3cd)" : "var(--catfish-bg)",
                   borderRadius: "var(--radius-sm)",
                   lineHeight: 1.5,
                   wordBreak: "break-word",
@@ -253,6 +269,7 @@ function EntrySection({
                   alignItems: "flex-start",
                   gap: 6,
                   opacity: isRemoving ? 0.4 : 1,
+                  transition: "background 0.15s",
                 }}
               >
                 <span style={{ flex: 1 }}>{e}</span>
@@ -260,18 +277,24 @@ function EntrySection({
                   type="button"
                   onClick={() => onRemove(e)}
                   disabled={isRemoving}
-                  title="删这条 memory (本机 hermes USER.md / MEMORY.md atomic 写)"
+                  title={
+                    isConfirming
+                      ? "再点一次真删"
+                      : "删这条 memory (本机 hermes USER.md atomic 写)"
+                  }
                   style={{
                     flexShrink: 0,
-                    background: "transparent",
+                    background: isConfirming ? "var(--status-err, #d33)" : "transparent",
                     border: "none",
-                    color: "var(--catfish-text-muted)",
+                    color: isConfirming ? "white" : "var(--catfish-text-muted)",
                     cursor: isRemoving ? "default" : "pointer",
                     fontSize: 11,
-                    padding: "0 4px",
+                    padding: isConfirming ? "2px 8px" : "0 4px",
+                    borderRadius: 3,
+                    fontWeight: isConfirming ? 600 : 400,
                   }}
                 >
-                  {isRemoving ? "..." : "🗑"}
+                  {isRemoving ? "..." : isConfirming ? "确认删" : "🗑"}
                 </button>
               </div>
             );
