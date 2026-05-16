@@ -80,6 +80,11 @@ class IdentityUser:
     created_by: str = "system"
     last_login_at: str | None = None
     must_change_password: bool = False
+    # ── RBAC Day 3a (5/17 加, BL-RBAC-DAY3A) ──
+    # None = 继承 department.allowed_models; [] = 用户级 override 解锁全允许;
+    # [m1, m2] = 用户级 override 收紧只允许这俩.
+    # gateway 拿到 user → 走 get_effective_allowed_models() 决议.
+    allowed_models: list[str] | None = None
 
     def effective_role(self) -> str:
         """实际生效的 role. 优先 role 字段, 兜底 tier.
@@ -236,7 +241,9 @@ class UserRegistry:
                 rows = await conn.fetch(
                     "SELECT email, password_hash, name, department, tier, role, "
                     "managed_departments, locked, locked_at, locked_by, deleted_at, "
-                    "created_at, created_by, last_login_at, must_change_password "
+                    "created_at, created_by, last_login_at, must_change_password, "
+                    # BL-RBAC-DAY3A (5/17): allowed_models per-user 白名单
+                    "allowed_models "
                     "FROM users"
                 )
         except Exception as e:
@@ -255,6 +262,16 @@ class UserRegistry:
             email = (row["email"] or "").strip().lower()
             if not email or not row["password_hash"]:
                 continue
+            # BL-RBAC-DAY3A (5/17): allowed_models 解析. NULL → None (继承 dept).
+            am = row.get("allowed_models")
+            if isinstance(am, str):
+                import json as _json  # noqa: PLC0415
+                try:
+                    am = _json.loads(am)
+                except Exception:
+                    am = None
+            if am is not None and not isinstance(am, list):
+                am = None
             loaded[email] = IdentityUser(
                 email=email,
                 password_hash=row["password_hash"],
@@ -272,6 +289,8 @@ class UserRegistry:
                 created_by=row.get("created_by") or "system",
                 last_login_at=row["last_login_at"].isoformat() if row.get("last_login_at") else None,
                 must_change_password=bool(row.get("must_change_password", False)),
+                # BL-RBAC-DAY3A: per-user model 白名单 (None = 继承 dept)
+                allowed_models=[str(m) for m in am] if isinstance(am, list) else None,
             )
         self._users = loaded
         logger.info("PG users 加载: %d 个用户 (覆盖 yaml)", len(loaded))
@@ -367,6 +386,15 @@ class UserRegistry:
                         managed = _json.loads(managed)
                     if not isinstance(managed, list):
                         managed = []
+                    # BL-RBAC-DAY3A: allowed_models 解析
+                    am = r.get("allowed_models")
+                    if isinstance(am, str):
+                        try:
+                            am = _json.loads(am)
+                        except Exception:
+                            am = None
+                    if am is not None and not isinstance(am, list):
+                        am = None
                     out.append(IdentityUser(
                         email=r["email"], password_hash=r["password_hash"],
                         name=r["name"] or "", department=r["department"] or "",
@@ -380,6 +408,7 @@ class UserRegistry:
                         created_by=r["created_by"] or "system",
                         last_login_at=r["last_login_at"].isoformat() if r["last_login_at"] else None,
                         must_change_password=bool(r["must_change_password"]),
+                        allowed_models=[str(m) for m in am] if isinstance(am, list) else None,
                     ))
                 return out
         # 内存 fallback (yaml only, 没 PG 时)
