@@ -8,9 +8,56 @@
  *
  * 软删 = 标 deleted_at, 30 天内可手动 restore (走 sessionRestore Tauri 命令).
  */
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { sessionsBulkDeleteShort, type BulkDeleteResult } from "../../lib/tauri";
 import { invoke } from "@tauri-apps/api/core";
+
+// BL-DASHBOARD-UI-CLEANUP-V3 (5/16 鸿波 '可恢复怎么恢复'): 把上次软删持久化到
+// localStorage, Companion 重启仍能看到"上次软删的 N 个 [恢复]" 按钮. 防"30 秒
+// 倒计时过后无路径恢复" 的虚假承诺.
+const LAST_DELETED_LS_KEY = "session_cleanup_last_deleted";
+
+interface LastDeletedSnap {
+  count: number;
+  ids: string[];
+  ts: number;  // 删的时间 epoch, 显示"5 分钟前删的"
+}
+
+function readLastDeleted(): LastDeletedSnap | null {
+  try {
+    const raw = localStorage.getItem(LAST_DELETED_LS_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as LastDeletedSnap;
+    // 超 30 天的删除记录清掉 (后端也过期不能 restore 了)
+    if (Date.now() - parsed.ts > 30 * 86400_000) {
+      localStorage.removeItem(LAST_DELETED_LS_KEY);
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeLastDeleted(snap: LastDeletedSnap | null): void {
+  try {
+    if (snap === null) {
+      localStorage.removeItem(LAST_DELETED_LS_KEY);
+    } else {
+      localStorage.setItem(LAST_DELETED_LS_KEY, JSON.stringify(snap));
+    }
+  } catch {
+    // localStorage 满/禁 silent fail, 不影响 UI
+  }
+}
+
+function formatTimeAgo(ts: number): string {
+  const diff = Date.now() - ts;
+  if (diff < 60_000) return "刚刚";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
+  return `${Math.floor(diff / 86_400_000)} 天前`;
+}
 
 /** 解析 hermes session id 成可读时间.
  *
@@ -33,9 +80,10 @@ export function SessionCleanupCard() {
   const [maxMessages, setMaxMessages] = useState(3);
   const [maxAgeHours, setMaxAgeHours] = useState(168);  // 7 天
   const [error, setError] = useState<string | null>(null);
-  const [lastDeleted, setLastDeleted] = useState<{ count: number; ids: string[] } | null>(null);
-  const [undoSecondsLeft, setUndoSecondsLeft] = useState(0);
-  const undoTimerRef = useRef<number | null>(null);
+  // BL-DASHBOARD-UI-CLEANUP-V3: lastDeleted 持久化 localStorage, 关 app 重启仍在
+  const [lastDeleted, setLastDeleted] = useState<LastDeletedSnap | null>(
+    () => readLastDeleted()
+  );
 
   // BL-DASHBOARD-UI-CLEANUP-V2: 进卡片自动 fetch 候选, 不需要员工点"预览"
   const fetchCandidates = async () => {
@@ -61,29 +109,9 @@ export function SessionCleanupCard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [maxMessages, maxAgeHours]);
 
-  // 撤销倒计时
-  useEffect(() => {
-    if (undoSecondsLeft <= 0) {
-      if (undoTimerRef.current) {
-        clearInterval(undoTimerRef.current);
-        undoTimerRef.current = null;
-      }
-      return;
-    }
-    undoTimerRef.current = window.setTimeout(() => {
-      setUndoSecondsLeft((s) => s - 1);
-    }, 1000);
-    return () => {
-      if (undoTimerRef.current) {
-        clearTimeout(undoTimerRef.current);
-      }
-    };
-  }, [undoSecondsLeft]);
-
   const doDelete = async () => {
     if (!candidates || candidates.total === 0) return;
     // BL-DASHBOARD-UI-CLEANUP-V2: 去 confirm() (Tauri window 不弹, bug 来源).
-    // 一键删 + 30 秒撤销窗口兜底.
     setLoading(true);
     setError(null);
     try {
@@ -92,8 +120,14 @@ export function SessionCleanupCard() {
         maxAgeHours,
         preview: false,
       });
-      setLastDeleted({ count: r.total, ids: r.sessionIds });
-      setUndoSecondsLeft(30);  // 30 秒撤销窗口
+      // V3: 持久化 lastDeleted, 关 app 重启仍能恢复
+      const snap: LastDeletedSnap = {
+        count: r.total,
+        ids: r.sessionIds,
+        ts: Date.now(),
+      };
+      setLastDeleted(snap);
+      writeLastDeleted(snap);
       setCandidates(null);
     } catch (e) {
       setError(`删除失败: ${e}`);
@@ -113,13 +147,19 @@ export function SessionCleanupCard() {
         await invoke("session_restore", { id });
       }
       setLastDeleted(null);
-      setUndoSecondsLeft(0);
+      writeLastDeleted(null);
       void fetchCandidates();  // 撤销后重新 fetch 候选
     } catch (e) {
       setError(`撤销失败: ${e}`);
     } finally {
       setLoading(false);
     }
+  };
+
+  const doDismiss = () => {
+    // BL-DASHBOARD-UI-CLEANUP-V3: 员工显式说"我知道了不恢复" → 清 banner
+    setLastDeleted(null);
+    writeLastDeleted(null);
   };
 
   return (
@@ -191,45 +231,58 @@ export function SessionCleanupCard() {
         <div style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>查询中…</div>
       )}
 
-      {/* 删完: 显示成功 + 撤销 (30 秒倒计时) */}
+      {/* BL-DASHBOARD-UI-CLEANUP-V3: 删完显示 banner, 撤销按钮永远在 (不倒计时)
+          + dismiss 按钮让员工显式关. localStorage 持久化, 关 app 重启仍在. */}
       {lastDeleted && (
         <div
           style={{
             display: "flex",
             alignItems: "center",
             gap: 12,
-            padding: "8px 12px",
+            padding: "10px 12px",
             background: "var(--catfish-bg)",
+            border: "1px solid var(--catfish-success, #059669)",
             borderRadius: 6,
             fontSize: 12,
-            marginBottom: 8,
+            marginBottom: 12,
           }}
         >
           <span style={{ color: "var(--catfish-success, #059669)", flex: 1 }}>
-            ✓ 已软删 {lastDeleted.count} 个 session
+            ✓ {formatTimeAgo(lastDeleted.ts)}软删了 {lastDeleted.count} 个 session
           </span>
-          {undoSecondsLeft > 0 ? (
-            <button
-              type="button"
-              onClick={doUndo}
-              disabled={loading}
-              style={{
-                padding: "4px 10px",
-                background: "transparent",
-                border: "1px solid var(--catfish-border)",
-                borderRadius: 4,
-                cursor: "pointer",
-                fontSize: 12,
-                color: "var(--catfish-cyan)",
-              }}
-            >
-              撤销 ({undoSecondsLeft}s)
-            </button>
-          ) : (
-            <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
-              30 天内仍可手动 restore
-            </span>
-          )}
+          <button
+            type="button"
+            onClick={doUndo}
+            disabled={loading}
+            style={{
+              padding: "4px 12px",
+              background: "transparent",
+              border: "1px solid var(--catfish-cyan)",
+              borderRadius: 4,
+              cursor: loading ? "wait" : "pointer",
+              fontSize: 12,
+              color: "var(--catfish-cyan)",
+              fontWeight: 500,
+            }}
+          >
+            {loading ? "恢复中…" : "全部恢复"}
+          </button>
+          <button
+            type="button"
+            onClick={doDismiss}
+            title="我知道了, 不恢复"
+            style={{
+              padding: "4px 8px",
+              background: "transparent",
+              border: "none",
+              cursor: "pointer",
+              fontSize: 14,
+              color: "var(--catfish-text-muted)",
+              lineHeight: 1,
+            }}
+          >
+            ✕
+          </button>
         </div>
       )}
 
