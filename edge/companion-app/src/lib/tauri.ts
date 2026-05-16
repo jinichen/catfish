@@ -69,6 +69,19 @@ export const toolBridgeCallTool = (
     sessionId,  // Tauri 命令 camelCase ↔ Rust snake_case 自动转换
   });
 
+// BL-DASHBOARD-HERMES-MEMORY-CARD (5/16): 读 hermes 0.13 真活 memory 文件
+export interface HermesMemoryView {
+  user_entries: string[];
+  memory_entries: string[];
+  total_bytes: number;
+  user_char_limit: number;
+  memory_char_limit: number;
+  user_file_path: string;
+  memory_file_path: string;
+}
+export const hermesMemoryRead = () =>
+  rawInvoke<HermesMemoryView>("hermes_memory_read");
+
 // ── health ───────────────────────────────────────────────
 export const fetchHealthz = () =>
   rawInvoke<{ status: string; service: string }>("healthz");

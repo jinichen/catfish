@@ -24,6 +24,7 @@ pub mod learning;
 pub mod local_search;
 pub mod logs;
 pub mod memory_history;
+pub mod hermes_memory;  // BL-DASHBOARD-HERMES-MEMORY-CARD (5/16)
 pub mod pet;
 pub mod relation;
 pub mod session_write;

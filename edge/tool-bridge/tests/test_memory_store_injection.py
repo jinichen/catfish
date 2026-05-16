@@ -287,6 +287,56 @@ def test_dispatch_todo_same_session_reuses_store(monkeypatch: pytest.MonkeyPatch
     assert store_1 is store_2, "同 session 应该复用 store, 实际新建"
 
 
+def test_todo_store_persists_to_disk_and_reloads(
+    monkeypatch: pytest.MonkeyPatch, tmp_path,
+) -> None:
+    """BL-TODO-STORE-PERSIST: dispatch 后 _persist_todo_store 写盘, 重启反加载 items.
+
+    模拟流程:
+      1. dispatch todo 一次, fake store._items mutate, _persist 写盘
+      2. 清 cache (模拟进程重启)
+      3. 再 _get_todo_store(同 session_id) → 应该从盘 _load 反加载 items
+    """
+    _reset_todo_store_cache(monkeypatch)
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    fake = _StoreInjectionFakeRegistry()
+    _install_fake_registry(monkeypatch, fake)
+
+    class _FakeTodoStore:
+        def __init__(self):
+            self._items = []
+
+    fake_module = types.SimpleNamespace(TodoStore=_FakeTodoStore)
+    monkeypatch.setitem(__import__("sys").modules, "tools.todo_tool", fake_module)
+
+    # 1. 第一次 dispatch, 模拟 hermes mutate store._items 加 1 个 todo
+    result = asyncio.run(adapter.dispatch_tool(
+        "todo", {"todos": [{"id": "1", "content": "test"}]},
+        session_id="sess-persist-test",
+    ))
+    assert result["ok"] is True
+
+    # fake.dispatch 不会真 mutate store._items. 手工 mutate 后调 _persist
+    store_before = adapter._todo_store_cache["sess-persist-test"]
+    store_before._items = [{"id": "1", "content": "test todo"}]
+    adapter._persist_todo_store("sess-persist-test", store_before)
+
+    # 验盘文件存在
+    persist_path = tmp_path / ".catfish" / "todo_store" / "sess-persist-test.json"
+    assert persist_path.exists(), "盘文件没写"
+
+    # 2. 清 cache (模拟进程重启)
+    _reset_todo_store_cache(monkeypatch)
+
+    # 3. 重新 _get_todo_store → 应该反加载
+    store_after = adapter._get_todo_store("sess-persist-test")
+    assert store_after is not None
+    assert store_after._items == [{"id": "1", "content": "test todo"}], (
+        f"反加载失败, items={store_after._items}"
+    )
+
+
 def test_get_memory_store_caches_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
     """第一次调用 init + load, 第二次直接返 cache 实例 (不重新 load_from_disk)."""
     _reset_memory_store_cache(monkeypatch)
