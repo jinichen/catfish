@@ -36,7 +36,8 @@ qwen 122b 标 `supports_tool_use: false`, gateway 检测员工触发 skill 意�
 from __future__ import annotations
 
 import logging
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from .config import Config, ModelConfig
 from .skill_guard import has_skill_intent

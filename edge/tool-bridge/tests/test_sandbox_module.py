@@ -272,3 +272,69 @@ class TestAdapterSandboxWiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+# ─── BL-SANDBOX-PPTX (5/15): _resolve_python_executable ──────────
+
+
+class TestResolvePythonExecutable(unittest.TestCase):
+    """python 解释器选择策略 — 5/15 鸿波撞 PPT 退化, 真因 sandbox.py 写死
+    /usr/bin/python3. 改成默认 sys.executable (= tool-bridge venv), 让 venv
+    装的 python-pptx / pandas / matplotlib 等 LLM execute_code 直接可用.
+    """
+
+    def test_default_is_sys_executable(self):
+        """没设 CATFISH_SANDBOX_PYTHON 时, 默认用 sys.executable"""
+        import sys
+        from catfish_tool_bridge import sandbox
+        env_no = {
+            k: v for k, v in os.environ.items()
+            if k != "CATFISH_SANDBOX_PYTHON"
+        }
+        with patch.dict(os.environ, env_no, clear=True):
+            result = sandbox._resolve_python_executable()
+            self.assertEqual(result, sys.executable)
+
+    def test_env_override(self):
+        """CATFISH_SANDBOX_PYTHON 显式覆盖时, 用 env (IT 部署定制场景)"""
+        from catfish_tool_bridge import sandbox
+        # 用一个真实存在的 path (sys.executable 自己就行)
+        import sys
+        with patch.dict(
+            os.environ,
+            {"CATFISH_SANDBOX_PYTHON": sys.executable},
+            clear=False,
+        ):
+            self.assertEqual(
+                sandbox._resolve_python_executable(),
+                sys.executable,
+            )
+
+    def test_env_override_nonexistent_falls_back(self):
+        """env 指了一个不存在的 path → fallback sys.executable + warn"""
+        import sys
+        from catfish_tool_bridge import sandbox
+        with patch.dict(
+            os.environ,
+            {"CATFISH_SANDBOX_PYTHON": "/nonexistent/python_definitely_not_here"},
+            clear=False,
+        ):
+            result = sandbox._resolve_python_executable()
+            # fallback 到 sys.executable
+            self.assertEqual(result, sys.executable)
+
+    def test_falls_back_to_usr_bin_if_no_sys_executable(self):
+        """极端: sys.executable 也没 — fallback /usr/bin/python3"""
+        from catfish_tool_bridge import sandbox
+        env_no = {
+            k: v for k, v in os.environ.items()
+            if k != "CATFISH_SANDBOX_PYTHON"
+        }
+        with patch.dict(os.environ, env_no, clear=True):
+            with patch("sys.executable", ""):
+                result = sandbox._resolve_python_executable()
+                self.assertEqual(result, "/usr/bin/python3")
+
+
+if __name__ == "__main__":
+    unittest.main()

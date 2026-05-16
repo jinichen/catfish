@@ -73,19 +73,19 @@ def _env_key(use_case: str) -> str:
     return f"CATFISH_{use_case.upper()}_MODEL"
 
 
-def _is_chat_available(m: "ModelConfig") -> bool:
+def _is_chat_available(m: ModelConfig) -> bool:
     """模型是否能做 chat 调用"""
     return m.mode == "chat" and m.upstream.is_available
 
 
-def _sort_private_first(models: list["ModelConfig"]) -> list["ModelConfig"]:
+def _sort_private_first(models: list[ModelConfig]) -> list[ModelConfig]:
     """tier=private 排前, 同 tier 保持 yaml 顺序 (Python sort 稳定)"""
     return sorted(models, key=lambda m: 0 if m.tier == "private" else 1)
 
 
 def pick_internal_models_ordered(
-    use_case: str, config: "Config"
-) -> list["ModelConfig"]:
+    use_case: str, config: Config
+) -> list[ModelConfig]:
     """返**按优先级排序**的候选列表 (private 优先, tag 匹配优先).
 
     BL-F15 (5/5): summarizer/proactive 收到 429 quota_exceeded 时按这个列表切下一个.
@@ -126,7 +126,7 @@ def pick_internal_models_ordered(
     return tagged_private + tagged_public + fallback_private + fallback_public
 
 
-def pick_internal_model(use_case: str, config: "Config") -> "ModelConfig | None":
+def pick_internal_model(use_case: str, config: Config) -> ModelConfig | None:
     """按 use_case tag + private 优先选模型.
 
     Args:

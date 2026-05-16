@@ -42,6 +42,7 @@ import json
 import logging
 import os
 import time
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
@@ -72,8 +73,8 @@ def _epoch_to_iso(ts: float | None) -> str | None:
     if ts is None:
         return None
     try:
-        from datetime import datetime, timezone
-        return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+        from datetime import datetime
+        return datetime.fromtimestamp(ts, tz=UTC).isoformat()
     except (TypeError, ValueError):
         return None
 

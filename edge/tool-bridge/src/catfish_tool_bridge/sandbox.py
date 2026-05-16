@@ -23,12 +23,40 @@ import platform as _platform
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_python_executable() -> str:
+    """BL-SANDBOX-PPTX (5/15): 选 sandbox 用的 python 解释器路径.
+
+    优先级:
+      1. env CATFISH_SANDBOX_PYTHON 显式覆盖 (IT 部署时可指定特定 venv)
+      2. sys.executable — 跑这模块的 python (= tool-bridge 自己的 venv).
+         tool-bridge venv 装的 lib (python-pptx / pandas / matplotlib /
+         openpyxl 等) 全部可用. 之前写死 /usr/bin/python3 系统 python
+         什么都没装, 导致 LLM execute_code 想 import 任何非 stdlib 库都挂.
+      3. 最后兜底 /usr/bin/python3 (sys.executable 不可用的极端场景)
+
+    这条改是 5/15 鸿波撞 PPT 生成 import pptx 失败的真修.
+    """
+    custom = os.environ.get("CATFISH_SANDBOX_PYTHON", "").strip()
+    if custom:
+        p = Path(custom).expanduser()
+        if p.exists():
+            return str(p)
+        logger.warning(
+            "CATFISH_SANDBOX_PYTHON=%s 不存在, fallback sys.executable",
+            custom,
+        )
+    if sys.executable and Path(sys.executable).exists():
+        return sys.executable
+    return "/usr/bin/python3"
 
 # 沙箱 profile 路径: 优先看 env, 否则用 catfish 仓库默认路径.
 # __file__ = .../edge/tool-bridge/src/catfish_tool_bridge/sandbox.py
@@ -254,9 +282,14 @@ def run_in_sandbox(
         profile = None
 
     # 选解释器
+    # BL-SANDBOX-PPTX (5/15): python 改用 _resolve_python_executable()
+    # (= tool-bridge venv 自己的 python), 让 venv 装的 python-pptx / pandas /
+    # matplotlib 等库 LLM execute_code 直接可用. 之前写死 /usr/bin/python3
+    # 系统 python 啥都没装. 见函数 docstring.
+    py_path = _resolve_python_executable()
     interpreter_map = {
-        "python": "/usr/bin/python3",
-        "py": "/usr/bin/python3",
+        "python": py_path,
+        "py": py_path,
         "bash": "/bin/bash",
         "sh": "/bin/sh",
     }

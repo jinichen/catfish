@@ -81,6 +81,31 @@ class SkillMeta:
     """下线原因, 例: '改用 v2 的 leadership-briefing-strict' 或 '客户合规变更, 不再使用'.
     deprecated=true 时建议填, 让员工/LLM 知道为啥下线 + 替代方案."""
 
+    # ── BL-SKILL-METADATA-DYNAMIC (5/15 鸿波 '半半的工作造成更大困恼') ──
+    # skill 自己声明触发词 / 类型, skill_guard 不再硬编码每个 skill 的关键词.
+
+    triggers: tuple[str, ...] = ()
+    """触发关键词. 员工 user message 含任一 trigger → skill_guard 强制 agent 调本 skill.
+
+    例: leadership-briefing 的 triggers = ("汇报", "请示", "立项", "上报", "呈报", ...)
+        guizang-ppt-magazine 的 triggers = ("PPT", "幻灯片", "slides", "deck", "杂志风", ...)
+
+    设计约束:
+    - 至少 3 个词, 否则太容易漏判
+    - 不要写"做" / "帮" 这种泛词, 会跟所有 skill 撞
+    - 中英都列 (员工有时打英文)
+    """
+
+    kind: str = "procedural"
+    """skill 类型, 影响 skill_guard 注入的铁律强度:
+
+    - "procedural"   — script.py 自己跑出文件 (leadership-briefing / weekly-report).
+                       agent 调 catfish_run_skill 就完事, 拿 files 字段给员工.
+    - "instructional" — script.py 只返指令 + 模板路径, 真活由 agent 接力
+                        (guizang-ppt-magazine 杂志风 PPT). agent 必须按返回的
+                        post_steps 真发 read_file / write_file, 不能嘴炮.
+    """
+
 
 # ── 找 skills root ──────────────────────────────────────────────
 
@@ -157,12 +182,32 @@ def _parse_skill_md(skill_md: Path) -> dict[str, Any] | None:
 
     deprecated_reason = str(front.get("deprecated_reason", "")).strip()
 
+    # BL-SKILL-METADATA-DYNAMIC: triggers + kind
+    # triggers 可以是 list 或 csv 字符串. 全部归一成 tuple[str, ...]
+    raw_triggers = front.get("triggers", [])
+    if isinstance(raw_triggers, str):
+        # "PPT, 杂志风, slides" — 容错
+        triggers = tuple(t.strip() for t in raw_triggers.split(",") if t.strip())
+    elif isinstance(raw_triggers, list):
+        triggers = tuple(str(t).strip() for t in raw_triggers if str(t).strip())
+    else:
+        triggers = ()
+
+    kind = str(front.get("kind", "procedural")).strip().lower()
+    if kind not in ("procedural", "instructional"):
+        logger.warning(
+            "%s frontmatter kind=%r 不合法, 回落 'procedural'", skill_md, kind,
+        )
+        kind = "procedural"
+
     return {
         "name": name,
         "description": description,
         "version": version,
         "deprecated": deprecated,
         "deprecated_reason": deprecated_reason,
+        "triggers": triggers,
+        "kind": kind,
     }
 
 
@@ -210,6 +255,8 @@ def discover_skills() -> list[SkillMeta]:
                 version=parsed["version"],
                 deprecated=parsed["deprecated"],
                 deprecated_reason=parsed["deprecated_reason"],
+                triggers=parsed["triggers"],
+                kind=parsed["kind"],
             )
         )
 

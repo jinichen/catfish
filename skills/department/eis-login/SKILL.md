@@ -2,6 +2,14 @@
 name: eis-login
 version: "0.1.0-frozen"
 deprecated: false
+kind: procedural
+triggers:
+  - 登录 EIS
+  - 登录eis
+  - 进 EIS
+  - 打开 EIS
+  - 开 EIS
+  - EIS 登录
 description: |-
   ⭐ 登录 EIS 一站式信息门户（更新 URL 为 http://eis.ffcs.cn，支持验证码自动识别）
 

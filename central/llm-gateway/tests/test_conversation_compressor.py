@@ -20,6 +20,7 @@ from catfish_gateway.conversation_compressor import (
     DEFAULT_KEEP_FIRST,
     DEFAULT_KEEP_LAST,
     ENV_DISABLE,
+    _strip_orphan_tool_boundary,
     estimate_tokens,
     is_compression_internal_request,
     maybe_compress_messages,
@@ -235,3 +236,115 @@ def test_is_compression_internal_request_case_insensitive():
     # 我们的逻辑用 .lower() 比较 value, key 假设 caller 已经传对了
     headers = {"X-Catfish-Compression-Internal": "TRUE"}
     assert is_compression_internal_request(headers) is True
+
+
+# ─── BL-COMPRESS-BOUNDARY (5/15 14:11 鸿波撞 Qwen 122B 400) ────
+#
+# 机械切 keep_last 会把 tool 消息切到 assistant_with_tool_calls 之前 —
+# Qwen Go gRPC 校验 "tool 必须紧跟匹配 assistant.tool_calls", orphan tool 直 400.
+# 修: _strip_orphan_tool_boundary 把段头 orphan tool 跳过 + 段尾悬挂 tool_calls 清掉.
+
+
+def test_strip_orphan_tool_skips_leading_tool():
+    """切点正好落在 tool 上 — 父 assistant 在 middle 被压, tool 进段头 = orphan."""
+    msgs = [
+        {"role": "user", "content": "q1"},
+        {"role": "assistant", "content": "调", "tool_calls": [{"id": "t1"}]},
+        {"role": "tool", "tool_call_id": "t1", "content": "r1"},
+        {"role": "assistant", "content": "答"},
+        {"role": "user", "content": "q2"},
+    ]
+    seg = _strip_orphan_tool_boundary(msgs, 2)  # 切点在 t1 (tool) 上
+    assert seg[0]["role"] != "tool", "orphan tool 应被跳过"
+    # cut=2 → tool 跳过 → cut=3, segment = messages[3:] = [assistant '答', user 'q2']
+    assert len(seg) == 2, f"应剩 2 条 (assistant '答' + user 'q2'), 实际 {len(seg)}"
+    assert seg[0]["content"] == "答"
+    assert seg[1]["role"] == "user"
+
+
+def test_strip_orphan_tool_skips_consecutive_orphans():
+    """同一 assistant 调了 N 个 tool, 切点把第 1 个 tool 落进段头 — N 个都得跳."""
+    msgs = [
+        {"role": "assistant", "tool_calls": [{"id": "t1"}, {"id": "t2"}, {"id": "t3"}]},
+        {"role": "tool", "tool_call_id": "t1", "content": "r1"},
+        {"role": "tool", "tool_call_id": "t2", "content": "r2"},
+        {"role": "tool", "tool_call_id": "t3", "content": "r3"},
+        {"role": "assistant", "content": "合并答"},
+    ]
+    seg = _strip_orphan_tool_boundary(msgs, 1)  # 切点在第 1 个 tool 上
+    assert seg[0]["role"] == "assistant", f"3 个 orphan tool 都得跳, 实际 {seg[0]}"
+    assert seg[0]["content"] == "合并答"
+
+
+def test_strip_orphan_tool_normal_user_boundary_unchanged():
+    """切点落在正常 user message — 不动."""
+    msgs = [
+        {"role": "user", "content": "q1"},
+        {"role": "assistant", "content": "a1"},
+        {"role": "user", "content": "q2"},
+        {"role": "assistant", "content": "a2"},
+    ]
+    seg = _strip_orphan_tool_boundary(msgs, 2)
+    assert seg == msgs[2:], f"正常对话不该改动: {seg}"
+
+
+def test_strip_orphan_tool_normal_assistant_boundary_unchanged():
+    """切点落在正常 assistant (无 tool_calls) — 不动."""
+    msgs = [
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": "纯文字答, 无 tool"},
+    ]
+    seg = _strip_orphan_tool_boundary(msgs, 0)
+    assert seg == msgs, f"正常 assistant 不该改动: {seg}"
+
+
+def test_strip_orphan_tool_dangling_trailing_tool_calls():
+    """段尾是 assistant.tool_calls, 但后面没 tool reply — 悬挂, 清 tool_calls."""
+    msgs = [
+        {"role": "user", "content": "q"},
+        {
+            "role": "assistant",
+            "content": "我去查",
+            "tool_calls": [{"id": "t9", "type": "function", "function": {"name": "search", "arguments": "{}"}}],
+        },
+    ]
+    seg = _strip_orphan_tool_boundary(msgs, 0)
+    assert "tool_calls" not in seg[-1], "悬挂 tool_calls 应被清掉"
+    assert seg[-1]["content"] == "我去查", "content 应保留"
+
+
+def test_strip_orphan_tool_dangling_assistant_with_empty_content():
+    """段尾悬挂 assistant.tool_calls 且 content 空 — 清完 tool_calls 后用空串 (Qwen 不嫌空)."""
+    msgs = [
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "t1"}]},
+    ]
+    seg = _strip_orphan_tool_boundary(msgs, 0)
+    assert "tool_calls" not in seg[-1]
+    assert seg[-1].get("content") == "", "空 content 应规范化成 ''"
+
+
+def test_strip_orphan_tool_cut_beyond_length():
+    """cut 超出 messages 长度 — 返空 list."""
+    msgs = [{"role": "user", "content": "x"}]
+    assert _strip_orphan_tool_boundary(msgs, 99) == []
+
+
+def test_strip_orphan_tool_empty_messages():
+    """空 messages — 不挂."""
+    assert _strip_orphan_tool_boundary([], 0) == []
+
+
+def test_strip_orphan_tool_preserves_valid_tool_pair():
+    """段头是 assistant.tool_calls + tool — 完整配对, 不动."""
+    msgs = [
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": "调", "tool_calls": [{"id": "t1"}]},
+        {"role": "tool", "tool_call_id": "t1", "content": "r1"},
+        {"role": "assistant", "content": "答"},
+    ]
+    seg = _strip_orphan_tool_boundary(msgs, 1)  # 切点在 assistant.tool_calls 上
+    # assistant 在段头, tool 紧跟, 配对完整 — 不动
+    assert seg[0]["role"] == "assistant"
+    assert seg[0].get("tool_calls"), "完整配对的 tool_calls 不该清"
+    assert seg[1]["role"] == "tool"

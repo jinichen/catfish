@@ -174,7 +174,7 @@ async def _cdp_send(
     try:
         await state._ws.send(json.dumps(msg))
         return await asyncio.wait_for(fut, timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("CDP send timeout: method=%s id=%d", method, msg_id)
         raise
     finally:
@@ -369,7 +369,7 @@ class CDPRecordingSession:
         chrome_ws: str = _DEFAULT_CHROME_WS,
         output_root: Path | None = None,
         connect_ws: bool = True,
-    ) -> "CDPRecordingSession":
+    ) -> CDPRecordingSession:
         """开 RecMode session — 连 CDP ws + 起后台 detector tasks.
 
         Args:
@@ -421,7 +421,7 @@ class CDPRecordingSession:
                 await _cdp_send(state, "DOM.enable", timeout=5.0)
                 await _cdp_send(state, "Network.enable", timeout=5.0)
                 await _cdp_send(state, "Runtime.enable", timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("CDP enable domains 超时 (继续, 部分 events 可能漏)")
             # 起 detector + watchdog
             state._bg_tasks.append(asyncio.create_task(_long_pause_detector(state)))

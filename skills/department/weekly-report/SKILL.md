@@ -2,6 +2,16 @@
 name: weekly-report
 version: "1.0.0"
 deprecated: false
+kind: procedural
+triggers:
+  - 周报
+  - 本周工作
+  - 本周总结
+  - 一周工作
+  - 一周汇总
+  - 这周做了
+  - 写周报
+  - weekly report
 description: |-
   ⭐ 生成员工周报 .xlsx — 部门内向上提交的工作汇总. 严格按真实公司模板复刻 (鸿波 4-29 提供 .xlsx 样板).
 

@@ -97,6 +97,21 @@ export interface ChatMessage {
    *  UI 渲染时 user bubble 显角标 "🎯 已插话改方向". 跟 /queue (排队等下一轮)
    *  互补 — /steer 是当前轮就改, /queue 是等当前完了才发. */
   _steered?: { atContent: string };
+  /** BL-TASK-ASSESS (5/15 鸿波"客户端要评估完成情况"): assistant message stream
+   *  结束后的"嘴炮断言"结果. is_promise_only=true 表示模型说了"已生成/完成/写入"
+   *  但 cum_has_tool_call=false + 文件路径不存在 → UI 渲染 ⚠ 嘴炮 badge +
+   *  "自动催继续 (剩 N 次)" 按钮. 只在 assistant role 上设. */
+  _promise_check?: {
+    is_promise_only: boolean;
+    /** 模型文字里宣称生成的路径 (从 content 里扫出来), 用来给 UI 显示"找不到 X" */
+    promised_paths: string[];
+    /** 用户已经手动/自动点过几次"继续". ≥3 后按钮变灰 + 提示换模型. */
+    nudge_count: number;
+    /** 触发命中的 skill_guard 判断 (gateway 给的元数据), 调试 UI 用 */
+    skill_guard_fired: boolean;
+    /** session 历史里 agent 调过 catfish_run_skill 没 */
+    ever_called_skill: boolean;
+  };
 }
 
 /** 一次会话的运行时状态(目前 store 直接展开到顶层,这个 type 留给 Week 3 持久化) */

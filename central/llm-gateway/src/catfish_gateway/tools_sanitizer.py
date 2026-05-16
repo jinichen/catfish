@@ -39,6 +39,7 @@ OpenAI 标准:
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 logger = logging.getLogger("catfish.gateway.tools_sanitizer")
@@ -50,6 +51,103 @@ logger = logging.getLogger("catfish.gateway.tools_sanitizer")
 # 通过名字 startswith 判断, 不依赖白名单.
 _HERMES_BROWSER_PREFIX = "browser_"
 _CATFISH_BROWSER_PREFIX = "catfish_browser_"
+
+
+# BL-TOOL-CAP (5/15 鸿波撞 Qwen 122B 83 tools 空 400): 单 request tool 数量上限.
+# Qwen 122B 实测 50+ tools 就开始撞空 400. 默认 cap 50, env 可调.
+# 超 cap 时按 priority 保留, 低优先级 drop.
+_DEFAULT_MAX_TOOLS = 50
+_ENV_MAX_TOOLS = "CATFISH_MAX_TOOLS"
+
+#: Tier 1 — always-on 核心工具, 任何任务都该有, 永不 drop.
+#: 这些是 LLM agent loop 的最底座 (执行代码 / 读文件 / 写文件 / 记忆 / 跨问 / 切片 /
+#: 求澄清 / 派任务). 砍了 LLM 干不了基本事.
+_ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
+    # Catfish 核心 native
+    "catfish_remember",
+    "catfish_search_sessions",
+    "catfish_list_my_outputs",
+    "catfish_user_profile_get",
+    "catfish_user_profile_propose",
+    "catfish_user_profile_confirm",
+    "catfish_run_skill",
+    "search_skills",
+    # Hermes 0.13 内置基础 (跨 agent 必须)
+    "execute_code",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "list_dir",
+    "search",
+    "grep",
+    "clarify",
+    "delegate_task",
+    # 文件 / shell
+    "shell",
+    "bash",
+    # BL-MEMORY-DIAGNOSIS (5/15 23:50 鸿波本机数据 audit):
+    # hermes 原生 memory 工具是跨 session 长期记忆的核心 (~/.hermes/USER.md /
+    # memories/), 之前一直被砍 → 日志原话 "砍掉低优先级 ... memory" → USER.md
+    # 12 天没动 / memories/ 3 周没动 / project_catfish_facts.md 0 字节空文件.
+    # 这是设计缺陷: memory 应该跟 catfish_remember 同优先级, 永不砍.
+    # 加白名单后 LLM 每次 chat 都能看到 memory.add/replace/remove, 自然写 USER.md.
+    "memory",
+    "memory_save",
+    "memory_load",
+    "memory_search",
+})
+
+
+def _cap_tools_by_priority(tools: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    """超 cap 时按 priority 保留 tools.
+
+    保留策略:
+      1. 所有 _ALWAYS_ON_TOOLS 中的 tool, 即使总数仍超也保留 (它们是底座)
+      2. 剩余 slot 按 tools 原顺序填 (caller 已经按某种 priority 排过, 我们尊重它)
+      3. 超出的 drop, 返回 (kept, dropped_names)
+
+    用法:
+      kept, dropped = _cap_tools_by_priority(cleaned)
+      if dropped: logger.warning(...)
+
+    返 cap 后的 tools + dropped tool 名清单 (给 audit log).
+    """
+    try:
+        max_tools = int(os.environ.get(_ENV_MAX_TOOLS, str(_DEFAULT_MAX_TOOLS)))
+    except ValueError:
+        max_tools = _DEFAULT_MAX_TOOLS
+    max_tools = max(10, max_tools)  # 兜底, 不允许 < 10 (always-on 都装不下)
+
+    if len(tools) <= max_tools:
+        return tools, []
+
+    # 先取 always-on (顺序保留)
+    always_on_kept: list[dict[str, Any]] = []
+    other: list[dict[str, Any]] = []
+    for t in tools:
+        if not isinstance(t, dict):
+            other.append(t)
+            continue
+        fn = t.get("function")
+        name = fn.get("name") if isinstance(fn, dict) else ""
+        if isinstance(name, str) and name in _ALWAYS_ON_TOOLS:
+            always_on_kept.append(t)
+        else:
+            other.append(t)
+
+    # 剩 slot = max - always_on. 按原顺序填.
+    remaining_slots = max(0, max_tools - len(always_on_kept))
+    other_kept = other[:remaining_slots]
+    dropped = other[remaining_slots:]
+
+    dropped_names: list[str] = []
+    for t in dropped:
+        if isinstance(t, dict):
+            fn = t.get("function")
+            name = fn.get("name") if isinstance(fn, dict) else "<unknown>"
+            dropped_names.append(str(name) if name else "<unknown>")
+
+    return always_on_kept + other_kept, dropped_names
 
 
 def _has_catfish_browser_tools(tools: list[Any]) -> bool:
@@ -160,13 +258,27 @@ def sanitize_tools(body: dict[str, Any]) -> dict[str, Any]:
             ", ".join(sorted(deduped_hermes_browser)[:8]),
         )
 
+    # BL-TOOL-CAP (5/15 鸿波撞 Qwen 122B 83 tools 空 400): 超 cap 时砍低优先级.
+    # 实测 Qwen 122B ≥50 tools 就开始撞空 400 (上游无具体错). 保留 always-on 核心
+    # + 剩 slot 按顺序填, 超 cap 的 drop. env CATFISH_MAX_TOOLS 调阈值.
+    capped_tools, capped_dropped = _cap_tools_by_priority(cleaned)
+    if capped_dropped:
+        logger.warning(
+            "BL-TOOL-CAP: %d tools 超上限 %d, 砍掉低优先级 (always-on 保留): %s",
+            len(capped_dropped),
+            int(os.environ.get(_ENV_MAX_TOOLS, str(_DEFAULT_MAX_TOOLS))),
+            ", ".join(capped_dropped[:10]),
+        )
+    cleaned = capped_tools
     body["tools"] = cleaned
 
     # BL-FIX5 (5/8): 同步扫消息历史 — assistant.tool_calls 里 name 在 deduped 集
     # 合的剔掉, 对应 tool message 一起丢. 防 BL-FIX4 部署前的旧轮次撞 Qwen Go gRPC
     # adapter 的"assistant 调过的 tool name 必须在 tools 列表里"校验 → 空 reason 400.
-    if deduped_hermes_browser:
-        _scrub_messages_for_dropped_tools(body, set(deduped_hermes_browser))
+    # BL-TOOL-CAP 同样的问题: 砍掉的 tool 在历史里有调用 → 撞校验 → 400. 一起 scrub.
+    all_dropped_names: set[str] = set(deduped_hermes_browser) | set(capped_dropped)
+    if all_dropped_names:
+        _scrub_messages_for_dropped_tools(body, all_dropped_names)
 
     return body
 

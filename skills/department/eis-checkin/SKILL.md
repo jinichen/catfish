@@ -2,6 +2,14 @@
 name: eis-checkin
 version: "0.1.0-frozen"
 deprecated: false
+kind: procedural
+triggers:
+  - 上班打卡
+  - 上班签到
+  - 打上班卡
+  - 上班卡
+  - EIS 签到
+  - EIS 上班打卡
 description: |-
   ⭐ 登录 EIS 后点上班打卡按钮
 

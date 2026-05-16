@@ -13,9 +13,8 @@ LLM 调路径: Companion 收到 catfish_read_tool_archive tool_call → 看 tool
 from __future__ import annotations
 
 import logging
-from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from ..auth import User, get_current_user

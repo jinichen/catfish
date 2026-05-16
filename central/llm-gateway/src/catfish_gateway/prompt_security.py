@@ -53,7 +53,6 @@ audit log 里没具体密码值.
 from __future__ import annotations
 
 import re
-from typing import List
 
 # 常见密码 / 凭据模式
 #
@@ -79,7 +78,7 @@ _CREDENTIAL_PATTERNS = [
 ]
 
 
-def detect_credentials_in_text(text: str) -> List[str]:
+def detect_credentials_in_text(text: str) -> list[str]:
     """扫一段文本, 返回所有 match 到的 pattern 类型 (不返回真值).
 
     Args:
@@ -93,7 +92,7 @@ def detect_credentials_in_text(text: str) -> List[str]:
     """
     if not text or not isinstance(text, str):
         return []
-    hits: List[str] = []
+    hits: list[str] = []
     for p in _CREDENTIAL_PATTERNS:
         if p.search(text):
             # 用 pattern 的 source 做 hit name (脱敏, 不含真密码)
@@ -120,7 +119,7 @@ def scrub_credentials_in_text(text: str) -> str:
     return out
 
 
-def detect_credentials_in_messages(messages: List[dict]) -> List[str]:
+def detect_credentials_in_messages(messages: list[dict]) -> list[str]:
     """扫 OpenAI-style messages 数组里所有 user content, 检测密码模式.
 
     Args:
@@ -150,7 +149,7 @@ def detect_credentials_in_messages(messages: List[dict]) -> List[str]:
     return sorted(all_hits)
 
 
-def make_warning_message(hits: List[str]) -> str:
+def make_warning_message(hits: list[str]) -> str:
     """根据 hits 生成给员工看的 warning 文本."""
     return (
         "⚠️ 你的 prompt 含明文密码 / 凭据 (检测到 "

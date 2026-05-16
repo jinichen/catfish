@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import time
 from copy import deepcopy
 from typing import Any
 
@@ -79,7 +78,13 @@ def _count_lines(content: str) -> int:
 
 
 def _is_archive_candidate(m: dict) -> bool:
-    """role=tool + content 是 str + 没被 archive 过 (避免重复打)."""
+    """role=tool + content 是 str + 没被 archive 过 (避免重复打).
+
+    BL-ARCHIVE-SKIP-INSTRUCTIONAL (5/15 鸿波 'agent 拿到归档摘要以为完事'):
+    catfish_run_skill 返回 instructional skill 指令 (含 `is_instructional: true`
+    + preferred_template + output_target) 时**永不归档**. 否则归档摘要把"这是
+    指令型 skill, LLM 需要接力"的语义抹掉, 写成"已生成 PPT" 误导 agent 死循环.
+    """
     if not isinstance(m, dict):
         return False
     if m.get("role") != "tool":
@@ -89,6 +94,11 @@ def _is_archive_candidate(m: dict) -> bool:
         return False
     # 已经是 archive 替换文本 (跑两次的话) — 跳过
     if c.startswith("[已归档: archive_ref="):
+        return False
+    # 指令型 skill 返回不归档 — 摘要会丢 preferred_template / output_target 等
+    # 关键接力指令字段, agent 没法干活. 用 substring 检测 (返回值是 JSON, 含
+    # `"is_instructional": true` 标记).
+    if m.get("name") == "catfish_run_skill" and '"is_instructional": true' in c:
         return False
     return True
 

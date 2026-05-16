@@ -28,9 +28,10 @@ import os
 import time
 import uuid
 from collections import defaultdict, deque
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -87,7 +88,7 @@ class A2AAskRequest(BaseModel):
 def _sse_event(event_name: str, data: dict[str, Any]) -> bytes:
     """格式化一条 SSE event."""
     payload = json.dumps(data, ensure_ascii=False)
-    return f"event: {event_name}\ndata: {payload}\n\n".encode("utf-8")
+    return f"event: {event_name}\ndata: {payload}\n\n".encode()
 
 
 def _jsonrpc_error(request_id: str, code: int, message: str, details: str = "") -> dict[str, Any]:

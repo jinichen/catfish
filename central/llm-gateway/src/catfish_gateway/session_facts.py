@@ -90,7 +90,7 @@ def read_session_facts() -> dict[str, list[dict[str, Any]]]:
     if not path.exists():
         return {}
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError, json.JSONDecodeError) as e:
         logger.warning("读 session_facts 失败 (%s) — 忽略. path=%s", e, path)

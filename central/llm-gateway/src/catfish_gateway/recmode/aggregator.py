@@ -33,7 +33,6 @@ import re
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 logger = logging.getLogger("catfish.recmode.aggregator")
 
@@ -272,6 +271,7 @@ async def call_llm(
         RuntimeError: gateway 不可达 / token 无 / LLM 错误
     """
     import os
+
     import httpx  # 5/14 装上 (pip install httpx)
 
     gw = gateway_url or os.environ.get("CATFISH_GATEWAY_URL", "http://localhost:8999")

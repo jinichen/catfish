@@ -59,6 +59,27 @@ export interface ChatUsage {
 export interface ChatStreamDoneInfo {
   finish_reason?: string;
   usage?: ChatUsage;
+  /** BL-TASK-ASSESS (5/15): gateway 在 [DONE] 前多发一条 task_assessment 事件,
+   *  Companion 用它做 promise-vs-reality 检测 (assistant 说"已生成"但
+   *  cum_has_tool_call=false + 没真生成文件 → ⚠ 嘴炮). */
+  task_assessment?: TaskAssessment;
+}
+
+export interface TaskAssessment {
+  /** OpenAI 兼容客户端忽略未知 object — Companion 嗅这字段拿 metadata */
+  object: "task_assessment";
+  model: string;
+  finish_reason: string | null;
+  /** 这一轮 stream 收到的 tool_calls chunk 总数 (不是单次 call 个数) */
+  tool_call_count: number;
+  /** 这一轮 assistant content 累计字符数 */
+  content_chars: number;
+  /** 这一轮是否累计有 tool_call (任何 1 个就 true) */
+  cum_has_tool_call: boolean;
+  /** skill_guard 是否在这次请求触发了铁律注入 */
+  skill_guard_fired: boolean;
+  /** 这条 session 历史里, agent 真调过 catfish_run_skill 没? */
+  ever_called_catfish_run_skill_in_session: boolean;
 }
 
 /** Token 缓存 —— OAuth access_token / dev token 兜底.
@@ -520,6 +541,9 @@ export async function streamChat(params: SendChatParams): Promise<void> {
   let buf = "";
   let usage: ChatUsage | undefined;
   let finishReason: string | undefined;
+  // BL-TASK-ASSESS-2-CLIENT: gateway 在 [DONE] 前发 task_assessment 事件,
+  // Companion 缓存在 stream loop 内, 在 onDone 时一起传给 caller.
+  let taskAssessment: TaskAssessment | undefined;
   // index → ToolCallAcc
   const toolCallsAcc: Record<number, ToolCallAcc> = {};
 
@@ -577,7 +601,7 @@ export async function streamChat(params: SendChatParams): Promise<void> {
           if (!data) continue;
           if (data === "[DONE]") {
             finalizeToolCallsIfAny();
-            onDone({ finish_reason: finishReason, usage });
+            onDone({ finish_reason: finishReason, usage, task_assessment: taskAssessment });
             return;
           }
 
@@ -596,6 +620,17 @@ export async function streamChat(params: SendChatParams): Promise<void> {
           ) {
             onError((parsed as { error: string }).error);
             return;
+          }
+
+          // BL-TASK-ASSESS-2-CLIENT: 嗅 task_assessment 事件 (object 字段标记).
+          // OpenAI 兼容客户端看到 unknown object 一般忽略, Companion 拿来做断言.
+          if (
+            typeof parsed === "object" &&
+            parsed !== null &&
+            (parsed as { object?: unknown }).object === "task_assessment"
+          ) {
+            taskAssessment = parsed as TaskAssessment;
+            continue; // task_assessment 事件不走后面的 choices 解析
           }
 
           const obj = parsed as {
@@ -651,10 +686,10 @@ export async function streamChat(params: SendChatParams): Promise<void> {
     }
     // 流自然结束(没 [DONE]):也 finalize
     finalizeToolCallsIfAny();
-    onDone({ finish_reason: finishReason, usage });
+    onDone({ finish_reason: finishReason, usage, task_assessment: taskAssessment });
   } catch (e) {
     if ((e as Error).name === "AbortError") {
-      onDone({ finish_reason: "abort", usage });
+      onDone({ finish_reason: "abort", usage, task_assessment: taskAssessment });
       return;
     }
     onError(`stream 中断: ${stringify(e)}`);

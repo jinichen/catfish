@@ -14,7 +14,6 @@ import asyncio
 import logging
 import os
 import time
-from typing import Any
 
 from . import db, features, prompts
 
@@ -51,9 +50,10 @@ async def _summarize_one(
         return None, None  # 摘要全局关 — caller 也不会调到这里
 
     import httpx  # 懒 import
+
+    from ..auth.dev_token import ensure_internal_dev_token  # noqa: PLC0415
     from ..config import load_config  # noqa: PLC0415
     from ..internal_models import pick_internal_models_ordered  # noqa: PLC0415
-    from ..auth.dev_token import ensure_internal_dev_token  # noqa: PLC0415
 
     try:
         config = load_config()

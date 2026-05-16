@@ -17,6 +17,25 @@ LLM 应用最深的痛点 — 每个 session 是孤岛, 模型不知道员工"�
 
 档 1 只解决"模型知道有历史"问题. 档 2 (employee_journal) 解决"模型知道历史里讲了啥".
 
+# BL-MEMORY-FTS5-RECALL (5/16 鸿波 'inject 改相关性召回')
+
+旧逻辑: 按时间倒序拿最近 10 个 session, 不管员工**这次问的是什么主题**. 跟员工
+当前问题不相关的老 session 占 token. 改成:
+
+  1. 抽当前 chat 最后一条 user message 关键词 (短句直接传, 长 prompt 取首 200 字)
+  2. 多 token AND 子串搜索 (LIKE) message content → 拿命中 session_id, 按 message ID
+     倒序排 (近期权重高)
+  3. join sessions 表拿元信息 → 注入 top-K (默认 5) 命中 session
+  4. **没查询** 或 **无命中** → fallback 走老 "最近时间" 逻辑 (兼容)
+
+为什么不用 FTS5: hermes state.db 虽然有 messages_fts 表, 但 FTS5 默认 tokenizer
+对中文分词不可靠 (沙盒 sqlite 3.37 不支持中文 trigram, 本机 3.40+ 行为又不同).
+LIKE %query% 跨版本一致, hermes messages 表也就几千行, LIKE 扫完 <10ms. 等
+hermes 把 FTS5 tokenizer 标准化后再切, 不抢这一步.
+
+效果: 员工问"上次资质方案怎么定的" → 命中"资质" 子串的老 session 排前, 不再被
+时间窗口里跟资质无关的 5 个 session 挤掉. token 跟老版一样, 但召回相关性高一个量级.
+
 # 跟其他 inject 的关系 (顺序很重要)
 
   identity → session_facts → stats_guard → skills_catalog → skill_guard →
@@ -32,6 +51,7 @@ LLM 应用最深的痛点 — 每个 session 是孤岛, 模型不知道员工"�
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 from copy import deepcopy
 from datetime import datetime, timedelta
@@ -46,8 +66,14 @@ DAYS_BACK = 7
 #: 最多列多少个 session (防 token 爆炸)
 MAX_SESSIONS = 10
 
+#: FTS5 召回的 top-K (BL-MEMORY-FTS5-RECALL): 比时间窗口小一半, 因为相关性高 → 5 个够用
+MAX_RELEVANT_SESSIONS = 5
+
 #: 首条 user message 截断字符数
 PREVIEW_CHARS = 100
+
+#: 拿 user message 前 N 字符作 FTS5 query (太长的 query FTS5 性能差且容易没结果)
+QUERY_MAX_CHARS = 200
 
 
 def get_state_db_path() -> Path | None:
@@ -97,21 +123,202 @@ def get_recent_sessions() -> list[tuple[str, float, int, str | None, str | None]
         return []
 
 
-def format_block(sessions: list[tuple]) -> str:
-    """渲染成 system prompt 用的 markdown 块."""
+# ============================================================
+# BL-MEMORY-FTS5-RECALL — 相关性召回
+# ============================================================
+
+
+#: 停用词 — 中英文高频词, 搜了等于全表 (LIKE %的% 命中所有有 "的" 的 message)
+_STOPWORDS = frozenset({
+    # 英文
+    "the", "a", "an", "is", "are", "was", "were", "be", "to", "of", "in",
+    "on", "for", "and", "or", "but",
+    # 中文代词
+    "我", "你", "他", "她", "它", "我们", "你们", "他们",
+    # 中文虚词
+    "的", "了", "是", "在", "和", "或者", "但是", "怎么", "什么", "如何",
+    # 中文常用动作 / 修饰
+    "请", "帮我", "给我", "把", "用", "做", "写", "上次", "之前",
+    "下面", "这个", "那个", "一个",
+})
+
+
+def _extract_query_tokens(text: str) -> list[str]:
+    """把 user message 切成关键词 tokens, 供 LIKE 子串搜索用.
+
+    处理:
+      1. 截首 QUERY_MAX_CHARS 防超长
+      2. 标点 / 引号 替空格 (LIKE 参数绑定本身已防注入; 切词用)
+      3. 切词, 滤 1 字符 noise + 停用词
+      4. 去重保序, 最多 6 个
+
+    返 ['资质', 'EIS', '登录'] 这种 token 列表 (空 list 表示无可搜内容).
+    """
+    if not text:
+        return []
+    s = text[:QUERY_MAX_CHARS]
+    # 标点 / 引号 替空格 (LIKE 参数绑定本身已防注入)
+    s = re.sub(r'[\'"`\\\(\)\*]', " ", s)
+    s = re.sub(r"[，。！？；：、,.!?;:/\\|<>{}\[\]@#$%^&+=~`]", " ", s)
+    # jieba 中文分词 (pyproject 已 depend jieba 0.42) — 之前用 split() 中文整段
+    # 当一 token, LIKE %登录怎么做的% 命中不了 "登录技能" 子串. jieba 切成
+    # "登录"+"怎么"+"做"+"的" 后, "登录" 能匹配.
+    try:
+        import jieba  # noqa: PLC0415
+
+        # cut_for_search 比 cut 切得更细, 利于子串召回
+        raw = list(jieba.cut_for_search(s))
+    except ImportError:
+        # jieba 没装 fallback 简单 split (中文召回精度差, 但不崩)
+        raw = s.split()
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for t in raw:
+        t = t.strip()
+        if not t or t.isspace():
+            continue
+        if t.lower() in _STOPWORDS:
+            continue
+        if len(t) < 2:  # 单字符 noise 多 (中英文都)
+            continue
+        # BL-MEMORY-POLISH (5/16 鸿波实盘 tokens=['2026','05','12','09','26',...]):
+        # 纯数字 < 4 字符 skip — 日期 / 时间 / 编号 (2026 / 05 / 12 等) jieba 切出来
+        # 大量噪声 token, AND 之后 LIKE 召回精度低. 4 字符以上数字 (例 "2026") 留下
+        # 是因为年份等长数字仍有定位价值. 注意"2026"是 4 字符正好留 (≥ 4).
+        if t.isdigit() and len(t) < 4:
+            continue
+        if t not in seen:
+            seen.add(t)
+            deduped.append(t)
+        if len(deduped) >= 6:
+            break
+    return deduped
+
+
+def get_relevant_sessions(
+    query: str, top_k: int = MAX_RELEVANT_SESSIONS
+) -> list[tuple[str, float, int, str | None, str | None]]:
+    """LIKE 子串召回相关 session 元信息.
+
+    为什么 LIKE 不 FTS5: SQLite FTS5 默认 tokenizer 对中文行为跨版本不一致
+    (3.37 不分中文字, 3.40+ trigram 才行). hermes state.db messages 表几千行,
+    LIKE %t% AND ... 扫完 < 10ms, 跨版本稳定. 等 hermes 把 tokenizer 标准化
+    再切 FTS5 不抢这一步.
+
+    流程:
+      1. 抽 query tokens (去停用词 + 单字符 + 去重)
+      2. 多 token AND `m.content LIKE %t%` 子串搜索
+      3. 同 session 多次命中 → MAX(message.id) 取近期命中作分数
+      4. join sessions 表, 按"近期命中"倒序, 限 top_k
+
+    返回: 同 get_recent_sessions 形式. 没命中返空 (调用方 fallback 时间窗口).
+
+    安全: read-only 连接, 1 秒 timeout, 参数化绑定防 SQL 注入, 异常吞掉返空.
+    """
+    db_path = get_state_db_path()
+    if db_path is None:
+        return []
+
+    tokens = _extract_query_tokens(query)
+    if not tokens:
+        return []
+
+    like_clauses = " AND ".join(["m.content LIKE ?"] * len(tokens))
+    like_params: list[str | int] = [f"%{t}%" for t in tokens]
+    like_params.append(top_k)
+
+    sql = f"""
+        SELECT
+            s.id,
+            s.started_at,
+            s.message_count,
+            s.title,
+            (SELECT m2.content FROM messages m2
+             WHERE m2.session_id = s.id AND m2.role = 'user'
+             ORDER BY m2.id LIMIT 1) AS first_user_msg
+        FROM sessions s
+        INNER JOIN (
+            SELECT
+                m.session_id AS session_id,
+                MAX(m.id) AS last_hit_id
+            FROM messages m
+            WHERE {like_clauses}
+            GROUP BY m.session_id
+            ORDER BY last_hit_id DESC
+            LIMIT ?
+        ) hits ON s.id = hits.session_id
+        WHERE s.message_count > 1
+        ORDER BY hits.last_hit_id DESC
+    """
+
+    try:
+        conn = sqlite3.connect(
+            f"file:{db_path}?mode=ro", uri=True, timeout=1.0
+        )
+        rows = conn.execute(sql, like_params).fetchall()
+        conn.close()
+        logger.info(
+            "BL-MEMORY-FTS5-RECALL: tokens=%r 命中 %d session",
+            tokens, len(rows),
+        )
+        return rows
+    except sqlite3.Error as e:
+        logger.warning(
+            "inject_session_history LIKE 召回失败: %s (fallback 时间窗口)", e
+        )
+        return []
+
+
+def _extract_user_query(messages: list[dict[str, Any]]) -> str:
+    """从 messages 抽最后一条 user message 文本作 FTS5 query.
+
+    multimodal user message (content 是 list, 含 image_url / text 等) 也兼容: 拼 text 段.
+    返空 str → 调用方 fallback 时间窗口.
+    """
+    for msg in reversed(messages):
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    t = item.get("text", "")
+                    if isinstance(t, str):
+                        parts.append(t)
+            return " ".join(parts).strip()
+        # 其它类型 (None / dict) → skip
+        return ""
+    return ""
+
+
+def format_block(sessions: list[tuple], *, relevant_mode: bool = False) -> str:
+    """渲染成 system prompt 用的 markdown 块.
+
+    relevant_mode=True (BL-MEMORY-FTS5-RECALL): 标题说明是按当前提问相关性召回的,
+    不是按时间. 这让模型知道列表里都是**跟当前问题相关**的老 session.
+    """
     if not sessions:
         return ""
 
-    lines = [
-        "",
-        "## 📅 员工最近 7 天 session 历史 (gateway 自动注入)",
-        "",
-        "员工的每次对话都在下面. **你必须意识到这些历史存在** —— "
-        "员工说「上次 / 之前 / 那个 X / 上周 / 昨天 / 我们讨论过的 / 之前定的」时, "
-        "**优先在这里找相关 session**, 必要时调 `session_search` 拉详细内容. "
-        "**不要假装从零开始** — 员工会觉得你是 100 个素不相识的人轮流帮他.",
-        "",
-    ]
+    if relevant_mode:
+        header = "## 📅 跟你当前提问最相关的 session (FTS5 召回, 按相关性排)"
+        instruction = (
+            "下面 session 是按**跟当前 user message 相关性**召回的, 不是时间. "
+            "员工说「上次 / 之前 / 那个 X / 我们讨论过的」**优先在这里找**, "
+            "必要时调 `session_search` 拉详细内容. **不要假装从零开始**."
+        )
+    else:
+        header = "## 📅 员工最近 7 天 session 历史 (gateway 自动注入)"
+        instruction = (
+            "员工的每次对话都在下面. **你必须意识到这些历史存在** —— "
+            "员工说「上次 / 之前 / 那个 X / 上周 / 昨天 / 我们讨论过的 / 之前定的」时, "
+            "**优先在这里找相关 session**, 必要时调 `session_search` 拉详细内容. "
+            "**不要假装从零开始** — 员工会觉得你是 100 个素不相识的人轮流帮他."
+        )
+    lines = ["", header, "", instruction, ""]
     for sid, started_at, msg_count, title, first_msg in sessions:
         try:
             date_str = datetime.fromtimestamp(started_at).strftime("%m-%d %H:%M")
@@ -132,14 +339,31 @@ def format_block(sessions: list[tuple]) -> str:
 def inject_session_history(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """在最后一条 system message 末尾追加 session 历史块.
 
+    BL-MEMORY-FTS5-RECALL (5/16): 优先按相关性召回, fallback 时间窗口.
+      1. 抽当前 user message → FTS5 search hermes state.db messages_fts
+      2. 命中 ≥ 1 个 session → 用相关 session (relevant_mode=True, 注入标题强调按相关性)
+      3. 命中 0 / FTS5 不可用 / 无 query → fallback 最近时间 N 个 session
+
     没 messages / 没 system message / 没 history → 原样返.
     幂等 (block 已存在不重复加).
     """
     if not messages:
         return messages
 
-    sessions = get_recent_sessions()
-    block = format_block(sessions)
+    # 优先 FTS5 相关性召回 (BL-MEMORY-FTS5-RECALL)
+    user_query = _extract_user_query(messages)
+    relevant_mode = False
+    sessions: list[tuple] = []
+    if user_query:
+        sessions = get_relevant_sessions(user_query)
+        if sessions:
+            relevant_mode = True
+
+    # 没相关 session → fallback 时间窗口 (老行为, 兼容)
+    if not sessions:
+        sessions = get_recent_sessions()
+
+    block = format_block(sessions, relevant_mode=relevant_mode)
     if not block:
         return messages
 
@@ -154,8 +378,11 @@ def inject_session_history(messages: list[dict[str, Any]]) -> list[dict[str, Any
     cur = messages[last_system_idx].get("content", "")
     if not isinstance(cur, str):
         return messages
-    # 幂等
-    if "员工最近 7 天 session 历史" in cur:
+    # 幂等 — 两种 mode 标题都检 (BL-MEMORY-FTS5-RECALL 加了第二种)
+    if (
+        "员工最近 7 天 session 历史" in cur
+        or "跟你当前提问最相关的 session" in cur
+    ):
         return messages
 
     out = deepcopy(messages)
@@ -173,6 +400,7 @@ def inject_session_history(messages: list[dict[str, Any]]) -> list[dict[str, Any
 __all__ = [
     "get_state_db_path",
     "get_recent_sessions",
+    "get_relevant_sessions",
     "format_block",
     "inject_session_history",
 ]

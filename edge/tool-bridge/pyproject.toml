@@ -35,6 +35,22 @@ dev = [
     "openpyxl>=3.0",     # excel skill 用
     "pypdfium2>=4.0",    # pdf 解析用
 ]
+# BL-SANDBOX-PPTX (5/15 鸿波撞 PPT 退化成 markdown): execute_code 沙箱里 LLM
+# 生成 PPT / 数据图 / 报表用的 lib. 跟 sandbox.py 改用 sys.executable 配合 —
+# sys.executable = tool-bridge venv 的 python, 装这里 LLM 立刻能 import. 之前
+# 写死 /usr/bin/python3 系统 python 啥都没装, LLM 生成 PPT 自动退化成 markdown.
+#
+# 装法: pip install -e '.[execute]' (在 tool-bridge venv 里)
+# 没装的话 LLM execute_code 调 import pptx 仍会失败, 但会清晰报 ModuleNotFoundError
+# 而不是退化, agent 知道这事 → 跟员工说"还没装这个库, 让 IT 装一下".
+execute = [
+    "python-pptx>=1.0",   # LLM 生成 .pptx (周报 / 立项 / 汇报场景)
+    "Pillow>=10.0",       # PPT 嵌图 / 处理截图
+    "matplotlib>=3.7",    # PPT/Excel 嵌数据图
+    "pandas>=2.0",        # 数据分析 + 生成报表
+    "python-docx>=1.0",   # 也补 .docx (跟 dev 段重复 — execute 不应依赖 dev)
+    "openpyxl>=3.0",      # 同上, .xlsx 表格
+]
 
 [build-system]
 requires = ["setuptools>=68"]

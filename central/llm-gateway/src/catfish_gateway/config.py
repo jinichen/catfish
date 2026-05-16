@@ -131,6 +131,11 @@ class ModelConfig(BaseModel):
     upstream: UpstreamConfig
 
     context_window: int | None = None
+    # BL-MAX-OUTPUT-TOKENS (5/15 22:31): 单次 output 上限, 跟 context_window 区分.
+    # 实盘: DeepSeek context 1M 但 max_tokens 393216 / Gemini Pro context 2M 但
+    # max_tokens 65536. 没配 → 沿用老行为 (= context_window).
+    # 这字段就是各家 model 的真实属性, 不是 hack. 查上游 API 文档抄过来即可.
+    max_output_tokens: int | None = None
     supports_tool_use: bool = False
     supports_streaming: bool = True
     supports_vision: bool = False

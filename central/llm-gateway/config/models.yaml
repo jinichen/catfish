@@ -69,6 +69,10 @@ models:
     # 注: 公共模型在 .env 里没配 key 时会自动跳过, 不会傻等。
     fallback:
       on_errors: [429, 502, 503, 504, "timeout", "connection error", "connection refused", "rate limit", "free tier", "upstream error"]
+      # BL-NVIDIA-NIM-DROP-FALLBACK (5/15 22:50 鸿波 'NVIDIA 还是不行'):
+      # 实盘 NVIDIA NIM 公网 Qwen 122B 连 2 次 latency 39s/19s 但 tokens=0 — free tier
+      # 排队等推理资源, 把整个 fallback 链拖死 20-40s. 从 chain 摘掉, 不当兜底.
+      # catalog 里 model 定义仍保留 (客户基建调研故事 / 手选还能用), 只是不自动落到它.
       chain: [catfish-public-qwen-flash, catfish-public-deepseek-flash, catfish-public-gemini-flash]
       max_hops: 2
 
@@ -154,6 +158,9 @@ models:
       timeout: 90  # 多模态请求图像/视频处理偏慢, 给宽裕
 
     context_window: 262144  # 256K
+    # max_output_tokens: 待查实 — 22:50 鸿波撞 fallback 全失效 audit 发现我刚加的
+    # 32768 是凭印象编的没查 DashScope 文档. revert 留 null, 走 cw 老行为.
+    # TODO: 等真撞 DashScope 400 拿到 error 里 valid range 再补回真值.
     supports_tool_use: true
     supports_streaming: true
     supports_vision: true
@@ -169,6 +176,7 @@ models:
     # 发现 trigger 历史漏 500. 公网到公网切没保密问题, 内网链不加 500 (防泄密).
     fallback:
       on_errors: [429, 500, 502, 503, 504, "timeout", "connection error", "connection refused", "rate limit", "free tier", "upstream error"]
+      # BL-NVIDIA-NIM-DROP-FALLBACK (5/15 22:50): 摘 nvidia-llama — 见 private-main 注释
       chain: [catfish-public-deepseek-flash, catfish-public-gemini-flash]
       max_hops: 2
 
@@ -208,6 +216,11 @@ models:
             type: disabled
 
     context_window: 1000000  # 1M
+    # BL-MAX-OUTPUT-TOKENS (5/15 22:31 鸿波撞 400 'Invalid max_tokens [1, 393216]'):
+    # DeepSeek V4 context 1M, 但单次 output 上限 393216. dyn 算法默认拿 cw 当上限,
+    # 实盘 cw - prompt - safety 算出 ~990K, 远超 393K, 撞 400. 这是 model 真实属性,
+    # 不是 gateway bug — 直接配字段, dyn 自动 clip 到 min(cw, max_output_tokens).
+    max_output_tokens: 393216
     supports_tool_use: true
     supports_streaming: true
     supports_vision: false
@@ -220,6 +233,7 @@ models:
     # picker 用 env override 强制选 deepseek 时, 撞错有兜底 (qwen-flash → gemini-flash).
     fallback:
       # BL-FALLBACK-500 (5/14 凌晨): 公网链加 500 — 见 qwen-flash 同段注释.
+      # BL-NVIDIA-NIM-DROP-FALLBACK (5/15 22:50): 摘 nvidia-llama — 见 private-main 注释
       on_errors: [429, 500, 502, 503, 504, "timeout", "connection error", "connection refused", "rate limit", "free tier", "upstream error"]
       chain: [catfish-public-qwen-flash, catfish-public-gemini-flash]
       max_hops: 2
@@ -233,7 +247,7 @@ models:
     mode: chat
 
     upstream:
-      model: gemini/gemini-3.1-pro-preview
+      model: gemini/gemini-2.5-pro
       api_key_env: GEMINI_API_KEY
       # Gemini 3 系列在 temperature < 1.0 时可能陷入循环或推理质量下降
       # 官方建议固定 1.0，不管客户端传什么
@@ -243,6 +257,10 @@ models:
       timeout: 180
 
     context_window: 2000000
+    # BL-MAX-OUTPUT-TOKENS (5/15): Gemini 2.5 Pro context 2M, 但单次 output 上限 65536.
+    # 不配的话 dyn 会算出 ~2M, 撞 Gemini 400 "max_output_tokens too large".
+    # 参考: https://ai.google.dev/gemini-api/docs/models#gemini-2.5-pro
+    max_output_tokens: 65536
     supports_tool_use: true
     supports_streaming: true
     supports_vision: true
@@ -252,10 +270,110 @@ models:
     # 撞 429 / 503 / timeout 时自动落回 Qwen3.6-Flash
     # (Qwen 没配 key 时自动跳过, 直接返回错误给客户端)
     # BL-FALLBACK-500 (5/14 凌晨): 公网链加 500 — 见 qwen-flash 同段注释.
+    # BL-NVIDIA-NIM-DROP-FALLBACK (5/15 22:50): 摘 nvidia-llama — 见 private-main 注释
     fallback:
       on_errors: [429, 500, 502, 503, 504, "timeout", "connection error", "connection refused", "rate limit", "free tier", "upstream error"]
       chain: [catfish-public-qwen-flash, catfish-private-main]
       max_hops: 2
+
+  # ---------- 公共 · 智谱 GLM 5.1 (NVIDIA NIM 托管, 国产模型) ----------
+  # NVIDIA NIM OpenAI 兼容端点 (build.nvidia.com)
+  # 没配 NVIDIA_API_KEY 时不出现在 catalog
+  # 模型详情:
+  #   - 智谱 GLM-5.1, NVIDIA NIM 平台托管
+  #   - 128K context
+  #   - 中文 instruction-following 比 Llama 强一档
+  #   - function calling 支持
+  #   - 不支持 vision (GLM-5.1 纯文本)
+  # 5/15 鸿波拍板用 GLM 替代原计划的 Llama 3.3 70B —
+  #   理由: 国产模型, 国央企接受度高于 Llama; 中文场景体验更稳;
+  #         即便走公网, 客户合规审查也比美国系模型友好.
+  # 用途 (5/15 鸿波 'deepseek 抽风 + qwen flash 配额用完 + gemini pro 偶发抖动'):
+  #   - 当 DashScope qwen-flash 配额用完 / DeepSeek streaming 异常时的第 4 兜底
+  #   - 跟 catfish-private-main 一档的 instruction-following 能力
+  #   - 客户基建调研: NVIDIA NIM + 国产模型组合是国央企可接受路径
+  #
+  # 注: catalog 内部 name 保留 'nvidia-llama' 不改 — 避免动 5 处 fallback chain
+  # 引用导致 startup warn. display_name 用真实模型名 (GLM-5.1).
+  # 长期: 如果要新加真 Llama, 用 catfish-public-nvidia-llama-real 或类似新 name.
+  - name: catfish-public-nvidia-llama
+    tier: public
+    display_name: "Qwen3.5 122B (NVIDIA NIM, 国产) · 内网同款备胎（公共付费）"
+    mode: chat
+
+    upstream:
+      # 5/15 22:10-22:25 鸿波实测演进:
+      #   v1 glm-5.1                            → 63K prompt TTFT 145s, 太慢
+      #   v2 meta/llama-3.3-70b-instruct        → "太老的模型不能用"
+      #   v3 qwen3-235b-a22b-instruct-2507      → 404 不存在 (我编的 ID)
+      #   v4 qwen3.5-397b-a17b                  → "一点反应都没有",
+      #     NVIDIA 免费 tier 可能排队等很久 / 资源不够
+      #   v5 (现在) qwen/qwen3.5-122b-a10b
+      #     ✓ **跟客户内网 catfish-private-main 完全同一个模型**
+      #     ✓ 备胎语义最干净: "内网挂了, 公网同型号接管"
+      #     ✓ 客户用户感知不到差别 (同 instruction-following, 同输出风格)
+      #     ✓ 国产模型, 国央企接受度高
+      #     ✓ NVIDIA NIM 上 122B 比 397B 资源充足, 不容易排队
+      #
+      # 设计思路: 备胎 = 同型号公网托管, 不是"更强的兜底". 体验一致最重要,
+      # demo 故事: "客户内网挂了, 公网 NVIDIA NIM 上有同款 Qwen3.5 122B 接管,
+      # 业务不中断". 比"切 Llama / 切 Gemini" 卖点强 — 客户 IT 听得懂同型号备胎.
+      #
+      # catalog 内部 name 仍叫 'nvidia-llama' — 保留, 防 5 处 fallback chain 引用要全改.
+      model: nvidia_nim/minimaxai/minimax-m2.7
+      api_base: https://integrate.api.nvidia.com/v1
+      api_key_env: NVIDIA_API_KEY
+      # 122B 比 397B 快很多, 给 90s 够用 (跟客户内网 timeout=300s 区别: 公网较快)
+      timeout: 90
+
+    context_window: 128000
+    # max_output_tokens: 待查实 — 22:50 同样, 我编的 16384 没核实文档. revert.
+    # NVIDIA NIM 各 model output cap 不公开统一, 等撞 400 看 error message.
+    supports_tool_use: true
+    supports_streaming: true
+    supports_vision: false
+    # BL-NVIDIA-NIM-MANUAL-ONLY (5/15 22:55 鸿波): 'fallback' 标签也去掉 — NVIDIA 不
+     # 当任何用例的兜底, 也不被 picker / fallback 选, 只能员工/客户在 companion 模型
+     # 选择器手选. 推理 / 长指令场景从这清单挪走, 实际由内网 main + gemini-pro 兜.
+    recommended_for: [client_demo_optional]
+    cost_tier: paid
+
+    # BL-NVIDIA-NIM-MANUAL-ONLY (5/15 22:55 鸿波 'NVIDIA 都不要 fallback, 只手选'):
+    # 删 fallback 块 — NVIDIA 跪了直接报客户端, 不绕弯到其他公网. 语义:
+    #   - 这是"客户基建调研路径", 跪了让员工自己换 model, 不要 gateway 暗中切走
+    #   - 当 demo 时 NVIDIA 真的不出字, 客户看见的应该是"NVIDIA 失败", 不是
+    #     "gateway 静默切到 DashScope 看起来一切正常" — 那等于骗自己
+    # 历史 fallback chain (qwen-flash → deepseek → gemini) 完全删掉, 不再绕.
+
+  # ---------- 公共 · NVIDIA Nemotron Super 49B（推理 + 长指令跟随） ----------
+  # NVIDIA 在 Llama 3.3 基础上自己微调的 reasoning 模型
+  # 用途: 复合任务 plan-execute / 长指令跟随 (花叔 60KB SKILL.md 这种)
+  - name: catfish-public-nvidia-nemotron
+    tier: public
+    display_name: "Nemotron Super 49B v1.5 (NVIDIA NIM) · 推理增强（公共付费）"
+    mode: chat
+
+    upstream:
+      # 5/15 22:14: 升 v1 → v1.5 (NVIDIA list 里两个都有), NVIDIA 在 Llama 3.3
+      # 上加推理的更新版. Nemotron 系列负责"推理强"场景, Qwen3.5 397B 负责
+      # "国产 + 通用主力" 场景.
+      model: nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5
+      api_base: https://integrate.api.nvidia.com/v1
+      api_key_env: NVIDIA_API_KEY
+      # reasoning 模型偏慢, 给宽裕 timeout
+      timeout: 180
+
+    context_window: 128000
+    # max_output_tokens: 待查实 — 同 nvidia-llama 段同因. revert.
+    supports_tool_use: true
+    supports_streaming: true
+    supports_vision: false
+    # BL-NVIDIA-NIM-MANUAL-ONLY (5/15 22:55 鸿波): 'fallback' 标签去掉, 只手选.
+    recommended_for: [client_demo_optional]
+    cost_tier: paid
+
+    # BL-NVIDIA-NIM-MANUAL-ONLY (5/15 22:55 鸿波 'NVIDIA 都不要 fallback, 只手选'):
+    # 删 fallback 块 — 跪了直接报客户端. 同 nvidia-llama 同段注释.
 
   # ---------- 公共 · Gemini 2.5 Flash（快速/便宜） ----------
   - name: catfish-public-gemini-flash
@@ -273,11 +391,14 @@ models:
       timeout: 180
 
     context_window: 1000000
+    # BL-MAX-OUTPUT-TOKENS (5/15): Gemini Flash context 1M, output 65536 (跟 Pro 同代).
+    max_output_tokens: 65536
     supports_tool_use: true
     supports_streaming: true
     supports_vision: true
     # Gemini Flash 是免费层, 配额最容易耗尽, 必须有 fallback
     # BL-FALLBACK-500 (5/14 凌晨): 公网链加 500 — 见 qwen-flash 同段注释.
+    # BL-NVIDIA-NIM-DROP-FALLBACK (5/15 22:50): 摘 nvidia-llama — 见 private-main 注释
     fallback:
       on_errors: [429, 500, 502, 503, 504, "timeout", "connection error", "connection refused", "rate limit", "free tier", "upstream error"]
       chain: [catfish-public-qwen-flash, catfish-private-main]

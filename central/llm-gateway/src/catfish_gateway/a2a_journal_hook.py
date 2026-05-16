@@ -37,7 +37,6 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger("catfish.gateway.a2a_journal_hook")
 
@@ -102,7 +101,7 @@ def append_a2a_help_entry(
     answer_preview: str = "",
     chunks_count: int = 0,
     duration_ms: int = 0,
-    timestamp: Optional[datetime] = None,
+    timestamp: datetime | None = None,
 ) -> bool:
     """B 端答完 A 后, 在 B 自己的 journal 追加一条 [a2a-help] 记录.
 

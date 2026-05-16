@@ -47,8 +47,9 @@ auto_continue.py — BL-A1.1 (5/8 ship): LLM 输出被 max_tokens 截断时自�
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 logger = logging.getLogger("catfish.gateway.auto_continue")
 
@@ -134,7 +135,7 @@ def _set_message_content(response: Any, content: str) -> None:
             msg["content"] = content
         else:
             try:
-                setattr(msg, "content", content)
+                msg.content = content
             except Exception:
                 # pydantic v2 frozen 之类不让改, 退路: 改 dict 形式
                 logger.warning("无法 setattr message.content, response shape 未知")

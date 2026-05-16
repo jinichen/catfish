@@ -10,20 +10,25 @@ import FeedbackButtons from "./FeedbackButtons";
 import SkillFeedbackButtons from "./SkillFeedbackButtons";
 // BL-VOICE2 (5/10): TTS 喇叭按钮, 鸿波 "这么好玩的东西没理由不现在做"
 import TTSButton from "../../components/TTSButton";
+// BL-TASK-ASSESS-3-UI (5/15): assistant 嘴炮 ⚠ badge + 催继续按钮
+import PromiseCheckBadge from "./PromiseCheckBadge";
 
 interface Props {
   msg: Msg;
   /** 是否在这条消息末尾显示流式光标 —— 由父组件计算
    *  (只对"最后一条助手且全局 isStreaming"为 true) */
   showCaret?: boolean;
+  /** BL-TASK-ASSESS-3-UI (5/15): 点 [⏩ 催它继续] 按钮时发"继续". 由父组件
+   *  ChatPanel 传下来, 走跟用户手动发"继续"完全一样的路径. 不走 gateway 重试. */
+  onNudge?: () => void;
 }
 
-export default function ChatMessage({ msg, showCaret = false }: Props) {
+export default function ChatMessage({ msg, showCaret = false, onNudge }: Props) {
   if (msg.role === "user") {
     return <UserBubble msg={msg} />;
   }
   if (msg.role === "assistant") {
-    return <AssistantBubble msg={msg} showCaret={showCaret} />;
+    return <AssistantBubble msg={msg} showCaret={showCaret} onNudge={onNudge} />;
   }
   // system 不渲染(gateway 自动注入,前端看不到);
   // tool 角色消息也不直接渲染 —— 它的内容已通过 ChatToolCall 在
@@ -141,9 +146,11 @@ function UserBubble({ msg }: { msg: Msg }) {
 function AssistantBubble({
   msg,
   showCaret,
+  onNudge,
 }: {
   msg: Msg;
   showCaret: boolean;
+  onNudge?: () => void;
 }) {
   // BL-E11 后续: 头像 alt 用员工自定义名 (默认 "小鲶")
   const agentName = useAgentStore((s) => s.name);
@@ -230,6 +237,11 @@ function AssistantBubble({
           >
             ✗ {friendlyError(msg.error)}
           </div>
+        )}
+        {/* BL-TASK-ASSESS-3-UI (5/15): 嘴炮断言 badge + 催继续按钮.
+            仅 stream done 后渲染 (!showCaret), 且 _promise_check.is_promise_only=true. */}
+        {!showCaret && msg._promise_check?.is_promise_only && onNudge && (
+          <PromiseCheckBadge msg={msg} onNudge={onNudge} />
         )}
         {/* BL-MM6 feedback 按钮 + BL-VOICE2 TTS 喇叭: 流式中不显, 防员工误点未完成消息.
             内容空 + 没 tool_calls + 不报错 时也不显 (点空消息无意义).

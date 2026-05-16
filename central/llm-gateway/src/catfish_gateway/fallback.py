@@ -27,9 +27,10 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
-from .config import Config, FallbackConfig, ModelConfig
+from .config import Config, ModelConfig
 
 logger = logging.getLogger("catfish.gateway.fallback")
 
@@ -133,38 +134,83 @@ class LargePromptFallbackBlocked(Exception):
         )
 
 
-def estimate_prompt_tokens(messages: list[dict] | None) -> int:
-    """BL-FALLBACK-PROMPT-CAP (5/14): 粗估 prompt tokens 给 fallback cap 用.
+def estimate_prompt_tokens(
+    messages: list[dict] | None,
+    model: str | None = None,
+    tools: list[dict] | None = None,
+) -> int:
+    """估 prompt tokens. 给 fallback cap + dynamic max_tokens 用.
 
-    没装 tiktoken (catfish 用 LiteLLM, 上游各家 tokenizer 不一), 用字符数 / 2 保守估:
-    - 英文 ~4 char/token (低估 → 偏安全, 触发 cap 偏多)
-    - 中文 ~1 char/token (高估 → 偏安全)
-    - 中英混 ~2-3 char/token, /2 是中间偏高估值
+    历史演进:
+      char/2 (5/14): Llama 中文低估 76% (39K 估 / 69K 真)
+      LiteLLM token_counter (5/15 鸿波 '硬编码偷懒'): 准估 messages, Llama 39K → 42K
+        但仍低估 40%, 因为 LiteLLM `token_counter(messages)` 只算 messages,
+        不算 chat completion body 的 `tools` field. 上游 (OpenAI/NVIDIA 等)
+        算 prompt 时把 tools schema 也当 input — 这是漏估的根本原因.
+      BL-TOOLS-IN-ESTIMATE (5/15 22:00 鸿波 'NVIDIA 还撞 ContextWindowExceeded'):
+        把 tools schema 也算进 prompt 估算. 50 个 tool * 平均 200 token/tool ≈ 10K.
 
-    高估比低估安全 — 触发 cap 拦截多一点不会烧公网钱, 漏拦一次就是 57K avg 公网.
+    Args:
+        messages: chat messages 数组 (含 content / tool_calls / multipart)
+        model:    LiteLLM 完整 model 名. None → 用 char/2 兜底.
+        tools:    OpenAI 风格 tools 数组 (function schemas). 加进 prompt 估算.
 
-    image_url 不算 (固定开销, vision 模型 token 计算靠上游).
+    image_url 仍不算 (固定开销, vision 模型 token 由上游真实算).
     """
-    if not messages:
+    if not messages and not tools:
         return 0
-    total_chars = 0
-    for m in messages:
-        c = m.get("content")
-        if isinstance(c, str):
-            total_chars += len(c)
-        elif isinstance(c, list):
-            # multipart (vision) — 只算 text part, 不算 image_url
-            for part in c:
-                if isinstance(part, dict) and part.get("type") == "text":
-                    total_chars += len(part.get("text", ""))
-        # tool_calls 字段也算
-        tcs = m.get("tool_calls") or []
-        for tc in tcs:
-            fn = tc.get("function") or {}
-            args = fn.get("arguments")
-            if isinstance(args, str):
-                total_chars += len(args)
-    return total_chars // 2
+
+    # ── messages 部分 ──
+    messages_tokens = 0
+    if messages:
+        if model:
+            try:
+                import litellm  # noqa: PLC0415
+
+                count = litellm.token_counter(model=model, messages=messages)
+                if isinstance(count, int) and count > 0:
+                    messages_tokens = count
+            except Exception as e:  # noqa: BLE001
+                logger.debug(
+                    "estimate_prompt_tokens: LiteLLM token_counter model=%s 失败 (%s), "
+                    "fallback char/2 估算",
+                    model, e,
+                )
+
+        if messages_tokens == 0:
+            # Fallback: char/2 粗估
+            total_chars = 0
+            for m in messages:
+                c = m.get("content")
+                if isinstance(c, str):
+                    total_chars += len(c)
+                elif isinstance(c, list):
+                    for part in c:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            total_chars += len(part.get("text", ""))
+                tcs = m.get("tool_calls") or []
+                for tc in tcs:
+                    fn = tc.get("function") or {}
+                    args = fn.get("arguments")
+                    if isinstance(args, str):
+                        total_chars += len(args)
+            messages_tokens = total_chars // 2
+
+    # ── tools 部分 (BL-TOOLS-IN-ESTIMATE) ──
+    # 上游算 prompt 时把 tools schema 也算 input. 50 tools * 200 token ≈ 10K.
+    # tools schema 是 JSON, 偏 4 char/token (相对 char/2 中英混更准).
+    # 不调 LiteLLM token_counter 因为它不接 tools, 自己算字符数即可.
+    tools_tokens = 0
+    if tools:
+        try:
+            import json as _json  # noqa: PLC0415
+
+            tools_json = _json.dumps(tools, ensure_ascii=False)
+            tools_tokens = len(tools_json) // 4  # JSON ~4 char/token
+        except Exception as e:  # noqa: BLE001
+            logger.debug("estimate_prompt_tokens: tools 序列化失败 (%s), 跳过", e)
+
+    return messages_tokens + tools_tokens
 
 
 def _extract_status_code(exc: Exception) -> int | None:
@@ -236,15 +282,21 @@ def resolve_chain(
             )
             continue
         # BL-FALLBACK-PROMPT-CAP: 大 prompt 不切公网 (公网更慢更贵, 不该兜底)
+        # BL-FALLBACK-CAP-SCOPE (5/15 22:15): 仅 primary 是 private 时才拦 public.
+        # 原意是"内网数据不应跨 public 边界", primary 已 public 时 fallback 到 public
+        # 不存在新的"跨边界" — 应该允许. 之前漏判 primary.tier 导致 public primary
+        # 撞错 fallback chain 全是 public 被一刀切, 抛 LargePromptFallbackBlocked.
         if (
             cap > 0
             and prompt_estimate > cap
             and m.tier == "public"
+            and primary.tier == "private"
         ):
             logger.warning(
-                "fallback chain skips %s (tier=public, prompt_estimate=%d > cap=%d). "
-                "BL-FALLBACK-PROMPT-CAP: 大 prompt 不切公网, 内网链 retry 失败就报错让用户重试.",
-                name, prompt_estimate, cap,
+                "fallback chain skips %s (tier=public, prompt_estimate=%d > cap=%d, "
+                "primary=%s/private). BL-FALLBACK-PROMPT-CAP: 大 prompt 内网→公网 "
+                "跨边界拦截.",
+                name, prompt_estimate, cap, primary.name,
             )
             continue
         out.append(m)

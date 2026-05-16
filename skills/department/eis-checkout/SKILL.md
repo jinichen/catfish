@@ -2,6 +2,14 @@
 name: eis-checkout
 version: "0.1.0-frozen"
 deprecated: false
+kind: procedural
+triggers:
+  - 下班打卡
+  - 下班签退
+  - 打下班卡
+  - 下班卡
+  - EIS 签退
+  - EIS 下班打卡
 description: |-
   ⭐ 登录 EIS 后点下班打卡按钮
 

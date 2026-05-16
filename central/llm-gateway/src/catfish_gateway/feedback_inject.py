@@ -48,7 +48,7 @@ def read_recent_negative() -> list[dict[str, Any]]:
     cutoff = time.time() - MAX_AGE_DAYS * 86400
     out: list[dict[str, Any]] = []
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:

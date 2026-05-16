@@ -229,3 +229,155 @@ async def test_with_fallback_no_estimate_arg_compatible(monkeypatch):
 
     result, used, _ = await with_fallback(cfg, main, _invoker)  # 没传 prompt_estimate
     assert used.name == "public_a"
+
+
+# ─── BL-TOOLS-IN-ESTIMATE (5/15 22:00 鸿波 'NVIDIA 还撞 ContextWindow') ──
+#
+# LiteLLM token_counter 只算 messages, 不算 chat completion body 的 tools field.
+# 上游 (NVIDIA / OpenAI) 算 prompt 时把 tools schema 也当 input. 50 tools 漏算
+# = 我们估 42K vs 真 69K 差 40%. 修: estimate 加 tools 参数, JSON char/4 估.
+
+
+def test_estimate_includes_tools_schema():
+    """tools schema 应该算进 prompt 估算"""
+    from catfish_gateway.fallback import estimate_prompt_tokens
+
+    messages = [{"role": "user", "content": "hi"}]
+    # 不传 tools
+    without_tools = estimate_prompt_tokens(messages)
+
+    # 传 50 个 tool (模拟 catfish 实际场景)
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": f"tool_{i}",
+                "description": "A test tool that does X" * 20,  # ~400 char desc
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "arg1": {"type": "string", "description": "arg description"},
+                        "arg2": {"type": "number"},
+                    },
+                },
+            },
+        }
+        for i in range(50)
+    ]
+    with_tools = estimate_prompt_tokens(messages, tools=tools)
+
+    # tools 50 个 * 大约 600 char/tool = 30K char / 4 char/token = 7.5K token
+    assert with_tools > without_tools, "加 tools 后估算应该变大"
+    assert with_tools - without_tools > 5000, (
+        f"50 tools 应至少加 5K token, 实际只 +{with_tools - without_tools}"
+    )
+
+
+def test_estimate_no_tools_unchanged():
+    """tools=None / [] → 跟没传 tools 一样"""
+    from catfish_gateway.fallback import estimate_prompt_tokens
+
+    messages = [{"role": "user", "content": "hi"}]
+    none_val = estimate_prompt_tokens(messages, tools=None)
+    empty = estimate_prompt_tokens(messages, tools=[])
+    no_arg = estimate_prompt_tokens(messages)
+    assert none_val == empty == no_arg
+
+
+def test_estimate_tools_only_no_messages():
+    """没 messages 但有 tools — 也能估"""
+    from catfish_gateway.fallback import estimate_prompt_tokens
+
+    tools = [
+        {"type": "function", "function": {"name": "test", "parameters": {}}}
+    ]
+    n = estimate_prompt_tokens([], tools=tools)
+    assert n > 0, "tools schema 也应有 token 数"
+
+
+# ─── BL-FALLBACK-CAP-SCOPE (5/15 22:15 鸿波 'NVIDIA primary 撞错全链被拦') ───
+#
+# BL-FALLBACK-PROMPT-CAP 原意: 内网数据不应跨 public 边界.
+# 修: 仅 primary.tier=='private' 时才 cap public candidate.
+# public primary 撞错走 public fallback chain 不算"跨边界" — 应该允许.
+
+
+def test_public_primary_no_cap_on_public_fallback():
+    """primary 已经是 public — fallback 到 public 不应被 BL-FALLBACK-PROMPT-CAP 拦.
+
+    回归实盘场景: catfish-public-nvidia-llama (public) 撞 ContextWindowExceeded,
+    fallback chain qwen-flash/deepseek-flash/gemini-flash (全 public) 应该能 hop."""
+    from types import SimpleNamespace
+
+    from catfish_gateway.fallback import resolve_chain
+
+    # 造 fake config with NVIDIA primary + public chain
+    nvidia = SimpleNamespace(
+        name="catfish-public-nvidia-llama",
+        tier="public",
+        mode="chat",
+        upstream=SimpleNamespace(api_key_env="NVIDIA_API_KEY", is_available=True),
+        fallback=SimpleNamespace(
+            chain=["catfish-public-qwen-flash"],
+            on_errors=["context window"],
+            max_hops=2,
+        ),
+    )
+    qwen = SimpleNamespace(
+        name="catfish-public-qwen-flash",
+        tier="public",
+        mode="chat",
+        upstream=SimpleNamespace(api_key_env="DASHSCOPE_API_KEY", is_available=True),
+    )
+    fake_config = SimpleNamespace(
+        max_fallback_prompt_tokens=30000,
+        get_model=lambda n: {nvidia.name: nvidia, qwen.name: qwen}.get(n),
+    )
+
+    # 大 prompt 50K, 远超 cap 30K — 但 primary 已是 public, 不应拦 public fallback
+    chain = resolve_chain(fake_config, nvidia, prompt_estimate=50000)
+
+    assert len(chain) == 1, (
+        f"public primary 的 public fallback chain 不该被 cap 拦, "
+        f"实际剩 {len(chain)} 个"
+    )
+    assert chain[0].name == "catfish-public-qwen-flash"
+
+
+def test_private_primary_still_caps_public_fallback():
+    """primary 是 private — 仍按 BL-FALLBACK-PROMPT-CAP 原设计拦 public.
+
+    确保 BL-FALLBACK-CAP-SCOPE 改动没破坏内网→公网保密线."""
+    from types import SimpleNamespace
+
+    from catfish_gateway.fallback import resolve_chain
+
+    private_main = SimpleNamespace(
+        name="catfish-private-main",
+        tier="private",  # ← 关键: private primary
+        mode="chat",
+        upstream=SimpleNamespace(api_key_env="INTERNAL_LLM_KEY", is_available=True),
+        fallback=SimpleNamespace(
+            chain=["catfish-public-qwen-flash"],
+            on_errors=["timeout"],
+            max_hops=2,
+        ),
+    )
+    qwen = SimpleNamespace(
+        name="catfish-public-qwen-flash",
+        tier="public",
+        mode="chat",
+        upstream=SimpleNamespace(api_key_env="DASHSCOPE_API_KEY", is_available=True),
+    )
+    fake_config = SimpleNamespace(
+        max_fallback_prompt_tokens=30000,
+        get_model=lambda n: {private_main.name: private_main, qwen.name: qwen}.get(n),
+    )
+
+    # 大 prompt 50K, private primary → public fallback 应被拦 (跨边界)
+    chain = resolve_chain(fake_config, private_main, prompt_estimate=50000)
+
+    assert len(chain) == 0, (
+        f"private primary → public fallback 大 prompt 应被拦 (跨保密边界), "
+        f"实际剩 {len(chain)} 个"
+    )

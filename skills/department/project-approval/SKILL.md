@@ -2,6 +2,17 @@
 name: project-approval
 version: "1.0.0"
 deprecated: false
+kind: procedural
+triggers:
+  - 立项
+  - 立项报告
+  - 立项申请
+  - 立项请示
+  - 项目立项
+  - 项目可研
+  - 可行性研究
+  - 可研报告
+  - 项目方案及预算
 description: |-
   ⭐ 生成项目立项 / 立项申请 / 项目可研 / 立项报告 .docx 文档. 严格按真实公文样式 (复用 leadership-briefing 渲染层).
 

@@ -37,8 +37,8 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 
-from .auth import User, get_current_user
 from . import facts_db  # BL-Q3-FACT PG 统一 (5/10): PG 主 + jsonl 兜底
+from .auth import User, get_current_user
 
 logger = logging.getLogger("catfish.gateway.facts")
 

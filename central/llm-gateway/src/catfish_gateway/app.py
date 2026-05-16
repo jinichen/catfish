@@ -51,31 +51,31 @@ from fastapi import Depends, FastAPI, HTTPException, Request  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import StreamingResponse  # noqa: E402
 
+from . import quota as _quota_module  # noqa: E402  五一 sprint 5/2 收尾: chat 后写 quota_events
+from . import session_meta  # noqa: E402  BL-E16 关系建立: tick + inject 时间元
 from .auth import User, get_current_user, get_current_user_optional  # noqa: E402
 from .catalog import build_catalog  # noqa: E402
 from .config import Config, load_config  # noqa: E402
-from .gemini_guard import harden_for_gemini  # noqa: E402
-from .multimodal_guard import route_to_vision_if_needed  # noqa: E402
-from .multimodal_tool_unwrap import unwrap_tool_images  # noqa: E402
-from .tool_capability_guard import route_to_tool_capable_if_needed  # noqa: E402
 from .employee_journal import inject_employee_journal  # noqa: E402
+from .fallback import with_fallback  # noqa: E402
 from .feedback_inject import inject_feedback  # noqa: E402  BL-MM6
-from .inject_session_history import inject_session_history  # noqa: E402
-from .session_facts import inject_session_facts  # noqa: E402
-from . import session_meta  # noqa: E402  BL-E16 关系建立: tick + inject 时间元
-from .session_summarizer import trigger_background_summary  # noqa: E402
-from .skill_guard import inject_skill_guard  # noqa: E402
-from .skills_inject import inject_skills_catalog  # noqa: E402
-from .stats_guard import inject_stats_guard  # noqa: E402
-from .fallback import should_fallback, with_fallback  # noqa: E402
-from .tools_sanitizer import sanitize_tools  # noqa: E402
+from .gemini_guard import harden_for_gemini  # noqa: E402
 from .identity_inject import (  # noqa: E402
     header_agent_prefs,
     header_skips_identity,
     inject_identity_if_needed,
 )
+from .inject_session_history import inject_session_history  # noqa: E402
 from .metrics import log_request_metadata  # noqa: E402
-from . import quota as _quota_module  # noqa: E402  五一 sprint 5/2 收尾: chat 后写 quota_events
+from .multimodal_guard import route_to_vision_if_needed  # noqa: E402
+from .multimodal_tool_unwrap import unwrap_tool_images  # noqa: E402
+from .session_facts import inject_session_facts  # noqa: E402
+from .session_summarizer import trigger_background_summary  # noqa: E402
+from .skill_guard import inject_skill_guard  # noqa: E402
+from .skills_inject import inject_skills_catalog  # noqa: E402
+from .stats_guard import inject_stats_guard  # noqa: E402
+from .tool_capability_guard import route_to_tool_capable_if_needed  # noqa: E402
+from .tools_sanitizer import sanitize_tools  # noqa: E402
 
 # Global setup
 
@@ -137,6 +137,13 @@ async def lifespan(app: FastAPI):
     # dev_token 后内部调用 401 的副作用. 没显式配 → 自动生成 32B random.
     from .auth.dev_token import ensure_internal_dev_token  # noqa: PLC0415
     ensure_internal_dev_token()
+
+    # BL-MEMORY-MIGRATE-STEP1C (5/16): 注册 8 个内置 MemoryProvider 到全局 Registry.
+    # chat_completions middleware 改成调 registry.inject_subset(), 替代 8 个分散
+    # inject_X() 调用. identity 不在 Registry (它**创建** system, Registry 是
+    # **追加**, 留 app.py 早期跑作 Registry 前置).
+    from .memory.bootstrap import bootstrap_registry  # noqa: PLC0415
+    bootstrap_registry()
 
     logger.info("catfish-gateway starting with %d model(s):", len(config.models))
     for m in config.models:
@@ -1018,7 +1025,7 @@ async def api_learn_analyze(
     Caller (Companion): 录屏完点 ✅ → 先 POST /stop_recording → 再 POST /analyze
     → 拿 skill_dir → 读 SKILL.md / main.py 显 preview UI 给用户 review.
     """
-    from .recmode import aggregator, cdp_listener  # noqa: PLC0415
+    from .recmode import aggregator  # noqa: PLC0415
     session_id = (body.get("session_id") or "").strip()
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id 不能空")
@@ -1219,6 +1226,7 @@ async def api_audit_department(
 
 
 from pydantic import BaseModel as _BaseModel  # 局部 import 防顶层污染
+
 
 class _DeptQuotaUpdate(_BaseModel):
     tokens_per_day: int
@@ -1547,6 +1555,93 @@ def _resolve_model(config: Config, name: str):
     return model
 
 
+def _safe_int_env(key: str, default: int) -> int:
+    """env 读 int, 解析失败回 default. 防 yaml/.env 里值写歪了崩进程."""
+    try:
+        return int(os.environ.get(key, str(default)))
+    except ValueError:
+        return default
+
+
+def _safe_float_env(key: str, default: float) -> float:
+    try:
+        return float(os.environ.get(key, str(default)))
+    except ValueError:
+        return default
+
+
+def _compute_max_allowed_output_tokens(
+    messages: list, tools: list | None, model
+) -> int | None:
+    """算当前 model 真实剩余 output 空间. 返 None 表示算不出 (cw=0).
+
+    BL-MAX-TOKENS-DYNAMIC (5/15): cw - prompt_est*buffer - safety. 比硬编码 32K 优:
+      - 短 prompt (5-10K) 输出空间 ~120K, 不再被 32K 上限卡住
+      - 长 prompt (>96K) 自动留够 prompt 空间, 不会跑 OOM
+    BL-TOKEN-COUNTER-LITELLM (5/15 22:00): estimator 走 LiteLLM token_counter, 认
+      Llama/Qwen/Gemini/DeepSeek 各家 tokenizer, 准估 ±5%. 准估后 dyn 自然在剩余
+      空间内, **不需要硬编码 HARD CAP** (那是偷懒, 鸿波拍过).
+    BL-TOOLS-IN-ESTIMATE (5/15 22:00): tools schema 也算 prompt 一部分 (50 tools *
+      200 token = 10K, 漏算会撞 ContextWindowExceeded).
+    BL-ESTIMATE-ERROR-MARGIN (5/15 22:10): tokenizer 仍有 10-25% 误差 (系统 inject
+      markdown / 特殊 token / chat format 差异), 用 buffer_factor (默认 1.3, env
+      CATFISH_PROMPT_BUFFER_FACTOR 可调) 给 prompt_est 加成比例 buffer.
+    BL-MAX-OUTPUT-TOKENS (5/15 22:31): context_window 跟 max_output_tokens 是俩字段:
+      cw = prompt+output 总上限 (DeepSeek 1M); max_out = 单次 output 上限 (DeepSeek
+      393K). dyn 必须 clip 到 min(cw, max_out), 否则撞 400 [1, 393216].
+    """
+    try:
+        cw = int(getattr(model, "context_window", 0) or 0)
+    except (TypeError, ValueError):
+        cw = 0
+    if cw <= 0:
+        return None
+    try:
+        from .fallback import estimate_prompt_tokens  # noqa: PLC0415
+
+        prompt_est = estimate_prompt_tokens(
+            messages, model=model.upstream.model, tools=tools
+        )
+    except Exception:  # noqa: BLE001
+        prompt_est = 0
+    safety = _safe_int_env("CATFISH_MAX_TOKENS_SAFETY", 2048)
+    buffer_factor = _safe_float_env("CATFISH_PROMPT_BUFFER_FACTOR", 1.3)
+    dyn = cw - int(prompt_est * buffer_factor) - safety
+    try:
+        max_out = int(getattr(model, "max_output_tokens", 0) or 0)
+    except (TypeError, ValueError):
+        max_out = 0
+    upper = min(cw, max_out) if max_out > 0 else cw
+    return max(4096, min(dyn, upper))  # 下限 4K (防压成 0/负数), 上限取真实输出 cap
+
+
+def _apply_max_tokens(params: dict, model) -> None:
+    """In-place 决定 params['max_tokens']:
+
+    - client 没传 → 用 _compute_max_allowed_output_tokens (dyn), 算不出走 32K 兜底
+    - client 传了 → 仍 clip 到 dyn (BL-MAX-TOKENS-CLIP 防 fallback 切小 ctx 撞 400)
+    """
+    allowed = _compute_max_allowed_output_tokens(
+        params.get("messages") or [], params.get("tools"), model
+    )
+    client_val = params.get("max_tokens")
+    if "max_tokens" not in params or client_val is None:
+        if allowed is not None:
+            params["max_tokens"] = allowed
+        else:
+            params["max_tokens"] = _safe_int_env("CATFISH_MAX_TOKENS_FALLBACK", 32768)
+        return
+    # client 显式传了 — clip 到 model 真实容量 (BL-MAX-TOKENS-CLIP)
+    if allowed is not None and isinstance(client_val, int) and client_val > allowed:
+        cw = getattr(model, "context_window", 0) or 0
+        logger.warning(
+            "BL-MAX-TOKENS-CLIP: client 传 max_tokens=%d 超 model=%s 剩余空间 %d, "
+            "clip 到 %d (context_window=%d, prompt 估算占用过大)",
+            client_val, model.name, allowed, allowed, cw,
+        )
+        params["max_tokens"] = allowed
+
+
 def _build_litellm_params(body: dict, model) -> dict:
     """Map gateway request -> litellm call params.
 
@@ -1563,13 +1658,7 @@ def _build_litellm_params(body: dict, model) -> dict:
             "timeout": model.upstream.timeout,
         }
     )
-    # BL-FIX23 L4a (5/9): 客户端没传 max_tokens 时强制兜底 4096. 鸿波 5/9 报
-    # '半截就停' 真因: Qwen vLLM 默认 max_tokens 太小 (~600 token), 长 docx
-    # 输出被截 finish_reason=length, streaming 路径 BL-A1.1 auto-continue
-    # 没覆盖, 直接 stream 结束. 兜底 4K 让大多数任务一次完成. 续写 streaming
-    # 版 BL-A1.2 后续做.
-    if "max_tokens" not in params or params["max_tokens"] is None:
-        params["max_tokens"] = 4096
+    _apply_max_tokens(params, model)
     if model.upstream.api_base:
         params["api_base"] = model.upstream.api_base
 
@@ -1598,6 +1687,7 @@ def _build_litellm_params(body: dict, model) -> dict:
         }
         if changed:
             logger.info("applied param_overrides for %s: %s", model.name, changed)
+
     return params
 
 
@@ -1772,7 +1862,7 @@ async def _stream_with_keepalive(iterator, interval_secs: float = _KEEPALIVE_INT
                 iterator.__anext__(), timeout=interval_secs
             )
             yield chunk
-        except asyncio.TimeoutError:
+        except TimeoutError:
             yield "__keepalive__"
         except StopAsyncIteration:
             return
@@ -1876,6 +1966,7 @@ async def _stream_chat_completion(
     # 跑 InflightCleanupTransform unlink. gateway 真崩 (SIGKILL) 文件留下,
     # 启动时 reap_interrupted 写一条 'interrupted_resumed' audit 替补.
     import uuid as _uuid  # noqa: PLC0415
+
     from . import inflight_streams  # noqa: PLC0415
     request_id = _uuid.uuid4().hex
     inflight_streams.mark_started(
@@ -1901,8 +1992,14 @@ async def _stream_chat_completion(
 
         # BL-FALLBACK-PROMPT-CAP (5/14): 算 prompt 估算传给 with_fallback, 大 prompt
         # 失败时跳过公网 candidate (公网更慢更贵, 不该兜底).
+        # BL-TOKEN-COUNTER-LITELLM (5/15): 传 model 名让 estimate 用真 tokenizer.
+        # BL-TOOLS-IN-ESTIMATE (5/15 22:00): 加 tools schema 估算, 上游也算 tools.
         from .fallback import estimate_prompt_tokens  # noqa: PLC0415
-        prompt_estimate = estimate_prompt_tokens(body.get("messages") or [])
+        prompt_estimate = estimate_prompt_tokens(
+            body.get("messages") or [],
+            model=model.upstream.model,
+            tools=body.get("tools"),
+        )
         (iterator, first_chunk), used_model, attempts_log = await with_fallback(
             config, model, _start_stream, prompt_estimate=prompt_estimate,
         )
@@ -2017,6 +2114,50 @@ async def _stream_chat_completion(
                     used_model.name,
                 )
 
+        # ── BL-TASK-ASSESS-1-GATEWAY (5/15 鸿波"客户端要评估完成情况") ──
+        # 在 [DONE] 之前多发一条 task_assessment 事件, Companion 接到后做
+        # promise-vs-reality 检测 (assistant 文字说了"已生成"但 cum_tc=false +
+        # 文件路径不存在 → ⚠ 嘴炮). 不重复算 — gateway 一次性把状态给客户端.
+        #
+        # 格式: 一条普通 data: 行, object="task_assessment". OpenAI 兼容客户端
+        # 看到 unknown object 会忽略 (extra-field 容忍). Companion 嗅 object
+        # 字段拿 metadata.
+        try:
+            from .skill_guard import has_skill_intent  # noqa: PLC0415
+            from .skills_loader import discover_skills  # noqa: PLC0415
+
+            sg_fired = has_skill_intent(
+                body.get("messages") or [],
+                skills=discover_skills(),
+            )
+
+            # 历史里 assistant 调过 catfish_run_skill 没?
+            ever_called_skill = False
+            for _m in (body.get("messages") or []):
+                if _m.get("role") != "assistant":
+                    continue
+                for _tc in (_m.get("tool_calls") or []):
+                    _fn = (_tc.get("function") or {}) if isinstance(_tc, dict) else {}
+                    if _fn.get("name") == "catfish_run_skill":
+                        ever_called_skill = True
+                        break
+                if ever_called_skill:
+                    break
+
+            task_assessment = {
+                "object": "task_assessment",
+                "model": used_model.name,
+                "finish_reason": last_finish_reason,
+                "tool_call_count": chunk_stats["tool_calls"],
+                "content_chars": len(cumulative_content),
+                "cum_has_tool_call": cumulative_has_tool_call,
+                "skill_guard_fired": sg_fired,
+                "ever_called_catfish_run_skill_in_session": ever_called_skill,
+            }
+            yield f"data: {json.dumps(task_assessment, ensure_ascii=False)}\n\n"
+        except Exception as e:  # noqa: BLE001
+            logger.debug("task_assessment 事件构造失败 (%s), 不阻塞主流程", e)
+
         yield "data: [DONE]\n\n"
     except Exception as e:  # noqa: BLE001
         status_str = "error"
@@ -2112,8 +2253,14 @@ async def _invoke_chat_completion(
             params = _build_litellm_params(call_body, candidate_model)
             return await litellm.acompletion(**params)
         # BL-FALLBACK-PROMPT-CAP (5/14): 大 prompt 失败时跳过公网
+        # BL-TOKEN-COUNTER-LITELLM (5/15): 真 tokenizer 估算
+        # BL-TOOLS-IN-ESTIMATE (5/15 22:00): tools schema 也算
         from .fallback import estimate_prompt_tokens  # noqa: PLC0415
-        pe = estimate_prompt_tokens(call_body.get("messages") or [])
+        pe = estimate_prompt_tokens(
+            call_body.get("messages") or [],
+            model=model.upstream.model,
+            tools=call_body.get("tools"),
+        )
         resp, used, _attempts = await with_fallback(
             config, model, _call, prompt_estimate=pe,
         )
@@ -2275,53 +2422,57 @@ async def chat_completions(
     if _service_lean and not _teaching_mode:
         logger.info("BL-LEAN-CHAT: service token (sub=%s) auto-lean inject", user.sub)
 
-    # session_facts 注入: 把员工本 session 内明确告诉过的硬事实 (catfish_remember
-    # 写到 ~/.catfish/session_facts.json) 拼到最后一条 system message 末尾.
-    # 工程级 attention 兜底, 不依赖模型自觉 quote (SOUL.md 复述模式是软纪律).
-    if not _lean:
-        body["messages"] = inject_session_facts(body["messages"])
-
-    # stats_guard 注入: 员工最近一句要求"统计 / 多少 / 合计" 等, 强制提醒模型
-    # 必须 execute_code 用 Python 算, 不许自数. SOUL.md § 数据统计 = 代码统计
-    # 配套硬规则. 鸿波 2026-04-29 反馈"软纪律已修正多次仍出错".
-    if not _lean:
-        body["messages"] = inject_stats_guard(body["messages"])
-
-    # ⚠️ 2026-04-30 一度禁用 → 立即撤回 (B 方案假设错了)
+    # BL-MEMORY-MIGRATE-STEP1C (5/16): 8 个 inject_X() 合并成 1 个 Registry 调用.
     #
-    # 历史:
-    #   - 4-30 上午: 鸿波建议 catfish skill 装到 hermes ~/.hermes/skills/productivity/
-    #     catfish-* 下, 走 hermes 原生调用. 我假设 hermes skill 是"模型自动可见的
-    #     tool", 复制过去就能用. 软禁用了 A 方案的 inject + catfish_run_skill.
-    #   - 4-30 下午测试: 实际 hermes skill 不是自动 tool, 模型不会主动调用. 它会调
-    #     skill_manage / execute_code 自写代码, 还是绕开 catfish 工程审定 skill.
-    #   - 结论: A 方案 (catfish_run_skill 工具直接执行 script.py) 才是符合实际的设计.
-    #     立刻撤回 B 方案的禁用.
+    # 替代历史: inject_session_facts / inject_stats_guard / inject_skills_catalog /
+    #          inject_skill_guard / inject_session_history / inject_employee_journal /
+    #          inject_feedback / build_meta_block 8 处.
     #
-    # B 方案做的 install_to_hermes.sh 复制 SKILL.md 到 hermes 路径无害, 留着备用 (作为
-    # hermes 端"看得到 catfish skill 存在"的兜底). 但调用走 A 方案的 catfish_run_skill.
-    # skills_catalog 永远注入 — LLM 必须看到能调哪些 skill (含凝固后的)
-    body["messages"] = inject_skills_catalog(body["messages"])
-    # skill_guard 是工程级保护, lean 模式关 (鸿波 4-30 已说过"过度设计")
-    if not _lean:
-        body["messages"] = inject_skill_guard(body["messages"], body)
+    # 模式选 provider:
+    #   lean:    {skills_catalog}  (其它都跳, 教学场景只看 skill 列表)
+    #   internal: set()  (Registry 自己也跳 inject)
+    #   普通:    全跑 (按 priority 顺序)
+    #
+    # 注: identity (创建 system) / compound_intent / session_goal / hints / session_meta tick
+    # 不在 Registry 里, 留下面 app.py 原位.
+    from .memory import InjectContext  # noqa: PLC0415
+    from .memory.registry import get_global_registry  # noqa: PLC0415
+    from .inject_session_history import _extract_user_query  # noqa: PLC0415
 
-    # ── 跨 session 上下文 (鸿波 4-30 反馈"跨对话信息割裂, 不像真实个体") ──
-    # lean 模式全关 — 教学场景不需要 7 天历史 / journal / 历史 feedback,
-    # 这些只会让 LLM 跑偏 (例: journal 里说"鸿波周三聚餐" 跟 EIS 教学无关)
-    if not _lean:
-        # 档 1: 注入最近 7 天 session 元信息 (id / 时间 / 首条 user message), 模型
-        #       看到至少**意识到**有这些历史存在
-        body["messages"] = inject_session_history(body["messages"])
-        # 档 2: 注入 ~/.catfish/employee_journal.md 内容 (LLM 总结过的关键决策 /
-        #       偏好 / 里程碑), 模型看到员工"过去几天究竟讲了啥决定了啥"
-        body["messages"] = inject_employee_journal(body["messages"])
+    if _lean:
+        # 教学场景: 只保留 skills_catalog (LLM 必须看到能调哪些 skill)
+        enabled = {"skills_catalog"}
+    else:
+        # 普通模式: 全部 provider 都跑
+        # session_history / employee_journal / feedback 在 internal call 时自动跳
+        # (Registry 看 ctx.is_internal_call)
+        enabled = None  # None = 全跑
 
-        # 档 3 (BL-MM6 5/5): 注入员工最近 7 天 negative feedback (👎 / 改).
-        #       跟 BL-MM5 主动学习 (软纪律) 配合, 这条是显式 + 工程级 — 员工 explicit
-        #       点了 button 才入, 比 LLM 自觉观察的权重高. internal call 也 inject —
-        #       summarizer / proactive 用一致风格, 也要尊重员工 feedback.
-        body["messages"] = inject_feedback(body["messages"])
+    inject_ctx = InjectContext(
+        user_sub=getattr(user, "sub", None),
+        user_dept=getattr(user, "dept", None),
+        user_role=getattr(user, "role", None),
+        messages=body["messages"],
+        last_user_message=_extract_user_query(body["messages"]),
+        model_name=model.name,
+        is_internal_call=is_internal_call,
+    )
+    body["messages"] = get_global_registry().inject_subset(
+        inject_ctx, body["messages"], enabled,
+    )
+
+    # BL-COMPOUND-PLAN-EXECUTE (5/15 鸿波 '复合任务 agent 撑不住'): 复合任务
+    # ('分析 + 生成 PPT') 检测命中 → 追加 plan-execute 铁律到同一段 system,
+    # 不在 messages 中间插新 system (上次 v2 撞过 Qwen 400). prompt-only,
+    # agent 自己看历史推断当前 step. 单步任务不触发, 不影响普通会话.
+    # 不在 Registry 因为它跟具体 chat 行为强耦合 (compound = 多 turn), 不是单纯 inject.
+    if not _lean:
+        try:
+            from .compound_intent import inject_compound_plan_execute  # noqa: PLC0415
+
+            body["messages"] = inject_compound_plan_execute(body["messages"])
+        except Exception as e:  # noqa: BLE001
+            logger.debug("compound_intent 注入失败 (%s), 不阻塞", e)
 
     # 档 4 (BL-HERMES013-3 5/11): 注入员工 /goal 锁定目标. 借鉴 Hermes 0.13 Ralph
     # loop. 单文件 ~/.catfish/session_goal.txt, 员工 /goal xxx 设, 每轮自动 inject
@@ -2353,29 +2504,17 @@ async def chat_completions(
         # 写多份文件) 会被误拦, 把正常流打成失败. duplicate_tool_call_guard.py 模块
         # 本身保留, 不再被 chat_completions 入口调用.
 
-    # BL-E16 关系建立: 注入 session_meta (距上次 N 天 N 小时 / 今天第几次)
-    # 让 LLM 知道时间感, 跨天回来时能自然说"好几天没找我了".
-    # 同时 tick: 写本次 chat 时间, 累计 today_count.
+    # BL-E16 关系建立: session_meta inject 已由 SessionMetaProvider (priority=30)
+    # 在 Registry inject_subset 阶段接管. 这里只剩 tick (写本次 chat 时间).
     #
     # BL-F17 后续 (5/5 凌晨 39060 次事故): internal 调用也跳 tick, 不然 summarizer
     # 死循环时 today_count 暴涨 (5/4 凌晨 dev-user 跳到 39060). 跟 quota 同思路:
     # 后台 housekeeping 不算"员工今天找了我".
     if not is_internal_call:
         try:
-            meta_block = session_meta.build_meta_block()
-            if meta_block:
-                # 找已有的 system message 拼到末尾; 没有则前插一条
-                inserted = False
-                for m in body["messages"]:
-                    if m.get("role") == "system":
-                        m["content"] = (m.get("content") or "") + "\n\n---\n\n" + meta_block
-                        inserted = True
-                        break
-                if not inserted:
-                    body["messages"].insert(0, {"role": "system", "content": meta_block})
             session_meta.tick()
         except Exception as e:
-            logger.warning("session_meta inject/tick 失败 (无关键路径): %s", e)
+            logger.warning("session_meta tick 失败 (无关键路径): %s", e)
 
     # 后台触发: 异步总结 1 个最近结束但没总结过的 session, append 到 journal.
     # fire-and-forget, 不阻塞当前请求, 失败静默. 让 journal 自动持续填充.
@@ -2384,6 +2523,20 @@ async def chat_completions(
         asyncio.create_task(trigger_background_summary())
     except Exception:
         pass
+
+    # BL-MEMORY-DISTILL-LIVE (5/16 鸿波 'memory_distill 真上线'):
+    # 异步 LLM 蒸馏老 journal 段 → 写 ~/.catfish/distilled_facts.md, 24h cooldown.
+    # 跟 trigger_background_summary 互补: summary 持续写新段, distill 把老段抽精华
+    # 让 inject 不丢 99% 老内容. fire-and-forget, 不阻塞当前请求.
+    # 跳: internal call (loopback summary / proactive / distill 自身), 防递归.
+    if not is_internal_call:
+        try:
+            import asyncio  # noqa: PLC0415
+
+            from .memory_distill import maybe_run_llm_distillation  # noqa: PLC0415
+            asyncio.create_task(maybe_run_llm_distillation())
+        except Exception:  # noqa: BLE001
+            pass
 
     # Prompt 安全检测: 扫 user messages 看是否含明文密码 / 凭据.
     # 不拦截 (员工知道在干嘛), 只 log warn + audit 标记, 让员工 IT 事后能查谁在何时
@@ -2708,8 +2861,8 @@ def run():
     host_source = "env HOST" if "HOST" in os.environ else "default(127.0.0.1)"
     if host == "0.0.0.0":
         print(
-            f"[catfish] ⚠️ HOST=0.0.0.0 — gateway 暴露到所有网卡 (局域网可访问). "
-            f"仅服务器部署用. 员工电脑应改回 127.0.0.1.",
+            "[catfish] ⚠️ HOST=0.0.0.0 — gateway 暴露到所有网卡 (局域网可访问). "
+            "仅服务器部署用. 员工电脑应改回 127.0.0.1.",
             flush=True,
         )
     print(

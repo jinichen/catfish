@@ -20,6 +20,7 @@ import {
   AUTO_CONTINUE_PROMPT,
 } from "../store/auto_continue";  // 5/13 鸿波"长程任务咋办" — gateway 删 BL-FIX23 后客户端补
 import { streamChat, type OpenAITool } from "../lib/chat";
+import { checkPromiseOnly } from "../lib/promiseCheck";
 import {
   toolBridgeListTools,
   toolBridgeCallTool,
@@ -354,6 +355,27 @@ export function useChat(initialModel: string) {
           // BL-CONTEXT-COUNTER (5/13): 把 usage.prompt_tokens 写 store, 状态栏渲染
           if (info?.usage?.prompt_tokens != null) {
             useChatStore.getState().setLastPromptTokens(info.usage.prompt_tokens);
+          }
+          // BL-TASK-ASSESS-3-UI (5/15 鸿波"客户端要评估完成情况"): 拿 gateway 给的
+          // task_assessment 做 promise-vs-reality 检测, 命中嘴炮 → 写
+          // assistant message._promise_check, UI 渲染 ⚠ badge + 催继续按钮.
+          if (info?.task_assessment && currentStreamIdRef.current) {
+            const assistantContent =
+              useChatStore.getState().messages.find((m) => m.id === currentStreamIdRef.current)
+                ?.content || "";
+            const check = checkPromiseOnly(assistantContent, info.task_assessment);
+            if (check.is_promise_only) {
+              updateMessage(currentStreamIdRef.current, {
+                _promise_check: {
+                  is_promise_only: true,
+                  promised_paths: check.promised_paths,
+                  nudge_count: 0,
+                  skill_guard_fired: info.task_assessment.skill_guard_fired,
+                  ever_called_skill:
+                    info.task_assessment.ever_called_catfish_run_skill_in_session,
+                },
+              });
+            }
           }
         },
         onError: (err) => {

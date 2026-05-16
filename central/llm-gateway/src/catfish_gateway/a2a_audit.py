@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -43,7 +43,7 @@ def _audit_path() -> Path:
 def write_audit(event: dict[str, Any]) -> None:
     """append 一行 JSON. 失败静默 (audit 不阻塞主流程)."""
     if "ts" not in event:
-        event["ts"] = datetime.now(timezone.utc).isoformat()
+        event["ts"] = datetime.now(UTC).isoformat()
     try:
         path = _audit_path()
         path.parent.mkdir(parents=True, exist_ok=True)

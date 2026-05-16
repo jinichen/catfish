@@ -33,7 +33,6 @@ from __future__ import annotations
 
 from collections import Counter
 
-
 # 注入 page 的 MutationObserver script — Runtime.evaluate 跑一次, 之后 page
 # 上有 window.__catfishGetMutations() 函数拿汇总.
 INJECT_OBSERVER_JS = """

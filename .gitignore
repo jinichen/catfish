@@ -150,3 +150,7 @@ central/llm-gateway/config/dev_users.yaml
 central/.env
 central/nginx.conf
 central/certs/
+
+# 防 backup 文件意外 commit (BL-MEMORY-COMMIT-FIX 5/16)
+*.bak
+*.bak2

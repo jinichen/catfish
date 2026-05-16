@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 logger = logging.getLogger("catfish.gateway.session_meta")
@@ -49,7 +49,7 @@ def meta_path() -> Path:
 
 def _now() -> datetime:
     """允许测试 monkeypatch (不要直接 import datetime.now 进调用方)."""
-    return datetime.now(timezone.utc).astimezone()
+    return datetime.now(UTC).astimezone()
 
 
 def _read() -> dict:

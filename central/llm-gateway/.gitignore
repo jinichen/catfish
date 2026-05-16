@@ -9,3 +9,9 @@ __pycache__/
 .ruff_cache/
 build/
 dist/
+
+# BL-MEMORY-COMMIT-FIX (5/16 鸿波踩坑): *.bak 永不进 git
+# 触发: sed -i.bak / cp .env .env.bak 之类的备份文件
+# .env 系列含 secret, 落进 git push 出去就泄露
+*.bak
+*.bak2

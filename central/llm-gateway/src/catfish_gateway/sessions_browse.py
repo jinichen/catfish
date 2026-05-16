@@ -36,7 +36,7 @@ import logging
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger("catfish.gateway.sessions_browse")
 
@@ -166,7 +166,7 @@ def count_sessions(
     return int(row[0]) if row else 0
 
 
-def get_session(session_id: str, *, max_messages: int = 500) -> Optional[dict[str, Any]]:
+def get_session(session_id: str, *, max_messages: int = 500) -> dict[str, Any] | None:
     """单个 session 详情 + messages 数组. 不存在返 None.
 
     max_messages: 防超长 session 撑爆响应, 默认 500 条 (按时间正序).

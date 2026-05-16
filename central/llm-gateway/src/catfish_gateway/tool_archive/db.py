@@ -12,10 +12,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
 
 logger = logging.getLogger("catfish.gateway.tool_archive.db")
 
@@ -119,10 +117,10 @@ def _pg_upsert(row: dict) -> bool:
                     row.get("summary_at"),
                     row.get("summary_error"),
                     row.get("origin_model"),
-                    row.get("created_at", datetime.now(timezone.utc)),
+                    row.get("created_at", datetime.now(UTC)),
                     row.get(
                         "expires_at",
-                        datetime.now(timezone.utc)
+                        datetime.now(UTC)
                         + timedelta(days=RETENTION_DAYS),
                     ),
                 ),
@@ -146,10 +144,10 @@ def _jsonl_write(row: dict) -> None:
         if isinstance(v, datetime):
             body[k] = v.isoformat()
     if "created_at" not in body or body["created_at"] is None:
-        body["created_at"] = datetime.now(timezone.utc).isoformat()
+        body["created_at"] = datetime.now(UTC).isoformat()
     if "expires_at" not in body or body["expires_at"] is None:
         body["expires_at"] = (
-            datetime.now(timezone.utc) + timedelta(days=RETENTION_DAYS)
+            datetime.now(UTC) + timedelta(days=RETENTION_DAYS)
         ).isoformat()
     p.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
 
@@ -215,7 +213,7 @@ def _jsonl_get(ref: str) -> dict | None:
                 if exp and isinstance(exp, str):
                     try:
                         exp_dt = datetime.fromisoformat(exp.replace("Z", "+00:00"))
-                        if exp_dt < datetime.now(timezone.utc):
+                        if exp_dt < datetime.now(UTC):
                             return None
                     except ValueError:
                         pass
@@ -295,7 +293,7 @@ def update_summary(
     error: str | None = None,
 ) -> bool:
     """summary IS NOT NULL 或 summary_error 都算"已处理过"."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     pg_ok = _pg_update_summary(ref, summary=summary, model=model, error=error, at=now)
     jsonl_ok = _jsonl_update_summary(ref, summary=summary, model=model, error=error, at=now)
     return pg_ok or jsonl_ok
@@ -376,7 +374,7 @@ def _jsonl_gc() -> int:
     if not ARCHIVE_DIR.exists():
         return 0
     deleted = 0
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for session_dir in ARCHIVE_DIR.iterdir():
         if not session_dir.is_dir():
             continue

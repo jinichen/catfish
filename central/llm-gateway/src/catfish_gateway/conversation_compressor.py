@@ -155,6 +155,67 @@ _COMPRESSION_PROMPT = """你是对话压缩助手. 下面是员工跟鲶鱼的�
 """
 
 
+# ─── tool-call 边界整理 (BL-COMPRESS-BOUNDARY) ─────────
+
+
+def _strip_orphan_tool_boundary(
+    messages: list[dict[str, Any]],
+    cut_idx: int,
+) -> list[dict[str, Any]]:
+    """从 messages[cut_idx:] 取尾部段, 保证 tool-call 配对完整.
+
+    两类要清的:
+      1. 段头 orphan tool: tool message 的父 assistant 在 middle 里被压了 ->
+         tool 进 last 段后没爹, Qwen 直 400. 滑切点往后跳掉.
+      2. 段尾悬挂 assistant.tool_calls: 最后一个 message 是 assistant 调了
+         tool 但 tool reply 没在 segment 里 (被 middle 吞了 / 还没回来) ->
+         把 tool_calls 字段去掉但保留 message content.
+
+    设计选择: 不去找匹配 tool_call_id, 只看相邻 role 序列. 因为:
+      - hermes-agent 把 tool_calls 和 tool reply 都按时序 append, 紧邻
+      - 找 id 要 deep-walk, 代价不值
+    """
+    n = len(messages)
+    # ── (1) 段头 orphan tool 跳过 ──
+    cut = max(0, cut_idx)
+    while cut < n:
+        m = messages[cut]
+        if not isinstance(m, dict):
+            break
+        role = m.get("role")
+        if role == "tool":
+            # tool 单条 = orphan (父 assistant 在 cut 之前已被压).
+            # 也包含 cut 前一条是 assistant.tool_calls 但 keep_first/middle 边界把它切掉的极端情况.
+            cut += 1
+            continue
+        break
+
+    segment = list(messages[cut:n])
+    if not segment:
+        return segment
+
+    # ── (2) 段尾悬挂 assistant.tool_calls 清掉 ──
+    # 反扫找最后一条 assistant message, 看它声明的 tool_calls 有没有对应 tool reply.
+    # 简化: 看它后面有没有 tool message; 没有的话 tool_calls 去掉.
+    last_idx = len(segment) - 1
+    if last_idx >= 0:
+        last = segment[last_idx]
+        if (
+            isinstance(last, dict)
+            and last.get("role") == "assistant"
+            and last.get("tool_calls")
+        ):
+            # 这条 assistant 是最尾, 后面没 tool reply, 必悬挂
+            new_msg = dict(last)
+            new_msg.pop("tool_calls", None)
+            # content 空也保留 — 改成空串防 Qwen 嫌空
+            if not new_msg.get("content"):
+                new_msg["content"] = ""
+            segment[last_idx] = new_msg
+
+    return segment
+
+
 # ─── 压缩主流程 ────────────────────────────────────────
 
 
@@ -220,7 +281,15 @@ async def maybe_compress_messages(
         "role": "system",
         "content": f"[此前 {len(middle)} 条对话的压缩摘要 — by catfish-gateway BL-COMPRESSION]\n\n{summary}",
     }
-    new_messages = messages[:keep_first] + [summary_msg] + messages[len(messages) - keep_last:]
+
+    # ─── BL-COMPRESS-BOUNDARY (5/15 14:11 鸿波撞 Qwen 122B 400) ────
+    # 机械切 keep_last 会把 tool 消息切到 assistant_with_tool_calls 之前 —
+    # Qwen Go gRPC 校验 "tool 必须紧跟匹配的 assistant.tool_calls", orphan tool 直 400.
+    # 修: 把切点往后挪, 直到不是 orphan tool 开头; 同时把尾部悬挂的
+    # assistant.tool_calls (对应 tool 已被压缩) 也清掉.
+    cut = len(messages) - keep_last
+    last_segment = _strip_orphan_tool_boundary(messages, cut)
+    new_messages = messages[:keep_first] + [summary_msg] + last_segment
     post_token = estimate_tokens(new_messages)
 
     # 压缩本身可能没省 (摘要太长). 真省了再返新版.
@@ -279,6 +348,7 @@ async def _summarize_middle(
     # 调 gateway loopback
     try:
         import httpx  # noqa: PLC0415
+
         from .auth.dev_token import ensure_internal_dev_token  # noqa: PLC0415
         from .config import load_config  # noqa: PLC0415
         from .internal_models import pick_internal_models_ordered  # noqa: PLC0415
@@ -365,6 +435,7 @@ __all__ = [
     "maybe_compress_messages",
     "estimate_tokens",
     "is_compression_internal_request",
+    "_strip_orphan_tool_boundary",
     "DEFAULT_THRESHOLD_RATIO",
     "DEFAULT_KEEP_FIRST",
     "DEFAULT_KEEP_LAST",

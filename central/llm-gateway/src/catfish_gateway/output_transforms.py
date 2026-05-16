@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Optional, Protocol
+from typing import Any, Protocol
 
 logger = logging.getLogger("catfish.gateway.output_transforms")
 
@@ -61,7 +61,7 @@ class OutputCtx:
     prompt_tokens: int
     completion_tokens: int
     latency_ms: float
-    ttft_ms: Optional[float]
+    ttft_ms: float | None
     status: str            # "ok" | "error"
     error: str
     security_concern: str
@@ -206,7 +206,7 @@ class TransformChain:
                     getattr(t, "name", type(t).__name__), e,
                 )
 
-    def add(self, t: LLMOutputTransform) -> "TransformChain":
+    def add(self, t: LLMOutputTransform) -> TransformChain:
         """运行时插 transform (测试 / 客户定制用). 返 self 支持链式."""
         self.transforms.append(t)
         return self

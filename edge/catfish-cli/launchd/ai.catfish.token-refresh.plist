@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  BL-HERMES-OIDC-AUTOREFRESH (5/15 鸿波 'hermes daemon 401 问题')
+
+  每 50 min 跑一次 `catfish refresh`, 拿新 OAuth access_token 写回
+  ~/.hermes/config.yaml. 避免 access_token (1h TTL) 过期后 hermes 打
+  catfish_gateway 撞 401.
+
+  跟 ai.hermes.gateway 配合工作:
+    - hermes daemon 读 ~/.hermes/config.yaml 的 api_key (静态)
+    - catfish refresh 用 refresh_token grant 换新 access_token
+    - 写回同一份 config (但 hermes 进程已经把 api_key cache 在内存,
+      所以下次 kickstart hermes 时才生效)
+
+  注意: 这个 plist **不替代 ai.hermes.gateway** — 它只刷新 token.
+  hermes daemon 本身要照常跑 (IM frontend 必须保留).
+
+  装法:
+    cp ~/person_task/catfish/edge/catfish-cli/launchd/ai.catfish.token-refresh.plist \
+       ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.catfish.token-refresh.plist
+    launchctl kickstart gui/$(id -u)/ai.catfish.token-refresh    # 立刻跑一次
+
+  卸法 (调试 / 想关):
+    launchctl bootout gui/$(id -u)/ai.catfish.token-refresh
+    rm ~/Library/LaunchAgents/ai.catfish.token-refresh.plist
+
+  状态查询:
+    launchctl list | grep ai.catfish.token-refresh
+    cat /tmp/catfish-token-refresh.log    # stdout/stderr 都重定向到这
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.catfish.token-refresh</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <!-- 注意: PATH 在 launchd 环境里很简陋, catfish 命令要给绝对路径.
+             用户可以改这条到自己 catfish-cli 安装位置. 默认假设 pipx 或 brew. -->
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>/usr/bin/env catfish refresh &gt;&gt; /tmp/catfish-token-refresh.log 2&gt;&amp;1</string>
+    </array>
+
+    <!-- 每 50 分钟跑一次 (access_token TTL 1h, 提前 10 min 刷) -->
+    <key>StartInterval</key>
+    <integer>3000</integer>
+
+    <!-- 启动时立刻跑一次 (开机 / load 后不等 50 分钟) -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- 失败时不要硬重试 (避免 catfish_identity 挂时 spam log).
+         50 min 后 StartInterval 自然再跑. -->
+    <key>KeepAlive</key>
+    <false/>
+
+    <!-- 标准输出/错误重定向 (调试用) -->
+    <key>StandardOutPath</key>
+    <string>/tmp/catfish-token-refresh.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/catfish-token-refresh.log</string>
+
+    <!-- 限制进程资源, 防 catfish refresh 卡死耗 CPU -->
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>Nice</key>
+    <integer>10</integer>
+</dict>
+</plist>

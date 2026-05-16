@@ -38,14 +38,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
-from .employee_journal import JOURNAL_PATH, append_to_journal
+from .employee_journal import append_to_journal
 
 logger = logging.getLogger("catfish.gateway.session_summarizer")
 
@@ -295,7 +293,9 @@ async def _summarize_with_llm(
     user_prompt = _SUMMARY_PROMPT + f"\n\n会话历史:\n\n{context}"
 
     import os  # noqa: PLC0415
+
     import httpx  # noqa: PLC0415
+
     from .config import load_config  # noqa: PLC0415
     from .internal_models import pick_internal_models_ordered  # noqa: PLC0415
 

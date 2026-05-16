@@ -366,3 +366,87 @@ def test_derive_session_id_fallback_to_date():
     from catfish_gateway.tool_archive import archiver
     sid = archiver.derive_session_id("t@x.com")
     assert sid.startswith("t@x.com:20")  # 2026-xx-xx
+
+
+# ─── BL-ARCHIVE-SKIP-INSTRUCTIONAL (5/15 鸿波撞"归档摘要误导 agent") ──
+#
+# catfish_run_skill 返回 instructional skill 指令时不归档 — 否则摘要把
+# preferred_template / output_target 字段抹掉, agent 死循环.
+
+
+def test_skip_archive_for_instructional_skill_return():
+    """catfish_run_skill 返回含 is_instructional: true → 不归档, 哪怕超阈值"""
+    from catfish_gateway.tool_archive import archiver
+    # 造一个很大的 instructional skill 返回 (>4KB 阈值)
+    big_instruction = "X" * 8000
+    fake_return = (
+        '{"ok": true, "files": [], '
+        '"summary": "...", '
+        '"instruction": "' + big_instruction + '", '
+        '"is_instructional": true, '
+        '"preferred_template": "/path/template.html", '
+        '"output_target": "/path/output.html"}'
+    )
+    msgs = [
+        {"role": "user", "content": "做 PPT"},
+        {
+            "role": "tool",
+            "tool_call_id": "t1",
+            "name": "catfish_run_skill",
+            "content": fake_return,
+        },
+    ]
+    out = archiver.archive_tool_messages(
+        msgs, user_email="t@x.com", session_id="t:s1",
+    )
+    # tool message content 应原样保留, 没被替换成 "[已归档: archive_ref=..."
+    assert out[1]["content"] == fake_return, (
+        "instructional skill 返回不该归档 — 摘要会丢 preferred_template 等字段"
+    )
+
+
+def test_archive_still_works_for_procedural_skill_return():
+    """procedural skill (没 is_instructional 标记) 超阈值 → 正常归档"""
+    from catfish_gateway.tool_archive import archiver
+    # procedural skill 返回, 没 is_instructional
+    fake_return = (
+        '{"ok": true, "files": ["/path/report.docx"], '
+        '"summary": "周报已生成", '
+        '"big_data": "' + ("Y" * 8000) + '"}'
+    )
+    msgs = [
+        {
+            "role": "tool",
+            "tool_call_id": "t1",
+            "name": "catfish_run_skill",
+            "content": fake_return,
+        },
+    ]
+    out = archiver.archive_tool_messages(
+        msgs, user_email="t@x.com", session_id="t:s1",
+    )
+    # procedural 应该被归档
+    assert out[0]["content"] != fake_return
+    assert out[0]["content"].startswith("[已归档: archive_ref="), (
+        "procedural skill 返回照常归档, 不受 instructional 跳过逻辑影响"
+    )
+
+
+def test_archive_still_works_for_other_tools():
+    """其他 tool (非 catfish_run_skill) 不受影响"""
+    from catfish_gateway.tool_archive import archiver
+    # 哪怕 content 含 "is_instructional: true" 字串, 其他 tool 也归档
+    big_content = "X" * 8000 + '"is_instructional": true'
+    msgs = [
+        {
+            "role": "tool",
+            "tool_call_id": "t1",
+            "name": "read_file",  # 不是 catfish_run_skill
+            "content": big_content,
+        },
+    ]
+    out = archiver.archive_tool_messages(
+        msgs, user_email="t@x.com", session_id="t:s1",
+    )
+    # 应该被归档 — instructional 跳过逻辑只针对 catfish_run_skill
+    assert out[0]["content"] != big_content

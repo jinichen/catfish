@@ -38,6 +38,8 @@ interface ChatState {
   addMessage: (msg: ChatMessage) => void;
   updateMessage: (id: string, update: Partial<ChatMessage>) => void;
   appendToMessage: (id: string, delta: string) => void;
+  /** BL-TASK-ASSESS-3-UI (5/15): 点"催它继续"按钮时计数器++. 3 次用完后按钮变灰. */
+  incrementPromiseNudge: (id: string) => void;
   setIsStreaming: (v: boolean) => void;
   setStreamingId: (id: string | null) => void;
   setModel: (m: string) => void;
@@ -133,6 +135,19 @@ export const useChatStore = create<ChatState>((set) => ({
       messages: s.messages.map((m) =>
         m.id === id ? { ...m, content: m.content + delta } : m,
       ),
+    })),
+  incrementPromiseNudge: (id) =>
+    set((s) => ({
+      messages: s.messages.map((m) => {
+        if (m.id !== id || !m._promise_check) return m;
+        return {
+          ...m,
+          _promise_check: {
+            ...m._promise_check,
+            nudge_count: m._promise_check.nudge_count + 1,
+          },
+        };
+      }),
     })),
   setIsStreaming: (v) => set({ isStreaming: v }),
   setStreamingId: (id) => set({ streamingId: id }),

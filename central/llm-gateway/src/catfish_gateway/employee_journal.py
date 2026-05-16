@@ -153,22 +153,57 @@ def inject_employee_journal(
 ) -> list[dict[str, Any]]:
     """在最后 system message 末尾追加 employee_journal.
 
-    journal 空 → 原样返. 幂等.
+    BL-MEMORY-DISTILL-LIVE (5/16 鸿波) — 两段式注入:
+      A. 老段蒸馏精华 (~/.catfish/distilled_facts.md, ~3KB)
+         memory_distill 后台跑 LLM 抽出的"人/项目/偏好/决策" 长期事实
+      B. 最近 journal 段全文 (~5KB, 尾部 INJECT_MAX_BYTES 截断)
+         最近 3-5 个段, 全文保留供细节召回
+
+    总注入 ~8KB ≈ 2K token. 老内容**不再丢 99%** — 蒸馏成 traits 永远在 A 段.
+
+    journal 空 + distilled 空 → 原样返. 幂等 (check "员工长期日记" 标志).
     """
     if not messages:
         return messages
 
     journal = read_journal()
-    if not journal.strip():
+    # lazy import 避免循环
+    try:
+        from .memory_distill import read_distilled_facts  # noqa: PLC0415
+        distilled = read_distilled_facts()
+    except ImportError:
+        distilled = ""
+
+    if not journal.strip() and not distilled.strip():
         return messages
 
+    # A 段: 蒸馏老段 (如果有)
+    distilled_section = ""
+    if distilled.strip():
+        distilled_section = (
+            "\n\n### A. 长期事实 (LLM 蒸馏老 journal, ~/.catfish/distilled_facts.md)\n\n"
+            "下面是从员工**老 journal 段**抽出的关键事实 (人/项目/偏好/决策). "
+            "这些是**长期记忆**, 比单次 session 总结更重要. 任何时候提到员工的"
+            "工作方式 / 项目 / 偏好, 优先用这里.\n\n"
+            f"{distilled.strip()}\n"
+        )
+
+    # B 段: 最近 journal 全文 (如果有)
+    journal_section = ""
+    if journal.strip():
+        journal_section = (
+            "\n\n### B. 最近 journal 段 (全文, ~/.catfish/employee_journal.md 尾部)\n\n"
+            "下面是员工最近的工作总结、决策、偏好 (按时间倒序). 你**必须**通读这些, "
+            "理解员工当前在做什么、偏好什么风格、做过哪些重要决策. 当员工提到\""
+            "上次 / 之前 / 那个 X / 我们讨论过的\"时, 优先在这里找上下文. "
+            "不要假装不知道. 不要让员工感觉你是 100 个素不相识的人轮流帮他.\n\n"
+            f"{journal.strip()}\n"
+        )
+
     block = (
-        "\n\n## 📝 员工长期日记 (gateway 自动注入, ~/.catfish/employee_journal.md)\n\n"
-        "下面是员工最近的工作总结、决策、偏好 (按时间倒序). 你**必须**通读这些, "
-        "理解员工当前在做什么、偏好什么风格、做过哪些重要决策. 当员工提到\""
-        "上次 / 之前 / 那个 X / 我们讨论过的\"时, 优先在这里找上下文. "
-        "不要假装不知道. 不要让员工感觉你是 100 个素不相识的人轮流帮他.\n\n"
-        f"{journal.strip()}\n"
+        "\n\n## 📝 员工长期日记 (gateway 自动注入, 两段式)\n"
+        + distilled_section
+        + journal_section
     )
 
     last_system_idx = -1

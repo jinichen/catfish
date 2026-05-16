@@ -77,6 +77,9 @@ export default function ChatPanel({
             // 双重判断：全局 isStreaming + msg.id 跟当前流的 id 匹配。
             // 这避免了"历史 assistant 消息也显示光标"的 bug。
             showCaret={isStreaming && m.id === streamingId}
+            // BL-TASK-ASSESS-3-UI (5/15): 嘴炮断言 [⏩ 催它继续] 按钮 → 发"继续",
+            // 走跟用户手动发完全一样的 onSend 路径, 不走 gateway 重试.
+            onNudge={() => onSend("继续", [])}
           />
         ))}
       </div>
