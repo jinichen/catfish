@@ -106,7 +106,10 @@ function EmptyState() {
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        height: "60%",
+        // BL-EMPTY-STATE-CENTER (5/16): 原 60% 让内容居中在前 60% 区域 = 视觉
+        // 30% 位置偏上. 改 100% 让内容真居中 (视觉 50%), 跟下方输入框形成
+        // 自然眼神动线 (居中 mascot → 向下扫到输入框).
+        height: "100%",
         textAlign: "center",
         color: "var(--catfish-text-muted)",
       }}
