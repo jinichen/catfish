@@ -458,9 +458,15 @@ export function useChat(initialModel: string) {
         let ok = false;
         let errMsg: string | undefined;
         try {
+          // BL-TODO-BRIDGE-STORE follow-up (5/16): 实接 sessionId 透传, 让 per-session
+          // stateful tool (hermes todo) 真按 session 隔离. 老 caller (Dashboard 各卡
+          // 调 catfish_user_profile_* 等) 不传, 走 __default__ 行为不变.
+          const sessionId =
+            useChatStore.getState().persistedSessionId ?? undefined;
           const res = await toolBridgeCallTool(
             tc.name,
             tc.args as Record<string, unknown>,
+            sessionId,
           );
           ok = res.ok;
           if (res.ok) {
