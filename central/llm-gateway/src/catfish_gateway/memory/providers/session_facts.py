@@ -1,11 +1,11 @@
-"""SessionFactsProvider — 包 session_facts inject 成 MemoryProvider.
+"""SessionFactsProvider — DEPRECATED (5/16 鸿波 A 真切).
 
-priority=20: 员工**显式硬事实** 优先级最高 (仅次于 identity/persona). 模型必须最先
-看到员工"明确告诉过"的事 (例 EIS=http, 密码=keychain://x), 避免长 attention 后忘.
+BL-MEMORY-CATFISH-REMEMBER-BLACKLIST 后, catfish_remember 不再暴露给 LLM,
+LLM 不能写 session_facts.json. 老数据保留但不再 inject (hermes memories/ 接管).
 
-复用 session_facts 模块:
-  - read_session_facts() → revision list dict
-  - render_facts_block() → markdown 字符串
+env CATFISH_EXPOSE_REMEMBER=1 操作员一键还原 expose + 同时让 Provider 继续 inject.
+
+保留 prefetch 实现作 fallback, 但默认返 None.
 """
 
 from __future__ import annotations
@@ -34,6 +34,13 @@ class SessionFactsProvider:
     budget_bytes = 6000
 
     def prefetch(self, ctx: InjectContext) -> str | None:
+        # BL-MEMORY-CATFISH-REMEMBER-BLACKLIST (5/16 鸿波 A): catfish_remember
+        # 不再暴露 LLM, session_facts.json 老数据保留兼容但不 inject.
+        # env CATFISH_EXPOSE_REMEMBER=1 操作员一键还原 (含 inject + tool expose).
+        import os  # noqa: PLC0415
+        if os.environ.get("CATFISH_EXPOSE_REMEMBER", "0") != "1":
+            return None
+
         from ...session_facts import _current, _safe_inline, read_session_facts  # noqa: PLC0415
 
         try:

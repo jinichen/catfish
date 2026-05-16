@@ -93,8 +93,13 @@ def test_session_facts_provider_empty_returns_none(tmp_path, monkeypatch):
 
 
 def test_session_facts_provider_with_data(tmp_path, monkeypatch):
-    """有 facts → 返渲染过的 block, 含硬事实."""
+    """有 facts + CATFISH_EXPOSE_REMEMBER=1 → 返渲染过的 block, 含硬事实.
+
+    BL-MEMORY-CATFISH-REMEMBER-BLACKLIST 后 default deprecated 返 None.
+    env opt-in 才 inject (操作员调试用).
+    """
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CATFISH_EXPOSE_REMEMBER", "1")  # opt-in 才返内容
     cat_dir = tmp_path / ".catfish"
     cat_dir.mkdir()
     facts_file = cat_dir / "session_facts.json"
@@ -109,9 +114,21 @@ def test_session_facts_provider_with_data(tmp_path, monkeypatch):
     assert out is not None
     assert "EIS" in out
     assert "http://eis.example.com" in out
-    # BL-MEMORY-FULL-HERMES 文案: 强调 session-only + 引导用 memory
     assert "临时事实" in out or "session 内" in out
-    assert "memory" in out  # nudge LLM 用 memory 工具
+    assert "memory" in out
+
+
+def test_session_facts_provider_default_deprecated(tmp_path, monkeypatch):
+    """BL-MEMORY-CATFISH-REMEMBER-BLACKLIST: default 不 inject (catfish_remember 已黑名单)."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    # 不 setenv CATFISH_EXPOSE_REMEMBER
+    cat_dir = tmp_path / ".catfish"
+    cat_dir.mkdir()
+    (cat_dir / "session_facts.json").write_text(json.dumps({
+        "key1": [{"value": "v1", "ts": time.time(), "prev_value": None}],
+    }))
+    # 即使有数据, 默认也返 None (deprecated)
+    assert SessionFactsProvider().prefetch(InjectContext()) is None
 
 
 def test_session_facts_provider_corrupt_json_returns_none(tmp_path, monkeypatch):
@@ -209,12 +226,9 @@ def test_session_history_provider_no_db_returns_none(monkeypatch):
 
 
 def test_session_facts_provider_keys_render(tmp_path, monkeypatch):
-    """SessionFactsProvider 渲染 facts 的 key + value, 含 memory tool nudge.
-
-    BL-MEMORY-FULL-HERMES 改: 不再跟 legacy render_facts_block 完全一致 (我们删了
-    revision history + 加了 memory tool nudge). 只测关键 key/value 真出来.
-    """
+    """SessionFactsProvider 渲染 facts 的 key + value (需要 expose env)."""
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CATFISH_EXPOSE_REMEMBER", "1")  # opt-in
     cat_dir = tmp_path / ".catfish"
     cat_dir.mkdir()
     (cat_dir / "session_facts.json").write_text(json.dumps({
@@ -225,5 +239,4 @@ def test_session_facts_provider_keys_render(tmp_path, monkeypatch):
     assert out is not None
     assert "key1" in out
     assert "v1" in out
-    # 加 nudge 引导员工 / LLM 用 memory 工具做长期存储
-    assert "memory" in out
+    assert "memory" in out  # nudge 引导用 memory 工具做长期存储
