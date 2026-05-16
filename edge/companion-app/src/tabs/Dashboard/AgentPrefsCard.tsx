@@ -3,7 +3,8 @@
  * Onboarding 走完后想改也能改这里. 跟 Onboarding StepName 共用 store + lib/agent.
  */
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 
 import { PERSONALITY_LABELS, type Personality } from "../../lib/agent";
 import { useAgentStore } from "../../store/agent";
@@ -245,6 +246,9 @@ export default function AgentPrefsCard() {
           </div>
         </>
       )}
+      {/* BL-IDENTITY-CARD-KILL (5/16): 砍 IdentityCard 后, 鲶鱼版本号挪这里 (售后报 bug 时用).
+          其余诊断信息 (员工名 / SOUL 路径 / 活动会话 ID) 员工真需要时去"控制台" tab. */}
+      <CatfishVersionFooter />
     </div>
   );
 }
@@ -261,6 +265,30 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
     >
       <span style={{ color: "var(--catfish-text-muted)" }}>{label}</span>
       <span style={{ color: "var(--catfish-text)" }}>{value}</span>
+    </div>
+  );
+}
+
+/** BL-IDENTITY-CARD-KILL (5/16): 卡底部小字版本号. 售后/客服场景报 bug 用. */
+function CatfishVersionFooter() {
+  const [version, setVersion] = useState<string>("…");
+  useEffect(() => {
+    getVersion()
+      .then((v) => setVersion(`v${v}`))
+      .catch(() => setVersion("(未知)"));
+  }, []);
+  return (
+    <div
+      style={{
+        marginTop: "var(--space-3)",
+        paddingTop: "var(--space-2)",
+        borderTop: "1px dashed var(--catfish-border)",
+        fontSize: 10,
+        color: "var(--catfish-text-muted)",
+        textAlign: "right",
+      }}
+    >
+      鲶鱼 {version}
     </div>
   );
 }

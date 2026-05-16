@@ -30,7 +30,11 @@
  * 注: 7 张被砍的卡 .tsx 文件保留在仓库 (Tab 不再 import), 给 ARCH3 / 回滚留路.
  */
 
-import IdentityCard from "./IdentityCard";
+// BL-IDENTITY-CARD-KILL (5/16): IdentityCard 6 项全只读纯诊断 (员工名 / SOUL symlink 路径 /
+// 活动会话 hash / 鲶鱼版本号 / 皮肤 / 默认模型), 员工读完无操作可做, 是给开发者 debug 看的.
+// 砍卡, "我自己" section 整合成只剩 AgentPrefsCard. 版本号挪到 AgentPrefsCard 底部小字.
+// 诊断信息员工真需要时去"控制台"tab 看, 不污染 Dashboard.
+// import IdentityCard from "./IdentityCard";
 import ServicesCard from "./ServicesCard";
 import QuotaCard from "./QuotaCard";
 // BL-SESSION-CLEANUP-KILL (5/16 鸿波 '没意义砍了吧'): SessionCleanupCard 砍.
@@ -88,13 +92,14 @@ export default function DashboardTab() {
         <TasksCard />
       </CollapsibleSection>
 
-      {/* 第二组: 我自己 — 身份 + 鲶鱼名/人设 (默认开) */}
+      {/* 第二组: 小鲶设置 — 鲶鱼名 / 人设 / 桌宠. 5/16 砍 IdentityCard (BL-IDENTITY-CARD-KILL)
+          整合后只剩 1 卡, section 标题从"我自己"改"小鲶设置"消歧义 (原"我自己"模棱两可
+          — 讲员工还是讲鲶鱼). */}
       <CollapsibleSection
         id="me"
-        title="👤 我自己"
-        count={2}
+        title="🐟 小鲶设置"
+        count={1}
       >
-        <IdentityCard />
         <AgentPrefsCard />
       </CollapsibleSection>
 
