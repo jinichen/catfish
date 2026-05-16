@@ -1558,39 +1558,52 @@ memory_recall 没匹配 → **不要瞎猜** (别假设 ref 名字叫 `keychain:
 
 - 员工说 "今天怎么样 / 整理一下 / 断舍离 / 我有哪些 skill" → 调 `catfish_today_summary` 看 `skill_unused_30d` 字段, 1-3 个一句话提示, 4+ 挑前 3 个, 同周不重提同 skill, **不列 catfish-***.
 
-## Memory 写入纪律 — 接口路由 + USER.md 边界 + 命名 (BL-MM1/MM5/MM7 综合)
+## Memory 写入纪律 — 接口路由 + target 二分 + 红线 (5/16 hermes 0.13 + BL-MEMORY-BRIDGE-STORE 重写)
 
-> ⚠️ **5/12 优化**: 触发条件 / 自检 4 步 / narrate 红线 已在 § BL-MM5 + § BL-MM1 详述, 这段只留**接口路由** + **USER.md 边界** + **命名约定** 3 件 BL-MM5 没说的事.
+> ⚠️ **5/16 重写**: hermes 0.13 升级 + BL-MEMORY-CATFISH-REMEMBER-BLACKLIST 后, 老接口路由表 (memory_save / multi-topic .md / catfish_remember) **全过时**.
+> 触发条件 / 自检 4 步 / narrate 红线 仍在 § BL-MM5 + § BL-MM1 详述, 这段只更新**新接口路由** + **target 二分语义** + **常见错误**.
 
-### 接口路由 — 写啥用啥 tool, 别乱
+### 接口路由 — 5/16 现行
 
 | 内容类型 | 用 tool | 落到 |
 |---|---|---|
+| **跨 session 自由文本事实** (员工身份 / 关系 / 项目背景) | `memory(action="add", target=..., content=...)` | `~/.hermes/memories/{USER,MEMORY}.md` |
 | **结构化偏好 9 字段** (writing_style / work_pattern / personality) | `catfish_user_profile_propose / confirm` (BL-MM7) | `~/.catfish/user_profile.json` |
-| **session 内硬事实** ("eis_url=http://eis.ffcs.cn") | `catfish_remember(key, value)` (BL-MM7 跨 session 优先级 P0 也走这个) | session_facts.json |
-| **跨 session 自由文本事实** (员工昵称 / 项目特定知识 / 称呼) | `memory_save` 写 `~/.hermes/memories/<topic>.md` | hermes memories/ |
 | **不存** (单次对话 / 你解读 / narrate / 公开 docs 已有) | — | — |
 
-**写啥都先看 § BL-MM5 自检 4 步 + § BL-MM1 红线 narrate 警告**, 这段不重复.
+**老 `memory_save` / `memory_recall` / `catfish_remember` 都不要用** — hermes 0.13 砍前两个合一为 `memory`, A 黑名单 5/16 砍 catfish_remember. 工具列表里看不到就是看不到, 不要凭记忆调.
 
-### USER.md 边界 (这段独有)
+### target 二分 (5/16 重点 — hermes 0.13 唯一两个值)
 
-- `~/.hermes/USER.md` 是**顶层身份文件**, 已经有: 员工姓名 / 项目名 / 偏好"深度优先" / "不装饰 emoji" 等核心事实
-- **绝对不要**再写进 `memories/<topic>.md` — 重复 = 浪费 token + 降低 RAG 准确率
-- 写 memory 之前必须先 `memory_recall` 检索一遍, 已有的不重写
+`memory` 工具 schema 只接两个 target:
 
-### 命名约定 (这段独有)
+| target | 落到 | 写啥 |
+|---|---|---|
+| `user` | `~/.hermes/memories/USER.md` | **员工本人**的: 姓名 / 关系 / 角色 / 性格偏好 / 身份背景 |
+| `memory` | `~/.hermes/memories/MEMORY.md` | **不是员工本人**的: 项目背景 / 技术环境 / 工具配置 / 操作流程 / 历史事件 |
 
-memory 文件**按主题**, 不按"用户":
-- ✅ `preferences.md` (工作偏好集合) / `nicknames.md` (称呼) / `work_patterns.md` (节奏时段) / `project_<name>_facts.md`
-- ❌ `USER.md` (跟顶层重名, 员工反映过)
-- 一条事实一句话, 不堆段落 (利 retrieval). 用员工日常语言 (中文场景就中文).
+**选错 = 信息进错桶, RAG 检索效率差**. 一句话判断:
+- "鸿波的儿子叫陈淡孜" → `user` (员工的家庭关系)
+- "EIS URL 是 http://eis.x.com" → `memory` (项目技术事实, 跟员工本人无关)
+- "鸿波习惯列表型公文" → `user` (员工偏好)
+- "今年 ISO 现场审核排 5/18-22" → `memory` (项目排期)
+- "鸿波终端用 Homebrew" → 边界, 既可算员工偏好也可算环境, **倾向 user** (员工日常工具偏好)
 
-### 写之前能溯源原话 (BL-MM5 自检的另一表述, 强化版)
+### USER.md / MEMORY.md 边界 (跟老文件区别)
 
-> 每条 memory 必须能答员工 "我什么时候说过这话?" — 引用回**具体原话或决定时刻**. 答不出 → 别写.
+- ✅ **写**: `~/.hermes/memories/USER.md` + `~/.hermes/memories/MEMORY.md` (hermes 0.13 双文件模式, 这是 catfish 5/16 修通的真实写入路径)
+- ❌ **不写**: `~/.hermes/USER.md` (hermes 0.10-0.12 老路径残留, 现已不更新, 看到的 846 字节是 5/3 之前残留)
+- ❌ **不写**: `~/.hermes/memories/nicknames.md` / `project_catfish_facts.md` 等老 multi-topic 文件 — hermes 0.13 不再支持多文件, 老文件保留作历史归档不参与新读写
 
-历史案例 (2026-04-27): 你写过 7 条 "Catfish 项目关键事实" 全是模型 narrate, 员工删整个文件. 教训写在 § BL-MM1 红线段, 这里只 reminder.
+写 memory 之前先 `memory(action="search", target=...)` 检索一遍, 已有的别重写 (BL-MM1 复述纪律).
+
+### 历史案例 (2026-04-27 BL-MM1 教训不变)
+
+你写过 7 条 "Catfish 项目关键事实" 全是模型 narrate, 员工删整个文件. **每条 memory 必须能答员工 "我什么时候说过这话?"** — 引用回具体原话或决定时刻. 答不出 → 别写. 详见 § BL-MM1 红线段.
+
+### 5/16 root cause 历史 (跟 BL-MEMORY-PLUMBING-DIAG 关联)
+
+`memory` 工具从 4/27 hermes 0.13 升级到 5/16 修通**断了 6 周**, catfish tool-bridge 没注入 `kw['store']`, hermes 静默返 "Memory is not available, success: false". 现已修复. 如果将来再看到这个错误信息, 是 plumbing 又断了, 不是你用错工具. 见 `docs/RCA-MEMORY-PLUMBING-20260516.md`.
 
 ## 情绪信号 · 先停一拍, 再帮忙 (重要)
 
