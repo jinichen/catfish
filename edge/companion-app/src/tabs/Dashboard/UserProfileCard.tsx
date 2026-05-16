@@ -146,9 +146,12 @@ export default function UserProfileCard() {
         border: "1px solid var(--catfish-border)",
         borderRadius: "var(--radius-md)",
         padding: "var(--space-4)",
-        // BL-USER-PROFILE-LIMIT-HEIGHT (5/16): 跟 RelationCard 视觉对称.
-        // alignSelf:start 不被 grid row stretch, fields 内部滚动看更多.
-        alignSelf: "start",
+        // BL-USER-PROFILE-LIMIT-HEIGHT (5/16 V3): 撑齐 row + flex column 跟
+        // RelationCard 同步. fields 区 flex:1 撑满剩余 + 内部滚动.
+        height: "100%",
+        boxSizing: "border-box",
+        display: "flex",
+        flexDirection: "column",
       }}
     >
       <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)", marginBottom: "var(--space-2)" }}>
@@ -174,11 +177,12 @@ export default function UserProfileCard() {
         </div>
       )}
 
-      {/* BL-USER-PROFILE-LIMIT-HEIGHT (5/16): fields 列表 maxHeight + 滚动, 跟
-          RelationCard entries 区视觉对称, 不让卡无限撑高. */}
+      {/* BL-USER-PROFILE-LIMIT-HEIGHT (5/16 V3): fields 列表 flex:1 撑满卡内剩余
+          高度 (跟 RelationCard 同步等高) + 内部滚动看更多 evidence. */}
       <div
         style={{
-          maxHeight: 360,
+          flex: 1,
+          minHeight: 200,
           overflowY: "auto",
           paddingRight: 4,
         }}
