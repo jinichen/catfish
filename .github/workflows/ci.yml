@@ -16,8 +16,10 @@ concurrency:
 
 jobs:
   # ════════════════════════════════════════════════════════════
-  # 1. tool-bridge Python tests (453 tests)
+  # 1. tool-bridge Python tests
   # ════════════════════════════════════════════════════════════
+  # tool-bridge pyproject requires-python>=3.10 (装在客户机, 一律 3.10+).
+  # 用 3.10 保最低支持版本兼容性, 沙盒和客户机一致.
   tool-bridge:
     name: tool-bridge tests
     runs-on: ubuntu-latest
@@ -39,14 +41,21 @@ jobs:
       - name: Run tool-bridge tests
         working-directory: edge/tool-bridge
         run: |
+          # BL-CI-FIX (5/17): ignore test_fed25_e2e_chain.py — 跨包 E2E 测试,
+          # 需要 catfish_gateway 在 PYTHONPATH. 跟 test_e2e_sandbox /
+          # test_e2e_agent_workflow 一样, CI 里只跑单包单测.
           PYTHONPATH=src python -m pytest tests/ -v \
             --ignore=tests/test_e2e_sandbox.py \
             --ignore=tests/test_e2e_agent_workflow.py \
+            --ignore=tests/test_fed25_e2e_chain.py \
             -p no:cacheprovider
 
   # ════════════════════════════════════════════════════════════
-  # 2. gateway Python tests (799 tests)
+  # 2. gateway Python tests
   # ════════════════════════════════════════════════════════════
+  # BL-CI-FIX (5/17): gateway pyproject requires-python>=3.12 (datetime.UTC,
+  # type 等 3.11+/3.12+ 特性已大量使用). 5/17 前 CI 用 3.10 一直默默失败 (现在
+  # 1300+ 测试因为 ImportError 全 collect 不上), 是 hermes 0.14 升级时漏改 ci.yml.
   gateway:
     name: gateway tests
     runs-on: ubuntu-latest
@@ -54,10 +63,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python 3.10
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.12"
           cache: pip
 
       - name: Install deps
@@ -95,6 +104,14 @@ jobs:
       - name: Install deps
         working-directory: edge/companion-app
         run: npm ci --no-audit --no-fund
+
+      # BL-CI-FIX (5/17): npm 已知 bug (npm/cli#4828) — package-lock.json 在 macOS
+      # 生成, npm ci 在 Linux 跑可能不装 platform-specific optionalDependencies.
+      # rollup 4 把 native binary 拆 11 个 platform 包, 缺一就 vite build 挂.
+      # 显式重装 Linux x64 binary, --no-save 不污染 lockfile.
+      - name: Ensure rollup Linux x64 native binary
+        working-directory: edge/companion-app
+        run: npm install --no-save --no-audit --no-fund @rollup/rollup-linux-x64-gnu
 
       - name: TSC strict check (no emit)
         working-directory: edge/companion-app
