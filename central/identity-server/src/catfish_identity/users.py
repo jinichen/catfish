@@ -601,8 +601,20 @@ class UserRegistry:
         department: str | None = None,
         role: str | None = None,
         managed_departments: list[str] | None = None,
+        # BL-RBAC-DAY7 (5/17): per-user RBAC 维度 override (跟 user.allowed_*
+        # field 对位). 传 None 跳过, [] = 用户级 override 解锁, [m1, m2] = 收紧.
+        # 改写"unset" (回继承 dept) 用一个 sentinel: 不传该字段 = 不动,
+        # 传 "__inherit__" = 改成 NULL (回继承 dept) — UI 显式触发.
+        allowed_models: list[str] | str | None = None,
+        allowed_tools: list[str] | str | None = None,
+        allowed_skills: list[str] | str | None = None,
     ) -> tuple[bool, str]:
-        """改 user 元信息. 不动密码 / 锁状态 — 那俩走专门 endpoint."""
+        """改 user 元信息. 不动密码 / 锁状态 — 那俩走专门 endpoint.
+
+        BL-RBAC-DAY7 (5/17): allowed_models / allowed_tools / allowed_skills 三维
+        可改, 跟 user.allowed_* field 对位. 传 None 跳过, "__inherit__" → NULL
+        (回继承 dept), list → 写入 (空 list 也是 override 解锁).
+        """
         from .db import get_pool  # noqa: PLC0415
         import json as _json  # noqa: PLC0415
 
@@ -640,6 +652,37 @@ class UserRegistry:
             params.append(_json.dumps(managed_departments))
             meta["managed_departments"] = managed_departments
             user.managed_departments = [str(d) for d in managed_departments]
+
+        # BL-RBAC-DAY7 (5/17): allowed_* 三维更新.
+        # None = 不动. "__inherit__" = NULL (回继承 dept). list = override.
+        def _resolve_allowed(value, field_name):
+            """返 (sql_value, py_value) 或 None (跳过)."""
+            if value is None:
+                return None
+            if value == "__inherit__":
+                return ("NULL", None)
+            if isinstance(value, list):
+                return (f"${len(params) + 1}::jsonb", [str(v) for v in value])
+            return None  # 容错: 非法值跳过
+
+        for field_name, raw_value in (
+            ("allowed_models", allowed_models),
+            ("allowed_tools", allowed_tools),
+            ("allowed_skills", allowed_skills),
+        ):
+            resolved = _resolve_allowed(raw_value, field_name)
+            if resolved is None:
+                continue
+            sql_val, py_val = resolved
+            if sql_val == "NULL":
+                sets.append(f"{field_name} = NULL")
+                meta[field_name] = None
+                setattr(user, field_name, None)
+            else:
+                sets.append(f"{field_name} = {sql_val}")
+                params.append(_json.dumps(py_val))
+                meta[field_name] = py_val
+                setattr(user, field_name, py_val)
 
         if not sets:
             return True, ""

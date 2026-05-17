@@ -155,6 +155,72 @@ class DepartmentRegistry:
             await self.load_from_pg()
         return list(self._cache.values())
 
+    async def update(
+        self,
+        name: str,
+        *,
+        by_email: str,
+        allowed_models: list[str] | None = None,
+        allowed_tools: list[str] | None = None,
+        allowed_skills: list[str] | None = None,
+        quota_models_day: int | None = None,
+        description: str | None = None,
+    ) -> tuple[bool, str]:
+        """BL-RBAC-DAY7 (5/17): admin 改 dept 配置. PG UPDATE + 内存 cache 失效.
+
+        None 跳过, list (含空 []) 写入. quota = -1 跳过 (sentinel, 0 是合法 "不限").
+        admin_router /departments/{name} PUT 用.
+        """
+        from .db import get_pool  # noqa: PLC0415
+
+        if not self._loaded:
+            await self.load_from_pg()
+        if name not in self._cache:
+            return False, f"dept {name} 不存在"
+
+        sets = []
+        params: list = []
+        if allowed_models is not None:
+            sets.append(f"allowed_models = ${len(params) + 1}::jsonb")
+            params.append(json.dumps([str(m) for m in allowed_models]))
+        if allowed_tools is not None:
+            sets.append(f"allowed_tools = ${len(params) + 1}::jsonb")
+            params.append(json.dumps([str(t) for t in allowed_tools]))
+        if allowed_skills is not None:
+            sets.append(f"allowed_skills = ${len(params) + 1}::jsonb")
+            params.append(json.dumps([str(s) for s in allowed_skills]))
+        if quota_models_day is not None and quota_models_day >= 0:
+            sets.append(f"quota_models_day = ${len(params) + 1}")
+            params.append(int(quota_models_day))
+        if description is not None:
+            sets.append(f"description = ${len(params) + 1}")
+            params.append(description)
+
+        if not sets:
+            return True, ""
+
+        sets.append("updated_at = NOW()")
+        pool = await get_pool()
+        if pool is None:
+            return False, "PG 不可用"
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    f"UPDATE departments SET {', '.join(sets)} WHERE name = ${len(params) + 1}",
+                    *params, name,
+                )
+        except Exception as e:
+            return False, f"PG 写失败: {e}"
+
+        # invalidate cache, 下次 get/list 重 load
+        self._loaded = False
+        self._cache.clear()
+        logger.info(
+            "BL-RBAC-DAY7: dept %s 更新 by %s (fields=%s)",
+            name, by_email, [s.split("=")[0].strip() for s in sets if "updated_at" not in s],
+        )
+        return True, ""
+
 
 # Singleton (gateway / identity admin 共享)
 _global_registry: DepartmentRegistry | None = None

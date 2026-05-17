@@ -20,6 +20,11 @@ export interface UserBrief {
   created_at: string | null;
   last_login_at: string | null;
   must_change_password: boolean;
+  // BL-RBAC-DAY7 (5/17): per-user override. null = 继承 dept, [] = 解锁全允许.
+  // 后端字段, identity-server _to_brief 5/17 加上.
+  allowed_models?: string[] | null;
+  allowed_tools?: string[] | null;
+  allowed_skills?: string[] | null;
 }
 
 export interface UsersListResponse {
@@ -55,6 +60,31 @@ export interface UpdateUserReq {
   department?: string;
   role?: Role;
   managed_departments?: string[];
+  // BL-RBAC-DAY7 (5/17): per-user RBAC override. null = 不动, "__inherit__"
+  // = NULL (回继承 dept), [] = 解锁全允许, [m1,m2] = 收紧.
+  allowed_models?: string[] | "__inherit__" | null;
+  allowed_tools?: string[] | "__inherit__" | null;
+  allowed_skills?: string[] | "__inherit__" | null;
+}
+
+// BL-RBAC-DAY7 (5/17): Department CRUD
+export interface Department {
+  name: string;
+  allowed_models: string[];
+  allowed_tools: string[];
+  allowed_skills: string[];
+  quota_models_day: number;
+  description: string;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface UpdateDeptReq {
+  allowed_models?: string[];
+  allowed_tools?: string[];
+  allowed_skills?: string[];
+  quota_models_day?: number;
+  description?: string;
 }
 
 export interface UsersAuditEvent {
@@ -111,5 +141,20 @@ export const adminApi = {
   listAudit: (limit: number = 100) =>
     api.get<{ events: UsersAuditEvent[]; limit: number }>(
       `/api/admin/users-audit?limit=${limit}`,
+    ),
+
+  // BL-RBAC-DAY7 (5/17): department CRUD
+  listDepartments: () =>
+    api.get<{ departments: Department[] }>(`/api/admin/departments`),
+
+  getDepartment: (name: string) =>
+    api.get<{ department: Department }>(
+      `/api/admin/departments/${encodeURIComponent(name)}`,
+    ),
+
+  updateDepartment: (name: string, req: UpdateDeptReq) =>
+    api.put<{ ok: boolean; department: Department }>(
+      `/api/admin/departments/${encodeURIComponent(name)}`,
+      req,
     ),
 };

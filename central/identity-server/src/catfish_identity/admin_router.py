@@ -115,6 +115,10 @@ class UserBrief(BaseModel):
     created_at: str | None = None
     last_login_at: str | None = None
     must_change_password: bool = False
+    # BL-RBAC-DAY7 (5/17): per-user override. null = 继承 dept, [] = 解锁全允许.
+    allowed_models: list[str] | None = None
+    allowed_tools: list[str] | None = None
+    allowed_skills: list[str] | None = None
 
 
 def _to_brief(u: IdentityUser) -> UserBrief:
@@ -130,6 +134,9 @@ def _to_brief(u: IdentityUser) -> UserBrief:
         created_at=u.created_at,
         last_login_at=u.last_login_at,
         must_change_password=u.must_change_password,
+        allowed_models=u.allowed_models,
+        allowed_tools=u.allowed_tools,
+        allowed_skills=u.allowed_skills,
     )
 
 
@@ -148,6 +155,11 @@ class UpdateUserReq(BaseModel):
     department: str | None = None
     role: str | None = None
     managed_departments: list[str] | None = None
+    # BL-RBAC-DAY7 (5/17): per-user RBAC override 三维. None = 不动,
+    # "__inherit__" = NULL (回继承 dept), list = override (空 list = 解锁全允许).
+    allowed_models: list[str] | str | None = None
+    allowed_tools: list[str] | str | None = None
+    allowed_skills: list[str] | str | None = None
 
 
 class LockUserReq(BaseModel):
@@ -249,6 +261,10 @@ def make_admin_router(registry: UserRegistry) -> APIRouter:
             department=req.department,
             role=req.role,
             managed_departments=req.managed_departments,
+            # BL-RBAC-DAY7 (5/17): 三维 RBAC override 透传
+            allowed_models=req.allowed_models,
+            allowed_tools=req.allowed_tools,
+            allowed_skills=req.allowed_skills,
         )
         if not ok:
             raise HTTPException(status_code=400, detail=err)
@@ -338,4 +354,69 @@ def make_admin_router(registry: UserRegistry) -> APIRouter:
             },
         }
 
+    # ── BL-RBAC-DAY7 (5/17): departments endpoints ─────────────────
+    # admin / sysadmin 看 + 改 dept 配置 (allowed_models / allowed_tools /
+    # allowed_skills / quota_models_day / description). manager 只读自己管
+    # 的 dept (managed_departments). employee 没权限.
+
+    @router.get("/departments")
+    async def list_departments(
+        caller: CallerContext = Depends(require_admin_or_above),
+    ) -> dict[str, Any]:
+        """列所有 dept. admin / sysadmin 看全, manager 只看 managed_departments."""
+        from .departments import get_global_registry  # noqa: PLC0415
+
+        depts = await get_global_registry().list_all()
+        # manager filter — 但 manager 没过 require_admin_or_above, 不会到这.
+        # 留口子给 future role=manager 改成 manager_or_above
+        return {"departments": [d.to_dict() for d in depts]}
+
+    @router.get("/departments/{name}")
+    async def get_department(
+        name: str,
+        caller: CallerContext = Depends(require_admin_or_above),
+    ) -> dict[str, Any]:
+        from .departments import get_global_registry  # noqa: PLC0415
+
+        dept = await get_global_registry().get(name)
+        if dept is None:
+            raise HTTPException(status_code=404, detail=f"dept {name} 不存在")
+        return {"department": dept.to_dict()}
+
+    @router.put("/departments/{name}")
+    async def update_department(
+        name: str,
+        req: "UpdateDeptReq",
+        caller: CallerContext = Depends(require_admin_or_above),
+    ) -> dict[str, Any]:
+        from .departments import get_global_registry  # noqa: PLC0415
+
+        reg = get_global_registry()
+        ok, err = await reg.update(
+            name,
+            by_email=caller.sub,
+            allowed_models=req.allowed_models,
+            allowed_tools=req.allowed_tools,
+            allowed_skills=req.allowed_skills,
+            quota_models_day=req.quota_models_day if req.quota_models_day is not None else -1,
+            description=req.description,
+        )
+        if not ok:
+            raise HTTPException(status_code=400, detail=err)
+        dept = await reg.get(name)
+        return {"ok": True, "department": dept.to_dict() if dept else None}
+
     return router
+
+
+class UpdateDeptReq(BaseModel):
+    """BL-RBAC-DAY7 (5/17): admin /admin/departments/{name} PUT body.
+
+    所有字段 optional, None 跳过. allowed_* 是 list[str] (空 = 全允许).
+    quota_models_day 0 = 不限, -1 sentinel 跳过 (但 client 应该不传 -1, 直接不传).
+    """
+    allowed_models: list[str] | None = None
+    allowed_tools: list[str] | None = None
+    allowed_skills: list[str] | None = None
+    quota_models_day: int | None = None
+    description: str | None = None
