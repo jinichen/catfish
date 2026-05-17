@@ -18,6 +18,7 @@ import { useEffect } from "react";
 import { fetchProactiveStarter } from "../lib/me";
 
 import { sendNotification, petIsVisible, petEmitBubble } from "../lib/tauri";
+import { useAgentStore } from "../store/agent";
 import { useUIStore } from "../store/ui";
 
 const TIMES_LOCAL = ["09:30", "14:00", "17:30"];
@@ -93,7 +94,7 @@ async function fireOne(time: string): Promise<void> {
       return;
     }
     console.log(`[proactive] fireOne(${time}): starter="${s.starter.slice(0, 60)}..."`);
-    const { useAgentStore } = await import("../store/agent");
+    // 5/18 BL-COMPANION-VITE-CHUNK-WARN: useAgentStore 顶部 static (跟 App.tsx 等保持一致).
     const agentName = useAgentStore.getState().name || "小鲶";
 
     // 5/6 鸿波: 桌宠 = 主动信息统一出口, 不再砸 macOS 通知刷屏.

@@ -5,6 +5,7 @@
 //!   - `services/`  —— 内部进程管理（前端不可直接访问）
 //!   - `tray/`      —— menubar 托盘菜单
 
+mod app_menu;
 mod commands;
 mod services;
 mod tray;
@@ -203,6 +204,15 @@ pub fn run() {
         .setup(move |app| {
             #[cfg(desktop)]
             tray::install(app.handle())?;
+
+            // 5/18 BL-COMPANION-ABOUT-HIJACK: macOS app menu 自定义,
+            // "关于鲶鱼" item 走我们自己的 React 模态而不是原生 panel.
+            #[cfg(target_os = "macos")]
+            {
+                if let Err(e) = app_menu::install(app) {
+                    log::warn!("app_menu::install 失败 (不阻塞启动, 默认菜单兜底): {e}");
+                }
+            }
 
             // 5/7 BL-CR: 启动时确保 ~/.hermes/config.yaml 有保守 curator 段
             // (hermes 0.12 默认 30/90/2h 太激进, 我们 patch 成 60/180/4h).

@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 
+import AboutModal from "./components/AboutModal";
 import AuthBanner from "./components/AuthBanner";
 import DevUserSwitcher from "./components/DevUserSwitcher";
 import FocusModeView from "./components/FocusModeView";
@@ -24,6 +25,7 @@ export default function App() {
   const loadAgentPrefs = useAgentStore((s) => s.loadAgentPrefs);
   const focusActive = useFocusStore((s) => s.active);
   const toggleFocus = useFocusStore((s) => s.toggle);
+  const openAbout = useUIStore((s) => s.openAbout);
 
   // BL-E27 一次到位: 桌宠状态联动 LLM (idle/thinking/running/done)
   usePetStatusBroadcast();
@@ -54,6 +56,20 @@ export default function App() {
     };
   }, [toggleFocus]);
 
+  // 5/18 BL-COMPANION-ABOUT-HIJACK: macOS app menu "鲶鱼 Companion → 关于鲶鱼"
+  // 走自定义 React 模态, 不走原生 NSPanel. Rust 端 emit "show-about", 这里接.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    void (async () => {
+      unlisten = await listen("show-about", () => {
+        openAbout();
+      });
+    })();
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [openAbout]);
+
   // 五一 sprint 5/5: Esc 隐藏浮窗 (配合 Cmd+Shift+Space 召唤)
   // 输入框聚焦时 Esc 由组件自己处理 (e.g. 关闭弹层); 这里只在 body 聚焦时拦截.
   // BL-E15: 专注模式激活时这个 Esc-hide 不能跑, FocusModeView 自己 capture Esc 退专注.
@@ -77,7 +93,14 @@ export default function App() {
   // 注意放在 LoginGate 之前: 即使没登录, 按 Cmd+Shift+F 也能进专注 (员工常用场景:
   // 临时打开 Companion 没登, 按快捷键挡屏).
   if (focusActive) {
-    return <FocusModeView />;
+    // 5/18 BL-COMPANION-ABOUT-HIJACK: AboutModal 在专注模式也要能弹 (员工
+    // 从 macOS menu 触发, 不应被专注 view 吞掉).
+    return (
+      <>
+        <FocusModeView />
+        <AboutModal />
+      </>
+    );
   }
 
   // SSO Phase 1C: LoginGate 包整个 App. 没登录时挡住, 让员工先点登录.
@@ -89,6 +112,8 @@ export default function App() {
     <LoginGate>
       <AppShell activeTab={activeTab} />
       <OnboardingWizard />
+      {/* 5/18 BL-COMPANION-ABOUT-HIJACK: 顶部 chip + macOS app menu 共享的关于模态 */}
+      <AboutModal />
     </LoginGate>
   );
 }

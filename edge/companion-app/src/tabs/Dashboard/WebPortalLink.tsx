@@ -25,6 +25,7 @@ import { getVersion } from "@tauri-apps/api/app";
 
 import { config } from "../../lib/env";
 import { useMe } from "../../hooks/useMe";
+import { useUIStore } from "../../store/ui";
 
 /** BL-ARCH2 fix1 (5/10): Tauri webview 默认吞 `<a target="_blank">`, 必须程序化
  * 调 `@tauri-apps/plugin-shell` 的 `open()` 才能打开系统默认浏览器.
@@ -249,23 +250,19 @@ export default function WebPortalLink() {
   );
 }
 
-/** BL-COMPANION-ABOUT-CHIP (5/18 鸿波): "关于鲶鱼" 简版徽章.
+/** BL-COMPANION-ABOUT-CHIP (5/18 鸿波): "关于鲶鱼" 徽章.
  *
- * 鸿波 5/18 反馈: 仪表盘没"关于"卡, 员工不知道自己装的是哪版 / 鲶鱼是啥.
- * 决策: 顶部 banner 加灰色 chip "鲶鱼 v0.14.0", 点开模态显:
- *   - 一句话介绍 (鲶鱼是啥)
- *   - 版本号 (前端 + 内核已同步, 对外只显一个数字, BL-COMPANION-VERSION-SYNC)
- * 不放反馈渠道 / 文档链接 / 诊断信息 — 那些走客服 / 控制台 tab.
+ * 5/18 BL-COMPANION-ABOUT-HIJACK: 模态 hoist 到 App.tsx 渲染, 这里只点开 store flag,
+ * 跟 macOS app menu "关于鲶鱼" 共享一个 AboutModal 实例.
  */
 function AboutChip() {
   const [version, setVersion] = useState<string>("…");
-  const [open, setOpen] = useState(false);
+  const openAbout = useUIStore((s) => s.openAbout);
 
   useEffect(() => {
     getVersion()
       .then((v) => setVersion(v))
       .catch((e) => {
-        // 非 Tauri 环境 (vite dev preview) getVersion 抛错, 兜底显 ?
         // eslint-disable-next-line no-console
         console.warn("[AboutChip] getVersion 失败:", e);
         setVersion("?");
@@ -273,128 +270,31 @@ function AboutChip() {
   }, []);
 
   return (
-    <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        title="关于鲶鱼 — 版本 / 介绍"
-        style={{
-          fontSize: 11,
-          color: "var(--catfish-text-muted)",
-          background: "transparent",
-          border: "1px solid var(--catfish-border)",
-          borderRadius: "var(--radius-sm)",
-          padding: "2px 8px",
-          cursor: "pointer",
-          fontFamily: "inherit",
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.borderColor = "var(--catfish-accent)";
-          e.currentTarget.style.color = "var(--catfish-text)";
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.borderColor = "var(--catfish-border)";
-          e.currentTarget.style.color = "var(--catfish-text-muted)";
-        }}
-      >
-        鲶鱼 v{version}
-      </button>
-      {open && <AboutModal version={version} onClose={() => setOpen(false)} />}
-    </>
-  );
-}
-
-function AboutModal({ version, onClose }: { version: string; onClose: () => void }) {
-  // ESC 关
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  return (
-    <div
-      onClick={onClose}
+    <button
+      type="button"
+      onClick={openAbout}
+      title="关于鲶鱼 — 版本 / 介绍"
       style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.4)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 9999,
+        fontSize: 11,
+        color: "var(--catfish-text-muted)",
+        background: "transparent",
+        border: "1px solid var(--catfish-border)",
+        borderRadius: "var(--radius-sm)",
+        padding: "2px 8px",
+        cursor: "pointer",
+        fontFamily: "inherit",
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.borderColor = "var(--catfish-accent)";
+        e.currentTarget.style.color = "var(--catfish-text)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.borderColor = "var(--catfish-border)";
+        e.currentTarget.style.color = "var(--catfish-text-muted)";
       }}
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: "var(--catfish-bg-elevated)",
-          border: "1px solid var(--catfish-border)",
-          borderRadius: "var(--radius-md)",
-          padding: "var(--space-4)",
-          maxWidth: 420,
-          width: "90%",
-          boxShadow: "0 10px 40px rgba(0,0,0,0.2)",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "var(--space-2)",
-            marginBottom: "var(--space-3)",
-          }}
-        >
-          <span style={{ fontSize: 28 }}>🐟</span>
-          <div style={{ fontSize: 18, fontWeight: 600 }}>关于鲶鱼</div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="关闭"
-            style={{
-              marginLeft: "auto",
-              background: "transparent",
-              border: "none",
-              fontSize: 18,
-              color: "var(--catfish-text-muted)",
-              cursor: "pointer",
-              padding: 4,
-            }}
-          >
-            ×
-          </button>
-        </div>
-        <p
-          style={{
-            fontSize: 13,
-            lineHeight: 1.6,
-            color: "var(--catfish-text)",
-            margin: 0,
-            marginBottom: "var(--space-3)",
-          }}
-        >
-          <strong>鲶鱼</strong>是企业内部 AI 副手 —— 帮你看邮件 / 起草回复 / 跑长任务 /
-          跨 LLM 对话. 私密数据留在你本机, 不上云.
-        </p>
-        <div
-          style={{
-            fontSize: 12,
-            color: "var(--catfish-text-muted)",
-            paddingTop: "var(--space-2)",
-            borderTop: "1px dashed var(--catfish-border)",
-            display: "grid",
-            gridTemplateColumns: "auto 1fr",
-            columnGap: "var(--space-3)",
-            rowGap: 4,
-          }}
-        >
-          <div>版本</div>
-          <div style={{ fontFamily: "var(--font-mono, monospace)" }}>v{version}</div>
-        </div>
-      </div>
-    </div>
+      鲶鱼 v{version}
+    </button>
   );
 }
 
