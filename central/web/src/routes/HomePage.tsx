@@ -17,8 +17,10 @@ export function HomePage() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
-      {/* BL-CENTRAL-WEB-CONSOLIDATE (5/17 鸿波): Hero 改造 — 讲清"中央门户瘦, 边缘
-          Companion 厚"的叙事. 防员工登进来 nav 看着稀觉得"啥也没". */}
+      {/* BL-HOMEPAGE-DEDUPE (5/17 鸿波): 删 Hero 卡 bullet 列表 — 跟下面 NavTile
+          完全冗余 (顶部 nav + Hero bullet + NavTile 三处 echo 同 5 项, 3 倍 noise).
+          NavTile 是真正的可点入口, 留. Hero 收紧成 welcome + Companion 提示 + role.
+          视觉重点从"中央门户能做啥"挪到"个人功能去 Companion". */}
       <Card
         title={
           <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
@@ -29,49 +31,15 @@ export function HomePage() {
               height={24}
               style={{ display: "block" }}
             />
-            <span style={{ fontSize: 18 }}>鲶鱼中央门户</span>
-            <span
-              style={{
-                fontSize: 12,
-                color: "var(--text-muted)",
-                fontWeight: 400,
-              }}
-            >
-              · 跨员工管理 + 共享市场
+            <span style={{ fontSize: 18 }}>
+              欢迎, {me.email.split("@")[0]}
             </span>
           </span>
         }
       >
-        <div
-          style={{ color: "var(--text)", fontSize: 14, lineHeight: 1.7 }}
-        >
-          <div style={{ marginBottom: "var(--space-3)" }}>
-            欢迎 <b>{me.email.split("@")[0]}</b>. 中央门户只看 3 类事:
-          </div>
-          <ul
-            style={{
-              paddingLeft: 0,
-              listStyle: "none",
-              margin: 0,
-              display: "flex",
-              flexDirection: "column",
-              gap: 4,
-            }}
-          >
-            <li>📦 跨员工 / 跨部门 <b>资源市场</b> — Skills / MCP / 共享工具</li>
-            {isManagerOrAdmin && (
-              <li>👥📜 <b>部门管理 + 审计</b> — 本部门用量 / top 员工 / 历史调用</li>
-            )}
-            {isAdmin && (
-              <li>⚙️ <b>Admin 后台</b> — 用户 / 配额 / billing / 部门 RBAC</li>
-            )}
-            {isSysadmin && (
-              <li>🔐 <b>系统管理</b> — 服务状态 / 操作审计 / 危险操作</li>
-            )}
-          </ul>
+        <div style={{ color: "var(--text)", fontSize: 14, lineHeight: 1.6 }}>
           <div
             style={{
-              marginTop: "var(--space-4)",
               padding: "var(--space-3)",
               background: "var(--bg-elev)",
               border: "1px solid var(--border)",
