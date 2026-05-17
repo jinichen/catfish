@@ -1213,12 +1213,21 @@ async def api_quota_global(
 async def api_audit_global(
     user: User = Depends(get_current_user),
     since_hours: int = 24,
+    model: str | None = None,
+    dept: str | None = None,
+    user_email: str | None = None,
 ) -> dict[str, Any]:
     """全员 audit 聚合 — admin 看请求总数 / 模型分布 / 部门分布 / top 员工.
 
     BL-AUDIT-UX-P1 (5/17): 加 since_hours 时间窗 + 上期对照.
-      since_hours: 1-720 (1 小时-30 天), 默认 24h. 前端 [24h][7d=168][30d=720] 切.
-      previous_*: 同长度的上一段 (e.g. 24h 视图 → 上 24h 的总数), 给 trend ↑↓.
+    BL-AUDIT-UX-P2 (5/17): 加 drill-down filter (model/dept/user_email).
+      点 audit 页某行 → 前端把该值塞进 URL query, /api/audit/global 收到后
+      把 SQL 加 WHERE. 上期 trend 跟当前期同 filter 才有意义.
+
+      since_hours: 1-720 (1 小时-30 天), 默认 24h.
+      model: catalog ID (例 'catfish-public-nvidia-nemotron'), None=全部
+      dept: 部门名 (含 '(未分组)' 合成桶), None=全部
+      user_email: 员工 email (含 '(未分组员工)' 合成桶), None=全部
     """
     from . import quota
     _require_admin(user)
@@ -1231,8 +1240,17 @@ async def api_audit_global(
     period_start_ms = now_ms - window_ms
     prev_period_start_ms = period_start_ms - window_ms
 
-    summary = quota.audit_summary_global_since(period_start_ms)
-    prev = quota.audit_period_totals(prev_period_start_ms, period_start_ms)
+    # 空字符串当 None 处理 — 前端 /api/audit/global?model=&dept=eng 这种半填的也兼容
+    filter_kwargs = {
+        "filter_model": model or None,
+        "filter_dept": dept or None,
+        "filter_user": user_email or None,
+    }
+
+    summary = quota.audit_summary_global_since(period_start_ms, **filter_kwargs)
+    prev = quota.audit_period_totals(
+        prev_period_start_ms, period_start_ms, **filter_kwargs,
+    )
 
     return {
         "since_ms": period_start_ms,
@@ -1243,6 +1261,12 @@ async def api_audit_global(
         "previous_total_tokens": prev["total_tokens"],
         "previous_active_users": prev["active_users"],
         "previous_active_departments": prev["active_departments"],
+        # BL-AUDIT-UX-P2: 把当前 filter echo 回前端, 显示 pill 用
+        "filter": {
+            "model": filter_kwargs["filter_model"],
+            "dept": filter_kwargs["filter_dept"],
+            "user_email": filter_kwargs["filter_user"],
+        },
         "viewer_role": user.role,
     }
 

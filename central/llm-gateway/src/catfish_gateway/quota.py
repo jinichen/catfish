@@ -629,15 +629,53 @@ def top_departments(cutoff_ms: int, limit: int = 10) -> list[dict]:
         return []
 
 
-def audit_period_totals(start_ms: int, end_ms: int) -> dict:
+def _build_audit_filter(
+    model: str | None,
+    dept: str | None,
+    user_email: str | None,
+    placeholder: str,
+) -> tuple[str, list[Any]]:
+    """BL-AUDIT-UX-P2 (5/17): 把 drill-down filter 转 SQL 片段.
+
+    用 COALESCE 兼容 '(未分组)' / '(未分组员工)' 合成桶名 (跟 by_dept / by_user
+    显示一致). placeholder 是 '%s' (PG) 或 '?' (sqlite).
+    返 (sql_extra, params_extra) — caller 拼到 WHERE 后, 参数追加到 query.
+    """
+    extras: list[str] = []
+    params: list[Any] = []
+    if model:
+        extras.append(f"AND model = {placeholder}")
+        params.append(model)
+    if dept:
+        # 兼容 '(未分组)' 桶 — 选这桶时匹配空字符串 + NULL
+        extras.append(
+            f"AND COALESCE(NULLIF(department, ''), '(未分组)') = {placeholder}"
+        )
+        params.append(dept)
+    if user_email:
+        extras.append(
+            f"AND COALESCE(NULLIF(user_email, ''), '(未分组员工)') = {placeholder}"
+        )
+        params.append(user_email)
+    return (" " + " ".join(extras) if extras else "", params)
+
+
+def audit_period_totals(
+    start_ms: int,
+    end_ms: int,
+    *,
+    filter_model: str | None = None,
+    filter_dept: str | None = None,
+    filter_user: str | None = None,
+) -> dict:
     """BL-AUDIT-UX-P1 (5/17): 时间窗内 top-level 数字 (no by_* breakdown).
 
     给 trend ↑↓ vs 上期对照用 — 当前期跟上期同样查一遍, 前端做差算 % 变化.
-    比 audit_summary_global_since 轻一半 (只 1 个 query, 不跑 by_model /
-    by_dept / by_user GROUP BY).
+
+    BL-AUDIT-UX-P2 (5/17): 加 drill-down filter 参数 — 上期 trend 跟当前期同
+    filter 才有意义 (不然 "model=X 这期 ↑20%" 跟 "model=* 上期" 比毫无意义).
 
     Returns: {request_count, total_tokens, active_users, active_departments}.
-    全 0 表示该期无业务请求 (或 PG 错). 永不 raise.
     """
     empty = {
         "request_count": 0,
@@ -647,19 +685,22 @@ def audit_period_totals(start_ms: int, end_ms: int) -> dict:
     }
     if _use_pg():
         try:
+            extra_sql, extra_params = _build_audit_filter(
+                filter_model, filter_dept, filter_user, "%s",
+            )
+            sql = (
+                f"""SELECT COUNT(*),
+                          COALESCE(SUM(tokens_in + tokens_out), 0),
+                          COUNT(DISTINCT user_email),
+                          COUNT(DISTINCT department)
+                            FILTER (WHERE department <> '')
+                   FROM quota_events
+                   WHERE ts_ms >= %s AND ts_ms < %s
+                     AND user_email NOT LIKE 'internal:%%'{extra_sql}"""
+            )
             with _pg_conn() as conn:
                 with conn.cursor() as cur:
-                    cur.execute(
-                        """SELECT COUNT(*),
-                                  COALESCE(SUM(tokens_in + tokens_out), 0),
-                                  COUNT(DISTINCT user_email),
-                                  COUNT(DISTINCT department)
-                                    FILTER (WHERE department <> '')
-                           FROM quota_events
-                           WHERE ts_ms >= %s AND ts_ms < %s
-                             AND user_email NOT LIKE 'internal:%%'""",
-                        (start_ms, end_ms),
-                    )
+                    cur.execute(sql, (start_ms, end_ms, *extra_params))
                     row = cur.fetchone()
             return {
                 "request_count": int(row[0] or 0),
@@ -673,18 +714,23 @@ def audit_period_totals(start_ms: int, end_ms: int) -> dict:
 
     # sqlite (test 路径)
     try:
-        conn = _get_conn()
-        cur = conn.execute(
-            """SELECT COUNT(*),
+        extra_sql, extra_params = _build_audit_filter(
+            filter_model, filter_dept, filter_user, "?",
+        )
+        # 注: sqlite 路径仍保留 department != '' (老 schema 兼容). 加 dept filter
+        # 时 COALESCE 已经处理空 dept 合成桶, 不冲突.
+        sql = (
+            f"""SELECT COUNT(*),
                       COALESCE(SUM(tokens_in + tokens_out), 0),
                       COUNT(DISTINCT user_email),
                       COUNT(DISTINCT department)
                FROM quota_events
                WHERE ts >= ? AND ts < ?
                  AND user_email NOT LIKE 'internal:%'
-                 AND department != ''""",
-            (start_ms, end_ms),
+                 AND department != ''{extra_sql}"""
         )
+        conn = _get_conn()
+        cur = conn.execute(sql, (start_ms, end_ms, *extra_params))
         row = cur.fetchone()
         conn.close()
         return {
@@ -698,8 +744,19 @@ def audit_period_totals(start_ms: int, end_ms: int) -> dict:
         return empty
 
 
-def audit_summary_global_since(cutoff_ms: int) -> dict:
-    """全局聚合 — admin /api/audit/global 用. 跟 audit_summary_dept_since 同结构, 不限部门."""
+def audit_summary_global_since(
+    cutoff_ms: int,
+    *,
+    filter_model: str | None = None,
+    filter_dept: str | None = None,
+    filter_user: str | None = None,
+) -> dict:
+    """全局聚合 — admin /api/audit/global 用. 跟 audit_summary_dept_since 同结构, 不限部门.
+
+    BL-AUDIT-UX-P2 (5/17): 加 drill-down filter (model/dept/user). 应用到 top-level
+    totals + by_model + by_dept + by_user. **不应用到 internal_loopback** (loopback
+    跟员工筛选无关, 它就是 gateway 自己的消耗).
+    """
     empty = {
         "request_count": 0,
         "total_tokens": 0,
@@ -718,15 +775,18 @@ def audit_summary_global_since(cutoff_ms: int) -> dict:
     # internal_*, 不混进员工业务总览. 防 sysadmin 误以为业务用量 1.87x.
     if _use_pg():
         try:
+            extra_sql_pg, extra_params_pg = _build_audit_filter(
+                filter_model, filter_dept, filter_user, "%s",
+            )
             with _pg_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        """SELECT COUNT(*), COALESCE(SUM(tokens_in + tokens_out), 0),
+                        f"""SELECT COUNT(*), COALESCE(SUM(tokens_in + tokens_out), 0),
                                   COUNT(DISTINCT user_email),
                                   COUNT(DISTINCT department) FILTER (WHERE department <> '')
                            FROM quota_events
-                           WHERE ts_ms >= %s AND user_email NOT LIKE 'internal:%%'""",
-                        (cutoff_ms,),
+                           WHERE ts_ms >= %s AND user_email NOT LIKE 'internal:%%'{extra_sql_pg}""",
+                        (cutoff_ms, *extra_params_pg),
                     )
                     row = cur.fetchone()
                     request_count = int(row[0] or 0)
@@ -734,8 +794,9 @@ def audit_summary_global_since(cutoff_ms: int) -> dict:
                     active_users = int(row[2] or 0)
                     active_departments = int(row[3] or 0)
 
-                    # internal: 单独算 (audit transparency, 让 sysadmin 知道 gateway
-                    # 内部循环消耗了多少 — 5 维 inject / summarizer / proactive 等)
+                    # internal: 单独算, drill-down filter 不影响 (loopback 跟员工
+                    # 筛选无关). audit transparency: sysadmin 看 gateway 内部循环
+                    # 消耗多少 — 5 维 inject / summarizer / proactive 等.
                     cur.execute(
                         """SELECT COUNT(*), COALESCE(SUM(tokens_in + tokens_out), 0)
                            FROM quota_events
@@ -747,11 +808,11 @@ def audit_summary_global_since(cutoff_ms: int) -> dict:
                     internal_tokens = int(irow[1] or 0)
 
                     cur.execute(
-                        """SELECT model, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS tk
+                        f"""SELECT model, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS tk
                            FROM quota_events
-                           WHERE ts_ms >= %s AND user_email NOT LIKE 'internal:%%'
+                           WHERE ts_ms >= %s AND user_email NOT LIKE 'internal:%%'{extra_sql_pg}
                            GROUP BY model ORDER BY tk DESC LIMIT 20""",
-                        (cutoff_ms,),
+                        (cutoff_ms, *extra_params_pg),
                     )
                     by_model = [
                         {"model": r[0], "count": int(r[1]), "total_tokens": int(r[2] or 0)}
@@ -762,13 +823,13 @@ def audit_summary_global_since(cutoff_ms: int) -> dict:
                     # 总请求 405 vs 按部门加和 117 这种"数据消失" bug 让客户立刻
                     # 不信任所有数字. 用 COALESCE 把空 dept 统一标 '(未分组)'.
                     cur.execute(
-                        """SELECT COALESCE(NULLIF(department, ''), '(未分组)') AS dept,
+                        f"""SELECT COALESCE(NULLIF(department, ''), '(未分组)') AS dept,
                                   COUNT(*) AS cnt,
                                   SUM(tokens_in + tokens_out) AS tk
                            FROM quota_events
-                           WHERE ts_ms >= %s AND user_email NOT LIKE 'internal:%%'
+                           WHERE ts_ms >= %s AND user_email NOT LIKE 'internal:%%'{extra_sql_pg}
                            GROUP BY dept ORDER BY tk DESC LIMIT 20""",
-                        (cutoff_ms,),
+                        (cutoff_ms, *extra_params_pg),
                     )
                     by_department = [
                         {"department": r[0], "count": int(r[1]), "total_tokens": int(r[2] or 0)}
@@ -778,14 +839,14 @@ def audit_summary_global_since(cutoff_ms: int) -> dict:
                     # BL-AUDIT-P0-FIX (5/17): LIMIT 10 → 50, 防 top 50 但只显示
                     # 几个的"数据消失"印象. user_email 空时也归 (未分组员工).
                     cur.execute(
-                        """SELECT COALESCE(NULLIF(user_email, ''), '(未分组员工)') AS ue,
+                        f"""SELECT COALESCE(NULLIF(user_email, ''), '(未分组员工)') AS ue,
                                   COALESCE(NULLIF(department, ''), '(未分组)') AS dept,
                                   COUNT(*) AS cnt,
                                   SUM(tokens_in + tokens_out) AS tk
                            FROM quota_events
-                           WHERE ts_ms >= %s AND user_email NOT LIKE 'internal:%%'
+                           WHERE ts_ms >= %s AND user_email NOT LIKE 'internal:%%'{extra_sql_pg}
                            GROUP BY ue, dept ORDER BY tk DESC LIMIT 50""",
-                        (cutoff_ms,),
+                        (cutoff_ms, *extra_params_pg),
                     )
                     by_user = [
                         {
@@ -815,38 +876,39 @@ def audit_summary_global_since(cutoff_ms: int) -> dict:
     # sqlite fallback (BL-AUDIT-INTERNAL-SPLIT: 同样过滤 internal:* user)
     try:
         conn = _get_conn()
-        # BL-AUDIT-P0-FIX (5/17): 去掉老 `AND department != ''` 过滤. 老逻辑下
-        # request_count / total_tokens 跟 PG 不一致 (PG 不过滤空 dept), 也跟前
-        # 端展示的 by_model 总和不一致. 跟 PG 路径对齐, top-level 计数包含所有
-        # 非 internal 事件, 空 dept 桶单独算 (未分组).
-        cur = conn.execute(
-            """SELECT COUNT(*), COALESCE(SUM(tokens_in + tokens_out), 0),
-                      COUNT(DISTINCT user_email),
-                      COUNT(DISTINCT department)
-               FROM quota_events
-               WHERE ts >= ? AND department != ''
-                 AND user_email NOT LIKE 'internal:%'""",
-            (cutoff_ms,),
+        # BL-AUDIT-UX-P2 (5/17): drill-down filter — 用 ? placeholder
+        extra_sql_sq, extra_params_sq = _build_audit_filter(
+            filter_model, filter_dept, filter_user, "?",
         )
+
+        # top-level COUNT/SUM/active_users + active_departments
         # 注: active_departments 仍只数有 dept 的 (排除未分组), 这个语义更有用.
+        cur = conn.execute(
+            f"""SELECT COUNT(*), COALESCE(SUM(tokens_in + tokens_out), 0),
+                       COUNT(DISTINCT user_email),
+                       COUNT(DISTINCT department)
+                FROM quota_events
+                WHERE ts >= ? AND department != ''
+                  AND user_email NOT LIKE 'internal:%'{extra_sql_sq}""",
+            (cutoff_ms, *extra_params_sq),
+        )
         row = cur.fetchone()
-        active_users_subquery_with_dept = int(row[2] or 0)
         active_departments = int(row[3] or 0)
 
         # top-level COUNT/SUM/active_users 不过滤 dept, 跟 PG 路径对齐
         cur = conn.execute(
-            """SELECT COUNT(*), COALESCE(SUM(tokens_in + tokens_out), 0),
-                      COUNT(DISTINCT user_email)
-               FROM quota_events
-               WHERE ts >= ? AND user_email NOT LIKE 'internal:%'""",
-            (cutoff_ms,),
+            f"""SELECT COUNT(*), COALESCE(SUM(tokens_in + tokens_out), 0),
+                       COUNT(DISTINCT user_email)
+                FROM quota_events
+                WHERE ts >= ? AND user_email NOT LIKE 'internal:%'{extra_sql_sq}""",
+            (cutoff_ms, *extra_params_sq),
         )
         row = cur.fetchone()
         request_count = int(row[0] or 0)
         total_tokens = int(row[1] or 0)
         active_users = int(row[2] or 0)
-        _ = active_users_subquery_with_dept  # 暂保留, 后续若需要 "active dept users" 指标用
 
+        # internal: 单独算, drill-down filter 不影响.
         cur = conn.execute(
             """SELECT COUNT(*), COALESCE(SUM(tokens_in + tokens_out), 0)
                FROM quota_events
@@ -858,26 +920,25 @@ def audit_summary_global_since(cutoff_ms: int) -> dict:
         internal_tokens = int(irow[1] or 0)
 
         cur = conn.execute(
-            """SELECT model, COUNT(*), SUM(tokens_in + tokens_out)
-               FROM quota_events
-               WHERE ts >= ? AND user_email NOT LIKE 'internal:%'
-               GROUP BY model ORDER BY 3 DESC LIMIT 20""",
-            (cutoff_ms,),
+            f"""SELECT model, COUNT(*), SUM(tokens_in + tokens_out)
+                FROM quota_events
+                WHERE ts >= ? AND user_email NOT LIKE 'internal:%'{extra_sql_sq}
+                GROUP BY model ORDER BY 3 DESC LIMIT 20""",
+            (cutoff_ms, *extra_params_sq),
         )
         by_model = [
             {"model": r[0], "count": int(r[1]), "total_tokens": int(r[2] or 0)}
             for r in cur.fetchall()
         ]
 
-        # BL-AUDIT-P0-FIX (5/17): 空 dept 不再吞, 统一标 '(未分组)'. 跟 PG 路径
-        # 同步. NULLIF + COALESCE 把 NULL / '' 都映射成同一桶名.
+        # BL-AUDIT-P0-FIX (5/17): 空 dept 不再吞, 统一标 '(未分组)'.
         cur = conn.execute(
-            """SELECT COALESCE(NULLIF(department, ''), '(未分组)') AS dept,
-                      COUNT(*), SUM(tokens_in + tokens_out)
-               FROM quota_events
-               WHERE ts >= ? AND user_email NOT LIKE 'internal:%'
-               GROUP BY dept ORDER BY 3 DESC LIMIT 20""",
-            (cutoff_ms,),
+            f"""SELECT COALESCE(NULLIF(department, ''), '(未分组)') AS dept,
+                       COUNT(*), SUM(tokens_in + tokens_out)
+                FROM quota_events
+                WHERE ts >= ? AND user_email NOT LIKE 'internal:%'{extra_sql_sq}
+                GROUP BY dept ORDER BY 3 DESC LIMIT 20""",
+            (cutoff_ms, *extra_params_sq),
         )
         by_department = [
             {"department": r[0], "count": int(r[1]), "total_tokens": int(r[2] or 0)}
@@ -886,13 +947,13 @@ def audit_summary_global_since(cutoff_ms: int) -> dict:
 
         # BL-AUDIT-P0-FIX (5/17): LIMIT 10 → 50, 空 user_email / department 归桶.
         cur = conn.execute(
-            """SELECT COALESCE(NULLIF(user_email, ''), '(未分组员工)') AS ue,
-                      COALESCE(NULLIF(department, ''), '(未分组)') AS dept,
-                      COUNT(*), SUM(tokens_in + tokens_out)
-               FROM quota_events
-               WHERE ts >= ? AND user_email NOT LIKE 'internal:%'
-               GROUP BY ue, dept ORDER BY 4 DESC LIMIT 50""",
-            (cutoff_ms,),
+            f"""SELECT COALESCE(NULLIF(user_email, ''), '(未分组员工)') AS ue,
+                       COALESCE(NULLIF(department, ''), '(未分组)') AS dept,
+                       COUNT(*), SUM(tokens_in + tokens_out)
+                FROM quota_events
+                WHERE ts >= ? AND user_email NOT LIKE 'internal:%'{extra_sql_sq}
+                GROUP BY ue, dept ORDER BY 4 DESC LIMIT 50""",
+            (cutoff_ms, *extra_params_sq),
         )
         by_user = [
             {

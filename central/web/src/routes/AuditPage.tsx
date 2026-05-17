@@ -15,6 +15,7 @@ import { RoleGate } from "../components/RoleGate";
 import { costRMB, fmtRMB, getModelDisplay, totalCostRMB } from "../lib/modelDisplay";
 import {
   fetchGlobalAudit,
+  type AuditFilter,
   type GlobalAudit,
 } from "../lib/me";
 
@@ -36,18 +37,24 @@ export function AuditPage() {
   const [loading, setLoading] = useState(false);
   // BL-AUDIT-UX-P1: 时间窗状态, 默认 24h
   const [sinceHours, setSinceHours] = useState<number>(24);
+  // BL-AUDIT-UX-P2: drill-down filter (一次 1 维, 多维是 P3)
+  const [filter, setFilter] = useState<AuditFilter>({});
 
   useEffect(() => {
     setLoading(true);
     setError(null);
-    fetchGlobalAudit(sinceHours)
+    fetchGlobalAudit(sinceHours, filter)
       .then((a) => {
         if (!a) setError("拉取 audit 失败 (没权限或后端报错)");
         else setAudit(a);
       })
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
-  }, [sinceHours]);
+  }, [sinceHours, filter]);
+
+  // BL-AUDIT-UX-P2: 一次只允许 1 个 filter 维度. 点新行 → 替换 (不叠加).
+  const setSingleFilter = (next: AuditFilter) => setFilter(next);
+  const clearFilter = () => setFilter({});
 
   return (
     <RoleGate require={["manager", "admin"]}>
@@ -68,6 +75,9 @@ export function AuditPage() {
               loading={loading}
             />
 
+            {/* ── BL-AUDIT-UX-P2: 当前 filter pill chip (仅有 filter 时显) ── */}
+            <FilterPillBar filter={filter} onClear={clearFilter} />
+
             {/* ── 异常告警条 (BL-AUDIT-UX-P0 占位, P1 backend 出 trend 后实数) ── */}
             <AnomalyBanner audit={audit} />
 
@@ -83,17 +93,83 @@ export function AuditPage() {
             <DataReconciliation audit={audit} />
 
             {/* ── 按模型 (横向 bar + 比例 % + 友好名 + 颜色) ── */}
-            <ModelBreakdownCard audit={audit} />
+            <ModelBreakdownCard
+              audit={audit}
+              onClickRow={(model) => setSingleFilter({ model })}
+              activeModel={filter.model ?? null}
+            />
 
             {/* ── 按部门 (横向 bar) ── */}
-            <DeptBreakdownCard audit={audit} />
+            <DeptBreakdownCard
+              audit={audit}
+              onClickRow={(dept) => setSingleFilter({ dept })}
+              activeDept={filter.dept ?? null}
+            />
 
             {/* ── 按员工 (横向 bar, top N) ── */}
-            <UserBreakdownCard audit={audit} />
+            <UserBreakdownCard
+              audit={audit}
+              onClickRow={(user_email) => setSingleFilter({ user_email })}
+              activeUser={filter.user_email ?? null}
+            />
           </>
         )}
       </div>
     </RoleGate>
+  );
+}
+
+/** BL-AUDIT-UX-P2: 当前 filter pill, 有 filter 时显示 + 一键清除. */
+function FilterPillBar({
+  filter,
+  onClear,
+}: {
+  filter: AuditFilter;
+  onClear: () => void;
+}) {
+  const hasFilter = !!(filter.model || filter.dept || filter.user_email);
+  if (!hasFilter) return null;
+  let label = "";
+  if (filter.model) {
+    const md = getModelDisplay(filter.model);
+    label = `模型 = ${md.dotEmoji} ${md.friendly}`;
+  } else if (filter.dept) {
+    label = `部门 = ${filter.dept}`;
+  } else if (filter.user_email) {
+    label = `员工 = ${filter.user_email}`;
+  }
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "8px 12px",
+        background: "var(--bg-elev)",
+        border: "1px dashed var(--accent)",
+        borderRadius: "var(--radius-sm)",
+        fontSize: 13,
+      }}
+    >
+      <span style={{ color: "var(--text-muted)" }}>🔍 已筛选:</span>
+      <span style={{ fontWeight: 500 }}>{label}</span>
+      <button
+        type="button"
+        onClick={onClear}
+        style={{
+          marginLeft: "auto",
+          padding: "2px 10px",
+          background: "transparent",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius-sm)",
+          color: "var(--text)",
+          fontSize: 12,
+          cursor: "pointer",
+        }}
+      >
+        ✕ 清除筛选
+      </button>
+    </div>
   );
 }
 
@@ -600,8 +676,17 @@ function InternalLoopbackCard({ audit }: { audit: GlobalAudit }) {
 }
 
 /** BL-AUDIT-UX-P0: 按模型 — 横向 bar + 比例 % + 友好名 + 颜色.
- *  BL-AUDIT-UX-P1: + RMB 列 (按 model 单价精算) */
-function ModelBreakdownCard({ audit }: { audit: GlobalAudit }) {
+ *  BL-AUDIT-UX-P1: + RMB 列 (按 model 单价精算)
+ *  BL-AUDIT-UX-P2: + onClickRow drill-down, activeModel 高亮 */
+function ModelBreakdownCard({
+  audit,
+  onClickRow,
+  activeModel,
+}: {
+  audit: GlobalAudit;
+  onClickRow: (model: string) => void;
+  activeModel: string | null;
+}) {
   const total = audit.by_model.reduce((s, m) => s + m.total_tokens, 0);
   return (
     <Card title="按模型用量">
@@ -612,6 +697,8 @@ function ModelBreakdownCard({ audit }: { audit: GlobalAudit }) {
           const pct = total > 0 ? (m.total_tokens / total) * 100 : 0;
           return {
             key: m.model,
+            onClick: () => onClickRow(m.model),
+            active: activeModel === m.model,
             label: (
               <span
                 style={{ display: "inline-flex", alignItems: "center", gap: 8 }}
@@ -644,7 +731,15 @@ function ModelBreakdownCard({ audit }: { audit: GlobalAudit }) {
   );
 }
 
-function DeptBreakdownCard({ audit }: { audit: GlobalAudit }) {
+function DeptBreakdownCard({
+  audit,
+  onClickRow,
+  activeDept,
+}: {
+  audit: GlobalAudit;
+  onClickRow: (dept: string) => void;
+  activeDept: string | null;
+}) {
   if (!audit.by_department || audit.by_department.length === 0) return null;
   const total = audit.by_department.reduce((s, d) => s + d.total_tokens, 0);
   return (
@@ -655,6 +750,8 @@ function DeptBreakdownCard({ audit }: { audit: GlobalAudit }) {
           const pct = total > 0 ? (d.total_tokens / total) * 100 : 0;
           return {
             key: d.department,
+            onClick: () => onClickRow(d.department),
+            active: activeDept === d.department,
             label: (
               <span
                 style={{
@@ -681,7 +778,15 @@ function DeptBreakdownCard({ audit }: { audit: GlobalAudit }) {
   );
 }
 
-function UserBreakdownCard({ audit }: { audit: GlobalAudit }) {
+function UserBreakdownCard({
+  audit,
+  onClickRow,
+  activeUser,
+}: {
+  audit: GlobalAudit;
+  onClickRow: (user_email: string) => void;
+  activeUser: string | null;
+}) {
   if (audit.by_user.length === 0) {
     return (
       <Card title="按员工用量">
@@ -720,6 +825,8 @@ function UserBreakdownCard({ audit }: { audit: GlobalAudit }) {
           const pct = total > 0 ? (u.total_tokens / total) * 100 : 0;
           return {
             key: `${u.user_email}::${u.department}`,
+            onClick: () => onClickRow(u.user_email),
+            active: activeUser === u.user_email,
             label: (
               <span
                 style={{
@@ -769,6 +876,10 @@ function Table({
     rmb?: number;
     pct: number;
     barColor: string;
+    /** BL-AUDIT-UX-P2: 行点击 drill down. 不传 = 行不可点 (光标不变) */
+    onClick?: () => void;
+    /** BL-AUDIT-UX-P2: 高亮当前 filter 中的那一行 */
+    active?: boolean;
   }[];
   showExtraColumn?: string;
   showRmbColumn?: boolean;
@@ -810,7 +921,26 @@ function Table({
         {rows.map((r) => (
           <tr
             key={r.key}
-            style={{ borderBottom: "1px solid var(--bg-secondary)" }}
+            onClick={r.onClick}
+            style={{
+              borderBottom: "1px solid var(--bg-secondary)",
+              cursor: r.onClick ? "pointer" : "default",
+              background: r.active
+                ? "color-mix(in srgb, var(--accent) 12%, transparent)"
+                : "transparent",
+              transition: "background 0.1s",
+            }}
+            onMouseEnter={(e) => {
+              if (r.onClick && !r.active) {
+                e.currentTarget.style.background = "var(--bg-elev)";
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (r.onClick && !r.active) {
+                e.currentTarget.style.background = "transparent";
+              }
+            }}
+            title={r.onClick ? "点击筛选只看这一行" : undefined}
           >
             <td style={{ padding: "8px" }}>{r.label}</td>
             {showExtraColumn && (

@@ -495,3 +495,86 @@ def test_audit_period_totals_empty_returns_zeros(tmp_path: Path) -> None:
         "active_users": 0,
         "active_departments": 0,
     }
+
+
+# ── BL-AUDIT-UX-P2: drill-down filter ────────────────────────────
+
+
+def test_audit_summary_global_filter_by_model(tmp_path: Path) -> None:
+    """filter_model=X → 只返该 model 数据 (top-level + by_model 都收紧)."""
+    quota.record_usage("a@x.com", "研发部", "qwen", 1000, 500)
+    quota.record_usage("a@x.com", "研发部", "gemini", 200, 100)
+    quota.record_usage("b@x.com", "销售部", "qwen", 800, 400)
+
+    cutoff = int(time.time() * 1000) - 3_600_000
+    s = quota.audit_summary_global_since(cutoff, filter_model="qwen")
+
+    # 只算 qwen 的 2 条
+    assert s["request_count"] == 2
+    assert s["total_tokens"] == 1000 + 500 + 800 + 400
+    # 跨 2 个员工 / 2 个部门 (qwen 被 a 和 b 用)
+    assert s["active_users"] == 2
+    # by_model 自然就剩 qwen 1 项
+    assert len(s["by_model"]) == 1
+    assert s["by_model"][0]["model"] == "qwen"
+
+
+def test_audit_summary_global_filter_by_dept(tmp_path: Path) -> None:
+    """filter_dept=研发部 → 只返该部门数据."""
+    quota.record_usage("a@x.com", "研发部", "qwen", 1000, 0)
+    quota.record_usage("b@x.com", "研发部", "gemini", 500, 0)
+    quota.record_usage("c@x.com", "销售部", "qwen", 9999, 0)
+
+    cutoff = int(time.time() * 1000) - 3_600_000
+    s = quota.audit_summary_global_since(cutoff, filter_dept="研发部")
+
+    assert s["request_count"] == 2  # 不含销售
+    assert s["total_tokens"] == 1500
+    assert s["active_users"] == 2
+    # by_dept 只剩研发部
+    dept_names = {d["department"] for d in s["by_department"]}
+    assert dept_names == {"研发部"}
+
+
+def test_audit_summary_global_filter_by_user(tmp_path: Path) -> None:
+    """filter_user=a@x.com → 只返该员工数据."""
+    quota.record_usage("a@x.com", "研发部", "qwen", 1000, 0)
+    quota.record_usage("a@x.com", "研发部", "gemini", 500, 0)
+    quota.record_usage("b@x.com", "研发部", "qwen", 9999, 0)
+
+    cutoff = int(time.time() * 1000) - 3_600_000
+    s = quota.audit_summary_global_since(cutoff, filter_user="a@x.com")
+
+    assert s["request_count"] == 2  # 不含 b
+    assert s["total_tokens"] == 1500
+    assert s["active_users"] == 1
+    user_emails = {u["user_email"] for u in s["by_user"]}
+    assert user_emails == {"a@x.com"}
+
+
+def test_audit_summary_global_filter_internal_excluded(tmp_path: Path) -> None:
+    """drill-down filter 不影响 internal_* (loopback 永远独立算)."""
+    quota.record_usage("a@x.com", "研发部", "qwen", 1000, 0)
+    quota.record_usage("internal:gateway-loopback", "", "qwen", 5000, 0)
+
+    cutoff = int(time.time() * 1000) - 3_600_000
+    s = quota.audit_summary_global_since(cutoff, filter_model="qwen")
+    # 业务部分 filter 生效 (qwen 1 条业务)
+    assert s["request_count"] == 1
+    assert s["total_tokens"] == 1000
+    # internal 不受 filter 影响, 仍算 5000
+    assert s["internal_request_count"] == 1
+    assert s["internal_tokens"] == 5000
+
+
+def test_audit_period_totals_filter_applies(tmp_path: Path) -> None:
+    """audit_period_totals 同样支持 filter, 给 trend ↑↓ 当前期 vs 上期同 filter 用."""
+    quota.record_usage("a@x.com", "研发部", "qwen", 1000, 0)
+    quota.record_usage("a@x.com", "研发部", "gemini", 9999, 0)
+
+    now_ms = int(time.time() * 1000)
+    s = quota.audit_period_totals(
+        now_ms - 3_600_000, now_ms + 1000, filter_model="qwen",
+    )
+    assert s["request_count"] == 1
+    assert s["total_tokens"] == 1000

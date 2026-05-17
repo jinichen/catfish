@@ -77,6 +77,13 @@ export async function fetchGlobalQuota(): Promise<GlobalQuota | null> {
   }
 }
 
+export interface AuditFilter {
+  /** BL-AUDIT-UX-P2 (5/17): drill-down filter, 一次只用 1 个 (多 filter 是 P3). */
+  model?: string | null;
+  dept?: string | null;
+  user_email?: string | null;
+}
+
 export interface GlobalAudit {
   since_ms: number;
   /** BL-AUDIT-UX-P1 (5/17): 时间窗长度 (h). 24/168/720 = 24h/7d/30d. */
@@ -99,15 +106,21 @@ export interface GlobalAudit {
   previous_total_tokens?: number;
   previous_active_users?: number;
   previous_active_departments?: number;
+  /** BL-AUDIT-UX-P2 (5/17): backend echo 当前 filter, 给前端显示 pill chip. */
+  filter?: AuditFilter;
 }
 
 export async function fetchGlobalAudit(
   sinceHours: number = 24,
+  filter: AuditFilter = {},
 ): Promise<GlobalAudit | null> {
   try {
-    return await api.get<GlobalAudit>(
-      `/api/audit/global?since_hours=${encodeURIComponent(sinceHours)}`,
-    );
+    const q = new URLSearchParams();
+    q.set("since_hours", String(sinceHours));
+    if (filter.model) q.set("model", filter.model);
+    if (filter.dept) q.set("dept", filter.dept);
+    if (filter.user_email) q.set("user_email", filter.user_email);
+    return await api.get<GlobalAudit>(`/api/audit/global?${q.toString()}`);
   } catch {
     return null;
   }
