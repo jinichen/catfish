@@ -54,8 +54,19 @@ ls ~/.hermes/hermes-agent/model_tools.py
 cd ~/.hermes/hermes-agent
 git fetch --tags --all
 git checkout v2026.5.16   # The Foundation Release
-pip install -e .           # 重装 (lazy-deps 自动处理)
+pip install -e .           # editable 重装, lazy-deps 自动处理
 ```
+
+**⚠ 不要用 `pip install hermes-agent==0.14`** — 截至 5/17, PyPI 上 hermes-agent
+最新 wheel 还是 0.13.0 (Nous 的 release process GitHub tag → PyPI wheel 滞后
+1-7 天)。 0.14 GitHub release notes 写的 `pip install hermes-agent` 是**未来
+default 路径**, 当前必须 git source 装。 PyPI 推上去之前一直走 git clone +
+`pip install -e .`。
+
+**catfish-tool-bridge 必须 git clone path** — `find_hermes_agent_path()` 找
+`~/.hermes/hermes-agent/model_tools.py`, PyPI 装的话子模块在 `site-packages/`
+找不到, bootstrap.py 直接抛 `BL-HERMES-014-LAZY` 错误。 catfish 集成长期都
+是 git clone path, 不切 PyPI。
 
 **注意**: 0.14 把 `[all]` extras 缩水 (#24515), 改用 `--extra all` 不是
 `--all-extras`。 如果之前装机脚本写 `pip install -e .[all] --all-extras` 要改成
