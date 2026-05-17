@@ -14,14 +14,24 @@
 
 | 平台 + 客户端 | 列 | 读 | 搜 | 起草 | 状态 |
 |---|---|---|---|---|---|
+| **macOS Apple Mail** (Mail.app) | ✅ | ✅ | ✅ | ✅ (草稿落 Drafts) | **MVP 可用** (5/18 BL-EMAIL-APPLEMAIL-IMPL) |
 | **macOS Foxmail 1.5+** | ✅ | ✅ | ✅ | ❌(红线 + 写入不可靠) | **可用** |
-| **macOS Apple Mail** (Mail.app) | ⏳ | ⏳ | ⏳ | ⏳ | scaffold (BL-EMAIL-APPLEMAIL 5/17) |
 | Windows Outlook | ⏳ | ⏳ | ⏳ | ⏳ | TODO (pywin32 COM) |
 | Windows Foxmail | ⏳ | ⏳ | ⏳ | ⏳ | TODO (.box parser 已有) |
 
-> **5/17 BL-EMAIL-APPLEMAIL**: macOS 端目标从 Outlook for Mac 改 Apple Mail.app.
-> 理由: Mail.app 100% 装机 / AppleScript dictionary 完整 / 免 Microsoft 365 订阅.
+> **5/17-18 BL-EMAIL-APPLEMAIL**: macOS 端从 Outlook for Mac 改 Apple Mail.app.
+> 5/18 真 ship MVP — 5 方法走 AppleScript via osascript subprocess, 32 单测覆盖.
 > 详见 DESIGN.md 1.2 + 4.1.
+
+### Apple Mail 第一次用
+
+macOS 第一次跑会弹 **"catfish wants to control Mail"** — **必须点允许**, 否则
+`supports_drafts=False` 降级到只读. 不小心点了拒绝:
+- System Settings → Privacy & Security → Automation
+- 找运行 catfish 的 terminal / Catfish.app
+- 勾上 Mail
+
+Mail.app 没开时 → `ClientNotRunningError`, 先开 Mail 再用.
 
 ---
 
