@@ -123,6 +123,98 @@ _ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
 })
 
 
+#: BL-RBAC-DAY4-HARDENING (5/17, hermes 0.14 #26759 tool_override 威胁模型):
+#:
+#: 已知 hermes / catfish builtin tool 白名单. 用于 detect "陌生" tool 名
+#: (plugin tool_override rename builtin 成 dept-allowed 名的攻击)。
+#: 不在此白名单 + 不在 mcp__* 前缀 + 不在 dept allowed_tools → audit WARN.
+#:
+#: 不 drop, 因为:
+#:   1. 客户自家 plugin 命名千差万别, drop 会误杀
+#:   2. RBAC allowed_tools 已经在 sanitize 里实施了, 这层只看异常模式
+#:   3. drop 决策留给 dept admin 在 catfish-web /admin/access 配 allowed_tools
+#:
+#: 维护策略: hermes major 升级时 (e.g. 0.14 → 0.15) 跟 release notes 同步, 漏
+#: 一个工具只是误报多一条 audit 行, 不影响功能.
+_KNOWN_BUILTIN_TOOLS: frozenset[str] = frozenset({
+    # ── catfish 原生 (catfish_tool_bridge.catfish_tools) ──
+    "catfish_search_sessions", "catfish_list_my_outputs",
+    "catfish_user_profile_get", "catfish_user_profile_propose", "catfish_user_profile_confirm",
+    "catfish_run_skill", "search_skills",
+    "catfish_remember",  # hidden 但已知 name, 不应被当 unknown
+    "catfish_memory_dedupe", "catfish_memory_compress",  # hidden 同
+    "catfish_browser_open", "catfish_browser_back", "catfish_browser_click",
+    "catfish_browser_screenshot", "catfish_browser_eval", "catfish_browser_navigate",
+    "catfish_read_url", "catfish_read_tool_archive",
+    # ── hermes 0.13 内置 (catfish-tool-bridge 加载) ──
+    "execute_code", "read_file", "write_file", "edit_file", "list_dir",
+    "search", "grep", "clarify", "delegate_task", "shell", "bash",
+    "memory",  # hermes 0.13 unified
+    "todo_tool",  # BL-TODO-BRIDGE-STORE
+    "screenshot", "vision",
+    "browser_back", "browser_open", "browser_click", "browser_eval",
+    "browser_vision", "browser_navigate", "browser_screenshot", "browser_cdp",
+    # ── hermes 0.14 新加 (release v2026.5.16) ──
+    "x_search",  # #26763 X (Twitter) search
+    "video_generate",  # 0.14 unified pluggable
+    "computer_use",  # 0.14 cua-driver backend (不再 Anthropic-only)
+    "browser_console",  # #23226 180x faster CDP
+})
+
+
+def _audit_unknown_tools(
+    body: dict[str, Any],
+    user: Any,
+    tools: list[dict[str, Any]],
+) -> list[str]:
+    """BL-RBAC-DAY4-HARDENING: 扫 tool 列表里"陌生"工具, 返 unknown names (audit only).
+
+    陌生定义: 不在 _KNOWN_BUILTIN_TOOLS + 不在 mcp__* / _mcp_ / mcp_ 前缀
+    + 不在 user.effective_allowed_tools (dept 显式批的). 落 audit log,
+    不 drop — 让 dept admin 在 /admin/access 决定是否加 allowlist.
+
+    防的威胁: hermes 0.14 #26759 tool_override 把 builtin 重命名成 dept-allowed
+    名 (e.g. catfish_browser_open → catfish_run_skill). 我们看 name 没法识别原始
+    来源, 但 unknown 名出现的频率突然飙高 = 部署里有 plugin tool_override.
+    """
+    if not tools:
+        return []
+    allowed_explicit: set[str] = set()
+    if user is not None:
+        eat = getattr(user, "effective_allowed_tools", None) or []
+        allowed_explicit = {str(t) for t in eat}
+
+    unknown: list[str] = []
+    for t in tools:
+        if not isinstance(t, dict):
+            continue
+        fn = t.get("function")
+        name = fn.get("name") if isinstance(fn, dict) else None
+        if not isinstance(name, str) or not name:
+            continue
+        # 已知 builtin → OK
+        if name in _KNOWN_BUILTIN_TOOLS:
+            continue
+        # MCP server tool (hermes 标准约定 mcp__server__tool) → OK
+        if name.startswith("mcp__") or name.startswith("mcp_"):
+            continue
+        # dept 显式批了 → OK (admin 明知, 故意, 不报)
+        if name in allowed_explicit:
+            continue
+        unknown.append(name)
+
+    if unknown:
+        sub = getattr(user, "sub", "?") if user else "?"
+        dept = getattr(user, "department", "?") if user else "?"
+        logger.warning(
+            "BL-RBAC-DAY4-HARDENING: %d unknown tool name(s) seen "
+            "(hermes 0.14 tool_override 嫌疑, audit only 不 drop): "
+            "user=%s dept=%s unknown=%s",
+            len(unknown), sub, dept, ", ".join(sorted(unknown)[:8]),
+        )
+    return unknown
+
+
 def _cap_tools_by_priority(tools: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
     """超 cap 时按 priority 保留 tools.
 
@@ -333,6 +425,10 @@ def sanitize_tools(body: dict[str, Any], user: Any = None) -> dict[str, Any]:
                 ", ".join(rbac_dropped[:10]),
             )
         cleaned = rbac_kept
+
+    # BL-RBAC-DAY4-HARDENING (5/17, hermes 0.14 #26759 tool_override 防御):
+    # 扫"陌生"tool 名 audit, 不 drop. 防 plugin 把 builtin rename 成 dept-allowed.
+    _audit_unknown_tools(body, user, cleaned)
 
     # BL-TOOL-CAP (5/15 鸿波撞 Qwen 122B 83 tools 空 400): 超 cap 时砍低优先级.
     # 实测 Qwen 122B ≥50 tools 就开始撞空 400 (上游无具体错). 保留 always-on 核心

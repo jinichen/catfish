@@ -74,6 +74,10 @@ class OutputCtx:
     # provider 永远 0, AuditTransform 见 0 不写字段.
     cache_creation_tokens: int = 0
     cache_read_tokens: int = 0
+    # BL-RBAC-DAY4-HARDENING (5/17): X-Catfish-Source header. Companion 标
+    # 'companion', hermes plugin ctx.llm 调没改 default 留 'unknown'. audit 看
+    # unknown 占比 = 部署里多少 plugin 在绕开 catfish-gateway.
+    source: str = "unknown"
 
 
 # ─────────────────────────────────────────────────────────────
@@ -139,6 +143,8 @@ class AuditTransform:
             # BL-CACHE-AUDIT (5/17): 透传 Anthropic prompt cache 字段
             cache_creation_tokens=ctx.cache_creation_tokens,
             cache_read_tokens=ctx.cache_read_tokens,
+            # BL-RBAC-DAY4-HARDENING (5/17): X-Catfish-Source audit
+            source=ctx.source,
         )
 
 

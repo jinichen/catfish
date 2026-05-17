@@ -187,6 +187,9 @@ def log_request_metadata(
     # 没拿到 cache_* 字段的 provider (OpenAI/DeepSeek/Gemini).
     cache_creation_tokens: int = 0,
     cache_read_tokens: int = 0,
+    # BL-RBAC-DAY4-HARDENING (5/17, hermes 0.14 #23194 ctx.llm 防御):
+    # X-Catfish-Source header. 'companion' / 'plugin:<name>' / 'unknown' / 'cron'
+    source: str = "unknown",
 ) -> None:
     """Emit a single structured log line + persist 到 JSONL.
 
@@ -235,6 +238,11 @@ def log_request_metadata(
     if cache_creation_tokens or cache_read_tokens:
         record["cache_creation_tokens"] = cache_creation_tokens
         record["cache_read_tokens"] = cache_read_tokens
+
+    # BL-RBAC-DAY4-HARDENING (5/17): X-Catfish-Source header audit.
+    # 默认 'unknown' 不写字段减少噪音, 显式标的 (companion / plugin:xxx) 才记.
+    if source and source != "unknown":
+        record["source"] = source[:50]
 
     # 1. stderr log (实时可见, 给 ops 看)
     logger.info(json.dumps(record, ensure_ascii=False))

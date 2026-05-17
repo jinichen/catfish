@@ -1960,6 +1960,7 @@ async def _stream_chat_completion(
     model,
     security_concern: str | None = None,
     is_internal: bool = False,  # BL-F17 (5/5): internal 调用跳 record_usage
+    source_hint: str = "unknown",  # BL-RBAC-DAY4-HARDENING (5/17): X-Catfish-Source audit
     # BL-LEAN-SESSION teaching_mode 参数 已 DELETED (5/13 鸿波"全部清干净"):
     # 之前给 BL-FIX23 retry 的 _lean gate 用. retry 删了它就 dead arg.
     # _lean 控制 SOUL inject pipeline 那部分仍在 chat_completions 里 (1651), 不影响.
@@ -2259,6 +2260,8 @@ async def _stream_chat_completion(
             # usage 里). 抓不到 (非 Anthropic / fallback model) 默认 0.
             cache_creation_tokens=_stream_cache_creation,
             cache_read_tokens=_stream_cache_read,
+            # BL-RBAC-DAY4-HARDENING (5/17): X-Catfish-Source audit
+            source=source_hint,
         )
         output_transforms.DEFAULT_CHAIN.run(ctx)
 
@@ -2277,6 +2280,7 @@ async def _invoke_chat_completion(
     model,
     security_concern: str | None = None,
     is_internal: bool = False,  # BL-F17 (5/5): internal 调用跳 record_usage
+    source_hint: str = "unknown",  # BL-RBAC-DAY4-HARDENING (5/17): X-Catfish-Source audit
 ) -> dict[str, Any]:
     """Non-streaming chat completion path, with fallback chain support.
 
@@ -2383,6 +2387,8 @@ async def _invoke_chat_completion(
         security_concern=security_concern,
         cache_creation_tokens=cache_creation,
         cache_read_tokens=cache_read,
+        # BL-RBAC-DAY4-HARDENING (5/17): X-Catfish-Source audit
+        source=source_hint,
     )
     # 五一 sprint 5/2 收尾: 同步写 quota_events. ok 才记 (error 时 tokens=0).
     # BL-F17 (5/5): internal 调用跳 record_usage (audit log 仍写, 只 quota 跳).
@@ -2417,6 +2423,13 @@ async def chat_completions(
     is_internal_call = (
         request.headers.get("x-catfish-internal", "").lower() in ("true", "1", "yes")
     )
+
+    # BL-RBAC-DAY4-HARDENING (5/17, hermes 0.14 #23194 ctx.llm bypass 防御):
+    # Companion 显式标 X-Catfish-Source=companion. hermes plugin 内部 ctx.llm
+    # 调用如果没改 default 会留 unknown — audit 看 unknown 比例就知道部署里有
+    # 多少 plugin 在绕开. 真要堵需要客户 IT firewall 把 plugin 出口锁回 catfish.
+    # 字段进 audit log, 不阻塞 (绕 catfish 的 plugin 根本到不了我们这).
+    source_hint = request.headers.get("x-catfish-source", "").strip() or "unknown"
 
     if not user.can_access(model):
         raise HTTPException(status_code=403, detail=f"access denied to model: {model_name}")
@@ -2852,6 +2865,7 @@ async def chat_completions(
                 model_name=model_name, model=model,
                 security_concern=security_concern,
                 is_internal=is_internal_call,  # BL-F17: 透传, 跳 record_usage
+                source_hint=source_hint,  # BL-RBAC-DAY4-HARDENING (5/17)
                 # teaching_mode 透传 已 DELETED (5/13): _stream_chat_completion 不再用.
                 # _teaching_mode / _lean 控制 SOUL inject 在上面 1651 行已用过.
             ),
@@ -2862,6 +2876,7 @@ async def chat_completions(
         model_name=model_name, model=model,
         security_concern=security_concern,
         is_internal=is_internal_call,  # BL-F17: 透传, 跳 record_usage
+        source_hint=source_hint,  # BL-RBAC-DAY4-HARDENING (5/17)
     )
 
 
