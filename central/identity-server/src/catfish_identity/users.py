@@ -89,6 +89,10 @@ class IdentityUser:
     # 跟 allowed_models 同套语义, tools 维度. None = 继承 dept; [] = 全允许 override;
     # [t1, t2] = 收紧 (+ gateway 端 ALWAYS_ON_TOOLS 兜底 LLM agent loop 底座).
     allowed_tools: list[str] | None = None
+    # ── RBAC Day 5 (5/17 加, BL-RBAC-DAY5) ──
+    # skill 维度, glob pattern (catfish:* / hermes:bundled:* / hermes:github:owner/*).
+    # None = 继承 dept; [] = 全允许; [g1, g2] = 收紧到匹配的 skill.
+    allowed_skills: list[str] | None = None
 
     def effective_role(self) -> str:
         """实际生效的 role. 优先 role 字段, 兜底 tier.
@@ -127,6 +131,8 @@ class IdentityUser:
             "allowed_models_raw": self.allowed_models,
             # BL-RBAC-DAY4 (5/17): allowed_tools raw (gateway 走异步版拿 effective)
             "allowed_tools_raw": self.allowed_tools,
+            # BL-RBAC-DAY5 (5/17): allowed_skills raw (gateway 走异步版拿 effective)
+            "allowed_skills_raw": self.allowed_skills,
         }
 
     async def to_oidc_claims_async(self) -> dict:
@@ -137,6 +143,7 @@ class IdentityUser:
         """
         from .departments import (  # noqa: PLC0415
             get_effective_allowed_models,
+            get_effective_allowed_skills,
             get_effective_allowed_tools,
         )
 
@@ -155,6 +162,13 @@ class IdentityUser:
             user_department=self.department,
         )
         base["effective_allowed_tools"] = effective_tools
+        # BL-RBAC-DAY5 (5/17): effective_allowed_skills, gateway skills_inject 过滤
+        effective_skills = await get_effective_allowed_skills(
+            user_email=self.email,
+            user_allowed_skills=self.allowed_skills,
+            user_department=self.department,
+        )
+        base["effective_allowed_skills"] = effective_skills
         return base
 
 
@@ -286,7 +300,9 @@ class UserRegistry:
                     # BL-RBAC-DAY3A (5/17): allowed_models per-user 白名单
                     "allowed_models, "
                     # BL-RBAC-DAY4 (5/17): allowed_tools per-user 白名单
-                    "allowed_tools "
+                    "allowed_tools, "
+                    # BL-RBAC-DAY5 (5/17): allowed_skills per-user 白名单
+                    "allowed_skills "
                     "FROM users"
                 )
         except Exception as e:
@@ -325,6 +341,16 @@ class UserRegistry:
                     at = None
             if at is not None and not isinstance(at, list):
                 at = None
+            # BL-RBAC-DAY5 (5/17): allowed_skills 解析
+            ask = row.get("allowed_skills")
+            if isinstance(ask, str):
+                import json as _json  # noqa: PLC0415
+                try:
+                    ask = _json.loads(ask)
+                except Exception:
+                    ask = None
+            if ask is not None and not isinstance(ask, list):
+                ask = None
             loaded[email] = IdentityUser(
                 email=email,
                 password_hash=row["password_hash"],
@@ -346,6 +372,8 @@ class UserRegistry:
                 allowed_models=[str(m) for m in am] if isinstance(am, list) else None,
                 # BL-RBAC-DAY4: per-user tools 白名单 (None = 继承 dept)
                 allowed_tools=[str(t) for t in at] if isinstance(at, list) else None,
+                # BL-RBAC-DAY5: per-user skills 白名单 (None = 继承 dept)
+                allowed_skills=[str(s) for s in ask] if isinstance(ask, list) else None,
             )
         self._users = loaded
         logger.info("PG users 加载: %d 个用户 (覆盖 yaml)", len(loaded))
@@ -415,8 +443,8 @@ class UserRegistry:
                         "managed_departments, locked, locked_at, locked_by, deleted_at, "
                         "created_at, created_by, last_login_at, must_change_password, "
                         # BL-RBAC-DAY3A (5/17) allowed_models + DAY4 allowed_tools
-                        # (Day 3a 漏了 SELECT — parse 用 r.get 没 KeyError 但永远 None)
-                        "allowed_models, allowed_tools "
+                        # + DAY5 allowed_skills (一行 SELECT 三个 RBAC 维度)
+                        "allowed_models, allowed_tools, allowed_skills "
                         "FROM users"
                     )
                     where = []
@@ -462,6 +490,15 @@ class UserRegistry:
                             at = None
                     if at is not None and not isinstance(at, list):
                         at = None
+                    # BL-RBAC-DAY5: allowed_skills 解析
+                    ask = r.get("allowed_skills")
+                    if isinstance(ask, str):
+                        try:
+                            ask = _json.loads(ask)
+                        except Exception:
+                            ask = None
+                    if ask is not None and not isinstance(ask, list):
+                        ask = None
                     out.append(IdentityUser(
                         email=r["email"], password_hash=r["password_hash"],
                         name=r["name"] or "", department=r["department"] or "",
@@ -477,6 +514,7 @@ class UserRegistry:
                         must_change_password=bool(r["must_change_password"]),
                         allowed_models=[str(m) for m in am] if isinstance(am, list) else None,
                         allowed_tools=[str(t) for t in at] if isinstance(at, list) else None,
+                        allowed_skills=[str(s) for s in ask] if isinstance(ask, list) else None,
                     ))
                 return out
         # 内存 fallback (yaml only, 没 PG 时)

@@ -196,6 +196,12 @@ class OIDCProvider(AuthProvider):
             eat_list = [str(t) for t in eat_raw if t]
         else:
             eat_list = []
+        # BL-RBAC-DAY5 (5/17): effective_allowed_skills (glob pattern list)
+        eas_raw = payload.get("effective_allowed_skills", [])
+        if isinstance(eas_raw, list):
+            eas_list = [str(s) for s in eas_raw if s]
+        else:
+            eas_list = []
         return User(
             sub=sub,
             department=payload.get("department", ""),
@@ -206,4 +212,5 @@ class OIDCProvider(AuthProvider):
             auth_method=self.name,
             effective_allowed_models=eam_list,
             effective_allowed_tools=eat_list,
+            effective_allowed_skills=eas_list,
         )

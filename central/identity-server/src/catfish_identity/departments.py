@@ -43,6 +43,9 @@ class Department:
     # BL-RBAC-DAY4 (5/17): per-dept allowed_tools 白名单 (gateway tools_sanitizer 过滤).
     # [] = 全允许 (开放默认); [t1, t2] = 只这俩 + ALWAYS_ON_TOOLS 兜底.
     allowed_tools: list[str] = field(default_factory=list)
+    # BL-RBAC-DAY5 (5/17): per-dept allowed_skills glob (gateway skills_inject 过滤).
+    # [] = 全允许; [<ns>:<glob>] = namespace 维度 (catfish:* / hermes:bundled:* / etc).
+    allowed_skills: list[str] = field(default_factory=list)
 
     def is_open(self) -> bool:
         """allowed_models 为空 = 全允许 (开放默认)."""
@@ -61,6 +64,7 @@ class Department:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "allowed_tools": self.allowed_tools,
+            "allowed_skills": self.allowed_skills,
         }
 
 
@@ -88,7 +92,9 @@ class DepartmentRegistry:
                     "SELECT name, allowed_models, quota_models_day, description, "
                     "created_at, updated_at, "
                     # BL-RBAC-DAY4 (5/17): allowed_tools 加入
-                    "allowed_tools "
+                    "allowed_tools, "
+                    # BL-RBAC-DAY5 (5/17): allowed_skills 加入
+                    "allowed_skills "
                     "FROM departments"
                 )
         except Exception as e:
@@ -114,6 +120,15 @@ class DepartmentRegistry:
                     at = []
             if not isinstance(at, list):
                 at = []
+            # BL-RBAC-DAY5: allowed_skills 解析
+            ask = row.get("allowed_skills")
+            if isinstance(ask, str):
+                try:
+                    ask = json.loads(ask)
+                except Exception:
+                    ask = []
+            if not isinstance(ask, list):
+                ask = []
             loaded[row["name"]] = Department(
                 name=row["name"],
                 allowed_models=[str(m) for m in am],
@@ -122,6 +137,7 @@ class DepartmentRegistry:
                 created_at=row["created_at"].isoformat() if row.get("created_at") else None,
                 updated_at=row["updated_at"].isoformat() if row.get("updated_at") else None,
                 allowed_tools=[str(t) for t in at],
+                allowed_skills=[str(s) for s in ask],
             )
         self._cache = loaded
         self._loaded = True
@@ -211,3 +227,32 @@ async def get_effective_allowed_tools(
         )
         return []
     return dept.allowed_tools
+
+
+async def get_effective_allowed_skills(
+    user_email: str,
+    user_allowed_skills: list[str] | None,
+    user_department: str,
+) -> list[str]:
+    """BL-RBAC-DAY5 (5/17): 合并 user.allowed_skills + dept.allowed_skills.
+
+    跟 allowed_models / allowed_tools 同决议. 但 skill list 是 **glob pattern**:
+    返回的每条形如 `catfish:*` / `hermes:bundled:*` / `hermes:github:owner/*`,
+    gateway 端按 fnmatch 匹配 skill 的 namespaced name (skills_loader 推导).
+
+    返 [] = 全允许. 返 [g1, g2] = 只允许命中这俩 glob 的 skill.
+    """
+    if user_allowed_skills is not None:
+        return user_allowed_skills
+
+    if not user_department:
+        return []
+
+    dept = await get_global_registry().get(user_department)
+    if dept is None:
+        logger.warning(
+            "user %s 的 department=%r 不在 departments 表, skills fallback 全允许",
+            user_email, user_department,
+        )
+        return []
+    return dept.allowed_skills

@@ -102,6 +102,14 @@ class InjectContext:
     #: 调试模式 — Registry 打印每 provider 实际 inject 字节数 / 截断 (audit 用)
     debug: bool = False
 
+    #: BL-RBAC-DAY5 (5/17): user.effective_allowed_skills glob list (从 OIDC claim).
+    #: [] = 全允许 (开放默认). SkillsCatalogProvider 用 fnmatch 过滤 skill 列表.
+    #: None = 没设 (匿名 / 内部调用), 不过滤.
+    effective_allowed_skills: list[str] | None = None
+
+    #: BL-RBAC (5/10 BL-ARCH1 P1): user 是不是 sysadmin (绕过所有 RBAC).
+    is_sysadmin: bool = False
+
 
 @runtime_checkable
 class MemoryProvider(Protocol):

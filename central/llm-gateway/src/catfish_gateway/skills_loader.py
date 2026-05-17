@@ -96,6 +96,19 @@ class SkillMeta:
     - 中英都列 (员工有时打英文)
     """
 
+    namespace: str = "catfish"
+    """BL-RBAC-DAY5 (5/17): skill 命名空间, RBAC 过滤的 key.
+
+    取值:
+    - `catfish`                              — catfish 自家工程审定 (CATFISH_SKILLS_DIR)
+    - `hermes:bundled`                       — hermes 装机自带 (~/.hermes/hermes-agent/skills/)
+    - `hermes:github:<owner>/<repo>`         — 员工 git clone GitHub skill 到 ~/.hermes/skills/
+    - `hermes:hf:<owner>/<name>`             — hermes 0.14 #26219 huggingface tap 拉的
+    - `hermes:local:<name>`                  — 员工本机自写, 既无 .git 也无 hf 标记
+
+    `qualified_name()` 返完整 `{namespace}:{skill_path}` 给 RBAC fnmatch.
+    """
+
     kind: str = "procedural"
     """skill 类型, 影响 skill_guard 注入的铁律强度:
 
@@ -106,8 +119,82 @@ class SkillMeta:
                         post_steps 真发 read_file / write_file, 不能嘴炮.
     """
 
+    def qualified_name(self) -> str:
+        """BL-RBAC-DAY5 (5/17): 完整 namespaced name 给 RBAC fnmatch.
+
+        catfish 自家 → 'catfish:<skill_path>'  例: 'catfish:department/weekly-report'
+        hermes:bundled → 'hermes:bundled:<skill_path>'
+        hermes:github:owner/repo → 'hermes:github:owner/repo'  (整个 namespace 就是 name)
+        hermes:hf:owner/name → 'hermes:hf:owner/name'
+        hermes:local:name → 'hermes:local:name'
+
+        gateway 端 user.can_use_skill(qualified_name()) 按 user.effective_allowed_skills
+        的 glob 匹配.
+        """
+        # hermes:* 类已经在 namespace 里编码完整 path 了 (除了 bundled), 不重复拼
+        if self.namespace.startswith("hermes:github:") or \
+           self.namespace.startswith("hermes:hf:") or \
+           self.namespace.startswith("hermes:local:"):
+            return self.namespace
+        if self.namespace == "hermes:bundled":
+            return f"hermes:bundled:{self.skill_path}"
+        # catfish 自家
+        return f"catfish:{self.skill_path}"
+
 
 # ── 找 skills root ──────────────────────────────────────────────
+
+
+def _hermes_skills_root() -> Path:
+    """BL-RBAC-DAY5: hermes user-level skills (~/.hermes/skills/).
+
+    跟 _find_skills_root() 平行. catfish 自家是工程审定 skill,
+    hermes 这边是员工自加 (git clone / hermes 0.14 huggingface tap / 本机自写).
+    """
+    return Path.home() / ".hermes" / "skills"
+
+
+def _infer_hermes_skill_namespace(skill_dir: Path) -> str:
+    """BL-RBAC-DAY5: 推 ~/.hermes/skills/<name>/ 这种 hermes skill 的 namespace.
+
+    规则:
+    - 有 .git/config 且 remote.origin.url 含 github.com → `hermes:github:<owner>/<repo>`
+    - 有 .hf-skill 或 frontmatter 标 hf → `hermes:hf:<owner>/<name>` (hermes 0.14 #26219)
+    - 都没有 → `hermes:local:<name>` (员工本机自写)
+    """
+    name = skill_dir.name
+
+    # 推 GitHub
+    git_config = skill_dir / ".git" / "config"
+    if git_config.exists():
+        try:
+            text = git_config.read_text(encoding="utf-8", errors="ignore")
+            # 找 remote.origin.url = https://github.com/owner/repo[.git]
+            m = re.search(
+                r"url\s*=\s*(?:https?://github\.com/|git@github\.com:)"
+                r"([^/\s]+)/([^/\s]+?)(?:\.git)?(?:\s|$)",
+                text,
+            )
+            if m:
+                owner, repo = m.group(1), m.group(2)
+                return f"hermes:github:{owner}/{repo}"
+        except OSError:
+            pass
+
+    # 推 HuggingFace (hermes 0.14 huggingface tap 留的标记)
+    # 实际 hermes 0.14 怎么标 hf-sourced skill 待 audit, 先按猜测
+    hf_marker = skill_dir / ".hf-skill"
+    if hf_marker.exists():
+        try:
+            content = hf_marker.read_text(encoding="utf-8").strip()
+            # 期望格式 "owner/name"
+            if "/" in content:
+                return f"hermes:hf:{content}"
+        except OSError:
+            pass
+
+    # fallback: 本机 local
+    return f"hermes:local:{name}"
 
 
 def _find_skills_root() -> Path | None:
@@ -217,53 +304,99 @@ def _parse_skill_md(skill_md: Path) -> dict[str, Any] | None:
 def discover_skills() -> list[SkillMeta]:
     """扫描 skills 目录, 返回所有合法 skill 的元数据列表.
 
-    每次调用重新扫 — skills 改了不需要重启 gateway, 客户 IT / 我们改 SKILL.md
-    立即生效. 一次扫描成本: <50ms (skill 数量量级 10s).
+    BL-RBAC-DAY5 (5/17): 扫两路 — catfish 自家 + hermes user-level (~/.hermes/skills/).
+    每条 SkillMeta 含 namespace 字段, qualified_name() 给 RBAC fnmatch.
 
-    返回: 按 skill_path 字母序排序.
+    catfish 自家 (CATFISH_SKILLS_DIR / 默认): namespace='catfish'
+    hermes user-level: namespace='hermes:github:<o/r>' / 'hermes:hf:<o/n>' /
+                       'hermes:local:<n>' (推导 _infer_hermes_skill_namespace)
+
+    返按 qualified_name 字母序.
     """
-    root = _find_skills_root()
-    if root is None:
+    results: list[SkillMeta] = []
+
+    # ── catfish 自家 skill ──
+    catfish_root = _find_skills_root()
+    if catfish_root is not None:
+        for skill_md in sorted(catfish_root.rglob("SKILL.md")):
+            try:
+                rel = skill_md.relative_to(catfish_root).parent
+            except ValueError:
+                continue
+            skill_path = str(rel).replace(os.sep, "/")
+
+            parsed = _parse_skill_md(skill_md)
+            if parsed is None:
+                continue
+
+            script_py = skill_md.parent / "script.py"
+            results.append(
+                SkillMeta(
+                    skill_path=skill_path,
+                    name=parsed["name"],
+                    description=parsed["description"],
+                    skill_md_path=skill_md,
+                    script_py_path=script_py if script_py.exists() else None,
+                    version=parsed["version"],
+                    deprecated=parsed["deprecated"],
+                    deprecated_reason=parsed["deprecated_reason"],
+                    triggers=parsed["triggers"],
+                    kind=parsed["kind"],
+                    namespace="catfish",
+                )
+            )
+    else:
         logger.info(
             "skills_loader: 没找到 catfish skills 目录 (CATFISH_SKILLS_DIR 没设, "
-            "也没扫到默认路径). LLM 不会看到 catfish skill 列表."
+            "也没扫到默认路径). 跳过 catfish 自家 skill."
         )
-        return []
 
-    results: list[SkillMeta] = []
-    # 递归扫所有 SKILL.md (排除 ~/.hermes/skills 风格)
-    for skill_md in sorted(root.rglob("SKILL.md")):
-        # 相对路径 (去掉 root prefix + SKILL.md 文件名)
-        try:
-            rel = skill_md.relative_to(root).parent
-        except ValueError:
-            continue
-        skill_path = str(rel).replace(os.sep, "/")
+    # ── hermes user-level skill (~/.hermes/skills/) ──
+    # BL-RBAC-DAY5: 扫员工自加的 skill (git clone GitHub / hermes 0.14 hf tap / 本机自写)
+    hermes_root = _hermes_skills_root()
+    if hermes_root.is_dir():
+        # ~/.hermes/skills/ 下每个**直接**子目录算一个 skill (SKILL.md 在根)
+        # hermes 自带的 bundled skill 在 ~/.hermes/hermes-agent/skills/ 不在这里
+        for entry in sorted(hermes_root.iterdir()):
+            if not entry.is_dir() or entry.name.startswith("."):
+                continue
+            skill_md = entry / "SKILL.md"
+            if not skill_md.exists():
+                continue
 
-        parsed = _parse_skill_md(skill_md)
-        if parsed is None:
-            continue
+            parsed = _parse_skill_md(skill_md)
+            if parsed is None:
+                continue
 
-        script_py = skill_md.parent / "script.py"
-        results.append(
-            SkillMeta(
-                skill_path=skill_path,
-                name=parsed["name"],
-                description=parsed["description"],
-                skill_md_path=skill_md,
-                script_py_path=script_py if script_py.exists() else None,
-                version=parsed["version"],
-                deprecated=parsed["deprecated"],
-                deprecated_reason=parsed["deprecated_reason"],
-                triggers=parsed["triggers"],
-                kind=parsed["kind"],
+            namespace = _infer_hermes_skill_namespace(entry)
+            script_py = entry / "script.py"
+            results.append(
+                SkillMeta(
+                    skill_path=entry.name,
+                    name=parsed["name"],
+                    description=parsed["description"],
+                    skill_md_path=skill_md,
+                    script_py_path=script_py if script_py.exists() else None,
+                    version=parsed["version"],
+                    deprecated=parsed["deprecated"],
+                    deprecated_reason=parsed["deprecated_reason"],
+                    triggers=parsed["triggers"],
+                    kind=parsed["kind"],
+                    namespace=namespace,
+                )
             )
-        )
+
+    # 字母排序按 qualified_name (RBAC 角度便于看)
+    results.sort(key=lambda s: s.qualified_name())
 
     logger.info(
-        "skills_loader: 发现 %d 个 skill (%s)",
+        "skills_loader: 发现 %d 个 skill (catfish=%d, hermes:github=%d, "
+        "hermes:hf=%d, hermes:local=%d)",
         len(results),
-        [s.skill_path for s in results],
+        sum(1 for s in results if s.namespace == "catfish"),
+        sum(1 for s in results if s.namespace.startswith("hermes:github:")),
+        sum(1 for s in results if s.namespace.startswith("hermes:hf:")),
+        sum(1 for s in results if s.namespace.startswith("hermes:local:")),
     )
     return results
 

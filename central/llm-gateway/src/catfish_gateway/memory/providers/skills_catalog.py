@@ -78,12 +78,44 @@ class SkillsCatalogProvider:
                 )
                 return None
 
-        from ...skills_inject import _get_skills_block  # noqa: PLC0415
+        # BL-RBAC-DAY5 (5/17): 按 user.effective_allowed_skills RBAC 过滤
+        # skill 列表后再 render. 空 list / None / sysadmin → 不过滤.
+        from ...skills_loader import discover_skills, format_skills_block  # noqa: PLC0415
 
         try:
-            block = _get_skills_block()
+            all_skills = discover_skills()
         except Exception as e:  # noqa: BLE001
-            logger.warning("SkillsCatalogProvider _get_skills_block 失败: %s", e)
+            logger.warning("SkillsCatalogProvider discover_skills 失败: %s", e)
+            return None
+
+        # RBAC 过滤
+        if ctx.is_sysadmin or not ctx.effective_allowed_skills:
+            # sysadmin / 没 RBAC 配置 / 空 list (全允许) → 不过滤
+            filtered = all_skills
+        else:
+            import fnmatch  # noqa: PLC0415
+            filtered = []
+            for s in all_skills:
+                qn = s.qualified_name()
+                if any(fnmatch.fnmatchcase(qn, p) for p in ctx.effective_allowed_skills):
+                    filtered.append(s)
+            dropped = len(all_skills) - len(filtered)
+            if dropped > 0:
+                logger.info(
+                    "BL-RBAC-DAY5: drop %d/%d skill per user.allowed_skills "
+                    "(user=%s dept=%s patterns=%s)",
+                    dropped, len(all_skills),
+                    ctx.user_sub, ctx.user_dept,
+                    ctx.effective_allowed_skills[:5],
+                )
+
+        if not filtered:
+            return None
+
+        try:
+            block = format_skills_block(filtered)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("SkillsCatalogProvider format_skills_block 失败: %s", e)
             return None
         if not block or not block.strip():
             return None

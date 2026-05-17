@@ -59,6 +59,10 @@ class User:
     # 跟 allowed_models 同语义. gateway tools_sanitizer 用它过滤 LLM tool 列表.
     # ALWAYS_ON_TOOLS 永远兜底, 不被这个列表 drop.
     effective_allowed_tools: list[str] = None  # type: ignore[assignment]
+    # BL-RBAC-DAY5 (5/17): allowed_skills glob list from OIDC effective_allowed_skills.
+    # 跟 allowed_tools 同语义但 glob 匹配 (namespace:pattern, fnmatch). gateway
+    # skills_inject 用它过滤 LLM 看到的 skill catalog.
+    effective_allowed_skills: list[str] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         if self.managed_departments is None:
@@ -67,6 +71,8 @@ class User:
             self.effective_allowed_models = []
         if self.effective_allowed_tools is None:
             self.effective_allowed_tools = []
+        if self.effective_allowed_skills is None:
+            self.effective_allowed_skills = []
 
     def can_access(self, model) -> bool:
         """BL-RBAC-DAY3B (5/17): 真 RBAC. effective_allowed_models 空 = 全允许.
@@ -97,6 +103,27 @@ class User:
         if not isinstance(tool_name, str) or not tool_name:
             return False
         return tool_name in self.effective_allowed_tools
+
+    def can_use_skill(self, skill_name: str) -> bool:
+        """BL-RBAC-DAY5 (5/17): skill 维度 RBAC, glob 匹配.
+
+        skill_name 是 namespaced (`catfish:weekly-report` /
+        `hermes:github:zarazhangrui/frontend-slides` / 等), 由 skills_loader
+        推导. effective_allowed_skills 是 glob pattern list.
+
+        sysadmin 永远绕过. 空 list = 全允许.
+        """
+        if self.is_sysadmin():
+            return True
+        if not self.effective_allowed_skills:
+            return True  # 空 = 全允许
+        if not isinstance(skill_name, str) or not skill_name:
+            return False
+        import fnmatch  # noqa: PLC0415
+        for pattern in self.effective_allowed_skills:
+            if fnmatch.fnmatchcase(skill_name, pattern):
+                return True
+        return False
 
     def is_sysadmin(self) -> bool:
         """BL-ARCH1 P1 (5/10): 超级管理员, identity-server users.yaml tier=sysadmin."""

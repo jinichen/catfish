@@ -2540,6 +2540,9 @@ async def chat_completions(
         last_user_message=_extract_user_query(body["messages"]),
         model_name=model.name,
         is_internal_call=is_internal_call,
+        # BL-RBAC-DAY5 (5/17): 传 user 的 RBAC 字段, SkillsCatalogProvider 过滤
+        effective_allowed_skills=list(getattr(user, "effective_allowed_skills", []) or []),
+        is_sysadmin=bool(getattr(user, "is_sysadmin", lambda: False)()) if callable(getattr(user, "is_sysadmin", None)) else False,
     )
     # BL-MEMORY-UNIFIED-INJECT (5/17 切默认): env flag 切 unified (维度分组) vs legacy (5 段并列).
     # 默认 **unified** (1). 撞 bug 立 CATFISH_MEMORY_UNIFIED=0 回退 legacy.
