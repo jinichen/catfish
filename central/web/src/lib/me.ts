@@ -28,17 +28,9 @@ export interface QuotaWindow {
   limit: number; // 0 = 不限
 }
 
-export interface QuotaMe {
-  user_email: string;
-  department: string;
-  minute: QuotaWindow;
-  day: QuotaWindow;
-  department_day: QuotaWindow;
-}
-
-export async function fetchQuotaMe(): Promise<QuotaMe> {
-  return api.get<QuotaMe>("/api/quota/me");
-}
+// BL-CENTRAL-WEB-PURGE-MEPAGE (5/17 鸿波): QuotaMe + fetchQuotaMe 删 — 中央 web
+// /me 整页删, 员工自查配额走桌面 Companion. /api/quota/me 后端 endpoint 仍
+// 保留 (Companion 调). DepartmentQuota 给 manager 视角看本部门, 不删.
 
 export interface DepartmentQuota {
   department: string;

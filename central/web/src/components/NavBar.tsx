@@ -19,11 +19,11 @@ export function NavBar() {
   const isAdminOrAbove = me?.role === "admin" || me?.role === "sysadmin";
   const isSysadmin = me?.role === "sysadmin";
 
-  // BL-CENTRAL-WEB-PURGE-USERDATA (5/17 鸿波): 删 "📚 会话" / "📊 看板" 两个 nav —
-  // 它们读员工本机 ~/.hermes/state.db + ~/.catfish/tasks.jsonl, 违反
-  // BL-CENTRAL-EDGE-BOUNDARY 规则 (中央端不碰用户数据). 这俩功能 Companion 自己有.
+  // BL-CENTRAL-WEB-PURGE-USERDATA + BL-CENTRAL-WEB-PURGE-MEPAGE (5/17 鸿波):
+  // 删 "我的" / "📚 会话" / "📊 看板" 3 个 nav. 这些页面都暴露员工本机/
+  // 个性化数据 (state.db / tasks.jsonl / 画像名称等), 违 BL-CENTRAL-EDGE-BOUNDARY.
+  // 员工自查身份/配额/会话/看板 → 桌面 Companion app. 中央 web 留管理 + 审计.
   const links: Array<{ to: string; label: string; show: boolean }> = [
-    { to: "/me", label: "我的", show: true },
     { to: "/skills", label: "Skills Hub", show: true },
     { to: "/mcp", label: "MCP 市场", show: true },
     { to: "/manager", label: "部门", show: isManagerOrAbove },

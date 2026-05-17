@@ -30,7 +30,9 @@ import { getCurrentUser, handleCallback, login } from "./lib/auth";
 import { useAuthStore } from "./store/auth";
 
 import { HomePage } from "./routes/HomePage";
-import { MePage } from "./routes/MePage";
+// BL-CENTRAL-WEB-PURGE-MEPAGE (5/17 鸿波): 删 MePage — 3 张卡里第 3 张列了员工
+// 本机数据具体概念名 (writing_style / employee_journal / session_facts 等),
+// 违 BL-CENTRAL-EDGE-BOUNDARY spirit. 员工自查身份 / 配额 → Companion 桌面 app.
 import { SkillsHubPage } from "./routes/SkillsHubPage";
 import { McpMarketPage } from "./routes/McpMarketPage";
 import { ManagerPage } from "./routes/ManagerPage";
@@ -170,11 +172,11 @@ export function App() {
       >
         <Routes>
           <Route path="/" element={<HomePage />} />
-          <Route path="/me" element={<MePage />} />
-          {/* BL-CENTRAL-WEB-PURGE-USERDATA (5/17 鸿波):
-              /sessions + /kanban 删了 — 它们读员工本机 state.db + tasks.jsonl,
-              违反 BL-CENTRAL-EDGE-BOUNDARY 规则. 这俩功能 Companion 自己有.
-              老链接 redirect 回首页 (员工开 Companion 看会话 / 看板). */}
+          {/* BL-CENTRAL-WEB-PURGE-USERDATA + BL-CENTRAL-WEB-PURGE-MEPAGE
+              (5/17 鸿波): 删 /me /sessions /kanban 三页 — 都涉及员工本机/
+              个性化数据展示, 违 BL-CENTRAL-EDGE-BOUNDARY 规则. 员工自查身份/
+              配额/会话/看板 → 桌面 Companion app. 老链接 redirect 到首页. */}
+          <Route path="/me" element={<Navigate to="/" replace />} />
           <Route path="/sessions" element={<Navigate to="/" replace />} />
           <Route path="/sessions/*" element={<Navigate to="/" replace />} />
           <Route path="/kanban" element={<Navigate to="/" replace />} />

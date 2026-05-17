@@ -34,8 +34,8 @@ export function HomePage() {
       >
         <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
           <p>
-            这是<b>鲶鱼中央门户</b> — 跨员工 / 跨部门 / 管理类功能在这里看.
-            日常对话 / 桌宠 / 我的画像 还是在桌面 Companion app 里看.
+            这是<b>鲶鱼中央门户</b> — 只看跨员工 / 跨部门 / 管理类功能.
+            日常对话 / 我自己的配额 / 会话历史 / 个性化数据请在桌面 Companion app 里看.
           </p>
           <p>
             你的角色: <b>{me.role}</b>
@@ -60,12 +60,8 @@ export function HomePage() {
           gap: "var(--space-3)",
         }}
       >
-        <NavTile
-          to="/me"
-          icon="👤"
-          title="我的概览"
-          desc="今日用量 / 我装的 skill / mcp"
-        />
+        {/* BL-CENTRAL-WEB-PURGE-MEPAGE (5/17): "我的概览" tile 砍, /me 整页废.
+            员工自查身份 / 配额 / 画像 / skill 列表 → 桌面 Companion app. */}
         <NavTile
           to="/skills"
           icon="🛠️"
