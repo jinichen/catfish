@@ -17,39 +17,91 @@ export function HomePage() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+      {/* BL-CENTRAL-WEB-CONSOLIDATE (5/17 鸿波): Hero 改造 — 讲清"中央门户瘦, 边缘
+          Companion 厚"的叙事. 防员工登进来 nav 看着稀觉得"啥也没". */}
       <Card
         title={
-          // BL-ARCH1 P3 (5/10): 标题加 logo, 跟 NavBar 一致, 不再 emoji 拼字符串
           <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
             <img
               src="/catfish-logo.svg"
               alt=""
-              width={20}
-              height={20}
+              width={24}
+              height={24}
               style={{ display: "block" }}
             />
-            欢迎, {me.email.split("@")[0]}
+            <span style={{ fontSize: 18 }}>鲶鱼中央门户</span>
+            <span
+              style={{
+                fontSize: 12,
+                color: "var(--text-muted)",
+                fontWeight: 400,
+              }}
+            >
+              · 跨员工管理 + 共享市场
+            </span>
           </span>
         }
       >
-        <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
-          <p>
-            这是<b>鲶鱼中央门户</b> — 只看跨员工 / 跨部门 / 管理类功能.
-            日常对话 / 我自己的配额 / 会话历史 / 个性化数据请在桌面 Companion app 里看.
-          </p>
-          <p>
-            你的角色: <b>{me.role}</b>
+        <div
+          style={{ color: "var(--text)", fontSize: 14, lineHeight: 1.7 }}
+        >
+          <div style={{ marginBottom: "var(--space-3)" }}>
+            欢迎 <b>{me.email.split("@")[0]}</b>. 中央门户只看 3 类事:
+          </div>
+          <ul
+            style={{
+              paddingLeft: 0,
+              listStyle: "none",
+              margin: 0,
+              display: "flex",
+              flexDirection: "column",
+              gap: 4,
+            }}
+          >
+            <li>📦 跨员工 / 跨部门 <b>资源市场</b> — Skills / MCP / 共享工具</li>
+            {isManagerOrAdmin && (
+              <li>👥📜 <b>部门管理 + 审计</b> — 本部门用量 / top 员工 / 历史调用</li>
+            )}
+            {isAdmin && (
+              <li>⚙️ <b>Admin 后台</b> — 用户 / 配额 / billing / 部门 RBAC</li>
+            )}
+            {isSysadmin && (
+              <li>🔐 <b>系统管理</b> — 服务状态 / 操作审计 / 危险操作</li>
+            )}
+          </ul>
+          <div
+            style={{
+              marginTop: "var(--space-4)",
+              padding: "var(--space-3)",
+              background: "var(--bg-elev)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius-sm)",
+              fontSize: 13,
+              color: "var(--text-muted)",
+            }}
+          >
+            💡 <b>日常对话 / 我的配额 / 会话历史 / 画像 / 印象 / 个性化设置</b>{" "}
+            请打开桌面 <b>Companion app</b>. 中央门户故意做薄, 员工数据不离本机.
+          </div>
+          <div
+            style={{
+              marginTop: "var(--space-3)",
+              fontSize: 11,
+              color: "var(--text-muted)",
+            }}
+          >
+            你的角色 <b>{me.role}</b>
             {me.department && (
               <>
-                {" · "}部门: <b>{me.department}</b>
+                {" · "}部门 <b>{me.department}</b>
               </>
             )}
             {me.managed_departments.length > 0 && (
               <>
-                {" · "}管的部门: <b>{me.managed_departments.join(", ")}</b>
+                {" · "}管 <b>{me.managed_departments.join(", ")}</b>
               </>
             )}
-          </p>
+          </div>
         </div>
       </Card>
 
@@ -60,19 +112,11 @@ export function HomePage() {
           gap: "var(--space-3)",
         }}
       >
-        {/* BL-CENTRAL-WEB-PURGE-MEPAGE (5/17): "我的概览" tile 砍, /me 整页废.
-            员工自查身份 / 配额 / 画像 / skill 列表 → 桌面 Companion app. */}
         <NavTile
-          to="/skills"
-          icon="🛠️"
-          title="Skills Hub"
-          desc="全公司 skill 市场 · 浏览 / publish / 评分"
-        />
-        <NavTile
-          to="/mcp"
-          icon="🔌"
-          title="MCP 连接器市场"
-          desc="Jira / GitLab / 飞书 等 60+ 工具"
+          to="/market"
+          icon="📦"
+          title="资源市场"
+          desc="Skills (技能脚本) · MCP (连接器) · 全公司共享"
         />
         {isManagerOrAdmin && (
           <NavTile

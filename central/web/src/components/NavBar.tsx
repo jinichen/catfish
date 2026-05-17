@@ -19,16 +19,17 @@ export function NavBar() {
   const isAdminOrAbove = me?.role === "admin" || me?.role === "sysadmin";
   const isSysadmin = me?.role === "sysadmin";
 
-  // BL-CENTRAL-WEB-PURGE-USERDATA + BL-CENTRAL-WEB-PURGE-MEPAGE (5/17 鸿波):
-  // 删 "我的" / "📚 会话" / "📊 看板" 3 个 nav. 这些页面都暴露员工本机/
-  // 个性化数据 (state.db / tasks.jsonl / 画像名称等), 违 BL-CENTRAL-EDGE-BOUNDARY.
-  // 员工自查身份/配额/会话/看板 → 桌面 Companion app. 中央 web 留管理 + 审计.
+  // BL-CENTRAL-WEB-CONSOLIDATE (5/17 鸿波): 5 项 nav 按权限阶梯排列, emoji 全统一.
+  // 普通员工看到 📦 市场 (Skills + MCP 合一); manager+ 加 👥 部门 + 📜 审计;
+  // admin+ 加 ⚙️ Admin; sysadmin 加 🔐 系统.
+  //
+  // 之前删的 "我的" / "📚 会话" / "📊 看板" 都是个人数据展示, 违
+  // BL-CENTRAL-EDGE-BOUNDARY. 员工自查 → 桌面 Companion app.
   const links: Array<{ to: string; label: string; show: boolean }> = [
-    { to: "/skills", label: "Skills Hub", show: true },
-    { to: "/mcp", label: "MCP 市场", show: true },
-    { to: "/manager", label: "部门", show: isManagerOrAbove },
-    { to: "/audit", label: "审计", show: isManagerOrAbove },
-    { to: "/admin", label: "Admin", show: isAdminOrAbove },
+    { to: "/market", label: "📦 市场", show: true },
+    { to: "/manager", label: "👥 部门", show: isManagerOrAbove },
+    { to: "/audit", label: "📜 审计", show: isManagerOrAbove },
+    { to: "/admin", label: "⚙️ Admin", show: isAdminOrAbove },
     { to: "/admin/system", label: "🔐 系统", show: isSysadmin },
   ];
 

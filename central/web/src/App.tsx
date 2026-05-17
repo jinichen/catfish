@@ -30,11 +30,11 @@ import { getCurrentUser, handleCallback, login } from "./lib/auth";
 import { useAuthStore } from "./store/auth";
 
 import { HomePage } from "./routes/HomePage";
-// BL-CENTRAL-WEB-PURGE-MEPAGE (5/17 鸿波): 删 MePage — 3 张卡里第 3 张列了员工
-// 本机数据具体概念名 (writing_style / employee_journal / session_facts 等),
-// 违 BL-CENTRAL-EDGE-BOUNDARY spirit. 员工自查身份 / 配额 → Companion 桌面 app.
-import { SkillsHubPage } from "./routes/SkillsHubPage";
-import { McpMarketPage } from "./routes/McpMarketPage";
+// BL-CENTRAL-WEB-PURGE-MEPAGE (5/17 鸿波): 删 MePage — 个人数据展示违
+// BL-CENTRAL-EDGE-BOUNDARY spirit. 员工自查 → Companion 桌面 app.
+// BL-CENTRAL-WEB-CONSOLIDATE (5/17): Skills Hub + MCP 市场合到 /market 下,
+// 2 个 sub-tab. 本质同类 (LLM plugin marketplace).
+import { MarketPage } from "./routes/MarketPage";
 import { ManagerPage } from "./routes/ManagerPage";
 import { AdminPage } from "./routes/AdminPage";
 import { AuditPage } from "./routes/AuditPage";
@@ -180,8 +180,13 @@ export function App() {
           <Route path="/sessions" element={<Navigate to="/" replace />} />
           <Route path="/sessions/*" element={<Navigate to="/" replace />} />
           <Route path="/kanban" element={<Navigate to="/" replace />} />
-          <Route path="/skills/*" element={<SkillsHubPage />} />
-          <Route path="/mcp/*" element={<McpMarketPage />} />
+          {/* BL-CENTRAL-WEB-CONSOLIDATE (5/17 鸿波): Skills + MCP 合并到 /market.
+              老 /skills/* /mcp/* 自动 redirect 到 /market/* 保 bookmark 不破. */}
+          <Route path="/market/*" element={<MarketPage />} />
+          <Route path="/skills" element={<Navigate to="/market/skills" replace />} />
+          <Route path="/skills/*" element={<Navigate to="/market/skills" replace />} />
+          <Route path="/mcp" element={<Navigate to="/market/mcp" replace />} />
+          <Route path="/mcp/*" element={<Navigate to="/market/mcp" replace />} />
           <Route path="/manager/*" element={<ManagerPage />} />
           <Route path="/admin/*" element={<AdminPage />} />
           <Route path="/audit" element={<AuditPage />} />

@@ -75,7 +75,7 @@ function SkillList() {
         title={`Skills Hub · ${skills.length} skill / ${namespaces.length} namespace`}
         action={
           <Link
-            to="/skills/publish"
+            to="/market/skills/publish"
             style={{
               background: "var(--accent)",
               color: "white",
@@ -110,7 +110,7 @@ function SkillList() {
         <Card title="还没人发布过 skill">
           <div style={{ color: "var(--text-muted)" }}>
             写完一个 skill 后, 让小鲶帮你发布 (调 catfish_skill_publish), 或者
-            <Link to="/skills/publish"> 在这里直接上传</Link>.
+            <Link to="/market/skills/publish"> 在这里直接上传</Link>.
           </div>
         </Card>
       )}
@@ -137,7 +137,7 @@ function SkillList() {
             {grouped[ns].map((s) => (
               <Link
                 key={`${s.namespace}/${s.name}`}
-                to={`/skills/${s.namespace}/${s.name}`}
+                to={`/market/skills/${s.namespace}/${s.name}`}
                 style={{
                   background: "var(--bg-elev)",
                   border: "1px solid var(--border)",
@@ -229,7 +229,7 @@ function SkillDetail() {
     const r = await deleteSkillVersion(detail.namespace, detail.name, detail.version);
     setBusy(false);
     if (r.ok) {
-      navigate("/skills");
+      navigate("/market/skills");
     } else {
       alert(`删除失败: ${r.error}`);
     }
@@ -436,7 +436,7 @@ function PublishForm() {
           </button>
           <button
             type="button"
-            onClick={() => navigate("/skills")}
+            onClick={() => navigate("/market/skills")}
             style={{
               background: "transparent",
               border: "1px solid var(--border)",

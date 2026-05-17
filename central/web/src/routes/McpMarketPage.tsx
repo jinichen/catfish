@@ -59,7 +59,7 @@ function McpList() {
         {allowed.map((c) => (
           <Link
             key={c.id}
-            to={`/mcp/${c.id}`}
+            to={`/market/mcp/${c.id}`}
             style={{
               background: "var(--bg-elev)",
               border: "1px solid var(--border)",
