@@ -248,15 +248,23 @@ def _internal_loopback_url() -> str:
     return f"http://{host}:{port}"
 
 
-async def _llm_distill_chunk(chunk: str, *, timeout: float = 60.0) -> str | None:
+async def _llm_distill_chunk(
+    chunk: str, *, model_name: str, timeout: float = 60.0,
+) -> str | None:
     """走 gateway loopback 调 LLM 抽 chunk 关键事实.
 
     返 markdown bullet 文本 (或 None 失败). 失败不抛 — distill 后台异步, 不阻塞 chat.
 
-    用 catfish-public-qwen-flash (轻模型, fallback chain 内置). 通过 internal token
-    走 X-Catfish-Internal header, 跳 quota check (后台扫不算员工配额).
+    BL-INTERNAL-MODEL-FOLLOW-USER-DISTILL (5/17 鸿波 'memory_distill 用 qwen-flash
+    不是员工 nemotron'): model_name 必须由 caller 解析员工最近 session 的 model
+    传进来. 严格 1 candidate, 不 fallback (跟 summarizer / proactive / a2a / facts
+    同套路). 通过 internal token 走 X-Catfish-Internal header, 跳 quota check.
     """
     if not chunk.strip():
+        return None
+    if not model_name:
+        # 调用方应已解析过, 防御性 guard
+        logger.debug("memory_distill _llm_distill_chunk: 没拿到 model_name, 跳过")
         return None
     try:
         # lazy import 避免循环 + 测试 mock 容易
@@ -270,7 +278,7 @@ async def _llm_distill_chunk(chunk: str, *, timeout: float = 60.0) -> str | None
     token = ensure_internal_dev_token()
     url = _internal_loopback_url() + "/v1/chat/completions"
     payload = {
-        "model": "catfish-public-qwen-flash",
+        "model": model_name,
         "messages": [
             {"role": "system", "content": _LLM_DISTILL_SYSTEM_PROMPT},
             {"role": "user", "content": chunk},
@@ -615,23 +623,29 @@ def _format_distilled_header() -> str:
 async def maybe_run_llm_distillation(
     journal_text: str | None = None,
     *,
+    user_email: str | None = None,
     only_old_segments: bool = True,
 ) -> str | None:
     """真 LLM 蒸馏主流程.
 
     流程:
       1. 检查触发条件 (阈值 + 24h 间隔)
-      2. 读 journal, 切 chunk (DISTILL_CHUNK_CHARS = 8000)
-      3. 每 chunk 走 gateway loopback 调 LLM 抽事实
-      4. 合并所有 chunk 结果 → 写 ~/.catfish/distilled_facts.md
-      5. 标记 distillation 跑过 (DISTILL_STATE_PATH)
+      2. 解析员工最近 session model (BL-INTERNAL-MODEL-FOLLOW-USER-DISTILL)
+      3. 读 journal, 切 chunk (DISTILL_CHUNK_CHARS = 8000)
+      4. 每 chunk 走 gateway loopback 调 LLM 抽事实
+      5. 合并所有 chunk 结果 → 写 ~/.catfish/distilled_facts.md
+      6. 标记 distillation 跑过 (DISTILL_STATE_PATH)
+
+    user_email: 必传 (caller 应传 user.sub). BL-INTERNAL-MODEL-FOLLOW-USER (5/17
+      鸿波 '选哪个 model, 所有 LLM 都用同款'). 拿不到 model → 直接 skip, 不
+      fallback (跟 summarizer / proactive / a2a / facts 同套路).
 
     only_old_segments=True (默认): 跳过最后 5KB (那部分 inject_employee_journal 全文
       注入, 不需要蒸馏). 防 distilled + journal 重复.
 
     返:
       - 蒸馏后 markdown 文本 (写盘成功)
-      - None: 没跑 (条件不满足 / 失败)
+      - None: 没跑 (条件不满足 / 拿不到员工 model / 失败)
 
     设计:
       - 不抛异常 — 失败静默, distill 是 background task 不该影响 chat
@@ -640,6 +654,32 @@ async def maybe_run_llm_distillation(
     """
     text = journal_text if journal_text is not None else read_journal(for_injection=False)
     if not should_run_llm_distillation(text):
+        return None
+
+    # BL-INTERNAL-MODEL-FOLLOW-USER-DISTILL (5/17 鸿波 'memory_distill 用 qwen-flash
+    # 不是员工 nemotron'): 严格用员工最近 session 的 model. 拿不到 → skip.
+    # 之前硬编码 catfish-public-qwen-flash → dashscope 403 (员工没绑公网 qwen 配额),
+    # 且违反"所有 LLM 用员工选的 model" 总规则.
+    try:
+        from .config import load_config  # noqa: PLC0415
+        from .user_model_resolver import (  # noqa: PLC0415
+            get_user_last_session_model,
+            resolve_model_obj,
+        )
+
+        config = load_config()
+        model_name = get_user_last_session_model(user_email or "")
+        origin_obj = resolve_model_obj(model_name, config)
+        if origin_obj is None:
+            logger.info(
+                "memory_distill skip: 没拿到 user=%s 最近 session model (新员工 / "
+                "老 schema / model 不可达), 不 fallback",
+                user_email or "<none>",
+            )
+            return None
+        chosen_model_name = origin_obj.name
+    except Exception as e:  # noqa: BLE001
+        logger.warning("memory_distill 解析 model 失败 (skip): %s", e)
         return None
 
     # 跳过最后 ~5KB (这段 inject_employee_journal 会直接 inject 全文)
@@ -672,7 +712,7 @@ async def maybe_run_llm_distillation(
     distilled_parts: list[str] = []
     fail_count = 0
     for chunk in chunks:
-        result = await _llm_distill_chunk(chunk)
+        result = await _llm_distill_chunk(chunk, model_name=chosen_model_name)
         if result:
             # BL-MEMORY-POLISH (5/16): 用 len 当编号, 跳过失败的 chunk 不留空号.
             # 之前用 i+1, 失败 chunk 在 output 编号上跳号 (见过"Chunk 2/3 没 1").
@@ -698,7 +738,10 @@ async def maybe_run_llm_distillation(
     write_distilled_facts(full_text)
     mark_distillation_run(len(distilled_parts))
     logger.info(
-        "BL-MEMORY-DISTILL-LIVE: %d chunks 蒸馏成功 %d 失败 %d, 写 distilled_facts.md %d 字节",
-        len(chunks), len(distilled_parts), fail_count, len(full_text.encode("utf-8")),
+        "BL-MEMORY-DISTILL-LIVE: model=%s user=%s %d chunks 蒸馏成功 %d 失败 %d, "
+        "写 distilled_facts.md %d 字节",
+        chosen_model_name, user_email or "<none>",
+        len(chunks), len(distilled_parts), fail_count,
+        len(full_text.encode("utf-8")),
     )
     return full_text

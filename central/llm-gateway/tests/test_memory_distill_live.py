@@ -11,12 +11,41 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from catfish_gateway import memory_distill
 from catfish_gateway.employee_journal import inject_employee_journal
+
+
+def _patch_user_model_resolver(monkeypatch, *, model_name: str = "test-model"):
+    """Helper: BL-INTERNAL-MODEL-FOLLOW-USER-DISTILL (5/17 鸿波) — distill 现在严格
+    走 user_model_resolver, 拿不到员工最近 session model 就 skip. 测试用 fake 桩
+    返一个 'test-model' 模拟员工有可用 model.
+
+    返回 mock 对象方便 caller assert 调用参数.
+    """
+    fake_model = SimpleNamespace(
+        name=model_name,
+        mode="chat",
+        upstream=SimpleNamespace(is_available=True),
+    )
+    monkeypatch.setattr(
+        "catfish_gateway.user_model_resolver.get_user_last_session_model",
+        lambda email: model_name,
+    )
+    monkeypatch.setattr(
+        "catfish_gateway.user_model_resolver.resolve_model_obj",
+        lambda name, config: fake_model if name == model_name else None,
+    )
+    # load_config 也可能不存在 catalog → mock 个空 config 避免落盘 IO
+    monkeypatch.setattr(
+        "catfish_gateway.config.load_config",
+        lambda: SimpleNamespace(models=[fake_model]),
+    )
+    return fake_model
 
 
 # ── read/write distilled_facts 往返 ─────────────────────
@@ -167,8 +196,11 @@ async def test_llm_distillation_skips_when_journal_short(tmp_path, monkeypatch):
     monkeypatch.setattr(memory_distill, "DISTILL_STATE_PATH", tmp_path / "s.json")
     # 强制满足触发条件 (entry 数 ≥ DISTILL_THRESHOLD, monkeypatch 阈值降到 1)
     monkeypatch.setattr(memory_distill, "DISTILL_THRESHOLD", 1)
+    _patch_user_model_resolver(monkeypatch)
 
-    result = await memory_distill.maybe_run_llm_distillation()
+    result = await memory_distill.maybe_run_llm_distillation(
+        user_email="test@example.com",
+    )
     # journal 太短没"老段", skip
     assert result is None
 
@@ -201,8 +233,11 @@ async def test_llm_distillation_calls_loopback_and_writes_facts(tmp_path, monkey
         memory_distill, "_llm_distill_chunk",
         AsyncMock(return_value=fake_chunk_result),
     )
+    _patch_user_model_resolver(monkeypatch)
 
-    result = await memory_distill.maybe_run_llm_distillation()
+    result = await memory_distill.maybe_run_llm_distillation(
+        user_email="test@example.com",
+    )
     assert result is not None
     assert fake_chunk_result in result
     # 文件已落盘
@@ -234,8 +269,11 @@ async def test_llm_distillation_all_chunks_fail_no_write(tmp_path, monkeypatch):
     monkeypatch.setattr(
         memory_distill, "_llm_distill_chunk", AsyncMock(return_value=None),
     )
+    _patch_user_model_resolver(monkeypatch)
 
-    result = await memory_distill.maybe_run_llm_distillation()
+    result = await memory_distill.maybe_run_llm_distillation(
+        user_email="test@example.com",
+    )
     assert result is None
     assert not distilled_path.exists()
 
@@ -381,15 +419,18 @@ async def test_llm_distillation_skipped_chunk_no_gap_in_numbering(tmp_path, monk
     # mock: 第 1 个 chunk 返 None 失败, 第 2/3 成功
     call_count = {"n": 0}
 
-    async def fake_distill(chunk, *, timeout=60.0):
+    async def fake_distill(chunk, *, model_name, timeout=60.0):
         call_count["n"] += 1
         if call_count["n"] == 1:
             return None  # 第 1 chunk 失败
         return f"- 事实 {call_count['n']}"
 
     monkeypatch.setattr(memory_distill, "_llm_distill_chunk", fake_distill)
+    _patch_user_model_resolver(monkeypatch)
 
-    result = await memory_distill.maybe_run_llm_distillation()
+    result = await memory_distill.maybe_run_llm_distillation(
+        user_email="test@example.com",
+    )
     assert result is not None
     # 编号该是 1, 2 (不是 2, 3) — 跳过失败的不留空号
     assert "蒸馏段 1" in result
@@ -422,7 +463,104 @@ async def test_llm_distillation_24h_cooldown(tmp_path, monkeypatch):
 
     mock_llm = AsyncMock(return_value="should-not-be-called")
     monkeypatch.setattr(memory_distill, "_llm_distill_chunk", mock_llm)
+    _patch_user_model_resolver(monkeypatch)
 
-    result = await memory_distill.maybe_run_llm_distillation()
+    result = await memory_distill.maybe_run_llm_distillation(
+        user_email="test@example.com",
+    )
     assert result is None
     mock_llm.assert_not_called()  # cooldown 触发, LLM 没被调
+
+
+# ── BL-INTERNAL-MODEL-FOLLOW-USER-DISTILL: 拿不到员工 model → skip ───
+
+
+@pytest.mark.asyncio
+async def test_llm_distillation_skips_when_no_user_model(tmp_path, monkeypatch):
+    """员工没最近 session model (新员工 / 老 schema) → skip, 不 fallback.
+
+    BL-INTERNAL-MODEL-FOLLOW-USER-DISTILL (5/17 鸿波 '选哪个 model 所有 LLM 都用同款'):
+    distill 不能再硬编码 qwen-flash. 拿不到员工选的 model 就跳过, 不偷偷用别的.
+    """
+    big_journal = "\n\n".join(
+        f"## 2026-05-{i:02d} 10:00\n" + "x" * 500 for i in range(1, 30)
+    )
+    journal_path = tmp_path / "j.md"
+    journal_path.write_text(big_journal)
+
+    distilled_path = tmp_path / "d.md"
+    monkeypatch.setattr(
+        "catfish_gateway.employee_journal._default_journal_path",
+        lambda: journal_path,
+    )
+    monkeypatch.setattr(memory_distill, "DISTILLED_FACTS_PATH", distilled_path)
+    monkeypatch.setattr(memory_distill, "DISTILL_STATE_PATH", tmp_path / "s.json")
+    monkeypatch.setattr(memory_distill, "DISTILL_THRESHOLD", 1)
+
+    # resolver 返 None (员工没 session model)
+    monkeypatch.setattr(
+        "catfish_gateway.user_model_resolver.get_user_last_session_model",
+        lambda email: None,
+    )
+    monkeypatch.setattr(
+        "catfish_gateway.user_model_resolver.resolve_model_obj",
+        lambda name, config: None,
+    )
+    monkeypatch.setattr(
+        "catfish_gateway.config.load_config",
+        lambda: SimpleNamespace(models=[]),
+    )
+
+    # LLM 不该被调到 — 拿不到 model 提前 return None
+    mock_llm = AsyncMock(return_value="should-not-be-called")
+    monkeypatch.setattr(memory_distill, "_llm_distill_chunk", mock_llm)
+
+    result = await memory_distill.maybe_run_llm_distillation(
+        user_email="ghost@example.com",
+    )
+    assert result is None
+    assert not distilled_path.exists()
+    mock_llm.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_llm_distillation_passes_user_model_to_chunk_call(tmp_path, monkeypatch):
+    """resolver 返的 model.name 被原样塞 _llm_distill_chunk model_name kwarg.
+
+    防止"硬编码 qwen-flash" 回归 — 真接住员工选的 model.
+    """
+    big_journal = "\n\n".join(
+        f"## 2026-05-{i:02d} 10:00\n" + "x" * 500 for i in range(1, 30)
+    )
+    journal_path = tmp_path / "j.md"
+    journal_path.write_text(big_journal)
+
+    monkeypatch.setattr(
+        "catfish_gateway.employee_journal._default_journal_path",
+        lambda: journal_path,
+    )
+    monkeypatch.setattr(memory_distill, "DISTILLED_FACTS_PATH", tmp_path / "d.md")
+    monkeypatch.setattr(memory_distill, "DISTILL_STATE_PATH", tmp_path / "s.json")
+    monkeypatch.setattr(memory_distill, "DISTILL_THRESHOLD", 1)
+
+    _patch_user_model_resolver(
+        monkeypatch, model_name="catfish-public-nvidia-nemotron",
+    )
+
+    seen_model_names: list[str] = []
+
+    async def fake_distill(chunk, *, model_name, timeout=60.0):
+        seen_model_names.append(model_name)
+        return "- 抽出的事实"
+
+    monkeypatch.setattr(memory_distill, "_llm_distill_chunk", fake_distill)
+
+    result = await memory_distill.maybe_run_llm_distillation(
+        user_email="zhanghongbo@ffcs.cn",
+    )
+    assert result is not None
+    # 所有 chunk 调用都传了员工选的 model, 没用硬编码
+    assert seen_model_names, "至少 1 个 chunk 应被处理"
+    assert all(m == "catfish-public-nvidia-nemotron" for m in seen_model_names), (
+        f"distill 没接员工 model, 收到: {seen_model_names}"
+    )

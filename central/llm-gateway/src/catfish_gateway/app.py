@@ -2630,12 +2630,19 @@ async def chat_completions(
     # 跟 trigger_background_summary 互补: summary 持续写新段, distill 把老段抽精华
     # 让 inject 不丢 99% 老内容. fire-and-forget, 不阻塞当前请求.
     # 跳: internal call (loopback summary / proactive / distill 自身), 防递归.
+    #
+    # BL-INTERNAL-MODEL-FOLLOW-USER-DISTILL (5/17 鸿波 'memory_distill 用 qwen-flash
+    # 不是员工 nemotron'): 传 user.sub, distill 内部用 get_user_last_session_model
+    # 解析员工当前选的 model, 严格 follow-user (跟 summarizer / proactive / a2a /
+    # facts 同套路).
     if not is_internal_call:
         try:
             import asyncio  # noqa: PLC0415
 
             from .memory_distill import maybe_run_llm_distillation  # noqa: PLC0415
-            asyncio.create_task(maybe_run_llm_distillation())
+            asyncio.create_task(
+                maybe_run_llm_distillation(user_email=user.sub),
+            )
         except Exception:  # noqa: BLE001
             pass
 
