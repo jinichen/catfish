@@ -36,12 +36,18 @@ mailbox, 员工开 Mail.app 点 Send (0.5s 认知 checkpoint, 跟 DESIGN.md 1.3 
 """
 from __future__ import annotations
 
+import email
+import email.parser
+import email.policy
 import logging
 import os
+import plistlib
+import re
 import subprocess
 import tempfile
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from pathlib import Path
 from typing import Sequence
 
 from .base import (
@@ -52,6 +58,7 @@ from .base import (
     EmailAdapterError,
     ListFilter,
     Message,
+    NotSupportedError,
 )
 
 logger = logging.getLogger("catfish_email.adapters.apple_mail")
@@ -126,12 +133,14 @@ tell application "Mail"
 end tell
 """
 
-# read_message: 写 body 到 temp 文件 (避 AS string escape 噩梦), 返其余 metadata
+# read_message: AS 写 body (text) + source (完整 RFC822) 到 2 个 temp 文件,
+# Python 解析 source 提 HTML part. BL-EMAIL-APPLEMAIL-FULL (5/18).
 _AS_GET_MESSAGE = f"""
 tell application "Mail"
     set accName to "{{ACCOUNT}}"
     set targetId to {{MSG_ID}}
     set bodyPath to "{{BODY_PATH}}"
+    set sourcePath to "{{SOURCE_PATH}}"
 
     set acc to first account whose name of it is accName
     set foundMsg to missing value
@@ -151,6 +160,17 @@ tell application "Mail"
     set eof fileRef to 0
     write bodyText to fileRef as «class utf8»
     close access fileRef
+
+    -- 写完整 RFC822 source (含 HTML part), Python 端用 email.parser 提 body_html
+    try
+        set rawSource to source of foundMsg
+        set srcRef to open for access POSIX file sourcePath with write permission
+        set eof srcRef to 0
+        write rawSource to srcRef as «class utf8»
+        close access srcRef
+    on error
+        -- source 拿不到 (老 Mail 版本 / 网络 fetch 失败), HTML 留空
+    end try
 
     set subj to subject of foundMsg
     set sndr to sender of foundMsg
@@ -208,7 +228,7 @@ tell application "Mail"
 end tell
 """
 
-# create_draft: body 从 temp 文件读
+# create_draft: body 从 temp 文件读; 支持 to/cc/bcc
 _AS_CREATE_DRAFT = """
 tell application "Mail"
     set accName to "{ACCOUNT}"
@@ -216,6 +236,7 @@ tell application "Mail"
     set bodyPath to "{BODY_PATH}"
     set toList to "{TO}"
     set ccList to "{CC}"
+    set bccList to "{BCC}"
 
     set fileRef to open for access POSIX file bodyPath
     set bodyText to (read fileRef as «class utf8»)
@@ -237,6 +258,14 @@ tell application "Mail"
             set cleanAddr to my trimText(addr as string)
             if cleanAddr is not "" then
                 make new cc recipient at end of cc recipients with properties {address:cleanAddr}
+            end if
+        end repeat
+        -- bcc recipients (BL-EMAIL-APPLEMAIL-FULL 5/18)
+        set bccItems to my splitText(bccList, ",")
+        repeat with addr in bccItems
+            set cleanAddr to my trimText(addr as string)
+            if cleanAddr is not "" then
+                make new bcc recipient at end of bcc recipients with properties {address:cleanAddr}
             end if
         end repeat
         -- 不调 send! 留在 Drafts
@@ -389,11 +418,252 @@ def _escape_as_string(s: str) -> str:
     )
 
 
+def _extract_html_from_source_file(source_path: str) -> str:
+    """从 AS 写的 RFC822 源码文件抽出 text/html 部分.
+
+    BL-EMAIL-APPLEMAIL-FULL (5/18). source 拿不到 (老版本 / 网络 fetch 失败 /
+    AS 没写) 时返空字符串.
+    """
+    try:
+        with open(source_path, "rb") as f:
+            raw = f.read()
+        if not raw:
+            return ""
+        msg = email.message_from_bytes(raw, policy=email.policy.default)
+        # 遍历 multipart, 找 text/html
+        if msg.is_multipart():
+            for part in msg.walk():
+                if part.get_content_type() == "text/html":
+                    try:
+                        return part.get_content()
+                    except Exception:  # noqa: BLE001
+                        # 编码解析失败, 退到原 bytes decode
+                        payload = part.get_payload(decode=True) or b""
+                        return payload.decode("utf-8", errors="replace")
+            return ""
+        # 非 multipart: 看本身是不是 html
+        if msg.get_content_type() == "text/html":
+            return msg.get_content()
+        return ""
+    except (OSError, ValueError) as e:
+        logger.debug("_extract_html_from_source_file 解析失败 %s: %s", source_path, e)
+        return ""
+
+
+# ── EMLX (Apple Mail 本地缓存文件格式) 解析 helpers ──────
+
+
+# Mail.app 账号目录名格式. 实测样本:
+#   "IMAP-hongbo@example.com@imap.example.com"
+#   "iCloud-hongbo@iCloud"
+#   "Exchange-hongbo@company.com"
+# 提取第一个 @ 后到 @host 前的 email
+_EMLX_ACCOUNT_DIR_RE = re.compile(r"^[A-Za-z]+-([^@]+@[^@]+?)(?:@[^@]+)?$")
+
+
+def _parse_email_from_dir_name(name: str) -> str | None:
+    """从 Mail.app 账号目录名提 email. 提不到返 None."""
+    m = _EMLX_ACCOUNT_DIR_RE.match(name)
+    if m:
+        return m.group(1)
+    # fallback: 找名字里第一个 @ 子串
+    parts = name.split("@")
+    if len(parts) >= 2 and "." in parts[1]:
+        return f"{parts[0].split('-')[-1]}@{parts[1].split('-')[0]}"
+    return None
+
+
+# Folder 名 → 可能的 .mbox 子目录名候选 (Mail.app 国际化)
+_FOLDER_ALIASES: dict[str, list[str]] = {
+    "Inbox": ["INBOX.mbox", "Inbox.mbox", "收件箱.mbox"],
+    "INBOX": ["INBOX.mbox", "Inbox.mbox", "收件箱.mbox"],
+    "Drafts": ["Drafts.mbox", "草稿.mbox", "Drafts (This computer).mbox"],
+    "Sent": ["Sent.mbox", "Sent Messages.mbox", "已发送.mbox"],
+}
+
+
+def _find_emlx_files(account_dir: Path, folder: str) -> list[Path]:
+    """找账号目录下指定 folder 的所有 .emlx 文件路径."""
+    folder_candidates = _FOLDER_ALIASES.get(folder, [f"{folder}.mbox", folder])
+    for cand in folder_candidates:
+        mbox_dir = account_dir / cand
+        if mbox_dir.is_dir():
+            # mbox 下面是 <UUID>-Data/Messages/*.emlx
+            return list(mbox_dir.rglob("*.emlx"))
+    return []
+
+
+def _parse_emlx_summary(emlx_path: Path, account_name: str, folder: str) -> Message:
+    """轻量解析 .emlx (只读 header), 给 list/search 用.
+
+    EMLX 格式: 第一行 = byte count, 然后 RFC822 邮件, 末尾 plist trailer.
+    我们只解析 RFC822 头部, plist 用来读 is_read flag.
+    """
+    raw, plist = _read_emlx_raw(emlx_path)
+    msg = email.message_from_bytes(raw, policy=email.policy.default)
+    subject = _safe_header(msg, "Subject")
+    sender = _safe_header(msg, "From")
+    date_header = _safe_header(msg, "Date")
+    date_iso = _parse_applescript_date(date_header)  # RFC2822 同样能解
+    is_read = _emlx_is_read(plist)
+    # ID 用 emlx 路径 (绝对) — Python 端能直接打开
+    msg_id = f"emlx:{emlx_path}"
+    return Message(
+        id=f"{account_name}|{msg_id}",
+        account=account_name,
+        folder=folder,
+        subject=subject,
+        sender=sender,
+        date=date_iso,
+        is_read=is_read,
+        body_text="",
+    )
+
+
+def _parse_emlx_full(emlx_path: Path, account_name: str) -> Message:
+    """完整解析 .emlx, 给 read_message 用 — body_text + body_html + 附件元数据."""
+    raw, plist = _read_emlx_raw(emlx_path)
+    msg = email.message_from_bytes(raw, policy=email.policy.default)
+    subject = _safe_header(msg, "Subject")
+    sender = _safe_header(msg, "From")
+    date_iso = _parse_applescript_date(_safe_header(msg, "Date"))
+    to_str = _safe_header(msg, "To")
+    cc_str = _safe_header(msg, "Cc")
+    body_text = ""
+    body_html = ""
+    if msg.is_multipart():
+        for part in msg.walk():
+            ct = part.get_content_type()
+            if ct == "text/plain" and not body_text:
+                try:
+                    body_text = part.get_content()
+                except Exception:  # noqa: BLE001
+                    payload = part.get_payload(decode=True) or b""
+                    body_text = payload.decode("utf-8", errors="replace")
+            elif ct == "text/html" and not body_html:
+                try:
+                    body_html = part.get_content()
+                except Exception:  # noqa: BLE001
+                    payload = part.get_payload(decode=True) or b""
+                    body_html = payload.decode("utf-8", errors="replace")
+    else:
+        ct = msg.get_content_type()
+        try:
+            content = msg.get_content()
+        except Exception:  # noqa: BLE001
+            payload = msg.get_payload(decode=True) or b""
+            content = payload.decode("utf-8", errors="replace")
+        if ct == "text/html":
+            body_html = content
+        else:
+            body_text = content
+    return Message(
+        id=f"{account_name}|emlx:{emlx_path}",
+        account=account_name,
+        folder="Inbox",  # emlx 路径里有 .mbox 名, 但简化
+        subject=subject,
+        sender=sender,
+        recipients=tuple(
+            a.strip() for a in to_str.split(",") if a.strip()
+        ),
+        cc=tuple(a.strip() for a in cc_str.split(",") if a.strip()),
+        date=date_iso,
+        is_read=_emlx_is_read(plist),
+        body_text=body_text,
+        body_html=body_html,
+    )
+
+
+def _read_emlx_raw(emlx_path: Path) -> tuple[bytes, dict | None]:
+    """读 .emlx 返 (RFC822 bytes, trailer plist dict).
+
+    EMLX 格式:
+      <byte_count>\\n           ← ASCII 数字 + newline
+      <RFC822 message bytes>    ← 长度 = byte_count
+      <plist xml trailer>       ← 可选, Mail 元数据 (flags / labels 等)
+    """
+    raw = emlx_path.read_bytes()
+    # 第一行 byte count
+    nl_idx = raw.find(b"\n")
+    if nl_idx == -1:
+        return raw, None
+    try:
+        byte_count = int(raw[:nl_idx].decode("ascii").strip())
+    except ValueError:
+        return raw, None
+    rfc822 = raw[nl_idx + 1: nl_idx + 1 + byte_count]
+    trailer = raw[nl_idx + 1 + byte_count:].strip()
+    plist_dict: dict | None = None
+    if trailer:
+        try:
+            plist_dict = plistlib.loads(trailer)
+        except Exception:  # noqa: BLE001
+            plist_dict = None
+    return rfc822, plist_dict
+
+
+def _emlx_is_read(plist: dict | None) -> bool:
+    """从 emlx trailer plist 读 read flag. 'flags' 是 64-bit int, bit 0 = read.
+
+    详见 Apple Mail 内部文档 (反向工程): flag bit layout:
+      bit 0: read
+      bit 1: deleted
+      bit 2: answered
+      bit 3: encrypted
+      bit 4: flagged
+      ...
+    解不出返 False (保守: 当作未读).
+    """
+    if not plist:
+        return False
+    flags = plist.get("flags")
+    if not isinstance(flags, int):
+        return False
+    return bool(flags & 1)
+
+
+def _safe_header(msg: email.message.Message, name: str) -> str:
+    """读 RFC822 header, 解码后返字符串. 缺/烂 → 空字符串."""
+    val = msg.get(name)
+    if val is None:
+        return ""
+    if isinstance(val, str):
+        return val.strip()
+    try:
+        return str(val).strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _detect_mail_data_dir() -> Path | None:
+    """探测 Apple Mail 本地缓存目录, 优先取最新版本号.
+
+    macOS 14+ (Sonoma+): ~/Library/Mail/V10
+    macOS 12-13:        ~/Library/Mail/V9
+    更早:               V2-V8 (旧版本 emlx 仍能读)
+
+    返优先级最高现存的, 都没有则 None.
+    """
+    base = Path.home() / "Library" / "Mail"
+    if not base.is_dir():
+        return None
+    candidates = sorted(
+        (p for p in base.iterdir() if p.name.startswith("V") and p.is_dir()),
+        key=lambda p: -int(p.name[1:]) if p.name[1:].isdigit() else 0,
+    )
+    return candidates[0] if candidates else None
+
+
 # ── Adapter 主类 ────────────────────────────────────────
 
 
 class AppleMailAdapter(EmailAdapter):
-    """Apple Mail.app AppleScript-first adapter."""
+    """Apple Mail.app AppleScript-first adapter + EMLX fallback (只读).
+
+    BL-EMAIL-APPLEMAIL-FULL (5/18):
+      没拿到 Automation 权限 / Mail 没开 → 自动降级 EMLX 文件解析模式 (只读).
+      `supports_drafts` 切 False, create_draft 抛 NotSupportedError.
+    """
 
     name = "apple_mail"
     supports_drafts = True  # AS 支持 make new outgoing message (需 Automation 权限)
@@ -401,16 +671,28 @@ class AppleMailAdapter(EmailAdapter):
     def __init__(self) -> None:
         # __init__ 不主动 ping — 让 list_accounts 第一次调时再触发, 避免 import 时
         # 就弹 Automation 权限窗.
-        pass
+        self._use_emlx_fallback = False
+        self._emlx_mail_dir: Path | None = None  # lazy: 第一次 fallback 时探测
 
     # ── 公共接口 ──
 
     def list_accounts(self) -> list[Account]:
+        if self._use_emlx_fallback:
+            return self._list_accounts_emlx()
         if not _is_mail_running():
+            # AS 不行 → 试 EMLX
+            if self._enable_emlx_fallback_if_available():
+                return self._list_accounts_emlx()
             raise ClientNotRunningError(
-                "Mail.app 没在跑. 先打开 Mail 再调.",
+                "Mail.app 没在跑且没本地 EMLX 缓存. 先打开 Mail 再调.",
             )
-        out = _run_osascript(_AS_LIST_ACCOUNTS)
+        try:
+            out = _run_osascript(_AS_LIST_ACCOUNTS)
+        except ClientNotRunningError:
+            if self._enable_emlx_fallback_if_available():
+                logger.info("apple_mail: AS 不可用, 切 EMLX 只读 fallback")
+                return self._list_accounts_emlx()
+            raise
         records = _parse_records(out, n_fields=3)
         if not records:
             raise DataNotFoundError(
@@ -422,6 +704,16 @@ class AppleMailAdapter(EmailAdapter):
         ]
 
     def list_messages(self, filt: ListFilter) -> list[Message]:
+        if self._use_emlx_fallback:
+            return self._list_messages_emlx(filt)
+        try:
+            return self._list_messages_as(filt)
+        except ClientNotRunningError:
+            if self._enable_emlx_fallback_if_available():
+                return self._list_messages_emlx(filt)
+            raise
+
+    def _list_messages_as(self, filt: ListFilter) -> list[Message]:
         account_name = self._resolve_account_name(filt.account)
         script = (
             _AS_LIST_MESSAGES
@@ -467,16 +759,35 @@ class AppleMailAdapter(EmailAdapter):
         return result
 
     def read_message(self, message_id: str) -> Message:
+        # BL-EMAIL-APPLEMAIL-FULL (5/18): EMLX id 优先走文件解析路径
+        if message_id.startswith("emlx:") or "|emlx:" in message_id:
+            return self._read_message_emlx(message_id)
+        if self._use_emlx_fallback:
+            return self._read_message_emlx(message_id)
+
+        try:
+            return self._read_message_as(message_id)
+        except ClientNotRunningError:
+            # AS 路径不可用 → 切 EMLX
+            if self._enable_emlx_fallback_if_available():
+                return self._read_message_emlx(message_id)
+            raise
+
+    def _read_message_as(self, message_id: str) -> Message:
+        """AS 主路径: AS 写 body + source RFC822 到 2 个 tmp 文件, Python 解析."""
         account_name, msg_id = self._unpack_id(message_id)
-        # body 写 tmp 文件: AS 写, Python 读 (避 escape)
+        # 2 个 tmp 文件: body (纯文本) + source (完整 RFC822, 含 HTML part)
         with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tf:
             body_path = tf.name
+        with tempfile.NamedTemporaryFile(suffix=".eml", delete=False) as tf:
+            source_path = tf.name
         try:
             script = (
                 _AS_GET_MESSAGE
                 .replace("{ACCOUNT}", _escape_as_string(account_name))
                 .replace("{MSG_ID}", msg_id)  # msg_id 是数字, 不引号
                 .replace("{BODY_PATH}", body_path)
+                .replace("{SOURCE_PATH}", source_path)
             )
             out = _run_osascript(script)
             fields = out.split(FS)
@@ -491,6 +802,8 @@ class AppleMailAdapter(EmailAdapter):
                     body_text = f.read()
             except OSError as e:
                 logger.warning("body tmp 文件读失败: %s", e)
+            # BL-EMAIL-APPLEMAIL-FULL (5/18): 从 source RFC822 抽 body_html
+            body_html = _extract_html_from_source_file(source_path)
             return Message(
                 id=message_id,
                 account=account_name,
@@ -503,13 +816,14 @@ class AppleMailAdapter(EmailAdapter):
                 cc=tuple(a.strip() for a in cc_str.split(",") if a.strip()),
                 date=_parse_applescript_date(dt_str),
                 body_text=body_text,
-                body_html="",  # Mail.app AS 不直接给 HTML body, P1 再加
+                body_html=body_html,
             )
         finally:
-            try:
-                os.unlink(body_path)
-            except OSError:
-                pass
+            for p in (body_path, source_path):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
 
     def search(
         self,
@@ -521,6 +835,25 @@ class AppleMailAdapter(EmailAdapter):
     ) -> list[Message]:
         if not query.strip():
             return []
+        if self._use_emlx_fallback:
+            return self._search_emlx(query, account=account, folder=folder, limit=limit)
+        try:
+            return self._search_as(query, account=account, folder=folder, limit=limit)
+        except ClientNotRunningError:
+            if self._enable_emlx_fallback_if_available():
+                return self._search_emlx(
+                    query, account=account, folder=folder, limit=limit,
+                )
+            raise
+
+    def _search_as(
+        self,
+        query: str,
+        *,
+        account: str | None,
+        folder: str,
+        limit: int,
+    ) -> list[Message]:
         account_name = self._resolve_account_name(account)
         script = (
             _AS_SEARCH
@@ -558,11 +891,11 @@ class AppleMailAdapter(EmailAdapter):
     ) -> str:
         if not to:
             raise ValueError("create_draft: to 不能空")
-        if bcc:
-            # AS bcc 支持复杂, MVP 暂不接 (员工要 bcc 自己开 Mail 加)
-            logger.warning(
-                "create_draft: bcc 参数 MVP 暂忽略 (%d 个). 员工自己开 Mail 加.",
-                len(bcc),
+        # EMLX fallback 模式只读 → 不支持起草
+        if self._use_emlx_fallback:
+            raise NotSupportedError(
+                "Apple Mail EMLX fallback 模式只读, 不能写草稿. "
+                "去 System Settings 给 catfish 'Mail' Automation 权限后重试.",
             )
         account_name = self._resolve_account_name(account)
         # body 写 tmp 文件传给 AS
@@ -574,6 +907,7 @@ class AppleMailAdapter(EmailAdapter):
         try:
             to_str = ",".join(to)
             cc_str = ",".join(cc)
+            bcc_str = ",".join(bcc)  # BL-EMAIL-APPLEMAIL-FULL (5/18): bcc 支持
             script = (
                 _AS_CREATE_DRAFT
                 .replace("{ACCOUNT}", _escape_as_string(account_name))
@@ -581,6 +915,7 @@ class AppleMailAdapter(EmailAdapter):
                 .replace("{BODY_PATH}", body_path)
                 .replace("{TO}", _escape_as_string(to_str))
                 .replace("{CC}", _escape_as_string(cc_str))
+                .replace("{BCC}", _escape_as_string(bcc_str))
             )
             out = _run_osascript(script)
             draft_id = out.strip()
@@ -592,6 +927,188 @@ class AppleMailAdapter(EmailAdapter):
                 os.unlink(body_path)
             except OSError:
                 pass
+
+    # ── EMLX fallback (只读) ────────────────────────────
+    #
+    # 触发条件: AS 不可用 (没 Automation 权限 / Mail.app 没开) 且本机有
+    # ~/Library/Mail/V*/ 目录 (Mail 曾同步过本地).
+    #
+    # 数据布局 (macOS 14+):
+    #   ~/Library/Mail/V10/
+    #     ├ MailData/          ← 元数据 (账号 plist 等)
+    #     ├ <UUID>-IMAP@imap.host/   ← 账号目录, name 含 email
+    #     │   ├ INBOX.mbox/
+    #     │   │   └ <UUID>-Data/Messages/<id>.emlx
+    #     │   ├ Drafts.mbox/
+    #     │   └ Sent.mbox/
+    #     └ ...
+    #
+    # ID 格式 (EMLX 模式): "<account_name>|emlx:<emlx_file_path>"
+
+    def _enable_emlx_fallback_if_available(self) -> bool:
+        """探测本机 EMLX 数据目录. 有 → 切 fallback 返 True; 没 → False.
+
+        副作用: 设 _use_emlx_fallback=True + supports_drafts=False.
+        """
+        if self._use_emlx_fallback:
+            return True
+        mail_dir = _detect_mail_data_dir()
+        if mail_dir is None:
+            return False
+        self._emlx_mail_dir = mail_dir
+        self._use_emlx_fallback = True
+        self.supports_drafts = False  # EMLX 只读, 不能写草稿
+        logger.info(
+            "apple_mail EMLX fallback 激活: %s (只读, create_draft 会抛 "
+            "NotSupportedError)", mail_dir,
+        )
+        return True
+
+    def _list_accounts_emlx(self) -> list[Account]:
+        """扫 V* 目录里子目录, 名字 parse 出 email."""
+        mail_dir = self._emlx_mail_dir
+        if mail_dir is None or not mail_dir.is_dir():
+            raise DataNotFoundError(
+                f"EMLX fallback: 找不到 Mail 数据目录 {mail_dir}",
+            )
+        accounts: list[Account] = []
+        for child in sorted(mail_dir.iterdir()):
+            if not child.is_dir():
+                continue
+            # 跳过 MailData / Mailboxes 等系统目录
+            if child.name in ("MailData", "Mailboxes"):
+                continue
+            email_addr = _parse_email_from_dir_name(child.name)
+            display_name = email_addr or child.name
+            accounts.append(
+                Account(
+                    name=display_name,
+                    address=email_addr or display_name,
+                    is_default=(len(accounts) == 0),  # 第一个标 default
+                ),
+            )
+        if not accounts:
+            raise DataNotFoundError(
+                f"EMLX fallback: {mail_dir} 下没找到账号目录",
+            )
+        return accounts
+
+    def _account_dir_emlx(self, account_name: str) -> Path:
+        """resolve 账号目录. account_name 可能是显示名 / email 地址."""
+        mail_dir = self._emlx_mail_dir
+        if mail_dir is None:
+            raise DataNotFoundError("EMLX mail_dir 未初始化")
+        for child in mail_dir.iterdir():
+            if not child.is_dir():
+                continue
+            if child.name in ("MailData", "Mailboxes"):
+                continue
+            if (
+                account_name in child.name
+                or _parse_email_from_dir_name(child.name) == account_name
+            ):
+                return child
+        raise DataNotFoundError(
+            f"EMLX fallback: 找不到账号 {account_name!r} 的目录",
+        )
+
+    def _list_messages_emlx(self, filt: ListFilter) -> list[Message]:
+        """扫账号目录下指定 folder (默认 INBOX), 解 .emlx 文件头."""
+        accounts = self._list_accounts_emlx()
+        if filt.account:
+            account = next(
+                (a for a in accounts if a.address == filt.account or a.name == filt.account),
+                None,
+            )
+            if account is None:
+                raise DataNotFoundError(
+                    f"EMLX fallback: 账号 {filt.account!r} 不在",
+                )
+        else:
+            account = next((a for a in accounts if a.is_default), accounts[0])
+        account_dir = self._account_dir_emlx(account.name)
+        emlx_files = _find_emlx_files(account_dir, folder=filt.folder)
+        # 按修改时间倒序 (最近的在前), 然后 limit
+        emlx_files.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
+        result: list[Message] = []
+        for emlx_path in emlx_files:
+            if len(result) >= filt.limit:
+                break
+            try:
+                msg = _parse_emlx_summary(emlx_path, account.name, filt.folder)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("跳过损坏的 emlx %s: %s", emlx_path, e)
+                continue
+            # Python 端 filter (跟 AS 路径同套规则)
+            if filt.since and msg.date and msg.date < filt.since:
+                continue
+            if filt.until and msg.date and msg.date >= filt.until:
+                continue
+            if (
+                filt.sender_contains
+                and filt.sender_contains.lower() not in msg.sender.lower()
+            ):
+                continue
+            if (
+                filt.subject_contains
+                and filt.subject_contains.lower() not in msg.subject.lower()
+            ):
+                continue
+            if filt.unread_only and msg.is_read:
+                continue
+            result.append(msg)
+        return result
+
+    def _read_message_emlx(self, message_id: str) -> Message:
+        """ID 格式 'account|emlx:/path/to/file.emlx', 全文解析."""
+        if "|emlx:" not in message_id:
+            raise ValueError(
+                f"_read_message_emlx: id 格式错 (应 'account|emlx:path'): {message_id!r}",
+            )
+        account_name, rest = message_id.split("|", 1)
+        emlx_path = Path(rest[len("emlx:"):])
+        if not emlx_path.exists():
+            raise DataNotFoundError(f"EMLX 文件不在: {emlx_path}")
+        return _parse_emlx_full(emlx_path, account_name)
+
+    def _search_emlx(
+        self,
+        query: str,
+        *,
+        account: str | None,
+        folder: str,
+        limit: int,
+    ) -> list[Message]:
+        """全扫所有 emlx, subject/sender contains. 慢但够 fallback 用."""
+        accounts = self._list_accounts_emlx()
+        if account:
+            target = next(
+                (a for a in accounts if a.address == account or a.name == account),
+                None,
+            )
+            if target is None:
+                return []
+            account_dirs = [self._account_dir_emlx(target.name)]
+            account_names = [target.name]
+        else:
+            account_dirs = [self._account_dir_emlx(a.name) for a in accounts]
+            account_names = [a.name for a in accounts]
+        q_lower = query.lower()
+        result: list[Message] = []
+        for acc_name, acc_dir in zip(account_names, account_dirs):
+            for emlx_path in _find_emlx_files(acc_dir, folder=folder):
+                if len(result) >= limit:
+                    return result
+                try:
+                    msg = _parse_emlx_summary(emlx_path, acc_name, folder)
+                except Exception:
+                    continue
+                if (
+                    q_lower in msg.subject.lower()
+                    or q_lower in msg.sender.lower()
+                ):
+                    result.append(msg)
+        return result
 
     # ── 内部 helpers ──
 
