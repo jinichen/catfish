@@ -610,8 +610,14 @@ def audit_summary_global_since(cutoff_ms: int) -> dict:
         "by_model": [],
         "by_department": [],
         "by_user": [],
+        # BL-AUDIT-INTERNAL-SPLIT (5/17): internal loopback 单独算
+        "internal_request_count": 0,
+        "internal_tokens": 0,
     }
 
+    # BL-AUDIT-INTERNAL-SPLIT (5/17): SQL 过滤 user_email NOT LIKE 'internal:%' —
+    # internal:gateway-loopback / internal:summarizer / 等内部循环 token 单独算
+    # internal_*, 不混进员工业务总览. 防 sysadmin 误以为业务用量 1.87x.
     if _use_pg():
         try:
             with _pg_conn() as conn:
@@ -620,7 +626,8 @@ def audit_summary_global_since(cutoff_ms: int) -> dict:
                         """SELECT COUNT(*), COALESCE(SUM(tokens_in + tokens_out), 0),
                                   COUNT(DISTINCT user_email),
                                   COUNT(DISTINCT department) FILTER (WHERE department <> '')
-                           FROM quota_events WHERE ts_ms >= %s""",
+                           FROM quota_events
+                           WHERE ts_ms >= %s AND user_email NOT LIKE 'internal:%%'""",
                         (cutoff_ms,),
                     )
                     row = cur.fetchone()
@@ -629,9 +636,22 @@ def audit_summary_global_since(cutoff_ms: int) -> dict:
                     active_users = int(row[2] or 0)
                     active_departments = int(row[3] or 0)
 
+                    # internal: 单独算 (audit transparency, 让 sysadmin 知道 gateway
+                    # 内部循环消耗了多少 — 5 维 inject / summarizer / proactive 等)
+                    cur.execute(
+                        """SELECT COUNT(*), COALESCE(SUM(tokens_in + tokens_out), 0)
+                           FROM quota_events
+                           WHERE ts_ms >= %s AND user_email LIKE 'internal:%%'""",
+                        (cutoff_ms,),
+                    )
+                    irow = cur.fetchone()
+                    internal_request_count = int(irow[0] or 0)
+                    internal_tokens = int(irow[1] or 0)
+
                     cur.execute(
                         """SELECT model, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS tk
-                           FROM quota_events WHERE ts_ms >= %s
+                           FROM quota_events
+                           WHERE ts_ms >= %s AND user_email NOT LIKE 'internal:%%'
                            GROUP BY model ORDER BY tk DESC LIMIT 20""",
                         (cutoff_ms,),
                     )
@@ -642,7 +662,9 @@ def audit_summary_global_since(cutoff_ms: int) -> dict:
 
                     cur.execute(
                         """SELECT department, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS tk
-                           FROM quota_events WHERE ts_ms >= %s AND department <> ''
+                           FROM quota_events
+                           WHERE ts_ms >= %s AND department <> ''
+                                 AND user_email NOT LIKE 'internal:%%'
                            GROUP BY department ORDER BY tk DESC LIMIT 20""",
                         (cutoff_ms,),
                     )
@@ -653,7 +675,8 @@ def audit_summary_global_since(cutoff_ms: int) -> dict:
 
                     cur.execute(
                         """SELECT user_email, department, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS tk
-                           FROM quota_events WHERE ts_ms >= %s
+                           FROM quota_events
+                           WHERE ts_ms >= %s AND user_email NOT LIKE 'internal:%%'
                            GROUP BY user_email, department ORDER BY tk DESC LIMIT 10""",
                         (cutoff_ms,),
                     )
@@ -674,19 +697,24 @@ def audit_summary_global_since(cutoff_ms: int) -> dict:
                 "by_model": by_model,
                 "by_department": by_department,
                 "by_user": by_user,
+                # BL-AUDIT-INTERNAL-SPLIT (5/17): internal loopback 透明度
+                "internal_request_count": internal_request_count,
+                "internal_tokens": internal_tokens,
             }
         except Exception as e:
             logger.warning("audit_summary_global_since PG 失败: %s", e)
             return empty
 
-    # sqlite fallback
+    # sqlite fallback (BL-AUDIT-INTERNAL-SPLIT: 同样过滤 internal:* user)
     try:
         conn = _get_conn()
         cur = conn.execute(
             """SELECT COUNT(*), COALESCE(SUM(tokens_in + tokens_out), 0),
                       COUNT(DISTINCT user_email),
                       COUNT(DISTINCT department)
-               FROM quota_events WHERE ts >= ? AND department != ''""",
+               FROM quota_events
+               WHERE ts >= ? AND department != ''
+                 AND user_email NOT LIKE 'internal:%'""",
             (cutoff_ms,),
         )
         row = cur.fetchone()
@@ -696,8 +724,19 @@ def audit_summary_global_since(cutoff_ms: int) -> dict:
         active_departments = int(row[3] or 0)
 
         cur = conn.execute(
+            """SELECT COUNT(*), COALESCE(SUM(tokens_in + tokens_out), 0)
+               FROM quota_events
+               WHERE ts >= ? AND user_email LIKE 'internal:%'""",
+            (cutoff_ms,),
+        )
+        irow = cur.fetchone()
+        internal_request_count = int(irow[0] or 0)
+        internal_tokens = int(irow[1] or 0)
+
+        cur = conn.execute(
             """SELECT model, COUNT(*), SUM(tokens_in + tokens_out)
-               FROM quota_events WHERE ts >= ?
+               FROM quota_events
+               WHERE ts >= ? AND user_email NOT LIKE 'internal:%'
                GROUP BY model ORDER BY 3 DESC LIMIT 20""",
             (cutoff_ms,),
         )
@@ -708,7 +747,9 @@ def audit_summary_global_since(cutoff_ms: int) -> dict:
 
         cur = conn.execute(
             """SELECT department, COUNT(*), SUM(tokens_in + tokens_out)
-               FROM quota_events WHERE ts >= ? AND department != ''
+               FROM quota_events
+               WHERE ts >= ? AND department != ''
+                 AND user_email NOT LIKE 'internal:%'
                GROUP BY department ORDER BY 3 DESC LIMIT 20""",
             (cutoff_ms,),
         )
@@ -719,7 +760,8 @@ def audit_summary_global_since(cutoff_ms: int) -> dict:
 
         cur = conn.execute(
             """SELECT user_email, department, COUNT(*), SUM(tokens_in + tokens_out)
-               FROM quota_events WHERE ts >= ?
+               FROM quota_events
+               WHERE ts >= ? AND user_email NOT LIKE 'internal:%'
                GROUP BY user_email, department ORDER BY 4 DESC LIMIT 10""",
             (cutoff_ms,),
         )
@@ -741,6 +783,8 @@ def audit_summary_global_since(cutoff_ms: int) -> dict:
             "by_model": by_model,
             "by_department": by_department,
             "by_user": by_user,
+            "internal_request_count": internal_request_count,
+            "internal_tokens": internal_tokens,
         }
     except Exception as e:
         logger.warning("audit_summary_global_since sqlite 失败: %s", e)

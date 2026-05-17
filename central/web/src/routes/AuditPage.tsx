@@ -43,7 +43,7 @@ export function AuditPage() {
         {!audit && !error && <div>加载中…</div>}
         {audit && (
           <>
-            <Card title="今日总览">
+            <Card title="今日总览 · 员工业务">
               <div
                 style={{
                   display: "grid",
@@ -63,9 +63,48 @@ export function AuditPage() {
                   color: "var(--text-muted)",
                 }}
               >
-                数据范围: 最近 24h. 视角: {audit.viewer_role} (manager 看本部门, admin 全公司)
+                数据范围: 最近 24h. 视角: {audit.viewer_role} (manager 看本部门, admin 全公司).
+                <br />
+                此处统计**仅含员工业务**, 排除 gateway 内部循环 (summarizer / proactive / 5 维 inject 等).
               </div>
             </Card>
+
+            {/* BL-AUDIT-INTERNAL-SPLIT (5/17): internal loopback 单独显示, 给 sysadmin 看透明度.
+                数据 = gateway 自己跑的 summarizer / distill / 5 维 inject 等内部循环消耗.
+                跟员工业务无关, 但是真消耗 token (上游 LLM 计费). */}
+            {(audit.internal_tokens ?? 0) > 0 && (
+              <Card title="Gateway 内部循环消耗 (audit 透明度)">
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(2, 1fr)",
+                    gap: "var(--space-3)",
+                  }}
+                >
+                  <Stat
+                    label="内部请求"
+                    value={(audit.internal_request_count ?? 0).toLocaleString()}
+                  />
+                  <Stat
+                    label="内部 tokens"
+                    value={fmtTokens(audit.internal_tokens ?? 0)}
+                  />
+                </div>
+                <div
+                  style={{
+                    marginTop: "var(--space-3)",
+                    fontSize: 11,
+                    color: "var(--text-muted)",
+                  }}
+                >
+                  来源: <code>internal:gateway-loopback</code> / <code>internal:summarizer</code> 等.
+                  gateway 自己跑 session summarize / proactive task / 5 维 memory inject 时消耗.
+                  <br />
+                  跟员工业务**无关**, 但占真实账单 token. 想优化看 BL-CACHE-AUDIT (#76) +
+                  压缩 inject (#76 后续).
+                </div>
+              </Card>
+            )}
 
             <Card title={`按模型 (${audit.by_model.length} 模型)`}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>

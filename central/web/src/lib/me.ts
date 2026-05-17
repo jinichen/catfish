@@ -87,6 +87,7 @@ export async function fetchGlobalQuota(): Promise<GlobalQuota | null> {
 
 export interface GlobalAudit {
   since_ms: number;
+  /** 员工业务 (排除 internal:* loopback) */
   request_count: number;
   total_tokens: number;
   active_users: number;
@@ -95,6 +96,10 @@ export interface GlobalAudit {
   by_department: { department: string; count: number; total_tokens: number }[];
   by_user: { user_email: string; department: string; count: number; total_tokens: number }[];
   viewer_role: Role;
+  /** BL-AUDIT-INTERNAL-SPLIT (5/17): gateway 内部循环消耗 (summarizer / proactive
+   *  / 5 维 inject 等), 不算员工业务. sysadmin 看透明度. */
+  internal_request_count?: number;
+  internal_tokens?: number;
 }
 
 export async function fetchGlobalAudit(): Promise<GlobalAudit | null> {
