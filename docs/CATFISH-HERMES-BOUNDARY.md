@@ -130,3 +130,19 @@
 **作者**: 鸿波 + 鲶鱼
 **生效日期**: 2026-05-17 (凌晨 04:50)
 **修订**: 需鸿波拍板, 不允许工程师 / AI 单方面松绑.
+
+---
+
+## 附录: 威胁模型 — OS 隔离才是边界 (BL-HERMES-014-P0-MIRROR 5/17)
+
+镜像 hermes 0.14 #20317 ("Rewrite security policy around OS-level isolation as the boundary"). hermes 0.14 正式把"plugins 跟 hermes core 之间是同进程协作不是安全边界"写进官方威胁模型. catfish 同套规则:
+
+1. **进程内不是安全边界**. catfish-gateway 进程里跑的所有代码 (含动态加载的 skill / plugin / hermes adapter) 都视为同信任域. 不能依赖 Python 沙箱 / import hook / monkey-patch 做安全控制 — 一个恶意 in-process plugin 可以拿到任意全局变量, 改任意函数, 读任意环境变量.
+2. **OS / 容器 / 主机才是边界**. 想跨员工 / 跨租户隔离, 要靠:
+   - 不同员工 = 不同 catfish-gateway 进程 / 不同 macOS user / 不同 Linux namespace
+   - 不同租户 = 不同 docker container / 不同 VM
+   - 网络层 (TLS + JWT) 是跨边界通信的唯一安全机制
+3. **catfish 中央层 (FastAPI 进程) 内做的所有"RBAC 检查" 都是 quota / UX 控制, 不是隔离担保**. allowed_models / allowed_tools / allowed_skills 是为了控成本 + 防误操作, 不能拦下"恶意员工已经拿到进程内执行权"这种情况.
+4. **想真隔离**: 客户多租户 = 一员工一进程 (systemd 单实例 / launchd 一员工一 service). 这是 SaaS 化包装的一部分, 客户 IT 升 Day 8 接入手册要写清楚.
+
+跟 hermes 0.14 #20317 一致 — 别把进程内复杂代码当安全沙箱用.

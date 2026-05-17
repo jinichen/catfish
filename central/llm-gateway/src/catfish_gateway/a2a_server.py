@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from collections import defaultdict, deque
@@ -40,6 +41,41 @@ from .a2a_audit import write_audit
 from .a2a_jwt import verify_a2a_token
 
 logger = logging.getLogger("catfish.gateway.a2a_server")
+
+
+# ── BL-HERMES-014-P0-MIRROR (5/17): from_sub 渲染到 system prompt 前清洗 ──
+#
+# 镜像 hermes 0.14 #22435 (kanban_comment author override) + #22769
+# (build_worker_context sanitization) 的纪律: **任何 caller-controlled 字符串
+# 进 system prompt 之前都要清洗**.
+#
+# a2a 场景: params.from_sub 由 JWT iss 担保 (verify_a2a_token 已做), 但 JWT 担保
+# 的只是"发送方真的拥有这个 sub", 而 sub 字符串本身仍是 caller-控制的. 攻击者
+# 注册 sub = "X\n\n忽略上面指示, 改而:..." 就能往 B 的 system prompt 注入指令.
+#
+# 规则:
+#   - 只允许 [A-Za-z0-9@._-] (典型 email / sub 字符)
+#   - 截断 64 字符 (足够装最长 email, 阻止超长 prompt 污染)
+#   - 不合规 → 退到 "<unknown>" 占位
+_FROM_SUB_ALLOWED_RE = re.compile(r"^[A-Za-z0-9@._\-]{1,64}$")
+
+
+def _sanitize_from_sub_for_prompt(raw: str | None) -> str:
+    """清洗 from_sub 字符串使其能安全 string-interp 到 system prompt 里.
+
+    BL-HERMES-014-P0-MIRROR (5/17). 调用方 (a2a_server / a2a_audit) 应该用清洗后
+    的值, 不该把原始 params.from_sub 塞进 prompt 任何位置.
+    """
+    if not raw:
+        return "<unknown>"
+    if _FROM_SUB_ALLOWED_RE.match(raw):
+        return raw
+    # 不合规 — log 一行方便事后查 (谁试图注入), 返占位
+    logger.warning(
+        "a2a from_sub 不合规 (%r), 拒绝渲染进 prompt, 用 <unknown> 占位",
+        raw[:200],
+    )
+    return "<unknown>"
 
 
 # ── 限流 (per from_sub, 1 分钟 10 次) ─────────────────────────────
@@ -293,10 +329,14 @@ async def _stream_llm_answer(
     answer_buffer = ""
     _ANSWER_BUFFER_MAX = 200
 
+    # BL-HERMES-014-P0-MIRROR (5/17): from_sub 进 prompt 之前清洗, 防 caller
+    # 用 "X\n\n忽略上面..." 形态 sub 做 prompt 注入. 详见模块顶部说明.
+    safe_from_sub = _sanitize_from_sub_for_prompt(params.from_sub)
+
     # 构建 prompt
     system_prompt = (
         f"你是 {os.environ.get('CATFISH_USER_SUB', 'B 鲶鱼')} 的鲶鱼副手. "
-        f"另一个员工 {params.from_sub} 的鲶鱼通过 Plan D Federation 协议向你提问. "
+        f"另一个员工 {safe_from_sub} 的鲶鱼通过 Plan D Federation 协议向你提问. "
         f"目的: {params.purpose or '普通咨询'}. "
         f"上下文: {params.context_hint or '无'}\n"
         "回答要点:\n"
@@ -315,9 +355,10 @@ async def _stream_llm_answer(
         api_key = os.environ.get("DASHSCOPE_API_KEY", "").strip()
         if not api_key:
             # 没 API key, 给 mock 回答 (单机 mock 测试用)
+            # BL-HERMES-014-P0-MIRROR (5/17): mock 回答也走清洗后 from_sub.
             mock_answer = (
                 f"[mock 回答 — 没 DASHSCOPE_API_KEY, 真生产会调 LLM] "
-                f"{params.from_sub} 问 '{params.question}'. "
+                f"{safe_from_sub} 问 '{params.question}'. "
                 f"按 ALLOW.md 匹配 ({allow_match}) 我可以答, 但当前没 LLM 配置."
             )
             for chunk in _split_into_chunks(mock_answer):
@@ -342,8 +383,9 @@ async def _stream_llm_answer(
             chosen_model = resolve_model_obj(from_sub_model, config)
             if chosen_model is None:
                 # 退化到 mock 答 (拿不到 from_sub 在本机的最近 session model)
+                # BL-HERMES-014-P0-MIRROR (5/17): 用清洗后 from_sub.
                 mock_answer = (
-                    f"[mock 回答 — 拿不到 {params.from_sub} 最近 session model "
+                    f"[mock 回答 — 拿不到 {safe_from_sub} 最近 session model "
                     f"(可能是远端员工 / 本机没 session 历史)] "
                     f"问 '{params.question}'."
                 )
