@@ -357,13 +357,13 @@ models:
       # 5/15 22:14: 升 v1 → v1.5 (NVIDIA list 里两个都有), NVIDIA 在 Llama 3.3
       # 上加推理的更新版. Nemotron 系列负责"推理强"场景, Qwen3.5 397B 负责
       # "国产 + 通用主力" 场景.
-      model: nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5
+      model: nvidia_nim/minimaxai/minimax-m2.7
       api_base: https://integrate.api.nvidia.com/v1
       api_key_env: NVIDIA_API_KEY
       # reasoning 模型偏慢, 给宽裕 timeout
       timeout: 180
 
-    context_window: 128000
+    context_window: 4096
     # max_output_tokens: 待查实 — 同 nvidia-llama 段同因. revert.
     supports_tool_use: true
     supports_streaming: true

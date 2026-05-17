@@ -2,24 +2,33 @@
 
 use std::process::Command;
 
-/// 打开系统终端窗口并自动运行 `catfish`（鲶鱼包装命令,起 hermes）。
+/// 打开系统终端窗口并自动运行 `hermes` (品牌已 patch 成鲶鱼/小鲶).
+///
+/// 5/18 BL-COMPANION-OPEN-TERMINAL-FIX:
+///   老代码跑 `catfish`, 但那是 identity/auth CLI (login/status/logout/token/refresh),
+///   不是对话 agent. 跑了直接挂在 argparse "the following arguments are required: command".
+///   真正的 chat agent 是 `hermes` — catfish brand patch 让它 banner / UI 显示鲶鱼,
+///   binary 名不变. 详见 docs/CATFISH-HERMES-BOUNDARY.md.
 ///
 /// macOS: 用 osascript 调 Terminal.app
 /// Windows: 用 cmd start
-/// Linux: 暂不支持（terminal emulator 太多，没办法通用探测）
+/// Linux: 暂不支持 (terminal emulator 太多, 没办法通用探测)
 #[tauri::command]
 pub async fn open_terminal(cwd: Option<String>) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        // 拼 cd 前缀，cwd 用单引号包让带空格的路径也能用
+        // 拼 cd 前缀,cwd 用单引号包让带空格的路径也能用
         let inner_cmd = match cwd {
-            Some(p) if !p.is_empty() => format!("cd '{}' && catfish", p.replace('\'', "'\\''")),
-            _ => "catfish".to_string(),
+            Some(p) if !p.is_empty() => format!("cd '{}' && hermes", p.replace('\'', "'\\''")),
+            _ => "hermes".to_string(),
         };
-        // AppleScript：先 do script 起新窗口，再 activate 把它前置
+        // AppleScript: 先 do script 起新窗口, set custom title 盖掉前台进程名 (Terminal.app
+        // 默认标题栏显示 "[user] — [process] — [size]", 直接暴露 hermes), 再 activate 前置.
+        // 5/18 BL-COMPANION-TERMINAL-TITLE: do script 返 tab, custom title 强制改 '鲶鱼'.
         let script = format!(
             r#"tell application "Terminal"
-                do script "{}"
+                set newTab to do script "{}"
+                set custom title of newTab to "鲶鱼"
                 activate
             end tell"#,
             inner_cmd.replace('"', "\\\"")
@@ -33,13 +42,15 @@ pub async fn open_terminal(cwd: Option<String>) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        // Windows: 起新 cmd 窗口跑 catfish (/K 让窗口跑完命令后保留)
+        // Windows: 起新 cmd 窗口跑 hermes (/K 让窗口跑完命令后保留).
+        // 5/18 BL-COMPANION-TERMINAL-TITLE: `start "鲶鱼" cmd ...` 第一个引号串是窗口标题,
+        // 盖掉默认的 "cmd" / 程序路径, 防品牌泄漏.
         let mut cmd = Command::new("cmd");
-        cmd.args(["/C", "start", "cmd", "/K"]);
+        cmd.args(["/C", "start", "鲶鱼", "cmd", "/K"]);
         if let Some(p) = cwd {
-            cmd.arg(format!("cd /d {} && catfish", p));
+            cmd.arg(format!("cd /d {} && hermes", p));
         } else {
-            cmd.arg("catfish");
+            cmd.arg("hermes");
         }
         cmd.spawn().map_err(|e| format!("启动失败: {e}"))?;
         return Ok(());
@@ -48,7 +59,7 @@ pub async fn open_terminal(cwd: Option<String>) -> Result<(), String> {
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = cwd;
-        Err("Linux 暂不支持自动开终端 — 请在你常用的终端里运行 'catfish'".into())
+        Err("Linux 暂不支持自动开终端 — 请在你常用的终端里运行 'hermes'".into())
     }
 }
 

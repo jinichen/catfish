@@ -65,9 +65,9 @@ edge/email-agent/
 │   ├── adapters/                   # ★ 适配器模式
 │   │   ├── __init__.py
 │   │   ├── base.py                 # EmailAdapter ABC + 数据类
-│   │   ├── outlook_win.py          # Windows COM
-│   │   ├── outlook_mac.py          # macOS AppleScript
-│   │   ├── foxmail_win.py          # Foxmail Win 完整读写 (含 draft 注入)
+│   │   ├── apple_mail.py           # macOS Mail.app AppleScript + EMLX 兜底  ← 5/18 替代 outlook_mac.py
+│   │   ├── outlook_win.py          # Windows COM (TODO)
+│   │   ├── foxmail_win.py          # Foxmail Win 完整读写 (含 draft 注入, TODO)
 │   │   └── foxmail_mac.py          # Foxmail Mac 只读 (draft 抛 NotSupportedError)
 │   │
 │   ├── box_parser.py               # Foxmail .box / .ind 解析器 (Win/Mac 共用)
@@ -82,14 +82,12 @@ edge/email-agent/
 │
 ├── tests/
 │   ├── test_box_parser.py          # 用 fixture .box 文件
-│   ├── test_adapter_outlook_mac.py # mock osascript
-│   ├── test_adapter_outlook_win.py # mock win32com
-│   ├── test_adapter_foxmail.py     # mock 文件系统
-│   ├── test_draft.py               # mock gateway LLM
+│   ├── test_adapter_apple_mail.py  # mock osascript + EMLX 文件 (50 tests)  ← 5/18
+│   ├── test_adapter_foxmail_mac.py # 真合成 Profile 目录 (32 tests)
+│   ├── test_adapter_outlook_win.py # mock win32com (TODO)
 │   └── fixtures/
 │       ├── sample.box
-│       ├── sample.ind
-│       └── outlook-applescript-output.json
+│       └── sample.ind
 │
 └── install.sh                      # 装 skill 到 ~/.hermes/skills/productivity/
 ```
@@ -340,10 +338,10 @@ description: 帮员工读公司邮箱 + 起草回复 (Outlook / Foxmail 桌面�
 | 类型 | 怎么做 |
 |---|---|
 | **box_parser** | fixture `.box` / `.ind` 文件 + 解析后跟期望值对比 (主题 / 发件人 / 正文) |
-| **outlook_mac** | mock subprocess; 喂 osascript 输出 JSON; 验证 Python 解析正确 |
-| **outlook_win** | mock `win32com.client.Dispatch`; 验证 COM 调用序列 |
-| **foxmail_win** | mock 文件系统 (pyfakefs / tmp_path); 写 draft 后验证 .eml 在指定目录 |
-| **foxmail_mac** | 复用 box_parser fixture; 验证 `create_draft` 抛 NotSupportedError |
+| **apple_mail** | mock subprocess (osascript) + 合成 EMLX 文件; 验证 AS 输出解析 + EMLX fallback chain + body_html 抽取 (50 tests) |
+| **outlook_win** | mock `win32com.client.Dispatch`; 验证 COM 调用序列 (TODO) |
+| **foxmail_win** | mock 文件系统 (pyfakefs / tmp_path); 写 draft 后验证 .eml 在指定目录 (TODO) |
+| **foxmail_mac** | 复用 box_parser fixture; 验证 `create_draft` 抛 NotSupportedError (32 tests) |
 | **draft** | mock gateway HTTP; 验证 prompt 含必要 context (in_reply_to body / 收件人 / 语气配置) |
 | **inbox 工厂** | mock platform 检测; 验证返回正确的 adapter 实例 |
 | **端到端** (真客户端) | 手工跑 + checklist; 自动化太脆 |

@@ -121,6 +121,13 @@ jobs:
         working-directory: edge/companion-app
         run: npx vite build
 
+      # BL-COMPANION-VERSION-SYNC (5/18): 三处版本号 (package.json / Cargo.toml /
+      # tauri.conf.json) 必须一致, 防漂移. hermes 同步那一块靠 release runbook,
+      # 不在 CI 范围 (hermes 装在 ~/.hermes/, runner 看不到).
+      - name: Companion version sync lint
+        working-directory: edge/companion-app
+        run: bash scripts/check_version_sync.sh
+
   # ════════════════════════════════════════════════════════════
   # 4. 全套总结 — 所有 job 都过才算 CI 绿
   # ════════════════════════════════════════════════════════════

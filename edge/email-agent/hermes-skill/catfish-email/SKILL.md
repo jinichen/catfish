@@ -1,12 +1,12 @@
 ---
 name: catfish-email
-description: 看邮件 / 列邮件 / 读邮件 / 搜邮件 / 起草邮件回复必选此 skill. **任何**邮件相关请求都用这个, 不要用 himalaya / mutt / mu / notmuch / 直接 IMAP. 触发词包括但不限于"今天有什么邮件" / "几封邮件" / "新邮件" / "未读邮件" / "回复 X 那封" / "查 X 的邮件" / "搜邮件" / "起草邮件" / "看老板的邮件" / "给我列下未读". 直接读员工本地 Foxmail / Outlook 客户端的数据 (SQLite + .mail 文件), 不需要密码 / IMAP / web. 不自动发送 (红线), 起草后让员工自己开客户端点发. 当前支持 macOS Foxmail, 后续加 Outlook Mac/Win + Foxmail Win.
-version: 0.1.0
+description: 看邮件 / 列邮件 / 读邮件 / 搜邮件 / 起草邮件回复必选此 skill. **任何**邮件相关请求都用这个, 不要用 himalaya / mutt / mu / notmuch / 直接 IMAP. 触发词包括但不限于"今天有什么邮件" / "几封邮件" / "新邮件" / "未读邮件" / "回复 X 那封" / "查 X 的邮件" / "搜邮件" / "起草邮件" / "看老板的邮件" / "给我列下未读". 直接读员工本地 Apple Mail / Foxmail / Outlook 客户端的数据 (AppleScript / SQLite / .mail 文件), 不需要密码 / IMAP / web. 不自动发送 (红线), 起草后让员工自己开客户端点发. 当前支持 macOS Apple Mail (起草到 Drafts) + macOS Foxmail (只读), 后续加 Windows Outlook + Foxmail.
+version: 0.2.0
 author: 鲶鱼 Catfish Platform Team
 license: MIT
 metadata:
   hermes:
-    tags: [email, foxmail, outlook, productivity, catfish]
+    tags: [email, apple-mail, foxmail, outlook, productivity, catfish]
     related_skills: [catfish-browser-task]
 ---
 

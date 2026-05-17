@@ -1,6 +1,9 @@
 [package]
 name = "catfish-companion-app"
-version = "0.1.0"
+# 5/18 BL-COMPANION-VERSION-SYNC: 跟 hermes (catfish brand) 同步.
+# 改时记得同步 src-tauri/tauri.conf.json + ../package.json + hermes VERSION.
+# CI lint: scripts/check_version_sync.sh
+version = "0.14.0"
 description = "Catfish Companion App - desktop sidekick for the Catfish platform"
 authors = ["Catfish Team"]
 edition = "2021"

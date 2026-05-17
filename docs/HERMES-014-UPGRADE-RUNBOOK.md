@@ -80,6 +80,29 @@ hermes doctor             # 自检
 hermes tools              # 列出可用 tool, 应含新加的 x_search / computer_use / video_generate
 ```
 
+### 3b. 同步 Companion 版本号 (BL-COMPANION-VERSION-SYNC, 5/18)
+
+hermes upstream bump 时, Companion 三处版本号必须跟着改 (员工感知一致, 不然
+hermes banner 显 0.14 但 Companion "关于" 显 0.1, 跟同事汇报 / 故障排错都麻烦):
+
+```bash
+# 三处都改成跟 hermes 同样的 X.Y.Z
+sed -i.bak 's/"version": "[^"]*"/"version": "0.14.0"/' edge/companion-app/package.json
+sed -i.bak '/^\[package\]/,/^\[/ s/^version = ".*"/version = "0.14.0"/' edge/companion-app/src-tauri/Cargo.toml
+sed -i.bak 's/"version": "[^"]*"/"version": "0.14.0"/' edge/companion-app/src-tauri/tauri.conf.json
+rm edge/companion-app/{package.json,src-tauri/Cargo.toml,src-tauri/tauri.conf.json}.bak
+
+# 校验三处一致
+bash edge/companion-app/scripts/check_version_sync.sh
+# 期望: ✓ Companion 版本一致: 0.14.0
+
+# 重 build
+cd edge/companion-app && pnpm tauri build
+```
+
+CI 跑 `check_version_sync.sh` 卡漂移, 但 hermes ↔ Companion 同步靠这一段 runbook
+(hermes 不在仓库里, CI 验不了).
+
 ### 4. 重启 catfish-tool-bridge (跟 hermes 同 venv)
 
 ```bash
