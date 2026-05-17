@@ -734,3 +734,35 @@ def test_detect_mail_data_dir_returns_none_when_no_mail_app(tmp_path, monkeypatc
     home.mkdir()
     monkeypatch.setattr("pathlib.Path.home", classmethod(lambda cls: home))
     assert am._detect_mail_data_dir() is None
+
+
+# ════════════════════════════════════════════════════════════════════
+#         BL-EMAIL-APPLEMAIL-AS-CTRLCHAR (5/18) 防回归
+# ════════════════════════════════════════════════════════════════════
+
+
+def test_no_raw_control_chars_in_as_templates():
+    """静态检查: AS 字符串模板里不能内嵌 raw 0x1f / 0x1e.
+
+    osascript 解析 AS string literal 里出现 ASCII control char (< 0x20, 除 \\t \\n \\r)
+    会挂 -2741 "expected end of line, found class name". 老 f-string 把 FS/RS 直接
+    interpolate 进去就踩这坑 (实盘 5/18 鸿波报 'catfish-email accounts 挂').
+
+    所有 AS 模板必须在 AS 内部用 (ASCII character 31) 等表达式重建分隔符,
+    Python f-string / .replace 不能注入 raw \\x1f / \\x1e.
+    """
+    for name, tmpl in [
+        ("_AS_PING", am._AS_PING),
+        ("_AS_LIST_ACCOUNTS", am._AS_LIST_ACCOUNTS),
+        ("_AS_LIST_MESSAGES", am._AS_LIST_MESSAGES),
+        ("_AS_GET_MESSAGE", am._AS_GET_MESSAGE),
+        ("_AS_SEARCH", am._AS_SEARCH),
+        ("_AS_CREATE_DRAFT", am._AS_CREATE_DRAFT),
+    ]:
+        for ch_code in range(0x20):
+            if ch_code in (0x09, 0x0A, 0x0D):
+                continue  # tab / LF / CR 允许
+            assert chr(ch_code) not in tmpl, (
+                f"{name} 内嵌 raw control char U+{ch_code:04X}, "
+                f"会让 osascript 挂 (-2741). 用 (ASCII character N) 替代."
+            )

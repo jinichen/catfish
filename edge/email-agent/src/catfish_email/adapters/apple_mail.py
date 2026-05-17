@@ -79,8 +79,14 @@ tell application "System Events"
 end tell
 """
 
-_AS_LIST_ACCOUNTS = f"""
+_AS_LIST_ACCOUNTS = """
 tell application "Mail"
+    -- BL-EMAIL-APPLEMAIL-AS-CTRLCHAR (5/18): AS string literal 不接受 raw 0x1f/0x1e,
+    -- 老代码 Python f-string 把 FS="\\x1f" / RS="\\x1e" 内嵌进 AS 字符串里直接挂
+    -- (osascript -2741 syntax error). 在 AS 里用 ASCII character 重建同样的字节,
+    -- Python 端 .split(FS) / .split(RS) 行为不变 (写出 byte 完全一致).
+    set FS to (ASCII character 31)
+    set RS to (ASCII character 30)
     set accs to accounts
     set out to ""
     set defaultName to ""
@@ -96,19 +102,22 @@ tell application "Mail"
         end if
         set isDefault to "0"
         if accName = defaultName then set isDefault to "1"
-        set out to out & accName & "{FS}" & addr & "{FS}" & isDefault & "{RS}"
+        set out to out & accName & FS & addr & FS & isDefault & RS
     end repeat
     return out
 end tell
 """
 
 # list_messages: messageId | subject | sender | date | isRead | folder
-_AS_LIST_MESSAGES = f"""
+_AS_LIST_MESSAGES = """
 tell application "Mail"
-    set accName to "{{ACCOUNT}}"
-    set folderName to "{{FOLDER}}"
-    set limitN to {{LIMIT}}
-    set unreadOnly to {{UNREAD_ONLY}}
+    -- BL-EMAIL-APPLEMAIL-AS-CTRLCHAR (5/18): FS/RS 在 AS 里建.
+    set FS to (ASCII character 31)
+    set RS to (ASCII character 30)
+    set accName to "{ACCOUNT}"
+    set folderName to "{FOLDER}"
+    set limitN to {LIMIT}
+    set unreadOnly to {UNREAD_ONLY}
     set acc to first account whose name of it is accName
     set mb to mailbox folderName of acc
     set msgs to messages of mb
@@ -125,7 +134,7 @@ tell application "Mail"
             set dt to (date received of m) as string
             set readSt to "1"
             if (read status of m) is false then set readSt to "0"
-            set out to out & msgId & "{FS}" & subj & "{FS}" & sndr & "{FS}" & dt & "{FS}" & readSt & "{FS}" & folderName & "{RS}"
+            set out to out & msgId & FS & subj & FS & sndr & FS & dt & FS & readSt & FS & folderName & RS
             set i to i + 1
         end if
     end repeat
@@ -135,12 +144,14 @@ end tell
 
 # read_message: AS 写 body (text) + source (完整 RFC822) 到 2 个 temp 文件,
 # Python 解析 source 提 HTML part. BL-EMAIL-APPLEMAIL-FULL (5/18).
-_AS_GET_MESSAGE = f"""
+_AS_GET_MESSAGE = """
 tell application "Mail"
-    set accName to "{{ACCOUNT}}"
-    set targetId to {{MSG_ID}}
-    set bodyPath to "{{BODY_PATH}}"
-    set sourcePath to "{{SOURCE_PATH}}"
+    -- BL-EMAIL-APPLEMAIL-AS-CTRLCHAR (5/18): FS 在 AS 里建.
+    set FS to (ASCII character 31)
+    set accName to "{ACCOUNT}"
+    set targetId to {MSG_ID}
+    set bodyPath to "{BODY_PATH}"
+    set sourcePath to "{SOURCE_PATH}"
 
     set acc to first account whose name of it is accName
     set foundMsg to missing value
@@ -197,17 +208,20 @@ tell application "Mail"
     end try
     set folderName to name of mailbox of foundMsg
 
-    return subj & "{FS}" & sndr & "{FS}" & dt & "{FS}" & toStr & "{FS}" & ccStr & "{FS}" & folderName
+    return subj & FS & sndr & FS & dt & FS & toStr & FS & ccStr & FS & folderName
 end tell
 """
 
 # search: AS messages whose subject contains q OR sender contains q
-_AS_SEARCH = f"""
+_AS_SEARCH = """
 tell application "Mail"
-    set accName to "{{ACCOUNT}}"
-    set folderName to "{{FOLDER}}"
-    set q to "{{QUERY}}"
-    set limitN to {{LIMIT}}
+    -- BL-EMAIL-APPLEMAIL-AS-CTRLCHAR (5/18): FS/RS 在 AS 里建.
+    set FS to (ASCII character 31)
+    set RS to (ASCII character 30)
+    set accName to "{ACCOUNT}"
+    set folderName to "{FOLDER}"
+    set q to "{QUERY}"
+    set limitN to {LIMIT}
     set acc to first account whose name of it is accName
     set mb to mailbox folderName of acc
     set msgs to (messages of mb whose subject contains q or sender contains q)
@@ -221,7 +235,7 @@ tell application "Mail"
         set dt to (date received of m) as string
         set readSt to "1"
         if (read status of m) is false then set readSt to "0"
-        set out to out & msgId & "{FS}" & subj & "{FS}" & sndr & "{FS}" & dt & "{FS}" & readSt & "{FS}" & folderName & "{RS}"
+        set out to out & msgId & FS & subj & FS & sndr & FS & dt & FS & readSt & FS & folderName & RS
         set i to i + 1
     end repeat
     return out
