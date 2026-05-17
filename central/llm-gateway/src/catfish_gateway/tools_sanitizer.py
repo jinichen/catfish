@@ -129,15 +129,33 @@ _ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
 #: 维护策略: hermes major 升级时 (e.g. 0.14 → 0.15) 跟 release notes 同步, 漏
 #: 一个工具只是误报多一条 audit 行, 不影响功能.
 _KNOWN_BUILTIN_TOOLS: frozenset[str] = frozenset({
-    # ── catfish 原生 (catfish_tool_bridge.catfish_tools) ──
-    "catfish_search_sessions", "catfish_list_my_outputs",
-    "catfish_user_profile_get", "catfish_user_profile_propose", "catfish_user_profile_confirm",
-    "catfish_run_skill", "search_skills",
-    "catfish_remember",  # hidden 但已知 name
-    "catfish_memory_dedupe", "catfish_memory_compress",  # hidden
-    "catfish_browser_open", "catfish_browser_back", "catfish_browser_click",
-    "catfish_browser_screenshot", "catfish_browser_eval", "catfish_browser_navigate",
-    "catfish_read_url", "catfish_read_tool_archive",
+    # ── catfish 原生 (catfish_tool_bridge/catfish_tools.py CATFISH_NATIVE_TOOLS) ──
+    # 5/17 客户机实测 log 漏报 37 个, grep edge/tool-bridge/src 拉真实 47 个全名:
+    # catfish 用户身份 / skill / a2a / memory / browser_* / freeze / expert /
+    # reminder / calendar / task / style_fingerprint / today_summary / teach
+    "catfish_a2a_ask", "catfish_list_a2a_help",
+    "catfish_browser_click", "catfish_browser_fill", "catfish_browser_find_by_text",
+    "catfish_browser_goto", "catfish_browser_locate", "catfish_browser_screenshot",
+    "catfish_browser_snapshot",
+    "catfish_confirm_expertise", "catfish_expert_consult", "catfish_extract_expertise",
+    "catfish_list_expertise",
+    "catfish_create_calendar_event", "catfish_list_calendars",
+    "catfish_create_reminder", "catfish_list_reminder_lists",
+    "catfish_freeze_inspect", "catfish_freeze_rotate", "catfish_freeze_skill",
+    "catfish_list_my_outputs", "catfish_memory_compress", "catfish_memory_dedupe",
+    "catfish_propose_skill", "catfish_propose_skill_revision",
+    "catfish_read_tool_archive", "catfish_recognize_captcha", "catfish_remember",
+    "catfish_run_skill", "catfish_run_task", "catfish_screenshot",
+    "catfish_search_sessions", "catfish_skill_backup", "catfish_skill_delete",
+    "catfish_skill_install", "catfish_skill_publish",
+    "catfish_style_fingerprint_clear", "catfish_style_fingerprint_get",
+    "catfish_style_fingerprint_refresh",
+    "catfish_task_list", "catfish_task_result", "catfish_task_status",
+    "catfish_teach_end", "catfish_teach_start", "catfish_today_summary",
+    "catfish_user_profile_clear", "catfish_user_profile_confirm",
+    "catfish_user_profile_get", "catfish_user_profile_propose",
+    # 顺手放进 search_skills (catfish ALWAYS_ON 不在 catfish_native, 但用)
+    "search_skills",
     # ── hermes 0.14 真实 71 tool name (5/17 客户机实测拉的, hermes-agent
     # registry.get_all_tool_names() 真实输出, 不是 release notes 推测) ──
     # browser (12)
