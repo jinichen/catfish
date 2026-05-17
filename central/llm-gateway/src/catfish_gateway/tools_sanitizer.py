@@ -86,10 +86,8 @@ _HIDDEN_FROM_LLM: frozenset[str] = frozenset({
 #: 这些是 LLM agent loop 的最底座 (执行代码 / 读文件 / 写文件 / 记忆 / 跨问 / 切片 /
 #: 求澄清 / 派任务). 砍了 LLM 干不了基本事.
 _ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
-    # Catfish 核心 native
-    # BL-MEMORY-CATFISH-REMEMBER-BLACKLIST (5/16): catfish_remember 移到 hidden,
-    # 不再给 LLM 看到 (强制走 hermes memory).
-    # "catfish_remember",  # ← 从 always-on 移除 (现在在 _HIDDEN_FROM_LLM)
+    # ── Catfish 核心 native ──
+    # BL-MEMORY-CATFISH-REMEMBER-BLACKLIST (5/16): catfish_remember 移到 hidden.
     "catfish_search_sessions",
     "catfish_list_my_outputs",
     "catfish_user_profile_get",
@@ -97,29 +95,23 @@ _ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
     "catfish_user_profile_confirm",
     "catfish_run_skill",
     "search_skills",
-    # Hermes 0.13 内置基础 (跨 agent 必须)
-    "execute_code",
-    "read_file",
-    "write_file",
-    "edit_file",
-    "list_dir",
-    "search",
-    "grep",
-    "clarify",
-    "delegate_task",
-    # 文件 / shell
-    "shell",
-    "bash",
-    # BL-MEMORY-DIAGNOSIS (5/15 23:50 鸿波本机数据 audit):
-    # hermes 原生 memory 工具是跨 session 长期记忆的核心 (~/.hermes/USER.md /
-    # memories/), 之前一直被砍 → 日志原话 "砍掉低优先级 ... memory" → USER.md
-    # 12 天没动 / memories/ 3 周没动 / project_catfish_facts.md 0 字节空文件.
-    # 这是设计缺陷: memory 应该跟 catfish_remember 同优先级, 永不砍.
-    # 加白名单后 LLM 每次 chat 都能看到 memory.add/replace/remove, 自然写 USER.md.
-    # 5/16 BL-MEMORY-PLUMBING-DIAG 实盘: hermes 0.13 把 4 个旧 memory tool
-    # 合一为 `memory` (action=add/replace/remove/search). 不再注册 memory_save
-    # / memory_load / memory_search — 老名字留着 always-on hit log 永远报 missing.
-    "memory",
+    # ── Hermes 0.14 内置基础 (5/17 客户机实测对齐 hermes 0.14 tool name) ──
+    # BL-HERMES-014-UPGRADE (5/17): hermes 0.14 改了一批 tool name, 老的
+    # shell/bash/edit_file/list_dir/search/grep/todo_tool/screenshot **不再注册** —
+    # always-on hit log 一直报 missing. 改用 0.14 真名:
+    "execute_code",      # 跑代码
+    "read_file",         # 读文件
+    "write_file",        # 写文件
+    "patch",             # hermes 0.14 取代 edit_file (统一 patch-style 编辑)
+    "search_files",      # hermes 0.14 取代 search/grep/list_dir (统一搜索)
+    "terminal",          # hermes 0.14 取代 shell/bash
+    "process",           # hermes 0.14 新加 (process 管理)
+    "clarify",           # 跨问 / 求澄清
+    "delegate_task",     # 派任务
+    "todo",              # hermes 0.14 重命名 todo_tool → todo (catfish-tool-bridge
+                         # adapter.py 仍 `from tools.todo_tool import TodoStore`
+                         # module 路径未变, 只是 tool name 改了)
+    "memory",            # hermes 0.13/0.14 unified memory (action=add/replace/remove/search)
 })
 
 
@@ -141,24 +133,52 @@ _KNOWN_BUILTIN_TOOLS: frozenset[str] = frozenset({
     "catfish_search_sessions", "catfish_list_my_outputs",
     "catfish_user_profile_get", "catfish_user_profile_propose", "catfish_user_profile_confirm",
     "catfish_run_skill", "search_skills",
-    "catfish_remember",  # hidden 但已知 name, 不应被当 unknown
-    "catfish_memory_dedupe", "catfish_memory_compress",  # hidden 同
+    "catfish_remember",  # hidden 但已知 name
+    "catfish_memory_dedupe", "catfish_memory_compress",  # hidden
     "catfish_browser_open", "catfish_browser_back", "catfish_browser_click",
     "catfish_browser_screenshot", "catfish_browser_eval", "catfish_browser_navigate",
     "catfish_read_url", "catfish_read_tool_archive",
-    # ── hermes 0.13 内置 (catfish-tool-bridge 加载) ──
-    "execute_code", "read_file", "write_file", "edit_file", "list_dir",
-    "search", "grep", "clarify", "delegate_task", "shell", "bash",
-    "memory",  # hermes 0.13 unified
-    "todo_tool",  # BL-TODO-BRIDGE-STORE
-    "screenshot", "vision",
-    "browser_back", "browser_open", "browser_click", "browser_eval",
-    "browser_vision", "browser_navigate", "browser_screenshot", "browser_cdp",
-    # ── hermes 0.14 新加 (release v2026.5.16) ──
-    "x_search",  # #26763 X (Twitter) search
-    "video_generate",  # 0.14 unified pluggable
-    "computer_use",  # 0.14 cua-driver backend (不再 Anthropic-only)
-    "browser_console",  # #23226 180x faster CDP
+    # ── hermes 0.14 真实 71 tool name (5/17 客户机实测拉的, hermes-agent
+    # registry.get_all_tool_names() 真实输出, 不是 release notes 推测) ──
+    # browser (12)
+    "browser_back", "browser_cdp", "browser_click", "browser_console",
+    "browser_dialog", "browser_get_images", "browser_navigate", "browser_press",
+    "browser_scroll", "browser_snapshot", "browser_type", "browser_vision",
+    # core agent (10)
+    "clarify", "delegate_task", "execute_code",
+    "patch",         # 0.14 取代 edit_file
+    "process",       # 0.14 新加
+    "read_file", "write_file",
+    "search_files",  # 0.14 取代 search/grep/list_dir
+    "terminal",      # 0.14 取代 shell/bash
+    "memory",
+    # task / cron / kanban (11)
+    "todo", "cronjob",
+    "kanban_block", "kanban_comment", "kanban_complete", "kanban_create",
+    "kanban_heartbeat", "kanban_link", "kanban_list", "kanban_show", "kanban_unblock",
+    # skills (3)
+    "skill_manage", "skill_view", "skills_list",
+    # vision / video / image (4)
+    "image_generate", "video_analyze", "video_generate", "vision_analyze",
+    # web / search (4)
+    "session_search", "web_extract", "web_search", "x_search",
+    # messaging (3)
+    "send_message", "discord", "discord_admin",
+    # feishu (5)
+    "feishu_doc_read", "feishu_drive_add_comment", "feishu_drive_list_comment_replies",
+    "feishu_drive_list_comments", "feishu_drive_reply_comment",
+    # home assistant (4)
+    "ha_call_service", "ha_get_state", "ha_list_entities", "ha_list_services",
+    # spotify (8)
+    "spotify_albums", "spotify_devices", "spotify_library", "spotify_playback",
+    "spotify_playlists", "spotify_queue", "spotify_search",
+    # yuanbao (5)
+    "yb_query_group_info", "yb_query_group_members",
+    "yb_search_sticker", "yb_send_dm", "yb_send_sticker",
+    # misc (3)
+    "computer_use",   # 0.14 cua-driver, 非 Anthropic
+    "text_to_speech",
+    "mixture_of_agents",
 })
 
 
