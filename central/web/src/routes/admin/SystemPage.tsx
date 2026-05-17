@@ -154,22 +154,13 @@ function SystemDashboard() {
         )}
       </Card>
 
-      <Card title="⚠️ 危险操作 (sysadmin only)">
-        <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
-          <p>这些操作会影响整个系统, 谨慎执行. P1 待加:</p>
-          <ul style={{ paddingLeft: 20 }}>
-            <li>系统服务重启 (gateway / identity / mcp / hub / broker)</li>
-            <li>PG 数据库备份 / 恢复</li>
-            <li>OIDC 配置热更 (改 audience / 加客户自建 SSO)</li>
-            <li>quotas.yaml 编辑 (改 default / per_dept override)</li>
-            <li>dev_users 编辑 (多角色测试账号)</li>
-            <li>导出全公司 audit 月报 (合规)</li>
-          </ul>
-          <p style={{ marginTop: "var(--space-3)" }}>
-            目前: 改 yaml 还是 ssh 改文件后重启 service.
-          </p>
-        </div>
-      </Card>
+      {/* BL-HOMEPAGE-DEDUPE follow-up (5/17 鸿波): "危险操作" 卡删除 — 整张卡是
+          P1 待加项的纯文字 placeholder, 没真按钮, UI 上是空头支票. 真危险操作
+          (重启 service / 改 yaml / dev_users 编辑) 当前走 ssh + 改文件, 不该在
+          web UI 引导员工"我能在这做这些事" — 容易误认为有按钮就能点. 等真接入
+          后台 API 再加回这张卡, 现在空叫无意义.
+          注: doc string 顶部还保留'危险操作 (重启/备份)' 项目说明作为 future
+          backlog, 但不渲染卡片. */}
     </div>
   );
 }
