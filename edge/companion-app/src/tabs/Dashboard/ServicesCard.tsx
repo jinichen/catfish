@@ -1,12 +1,18 @@
-/** 仪表盘 · 4 服务概览卡片
+/** 仪表盘 · 服务概览卡片
  *
- * 复用 Console tab 的状态轮询 hook (useServiceStatus + services store), 但比
- * Console 的 ServiceCard 紧凑 —— 每行一个服务: 状态点 + 名称 + 端口/PID/状态文案。
- * 点击行跳到"控制台" tab 做启停操作 (这里只展示, 不操作)。
+ * 状态:
+ *   - **Tool Bridge / Chrome / Local Search** (3 个真本地服务) — 边缘端 Companion
+ *     可启停 + 重启. 它们是单 Mac 单员工的进程, 跟 Companion 进程绑定.
+ *   - **LLM Gateway** (1 个中央端服务) — 只读监控. 状态点 + 端口, 没启停按钮.
  *
- * 为啥 Dashboard 也要显示:
- *   员工默认进 Dashboard 想一眼看清楚整体健康度。 autostart 拉起的 tool-bridge /
- *   gateway 出问题时, 不该让员工跑去控制台才能发现。
+ * BL-COMPANION-SERVICES-DEMOTE (5/17 鸿波): 老逻辑允许 Companion 启停 Gateway,
+ * 违 BL-CENTRAL-EDGE-BOUNDARY 操作面 — Gateway 是中央服务 (未来 SaaS 化跑客户
+ * 机房 / 云端), 边缘 Companion 不该有启停权. SaaS 化后启停按钮点了也没用,
+ * 多员工共享时一员工停 → 全公司断. 现在就撤掉, 改只读监控 (健康检查 only).
+ *
+ * 为啥 Dashboard 还要显示 Gateway:
+ *   员工不能控制 != 不能看. Gateway 挂的话员工聊天用不了, 要能 spotting 到
+ *   红点 → 联系 ops 处理. 跟"信号塔在不在线"同性质.
  */
 
 import { useServicesStore } from "../../store/services";
@@ -15,8 +21,6 @@ import { useAgentStore } from "../../store/agent";
 import StatusDot from "../../components/StatusDot";
 import type { ServiceId, ServiceStatus } from "../../types/service";
 import {
-  gatewayStart,
-  gatewayStop,
   chromeLaunch,
   chromeKill,
   localSearchStart,
@@ -25,20 +29,24 @@ import {
   toolBridgeStop,
 } from "../../lib/tauri";
 
-// BL-CONSOLE-TAB-KILL (5/16): 启停 action 表, 替代砍掉的控制台 tab.
-// 每个 ServiceId 知道自己怎么 start/stop. 重启 = stop + 800ms + start.
+// BL-COMPANION-SERVICES-DEMOTE (5/17): gateway 不在 SERVICE_ACTIONS 里了 —
+// 边缘 Companion 无权启停中央服务. 表里只剩 3 个真本地服务.
+// 类型 Pick 防新增 ServiceId 时漏改这个表.
+type LocalServiceId = Exclude<ServiceId, "gateway">;
 const SERVICE_ACTIONS: Record<
-  ServiceId,
+  LocalServiceId,
   { start: () => Promise<unknown>; stop: () => Promise<unknown> }
 > = {
-  gateway: { start: gatewayStart, stop: gatewayStop },
   chrome: { start: chromeLaunch, stop: chromeKill },
   local_search: { start: localSearchStart, stop: localSearchStop },
   tool_bridge: { start: toolBridgeStart, stop: toolBridgeStop },
 };
 
 async function restartService(id: ServiceId): Promise<void> {
-  const a = SERVICE_ACTIONS[id];
+  // BL-COMPANION-SERVICES-DEMOTE (5/17): gateway 不可重启, 这里直接 return.
+  // (UI 上 gateway 行已经没 ↻ 按钮, 这是个 defensive check)
+  if (id === "gateway") return;
+  const a = SERVICE_ACTIONS[id as LocalServiceId];
   if (!a) return;
   try {
     await a.stop();
@@ -62,7 +70,9 @@ function buildServices(agentName: string): ServiceRow[] {
     {
       id: "gateway",
       name: "LLM Gateway",
-      why: "所有 LLM 请求经它, 没起来 = 聊天用不了",
+      // BL-COMPANION-SERVICES-DEMOTE (5/17): 文案改成"中央服务"明确身份, 提示
+      // 员工挂了找 IT/ops, 不要自己尝试重启 (按钮也没了).
+      why: "中央服务 (你 mac 上是过渡, 未来云端). 挂了联系 IT, 没起来 = 聊天用不了",
     },
     {
       id: "tool_bridge",
@@ -129,58 +139,56 @@ export default function ServicesCard() {
           marginBottom: "var(--space-3)",
         }}
       >
-        <strong>本地服务</strong>
-        {/* BL-CONSOLE-TAB-KILL (5/16): 一键 batch 操作, 替代砍掉的控制台 tab.
+        <strong>服务状态</strong>
+        {/* BL-COMPANION-SERVICES-DEMOTE (5/17): batch 按钮**只动 3 个本地服务**,
+            不再控制 Gateway (中央端). 按钮文案改 "本地全启 / 本地全停 / 本地全重启"
+            明确范围. Gateway 行单独显示状态点, 没按钮.
             真要看 log 走 ~/Library/Logs/Catfish/*.log 文件. */}
         <div style={{ display: "flex", gap: 4 }}>
           <button
             onClick={() => {
               void Promise.allSettled([
-                gatewayStart(),
                 chromeLaunch(),
                 localSearchStart(),
                 toolBridgeStart(),
               ]);
             }}
-            title="一键启动 4 个本地服务"
+            title="一键启动 3 个本地服务 (Tool Bridge / Chrome / Local Search)"
             style={batchBtnStyle}
           >
-            全启
+            本地全启
           </button>
           <button
             onClick={() => {
               void Promise.allSettled([
-                gatewayStop(),
                 chromeKill(),
                 localSearchStop(),
                 toolBridgeStop(),
               ]);
             }}
-            title="一键停止 4 个本地服务"
+            title="一键停止 3 个本地服务"
             style={batchBtnStyle}
           >
-            全停
+            本地全停
           </button>
           <button
             onClick={async () => {
               await Promise.allSettled([
-                gatewayStop(),
                 chromeKill(),
                 localSearchStop(),
                 toolBridgeStop(),
               ]);
               await new Promise((r) => setTimeout(r, 800));
               await Promise.allSettled([
-                gatewayStart(),
                 chromeLaunch(),
                 localSearchStart(),
                 toolBridgeStart(),
               ]);
             }}
-            title="一键全部重启"
+            title="一键重启 3 个本地服务"
             style={batchBtnStyle}
           >
-            全重启
+            本地全重启
           </button>
         </div>
       </header>
@@ -229,14 +237,31 @@ function ServiceRowItem({ row }: { row: ServiceRow }) {
           {compactStatusText(status)}
         </span>
         {/* BL-CONSOLE-TAB-KILL (5/16): 单服务重启按钮, 替代控制台单卡操作.
-            员工 90% 撞 bug 时想做的就是"重启这个服务", 直接前置. */}
-        <button
-          onClick={() => void restartService(row.id)}
-          title={`重启 ${row.name}`}
-          style={rowBtnStyle}
-        >
-          ↻
-        </button>
+            员工 90% 撞 bug 时想做的就是"重启这个服务", 直接前置.
+            BL-COMPANION-SERVICES-DEMOTE (5/17): Gateway 不显示重启按钮 —
+            中央服务边缘不该有启停权. 留个占位灰字"只读"提示员工知道. */}
+        {row.id === "gateway" ? (
+          <span
+            style={{
+              fontSize: 10,
+              color: "var(--catfish-text-muted)",
+              padding: "2px 8px",
+              border: "1px dashed var(--catfish-border)",
+              borderRadius: "var(--radius-sm)",
+            }}
+            title="中央服务由 IT / ops 管理, Companion 只读监控状态"
+          >
+            只读
+          </span>
+        ) : (
+          <button
+            onClick={() => void restartService(row.id)}
+            title={`重启 ${row.name}`}
+            style={rowBtnStyle}
+          >
+            ↻
+          </button>
+        )}
       </div>
       {/* BL-FIX18: why 改 inline 副标题, 不再 native tooltip 出界 */}
       <div
