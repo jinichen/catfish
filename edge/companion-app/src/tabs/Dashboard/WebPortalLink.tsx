@@ -4,19 +4,17 @@
  * Companion 砍了 7 张管理类卡, 这些功能挪去 catfish-web. 这张顶部 banner 给员工
  * 一条进 web 的路, 按 role 显示能进的入口.
  *
- * 路由约定 (跟 catfish-web src/routes/ 对齐):
- *   /me           我的 (跟 Companion 仪表盘同源数据, 浏览器看一眼)
- *   /skills       Skills Hub 全市场
- *   /mcp          MCP 连接器市场
- *   /manager      部门 (manager+)
- *   /audit        审计大查询 (manager+)
- *   /admin        Admin 后台 (admin / sysadmin)
- *   /admin/system 系统管理 (sysadmin)
+ * 路由约定 (跟 catfish-web src/routes/ 对齐, **5/17 更新**):
+ *   /market       📦 资源市场 (Skills + MCP 合并, 内 sub-tab)
+ *   /manager      👥 部门 (manager+)
+ *   /audit        📜 审计大查询 (manager+)
+ *   /admin        ⚙️ Admin 后台 (admin / sysadmin)
+ *   /admin/system 🔐 系统管理 (sysadmin)
  *
- * 渲染策略:
- *   - 顶部 banner 一行 (轻样式), 不抢 ProactiveCard / TasksCard 注意力.
- *   - 按 role 过滤链接 (跟 catfish-web NavBar.tsx 同款).
- *   - 没拿到 role (loading) 仍显示通用入口 (我的 / Skills / MCP).
+ * BL-COMPANION-DASHBOARD-SYNC (5/17 鸿波): 老 7 项链接对齐到 web 新 5 项.
+ *   - 删 /me — web 整页废了, 员工自查走 Companion 仪表盘本身
+ *   - 合 /skills + /mcp → /market — web 已经合并成单一 tab
+ *   - emoji 统一 (📦 / 👥 / 📜 / ⚙️ / 🔐), 顺序按权限阶梯
  *
  * BL-ARCH2 fix4 (5/10): catfish-web 没起来时给"未运行"提示, 不让员工点链接看
  * 系统浏览器"无法连接服务器"无声失败 (鸿波: "还是一样的"). 心跳 10s 一次.
@@ -90,42 +88,34 @@ interface PortalLink {
   show: (role: string) => boolean;
 }
 
-// 跟 catfish-web NavBar.tsx role 继承一致: sysadmin > admin > manager > employee
+// BL-COMPANION-DASHBOARD-SYNC (5/17 鸿波): 跟 catfish-web NavBar.tsx 5 项 nav 对齐.
+// role 继承: sysadmin > admin > manager > employee. 老 7 项 → 新 5 项:
+//   - 删 /me (整页废了, 员工自查走 Companion 仪表盘本身)
+//   - 合 /skills + /mcp → /market (web 已合并成 sub-tab)
+//   - emoji 统一, 顺序按权限阶梯升级
 const PORTAL_LINKS: PortalLink[] = [
   {
-    path: "/me",
-    label: "我的总览",
-    desc: "在浏览器看本人 quota / 装的 skill / mcp",
-    show: () => true,
-  },
-  {
-    path: "/skills",
-    label: "Skills Hub",
-    desc: "全公司 skill 广场, 装 / publish / 评分",
-    show: () => true,
-  },
-  {
-    path: "/mcp",
-    label: "MCP 市场",
-    desc: "Jira / GitLab / 文件 mcp 订阅",
+    path: "/market",
+    label: "📦 资源市场",
+    desc: "Skills (技能脚本) + MCP (连接器) 合并入口, 全公司共享",
     show: () => true,
   },
   {
     path: "/manager",
-    label: "部门",
-    desc: "本部门 quota / 团队 / audit",
+    label: "👥 部门",
+    desc: "本部门 quota / top 员工 / audit",
     show: (r) => r === "manager" || r === "admin" || r === "sysadmin",
   },
   {
     path: "/audit",
-    label: "审计大查询",
-    desc: "跨员工 / 跨部门 / 时间段",
+    label: "📜 审计大查询",
+    desc: "跨员工 / 跨部门 / 时间段 + 趋势 + CSV 导出",
     show: (r) => r === "manager" || r === "admin" || r === "sysadmin",
   },
   {
     path: "/admin",
-    label: "Admin 后台",
-    desc: "用户 / 配额规则 / billing",
+    label: "⚙️ Admin 后台",
+    desc: "用户 / 配额规则 / billing / 部门 RBAC",
     show: (r) => r === "admin" || r === "sysadmin",
   },
   {
@@ -193,7 +183,7 @@ export default function WebPortalLink() {
         >
           {isOffline
             ? <>未运行 (<code>{webBase}</code>) — 启动: <code>cd central/web && npm run dev</code></>
-            : <>管理类功能 (跨员工 / 跨部门 / IT) 都搬去 web 了, 桌面端只看"我的"</>}
+            : <>管理 + 跨员工市场在 web. 桌面端管个人 (对话 / 画像 / skill 装卸 / 配额自查)</>}
         </span>
       </div>
       <div
