@@ -1415,18 +1415,22 @@ async def api_dev_users() -> dict[str, Any]:
 
 @app.get("/api/proactive/starter")
 async def api_proactive_starter(
-    user: User = Depends(get_current_user),  # noqa: ARG001  鉴权但不用 user 字段
+    user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """返一个上下文感知的 starter (引用员工 journal + 时段). 失败返 fallback 模板."""
+    """返一个上下文感知的 starter (引用员工 journal + 时段). 失败返 fallback 模板.
+
+    BL-INTERNAL-MODEL-FOLLOW-USER (5/17): user.sub 透传, proactive 用员工最近
+    session 的 model. 没拿到 → fallback 模板.
+    """
     from . import proactive
-    return await proactive.generate_starter()
+    return await proactive.generate_starter(user_email=user.sub)
 
 
 # 5/6 BL-E13.5 真主动 Phase B: 信号触发的针对性 starter
 @app.post("/api/proactive/contextual")
 async def api_proactive_contextual(
     body: dict[str, Any],
-    user: User = Depends(get_current_user),  # noqa: ARG001
+    user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     """信号触发的 starter. body = {signal_kind: str, context: dict}.
 
@@ -1434,6 +1438,7 @@ async def api_proactive_contextual(
     context: 各 kind 不同, 见 proactive.py _SIGNAL_KIND_PROMPTS
 
     失败返 source='fallback', frontend 用本地模板兜底.
+    BL-INTERNAL-MODEL-FOLLOW-USER (5/17): 用员工最近 session 的 model.
     """
     from . import proactive
     signal_kind = (body.get("signal_kind") or "").strip()
@@ -1444,7 +1449,7 @@ async def api_proactive_contextual(
             "context_hint": "missing signal_kind or context",
             "source": "fallback",
         }
-    return await proactive.generate_contextual_starter(signal_kind, context)
+    return await proactive.generate_contextual_starter(signal_kind, context, user_email=user.sub)
 
 
 # Capability-probe stubs

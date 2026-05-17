@@ -113,21 +113,35 @@ GENERATE_PATCH_PROMPT_SYSTEM = """你是 catfish skill 改写助手. 给你一�
 
 # ── 公共: LLM 调用 helper ───────────────────────
 
-async def _llm_json(system_prompt: str, user_prompt: str, *, max_tokens: int = 4000) -> dict:
+async def _llm_json(
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    max_tokens: int = 4000,
+    triggered_by: str | None = None,
+) -> dict:
     """调内部 LLM, 期望返 JSON. 失败时返 {"error": ...}.
 
-    走 internal_models.pick_internal_model("fact_analyzer") 选模型. tier=private 优先,
-    数据不出公司 — 跟 catfish "本地优先" 定位一致.
-
-    BL-INTERNAL-MODEL-FOLLOW-USER (5/17): 不绑员工 session model — facts 是
-    admin/cron 触发的政策解析任务, 不属于员工 session, 没 origin_model. 保留
-    pick_internal_model 的 private-first 兜底. 政策审计需求强 (合规), 走私有
-    模型保数据不出, 这层不动.
+    BL-INTERNAL-MODEL-FOLLOW-USER (5/17 鸿波): 严格用 triggered_by (触发 admin)
+    最近 session 的 model. 没 triggered_by / 拿不到 model → 返 error, 不
+    fallback. caller (admin /api/facts/* endpoint) 必须传 admin user.sub.
     """
+    from .user_model_resolver import get_user_last_session_model, resolve_model_obj  # noqa: PLC0415
+
+    if not triggered_by:
+        return {
+            "error": "BL-INTERNAL-MODEL-FOLLOW-USER: 没 triggered_by (admin sub), "
+                     "facts 分析跳过 (员工同款规则). caller 必须传 admin user.sub."
+        }
+
     config = load_config()
-    chosen = pick_internal_model("fact_analyzer", config)
+    admin_model = get_user_last_session_model(triggered_by)
+    chosen = resolve_model_obj(admin_model, config)
     if chosen is None:
-        return {"error": "catalog 没可用 chat 模型, 无法跑 fact 分析. 检查 models.yaml"}
+        return {
+            "error": f"没拿到 admin {triggered_by} 最近 session model, facts 分析跳过. "
+                     "admin 先打开 Companion 选个 model 聊一句, 创建 session 后再触发."
+        }
 
     import litellm  # noqa: PLC0415
 
@@ -196,8 +210,12 @@ def _read_file_text(meta: dict) -> str:
 
 # ── Step 1: extract ─────────────────────────────
 
-async def run_extract(meta: dict) -> dict:
-    """读变更文件 → LLM 提"事实点". 返 {"summary", "facts": [...], "effective_date"}."""
+async def run_extract(meta: dict, triggered_by: str | None = None) -> dict:
+    """读变更文件 → LLM 提"事实点". 返 {"summary", "facts": [...], "effective_date"}.
+
+    BL-INTERNAL-MODEL-FOLLOW-USER (5/17): triggered_by 是 admin sub, 用 admin
+    最近 session 的 model. 调用方 (facts_router) 必传.
+    """
     text = _read_file_text(meta)
     if len(text) < 50:
         return {"error": "文件解析后内容太短 (< 50 字), 可能解析失败", "facts": []}
@@ -209,7 +227,7 @@ async def run_extract(meta: dict) -> dict:
 
     user_prompt = f"文件标题: {meta.get('title', '')}\n生效日期 (若文件没说, 留 null): {meta.get('effective_date') or '未指定'}\n\n文件内容:\n\n{text}"
 
-    result = await _llm_json(EXTRACT_PROMPT_SYSTEM, user_prompt, max_tokens=6000)
+    result = await _llm_json(EXTRACT_PROMPT_SYSTEM, user_prompt, max_tokens=6000, triggered_by=triggered_by)
     if "error" in result:
         return {**result, "facts": []}
 
@@ -268,7 +286,10 @@ async def _fetch_all_skills(user: User) -> list[dict]:
 
 
 async def run_find_impact(meta: dict, facts: dict, user: User) -> list[dict]:
-    """对每个事实点, LLM 找受影响 skill. 返扁平 list (每条 = 一个 impact)."""
+    """对每个事实点, LLM 找受影响 skill. 返扁平 list (每条 = 一个 impact).
+
+    BL-INTERNAL-MODEL-FOLLOW-USER (5/17): triggered_by 用 user.sub (admin).
+    """
     skills = await _fetch_all_skills(user)
     if not skills:
         logger.warning("找受影响 skill: skills-hub 返 0 个 skill (可能没起 / 没装 skill)")
@@ -299,7 +320,7 @@ async def run_find_impact(meta: dict, facts: dict, user: User) -> list[dict]:
             f"事实变更:\n{json.dumps(fact, ensure_ascii=False, indent=2)}\n\n"
             f"待筛 skill 列表 (共 {len(skills)} 个):\n{skills_block}"
         )
-        result = await _llm_json(FIND_IMPACT_PROMPT_SYSTEM, user_prompt, max_tokens=2000)
+        result = await _llm_json(FIND_IMPACT_PROMPT_SYSTEM, user_prompt, max_tokens=2000, triggered_by=user.sub)
         if "error" in result:
             logger.warning("find_impact LLM 失败: %s (fact=%s)", result.get("error"), fact.get("id"))
             continue
@@ -382,7 +403,7 @@ async def run_generate_patches(
                 f"skill 当前内容 ({ns}/{name} v{version}):\n```\n{full_md}\n```"
             )
             patch_result = await _llm_json(
-                GENERATE_PATCH_PROMPT_SYSTEM, user_prompt, max_tokens=4000
+                GENERATE_PATCH_PROMPT_SYSTEM, user_prompt, max_tokens=4000, triggered_by=user.sub
             )
             if "error" in patch_result:
                 logger.warning("generate_patch LLM 失败: %s", patch_result.get("error"))

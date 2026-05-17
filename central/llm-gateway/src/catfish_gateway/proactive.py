@@ -154,8 +154,11 @@ def _build_user_prompt(journal_tail: str, now: datetime) -> str:
 直接输出 1 句 starter, 不要前后缀, 不要 markdown."""
 
 
-async def generate_starter() -> dict[str, Any]:
+async def generate_starter(user_email: str | None = None) -> dict[str, Any]:
     """生成主动闲聊 starter.
+
+    BL-INTERNAL-MODEL-FOLLOW-USER (5/17 鸿波): 严格用员工最近 session 的 model,
+    不 fallback. 拿不到 model → fallback 模板.
 
     返:
       {
@@ -167,21 +170,22 @@ async def generate_starter() -> dict[str, Any]:
     now = datetime.now()
     journal_tail = _read_journal_tail()
 
-    # BL-INTERNAL-MODEL-FOLLOW-USER (5/17): proactive 是后台 cron 任务, 没员工
-    # 当前 chat 的 origin_model context. 长期方案: 拿员工最后 1 个 session 的
-    # model (sessions 表最大 started_at + status=active 那条). Day 8 再做.
-    # 短期保留 pick_internal_models_ordered 的 "private 优先" 兜底 — 它是 1 句
-    # 闲聊 max_tokens=120, 走私有 model 没成本风险.
+    # 拿员工最近 session 的 model (BL-INTERNAL-MODEL-FOLLOW-USER 5/17 严格规则)
     from .config import load_config  # 懒 import
-    from .internal_models import pick_internal_models_ordered  # 懒 import
+    from .user_model_resolver import get_user_last_session_model, resolve_model_obj
     config = load_config()
-    candidates = pick_internal_models_ordered("proactive_starter", config)
-    if not candidates:
+    model_name = get_user_last_session_model(user_email or "")
+    origin_obj = resolve_model_obj(model_name, config)
+    if origin_obj is None:
         return {
             "starter": _fallback_starter(now),
-            "context_hint": "fallback (catalog 没可用 chat 模型, 全部 api key 没配?)",
+            "context_hint": (
+                f"fallback (没拿到 {user_email} 最近 session model — "
+                "新员工 / 老 schema / 全 model 不可达, 跳过 LLM call)"
+            ),
             "source": "fallback",
         }
+    candidates = [origin_obj]  # 严格只一个候选, 跟员工 chat 同款
 
     # gateway loopback HTTP (跟 summarizer 同模式, BL-F12)
     import httpx  # 懒 import
@@ -364,8 +368,11 @@ def _build_contextual_user_prompt(
 async def generate_contextual_starter(
     signal_kind: str,
     context: dict[str, Any],
+    user_email: str | None = None,
 ) -> dict[str, Any]:
     """生成信号触发的针对性 starter.
+
+    BL-INTERNAL-MODEL-FOLLOW-USER (5/17 鸿波): 严格用员工最近 session 的 model.
 
     Args:
       signal_kind: 'silence' | 'deadline' | 'focus'
@@ -373,6 +380,7 @@ async def generate_contextual_starter(
         silence: {minutes_ago, last_user_text, action_hits}
         deadline: {days_until, date_str, journal_excerpt}
         focus: {minutes_away, last_user_text}
+      user_email: 员工 email, 用于查最近 session model.
 
     返:
       {starter, context_hint, source: 'llm' | 'fallback'}
@@ -387,17 +395,21 @@ async def generate_contextual_starter(
             "source": "fallback",
         }
 
-    # 候选模型 (跟死时间版同, 复用 proactive_starter use_case)
+    # BL-INTERNAL-MODEL-FOLLOW-USER (5/17): 用员工最近 session model, 严格一致.
     from .config import load_config  # noqa: PLC0415
-    from .internal_models import pick_internal_models_ordered  # noqa: PLC0415
+    from .user_model_resolver import get_user_last_session_model, resolve_model_obj  # noqa: PLC0415
     config = load_config()
-    candidates = pick_internal_models_ordered("proactive_starter", config)
-    if not candidates:
+    model_name = get_user_last_session_model(user_email or "")
+    origin_obj = resolve_model_obj(model_name, config)
+    if origin_obj is None:
         return {
             "starter": "",
-            "context_hint": "fallback (catalog 没可用 chat 模型)",
+            "context_hint": (
+                f"fallback (没拿到 {user_email} 最近 session model, frontend 走本地模板)"
+            ),
             "source": "fallback",
         }
+    candidates = [origin_obj]
 
     import httpx  # noqa: PLC0415
     port = os.environ.get("PORT", "8999")

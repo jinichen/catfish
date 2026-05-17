@@ -328,23 +328,24 @@ async def _stream_llm_answer(
             yield _sse_event("done", _jsonrpc_done(req.id, audit_id, chunks_count))
         else:
             # 真 LLM streaming.
-            # BL-F14: 不写死模型, 用 pick_internal_model("a2a_aux") 按 tag 选 (private 优先).
-            # a2a 走特殊 SSE 链路, 不走 gateway loopback (跟 summarizer/proactive 不同),
-            # 直接用 LiteLLM, 但 model + api_base + api_key 都从 catalog 来.
-            #
-            # BL-INTERNAL-MODEL-FOLLOW-USER (5/17): a2a 是跨员工 federation,
-            # 接收方接到 from_sub 的请求, 不绑接收方的 session model. 长期:
-            # 让 from_sub (发起方) 透传自己 session 的 model 到 a2a header,
-            # 接收方用同款回答 — Day 8 设计. 短期保留 pick_internal_model.
+            # BL-INTERNAL-MODEL-FOLLOW-USER (5/17 鸿波): 严格用 from_sub (发起方
+            # 员工) 最近 session 的 model. a2a 是跨员工 federation, from_sub
+            # 是真正的"用户" — 答案是给 from_sub 看的, 自然该用 from_sub 的 model.
+            # 接收方 (本机 catfish-gateway) 查本机 sessions 表里 from_sub 的最近
+            # model. 如果 from_sub 在本机没 session (远端员工), 用 mock 答.
             from .config import load_config  # noqa: PLC0415
-            from .internal_models import pick_internal_model  # noqa: PLC0415
+            from .user_model_resolver import (  # noqa: PLC0415
+                get_user_last_session_model, resolve_model_obj,
+            )
             config = load_config()
-            chosen_model = pick_internal_model("a2a_aux", config)
+            from_sub_model = get_user_last_session_model(params.from_sub or "")
+            chosen_model = resolve_model_obj(from_sub_model, config)
             if chosen_model is None:
-                # 退化到 mock 答 (catalog 没可用模型)
+                # 退化到 mock 答 (拿不到 from_sub 在本机的最近 session model)
                 mock_answer = (
-                    f"[mock 回答 — catalog 没可用 chat 模型, A2A LLM 调用跳过] "
-                    f"{params.from_sub} 问 '{params.question}'."
+                    f"[mock 回答 — 拿不到 {params.from_sub} 最近 session model "
+                    f"(可能是远端员工 / 本机没 session 历史)] "
+                    f"问 '{params.question}'."
                 )
                 for chunk in _split_into_chunks(mock_answer):
                     chunks_count += 1

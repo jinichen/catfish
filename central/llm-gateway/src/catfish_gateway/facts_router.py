@@ -306,7 +306,7 @@ async def extract_fact(
         logger.info("facts.extract: 重跑 fact %s (旧 status=%s)", fact_id, meta["status"])
 
     from .facts_pipeline import run_extract  # noqa: PLC0415 (避免循环依赖)
-    facts = await run_extract(meta)
+    facts = await run_extract(meta, triggered_by=user.sub)
 
     fact_dir = _fact_dir(fact_id)
     (fact_dir / "fact.json").write_text(
@@ -341,7 +341,7 @@ async def analyze_fact(
     # 自动 extract (如果还没)
     if not (fact_dir / "fact.json").exists():
         from .facts_pipeline import run_extract  # noqa: PLC0415
-        facts = await run_extract(meta)
+        facts = await run_extract(meta, triggered_by=user.sub)
         (fact_dir / "fact.json").write_text(
             json.dumps(facts, ensure_ascii=False, indent=2), encoding="utf-8"
         )
