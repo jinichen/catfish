@@ -3,8 +3,8 @@
 > 鲶鱼平台的邮件 agent. 让小鲶替你**读**公司邮箱 + **起草**回复. **不自动发送**(红线).
 
 源自实测约束: 公司邮箱不支持 IMAP / web / API, 只有桌面客户端
-(Outlook / Foxmail). 我们直接读客户端的本地数据, 凭据由客户端自己管,
-catfish 完全不碰密码.
+(Apple Mail / Outlook / Foxmail). 我们直接读客户端的本地数据, 凭据由客户端
+自己管, catfish 完全不碰密码.
 
 详细设计: 见 [DESIGN.md](DESIGN.md).
 
@@ -15,9 +15,13 @@ catfish 完全不碰密码.
 | 平台 + 客户端 | 列 | 读 | 搜 | 起草 | 状态 |
 |---|---|---|---|---|---|
 | **macOS Foxmail 1.5+** | ✅ | ✅ | ✅ | ❌(红线 + 写入不可靠) | **可用** |
-| macOS Outlook | ⏳ | ⏳ | ⏳ | ⏳ | TODO (AppleScript) |
+| **macOS Apple Mail** (Mail.app) | ⏳ | ⏳ | ⏳ | ⏳ | scaffold (BL-EMAIL-APPLEMAIL 5/17) |
 | Windows Outlook | ⏳ | ⏳ | ⏳ | ⏳ | TODO (pywin32 COM) |
 | Windows Foxmail | ⏳ | ⏳ | ⏳ | ⏳ | TODO (.box parser 已有) |
+
+> **5/17 BL-EMAIL-APPLEMAIL**: macOS 端目标从 Outlook for Mac 改 Apple Mail.app.
+> 理由: Mail.app 100% 装机 / AppleScript dictionary 完整 / 免 Microsoft 365 订阅.
+> 详见 DESIGN.md 1.2 + 4.1.
 
 ---
 

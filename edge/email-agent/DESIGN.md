@@ -3,7 +3,12 @@
 > P1-1 三大支柱之二: 让小鲶替员工读邮件 + 起草回复, 但**不自动发**。
 >
 > 现状约束 (2026-04-26 跟员工对齐): 公司邮箱不支持 IMAP / web / API,
-> 只有桌面客户端 (Outlook + Foxmail) —— 所以走客户端集成路径。
+> 只有桌面客户端 — 所以走客户端集成路径。
+>
+> **5/17 BL-EMAIL-APPLEMAIL 调整**: macOS 端目标客户端从 **Outlook for Mac**
+> 改成 **Apple Mail (Mail.app, 系统自带)**. 理由: Mail.app macOS 100% 装机,
+> AppleScript dictionary 完整, 国内员工免 Microsoft 365 订阅. Windows 端仍是
+> Outlook (Windows + 企业 Outlook 是国内主力组合).
 
 ---
 
@@ -20,13 +25,19 @@
 
 ### 1.2 桌面客户端集成的关键 insight
 
-不要试图重写一个邮件客户端。**让 catfish 跟员工已经登录的 Outlook / Foxmail 客户端对话**, 借助:
-- macOS Outlook → AppleScript (Microsoft 官方 dictionary)
+不要试图重写一个邮件客户端。**让 catfish 跟员工已经登录的桌面客户端对话**, 借助:
+- macOS **Apple Mail (Mail.app)** → AppleScript (Apple 官方 dictionary 完整)  ← **5/17 替代 Outlook for Mac**
 - Windows Outlook → COM (pywin32, Microsoft 官方接口)
 - Windows Foxmail → 解析本地 `.box` 数据文件 (无官方 API, 逆向)
 - macOS Foxmail → 同 Windows 但**只读** (写入路径不可靠)
 
 凭据 / OAuth / Exchange auth 全部由客户端自己管, catfish 完全不碰密码。
+
+**为啥 Apple Mail > Outlook for Mac**:
+- macOS 100% 装机, Outlook for Mac 需 Microsoft 365 订阅 (国内员工渗透 <20%)
+- Apple Mail AppleScript dictionary 比 Outlook for Mac 完整 (Microsoft AS dictionary 历史失修)
+- Mail.app 跟 Exchange / IMAP / iCloud / Gmail 全兼容, 后端独立于客户端选择
+- 唯一权限墙: macOS Automation (一次性弹窗确认, 跟 Foxmail Mac 同模式)
 
 ### 1.3 不自动发的红线
 
@@ -202,7 +213,7 @@ class EmailAdapter(ABC):
 
 ## 4. 4 个 Adapter 各自策略
 
-### 4.1 macOS Outlook (`outlook_mac.py`)
+### 4.1 macOS Apple Mail (`apple_mail.py`)  ← 5/17 替代原 outlook_mac.py
 
 **机制**: subprocess 调 `osascript -e '<applescript>'` 跑 .applescript 文件。
 
@@ -210,21 +221,33 @@ class EmailAdapter(ABC):
 
 **关键 AppleScript 命令**:
 ```applescript
-tell application "Microsoft Outlook"
-    -- 列
-    set msgs to (messages of inbox where (time received > date "2026-04-26"))
-    -- 读
-    set msg to (first incoming message of inbox whose id is "X")
-    set body to plain text content of msg
+tell application "Mail"
+    -- 列账户
+    set accs to accounts
+    -- 列 (最近 7 天)
+    set msgs to (messages of inbox where (date received > date "2026-04-26"))
+    -- 读 (Mail.app 用 message id, 不是 entryID)
+    set msg to (first message of inbox of account "Work" whose id is "X")
+    set body to content of msg  -- 注: 不是 Outlook 的 "plain text content"
     -- 搜索
     set msgs to (messages of inbox whose subject contains "X")
-    -- 起草
+    -- 起草: 草稿放 Drafts mailbox
     set draft to make new outgoing message with properties {subject:"X", content:"Y"}
-    -- 不调 send! 让它躺在 Drafts
+    set visible of draft to true  -- 弹给员工 review
+    -- 不调 send! 让员工自己看一眼再发
 end tell
 ```
 
-**坑**: AppleScript 字符串转义、CJK 编码、附件路径访问 sandbox 受限。
+**坑**:
+- AppleScript 字符串转义、CJK 编码 — 用 heredoc + UTF-8 osascript 参数
+- 附件路径: Mail.app sandboxed, 附件读得到但写要 user 显式 grant
+- **Automation 权限墙**: 第一次 osascript 调 Mail, macOS 弹 "Catfish wants to control Mail". 员工不点允许 → adapter `supports_drafts = False`, 降级到 EMLX 文件只读模式
+- AppleScript dictionary 用 `Mail.app` 自带, 不是 Outlook for Mac — 命令名跟 Outlook 不同 (e.g. `content` vs `plain text content`)
+
+**EMLX fallback (没 Automation 权限时)**:
+- 读 `~/Library/Mail/V10/<Account>/<Mailbox>.mbox/<UUID>/Messages/*.emlx`
+- emlx = RFC822 + plist header. Python 标库 `email.parser` 跟 `plistlib` 解析
+- 只读, 写不了草稿 (写 emlx 后 Mail.app 不会重新索引)
 
 ### 4.2 Windows Outlook (`outlook_win.py`)
 

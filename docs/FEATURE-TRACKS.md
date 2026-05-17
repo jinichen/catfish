@@ -371,7 +371,7 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 - ✅ inbox.py + cli (`__main__.py`)
 - ✅ tests (test_box_parser, test_adapter_foxmail_mac)
 - ⬜ 跟 Companion 接通 (现是独立 CLI) · 1 周
-- ⬜ Outlook Mac adapter · 1 周
+- ⬜ **Apple Mail (Mail.app) adapter** · 1 周 (5/17 改, 替原 Outlook for Mac, BL-EMAIL-APPLEMAIL)
 - ⬜ Win Outlook adapter · 1-2 周
 - ⬜ 起草工具 (catfish_email_draft) 接到 tool-bridge · 0.5 周
 - ⬜ Companion 邮件 tab GUI · 1 周 (BL-D13)
