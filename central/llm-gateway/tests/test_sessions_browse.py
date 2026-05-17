@@ -362,136 +362,34 @@ def _cleanup():
     app.dependency_overrides.clear()
 
 
-def test_endpoint_list_employee_ok(fake_home: Path, monkeypatch):
-    """普通员工能访问 /me (只看自己)."""
-    now = time.time()
-    _seed_db(
-        fake_home,
-        sessions=[{"id": "s1", "started_at": now, "message_count": 2}],
-        messages=[
-            {"session_id": "s1", "role": "user", "content": "hi", "created_at": now},
-        ],
-    )
+# BL-CENTRAL-WEB-PURGE-USERDATA (5/17 鸿波): 砍 /api/sessions/me/* 3 个 endpoint
+# (违反 BL-CENTRAL-EDGE-BOUNDARY: 中央端不读员工本机 ~/.hermes/state.db). 旧 9 个
+# endpoint 单测 (test_endpoint_list_* / test_endpoint_search_* / test_endpoint_detail_*
+# / test_endpoint_admin_can_also_list / test_endpoint_route_order_*) 全删. 现在 1 条
+# 防回归测试: 这些 path 必须 404, 谁加回来 endpoint 就 fail.
+#
+# 模块单测 (test_list_* / test_count_* / test_get_session_* / test_search_*) 保留 —
+# sessions_browse.py 模块本身仍可被未来重用 (例如搬 Companion 后 Companion 直接 import).
+
+
+def test_endpoints_removed_return_404(fake_home: Path, monkeypatch):
+    """BL-CENTRAL-WEB-PURGE-USERDATA: 中央 gateway 不再暴露读员工本机 session 的端点.
+
+    旧 3 个 endpoint (/api/sessions/me, /me/search, /me/{id}) 都删, 任何调用 404.
+    防有人 PR 不小心加回来, 也防 catfish-web 旧版本访问到老端点.
+    """
     c = _client_as("employee", monkeypatch)
-    r = c.get("/api/sessions/me")
-    _cleanup()
-    assert r.status_code == 200
-    data = r.json()
-    assert data["total"] == 1
-    assert len(data["sessions"]) == 1
-    assert data["sessions"][0]["id"] == "s1"
-
-
-def test_endpoint_list_paginated(fake_home: Path, monkeypatch):
-    now = time.time()
-    sess = [{"id": f"s{i}", "started_at": now - i, "message_count": 1} for i in range(8)]
-    msgs = [{"session_id": s["id"], "role": "user", "content": "x", "created_at": now}
-            for s in sess]
-    _seed_db(fake_home, sessions=sess, messages=msgs)
-    c = _client_as("employee", monkeypatch)
-    r = c.get("/api/sessions/me?limit=3&offset=0")
-    _cleanup()
-    data = r.json()
-    assert data["total"] == 8
-    assert len(data["sessions"]) == 3
-
-
-def test_endpoint_list_with_search(fake_home: Path, monkeypatch):
-    now = time.time()
-    _seed_db(
-        fake_home,
-        sessions=[
-            {"id": "s1", "started_at": now, "message_count": 1},
-            {"id": "s2", "started_at": now, "message_count": 1},
-        ],
-        messages=[
-            {"session_id": "s1", "role": "user", "content": "资质审核", "created_at": now},
-            {"session_id": "s2", "role": "user", "content": "天气好", "created_at": now},
-        ],
-    )
-    c = _client_as("employee", monkeypatch)
-    r = c.get("/api/sessions/me?q=资质")
-    _cleanup()
-    assert r.json()["total"] == 1
-
-
-def test_endpoint_search_matches(fake_home: Path, monkeypatch):
-    now = time.time()
-    _seed_db(
-        fake_home,
-        sessions=[{"id": "s1", "started_at": now, "message_count": 1}],
-        messages=[
-            {"session_id": "s1", "role": "user", "content": "资质审核步骤", "created_at": now},
-        ],
-    )
-    c = _client_as("employee", monkeypatch)
-    r = c.get("/api/sessions/me/search?q=资质")
-    _cleanup()
-    assert r.status_code == 200
-    data = r.json()
-    assert len(data["matches"]) == 1
-    assert data["matches"][0]["session_id"] == "s1"
-
-
-def test_endpoint_search_q_required(fake_home: Path, monkeypatch):
-    c = _client_as("employee", monkeypatch)
-    r = c.get("/api/sessions/me/search")
-    _cleanup()
-    assert r.status_code == 422  # FastAPI required query param
-
-
-def test_endpoint_detail_ok(fake_home: Path, monkeypatch):
-    now = time.time()
-    _seed_db(
-        fake_home,
-        sessions=[{"id": "abc-123", "started_at": now, "message_count": 2}],
-        messages=[
-            {"session_id": "abc-123", "role": "user", "content": "Q", "created_at": now},
-            {"session_id": "abc-123", "role": "assistant", "content": "A", "created_at": now},
-        ],
-    )
-    c = _client_as("employee", monkeypatch)
-    r = c.get("/api/sessions/me/abc-123")
-    _cleanup()
-    assert r.status_code == 200
-    data = r.json()
-    assert data["id"] == "abc-123"
-    assert len(data["messages"]) == 2
-    assert data["viewer"] == "employee@ffcs.cn"
-
-
-def test_endpoint_detail_404(fake_home: Path, monkeypatch):
-    _seed_db(fake_home, sessions=[], messages=[])
-    c = _client_as("employee", monkeypatch)
-    r = c.get("/api/sessions/me/nonexistent")
-    _cleanup()
-    assert r.status_code == 404
-    assert "不存在" in r.json()["detail"]
-
-
-def test_endpoint_admin_can_also_list(fake_home: Path, monkeypatch):
-    """admin / sysadmin 也能看自己的 — /me 不限 role, 谁登录看谁."""
-    now = time.time()
-    _seed_db(
-        fake_home,
-        sessions=[{"id": "s1", "started_at": now, "message_count": 1}],
-        messages=[
-            {"session_id": "s1", "role": "user", "content": "x", "created_at": now},
-        ],
-    )
-    for role in ["admin", "sysadmin", "manager"]:
-        c = _client_as(role, monkeypatch)
-        r = c.get("/api/sessions/me")
+    try:
+        for path in (
+            "/api/sessions/me",
+            "/api/sessions/me?q=资质",
+            "/api/sessions/me/search?q=test",
+            "/api/sessions/me/any-id",
+        ):
+            r = c.get(path)
+            assert r.status_code == 404, (
+                f"{path} 返 {r.status_code}, 该 404 (BL-CENTRAL-EDGE-BOUNDARY: "
+                "中央端不暴露读员工本机 ~/.hermes/state.db 的端点)"
+            )
+    finally:
         _cleanup()
-        assert r.status_code == 200, f"role={role} failed"
-
-
-def test_endpoint_route_order_search_not_caught_by_id(fake_home: Path, monkeypatch):
-    """关键: /me/search 必须命中 search endpoint, 不被当成 session_id='search'."""
-    _seed_db(fake_home, sessions=[], messages=[])
-    c = _client_as("employee", monkeypatch)
-    r = c.get("/api/sessions/me/search?q=test")
-    _cleanup()
-    # 命中 search → 200 + matches=[], 不该是 detail 的 404
-    assert r.status_code == 200
-    assert "matches" in r.json()

@@ -19,12 +19,11 @@ export function NavBar() {
   const isAdminOrAbove = me?.role === "admin" || me?.role === "sysadmin";
   const isSysadmin = me?.role === "sysadmin";
 
+  // BL-CENTRAL-WEB-PURGE-USERDATA (5/17 鸿波): 删 "📚 会话" / "📊 看板" 两个 nav —
+  // 它们读员工本机 ~/.hermes/state.db + ~/.catfish/tasks.jsonl, 违反
+  // BL-CENTRAL-EDGE-BOUNDARY 规则 (中央端不碰用户数据). 这俩功能 Companion 自己有.
   const links: Array<{ to: string; label: string; show: boolean }> = [
     { to: "/me", label: "我的", show: true },
-    // 5/12 借鉴 hermes-desktop A: 跨日历史搜索
-    { to: "/sessions", label: "📚 会话", show: true },
-    // 5/13 BL-HERMES013-RED-2: 多 agent 任务看板 (scope 1 单员工本地)
-    { to: "/kanban", label: "📊 看板", show: true },
     { to: "/skills", label: "Skills Hub", show: true },
     { to: "/mcp", label: "MCP 市场", show: true },
     { to: "/manager", label: "部门", show: isManagerOrAbove },

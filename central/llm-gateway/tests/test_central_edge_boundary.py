@@ -64,7 +64,10 @@ KNOWN_VIOLATIONS_ALLOWLIST: set[str] = {
     "proactive.py",
     "session_meta.py",
     "tool_archive/db.py",
-    # C 类 — UI 直调端点 (4)
+    # C 类 — UI 直调端点 (2, 还剩 recent_outputs + skills_loader 待清理)
+    # BL-CENTRAL-WEB-PURGE-USERDATA (5/17): sessions_browse + tasks_browse 已不再
+    # 被 gateway endpoint 调用 (端点全删). 模块仍在 src 里待移除, 但 lint allowlist
+    # 暂留 — 等本机 git rm 后从 allowlist 一并删.
     "sessions_browse.py",
     "tasks_browse.py",
     "recent_outputs.py",

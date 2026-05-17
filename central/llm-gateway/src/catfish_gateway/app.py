@@ -538,88 +538,16 @@ async def api_me(user: User = Depends(get_current_user)) -> dict[str, Any]:
     }
 
 
-# ── /api/sessions/me/* — Sessions 浏览 + 跨日搜索 (5/12 借鉴 hermes-desktop A) ──
+# BL-CENTRAL-WEB-PURGE-USERDATA (5/17 鸿波): 砍 /api/sessions/me/* 3 个端点.
 #
-# 数据源: 员工自己 mac ~/.hermes/state.db (read-only sqlite, 跟 inject_session_history 同源).
-# 不需要 RBAC 二次校验 — db 本来就只有自己的 (gateway 跑在员工 mac, 物理隔离).
-# catfish-web 浏览器调本地 gateway (vite proxy / nginx 反代到 localhost:8999).
-
-
-@app.get("/api/sessions/me")
-async def api_sessions_list(
-    user: User = Depends(get_current_user),
-    days_back: int = 30,
-    q: str = "",
-    limit: int = 50,
-    offset: int = 0,
-) -> dict[str, Any]:
-    """列员工自己的 hermes session 历史 + 跨日搜索 + 分页.
-
-    Args:
-        days_back: 看过去多少天的 session, 默认 30
-        q: 关键字 (任意 message content 含 q 命中, 大小写不敏感)
-        limit: 1-200 默认 50
-        offset: ≥0 默认 0
-    """
-    from . import sessions_browse  # noqa: PLC0415
-    return {
-        "sessions": sessions_browse.list_sessions(
-            days_back=days_back,
-            search_q=q,
-            limit=limit,
-            offset=offset,
-        ),
-        "total": sessions_browse.count_sessions(days_back=days_back, search_q=q),
-        "limit": max(1, min(200, int(limit))),
-        "offset": max(0, int(offset)),
-        "days_back": max(0, int(days_back)),
-        "q": q,
-        "viewer": user.sub,
-    }
-
-
-@app.get("/api/sessions/me/search")
-async def api_sessions_search(
-    q: str,
-    user: User = Depends(get_current_user),
-    days_back: int = 30,
-    limit: int = 50,
-) -> dict[str, Any]:
-    """跨 session 全文搜索 — 命中行级别返 (跳到对应 session 用).
-
-    跟 /api/sessions/me?q=X 区别:
-      - list 是 session 级 (整个 session 含 q 即命中, 显示 session 卡片)
-      - search 是 message 级 (含 q 的具体行 + ±50 字符上下文)
-    """
-    from . import sessions_browse  # noqa: PLC0415
-    return {
-        "matches": sessions_browse.search_messages(
-            q=q, days_back=days_back, limit=limit,
-        ),
-        "q": q,
-        "viewer": user.sub,
-    }
-
-
-@app.get("/api/sessions/me/{session_id}")
-async def api_sessions_detail(
-    session_id: str,
-    user: User = Depends(get_current_user),
-    max_messages: int = 500,
-) -> dict[str, Any]:
-    """单个 session 详情 + messages 数组. 不存在返 404.
-
-    max_messages: 1-2000, 默认 500.
-    """
-    from . import sessions_browse  # noqa: PLC0415
-    detail = sessions_browse.get_session(session_id, max_messages=max_messages)
-    if detail is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"session {session_id} 不存在 (已被 hermes 清理 / id 错)",
-        )
-    detail["viewer"] = user.sub
-    return detail
+# 老逻辑: 中央 web /sessions 页面调这些端点 → gateway 读员工本机
+# ~/.hermes/state.db → 返完整 chat messages 给 web. 违反 BL-CENTRAL-EDGE-BOUNDARY
+# (中央端不碰用户数据). Companion 自己有这功能.
+#
+# 砍 3 个: GET /api/sessions/me, /api/sessions/me/search, /api/sessions/me/{id}
+# 配套 src/catfish_gateway/sessions_browse.py 不再被任何 endpoint 调用, 可独立
+# 移除 (BL ticket follow-up). 现在保留 module 但 dead code, lint allowlist 可
+# 把 sessions_browse.py 标 dead.
 
 
 # ── /api/tasks/me — Multi-Agent Kanban 单员工任务看板 (BL-HERMES013-RED-2 5/13) ──
@@ -1115,45 +1043,12 @@ async def api_learn_status(
     return s
 
 
-@app.get("/api/tasks/me")
-async def api_tasks_list(
-    user: User = Depends(get_current_user),
-    hours_back: int = 48,
-    limit: int = 200,
-    source: str = "",
-) -> dict[str, Any]:
-    """列员工自己本地的任务 (background + a2a_inbox 聚合).
-
-    Args:
-        hours_back: 看过去几小时, 默认 48 (周一看周五跨天).
-        limit: 最多返几张卡, 默认 200.
-        source: 过滤 source 逗号分隔 (空 = 全要), 例 "background" / "a2a_inbox".
-
-    Returns:
-        {
-          "cards": [TaskCard, ...],   # 倒序 (最新在前)
-          "summary": {pending: N, running: N, waiting: N, completed: N, failed: N},
-          "viewer": "<sub>",
-          ...
-        }
-    """
-    from . import tasks_browse  # noqa: PLC0415
-    sources_filter: list[str] | None = None
-    if source:
-        sources_filter = [s.strip() for s in source.split(",") if s.strip()]
-    cards = tasks_browse.list_my_tasks(
-        hours_back=max(1, int(hours_back)) if hours_back > 0 else None,
-        limit=max(1, min(1000, int(limit))),
-        sources=sources_filter,
-    )
-    return {
-        "cards": cards,
-        "summary": tasks_browse.status_summary(cards),
-        "total": len(cards),
-        "limit": max(1, min(1000, int(limit))),
-        "hours_back": int(hours_back),
-        "viewer": user.sub,
-    }
+# BL-CENTRAL-WEB-PURGE-USERDATA (5/17 鸿波): 砍 /api/tasks/me 端点.
+#
+# 老逻辑: 中央 web /看板 页面调此端点 → gateway 读员工本机
+# ~/.catfish/tasks.jsonl → 返任务标题/状态给 web. 违反 BL-CENTRAL-EDGE-BOUNDARY.
+# Companion 自己有任务看板. 配套 src/catfish_gateway/tasks_browse.py 不再被调用,
+# 但模块保留待 follow-up ticket 清理.
 
 
 # /api/quota/department/{dept} — manager / admin 看本部门 quota 聚合

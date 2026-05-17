@@ -31,13 +31,14 @@ import { useAuthStore } from "./store/auth";
 
 import { HomePage } from "./routes/HomePage";
 import { MePage } from "./routes/MePage";
-import { SessionsPage } from "./routes/SessionsPage";
 import { SkillsHubPage } from "./routes/SkillsHubPage";
 import { McpMarketPage } from "./routes/McpMarketPage";
 import { ManagerPage } from "./routes/ManagerPage";
 import { AdminPage } from "./routes/AdminPage";
 import { AuditPage } from "./routes/AuditPage";
-import { KanbanPage } from "./routes/KanbanPage";  // BL-HERMES013-RED-2 (5/13)
+// BL-CENTRAL-WEB-PURGE-USERDATA (5/17 鸿波): 删 SessionsPage / KanbanPage —
+// 它们读员工本机 ~/.hermes/state.db + ~/.catfish/tasks.jsonl, 违反
+// BL-CENTRAL-EDGE-BOUNDARY 规则. 这俩功能 Companion 桌面 app 自己有.
 
 function AuthCallback() {
   const navigate = useNavigate();
@@ -170,10 +171,13 @@ export function App() {
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/me" element={<MePage />} />
-          {/* 5/12 借鉴 hermes-desktop A: 跨日 sessions 历史 + 搜索 */}
-          <Route path="/sessions" element={<SessionsPage />} />
-          {/* 5/13 借鉴 Hermes 0.13 Multi-Agent Kanban — scope 1 单员工本地任务看板 */}
-          <Route path="/kanban" element={<KanbanPage />} />
+          {/* BL-CENTRAL-WEB-PURGE-USERDATA (5/17 鸿波):
+              /sessions + /kanban 删了 — 它们读员工本机 state.db + tasks.jsonl,
+              违反 BL-CENTRAL-EDGE-BOUNDARY 规则. 这俩功能 Companion 自己有.
+              老链接 redirect 回首页 (员工开 Companion 看会话 / 看板). */}
+          <Route path="/sessions" element={<Navigate to="/" replace />} />
+          <Route path="/sessions/*" element={<Navigate to="/" replace />} />
+          <Route path="/kanban" element={<Navigate to="/" replace />} />
           <Route path="/skills/*" element={<SkillsHubPage />} />
           <Route path="/mcp/*" element={<McpMarketPage />} />
           <Route path="/manager/*" element={<ManagerPage />} />
