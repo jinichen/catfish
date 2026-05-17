@@ -483,7 +483,7 @@ def sanitize_tools(body: dict[str, Any], user: Any = None) -> dict[str, Any]:
     body["tools"] = cleaned
 
     # BL-MEMORY-PLUMBING-DIAG (5/16): 暴露 always-on 实际命中. 排"LLM 调了 31 个
-    # tool 但 ~/.hermes/memories/ 没动" 真因 — 假设上游 list_tools() 没送
+    # tool 但 ~/.hermes/memories/ 没动" 真因 — 假设上游 list_tools() 没送  # noqa: BOUNDARY (doc reference)
     # memory_save (hermes registry 没注册), sanitizer 看不到也变不出来.
     # 一次聊天 log 出 always-on 实际命中名字, 三秒看清是模型层还是 plumbing 层.
     seen_always_on: list[str] = []

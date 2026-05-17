@@ -40,17 +40,38 @@ import yaml
 logger = logging.getLogger("catfish.gateway.quota")
 
 
-# ── Backend 选择 (PG 主, sqlite 兜底) ─────────────────────────
+# ── Backend 选择 (生产 PG-only; 单测可 sqlite override) ───────
+#
+# BL-QUOTA-SQLITE-DEPRECATE + BL-CENTRAL-EDGE-BOUNDARY (5/17 鸿波):
+#   规则: 中央端不许碰用户本机文件 (包括 ~/.catfish/quota.db). 生产必走 PG.
+#   单测可以用 sqlite tmp 文件 (test fixture 设 CATFISH_QUOTA_DB 显式 override).
+#
+#   老逻辑: PG 写失败 → fallback sqlite (双写). 这违反规则因为 sqlite 落在员工
+#   Mac. 删 fallback — PG 写失败 = log warning + 丢这条 audit (audit 不是关键
+#   路径, 丢一条比写员工本机好).
 
 
 def _use_pg() -> bool:
-    """有 CATFISH_DB_URL → PG. CATFISH_QUOTA_DB env (sqlite override) 仍优先 (单测用).
+    """生产 PG, 单测 sqlite (test fixture 通过 CATFISH_QUOTA_DB env override).
 
-    单测里 conftest 设 CATFISH_QUOTA_DB → 走 sqlite, 不依赖真 PG.
+    返回:
+      True  — 走 PG (CATFISH_DB_URL 配了, 或 CATFISH_QUOTA_DB 没配 — 生产默认)
+      False — 走 sqlite (CATFISH_QUOTA_DB 显式配了, 单测路径)
+
+    BL-CENTRAL-EDGE-BOUNDARY (5/17): 老逻辑允许"两者都没配 → 静默走默认
+    ~/.catfish/quota.db" 写员工本机, 违反规则. 现在: 启动期校验, 没 PG 没 test
+    override → log warning. 调用方代码该 raise / 丢数据, 不再静默 fallback.
     """
     if os.environ.get("CATFISH_QUOTA_DB"):
         return False  # 单测显式 sqlite 路径
     return bool(os.environ.get("CATFISH_DB_URL", "").strip())
+
+
+def _audit_backend_configured() -> bool:
+    """有任一 audit backend 配了 (PG 或 test sqlite). 没配 → 生产模式该报警."""
+    return bool(os.environ.get("CATFISH_DB_URL", "").strip()) or bool(
+        os.environ.get("CATFISH_QUOTA_DB")
+    )
 
 
 _PG_CONN_INFO: str | None = None  # 缓存连接字符串, 避免重读 env
@@ -304,7 +325,10 @@ def record_usage(
 ) -> None:
     """请求完成后记真实 token 用量. 失败静默不影响主流程.
 
-    PG (CATFISH_DB_URL 配) 主路径, sqlite 兜底.
+    BL-QUOTA-SQLITE-DEPRECATE (5/17 鸿波): 老逻辑 PG 写失败 → fallback sqlite
+    (写 ~/.catfish/quota.db, 员工本机文件). 违反 BL-CENTRAL-EDGE-BOUNDARY 规则.
+    现在: 生产 PG-only, PG 失败 → log warning + 丢这条 audit. 单测走 sqlite
+    (CATFISH_QUOTA_DB env override).
     """
     ts_ms = int(time.time() * 1000)
 
@@ -319,11 +343,16 @@ def record_usage(
                          int(tokens_in), int(tokens_out)),
                     )
                 conn.commit()
-            return
         except Exception as e:
-            logger.warning("record_usage PG 失败 (fallback sqlite): %s", e)
-            # 不 return — 继续走 sqlite 兜底, 别丢数据
+            # BL-QUOTA-SQLITE-DEPRECATE (5/17): 不再 fallback sqlite. 丢这条
+            # audit 比写员工本机好. ops 应该把 PG 报警接监控.
+            logger.warning(
+                "record_usage PG 失败, 丢这条 audit (不再 fallback sqlite, "
+                "BL-CENTRAL-EDGE-BOUNDARY 规则): %s", e,
+            )
+        return
 
+    # 单测路径: CATFISH_QUOTA_DB env 显式配了, 走 tmp sqlite (test fixture 设的)
     try:
         conn = _get_conn()
         with conn:
@@ -334,7 +363,7 @@ def record_usage(
             )
         conn.close()
     except Exception as e:
-        logger.warning("record_usage sqlite 失败: %s", e)
+        logger.warning("record_usage sqlite (test mode) 失败: %s", e)
 
 
 def _sum_tokens(where_clause_sqlite: str, where_clause_pg: str, params: tuple[Any, ...]) -> int:
@@ -660,12 +689,16 @@ def audit_summary_global_since(cutoff_ms: int) -> dict:
                         for r in cur.fetchall()
                     ]
 
+                    # BL-AUDIT-P0-FIX (5/17): 同时聚合空 dept 桶, 不再吞 — 否则
+                    # 总请求 405 vs 按部门加和 117 这种"数据消失" bug 让客户立刻
+                    # 不信任所有数字. 用 COALESCE 把空 dept 统一标 '(未分组)'.
                     cur.execute(
-                        """SELECT department, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS tk
+                        """SELECT COALESCE(NULLIF(department, ''), '(未分组)') AS dept,
+                                  COUNT(*) AS cnt,
+                                  SUM(tokens_in + tokens_out) AS tk
                            FROM quota_events
-                           WHERE ts_ms >= %s AND department <> ''
-                                 AND user_email NOT LIKE 'internal:%%'
-                           GROUP BY department ORDER BY tk DESC LIMIT 20""",
+                           WHERE ts_ms >= %s AND user_email NOT LIKE 'internal:%%'
+                           GROUP BY dept ORDER BY tk DESC LIMIT 20""",
                         (cutoff_ms,),
                     )
                     by_department = [
@@ -673,11 +706,16 @@ def audit_summary_global_since(cutoff_ms: int) -> dict:
                         for r in cur.fetchall()
                     ]
 
+                    # BL-AUDIT-P0-FIX (5/17): LIMIT 10 → 50, 防 top 50 但只显示
+                    # 几个的"数据消失"印象. user_email 空时也归 (未分组员工).
                     cur.execute(
-                        """SELECT user_email, department, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS tk
+                        """SELECT COALESCE(NULLIF(user_email, ''), '(未分组员工)') AS ue,
+                                  COALESCE(NULLIF(department, ''), '(未分组)') AS dept,
+                                  COUNT(*) AS cnt,
+                                  SUM(tokens_in + tokens_out) AS tk
                            FROM quota_events
                            WHERE ts_ms >= %s AND user_email NOT LIKE 'internal:%%'
-                           GROUP BY user_email, department ORDER BY tk DESC LIMIT 10""",
+                           GROUP BY ue, dept ORDER BY tk DESC LIMIT 50""",
                         (cutoff_ms,),
                     )
                     by_user = [
@@ -708,6 +746,10 @@ def audit_summary_global_since(cutoff_ms: int) -> dict:
     # sqlite fallback (BL-AUDIT-INTERNAL-SPLIT: 同样过滤 internal:* user)
     try:
         conn = _get_conn()
+        # BL-AUDIT-P0-FIX (5/17): 去掉老 `AND department != ''` 过滤. 老逻辑下
+        # request_count / total_tokens 跟 PG 不一致 (PG 不过滤空 dept), 也跟前
+        # 端展示的 by_model 总和不一致. 跟 PG 路径对齐, top-level 计数包含所有
+        # 非 internal 事件, 空 dept 桶单独算 (未分组).
         cur = conn.execute(
             """SELECT COUNT(*), COALESCE(SUM(tokens_in + tokens_out), 0),
                       COUNT(DISTINCT user_email),
@@ -717,11 +759,24 @@ def audit_summary_global_since(cutoff_ms: int) -> dict:
                  AND user_email NOT LIKE 'internal:%'""",
             (cutoff_ms,),
         )
+        # 注: active_departments 仍只数有 dept 的 (排除未分组), 这个语义更有用.
+        row = cur.fetchone()
+        active_users_subquery_with_dept = int(row[2] or 0)
+        active_departments = int(row[3] or 0)
+
+        # top-level COUNT/SUM/active_users 不过滤 dept, 跟 PG 路径对齐
+        cur = conn.execute(
+            """SELECT COUNT(*), COALESCE(SUM(tokens_in + tokens_out), 0),
+                      COUNT(DISTINCT user_email)
+               FROM quota_events
+               WHERE ts >= ? AND user_email NOT LIKE 'internal:%'""",
+            (cutoff_ms,),
+        )
         row = cur.fetchone()
         request_count = int(row[0] or 0)
         total_tokens = int(row[1] or 0)
         active_users = int(row[2] or 0)
-        active_departments = int(row[3] or 0)
+        _ = active_users_subquery_with_dept  # 暂保留, 后续若需要 "active dept users" 指标用
 
         cur = conn.execute(
             """SELECT COUNT(*), COALESCE(SUM(tokens_in + tokens_out), 0)
@@ -745,12 +800,14 @@ def audit_summary_global_since(cutoff_ms: int) -> dict:
             for r in cur.fetchall()
         ]
 
+        # BL-AUDIT-P0-FIX (5/17): 空 dept 不再吞, 统一标 '(未分组)'. 跟 PG 路径
+        # 同步. NULLIF + COALESCE 把 NULL / '' 都映射成同一桶名.
         cur = conn.execute(
-            """SELECT department, COUNT(*), SUM(tokens_in + tokens_out)
+            """SELECT COALESCE(NULLIF(department, ''), '(未分组)') AS dept,
+                      COUNT(*), SUM(tokens_in + tokens_out)
                FROM quota_events
-               WHERE ts >= ? AND department != ''
-                 AND user_email NOT LIKE 'internal:%'
-               GROUP BY department ORDER BY 3 DESC LIMIT 20""",
+               WHERE ts >= ? AND user_email NOT LIKE 'internal:%'
+               GROUP BY dept ORDER BY 3 DESC LIMIT 20""",
             (cutoff_ms,),
         )
         by_department = [
@@ -758,11 +815,14 @@ def audit_summary_global_since(cutoff_ms: int) -> dict:
             for r in cur.fetchall()
         ]
 
+        # BL-AUDIT-P0-FIX (5/17): LIMIT 10 → 50, 空 user_email / department 归桶.
         cur = conn.execute(
-            """SELECT user_email, department, COUNT(*), SUM(tokens_in + tokens_out)
+            """SELECT COALESCE(NULLIF(user_email, ''), '(未分组员工)') AS ue,
+                      COALESCE(NULLIF(department, ''), '(未分组)') AS dept,
+                      COUNT(*), SUM(tokens_in + tokens_out)
                FROM quota_events
                WHERE ts >= ? AND user_email NOT LIKE 'internal:%'
-               GROUP BY user_email, department ORDER BY 4 DESC LIMIT 10""",
+               GROUP BY ue, dept ORDER BY 4 DESC LIMIT 50""",
             (cutoff_ms,),
         )
         by_user = [

@@ -132,6 +132,24 @@ async def lifespan(app: FastAPI):
     token_preview = dev_token[:4] + "..." + dev_token[-4:] if len(dev_token) > 8 else "<short>"
     logger.info("mode=%s  dev_token_preview=%s", env_mode, token_preview)
 
+    # BL-CENTRAL-EDGE-BOUNDARY + BL-QUOTA-SQLITE-DEPRECATE (5/17 鸿波):
+    # 生产必配 CATFISH_DB_URL (PG). 没配 → 启动报警, 防 audit 数据静默丢 / 写
+    # 员工本机. 单测走 CATFISH_QUOTA_DB env override (test fixture 设).
+    from .quota import _audit_backend_configured  # noqa: PLC0415
+    if not _audit_backend_configured():
+        if env_mode == "prod":
+            logger.error(
+                "❌ CATFISH_DB_URL 未配, 但 CATFISH_ENV=prod — audit 数据将静默丢失. "
+                "中央端必须配 PG (BL-CENTRAL-EDGE-BOUNDARY 规则: 不允许写员工本机 "
+                "sqlite 兜底). 立刻配 CATFISH_DB_URL 重启."
+            )
+        else:
+            logger.warning(
+                "⚠️ CATFISH_DB_URL 未配 (CATFISH_ENV=%s) — audit 写会被丢. "
+                "dev 没问题, 但要测 quota / audit 功能时该配本地 PG 或单测设 "
+                "CATFISH_QUOTA_DB env.", env_mode,
+            )
+
     # BL-FIX37 (5/10): gateway 内部 loopback (proactive_starter / session_summarizer)
     # 用 internal-only token 调自己 /v1/chat/completions, 修 BL-FIX29 关掉员工
     # dev_token 后内部调用 401 的副作用. 没显式配 → 自动生成 32B random.
