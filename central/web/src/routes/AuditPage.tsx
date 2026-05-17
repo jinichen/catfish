@@ -1,13 +1,18 @@
 /** /audit — 审计大查询 (manager + admin) (BL-ARCH1 5/10).
  *
- * P0: 列全公司今日 audit 数据 (audit by_user / by_model). admin 看全部, manager
- * 看本部门. 复用 fetchGlobalAudit (gateway 内部判 role 返过滤).
+ * 改造历史:
+ *   BL-ARCH1 (5/10):     P0 初版 — 4 stat 卡 + 3 表格
+ *   BL-AUDIT-P0-FIX:     修数据信任 bug + (未分组) 桶
+ *   BL-AUDIT-P0-FIX-V2:  sysadmin 也算全公司视角
+ *   BL-AUDIT-UX-P0 (5/17): UX 工程师化重做 — KPI hero / 模型 friendly /
+ *                          inline bar / 异常告警占位
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { Card } from "../components/Card";
 import { RoleGate } from "../components/RoleGate";
+import { getModelDisplay } from "../lib/modelDisplay";
 import {
   fetchGlobalAudit,
   type GlobalAudit,
@@ -17,6 +22,15 @@ function fmtTokens(n: number): string {
   if (n < 1000) return String(n);
   if (n < 1_000_000) return `${(n / 1000).toFixed(1)}K`;
   return `${(n / 1_000_000).toFixed(2)}M`;
+}
+
+/** 粗估成本 (RMB) — 公网平均 0.02¥/1K tokens (中位 catalog 价).
+ *  这是 P0 用的 rough number, BL-AUDIT-UX-P2 真做时按 model × tokens 精算. */
+function estimateCostRMB(tokens: number): string {
+  const rmb = (tokens / 1000) * 0.02;
+  if (rmb < 1) return `≈ ¥${rmb.toFixed(2)}`;
+  if (rmb < 100) return `≈ ¥${rmb.toFixed(1)}`;
+  return `≈ ¥${Math.round(rmb)}`;
 }
 
 export function AuditPage() {
@@ -43,219 +57,31 @@ export function AuditPage() {
         {!audit && !error && <div>加载中…</div>}
         {audit && (
           <>
-            {/* BL-AUDIT-P0-FIX (5/17): 标题口径统一 — "员工 LLM 使用 · 最近 24h",
-                不再"今日总览"vs"最近 24h" 互打架. 视角说明压到副标题 1 行内.
-                "员工业务/排除内部循环" 详情塞到 ⓘ 旁的 tooltip 提示文案.
+            {/* ── 标题区 ── */}
+            <PageHeader audit={audit} />
 
-                BL-AUDIT-P0-FIX-V2 (5/17): role 不止 "admin", sysadmin 也是全公司
-                视角. 4 个 role: sysadmin/admin/manager/employee — 前两个看全公司,
-                manager 看本部门, employee 拿不到这个端点 (RoleGate 拦). */}
-            <Card
-              title={
-                audit.viewer_role === "admin" || audit.viewer_role === "sysadmin"
-                  ? "员工 LLM 使用 · 最近 24h · 全公司"
-                  : "员工 LLM 使用 · 最近 24h · 本部门"
-              }
-            >
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(4, 1fr)",
-                  gap: "var(--space-3)",
-                }}
-              >
-                <Stat label="总请求" value={audit.request_count.toLocaleString()} />
-                <Stat label="总 tokens" value={fmtTokens(audit.total_tokens)} />
-                <Stat label="活跃员工" value={audit.active_users} />
-                <Stat
-                  label="活跃部门"
-                  value={audit.active_departments}
-                  hint="只数有部门归属的员工"
-                />
-              </div>
-              <div
-                style={{
-                  marginTop: "var(--space-3)",
-                  fontSize: 11,
-                  color: "var(--text-muted)",
-                }}
-                title="此处不含 gateway 内部循环 (summarizer / proactive / 5 维 inject 等), 见下方"
-              >
-                <span style={{ cursor: "help" }}>ⓘ 不含 gateway 内部循环消耗</span>
-              </div>
-            </Card>
+            {/* ── 异常告警条 (BL-AUDIT-UX-P0 占位, P1 backend 出 trend 后实数) ── */}
+            <AnomalyBanner audit={audit} />
 
-            {/* BL-AUDIT-INTERNAL-SPLIT (5/17): internal loopback 单独显示, 给 sysadmin 看透明度.
-                数据 = gateway 自己跑的 summarizer / distill / 5 维 inject 等内部循环消耗.
-                跟员工业务无关, 但是真消耗 token (上游 LLM 计费). */}
+            {/* ── KPI 区: 主指标 hero + 3 个辅助 ── */}
+            <KPIHero audit={audit} />
+
+            {/* BL-AUDIT-INTERNAL-SPLIT (5/17): internal loopback 单独透明度. */}
             {(audit.internal_tokens ?? 0) > 0 && (
-              <Card title="Gateway 内部循环消耗 (audit 透明度)">
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(2, 1fr)",
-                    gap: "var(--space-3)",
-                  }}
-                >
-                  <Stat
-                    label="内部请求"
-                    value={(audit.internal_request_count ?? 0).toLocaleString()}
-                  />
-                  <Stat
-                    label="内部 tokens"
-                    value={fmtTokens(audit.internal_tokens ?? 0)}
-                  />
-                </div>
-                <div
-                  style={{
-                    marginTop: "var(--space-3)",
-                    fontSize: 11,
-                    color: "var(--text-muted)",
-                  }}
-                >
-                  来源: <code>internal:gateway-loopback</code> / <code>internal:summarizer</code> 等.
-                  gateway 自己跑 session summarize / proactive task / 5 维 memory inject 时消耗.
-                  <br />
-                  跟员工业务**无关**, 但占真实账单 token. 想优化看 BL-CACHE-AUDIT (#76) +
-                  压缩 inject (#76 后续).
-                </div>
-              </Card>
+              <InternalLoopbackCard audit={audit} />
             )}
 
-            <Card title={`按模型 · ${audit.by_model.length} 项`}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                <thead>
-                  <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                    <th style={{ textAlign: "left", padding: "6px 8px" }}>模型</th>
-                    <th style={{ textAlign: "right", padding: "6px 8px" }}>请求</th>
-                    <th style={{ textAlign: "right", padding: "6px 8px" }}>tokens</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {audit.by_model.map((m) => (
-                    <tr
-                      key={m.model}
-                      style={{ borderBottom: "1px solid var(--bg-secondary)" }}
-                    >
-                      <td style={{ padding: "4px 8px", fontFamily: "var(--font-mono)" }}>
-                        {m.model}
-                      </td>
-                      <td style={{ padding: "4px 8px", textAlign: "right" }}>
-                        {m.count.toLocaleString()}
-                      </td>
-                      <td style={{ padding: "4px 8px", textAlign: "right" }}>
-                        {fmtTokens(m.total_tokens)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </Card>
-
-            {/* BL-AUDIT-P0-FIX (5/17): 数据对账提示.
-                ① "(未分组)" 桶 backend 已加, 不再吞 dept 空的员工 → 总数对得上.
-                ② 校验各表加和 == 总数, 不一致 显式提示 (sanity check). */}
+            {/* ── 数据对账 (BL-AUDIT-P0-FIX, 数字不一致时显, 一致时静默) ── */}
             <DataReconciliation audit={audit} />
 
-            {audit.by_department && audit.by_department.length > 0 && (
-              <Card title={`按部门 · ${audit.by_department.length} 项`}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                  <thead>
-                    <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                      <th style={{ textAlign: "left", padding: "6px 8px" }}>部门</th>
-                      <th style={{ textAlign: "right", padding: "6px 8px" }}>请求</th>
-                      <th style={{ textAlign: "right", padding: "6px 8px" }}>tokens</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {audit.by_department.map((d) => {
-                      const isUnassigned = d.department === "(未分组)";
-                      return (
-                        <tr
-                          key={d.department}
-                          style={{ borderBottom: "1px solid var(--bg-secondary)" }}
-                        >
-                          <td
-                            style={{
-                              padding: "4px 8px",
-                              fontStyle: isUnassigned ? "italic" : "normal",
-                              color: isUnassigned ? "var(--text-muted)" : undefined,
-                            }}
-                            title={
-                              isUnassigned
-                                ? "该桶里的员工没绑部门 (dev_token / 老员工 / OIDC 缺 dept claim). 接 Day 8 客户接入手册要求 SSO 必传 dept."
-                                : undefined
-                            }
-                          >
-                            {d.department}
-                          </td>
-                          <td style={{ padding: "4px 8px", textAlign: "right" }}>
-                            {d.count.toLocaleString()}
-                          </td>
-                          <td style={{ padding: "4px 8px", textAlign: "right" }}>
-                            {fmtTokens(d.total_tokens)}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </Card>
-            )}
+            {/* ── 按模型 (横向 bar + 比例 % + 友好名 + 颜色) ── */}
+            <ModelBreakdownCard audit={audit} />
 
-            <Card
-              title={
-                audit.by_user.length === 0
-                  ? "按员工 · 无数据"
-                  : `按员工 · ${audit.by_user.length} 项${audit.by_user.length >= 50 ? " (上限)" : ""}`
-              }
-            >
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                <thead>
-                  <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                    <th style={{ textAlign: "left", padding: "6px 8px" }}>员工</th>
-                    <th style={{ textAlign: "left", padding: "6px 8px" }}>部门</th>
-                    <th style={{ textAlign: "right", padding: "6px 8px" }}>请求</th>
-                    <th style={{ textAlign: "right", padding: "6px 8px" }}>tokens</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {audit.by_user.map((u) => {
-                    const isUnassigned = u.user_email === "(未分组员工)";
-                    return (
-                      <tr
-                        key={`${u.user_email}::${u.department}`}
-                        style={{ borderBottom: "1px solid var(--bg-secondary)" }}
-                      >
-                        <td
-                          style={{
-                            padding: "4px 8px",
-                            fontStyle: isUnassigned ? "italic" : "normal",
-                            color: isUnassigned ? "var(--text-muted)" : undefined,
-                          }}
-                          title={
-                            isUnassigned
-                              ? "该桶里的请求来源没拿到 user_email (dev_token / OIDC 缺 email claim)."
-                              : undefined
-                          }
-                        >
-                          {u.user_email}
-                        </td>
-                        <td style={{ padding: "4px 8px", color: "var(--text-muted)" }}>
-                          {u.department}
-                        </td>
-                        <td style={{ padding: "4px 8px", textAlign: "right" }}>
-                          {u.count.toLocaleString()}
-                        </td>
-                        <td style={{ padding: "4px 8px", textAlign: "right" }}>
-                          {fmtTokens(u.total_tokens)}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </Card>
+            {/* ── 按部门 (横向 bar) ── */}
+            <DeptBreakdownCard audit={audit} />
+
+            {/* ── 按员工 (横向 bar, top N) ── */}
+            <UserBreakdownCard audit={audit} />
           </>
         )}
       </div>
@@ -263,13 +89,158 @@ export function AuditPage() {
   );
 }
 
-function Stat({
+// ════════════════════════════════════════════════════════════════════
+//                          各 section 组件
+// ════════════════════════════════════════════════════════════════════
+
+function PageHeader({ audit }: { audit: GlobalAudit }) {
+  const scope =
+    audit.viewer_role === "admin" || audit.viewer_role === "sysadmin"
+      ? "全公司视角"
+      : "本部门视角";
+  return (
+    <div>
+      <h1
+        style={{
+          fontSize: 24,
+          fontWeight: 600,
+          margin: 0,
+          marginBottom: 4,
+        }}
+      >
+        LLM 使用审计
+      </h1>
+      <div
+        style={{
+          fontSize: 13,
+          color: "var(--text-muted)",
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+        }}
+      >
+        最近 24 小时 · {scope}
+        <span
+          title="本表不含 gateway 内部循环消耗 (summarizer / proactive / 5 维 inject). 内部消耗见下方独立卡."
+          style={{ cursor: "help" }}
+        >
+          ⓘ
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/** BL-AUDIT-UX-P0: 异常告警条占位 (放最顶, 第一时间抓眼).
+ *
+ * 当前数据无 trend 字段, 这个组件**永远 return null**. P1 后端在
+ * GlobalAudit 加 `anomalies: [{user, dept, model, ratio, threshold}]` 后,
+ * 这里直接 map 出红/黄条 — 已经准备好接口位置.
+ */
+function AnomalyBanner({ audit: _audit }: { audit: GlobalAudit }) {
+  // P1 占位: backend 加 anomalies 后这里就有实数据
+  const anomalies: { kind: string; text: string }[] = [];
+  if (anomalies.length === 0) return null;
+  return (
+    <Card title="⚠️ 异常告警">
+      <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13 }}>
+        {anomalies.map((a, i) => (
+          <li key={i} style={{ color: "var(--status-warn, #b45309)" }}>
+            {a.text}
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
+/** BL-AUDIT-UX-P0: KPI 主指标 hero.
+ *
+ * - 总 tokens 是主指标 (烧钱的): 36pt 大字 + 成本估算
+ * - 总请求 / 活跃员工 / 活跃部门 是辅助: 18pt 中字, 横向并列
+ */
+function KPIHero({ audit }: { audit: GlobalAudit }) {
+  return (
+    <div
+      style={{
+        background: "var(--bg-elev)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-md)",
+        padding: "var(--space-4)",
+      }}
+    >
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1.6fr 1fr 1fr 1fr",
+          gap: "var(--space-4)",
+          alignItems: "stretch",
+        }}
+      >
+        {/* Hero: 总 tokens */}
+        <div
+          style={{
+            borderRight: "1px solid var(--border)",
+            paddingRight: "var(--space-4)",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 11,
+              color: "var(--text-muted)",
+              textTransform: "uppercase",
+              letterSpacing: 0.6,
+              marginBottom: 4,
+            }}
+          >
+            💰 总 tokens · 24h
+          </div>
+          <div
+            style={{
+              fontSize: 40,
+              fontWeight: 600,
+              lineHeight: 1.1,
+              fontVariantNumeric: "tabular-nums",
+            }}
+          >
+            {fmtTokens(audit.total_tokens)}
+          </div>
+          <div
+            style={{
+              fontSize: 12,
+              color: "var(--text-muted)",
+              marginTop: 4,
+            }}
+          >
+            {estimateCostRMB(audit.total_tokens)} 估算成本
+          </div>
+        </div>
+
+        {/* 辅 1: 总请求 */}
+        <SubStat
+          label="📊 总请求"
+          value={audit.request_count.toLocaleString()}
+        />
+        {/* 辅 2: 活跃员工 */}
+        <SubStat label="👤 活跃员工" value={audit.active_users.toLocaleString()} />
+        {/* 辅 3: 活跃部门 */}
+        <SubStat
+          label="🏢 活跃部门"
+          value={audit.active_departments.toLocaleString()}
+          hint="只数有部门归属的员工"
+        />
+      </div>
+    </div>
+  );
+}
+
+function SubStat({
   label,
   value,
   hint,
 }: {
   label: string;
-  value: string | number;
+  value: string;
   hint?: string;
 }) {
   return (
@@ -278,29 +249,355 @@ function Stat({
         style={{
           fontSize: 11,
           color: "var(--text-muted)",
-          marginBottom: 2,
+          textTransform: "uppercase",
+          letterSpacing: 0.6,
+          marginBottom: 4,
+          display: "flex",
+          alignItems: "center",
+          gap: 4,
         }}
-        title={hint}
       >
         {label}
         {hint && (
-          <span style={{ marginLeft: 4, cursor: "help" }} aria-label={hint}>
+          <span style={{ cursor: "help" }} title={hint}>
             ⓘ
           </span>
         )}
       </div>
-      <div style={{ fontSize: 22, fontWeight: 600 }}>{value}</div>
+      <div
+        style={{
+          fontSize: 24,
+          fontWeight: 600,
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {value}
+      </div>
     </div>
   );
 }
 
+function InternalLoopbackCard({ audit }: { audit: GlobalAudit }) {
+  return (
+    <Card title="🔁 Gateway 内部循环消耗">
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: "var(--space-3)",
+        }}
+      >
+        <SubStat
+          label="内部请求"
+          value={(audit.internal_request_count ?? 0).toLocaleString()}
+        />
+        <SubStat
+          label="内部 tokens"
+          value={fmtTokens(audit.internal_tokens ?? 0)}
+          hint="summarizer / proactive / 5 维 inject 等 gateway 自调消耗. 跟员工业务无关, 但占真实 LLM 账单."
+        />
+      </div>
+    </Card>
+  );
+}
+
+/** BL-AUDIT-UX-P0: 按模型 — 横向 bar + 比例 % + 友好名 + 颜色. */
+function ModelBreakdownCard({ audit }: { audit: GlobalAudit }) {
+  const total = audit.by_model.reduce((s, m) => s + m.total_tokens, 0);
+  return (
+    <Card title="按模型用量">
+      <Table
+        rows={audit.by_model.map((m) => {
+          const md = getModelDisplay(m.model);
+          const pct = total > 0 ? (m.total_tokens / total) * 100 : 0;
+          return {
+            key: m.model,
+            label: (
+              <span
+                style={{ display: "inline-flex", alignItems: "center", gap: 8 }}
+              >
+                <span>{md.dotEmoji}</span>
+                <span style={{ fontWeight: 500 }}>{md.friendly}</span>
+                <span
+                  style={{
+                    fontSize: 11,
+                    color: "var(--text-muted)",
+                    padding: "1px 6px",
+                    background: "var(--bg-elev)",
+                    borderRadius: 8,
+                  }}
+                >
+                  {md.tier}
+                </span>
+                <span
+                  style={{
+                    fontSize: 10,
+                    color: "var(--text-muted)",
+                    fontFamily: "var(--font-mono)",
+                  }}
+                  title={m.model}
+                >
+                  {/* 鼠标 hover 显示 catalog ID */}
+                </span>
+              </span>
+            ),
+            count: m.count,
+            tokens: m.total_tokens,
+            pct,
+            barColor: md.color,
+          };
+        })}
+      />
+    </Card>
+  );
+}
+
+function DeptBreakdownCard({ audit }: { audit: GlobalAudit }) {
+  if (!audit.by_department || audit.by_department.length === 0) return null;
+  const total = audit.by_department.reduce((s, d) => s + d.total_tokens, 0);
+  return (
+    <Card title="按部门用量">
+      <Table
+        rows={audit.by_department.map((d, i) => {
+          const isUnassigned = d.department === "(未分组)";
+          const pct = total > 0 ? (d.total_tokens / total) * 100 : 0;
+          return {
+            key: d.department,
+            label: (
+              <span
+                style={{
+                  fontStyle: isUnassigned ? "italic" : "normal",
+                  color: isUnassigned ? "var(--text-muted)" : undefined,
+                }}
+                title={
+                  isUnassigned
+                    ? "该桶里员工没绑部门 (dev_token / 老员工 / OIDC 缺 dept claim). Day 8 客户接入手册要求 SSO 必传 dept."
+                    : undefined
+                }
+              >
+                {d.department}
+              </span>
+            ),
+            count: d.count,
+            tokens: d.total_tokens,
+            pct,
+            barColor: _palette(i),
+          };
+        })}
+      />
+    </Card>
+  );
+}
+
+function UserBreakdownCard({ audit }: { audit: GlobalAudit }) {
+  if (audit.by_user.length === 0) {
+    return (
+      <Card title="按员工用量">
+        <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
+          本期暂无员工业务请求.
+        </div>
+      </Card>
+    );
+  }
+  const total = audit.by_user.reduce((s, u) => s + u.total_tokens, 0);
+  const capped = audit.by_user.length >= 50;
+  return (
+    <Card
+      title={
+        <span>
+          按员工用量
+          {capped && (
+            <span
+              style={{
+                marginLeft: 8,
+                fontSize: 11,
+                color: "var(--text-muted)",
+                fontWeight: 400,
+              }}
+            >
+              (top 50 上限)
+            </span>
+          )}
+        </span>
+      }
+    >
+      <Table
+        showExtraColumn="部门"
+        rows={audit.by_user.map((u, i) => {
+          const isUnassigned = u.user_email === "(未分组员工)";
+          const pct = total > 0 ? (u.total_tokens / total) * 100 : 0;
+          return {
+            key: `${u.user_email}::${u.department}`,
+            label: (
+              <span
+                style={{
+                  fontStyle: isUnassigned ? "italic" : "normal",
+                  color: isUnassigned ? "var(--text-muted)" : undefined,
+                }}
+                title={
+                  isUnassigned
+                    ? "该桶里请求源没拿到 user_email (dev_token / OIDC 缺 email claim)."
+                    : undefined
+                }
+              >
+                {u.user_email}
+              </span>
+            ),
+            extra: u.department,
+            count: u.count,
+            tokens: u.total_tokens,
+            pct,
+            barColor: _palette(i),
+          };
+        })}
+      />
+    </Card>
+  );
+}
+
+/** BL-AUDIT-UX-P0: 通用表格组件 + 内嵌横向 bar.
+ *
+ * 每行结构:
+ *   [label........]  [横向 bar with %]  [请求数]  [tokens]
+ */
+function Table({
+  rows,
+  showExtraColumn,
+}: {
+  rows: {
+    key: string;
+    label: ReactNode;
+    extra?: string;
+    count: number;
+    tokens: number;
+    pct: number;
+    barColor: string;
+  }[];
+  showExtraColumn?: string;
+}) {
+  return (
+    <table
+      style={{
+        width: "100%",
+        borderCollapse: "collapse",
+        fontSize: 13,
+        fontVariantNumeric: "tabular-nums",
+      }}
+    >
+      <thead>
+        <tr style={{ borderBottom: "1px solid var(--border)" }}>
+          <th style={{ textAlign: "left", padding: "6px 8px", width: "30%" }}>
+            名称
+          </th>
+          {showExtraColumn && (
+            <th style={{ textAlign: "left", padding: "6px 8px", width: "20%" }}>
+              {showExtraColumn}
+            </th>
+          )}
+          <th style={{ textAlign: "left", padding: "6px 8px" }}>占比</th>
+          <th style={{ textAlign: "right", padding: "6px 8px", width: 80 }}>
+            请求
+          </th>
+          <th style={{ textAlign: "right", padding: "6px 8px", width: 90 }}>
+            tokens
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r) => (
+          <tr
+            key={r.key}
+            style={{ borderBottom: "1px solid var(--bg-secondary)" }}
+          >
+            <td style={{ padding: "8px" }}>{r.label}</td>
+            {showExtraColumn && (
+              <td
+                style={{
+                  padding: "8px",
+                  color: "var(--text-muted)",
+                  fontSize: 12,
+                }}
+              >
+                {r.extra}
+              </td>
+            )}
+            <td style={{ padding: "8px" }}>
+              <Bar pct={r.pct} color={r.barColor} />
+            </td>
+            <td style={{ padding: "8px", textAlign: "right" }}>
+              {r.count.toLocaleString()}
+            </td>
+            <td style={{ padding: "8px", textAlign: "right", fontWeight: 500 }}>
+              {fmtTokens(r.tokens)}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+/** 内嵌横向条 — 比例 % + 染色. */
+function Bar({ pct, color }: { pct: number; color: string }) {
+  const w = Math.max(0, Math.min(100, pct));
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+      }}
+    >
+      <div
+        style={{
+          flex: 1,
+          height: 8,
+          background: "var(--bg-elev)",
+          borderRadius: 4,
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            width: `${w}%`,
+            height: "100%",
+            background: color,
+            transition: "width 0.3s ease",
+          }}
+        />
+      </div>
+      <span
+        style={{
+          fontSize: 11,
+          color: "var(--text-muted)",
+          minWidth: 36,
+          textAlign: "right",
+        }}
+      >
+        {pct.toFixed(1)}%
+      </span>
+    </div>
+  );
+}
+
+/** 给部门 / 员工分组用的备用调色板 (前 8 个清亮, 后面回滚). */
+function _palette(i: number): string {
+  const C = [
+    "#5fa8d3", // blue
+    "#76b900", // green
+    "#7c3aed", // violet
+    "#f59e0b", // amber
+    "#ef4444", // red
+    "#06b6d4", // cyan
+    "#ec4899", // pink
+    "#8b5cf6", // purple
+  ];
+  return C[i % C.length];
+}
+
 /**
  * BL-AUDIT-P0-FIX (5/17): 数据对账 banner.
- *
- * 用途: 把 backend 返的总数 vs 各分组加和 比对一遍, 不一致就显式提示, 阻止
- * "总数 405 但 按部门加和 117" 这种"数据消失"印象损 audit 信任.
- *
- * 数据可信 = audit 类页面的生命线 (PM 视角). 任何细小不一致都被客户记 1 笔.
+ * 全对得上 — 静默不显示. 一致性 sanity check.
  */
 function DataReconciliation({ audit }: { audit: GlobalAudit }) {
   const modelSum = audit.by_model.reduce((s, m) => s + m.count, 0);
@@ -311,13 +608,9 @@ function DataReconciliation({ audit }: { audit: GlobalAudit }) {
   const deptOk = deptSum === audit.request_count;
   const userOk = userSum === audit.request_count;
 
-  // 全对得上 — 不显示 banner (静默 OK 不打扰)
-  if (modelOk && deptOk && userOk) {
-    return null;
-  }
+  if (modelOk && deptOk && userOk) return null;
 
-  // 至少 1 个对不上 — 显式提示, 帮 sysadmin 排查 backend SQL
-  const rows: { label: string; sum: number; ok: boolean }[] = [
+  const rows = [
     { label: "按模型加和", sum: modelSum, ok: modelOk },
     { label: "按部门加和", sum: deptSum, ok: deptOk },
     { label: "按员工加和", sum: userSum, ok: userOk },
@@ -329,15 +622,22 @@ function DataReconciliation({ audit }: { audit: GlobalAudit }) {
         总请求 <strong>{audit.request_count.toLocaleString()}</strong>, 但:
         <ul style={{ margin: "6px 0 6px 18px", padding: 0 }}>
           {rows.map((r) => (
-            <li key={r.label} style={{ color: r.ok ? "inherit" : "var(--status-warn, #b45309)" }}>
+            <li
+              key={r.label}
+              style={{
+                color: r.ok ? "inherit" : "var(--status-warn, #b45309)",
+              }}
+            >
               {r.label} = <strong>{r.sum.toLocaleString()}</strong>{" "}
-              {r.ok ? "✓" : `✗ (差 ${(audit.request_count - r.sum).toLocaleString()})`}
+              {r.ok
+                ? "✓"
+                : `✗ (差 ${(audit.request_count - r.sum).toLocaleString()})`}
             </li>
           ))}
         </ul>
         <div style={{ color: "var(--text-muted)", fontSize: 11 }}>
           典型原因: 老 audit 数据 user_email / department 缺 OIDC claim → 进 "(未分组)"
-          桶 (本表已显式列出). 跑 <code>POST /api/admin/audit/backfill</code> 回填可清零差额.
+          桶 (本表已显式列出).
         </div>
       </div>
     </Card>
