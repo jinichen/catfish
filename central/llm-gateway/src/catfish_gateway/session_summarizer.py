@@ -205,6 +205,29 @@ def _read_session_messages(session_id: str) -> list[tuple[str, str]]:
     return rows
 
 
+def _read_session_model(session_id: str) -> str | None:
+    """BL-INTERNAL-MODEL-FOLLOW-USER (5/17): 读 sessions.model 字段, 给
+    summarizer 用员工选的同款 model. 拿不到返 None, caller fallback 到
+    pick_internal_models_ordered 兜底.
+    """
+    if not STATE_DB.exists():
+        return None
+    try:
+        conn = sqlite3.connect(
+            f"file:{STATE_DB}?mode=ro", uri=True, timeout=1.0
+        )
+        row = conn.execute(
+            "SELECT model FROM sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+        conn.close()
+        if row and row[0]:
+            return str(row[0])
+    except sqlite3.Error as e:
+        logger.debug("read_session_model 失败 (sessions 表无 model 字段 or sqlite 错): %s", e)
+    return None
+
+
 _SUMMARY_PROMPT = """你是员工的工作日记写手. 下面是员工跟鲶鱼 (catfish, 员工的 AI 副手) 的一段对话历史.
 帮员工写一段简短日记 (1-2 段, 100-300 字), 抓 3 个重点:
 1. **员工要做什么**: 这次会话的核心需求 / 任务
@@ -255,7 +278,10 @@ def _mark_session_cool_down(session_id: str) -> None:
 
 
 async def _summarize_with_llm(
-    session_id: str, started_at: float, messages_pairs: list[tuple[str, str]]
+    session_id: str,
+    started_at: float,
+    messages_pairs: list[tuple[str, str]],
+    origin_model: str | None = None,
 ) -> str | None:
     """调 LLM 总结. 失败返 None.
 
@@ -297,12 +323,42 @@ async def _summarize_with_llm(
     import httpx  # noqa: PLC0415
 
     from .config import load_config  # noqa: PLC0415
-    from .internal_models import pick_internal_models_ordered  # noqa: PLC0415
+    # BL-INTERNAL-MODEL-FOLLOW-USER (5/17): 不再用 pick_internal_models_ordered.
+    # 严格 origin_model 一个候选, 撞错就标 cooldown 不切.
 
-    # BL-F14 + F15: 拿候选列表 (不只 1 个), 第 1 个撞 quota 就切第 2 个.
-    # 顺序: tag+private → tag+public → 兜底 private → 兜底 public.
+    # BL-INTERNAL-MODEL-FOLLOW-USER (5/17 鸿波拍板, 覆盖 5/4 BL-F14):
+    # 严格一致 — 员工选哪个 model, summarize 也用同款, 不 fallback. 撞错就报,
+    # 标 cooldown 后下次再试.
+    # 理由:
+    #   1. 配额一致 — 员工付 X 的钱, summarize 也走 X 不串账
+    #   2. 数据流一致 — 员工选公网 = 接受数据出公司, summarize 不偷偷走私有
+    #   3. 可预测 — debug 简单, 员工知道 summary 用哪个 model
+    # 拿不到 origin_model (老 session 没 model 字段 / 拒访 sqlite) → skip 不
+    # summarize, caller mark_journaled 防 hammer.
+    # 特殊 use case (vision/captcha 必须 vision model) 不走这个函数自己 pick.
     config = load_config()
-    candidates = pick_internal_models_ordered("summarizer", config)
+
+    if not origin_model:
+        logger.info(
+            "summarize_with_llm session=%s: 没 origin_model (老 session 或读 sessions.model "
+            "失败), 跳过 (员工同款规则).", session_id,
+        )
+        return None
+
+    origin_obj = next(
+        (m for m in config.models
+         if m.name == origin_model and m.mode == "chat" and m.upstream.is_available),
+        None,
+    )
+    if origin_obj is None:
+        logger.info(
+            "summarize_with_llm session=%s: origin_model=%s 不在 catalog / 不可达, "
+            "跳过 (不 fallback, 等员工下次用可达 model).",
+            session_id, origin_model,
+        )
+        return None
+    candidates = [origin_obj]  # 严格只一个候选, 不 fallback
+
     if not candidates:
         logger.info(
             "summarize_with_llm 跳过 session=%s: catalog 没可用 chat 模型 (api keys 全没配?)",
@@ -321,77 +377,51 @@ async def _summarize_with_llm(
     from .auth.dev_token import ensure_internal_dev_token  # 懒 import
     dev_token = ensure_internal_dev_token()
 
+    # BL-INTERNAL-MODEL-FOLLOW-USER (5/17): candidates 只 1 个 (员工同款), 撞错就
+    # 标 cooldown 5min, 不 fallback. 老 BL-F15 候选切换逻辑彻底删 — 跟"严格一致"
+    # 规则矛盾.
+    chosen_model = candidates[0]
     last_error: str | None = None
-    for attempt_idx, chosen_model in enumerate(candidates, start=1):
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                resp = await client.post(
-                    gateway_url,
-                    headers={
-                        "Authorization": f"Bearer {dev_token}",
-                        "X-Catfish-Skip-Identity": "true",
-                        "X-Catfish-Internal": "true",  # BL-F17: 跳 quota check + 不算 user_day
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": chosen_model.name,
-                        "messages": [{"role": "user", "content": user_prompt}],
-                        "temperature": 0.3,
-                        "max_tokens": 600,
-                        "stream": False,
-                    },
-                )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    text = data.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
-                    if attempt_idx > 1:
-                        logger.info(
-                            "summarize_with_llm session=%s 切换到第 %d 候选 %s 成功",
-                            session_id, attempt_idx, chosen_model.name,
-                        )
-                    return text.strip() or None
-                # 429 quota_exceeded → 切下一个候选 (BL-F15 关键)
-                if resp.status_code == 429:
-                    logger.info(
-                        "summarize_with_llm session=%s: %s 撞 429 quota, 切下一个候选 (剩 %d)",
-                        session_id, chosen_model.name, len(candidates) - attempt_idx,
-                    )
-                    last_error = f"429 quota: {chosen_model.name}"
-                    continue
-                # BL-F15 (5/5) 老写法 break 不切. 5/17 鸿波本机不在内网撞:
-                # 第 1 候选 catfish-private-main 撞 ServerDisconnected →
-                # gateway BL-FALLBACK-TOGGLE=False 返 502 → break → 不试公网
-                # 候选. 但 candidates 列表第 2+ 项就是公网 qwen-flash/
-                # deepseek/gemini, 应该试. 5xx (上游 / 网络问题) 切候选;
-                # 4xx (client request 格式 / RBAC 等) 切候选也没用, break.
-                last_error = f"{resp.status_code}: {resp.text[:200]}"
-                if 500 <= resp.status_code < 600:
-                    logger.info(
-                        "summarize_with_llm session=%s: %s 撞 %d (5xx 上游), "
-                        "切下一个候选 (剩 %d)",
-                        session_id, chosen_model.name, resp.status_code,
-                        len(candidates) - attempt_idx,
-                    )
-                    continue
-                logger.warning(
-                    "summarize_with_llm session=%s: gateway 返 %d (%s, 非 5xx), 不再切候选",
-                    session_id, resp.status_code, chosen_model.name,
-                )
-                break
-        except Exception as e:
-            last_error = f"exception: {type(e).__name__}: {e}"
-            logger.warning(
-                "summarize_with_llm session=%s 候选 %s 异常 %s, 切下一个",
-                session_id, chosen_model.name, e,
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                gateway_url,
+                headers={
+                    "Authorization": f"Bearer {dev_token}",
+                    "X-Catfish-Skip-Identity": "true",
+                    "X-Catfish-Internal": "true",  # BL-F17: 跳 quota check
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": chosen_model.name,
+                    "messages": [{"role": "user", "content": user_prompt}],
+                    "temperature": 0.3,
+                    "max_tokens": 600,
+                    "stream": False,
+                },
             )
-            continue
+            if resp.status_code == 200:
+                data = resp.json()
+                text = data.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+                return text.strip() or None
+            last_error = f"{resp.status_code}: {resp.text[:200]}"
+            logger.warning(
+                "summarize_with_llm session=%s: %s 撞 %d (员工同款规则, 不 fallback), "
+                "标 cooldown",
+                session_id, chosen_model.name, resp.status_code,
+            )
+    except Exception as e:
+        last_error = f"exception: {type(e).__name__}: {e}"
+        logger.warning(
+            "summarize_with_llm session=%s 调 %s 异常 %s (不 fallback), 标 cooldown",
+            session_id, chosen_model.name, e,
+        )
 
-    # 所有候选都失败 → 标记冷却, 防下次 chat 立即又来 hammer
-    logger.warning(
-        "summarize_with_llm session=%s 全 %d 候选都失败, 标记 %ds 冷却. 最后错: %s",
-        session_id, len(candidates), _COOL_DOWN_SECONDS, last_error,
-    )
     _mark_session_cool_down(session_id)
+    logger.info(
+        "summarize_with_llm session=%s 标 %ds cooldown. 最后错: %s",
+        session_id, _COOL_DOWN_SECONDS, last_error,
+    )
     return None
 
 
@@ -435,7 +465,10 @@ async def summarize_one_session(
             _mark_journaled(session_id)
             return False
 
-        summary = await _summarize_with_llm(session_id, started_at, msgs)
+        # BL-INTERNAL-MODEL-FOLLOW-USER (5/17): 读 session 用的 model, 传给
+        # summarizer 优先用同款 (顶候选首位). 拿不到 fallback 到 pick_internal.
+        origin_model = _read_session_model(session_id)
+        summary = await _summarize_with_llm(session_id, started_at, msgs, origin_model=origin_model)
         if summary is None or not summary.strip():
             # LLM 调用失败 — **不 mark**, 留给下次重试 (可能是网络抖 / API key 问题)
             # 鸿波 4-30 踩过坑: 提前 mark 导致 litellm 没装这种环境问题把 10 个
