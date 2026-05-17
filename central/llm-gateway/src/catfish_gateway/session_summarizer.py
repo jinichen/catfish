@@ -358,10 +358,23 @@ async def _summarize_with_llm(
                     )
                     last_error = f"429 quota: {chosen_model.name}"
                     continue
-                # 其他错码 (400/500/etc) — 大概率不是模型问题, 不切, 直接放弃
+                # BL-F15 (5/5) 老写法 break 不切. 5/17 鸿波本机不在内网撞:
+                # 第 1 候选 catfish-private-main 撞 ServerDisconnected →
+                # gateway BL-FALLBACK-TOGGLE=False 返 502 → break → 不试公网
+                # 候选. 但 candidates 列表第 2+ 项就是公网 qwen-flash/
+                # deepseek/gemini, 应该试. 5xx (上游 / 网络问题) 切候选;
+                # 4xx (client request 格式 / RBAC 等) 切候选也没用, break.
                 last_error = f"{resp.status_code}: {resp.text[:200]}"
+                if 500 <= resp.status_code < 600:
+                    logger.info(
+                        "summarize_with_llm session=%s: %s 撞 %d (5xx 上游), "
+                        "切下一个候选 (剩 %d)",
+                        session_id, chosen_model.name, resp.status_code,
+                        len(candidates) - attempt_idx,
+                    )
+                    continue
                 logger.warning(
-                    "summarize_with_llm session=%s: gateway 返 %d (%s), 不再切候选",
+                    "summarize_with_llm session=%s: gateway 返 %d (%s, 非 5xx), 不再切候选",
                     session_id, resp.status_code, chosen_model.name,
                 )
                 break
