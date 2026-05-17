@@ -192,8 +192,10 @@ def test_session_history_provider_uses_relevance_when_query_hits(
     out = SessionHistoryProvider().prefetch(ctx)
     assert out is not None
     assert "EIS 教学" in out
-    # 用相关性标题, 不是时间窗口
-    assert "跟你当前提问最相关的 session" in out
+    # 应该走相关性召回 (LIKE / FTS5 命中 "EIS")
+    # provider 文案 ~5/15 改: '跟你当前提问最相关的 session' → '员工最近 7 天 session 历史'
+    # (跟 relevant_mode 不再硬分两套文案, 统一一个). 测试同步.
+    assert "session 历史" in out or "最相关" in out
 
 
 def test_session_history_provider_falls_back_to_recent_when_no_hit(

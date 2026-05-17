@@ -15,3 +15,4 @@ dist/
 # .env 系列含 secret, 落进 git push 出去就泄露
 *.bak
 *.bak2
+.venv-test/
