@@ -167,7 +167,11 @@ async def generate_starter() -> dict[str, Any]:
     now = datetime.now()
     journal_tail = _read_journal_tail()
 
-    # BL-F14 + F15: 候选列表 (private 优先), 收到 429 切下一个绕 quota check.
+    # BL-INTERNAL-MODEL-FOLLOW-USER (5/17): proactive 是后台 cron 任务, 没员工
+    # 当前 chat 的 origin_model context. 长期方案: 拿员工最后 1 个 session 的
+    # model (sessions 表最大 started_at + status=active 那条). Day 8 再做.
+    # 短期保留 pick_internal_models_ordered 的 "private 优先" 兜底 — 它是 1 句
+    # 闲聊 max_tokens=120, 走私有 model 没成本风险.
     from .config import load_config  # 懒 import
     from .internal_models import pick_internal_models_ordered  # 懒 import
     config = load_config()

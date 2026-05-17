@@ -2770,6 +2770,8 @@ async def chat_completions(
                 body.get("messages") or [],
                 user_sub=user.sub,
                 model_context_window=ctx_window,
+                # BL-INTERNAL-MODEL-FOLLOW-USER (5/17): 压缩用员工选的同款 model
+                origin_model=model_name,
             )
             if compress_stats:
                 body["messages"] = new_msgs

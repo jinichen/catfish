@@ -227,6 +227,9 @@ async def maybe_compress_messages(
     threshold_ratio: float = DEFAULT_THRESHOLD_RATIO,
     keep_first: int = DEFAULT_KEEP_FIRST,
     keep_last: int = DEFAULT_KEEP_LAST,
+    # BL-INTERNAL-MODEL-FOLLOW-USER (5/17): 严格员工选的 model 同款.
+    # caller 必传, None 时跳过 (不 fallback 到别的 model).
+    origin_model: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     """如果 messages 估算 token > context * threshold, 压中间段.
 
@@ -270,8 +273,8 @@ async def maybe_compress_messages(
     if len(middle) < MIN_MIDDLE_TO_COMPRESS:
         return messages, None
 
-    # 调 LLM 压缩
-    summary = await _summarize_middle(middle, user_sub=user_sub)
+    # 调 LLM 压缩 — 严格员工同款 model (BL-INTERNAL-MODEL-FOLLOW-USER 5/17)
+    summary = await _summarize_middle(middle, user_sub=user_sub, origin_model=origin_model)
     if not summary:
         # LLM 挂了不卡主流程, 标 cooldown 防短时间反复重试
         _mark_sub_cool(user_sub)
@@ -316,14 +319,12 @@ async def _summarize_middle(
     middle_messages: list[dict[str, Any]],
     *,
     user_sub: str,
+    origin_model: str | None = None,
 ) -> str | None:
     """调 gateway loopback LLM 压缩中间段. 失败返 None.
 
-    Loopback 模式 (跟 session_summarizer._summarize_with_llm 一致):
-    - 走本机 gateway HTTP (autoload fallback chain / 复用 quota / brand scrub)
-    - X-Catfish-Internal: true (跳 quota count, 不算 user_day)
-    - X-Catfish-Skip-Identity: true (压摘要不要 SOUL 干扰)
-    - X-Catfish-Compression-Internal: true (本模块识别, 防自递归)
+    BL-INTERNAL-MODEL-FOLLOW-USER (5/17 鸿波拍板): 严格用 origin_model 同款.
+    None / 不在 catalog / 不可达 → 跳过. 撞错不 fallback.
     """
     # 拼上下文 (限单条最多 600 字, 防中间某 turn 异常长把 prompt 撑爆)
     context_lines = []
@@ -351,15 +352,29 @@ async def _summarize_middle(
 
         from .auth.dev_token import ensure_internal_dev_token  # noqa: PLC0415
         from .config import load_config  # noqa: PLC0415
-        from .internal_models import pick_internal_models_ordered  # noqa: PLC0415
     except ImportError as e:
         logger.warning("compression: import 依赖失败 (%s), 跳过", e)
         return None
 
+    # BL-INTERNAL-MODEL-FOLLOW-USER (5/17): 严格 origin_model 一个候选
+    if not origin_model:
+        logger.info(
+            "compression: 没 origin_model (caller 没传), 跳过 sub=%s (员工同款规则)",
+            user_sub,
+        )
+        return None
+
     config = load_config()
-    candidates = pick_internal_models_ordered("summarizer", config)
-    if not candidates:
-        logger.info("compression: catalog 没 summarizer 模型, 跳过 sub=%s", user_sub)
+    origin_obj = next(
+        (m for m in config.models
+         if m.name == origin_model and m.mode == "chat" and m.upstream.is_available),
+        None,
+    )
+    if origin_obj is None:
+        logger.info(
+            "compression: origin_model=%s 不在 catalog / 不可达, 跳过 sub=%s (不 fallback)",
+            origin_model, user_sub,
+        )
         return None
 
     port = os.environ.get("PORT", "8999")
@@ -369,51 +384,47 @@ async def _summarize_middle(
     )
     dev_token = ensure_internal_dev_token()
 
-    for chosen_model in candidates:
-        try:
-            async with httpx.AsyncClient(timeout=COMPRESSION_TIMEOUT_SECS) as client:
-                resp = await client.post(
-                    gateway_url,
-                    headers={
-                        "Authorization": f"Bearer {dev_token}",
-                        "X-Catfish-Skip-Identity": "true",
-                        "X-Catfish-Internal": "true",
-                        # 防自递归 — compressor 调 gateway 不能再触发 compressor
-                        "X-Catfish-Compression-Internal": "true",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": chosen_model.name,
-                        "messages": [{"role": "user", "content": user_prompt}],
-                        "temperature": 0.2,
-                        "max_tokens": 800,
-                    },
-                )
-                if resp.status_code != 200:
-                    logger.info(
-                        "compression: %s 返 %d, 试下一个 (sub=%s)",
-                        chosen_model.name, resp.status_code, user_sub,
-                    )
-                    continue
-                data = resp.json()
-                choices = data.get("choices") or []
-                if not choices:
-                    continue
-                content = choices[0].get("message", {}).get("content")
-                if isinstance(content, str) and content.strip():
-                    logger.info(
-                        "compression: 压缩成功 sub=%s model=%s, summary=%d chars",
-                        user_sub, chosen_model.name, len(content),
-                    )
-                    return content.strip()
-        except Exception as e:
-            logger.info(
-                "compression: %s 异常 (%s), 试下一个 sub=%s",
-                chosen_model.name, type(e).__name__, user_sub,
+    try:
+        async with httpx.AsyncClient(timeout=COMPRESSION_TIMEOUT_SECS) as client:
+            resp = await client.post(
+                gateway_url,
+                headers={
+                    "Authorization": f"Bearer {dev_token}",
+                    "X-Catfish-Skip-Identity": "true",
+                    "X-Catfish-Internal": "true",
+                    # 防自递归 — compressor 调 gateway 不能再触发 compressor
+                    "X-Catfish-Compression-Internal": "true",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": origin_obj.name,
+                    "messages": [{"role": "user", "content": user_prompt}],
+                    "temperature": 0.2,
+                    "max_tokens": 800,
+                },
             )
-            continue
-
-    logger.info("compression: 所有候选模型都挂, 跳过 sub=%s", user_sub)
+            if resp.status_code != 200:
+                logger.info(
+                    "compression: %s 返 %d, 跳过 (sub=%s, 不 fallback)",
+                    origin_obj.name, resp.status_code, user_sub,
+                )
+                return None
+            data = resp.json()
+            choices = data.get("choices") or []
+            if not choices:
+                return None
+            content = choices[0].get("message", {}).get("content")
+            if isinstance(content, str) and content.strip():
+                logger.info(
+                    "compression: 压缩成功 sub=%s model=%s (员工同款), summary=%d chars",
+                    user_sub, origin_obj.name, len(content),
+                )
+                return content.strip()
+    except Exception as e:
+        logger.info(
+            "compression: %s 异常 (%s), 跳过 sub=%s",
+            origin_obj.name, type(e).__name__, user_sub,
+        )
     return None
 
 

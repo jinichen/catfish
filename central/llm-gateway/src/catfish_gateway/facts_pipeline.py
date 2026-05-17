@@ -118,6 +118,11 @@ async def _llm_json(system_prompt: str, user_prompt: str, *, max_tokens: int = 4
 
     走 internal_models.pick_internal_model("fact_analyzer") 选模型. tier=private 优先,
     数据不出公司 — 跟 catfish "本地优先" 定位一致.
+
+    BL-INTERNAL-MODEL-FOLLOW-USER (5/17): 不绑员工 session model — facts 是
+    admin/cron 触发的政策解析任务, 不属于员工 session, 没 origin_model. 保留
+    pick_internal_model 的 private-first 兜底. 政策审计需求强 (合规), 走私有
+    模型保数据不出, 这层不动.
     """
     config = load_config()
     chosen = pick_internal_model("fact_analyzer", config)

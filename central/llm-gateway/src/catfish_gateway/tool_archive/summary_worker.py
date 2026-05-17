@@ -53,7 +53,6 @@ async def _summarize_one(
 
     from ..auth.dev_token import ensure_internal_dev_token  # noqa: PLC0415
     from ..config import load_config  # noqa: PLC0415
-    from ..internal_models import pick_internal_models_ordered  # noqa: PLC0415
 
     try:
         config = load_config()
@@ -61,28 +60,23 @@ async def _summarize_one(
         logger.warning("summary_worker load_config 失败: %s", e)
         return None, None
 
-    # 先按 catalog tag / 兜底, 拿到一个完整的候选 fallback chain
-    candidates = pick_internal_models_ordered("tool_summarizer", config)
+    # BL-INTERNAL-MODEL-FOLLOW-USER (5/17): 严格 origin_model 同款, 不 fallback.
+    # 老 5/11 BL-Q3-ARCHIVE fix2 是 'origin_model 顶首位 + tag/兜底 fallback chain',
+    # 现在改严格. 没 origin_model / 不在 catalog / 不可达 → 跳过 (caller 标 error
+    # 防再扫到), 不切别的 model.
+    if not origin_model:
+        logger.info("summary_worker: 没 origin_model, 跳过 (员工同款规则)")
+        return None, None
 
-    # origin_model 顶到最前面 (如果在 catalog 里 + 可达)
-    if origin_model:
-        origin_obj = next(
-            (m for m in config.models
-             if m.name == origin_model and m.mode == "chat" and m.upstream.is_available),
-            None,
-        )
-        if origin_obj:
-            # 去重: 候选已含 origin_model 就只移到最前; 不含就 prepend
-            candidates = [origin_obj] + [c for c in candidates if c.name != origin_model]
-            logger.debug(
-                "summary_worker: origin_model=%s 顶到候选首位 (chat 同款)",
-                origin_model,
-            )
-
-    if not candidates:
-        logger.warning(
-            "summary_worker: catalog 一个可用 chat 模型都没 — 跳过. "
-            "(没 tool_summarizer tag + 兜底也空, api key 全没配?)"
+    origin_obj = next(
+        (m for m in config.models
+         if m.name == origin_model and m.mode == "chat" and m.upstream.is_available),
+        None,
+    )
+    if origin_obj is None:
+        logger.info(
+            "summary_worker: origin_model=%s 不在 catalog / 不可达, 跳过 (不 fallback)",
+            origin_model,
         )
         return None, None
 
@@ -95,55 +89,46 @@ async def _summarize_one(
 
     user_prompt = prompts.build_summary_user_prompt(content, tool_name)
 
-    last_error: str | None = None
-    for chosen in candidates:
-        try:
-            async with httpx.AsyncClient(timeout=SUMMARY_TIMEOUT_SEC) as client:
-                resp = await client.post(
-                    gateway_url,
-                    headers={
-                        "Authorization": f"Bearer {dev_token}",
-                        "X-Catfish-Skip-Identity": "true",
-                        "X-Catfish-Internal": "true",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": chosen.name,
-                        "messages": [
-                            {"role": "system", "content": prompts.SUMMARY_SYSTEM_PROMPT},
-                            {"role": "user", "content": user_prompt},
-                        ],
-                        "temperature": 0.2,
-                        "max_tokens": SUMMARY_MAX_TOKENS,
-                        "stream": False,
-                    },
+    try:
+        async with httpx.AsyncClient(timeout=SUMMARY_TIMEOUT_SEC) as client:
+            resp = await client.post(
+                gateway_url,
+                headers={
+                    "Authorization": f"Bearer {dev_token}",
+                    "X-Catfish-Skip-Identity": "true",
+                    "X-Catfish-Internal": "true",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": origin_obj.name,
+                    "messages": [
+                        {"role": "system", "content": prompts.SUMMARY_SYSTEM_PROMPT},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "temperature": 0.2,
+                    "max_tokens": SUMMARY_MAX_TOKENS,
+                    "stream": False,
+                },
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                text = (
+                    data.get("choices", [{}])[0]
+                    .get("message", {})
+                    .get("content", "")
+                    or ""
                 )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    text = (
-                        data.get("choices", [{}])[0]
-                        .get("message", {})
-                        .get("content", "")
-                        or ""
-                    )
-                    text = text.strip()
-                    # 卡 120 字硬上限 (LLM 偶尔忽略 prompt 指令)
-                    if len(text) > 240:  # 中文 2 字符 ≈ 1 token, 240 字 ≈ 120-150 字
-                        text = text[:240] + "…"
-                    if text:
-                        return text, chosen.name
-                    last_error = "empty content"
-                    continue
-                if resp.status_code == 429:
-                    last_error = f"429 quota: {chosen.name}"
-                    continue
-                last_error = f"{resp.status_code}: {resp.text[:200]}"
-                break
-        except Exception as e:  # noqa: BLE001
-            last_error = f"{type(e).__name__}: {e}"
-            continue
-
-    logger.warning("summary_worker 全候选失败: %s", last_error)
+                text = text.strip()
+                if len(text) > 240:
+                    text = text[:240] + "…"
+                if text:
+                    return text, origin_obj.name
+            logger.info(
+                "summary_worker: %s 返 %d, 跳过 (员工同款规则, 不 fallback)",
+                origin_obj.name, resp.status_code,
+            )
+    except Exception as e:  # noqa: BLE001
+        logger.info("summary_worker: %s 异常 (%s), 跳过", origin_obj.name, type(e).__name__)
     return None, None
 
 

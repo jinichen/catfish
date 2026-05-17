@@ -331,6 +331,11 @@ async def _stream_llm_answer(
             # BL-F14: 不写死模型, 用 pick_internal_model("a2a_aux") 按 tag 选 (private 优先).
             # a2a 走特殊 SSE 链路, 不走 gateway loopback (跟 summarizer/proactive 不同),
             # 直接用 LiteLLM, 但 model + api_base + api_key 都从 catalog 来.
+            #
+            # BL-INTERNAL-MODEL-FOLLOW-USER (5/17): a2a 是跨员工 federation,
+            # 接收方接到 from_sub 的请求, 不绑接收方的 session model. 长期:
+            # 让 from_sub (发起方) 透传自己 session 的 model 到 a2a header,
+            # 接收方用同款回答 — Day 8 设计. 短期保留 pick_internal_model.
             from .config import load_config  # noqa: PLC0415
             from .internal_models import pick_internal_model  # noqa: PLC0415
             config = load_config()
