@@ -35,12 +35,20 @@
 | 跨 session 检索 (search) | ✅ memory(action=search) | ❌ 不重写 |
 | 上下游 LLM provider 切换 | ❌ hermes 不管 | ✅ catfish gateway (LiteLLM) |
 
-**catfish 越界过的事 (5/17 凌晨)**:
+**catfish 越界过的事 (5/17 凌晨 + 上午)**:
 - ❌ `catfish_memory_dedupe`: 自己用 jieba 写 Jaccard 找重复 — hermes 有 ContextCompressor 含语义摘要可复用
-- ❌ `catfish_memory_compress`: 自己写"砍最老 N 条" 压缩 — hermes 有 catfish-autocompress plugin 已 ship
+- ❌ `catfish_memory_compress`: 自己写"砍最老 N 条" 压缩 — hermes 有内置 compressor 已 ship
 - ❌ "压缩前提取 memory hook" (一度想加进 hermes plugin): 改 hermes 主对话路径, 风险高且 hermes 已经在压
+- ❌ **`catfish-autocompress` plugin (5/17 早 9:00 砍)** — 240 行 plugin 干一件事: 把 hermes ContextCompressor 默认 75% 阈值改成 50%. **hermes 0.14 已经把默认值改成 50%** (`agent/context_compressor.py:407` 写死 `threshold_percent: float = 0.50`), plugin 等于 no-op (50% 替 50%). 5/8 之后 9 天没启用都没事 = 证据. 鸿波 5/17 早 09:00 拍板: "hermes 有压缩, catfish 还压缩干嘛?" — 同 5/17 04:55 砍 dedupe/compress 一个套路.
 
-**周一 audit 决定**: 这 3 件是 catfish 越界, 砍工具暴露 / 砍 task. 留代码作 git 历史, LLM 看不到.
+**周一 audit 决定**: 这 4 件是 catfish 越界, 全砍 (5/17 凌晨砍 3 个工具暴露 + 上午砍 plugin 源码). 留代码作 git 历史, LLM 看不到.
+
+**catfish-autocompress 砍后的真实路径**:
+1. `~/.hermes/config.yaml` 改 `engine: compressor` (hermes 内置)
+2. `edge/hermes-plugins/catfish-autocompress/` 目录删除
+3. task #82 BL-HERMES-014-UPGRADE-STEP2 → deleted (没东西要 audit 了)
+4. HERMES-014-UPGRADE-RUNBOOK 里"重新部署 catfish-autocompress" 段落删
+5. 想自定义阈值? 直接配 hermes config.yaml (hermes 0.14 + 后续版本本应支持, 走 hermes 路径)
 
 ### 2. Context / Session 系统
 

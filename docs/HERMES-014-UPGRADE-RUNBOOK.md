@@ -94,37 +94,32 @@ catfish-tool-bridge --foreground 2>&1 | head -30
 **关键观察**: 如果看到 `BL-HERMES-014-LAZY: import model_tools 失败` →
 按错误信息提示的诊断步骤排查, 99% 是 `pip install -e .` 没跑或失败。
 
-### 4b. ⚠ 重新部署 catfish-autocompress plugin (升级抹掉了)
+### 4b. catfish-autocompress plugin — 已 deprecate (5/17 早 09:00 砍)
 
-hermes 升级时 `git checkout v2026.5.16` 会 clean 掉源码目录里的 catfish 自家
+hermes 升 0.14 时 `git checkout v2026.5.16` 会 clean 掉源码目录里 catfish 自家
 plugin (它原本在 `~/.hermes/hermes-agent/plugins/context_engine/catfish-autocompress/`,
-不在 hermes 官方 tag 里)。 不重装的话员工 hermes 用 hermes 默认 70-75% 压缩
-阈值, 私有 LLM 撞 4-28 那个 ReadTimeout 坑回来。
+不在 hermes 官方 tag 里)。 5/17 重装时发现:
 
-5/17 鸿波客户机实测确认: hermes 0.14 `ContextCompressor.__init__` + `ContextEngine`
-接口跟 catfish-autocompress 写法 100% 兼容, 直接 copy 回老位置即可。
+**hermes 0.14 `ContextCompressor` 默认 `threshold_percent = 0.50`** (源码 `agent/
+context_compressor.py:407`), 跟 catfish-autocompress 改的阈值**完全一致**。 plugin
+等于 no-op (50% 替 50%), 没存在价值。
 
+**决策**: 砍 plugin, hermes 自家 compressor 走起。 详见 `docs/CATFISH-HERMES-BOUNDARY.md`
+"压缩归 hermes" 原则。
+
+操作:
 ```bash
-# 假设 catfish 项目在 ~/person_task/catfish
-mkdir -p ~/.hermes/hermes-agent/plugins/context_engine/
-cp -r ~/person_task/catfish/edge/hermes-plugins/catfish-autocompress \
-      ~/.hermes/hermes-agent/plugins/context_engine/
-
-# 确认 ~/.hermes/config.yaml 含:
-#   context:
-#     engine: catfish-autocompress
-sed -i.bak 's/engine: compressor$/engine: catfish-autocompress/' ~/.hermes/config.yaml
+# 确认 ~/.hermes/config.yaml 是 hermes 默认 compressor
 grep -A2 "^context:" ~/.hermes/config.yaml
+# 期望:
+#   context:
+#     engine: compressor
+
+# 如果是 catfish-autocompress, 改回:
+sed -i.bak 's/engine: catfish-autocompress$/engine: compressor/' ~/.hermes/config.yaml
 ```
 
-验启用成功 (重启 hermes 后 log 应有):
-```
-catfish-autocompress 已注册：threshold=50%（...）
-```
-
-**长期 fix**: 把 plugin 改装到用户目录 `~/.hermes/plugins/` (升级不被抹), 等
-hermes 0.14 plugin discovery 扫用户目录确认后切换。 BL-HERMES-014-UPGRADE-STEP2
-(#82) audit 中。
+想自定义阈值? 直接配 hermes config (具体 schema 看 hermes docs), 不再走 plugin。
 
 ### 5. Companion 验
 
