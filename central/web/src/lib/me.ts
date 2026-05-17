@@ -79,6 +79,8 @@ export async function fetchGlobalQuota(): Promise<GlobalQuota | null> {
 
 export interface GlobalAudit {
   since_ms: number;
+  /** BL-AUDIT-UX-P1 (5/17): 时间窗长度 (h). 24/168/720 = 24h/7d/30d. */
+  since_hours: number;
   /** 员工业务 (排除 internal:* loopback) */
   request_count: number;
   total_tokens: number;
@@ -92,11 +94,20 @@ export interface GlobalAudit {
    *  / 5 维 inject 等), 不算员工业务. sysadmin 看透明度. */
   internal_request_count?: number;
   internal_tokens?: number;
+  /** BL-AUDIT-UX-P1 (5/17): 上一个等长窗口的对照数字, 前端做 trend ↑12% / ↓8%. */
+  previous_request_count?: number;
+  previous_total_tokens?: number;
+  previous_active_users?: number;
+  previous_active_departments?: number;
 }
 
-export async function fetchGlobalAudit(): Promise<GlobalAudit | null> {
+export async function fetchGlobalAudit(
+  sinceHours: number = 24,
+): Promise<GlobalAudit | null> {
   try {
-    return await api.get<GlobalAudit>("/api/audit/global");
+    return await api.get<GlobalAudit>(
+      `/api/audit/global?since_hours=${encodeURIComponent(sinceHours)}`,
+    );
   } catch {
     return null;
   }

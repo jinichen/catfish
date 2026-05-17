@@ -448,3 +448,50 @@ def test_audit_summary_global(tmp_path: Path) -> None:
     assert len(s["by_department"]) == 2
     assert len(s["by_model"]) == 2
     assert len(s["by_user"]) == 3
+
+
+def test_audit_period_totals_window_bounded(tmp_path: Path) -> None:
+    """BL-AUDIT-UX-P1 (5/17): audit_period_totals 按 start/end 窗口边界 SELECT.
+
+    防回归: 老 audit_summary_global_since 是 ts >= cutoff (开放上界), 新 helper
+    要 ts >= start AND ts < end (闭开区间), 防"上期数据"跟"本期"窗口重叠.
+    """
+    # 3 条都是当前时间 (后面 manipulate ts 不容易 — 改成验证 window 行为)
+    quota.record_usage("a@x.com", "研发部", "qwen", 100, 100)
+    quota.record_usage("b@x.com", "研发部", "qwen", 200, 200)
+
+    now_ms = int(time.time() * 1000)
+    # 窗口 [now-1h, now] → 应包含全 2 条
+    s_in = quota.audit_period_totals(now_ms - 3_600_000, now_ms + 1000)
+    assert s_in["request_count"] == 2
+    assert s_in["total_tokens"] == 600
+    assert s_in["active_users"] == 2
+    assert s_in["active_departments"] == 1
+
+    # 窗口 [yesterday, now-1h] → 应不含任何 (新写的 record 在 now 附近)
+    s_out = quota.audit_period_totals(now_ms - 86_400_000, now_ms - 3_600_000)
+    assert s_out["request_count"] == 0
+    assert s_out["total_tokens"] == 0
+
+
+def test_audit_period_totals_excludes_internal_loopback(tmp_path: Path) -> None:
+    """BL-AUDIT-INTERNAL-SPLIT 合规: internal:* user 不算 audit period totals."""
+    quota.record_usage("real@x.com", "研发部", "qwen", 500, 500)
+    quota.record_usage("internal:gateway-loopback", "", "qwen", 9999, 9999)
+
+    now_ms = int(time.time() * 1000)
+    s = quota.audit_period_totals(now_ms - 3_600_000, now_ms + 1000)
+    assert s["request_count"] == 1  # 不含 internal
+    assert s["total_tokens"] == 1000
+
+
+def test_audit_period_totals_empty_returns_zeros(tmp_path: Path) -> None:
+    """空窗口 → 全 0, 不 raise."""
+    now_ms = int(time.time() * 1000)
+    s = quota.audit_period_totals(now_ms - 1000, now_ms - 500)
+    assert s == {
+        "request_count": 0,
+        "total_tokens": 0,
+        "active_users": 0,
+        "active_departments": 0,
+    }

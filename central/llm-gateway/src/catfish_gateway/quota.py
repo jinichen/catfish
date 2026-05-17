@@ -629,6 +629,75 @@ def top_departments(cutoff_ms: int, limit: int = 10) -> list[dict]:
         return []
 
 
+def audit_period_totals(start_ms: int, end_ms: int) -> dict:
+    """BL-AUDIT-UX-P1 (5/17): 时间窗内 top-level 数字 (no by_* breakdown).
+
+    给 trend ↑↓ vs 上期对照用 — 当前期跟上期同样查一遍, 前端做差算 % 变化.
+    比 audit_summary_global_since 轻一半 (只 1 个 query, 不跑 by_model /
+    by_dept / by_user GROUP BY).
+
+    Returns: {request_count, total_tokens, active_users, active_departments}.
+    全 0 表示该期无业务请求 (或 PG 错). 永不 raise.
+    """
+    empty = {
+        "request_count": 0,
+        "total_tokens": 0,
+        "active_users": 0,
+        "active_departments": 0,
+    }
+    if _use_pg():
+        try:
+            with _pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT COUNT(*),
+                                  COALESCE(SUM(tokens_in + tokens_out), 0),
+                                  COUNT(DISTINCT user_email),
+                                  COUNT(DISTINCT department)
+                                    FILTER (WHERE department <> '')
+                           FROM quota_events
+                           WHERE ts_ms >= %s AND ts_ms < %s
+                             AND user_email NOT LIKE 'internal:%%'""",
+                        (start_ms, end_ms),
+                    )
+                    row = cur.fetchone()
+            return {
+                "request_count": int(row[0] or 0),
+                "total_tokens": int(row[1] or 0),
+                "active_users": int(row[2] or 0),
+                "active_departments": int(row[3] or 0),
+            }
+        except Exception as e:
+            logger.warning("audit_period_totals PG 失败: %s", e)
+            return empty
+
+    # sqlite (test 路径)
+    try:
+        conn = _get_conn()
+        cur = conn.execute(
+            """SELECT COUNT(*),
+                      COALESCE(SUM(tokens_in + tokens_out), 0),
+                      COUNT(DISTINCT user_email),
+                      COUNT(DISTINCT department)
+               FROM quota_events
+               WHERE ts >= ? AND ts < ?
+                 AND user_email NOT LIKE 'internal:%'
+                 AND department != ''""",
+            (start_ms, end_ms),
+        )
+        row = cur.fetchone()
+        conn.close()
+        return {
+            "request_count": int(row[0] or 0),
+            "total_tokens": int(row[1] or 0),
+            "active_users": int(row[2] or 0),
+            "active_departments": int(row[3] or 0),
+        }
+    except Exception as e:
+        logger.warning("audit_period_totals sqlite 失败: %s", e)
+        return empty
+
+
 def audit_summary_global_since(cutoff_ms: int) -> dict:
     """全局聚合 — admin /api/audit/global 用. 跟 audit_summary_dept_since 同结构, 不限部门."""
     empty = {

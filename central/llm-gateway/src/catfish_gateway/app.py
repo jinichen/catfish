@@ -1212,18 +1212,37 @@ async def api_quota_global(
 @app.get("/api/audit/global")
 async def api_audit_global(
     user: User = Depends(get_current_user),
+    since_hours: int = 24,
 ) -> dict[str, Any]:
-    """全员 audit 聚合 — admin 看请求总数 / 模型分布 / 部门分布 / top 员工."""
+    """全员 audit 聚合 — admin 看请求总数 / 模型分布 / 部门分布 / top 员工.
+
+    BL-AUDIT-UX-P1 (5/17): 加 since_hours 时间窗 + 上期对照.
+      since_hours: 1-720 (1 小时-30 天), 默认 24h. 前端 [24h][7d=168][30d=720] 切.
+      previous_*: 同长度的上一段 (e.g. 24h 视图 → 上 24h 的总数), 给 trend ↑↓.
+    """
     from . import quota
     _require_admin(user)
 
-    now_ms = int(time.time() * 1000)
-    day_cutoff = now_ms - 86_400_000
+    # 钳到合理范围: 1 小时 - 30 天
+    hours = max(1, min(720, int(since_hours)))
+    window_ms = hours * 3_600_000
 
-    summary = quota.audit_summary_global_since(day_cutoff)
+    now_ms = int(time.time() * 1000)
+    period_start_ms = now_ms - window_ms
+    prev_period_start_ms = period_start_ms - window_ms
+
+    summary = quota.audit_summary_global_since(period_start_ms)
+    prev = quota.audit_period_totals(prev_period_start_ms, period_start_ms)
+
     return {
-        "since_ms": day_cutoff,
+        "since_ms": period_start_ms,
+        "since_hours": hours,
         **summary,
+        # BL-AUDIT-UX-P1: 上期对照, 给前端做 trend ↑12% / ↓8% 用
+        "previous_request_count": prev["request_count"],
+        "previous_total_tokens": prev["total_tokens"],
+        "previous_active_users": prev["active_users"],
+        "previous_active_departments": prev["active_departments"],
         "viewer_role": user.role,
     }
 

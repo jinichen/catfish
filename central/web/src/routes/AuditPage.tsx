@@ -8,11 +8,11 @@
  *                          inline bar / 异常告警占位
  */
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { Card } from "../components/Card";
 import { RoleGate } from "../components/RoleGate";
-import { getModelDisplay } from "../lib/modelDisplay";
+import { costRMB, fmtRMB, getModelDisplay, totalCostRMB } from "../lib/modelDisplay";
 import {
   fetchGlobalAudit,
   type GlobalAudit,
@@ -24,27 +24,30 @@ function fmtTokens(n: number): string {
   return `${(n / 1_000_000).toFixed(2)}M`;
 }
 
-/** 粗估成本 (RMB) — 公网平均 0.02¥/1K tokens (中位 catalog 价).
- *  这是 P0 用的 rough number, BL-AUDIT-UX-P2 真做时按 model × tokens 精算. */
-function estimateCostRMB(tokens: number): string {
-  const rmb = (tokens / 1000) * 0.02;
-  if (rmb < 1) return `≈ ¥${rmb.toFixed(2)}`;
-  if (rmb < 100) return `≈ ¥${rmb.toFixed(1)}`;
-  return `≈ ¥${Math.round(rmb)}`;
-}
+const TIME_WINDOWS = [
+  { hours: 24, label: "24h" },
+  { hours: 168, label: "7d" },
+  { hours: 720, label: "30d" },
+];
 
 export function AuditPage() {
   const [audit, setAudit] = useState<GlobalAudit | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  // BL-AUDIT-UX-P1: 时间窗状态, 默认 24h
+  const [sinceHours, setSinceHours] = useState<number>(24);
 
   useEffect(() => {
-    fetchGlobalAudit()
+    setLoading(true);
+    setError(null);
+    fetchGlobalAudit(sinceHours)
       .then((a) => {
         if (!a) setError("拉取 audit 失败 (没权限或后端报错)");
         else setAudit(a);
       })
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
-  }, []);
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoading(false));
+  }, [sinceHours]);
 
   return (
     <RoleGate require={["manager", "admin"]}>
@@ -54,11 +57,16 @@ export function AuditPage() {
             <div style={{ color: "var(--status-err)" }}>{error}</div>
           </Card>
         )}
-        {!audit && !error && <div>加载中…</div>}
+        {loading && !audit && <div>加载中…</div>}
         {audit && (
           <>
-            {/* ── 标题区 ── */}
-            <PageHeader audit={audit} />
+            {/* ── 标题区 + 工具栏 (BL-AUDIT-UX-P1: 时间窗切换 + CSV 导出) ── */}
+            <PageHeader
+              audit={audit}
+              sinceHours={sinceHours}
+              onChangeWindow={setSinceHours}
+              loading={loading}
+            />
 
             {/* ── 异常告警条 (BL-AUDIT-UX-P0 占位, P1 backend 出 trend 后实数) ── */}
             <AnomalyBanner audit={audit} />
@@ -93,42 +101,241 @@ export function AuditPage() {
 //                          各 section 组件
 // ════════════════════════════════════════════════════════════════════
 
-function PageHeader({ audit }: { audit: GlobalAudit }) {
+function PageHeader({
+  audit,
+  sinceHours,
+  onChangeWindow,
+  loading,
+}: {
+  audit: GlobalAudit;
+  sinceHours: number;
+  onChangeWindow: (hours: number) => void;
+  loading: boolean;
+}) {
   const scope =
     audit.viewer_role === "admin" || audit.viewer_role === "sysadmin"
       ? "全公司视角"
       : "本部门视角";
+  const windowLabel = windowLabelOf(audit.since_hours);
   return (
-    <div>
-      <h1
-        style={{
-          fontSize: 24,
-          fontWeight: 600,
-          margin: 0,
-          marginBottom: 4,
-        }}
-      >
-        LLM 使用审计
-      </h1>
-      <div
-        style={{
-          fontSize: 13,
-          color: "var(--text-muted)",
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-        }}
-      >
-        最近 24 小时 · {scope}
-        <span
-          title="本表不含 gateway 内部循环消耗 (summarizer / proactive / 5 维 inject). 内部消耗见下方独立卡."
-          style={{ cursor: "help" }}
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "flex-end",
+        gap: "var(--space-3)",
+        flexWrap: "wrap",
+      }}
+    >
+      <div>
+        <h1
+          style={{
+            fontSize: 24,
+            fontWeight: 600,
+            margin: 0,
+            marginBottom: 4,
+          }}
         >
-          ⓘ
-        </span>
+          LLM 使用审计
+        </h1>
+        <div
+          style={{
+            fontSize: 13,
+            color: "var(--text-muted)",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+          }}
+        >
+          最近 {windowLabel} · {scope}
+          <span
+            title="本表不含 gateway 内部循环消耗 (summarizer / proactive / 5 维 inject). 内部消耗见下方独立卡."
+            style={{ cursor: "help" }}
+          >
+            ⓘ
+          </span>
+          {loading && (
+            <span style={{ color: "var(--text-muted)", fontSize: 11 }}>
+              · 加载中…
+            </span>
+          )}
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        <TimeWindowToggle value={sinceHours} onChange={onChangeWindow} />
+        <ExportCsvButton audit={audit} />
       </div>
     </div>
   );
+}
+
+function windowLabelOf(hours: number): string {
+  if (hours <= 24) return `${hours} 小时`;
+  if (hours <= 168) return `${hours / 24} 天`;
+  return `${hours / 24} 天`;
+}
+
+function TimeWindowToggle({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (hours: number) => void;
+}) {
+  return (
+    <div
+      role="tablist"
+      style={{
+        display: "inline-flex",
+        background: "var(--bg-elev)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-sm)",
+        padding: 2,
+      }}
+    >
+      {TIME_WINDOWS.map((w) => {
+        const active = value === w.hours;
+        return (
+          <button
+            key={w.hours}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(w.hours)}
+            style={{
+              padding: "4px 12px",
+              border: "none",
+              background: active ? "var(--accent)" : "transparent",
+              color: active ? "white" : "var(--text)",
+              borderRadius: "var(--radius-sm)",
+              fontSize: 12,
+              fontWeight: active ? 500 : 400,
+              cursor: "pointer",
+              transition: "background 0.1s",
+            }}
+          >
+            {w.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ExportCsvButton({ audit }: { audit: GlobalAudit }) {
+  const onExport = () => {
+    const csv = auditToCsv(audit);
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const since = new Date(audit.since_ms).toISOString().slice(0, 10);
+    a.download = `audit_${audit.since_hours}h_${since}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+  return (
+    <button
+      type="button"
+      onClick={onExport}
+      style={{
+        padding: "4px 12px",
+        background: "var(--bg-elev)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-sm)",
+        color: "var(--text)",
+        fontSize: 12,
+        cursor: "pointer",
+      }}
+      title="导出当前视图为 CSV (含模型/部门/员工 三表合一)"
+    >
+      📥 CSV
+    </button>
+  );
+}
+
+/** BL-AUDIT-UX-P1: 把 audit 三个表合并成一个 CSV (用 section header 分隔). */
+function auditToCsv(audit: GlobalAudit): string {
+  const lines: string[] = [];
+  const sinceIso = new Date(audit.since_ms).toISOString();
+  lines.push(`# Catfish LLM 使用审计 · 最近 ${audit.since_hours}h`);
+  lines.push(`# 起始时间, ${sinceIso}`);
+  lines.push(`# 视角, ${audit.viewer_role}`);
+  lines.push("");
+  lines.push("## KPI");
+  lines.push("指标,本期,上期,变化%");
+  lines.push(
+    csvRow([
+      "总请求",
+      String(audit.request_count),
+      String(audit.previous_request_count ?? ""),
+      pctChange(audit.request_count, audit.previous_request_count),
+    ]),
+  );
+  lines.push(
+    csvRow([
+      "总 tokens",
+      String(audit.total_tokens),
+      String(audit.previous_total_tokens ?? ""),
+      pctChange(audit.total_tokens, audit.previous_total_tokens),
+    ]),
+  );
+  lines.push(
+    csvRow([
+      "活跃员工",
+      String(audit.active_users),
+      String(audit.previous_active_users ?? ""),
+      pctChange(audit.active_users, audit.previous_active_users),
+    ]),
+  );
+  lines.push("");
+  lines.push("## 按模型");
+  lines.push("模型,catalog ID,请求,tokens,RMB 估算");
+  for (const m of audit.by_model) {
+    const md = getModelDisplay(m.model);
+    lines.push(
+      csvRow([
+        md.friendly,
+        m.model,
+        String(m.count),
+        String(m.total_tokens),
+        fmtRMB((m.total_tokens / 1000) * 0.0015).replace("≈ ", ""),
+      ]),
+    );
+  }
+  lines.push("");
+  lines.push("## 按部门");
+  lines.push("部门,请求,tokens");
+  for (const d of audit.by_department ?? []) {
+    lines.push(csvRow([d.department, String(d.count), String(d.total_tokens)]));
+  }
+  lines.push("");
+  lines.push("## 按员工");
+  lines.push("员工,部门,请求,tokens");
+  for (const u of audit.by_user) {
+    lines.push(csvRow([u.user_email, u.department, String(u.count), String(u.total_tokens)]));
+  }
+  return lines.join("\n");
+}
+
+function csvRow(cells: string[]): string {
+  return cells
+    .map((c) => {
+      if (/[,"\n]/.test(c)) {
+        return `"${c.replace(/"/g, '""')}"`;
+      }
+      return c;
+    })
+    .join(",");
+}
+
+function pctChange(curr: number, prev: number | undefined): string {
+  if (prev === undefined || prev === null || prev === 0) return "";
+  const delta = ((curr - prev) / prev) * 100;
+  const sign = delta >= 0 ? "+" : "";
+  return `${sign}${delta.toFixed(1)}%`;
 }
 
 /** BL-AUDIT-UX-P0: 异常告警条占位 (放最顶, 第一时间抓眼).
@@ -160,6 +367,10 @@ function AnomalyBanner({ audit: _audit }: { audit: GlobalAudit }) {
  * - 总请求 / 活跃员工 / 活跃部门 是辅助: 18pt 中字, 横向并列
  */
 function KPIHero({ audit }: { audit: GlobalAudit }) {
+  // BL-AUDIT-UX-P1: 精算 RMB — 按 model 单价加权
+  const totalRMB = useMemo(() => totalCostRMB(audit.by_model), [audit.by_model]);
+  const windowLabel = windowLabelOf(audit.since_hours);
+
   return (
     <div
       style={{
@@ -193,7 +404,7 @@ function KPIHero({ audit }: { audit: GlobalAudit }) {
               marginBottom: 4,
             }}
           >
-            💰 总 tokens · 24h
+            💰 总 tokens · {windowLabel}
           </div>
           <div
             style={{
@@ -205,14 +416,15 @@ function KPIHero({ audit }: { audit: GlobalAudit }) {
           >
             {fmtTokens(audit.total_tokens)}
           </div>
-          <div
-            style={{
-              fontSize: 12,
-              color: "var(--text-muted)",
-              marginTop: 4,
-            }}
-          >
-            {estimateCostRMB(audit.total_tokens)} 估算成本
+          <div style={{ marginTop: 6, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+              {fmtRMB(totalRMB)} 估算
+            </span>
+            <Trend
+              curr={audit.total_tokens}
+              prev={audit.previous_total_tokens}
+              hint="跟上一个等长窗口对照"
+            />
           </div>
         </div>
 
@@ -220,17 +432,99 @@ function KPIHero({ audit }: { audit: GlobalAudit }) {
         <SubStat
           label="📊 总请求"
           value={audit.request_count.toLocaleString()}
+          trend={
+            <Trend
+              curr={audit.request_count}
+              prev={audit.previous_request_count}
+              hint="跟上一个等长窗口对照"
+            />
+          }
         />
         {/* 辅 2: 活跃员工 */}
-        <SubStat label="👤 活跃员工" value={audit.active_users.toLocaleString()} />
+        <SubStat
+          label="👤 活跃员工"
+          value={audit.active_users.toLocaleString()}
+          trend={
+            <Trend
+              curr={audit.active_users}
+              prev={audit.previous_active_users}
+              hint="跟上一个等长窗口对照"
+            />
+          }
+        />
         {/* 辅 3: 活跃部门 */}
         <SubStat
           label="🏢 活跃部门"
           value={audit.active_departments.toLocaleString()}
           hint="只数有部门归属的员工"
+          trend={
+            <Trend
+              curr={audit.active_departments}
+              prev={audit.previous_active_departments}
+              hint="跟上一个等长窗口对照"
+            />
+          }
         />
       </div>
     </div>
+  );
+}
+
+/** BL-AUDIT-UX-P1: ↑12% / ↓8% trend pill — 绿色升 / 红色降 / 灰色持平.
+ *  prev=0 或 undefined 时不显示 (没参照系). */
+function Trend({
+  curr,
+  prev,
+  hint,
+}: {
+  curr: number;
+  prev: number | undefined;
+  hint?: string;
+}) {
+  if (prev === undefined || prev === null) return null;
+  // 上期 0 + 本期 > 0 → "新增" (无法算 %); 上期 0 + 本期 0 → 没变化, 不显示
+  if (prev === 0) {
+    if (curr === 0) return null;
+    return (
+      <span
+        title={hint}
+        style={{
+          fontSize: 11,
+          color: "var(--status-warn, #b45309)",
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        新增
+      </span>
+    );
+  }
+  const delta = ((curr - prev) / prev) * 100;
+  if (Math.abs(delta) < 0.5) {
+    return (
+      <span
+        title={hint}
+        style={{
+          fontSize: 11,
+          color: "var(--text-muted)",
+        }}
+      >
+        持平
+      </span>
+    );
+  }
+  const up = delta > 0;
+  return (
+    <span
+      title={hint}
+      style={{
+        fontSize: 11,
+        color: up ? "#16a34a" : "#dc2626",
+        fontVariantNumeric: "tabular-nums",
+        fontWeight: 500,
+      }}
+    >
+      {up ? "↑" : "↓"}{Math.abs(delta).toFixed(1)}%
+    </span>
   );
 }
 
@@ -238,10 +532,13 @@ function SubStat({
   label,
   value,
   hint,
+  trend,
 }: {
   label: string;
   value: string;
   hint?: string;
+  /** BL-AUDIT-UX-P1: 可选 trend pill, 例如 <Trend curr=X prev=Y /> */
+  trend?: ReactNode;
 }) {
   return (
     <div>
@@ -273,6 +570,7 @@ function SubStat({
       >
         {value}
       </div>
+      {trend && <div style={{ marginTop: 2 }}>{trend}</div>}
     </div>
   );
 }
@@ -301,12 +599,14 @@ function InternalLoopbackCard({ audit }: { audit: GlobalAudit }) {
   );
 }
 
-/** BL-AUDIT-UX-P0: 按模型 — 横向 bar + 比例 % + 友好名 + 颜色. */
+/** BL-AUDIT-UX-P0: 按模型 — 横向 bar + 比例 % + 友好名 + 颜色.
+ *  BL-AUDIT-UX-P1: + RMB 列 (按 model 单价精算) */
 function ModelBreakdownCard({ audit }: { audit: GlobalAudit }) {
   const total = audit.by_model.reduce((s, m) => s + m.total_tokens, 0);
   return (
     <Card title="按模型用量">
       <Table
+        showRmbColumn
         rows={audit.by_model.map((m) => {
           const md = getModelDisplay(m.model);
           const pct = total > 0 ? (m.total_tokens / total) * 100 : 0;
@@ -315,6 +615,7 @@ function ModelBreakdownCard({ audit }: { audit: GlobalAudit }) {
             label: (
               <span
                 style={{ display: "inline-flex", alignItems: "center", gap: 8 }}
+                title={m.model}
               >
                 <span>{md.dotEmoji}</span>
                 <span style={{ fontWeight: 500 }}>{md.friendly}</span>
@@ -329,20 +630,11 @@ function ModelBreakdownCard({ audit }: { audit: GlobalAudit }) {
                 >
                   {md.tier}
                 </span>
-                <span
-                  style={{
-                    fontSize: 10,
-                    color: "var(--text-muted)",
-                    fontFamily: "var(--font-mono)",
-                  }}
-                  title={m.model}
-                >
-                  {/* 鼠标 hover 显示 catalog ID */}
-                </span>
               </span>
             ),
             count: m.count,
             tokens: m.total_tokens,
+            rmb: costRMB(m.model, m.total_tokens),
             pct,
             barColor: md.color,
           };
@@ -458,11 +750,15 @@ function UserBreakdownCard({ audit }: { audit: GlobalAudit }) {
 /** BL-AUDIT-UX-P0: 通用表格组件 + 内嵌横向 bar.
  *
  * 每行结构:
- *   [label........]  [横向 bar with %]  [请求数]  [tokens]
+ *   [label........]  [extra (可选)] [横向 bar with %]  [请求数]  [tokens]  [RMB?]
+ *
+ * BL-AUDIT-UX-P1: + showRmbColumn 可选 — 模型表用 (按 model 精算), 部门 / 员工表
+ * 不显示 (需要后端把 tokens × model 拆出来才能精算).
  */
 function Table({
   rows,
   showExtraColumn,
+  showRmbColumn,
 }: {
   rows: {
     key: string;
@@ -470,10 +766,12 @@ function Table({
     extra?: string;
     count: number;
     tokens: number;
+    rmb?: number;
     pct: number;
     barColor: string;
   }[];
   showExtraColumn?: string;
+  showRmbColumn?: boolean;
 }) {
   return (
     <table
@@ -501,6 +799,11 @@ function Table({
           <th style={{ textAlign: "right", padding: "6px 8px", width: 90 }}>
             tokens
           </th>
+          {showRmbColumn && (
+            <th style={{ textAlign: "right", padding: "6px 8px", width: 90 }}>
+              RMB 估算
+            </th>
+          )}
         </tr>
       </thead>
       <tbody>
@@ -530,6 +833,18 @@ function Table({
             <td style={{ padding: "8px", textAlign: "right", fontWeight: 500 }}>
               {fmtTokens(r.tokens)}
             </td>
+            {showRmbColumn && (
+              <td
+                style={{
+                  padding: "8px",
+                  textAlign: "right",
+                  color: "var(--text-muted)",
+                  fontSize: 12,
+                }}
+              >
+                {r.rmb !== undefined ? fmtRMB(r.rmb).replace("≈ ", "") : "—"}
+              </td>
+            )}
           </tr>
         ))}
       </tbody>
