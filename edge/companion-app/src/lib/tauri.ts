@@ -268,6 +268,17 @@ export const emailDeleteMessage = (id: string) =>
 // AI 不应该绕过 compose panel 直调这个.
 export const emailSendMessage = (id: string) =>
   rawInvoke<string>("email_send_message", { id });
+
+// BL-COMPANION-HERMES-API-CONFIG (5/19 Phase 2-2A): 暴露 hermes API server 配置
+// 给 chat.ts. 不返 key (key 在 Rust 端拼 header, 不发 JS, 防 XSS / 误 log).
+// Phase 2-2B 实施 chat.ts 切换时读这个判断走 gateway 还是 hermes.
+export interface HermesApiConfigPublic {
+  enabled: boolean;
+  url: string;
+  has_key: boolean;
+}
+export const hermesApiConfigGet = () =>
+  rawInvoke<HermesApiConfigPublic>("hermes_api_config_get");
 export interface CreateDraftArgs {
   to: string;
   subject: string;

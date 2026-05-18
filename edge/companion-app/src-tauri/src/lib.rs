@@ -405,6 +405,8 @@ pub fn run() {
             services::email_scheduler::email_urgency_map,
             // BL-EMAIL-URGENCY-BADGE (5/18): 前端主动 batch 评级 (历史邮件也能评)
             services::email_scheduler::email_classify_now,
+            // BL-COMPANION-HERMES-API-CONFIG (5/19 Phase 2-2A): 暴露 hermes_api 配置给 React
+            services::hermes_api_config::hermes_api_config_get,
             // BL-E16 关系建立 (五一 sprint 5/3 晚): "鲶鱼对你的印象" 透明 + 清空
             commands::relation::relation_summary,
             commands::relation::relation_forget,
