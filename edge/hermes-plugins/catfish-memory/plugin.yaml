@@ -1,0 +1,5 @@
+name: catfish-memory
+version: 0.1.0
+description: "Catfish 扩展 memory provider — 聚合 employee_journal / skills_catalog / feedback / session_meta / skill_guard 5 个 catfish 边缘数据源, 通过 hermes MemoryProvider 接口注入 system prompt. 替代 gateway 老 memory_registry 反 pattern (BL-MEMORY-OWNERSHIP-FIX, docs/MEMORY-OWNERSHIP-ARCHITECTURE.md)."
+hooks:
+  - on_session_end
