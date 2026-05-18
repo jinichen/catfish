@@ -1,14 +1,24 @@
 """BL-MEMORY-MIGRATE-STEP1C — Registry 切换整合测试.
 
-验证 registry.inject_subset() 跟 8 个旧 inject_X 拼起来产生**等价 / 接近** 内容.
-不强求字符级一致 (拼接顺序 / 空行细节会差), 但**关键内容必须都在** + **顺序合理**.
+5/19 BL-GATEWAY-MEMORY-CODE-DEPRECATED (Phase 2-3): 整个文件**模块级 skip**.
+原因: bootstrap_registry 5/19 起不再 register 任何 provider, memory 责任
+转给 hermes plugin (edge/hermes-plugins/catfish-memory). 这些"老 provider 行为
+等价性" 测试已经**不适用**, 留代码作 reference, 测试 skip.
 
-测试矩阵:
-  - 普通模式 (enabled=None): 跑所有 provider
-  - lean 模式 (enabled={'skills_catalog'}): 只 skills
-  - internal 模式 (is_internal_call=True): 全跳
+如果 ownership 重构 cutover 完后真删 provider 文件, 这个测试文件也跟着删.
+
+老验收内容: registry.inject_subset() 跟 8 个旧 inject_X 拼起来产生等价 / 接近内容.
 """
+
 from __future__ import annotations
+
+import pytest
+
+pytestmark = pytest.mark.skip(
+    reason="5/19 BL-GATEWAY-MEMORY-CODE-DEPRECATED: gateway 不再 inject memory, "
+    "memory 转给 hermes plugin (catfish-memory). 这些等价性测试已不适用, "
+    "见 docs/MEMORY-OWNERSHIP-ARCHITECTURE.md"
+)
 
 import json
 import sqlite3

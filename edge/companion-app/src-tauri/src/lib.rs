@@ -407,6 +407,8 @@ pub fn run() {
             services::email_scheduler::email_classify_now,
             // BL-COMPANION-HERMES-API-CONFIG (5/19 Phase 2-2A): 暴露 hermes_api 配置给 React
             services::hermes_api_config::hermes_api_config_get,
+            // BL-COMPANION-CHAT-SWITCH-TO-HERMES (5/19 Phase 2-2B): chat.ts 走 hermes 时拿 auth header
+            services::hermes_api_config::hermes_api_auth_header,
             // BL-E16 关系建立 (五一 sprint 5/3 晚): "鲶鱼对你的印象" 透明 + 清空
             commands::relation::relation_summary,
             commands::relation::relation_forget,

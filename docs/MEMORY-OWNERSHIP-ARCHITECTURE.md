@@ -1,9 +1,48 @@
 # Catfish Memory Ownership Architecture (5/18 拍板版)
 
-> **状态**: 设计稿. 锁定方向, 实现拆 sprint 排期.
+> **状态**: ✅ **Phase 1+2 完整 ship (5/19 凌晨)**. Phase 3+4 留 backlog
+> (Phase 3 cutover 看 Phase 2-2B chat.ts 切换实盘验证, Phase 4 中央部署独立排期).
+>
 > **触发原因**: 5/18 深夜鸿波点穿 "memory 都交给 hermes, gateway 为什么还要去干预".
 > 现状 gateway `memory_registry` 10 provider 直读 `~/.hermes/` 是历史包袱
 > (5/4-5/13 一路补的补丁), 不是设计意图.
+
+## ✅ 完成进度 (5/19 凌晨 ship)
+
+- ✅ **Phase 1** 设计 + safety net + plugin POC (#17-#19)
+  - 本文档 (架构决策 + 10 provider 分流 + 路径图)
+  - `gateway memory_registry` env flag (CATFISH_GATEWAY_DISABLE_MEMORY)
+  - `edge/hermes-plugins/catfish-memory/` plugin (400+ 行 + 22 单测 + 实盘
+    `hermes memory status` 显 active ✓)
+- ✅ **Phase 2-1** 安装 + 调研 (#20-#21)
+  - `edge/hermes-plugins/install-catfish-memory.sh` 5 步幂等
+  - `docs/HERMES-OPENAI-SERVER-RESEARCH.md` Companion 切换 spec
+- ✅ **Phase 2-2A** 配置 + 认证 design (#22-#23)
+  - `services/hermes_api_config.rs` + tauri.ts wrapper
+  - `docs/COMPANION-HERMES-AUTH-DESIGN.md` API_SERVER_KEY 同步方案
+- ✅ **Phase 2-2B** chat.ts 切 endpoint (#24)
+  - `lib/chat.ts` 加 hermes 路径 (hermes_api.enabled=true → 调 8642, 否则 fallback gateway)
+  - hermes auth header 走 Rust Tauri 命令拼好 (key 不暴露 JS)
+  - 不传 tools (hermes 内部管 tool calling)
+  - 灰度: enabled=false 仍走老 gateway
+- ✅ **Phase 2-3** gateway memory_registry deprecated (#25)
+  - `memory/bootstrap.py` 清空 (不再 register 任何 provider)
+  - provider 模块保留作 reference (跟 sessions_browse.py 同模式)
+  - 老 integration 测试 module-level skip
+- ✅ **Phase 2-4** lint 防回归 (#26)
+  - `scripts/check-gateway-no-edge-fs.sh` warning 模式
+  - 发现 33 处 gateway 读 ~/.hermes/~/.catfish (memory 之外 quota/facts/
+    tool_archive/proactive/etc), 这些是 Phase 4 中央部署前 backlog
+- ✅ **配套** Phase 2 catfish-edge 安装 (#27)
+  - `scripts/setup-catfish-edge.sh` 一键装机 (key 随机生成 + 同步两边 +
+    plugin 软链 + hermes restart)
+  - `--rotate` 季度 key 轮换模式
+
+## ⬜ 待做 (Phase 3+4, 留 backlog)
+
+- ⬜ Phase 3 cutover 实盘验证 (Phase 2-2B 真机 e2e + 灰度全员)
+- ⬜ Phase 4 中央部署 (gateway 真跑公司机房, 解决剩 33 处 gateway 读 edge FS)
+- ⬜ 全删 `memory/providers/` 文件 (cutover 稳定后再 hard delete)
 
 ## 1. 现状审计 — gateway 当前的 10 个 memory provider
 

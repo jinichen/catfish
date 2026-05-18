@@ -139,6 +139,23 @@ pub fn hermes_api_config_get() -> HermesApiConfigPublic {
     }
 }
 
+/// 5/19 Phase 2-2B: 返完整 Authorization header value 给 chat.ts 用.
+///
+/// 不让 JS 拿 raw key — 返 "Bearer <key>" 拼好的字符串. JS 直接塞进 fetch
+/// headers. 这样 key 不进 localStorage / 不在 console / log 误漏概率小.
+/// (严格说还在 JS memory, 但比单纯返 raw key 安全, 也方便将来切 OIDC 时
+/// Rust 端逻辑变 — JS 只调这一个命令拿 header.)
+///
+/// enabled=false 或没 key 时返 None — caller 应该 fallback 到老 gateway 路径.
+#[tauri::command]
+pub fn hermes_api_auth_header() -> Option<String> {
+    let cfg = hermes_api_config();
+    if !cfg.enabled {
+        return None;
+    }
+    cfg.key.as_ref().map(|k| format!("Bearer {}", k))
+}
+
 #[derive(Debug, serde::Serialize)]
 pub struct HermesApiConfigPublic {
     pub enabled: bool,

@@ -20,6 +20,8 @@ import { useTeachingStore } from "../store/teaching";
 // 5/18 BL-CHAT-FALLBACK-MODEL-REVERT: fetchCatalog import 删了
 // (老 BL-FIX45 B fallback 切模型用的). 删 import 防 tsc unused warning.
 import { applySteerPrefix } from "./steer";  // BL-HERMES013-RED-1B (5/13 ACP /steer)
+// 5/19 BL-COMPANION-CHAT-SWITCH-TO-HERMES Phase 2-2B: hermes API server 路径配置
+import { hermesApiConfigGet, hermesApiAuthHeader } from "./tauri";
 
 interface SendChatParams {
   model: string;
@@ -383,15 +385,47 @@ export async function streamChat(params: SendChatParams): Promise<void> {
     signal,
   } = params;
 
-  const url = `${config.gatewayUrl}/v1/chat/completions`;
+  // 5/19 BL-COMPANION-CHAT-SWITCH-TO-HERMES Phase 2-2B: 切 hermes API server
+  // (端口 8642) 灰度路径. 跟 BL-MEMORY-OWNERSHIP-FIX 对齐 — hermes 当 agent
+  // runtime, 内部 memory inject (含 catfish-memory plugin) + tool calling +
+  // 调下游 gateway. Companion 退化成纯 UI client.
+  //
+  // 灰度逻辑: hermes_api.enabled=true → 走 hermes 8642; false → 走老 gateway.
+  // 配置在 ~/.catfish/companion.yaml `hermes_api:` 段, 详见
+  // docs/HERMES-OPENAI-SERVER-RESEARCH.md + COMPANION-HERMES-AUTH-DESIGN.md.
+  //
+  // 安全: hermes auth header 由 Rust 端拼 ("Bearer <API_SERVER_KEY>"), JS 只
+  // 看到组合好的字符串, raw key 不暴露.
+  let hermesCfg: { enabled: boolean; url: string; has_key: boolean } | null = null;
+  let hermesAuth: string | null = null;
+  try {
+    hermesCfg = await hermesApiConfigGet();
+    if (hermesCfg.enabled && hermesCfg.has_key) {
+      hermesAuth = await hermesApiAuthHeader();
+    }
+  } catch {
+    // Tauri 命令挂 — 走老 gateway 路径 (灰度安全降级)
+  }
+  const useHermes = hermesCfg !== null && hermesCfg.enabled && hermesAuth !== null;
+
+  const url = useHermes
+    ? `${hermesCfg!.url}/v1/chat/completions`
+    : `${config.gatewayUrl}/v1/chat/completions`;
+
+  // hermes API server 期望 model="hermes-agent" (固定, hermes 内部决定真 model).
+  // 老 gateway 期望真实 model 名 (catfish-private-main / catfish-public-qwen-flash / 等).
+  const effectiveModel = useHermes ? "hermes-agent" : model;
+
   const body: Record<string, unknown> = {
-    model,
+    model: effectiveModel,
     messages: toWire(messages),
     stream: true,
   };
-  if (tools && tools.length > 0) {
+  // 5/19 切 hermes 后**不再传 tools** — hermes 内部管 tool calling, 拼好结果返.
+  // 老 gateway 路径仍传 tools.
+  if (!useHermes && tools && tools.length > 0) {
     body.tools = tools;
-    // tool_choice 默认 auto,让 LLM 自己决定要不要调
+    // tool_choice 默认 auto, 让 LLM 自己决定要不要调
   }
 
   // BL-E11 命名权: 把当前员工自定义的 agent name + personality 带过去, gateway
@@ -432,19 +466,36 @@ export async function streamChat(params: SendChatParams): Promise<void> {
 
   // BL-FIX45 A+ (5/11): 走 fetchWithAuth — 401 自动 reauth + retry, 不再 inline 处理.
   // Authorization header 由 wrapper 自动加.
+  //
+  // 5/19 Phase 2-2B: hermes 路径**不走 fetchWithAuth** (它假设 OIDC token 401
+  // 后 reauth, 但 hermes 用 API_SERVER_KEY 静态 token, 401 reauth 没意义). 改
+  // 直接 fetch + hermes auth header (Rust 端拼好的 "Bearer <key>").
   let resp: Response;
   try {
-    resp = await fetchWithAuth(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...agentHeaders,
-      },
-      body: JSON.stringify(body),
-      signal,
-    });
+    if (useHermes) {
+      resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: hermesAuth!,
+          ...agentHeaders,
+        },
+        body: JSON.stringify(body),
+        signal,
+      });
+    } else {
+      resp = await fetchWithAuth(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...agentHeaders,
+        },
+        body: JSON.stringify(body),
+        signal,
+      });
+    }
   } catch (e) {
-    onError(`无法连接 gateway: ${stringify(e)}`);
+    onError(`无法连接 ${useHermes ? "hermes API" : "gateway"}: ${stringify(e)}`);
     return;
   }
 

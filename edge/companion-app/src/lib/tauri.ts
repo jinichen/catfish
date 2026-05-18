@@ -279,6 +279,10 @@ export interface HermesApiConfigPublic {
 }
 export const hermesApiConfigGet = () =>
   rawInvoke<HermesApiConfigPublic>("hermes_api_config_get");
+// BL-COMPANION-CHAT-SWITCH-TO-HERMES (5/19 Phase 2-2B): 拿完整 "Bearer <key>"
+// 字符串塞 fetch headers. enabled=false 或没 key → 返 null, caller fallback gateway.
+export const hermesApiAuthHeader = () =>
+  rawInvoke<string | null>("hermes_api_auth_header");
 export interface CreateDraftArgs {
   to: string;
   subject: string;
