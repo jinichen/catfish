@@ -3,8 +3,9 @@ import { create } from "zustand";
 import { useChatStore } from "./chat";
 import { sessionCreate, sessionMessageAppend } from "../lib/tauri";
 
-// "sessions" tab 已并入 "chat" 的 sidebar (P0-3.1 后), 不再单独 tab
-export type TabId = "chat" | "console" | "dashboard";
+// "sessions" tab 已并入 "chat" 的 sidebar (P0-3.1 后), 不再单独 tab.
+// "email" tab 5/18 BL-COMPANION-EMAIL-TAB 加 — AI 邮件管家独立 tab, 跟工作台 / 仪表盘同级.
+export type TabId = "chat" | "console" | "dashboard" | "email";
 
 interface UIState {
   activeTab: TabId;

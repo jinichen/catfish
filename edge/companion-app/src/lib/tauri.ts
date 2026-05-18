@@ -251,6 +251,11 @@ export const emailDigestFetch = (limit?: number) =>
   rawInvoke<string>("email_digest_fetch", { limit: limit ?? null });
 export const emailAccountsFetch = () =>
   rawInvoke<string>("email_accounts_fetch");
+// BL-COMPANION-EMAIL-TAB (5/18): 邮件 tab 用的全列表 + 读单封.
+export const emailListFetch = (unreadOnly: boolean, limit?: number) =>
+  rawInvoke<string>("email_list_fetch", { unreadOnly, limit: limit ?? null });
+export const emailReadMessage = (id: string) =>
+  rawInvoke<string>("email_read_message", { id });
 
 /** catfish-email list --json 单条 message 的 schema. 字段跟 base.py Message dataclass 对齐. */
 export interface EmailDigestItem {
@@ -264,11 +269,14 @@ export interface EmailDigestItem {
   has_attachments: boolean;
   body_text: string;     // list 场景为 snippet
 }
-/** catfish-email accounts --json 单条 schema. */
+/** catfish-email accounts --json 单条 schema.
+ * BL-EMAIL-MULTI-CLIENT (5/18): 多客户端时每个 account 多了 client 字段标识来源.
+ */
 export interface EmailAccountItem {
   name: string;
   address: string;
   is_default: boolean;
+  client?: string;  // apple_mail / foxmail_mac, 老 CLI 输出可能没这字段
 }
 
 // ── 桌宠跨窗通信 (5/6: Tauri 跨 webview event 不通, 走 Rust polling buffer) ─

@@ -10,6 +10,7 @@ import { useFocusStore } from "../store/focus";
 // catfish 是数字员工不是聊天工具, 员工在这干活. 跟 "仪表盘"形成"做事 vs 看事" 对偶.
 const TABS: { id: TabId; label: string }[] = [
   { id: "chat", label: "工作台" },
+  { id: "email", label: "📧 邮件" },  // 5/18 BL-COMPANION-EMAIL-TAB
   // { id: "console", label: "控制台" },  // 5/16 砍
   { id: "dashboard", label: "仪表盘" },
 ];

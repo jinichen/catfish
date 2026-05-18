@@ -388,9 +388,12 @@ pub fn run() {
             commands::curator::set_curator_config,
             commands::curator::ensure_curator_default,
             commands::curator::get_curator_state,
-            // BL-COMPANION-EMAIL-DIGEST (5/18): 邮件简报 shell-out 给 Dashboard 卡用
+            // BL-COMPANION-EMAIL-DIGEST (5/18): 邮件简报 shell-out
             commands::email::email_digest_fetch,
             commands::email::email_accounts_fetch,
+            // BL-COMPANION-EMAIL-TAB (5/18): 邮件 tab 用的扩展能力 (全列表 + 读全文)
+            commands::email::email_list_fetch,
+            commands::email::email_read_message,
             // BL-E16 关系建立 (五一 sprint 5/3 晚): "鲶鱼对你的印象" 透明 + 清空
             commands::relation::relation_summary,
             commands::relation::relation_forget,

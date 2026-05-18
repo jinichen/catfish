@@ -73,6 +73,65 @@ pub async fn email_digest_fetch(limit: Option<u32>) -> Result<String, String> {
     Ok(stdout)
 }
 
+/// 拉邮件列表 (all, 不只 unread). EmailTab 邮件 tab 完整 inbox 浏览用.
+/// unread_only=true → 只未读 (跟 step1 简报卡同行为); =false → 全部 (已读 + 未读混)
+#[tauri::command]
+pub async fn email_list_fetch(unread_only: bool, limit: Option<u32>) -> Result<String, String> {
+    let bin = find_catfish_email().ok_or_else(|| {
+        "catfish-email CLI 没装. 装: cd ~/person_task/catfish/edge/email-agent && bash install.sh"
+            .to_string()
+    })?;
+
+    let n = limit.unwrap_or(50).clamp(1, 500);
+    let mut args = vec!["list".to_string(), "--json".to_string()];
+    if unread_only {
+        args.push("--unread".to_string());
+    }
+    args.push("--limit".to_string());
+    args.push(n.to_string());
+
+    let out = Command::new(&bin)
+        .args(&args)
+        .output()
+        .map_err(|e| format!("catfish-email 调用失败: {e}"))?;
+
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("catfish-email 退出码 {:?}, 没 stderr", out.status.code())
+        } else {
+            stderr
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    if stdout.trim().is_empty() {
+        return Ok("[]".to_string());
+    }
+    Ok(stdout)
+}
+
+/// 读单封邮件全文 (含 body_text / body_html / 附件元数据).
+#[tauri::command]
+pub async fn email_read_message(id: String) -> Result<String, String> {
+    let bin = find_catfish_email().ok_or_else(|| {
+        "catfish-email CLI 没装".to_string()
+    })?;
+    let out = Command::new(&bin)
+        .args(["read", "--id", &id, "--json"])
+        .output()
+        .map_err(|e| format!("catfish-email 调用失败: {e}"))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("catfish-email read 退出码 {:?}", out.status.code())
+        } else {
+            stderr
+        });
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
 /// 拉账号列表. 用于"配了几个邮箱". 卡片 header 显 "5 账号 · 12 未读".
 #[tauri::command]
 pub async fn email_accounts_fetch() -> Result<String, String> {

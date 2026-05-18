@@ -86,16 +86,16 @@ export default function EmailDigestCard() {
   return (
     <section
       style={{
-        // BL-EMAIL-DIGEST-HEIGHT (5/18 鸿波): 跟同行 ProactiveCard 等高, 邮件多了内部滚.
-        // height:100% + flex column 让 grid cell 高度由对侧卡决定, 这里撑满.
+        // BL-EMAIL-DIGEST-HEIGHT-CAP (5/18 鸿波): 不撑满 grid cell (老代码 height:100% 太高).
+        // 卡片高度 = header + 列表 (max-height 限) + 按钮, 紧凑. 邮件多了列表内部滚.
         background: "var(--catfish-bg-elevated)",
         border: "1px solid var(--catfish-border)",
         borderRadius: "var(--radius-md)",
         padding: "var(--space-3)",
-        height: "100%",
+        // 卡片本身不 flex-grow, 由内部内容决定高度. 列表 max-height 兜住.
         boxSizing: "border-box",
-        display: "flex",
-        flexDirection: "column",
+        // grid-cell 里如果对侧卡更高, 本卡顶部对齐, 下方留空 (alignSelf:start)
+        alignSelf: "start",
       }}
     >
       <header
@@ -158,7 +158,7 @@ export default function EmailDigestCard() {
         </div>
       )}
 
-      {/* 未读列表 — flex:1 + 内部滚动, 让 header 跟 action 钉在上下两端, 列表撑中间 */}
+      {/* 未读列表 — 限高 + 内部滚动 (BL-EMAIL-DIGEST-HEIGHT-CAP 5/18). */}
       {!error && items.length > 0 && (
         <ul
           style={{
@@ -166,11 +166,9 @@ export default function EmailDigestCard() {
             padding: 0,
             margin: 0,
             marginBottom: "var(--space-2)",
-            // BL-EMAIL-DIGEST-HEIGHT: flex 占满中间, min-height:0 让 overflow 真生效
-            flex: 1,
-            minHeight: 0,
+            // 限 4-5 行可见, 多了滚 — 5 行 × 约 30px = 150px
+            maxHeight: 160,
             overflowY: "auto",
-            // 滚动条样式: 跟 chat 列同款, 不抢视觉
             scrollbarWidth: "thin",
           }}
         >
@@ -204,13 +202,10 @@ export default function EmailDigestCard() {
       {!error && !loading && items.length === 0 && (
         <div
           style={{
-            // 空态也撑满, 让卡跟 ProactiveCard 等高时不塌
-            flex: 1,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
             fontSize: 12,
             color: "var(--catfish-text-muted)",
+            textAlign: "center",
+            padding: "var(--space-3) 0",
           }}
         >
           🌊 没有未读邮件, 都处理完了

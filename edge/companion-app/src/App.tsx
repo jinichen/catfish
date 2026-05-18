@@ -13,6 +13,7 @@ import ChatTab from "./tabs/Chat/ChatTab";
 // BL-CONSOLE-TAB-KILL (5/16): 控制台 tab 砍, ConsoleTab.tsx 源码留着作 git 历史.
 // import ConsoleTab from "./tabs/Console/ConsoleTab";
 import DashboardTab from "./tabs/Dashboard/DashboardTab";
+import EmailTab from "./tabs/Email/EmailTab";  // 5/18 BL-COMPANION-EMAIL-TAB
 import { useUIStore } from "./store/ui";
 import { useAgentStore } from "./store/agent";
 import { useFocusStore } from "./store/focus";
@@ -167,6 +168,7 @@ function AppShell({ activeTab }: { activeTab: string }) {
       <main className="app-main">
         {/* BL-CONSOLE-TAB-KILL (5/16): {activeTab === "console" && <ConsoleTab />} */}
         {activeTab === "dashboard" && <DashboardTab />}
+        {activeTab === "email" && <EmailTab />}
       </main>
     </div>
   );
