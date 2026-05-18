@@ -38,11 +38,31 @@ from . import InjectContext, MemoryProvider
 logger = logging.getLogger("catfish.gateway.memory.registry")
 
 
+#: 5/18 BL-GATEWAY-MEMORY-DISABLE-FLAG (Phase 1 of BL-MEMORY-OWNERSHIP-FIX).
+#: env CATFISH_GATEWAY_DISABLE_MEMORY=1 → 所有 provider 一键跳过. 用途:
+#:   1. 实盘测试 — 验证 gateway 不 inject 时 hermes 拼好的 prompt 是否完整
+#:   2. 中央化部署过渡 — gateway 移到机房后, ~/.hermes 读不到, 必须 flag=1
+#:   3. 紧急 kill switch — provider 出 bug 时一键关掉, 不重启 gateway 代码
+#:
+#: 详见 docs/MEMORY-OWNERSHIP-ARCHITECTURE.md.
+#: 长远目标: provider 全迁 hermes plugin, 这个 flag 永久 = 1, 然后整个
+#: memory_registry 标 deprecated, 然后删.
+def _memory_disabled() -> bool:
+    return os.environ.get("CATFISH_GATEWAY_DISABLE_MEMORY", "0") == "1"
+
+
 class MemoryRegistry:
     """provider 注册 + inject 协调."""
 
     def __init__(self) -> None:
         self._providers: dict[str, MemoryProvider] = {}
+        # 启动期 log 一次, 让运维清楚 (不每次 inject 都 log 噪音)
+        if _memory_disabled():
+            logger.warning(
+                "memory_registry: CATFISH_GATEWAY_DISABLE_MEMORY=1, 所有 inject 跳过. "
+                "memory 责任已转给 hermes / hermes plugin. 详见 "
+                "docs/MEMORY-OWNERSHIP-ARCHITECTURE.md"
+            )
 
     def register(self, provider: MemoryProvider) -> None:
         """注册一个 provider. 同名重复注册 → 替换 + warning.
@@ -89,6 +109,8 @@ class MemoryRegistry:
         语义上 enabled 是**白名单**: 只有名字在集合里的 provider 才会跑.
         unknown name 在 enabled 里安静忽略 (没该 provider).
         """
+        if _memory_disabled():
+            return messages  # 5/18 BL-GATEWAY-MEMORY-DISABLE-FLAG
         if ctx.is_internal_call:
             return messages
         if enabled_names is not None and not enabled_names:
@@ -122,6 +144,8 @@ class MemoryRegistry:
         内容 marker 不同, 集中检查复杂). 推荐 provider 在 prefetch 内做幂等检测
         (例 inject_employee_journal 检 "员工长期日记" 标志).
         """
+        if _memory_disabled():
+            return messages  # 5/18 BL-GATEWAY-MEMORY-DISABLE-FLAG
         if ctx.is_internal_call:
             logger.debug(
                 "memory_registry: internal call (loopback), 跳全部 %d provider",

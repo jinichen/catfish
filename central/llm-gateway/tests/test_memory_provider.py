@@ -138,6 +138,54 @@ def test_inject_all_skips_internal_call():
     assert "should_not_inject" not in out[0]["content"]
 
 
+# ── 5/18 BL-GATEWAY-MEMORY-DISABLE-FLAG ─────────────────────
+
+
+def test_inject_all_skipped_when_disable_env_set(monkeypatch):
+    """env CATFISH_GATEWAY_DISABLE_MEMORY=1 → inject_all 返原 messages 不跑 provider."""
+    monkeypatch.setenv("CATFISH_GATEWAY_DISABLE_MEMORY", "1")
+    r = MemoryRegistry()
+    r.register(_make_provider("p", 10, "should_be_skipped"))
+    msgs = [{"role": "system", "content": "原"}, {"role": "user", "content": "hi"}]
+    out = r.inject_all(InjectContext(), msgs)
+    assert out is msgs  # 短路返原引用
+    assert "should_be_skipped" not in out[0]["content"]
+
+
+def test_inject_subset_skipped_when_disable_env_set(monkeypatch):
+    """inject_subset 同样被 disable flag 短路"""
+    monkeypatch.setenv("CATFISH_GATEWAY_DISABLE_MEMORY", "1")
+    r = MemoryRegistry()
+    r.register(_make_provider("p1", 10, "x"))
+    r.register(_make_provider("p2", 20, "y"))
+    msgs = [{"role": "system", "content": "原"}]
+    # 即使显式 enabled_names 也不跑
+    out = r.inject_subset(InjectContext(), msgs, enabled_names={"p1", "p2"})
+    assert out is msgs
+    assert "x" not in out[0]["content"]
+    assert "y" not in out[0]["content"]
+
+
+def test_inject_normal_when_disable_env_unset(monkeypatch):
+    """env 不设 → 默认行为不变, provider 正常跑"""
+    monkeypatch.delenv("CATFISH_GATEWAY_DISABLE_MEMORY", raising=False)
+    r = MemoryRegistry()
+    r.register(_make_provider("p", 10, "should_inject"))
+    msgs = [{"role": "system", "content": "原"}]
+    out = r.inject_all(InjectContext(), msgs)
+    assert "should_inject" in out[0]["content"]
+
+
+def test_inject_normal_when_disable_env_zero(monkeypatch):
+    """env=0 (显式关) → 跟没设一样, 正常跑"""
+    monkeypatch.setenv("CATFISH_GATEWAY_DISABLE_MEMORY", "0")
+    r = MemoryRegistry()
+    r.register(_make_provider("p", 10, "should_inject"))
+    msgs = [{"role": "system", "content": "原"}]
+    out = r.inject_all(InjectContext(), msgs)
+    assert "should_inject" in out[0]["content"]
+
+
 def test_inject_all_none_content_skipped():
     """provider 返 None → 不 inject."""
     r = MemoryRegistry()
