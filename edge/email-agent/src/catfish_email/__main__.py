@@ -174,23 +174,54 @@ def _cmd_list(adapters: list[EmailAdapter], args) -> int:
 
 
 def _cmd_read(adapters: list[EmailAdapter], args) -> int:
-    """5/18 BL-EMAIL-MULTI-CLIENT: 不知道 id 来自哪个 adapter, 逐个 try.
-    Apple Mail id (AS message id 整数) 跟 Foxmail id (文件路径 hash) 不会撞.
+    """5/18 BL-EMAIL-MULTI-CLIENT + 5/18 BL-EMAIL-READ-ROUTING-BY-PREFIX:
+    id 含 client 前缀 (`foxmail-mac|...|...` / `apple_mail|...`) → 直接路由对应 adapter.
+    无前缀 → 兼容老 2 段格式, 逐个 try.
+
+    背景实盘 5/18: 老逻辑"逐个 try" 把 `foxmail-mac|...` id 先丢 Apple Mail,
+    Apple Mail _unpack_id 用 `|` 切, account_name 错成 'foxmail-mac', AS 找不到这
+    账号挂 -1719. 改成按 id 前缀显式路由就不会跨 adapter 试错.
     """
-    last_err: Exception | None = None
-    for adapter in adapters:
+    msg_id = args.id
+    # 探测前缀路由: 第一段匹配某 adapter.name → 该 adapter.
+    # 注: id 保持完整传给 adapter — 各 adapter 的 _unpack_id 验证整段格式,
+    # 不能剥前缀 (Foxmail 的 _unpack_id 要 3 段含前缀才认).
+    target_adapter: EmailAdapter | None = None
+    if "|" in msg_id:
+        prefix = msg_id.split("|", 1)[0]
+        for a in adapters:
+            # adapter.name 是 'apple_mail' / 'foxmail_mac' (下划线),
+            # 前缀也可能写 'apple-mail' / 'foxmail-mac' (横线), 都认.
+            if a.name == prefix or a.name.replace("_", "-") == prefix:
+                target_adapter = a
+                break
+
+    if target_adapter is not None:
         try:
-            m = adapter.read_message(args.id)
-            break  # 找到了
+            m = target_adapter.read_message(msg_id)
         except DataNotFoundError as e:
-            last_err = e
-            continue  # 试下一个
+            _err(f"邮件不存在 [{target_adapter.name}]: {e}")
+            return 3
         except EmailAdapterError as e:
-            _err(f"[{adapter.name}] 读邮件失败: {e}")
+            _err(f"[{target_adapter.name}] 读邮件失败: {e}")
             return 1
     else:
-        _err(f"邮件不存在 (跨 {len(adapters)} 个客户端都没找到): {last_err}")
-        return 3
+        # 无前缀 / 不认识的前缀 → 兼容老 2 段格式, 逐 adapter try
+        last_err: Exception | None = None
+        m = None
+        for adapter in adapters:
+            try:
+                m = adapter.read_message(msg_id)
+                break
+            except DataNotFoundError as e:
+                last_err = e
+                continue
+            except EmailAdapterError as e:
+                _err(f"[{adapter.name}] 读邮件失败: {e}")
+                return 1
+        if m is None:
+            _err(f"邮件不存在 (跨 {len(adapters)} 个客户端都没找到): {last_err}")
+            return 3
 
     if args.json:
         print(json.dumps(_msg_to_dict(m), ensure_ascii=False, indent=2))

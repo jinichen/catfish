@@ -381,20 +381,41 @@ def _like_search(
 
 
 def locate_mail_file(account_dir: Path, folder_id: int, mailid: int) -> Path | None:
-    """在 Mail/<folder_id>/*/<mailid>.mail 里 glob 定位 (bucket 编号未知)。
+    """定位 .mail 文件. 多层 fallback (BL-FOXMAIL-MAIL-PATH 5/18 实盘修):
 
-    返回找到的第一个; None 表示没找到 (邮件可能已被 Foxmail 清理)。
+    1. Mail/<folder_id>/*/<mailid>.mail   (老假设: folder_id 当目录, 子层 bucket)
+    2. Mail/<folder_id>/<mailid>.mail     (老兜底: 旧 Foxmail 不分桶)
+    3. Mail/*/* /<mailid>.mail            (Foxmail mac 1.5 真实 sharding: 顶层
+       目录不是 folder_id 而是 mailid 前几位 hash, e.g. mailid=2898... → 28/8/)
+    4. Mail/** /<mailid>.mail             (任意深度兜底, 防 Foxmail 改 schema)
+
+    踩坑: 实盘 mailid=2898440511617566600 文件在 Mail/28/8/, 但 DB folder_id ≠ 28.
+    sharding 实际按 mailid_first_2_digits/_3rd_digit. (1)+(2) 找不到 → 老代码退
+    DB 摘要 → 员工看到的是 abstract 不是完整正文. (3)+(4) 兜住.
+
+    返回找到的第一个; None 表示 Foxmail 真没下载 (只拉 header, 用户没点开).
     """
-    mail_root = account_dir / "Mail" / str(folder_id)
-    if not mail_root.is_dir():
-        return None
-    candidates = list(mail_root.glob(f"*/{mailid}.mail"))
-    if candidates:
-        return candidates[0]
-    # 兜底: 直接放在 Mail/<folder_id>/ 下没分桶的 (旧 Foxmail 版本)
-    direct = mail_root / f"{mailid}.mail"
-    if direct.exists():
-        return direct
+    mailid_str = str(mailid)
+    # (1) folder_id 直接当目录 + bucket 子层
+    mail_root_folder = account_dir / "Mail" / str(folder_id)
+    if mail_root_folder.is_dir():
+        candidates = list(mail_root_folder.glob(f"*/{mailid_str}.mail"))
+        if candidates:
+            return candidates[0]
+        # (2) folder_id 下不分桶 (旧 Foxmail)
+        direct = mail_root_folder / f"{mailid_str}.mail"
+        if direct.exists():
+            return direct
+    # (3) Foxmail mac 1.5+ 真实 sharding: Mail/<hash>/<bucket>/<mailid>.mail
+    mail_root = account_dir / "Mail"
+    if mail_root.is_dir():
+        candidates = list(mail_root.glob(f"*/*/{mailid_str}.mail"))
+        if candidates:
+            return candidates[0]
+        # (4) 任意深度兜底
+        candidates = list(mail_root.glob(f"**/{mailid_str}.mail"))
+        if candidates:
+            return candidates[0]
     return None
 
 

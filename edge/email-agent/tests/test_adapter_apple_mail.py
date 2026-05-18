@@ -240,7 +240,8 @@ def test_list_messages_returns_snippets():
     assert m0.folder == "INBOX"
     assert m0.account == "工作"
     assert m0.body_text == ""  # list 场景不带 body
-    assert m0.id.startswith("工作|")
+    # 5/18 BL-EMAIL-READ-ROUTING-BY-PREFIX: 3 段格式 'apple_mail|account|msg_id'
+    assert m0.id.startswith("apple_mail|工作|")
     assert m0.date.startswith("2026-05-17")
 
     m1 = msgs[1]
@@ -293,10 +294,17 @@ def test_list_messages_unread_only_passes_through_to_as():
 
 
 def test_pack_unpack_id_roundtrip():
+    """5/18 BL-EMAIL-READ-ROUTING-BY-PREFIX: 新 _pack_id 加 apple_mail| 前缀."""
     adapter = AppleMailAdapter()
     packed = adapter._pack_id("工作", "12345")
-    assert packed == "工作|12345"
+    assert packed == "apple_mail|工作|12345"
     assert adapter._unpack_id(packed) == ("工作", "12345")
+
+
+def test_unpack_id_backward_compat_two_segments():
+    """5/18 BL-EMAIL-READ-ROUTING-BY-PREFIX: 老 2 段格式 (没 apple_mail 前缀) 仍能 unpack."""
+    adapter = AppleMailAdapter()
+    assert adapter._unpack_id("工作|12345") == ("工作", "12345")
 
 
 def test_unpack_id_rejects_malformed():

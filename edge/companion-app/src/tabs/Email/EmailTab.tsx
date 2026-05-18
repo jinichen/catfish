@@ -120,14 +120,9 @@ export default function EmailTab() {
     setActiveTab("chat");  // 跳到工作台看 chat
   };
 
-  const handleOpenMailApp = async () => {
-    try {
-      const { open } = await import("@tauri-apps/plugin-shell");
-      await open("mailto:");
-    } catch (e) {
-      console.warn("[EmailTab] open Mail.app 失败:", e);
-    }
-  };
+  // BL-COMPANION-EMAIL-TAB-MAILAPP-BUTTON-REMOVE (5/18 鸿波):
+  // 老 `📬 Mail.app` 按钮删 — catfish 自己读两边客户端都正常, 这按钮只跑 mailto:
+  // 起空白 compose, 跟员工预期"打开收件箱"不一致 + 现在没用例.
 
   const headerSummary = useMemo(() => {
     if (error) return "拉取失败";
@@ -198,7 +193,7 @@ export default function EmailTab() {
               {loading ? "…" : "⟳"}
             </button>
           </div>
-          {/* toolbar: 仅未读 toggle + 开 Mail.app */}
+          {/* toolbar: 只剩 仅未读 toggle. Mail.app 按钮 5/18 已删 (catfish 自己读完整, 不需要 bounce 出去) */}
           <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11, marginBottom: 6 }}>
             <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
               <input
@@ -208,24 +203,6 @@ export default function EmailTab() {
               />
               <span style={{ color: "var(--catfish-text-muted)" }}>仅未读</span>
             </label>
-            <button
-              type="button"
-              onClick={() => void handleOpenMailApp()}
-              style={{
-                marginLeft: "auto",
-                fontSize: 11,
-                padding: "2px 8px",
-                background: "transparent",
-                border: "1px solid var(--catfish-border)",
-                borderRadius: 4,
-                color: "var(--catfish-text-muted)",
-                cursor: "pointer",
-                fontFamily: "inherit",
-              }}
-              title="在 Apple Mail.app 里打开 (catfish 不重做 inbox UI, 复杂操作走 Mail.app)"
-            >
-              📬 Mail.app
-            </button>
           </div>
           {/* 搜索框 — 前端 filter 主题/发件人/账号 */}
           <input

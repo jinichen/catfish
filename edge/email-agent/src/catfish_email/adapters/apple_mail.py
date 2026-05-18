@@ -198,18 +198,42 @@ _AS_GET_MESSAGE = """
 tell application "Mail"
     set FS to (character id 31)
     set accName to "{ACCOUNT}"
-    set targetId to {MSG_ID}
+    set targetIdStr to "{MSG_ID}"
     set bodyPath to "{BODY_PATH}"
     set sourcePath to "{SOURCE_PATH}"
 
     set acc to first account whose name of it is accName
+    -- BL-EMAIL-APPLEMAIL-READ-ID-STR-V2 (5/18): id 总作字符串塞 AS 防解析挂 -2741,
+    -- 但 `whose` 子句里 `(id of it as string)` 不被 Mail.app 引擎认 (实盘"找不到").
+    -- 解法: 优先把字符串 coerce 回 integer 走整数比较 (大多数 id 是数字);
+    -- coerce 失败 (UUID / 字母) 才 fallback 字符串路径 (loop 比较).
+    try
+        set targetIdNum to (targetIdStr as integer)
+    on error
+        set targetIdNum to missing value
+    end try
+
     set foundMsg to missing value
     repeat with mb in mailboxes of acc
-        try
-            set m to (first message of mb whose id is targetId)
-            set foundMsg to m
-            exit repeat
-        end try
+        if targetIdNum is not missing value then
+            -- 整数路径 (常见)
+            try
+                set m to (first message of mb whose id is targetIdNum)
+                set foundMsg to m
+                exit repeat
+            end try
+        else
+            -- 字符串路径 (UUID 形 id), 逐封比较 (慢但兜底)
+            try
+                repeat with m in messages of mb
+                    if (id of m as string) is targetIdStr then
+                        set foundMsg to m
+                        exit repeat
+                    end if
+                end repeat
+                if foundMsg is not missing value then exit repeat
+            end try
+        end if
     end repeat
     if foundMsg is missing value then
         error "MESSAGE_NOT_FOUND" number 8001
@@ -905,7 +929,9 @@ class AppleMailAdapter(EmailAdapter):
             script = (
                 _AS_GET_MESSAGE
                 .replace("{ACCOUNT}", _escape_as_string(account_name))
-                .replace("{MSG_ID}", msg_id)  # msg_id 是数字, 不引号
+                # 5/18 BL-EMAIL-APPLEMAIL-READ-ID-STR: msg_id 总作字符串塞 AS,
+                # 不假设纯数字 (新版 Mail.app id 可能含 - / UUID 字母). escape 防 `"`.
+                .replace("{MSG_ID}", _escape_as_string(msg_id))
                 .replace("{BODY_PATH}", body_path)
                 .replace("{SOURCE_PATH}", source_path)
             )
@@ -1260,14 +1286,23 @@ class AppleMailAdapter(EmailAdapter):
         """打包 Mail 里的 numeric msg id + account name 成稳定字符串 id.
 
         分隔用 `|`. account_name 不允许含 `|` (Mail 限制 + 显示名常理).
+        5/18 BL-EMAIL-READ-ROUTING-BY-PREFIX: 加 'apple_mail|' 前缀, 跟 Foxmail
+        ('foxmail-mac|...') 同 3 段格式, _cmd_read 看前缀路由不走错 adapter.
         """
-        return f"{account_name}|{msg_id}"
+        return f"apple_mail|{account_name}|{msg_id}"
 
     @staticmethod
     def _unpack_id(packed: str) -> tuple[str, str]:
+        """5/18 BL-EMAIL-READ-ROUTING-BY-PREFIX: 兼容两种格式
+            - 新 (3 段): 'apple_mail|account|msg_id' (5/18 起 _pack_id 用这个)
+            - 老 (2 段): 'account|msg_id' (历史 list 输出的 id, 仍能 unpack)
+        """
         if "|" not in packed:
             raise ValueError(
-                f"Apple Mail message_id 格式错 (应 'account|id'): {packed!r}",
+                f"Apple Mail message_id 格式错 (应 'apple_mail|account|id' 或 'account|id'): {packed!r}",
             )
-        account, msg_id = packed.split("|", 1)
-        return account, msg_id
+        parts = packed.split("|", 2)
+        if len(parts) == 3 and parts[0] == "apple_mail":
+            return parts[1], parts[2]
+        # 老 2 段格式: account|msg_id
+        return parts[0], "|".join(parts[1:])
