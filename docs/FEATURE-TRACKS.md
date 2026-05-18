@@ -361,21 +361,29 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 
 ### Phase 1 · 完全没在主跟踪上的 ★
 
-#### #12 ★ email-agent (邮件 agent) [Phase 1, ~50%]
-> ⚠️ **PROJECT-STATUS 漏掉**, 但实际有 src/ + tests/ + DESIGN.md (~500 行).
-> 走客户端集成 (Outlook + Foxmail), **不碰密码**, 不走 IMAP.
+#### #12 ★ email-agent (邮件 agent) [Phase 1, **95%**]  ★ 5/17-18 大跃进, AI 邮件管家闭环
+> ★ 5/17-5/18 24+ ship: macOS adapter 完整 ship + Companion 邮件简报卡 4 step 闭环
+> (step1 卡 + step2 后台 scheduler + step3 LLM 评级 + step4 桌宠主动闲聊).
+> 走客户端集成 (Apple Mail + Foxmail + Outlook), **不碰密码**, 不走 IMAP, 红线.
+
+**5/17-5/18 ship 清单**:
+- ✅ Apple Mail (Mail.app) adapter 完整: AppleScript via osascript + EMLX fallback (没权限时只读) +
+  body_html 抽取 + bcc 起草 + cross-locale inbox 名 (`INBOX`/`Inbox`/`收件箱`/`受信箱`) + ISO 日期
+  + character id 31 控制字符 (BL-EMAIL-APPLEMAIL-IMPL/FULL/STALE-REFS/AS-CTRLCHAR/INBOX-NAMES/DATE-ISO)
+- ✅ Foxmail Mac adapter (已有) + Apple Mail 同时跑, CLI `--client` 没传 → 跨客户端合并查
+  (BL-EMAIL-MULTI-CLIENT, 修立项前提"公司邮箱走 Foxmail" 被 factory 短路漏掉)
+- ✅ CLI `_cmd_list` 跨账号合并 (BL-EMAIL-MULTI-ACCOUNT, 修"只查默认账号 0 未读" bug)
+- ✅ **Companion 邮件简报卡 + 后台 scheduler + LLM 评级 + 桌宠主动闲聊** 4 step 闭环
+  (BL-COMPANION-EMAIL-DIGEST step1-4, 详见 CHANGELOG 5/18)
+- ✅ `~/.catfish/companion.yaml` 的 `email:` 段配置 (poll_secs / rate_enabled / rate_model)
+- ✅ SKILL.md 加红线段防 LLM 反设计建议 ("不要建议 IMAP / Gmail API / himalaya")
 - ✅ DESIGN.md 完整 (P1-1 三大支柱之二)
-- ✅ Foxmail Mac DB parser (catfish_email/foxmail_db.py)
-- ✅ box_parser (mbox 格式)
-- ✅ adapters/foxmail_mac.py + base.py
-- ✅ inbox.py + cli (`__main__.py`)
-- ✅ tests (test_box_parser, test_adapter_foxmail_mac)
-- ⬜ 跟 Companion 接通 (现是独立 CLI) · 1 周
-- ⬜ **Apple Mail (Mail.app) adapter** · 1 周 (5/17 改, 替原 Outlook for Mac, BL-EMAIL-APPLEMAIL)
-- ⬜ Win Outlook adapter · 1-2 周
-- ⬜ 起草工具 (catfish_email_draft) 接到 tool-bridge · 0.5 周
-- ⬜ Companion 邮件 tab GUI · 1 周 (BL-D13)
-- **决策待**: demo 演不演这个? 真演就要彻底接通 + 1-2 周工作
+- ⬜ Win Outlook adapter · 1-2 周 (BL-C4)
+- ⬜ Win Foxmail adapter · 1 周 (BL-C5, .box parser 已有)
+- ⬜ Companion 邮件 tab GUI (独立 tab, 不只 dashboard 卡) · 1 周 (BL-D13)
+- ⬜ 邮件简报 step5: 卡片显急/中/低 badge + 评级"已读"自动消除通知 · 1-2 天
+- ⬜ 起草工具 (`catfish_email_draft`) 接到 tool-bridge · 0.5 周
+- **决策已定**: 演这个! macOS 端 (Apple Mail + Foxmail Mac) 已闭环可演, 实盘鸿波 3 账号 5 未读跨客户端正常显示
 
 #### #13 ★ feishu / 微信 / 钉钉 / 企微 — Hermes Unified Inbox [Phase 1, 重定位 5/7]
 > ⚠️ **5/7 鸿波关键发现**: hermes v0.12.0 内置 19 个 messaging platform, 含 **DingTalk / Feishu/Lark / WeCom (企微) / Weixin / QQ Bot / Yuanbao** 中国 IM 全栈. 之前 catfish 自己写的 `edge/feishu-monitor/` (CDP 模式) 是重复造轮子, 应切到 hermes gateway.

@@ -5197,3 +5197,142 @@ SOUL.md §606 三选一铁律 (扩展 5/13 BL-REMINDER 段):
 - 5/13 一日净交付: hermes 0.13 升级 (25 min, 不是估的 10-15 天) + ACP /queue + ACP /steer + macOS Reminders + Multi-Agent Kanban scope 1 + BACKLOG sprint 修订 + 真机验证 — **6 件大事一日 ship**, 全部含完整单测 + 文档 + 兜底, 没"图省事" patch
 - 测试统计: gateway **923 passed** (+15 tasks_browse, 0 回归), tool-bridge `test_task_manager` **33 passed** (+7 jsonl), Companion `steer.test` **19 passed** + `queue.test` 20 + `auto_continue.test` 12, TypeScript tsc --noEmit exit=0
 - **5/14 真机要做**: `git push` 推 4 commit + Companion build 看 [🎯 改主意] 三按钮 / Reminders 权限 / Kanban 5 列, 然后 BL-RBAC P0 + B sprint Day 1 启动
+
+---
+
+## 2026-05-17（周日）— 中央 / 边缘边界规则锚定 + Web 大清理 + 审计页 UX 重做 + Apple Mail Mac 转向
+
+主题: **"中央端坚决不能碰用户侧任何数据"** 规则文档化 + 审计页从工程师化 → dashboard 化 + macOS 邮件从 Outlook for Mac 转向 Apple Mail.app (100% 装机, 复用度高).
+
+### 完成 (按主题, 17 项 ship)
+
+#### A. 边界规则锚定 + 中央端用户数据净化 (鸿波 5/17 拍板)
+
+- **BL-CENTRAL-EDGE-BOUNDARY** (#92): 写 `docs/CENTRAL-EDGE-DATA-BOUNDARY.md` 强约束规则 + 30 项违规清单 + 迁移路线; 加 `tests/test_central_edge_boundary.py` CI lint (基线 33 个 allowlist, 单调下降, dead entry 自动报); `tools_sanitizer.py` 注释加 `# noqa: BOUNDARY`
+- **BL-QUOTA-SQLITE-DEPRECATE** (#93): `quota.py.record_usage` PG 失败不再 fallback sqlite (老逻辑写 `~/.catfish/quota.db` 违反 boundary). 丢一条 audit 比写员工本机好. `app.py` lifespan prod 模式 + 没 PG → log.error 大红警, dev warning. 单测路径保留 (`CATFISH_QUOTA_DB` env 走 tmp sqlite, 测试隔离不算违规)
+- **BL-CENTRAL-WEB-PURGE-USERDATA** (#94): 中央 web 砍 `/sessions` + `/看板` (整页 + 4 个 endpoint + 9 个 endpoint test); `SessionsPage.tsx` + `KanbanPage.tsx` 内容删 stub, `NavBar` 砍链接, `App.tsx` 老路由 redirect 首页防 404
+- **BL-CENTRAL-WEB-PURGE-MEPAGE** (#95): 删 `/me` 整页 + nav "我的". 第 3 张卡列了员工本机数据具体概念名 (writing_style / employee_journal / session_facts), 违 boundary spirit. 后端 `/api/quota/me` 保留 (Companion 调, audit 元数据合规)
+- **BL-CENTRAL-WEB-CONSOLIDATE** (#96): Skills+MCP 合并 → `/market` 单一入口 + 2 sub-tab (skills / mcp), 老 `/skills` `/mcp` redirect 保 bookmark. Nav emoji 统一 📦/👥/📜/⚙️/🔐, 按权限阶梯排序. 首页 hero 改造讲清"中央门户瘦, 边缘 Companion 厚". 新建 `routes/MarketPage.tsx` tab 壳
+- **BL-HOMEPAGE-DEDUPE** (#100): 首页 Hero bullet 跟 NavTile 重复 (3 处 echo 同 5 项) → 删 Hero bullet, 留 NavTile 真可点入口
+
+#### B. 审计页 UX 三段式重做 (工程师化 → dashboard, 资深 PM 视角)
+
+- **BL-AUDIT-P0-FIX** (#91) + **BL-AUDIT-P0-FIX-V2**: 修 3 个 P0 数据信任 bug + sysadmin 视角 (实盘 chenhongbo sysadmin badge 但标题显"本部门" — 写死 `=== 'admin'` 漏判 sysadmin role)
+- **BL-AUDIT-UX-P0** (#97): 标题 H1 + subtitle 替代工程师"·隔开 3 段"; KPI hero 总 tokens 40pt 主指标 + 成本估算 ≈¥N + 3 个辅助 stat 24pt; 模型 friendly 化 (`catfish-public-nvidia-nemotron` → 🟢 NVIDIA Nemotron [公网]) — 新建 `lib/modelDisplay.ts` 集中映射; 表内 inline 横向 bar + 占比 %; 异常告警条占位; 部门/员工表调色板循环
+- **BL-AUDIT-UX-P1** (#98): 时间窗 segmented (24h/7d/30d) + trend ↑/↓ vs 上期 + CSV 导出 (4 section 合一, 含 BOM Excel 中文不乱码) + 精算 RMB (`_PRICE_RMB_PER_1K_TOKEN` 表按 model 加权替代统一 0.02¥/1K)
+- **BL-AUDIT-UX-P2** (#99): drill-down 点行筛选. `_build_audit_filter` helper SQL WHERE 片段, 支持 model/dept/user_email; 前端 `<FilterPillBar>` 显已筛选 chip + 清除按钮; 3 个 BreakdownCard 行可点
+
+#### C. internal use case 全部跟员工 session model + resolver bug 修
+
+- **BL-INTERNAL-MODEL-FOLLOW-USER-FULL** (#86) + **DISTILL** (#87): 7 个 internal LLM use case 全 strict 1-candidate 模式 (memory_distill 是第 7 个). 老 fallback chain 砍, 没 model 直接 skip
+- **BL-TEST-STALE-FIX** (#88): 27 个 stale 测试修 (fallback chain → strict 1-candidate 后失效)
+- **BL-CI-FIX** (#89): GitHub Actions CI 红 — gateway py 3.10→3.12 (`datetime.UTC` Python 3.11+); tool-bridge tests 加 `--ignore` 跨包 E2E; companion `npm/cli#4828` rollup linux x64 native binary 强补
+- **BL-RESOLVER-SOURCE-FIX** (#90): `get_user_last_session_model` SQL 用 `WHERE source=?` 匹配 user_email, 但 Companion `session_write.rs:127` 写死 `source='companion'` 字面量. SQL 永远 0 行 → memory_distill / proactive / a2a / facts 全部静默 skip. 镜像 `identity.rs:124` 同模式删 source 过滤, 直接 ORDER BY started_at DESC LIMIT 1. 加 9 个防回归单测
+
+#### D. Companion 同步 + 边界遵守
+
+- **BL-COMPANION-DASHBOARD-SYNC** (#101): Companion 仪表盘"中央门户"卡 7→5 项跟 web 新 nav 对齐 (删 /me / 合 skills+mcp / emoji 统一 / 副标题改"管理+跨员工市场在 web. 桌面端管个人")
+- **BL-COMPANION-SERVICES-DEMOTE** (#102): Gateway 从 Companion 启停撤出, 改只读监控 (中央服务不该 Companion 启停 — 违 boundary)
+
+#### E. macOS 邮件 track 大转向: Outlook → Apple Mail.app
+
+- **BL-EMAIL-APPLEMAIL** (#103): macOS 邮件目标从 Outlook for Mac (Microsoft 365 订阅, 国内 <20% 渗透) → Apple Mail.app (100% 装机, AS dictionary 完整). DESIGN.md + 文件树更新, `outlook_mac` → `apple_mail`
+- **BL-EMAIL-APPLEMAIL-IMPL** (#104): Apple Mail adapter MVP 真实现. 5 个 EmailAdapter ABC 方法走 AppleScript via `osascript` subprocess. 32 个单测覆盖 mock subprocess (沙箱无 osascript / Mail.app)
+- **BL-EMAIL-APPLEMAIL-FULL** (#105): 补 3 个尾巴 — EMLX fallback (没 Automation 权限时降级只读) + body_html (`source` RFC822 多 part `text/html` 抽取) + bcc 支持. 18 个新单测, 共 50 个
+
+### 实盘踩坑 (5/17)
+
+- `git index.lock` 跨 mount 清不掉 — 沙箱不能 commit, 鸿波本机手 commit + push (4 单独 commit)
+- audit 页 sysadmin 标"本部门"是 frontend 写死 `=== 'admin'` 漏 4-role 体系 (sysadmin > admin > manager > employee), V2 修
+- 部门数 405 总 vs 117 by_dept = 288 缺 → `COALESCE(NULLIF(department, ''), '(未分组)')` 兜底"没填部门"账号
+
+---
+
+## 2026-05-18（周一, 一日 30+ ship)— Companion 0.14 + 邮件简报闭环 + Gateway Soft Handoff
+
+主题: **邮件简报功能闭环** (step1 卡 + step2 scheduler + step3 LLM 评级 + step4 桌宠主动闲聊) + **Companion 视觉债务清算** (版本同步 / About 菜单 / 终端命令修复) + **Apple Mail 实盘 6 个 bug 修穿**.
+
+一天净交付 **24+ 项 ship**, 全部含单测 + 文档 + 兜底.
+
+### 完成 (按主题, 24 项 ship, 119 单测净增)
+
+#### A. Apple Mail adapter 实盘 6 个 bug 一锅修穿 (#106-115)
+
+- **BL-EMAIL-APPLEMAIL-STALE-REFS** (#106): CLI `--client` help / SKILL.md description / DESIGN.md 文件树几处仍引用 `outlook-mac`, 同步到 `apple-mail`
+- **BL-EMAIL-APPLEMAIL-AS-CTRLCHAR** (#114) **P0**: 实盘 `catfish-email accounts --human` → osascript syntax error -2741. 根因 AS string literal 不接受 raw 0x1f/0x1e 控制字符 (老 f-string `FS = "\x1f"` interpolate 进 AS 字符串挂). 改 AS 内部 `set FS to (character id 31)` (现代语法替 deprecated `ASCII character N`), Python 端 `split(FS)` 行为不变 (byte 完全一致). 加静态防回归测试扫所有 AS 模板, 出现 `\x00-\x1f` (除 `\t\n\r`) 就挂
+- **BL-EMAIL-APPLEMAIL-INBOX-NAMES** (#115) **P0**: Gmail 5 个账号在 Mail.app 里 inbox 物理名是 `INBOX`/`[Gmail]/收件箱` 不是 `Inbox`. AS handler `resolveInbox(acc, wantName)` 按候选列表 `{INBOX, Inbox, 收件箱, 受信箱}` 逐个 try. **SKILL.md 加红线段**防 LLM 反设计建议: "永远不要建议切 IMAP 直连 / Gmail API / himalaya" (LLM 之前实盘建议"切 IMAP 直连模式更稳" 违反立项前提)
+- **BL-EMAIL-MULTI-ACCOUNT** (#118): `_cmd_list` 老逻辑只查"默认账号" — `resolve None → first account`. 用户 5 个账号时只看 1 个, Dashboard 误显"0 未读". 改成跨所有账号 query, date 降序合并, 单账号挂不阻塞进 stderr
+- **BL-EMAIL-DATE-ISO** (#119): Companion 邮件简报显 "Invalid Date". 根因 AS `(date received of m) as string` 返 locale 字符串 (zh-CN 给 `2026年5月17日 星期五 下午1:30:00`, strptime 没匹配格式). AS 端用 `my isoDate(d)` handler 直接 format ISO `YYYY-MM-DDTHH:MM:SS`, Python 直接 `datetime.fromisoformat` 解
+- **BL-EMAIL-MULTI-CLIENT** (#3 new): `inbox.py` 短路逻辑 — Mail.app 100% 装机, Foxmail 永远到不了. 跟立项前提"公司邮箱走 Foxmail" 矛盾. 新加 `get_all_adapters()` 不短路返所有能用 adapter list. `_cmd_list`/`_cmd_search`/`_cmd_read`/`_cmd_accounts` 4 个 CLI 命令全改 `list[EmailAdapter]` 签名, `read_message` 跨 adapter 逐个 try (Apple Mail id ≠ Foxmail id 命名空间不撞)
+
+#### B. Companion 视觉 / 配置债务清算 (#107-113)
+
+- **BL-COMPANION-OPEN-TERMINAL-FIX** (#107): "⌘ 在终端开鲶鱼" 按钮跑错命令. 老 Tauri `open_terminal` 跑 `catfish` (identity/auth CLI 只有 login/logout 子命令), 应该跑 `hermes` (真对话 agent, brand patch 显鲶鱼). macOS / Windows / Linux 三分支全改
+- **BL-COMPANION-TERMINAL-TITLE** (#108): macOS Terminal.app 标题栏默认显前台进程名 `hermes` (品牌泄漏). AppleScript `set custom title of newTab to "鲶鱼"` 强制盖. Windows 同款 `start "鲶鱼" cmd ...`
+- **BL-COMPANION-VERSION-SYNC** (#109): Companion 0.1.0 ↔ hermes 鲶鱼 v0.14.0 mismatch. 三处 (package.json / Cargo.toml / tauri.conf.json) 全 bump 0.14.0; 新加 `scripts/check_version_sync.sh` CI lint 防三处漂移; 升级 runbook 加 3b 段 (hermes upstream bump 时一锅改 Companion 三处)
+- **BL-COMPANION-ABOUT-CHIP** (#110): Dashboard 顶部 banner 加 `[鲶鱼 v0.14.0]` 灰色徽章, 点弹 React 模态 (一句话介绍 + 单一品牌版本号, 不暴露 Companion/Hermes 实现细节)
+- **BL-COMPANION-ABOUT-NATIVE-RICH** (#111): Info.plist 加 `CFBundleGetInfoString` + `NSHumanReadableCopyright`, macOS ⌘ → 关于鲶鱼 原生 panel 多 2 行 (产品定位 + 版权)
+- **BL-COMPANION-ABOUT-HIJACK** (#112): 自定义 macOS app menu (`app_menu.rs` 新建), "关于鲶鱼" item 不走原生 NSPanel, emit `show-about` Tauri 事件; 前端 `useUIStore.openAbout` + `<AboutModal />` 顶层挂载. macOS menu + dashboard chip 共享同一个 React 模态. 顺手补 编辑 / 窗口 submenu (Cut/Copy/Paste/Min/Zoom) — 替换默认 menu 后这些原生快捷键会丢
+- **BL-COMPANION-VITE-CHUNK-WARN** (#113): 3 处 dynamic import (`lib/tauri.ts` / `store/agent.ts` / `store/teaching.ts`) 同时也被 static import, Rollup 没法 chunk 拆开发 warning. 全转 static (老 dynamic 注释"防 zustand store 加载顺序" 是历史防御性代码, useAgentStore 早就 static 进来了实际不需要)
+- **BL-COMPANION-CSS-VAR-FIX** (#120): 我手误用 `--catfish-accent` 不存在的 CSS 变量, 解析失败按钮渲染透明像 disabled. tokens.css 主色叫 `--catfish-cyan`, EmailDigestCard + WebPortalLink AboutChip hover border 全改
+
+#### C. Gateway Soft Handoff (跨 model 切换中间件)
+
+- **BL-GATEWAY-SOFT-HANDOFF** (#116): Companion / hermes TUI 切 model 时 (e.g. Nemotron → DeepSeek), 历史 tool_calls 直接送新 model 可能炸 (LiteLLM XML 那个 #47 同类). 新加 `model_handoff.py` 中间件:
+  - Client 加 `X-Catfish-Prev-Model: <name>` header (Companion `useChatStore.prevSentModel` + `markModelSent()` 自动管)
+  - Gateway 检测到 prev != new + 新 model `supports_tool_use=False` → 把 messages 里 `tool_calls`/`role=tool` 转 inline `[catfish.tool_used]` 文本摘要, 新 model 当纯文本读
+  - System 末尾加 `[catfish handoff: 上轮 X → 本轮 Y]` 引导新 model "你刚接手"
+  - 9 个新单测覆盖: no-op (3) / annotate-only (1) / 真转译 (3) / 边缘 (2)
+  - **不做**: persona 切换 (Companion 不换 persona) + context window 压缩 (`ContextCompressor` 已接 #58) + memory rebind (catfish memory per-request 不绑 model). 真正 hermes proxy chain (#73) 是远期, B 路径解 95% 场景
+
+#### D. 邮件简报功能 4 step 闭环 (Dashboard 加邮件简报卡 + 后台扫 + LLM 评级 + 桌宠主动闲聊)
+
+- **BL-COMPANION-EMAIL-DIGEST step1** (#117): Dashboard "🔥 今日" section 加 `EmailDigestCard`. Rust `commands/email.rs` shell out `catfish-email list --unread --json`, 返 raw JSON 给前端. 卡片显未读数 + 列表 (发件人/主题/智能日期) + `💬 让小鲶帮我处理` (跳 chat tab + auto prompt) + `📬 开 Mail.app` 两个按钮
+- **BL-COMPANION-EMAIL-DIGEST-STEP2** (#121): `services/email_scheduler.rs` tokio 后台 task 每 N 分钟 (默认 600 / 10 min) 扫一次未读, 跟 baseline `HashSet<id>` diff, 新 id → macOS osascript `display notification`. 第一次 tick 不发 (建 baseline 防 spam). `tokio::task::spawn_blocking` 不卡 runtime
+- **BL-COMPANION-EMAIL-DIGEST-STEP3** (#122): 新邮件检测后调 gateway `/v1/chat/completions` 快速 model (默认 `catfish-public-deepseek-flash`) 评 急/中/低. **只"急"触发通知 + 桌宠**, 中/低静默 (防通知疲劳). reqwest 走 `oauth::current_access_token`, prompt 只送 主题+发件人 (隐私 + token 省). 11 个 Rust 单测 (urgency 解析 + JSON 容错 + truncate + sender 名抽取)
+- **BL-COMPANION-EMAIL-YAML-CONFIG** (#123): macOS 双击 .app 不读 shell env, `CATFISH_EMAIL_POLL_SECS` env 调不动. 新建 `services/email_config.rs` 读 `~/.catfish/companion.yaml` 的 `email:` 段 (`poll_secs` / `rate_enabled` / `rate_model`). 优先级 yaml > env > 默认, 跟 endpoints 同模式
+- **BL-COMPANION-EMAIL-DIGEST-STEP4** (#124): scheduler 检测到急 → emit `catfish:email-urgent` Tauri 事件 (含拼好的 starter: "张三那封紧的来了 — 项目周报草稿 帮你看?"), 前端 `App.tsx` listen → `useUIStore.startProactiveChat(starter)` 推 chat tab. 复用 BL-E13 主动闲聊路径
+- **BL-EMAIL-DIGEST-HEIGHT** + **HEIGHT-CAP** (#1/#4 new): 邮件简报卡视觉迭代 — 一开始撑满 grid cell 跟 ProactiveCard 等高, 鸿波觉得太高改成 `max-height: 160px` 列表内部滚动 (5 行可见, 多了滚), `alignSelf: start` 顶部对齐
+
+#### E. yaml 配置文件鲁棒性 (实盘踩坑)
+
+- **BL-COMPANION-YAML-MERGE** (#2 new): 实盘鸿波按我贴的 `cat > ~/.catfish/companion.yaml <<EOF` 覆盖了 yaml, 把 `oidc:` 段冲掉, 登录挂"OIDC 配置错: 自动生成默认 yaml 后仍读不到, 内部 bug". 老逻辑 `ensure_default_yaml` 只看 `path.exists()` 早返, 文件存在但缺 oidc 段不补. 改 `append_default_oidc_if_missing`: serde_yaml 解析顶层 mapping 看是否有 `oidc` key, 没有就追加默认 oidc 段, **不动现有其他段** (email/endpoints/agent/tts)
+
+### 实盘踩坑 (5/18)
+
+- **AS string literal 不接受 raw 0x1f/0x1e** — Python f-string interpolate 进去 osascript 直接挂. 修法: AS 端用 `character id 31` 重建. (踩了 2 个 round 才定位: 第一轮位置 145, 第二轮位置 497, 第三轮位置 215, 最后砍 `default account` 整段才彻底过)
+- **AS 中文 comment 让 line/col 计算错位** — 错误位置数字不可靠, 调试难. 所有 AS 模板 zero 中文 comment, 中文说明全挪 Python 这边
+- **AS `default account` 语法在 macOS Sequoia 挂 -2741** — class name 歧义. MVP 不识别默认账号, `is_default=False` 全部, `_resolve_account_name(None)` fallback `accounts[0]`
+- **Gmail INBOX 跨 provider 名不一样** — iCloud `INBOX`/`Inbox`, Gmail `INBOX`/`[Gmail]/收件箱`, Exchange `Inbox`/本地化. resolveInbox handler 兜底
+- **inbox.py factory 短路** — 立项就是为 Foxmail (公司邮箱不开 IMAP), 结果默认走 Apple Mail 把 Foxmail 跳过. 真正核心客户场景被漏掉! 加 `get_all_adapters()` 不短路
+- **`--catfish-accent` 不存在的 CSS 变量** — 我手误用了未定义的 var, 按钮渲染透明像 disabled. tokens.css 真主色叫 `--catfish-cyan`. 教训: 新 component 写 style 前先 grep 现有 tokens
+- **`cat > yaml` 覆盖把 oidc 冲掉** — 我贴命令时该用 `>>` 追加. 顺手做根因 fix `ensure_default_yaml` 检测缺段就补, 防员工 / 我 / 谁未来再手抖
+- **LLM 反设计建议 "切 IMAP"** — SKILL.md 没写红线时 LLM 倾向"用工程师常识修复", 这跟客户场景反着. SKILL.md 加显式 "永远不要建议 IMAP / Gmail-API / himalaya 类替代方案" 段防回归
+
+### 关键架构判断 (5/18 拍板)
+
+- **跨 model 切换走 B 路径** (gateway 中间件) 而非 C (hermes proxy chain): C 是远期 #73, B 解 95% 场景, 跟 hermes 0.14 `/handoff` 解耦
+- **邮件简报走"AI 管家"路径** 而非"再造邮件客户端 UI": 不重复 Mail.app, 只做 AI 才能做的 (评级 / 主动闲聊). 红线"不缓存邮件正文 / 不读正文 / 不绕过 CLI 直查 sqlite"
+- **配置走 yaml 不走 env**: macOS 双击 .app 不读 shell env (LaunchServices), `~/.catfish/companion.yaml` 是 catfish 客户端配置标准. env 仅作 dev override
+
+### 5/18 commit / push (鸿波本机, 沙箱卡 lock 不能直接 commit)
+
+- 10+ commit 分摊到 sprint 全程, 最后 `BL-COMPANION-VERSION-SYNC + BL-EMAIL-APPLEMAIL-STALE-REFS + ...` 一锅 commit + push
+- `b43b10d` BL-EMAIL-MULTI-CLIENT + BL-COMPANION-YAML-MERGE + BL-EMAIL-DIGEST-HEIGHT 一锅
+
+### 测试统计 (5/18 末)
+
+- email-agent: **83 passed** (32 IMPL + 18 FULL + 33 foxmail-mac, + 静态防 ctrl char 回归)
+- gateway: **1175+ passed** (沙箱 Python 3.10 限制 + 老 datetime.UTC 兼容问题不算回归)
+- gateway 新增 9 测 BL-GATEWAY-SOFT-HANDOFF
+- companion: TS strict `tsc --noEmit` clean, Rust 11 单测 email_scheduler
+- 测试净增: **30+ 项**
+
+### 下一步 (5/19+ 实盘验证后)
+
+- 邮件 track step5: 卡片显急/中/低 badge (前端 store 持久化评级) + 评级"已读"自动消除主动通知
+- BL-NEMOTRON-XML-TOOLCALL (#47): LiteLLM XML inline tool call 不兼容 (跟 SOFT-HANDOFF 互补, 长期解)
+- BL-RBAC-DAY8 (#70) E2E + 客户接入手册
+- macOS 邮件 e2e 真机验证 (5 账号 Mail.app + 1 Foxmail QQ 已验证 list / accounts 跨客户端跑通; read / draft 待实盘)
+- GitHub Actions CI 收红 (实盘日志显 jinichen/catfish 5/17 23:16 CI + Security 各挂一个)
+
