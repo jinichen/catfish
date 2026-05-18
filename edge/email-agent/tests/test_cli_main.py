@@ -15,7 +15,14 @@ from typing import Sequence
 
 import pytest
 
-from catfish_email.__main__ import _cmd_delete, _cmd_list, _cmd_mark_read, _cmd_read, _msg_to_dict
+from catfish_email.__main__ import (
+    _cmd_delete,
+    _cmd_list,
+    _cmd_mark_read,
+    _cmd_read,
+    _cmd_send,
+    _msg_to_dict,
+)
 from catfish_email.adapters.base import (
     Account,
     DataNotFoundError,
@@ -39,6 +46,7 @@ class _FakeAdapter(EmailAdapter):
         raise_on_list: Exception | None = None,
         raise_on_mark_read: Exception | None = None,
         raise_on_delete: Exception | None = None,
+        raise_on_send: Exception | None = None,
     ) -> None:
         self._name = name
         self._accounts = list(accounts)
@@ -46,8 +54,10 @@ class _FakeAdapter(EmailAdapter):
         self._raise = raise_on_list
         self._raise_mark = raise_on_mark_read
         self._raise_delete = raise_on_delete
+        self._raise_send = raise_on_send
         self.mark_read_calls: list[tuple[str, bool]] = []
         self.delete_calls: list[str] = []
+        self.send_calls: list[str] = []
 
     @property
     def name(self) -> str:
@@ -82,6 +92,11 @@ class _FakeAdapter(EmailAdapter):
         if self._raise_delete is not None:
             raise self._raise_delete
         self.delete_calls.append(message_id)
+
+    def send_message(self, message_id) -> None:
+        if self._raise_send is not None:
+            raise self._raise_send
+        self.send_calls.append(message_id)
 
 
 def _make_args(**kw):
@@ -540,3 +555,70 @@ def test_cmd_read_value_error_gives_format_hint(capsys):
     captured = capsys.readouterr()
     assert "id 格式不对" in captured.err
     assert "list --json" in captured.err
+
+
+# ============================================================
+# 5/18 BL-EMAIL-COMPOSE-SEND: send subcommand
+# ============================================================
+
+
+def _make_send_args(msg_id: str, *, json_out: bool = True):
+    return argparse.Namespace(id=msg_id, json=json_out)
+
+
+def test_cmd_send_routes_by_prefix_and_succeeds(capsys):
+    """按 id 前缀路由到 Apple Mail, 发送成功返 0"""
+    a = _FakeAdapter(name="apple_mail")
+    b = _FakeAdapter(name="foxmail_mac")
+    rc = _cmd_send([a, b], _make_send_args("apple_mail|alice@x.com|drafts-1"))
+    assert rc == 0
+    assert a.send_calls == ["apple_mail|alice@x.com|drafts-1"]
+    assert b.send_calls == []
+    out = json.loads(capsys.readouterr().out)
+    assert out["sent"] is True
+    assert out["adapter"] == "apple_mail"
+
+
+def test_cmd_send_foxmail_not_supported_returns_4(capsys):
+    """Foxmail 不支持 send → NotSupportedError → 返 4 + 友好引导"""
+    a = _FakeAdapter(
+        name="foxmail_mac",
+        raise_on_send=NotSupportedError("Foxmail Mac 不支持自动发送"),
+    )
+    rc = _cmd_send([a], _make_send_args("foxmail-mac|x@x.com|99"))
+    assert rc == 4
+    captured = capsys.readouterr()
+    assert "不支持自动发送" in captured.err
+    assert "请去客户端" in captured.err
+
+
+def test_cmd_send_unknown_id_returns_3(capsys):
+    """id 不存在 → DataNotFoundError → 返 3"""
+    a = _FakeAdapter(
+        name="apple_mail",
+        raise_on_send=DataNotFoundError("没这草稿"),
+    )
+    rc = _cmd_send([a], _make_send_args("apple_mail|x@x.com|999"))
+    assert rc == 3
+    captured = capsys.readouterr()
+    assert "草稿不存在" in captured.err
+
+
+def test_cmd_send_null_id_returns_2(capsys):
+    """null sentinel → 返 2"""
+    a = _FakeAdapter(name="apple_mail")
+    rc = _cmd_send([a], _make_send_args("null"))
+    assert rc == 2
+    assert "草稿 id 不能为空" in capsys.readouterr().err
+
+
+def test_cmd_send_value_error_returns_2(capsys):
+    """id 格式错 ValueError → 返 2 + 友好提示"""
+    a = _FakeAdapter(
+        name="apple_mail",
+        raise_on_send=ValueError("id 格式错"),
+    )
+    rc = _cmd_send([a], _make_send_args("apple_mail|...|..."))
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert "id 格式不对" in captured.err

@@ -631,9 +631,10 @@ catfish 核心卖点是"员工教鲶鱼一次, 凝固成 skill, 下次秒开". �
 |------|--------|-----------|
 | 找本地文件 / 文档 / 合同 / 笔记 | `mcp_catfish_local_search_local_search` | `search_files` / `find` / `grep`（慢且抓不到 PDF） |
 | **跨 session 搜历史对话** ('上次/那次/前几天 我们说过...') | **`catfish_search_sessions`** (5/13 加, 真跨 session) | `session_search` (hermes 自带, 可能只搜当前 session) |
+| **搜邮件** ('上次 / 那封 / 张三发的 X 邮件 / 工资条 / 通知') | **`catfish_email_search`** (5/18 加, 跨 Apple Mail + Foxmail FTS) | `catfish-email search` CLI (员工敲命令时用, LLM 不要绕过 tool) / IMAP 直查 |
 | 浏览器自动化 | `catfish-browser-task` skill 的 4 步模板 | 直接 browser_navigate（先看有没有 API） |
 | 内网合规 / 用户管理 / 风险报告 | `catfish-browser-compliance` skill | 不要让员工去 web 自己点 |
-| **邮件 (列 / 读 / 搜 / 起草)** | **`catfish-email` skill (跑 `catfish-email` CLI)** | **不要用 himalaya / mutt / mu / notmuch / 直接 IMAP** |
+| **邮件 (列 / 读 / 起草)** | **`catfish-email` skill (跑 `catfish-email` CLI)** | **不要用 himalaya / mutt / mu / notmuch / 直接 IMAP** |
 | 上下文压力大 | 等 `catfish-autocompress` 自动触发 | 不用主动 /compress |
 | 内网系统 | 走 Catfish Chrome 的 CDP 已登录态 | 不要让员工重新登录 |
 

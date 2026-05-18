@@ -294,6 +294,49 @@ tell application "Mail"
 end tell
 """
 
+# send_message: 5/18 BL-EMAIL-COMPOSE-SEND. AS `send <msg>` 真把草稿发出去.
+# 红线: 上层 UI 必须人工 confirm 之后才调到这, adapter 不做"是不是人发的" 校验.
+_AS_SEND_MESSAGE = """
+tell application "Mail"
+    set accName to "{ACCOUNT}"
+    set targetIdStr to "{MSG_ID}"
+
+    set acc to first account whose name of it is accName
+    try
+        set targetIdNum to (targetIdStr as integer)
+    on error
+        set targetIdNum to missing value
+    end try
+
+    set foundMsg to missing value
+    repeat with mb in mailboxes of acc
+        if targetIdNum is not missing value then
+            try
+                set m to (first message of mb whose id is targetIdNum)
+                set foundMsg to m
+                exit repeat
+            end try
+        else
+            try
+                repeat with m in messages of mb
+                    if (id of m as string) is targetIdStr then
+                        set foundMsg to m
+                        exit repeat
+                    end if
+                end repeat
+                if foundMsg is not missing value then exit repeat
+            end try
+        end if
+    end repeat
+    if foundMsg is missing value then
+        error "MESSAGE_NOT_FOUND" number 8001
+    end if
+
+    send foundMsg
+    return "OK"
+end tell
+"""
+
 # delete_message: 5/18 BL-EMAIL-DELETE. 同 _AS_GET_MESSAGE id-lookup pattern.
 # AS `delete <msg>` 在 Mail.app 默认行为 = "移到 Trash 文件夹" (跟用户按 ⌫
 # 键同效果). **不是物理删** — Trash 30 天内能找回. 红线对齐主流邮件客户端 UX.
@@ -1079,6 +1122,31 @@ class AppleMailAdapter(EmailAdapter):
                     os.unlink(p)
                 except OSError:
                     pass
+
+    def send_message(self, message_id: str) -> None:
+        """5/18 BL-EMAIL-COMPOSE-SEND: AS `send <msg>` 真发草稿.
+
+        红线: caller (Companion compose panel) **必须人工 confirm 才调**,
+        adapter 不做"是不是人发的" 校验. EMLX fallback 模式拒.
+        """
+        if self._use_emlx_fallback:
+            from .base import NotSupportedError
+            raise NotSupportedError(
+                "Apple Mail EMLX fallback 模式不支持 send_message — "
+                "Mail.app 必须开着才能发邮件"
+            )
+
+        account_name, msg_id = self._unpack_id(message_id)
+        script = (
+            _AS_SEND_MESSAGE
+            .replace("{ACCOUNT}", _escape_as_string(account_name))
+            .replace("{MSG_ID}", _escape_as_string(msg_id))
+        )
+        out = _run_osascript(script)
+        if out.strip() != "OK":
+            raise EmailAdapterError(
+                f"send_message: AS 返非 OK ({out[:120]!r})"
+            )
 
     def delete_message(self, message_id: str) -> None:
         """5/18 BL-EMAIL-DELETE: AS `delete <msg>` = 移到 Trash (软删).

@@ -139,6 +139,32 @@ pub async fn email_read_message(id: String) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
+/// 5/18 BL-EMAIL-COMPOSE-SEND: 把 Drafts 里的草稿真发出去.
+///
+/// **红线**: 这个 Tauri 命令本身不做"是不是人发的" 校验, 是 React
+/// EmailComposePanel 必须通过两步 confirm 才允许调到这里. AI 永远只能起草
+/// (email_create_draft), 真 send 必须人工点按钮.
+#[tauri::command]
+pub async fn email_send_message(id: String) -> Result<String, String> {
+    let bin = find_catfish_email().ok_or_else(|| {
+        "catfish-email CLI 没装".to_string()
+    })?;
+    let out = Command::new(&bin)
+        .args(["send", "--id", &id, "--json"])
+        .output()
+        .map_err(|e| format!("catfish-email 调用失败: {e}"))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        // 退出码 4 = NotSupported (Foxmail), 错误消息有引导文案
+        return Err(if stderr.is_empty() {
+            format!("catfish-email send 退出码 {:?}", out.status.code())
+        } else {
+            stderr
+        });
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
 /// 5/18 BL-EMAIL-DELETE: 把邮件移到客户端 Trash 文件夹 (软删, 不彻底).
 ///
 /// Apple Mail: AS `delete <msg>` 移到 Trash, 跟员工按 ⌫ 同效果.

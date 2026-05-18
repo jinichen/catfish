@@ -237,6 +237,30 @@ class EmailAdapter(ABC):
             f"建议 SKILL 把正文 quote 给员工, 让员工自己复制粘贴到客户端。"
         )
 
+    def send_message(self, message_id: str) -> None:
+        """把 Drafts 文件夹里一封已起草的邮件真发出去.
+
+        5/18 BL-EMAIL-COMPOSE-SEND. 红线: **AI 永不自动调这个**. 必须是
+        Companion compose panel 里员工**人工点"发送" 按钮**两步 confirm 之后才调.
+        adapter 自己不验证"是不是人发的", 这是上层 UI 的责任.
+
+        Apple Mail: AS `send <msg>`. 真把邮件交给 outbox / SMTP server.
+        Foxmail Mac: 不支持 (Foxmail 没暴露 send API, 跟 delete 同问题, 走
+        IMAP 同步绕一圈不可靠).
+
+        Args:
+            message_id: 草稿的 message_id (从 create_draft 返的 / list 拿到的
+                Drafts 文件夹邮件 id)
+
+        Raises:
+            NotSupportedError: 子类不支持
+            DataNotFoundError: id 不存在 / 不在 Drafts 文件夹
+            EmailAdapterError: send 失败 (SMTP 错 / 收件人格式错)
+        """
+        raise NotSupportedError(
+            f"{self.name} 不支持 send_message — 请去客户端自己发."
+        )
+
     def delete_message(self, message_id: str) -> None:
         """删除邮件 (移到客户端的废纸篓 / Trash 文件夹, 不是物理彻底删).
 

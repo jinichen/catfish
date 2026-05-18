@@ -17,7 +17,8 @@ import { fetchWithAuth } from "./me";
 import { useAgentStore } from "../store/agent";
 import { useChatStore } from "../store/chat";
 import { useTeachingStore } from "../store/teaching";
-import { fetchCatalog } from "./tauri";
+// 5/18 BL-CHAT-FALLBACK-MODEL-REVERT: fetchCatalog import 删了
+// (老 BL-FIX45 B fallback 切模型用的). 删 import 防 tsc unused warning.
 import { applySteerPrefix } from "./steer";  // BL-HERMES013-RED-1B (5/13 ACP /steer)
 
 interface SendChatParams {
@@ -36,11 +37,17 @@ interface SendChatParams {
   signal?: AbortSignal;
   /** BL-FIX45 (5/11) 内部递归用 — 错误恢复 retry 计数, 防死循环.
    *  外部调用方不应传, 仅 streamChat 自己 retry 时传.
-   *  fallback (500 修): 最多 2 次切模型
+   *
+   *  fallback (DEPRECATED 5/18 BL-CHAT-FALLBACK-MODEL-REVERT): 老逻辑切别的
+   *    model. 撤回. 字段保留作类型兼容, 新代码不读不写.
    *  401 reauth 已由 fetchWithAuth wrapper 内部处理, 这里不再计数 (BL-FIX45 A+ 5/11).
+   *  upstreamFinalRetry (5/18 BL-CHAT-AUTO-RETRY-ON-UPSTREAM-500): 上游 500/502
+   *    /503/504 时 sleep 5s 自动 retry **同 model** 一次 (上游间歇挂常 5s 内恢复).
    */
   _retryCounters?: {
+    /** @deprecated 5/18 BL-CHAT-FALLBACK-MODEL-REVERT, 不再用 */
     fallback?: number;
+    upstreamFinalRetry?: number;
   };
 }
 
@@ -472,55 +479,22 @@ export async function streamChat(params: SendChatParams): Promise<void> {
       return;
     }
 
-    // ── BL-FIX45 B (5/11): 500/502/503/504 auto fallback model ─────
-    // 上游 LLM 服务挂 (例 Gemini 偶发 500 / DeepSeek timeout). 之前红框让员工
-    // 手动换模型, 现在: 自动从 catalog 拿下一个可达 chat 模型, silent 切 + 提示
-    // "Gemini 挂了, 切到 X 重试中". 最多 2 次 fallback 防死循环.
+    // ── 5/18 BL-CHAT-FALLBACK-MODEL-REVERT: 500/502/503/504 单 model 重试 ─
+    //
+    // 老逻辑 (BL-FIX45 B 5/11): 上游 500 → 静默 fallback 切到 catalog 里下一个
+    // 可达 model 最多 2 次. **撤回**, 跟 5/13 BL-FIX23/24 "gateway 不替员工做主"
+    // 同精神:
+    //   1. 你选 Qwen 因为它中文/国产/合规, 切到 nemotron / gemini 答案质量 +
+    //      合规属性都变了, 你不知道. 公司可能配"只用国产 model", 切别的违反 RBAC
+    //   2. 用户语义违背: 选了 model = "我要这个", 不是"任何能用的 model"
+    //   3. quality 降级不可预测, 5/13 BL-FIX23 撤回的同型问题
+    //
+    // 新逻辑: 500 → sleep 5s → retry **同 model** 一次. 上游 LLM (Qwen vLLM /
+    // DeepSeek) 间歇性挂常 5s 内恢复. retry 仍挂 → 诚实报错让用户决定 (换 model
+    // 或稍后再试). upstreamFinalRetry 限 1 次, signal abort 能取消.
     if ([500, 502, 503, 504].includes(resp.status)) {
-      const fallbackCount = params._retryCounters?.fallback ?? 0;
-      if (fallbackCount < 2) {
-        // 拿 catalog 下一个可达 chat 模型
-        let nextModel: string | null = null;
-        try {
-          // 5/18 BL-COMPANION-VITE-CHUNK-WARN: fetchCatalog 顶部 static import
-          // (./tauri 被 catfish 大量 static import, dynamic 这里只是历史 lazy 习惯, 没必要).
-          const catalog = await fetchCatalog();
-          const allModels = ((catalog as unknown) as { models?: Array<{ name: string; mode?: string; reachable?: boolean }> })
-            .models || [];
-          const triedSet = new Set<string>([model]);
-          // 把之前 fallback 试过的也排掉 (从 stringified _retryCounters 反推不好做, 简化: 排当前 model)
-          const candidates = allModels.filter(
-            (m) =>
-              m.mode === "chat" &&
-              m.reachable !== false &&
-              !triedSet.has(m.name),
-          );
-          if (candidates.length > 0) {
-            nextModel = candidates[0].name;
-          }
-        } catch {
-          /* fetchCatalog 失败 → 没法 fallback */
-        }
-
-        if (nextModel) {
-          onDelta(
-            `\n⚠️ 模型 \`${model}\` 暂时不可达 (HTTP ${resp.status}), ` +
-              `自动切到 \`${nextModel}\` 重试...\n`,
-          );
-          return streamChat({
-            ...params,
-            model: nextModel,
-            _retryCounters: {
-              ...params._retryCounters,
-              fallback: fallbackCount + 1,
-            },
-          });
-        }
-      }
-      // 没 fallback / 已经 retry 2 次 → friendly error
-      // BL-C8 (5/16): 优先用 backend errors.py friendly_upstream_error 翻译过的
-      // 中文短文案, fallback 才退到 message (技术 stack). 之前一直用 message,
-      // 员工看到的是 "InternalServerError: ... ServerDisconnectedError" 这种英文.
+      const finalRetryCount = params._retryCounters?.upstreamFinalRetry ?? 0;
+      // BL-C8 (5/16): 优先用 backend errors.py friendly_upstream_error 翻译过的中文短文案
       let detail = "";
       try {
         const errJson = await resp.json();
@@ -531,11 +505,42 @@ export async function streamChat(params: SendChatParams): Promise<void> {
       } catch {
         detail = await resp.text().catch(() => "");
       }
+
+      if (finalRetryCount < 1) {
+        onDelta(
+          `\n⏳ \`${model}\` 上游 ${resp.status} 暂时不可达, ` +
+            `5 秒后自动重试一次 (这段时间按 ⏸ 取消)...\n`,
+        );
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const t = setTimeout(resolve, 5000);
+            if (signal) {
+              const onAbort = () => {
+                clearTimeout(t);
+                reject(new Error("aborted"));
+              };
+              if (signal.aborted) onAbort();
+              else signal.addEventListener("abort", onAbort, { once: true });
+            }
+          });
+        } catch {
+          onError(`⚠️ \`${model}\` 上游 ${resp.status} 不可达. 用户取消自动重试.`);
+          return;
+        }
+        return streamChat({
+          ...params,
+          _retryCounters: {
+            ...params._retryCounters,
+            upstreamFinalRetry: 1,
+          },
+        });
+      }
+
+      // retry 仍失败 → 诚实报错, 不替员工做主切别的 model
       onError(
-        `⚠️ \`${model}\` 上游 ${resp.status} 不可达. ` +
-          (fallbackCount >= 2
-            ? "已尝试 fallback 切模型仍失败, 请稍后重试."
-            : "没有其它可用模型, 检查代理 / 网络.") +
+        `⚠️ \`${model}\` 上游 ${resp.status} 不可达 (5s 后重试仍失败). ` +
+          `上游 LLM 服务挂了, 你可以: (1) 换一个 model 重发 ` +
+          `(2) 稍后再试 (3) 排查 gateway log + 上游 LLM 服务状态.` +
           (detail ? ` 详细: ${detail.slice(0, 200)}` : ""),
       );
       return;

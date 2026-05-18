@@ -264,6 +264,10 @@ export const emailMarkRead = (id: string, read: boolean = true) =>
 // Apple Mail 支持; Foxmail Mac 不支持 (Promise reject 含友好提示).
 export const emailDeleteMessage = (id: string) =>
   rawInvoke<string>("email_delete_message", { id });
+// BL-EMAIL-COMPOSE-SEND (5/18): 把 Drafts 草稿真发. 红线: caller 必须人工 confirm.
+// AI 不应该绕过 compose panel 直调这个.
+export const emailSendMessage = (id: string) =>
+  rawInvoke<string>("email_send_message", { id });
 export interface CreateDraftArgs {
   to: string;
   subject: string;

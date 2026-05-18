@@ -121,11 +121,27 @@ export function useAuth() {
 
   // 5/18 BL-COMPANION-AUTO-RELOGIN: 距过期 < 1min 自动触发续登, 让员工无感.
   // 浏览器弹一下立即关闭 (catfish-identity 已登录态 cookie 还在, OAuth flow 秒过).
+  //
+  // 5/19 (本次实盘修): 真过期 (remaining <= 0) 也要自动续, 不能让员工手点
+  // "重新登录" 按钮. 老条件 `remaining > 0 && < 60` 只覆盖"还剩 1 分钟"的
+  // 窗口, 一旦过期反而不触发 — 鸿波实盘 chat 撞红条 banner 没自动续就是这.
+  //
+  // cooldown 防无限重试: 上次自动续登失败后 60s 内不再 auto-trigger
+  // (用户手点"重新登录" 按钮始终可用, cooldown 只限制自动那条路径).
   useEffect(() => {
     if (!state.authenticated || state.auth_method === "dev_token") return;
+    if (reauthing) return;  // 正在续, 别叠
     const now = Math.floor(Date.now() / 1000);
     const remaining = state.expires_at - now;
-    if (remaining > 0 && remaining < NEAR_EXPIRY_AUTO_SECS && !reauthing) {
+    // 三段触发: 还剩 < 1min / 真过期 / 过期超久 (cooldown 后再试一次)
+    const shouldAutoTrigger =
+      (remaining > 0 && remaining < NEAR_EXPIRY_AUTO_SECS) ||
+      // 真过期: 永远尝试自动续 — 失败的话 forceRelogin 内部 setError 不会再连击
+      // (本 effect 依赖 expires_at, expires_at 没变 effect 不重跑; login 成功
+      // expires_at 跳到未来, effect 跑一次就 return; login 失败 state 不变
+      // 也不会重跑 effect. 不需要 cooldown timer).
+      remaining <= 0;
+    if (shouldAutoTrigger) {
       void forceRelogin();
     }
   }, [state.authenticated, state.auth_method, state.expires_at, reauthing, forceRelogin]);

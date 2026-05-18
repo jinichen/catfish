@@ -1904,6 +1904,57 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ── BL-EMAIL-SEARCH-TOOL (5/18 鸿波"对话里检索没搜到邮件") ──────────
+    {
+        "name": "catfish_email_search",
+        "description": (
+            "★★★ 全文搜员工本地邮件 (Apple Mail + Foxmail 跨客户端跨账号). "
+            "**chat-first 范式打通邮件检索** — 之前 LLM 只能搜文件 (local_search) "
+            "+ 历史对话 (catfish_search_sessions), 邮件这条漏了, 现在补上.\n\n"
+            "✅ 调用场景:\n"
+            "  - 员工问 '上个月那封工资条邮件' → query='工资条'\n"
+            "  - 员工问 '张三给我发的那个合同' → query='张三 合同'\n"
+            "  - 员工问 '微信团队的通知邮件' → query='微信团队'\n"
+            "  - 任何 '那封/上次/之前/前几天 X 邮件' 类索引诉求\n\n"
+            "❌ 不调用:\n"
+            "  - 找文件 → local_search\n"
+            "  - 找历史对话 → catfish_search_sessions\n"
+            "  - 列收件箱 / 看未读 → 让员工去 Companion 邮件 tab\n\n"
+            "返参:\n"
+            "  - matches: 命中邮件 list, 每条 {id, adapter, account, subject, "
+            "    sender, date, is_read, snippet (前 200 字摘要)}\n"
+            "  - count: 总命中数\n"
+            "  - summary: 一句话归纳 (按 adapter 分组), 念给员工.\n"
+            "  - ok: false 时含 error 字段说明原因 (CLI 没装 / 超时 / 等)\n\n"
+            "🔒 隐私: 不读邮件正文 (只看 snippet), 不上行中央, 不跨员工. "
+            "邮件正文红线: 永不缓存."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "搜的关键字 (LIKE 字面匹配, 中文 OK, 多关键字空格分)",
+                },
+                "folder": {
+                    "type": "string",
+                    "description": "搜哪个文件夹: '*' = 跨所有 (默认), 'Inbox' = 仅收件箱",
+                },
+                "account": {
+                    "type": "string",
+                    "description": "指定账号地址 (默认搜所有账号; 多账号场景缩小范围用)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "最多返多少封 (默认 20, 上限 50)",
+                },
+            },
+            "required": ["query"],
+        },
+        "emoji": "📧",
+        "toolset": "catfish_native",
+        "available": True,
+    },
     # ── BL-FED2.3 (5/12 鸿波拍板) 跨员工路由 ──
     {
         "name": "catfish_expert_consult",
@@ -6305,6 +6356,10 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_search_sessions":
         from . import sessions_search  # noqa: PLC0415
         return sessions_search.tool_search_sessions(args)
+    # BL-EMAIL-SEARCH-TOOL (5/18 鸿波"对话里检索没搜到邮件")
+    if name == "catfish_email_search":
+        from . import email_search  # noqa: PLC0415
+        return email_search.tool_email_search(args)
     # BL-FIX-TIMEOUT-OUTPUTS (5/13 鸿波"做不出文档")
     if name == "catfish_list_my_outputs":
         from . import recent_outputs  # noqa: PLC0415

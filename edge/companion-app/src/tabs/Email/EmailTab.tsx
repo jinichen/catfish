@@ -24,6 +24,7 @@ import {
   emailAccountsFetch,
   emailCreateDraft,
   emailDeleteMessage,
+  emailSendMessage,
   emailClassifyNow,
   emailUrgencyMap,
   type EmailDigestItem,
@@ -618,38 +619,126 @@ function DetailPane({
     }
   };
 
-  const handleDraftReply = async () => {
+  // 5/18 BL-EMAIL-COMPOSE-SEND: compose panel state — 点 "起草回复" 后展开,
+  // 显示可编辑 to/cc/subject/body, 员工 review/编辑 → 点 "✉ 发送" 真发.
+  // 红线: AI 不能绕过这个 panel 直接 send, 必须人工在 panel 里点按钮.
+  const [composing, setComposing] = useState(false);
+  const [composeTo, setComposeTo] = useState("");
+  const [composeCc, setComposeCc] = useState("");
+  const [composeSubject, setComposeSubject] = useState("");
+  const [composeBody, setComposeBody] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [sendResult, setSendResult] = useState<string | null>(null);
+  const [sendConfirmPending, setSendConfirmPending] = useState(false);
+
+  // 3s 自动取消 send confirm
+  useEffect(() => {
+    if (!sendConfirmPending) return;
+    const t = window.setTimeout(() => setSendConfirmPending(false), 3000);
+    return () => window.clearTimeout(t);
+  }, [sendConfirmPending]);
+
+  // 选别的邮件时清 compose 状态
+  useEffect(() => {
+    setComposing(false);
+    setSendError(null);
+    setSendResult(null);
+    setSendConfirmPending(false);
+  }, [msg.id]);
+
+  /** 5/18 BL-EMAIL-COMPOSE-SEND: 点 "起草回复" 不再立即建 draft, 而是开
+   *  compose panel 让员工编辑. 这样:
+   *    - 取消不留 orphan draft
+   *    - 编辑后再 send 不会跟 Mail.app 那侧的草稿不一致 */
+  const handleOpenCompose = () => {
+    const replyTo = _replyAddress(msg.sender);
+    const subj = msg.subject?.startsWith("Re:") ? msg.subject : `Re: ${msg.subject || ""}`;
+    const quoted = (msg.body_text || "")
+      .split("\n")
+      .map((l) => `> ${l}`)
+      .join("\n");
+    const body = `\n\n\n${"-".repeat(20)} 原邮件 ${"-".repeat(20)}\n` +
+      `发件人: ${msg.sender}\n` +
+      `时间: ${msg.date}\n` +
+      `主题: ${msg.subject}\n\n` +
+      quoted;
+    setComposeTo(replyTo);
+    setComposeCc("");
+    setComposeSubject(subj);
+    setComposeBody(body);
+    setSendError(null);
+    setSendResult(null);
+    setSendConfirmPending(false);
+    setComposing(true);
+  };
+
+  /** 只保存到 Drafts, 不发. 等价于老 handleDraftReply 行为 (但用 panel 的内容). */
+  const handleSaveDraft = async () => {
     setDrafting(true);
     setDraftResult(null);
     setDraftError(null);
     try {
-      // 直接落简单 placeholder 草稿 — 不调 LLM (那是工作台的事, 跟"💬 让小鲶处理" 区分).
-      // 这里只做 "起草壳子": 收件人 = 原发件人, subject = Re:, body = quote 原文.
-      // 员工去 Mail.app Drafts 打开后, 自己写正文 (或者切回工作台让小鲶帮起草).
-      const replyTo = _replyAddress(msg.sender);
-      const subj = msg.subject?.startsWith("Re:") ? msg.subject : `Re: ${msg.subject || ""}`;
-      const quoted = (msg.body_text || "")
-        .split("\n")
-        .map((l) => `> ${l}`)
-        .join("\n");
-      const body = `\n\n\n${"-".repeat(20)} 原邮件 ${"-".repeat(20)}\n` +
-        `发件人: ${msg.sender}\n` +
-        `时间: ${msg.date}\n` +
-        `主题: ${msg.subject}\n\n` +
-        quoted;
       const resultJson = await emailCreateDraft({
-        to: replyTo,
-        subject: subj,
-        body,
+        to: composeTo,
+        cc: composeCc || undefined,
+        subject: composeSubject,
+        body: composeBody,
         inReplyTo: msg.id,
         account: msg.account,
       });
       const parsed = JSON.parse(resultJson);
       setDraftResult(parsed?.draft_id ?? "ok");
+      setComposing(false);  // 保存成功关 panel
     } catch (e) {
       setDraftError(e instanceof Error ? e.message : String(e));
     } finally {
       setDrafting(false);
+    }
+  };
+
+  /** 真发送: 两步 confirm, 第一次切 "再次点击确认", 第二次真发.
+   *  实现: 先 emailCreateDraft 拿 id, 再 emailSendMessage(id). */
+  const handleSendNow = async () => {
+    if (!sendConfirmPending) {
+      setSendConfirmPending(true);
+      setSendError(null);
+      return;
+    }
+    setSendConfirmPending(false);
+    setSending(true);
+    setSendError(null);
+    setSendResult(null);
+    console.log("[BL-EMAIL-COMPOSE-SEND] 起草+发送", { to: composeTo, subject: composeSubject });
+    try {
+      const draftJson = await emailCreateDraft({
+        to: composeTo,
+        cc: composeCc || undefined,
+        subject: composeSubject,
+        body: composeBody,
+        inReplyTo: msg.id,
+        account: msg.account,
+      });
+      const draftParsed = JSON.parse(draftJson);
+      const draftId = draftParsed?.draft_id;
+      if (!draftId) {
+        throw new Error("起草返回没 draft_id, 无法发送");
+      }
+      console.log("[BL-EMAIL-COMPOSE-SEND] draft 已建, 现在 send", draftId);
+      const sendJson = await emailSendMessage(draftId);
+      console.log("[BL-EMAIL-COMPOSE-SEND] 发送成功", sendJson);
+      setSendResult("✓ 已发送");
+      // 2s 后关 panel
+      setTimeout(() => {
+        setComposing(false);
+        setSendResult(null);
+      }, 2000);
+    } catch (e) {
+      const errMsg = e instanceof Error ? e.message : String(e);
+      console.error("[BL-EMAIL-COMPOSE-SEND] 发送失败:", errMsg);
+      setSendError(errMsg);
+    } finally {
+      setSending(false);
     }
   };
   return (
@@ -735,8 +824,8 @@ function DetailPane({
           </button>
           <button
             type="button"
-            onClick={() => void handleDraftReply()}
-            disabled={drafting}
+            onClick={handleOpenCompose}
+            disabled={drafting || composing}
             style={{
               background: "var(--catfish-bg)",
               color: "var(--catfish-text)",
@@ -744,12 +833,12 @@ function DetailPane({
               borderRadius: 4,
               padding: "8px 16px",
               fontSize: 13,
-              cursor: drafting ? "wait" : "pointer",
+              cursor: composing ? "default" : "pointer",
               fontFamily: "inherit",
             }}
-            title="在 Apple Mail 起一份回复草稿 (空白带 quote 原文). 真发送要你自己去 Mail.app Drafts 点发. 红线."
+            title="打开 compose 面板, 编辑回复内容 + 选择保存草稿或发送 (人工 confirm 才发)"
           >
-            {drafting ? "起草中…" : "✏️ 起草回复 (落 Drafts)"}
+            {composing ? "📝 编辑中…" : "✏️ 回复"}
           </button>
           {/* 5/18 BL-EMAIL-DELETE: 两步点击确认 (window.confirm 在 Tauri 不可靠).
               第一次点 → "🗑 再次点击确认" (3s 内有效), 第二次才真删. */}
@@ -813,7 +902,7 @@ function DetailPane({
           )}
           {draftResult && (
             <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
-              ✓ 草稿已落 Mail Drafts, 打开 Mail.app review + 发送
+              ✓ 草稿已落 Mail Drafts (5/18 起 Companion 也能直接发了, 用 "✏️ 回复")
             </span>
           )}
           {draftError && (
@@ -824,21 +913,242 @@ function DetailPane({
         </div>
       </div>
 
-      {/* 正文 */}
-      <div
-        style={{
-          flex: 1,
-          overflowY: "auto",
-          padding: "var(--space-4)",
-          fontSize: 13,
-          lineHeight: 1.6,
-          color: "var(--catfish-text)",
-          whiteSpace: "pre-wrap",
-          background: "var(--catfish-bg)",
-        }}
-      >
-        {msg.body_text || "(无正文)"}
-      </div>
+      {/* 5/18 BL-EMAIL-COMPOSE-SEND: compose panel - composing=true 时取代正文区显. */}
+      {composing ? (
+        <div
+          style={{
+            flex: 1,
+            overflowY: "auto",
+            padding: "var(--space-4)",
+            fontSize: 13,
+            background: "var(--catfish-bg)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
+          }}
+        >
+          {/* 红线提示横幅 */}
+          <div
+            style={{
+              padding: "8px 12px",
+              background: "rgba(34, 197, 94, 0.1)",
+              border: "1px solid rgba(34, 197, 94, 0.3)",
+              borderRadius: 4,
+              fontSize: 11,
+              color: "rgb(21, 128, 61)",
+              lineHeight: 1.5,
+            }}
+          >
+            ✏️ <strong>Compose 模式</strong> — 编辑下面内容, "💾 仅保存草稿"
+            落 Mail.app Drafts; "✉ 发送" 真发出去 (两步 confirm).
+            红线: AI 永远不能绕过这步直接 send, 必须你人工点按钮.
+          </div>
+
+          {/* to */}
+          <label style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+            <span style={{ width: 50, color: "var(--catfish-text-muted)", flex: "0 0 auto" }}>收件人</span>
+            <input
+              type="text"
+              value={composeTo}
+              onChange={(e) => setComposeTo(e.target.value)}
+              placeholder="alice@x.com, bob@y.com"
+              style={{
+                flex: 1,
+                background: "var(--catfish-bg-elevated)",
+                color: "var(--catfish-text)",
+                border: "1px solid var(--catfish-border)",
+                borderRadius: 4,
+                padding: "6px 10px",
+                fontSize: 13,
+                fontFamily: "inherit",
+              }}
+            />
+          </label>
+
+          {/* cc */}
+          <label style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+            <span style={{ width: 50, color: "var(--catfish-text-muted)", flex: "0 0 auto" }}>抄送</span>
+            <input
+              type="text"
+              value={composeCc}
+              onChange={(e) => setComposeCc(e.target.value)}
+              placeholder="可选, 多人逗号分隔"
+              style={{
+                flex: 1,
+                background: "var(--catfish-bg-elevated)",
+                color: "var(--catfish-text)",
+                border: "1px solid var(--catfish-border)",
+                borderRadius: 4,
+                padding: "6px 10px",
+                fontSize: 13,
+                fontFamily: "inherit",
+              }}
+            />
+          </label>
+
+          {/* subject */}
+          <label style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+            <span style={{ width: 50, color: "var(--catfish-text-muted)", flex: "0 0 auto" }}>主题</span>
+            <input
+              type="text"
+              value={composeSubject}
+              onChange={(e) => setComposeSubject(e.target.value)}
+              style={{
+                flex: 1,
+                background: "var(--catfish-bg-elevated)",
+                color: "var(--catfish-text)",
+                border: "1px solid var(--catfish-border)",
+                borderRadius: 4,
+                padding: "6px 10px",
+                fontSize: 13,
+                fontFamily: "inherit",
+              }}
+            />
+          </label>
+
+          {/* body */}
+          <textarea
+            value={composeBody}
+            onChange={(e) => setComposeBody(e.target.value)}
+            placeholder="正文..."
+            style={{
+              flex: 1,
+              minHeight: 200,
+              background: "var(--catfish-bg-elevated)",
+              color: "var(--catfish-text)",
+              border: "1px solid var(--catfish-border)",
+              borderRadius: 4,
+              padding: "8px 12px",
+              fontSize: 13,
+              lineHeight: 1.6,
+              fontFamily: "inherit",
+              resize: "vertical",
+            }}
+          />
+
+          {/* 错误 / 成功提示 */}
+          {sendError && (
+            <div
+              style={{
+                padding: "8px 12px",
+                background: "rgba(220, 80, 60, 0.1)",
+                border: "1px solid rgba(220, 80, 60, 0.3)",
+                borderRadius: 4,
+                fontSize: 12,
+                color: "rgb(220, 80, 60)",
+                lineHeight: 1.5,
+              }}
+            >
+              <strong>✗ 发送失败</strong>
+              <br />
+              {sendError}
+            </div>
+          )}
+          {sendResult && (
+            <div
+              style={{
+                padding: "8px 12px",
+                background: "rgba(34, 197, 94, 0.1)",
+                border: "1px solid rgba(34, 197, 94, 0.3)",
+                borderRadius: 4,
+                fontSize: 12,
+                color: "rgb(21, 128, 61)",
+              }}
+            >
+              {sendResult} (2 秒后关闭)
+            </div>
+          )}
+
+          {/* 行动按钮区 */}
+          <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
+            <button
+              type="button"
+              onClick={() => {
+                setComposing(false);
+                setSendConfirmPending(false);
+                setSendError(null);
+              }}
+              disabled={sending}
+              style={{
+                background: "transparent",
+                color: "var(--catfish-text-muted)",
+                border: "1px solid var(--catfish-border)",
+                borderRadius: 4,
+                padding: "8px 14px",
+                fontSize: 13,
+                cursor: sending ? "wait" : "pointer",
+                fontFamily: "inherit",
+              }}
+            >
+              × 取消
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleSaveDraft()}
+              disabled={sending || drafting}
+              style={{
+                background: "var(--catfish-bg)",
+                color: "var(--catfish-text)",
+                border: "1px solid var(--catfish-border)",
+                borderRadius: 4,
+                padding: "8px 14px",
+                fontSize: 13,
+                cursor: drafting ? "wait" : "pointer",
+                fontFamily: "inherit",
+              }}
+              title="保存到 Mail.app Drafts, 不发送. 等会儿去 Mail.app 改完自己发."
+            >
+              {drafting ? "保存中…" : "💾 仅保存草稿"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleSendNow()}
+              disabled={sending || !composeTo.trim()}
+              style={{
+                background: sendConfirmPending ? "rgba(34, 197, 94, 0.15)" : "var(--catfish-cyan)",
+                color: sendConfirmPending ? "rgb(21, 128, 61)" : "#fff",
+                border: sendConfirmPending
+                  ? "1px solid rgb(21, 128, 61)"
+                  : "1px solid var(--catfish-cyan)",
+                borderRadius: 4,
+                padding: "8px 14px",
+                fontSize: 13,
+                fontWeight: sendConfirmPending ? 600 : 500,
+                cursor: sending ? "wait" : (!composeTo.trim() ? "not-allowed" : "pointer"),
+                fontFamily: "inherit",
+                marginLeft: "auto",
+              }}
+              title={
+                sendConfirmPending
+                  ? "再次点击确认发送 (3s 内有效)"
+                  : "起草 + 发送邮件. 红线: 必须人工点这个按钮."
+              }
+            >
+              {sending
+                ? "发送中…"
+                : sendConfirmPending
+                  ? "✉ 再次点击确认 (3s)"
+                  : "✉ 发送"}
+            </button>
+          </div>
+        </div>
+      ) : (
+        /* 正文 (非 compose 时) */
+        <div
+          style={{
+            flex: 1,
+            overflowY: "auto",
+            padding: "var(--space-4)",
+            fontSize: 13,
+            lineHeight: 1.6,
+            color: "var(--catfish-text)",
+            whiteSpace: "pre-wrap",
+            background: "var(--catfish-bg)",
+          }}
+        >
+          {msg.body_text || "(无正文)"}
+        </div>
+      )}
     </>
   );
 }

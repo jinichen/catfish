@@ -5487,3 +5487,71 @@ SOUL.md §606 三选一铁律 (扩展 5/13 BL-REMINDER 段):
 - **删除 = 软删 (移到 Trash)**: 红线对齐主流邮件客户端 ⌫ 键. **永不物理删** — 误操作 30 天内 Trash 可恢复. catfish AI 副手"远程触发" 比员工本地 ⌫ 误操作风险更大, 红线更要严守
 - **两步点击确认 > window.confirm**: Tauri WebView 不可靠. UI 内状态切换 + 3s 自动取消比系统 dialog 更可控, 也不打扰
 
+---
+
+### 5/18 深夜 5 项 ship — chat 范式三处统一检索 + auto-relogin / fallback 取舍 + 邮件发送闭环
+
+主题: 鸿波"现在检索内容会自动检索文件/邮件/对话吗" → 补 email-search LLM tool;
+       "为什么不自己接续" → 修 auto-relogin expired + 加 500 自动重试;
+       "为什么要切模型" → 撤回 fallback 切模型 (跟 5/13 决策对齐);
+       "邮件可以在 Companion 里发送吗" → 内置 compose panel + 人工 confirm 发送
+
+#### P. catfish_email_search LLM tool (BL-EMAIL-SEARCH-TOOL)
+
+- **背景**: 鸿波"检索内容会自动检索文件、邮件、对话吗?" — local_search (文件) + catfish_search_sessions (对话) 都有 LLM tool, **邮件这条漏了**. 员工问鲶鱼"找张三那封工资邮件" 鲶鱼搜不到, 跟 chat-first 范式不符
+- 新建 `edge/tool-bridge/src/catfish_tool_bridge/email_search.py`: shell out `catfish-email search "<query>" --json`, 包成 OpenAI tool. 10s timeout / JSON 解析容错 / 不返 body_text (隐私) 只返 200 字 snippet / 按 adapter 分组 summary
+- `catfish_tools.py` 加 tool 定义 (★★★ 高优先级 description + 4 ✅ 调用场景 + 3 ❌ 不调用), dispatch_native 加路由
+- `SOUL.md` 表格加一行: **搜邮件** → `catfish_email_search` (新)
+- **13 新单测**: 空 query / CLI 没装 / 成功 / 空结果 / nonzero exit / timeout / OSError / 非法 JSON / limit clamp 上下 / account / folder. 顺手抓 2 bug: `limit=0` 走 default (or 短路把 0 当 falsy) → 严格 None 检测; "空 list 返 0 封" 写成 "没找到 X" 更顺口
+- **打通后效果**: 三处 (文件/对话/邮件) 全部 LLM tool 可调, chat-first 范式完整闭环
+
+#### Q. Auto-relogin expired bug 修 (BL-COMPANION-AUTO-RELOGIN-EXPIRED-FIX)
+
+- **背景**: 鸿波截图顶部红条"🔒 登录已过期, 部分功能不可用 [重新登录]" — 我 BL-COMPANION-AUTO-RELOGIN auto-trigger 老条件 `remaining > 0 && < 60` 一旦真过期 (remaining <= 0) **反而不触发**, 让员工手点"重新登录" 按钮. 蠢. 真过期了更该自动续才对
+- `useAuth.ts`: shouldAutoTrigger 加 `remaining <= 0` 条件. expired 也立即触发. 不需要 cooldown timer — effect 依赖 expires_at, 失败时 state 不变 effect 不重跑, 不会无限重试
+
+#### R. 500 自动重试同 model + fallback 切模型 revert (BL-COMPANION-CHAT-AUTO-RETRY + BL-CHAT-FALLBACK-MODEL-REVERT)
+
+- **背景 1 (R-1)**: 鸿波"为什么不自己接续, 还要人工接续吗?" — chat 第一次 500 鸿波只能手动重发. 加 5s 自动重试同 model 一次 (上游间歇挂 5s 内常恢复)
+- **背景 2 (R-2)**: 鸿波"为什么要切模型?" — BL-FIX45 B (5/11) fallback 切模型逻辑跟 5/13 "gateway 不替员工做主" 决策冲突. 员工选 Qwen 因为它中文/国产/合规, 切别的模型答案质量 + 合规属性都变了, 员工不知道
+- **R-1 实现** (`chat.ts`): 加 `_retryCounters.upstreamFinalRetry` 计数器, 500/502/503/504 → onDelta 显 "⏳ 5 秒后自动重试 \`{model}\` 一次..." → setTimeout 5000 (signal abort 能取消) → 重发 streamChat 同 model
+- **R-2 实现** (`chat.ts`): 删 ~30 行 BL-FIX45 B fallback 切模型代码 + 删 `fetchCatalog` import. `_retryCounters.fallback` 标 `@deprecated` 保留作类型兼容. 错误消息改诚实"换一个 model 重发 / 稍后再试 / 排查上游 LLM"
+- **新行为**: Qwen 挂了就说 Qwen 挂了, 决定权还给用户. 不再静默切到 nemotron / gemini
+
+#### S. Companion 内置 Compose Panel + 人工发送 (BL-EMAIL-COMPOSE-SEND)
+
+- **背景**: 鸿波"邮件可以在 Companion 里发送吗?" — 之前红线"AI 永不 send, 起草到 Drafts 让员工去 Mail.app 发", 体验多一步切应用. 折中方案 A: Companion 内置 compose panel, 人工 review/编辑 + 两步 confirm 发送. **红线保留**: AI 永远只能起草不能 send, 必须人工在 panel 里点按钮
+- `adapters/base.py`: `EmailAdapter.send_message(id)` 抽象, 默认 NotSupportedError + 红线注释
+- `adapters/apple_mail.py`: `_AS_SEND_MESSAGE` AS 模板 (`send <msg>` 真发) + `send_message()` 同 id-lookup 模式. EMLX fallback 拒
+- `__main__.py`: `catfish-email send --id <id>` 子命令 + `_cmd_send` 按前缀路由 + null/ValueError/NotSupported 兜底返码 2/3/4. **CLI help 含红线**"不要 AI 直接调, 必须人工确认"
+- `commands/email.rs` + `lib.rs` + `tauri.ts`: `email_send_message` Tauri 命令 + `emailSendMessage` JS wrapper
+- `EmailTab.tsx`: "✏️ 起草回复" 改 "✏️ 回复" → 点击打开 compose panel (取代正文区显示)
+  - 编辑区: to / cc / subject / body 全部可编辑 (`<input>` + `<textarea>`)
+  - 顶部绿色横幅红线提示: "AI 永远不能绕过这步直接 send, 必须你人工点按钮"
+  - 3 个按钮: **× 取消** / **💾 仅保存草稿** (落 Drafts 不发) / **✉ 发送** (两步 confirm)
+  - 发送两步: 第一次 → "✉ 再次点击确认 (3s)" + 绿色高亮, 3s 内第二次真发, 超时自动恢复
+  - 收件人空 → 发送按钮 disabled (防误发)
+  - 发送内部: emailCreateDraft 拿 id → emailSendMessage(id) → onError 醒目红框
+  - 发送成功 → 显示 "✓ 已发送 (2 秒后关闭)" → 2s 后关 panel
+- **5 新 CLI 单测**: 按前缀路由发送成功 / Foxmail NotSupported 返 4 / 未知 id 返 3 / null 返 2 / ValueError 返 2
+
+### 5/18 深夜测试净增
+
+- email-agent: 120 → 125 (+5 send subcommand)
+- tool-bridge: +13 (email_search_tool, 全新)
+- companion: tsc clean
+- **合计 +18 单测, 0 回归**
+
+### 5/18 全天最终战绩 (更新)
+
+**63 项 ship** = 56 (前面) + 7 (深夜):
+- 深夜 (7 项): catfish_email_search tool / auto-relogin expired fix / 500 auto retry / fallback 切模型 revert / Apple Mail send AS / CLI send 子命令 / EmailTab compose panel
+- 测试: identity 129 / email-agent 125 / gateway tool_retry_hint 23 / tool-bridge email_search 13 / companion tsc clean
+- **测试净增 5/18 全天: +68 / 0 我引入回归**
+
+### 5/18 关键架构决策 (再加)
+
+- **chat-first 范式打通三处检索**: 文件 / 对话 / 邮件 全部 LLM tool 可调, 员工问鲶鱼一句话三处自动搜 — 不加全局搜索框 (Linear/Notion 那套), 避免把鲶鱼降级成"邮件查看器"
+- **gateway/Companion 不替员工做主 (再一次)**: BL-FIX45 B fallback 切模型 revert 跟 5/13 BL-FIX23/24 同精神. 员工选了 model = "我要这个", 不是"任何能用的". 500 自动重试**同** model, 不偷切
+- **AI 永不 send, 人工 confirm 红线坚守**: BL-EMAIL-COMPOSE-SEND 加发送能力但不破红线. compose panel 顶部横幅 + CLI help + 代码注释多层强调. AI 调用路径走 tool 只能到 draft, send 必须 UI 人工点
+

@@ -399,6 +399,8 @@ pub fn run() {
             commands::email::email_mark_read,
             // BL-EMAIL-DELETE (5/18): 删邮件 (移到 Trash, 软删)
             commands::email::email_delete_message,
+            // BL-EMAIL-COMPOSE-SEND (5/18): 把 Drafts 草稿真发出去 (人工 confirm 红线)
+            commands::email::email_send_message,
             // BL-COMPANION-EMAIL-TAB-STEP2 (5/18): 评级 badge 取数
             services::email_scheduler::email_urgency_map,
             // BL-EMAIL-URGENCY-BADGE (5/18): 前端主动 batch 评级 (历史邮件也能评)
