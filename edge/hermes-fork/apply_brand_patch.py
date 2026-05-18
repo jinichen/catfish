@@ -19,6 +19,13 @@
     --install-hooks 会装 3 个 git hook (post-merge / post-checkout / post-rewrite),
     每次 git pull / merge / rebase 后自动重跑 --apply, 让升级不再撞品牌补丁.
     install.sh 默认会调 --install-hooks, 一次装好长期生效.
+
+代码 patch 自动重打 (5/19 BL-HERMES-PATCH-AUTOMATION):
+    patches/NNNN-描述.patch 存我们对 hermes 上游的非品牌代码改动 (CORS / 性能 / bugfix).
+    --apply / --revert / --verify 会同时跑 RULES 字符串规则 + patches/ 下的 .patch.
+    跟 RULES 互补 — RULES 改字符串字面量 (单行), patches 改代码块 (加常量 / 加 helper).
+    apply 用 `patch -p1` (而不是 `git apply`) — fuzzy matching 抗上游小改动.
+    幂等: 已 apply 的 patch (reverse dry-run 能过) 自动跳过.
 """
 from __future__ import annotations
 
@@ -26,12 +33,19 @@ import argparse
 import os
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
 # HERMES_DIR env 优先 (B.3 测试 + admin 场景), 默认 ~/.hermes/hermes-agent
 HERMES_ROOT = Path(os.environ.get("HERMES_DIR") or (Path.home() / ".hermes" / "hermes-agent"))
 BACKUP_SUFFIX = ".before-catfish"
+
+# .patch 文件目录 (5/19 BL-HERMES-PATCH-AUTOMATION)
+# 跟 RULES 字符串替换并存 — RULES 改单行字符串字面量, PATCHES 改代码块
+# (加常量 / 加 helper / 加分支等 git diff 能表达的多行 hunk).
+# 命名规范: NNNN-描述.patch, 按字典序逐个 apply.
+PATCHES_DIR = Path(__file__).resolve().parent / "patches"
 
 
 # 规则：(相对 HERMES_ROOT 的路径, 原字符串, 新字符串, 说明)
@@ -591,6 +605,126 @@ def verify() -> int:
 
 
 # ============================================================
+# apply_patches: 重打 patches/ 目录下的 .patch 文件
+# ============================================================
+#
+# 5/19 BL-HERMES-PATCH-AUTOMATION 设计:
+#   场景: 像 RULES 那样自动维护我们对 hermes 上游的非品牌代码改动 (比如 CORS 修复).
+#         RULES 适合单行字符串字面量替换, 多行代码块 / 加常量 / 加 helper 函数
+#         那种结构化改动用 git diff -> .patch 文件更好.
+#
+#   工具: 用 `patch -p1` 命令而不是 `git apply` — 前者 fuzzy matching 抗上游小改动,
+#         上下文略偏一两行还能成功 (git apply 是严格的, 一格不对就拒).
+#
+#   幂等检测: `patch -R --dry-run` 等价于"能否反向 apply" -> "是否已经 apply 过".
+#         apply 前先这么测一下, 已 apply 就跳过, 跟 RULES 的 _check_already_patched
+#         同 pattern.
+#
+#   命名规范: patches/NNNN-描述.patch (4 位数字前缀方便排序, 描述用 kebab-case).
+
+def apply_patches(action: str) -> int:
+    """对 patches/ 目录下所有 .patch 文件做 action.
+
+    action:
+        "apply"   真的打 patch (幂等: 已 apply 的跳过)
+        "revert"  反向 apply (幂等: 没 apply 的跳过)
+        "verify"  检查每个 patch 是否还在 (apply 后状态), 缺的 fail
+        "dry-run" 只测试能否 apply, 不真写文件
+
+    返回失败的 patch 个数 (0 = OK).
+    """
+    if not PATCHES_DIR.exists():
+        return 0
+
+    patches = sorted(PATCHES_DIR.glob("*.patch"))
+    if not patches:
+        return 0
+
+    print()
+    print(f"=== Catfish code patches ({action}) ===")
+    print(f"目录: {PATCHES_DIR}")
+    print(f"共 {len(patches)} 个 patch")
+    print()
+
+    fails = 0
+    for p in patches:
+        # 1. 检查是否已 apply: reverse dry-run 能过 = patch 已在文件里
+        already_applied = subprocess.run(
+            ["patch", "-p1", "-R", "--dry-run", "-i", str(p)],
+            cwd=HERMES_ROOT, capture_output=True, text=True
+        ).returncode == 0
+
+        if action == "apply":
+            if already_applied:
+                print(f"  DONE   {p.name} (已 apply)")
+                continue
+            r = subprocess.run(
+                ["patch", "-p1", "-i", str(p)],
+                cwd=HERMES_ROOT, capture_output=True, text=True,
+            )
+            if r.returncode == 0:
+                print(f"  PATCH  {p.name}")
+            else:
+                # patch 工具失败 — 通常是上游改了文件让锚点对不上
+                err = (r.stderr or r.stdout).strip().splitlines()
+                tail = err[-3:] if err else ["(no stderr)"]
+                print(f"  FAIL   {p.name}: {' | '.join(tail)}")
+                fails += 1
+
+        elif action == "revert":
+            if not already_applied:
+                print(f"  SKIP   {p.name} (没 apply, 不用 revert)")
+                continue
+            r = subprocess.run(
+                ["patch", "-p1", "-R", "-i", str(p)],
+                cwd=HERMES_ROOT, capture_output=True, text=True,
+            )
+            if r.returncode == 0:
+                print(f"  REVERT {p.name}")
+            else:
+                err = (r.stderr or r.stdout).strip().splitlines()
+                tail = err[-3:] if err else ["(no stderr)"]
+                print(f"  FAIL   {p.name}: {' | '.join(tail)}")
+                fails += 1
+
+        elif action == "verify":
+            # 验证 patch 还在 — 等价于 reverse dry-run 成功
+            if already_applied:
+                print(f"  OK     {p.name}")
+            else:
+                print(f"  MISS   {p.name} (没 apply, 需要 --apply)")
+                fails += 1
+
+        elif action == "dry-run":
+            # 看会不会 apply (注意: 已 apply 的会 fail, 所以加 already_applied 短路)
+            if already_applied:
+                print(f"  DONE   {p.name} (已 apply, dry-run 跳过)")
+                continue
+            r = subprocess.run(
+                ["patch", "-p1", "--dry-run", "-i", str(p)],
+                cwd=HERMES_ROOT, capture_output=True, text=True,
+            )
+            if r.returncode == 0:
+                print(f"  WOULD  {p.name} (apply 能成功)")
+            else:
+                err = (r.stderr or r.stdout).strip().splitlines()
+                tail = err[-3:] if err else ["(no stderr)"]
+                print(f"  FAIL   {p.name}: {' | '.join(tail)}")
+                fails += 1
+
+        else:
+            print(f"  ERROR  unknown action {action!r}")
+            fails += 1
+
+    print()
+    if fails == 0:
+        print(f"✓ {len(patches)} 个 patch 全部 {action} 成功")
+    else:
+        print(f"❌ {fails}/{len(patches)} 个 patch {action} 失败")
+    return fails
+
+
+# ============================================================
 # install_hooks: 在 ~/.hermes/hermes-agent/.git/hooks/ 安装自动重 patch 钩子
 # ============================================================
 #
@@ -767,12 +901,17 @@ def main() -> int:
         return 1
 
     if args.revert:
-        return revert()
+        rc = revert()
+        # 同时反向重打代码 patch (CORS 等). 即使 RULES revert 失败也跑, 否则 hermes 半干净.
+        rc_p = apply_patches("revert")
+        return rc if rc != 0 else (0 if rc_p == 0 else 1)
     if args.verify:
         print(f"=== Catfish brand verify ===")
         print(f"目标目录：{HERMES_ROOT}")
         print()
-        return verify()
+        rc = verify()
+        rc_p = apply_patches("verify")
+        return rc if rc != 0 else (0 if rc_p == 0 else 1)
     if args.install_hooks:
         print(f"=== 装 catfish git hooks ===")
         print(f"目标目录：{HERMES_ROOT}")
@@ -787,7 +926,10 @@ def main() -> int:
     print(f"目标目录：{HERMES_ROOT}")
     print(f"备份后缀：{BACKUP_SUFFIX}")
     print()
-    return apply(dry_run=not args.apply)
+    rc = apply(dry_run=not args.apply)
+    # 跑完字符串规则再跑代码 patch. apply 模式真打, 否则 dry-run.
+    rc_p = apply_patches("apply" if args.apply else "dry-run")
+    return rc if rc != 0 else (0 if rc_p == 0 else 1)
 
 
 if __name__ == "__main__":

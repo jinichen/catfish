@@ -1,0 +1,54 @@
+diff --git a/gateway/platforms/api_server.py b/gateway/platforms/api_server.py
+index 809d6cd8a..353c40112 100644
+--- a/gateway/platforms/api_server.py
++++ b/gateway/platforms/api_server.py
+@@ -671,9 +671,37 @@ class APIServerAdapter(BasePlatformAdapter):
+             pass
+         return "hermes-agent"
+ 
++    # Tauri 2 desktop webview origins — same-machine local apps (Companion,
++    # any other Tauri client). Always allowed regardless of cors_origins
++    # config because:
++    #   - macOS / Linux Tauri 2 webview reports Origin: tauri://localhost
++    #   - Windows Tauri 2 webview reports Origin: http://tauri.localhost
++    #   - These origins can never be reached by a remote browser tab (the
++    #     custom scheme / .localhost is intercepted by the OS / Tauri runtime),
++    #     so allowing them does not widen the attack surface for the API
++    #     server bound to 127.0.0.1.
++    # BL-HERMES-API-CORS-FIX (5/19): Catfish Companion (Tauri 2) was getting
++    # "Load failed" on fetch to http://127.0.0.1:8642/v1/chat/completions
++    # because the preflight OPTIONS was 403'd by the strict allowlist.
++    _TAURI_ORIGINS = ("tauri://localhost", "http://tauri.localhost")
++
++    def _is_tauri_origin(self, origin: str) -> bool:
++        return origin in self._TAURI_ORIGINS
++
+     def _cors_headers_for_origin(self, origin: str) -> Optional[Dict[str, str]]:
+         """Return CORS headers for an allowed browser origin."""
+-        if not origin or not self._cors_origins:
++        if not origin:
++            return None
++
++        # Tauri desktop webview — always allowed (see _TAURI_ORIGINS comment).
++        if self._is_tauri_origin(origin):
++            headers = dict(_CORS_HEADERS)
++            headers["Access-Control-Allow-Origin"] = origin
++            headers["Vary"] = "Origin"
++            headers["Access-Control-Max-Age"] = "600"
++            return headers
++
++        if not self._cors_origins:
+             return None
+ 
+         if "*" in self._cors_origins:
+@@ -696,6 +724,10 @@ class APIServerAdapter(BasePlatformAdapter):
+         if not origin:
+             return True
+ 
++        # Tauri desktop webview — always allowed (see _TAURI_ORIGINS comment).
++        if self._is_tauri_origin(origin):
++            return True
++
+         if not self._cors_origins:
+             return False
+ 
