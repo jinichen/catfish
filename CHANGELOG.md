@@ -5298,6 +5298,18 @@ SOUL.md §606 三选一铁律 (扩展 5/13 BL-REMINDER 段):
 
 - **BL-COMPANION-YAML-MERGE** (#2 new): 实盘鸿波按我贴的 `cat > ~/.catfish/companion.yaml <<EOF` 覆盖了 yaml, 把 `oidc:` 段冲掉, 登录挂"OIDC 配置错: 自动生成默认 yaml 后仍读不到, 内部 bug". 老逻辑 `ensure_default_yaml` 只看 `path.exists()` 早返, 文件存在但缺 oidc 段不补. 改 `append_default_oidc_if_missing`: serde_yaml 解析顶层 mapping 看是否有 `oidc` key, 没有就追加默认 oidc 段, **不动现有其他段** (email/endpoints/agent/tts)
 
+#### F. 长效 service token (hermes daemon 不再每小时挂)
+
+- **BL-HERMES-AUTH-LONGLIVED** (#3 new) **P0**: 实盘鸿波在 微信 ClawBot 跑邮件查询时撞 401 invalid_token. 多轮排查后定位真因 — hermes config 里 `api_key` 是 **user access_token** (1h TTL), Companion 登录拿到后拷给 hermes, 一小时后过期, 没人值守, 整个 hermes daemon 哑火. 跟客户场景"单机部署 / 偶尔晚上跑批"的预期完全对不上.
+  - **修法**: 走 OAuth 2.0 **client_credentials grant** (RFC 6749 §4.4) — hermes daemon = 服务身份, 不是人身份, 本来就该用 service token
+  - `routes.py` `_handle_client_credentials` 加 per-client TTL: 从 `client.service_token_ttl_seconds` 读, 默认 1h, **cap 365 天** (防 yaml 写 99999 年), floor 60s (防 5 秒 token 一发就过期)
+  - `clients.py` `IdentityClient` dataclass 加 `service_token_ttl_seconds: int | None`, `ClientRegistry.reload()` 读 yaml 时 int-parse 容错 (字符串 / 0 / None → fallback 默认)
+  - `config/clients.yaml` `hermes-cli` 加 `service_token_ttl_seconds: 2592000` (30 天) — 30 天足够覆盖一般运维周期, 太长又给 secret rotation 留空间
+  - `scripts/mint-hermes-service-token.sh` 一键脚本: `POST /token` → 拿 30 天 access_token → 解析 → 写 `~/.hermes/config.yaml` 的 `providers.*.api_key` (python+pyyaml 安全写, 备份 `.bak.YYYYMMDD-HHMMSS`, 只动 `catfish` provider 不动 OpenAI/Anthropic key). 支持 `--dry-run`, `CLIENT_SECRET` 交互式不进 history
+  - `docs/HERMES-014-UPGRADE-RUNBOOK.md` 加段: "升级后立即跑 mint 脚本 + cron 每月续 token" + user/service token 区别表
+  - **6 个新单测** (`test_client_credentials.py`): per-client TTL 30 天 / cap 365 天 / floor 60 秒 / 没配 fallback 1h / 非数字 fallback / 0 fallback. 全 18 测过. 真 prod clients.yaml + 真 demo secret 端到端 smoke: `expires_in=2592000`, `payload.exp - iat = 2592000s = 30 days`, `sub=client:hermes-cli`, `token_use=service` ✓
+  - **不动**: gateway 验签链路 (oidc.py 同公钥同 audience 同 `token_use in (id, access, service)`, service token 直接接受). audit 走 client-level (department=infra) 跟 user-level 隔离, 跟之前 dev_token 行为一致
+
 ### 实盘踩坑 (5/18)
 
 - **AS string literal 不接受 raw 0x1f/0x1e** — Python f-string interpolate 进去 osascript 直接挂. 修法: AS 端用 `character id 31` 重建. (踩了 2 个 round 才定位: 第一轮位置 145, 第二轮位置 497, 第三轮位置 215, 最后砍 `default account` 整段才彻底过)
@@ -5334,5 +5346,83 @@ SOUL.md §606 三选一铁律 (扩展 5/13 BL-REMINDER 段):
 - BL-NEMOTRON-XML-TOOLCALL (#47): LiteLLM XML inline tool call 不兼容 (跟 SOFT-HANDOFF 互补, 长期解)
 - BL-RBAC-DAY8 (#70) E2E + 客户接入手册
 - macOS 邮件 e2e 真机验证 (5 账号 Mail.app + 1 Foxmail QQ 已验证 list / accounts 跨客户端跑通; read / draft 待实盘)
-- GitHub Actions CI 收红 (实盘日志显 jinichen/catfish 5/17 23:16 CI + Security 各挂一个)
+- GitHub Actions CI 收红 (实盘日志显 jinichen/catfish 5/17 23:16 CI + Security 各挂一个; CI 红等 6/1 GitHub Actions 续费)
+
+---
+
+### 5/18 下半段补单 (晚上 7 项 ship — 鸿波"接着干完"指令一锅做完)
+
+主线: WeChat 邮件演示成功 + 11 封邮件归类输出后, 鸿波拍板"接着干完", 把 #1-#4 backlog
++ 实盘暴露的 3 个 UX bug 一并解, 防留尾巴.
+
+#### G. catfish-identity 长效 service token (BL-HERMES-AUTH-LONGLIVED, P0)
+
+- **背景**: WeChat ClawBot 邮件查询撞 401 invalid_token. 多轮排查后定位真因 — hermes config 里 `api_key` 是 **user access_token** (1h TTL), Companion 登录拿到后拷给 hermes, 1h 后过期, 单机部署没人值守, 整个 daemon 哑火. 跟"单机部署 / 偶尔晚上跑批"客户预期完全对不上
+- **修法**: 走 OAuth 2.0 **client_credentials grant** (RFC 6749 §4.4) — hermes daemon = 服务身份不是人身份, 本来就该用 service token
+- `central/identity-server/src/catfish_identity/routes.py`: `_handle_client_credentials` 加 per-client TTL (从 `client.service_token_ttl_seconds` 读, 默认 1h, **cap 365 天**, **floor 60s**)
+- `central/identity-server/src/catfish_identity/clients.py`: `IdentityClient` dataclass 加 `service_token_ttl_seconds: int | None`, yaml int-parse 容错 (字符串/0/None → fallback)
+- `config/clients.yaml`: `hermes-cli` 加 `service_token_ttl_seconds: 2592000` (30 天)
+- `scripts/mint-hermes-service-token.sh` 一键脚本: POST /token → 30 天 access_token → 写 `~/.hermes/config.yaml` 的 `providers.*.api_key` (Python+PyYAML 安全写, 备份, 只动 catfish provider). `--dry-run` + `CLIENT_SECRET` 交互输入不进 history. cron 友好
+- `docs/HERMES-014-UPGRADE-RUNBOOK.md` 加"长效 Service Token" 段 + user/service token 区别表
+- **6 个新单测** (`test_client_credentials.py`): 30 天 TTL / cap 365 天 / floor 60s / 默认 1h / 非数字 fallback / 0 fallback. 真 prod yaml + demo secret 端到端 smoke: `expires_in=2592000`, JWT `exp - iat = 30 days`, `sub=client:hermes-cli`, `token_use=service` ✓
+
+#### H. 邮件 CLI 三个 UX 严重 bug (实盘暴露)
+
+- **BL-EMAIL-LIST-ADAPTER-FIELD**: `catfish-email list --json | jq 'group_by(.adapter)'` 全是 null. `_msg_to_dict(m)` 不带 adapter 字段, 跨 adapter 调试不能用. 修: 加 `adapter_name` 可选参数, msgs 跟踪 `(adapter, Message)` 元组. `_cmd_list/search/read` 三处全改. 表格输出加"客户端" 列
+- **BL-EMAIL-ACCOUNT-CROSS-ADAPTER-CRASH** **P0**: `catfish-email list --account "Google"` Apple Mail 那侧找到 Google, Foxmail 没 "Google" profile, `_db_path` 拼空路径 sqlite open 漏 FileNotFoundError 不在 EmailAdapterError 体系 → 整命令崩溃. 修: foxmail `_resolve_account` 显式校验 profile 存在抛 DataNotFoundError; `_cmd_list/search` 再加 `except (FileNotFoundError, OSError, sqlite3.Error)` 兜底防御
+- **BL-EMAIL-MARK-READ** **P0**: 点开邮件后客户端那边状态不变. 完整链路接通:
+  - `adapters/base.py` `EmailAdapter.mark_read(id, read=True)` 抽象方法 (默认 NotSupportedError)
+  - `adapters/apple_mail.py` `_AS_MARK_READ` 模板 (`set read status of m to true/false`) + 同 `_AS_GET_MESSAGE` 的 id-lookup 逻辑 (integer 主, string fallback). EMLX fallback 模式拒 (Mail.app 重启会覆盖)
+  - `foxmail_db.py` `open_db_writable()` + `mark_message_read(conn, mailid, read)` `UPDATE mailinfo SET readstat WHERE mailid` (WAL + 2s timeout, Foxmail 并发不撞死)
+  - `adapters/foxmail_mac.py` `mark_read()` 解 id 验证账号/mailid 整数, 错抛 DataNotFoundError
+  - `__main__.py` `catfish-email read` 默认带 mark-as-read, `--no-mark-read` opt-out; 新 `catfish-email mark-read` 子命令 (按前缀路由 + `--unread` 反向)
+  - `commands/email.rs` + `lib.rs` + `lib/tauri.ts`: `email_mark_read` Tauri 命令 + `emailMarkRead` JS wrapper
+  - `EmailTab.tsx`: 点开邮件后乐观更新 `items[i].is_read=true`, 列表圆点立即消失
+
+#### I. 实盘 UX 修 (鸿波拷我占位符示例命令暴露)
+
+- **BL-EMAIL-APPLEMAIL-INVALID-INDEX**: Apple Mail `-1719 无效的索引` (account name 错) 老报"AppleScript 失败 (exit=1)..." 用户看不懂. 修: `_run_osascript` 翻译成"Mail.app 找不到这账号. 内部账号名 ≠ 邮箱地址 (jini.chen@icloud.com 对应 'iCloud'). 用 `accounts --json` 看真实名." 中英 -1719 都识别
+- **BL-EMAIL-ID-FORMAT-UX**: `read --id "..."` 占位符让 adapter 漏 ValueError 直接 Traceback. `_cmd_read / _cmd_mark_read` catch ValueError → 友好提示"用 `catfish-email list --json` 拷完整 id". 返码 2 区分 3 (不存在)
+- **BL-EMAIL-MARK-READ-MSG**: `mark-read` 按前缀路由失败时报"跨 1 个客户端没找到"误导. 改: target_adapter 路由失败 → "[adapter_name] 邮件不存在: ..."
+- **BL-EMAIL-APPLEMAIL-UNREAD-OLDESTFIRST** (真 bug): AS `messages of mb` 默认 oldest-first, `--limit 1 --unread` 老 loop 在前 N 封老 read 邮件耗尽 limit 才碰到 unread → 返空. 修: AS 端用 `whose read status is false` 过滤 + 倒序遍历 (新→旧) 取最新 limitN
+- **BL-EMAIL-ID-EMPTY-SENTINEL**: `$(... | jq -r '.[0].id')` 空 list 返"null" 字面量, CLI 跑 adapter loop 报"非法 id" 困惑. CLI 入口 sentinel check (null/undefined/none/空) → "邮件 id 不能为空, 用 `jq -r '.[0].id // empty'`"
+
+#### J. hermes auto_continue 同错 89 次硬上限 (BL-HERMES-AUTO-CONTINUE-LIMIT)
+
+- 背景: 鸿波报 hermes agent loop 撞同 tool 同 error 89 次烧 token. tool_retry_hint 注入 hint 但 LLM 不听
+- 修: `tool_retry_hint.py` 加 `should_hard_cap(messages)` + `build_hard_cap_abort_response(model, tool, err, count)` — 连续 5 次同 tool 失败 → gateway **跳过 LLM 调用**, 合成 `finish_reason=stop` + 无 tool_calls 的 assistant response, hermes agent loop 见 stop 自然退出
+- `app.py` `_apply_pre_invoke_middleware` 接 hard cap check, 优先 inject_hint. usage tokens=0 不算 quota
+- **7 新单测**: 5 阈值 / 10 次也 hit / 中间 tool 成功重置链 / 不同 tool 不累计 / 响应 shape 兼容 OpenAI / token=0
+
+#### K. oauth.rs 注释跟实现对齐 (BL-OAUTH-STORAGE-COMMENT-FIX)
+
+- BL-FIX32 (5/9) 把 token 存储从 macOS Keychain 改成 `~/.catfish/oauth/<name>` 文件 (unsigned dev binary 写 Keychain silent fail), 但 docstring + 注释 11 处仍说 "Keychain" 误导后来者
+- 修: 顶部 flow 图 / `run_login_flow` step 6/7 / `try_load_session` / `current_access_token` / `logout` 注释全改 "token 文件 (~/.catfish/oauth/)". 保留 BL-FIX32 历史 block (准确解释为啥从 Keychain 切走). 函数名 `save_to_keyring` / `load_from_keyring` / `KEYRING_USERNAME_*` 沿用 (注释已说明语义改了, callers 不动)
+
+#### L. Companion auto re-login (BL-COMPANION-AUTO-RELOGIN)
+
+- 背景: 老逻辑 `useAuth` 只在 startup `whoami` 一次, token 1h 期间过期不检测, 员工撞 401 才被动 reauth (浏览器弹无前兆), UX 差
+- `hooks/useAuth.ts`: 加周期 (60s) `expires_at` 检查 → `nearExpiry` (< 5min) / `expired` (< 0) / `reauthing` 三 flag 暴露. 距过期 < 1min **自动触发 `login()`** 静默续登 (catfish-identity 已登录态 cookie 在, OAuth flow 秒过). dev_token 模式 expires_at = +365 天, 不打扰
+- `components/AuthBanner.tsx`: 加三层状态展示 — 蓝"🔄 正在续登..." / 红"🔒 登录已过期 [重新登录]" / 黄"⏰ 即将过期 [现在续登]". 老 dev_token warning 保留
+- `lib/me.ts` `fetchWithAuth` 401 silent reauth 成功后 broadcast `window` 事件 `catfish:auth-refreshed`. `useAuth` 加 listener 自动刷新 whoami → React state 跟上新 expires_at, LoginGate / Banner / DevUserSwitcher 全同步
+
+### 5/18 测试净增 (下半段)
+
+- identity-server: **129/129** (+6 BL-HERMES-AUTH-LONGLIVED, 全过)
+- email-agent: **83 → 113** (+30: 7 CLI adapter 字段 / 7 跨 adapter 韧性 / 12 mark-read / 3 UX / 1 -1719 翻译)
+- llm-gateway tool_retry_hint: **16 → 23** (+7 hard cap)
+- companion: `tsc --noEmit` clean
+- **合计 +43 单测, 0 回归**
+
+### 5/18 下半段重要决策
+
+- **service token 默认 30 天上限 365**: 客户单机部署没 secret rotation 压力, 30 天覆盖一般运维周期; 365 天硬上限防 yaml 写 99999 年这种长期凭据
+- **hermes hard cap = 5**: 给 LLM 看到 hint + 试改思路的余量, 仍卡死才停. 跟 hint 软提示分层 — hint 改思路, hard cap 兜底
+- **auto re-login 阈值: warn 5min + auto 1min**: warn 早提醒员工有时间手动续, 自动 1min 兜底无感续 (catfish-identity 已登录 cookie 会让 OAuth flow 秒过)
+- **EmailAdapter.mark_read 是 base 抽象**: 默认 NotSupportedError, 让未来 IMAP / Outlook adapter 不强制实现 (只读 adapter 仍可工作)
+- **Apple Mail AS `whose read status is false` 过滤优先于 Python 后过滤**: 防 oldest-first 索引让 `--limit N --unread` 漏未读
+
+### 5/18 commit / push (本机, 沙箱 lock)
+
+预计一锅 commit: `BL-HERMES-AUTH-LONGLIVED + BL-EMAIL-{LIST-ADAPTER-FIELD,ACCOUNT-CROSS-ADAPTER-CRASH,MARK-READ,APPLEMAIL-INVALID-INDEX,ID-FORMAT-UX,APPLEMAIL-UNREAD-OLDESTFIRST,ID-EMPTY-SENTINEL} + BL-HERMES-AUTO-CONTINUE-LIMIT + BL-OAUTH-STORAGE-COMMENT-FIX + BL-COMPANION-AUTO-RELOGIN`
 

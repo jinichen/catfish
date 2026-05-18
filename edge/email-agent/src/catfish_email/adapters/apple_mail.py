@@ -123,23 +123,32 @@ tell application "Mail"
     set unreadOnly to {UNREAD_ONLY}
     set acc to first account whose name of it is accName
     set mb to my resolveInbox(acc, folderName)
-    set msgs to (messages of mb)
+    -- 5/18 BL-EMAIL-APPLEMAIL-UNREAD-OLDESTFIRST: Mail.app `messages of mb` 默认按
+    -- 索引返 (oldest-first 通常 = 按收到时间正序). 老逻辑 loop 内手判 `unreadOnly`
+    -- + early exit by limitN, 限制低时 (--limit 1) 可能把 100 封老 read 全扫了
+    -- 才碰到第一封 unread, 但 limit 已经 0 → 返空. 改成 AS 端 `whose` 提前过
+    -- 滤; 加 `(date received desc)` 排序拿最新.
+    if unreadOnly then
+        set msgs to (messages of mb whose read status is false)
+    else
+        set msgs to (messages of mb)
+    end if
+    set total to count of msgs
     set out to ""
     set i to 0
-    repeat with m in msgs
+    -- 从最后一封倒着遍历 (最新) — Mail.app 索引顺序通常是收到时间正序,
+    -- 倒序取就是按时间逆序拿最新的 limitN 封.
+    repeat with idx from total to 1 by -1
         if i >= limitN then exit repeat
-        set skipIt to false
-        if unreadOnly and (read status of m) is true then set skipIt to true
-        if not skipIt then
-            set msgId to (id of m) as string
-            set subj to (subject of m) as string
-            set sndr to (sender of m) as string
-            set dt to my isoDate(date received of m)
-            set readSt to "1"
-            if (read status of m) is false then set readSt to "0"
-            set out to out & msgId & FS & subj & FS & sndr & FS & dt & FS & readSt & FS & folderName & RS
-            set i to i + 1
-        end if
+        set m to item idx of msgs
+        set msgId to (id of m) as string
+        set subj to (subject of m) as string
+        set sndr to (sender of m) as string
+        set dt to my isoDate(date received of m)
+        set readSt to "1"
+        if (read status of m) is false then set readSt to "0"
+        set out to out & msgId & FS & subj & FS & sndr & FS & dt & FS & readSt & FS & folderName & RS
+        set i to i + 1
     end repeat
     return out
 end tell
@@ -282,6 +291,50 @@ tell application "Mail"
     set folderName to name of mailbox of foundMsg
 
     return subj & FS & sndr & FS & dt & FS & toStr & FS & ccStr & FS & folderName
+end tell
+"""
+
+# mark_read: 5/18 BL-EMAIL-MARK-READ. 同 _AS_GET_MESSAGE 的 id-lookup pattern,
+# 找到 message 后 `set read status of m to READ_FLAG`. 不返字段, 只返 "OK" / 异常.
+_AS_MARK_READ = """
+tell application "Mail"
+    set accName to "{ACCOUNT}"
+    set targetIdStr to "{MSG_ID}"
+    set readFlag to {READ_FLAG}
+
+    set acc to first account whose name of it is accName
+    try
+        set targetIdNum to (targetIdStr as integer)
+    on error
+        set targetIdNum to missing value
+    end try
+
+    set foundMsg to missing value
+    repeat with mb in mailboxes of acc
+        if targetIdNum is not missing value then
+            try
+                set m to (first message of mb whose id is targetIdNum)
+                set foundMsg to m
+                exit repeat
+            end try
+        else
+            try
+                repeat with m in messages of mb
+                    if (id of m as string) is targetIdStr then
+                        set foundMsg to m
+                        exit repeat
+                    end if
+                end repeat
+                if foundMsg is not missing value then exit repeat
+            end try
+        end if
+    end repeat
+    if foundMsg is missing value then
+        error "MESSAGE_NOT_FOUND" number 8001
+    end if
+
+    set read status of foundMsg to readFlag
+    return "OK"
 end tell
 """
 
@@ -466,6 +519,18 @@ def _run_osascript(
         if "Application isn't running" in err or "(-600)" in err or "isn't running" in err_lower:
             raise ClientNotRunningError(
                 "Mail.app 没在跑. 先打开 Mail 再调 catfish-email.",
+            )
+        # 5/18 BL-EMAIL-APPLEMAIL-INVALID-INDEX (-1719): "不能获得 account 1
+        # whose name = X 无效的索引". 真因是 id 里塞的 account name 在 Mail.app
+        # 找不到 (jini.chen@icloud.com 这种邮箱地址 ≠ Mail 内部账号名 "iCloud").
+        # 翻译成友好提示 + 引导走 list_accounts 拿真实名.
+        if "-1719" in err or "无效的索引" in err or "Invalid index" in err:
+            raise DataNotFoundError(
+                "Apple Mail 找不到这个账号 (id 里的 account name 不对). "
+                "Mail.app 内部账号名跟邮箱地址可能不同 "
+                "(比如 jini.chen@icloud.com 对应的内部名是 'iCloud'). "
+                "用 `catfish-email accounts --json` 看真实账号名, "
+                "或直接从 `catfish-email list --json` 拷完整 id."
             )
         raise EmailAdapterError(
             f"AppleScript 失败 (exit={result.returncode}): {err[:300]}",
@@ -970,6 +1035,34 @@ class AppleMailAdapter(EmailAdapter):
                     os.unlink(p)
                 except OSError:
                     pass
+
+    def mark_read(self, message_id: str, *, read: bool = True) -> None:
+        """5/18 BL-EMAIL-MARK-READ: AS `set read status of m to true/false`.
+
+        EMLX fallback 路径不实现 — emlx 文件状态由 Mail.app 维护, 直接改文件
+        Mail.app 不刷新会出"看着改了重启又回去"假象. EMLX 模式下报 NotSupportedError.
+        """
+        if self._use_emlx_fallback:
+            # 不啃 emlx 文件状态 (Mail.app 重启会覆盖)
+            from .base import NotSupportedError
+            raise NotSupportedError(
+                "Apple Mail EMLX fallback 模式不支持 mark_read — "
+                "Mail.app 必须开着才能持久化 read status"
+            )
+
+        account_name, msg_id = self._unpack_id(message_id)
+        script = (
+            _AS_MARK_READ
+            .replace("{ACCOUNT}", _escape_as_string(account_name))
+            .replace("{MSG_ID}", _escape_as_string(msg_id))
+            # AS boolean 字面量: true / false (小写)
+            .replace("{READ_FLAG}", "true" if read else "false")
+        )
+        out = _run_osascript(script)
+        if out.strip() != "OK":
+            raise EmailAdapterError(
+                f"mark_read: AS 返非 OK ({out[:120]!r})"
+            )
 
     def search(
         self,

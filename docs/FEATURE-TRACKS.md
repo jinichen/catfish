@@ -264,8 +264,8 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 
 ### Phase 2 · 五一 sprint 完整 ship Phase 2 后端
 
-#### #6 RBAC [Phase 2, 75%]  ★ 5/2 大幅推进
-> 三角色 (admin/manager/employee) + 部门隔离 + Dashboard 角色化.
+#### #6 RBAC [Phase 2, 80%]  ★ 5/2 大幅推进, 5/18 service token 长效化
+> 三角色 (admin/manager/employee) + 部门隔离 + Dashboard 角色化 + 服务身份独立 token 链.
 - ✅ Permission Enum (8 维度) + ROLE_PERMISSIONS 矩阵
 - ✅ require_permission FastAPI 依赖 (401/403)
 - ✅ users.role + managed_departments + effective_role()
@@ -276,9 +276,12 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 - ✅ /api/me 端点 + useMe hook
 - ✅ dev_users.yaml 多账号 + DevUserSwitcher 黄条 (7 测试账号切换)
 - ✅ 21 单测过 (rbac 16 + dev_token 5)
+- ✅ **5/14 client_credentials grant + clients.yaml 服务身份注册 (OAuth 2.0 RFC 6749 §4.4)**
+- ✅ **5/18 BL-HERMES-AUTH-LONGLIVED: per-client TTL 配置, hermes-cli 30 天 token + cap 365 天 + floor 60 秒 + 6 新单测 + mint 脚本 + runbook**
 - ⬜ 实际接到所有路由 (现只 quota / audit / me) · 0.5 周
 - ⬜ Manager 改本部门 quota PUT 端点 (现 read-only) · 1 周
 - ⬜ Admin 全局聚合卡 · 0.5 周
+- ⬜ service token rotation 端点 + audit who-rotated · 0.5 周
 
 #### #7 Quota [Phase 2, 100%]  ★ 5/2 完整 ship
 > 三维滑动窗口 (用户/模型/部门) + 实时 chat 接通 + manager UI.

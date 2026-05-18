@@ -122,6 +122,34 @@ def open_db(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
+def open_db_writable(db_path: Path) -> sqlite3.Connection:
+    """打开 messages.db, 读写模式 (5/18 BL-EMAIL-MARK-READ 用).
+
+    跟只读路径分开, 调用方明确知道这次是写. Foxmail 在跑也能并发写
+    (SQLite WAL 模式), 但要短 timeout 防 Foxmail 大批量写时阻塞我们.
+    """
+    if not db_path.exists():
+        raise FileNotFoundError(f"Foxmail messages.db 不存在: {db_path}")
+    conn = sqlite3.connect(str(db_path), timeout=2.0)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def mark_message_read(
+    conn: sqlite3.Connection, mailid: int, read: bool = True
+) -> bool:
+    """更新 mailinfo.readstat. 返回 True = 改了, False = 没找到这 mailid.
+
+    Foxmail Mac 1.5+ schema: readstat=1 已读, 0 未读 (实测).
+    """
+    cur = conn.execute(
+        "UPDATE mailinfo SET readstat = ? WHERE mailid = ?",
+        (1 if read else 0, mailid),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
 def list_folders(conn: sqlite3.Connection) -> list[FoxmailFolder]:
     """列所有文件夹 (含子文件夹)。"""
     rows = conn.execute(

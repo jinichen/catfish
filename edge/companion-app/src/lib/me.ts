@@ -137,6 +137,15 @@ export async function fetchWithAuth(
     // 401 → 触发 OAuth re-auth (弹浏览器)
     try {
       await invoke("auth_login");
+      // 5/18 BL-COMPANION-AUTO-RELOGIN: 通知 useAuth 刷新 — 不然 LoginGate /
+      // AuthBanner / DevUserSwitcher 的 state 还停在过期那一刻, 显错信息.
+      // 用 window event 而不是直接调 useAuth refresh 是因为 me.ts 是普通 module,
+      // 不在 React tree 里, 拿不到 hook. useAuth 自己挂 listener (下次改).
+      try {
+        window.dispatchEvent(new CustomEvent("catfish:auth-refreshed"));
+      } catch {
+        // 不支持 CustomEvent 的极老环境 (不太可能在 Tauri webview), silent
+      }
     } catch {
       // auth_login 失败 (用户关浏览器 / IdP 不可达) → 原 401 透传给 caller
       return resp;

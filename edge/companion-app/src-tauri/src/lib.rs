@@ -395,6 +395,8 @@ pub fn run() {
             commands::email::email_list_fetch,
             commands::email::email_read_message,
             commands::email::email_create_draft,
+            // BL-EMAIL-MARK-READ (5/18): 单独标已读/未读 (右键 / 批量场景)
+            commands::email::email_mark_read,
             // BL-COMPANION-EMAIL-TAB-STEP2 (5/18): 评级 badge 取数
             services::email_scheduler::email_urgency_map,
             // BL-E16 关系建立 (五一 sprint 5/3 晚): "鲶鱼对你的印象" 透明 + 清空

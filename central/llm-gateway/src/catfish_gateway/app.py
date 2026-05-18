@@ -49,7 +49,7 @@ import httpx  # noqa: E402
 import litellm  # noqa: E402
 from fastapi import Depends, FastAPI, HTTPException, Request  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
-from fastapi.responses import StreamingResponse  # noqa: E402
+from fastapi.responses import JSONResponse, StreamingResponse  # noqa: E402
 
 from . import quota as _quota_module  # noqa: E402  五一 sprint 5/2 收尾: chat 后写 quota_events
 from . import session_meta  # noqa: E402  BL-E16 关系建立: tick + inject 时间元
@@ -2569,6 +2569,25 @@ async def chat_completions(
     if not is_internal_call and not _lean and not _hints_disabled:
         # BL-A1.2: 连续多次同 tool 失败时换思路
         from . import tool_retry_hint  # noqa: PLC0415  lazy import
+        # 5/18 BL-HERMES-AUTO-CONTINUE-LIMIT: hard cap 优先于 soft hint.
+        # 鸿波实盘 hermes 不听 hint 闷头重试 89 次. 撞 5 次连续同 tool 失败 →
+        # gateway 合成 assistant abort 直接返客户端, 跳过 LLM 调用 (省 token +
+        # 强制退 agent loop). 跟 inject_hint 互补 (hint 给思路, hard cap 兜底).
+        hit, tool_name, error_summary = tool_retry_hint.should_hard_cap(body["messages"])
+        if hit:
+            count, _, _ = tool_retry_hint._detect_consecutive_failures(body["messages"])
+            synthetic = tool_retry_hint.build_hard_cap_abort_response(
+                model=body.get("model", "unknown"),
+                tool_name=tool_name,
+                error_summary=error_summary,
+                count=count,
+            )
+            logger.warning(
+                "BL-HERMES-AUTO-CONTINUE-LIMIT: 跳过 LLM 调用, 直接返合成 abort "
+                "(tool=%s consecutive=%d)", tool_name, count,
+            )
+            # 走跟 LLM 返同样的下游路径 (audit / response shape), 但不烧 token
+            return JSONResponse(synthetic)
         body["messages"] = tool_retry_hint.inject_tool_retry_hint(body["messages"])
 
         # BL-A1.3: "幻觉完成" hint

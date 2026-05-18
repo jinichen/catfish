@@ -112,6 +112,13 @@ pub async fn email_list_fetch(unread_only: bool, limit: Option<u32>) -> Result<S
 }
 
 /// 读单封邮件全文 (含 body_text / body_html / 附件元数据).
+///
+/// 5/18 BL-EMAIL-MARK-READ: CLI 的 `read` 子命令现在默认自动标已读 (跟主流邮件
+/// 客户端一致). Companion 点开邮件 → catfish-email read → Mail.app/Foxmail
+/// 那侧的 read status 也跟着翻 → 用户下次回到客户端看到已读. 返回的 JSON
+/// is_read 字段也会反映新状态, 前端可乐观更新列表.
+/// 如果用户想"窥视但不标记", 走单独的 hermes prompt 让 LLM 解释为啥, 这里不
+/// 提供 --no-mark-read 开关 (Companion 是面向用户的客户端, 点了就是看了).
 #[tauri::command]
 pub async fn email_read_message(id: String) -> Result<String, String> {
     let bin = find_catfish_email().ok_or_else(|| {
@@ -125,6 +132,35 @@ pub async fn email_read_message(id: String) -> Result<String, String> {
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
         return Err(if stderr.is_empty() {
             format!("catfish-email read 退出码 {:?}", out.status.code())
+        } else {
+            stderr
+        });
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// 5/18 BL-EMAIL-MARK-READ: 单独标已读/未读 (不读正文).
+///
+/// 场景: 用户在 EmailTab 列表里右键 "标已读" / 批量勾选 → 标已读, 不需要拉
+/// 正文. 也用于已读后又想标回未读的反向操作.
+#[tauri::command]
+pub async fn email_mark_read(id: String, read: Option<bool>) -> Result<String, String> {
+    let bin = find_catfish_email().ok_or_else(|| {
+        "catfish-email CLI 没装".to_string()
+    })?;
+    let mut args: Vec<&str> = vec!["mark-read", "--id", &id, "--json"];
+    // 默认 read=true (标已读). false → --unread
+    if read == Some(false) {
+        args.push("--unread");
+    }
+    let out = Command::new(&bin)
+        .args(&args)
+        .output()
+        .map_err(|e| format!("catfish-email 调用失败: {e}"))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("catfish-email mark-read 退出码 {:?}", out.status.code())
         } else {
             stderr
         });

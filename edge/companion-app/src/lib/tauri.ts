@@ -256,6 +256,10 @@ export const emailListFetch = (unreadOnly: boolean, limit?: number) =>
   rawInvoke<string>("email_list_fetch", { unreadOnly, limit: limit ?? null });
 export const emailReadMessage = (id: string) =>
   rawInvoke<string>("email_read_message", { id });
+// BL-EMAIL-MARK-READ (5/18): 单独标已读 / 反向标未读. CLI read 默认已自动标,
+// 这个 wrapper 是给右键 "标已读" / 批量场景用 (不读正文).
+export const emailMarkRead = (id: string, read: boolean = true) =>
+  rawInvoke<string>("email_mark_read", { id, read });
 export interface CreateDraftArgs {
   to: string;
   subject: string;

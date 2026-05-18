@@ -193,15 +193,56 @@ class FoxmailMacAdapter(EmailAdapter):
             " SKILL 应把正文 quote 给员工, 让员工自己粘贴到 Foxmail 撰写窗口。"
         )
 
+    def mark_read(self, message_id: str, *, read: bool = True) -> None:
+        """5/18 BL-EMAIL-MARK-READ: 直接 UPDATE mailinfo.readstat.
+
+        Foxmail Mac 1.5+ 用 sqlite, 写 readstat=1 就持久化了, 下次启动 Foxmail
+        看到的就是已读. WAL 模式 + 2s timeout, Foxmail 并发跑时不会撞死.
+        """
+        account, mailid_str = self._unpack_id(message_id)
+        try:
+            mailid = int(mailid_str)
+        except ValueError as e:
+            raise DataNotFoundError(
+                f"Foxmail mailid 必须是整数, 收到: {mailid_str!r}"
+            ) from e
+        db_path = self._db_path(account)
+        if not db_path.exists():
+            raise DataNotFoundError(
+                f"账号 {account} 的 messages.db 不存在 ({db_path})"
+            )
+        with foxmail_db.open_db_writable(db_path) as conn:
+            ok = foxmail_db.mark_message_read(conn, mailid, read=read)
+        if not ok:
+            raise DataNotFoundError(
+                f"邮件 mailid={mailid} 不在 messages.db (账号 {account})"
+            )
+
     # ============================================================
     # 内部 helpers
     # ============================================================
 
     def _resolve_account(self, account: str | None) -> str:
-        if account is not None:
-            return account
-        accounts = self.list_accounts()
-        return accounts[0].address
+        """resolve 账号名. 不存在 → raise DataNotFoundError (EmailAdapterError 子类)
+        让上层 _cmd_list 的 try/except 兜得住, 避免单 adapter 缺账号让全命令挂.
+
+        5/18 BL-EMAIL-ACCOUNT-CROSS-ADAPTER-CRASH: 实盘 `catfish-email list
+        --account "Google"` 时, Apple Mail 找到了 Google 账号, Foxmail
+        没"Google" profile, 但 `_db_path("Google")` 直接拼出不存在路径
+        让 sqlite open 抛 FileNotFoundError 不在 EmailAdapterError 体系内 →
+        _cmd_list except 不接 → 整命令崩溃.
+        """
+        if account is None:
+            accounts = self.list_accounts()
+            return accounts[0].address
+        # 显式账号 — 验证存在 (Foxmail profile 目录名匹配)
+        if not self._db_path(account).exists():
+            raise DataNotFoundError(
+                f"Foxmail 没账号 {account!r} (在 {self.profiles_dir} 下没找到 "
+                f"对应 profile/messages.db). 跨客户端查询时这是预期 — "
+                f"--account 可能只在 Apple Mail 那一侧存在."
+            )
+        return account
 
     def _account_dir(self, account: str) -> Path:
         return self.profiles_dir / account

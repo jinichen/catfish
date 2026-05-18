@@ -100,6 +100,15 @@ export default function EmailTab() {
       .then((json) => {
         const parsed = JSON.parse(json) as FullMessage;
         setDetail(parsed);
+        // 5/18 BL-EMAIL-MARK-READ: CLI 已经在 Mail.app/Foxmail 那侧标已读了,
+        // 这里乐观更新本地 items 让列表立即反映 (无需重新拉 list_fetch).
+        // parsed.is_read 是 CLI 返回的最新状态; 若 CLI 标失败它会保持 false,
+        // 跟 stderr 警告对得上, UI 也不会乱标.
+        if (parsed.is_read) {
+          setItems((prev) =>
+            prev.map((it) => (it.id === selectedId ? { ...it, is_read: true } : it)),
+          );
+        }
       })
       .catch((e) => {
         setDetailError(e instanceof Error ? e.message : String(e));

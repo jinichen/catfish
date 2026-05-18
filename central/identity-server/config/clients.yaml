@@ -52,3 +52,8 @@ clients:
     department: infra
     role: service
     enabled: true
+    # 5/18 BL-HERMES-AUTH-LONGLIVED: 这个 client 的 service token 给 30 天.
+    # 默认 1h 对 hermes daemon 太短 — 每小时要重新 mint 一次, 单机部署没人值守.
+    # 30 天足够覆盖一般运维周期, 到期前用 mint-hermes-service-token.sh 续一次.
+    # routes.py cap 365 天上限.
+    service_token_ttl_seconds: 2592000

@@ -414,3 +414,109 @@ def test_message_id_round_trip(make_foxmail_profile):
         full = a.read_message(lm.id)
         assert full.id == lm.id
         assert full.subject == lm.subject
+
+
+# ============================================================
+# 5/18 BL-EMAIL-ACCOUNT-CROSS-ADAPTER-CRASH
+# ============================================================
+
+
+def test_list_messages_with_unknown_account_raises_data_not_found(make_foxmail_profile):
+    """实盘: --account "Google" 但 Foxmail 没 Google profile.
+
+    应该抛 DataNotFoundError (EmailAdapterError 子类), 让 _cmd_list 的
+    `except EmailAdapterError` 兜住, 而不是漏 FileNotFoundError 让全命令挂.
+    """
+    profiles, _ = make_foxmail_profile(
+        account="hongbo@x.com",
+        mails=[{"subject": "x", "folder_id": 1}],
+    )
+    a = FoxmailMacAdapter(profiles_dir=profiles)
+    with pytest.raises(DataNotFoundError) as exc:
+        a.list_messages(ListFilter(folder="Inbox", account="Google"))
+    # 错误消息提到账号名 + profiles_dir, 方便 debug
+    assert "Google" in str(exc.value)
+
+
+def test_list_messages_with_known_account_still_works(make_foxmail_profile):
+    """显式传存在的 account 不影响正常路径"""
+    profiles, account = make_foxmail_profile(
+        account="real@x.com",
+        mails=[{"subject": "y", "folder_id": 1}],
+    )
+    a = FoxmailMacAdapter(profiles_dir=profiles)
+    msgs = a.list_messages(ListFilter(folder="Inbox", account=account))
+    assert len(msgs) == 1
+    assert msgs[0].subject == "y"
+
+
+# ============================================================
+# 5/18 BL-EMAIL-MARK-READ
+# ============================================================
+
+
+def test_mark_read_flips_readstat(make_foxmail_profile):
+    """mark_read(id, read=True) → 数据库 readstat=1, 下次 list 拿到 is_read=True"""
+    profiles, account = make_foxmail_profile(
+        account="a@x.com",
+        mails=[{"subject": "unread", "folder_id": 1, "mailid": 1234, "is_read": False}],
+    )
+    a = FoxmailMacAdapter(profiles_dir=profiles)
+    # 初始 unread
+    before = a.list_messages(ListFilter(folder="Inbox"))
+    assert before[0].is_read is False
+    # mark read
+    a.mark_read(before[0].id, read=True)
+    # 再 list 应该已读
+    after = a.list_messages(ListFilter(folder="Inbox"))
+    assert after[0].is_read is True
+
+
+def test_mark_read_flip_back_to_unread(make_foxmail_profile):
+    """mark_read(id, read=False) 可以反向标回未读"""
+    profiles, _ = make_foxmail_profile(
+        account="a@x.com",
+        mails=[{"subject": "x", "folder_id": 1, "mailid": 999, "is_read": True}],
+    )
+    a = FoxmailMacAdapter(profiles_dir=profiles)
+    msgs = a.list_messages(ListFilter(folder="Inbox"))
+    assert msgs[0].is_read is True
+    a.mark_read(msgs[0].id, read=False)
+    msgs2 = a.list_messages(ListFilter(folder="Inbox"))
+    assert msgs2[0].is_read is False
+
+
+def test_mark_read_unknown_id_raises_data_not_found(make_foxmail_profile):
+    """不存在的 mailid → DataNotFoundError, 上层能兜得住"""
+    profiles, account = make_foxmail_profile(
+        account="a@x.com",
+        mails=[{"subject": "x", "folder_id": 1, "mailid": 1, "is_read": False}],
+    )
+    a = FoxmailMacAdapter(profiles_dir=profiles)
+    # 用一个不存在的 mailid (但格式合法)
+    fake_id = f"foxmail-mac|{account}|99999999"
+    with pytest.raises(DataNotFoundError):
+        a.mark_read(fake_id)
+
+
+def test_mark_read_unknown_account_raises_data_not_found(make_foxmail_profile):
+    """id 里 account 不存在 → DataNotFoundError"""
+    profiles, _ = make_foxmail_profile(
+        account="a@x.com",
+        mails=[{"subject": "x", "folder_id": 1, "mailid": 1}],
+    )
+    a = FoxmailMacAdapter(profiles_dir=profiles)
+    fake_id = "foxmail-mac|nobody@x.com|1"
+    with pytest.raises(DataNotFoundError):
+        a.mark_read(fake_id)
+
+
+def test_mark_read_non_integer_mailid_raises(make_foxmail_profile):
+    """mailid 不是整数 (老 id 格式 / typo) → DataNotFoundError 不是裸 ValueError"""
+    profiles, _ = make_foxmail_profile(
+        account="a@x.com",
+        mails=[{"subject": "x", "folder_id": 1, "mailid": 1}],
+    )
+    a = FoxmailMacAdapter(profiles_dir=profiles)
+    with pytest.raises(DataNotFoundError):
+        a.mark_read("foxmail-mac|a@x.com|not-an-integer")

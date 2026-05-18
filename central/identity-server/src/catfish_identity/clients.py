@@ -94,6 +94,10 @@ class IdentityClient:
     department: str = ""
     role: str = SERVICE_ROLE  # 固定 = "service", 防 yaml 误填别的
     enabled: bool = True
+    #: 5/18 BL-HERMES-AUTH-LONGLIVED: 单 client 自定义 service token TTL (秒).
+    #: None / 0 → 走默认 1h. hermes-cli 这种长期 daemon 配 2592000 (30 天).
+    #: routes.py 强制 cap 365 天上限.
+    service_token_ttl_seconds: int | None = None
 
     def supports_grant(self, grant_type: str) -> bool:
         """这个 client 允许这个 grant_type 吗.
@@ -213,6 +217,16 @@ class ClientRegistry:
                 )
                 role = SERVICE_ROLE
 
+            # 5/18 BL-HERMES-AUTH-LONGLIVED: 读 service_token_ttl_seconds (可选)
+            ttl_raw = raw.get("service_token_ttl_seconds")
+            try:
+                ttl_val: int | None = int(ttl_raw) if ttl_raw is not None else None
+            except (TypeError, ValueError):
+                logger.warning(
+                    "client %s service_token_ttl_seconds=%r 不是整数, 走默认", client_id, ttl_raw
+                )
+                ttl_val = None
+
             loaded[client_id] = IdentityClient(
                 client_id=client_id,
                 client_secret_hash=client_secret_hash,
@@ -223,6 +237,7 @@ class ClientRegistry:
                 department=str(raw.get("department") or ""),
                 role=role,
                 enabled=bool(raw.get("enabled", True)),
+                service_token_ttl_seconds=ttl_val,
             )
         self._clients = loaded
         logger.info(

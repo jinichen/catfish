@@ -47,9 +47,14 @@ logger = logging.getLogger("catfish.identity.routes")
 _CODE_TTL_SECS = 300
 #: access token / id token 有效期 (秒)
 _TOKEN_TTL_SECS = 3600
-#: service token (client_credentials grant) 有效期 (秒)
-#: 跟 user token 同 1h. 服务客户端每 expire 重换 — 1h 短到不需要 refresh_token.
-_SERVICE_TOKEN_TTL_SECS = 3600
+#: service token (client_credentials grant) 默认有效期 (秒).
+#: 5/18 BL-HERMES-AUTH-LONGLIVED 改: per-client 可在 clients.yaml 配
+#: `service_token_ttl_seconds` 覆盖. hermes-cli 这种 long-lived 服务建议 30 天
+#: (2592000), 单机部署没 secret rotation 压力. 客户端没指定走默认 1h.
+_SERVICE_TOKEN_TTL_SECS_DEFAULT = 3600
+#: service token 上限: 365 天. 防 clients.yaml 写 99999 年这种长期凭据. 客户
+#: 真要更长应该走 catfish-identity admin 走 audit 流, 不是 yaml 一行改完.
+_SERVICE_TOKEN_TTL_SECS_MAX = 365 * 24 * 3600
 #: service token 的 audience. gateway 验签时 aud=catfish-gateway 才接受.
 _SERVICE_TOKEN_AUDIENCE = "catfish-gateway"
 
@@ -734,6 +739,12 @@ def _handle_client_credentials(
     final_scopes = client.filter_scopes(requested_scopes)
     final_scope_str = " ".join(final_scopes)
 
+    # 5/18 BL-HERMES-AUTH-LONGLIVED: 每个 client 可在 clients.yaml 配
+    # service_token_ttl_seconds 覆盖默认 1h. hermes-cli 设 30 天 (2592000) 单机省心.
+    # cap 365 天上限防"100 年过期"this种凭据 (真要更长走 admin audit 不走 yaml).
+    ttl = getattr(client, "service_token_ttl_seconds", None) or _SERVICE_TOKEN_TTL_SECS_DEFAULT
+    ttl = max(60, min(int(ttl), _SERVICE_TOKEN_TTL_SECS_MAX))
+
     # 签 access_token (RS256, 跟 user token 同公钥 — gateway 不区分验签)
     claims = client.to_token_claims(final_scope_str)
     # 注意: signer.sign_id_token 会自己加 iat / exp / iss / sub / aud, 这里 claims
@@ -749,18 +760,18 @@ def _handle_client_credentials(
             "role": claims["role"],
             "department": claims["department"],
         },
-        ttl_seconds=_SERVICE_TOKEN_TTL_SECS,
+        ttl_seconds=ttl,
     )
     logger.info(
-        "token OK (client_credentials): client=%s scope=%s dept=%s",
-        client_id, final_scope_str, client.department,
+        "token OK (client_credentials): client=%s scope=%s dept=%s ttl=%ds",
+        client_id, final_scope_str, client.department, ttl,
     )
     return JSONResponse(
         {
             "access_token": access_token,
             # **不返 id_token** — service 调用没 user sub
             "token_type": "Bearer",
-            "expires_in": _SERVICE_TOKEN_TTL_SECS,
+            "expires_in": ttl,
             "scope": final_scope_str,
         }
     )

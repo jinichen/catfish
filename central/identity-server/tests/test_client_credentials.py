@@ -316,3 +316,141 @@ def test_authorization_code_missing_code(client: TestClient):
     })
     assert r.status_code == 400
     assert r.json()["detail"]["error"] == "invalid_request"
+
+
+# ── 5/18 BL-HERMES-AUTH-LONGLIVED: per-client TTL ───────────
+
+
+def _build_app_with_ttl(tmp_path, ttl_yaml: str) -> tuple[FastAPI, ClientRegistry]:
+    """构造一个 app, hermes-cli 在 yaml 里配 ttl_yaml (字符串, 比如 '2592000' / ''/-'badval')."""
+    users_yaml = tmp_path / "users.yaml"
+    users_yaml.write_text(f"""
+users:
+  - email: alice@x.com
+    password_hash: {hash_password("password123")}
+    name: Alice
+    department: sales
+""")
+    extra_ttl = f"\n    service_token_ttl_seconds: {ttl_yaml}" if ttl_yaml else ""
+    clients_yaml = tmp_path / "clients.yaml"
+    clients_yaml.write_text(f"""
+clients:
+  - client_id: hermes-cli
+    client_secret_hash: {_hash("hermes-secret")}
+    allowed_grant_types:
+      - client_credentials
+    allowed_scopes:
+      - chat.completions
+    department: infra
+    role: service
+    enabled: true{extra_ttl}
+""", encoding="utf-8")
+    keys_dir = tmp_path / "keys"
+    signer = JwtSigner(key_dir=keys_dir)
+    registry = UserRegistry(users_path=users_yaml)
+    client_registry = ClientRegistry(clients_path=clients_yaml)
+    fastapi_app = FastAPI()
+    fastapi_app.include_router(
+        make_router(
+            issuer="http://test:8998",
+            signer=signer,
+            registry=registry,
+            code_store=_CodeStore(),
+            client_registry=client_registry,
+        )
+    )
+    fastapi_app.state.signer = signer
+    return fastapi_app, client_registry
+
+
+def test_per_client_ttl_30_days(tmp_path):
+    """clients.yaml 配 service_token_ttl_seconds: 2592000 → expires_in = 30 天"""
+    app, _ = _build_app_with_ttl(tmp_path, "2592000")
+    c = TestClient(app)
+    r = c.post("/token", data={
+        "grant_type": "client_credentials",
+        "client_id": "hermes-cli",
+        "client_secret": "hermes-secret",
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["expires_in"] == 2592000
+
+    # JWT 内 exp - iat 也是 30 天
+    from cryptography.hazmat.primitives import serialization
+    signer = app.state.signer
+    pub_pem = signer._public_key.public_bytes(  # noqa: SLF001
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    payload = pyjwt.decode(
+        body["access_token"], pub_pem,
+        algorithms=["RS256"], audience="catfish-gateway",
+    )
+    assert payload["exp"] - payload["iat"] == 2592000
+
+
+def test_per_client_ttl_caps_at_one_year(tmp_path):
+    """clients.yaml 配 999999999 → 被 cap 到 365 天"""
+    app, _ = _build_app_with_ttl(tmp_path, "999999999")
+    c = TestClient(app)
+    r = c.post("/token", data={
+        "grant_type": "client_credentials",
+        "client_id": "hermes-cli",
+        "client_secret": "hermes-secret",
+    })
+    assert r.status_code == 200
+    assert r.json()["expires_in"] == 365 * 24 * 3600
+
+
+def test_per_client_ttl_floor_60_seconds(tmp_path):
+    """配太小 (5 秒) → 被 floor 到 60 秒, 防一个 token 还没用就过期"""
+    app, _ = _build_app_with_ttl(tmp_path, "5")
+    c = TestClient(app)
+    r = c.post("/token", data={
+        "grant_type": "client_credentials",
+        "client_id": "hermes-cli",
+        "client_secret": "hermes-secret",
+    })
+    assert r.status_code == 200
+    assert r.json()["expires_in"] == 60
+
+
+def test_per_client_ttl_default_when_unset(tmp_path):
+    """yaml 没配 → 走 1h 默认"""
+    app, _ = _build_app_with_ttl(tmp_path, "")
+    c = TestClient(app)
+    r = c.post("/token", data={
+        "grant_type": "client_credentials",
+        "client_id": "hermes-cli",
+        "client_secret": "hermes-secret",
+    })
+    assert r.status_code == 200
+    assert r.json()["expires_in"] == 3600
+
+
+def test_per_client_ttl_bad_value_falls_back_default(tmp_path):
+    """配非数字 (字符串 'abc') → 走默认, 不爆"""
+    app, _ = _build_app_with_ttl(tmp_path, '"abc"')  # yaml 字符串
+    c = TestClient(app)
+    r = c.post("/token", data={
+        "grant_type": "client_credentials",
+        "client_id": "hermes-cli",
+        "client_secret": "hermes-secret",
+    })
+    assert r.status_code == 200
+    # IdentityClient.service_token_ttl_seconds=None (parse 失败 fallback) → 默认 1h
+    assert r.json()["expires_in"] == 3600
+
+
+def test_per_client_ttl_zero_uses_default(tmp_path):
+    """配 0 → 视为'没配', 走默认 (避免发零 TTL 的废 token)"""
+    app, _ = _build_app_with_ttl(tmp_path, "0")
+    c = TestClient(app)
+    r = c.post("/token", data={
+        "grant_type": "client_credentials",
+        "client_id": "hermes-cli",
+        "client_secret": "hermes-secret",
+    })
+    assert r.status_code == 200
+    assert r.json()["expires_in"] == 3600

@@ -50,8 +50,15 @@ logger = logging.getLogger("catfish.gateway.tool_retry_hint")
 THRESHOLD_HINT = 2
 # 多少次后建议放弃 / 报员工 (升级 hint)
 THRESHOLD_GIVEUP = 3
+# 5/18 BL-HERMES-AUTO-CONTINUE-LIMIT: hard cap — 连续同 tool 同 error 这么多次,
+# gateway 强制中止 (返合成 assistant 文字, 无 tool_calls), 让 hermes agent loop
+# 一定退出. 防 LLM 完全无视 hint 闷头重试 89 次烧 token / 卡 chat.
+# 5 次足够给 LLM 看到 hint + 试着改思路, 还卡死就该停了.
+THRESHOLD_HARD_CAP = 5
 # 扫 messages 倒数多少条, 不扫整个历史 (性能 + 准确性, 远古失败不算).
-SCAN_TAIL_LEN = 10
+# 5/18 BL-HERMES-AUTO-CONTINUE-LIMIT: 从 10 调到 30, hard cap 5 需要看更远历史
+# (assistant+tool 一对算 2 条, 5 次失败要 10 条 + buffer).
+SCAN_TAIL_LEN = 30
 
 # 标志已经注入过 hint 的 marker, 防重复注入
 _HINT_MARKER = "[BL-A1.2 tool-retry-hint]"
@@ -247,3 +254,81 @@ def inject_tool_retry_hint(messages: list) -> list:
         "STRONG" if count >= THRESHOLD_GIVEUP else "LIGHT",
     )
     return new_messages
+
+
+# ============================================================
+# 5/18 BL-HERMES-AUTO-CONTINUE-LIMIT: hard cap
+# ============================================================
+
+# 合成 assistant 响应的内容 — 给员工看, 顺手解释为啥停了.
+_HARD_CAP_ABORT_TEMPLATE = (
+    "[gateway hard cap] 已连续 {n} 次调用 `{tool_name}` 失败, "
+    "为防止 agent loop 卡死浪费 token, 现强制停止重试. "
+    "最后一次错误: \n{error_summary}\n\n"
+    "建议: \n"
+    "1. 看一下错误信息, 是不是参数 / 路径 / 权限问题, 换思路再问.\n"
+    "2. 如果是工具自身 bug, 请告知技术支持.\n"
+    "3. 如果错误是网络 / 上游临时挂, 稍等再试.\n"
+)
+
+
+def should_hard_cap(messages: list) -> tuple[bool, str | None, str]:
+    """检测是否撞 hard cap. True → caller 应该合成 abort response, 不调 LLM.
+
+    Returns:
+        (hit, tool_name, error_summary): hit=True 时另两个有值
+    """
+    count, tool_name, error_summary = _detect_consecutive_failures(messages)
+    if count >= THRESHOLD_HARD_CAP:
+        return True, tool_name, error_summary
+    return False, None, ""
+
+
+def build_hard_cap_abort_response(
+    *, model: str, tool_name: str | None, error_summary: str, count: int,
+) -> dict:
+    """构造一个合成的 OpenAI-format chat completion 响应 (no tool_calls).
+
+    返 dict shape 跟 litellm response 兼容. caller 直接当 final response 返客户端,
+    hermes agent loop 收到 finish_reason=stop + 无 tool_calls → 自然退出.
+
+    Args:
+        model: 用来填响应的 model 字段, 跟客户端请求时一致
+        tool_name: 触发 hard cap 的 tool (打 log + 错误消息)
+        error_summary: 最近几次失败的拼接错误
+        count: 连续失败次数
+    """
+    import time
+
+    content = _HARD_CAP_ABORT_TEMPLATE.format(
+        n=count,
+        tool_name=tool_name or "<unknown>",
+        error_summary=error_summary,
+    )
+    logger.warning(
+        "BL-HERMES-AUTO-CONTINUE-LIMIT triggered: tool=%s consecutive=%d. "
+        "返合成 abort response 强制 hermes agent loop 退出.",
+        tool_name, count,
+    )
+    return {
+        "id": f"catfish-hardcap-{int(time.time() * 1000)}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": content,
+                # **不设 tool_calls** — hermes agent loop 看到 stop + 无 tool_calls 退出
+            },
+            "finish_reason": "stop",
+        }],
+        "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        },
+        # catfish 标记 — 调用方可识别这是合成的不是 LLM 真返
+        "x_catfish_synthetic": "hard_cap_abort",
+    }

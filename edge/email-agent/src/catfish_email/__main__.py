@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import sqlite3
 import sys
 from dataclasses import asdict, is_dataclass
 from typing import Any
@@ -70,6 +71,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_accounts(adapters, args)
     if args.cmd == "draft":
         return _cmd_draft(adapters, args)
+    if args.cmd == "mark-read":
+        return _cmd_mark_read(adapters, args)
 
     parser.print_help()
     return 2
@@ -111,7 +114,9 @@ def _cmd_list(adapters: list[EmailAdapter], args) -> int:
     BL-EMAIL-MULTI-ACCOUNT (同日): --account 没传 → 遍历每个 adapter 的所有账号;
     显式传 --account 还是单账号 (员工只看某个账号时用).
     """
-    msgs = []
+    # 5/18 BL-EMAIL-LIST-ADAPTER-FIELD: 跟踪每条 msg 来自哪个 adapter,
+    # 输出 JSON 时注入 adapter 字段, 方便 jq group_by(.adapter) / debug.
+    msgs: list[tuple[str, Any]] = []  # (adapter_name, Message)
     errors: list[str] = []
     for adapter in adapters:
         # 这个 adapter 里要查哪些账号
@@ -139,14 +144,21 @@ def _cmd_list(adapters: list[EmailAdapter], args) -> int:
                 limit=args.limit,
             )
             try:
-                msgs.extend(adapter.list_messages(filt))
+                msgs.extend((adapter.name, m) for m in adapter.list_messages(filt))
             except EmailAdapterError as e:
                 # 单账号失败不阻塞 (Gmail INBOX 名兼容性 / Foxmail 没数据等), 记下继续
                 errors.append(f"[{adapter.name}] {acc_addr}: {e}")
                 continue
+            except (FileNotFoundError, OSError, sqlite3.Error) as e:  # noqa: PERF203
+                # 5/18 BL-EMAIL-ACCOUNT-CROSS-ADAPTER-CRASH: 兜底防御 — adapter
+                # 没把底层 IO/DB 异常包成 EmailAdapterError 就直接漏到 _cmd_list.
+                # 单 adapter 漏的应该改 adapter (raise DataNotFoundError), 这里
+                # 兜一层保跨 adapter 流不挂. 真正想看哪挂用 --debug 看 traceback.
+                errors.append(f"[{adapter.name}] {acc_addr}: {type(e).__name__}: {e}")
+                continue
 
     # 跨账号按 date 降序合并, 再 trim 到 limit
-    msgs.sort(key=lambda m: m.date or "", reverse=True)
+    msgs.sort(key=lambda am: am[1].date or "", reverse=True)
     msgs = msgs[: args.limit]
 
     # 错误进 stderr, stdout 留 JSON / markdown (跨 adapter / 跨账号场景, 部分挂不阻塞)
@@ -154,22 +166,25 @@ def _cmd_list(adapters: list[EmailAdapter], args) -> int:
         print(f"⚠ {err}", file=sys.stderr)
 
     if args.json:
-        print(json.dumps([_msg_to_dict(m) for m in msgs], ensure_ascii=False, indent=2))
+        print(json.dumps(
+            [_msg_to_dict(m, adapter_name=a) for (a, m) in msgs],
+            ensure_ascii=False, indent=2,
+        ))
     else:
         if not msgs:
             print("(没邮件)")
             return 0
         print(f"# {args.folder}, {len(msgs)} 封 (跨 {len(adapters)} 个客户端)")
         print()
-        print("| 状态 | 时间 | 主题 | 发件人 |")
-        print("|------|------|------|--------|")
-        for m in msgs:
+        print("| 客户端 | 状态 | 时间 | 主题 | 发件人 |")
+        print("|--------|------|------|------|--------|")
+        for (a, m) in msgs:
             state = "○" if m.is_read else "●"
             star = "⭐" if False else ""  # star 字段在 list snippet 里没暴露, 暂留
             date = (m.date or "")[:16]
             subj = m.subject[:40].replace("|", "\\|")
             sender = m.sender[:30].replace("|", "\\|")
-            print(f"| {state}{star} | {date} | {subj} | {sender} |")
+            print(f"| {a} | {state}{star} | {date} | {subj} | {sender} |")
     return 0
 
 
@@ -183,6 +198,16 @@ def _cmd_read(adapters: list[EmailAdapter], args) -> int:
     账号挂 -1719. 改成按 id 前缀显式路由就不会跨 adapter 试错.
     """
     msg_id = args.id
+    # 5/18 BL-EMAIL-ID-EMPTY-SENTINEL: 防 shell 里 `$(... | jq -r '.[0].id')` 在空
+    # list 时给"null" 字符串 → 直接报无效 id 友好提示, 不浪费一次 adapter loop.
+    if not msg_id or msg_id.lower() in {"null", "undefined", "none"}:
+        _err(
+            f"邮件 id 不能为空 (收到 {msg_id!r}). "
+            "如果你跑的是 `$(catfish-email list ... | jq -r '.[0].id')` 而 jq 返了 null, "
+            "意味着 list 返了空数组 (没未读邮件). 用 `jq -r '.[0].id // empty'` "
+            "防 shell 拿到 'null' 字面量."
+        )
+        return 2
     # 探测前缀路由: 第一段匹配某 adapter.name → 该 adapter.
     # 注: id 保持完整传给 adapter — 各 adapter 的 _unpack_id 验证整段格式,
     # 不能剥前缀 (Foxmail 的 _unpack_id 要 3 段含前缀才认).
@@ -196,35 +221,71 @@ def _cmd_read(adapters: list[EmailAdapter], args) -> int:
                 target_adapter = a
                 break
 
+    adapter_used: str | None = None  # 5/18 BL-EMAIL-LIST-ADAPTER-FIELD
     if target_adapter is not None:
         try:
             m = target_adapter.read_message(msg_id)
+            adapter_used = target_adapter.name
         except DataNotFoundError as e:
             _err(f"邮件不存在 [{target_adapter.name}]: {e}")
             return 3
+        except ValueError as e:
+            # 5/18 BL-EMAIL-ID-FORMAT-UX: adapter 的 _unpack_id 漏 ValueError
+            # (员工手工拼 id 拼错 / 用了 list 文档里的占位符 "...")
+            _err(
+                f"邮件 id 格式不对: {e}. "
+                f"用 `catfish-email list --json` 拷完整 id, 不要手工拼."
+            )
+            return 2
         except EmailAdapterError as e:
             _err(f"[{target_adapter.name}] 读邮件失败: {e}")
             return 1
     else:
         # 无前缀 / 不认识的前缀 → 兼容老 2 段格式, 逐 adapter try
         last_err: Exception | None = None
+        last_value_err: ValueError | None = None
         m = None
         for adapter in adapters:
             try:
                 m = adapter.read_message(msg_id)
+                adapter_used = adapter.name
                 break
             except DataNotFoundError as e:
                 last_err = e
+                continue
+            except ValueError as e:
+                # 同上 UX 修
+                last_value_err = e
                 continue
             except EmailAdapterError as e:
                 _err(f"[{adapter.name}] 读邮件失败: {e}")
                 return 1
         if m is None:
+            # 所有 adapter 都因 id 格式不认 → 友好提示而不是 "不存在"
+            if last_err is None and last_value_err is not None:
+                _err(
+                    f"邮件 id 格式不对 (所有客户端都不认): {last_value_err}. "
+                    f"用 `catfish-email list --json` 拷完整 id."
+                )
+                return 2
             _err(f"邮件不存在 (跨 {len(adapters)} 个客户端都没找到): {last_err}")
             return 3
 
+    # 5/18 BL-EMAIL-MARK-READ: 读完默认自动标已读 (跟普通邮件客户端体验一致),
+    # --no-mark-read 关. 失败不阻塞输出 — 已经把正文拉回来了, 标已读挂 stderr 警告
+    # 不让 read 命令返非零. (Apple Mail EMLX fallback 模式不支持时 NotSupportedError
+    # 也走这条 stderr 路径.)
+    if getattr(args, "mark_read", False) and not m.is_read and adapter_used is not None:
+        owner_adapter = next((a for a in adapters if a.name == adapter_used), None)
+        if owner_adapter is not None:
+            try:
+                owner_adapter.mark_read(args.id, read=True)
+                m = m.__class__(**{**asdict(m), "is_read": True})  # 让 JSON 输出反映新状态
+            except EmailAdapterError as e:
+                print(f"⚠ [{adapter_used}] 标已读失败 (正文已读取): {e}", file=sys.stderr)
+
     if args.json:
-        print(json.dumps(_msg_to_dict(m), ensure_ascii=False, indent=2))
+        print(json.dumps(_msg_to_dict(m, adapter_name=adapter_used), ensure_ascii=False, indent=2))
     else:
         print(f"# {m.subject}")
         print()
@@ -246,13 +307,83 @@ def _cmd_read(adapters: list[EmailAdapter], args) -> int:
     return 0
 
 
+def _cmd_mark_read(adapters: list[EmailAdapter], args) -> int:
+    """5/18 BL-EMAIL-MARK-READ: 独立 subcommand. 不读正文只改状态.
+
+    跟 _cmd_read 同 id 路由 (按 client 前缀): foxmail_mac|... → foxmail adapter.
+    无前缀 → 逐个 try (兼容老 id).
+    """
+    msg_id = args.id
+    read = not args.unread
+
+    # 5/18 BL-EMAIL-ID-EMPTY-SENTINEL: 同 _cmd_read, 防 jq null
+    if not msg_id or msg_id.lower() in {"null", "undefined", "none"}:
+        _err(
+            f"邮件 id 不能为空 (收到 {msg_id!r}). "
+            "用 `jq -r '.[0].id // empty'` 防空 list 返 'null' 字面量."
+        )
+        return 2
+
+    target_adapter: EmailAdapter | None = None
+    if "|" in msg_id:
+        prefix = msg_id.split("|", 1)[0]
+        for a in adapters:
+            if a.name == prefix or a.name.replace("_", "-") == prefix:
+                target_adapter = a
+                break
+
+    if target_adapter is not None:
+        candidates = [target_adapter]
+    else:
+        candidates = list(adapters)
+
+    last_err: Exception | None = None
+    last_value_err: ValueError | None = None
+    for a in candidates:
+        try:
+            a.mark_read(msg_id, read=read)
+            if args.json:
+                print(json.dumps(
+                    {"adapter": a.name, "id": msg_id, "read": read, "ok": True},
+                    ensure_ascii=False,
+                ))
+            else:
+                print(f"✓ [{a.name}] 标{'已读' if read else '未读'}: {msg_id}")
+            return 0
+        except DataNotFoundError as e:
+            last_err = e
+            continue  # 试下个 adapter
+        except ValueError as e:
+            # 5/18 BL-EMAIL-ID-FORMAT-UX: id 格式错 (员工手抠 id / 用 "..." 占位符)
+            last_value_err = e
+            continue
+        except EmailAdapterError as e:
+            _err(f"[{a.name}] mark_read 失败: {e}")
+            return 1
+
+    # 5/18 BL-EMAIL-MARK-READ-MSG: 文案区分按前缀路由 vs 跨所有 adapter 搜.
+    # 按前缀精确路由时只在那一个客户端里找, 报错应该明说"在 X 客户端里没找到",
+    # 不是误导性的"跨 1 个客户端" (听着像广撒网失败实际是单点查无).
+    if last_err is None and last_value_err is not None:
+        _err(
+            f"邮件 id 格式不对: {last_value_err}. "
+            f"用 `catfish-email list --json` 拷完整 id."
+        )
+        return 2
+    if target_adapter is not None:
+        _err(f"[{target_adapter.name}] 邮件不存在: {last_err}")
+    else:
+        _err(f"邮件不存在 (跨 {len(candidates)} 个客户端都没找到): {last_err}")
+    return 3
+
+
 def _cmd_search(adapters: list[EmailAdapter], args) -> int:
     """5/18 BL-EMAIL-MULTI-CLIENT: 跨所有 adapter 搜, 合并 + 按 date 排."""
-    hits = []
+    hits: list[tuple[str, Any]] = []  # 5/18 BL-EMAIL-LIST-ADAPTER-FIELD: 同 _cmd_list
     errors: list[str] = []
     for adapter in adapters:
         try:
-            hits.extend(adapter.search(
+            hits.extend((adapter.name, m) for m in adapter.search(
                 args.query,
                 account=args.account,
                 folder=args.folder,
@@ -261,24 +392,31 @@ def _cmd_search(adapters: list[EmailAdapter], args) -> int:
         except EmailAdapterError as e:
             errors.append(f"[{adapter.name}] 搜索失败: {e}")
             continue
+        except (FileNotFoundError, OSError, sqlite3.Error) as e:  # noqa: PERF203
+            # 5/18 BL-EMAIL-ACCOUNT-CROSS-ADAPTER-CRASH 同 _cmd_list 兜底
+            errors.append(f"[{adapter.name}] 搜索失败 ({type(e).__name__}): {e}")
+            continue
 
-    hits.sort(key=lambda m: m.date or "", reverse=True)
+    hits.sort(key=lambda am: am[1].date or "", reverse=True)
     hits = hits[: args.limit]
 
     for err in errors:
         print(f"⚠ {err}", file=sys.stderr)
 
     if args.json:
-        print(json.dumps([_msg_to_dict(m) for m in hits], ensure_ascii=False, indent=2))
+        print(json.dumps(
+            [_msg_to_dict(m, adapter_name=a) for (a, m) in hits],
+            ensure_ascii=False, indent=2,
+        ))
     else:
         if not hits:
             print(f"(没找到 '{args.query}')")
             return 0
         print(f"# 搜索 '{args.query}', 找到 {len(hits)} 封 (跨 {len(adapters)} 个客户端)")
         print()
-        for m in hits:
+        for (a, m) in hits:
             state = "○" if m.is_read else "●"
-            print(f"- {state} [{m.date[:16]}] {m.subject}  ← {m.sender}")
+            print(f"- {state} [{a}] [{m.date[:16]}] {m.subject}  ← {m.sender}")
     return 0
 
 
@@ -324,6 +462,23 @@ def _build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--id", required=True, help="message id (从 list 输出里拿)")
     pr.add_argument("--json", action="store_true", default=True)
     pr.add_argument("--human", dest="json", action="store_false")
+    # 5/18 BL-EMAIL-MARK-READ: 默认读完自动标已读 (跟邮件客户端一致); --no-mark-read 关
+    pr.add_argument(
+        "--no-mark-read",
+        dest="mark_read",
+        action="store_false",
+        default=True,
+        help="不要把这封标记为已读 (默认: 读完自动标已读)",
+    )
+
+    # mark-read (5/18 BL-EMAIL-MARK-READ): 独立 subcommand 也能批量标 (不读正文)
+    pm = sub.add_parser("mark-read", help="标记邮件已读/未读")
+    pm.add_argument("--id", required=True, help="message id")
+    pm.add_argument(
+        "--unread", action="store_true", help="反向: 标回未读"
+    )
+    pm.add_argument("--json", action="store_true", default=True)
+    pm.add_argument("--human", dest="json", action="store_false")
 
     # search
     ps = sub.add_parser("search", help="全文搜索")
@@ -426,9 +581,17 @@ def _cmd_draft(adapters: list[EmailAdapter], args) -> int:
 # ============================================================
 
 
-def _msg_to_dict(m) -> dict[str, Any]:
-    """Message dataclass → dict, attachments 也展开。"""
-    d = asdict(m)
+def _msg_to_dict(m, adapter_name: str | None = None) -> dict[str, Any]:
+    """Message dataclass → dict, attachments 也展开.
+
+    5/18 BL-EMAIL-LIST-ADAPTER-FIELD: 可选 adapter_name 注入到 dict 里 (放最前面),
+    让 `jq group_by(.adapter)` / 调试 / 跨 adapter 联调能区分这条来自 Mail.app
+    还是 Foxmail. 老调用方不传 adapter_name 时不带 key (向后兼容).
+    """
+    d: dict[str, Any] = {}
+    if adapter_name is not None:
+        d["adapter"] = adapter_name
+    d.update(asdict(m))
     return d
 
 

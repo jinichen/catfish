@@ -221,6 +221,58 @@ pkill -f catfish-tool-bridge  # Companion 重启 respawn
    admin 应该 review 哪些 dept 该有 `computer_use` 权限 (不再隐含
    "Anthropic 用户 = computer_use 用户")。
 
+## 🔑 长效 Service Token (5/18 BL-HERMES-AUTH-LONGLIVED)
+
+升级到 0.14 后, hermes daemon 仍走 catfish-gateway. 之前 hermes 配的是
+**user access_token** (1h TTL), daemon 跑批撞过期, 每小时要客户 IT 重新
+拷一次 token — 单机部署没人值守, 体验差.
+
+5/18 起 catfish-identity 支持 **client_credentials grant** (RFC 6749 §4.4)
++ per-client TTL. `hermes-cli` 在 `clients.yaml` 配
+`service_token_ttl_seconds: 2592000` (30 天), mint 一次能用一个月.
+
+### 一次性 mint (升级后立即跑)
+
+```bash
+# 从 catfish 中央 ops 拿 client_secret (一次性给, 不留库)
+export CLIENT_SECRET='your-hermes-client-secret'
+
+# 默认连 localhost:8998. 远程 identity-server 用 IDENTITY_URL 覆盖.
+scripts/mint-hermes-service-token.sh
+# 输出:
+#   ✓ token OK
+#      expires_in : 2592000s (30 天)
+#      expires_at : 2026-06-17 14:32:11
+#      scope      : openid email profile chat.completions audit.write tools.invoke skills.run
+#   ✓ providers.catfish-gateway: eyJhbGc... → eyJhbGc...
+#   ✓ 写入 ~/.hermes/config.yaml
+
+# 重启 hermes daemon
+pkill -f 'hermes serve' 2>/dev/null
+nohup hermes serve > ~/.hermes/serve.log 2>&1 &
+```
+
+### 自动续 (推荐, 装一次跑一辈子)
+
+到期前重跑脚本即可. 装 cron 每月续:
+
+```bash
+# crontab -e
+0 3 1 * * CLIENT_SECRET=xxx /path/to/catfish/scripts/mint-hermes-service-token.sh >> ~/.hermes/mint.log 2>&1
+```
+
+### 区别 user token vs service token
+
+| 维度 | user access_token | service access_token |
+|---|---|---|
+| sub | email (e.g. alice@x.com) | `client:hermes-cli` |
+| token_use | `access` | `service` |
+| TTL | 1h (硬码) | 30 天 (per-client 配, cap 365 天) |
+| 适用 | Companion / 浏览器 SSO | hermes daemon / cron / a2a |
+| audit | user-level quota | client-level quota (department=infra) |
+
+gateway oidc.py 同一公钥验签, `token_use` 字段分流鉴权链 — 业务方无感知.
+
 ## 📞 升级期间联系
 
 升级 24 小时内有 catfish 中央 ops 待命:

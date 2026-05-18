@@ -1,0 +1,91 @@
+5/18 下半段 7 项 ship + 5 实盘 UX 修
+
+主题: 邮件 mark-as-read 全链路 + 长效 service token + auto re-login + hermes hard cap + UX 修
+
+== Identity / Auth ==
+* BL-HERMES-AUTH-LONGLIVED: catfish-identity 加 per-client TTL,
+  hermes-cli 30 天 service token. routes.py cap 365 天 / floor 60s,
+  clients.py 加 service_token_ttl_seconds 字段 + yaml int-parse 容错,
+  config/clients.yaml hermes-cli 加 2592000 (30 天).
+  scripts/mint-hermes-service-token.sh 一键 mint + 写 hermes config.yaml
+  + cron 友好. docs/HERMES-014-UPGRADE-RUNBOOK.md 加章节 + 区别表.
+  6 新单测 (test_client_credentials.py).
+* BL-OAUTH-STORAGE-COMMENT-FIX: oauth.rs 11 处 "Keychain" 注释改
+  "token 文件 (~/.catfish/oauth/)" 跟 BL-FIX32 (5/9) 实现对齐.
+  保留历史 block, 函数名沿用减改动.
+* BL-COMPANION-AUTO-RELOGIN: useAuth 加 expires_at 周期检查
+  (nearExpiry < 5min, auto-trigger < 1min), AuthBanner 加蓝/红/黄
+  三层状态 + 续登按钮, fetchWithAuth 401 silent reauth 后 broadcast
+  catfish:auth-refreshed event, useAuth listener 自动 refresh whoami.
+
+== Email Agent ==
+* BL-EMAIL-LIST-ADAPTER-FIELD: list --json 加 adapter 字段, jq
+  group_by(.adapter) 能用. _cmd_list/search/read msgs 跟踪
+  (adapter_name, Message) 元组. 表格输出加"客户端"列.
+* BL-EMAIL-ACCOUNT-CROSS-ADAPTER-CRASH (P0): --account "X" 让单
+  adapter 缺账号崩溃 → foxmail _resolve_account 校验抛
+  DataNotFoundError, _cmd_list/search 兜底 FileNotFoundError /
+  OSError / sqlite3.Error.
+* BL-EMAIL-MARK-READ (P0): 点开邮件不变已读全链路修
+  - adapters/base.py EmailAdapter.mark_read 抽象
+  - apple_mail.py _AS_MARK_READ + 同 _AS_GET_MESSAGE 的 id-lookup
+    (EMLX fallback 显式拒)
+  - foxmail_db.py open_db_writable + mark_message_read SQL
+  - foxmail_mac.py mark_read 解 id 验证抛 DataNotFoundError
+  - __main__.py: read 默认 mark-as-read, --no-mark-read opt-out,
+    新 mark-read 子命令 (按前缀路由 / --unread 反向)
+  - commands/email.rs + lib.rs + tauri.ts: email_mark_read 命令
+  - EmailTab.tsx 点开后乐观更新 is_read=true
+* 实盘 UX 修 (鸿波拷占位符示例命令暴露):
+  - BL-EMAIL-APPLEMAIL-INVALID-INDEX: -1719 翻译 (中英都识别)
+  - BL-EMAIL-ID-FORMAT-UX: ValueError → 友好提示 (返码 2 区分 3)
+  - BL-EMAIL-MARK-READ-MSG: 按前缀路由失败不再说"跨 1 个"
+  - BL-EMAIL-APPLEMAIL-UNREAD-OLDESTFIRST (真 bug): AS whose
+    read status is false 过滤 + 倒序遍历, 防 oldest-first 索引
+    让 --limit 1 --unread 漏未读
+  - BL-EMAIL-ID-EMPTY-SENTINEL: null/undefined/none/空 id sentinel
+
+== Gateway ==
+* BL-HERMES-AUTO-CONTINUE-LIMIT: tool_retry_hint.py 加 hard cap
+  (5 次连续同 tool 同 err → 合成 finish_reason=stop + 无 tool_calls
+  abort response, gateway 跳过 LLM 调用). app.py 接入 should_hard_cap
+  优先于 inject_hint. usage tokens=0 不算 quota.
+  SCAN_TAIL_LEN 10 → 30 (hard cap 5 需要看更远历史).
+  7 新单测 (TestHardCap class).
+
+== 测试 ==
+* identity-server: 129/129 (+6, 全过)
+* email-agent: 83 → 113 (+30: 7 adapter 字段 / 7 跨 adapter 韧性
+  / 12 mark-read / 3 UX / 1 -1719 翻译)
+* llm-gateway tool_retry_hint: 16 → 23 (+7 hard cap)
+* companion: tsc --noEmit clean
+* 合计 +43 单测, 0 回归
+
+== 修改文件 ==
+central/identity-server/src/catfish_identity/clients.py
+central/identity-server/src/catfish_identity/routes.py
+central/identity-server/config/clients.yaml
+central/identity-server/tests/test_client_credentials.py
+central/llm-gateway/src/catfish_gateway/tool_retry_hint.py
+central/llm-gateway/src/catfish_gateway/app.py
+central/llm-gateway/tests/test_tool_retry_hint.py
+edge/email-agent/src/catfish_email/__main__.py
+edge/email-agent/src/catfish_email/adapters/base.py
+edge/email-agent/src/catfish_email/adapters/apple_mail.py
+edge/email-agent/src/catfish_email/adapters/foxmail_mac.py
+edge/email-agent/src/catfish_email/foxmail_db.py
+edge/email-agent/tests/test_adapter_foxmail_mac.py
+edge/email-agent/tests/test_adapter_apple_mail.py
+edge/email-agent/tests/test_cli_main.py (新)
+edge/companion-app/src/hooks/useAuth.ts
+edge/companion-app/src/components/AuthBanner.tsx
+edge/companion-app/src/tabs/Email/EmailTab.tsx
+edge/companion-app/src/lib/me.ts
+edge/companion-app/src/lib/tauri.ts
+edge/companion-app/src-tauri/src/commands/email.rs
+edge/companion-app/src-tauri/src/lib.rs
+edge/companion-app/src-tauri/src/services/oauth.rs
+scripts/mint-hermes-service-token.sh (新)
+docs/HERMES-014-UPGRADE-RUNBOOK.md
+docs/FEATURE-TRACKS.md
+CHANGELOG.md

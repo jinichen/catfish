@@ -102,6 +102,37 @@ def test_run_osascript_missing_osascript_binary_raises():
             _run_osascript("anything")
 
 
+def test_run_osascript_invalid_index_1719_translates_to_friendly_error():
+    """5/18 BL-EMAIL-APPLEMAIL-INVALID-INDEX: -1719 (account 名找不到) 应该
+    翻译成 DataNotFoundError + 引导用 list_accounts 拿真实名, 不是原始 AS 报错."""
+    raw_err = (
+        "322:363: execution error: \"Mail\" 遇到一个错误: "
+        "不能获得\"account 1 whose name = \\\"jini.chen@icloud.com\\\"\". "
+        "无效的索引。 (-1719)"
+    )
+    with patch(
+        "subprocess.run",
+        return_value=_mock_completed_process(stderr=raw_err, returncode=1),
+    ):
+        with pytest.raises(DataNotFoundError, match="账号"):
+            _run_osascript("anything")
+
+
+def test_run_osascript_invalid_index_english_also_translated():
+    """英语 macOS 也认 'Invalid index' 文案"""
+    raw_err = (
+        "execution error: Mail got an error: "
+        "Can't get account 1 whose name = \"foo\". "
+        "Invalid index. (-1719)"
+    )
+    with patch(
+        "subprocess.run",
+        return_value=_mock_completed_process(stderr=raw_err, returncode=1),
+    ):
+        with pytest.raises(DataNotFoundError, match="账号"):
+            _run_osascript("anything")
+
+
 # ── _parse_records ──────────────────────────────────────
 
 

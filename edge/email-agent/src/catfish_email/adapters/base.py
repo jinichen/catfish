@@ -236,3 +236,26 @@ class EmailAdapter(ABC):
             f"{self.name} 不支持 create_draft (只读 adapter)。"
             f"建议 SKILL 把正文 quote 给员工, 让员工自己复制粘贴到客户端。"
         )
+
+    def mark_read(self, message_id: str, *, read: bool = True) -> None:
+        """把邮件标记为已读 / 未读. 在客户端那一侧持久化 (next launch 仍是这状态).
+
+        5/18 BL-EMAIL-MARK-READ. 默认实现 raise NotSupportedError — 不会写
+        邮件状态的客户端 (e.g. 纯只读 IMAP 镜像) 不必 override.
+
+        Apple Mail: AS `set read status of m to true`.
+        Foxmail Mac: SQL `UPDATE mailinfo SET readstat=1 WHERE mailid=?`.
+
+        Args:
+            message_id: 跟 read_message / list_messages 返的 id 同格式
+                (含 client 前缀: `apple_mail|...` / `foxmail-mac|...`).
+            read: True = 标已读 (默认), False = 标回未读.
+
+        Raises:
+            NotSupportedError: 子类不支持
+            DataNotFoundError: id 不存在
+            EmailAdapterError: 其它失败
+        """
+        raise NotSupportedError(
+            f"{self.name} 不支持 mark_read (只读 adapter)。"
+        )

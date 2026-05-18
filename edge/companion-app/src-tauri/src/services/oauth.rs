@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! Companion 启动
-//!   ↓ Keychain 找 access_token
+//!   ↓ token 文件 (~/.catfish/oauth/) 找 access_token
 //!   ├─ 有 + 没过期  → 用之
 //!   └─ 没有 / 过期 → 走 OAuth flow:
 //!        ↓ 起临时 HTTP server 监听 127.0.0.1:<random_port>
@@ -12,7 +12,7 @@
 //!        ↓ 员工登录, IdP redirect 回 cb URL with ?code=xxx
 //!        ↓ HTTP server 收到 code, 关掉
 //!        ↓ POST /token 换 id_token + access_token
-//!        ↓ 存 Keychain
+//!        ↓ 存 token 文件 (5/9 BL-FIX32: keychain → 文件, dev binary 适配)
 //!        ↓ Companion 用 access_token 调 gateway
 //! ```
 //!
@@ -284,7 +284,7 @@ pub fn dev_token_from_env() -> Option<String> {
 ///   3. 浏览器开 authorize URL
 ///   4. 等 callback 拿 code
 ///   5. POST /token 换 token
-///   6. 存 Keychain
+///   6. 存 token 文件 (~/.catfish/oauth/, BL-FIX32 5/9)
 ///   7. 返 AuthSession
 pub async fn run_login_flow(cfg: &OidcConfig) -> Result<AuthSession> {
     // 1. 生成 state
@@ -335,7 +335,7 @@ pub async fn run_login_flow(cfg: &OidcConfig) -> Result<AuthSession> {
         expires_at,
     };
 
-    // 7. 存 Keychain (access_token + id_token + session info)
+    // 7. 存 token 文件 (~/.catfish/oauth/, BL-FIX32 5/9): access_token + id_token + session info
     save_to_keyring(KEYRING_USERNAME_ACCESS, &token_resp.access_token)?;
     save_to_keyring(KEYRING_USERNAME_ID, &token_resp.id_token)?;
     save_to_keyring(
@@ -348,23 +348,23 @@ pub async fn run_login_flow(cfg: &OidcConfig) -> Result<AuthSession> {
 }
 
 /// Companion 启动时调. 优先级:
-///   1. Keychain 有未过期 access_token → 用之 (登录员工的真身份)
+///   1. token 文件有未过期 access_token → 用之 (登录员工的真身份)
 ///   2. CATFISH_DEV_TOKEN 设了 → 用 dev_token (没登录时的开发兜底)
 ///   3. 都没有 → 返 None, UI 弹登录
 ///
-/// BL-FIX28 (5/9): 优先级翻转. 老序列让 dev_token 比 keychain 优先, OIDC
+/// BL-FIX28 (5/9): 优先级翻转. 老序列让 dev_token 比 token 文件优先, OIDC
 /// 登录的员工 (chenhongbo@ffcs.cn) Companion 还是用 dev_token 调 gateway,
 /// gateway 解码 → 'dev-user@catfish.dev', quota / audit / chat 全挂虚构 user.
 /// 跟 me.ts BL-FIX26 的优先级对齐: 真 token 优先, env 兜底.
 pub fn try_load_session() -> Option<AuthSession> {
-    // 1. Keychain 找真登录态 (OIDC)
+    // 1. token 文件 (~/.catfish/oauth/, BL-FIX32) 找真登录态 (OIDC)
     if let Ok(Some(raw)) = load_from_keyring(KEYRING_USERNAME_USER_INFO) {
         if let Ok(session) = serde_json::from_str::<AuthSession>(&raw) {
             let now = chrono::Utc::now().timestamp();
             if session.expires_at > now {
                 return Some(session);
             }
-            log::info!("Keychain access_token 过期, fallback 到 dev_token / 弹登录");
+            log::info!("token 文件 access_token 过期, fallback 到 dev_token / 弹登录");
         }
     }
     // 2. dev_token 兜底 (没登录 / token 过期)
@@ -387,13 +387,13 @@ pub fn try_load_session() -> Option<AuthSession> {
 /// BL-FIX31 (5/9 鸿波诊断): catfish gateway OIDC validator 显式拒绝
 /// token_use=access 的真 access_token (auth/oidc.py:159 安全设计 — access_token
 /// 一般不该被当 id_token 用). catfish 这套把 id_token 当 gateway API auth,
-/// 所以 keychain 里要返 id_token. Tauri 命令名 auth_get_access_token 是沿用
+/// 所以 token 文件里要返 id_token. Tauri 命令名 auth_get_access_token 是沿用
 /// OAuth 习惯命名, 真实语义是 "gateway 收的那个 token".
 ///
-/// BL-FIX28 (5/9): 优先 Keychain, dev_token 兜底. 跟 try_load_session 同序.
+/// BL-FIX28 (5/9): 优先 token 文件, dev_token 兜底. 跟 try_load_session 同序.
 /// BL-FIX26 (me.ts) 翻转优先级前提是这个函数返真 OIDC token, 而不是 access_token.
 pub fn current_access_token() -> Option<String> {
-    // 1. Keychain id_token (OIDC 真登录的, gateway 接受)
+    // 1. token 文件 id_token (OIDC 真登录的, gateway 接受)
     if let Ok(Some(tok)) = load_from_keyring(KEYRING_USERNAME_ID) {
         if !tok.is_empty() {
             return Some(tok);
@@ -409,7 +409,7 @@ pub fn current_user_sub() -> Option<String> {
     try_load_session().map(|s| s.email)
 }
 
-/// 登出: 清 Keychain. dev_token 模式下不动 env (那是员工 explicit 设的).
+/// 登出: 清 token 文件 (~/.catfish/oauth/). dev_token 模式下不动 env (那是员工 explicit 设的).
 pub fn logout() -> Result<()> {
     let _ = delete_from_keyring(KEYRING_USERNAME_ACCESS);
     let _ = delete_from_keyring(KEYRING_USERNAME_ID);
