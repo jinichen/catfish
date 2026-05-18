@@ -5426,3 +5426,64 @@ SOUL.md §606 三选一铁律 (扩展 5/13 BL-REMINDER 段):
 
 预计一锅 commit: `BL-HERMES-AUTH-LONGLIVED + BL-EMAIL-{LIST-ADAPTER-FIELD,ACCOUNT-CROSS-ADAPTER-CRASH,MARK-READ,APPLEMAIL-INVALID-INDEX,ID-FORMAT-UX,APPLEMAIL-UNREAD-OLDESTFIRST,ID-EMPTY-SENTINEL} + BL-HERMES-AUTO-CONTINUE-LIMIT + BL-OAUTH-STORAGE-COMMENT-FIX + BL-COMPANION-AUTO-RELOGIN`
 
+---
+
+### 5/18 晚上 2.5 项 ship (鸿波实盘截图反馈推动)
+
+主题: EmailTab 截图 99 封邮件 0 badge / 0 删除 → 实盘补完邮件 UI 闭环 + Foxmail 删除踩坑 revert.
+
+#### M. 邮件优先级 badge 完整显示 (BL-EMAIL-URGENCY-BADGE)
+
+- **背景**: 鸿波截图 EmailTab 99 封邮件全无优先级标识. 双因:
+  1. scheduler 只评级 `diff 新邮件` (启动时建 baseline 跳过), 启动时已有的 99 封历史邮件永远没评级 → urgency_cache 空 → badge 不显
+  2. 老逻辑"中=不显省视觉" 让中等紧急也藏起来, 用户看不到任何 badge 误以为系统没干活
+- **修法**:
+  - `services/email_scheduler.rs` 加 `email_classify_now(items: Vec<EmailItemInput>)` Tauri 命令 — 前端 batch 评级一批邮件, 已 cache 跳过省 token, 返完整 cache map. LLM 调一次评 batch
+  - `lib/tauri.ts` 加 `emailClassifyNow` wrapper, `EmailItemInput` 兼容 list_fetch JSON shape (id/subject/sender/account?/date?/is_read?)
+  - `EmailTab.tsx`: 列表加载完后 effect 自动 batch 30 评级未评 id, 顺序 await 避免并发烧 quota
+  - badge 三色齐全: **急 (红)** / **中 (黄, 新加)** / **低 (灰)**. 老"中=不显" 改成显黄色 chip
+- **踩 Rust 编译错**: 我假设 EmailItem 有 `account/date/is_read` 字段, 真实只有 `id/subject/sender`. 修: map 构造只填三字段, EmailItemInput 多余字段加 `#[allow(dead_code)]`
+
+#### N. 邮件删除全链路 (BL-EMAIL-DELETE)
+
+- **背景**: 鸿波"少了删除邮件的能力". 全链路实现:
+  - `adapters/base.py` `EmailAdapter.delete_message(id)` 抽象 (默认 NotSupportedError)
+  - `adapters/apple_mail.py` `_AS_DELETE_MESSAGE` AS 模板 (`delete <msg>` = 移到 Trash, 跟员工按 ⌫ 同效果, 软删可恢复) + 同 `_AS_GET_MESSAGE` 的 id-lookup 逻辑 (integer 主 / string fallback). EMLX fallback 模式显式拒
+  - `__main__.py` `catfish-email delete --id <id>` 子命令 + `_cmd_delete` 按前缀路由, 返码 4 = NotSupported 区分 1/2/3. 6 个 sub-case: 路由成功 / Foxmail NotSupported / 未知 id / null / ValueError / 全 adapter NotSupported
+  - `commands/email.rs` + `lib.rs` + `tauri.ts`: `email_delete_message` Tauri 命令 + `emailDeleteMessage` JS wrapper
+  - `EmailTab.tsx`: 详情面板右上角加 🗑 红色调按钮. **两步点击确认** (window.confirm 在 Tauri WebView 不可靠): 第一次点 → "🗑 再次点击确认 (3s)" + 红色边框 + 加粗, 3s 内第二次点真删, 超时自动恢复初态. 删除成功 onDeleted callback 从 items 移除 + 清 selectedId, 不重拉 list_fetch
+  - 错误提示加大: 醒目红色框 + 不支持 adapter 时引导文案
+- **红线**: 永远软删 (移到 Trash 30 天可恢复), 永不彻底物理删. 跟主流邮件客户端 ⌫ 键行为对齐
+- **console log 诊断**: `[BL-EMAIL-DELETE] 调用 emailDeleteMessage <id>` + 成功/失败 log 方便实盘排查
+
+#### O. Foxmail 删除踩坑 + revert (BL-EMAIL-FOXMAIL-DELETE → BL-EMAIL-FOXMAIL-DELETE-REVERT)
+
+- **尝试**: 鸿波"这是因为 Foxmail 不支持吗?" → 我说接受这限制, 用户没接受, 我决定补 Foxmail 删除. 走 sqlite write 路径:
+  - `foxmail_db.py` 加 `open_db_writable` + `move_to_trash(conn, mailid)` — UPDATE mail_box_info SET mail_folderid = trash_id WHERE mail_id = mailid (跟 mark_read 同 sqlite write 模式)
+  - `foxmail_mac.py delete_message` 调 move_to_trash, 4 单测 (从 INBOX 消失到 Trash / 未知 mailid / 无 Trash folder / 非整数 mailid)
+- **实盘失败 (鸿波 22:xx)**: 重启 Foxmail 后**邮件回到 INBOX**. 真因: Foxmail IMAP 同步是 **server-as-source-of-truth**, 启动时本地 sqlite vs server 比对, server 那封还在 INBOX → 覆盖我们的本地 folder 改动. Foxmail Mac schema 没暴露"待同步操作" 队列表 (e.g. IMAP IDLE 推送队列), 没有可靠路径让 Foxmail 把删除推到 server
+- **revert (BL-EMAIL-FOXMAIL-DELETE-REVERT)**: 撤回 adapter delete_message 实现, 改回 raise NotSupportedError + 详细引导文案 ("Foxmail 没暴露删除 IPC, 我们试过直接动 sqlite 但 IMAP 同步会拉回 INBOX 让操作无效. 请打开 Foxmail 客户端自己删 — Foxmail 会通知 server, 下次 Companion 刷新看不到这封了"). `foxmail_db.move_to_trash()` **保留** 作 reference / 未来 Foxmail 出 IPC 可复用. 4 sqlite write 测试改回 1 NotSupportedError 测试 (验证错误消息含 "Foxmail 客户端" / "IMAP" 引导关键词)
+- **教训**: 走 sqlite write 改邮件状态在 IMAP 同步面前不可靠. mark_read 看着工作是 IMAP `\Seen` flag 同步行为容忍本地优先, 但 folder 改动 IMAP 严格要求 server-side. 长远要 Foxmail 暴露真 IPC, 或者走 GUI scripting (脆弱不做) 才能可靠
+
+### 5/18 全天最终测试统计
+
+- identity-server: **129/129** (+6)
+- email-agent: **83 → 120** (+37: 7 adapter 字段 / 7 跨 adapter 韧性 / 12 mark-read / 5 UX / 6 delete CLI / 1 Foxmail-delete-not-supported)
+- llm-gateway tool_retry_hint: **16 → 23** (+7 hard cap)
+- companion: tsc clean
+- **合计 +50 单测, 0 回归**
+
+### 5/18 全天 ship 总数
+
+**56 项 ship**:
+- 上半段 (24 项): 邮件 6 bug 一锅修 / Companion 视觉债务 (7 项) / Gateway Soft Handoff / 邮件简报 4-step / yaml merge bug
+- 下半段第一波 (7 项 BL): HERMES-AUTH-LONGLIVED / EMAIL-{LIST-ADAPTER-FIELD,ACCOUNT-CROSS-ADAPTER-CRASH,MARK-READ} / HERMES-AUTO-CONTINUE-LIMIT / OAUTH-STORAGE-COMMENT-FIX / COMPANION-AUTO-RELOGIN
+- 实盘 UX 修 (5 项): -1719 翻译 / ValueError 友好 / null sentinel / mark-read 文案 / AS unread-oldest-first
+- 邮件 UI 闭环 (3 项): URGENCY-BADGE / DELETE (Apple Mail) / FOXMAIL-DELETE (revert)
+
+### 5/18 关键架构决策再加
+
+- **Foxmail 走 sqlite write 不可靠**: 实盘验证 server-as-source-of-truth 在 IMAP 同步面前总赢, 本地 sqlite 任何 folder 改动都会被覆盖. 长远 Foxmail 删除只能等 IPC 或 GUI scripting (后者太脆弱). mark_read 走 sqlite 看着 OK 是 IMAP `\Seen` 同步语义容忍本地优先, 不代表所有 sqlite write 都安全 — folder 改动绝不行
+- **删除 = 软删 (移到 Trash)**: 红线对齐主流邮件客户端 ⌫ 键. **永不物理删** — 误操作 30 天内 Trash 可恢复. catfish AI 副手"远程触发" 比员工本地 ⌫ 误操作风险更大, 红线更要严守
+- **两步点击确认 > window.confirm**: Tauri WebView 不可靠. UI 内状态切换 + 3s 自动取消比系统 dialog 更可控, 也不打扰
+

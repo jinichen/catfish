@@ -139,6 +139,33 @@ pub async fn email_read_message(id: String) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
+/// 5/18 BL-EMAIL-DELETE: 把邮件移到客户端 Trash 文件夹 (软删, 不彻底).
+///
+/// Apple Mail: AS `delete <msg>` 移到 Trash, 跟员工按 ⌫ 同效果.
+/// Foxmail Mac: 不支持 (返 4 退出码, 提示员工去 Foxmail 自己删).
+///
+/// 红线: 永远不彻底物理删 — Trash 30 天内可恢复, 跟主流邮件客户端对齐.
+#[tauri::command]
+pub async fn email_delete_message(id: String) -> Result<String, String> {
+    let bin = find_catfish_email().ok_or_else(|| {
+        "catfish-email CLI 没装".to_string()
+    })?;
+    let out = Command::new(&bin)
+        .args(["delete", "--id", &id, "--json"])
+        .output()
+        .map_err(|e| format!("catfish-email 调用失败: {e}"))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        // 退出码 4 = 不支持的 adapter (Foxmail) — 错误消息含引导文案, 前端可直接显
+        return Err(if stderr.is_empty() {
+            format!("catfish-email delete 退出码 {:?}", out.status.code())
+        } else {
+            stderr
+        });
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
 /// 5/18 BL-EMAIL-MARK-READ: 单独标已读/未读 (不读正文).
 ///
 /// 场景: 用户在 EmailTab 列表里右键 "标已读" / 批量勾选 → 标已读, 不需要拉

@@ -73,6 +73,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_draft(adapters, args)
     if args.cmd == "mark-read":
         return _cmd_mark_read(adapters, args)
+    if args.cmd == "delete":
+        return _cmd_delete(adapters, args)
 
     parser.print_help()
     return 2
@@ -377,6 +379,81 @@ def _cmd_mark_read(adapters: list[EmailAdapter], args) -> int:
     return 3
 
 
+def _cmd_delete(adapters: list[EmailAdapter], args) -> int:
+    """5/18 BL-EMAIL-DELETE: 移邮件到客户端 Trash 文件夹 (软删).
+
+    跟 _cmd_mark_read 同 id 路由: 按前缀 → 单 adapter, 无前缀 → 逐 adapter try.
+    Foxmail Mac 不支持 → NotSupportedError → 友好提示让用户去客户端删.
+    """
+    from .adapters.base import NotSupportedError  # noqa: PLC0415
+
+    msg_id = args.id
+
+    # 5/18 BL-EMAIL-ID-EMPTY-SENTINEL: 同 _cmd_read, 防 jq null
+    if not msg_id or msg_id.lower() in {"null", "undefined", "none"}:
+        _err(
+            f"邮件 id 不能为空 (收到 {msg_id!r}). "
+            "用 `jq -r '.[0].id // empty'` 防空 list 返 'null' 字面量."
+        )
+        return 2
+
+    target_adapter: EmailAdapter | None = None
+    if "|" in msg_id:
+        prefix = msg_id.split("|", 1)[0]
+        for a in adapters:
+            if a.name == prefix or a.name.replace("_", "-") == prefix:
+                target_adapter = a
+                break
+
+    candidates = [target_adapter] if target_adapter is not None else list(adapters)
+    last_err: Exception | None = None
+    last_value_err: ValueError | None = None
+    last_not_supported: NotSupportedError | None = None
+    for a in candidates:
+        try:
+            a.delete_message(msg_id)
+            if args.json:
+                print(json.dumps(
+                    {"adapter": a.name, "id": msg_id, "deleted": True, "ok": True},
+                    ensure_ascii=False,
+                ))
+            else:
+                print(f"✓ [{a.name}] 已移到 Trash: {msg_id}")
+            return 0
+        except DataNotFoundError as e:
+            last_err = e
+            continue
+        except ValueError as e:
+            last_value_err = e
+            continue
+        except NotSupportedError as e:
+            # 这 adapter 不支持 (e.g. Foxmail Mac) — 记下试下个, 都不支持才报
+            last_not_supported = e
+            continue
+        except EmailAdapterError as e:
+            _err(f"[{a.name}] 删邮件失败: {e}")
+            return 1
+
+    if last_value_err is not None and last_err is None and last_not_supported is None:
+        _err(
+            f"邮件 id 格式不对: {last_value_err}. "
+            f"用 `catfish-email list --json` 拷完整 id."
+        )
+        return 2
+    if last_not_supported is not None and last_err is None:
+        # 路由到的 adapter 全是 NotSupportedError (典型: 用户传 foxmail-mac| id)
+        _err(
+            f"邮件所在的客户端不支持自动删除: {last_not_supported}. "
+            "请去客户端 (Foxmail / Outlook 等) 自己删."
+        )
+        return 4  # 区分: 4=不支持, 跟 1/2/3 都不同
+    if target_adapter is not None:
+        _err(f"[{target_adapter.name}] 邮件不存在: {last_err}")
+    else:
+        _err(f"邮件不存在 (跨 {len(candidates)} 个客户端都没找到): {last_err}")
+    return 3
+
+
 def _cmd_search(adapters: list[EmailAdapter], args) -> int:
     """5/18 BL-EMAIL-MULTI-CLIENT: 跨所有 adapter 搜, 合并 + 按 date 排."""
     hits: list[tuple[str, Any]] = []  # 5/18 BL-EMAIL-LIST-ADAPTER-FIELD: 同 _cmd_list
@@ -479,6 +556,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     pm.add_argument("--json", action="store_true", default=True)
     pm.add_argument("--human", dest="json", action="store_false")
+
+    # delete (5/18 BL-EMAIL-DELETE): 移邮件到客户端 Trash (软删, 不彻底)
+    pdel = sub.add_parser(
+        "delete",
+        help="把邮件移到客户端 Trash (软删 — Trash 30 天内可恢复)",
+    )
+    pdel.add_argument("--id", required=True, help="message id")
+    pdel.add_argument("--json", action="store_true", default=True)
+    pdel.add_argument("--human", dest="json", action="store_false")
 
     # search
     ps = sub.add_parser("search", help="全文搜索")

@@ -260,6 +260,10 @@ export const emailReadMessage = (id: string) =>
 // 这个 wrapper 是给右键 "标已读" / 批量场景用 (不读正文).
 export const emailMarkRead = (id: string, read: boolean = true) =>
   rawInvoke<string>("email_mark_read", { id, read });
+// BL-EMAIL-DELETE (5/18): 把邮件移到客户端 Trash 文件夹 (软删, 不彻底).
+// Apple Mail 支持; Foxmail Mac 不支持 (Promise reject 含友好提示).
+export const emailDeleteMessage = (id: string) =>
+  rawInvoke<string>("email_delete_message", { id });
 export interface CreateDraftArgs {
   to: string;
   subject: string;
@@ -282,6 +286,20 @@ export const emailCreateDraft = (args: CreateDraftArgs) =>
 /** id → "急" | "中" | "低" map, scheduler 后台评级缓存. */
 export const emailUrgencyMap = () =>
   rawInvoke<Record<string, string>>("email_urgency_map");
+
+/** BL-EMAIL-URGENCY-BADGE (5/18): 前端主动评级一批邮件 (历史邮件也能评).
+ * 已 cache 的跳过, 只评新 id. 返完整 cache map.
+ * 性能: 一次评 batch (LLM 调一次), 前端最好 batch <=30 避免 prompt 太长. */
+export const emailClassifyNow = (
+  items: Array<{
+    id: string;
+    subject: string;
+    sender: string;
+    account?: string;
+    date?: string;
+    is_read?: boolean;
+  }>,
+) => rawInvoke<Record<string, string>>("email_classify_now", { items });
 
 /** catfish-email list --json 单条 message 的 schema. 字段跟 base.py Message dataclass 对齐. */
 export interface EmailDigestItem {

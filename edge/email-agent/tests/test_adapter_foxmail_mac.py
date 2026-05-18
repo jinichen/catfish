@@ -520,3 +520,25 @@ def test_mark_read_non_integer_mailid_raises(make_foxmail_profile):
     a = FoxmailMacAdapter(profiles_dir=profiles)
     with pytest.raises(DataNotFoundError):
         a.mark_read("foxmail-mac|a@x.com|not-an-integer")
+
+
+# ============================================================
+# 5/18 BL-EMAIL-FOXMAIL-DELETE-REVERT: 撤回 sqlite write 实现
+# 实盘 (鸿波 5/18 22:xx): 重启 Foxmail 后邮件回到 INBOX, IMAP 同步覆盖.
+# foxmail_db.move_to_trash() 保留作 reference, adapter 这里抛 NotSupported.
+# ============================================================
+
+
+def test_delete_message_not_supported(make_foxmail_profile):
+    """Foxmail Mac delete_message 抛 NotSupportedError (sqlite write 被 IMAP 覆盖,
+    没有可靠的删除路径). 错误消息引导员工去 Foxmail 客户端自己删."""
+    profiles, account = make_foxmail_profile(
+        account="a@x.com",
+        mails=[{"subject": "x", "folder_id": 1, "mailid": 1}],
+    )
+    a = FoxmailMacAdapter(profiles_dir=profiles)
+    with pytest.raises(NotSupportedError) as exc:
+        a.delete_message(f"foxmail-mac|{account}|1")
+    # 错误消息引导用户
+    assert "Foxmail 客户端" in str(exc.value)
+    assert "IMAP" in str(exc.value)

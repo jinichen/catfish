@@ -1,91 +1,109 @@
-5/18 下半段 7 项 ship + 5 实盘 UX 修
+5/18 下半段 10 项 ship + 5 实盘 UX + Foxmail revert
 
-主题: 邮件 mark-as-read 全链路 + 长效 service token + auto re-login + hermes hard cap + UX 修
+主题: 邮件 UI 闭环 (优先级 badge + 删除) + 长效 service token + auto re-login
+       + hermes hard cap + UX 修 + Foxmail 删除 revert
 
 == Identity / Auth ==
 * BL-HERMES-AUTH-LONGLIVED: catfish-identity 加 per-client TTL,
   hermes-cli 30 天 service token. routes.py cap 365 天 / floor 60s,
-  clients.py 加 service_token_ttl_seconds 字段 + yaml int-parse 容错,
-  config/clients.yaml hermes-cli 加 2592000 (30 天).
-  scripts/mint-hermes-service-token.sh 一键 mint + 写 hermes config.yaml
-  + cron 友好. docs/HERMES-014-UPGRADE-RUNBOOK.md 加章节 + 区别表.
-  6 新单测 (test_client_credentials.py).
+  clients.py 加 service_token_ttl_seconds 字段 + yaml int-parse 容错.
+  scripts/mint-hermes-service-token.sh 一键 mint + 写 hermes config.
+  6 新单测.
 * BL-OAUTH-STORAGE-COMMENT-FIX: oauth.rs 11 处 "Keychain" 注释改
   "token 文件 (~/.catfish/oauth/)" 跟 BL-FIX32 (5/9) 实现对齐.
-  保留历史 block, 函数名沿用减改动.
 * BL-COMPANION-AUTO-RELOGIN: useAuth 加 expires_at 周期检查
   (nearExpiry < 5min, auto-trigger < 1min), AuthBanner 加蓝/红/黄
   三层状态 + 续登按钮, fetchWithAuth 401 silent reauth 后 broadcast
   catfish:auth-refreshed event, useAuth listener 自动 refresh whoami.
 
-== Email Agent ==
+== Email Agent (核心) ==
 * BL-EMAIL-LIST-ADAPTER-FIELD: list --json 加 adapter 字段, jq
-  group_by(.adapter) 能用. _cmd_list/search/read msgs 跟踪
-  (adapter_name, Message) 元组. 表格输出加"客户端"列.
+  group_by(.adapter) 能用.
 * BL-EMAIL-ACCOUNT-CROSS-ADAPTER-CRASH (P0): --account "X" 让单
-  adapter 缺账号崩溃 → foxmail _resolve_account 校验抛
-  DataNotFoundError, _cmd_list/search 兜底 FileNotFoundError /
+  adapter 缺账号崩溃 → DataNotFoundError + 兜底 FileNotFoundError /
   OSError / sqlite3.Error.
 * BL-EMAIL-MARK-READ (P0): 点开邮件不变已读全链路修
   - adapters/base.py EmailAdapter.mark_read 抽象
-  - apple_mail.py _AS_MARK_READ + 同 _AS_GET_MESSAGE 的 id-lookup
-    (EMLX fallback 显式拒)
+  - apple_mail.py _AS_MARK_READ AS 模板
   - foxmail_db.py open_db_writable + mark_message_read SQL
-  - foxmail_mac.py mark_read 解 id 验证抛 DataNotFoundError
-  - __main__.py: read 默认 mark-as-read, --no-mark-read opt-out,
-    新 mark-read 子命令 (按前缀路由 / --unread 反向)
-  - commands/email.rs + lib.rs + tauri.ts: email_mark_read 命令
-  - EmailTab.tsx 点开后乐观更新 is_read=true
-* 实盘 UX 修 (鸿波拷占位符示例命令暴露):
-  - BL-EMAIL-APPLEMAIL-INVALID-INDEX: -1719 翻译 (中英都识别)
-  - BL-EMAIL-ID-FORMAT-UX: ValueError → 友好提示 (返码 2 区分 3)
-  - BL-EMAIL-MARK-READ-MSG: 按前缀路由失败不再说"跨 1 个"
-  - BL-EMAIL-APPLEMAIL-UNREAD-OLDESTFIRST (真 bug): AS whose
-    read status is false 过滤 + 倒序遍历, 防 oldest-first 索引
-    让 --limit 1 --unread 漏未读
-  - BL-EMAIL-ID-EMPTY-SENTINEL: null/undefined/none/空 id sentinel
+  - __main__.py read 默认 mark-as-read, --no-mark-read opt-out,
+    新 mark-read 子命令
+  - commands/email.rs email_mark_read + EmailTab 乐观更新
+
+== Email UI 闭环 (实盘截图反馈) ==
+* BL-EMAIL-URGENCY-BADGE: 99 封邮件 0 badge 问题修
+  - services/email_scheduler.rs 加 email_classify_now Tauri 命令,
+    前端 batch 评级未评 id (LLM 一次评一批, 已 cache 跳过)
+  - EmailTab.tsx 加载后自动 batch 30 评级, 中 badge 也显 (黄色),
+    三色齐全急/中/低
+* BL-EMAIL-DELETE: 删除邮件全链路 (Apple Mail 端可用)
+  - adapters/base.py EmailAdapter.delete_message 抽象
+  - apple_mail.py _AS_DELETE_MESSAGE AS `delete <msg>` 软删 → Trash
+  - __main__.py delete 子命令 + 返码 4 = NotSupported 区分
+  - commands/email.rs + tauri.ts + EmailTab.tsx 🗑 红色调按钮
+  - **两步点击确认** (window.confirm 在 Tauri 不可靠):
+    第一次 → "再次点击确认 (3s)" + 红框, 第二次真删
+* BL-EMAIL-FOXMAIL-DELETE → BL-EMAIL-FOXMAIL-DELETE-REVERT:
+  - 尝试: foxmail_db.move_to_trash sqlite UPDATE mail_box_info,
+    foxmail_mac.delete_message 调用之
+  - 实盘失败: 鸿波重启 Foxmail 后邮件回 INBOX. Foxmail IMAP 同步
+    server-as-source-of-truth 覆盖本地 sqlite, Foxmail Mac 没暴露
+    "待同步操作" 队列表
+  - revert: foxmail_mac.delete_message 改回 raise NotSupportedError
+    + 详细引导文案. move_to_trash() 保留作 reference
+
+== 实盘 UX 修 ==
+* BL-EMAIL-APPLEMAIL-INVALID-INDEX: -1719 (中英) 翻译成账号名
+  不对的友好提示
+* BL-EMAIL-ID-FORMAT-UX: ValueError → 友好提示返码 2 区分 3
+* BL-EMAIL-MARK-READ-MSG: 按前缀路由失败不再说"跨 1 个"
+* BL-EMAIL-APPLEMAIL-UNREAD-OLDESTFIRST (真 bug): AS whose
+  read status is false 过滤 + 倒序遍历, 防 oldest-first 索引让
+  --limit 1 --unread 漏未读
+* BL-EMAIL-ID-EMPTY-SENTINEL: null/undefined/none/空 id sentinel
 
 == Gateway ==
 * BL-HERMES-AUTO-CONTINUE-LIMIT: tool_retry_hint.py 加 hard cap
   (5 次连续同 tool 同 err → 合成 finish_reason=stop + 无 tool_calls
   abort response, gateway 跳过 LLM 调用). app.py 接入 should_hard_cap
-  优先于 inject_hint. usage tokens=0 不算 quota.
-  SCAN_TAIL_LEN 10 → 30 (hard cap 5 需要看更远历史).
-  7 新单测 (TestHardCap class).
+  优先于 inject_hint. usage tokens=0 不算 quota. 7 新单测.
 
 == 测试 ==
-* identity-server: 129/129 (+6, 全过)
-* email-agent: 83 → 113 (+30: 7 adapter 字段 / 7 跨 adapter 韧性
-  / 12 mark-read / 3 UX / 1 -1719 翻译)
-* llm-gateway tool_retry_hint: 16 → 23 (+7 hard cap)
+* identity-server: 129/129 (+6)
+* email-agent: 83 → 120 (+37)
+* llm-gateway tool_retry_hint: 16 → 23 (+7)
 * companion: tsc --noEmit clean
-* 合计 +43 单测, 0 回归
+* 合计 +50 单测, 0 回归
 
-== 修改文件 ==
-central/identity-server/src/catfish_identity/clients.py
-central/identity-server/src/catfish_identity/routes.py
+== 关键架构决策 ==
+* Foxmail 走 sqlite write 改 folder 不可靠 (IMAP server-as-source-
+  of-truth 覆盖). mark_read 看着 OK 不代表所有 sqlite write 都安全
+* 删除 = 软删 (移到 Trash 30 天可恢复), 永不物理删. catfish 远程
+  触发误操作风险更大, 红线更要严守
+* 两步点击确认 > window.confirm (Tauri WebView 后者不可靠)
+
+== 新文件 ==
+edge/companion-app/src/tabs/Email/EmailTab.tsx (新前端)
+scripts/mint-hermes-service-token.sh
+edge/email-agent/tests/test_cli_main.py
+COMMIT-2026-05-18-PM.txt (本文件, commit 用后删)
+
+== 修改文件 (主要) ==
+central/identity-server/src/catfish_identity/{clients.py,routes.py}
 central/identity-server/config/clients.yaml
 central/identity-server/tests/test_client_credentials.py
-central/llm-gateway/src/catfish_gateway/tool_retry_hint.py
-central/llm-gateway/src/catfish_gateway/app.py
+central/llm-gateway/src/catfish_gateway/{tool_retry_hint.py,app.py}
 central/llm-gateway/tests/test_tool_retry_hint.py
 edge/email-agent/src/catfish_email/__main__.py
-edge/email-agent/src/catfish_email/adapters/base.py
-edge/email-agent/src/catfish_email/adapters/apple_mail.py
-edge/email-agent/src/catfish_email/adapters/foxmail_mac.py
+edge/email-agent/src/catfish_email/adapters/{base.py,apple_mail.py,foxmail_mac.py}
 edge/email-agent/src/catfish_email/foxmail_db.py
-edge/email-agent/tests/test_adapter_foxmail_mac.py
-edge/email-agent/tests/test_adapter_apple_mail.py
-edge/email-agent/tests/test_cli_main.py (新)
+edge/email-agent/tests/{test_adapter_foxmail_mac.py,test_adapter_apple_mail.py}
 edge/companion-app/src/hooks/useAuth.ts
 edge/companion-app/src/components/AuthBanner.tsx
-edge/companion-app/src/tabs/Email/EmailTab.tsx
-edge/companion-app/src/lib/me.ts
-edge/companion-app/src/lib/tauri.ts
+edge/companion-app/src/lib/{me.ts,tauri.ts}
 edge/companion-app/src-tauri/src/commands/email.rs
+edge/companion-app/src-tauri/src/services/{oauth.rs,email_scheduler.rs}
 edge/companion-app/src-tauri/src/lib.rs
-edge/companion-app/src-tauri/src/services/oauth.rs
-scripts/mint-hermes-service-token.sh (新)
 docs/HERMES-014-UPGRADE-RUNBOOK.md
 docs/FEATURE-TRACKS.md
 CHANGELOG.md

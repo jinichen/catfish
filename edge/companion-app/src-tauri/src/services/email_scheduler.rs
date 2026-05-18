@@ -103,6 +103,80 @@ pub fn email_urgency_map() -> HashMap<String, String> {
         .unwrap_or_default()
 }
 
+/// 5/18 BL-EMAIL-URGENCY-BADGE: 前端主动 batch 评级一批邮件 (按 id 给 subject/sender).
+///
+/// 老路径只评 scheduler diff 出的新邮件, 启动时已有的 99 封历史邮件永远无评级,
+/// EmailTab badge 空白. 这命令让前端打开 tab 时主动调一次, 把所有可见的未评 id
+/// 一次性评完. 已 cache 的 id 跳过 (省 token), 只评新 id.
+///
+/// Args:
+///     items: 跟 fetch_unread 同 shape (id/subject/sender/account/date/is_read),
+///            前端从 list_fetch 返的数据里挑没 cache 的传过来
+///
+/// Returns: 评完后的完整 cache map (含老的 + 新的). 调用方一次拿全, 不用再调 urgency_map.
+///
+/// 性能: LLM 调 1 次评 batch (跟 scheduler rate_emails 同函数 call_rate_llm).
+/// 前端应该自己 batch 上限 (e.g. 30 一批), 不要一次塞 99 个 prompt 太长.
+#[tauri::command]
+pub async fn email_classify_now(
+    items: Vec<EmailItemInput>,
+) -> Result<HashMap<String, String>, String> {
+    // 过滤已 cache 的 (省 LLM 调用). EmailItem 只要 id/subject/sender 三字段
+    // (rate_emails 内部只用这三个), input 的 account/date/is_read 仅作前端
+    // 自描述方便调用方传 list_fetch 的整条 dict, 这里丢掉.
+    let to_rate: Vec<EmailItem> = {
+        let cache = urgency_cache().lock().map_err(|e| e.to_string())?;
+        items
+            .iter()
+            .filter(|it| !cache.contains_key(&it.id))
+            .map(|it| EmailItem {
+                id: it.id.clone(),
+                subject: it.subject.clone(),
+                sender: it.sender.clone(),
+            })
+            .collect()
+    };
+
+    if to_rate.is_empty() {
+        // 全已 cache, 直接返
+        return Ok(urgency_cache().lock().map(|c| c.clone()).unwrap_or_default());
+    }
+
+    log::info!(
+        "email_classify_now: 评级 {} 封 (跳过 {} 已 cache)",
+        to_rate.len(),
+        items.len() - to_rate.len(),
+    );
+
+    let rated = rate_emails(&to_rate).await;
+    if let Ok(mut cache) = urgency_cache().lock() {
+        for (it, u) in to_rate.iter().zip(rated.iter()) {
+            cache.insert(it.id.clone(), u.as_label().to_string());
+        }
+        if cache.len() > 200 {
+            let keys: Vec<_> = cache.keys().take(100).cloned().collect();
+            for k in keys {
+                cache.remove(&k);
+            }
+        }
+    }
+
+    Ok(urgency_cache().lock().map(|c| c.clone()).unwrap_or_default())
+}
+
+/// 前端传给 email_classify_now 用的 input shape (比 EmailItem 多 Option, 兼容 list_fetch
+/// JSON 字段缺失场景). 多余字段 (account/date/is_read) 仅作 future-proof 接收, 不读.
+#[derive(serde::Deserialize)]
+#[allow(dead_code)]
+pub struct EmailItemInput {
+    pub id: String,
+    pub subject: String,
+    pub sender: String,
+    pub account: Option<String>,
+    pub date: Option<String>,
+    pub is_read: Option<bool>,
+}
+
 /// app 启动时调一次. poll_secs=0 (yaml 或 env) 则不起.
 ///
 /// `app` 参数: 给 background task 存进 OnceLock, 用来 emit `catfish:email-urgent`

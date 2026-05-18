@@ -23,6 +23,8 @@ import {
   emailReadMessage,
   emailAccountsFetch,
   emailCreateDraft,
+  emailDeleteMessage,
+  emailClassifyNow,
   emailUrgencyMap,
   type EmailDigestItem,
   type EmailAccountItem,
@@ -75,6 +77,42 @@ export default function EmailTab() {
   useEffect(() => {
     void loadList();
   }, [loadList]);
+
+  // 5/18 BL-EMAIL-URGENCY-BADGE: 列表加载完后主动评级所有未评 id.
+  // scheduler 只评 diff 新邮件, 启动时已有的历史邮件永远无评级 → badge 空白.
+  // 这里主动 batch 评级 (LLM call 一次, 已 cache 的跳过省 token).
+  // 分批 30 防 prompt 太长, 顺序 await 不并发避免烧 quota.
+  useEffect(() => {
+    if (items.length === 0) return;
+    const unrated = items.filter((it) => !urgencyMap[it.id]);
+    if (unrated.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const BATCH = 30;
+      for (let i = 0; i < unrated.length; i += BATCH) {
+        if (cancelled) return;
+        const batch = unrated.slice(i, i + BATCH);
+        try {
+          const updated = await emailClassifyNow(batch.map((it) => ({
+            id: it.id,
+            subject: it.subject,
+            sender: it.sender,
+            account: it.account,
+            date: it.date,
+            is_read: it.is_read,
+          })));
+          if (!cancelled) setUrgencyMap(updated);
+        } catch {
+          // 评级失败 (gateway 挂 / token 过期) — 跳过, badge 维持空白不阻塞 UI
+          return;
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // 依赖 items.length + 第一条 id 防 items 引用变更 (filteredItems 重新算) 触发重跑
+  }, [items, urgencyMap]);
 
   // 前端 filter: 主题 / 发件人 / 账号 substring (case-insensitive)
   const filteredItems = useMemo(() => {
@@ -363,7 +401,19 @@ export default function EmailTab() {
         )}
 
         {selectedId && detail && !detailLoading && (
-          <DetailPane msg={detail} onAskCatfish={handleAskCatfish} />
+          <DetailPane
+            msg={detail}
+            onAskCatfish={handleAskCatfish}
+            onDeleted={() => {
+              // 5/18 BL-EMAIL-DELETE: 删除成功后从列表移除 + 清详情. 不重新拉
+              // list_fetch (avoid 网络 + 抖动), Mail.app 那边已经移到 Trash, 列表
+              // 反映即可.
+              if (selectedId) {
+                setItems((prev) => prev.filter((it) => it.id !== selectedId));
+                setSelectedId(null);
+              }
+            }}
+          />
         )}
       </main>
     </div>
@@ -431,7 +481,10 @@ function ListItem({
         >
           {_extractSenderName(item.sender)}
         </strong>
-        {/* 评级 badge — scheduler 已评过的才显, 急=红 / 低=灰 / 中=不显省视觉 */}
+        {/* 评级 badge — 急=红 / 中=黄 / 低=灰 / 未评=空.
+            5/18 BL-EMAIL-URGENCY-BADGE: 老逻辑 "中=不显" 让用户以为没评级, 实际是
+            已评但被藏起来. 鸿波反馈"现在邮件没有任何优先级"就是这问题. 改 中
+            也显黄色 chip, 三色齐全用户看得见. */}
         {urgency === "急" && (
           <span
             style={{
@@ -445,6 +498,21 @@ function ListItem({
             }}
           >
             急
+          </span>
+        )}
+        {urgency === "中" && (
+          <span
+            style={{
+              flex: "0 0 auto",
+              fontSize: 9,
+              padding: "1px 5px",
+              background: "rgba(251, 191, 36, 0.18)",
+              color: "rgb(180, 130, 20)",
+              borderRadius: 3,
+              fontWeight: 500,
+            }}
+          >
+            中
           </span>
         )}
         {urgency === "低" && (
@@ -496,13 +564,59 @@ function ListItem({
 function DetailPane({
   msg,
   onAskCatfish,
+  onDeleted,
 }: {
   msg: FullMessage;
   onAskCatfish: (m: FullMessage) => void;
+  onDeleted: () => void;  // 5/18 BL-EMAIL-DELETE: 删除成功 → 父组件移除 item
 }) {
   const [drafting, setDrafting] = useState(false);
   const [draftResult, setDraftResult] = useState<string | null>(null);
   const [draftError, setDraftError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  /** 5/18 BL-EMAIL-DELETE: 两步确认 — 第一次点 "🗑 删除" 切到 "再次点击确认" 状态,
+   *  第二次点才真删. 3s 后自动取消恢复初态. 比 window.confirm 在 Tauri WebView
+   *  下可靠 (有些场景 confirm 被吞), 也比系统 dialog 打扰. */
+  const [confirmPending, setConfirmPending] = useState(false);
+
+  // 取消 confirm 状态的 timer
+  useEffect(() => {
+    if (!confirmPending) return;
+    const t = window.setTimeout(() => setConfirmPending(false), 3000);
+    return () => window.clearTimeout(t);
+  }, [confirmPending]);
+
+  // 选不同邮件时清 state, 防上封邮件的 error / confirm 残留
+  useEffect(() => {
+    setConfirmPending(false);
+    setDeleteError(null);
+  }, [msg.id]);
+
+  const handleDelete = async () => {
+    if (!confirmPending) {
+      // 第一次点 — 进 "再次确认" 状态, 不调 CLI
+      setConfirmPending(true);
+      setDeleteError(null);
+      return;
+    }
+    // 第二次点 — 真删
+    setConfirmPending(false);
+    setDeleting(true);
+    setDeleteError(null);
+    console.log("[BL-EMAIL-DELETE] 调用 emailDeleteMessage", msg.id);
+    try {
+      const result = await emailDeleteMessage(msg.id);
+      console.log("[BL-EMAIL-DELETE] 删除成功", result);
+      onDeleted();
+    } catch (e) {
+      const errMsg = e instanceof Error ? e.message : String(e);
+      console.error("[BL-EMAIL-DELETE] 删除失败:", errMsg);
+      setDeleteError(errMsg);
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   const handleDraftReply = async () => {
     setDrafting(true);
@@ -637,6 +751,66 @@ function DetailPane({
           >
             {drafting ? "起草中…" : "✏️ 起草回复 (落 Drafts)"}
           </button>
+          {/* 5/18 BL-EMAIL-DELETE: 两步点击确认 (window.confirm 在 Tauri 不可靠).
+              第一次点 → "🗑 再次点击确认" (3s 内有效), 第二次才真删. */}
+          <button
+            type="button"
+            onClick={() => void handleDelete()}
+            disabled={deleting}
+            style={{
+              background: confirmPending ? "rgba(220, 80, 60, 0.15)" : "var(--catfish-bg)",
+              color: "rgb(220, 80, 60)",
+              border: `1px solid ${confirmPending ? "rgb(220, 80, 60)" : "rgba(220, 80, 60, 0.4)"}`,
+              borderRadius: 4,
+              padding: "8px 14px",
+              fontSize: 13,
+              fontWeight: confirmPending ? 600 : 400,
+              cursor: deleting ? "wait" : "pointer",
+              fontFamily: "inherit",
+              marginLeft: "auto",
+            }}
+            title={
+              confirmPending
+                ? "再次点击确认删除 (3s 内有效, 否则自动取消)"
+                : "把这封邮件移到客户端 Trash 文件夹 (软删, 30 天内可恢复)"
+            }
+          >
+            {deleting
+              ? "删除中…"
+              : confirmPending
+                ? "🗑 再次点击确认 (3s)"
+                : "🗑 删除"}
+          </button>
+          {deleteError && (
+            <div
+              style={{
+                width: "100%",
+                marginTop: 8,
+                padding: "8px 12px",
+                background: "rgba(220, 80, 60, 0.1)",
+                border: "1px solid rgba(220, 80, 60, 0.3)",
+                borderRadius: 4,
+                fontSize: 12,
+                color: "rgb(220, 80, 60)",
+                lineHeight: 1.5,
+              }}
+            >
+              <strong>✗ 删除失败</strong>
+              <br />
+              {deleteError}
+              {deleteError.includes("不支持") && (
+                <>
+                  <br />
+                  <span style={{ opacity: 0.85 }}>
+                    (Foxmail Mac 没暴露删除 IPC, 我们试过直接动 sqlite 但 IMAP
+                    同步会把邮件从 server 拉回 INBOX 让操作无效. 请打开 Foxmail
+                    客户端自己删 — Foxmail 会通知 server, 然后下次 Companion
+                    刷新就看不到这封了.)
+                  </span>
+                </>
+              )}
+            </div>
+          )}
           {draftResult && (
             <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
               ✓ 草稿已落 Mail Drafts, 打开 Mail.app review + 发送

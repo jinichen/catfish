@@ -193,6 +193,24 @@ class FoxmailMacAdapter(EmailAdapter):
             " SKILL 应把正文 quote 给员工, 让员工自己粘贴到 Foxmail 撰写窗口。"
         )
 
+    def delete_message(self, message_id: str) -> None:
+        """5/18 BL-EMAIL-FOXMAIL-DELETE-REVERT: Foxmail 不支持自动删除.
+
+        历史: 5/18 早期尝试走 sqlite UPDATE mail_box_info 软删, 实盘鸿波重启
+        Foxmail 后邮件**回到 INBOX** — Foxmail IMAP 同步把本地 folder 改动
+        当作"过时本地状态" 用 server-end (server 还在 INBOX) 覆盖. Foxmail Mac
+        schema 没暴露"待同步删除" 队列表, 没有可靠路径让 Foxmail 把删除推到
+        server. 走 GUI scripting (System Events 模拟 ⌫) 太脆弱不同 Foxmail
+        版本会挂. 撤回这条实现, 引导员工去 Foxmail 客户端自己删.
+
+        foxmail_db.move_to_trash() 保留作为 reference / debug 用, 不被这里调.
+        """
+        raise NotSupportedError(
+            "Foxmail Mac 不支持自动删除 — Foxmail 没暴露删除 IPC, 走 sqlite "
+            "会被 IMAP 同步从 server 拉回 INBOX 让删除无效. 请去 Foxmail "
+            "客户端自己删 (它会通知 server, 然后下次 Companion 同步看不到)."
+        )
+
     def mark_read(self, message_id: str, *, read: bool = True) -> None:
         """5/18 BL-EMAIL-MARK-READ: 直接 UPDATE mailinfo.readstat.
 

@@ -237,6 +237,31 @@ class EmailAdapter(ABC):
             f"建议 SKILL 把正文 quote 给员工, 让员工自己复制粘贴到客户端。"
         )
 
+    def delete_message(self, message_id: str) -> None:
+        """删除邮件 (移到客户端的废纸篓 / Trash 文件夹, 不是物理彻底删).
+
+        5/18 BL-EMAIL-DELETE. 默认实现 raise NotSupportedError — 只读 adapter
+        (e.g. Foxmail Mac, 它的删除会跟 sqlite + .mail 文件 + IMAP 同步绕一圈
+        我们动 sqlite 不可靠) 不必 override, 让用户去客户端自己删.
+
+        Apple Mail: AS `delete <msg>` 或 `set mailbox of m to (mailbox "Trash"
+        of acc)` (软删, 跟"按 ⌫" 同效果, 用户能从 Trash 找回).
+
+        红线: **永远不能彻底物理删** — 即使员工误点删除, 客户端的 Trash 文件夹
+        7-30 天内还能恢复. 客户端原生 ⌫ 键就这个行为, 我们对齐.
+
+        Args:
+            message_id: 跟 list_messages / read_message 返的 id 同格式
+
+        Raises:
+            NotSupportedError: 子类不支持 (Foxmail Mac 等)
+            DataNotFoundError: id 不存在
+            EmailAdapterError: 其它失败
+        """
+        raise NotSupportedError(
+            f"{self.name} 不支持 delete_message (建议员工去客户端自己删)."
+        )
+
     def mark_read(self, message_id: str, *, read: bool = True) -> None:
         """把邮件标记为已读 / 未读. 在客户端那一侧持久化 (next launch 仍是这状态).
 

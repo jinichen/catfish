@@ -15,7 +15,7 @@ from typing import Sequence
 
 import pytest
 
-from catfish_email.__main__ import _cmd_list, _cmd_mark_read, _cmd_read, _msg_to_dict
+from catfish_email.__main__ import _cmd_delete, _cmd_list, _cmd_mark_read, _cmd_read, _msg_to_dict
 from catfish_email.adapters.base import (
     Account,
     DataNotFoundError,
@@ -23,6 +23,7 @@ from catfish_email.adapters.base import (
     EmailAdapterError,
     ListFilter,
     Message,
+    NotSupportedError,
 )
 
 
@@ -37,13 +38,16 @@ class _FakeAdapter(EmailAdapter):
         messages: Sequence[Message] = (),
         raise_on_list: Exception | None = None,
         raise_on_mark_read: Exception | None = None,
+        raise_on_delete: Exception | None = None,
     ) -> None:
         self._name = name
         self._accounts = list(accounts)
         self._messages = list(messages)
         self._raise = raise_on_list
         self._raise_mark = raise_on_mark_read
+        self._raise_delete = raise_on_delete
         self.mark_read_calls: list[tuple[str, bool]] = []
+        self.delete_calls: list[str] = []
 
     @property
     def name(self) -> str:
@@ -73,6 +77,11 @@ class _FakeAdapter(EmailAdapter):
         if self._raise_mark is not None:
             raise self._raise_mark
         self.mark_read_calls.append((message_id, read))
+
+    def delete_message(self, message_id) -> None:
+        if self._raise_delete is not None:
+            raise self._raise_delete
+        self.delete_calls.append(message_id)
 
 
 def _make_args(**kw):
@@ -423,6 +432,96 @@ def test_cmd_read_empty_id_friendly_message(capsys):
     a = _FakeAdapter(name="apple_mail")
     rc = _cmd_read([a], _make_read_args("", mark_read=False))
     assert rc == 2
+
+
+# ============================================================
+# 5/18 BL-EMAIL-DELETE: delete subcommand
+# ============================================================
+
+
+def _make_delete_args(msg_id: str, *, json_out: bool = True):
+    return argparse.Namespace(id=msg_id, json=json_out)
+
+
+def test_cmd_delete_routes_by_prefix_and_succeeds(capsys):
+    """按 id 前缀路由到正确 adapter, 删除成功返 0 + ok JSON"""
+    a = _FakeAdapter(name="apple_mail")
+    b = _FakeAdapter(name="foxmail_mac")
+    rc = _cmd_delete(
+        [a, b],
+        _make_delete_args("apple_mail|alice@icloud.com|123"),
+    )
+    assert rc == 0
+    assert a.delete_calls == ["apple_mail|alice@icloud.com|123"]
+    assert b.delete_calls == []
+    out = json.loads(capsys.readouterr().out)
+    assert out == {
+        "adapter": "apple_mail",
+        "id": "apple_mail|alice@icloud.com|123",
+        "deleted": True,
+        "ok": True,
+    }
+
+
+def test_cmd_delete_foxmail_not_supported_returns_4(capsys):
+    """Foxmail Mac 不支持 delete → NotSupportedError → 返码 4 + 引导文案"""
+    a = _FakeAdapter(
+        name="foxmail_mac",
+        raise_on_delete=NotSupportedError("Foxmail Mac 不支持自动删除"),
+    )
+    rc = _cmd_delete([a], _make_delete_args("foxmail-mac|hongbo@qq.com|999"))
+    assert rc == 4  # 区分 1/2/3
+    captured = capsys.readouterr()
+    assert "不支持自动删除" in captured.err
+    assert "请去客户端" in captured.err  # 引导用户去 Foxmail 自己删
+
+
+def test_cmd_delete_unknown_id_returns_3(capsys):
+    """id 不存在 → DataNotFoundError → 返 3"""
+    a = _FakeAdapter(
+        name="apple_mail",
+        raise_on_delete=DataNotFoundError("没这邮件"),
+    )
+    rc = _cmd_delete([a], _make_delete_args("apple_mail|alice@icloud.com|999"))
+    assert rc == 3
+    captured = capsys.readouterr()
+    assert "邮件不存在" in captured.err
+    assert "[apple_mail]" in captured.err  # 按前缀路由的清晰提示
+
+
+def test_cmd_delete_null_id_returns_2(capsys):
+    """null sentinel → 返 2 (跟 read/mark-read 一致)"""
+    a = _FakeAdapter(name="apple_mail")
+    rc = _cmd_delete([a], _make_delete_args("null"))
+    assert rc == 2
+    assert "邮件 id 不能为空" in capsys.readouterr().err
+
+
+def test_cmd_delete_value_error_returns_2(capsys):
+    """id 格式错 ValueError → 友好提示 + 返 2"""
+    a = _FakeAdapter(
+        name="apple_mail",
+        raise_on_delete=ValueError("id 格式错"),
+    )
+    rc = _cmd_delete([a], _make_delete_args("apple_mail|...|..."))
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert "id 格式不对" in captured.err
+    assert "list --json" in captured.err
+
+
+def test_cmd_delete_all_adapters_dont_support_returns_4(capsys):
+    """无前缀 + 全 adapter NotSupportedError → 返 4"""
+    a = _FakeAdapter(
+        name="apple_mail",
+        raise_on_delete=NotSupportedError("Apple Mail EMLX fallback 不支持"),
+    )
+    b = _FakeAdapter(
+        name="foxmail_mac",
+        raise_on_delete=NotSupportedError("Foxmail 不支持"),
+    )
+    rc = _cmd_delete([a, b], _make_delete_args("no-prefix-id-here"))
+    assert rc == 4
 
 
 def test_cmd_read_value_error_gives_format_hint(capsys):

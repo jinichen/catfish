@@ -150,6 +150,32 @@ def mark_message_read(
     return cur.rowcount > 0
 
 
+def move_to_trash(conn: sqlite3.Connection, mailid: int) -> bool:
+    """把邮件移到 Trash 文件夹 (软删). 返 True = 改了, False = 没找到 mailid.
+
+    5/18 BL-EMAIL-DELETE: Foxmail 没暴露 AppleScript / IPC 删除接口, 只能
+    直接动 sqlite. 思路跟 Apple Mail AS `delete <msg>` 一致 — 改 folder
+    指针, 不真删 row. 用户在 Foxmail 客户端"已删除" 文件夹仍能看到.
+
+    **已知风险**: Foxmail 重启 + IMAP 同步可能把邮件从 server 重新拉回原
+    folder (因为我们没让 Foxmail 知道"用户主动删了"). 跟 mark_read 同
+    取舍 — 短期 UX 改善, 长期同步可能覆盖. 长远要 Foxmail 暴露真删除接口.
+
+    实现: 找 Trash folder id (alias_groups['Trash']), UPDATE mail_box_info
+    SET mail_folderid = trash_id WHERE mail_id = mailid.
+    """
+    trash_id = find_folder_by_title(conn, TRASH_TITLES)
+    if trash_id is None:
+        # Foxmail profile 没建 Trash folder — 罕见, fallback 不动
+        return False
+    cur = conn.execute(
+        "UPDATE mail_box_info SET mail_folderid = ? WHERE mail_id = ?",
+        (trash_id.id, mailid),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
 def list_folders(conn: sqlite3.Connection) -> list[FoxmailFolder]:
     """列所有文件夹 (含子文件夹)。"""
     rows = conn.execute(

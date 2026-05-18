@@ -397,8 +397,12 @@ pub fn run() {
             commands::email::email_create_draft,
             // BL-EMAIL-MARK-READ (5/18): 单独标已读/未读 (右键 / 批量场景)
             commands::email::email_mark_read,
+            // BL-EMAIL-DELETE (5/18): 删邮件 (移到 Trash, 软删)
+            commands::email::email_delete_message,
             // BL-COMPANION-EMAIL-TAB-STEP2 (5/18): 评级 badge 取数
             services::email_scheduler::email_urgency_map,
+            // BL-EMAIL-URGENCY-BADGE (5/18): 前端主动 batch 评级 (历史邮件也能评)
+            services::email_scheduler::email_classify_now,
             // BL-E16 关系建立 (五一 sprint 5/3 晚): "鲶鱼对你的印象" 透明 + 清空
             commands::relation::relation_summary,
             commands::relation::relation_forget,
