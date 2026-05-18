@@ -29,10 +29,10 @@
 //! - 通知 / 评级里**只送主题 + 发件人**, 不送正文 (隐私 + token 省).
 //! - 失败静默 — Mail.app 没开 / 没权限 / CLI 没装 / 评级 LLM 挂, log debug 不 spam 通知.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -44,6 +44,15 @@ use crate::services::{email_config, endpoints, oauth};
 /// app handle 句柄, 给 background task 用来 emit Tauri 事件给前端.
 /// schedule_email_scheduler() 启动时存进来.
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
+
+/// urgency 评级缓存 — scheduler 评完一封, 写这里给 Tauri command email_urgency_map() 读.
+/// id -> "急" | "中" | "低" 字符串 (跟 SerializableUrgency 同套). 已读 → tick 时自然
+/// 从 baseline 移除 → 下次评级也不会再被加进来. 缓存上限 200 防内存涨, 老的先丢.
+static URGENCY_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+
+fn urgency_cache() -> &'static Mutex<HashMap<String, String>> {
+    URGENCY_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 #[derive(Deserialize, Clone, Debug)]
 struct EmailItem {
@@ -75,6 +84,23 @@ impl Urgency {
     fn is_urgent(&self) -> bool {
         matches!(self, Self::Urgent)
     }
+
+    fn as_label(&self) -> &'static str {
+        match self {
+            Self::Urgent => "急",
+            Self::Medium => "中",
+            Self::Low => "低",
+        }
+    }
+}
+
+/// Tauri command 用 — 前端 EmailTab 读评级 badge.
+/// 返 id → "急" | "中" | "低" map, 卡 cache 上限 200, 重启 Companion 清空.
+#[tauri::command]
+pub fn email_urgency_map() -> HashMap<String, String> {
+    urgency_cache().lock()
+        .map(|c| c.clone())
+        .unwrap_or_default()
 }
 
 /// app 启动时调一次. poll_secs=0 (yaml 或 env) 则不起.
@@ -134,6 +160,21 @@ pub fn schedule_email_scheduler(app: AppHandle) {
                             );
                             // step3: 评级 → 只"急"通知
                             let rated = rate_emails(&new_items).await;
+
+                            // step2 (BL-COMPANION-EMAIL-TAB-STEP2): 写 urgency 缓存
+                            // 给前端 EmailTab badge 用. 老 id 已读 → baseline 自然
+                            // remove, 这里不主动清; LRU 上限 200 防内存涨.
+                            if let Ok(mut cache) = urgency_cache().lock() {
+                                for (it, u) in new_items.iter().zip(rated.iter()) {
+                                    cache.insert(it.id.clone(), u.as_label().to_string());
+                                }
+                                // 简单 LRU: 超 200 时随便丢一半 (BTreeMap 不行用 HashMap)
+                                if cache.len() > 200 {
+                                    let keys: Vec<_> = cache.keys().take(100).cloned().collect();
+                                    for k in keys { cache.remove(&k); }
+                                }
+                            }
+
                             let urgent: Vec<&EmailItem> = rated
                                 .iter()
                                 .zip(new_items.iter())

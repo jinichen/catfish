@@ -251,11 +251,33 @@ export const emailDigestFetch = (limit?: number) =>
   rawInvoke<string>("email_digest_fetch", { limit: limit ?? null });
 export const emailAccountsFetch = () =>
   rawInvoke<string>("email_accounts_fetch");
-// BL-COMPANION-EMAIL-TAB (5/18): 邮件 tab 用的全列表 + 读单封.
+// BL-COMPANION-EMAIL-TAB (5/18): 邮件 tab 用的全列表 + 读单封 + 起草 + 评级 map.
 export const emailListFetch = (unreadOnly: boolean, limit?: number) =>
   rawInvoke<string>("email_list_fetch", { unreadOnly, limit: limit ?? null });
 export const emailReadMessage = (id: string) =>
   rawInvoke<string>("email_read_message", { id });
+export interface CreateDraftArgs {
+  to: string;
+  subject: string;
+  body: string;
+  cc?: string;
+  bcc?: string;
+  inReplyTo?: string;
+  account?: string;
+}
+export const emailCreateDraft = (args: CreateDraftArgs) =>
+  rawInvoke<string>("email_create_draft", {
+    to: args.to,
+    cc: args.cc ?? null,
+    bcc: args.bcc ?? null,
+    subject: args.subject,
+    body: args.body,
+    inReplyTo: args.inReplyTo ?? null,
+    account: args.account ?? null,
+  });
+/** id → "急" | "中" | "低" map, scheduler 后台评级缓存. */
+export const emailUrgencyMap = () =>
+  rawInvoke<Record<string, string>>("email_urgency_map");
 
 /** catfish-email list --json 单条 message 的 schema. 字段跟 base.py Message dataclass 对齐. */
 export interface EmailDigestItem {

@@ -391,9 +391,12 @@ pub fn run() {
             // BL-COMPANION-EMAIL-DIGEST (5/18): 邮件简报 shell-out
             commands::email::email_digest_fetch,
             commands::email::email_accounts_fetch,
-            // BL-COMPANION-EMAIL-TAB (5/18): 邮件 tab 用的扩展能力 (全列表 + 读全文)
+            // BL-COMPANION-EMAIL-TAB (5/18): 邮件 tab 用的扩展能力 (全列表 + 读全文 + 起草)
             commands::email::email_list_fetch,
             commands::email::email_read_message,
+            commands::email::email_create_draft,
+            // BL-COMPANION-EMAIL-TAB-STEP2 (5/18): 评级 badge 取数
+            services::email_scheduler::email_urgency_map,
             // BL-E16 关系建立 (五一 sprint 5/3 晚): "鲶鱼对你的印象" 透明 + 清空
             commands::relation::relation_summary,
             commands::relation::relation_forget,

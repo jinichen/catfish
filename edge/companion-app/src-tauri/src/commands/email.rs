@@ -132,6 +132,74 @@ pub async fn email_read_message(id: String) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
+/// 起草邮件落 Mail.app Drafts (不发送 — 红线). BL-COMPANION-EMAIL-TAB-STEP2 (5/18).
+///
+/// body 通过 stdin / tmp file 传给 CLI 避 shell 转义. 这里用 tmp file 更稳.
+#[tauri::command]
+pub async fn email_create_draft(
+    to: String,
+    cc: Option<String>,
+    bcc: Option<String>,
+    subject: String,
+    body: String,
+    in_reply_to: Option<String>,
+    account: Option<String>,
+) -> Result<String, String> {
+    let bin = find_catfish_email().ok_or_else(|| {
+        "catfish-email CLI 没装".to_string()
+    })?;
+
+    // body 写 tmp file 避免 shell 转义 (员工正文可能含引号/换行/特殊字符)
+    let tmp_dir = std::env::temp_dir();
+    let tmp_path = tmp_dir.join(format!(
+        "catfish-email-draft-{}-{}.txt",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis()).unwrap_or(0),
+    ));
+    std::fs::write(&tmp_path, &body)
+        .map_err(|e| format!("写 body tmp 文件失败: {e}"))?;
+
+    let mut args = vec![
+        "draft".to_string(),
+        "--to".to_string(), to,
+        "--subject".to_string(), subject,
+        "--body-file".to_string(), tmp_path.to_string_lossy().to_string(),
+        "--json".to_string(),
+    ];
+    if let Some(c) = cc.filter(|s| !s.is_empty()) {
+        args.push("--cc".to_string()); args.push(c);
+    }
+    if let Some(b) = bcc.filter(|s| !s.is_empty()) {
+        args.push("--bcc".to_string()); args.push(b);
+    }
+    if let Some(r) = in_reply_to.filter(|s| !s.is_empty()) {
+        args.push("--in-reply-to".to_string()); args.push(r);
+    }
+    if let Some(a) = account.filter(|s| !s.is_empty()) {
+        args.push("--account".to_string()); args.push(a);
+    }
+
+    let out = Command::new(&bin)
+        .args(&args)
+        .output()
+        .map_err(|e| format!("catfish-email draft 调用失败: {e}"))?;
+
+    // 清 tmp file (失败不阻塞)
+    let _ = std::fs::remove_file(&tmp_path);
+
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("draft 退出码 {:?}", out.status.code())
+        } else {
+            stderr
+        });
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
 /// 拉账号列表. 用于"配了几个邮箱". 卡片 header 显 "5 账号 · 12 未读".
 #[tauri::command]
 pub async fn email_accounts_fetch() -> Result<String, String> {

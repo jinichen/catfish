@@ -22,6 +22,8 @@ import {
   emailListFetch,
   emailReadMessage,
   emailAccountsFetch,
+  emailCreateDraft,
+  emailUrgencyMap,
   type EmailDigestItem,
   type EmailAccountItem,
 } from "../../lib/tauri";
@@ -36,7 +38,9 @@ interface FullMessage extends EmailDigestItem {
 export default function EmailTab() {
   const [items, setItems] = useState<EmailDigestItem[]>([]);
   const [accounts, setAccounts] = useState<EmailAccountItem[]>([]);
+  const [urgencyMap, setUrgencyMap] = useState<Record<string, string>>({});
   const [unreadOnly, setUnreadOnly] = useState(true);
+  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -51,14 +55,16 @@ export default function EmailTab() {
     setLoading(true);
     setError(null);
     try {
-      const [listJson, accountsJson] = await Promise.all([
+      const [listJson, accountsJson, urgency] = await Promise.all([
         emailListFetch(unreadOnly, 100),
         emailAccountsFetch().catch(() => "[]"),
+        emailUrgencyMap().catch(() => ({})),
       ]);
       const list = JSON.parse(listJson);
       const accs = JSON.parse(accountsJson);
       if (Array.isArray(list)) setItems(list as EmailDigestItem[]);
       if (Array.isArray(accs)) setAccounts(accs as EmailAccountItem[]);
+      setUrgencyMap(urgency || {});
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -69,6 +75,17 @@ export default function EmailTab() {
   useEffect(() => {
     void loadList();
   }, [loadList]);
+
+  // 前端 filter: 主题 / 发件人 / 账号 substring (case-insensitive)
+  const filteredItems = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter((m) =>
+      (m.subject || "").toLowerCase().includes(q) ||
+      (m.sender || "").toLowerCase().includes(q) ||
+      (m.account || "").toLowerCase().includes(q),
+    );
+  }, [items, search]);
 
   // 选邮件 → 拉全文
   useEffect(() => {
@@ -182,7 +199,7 @@ export default function EmailTab() {
             </button>
           </div>
           {/* toolbar: 仅未读 toggle + 开 Mail.app */}
-          <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11, marginBottom: 6 }}>
             <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
               <input
                 type="checkbox"
@@ -210,6 +227,29 @@ export default function EmailTab() {
               📬 Mail.app
             </button>
           </div>
+          {/* 搜索框 — 前端 filter 主题/发件人/账号 */}
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="🔍 搜主题 / 发件人 / 账号"
+            style={{
+              width: "100%",
+              padding: "4px 8px",
+              fontSize: 12,
+              border: "1px solid var(--catfish-border)",
+              borderRadius: 4,
+              background: "var(--catfish-bg)",
+              color: "var(--catfish-text)",
+              fontFamily: "inherit",
+              boxSizing: "border-box",
+            }}
+          />
+          {search && (
+            <div style={{ fontSize: 10, color: "var(--catfish-text-muted)", marginTop: 4 }}>
+              🔍 已筛选 {filteredItems.length} / {items.length}
+            </div>
+          )}
         </div>
 
         {/* 错误态 */}
@@ -243,7 +283,7 @@ export default function EmailTab() {
             scrollbarWidth: "thin",
           }}
         >
-          {!error && !loading && items.length === 0 && (
+          {!error && !loading && filteredItems.length === 0 && (
             <li
               style={{
                 padding: "var(--space-4) var(--space-3)",
@@ -252,14 +292,17 @@ export default function EmailTab() {
                 textAlign: "center",
               }}
             >
-              🌊 {unreadOnly ? "没有未读邮件, 都处理完了" : "收件箱为空"}
+              {search
+                ? `🔍 没匹配 "${search}"`
+                : unreadOnly ? "🌊 没有未读邮件, 都处理完了" : "📭 收件箱为空"}
             </li>
           )}
-          {items.map((m) => (
+          {filteredItems.map((m) => (
             <ListItem
               key={m.id}
               item={m}
               active={selectedId === m.id}
+              urgency={urgencyMap[m.id]}
               onClick={() => setSelectedId(m.id)}
             />
           ))}
@@ -346,10 +389,12 @@ export default function EmailTab() {
 function ListItem({
   item,
   active,
+  urgency,
   onClick,
 }: {
   item: EmailDigestItem;
   active: boolean;
+  urgency?: string;  // '急' / '中' / '低', undef = scheduler 还没评级
   onClick: () => void;
 }) {
   return (
@@ -400,6 +445,37 @@ function ListItem({
         >
           {_extractSenderName(item.sender)}
         </strong>
+        {/* 评级 badge — scheduler 已评过的才显, 急=红 / 低=灰 / 中=不显省视觉 */}
+        {urgency === "急" && (
+          <span
+            style={{
+              flex: "0 0 auto",
+              fontSize: 9,
+              padding: "1px 5px",
+              background: "rgba(239, 68, 68, 0.15)",
+              color: "rgb(185, 28, 28)",
+              borderRadius: 3,
+              fontWeight: 600,
+            }}
+          >
+            急
+          </span>
+        )}
+        {urgency === "低" && (
+          <span
+            style={{
+              flex: "0 0 auto",
+              fontSize: 9,
+              padding: "1px 5px",
+              background: "transparent",
+              color: "var(--catfish-text-muted)",
+              opacity: 0.6,
+              borderRadius: 3,
+            }}
+          >
+            低
+          </span>
+        )}
         <span style={{ flex: "0 0 auto", color: "var(--catfish-text-muted)", fontSize: 11 }}>
           {_formatShortDate(item.date)}
         </span>
@@ -438,6 +514,44 @@ function DetailPane({
   msg: FullMessage;
   onAskCatfish: (m: FullMessage) => void;
 }) {
+  const [drafting, setDrafting] = useState(false);
+  const [draftResult, setDraftResult] = useState<string | null>(null);
+  const [draftError, setDraftError] = useState<string | null>(null);
+
+  const handleDraftReply = async () => {
+    setDrafting(true);
+    setDraftResult(null);
+    setDraftError(null);
+    try {
+      // 直接落简单 placeholder 草稿 — 不调 LLM (那是工作台的事, 跟"💬 让小鲶处理" 区分).
+      // 这里只做 "起草壳子": 收件人 = 原发件人, subject = Re:, body = quote 原文.
+      // 员工去 Mail.app Drafts 打开后, 自己写正文 (或者切回工作台让小鲶帮起草).
+      const replyTo = _replyAddress(msg.sender);
+      const subj = msg.subject?.startsWith("Re:") ? msg.subject : `Re: ${msg.subject || ""}`;
+      const quoted = (msg.body_text || "")
+        .split("\n")
+        .map((l) => `> ${l}`)
+        .join("\n");
+      const body = `\n\n\n${"-".repeat(20)} 原邮件 ${"-".repeat(20)}\n` +
+        `发件人: ${msg.sender}\n` +
+        `时间: ${msg.date}\n` +
+        `主题: ${msg.subject}\n\n` +
+        quoted;
+      const resultJson = await emailCreateDraft({
+        to: replyTo,
+        subject: subj,
+        body,
+        inReplyTo: msg.id,
+        account: msg.account,
+      });
+      const parsed = JSON.parse(resultJson);
+      setDraftResult(parsed?.draft_id ?? "ok");
+    } catch (e) {
+      setDraftError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDrafting(false);
+    }
+  };
   return (
     <>
       {/* 详情 header */}
@@ -501,7 +615,7 @@ function DetailPane({
           )}
         </div>
         {/* 行动按钮 */}
-        <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+        <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap", alignItems: "center" }}>
           <button
             type="button"
             onClick={() => onAskCatfish(msg)}
@@ -517,8 +631,36 @@ function DetailPane({
               fontFamily: "inherit",
             }}
           >
-            💬 让小鲶处理这封 (进工作台)
+            💬 让小鲶处理这封
           </button>
+          <button
+            type="button"
+            onClick={() => void handleDraftReply()}
+            disabled={drafting}
+            style={{
+              background: "var(--catfish-bg)",
+              color: "var(--catfish-text)",
+              border: "1px solid var(--catfish-border)",
+              borderRadius: 4,
+              padding: "8px 16px",
+              fontSize: 13,
+              cursor: drafting ? "wait" : "pointer",
+              fontFamily: "inherit",
+            }}
+            title="在 Apple Mail 起一份回复草稿 (空白带 quote 原文). 真发送要你自己去 Mail.app Drafts 点发. 红线."
+          >
+            {drafting ? "起草中…" : "✏️ 起草回复 (落 Drafts)"}
+          </button>
+          {draftResult && (
+            <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
+              ✓ 草稿已落 Mail Drafts, 打开 Mail.app review + 发送
+            </span>
+          )}
+          {draftError && (
+            <span style={{ fontSize: 11, color: "rgb(185, 28, 28)" }}>
+              起草失败: {draftError}
+            </span>
+          )}
         </div>
       </div>
 
@@ -549,6 +691,14 @@ function _extractSenderName(sender: string): string {
   if (m) return m[1].trim().replace(/^"|"$/g, "");
   if (sender.includes("@")) return sender.split("@")[0];
   return sender;
+}
+
+/** "张三 <zhang@x.com>" → "zhang@x.com"; "bob@example.com" → "bob@example.com" */
+function _replyAddress(sender: string): string {
+  if (!sender) return "";
+  const m = sender.match(/<([^>]+)>/);
+  if (m) return m[1].trim();
+  return sender.trim();
 }
 
 function _formatShortDate(iso: string): string {

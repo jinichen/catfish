@@ -68,6 +68,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_search(adapters, args)
     if args.cmd == "accounts":
         return _cmd_accounts(adapters, args)
+    if args.cmd == "draft":
+        return _cmd_draft(adapters, args)
 
     parser.print_help()
     return 2
@@ -301,7 +303,91 @@ def _build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--json", action="store_true", default=True)
     ps.add_argument("--human", dest="json", action="store_false")
 
+    # draft (BL-COMPANION-EMAIL-TAB-STEP2 5/18): 起草邮件落 Drafts, 不发送 (红线).
+    # 不调 LLM 生成 (那是 Companion / hermes 的事), 这里只是 thin wrapper 把
+    # to/cc/bcc/subject/body 落到客户端 Drafts. 调用方负责正文内容.
+    pd = sub.add_parser("draft", help="起草邮件到客户端 Drafts (不发送)")
+    pd.add_argument("--to", required=True, help="收件人, 多人用逗号分隔")
+    pd.add_argument("--cc", default="", help="抄送, 多人逗号")
+    pd.add_argument("--bcc", default="", help="密送, 多人逗号")
+    pd.add_argument("--subject", required=True)
+    pd.add_argument("--body", help="正文 (字符串). 跟 --body-file 二选一")
+    pd.add_argument("--body-file", help="正文从文件读 (避 shell 转义坑, --body 长时用)")
+    pd.add_argument("--in-reply-to", help="原邮件 id (回复时引用, 让客户端串 thread)")
+    pd.add_argument("--account", help="从哪个账号起草 (默认第一个)")
+    pd.add_argument("--json", action="store_true", default=True)
+    pd.add_argument("--human", dest="json", action="store_false")
+
     return p
+
+
+def _cmd_draft(adapters: list[EmailAdapter], args) -> int:
+    """5/18 BL-COMPANION-EMAIL-TAB-STEP2: 起草到 Drafts, 不发送.
+
+    红线: 这是只读+落 Drafts 的语义, 永不调 send. 员工自己去客户端点发送.
+    多 adapter 时: 找第一个 supports_drafts=True 的 (Foxmail Mac 不支持).
+    """
+    from .adapters.base import NotSupportedError  # noqa: PLC0415
+
+    # 拿 body
+    if args.body and args.body_file:
+        _err("--body 跟 --body-file 二选一, 不能同时给")
+        return 2
+    if args.body_file:
+        try:
+            with open(args.body_file, encoding="utf-8") as f:
+                body = f.read()
+        except OSError as e:
+            _err(f"读 {args.body_file} 失败: {e}")
+            return 2
+    else:
+        body = args.body or ""
+
+    # 找一个 supports_drafts=True 的 adapter (Apple Mail 支持, Foxmail Mac 不支持)
+    target = None
+    for a in adapters:
+        if getattr(a, "supports_drafts", False):
+            target = a
+            break
+    if target is None:
+        _err(
+            f"没找到支持起草的 adapter (现有: {', '.join(a.name for a in adapters)}). "
+            f"Apple Mail.app 支持; Foxmail Mac 不支持 (设计限制, 写入不可靠).",
+        )
+        return 1
+
+    to_list = [t.strip() for t in args.to.split(",") if t.strip()]
+    cc_list = [t.strip() for t in (args.cc or "").split(",") if t.strip()]
+    bcc_list = [t.strip() for t in (args.bcc or "").split(",") if t.strip()]
+
+    try:
+        msg_id = target.create_draft(
+            to=to_list,
+            cc=cc_list,
+            bcc=bcc_list,
+            subject=args.subject,
+            body=body,
+            in_reply_to=args.in_reply_to,
+            account=args.account,
+        )
+    except NotSupportedError as e:
+        _err(f"该 adapter 不支持起草: {e}")
+        return 1
+    except EmailAdapterError as e:
+        _err(f"起草失败: {e}")
+        return 1
+
+    if args.json:
+        print(json.dumps(
+            {"draft_id": msg_id, "adapter": target.name, "to": to_list, "subject": args.subject},
+            ensure_ascii=False, indent=2,
+        ))
+    else:
+        print(f"✓ 草稿已落 {target.name} Drafts (id={msg_id})")
+        print(f"  收件人: {', '.join(to_list)}")
+        print(f"  主题:   {args.subject}")
+        print(f"  → 打开 Mail.app Drafts 文件夹 review + 点发送")
+    return 0
 
 
 # ============================================================
