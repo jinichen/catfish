@@ -176,7 +176,12 @@
 
 ### Phase 2 — 实现 (2 周)
 
-**BL-CATFISH-MEMORY-PLUGIN-{employee-journal,skills-catalog,feedback,session-meta,skill-guard}**: 把 5 个 catfish 扩展 memory provider 改成 hermes plugin, 每个独立测试 (5 个并行 ticket, 各 1-2 天)
+**BL-CATFISH-MEMORY-PLUGIN-MNEMOSYNE** (重要修正 5/19 凌晨):
+- 原拆"5 个独立 plugin (employee-journal/skills-catalog/feedback/session-meta/skill-guard)" **错了**
+- hermes MemoryManager 有 **one-external-provider limit** — 只能装一个外部 provider
+- 改成: 1 个 catfish 总 provider (e.g. `catfish-mnemosyne` 或 `catfish-memory`), 在它内部
+  prefetch + system_prompt_block 里聚合所有 5 个 catfish 数据源
+- 估时不变 ~1 周, 工程量反而小 (一个 plugin 装一次)
 
 **BL-COMPANION-SWITCH-TO-HERMES-SERVE**: Companion `chat.ts` / `useAuth` / `fetchWithAuth` 改成调 hermes serve, 不再调 gateway. 401 reauth 路径调整 (1 周)
 
