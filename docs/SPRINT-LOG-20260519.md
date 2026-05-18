@@ -112,17 +112,27 @@ ps aux | grep 'Catfish Companion.app'
 
 启动顺序: identity (8998) → gateway (8999) → hermes (8642) → Companion. 任何一个停, 上游都受影响.
 
-## 上游同步风险 (5/19+ 必须处理)
+## 上游同步 — 已自动化 (5/19 凌晨 BL-HERMES-PATCH-AUTOMATION 解决)
 
-hermes CORS 修复在 `~/.hermes/hermes-agent/` (NousResearch 上游 repo) 的本地分支 `catfish-local-patches`. 风险:
+hermes 升级后**不需要手动重打 CORS patch**. 已扩展 `apply_brand_patch.py` 加 `apply_patches()` 函数 + `patches/` 目录机制:
 
-1. **hermes 升级 → main 推进, 我们 detach** → 升级 hook (`apply_brand_patch.py`) 可能覆盖
-2. **未 push 到任何 remote** → 员工新机装 hermes 默认没这 patch, Companion 同样 403
-3. **NousResearch 同步策略未定**: PR / fork / 本地维护三选一
+```
+edge/hermes-fork/
+  ├── apply_brand_patch.py        # 既有, 扩展 apply_patches()
+  └── patches/                    # 新增 (commit ca3cee3)
+      ├── README.md
+      └── 0001-api-server-cors-tauri-origin.patch
+```
 
-**短期 (本周)**: 把 `~/.hermes/hermes-agent/gateway/platforms/api_server.py` 的 diff 抽成 `edge/hermes-fork/patches/` 下的 .patch 文件, 让 setup-catfish-edge.sh 装机时自动 apply. 跟 brand patch 同 pattern.
+跟现有品牌 RULES (字符串替换) 并存:
+- **RULES**: 单行字符串替换 — Hermes / Nous Research → 鲶鱼
+- **patches/**: 多行代码块 — CORS 修复 + 未来其它代码 patch
 
-**长期**: 考虑提 PR 上游 — CORS 是通用功能, 不太可能拒.
+git hooks (post-merge / post-checkout / post-rewrite) 已在 `--install-hooks` 装好, hermes `git pull` 后自动跑 `--apply`, 我们的 patch 自动重打. 幂等 (已 apply 跳过) + dry-run 抗破坏.
+
+加新 patch 流程看 `edge/hermes-fork/patches/README.md`. 命名规范 `NNNN-描述.patch`, sort 顺序 apply.
+
+**长期 (本月内)**: 考虑给 NousResearch 提 CORS PR — 通用功能 + 不动既有逻辑, 收的可能性高. 收了就能删 patches/0001-*.
 
 ## 验证 cutover 健康 (任何时候怀疑)
 
@@ -154,10 +164,12 @@ grep -A3 hermes_api ~/.catfish/companion.yaml
 
 ## 剩余 backlog (5/19+ 做)
 
-- [ ] identity-server 重启加载 30d TTL 配置 (现 1h)
+- [x] ~~identity-server 重启加载 30d TTL 配置~~ ✓ 5/19 06:31 mint 验过 expires_in=2592000s
 - [ ] Tauri tauri.conf.json CSP 加 `http://localhost:*` (Companion 重编译, 改完可移除 yaml 的 127.0.0.1 强制)
-- [ ] hermes CORS patch 抽 `.patch` 进 `edge/hermes-fork/patches/` (升级抗性)
+- [x] ~~hermes CORS patch 抽 `.patch` 进 `edge/hermes-fork/patches/`~~ ✓ commit ca3cee3 BL-HERMES-PATCH-AUTOMATION
+- [ ] 给 NousResearch 提 CORS PR (能 merge 就删本地 patch) — nice-to-have, 不阻塞
 - [ ] gateway memory 模块**真删** (`central/llm-gateway/src/catfish_gateway/memory/providers/`, 稳定 1 周后)
+- [ ] **BL-COMPANION-UX-POST-CUTOVER-AUDIT** — hermes cutover 后 Companion 按钮重新审视 (5/19 当天做, 见下面 §)
 - [ ] 33 个 gateway → edge FS 残留 (lint warning)
 - [ ] MCP stdio transport vs hermes TCP keepalive 不兼容 (hermes 内部 bug)
 - [ ] 内部 qwen 服务夜间不可达 → 文档化"夜间手切外网 model" 的员工 SOP
@@ -166,7 +178,10 @@ grep -A3 hermes_api ~/.catfish/companion.yaml
 
 **你最容易忘的事**:
 
-1. **hermes CORS 修复不在 catfish repo** — 在 `~/.hermes/hermes-agent/` 的 `catfish-local-patches` 分支. hermes 升级会丢.
+1. **hermes CORS 修复在两个地方**:
+   - 真改动位置: `~/.hermes/hermes-agent/gateway/platforms/api_server.py` (catfish-local-patches 分支)
+   - **patch 源**: `~/person_task/catfish/edge/hermes-fork/patches/0001-api-server-cors-tauri-origin.patch`
+   - hermes 升级时 git hook 自动 re-apply, **不需要手动**. 但 patch 源是真理来源, 要改 CORS 行为先改 .patch 文件再 --apply.
 2. **yaml url 必须用 127.0.0.1 不能 localhost** — Tauri CSP 不放 localhost, 改完 CSP 才能用 hostname.
 3. **`enabled: false` 是灰度安全默认** — setup 脚本写完不会自动翻 true, 员工装机后**必须手动翻**.
 4. **gateway 还会收到流量, 那是 hermes 转发的, 不是 Companion 直打** — 看 user identity 是不是 chenhongbo@ffcs.cn 透传过来的就知道.
@@ -180,6 +195,65 @@ grep -A3 hermes_api ~/.catfish/companion.yaml
 - 02:00 → 04:00 — 撞 5 个坑, 逐个修
 - 04:00 → 05:30 — 真切 + CORS 修复 + 实盘验证
 - 06:00 — 本文档写完
+
+## § BL-COMPANION-UX-POST-CUTOVER-AUDIT (5/19 当天做)
+
+> **触发**: 切到 hermes 后, Companion 输入栏的 3 个按钮 (学习 / 接续再思考 / 停在发) 原本是 Companion + gateway 时代的产物, 行为可能过时.
+
+### Phase A — Audit (1 小时, 不动代码)
+
+每个按钮三问: (1) 现在 wire 到哪 (2) 切 hermes 后是否仍生效 (3) 还有用没
+
+#### A1. 🎓 学习 / Teaching Mode
+
+- **现在 wire**: `chat.ts:451` `useTeachingStore.getState().on` → 发 `X-Catfish-Teaching-Mode: 1` header
+- **gateway 时代行为**: gateway 收 header → 关 9 个 inject (memory / employee_journal / 等) + 关 feedback retry, 让 LLM "纯净"接收输入
+- **hermes 时代检查**:
+  - hermes API server 收到这 header, 不认识, 透传给 gateway → gateway 仍关 inject 但**inject 现在在 hermes 这层做的**, 关 gateway inject 没意义
+  - hermes 是否有 "skip memory inject" 等价开关? (查 hermes 文档 / 配置)
+  - 如果没, "教学模式" 这个产品概念在 hermes 架构下需要重新定义 — 或者**改成传给 hermes 的 system prompt override**
+- **决策**:
+  - 选 A. wire 到 hermes (找 hermes 等价 toggle / 改 hermes 加这功能)
+  - 选 B. 砍掉这按钮 (员工实际用吗? 看 metrics 这按钮点击率)
+  - 选 C. 改语义为"加深度推理 prompt" (变成 prompt 工程)
+
+#### A2. 🔄 接续 / 再思考
+
+- **现在 wire**: 找 chat.ts / useChat.ts 里的逻辑 — 大概是重新 POST 一次带 "请再深入想想" 的 instruction
+- **hermes 时代检查**:
+  - hermes 有 `auto_continue` (自动, 重试错误响应), 跟用户主动 "我不满意" **语义不同** — 这按钮**还有价值**
+  - 但实现机制可能要调: 之前用户点接续, Companion 复用同 session 重发. hermes 走 agent loop, "再思考"应该让 hermes 自己 plan-act 一轮, 不是重 POST 整个对话
+- **决策**: 大概率保留, 但**改实现** — 让 hermes agent loop 跑一轮 "请重新评估上一次回答" 的 sub-prompt
+
+#### A3. 🎙 停在发 / 按住说话
+
+- 跟 hermes 切换**无关**, 纯 UX/语音录入
+- **不动**
+
+### Phase B — 扩展思考: 暴露 hermes 原生特性
+
+切完后, 理论上能给员工开放 hermes 的 4 类原生能力, 看哪些值得做:
+
+| hermes 能力 | 当前状态 | 该做不该做 |
+|---|---|---|
+| plugins (context_engine, holographic memory 等) | one-external-provider-limit 锁了 catfish-memory, 其它 plugin 暂关 | 短期不开, 怕跟 catfish memory 撞 |
+| skill 系统 | hermes 有自己的 skills/, catfish skill 是双轨 | **该合并** — 但是大工程, 不在本 sprint |
+| multi-agent A2A 协议 | hermes 有, catfish 也有 (各自实现, 不互通) | 长期对齐, 不急 |
+| 命令模式 (`/cmd`) | hermes CLI 有, Companion 没暴露 | Phase B 后期看是否值得 |
+
+### Phase C — 改 + 验 (2-3 小时)
+
+按 Phase A 决策, 改 chat.ts / 后端 / 加测试. 改完手测 3 按钮 + 跑一轮已有 chat 看不破回归.
+
+### 时间预算
+
+- 7:00 - 9:00 通勤 + 早饭 (休息一下, 别死磕)
+- 9:00 - 10:00 Phase A audit
+- 10:00 - 12:00 Phase B 扩展思考 + 决策
+- 13:00 - 16:00 Phase C 实现 + 验证
+- 16:00 commit + 收尾
+
+**前置依赖**: 你**先休息 2 小时** (现在 7:00, 9:00 前别动代码). 28h sprint 后大脑 reasoning 能力降级, 这事是产品设计决策, 不是闭眼能写的代码, 醒着大脑做才不会做错决策.
 
 ---
 *作者: 鸿波 + Claude (Cowork mode)*
