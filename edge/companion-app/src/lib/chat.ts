@@ -15,6 +15,7 @@ import type { ChatMessage, ToolCall } from "../types/chat";
 import { config } from "./env";
 import { fetchWithAuth } from "./me";
 import { useAgentStore } from "../store/agent";
+import { useChatStore } from "../store/chat";
 import { useTeachingStore } from "../store/teaching";
 import { fetchCatalog } from "./tauri";
 import { applySteerPrefix } from "./steer";  // BL-HERMES013-RED-1B (5/13 ACP /steer)
@@ -409,6 +410,18 @@ export async function streamChat(params: SendChatParams): Promise<void> {
   if (useTeachingStore.getState().on) {
     agentHeaders["X-Catfish-Teaching-Mode"] = "1";
   }
+
+  // BL-GATEWAY-SOFT-HANDOFF (5/18): 切 model 后下一次请求带 X-Catfish-Prev-Model,
+  // gateway 据此把历史 tool_calls 转 inline 文本 (新 model 不支持 tools 时), 防炸.
+  // 同 model 续聊 → prevSentModel === current model, gateway 看相同就 no-op.
+  // 没发过任何消息 (prevSentModel === null) → 不发 header, 跟老行为一样.
+  const _prevSent = useChatStore.getState().prevSentModel;
+  if (_prevSent && _prevSent !== model) {
+    agentHeaders["X-Catfish-Prev-Model"] = _prevSent;
+  }
+  // 发完后 (无论成功 / 失败) 更新 prevSentModel = 本次 model, 下一次发送对比基准.
+  // 放在最早 — 即使 fetch 抛错, 下次再发也能继续追踪 (老 model 已经"用过"了).
+  useChatStore.getState().markModelSent();
 
   // BL-FIX45 A+ (5/11): 走 fetchWithAuth — 401 自动 reauth + retry, 不再 inline 处理.
   // Authorization header 由 wrapper 自动加.

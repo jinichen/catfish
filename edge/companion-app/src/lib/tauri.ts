@@ -245,6 +245,32 @@ export const openTerminal = (cwd?: string) =>
 export const sendNotification = (title: string, body: string) =>
   rawInvoke<void>("notify", { title, body });
 
+// ── email digest (BL-COMPANION-EMAIL-DIGEST 5/18) ─────────
+// shell out catfish-email CLI, 返 raw JSON 字符串. 前端 JSON.parse 自取字段.
+export const emailDigestFetch = (limit?: number) =>
+  rawInvoke<string>("email_digest_fetch", { limit: limit ?? null });
+export const emailAccountsFetch = () =>
+  rawInvoke<string>("email_accounts_fetch");
+
+/** catfish-email list --json 单条 message 的 schema. 字段跟 base.py Message dataclass 对齐. */
+export interface EmailDigestItem {
+  id: string;
+  account: string;
+  folder: string;
+  subject: string;
+  sender: string;
+  date: string;          // ISO-8601 UTC
+  is_read: boolean;
+  has_attachments: boolean;
+  body_text: string;     // list 场景为 snippet
+}
+/** catfish-email accounts --json 单条 schema. */
+export interface EmailAccountItem {
+  name: string;
+  address: string;
+  is_default: boolean;
+}
+
 // ── 桌宠跨窗通信 (5/6: Tauri 跨 webview event 不通, 走 Rust polling buffer) ─
 export interface PetEmitBubbleDiag {
   pet_window_exists: boolean;

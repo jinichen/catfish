@@ -74,6 +74,7 @@ from .session_summarizer import trigger_background_summary  # noqa: E402
 from .skill_guard import inject_skill_guard  # noqa: E402
 from .skills_inject import inject_skills_catalog  # noqa: E402
 from .stats_guard import inject_stats_guard  # noqa: E402
+from .model_handoff import apply_soft_handoff  # noqa: E402
 from .tool_capability_guard import route_to_tool_capable_if_needed  # noqa: E402
 from .tools_sanitizer import sanitize_tools  # noqa: E402
 
@@ -2411,6 +2412,25 @@ async def chat_completions(
             return StreamingResponse(
                 _fake_sse_response(goal_response, model_name=model_name),
                 media_type="text/event-stream",
+            )
+
+    # BL-GATEWAY-SOFT-HANDOFF (5/18 鸿波拍板): 跨 model 切换中间件.
+    # client 自报上轮 model (X-Catfish-Prev-Model header), 跟本轮 body["model"] 不同 +
+    # 新 model 不支持 tools → 把历史 tool_calls / tool messages 转 inline 文本摘要,
+    # 不让旧的 tool history 直接送给新 model 而炸. 客户端不传 header → no-op.
+    # 不处理 context window / persona / memory rebind (3 件 hermes 自家做 / 我们不需要).
+    _prev_model_name = request.headers.get("x-catfish-prev-model", "").strip()
+    if _prev_model_name:
+        body, _handoff_hint = apply_soft_handoff(
+            body,
+            prev_model_name=_prev_model_name,
+            new_model=model,
+            config=config,
+        )
+        if _handoff_hint:
+            request.state.handoff_hint = _handoff_hint
+            logger.info(
+                "soft handoff applied: user=%s hint=%s", user.sub, _handoff_hint
             )
 
     # 鲶鱼身份注入：客户端没传 system message 就自动加 SOUL + memory

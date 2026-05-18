@@ -13,6 +13,7 @@ pub mod audit;
 pub mod auth;
 pub mod chrome;
 pub mod curator;
+pub mod email;  // BL-COMPANION-EMAIL-DIGEST (5/18): 邮件简报卡的后端 shell-out
 pub mod endpoints;
 pub mod feedback;
 pub mod file;

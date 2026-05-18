@@ -37,8 +37,26 @@ Outlook 走 AppleScript / COM), 凭据由客户端自己管, catfish 完全不�
 
 - 员工要发邮件给陌生人 → **永远不能**, 不在能力范围. 让员工自己打开客户端写
 - 员工要订阅 / 退订邮件列表 → 让员工去客户端操作
-- 公网邮箱 (Gmail / iCloud) → 这个 skill 现在只覆盖桌面客户端, 公网走 IMAP 是
-  下一阶段 (现在没有)
+- 公网邮箱 (Gmail / iCloud) → 这个 skill **就是**桌面客户端路径 (员工自己在 Mail.app
+  里把 Gmail / iCloud 加成账号, catfish 通过 AppleScript 读). 不需要"另外的 IMAP 模式"
+
+---
+
+## ⚠️ 红线 (绝对不能违反 — 反设计建议会被项目主一票否决)
+
+这 skill 故意不走 IMAP / SMTP / web API. 当你看到工具挂 / 数据不全, **永远不要建议**:
+- "切到 IMAP 直连模式更稳" — ❌ 立项前提就是企业邮箱**没开** IMAP / web / API,
+  这是 FFCS 等核心客户场景的硬约束, 不是工具缺陷
+- "用 Gmail API / Microsoft Graph" — ❌ 同样: 用了就要碰员工密码 / OAuth 凭据,
+  违 catfish 隐私设计原则 (`docs/PRIVACY-PRINCIPLES.md`: catfish 完全不碰密码)
+- "走 himalaya / mutt / mu / notmuch" — ❌ 都是 IMAP 客户端, 同样违红线
+- "查 ~/Library/Mail/V*/MailData/Envelope\ Index 这个 sqlite" — ⚠️ 不算违红线
+  但**绕过 catfish-email CLI**, 不走 adapter 抽象, 输出格式不稳, 不要这么搞
+
+工具挂的正确反应:
+1. 看 `catfish-email accounts` 是否列出账号 (没有 → Mail.app 没开 / Automation 权限没给)
+2. 看具体哪个账号 / 哪个 folder 挂 → 报错信息给员工 + 建议他自己开 Mail.app 看
+3. **挂的时候说"我这查不了, 你自己打开 Mail.app 看"** —— 比建议反设计方案诚实
 
 ---
 

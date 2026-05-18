@@ -79,59 +79,62 @@ tell application "System Events"
 end tell
 """
 
+# BL-EMAIL-APPLEMAIL-AS-CTRLCHAR (5/18):
+#   - 老 f-string interpolate FS="\x1f"/RS="\x1e" 进 AS string literal → osascript -2741.
+#   - AS 里用 `character id 31` (modern, Mac 10.5+ ASCII character 替代品) 重建分隔符.
+#   - AS 注释里 *不* 写中文 — osascript 解析中文 comment 时 line/col 计算错位, 错误
+#     位置难定位; 中文说明全挪到 Python 这边.
+#   - `set accs to every account` 比 `set accs to accounts` 更明确, 部分 macOS 版本
+#     `accounts` 单独出现会被解析成 class name (-2741 在 col 145 / 497 都踩这).
 _AS_LIST_ACCOUNTS = """
 tell application "Mail"
-    -- BL-EMAIL-APPLEMAIL-AS-CTRLCHAR (5/18): AS string literal 不接受 raw 0x1f/0x1e,
-    -- 老代码 Python f-string 把 FS="\\x1f" / RS="\\x1e" 内嵌进 AS 字符串里直接挂
-    -- (osascript -2741 syntax error). 在 AS 里用 ASCII character 重建同样的字节,
-    -- Python 端 .split(FS) / .split(RS) 行为不变 (写出 byte 完全一致).
-    set FS to (ASCII character 31)
-    set RS to (ASCII character 30)
-    set accs to accounts
+    set FS to (character id 31)
+    set RS to (character id 30)
     set out to ""
-    set defaultName to ""
-    try
-        set defaultName to name of default account
-    end try
-    repeat with acc in accs
-        set accName to name of acc as string
-        set addrs to email addresses of acc
+    repeat with acc in every account
+        set accName to (name of acc) as string
+        set addrList to (email addresses of acc)
         set addr to ""
-        if (count of addrs) > 0 then
-            set addr to item 1 of addrs as string
+        if (count of addrList) > 0 then
+            set addr to (item 1 of addrList) as string
         end if
-        set isDefault to "0"
-        if accName = defaultName then set isDefault to "1"
-        set out to out & accName & FS & addr & FS & isDefault & RS
+        set out to out & accName & FS & addr & FS & "0" & RS
     end repeat
     return out
 end tell
 """
 
 # list_messages: messageId | subject | sender | date | isRead | folder
+# BL-EMAIL-APPLEMAIL-INBOX-NAMES (5/18 鸿波实盘):
+#   Mail.app 在不同 IMAP provider 下 inbox 物理名不一样:
+#     - iCloud:   "INBOX" / "Inbox"
+#     - Gmail:    "INBOX" / "[Gmail]/All Mail" / 本地化"收件箱"
+#     - Exchange: "Inbox" / 本地化"收件箱"
+#   老硬编码 `mailbox "Inbox" of acc` 在 Gmail 5 个账号挂 "不能获得 mailbox Inbox of account id...".
+#   改成: 当 folderName="Inbox" 时, AS 端按候选列表逐个 try 找第一个能拿到的;
+#   非 "Inbox" 时按字面名 (员工自己指定 subfolder 不该兜底).
 _AS_LIST_MESSAGES = """
 tell application "Mail"
-    -- BL-EMAIL-APPLEMAIL-AS-CTRLCHAR (5/18): FS/RS 在 AS 里建.
-    set FS to (ASCII character 31)
-    set RS to (ASCII character 30)
+    set FS to (character id 31)
+    set RS to (character id 30)
     set accName to "{ACCOUNT}"
     set folderName to "{FOLDER}"
     set limitN to {LIMIT}
     set unreadOnly to {UNREAD_ONLY}
     set acc to first account whose name of it is accName
-    set mb to mailbox folderName of acc
-    set msgs to messages of mb
+    set mb to my resolveInbox(acc, folderName)
+    set msgs to (messages of mb)
     set out to ""
     set i to 0
     repeat with m in msgs
-        if i ≥ limitN then exit repeat
+        if i >= limitN then exit repeat
         set skipIt to false
         if unreadOnly and (read status of m) is true then set skipIt to true
         if not skipIt then
-            set msgId to id of m as string
-            set subj to subject of m as string
-            set sndr to sender of m as string
-            set dt to (date received of m) as string
+            set msgId to (id of m) as string
+            set subj to (subject of m) as string
+            set sndr to (sender of m) as string
+            set dt to my isoDate(date received of m)
             set readSt to "1"
             if (read status of m) is false then set readSt to "0"
             set out to out & msgId & FS & subj & FS & sndr & FS & dt & FS & readSt & FS & folderName & RS
@@ -140,14 +143,60 @@ tell application "Mail"
     end repeat
     return out
 end tell
+
+-- BL-EMAIL-APPLEMAIL-INBOX-NAMES (5/18): resolve canonical inbox across providers.
+-- iCloud/Gmail/Exchange/Outlook all name their inbox differently; try the common
+-- candidates one by one, fall back to literal name if not "Inbox".
+on resolveInbox(acc, wantName)
+    if wantName is "Inbox" then
+        set candidates to {"INBOX", "Inbox", "收件箱", "受信箱"}
+        repeat with cand in candidates
+            tell application "Mail"
+                try
+                    return mailbox (cand as string) of acc
+                end try
+            end tell
+        end repeat
+    end if
+    tell application "Mail"
+        return mailbox wantName of acc
+    end tell
+end resolveInbox
+
+-- BL-EMAIL-DATE-ISO (5/18): coerce AS date to ISO-8601 ourselves.
+-- `(date received of m) as string` is locale-dependent (zh-CN gives '2026年...' which
+-- Python's strptime can't parse without explicit locale). We assemble year-mo-dyTh:mn:sc
+-- manually, in local TZ (no offset suffix). Python side just parses as naive ISO.
+on isoDate(d)
+    set yr to year of d as integer
+    set mo to month of d as integer
+    set dy to day of d as integer
+    set hr to hours of d as integer
+    set mn to minutes of d as integer
+    set sc to seconds of d as integer
+    return _pad4(yr) & "-" & _pad2(mo) & "-" & _pad2(dy) & "T" & _pad2(hr) & ":" & _pad2(mn) & ":" & _pad2(sc)
+end isoDate
+
+on _pad2(n)
+    set s to n as string
+    if (count of s) < 2 then set s to "0" & s
+    return s
+end _pad2
+
+on _pad4(n)
+    set s to n as string
+    repeat while (count of s) < 4
+        set s to "0" & s
+    end repeat
+    return s
+end _pad4
 """
 
 # read_message: AS 写 body (text) + source (完整 RFC822) 到 2 个 temp 文件,
 # Python 解析 source 提 HTML part. BL-EMAIL-APPLEMAIL-FULL (5/18).
 _AS_GET_MESSAGE = """
 tell application "Mail"
-    -- BL-EMAIL-APPLEMAIL-AS-CTRLCHAR (5/18): FS 在 AS 里建.
-    set FS to (ASCII character 31)
+    set FS to (character id 31)
     set accName to "{ACCOUNT}"
     set targetId to {MSG_ID}
     set bodyPath to "{BODY_PATH}"
@@ -172,7 +221,7 @@ tell application "Mail"
     write bodyText to fileRef as «class utf8»
     close access fileRef
 
-    -- 写完整 RFC822 source (含 HTML part), Python 端用 email.parser 提 body_html
+    -- Write full RFC822 source (with HTML part); Python parses body_html via email.parser
     try
         set rawSource to source of foundMsg
         set srcRef to open for access POSIX file sourcePath with write permission
@@ -180,7 +229,7 @@ tell application "Mail"
         write rawSource to srcRef as «class utf8»
         close access srcRef
     on error
-        -- source 拿不到 (老 Mail 版本 / 网络 fetch 失败), HTML 留空
+        -- source unavailable (old Mail version / network fetch fail) - leave HTML blank
     end try
 
     set subj to subject of foundMsg
@@ -213,26 +262,26 @@ end tell
 """
 
 # search: AS messages whose subject contains q OR sender contains q
+# BL-EMAIL-APPLEMAIL-INBOX-NAMES (5/18): 同样走 resolveInbox 兜底 cross-account inbox 名.
 _AS_SEARCH = """
 tell application "Mail"
-    -- BL-EMAIL-APPLEMAIL-AS-CTRLCHAR (5/18): FS/RS 在 AS 里建.
-    set FS to (ASCII character 31)
-    set RS to (ASCII character 30)
+    set FS to (character id 31)
+    set RS to (character id 30)
     set accName to "{ACCOUNT}"
     set folderName to "{FOLDER}"
     set q to "{QUERY}"
     set limitN to {LIMIT}
     set acc to first account whose name of it is accName
-    set mb to mailbox folderName of acc
+    set mb to my resolveInbox(acc, folderName)
     set msgs to (messages of mb whose subject contains q or sender contains q)
     set out to ""
     set i to 0
     repeat with m in msgs
-        if i ≥ limitN then exit repeat
-        set msgId to id of m as string
-        set subj to subject of m as string
-        set sndr to sender of m as string
-        set dt to (date received of m) as string
+        if i >= limitN then exit repeat
+        set msgId to (id of m) as string
+        set subj to (subject of m) as string
+        set sndr to (sender of m) as string
+        set dt to my isoDate(date received of m)
         set readSt to "1"
         if (read status of m) is false then set readSt to "0"
         set out to out & msgId & FS & subj & FS & sndr & FS & dt & FS & readSt & FS & folderName & RS
@@ -240,6 +289,49 @@ tell application "Mail"
     end repeat
     return out
 end tell
+
+-- BL-EMAIL-APPLEMAIL-INBOX-NAMES (5/18): same handler as _AS_LIST_MESSAGES; AS doesn't
+-- share handlers across osascript invocations so we repeat it.
+on resolveInbox(acc, wantName)
+    if wantName is "Inbox" then
+        set candidates to {"INBOX", "Inbox", "收件箱", "受信箱"}
+        repeat with cand in candidates
+            tell application "Mail"
+                try
+                    return mailbox (cand as string) of acc
+                end try
+            end tell
+        end repeat
+    end if
+    tell application "Mail"
+        return mailbox wantName of acc
+    end tell
+end resolveInbox
+
+-- BL-EMAIL-DATE-ISO (5/18): same as _AS_LIST_MESSAGES, repeat handlers.
+on isoDate(d)
+    set yr to year of d as integer
+    set mo to month of d as integer
+    set dy to day of d as integer
+    set hr to hours of d as integer
+    set mn to minutes of d as integer
+    set sc to seconds of d as integer
+    return _pad4(yr) & "-" & _pad2(mo) & "-" & _pad2(dy) & "T" & _pad2(hr) & ":" & _pad2(mn) & ":" & _pad2(sc)
+end isoDate
+
+on _pad2(n)
+    set s to n as string
+    if (count of s) < 2 then set s to "0" & s
+    return s
+end _pad2
+
+on _pad4(n)
+    set s to n as string
+    repeat while (count of s) < 4
+        set s to "0" & s
+    end repeat
+    return s
+end _pad4
 """
 
 # create_draft: body 从 temp 文件读; 支持 to/cc/bcc
@@ -282,7 +374,7 @@ tell application "Mail"
                 make new bcc recipient at end of bcc recipients with properties {address:cleanAddr}
             end if
         end repeat
-        -- 不调 send! 留在 Drafts
+        -- DO NOT call send; stays in Drafts (red line)
     end tell
 
     return id of newMsg as string
@@ -387,15 +479,29 @@ def _parse_records(text: str, n_fields: int) -> list[list[str]]:
 def _parse_applescript_date(s: str) -> str:
     """AS date → ISO-8601 UTC.
 
-    AS date 格式跟 system locale 走. 常见:
-      - 英文: 'Friday, May 17, 2026 at 1:30:00 PM'
-      - 中文: '2026年5月17日 星期五 下午1:30:00'
+    5/18 BL-EMAIL-DATE-ISO: AS 端用 isoDate() handler 直接 format 成
+    'YYYY-MM-DDTHH:MM:SS' (本地时区, 无 offset), Python 这里解 ISO 后假设
+    本地时区, 转 UTC. 老 locale 字符串路径 fallback 保留 (防 AS 端某天回退).
 
-    解析不了返原字符串 (老 date 解析失败不阻 list).
+    Args:
+        s: AS 输出的日期串. 通常 'YYYY-MM-DDTHH:MM:SS' (5/18 起新格式),
+           老格式 '2026年5月17日 星期五 下午1:30:00' / 'Friday, May 17, 2026 at 1:30:00 PM' 也尝试.
+
+    Returns:
+        ISO-8601 UTC '2026-05-17T13:30:00+00:00', 解析不了原样返.
     """
     if not s:
         return ""
-    # 先 RFC 2822 (Mail 内部很多 header 是这格式)
+    # 5/18 新路径: AS isoDate() 输出 'YYYY-MM-DDTHH:MM:SS' (naive, 本地时区)
+    try:
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            # 假设本地时区, 转 UTC. astimezone(None) 拿系统时区.
+            dt = dt.astimezone()
+        return dt.astimezone(timezone.utc).isoformat()
+    except ValueError:
+        pass
+    # RFC 2822 fallback (Mail header 偶尔出这格式)
     try:
         dt = parsedate_to_datetime(s)
         if dt:
@@ -404,7 +510,7 @@ def _parse_applescript_date(s: str) -> str:
             return dt.astimezone(timezone.utc).isoformat()
     except (TypeError, ValueError):
         pass
-    # 再几个常见 locale format
+    # locale 字符串 fallback (老 adapter 路径或本地化变种)
     for fmt in (
         "%A, %B %d, %Y at %I:%M:%S %p",
         "%A, %d %B %Y at %H:%M:%S",

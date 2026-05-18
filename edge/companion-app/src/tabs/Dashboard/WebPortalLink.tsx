@@ -234,7 +234,7 @@ export default function WebPortalLink() {
                 transition: "border-color 0.15s ease",
               }}
               onMouseEnter={(e) => {
-                if (!isOffline) e.currentTarget.style.borderColor = "var(--catfish-accent)";
+                if (!isOffline) e.currentTarget.style.borderColor = "var(--catfish-cyan)";
               }}
               onMouseLeave={(e) =>
                 (e.currentTarget.style.borderColor = "var(--catfish-border)")

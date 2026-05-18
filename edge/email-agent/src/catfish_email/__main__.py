@@ -31,7 +31,7 @@ from .adapters.base import (
     ListFilter,
     NotSupportedError,
 )
-from .inbox import get_adapter
+from .inbox import get_adapter, get_all_adapters
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -43,8 +43,16 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
+    # 5/18 BL-EMAIL-MULTI-CLIENT: --client 显式 → 单 adapter; 没传 → 全部 adapter
+    # (e.g. Mail.app + Foxmail 同时跑). 防 factory 短路漏 Foxmail 数据.
     try:
-        adapter = get_adapter(args.client)
+        if args.client:
+            adapters: list[EmailAdapter] = [get_adapter(args.client)]
+        else:
+            adapters = get_all_adapters()
+            if not adapters:
+                _err("找不到任何可用邮件客户端 (Mail.app 没开 / Foxmail 没装)")
+                return 1
     except DataNotFoundError as e:
         _err(f"找不到可用的邮件客户端: {e}")
         return 1
@@ -53,13 +61,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.cmd == "list":
-        return _cmd_list(adapter, args)
+        return _cmd_list(adapters, args)
     if args.cmd == "read":
-        return _cmd_read(adapter, args)
+        return _cmd_read(adapters, args)
     if args.cmd == "search":
-        return _cmd_search(adapter, args)
+        return _cmd_search(adapters, args)
     if args.cmd == "accounts":
-        return _cmd_accounts(adapter, args)
+        return _cmd_accounts(adapters, args)
 
     parser.print_help()
     return 2
@@ -70,35 +78,78 @@ def main(argv: list[str] | None = None) -> int:
 # ============================================================
 
 
-def _cmd_accounts(adapter: EmailAdapter, args) -> int:
-    accs = adapter.list_accounts()
-    if args.json:
-        print(json.dumps([asdict(a) for a in accs], ensure_ascii=False, indent=2))
-    else:
-        print(f"客户端: {adapter.name}, 共 {len(accs)} 个账号:")
+def _cmd_accounts(adapters: list[EmailAdapter], args) -> int:
+    """5/18 BL-EMAIL-MULTI-CLIENT: 跨所有 adapter (Mail.app + Foxmail) 列账号."""
+    all_accs = []
+    for adapter in adapters:
+        try:
+            accs = adapter.list_accounts()
+        except EmailAdapterError as e:
+            print(f"⚠ {adapter.name} 列账号失败: {e}", file=sys.stderr)
+            continue
+        # 每个 account dict 加 client 字段标识从哪来
         for a in accs:
-            mark = "★" if a.is_default else " "
-            print(f"  {mark} {a.address}")
+            d = asdict(a)
+            d["client"] = adapter.name
+            all_accs.append(d)
+
+    if args.json:
+        print(json.dumps(all_accs, ensure_ascii=False, indent=2))
+    else:
+        print(f"共 {len(all_accs)} 个账号 (跨 {len(adapters)} 个客户端):")
+        for d in all_accs:
+            mark = "★" if d.get("is_default") else " "
+            print(f"  {mark} [{d['client']}] {d['address']}")
     return 0
 
 
-def _cmd_list(adapter: EmailAdapter, args) -> int:
-    filt = ListFilter(
-        folder=args.folder,
-        account=args.account,
-        since=args.since,
-        until=args.until,
-        sender_contains=args.sender,
-        subject_contains=args.subject,
-        body_contains=args.body,
-        unread_only=args.unread,
-        limit=args.limit,
-    )
-    try:
-        msgs = adapter.list_messages(filt)
-    except EmailAdapterError as e:
-        _err(f"列邮件失败: {e}")
-        return 1
+def _cmd_list(adapters: list[EmailAdapter], args) -> int:
+    """5/18 BL-EMAIL-MULTI-CLIENT: 跨所有 adapter (Mail.app + Foxmail) + 所有账号合并查.
+
+    BL-EMAIL-MULTI-ACCOUNT (同日): --account 没传 → 遍历每个 adapter 的所有账号;
+    显式传 --account 还是单账号 (员工只看某个账号时用).
+    """
+    msgs = []
+    errors: list[str] = []
+    for adapter in adapters:
+        # 这个 adapter 里要查哪些账号
+        if args.account:
+            accounts_to_query: list[str | None] = [args.account]
+        else:
+            try:
+                accs = adapter.list_accounts()
+                accounts_to_query = [a.address for a in accs] or [None]
+            except EmailAdapterError as e:
+                errors.append(f"[{adapter.name}] 列账号失败: {e}")
+                continue
+
+        for acc_addr in accounts_to_query:
+            filt = ListFilter(
+                folder=args.folder,
+                account=acc_addr,
+                since=args.since,
+                until=args.until,
+                sender_contains=args.sender,
+                subject_contains=args.subject,
+                body_contains=args.body,
+                unread_only=args.unread,
+                # 每账号取 limit, 最后再 trim. 防某账号占满 limit 把其他账号挤掉.
+                limit=args.limit,
+            )
+            try:
+                msgs.extend(adapter.list_messages(filt))
+            except EmailAdapterError as e:
+                # 单账号失败不阻塞 (Gmail INBOX 名兼容性 / Foxmail 没数据等), 记下继续
+                errors.append(f"[{adapter.name}] {acc_addr}: {e}")
+                continue
+
+    # 跨账号按 date 降序合并, 再 trim 到 limit
+    msgs.sort(key=lambda m: m.date or "", reverse=True)
+    msgs = msgs[: args.limit]
+
+    # 错误进 stderr, stdout 留 JSON / markdown (跨 adapter / 跨账号场景, 部分挂不阻塞)
+    for err in errors:
+        print(f"⚠ {err}", file=sys.stderr)
 
     if args.json:
         print(json.dumps([_msg_to_dict(m) for m in msgs], ensure_ascii=False, indent=2))
@@ -106,7 +157,7 @@ def _cmd_list(adapter: EmailAdapter, args) -> int:
         if not msgs:
             print("(没邮件)")
             return 0
-        print(f"# {filt.folder}, {len(msgs)} 封")
+        print(f"# {args.folder}, {len(msgs)} 封 (跨 {len(adapters)} 个客户端)")
         print()
         print("| 状态 | 时间 | 主题 | 发件人 |")
         print("|------|------|------|--------|")
@@ -120,15 +171,24 @@ def _cmd_list(adapter: EmailAdapter, args) -> int:
     return 0
 
 
-def _cmd_read(adapter: EmailAdapter, args) -> int:
-    try:
-        m = adapter.read_message(args.id)
-    except DataNotFoundError as e:
-        _err(f"邮件不存在: {e}")
+def _cmd_read(adapters: list[EmailAdapter], args) -> int:
+    """5/18 BL-EMAIL-MULTI-CLIENT: 不知道 id 来自哪个 adapter, 逐个 try.
+    Apple Mail id (AS message id 整数) 跟 Foxmail id (文件路径 hash) 不会撞.
+    """
+    last_err: Exception | None = None
+    for adapter in adapters:
+        try:
+            m = adapter.read_message(args.id)
+            break  # 找到了
+        except DataNotFoundError as e:
+            last_err = e
+            continue  # 试下一个
+        except EmailAdapterError as e:
+            _err(f"[{adapter.name}] 读邮件失败: {e}")
+            return 1
+    else:
+        _err(f"邮件不存在 (跨 {len(adapters)} 个客户端都没找到): {last_err}")
         return 3
-    except EmailAdapterError as e:
-        _err(f"读邮件失败: {e}")
-        return 1
 
     if args.json:
         print(json.dumps(_msg_to_dict(m), ensure_ascii=False, indent=2))
@@ -153,17 +213,27 @@ def _cmd_read(adapter: EmailAdapter, args) -> int:
     return 0
 
 
-def _cmd_search(adapter: EmailAdapter, args) -> int:
-    try:
-        hits = adapter.search(
-            args.query,
-            account=args.account,
-            folder=args.folder,
-            limit=args.limit,
-        )
-    except EmailAdapterError as e:
-        _err(f"搜索失败: {e}")
-        return 1
+def _cmd_search(adapters: list[EmailAdapter], args) -> int:
+    """5/18 BL-EMAIL-MULTI-CLIENT: 跨所有 adapter 搜, 合并 + 按 date 排."""
+    hits = []
+    errors: list[str] = []
+    for adapter in adapters:
+        try:
+            hits.extend(adapter.search(
+                args.query,
+                account=args.account,
+                folder=args.folder,
+                limit=args.limit,
+            ))
+        except EmailAdapterError as e:
+            errors.append(f"[{adapter.name}] 搜索失败: {e}")
+            continue
+
+    hits.sort(key=lambda m: m.date or "", reverse=True)
+    hits = hits[: args.limit]
+
+    for err in errors:
+        print(f"⚠ {err}", file=sys.stderr)
 
     if args.json:
         print(json.dumps([_msg_to_dict(m) for m in hits], ensure_ascii=False, indent=2))
@@ -171,7 +241,7 @@ def _cmd_search(adapter: EmailAdapter, args) -> int:
         if not hits:
             print(f"(没找到 '{args.query}')")
             return 0
-        print(f"# 搜索 '{args.query}', 找到 {len(hits)} 封")
+        print(f"# 搜索 '{args.query}', 找到 {len(hits)} 封 (跨 {len(adapters)} 个客户端)")
         print()
         for m in hits:
             state = "○" if m.is_read else "●"

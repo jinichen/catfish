@@ -27,6 +27,11 @@ interface ChatState {
    *  prompt_tokens, 给状态栏 context counter 用 (xxK / 128K, 80% 黄, 95% 红).
    *  reset / 切 session 时清零, 每次 onDone 时更新. */
   lastPromptTokens: number | null;
+  /** BL-GATEWAY-SOFT-HANDOFF (5/18): 上轮请求用的 model 名. 切 model 后下一轮请求
+   *  会带 X-Catfish-Prev-Model header, gateway 据此做 tool-history 兼容转译.
+   *  null = 本 session 还没发过任何请求, 或者 reset 过. setModel 不动这个,
+   *  发送时同步: send 前快照 model 进 header, send 完更新 prevSentModel = model. */
+  prevSentModel: string | null;
   /** BL-HERMES013-RED-1A (5/13 借鉴 Hermes 0.13 ACP /queue): streaming 中
    *  用户排队的下一条消息. 当前 stream [DONE] → useChat 自动从 queue 取第一条
    *  send. 跟 BL-COMPANION-UX1 ⏹ 停下接着发 互补 (一个停一个排队).
@@ -45,6 +50,9 @@ interface ChatState {
   setModel: (m: string) => void;
   setPersistedSessionId: (id: string | null) => void;
   setLastPromptTokens: (n: number | null) => void;
+  /** BL-GATEWAY-SOFT-HANDOFF (5/18): 标记一次 send 已用过当前 model, 下次发送
+   *  时如果 model 变了, X-Catfish-Prev-Model header 就带上这个旧值. */
+  markModelSent: () => void;
   /** BL-HERMES013-RED-1A: queue 操作 */
   enqueueMessage: (text: string) => void;
   dequeueMessage: () => { id: string; text: string; ts: string } | undefined;
@@ -120,6 +128,7 @@ export const useChatStore = create<ChatState>((set) => ({
   model: "catfish-private-main",
   persistedSessionId: null,
   lastPromptTokens: null,
+  prevSentModel: null,
   queue: [],
 
   setMessages: (messages) => set({ messages }),
@@ -156,6 +165,7 @@ export const useChatStore = create<ChatState>((set) => ({
     set({ persistedSessionId }),
   setLastPromptTokens: (lastPromptTokens) =>
     set({ lastPromptTokens }),
+  markModelSent: () => set((s) => ({ prevSentModel: s.model })),
   enqueueMessage: (text) =>
     set((s) => ({
       queue: [
@@ -188,6 +198,10 @@ export const useChatStore = create<ChatState>((set) => ({
       streamingId: null,
       model: detail.meta.model,
       persistedSessionId: detail.meta.id,
+      // BL-GATEWAY-SOFT-HANDOFF (5/18): 历史 session resume 时, 把 session.model 当
+      // 上次 send 的 model (员工切到别的 model 再发, 才算 handoff). 历史已有 tool_calls
+      // 也按这个走 — gateway 会按 prev 对比新 model 决定是否转译.
+      prevSentModel: detail.meta.model,
     }),
   reset: () =>
     set({
@@ -196,6 +210,7 @@ export const useChatStore = create<ChatState>((set) => ({
       streamingId: null,
       persistedSessionId: null,
       lastPromptTokens: null,  // BL-CONTEXT-COUNTER: 切会话清零
+      prevSentModel: null,     // BL-GATEWAY-SOFT-HANDOFF: 新 session 没"上次"
       queue: [],  // BL-HERMES013-RED-1A: 切会话清队列
     }),
 }));

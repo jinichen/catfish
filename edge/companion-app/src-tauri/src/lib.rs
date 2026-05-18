@@ -273,6 +273,12 @@ pub fn run() {
             // 员工卡死. 见 services/watchdog.rs.
             services::watchdog::schedule_watchdog();
 
+            // 5/18 BL-COMPANION-EMAIL-DIGEST-STEP2/3/4: 每 10 分钟 (yaml 可调) 扫
+            // 一次未读邮件, 新邮件 → LLM 评级 → 急的发 macOS 通知 + emit
+            // catfish:email-urgent 事件 (前端接, 调桌宠主动闲聊).
+            // 配置走 ~/.catfish/companion.yaml email 段; poll_secs=0 关.
+            services::email_scheduler::schedule_email_scheduler(app.handle().clone());
+
             // 5/6 BL-E27.2: 桌宠 hover tracker — 80ms 一次轮询鼠标位置,
             // 切 set_ignore_cursor_events 让透明区真透 (附近点击穿到桌面),
             // 桌宠区接事件 (能点能拖). 见 services/pet_hover.rs.
@@ -382,6 +388,9 @@ pub fn run() {
             commands::curator::set_curator_config,
             commands::curator::ensure_curator_default,
             commands::curator::get_curator_state,
+            // BL-COMPANION-EMAIL-DIGEST (5/18): 邮件简报 shell-out 给 Dashboard 卡用
+            commands::email::email_digest_fetch,
+            commands::email::email_accounts_fetch,
             // BL-E16 关系建立 (五一 sprint 5/3 晚): "鲶鱼对你的印象" 透明 + 清空
             commands::relation::relation_summary,
             commands::relation::relation_forget,

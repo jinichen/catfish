@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import platform
 
-from .adapters.base import DataNotFoundError, EmailAdapter
+from .adapters.base import ClientNotRunningError, DataNotFoundError, EmailAdapter
 
 logger = logging.getLogger("catfish_email.inbox")
 
@@ -58,6 +58,37 @@ def get_adapter(client: str | None = None) -> EmailAdapter:
         f"{system} 上没找到可用的邮件客户端 (尝试过: {', '.join(candidates)})。"
         f"装个 Outlook 或 Foxmail 再加邮箱账号。最后一个错: {last_err}"
     )
+
+
+def get_all_adapters() -> list[EmailAdapter]:
+    """5/18 BL-EMAIL-MULTI-CLIENT: 返当前平台 *所有* 能用的 adapter, 不短路.
+
+    跟 get_adapter() 的差别:
+        - get_adapter(): 找第一个能用的就返 (默认行为, Apple Mail 永远赢)
+        - get_all_adapters(): 全跑一遍, 返所有能用的 list
+
+    用途: CLI `_cmd_list` 不传 --client 时跨客户端合并查邮件. 跟立项前提一致 ——
+    员工同时用 Mail.app (iCloud/Gmail) + Foxmail (公司企业邮箱) 是常见组合.
+
+    Returns:
+        所有能初始化的 adapter list (按平台候选顺序). 全挂返空 list (caller 自决怎么报).
+    """
+    system = platform.system()
+    if system == "Darwin":
+        candidates = ["apple-mail", "foxmail-mac"]
+    elif system == "Windows":
+        candidates = ["outlook-win", "foxmail-win"]
+    else:
+        return []
+
+    adapters: list[EmailAdapter] = []
+    for c in candidates:
+        try:
+            adapters.append(_get_adapter_explicit(c))
+        except (DataNotFoundError, ImportError, NotImplementedError, ClientNotRunningError) as e:
+            logger.debug("adapter %s 不可用 (skip): %s", c, e)
+            continue
+    return adapters
 
 
 def _get_adapter_explicit(client: str) -> EmailAdapter:

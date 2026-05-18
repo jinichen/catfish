@@ -177,12 +177,14 @@ impl OidcConfig {
         }))
     }
 
-    /// 第一次启动 (没 yaml 也没 env) 时, 自动生成默认配置文件指向本地
-    /// catfish-identity. 客户用别的 SSO 时手动改这个 yaml.
+    /// 第一次启动 (没 yaml 也没 env) 时生成默认; 已有 yaml 但缺 oidc 段时 *补*
+    /// 而不是覆盖 (BL-COMPANION-YAML-MERGE 5/18 鸿波踩坑: 覆写 email 段时把
+    /// oidc 段冲掉, 自动补又被 path.exists 早返跳过 → 登录永挂).
     fn ensure_default_yaml() -> Result<()> {
         let path = Self::yaml_path()?;
         if path.exists() {
-            return Ok(());
+            // 文件存在但可能缺 oidc 段. 追加默认 oidc, 不动其他段.
+            return Self::append_default_oidc_if_missing(&path);
         }
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -236,6 +238,35 @@ oidc:
             let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
         }
         log::info!("已生成默认 ~/.catfish/companion.yaml, 客户按需修改 oidc.issuer");
+        Ok(())
+    }
+
+    /// BL-COMPANION-YAML-MERGE (5/18): 文件存在但缺 oidc 段时追加默认.
+    /// 不动现有 email / endpoints / agent / tts 等段.
+    fn append_default_oidc_if_missing(path: &std::path::Path) -> Result<()> {
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("读 {} 失败", path.display()))?;
+        // 解 yaml 看顶层是否有 oidc key. 解失败 / 空文件都当 *缺*, append.
+        let has_oidc = serde_yaml::from_str::<serde_yaml::Value>(&content)
+            .ok()
+            .and_then(|v| v.as_mapping().cloned())
+            .map(|m| m.contains_key(serde_yaml::Value::String("oidc".into())))
+            .unwrap_or(false);
+        if has_oidc {
+            return Ok(());
+        }
+        log::warn!(
+            "{} 已存在但缺 oidc 段, 追加默认 oidc (指本地 catfish-identity:8998). \
+             不动现有其他段.",
+            path.display()
+        );
+        // 防末尾没换行直接接 → "}oidc:" 拼起来挂
+        let separator = if content.ends_with('\n') { "" } else { "\n" };
+        let appended = format!(
+            "{content}{separator}\n# 5/18 自动补的 oidc 段 (登录必需). 客户用别的 SSO 改 issuer.\noidc:\n  issuer: http://127.0.0.1:8998\n  client_id: catfish-companion\n  audience: catfish-companion\n  scope: openid email profile\n"
+        );
+        std::fs::write(path, appended)
+            .with_context(|| format!("追加 oidc 段到 {} 失败", path.display()))?;
         Ok(())
     }
 }

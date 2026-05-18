@@ -70,6 +70,29 @@ export default function App() {
     };
   }, [openAbout]);
 
+  // 5/18 BL-COMPANION-EMAIL-DIGEST-STEP4: 邮件 scheduler 检测到"急"邮件 →
+  // Rust 端 emit catfish:email-urgent (含 starter 字符串). 这里接 → 走桌宠
+  // 主动闲聊路径 (跟 BL-E13 早9:30/午14:00 主动找你聊同一套 startProactiveChat).
+  // 切到 chat tab + 一条 assistant message 自动出现"张三那封紧的来了, 帮你看?"
+  const startProactiveChat = useUIStore((s) => s.startProactiveChat);
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    void (async () => {
+      unlisten = await listen<{ count: number; starter: string; ids: string[] }>(
+        "catfish:email-urgent",
+        (event) => {
+          const { starter, count } = event.payload;
+          if (starter && count > 0) {
+            startProactiveChat(starter);
+          }
+        },
+      );
+    })();
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [startProactiveChat]);
+
   // 五一 sprint 5/5: Esc 隐藏浮窗 (配合 Cmd+Shift+Space 召唤)
   // 输入框聚焦时 Esc 由组件自己处理 (e.g. 关闭弹层); 这里只在 body 聚焦时拦截.
   // BL-E15: 专注模式激活时这个 Esc-hide 不能跑, FocusModeView 自己 capture Esc 退专注.

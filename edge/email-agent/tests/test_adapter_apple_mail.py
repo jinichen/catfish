@@ -177,10 +177,11 @@ def test_escape_as_string_backslash():
 
 
 def test_list_accounts_parses_records():
-    """3 个 account, 第 2 个是 default."""
+    """3 个 account, is_default 全 False (BL-EMAIL-APPLEMAIL-AS-CTRLCHAR 5/18:
+    AS 'default account' 语法在 macOS Sequoia 挂 -2741, MVP 不识别默认账号)."""
     stdout = (
         f"工作{FS}work@example.com{FS}0{RS}"
-        f"个人{FS}me@gmail.com{FS}1{RS}"
+        f"个人{FS}me@gmail.com{FS}0{RS}"
         f"测试{FS}test@test.cn{FS}0{RS}"
     )
     # mock _is_mail_running True + _run_osascript 第 2 次调返 stdout
@@ -192,7 +193,7 @@ def test_list_accounts_parses_records():
         accounts = adapter.list_accounts()
     assert len(accounts) == 3
     assert accounts[0] == Account(name="工作", address="work@example.com", is_default=False)
-    assert accounts[1] == Account(name="个人", address="me@gmail.com", is_default=True)
+    assert accounts[1] == Account(name="个人", address="me@gmail.com", is_default=False)
     assert accounts[2].name == "测试"
 
 
@@ -329,21 +330,23 @@ def test_search_returns_results():
 
 
 def test_resolve_account_name_default():
-    """None → 走 is_default=True 的那个."""
+    """None → 走第一个 (BL-EMAIL-APPLEMAIL-AS-CTRLCHAR 5/18: is_default 永远 False,
+    AS 'default account' 在 macOS Sequoia 挂; resolve None 退化成 fallback 第一个)."""
     accounts_stdout = (
         f"工作{FS}work@x.com{FS}0{RS}"
-        f"个人{FS}me@x.com{FS}1{RS}"
+        f"个人{FS}me@x.com{FS}0{RS}"
     )
     with (
         patch.object(am, "_is_mail_running", return_value=True),
         patch.object(am, "_run_osascript", return_value=accounts_stdout),
     ):
-        assert AppleMailAdapter()._resolve_account_name(None) == "个人"
+        # 没默认账号 → 拿第一个
+        assert AppleMailAdapter()._resolve_account_name(None) == "工作"
 
 
 def test_resolve_account_name_by_email():
     """传 email 地址 → 映射回显示名."""
-    accounts_stdout = f"工作{FS}work@x.com{FS}1{RS}"
+    accounts_stdout = f"工作{FS}work@x.com{FS}0{RS}"
     with (
         patch.object(am, "_is_mail_running", return_value=True),
         patch.object(am, "_run_osascript", return_value=accounts_stdout),
@@ -352,7 +355,7 @@ def test_resolve_account_name_by_email():
 
 
 def test_resolve_account_name_not_found_raises():
-    accounts_stdout = f"工作{FS}work@x.com{FS}1{RS}"
+    accounts_stdout = f"工作{FS}work@x.com{FS}0{RS}"
     with (
         patch.object(am, "_is_mail_running", return_value=True),
         patch.object(am, "_run_osascript", return_value=accounts_stdout),
@@ -394,7 +397,7 @@ def test_create_draft_bcc_passes_through_to_as():
     def fake_run(script, **_):
         captured.append(script)
         # list_accounts (走 _AS_LIST_ACCOUNTS) 返 1 个 default
-        if "set accs to accounts" in script:
+        if "repeat with acc in every account" in script:
             return f"工作{FS}work@x.com{FS}1{RS}"
         # create_draft 返新 id
         if "make new outgoing message" in script:
@@ -425,7 +428,7 @@ def test_create_draft_no_bcc_passes_empty_string():
 
     def fake_run(script, **_):
         captured.append(script)
-        if "set accs to accounts" in script:
+        if "repeat with acc in every account" in script:
             return f"工作{FS}work@x.com{FS}1{RS}"
         return "999"
 

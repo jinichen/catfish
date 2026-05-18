@@ -51,6 +51,7 @@ import SkillsMcpCard from "./SkillsMcpCard";
 // backend (LearningAggregator / SkillRevision) 仍跑, 真要看走"控制台"tab.
 // import LearningCard from "./LearningCard";
 // import SkillRevisionCard from "./SkillRevisionCard";
+import EmailDigestCard from "./EmailDigestCard";  // BL-COMPANION-EMAIL-DIGEST (5/18)
 import ProactiveCard from "./ProactiveCard";
 import AgentPrefsCard from "./AgentPrefsCard";
 import RelationCard from "./RelationCard";
@@ -98,13 +99,14 @@ export default function DashboardTab() {
       {/* BL-ARCH2 (5/10): 顶部 banner — "去中央门户 →" 按 role 显示锚点 */}
       <WebPortalLink />
 
-      {/* 第一组: 今日 — 主动闲聊 + 后台任务 (高频, 默认开, 顶部) */}
+      {/* 第一组: 今日 — 主动闲聊 + 后台任务 + 邮件简报 (高频, 默认开, 顶部) */}
       <CollapsibleSection
         id="today"
         title="🔥 今日"
-        count={2}
+        count={3}
       >
         <ProactiveCard />
+        <EmailDigestCard />  {/* BL-COMPANION-EMAIL-DIGEST step1 (5/18) */}
         <TasksCard />
       </CollapsibleSection>
 
