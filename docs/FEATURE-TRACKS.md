@@ -162,6 +162,59 @@ Phase 4 · 集团级 mesh               [░░░░░░░░░░]  0%   �
 
 ---
 
+## 🔥 5/18 新发现的架构 P0 (中央化部署前置)
+
+### BL-MEMORY-OWNERSHIP-FIX ★★★ P0 架构分工错配
+
+**真问题** (5/18 深夜鸿波点穿): memory 本该是 **hermes 唯一责任** — hermes 是 agent runtime, memory store / sessions / facts / USER.md 都是它的核心能力. 但 catfish 历史上 (5/4-5/13 一路加) 在 **gateway 又造了一层 memory_registry** 10 个 provider 直读 `~/.hermes/state.db` + `~/.catfish/employee.md`. 这是个**架构分工错误**, 不是部署位置问题.
+
+**为什么会出错**:
+- Companion 起步时直接调 gateway (没走 hermes serve), gateway 那边发现 prompt 没 memory, 就**在 gateway 补了 inject**. 这是个补丁, 不是设计
+- 5/4-5/13 不断加 provider (skills_catalog / employee_journal / stats_guard / feedback), 越加越深, 现在 10 个
+- 没人停下来问 "这本来不就是 hermes 的事吗"
+
+**正确的架构分工**:
+- **hermes**: 唯一 agent runtime + memory 责任人. 内置 memory provider + 接入 catfish 扩展 provider (employee_journal 等) 通过 hermes plugin
+- **catfish-gateway**: **纯 LLM 代理** + auth/quota/audit. 看 messages 不修改, **不读 ~/.hermes/**
+- **Companion / 微信 / catfish-web**: 纯 UI, 调 hermes serve 不直调 gateway
+- **catfish-tool-bridge**: hermes plugin, 提供 native tool (含 catfish 自己的 memory provider 通过 plugin 进 hermes)
+
+**正确的数据流**:
+```
+Companion → HTTPS OpenAI 兼容 → hermes serve (本机)
+                                      ↓ memory inject + agent loop
+                                      ↓ HTTPS Bearer service token  
+                                catfish-gateway (中央, 纯代理)
+                                      ↓ HTTPS
+                                上游 LLM
+```
+
+**重构拆解** (~3 周, 真要做的事):
+
+1. **BL-MEMORY-OWNERSHIP-DESIGN-DOC**: 写 `docs/catfish-memory-architecture.md` 定 hermes 唯一负责. 列 10 个 gateway provider 各自怎么迁: 直接删 (hermes 自带) / 改 hermes plugin (catfish 加的) / 改 LLM tool (LLM 主动拉) 三类分流 (3-5h)
+
+2. **BL-COMPANION-VIA-HERMES-SERVE**: Companion 改成调 `hermes serve` 而不是 `catfish-gateway`. 这是大改动 — useChat / streamChat / fetchWithAuth / 401 reauth 全要适配 hermes API (1-1.5 周)
+
+3. **BL-CATFISH-MEMORY-AS-HERMES-PLUGIN**: 把 catfish 自己加的 memory provider (employee_journal / skills_catalog / feedback / relations / stats_guard 等) 改写成 hermes plugin (Python module + hermes plugin manifest), 通过 hermes plugin 体系接入 (1 周)
+
+4. **BL-GATEWAY-MEMORY-CODE-DELETE**: gateway `memory_registry` + 10 个 provider 模块全删. gateway 瘦身成"纯代理", 单测删 / 调整 (2-3 天)
+
+5. **BL-GATEWAY-NO-EDGE-FILES**: gateway 代码 review, 确保不再有任何 `Path.home()` / `~/.hermes/` / `~/.catfish/` 引用. 加 lint rule 防回归 (1 天)
+
+**未选方案**:
+- 客户端 inject (Companion 自己拼 prompt): 跟 hermes 重复, hermes 本身就该做这事 — 让 hermes 做对的事, 别绕过它
+- gateway 继续 inject 但读"中央 PG 镜像": 违反 BL-CENTRAL-EDGE-BOUNDARY, memory 上行公司机房, 5/17 已否决
+
+**触发时机** (必须重构完):
+- ❌ 当前 (你单机 dev 跑全部, gateway 跟 ~/.hermes 同机, 能凑合)
+- ✅ **第二台 Mac 测试之前**
+- ✅ **任何"gateway 公司机房 / 多员工共享" 部署之前**
+- ✅ **5/14 demo 后客户问"装一份给我们"** — 答案是装 hermes + Companion + catfish-tool-bridge + 边缘 catfish-edge, 公司机房只装 gateway. 现在分工没对就给不出干净答案
+
+详见 task #17 BL-MEMORY-OWNERSHIP-FIX (5/18 深夜重新定义, 取代之前 P0 ticket).
+
+---
+
 ## 🚨 当前最大风险 / 缺位 (Top 5, 5/8 更新)
 
 | # | 风险 / 缺位 | 影响 | 跟踪 track |
