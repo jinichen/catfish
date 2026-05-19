@@ -2637,11 +2637,18 @@ async def chat_completions(
 
     # 后台触发: 异步总结 1 个最近结束但没总结过的 session, append 到 journal.
     # fire-and-forget, 不阻塞当前请求, 失败静默. 让 journal 自动持续填充.
-    try:
-        import asyncio  # noqa: PLC0415
-        asyncio.create_task(trigger_background_summary())
-    except Exception:
-        pass
+    #
+    # BL-GATEWAY-CLEANUP-POST-HERMES Week 2 Step C (5/19 晚): env gate.
+    # CATFISH_GATEWAY_LEGACY_SUMMARIZE=1 (默认) — 旧 caller 跑, 跟之前一样.
+    # CATFISH_GATEWAY_LEGACY_SUMMARIZE=0 — 关 gateway 旧 caller, summary 走
+    # catfish-memory plugin 的 on_session_end (Week 2 Step B 加上的写路径).
+    # 部署时**手动改这个 env**才真切换, push 代码本身不动行为.
+    if os.environ.get("CATFISH_GATEWAY_LEGACY_SUMMARIZE", "1") == "1":
+        try:
+            import asyncio  # noqa: PLC0415
+            asyncio.create_task(trigger_background_summary())
+        except Exception:
+            pass
 
     # BL-MEMORY-DISTILL-LIVE (5/16 鸿波 'memory_distill 真上线'):
     # 异步 LLM 蒸馏老 journal 段 → 写 ~/.catfish/distilled_facts.md, 24h cooldown.
@@ -2653,7 +2660,13 @@ async def chat_completions(
     # 不是员工 nemotron'): 传 user.sub, distill 内部用 get_user_last_session_model
     # 解析员工当前选的 model, 严格 follow-user (跟 summarizer / proactive / a2a /
     # facts 同套路).
-    if not is_internal_call:
+    # BL-GATEWAY-CLEANUP-POST-HERMES Week 2 Step C (5/19 晚): env gate.
+    # 跟上面 trigger_background_summary 同一个 env, 一个开关同时控两条路径,
+    # 防止"summary 关了 distill 还在跑"或反过来的半切状态.
+    if (
+        not is_internal_call
+        and os.environ.get("CATFISH_GATEWAY_LEGACY_SUMMARIZE", "1") == "1"
+    ):
         try:
             import asyncio  # noqa: PLC0415
 
