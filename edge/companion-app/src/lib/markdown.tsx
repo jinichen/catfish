@@ -17,6 +17,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import rehypeRaw from "rehype-raw";
+import { linkifyChildren } from "./linkify_paths";
 
 interface Props {
   text: string;
@@ -184,7 +185,7 @@ export function Markdown({ text }: Props) {
                 wordBreak: "break-word",
               }}
             >
-              {children}
+              {linkifyChildren(children, "th")}
             </th>
           ),
           td: ({ children }) => (
@@ -197,9 +198,14 @@ export function Markdown({ text }: Props) {
                 wordBreak: "break-word",
               }}
             >
-              {children}
+              {linkifyChildren(children, "td")}
             </td>
           ),
+          // BL-COMPANION-FILE-PATH-CLICKABLE (5/19): 段落 / 列表项里的
+          // 绝对文件路径 (eg "已生成 /Users/.../report.xlsx") 原位换成
+          // 可点击 <a>, 点 → Tauri openFile. 不递归进 <code>/<a>.
+          p: ({ children }) => <p>{linkifyChildren(children, "p")}</p>,
+          li: ({ children }) => <li>{linkifyChildren(children, "li")}</li>,
           // <br> 单独 style 一下, 让表格里的换行显得自然
           br: () => <br />,
           // 链接外开 — Tauri webview 默认吞 <a target="_blank">, 必须程序化

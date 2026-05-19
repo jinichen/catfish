@@ -2627,9 +2627,13 @@ async def chat_completions(
             return JSONResponse(synthetic)
         body["messages"] = tool_retry_hint.inject_tool_retry_hint(body["messages"])
 
-        # BL-A1.3: "幻觉完成" hint
+        # BL-A1.3: "幻觉完成" hint + BL-LLM-PLAN-WITHOUT-ACT plan-then-stop guard
+        # 5/19: 不再加 prompt 铁律 (qwen 钟摆已两轮翻车), 改 agent loop guard 兜底.
+        # inject_self_critique 聚合两条 detect:
+        #   - 完成承诺 ("已生成 X" 但没 tool_call) — 老路径
+        #   - plan-then-stop (JSON plan / "step 1 / 我将" 但没 tool_call) — 新增
         from . import self_critique  # noqa: PLC0415  lazy import
-        body["messages"] = self_critique.inject_completion_critique_hint(body["messages"])
+        body["messages"] = self_critique.inject_self_critique(body["messages"])
 
         # ─── BL-FIX24 duplicate-tool-call guard 全部 DELETED (5/13 鸿波"乱七八糟") ──
         # 历史: 软 hint (inject_duplicate_guard_hint) + 物理 hard-block (detect_hard_block_duplicate

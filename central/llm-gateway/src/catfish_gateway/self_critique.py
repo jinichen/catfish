@@ -23,6 +23,21 @@ LLM 经常**承诺完成**(说"已保存/已完成") 但**实际没调对应工�
 
 阶段 1 已经能拦 80% 的 "幻觉完成". 5/14 demo 用阶段 1 够.
 
+# BL-LLM-PLAN-WITHOUT-ACT (5/19 扩展): plan-then-stop detection
+
+钟摆历史: qwen-aware 铁律 1 让它 tool_call first → 又卡死循环 → 铁律 4 终止条件 →
+qwen 学会"输出 plan JSON 然后 finish_reason=stop, 以为 plan 就是 final answer".
+
+不再加 prompt 铁律 (滑过头). 改 agent loop guard 兜底:
+  - assistant content 含 plan 文本 (JSON plan / "step 1" / "第 1 步" / "我将" / "开始执行")
+  - finish_reason=stop (或 没 tool_calls)
+  - 同范围内**没**任何 productive tool_call
+  - → 注入 hint "你给的是 plan 不是 final answer, 必须真调 tool_call 执行 step 1"
+
+跟原有完成承诺 detect 互补:
+  - 完成承诺路径: "已生成 X" + 没 tool_call → 触发 (文字幻觉完成)
+  - plan-then-stop 路径: "step 1 ... 开始执行" + 没 tool_call → 触发 (只画饼没动手)
+
 # 跟 tool_retry_hint 区别
 
 | | tool_retry_hint (BL-A1.2) | self_critique (BL-A1.3) |
@@ -35,7 +50,7 @@ LLM 经常**承诺完成**(说"已保存/已完成") 但**实际没调对应工�
 
 # 测试
 
-10 单测 (tests/test_self_critique.py):
+tests/test_self_critique.py:
     - 普通 chat 不触发
     - 含完成承诺 + 有对应 execute_code → 不触发 (真做了)
     - 含完成承诺 + 没 tool_call → 触发
@@ -46,6 +61,14 @@ LLM 经常**承诺完成**(说"已保存/已完成") 但**实际没调对应工�
     - tool 名 keyword 匹配 (execute_code / catfish_run_skill / write_file)
     - 短 content 不触发 (避免 "已知" "已经" 误判)
     - 完成承诺 + 提议未来动作 ("我马上...") 不触发
+
+BL-LLM-PLAN-WITHOUT-ACT 扩展 case:
+    - JSON plan ({"plan": [...]}) + 没 tool_call → 触发 plan hint
+    - "step 1: ... step 2: ..." + 没 tool_call → 触发
+    - "我将: 1. ... 2. ... 开始执行" + 没 tool_call → 触发
+    - 真完成文字 (含路径 + 大小) → **不**触发 (避免误伤真完成)
+    - 同范围有 productive tool_call → **不**触发 (plan + 真做 = OK)
+    - plan hint 跟完成承诺 hint 各自幂等 不重复
 """
 from __future__ import annotations
 
@@ -127,8 +150,72 @@ _HINT_TEMPLATE = (
     "央企客户要的是真文件实物, 不是 chat 里的承诺."
 )
 
+# ─── BL-LLM-PLAN-WITHOUT-ACT (5/19): plan-then-stop 检测 ──────────────────
+# qwen 钟摆: 加铁律 4 终止条件后, qwen 学会"输出 plan JSON / step 1 → step 2 ...
+# 然后 finish_reason=stop, 以为 plan 就是 final answer". 实际啥都没真做.
+# 不再 prompt engineering (滑过头). 用 agent loop guard 兜底.
+
+# 中文 plan 文本 marker (qwen 常用句式)
+_PLAN_TEXT_PATTERNS = [
+    r"我将\s*[:：]",                # "我将:" / "我将："
+    r"我会\s*[:：]",
+    r"我打算",
+    r"接下来我会",
+    r"接下来将",
+    r"^\s*步骤\s*[1一]\s*[:：.]",   # "步骤 1:" / "步骤一."
+    r"第\s*[1一]\s*步",            # "第 1 步" / "第一步"
+    r"开始执行\s*[:：]?\s*$",       # "开始执行:" / "开始执行"
+    r"现在开始执行",
+    r"^\s*1\.\s.{0,40}\n\s*2\.",   # "1. xxx\n2. ..." 编号列表 plan
+    # 英文也兜一下 (qwen 偶尔用)
+    r"\bstep\s*1\b\s*[:：.].{0,40}\bstep\s*2\b",
+    r"\bI\s+will\s*[:：]",
+]
+_PLAN_TEXT_REGEX = re.compile("|".join(_PLAN_TEXT_PATTERNS), re.IGNORECASE | re.MULTILINE)
+
+# JSON plan 格式 — compound_intent 教 qwen 输出的格式, qwen 学了就 stop
+# 例:  {"plan": [{"step": 1, "action": "...", "what": "..."}, ...]}
+_PLAN_JSON_REGEX = re.compile(
+    r'"plan"\s*:\s*\[' +              # "plan": [
+    r'|"step"\s*:\s*\d+' +             # "step": 1
+    r'|"action"\s*:\s*"',              # "action": "..."
+    re.IGNORECASE,
+)
+
+# "真完成" anti-pattern — 出现这些就**不**触发 plan hint (避免误伤)
+# 关键标志: 含具体文件路径 / URL / 字节数 / 行数 / "已" 完成 词
+# (完成承诺路径有自己的检测, 这里只防 plan hint 误伤真完成)
+_REAL_DELIVERY_PATTERNS = [
+    r"/[A-Za-z0-9_\-./]{6,}\.(docx|xlsx|pptx|pdf|md|txt|csv|json|html|png|jpg|svg|zip)\b",
+    r"~/[A-Za-z0-9_\-./]{4,}",
+    r"\b\d+(\.\d+)?\s*(KB|MB|GB|bytes?)\b",
+    r"\b\d+\s*(行|段|字|条记录|个文件)\b",
+    r"https?://\S+",
+]
+_REAL_DELIVERY_REGEX = re.compile("|".join(_REAL_DELIVERY_PATTERNS), re.IGNORECASE)
+
+# plan-then-stop hint 防重复 marker (跟完成承诺独立, 各自幂等)
+_PLAN_HINT_MARKER = "[BL-A1.3 plan-then-stop-hint]"
+
+_PLAN_HINT_TEMPLATE = (
+    f"{_PLAN_HINT_MARKER}\n"
+    "**plan-then-stop 检测**: 你刚输出了**计划文本** (例: \"我将...\", "
+    "\"step 1 → step 2\", JSON plan 等), 但**没有发任何 tool_call**, "
+    "也没有产生真实交付物 (文件路径 / URL / 字节数).\n\n"
+    "**plan 不是 final answer**. 员工要的是真东西, 不是一段计划文字.\n\n"
+    "立刻按下面走:\n"
+    "1. 选 plan 里的**第 1 步**, 现在就 emit 对应的 tool_call (catfish_run_skill / "
+    "execute_code / write_file 等), 真调出去.\n"
+    "2. **本轮**只发 tool_call, 不要再讲 plan, 不要再说\"我将...\".\n"
+    "3. 等 tool result 回来, 下一轮再决定要不要继续 step 2 或者收尾.\n\n"
+    "如果信息不够开干, 调 clarify 工具问员工. 但**不允许**只输出 plan 然后 stop."
+)
+
 # 扫多深 (倒数 N 条 messages, 看完成承诺 vs 对应 tool_call)
 _SCAN_DEPTH = 6
+
+# plan 文本的最短长度 — 短于这个不判 plan (避免普通对话误伤)
+_PLAN_MIN_LEN = 20
 
 
 def _has_completion_promise(content: str) -> tuple[bool, str]:
@@ -185,8 +272,42 @@ def _has_productive_tool_call_recent(messages: list, depth: int = _SCAN_DEPTH) -
     return False
 
 
+def _has_plan_intent(content: str) -> tuple[bool, str]:
+    """content 是不是 plan 文本 (qwen "plan-then-stop" 模式).
+
+    判断标志:
+      1. 含 JSON plan 关键字段 (`"plan": [` / `"step": N` / `"action": "..."`)
+      2. 或含中文 plan 句式 ("我将:" / "step 1" / "第 1 步" / "开始执行")
+
+    例外: content 含真交付物标志 (具体路径 / URL / 字节数) → 视为真完成, 不判 plan.
+
+    Returns:
+        (是不是 plan, 匹配到的关键词片段)
+    """
+    if not content or not isinstance(content, str):
+        return False, ""
+    if len(content.strip()) < _PLAN_MIN_LEN:
+        return False, ""
+
+    # 含真交付物 → 不当 plan (避免误伤真完成的 final answer)
+    if _REAL_DELIVERY_REGEX.search(content):
+        return False, ""
+
+    # JSON plan 优先 (信号最强)
+    json_m = _PLAN_JSON_REGEX.search(content)
+    if json_m:
+        return True, json_m.group(0)
+
+    # 中文 / 英文 plan 句式
+    text_m = _PLAN_TEXT_REGEX.search(content)
+    if text_m:
+        return True, text_m.group(0)
+
+    return False, ""
+
+
 def has_existing_hint(messages: list) -> bool:
-    """是否已注入过 BL-A1.3 hint.
+    """是否已注入过 BL-A1.3 完成承诺 hint.
 
     BL-FIX8 (5/8): 兼容老 system role + 新 user role 两种历史.
     """
@@ -197,6 +318,19 @@ def has_existing_hint(messages: list) -> bool:
             continue
         content = msg.get("content")
         if isinstance(content, str) and _HINT_MARKER in content:
+            return True
+    return False
+
+
+def has_existing_plan_hint(messages: list) -> bool:
+    """是否已注入过 plan-then-stop hint (独立于完成承诺 hint, 各自幂等)."""
+    for msg in messages[-15:]:
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("role") not in ("system", "user"):
+            continue
+        content = msg.get("content")
+        if isinstance(content, str) and _PLAN_HINT_MARKER in content:
             return True
     return False
 
@@ -258,3 +392,64 @@ def inject_completion_critique_hint(messages: list) -> list:
         promise_keyword,
     )
     return new_messages
+
+
+def inject_plan_then_stop_hint(messages: list) -> list:
+    """BL-LLM-PLAN-WITHOUT-ACT: 检测 plan-then-stop → 注入 hint 强制真做.
+
+    触发条件: 倒数 _SCAN_DEPTH 条里
+        a. 最近一条 assistant content 是 plan 文本 (JSON plan / "step 1" /
+           "我将" / "开始执行" 等), 长度 ≥ _PLAN_MIN_LEN
+        b. content 不含真交付物标志 (路径 / URL / 字节数) — 避免误伤真完成
+        c. 同范围内 NO productive tool_call — 真画饼没动手
+
+    Returns:
+        新 messages list (没触发返回原引用)
+    """
+    if not messages:
+        return messages
+    if has_existing_plan_hint(messages):
+        return messages
+
+    tail = messages[-_SCAN_DEPTH:]
+    plan_keyword = None
+    for msg in reversed(tail):
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content") or ""
+        if not isinstance(content, str):
+            continue
+        is_plan, kw = _has_plan_intent(content)
+        if is_plan:
+            plan_keyword = kw
+            break
+
+    if plan_keyword is None:
+        return messages
+
+    # 真做了 (plan + 真调 tool) → 不触发
+    if _has_productive_tool_call_recent(messages, depth=_SCAN_DEPTH):
+        return messages
+
+    # 触发: 只画饼没动手
+    new_messages = list(messages)
+    new_messages.append({"role": "user", "content": _PLAN_HINT_TEMPLATE})
+    logger.info(
+        "plan-then-stop hint injected (BL-LLM-PLAN-WITHOUT-ACT): "
+        "plan_keyword=%r, no productive tool_call in tail",
+        plan_keyword,
+    )
+    return new_messages
+
+
+def inject_self_critique(messages: list) -> list:
+    """聚合入口: 同时跑两条 detect (完成承诺 + plan-then-stop), 各自幂等.
+
+    顺序: 先 completion-promise (老路径优先, "已完成" 信号更强),
+    再 plan-then-stop (qwen-aware 兜底). 两者互不冲突, 一轮最多注入两条 hint.
+    """
+    out = inject_completion_critique_hint(messages)
+    out = inject_plan_then_stop_hint(out)
+    return out

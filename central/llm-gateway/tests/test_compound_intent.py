@@ -19,8 +19,6 @@ sys.path.insert(0, str(SRC))
 
 from catfish_gateway.compound_intent import (  # noqa: E402
     _PLAN_EXECUTE_MARKER,
-    _QWEN_MARKER,
-    _is_qwen_internal_model,
     has_compound_intent,
     inject_compound_plan_execute,
 )
@@ -176,96 +174,57 @@ def test_inject_preserves_user_text():
     assert out[1]["content"] == "分析这份 CSV, 然后生成 PPT"
 
 
-# ─── BL-LLM-PLAN-WITHOUT-ACT: qwen-aware 注入 ──────────
+# ─── BL-LLM-PLAN-WITHOUT-ACT v2 (按 A 路线): qwen-aware 已删 ──────────
+# 之前这块测试 qwen 名字匹配 + qwen 块注入. 5/19 改路线:
+# - 删 qwen 名字硬编码, prompt 完全 model-agnostic
+# - plan-then-stop 行为靠 self_critique.py 兜底 (model-agnostic detect + reprompt)
+# - 这里只保留通用 plan-execute (复合任务) 测试
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "catfish-private-main",
-        "catfish-public-qwen-flash",
-        "qwen_v3_5_122b_a10b",
-        "openai/qwen3.5-flash-2026-02-23",
-        "QWEN-122B",  # case-insensitive
-    ],
-)
-def test_is_qwen_internal_model_hits(name):
-    assert _is_qwen_internal_model(name)
-
-
-@pytest.mark.parametrize(
-    "name",
-    [
-        "catfish-public-deepseek-flash",
-        "gemini-2.5-flash",
-        "claude-opus-4-7",
-        None,
-        "",
-    ],
-)
-def test_is_qwen_internal_model_misses(name):
-    assert not _is_qwen_internal_model(name)
-
-
-def test_qwen_inject_on_single_step_task():
-    """单步任务 + qwen → 注入 qwen 铁律 (即便没复合意图)"""
+def test_no_inject_on_single_step_task_any_model():
+    """单步任务 (没复合连接词) — 不管 model 是啥都不注入"""
     msgs = [
         {"role": "system", "content": "原 system"},
-        {"role": "user", "content": "帮我写周报"},  # 单步 (没连接词)
+        {"role": "user", "content": "帮我写周报"},  # 单步
     ]
     assert not has_compound_intent(msgs)
+
+    # qwen 单步: 不注入 (之前会注入, 现在不)
     out = inject_compound_plan_execute(msgs, model_name="catfish-private-main")
-    assert _QWEN_MARKER in out[0]["content"]
-    assert _PLAN_EXECUTE_MARKER not in out[0]["content"]  # 单步不该有 plan-execute
-    assert out[0]["content"].startswith("原 system")
-
-
-def test_qwen_no_inject_on_deepseek():
-    """单步 + 非 qwen → 不注入 (deepseek 自己 ReAct 强)"""
-    msgs = [
-        {"role": "system", "content": "原 system"},
-        {"role": "user", "content": "帮我写周报"},
-    ]
-    out = inject_compound_plan_execute(msgs, model_name="catfish-public-deepseek-flash")
-    assert _QWEN_MARKER not in out[0]["content"]
     assert _PLAN_EXECUTE_MARKER not in out[0]["content"]
     assert out == msgs
 
-
-def test_qwen_inject_idempotent():
-    msgs = [
-        {"role": "system", "content": "原 system"},
-        {"role": "user", "content": "登录 EIS"},
-    ]
-    once = inject_compound_plan_execute(msgs, model_name="qwen_v3_5_122b_a10b")
-    twice = inject_compound_plan_execute(once, model_name="qwen_v3_5_122b_a10b")
-    assert once[0]["content"] == twice[0]["content"]
-    assert once[0]["content"].count(_QWEN_MARKER) == 1
+    # deepseek 单步: 不注入 (跟之前一致)
+    out2 = inject_compound_plan_execute(msgs, model_name="catfish-public-deepseek-flash")
+    assert _PLAN_EXECUTE_MARKER not in out2[0]["content"]
+    assert out2 == msgs
 
 
-def test_qwen_plus_compound_both_inject():
-    """qwen + 复合任务 → 两块都注入 (qwen 在前, plan-execute 在后)"""
+def test_inject_on_compound_task_any_model():
+    """复合任务 — 不管 model 是啥都注入 plan-execute (model-agnostic)"""
     msgs = [
         {"role": "system", "content": "原 system"},
         {"role": "user", "content": "分析 CSV 然后生成 PPT"},
     ]
-    out = inject_compound_plan_execute(msgs, model_name="catfish-private-main")
-    sys = out[0]["content"]
-    assert _QWEN_MARKER in sys
-    assert _PLAN_EXECUTE_MARKER in sys
-    # qwen 块在前 (优先级高)
-    assert sys.find(_QWEN_MARKER) < sys.find(_PLAN_EXECUTE_MARKER)
+
+    for model_name in [
+        "catfish-private-main",
+        "catfish-public-deepseek-flash",
+        "gemini-2.5-flash",
+        None,
+    ]:
+        out = inject_compound_plan_execute(msgs, model_name=model_name)
+        assert _PLAN_EXECUTE_MARKER in out[0]["content"], f"model={model_name}"
 
 
 def test_backward_compat_no_model_name():
-    """model_name 不传 (老 caller) — 仍按 has_compound_intent 决定"""
+    """model_name 不传 (老 caller) — 按 has_compound_intent 决定"""
     msgs = [
         {"role": "system", "content": "原 system"},
         {"role": "user", "content": "分析 CSV 然后生成 PPT"},
     ]
     out = inject_compound_plan_execute(msgs)
     assert _PLAN_EXECUTE_MARKER in out[0]["content"]
-    assert _QWEN_MARKER not in out[0]["content"]
 
 
 # ─── 跟 skill_guard 共存 ─────────────────────────────────

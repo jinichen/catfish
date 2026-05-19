@@ -86,84 +86,15 @@ def has_compound_intent(messages: list[dict[str, Any]]) -> bool:
 
 _PLAN_EXECUTE_MARKER = "## 复合任务 — 分步执行 (gateway plan-execute 注入)"
 
-#: BL-LLM-PLAN-WITHOUT-ACT (5/19): 内网 qwen 122b ("catfish-private-main" /
-#: "qwen_v3_5_122b" 等) 学了通用 plan-execute 块的"先列 plan, 再 stop"语义后,
-#: 单步任务也跟着退化成"我将: 1. ... 2. ...开始执行:" 然后 finish_reason=stop,
-#: 真 tool_calls=0 — 员工只看到一段计划文字, 啥文件也没出.
-#:
-#: deepseek/gemini 公网模型对 tool calling 训练充分, 不会卡这步; 内网 qwen 122b
-#: 的 ReAct 能力弱, 必须用更激进 prompt 把"立即 emit tool_call"前置铁律强压.
-#:
-#: 策略: model 含 "qwen" 或 "private-main" 时, **替换** plan-execute 块为
-#: qwen 专用版 — 单步任务也加 "立即调 tool_call, 不要先讲计划" 的 must-call
-#: 铁律. 复合任务的 plan-execute 部分保留 (多步确实需要), 但前置一段更刚性的
-#: "先 act 再 plan" 校正.
-_QWEN_MARKER = "## ⚠️ 内网模型执行铁律 (gateway qwen-aware 注入)"
-
-
-def _is_qwen_internal_model(model_name: str | None) -> bool:
-    """检测是否走内网 qwen / private-main 系模型.
-
-    匹配规则: 名字 (大小写无关) 含 'qwen' 或 'private-main'.
-    catalog 现有命名:
-      - catfish-private-main          (内网 qwen 122b)
-      - catfish-public-qwen-flash     (公网 qwen flash, 仍按 qwen 处理 — 也常吃 plan)
-      - qwen_v3_5_122b_a10b           (内网底层 model id)
-    """
-    if not model_name:
-        return False
-    n = model_name.lower()
-    return "qwen" in n or "private-main" in n
-
-
-# qwen 内网模型专用铁律 — 复合任务也用这块, 但加 ACT 铁律前置.
-_QWEN_EXECUTE_BLOCK = """
-
-## ⚠️ 内网模型执行铁律 (gateway qwen-aware 注入)
-
-以下规则**优先**于其它注入块. 内网 qwen 模型在通用 ReAct 上偏好"先写计划再 stop",
-导致只说不做. 必须按下面铁律走:
-
-### 铁律 1 — 立即 emit tool_call, 不许讲计划文字
-
-员工请求**任何**触发 skill / tool 的话 (例: 写周报 / 做 PPT / 登录 EIS / 分析 CSV),
-你**必须立即输出 tool_call**, 不允许先输出"我将..."、"让我..."、"好的, 我现在..."
-之类承诺文字. tool_call 出来后等 tool result, 再决定下一步.
-
-### 铁律 2 — 计划只能在 tool_call 之后讲 (复合任务才需要)
-
-如果是真的多步 (≥ 2 个 skill / tool 协作), 第一个 tool_call 必须先发出,
-等该 tool 的 result 回来后, 再在 assistant content 里讲下一步打算干啥.
-**绝对不允许在 tool_call 前先讲整个 plan**.
-
-### 铁律 3 — 不确定就调 clarify 工具问
-
-不知道员工到底想干啥 / 缺关键参数 → 调 `clarify` 工具 (hermes 内置), 或
-`catfish_user_profile_get` 取上下文; **不要凭空想象然后写一段计划停在那**.
-
-### 反模式 (踩过坑, 严禁)
-
-错误示范 (员工: 帮我写周报):
-> "好的, 我将: 1. 读取模板... 2. 生成文档... 3. 保存输出. 开始执行:"
-> [然后 finish_reason=stop, 真 tool_calls=0]
-
-正确示范 (员工: 帮我写周报):
-> [立即 tool_call: catfish_run_skill(name="catfish-weekly-report", ...)]
-> [等 tool result 回来后再说"已生成: <path>"]
-
-### 验收
-
-本轮 assistant 输出**必须**满足下面之一, 否则就是 bug:
-  - emit ≥ 1 个 tool_call (主流程)
-  - emit clarify tool_call (信息不够时)
-  - 只输出 1-2 句确认/收尾, 没有任何"我将..."的承诺文字 (任务已完成时)
-
-"""
-
-
-_PLAN_EXECUTE_MARKER_QWEN = _QWEN_MARKER  # 别名, 便于测试 import
-
-
+# 5/19 BL-LLM-PLAN-WITHOUT-ACT v2 (鸿波 "按 A 路线"):
+# 之前为 qwen 122b 加了 _QWEN_EXECUTE_BLOCK 硬编码 model 名注入. 但实测发现
+# qwen 学了铁律后把 tool_call 写成文本字面值 ([tool_call: ...]), 越拧越偏.
+# 而且硬编码 model 名不可持续 — 每加新 model 都要 prompt engineering, 维护爆炸.
+#
+# 改路线: prompt 完全 model-agnostic, 只剩通用 plan-execute (有复合连接词才注入).
+# 兜底交给 self_critique.py (model-agnostic detect 'plan + finish_reason=stop'
+# → 注入 reprompt). 加新 model 不动 prompt. qwen 行为如果仍然怪是 model 能力
+# 问题, 不是 prompt 写错.
 _PLAN_EXECUTE_BLOCK = """
 
 ## 复合任务 — 分步执行 (gateway plan-execute 注入)
@@ -215,27 +146,23 @@ def inject_compound_plan_execute(
     messages: list[dict[str, Any]],
     model_name: str | None = None,
 ) -> list[dict[str, Any]]:
-    """注入"先 act 再 plan"铁律到最后 system message 末尾.
+    """注入复合任务 plan-execute 铁律到最后 system message 末尾.
 
-    两种注入 (互不冲突, 可同时 append):
+    Model-agnostic. 有复合连接词 + ≥ 2 个动作动词 → 注入. 否则不注入.
 
-      1. **qwen-aware 块** (`_QWEN_EXECUTE_BLOCK`):
-         model 是内网 qwen / private-main 系 → 单步 / 复合都注入.
-         解决 BL-LLM-PLAN-WITHOUT-ACT — qwen 见到任何 trigger 就开始
-         写 "我将..." plan 然后 stop, 不真发 tool_call.
-
-      2. **复合任务 plan-execute 块** (`_PLAN_EXECUTE_BLOCK`):
-         有复合连接词 + ≥ 2 个动作动词 → 注入. 跟之前一致.
+    单步任务的 "plan-then-stop" 行为不靠这块 prompt 防 — 改靠 self_critique
+    (检测 assistant 输出 plan-only + finish_reason=stop, 注入 reprompt).
+    这样 prompt 不再因为某个 model 偏好"先讲后做"而硬编码 model 名.
 
     幂等. 不动 messages 顺序 (不在中间插 system, Qwen Go gRPC adapter 严格校验).
+
+    model_name 参数保留 (向后兼容 caller signature), 但不再 case 判断 — 5/19
+    BL-LLM-PLAN-WITHOUT-ACT v2 (鸿波 "按 A 路线") 删了 qwen-aware 硬编码.
     """
     if not messages:
         return messages
 
-    is_qwen = _is_qwen_internal_model(model_name)
-    is_compound = has_compound_intent(messages)
-
-    if not is_qwen and not is_compound:
+    if not has_compound_intent(messages):
         return messages
 
     # 找最后 system 段 (跟 skill_guard 同套路)
@@ -252,36 +179,14 @@ def inject_compound_plan_execute(
     if not isinstance(cur, str):
         return messages
 
-    # 计算要追加什么 (幂等: 看 marker 已经在不在)
-    to_append = ""
-    qwen_will_inject = is_qwen and _QWEN_MARKER not in cur
-    compound_will_inject = is_compound and _PLAN_EXECUTE_MARKER not in cur
-
-    if qwen_will_inject:
-        to_append += _QWEN_EXECUTE_BLOCK
-    if compound_will_inject:
-        to_append += _PLAN_EXECUTE_BLOCK
-
-    if not to_append:
-        # 都已注入过, 或都不该注入
+    # 幂等
+    if _PLAN_EXECUTE_MARKER in cur:
         return messages
 
     out = deepcopy(messages)
     sys_msg = out[last_system_idx]
-    sys_msg["content"] = sys_msg["content"].rstrip() + to_append
-
-    if qwen_will_inject and compound_will_inject:
-        logger.info(
-            "compound_intent: 注入 qwen-aware + plan-execute 铁律 (model=%s)",
-            model_name,
-        )
-    elif qwen_will_inject:
-        logger.info(
-            "compound_intent: 注入 qwen-aware 执行铁律 (BL-LLM-PLAN-WITHOUT-ACT, model=%s)",
-            model_name,
-        )
-    else:
-        logger.info("compound_intent: 注入 plan-execute 铁律")
+    sys_msg["content"] = sys_msg["content"].rstrip() + _PLAN_EXECUTE_BLOCK
+    logger.info("compound_intent: 注入 plan-execute 铁律")
     return out
 
 
@@ -309,5 +214,4 @@ def _last_user_text(messages: list[dict[str, Any]]) -> str:
 __all__ = [
     "has_compound_intent",
     "inject_compound_plan_execute",
-    "_is_qwen_internal_model",
 ]

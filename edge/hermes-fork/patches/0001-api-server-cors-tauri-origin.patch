@@ -1,5 +1,5 @@
 diff --git a/gateway/platforms/api_server.py b/gateway/platforms/api_server.py
-index ae77100f6..8b1df9888 100644
+index ae77100f6..42f41d6c0 100644
 --- a/gateway/platforms/api_server.py
 +++ b/gateway/platforms/api_server.py
 @@ -11,7 +11,8 @@ Exposes an HTTP server with endpoints:
@@ -118,7 +118,7 @@ index ae77100f6..8b1df9888 100644
 +    # BL-HERMES-API-CORS-FIX (5/19): Catfish Companion (Tauri 2) was getting
 +    # "Load failed" on fetch to http://127.0.0.1:8642/v1/chat/completions
 +    # because the preflight OPTIONS was 403'd by the strict allowlist.
-+    _TAURI_ORIGINS = ("tauri://localhost", "http://tauri.localhost")
++    _TAURI_ORIGINS = ("tauri://localhost", "http://tauri.localhost", "http://localhost:1420")
 +
 +    def _is_tauri_origin(self, origin: str) -> bool:
 +        return origin in self._TAURI_ORIGINS

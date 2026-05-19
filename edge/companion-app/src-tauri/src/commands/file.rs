@@ -92,6 +92,11 @@ pub async fn reveal_in_finder(path: String) -> Result<(), String> {
 }
 
 /// 用默认 app 打开文件 (`open <path>`).
+///
+/// BL-COMPANION-FILE-PATH-CLICKABLE 修 (5/19 晚): `.status()` 只 catch IO 层 spawn
+/// 失败, **不 catch** `open` 自身非 0 退出 (文件不存在 / 没权限 / 没默认 app 绑定 .xlsx).
+/// 之前 silent fail, 前端 await 拿 Ok 还以为打开了. 现在显式检查 exit code + 用
+/// stderr 拼错误, 让 console.warn 真有信息.
 #[tauri::command]
 pub async fn open_file(path: String) -> Result<(), String> {
     let resolved = resolve_path(&path)?;
@@ -99,28 +104,45 @@ pub async fn open_file(path: String) -> Result<(), String> {
 
     #[cfg(target_os = "macos")]
     {
-        Command::new("open")
+        let out = Command::new("open")
             .arg(&path_str)
-            .status()
-            .map_err(|e| format!("open 失败: {e}"))?;
+            .output()
+            .map_err(|e| format!("open 命令 spawn 失败: {e}"))?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            return Err(format!(
+                "open 退出码 {} ({}): {}",
+                out.status.code().unwrap_or(-1),
+                path_str,
+                if stderr.is_empty() { "无 stderr 输出".into() } else { stderr },
+            ));
+        }
         return Ok(());
     }
 
     #[cfg(target_os = "linux")]
     {
-        Command::new("xdg-open")
+        let out = Command::new("xdg-open")
             .arg(&path_str)
-            .status()
-            .map_err(|e| format!("xdg-open 失败: {e}"))?;
+            .output()
+            .map_err(|e| format!("xdg-open spawn 失败: {e}"))?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            return Err(format!("xdg-open 退出码 {}: {}", out.status.code().unwrap_or(-1), stderr));
+        }
         return Ok(());
     }
 
     #[cfg(target_os = "windows")]
     {
-        Command::new("cmd")
+        let out = Command::new("cmd")
             .args(["/C", "start", "", &path_str])
-            .status()
-            .map_err(|e| format!("start 失败: {e}"))?;
+            .output()
+            .map_err(|e| format!("start spawn 失败: {e}"))?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            return Err(format!("start 退出码 {}: {}", out.status.code().unwrap_or(-1), stderr));
+        }
         return Ok(());
     }
 
