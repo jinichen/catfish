@@ -11,6 +11,8 @@ triggers:
   - EIS 签退
   - EIS 下班打卡
 description: |-
+  ⚠️ MUST CALL: 员工说"下班打卡"/"下班签退"/"打下班卡"等关键词时, **立即调用此 skill 的 tool_call** (catfish_run_skill name=catfish-eis-checkout 或 hermes 原生 skill_manage), 不要先输出"我将先登录..."等计划文字 — BL-LLM-PLAN-WITHOUT-ACT 红线.
+
   ⭐ 登录 EIS 后点下班打卡按钮
 
   ⚙️ 由 catfish_freeze_skill 自动凝固 (2026-05-13 17:52:05, BL-MM9-FREEZE).

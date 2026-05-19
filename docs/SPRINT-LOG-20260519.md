@@ -236,7 +236,8 @@ grep -A3 hermes_api ~/.catfish/companion.yaml
 
 | hermes 能力 | 当前状态 | 该做不该做 |
 |---|---|---|
-| plugins (context_engine, holographic memory 等) | one-external-provider-limit 锁了 catfish-memory, 其它 plugin 暂关 | 短期不开, 怕跟 catfish memory 撞 |
+| hermes 自带 memory plugins (holographic / hindsight / honcho) | hermes one-external-provider-limit 只许一个外部 provider, **catfish-memory 占住了这个 slot**, 所以 hermes 自带几个 plugin 没法并行跑 | 短期不开 (catfish-memory 是主力), 长期看要不要把它们的能力 (e.g. holographic 的语义压缩) 移植进 catfish-memory |
+| hermes 自带 context_engine plugins | 跟 memory plugin 不冲突, 但当前 catfish 没开 | 评估每个 plugin 的能力, 看哪些值得开 |
 | skill 系统 | hermes 有自己的 skills/, catfish skill 是双轨 | **该合并** — 但是大工程, 不在本 sprint |
 | multi-agent A2A 协议 | hermes 有, catfish 也有 (各自实现, 不互通) | 长期对齐, 不急 |
 | 命令模式 (`/cmd`) | hermes CLI 有, Companion 没暴露 | Phase B 后期看是否值得 |

@@ -11,6 +11,8 @@ triggers:
   - 开 EIS
   - EIS 登录
 description: |-
+  ⚠️ MUST CALL: 员工说"登录 EIS"/"进 EIS"/"打开 EIS"等关键词时, **立即调用此 skill 的 tool_call** (catfish_run_skill name=catfish-eis-login 或 hermes 原生 skill_manage), 不要先输出"我将打开浏览器, 然后..."等计划文字 — BL-LLM-PLAN-WITHOUT-ACT 红线.
+
   ⭐ 登录 EIS 一站式信息门户（更新 URL 为 http://eis.ffcs.cn，支持验证码自动识别）
 
   ⚙️ 由 catfish_freeze_skill 自动凝固 (2026-05-12 13:26:39, BL-MM9-FREEZE).

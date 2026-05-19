@@ -13,6 +13,8 @@ triggers:
   - 写周报
   - weekly report
 description: |-
+  ⚠️ MUST CALL: 员工说"写周报"/"本周工作"/"本周总结"/"周报材料"等关键词时, **立即调用此 skill 的 tool_call** (catfish_run_skill name=catfish-weekly-report 或 hermes 原生 skill_manage), 不要先输出"我将: 1. ... 2. ..."等计划文字 — BL-LLM-PLAN-WITHOUT-ACT 红线.
+
   ⭐ 生成员工周报 .xlsx — 部门内向上提交的工作汇总. 严格按真实公司模板复刻 (鸿波 4-29 提供 .xlsx 样板).
 
   **格式**:

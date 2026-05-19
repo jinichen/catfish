@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 
 from fastapi import Header, HTTPException
 
@@ -49,7 +50,113 @@ __all__ = [
     "make_auth_provider",
     "get_current_user",
     "get_current_user_optional",
+    # BL-AUTH-DECOUPLE-A1 (5/19)
+    "SERVICE_CLIENTS_ALLOWING_USER_OVERRIDE",
+    "SERVICE_SUB_PREFIX",
+    "X_CATFISH_USER_HEADER",
+    "is_service_principal",
+    "service_client_id",
+    "resolve_effective_user_email",
 ]
+
+
+# ────────────────────────────────────────────────────────────────────────
+# BL-AUTH-DECOUPLE-A1 (5/19): service token + X-Catfish-User header.
+#
+# 背景: hermes daemon 调 gateway 用员工的 user JWT (1h) 跨小时被 OAuth refresh
+# 覆盖, 中间 401 race. 治本: hermes 改用 service token (sub=client:hermes-cli,
+# 30 天), 然后用 X-Catfish-User header 标识"代表哪个 user 调用". gateway 验
+# service token, 同时取 header 的 email 作为 quota / RBAC / audit 的 effective
+# user. 只白名单的 client_id 允许这个 override, 防别的 service 越权.
+#
+# 详见 A1 工单 + docs/AUTH-DESIGN.md (后续补 § 14).
+# ────────────────────────────────────────────────────────────────────────
+
+#: service token sub 的前缀 (catfish-identity clients.py to_token_claims 约定).
+SERVICE_SUB_PREFIX = "client:"
+
+#: 允许通过 X-Catfish-User header 覆盖 effective_user 的 service client_id 白名单.
+#: 写死在代码里 (不走 yaml) — 防 ops 误配某个 service 拿到 user-impersonation 能力.
+#: 加新 client 要改这里 + 走 code review.
+SERVICE_CLIENTS_ALLOWING_USER_OVERRIDE: frozenset[str] = frozenset({"hermes-cli"})
+
+#: HTTP header name. 跟 hermes / Companion 约定 (A2 / A3 实现侧用同一个名).
+X_CATFISH_USER_HEADER = "X-Catfish-User"
+
+#: X-Catfish-User 值的形状校验 — 必须长得像 email.
+#: 真正的"user 是否存在"由后端业务 (quota / facts / etc) 自己处理 — gateway
+#: 只防 garbage / injection / 不像 email 的字符串.
+#: 容忍长度 254 (RFC 5321 local 64 + @ + domain 255 cap).
+_EMAIL_SHAPE_RE = re.compile(
+    r"^[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9.\-]{1,253}\.[A-Za-z]{2,}$"
+)
+
+
+def is_service_principal(user: User | None) -> bool:
+    """user 是不是 service token 派生的 (sub 以 'client:' 开头).
+
+    判 sub 形状不判 role — role=service 是 catfish-identity 约定的, 但万一
+    yaml 错配 / 别的 IdP 不带这字段, sub 前缀更不可绕过 (oidc.py 验签后 sub
+    直接来自 JWT, 不经过 yaml).
+    """
+    if user is None:
+        return False
+    return isinstance(user.sub, str) and user.sub.startswith(SERVICE_SUB_PREFIX)
+
+
+def service_client_id(user: User | None) -> str | None:
+    """从 service token user 提 client_id. 非 service token 返 None."""
+    if not is_service_principal(user):
+        return None
+    return user.sub[len(SERVICE_SUB_PREFIX):] or None
+
+
+def resolve_effective_user_email(
+    user: User,
+    x_catfish_user_header: str | None,
+) -> str:
+    """决定本次请求"代表谁"的 email — quota / RBAC / audit 用这个.
+
+    规则:
+      1. 普通 user token (sub=email): effective = sub. X-Catfish-User **完全忽略**
+         (防普通员工冒充别人).
+      2. Service token (sub=client:<id>) 且 client_id 在白名单:
+         必须带 X-Catfish-User header + 内容看着像 email → effective = header.
+         缺 header → 400 (caller 应该传).
+         header 格式不对 → 401.
+      3. Service token 但 client_id **不在白名单**: X-Catfish-User 忽略,
+         effective = sub (e.g. "client:something"). 这样不允许 impersonation
+         的 service 也能跑 (例如 cron 跑批 quota 归到自己头上).
+
+    返: 字符串 (email 或 "client:..."), 永不返 None. raise HTTPException 表错.
+    """
+    # 普通 user token
+    if not is_service_principal(user):
+        return user.sub
+
+    # service token
+    cid = service_client_id(user)
+    if cid not in SERVICE_CLIENTS_ALLOWING_USER_OVERRIDE:
+        # 不允许 override 的 service: 自己当 effective user
+        return user.sub
+
+    # 允许 override 的 service token (e.g. hermes-cli)
+    raw = (x_catfish_user_header or "").strip()
+    if not raw:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"service token (sub={user.sub}) requires "
+                f"{X_CATFISH_USER_HEADER} header to identify on-behalf-of user"
+            ),
+        )
+    if not _EMAIL_SHAPE_RE.match(raw):
+        # 不像 email — 拒 (防 garbage / injection)
+        raise HTTPException(
+            status_code=401,
+            detail=f"{X_CATFISH_USER_HEADER} value is not a valid email",
+        )
+    return raw
 
 logger = logging.getLogger("catfish.gateway.auth")
 

@@ -1,0 +1,256 @@
+diff --git a/gateway/platforms/api_server.py b/gateway/platforms/api_server.py
+--- a/gateway/platforms/api_server.py
++++ b/gateway/platforms/api_server.py
+@@ -734,6 +734,74 @@
+         return "*" in self._cors_origins or origin in self._cors_origins
+ 
+     # ------------------------------------------------------------------
++    # Catfish auth-decouple — extract the end-user email so it can be
++    # forwarded to the upstream gateway as `X-Catfish-User`. The hermes
++    # API server's own auth (Bearer == API_SERVER_KEY) is unchanged.
++    #
++    # BL-AUTH-DECOUPLE-A2 (5/19): hermes now talks to catfish-gateway
++    # using a long-lived service token (sub=client:hermes-cli) instead
++    # of the per-user JWT. To keep audit/quota correct, hermes forwards
++    # the caller's identity in `X-Catfish-User`. Resolution order:
++    #   1. JWT `sub` claim from the incoming Authorization Bearer (works
++    #      once Companion ships A3 — passes the user's portal JWT).
++    #   2. Explicit `X-Catfish-User` header on the incoming request.
++    #   3. `HERMES_DEFAULT_USER` env var (test harness / single-tenant
++    #      installs that haven't shipped A3 yet).
++    # Returns "" when no candidate is found; downstream then sends no
++    # header and the gateway will reject the service-token request with
++    # 400, surfacing the misconfig instead of charging it to nobody.
++    # ------------------------------------------------------------------
++
++    _EMAIL_LIKE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
++
++    @staticmethod
++    def _decode_jwt_sub(token: str) -> str:
++        """Decode JWT payload (no signature verification) and return ``sub``.
++
++        Returns "" on any failure. We don't verify because:
++          - hermes is not the JWT issuer (catfish-gateway is) and rotating
++            keys here would duplicate gateway logic and drift.
++          - the JWT was already accepted by ``_check_auth`` upstream (or
++            else we wouldn't be running). Forwarding sub is a best-effort
++            attribution hint, not an authorization decision.
++        """
++        if not token or token.count(".") != 2:
++            return ""
++        try:
++            import base64 as _b64
++            import json as _json
++            payload_b64 = token.split(".")[1]
++            payload_b64 += "=" * (-len(payload_b64) % 4)
++            payload = _json.loads(_b64.urlsafe_b64decode(payload_b64))
++            sub = payload.get("sub") or payload.get("email") or ""
++            return str(sub) if sub else ""
++        except Exception:
++            return ""
++
++    def _extract_catfish_outgoing_user(self, request: "web.Request") -> str:
++        """Resolve the end-user email to forward as ``X-Catfish-User``.
++
++        See class-level comment above for resolution order. Always returns
++        a string (possibly empty) — never raises.
++        """
++        # 1. JWT sub
++        auth_header = request.headers.get("Authorization", "")
++        if auth_header.lower().startswith("bearer "):
++            token = auth_header[7:].strip()
++            sub = self._decode_jwt_sub(token)
++            if sub and self._EMAIL_LIKE.match(sub):
++                return sub
++        # 2. Explicit pass-through header from Companion
++        explicit = request.headers.get("X-Catfish-User", "").strip()
++        if explicit and self._EMAIL_LIKE.match(explicit):
++            return explicit
++        # 3. Env fallback (single-tenant / pre-A3 testing)
++        fallback = os.environ.get("HERMES_DEFAULT_USER", "").strip()
++        if fallback and self._EMAIL_LIKE.match(fallback):
++            return fallback
++        return ""
++
++    # ------------------------------------------------------------------
+     # Auth helper
+     # ------------------------------------------------------------------
+ 
+@@ -856,6 +924,7 @@
+         tool_complete_callback=None,
+         gateway_session_key: Optional[str] = None,
+         model_override: Optional[str] = None,
++        catfish_outgoing_user: Optional[str] = None,
+     ) -> Any:
+         """
+         Create an AIAgent instance using the gateway's runtime config.
+@@ -925,6 +994,14 @@
+             reasoning_config=reasoning_config,
+             gateway_session_key=gateway_session_key,
+         )
++        # Catfish auth-decouple — stash the end-user email on the agent so
++        # the OpenAI client builder in run_agent.py can inject the
++        # `X-Catfish-User` header on outbound chat/completions calls to
++        # catfish-gateway. Empty string means "no header" (gateway will
++        # 400 service-token requests without it, surfacing the misconfig).
++        # See ``_extract_catfish_outgoing_user`` for resolution order.
++        if catfish_outgoing_user:
++            agent._catfish_outgoing_user = catfish_outgoing_user
+         return agent
+ 
+     # ------------------------------------------------------------------
+@@ -1225,6 +1302,10 @@
+             # side-by-side with ``tool_start_callback``/``tool_complete_callback``.
+             # The structured callbacks are strictly richer (they carry the
+             # tool_call id), so they own the chat-completions SSE channel.
++            # Catfish auth-decouple — resolve end-user email once per request
++            # so both the streaming and non-streaming agent runs forward the
++            # same `X-Catfish-User` to catfish-gateway.
++            catfish_outgoing_user = self._extract_catfish_outgoing_user(request)
+             agent_ref = [None]
+             agent_task = asyncio.ensure_future(self._run_agent(
+                 user_message=user_message,
+@@ -1237,6 +1318,7 @@
+                 agent_ref=agent_ref,
+                 gateway_session_key=gateway_session_key,
+                 model_override=model_name,
++                catfish_outgoing_user=catfish_outgoing_user,
+             ))
+             # Ensure SSE drain loops can terminate without relying on polling
+             # agent_task.done(), which can race with queue timeout checks.
+@@ -1249,6 +1331,7 @@
+             )
+ 
+         # Non-streaming: run the agent (with optional Idempotency-Key)
++        catfish_outgoing_user_nonstream = self._extract_catfish_outgoing_user(request)
+         async def _compute_completion():
+             return await self._run_agent(
+                 user_message=user_message,
+@@ -1257,6 +1340,7 @@
+                 session_id=session_id,
+                 gateway_session_key=gateway_session_key,
+                 model_override=model_name,
++                catfish_outgoing_user=catfish_outgoing_user_nonstream,
+             )
+ 
+         idempotency_key = request.headers.get("Idempotency-Key")
+@@ -2762,6 +2846,7 @@
+         agent_ref: Optional[list] = None,
+         gateway_session_key: Optional[str] = None,
+         model_override: Optional[str] = None,
++        catfish_outgoing_user: Optional[str] = None,
+     ) -> tuple:
+         """
+         Create an agent and run a conversation in a thread executor.
+@@ -2786,6 +2871,7 @@
+                 tool_complete_callback=tool_complete_callback,
+                 gateway_session_key=gateway_session_key,
+                 model_override=model_override,
++                catfish_outgoing_user=catfish_outgoing_user,
+             )
+             if agent_ref is not None:
+                 agent_ref[0] = agent
+@@ -2992,6 +3078,10 @@
+             model=body.get("model", self._model_name),
+         )
+ 
++        # Catfish auth-decouple — resolve once before the background task
++        # so the closure captures it.
++        catfish_outgoing_user_run = self._extract_catfish_outgoing_user(request)
++
+         async def _run_and_close():
+             try:
+                 self._set_run_status(run_id, "running")
+@@ -3002,6 +3092,7 @@
+                     tool_progress_callback=event_cb,
+                     gateway_session_key=gateway_session_key,
+                     model_override=body.get("model"),
++                    catfish_outgoing_user=catfish_outgoing_user_run,
+                 )
+                 self._active_run_agents[run_id] = agent
+ 
+diff --git a/run_agent.py b/run_agent.py
+--- a/run_agent.py
++++ b/run_agent.py
+@@ -7085,8 +7085,81 @@
+             and self._api_kwargs_have_image_parts(api_kwargs or {})
+         ):
+             request_kwargs["default_headers"] = self._copilot_headers_for_request(is_vision=True)
++        # Catfish auth-decouple (BL-AUTH-DECOUPLE-A2) — when hermes is
++        # using a service token to talk to a local catfish-gateway,
++        # forward the end-user email as `X-Catfish-User` so the gateway
++        # can attribute audit/quota correctly. The email was stashed on
++        # ``self`` by gateway.platforms.api_server when handling the
++        # inbound Companion request; missing → no header (gateway will
++        # 400, surfacing the misconfig). Only injected when the upstream
++        # is a catfish-gateway-shaped URL so non-catfish providers (e.g.
++        # OpenRouter, direct Anthropic) never leak the header.
++        self._inject_catfish_outgoing_user_header(request_kwargs)
+         return self._create_openai_client(request_kwargs, reason=reason, shared=False)
+ 
++    def _is_catfish_gateway_url(self, base_url: str) -> bool:
++        """Return True when *base_url* looks like a local catfish-gateway.
++
++        Recognised by (a) hostname in the explicit env var
++        ``CATFISH_GATEWAY_HOSTS`` (comma-separated), or (b) host being
++        ``localhost``/``127.0.0.1``/``::1`` AND port in 8990–8999. This
++        keeps the header off real OpenAI / OpenRouter / proxy hops while
++        still catching the deployment defaults (gateway on 8999) and
++        common dev ports. Override via env when shipping a non-default
++        port.
++        """
++        if not base_url:
++            return False
++        try:
++            from urllib.parse import urlparse
++            parsed = urlparse(base_url)
++            host = (parsed.hostname or "").lower()
++            port = parsed.port
++        except Exception:
++            return False
++        explicit_hosts = [
++            h.strip().lower()
++            for h in os.environ.get("CATFISH_GATEWAY_HOSTS", "").split(",")
++            if h.strip()
++        ]
++        if explicit_hosts and host in explicit_hosts:
++            return True
++        if host in {"localhost", "127.0.0.1", "::1"} and port and 8990 <= port <= 8999:
++            return True
++        return False
++
++    def _inject_catfish_outgoing_user_header(self, request_kwargs: dict) -> None:
++        """Merge ``X-Catfish-User`` into request_kwargs['default_headers']
++        when the upstream is a catfish-gateway URL.
++
++        Safe no-op when:
++          - ``self._catfish_outgoing_user`` is unset/empty (CLI runs, non
++            api_server platforms, or env fallback unset),
++          - the upstream isn't a catfish-gateway-shaped URL (regular
++            OpenAI / OpenRouter / Anthropic targets),
++          - ``default_headers`` already has the key (caller wins).
++
++        Mutates *request_kwargs* in place.
++        """
++        user = getattr(self, "_catfish_outgoing_user", "") or ""
++        if not user:
++            return
++        if not self._is_catfish_gateway_url(str(request_kwargs.get("base_url", ""))):
++            return
++        existing = request_kwargs.get("default_headers") or {}
++        # Normalise to a plain dict — OpenAI SDK accepts dict-like, but we
++        # need to merge without trampling callers (copilot vision path).
++        if not isinstance(existing, dict):
++            try:
++                existing = dict(existing)
++            except Exception:
++                existing = {}
++        if "X-Catfish-User" in existing:
++            return
++        merged = dict(existing)
++        merged["X-Catfish-User"] = user
++        request_kwargs["default_headers"] = merged
++
+     def _close_request_openai_client(self, client: Any, *, reason: str) -> None:
+         self._close_openai_client(client, reason=reason, shared=False)
+ 

@@ -21,7 +21,7 @@ import { useTeachingStore } from "../store/teaching";
 // (老 BL-FIX45 B fallback 切模型用的). 删 import 防 tsc unused warning.
 import { applySteerPrefix } from "./steer";  // BL-HERMES013-RED-1B (5/13 ACP /steer)
 // 5/19 BL-COMPANION-CHAT-SWITCH-TO-HERMES Phase 2-2B: hermes API server 路径配置
-import { hermesApiConfigGet, hermesApiAuthHeader } from "./tauri";
+import { hermesApiConfigGet, hermesApiAuthHeader, authWhoami } from "./tauri";
 
 interface SendChatParams {
   model: string;
@@ -398,10 +398,22 @@ export async function streamChat(params: SendChatParams): Promise<void> {
   // 看到组合好的字符串, raw key 不暴露.
   let hermesCfg: { enabled: boolean; url: string; has_key: boolean } | null = null;
   let hermesAuth: string | null = null;
+  // BL-AUTH-DECOUPLE-A3 (5/19): hermes 路径要显式把当前员工 email 通过
+  // X-Catfish-User header 传给 hermes (hermes 再透传给 gateway). 不再依赖
+  // hermes 的 HERMES_DEFAULT_USER env fallback — 真上多租户时 env 单值挂不住.
+  // authWhoami 直接读 keychain OAuth token 解出来的 email, 一次 IPC ~1ms.
+  let userEmail: string | null = null;
   try {
     hermesCfg = await hermesApiConfigGet();
     if (hermesCfg.enabled && hermesCfg.has_key) {
       hermesAuth = await hermesApiAuthHeader();
+      try {
+        const who = await authWhoami();
+        if (who.authenticated && who.email) userEmail = who.email;
+      } catch {
+        // whoami 挂 (keychain 没 token / OIDC 异常) → 不带 header, 让 hermes
+        // 拒 401 (A1+A2 已要求 service-sub token 必带 X-Catfish-User).
+      }
     }
   } catch {
     // Tauri 命令挂 — 走老 gateway 路径 (灰度安全降级)
@@ -412,9 +424,14 @@ export async function streamChat(params: SendChatParams): Promise<void> {
     ? `${hermesCfg!.url}/v1/chat/completions`
     : `${config.gatewayUrl}/v1/chat/completions`;
 
-  // hermes API server 期望 model="hermes-agent" (固定, hermes 内部决定真 model).
-  // 老 gateway 期望真实 model 名 (catfish-private-main / catfish-public-qwen-flash / 等).
-  const effectiveModel = useHermes ? "hermes-agent" : model;
+  // BL-COMPANION-MODEL-SELECTOR-HERMES-SYNC (5/19): 两边都传真 model 名.
+  //   - 老 gateway 一直按 body.model 路由.
+  //   - hermes API server 现在也接受 body.model 作为单次 override (api_server.py
+  //     _create_agent.model_override); 留空 / "hermes-agent" / 当前 profile 名时
+  //     回落到 config.yaml model.default, 不影响 Open WebUI 等老 OpenAI 客户端.
+  // 之前写死成 "hermes-agent" 导致 UI 选的 model 被吞, hermes 全跑 config 默认
+  // (deepseek-flash) — 40K context 不稳, 一调 skill 就 streaming error.
+  const effectiveModel = model;
 
   const body: Record<string, unknown> = {
     model: effectiveModel,
@@ -473,13 +490,19 @@ export async function streamChat(params: SendChatParams): Promise<void> {
   let resp: Response;
   try {
     if (useHermes) {
+      const hermesHeaders: Record<string, string> = {
+        "Content-Type": "application/json",
+        Authorization: hermesAuth!,
+        ...agentHeaders,
+      };
+      // BL-AUTH-DECOUPLE-A3 (5/19): 真员工 email 走 X-Catfish-User. hermes
+      // OpenAI server 解 (依赖 X-Catfish-User, 不再回退到 HERMES_DEFAULT_USER env).
+      if (userEmail) {
+        hermesHeaders["X-Catfish-User"] = userEmail;
+      }
       resp = await fetch(url, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: hermesAuth!,
-          ...agentHeaders,
-        },
+        headers: hermesHeaders,
         body: JSON.stringify(body),
         signal,
       });

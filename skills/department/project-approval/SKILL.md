@@ -14,6 +14,8 @@ triggers:
   - 可研报告
   - 项目方案及预算
 description: |-
+  ⚠️ MUST CALL: 员工说"立项"/"立项报告"/"立项申请"/"项目可研"/"可研报告"等关键词时, **立即调用此 skill 的 tool_call** (catfish_run_skill name=catfish-project-approval 或 hermes 原生 skill_manage), 不要先输出"我将: 1. 收集材料... 2. 起草..."等计划文字 — BL-LLM-PLAN-WITHOUT-ACT 红线.
+
   ⭐ 生成项目立项 / 立项申请 / 项目可研 / 立项报告 .docx 文档. 严格按真实公文样式 (复用 leadership-briefing 渲染层).
 
   **文档结构** (4 段固定逻辑顺序):

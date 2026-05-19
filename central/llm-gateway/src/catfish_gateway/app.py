@@ -53,7 +53,14 @@ from fastapi.responses import JSONResponse, StreamingResponse  # noqa: E402
 
 from . import quota as _quota_module  # noqa: E402  五一 sprint 5/2 收尾: chat 后写 quota_events
 from . import session_meta  # noqa: E402  BL-E16 关系建立: tick + inject 时间元
-from .auth import User, get_current_user, get_current_user_optional  # noqa: E402
+from .auth import (  # noqa: E402
+    User,
+    X_CATFISH_USER_HEADER,
+    get_current_user,
+    get_current_user_optional,
+    is_service_principal,
+    resolve_effective_user_email,
+)
 from .catalog import build_catalog  # noqa: E402
 from .config import Config, load_config  # noqa: E402
 from .employee_journal import inject_employee_journal  # noqa: E402
@@ -2393,6 +2400,29 @@ async def chat_completions(
     # 字段进 audit log, 不阻塞 (绕 catfish 的 plugin 根本到不了我们这).
     source_hint = request.headers.get("x-catfish-source", "").strip() or "unknown"
 
+    # ────────────────────────────────────────────────────────────────────
+    # BL-AUTH-DECOUPLE-A1 (5/19): service token + X-Catfish-User → on-behalf-of.
+    #
+    # 普通 user JWT (sub=email): X-Catfish-User 完全忽略, effective = user.sub.
+    # service token (sub=client:hermes-cli) + 白名单: 读 X-Catfish-User 当 effective.
+    # quota / RBAC / audit / metrics / inject_ctx 全用 effective_user_email,
+    # 不直接用 user.sub. 但 RBAC dataclass 仍是 user (service token 的 role/
+    # allowed_models 是 service 维度, 不是 on-behalf user 的 — 那 cross-project
+    # 解析能力 A1 不引入, 留 A4+).
+    #
+    # 跨小时 401 race 治本: hermes 用长寿 service token 调 gateway, 不再被 user
+    # token 1h refresh 卡.
+    # ────────────────────────────────────────────────────────────────────
+    _x_user_header_raw = request.headers.get(X_CATFISH_USER_HEADER)
+    effective_user_email = resolve_effective_user_email(user, _x_user_header_raw)
+    _is_service_call = is_service_principal(user)
+    if _is_service_call and effective_user_email != user.sub:
+        logger.info(
+            "BL-AUTH-DECOUPLE-A1: service token sub=%s acting on behalf of "
+            "user=%s (X-Catfish-User)",
+            user.sub, effective_user_email,
+        )
+
     if not user.can_access(model):
         raise HTTPException(status_code=403, detail=f"access denied to model: {model_name}")
     if model.mode != "chat":
@@ -2514,7 +2544,10 @@ async def chat_completions(
         enabled = None  # None = 全跑
 
     inject_ctx = InjectContext(
-        user_sub=getattr(user, "sub", None),
+        # BL-AUTH-DECOUPLE-A1 (5/19): inject_ctx 的 user_sub 用 effective_user_email,
+        # 让 memory / facts / journal provider 按 X-Catfish-User 取员工自己的数据,
+        # 不是按 service client (会变成所有员工共享 hermes-cli 的空 memory).
+        user_sub=effective_user_email,
         user_dept=getattr(user, "dept", None),
         user_role=getattr(user, "role", None),
         messages=body["messages"],
@@ -2547,7 +2580,11 @@ async def chat_completions(
         try:
             from .compound_intent import inject_compound_plan_execute  # noqa: PLC0415
 
-            body["messages"] = inject_compound_plan_execute(body["messages"])
+            # BL-LLM-PLAN-WITHOUT-ACT (5/19): 把 model.name 传进去, 内网 qwen
+            # 命中 → 额外注入 "立即 act, 不许 plan" 铁律, 解决"只说不做" bug.
+            body["messages"] = inject_compound_plan_execute(
+                body["messages"], model_name=getattr(model, "name", None),
+            )
         except Exception as e:  # noqa: BLE001
             logger.debug("compound_intent 注入失败 (%s), 不阻塞", e)
 
@@ -2635,8 +2672,10 @@ async def chat_completions(
             import asyncio  # noqa: PLC0415
 
             from .memory_distill import maybe_run_llm_distillation  # noqa: PLC0415
+            # BL-AUTH-DECOUPLE-A1 (5/19): distill 按 effective_user_email (X-Catfish-User
+            # 或 user JWT sub) — service token on-behalf-of 时是员工 email, 不是 client.
             asyncio.create_task(
-                maybe_run_llm_distillation(user_email=user.sub),
+                maybe_run_llm_distillation(user_email=effective_user_email),
             )
         except Exception:  # noqa: BLE001
             pass
@@ -2655,7 +2694,7 @@ async def chat_completions(
             logger.warning(
                 "user=%s 在 prompt 里检测到密码 / 凭据明文 (%d 处). "
                 "建议员工用 secret_ref (keychain:// 或 env://) 替代. user_sub=%s",
-                user.sub, len(credential_hits), user.sub,
+                effective_user_email, len(credential_hits), effective_user_email,
             )
             # 把 hits 暂存到 request state, 让后面 audit log 能拿到
             request.state.credential_hits = credential_hits
@@ -2707,10 +2746,12 @@ async def chat_completions(
         # 召回中段. 含 features.is_archive_enabled() 灰度开关 (默认开). archive
         # 写挂 → 自动降级 FIX41 硬切 (兜底). 内部用 derive_session_id 自动从
         # first user message hash 派生 session_id, 同会话稳定.
+        # BL-AUTH-DECOUPLE-A1 (5/19): service token on-behalf-of 模式时 user_email
+        # 用 effective_user_email (X-Catfish-User), tool archive 按 user 隔离.
         from .tool_archive import prepare_tool_messages  # noqa: PLC0415
         body["messages"] = prepare_tool_messages(
             body["messages"],
-            user_email=user.sub,  # User.sub = email (决策 3)
+            user_email=effective_user_email,  # User.sub = email (决策 3), A1 后 X-Catfish-User 覆盖
             origin_model=model_name,  # fix2: summary_worker 用 chat 同款模型
         )
 
@@ -2773,9 +2814,11 @@ async def chat_completions(
         try:
             from .conversation_compressor import maybe_compress_messages  # noqa: PLC0415
             ctx_window = getattr(model, "context_window", None) or 128000
+            # BL-AUTH-DECOUPLE-A1 (5/19): 压缩按 effective_user_email 归账 (service
+            # on-behalf-of 时 = X-Catfish-User 指定的员工).
             new_msgs, compress_stats = await maybe_compress_messages(
                 body.get("messages") or [],
-                user_sub=user.sub,
+                user_sub=effective_user_email,
                 model_context_window=ctx_window,
                 # BL-INTERNAL-MODEL-FOLLOW-USER (5/17): 压缩用员工选的同款 model
                 origin_model=model_name,
@@ -2785,7 +2828,7 @@ async def chat_completions(
                 logger.info(
                     "BL-COMPRESSION-GATEWAY: sub=%s 压 %d 条历史 → 摘要, "
                     "token %d→%d (省 %d%%)",
-                    user.sub,
+                    effective_user_email,
                     compress_stats["compressed_count"],
                     compress_stats["pre_token"],
                     compress_stats["post_token"],
@@ -2817,7 +2860,7 @@ async def chat_completions(
     if is_internal_call:
         logger.info(
             "internal call: user=%s model=%s 跳 quota check (X-Catfish-Internal)",
-            user.sub, model_name,
+            effective_user_email, model_name,
         )
     else:
         try:
@@ -2827,18 +2870,24 @@ async def chat_completions(
                 if isinstance(m, dict)
             )
             estimated = _quota_module.estimate_tokens(prompt_text)
+            # BL-AUTH-DECOUPLE-A1 (5/19): quota 归账给 effective_user_email.
+            # 普通 user JWT: 跟 user.sub 一致, 行为不变.
+            # service token on-behalf-of (hermes-cli): quota 归到 X-Catfish-User
+            # 指定的员工, 不归到 client:hermes-cli (后者会让所有员工共享一个 quota).
             qc = _quota_module.check_quota(
-                user_email=user.sub,
+                user_email=effective_user_email,
                 department=user.department,
                 model=model_name,
                 est_tokens=estimated,
                 role=user.role,  # BL-FIX39 (5/11): admin / sysadmin 跳 quota
             )
             if not qc.allowed:
-                friendly = _quota_module.friendly_quota_message(qc, user.sub, model_name)
+                friendly = _quota_module.friendly_quota_message(
+                    qc, effective_user_email, model_name,
+                )
                 logger.info(
                     "quota deny: user=%s model=%s dimension=%s current=%d limit=%d",
-                    user.sub, model_name, qc.dimension, qc.current, qc.limit,
+                    effective_user_email, model_name, qc.dimension, qc.current, qc.limit,
                 )
                 raise HTTPException(
                     status_code=429,
@@ -2873,18 +2922,18 @@ async def chat_completions(
     if is_stream:
         return StreamingResponse(
             _stream_chat_completion(
-                body, user_sub=user.sub, user_dept=user.department,
+                body, user_sub=effective_user_email, user_dept=user.department,
                 model_name=model_name, model=model,
                 security_concern=security_concern,
                 is_internal=is_internal_call,  # BL-F17: 透传, 跳 record_usage
                 source_hint=source_hint,  # BL-RBAC-DAY4-HARDENING (5/17)
-                # teaching_mode 透传 已 DELETED (5/13): _stream_chat_completion 不再用.
-                # _teaching_mode / _lean 控制 SOUL inject 在上面 1651 行已用过.
+                # BL-AUTH-DECOUPLE-A1 (5/19): user_sub 透传 effective_user_email,
+                # audit / record_usage 都按 X-Catfish-User 归账 (service token on-behalf-of).
             ),
             media_type="text/event-stream",
         )
     return await _invoke_chat_completion(
-        body, user_sub=user.sub, user_dept=user.department,
+        body, user_sub=effective_user_email, user_dept=user.department,
         model_name=model_name, model=model,
         security_concern=security_concern,
         is_internal=is_internal_call,  # BL-F17: 透传, 跳 record_usage

@@ -19,6 +19,11 @@
 #   - 只复制 SKILL.md / script.py / README.md / tests/ — 不带 sample-output / .csv 等
 #     运行产出物
 #
+# BL-LLM-PLAN-WITHOUT-ACT (5/19): 每个 SKILL.md description 顶部应有
+# "⚠️ MUST CALL: 员工说... **立即调用此 skill 的 tool_call**..." 段落 — 内网
+# qwen 122b 只说不做 bug 的红线提示, 给低 ReAct 能力的 LLM 看. 同步时整段照搬
+# 不做特殊处理, 在源文件 (catfish/skills/department/*/SKILL.md) 维护即可.
+#
 # 用法:
 #   bash ~/person_task/catfish/skills/install_to_hermes.sh
 #

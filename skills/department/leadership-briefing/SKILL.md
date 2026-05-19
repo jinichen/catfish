@@ -26,6 +26,8 @@ triggers:
   - 给集团汇报
   - 给上级汇报
 description: |-
+  ⚠️ MUST CALL: 员工说"汇报"/"工作汇报"/"请示"/"决策事项"/"给领导汇报"等关键词时, **立即调用此 skill 的 tool_call** (catfish_run_skill name=catfish-leadership-briefing 或 hermes 原生 skill_manage), 不要先输出"我将: 1. 收集材料... 2. 起草..."等计划文字 — BL-LLM-PLAN-WITHOUT-ACT 红线.
+
   ⭐ 生成公司 / 集团领导汇报 / 决策事项 .docx 文档. 严格按真实公文样式 (鸿波 PDF 样板复刻).
 
   **文档结构**:

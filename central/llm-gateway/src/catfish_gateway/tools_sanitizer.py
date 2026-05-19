@@ -95,6 +95,11 @@ _ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
     "catfish_user_profile_confirm",
     "catfish_run_skill",
     "search_skills",
+    # BL-LLM-PLAN-WITHOUT-ACT (5/19): 内网 qwen 见到周报 / PPT 等关键词必须能立即
+    # 找到对应 skill 并触发, 不能因 BL-TOOL-CAP 被砍. skill discovery + invocation
+    # 这一族永不 drop. (catfish_run_skill 已在表里, 这里补 hermes 0.14 的 skill_*.)
+    "skill_view",        # 看单个 skill 详情 (LLM 决定是否调用前)
+    "skills_list",       # 列所有 skill (无 search_skills 时兜底)
     # ── Hermes 0.14 内置基础 (5/17 客户机实测对齐 hermes 0.14 tool name) ──
     # BL-HERMES-014-UPGRADE (5/17): hermes 0.14 改了一批 tool name, 老的
     # shell/bash/edit_file/list_dir/search/grep/todo_tool/screenshot **不再注册** —
