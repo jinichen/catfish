@@ -317,13 +317,20 @@ def _gateway_url() -> str:
 def _gateway_dev_token() -> str:
     """从 env 拿 gateway internal dev token. 没设返空 (caller skip).
 
-    设计取舍: 不依赖 gateway 那边的 ensure_internal_dev_token() — plugin 是
-    in-hermes 进程, import gateway code 跨进程不健康. 让 launchd / hermes 启动
-    脚本把 token 注入 env (跟 HERMES_SERVICE_TOKEN 同套路).
+    设计取舍 (Week 2 Step D 部署前确认): 不依赖 gateway 那边的
+    ensure_internal_dev_token() runtime 生成 — plugin 是 in-hermes 进程, import
+    gateway code 跨进程不健康. 必须**两个进程都从同一个 env 读**, plugin (hermes
+    进程) 和 gateway 进程的 env 都设这个值.
 
-    env: CATFISH_GATEWAY_DEV_TOKEN
+    BL-FIX37 妥协 (5/19 Week 2 Step D): 老 BL-FIX37 设计是 gateway 启动自动
+    生成 random + 不落盘 (外部抓不到, 重启即变). plugin 在另一进程必须能拿
+    同一个值 → 退让成显式预设到 .env 文件. 文件 chmod 600 + .gitignore 兜底
+    安全性. 跟 HERMES_SERVICE_TOKEN 同套路.
+
+    env: CATFISH_INTERNAL_DEV_TOKEN (跟 gateway auth/dev_token.py 同名,
+    部署时设一处, 两进程共享)
     """
-    return os.environ.get("CATFISH_GATEWAY_DEV_TOKEN", "").strip()
+    return os.environ.get("CATFISH_INTERNAL_DEV_TOKEN", "").strip()
 
 
 async def _call_summarize_llm(

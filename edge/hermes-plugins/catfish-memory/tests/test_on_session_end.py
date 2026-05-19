@@ -87,7 +87,7 @@ def env_enable_summarize(monkeypatch: pytest.MonkeyPatch):
     """env 配置: 启用 summarize + 设 model + 设 dev token (3 项缺一个就 skip)"""
     monkeypatch.setenv("CATFISH_PLUGIN_SUMMARIZE", "1")
     monkeypatch.setenv("CATFISH_PLUGIN_SUMMARIZE_MODEL", "catfish-public-qwen-flash")
-    monkeypatch.setenv("CATFISH_GATEWAY_DEV_TOKEN", "test-dev-token-xxx")
+    monkeypatch.setenv("CATFISH_INTERNAL_DEV_TOKEN", "test-dev-token-xxx")
 
 
 # ── 纯 helper 单测 ──────────────────────────────────────
@@ -218,7 +218,7 @@ def test_on_session_end_noop_when_disabled_by_env(
     """CATFISH_PLUGIN_SUMMARIZE=0 → 完全 skip, 不开 thread, 不写 journal"""
     monkeypatch.setenv("CATFISH_PLUGIN_SUMMARIZE", "0")
     monkeypatch.setenv("CATFISH_PLUGIN_SUMMARIZE_MODEL", "x")
-    monkeypatch.setenv("CATFISH_GATEWAY_DEV_TOKEN", "y")
+    monkeypatch.setenv("CATFISH_INTERNAL_DEV_TOKEN", "y")
     provider.on_session_end([
         {"role": "user", "content": "test"},
         {"role": "assistant", "content": "test back"},
@@ -232,7 +232,7 @@ def test_on_session_end_noop_when_no_model_env(
     """没 CATFISH_PLUGIN_SUMMARIZE_MODEL → skip (Step B 阶段双写期正常行为)"""
     monkeypatch.setenv("CATFISH_PLUGIN_SUMMARIZE", "1")
     monkeypatch.delenv("CATFISH_PLUGIN_SUMMARIZE_MODEL", raising=False)
-    monkeypatch.setenv("CATFISH_GATEWAY_DEV_TOKEN", "y")
+    monkeypatch.setenv("CATFISH_INTERNAL_DEV_TOKEN", "y")
     provider.on_session_end([
         {"role": "user", "content": "test"},
         {"role": "assistant", "content": "back"},
@@ -399,8 +399,8 @@ def test_on_session_end_does_not_raise_on_exception(
 
 @pytest.mark.asyncio
 async def test_call_summarize_llm_no_token_returns_none(monkeypatch):
-    """没 CATFISH_GATEWAY_DEV_TOKEN → 直接 None, 不发请求"""
-    monkeypatch.delenv("CATFISH_GATEWAY_DEV_TOKEN", raising=False)
+    """没 CATFISH_INTERNAL_DEV_TOKEN → 直接 None, 不发请求"""
+    monkeypatch.delenv("CATFISH_INTERNAL_DEV_TOKEN", raising=False)
     result = await catfish_memory._call_summarize_llm(
         [("user", "hi"), ("assistant", "hello")], "some-model",
     )
@@ -410,7 +410,7 @@ async def test_call_summarize_llm_no_token_returns_none(monkeypatch):
 @pytest.mark.asyncio
 async def test_call_summarize_llm_no_pairs_returns_none(monkeypatch):
     """空 pairs → 不发请求"""
-    monkeypatch.setenv("CATFISH_GATEWAY_DEV_TOKEN", "x")
+    monkeypatch.setenv("CATFISH_INTERNAL_DEV_TOKEN", "x")
     result = await catfish_memory._call_summarize_llm([], "model")
     assert result is None
 
@@ -418,7 +418,7 @@ async def test_call_summarize_llm_no_pairs_returns_none(monkeypatch):
 @pytest.mark.asyncio
 async def test_call_summarize_llm_success(monkeypatch):
     """mock httpx 200 → 返 content"""
-    monkeypatch.setenv("CATFISH_GATEWAY_DEV_TOKEN", "x")
+    monkeypatch.setenv("CATFISH_INTERNAL_DEV_TOKEN", "x")
     captured = {}
 
     class FakeResp:
@@ -454,7 +454,7 @@ async def test_call_summarize_llm_success(monkeypatch):
 @pytest.mark.asyncio
 async def test_call_summarize_llm_non_200_returns_none(monkeypatch):
     """HTTP 非 200 → None"""
-    monkeypatch.setenv("CATFISH_GATEWAY_DEV_TOKEN", "x")
+    monkeypatch.setenv("CATFISH_INTERNAL_DEV_TOKEN", "x")
 
     class FakeResp:
         status_code = 500
