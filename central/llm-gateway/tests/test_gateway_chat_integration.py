@@ -55,16 +55,28 @@ from unittest.mock import AsyncMock
 SRC = Path(__file__).resolve().parent.parent / "src"
 sys.path.insert(0, str(SRC))
 
-from catfish_gateway.compound_intent import (  # noqa: E402
-    _PLAN_EXECUTE_MARKER,
-    has_compound_intent,
-    inject_compound_plan_execute,
-)
-from catfish_gateway.self_critique import (  # noqa: E402
-    _HINT_MARKER,
-    _PLAN_HINT_MARKER,
-    inject_self_critique,
-)
+# BL-GATEWAY-CLEANUP-POST-HERMES (Week 1 删完): compound_intent.py + self_critique.py
+# 已删, hermes-agent 自管 agent loop. 本文件仍保留 5 scenario 作"删完之后"行为锚
+# 定 — 不再 import 已删模块, 注入相关断言改成 no-op (注入层都没了, 自然不再注入).
+# 凡是 mock LLM 行为 / agent loop 轮次断言仍跑, 这才是真正的 anchor.
+def has_compound_intent(_messages):  # noqa: D401 — stub for post-deletion anchor
+    """已删 compound_intent.py — 永远不触发 (hermes 自管 plan-execute)."""
+    return False
+
+
+def inject_compound_plan_execute(messages, model_name=None):  # noqa: ARG001
+    """已删 compound_intent.py — 直接返原 messages."""
+    return list(messages)
+
+
+def inject_self_critique(messages):
+    """已删 self_critique.py — 直接返原 messages (hermes agent loop 兜底)."""
+    return list(messages)
+
+
+_PLAN_EXECUTE_MARKER = "<<DELETED_NEVER_APPEARS>>"
+_HINT_MARKER = "<<DELETED_NEVER_APPEARS>>"
+_PLAN_HINT_MARKER = "<<DELETED_NEVER_APPEARS>>"
 
 
 # ─── helpers — mock litellm response shapes ─────────────────────
@@ -231,12 +243,12 @@ class GatewayChatIntegrationBaseline(unittest.TestCase):
         """
         messages = _base_messages("分析 ~/data/sales.csv 然后生成 PPT")
 
-        # compound_intent 应触发 (有"然后" + "分析" + "生成" 两动词)
-        self.assertTrue(has_compound_intent(messages),
-                        "S2: 应识别复合任务 (有连接词 + 2 动词)")
+        # Week 1 删完: compound_intent 已删, 永远不触发. hermes 自管 plan-execute.
+        self.assertFalse(has_compound_intent(messages),
+                         "S2 (post-deletion): compound_intent 已删, 永远不触发")
         injected = inject_compound_plan_execute(messages, model_name="qwen")
-        self.assertIn(_PLAN_EXECUTE_MARKER, injected[0]["content"],
-                      "S2: 复合任务应注入 plan-execute prompt 块 (Week 1 删之前)")
+        self.assertNotIn(_PLAN_EXECUTE_MARKER, injected[0]["content"],
+                         "S2 (post-deletion): 已删模块不应注入 plan-execute")
 
         # Round 1: LLM emit execute_code 跑 CSV 分析
         tc_csv = _mk_tool_call(
@@ -310,9 +322,9 @@ class GatewayChatIntegrationBaseline(unittest.TestCase):
         """
         messages = _base_messages("读取 notes.txt 然后写出 markdown 版本")
 
-        # 复合: 有"然后" + "读取" + "写出" 命中 _ACTION_VERBS
-        self.assertTrue(has_compound_intent(messages),
-                        "S3: 应识别复合任务")
+        # Week 1 删完: compound_intent 已删, 永远不触发. hermes agent loop 兜底.
+        self.assertFalse(has_compound_intent(messages),
+                         "S3 (post-deletion): compound_intent 已删, 永远不触发")
         injected = inject_compound_plan_execute(messages, model_name="qwen")
 
         # Round 1: read_file

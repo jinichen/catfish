@@ -117,10 +117,11 @@ def test_registry_inject_invoked(app_src):
 # ─── 仍 inline 的 hint 系列受 _lean gate ────────────────────────────
 
 
+# BL-GATEWAY-CLEANUP-POST-HERMES (Week 1 删完): self_critique.inject_completion_critique_hint
+# 和 inject_compound_plan_execute 已删 (hermes-agent 自管 agent loop), 不再在 app.py
+# 出现, 故从本断言列表里移除. tool_retry_hint 保留 (BL-A1.2 hard-cap, hermes 没接管).
 INLINE_LEAN_GATED = [
     "tool_retry_hint.inject_tool_retry_hint",
-    "self_critique.inject_completion_critique_hint",
-    "inject_compound_plan_execute",
 ]
 
 

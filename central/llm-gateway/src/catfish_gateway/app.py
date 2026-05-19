@@ -2528,7 +2528,7 @@ async def chat_completions(
     #   internal: set()  (Registry 自己也跳 inject)
     #   普通:    全跑 (按 priority 顺序)
     #
-    # 注: identity (创建 system) / compound_intent / session_goal / hints / session_meta tick
+    # 注: identity (创建 system) / session_goal / hints / session_meta tick
     # 不在 Registry 里, 留下面 app.py 原位.
     from .memory import InjectContext  # noqa: PLC0415
     from .memory.registry import get_global_registry  # noqa: PLC0415
@@ -2571,22 +2571,8 @@ async def chat_completions(
             inject_ctx, body["messages"], enabled,
         )
 
-    # BL-COMPOUND-PLAN-EXECUTE (5/15 鸿波 '复合任务 agent 撑不住'): 复合任务
-    # ('分析 + 生成 PPT') 检测命中 → 追加 plan-execute 铁律到同一段 system,
-    # 不在 messages 中间插新 system (上次 v2 撞过 Qwen 400). prompt-only,
-    # agent 自己看历史推断当前 step. 单步任务不触发, 不影响普通会话.
-    # 不在 Registry 因为它跟具体 chat 行为强耦合 (compound = 多 turn), 不是单纯 inject.
-    if not _lean:
-        try:
-            from .compound_intent import inject_compound_plan_execute  # noqa: PLC0415
-
-            # BL-LLM-PLAN-WITHOUT-ACT (5/19): 把 model.name 传进去, 内网 qwen
-            # 命中 → 额外注入 "立即 act, 不许 plan" 铁律, 解决"只说不做" bug.
-            body["messages"] = inject_compound_plan_execute(
-                body["messages"], model_name=getattr(model, "name", None),
-            )
-        except Exception as e:  # noqa: BLE001
-            logger.debug("compound_intent 注入失败 (%s), 不阻塞", e)
+    # BL-GATEWAY-CLEANUP-POST-HERMES (5/20 删): compound_intent.py 已删,
+    # hermes-agent 自管 plan-execute (run_agent.py:12614 agent loop).
 
     # 档 4 (BL-HERMES013-3 5/11): 注入员工 /goal 锁定目标. 借鉴 Hermes 0.13 Ralph
     # loop. 单文件 ~/.catfish/session_goal.txt, 员工 /goal xxx 设, 每轮自动 inject
@@ -2627,13 +2613,9 @@ async def chat_completions(
             return JSONResponse(synthetic)
         body["messages"] = tool_retry_hint.inject_tool_retry_hint(body["messages"])
 
-        # BL-A1.3: "幻觉完成" hint + BL-LLM-PLAN-WITHOUT-ACT plan-then-stop guard
-        # 5/19: 不再加 prompt 铁律 (qwen 钟摆已两轮翻车), 改 agent loop guard 兜底.
-        # inject_self_critique 聚合两条 detect:
-        #   - 完成承诺 ("已生成 X" 但没 tool_call) — 老路径
-        #   - plan-then-stop (JSON plan / "step 1 / 我将" 但没 tool_call) — 新增
-        from . import self_critique  # noqa: PLC0415  lazy import
-        body["messages"] = self_critique.inject_self_critique(body["messages"])
+        # BL-GATEWAY-CLEANUP-POST-HERMES (5/20 删): self_critique.py 已删,
+        # 完成承诺 / plan-then-stop 检测由 hermes-agent agent loop 兜底
+        # (hermes 自己跑 max_iterations=90 + tool_retry, 不再需要 gateway 注入 hint).
 
         # ─── BL-FIX24 duplicate-tool-call guard 全部 DELETED (5/13 鸿波"乱七八糟") ──
         # 历史: 软 hint (inject_duplicate_guard_hint) + 物理 hard-block (detect_hard_block_duplicate
