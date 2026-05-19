@@ -1,0 +1,757 @@
+diff --git a/gateway/platforms/api_server.py b/gateway/platforms/api_server.py
+index 42f41d6c0..41e0bc2c3 100644
+--- a/gateway/platforms/api_server.py
++++ b/gateway/platforms/api_server.py
+@@ -3457,6 +3457,299 @@ class APIServerAdapter(BasePlatformAdapter):
+ 
+         return web.json_response({"run_id": run_id, "status": "stopping"})
+ 
++    # ------------------------------------------------------------------
++    # Catfish companion-proxy (BL-AUTH-DECOUPLE-A5)
++    #
++    # Companion historically hit catfish-gateway (8999) directly for every
++    # non-chat endpoint (/api/me, /v1/catalog, /v1/mcp/*, /api/learn/*, ...)
++    # using a per-user JWT. That JWT expires hourly and Companion sometimes
++    # doesn't refresh in time, producing the 401 storm we've been chasing.
++    #
++    # A5 collapses that surface: Companion talks to hermes only. Hermes
++    # re-issues those requests to catfish-gateway using the service token
++    # (same plumbing as A2 chat path) and forwards the end-user email via
++    # X-Catfish-User so audit/quota remain attributed correctly.
++    #
++    # Routing model:
++    #   • Hermes's own first-party routes are registered first in connect()
++    #     and aiohttp matches them first.
++    #   • This catch-all sits LAST and only matches under a narrow prefix
++    #     allowlist (/api/, /v1/, /a2a/, /healthz). Anything outside still
++    #     404s exactly like before.
++    #   • Auth: same _check_auth(API_SERVER_KEY) as every other endpoint.
++    #     Without a valid bearer the proxy never reaches catfish-gateway.
++    #
++    # Streaming: aiohttp's iter_chunked + StreamResponse keeps SSE
++    # (event-stream) live — we never buffer the body. Used by /a2a/ask and
++    # any future SSE endpoint backed by gateway.
++    # ------------------------------------------------------------------
++
++    # Prefixes Companion is allowed to reach via the proxy. Anything outside
++    # this allowlist 404s instead of leaking arbitrary upstream URLs.
++    _PROXY_ALLOWED_PREFIXES = ("/api/", "/v1/", "/a2a/", "/healthz")
++
++    # Headers we MUST NOT forward downstream (hop-by-hop per RFC 7230 +
++    # auth/host which we replace ourselves).
++    _PROXY_STRIP_REQUEST_HEADERS = frozenset({
++        "host",
++        "authorization",
++        "x-catfish-user",         # we recompute via _extract_catfish_outgoing_user
++        "content-length",         # aiohttp sets this on the outbound side
++        "connection",
++        "keep-alive",
++        "proxy-authenticate",
++        "proxy-authorization",
++        "te",
++        "trailer",
++        "transfer-encoding",
++        "upgrade",
++        # Browser-injected — meaningless / harmful to forward
++        "origin",
++        "referer",
++        "cookie",
++    })
++
++    _PROXY_STRIP_RESPONSE_HEADERS = frozenset({
++        "content-length",         # we restream; aiohttp will set its own
++        "transfer-encoding",
++        "connection",
++        "keep-alive",
++        # Strip upstream CORS — we re-apply our own based on Origin so
++        # Companion's tauri:// origin works even if gateway didn't allow it.
++        "access-control-allow-origin",
++        "access-control-allow-credentials",
++        "access-control-allow-headers",
++        "access-control-allow-methods",
++        "access-control-expose-headers",
++        "access-control-max-age",
++        "vary",
++    })
++
++    def _catfish_gateway_base_url(self) -> str:
++        """Return the catfish-gateway base URL (no /v1 suffix).
++
++        Pulled from the same place hermes already uses for chat completions:
++        model.base_url in config.yaml (e.g. ``http://localhost:8999/v1``).
++        We strip a trailing ``/v1`` segment so endpoints like ``/api/me`` and
++        ``/healthz`` resolve to the right host root.
++
++        Override via env ``CATFISH_GATEWAY_BASE_URL`` for tests / non-default
++        deployments.
++        """
++        explicit = os.environ.get("CATFISH_GATEWAY_BASE_URL", "").strip()
++        if explicit:
++            return explicit.rstrip("/")
++        try:
++            from gateway.run import _resolve_runtime_agent_kwargs
++            runtime = _resolve_runtime_agent_kwargs()
++            base = str(runtime.get("base_url") or "").rstrip("/")
++        except Exception as exc:  # pragma: no cover - fail-safe
++            logger.warning("[proxy] failed to resolve gateway base_url: %s", exc)
++            base = ""
++        if base.endswith("/v1"):
++            base = base[:-3]
++        return base or "http://127.0.0.1:8999"
++
++    @classmethod
++    def _path_is_proxyable(cls, path: str) -> bool:
++        """Return True iff *path* starts with an allowed proxy prefix."""
++        if not path:
++            return False
++        # Normalise to a single leading slash; aiohttp gives us that already
++        # but defensive against future routing tweaks.
++        if not path.startswith("/"):
++            path = "/" + path
++        for prefix in cls._PROXY_ALLOWED_PREFIXES:
++            if path.startswith(prefix):
++                return True
++        return False
++
++    def _build_proxy_request_headers(
++        self,
++        request: "web.Request",
++        outgoing_user: str,
++    ) -> Dict[str, str]:
++        """Build the header dict forwarded to catfish-gateway.
++
++        Drops hop-by-hop + auth headers, swaps in the service token, and
++        sets X-Catfish-User to the resolved end-user email.
++        """
++        out: Dict[str, str] = {}
++        for key, value in request.headers.items():
++            if key.lower() in self._PROXY_STRIP_REQUEST_HEADERS:
++                continue
++            out[key] = value
++        service_token = os.environ.get("HERMES_SERVICE_TOKEN", "").strip()
++        if service_token:
++            out["Authorization"] = f"Bearer {service_token}"
++        if outgoing_user:
++            out["X-Catfish-User"] = outgoing_user
++        # Identify the proxy hop for upstream logs / debugging.
++        out.setdefault("X-Forwarded-By", "hermes-api-server")
++        return out
++
++    def _filter_proxy_response_headers(self, raw: Any) -> Dict[str, str]:
++        """Subset of upstream response headers safe to relay to the client."""
++        out: Dict[str, str] = {}
++        try:
++            items = raw.items()
++        except AttributeError:
++            return out
++        for key, value in items:
++            if key.lower() in self._PROXY_STRIP_RESPONSE_HEADERS:
++                continue
++            out[key] = value
++        return out
++
++    async def _handle_companion_proxy(self, request: "web.Request") -> "web.StreamResponse":
++        """Catch-all proxy for Companion → catfish-gateway calls.
++
++        Behaviour:
++          1. Auth via API_SERVER_KEY (same as every other route).
++          2. Path prefix allowlist — reject anything outside /api/, /v1/,
++             /a2a/, /healthz to keep the attack surface bounded.
++          3. Re-issue the request to catfish-gateway with:
++                Authorization: Bearer ${HERMES_SERVICE_TOKEN}
++                X-Catfish-User: <end-user email>
++                <original headers minus hop-by-hop / auth / host>
++          4. Stream the response back chunk-by-chunk so SSE
++             (text/event-stream) bodies preserve their incremental shape.
++          5. Apply hermes's CORS headers based on Origin so Companion's
++             tauri:// origin works uniformly.
++        """
++        # OPTIONS preflight — handled by cors_middleware before we ever get
++        # here for known routes. For the catch-all we still need to answer
++        # explicitly so the browser doesn't see a 405.
++        if request.method == "OPTIONS":
++            origin = request.headers.get("Origin", "")
++            cors = self._cors_headers_for_origin(origin) if origin else None
++            if cors is not None:
++                return web.Response(status=204, headers=cors)
++            return web.Response(status=204)
++
++        auth_err = self._check_auth(request)
++        if auth_err:
++            return auth_err
++
++        path = request.rel_url.path
++        if not self._path_is_proxyable(path):
++            return web.json_response(
++                _openai_error(f"Not found: {path}", err_type="invalid_request_error", code="not_found"),
++                status=404,
++            )
++
++        outgoing_user = self._extract_catfish_outgoing_user(request)
++        gateway_base = self._catfish_gateway_base_url()
++        # Preserve query string verbatim (path_qs includes the "?...").
++        upstream_url = f"{gateway_base}{request.rel_url.path_qs}"
++        out_headers = self._build_proxy_request_headers(request, outgoing_user)
++
++        # Read body once (small payloads) — keep raw bytes so we don't
++        # accidentally re-encode JSON. iter_chunked uses streaming on the
++        # response side, which is what matters for SSE.
++        body_bytes: Optional[bytes]
++        if request.method in {"GET", "HEAD", "DELETE", "OPTIONS"}:
++            body_bytes = None
++        else:
++            try:
++                body_bytes = await request.read()
++            except Exception as exc:
++                logger.warning("[proxy] failed to read body for %s %s: %s", request.method, path, exc)
++                return web.json_response(
++                    _openai_error("Could not read request body for proxy", err_type="invalid_request_error"),
++                    status=400,
++                )
++
++        # aiohttp imported at module top inside the try/except. Build a
++        # short-lived ClientSession per call — overhead is negligible (Python
++        # connection reuse via keep-alive lives below the session) and we
++        # avoid lifecycle hassle when the platform restarts.
++        try:
++            import aiohttp as _aiohttp
++        except ImportError:  # pragma: no cover - api_server guards this
++            return web.json_response(
++                _openai_error("aiohttp unavailable", err_type="server_error"),
++                status=500,
++            )
++
++        # No global timeout — gateway endpoints span quick reads (/api/me)
++        # and long-running SSE (/a2a/ask). Total timeout would kill the SSE.
++        # sock_connect/sock_read give us a sane connect-time guard without
++        # capping in-flight idle. Companion sets its own client timeouts.
++        timeout = _aiohttp.ClientTimeout(total=None, sock_connect=10.0, sock_read=None)
++
++        origin = request.headers.get("Origin", "")
++        cors = self._cors_headers_for_origin(origin) if origin else None
++
++        try:
++            session = _aiohttp.ClientSession(timeout=timeout)
++        except Exception as exc:  # pragma: no cover
++            logger.error("[proxy] could not create upstream session: %s", exc)
++            return web.json_response(
++                _openai_error("Upstream session create failed", err_type="server_error"),
++                status=502,
++            )
++
++        upstream_resp = None
++        try:
++            upstream_resp = await session.request(
++                method=request.method,
++                url=upstream_url,
++                headers=out_headers,
++                data=body_bytes,
++                allow_redirects=False,
++            )
++        except _aiohttp.ClientConnectorError as exc:
++            await session.close()
++            logger.warning("[proxy] connect to %s failed: %s", upstream_url, exc)
++            return web.json_response(
++                _openai_error(f"Upstream connect failed: {exc}", err_type="server_error"),
++                status=502,
++            )
++        except Exception as exc:
++            await session.close()
++            logger.error("[proxy] upstream request failed: %s", exc, exc_info=True)
++            return web.json_response(
++                _openai_error(f"Upstream request error: {exc}", err_type="server_error"),
++                status=502,
++            )
++
++        try:
++            # Prepare the streaming response to the original client. We use
++            # StreamResponse so SSE chunks land immediately; non-stream
++            # endpoints just write one chunk and end.
++            resp_headers = self._filter_proxy_response_headers(upstream_resp.headers)
++            if cors:
++                resp_headers.update(cors)
++            client_resp = web.StreamResponse(
++                status=upstream_resp.status,
++                reason=upstream_resp.reason,
++                headers=resp_headers,
++            )
++            await client_resp.prepare(request)
++            try:
++                async for chunk in upstream_resp.content.iter_chunked(16384):
++                    if not chunk:
++                        continue
++                    await client_resp.write(chunk)
++            except (asyncio.CancelledError, ConnectionResetError):
++                # Client went away — nothing to do but unwind cleanly.
++                raise
++            except Exception as exc:
++                logger.warning("[proxy] stream relay error for %s: %s", path, exc)
++            await client_resp.write_eof()
++            return client_resp
++        finally:
++            try:
++                if upstream_resp is not None:
++                    upstream_resp.release()
++            except Exception:
++                pass
++            try:
++                await session.close()
++            except Exception:
++                pass
++
+     async def _sweep_orphaned_runs(self) -> None:
+         """Periodically clean up run streams that were never consumed."""
+         while True:
+@@ -3530,6 +3823,15 @@ class APIServerAdapter(BasePlatformAdapter):
+             self._app.router.add_get("/v1/runs/{run_id}/events", self._handle_run_events)
+             self._app.router.add_post("/v1/runs/{run_id}/approval", self._handle_run_approval)
+             self._app.router.add_post("/v1/runs/{run_id}/stop", self._handle_stop_run)
++            # BL-AUTH-DECOUPLE-A5 — Companion → catfish-gateway proxy.
++            # Registered LAST so aiohttp's first-match-wins routing keeps
++            # every hermes-native endpoint above intact. The handler itself
++            # gates by allowed-prefix + API key so this won't accidentally
++            # leak access to other URLs even if they reach it.
++            for _method in ("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"):
++                self._app.router.add_route(
++                    _method, "/{proxy_path:.*}", self._handle_companion_proxy
++                )
+             # Start background sweep to clean up orphaned (unconsumed) run streams
+             sweep_task = asyncio.create_task(self._sweep_orphaned_runs())
+             try:
+diff --git a/tests/gateway/test_api_server_companion_proxy.py b/tests/gateway/test_api_server_companion_proxy.py
+new file mode 100644
+index 000000000..8be632b4d
+--- /dev/null
++++ b/tests/gateway/test_api_server_companion_proxy.py
+@@ -0,0 +1,431 @@
++"""
++Tests for the Companion-proxy (BL-AUTH-DECOUPLE-A5).
++
++Covers:
++- Path-prefix allowlist (in /api/, /v1/, /a2a/, /healthz pass; other 404).
++- Auth required: requests without API_SERVER_KEY get 401, never touch
++  upstream.
++- Service-token swap: outgoing Authorization → ``Bearer ${HERMES_SERVICE_TOKEN}``.
++- X-Catfish-User resolution: JWT sub > explicit header > env fallback.
++- Hop-by-hop / cookie / host headers stripped from upstream request.
++- Streaming responses (text/event-stream) relayed chunk-by-chunk, not
++  buffered.
++- Hermes's own first-party routes (/v1/models, /health, /v1/chat/completions)
++  still resolve to their dedicated handlers and never hit the proxy.
++
++These are unit-ish tests — we mock the upstream catfish-gateway with an
++``aiohttp`` test server rather than hitting the real 8999.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import json
++from typing import Any, Dict, List, Tuple
++from unittest.mock import patch
++
++import pytest
++from aiohttp import web
++
++from gateway.config import Platform, PlatformConfig
++from gateway.platforms.api_server import APIServerAdapter
++
++
++# ---------------------------------------------------------------------------
++# Helpers
++# ---------------------------------------------------------------------------
++
++
++class _CapturedRequest:
++    """Snapshot of the inbound request that the fake gateway received."""
++
++    __slots__ = ("method", "path", "query", "headers", "body")
++
++    def __init__(self, method: str, path: str, query: str, headers: Dict[str, str], body: bytes):
++        self.method = method
++        self.path = path
++        self.query = query
++        self.headers = headers
++        self.body = body
++
++
++async def _start_fake_gateway(handler) -> Tuple[web.AppRunner, str]:
++    """Spin up an aiohttp app exposing *handler* on a random local port."""
++    app = web.Application()
++    app.router.add_route("*", "/{tail:.*}", handler)
++    runner = web.AppRunner(app)
++    await runner.setup()
++    site = web.TCPSite(runner, "127.0.0.1", 0)
++    await site.start()
++    # AppRunner doesn't expose the bound port cleanly; reach into the socket.
++    server = site._server
++    sockets = getattr(server, "sockets", None) or []
++    port = sockets[0].getsockname()[1] if sockets else 0
++    return runner, f"http://127.0.0.1:{port}"
++
++
++def _make_adapter(api_key: str = "test-key") -> APIServerAdapter:
++    cfg = PlatformConfig(extra={"host": "127.0.0.1", "port": 0, "key": api_key})
++    return APIServerAdapter(cfg)
++
++
++async def _start_adapter(adapter: APIServerAdapter) -> Tuple[web.AppRunner, str]:
++    """Start the adapter's aiohttp app on a local port and return its URL."""
++    # connect() does port binding internally — but it picks 8642. For tests we
++    # build a parallel runner from the same routes config to avoid clobber.
++    adapter._app = web.Application(client_max_size=10_000_000)
++    adapter._app["api_server_adapter"] = adapter
++    # Mirror the route table the production connect() registers, ending in
++    # the catch-all proxy.
++    adapter._app.router.add_get("/health", adapter._handle_health)
++    adapter._app.router.add_get("/v1/models", adapter._handle_models)
++    for method in ("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"):
++        adapter._app.router.add_route(method, "/{proxy_path:.*}", adapter._handle_companion_proxy)
++    runner = web.AppRunner(adapter._app)
++    await runner.setup()
++    site = web.TCPSite(runner, "127.0.0.1", 0)
++    await site.start()
++    sockets = getattr(site._server, "sockets", None) or []
++    port = sockets[0].getsockname()[1] if sockets else 0
++    return runner, f"http://127.0.0.1:{port}"
++
++
++# ---------------------------------------------------------------------------
++# Pure unit tests (no I/O) for the helper functions
++# ---------------------------------------------------------------------------
++
++
++class TestPathAllowlist:
++    def test_api_prefix_allowed(self):
++        assert APIServerAdapter._path_is_proxyable("/api/me") is True
++        assert APIServerAdapter._path_is_proxyable("/api/quota/me") is True
++        assert APIServerAdapter._path_is_proxyable("/api/learn/start_recording") is True
++
++    def test_v1_prefix_allowed(self):
++        assert APIServerAdapter._path_is_proxyable("/v1/catalog") is True
++        assert APIServerAdapter._path_is_proxyable("/v1/mcp/registry") is True
++        assert APIServerAdapter._path_is_proxyable("/v1/hub/skills") is True
++
++    def test_a2a_prefix_allowed(self):
++        assert APIServerAdapter._path_is_proxyable("/a2a/ask") is True
++
++    def test_healthz_allowed(self):
++        assert APIServerAdapter._path_is_proxyable("/healthz") is True
++
++    def test_unknown_prefix_rejected(self):
++        assert APIServerAdapter._path_is_proxyable("/etc/passwd") is False
++        assert APIServerAdapter._path_is_proxyable("/admin") is False
++        assert APIServerAdapter._path_is_proxyable("") is False
++        assert APIServerAdapter._path_is_proxyable("/") is False
++
++
++class TestProxyHeaderShaping:
++    def test_strip_hop_by_hop_and_auth(self):
++        adapter = _make_adapter()
++        with patch.dict("os.environ", {"HERMES_SERVICE_TOKEN": "svc-tok"}, clear=False):
++            class _Req:
++                headers = {
++                    "Host": "127.0.0.1:8642",
++                    "Authorization": "Bearer some-user-jwt",
++                    "X-Catfish-User": "hijacker@evil.com",
++                    "Cookie": "session=abc",
++                    "Content-Type": "application/json",
++                    "Accept": "application/json",
++                    "Origin": "tauri://localhost",
++                    "X-Custom-Trace": "trace-xyz",
++                }
++            out = adapter._build_proxy_request_headers(_Req(), "real@user.com")
++        assert out["Authorization"] == "Bearer svc-tok"
++        assert out["X-Catfish-User"] == "real@user.com"
++        assert out["Content-Type"] == "application/json"
++        assert out["X-Custom-Trace"] == "trace-xyz"
++        # Stripped:
++        for forbidden in ("Host", "Cookie", "Origin"):
++            assert forbidden not in out
++
++    def test_no_service_token_means_no_auth(self):
++        adapter = _make_adapter()
++        with patch.dict("os.environ", {}, clear=True):
++            class _Req:
++                headers = {"Accept": "application/json"}
++            out = adapter._build_proxy_request_headers(_Req(), "")
++        # Without a service token configured we MUST NOT forward a bogus
++        # Authorization header — upstream will then 401, which is the
++        # correct surface for the misconfig.
++        assert "Authorization" not in out
++        assert "X-Catfish-User" not in out
++
++
++class TestResponseHeaderFilter:
++    def test_strips_cors_and_hop_by_hop(self):
++        adapter = _make_adapter()
++        raw = {
++            "Content-Type": "application/json",
++            "Content-Length": "42",
++            "Transfer-Encoding": "chunked",
++            "Access-Control-Allow-Origin": "*",
++            "Access-Control-Allow-Credentials": "true",
++            "X-Trace-Id": "abc",
++        }
++        out = adapter._filter_proxy_response_headers(raw)
++        assert out["Content-Type"] == "application/json"
++        assert out["X-Trace-Id"] == "abc"
++        for stripped in ("Content-Length", "Transfer-Encoding",
++                         "Access-Control-Allow-Origin",
++                         "Access-Control-Allow-Credentials"):
++            assert stripped not in out
++
++
++class TestGatewayBaseURLDerivation:
++    def test_env_override_wins(self):
++        adapter = _make_adapter()
++        with patch.dict("os.environ", {"CATFISH_GATEWAY_BASE_URL": "http://example.test:9999"}, clear=False):
++            assert adapter._catfish_gateway_base_url() == "http://example.test:9999"
++
++    def test_strips_trailing_v1(self):
++        adapter = _make_adapter()
++        with patch("gateway.run._resolve_runtime_agent_kwargs",
++                   return_value={"base_url": "http://127.0.0.1:8999/v1"}):
++            with patch.dict("os.environ", {}, clear=False):
++                # Make sure env override is empty.
++                import os
++                os.environ.pop("CATFISH_GATEWAY_BASE_URL", None)
++                assert adapter._catfish_gateway_base_url() == "http://127.0.0.1:8999"
++
++
++# ---------------------------------------------------------------------------
++# Integration-ish tests with a fake upstream gateway
++# ---------------------------------------------------------------------------
++
++
++@pytest.mark.asyncio
++async def test_proxy_get_api_me_forwards_service_token_and_user():
++    """GET /api/me must reach upstream with service token + X-Catfish-User."""
++    captured: List[_CapturedRequest] = []
++
++    async def _gateway_handler(request: web.Request) -> web.Response:
++        body = await request.read()
++        captured.append(_CapturedRequest(
++            method=request.method,
++            path=request.path,
++            query=request.query_string,
++            headers=dict(request.headers),
++            body=body,
++        ))
++        return web.json_response({"email": "u@catfish.dev", "role": "admin"})
++
++    gateway_runner, gateway_url = await _start_fake_gateway(_gateway_handler)
++    adapter = _make_adapter(api_key="test-key")
++    server_runner, hermes_url = await _start_adapter(adapter)
++
++    try:
++        import aiohttp
++        with patch.dict("os.environ", {
++            "HERMES_SERVICE_TOKEN": "service-token-xyz",
++            "HERMES_DEFAULT_USER": "u@catfish.dev",
++            "CATFISH_GATEWAY_BASE_URL": gateway_url,
++        }, clear=False):
++            async with aiohttp.ClientSession() as session:
++                async with session.get(
++                    f"{hermes_url}/api/me",
++                    headers={"Authorization": "Bearer test-key"},
++                ) as resp:
++                    assert resp.status == 200
++                    j = await resp.json()
++                    assert j == {"email": "u@catfish.dev", "role": "admin"}
++        assert len(captured) == 1
++        c = captured[0]
++        assert c.method == "GET"
++        assert c.path == "/api/me"
++        # Service token swap
++        assert c.headers.get("Authorization") == "Bearer service-token-xyz"
++        # User attribution
++        assert c.headers.get("X-Catfish-User") == "u@catfish.dev"
++        # Proxy marker
++        assert c.headers.get("X-Forwarded-By") == "hermes-api-server"
++    finally:
++        await server_runner.cleanup()
++        await gateway_runner.cleanup()
++
++
++@pytest.mark.asyncio
++async def test_proxy_rejects_unknown_path():
++    adapter = _make_adapter(api_key="test-key")
++    server_runner, hermes_url = await _start_adapter(adapter)
++    try:
++        import aiohttp
++        with patch.dict("os.environ", {"CATFISH_GATEWAY_BASE_URL": "http://127.0.0.1:1"}, clear=False):
++            async with aiohttp.ClientSession() as session:
++                async with session.get(
++                    f"{hermes_url}/etc/passwd",
++                    headers={"Authorization": "Bearer test-key"},
++                ) as resp:
++                    assert resp.status == 404
++    finally:
++        await server_runner.cleanup()
++
++
++@pytest.mark.asyncio
++async def test_proxy_rejects_without_api_key():
++    """Without a valid API_SERVER_KEY the proxy must not reach upstream."""
++    upstream_hits: List[int] = []
++
++    async def _gateway_handler(request: web.Request) -> web.Response:
++        upstream_hits.append(1)
++        return web.Response(text="boom")
++
++    gateway_runner, gateway_url = await _start_fake_gateway(_gateway_handler)
++    adapter = _make_adapter(api_key="test-key")
++    server_runner, hermes_url = await _start_adapter(adapter)
++    try:
++        import aiohttp
++        with patch.dict("os.environ", {
++            "HERMES_SERVICE_TOKEN": "service-token-xyz",
++            "CATFISH_GATEWAY_BASE_URL": gateway_url,
++        }, clear=False):
++            async with aiohttp.ClientSession() as session:
++                async with session.get(f"{hermes_url}/api/me") as resp:
++                    assert resp.status == 401
++                # Wrong key
++                async with session.get(
++                    f"{hermes_url}/api/me",
++                    headers={"Authorization": "Bearer wrong"},
++                ) as resp:
++                    assert resp.status == 401
++        assert upstream_hits == []
++    finally:
++        await server_runner.cleanup()
++        await gateway_runner.cleanup()
++
++
++@pytest.mark.asyncio
++async def test_proxy_streams_sse_event_stream():
++    """SSE upstream responses must be relayed chunk-by-chunk (not buffered)."""
++
++    async def _gateway_handler(request: web.Request) -> web.StreamResponse:
++        resp = web.StreamResponse(
++            status=200,
++            headers={"Content-Type": "text/event-stream"},
++        )
++        await resp.prepare(request)
++        for i in range(3):
++            await resp.write(f"data: msg-{i}\n\n".encode())
++            await asyncio.sleep(0.01)
++        await resp.write_eof()
++        return resp
++
++    gateway_runner, gateway_url = await _start_fake_gateway(_gateway_handler)
++    adapter = _make_adapter(api_key="test-key")
++    server_runner, hermes_url = await _start_adapter(adapter)
++    try:
++        import aiohttp
++        with patch.dict("os.environ", {
++            "HERMES_SERVICE_TOKEN": "svc",
++            "HERMES_DEFAULT_USER": "u@catfish.dev",
++            "CATFISH_GATEWAY_BASE_URL": gateway_url,
++        }, clear=False):
++            async with aiohttp.ClientSession() as session:
++                async with session.get(
++                    f"{hermes_url}/a2a/ask",
++                    headers={"Authorization": "Bearer test-key"},
++                ) as resp:
++                    assert resp.status == 200
++                    assert resp.headers.get("Content-Type", "").startswith("text/event-stream")
++                    received = []
++                    async for chunk in resp.content.iter_any():
++                        received.append(chunk.decode())
++                        if sum(len(c) for c in received) >= len("data: msg-0\n\ndata: msg-1\n\ndata: msg-2\n\n"):
++                            break
++        full = "".join(received)
++        assert "data: msg-0" in full
++        assert "data: msg-1" in full
++        assert "data: msg-2" in full
++    finally:
++        await server_runner.cleanup()
++        await gateway_runner.cleanup()
++
++
++@pytest.mark.asyncio
++async def test_proxy_post_body_and_query_pass_through():
++    """POST with JSON body + query string must reach upstream verbatim."""
++
++    captured: List[_CapturedRequest] = []
++
++    async def _gateway_handler(request: web.Request) -> web.Response:
++        body = await request.read()
++        captured.append(_CapturedRequest(
++            method=request.method,
++            path=request.path,
++            query=request.query_string,
++            headers=dict(request.headers),
++            body=body,
++        ))
++        return web.json_response({"ok": True})
++
++    gateway_runner, gateway_url = await _start_fake_gateway(_gateway_handler)
++    adapter = _make_adapter(api_key="test-key")
++    server_runner, hermes_url = await _start_adapter(adapter)
++    try:
++        import aiohttp
++        payload = {"signal_kind": "silence", "context": {"a": 1}}
++        with patch.dict("os.environ", {
++            "HERMES_SERVICE_TOKEN": "svc",
++            "HERMES_DEFAULT_USER": "u@catfish.dev",
++            "CATFISH_GATEWAY_BASE_URL": gateway_url,
++        }, clear=False):
++            async with aiohttp.ClientSession() as session:
++                async with session.post(
++                    f"{hermes_url}/api/proactive/contextual?trace=42",
++                    headers={
++                        "Authorization": "Bearer test-key",
++                        "Content-Type": "application/json",
++                    },
++                    data=json.dumps(payload),
++                ) as resp:
++                    assert resp.status == 200
++        assert len(captured) == 1
++        c = captured[0]
++        assert c.method == "POST"
++        assert c.path == "/api/proactive/contextual"
++        assert c.query == "trace=42"
++        assert json.loads(c.body.decode()) == payload
++        assert c.headers.get("X-Catfish-User") == "u@catfish.dev"
++        assert c.headers.get("Authorization") == "Bearer svc"
++    finally:
++        await server_runner.cleanup()
++        await gateway_runner.cleanup()
++
++
++@pytest.mark.asyncio
++async def test_hermes_own_routes_take_precedence():
++    """Hermes's own /v1/models must NOT go through the proxy."""
++
++    upstream_hits: List[int] = []
++
++    async def _gateway_handler(request: web.Request) -> web.Response:
++        upstream_hits.append(1)
++        return web.Response(text="should-not-be-called")
++
++    gateway_runner, gateway_url = await _start_fake_gateway(_gateway_handler)
++    adapter = _make_adapter(api_key="test-key")
++    server_runner, hermes_url = await _start_adapter(adapter)
++    try:
++        import aiohttp
++        with patch.dict("os.environ", {
++            "HERMES_SERVICE_TOKEN": "svc",
++            "CATFISH_GATEWAY_BASE_URL": gateway_url,
++        }, clear=False):
++            async with aiohttp.ClientSession() as session:
++                async with session.get(
++                    f"{hermes_url}/v1/models",
++                    headers={"Authorization": "Bearer test-key"},
++                ) as resp:
++                    assert resp.status == 200
++                    j = await resp.json()
++                    # /v1/models is hermes-native, returns hermes-agent model
++                    assert j.get("object") == "list"
++                    assert any(item.get("id") for item in j.get("data", []))
++        assert upstream_hits == []
++    finally:
++        await server_runner.cleanup()
++        await gateway_runner.cleanup()

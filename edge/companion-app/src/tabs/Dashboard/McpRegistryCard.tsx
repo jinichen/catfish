@@ -14,7 +14,9 @@
 
 import { useEffect, useState } from "react";
 import { config } from "../../lib/env";
-import { getToken } from "../../lib/me";
+// BL-AUTH-DECOUPLE-A5 Phase 2 (5/19): 改走 fetchWithAuth, 不再 inline getToken +
+// raw fetch — wrapper 内部按 useHermes 切 API_SERVER_KEY / OAuth, 加 X-Catfish-User.
+import { fetchWithAuth } from "../../lib/me";
 
 interface ConnectorTool {
   name: string;
@@ -77,11 +79,8 @@ export default function McpRegistryCard() {
 
   const refresh = async () => {
     try {
-      const token = await getToken();
-      const url = `${config.gatewayUrl}/v1/mcp/registry`;
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const url = `${config.backendUrl}/v1/mcp/registry`;
+      const res = await fetchWithAuth(url);
       if (!res.ok) {
         if (res.status === 502) {
           setError("mcp-registry 未启动 (dev: python -m catfish_mcp_registry.app, port 8996)");
@@ -110,14 +109,11 @@ export default function McpRegistryCard() {
     ev.stopPropagation();
     setBusyId(c.id);
     try {
-      const token = await getToken();
-      const authHeaders = {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      };
-      const res = await fetch(`${config.gatewayUrl}/v1/mcp/subscribe`, {
+      // BL-AUTH-DECOUPLE-A5 (5/19): fetchWithAuth 自动加 Authorization + X-Catfish-User.
+      const jsonHeaders = { "Content-Type": "application/json" };
+      const res = await fetchWithAuth(`${config.backendUrl}/v1/mcp/subscribe`, {
         method: "POST",
-        headers: authHeaders,
+        headers: jsonHeaders,
         body: JSON.stringify({ connector_id: c.id }),
       });
       if (!res.ok) {
@@ -133,9 +129,9 @@ export default function McpRegistryCard() {
         await refresh();
         return;
       }
-      const startRes = await fetch(`${config.gatewayUrl}/v1/mcp/oauth/start`, {
+      const startRes = await fetchWithAuth(`${config.backendUrl}/v1/mcp/oauth/start`, {
         method: "POST",
-        headers: authHeaders,
+        headers: jsonHeaders,
         body: JSON.stringify({ subscription_id: json.subscription.id }),
       });
       if (!startRes.ok) {
@@ -144,9 +140,9 @@ export default function McpRegistryCard() {
       }
       const startJson = (await startRes.json()) as { authorize_url: string; state: string };
       if (startJson.authorize_url.includes("mock-callback")) {
-        const cbRes = await fetch(`${config.gatewayUrl}/v1/mcp/oauth/callback`, {
+        const cbRes = await fetchWithAuth(`${config.backendUrl}/v1/mcp/oauth/callback`, {
           method: "POST",
-          headers: authHeaders,
+          headers: jsonHeaders,
           body: JSON.stringify({
             state: startJson.state,
             code: "mock-code",
@@ -174,11 +170,8 @@ export default function McpRegistryCard() {
     ev.stopPropagation();
     setBusyId(c.id);
     try {
-      const token = await getToken();
-      const authHeader = { Authorization: `Bearer ${token}` };
-      const subsRes = await fetch(`${config.gatewayUrl}/v1/mcp/subscribed`, {
-        headers: authHeader,
-      });
+      // BL-AUTH-DECOUPLE-A5 (5/19): fetchWithAuth 自动加 Authorization + X-Catfish-User.
+      const subsRes = await fetchWithAuth(`${config.backendUrl}/v1/mcp/subscribed`);
       if (!subsRes.ok) {
         showFlash(`查我的订阅失败: HTTP ${subsRes.status}`);
         return;
@@ -193,9 +186,9 @@ export default function McpRegistryCard() {
         showFlash(`未找到 ${c.name} 的活跃订阅`);
         return;
       }
-      const r = await fetch(
-        `${config.gatewayUrl}/v1/mcp/subscribe/${mine.id}`,
-        { method: "DELETE", headers: authHeader },
+      const r = await fetchWithAuth(
+        `${config.backendUrl}/v1/mcp/subscribe/${mine.id}`,
+        { method: "DELETE" },
       );
       if (r.ok) {
         showFlash(`已取消订阅 ${c.name}`);

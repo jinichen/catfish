@@ -63,8 +63,26 @@ export const isDev = import.meta.env.DEV;
 export const isProd = import.meta.env.PROD;
 
 // config 字段不再 const — bootstrapEndpoints() 启动时改 gatewayUrl / webUrl
+//
+// BL-AUTH-DECOUPLE-A5 Phase 2 (5/19): 加 backendUrl + useHermes.
+//   - gatewayUrl  仍然是老 catfish-gateway 8999 (Rust tool-bridge 内部需要 +
+//     灰度回退路径). **不删**.
+//   - backendUrl  Companion 调"后端 API"的统一入口. hermes 路径开时 = hermes
+//     8642, 否则 = gatewayUrl. **chat 路径不读这字段** (chat.ts 自己读 hermesCfg).
+//   - useHermes   是否走 hermes 路径. fetchWithAuth 据此决定 auth header.
+// 这两个字段在 bootstrapEndpoints() 启动时根据 hermes_api 配置写回, 之后不变.
+// 切换 = 改 ~/.catfish/companion.yaml + 重启 Companion.
 export const config = {
   gatewayUrl: readGatewayUrlBuildTime(),
+  /** BL-AUTH-DECOUPLE-A5 (5/19): 所有调后端 API 的代码用这个 URL. 默认 = gatewayUrl;
+   *  hermes_api.enabled + has_key 时 = hermes URL (启动期 bootstrapEndpoints 改). */
+  backendUrl: readGatewayUrlBuildTime(),
+  /** BL-AUTH-DECOUPLE-A5 (5/19): true 时 fetchWithAuth 用 hermes auth header (API_SERVER_KEY)
+   *  + X-Catfish-User, 不走 OAuth 1h JWT 路径. false 时回退老路径. */
+  useHermes: false,
+  /** BL-AUTH-DECOUPLE-A5 (5/19): hermes auth header 完整字符串 "Bearer <API_SERVER_KEY>".
+   *  Rust 端拼好返字符串, JS 不接触 raw key. useHermes=false 时为 null. */
+  hermesAuthHeader: null as string | null,
   // BL-ARCH2 (5/10): 中央门户基址. 仪表盘 "去 web 看 →" 锚点用.
   webUrl: readWebUrlBuildTime(),
   pollIntervalMs: 3000,
@@ -104,9 +122,42 @@ export async function bootstrapEndpoints(): Promise<void> {
         );
       }
     }
+    // BL-AUTH-DECOUPLE-A5 Phase 2 (5/19): backendUrl 默认跟 gatewayUrl, 这里先同步
+    config.backendUrl = config.gatewayUrl;
   } catch (e) {
     // 非 Tauri 环境 / Rust 端没注册 / yaml 损坏 → 回退 build-time 默认
     // eslint-disable-next-line no-console
     console.warn("[BL-WIN9] get_runtime_endpoints 失败, 回退 build-time 默认", e);
+  }
+
+  // BL-AUTH-DECOUPLE-A5 Phase 2 (5/19): 读 hermes_api 配置, 决定 backendUrl/useHermes.
+  // hermes 8642 已在 Phase 1 加 proxy, 把 /api/ /v1/ /a2a/ /healthz 转给 gateway,
+  // 用 service token 替换 Authorization. Companion 全 API 走 hermes (chat.ts 除外
+  // — 它有自己的 hermes 直连逻辑). 灰度: hermes_api.enabled=false 时仍走老 gateway.
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const hcfg = (await invoke("hermes_api_config_get")) as {
+      enabled: boolean;
+      url: string;
+      has_key: boolean;
+    } | null;
+    if (hcfg && hcfg.enabled && hcfg.has_key) {
+      const auth = (await invoke("hermes_api_auth_header")) as string | null;
+      if (auth) {
+        const hermesUrl = hcfg.url.replace(/\/+$/, "");
+        const oldBackend = config.backendUrl;
+        config.backendUrl = hermesUrl;
+        config.useHermes = true;
+        config.hermesAuthHeader = auth;
+        // eslint-disable-next-line no-console
+        console.info(
+          `[BL-AUTH-DECOUPLE-A5] backendUrl: ${oldBackend} → ${hermesUrl} (hermes proxy 启用)`,
+        );
+      }
+    }
+  } catch (e) {
+    // 非 Tauri / Rust 命令未注册 → useHermes=false, 走老 gateway 路径 (灰度安全降级)
+    // eslint-disable-next-line no-console
+    console.warn("[BL-AUTH-DECOUPLE-A5] 读 hermes_api 配置失败, 走老 gateway 路径", e);
   }
 }

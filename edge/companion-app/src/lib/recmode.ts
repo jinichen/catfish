@@ -38,7 +38,7 @@ export interface AnalyzeResponse {
 }
 
 async function _post<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetchWithAuth(config.gatewayUrl + path, {
+  const res = await fetchWithAuth(config.backendUrl + path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -57,7 +57,7 @@ async function _post<T>(path: string, body: unknown): Promise<T> {
 }
 
 async function _get<T>(path: string): Promise<T> {
-  const res = await fetchWithAuth(config.gatewayUrl + path);
+  const res = await fetchWithAuth(config.backendUrl + path);
   if (!res.ok) {
     throw new Error(`HTTP ${res.status}`);
   }

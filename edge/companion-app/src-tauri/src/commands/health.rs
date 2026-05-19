@@ -8,9 +8,20 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::services::endpoints;
+use crate::services::{endpoints, hermes_api_config};
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// BL-AUTH-DECOUPLE-A5 Phase 2 (5/19): 返 Companion 真"后端 API 入口" base URL.
+/// hermes_api.enabled + has_key 时 = hermes 8642 (hermes Phase 1 proxy 转 gateway),
+/// 否则 = gateway 8999 (灰度回退). 跟前端 config.backendUrl 同语义.
+fn backend_base() -> String {
+    let h = hermes_api_config::hermes_api_config();
+    if h.enabled && h.key.is_some() {
+        return h.url.trim_end_matches('/').to_string();
+    }
+    endpoints::endpoints().gateway_base()
+}
 
 /// 既要 Deserialize（reqwest 解 gateway 返回）也要 Serialize（送给前端）
 #[derive(Debug, Serialize, Deserialize)]
@@ -23,7 +34,7 @@ pub struct HealthzResp {
 #[tauri::command]
 pub async fn healthz() -> Result<HealthzResp, String> {
     let client = build_client()?;
-    let base = endpoints::endpoints().gateway_base();
+    let base = backend_base();
     let resp = client
         .get(format!("{base}/healthz"))
         .send()
@@ -43,7 +54,7 @@ pub async fn healthz() -> Result<HealthzResp, String> {
 #[tauri::command]
 pub async fn catalog() -> Result<Value, String> {
     let client = build_client()?;
-    let base = endpoints::endpoints().gateway_base();
+    let base = backend_base();
     let resp = client
         .get(format!("{base}/v1/catalog"))
         .send()

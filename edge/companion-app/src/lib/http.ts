@@ -11,7 +11,9 @@
 import { config } from "./env";
 
 export class GatewayHttp {
-  constructor(private baseUrl: string = config.gatewayUrl) {}
+  // BL-AUTH-DECOUPLE-A5 (5/19): 改读 backendUrl (hermes proxy 启用时 = hermes URL).
+  // 这个 client 主要做匿名 GET (e.g. /v1/catalog), hermes 也透传, 无需改 header.
+  constructor(private baseUrl: string = config.backendUrl) {}
 
   async get<T>(path: string): Promise<T> {
     const res = await fetch(this.baseUrl + path);

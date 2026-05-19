@@ -124,6 +124,47 @@ export async function fetchWithAuth(
   init?: RequestInit,
   opts: { skipReauth?: boolean } = {},
 ): Promise<Response> {
+  // BL-AUTH-DECOUPLE-A5 Phase 2 (5/19): hermes 路径走静态 API_SERVER_KEY +
+  // X-Catfish-User 透传 user identity. 不再 OAuth 1h JWT (那是给 catfish-gateway
+  // 老路径用的). hermes proxy 拿 service token 替换 Authorization 调下游 gateway,
+  // identity 从 X-Catfish-User 读. 详见 BL-AUTH-DECOUPLE-A1/A2/A3 + Phase 1 总览.
+  //
+  // 灰度: config.useHermes=false 时仍走老 OAuth 路径 (backward compat + 安全降级).
+  if (config.useHermes && config.hermesAuthHeader) {
+    return fetchWithHermes(input, init);
+  }
+  return fetchWithOAuth(input, init, opts);
+}
+
+/** BL-AUTH-DECOUPLE-A5 (5/19): hermes 静态 key 路径. 不 reauth (key 不会过期).
+ *
+ * hermes API_SERVER_KEY 是常驻 static token, 401 没 reauth 必要; 真 401 说明 hermes
+ * 自己挂了 / key 错配, 让 caller 看 raw 错码自己决定 (大部分 caller 现在 friendly msg).
+ */
+async function fetchWithHermes(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  const headers = new Headers(init?.headers || {});
+  headers.set("Authorization", config.hermesAuthHeader!);
+  // X-Catfish-User: 真员工 email. hermes proxy 据此把请求路给下游 gateway,
+  // gateway 用这个 email 取 user (BL-AUTH-DECOUPLE-A1 service token + X-Catfish-User
+  // 约定). 拿不到 (未登录 / IdP 挂) 不带, 让 hermes 拒 401 — 不静默走错 user.
+  try {
+    const email = await getCurrentUserEmail();
+    if (email) headers.set("X-Catfish-User", email);
+  } catch {
+    /* keychain 没 token → 不带 header, hermes 401, caller 触发登录 */
+  }
+  return fetch(input, { ...init, headers });
+}
+
+/** BL-AUTH-DECOUPLE-A5 (5/19): 老 catfish-gateway 直调路径 (灰度回退). 保留旧 reauth 行为. */
+async function fetchWithOAuth(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+  opts: { skipReauth?: boolean } = {},
+): Promise<Response> {
   const doRequest = async (token: string): Promise<Response> => {
     const headers = new Headers(init?.headers || {});
     headers.set("Authorization", `Bearer ${token}`);
@@ -158,9 +199,37 @@ export async function fetchWithAuth(
   return resp;
 }
 
+/** BL-AUTH-DECOUPLE-A5 (5/19): 读当前登录员工 email — hermes 路径必须传 X-Catfish-User.
+ *
+ * 走 auth_whoami Tauri 命令读 keychain OAuth token 解出来的 email (一次 IPC ~1ms).
+ * 缓存到 memory (单 process 单员工, 切账号要重启). 不缓 localStorage — 避免脏 cache.
+ */
+let _cachedUserEmail: string | null = null;
+async function getCurrentUserEmail(): Promise<string | null> {
+  if (_cachedUserEmail) return _cachedUserEmail;
+  try {
+    const who = await invoke<{ authenticated: boolean; email?: string | null }>(
+      "auth_whoami",
+    );
+    if (who.authenticated && who.email) {
+      _cachedUserEmail = who.email;
+      return who.email;
+    }
+  } catch {
+    /* Tauri 命令不可用 / 没登录 → null */
+  }
+  return null;
+}
+
+/** 测试钩子 — 单测重置 email cache. 生产代码不调. */
+export function _resetUserEmailCacheForTest(): void {
+  _cachedUserEmail = null;
+}
+
 export async function fetchMe(): Promise<MeInfo> {
   // BL-FIX45 A+ (5/11): 走 fetchWithAuth, 401 自动 reauth.
-  const url = `${config.gatewayUrl}/api/me`;
+  // BL-AUTH-DECOUPLE-A5 (5/19): backendUrl 路径, hermes proxy 转 gateway.
+  const url = `${config.backendUrl}/api/me`;
   const resp = await fetchWithAuth(url);
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return (await resp.json()) as MeInfo;
@@ -175,7 +244,7 @@ export interface DepartmentQuota {
 
 export async function fetchDepartmentQuota(dept: string): Promise<DepartmentQuota> {
   // BL-FIX45 A+ (5/11): 走 fetchWithAuth, 401 自动 reauth.
-  const url = `${config.gatewayUrl}/api/quota/department/${encodeURIComponent(dept)}`;
+  const url = `${config.backendUrl}/api/quota/department/${encodeURIComponent(dept)}`;
   const resp = await fetchWithAuth(url);
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return (await resp.json()) as DepartmentQuota;
@@ -193,7 +262,7 @@ export interface DepartmentAudit {
 
 export async function fetchDepartmentAudit(dept: string): Promise<DepartmentAudit> {
   // BL-FIX45 A+ (5/11): 走 fetchWithAuth, 401 自动 reauth.
-  const url = `${config.gatewayUrl}/api/audit/department/${encodeURIComponent(dept)}`;
+  const url = `${config.backendUrl}/api/audit/department/${encodeURIComponent(dept)}`;
   const resp = await fetchWithAuth(url);
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return (await resp.json()) as DepartmentAudit;
@@ -213,7 +282,10 @@ export interface DevUser {
 /** 列 dev_users.yaml 配置的所有测试账号. 生产模式 (prod) 端点 404, 切换器隐藏. */
 export async function fetchDevUsers(): Promise<DevUser[] | null> {
   try {
-    const url = `${config.gatewayUrl}/api/dev/users`;
+    // BL-AUTH-DECOUPLE-A5 (5/19): dev-users 端点也走 backendUrl. hermes proxy 转发,
+    // 注意这一处用裸 fetch 不带 Authorization (dev 端点 prod 404), hermes 给 401
+    // 时降级 null 已被 try-catch 兜住.
+    const url = `${config.backendUrl}/api/dev/users`;
     const resp = await fetch(url);
     if (!resp.ok) return null; // 404 / prod
     const data = (await resp.json()) as { users: DevUser[] };
@@ -231,7 +303,7 @@ export async function updateDepartmentQuota(
   tokensPerDay: number,
 ): Promise<{ ok: boolean; tokens_per_day?: number; detail?: string }> {
   // BL-FIX45 A+ (5/11): 走 fetchWithAuth, 401 自动 reauth.
-  const url = `${config.gatewayUrl}/api/quota/department/${encodeURIComponent(dept)}`;
+  const url = `${config.backendUrl}/api/quota/department/${encodeURIComponent(dept)}`;
   const resp = await fetchWithAuth(url, {
     method: "PUT",
     headers: {
@@ -266,7 +338,7 @@ export interface GlobalQuota {
 
 export async function fetchGlobalQuota(): Promise<GlobalQuota | null> {
   // BL-FIX45 A+ (5/11): 走 fetchWithAuth, 401 自动 reauth.
-  const resp = await fetchWithAuth(`${config.gatewayUrl}/api/quota/global`);
+  const resp = await fetchWithAuth(`${config.backendUrl}/api/quota/global`);
   if (!resp.ok) return null;
   return (await resp.json()) as GlobalQuota;
 }
@@ -287,7 +359,7 @@ export interface GlobalAudit {
 
 export async function fetchGlobalAudit(): Promise<GlobalAudit | null> {
   // BL-FIX45 A+ (5/11): 走 fetchWithAuth, 401 自动 reauth.
-  const resp = await fetchWithAuth(`${config.gatewayUrl}/api/audit/global`);
+  const resp = await fetchWithAuth(`${config.backendUrl}/api/audit/global`);
   if (!resp.ok) return null;
   return (await resp.json()) as GlobalAudit;
 }
@@ -306,7 +378,7 @@ export async function fetchProactiveStarter(): Promise<ProactiveStarter | null> 
   try {
     // BL-FIX45 A+ (5/11): 走 fetchWithAuth — 鸿波截图 '今日话题拉不到' 真因是
     // OAuth token 过期 401, Companion 没自动 reauth. 现在 wrapper 自动 reauth + 重发.
-    const url = `${config.gatewayUrl}/api/proactive/starter`;
+    const url = `${config.backendUrl}/api/proactive/starter`;
     const resp = await fetchWithAuth(url);
     if (!resp.ok) return null;
     return (await resp.json()) as ProactiveStarter;
@@ -329,7 +401,7 @@ export async function fetchContextualStarter(
 ): Promise<ProactiveStarter | null> {
   try {
     // BL-FIX45 A+ (5/11): 走 fetchWithAuth, 401 自动 reauth.
-    const url = `${config.gatewayUrl}/api/proactive/contextual`;
+    const url = `${config.backendUrl}/api/proactive/contextual`;
     const ctrl = new AbortController();
     const t = window.setTimeout(() => ctrl.abort(), 5000);
     try {

@@ -9,7 +9,7 @@
  */
 
 import { config } from "./env";
-import { getToken } from "./me";
+import { fetchWithAuth } from "./me";
 
 export interface QuotaWindow {
   used: number;
@@ -27,13 +27,12 @@ export interface QuotaMe {
 // BL-FIX35 (5/10): 删本文件自己的 getToken (第 3 份 copy-paste, 漏 OAuth
 // keychain → 配额卡 401). 改用 me.ts 的统一 getToken (OAuth 优先, dev_token
 // 兜底). 全 app token 链路从此一处定义.
-
+//
+// BL-AUTH-DECOUPLE-A5 Phase 2 (5/19): 改走 fetchWithAuth — hermes 路径 + OAuth
+// 路径分支 wrapper 内部处理. URL 也走 backendUrl (hermes proxy 转发 /api/quota/me).
 export async function fetchQuotaMe(): Promise<QuotaMe> {
-  const token = await getToken();
-  const url = `${config.gatewayUrl}/api/quota/me`;
-  const resp = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const url = `${config.backendUrl}/api/quota/me`;
+  const resp = await fetchWithAuth(url);
   if (!resp.ok) {
     throw new Error(`HTTP ${resp.status}`);
   }

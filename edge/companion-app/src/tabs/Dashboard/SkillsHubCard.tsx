@@ -19,7 +19,9 @@
 import { useEffect, useState } from "react";
 
 import { config } from "../../lib/env";
-import { getToken } from "../../lib/me";
+// BL-AUTH-DECOUPLE-A5 Phase 2 (5/19): 改 fetchWithAuth — wrapper 按 useHermes
+// 路径切 API_SERVER_KEY + X-Catfish-User / OAuth bearer, 这里不再 inline getToken.
+import { fetchWithAuth } from "../../lib/me";
 import { useAgentStore } from "../../store/agent";
 
 interface SkillSummary {
@@ -59,11 +61,8 @@ export default function SkillsHubCard() {
 
   const refresh = async () => {
     try {
-      const token = await getToken();
-      const url = `${config.gatewayUrl}/v1/hub/skills`;
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const url = `${config.backendUrl}/v1/hub/skills`;
+      const res = await fetchWithAuth(url);
       if (!res.ok) {
         if (res.status === 502) {
           setError("skills-hub 未启动 (dev: python -m catfish_skills_hub.app, port 8997)");
