@@ -288,6 +288,7 @@ mod tests {
             gateway_port: 8999,
             chrome_host: "127.0.0.1".into(),
             chrome_port: 9222,
+            web_url: "http://127.0.0.1:8999".into(),
         };
         assert_eq!(ep.gateway_base(), "http://127.0.0.1:8999");
         assert_eq!(ep.chrome_base(), "http://127.0.0.1:9222");

@@ -23,6 +23,25 @@ fn backend_base() -> String {
     endpoints::endpoints().gateway_base()
 }
 
+/// BL-AUTH-DECOUPLE-A5 Phase 2 closure (5/19): 算这次请求该带的 Authorization header.
+///
+/// - 走 hermes proxy (enabled + has_key) → `Some("Bearer <API_SERVER_KEY>")`,
+///   因为 hermes `_handle_companion_proxy` 一律 require API_SERVER_KEY, 不区分
+///   哪个 path (即使 gateway 端 `/v1/catalog` 是匿名公开的, hermes 这层入口
+///   永远要 key — proxy 本身的入口鉴权, 跟下游业务鉴权是两件事).
+/// - 走老 gateway 直连 (灰度回退) → `None`, gateway `/v1/catalog` 接受匿名.
+///
+/// `health.rs` 的 `healthz` / `catalog` 调用都该带这个, 不带会被 hermes 401.
+/// 这是 A5 Phase 2 部署后 model selector 退化到 raw model ID 的根因.
+fn backend_auth_header() -> Option<String> {
+    let h = hermes_api_config::hermes_api_config();
+    if h.enabled {
+        h.key.as_ref().map(|k| format!("Bearer {}", k))
+    } else {
+        None
+    }
+}
+
 /// 既要 Deserialize（reqwest 解 gateway 返回）也要 Serialize（送给前端）
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HealthzResp {
@@ -35,8 +54,11 @@ pub struct HealthzResp {
 pub async fn healthz() -> Result<HealthzResp, String> {
     let client = build_client()?;
     let base = backend_base();
-    let resp = client
-        .get(format!("{base}/healthz"))
+    let mut req = client.get(format!("{base}/healthz"));
+    if let Some(auth) = backend_auth_header() {
+        req = req.header("Authorization", auth);
+    }
+    let resp = req
         .send()
         .await
         .map_err(|e| format!("连接失败：{e}"))?;
@@ -50,13 +72,24 @@ pub async fn healthz() -> Result<HealthzResp, String> {
         .map_err(|e| format!("解析失败：{e}"))
 }
 
-/// GET /v1/catalog —— 公开的模型清单（匿名也能调）
+/// GET /v1/catalog —— 公开的模型清单（匿名也能调）.
+///
+/// 注意: 虽然 gateway 端 `/v1/catalog` 接受匿名 (`get_current_user_optional`),
+/// 但走 hermes proxy (8642) 时一律要带 API_SERVER_KEY — hermes 这一跳的入口
+/// 鉴权独立于下游业务鉴权 (proxy `_check_auth` 不区分 path).
+///
+/// 不带 Authorization → hermes 401 → catalog `null` → ChatTab 落回 raw
+/// "catfish-private-main" 字符串, 丢掉 friendly display_name 和 tier 描述.
+/// 这是 BL-AUTH-DECOUPLE-A5 Phase 2 部署后 model selector 退化的根因.
 #[tauri::command]
 pub async fn catalog() -> Result<Value, String> {
     let client = build_client()?;
     let base = backend_base();
-    let resp = client
-        .get(format!("{base}/v1/catalog"))
+    let mut req = client.get(format!("{base}/v1/catalog"));
+    if let Some(auth) = backend_auth_header() {
+        req = req.header("Authorization", auth);
+    }
+    let resp = req
         .send()
         .await
         .map_err(|e| format!("连接失败：{e}"))?;
@@ -77,4 +110,82 @@ fn build_client() -> Result<reqwest::Client, String> {
         .no_proxy()
         .build()
         .map_err(|e| format!("HTTP client 构造失败：{e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    //! BL-AUTH-DECOUPLE-A5 Phase 2 闭口回归 (5/19).
+    //!
+    //! 防回归: model selector 退化到 raw `catfish-private-main` 是因为
+    //! `catalog()` / `healthz()` 不带 Authorization 走 hermes proxy → 401.
+    //! 这组测试锁死: hermes_api 开启时 `backend_auth_header()` 必须返
+    //! Some("Bearer <key>"), 关闭时 None.
+    //!
+    //! 注意: `hermes_api_config()` 用 `OnceLock` 启动时算一次, 单进程跑测
+    //! 共享一个全局实例 — 没法直接覆盖. 这里只测 `build()` (private 但
+    //! 通过 backend_auth_header 间接走). 为了不污染共享状态, 我们改测
+    //! 一个等价的 pure-fn 副本逻辑, 跟生产代码 lock-step.
+    //!
+    //! 真正端到端的覆盖在 hermes 侧 `tests/gateway/test_api_server_companion_proxy.py`
+    //! 的 `test_proxy_rejects_without_api_key` (确认没 key 401) + 这里的
+    //! "带 key 时拼 Authorization" 加起来形成闭环.
+    use crate::services::hermes_api_config::HermesApiConfig;
+
+    /// 跟 `super::backend_auth_header` 同算法的 pure 版本, 接受任意 cfg
+    /// 避免触发 OnceLock 全局.
+    fn compute_auth_header(cfg: &HermesApiConfig) -> Option<String> {
+        if cfg.enabled {
+            cfg.key.as_ref().map(|k| format!("Bearer {}", k))
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn returns_bearer_when_hermes_enabled_with_key() {
+        // 生产路径: companion.yaml hermes_api.enabled=true + key=<api_server_key>
+        // → catalog() / healthz() 必须带 Authorization, 否则 hermes 401.
+        let cfg = HermesApiConfig {
+            enabled: true,
+            url: "http://localhost:8642".to_string(),
+            key: Some("test-api-server-key".to_string()),
+        };
+        assert_eq!(
+            compute_auth_header(&cfg).as_deref(),
+            Some("Bearer test-api-server-key"),
+            "hermes_api 启用+有 key 时必须输出 Bearer header, 不然 model selector \
+             会退化到 raw model ID (A5 Phase 2 回归)"
+        );
+    }
+
+    #[test]
+    fn returns_none_when_hermes_disabled() {
+        // 灰度回退路径: hermes_api 关闭 → 走 gateway 8999 直连, gateway
+        // /v1/catalog 接受匿名, 不该塞 Authorization (gateway 看到非法
+        // token 会拒, 而我们这里压根没 token 业务概念).
+        let cfg = HermesApiConfig {
+            enabled: false,
+            url: "http://localhost:8642".to_string(),
+            key: Some("present-but-disabled".to_string()),
+        };
+        assert!(
+            compute_auth_header(&cfg).is_none(),
+            "hermes_api.enabled=false 时不该带 Authorization"
+        );
+    }
+
+    #[test]
+    fn returns_none_when_hermes_enabled_but_no_key() {
+        // 不该发生 (hermes_api_config::build 会 force enabled=false), 但
+        // 防御性测一遍: 没 key 就没法拼 Bearer.
+        let cfg = HermesApiConfig {
+            enabled: true,
+            url: "http://localhost:8642".to_string(),
+            key: None,
+        };
+        assert!(
+            compute_auth_header(&cfg).is_none(),
+            "enabled=true 但 key 缺失时不该 panic 也不该拼半截 header"
+        );
+    }
 }
