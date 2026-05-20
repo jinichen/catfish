@@ -164,12 +164,10 @@ async def lifespan(app: FastAPI):
     from .auth.dev_token import ensure_internal_dev_token  # noqa: PLC0415
     ensure_internal_dev_token()
 
-    # BL-MEMORY-MIGRATE-STEP1C (5/16): 注册 8 个内置 MemoryProvider 到全局 Registry.
-    # chat_completions middleware 改成调 registry.inject_subset(), 替代 8 个分散
-    # inject_X() 调用. identity 不在 Registry (它**创建** system, Registry 是
-    # **追加**, 留 app.py 早期跑作 Registry 前置).
-    from .memory.bootstrap import bootstrap_registry  # noqa: PLC0415
-    bootstrap_registry()
+    # BL-GATEWAY-MEMORY-REGISTRY-DELETE (5/20): memory_registry 整套删除.
+    # 5/19 BL-MEMORY-OWNERSHIP-FIX Phase 2-3 已 disable provider 注册.
+    # 5/20 Day 2 catfish-memory plugin (hermes 侧) 接管 5 provider 的 prefetch 路径.
+    # 5/20 audit verdict: memory/ 整目录 (~1387 LOC) 是 no-op 死代码, 跟 caller 一起删.
 
     logger.info("catfish-gateway starting with %d model(s):", len(config.models))
     for m in config.models:
@@ -2522,54 +2520,13 @@ async def chat_completions(
     # 替代历史: inject_session_facts / inject_stats_guard / inject_skills_catalog /
     #          inject_skill_guard / inject_session_history / inject_employee_journal /
     #          inject_feedback / build_meta_block 8 处.
+    # BL-GATEWAY-MEMORY-REGISTRY-DELETE (5/20): memory_registry inject 整套删除.
+    # 5/19 BL-MEMORY-OWNERSHIP-FIX Phase 2-3 已 disable provider 注册 → inject_unified
+    # / inject_subset 实际是 no-op (registry.providers 永远空). 5/20 spike audit
+    # 确认死代码 + 删 caller. catfish-memory plugin (hermes 侧 prefetch 钩子) 接管
+    # 5 个 catfish 边缘 provider 的 system prompt 注入路径.
     #
-    # 模式选 provider:
-    #   lean:    {skills_catalog}  (其它都跳, 教学场景只看 skill 列表)
-    #   internal: set()  (Registry 自己也跳 inject)
-    #   普通:    全跑 (按 priority 顺序)
-    #
-    # 注: identity (创建 system) / session_goal / hints / session_meta tick
-    # 不在 Registry 里, 留下面 app.py 原位.
-    from .memory import InjectContext  # noqa: PLC0415
-    from .memory.registry import get_global_registry  # noqa: PLC0415
-    from .inject_session_history import _extract_user_query  # noqa: PLC0415
-
-    if _lean:
-        # 教学场景: 只保留 skills_catalog (LLM 必须看到能调哪些 skill)
-        enabled = {"skills_catalog"}
-    else:
-        # 普通模式: 全部 provider 都跑
-        # session_history / employee_journal / feedback 在 internal call 时自动跳
-        # (Registry 看 ctx.is_internal_call)
-        enabled = None  # None = 全跑
-
-    inject_ctx = InjectContext(
-        # BL-AUTH-DECOUPLE-A1 (5/19): inject_ctx 的 user_sub 用 effective_user_email,
-        # 让 memory / facts / journal provider 按 X-Catfish-User 取员工自己的数据,
-        # 不是按 service client (会变成所有员工共享 hermes-cli 的空 memory).
-        user_sub=effective_user_email,
-        user_dept=getattr(user, "dept", None),
-        user_role=getattr(user, "role", None),
-        messages=body["messages"],
-        last_user_message=_extract_user_query(body["messages"]),
-        model_name=model.name,
-        is_internal_call=is_internal_call,
-        # BL-RBAC-DAY5 (5/17): 传 user 的 RBAC 字段, SkillsCatalogProvider 过滤
-        effective_allowed_skills=list(getattr(user, "effective_allowed_skills", []) or []),
-        is_sysadmin=bool(getattr(user, "is_sysadmin", lambda: False)()) if callable(getattr(user, "is_sysadmin", None)) else False,
-    )
-    # BL-MEMORY-UNIFIED-INJECT (5/17 切默认): env flag 切 unified (维度分组) vs legacy (5 段并列).
-    # 默认 **unified** (1). 撞 bug 立 CATFISH_MEMORY_UNIFIED=0 回退 legacy.
-    # 5/16 实测路径: 见 BL-MEMORY-UNIFIED-INJECT + SOUL "员工画像信息架构" 段.
-    _registry = get_global_registry()
-    if os.environ.get("CATFISH_MEMORY_UNIFIED", "1") != "0":
-        body["messages"] = _registry.inject_unified(
-            inject_ctx, body["messages"], enabled,
-        )
-    else:
-        body["messages"] = _registry.inject_subset(
-            inject_ctx, body["messages"], enabled,
-        )
+    # 保留: identity (创建 system) / session_goal / hints / session_meta tick / hermes builtin
 
     # BL-GATEWAY-CLEANUP-POST-HERMES (5/20 删): compound_intent.py 已删,
     # hermes-agent 自管 plan-execute (run_agent.py:12614 agent loop).

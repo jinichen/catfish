@@ -48,15 +48,15 @@ FORBIDDEN_PATTERNS = [
 # 每个完成迁移 → 从这清单删 → 不再豁免.
 # **新加文件不许进这个 list**, 走 PR review 时 reviewer 拒绝.
 KNOWN_VIOLATIONS_ALLOWLIST: set[str] = {
-    # A 类 — Memory inject 链 (9)
+    # A 类 — Memory inject 链 (5; 5/20 减 4)
+    # BL-GATEWAY-MEMORY-REGISTRY-DELETE (5/20): memory/providers/{employee_journal,
+    # feedback, hermes_memory, skills_catalog}.py 4 个删除. 5/19 BL-MEMORY-OWNERSHIP-FIX
+    # 已 disable, 5/20 audit verdict 确认 no-op 死代码, catfish-memory plugin (hermes
+    # 侧 prefetch) 接管.
     "inject_session_history.py",
     "employee_journal.py",
     "session_facts.py",
     "feedback_inject.py",
-    "memory/providers/employee_journal.py",
-    "memory/providers/feedback.py",
-    "memory/providers/hermes_memory.py",
-    "memory/providers/skills_catalog.py",
     "identity_inject.py",
     # B 类 — 后台任务 (5)
     "session_summarizer.py",
