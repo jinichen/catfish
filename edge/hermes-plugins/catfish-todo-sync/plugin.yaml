@@ -1,0 +1,11 @@
+name: catfish-todo-sync
+version: 0.1.10
+description: "Catfish todo 同步 — monkey-patch hermes 内置 TodoStore.write, 每次 LLM 调 todo tool 加待办时, 同步调 catfish-journal CLI 真写 ~/.catfish/employee_journal.md. 让员工 chat 说'加TODO X'自然话, 后台自动同步进 journal, 早安 tab 看得到. 不动 hermes core 代码 (BL-CATFISH-TODO-SYNC, 5/20)."
+hooks:
+  - sync_turn        # 跟 catfish-memory 同 pattern, hermes loader 据此识别为 memory plugin 走 register(ctx) 加载路径
+# 入口: __init__.py register(ctx), hermes plugin loader 标准 pattern (跟 catfish-memory 一致)
+# v0.1.0 → v0.1.1: 入口 initialize 改 register(ctx)
+# v0.1.1 → v0.1.2: 加 hooks 字段, 之前 hermes loader 完全没扫到 plugin
+# v0.1.8 → v0.1.9: completed 但 journal 找不到时, 调 catfish-journal add --done 补 [x] 历史
+# v0.1.9 → v0.1.10: 默认走 catfish-journal sync --stdin batch, 1 次 subprocess 处理 N todos
+#                   (省 N-1 次 Python 启动开销), fallback 老 CLI 单调路径

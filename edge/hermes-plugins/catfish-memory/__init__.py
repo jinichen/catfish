@@ -46,6 +46,40 @@ def register(ctx) -> None:
     ctx.register_memory_provider(provider)
     logger.info("catfish-memory plugin registered ✓")
 
+    # 5/20 BL-CATFISH-TODO-SYNC v0.1.6: catfish-memory 顺手 exec catfish-todo-sync
+    # 的 catfish_todo_sync.py 文件, 直接调 _apply_patch 应用 monkey-patch.
+    # 用 importlib.util.spec_from_file_location 绕过 "包名带连字符不能 import" 问题.
+    # 跟 catfish-memory 自身解耦, 失败完全静默. INFO log 让鸿波看到诊断.
+    try:
+        from pathlib import Path
+        import importlib.util
+        _todo_sync_py = (
+            Path(__file__).parent.parent / "catfish-todo-sync" / "catfish_todo_sync.py"
+        )
+        if _todo_sync_py.exists():
+            _spec = importlib.util.spec_from_file_location(
+                "_catfish_todo_sync_inline", _todo_sync_py
+            )
+            if _spec and _spec.loader:
+                _mod = importlib.util.module_from_spec(_spec)
+                _spec.loader.exec_module(_mod)
+                _patched = _mod._apply_patch()
+                if _patched:
+                    logger.info("catfish-todo-sync: monkey-patch applied ✓")
+                else:
+                    logger.info(
+                        "catfish-todo-sync: patch skipped (already patched or "
+                        "tools.todo_tool not importable)"
+                    )
+        else:
+            logger.debug(
+                "catfish-todo-sync source not found at %s", _todo_sync_py
+            )
+    except Exception as _todo_sync_err:
+        logger.warning(
+            "catfish-todo-sync trigger failed (ignored): %s", _todo_sync_err
+        )
+
 
 # 双 import 兼容 — pytest / IDE 用绝对 import 拿 class
 try:
