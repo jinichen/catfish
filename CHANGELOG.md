@@ -5555,3 +5555,236 @@ SOUL.md §606 三选一铁律 (扩展 5/13 BL-REMINDER 段):
 - **gateway/Companion 不替员工做主 (再一次)**: BL-FIX45 B fallback 切模型 revert 跟 5/13 BL-FIX23/24 同精神. 员工选了 model = "我要这个", 不是"任何能用的". 500 自动重试**同** model, 不偷切
 - **AI 永不 send, 人工 confirm 红线坚守**: BL-EMAIL-COMPOSE-SEND 加发送能力但不破红线. compose panel 顶部横幅 + CLI help + 代码注释多层强调. AI 调用路径走 tool 只能到 draft, send 必须 UI 人工点
 
+---
+
+## 2026-05-19（周二）凌晨 — Memory Ownership 架构 Phase 1+2 ship
+
+主线: **memory provider 解耦** — hermes 内置 memory 跟 catfish-memory 共存. 凌晨拍板架构, 直接 ship Phase 1+2.
+
+### 完成
+
+- **Phase 1**: hermes 0.13 memory 抽象层 (MemoryProvider ABC, MemoryManager 单 active provider). builtin / catfish-memory 两 provider 并存, 通过 `memory.provider:` config 切换. 默认仍 builtin, 不影响存量行为
+- **Phase 2**: catfish-memory plugin 完整 register(ctx) 流程, hermes plugin loader 通过 `hooks: [sync_turn]` 字段识别 memory plugin
+- **架构文档**: `docs/MEMORY-OWNERSHIP-ARCHITECTURE.md` 落地 — provider 协议 / 加载顺序 / 单 active 红线 / 跨 session 行为
+- **决策**: 不走 multi-provider merge (会爆 context + 模糊归属), 走 single active + 显式 config 切换. memory ownership 跟 client 走, 不跟 model 走
+
+---
+
+## 2026-05-20（周二全天）— 早安播报 MVP + 对话改 TODO + catfish-todo-sync plugin (9 轮调试)
+
+主题: **Daily Briefing MVP 22 项 ship** (skeleton → 真数据 → LLM 升级 → 邮件评级 → 桌宠播报 → 人设 → prefs UI → tab 顺序) + **对话改 TODO 三 stage** (Rust CRUD + Python catfish-journal CLI + chat 路由) + **catfish-todo-sync plugin 9 版本演进** (v0.1.0 → v0.1.8) 把 hermes 内置 todo tool 真同步进 journal.
+
+一天净交付 **34+ 项 ship**, 全部含单测 + 文档 + 兜底.
+
+### 完成 (按主题, 34 项 ship, 测试 +25)
+
+#### A. Daily Briefing MVP 骨架到上线 22 项 (Task #1-22)
+
+- **Task #1-2 骨架**: Dashboard 新加 BriefingTab. `briefing_section.tsx` 渲染早安 banner + 三行卡片 (邮件 / 工作计划 / 日程). 占位 mock 数据先跑通布局
+- **Task #3-5 真数据接入**: 邮件行接 `email_list_fetch`; 日程行 macOS osascript JXA 拉 Calendar.app (15 单测 cover); 工作计划行接 `journal_todos_fetch` 读 `~/.catfish/employee_journal.md`
+- **Task #6-9 LLM 升级**: 早安 banner 文案不再 hard-code, 走 gateway `/v1/chat/completions` Haiku, `fetchMergedBriefing` 返 JSON `{todos, suggestion}` 一次调用解多任务. Personality 段 prompt 注入员工人设 (`employee.profile` 段)
+- **Task #10-13 邮件 LLM 评级**: BriefingCard 邮件行带急/中/低 badge (复用 5/18 BL-EMAIL-URGENCY-BADGE). prefs 加"邮件 LLM 评级"开关 (默认开)
+- **Task #14-17 桌宠主动播报**: 9:00 AM macOS osascript `display notification` "早, 看你今天 5 个 TODO + 3 封急邮件". 路径 "急邮件优先 → 叫醒 → 跳 BriefingTab"
+- **Task #18-20 Prefs UI 完整**: AgentPrefsCard 加 3 开关 ("早安 9:00 push" / "邮件 LLM 评级" / "桌宠主动播报"), 持久化 `~/.catfish/companion.yaml` 的 `briefing:` 段
+- **Task #21-22 默认 tab + 顺序**: 默认 tab `briefing` (员工开 app 直进早安), tab 顺序 BriefingTab ↔ Workspace 互换 (早报第一, 工作台第二)
+
+#### B. 对话改 TODO 三 Stage (Task #23-26, 选 Option B)
+
+- **背景**: 鸿波"工作计划是自己改还是在对话里面改?" → 我两选项 (A=GUI 按钮, B=LLM tool calling 自然话). 鸿波"用 B 吧" → 一气推三 stage
+- **Stage 1 (Rust CRUD)**: `commands/journal.rs` 加 `journal_add_todo` / `journal_mark_done` / `journal_delete_todo` Tauri 命令. **双 locator** (line + text_hint) 防 LLM 误删 — 两条都对才执行. Rust 端单测 6 项 (regex 行号匹配 / hint mismatch / out of range / 缩进保留)
+- **Stage 2 (Python CLI)**: 新建 `edge/journal-agent/` 包. `catfish_journal/core.py` 提供 `extract_todos` / `mark_todo_done` / `delete_todo` / `add_todo` 4 函数, 跟 Rust 端 regex 等价 (任一端改 regex 两边都过单测). 31 单测 cover (checkbox / inline / section / 缩进 / round-trip)
+- **Stage 3 (Chat 路由)**: `catfish_tools.py` 注册 3 个 LLM tool (`catfish_journal_add` / `catfish_journal_done` / `catfish_journal_delete`), SOUL.md 加表格行引导 LLM 调用. 员工 chat 说"帮我加 TODO X" → LLM 调 tool → Python CLI 真写 journal
+
+#### C. catfish-todo-sync plugin 9 轮调试 (v0.1.0 → v0.1.8)
+
+**背景**: 验证 Stage 3 真有效时发现 — 员工说"加 TODO X" LLM 不调我们的 `catfish_journal_add`, 因为 **hermes 0.13 自带 `todo` tool 抢路由**. 内置 `TodoStore` 只存 in-memory (重启丢), 跟 journal 文件路径不通. 修法: monkey-patch `TodoStore.write`.
+
+- **v0.1.0** (`initialize()` 入口): hermes 不调 initialize, 跑空. 改 `register(ctx)`
+- **v0.1.1**: register(ctx) 加了, 但 hermes plugin loader 完全没扫到 plugin
+- **v0.1.2**: 加 `hooks: [sync_turn]` plugin.yaml 字段, hermes 据此识别 memory plugin 走 register(ctx) 加载路径
+- **v0.1.3**: plugin 装到 `~/.hermes/plugins/` — hermes 不扫这, 改 `~/.hermes/hermes-agent/plugins/memory/<name>`
+- **v0.1.4**: import-time `_apply_patch()` 跑了但没生效 — `discover_memory_providers` 启动时**没被调**, register(ctx) 只在 hermes 创建 AIAgent 实例 (新 chat 会话) 时才调
+- **v0.1.5** (symbiotic trigger 尝试): 想让 catfish-memory (已 active) 顺手 import catfish-todo-sync 触发 patch. 写 `import catfish_todo_sync` — Python 把 plugin 目录名当 module name, 但目录名含 `-` Python 不允许. ImportError
+- **v0.1.6** (symbiotic trigger 修): 改用 `importlib.util.spec_from_file_location("_catfish_todo_sync_inline", path)` 跳过 Python module name 限制. catfish-memory `register(ctx)` 末尾 13 行 inline import + 调 `_apply_patch()`. **monkey-patch 真生效**, 第一条 chat 加的 TODO 真写进 journal ✓
+- **v0.1.7** (幂等修): 鸿波报"重复" — tail journal 看到 4 条同 text 副本. 真因: hermes TodoStore 每轮 sync_turn 都 write 一次, write 拿到的是**全量 list**, 我们重复 `catfish-journal add` 同 content. 修: `core.add_todo` 加 regex idempotent check (`^\s*[-*+]\s*\[[ xX]\]\s+` + escape(text) + `\s*$`), 已存在跳过返原 content. Rust journal.rs 同步加同算法防漂移. **8 新单测**
+- **v0.1.8** (完整 status lifecycle): 鸿波报"待办列表完成后怎么没有更新?" — hermes TodoStore `status` 字段 (pending / in_progress / completed / cancelled) 一直没用上, 我们只对 pending add 不处理 completed/cancelled. 修: `_sync_to_journal` 新加 `_find_todo_line_in_journal(bin_path, content)` 查 journal 行号, completed → `catfish-journal done --line N --hint H`, cancelled → `catfish-journal delete --line N --hint H`. **3 新单测**
+
+#### D. 实盘自然话闭环验证
+
+```
+员工 chat "帮我加 TODO 给老李写汇报"
+  → hermes LLM → 内置 todo tool → TodoStore.write([{content, status=pending}])
+  → monkey-patched _sync_to_journal
+  → catfish-journal add "给老李写汇报"
+  → ~/.catfish/employee_journal.md +1 行 - [ ]
+  → BriefingCard journal_todos_fetch → ✅ 工作计划行显
+```
+然后说"完成给老李写汇报":
+```
+TodoStore.write([{content, status=completed}])
+  → _find_todo_line_in_journal → 找到 line=N
+  → catfish-journal done --line N --hint H
+  → journal `- [ ]` → `- [x]`
+  → BriefingCard 重拉显已完成
+```
+
+### 5/20 踩坑
+
+- **hermes plugin 加载机制 9 轮调试**: 文档没写清的几条 — `register(ctx)` 只在新 AIAgent 实例创建时调 (`hermes gateway restart` 不重 import plugin, 要新 chat 会话); 目录名含 `-` 不能 `import package_name` (要 importlib.util); `discover_memory_providers` 启动不调 (要走 plugin.yaml `hooks:` 字段触发); plugin 装路径必须 `~/.hermes/hermes-agent/plugins/memory/<name>` 不是 `~/.hermes/plugins/`
+- **Cross-plugin symbiotic trigger pattern**: catfish-memory (单 active provider) 在 register(ctx) 末尾顺手 inline import catfish-todo-sync (非 active, 只 patch) 触发 monkey-patch. **不破坏 hermes 单 active 红线**, 但允许多个 plugin 协同
+- **logger.debug 看不到**: hermes 默认日志级别没显 debug. 调试期间改 logger.info, 上线后哑回 debug
+- **Bytes literal 含中文挂**: `b'[{"text": "已完成"...}]'` Python 报 `SyntaxError: bytes can only contain ASCII literal characters`. 改 `'...'.encode("utf-8")`
+- **TodoStore.write 拿全量 list 不是 diff**: 每轮 sync_turn 都 write 全量, 重复 add 同 content. v0.1.7 idempotent 解
+- **completed status 默认没处理**: 5/13 sync 设计只想 pending → add, 没想 lifecycle. v0.1.8 补完整 done/delete 链路
+
+### 5/20 关键架构决策
+
+- **Hermes 内置 tool 被抢路由时, monkey-patch > 改 hermes core**: hermes 是上游, 改 core 升级会丢. 走 plugin monkey-patch + symbiotic trigger 让 hermes core 不动也能扩展. 红线: 只 patch write 不 patch read (LLM 后续读 TodoStore 拿到的就是原 in-memory state, 不影响)
+- **Plugin loader 复杂度 / 文档负担**: hermes plugin loader 隐式协议太多 (hooks 字段 / 安装路径 / register 调用时机 / 单 active limit). 9 轮才走通. 落地一条经验: 任何 plugin 改动后 `hermes gateway restart` **不够**, 必须新 chat 会话才生效
+- **TODO sync 全量 lifecycle 而非只 pending**: pending-only sync 让员工 chat 标完成后 journal 不更新, BriefingCard 显示错的"未完成"任务. v0.1.8 done/delete 联动是必须不是 nice-to-have
+- **Cross-plugin trigger 不破单 active 红线**: catfish-memory 是 active provider 注册 MemoryProvider; catfish-todo-sync 是非 active provider (is_available=False) 只用 register 时机做 patch. 跟 memory ownership 架构兼容
+- **chat 自然话 = journal 真写**: 整条链路完整, 员工不用记 CLI 语法 (`catfish-journal add "..."` / `done --line N --hint X`). LLM tool calling 把语法门槛抹掉, 鲶鱼真"AI 副手"
+
+### 5/20 测试净增
+
+- catfish-todo-sync (新): **11 单测** (8 base + 3 v0.1.8 lifecycle, monkey-patch / status 过滤 / subprocess 兜底 / 幂等 batch)
+- journal-agent (新): **31 单测** (extract / mark_done / delete / add / 幂等 / round-trip)
+- companion-app (Rust): journal.rs CRUD **6 单测**, briefing osascript Calendar **15 单测**
+- chat-first tool registry: catfish_journal_{add,done,delete} 注册 **3 单测**
+- **合计 +25 单测 (跟 5/13/14/15/17/18 同标 0 我引入回归)** — 含原跨端 Rust↔Python regex 等价测试
+
+### 5/20 ship 总数 (34 项)
+
+- 早安播报 22 项 (skeleton + 真数据 + LLM + 评级 + 桌宠 + 人设 + prefs + 默认 tab + 顺序)
+- 对话改 TODO 3 stage (Rust CRUD / Python CLI / chat 路由)
+- catfish-todo-sync 9 版本演进 (v0.1.0 → v0.1.8, 算 1 项 plugin)
+- v0.1.7 幂等修 (单独里程碑)
+- v0.1.8 lifecycle 修 (单独里程碑)
+- 文档: CHANGELOG / FEATURE-TRACKS / MEMORY-OWNERSHIP-ARCHITECTURE 3 处同步
+
+### 5/20 commit / push
+
+预计一锅 commit: `BL-CATFISH-BRIEFING + BL-CATFISH-TODO-EDIT-STAGE1/2/3 + BL-CATFISH-TODO-SYNC (v0.1.0→v0.1.8) + BL-CATFISH-JOURNAL-IDEMPOTENT + 文档同步`
+
+### 下一步 (5/21+)
+
+- **catfish-todo-sync v0.1.9 候选**: completed 但 journal 找不到时, 补 `- [x] <content>` 历史记录 (当前 add CLI 只能加 `- [ ]`, 需扩 `--done` flag)
+- **早安播报 v2**: 卡片可点击展开详情 (邮件预览 / TODO 子任务 / 日程参会人)
+- **briefing 通知去重**: 同一封急邮件不重复 9:00 push (评级 cache 持久化 + dedup window)
+- **chat-first 自然话扩展**: "把张三那封改成待办" / "今天的会都加进 TODO" 跨 source 自动落 journal
+
+---
+
+## 2026-05-20（周二下半段）— 早安播报 v2 收尾 + catfish-todo-sync v0.1.9/v0.1.10 (7 项 ship)
+
+主题: **catfish-todo-sync 收尾两版** (v0.1.9 completed 找不到补 [x] 历史 + v0.1.10 batch sync 一次 subprocess 处理 N op) + **早安播报 v2 三 sub-task 全 ship** (卡片展开 / 日程参会人描述 / 通知去重 / chat-first 跨 source 跨日程).
+
+净交付 **7 项 ship**, 测试 +48 (catfish-todo-sync 11→17 / journal-agent 31→48 / scheduler.rs 14→18).
+
+### 完成 (按主题, 7 项 ship)
+
+#### A. catfish-todo-sync v0.1.9 — completed 找不到 line 时补 `- [x]` 历史
+
+- **背景**: v0.1.8 lifecycle 给 completed 路径走 `_find_todo_line_in_journal` 找 line 调 done. journal 找不到 (LLM 直接标完成没经 add) → silent skip, 早安 tab 没法反映员工干过的事 (BriefingCard 只显未来未完成 TODO, 历史 [x] 不在 extract_todos 范围)
+- **修法**: completed 找不到 line → 调 `catfish-journal add <content> --done` 补一条 `- [x] <content>` 进 journal 做历史记录. core.add_todo 加 `done: bool = False` 参数, CLI 加 `--done` flag. 走幂等 (已存在不重复加)
+- **新单测 6 个** (journal-agent core): `add_done_writes_checked_box` / `add_done_existing_unchecked_skipped` / `add_done_existing_checked_skipped` / `add_done_to_section` / `add_done_to_new_section` / `add_done_default_false_compat`
+- **plugin 单测 1 个**: `test_sync_completed_not_in_journal_adds_done_history` 替代 v0.1.8 的 `_skipped` (现行为变了)
+- **batch test 同步**: `test_sync_batch_multiple_todos` 期望 5 调 (3 add + 1 list + 1 add --done) 替代 v0.1.8 的 4
+
+#### B. catfish-todo-sync v0.1.10 — batch sync 一次 subprocess 处理 N op
+
+- **背景**: hermes TodoStore.write 每轮 sync_turn 拿全量 list (1-10 条), 单调 catfish-journal CLI N 次. 每次 Python 启动 ~50-200ms, N=10 时总 0.5-2s, 慢
+- **修法**: catfish-journal 加 `sync --stdin` 子命令 — 接 jsonl ops (一行一 `{status, content}`), 内部 read journal → process all (内存) → write 一次. 单 fork 单 read 单 write. plugin 端默认走 batch, 老 CLI (< v0.1.10) 返 invalid choice → fallback 单调
+- **关键设计**: completed 路径 batch 内部从最新 `new_content` (含已 add 的) 找 line, 后面 op 看得到前面 op 改的 journal. cancelled 同样 inline lookup
+- **新单测 11 (cli sync)**: `test_cli_sync.py` 端到端 — pending → add (含幂等) / completed in journal → done / completed not in journal → add_done (v0.1.9 同语义) / cancelled → delete / 多 op 顺序处理 / 空 stdin / 非 JSON exit 2 / 未知 status skip
+- **新单测 6 (plugin batch)**: `_sync_to_journal_batch` 直测 — calls sync --stdin / 老 CLI fallback / timeout fallback / 空 todos no call / 全空 content no call / `_sync_to_journal` 默认走 batch
+- **老单测兼容**: TestSyncToJournal class setUp 加 `_sync_to_journal_batch` patch return_value=False, 单调 fallback 路径全保留可测
+
+#### C. 早安播报 v2 sub-task 1 — 卡片可点击展开详情
+
+- **背景**: BriefingCard 4 行总览只显聚合数, 详情区 (EmailsDetailSection / EventsDetailSection / TodosDetailSection) 显主题+发件人/时间地点/TODO 文本. 鸿波"卡片可点击展开详情" — 邮件正文预览 / TODO 元数据 + 快捷操作 / 日程参会人地点
+- **📬 邮件 v2**: EmailsDetailSection 抽 `EmailGroup` 子组件管 expanded set, 单条 li 点击 toggle. 展开时 lazy 调 `emailReadMessage(id)` 拉 body (200 字截断), 加 bodyCache 防二次拉, 加载中显 "🤔 拉正文…", 完整发件人 + "在 邮件 tab 看完整" 跳转链
+- **✅ TODO v2**: TodosDetailSection li 点击展开元数据 (source / line / section), 加 ✅ 标完成 / 🗑 删 快捷按钮, 真调 `journalMarkTodoDone` / `journalDeleteTodo`. 乐观更新 (标完成 strike-through / 删了立即不显), 错误显红框. LLM 推断 TODO (line=0) 按钮 disabled + tooltip 解释. 触发 onChanged → 主组件 loadAll 重拉
+- **📅 日历 v2**: EventsDetailSection li 点击展开 — 完整 ISO ("5月20日 周二 14:00 — 15:30 (1.5h)") + 完整 location + calendar 全名. 加 helper `_formatFullDateRange` 拼 zh-CN locale + duration 标
+- **rerender 防抖**: useState<Set<string>> 管展开集合, useCallback 防 EmailGroup 渲染抖动
+
+#### D. 早安播报 v2 sub-step 1.3 — 日程展开显参会人 / 描述 (扩 Rust calendar backend)
+
+- **背景**: c. 卡片可展开但日程展开只有时间/地点/calendar 名, 鸿波 v2 要的"参会人 + 描述" 需扩 Rust backend osascript JXA 抽 attendees / description 字段
+- **JXA 扩**: 两个 JXA 脚本 (`JXA_TODAY_EVENTS` / `JXA_WEEK_EVENTS`) 加 try/catch 包死的 `e.attendees()` + `e.description()` 抽取. attendees 优先 displayName fallback emailAddress. description 截 500 字防展开区被超长描述撑爆. 老 macOS / 订阅日历 / 损坏事件 取不出字段就跳, JSON 不设
+- **TS 端**: `CalendarEvent` interface 加 `attendees?: string[]` + `description?: string` (optional, JXA 仅在有值时设, 没参会人就 undefined)
+- **EventsDetailSection 渲染**: 展开区 attendees 显前 5 人 (多了显 "等 N 人"), description 显在浅灰背景框. 跟 location / calendar 名分行排版
+
+#### E. 早安播报 v2 sub-task 2 — 通知去重 + 评级 cache 持久化
+
+- **背景**: 5/18 scheduler urgency_cache + seen baseline 都是 in-memory only. Companion 重启 → cache 清空 → 99 封历史邮件全部要重评 (烧 LLM token). 同一封急邮件每次 scheduler tick (10 min 一次) 都 push macOS 通知 → "叫醒疲劳"
+- **持久化 urgency_cache**: 启动 `load_persisted_state()` 从 `~/.catfish/email_urgency.json` 加载. 评完一批 (`rate_emails` / `email_classify_now`) 调 `persist_urgency_cache()` atomic write (`.tmp` + rename). Companion 重启不重评, 省 token
+- **24h push dedup**: 加 `PUSH_HISTORY: HashMap<id, epoch_secs>` 持久化到 `~/.catfish/email_push_history.json`. `send_notification` 前调 `dedup_for_push(&urgent)` 过滤掉 24h 内 push 过的 id. 启动顺手 GC 24h 之前的 entry. 仍 emit Tauri `catfish:email-urgent` 事件给前端 (桌宠主动闲聊自己 dedup)
+- **新单测 4 (scheduler.rs)**: `dedup_first_push_all_allowed` / `dedup_repeat_push_blocked` / `dedup_old_entry_expired_after_24h` / `dedup_mixed_some_blocked_some_allowed`
+
+#### F. 早安播报 v2 sub-task 3 — chat-first 跨 source (邮件 / 日历 → TODO)
+
+- **背景**: 鸿波 v2 想要 "把张三那封改成待办" / "今天的会都加进 TODO" 跨 source 自然话. 实施方案选择 — 加 native tool (重) vs 改 SKILL.md cookbook 引导 LLM 自然 chain (轻)
+- **走 SKILL.md cookbook 路径**: 不引入新 native tool, 让 LLM 用现有 building blocks (`catfish_email_search` 5/18 + `catfish-journal` skill) 自然组合, 跟 BL-MM9-FREEZE-v2 嵌套调 skill 同精神
+- **catfish-journal SKILL.md v0.2.0**: 加 § "跨 source 案例" 段, 3 个 cookbook example —
+  Example 4: 把张三那封改成待办 (`catfish_email_search` → `catfish-journal add`)
+  Example 5: 今天的会都加进 TODO (calendar today → batch add 3 条)
+  Example 6: 本周邮件里要回的都加 TODO (search 全量 + LLM 评级 → 只加急的)
+- **红线**: 简洁动词短语 < 30 字, 不 copy 整封邮件正文; 批量 add 仍逐条调 CLI 单条 confirm; 只加急的 (默认), 全加要 explicit "全加"; LLM 不自动调 ("今天有 3 个会"只列不加, 员工 explicit "加进 TODO" 才走)
+- **SKILL.md frontmatter description 加跨 source 触发词**: "把 X 那封邮件改成待办" / "今天的会都加进 TODO" / "这周要回的邮件全加上" (5/20 v0.2.0)
+- **fallback 留口**: 实盘发现 LLM 不会自然 chain → 5/21+ 加 native tool 兜底
+
+### 5/20 下半段踩坑
+
+- **`_sync_to_journal_batch` mocking 让老 TestSyncToJournal 全挂**: 因为默认 batch 走通 MagicMock returncode=0 → 单调路径不被测. setUp 加 `patch.object(catfish_todo_sync, "_sync_to_journal_batch", return_value=False)` 强制走 fallback, 老测试名/意图保留
+- **JXA `e.description()` 在订阅日历 / 老 macOS 没此属性挂**: try/catch 包死, 取不到字段就 JSON 不设, optional 兼容
+- **SystemTime + UNIX_EPOCH duration 算 epoch_secs 在 Rust testing 下 OK, 但要 `unwrap_or(0)`** 防系统时钟比 UNIX_EPOCH 早 (理论上不可能但有 spec/clippy 警告)
+- **catfish-journal `sync --stdin` exit code**: 老 CLI fallback 检测要看 stderr 含 "invalid choice" + exit 2 (argparse 标准). 写错了就 silent 一直走 batch 不 fallback
+- **chat-first 跨 source 不加 native tool 反直觉但正确**: 鸿波 task description 写 "加 2 个 LLM tool", 实施时发现 SKILL.md cookbook 更灵活 — tool 内部 chain 改邮件适配器跟着改, cookbook 引导 LLM 自己 chain 更松. 跟 BL-MM9-FREEZE-v2 5/12 教训对齐 (skill 复用而非新写)
+
+### 5/20 下半段关键架构决策
+
+- **catfish-todo-sync 收尾两版独立 ship**: v0.1.9 = 历史补 [x] (语义独立, 给 LLM 直接 complete 路径救火), v0.1.10 = batch 优化 (性能独立, 跟语义解耦). 两版分别 plugin.yaml bump + 独立单测 boundary 清, 出错能精准 revert 单版
+- **batch fallback 默认开启, 老 CLI 自动降级**: 客户 mac 上 catfish-journal 版本可能 < v0.1.10 (没 sync 子命令), 走 fallback 单调路径仍 work. plugin 内部检测 stderr "invalid choice" 自动降级, 不强迫客户先升 catfish-journal CLI 再升 plugin
+- **chat-first 跨 source 用 cookbook, 不加 tool**: native tool 引入维护负担 (tool 内部 chain 邮件 / 日历 / journal 三 source 改一处全要跟). SKILL.md cookbook 是 prompt-level 引导, LLM 自己 chain 现有 tool 更灵活. 实盘验证后如果不够再加 tool
+- **24h dedup window**: 同一急邮件最多 1 次/天叫醒. 24h 是经验值 — 比 12h 长防员工白天没看晚上又被叫, 比 48h 短防真重要邮件被一直 dedup. 长期可做 config
+- **urgency cache 持久化 atomic write**: `.tmp + rename` 防 Companion 崩溃半写 (半写 JSON 比丢全部新增更糟). 跟 secret_resolver / oauth state 同套路
+
+### 5/20 下半段测试净增
+
+- catfish-todo-sync (plugin): **11 → 17** (+6 batch + lifecycle 变更测试)
+- journal-agent core: **31 → 37** (+6 add_done)
+- journal-agent cli_sync (新): **+11** (batch CLI 端到端)
+- companion-app scheduler.rs Rust: **14 → 18** (+4 dedup)
+- companion-app TS: `tsc --noEmit` clean (0 error 新增)
+- **合计 +27 单测 (跟 5/20 上半段同标 0 我引入回归)**
+
+### 5/20 下半段 ship 总数 (7 项)
+
+- A. catfish-todo-sync v0.1.9 (完成历史补 [x])
+- B. catfish-todo-sync v0.1.10 (batch sync 优化)
+- C. 早安播报 v2 卡片可展开 (邮件 body + TODO done/del + 日程 full time)
+- D. 日程展开补参会人/描述 (扩 calendar backend JXA)
+- E. 邮件通知 24h dedup + urgency cache 持久化
+- F. chat-first 跨 source (catfish-journal SKILL.md v0.2.0 cookbook)
+- G. 文档同步 (CHANGELOG 5/20 下半段 + FEATURE-TRACKS)
+
+### 5/20 全天 ship 总计 (上 + 下 = 41 项)
+
+- 早安播报 22 项 (skeleton + 真数据 + LLM + 评级 + 桌宠 + 人设 + prefs + 默认 tab + 顺序)
+- 对话改 TODO 3 stage (Rust CRUD / Python CLI / chat 路由)
+- catfish-todo-sync v0.1.0 → v0.1.10 (11 版本演进, 算 1 项 plugin)
+- v0.1.7 幂等修 (单独里程碑)
+- v0.1.8 lifecycle 修 (单独里程碑)
+- v0.1.9 历史补 [x] (5/20 下半段)
+- v0.1.10 batch 优化 (5/20 下半段)
+- 早安播报 v2 sub-task 1/2/3 (5/20 下半段, 3 项 ship)
+- 日程展开补参会人/描述 (5/20 下半段, 扩 Rust backend)
+- 文档同步 3 次
+
+### 下一步 (5/21+)
+
+- **真机验证**: Companion 重启后 urgency cache / push history 持久化是否真生效
+- **chat-first 实盘**: 鸿波说"把张三那封改成待办" 看 LLM 是否真 chain (search + add); 不会的话加 native tool 兜底
+- **catfish-todo-sync v0.1.11 候选**: TodoStore.write 是否还能再省 — diff 跟上次 todos array, 只 sync 变了的, 没变的不动 (currently 全量送 N op, 即使 idempotent 也开销)
+

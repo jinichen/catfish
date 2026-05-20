@@ -44,6 +44,13 @@
 - ⬜ Phase 4 中央部署 (gateway 真跑公司机房, 解决剩 33 处 gateway 读 edge FS)
 - ⬜ 全删 `memory/providers/` 文件 (cutover 稳定后再 hard delete)
 
+## ✅ Phase 2+ 扩展案例 (5/20 ship)
+
+- ✅ **catfish-todo-sync plugin v0.1.8** (9 版本演进, see § 7): hermes 0.13 内置 `todo` tool 抢路由的扩展案例.
+  通过 **cross-plugin symbiotic trigger** (catfish-memory `register(ctx)` 末尾 inline import 触发) monkey-patch
+  `TodoStore.write`, 让 chat 自然话加 TODO → 真写 `~/.catfish/employee_journal.md`. **不破单 active 红线**
+  (dummy `MemoryProvider.is_available=False`), 跟本文档 § 2.2 完全兼容. **+48 单测 0 回归**.
+
 ## 1. 现状审计 — gateway 当前的 10 个 memory provider
 
 | # | Provider | priority | budget | 真实数据源 | 该归谁 |
@@ -310,6 +317,112 @@
 2. 建子 ticket (BL-MEMORY-ARCH-DOC ✓ / BL-HERMES-PLUGIN-INTERFACE-SPEC / 5 个 plugin / Companion switch / gateway delete / deploy doc)
 3. 排到 5/19+ sprint backlog 第一位
 4. 不在分工没定的情况下继续往 gateway memory_registry 加新 provider — 加进 hermes plugin 体系
+
+---
+
+## 7. 5/20 扩展案例: catfish-todo-sync (Phase 2+ 跨 plugin symbiotic trigger 模式)
+
+> **背景**: 5/20 早安播报 MVP 完工时, 发现 hermes 0.13 自带 `todo` tool (`tools.todo_tool.TodoStore`) 抢路由优先级**高于**我们的 `catfish_journal_add` skill. 员工 chat 说"加 TODO X" LLM 直接调内置 `todo` tool, 只存 in-memory (`TodoStore._items`), 重启 hermes 全丢. 我们的 BriefingCard 工作计划行只读 `~/.catfish/employee_journal.md`, 所以 chat 加的 TODO 早安看不到.
+
+### 7.1 修法: monkey-patch + cross-plugin symbiotic trigger
+
+不能改 hermes core (上游, 升级会丢). 走 **plugin monkey-patch + cross-plugin trigger** 两层组合:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  hermes serve (员工本机 8642)                                  │
+│   ↓ 启动加载 plugins/memory/                                   │
+│                                                              │
+│  ┌──────────────────────────┐                                │
+│  │ catfish-memory (active)  │  is_available()=True           │
+│  │  - employee_journal      │  注册为唯一 active provider     │
+│  │  - SkillsCatalog         │                                │
+│  │  - ...                   │                                │
+│  │  register(ctx):          │                                │
+│  │    ★ 末尾 13 行          │                                │
+│  │    importlib.util         │                                │
+│  │    .spec_from_file_loc    │  ← 跳过 Python module 限制     │
+│  │    catfish-todo-sync      │   (目录名含 - 不能 import)    │
+│  │    ._apply_patch()        │  ← 触发 monkey-patch          │
+│  └──────────────────────────┘                                │
+│                ↓                                              │
+│  ┌──────────────────────────┐                                │
+│  │ catfish-todo-sync        │  is_available()=False          │
+│  │ (passive, 不抢 active)   │                                │
+│  │  monkey-patches:         │                                │
+│  │    TodoStore.write       │  → 拦截 LLM 写 TODO            │
+│  │  原 write 仍跑           │  → in-memory 不动              │
+│  │  + 同步调 catfish-journal│  → 真写 ~/.catfish/journal.md  │
+│  └──────────────────────────┘                                │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 7.2 关键技术点
+
+- **`importlib.util.spec_from_file_location`**: Python 不允许 `import name-with-dash`, 目录名 `catfish-todo-sync` 含 `-` 用普通 `import` 失败. 用 `importlib.util.spec_from_file_location("_catfish_todo_sync_inline", path/to/file.py)` 跳过模块名限制, 直接 exec 文件
+- **MemoryProvider.is_available=False**: catfish-todo-sync 注册 dummy MemoryProvider 满足 hermes plugin loader 协议, 但 `is_available()` 永远返 False — **不抢 active provider** (catfish-memory 仍是单 active). 真核心工作 (monkey-patch) 在 `register(ctx)` 阶段一次性完成
+- **`plugin.yaml: hooks: [sync_turn]`**: hermes plugin loader 据此识别为 memory plugin 走 `register(ctx)` 加载路径. 没这字段 loader 完全不扫
+- **安装路径 `~/.hermes/hermes-agent/plugins/memory/<name>`**: 不是 `~/.hermes/plugins/`. 文档没写清的隐式约定
+- **`register(ctx)` 调用时机**: 只在 hermes 创建 `AIAgent` 实例 (新 chat 会话) 时才调. `hermes gateway restart` **不重 import plugin**, 改完必须新建 chat 会话才生效
+
+### 7.3 单 active provider 红线不破
+
+catfish-todo-sync 实例化的 dummy `MemoryProvider` 永远 `is_available=False`, `MemoryManager` 不把它算 active. 真 active 仍是 catfish-memory (`memory.provider: catfish-memory` config 切换). 跟本文档 § 2.2 "单 active provider" 原则**完全兼容**:
+
+| Plugin | provider type | is_available | 工作 |
+|---|---|---|---|
+| catfish-memory | external | True | inject employee_journal / skills_catalog ... |
+| catfish-todo-sync | dummy | **False** | monkey-patch TodoStore.write (副作用) |
+| hermes builtin | builtin | (fallback) | session_history / MEMORY.md / USER.md |
+
+**意义**: 多个 plugin 可以**协同**做 memory ownership 之外的扩展 (副作用 / 拦截 / 同步), 不需要把所有逻辑塞 catfish-memory 一个 plugin. cross-plugin symbiotic trigger 是 Phase 2+ 的扩展模式.
+
+### 7.4 v0.1.7 / v0.1.8 关键演进 (跟 memory ownership 同源思路)
+
+- **v0.1.7 幂等修**: hermes `TodoStore.write` 每轮 sync_turn 都把**全量 list** 写一次, 我们 naive sync 会重复 `catfish-journal add` 同 content (实盘 4 副本). 修: `core.add_todo` 加 regex idempotent check + Rust journal.rs 同步同算法防漂移. **跟 memory inject "覆盖前 read-then-write" 同精神**: 写之前 read 看是否已存在
+- **v0.1.8 完整 status lifecycle**: TodoStore `status` 字段 (pending / in_progress / completed / cancelled) 不只 pending 重要. completed → `catfish-journal done --line N --hint H`, cancelled → `catfish-journal delete --line N --hint H`. **journal 跟 in-memory 状态保持同步**, BriefingCard 显示一致
+
+### 7.5 设计经验 (跨 plugin 协同模式)
+
+适用场景:
+- 一个 plugin 是 active memory provider (inject / 召回)
+- 另一个 plugin 不当 memory provider, 但需要在 hermes 启动时做副作用 (monkey-patch / 注册 callback / 启 background task)
+- 直接 hermes builtin plugin loader 不能跑非 memory 类型的 plugin (loader 现状只扫 `plugins/memory/`)
+
+**用 cross-plugin symbiotic trigger**:
+```python
+# catfish-memory/__init__.py 末尾
+def register(ctx):
+    # ... 注册 catfish-memory 自己作 active provider ...
+
+    # 顺手触发兄弟 plugin (passive, monkey-patch only)
+    try:
+        from pathlib import Path
+        import importlib.util
+        sibling = Path(__file__).parent.parent / "catfish-todo-sync" / "catfish_todo_sync.py"
+        if sibling.exists():
+            spec = importlib.util.spec_from_file_location("_inline", sibling)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            mod._apply_patch()
+    except Exception as e:
+        logger.warning("sibling plugin trigger failed (ignored): %s", e)
+```
+
+**红线**:
+- ⛔ Sibling plugin 不能也注册 MemoryProvider — 破单 active 红线
+- ⛔ Sibling plugin 失败不能影响 active provider 注册 — try/except 兜底
+- ✅ Sibling plugin 只做副作用 (monkey-patch / register hook / 启 task)
+- ✅ Active provider 跟 sibling 解耦, 一个删了另一个仍跑
+
+### 7.6 5/20 ship 统计
+
+- **plugin**: `edge/hermes-plugins/catfish-todo-sync/` v0.1.8 (9 版本演进)
+- **单测**: catfish-todo-sync 11 + journal-agent core 31 + Rust journal.rs 6 = **48 新单测**
+- **联动改动**: `catfish-memory/__init__.py` register 末尾加 13 行 inline import 触发 patch
+- **下游消费**: BriefingCard 工作计划行 (journal_todos_fetch) 实时显 chat 加的 TODO ✓
+
+详见 `CHANGELOG.md` 5/20 段 + `edge/hermes-plugins/catfish-todo-sync/catfish_todo_sync.py` 模块顶部 docstring.
 
 ---
 

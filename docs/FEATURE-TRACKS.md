@@ -1,6 +1,6 @@
 # 鲶鱼 · Feature Tracks (主入口)
 
-> **快照**: 2026-05-12 (周二深夜) · **维护人**: 鸿波 · **更新**: 每周日晚 + 重大 ship 时
+> **快照**: 2026-05-20 (周二全天 + 下半段 v2 收尾) · **维护人**: 鸿波 · **更新**: 每周日晚 + 重大 ship 时
 > **角色**: 这是**唯一**的"我们在做啥 / 还差啥 / 在哪个 phase"主入口.
 > 其他 doc 角色见底部 § 文档地图.
 
@@ -9,7 +9,7 @@
 ## 🚦 Phase 进度 (一行看清)
 
 ```
-Phase 1 · 单员工 AI 副手           [██████████] 100%  · 5/12 BL-MM9-FREEZE-v2 教学→凝固→复用闭环跑通 (eis-login 2.3s 复用 + eis-checkin SOP 第二次验证)
+Phase 1 · 单员工 AI 副手           [██████████] 100%  · 5/20 Daily Briefing MVP + v2 三 sub-task 全 ship (catfish-todo-sync v0.1.10 11 轮演进 + 卡片可展开 + 通知去重 + chat-first 跨 source) · 5/12 BL-MM9-FREEZE-v2 教学→凝固→复用闭环跑通 (eis-login 2.3s 复用 + eis-checkin SOP 第二次验证)
 Phase 2 · 团队版 (SSO/RBAC/Win)    [██████████] 99%   · 5/10 凌晨 4 个中央 service PG 统一 + 5/12 GitHub Actions CI 落地 (1257 测试零失败)
 Phase 3 · ★ Federation             [█████████░] 95%   · Plan D v0.1 ✅ + 5/6 重定位 + 5/12 BL-FED2.1-2.6 全 ship ✅ (6 个 sub 一日内连发 + demo 真跑通, 剩 5% 是实时 Companion 弹窗 P1)
                                                           + Hermes 0.13 对齐建议清单落档 docs/HERMES-013-ALIGN.md (5/18 升级 sprint 拿来对)
@@ -440,6 +440,65 @@ Companion → HTTPS OpenAI 兼容 → hermes serve (本机)
 - ⬜ 邮件简报 step5: 卡片显急/中/低 badge + 评级"已读"自动消除通知 · 1-2 天
 - ⬜ 起草工具 (`catfish_email_draft`) 接到 tool-bridge · 0.5 周
 - **决策已定**: 演这个! macOS 端 (Apple Mail + Foxmail Mac) 已闭环可演, 实盘鸿波 3 账号 5 未读跨客户端正常显示
+
+#### #31 ★ Daily Briefing (早安播报) [Phase 1, 100%]  ★ 5/20 全天 ship MVP + v2 三 sub-task 全 ship
+> Dashboard 默认 tab 改"早安", 员工开 app 进来就看 banner + 邮件 + 工作计划 + 日程 + 桌宠 9:00 主动播报.
+> chat 自然话改 TODO 真写 `~/.catfish/employee_journal.md`, BriefingCard 工作计划行实时显.
+
+**5/20 ship 清单 (22 项 + 对话改 TODO 三 stage)**:
+- ✅ **Task #1-2 骨架**: `BriefingTab.tsx` + `briefing_section.tsx` 渲染早安 banner + 三行卡片. 默认 tab `briefing` (员工开 app 直进早安), tab 顺序 BriefingTab ↔ Workspace 互换 (早报第一, 工作台第二)
+- ✅ **Task #3-5 真数据**: 邮件行接 `email_list_fetch` / 日程行 macOS osascript JXA 拉 Calendar.app (15 单测) / 工作计划行接 `journal_todos_fetch` 读 `~/.catfish/employee_journal.md`
+- ✅ **Task #6-9 LLM 升级**: 早安 banner 文案走 gateway Haiku, `fetchMergedBriefing` 返 JSON `{todos, suggestion}` 一次调用解多任务. Personality 段 prompt 注入员工人设 (`employee.profile` 段)
+- ✅ **Task #10-13 邮件 LLM 评级**: BriefingCard 邮件行带急/中/低 badge (复用 5/18 BL-EMAIL-URGENCY-BADGE)
+- ✅ **Task #14-17 桌宠主动播报**: 9:00 AM macOS osascript `display notification` "早, 看你今天 N 个 TODO + M 封急邮件". 路径"急邮件优先 → 叫醒 → 跳 BriefingTab"
+- ✅ **Task #18-20 Prefs UI**: AgentPrefsCard 加 3 开关 ("早安 9:00 push" / "邮件 LLM 评级" / "桌宠主动播报"), 持久化 `~/.catfish/companion.yaml` 的 `briefing:` 段
+- ✅ **Task #23-25 对话改 TODO 三 stage (Option B = LLM tool calling)**:
+  - Stage 1 (Rust CRUD, `commands/journal.rs`): `journal_add_todo` / `journal_mark_done` / `journal_delete_todo` Tauri 命令. 双 locator (line + text_hint) 防 LLM 误删 (6 单测)
+  - Stage 2 (Python CLI `edge/journal-agent/`): `catfish_journal/core.py` 4 函数, 跟 Rust regex 等价 (任一端改两边过单测, 31 单测)
+  - Stage 3 (Chat 路由): `catfish_tools.py` 注册 3 LLM tool, SOUL.md 加引导. 员工 chat "加 TODO X" → LLM → Python CLI → journal 真写
+- ✅ **Task #26 catfish-todo-sync plugin v0.1.0 → v0.1.8** (9 轮调试): monkey-patch hermes 0.13 内置 `TodoStore.write` 同步进 journal. 见 #29.5 单独跟踪
+
+**5/20 关键架构决策**:
+- chat 自然话 = journal 真写: 整条链路完整, 员工不用记 CLI 语法. LLM tool calling 把语法门槛抹掉, 鲶鱼真"AI 副手"
+- 默认 tab `briefing` + tab 顺序换: 员工早上开 app 第一眼是早安播报, 不是工作台 (workspace 是写完执行的地方, 早安是看完决策的地方)
+- briefing LLM merged prompt: 一次调用返多任务 JSON (todos + suggestion), 减 LLM round-trip + token
+
+**v2 sub-task 5/20 下半段全 ship (100% v2 完结)**:
+- ✅ 卡片可点击展开详情 (5/20): 邮件 body snippet lazy 拉 + TODO 元数据 + done/删快捷按钮 + 日程完整 ISO/duration/参会人/描述. EmailGroup / TodosDetailSection / EventsDetailSection 三子组件 useState 管 expanded set. 真调 journalMarkTodoDone / journalDeleteTodo 乐观更新
+- ✅ 日程展开显参会人/描述 (5/20): JXA 抽 e.attendees() + e.description() (try/catch 包死兼容老 macOS / 订阅日历), CalendarEvent 加 attendees?: string[] + description?: string optional
+- ✅ briefing 通知去重 (5/20): urgency cache 持久化到 ~/.catfish/email_urgency.json (atomic write), 24h push dedup (~/.catfish/email_push_history.json), Companion 重启不重评不重叫醒. +4 Rust 单测
+- ✅ chat-first 自然话扩展 (5/20): catfish-journal SKILL.md v0.2.0 加 3 个跨 source cookbook (邮件 → TODO / 日历 → TODO / 评级急的批量加). 不引入新 native tool, LLM 自然 chain (catfish_email_search + catfish-journal). 实盘不行 5/21+ 再加 tool 兜底
+
+#### #29.5 ★ catfish-todo-sync (hermes 内置 todo → journal 同步 plugin) [Phase 1, 100%]  ★ 5/20 ship v0.1.10 (11 轮演进)
+> hermes 0.13 内置 `todo` tool 抢路由优先级高于我们的 `catfish_journal_add` skill. 员工 chat 说"加 TODO X" LLM 调内置 `todo` tool 只存 in-memory (`TodoStore._items`), 重启 hermes 丢. **修法**: plugin monkey-patch `TodoStore.write` 同步调 `catfish-journal` CLI 真写文件.
+
+**v0.1.0 → v0.1.8 9 轮演进**:
+- v0.1.0 → v0.1.1: `initialize()` 入口 → `register(ctx)` (hermes 不调 initialize)
+- v0.1.1 → v0.1.2: 加 `hooks: [sync_turn]` plugin.yaml 字段 (hermes loader 据此识别 memory plugin)
+- v0.1.2 → v0.1.3: 装路径 `~/.hermes/plugins/` → `~/.hermes/hermes-agent/plugins/memory/<name>`
+- v0.1.3 → v0.1.4: import-time patch 跑了没生效 (`discover_memory_providers` 启动不调)
+- v0.1.4 → v0.1.5 → v0.1.6: 借 catfish-memory `register(ctx)` 末尾 inline import 触发 patch (cross-plugin symbiotic trigger). 目录名含 `-` 不能 `import package_name`, 改 `importlib.util.spec_from_file_location`
+- v0.1.6 → v0.1.7: **幂等修** (鸿波报"重复"): TodoStore.write 全量送 list, 重复 add 同 content. `core.add_todo` 加 regex idempotent check, Rust journal.rs 同算法防漂移 (8 新单测)
+- v0.1.7 → v0.1.8: **完整 status lifecycle** (鸿波报"待办列表完成后怎么没有更新?"): pending → add / completed → `_find_todo_line_in_journal` → done / cancelled → delete. 3 新单测
+- v0.1.8 → v0.1.9: **completed 找不到 line 时补 [x] 历史** (5/20 下半段): LLM 直接标完成没经 add 时, 走 `catfish-journal add <content> --done` 补 [x] 到 journal, BriefingCard 反映干过的事不只未来 TODO. core.add_todo 加 done: bool, CLI 加 --done flag. 6 新单测
+- v0.1.9 → v0.1.10: **batch sync 优化** (5/20 下半段): catfish-journal CLI 加 `sync --stdin` 子命令, 一次 subprocess 处理 N op (单 fork 单 read 单 write). plugin 默认走 batch, 老 CLI fallback 单调路径. 省 N-1 次 Python 启动开销 (~50-200ms 每次). +17 单测 (11 cli sync e2e + 6 plugin batch)
+
+**测试**:
+- catfish-todo-sync 单测 17 (8 base + 3 v0.1.8 lifecycle + 6 v0.1.10 batch)
+- journal-agent core 单测 37 (含幂等 + round-trip + v0.1.9 done=True 6 测)
+- journal-agent cli_sync 11 (v0.1.10 batch e2e: pending/completed/cancelled 顺序处理 / 错误)
+- companion-app Rust journal.rs 单测 6
+- companion-app Rust scheduler.rs 单测 18 (v2 sub-task 2 通知去重 +4 测)
+
+**关键架构判断**:
+- Monkey-patch > 改 hermes core: hermes 上游, 改 core 升级丢. plugin patch + symbiotic trigger 让 hermes core 不动也能扩展
+- 只 patch `write` 不 patch `read`: LLM 后续读 TodoStore 拿到原 in-memory state 不受影响
+- cross-plugin symbiotic trigger: catfish-memory (active provider) 在 register(ctx) 末尾 inline import catfish-todo-sync (非 active, 只 patch) 触发 monkey-patch. **不破坏 hermes 单 active 红线**, 但允许多个 plugin 协同
+- TODO sync 全 lifecycle 而非只 pending: pending-only sync 让员工 chat 标完成后 journal 不更新, BriefingCard 显示错的"未完成"任务. v0.1.8 done/delete 联动是必须不是 nice-to-have
+
+**剩 0% (5/21+ 后续候选)**:
+- ⬜ v0.1.11 diff sync (currently 全量 N op idempotent, 即使没变也开销): TodoStore.write diff 上次 todos array, 只 sync 变了的 · 0.5 天
+- ⬜ batch sync 用 unix socket / shared library 替代 subprocess + stdin (彻底干掉 Python 启动开销) · 1-2 天
 
 #### #13 ★ feishu / 微信 / 钉钉 / 企微 — Hermes Unified Inbox [Phase 1, 重定位 5/7]
 > ⚠️ **5/7 鸿波关键发现**: hermes v0.12.0 内置 19 个 messaging platform, 含 **DingTalk / Feishu/Lark / WeCom (企微) / Weixin / QQ Bot / Yuanbao** 中国 IM 全栈. 之前 catfish 自己写的 `edge/feishu-monitor/` (CDP 模式) 是重复造轮子, 应切到 hermes gateway.
