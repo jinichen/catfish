@@ -101,13 +101,26 @@ Step E 三个 module 一起删, 由 catfish-memory plugin 接管. 当前 (5/20) 
 
 **唯一可优化**: Task #14 BL-LEAN-GATE-MISSING — lean 模式不需要 retry hint, 加 gate 跳过 (省 50 LOC if). 单独修补, 不删模块.
 
-#### `inject_session_goal.py` (/goal 命令, 228 LOC) — ❓ **暂留**
+**Audit 5/20 末**: ✅ 已 effective done — caller `app.py:2549` 早就有 `if not is_internal_call and not _lean and not _hints_disabled:` 三重 gate 包整段 hard_cap + inject_tool_retry_hint (line 2549-2581). lean 模式确实不调这 50 LOC. 模块内部没加 defensive lean check (单 caller 没必要). 文档之前标 ⏳ 是 stale, 标 ✓.
+
+#### `inject_session_goal.py` (/goal 命令, 228 LOC) — ❌ **留 (5/20 末 audit 终审)**
 
 **位置**: `session_goals.py` + `app.py:2434-2445, 2581-2582`
 
 **Audit verdict (5/20)**: ❓ 暂留. hermes API server (8642, Companion 走的) **没 /goal 拦截**, 只 CLI 有. gateway 这层 `detect_goal_command` 是 Companion → hermes → gateway 链上唯一 /goal 拦截点. hermes Ralph loop "evaluate_after_turn" 是 *持续* 拉回, gateway 现版本只做 *事前 inject*, **功能不等价**.
 
 **何时重审**: 等 Task #26 BL-COMPANION-DAILY-BRIEFING-MVP 设计完一起讨论.
+
+**Audit 5/20 末 (Daily Briefing MVP + v2 ship 后重审)**: ❌ 留. BriefingCard 不能替代 /goal — 两者方向相反:
+
+| 模块 | 方向 | 触发 |
+|---|---|---|
+| `/goal` (session_goals.py) | 员工 **→** LLM (锚定) | 员工显式 "/goal 写季度汇报" 防 LLM 跑偏 |
+| BriefingCard suggestion | LLM **→** 员工 (建议) | LLM 看 4 行总览推 priority 给员工 |
+
+跟 inject_session_goal 同源思路的"事前锚定" hermes 0.13 Ralph loop 那个, **Companion 走的 hermes API server 8642 仍无 /goal 拦截** (只 CLI 有). gateway 这层是 chat 链路上唯一拦截点. 删了 = Companion 用户彻底没 /goal 能力.
+
+**Future-proof backlog (不阻塞)**: BriefingCard 可以加"今日重点" 输入框作 UI 路径 — 员工在卡片设, 写到 `~/.catfish/session_goal.txt`, 让 /goal 有 UI 不只 CLI. inject_session_goal 不动, 仍读同一文件. **这是新功能不是减 LOC**, 算 Q3 候选.
 
 ### ❌ 永远不动 — Q5/Q6 是 catfish 企业能力护城河
 
@@ -132,8 +145,8 @@ Step E 三个 module 一起删, 由 catfish-memory plugin 接管. 当前 (5/20) 
 | Week 1 (compound_intent + self_critique) | -1330 | ✓ 完成 |
 | Q1+Q4 (memory/ + 4 test + lean_inject + caller) | -2788 | ✓ 完成 |
 | Step E (session_summarizer + memory_distill + employee_journal) | -1515 | ⏳ Day 17+ |
-| Q3 inject_session_goal | ~228 | ❓ 暂留, #26 重审 |
-| Task #14 tool_retry_hint lean gate | ~50 (单独修补) | ⏳ pending |
+| Q3 inject_session_goal | ~228 | ❌ 留 (5/20 末 audit: 方向相反 BriefingCard 不能替代) |
+| Task #14 tool_retry_hint lean gate | ~50 (单独修补) | ✅ 已 effective done (caller 处 gate, 5/20 audit) |
 | **可减总计 (含 Step E)** | **~-5683 LOC** | |
 | **永远不动 (Q2 / Q5 / Q6 / 护城河)** | ~1500 LOC | charter 第 2-4 层 |
 
@@ -165,8 +178,9 @@ Gateway 现约 7000-8000 LOC, 净减 ~5700 LOC = **约 75%** (5/19 估 50% 偏�
 2026-05-27   Day 7 双跑通过 → LEGACY=0 切换 plugin 独占
 2026-06-03   Day 14 plugin 独占 7 天通过
 2026-06-04+  Step E 硬删 session_summarizer/memory_distill/employee_journal     -5633
-2026-Q2末    inject_session_goal 跟 #26 daily-briefing 一起重审, 视情况删
-2026-Q3+     不动 (Q2 / Q5 / Q6 / 其它护城河 ~1500 LOC 留)
+2026-Q2末    Q1+Q4 + Step E 后清零, 剩护城河 ~1500 LOC
+2026-Q3+     不动 (Q2 / Q3 inject_session_goal / Q5 / Q6 / 其它护城河 ~1500 LOC 留)
+             可选: BriefingCard 加"今日重点" 输入框作 /goal UI 路径 (新功能 非减 LOC)
 ```
 
 ## 跟 charter 三问对齐
