@@ -93,6 +93,46 @@
 
 ---
 
+## Skill 边界 (5/21 加, 业务 skill 库重叠扫描后定)
+
+写新 catfish skill (放在 `skills/department/` 或 `skills/business/`) 前必须先扫 hermes 自带 skill, 防重叠:
+
+```bash
+ls ~/.hermes/hermes-agent/skills/          # 25 大类目录
+grep -ri "<关键词>" ~/.hermes/hermes-agent/skills/ --include="*.md" | head
+```
+
+**决策树**:
+
+| hermes 有同类? | catfish 做法 |
+|---|---|
+| ✅ 有, 功能 80%+ 重叠 | **不写 skill**. 写 cookbook (SKILL.md 教 LLM 自己 chain hermes 工具), 跟 `catfish-journal/SKILL.md v0.2.0 跨 source` 同模式 |
+| ⚠️ 有但走云端 API (Teams / Google / Microsoft Graph), catfish 要走本地 / 国内系统 | **重定位**, 明确标注差异. skill 名加前缀 (例: `local-meeting-minutes` 区别于 hermes `teams-meeting-pipeline`), 不抢同一个 trigger 词 |
+| ❌ 没有, 中国政企本地化业务 | **写 catfish skill**, 但渲染层/工具基础设施**只复用 hermes 提供的** (`python-docx` / `python-pptx` / `pymupdf` / `openpyxl` / `markitdown` 等), 不重复造轮子 |
+
+**当前 catfish skill 边界 verdict (5/21 audit)**:
+
+| catfish skill | hermes 对应 | verdict |
+|---|---|---|
+| leadership-briefing (4 段公文 .docx) | `ocr-and-documents` (给 python-docx 工具底座) | ✅ 不越界. catfish = 中国政企模板 + 方正小标宋 + 双 backend 错别字 + LLM 接业务数据 |
+| weekly-report (.xlsx 周报) | `google-workspace` (云端 Sheets) | ✅ 不越界. catfish = 本地 openpyxl 政企表格模板 |
+| project-approval (项目立项 .docx) | `ocr-and-documents` (工具底座) | ✅ 不越界. catfish = 立项模板 + 4 段语义 |
+| qualification-export (资质导出) | 无 | ✅ 写 skill, 政企特定数据 |
+| ~~meeting-minutes~~ (会议纪要) | `productivity/teams-meeting-pipeline` | ⚠️ **不写 skill**, 改 cookbook 教 LLM chain (BL-I3.1 视频抽音轨 + hermes ocr-and-documents 渲染). 砍 1 周工作量到 1-2 天 |
+| annual-summary (年终汇报) | 无 (数据源 `~/.hermes/employee_journal/` 是 catfish 5/20 ship 的 journal-agent) | ✅ 写 skill |
+| procurement (采购单 .xlsx) | 无 | ✅ 写 skill |
+
+**Skill 命名反模式** (容易跟 hermes 撞 trigger 词):
+- `meeting-*` (撞 `teams-meeting-pipeline`)
+- `pdf-*` / `document-*` (撞 `ocr-and-documents` / `nano-pdf`)
+- `slides-*` / `ppt-*` / `deck-*` (撞 `powerpoint`)
+- `email-*` (撞 `email/himalaya`)
+- `obsidian-*` / `notion-*` / `linear-*` / `airtable-*` (各自撞 hermes 同名 skill)
+
+加前缀 `catfish-` 或本地化关键词 (`zh-` / `gov-` / `enterprise-`) 显示差异. 实在没差异化 → 不写 skill, 写 cookbook.
+
+---
+
 ## 反模式 (PR review / 设计提议时拦)
 
 | 反模式 keyword | 警告 |
@@ -102,6 +142,8 @@
 | "在 hermes plugin 里加 catfish 专属 hook" | 改 hermes 内部 = 高风险 + 升级 hermes 时丢. 改 catfish 那层 |
 | "catfish gateway 加一个 X 的 endpoint, X 是 hermes 也有的" | 同上, 应该走 hermes |
 | "catfish 把 hermes 没暴露的内部 class 暴露给 LLM" | 应该给 hermes 提 PR 让它正式 expose, 不是 catfish 偷偷用 |
+| 写新 catfish skill 没先 `ls ~/.hermes/hermes-agent/skills/` 扫一遍 | 5/21 加. 重叠风险点: `meeting-*` / `email-*` / `pdf-*` / `slides-*` / `notion-*` / `linear-*` 等 trigger 词易撞 |
+| 新 skill 自己造渲染轮子 (重写 docx/pptx/xlsx 生成) 而不复用 hermes 提供的 python-docx / python-pptx / openpyxl | hermes `ocr-and-documents` + `powerpoint` 已经给了渲染底座. catfish 只做政企本地化模板 + LLM 接业务数据 |
 
 ---
 

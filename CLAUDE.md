@@ -67,6 +67,7 @@ git diff --name-only HEAD | xargs -I{} wc -l {} 2>/dev/null | sort -rn | head
 - **改完代码后**: 跑 `bash scripts/check_file_sizes.sh --strict` 自检.
 - **commit 前**: 自检过 + 测试过. 测试退化 0 容忍.
 - **触发拆分时**: 用上面的 re-export 协议, 不破 import 兼容, 跟着改测试 monkeypatch.
+- **写新 skill / 新 tool / 新 plugin 前**: 先看 `docs/CATFISH-HERMES-BOUNDARY.md`, 扫 `~/.hermes/hermes-agent/skills/` 和 `~/.hermes/hermes-agent/tools/` 防重叠. hermes 有 → 写 cookbook 不写 skill. 重写 hermes 已有的轮子 = 越界.
 
 ## 5. 已有拆分参考 (5/20-5/21 round 1+2)
 
