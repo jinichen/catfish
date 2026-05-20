@@ -20,6 +20,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { listSessions, countSessions, openTerminal, sessionSoftDelete } from "../../lib/tauri";
+import { groupSessionsByTitle, type SessionGroupEntry } from "../../lib/sessionGroup";
 import type { SessionMeta } from "../../types/session";
 
 interface Props {
@@ -191,37 +192,49 @@ export default function ChatSidebar({
             还没会话 —— 起个新对话试试。
           </div>
         )}
-        {!loading &&
-          !error &&
-          sessions.map((s) => (
-            <SessionRow
-              key={s.id}
-              session={s}
-              active={s.id === activeId}
-              disabled={false /* BL-COMPANION-UX2: streaming 中也允许点 */}
-              onClick={() => onSelect(s.id)}
-              onDelete={async (id) => {
-                // BL-SESSION-MGMT C (5/15): 软删 + 立即从 sidebar 移除 (乐观更新),
-                // 然后异步刷 sessions_list (实际从 state.db 重拉)
-                try {
-                  await sessionSoftDelete(id);
-                  setSessions((prev) => prev.filter((x) => x.id !== id));
-                  if (totalCount !== null) setTotalCount(totalCount - 1);
-                  // 如果删的是当前 active 的, 切到第一条 / 起新对话
-                  if (id === activeId) {
-                    const remaining = sessions.filter((x) => x.id !== id);
-                    if (remaining.length > 0) {
-                      onSelect(remaining[0].id);
-                    }
-                  }
-                } catch (e) {
-                  console.error("[session-delete] 失败:", e);
-                  alert(`删除失败: ${e}`);
+        {/* BL-COMPANION-SESSION-DEDUP (5/20 鸿波): 同 title 会话堆叠为一组,
+            点同名 chip 展开 sub-session 列表. session id 不变 — 鸿波点的就是
+            那个 sub. LLM 生成 title 算法对相似 prompt 出同名, 没去堆叠 sidebar
+            一眼看不出哪条是哪条. */}
+        {!loading && !error && (() => {
+          const groups = groupSessionsByTitle(sessions);
+          // 当 activeId 在某 group 的 sibling 里, 自动展开那组
+          const autoExpanded = new Set<string>();
+          if (activeId) {
+            for (const g of groups) {
+              if (g.sessions.some((s) => s.id === activeId) && g.sessions.length > 1) {
+                autoExpanded.add(g.key);
+              }
+            }
+          }
+          const onDeleteHandler = async (id: string) => {
+            try {
+              await sessionSoftDelete(id);
+              setSessions((prev) => prev.filter((x) => x.id !== id));
+              if (totalCount !== null) setTotalCount(totalCount - 1);
+              if (id === activeId) {
+                const remaining = sessions.filter((x) => x.id !== id);
+                if (remaining.length > 0) {
+                  onSelect(remaining[0].id);
                 }
-              }}
+              }
+            } catch (e) {
+              console.error("[session-delete] 失败:", e);
+              alert(`删除失败: ${e}`);
+            }
+          };
+          return groups.map((g) => (
+            <SessionGroup
+              key={g.key}
+              group={g}
+              activeId={activeId}
+              autoExpanded={autoExpanded.has(g.key)}
+              onSelect={onSelect}
+              onDelete={onDeleteHandler}
               streaming={busy}
             />
-          ))}
+          ));
+        })()}
       </div>
 
       <footer
@@ -285,6 +298,128 @@ export default function ChatSidebar({
   );
 }
 
+// ── BL-COMPANION-SESSION-DEDUP (5/20 鸿波): 同 title 会话堆叠 ──
+// 算法在 src/lib/sessionGroup.ts (纯函数 + 单测覆盖).
+// SessionGroup 组件: 单条 → 退回 SessionRow; 多条 → 主条 + "+N" chip + 展开 sub-session.
+
+function SessionGroup({
+  group,
+  activeId,
+  autoExpanded,
+  onSelect,
+  onDelete,
+  streaming,
+}: {
+  group: SessionGroupEntry;
+  activeId: string | null;
+  autoExpanded: boolean;
+  onSelect: (id: string) => void;
+  onDelete: (sessionId: string) => void;
+  streaming: boolean;
+}) {
+  const [expanded, setExpanded] = useState(autoExpanded);
+  // autoExpanded 跟 activeId 变化 — 鸿波点别处后再 active 切回组内仍展开
+  useEffect(() => {
+    if (autoExpanded) setExpanded(true);
+  }, [autoExpanded]);
+
+  // 单 session 情况 — 老 SessionRow 行为完全一致 (没 chip / 没展开)
+  if (group.sessions.length === 1) {
+    const s = group.sessions[0];
+    return (
+      <SessionRow
+        session={s}
+        active={s.id === activeId}
+        disabled={false}
+        onClick={() => onSelect(s.id)}
+        onDelete={onDelete}
+        streaming={streaming}
+      />
+    );
+  }
+
+  // 多 session 撞名 — 主条 (最新) + 折叠按钮 + 撞名 chip "+N"
+  const main = group.sessions[0];
+  const siblings = group.sessions.slice(1);
+  // group 内总消息数 (鸿波想知道这组合共聊了多少)
+  const totalMessages = group.sessions.reduce(
+    (sum, s) => sum + (s.messageCount || 0),
+    0,
+  );
+  // 组的 active = 任一 sub-session 是 active
+  const anyActive = group.sessions.some((s) => s.id === activeId);
+
+  return (
+    <div
+      style={{
+        // 整组用左边竖线连起来视觉成一组. active 时换浅高亮.
+        borderLeft: anyActive
+          ? "3px solid var(--catfish-accent, #2563eb)"
+          : "3px solid transparent",
+      }}
+    >
+      {/* 主条 — 复用 SessionRow 但传 onClick = 点主条切到 main session */}
+      <div style={{ position: "relative" }}>
+        <SessionRow
+          session={main}
+          active={main.id === activeId}
+          disabled={false}
+          onClick={() => onSelect(main.id)}
+          onDelete={onDelete}
+          streaming={streaming}
+        />
+        {/* 撞名 chip + 展开按钮覆盖在主条右上角 */}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setExpanded((v) => !v);
+          }}
+          title={
+            expanded
+              ? `收起 ${siblings.length} 条同名会话`
+              : `展开 ${siblings.length} 条同名会话 (合计 ${totalMessages} 条消息)`
+          }
+          style={{
+            position: "absolute",
+            right: 30, // 留位置给 × 按钮 (SessionRow hover 时显)
+            top: 8,
+            fontSize: 10,
+            padding: "1px 6px",
+            border: "1px solid var(--catfish-border)",
+            borderRadius: 8,
+            background: "var(--catfish-bg-elevated)",
+            color: "var(--catfish-text-muted)",
+            cursor: "pointer",
+            fontFamily: "inherit",
+            lineHeight: 1.4,
+            display: "flex",
+            alignItems: "center",
+            gap: 3,
+          }}
+        >
+          <span style={{ fontSize: 9 }}>{expanded ? "▼" : "▶"}</span>
+          +{siblings.length} 同名
+        </button>
+      </div>
+      {/* 展开区: sub-sessions */}
+      {expanded && siblings.map((s) => (
+        <div key={s.id} style={{ paddingLeft: 14, opacity: 0.92 }}>
+          <SessionRow
+            session={s}
+            active={s.id === activeId}
+            disabled={false}
+            onClick={() => onSelect(s.id)}
+            onDelete={onDelete}
+            streaming={streaming}
+            isSubRow
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function SessionRow({
   session,
   active,
@@ -292,6 +427,7 @@ function SessionRow({
   onClick,
   onDelete,
   streaming = false,  // BL-COMPANION-UX2 (5/12): 提示用, 不再禁用
+  isSubRow = false,    // BL-COMPANION-SESSION-DEDUP (5/20): 撞名展开里的 sub-session
 }: {
   session: SessionMeta;
   active: boolean;
@@ -300,6 +436,7 @@ function SessionRow({
   /** BL-SESSION-MGMT C (5/15): hover × 点了调, 父级处理软删 + refresh */
   onDelete: (sessionId: string) => void;
   streaming?: boolean;
+  isSubRow?: boolean;
 }) {
   const [hover, setHover] = useState(false);
   // BL-SESSION-MGMT C (5/15): 二次确认状态. 首次点 × → confirming=true (按钮变 "确定?"),
@@ -334,16 +471,21 @@ function SessionRow({
       }}
       style={{
         position: "relative",
-        padding: "8px 12px 8px 14px",
+        // BL-COMPANION-SESSION-DEDUP (5/20): sub-row 比主条 padding 略减 + 字体小
+        padding: isSubRow ? "6px 12px 6px 10px" : "8px 12px 8px 14px",
         cursor: disabled ? "not-allowed" : "pointer",
         background: active
           ? "var(--catfish-bg-elevated)"
           : "transparent",
-        borderLeft: active
-          ? "3px solid var(--catfish-accent, #2563eb)"
-          : "3px solid transparent",
+        // sub-row 不画 borderLeft 避免跟父 group 的 borderLeft 撞 (双竖线)
+        borderLeft: isSubRow
+          ? "none"
+          : active
+            ? "3px solid var(--catfish-accent, #2563eb)"
+            : "3px solid transparent",
         opacity: disabled ? 0.5 : 1,
         userSelect: "none",
+        fontSize: isSubRow ? 12 : undefined,
       }}
     >
       <div
