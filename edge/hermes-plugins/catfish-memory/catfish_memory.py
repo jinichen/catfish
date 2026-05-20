@@ -189,6 +189,16 @@ _SUMMARIZE_DEDUP_SECONDS = 300  # 5 分钟
 #: 蒸馏 24h cooldown (跟 gateway memory_distill 原 24h 一致, 防同次 chat 反复触发).
 _DISTILL_COOLDOWN_SECONDS = 24 * 3600
 
+#: sync_turn 节流默认: 每 N 轮触发一次 summary. env CATFISH_PLUGIN_SUMMARIZE_EVERY_N_TURNS 覆盖.
+#: 跟 5/20 Step D 失败原因相关 — on_session_end 不在 per-chat trigger (run_agent.py:16078
+#: 注释 "Memory provider on_session_end NOT called per turn"), 必须用 sync_turn + 节流.
+_DEFAULT_TURNS_BETWEEN_SUMMARY = 5
+
+#: sync_turn 节流默认: 距上次 summary 最小间隔 (秒). 跟 N 轮规则取 "或" — 任一满足都触发.
+#: env CATFISH_PLUGIN_SUMMARIZE_MIN_INTERVAL_SECONDS 覆盖.
+#: 30min 是经验值: 员工连续 chat 30min 算一段思路完成, 该总结了.
+_DEFAULT_MIN_SUMMARY_INTERVAL_SECONDS = 1800
+
 #: gateway loopback URL (env 覆盖, 默认 8999).
 _DEFAULT_GATEWAY_URL = "http://127.0.0.1:8999/v1/chat/completions"
 
@@ -474,6 +484,20 @@ class CatfishMemoryProvider(MemoryProvider):
         self._catfish_home_cached: Optional[Path] = None
         self._initialized = False
 
+        # ── sync_turn 节流状态 (BL-MEMORY-SYNC-TURN-REFACTOR Day 1, 5/20) ──
+        # 替代 on_session_end (hermes 在 per-chat 不调那个 hook, run_agent.py:16078).
+        # sync_turn 每轮 hermes 调一次, 我们累积到 buffer, 满足节流条件再触发 summary.
+        #
+        # 节流: 每 N 轮 (default 5) OR 距上次 summary >= 30min, 任一满足.
+        # 触发后清 buffer + 重置 counter, 防止下次又把同一段内容总结一遍.
+        #
+        # _buffer_lock 保护多线程访问 (hermes 可能在不同 thread 调 sync_turn,
+        # 或者 sync_turn 主线程跟后台 summary thread 并发改 buffer).
+        self._turn_buffer: List[Tuple[str, str]] = []
+        self._turns_since_last_summary: int = 0
+        self._last_summary_ts: float = 0.0  # epoch seconds; 0 = 没跑过
+        self._buffer_lock = threading.Lock()
+
     @property
     def name(self) -> str:
         return "catfish-memory"
@@ -494,12 +518,18 @@ class CatfishMemoryProvider(MemoryProvider):
           - hermes_home (str): hermes 自己的 home (跟 ~/.hermes/ 可能不同, 比如
             子 profile / 测试 profile). 我们 catfish 不依赖 hermes_home, 只用
             CATFISH_HOME env / `~/.catfish/`, 但记下供 debug.
+
+        BL-MEMORY-SYNC-TURN-REFACTOR (5/20): 初始化 _last_summary_ts = now, 防止
+        plugin 第 1 轮 sync_turn 撞 "elapsed >= min_interval" trivially trigger
+        (没跑过 summary 时 _last_summary_ts=0 → elapsed=inf → 第 1 轮就触发,
+        违背"30min 间隔"语义). 用 now 作 baseline, 之后 elapsed 才有意义.
         """
         self._session_id = session_id
         hh = kwargs.get("hermes_home")
         if isinstance(hh, str):
             self._hermes_home = Path(hh)
         self._catfish_home_cached = _catfish_home()
+        self._last_summary_ts = time.time()  # baseline, 防 trivially trigger
         self._initialized = True
         logger.info(
             "catfish-memory initialize: session=%s catfish_home=%s hermes_home=%s",
@@ -664,60 +694,183 @@ class CatfishMemoryProvider(MemoryProvider):
     def shutdown(self) -> None:
         logger.info("catfish-memory shutdown: session=%s", self._session_id)
 
-    # ── 写路径: on_session_end (BL-GATEWAY-CLEANUP-POST-HERMES Week 2) ───
+    # ── 写路径: sync_turn + 节流 (BL-MEMORY-SYNC-TURN-REFACTOR, 5/20) ───
     #
     # 替代 gateway 旧 session_summarizer + memory_distill module.
-    # hermes 在 session 结束时调用这个 hook (run_agent.py:5809/5816/5840/16085),
-    # 我们做两件事:
-    #   1. 总结当前 session → 追加 ~/.catfish/employee_journal.md
-    #   2. 满足 24h cooldown → 蒸馏老 journal → 覆盖写 ~/.catfish/distilled_facts.md
     #
-    # 设计原则:
-    #   - **fire-and-forget**: hermes 调进来 sync, 我们 spawn daemon thread 跑 async
-    #     LLM 调用, 不阻塞 hermes session shutdown
-    #   - **双写期幂等**: Step B-Step C 过渡期 gateway 旧 caller 也在跑, 用
-    #     journal_path mtime < SUMMARIZE_DEDUP_SECONDS skip 防 dup. 一旦 Step C
-    #     env gate 关掉 gateway 那条, 这个保护自动失效 (但也无害, 因为只有 plugin 自己写)
-    #   - **不抛**: 整个 on_session_end 包 try/except, 任何错都不能让 hermes 挂
+    # # 为啥不是 on_session_end (Step D 失败教训, 2026-05-20 早 6h debug)
+    #
+    # hermes 的 memory_provider.on_session_end 只在 **真 session boundary** 触发:
+    #   - CLI atexit / `/reset` / `/new` / context compression / gateway session expiry
+    #   - 详见 run_agent.py:16078-16091 注释 "Memory provider on_session_end NOT called
+    #     per turn — would kill provider before second message"
+    #
+    # Companion 切 session 在 hermes 这边是 "SSE disconnected; interrupted agent task",
+    # 不走 session_end path → 我们的 on_session_end 实现**永远不会** trigger →
+    # journal 永远不被写. 5/20 早实测验证了这点 (catfish-debt-audit 2026-05-19).
+    #
+    # # 正确机制: sync_turn + 节流
+    #
+    # sync_turn 是 hermes per-turn hook (每轮 user+assistant 完成调一次).
+    # 但每轮都跑 LLM summary 太贵 (烧 token), 用节流:
+    #   - 节流 A: 累积 N 轮 (default 5, env CATFISH_PLUGIN_SUMMARIZE_EVERY_N_TURNS)
+    #   - 节流 B: 距上次 summary >= X 秒 (default 1800=30min, env CATFISH_PLUGIN_SUMMARIZE_MIN_INTERVAL_SECONDS)
+    #   - 任一满足触发. 触发后 reset counter + buffer.
+    #
+    # # 兜底: on_session_end 仍保留作 force-flush
+    #
+    # session 真结束时 (CLI exit / reset), 把没满 N 轮的剩余 buffer 也 summarize 一次,
+    # 不丢最后一段对话.
+    #
+    # # 设计原则
+    #   - **fire-and-forget**: hermes 同步调 sync_turn, 我们 spawn daemon thread 跑 async
+    #     LLM 调用, 不阻塞 hermes 主流程
+    #   - **双写期幂等**: deploy 时 gateway 旧 caller 还在跑, journal mtime <
+    #     SUMMARIZE_DEDUP_SECONDS 视为 gateway 刚写过, plugin skip 防 dup
+    #   - **不抛**: 全 try/except, 任何错都不能让 hermes 挂
+    #   - **线程安全**: _turn_buffer / _turns_since_last_summary / _last_summary_ts
+    #     的访问全部走 _buffer_lock 保护
 
-    def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
-        """hermes session 结束 hook — 后台总结 + 蒸馏 (fire-and-forget)."""
+    def sync_turn(
+        self,
+        user_content: str,
+        assistant_content: str,
+        *,
+        session_id: str = "",
+    ) -> None:
+        """hermes per-turn hook — 累积 + 节流 trigger summary (fire-and-forget)."""
         try:
-            self._on_session_end_impl(messages)
+            self._sync_turn_impl(user_content, assistant_content, session_id)
         except Exception as e:  # noqa: BLE001 - 全 catch, 不能让 hermes 挂
-            logger.warning("catfish-memory on_session_end 失败 (静默): %s", e)
+            logger.warning("catfish-memory sync_turn 失败 (静默): %s", e)
 
-    def _on_session_end_impl(self, messages: List[Dict[str, Any]]) -> None:
+    def _sync_turn_impl(
+        self,
+        user_content: str,
+        assistant_content: str,
+        session_id: str,
+    ) -> None:
         # Env gate: CATFISH_PLUGIN_SUMMARIZE=0 整体关掉 (回滚兜底)
         if os.environ.get("CATFISH_PLUGIN_SUMMARIZE", "1") == "0":
-            logger.debug("CATFISH_PLUGIN_SUMMARIZE=0, 跳过 on_session_end")
-            return
-        if not messages:
             return
 
-        # 双写期幂等 — gateway 刚写过 (< 5min) 就 skip
-        if self._journal_recently_written():
-            logger.info(
-                "catfish-memory: journal mtime < %ds, 假设 gateway 刚写过, skip summarize",
-                _SUMMARIZE_DEDUP_SECONDS,
-            )
-            return
-
-        # model 必须从 env 拿 — 没 env = Step B 阶段 gateway 还在跑严格 model 跟随,
-        # plugin 这条路径不该写. Step C 之后 deploy 时再设这个 env 让 plugin 接管.
+        # model 必须设
         model = os.environ.get("CATFISH_PLUGIN_SUMMARIZE_MODEL", "").strip()
         if not model:
-            logger.debug(
-                "CATFISH_PLUGIN_SUMMARIZE_MODEL 未设, 跳过 (Step B 阶段正常行为)"
+            return
+
+        # 过滤非 str (None / list / int 等) 先, 再 strip 判断 (避免对 None .strip)
+        if not isinstance(user_content, str) or not isinstance(assistant_content, str):
+            return
+        if not user_content.strip() or not assistant_content.strip():
+            return
+
+        # Update self._session_id 跟最新 — hermes 可能 rotate session_id, journal entry
+        # 用最新 sid (避免老 init 时 session_id 跟当前 turn 不一致)
+        if session_id:
+            self._session_id = session_id
+
+        # 节流判断 + 累积 — 整段在 lock 里, 防多线程并发
+        should_trigger = False
+        snapshot_pairs: List[Tuple[str, str]] = []
+        last_ts_before_update = 0.0  # capture 给 lock 外 mtime check 用
+        with self._buffer_lock:
+            self._turn_buffer.append(("user", user_content))
+            self._turn_buffer.append(("assistant", assistant_content))
+            self._turns_since_last_summary += 1
+
+            n_turns_threshold = self._get_n_turns_threshold()
+            min_interval = self._get_min_interval_seconds()
+            now = time.time()
+            elapsed = now - self._last_summary_ts if self._last_summary_ts else float("inf")
+
+            # 节流 A: 累积 N 轮
+            triggered_by_n = self._turns_since_last_summary >= n_turns_threshold
+            # 节流 B: 距上次足够久 (且 buffer 至少有 1 轮)
+            triggered_by_time = (
+                elapsed >= min_interval
+                and self._turns_since_last_summary >= 1
+            )
+
+            if triggered_by_n or triggered_by_time:
+                should_trigger = True
+                # 截 snapshot 后清 buffer, lock 释放后 spawn thread
+                snapshot_pairs = list(self._turn_buffer)
+                self._turn_buffer.clear()
+                self._turns_since_last_summary = 0
+                last_ts_before_update = self._last_summary_ts  # for mtime check
+                self._last_summary_ts = now
+
+        if not should_trigger:
+            return
+
+        # 双写期幂等 — gateway 刚写过 (file mtime 比 plugin 自己上次 trigger 还新)
+        # 才 skip. plugin 自己写完后 mtime ≈ last_summary_ts, 不会撞这条.
+        # 5s buffer 避开 filesystem timestamp resolution + race window.
+        if self._journal_written_externally(last_ts_before_update):
+            logger.info(
+                "catfish-memory sync_turn: detected external journal write (gateway?) "
+                "after our last summary, skip dup"
             )
             return
 
-        pairs = _extract_message_pairs(messages)
-        if not pairs:
-            logger.debug("on_session_end: 没 user/assistant 对话对, 跳过")
+        self._spawn_summarize_thread(snapshot_pairs, model)
+
+    def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
+        """hermes session 真结束 hook — force flush buffer 剩余对话 (兜底).
+
+        session 真结束的场景 (run_agent.py:16078 注释):
+          - CLI atexit
+          - `/reset` / `/new` 命令
+          - Context compression
+          - Gateway session expiry (TTL)
+
+        on_session_end 触发时, buffer 里可能还有没满 N 轮的对话, 这里 force 总结一次,
+        不丢最后一段. 然后清 buffer 状态准备下一个 session.
+
+        messages 参数是 hermes 给的全 session messages, 我们**不用**它 — 用 buffer
+        里实际 sync_turn 累积的内容 (更精准, 跟节流逻辑一致).
+        """
+        try:
+            self._force_flush()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("catfish-memory on_session_end force flush 失败: %s", e)
+
+    def _force_flush(self) -> None:
+        """触发 buffer 里剩余对话的一次 summary (即使没满 N 轮)."""
+        if os.environ.get("CATFISH_PLUGIN_SUMMARIZE", "1") == "0":
+            return
+        model = os.environ.get("CATFISH_PLUGIN_SUMMARIZE_MODEL", "").strip()
+        if not model:
             return
 
-        # fire-and-forget — 后台 thread 跑 async LLM 调用
+        last_ts_before_update = 0.0
+        with self._buffer_lock:
+            if not self._turn_buffer:
+                return
+            snapshot_pairs = list(self._turn_buffer)
+            self._turn_buffer.clear()
+            self._turns_since_last_summary = 0
+            last_ts_before_update = self._last_summary_ts
+            self._last_summary_ts = time.time()
+
+        # 双写期幂等 — 跟 sync_turn 同套路, 用 last_summary_ts 而非 file mtime 当 baseline
+        if self._journal_written_externally(last_ts_before_update):
+            logger.info(
+                "catfish-memory force_flush: detected external journal write, skip dup"
+            )
+            return
+
+        self._spawn_summarize_thread(snapshot_pairs, model)
+
+    def _spawn_summarize_thread(
+        self,
+        pairs: List[Tuple[str, str]],
+        model: str,
+    ) -> None:
+        """spawn 后台 daemon thread 跑 async LLM summary + 写文件. fire-and-forget."""
+        if not pairs:
+            return
         sid = self._session_id
         catfish_home = self._catfish_home_cached or _catfish_home()
         thread = threading.Thread(
@@ -729,22 +882,54 @@ class CatfishMemoryProvider(MemoryProvider):
         )
         thread.start()
         logger.info(
-            "catfish-memory: 起后台 thread summarize session=%s msgs=%d",
-            sid, len(pairs),
+            "catfish-memory sync_turn trigger: session=%s pairs=%d (n_turns=%d / threshold=%d)",
+            sid, len(pairs), len(pairs) // 2,
+            self._get_n_turns_threshold(),
         )
 
-    def _journal_recently_written(self) -> bool:
-        """journal 文件 mtime < SUMMARIZE_DEDUP_SECONDS 视为刚被写过 (双写保护).
+    def _get_n_turns_threshold(self) -> int:
+        """读 env 拿节流 A 阈值 (每 N 轮). 默认 5."""
+        raw = os.environ.get("CATFISH_PLUGIN_SUMMARIZE_EVERY_N_TURNS", "").strip()
+        if not raw:
+            return _DEFAULT_TURNS_BETWEEN_SUMMARY
+        try:
+            n = int(raw)
+            return max(1, n)  # >=1, 不接受 0 或负
+        except ValueError:
+            return _DEFAULT_TURNS_BETWEEN_SUMMARY
 
-        典型场景: gateway 旧 caller 在 chat 完成 fire-and-forget summarize,
-        几秒后 hermes session 结束触发我们这个 hook — 我们 skip 防 dup.
+    def _get_min_interval_seconds(self) -> int:
+        """读 env 拿节流 B 阈值 (秒). 默认 1800 (30min)."""
+        raw = os.environ.get("CATFISH_PLUGIN_SUMMARIZE_MIN_INTERVAL_SECONDS", "").strip()
+        if not raw:
+            return _DEFAULT_MIN_SUMMARY_INTERVAL_SECONDS
+        try:
+            n = int(raw)
+            return max(0, n)  # >=0, 0 = 时间间隔禁用 (只靠 N 轮)
+        except ValueError:
+            return _DEFAULT_MIN_SUMMARY_INTERVAL_SECONDS
+
+    def _journal_written_externally(self, our_last_ts: float) -> bool:
+        """journal 文件 mtime 显著新于 plugin 自己上次 summary 时间 → 是别人 (gateway) 写的.
+
+        BL-MEMORY-SYNC-TURN-REFACTOR (5/20): 替代老 _journal_recently_written.
+        老逻辑用 file mtime vs absolute (5min) 判断"刚写过", 但 plugin 自己写完
+        journal 后下次触发时也撞这条, **被自己 skip**. test_sync_turn_buffer_resets
+        测试暴露了这个 bug.
+
+        新逻辑: file mtime > our_last_ts + 5s buffer → 真有别人 (gateway 老 caller)
+        在 plugin 上次 trigger 之后写了 journal, 双写期防 dup.
+
+        5s buffer 避开:
+          - macOS HFS+/APFS timestamp resolution (默认 1s 但可能不准)
+          - lock 释放 → spawn thread 跑 LLM 调用 → 写 file 这段 race window
         """
         path = (self._catfish_home_cached or _catfish_home()) / "employee_journal.md"
         try:
             if not path.exists():
                 return False
-            age = time.time() - path.stat().st_mtime
-            return age < _SUMMARIZE_DEDUP_SECONDS
+            mtime = path.stat().st_mtime
+            return mtime > our_last_ts + 5.0
         except OSError:
             return False
 
