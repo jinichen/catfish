@@ -242,10 +242,26 @@ def test_inject_employee_journal(tmp_path, monkeypatch):
 
 
 def test_inject_employee_journal_empty_noop(tmp_path, monkeypatch):
-    """journal 不存在 → 不动 messages."""
+    """journal **+ distilled** 都不存在 → 不动 messages.
+
+    BL-EMPLOYEE-JOURNAL-EMPTY-NOOP fix (5/20): inject_employee_journal 的 noop
+    条件是 journal 跟 distilled 都空 (employee_journal.py:177). 老测试只 monkeypatch
+    了 journal_path, 没 monkeypatch distilled_facts.md 路径 (它走 hardcoded
+    Path.home() / ".catfish" / "distilled_facts.md"). 真 mac 上 distilled 文件
+    有 2KB 内容, 导致测试在生产 mac 跑会 fail (inject 真触发).
+
+    修法: 同时 monkeypatch distilled_facts.md 路径指向 tmp_path 的 missing 文件,
+    保证 distilled 也读不到, 触发真 noop 路径.
+    """
     monkeypatch.setattr(
         "catfish_gateway.employee_journal.journal_path",
         lambda: tmp_path / ".catfish" / "missing.md",
+    )
+    # 同步 monkeypatch distilled_facts 路径, 防真 mac ~/.catfish/distilled_facts.md
+    # 内容污染测试. 5/20 修复.
+    monkeypatch.setattr(
+        "catfish_gateway.memory_distill.DISTILLED_FACTS_PATH",
+        tmp_path / ".catfish" / "distilled_missing.md",
     )
     msgs = [{"role": "system", "content": "sys"}]
     out = inject_employee_journal(msgs)
