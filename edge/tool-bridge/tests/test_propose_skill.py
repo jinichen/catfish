@@ -16,13 +16,19 @@ from pathlib import Path
 
 import pytest
 
-from catfish_tool_bridge import catfish_tools
+from catfish_tool_bridge import catfish_tools, catfish_tools_skill_ops
 
 
 @pytest.fixture
 def proposals_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """每个 test 独立 ~/.catfish/skill_proposals.jsonl"""
+    """每个 test 独立 ~/.catfish/skill_proposals.jsonl.
+
+    5/20 拆分后: propose_skill 在 catfish_tools_skill_ops 子模块, 函数读自己
+    module global. monkeypatch 改 skill_ops 那个才生效. catfish_tools 顶层
+    re-export 同时 patch 保持 API 一致.
+    """
     p = tmp_path / "skill_proposals.jsonl"
+    monkeypatch.setattr(catfish_tools_skill_ops, "SKILL_PROPOSALS_PATH", p)
     monkeypatch.setattr(catfish_tools, "SKILL_PROPOSALS_PATH", p)
     return p
 

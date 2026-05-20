@@ -585,7 +585,16 @@ def test_skill_install_hub_mode_mock(tmp_path: Path, monkeypatch) -> None:
     )
 
     # mock _install_from_hub 直接返这个 staging
-    from catfish_tool_bridge import catfish_tools
+    # 5/20 拆分后: skill_install 在 catfish_tools_install 子模块 (再拆从 install_and_ops 抽出),
+    # 函数读自己 module 的 _install_from_hub. 必须 patch 那边才生效.
+    from catfish_tool_bridge import catfish_tools, catfish_tools_install
+    monkeypatch.setattr(catfish_tools_install, "_install_from_hub", lambda *_a, **_kw: {
+        "ok": True,
+        "staging_dir": str(staging),
+        "hub_namespace": "shared",
+        "hub_name": "hub-skill" if "hub-skill" in str(staging) else "ns-test",
+        "hub_version": "1.0.0",
+    })
     monkeypatch.setattr(catfish_tools, "_install_from_hub", lambda *_a, **_kw: {
         "ok": True,
         "staging_dir": str(staging),
@@ -624,7 +633,16 @@ def test_skill_install_hub_namespace_override(tmp_path: Path, monkeypatch) -> No
         encoding="utf-8",
     )
 
-    from catfish_tool_bridge import catfish_tools
+    # 5/20 拆分后: skill_install 在 catfish_tools_install 子模块 (再拆从 install_and_ops 抽出),
+    # 函数读自己 module 的 _install_from_hub. 必须 patch 那边才生效.
+    from catfish_tool_bridge import catfish_tools, catfish_tools_install
+    monkeypatch.setattr(catfish_tools_install, "_install_from_hub", lambda *_a, **_kw: {
+        "ok": True,
+        "staging_dir": str(staging),
+        "hub_namespace": "shared",
+        "hub_name": "hub-skill" if "hub-skill" in str(staging) else "ns-test",
+        "hub_version": "1.0.0",
+    })
     monkeypatch.setattr(catfish_tools, "_install_from_hub", lambda *_a, **_kw: {
         "ok": True,
         "staging_dir": str(staging),
