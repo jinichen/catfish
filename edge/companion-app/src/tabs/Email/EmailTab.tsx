@@ -26,10 +26,10 @@ import {
   emailDeleteMessage,
   emailSendMessage,
   emailClassifyNow,
-  emailUrgencyMap,
   type EmailDigestItem,
   type EmailAccountItem,
 } from "../../lib/tauri";
+import { useEmailStore } from "../../store/email";
 import { useUIStore } from "../../store/ui";
 
 interface FullMessage extends EmailDigestItem {
@@ -41,7 +41,12 @@ interface FullMessage extends EmailDigestItem {
 export default function EmailTab() {
   const [items, setItems] = useState<EmailDigestItem[]>([]);
   const [accounts, setAccounts] = useState<EmailAccountItem[]>([]);
-  const [urgencyMap, setUrgencyMap] = useState<Record<string, string>>({});
+  // BL-COMPANION-EMAIL-DIGEST-STEP5 (5/20): urgencyMap 走 useEmailStore
+  // (localStorage hydrate + Rust reconcile + 跨 tab 共享, 不再 local useState).
+  const urgencyMap = useEmailStore((s) => s.urgencyMap);
+  const setUrgencyMap = useEmailStore((s) => s.setUrgencyMap);
+  const reconcileUrgency = useEmailStore((s) => s.reconcileFromRust);
+  const markEmailRead = useEmailStore((s) => s.markRead);
   const [unreadOnly, setUnreadOnly] = useState(true);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
@@ -58,16 +63,18 @@ export default function EmailTab() {
     setLoading(true);
     setError(null);
     try {
-      const [listJson, accountsJson, urgency] = await Promise.all([
+      const [listJson, accountsJson, _urgency] = await Promise.all([
         emailListFetch(unreadOnly, 100),
         emailAccountsFetch().catch(() => "[]"),
-        emailUrgencyMap().catch(() => ({})),
+        // BL-COMPANION-EMAIL-DIGEST-STEP5: 走 store.reconcileFromRust 后台拉,
+        // setUrgencyMap 不再这里调 — store 内部自己 merge + 持久化
+        reconcileUrgency().catch(() => ({})),
       ]);
+      void _urgency;
       const list = JSON.parse(listJson);
       const accs = JSON.parse(accountsJson);
       if (Array.isArray(list)) setItems(list as EmailDigestItem[]);
       if (Array.isArray(accs)) setAccounts(accs as EmailAccountItem[]);
-      setUrgencyMap(urgency || {});
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -147,6 +154,10 @@ export default function EmailTab() {
           setItems((prev) =>
             prev.map((it) => (it.id === selectedId ? { ...it, is_read: true } : it)),
           );
+          // BL-COMPANION-EMAIL-DIGEST-STEP5 sub-task 2 (5/20): 同步告诉 store
+          // 这封被读了 → 桌宠主动闲聊 (BL-E13) 不再 push 这封, 即使 24h
+          // dedup window 还在. 写 localStorage 持久化跨 Companion 重启.
+          markEmailRead(selectedId);
         }
       })
       .catch((e) => {
