@@ -22,15 +22,12 @@ import {
 import { streamChat, type OpenAITool } from "../lib/chat";
 import { checkPromiseOnly } from "../lib/promiseCheck";
 import {
-  toolBridgeListTools,
   toolBridgeCallTool,
   sessionCreate,
   sessionMessageAppend,
   sessionFinalize,
-  fetchCatalog,
 } from "../lib/tauri";
 import type { Attachment, ChatMessage, ToolCall } from "../types/chat";
-import type { CatalogModel } from "../types/catalog";
 
 // 20 轮够用 — leadership-briefing skill 多附件场景一次成功的话只 1-3 轮 (拿
 // schema + 真调). 如果模型 args 格式错循环, 也最多浪费 20 轮就停 (跟 10 轮
@@ -38,17 +35,7 @@ import type { CatalogModel } from "../types/catalog";
 // 总是踩到上限" 后调高.
 const MAX_TOOL_ROUNDS = 20;
 
-// 视觉模型 fallback 优先级 (从高到低)
-//   1. 内网 Qwen3-VL (免费, 本地, 国产 OCR 强)
-//   2. 公共 Qwen-Flash (256K 多模态, 付费, 备份)
-//   3. 公共 Gemini Flash (快, 付费)
-//   4. 公共 Gemini Pro (慢但强, 付费)
-const VISION_MODEL_PREFERENCE = [
-  "catfish-private-vision",
-  "catfish-public-qwen-flash",
-  "catfish-public-gemini-flash",
-  "catfish-public-gemini-pro",
-];
+// 5/20 拆分: VISION_MODEL_PREFERENCE 移到 chat/visionSwitch.ts (跟 maybeSwitchToVision 一起)
 
 function uuid(): string {
   return crypto.randomUUID
@@ -60,153 +47,11 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-// ─── tools 列表缓存 ───────────────────────────────────
-// 成功一次后用 cache 避免每次 send 都查 tool_bridge。
-// 失败时**不缓存**,下次 send 会重试(tool_bridge 可能晚启动 / 中途重启)。
-//
-// 三重失效策略 (鸿波 2026-04-29 多次翻车后加):
-//   1. TTL 60s — 时间到自动失效
-//   2. 关键工具缺失 — cache 里没 KEY_TOOLS 任意一个就立即重拉 (装新工具后能自动感知)
-//   3. _clearToolsCache() 显式清 — 切账号 / 重启 tool_bridge / 装新 skill 后调
-//
-// KEY_TOOLS: 如果 tool-bridge 装上了**任意一个**新关键工具但 cache 里没看到, 立即重拉.
-// 这样 Companion 启动早期拉到 8 个老工具后, tool-bridge 装上 catfish_run_skill (第 9 个),
-// 下次 chat 自动检测 cache 缺 catfish_run_skill → 重拉拿到 9 个 → 模型立即可见新工具.
-// 不需要用户 Cmd+R.
-const KEY_TOOLS = ["catfish_run_skill"];
-let _cachedTools: OpenAITool[] | null = null;
-let _cachedAt = 0;
-const _TOOLS_CACHE_TTL_MS = 60_000;
 
-function _cacheHasAllKeyTools(cached: OpenAITool[]): boolean {
-  const names = new Set(cached.map((t) => t.function.name));
-  return KEY_TOOLS.every((kt) => names.has(kt));
-}
-
-async function ensureTools(): Promise<OpenAITool[]> {
-  const now = Date.now();
-  if (
-    _cachedTools !== null
-    && now - _cachedAt < _TOOLS_CACHE_TTL_MS
-    && _cacheHasAllKeyTools(_cachedTools)
-  ) {
-    return _cachedTools;
-  }
-  if (_cachedTools !== null && !_cacheHasAllKeyTools(_cachedTools)) {
-    console.info(
-      "[catfish chat] cache 里缺关键工具, 强制重拉 tool_bridge",
-    );
-  }
-  try {
-    const list = await toolBridgeListTools();
-    const usable = list.filter((t) => t.available);
-    // tool-bridge 给的 ToolInfo 是扁平: {name, description, input_schema, emoji, toolset, available}
-    // OpenAI tools API 要求: {type:"function", function:{name, description, parameters}}
-    // input_schema 仅对应 parameters 字段; 早期版本误把整个 input_schema 当 function 用了,
-    // 结果发出去的 tool 没有 name 字段, OpenAI 兼容路径 (Qwen) 宽容能跑,
-    // 但 Gemini 走 GoogleAIStudioGeminiConfig.map_openai_params 会 KeyError: 'name' 直接挂。
-    const wire: OpenAITool[] = usable.map((t) => ({
-      type: "function" as const,
-      function: {
-        name: t.name,
-        description: t.description,
-        parameters: (t.input_schema as Record<string, unknown>) ?? {
-          type: "object",
-          properties: {},
-        },
-      },
-    }));
-    _cachedTools = wire;
-    _cachedAt = Date.now();
-    console.info(
-      `[catfish chat] 加载 ${wire.length}/${list.length} 个工具(${list.length - wire.length} 个不可用 toolset, TTL 60s)`,
-    );
-    return wire;
-  } catch (e) {
-    // tool_bridge 没启动 / unix socket 不通 - 走纯文字模式,**不缓存**让下次 send 重试
-    console.warn("[catfish chat] tool_bridge 不可达, 跳过 tools(下次重试):", e);
-    return [];
-  }
-}
-
-/** 切账号 / 重启 tool_bridge / 装新 skill 后调一次清缓存让 ensureTools 重拉 */
-export function _clearToolsCache(): void {
-  _cachedTools = null;
-  _cachedAt = 0;
-}
-
-// ─── 视觉模型自动选择 ───────────────────────────────────
-//
-// 员工带图发送时, 如果当前模型不支持视觉 (比如默认主力 deepseek-flash 是纯文本),
-// 直接发上去会被上游丢图 / 报错. 我们做透明切换:
-//   1. 拉 catalog 找 supports_vision=true 的模型
-//   2. 按 VISION_MODEL_PREFERENCE 优先级挑第一个 reachable + api_key_configured 的
-//   3. 改当前 store 的 model, 在聊天里追加一条 system 角色消息说"已切到 X"
-//
-// 失败兜底: catalog 拉不到或没视觉模型 → 用原模型硬发, 让上游报错员工自己决策
-
-interface VisionSwitchResult {
-  switched: boolean;
-  /** 改后的 model id (没切就是原值) */
-  newModel: string;
-  /** 给员工看的提示 (没切就是 null) */
-  notice: string | null;
-}
-
-async function maybeSwitchToVision(
-  currentModel: string,
-): Promise<VisionSwitchResult> {
-  let models: CatalogModel[];
-  try {
-    const cat = await fetchCatalog();
-    models = cat.models ?? [];
-  } catch (e) {
-    console.warn("[catfish chat] 拉 catalog 失败, 不切视觉模型:", e);
-    return { switched: false, newModel: currentModel, notice: null };
-  }
-
-  const cur = models.find((m) => m.id === currentModel);
-  // 当前模型已经支持视觉 → 不切
-  if (cur && cur.supports_vision) {
-    return { switched: false, newModel: currentModel, notice: null };
-  }
-
-  // visionPool: 只看 supports_vision + api_key_configured。
-  // 故意不看 is_reachable —— catalog 那个字段是 30s/15s 缓存, 抖动会误杀;
-  // 即使探测时不通, 实际请求时可能恰好通了, 不该提前 block 切换。
-  // 真不通会在 LiteLLM 调用时报 ConnectionError, 那时 fallback chain 接管。
-  const visionPool = models.filter(
-    (m) => m.supports_vision && m.api_key_configured,
-  );
-  if (visionPool.length === 0) {
-    return {
-      switched: false,
-      newModel: currentModel,
-      notice:
-        "⚠ 没有可用的视觉模型 (supports_vision=true 且配了 API key 的为空)。" +
-        "检查 catfish-private-vision 配置, 或在 .env 配 GEMINI_API_KEY / DASHSCOPE_API_KEY 启用公共视觉模型。",
-    };
-  }
-
-  for (const preferred of VISION_MODEL_PREFERENCE) {
-    const m = visionPool.find((x) => x.id === preferred);
-    if (m) {
-      return {
-        switched: true,
-        newModel: m.id,
-        notice: `🔁 检测到图片附件, 已切到「${m.display_name.split(" · ")[0] || m.id}」(原 ${cur?.display_name || currentModel} 不支持视觉)`,
-      };
-    }
-  }
-
-  // PREFERENCE 列表里都没匹配, 就用 visionPool 第一个
-  const first = visionPool[0];
-  return {
-    switched: true,
-    newModel: first.id,
-    notice: `🔁 检测到图片附件, 已切到「${first.display_name}」(原模型不支持视觉)`,
-  };
-}
+// 5/20 拆 907 → ~700: tools cache + vision switch 抽到 chat/
+export { _clearToolsCache } from "./chat/toolsCache";
+import { ensureTools } from "./chat/toolsCache";
+import { maybeSwitchToVision } from "./chat/visionSwitch";
 
 // ─── 主 hook ───────────────────────────────────
 
