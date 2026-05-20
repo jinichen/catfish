@@ -48,8 +48,7 @@ _registry_module = None
 # 模型, 不比 hermes 更不安全.
 # ============================================================
 
-_memory_store_cache: Any = None
-_memory_store_init_failed = False
+# 5/21 移到 adapter_todo.py (跟 _get_memory_store 函数一起)
 
 # ============================================================
 # BL-TODO-BRIDGE-STORE (5/16 sprint follow-up)
@@ -60,180 +59,23 @@ _memory_store_init_failed = False
 # singleton (兼容老客户端不传 session_id).
 #
 # LRU 简化: 上限 50 个 session 防 OOM. catfish 单员工本机, 实际峰值不会到.
-# ============================================================
 
-_TODO_STORE_DEFAULT_KEY = "__default__"
-_TODO_STORE_MAX_SESSIONS = 50
-_todo_store_cache: Dict[str, Any] = {}
-_todo_store_init_failed = False
-
-
-def _todo_persist_dir() -> Path:
-    """BL-TODO-STORE-PERSIST: 持久化目录 ~/.catfish/todo_store/. 不存在自动建."""
-    d = Path.home() / ".catfish" / "todo_store"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def _todo_persist_path(session_id: str) -> Path:
-    """每 session 一个 json 文件. session_id 含特殊字符 safe — 沙箱级危险不存在,
-    catfish session_id 由我们自家 sessions.rs 生成, 是 timestamp+hash 格式 safe."""
-    return _todo_persist_dir() / f"{session_id}.json"
-
-
-def _load_todo_store_from_disk(session_id: str, store: Any) -> None:
-    """从盘读 items 灌进新建的 TodoStore. 失败 silent (空 store 是合理 fallback)."""
-    path = _todo_persist_path(session_id)
-    if not path.exists():
-        return
-    try:
-        import json  # noqa: PLC0415
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        # TodoStore._items 直接 list, 简单赋值
-        if isinstance(data, list):
-            store._items = data
-            logger.info(
-                "BL-TODO-STORE-PERSIST: load session=%r %d items from disk",
-                session_id, len(data),
-            )
-    except Exception as e:
-        logger.warning(
-            "BL-TODO-STORE-PERSIST: load session=%r 失败 (盘文件可能 corrupt): %s",
-            session_id, e,
-        )
-
-
-def _persist_todo_store(session_id: str, store: Any) -> None:
-    """dispatch 后写盘. 失败 silent (in-memory 仍 OK, 下次重启丢但不阻塞当前调用)."""
-    try:
-        import json  # noqa: PLC0415
-        items = getattr(store, "_items", None)
-        if items is None:
-            return
-        path = _todo_persist_path(session_id)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(items, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logger.warning(
-            "BL-TODO-STORE-PERSIST: persist session=%r 失败: %s",
-            session_id, e,
-        )
-
-
-def _get_todo_store(session_id: Optional[str]):
-    """Per-session lazy TodoStore. session_id 缺失 → __default__ key 全局共享.
-
-    BL-TODO-STORE-PERSIST (5/16): 新建时先看盘, 有 ~/.catfish/todo_store/<sid>.json
-    就反加载. dispatch 后由 _dispatch_via_hermes_registry 调 _persist_todo_store 写盘.
-
-    简化 LRU: 超 50 session 时随机 evict 一个 oldest key (dict insertion order).
-    Evict 时同步删盘文件 (避免无限增长).
-    """
-    global _todo_store_init_failed
-    if _todo_store_init_failed:
-        return None
-
-    key = session_id or _TODO_STORE_DEFAULT_KEY
-    if key in _todo_store_cache:
-        return _todo_store_cache[key]
-
-    # LRU evict
-    if len(_todo_store_cache) >= _TODO_STORE_MAX_SESSIONS:
-        oldest_key = next(iter(_todo_store_cache))
-        _todo_store_cache.pop(oldest_key, None)
-        # 同步删盘 (防累积)
-        try:
-            _todo_persist_path(oldest_key).unlink(missing_ok=True)
-        except Exception:
-            pass
-        logger.info(
-            "BL-TODO-BRIDGE-STORE: cache 满, evict session=%r (含盘文件)", oldest_key,
-        )
-
-    try:
-        from tools.todo_tool import TodoStore  # noqa: PLC0415
-        store = TodoStore()
-        _load_todo_store_from_disk(key, store)  # 反加载
-        _todo_store_cache[key] = store
-        logger.info(
-            "BL-TODO-BRIDGE-STORE: 新建 TodoStore session=%r (cache 大小=%d, 已加载 %d items)",
-            key, len(_todo_store_cache), len(getattr(store, "_items", [])),
-        )
-        return store
-    except Exception as e:
-        logger.exception(
-            "BL-TODO-BRIDGE-STORE: TodoStore 初始化失败, todo 工具将持续返 disabled: %s",
-            e,
-        )
-        _todo_store_init_failed = True
-        return None
-
-
-def _read_hermes_memory_config() -> dict:
-    """读 ~/.hermes/config.yaml 的 memory 段. 缺失 / 解析失败返空 dict.
-
-    返回的 dict 用 MemoryStore 默认值兜底 (memory_char_limit=2200, user_char_limit=1375).
-    """
-    cfg_path = Path.home() / ".hermes" / "config.yaml"
-    if not cfg_path.exists():
-        return {}
-    try:
-        import yaml  # noqa: PLC0415  # 延迟 import, 避免影响 tool-bridge 启动速度
-        with open(cfg_path, encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-        return data.get("memory") or {}
-    except Exception as e:
-        logger.warning(
-            "BL-MEMORY-BRIDGE-STORE: 读 ~/.hermes/config.yaml memory 段失败, "
-            "用 hermes 默认 char_limit: %s",
-            e,
-        )
-        return {}
-
-
-def _get_memory_store():
-    """Lazy + cache hermes MemoryStore singleton.
-
-    第一次调用时构造 + load_from_disk(), 后续返同一实例.
-    任何步骤失败 → 标 init_failed, 一直返 None (不反复重试免刷 log).
-    """
-    global _memory_store_cache, _memory_store_init_failed
-    if _memory_store_cache is not None:
-        return _memory_store_cache
-    if _memory_store_init_failed:
-        return None
-
-    try:
-        # hermes-agent 已经在 sys.path 里 (bootstrap.bootstrap() 启动时塞的)
-        from tools.memory_tool import MemoryStore  # noqa: PLC0415
-
-        cfg = _read_hermes_memory_config()
-        store = MemoryStore(
-            memory_char_limit=int(cfg.get("memory_char_limit", 2200)),
-            user_char_limit=int(cfg.get("user_char_limit", 1375)),
-        )
-        store.load_from_disk()
-        _memory_store_cache = store
-        logger.info(
-            "BL-MEMORY-BRIDGE-STORE: hermes MemoryStore 初始化成功 "
-            "(mem_limit=%d user_limit=%d, mem_entries=%d user_entries=%d)",
-            store.memory_char_limit,
-            store.user_char_limit,
-            len(store.memory_entries),
-            len(store.user_entries),
-        )
-        return store
-    except Exception as e:
-        logger.exception(
-            "BL-MEMORY-BRIDGE-STORE: MemoryStore 初始化失败, "
-            "memory tool 将持续返 disabled. 错: %s",
-            e,
-        )
-        _memory_store_init_failed = True
-        return None
-
-
+# 5/21 拆: TodoStore + memory store init helpers 抽到 adapter_todo.py
+from .adapter_todo import (  # noqa: F401
+    _get_memory_store,
+    _get_todo_store,
+    _load_todo_store_from_disk,
+    _memory_store_cache,
+    _memory_store_init_failed,
+    _persist_todo_store,
+    _read_hermes_memory_config,
+    _TODO_STORE_DEFAULT_KEY,
+    _TODO_STORE_MAX_SESSIONS,
+    _todo_persist_dir,
+    _todo_persist_path,
+    _todo_store_cache,
+    _todo_store_init_failed,
+)
 
 def install_registry(registry_module) -> None:
     """server 启动后调一次,把 hermes 的 tools.registry 模块塞进来"""
@@ -336,161 +178,13 @@ _MM3_INLINE_PREFIX = "_(BL-MM3 上次值, 已废"
 _MM3_INLINE_MAX_OLD_LEN = 200  # 旧值塞 inline 时截到这么长
 
 
-def _extract_recall_text(raw: Any) -> str:
-    """从 hermes memory_recall 返回里提取文本.
 
-    hermes 0.10-0.12 memory_recall 返回 shape 不固定:
-      - dict: {"content": "..."} / {"text": "..."} / {"value": "..."}
-      - list: [{"content": "..."}, ...]  (取第一个的 content)
-      - str:  直接是文本
-      - None / 空 dict: 没找到
-    """
-    if raw is None:
-        return ""
-    if isinstance(raw, str):
-        return raw
-    if isinstance(raw, dict):
-        for k in ("content", "text", "value", "result"):
-            v = raw.get(k)
-            if isinstance(v, str) and v.strip():
-                return v
-        return ""
-    if isinstance(raw, list):
-        if not raw:
-            return ""
-        first = raw[0]
-        if isinstance(first, str):
-            return first
-        if isinstance(first, dict):
-            return _extract_recall_text(first)
-        return ""
-    return ""
-
-
-def _strip_old_inline_block(content: str) -> str:
-    """剥掉上一轮 BL-MM3 加的 inline 备注块, 取出"真新值".
-
-    每次 versioned save 都会拼上 `\\n\\n---\\n_(BL-MM3 上次值...)_` 备注.
-    下次再写时, 我们 read 回来的 old_text 是"含上轮备注的版本",
-    要把上轮备注剥掉, 不然 inline 块会越叠越长.
-    """
-    if not content:
-        return content
-    marker = f"\n\n---\n{_MM3_INLINE_PREFIX}"
-    idx = content.find(marker)
-    if idx == -1:
-        return content
-    return content[:idx].rstrip()
-
-
-async def _memory_save_versioned(args: Dict[str, Any]) -> Dict[str, Any]:
-    """BL-MM3: hermes memory_save 包一层版本化.
-
-    返回标准 dispatch shape: {"ok", "tool", "result", "error"}.
-
-    args 兼容两种字段名:
-      hermes 原生: {"name": "...", "content": "..."}
-      catfish 习惯: {"key": "...", "value": "..."} (兼容旧测试)
-    """
-    name = (args.get("name") or args.get("key") or "").strip()
-    new_content = args.get("content") if args.get("content") is not None else args.get("value")
-    if isinstance(new_content, str):
-        new_content = new_content.strip()
-    if not name:
-        return {
-            "ok": False, "tool": "memory_save", "result": None,
-            "error": "memory_save 需要 name (或 key) — BL-MM3 wrapper 拿不到 name 没法 read 旧值",
-        }
-    if not new_content or not isinstance(new_content, str):
-        return {
-            "ok": False, "tool": "memory_save", "result": None,
-            "error": "memory_save 需要 content (或 value) 字符串",
-        }
-
-    r = _r()
-
-    # 1. read 旧值 (失败兜底: 按"首次记"处理, 不阻塞 write)
-    old_text_raw = ""
-    read_failed = False
-    try:
-        if "memory_recall" in r.get_all_tool_names():
-            disp = r.dispatch
-            if inspect.iscoroutinefunction(disp):
-                old_resp = await disp("memory_recall", {"query": name})
-            else:
-                old_resp = await asyncio.to_thread(disp, "memory_recall", {"query": name})
-            old_text_raw = _extract_recall_text(old_resp)
-    except Exception as e:
-        logger.info("memory_save_versioned: read 旧值失败 (%s), 按首次记兜底", e)
-        read_failed = True
-        old_text_raw = ""
-
-    # 剥掉上一轮的 inline 备注块, 拿到"上一轮的真新值"
-    old_text = _strip_old_inline_block(old_text_raw)
-
-    # 2. 拼新 content
-    is_overwrite = bool(old_text)
-    no_change = is_overwrite and old_text.strip() == new_content.strip()
-    if is_overwrite and not no_change:
-        prev_truncated = old_text[:_MM3_INLINE_MAX_OLD_LEN].replace("\n", " ")
-        ellipsis = "…" if len(old_text) > _MM3_INLINE_MAX_OLD_LEN else ""
-        wrapped_content = (
-            f"{new_content}\n\n"
-            f"---\n"
-            f"{_MM3_INLINE_PREFIX}, ts={time.strftime('%Y-%m-%d %H:%M')}: "
-            f"{prev_truncated}{ellipsis})_"
-        )
-    else:
-        # 首次 / 同值 → 不加 inline 块
-        wrapped_content = new_content
-
-    # 3. 调真 hermes memory_save (传 name + content, 兼容历史 args 里的额外字段)
-    save_args = {k: v for k, v in args.items() if k not in ("key", "value")}
-    save_args["name"] = name
-    save_args["content"] = wrapped_content
-    try:
-        disp = r.dispatch
-        if inspect.iscoroutinefunction(disp):
-            raw_save = await disp("memory_save", save_args)
-        else:
-            raw_save = await asyncio.to_thread(disp, "memory_save", save_args)
-    except Exception as e:
-        logger.exception("memory_save_versioned: write 失败 (name=%s)", name)
-        return {
-            "ok": False, "tool": "memory_save", "result": None,
-            "error": f"{type(e).__name__}: {e}",
-        }
-
-    # 4. 包装返回 — 字段对齐 BL-MM2 (previous_value / overwrite / no_change / summary)
-    if no_change:
-        summary = (
-            f"'{name}' 跨 session 记忆已是这个值, 没改写历史. "
-            f"(读旧值后发现 == 新值)"
-        )
-    elif is_overwrite:
-        prev_preview = old_text[:80] + ("…" if len(old_text) > 80 else "")
-        summary = (
-            f"更新了跨 session 记忆 '{name}'. 上次值: {prev_preview!r}. "
-            f"按 BL-MM1 纪律, 你回员工时**必须**主动 quote 旧值 "
-            f"(\"我之前记的是 X, 现在改成 Y\"), 不要装作从来没记过."
-        )
-    else:
-        suffix = " (read_old 失败已兜底)" if read_failed else ""
-        summary = f"记下了跨 session 记忆 '{name}' (首次){suffix}."
-
-    result_payload: Dict[str, Any] = {
-        "type": "ok",
-        "name": name,
-        "previous_value": old_text if old_text else None,
-        "overwrite": is_overwrite,
-        "no_change": no_change,
-        "read_old_ok": not read_failed,
-        "summary": summary,
-        # 真 hermes 返回也带回 (供 LLM 看到 path/状态; 主流程会经 scrub_brand 脱敏)
-        "raw_save_response": raw_save,
-    }
-    return {"ok": True, "tool": "memory_save", "result": result_payload, "error": None}
-
+# 5/21 拆: memory_save_versioned 抽到 adapter_memory.py
+from .adapter_memory import (  # noqa: F401
+    _extract_recall_text,
+    _memory_save_versioned,
+    _strip_old_inline_block,
+)
 
 def list_tools() -> List[Dict[str, Any]]:
     """返回 OpenAI tool calling 兼容的 tool definitions。
@@ -583,132 +277,13 @@ def scrub_brand_in_result(tool_name: str, result: Any) -> Any:
 # tools/dispatch
 # ============================================================
 
-#: execute_code 误用守卫 — sandbox 子进程拿不到 hermes session, 调 catfish_*
-#: 必死锁. 这些子串只要在脚本里出现, 大概率是模型搞错 (踩过坑 2026-04-28 鸿波 demo).
-_EXECUTE_CODE_FORBIDDEN_PATTERNS = (
-    "catfish_browser_",
-    "catfish_screenshot",
-    "catfish_skill_",
-    "catfish_tool_bridge",
-    "import catfish_",
-    "from catfish_",
+# 5/21 拆: execute_code 守卫 (misuse + security) 抽到 adapter_security.py
+from .adapter_security import (  # noqa: F401
+    _check_execute_code_misuse,
+    _check_execute_code_security,
+    _EXECUTE_CODE_DANGEROUS_PATTERNS,
+    _EXECUTE_CODE_FORBIDDEN_PATTERNS,
 )
-
-
-def _check_execute_code_misuse(name: str, args: Dict[str, Any]) -> str | None:
-    """检测 execute_code 沙箱误调用 catfish 工具. 命中返回 friendly error 字符串.
-
-    返回 None = OK; 字符串 = 应该立即拒绝 + 把字符串塞进 error 字段.
-
-    为啥拦: hermes execute_code 是 bash/python sandbox 子进程, 跟 hermes 主进程
-    完全隔离, 拿不到 tool-bridge unix socket / browser session. 模型在脚本里
-    `import catfish_browser_*` 或调对应函数必死锁等 30s timeout, 浪费员工时间.
-    SOUL.md § execute_code 红线已经写过纪律, 这里加工程兜底.
-    """
-    if name not in {"execute_code", "shell_exec", "python", "bash"}:
-        return None
-    # 拼起来: code / command / input 等常见字段
-    text_parts: list[str] = []
-    for key in ("code", "command", "input", "script", "args"):
-        v = args.get(key)
-        if isinstance(v, str):
-            text_parts.append(v)
-        elif isinstance(v, list):
-            text_parts.extend(str(x) for x in v if isinstance(x, str))
-    text = "\n".join(text_parts).lower()
-    if not text:
-        return None
-    hits = [p for p in _EXECUTE_CODE_FORBIDDEN_PATTERNS if p.lower() in text]
-    if not hits:
-        return None
-    return (
-        f"⚠️ {name} 沙箱里检测到 catfish 工具调用 ({hits[0]}). "
-        f"这必失败 — sandbox 子进程拿不到 hermes browser session / tool-bridge socket. "
-        f"请用原生 tool calling 直接调 catfish_browser_* 等, 不要写脚本调. "
-        f"详见 SOUL.md § execute_code 红线."
-    )
-
-
-# 5/6 安全 P1 G3: execute_code 安全守卫.
-#
-# 真正的 sandbox 在 hermes 那边 (我们这边只是 dispatcher), 但能在 dispatcher 层
-# 拦"明显不合规"的脚本: 越权 path / 外联 / 危险 shell / 凭证读取.
-# 不绝对完备 (能被 obfuscate 绕), 但显式拦截 = "鲶鱼明确禁止这种行为", audit 留痕.
-#
-# 命中时:
-#   - 默认: 返回 error (LLM 看到, 不执行)
-#   - env CATFISH_EXEC_GUARD=warn: 只 log, 不拦 (开发期调试用)
-_EXECUTE_CODE_DANGEROUS_PATTERNS: tuple[tuple[str, str], ...] = (
-    # ── 凭证 / 敏感目录 ────────────────────────────
-    ("~/.ssh", "读员工 SSH 私钥 — 严禁"),
-    ("/.ssh/id_", "读员工 SSH 私钥 — 严禁"),
-    ("~/.aws/credentials", "读 AWS 凭证 — 严禁"),
-    ("~/.docker/config.json", "读 Docker registry 凭证 — 严禁"),
-    ("/library/keychains", "读 macOS Keychain — 严禁 (用 secret_resolver / keychain://)"),
-    ("/etc/shadow", "读 Linux 密码 hash — 严禁"),
-    ("/etc/passwd", "读系统账户清单 — 严禁"),
-    ("netrc", "读 ~/.netrc 凭证 — 严禁"),
-    # ── 网络外联 (data exfil 风险) ────────────────
-    ("curl http", "外联网络 — 严禁 (用 catfish_browser_* / catfish_fetch_url, 走 audit)"),
-    ("curl -x", "外联网络 — 严禁"),
-    ("wget http", "外联网络 — 严禁"),
-    ("requests.get(", "Python 外联网络 — 严禁 (走 catfish_fetch_url 留 audit)"),
-    ("requests.post(", "Python 外联网络 — 严禁"),
-    ("urllib.request.urlopen(", "Python 外联网络 — 严禁"),
-    ("urllib2.urlopen(", "Python 外联网络 — 严禁"),
-    ("httpx.get(", "Python 外联网络 — 严禁"),
-    ("httpx.post(", "Python 外联网络 — 严禁"),
-    ("aiohttp.clientsession", "Python 外联网络 — 严禁"),
-    ("socket.connect(", "Python raw socket — 严禁"),
-    # ── 危险 shell ──────────────────────────────
-    ("rm -rf /", "递归删根目录 — 严禁"),
-    ("rm -rf ~", "递归删 home — 严禁"),
-    (":(){:|:&};:", "fork bomb — 严禁"),
-    ("dd if=/dev/", "raw disk 操作 — 严禁"),
-    ("mkfs.", "格式化 — 严禁"),
-    ("> /dev/sd", "写裸盘 — 严禁"),
-    ("chmod 777 /", "全盘权限放开 — 严禁"),
-)
-
-
-def _check_execute_code_security(name: str, args: Dict[str, Any]) -> str | None:
-    """检测 execute_code 脚本里的危险操作 (越权/外联/凭证). 命中返回 error 字符串.
-
-    限定 execute_code / shell_exec / python / bash 工具.
-    跟 _check_execute_code_misuse 协同: misuse 拦"调错 catfish 工具" (功能错),
-    security 拦"做坏事" (安全错).
-
-    env CATFISH_EXEC_GUARD=warn 只 log 不拦 (开发期 / 信任环境用).
-    """
-    if name not in {"execute_code", "shell_exec", "python", "bash"}:
-        return None
-    text_parts: list[str] = []
-    for key in ("code", "command", "input", "script", "args"):
-        v = args.get(key)
-        if isinstance(v, str):
-            text_parts.append(v)
-        elif isinstance(v, list):
-            text_parts.extend(str(x) for x in v if isinstance(x, str))
-    text = "\n".join(text_parts).lower()
-    if not text:
-        return None
-
-    hits = [(p, reason) for p, reason in _EXECUTE_CODE_DANGEROUS_PATTERNS if p.lower() in text]
-    if not hits:
-        return None
-
-    pattern, reason = hits[0]
-    mode = (os.environ.get("CATFISH_EXEC_GUARD") or "deny").strip().lower()
-    msg = (
-        f"🛡️ execute_code 安全守卫拦截: 检测到 {pattern!r} — {reason}. "
-        f"鲶鱼禁止 LLM 通过 execute_code 做这些. "
-        f"如需读特定文件/调 API, 用对应的 catfish_* 工具走 audit log."
-    )
-    if mode == "warn":
-        # warn 模式只记录不拦 (默认 deny, 开发期调试可设 warn)
-        logger.warning("[exec_guard:warn] %s | text 前 200 字: %s", msg, text[:200])
-        return None
-    return msg
 
 
 async def dispatch_tool(

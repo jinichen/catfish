@@ -88,7 +88,15 @@ def _install_fake_registry(monkeypatch: pytest.MonkeyPatch, fake: Any) -> None:
 
 
 def _reset_memory_store_cache(monkeypatch: pytest.MonkeyPatch) -> None:
-    """每次测试前清掉模块级 cache, 防互相污染."""
+    """每次测试前清掉模块级 cache, 防互相污染.
+
+    5/21 拆分后: cache global 移到 adapter_todo.py (跟 _get_memory_store 函数一起,
+    防 cross-module read). 必须 patch 那边才生效. adapter 顶层 re-export 同 patch
+    保 API 兼容.
+    """
+    from catfish_tool_bridge import adapter_todo
+    monkeypatch.setattr(adapter_todo, "_memory_store_cache", None)
+    monkeypatch.setattr(adapter_todo, "_memory_store_init_failed", False)
     monkeypatch.setattr(adapter, "_memory_store_cache", None)
     monkeypatch.setattr(adapter, "_memory_store_init_failed", False)
 
@@ -190,7 +198,9 @@ def test_get_memory_store_init_failure_marks_failed(monkeypatch: pytest.MonkeyPa
 
     store1 = adapter._get_memory_store()
     assert store1 is None
-    assert adapter._memory_store_init_failed is True
+    # 5/21 拆: flag global 在 adapter_todo.py (函数也在那), 读那边的真实状态
+    from catfish_tool_bridge import adapter_todo
+    assert adapter_todo._memory_store_init_failed is True
 
     # 第二次调用应该直接走 short-circuit, 不再 import
     # 把 _fail_import 换成会抛不同错的版本, 验证它没被再次调用
@@ -220,7 +230,11 @@ def test_get_memory_store_init_failure_marks_failed(monkeypatch: pytest.MonkeyPa
 
 
 def _reset_todo_store_cache(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(adapter, "_todo_store_cache", {})
+    """5/21 拆分: _todo_store_cache 在 adapter_todo.py. patch 那边才生效."""
+    from catfish_tool_bridge import adapter_todo
+    monkeypatch.setattr(adapter_todo, "_todo_store_cache", {})
+    monkeypatch.setattr(adapter_todo, "_todo_store_init_failed", False)
+    monkeypatch.setattr(adapter, "_todo_store_cache", adapter_todo._todo_store_cache)
     monkeypatch.setattr(adapter, "_todo_store_init_failed", False)
 
 
