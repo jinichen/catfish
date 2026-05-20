@@ -154,3 +154,6 @@ central/certs/
 # 防 backup 文件意外 commit (BL-MEMORY-COMMIT-FIX 5/16)
 *.bak
 *.bak2
+
+# 一次性 commit 批处理脚本 — 跑完即丢, 不进 git 历史 (5/21 拆分日加)
+.commit-*-*.sh
