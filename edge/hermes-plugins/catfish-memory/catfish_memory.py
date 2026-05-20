@@ -324,6 +324,121 @@ def _gateway_url() -> str:
     return os.environ.get("CATFISH_GATEWAY_INTERNAL_URL", _DEFAULT_GATEWAY_URL).strip() or _DEFAULT_GATEWAY_URL
 
 
+# ── 文件持久化 buffer + state (BL-MEMORY-SYNC-TURN-REFACTOR Day 2, 5/20) ───
+#
+# 发现 (5/20 12:30 实测): hermes api_server 模式**每个 chat completion request
+# 创建新 AIAgent + 新 plugin instance**. 我们 plugin 内部 instance state
+# (_turn_buffer / _turns_since_last_summary / _last_summary_ts) **每次重置**,
+# 节流计数器永不累积到 5.
+#
+# Trace 证据 (5 次同 session_id curl): 5 个不同 instance id
+#   112013d10 → 111fa5710 → 1120058d0 → 112022390 → 111fda910
+#   counter_before 全 0.
+#
+# 修法: 节流 state 跨 instance 持久化到文件, plugin 每次 sync_turn 读 file
+# 状态做节流判断, 触发后写 file 清空. 文件锁 (fcntl.flock) 防并发写.
+
+#: buffer 文件 — 跨 instance 累积 user/assistant pairs, jsonl 一行一 entry
+_BUFFER_FILENAME = ".catfish_memory_buffer.jsonl"
+
+#: state 文件 — 跨 instance 存 last_summary_ts (单 dict json)
+_STATE_FILENAME = ".catfish_memory_state.json"
+
+
+def _buffer_file_path(home: Path) -> Path:
+    return home / _BUFFER_FILENAME
+
+
+def _state_file_path(home: Path) -> Path:
+    return home / _STATE_FILENAME
+
+
+def _read_buffer(home: Path) -> List[Tuple[str, str]]:
+    """读 buffer file 返 list of (role, content). 不存在/corrupt 返空."""
+    path = _buffer_file_path(home)
+    if not path.exists():
+        return []
+    pairs: List[Tuple[str, str]] = []
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            # shared lock for read (best-effort; macOS/Linux fcntl)
+            try:
+                import fcntl
+                fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+            except (OSError, ImportError):
+                pass
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                    role = obj.get("role")
+                    content = obj.get("content")
+                    if isinstance(role, str) and isinstance(content, str):
+                        pairs.append((role, content))
+                except (json.JSONDecodeError, AttributeError):
+                    continue
+    except OSError:
+        return []
+    return pairs
+
+
+def _append_to_buffer(home: Path, role: str, content: str, session_id: str) -> int:
+    """append entry to buffer file. 返新 pair 数 (len(entries) // 2)."""
+    path = _buffer_file_path(home)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    entry = json.dumps({
+        "ts": time.time(),
+        "role": role,
+        "content": content,
+        "session_id": session_id,
+    }, ensure_ascii=False)
+    try:
+        with path.open("a", encoding="utf-8") as f:
+            try:
+                import fcntl
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            except (OSError, ImportError):
+                pass
+            f.write(entry + "\n")
+    except OSError:
+        return 0
+    # count by re-reading (cheap, file 通常 < 20 entries)
+    return len(_read_buffer(home))
+
+
+def _clear_buffer(home: Path) -> None:
+    """清空 buffer file (删除)."""
+    path = _buffer_file_path(home)
+    try:
+        if path.exists():
+            path.unlink()
+    except OSError:
+        pass
+
+
+def _read_state(home: Path) -> Dict[str, Any]:
+    """读 state file. 不存在/corrupt 返空 dict."""
+    path = _state_file_path(home)
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return {}
+
+
+def _write_state(home: Path, state: Dict[str, Any]) -> None:
+    """覆盖写 state file."""
+    path = _state_file_path(home)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.write_text(json.dumps(state), encoding="utf-8")
+    except OSError:
+        pass
+
+
 def _gateway_dev_token() -> str:
     """从 env 拿 gateway internal dev token. 没设返空 (caller skip).
 
@@ -739,6 +854,24 @@ class CatfishMemoryProvider(MemoryProvider):
         session_id: str = "",
     ) -> None:
         """hermes per-turn hook — 累积 + 节流 trigger summary (fire-and-forget)."""
+        # --- BL-MEMORY-SYNC-TURN-REFACTOR Day 2 trace (5/20): 验证 hermes 调到 + 节流状态
+        try:
+            _home = self._catfish_home_cached or _catfish_home()
+            _file_pairs = len(_read_buffer(_home))
+            _file_state = _read_state(_home)
+            with open(os.path.expanduser("~/.catfish/_sync_turn_trace.log"), "a") as _tf:
+                _tf.write(
+                    f"{time.strftime('%Y-%m-%d %H:%M:%S')} "
+                    f"sync_turn: inst={id(self):x} "
+                    f"file_pairs_before={_file_pairs} "
+                    f"last_summary_ts={_file_state.get('last_summary_ts', 0)} "
+                    f"u_len={len(user_content or '')} "
+                    f"a_len={len(assistant_content or '')} "
+                    f"sid={session_id[:12]}\n"
+                )
+        except Exception:
+            pass
+        # --- END trace
         try:
             self._sync_turn_impl(user_content, assistant_content, session_id)
         except Exception as e:  # noqa: BLE001 - 全 catch, 不能让 hermes 挂
@@ -750,67 +883,58 @@ class CatfishMemoryProvider(MemoryProvider):
         assistant_content: str,
         session_id: str,
     ) -> None:
-        # Env gate: CATFISH_PLUGIN_SUMMARIZE=0 整体关掉 (回滚兜底)
+        # Env gate
         if os.environ.get("CATFISH_PLUGIN_SUMMARIZE", "1") == "0":
             return
-
-        # model 必须设
         model = os.environ.get("CATFISH_PLUGIN_SUMMARIZE_MODEL", "").strip()
         if not model:
             return
 
-        # 过滤非 str (None / list / int 等) 先, 再 strip 判断 (避免对 None .strip)
+        # 过滤非 str / 空 content
         if not isinstance(user_content, str) or not isinstance(assistant_content, str):
             return
         if not user_content.strip() or not assistant_content.strip():
             return
 
-        # Update self._session_id 跟最新 — hermes 可能 rotate session_id, journal entry
-        # 用最新 sid (避免老 init 时 session_id 跟当前 turn 不一致)
+        # Update self._session_id 跟最新
         if session_id:
             self._session_id = session_id
 
-        # 节流判断 + 累积 — 整段在 lock 里, 防多线程并发
-        should_trigger = False
-        snapshot_pairs: List[Tuple[str, str]] = []
-        last_ts_before_update = 0.0  # capture 给 lock 外 mtime check 用
-        with self._buffer_lock:
-            self._turn_buffer.append(("user", user_content))
-            self._turn_buffer.append(("assistant", assistant_content))
-            self._turns_since_last_summary += 1
+        home = self._catfish_home_cached or _catfish_home()
 
-            n_turns_threshold = self._get_n_turns_threshold()
-            min_interval = self._get_min_interval_seconds()
-            now = time.time()
-            elapsed = now - self._last_summary_ts if self._last_summary_ts else float("inf")
+        # 累积到文件 buffer (跨 instance 持久化 — 因为 hermes api_server 每 chat 新 instance)
+        _append_to_buffer(home, "user", user_content, session_id)
+        new_entry_count = _append_to_buffer(home, "assistant", assistant_content, session_id)
+        n_pairs = new_entry_count // 2
 
-            # 节流 A: 累积 N 轮
-            triggered_by_n = self._turns_since_last_summary >= n_turns_threshold
-            # 节流 B: 距上次足够久 (且 buffer 至少有 1 轮)
-            triggered_by_time = (
-                elapsed >= min_interval
-                and self._turns_since_last_summary >= 1
-            )
+        # 读 state (last_summary_ts)
+        state = _read_state(home)
+        last_ts = float(state.get("last_summary_ts", 0))
 
-            if triggered_by_n or triggered_by_time:
-                should_trigger = True
-                # 截 snapshot 后清 buffer, lock 释放后 spawn thread
-                snapshot_pairs = list(self._turn_buffer)
-                self._turn_buffer.clear()
-                self._turns_since_last_summary = 0
-                last_ts_before_update = self._last_summary_ts  # for mtime check
-                self._last_summary_ts = now
+        # 节流判断
+        n_threshold = self._get_n_turns_threshold()
+        min_interval = self._get_min_interval_seconds()
+        now = time.time()
+        elapsed = (now - last_ts) if last_ts > 0 else float("inf")
 
-        if not should_trigger:
+        triggered_by_n = n_pairs >= n_threshold
+        # 时间节流: 必须 last_ts 真有值 (>0) 且超 min_interval 且至少 1 pair
+        triggered_by_time = (
+            last_ts > 0 and elapsed >= min_interval and n_pairs >= 1
+        )
+
+        if not (triggered_by_n or triggered_by_time):
             return
 
-        # 双写期幂等 — gateway 刚写过 (file mtime 比 plugin 自己上次 trigger 还新)
-        # 才 skip. plugin 自己写完后 mtime ≈ last_summary_ts, 不会撞这条.
-        # 5s buffer 避开 filesystem timestamp resolution + race window.
-        if self._journal_written_externally(last_ts_before_update):
+        # Trigger: snapshot buffer + 清 file + update state
+        snapshot_pairs = _read_buffer(home)
+        _clear_buffer(home)
+        _write_state(home, {"last_summary_ts": now})
+
+        # 双写期幂等 — gateway 刚写过 file mtime 比 plugin 上次 trigger 还新, skip
+        if self._journal_written_externally(last_ts):
             logger.info(
-                "catfish-memory sync_turn: detected external journal write (gateway?) "
-                "after our last summary, skip dup"
+                "catfish-memory sync_turn: external journal write detected, skip dup"
             )
             return
 
@@ -844,20 +968,20 @@ class CatfishMemoryProvider(MemoryProvider):
         if not model:
             return
 
-        last_ts_before_update = 0.0
-        with self._buffer_lock:
-            if not self._turn_buffer:
-                return
-            snapshot_pairs = list(self._turn_buffer)
-            self._turn_buffer.clear()
-            self._turns_since_last_summary = 0
-            last_ts_before_update = self._last_summary_ts
-            self._last_summary_ts = time.time()
+        home = self._catfish_home_cached or _catfish_home()
+        snapshot_pairs = _read_buffer(home)
+        if not snapshot_pairs:
+            return
 
-        # 双写期幂等 — 跟 sync_turn 同套路, 用 last_summary_ts 而非 file mtime 当 baseline
-        if self._journal_written_externally(last_ts_before_update):
+        # 读 state 拿 last_ts (给 mtime check 用), 然后 clear + update
+        state = _read_state(home)
+        last_ts = float(state.get("last_summary_ts", 0))
+        _clear_buffer(home)
+        _write_state(home, {"last_summary_ts": time.time()})
+
+        if self._journal_written_externally(last_ts):
             logger.info(
-                "catfish-memory force_flush: detected external journal write, skip dup"
+                "catfish-memory force_flush: external journal write detected, skip dup"
             )
             return
 
@@ -924,6 +1048,10 @@ class CatfishMemoryProvider(MemoryProvider):
           - macOS HFS+/APFS timestamp resolution (默认 1s 但可能不准)
           - lock 释放 → spawn thread 跑 LLM 调用 → 写 file 这段 race window
         """
+        # our_last_ts <= 0 表示 plugin 没"上次 summary" — 不能判断别人写过. 第一次
+        # trigger 时这种情况, journal 即使有 (gateway 时代留下的) 也不该 skip plugin.
+        if our_last_ts <= 0:
+            return False
         path = (self._catfish_home_cached or _catfish_home()) / "employee_journal.md"
         try:
             if not path.exists():

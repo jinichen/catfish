@@ -198,8 +198,9 @@ def test_sync_turn_time_throttle_triggers_after_interval(
     monkeypatch.setenv("CATFISH_PLUGIN_SUMMARIZE_EVERY_N_TURNS", "100")  # N 几乎不触发
     monkeypatch.setenv("CATFISH_PLUGIN_SUMMARIZE_MIN_INTERVAL_SECONDS", "60")
 
-    # 假装 90 秒前刚 summary 过
-    provider._last_summary_ts = time.time() - 90  # 跨阈值
+    # 预设 file state: 90 秒前刚 summary 过 (file 持久化 state, 跨 instance)
+    import catfish_memory as _cm
+    _cm._write_state(fake_home, {"last_summary_ts": time.time() - 90})
 
     provider.sync_turn("u0", "a0", session_id="s1")
     # 触发 (距上次 >= 60s + 至少 1 轮)
@@ -213,36 +214,34 @@ def test_sync_turn_time_throttle_no_trigger_within_interval(
     monkeypatch.setenv("CATFISH_PLUGIN_SUMMARIZE_EVERY_N_TURNS", "100")
     monkeypatch.setenv("CATFISH_PLUGIN_SUMMARIZE_MIN_INTERVAL_SECONDS", "60")
 
-    # 刚 5 秒前 summary 过
-    provider._last_summary_ts = time.time() - 5
+    # 预设 file state: 刚 5 秒前 summary 过
+    import catfish_memory as _cm
+    _cm._write_state(fake_home, {"last_summary_ts": time.time() - 5})
 
     for i in range(3):
         provider.sync_turn(f"u{i}", f"a{i}", session_id="s1")
     assert len(mock_llm["summarize"]) == 0
 
 
-def test_sync_turn_time_throttle_disabled_when_interval_zero(
+def test_sync_turn_time_throttle_disabled_when_no_prior_summary(
     provider, env_enable, mock_llm, sync_thread, fake_home, monkeypatch,
 ):
-    """env interval=0 → 时间节流禁用, 只看 N 轮"""
+    """plugin 没跑过 (file state 没 last_summary_ts) → 时间节流不触发, 只靠 N 轮.
+
+    新设计 (5/20 Day 2): time-based trigger 要求 last_summary_ts > 0. 这避免了
+    plugin 首次启动 (state 没值) 撞 "elapsed=inf, 第 1 轮就触发" trivially case.
+    """
     monkeypatch.setenv("CATFISH_PLUGIN_SUMMARIZE_EVERY_N_TURNS", "5")
     monkeypatch.setenv("CATFISH_PLUGIN_SUMMARIZE_MIN_INTERVAL_SECONDS", "0")
+    # 不写 state file → last_summary_ts 默认 0
 
-    # interval=0 + last_summary_ts 很久之前 — 应该 elapsed > 0 总是 True
-    # 但 triggered_by_time 还要求 turns >= 1, 第 1 轮就触发?
-    # 0 实际意思是禁用时间节流 (永远不靠时间触发, 不是"任何时间都触发").
-    # 看实现: triggered_by_time = elapsed >= min_interval and turns >= 1
-    # min_interval=0 → elapsed >= 0 True (除非负, 永真) + turns >= 1 → 第 1 轮就触发.
-    # 这是 "interval=0 = 时间禁用" 的反语义. 我们要重新理解 — 实际上意思是
-    # "interval=0 → 时间节流条件 trivially 满足, 所以每轮都触发". 这不是禁用.
-    #
-    # 修法: 实现里 if min_interval <= 0 应当 disable time-based trigger.
-    # 但这跟当前代码不一致 — 当前 min_interval=0 会让时间路径每轮 trigger.
-    #
-    # 测试断言: interval=0 时, 第 1 轮就触发 (按当前实现).
-    # TODO: 如果想 0=disable, 改实现里 max(0, ...) → 加 if min_interval == 0: 跳时间分支
     provider.sync_turn("u0", "a0", session_id="s1")
-    assert len(mock_llm["summarize"]) == 1  # interval=0 实际让第 1 轮就触发
+    # 第 1 轮: file_pairs=1, 不满 N=5, 时间分支要求 last_ts>0 (默认 0) 不触发
+    assert len(mock_llm["summarize"]) == 0
+    # 累积 5 轮才触发
+    for i in range(1, 5):
+        provider.sync_turn(f"u{i}", f"a{i}", session_id="s1")
+    assert len(mock_llm["summarize"]) == 1
 
 
 # ── Env 控制 ─────────────────────────────────────────
@@ -316,26 +315,25 @@ def test_sync_turn_skips_non_string_content(
 def test_sync_turn_skips_writing_when_external_write_detected(
     provider, env_enable, mock_llm, sync_thread, fake_home,
 ):
-    """模拟 gateway 在 plugin init 之后写了 journal (mtime > our_last_ts + 5s)
+    """模拟 gateway 在 plugin 上次 summary 之后写了 journal (mtime > our_last_ts + 5s)
     → 视为外部写, plugin skip 避免 dup."""
-    # plugin init 时 _last_summary_ts = init_time. 我们把它强制设回 30s 前,
-    # 然后 journal mtime 设到 10s 前 (= init - 30 + 20 = init - 10).
-    # mtime (init-10) > our_last_ts (init-30) + 5 → True, skip ✓
+    import catfish_memory as _cm
     init_time = time.time()
-    provider._last_summary_ts = init_time - 30  # plugin 上次 trigger 30s 前
+    # 预设 file state: plugin 上次 summary 在 30s 前
+    _cm._write_state(fake_home, {"last_summary_ts": init_time - 30})
 
     j = fake_home / "employee_journal.md"
     j.write_text("已有内容\n", encoding="utf-8")
-    # journal mtime = 10s 前, 即 our_last_ts (30s 前) + 20s, 远超 5s buffer
+    # journal mtime = 10s 前 = our_last_ts (30s 前) + 20s, 远超 5s buffer → 判为外部
     recent = init_time - 10
     os.utime(j, (recent, recent))
 
     for i in range(5):
         provider.sync_turn(f"u{i}", f"a{i}", session_id="s1")
-    # 触发 (5 轮), 但 mtime check skip
+    # 触发 (n_pairs=5), 但 mtime check skip
     assert len(mock_llm["summarize"]) == 0
-    # counter 重置 (避免 next 5 轮 again skip — trade-off)
-    assert provider._turns_since_last_summary == 0
+    # buffer file 已被 clear (即使 skip 写, trigger 路径走完了)
+    assert _cm._read_buffer(fake_home) == []
 
 
 def test_sync_turn_proceeds_when_journal_only_written_by_plugin_itself(
@@ -521,3 +519,84 @@ def test_get_min_interval_default(provider, monkeypatch):
 def test_get_min_interval_env(provider, monkeypatch):
     monkeypatch.setenv("CATFISH_PLUGIN_SUMMARIZE_MIN_INTERVAL_SECONDS", "600")
     assert provider._get_min_interval_seconds() == 600
+
+
+# ── 文件持久化 buffer + state 跨 instance (BL-MEMORY-SYNC-TURN-REFACTOR Day 2) ─
+#
+# hermes api_server 每个 chat completion 创建新 plugin instance, instance state
+# 不能累积. 验证文件持久化跨 instance 工作.
+
+
+def test_buffer_persists_across_instances(fake_home, env_enable, mock_llm, sync_thread):
+    """5 个不同 provider instance 各调 1 次 sync_turn → 5 轮累积 → 第 5 个触发"""
+    import catfish_memory as _cm
+
+    for i in range(5):
+        # 新 instance (模拟 hermes api_server 每 chat new AIAgent)
+        p = _cm.CatfishMemoryProvider()
+        p.initialize(session_id=f"session-{i}")
+        p.sync_turn(f"user msg {i}", f"assistant reply {i}", session_id=f"session-{i}")
+
+    # 5 个 instance 各 1 turn, 累积 5 pair → 第 5 次应该触发
+    assert len(mock_llm["summarize"]) == 1
+    assert len(mock_llm["summarize"][0]["pairs"]) == 10  # 5 pair × 2 entries
+
+
+def test_buffer_file_cleared_after_trigger(fake_home, env_enable, mock_llm, sync_thread):
+    """触发后 buffer file 被清空 (file 不存在或为空)"""
+    import catfish_memory as _cm
+
+    for i in range(5):
+        p = _cm.CatfishMemoryProvider()
+        p.initialize(session_id="s1")
+        p.sync_turn(f"u{i}", f"a{i}", session_id="s1")
+
+    assert _cm._read_buffer(fake_home) == []  # buffer cleared
+
+
+def test_state_file_updated_after_trigger(fake_home, env_enable, mock_llm, sync_thread):
+    """触发后 state file 的 last_summary_ts 被更新到当前时间"""
+    import catfish_memory as _cm
+
+    before = time.time()
+    for i in range(5):
+        p = _cm.CatfishMemoryProvider()
+        p.initialize(session_id="s1")
+        p.sync_turn(f"u{i}", f"a{i}", session_id="s1")
+    after = time.time()
+
+    state = _cm._read_state(fake_home)
+    last_ts = state.get("last_summary_ts", 0)
+    assert before <= last_ts <= after
+
+
+def test_buffer_file_corrupt_recovers_gracefully(fake_home, env_enable, mock_llm, sync_thread):
+    """buffer file 内容 corrupt (非 json 行) 不挂, 跳过 corrupt 行只读合法的"""
+    import catfish_memory as _cm
+
+    buf_path = _cm._buffer_file_path(fake_home)
+    buf_path.parent.mkdir(parents=True, exist_ok=True)
+    buf_path.write_text(
+        '{"ts": 1, "role": "user", "content": "valid"}\n'
+        'this is not json\n'
+        '{"ts": 2, "role": "assistant", "content": "valid back"}\n'
+        '{}\n',  # missing role/content
+        encoding="utf-8",
+    )
+
+    pairs = _cm._read_buffer(fake_home)
+    assert len(pairs) == 2  # 只读到 valid 两个, corrupt 跳过
+    assert pairs[0] == ("user", "valid")
+    assert pairs[1] == ("assistant", "valid back")
+
+
+def test_state_file_corrupt_recovers_gracefully(fake_home, env_enable, mock_llm, sync_thread):
+    """state file 内容 corrupt → 返空 dict, 不挂"""
+    import catfish_memory as _cm
+
+    state_path = _cm._state_file_path(fake_home)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text("this is not json", encoding="utf-8")
+
+    state = _cm._read_state(fake_home)
+    assert state == {}
