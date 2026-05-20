@@ -11,6 +11,7 @@
 pub mod agent;
 pub mod audit;
 pub mod auth;
+pub mod calendar;  // BL-CALENDAR-INTEGRATION (5/20): macOS Calendar.app via osascript JXA
 pub mod chrome;
 pub mod curator;
 pub mod email;  // BL-COMPANION-EMAIL-DIGEST (5/18): 邮件简报卡的后端 shell-out
@@ -21,6 +22,7 @@ pub mod file_parse;
 pub mod gateway;
 pub mod health;
 pub mod identity;
+pub mod journal;  // BL-JOURNAL-TODO-EXTRACT (5/20): ~/.catfish/employee_journal.md TODO 抽取
 pub mod learning;
 pub mod local_search;
 pub mod logs;
@@ -28,6 +30,7 @@ pub mod memory_history;
 pub mod hermes_memory;  // BL-DASHBOARD-HERMES-MEMORY-CARD (5/16)
 pub mod pet;
 pub mod relation;
+pub mod session_goal;  // BL-BRIEFING-GOAL-INPUT (5/20): /goal UI 路径
 pub mod session_write;
 pub mod sessions;
 pub mod skill_audit;

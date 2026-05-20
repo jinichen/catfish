@@ -9,6 +9,9 @@ import { useFocusStore } from "../store/focus";
 // BL-TAB-RENAME (5/16): "对话" → "工作台". 跟 ChatGPT/Claude 区分定位:
 // catfish 是数字员工不是聊天工具, 员工在这干活. 跟 "仪表盘"形成"做事 vs 看事" 对偶.
 const TABS: { id: TabId; label: string }[] = [
+  // 5/20 BL-COMPANION-TAB-ORDER-SWAP: 早安 ↔ 工作台 互换. 早安放最左, 开窗第一眼看 today.
+  // 默认 activeTab 仍 chat (员工核心动作还是工作台对话), 只是排版上早安更显眼.
+  { id: "briefing", label: "早安" },
   { id: "chat", label: "工作台" },
   // 5/18 BL-COMPANION-EMAIL-TAB: 跟 工作台/仪表盘 纯文字对齐, 不加 📧 emoji
   // (单独加图标视觉不一致, 鸿波 5/18 反馈)

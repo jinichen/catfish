@@ -1,7 +1,8 @@
 /** 主动闲聊定时调度 — BL-E13 C-MVP (五一 sprint 5/2 收尾).
  *
- * 每天 3 个时段自动 fetch starter + 发 macOS 通知:
- *   - 9:30   早上召唤
+ * 每天多个时段自动 fetch starter + 发 macOS 通知:
+ *   - 9:00   早安播报 (BL-COMPANION-MORNING-PUSH 5/20): 邮件+日历+TODO 聚合 LLM 写
+ *   - 9:30   早上召唤 (闲聊 starter, 跟早安播报互补 — 一个是数据看板, 一个是话题切入)
  *   - 14:00  下午召唤
  *   - 17:30  傍晚 (鼓励攒今日进 journal)
  *
@@ -11,23 +12,55 @@
  *
  * 配置 (后续加 UI, 现在硬编码):
  *   localStorage["catfish:proactive_enabled"] = "true" | "false" (默认 true)
+ *   localStorage["catfish:morning_push_enabled"] = "true" | "false" (默认 true) — 单控 09:00 早安播报
  */
 
 import { useEffect } from "react";
 
+import { fetchBriefingSuggestion, fetchMergedBriefing } from "../lib/briefing";
 import { fetchProactiveStarter } from "../lib/me";
 
-import { sendNotification, petIsVisible, petEmitBubble } from "../lib/tauri";
+import {
+  calendarTodayFetch,
+  emailDigestFetch,
+  journalTodosFetch,
+  petEmitBubble,
+  petIsVisible,
+  sendNotification,
+  type CalendarEvent,
+  type JournalTodo,
+} from "../lib/tauri";
 import { useAgentStore } from "../store/agent";
+import { useChatStore } from "../store/chat";
 import { useUIStore } from "../store/ui";
 
-const TIMES_LOCAL = ["09:30", "14:00", "17:30"];
+interface ScheduledTime {
+  time: string;                 // "HH:MM"
+  source: "proactive_starter" | "morning_briefing";
+}
+
+const TIMES_LOCAL: ScheduledTime[] = [
+  { time: "09:00", source: "morning_briefing" },  // BL-COMPANION-MORNING-PUSH (5/20)
+  { time: "09:30", source: "proactive_starter" },
+  { time: "14:00", source: "proactive_starter" },
+  { time: "17:30", source: "proactive_starter" },
+];
 const _ENABLED_KEY = "catfish:proactive_enabled";
+const _MORNING_PUSH_ENABLED_KEY = "catfish:morning_push_enabled";
 const _LAST_FIRED_KEY = "catfish:proactive_last_fired";
 
 function isEnabled(): boolean {
   try {
     const v = localStorage.getItem(_ENABLED_KEY);
+    return v === null ? true : v === "true";
+  } catch {
+    return true;
+  }
+}
+
+function isMorningPushEnabled(): boolean {
+  try {
+    const v = localStorage.getItem(_MORNING_PUSH_ENABLED_KEY);
     return v === null ? true : v === "true";
   } catch {
     return true;
@@ -79,21 +112,78 @@ function nowHHMM(): string {
     .padStart(2, "0")}`;
 }
 
-async function fireOne(time: string): Promise<void> {
+/** BL-COMPANION-MORNING-PUSH (5/20): 早安播报 starter 拉取.
+ *
+ * 并发拉 邮件 / 日历 / journal TODO 三源, 喂 LLM 生成播报字符串.
+ * LLM 挂 → rule-based fallback (跟 BriefingCard 同套路). 三源全空 → 返 null skip.
+ */
+async function fetchMorningBriefingStarter(): Promise<string | null> {
+  const model = useChatStore.getState().model;
+  const personality = useAgentStore.getState().personality;
+
+  const [emailRes, calRes, todoRes] = await Promise.allSettled([
+    emailDigestFetch(50),
+    calendarTodayFetch(false),  // 走 5min 缓存, 09:00 用昨晚 fetch 的也行
+    journalTodosFetch(),
+  ]);
+
+  const unread = emailRes.status === "fulfilled"
+    ? (() => { try { const a = JSON.parse(emailRes.value); return Array.isArray(a) ? a.length : 0; } catch { return 0; } })()
+    : 0;
+  const evts = calRes.status === "fulfilled"
+    ? (() => { try { const a = JSON.parse(calRes.value); return Array.isArray(a) ? (a as CalendarEvent[]) : []; } catch { return []; } })()
+    : [];
+  const todos = todoRes.status === "fulfilled"
+    ? (() => { try { const a = JSON.parse(todoRes.value); return Array.isArray(a) ? (a as JournalTodo[]) : []; } catch { return []; } })()
+    : [];
+
+  // 三源都空 → 没必要 push
+  if (unread === 0 && evts.length === 0 && todos.length === 0) {
+    return null;
+  }
+
+  // BL-BRIEFING-LLM-MERGE (5/20): 试合并版 (1 调拿 todos + suggestion).
+  // 桌宠 push 只用 suggestion, todos 部分丢掉 — 老路径 fallback 用单调用 suggestion.
+  // BL-BRIEFING-LLM-PERSONALITY (5/20): 喂员工选的桌宠人格给 LLM
+  const merged = await fetchMergedBriefing(unread, evts, todos, model, [], personality);
+  if (merged) return merged.suggestion;
+
+  // fallback 单调用 suggestion
+  return await fetchBriefingSuggestion(unread, evts, todos, model, personality);
+}
+
+async function fireOne(time: string, source: ScheduledTime["source"]): Promise<void> {
   try {
-    console.log(`[proactive] fireOne(${time}): 拉 starter...`);
-    const s = await fetchProactiveStarter();
-    if (!s || !s.starter) {
-      console.warn(
-        `[proactive] fireOne(${time}): fetchProactiveStarter 没返 starter, 跳过. 检查 gateway /me/proactive_starter 接口或 LLM 配置.`,
-        s,
-      );
-      // 5/6 fix: 已经 markFired 了, 不还原. 网络瞬挂的话员工今天这条就丢了 —
-      // tradeoff: 防 StrictMode 双 mount 重复 fire (LLM 多花 token + 双气泡 spam)
-      // > "瞬时网络挂导致今天那 1 条丢" (员工还有 dashboard 卡 + 下个时段补).
-      return;
+    console.log(`[proactive] fireOne(${time}, ${source}): 拉 starter...`);
+
+    let starter: string | null = null;
+    if (source === "morning_briefing") {
+      // BL-COMPANION-MORNING-PUSH (5/20): 09:00 早安播报路径
+      if (!isMorningPushEnabled()) {
+        console.log(`[proactive] morning_push disabled (localStorage), skip ${time}`);
+        return;
+      }
+      starter = await fetchMorningBriefingStarter();
+      if (!starter) {
+        console.log(`[proactive] fireOne(${time}, morning_briefing): 三源都空, skip`);
+        return;
+      }
+      // 加个开头让员工知道这是"早安"而不是普通闲聊
+      starter = `☀️ 早, ${starter}`;
+    } else {
+      // 老 proactive_starter 路径 (LLM 看 journal + 时段生成闲聊话题)
+      const s = await fetchProactiveStarter();
+      if (!s || !s.starter) {
+        console.warn(
+          `[proactive] fireOne(${time}, proactive_starter): fetchProactiveStarter 没返 starter, 跳过.`,
+          s,
+        );
+        return;
+      }
+      starter = s.starter;
     }
-    console.log(`[proactive] fireOne(${time}): starter="${s.starter.slice(0, 60)}..."`);
+
+    console.log(`[proactive] fireOne(${time}, ${source}): starter="${starter.slice(0, 60)}..."`);
     // 5/18 BL-COMPANION-VITE-CHUNK-WARN: useAgentStore 顶部 static (跟 App.tsx 等保持一致).
     const agentName = useAgentStore.getState().name || "小鲶";
 
@@ -103,7 +193,7 @@ async function fireOne(time: string): Promise<void> {
     //   1. 总是 prefill chat input (员工开 Companion 时一眼看到 starter, 改一下就发)
     //   2. 桌宠 visible → emit pet_bubble (桌宠头顶冒气泡, 桌宠 idle → thinking)
     //      桌宠 hidden  → 兜底 macOS 通知 (员工自己关了桌宠, 不能漏消息)
-    useUIStore.getState().startProactiveChat(s.starter);
+    useUIStore.getState().startProactiveChat(starter);
 
     let usedBubble = false;
     try {
@@ -111,7 +201,7 @@ async function fireOne(time: string): Promise<void> {
       console.log(`[proactive] 桌宠 visible=${visible}`);
       if (visible) {
         // 5/6: emitTo frontend 跨窗目测不可靠, 走 Rust 命令 (app.emit_to) 100% 准
-        const diag = await petEmitBubble(s.starter, agentName);
+        const diag = await petEmitBubble(starter, agentName);
         console.log("[proactive] pet_emit_bubble Rust 返回诊断:", diag);
         usedBubble = true;
       }
@@ -119,13 +209,17 @@ async function fireOne(time: string): Promise<void> {
       console.warn("[proactive] pet_is_visible 失败, fallback macOS 通知:", e);
     }
     if (!usedBubble) {
-      console.log(`[proactive] 桌宠不可见, 走 macOS 通知 fallback`);
-      await sendNotification(`${agentName}想跟你聊一句`, s.starter);
+      // morning_briefing 用 "☀️ 早安播报" 标题更明确; proactive_starter 用老"想跟你聊一句"
+      const title = source === "morning_briefing"
+        ? `☀️ ${agentName}的早安播报`
+        : `${agentName}想跟你聊一句`;
+      console.log(`[proactive] 桌宠不可见, 走 macOS 通知 fallback (${title})`);
+      await sendNotification(title, starter);
     }
     // 5/6 fix: markFired 已在 tick() 决定 fire 时立即标过, 这里不重复.
-    console.log(`[proactive] fireOne(${time}): ✅ 完成 (usedBubble=${usedBubble})`);
+    console.log(`[proactive] fireOne(${time}, ${source}): ✅ 完成 (usedBubble=${usedBubble})`);
   } catch (e) {
-    console.warn(`[proactive] fireOne(${time}) 失败:`, e);
+    console.warn(`[proactive] fireOne(${time}, ${source}) 失败:`, e);
   }
 }
 
@@ -160,23 +254,23 @@ export function useProactiveScheduler(): void {
       // 找"今天该发但还没发"的最近一条
       // TIMES_LOCAL 升序, 反向遍历找最近过点的没发的
       for (let i = TIMES_LOCAL.length - 1; i >= 0; i--) {
-        const t = TIMES_LOCAL[i];
+        const { time: t, source } = TIMES_LOCAL[i];
         if (firedToday.has(t)) continue;
         if (_hhmmGE(cur, t)) {
-          console.log(`[proactive] fire ${t} (now=${cur}, missed pickup)`);
+          console.log(`[proactive] fire ${t} (source=${source}, now=${cur}, missed pickup)`);
           // 5/6 fix: markFired **立即**标 — 防 React StrictMode dev mode 双 mount
           // 让 useEffect 跑两次时, 第二次 tick 看到 firedToday 已含, 不重复 fire.
           // (老代码 markFired 在 fireOne 末尾, await 期间第二个 tick 抢着进来, LLM
           //  调两次 + 员工双气泡/双通知 spam)
           markFired(t);
-          void fireOne(t);
+          void fireOne(t, source);
           return; // 一次只发一个
         }
       }
     };
 
     console.log(
-      `[proactive] scheduler 启动, times=${TIMES_LOCAL.join(",")} (mount @ ${nowHHMM()})`,
+      `[proactive] scheduler 启动, times=${TIMES_LOCAL.map((t) => `${t.time}/${t.source}`).join(",")} (mount @ ${nowHHMM()})`,
     );
     // mount 立即看一下 (员工任何时间打开都能补发当天最近过点的那条)
     tick();

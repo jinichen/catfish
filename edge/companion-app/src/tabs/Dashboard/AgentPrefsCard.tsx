@@ -8,7 +8,32 @@ import { getVersion } from "@tauri-apps/api/app";
 
 import { PERSONALITY_LABELS, type Personality } from "../../lib/agent";
 import { useAgentStore } from "../../store/agent";
-import { petShow, petHide } from "../../lib/tauri";
+import {
+  emailConfigGet,
+  petHide,
+  petShow,
+  type EmailConfigPublic,
+} from "../../lib/tauri";
+
+// BL-COMPANION-PREFS-TOGGLES (5/20): localStorage key 跟 useProactiveScheduler 对齐
+const MORNING_PUSH_KEY = "catfish:morning_push_enabled";
+
+function isMorningPushEnabled(): boolean {
+  try {
+    const v = localStorage.getItem(MORNING_PUSH_KEY);
+    return v === null ? true : v === "true";
+  } catch {
+    return true;
+  }
+}
+
+function setMorningPushEnabled(v: boolean): void {
+  try {
+    localStorage.setItem(MORNING_PUSH_KEY, v ? "true" : "false");
+  } catch {
+    /* ignore quota */
+  }
+}
 
 export default function AgentPrefsCard() {
   const name = useAgentStore((s) => s.name);
@@ -20,6 +45,31 @@ export default function AgentPrefsCard() {
   const [draftPers, setDraftPers] = useState<Personality>(personality);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // BL-COMPANION-PREFS-TOGGLES (5/20): 早安 push 开关 + 邮件评级状态
+  const [morningPush, setMorningPush] = useState(isMorningPushEnabled);
+  const [emailCfg, setEmailCfg] = useState<EmailConfigPublic | null>(null);
+
+  useEffect(() => {
+    void emailConfigGet().then(setEmailCfg).catch(() => {});
+  }, []);
+
+  const toggleMorningPush = (next: boolean) => {
+    setMorningPushEnabled(next);
+    setMorningPush(next);
+  };
+
+  const openYaml = async () => {
+    if (!emailCfg?.yaml_path) return;
+    try {
+      const { open } = await import("@tauri-apps/plugin-shell");
+      // 打开整个 ~/.catfish 文件夹比直接打开 yaml 更友好 (员工能看到全部配置)
+      // 这里直接打开 yaml 文件 — 系统会用默认 editor (TextEdit / VSCode 等)
+      await open(emailCfg.yaml_path);
+    } catch (e) {
+      alert(`打开 yaml 失败: ${e}\n手动打开: ${emailCfg.yaml_path}`);
+    }
+  };
 
   const startEdit = () => {
     setDraftName(name);
@@ -145,6 +195,102 @@ export default function AgentPrefsCard() {
               点鲶鱼唤主窗 · 空白处穿透到桌面 · ⌥⇧1/2/3/4 切 4 屏角
             </div>
           </div>
+
+          {/* BL-COMPANION-PREFS-TOGGLES (5/20): 早安播报 9:00 push + 邮件 LLM 评级
+              两个 toggle. 前者 localStorage 即时, 后者 yaml 配置展示 + 跳 yaml. */}
+          <div
+            style={{
+              marginTop: "var(--space-3)",
+              paddingTop: "var(--space-2)",
+              borderTop: "1px dashed var(--catfish-border)",
+            }}
+          >
+            {/* 早安播报 toggle */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                marginBottom: 8,
+              }}
+            >
+              <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", flex: 1 }}>
+                ☀️ 早安播报 9:00 主动 push
+                <span style={{ marginLeft: 6, fontSize: 10, opacity: 0.7 }}>
+                  (邮件 / 日历 / TODO 汇总)
+                </span>
+              </span>
+              <ToggleButton
+                active={morningPush}
+                onClick={() => toggleMorningPush(true)}
+                label="开"
+              />
+              <ToggleButton
+                active={!morningPush}
+                onClick={() => toggleMorningPush(false)}
+                label="关"
+              />
+            </div>
+
+            {/* 邮件 LLM 评级 — yaml 配置展示 (只读) + 打开 yaml 按钮 */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                marginBottom: 4,
+              }}
+            >
+              <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", flex: 1 }}>
+                📬 邮件 LLM 评级
+                <span style={{ marginLeft: 6, fontSize: 10, opacity: 0.7 }}>
+                  (急 / 中 / 低 自动分类)
+                </span>
+              </span>
+              {emailCfg ? (
+                <span
+                  style={{
+                    fontSize: 11,
+                    color: emailCfg.rate_enabled ? "var(--catfish-cyan)" : "var(--catfish-text-muted)",
+                    fontWeight: 500,
+                  }}
+                >
+                  {emailCfg.rate_enabled ? "✅ 已开" : "❌ 已关"}
+                </span>
+              ) : (
+                <span style={{ fontSize: 10, color: "var(--catfish-text-muted)" }}>读取中…</span>
+              )}
+              <button
+                type="button"
+                onClick={() => void openYaml()}
+                disabled={!emailCfg?.yaml_path}
+                title={emailCfg?.yaml_path ?? "yaml 路径未知"}
+                style={{
+                  fontSize: 10,
+                  padding: "2px 8px",
+                  border: "1px solid var(--catfish-border)",
+                  borderRadius: 4,
+                  background: "transparent",
+                  color: "var(--catfish-text-muted)",
+                  cursor: emailCfg?.yaml_path ? "pointer" : "not-allowed",
+                  fontFamily: "inherit",
+                }}
+              >
+                📝 改 yaml
+              </button>
+            </div>
+            <div
+              style={{
+                fontSize: 10,
+                color: "var(--catfish-text-muted)",
+                marginLeft: 0,
+                opacity: 0.7,
+                lineHeight: 1.5,
+              }}
+            >
+              评级改要改 ~/.catfish/companion.yaml → email.rate_enabled, 重启 Companion 生效
+            </div>
+          </div>
         </>
       ) : (
         <>
@@ -250,6 +396,38 @@ export default function AgentPrefsCard() {
           其余诊断信息 (员工名 / SOUL 路径 / 活动会话 ID) 员工真需要时去"控制台" tab. */}
       <CatfishVersionFooter />
     </div>
+  );
+}
+
+/** BL-COMPANION-PREFS-TOGGLES (5/20): 两段式开/关 toggle button.
+ * active=true 高亮, 跟 桌宠 "显示 / 隐藏" 按钮风格保持一致. */
+function ToggleButton({
+  active,
+  onClick,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        fontSize: 11,
+        padding: "3px 10px",
+        border: `1px solid ${active ? "var(--catfish-cyan)" : "var(--catfish-border)"}`,
+        borderRadius: 4,
+        background: active ? "var(--catfish-bg-cream)" : "transparent",
+        color: active ? "var(--catfish-text)" : "var(--catfish-text-muted)",
+        cursor: "pointer",
+        fontFamily: "inherit",
+        fontWeight: active ? 500 : 400,
+      }}
+    >
+      {label}
+    </button>
   );
 }
 

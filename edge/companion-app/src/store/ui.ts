@@ -5,7 +5,10 @@ import { sessionCreate, sessionMessageAppend } from "../lib/tauri";
 
 // "sessions" tab 已并入 "chat" 的 sidebar (P0-3.1 后), 不再单独 tab.
 // "email" tab 5/18 BL-COMPANION-EMAIL-TAB 加 — AI 邮件管家独立 tab, 跟工作台 / 仪表盘同级.
-export type TabId = "chat" | "console" | "dashboard" | "email";
+// "briefing" tab 5/20 BL-COMPANION-DAILY-BRIEFING-MVP 加 — 早安播报独立 tab,
+//   开窗一眼看今日 (邮件 / 日历 / 工作计划 / 建议). 跟 Dashboard 解耦免跟"我的画像 /
+//   服务"等系统信息混淆.
+export type TabId = "chat" | "console" | "dashboard" | "email" | "briefing";
 
 interface UIState {
   activeTab: TabId;
@@ -28,8 +31,11 @@ interface UIState {
 }
 
 export const useUIStore = create<UIState>((set, get) => ({
-  // 默认进入对话 tab —— 这是员工最常用的功能
-  activeTab: "chat",
+  // 5/20 BL-COMPANION-TAB-ORDER-SWAP: default tab 从 chat 改 briefing —
+  // 开窗第一眼看今日总览 (邮件未读 + 日历 + 工作计划 + LLM 建议), 跟员工真实
+  // 早起开 Companion 的需求对齐. 老 default=chat 历史: BL-E11 五一 sprint 默认对话.
+  // startProactiveChat 等仍切到 chat (员工对话场景), 这里只改首次启动.
+  activeTab: "briefing",
   darkMode: false,
   aboutOpen: false,
   pendingChatPrefill: "",

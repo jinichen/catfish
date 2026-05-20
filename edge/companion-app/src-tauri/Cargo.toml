@@ -42,6 +42,8 @@ rand = "0.8"
 base64 = "0.22"
 # url 解析 query params
 url = "2"
+# BL-JOURNAL-TODO-EXTRACT (5/20): journal markdown TODO 抽取 regex
+regex = "1"
 
 [dev-dependencies]
 # tempfile: 给单测建临时 ~/.hermes 目录用 (session_write / learning / endpoints)

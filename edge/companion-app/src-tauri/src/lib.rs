@@ -388,6 +388,23 @@ pub fn run() {
             commands::curator::set_curator_config,
             commands::curator::ensure_curator_default,
             commands::curator::get_curator_state,
+            // BL-CALENDAR-INTEGRATION (5/20): macOS Calendar.app 今日 events
+            commands::calendar::calendar_today_fetch,
+            // BL-CALENDAR-WEEK (5/20): 跨日 7 天 events (今天 + 明天 + 后 5 天)
+            commands::calendar::calendar_week_fetch,
+            // BL-JOURNAL-TODO-EXTRACT (5/20): ~/.catfish/employee_journal.md 未完成 TODO
+            commands::journal::journal_todos_fetch,
+            // BL-JOURNAL-TODO-EXTRACT step2 (5/20): 读 journal 最近 5KB 给 LLM 抽自然语言 TODO
+            commands::journal::journal_read_recent,
+            // BL-JOURNAL-TODO-EDIT-CHAT Stage 1 (5/20): journal CRUD 给 LLM tool calling 改
+            commands::journal::journal_mark_todo_done,
+            commands::journal::journal_delete_todo,
+            commands::journal::journal_add_todo,
+            // BL-BRIEFING-GOAL-INPUT (5/20): /goal UI 路径 — BriefingCard 输入框
+            // 写 ~/.catfish/session_goal.txt, gateway inject_session_goal 共享同文件
+            commands::session_goal::session_goal_read,
+            commands::session_goal::session_goal_write,
+            commands::session_goal::session_goal_clear,
             // BL-COMPANION-EMAIL-DIGEST (5/18): 邮件简报 shell-out
             commands::email::email_digest_fetch,
             commands::email::email_accounts_fetch,
@@ -403,6 +420,8 @@ pub fn run() {
             commands::email::email_send_message,
             // BL-COMPANION-EMAIL-TAB-STEP2 (5/18): 评级 badge 取数
             services::email_scheduler::email_urgency_map,
+            // BL-COMPANION-PREFS-TOGGLES (5/20): 暴露 email config 给前端 AgentPrefsCard 展示
+            services::email_config::email_config_get,
             // BL-EMAIL-URGENCY-BADGE (5/18): 前端主动 batch 评级 (历史邮件也能评)
             services::email_scheduler::email_classify_now,
             // BL-COMPANION-HERMES-API-CONFIG (5/19 Phase 2-2A): 暴露 hermes_api 配置给 React

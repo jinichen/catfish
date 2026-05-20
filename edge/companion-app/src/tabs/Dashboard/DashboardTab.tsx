@@ -55,6 +55,11 @@ import SkillsMcpCard from "./SkillsMcpCard";
 // 邮件 tab (📧 邮件) 成 single source of truth, dashboard 这张删防数据漂移.
 // 源码 EmailDigestCard.tsx 留作 git 历史 / 万一回滚.
 // import EmailDigestCard from "./EmailDigestCard";
+// BL-COMPANION-DAILY-BRIEFING-MVP step1.5 (5/20 鸿波): BriefingCard 5/20 早上加在
+// Dashboard 顶, 下午改成独立 "早安" tab (tabs/Briefing/BriefingTab.tsx). Dashboard
+// 解耦"系统状态" (我的画像 / 服务 / 配额 / 设置) vs "今日要事" (邮件 / 日历 / 工作计划).
+// BriefingCard.tsx 仍保留作可复用 component, 当前只 BriefingTab 引用.
+// import BriefingCard from "./BriefingCard";
 import ProactiveCard from "./ProactiveCard";
 import AgentPrefsCard from "./AgentPrefsCard";
 import RelationCard from "./RelationCard";
@@ -103,8 +108,9 @@ export default function DashboardTab() {
       <WebPortalLink />
 
       {/* 第一组: 今日 — 主动闲聊 + 后台任务 (高频, 默认开, 顶部).
-          5/18 BL-COMPANION-EMAIL-DIGEST-REMOVE-FROM-DASHBOARD: 邮件简报已挪 📧 邮件 tab.
-          count 3 → 2. */}
+          5/18 BL-COMPANION-EMAIL-DIGEST-REMOVE-FROM-DASHBOARD: 邮件简报挪 📧 邮件 tab.
+          5/20 BL-COMPANION-DAILY-BRIEFING-MVP (step1.5): 早安播报挪独立"早安" tab.
+                count 一直 2 (BriefingCard 早上短暂在这停留半天就移走了). */}
       <CollapsibleSection
         id="today"
         title="🔥 今日"

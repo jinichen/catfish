@@ -33,13 +33,141 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tokio::time;
 
 use crate::services::{email_config, endpoints, oauth};
+
+// BL-COMPANION-BRIEFING-V2 sub-task 2 (5/20): 通知去重 + 评级持久化.
+//
+// 1. urgency_cache 现在不只 in-memory, 启动时从 ~/.catfish/email_urgency.json
+//    加载, 评完一封后异步写回 disk. Companion 重启不重评 (省 LLM token).
+// 2. 急邮件 push history 持久化到 ~/.catfish/email_push_history.json,
+//    24h 内同 id 不重复 push macOS 通知. 防"同一急邮件每次 scheduler tick 都叫醒".
+
+const DEDUP_WINDOW_SECS: u64 = 24 * 3600; // 24h
+const URGENCY_CACHE_FILE: &str = "email_urgency.json";
+const PUSH_HISTORY_FILE: &str = "email_push_history.json";
+
+/// 解 ~/.catfish/<file>. None = HOME 找不到 (不发声明跳过持久化).
+fn catfish_state_file(name: &str) -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    let mut p = PathBuf::from(home);
+    p.push(".catfish");
+    p.push(name);
+    Some(p)
+}
+
+fn now_epoch_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// 急邮件 push history: id → 上次 push 的 epoch 秒. 24h 内不重 push.
+static PUSH_HISTORY: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+fn push_history() -> &'static Mutex<HashMap<String, u64>> {
+    PUSH_HISTORY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 启动时调一次 — load urgency_cache + push_history 从 disk.
+/// 找不到文件 / 解析失败 → 静默, 当 empty (跟 5/18 老行为兼容).
+fn load_persisted_state() {
+    if let Some(path) = catfish_state_file(URGENCY_CACHE_FILE) {
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(parsed) = serde_json::from_str::<HashMap<String, String>>(&content) {
+                if let Ok(mut cache) = urgency_cache().lock() {
+                    *cache = parsed;
+                    log::info!(
+                        "email_scheduler: loaded {} urgency entries from {}",
+                        cache.len(),
+                        path.display()
+                    );
+                }
+            }
+        }
+    }
+    if let Some(path) = catfish_state_file(PUSH_HISTORY_FILE) {
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(parsed) = serde_json::from_str::<HashMap<String, u64>>(&content) {
+                if let Ok(mut hist) = push_history().lock() {
+                    // 启动时顺手 GC 24h 之前的, 防 file 越涨越大
+                    let cutoff = now_epoch_secs().saturating_sub(DEDUP_WINDOW_SECS);
+                    *hist = parsed.into_iter().filter(|(_, ts)| *ts >= cutoff).collect();
+                    log::info!(
+                        "email_scheduler: loaded {} push history entries (GC 后)",
+                        hist.len()
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// atomic write JSON map to ~/.catfish/<file>. 失败 log.debug, 不抛.
+/// .tmp + rename 防中途崩坏 — 半写文件比丢全部新增 cache 更糟.
+fn persist_json_atomic<T: Serialize>(file: &str, data: &T) {
+    let Some(path) = catfish_state_file(file) else { return };
+    let Some(parent) = path.parent() else { return };
+    let _ = std::fs::create_dir_all(parent);
+    let json = match serde_json::to_string_pretty(data) {
+        Ok(s) => s,
+        Err(e) => {
+            log::debug!("persist_json {file}: serialize 失败 {e}");
+            return;
+        }
+    };
+    let tmp = path.with_extension("json.tmp");
+    if let Err(e) = std::fs::write(&tmp, json) {
+        log::debug!("persist_json {file}: 写 tmp 失败 {e}");
+        return;
+    }
+    if let Err(e) = std::fs::rename(&tmp, &path) {
+        log::debug!("persist_json {file}: rename 失败 {e}");
+    }
+}
+
+fn persist_urgency_cache() {
+    if let Ok(cache) = urgency_cache().lock() {
+        persist_json_atomic(URGENCY_CACHE_FILE, &*cache);
+    }
+}
+
+fn persist_push_history() {
+    if let Ok(hist) = push_history().lock() {
+        persist_json_atomic(PUSH_HISTORY_FILE, &*hist);
+    }
+}
+
+/// 过滤掉 24h 内已 push 过的 id, 返还能 push 的 items (顺手把现 push 的 id 记进 history).
+/// 同时 persist push_history 到 disk.
+fn dedup_for_push<'a>(urgent: &[&'a EmailItem]) -> Vec<&'a EmailItem> {
+    let now = now_epoch_secs();
+    let cutoff = now.saturating_sub(DEDUP_WINDOW_SECS);
+    let mut hist = match push_history().lock() {
+        Ok(g) => g,
+        Err(_) => return urgent.to_vec(),  // lock 坏不该 silent skip notification
+    };
+    // GC 老 entry
+    hist.retain(|_, ts| *ts >= cutoff);
+    // 过滤未 push 过的
+    let allowed: Vec<&EmailItem> = urgent
+        .iter()
+        .copied()
+        .filter(|it| !hist.contains_key(&it.id))
+        .collect();
+    // 记录这次 push 的 id
+    for it in &allowed {
+        hist.insert(it.id.clone(), now);
+    }
+    drop(hist);  // 释放锁再写 disk
+    persist_push_history();
+    allowed
+}
 
 /// app handle 句柄, 给 background task 用来 emit Tauri 事件给前端.
 /// schedule_email_scheduler() 启动时存进来.
@@ -160,6 +288,8 @@ pub async fn email_classify_now(
             }
         }
     }
+    // BL-COMPANION-BRIEFING-V2 sub-task 2 (5/20): 持久化, 重启不重评
+    persist_urgency_cache();
 
     Ok(urgency_cache().lock().map(|c| c.clone()).unwrap_or_default())
 }
@@ -185,6 +315,10 @@ pub fn schedule_email_scheduler(app: AppHandle) {
     let _ = APP_HANDLE.set(app);
     let cfg = email_config::email_config();
     let poll_secs = cfg.poll_secs;
+
+    // BL-COMPANION-BRIEFING-V2 sub-task 2 (5/20): load 持久化的 urgency cache +
+    // push history. Companion 重启不重评 / 不再叫醒同一急邮件 24h.
+    load_persisted_state();
 
     if poll_secs == 0 {
         log::info!("email_scheduler: poll_secs=0 (yaml/env 关掉), 不起调度");
@@ -248,6 +382,9 @@ pub fn schedule_email_scheduler(app: AppHandle) {
                                     for k in keys { cache.remove(&k); }
                                 }
                             }
+                            // BL-COMPANION-BRIEFING-V2 sub-task 2 (5/20): 评完一批
+                            // 异步写 urgency_cache 到 disk. 失败静默, 不阻塞 scheduler.
+                            persist_urgency_cache();
 
                             let urgent: Vec<&EmailItem> = rated
                                 .iter()
@@ -261,7 +398,20 @@ pub fn schedule_email_scheduler(app: AppHandle) {
                                 rated.iter().filter(|u| **u == Urgency::Low).count(),
                             );
                             if !urgent.is_empty() {
-                                send_notification(&urgent);
+                                // BL-COMPANION-BRIEFING-V2 sub-task 2 (5/20): 24h dedup
+                                // 同一急邮件不重复 push macOS 通知. 第一次 push 之后,
+                                // 24h 内 scheduler tick 检测到这封仍 unread 不再叫醒.
+                                // 仍 emit Tauri 事件给前端 — 前端桌宠主动闲聊 path
+                                // (BL-E13 step4) 自己有 dedup, 这里不替它做主.
+                                let to_push = dedup_for_push(&urgent);
+                                if !to_push.is_empty() {
+                                    send_notification(&to_push);
+                                } else {
+                                    log::info!(
+                                        "email_scheduler: {} 急邮件 24h 内已 push 过, 跳过通知",
+                                        urgent.len()
+                                    );
+                                }
                                 emit_urgent_event(&urgent);
                             }
                         }
@@ -505,6 +655,15 @@ fn emit_urgent_event(urgent: &[&EmailItem]) {
         count: urgent.len(),
         starter,
         ids: urgent.iter().map(|i| i.id.clone()).collect(),
+        // BL-EMAIL-URGENT-LLM-PUSH (5/20): 多带 metadata 让前端调 LLM 写 starter
+        // 不用回查 (没这个字段前端要再调 email_urgency_map + email list).
+        items: urgent
+            .iter()
+            .map(|i| UrgentItemMeta {
+                subject: i.subject.clone(),
+                sender: i.sender.clone(),
+            })
+            .collect(),
     };
 
     if let Err(e) = app.emit("catfish:email-urgent", &payload) {
@@ -519,6 +678,13 @@ struct UrgentEventPayload {
     count: usize,
     starter: String,
     ids: Vec<String>,
+    items: Vec<UrgentItemMeta>,
+}
+
+#[derive(Serialize, Clone)]
+struct UrgentItemMeta {
+    subject: String,
+    sender: String,
 }
 
 /// 通过 osascript display notification 发 macOS 系统通知.
@@ -663,5 +829,69 @@ mod tests {
     #[test]
     fn truncate_chinese_counts_chars() {
         assert_eq!(truncate("一二三四五六", 3), "一二三…");
+    }
+
+    // ── BL-COMPANION-BRIEFING-V2 sub-task 2 (5/20): 通知去重 ──
+
+    fn mk(id: &str) -> EmailItem {
+        EmailItem {
+            id: id.to_string(),
+            subject: "test".to_string(),
+            sender: "x@y.com".to_string(),
+        }
+    }
+
+    #[test]
+    fn dedup_first_push_all_allowed() {
+        // 清空 history (其他测试可能污染 OnceLock)
+        if let Ok(mut h) = push_history().lock() { h.clear(); }
+        let a = mk("id1");
+        let b = mk("id2");
+        let urgent = vec![&a, &b];
+        let allowed = dedup_for_push(&urgent);
+        assert_eq!(allowed.len(), 2);
+    }
+
+    #[test]
+    fn dedup_repeat_push_blocked() {
+        // 清空起步
+        if let Ok(mut h) = push_history().lock() { h.clear(); }
+        let a = mk("dup-id-A");
+        let urgent = vec![&a];
+        let first = dedup_for_push(&urgent);
+        assert_eq!(first.len(), 1);
+        // 立即重 push 同 id → 0 allowed
+        let second = dedup_for_push(&urgent);
+        assert_eq!(second.len(), 0, "24h 内同 id 重复 push 应被拦");
+    }
+
+    #[test]
+    fn dedup_old_entry_expired_after_24h() {
+        // 清空 + 注入一个 25h 前的 entry
+        if let Ok(mut h) = push_history().lock() {
+            h.clear();
+            let old_ts = now_epoch_secs().saturating_sub(25 * 3600);
+            h.insert("old-id".to_string(), old_ts);
+        }
+        let a = mk("old-id");
+        let urgent = vec![&a];
+        // 25h 前 push 过, 现在应该重新允许 push
+        let allowed = dedup_for_push(&urgent);
+        assert_eq!(allowed.len(), 1, "24h 前的 entry 已过 dedup window, 应重新 push");
+    }
+
+    #[test]
+    fn dedup_mixed_some_blocked_some_allowed() {
+        if let Ok(mut h) = push_history().lock() {
+            h.clear();
+            // id-A 1h 前已 push, 应拦; id-B 没 push 过, 应通
+            h.insert("id-A".to_string(), now_epoch_secs().saturating_sub(3600));
+        }
+        let a = mk("id-A");
+        let b = mk("id-B");
+        let urgent = vec![&a, &b];
+        let allowed = dedup_for_push(&urgent);
+        assert_eq!(allowed.len(), 1);
+        assert_eq!(allowed[0].id, "id-B");
     }
 }

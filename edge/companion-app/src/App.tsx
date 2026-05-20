@@ -12,6 +12,7 @@ import TabBar from "./components/TabBar";
 import ChatTab from "./tabs/Chat/ChatTab";
 // BL-CONSOLE-TAB-KILL (5/16): 控制台 tab 砍, ConsoleTab.tsx 源码留着作 git 历史.
 // import ConsoleTab from "./tabs/Console/ConsoleTab";
+import BriefingTab from "./tabs/Briefing/BriefingTab";  // 5/20 BL-COMPANION-DAILY-BRIEFING-MVP
 import DashboardTab from "./tabs/Dashboard/DashboardTab";
 import EmailTab from "./tabs/Email/EmailTab";  // 5/18 BL-COMPANION-EMAIL-TAB
 import { useUIStore } from "./store/ui";
@@ -72,22 +73,71 @@ export default function App() {
   }, [openAbout]);
 
   // 5/18 BL-COMPANION-EMAIL-DIGEST-STEP4: 邮件 scheduler 检测到"急"邮件 →
-  // Rust 端 emit catfish:email-urgent (含 starter 字符串). 这里接 → 走桌宠
-  // 主动闲聊路径 (跟 BL-E13 早9:30/午14:00 主动找你聊同一套 startProactiveChat).
-  // 切到 chat tab + 一条 assistant message 自动出现"张三那封紧的来了, 帮你看?"
+  // Rust 端 emit catfish:email-urgent. 这里接 → 走桌宠主动闲聊路径 (BL-E13 同套).
+  //
+  // 5/20 BL-EMAIL-URGENT-LLM-PUSH: 改用 LLM 写 starter (跟早安播报同套路, 更自然),
+  // LLM 挂了 fallback 老 Rust 拼的 hard-coded starter.
   const startProactiveChat = useUIStore((s) => s.startProactiveChat);
   useEffect(() => {
     let unlisten: (() => void) | null = null;
     void (async () => {
-      unlisten = await listen<{ count: number; starter: string; ids: string[] }>(
-        "catfish:email-urgent",
-        (event) => {
-          const { starter, count } = event.payload;
-          if (starter && count > 0) {
-            startProactiveChat(starter);
+      unlisten = await listen<{
+        count: number;
+        starter: string;
+        ids: string[];
+        items?: Array<{ subject: string; sender: string }>;
+      }>("catfish:email-urgent", async (event) => {
+        const { starter: fallbackStarter, count, items, ids } = event.payload;
+        if (!fallbackStarter || count === 0) return;
+
+        // BL-COMPANION-EMAIL-DIGEST-STEP5 sub-task 2 (5/20): 员工已点开过的急
+        // 邮件不再叫醒. Rust scheduler 24h push_history dedup 只防"刚 push 过",
+        // 不知道员工是否真读了; 前端 useEmailStore.readIds (localStorage 持久化)
+        // 记录员工真读过的 id, 这里 filter.
+        if (ids && ids.length > 0) {
+          const { useEmailStore } = await import("./store/email");
+          const readSet = useEmailStore.getState().readIds;
+          const unreadIds = ids.filter((id) => !readSet.has(id));
+          if (unreadIds.length === 0) {
+            console.log(
+              `[email-urgent] ${ids.length} 封急邮件员工都已读过, 跳过桌宠通知`,
+            );
+            return;
           }
-        },
-      );
+          if (unreadIds.length < ids.length) {
+            console.log(
+              `[email-urgent] ${ids.length - unreadIds.length}/${ids.length} 封已读, 仍 ${unreadIds.length} 封未读, 走通知`,
+            );
+          }
+        }
+
+        // BL-EMAIL-URGENT-LLM-PUSH (5/20): 调 LLM 写更自然版本
+        let finalStarter = fallbackStarter;
+        if (items && items.length > 0) {
+          try {
+            const { fetchUrgentEmailStarter } = await import("./lib/briefing");
+            const { useChatStore } = await import("./store/chat");
+            const { useAgentStore } = await import("./store/agent");
+            const model = useChatStore.getState().model;
+            const personality = useAgentStore.getState().personality;
+            const llmStarter = await fetchUrgentEmailStarter(
+              items.map((it) => ({ subject: it.subject, sender: it.sender })),
+              model,
+              personality,
+            );
+            if (llmStarter) {
+              finalStarter = llmStarter;
+              console.log(`[email-urgent] LLM starter: ${llmStarter.slice(0, 60)}`);
+            } else {
+              console.log("[email-urgent] LLM 挂, fallback scheduler starter");
+            }
+          } catch (e) {
+            console.warn("[email-urgent] LLM 异常, fallback scheduler starter", e);
+          }
+        }
+
+        startProactiveChat(finalStarter);
+      });
     })();
     return () => {
       if (unlisten) unlisten();
@@ -167,6 +217,7 @@ function AppShell({ activeTab }: { activeTab: string }) {
       <TabBar />
       <main className="app-main">
         {/* BL-CONSOLE-TAB-KILL (5/16): {activeTab === "console" && <ConsoleTab />} */}
+        {activeTab === "briefing" && <BriefingTab />}
         {activeTab === "dashboard" && <DashboardTab />}
         {activeTab === "email" && <EmailTab />}
       </main>

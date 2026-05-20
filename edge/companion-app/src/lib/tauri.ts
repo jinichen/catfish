@@ -245,6 +245,83 @@ export const openTerminal = (cwd?: string) =>
 export const sendNotification = (title: string, body: string) =>
   rawInvoke<void>("notify", { title, body });
 
+// ── prefs (BL-COMPANION-PREFS-TOGGLES 5/20) ───────────────
+// 读 email scheduler 当前 effective 配置 (truth source: ~/.catfish/companion.yaml).
+// AgentPrefsCard 显当前 rate_enabled 状态 + 打开 yaml 按钮.
+export const emailConfigGet = () =>
+  rawInvoke<EmailConfigPublic>("email_config_get");
+
+export interface EmailConfigPublic {
+  poll_secs: number;
+  rate_enabled: boolean;
+  rate_model: string;
+  yaml_path: string;
+}
+
+// ── journal TODO (BL-JOURNAL-TODO-EXTRACT 5/20) ───────────
+// Rust regex 抽 ~/.catfish/employee_journal.md 未完成 TODO. 返 JSON 字符串.
+export const journalTodosFetch = () =>
+  rawInvoke<string>("journal_todos_fetch");
+
+/** BL-JOURNAL-TODO-EXTRACT step2 (5/20): 读 journal 最近 5KB 给 LLM 抽自然语言 TODO. */
+export const journalReadRecent = () =>
+  rawInvoke<string>("journal_read_recent");
+
+/** BL-JOURNAL-TODO-EDIT-CHAT Stage 1 (5/20): journal CRUD 给 LLM tool calling 用.
+ * 双重定位 line + text_hint 防误伤 (员工改 journal 后行号偏移). */
+export const journalMarkTodoDone = (line: number, textHint: string) =>
+  rawInvoke<string>("journal_mark_todo_done", { line, textHint });
+
+export const journalDeleteTodo = (line: number, textHint: string) =>
+  rawInvoke<string>("journal_delete_todo", { line, textHint });
+
+// ── /goal UI 路径 (BL-BRIEFING-GOAL-INPUT 5/20) ───────────
+// BriefingCard "今日重点" 输入框写 ~/.catfish/session_goal.txt. gateway 端
+// inject_session_goal 仍读同一文件, chat 链路 inject 进 system 锚定 LLM.
+// CLI /goal xxx 仍工作, 共享同存储.
+export const sessionGoalRead = () =>
+  rawInvoke<string | null>("session_goal_read");
+export const sessionGoalWrite = (text: string) =>
+  rawInvoke<void>("session_goal_write", { text });
+export const sessionGoalClear = () =>
+  rawInvoke<void>("session_goal_clear");
+
+export const journalAddTodo = (text: string, section?: string) =>
+  rawInvoke<string>("journal_add_todo", { text, section: section ?? null });
+
+export interface JournalTodo {
+  text: string;
+  line: number;        // 1-based 行号
+  source: "checkbox" | "inline";
+  section: string;     // 所在段标题
+}
+
+// ── calendar (BL-CALENDAR-INTEGRATION 5/20) ───────────────
+// osascript JXA shell out 到 Calendar.app, 返今日 events JSON 字符串.
+// 前端 JSON.parse 取 CalendarEvent[] 字段.
+//
+// BL-CALENDAR-INTEGRATION step2 (5/20): Rust 端 5 分钟内存缓存.
+// 默认 (forceRefresh=false) 走缓存; ⟳ 按钮传 true 跳缓存强制刷.
+export const calendarTodayFetch = (forceRefresh = false) =>
+  rawInvoke<string>("calendar_today_fetch", { forceRefresh });
+
+// BL-CALENDAR-WEEK (5/20): 未来 7 天 events (今天 0 点 — 7 天后). 同 5min 缓存.
+export const calendarWeekFetch = (forceRefresh = false) =>
+  rawInvoke<string>("calendar_week_fetch", { forceRefresh });
+
+export interface CalendarEvent {
+  calendar: string;     // 日历名 (Home / Work / 节假日 ...)
+  summary: string;      // 事件标题
+  start: string;        // ISO-8601
+  end: string;          // ISO-8601
+  all_day: boolean;     // 全天事件 (start/end 仍 ISO 但忽略时间)
+  location?: string;    // 可选, 没填空字符串
+  // BL-COMPANION-BRIEFING-V2 (5/20): 早安播报 v2 单条 event 展开时显
+  // 没参会人 / 没描述 / 老 macOS 取不到 → 字段不存在 (JXA 仅在有值时设)
+  attendees?: string[];  // 参会人 (displayName 优先, fallback emailAddress)
+  description?: string;  // 事件描述 (JXA 端截 500 字)
+}
+
 // ── email digest (BL-COMPANION-EMAIL-DIGEST 5/18) ─────────
 // shell out catfish-email CLI, 返 raw JSON 字符串. 前端 JSON.parse 自取字段.
 export const emailDigestFetch = (limit?: number) =>

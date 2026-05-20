@@ -26,7 +26,7 @@
 
 use std::sync::OnceLock;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const DEFAULT_POLL_SECS: u64 = 600;
 const DEFAULT_RATE_MODEL: &str = "catfish-public-deepseek-flash";
@@ -99,6 +99,33 @@ static EMAIL_CONFIG: OnceLock<EmailConfig> = OnceLock::new();
 /// 改配置要重启 Companion (跟 endpoints 同模式).
 pub fn email_config() -> &'static EmailConfig {
     EMAIL_CONFIG.get_or_init(build)
+}
+
+/// BL-COMPANION-PREFS-TOGGLES (5/20): 前端展示当前 effective 配置.
+///
+/// truth source 是 ~/.catfish/companion.yaml, 改要打开文件 + 重启 Companion.
+/// 这个 command 只读, 用来在 AgentPrefsCard 显当前状态 ✅/❌.
+#[derive(Debug, Clone, Serialize)]
+pub struct EmailConfigPublic {
+    pub poll_secs: u64,
+    pub rate_enabled: bool,
+    pub rate_model: String,
+    /// yaml 文件绝对路径 (前端 shell.open 用)
+    pub yaml_path: String,
+}
+
+#[tauri::command]
+pub fn email_config_get() -> EmailConfigPublic {
+    let cfg = email_config();
+    let path = yaml_path()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    EmailConfigPublic {
+        poll_secs: cfg.poll_secs,
+        rate_enabled: cfg.rate_enabled,
+        rate_model: cfg.rate_model.clone(),
+        yaml_path: path,
+    }
 }
 
 
