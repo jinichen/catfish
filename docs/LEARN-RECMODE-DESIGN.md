@@ -351,6 +351,52 @@ skill 跑时:
 
 DOM 改了, skill 自适应跟上, **用户不用修 skill**.
 
+### 7.4 隐私路径硬约束 (5/21 加, 防自动共享)
+
+教学产物的隐私风险**远高于一般手写 skill**: 录屏可能含员工本人脸/工位、其他员工身份证号/姓名/工号、内部 URL、部门 know-how. 落地必须走双层路径, **绝不自动上传中央 Skills Hub**:
+
+#### 双层路径
+
+```
+教学 freeze
+   │
+   ├── 默认落本机 ~/.catfish/skills/<ns>/<name>/   ← 永不出员工本机
+   │     │
+   │     └── hermes registry 通过 catfish-hermes-plugin 扩展路径注册
+   │         → LLM 看得到调得到
+   │         → Curator 不扫 ~/.catfish/, 不会 archive 教学产物
+   │
+   └── 员工显式点 "📤 发布到团队 Hub" 按钮 ← 主动行为, 不自动
+         │
+         ├── publish 前 3 道扫描必跑:
+         │   (a) BL-D2 凭据扫描 (6 类正则, 5/10 已 ship)
+         │   (b) PII 扫描: 录屏 keyframe 跑 vision 检测身份证号/姓名/工号; 转写文本跑 NER (jieba + regex)
+         │   (c) 内网 URL/hostname 扫描: regex 黑名单 (10.*. / 192.168.* / *.corp.* / *.internal.*)
+         │
+         ├── 任何一道命中 → 拒上传 + 显示具体命中位置, 让员工确认是否脱敏后重传
+         │
+         └── 通过 → 走 Skills Hub 审核流 (manager publish → admin approve → live)
+                   approved 前对其他员工不可见
+```
+
+#### 硬约束 (LLM 写代码时强制遵守)
+
+| 约束 | 反模式 (LLM 不许做) |
+|---|---|
+| 教学 freeze 后**默认**落 `~/.catfish/skills/`, **不**自动 publish | freeze 末尾直接调 `catfish_skill_publish` |
+| publish 必须**员工显式点按钮**触发, **不**走 tool call | LLM 自己调 `catfish_skill_publish` 当作 freeze 一部分 |
+| publish 前 3 道扫描全过才发起请求 | 跳过扫描直接 POST 到 hub |
+| publish 弹窗必须明确警告 "会被部门/全公司看到" + 列出 3 道扫描结果 | 静默 publish, 不给员工 second-confirm 机会 |
+| 教学产物 metadata 加 `from_teaching: true` | publish 时 strip 这个字段 (避免 admin 看不出来源) |
+
+#### 跟 #11 "部门级 skill auto-推" 的边界
+
+`#11 ⬜ 部门级 skill auto-推 · 1-2 周` 这条 backlog 是潜在"自动共享"风险点. ship 前必须加约束:
+
+- **不是 publish 就推**: 员工 publish → 进个人 namespace (`<email>/<name>`), 不进部门清单
+- **Admin pull, 不是 auto-push**: admin 在 Web UI 看部门高频 skill list, 一键加进部门必装清单 (跟 Hub 审核流 manager → admin 一致)
+- **教学产物强制二次审核**: metadata `from_teaching: true` 的 skill 不能直接进部门必装清单, 必须 admin 在 Web UI 单独审 (因 PII / 内网信息泄漏后果更严重)
+
 ---
 
 ## 8. 5/19 验证计划 (鸿波周一手动检查 EIS 资质时录屏 + 语音)

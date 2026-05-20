@@ -131,6 +131,45 @@ grep -ri "<关键词>" ~/.hermes/hermes-agent/skills/ --include="*.md" | head
 
 加前缀 `catfish-` 或本地化关键词 (`zh-` / `gov-` / `enterprise-`) 显示差异. 实在没差异化 → 不写 skill, 写 cookbook.
 
+### Skill 路径 + Curator 边界 (5/21 加)
+
+**hermes Curator** (auxiliary model, 后台 archive 不活跃 skill) 的 `is_agent_created()` 判定:
+
+```python
+def is_agent_created(skill_name: str) -> bool:
+    """Whether *skill_name* is neither bundled nor hub-installed."""
+    off_limits = _read_bundled_manifest_names() | _read_hub_installed_names()
+    return skill_name not in off_limits
+```
+
+含义: 只动 `~/.hermes/skills/` 里**既不是 bundled 也不是 hub-installed** 的 skill. 推论:
+
+| catfish skill 落哪 | Curator 行为 |
+|---|---|
+| `~/.catfish/skills/<ns>/<name>/` (本机, catfish 自家路径) | ❌ Curator 看不到, 不动 |
+| `~/.hermes/skills/<ns>/<name>/` + 通过 `catfish_skill_install` 走 hub | ✅ 进 `_read_hub_installed_names()` 列表 → Curator 永不动 |
+| `~/.hermes/skills/<ns>/<name>/` 但**未**通过 hub (例: 手动 cp / 教学产物误落) | ⚠️ 被判 agent-created → 30 天没用就被 archive (可恢复但流程难) |
+
+**纪律**:
+- catfish 教学产物 (BL-LEARN-RECMODE) **默认落 `~/.catfish/skills/`**, 不进 `~/.hermes/skills/`. 详见 `docs/LEARN-RECMODE-DESIGN.md § 7.4`
+- catfish_skill_install 装的全部走 hub 路径, 自动进 `_read_hub_installed_names()`
+- 永不**手动 cp / 软链** skill 到 `~/.hermes/skills/`, 必失踪 (Curator 静默 archive)
+
+### Skills Hub 隐私边界 (5/21 加, 防"自动共享")
+
+**catfish 当前只有一个 Hub — 中央 Skills Hub**, **没有"本机 hub"概念**. publish 到 Hub = 上传中央 + 默认对全公司可见 (审核流 ⬜ 还在 backlog).
+
+教学场景 (BL-LEARN-RECMODE) 录屏 + 语音可能含 PII / 内网信息 / 部门 know-how, 风险比一般 skill 高很多. 硬约束:
+
+| 约束 | 反模式 |
+|---|---|
+| 教学 freeze 后**默认**落本机 `~/.catfish/skills/`, **不**自动 publish | freeze 末尾直接 publish |
+| publish 必须员工**显式点按钮**, 不走 LLM tool call | LLM 自己调 `catfish_skill_publish` |
+| publish 前跑 3 道扫描 (凭据 / PII / 内网 URL) 才发请求 | 跳扫描直接 POST |
+| publish 弹窗明确警告"会被部门/全公司看到" | 静默 publish |
+
+详见 `docs/LEARN-RECMODE-DESIGN.md § 7.4`. **#11 ⬜ "部门级 skill auto-推"** 是潜在自动共享风险点, ship 前必读这段.
+
 ---
 
 ## 反模式 (PR review / 设计提议时拦)
