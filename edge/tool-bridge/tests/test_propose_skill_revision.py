@@ -18,19 +18,19 @@ from pathlib import Path
 
 import pytest
 
-from catfish_tool_bridge import catfish_tools, catfish_tools_skill_ops
+from catfish_tool_bridge import catfish_tools, catfish_tools_propose, catfish_tools_skill_ops
 
 
 @pytest.fixture
 def revisions_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """每个 test 独立 ~/.catfish/skill_revisions.jsonl.
 
-    5/20 拆分后: propose_skill_revision 函数在 catfish_tools_skill_ops 子模块,
-    读自己 module 的 SKILL_REVISIONS_PATH global. monkeypatch 改这里才生效.
-    catfish_tools 顶层 re-export 也 patch 一份保持 API 一致 (老 caller 直接读
-    catfish_tools.SKILL_REVISIONS_PATH 也对).
+    5/21 再拆: propose_skill_revision 现在在 catfish_tools_propose, 读自己 module
+    的 SKILL_REVISIONS_PATH global. 也 patch 老的 catfish_tools_skill_ops 跟
+    catfish_tools 顶层 re-export 保持向后兼容.
     """
     p = tmp_path / "skill_revisions.jsonl"
+    monkeypatch.setattr(catfish_tools_propose, "SKILL_REVISIONS_PATH", p)
     monkeypatch.setattr(catfish_tools_skill_ops, "SKILL_REVISIONS_PATH", p)
     monkeypatch.setattr(catfish_tools, "SKILL_REVISIONS_PATH", p)
     return p
