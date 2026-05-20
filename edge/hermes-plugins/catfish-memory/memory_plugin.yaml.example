@@ -1,0 +1,41 @@
+# catfish-memory plugin 配置 (BL-PLUGIN-CONFIG-YAML, 5/20)
+#
+# 实际部署 copy 到 ~/.catfish/memory_plugin.yaml (plugin 自动读)
+# 跟 ~/.catfish/companion.yaml 同套路, catfish 全栈共享配置位置
+#
+# 优先级: yaml > env > hardcoded default
+# env 仍兼容 (老 .env 部署不破坏):
+#   - CATFISH_PLUGIN_SUMMARIZE
+#   - CATFISH_PLUGIN_SUMMARIZE_MODEL
+#   - CATFISH_PLUGIN_SUMMARIZE_EVERY_N_TURNS
+#   - CATFISH_PLUGIN_SUMMARIZE_MIN_INTERVAL_SECONDS
+
+# 总开关 — false 时 plugin 完全 skip, 不累积也不触发
+# 等价 env CATFISH_PLUGIN_SUMMARIZE
+enabled: true
+
+# Summary LLM 调用配置
+summarize:
+  # LLM model — plugin 后台 thread 调 gateway loopback 用这个 model
+  # 推荐内网 model (e.g., catfish-private-vision), 数据不出 Mac, 跟 charter
+  # 第 1 层护城河 "员工业务数据不出 Mac" 一致.
+  #
+  # 公网 model (catfish-public-qwen-flash / deepseek 等) 也行, 但意味着员工
+  # chat 摘要会上行到公网, 跟 charter 数据合规原则有 trade-off.
+  #
+  # 等价 env CATFISH_PLUGIN_SUMMARIZE_MODEL
+  model: catfish-private-vision
+
+  # 节流 A: 累积 N 轮 user/assistant pairs 触发 summary
+  # 实际 hermes api_server 模式每 chat completion 是 1 turn, 跨 instance 累积
+  # 到 file (~/.catfish/.catfish_memory_buffer.jsonl). 5 = 员工聊够 5 轮触发一次.
+  #
+  # 等价 env CATFISH_PLUGIN_SUMMARIZE_EVERY_N_TURNS
+  every_n_turns: 5
+
+  # 节流 B: 距上次 summary >= N 秒触发 (跟 N 轮规则取或)
+  # 0 = 禁用时间节流, 只靠 N 轮
+  # 30min = 员工聊一会儿停下来时也总结一段, 不等到满 5 轮
+  #
+  # 等价 env CATFISH_PLUGIN_SUMMARIZE_MIN_INTERVAL_SECONDS
+  min_interval_seconds: 1800

@@ -439,6 +439,54 @@ def _write_state(home: Path, state: Dict[str, Any]) -> None:
         pass
 
 
+# ── plugin 配置 yaml (BL-PLUGIN-CONFIG-YAML 5/20 Day 2.5) ─────────
+#
+# 鸿波拍板: 配置不硬编码 / env, 走 yaml 参数文件, 跟 ~/.catfish/companion.yaml
+# 同套路 (catfish 全栈共享配置位置).
+#
+# 文件路径: ~/.catfish/memory_plugin.yaml
+#
+# 优先级: yaml > env > hardcoded default. env 兜底兼容老部署.
+#
+# 内容示例:
+#   enabled: true
+#   summarize:
+#     model: catfish-private-vision
+#     every_n_turns: 5
+#     min_interval_seconds: 1800
+
+_PLUGIN_CONFIG_FILENAME = "memory_plugin.yaml"
+
+
+def _plugin_config_path(home: Optional[Path] = None) -> Path:
+    """yaml 配置文件位置. 默认 ~/.catfish/memory_plugin.yaml.
+
+    home 参数让单测可指定 fake home; 没传时用 _catfish_home() (env CATFISH_HOME aware).
+    """
+    return (home or _catfish_home()) / _PLUGIN_CONFIG_FILENAME
+
+
+def _load_plugin_config(home: Optional[Path] = None) -> Dict[str, Any]:
+    """读 yaml 配置. 不存在 / 解析失败返空 dict (走 env / default 兜底).
+
+    PyYAML 不可用时也返空 (优雅降级) — env 仍 work.
+    """
+    path = _plugin_config_path(home)
+    if not path.exists():
+        return {}
+    try:
+        import yaml  # 懒 import, PyYAML 是 hermes 自带依赖
+    except ImportError:
+        logger.debug("PyYAML 不可用, plugin yaml config 不加载")
+        return {}
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, yaml.YAMLError) as e:
+        logger.warning("catfish-memory plugin yaml 配置加载失败 (%s): %s", path, e)
+        return {}
+
+
 def _gateway_dev_token() -> str:
     """从 env 拿 gateway internal dev token. 没设返空 (caller skip).
 
@@ -883,10 +931,10 @@ class CatfishMemoryProvider(MemoryProvider):
         assistant_content: str,
         session_id: str,
     ) -> None:
-        # Env gate
-        if os.environ.get("CATFISH_PLUGIN_SUMMARIZE", "1") == "0":
+        # yaml/env 配置 — yaml 优先, env 兜底, default fallback
+        if not self._is_summarize_enabled():
             return
-        model = os.environ.get("CATFISH_PLUGIN_SUMMARIZE_MODEL", "").strip()
+        model = self._get_summarize_model()
         if not model:
             return
 
@@ -962,9 +1010,9 @@ class CatfishMemoryProvider(MemoryProvider):
 
     def _force_flush(self) -> None:
         """触发 buffer 里剩余对话的一次 summary (即使没满 N 轮)."""
-        if os.environ.get("CATFISH_PLUGIN_SUMMARIZE", "1") == "0":
+        if not self._is_summarize_enabled():
             return
-        model = os.environ.get("CATFISH_PLUGIN_SUMMARIZE_MODEL", "").strip()
+        model = self._get_summarize_model()
         if not model:
             return
 
@@ -1012,26 +1060,51 @@ class CatfishMemoryProvider(MemoryProvider):
         )
 
     def _get_n_turns_threshold(self) -> int:
-        """读 env 拿节流 A 阈值 (每 N 轮). 默认 5."""
+        """节流 A 阈值 (每 N 轮). 优先 yaml > env > default 5."""
+        # yaml 优先
+        cfg = _load_plugin_config(self._catfish_home_cached or _catfish_home())
+        yaml_val = cfg.get("summarize", {}).get("every_n_turns") if isinstance(cfg, dict) else None
+        if isinstance(yaml_val, int):
+            return max(1, yaml_val)
+        # env 兜底
         raw = os.environ.get("CATFISH_PLUGIN_SUMMARIZE_EVERY_N_TURNS", "").strip()
-        if not raw:
-            return _DEFAULT_TURNS_BETWEEN_SUMMARY
-        try:
-            n = int(raw)
-            return max(1, n)  # >=1, 不接受 0 或负
-        except ValueError:
-            return _DEFAULT_TURNS_BETWEEN_SUMMARY
+        if raw:
+            try:
+                return max(1, int(raw))
+            except ValueError:
+                pass
+        return _DEFAULT_TURNS_BETWEEN_SUMMARY
 
     def _get_min_interval_seconds(self) -> int:
-        """读 env 拿节流 B 阈值 (秒). 默认 1800 (30min)."""
+        """节流 B 阈值 (秒). 优先 yaml > env > default 1800."""
+        cfg = _load_plugin_config(self._catfish_home_cached or _catfish_home())
+        yaml_val = cfg.get("summarize", {}).get("min_interval_seconds") if isinstance(cfg, dict) else None
+        if isinstance(yaml_val, int):
+            return max(0, yaml_val)
         raw = os.environ.get("CATFISH_PLUGIN_SUMMARIZE_MIN_INTERVAL_SECONDS", "").strip()
-        if not raw:
-            return _DEFAULT_MIN_SUMMARY_INTERVAL_SECONDS
-        try:
-            n = int(raw)
-            return max(0, n)  # >=0, 0 = 时间间隔禁用 (只靠 N 轮)
-        except ValueError:
-            return _DEFAULT_MIN_SUMMARY_INTERVAL_SECONDS
+        if raw:
+            try:
+                return max(0, int(raw))
+            except ValueError:
+                pass
+        return _DEFAULT_MIN_SUMMARY_INTERVAL_SECONDS
+
+    def _get_summarize_model(self) -> str:
+        """LLM model. 优先 yaml > env. 没设返空字符串 (caller skip)."""
+        cfg = _load_plugin_config(self._catfish_home_cached or _catfish_home())
+        yaml_val = cfg.get("summarize", {}).get("model") if isinstance(cfg, dict) else None
+        if isinstance(yaml_val, str) and yaml_val.strip():
+            return yaml_val.strip()
+        return os.environ.get("CATFISH_PLUGIN_SUMMARIZE_MODEL", "").strip()
+
+    def _is_summarize_enabled(self) -> bool:
+        """启用 plugin summary 写路径. 优先 yaml.enabled, env=0 关掉."""
+        cfg = _load_plugin_config(self._catfish_home_cached or _catfish_home())
+        yaml_val = cfg.get("enabled") if isinstance(cfg, dict) else None
+        if isinstance(yaml_val, bool):
+            return yaml_val
+        # env 兜底: =0 关掉, 否则启用 (默认 enabled)
+        return os.environ.get("CATFISH_PLUGIN_SUMMARIZE", "1") != "0"
 
     def _journal_written_externally(self, our_last_ts: float) -> bool:
         """journal 文件 mtime 显著新于 plugin 自己上次 summary 时间 → 是别人 (gateway) 写的.

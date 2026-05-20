@@ -600,3 +600,98 @@ def test_state_file_corrupt_recovers_gracefully(fake_home, env_enable, mock_llm,
 
     state = _cm._read_state(fake_home)
     assert state == {}
+
+
+# ── yaml 配置 (BL-PLUGIN-CONFIG-YAML Day 2.5) ─────────────────────
+
+
+def _write_plugin_yaml(home: Path, content: str) -> None:
+    """写测试用 yaml 配置到 fake home"""
+    import catfish_memory as _cm
+    path = _cm._plugin_config_path(home)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def test_yaml_overrides_env_n_turns(fake_home, monkeypatch, provider):
+    """yaml every_n_turns 优先于 env"""
+    monkeypatch.setenv("CATFISH_PLUGIN_SUMMARIZE_EVERY_N_TURNS", "100")
+    _write_plugin_yaml(fake_home, "summarize:\n  every_n_turns: 3\n")
+    assert provider._get_n_turns_threshold() == 3
+
+
+def test_yaml_overrides_env_min_interval(fake_home, monkeypatch, provider):
+    """yaml min_interval_seconds 优先于 env"""
+    monkeypatch.setenv("CATFISH_PLUGIN_SUMMARIZE_MIN_INTERVAL_SECONDS", "9999")
+    _write_plugin_yaml(fake_home, "summarize:\n  min_interval_seconds: 600\n")
+    assert provider._get_min_interval_seconds() == 600
+
+
+def test_yaml_overrides_env_model(fake_home, monkeypatch, provider):
+    """yaml summarize.model 优先于 env"""
+    monkeypatch.setenv("CATFISH_PLUGIN_SUMMARIZE_MODEL", "env-model")
+    _write_plugin_yaml(fake_home, "summarize:\n  model: yaml-model\n")
+    assert provider._get_summarize_model() == "yaml-model"
+
+
+def test_yaml_overrides_env_enabled(fake_home, monkeypatch, provider):
+    """yaml enabled: false 关掉, 即使 env=1"""
+    monkeypatch.setenv("CATFISH_PLUGIN_SUMMARIZE", "1")
+    _write_plugin_yaml(fake_home, "enabled: false\n")
+    assert provider._is_summarize_enabled() is False
+
+
+def test_yaml_enabled_true_overrides_env_zero(fake_home, monkeypatch, provider):
+    """yaml enabled: true 启用, 即使 env=0"""
+    monkeypatch.setenv("CATFISH_PLUGIN_SUMMARIZE", "0")
+    _write_plugin_yaml(fake_home, "enabled: true\n")
+    assert provider._is_summarize_enabled() is True
+
+
+def test_yaml_missing_falls_back_to_env(fake_home, monkeypatch, provider):
+    """yaml 不存在 → 走 env"""
+    monkeypatch.setenv("CATFISH_PLUGIN_SUMMARIZE_EVERY_N_TURNS", "7")
+    monkeypatch.setenv("CATFISH_PLUGIN_SUMMARIZE_MODEL", "env-fallback")
+    # 不写 yaml file
+    assert provider._get_n_turns_threshold() == 7
+    assert provider._get_summarize_model() == "env-fallback"
+
+
+def test_yaml_corrupt_falls_back_to_env(fake_home, monkeypatch, provider):
+    """yaml 文件 corrupt → 走 env, 不挂"""
+    monkeypatch.setenv("CATFISH_PLUGIN_SUMMARIZE_EVERY_N_TURNS", "11")
+    _write_plugin_yaml(fake_home, "this is not yaml: [invalid")
+    assert provider._get_n_turns_threshold() == 11
+
+
+def test_yaml_partial_config(fake_home, monkeypatch, provider):
+    """yaml 只配 1 项 (model), 其他走 env / default"""
+    monkeypatch.setenv("CATFISH_PLUGIN_SUMMARIZE_EVERY_N_TURNS", "9")
+    _write_plugin_yaml(fake_home, "summarize:\n  model: yaml-only-model\n")
+    assert provider._get_summarize_model() == "yaml-only-model"
+    assert provider._get_n_turns_threshold() == 9  # env 兜底
+    assert provider._get_min_interval_seconds() == 1800  # default 兜底
+
+
+def test_yaml_full_real_world_example(fake_home, monkeypatch, provider):
+    """完整真实 yaml 配置例子"""
+    monkeypatch.delenv("CATFISH_PLUGIN_SUMMARIZE", raising=False)
+    monkeypatch.delenv("CATFISH_PLUGIN_SUMMARIZE_MODEL", raising=False)
+    monkeypatch.delenv("CATFISH_PLUGIN_SUMMARIZE_EVERY_N_TURNS", raising=False)
+    monkeypatch.delenv("CATFISH_PLUGIN_SUMMARIZE_MIN_INTERVAL_SECONDS", raising=False)
+
+    _write_plugin_yaml(
+        fake_home,
+        """
+enabled: true
+summarize:
+  model: catfish-private-vision
+  every_n_turns: 8
+  min_interval_seconds: 3600
+""",
+    )
+
+    assert provider._is_summarize_enabled() is True
+    assert provider._get_summarize_model() == "catfish-private-vision"
+    assert provider._get_n_turns_threshold() == 8
+    assert provider._get_min_interval_seconds() == 3600
