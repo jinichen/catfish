@@ -40,6 +40,13 @@ interface FingerprintView {
 
 const REFRESH_MS = 60_000;
 
+/** BL-STYLE-FP-NAN-FIX (5/20 鸿波): source_count=0 时 ratio 是 NaN / undefined → 显 "—".
+ * (NaN * 100).toFixed(0) === "NaN" 显 "NaN%" 看着像 bug. */
+function pct(ratio: number | null | undefined): string {
+  if (typeof ratio !== "number" || !Number.isFinite(ratio)) return "—";
+  return `${(ratio * 100).toFixed(0)}%`;
+}
+
 function humanTime(ts: number | undefined | null): string {
   if (!ts || ts <= 0) return "未抽取";
   const now = Date.now() / 1000;
@@ -195,6 +202,33 @@ export default function StyleFingerprintCard() {
 
       {view?.exists && view.stats && (
         <>
+          {/* BL-STYLE-FP-EMPTY-HINT (5/20): source_count=0 时, 抽过但没扫到文档.
+              提示加 yaml scan_dirs (~/.catfish/companion.yaml style_fingerprint.scan_dirs)
+              或调用 refresh args.source_dirs 显式扫别处. */}
+          {(view.source_count ?? 0) === 0 && (
+            <div
+              style={{
+                fontSize: 11,
+                color: "var(--catfish-text-muted)",
+                background: "var(--catfish-bg)",
+                border: "1px dashed var(--catfish-border)",
+                borderRadius: 4,
+                padding: "6px 10px",
+                marginBottom: "var(--space-3)",
+                lineHeight: 1.5,
+              }}
+            >
+              扫了 <code>~/Documents/work/</code> + <code>~/.catfish/output/</code> 没找到 ≥200 字
+              的 .md/.docx/.txt. 加扫描目录: 编辑 <code>~/.catfish/companion.yaml</code> 加段:
+              <pre style={{ margin: "4px 0 0 0", padding: "4px 8px", background: "var(--catfish-bg-elevated)", fontSize: 10, borderRadius: 3 }}>
+{`style_fingerprint:
+  scan_dirs:
+    - ~/person_task/catfish/docs
+    - ~/work-reports`}
+              </pre>
+              保存后点 "重新抽取" ↑
+            </div>
+          )}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8, fontSize: 13, marginBottom: "var(--space-3)" }}>
             <div>📚 来源文档: <strong>{view.source_count ?? 0}</strong></div>
             {/* 5/15 鸿波撞 white screen — view.stats={} 空对象通过 truthy 检查
@@ -235,9 +269,9 @@ export default function StyleFingerprintCard() {
             <div style={{ marginBottom: "var(--space-3)", fontSize: 12 }}>
               <div style={{ fontWeight: 500, marginBottom: 4 }}>段落结构偏好</div>
               <div style={{ color: "var(--catfish-text-muted)" }}>
-                列表 {(view.structure_pref.list_ratio * 100).toFixed(0)}% ·
-                {" "}表格 {(view.structure_pref.table_ratio * 100).toFixed(0)}% ·
-                {" "}散文 {(view.structure_pref.prose_ratio * 100).toFixed(0)}%
+                列表 {pct(view.structure_pref.list_ratio)} ·
+                {" "}表格 {pct(view.structure_pref.table_ratio)} ·
+                {" "}散文 {pct(view.structure_pref.prose_ratio)}
               </div>
             </div>
           )}

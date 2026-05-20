@@ -66,6 +66,60 @@ DEFAULT_SOURCE_DIRS = [
     Path.home() / ".catfish" / "output",
 ]
 
+# BL-STYLE-FP-YAML-CONFIG (5/20 鸿波报"来源文档 0"): 员工真写文档的目录 (~/person_task/
+# catfish/docs/, ~/work-reports/ 等) 不在 DEFAULT. 让 ~/.catfish/companion.yaml 加
+# style_fingerprint.scan_dirs: [...] union 默认 (默认目录不存在也不挂, 见 _scan_dir).
+COMPANION_YAML_PATH = Path.home() / ".catfish" / "companion.yaml"
+
+
+def _load_scan_dirs_yaml() -> List[Path]:
+    """读 ~/.catfish/companion.yaml 的 style_fingerprint.scan_dirs.
+
+    yaml 不存在 / 解析失败 / 没 style_fingerprint 段 → 返空 list, 不抛.
+    返的路径已 expanduser(), 但不验证存在 (_scan_dir 不存在自动跳).
+    """
+    if not COMPANION_YAML_PATH.exists():
+        return []
+    try:
+        import yaml  # noqa: PLC0415
+    except ImportError:
+        return []  # 没装 yaml 静默
+    try:
+        with open(COMPANION_YAML_PATH, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except (OSError, Exception):  # noqa: BLE001
+        return []
+    if not isinstance(data, dict):
+        return []
+    cfg = data.get("style_fingerprint", {})
+    if not isinstance(cfg, dict):
+        return []
+    dirs = cfg.get("scan_dirs", [])
+    if not isinstance(dirs, list):
+        return []
+    return [Path(s).expanduser() for s in dirs if isinstance(s, str) and s.strip()]
+
+
+def _resolve_scan_dirs(arg_dirs: Optional[List[str]] = None) -> List[Path]:
+    """resolve 最终扫描目录列表.
+
+    优先级: explicit args.source_dirs > yaml union 默认 > 默认.
+    args 给了显式 list → 只走 args (调用方知道自己要啥).
+    没给 → DEFAULT_SOURCE_DIRS + yaml 自定义 (去重保序).
+    """
+    if arg_dirs and isinstance(arg_dirs, list):
+        return [Path(s).expanduser() for s in arg_dirs if isinstance(s, str)]
+    # union default + yaml, 去重保序 (先 default, 再 yaml 新加的)
+    seen: set = set()
+    out: List[Path] = []
+    for d in list(DEFAULT_SOURCE_DIRS) + _load_scan_dirs_yaml():
+        key = str(d)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(d)
+    return out
+
 # 边界
 MIN_DOC_CHARS = 200  # 太短的不算, 没统计意义
 MAX_DOCS_TO_SCAN = 500  # 防文件夹太大爆内存
@@ -266,12 +320,23 @@ def _sample_sentences(docs: List[Tuple[Path, float, str]], n: int = 5) -> List[s
 def _build_fingerprint(docs: List[Tuple[Path, float, str]]) -> Dict[str, Any]:
     """从 [(path, mtime, content), ...] 构建 fingerprint dict."""
     if not docs:
+        # 5/20 BL-STYLE-FP-NAN-FIX: 空 docs 仍返完整 structure_pref shape (0/0/0)
+        # 而非 {}. 前端拿到 None/undefined ratio 显 NaN%, 给 0 就显 0%.
         return {
             "sources": [],
-            "stats": {"total_docs": 0, "total_chars": 0},
+            "stats": {
+                "total_docs": 0,
+                "total_chars": 0,
+                "avg_sentence_length": 0.0,
+                "sentence_count": 0,
+            },
             "top_words": [],
             "punctuation_pref": {},
-            "structure_pref": {},
+            "structure_pref": {
+                "list_ratio": 0.0,
+                "table_ratio": 0.0,
+                "prose_ratio": 0.0,
+            },
             "sample_sentences": [],
             "last_refreshed": time.time(),
             "had_jieba": _has_jieba(),
@@ -417,16 +482,17 @@ def style_fingerprint_refresh(args: Dict[str, Any]) -> Dict[str, Any]:
     返:
       {type: result, result: {scanned_dirs, total_docs, fingerprint_path}}
     """
-    source_dirs_arg = args.get("source_dirs")
-    if source_dirs_arg and isinstance(source_dirs_arg, list):
-        dirs = [Path(s).expanduser() for s in source_dirs_arg if isinstance(s, str)]
-    else:
-        dirs = list(DEFAULT_SOURCE_DIRS)
+    # BL-STYLE-FP-YAML-CONFIG (5/20): args 没给 → resolve 默认 + yaml union
+    dirs = _resolve_scan_dirs(args.get("source_dirs"))
 
     all_docs: List[Tuple[Path, float, str]] = []
     scanned_dirs: List[str] = []
+    skipped_dirs: List[str] = []  # 不存在 / 不是目录 / 没读出内容
     for d in dirs:
         scanned_dirs.append(str(d))
+        if not d.exists() or not d.is_dir():
+            skipped_dirs.append(str(d))
+            continue
         docs = _scan_dir(d, MAX_DOCS_TO_SCAN - len(all_docs))
         all_docs.extend(docs)
         if len(all_docs) >= MAX_DOCS_TO_SCAN:
@@ -439,10 +505,16 @@ def style_fingerprint_refresh(args: Dict[str, Any]) -> Dict[str, Any]:
         "type": "result",
         "result": {
             "scanned_dirs": scanned_dirs,
+            "skipped_dirs": skipped_dirs,  # 5/20: 显式列不存在目录, 帮员工调试
             "total_docs": len(all_docs),
             "fingerprint_path": str(STYLE_FINGERPRINT_PATH),
             "had_jieba": fp.get("had_jieba", False),
             "top_3_words": [w["word"] for w in fp.get("top_words", [])[:3]],
+            # 5/20: 提示员工 yaml 配置位置, 方便加 scan_dirs
+            "yaml_config_hint": (
+                f"加扫描目录: 编辑 {COMPANION_YAML_PATH}, 加段:\n"
+                "style_fingerprint:\n  scan_dirs:\n    - ~/your-doc-dir"
+            ) if len(all_docs) == 0 else None,
         },
     }
 
