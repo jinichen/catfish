@@ -84,4 +84,25 @@ def bootstrap() -> "registry_module":  # type: ignore[name-defined]
 
     tool_count = len(registry_module.registry.get_all_tool_names())
     logger.info("loaded %d tools from hermes-agent", tool_count)
+
+    # 5/21 方案 1: 启动时幂等注册 ~/.catfish/skills/ 进 hermes external_dirs.
+    # 让 hermes registry 自动扫到教学产物路径, 不需要 freeze 后 cp 到 hermes 目录.
+    # 失败 silent log, 不阻塞 tool-bridge 启动 (hermes 没装 / config 损坏 / 写盘失败).
+    try:
+        from . import skill_register  # noqa: PLC0415
+        result = skill_register.ensure_external_dir_registered()
+        if result.get("action") == "appended":
+            logger.info(
+                "skill_register: 首次注册 %s 进 hermes config.yaml external_dirs.",
+                skill_register.LOCAL_SKILLS_ROOT,
+            )
+        elif result.get("action") == "noop" and result.get("already_present"):
+            logger.debug("skill_register: external_dirs 已含 %s, noop.", skill_register.LOCAL_SKILLS_ROOT)
+        elif result.get("action") == "skipped_no_config":
+            logger.info("skill_register: ~/.hermes/config.yaml 不存在, 跳过 external_dirs 注册.")
+        # 同时保证目录存在 (即使没注册成功, 教学 freeze 第一次也不挂)
+        skill_register.ensure_local_skills_dir()
+    except Exception as e:
+        logger.warning("skill_register: 启动时注册失败, 不阻塞 tool-bridge: %s", e)
+
     return registry_module
