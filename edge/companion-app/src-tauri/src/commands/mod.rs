@@ -11,6 +11,7 @@
 pub mod agent;
 pub mod audit;
 pub mod auth;
+pub mod briefing_context;  // BL-BRIEFING-DECISION (5/21 Phase 5): distilled_facts + recent sessions
 pub mod calendar;  // BL-CALENDAR-INTEGRATION (5/20): macOS Calendar.app via osascript JXA
 pub mod chrome;
 pub mod curator;

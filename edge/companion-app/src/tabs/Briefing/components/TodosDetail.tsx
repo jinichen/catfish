@@ -88,7 +88,6 @@ export default function TodosDetailSection({
 
   return (
     <details
-      open
       style={{
         marginTop: "var(--space-2)",
         fontSize: 12,

@@ -392,6 +392,8 @@ pub fn run() {
             commands::calendar::calendar_today_fetch,
             // BL-CALENDAR-WEEK (5/20): 跨日 7 天 events (今天 + 明天 + 后 5 天)
             commands::calendar::calendar_week_fetch,
+            // BL-BRIEFING-DECISION (5/21 Phase 5): 综合判断上下文包 (distilled_facts + 24h sessions)
+            commands::briefing_context::briefing_context_fetch,
             // BL-JOURNAL-TODO-EXTRACT (5/20): ~/.catfish/employee_journal.md 未完成 TODO
             commands::journal::journal_todos_fetch,
             // BL-JOURNAL-TODO-EXTRACT step2 (5/20): 读 journal 最近 5KB 给 LLM 抽自然语言 TODO

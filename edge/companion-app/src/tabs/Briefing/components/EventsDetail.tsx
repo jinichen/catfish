@@ -12,7 +12,11 @@ import { formatDayLabel, formatFullDateRange, formatTime } from "./helpers";
 
 // ── 今日 events 时间表详情 ────────────────────────────────────
 
-export function EventsDetailSection({ events }: { events: CalendarEvent[] }) {
+/**
+ * defaultOpen (5/21 加): 日历事件少 (≤ 3) 时直接展开, 不强制员工点开看. 鸿波 5/21
+ * 反馈: '日历就这样一句话, 没什么用呀' — 1-3 件直接列出比折叠后更易扫.
+ */
+export function EventsDetailSection({ events, defaultOpen = false }: { events: CalendarEvent[]; defaultOpen?: boolean }) {
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const toggle = (i: number) => {
     const next = new Set(expanded);
@@ -23,7 +27,7 @@ export function EventsDetailSection({ events }: { events: CalendarEvent[] }) {
 
   return (
     <details
-      open
+      open={defaultOpen}
       style={{
         marginTop: "var(--space-3)",
         fontSize: 12,
@@ -183,7 +187,6 @@ export function WeekEventsDetailSection({
 
   return (
     <details
-      open
       style={{
         marginTop: "var(--space-2)",
         fontSize: 12,

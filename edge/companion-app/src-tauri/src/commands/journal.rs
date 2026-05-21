@@ -29,6 +29,10 @@ pub struct JournalTodo {
     pub source: String,
     /// 所在日期段标题 (e.g., "2026-05-19" 或 "本周周报"), 没匹配到段返空
     pub section: String,
+    /// 5/21 加: 员工 markdown 里 ⭐ / 🔝 / "重点:" 前缀 → is_priority=true.
+    /// text 字段已去除前缀; UI 看到 is_priority 自己打 ⭐ 标. 早安播报 priority 项排序置顶.
+    /// 跟 Python core.py is_priority 字段对齐.
+    pub is_priority: bool,
 }
 
 fn journal_path() -> Option<PathBuf> {
@@ -253,9 +257,18 @@ pub(crate) fn extract_todos(text: &str) -> Vec<JournalTodo> {
     let inline_re = Regex::new(r"(?i)(?:^|\s)(?:todo|待办)\s*[:：\-]\s*(.+?)\s*$").unwrap();
     // 段标题 (## YYYY-MM-DD - xxx / ## 任意)
     let section_re = Regex::new(r"^##\s+(.+?)\s*$").unwrap();
+    // 5/21 加: priority 前缀 (⭐ / 🔝 / 重点: / 重点：). text 去前缀 + is_priority=true
+    let priority_re = Regex::new(r"^(?:⭐|🔝|重点[:：]?\s*)").unwrap();
 
     let mut todos = Vec::new();
     let mut current_section = String::new();
+
+    let strip_priority = |s: &str| -> (String, bool) {
+        let stripped = priority_re.replace(s, "").trim().to_string();
+        let orig_trimmed = s.trim();
+        let is_pri = stripped != orig_trimmed;
+        (stripped, is_pri)
+    };
 
     for (idx, line) in text.lines().enumerate() {
         let lineno = (idx + 1) as u32;
@@ -269,11 +282,13 @@ pub(crate) fn extract_todos(text: &str) -> Vec<JournalTodo> {
         // checkbox 未完成
         if let Some(cap) = checkbox_re.captures(line) {
             if let Some(m) = cap.get(1) {
+                let (text, is_priority) = strip_priority(m.as_str());
                 todos.push(JournalTodo {
-                    text: m.as_str().to_string(),
+                    text,
                     line: lineno,
                     source: "checkbox".to_string(),
                     section: current_section.clone(),
+                    is_priority,
                 });
                 continue;
             }
@@ -288,11 +303,13 @@ pub(crate) fn extract_todos(text: &str) -> Vec<JournalTodo> {
                 continue;
             }
             if let Some(m) = cap.get(1) {
+                let (text, is_priority) = strip_priority(m.as_str());
                 todos.push(JournalTodo {
-                    text: m.as_str().to_string(),
+                    text,
                     line: lineno,
                     source: "inline".to_string(),
                     section: current_section.clone(),
+                    is_priority,
                 });
             }
         }
@@ -343,6 +360,47 @@ mod tests {
     #[test]
     fn test_empty_journal() {
         assert!(extract_todos("").is_empty());
+    }
+
+    // ── 5/21 加: is_priority 解析 ──────────────────────────────
+
+    #[test]
+    fn test_priority_star_prefix() {
+        let out = extract_todos("- [ ] ⭐ 完成季度汇报");
+        assert_eq!(out.len(), 1);
+        assert!(out[0].is_priority);
+        assert_eq!(out[0].text, "完成季度汇报"); // 去前缀
+    }
+
+    #[test]
+    fn test_priority_top_emoji_prefix() {
+        let out = extract_todos("- [ ] 🔝 给老李回复");
+        assert!(out[0].is_priority);
+        assert_eq!(out[0].text, "给老李回复");
+    }
+
+    #[test]
+    fn test_priority_chinese_prefix() {
+        let out = extract_todos("- [ ] 重点: 跑完整周报\n- [ ] 重点:写邮件");
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|t| t.is_priority));
+        assert_eq!(out[0].text, "跑完整周报");
+        assert_eq!(out[1].text, "写邮件");
+    }
+
+    #[test]
+    fn test_priority_default_false() {
+        let out = extract_todos("- [ ] 普通任务");
+        assert_eq!(out.len(), 1);
+        assert!(!out[0].is_priority);
+    }
+
+    #[test]
+    fn test_priority_inline_todo() {
+        let out = extract_todos("TODO: ⭐ 重点任务");
+        assert_eq!(out.len(), 1);
+        assert!(out[0].is_priority);
+        assert_eq!(out[0].text, "重点任务");
     }
 
     // ── BL-JOURNAL-TODO-EDIT-CHAT Stage 1 (5/20): journal CRUD ──
