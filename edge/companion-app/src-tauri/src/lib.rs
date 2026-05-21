@@ -434,6 +434,22 @@ pub fn run() {
             commands::relation::relation_summary,
             commands::relation::relation_forget,
             commands::relation::journal_read_raw,
+            // BL-ADVISOR-PROFILE (5/21 Phase 7 第 1 步): 员工职级 + 画像自动识别
+            commands::profile::profile_get,
+            commands::profile::profile_save,
+            commands::profile::profile_mark_wrong,
+            commands::profile::profile_hints_read,
+            commands::profile::profile_needs_recompute,
+            commands::profile::profile_next_recompute_at,
+            // BL-ADVISOR-DRAFTS (5/21 Phase 7 第 2 步): ~/.catfish/outputs/<date>/ 草稿存储
+            commands::drafts::draft_save,
+            commands::drafts::draft_read,
+            commands::drafts::draft_list_today,
+            commands::drafts::draft_open_in_editor,
+            // BL-ADVISOR-DECISIONS (5/21 Phase 7 第 2 步): ~/.catfish/decisions.jsonl 决策留痕
+            commands::decisions::decision_record,
+            commands::decisions::decision_list_recent,
+            commands::decisions::decision_search,
             // BL-MM4 v1 (5/5 晚): "鲶鱼记的硬事实" 版本卡 (跟 BL-MM2 配套)
             commands::memory_history::memory_history_summary,
             commands::memory_history::memory_history_clear_key,

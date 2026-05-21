@@ -1,0 +1,627 @@
+/** BL-ADVISOR-PROFILE (5/21 Phase 7 第 1 步): 员工职级 + 画像自动识别 — TS 端.
+ *
+ * 设计稿: docs/CATFISH-ADVISOR-DESIGN.md §2
+ *
+ * 分工:
+ *   - Rust (commands/profile.rs): 读写 ~/.catfish/profile.json + 标错 + 过期判断
+ *   - TS (本文件): 调 Tauri command + 调 gateway LLM 推断 + 写回
+ *
+ * 调 gateway 走第 4 步设计的 prompt (待 Phase 7 第 4 步 ship 后接入).
+ * 当前版本: schema + Tauri wrapper + recomputeProfile() 占位 (实际推断逻辑待 §4 完成).
+ */
+
+import { invoke as rawInvoke } from "@tauri-apps/api/core";
+
+import { config } from "./env";
+import { fetchWithAuth } from "./me";
+import {
+  briefingContextFetch,
+  calendarWeekFetch,
+  emailListFetch,
+  toolBridgeCallTool,
+} from "./tauri";
+
+// ── Schema (跟 Rust 端 profile.rs serde 严格对齐) ──────────────────
+
+export type Tier = "frontline" | "mid" | "senior";
+
+export type CentralStateSignal = "none" | "weak" | "strong";
+
+export interface KeyPerson {
+  name: string;
+  relation: string;  // "上级" / "客户" / "下属" / "平级" / "同事" / "兄弟单位" 等
+  project?: string;
+  lastContact?: string;  // ISO-8601 日期
+}
+
+export interface KeyProject {
+  name: string;
+  status: string;  // "进行中" / "暂停" / "完成" / "待启动"
+  client?: string;
+  deadline?: string;  // ISO-8601 日期
+}
+
+export interface Profile {
+  tier: Tier;
+  centralState: CentralStateSignal;
+  style: string;
+  keyPeople: KeyPerson[];
+  keyProjects: KeyProject[];
+  confidence: number;  // 0.0 - 1.0
+  evidence: string[];
+  /** 5/21 cold start: 员工写作 / 沟通风格. None = 没 fingerprint (cold start) 或推断挂. */
+  personality?: Personality;
+  updatedAt: string;  // ISO-8601
+  nextRecomputeAt: string;  // ISO-8601
+}
+
+export type Verbosity = "concise" | "balanced" | "verbose";
+export type Structure = "list_heavy" | "balanced" | "prose_heavy";
+export type Formality = "formal" | "balanced" | "casual";
+
+export interface Personality {
+  verbosity: Verbosity;
+  structure: Structure;
+  formality: Formality;
+  /** 5-10 个高频实词 — LLM 起草时模仿用 */
+  signatureWords: string[];
+  /** 1-3 句员工历史样本 — LLM 直接模仿语气 */
+  sampleSentences: string[];
+  /** fingerprint 来源文档数. 0 = cold start */
+  sourceCount: number;
+}
+
+// ── Tauri command wrappers ──────────────────────────────────────────
+
+/** 读 ~/.catfish/profile.json. 不存在返 null. */
+export const profileGet = () =>
+  rawInvoke<Profile | null>("profile_get");
+
+/** LLM 推断完, 写回 profile.json. 原子写. */
+export const profileSave = (profile: Profile) =>
+  rawInvoke<void>("profile_save", { profile });
+
+/** 员工标"识别错了" → append profile_hints.md. */
+export const profileMarkWrong = (reason: string) =>
+  rawInvoke<void>("profile_mark_wrong", { reason });
+
+/** 读 profile_hints.md (给 LLM 复算输入). */
+export const profileHintsRead = () =>
+  rawInvoke<string>("profile_hints_read");
+
+/** 是否需要复算 (不存在 / 过期 / force=true). */
+export const profileNeedsRecompute = (force = false) =>
+  rawInvoke<boolean>("profile_needs_recompute", { force });
+
+/** 算下次复算时间 (默认一周后). */
+export const profileNextRecomputeAt = (days?: number) =>
+  rawInvoke<string>("profile_next_recompute_at", { days });
+
+// ── High-level: recompute profile ────────────────────────────────────
+//
+// 5/21 Phase 7 第 1 步当前版本 = 占位.
+//   - Rust schema + 读写 ✓ (commands/profile.rs)
+//   - Tauri wrapper ✓ (本文件 wrappers 段)
+//   - LLM 推断 prompt 待 Phase 7 第 4 步 ship 后接入
+//
+// 当前 recomputeProfile() 行为:
+//   - 没有真 LLM 调用, 返一个保守的默认 profile (tier=mid, confidence=0.0)
+//   - confidence=0.0 让 UI 知道这是占位, 不要展示给员工
+//   - 真实推断接入后, confidence 才反映实际值
+//
+// 后续接入步骤 (Phase 7 第 4 步完成后):
+//   1. 调 briefingContextFetch() 拿 7 数据源
+//   2. 调 profileHintsRead() 拿员工纠错痕迹
+//   3. 拼装设计稿 §2.2 的 prompt
+//   4. 调 fetchWithAuth 调 gateway, model 用 chat 同款
+//   5. 解析 JSON 输出, 用 profileNextRecomputeAt() 填 nextRecomputeAt
+//   6. profileSave(profile)
+
+// ─── Profile 识别 LLM Prompt (设计稿 §2.2) ──────────────────────────
+
+const PROFILE_SYSTEM_PROMPT = `你是 catfish 员工画像分析师. 看以下数据,
+推断这员工的:
+1. 职级 tier ∈ {frontline, mid, senior}
+2. 央国企信号强度 centralState ∈ {none, weak, strong}
+3. 关心风格 style ∈ {合规优先, 业务优先, 关系优先, 数字优先}
+4. 关键人脉 keyPeople (最多 10 人, 含 relation: 上级/客户/下属/平级/同事/兄弟单位)
+5. 重点项目 keyProjects (最多 5 个, 含 status: 进行中/暂停/完成/待启动)
+6. 推断置信度 confidence ∈ [0.0, 1.0]
+7. 证据 evidence (3-5 条, 引用具体语料)
+8. **5/21 cold start 补丁**: personality (员工写作 / 沟通风格), 含:
+   - verbosity ∈ {concise, balanced, verbose}  ← 从邮件 / 文档 / fingerprint stats 推
+   - structure ∈ {list_heavy, balanced, prose_heavy}  ← 从 fingerprint structure_pref
+   - formality ∈ {formal, balanced, casual}  ← 从邮件称呼 / 标点 / top_words
+   - signatureWords: 5-10 个高频实词 ← 直接复制 fingerprint top_words 前 10
+   - sampleSentences: 1-3 句员工历史样本 ← 直接复制 fingerprint sample_sentences 前 3
+   - sourceCount: fingerprint.source_count (0 = cold start)
+   personality 字段 fingerprint 不存在 (cold start) → 仍可从邮件历史抽 verbosity/formality
+   粗略推断, signatureWords=[], sampleSentences=[], sourceCount=0.
+
+判断依据 (参考但不限于):
+- frontline 信号: TODO 颗粒度细 / 关心个人 KPI / 上级出现频率高 / 没有"班子"概念
+- mid 信号: 出现"团队/项目/分派" / 同时多个项目 / 对上汇报 + 对下安排
+- senior 信号: 出现"班子/季度/战略/拍板" / 关键人物 (局长/总) 频繁 / 例外/异常驱动
+
+央国企信号: "ISO / 资质 / 国资委 / 党组 / 班子会 / 政策 / 局 / 函" 等术语出现
+
+# Cold start (新员工 catfish 历史空) 必读
+- 邮件历史是**主源**: sender 出现高频的 = 关键人脉 / 上级; 主题词频 = 主管事务 / 项目
+- 日历历史: 频繁参会人 = 团队 / 上下级关系; 会议主题 = 项目 / 节奏
+- style_fingerprint: 员工历史文档抽出的写作特征, 直接映射到 personality
+- catfish 自己历史 (distilled_facts / sessions) 为空 不是问题, 用上面 3 个能跑起来
+
+输出严格 JSON (不加 markdown 反引号, 不加前缀):
+{
+  "tier": "mid",
+  "centralState": "strong",
+  "style": "合规优先",
+  "keyPeople": [{"name": "李局", "relation": "上级"}],
+  "keyProjects": [{"name": "项目 A", "status": "进行中", "client": "老李"}],
+  "confidence": 0.82,
+  "evidence": ["...", "...", "..."],
+  "personality": {
+    "verbosity": "concise",
+    "structure": "list_heavy",
+    "formality": "formal",
+    "signatureWords": ["资质", "风控", "合规", "落地"],
+    "sampleSentences": ["按上次班子会决议，本周完成 ISO 审核 day4"],
+    "sourceCount": 12
+  }
+}
+
+数据稀疏 (一些字段空) → confidence 低 (0.3-0.5), 不要瞎填. 数据多且一致 → confidence
+高 (0.7-0.95). 没数据完全无法判断 → confidence 0.0, 字段填保守默认.`;
+
+const PROFILE_LLM_QUERY = "?catfish_source=companion-profile&catfish_skip_identity=1&catfish_internal=1";
+
+/** 调 LLM 真识别员工画像. 不挂 AbortSignal (Tauri suspend 经验).
+ *  挂了返 null, caller 兜底用占位.
+ *
+ *  5/21 cold start 补丁: 并发拉 6 数据源 (3 catfish 自己的 + 3 外部, 后者解决 cold start):
+ *    catfish 自己:
+ *      - briefingContextFetch: distilled_facts / workplan / projects / sessions / weekly_reports
+ *      - profileHintsRead: profile_hints.md (员工纠错痕迹)
+ *    外部 (新员工也有):
+ *      - emailListFetch: 邮件列表 (sender 频次 → 关键人脉, subject 词频 → 主管事务)
+ *      - calendarWeekFetch: 过去 7 天日历 (参会人 → 团队 / 节奏)
+ *      - catfish_style_fingerprint_get: 写作风格 (verbosity / structure / formality / signatureWords)
+ */
+async function inferProfileFromContext(model: string): Promise<Profile | null> {
+  // 并发拉, 单点挂不影响其他
+  const [ctxRes, hintsRes, emailRes, calRes, fpRes] = await Promise.allSettled([
+    briefingContextFetch(),
+    profileHintsRead(),
+    emailListFetch(false, 100),    // 全部邮件, limit 100
+    calendarWeekFetch(false),
+    toolBridgeCallTool("catfish_style_fingerprint_get", {}),
+  ]);
+
+  const ctx = ctxRes.status === "fulfilled" ? ctxRes.value : null;
+  const hints = hintsRes.status === "fulfilled" ? hintsRes.value : "";
+
+  // 拼 user prompt 喂 LLM 全部画像相关数据
+  const parts: string[] = [];
+
+  // ─── 1) catfish 自己历史 (有就喂, 新员工大概率空) ───
+  if (ctx) {
+    if (ctx.distilledFacts.trim()) {
+      parts.push(`# 长期记忆 distilled_facts\n${ctx.distilledFacts.trim()}`);
+    }
+    if (ctx.workplan.trim()) {
+      parts.push(`# 员工自写工作计划 workplan.md\n${ctx.workplan.trim()}`);
+    }
+    if (ctx.projects.trim()) {
+      parts.push(`# 项目跟踪 projects.md\n${ctx.projects.trim()}`);
+    }
+    if (ctx.recentSessionBriefs.length > 0) {
+      const lines = ctx.recentSessionBriefs.slice(0, 10).map((s) => {
+        const msg = (s.firstUserMessage || "").slice(0, 80);
+        return `[${s.startedAt.slice(0, 10)}] ${s.title || "(无 title)"}: ${msg}`;
+      });
+      parts.push(`# 最近 7 天对话 sessions\n${lines.join("\n")}`);
+    }
+    if (ctx.weeklyReports.length > 0) {
+      const lines = ctx.weeklyReports
+        .slice(0, 5)
+        .map((r) => `${r.modifiedAt.slice(0, 10)} ${r.filename}`);
+      parts.push(`# 周报历史 outputs/weekly-*\n${lines.join("\n")}`);
+    }
+  }
+  if (hints.trim()) {
+    parts.push(`# 员工纠错痕迹 (profile_hints.md — 优先参考)\n${hints.trim()}`);
+  }
+
+  // ─── 2) 外部已有数据 (cold start 主源) ───
+
+  // 2A. 邮件历史 (sender 频次 + subject 词频)
+  if (emailRes.status === "fulfilled") {
+    try {
+      const arr = JSON.parse(emailRes.value);
+      if (Array.isArray(arr) && arr.length > 0) {
+        // 统计 sender top 15 + subject 前 50 列
+        const senderCount: Record<string, number> = {};
+        for (const m of arr) {
+          const s = String(m.sender ?? "").trim();
+          if (s) senderCount[s] = (senderCount[s] ?? 0) + 1;
+        }
+        const topSenders = Object.entries(senderCount)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 15)
+          .map(([s, c]) => `${s} × ${c}`);
+        const subjectsList = arr
+          .slice(0, 50)
+          .map((m: { subject?: string }) => String(m.subject ?? "").slice(0, 60))
+          .filter(Boolean);
+        parts.push(
+          `# 邮件来往人 top 15 (推关键人脉 / 上下级)\n${topSenders.join("\n")}\n\n` +
+            `# 邮件主题 前 50 列 (推主管事务 / 项目)\n${subjectsList.join("\n")}`,
+        );
+      }
+    } catch {
+      /* ignore, JSON 解析挂 */
+    }
+  }
+
+  // 2B. 日历过去 7 天 (参会人 + 主题)
+  if (calRes.status === "fulfilled") {
+    try {
+      const arr = JSON.parse(calRes.value);
+      if (Array.isArray(arr) && arr.length > 0) {
+        const lines = arr.slice(0, 30).map((e: {
+          start?: string;
+          summary?: string;
+          attendees?: string[];
+        }) => {
+          const date = String(e.start ?? "").slice(0, 10);
+          const summary = String(e.summary ?? "").slice(0, 50);
+          const att = Array.isArray(e.attendees) ? e.attendees.slice(0, 5).join(", ") : "";
+          return `${date} ${summary}${att ? ` (与: ${att})` : ""}`;
+        });
+        parts.push(`# 日历过去 7 天事件 (推团队 / 节奏 / 项目)\n${lines.join("\n")}`);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // 2C. style_fingerprint (LLM 直接抽 personality)
+  // tool_bridge_call_tool 返 {ok, tool, result, error}, style_fingerprint 内层 result 再含 {type, result}
+  if (fpRes.status === "fulfilled") {
+    const tcr = fpRes.value;
+    const inner =
+      tcr.ok && tcr.result && typeof tcr.result === "object"
+        ? (tcr.result as { result?: { exists?: boolean } }).result
+        : null;
+    if (inner && inner.exists === true) {
+      parts.push(
+        `# style_fingerprint (员工写作风格, 5/6 BL-MM8 抽出)\n` +
+          `${JSON.stringify(inner, null, 2)}`,
+      );
+    } else {
+      parts.push(
+        `# style_fingerprint: 不存在 (cold start). personality 字段从邮件 / 文档粗略推, sourceCount=0`,
+      );
+    }
+  }
+
+  if (parts.length === 0) {
+    console.log("[profile] 全部 6 数据源空, 跳 LLM 推断");
+    return null;
+  }
+  parts.push(
+    "# 任务\n按 system prompt 出 JSON. 数据稀疏 → confidence 低. 不瞎填. " +
+      "**含 personality 字段** (cold start 时 sourceCount=0 仍可推 verbosity/formality 粗略).",
+  );
+
+  const url = `${config.backendUrl}/v1/chat/completions${PROFILE_LLM_QUERY}`;
+  console.log("[profile] 调 LLM 推断, prompt 长度:", parts.join("\n\n").length);
+
+  try {
+    const resp = await fetchWithAuth(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: PROFILE_SYSTEM_PROMPT },
+          { role: "user", content: parts.join("\n\n") },
+        ],
+        max_tokens: 1000,
+        temperature: 0.3,
+        stream: false,
+      }),
+    });
+    if (!resp.ok) {
+      console.warn("[profile] LLM HTTP", resp.status);
+      return null;
+    }
+    const data = await resp.json();
+    const content = data?.choices?.[0]?.message?.content;
+    if (typeof content !== "string") {
+      console.warn("[profile] LLM 返非字符串", content);
+      return null;
+    }
+    const parsed = robustJsonParse(content);
+    if (parsed === null) {
+      console.warn("[profile] LLM 返非 JSON, 原文前 200:", content.slice(0, 200));
+      return null;
+    }
+    return parseProfileFromLLM(parsed);
+  } catch (e) {
+    console.warn("[profile] LLM 调用挂:", e);
+    return null;
+  }
+}
+
+/** 鲁棒 JSON 解析 — LLM 输出常含前后解释文字 (e.g. "现在我已经分析完..."),
+ *  剥 markdown 反引号 + 截取第一个 `{` 到最后一个 `}` 之间.
+ *  失败返 null, 不抛. */
+function robustJsonParse(content: string): unknown | null {
+  if (typeof content !== "string") return null;
+  let s = content
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/```$/, "")
+    .trim();
+  // 尝试直接 parse
+  try {
+    return JSON.parse(s);
+  } catch {
+    /* 落空, 走截取 */
+  }
+  // 截第一个 { 到最后一个 } (含)
+  const first = s.indexOf("{");
+  const last = s.lastIndexOf("}");
+  if (first >= 0 && last > first) {
+    s = s.slice(first, last + 1);
+    try {
+      return JSON.parse(s);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** 5/22 cold start 修锁: 同时只允许一个 recompute 跑.
+ *  React StrictMode dev 模式 useEffect 双调 → ensureProfileFresh 双跑 → LLM 调 2 次浪费 token. */
+let _recomputingProfile: Promise<Profile | null> | null = null;
+
+function parseProfileFromLLM(raw: unknown): Profile | null {
+  if (!raw || typeof raw !== "object") return null;
+  const obj = raw as Record<string, unknown>;
+
+  const tier = obj.tier;
+  if (tier !== "frontline" && tier !== "mid" && tier !== "senior") {
+    console.warn("[profile] tier 非法:", tier);
+    return null;
+  }
+  const centralStateRaw = obj.centralState ?? obj.central_state;
+  const centralState: "none" | "weak" | "strong" =
+    centralStateRaw === "strong" ? "strong" : centralStateRaw === "weak" ? "weak" : "none";
+
+  const style = typeof obj.style === "string" ? obj.style : "未识别";
+  const confidence =
+    typeof obj.confidence === "number" ? Math.max(0, Math.min(1, obj.confidence)) : 0.5;
+
+  const keyPeople: KeyPerson[] = [];
+  const rawPpl = obj.keyPeople ?? obj.key_people;
+  if (Array.isArray(rawPpl)) {
+    for (const p of rawPpl.slice(0, 10)) {
+      if (!p || typeof p !== "object") continue;
+      const pp = p as Record<string, unknown>;
+      const name = typeof pp.name === "string" ? pp.name : null;
+      const relation = typeof pp.relation === "string" ? pp.relation : null;
+      if (!name || !relation) continue;
+      keyPeople.push({
+        name,
+        relation,
+        project: typeof pp.project === "string" ? pp.project : undefined,
+        lastContact:
+          typeof pp.lastContact === "string"
+            ? pp.lastContact
+            : typeof pp.last_contact === "string"
+            ? pp.last_contact
+            : undefined,
+      });
+    }
+  }
+
+  const keyProjects: KeyProject[] = [];
+  const rawProj = obj.keyProjects ?? obj.key_projects;
+  if (Array.isArray(rawProj)) {
+    for (const p of rawProj.slice(0, 5)) {
+      if (!p || typeof p !== "object") continue;
+      const pp = p as Record<string, unknown>;
+      const name = typeof pp.name === "string" ? pp.name : null;
+      const status = typeof pp.status === "string" ? pp.status : null;
+      if (!name || !status) continue;
+      keyProjects.push({
+        name,
+        status,
+        client: typeof pp.client === "string" ? pp.client : undefined,
+        deadline: typeof pp.deadline === "string" ? pp.deadline : undefined,
+      });
+    }
+  }
+
+  const evidence: string[] = [];
+  if (Array.isArray(obj.evidence)) {
+    for (const e of obj.evidence) {
+      if (typeof e === "string") evidence.push(e);
+    }
+  }
+
+  // 5/21 cold start: personality 字段 (Optional)
+  let personality: Personality | undefined;
+  const rawPers = obj.personality;
+  if (rawPers && typeof rawPers === "object") {
+    const pp = rawPers as Record<string, unknown>;
+    const vRaw = String(pp.verbosity ?? "balanced");
+    const sRaw = String(pp.structure ?? "balanced");
+    const fRaw = String(pp.formality ?? "balanced");
+    const verbosity: Verbosity =
+      vRaw === "concise" ? "concise" : vRaw === "verbose" ? "verbose" : "balanced";
+    const structure: Structure =
+      sRaw === "list_heavy" ? "list_heavy" : sRaw === "prose_heavy" ? "prose_heavy" : "balanced";
+    const formality: Formality =
+      fRaw === "formal" ? "formal" : fRaw === "casual" ? "casual" : "balanced";
+    const signatureWords: string[] = [];
+    if (Array.isArray(pp.signatureWords ?? pp.signature_words)) {
+      for (const w of (pp.signatureWords ?? pp.signature_words) as unknown[]) {
+        if (typeof w === "string") signatureWords.push(w);
+      }
+    }
+    const sampleSentences: string[] = [];
+    if (Array.isArray(pp.sampleSentences ?? pp.sample_sentences)) {
+      for (const s of (pp.sampleSentences ?? pp.sample_sentences) as unknown[]) {
+        if (typeof s === "string") sampleSentences.push(s);
+      }
+    }
+    const sourceCount =
+      typeof pp.sourceCount === "number"
+        ? pp.sourceCount
+        : typeof pp.source_count === "number"
+        ? pp.source_count
+        : 0;
+    personality = {
+      verbosity,
+      structure,
+      formality,
+      signatureWords: signatureWords.slice(0, 10),
+      sampleSentences: sampleSentences.slice(0, 3),
+      sourceCount,
+    };
+  }
+
+  return {
+    tier,
+    centralState,
+    style,
+    keyPeople,
+    keyProjects,
+    confidence,
+    evidence: evidence.length > 0 ? evidence : ["LLM 推断, 无显式 evidence 字段"],
+    personality,
+    updatedAt: new Date().toISOString(),
+    nextRecomputeAt: "",  // caller 填
+  };
+}
+
+/** Phase 7 第 4 步真接入: 调 LLM 出 profile JSON, 写回 profile.json.
+ *  LLM 挂了 / 数据全空 → 写一个 confidence=0 占位 (UI 显"识别中" 引导员工多用 catfish).
+ *
+ *  5/22 cold start 修: in-flight 锁防 React StrictMode dev 双调浪费 token.
+ *
+ *  model: 必传, 跟员工 chat model 同款 (5/17 BL-INTERNAL-MODEL-FOLLOW-USER 原则).
+ *         caller (AdvisorView) 从 useChatStore.model 取. 没传或空 → 拒跑返 null.
+ */
+export async function recomputeProfile(model: string): Promise<Profile | null> {
+  // 已经在跑 → 复用同一个 promise
+  if (_recomputingProfile) {
+    console.log("[profile] recompute 已在跑, 复用 in-flight promise");
+    return _recomputingProfile;
+  }
+  if (!model || typeof model !== "string" || !model.trim()) {
+    console.warn("[profile] recompute 拒跑: model 空");
+    return null;
+  }
+
+  const m = model;
+
+  _recomputingProfile = (async () => {
+    const nextRecomputeAt = await profileNextRecomputeAt(7);
+    const llmProfile = await inferProfileFromContext(m);
+    if (llmProfile) {
+      llmProfile.nextRecomputeAt = nextRecomputeAt;
+      await profileSave(llmProfile);
+      console.log("[profile] LLM 推断 OK", {
+        tier: llmProfile.tier,
+        centralState: llmProfile.centralState,
+        confidence: llmProfile.confidence,
+      });
+      return llmProfile;
+    }
+    // LLM 挂或数据空 → 占位
+    const placeholder: Profile = {
+      tier: "mid",
+      centralState: "weak",
+      style: "未识别",
+      keyPeople: [],
+      keyProjects: [],
+      confidence: 0.0,
+      evidence: ["LLM 推断挂 / 数据稀疏, 占位中. 用 catfish 几天后自动校准"],
+      updatedAt: new Date().toISOString(),
+      nextRecomputeAt,
+    };
+    await profileSave(placeholder);
+    return placeholder;
+  })();
+
+  try {
+    return await _recomputingProfile;
+  } finally {
+    _recomputingProfile = null;  // 释放锁, 下次允许新一轮
+  }
+}
+
+/** 5/22 cold start 改: 同步版 — 等 recompute 完返回 profile.
+ *
+ *  逻辑:
+ *    - force=true: 不管现状, 强制重算并等结果
+ *    - 否则: profileNeedsRecompute → 若 true 等 recompute, 若 false 直接返 profileGet
+ *
+ *  model: 跟员工 chat model 同款 (5/17 BL-INTERNAL-MODEL-FOLLOW-USER).
+ *         Caller (AdvisorView) 从 useChatStore.model 取. 空时拒跑返 null.
+ */
+export async function ensureRecomputed(
+  model: string,
+  force = false,
+): Promise<Profile | null> {
+  if (!force) {
+    try {
+      const needs = await profileNeedsRecompute(false);
+      if (!needs) {
+        return await profileGet();
+      }
+    } catch (e) {
+      console.warn("[profile] needs_recompute 检查失败, 仍尝试 recompute:", e);
+    }
+  }
+  // 等 recompute (in-flight 锁防 StrictMode 双调)
+  return await recomputeProfile(model);
+}
+
+
+/** App 启动时调一次. 后台 fire-and-forget. 不阻塞 UI.
+ *
+ *  逻辑:
+ *    - profile 不存在 → 后台跑 recompute, 占位先用上
+ *    - profile 存在但过期 / confidence < 0.3 (占位) → 后台跑 recompute (5/22 修)
+ *    - profile 存在且未过期 + confidence >= 0.3 → 跳过
+ *
+ *  5/22 cold start 修: 加 onDone 回调, recompute 完通知 UI re-load (防 LLM 第一次挂
+ *  写占位后 UI 永远显"识别中"). force=true 时跳过 needs check 直接重算 (刷新按钮用).
+ */
+export function ensureProfileFresh(
+  model: string,
+  force = false,
+  onDone?: (p: Profile | null) => void,
+): void {
+  void (async () => {
+    try {
+      const needs = force || (await profileNeedsRecompute(false));
+      if (!needs) return;
+      // 后台异步
+      const p = await recomputeProfile(model).catch((e) => {
+        console.warn("[profile] recompute 失败:", e);
+        return null;
+      });
+      onDone?.(p);
+    } catch (e) {
+      console.warn("[profile] needs_recompute 检查失败:", e);
+      onDone?.(null);
+    }
+  })();
+}

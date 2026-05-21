@@ -1,0 +1,203 @@
+//! BL-ADVISOR-DRAFTS (5/21 Phase 7 第 2 步): 草稿存储.
+//!
+//! 设计稿 §6.1: ~/.catfish/outputs/<YYYY-MM-DD>/<task-type>-<key>.md
+//!
+//! 跟 BL-CENTRAL-EDGE (5/17): 草稿在员工本机, 不出端. catfish 不替员工发, 只起草到 outputs/,
+//! 员工自己点开看/改/复制后自己发.
+//!
+//! 这一层 Rust 提供:
+//!   - draft_save: LLM tool 调完 (e.g. draft_email_reply) 把草稿内容写到 outputs/<date>/
+//!   - draft_read: UI 展开 DraftPreview 时读全文
+//!   - draft_list_today: 列今天所有草稿元数据 (filename + size + mtime)
+//!   - draft_open_in_editor: 调系统默认编辑器打开 (员工自己改 + 复制后发)
+
+use std::path::PathBuf;
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftRef {
+    /// 文件名 (不含目录), e.g. "reply-laoli-balanced.md"
+    pub filename: String,
+    /// 完整路径 (debug 用 / 员工可拷)
+    pub abs_path: String,
+    /// ISO-8601 mtime
+    pub modified_at: String,
+    /// 大小字节
+    pub bytes: u64,
+}
+
+// ── 路径 helpers ─────────────────────────────────────────────────────
+
+fn outputs_root() -> Result<PathBuf, String> {
+    let home = std::env::var("HOME").map_err(|e| format!("HOME 未设: {e}"))?;
+    Ok(PathBuf::from(home).join(".catfish").join("outputs"))
+}
+
+fn today_dir() -> Result<PathBuf, String> {
+    let date = Utc::now().format("%Y-%m-%d").to_string();
+    Ok(outputs_root()?.join(date))
+}
+
+fn date_dir(date: &str) -> Result<PathBuf, String> {
+    // date 必须是 YYYY-MM-DD 格式 — 防 path traversal
+    if !date.chars().all(|c| c.is_ascii_digit() || c == '-') || date.len() != 10 {
+        return Err(format!("date 格式非法 (期望 YYYY-MM-DD): {date}"));
+    }
+    Ok(outputs_root()?.join(date))
+}
+
+fn safe_filename(filename: &str) -> Result<&str, String> {
+    // 防 path traversal: 不允许 / .. 等
+    if filename.contains('/') || filename.contains("..") || filename.contains('\\') {
+        return Err(format!("filename 含非法字符: {filename}"));
+    }
+    if filename.is_empty() || filename.len() > 200 {
+        return Err(format!("filename 长度非法: {}", filename.len()));
+    }
+    Ok(filename)
+}
+
+// ── Tauri commands ───────────────────────────────────────────────────
+
+/// LLM tool 写草稿. 路径自动 outputs/<today>/<filename>. 内容覆盖式写.
+///
+/// filename 限制: 不含 / \\ ..; 长度 1-200.
+/// 返回写入的绝对路径 (前端 UI 用来显示 + 调 open_in_editor).
+#[tauri::command]
+pub async fn draft_save(filename: String, content: String) -> Result<String, String> {
+    let fname = safe_filename(&filename)?;
+    let dir = today_dir()?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("创建 outputs/<today>/ 失败: {e}"))?;
+
+    let path = dir.join(fname);
+    let tmp = path.with_extension(format!(
+        "{}.tmp",
+        path.extension().and_then(|s| s.to_str()).unwrap_or("part")
+    ));
+
+    std::fs::write(&tmp, content)
+        .map_err(|e| format!("写 draft tmp 失败: {e}"))?;
+    std::fs::rename(&tmp, &path)
+        .map_err(|e| format!("rename draft 失败: {e}"))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// 读草稿内容.
+///
+/// date: "YYYY-MM-DD" — 限定格式防 path traversal.
+/// filename: 同 safe_filename 检查.
+#[tauri::command]
+pub async fn draft_read(date: String, filename: String) -> Result<String, String> {
+    let fname = safe_filename(&filename)?;
+    let dir = date_dir(&date)?;
+    let path = dir.join(fname);
+    if !path.exists() {
+        return Err(format!("草稿不存在: {}", path.display()));
+    }
+    std::fs::read_to_string(&path)
+        .map_err(|e| format!("读 draft 失败: {e}"))
+}
+
+/// 列今天所有草稿 (mtime 倒序). 没目录 / 空目录 → 空 Vec.
+#[tauri::command]
+pub async fn draft_list_today() -> Result<Vec<DraftRef>, String> {
+    let dir = today_dir()?;
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let entries = std::fs::read_dir(&dir)
+        .map_err(|e| format!("read_dir 失败: {e}"))?;
+    let mut out: Vec<DraftRef> = Vec::new();
+    for e in entries.flatten() {
+        let p = e.path();
+        if !p.is_file() {
+            continue;
+        }
+        let filename = match p.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        // 跳 tmp 半成品
+        if filename.ends_with(".tmp") {
+            continue;
+        }
+        let meta = match e.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let modified_at = match meta.modified() {
+            Ok(t) => {
+                let dt: chrono::DateTime<chrono::Utc> = t.into();
+                dt.to_rfc3339()
+            }
+            Err(_) => continue,
+        };
+        out.push(DraftRef {
+            filename,
+            abs_path: p.to_string_lossy().to_string(),
+            modified_at,
+            bytes: meta.len(),
+        });
+    }
+    out.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
+    Ok(out)
+}
+
+/// 调系统默认编辑器打开草稿. macOS = `open <path>`, 跟 Finder 双击同效.
+#[tauri::command]
+pub async fn draft_open_in_editor(abs_path: String) -> Result<(), String> {
+    // 防滥用: 只允许 outputs/ 下的路径
+    let outputs = outputs_root()?;
+    let outputs_str = outputs.to_string_lossy().to_string();
+    if !abs_path.starts_with(&outputs_str) {
+        return Err(format!("路径不在 outputs/ 下, 拒打开: {abs_path}"));
+    }
+    // 防 path traversal
+    if abs_path.contains("..") {
+        return Err(format!("路径含 ..: {abs_path}"));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let out = std::process::Command::new("open")
+            .arg(&abs_path)
+            .output()
+            .map_err(|e| format!("调 open 失败: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "open 返非 0: {}",
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        return Err("draft_open_in_editor 当前只支持 macOS".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn safe_filename_rejects_traversal() {
+        assert!(safe_filename("ok-file.md").is_ok());
+        assert!(safe_filename("../escape.md").is_err());
+        assert!(safe_filename("dir/file.md").is_err());
+        assert!(safe_filename("").is_err());
+        assert!(safe_filename(&"x".repeat(201)).is_err());
+    }
+
+    #[test]
+    fn date_dir_rejects_malformed() {
+        assert!(date_dir("2026-05-22").is_ok());
+        assert!(date_dir("../etc").is_err());
+        assert!(date_dir("2026/05/22").is_err());  // / 被过滤
+        assert!(date_dir("20260522").is_err());   // 长度不对
+    }
+}

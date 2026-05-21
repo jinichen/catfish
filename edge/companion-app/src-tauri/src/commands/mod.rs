@@ -29,7 +29,10 @@ pub mod local_search;
 pub mod logs;
 pub mod memory_history;
 pub mod hermes_memory;  // BL-DASHBOARD-HERMES-MEMORY-CARD (5/16)
+pub mod decisions;  // BL-ADVISOR-DECISIONS (5/21 Phase 7): ~/.catfish/decisions.jsonl 决策留痕
+pub mod drafts;     // BL-ADVISOR-DRAFTS (5/21 Phase 7): ~/.catfish/outputs/<date>/ 草稿存储
 pub mod pet;
+pub mod profile;    // BL-ADVISOR-PROFILE (5/21 Phase 7): 员工职级 + 画像自动识别
 pub mod relation;
 pub mod session_goal;  // BL-BRIEFING-GOAL-INPUT (5/20): /goal UI 路径
 pub mod session_write;
