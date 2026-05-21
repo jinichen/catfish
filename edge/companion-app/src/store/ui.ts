@@ -31,10 +31,11 @@ interface UIState {
 }
 
 export const useUIStore = create<UIState>((set, get) => ({
-  // 5/20 BL-COMPANION-TAB-ORDER-SWAP: default tab 从 chat 改 briefing —
-  // 开窗第一眼看今日总览 (邮件未读 + 日历 + 工作计划 + LLM 建议), 跟员工真实
-  // 早起开 Companion 的需求对齐. 老 default=chat 历史: BL-E11 五一 sprint 默认对话.
-  // startProactiveChat 等仍切到 chat (员工对话场景), 这里只改首次启动.
+  // 5/20 BL-COMPANION-TAB-ORDER-SWAP: default tab 改 briefing.
+  // 5/21 鸿波 Phase 7 开工: 早安 Phase 6 (WorkplanView) 砍, 改做"智能参谋"
+  //   (docs/CATFISH-ADVISOR-DESIGN.md). 开发期临时切回 chat 避半成品.
+  // 5/22 Phase 7 跑通 (智能参谋主菜 + cold start 三件 + race fix + 硬编码修),
+  //   切回早安默认. 员工打开第一眼看主菜 + 选项 + 草稿.
   activeTab: "briefing",
   darkMode: false,
   aboutOpen: false,
