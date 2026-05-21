@@ -1,23 +1,8 @@
-/** 早安播报 (Daily Briefing) — BL-COMPANION-DAILY-BRIEFING-MVP (5/20 鸿波).
- *
- * 主组件 — 4 行总览 + 详情区. 子组件 / helpers 拆到 src/tabs/Briefing/components/
- * (5/20 鸿波"文件太长一定要拆开" 强制拆 1471 → ~300 行规则).
- *
- * 文件位置历史: BriefingCard 第一个版本放在 Dashboard/ (5/20 MVP), 后续抽 BriefingTab
- * 复用 BriefingCard. 现在仍在 Dashboard/ — 改 import path 要改 BriefingTab, 保留位置
- * 不动. 子组件全在 src/tabs/Briefing/components/.
- *
- * MVP 结构:
- *   step1 (5/20): 骨架 + 4 行总览 + 真数据接入 + LLM merged briefing
- *   step2 (5/20): 详情区展开 (邮件 body / TODO done/del / 日程参会人/描述)
- *   step3 (5/20): GoalInput "今日重点" — 写 ~/.catfish/session_goal.txt
- *                跟 gateway inject_session_goal 共享同文件, /goal UI 路径
- */
+/** 早安播报 — 主菜 WorkplanView (周/日 × 内容/事件/建议), 副菜 EventsDetail + TodosDetail. */
 
 import { useEffect, useState } from "react";
 
 import {
-  fetchBriefingSuggestion,
   fetchLlmJournalTodos,
   fetchMergedBriefing,
 } from "../../lib/briefing";
@@ -34,49 +19,47 @@ import {
 import { useAgentStore } from "../../store/agent";
 import { useChatStore } from "../../store/chat";
 import { useEmailStore } from "../../store/email";
-import { useUIStore } from "../../store/ui";
 
-import BriefingRow from "../Briefing/components/BriefingRow";
-import EmailsDetailSection from "../Briefing/components/EmailsDetail";
-import { EventsDetailSection, WeekEventsDetailSection } from "../Briefing/components/EventsDetail";
-import GoalInput from "../Briefing/components/GoalInput";
-import {
-  calendarSummary,
-  emailSummary,
-  getGreeting,
-  suggestionSummary,
-  todoSummary,
-} from "../Briefing/components/helpers";
+import { EventsDetailSection } from "../Briefing/components/EventsDetail";
 import TodosDetailSection from "../Briefing/components/TodosDetail";
+import WorkplanView from "../Briefing/components/WorkplanView";
+import { fetchWorkplan, type Workplan } from "../../lib/briefing_workplan";
+import { getGreeting } from "../Briefing/components/helpers";
 
 // 30 分钟刷一次未读数 (跟 ProactiveCard 同步, 不主动打扰但保新鲜)
 const REFRESH_MS = 30 * 60 * 1000;
 
 export default function BriefingCard() {
-  const [emails, setEmails] = useState<EmailDigestItem[] | null>(null);
-  const [unreadCount, setUnreadCount] = useState<number | null>(null);
-  // BL-COMPANION-EMAIL-DIGEST-STEP5 (5/20): urgencyMap 从 useEmailStore 拉
+  // 5/21 Phase 6: 4 行总览删后, emails / unreadCount / *Error 只 setter 不 read.
+  // state 仍保留是因为 loadAll 内调用 setter 给 React 重渲染 + future ProactiveCard 可能用.
+  const [, setEmails] = useState<EmailDigestItem[] | null>(null);
+  const [, setUnreadCount] = useState<number | null>(null);
+  // BL-COMPANION-EMAIL-DIGEST-STEP5 (5/20): urgencyMap 从 useEmailStore 拉, 传给 fetchWorkplan
   const urgencyMap = useEmailStore((s) => s.urgencyMap);
   const reconcileUrgency = useEmailStore((s) => s.reconcileFromRust);
   const setUrgencyMap = useEmailStore((s) => s.setUrgencyMap);
-  const [emailError, setEmailError] = useState<string | null>(null);
+  const [, setEmailError] = useState<string | null>(null);
   // BL-CALENDAR-INTEGRATION (5/20): 真日历数据
   const [calEvents, setCalEvents] = useState<CalendarEvent[] | null>(null);
-  const [calError, setCalError] = useState<string | null>(null);
-  // BL-CALENDAR-WEEK (5/20): 未来 7 天 events
-  const [weekEvents, setWeekEvents] = useState<CalendarEvent[] | null>(null);
+  const [, setCalError] = useState<string | null>(null);
+  // BL-CALENDAR-WEEK (5/20): 未来 7 天 events. 拉了暂未渲染 (workplan LLM 暂只用今日).
+  const [, setWeekEvents] = useState<CalendarEvent[] | null>(null);
   // BL-JOURNAL-TODO-EXTRACT (5/20)
   const [todos, setTodos] = useState<JournalTodo[] | null>(null);
-  const [todoError, setTodoError] = useState<string | null>(null);
-  // BL-BRIEFING-LLM-RANK step2 (5/20)
-  const [llmSuggestion, setLlmSuggestion] = useState<string | null>(null);
-  const [llmLoading, setLlmLoading] = useState(false);
+  const [, setTodoError] = useState<string | null>(null);
+  // BL-BRIEFING-LLM-RANK step2 (5/20) — 5/21 Phase 6 已废弃 suggestion 字符串路径,
+  // 仅保留 setLlmLoading 给 useProactiveScheduler 兼容. LLM 推 todos 走 fetchMergedBriefing.
+  const [, setLlmLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [lastSync, setLastSync] = useState<Date | null>(null);
 
-  const setActiveTab = useUIStore((s) => s.setActiveTab);
   const model = useChatStore((s) => s.model);
   const personality = useAgentStore((s) => s.personality);
+
+  // 5/21 Phase 6: LLM Workplan (周/日双层 × 内容/事件/建议 6 块).
+  // 异步 10-20s 跑. 跑出来主渲染 WorkplanView. 没跑出来 → 不渲染该段 (4 行总览 + 详情段仍在).
+  const [workplan, setWorkplan] = useState<Workplan | null>(null);
+  const [workplanLoading, setWorkplanLoading] = useState(false);
 
   // forceRefresh=true → ⟳ 按钮主动刷, 跳 calendar Rust 缓存. 自动 interval 走缓存.
   const loadAll = async (forceRefresh = false) => {
@@ -194,23 +177,21 @@ export default function BriefingCard() {
       })
       .map((m) => ({ subject: m.subject, sender: m.sender }));
 
-    let suggestion: string | null = null;
+    // 5/21 Phase 6 大清: 不再读 suggestion 字符串, 只要 llmTodos 推断结果合并到 regex todos.
+    // fetchBriefingSuggestion 路径在 useProactiveScheduler 仍用 (proactive 浮窗), BriefingCard 不调.
     let llmTodos: JournalTodo[] = [];
     const merged = await fetchMergedBriefing(unread, evts, regexTodos, model, urgentHints, personality);
     if (merged) {
-      suggestion = merged.suggestion;
       llmTodos = merged.todos;
-      console.log("[BriefingCard] merged LLM ✅", { suggestionLen: suggestion.length, todoCount: llmTodos.length });
+      console.log("[BriefingCard] merged LLM ✅", { todoCount: llmTodos.length });
     } else {
-      console.log("[BriefingCard] merged LLM 挂, fallback 两次独立调用");
-      const [suggestionRes, llmTodosRes] = await Promise.allSettled([
-        fetchBriefingSuggestion(unread, evts, regexTodos, model, personality),
-        fetchLlmJournalTodos(regexTodos, model, personality),
-      ]);
-      suggestion = suggestionRes.status === "fulfilled" ? suggestionRes.value : null;
-      llmTodos = llmTodosRes.status === "fulfilled" ? llmTodosRes.value : [];
+      console.log("[BriefingCard] merged LLM 挂, fallback fetchLlmJournalTodos");
+      try {
+        llmTodos = await fetchLlmJournalTodos(regexTodos, model, personality);
+      } catch (e) {
+        console.warn("[BriefingCard] fetchLlmJournalTodos 也挂:", e);
+      }
     }
-    setLlmSuggestion(suggestion);
 
     // TODO 合并: regex (确切) + LLM (推断), 按 text 去重
     if (llmTodos.length > 0) {
@@ -222,6 +203,24 @@ export default function BriefingCard() {
     }
 
     setLlmLoading(false);
+
+    // 5/21 Phase 6: 异步跑 LLM Workplan (周/日双层综合判断).
+    // 不阻塞 loadAll. 失败保持 workplan=null → 只显 4 行总览 + 详情段, 不渲染 WorkplanView.
+    setWorkplanLoading(true);
+    const finalEmails = localEmails;
+    const finalEvents = evts;
+    const finalTodos = llmTodos.length > 0
+      ? [...regexTodos, ...llmTodos.filter((t) =>
+          !regexTodos.some((r) => r.text.trim().toLowerCase() === t.text.trim().toLowerCase())
+        )]
+      : regexTodos;
+    void fetchWorkplan(finalEmails, finalEvents, finalTodos, urgencyMap, model)
+      .then((w) => setWorkplan(w))
+      .catch((e) => {
+        console.warn("[BriefingCard] workplan 异常:", e);
+        setWorkplan(null);
+      })
+      .finally(() => setWorkplanLoading(false));
   };
 
   useEffect(() => {
@@ -247,7 +246,8 @@ export default function BriefingCard() {
         alignSelf: "start",
       }}
     >
-      {/* Header: 问候 + 日期 + ⟳ */}
+      {/* Header: 问候 + 日期 + 刷新按钮.
+          5/21 L3 化简: 删 ☀️ emoji, 刷新按钮文字化 ('刷新' 替代 '⟳') */}
       <header
         style={{
           display: "flex",
@@ -256,14 +256,13 @@ export default function BriefingCard() {
           marginBottom: "var(--space-3)",
         }}
       >
-        <span style={{ fontSize: 18 }}>☀️</span>
-        <strong style={{ fontSize: 14 }}>{greeting}</strong>
-        <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>{today}</span>
+        <strong style={{ fontSize: 15, color: "var(--catfish-text)" }}>{greeting}</strong>
+        <span style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>{today}</span>
         <button
           type="button"
           onClick={() => void loadAll(true)}
           disabled={loading}
-          title="刷新今日总览 (跳缓存强制刷日历)"
+          title="刷新今日总览"
           style={{
             marginLeft: "auto",
             background: "transparent",
@@ -271,85 +270,43 @@ export default function BriefingCard() {
             borderRadius: "var(--radius-sm)",
             color: "var(--catfish-text-muted)",
             cursor: loading ? "wait" : "pointer",
-            fontSize: 11,
-            padding: "2px 8px",
+            fontSize: 12,
+            padding: "3px 10px",
             fontFamily: "inherit",
           }}
         >
-          {loading ? "…" : "⟳"}
+          {loading ? "同步中…" : "刷新"}
         </button>
       </header>
 
-      {/* BL-BRIEFING-GOAL-INPUT (5/20): 今日重点输入框 — 写 ~/.catfish/session_goal.txt,
-          gateway 端 inject_session_goal 共享同文件, chat 链路自动 inject 让 LLM 锚定. */}
-      <GoalInput />
+      {/* 周/日双层 Workplan — LLM 综合 7 数据源.
+          跑出来 → WorkplanView 渲染; loading → 占位卡; 失败 → 不显, 走下面详情段. */}
+      {workplan ? (
+        <WorkplanView workplan={workplan} />
+      ) : workplanLoading ? (
+        <div
+          style={{
+            marginTop: "var(--space-4)",
+            padding: "16px 18px",
+            color: "var(--catfish-text-muted)",
+            fontSize: 13,
+            fontStyle: "italic",
+            textAlign: "center",
+            background: "var(--catfish-bg)",
+            borderRadius: "var(--radius-sm)",
+            border: "1px dashed var(--catfish-border)",
+          }}
+        >
+          小鲶在综合判断你本周和今天的工作…
+        </div>
+      ) : null}
 
-      {/* 4 行总览 */}
-      <ul
-        style={{
-          listStyle: "none",
-          padding: 0,
-          margin: 0,
-          display: "flex",
-          flexDirection: "column",
-          gap: "var(--space-2)",
-        }}
-      >
-        <BriefingRow
-          icon="📬"
-          label="邮件"
-          summary={emailSummary(unreadCount, loading, emailError, emails, urgencyMap)}
-          actionable={(unreadCount ?? 0) > 0}
-          onClick={() => setActiveTab("email")}
-          actionLabel="查看 →"
+      {/* 详情区: 日历 ≤ 3 件直接展开 (鸿波: '1 件 1 句话没用'); 工作计划默认收起, 可标完成/删除. */}
+      {(calEvents?.length ?? 0) > 0 && (
+        <EventsDetailSection
+          events={calEvents!}
+          defaultOpen={(calEvents?.length ?? 0) <= 3}
         />
-
-        <BriefingRow
-          icon="📅"
-          label="日历"
-          summary={calendarSummary(calEvents, loading, calError)}
-          muted={calError !== null || (calEvents?.length ?? 0) === 0}
-          hint={calError ? "点⟳重试 / 看授权" : undefined}
-        />
-
-        <BriefingRow
-          icon="✅"
-          label="工作计划"
-          summary={todoSummary(todos, loading, todoError)}
-          muted={todoError !== null || (todos?.length ?? 0) === 0}
-          hint={todoError ? "看 ~/.catfish/employee_journal.md" : undefined}
-        />
-
-        <BriefingRow
-          icon="💡"
-          label="优先建议"
-          summary={
-            llmLoading
-              ? "🤔 小鲶在想…"
-              : llmSuggestion ?? suggestionSummary(unreadCount, calEvents, todos)
-          }
-          muted={
-            !llmLoading &&
-            llmSuggestion === null &&
-            (unreadCount ?? 0) === 0 &&
-            (calEvents?.length ?? 0) === 0 &&
-            (todos?.length ?? 0) === 0
-          }
-          hint={llmSuggestion === null && !llmLoading ? "rule-based fallback (LLM 挂)" : undefined}
-        />
-      </ul>
-
-      {/* 详情区 (5/20 BL-COMPANION-BRIEFING-DETAIL + v2 sub-task 1 可展开) */}
-      {(emails?.length ?? 0) > 0 && (
-        <EmailsDetailSection
-          emails={emails!}
-          urgencyMap={urgencyMap}
-          onGoEmailTab={() => setActiveTab("email")}
-        />
-      )}
-      {(calEvents?.length ?? 0) > 0 && <EventsDetailSection events={calEvents!} />}
-      {(weekEvents?.length ?? 0) > 0 && (
-        <WeekEventsDetailSection weekEvents={weekEvents!} todayEvents={calEvents ?? []} />
       )}
       {(todos?.length ?? 0) > 0 && (
         <TodosDetailSection todos={todos!} onChanged={() => void loadAll(true)} />
