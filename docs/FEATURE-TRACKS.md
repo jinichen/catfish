@@ -660,6 +660,7 @@ Companion → HTTPS OpenAI 兼容 → hermes serve (本机)
 - ⬜ **5/8 后 verify 2 件**: `tools/skill_usage.is_agent_created()` 判定逻辑 + `skill_manage` pin API
 - ⬜ **5/15-5/22 升级实施** (走 HERMES-UPGRADE.md § 5 阶段 B): brand patch 重构 字符串 → 三层运行时拦截 (wrapper subprocess + Shell Hook + 兜底 source patch). 估计 468 行能裁到 50-100 行
 - ⬜ **Q3 上游 issue (不预投 PR)**: 5/7 修订 — git hooks 方案 ship 后我们这端已够稳, 上游 PR 降级到 nice-to-have. Q3 投个 issue 探 NousResearch 意愿 (5 分钟), 有 buy-in 再投 PR; 没回应就维持 git hooks 路线 (每次升级 30 分钟补规则). 详见 `HERMES-UPGRADE.md § 6`
+- ⬜ **Q3 写 CatfishHubSource 实现 hermes SkillSource ABC** (5/21 加): hermes `tools/skills_hub.py:294` 的 `SkillSource(ABC)` 是上游 5 个 source 抽象 (OptionalSkill / GitHub / ClawHub / LobeHub / Optional). catfish 中央 Hub 客户端 (`catfish_skill_install` + `catfish_skill_publish` 自写一套) 应该作**第 6 个 source** 接进 hermes 标准协议. 写完后 catfish 客户端 install 链路砍掉, 改走 `hermes skills install --source catfish-hub`. ~200 行客户端适配 (sources adapter + auth header 透传 + audit hook). 配合 hermes 升级 sprint 一起做. 详见 `docs/CATFISH-HERMES-BOUNDARY.md` "双 Hub 关系" 段
 - 完整方案见 `docs/HERMES-UPGRADE.md` (430 行, 含时间表 / 风险表 / 升级回归 checklist)
 
 ---

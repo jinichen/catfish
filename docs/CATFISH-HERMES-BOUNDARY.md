@@ -155,6 +155,80 @@ def is_agent_created(skill_name: str) -> bool:
 - catfish_skill_install 装的全部走 hub 路径, 自动进 `_read_hub_installed_names()`
 - 永不**手动 cp / 软链** skill 到 `~/.hermes/skills/`, 必失踪 (Curator 静默 archive)
 
+### 双 Hub 关系 (5/21 加, 必读)
+
+**关键事实**: hermes 和 catfish **各有一个 Skills Hub**, 解决**不同需求**, 不重叠不越界. 但两个 Hub 的客户端实现现在是平行两套, 是技术债.
+
+#### Hermes Skills Hub (上游自带, 2972 行 in `~/.hermes/hermes-agent/tools/skills_hub.py`)
+
+```
+HUB_DIR = ~/.hermes/skills/.hub/   (lock.json / quarantine / audit / taps / index-cache)
+
+SkillSource(ABC) 5 个具体 source:
+  ├─ OptionalSkillSource  — hermes 自带可选 skill
+  ├─ GitHubSource         — 公网任何 GitHub repo
+  ├─ ClawHubSource        — ClawHub 公网社区
+  ├─ LobeHubSource        — LobeHub 公网社区
+  └─ (留座位给 CatfishHubSource, 现在空着 — Q3 技术债)
+
+Trust: TRUSTED_REPOS = {openai/skills, anthropics/skills, huggingface/skills} 白名单
+       skills_guard.py verdict ∈ {safe, caution, dangerous} → INSTALL_POLICY 拦截
+
+CLI: hermes skills search / install / publish / tap add <repo>
+     hermes skills publish <path> --to github --repo <owner/repo>   ← 公网发布
+```
+
+**面向**: 个人开发者从公网找 skill, 公开发布到 GitHub.
+
+#### Catfish Skills Hub (5/2 ship, `central/skills-hub/`)
+
+```
+Hub server (中央 FastAPI):
+  ~/.catfish-hub/<ns>/<name>/<version>/  +  PG (skills_versions / skills_audit)
+  鉴权: OAuth + RBAC + 部门隔离 + 审核流 ⬜ (manager publish → admin approve, 1 周 backlog)
+  Audit: SHA256 校验 + BL-D2 6 类凭据扫描拒上传 + 谁 publish/install jsonl
+
+客户端 (员工本机, tool-bridge):
+  catfish_skill_publish — 走 OAuth + 凭据扫描 + 上传中央
+  catfish_skill_install — 中央 hub URL pull + 本机 dry-run + dedup
+  ⚠️ 自己写了一套, 没接 hermes SkillSource ABC — Q3 技术债
+```
+
+**面向**: 企业内员工分享部门 skill 但不让出公司, manager/admin 治理.
+
+#### 不重叠的根因
+
+| 维度 | Hermes Hub | Catfish Hub |
+|---|---|---|
+| 数据源 | 公网 GitHub + 公网社区 | 企业内部中央 server |
+| Trust | GitHub 仓库白名单 | 企业 OAuth + RBAC |
+| 公私 | 完全公开 (互联网可见) | 内网私有 |
+| 客户内网能用 | ❌ 通常封 GitHub | ✅ 自托管 |
+| 解决的问题 | 个人开发者效率 | 企业 know-how 治理 |
+
+按 BOUNDARY 决策原则: catfish Hub 落在"政企合规 + 多员工"独有性, 不算越界. ✓
+
+#### 双 Hub 共存的 4 条纪律
+
+1. **catfish skill (业务 + 教学产物) 只走 catfish Hub publish**. **永禁** `hermes skills publish --to github` (会把内网信息泄到公网 GitHub)
+2. **个人想从公网装 skill** → 直接走 hermes Hub (`hermes skills install`), catfish 不拦
+3. **catfish Hub 不聚合 hermes 公网 source**. 客户内网通常无 GitHub 访问, 也不该把公网未审 skill 混进企业可信源
+4. **CatfishHubSource ABC 实现** — Q3 技术债登记, 配合 Hermes 升级 sprint 一起做. 写完后 catfish_skill_install 砍掉, 走 hermes 标准 `hermes skills install --source catfish-hub` 链路 (~200 行客户端适配)
+
+#### 三层路径 + 两 Hub 完整图
+
+| 路径 | 谁管 | 用途 | Curator? |
+|---|---|---|---|
+| `~/.hermes/skills/` (bundled) | hermes | 自带 skill (productivity/powerpoint 等) | 不动 (bundled) |
+| `~/.hermes/skills/.hub/` | hermes Hub | 从公网 source 装的状态 | 不动 (hub_installed) |
+| `~/.hermes/optional-skills/` | hermes | 可选官方 skill | 不动 |
+| `~/.hermes/skills/productivity/catfish-*` | catfish 历史 (5/12 BL-MM9-FREEZE) | 现 3 个业务 skill 落这 | ⚠️ 被判 agent-created, 方案 1 ship 后改走 external_dirs 或 pin 兜底 |
+| `~/.catfish/skills/<ns>/<name>/` | catfish (方案 1) | **教学产物默认落这**, 通过 hermes config.yaml `skills.external_dirs` 注册让 registry 看到 | 不动 (external_dirs 外, Curator 不扫) |
+| 中央 server `~/.catfish-hub/<ns>/<name>/<version>/` | catfish Hub | **publish 后中央副本** | 不动 (在 server) |
+| `~/person_task/catfish/skills/department/<name>/` | catfish 工程 (git tracked) | **业务 skill 源码** (leadership-briefing 等) | 不动 (不在 `~/.hermes/`) |
+
+---
+
 ### Skills Hub 隐私边界 (5/21 加, 防"自动共享")
 
 **catfish 当前只有一个 Hub — 中央 Skills Hub**, **没有"本机 hub"概念**. publish 到 Hub = 上传中央 + 默认对全公司可见 (审核流 ⬜ 还在 backlog).
