@@ -1461,9 +1461,15 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
             "  - name: 'eis-login' 等. 跟 catfish_teach_start 传的一致就行.\n"
             "  - namespace: 'department' (默认) / 'personal' / 'team'\n"
             "  - description: 1-500 字描述\n"
+            "  - target: 'local' (默认, 5/21 加, 落 ~/.catfish/skills/) / 'workspace' (落工程目录, 业务 skill)\n"
             "  - overwrite: 同名 skill 已存在时是否覆盖 (默认 false)\n"
-            "  - run_install: 凝固后自动跑 install_to_hermes.sh (默认 true)\n\n"
-            "**返回**: {ok, name, namespace, skill_path, hermes_name, files[], params[], install{...}, summary}\n\n"
+            "  - run_install: 凝固后自动跑 install_to_hermes.sh (5/21 默认 false. 只 target='workspace' 生效)\n\n"
+            "**返回**: {ok, name, namespace, target, skill_path, skill_dir, hermes_name, files[], params[], "
+            "register_external_dir{...}, install{...}, summary}\n\n"
+            "**5/21 方案 1 隐私纪律**:\n"
+            "  - 教学产物默认 target='local' 落本机 ~/.catfish/skills/, **永不**自动 publish 中央 Hub.\n"
+            "  - 想发布到团队 → 员工显式点 Companion UI 按钮, 走 catfish_skill_publish (跑 3 道扫描: 凭据 / PII / 内网 URL).\n"
+            "  - LLM **不要**自己调 catfish_skill_publish 当 freeze 一部分.\n\n"
             "**安全**:\n"
             "  - trace 里 fill 含明文密码 → 拒凝固, 提示员工用 secret_ref 重教\n"
             "  - secret_ref 原样保留在 script.py (不解析成明文)\n"
@@ -1485,13 +1491,22 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
                     "type": "string",
                     "description": "skill 描述, 1-500 字, 进 SKILL.md frontmatter.",
                 },
+                "target": {
+                    "type": "string",
+                    "enum": ["local", "workspace"],
+                    "description": (
+                        "落盘路径 (5/21 加). 'local' (默认): ~/.catfish/skills/, 教学私有, 自动注册到 "
+                        "hermes external_dirs, Curator 不动. 'workspace': ~/person_task/catfish/skills/, "
+                        "业务 skill 源码工程目录用, 配合 install_to_hermes.sh."
+                    ),
+                },
                 "overwrite": {
                     "type": "boolean",
                     "description": "已存在的 skill 是否覆盖. 默认 false.",
                 },
                 "run_install": {
                     "type": "boolean",
-                    "description": "凝固后自动跑 install_to_hermes.sh 同步. 默认 true.",
+                    "description": "凝固后自动跑 install_to_hermes.sh. 5/21 默认 false. 仅 target='workspace' 生效.",
                 },
                 "session_archive_path": {
                     "type": "string",

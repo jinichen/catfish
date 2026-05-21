@@ -362,9 +362,10 @@ DOM 改了, skill 自适应跟上, **用户不用修 skill**.
    │
    ├── 默认落本机 ~/.catfish/skills/<ns>/<name>/   ← 永不出员工本机
    │     │
-   │     └── hermes registry 通过 catfish-hermes-plugin 扩展路径注册
-   │         → LLM 看得到调得到
-   │         → Curator 不扫 ~/.catfish/, 不会 archive 教学产物
+   │     └── 通过 hermes 自带 skills.external_dirs 配置注册 (config.yaml)
+   │         → hermes registry 自动扫到, LLM 看得到调得到
+   │         → external_dirs 在 Curator 扫描范围外, 不会被 archive
+   │         (实现: catfish_tool_bridge.skill_register.ensure_external_dir_registered)
    │
    └── 员工显式点 "📤 发布到团队 Hub" 按钮 ← 主动行为, 不自动
          │

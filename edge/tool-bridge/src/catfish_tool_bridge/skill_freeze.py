@@ -69,8 +69,16 @@ from . import trace_recorder
 
 logger = logging.getLogger("catfish.tool_bridge.skill_freeze")
 
-#: catfish 工程 skills 根目录解析跟 catfish_run_skill 同源
-def _resolve_catfish_skills_root() -> Path | None:
+#: 5/21 方案 1: 教学产物本机路径 (默认 target='local')
+from .skill_register import LOCAL_SKILLS_ROOT, ensure_external_dir_registered  # noqa: F401
+
+
+def _resolve_workspace_skills_root() -> Path | None:
+    """catfish 工程 skills 根目录 (git tracked 业务 skill 源码用).
+
+    保留路径主要给业务 skill (leadership-briefing / weekly-report / project-approval)
+    用. 教学产物**不**走这条 — 走 _resolve_local_skills_root().
+    """
     import os  # noqa: PLC0415
     env_dir = os.environ.get("CATFISH_SKILLS_DIR")
     if env_dir:
@@ -87,6 +95,23 @@ def _resolve_catfish_skills_root() -> Path | None:
         if c.is_dir():
             return c
     return None
+
+
+def _resolve_local_skills_root() -> Path:
+    """5/21 方案 1: 教学产物本机路径 ~/.catfish/skills/. 不存在自动创建.
+
+    设计: hermes 通过 config.yaml skills.external_dirs 看到此路径, Curator 不扫.
+    """
+    LOCAL_SKILLS_ROOT.mkdir(parents=True, exist_ok=True)
+    return LOCAL_SKILLS_ROOT
+
+
+# 旧名 alias 防破老 caller (其它模块如 catfish_tools 可能直接 import)
+def _resolve_catfish_skills_root() -> Path | None:
+    """[DEPRECATED 5/21] 老 caller 仍走 workspace path. 新调用用
+    _resolve_local_skills_root() 走教学私有 path.
+    """
+    return _resolve_workspace_skills_root()
 
 
 # ─── 模板片段 ────────────────────────────────────────────────────────
@@ -128,12 +153,21 @@ def freeze_skill(args: dict[str, Any]) -> dict[str, Any]:
     BL-MM9-FREEZE-v2 (5/12): 只凝固**最近一个完成的 teach session** 的 trace,
     不再按时间窗口模糊取. 凝固前 session 必须 end (catfish_teach_end), 否则拒.
 
+    5/21 方案 1 改动:
+      - 加 target 参数: 'local' (默认, 落 ~/.catfish/skills/) 或 'workspace'
+        (落 ~/person_task/catfish/skills/, 业务 skill 源码用)
+      - run_install 默认改成 False (员工显式才装到 hermes / publish 到 Hub)
+      - target='local' 时自动注册到 hermes config.yaml skills.external_dirs
+        让 hermes registry 能扫到, 但 Curator 不动 (external_dirs 外)
+
     args:
       name: str, e.g. "eis-login"
       namespace: str, default "department"
       description: str
+      target: 'local' (默认) | 'workspace' — 落盘路径选择 (5/21 加)
       overwrite: bool — 已存在的 skill 是否覆盖. 默认 false
-      run_install: bool — 凝固后是否自动跑 install_to_hermes.sh. 默认 true
+      run_install: bool — 凝固后是否自动跑 install_to_hermes.sh. 默认 False (5/21 改).
+                   仅 target='workspace' 时生效 (target='local' 已经在 external_dirs)
       session_archive_path: str (可选, 调试用) — 显式指定某 session archive 凝固
     """
     name = (args.get("name") or "").strip()
@@ -149,8 +183,15 @@ def freeze_skill(args: dict[str, Any]) -> dict[str, Any]:
             "error": f"namespace 必须是 department / personal / team, 不接受 {namespace!r}",
         }
     description = (args.get("description") or f"凝固 {name} 流程").strip()[:500]
+    target = (args.get("target") or "local").strip().lower()
+    if target not in ("local", "workspace"):
+        return {
+            "ok": False,
+            "error": f"target 必须是 'local' / 'workspace', 不接受 {target!r}",
+        }
     overwrite = bool(args.get("overwrite", False))
-    run_install = bool(args.get("run_install", True))
+    # 5/21 默认改 False — 教学产物默认不进 hermes productivity, 也不自动 publish
+    run_install = bool(args.get("run_install", False))
 
     # v2: 拒绝在 active session 期间凝固 (session 没 end 说明教学没完, 凝固
     # 早了会拿不全步骤)
@@ -229,13 +270,24 @@ def freeze_skill(args: dict[str, Any]) -> dict[str, Any]:
             ),
         }
 
-    # 3) 落地
-    root = _resolve_catfish_skills_root()
-    if root is None:
-        return {
-            "ok": False,
-            "error": "找不到 catfish skills 根目录 (设 CATFISH_SKILLS_DIR env).",
-        }
+    # 3) 落地 — 按 target 切换 root (5/21 方案 1)
+    register_result: dict[str, Any] = {"ran": False}
+    if target == "local":
+        root = _resolve_local_skills_root()
+        # target='local' 时自动注册到 hermes external_dirs (幂等)
+        register_result = ensure_external_dir_registered(root)
+        register_result["ran"] = True
+    else:  # target='workspace'
+        root = _resolve_workspace_skills_root()
+        if root is None:
+            return {
+                "ok": False,
+                "error": (
+                    "target='workspace' 找不到 catfish 工程 skills 根目录 "
+                    "(设 CATFISH_SKILLS_DIR env). 改 target='local' 落本机 "
+                    "~/.catfish/skills/."
+                ),
+            }
     skill_dir = root / namespace / name
     if skill_dir.exists() and not overwrite:
         return {
@@ -276,9 +328,12 @@ def freeze_skill(args: dict[str, Any]) -> dict[str, Any]:
     )
     (skill_dir / "SKILL.md").write_text(skill_md, encoding="utf-8")
 
-    # 4) install_to_hermes
+    # 4) install_to_hermes — 仅 target='workspace' + run_install=True 时跑
+    # 5/21 方案 1: target='local' 已经通过 external_dirs 让 hermes 看到了, 不需要
+    # cp 到 ~/.hermes/skills/productivity/catfish-*/. 也不要 default 自动 install
+    # (隐私: 教学产物默认本机, 显式才 install/publish).
     install_result: dict[str, Any] = {"ran": False}
-    if run_install:
+    if run_install and target == "workspace":
         install_sh = root / "install_to_hermes.sh"
         if install_sh.exists():
             try:
@@ -296,12 +351,38 @@ def freeze_skill(args: dict[str, Any]) -> dict[str, Any]:
                 install_result = {"ran": True, "error": repr(e)}
         else:
             install_result = {"ran": False, "reason": "install_to_hermes.sh 不存在"}
+    elif run_install and target == "local":
+        # target='local' 不该走 install_to_hermes — 已经通过 external_dirs 注册
+        install_result = {
+            "ran": False,
+            "reason": (
+                "target='local' 用 external_dirs, 不需要 cp 到 ~/.hermes/skills/. "
+                "想强制装到 hermes productivity 改 target='workspace'."
+            ),
+        }
+
+    # 5/21 方案 1 summary 区分 target
+    if target == "local":
+        summary = (
+            f"✓ 凝固完成 (target=local, 教学私有路径). {namespace}/{name} → "
+            f"{skill_dir}. hermes 通过 skills.external_dirs 自动识别. "
+            f"想发布到团队 Hub: 显式调 catfish_skill_publish(skill_path='{skill_dir}', "
+            f"namespace='{namespace}') (员工本机点按钮触发, 不要 LLM 自己调)."
+        )
+    else:  # workspace
+        summary = (
+            f"✓ 凝固完成 (target=workspace, 业务 skill 工程目录). {namespace}/{name} "
+            f"({skill_dir}). 跑 install_to_hermes.sh 同步到 ~/.hermes/skills/"
+            f"productivity/catfish-{name}: {'成功' if install_result.get('returncode') == 0 else '未跑或失败'}."
+        )
 
     return {
         "ok": True,
         "name": name,
         "namespace": namespace,
+        "target": target,
         "skill_path": f"{namespace}/{name}",
+        "skill_dir": str(skill_dir),
         "hermes_name": f"catfish-{name}",
         "files": [
             str(skill_dir / "script.py"),
@@ -309,12 +390,9 @@ def freeze_skill(args: dict[str, Any]) -> dict[str, Any]:
         ],
         "trace_steps_used": len(trace),
         "params": [{"name": n, "type": t, "default": d} for n, t, d in params],
+        "register_external_dir": register_result,
         "install": install_result,
-        "summary": (
-            f"✓ 凝固完成. {namespace}/{name} (script.py + SKILL.md). "
-            f"调 catfish_run_skill('{namespace}/{name}', {{...}}) 复用. "
-            f"hermes 端 = catfish-{name}."
-        ),
+        "summary": summary,
     }
 
 

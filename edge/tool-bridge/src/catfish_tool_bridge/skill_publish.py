@@ -40,7 +40,7 @@ GATEWAY_URL = _os.environ.get(
     f"http://{_GATEWAY_HOST}:{_GATEWAY_PORT}",
 )
 
-#: 凭据 / 敏感字段正则 — publish 前 grep, 撞到拒绝
+#: 凭据 / 敏感字段正则 — publish 前 grep, 撞到拒绝 (BL-D2, 5/10 ship)
 _SENSITIVE_PATTERNS = [
     re.compile(r"\bpassword\s*[:=]\s*['\"]?[A-Za-z0-9_\-!@#$%^&*]{4,}", re.IGNORECASE),
     re.compile(r"\bapi_?key\s*[:=]\s*['\"]?[A-Za-z0-9_\-]{16,}", re.IGNORECASE),
@@ -48,6 +48,37 @@ _SENSITIVE_PATTERNS = [
     re.compile(r"\bsk-[A-Za-z0-9]{20,}"),  # OpenAI / DeepSeek key
     re.compile(r"\bAIza[A-Za-z0-9_\-]{35}"),  # Gemini key
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),  # SSH / RSA key
+]
+
+#: PII 扫描 (5/21 方案 1): 教学产物 publish 前防身份证号 / 姓名 / 工号上传
+#:
+#: 命中位置: SKILL.md / script.py 里 hardcode 的数据 (录屏 OCR 误写 / 流程含真员工
+#: 姓名/工号). 命中 → 拒上传 + 提示员工脱敏.
+_PII_PATTERNS = [
+    # 中国身份证号 (18 位, 含末尾 X)
+    re.compile(r"\b[1-9]\d{5}(?:18|19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx]\b"),
+    # 中国手机号 (11 位, 1 开头)
+    re.compile(r"\b1[3-9]\d{9}\b"),
+    # 工号 (8-12 位数字, 前后是空格 / : / = / 'employee_id' 等上下文词)
+    re.compile(r"(?i)\b(employee_?id|work_?no|工号|员工号)\s*[:=]\s*['\"]?\d{6,12}\b"),
+    # 银行卡号 (16-19 位)
+    re.compile(r"\b\d{16,19}\b"),
+]
+
+#: 内网 URL / hostname 扫描 (5/21 方案 1): 防教学录屏把内网拓扑信息打包上 Hub.
+#:
+#: 客户企业内网常用网段 / 域名后缀. 撞到 → 拒上传 + 提示员工脱敏成 example.com /
+#: 占位符 / 环境变量.
+_INTRANET_PATTERNS = [
+    # 内网 IP 段 (RFC 1918)
+    re.compile(r"\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b"),
+    re.compile(r"\b192\.168\.\d{1,3}\.\d{1,3}\b"),
+    re.compile(r"\b172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}\b"),
+    # 常见企业域名后缀
+    re.compile(r"https?://[\w\-]+\.(corp|internal|intra|local)\b"),
+    # FFCS 默认拿到的内网 hostname pattern (鸿波公司, 灵敏)
+    re.compile(r"\beis[\.\-][\w\-]+\b"),
+    re.compile(r"\boa[\.\-][\w\-]+\b"),
 ]
 
 #: skill 目录里要打包的文件后缀
@@ -66,7 +97,7 @@ def _read_id_token() -> str | None:
 
 
 def _scan_sensitive(file_map: dict[str, bytes]) -> list[str]:
-    """扫所有文件内容找凭据. 返命中文件名列表."""
+    """扫所有文件内容找凭据 (BL-D2). 返命中文件名列表."""
     hits = []
     for rel, content in file_map.items():
         try:
@@ -76,6 +107,39 @@ def _scan_sensitive(file_map: dict[str, bytes]) -> list[str]:
         for pat in _SENSITIVE_PATTERNS:
             if pat.search(text):
                 hits.append(f"{rel} (撞 {pat.pattern[:40]})")
+                break
+    return hits
+
+
+def _scan_pii(file_map: dict[str, bytes]) -> list[str]:
+    """扫 PII (5/21 方案 1). 返命中文件名 + 撞到的字段类型."""
+    hits = []
+    pii_names = ["身份证号", "手机号", "工号", "银行卡号"]
+    for rel, content in file_map.items():
+        try:
+            text = content.decode("utf-8", errors="ignore")
+        except Exception:
+            continue
+        for idx, pat in enumerate(_PII_PATTERNS):
+            m = pat.search(text)
+            if m:
+                hits.append(f"{rel} (含 {pii_names[idx]}: {m.group()[:6]}***)")
+                break  # 一个文件命中一类就够, 不重复报
+    return hits
+
+
+def _scan_intranet(file_map: dict[str, bytes]) -> list[str]:
+    """扫内网 URL/hostname (5/21 方案 1). 返命中文件名 + 撞到的 URL 片段."""
+    hits = []
+    for rel, content in file_map.items():
+        try:
+            text = content.decode("utf-8", errors="ignore")
+        except Exception:
+            continue
+        for pat in _INTRANET_PATTERNS:
+            m = pat.search(text)
+            if m:
+                hits.append(f"{rel} (含内网: {m.group()})")
                 break
     return hits
 
@@ -138,7 +202,8 @@ def skill_publish(args: dict[str, Any]) -> dict[str, Any]:
     if "SKILL.md" not in file_map:
         return {"ok": False, "error": "SKILL.md 没收到 (可能是软链或权限问题)"}
 
-    # 凭据扫描 (publish 不能上传含密码 / api key 的文件)
+    # 5/21 方案 1: 3 道扫描串联跑, 任一命中就拒
+    # (a) 凭据 (BL-D2) — publish 不能上传含密码 / api key 的文件
     leaks = _scan_sensitive(file_map)
     if leaks:
         return {
@@ -148,6 +213,34 @@ def skill_publish(args: dict[str, Any]) -> dict[str, Any]:
                 + "\n  ".join(leaks)
                 + "\n请把凭据改成 keychain:// ref 后重试."
             ),
+            "scan_phase": "credentials",
+        }
+
+    # (b) PII (5/21 方案 1) — 防身份证号 / 手机号 / 工号 / 银行卡号上传
+    pii_hits = _scan_pii(file_map)
+    if pii_hits:
+        return {
+            "ok": False,
+            "error": (
+                "publish 前 PII 扫描命中, 拒绝上传 (教学录屏可能写进 hardcode 数据):\n  "
+                + "\n  ".join(pii_hits)
+                + "\n请把员工 PII 改成占位符 (例 '{{employee_id}}') 或参数 (params) 后重试."
+            ),
+            "scan_phase": "pii",
+        }
+
+    # (c) 内网 URL (5/21 方案 1) — 防内网拓扑信息泄漏
+    intranet_hits = _scan_intranet(file_map)
+    if intranet_hits:
+        return {
+            "ok": False,
+            "error": (
+                "publish 前内网 URL 扫描命中, 拒绝上传:\n  "
+                + "\n  ".join(intranet_hits)
+                + "\n请把内网域名 / IP 改成 example.com / 环境变量 (例 "
+                "{{INTRANET_OA_URL}}) 或占位符后重试."
+            ),
+            "scan_phase": "intranet",
         }
 
     # 拿 OAuth id_token

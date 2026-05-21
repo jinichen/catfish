@@ -24,13 +24,13 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def isolated_dirs(tmp_path, monkeypatch):
-    """trace + skills 目录隔离."""
-    from catfish_tool_bridge import trace_recorder, skill_freeze
+    """trace + skills 目录隔离 (5/21: 同时隔离 LOCAL_SKILLS_ROOT 防写真用户 home)."""
+    from catfish_tool_bridge import trace_recorder, skill_freeze, skill_register
     fake_home = tmp_path / "home"
     fake_traces = fake_home / ".catfish" / "traces"
-    fake_skills = tmp_path / "skills"
+    fake_skills = tmp_path / "skills"          # workspace path
+    fake_local = fake_home / ".catfish" / "skills"  # 5/21 local path (默认 target)
     fake_skills.mkdir()
-    # 不放空 install_to_hermes.sh — 让 freeze 跑时 run_install 跳过
     monkeypatch.setattr(trace_recorder, "TRACE_DIR", fake_traces)
     monkeypatch.setattr(trace_recorder, "TRACE_PATH", fake_traces / "active.jsonl")
     monkeypatch.setattr(trace_recorder, "STATE_PATH", fake_traces / "_state.json")
@@ -38,7 +38,19 @@ def isolated_dirs(tmp_path, monkeypatch):
     monkeypatch.setattr(trace_recorder, "ARCHIVE_DIR", fake_traces)
     trace_recorder._SEQ = 0
     monkeypatch.setenv("CATFISH_SKILLS_DIR", str(fake_skills))
-    yield {"home": fake_home, "skills": fake_skills, "traces": fake_traces}
+    # 5/21 方案 1: target='local' 默认, mock LOCAL_SKILLS_ROOT 防写真 ~/.catfish/skills/
+    monkeypatch.setattr(skill_register, "LOCAL_SKILLS_ROOT", fake_local)
+    monkeypatch.setattr(skill_freeze, "LOCAL_SKILLS_ROOT", fake_local)
+    # 5/21: hermes config.yaml 也指向 tmp_path (默认没有, 注册器走 skipped_no_config)
+    fake_hermes_cfg = fake_home / ".hermes" / "config.yaml"
+    monkeypatch.setattr(skill_register, "HERMES_CONFIG_PATH", fake_hermes_cfg)
+    yield {
+        "home": fake_home,
+        "skills": fake_skills,
+        "traces": fake_traces,
+        "local": fake_local,
+        "hermes_cfg": fake_hermes_cfg,
+    }
 
 
 def _seed_eis_trace():

@@ -222,8 +222,8 @@ Hub server (中央 FastAPI):
 | `~/.hermes/skills/` (bundled) | hermes | 自带 skill (productivity/powerpoint 等) | 不动 (bundled) |
 | `~/.hermes/skills/.hub/` | hermes Hub | 从公网 source 装的状态 | 不动 (hub_installed) |
 | `~/.hermes/optional-skills/` | hermes | 可选官方 skill | 不动 |
-| `~/.hermes/skills/productivity/catfish-*` | catfish 历史 (5/12 BL-MM9-FREEZE) | 现 3 个业务 skill 落这 | ⚠️ 被判 agent-created, 方案 1 ship 后改走 external_dirs 或 pin 兜底 |
-| `~/.catfish/skills/<ns>/<name>/` | catfish (方案 1) | **教学产物默认落这**, 通过 hermes config.yaml `skills.external_dirs` 注册让 registry 看到 | 不动 (external_dirs 外, Curator 不扫) |
+| `~/.hermes/skills/productivity/catfish-*` | catfish 历史 (5/12 BL-MM9-FREEZE) | 现 3 个业务 skill 落这 | ✅ 方案 1 (5/21) ship 后 install_to_hermes.sh 末尾自动 pin (.curator_state), Curator 永跳过 |
+| `~/.catfish/skills/<ns>/<name>/` | catfish (方案 1 ship, 5/21) | **教学产物默认落这**, 通过 `skill_register.ensure_external_dir_registered()` 写 `~/.hermes/config.yaml` `skills.external_dirs` 让 hermes registry 看到 | 不动 (external_dirs 外, Curator 不扫) |
 | 中央 server `~/.catfish-hub/<ns>/<name>/<version>/` | catfish Hub | **publish 后中央副本** | 不动 (在 server) |
 | `~/person_task/catfish/skills/department/<name>/` | catfish 工程 (git tracked) | **业务 skill 源码** (leadership-briefing 等) | 不动 (不在 `~/.hermes/`) |
 

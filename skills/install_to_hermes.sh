@@ -109,6 +109,71 @@ echo ""
 echo "=========================================="
 echo -e "${GREEN}✓ 已同步 $synced 个 skill${RESET}"
 echo ""
+
+# ── 5/21 加: pin 这些 catfish-* skill 防 Curator archive ─────────────
+# catfish-* 不在 hermes bundled_manifest 也不在 hub_installed_names →
+# is_agent_created() 判定 True → Curator 30 天没用就 archive (静默).
+# 写 ~/.hermes/skills/.curator_state 把它们加 paused list 让 Curator 跳过.
+# 详见 docs/CATFISH-HERMES-BOUNDARY.md "Skill 路径 + Curator 边界" 段.
+CURATOR_STATE="$HOME/.hermes/skills/.curator_state"
+if [ -d "$(dirname "$CURATOR_STATE")" ]; then
+  # 收集所有 catfish-* skill 名
+  catfish_skills=()
+  for src_dir in "$CATFISH_SKILLS_DIR"/department/*/; do
+    [ -d "$src_dir" ] || continue
+    [ -f "$src_dir/SKILL.md" ] || continue
+    catfish_skills+=("catfish-$(basename "$src_dir")")
+  done
+
+  if [ ${#catfish_skills[@]} -gt 0 ]; then
+    # 简单 jq-free 处理: 用 python 读取/合并/写回 (atomic via tmp+mv)
+    python3 - "$CURATOR_STATE" "${catfish_skills[@]}" <<'PYEOF'
+import json, os, sys, tempfile
+path = sys.argv[1]
+to_pin = set(sys.argv[2:])
+
+# 读
+state = {}
+if os.path.exists(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            state = json.load(f) or {}
+    except Exception:
+        state = {}
+
+if not isinstance(state, dict):
+    state = {}
+
+# 合并 paused list (兼容老格式 — paused / pinned 都看)
+paused = set(state.get("paused") or [])
+pinned = set(state.get("pinned") or [])
+paused.update(to_pin)
+state["paused"] = sorted(paused)
+# pinned 也加一份, 兼容不同 hermes 版本 (5/4 研究里 docstring 说 pin, 后续可能改键名)
+pinned.update(to_pin)
+state["pinned"] = sorted(pinned)
+
+# atomic write
+fd, tmp = tempfile.mkstemp(prefix=os.path.basename(path) + ".", dir=os.path.dirname(path))
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+except Exception as e:
+    try: os.unlink(tmp)
+    except FileNotFoundError: pass
+    print(f"WARN: pin 写盘失败: {e}", file=sys.stderr)
+    sys.exit(0)  # 不阻塞同步
+
+print(f"pinned {len(to_pin)} catfish-* skill (Curator 不会 archive 这些)")
+PYEOF
+    echo -e "${GREEN}✓${RESET} pin 写入 $CURATOR_STATE — Curator 永不 archive catfish-* skill"
+  fi
+else
+  echo -e "${YELLOW}⚠${RESET} $(dirname "$CURATOR_STATE") 不存在, 跳过 Curator pin (hermes 老版本?)"
+fi
+
+echo ""
 echo "下一步:"
 echo "  1. 重启 tool-bridge 让它重扫 skill 列表:"
 echo "       pkill -9 -f catfish_tool_bridge && sleep 8"
