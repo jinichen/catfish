@@ -317,6 +317,18 @@ def header_skips_identity(headers) -> bool:
     return val.lower() in ("true", "1", "yes")
 
 
+def request_skips_identity(request) -> bool:
+    """5/21 BL-CORS-DEBT-FIX: header 或 query param 任一指示 skip 都生效.
+
+    hermes proxy 8642 CORS allow-list 没配 X-Catfish-Skip-Identity, 前端通过
+    URL `?catfish_skip_identity=1` 传同效信号. 老 caller 走 header 仍然 work.
+    """
+    if header_skips_identity(request.headers):
+        return True
+    val = request.query_params.get("catfish_skip_identity", "")
+    return val.lower() in ("true", "1", "yes")
+
+
 def header_agent_prefs(headers) -> tuple[str, str]:
     """从 FastAPI request.headers 取员工自定义的 agent name / personality.
 

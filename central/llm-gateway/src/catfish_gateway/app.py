@@ -69,7 +69,8 @@ from .feedback_inject import inject_feedback  # noqa: E402  BL-MM6
 from .gemini_guard import harden_for_gemini  # noqa: E402
 from .identity_inject import (  # noqa: E402
     header_agent_prefs,
-    header_skips_identity,
+    header_skips_identity,  # noqa: F401 (5/21 留作 deprecated 引用)
+    request_skips_identity,
     inject_identity_if_needed,
 )
 from .inject_session_history import inject_session_history  # noqa: E402
@@ -2387,8 +2388,12 @@ async def chat_completions(
     # prompt_security detector / 等) 都能跳过 internal 调用. 这条**必须**在 line 1074
     # session_meta tick 之前赋值, 否则 UnboundLocalError. (5/5 17:13 鸿波报 P0,
     # 之前不知谁不小心注释了, 导致 chat_completions 全 500.)
+    #
+    # 5/21 BL-CORS-DEBT-FIX: hermes proxy 8642 CORS allow-list 没配 X-Catfish-*, 撞 preflight.
+    # 加 query param fallback (?catfish_internal=1) 兼容. header 仍优先, 老 caller 不破.
     is_internal_call = (
         request.headers.get("x-catfish-internal", "").lower() in ("true", "1", "yes")
+        or request.query_params.get("catfish_internal", "").lower() in ("true", "1", "yes")
     )
 
     # BL-RBAC-DAY4-HARDENING (5/17, hermes 0.14 #23194 ctx.llm bypass 防御):
@@ -2396,7 +2401,13 @@ async def chat_completions(
     # 调用如果没改 default 会留 unknown — audit 看 unknown 比例就知道部署里有
     # 多少 plugin 在绕开. 真要堵需要客户 IT firewall 把 plugin 出口锁回 catfish.
     # 字段进 audit log, 不阻塞 (绕 catfish 的 plugin 根本到不了我们这).
-    source_hint = request.headers.get("x-catfish-source", "").strip() or "unknown"
+    #
+    # 5/21 BL-CORS-DEBT-FIX: 加 ?catfish_source= query param fallback (hermes proxy CORS).
+    source_hint = (
+        request.headers.get("x-catfish-source", "").strip()
+        or request.query_params.get("catfish_source", "").strip()
+        or "unknown"
+    )
 
     # ────────────────────────────────────────────────────────────────────
     # BL-AUTH-DECOUPLE-A1 (5/19): service token + X-Catfish-User → on-behalf-of.
@@ -2464,7 +2475,7 @@ async def chat_completions(
     # 鲶鱼身份注入：客户端没传 system message 就自动加 SOUL + memory
     # Hermes 这种已自带 system 的不动；客户端可加 X-Catfish-Skip-Identity: true 强制跳过
     # BL-E11 命名权: header X-Catfish-Agent-Name / -Personality 让员工改名 + 选人设
-    skip = header_skips_identity(request.headers)
+    skip = request_skips_identity(request)  # 5/21: header 或 ?catfish_skip_identity=1 都生效
     # BL-LEAN-CHAT (5/15 凌晨): 服务 token (token_use=service, e.g. hermes-cli, cron, a2a)
     # 自动 skip identity. 服务调用不需要"鲶鱼人格", 它跑批 / 跑 skill, 拿原始 LLM 答即可.
     # 鸿波 5/14 端到端测时单 chat "1+1=?" 撞 35713 input tokens, 80% 来自 SOUL/identity.

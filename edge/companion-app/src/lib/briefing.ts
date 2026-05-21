@@ -64,11 +64,14 @@ function _personalityHint(personality: Personality | undefined): string {
  * sessions 表, 工作台左侧 session 列表混入"现在 14:58. 日历今天 1 件..." 这种
  * prompt 文字.
  */
+// 5/21 BL-CORS-DEBT-FIX: 删 X-Catfish-* header, 改 URL query param 传 (hermes proxy
+// 8642 CORS allow-list 没配这些 header, preflight 拒). gateway 端 5/21 已经支持
+// ?catfish_source=&catfish_skip_identity=1 query param fallback.
 const SERVICE_LLM_HEADERS = {
   "content-type": "application/json",
-  "X-Catfish-Source": "companion-briefing-card",
-  "X-Catfish-Skip-Identity": "true",
 };
+
+const SERVICE_LLM_QUERY = "?catfish_source=companion-briefing-card&catfish_skip_identity=1";
 
 const SYSTEM_PROMPT = `你是用户的鲶鱼数字员工 (Catfish), 帮员工写早安播报的 💡 优先建议行.
 风格:
@@ -153,7 +156,7 @@ export async function fetchBriefingSuggestion(
   }
 
   const userPrompt = _buildUserPrompt(unread, events, todos);
-  const url = `${config.backendUrl}/v1/chat/completions`;
+  const url = `${config.backendUrl}/v1/chat/completions${SERVICE_LLM_QUERY}`;
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 5000);
@@ -205,9 +208,10 @@ export async function fetchBriefingSuggestion(
 
 // ── BL-BRIEFING-LLM-MERGE (5/20): 合并 2 个 LLM 调用为 1 个 ──────
 //
-// 老路径 (BriefingCard 当前): fetchBriefingSuggestion + fetchLlmJournalTodos 并发,
-// 卡慢的那个 (~6s). 合并后 1 个 prompt 同时返 JSON `{todos, suggestion}`, 减一半
-// 延迟 + 减一半 token. JSON 解析失败 → 调用方 fallback 到两个独立调用.
+// fetchBriefingSuggestion + fetchLlmJournalTodos 各跑 ~6s, 并发也要等慢的那个.
+// 合并后 1 个 prompt 同时返 `{todos, suggestion}`, 减一半延迟 + 减一半 token.
+// JSON 解析失败 → 调用方 fallback 到两个独立调用.
+// (5/21 Phase 6 后, BriefingCard 只读 .todos 字段, .suggestion 仅 useProactiveScheduler 用.)
 
 const MERGED_SYSTEM_PROMPT = `你是用户的鲶鱼数字员工 (Catfish), 帮员工同时干两件事:
 
@@ -267,7 +271,7 @@ export async function fetchMergedBriefing(
   }
 
   const userPrompt = _buildMergedUserPrompt(unread, events, knownTodos, journalText, urgentEmails);
-  const url = `${config.backendUrl}/v1/chat/completions`;
+  const url = `${config.backendUrl}/v1/chat/completions${SERVICE_LLM_QUERY}`;
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 8000);
@@ -438,7 +442,7 @@ export async function fetchUrgentEmailStarter(
     .join("\n");
   const userPrompt = `刚到 ${urgentEmails.length} 封急邮件:\n${list}\n\n写一句桌宠提醒.`;
 
-  const url = `${config.backendUrl}/v1/chat/completions`;
+  const url = `${config.backendUrl}/v1/chat/completions${SERVICE_LLM_QUERY}`;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 4000);
 
@@ -524,7 +528,7 @@ export async function fetchLlmJournalTodos(
     `journal 内容:\n${journalText}\n\n` +
     `请返自然语言 TODO 的 JSON array.`;
 
-  const url = `${config.backendUrl}/v1/chat/completions`;
+  const url = `${config.backendUrl}/v1/chat/completions${SERVICE_LLM_QUERY}`;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 6000);
 
