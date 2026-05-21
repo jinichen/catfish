@@ -25,12 +25,32 @@ SECTION_RE = re.compile(r"^##\s+(.+?)\s*$")
 
 @dataclass
 class JournalTodo:
-    """journal_todos_fetch 返的单条 TODO. 跟 Rust JournalTodo struct 对齐."""
+    """journal_todos_fetch 返的单条 TODO. 跟 Rust JournalTodo struct 对齐.
+
+    is_priority (5/21 加): 员工标记的"重点工作". 替代 5/20 ship 的 GoalInput
+    独立输入框 — 在 journal markdown 里某条 TODO 前加 ⭐ / 🔝 / "重点:" 前缀,
+    解析时识别. 早安播报里 priority 项排序置顶 + 单独标记.
+    """
 
     text: str
     line: int  # 1-based
     source: str  # "checkbox" | "inline"
     section: str  # 所在段标题, 没有返空
+    is_priority: bool = False  # 5/21 加, 默认 False 兼容老 caller
+
+
+# 5/21 加: 重点 TODO 前缀识别 — 员工在 markdown 里写
+#   - [ ] ⭐ 完成季度汇报
+#   - [ ] 重点: 完成季度汇报
+#   - [ ] 🔝 完成季度汇报
+# 任一前缀就识别为 priority. text 字段去掉前缀 (UI 单独打 ⭐ 标记, 不重复显示)
+_PRIORITY_PREFIX_RE = re.compile(r"^(?:⭐|🔝|重点[:：]?\s*)")
+
+
+def _strip_priority_prefix(content: str) -> tuple[str, bool]:
+    """检查 content 是否带 priority 前缀. 返 (去前缀后的纯文本, is_priority)."""
+    stripped = _PRIORITY_PREFIX_RE.sub("", content).strip()
+    return stripped, stripped != content.strip()
 
 
 # ── 抽 TODO ──────────────────────────────────────────────────────────────
@@ -43,6 +63,7 @@ def extract_todos(text: str) -> list[JournalTodo]:
     - 行内 `TODO: xxx` / `待办: xxx` 抽出来标 source=inline
     - 已完成 `- [x] xxx` 跳过
     - `- [x] TODO: xxx` 跳过 (避免双抽)
+    - 5/21 加: text 以 ⭐ / 🔝 / "重点:" 开头 → is_priority=True, text 去前缀
     """
     todos: list[JournalTodo] = []
     current_section = ""
@@ -61,12 +82,14 @@ def extract_todos(text: str) -> list[JournalTodo]:
         if m:
             # m.group(2) 是 "[ ]" 之后那段, 去掉前导空白
             content = line[line.index("[ ]") + 3 :].strip()
+            cleaned, is_priority = _strip_priority_prefix(content)
             todos.append(
                 JournalTodo(
-                    text=content,
+                    text=cleaned,
                     line=lineno,
                     source="checkbox",
                     section=current_section,
+                    is_priority=is_priority,
                 )
             )
             continue
@@ -76,12 +99,15 @@ def extract_todos(text: str) -> list[JournalTodo]:
             continue
         m = INLINE_TODO_RE.search(line)
         if m:
+            content = m.group(1).strip()
+            cleaned, is_priority = _strip_priority_prefix(content)
             todos.append(
                 JournalTodo(
-                    text=m.group(1).strip(),
+                    text=cleaned,
                     line=lineno,
                     source="inline",
                     section=current_section,
+                    is_priority=is_priority,
                 )
             )
 

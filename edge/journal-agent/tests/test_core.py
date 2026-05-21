@@ -314,3 +314,53 @@ def test_roundtrip_add_then_extract():
     assert len(todos) == 2
     assert any("新任务" in t.text for t in todos)
     assert any("老任务" in t.text for t in todos)
+
+
+# ── is_priority 解析 (5/21 加) ───────────────────────────────────────
+
+
+def test_priority_star_prefix():
+    """⭐ 前缀识别 + text 去前缀."""
+    out = core.extract_todos("- [ ] ⭐ 完成季度汇报")
+    assert len(out) == 1
+    assert out[0].is_priority is True
+    assert out[0].text == "完成季度汇报"  # 去掉 ⭐
+
+
+def test_priority_top_emoji_prefix():
+    """🔝 前缀识别."""
+    out = core.extract_todos("- [ ] 🔝 给老李回复")
+    assert out[0].is_priority is True
+    assert out[0].text == "给老李回复"
+
+
+def test_priority_chinese_prefix():
+    """'重点:' / '重点：' 中英文冒号都识别."""
+    out = core.extract_todos("- [ ] 重点: 跑完整周报\n- [ ] 重点：写邮件")
+    assert len(out) == 2
+    assert all(t.is_priority for t in out)
+    assert out[0].text == "跑完整周报"
+    assert out[1].text == "写邮件"
+
+
+def test_priority_default_false():
+    """没前缀 → is_priority=False (向后兼容)."""
+    out = core.extract_todos("- [ ] 普通任务\nTODO: 普通行内")
+    assert len(out) == 2
+    assert all(t.is_priority is False for t in out)
+
+
+def test_priority_inline_todo():
+    """行内 TODO: 也支持 ⭐ 前缀."""
+    out = core.extract_todos("TODO: ⭐ 重点任务")
+    assert len(out) == 1
+    assert out[0].is_priority is True
+    assert out[0].text == "重点任务"
+
+
+def test_priority_mixed_sort_order():
+    """priority + 普通 TODO 混合, extract 按行号顺序; 排序由 caller 做."""
+    md = "- [ ] 普通 1\n- [ ] ⭐ 重点\n- [ ] 普通 2"
+    out = core.extract_todos(md)
+    assert [t.text for t in out] == ["普通 1", "重点", "普通 2"]
+    assert [t.is_priority for t in out] == [False, True, False]
