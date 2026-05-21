@@ -629,3 +629,63 @@ def _scrub_messages_for_dropped_tools(
             dropped_tool_msgs,
             ", ".join(sorted(dropped_names)[:3]),
         )
+
+    # BL-LOOP-C (5/21 鸿波): scrub 完之后给 LLM 显式反馈 — 否则它根本不知道自己
+    # 调过的工具被砍了, 下轮又 emit 同名 tool_call (实测 c90300056cee /
+    # e49d475cec4a session 30s 反复同 3 个工具 browser_snapshot /
+    # confirm_expertise / create_calendar_event). 注 system message 末尾"工具状态
+    # 告知", 不动 assistant/tool 历史 shape (防上游 400).
+    _inject_scrub_notice(body["messages"], dropped_names)
+
+
+# ── BL-LOOP-C (5/21): scrub 反馈注入 ────────────────────────────────
+
+#: System message 末尾标记 — 老 notice 入口 strip 时认这个 token, 不重复堆叠.
+SCRUB_NOTICE_MARKER = "[catfish-scrub-notice]"
+
+
+def _inject_scrub_notice(messages: list[Any], dropped_names: set[str]) -> None:
+    """在 system message 末尾追加被砍工具反馈, 给 LLM 显式信号.
+
+    打破: BL-FIX4 dedupe / BL-TOOL-CAP / BL-RBAC scrub 后, LLM 看不到自己调过被砍
+    工具 (assistant.tool_calls + tool message 都被删), 下轮又 emit 同名 tool_call,
+    形成 30s 反复重试的 loop (5/21 鸿波 19:30 日志诊断). 注一条 system notice 后
+    LLM 明知工具不可用, 自动避让.
+
+    不动 assistant/tool 历史 shape (那会撞上游 Qwen Go gRPC 校验 "tool_call.name 必须
+    在 tools 列表里" 抛 400). 只追 system tail.
+
+    幂等: 每次 sanitize 都会跑, 但 marker 让老 notice 先被截掉, 不堆叠.
+    """
+    if not dropped_names:
+        return
+    if not isinstance(messages, list) or not messages:
+        return
+
+    notice = (
+        f"\n\n{SCRUB_NOTICE_MARKER} ⚠️ 以下工具在本次请求**不可用** (RBAC/Cap/Dedupe 砍掉): "
+        f"{', '.join(sorted(dropped_names))}. "
+        f"**不要再调这些工具**, 也不要假设它们的输出. "
+        f"改用其他可用工具 (e.g. catfish_search) 或直接给用户文字回复."
+    )
+
+    # 找首条 system message
+    sys_idx = next(
+        (
+            i for i, m in enumerate(messages)
+            if isinstance(m, dict) and m.get("role") == "system"
+        ),
+        None,
+    )
+
+    if sys_idx is not None:
+        msg = messages[sys_idx]
+        content = msg.get("content")
+        if isinstance(content, str):
+            # 截掉上一轮 notice (marker 之后全是老 notice, strip 再加新的)
+            if SCRUB_NOTICE_MARKER in content:
+                content = content.split(SCRUB_NOTICE_MARKER, 1)[0].rstrip()
+            messages[sys_idx] = {**msg, "content": content + notice}
+        # content 是 multipart list 等非 str — 不动, 简化处理
+    # 没 system message → 不主动插入. 真实 chat 一定有 system (Companion/hermes 都注),
+    # 没的多半是测试 / 直接 curl, 不污染. 老 test (test_scrub_history_*) 也不破.

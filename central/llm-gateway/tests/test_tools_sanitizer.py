@@ -757,3 +757,7 @@ def test_scrub_history_logs(caplog: object) -> None:
     msg = matched[0].getMessage()
     assert "丢 assistant=1" in msg
     assert "丢 orphan tool msg=1" in msg
+
+
+# BL-LOOP-C (5/21) — scrub 后注入"工具已砍"反馈测试: 拆到 test_tools_sanitizer_scrub_notice.py
+# (5/21 拆分超 800 行红线时移走). 主文件保留 BL-FIX4/FIX5 dedupe + scrub 测试.
