@@ -85,6 +85,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": [
+      "swift/catfish-calendar"
+    ],
     "macOS": {
       "minimumSystemVersion": "10.15",
       "infoPlist": "Info.plist"

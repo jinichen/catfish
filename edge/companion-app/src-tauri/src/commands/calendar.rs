@@ -231,9 +231,15 @@ pub async fn calendar_week_fetch(force_refresh: Option<bool>) -> Result<String, 
         }
     }
 
-    // week 时间窗大, 比 today 再宽一点
+    // BL-CALENDAR-EVENTKIT (5/21): 优先 EventKit binary, osascript fallback.
     let result = tokio::task::spawn_blocking(|| {
-        run_osascript(JXA_WEEK_EVENTS, Duration::from_secs(20))
+        match run_eventkit("week", Duration::from_secs(3)) {
+            Ok(json) => Ok(json),
+            Err(e) => {
+                eprintln!("[calendar] EventKit binary 不可用 ({}), fallback osascript", e);
+                run_osascript(JXA_WEEK_EVENTS, Duration::from_secs(20))
+            }
+        }
     })
     .await
     .map_err(|e| format!("join error: {e}"))?;
@@ -267,10 +273,17 @@ pub async fn calendar_today_fetch(force_refresh: Option<bool>) -> Result<String,
         }
     }
 
-    // tokio spawn_blocking 跑 sync Command, 不阻塞 async runtime
-    // 5/20 鸿波本机 8s 不够 (多账号 calendar). 提到 15s + 跳订阅 calendar 减查询次数.
+    // BL-CALENDAR-EVENTKIT (5/21): 优先调 Swift binary (EventKit), osascript 兜底.
+    // EventKit 直调 macOS 原生 API < 100ms 稳定, 不走 AppleScript subprocess 冷启动慢.
+    // Swift binary 不存在 (未编译 / 跨平台) → fallback osascript 老路径.
     let result = tokio::task::spawn_blocking(|| {
-        run_osascript(JXA_TODAY_EVENTS, Duration::from_secs(15))
+        match run_eventkit("today", Duration::from_secs(3)) {
+            Ok(json) => Ok(json),
+            Err(e) => {
+                eprintln!("[calendar] EventKit binary 不可用 ({}), fallback osascript 15s timeout", e);
+                run_osascript(JXA_TODAY_EVENTS, Duration::from_secs(15))
+            }
+        }
     })
     .await
     .map_err(|e| format!("join error: {e}"))?;
@@ -284,6 +297,109 @@ pub async fn calendar_today_fetch(force_refresh: Option<bool>) -> Result<String,
     }
 
     result
+}
+
+/// BL-CALENDAR-EVENTKIT (5/21): spawn catfish-calendar Swift binary 调 EventKit.
+///
+/// 路径查找顺序:
+///   1. .app/Contents/Resources/catfish-calendar  (生产 build 后打包路径)
+///   2. ../../catfish-calendar  (开发期 tauri dev, swift/ 目录里 swiftc -o ../catfish-calendar)
+///   3. src-tauri/swift/catfish-calendar         (开发期, 跟源码同目录)
+///   4. PATH 找  (员工手动 swiftc 编译装 /usr/local/bin/)
+///
+/// 子命令: today / week / list-cals / create
+/// 超时 3s (EventKit < 100ms 正常, 给到 3s 应对系统繁忙)
+fn run_eventkit(subcmd: &str, timeout: Duration) -> Result<String, String> {
+    use std::io::Read;
+
+    // 找 binary
+    let bin_path = locate_eventkit_binary()
+        .ok_or_else(|| "catfish-calendar binary 未找到 (尚未编译? cd src-tauri/swift && bash build.sh)".to_string())?;
+
+    let mut child = Command::new(&bin_path)
+        .args([subcmd, "--json"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("spawn catfish-calendar 失败: {e}"))?;
+
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut stdout = String::new();
+                let mut stderr = String::new();
+                if let Some(mut so) = child.stdout.take() {
+                    let _ = so.read_to_string(&mut stdout);
+                }
+                if let Some(mut se) = child.stderr.take() {
+                    let _ = se.read_to_string(&mut stderr);
+                }
+                if !status.success() {
+                    return Err(format!(
+                        "catfish-calendar exit {:?}: {}",
+                        status.code(),
+                        stderr.trim()
+                    ));
+                }
+                let trimmed = stdout.trim();
+                if trimmed.is_empty() {
+                    return Ok("[]".to_string());
+                }
+                return Ok(trimmed.to_string());
+            }
+            Ok(None) => {
+                if start.elapsed() > timeout {
+                    let _ = child.kill();
+                    return Err(format!("catfish-calendar 超时 {}s (EventKit 应该 < 100ms, 超时异常)", timeout.as_secs()));
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(e) => {
+                return Err(format!("catfish-calendar wait 失败: {e}"));
+            }
+        }
+    }
+}
+
+fn locate_eventkit_binary() -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+
+    // 1. .app/Contents/Resources/catfish-calendar (tauri build 后路径)
+    if let Ok(exe) = std::env::current_exe() {
+        // exe 在 .app/Contents/MacOS/<binary>, Resources 同级
+        if let Some(macos_dir) = exe.parent() {
+            if let Some(contents_dir) = macos_dir.parent() {
+                let candidate = contents_dir.join("Resources").join("catfish-calendar");
+                if candidate.exists() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+
+    // 2 + 3. 开发期: src-tauri/swift/catfish-calendar / src-tauri/catfish-calendar
+    let dev_candidates: [PathBuf; 2] = [
+        PathBuf::from("src-tauri/swift/catfish-calendar"),
+        PathBuf::from("src-tauri/catfish-calendar"),
+    ];
+    for c in dev_candidates {
+        if c.exists() {
+            return Some(c);
+        }
+    }
+
+    // 4. PATH
+    if let Ok(output) = Command::new("which").arg("catfish-calendar").output() {
+        if output.status.success() {
+            let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path_str.is_empty() {
+                return Some(PathBuf::from(path_str));
+            }
+        }
+    }
+
+    None
 }
 
 fn run_osascript(script: &str, timeout: Duration) -> Result<String, String> {
@@ -333,9 +449,13 @@ fn run_osascript(script: &str, timeout: Duration) -> Result<String, String> {
                     let _ = child.kill();
                     return Err(format!(
                         "osascript 超时 {}s. 常见原因: \
-                        (1) macOS 弹了授权对话框被忽略 — 系统设置 → 隐私 → 自动化 → 鲶鱼 Companion → 勾 Calendar; \
-                        (2) Calendar.app 多账号 / 订阅日历多 — 已自动跳订阅 calendar; \
-                        (3) Calendar.app 冷启动 — 重试一次一般快; \
+                        (1) **macOS 14+ 日历权限给的是 '仅添加访问权限', 读取被静默拒**: \
+                           系统设置 → 隐私与安全性 → 日历 → Catfish Companion → 点 '选项...' → 改成 '完全日历访问权限'. \
+                           '仅添加' 只能创建事件, 不能读今天日程. \
+                        (1.5) **改完权限要 Cmd+Q 完全退出 Companion 再重开**: TCC 权限按进程启动时快照, 改完不重启用的还是旧权限快照. \
+                        (2) macOS 弹了首次授权对话框被忽略: 系统设置 → 隐私 → 自动化 → 鲶鱼 Companion → 勾 Calendar; \
+                        (3) Calendar.app 多账号 / 订阅日历多 — 已自动跳订阅 calendar; \
+                        (4) Calendar.app 冷启动 — 重试一次一般快; \
                         长期解决: BL-CALENDAR-INTEGRATION step3 Swift FFI EventKit",
                         timeout.as_secs()
                     ));

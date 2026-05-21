@@ -294,7 +294,39 @@ export interface JournalTodo {
   line: number;        // 1-based 行号
   source: "checkbox" | "inline";
   section: string;     // 所在段标题
+  // 5/21 加: 员工 markdown 里 ⭐ / 🔝 / "重点:" 前缀 → is_priority=true
+  // text 字段已去除前缀, UI 看到 is_priority 自己打 ⭐ 标. 早安播报 priority 项排序置顶.
+  // 后端 Rust 端 (src-tauri/src/commands/journal.rs) 跟着加 serde 字段, 没加就 undefined.
+  is_priority?: boolean;
 }
+
+// ── BL-BRIEFING-DECISION (5/21 Phase 5): 综合判断上下文包 ─────────────
+
+export interface SessionBrief {
+  id: string;
+  title: string;
+  startedAt: string;
+  firstUserMessage: string;
+  messageCount: number;
+}
+
+export interface WeeklyReportRef {
+  filename: string;
+  modifiedAt: string;
+}
+
+export interface BriefingContext {
+  distilledFacts: string;          // ~/.catfish/distilled_facts.md 全文
+  recentSessionBriefs: SessionBrief[];  // 最近 7 天 sessions (Phase 6 扩到周维度)
+  sessionGoal: string;              // ~/.catfish/session_goal.txt 员工自设今日重点
+  // 5/21 Phase 6 新加 3 个数据源
+  workplan: string;                 // ~/.catfish/workplan.md 员工自写本周/本月计划
+  projects: string;                 // ~/.catfish/projects.md 项目进度
+  weeklyReports: WeeklyReportRef[]; // outputs/ 下 weekly-* 文件 + mtime
+}
+
+export const briefingContextFetch = () =>
+  rawInvoke<BriefingContext>("briefing_context_fetch", {});
 
 // ── calendar (BL-CALENDAR-INTEGRATION 5/20) ───────────────
 // osascript JXA shell out 到 Calendar.app, 返今日 events JSON 字符串.

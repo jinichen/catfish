@@ -25,5 +25,12 @@
     <!-- AppleScript 触发系统 dictation (方案 B Day 1, osascript 用) -->
     <key>NSAppleEventsUsageDescription</key>
     <string>鲶鱼需要发 AppleScript 事件来触发 macOS 系统听写功能.</string>
+
+    <!-- EventKit 日历访问 (5/21 BL-CALENDAR-EVENTKIT-FFI, 替代 osascript 调 Calendar.app) -->
+    <!-- macOS 14+ 必须有此 key 才能调 EKEventStore.requestFullAccessToEvents -->
+    <key>NSCalendarsUsageDescription</key>
+    <string>鲶鱼需要读取日历事件来给早安播报和日程提醒功能用. 数据完全留在本机.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>鲶鱼需要完全访问日历来读取你的会议日程 (早安播报 / 智能提醒). 数据 0 出员工电脑.</string>
 </dict>
 </plist>
