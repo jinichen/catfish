@@ -68,6 +68,7 @@ git diff --name-only HEAD | xargs -I{} wc -l {} 2>/dev/null | sort -rn | head
 - **commit 前**: 自检过 + 测试过. 测试退化 0 容忍.
 - **触发拆分时**: 用上面的 re-export 协议, 不破 import 兼容, 跟着改测试 monkeypatch.
 - **写新 skill / 新 tool / 新 plugin 前**: 先看 `docs/CATFISH-HERMES-BOUNDARY.md`, 扫 `~/.hermes/hermes-agent/skills/` 和 `~/.hermes/hermes-agent/tools/` 防重叠. hermes 有 → 写 cookbook 不写 skill. 重写 hermes 已有的轮子 = 越界.
+- **写对外文案 / 销售物料 / 广告词 / demo deck 前**: 先看 `docs/CATFISH-POSITIONING-2026-05-19.md` "产品初衷 — 5 条护栏" 段 (员工拥有 / 跨雇主可携带 / 数据零出端 / 中央边缘分离 / 跨厂商 LLM 不绑死). 广告词可换皮, 初衷 5 条永不动. 5/21 新广告词 "员工成长加速器 + 组织能力沉淀器" 是包装升级, 不是替换初衷.
 
 ## 5. 已有拆分参考 (5/20-5/21 round 1+2)
 
