@@ -668,6 +668,25 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_list_calendars":
         from . import calendar_events  # noqa: PLC0415
         return calendar_events.tool_list_calendars(args)
+    # ── BL-ADVISOR (5/21 Phase 7): 6 个智能参谋 tool ──
+    if name == "catfish_draft_email_reply":
+        from . import advisor_drafts  # noqa: PLC0415
+        return advisor_drafts.draft_email_reply(args)
+    if name == "catfish_draft_meeting_brief":
+        from . import advisor_drafts  # noqa: PLC0415
+        return advisor_drafts.draft_meeting_brief(args)
+    if name == "catfish_compose_followup_list":
+        from . import advisor_drafts  # noqa: PLC0415
+        return advisor_drafts.compose_followup_list(args)
+    if name == "catfish_check_compliance":
+        from . import advisor_scans  # noqa: PLC0415
+        return advisor_scans.check_compliance(args)
+    if name == "catfish_political_sensitivity_scan":
+        from . import advisor_scans  # noqa: PLC0415
+        return advisor_scans.political_sensitivity_scan(args)
+    if name == "catfish_recall_decision_history":
+        from . import advisor_recall  # noqa: PLC0415
+        return advisor_recall.recall_decision_history(args)
     raise ValueError(f"unknown native tool: {name}")
 
 

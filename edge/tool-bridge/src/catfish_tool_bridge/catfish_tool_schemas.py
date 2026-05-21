@@ -2119,4 +2119,158 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ─── BL-ADVISOR (5/21 Phase 7): 6 个智能参谋 tool ─────────────────────
+    # 设计稿: docs/CATFISH-ADVISOR-DESIGN.md §4
+    # 5/21 鸿波: catfish 绝不代行, 只起草到 outputs/ + 给选项. tool 只做 IO,
+    # LLM 主调用方 generate 内容传给 tool. tool 不二次调 LLM (简版).
+    {
+        "name": "catfish_draft_email_reply",
+        "description": (
+            "起草邮件回信草稿到 ~/.catfish/outputs/<today>/reply-*.md, 不替员工发. "
+            "LLM 已 generate 好正文传 content 字段. 想给 2-3 个口径就调 2-3 次, "
+            "每次不同 tone."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tone": {
+                    "type": "string",
+                    "enum": ["strict", "balanced", "friendly", "formal", "urgent", "hold"],
+                    "description": "口径风格. strict=不松口, balanced=平衡, hold=暂缓.",
+                },
+                "thread_id": {"type": "string", "description": "邮件 thread id (元数据)"},
+                "recipient": {"type": "string", "description": "收件人"},
+                "subject": {"type": "string", "description": "邮件主题"},
+                "content": {"type": "string", "description": "LLM 已 generate 好的回信正文"},
+                "compliance_notes": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "(可选) check_compliance 跑出的合规提示",
+                },
+            },
+            "required": ["tone", "thread_id", "recipient", "subject", "content"],
+        },
+        "emoji": "✉️",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_draft_meeting_brief",
+        "description": (
+            "起草会议汇报材料 brief 到 ~/.catfish/outputs/<today>/meeting-brief-*.md. "
+            "LLM generate 好 markdown brief, 标 highlighted_uncertain 让员工开会前确认."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string", "description": "日历 event id"},
+                "event_title": {"type": "string", "description": "会议标题"},
+                "content": {"type": "string", "description": "LLM generate 的 brief 正文 (markdown)"},
+                "highlighted_uncertain": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "(可选) 待员工确认的数字/内容点",
+                },
+            },
+            "required": ["event_id", "event_title", "content"],
+        },
+        "emoji": "📄",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_compose_followup_list",
+        "description": (
+            "起草项目催办名单 + 多种沟通口径 → ~/.catfish/outputs/<today>/followup-*.md. "
+            "LLM 已 generate 含多人/多 tone 的 markdown."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string", "description": "项目名"},
+                "decision_ref": {"type": "string", "description": "(可选) 哪次会议拍的"},
+                "content": {"type": "string", "description": "LLM generate 的催办名单 markdown"},
+            },
+            "required": ["project", "content"],
+        },
+        "emoji": "📨",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_check_compliance",
+        "description": (
+            "扫一段文本 (邮件草稿 / 汇报材料) 的央国企合规风险 (ISO/审计/法务/财务). "
+            "返 flag 列表含 severity/type/matched_keyword/suggestion. 关键词匹配, 第一版."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "content": {"type": "string", "description": "要扫的文本"},
+                "context": {"type": "string", "description": "(可选) 涉及哪个项目/客户"},
+            },
+            "required": ["content"],
+        },
+        "emoji": "⚠️",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_political_sensitivity_scan",
+        "description": (
+            "扫文本对相关人 (上级/平级/客户) 的政治敏感度. 第一版保守, 只 flag + 给 "
+            "suggested_phrasings. senior tier + high severity 时 advisory_only=true, "
+            "UI 渲染'提醒人工核对'而不是'建议改'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "content": {"type": "string", "description": "文本"},
+                "related_people": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "relation": {"type": "string"},
+                        },
+                    },
+                    "description": "(可选) 涉及的人 [{name, relation}]",
+                },
+                "tier": {
+                    "type": "string",
+                    "enum": ["frontline", "mid", "senior"],
+                    "description": "(可选) 员工职级",
+                },
+            },
+            "required": ["content"],
+        },
+        "emoji": "🎯",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_recall_decision_history",
+        "description": (
+            "按 topic + 可选 person/project 检索 ~/.catfish/decisions.jsonl 过往决策口径. "
+            "让现在的建议跟历史一致 (不背离). substring 匹配, 第一版."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string", "description": "主题关键词 (必填)"},
+                "person": {"type": "string", "description": "(可选) 相关人"},
+                "project": {"type": "string", "description": "(可选) 相关项目"},
+                "limit": {
+                    "type": "integer",
+                    "description": "最多返几条 (默认 5, 上限 50)",
+                    "default": 5,
+                },
+            },
+            "required": ["topic"],
+        },
+        "emoji": "🔍",
+        "toolset": "catfish_native",
+        "available": True,
+    },
 ]
