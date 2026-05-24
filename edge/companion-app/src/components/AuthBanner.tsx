@@ -2,12 +2,18 @@
  *
  * 显示规则 (按优先级, 上面的胜出):
  *   - reauthing → 蓝色"正在续登..." (5/18 BL-COMPANION-AUTO-RELOGIN)
- *   - expired   → 红色"登录已过期 [重新登录]" 按钮 (5/18)
  *   - nearExpiry→ 黄色"登录即将过期, [续登]" 按钮 (5/18)
  *   - auth_method='dev_token' → 黄色 warning "你在用开发模式 token..."
  *   - auth_method='oidc'      → 不显示 (正常状态, 不打扰员工)
  *
  * 决策 6 (docs/AUTH-DESIGN.md § 13): dev_token 在 prod 也保留作兜底, 但 UI 必须警告.
+ *
+ * 5/22 鸿波: **expired 红条删掉**. 5/19 已经做了"真过期永远自动续登"
+ * (useAuth.ts:131-147), 红条 = stale noise — UI 显"已过期" 而 fetchWithAuth 401
+ * silent reauth 已经把 token 续上, 员工看见红条但 chat 能用, 反而误导.
+ * expired state 和 forceRelogin 在 useAuth 里保留 (内部自动续登要用), 只是
+ * UI 不展示. nearExpiry (< 5min) 仍展示 — 那是真"快到期" 的 advance warning,
+ * 不是"已挂"的 false alarm.
  */
 
 import { useAuth } from "../hooks/useAuth";
@@ -32,7 +38,7 @@ const BTN_BASE: React.CSSProperties = {
 };
 
 export default function AuthBanner() {
-  const { state, nearExpiry, expired, reauthing, forceRelogin } = useAuth();
+  const { state, nearExpiry, reauthing, forceRelogin } = useAuth();
 
   // 5/18 BL-COMPANION-AUTO-RELOGIN: reauth 进行中 → 蓝色提示
   if (reauthing) {
@@ -50,24 +56,10 @@ export default function AuthBanner() {
     );
   }
 
-  // 5/18 BL-COMPANION-AUTO-RELOGIN: 已过期 → 红色 + 一键续登
-  if (expired) {
-    return (
-      <div
-        style={{
-          ...BANNER_BASE,
-          background: "rgba(239, 68, 68, 0.15)",
-          borderBottomColor: "rgba(239, 68, 68, 0.4)",
-          color: "#ef4444",
-        }}
-      >
-        🔒 登录已过期, 部分功能不可用.
-        <button onClick={() => void forceRelogin()} style={BTN_BASE}>
-          重新登录
-        </button>
-      </div>
-    );
-  }
+  // 5/22 鸿波: expired 红条删. 5/19 已经在 useAuth.ts:131-147 做"真过期永远自动续登",
+  // 红条只是 stale noise — UI 显"已过期" 而 fetchWithAuth 401 silent reauth 已经把
+  // token 续上, 员工看见红条但 chat 能用, 反而误导. expired state 还在内部用
+  // (触发 forceRelogin), 只是 UI 不展示.
 
   // 5/18 BL-COMPANION-AUTO-RELOGIN: 快过期 → 黄色提醒 (不阻塞, 但提示)
   if (nearExpiry) {

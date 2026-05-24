@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  BL-CATFISH-GATEWAY-LAUNCHD (5/23 鸿波 P0-1) — catfish-gateway port 8999 长期 daemon.
+
+  背景: 5/22 前 catfish-gateway 被 Companion autostart 拉起 (跟 tool-bridge / chrome / local-search 一组).
+  5/22 BL-COMPANION-DECOUPLE-GATEWAY 鸿波拍 "服务端的 Companion 不要管, 做好自己的客户端任务就好了".
+  解耦后 Companion 不再管 gateway, gateway 改由 launchctl 管 — 但仓库一直没 plist 源, 鸿波本机的
+  com.catfish.gateway.plist 是孤本 (5/23 launchctl list 看到 78 exit, EX_CONFIG 配置错), 重新写规范版.
+
+  跟 ai.hermes.gateway / ai.catfish.identity 配合工作:
+    - ai.catfish.identity (port 8998): OIDC issuer, 必须先起 (gateway 启动时 fetch jwks)
+    - com.catfish.gateway (port 8999, this): catfish LLM gateway, 主体
+    - ai.hermes.gateway (port 8642): hermes API server, proxy 到 catfish-gateway 8999
+
+  跟 token-refresh 关系:
+    - token-refresh 每 50 min 跑 catfish refresh, 写新 OAuth access_token 到 ~/.hermes/config.yaml.
+    - 跟 gateway 长跑独立, gateway 验 token 用 jwks (公钥), 不依赖刷新.
+
+  装法:
+    cp ~/person_task/catfish/edge/catfish-cli/launchd/com.catfish.gateway.plist \
+       ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.catfish.gateway.plist
+    launchctl kickstart gui/$(id -u)/com.catfish.gateway   # 立刻起一次
+
+  卸法 (调试 / 想关):
+    launchctl bootout gui/$(id -u)/com.catfish.gateway
+    rm ~/Library/LaunchAgents/com.catfish.gateway.plist
+
+  状态查询:
+    launchctl list | grep com.catfish.gateway
+    lsof -i :8999                                   # 看真在 listen
+    tail -50 /tmp/catfish-gateway.log               # stdout/stderr
+    curl -s http://127.0.0.1:8999/v1/catalog | head # 健康检查
+
+  78 exit (EX_CONFIG) 常见原因排查:
+    1. WorkingDirectory 不存在 / 没权限 → check ProgramArguments cd 路径
+    2. venv python 找不到 → check /Users/chenhongbo/person_task/catfish/central/llm-gateway/venv/bin/python
+    3. .env 没装 / 解析错 → check ~/.hermes/.env 有 HERMES_SERVICE_TOKEN
+    4. 端口 8999 已占 (老进程没 kill) → lsof -i :8999 + pkill -f catfish_gateway
+    5. config/models.yaml 损坏 → 看 stderr log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.catfish.gateway</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <!-- 用 venv python (catfish-gateway 装在 central/llm-gateway/venv/), 不用系统 /usr/bin/python3
+             因为依赖 LiteLLM / FastAPI / uvicorn 等只装在 venv 里. -->
+        <string>/Users/chenhongbo/person_task/catfish/central/llm-gateway/venv/bin/python</string>
+        <string>-m</string>
+        <string>catfish_gateway.app</string>
+    </array>
+
+    <!-- cd 到 llm-gateway 目录, 让相对路径 (config/models.yaml / .env) 解析正确 -->
+    <key>WorkingDirectory</key>
+    <string>/Users/chenhongbo/person_task/catfish/central/llm-gateway</string>
+
+    <!-- 环境变量: HOST 改回 127.0.0.1 (5/23 startup log 警告 HOST=0.0.0.0 局域网可访问).
+         其它 env 由 catfish_gateway 自己 load_dotenv() 从 .env 读, 不在 plist 写敏感值. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOST</key>
+        <string>127.0.0.1</string>
+        <key>PORT</key>
+        <string>8999</string>
+        <key>CATFISH_ENV</key>
+        <string>prod</string>
+    </dict>
+
+    <!-- 长跑 daemon: 启动时拉起 + 崩了自动重启 -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <!-- 只在 crash exit 时重启, 不在正常 exit (e.g. CTRL+C kill) 重启 -->
+        <key>SuccessfulExit</key>
+        <false/>
+        <!-- 网络抖动期间不要每秒疯重启: launchd 默认 throttle 10s, OK -->
+        <key>Crashed</key>
+        <true/>
+    </dict>
+
+    <!-- 重启间隔 throttle (防 config 永久错时疯重启刷 log).
+         launchd 默认 10s, 这里 30s 更稳 — 真 config 错 30s 内手动停 launchctl 就行. -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <!-- stdout/stderr 重定向 (调试用). 真生产改 /Users/chenhongbo/Library/Logs/catfish/ 让 logrotate 接管. -->
+    <key>StandardOutPath</key>
+    <string>/tmp/catfish-gateway.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/catfish-gateway.log</string>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+
+    <!-- LimitLoadToSessionType Aqua: 只在用户登录 GUI 时跑 (不在 sshd / SSH session 起).
+         catfish-gateway 是为员工 Companion 服务的, 没人登录就不需要跑. -->
+    <key>LimitLoadToSessionType</key>
+    <string>Aqua</string>
+</dict>
+</plist>

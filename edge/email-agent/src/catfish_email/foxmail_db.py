@@ -113,11 +113,19 @@ class FoxmailMailRow:
 
 
 def open_db(db_path: Path) -> sqlite3.Connection:
-    """打开 messages.db, 只读模式 (避免污染 Foxmail 自己的写)。"""
+    """打开 messages.db, 只读模式 (避免污染 Foxmail 自己的写)。
+
+    5/23 BL-EMAIL-FOXMAIL-LOCK (鸿波): 老 ?mode=ro 不够 — Foxmail 客户端跑时
+    sqlite WAL 或 exclusive transaction 仍会阻塞 SHARED lock 申请, catfish-email
+    撞 OperationalError: database is locked → 跨 adapter merge 返 []. 改 ?immutable=1
+    完全跳过 lock 检查 (sqlite 把 db 当不变文件读, 读 snapshot 即可, 不在乎期间
+    Foxmail 又写了新邮件). 副作用: 读到的可能不含 Foxmail 这 30s 收的新邮件,
+    但下次 catfish-email list 会拿到 — 跟员工真用的 IMAP poll 节奏一致, 可接受.
+    """
     if not db_path.exists():
         raise FileNotFoundError(f"Foxmail messages.db 不存在: {db_path}")
-    # 用 file:?mode=ro URI 强制只读 (Foxmail 在跑也能并发读)
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2.0)
+    # immutable=1 隐含 mode=ro + 跳过 lock 检查, 真"snapshot read", Foxmail 在跑也不撞.
+    conn = sqlite3.connect(f"file:{db_path}?immutable=1", uri=True, timeout=2.0)
     conn.row_factory = sqlite3.Row
     return conn
 

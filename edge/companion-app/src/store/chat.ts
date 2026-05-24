@@ -63,7 +63,9 @@ interface ChatState {
    * - 把 DB 里的 SessionMessage[] 映射成 ChatMessage[]
    * - 设 persistedSessionId 让后续 send 顺着同一个 session 续写
    * - reset streaming 状态 (历史一定不在 streaming 中)
-   * - model 也跟随 session 的 model (但不强制, 调用方可以再 setModel)
+   * - model **不动**: picker 选的就是当前要用的, 切会话不应该被会话历史的 model
+   *   覆盖。 prevSentModel 仍然记录 session 上次发送时的 model, 这样 gateway
+   *   还能按"旧 model → picker 新 model"做 soft handoff 的 tool-history 转译。
    */
   loadSession: (detail: SessionDetail) => void;
   reset: () => void;
@@ -196,11 +198,15 @@ export const useChatStore = create<ChatState>((set) => ({
       messages: detail.messages.map(dbMessageToChat),
       isStreaming: false,
       streamingId: null,
-      model: detail.meta.model,
+      // BL-GLOBAL-MODEL (5/23): 切会话**不动 model**. picker 是全局选择,
+      // 选了 deepseek 就一直用 deepseek, 不要因为历史会话最后一次用的是 gemini
+      // 就把 picker 拽回 gemini. 用户反复反馈这个行为反直觉.
       persistedSessionId: detail.meta.id,
       // BL-GATEWAY-SOFT-HANDOFF (5/18): 历史 session resume 时, 把 session.model 当
       // 上次 send 的 model (员工切到别的 model 再发, 才算 handoff). 历史已有 tool_calls
       // 也按这个走 — gateway 会按 prev 对比新 model 决定是否转译.
+      // 注: 即使现在不覆盖 model, prevSentModel 仍然必须按 session 自身的 model 走 —
+      // 这样 picker 当前 model ≠ session 上次 model 时, gateway 才知道要做转译.
       prevSentModel: detail.meta.model,
     }),
   reset: () =>

@@ -43,16 +43,20 @@ export default function ChatTab() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  /** BL-COMPANION-UX2 (5/12): streaming 中点列表切换 → 先 abort 当前 stream
-   * 再 loadSession. 老行为是 sidebar 禁用切换, 体验差 (鸿波: "锁死").
+  /** BL-COMPANION-UX2 (5/12): streaming 中点列表切换.
+   *
+   * BL-MULTI-SESSION-STREAM (5/24 鸿波): 老逻辑切走前 cancel() abort 当前流, 长任务
+   * 被打断. 新逻辑跟 streamRegistry 配合 — 切走**不再 abort**, 老 stream 在 registry
+   * 里继续跑直到完成, 持久化到 db (用 ctx.sessionId 锁定写到对的 session). 用户切回
+   * 来时 loadSession 从 db 读最新内容, 看到 stream 还在 / 已完成.
+   *
+   * BL-SWITCH-CONFIRM (5/24): 老的二次确认也撤掉 — 切走没"破坏性后果"了, 别打扰用户.
+   * sidebar 上的 ⏳ 徽章 (Step 3.5) 会告诉员工"那条还在跑".
    */
   const handleSelect = useCallback(
     async (id: string) => {
       if (id === persistedSessionId) return; // 点的就是当前
-      if (isStreaming) {
-        cancel();                             // abort 当前 stream
-        await new Promise((r) => setTimeout(r, 200));  // 等 finally cleanup
-      }
+      // ★ 不再 cancel! stream 继续在 registry 里跑.
       try {
         const detail = await getSession(id);
         loadSession(detail);
@@ -62,19 +66,19 @@ export default function ChatTab() {
         setLoadError(`切换失败: ${e}`);
       }
     },
-    [persistedSessionId, loadSession, isStreaming, cancel],
+    [persistedSessionId, loadSession],
   );
 
-  /** BL-COMPANION-UX2 (5/12): streaming 中也能点"+ 新对话" → 先 abort 再 reset. */
+  /** BL-COMPANION-UX2 (5/12): streaming 中也能点"+ 新对话".
+   * BL-MULTI-SESSION-STREAM (5/24): 同 handleSelect, 开新对话**不再 abort** 老 stream.
+   * 老 stream 在 registry 里继续跑完, 自己持久化. 新对话独立 reset store.
+   */
   const handleNew = useCallback(async () => {
     if (messages.length === 0 && !persistedSessionId) return;
-    if (isStreaming) {
-      cancel();
-      await new Promise((r) => setTimeout(r, 200));
-    }
+    // ★ 不再 cancel! 老 stream 在 streamRegistry 里自跑完.
     reset();
     setLoadError(null);
-  }, [messages.length, persistedSessionId, reset, isStreaming, cancel]);
+  }, [messages.length, persistedSessionId, reset]);
 
   /** 包一层 send: 完成后 bump refreshKey 让 sidebar 看到新会话 / 新 message_count */
   const handleSend = useCallback(

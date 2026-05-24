@@ -47,7 +47,7 @@ _NETWORK_STATUS = precheck_and_setup()
 
 import httpx  # noqa: E402
 import litellm  # noqa: E402
-from fastapi import Depends, FastAPI, HTTPException, Request  # noqa: E402
+from fastapi import Depends, FastAPI, Header, HTTPException, Request  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import JSONResponse, StreamingResponse  # noqa: E402
 
@@ -63,7 +63,10 @@ from .auth import (  # noqa: E402
 )
 from .catalog import build_catalog  # noqa: E402
 from .config import Config, load_config  # noqa: E402
-from .employee_journal import inject_employee_journal  # noqa: E402
+# 5/23 BL-GATEWAY-DROP-LEGACY-SUMMARIZE: inject_employee_journal 5/20 BL-GATEWAY-
+# MEMORY-REGISTRY-DELETE 时已 disable (registry.providers 永远空), 实际无 caller.
+# 函数体也从 employee_journal.py 删, 该模块剩下 read_journal / append_to_journal
+# 给 a2a_journal_hook (写 bob 本机 journal) 用. 老 import 移除.
 from .fallback import with_fallback  # noqa: E402
 from .feedback_inject import inject_feedback  # noqa: E402  BL-MM6
 from .gemini_guard import harden_for_gemini  # noqa: E402
@@ -78,7 +81,8 @@ from .metrics import log_request_metadata  # noqa: E402
 from .multimodal_guard import route_to_vision_if_needed  # noqa: E402
 from .multimodal_tool_unwrap import unwrap_tool_images  # noqa: E402
 from .session_facts import inject_session_facts  # noqa: E402
-from .session_summarizer import trigger_background_summary  # noqa: E402
+# 5/23 BL-GATEWAY-DROP-LEGACY-SUMMARIZE: session_summarizer 整文件已删, plugin 接管
+# (catfish-memory on_session_end 写 employee_journal). 老 import 移除.
 from .skill_guard import inject_skill_guard  # noqa: E402
 from .skills_inject import inject_skills_catalog  # noqa: E402
 from .stats_guard import inject_stats_guard  # noqa: E402
@@ -489,18 +493,27 @@ async def health() -> dict[str, str]:
 
 
 @app.get("/api/quota/me")
-async def quota_me(user: User = Depends(get_current_user)) -> dict[str, Any]:
+async def quota_me(
+    user: User = Depends(get_current_user),
+    x_catfish_user: str | None = Header(default=None, alias="X-Catfish-User"),
+) -> dict[str, Any]:
     from . import quota  # 懒 import 避免顶层循环
 
+    # 5/23 BL-QUOTA-EFFECTIVE-USER (鸿波): chat 写 quota_events 时按 effective_user_email
+    # (resolve 后真员工 chenhongbo@ffcs.cn). quota_me 之前用 user.sub 查, hermes service
+    # token 时 sub=client:hermes-cli, 查到 0 → dashboard 永远显示 0/不限. 改用同款 resolve
+    # 让"读"按"写"一致.
+    effective_user = resolve_effective_user_email(user, x_catfish_user)
+
     config = quota.load_quota_config()
-    user_q = config.per_user_for(user.sub)
+    user_q = config.per_user_for(effective_user)
 
     now_ms = int(time.time() * 1000)
     minute_cutoff = now_ms - 60_000
     day_cutoff = now_ms - 86_400_000
 
-    used_minute = quota.sum_tokens_user_since(user.sub, minute_cutoff)
-    used_day = quota.sum_tokens_user_since(user.sub, day_cutoff)
+    used_minute = quota.sum_tokens_user_since(effective_user, minute_cutoff)
+    used_day = quota.sum_tokens_user_since(effective_user, day_cutoff)
 
     dept_used_day = 0
     dept_limit_day = 0
@@ -511,7 +524,7 @@ async def quota_me(user: User = Depends(get_current_user)) -> dict[str, Any]:
             dept_limit_day = dept_q.tokens_per_day
 
     return {
-        "user_email": user.sub,
+        "user_email": effective_user,
         "department": user.department,
         "minute": {
             "used": used_minute,
@@ -1101,6 +1114,99 @@ async def api_quota_department(
         "top_users": top_users,  # [{user_email, tokens_used}]
         "viewer_role": user.role,
     }
+
+
+# ── BL-EDGE-TOOL-KEY (5/24 鸿波): hermes 边缘工具中央派发 backend key ──
+#
+# 让 catfish-cli refresh-hermes 拉这个 endpoint, 把 Tavily/Firecrawl 等
+# 第三方 key 从中央 .env 同步到员工 ~/.hermes/.env, admin 改 key 50 台机器
+# 下次 refresh 自动拿新值, 不用 ssh 全跑一遍.
+#
+# 详见 catfish_gateway/edge_tool_config.py docstring.
+
+
+@app.get("/v1/edge/tool-config/{tool_name}")
+async def edge_tool_config(
+    tool_name: str,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """中央派发 hermes 边缘工具的 backend key + yaml block.
+
+    协议:
+      - tool 不在 registry → 404
+      - tool 在 registry 但 RBAC 拦 → 403 (user.can_use_tool false)
+      - tool 在 registry + RBAC 通 + gateway env 没配 key → 503
+      - 200 → {tool_name, tool_group, provider, env_vars, yaml_block}
+
+    被调约定:
+      - Bearer 任意 JWT (用户 OAuth token / hermes-cli service token 都行).
+      - CLI 拿到响应后, env_vars 合并写 ~/.hermes/.env (per-key update),
+        yaml_block 合并写 ~/.hermes/config.yaml (preserve sibling keys).
+    """
+    from . import edge_tool_config as etc  # 懒 import 防循环
+
+    if not etc.is_supported_tool(tool_name):
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": f"tool {tool_name!r} 不在中央派发 registry",
+                "supported": etc.list_supported_tools(),
+            },
+        )
+
+    # RBAC — sysadmin / 空 effective_allowed_tools = 全允许 (User.can_use_tool 内置)
+    if not user.can_use_tool(tool_name):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"department={user.department} 未获批工具 {tool_name}. "
+                f"effective_allowed_tools={user.effective_allowed_tools} "
+                f"(让 admin 在 identity-server 部门 RBAC 加这个 tool)"
+            ),
+        )
+
+    status, body = etc.build_response(tool_name)
+    if status == 503:
+        raise HTTPException(status_code=503, detail=body)
+    if status != 200:
+        # registry 命中校验已经在上面做过, 走到这只能是未来加的新错误码
+        raise HTTPException(status_code=status, detail=body)
+    return body
+
+
+@app.get("/v1/edge/tool-config")
+async def edge_tool_config_list(
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """给 CLI 用 — 一次拉支持的 tool 列表, 不返 key 值 (key 走 per-tool endpoint).
+
+    CLI 用法:
+        names = GET /v1/edge/tool-config → ["web_search", "web_extract", ...]
+        for name in names: GET /v1/edge/tool-config/{name}
+    """
+    from . import edge_tool_config as etc
+
+    return {
+        "supported": etc.list_supported_tools(),
+        # 顺手把 group 元信息暴露, CLI 可以提前去重 (3 个 web tool 共一份 env)
+        "groups": _group_metadata(),
+    }
+
+
+def _group_metadata() -> dict[str, dict[str, Any]]:
+    """给 edge_tool_config_list 用: { tool_group: {provider, env_var_name, tools: [...]} }."""
+    from . import edge_tool_config as etc
+
+    out: dict[str, dict[str, Any]] = {}
+    for name, cfg in etc.EDGE_TOOL_REGISTRY.items():
+        g = out.setdefault(
+            cfg.tool_group,
+            {"provider": cfg.provider, "env_var_name": cfg.env_var_name, "tools": []},
+        )
+        g["tools"].append(name)
+    for g in out.values():
+        g["tools"].sort()
+    return out
 
 
 # /api/audit/department/{dept} — manager / admin 看本部门 audit 聚合
@@ -2603,49 +2709,19 @@ async def chat_completions(
         except Exception as e:
             logger.warning("session_meta tick 失败 (无关键路径): %s", e)
 
-    # 后台触发: 异步总结 1 个最近结束但没总结过的 session, append 到 journal.
-    # fire-and-forget, 不阻塞当前请求, 失败静默. 让 journal 自动持续填充.
+    # 5/23 BL-GATEWAY-DROP-LEGACY-SUMMARIZE (鸿波 task #5 Stage 1): 删 gateway 端
+    # session_summarizer (trigger_background_summary) + memory_distill (maybe_run_llm_
+    # distillation) 两条后台路径. 5/22 切 CATFISH_GATEWAY_LEGACY_SUMMARIZE=0 后,
+    # catfish-memory plugin 的 sync_turn / on_session_end 接管: 写 employee_journal +
+    # 蒸馏 distilled_facts.md 全在 hermes 侧 plugin (Companion 端) 跑. gateway 不再
+    # 读写员工本机 journal / distilled_facts → 中央边缘分离真落实, gateway 物理上可
+    # 搬到中央服务器跑.
     #
-    # BL-GATEWAY-CLEANUP-POST-HERMES Week 2 Step C (5/19 晚): env gate.
-    # CATFISH_GATEWAY_LEGACY_SUMMARIZE=1 (默认) — 旧 caller 跑, 跟之前一样.
-    # CATFISH_GATEWAY_LEGACY_SUMMARIZE=0 — 关 gateway 旧 caller, summary 走
-    # catfish-memory plugin 的 on_session_end (Week 2 Step B 加上的写路径).
-    # 部署时**手动改这个 env**才真切换, push 代码本身不动行为.
-    if os.environ.get("CATFISH_GATEWAY_LEGACY_SUMMARIZE", "1") == "1":
-        try:
-            import asyncio  # noqa: PLC0415
-            asyncio.create_task(trigger_background_summary())
-        except Exception:
-            pass
-
-    # BL-MEMORY-DISTILL-LIVE (5/16 鸿波 'memory_distill 真上线'):
-    # 异步 LLM 蒸馏老 journal 段 → 写 ~/.catfish/distilled_facts.md, 24h cooldown.
-    # 跟 trigger_background_summary 互补: summary 持续写新段, distill 把老段抽精华
-    # 让 inject 不丢 99% 老内容. fire-and-forget, 不阻塞当前请求.
-    # 跳: internal call (loopback summary / proactive / distill 自身), 防递归.
+    # 删的: src/memory_distill.py (747 行) + src/session_summarizer.py (527 行) +
+    # 3 个测试 (test_memory_distill / _live / test_memory_features_baseline +
+    # test_session_summarizer), 共净删 ~2500 行.
     #
-    # BL-INTERNAL-MODEL-FOLLOW-USER-DISTILL (5/17 鸿波 'memory_distill 用 qwen-flash
-    # 不是员工 nemotron'): 传 user.sub, distill 内部用 get_user_last_session_model
-    # 解析员工当前选的 model, 严格 follow-user (跟 summarizer / proactive / a2a /
-    # facts 同套路).
-    # BL-GATEWAY-CLEANUP-POST-HERMES Week 2 Step C (5/19 晚): env gate.
-    # 跟上面 trigger_background_summary 同一个 env, 一个开关同时控两条路径,
-    # 防止"summary 关了 distill 还在跑"或反过来的半切状态.
-    if (
-        not is_internal_call
-        and os.environ.get("CATFISH_GATEWAY_LEGACY_SUMMARIZE", "1") == "1"
-    ):
-        try:
-            import asyncio  # noqa: PLC0415
-
-            from .memory_distill import maybe_run_llm_distillation  # noqa: PLC0415
-            # BL-AUTH-DECOUPLE-A1 (5/19): distill 按 effective_user_email (X-Catfish-User
-            # 或 user JWT sub) — service token on-behalf-of 时是员工 email, 不是 client.
-            asyncio.create_task(
-                maybe_run_llm_distillation(user_email=effective_user_email),
-            )
-        except Exception:  # noqa: BLE001
-            pass
+    # env CATFISH_GATEWAY_LEGACY_SUMMARIZE 同步从 .env 删, 不再有 fallback.
 
     # Prompt 安全检测: 扫 user messages 看是否含明文密码 / 凭据.
     # 不拦截 (员工知道在干嘛), 只 log warn + audit 标记, 让员工 IT 事后能查谁在何时
@@ -2755,7 +2831,9 @@ async def chat_completions(
     # LiteLLM 转 Gemini functionDeclarations 时 KeyError 把整个请求挂掉。
     # BL-RBAC-DAY4 (5/17): 传 user, sanitizer 按 user.effective_allowed_tools
     # 过滤 LLM tool 列表. sysadmin / 空 list / ALWAYS_ON 永远放行.
-    body = sanitize_tools(body, user=user)
+    # 5/22 BL-TOOL-PROFILE 鸿波: 传 source_hint, sanitizer 按 source 砍 catfish_*
+    # 到 profile 白名单 (companion-advisor / companion-profile / etc).
+    body = sanitize_tools(body, user=user, source_hint=source_hint)
 
     # Gemini 防退化: 在 system 末尾加禁用 native tool_code 的指令
     # 没用 Gemini 模型 / 客户端不传 system 都会跳过, 无副作用

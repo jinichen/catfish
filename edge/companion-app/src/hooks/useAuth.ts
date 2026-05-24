@@ -71,6 +71,14 @@ export function useAuth() {
   }, [refresh]);
 
   // 5/18 BL-COMPANION-AUTO-RELOGIN: 周期 expiry check
+  // 5/23 BL-COMPANION-SILENT-REFRESH: 周期里**先 refresh()** 再 check.
+  // 原因: Rust 端 auth_get_access_token 现在会在 token 快过期时 silent refresh,
+  // 写入新 expires_at 到 ~/.catfish/oauth/user_info. 但 React state 里的
+  // expires_at 是 mount 时 whoami 拿的旧值, 不会自己变. 如果只 check 本地缓存,
+  // 老 expires_at 到点 → setExpired(true) → 触发下面 auto-trigger forceRelogin
+  // 弹浏览器, 跟"silent refresh 已经把 token 续好" 矛盾.
+  // 修法: 每次 poll 都先 authWhoami 读盘上的最新 user_info, 再判 near/expired.
+  // 一次 IPC ~1ms, 60s 一次代价可忽略.
   useEffect(() => {
     if (!state.authenticated) {
       setNearExpiry(false);
@@ -83,16 +91,27 @@ export function useAuth() {
       setExpired(false);
       return;
     }
-    const check = () => {
+    const check = async () => {
+      // 5/23 BL-COMPANION-SILENT-REFRESH: 先同步盘上最新 user_info, 再判
+      try {
+        await refresh();
+      } catch {
+        // whoami 挂 (Tauri 命令崩 / IPC race) → 用上次 state 兜底, 不致命
+      }
+      // refresh() 完成后, state.expires_at 可能已被 setState 更新 (异步, 这次
+      // check 里读的还是闭包捕获的旧值). 不要紧 — setState 触发的 re-render
+      // 会让 useEffect 重跑 (deps 含 expires_at), 下一轮 check 用新值.
+      // 这一轮 check 仍按旧 state 判 near/expired, 最多多 setNearExpiry 一次
+      // 同值 (React 自动 bail out re-render), 不引起多余动作.
       const now = Math.floor(Date.now() / 1000);
       const remaining = state.expires_at - now;
       setNearExpiry(remaining > 0 && remaining < NEAR_EXPIRY_WARN_SECS);
       setExpired(remaining <= 0);
     };
-    check();  // 立即一次
-    const t = window.setInterval(check, POLL_INTERVAL_MS);
+    void check();  // 立即一次
+    const t = window.setInterval(() => void check(), POLL_INTERVAL_MS);
     return () => window.clearInterval(t);
-  }, [state.authenticated, state.auth_method, state.expires_at]);
+  }, [state.authenticated, state.auth_method, state.expires_at, refresh]);
 
   const login = useCallback(async () => {
     setError(null);

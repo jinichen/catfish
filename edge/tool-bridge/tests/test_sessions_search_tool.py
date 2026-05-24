@@ -15,6 +15,16 @@ from catfish_tool_bridge import sessions_search
 
 
 def _seed_db(home: Path, sessions: list[dict], messages: list[dict]) -> None:
+    """构造 hermes ~/.hermes/state.db 跟 production schema 完全一致的测试库.
+
+    BL-FIX-SESSION-SEARCH-SCHEMA (5/24): 之前测试套自己造了 created_at REAL 让
+    sessions_search.py 的 (错的) SQL 通过, production hermes 真实字段叫 timestamp,
+    导致 LLM 永远搜不到, 报"session_search 不可用". schema 权威来源:
+      - companion-app/src-tauri/src/commands/session_write.rs:334
+      - llm-gateway/tests/test_session_history.py:66
+    现在测试 schema 严格对齐 production, 防止反向适配错代码再次发生.
+    test 入参 dict 也用 'timestamp' 名字, caller 同步改了.
+    """
     hermes = home / ".hermes"
     hermes.mkdir(parents=True, exist_ok=True)
     db = hermes / "state.db"
@@ -28,10 +38,15 @@ def _seed_db(home: Path, sessions: list[dict], messages: list[dict]) -> None:
         );
         CREATE TABLE messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT,
-            role TEXT,
+            session_id TEXT NOT NULL,
+            role TEXT NOT NULL,
             content TEXT,
-            created_at REAL
+            tool_call_id TEXT,
+            tool_calls TEXT,
+            tool_name TEXT,
+            timestamp REAL,
+            token_count INTEGER,
+            finish_reason TEXT
         );
     """)
     for s in sessions:
@@ -40,9 +55,12 @@ def _seed_db(home: Path, sessions: list[dict], messages: list[dict]) -> None:
             (s["id"], s["started_at"], s.get("message_count", 1), s.get("title", "")),
         )
     for m in messages:
+        # BL-FIX-SESSION-SEARCH-SCHEMA: 接受 'timestamp' (production 真名);
+        # 老 test 入参 dict 用 'created_at', 兼容一并接住, 老 test case 不必全改.
+        ts = m.get("timestamp", m.get("created_at"))
         conn.execute(
-            "INSERT INTO messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)",
-            (m["session_id"], m["role"], m["content"], m["created_at"]),
+            "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
+            (m["session_id"], m["role"], m["content"], ts),
         )
     conn.commit()
     conn.close()

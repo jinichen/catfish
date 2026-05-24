@@ -58,18 +58,17 @@ KNOWN_VIOLATIONS_ALLOWLIST: set[str] = {
     "session_facts.py",
     "feedback_inject.py",
     "identity_inject.py",
-    # B 类 — 后台任务 (5)
-    "session_summarizer.py",
-    "memory_distill.py",
+    # B 类 — 后台任务 (3) — 5/23 BL-GATEWAY-DROP-LEGACY-SUMMARIZE (task #5 Stage 1):
+    # session_summarizer.py + memory_distill.py 整文件已 rm, catfish-memory plugin
+    # (hermes 侧 prefetch + sync_turn) 接管 employee_journal / distilled_facts 全套写读.
+    # allowlist 删 2 行.
     "proactive.py",
     "session_meta.py",
     "tool_archive/db.py",
-    # C 类 — UI 直调端点 (2, 还剩 recent_outputs + skills_loader 待清理)
+    # C 类 — UI 直调端点
     # BL-CENTRAL-WEB-PURGE-USERDATA (5/17): sessions_browse + tasks_browse 已不再
-    # 被 gateway endpoint 调用 (端点全删). 模块仍在 src 里待移除, 但 lint allowlist
-    # 暂留 — 等本机 git rm 后从 allowlist 一并删.
-    "sessions_browse.py",
-    "tasks_browse.py",
+    # 被 gateway endpoint 调用 (端点全删). 5/22 鸿波: 真 git rm 这俩文件 + 对应
+    # tests/test_sessions_browse.py + tests/test_tasks_browse.py. allowlist 也跟着删.
     "recent_outputs.py",
     "skills_loader.py",
     # D 类 — A2A federation (5)

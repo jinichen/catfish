@@ -116,16 +116,9 @@ fn is_alive(pid_file_getter: impl Fn() -> Option<std::path::PathBuf>, cmdline: &
     process::read_pid_file_alive_strict(&pid_file, cmdline).is_some()
 }
 
-/// 探测 TCP 端口是否被占用 (不区分谁占).
-///
-/// 用途: gateway 类有固定监听端口 (8999) 的服务, watchdog spawn 前应该
-/// 先看端口被没被占. 占了 = 有人在跑 (可能是开发者手动 `python -m catfish_gateway.app`),
-/// 别 spawn 撞端口. 没占 = 真没起, 该 spawn.
-///
-/// 实现: 尝试 bind 同一个端口, bind 成功 = 没被占 (立刻 drop 释放), bind 失败 = 占了.
-async fn port_in_use(port: u16) -> bool {
-    tokio::net::TcpListener::bind(("127.0.0.1", port)).await.is_err()
-}
+// 5/22 BL-COMPANION-DECOUPLE-GATEWAY (鸿波): port_in_use 删 — 之前唯一 caller 是
+// gateway respawn 前的端口占用检测. gateway 解耦后 watchdog 不再管 gateway, 这个
+// helper 死代码. 真要恢复直接 git blame.
 
 /// app 启动时调一次, 起背景 watchdog task.
 ///
@@ -133,42 +126,31 @@ async fn port_in_use(port: u16) -> bool {
 /// watchdog 负责运行期监控 + self-heal.
 pub fn schedule_watchdog() {
     tauri::async_runtime::spawn(async move {
-        let gateway_health = ServiceHealth::default();
+        // 5/22 BL-COMPANION-DECOUPLE-GATEWAY (鸿波): watchdog 不再监控 / respawn
+        // gateway. gateway 是服务端基础设施, 由 launchctl plist (本机) 或客户 IT
+        // 部署流程 (生产) 独立管控. 前端 health card 检测端口 + 提示员工启动.
+        //
+        // 5/22 鸿波: watchdog 现监控 2 个 client-side 长期服务:
+        //   - tool-bridge: 重要 (LLM 工具调用必经), 死了立刻 respawn
+        //   - local-search: 文件 FTS watcher, 死了 respawn 让索引继续更新
+        //
+        // 不监控:
+        //   - chrome: 员工主动 close 时不该自动起回 (尊重员工意图)
+        //   - gateway: 服务端, 由 launchctl 独立管控
         let tool_bridge_health = ServiceHealth::default();
+        let local_search_health = ServiceHealth::default();
         let mut interval = time::interval(Duration::from_secs(TICK_INTERVAL_SECS));
         // 第一 tick 立即返回, autostart 应该已经处理过了, 跳过
         interval.tick().await;
         log::info!(
-            "watchdog: 启动, tick={}s, max_failures={}, backoff={}s",
+            "watchdog: 启动 (tool-bridge + local-search, gateway/chrome 解耦), \
+             tick={}s, max_failures={}, backoff={}s",
             TICK_INTERVAL_SECS, MAX_CONSECUTIVE_FAILURES, BACKOFF_AFTER_FAILURES_SECS
         );
         loop {
             interval.tick().await;
 
-            // gateway
-            if !gateway_health.is_in_backoff()
-                && !is_alive(catfish_paths::gateway_pid_file, "catfish_gateway")
-            {
-                // 端口被占 = 有人在跑 (大概率开发者手动 python -m catfish_gateway.app
-                // 调试代码, 没写 PID file). watchdog 不该 spawn 第二个撞端口.
-                let gw_port = crate::services::endpoints::endpoints().gateway_port;
-                if port_in_use(gw_port).await {
-                    log::info!(
-                        "watchdog: gateway 端口 {} 已被占 (开发者可能手动跑), 跳过 spawn",
-                        gw_port
-                    );
-                } else {
-                    log::info!("watchdog: gateway dead, respawning");
-                    autostart::ensure_gateway_running().await;
-                    if is_alive(catfish_paths::gateway_pid_file, "catfish_gateway") {
-                        gateway_health.record_success("gateway");
-                    } else {
-                        gateway_health.record_failure("gateway");
-                    }
-                }
-            }
-
-            // tool-bridge
+            // tool-bridge (client-side MCP server)
             if !tool_bridge_health.is_in_backoff()
                 && !is_alive(catfish_paths::tool_bridge_pid_file, "catfish_tool_bridge")
             {
@@ -180,6 +162,19 @@ pub fn schedule_watchdog() {
                     tool_bridge_health.record_success("tool-bridge");
                 } else {
                     tool_bridge_health.record_failure("tool-bridge");
+                }
+            }
+
+            // local-search (文件 FTS watcher, 死了 respawn 让索引继续)
+            if !local_search_health.is_in_backoff()
+                && !is_alive(catfish_paths::local_search_pid_file, "catfish_search")
+            {
+                log::info!("watchdog: local-search dead, respawning");
+                autostart::ensure_local_search_running().await;
+                if is_alive(catfish_paths::local_search_pid_file, "catfish_search") {
+                    local_search_health.record_success("local-search");
+                } else {
+                    local_search_health.record_failure("local-search");
                 }
             }
         }

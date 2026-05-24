@@ -42,167 +42,24 @@ import logging
 import os
 from typing import Any
 
+# 5/22 拆分 (老文件 808 > 800 红线): frozenset 常量 / source profile 表全搬走,
+# 这里 re-export 保 import 兼容 — 老 caller `from .tools_sanitizer import _ALWAYS_ON_TOOLS`
+# 仍能拿到值. 跟 catfish_tools.py / adapter.py 5/20 拆分用的 touchstone 协议同款.
+from .tools_sanitizer_constants import (  # noqa: F401  re-export 保 caller 不变
+    ALWAYS_ON_TOOLS as _ALWAYS_ON_TOOLS,
+    CATFISH_BROWSER_PREFIX as _CATFISH_BROWSER_PREFIX,
+    DEFAULT_MAX_TOOLS as _DEFAULT_MAX_TOOLS,
+    ENV_MAX_TOOLS as _ENV_MAX_TOOLS,
+    HERMES_BROWSER_PREFIX as _HERMES_BROWSER_PREFIX,
+    HIDDEN_FROM_LLM as _HIDDEN_FROM_LLM,
+    KNOWN_BUILTIN_TOOLS as _KNOWN_BUILTIN_TOOLS,
+    MCP_CATFISH_PREFIX as _MCP_CATFISH_PREFIX,
+    SOURCE_TOOL_PROFILES as _SOURCE_TOOL_PROFILES,
+    is_always_on as _is_always_on,
+)
+
 logger = logging.getLogger("catfish.gateway.tools_sanitizer")
 
-
-# BL-FIX4 (5/8): hermes builtin browser_* 跟 catfish_browser_* namespace 撞, 看到
-# catfish 一族就丢 hermes 一族. 这里只列 hermes 已知 builtin (现网客户端实际暴露的),
-# 新加的不在表里也无所谓 — 我们只丢 "browser_" 开头且**不带 catfish_ 前缀**的,
-# 通过名字 startswith 判断, 不依赖白名单.
-_HERMES_BROWSER_PREFIX = "browser_"
-_CATFISH_BROWSER_PREFIX = "catfish_browser_"
-
-
-# BL-TOOL-CAP (5/15 鸿波撞 Qwen 122B 83 tools 空 400): 单 request tool 数量上限.
-# Qwen 122B 实测 50+ tools 就开始撞空 400. 默认 cap 50, env 可调.
-# 超 cap 时按 priority 保留, 低优先级 drop.
-_DEFAULT_MAX_TOOLS = 50
-_ENV_MAX_TOOLS = "CATFISH_MAX_TOOLS"
-
-#: BL-MEMORY-CATFISH-REMEMBER-BLACKLIST (5/16 鸿波 A 真切) — 永不暴露给 LLM 的工具.
-#:
-#: 5/16 实盘 Nemotron 49B 在 catfish_remember vs hermes memory 之间反复, 选了
-#: 错的 (session-only 的 catfish_remember 当跨 session 用). SOUL nudge V1/V2/V3
-#: 都没让模型听话. 鸿波拍板: 干脆从 LLM 工具列表彻底移除 catfish_remember, 让
-#: LLM 没选择, 强制走 hermes memory.
-#:
-#: catfish_remember tool 本身**保留**实现 (供员工 /remember 显式命令触发, 或
-#: gateway 内部 BL-MM1/MM2 流程). 只是不再 expose 给上游 LLM.
-#:
-#: 想恢复 expose (操作员调试): env CATFISH_EXPOSE_REMEMBER=1.
-_HIDDEN_FROM_LLM: frozenset[str] = frozenset({
-    "catfish_remember",
-    # BL-MEMORY-DEDUPE-COMPRESS-REVIEW (5/17 04:55 凌晨, #61): 鸿波 5 次抓我
-    # over-engineer 后拍板砍这 2 工具暴露. 越界 hermes 责任 (压缩归 hermes
-    # catfish-autocompress + ContextCompressor), entries 2 年才撞 limit 不该
-    # 凌晨写. 留代码作 git 历史, LLM 看不到不会调.
-    # 想恢复 (真撞 limit 时): env CATFISH_EXPOSE_MEMORY_INTEGRITY=1 (未实现, 真要时
-    # 改 sanitizer if 加 env check).
-    "catfish_memory_dedupe",
-    "catfish_memory_compress",
-})
-
-#: Tier 1 — always-on 核心工具, 任何任务都该有, 永不 drop.
-#: 这些是 LLM agent loop 的最底座 (执行代码 / 读文件 / 写文件 / 记忆 / 跨问 / 切片 /
-#: 求澄清 / 派任务). 砍了 LLM 干不了基本事.
-_ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
-    # ── Catfish 核心 native ──
-    # BL-MEMORY-CATFISH-REMEMBER-BLACKLIST (5/16): catfish_remember 移到 hidden.
-    "catfish_search_sessions",
-    "catfish_list_my_outputs",
-    "catfish_user_profile_get",
-    "catfish_user_profile_propose",
-    "catfish_user_profile_confirm",
-    "catfish_run_skill",
-    "search_skills",
-    # BL-LLM-PLAN-WITHOUT-ACT (5/19): 内网 qwen 见到周报 / PPT 等关键词必须能立即
-    # 找到对应 skill 并触发, 不能因 BL-TOOL-CAP 被砍. skill discovery + invocation
-    # 这一族永不 drop. (catfish_run_skill 已在表里, 这里补 hermes 0.14 的 skill_*.)
-    "skill_view",        # 看单个 skill 详情 (LLM 决定是否调用前)
-    "skills_list",       # 列所有 skill (无 search_skills 时兜底)
-    # ── Hermes 0.14 内置基础 (5/17 客户机实测对齐 hermes 0.14 tool name) ──
-    # BL-HERMES-014-UPGRADE (5/17): hermes 0.14 改了一批 tool name, 老的
-    # shell/bash/edit_file/list_dir/search/grep/todo_tool/screenshot **不再注册** —
-    # always-on hit log 一直报 missing. 改用 0.14 真名:
-    "execute_code",      # 跑代码
-    "read_file",         # 读文件
-    "write_file",        # 写文件
-    "patch",             # hermes 0.14 取代 edit_file (统一 patch-style 编辑)
-    "search_files",      # hermes 0.14 取代 search/grep/list_dir (统一搜索)
-    "terminal",          # hermes 0.14 取代 shell/bash
-    "process",           # hermes 0.14 新加 (process 管理)
-    "clarify",           # 跨问 / 求澄清
-    "delegate_task",     # 派任务
-    "todo",              # hermes 0.14 重命名 todo_tool → todo (catfish-tool-bridge
-                         # adapter.py 仍 `from tools.todo_tool import TodoStore`
-                         # module 路径未变, 只是 tool name 改了)
-    "memory",            # hermes 0.13/0.14 unified memory (action=add/replace/remove/search)
-})
-
-
-#: BL-RBAC-DAY4-HARDENING (5/17, hermes 0.14 #26759 tool_override 威胁模型):
-#:
-#: 已知 hermes / catfish builtin tool 白名单. 用于 detect "陌生" tool 名
-#: (plugin tool_override rename builtin 成 dept-allowed 名的攻击)。
-#: 不在此白名单 + 不在 mcp__* 前缀 + 不在 dept allowed_tools → audit WARN.
-#:
-#: 不 drop, 因为:
-#:   1. 客户自家 plugin 命名千差万别, drop 会误杀
-#:   2. RBAC allowed_tools 已经在 sanitize 里实施了, 这层只看异常模式
-#:   3. drop 决策留给 dept admin 在 catfish-web /admin/access 配 allowed_tools
-#:
-#: 维护策略: hermes major 升级时 (e.g. 0.14 → 0.15) 跟 release notes 同步, 漏
-#: 一个工具只是误报多一条 audit 行, 不影响功能.
-_KNOWN_BUILTIN_TOOLS: frozenset[str] = frozenset({
-    # ── catfish 原生 (catfish_tool_bridge/catfish_tools.py CATFISH_NATIVE_TOOLS) ──
-    # 5/17 客户机实测 log 漏报 37 个, grep edge/tool-bridge/src 拉真实 47 个全名:
-    # catfish 用户身份 / skill / a2a / memory / browser_* / freeze / expert /
-    # reminder / calendar / task / style_fingerprint / today_summary / teach
-    "catfish_a2a_ask", "catfish_list_a2a_help",
-    "catfish_browser_click", "catfish_browser_fill", "catfish_browser_find_by_text",
-    "catfish_browser_goto", "catfish_browser_locate", "catfish_browser_screenshot",
-    "catfish_browser_snapshot",
-    "catfish_confirm_expertise", "catfish_expert_consult", "catfish_extract_expertise",
-    "catfish_list_expertise",
-    "catfish_create_calendar_event", "catfish_list_calendars",
-    "catfish_create_reminder", "catfish_list_reminder_lists",
-    "catfish_freeze_inspect", "catfish_freeze_rotate", "catfish_freeze_skill",
-    "catfish_list_my_outputs", "catfish_memory_compress", "catfish_memory_dedupe",
-    "catfish_propose_skill", "catfish_propose_skill_revision",
-    "catfish_read_tool_archive", "catfish_recognize_captcha", "catfish_remember",
-    "catfish_run_skill", "catfish_run_task", "catfish_screenshot",
-    "catfish_search_sessions", "catfish_skill_backup", "catfish_skill_delete",
-    "catfish_skill_install", "catfish_skill_publish",
-    "catfish_style_fingerprint_clear", "catfish_style_fingerprint_get",
-    "catfish_style_fingerprint_refresh",
-    "catfish_task_list", "catfish_task_result", "catfish_task_status",
-    "catfish_teach_end", "catfish_teach_start", "catfish_today_summary",
-    "catfish_user_profile_clear", "catfish_user_profile_confirm",
-    "catfish_user_profile_get", "catfish_user_profile_propose",
-    # 顺手放进 search_skills (catfish ALWAYS_ON 不在 catfish_native, 但用)
-    "search_skills",
-    # ── hermes 0.14 真实 71 tool name (5/17 客户机实测拉的, hermes-agent
-    # registry.get_all_tool_names() 真实输出, 不是 release notes 推测) ──
-    # browser (12)
-    "browser_back", "browser_cdp", "browser_click", "browser_console",
-    "browser_dialog", "browser_get_images", "browser_navigate", "browser_press",
-    "browser_scroll", "browser_snapshot", "browser_type", "browser_vision",
-    # core agent (10)
-    "clarify", "delegate_task", "execute_code",
-    "patch",         # 0.14 取代 edit_file
-    "process",       # 0.14 新加
-    "read_file", "write_file",
-    "search_files",  # 0.14 取代 search/grep/list_dir
-    "terminal",      # 0.14 取代 shell/bash
-    "memory",
-    # task / cron / kanban (11)
-    "todo", "cronjob",
-    "kanban_block", "kanban_comment", "kanban_complete", "kanban_create",
-    "kanban_heartbeat", "kanban_link", "kanban_list", "kanban_show", "kanban_unblock",
-    # skills (3)
-    "skill_manage", "skill_view", "skills_list",
-    # vision / video / image (4)
-    "image_generate", "video_analyze", "video_generate", "vision_analyze",
-    # web / search (4)
-    "session_search", "web_extract", "web_search", "x_search",
-    # messaging (3)
-    "send_message", "discord", "discord_admin",
-    # feishu (5)
-    "feishu_doc_read", "feishu_drive_add_comment", "feishu_drive_list_comment_replies",
-    "feishu_drive_list_comments", "feishu_drive_reply_comment",
-    # home assistant (4)
-    "ha_call_service", "ha_get_state", "ha_list_entities", "ha_list_services",
-    # spotify (8)
-    "spotify_albums", "spotify_devices", "spotify_library", "spotify_playback",
-    "spotify_playlists", "spotify_queue", "spotify_search",
-    # yuanbao (5)
-    "yb_query_group_info", "yb_query_group_members",
-    "yb_search_sticker", "yb_send_dm", "yb_send_sticker",
-    # misc (3)
-    "computer_use",   # 0.14 cua-driver, 非 Anthropic
-    "text_to_speech",
-    "mixture_of_agents",
-})
 
 
 def _audit_unknown_tools(
@@ -259,18 +116,21 @@ def _audit_unknown_tools(
 
 
 def _cap_tools_by_priority(tools: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
-    """超 cap 时按 priority 保留 tools.
+    """按 priority 重排 + cap tools.
 
-    保留策略:
-      1. 所有 _ALWAYS_ON_TOOLS 中的 tool, 即使总数仍超也保留 (它们是底座)
-      2. 剩余 slot 按 tools 原顺序填 (caller 已经按某种 priority 排过, 我们尊重它)
-      3. 超出的 drop, 返回 (kept, dropped_names)
+    BL-WEB-ALWAYS-ON (5/25 鸿波): **永远** 把 always-on 排到前面, 不只 cap 时.
+    动机: hermes 按字母序发 tool, web_search 排倒数 → 模型位置偏置不选 → 退化用
+    catfish_browser_* 抓页面 (慢 30 倍). 永远前置让 always-on 一族在第 1-20 位,
+    模型 attention 优先看到.
 
-    用法:
-      kept, dropped = _cap_tools_by_priority(cleaned)
-      if dropped: logger.warning(...)
+    重排 + cap 策略:
+      1. 扫一遍, 分 always_on / other 两堆 (always_on 用 _is_always_on, 同时认
+         裸名 `catfish_today_summary` 和 MCP 包装名 `mcp_catfish_tools_*`).
+      2. 输出 = always_on + other, **永远** 这个顺序, 无视是否超 cap.
+      3. 超 cap (always_on + other > max) 才从 other 末尾砍.
+      4. always_on 自己绝不被 cap drop (它们是 LLM agent loop 底座).
 
-    返 cap 后的 tools + dropped tool 名清单 (给 audit log).
+    返 (reordered_kept, dropped_names). dropped_names 空 = 没砍 (但可能重排了).
     """
     try:
         max_tools = int(os.environ.get(_ENV_MAX_TOOLS, str(_DEFAULT_MAX_TOOLS)))
@@ -278,10 +138,7 @@ def _cap_tools_by_priority(tools: list[dict[str, Any]]) -> tuple[list[dict[str, 
         max_tools = _DEFAULT_MAX_TOOLS
     max_tools = max(10, max_tools)  # 兜底, 不允许 < 10 (always-on 都装不下)
 
-    if len(tools) <= max_tools:
-        return tools, []
-
-    # 先取 always-on (顺序保留)
+    # 分堆 — always_on 一类, 其他一类. 都保 caller 给的相对顺序.
     always_on_kept: list[dict[str, Any]] = []
     other: list[dict[str, Any]] = []
     for t in tools:
@@ -290,12 +147,12 @@ def _cap_tools_by_priority(tools: list[dict[str, Any]]) -> tuple[list[dict[str, 
             continue
         fn = t.get("function")
         name = fn.get("name") if isinstance(fn, dict) else ""
-        if isinstance(name, str) and name in _ALWAYS_ON_TOOLS:
+        if _is_always_on(name):
             always_on_kept.append(t)
         else:
             other.append(t)
 
-    # 剩 slot = max - always_on. 按原顺序填.
+    # 算要不要砍 other 尾部 (always_on 永不砍, 哪怕超 cap)
     remaining_slots = max(0, max_tools - len(always_on_kept))
     other_kept = other[:remaining_slots]
     dropped = other[remaining_slots:]
@@ -308,6 +165,58 @@ def _cap_tools_by_priority(tools: list[dict[str, Any]]) -> tuple[list[dict[str, 
             dropped_names.append(str(name) if name else "<unknown>")
 
     return always_on_kept + other_kept, dropped_names
+
+
+def _filter_by_source_profile(
+    tools: list[dict[str, Any]],
+    source_hint: str,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """5/22 BL-TOOL-PROFILE: 按 source_hint 砍 catfish_* tool 到 profile 白名单.
+
+    规则:
+      - source_hint 不在 _SOURCE_TOOL_PROFILES → 不过滤, 返原列表
+      - 在表里:
+        * always-on tool 永远保留 (LLM agent loop 底座)
+        * hermes builtin (不是 catfish_ 前缀) 不动 (它们是 hermes 0.14 注册的, 跟
+          catfish profile 无关. plugin tool / mcp__* 同理)
+        * catfish_* tool 只保留 profile 白名单里的 + hidden 已经在前面处理过
+        * MCP tool (mcp__*) 不动 (员工装的 plugin, 不该被 catfish profile 砍)
+
+    用法:
+      kept, dropped = _filter_by_source_profile(cleaned, source_hint)
+    """
+    if source_hint not in _SOURCE_TOOL_PROFILES:
+        return tools, []
+
+    allowed_catfish = _SOURCE_TOOL_PROFILES[source_hint]
+    kept: list[dict[str, Any]] = []
+    dropped: list[str] = []
+
+    for t in tools:
+        if not isinstance(t, dict):
+            kept.append(t)
+            continue
+        fn = t.get("function")
+        name = fn.get("name") if isinstance(fn, dict) else None
+        if not isinstance(name, str):
+            kept.append(t)
+            continue
+
+        # always-on 永远保留 (用 _is_always_on 同时认裸名 + mcp_catfish_tools_ 前缀)
+        if _is_always_on(name):
+            kept.append(t)
+            continue
+        # 非 catfish_* (hermes / mcp__* / 其它) 不动
+        if not name.startswith("catfish_"):
+            kept.append(t)
+            continue
+        # catfish_* → 只保 profile 白名单
+        if name in allowed_catfish:
+            kept.append(t)
+        else:
+            dropped.append(name)
+
+    return kept, dropped
 
 
 def _has_catfish_browser_tools(tools: list[Any]) -> bool:
@@ -324,7 +233,11 @@ def _has_catfish_browser_tools(tools: list[Any]) -> bool:
     return False
 
 
-def sanitize_tools(body: dict[str, Any], user: Any = None) -> dict[str, Any]:
+def sanitize_tools(
+    body: dict[str, Any],
+    user: Any = None,
+    source_hint: str = "unknown",
+) -> dict[str, Any]:
     """原地修 body["tools"] —— 丢畸形条目, 修补能补的字段。
 
     返回原 body (mutate in-place + return), 调用方习惯链式。
@@ -333,6 +246,9 @@ def sanitize_tools(body: dict[str, Any], user: Any = None) -> dict[str, Any]:
     BL-RBAC-DAY4 (5/17): 可选 user 参. 给了就按 user.can_use_tool() 过滤
     白名单, ALWAYS_ON_TOOLS 永远保留 (LLM agent loop 底座). user=None 则
     不做 RBAC 过滤 (兼容老 caller / 内部 loopback / 测试).
+
+    BL-TOOL-PROFILE (5/22 鸿波): source_hint 在 _SOURCE_TOOL_PROFILES 里 → 按
+    profile 砍 catfish_* tool. unknown / 未知 source → 不过滤 (现有行为).
     """
     tools = body.get("tools")
     if not isinstance(tools, list):
@@ -450,7 +366,8 @@ def sanitize_tools(body: dict[str, Any], user: Any = None) -> dict[str, Any]:
                 rbac_kept.append(t)
                 continue
             # ALWAYS_ON_TOOLS 兜底: 不论 RBAC 怎么收紧都保留 LLM 底座
-            if nm in _ALWAYS_ON_TOOLS:
+            # (用 _is_always_on 同时认裸名 + mcp_catfish_tools_ 前缀, BL-MCP-PREFIX-FIX)
+            if _is_always_on(nm):
                 rbac_kept.append(t)
                 continue
             if user.can_use_tool(nm):
@@ -473,15 +390,31 @@ def sanitize_tools(body: dict[str, Any], user: Any = None) -> dict[str, Any]:
     # 扫"陌生"tool 名 audit, 不 drop. 防 plugin 把 builtin rename 成 dept-allowed.
     _audit_unknown_tools(body, user, cleaned)
 
+    # 5/22 BL-TOOL-PROFILE 鸿波: 按 source_hint 砍 catfish_* 到 profile 白名单.
+    # 在 RBAC + cap 之前砍 — 优先级是: 畸形 > RBAC > profile > cap. profile 砍掉
+    # 的是 caller 不需要的 (caller 是 advisor 不会用 freeze_*), 不是权限问题.
+    profile_kept, profile_dropped = _filter_by_source_profile(cleaned, source_hint)
+    if profile_dropped:
+        logger.info(
+            "BL-TOOL-PROFILE: source=%s 砍 %d 个非该 profile 的 catfish_* tool: %s",
+            source_hint,
+            len(profile_dropped),
+            ", ".join(sorted(profile_dropped)[:10]),
+        )
+    cleaned = profile_kept
+
     # BL-TOOL-CAP (5/15 鸿波撞 Qwen 122B 83 tools 空 400): 超 cap 时砍低优先级.
     # 实测 Qwen 122B ≥50 tools 就开始撞空 400 (上游无具体错). 保留 always-on 核心
     # + 剩 slot 按顺序填, 超 cap 的 drop. env CATFISH_MAX_TOOLS 调阈值.
     capped_tools, capped_dropped = _cap_tools_by_priority(cleaned)
     if capped_dropped:
+        # 5/25 鸿波: 老格式 "41 tools 超上限 110" 让人误以为是"输入 41 超 cap 110"
+        # (其实 41 是 dropped count). 改 "dropped=N cap=K kept=M" 一目了然.
         logger.warning(
-            "BL-TOOL-CAP: %d tools 超上限 %d, 砍掉低优先级 (always-on 保留): %s",
+            "BL-TOOL-CAP: dropped=%d cap=%d kept=%d (always-on 保留, 砍 other 尾巴): %s",
             len(capped_dropped),
             int(os.environ.get(_ENV_MAX_TOOLS, str(_DEFAULT_MAX_TOOLS))),
+            len(capped_tools),
             ", ".join(capped_dropped[:10]),
         )
     cleaned = capped_tools
@@ -497,7 +430,7 @@ def sanitize_tools(body: dict[str, Any], user: Any = None) -> dict[str, Any]:
             continue
         fn = t.get("function")
         nm = fn.get("name") if isinstance(fn, dict) else None
-        if isinstance(nm, str) and nm in _ALWAYS_ON_TOOLS:
+        if isinstance(nm, str) and _is_always_on(nm):
             seen_always_on.append(nm)
     # hermes 0.13 只一个 `memory` 工具, 见到就 OK.
     if "memory" not in seen_always_on:

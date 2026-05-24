@@ -81,13 +81,19 @@ def search_messages(
     )
     limit = max(1, min(_MAX_LIMIT, int(limit)))
     try:
+        # BL-FIX-SESSION-SEARCH-SCHEMA (5/24 鸿波"session_search 不可用"): 真实 hermes
+        # `messages` 表字段叫 `timestamp` (REAL, unix ts), 不是 `created_at`. 老代码
+        # 写 `m.created_at` 一直 silent 失败 ("no such column" → except → 返 []),
+        # 测试套自己造了个 created_at schema 让 SQL 通过, production 永远拿不到结果.
+        # 权威 schema 来源: companion-app session_write.rs:334 + gateway test_session_history.py:66.
+        # LLM-facing 输出 dict 保留 'created_at' / 'created_iso' 命名不变, 只改 SQL.
         rows = conn.execute(
-            "SELECT m.session_id, m.role, m.content, m.created_at, "
+            "SELECT m.session_id, m.role, m.content, m.timestamp, "
             "       (SELECT s.title FROM sessions s WHERE s.id = m.session_id) AS title "
             "FROM messages m "
             "JOIN sessions s ON s.id = m.session_id "
             "WHERE s.started_at >= ? AND m.content LIKE ? ESCAPE '\\' "
-            "ORDER BY m.created_at DESC LIMIT ?",
+            "ORDER BY m.timestamp DESC LIMIT ?",
             (cutoff_ts, like_pattern, limit),
         ).fetchall()
         conn.close()
@@ -96,7 +102,7 @@ def search_messages(
         return []
 
     out = []
-    for sid, role, content, created_at, title in rows:
+    for sid, role, content, ts, title in rows:
         snippet = (content or "").strip()
         # 高亮 query 周围 ±N 字符 (跟 gateway sessions_browse 一致)
         idx = snippet.lower().find(query.lower())
@@ -111,10 +117,12 @@ def search_messages(
             "session_title": title or "",
             "role": role or "",
             "snippet": snippet,
-            "created_at": float(created_at) if created_at else 0.0,
+            # LLM-facing 字段名仍叫 created_at — 是工具对外契约, 不动.
+            # 内部 SQL 列名是 timestamp, 见上面注释.
+            "created_at": float(ts) if ts else 0.0,
             "created_iso": (
-                datetime.fromtimestamp(created_at).isoformat()
-                if created_at else ""
+                datetime.fromtimestamp(ts).isoformat()
+                if ts else ""
             ),
         })
     return out

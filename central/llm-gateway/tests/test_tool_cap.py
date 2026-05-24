@@ -145,11 +145,12 @@ def test_sanitize_tools_applies_cap(monkeypatch):
 
 
 def test_sanitize_tools_no_cap_when_under_limit(monkeypatch):
-    """40 个 tools (under 50) — 不被 cap"""
+    """30 个 tools (under default 35 cap) — 不被 cap.
+    5/22 BL-TOOL-PROFILE 鸿波: _DEFAULT_MAX_TOOLS 50→35 配合 source profile 砍."""
     monkeypatch.delenv("CATFISH_MAX_TOOLS", raising=False)
-    body = {"tools": [_tool(f"t_{i}") for i in range(40)]}
+    body = {"tools": [_tool(f"t_{i}") for i in range(30)]}
     sanitize_tools(body)
-    assert len(body["tools"]) == 40
+    assert len(body["tools"]) == 30
 
 
 def test_sanitize_tools_scrubs_history_for_capped(monkeypatch):
@@ -192,3 +193,107 @@ def test_sanitize_tools_scrubs_history_for_capped(monkeypatch):
     if "tool_calls" in asst_msg:
         for tc in asst_msg.get("tool_calls", []):
             assert tc["function"]["name"] != "low_pri_15"
+
+
+# ─── BL-WEB-ALWAYS-ON + BL-MCP-PREFIX-FIX (5/25) ────────────────
+
+
+def test_web_search_extract_crawl_in_always_on():
+    """5/25 BL-WEB-ALWAYS-ON: hermes 0.14 web 三件套必须 always-on, 防 cap 砍 + 排前面."""
+    for n in ("web_search", "web_extract", "web_crawl"):
+        assert n in _ALWAYS_ON_TOOLS, f"{n} 应该在 ALWAYS_ON_TOOLS"
+
+
+def test_always_on_promoted_to_front_when_under_cap(monkeypatch):
+    """5/25 BL-WEB-ALWAYS-ON: 即使没超 cap, always-on 也要重排到前面.
+
+    动机: hermes 按字母序发 tool, web_search (W) 排倒数. 不超 cap 也要 promote
+    到前面, 防模型位置偏置不选 web_search 退化用 catfish_browser_*.
+    """
+    monkeypatch.delenv("CATFISH_MAX_TOOLS", raising=False)
+    # caller 给的顺序: 普通 → always_on (always_on 在尾)
+    tools = (
+        [_tool("zz_random_1"), _tool("zz_random_2")]
+        + [_tool("web_search"), _tool("web_extract")]  # always-on, 字母末段
+        + [_tool("zz_random_3")]
+    )
+
+    kept, dropped = _cap_tools_by_priority(tools)
+
+    assert dropped == [], "5 个 tool 远低于 cap, 不该砍"
+    # 输出顺序: always_on 一组在前, 其他在后 (各自保 caller 给的相对顺序)
+    names = [t["function"]["name"] for t in kept]
+    assert names[0] == "web_search", "web_search 应该被 promote 到第 1 位"
+    assert names[1] == "web_extract"
+    assert names[2:] == ["zz_random_1", "zz_random_2", "zz_random_3"]
+
+
+def test_always_on_preserved_relative_order_among_themselves(monkeypatch):
+    """同为 always-on 的 tools, 相对顺序保 caller 给的顺序 (不再排序乱)."""
+    monkeypatch.delenv("CATFISH_MAX_TOOLS", raising=False)
+    # caller 给: write_file 在前, read_file 在后 (反字母序)
+    tools = [
+        _tool("random_x"),
+        _tool("write_file"),
+        _tool("random_y"),
+        _tool("read_file"),
+    ]
+    kept, _ = _cap_tools_by_priority(tools)
+    names = [t["function"]["name"] for t in kept]
+    # always-on 前置: write_file 仍在 read_file 前 (caller 给的顺序)
+    assert names == ["write_file", "read_file", "random_x", "random_y"]
+
+
+def test_mcp_wrapped_always_on_promoted_too(monkeypatch):
+    """5/25 BL-MCP-PREFIX-FIX: mcp_catfish_tools_web_search 也算 always-on."""
+    monkeypatch.delenv("CATFISH_MAX_TOOLS", raising=False)
+    tools = [
+        _tool("zz_random_1"),
+        _tool("mcp_catfish_tools_web_search"),   # MCP 包装版
+        _tool("zz_random_2"),
+        _tool("mcp_catfish_tools_catfish_today_summary"),  # 同样
+    ]
+    kept, _ = _cap_tools_by_priority(tools)
+    names = [t["function"]["name"] for t in kept]
+    # 两个 MCP 包装的 always-on 都被 promote 到前面
+    assert names[0] == "mcp_catfish_tools_web_search"
+    assert names[1] == "mcp_catfish_tools_catfish_today_summary"
+    assert names[2:] == ["zz_random_1", "zz_random_2"]
+
+
+def test_mcp_wrapped_always_on_survives_cap(monkeypatch):
+    """5/25 BL-MCP-PREFIX-FIX: 超 cap 时, MCP 包装的 always-on 也不被砍."""
+    monkeypatch.setenv("CATFISH_MAX_TOOLS", "11")
+    tools = [
+        _tool("mcp_catfish_tools_catfish_today_summary"),  # MCP 包装 always-on
+        _tool("mcp_catfish_tools_web_search"),             # 同上
+    ] + [_tool(f"low_{i}") for i in range(20)]   # 20 low priority
+
+    kept, dropped = _cap_tools_by_priority(tools)
+    kept_names = {t["function"]["name"] for t in kept}
+
+    # 2 个 MCP 包装 always-on 保留 (BL-MCP-PREFIX-FIX 前会被当普通工具砍)
+    assert "mcp_catfish_tools_catfish_today_summary" in kept_names
+    assert "mcp_catfish_tools_web_search" in kept_names
+    assert "mcp_catfish_tools_catfish_today_summary" not in dropped
+    assert "mcp_catfish_tools_web_search" not in dropped
+
+
+def test_is_always_on_helper_directly():
+    """直接测 _is_always_on helper 的 3 个分支."""
+    from catfish_gateway.tools_sanitizer_constants import is_always_on
+
+    # 裸名匹配
+    assert is_always_on("web_search") is True
+    assert is_always_on("execute_code") is True
+    # MCP 包装名 strip 后匹配
+    assert is_always_on("mcp_catfish_tools_web_search") is True
+    assert is_always_on("mcp_catfish_tools_catfish_today_summary") is True
+    # 不在 always-on
+    assert is_always_on("random_tool") is False
+    assert is_always_on("mcp_catfish_tools_random_tool") is False
+    # 边界
+    assert is_always_on("") is False
+    assert is_always_on(None) is False  # type: ignore[arg-type]
+    # 别的 MCP 前缀不识别 (只认 mcp_catfish_tools_)
+    assert is_always_on("mcp_someother_server_web_search") is False

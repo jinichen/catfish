@@ -91,7 +91,19 @@ pub async fn auth_logout() -> Result<(), String> {
 /// `auth_get_access_token` — 给前端调 gateway 时用.
 /// 注意: 这个不暴露 id_token (没必要), 只返 access_token.
 /// 前端拿到后直接 `Authorization: Bearer <token>` 调 gateway.
+///
+/// BL-COMPANION-SILENT-REFRESH (5/23): 走 ensure_fresh_access_token 而不是
+/// current_access_token. 区别:
+///   - current_access_token: 纯读盘, token 即使过期也照返 → gateway 401 → me.ts
+///     fetchWithAuth 撞 401 → invoke('auth_login') 弹浏览器走完整 OAuth.
+///   - ensure_fresh_access_token: 读盘前先看 expires_at, 快过期 / 已过期就用
+///     refresh_token 跟 catfish-identity 换一对新的, 员工无感. refresh 也挂时
+///     才 fallback 到老路径 (返旧 token → 401 → 弹浏览器, 跟用户 5/23 选定的
+///     fallback 一致).
+///
+/// 历史: 函数名沿用 OAuth 习惯叫 access_token, 实际语义是"给 gateway 当 Bearer
+/// 的那个 token" — BL-FIX31 5/9 改成 id_token 后名字没改, 现在仍是.
 #[tauri::command]
 pub async fn auth_get_access_token() -> Result<Option<String>, String> {
-    Ok(oauth::current_access_token())
+    Ok(oauth::ensure_fresh_access_token().await)
 }

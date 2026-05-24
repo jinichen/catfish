@@ -14,7 +14,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
-import { gatewayGetDevToken } from "./tauri";
+import { gatewayGetDevToken, hermesApiConfigGet, hermesApiAuthHeader } from "./tauri";
 import { config } from "./env";
 
 // BL-ARCH1 P1 (5/10): 加 sysadmin (catfish-identity 超级管理员).
@@ -53,7 +53,13 @@ export function setOverrideToken(token: string | null): void {
   }
 }
 
-let _cachedEnvToken: string | null = null;
+// BL-FIX-STALE-TOKEN-CACHE (5/24 鸿波"为啥要这样强制才正常"): 删 _cachedEnvToken
+// 模块级缓存. 原 bug: Companion 启动早期 invoke('auth_get_access_token') 偶发返
+// null (catfish-identity 没起好 / OAuth 还没完成), getToken() 落到 env 兜底链拿
+// dev-token-local 并**永久缓存**. 之后即便 silent refresh 把 OAuth 续好, 只要某
+// 次 invoke 返 null 就立即回到这个老 cache → gateway 持续 401 → 必须 killall
+// Companion 才能恢复. 真没必要 cache — gatewayGetDevToken 是 Tauri IPC ~1ms,
+// 每次拉一下不疼.
 
 /** BL-D3 Phase 3.1 (5/9): export 给 McpRegistryCard 等其他卡复用.
  *
@@ -67,7 +73,7 @@ let _cachedEnvToken: string | null = null;
  * 优先级 (5/9 改):
  *   0. OAuth keychain access_token (登录员工的真 token, 最优先)
  *   1. localStorage 切换器 override (dev 调试用)
- *   2. .env CATFISH_DEV_TOKEN (开发兜底, 没登录时)
+ *   2. .env CATFISH_DEV_TOKEN (开发兜底, 没登录时, **每次现拉**, 不缓存)
  *   3. fallback 'dev-token-local' (一切都失败时)
  */
 export async function getToken(): Promise<string> {
@@ -81,12 +87,10 @@ export async function getToken(): Promise<string> {
   // 1. 切换器选的覆盖
   const override = getOverrideToken();
   if (override) return override;
-  // 2. .env 兜底
-  if (_cachedEnvToken) return _cachedEnvToken;
+  // 2. .env 兜底 — BL-FIX-STALE-TOKEN-CACHE (5/24): 不缓存, 每次现拉. 防 Companion
+  //    启动早期偶发把 dev-token-local 缓死, 之后 OAuth 续上了 JS 还在用老 cache.
   try {
-    const t = await gatewayGetDevToken();
-    _cachedEnvToken = t;
-    return t;
+    return await gatewayGetDevToken();
   } catch {
     return "dev-token-local";
   }
@@ -175,6 +179,11 @@ async function fetchWithOAuth(
   let resp = await doRequest(token);
 
   if (resp.status === 401 && !opts.skipReauth) {
+    // BL-FIX-STALE-TOKEN-CACHE (5/24): 撞 401 第一时间 invalidate user email cache.
+    // 老 bug: 启动早期 _cachedUserEmail 可能存了错 email (whoami 半成功 / 刚登录中),
+    // 之后 401 reauth 流程拿不到正确 email 路 hermes 头, 同样 401 死循环.
+    // 现在 401 时无脑清 cache, 下次 getCurrentUserEmail 重新 whoami.
+    _cachedUserEmail = null;
     // 401 → 触发 OAuth re-auth (弹浏览器)
     try {
       await invoke("auth_login");
@@ -282,12 +291,26 @@ export interface DevUser {
 /** 列 dev_users.yaml 配置的所有测试账号. 生产模式 (prod) 端点 404, 切换器隐藏. */
 export async function fetchDevUsers(): Promise<DevUser[] | null> {
   try {
-    // BL-AUTH-DECOUPLE-A5 (5/19): dev-users 端点也走 backendUrl. hermes proxy 转发,
-    // 注意这一处用裸 fetch 不带 Authorization (dev 端点 prod 404), hermes 给 401
-    // 时降级 null 已被 try-catch 兜住.
+    // 5/23 BL-FETCH-DEV-USERS-AUTH (鸿波): 老代码裸 fetch 不带 Authorization,
+    // hermes proxy 强制 Bearer API_SERVER_KEY → 直接 401, 不到 catfish-gateway 那步.
+    // 老注释说 "401 时降级 null 已被 try-catch 兜住" — 功能 OK 但 console 一直打
+    // 红色 "Failed to load resource: 401" 误导员工以为有 bug. 修法: 跟 chat.ts
+    // 同款拿 hermes auth header (Bearer API_SERVER_KEY), 401 噪音消失.
+    let hermesAuth: string | null = null;
+    try {
+      const hcfg = await hermesApiConfigGet();
+      if (hcfg?.enabled && hcfg?.has_key) {
+        hermesAuth = await hermesApiAuthHeader();
+      }
+    } catch {
+      // Tauri 命令挂 / hermes proxy 没启用 → 裸 fetch 走老路径 (有 401 也吃了)
+    }
+
     const url = `${config.backendUrl}/api/dev/users`;
-    const resp = await fetch(url);
-    if (!resp.ok) return null; // 404 / prod
+    const headers: Record<string, string> = {};
+    if (hermesAuth) headers["Authorization"] = hermesAuth;
+    const resp = await fetch(url, { headers });
+    if (!resp.ok) return null; // 404 / prod / 仍 401 (走老 gateway 路径无 hermes auth)
     const data = (await resp.json()) as { users: DevUser[] };
     return data.users || [];
   } catch {

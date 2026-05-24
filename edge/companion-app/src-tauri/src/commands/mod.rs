@@ -29,6 +29,10 @@ pub mod local_search;
 pub mod logs;
 pub mod memory_history;
 pub mod hermes_memory;  // BL-DASHBOARD-HERMES-MEMORY-CARD (5/16)
+pub mod advisor_cache;   // BL-ADVISOR-CACHE (5/22 Phase 7): 缓存 advisor 结果
+pub mod advisor_config;  // BL-ADVISOR-CONFIG (5/22 Phase 7): 读 yaml advisor section
+pub mod advisor_task_state;  // BL-ADVISOR-TASK-STATE (5/22): done/snoozed/ignored 状态
+pub mod style_fingerprint_dirs;  // BL-STYLE-FP-DIR-PICKER (5/22 鸿波): scan_dirs UI 管理
 pub mod decisions;  // BL-ADVISOR-DECISIONS (5/21 Phase 7): ~/.catfish/decisions.jsonl 决策留痕
 pub mod drafts;     // BL-ADVISOR-DRAFTS (5/21 Phase 7): ~/.catfish/outputs/<date>/ 草稿存储
 pub mod pet;

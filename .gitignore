@@ -152,7 +152,11 @@ central/nginx.conf
 central/certs/
 
 # 防 backup 文件意外 commit (BL-MEMORY-COMMIT-FIX 5/16)
+# 5/25 鸿波: 老 *.bak 只 match .bak 结尾, 不 match .bak.before-xxx.<timestamp>
+# 这种带后缀 (5/22 撞过 .env.bak.before-legacy-summarize-off.2026-05-22T23-19-20
+# 含 5 个真 API key 差点 commit). 改 *.bak* 一并覆盖.
 *.bak
+*.bak.*
 *.bak2
 
 # 一次性 commit 批处理脚本 — 跑完即丢, 不进 git 历史 (5/21 拆分日加)

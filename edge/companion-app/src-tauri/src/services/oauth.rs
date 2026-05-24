@@ -34,8 +34,9 @@
 //! # Phase 1C 简化
 //!
 //! - 不做 PKCE (Phase 2 加, 让 catfish-identity 也支持先)
-//! - 不做 refresh_token rotation (Phase 1C-2 加, 现在过期员工重新登录即可)
-//! - 不做 silent renew
+//! - ~~不做 refresh_token rotation~~ (5/23 BL-COMPANION-SILENT-REFRESH 已加, 见
+//!   `try_refresh_session` + `ensure_fresh_access_token`. catfish-identity 30 天
+//!   refresh_token 已存在 + rotate. 闲置 1h 重新发消息不再 401)
 //! - state 用 32 字节 random, 防 CSRF (基础)
 
 use std::collections::HashMap;
@@ -47,7 +48,15 @@ use base64::Engine as _;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, Mutex};
+
+// BL-COMPANION-SILENT-REFRESH (5/23): 全局 mutex, 防并发 refresh.
+// 场景: Companion 同时跑 catalog 轮询 + chat + dashboard, 都通过
+// auth_get_access_token 拿 token; access 快过期那一刻多个调用并发触发 refresh.
+// refresh_token 是 one-time use (rotation), 第一个成功, 其余全 400 invalid_grant
+// (catfish-identity routes_token.py:206). 加 mutex 让后来者等第一个完成, 直接
+// 读盘上的新 token, 不再多发请求.
+static REFRESH_MUTEX: Mutex<()> = Mutex::const_new(());
 
 // BL-FIX32 (5/9): token 存储从 macOS Keychain 改文件 (~/.catfish/oauth/<name>),
 // keyring crate 不再用. 老 KEYRING_SERVICE 删. 下面三个仍叫 KEYRING_USERNAME_*
@@ -56,8 +65,17 @@ use tokio::sync::oneshot;
 const KEYRING_USERNAME_ACCESS: &str = "access_token";
 const KEYRING_USERNAME_ID: &str = "id_token";
 const KEYRING_USERNAME_USER_INFO: &str = "user_info";
+// BL-COMPANION-SILENT-REFRESH (5/23): catfish-identity 在 /token 响应里返
+// refresh_token (30 天 TTL, rotation). 之前 oauth.rs 解析时连字段都不声明,
+// 直接丢. 现在落盘 ~/.catfish/oauth/refresh_token, ensure_fresh_access_token
+// 在 access 快过期 / 已过期时拿它去 /token 换新 access + 新 refresh, 员工无感.
+const KEYRING_USERNAME_REFRESH: &str = "refresh_token";
 
 const DEFAULT_SCOPE: &str = "openid email profile";
+
+/// BL-COMPANION-SILENT-REFRESH (5/23): access_token 还剩 <= 这么多秒就提前续.
+/// 5 分钟 = 给 LLM 长流足够缓冲, 不会半截 token 过期.
+const REFRESH_WHEN_REMAINING_SECS: i64 = 300;
 
 /// Login 完成后的用户信息 (从 ID Token claims 提).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -342,8 +360,17 @@ pub async fn run_login_flow(cfg: &OidcConfig) -> Result<AuthSession> {
         KEYRING_USERNAME_USER_INFO,
         &serde_json::to_string(&session)?,
     )?;
-
-    log::info!("OAuth login OK: user={} dept={}", session.email, session.department);
+    // BL-COMPANION-SILENT-REFRESH (5/23): 落 refresh_token. 老 catfish-identity
+    // (没配 refresh_token_store) → 字段缺省 None, 跳过保存. 老员工升级后
+    // 第一次仍然走完整 OAuth, 之后续期是免登的.
+    if let Some(rt) = &token_resp.refresh_token {
+        save_to_keyring(KEYRING_USERNAME_REFRESH, rt)?;
+        log::info!("OAuth login OK: user={} dept={} (refresh_token 已落盘)", session.email, session.department);
+    } else {
+        // 老 server / 没启用 refresh — 清掉旧的, 防误用过期 refresh
+        let _ = delete_from_keyring(KEYRING_USERNAME_REFRESH);
+        log::info!("OAuth login OK: user={} dept={} (server 未发 refresh_token, 走老 1h 模式)", session.email, session.department);
+    }
     Ok(session)
 }
 
@@ -409,11 +436,162 @@ pub fn current_user_sub() -> Option<String> {
     try_load_session().map(|s| s.email)
 }
 
+/// BL-COMPANION-SILENT-REFRESH (5/23): 拿 refresh_token 跟 /token 换新一对 token, 不弹浏览器.
+///
+/// 调用前提:
+///   - ~/.catfish/oauth/refresh_token 文件存在 (上次 login flow 落的)
+///   - catfish-identity 配了 refresh_token_store + 这条 refresh 还在 30 天 TTL 内 + 没 revoked
+///
+/// rotation 注意: 服务端验完旧 refresh → 标 revoked → 发新 access + 新 refresh.
+/// 所以这里成功后必须把新 refresh 也写盘 (覆盖旧的), 否则下次再 refresh 拿旧的 → 400 invalid_grant.
+///
+/// 失败原因 (返 Err, caller fallback 走完整 OAuth flow 弹浏览器):
+///   - refresh_token 文件不存在 (老版 install 没落)
+///   - 服务端没启用 refresh_token_store
+///   - refresh 也过期了 (闲置 > 30 天)
+///   - 网络挂 / catfish-identity 不可达
+///   - refresh 被回放 (并发 refresh 撞车第二个)
+pub async fn try_refresh_session(cfg: &OidcConfig) -> Result<AuthSession> {
+    // 1. 读 refresh_token
+    let refresh_token = load_from_keyring(KEYRING_USERNAME_REFRESH)?
+        .ok_or_else(|| anyhow!("没有 refresh_token 文件 (老版 install 或登出过), 需要完整 OAuth"))?;
+    if refresh_token.is_empty() {
+        bail!("refresh_token 文件存在但是空的, 走完整 OAuth");
+    }
+
+    // 2. POST /token 换
+    let token_url = format!("{}/token", cfg.issuer);
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&token_url)
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token.as_str()),
+            ("client_id", cfg.client_id.as_str()),
+        ])
+        .send()
+        .await
+        .context("调 /token (refresh_token grant) 失败")?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        // 把 refresh_token 干掉, 下次 ensure_fresh_access_token 不再尝试 (它已失效).
+        // caller 看 Err 会 fallback 走 OAuth, 完成后会重新 save 一份新的.
+        let _ = delete_from_keyring(KEYRING_USERNAME_REFRESH);
+        bail!("/token refresh 返 {status}: {body} (已删本地 refresh_token, 下次走完整 OAuth)");
+    }
+    let token_resp: TokenResponse = resp.json().await.context("解析 refresh /token 响应失败")?;
+
+    // 3. 解新 id_token 拿 claims (跟 login flow 同款, 不验签)
+    let claims = decode_id_token_claims_unverified(&token_resp.id_token)?;
+    let now = chrono::Utc::now().timestamp();
+    let expires_at = now + token_resp.expires_in.unwrap_or(3600);
+
+    let session = AuthSession {
+        email: claims.sub,
+        name: claims.name.unwrap_or_default(),
+        department: claims.department.unwrap_or_default(),
+        tier: claims.tier.unwrap_or_else(|| "employee".into()),
+        auth_method: "oidc".into(),
+        expires_at,
+    };
+
+    // 4. 写盘 — access + id + user_info 全更新. refresh_token 也要更 (rotation).
+    save_to_keyring(KEYRING_USERNAME_ACCESS, &token_resp.access_token)?;
+    save_to_keyring(KEYRING_USERNAME_ID, &token_resp.id_token)?;
+    save_to_keyring(
+        KEYRING_USERNAME_USER_INFO,
+        &serde_json::to_string(&session)?,
+    )?;
+    if let Some(rt) = &token_resp.refresh_token {
+        save_to_keyring(KEYRING_USERNAME_REFRESH, rt)?;
+    } else {
+        // 服务端没发新 refresh (理论上 rotation 一定发) — 删旧的保安全
+        let _ = delete_from_keyring(KEYRING_USERNAME_REFRESH);
+        log::warn!("refresh /token 没返新 refresh_token, 已删本地 — 下次过期会走完整 OAuth");
+    }
+
+    log::info!(
+        "OAuth refresh OK: user={} new exp={} (远端 catfish-identity rotation)",
+        session.email, expires_at,
+    );
+    Ok(session)
+}
+
+/// BL-COMPANION-SILENT-REFRESH (5/23): 给前端调 gateway 用的 token, **保证够新**.
+///
+/// 行为决策树:
+///   1. 当前 session 还剩 > 5 分钟 → 返当前 id_token (sync 路径, 不打 IdP)
+///   2. session 不存在 / 已过期 / 还剩 < 5 分钟:
+///        a. 尝试 refresh (mutex 防并发):
+///             - mutex 拿到后再 try_load_session 一次 (可能已经被别人 refresh 完了)
+///             - 还需要续 → 调 try_refresh_session → 写盘 → 返新 id_token
+///        b. refresh 失败 → log warn → 返当前 (可能过期) id_token / dev_token
+///           gateway 验签 401 → me.ts fetchWithAuth 收到 401 → 弹浏览器走完整 OAuth
+///
+/// 这个函数是 async 的, 因为 refresh 涉及 HTTP. 调用方 (auth_get_access_token Tauri
+/// 命令) 也是 async, 顺路改.
+///
+/// 同步路径 (callers in email_scheduler.rs / tool_bridge.rs) 还在调老的
+/// `current_access_token()`, 那里仍是"返磁盘上的 token, 可能过期" 的旧行为, 留给
+/// 后续 sweep — 优先级低, 因为 chat 路径 (用户实际敲字的入口) 已经覆盖了.
+pub async fn ensure_fresh_access_token() -> Option<String> {
+    // 1. 没真登录态 (dev_token / 未登录) → 老 sync 路径
+    let session = match try_load_session() {
+        Some(s) => s,
+        None => return current_access_token(),
+    };
+    // dev_token 永不过期 (expires_at = now + 365d), 短路
+    if session.auth_method == "dev_token" {
+        return current_access_token();
+    }
+
+    // 2. 还很新 → 直接返
+    let now = chrono::Utc::now().timestamp();
+    if session.expires_at - now > REFRESH_WHEN_REMAINING_SECS {
+        return current_access_token();
+    }
+
+    // 3. 快过期 / 已过期 → 尝试 refresh (mutex 防并发同时打 IdP)
+    let _guard = REFRESH_MUTEX.lock().await;
+
+    // 拿到锁后再读一次盘 — 可能另一个 task 已经 refresh 完了
+    if let Some(s2) = try_load_session() {
+        if s2.expires_at - now > REFRESH_WHEN_REMAINING_SECS {
+            log::debug!("ensure_fresh: 等锁期间 token 已被别人续上, 直接用");
+            return current_access_token();
+        }
+    }
+
+    // 真要去 refresh
+    let cfg = match OidcConfig::load() {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("ensure_fresh: OidcConfig::load 失败: {e}, 返旧 token, 让 401 走完整 OAuth");
+            return current_access_token();
+        }
+    };
+    match try_refresh_session(&cfg).await {
+        Ok(_) => {
+            log::info!("ensure_fresh: silent refresh 成功, 员工无感");
+            current_access_token() // 读刚写盘的新 id_token
+        }
+        Err(e) => {
+            log::warn!(
+                "ensure_fresh: silent refresh 失败: {e:#}. 返旧 token, gateway 401 → fetchWithAuth 会弹浏览器走完整 OAuth (用户选定的 fallback)."
+            );
+            current_access_token()
+        }
+    }
+}
+
 /// 登出: 清 token 文件 (~/.catfish/oauth/). dev_token 模式下不动 env (那是员工 explicit 设的).
 pub fn logout() -> Result<()> {
     let _ = delete_from_keyring(KEYRING_USERNAME_ACCESS);
     let _ = delete_from_keyring(KEYRING_USERNAME_ID);
     let _ = delete_from_keyring(KEYRING_USERNAME_USER_INFO);
+    // BL-COMPANION-SILENT-REFRESH (5/23): 清 refresh_token, 不然 logout 后还能续期.
+    let _ = delete_from_keyring(KEYRING_USERNAME_REFRESH);
     Ok(())
 }
 
@@ -525,6 +703,12 @@ struct TokenResponse {
     access_token: String,
     id_token: String,
     expires_in: Option<i64>,
+    /// BL-COMPANION-SILENT-REFRESH (5/23): catfish-identity routes_token.py:150
+    /// 在 refresh_token_store 配了的情况下会带这个字段. 没配 → None, 保持原行为
+    /// (员工 1h 后重登).
+    /// rotation: 每次 refresh 后服务端发新 refresh_token, 老的标 revoked.
+    #[serde(default)]
+    refresh_token: Option<String>,
 }
 
 async fn exchange_code_for_tokens(

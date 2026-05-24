@@ -28,6 +28,13 @@ interface SendChatParams {
   messages: ChatMessage[];
   /** OpenAI tool calling 兼容的 tool 定义列表,空表示不带 tools */
   tools?: OpenAITool[];
+  /** 5/23 BL-COMPANION-HERMES-SESSION-REUSE (鸿波): companion 已经 lazy create
+   *  一个 state.db session_id, 通过 X-Hermes-Session-Id header 传给 hermes,
+   *  hermes 复用而非新建 api-* session. 没传 → hermes 老行为, 自己 derive 一个.
+   *  目的: 同一对话不再 2 个 session (companion source + api_server source).
+   *  hermes 端已支持 (api_server.py:1188 provided_session_id).
+   */
+  sessionId?: string;
   /** 每个 token 来一次 */
   onDelta: (text: string) => void;
   /** LLM 决定调工具(stream 中 tool_calls 累积完毕)时触发 */
@@ -75,6 +82,12 @@ export interface ChatStreamDoneInfo {
    *  Companion 用它做 promise-vs-reality 检测 (assistant 说"已生成"但
    *  cum_has_tool_call=false + 没真生成文件 → ⚠ 嘴炮). */
   task_assessment?: TaskAssessment;
+  /** 5/23 BL-COMPANION-HERMES-SESSION-REUSE (鸿波): 本次 stream 是否走 hermes
+   *  API server 路径. true → hermes 端已经往 state.db 写 assistant message,
+   *  companion 不要再 sessionMessageAppend 写一遍 (会双写). false → 老
+   *  gateway 路径, hermes 没参与, companion 必须自己写.
+   */
+  via_hermes?: boolean;
 }
 
 export interface TaskAssessment {
@@ -129,6 +142,7 @@ export async function streamChat(params: SendChatParams): Promise<void> {
     model,
     messages,
     tools,
+    sessionId,
     onDelta,
     onToolCalls,
     onDone,
@@ -250,6 +264,12 @@ export async function streamChat(params: SendChatParams): Promise<void> {
       // OpenAI server 解 (依赖 X-Catfish-User, 不再回退到 HERMES_DEFAULT_USER env).
       if (userEmail) {
         hermesHeaders["X-Catfish-User"] = userEmail;
+      }
+      // 5/23 BL-COMPANION-HERMES-SESSION-REUSE (鸿波): 传 companion 创建的
+      // session id, hermes 收到就复用, 不再 derive api-* 新 session.
+      // 解决 "1 个对话 → state.db 出 2 条 session (companion + api_server)" 的双开.
+      if (sessionId) {
+        hermesHeaders["X-Hermes-Session-Id"] = sessionId;
       }
       resp = await fetch(url, {
         method: "POST",
@@ -455,7 +475,7 @@ export async function streamChat(params: SendChatParams): Promise<void> {
           if (!data) continue;
           if (data === "[DONE]") {
             finalizeToolCallsIfAny();
-            onDone({ finish_reason: finishReason, usage, task_assessment: taskAssessment });
+            onDone({ finish_reason: finishReason, usage, task_assessment: taskAssessment, via_hermes: useHermes });
             return;
           }
 
@@ -540,7 +560,7 @@ export async function streamChat(params: SendChatParams): Promise<void> {
     }
     // 流自然结束(没 [DONE]):也 finalize
     finalizeToolCallsIfAny();
-    onDone({ finish_reason: finishReason, usage, task_assessment: taskAssessment });
+    onDone({ finish_reason: finishReason, usage, task_assessment: taskAssessment, via_hermes: useHermes });
   } catch (e) {
     if ((e as Error).name === "AbortError") {
       onDone({ finish_reason: "abort", usage, task_assessment: taskAssessment });

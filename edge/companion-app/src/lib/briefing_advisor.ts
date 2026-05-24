@@ -126,6 +126,14 @@ const SYSTEM_PROMPT = `你是 catfish — 中国央国企员工的智能参谋. 
    - 涉及催办 → catfish_compose_followup_list
    - 涉及决策 → catfish_recall_decision_history (拉历史口径, 不背离)
 
+   **draftPath 硬约束** (5/22 鸿波撞 LLM 幻觉路径加):
+   - draftPath 字段**只能**是真调 catfish_draft_email_reply / catfish_draft_meeting_brief
+     后返回的 path 字段 (那个会落在 ~/.catfish/outputs/<today>/ 下).
+   - **不允许编路径**. 没真调 tool 就**不填 draftPath**, 或填 null.
+   - 不允许填 ~/Documents/, ~/Desktop/, 任何非 ~/.catfish/outputs/ 下的路径.
+   - 不允许凭主菜标题脑补"应该叫什么名字" 再写进 draftPath. 必须 tool 返什么写什么.
+   - 违反 → Rust 后端拒打开, 员工看到红条, catfish 失信.
+
 4. **central_state=strong 时, 每件主菜额外跑扫描**:
    - 邮件 / 汇报草稿 → catfish_check_compliance
    - 涉及关键人物 → catfish_political_sensitivity_scan
@@ -141,7 +149,7 @@ const SYSTEM_PROMPT = `你是 catfish — 中国央国企员工的智能参谋. 
       "reason": "影响项目 A 客户关系",
       "options": [
         {"label": "A", "tone": "strict", "summary": "紧扣 5/18 班子会边界"},
-        {"label": "B", "tone": "balanced", "summary": "微调保留余地", "aiLean": true, "draftPath": "/Users/.../reply-laoli-balanced.md"},
+        {"label": "B", "tone": "balanced", "summary": "微调保留余地", "aiLean": true, "draftPath": "<填真调 catfish_draft_email_reply 后返的 path; 没调就不填本字段>"},
         {"label": "C", "tone": "hold", "summary": "暂缓回复, 周一面谈"}
       ],
       "complianceFlags": [
@@ -292,20 +300,71 @@ export interface AdvisorInput {
  *  跟 recomputeProfile 同款 in-flight 锁. */
 let _advisorInFlight: Promise<AdvisorResult | null> | null = null;
 
+/** 5/22 鸿波实盘: 公司内网 Qwen 拥堵, TTFT 44s, 多次撞 gateway 300s timeout, UI 干等 5min.
+ *  客户端 60s timeout sentinel — fetch 不 abort (避 5/21 Tauri webview suspend bug,
+ *  fetch 完成后 cache 还会写, 下次时段触发能用), 但 fetchBriefingAdvisor 早返
+ *  TIMEOUT, 调用方走 stale cache fallback. */
+export const ADVISOR_TIMEOUT = Symbol("advisor-timeout");
+export type AdvisorFetchResult = AdvisorResult | null | typeof ADVISOR_TIMEOUT;
+const CLIENT_TIMEOUT_MS = 60_000;
+
 /** 主入口. 不挂 AbortSignal (Tauri webview suspend 经验, 5/21 学到). */
-export async function fetchBriefingAdvisor(input: AdvisorInput): Promise<AdvisorResult | null> {
+export async function fetchBriefingAdvisor(input: AdvisorInput): Promise<AdvisorFetchResult> {
   // in-flight 锁: 已在跑就复用 promise
   if (_advisorInFlight) {
     console.log("[advisor] 已在跑, 复用 in-flight promise (StrictMode 双调防御)");
-    return _advisorInFlight;
+    // 复用 in-flight 也加同款 timeout race — 让连续两次调都同等享受超时保护
+    return raceWithTimeout(_advisorInFlight);
   }
 
-  _advisorInFlight = _fetchBriefingAdvisorImpl(input);
+  const myPromise = _fetchBriefingAdvisorImpl(input);
+  _advisorInFlight = myPromise;
+  // 注: 不 await 整个 promise (它要 5min), 用 race 让本次调用早返;
+  // myPromise 后台跑完后:
+  //   - 清锁
+  //   - 如果 result 非空, 写 cache (避免 5min 后真返回的成果被丢弃)
   try {
-    return await _advisorInFlight;
+    return await raceWithTimeout(myPromise);
   } finally {
-    _advisorInFlight = null;
+    void myPromise
+      .then(async (result) => {
+        if (!result) return;
+        try {
+          const { advisorCacheSave } = await import("./advisor_cache");
+          await advisorCacheSave({
+            computedAt: new Date().toISOString(),
+            result,
+            model: input.model,
+          });
+          console.log("[advisor] 后台完成, 已写 cache (调用方可能已 TIMEOUT 走 stale)");
+        } catch (e) {
+          console.warn("[advisor] 后台写 cache 挂:", e);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (_advisorInFlight === myPromise) {
+          _advisorInFlight = null;
+        }
+      });
   }
+}
+
+async function raceWithTimeout(
+  p: Promise<AdvisorResult | null>,
+): Promise<AdvisorFetchResult> {
+  return Promise.race<AdvisorFetchResult>([
+    p,
+    new Promise<typeof ADVISOR_TIMEOUT>((resolve) =>
+      setTimeout(() => {
+        console.warn(
+          `[advisor] 客户端 ${CLIENT_TIMEOUT_MS / 1000}s 超时, 返 TIMEOUT (fetch 仍在后台跑, ` +
+            "完成会写 cache, 下次时段触发能用).",
+        );
+        resolve(ADVISOR_TIMEOUT);
+      }, CLIENT_TIMEOUT_MS),
+    ),
+  ]);
 }
 
 async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorResult | null> {
@@ -478,17 +537,30 @@ function parseMainTask(t: Record<string, unknown>): MainTask | null {
       const tone = typeof op.tone === "string" ? op.tone : null;
       const summary = typeof op.summary === "string" ? op.summary : "";
       if (!label || !tone) continue;
+      // 5/22 鸿波 BL-DRAFTPATH-WHITELIST: 防 LLM 幻觉路径.
+      // LLM 偶尔不听 SYSTEM_PROMPT, 编一个 /Users/.../Documents/xxx.md 进来.
+      // 客户端二次过滤: 只接 ~/.catfish/outputs/ 下的 path, 其它当 null.
+      // 这样 UI 显"无草稿, 自己写" 而不是点了报"草稿打开失败".
+      const rawDraft =
+        typeof op.draftPath === "string"
+          ? op.draftPath
+          : typeof op.draft_path === "string"
+          ? op.draft_path
+          : undefined;
+      const safeDraft =
+        rawDraft && rawDraft.includes("/.catfish/outputs/") ? rawDraft : undefined;
+      if (rawDraft && !safeDraft) {
+        console.warn(
+          "[advisor] LLM 幻觉 draftPath, 不在 ~/.catfish/outputs/ 下, 已清:",
+          rawDraft,
+        );
+      }
       options.push({
         label,
         tone,
         summary,
         aiLean: op.aiLean === true || op.ai_lean === true,
-        draftPath:
-          typeof op.draftPath === "string"
-            ? op.draftPath
-            : typeof op.draft_path === "string"
-            ? op.draft_path
-            : undefined,
+        draftPath: safeDraft,
       });
     }
   }

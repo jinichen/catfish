@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import logging
 import os
 import traceback
@@ -228,6 +229,103 @@ def list_tools() -> List[Dict[str, Any]]:
     return out
 
 
+# ── tool_archive 截胡 (5/22 BL-CENTRAL-EDGE-TOOL-ARCHIVE Phase 4) ──────
+
+def _maybe_archive_oversized_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    """超阈值的 tool result content 写本机 archive + 替换成 ref 引用文本.
+
+    替代 gateway 老 central/llm-gateway/tool_archive (那个把 content 写中央 PG
+    违反 5/17 BOUNDARY). 5/22 鸿波拍板真重构, 此为 in-process 截胡入口.
+
+    决策:
+      - 只看 result["result"] 字段 (raw tool output), 不算 ok/error/tool 的额外
+        包装字节 — 因为大头肯定在 result 字段里.
+      - result["result"] 是 str → 直接 archive 这个 str.
+      - 是 dict/list → json.dumps 后 archive (二进制 / 嵌套结构同 gateway 老逻辑).
+      - 阈值 < threshold → 不动, 原样返.
+      - 不动 result["ok"] / result["tool"] / result["error"] — 让 hermes / LLM
+        看到的 envelope 结构不变, 只有 result["result"] 从原始 content 变成
+        "[已归档: archive_ref=..., tool=..., XKB / N 行] 摘要 + 头尾预览" 字符串.
+
+    LLM 看到 [已归档 ref=xxx] 后, 想看全文调 catfish_read_tool_archive(ref=xxx)
+    → 走 tool-bridge 直读本机 (Phase 3 改过, 不再走 HTTP).
+    """
+    from . import tool_archive_local  # noqa: PLC0415  懒 import 避免循环
+    if not tool_archive_local.is_archive_enabled():
+        return result
+
+    raw = result.get("result")
+    if raw is None:
+        return result
+
+    # 序列化为 str (跟 gateway 老逻辑同 — gateway 处理的是 hermes 序列化后的 content)
+    if isinstance(raw, str):
+        content = raw
+    else:
+        try:
+            content = json.dumps(raw, ensure_ascii=False, default=str)
+        except (TypeError, ValueError) as e:
+            logger.debug(
+                "tool_archive: result 不能序列化 (tool=%s): %s, 跳过 archive",
+                result.get("tool"), e,
+            )
+            return result
+
+    nbytes = len(content.encode("utf-8"))
+    if nbytes < tool_archive_local.threshold_bytes():
+        return result
+
+    # _is_archive_candidate 的部分逻辑在这里复现 (跳 instructional skill)
+    if (
+        result.get("tool") == "catfish_run_skill"
+        and isinstance(raw, dict)
+        and raw.get("is_instructional") is True
+    ):
+        return result
+    if isinstance(raw, str) and raw.startswith("[已归档: archive_ref="):
+        return result
+
+    tool_name = result.get("tool") or "tool"
+    # tool_call_id 在 adapter 这层不一定能拿到 (hermes 还没分配), 用 None +
+    # ref 算法兼容 — 同 content 多次调用会算出同 ref, 实测可接受.
+    ref = tool_archive_local._compute_ref(content, None)
+
+    ok = tool_archive_local.upsert_archive({
+        "ref": ref,
+        "session_id": None,  # adapter 这层没 session_id 上下文, 留空
+        "catfish_user": tool_archive_local._catfish_user(),
+        "tool_call_id": None,
+        "tool_name": tool_name,
+        "content": content,
+        "content_bytes": nbytes,
+        "lines": tool_archive_local._count_lines(content),
+    })
+    if not ok:
+        logger.warning(
+            "tool_archive: 写挂 tool=%s nbytes=%d, 原样返 (不截胡)",
+            tool_name, nbytes,
+        )
+        return result
+
+    replacement = tool_archive_local.build_replacement_text(
+        ref=ref,
+        content=content,
+        tool_name=tool_name,
+        content_bytes=nbytes,
+        lines=tool_archive_local._count_lines(content),
+    )
+    logger.info(
+        "tool_archive: 归档 tool=%s ref=%s %d→%d bytes (省 %dKB)",
+        tool_name, ref, nbytes, len(replacement.encode("utf-8")),
+        (nbytes - len(replacement.encode("utf-8"))) // 1024,
+    )
+    new_result = dict(result)  # shallow copy 不动 caller 持有的 dict
+    new_result["result"] = replacement
+    new_result["_archived"] = True  # 给 caller / test 用
+    new_result["_archive_ref"] = ref
+    return new_result
+
+
 # ── 品牌脱敏 (五一 sprint 5/3 加) ───────────────────────────────
 
 
@@ -395,6 +493,18 @@ async def dispatch_tool(
                 result["error"] = _scrub_brand_leaks(result["error"])
             except Exception:
                 pass
+
+    # 5/22 BL-CENTRAL-EDGE-TOOL-ARCHIVE Phase 4 (鸿波): edge 端 in-process 截胡.
+    # 替代 gateway 老 tool_archive (那个把 content 写中央 PG 违反 5/17 BOUNDARY).
+    # 仅 ok=True 的成功结果走 archive (失败 result 通常很小, 不值得 archive).
+    if result.get("ok") and result.get("result") is not None:
+        try:
+            result = _maybe_archive_oversized_result(result)
+        except Exception:
+            logger.exception(
+                "tool_archive_local 截胡挂 (tool=%s), 原样返", name,
+            )
+
     return result
 
 

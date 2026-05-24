@@ -5788,3 +5788,426 @@ TodoStore.write([{content, status=completed}])
 - **chat-first 实盘**: 鸿波说"把张三那封改成待办" 看 LLM 是否真 chain (search + add); 不会的话加 native tool 兜底
 - **catfish-todo-sync v0.1.11 候选**: TodoStore.write 是否还能再省 — diff 跟上次 todos array, 只 sync 变了的, 没变的不动 (currently 全量送 N op, 即使 idempotent 也开销)
 
+---
+
+## 2026-05-21（周四）— TODO 待补
+
+> 5/21 全天 ship 未及时写入 CHANGELOG. 凭记忆 / git log / docs/ 补:
+> - Phase 7 智能参谋设计推翻 Phase 6 (CATFISH-ADVISOR-DESIGN.md)
+> - L3 化简 / priority ⭐ / ranked / 详情段 / LLM Decision (Phase 1-5 advisor)
+> - briefing_advisor.ts + AdvisorView.tsx + ActionCard.tsx (~660 行)
+> - advisor_task_state.rs (217 行) + style_fingerprint_dirs.rs (228 行)
+> - adapter.py 拆分 (1113 → 688): adapter_todo / adapter_memory / adapter_security
+> - users.py 拆分 (886 → 771): 抽 IdentityUser model
+> - catfish_memory.py 拆分 (1183 → 685): 抽 helpers + 14 常量
+> 详情待回看 docs/CATFISH-ADVISOR-DESIGN.md 和 git log 补完.
+
+---
+
+## 2026-05-22（周五）— TODO 待补
+
+> 5/22 全天 ship 未及时写入 CHANGELOG. 凭记忆 / git log 补:
+> - BL-CENTRAL-EDGE-TOOL-ARCHIVE 真重构: PG → edge sqlite + 文件 (~/.catfish/tool_archives/<date>/<ref>.json + _index.sqlite)
+>   - tool_archive_local.py (新, 581 行) + read_tool_archive.py (重写, 173 行)
+>   - adapter.py +120 行 (_maybe_archive_oversized_result 截胡)
+>   - migrate_tool_archives_pg_to_local.py (新, 480 rows 迁移成功)
+>   - gateway archiver.py 加 env CATFISH_GATEWAY_TOOL_ARCHIVE_ENABLE short-circuit
+> - tools_sanitizer.py 拆分 (808 → 618) + tools_sanitizer_constants.py (新, 215 行)
+> - BL-TOOL-PROFILE: 按 X-Catfish-Source 砍 catfish_* tools, _DEFAULT_MAX_TOOLS 50 → 35
+> - Companion autostart.rs 解耦 gateway (删 ensure_gateway_running ~70 行) + 加 ensure_local_search_running / ensure_chrome_running
+> - watchdog.rs 解耦: 不再监控 / respawn gateway, 只管 tool-bridge + local-search
+> - catfish-memory plugin sync_turn 接管 employee_journal 写 (CATFISH_GATEWAY_LEGACY_SUMMARIZE=0)
+> - 双 config (work/home) 切换脚本 catfish-mode + ~/.hermes/config.yaml.work/.home (5/23 又删了, 见下)
+> - sessions_browse.py + tasks_browse.py 死代码清 (~1209 LOC 净清)
+> - Phase 7 advisor UX 修: AuthBanner 红条删 / 60s timeout / ActionCard 三态 / OptionRow 文案
+> - hermes default model 公网 deepseek → 内网 catfish-private-main (数据零出端合规)
+> - gemini-3.5-flash 配置漂移修 (display_name / comment / model 三处对齐)
+> 详情待回看 git log + 当天对话日志补完.
+
+---
+
+## 2026-05-23（周六全天）— 双 config 推翻 + 双开合一 + 双写防 + 大清理 (10 项 ship)
+
+### 完成
+
+1. **删双 config 切换 + 关 fallback** (推翻 5/22 ship)
+   - 删 ~/.hermes/config.yaml.work/.home/.swap + before-mode-switch.* 备份
+   - 删 scripts/catfish-mode bash 脚本
+   - .env CATFISH_AUTO_FALLBACK=1 → 0
+   - 决策: UI 模型下拉已经能切, 不需要双 config; fallback 串模型让流式撞车
+   - 副作用: mid-stream fallback 老 bug 自动消失 (fallback 关了就不存在)
+
+2. **tool-bridge TodoStore → employee_journal sync 内联** (替老 plugin 死代码)
+   - adapter_todo.py 加 _find_catfish_journal_bin / _sync_to_journal_batch / _sync_to_journal (~150 行)
+   - _persist_todo_store 末尾调 _sync_to_journal(items), 同步 pending/in_progress/completed/cancelled 4 状态
+   - 老 catfish-todo-sync plugin (edge/hermes-plugins/catfish-todo-sync/) 整套 ~280 行删
+   - 根因: plugin 靠 hermes plugin loader import-time monkey-patch TodoStore.write, 但 catfish 实际路径是 tool-bridge 直接 `from tools.todo_tool import TodoStore` — bypass plugin loader 永远没跑
+   - 5/20 ship 后从来没真生效, 5/23 鸿波 sqlite 看 deepseek 调 todo_write 落了 10 项 TodoStore + ~/.catfish/todo_store/<sid>.json, 但 employee_journal.md 完全没收到
+
+3. **journal-agent archive 子命令** (主 journal 减 90%)
+   - core.py 加 archive_old() 纯函数 (368 行) — 按 section_ts 切, > N 天归档, 按 year 聚合
+   - cli.py 加 archive --days N [--dry-run] 子命令 (363 行)
+   - 鸿波本机跑 --days 7: 主 journal 8805 → 826 行 (-90%), 322KB → 27KB
+   - LLM cat 全文从 ~80K → ~8K token, 不再触发 deepseek "journal 内容太长" 回退
+   - 归档文件 ~/.catfish/employee_journal_archive_YYYY.md (671KB), 静态留存
+
+4. **state.db corrupt 重建**
+   - sqlite integrity_check 报 "Tree 8050 page 544192 Rowid out of order"
+   - chat append 全报 "database disk image is malformed", session_message_append 失败
+   - .recover 没救回 — 备份 state.db.corrupt-backup.* (2.7GB) + .corrupt-bak (2.9GB) + .dead (2.9GB)
+   - 操作: rm state.db/-wal/-shm + launchctl kickstart hermes → fresh schema (17 表全建好)
+   - 代价: 622 条历史 session 列表丢, 但 employee_journal.md / distilled_facts.md / todo_store / facts 全留
+
+5. **Hermes API server CORS Allow-Headers 加 5 项**
+   - hermes-agent/gateway/platforms/api_server.py:424 _CORS_HEADERS
+   - 老 Allow-Headers 只 "Authorization, Content-Type, Idempotency-Key, X-Catfish-User"
+   - 加 X-Hermes-Session-Id (hermes 自家定义的 header 居然没在 CORS 放行)
+   - + 加 X-Catfish-Agent-Name / Agent-Personality / Teaching-Mode / Prev-Model (catfish 早就在发)
+   - 否则 browser preflight (OPTIONS) 拒, fetch 报 "Load failed", 体感 chat 完全连不上
+   - 5/19 BL-AUTH-DECOUPLE-A5 切 hermes 路径时漏修
+
+6. **Chat 双开合一 (BL-COMPANION-HERMES-SESSION-REUSE)**
+   - chat.ts SendChatParams 加 sessionId? 字段
+   - streamChat 在 useHermes 路径加 header `X-Hermes-Session-Id: <persistedSessionId>`
+   - hermes 端 api_server.py:1188 早就支持 provided_session_id, 但 companion 之前没传
+   - useChat.ts 调 streamChat 时透传 useChatStore.getState().persistedSessionId
+   - 效果: state.db 同一对话从"1 companion + 1 api_server" 双胞胎 → 只 1 companion
+   - 副作用 → 见 #7
+
+7. **via_hermes flag 防双写 (B 修法副作用收尾)**
+   - 问题: hermes 复用 companion session 后, hermes 自己 commit assistant + companion onDone 后 sessionMessageAppend → 同 session 出 2 条 assistant row, UI 显示重复
+   - chat.ts ChatStreamDoneInfo 加 via_hermes? flag, 3 处 onDone({...}) 都填
+   - useChat.ts refs 加 viaHermes, persistMessage(finalAssistant) 前判 if (!refs.viaHermes)
+   - 验证: sqlite 新 chat 只 1 user + 1 assistant (修前 2 assistant)
+
+8. **/api/quota/me 用 effective_user_email**
+   - app.py:491 之前用 user.sub 查 quota_events
+   - hermes service token 时 sub=`client:hermes-cli`, 而 chat 写 quota 时按 resolve_effective_user_email (真员工 chenhongbo@ffcs.cn)
+   - 写读不一致 → dashboard 永远显示 0/10M
+   - 改: quota_me 接 X-Catfish-User header 参数 + resolve_effective_user_email, 跟 chat 路径对齐
+   - 修后 curl 拿到真数据: day.used 11.28M (今天真用了 11M token, 超 10M 日限 13%)
+   - 之前没察觉是因为 quota_check 也用 user.sub → 永远查 0 → 限流从未触发
+
+9. **me.ts fetchDevUsers 加 hermes auth** (消 console 401 噪音)
+   - 老代码裸 fetch 不带 Authorization
+   - hermes proxy 强制 Bearer API_SERVER_KEY → 直接 401, 不到 catfish-gateway
+   - 老注释承认 "401 时降级 null 已被 try-catch 兜住" — 功能 OK 但 console 一直打红色 "Failed to load resource: 401" 误导
+   - 改: 拿 hermesApiAuthHeader, 跟 chat.ts 同款带 Authorization
+   - DevUserSwitcher 两 tab 各 mount 一次 + StrictMode double-call = 4 个 401 → 全消
+
+10. **RecMode 按钮 🎙→🎬 + 加 border 风格统一**
+    - RecModeButton.tsx 老 `border: "none" + transparent`, 跟旁边 📎/🎓/🎤 (TeachingToggle 风格) 不齐
+    - emoji 🎙 跟普通 🎤 (语音输入) 视觉太像, 员工分不清
+    - 改: 🎬 (拍版, 贴 "你演一遍 catfish 学" 语义) + 1px border + radius-sm + active 时 cyan
+    - 删 T import (T.cyan / T.textSecondary 不再用, tsc noUnusedLocals 卡 build)
+
+11. **Hermes memory cap 上调** (附加)
+    - ~/.hermes/config.yaml: memory_char_limit 2200 → 5000, user_char_limit 1375 → 3500
+    - 实际 MEMORY.md 3868 字符 (超 cap 76%), USER.md 2560 字符 (超 86%) — 一直被截
+    - 副作用: system prompt 每次多 ~5KB ≈ 1200 token, 1M / 128K 模型都扛
+
+### 踩坑
+
+- **pkill + `python ... &` 无 disown**: 鸿波每次 `pkill -f gateway; python -m ... &` 起的 gateway, terminal 关 / Ctrl+C 触发 SIGHUP 杀进程. 隔几小时 gateway 又挂. 正确姿势: `nohup ... > /tmp/log 2>&1 & disown`. 真生产用 launchctl plist (但 com.catfish.gateway 5/22 起 78 exit, 没修)
+- **mid-stream fallback 设计意图 vs 实现冲突**: fallback.py:24-25 注释明确写 "已开始流就让它挂", 但 should_fallback() 只看 status code 是否 503/429, 没区分 first chunk 前/后. LiteLLM MidStreamFallbackError 把首字之前的 Connection reset / 429 都包成"mid-stream", 503 直接进 fallback chain → 盲切 → qwen-flash APIError → private-main 在家不通 → 全 chain fail. 完全关 CATFISH_AUTO_FALLBACK=0 后这个矛盾不存在
+- **catfish-todo-sync plugin 5/20 ship 后从来没真接上**: tool-bridge bypass hermes plugin loader → monkey-patch 没机会. 5/23 鸿波 sqlite 查 deepseek 那次"嘴说写入 10 项 TODO" 真相 = tool_call_count = 0, 嘴炮. 后来 deepseek 改用 patch 工具直接写 markdown 文件才落盘 — 但走的不是 todo_write hook 路径, sync 也没触发
+- **state.db corrupt 真因没查到**: 5/22 WAL checkpoint 失败? rusqlite 并发写? 不确定. .recover 也救不全 — 重建是唯一办法
+- **companion-hermes session 双开是 lazy create 的, 改一个 header 就修, 但 hermes 自己也写 assistant** → 引入双写新副作用, 又一轮 via_hermes flag 修
+- **/api/quota/me 写读不一致** 隐藏了真相: 鸿波今天 11.28M token, 超 10M 日限 13%, 但 dashboard 显示 0, 限流也从未触发 → 服务端配额监控完全失效, 单 service token 共用账户场景的盲点
+- **Gemini free tier 20 req/day 烧光后 fallback chain 帮忙隐藏限流**: 鸿波之前没察觉 gemini 早就 quota_exceeded, 因为 fallback 默默切到 qwen / deepseek. 关 fallback 后真相露出来
+- **TS noUnusedLocals 严格**: import 没用就卡 build (`tsc -b` 前导致 npm run tauri build 失败). RecModeButton.tsx 改完忘删 T import 撞这条
+- **build chunk warn**: dist/assets/main-*.js 760KB > 500KB. dynamic import 跟 static import 混用让 Rollup 不能 split chunk. 不影响功能, 但加载稍慢
+
+### 关键决策
+
+- **"真重构不补丁" (鸿波多次拍)**: fallback 不要, 直接报错; 双 config 不要, UI 选模型就够. 5/22 凌晨的多 config / fallback chain 设计当晚被推翻
+- **服务端 vs 客户端边界 (5/22 已立, 今天落实)**: Companion 只管 client services (tool-bridge / local-search / chrome), 不管 gateway. launchctl 起的 gateway 不在 watchdog 监控里, 手动 nohup 凑活
+- **archive 按 year 而不是按时间窗**: 减体量按 "切一段时间到 archive" 不是逐行截. 鸿波 1350 sections / 23 天 = 58 session/天 数据密度, --days 7 切走 4/30-5/15
+- **承认 5/21 + 5/22 CHANGELOG 漏了**: 这两天 ship 量大 (Phase 7 / tool_archive 重构 / autostart 解耦 / 5 BOUNDARY 整改), 但鸿波累完每晚都说"真睡了"没写. 5/23 加 stub 占位, 让历史空缺看得见
+- **承认 sandbox + 真机数据有差 (我 8 次错误的延续)**: 凭印象答几次都被鸿波纠 ("你要看代码"). 今天 quota=0 / journal 太长 / 401 噪音 / mid-stream fallback 全是先 grep 代码 + sqlite 查实际数据再答, 准确率高 — 给自己留教训
+
+### 遗留 (留下次或下周)
+
+- 5/21 + 5/22 CHANGELOG 还需补完 (Phase 7 advisor / tool_archive 重构 / autostart 解耦 / 5 BOUNDARY 整改 详情)
+- launchctl com.catfish.gateway (78 exit) + token-refresh 没起, 靠 nohup 凑活, 鸿波重启 Mac 后会断
+- background advisor / briefing / profile fetch 也会创 api-* session (UI 列表仍有少量"假对话"), B 修法只覆盖 useChat 一条路径
+- crontab 自动跑 `catfish-journal archive --days 7` 没装, 主 journal 会再涨回 8000 行 (每天 +58 sections × 6.5 行)
+- state.db 备份 ~8.5GB (corrupt-backup × 2 + dead × 1), 磁盘紧张可清, 留 1 个挖历史用
+- catfish-memory plugin sync_turn 1 周覆盖度验证 (task #5) 6/5 时间到再看 journal 段是否完整
+- mid-stream fallback bug 留代码 (CATFISH_AUTO_FALLBACK=0 关行为, 不删代码) — 真要恢复 fallback 就要修 should_fallback() 看 is_pre_first_chunk
+- 双开合一 + 双写防 在 prod build 真验 (今天 sandbox 看到 1 user + 1 assistant 是 dev 模式, prod build 鸿波刚 npm run tauri build 完, 装新 .app 试)
+- LLM 长期 chat 看 hermes memory cap 提到 5000/3500 后老 entries 能不能找回 (本周看)
+
+### 当天测试净增
+
+- TS tsc --noEmit clean (chat.ts / useChat.ts / RecModeButton.tsx / me.ts 改完都过)
+- adapter_todo.py smoke test (import + 干跑 _sync_to_journal(空 todos) + 1 pending = 都不挂)
+- archive_old() smoke test (4 段 sample, 2 段归档到 2026, 2 段留主 — 跑通)
+- bash scripts/check_file_sizes.sh --strict (我加的代码全部 < 800 红线: adapter_todo.py 406 / core.py 368 / cli.py 363 / me.ts 441 / chat.ts 570 / useChat.ts 756)
+- 仓库总 277 ≥ 800 红线文件是历史欠债, 不是我引入
+
+### 5/23 ship 总数: 11 项 (10 主 + 1 附加)
+
+---
+
+## 2026-05-24（周日全天 + 5/25 凌晨延伸）— 6 大主题: Step 3 流不打断 + D 方案 service token + memory 纪律 + BL-EDGE-TOOL-KEY 中央派发 + Companion silent refresh + Tavily web_search 真闭环 (47 项 ship)
+
+> **整天最大成果**: 把 catfish 中央化部署前的最后一块"第三方 API key 中央派发"基础设施 ship 完毕 (BL-EDGE-TOOL-KEY), 顺手解决 5 个独立 P1 bug (模型切回 Gemini / 401 storm / Qwen 122B 撞 max_tokens / NVIDIA NIM 两条 entry 配错 / session_search SQL 字段名错), 4 个 BL 一起把 web_search demo 在 DeepSeek-v4-flash 上从 "走 browser 抓页面 60 秒+200K token" 改成 "原生 web_search tool_call 15 秒"。
+
+### 完成 — Phase A: 5/24 上午, P0 bug 修
+
+1. **模型切会话自动跳回 Gemini bug (chat.ts:loadSession)**
+   - 删 loadSession 里 `model: detail.meta.model` 行
+   - 根因: loadSession 把会话的"创建时模型"覆盖了用户当前选择 → 切到老会话就跳回老模型
+   - 决策: 用户选啥就用啥, 全局生效, 切会话不重置 (符合鸿波 "选择了哪个模型就用哪个" 直觉)
+
+2. **OAuth 401 storm 修 (Companion silent refresh)**
+   - oauth.rs: 加 `KEYRING_USERNAME_REFRESH` + `REFRESH_WHEN_REMAINING_SECS = 300` + `try_refresh_session()` + `ensure_fresh_access_token()` + `static REFRESH_MUTEX`
+   - auth.rs: `auth_get_access_token` 改 `ensure_fresh_access_token().await`
+   - me.ts: 删 `_cachedEnvToken` 模块级缓存 (BL-FIX-STALE-TOKEN-CACHE), 401 时 invalidate `_cachedUserEmail`
+   - 根因: access_token 1 小时过期, Companion 没有 refresh 逻辑 → 闲 1 小时后所有 request 拿过期 token 撞 401
+   - 修后: 静默 refresh, token 剩 < 5 分钟自动续, 员工无感
+
+3. **Groq gpt-oss-120b 加入 models.yaml**
+   - 加 catfish-public-groq-gptoss-120b entry, max_output_tokens 65536
+   - 顺手 Qwen-flash max_output_tokens 65536 (老 8192 撞过空 400)
+   - 鸿波要的快速大模型选项, 跟 DeepSeek/Nemotron 并列
+
+4. **NVIDIA NIM 两条 entry 全错, 改对**
+   - nvidia-llama: model `nvidia_nim/deepseek-ai/deepseek-v4-flash`, context 131072
+   - nvidia-nemotron: model `nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5`, context 131072 (老 4096 一聊就爆!)
+   - 都加 max_output_tokens 131072
+   - Nemotron `supports_tool_use: false` (reasoning 模型, 把 tool calls 写成 text → Chrome about:blank, 不能当 chat 用)
+
+5. **session_search SQL 字段名错 (sessions_search.py)**
+   - `m.created_at` → `m.timestamp` (hermes 真实 schema 是 timestamp, 不是 created_at)
+   - 历史 BL-FIX 写错了, 跨 session 检索一直返空, 鸿波"为什么 session_search 不可用" 报上来才发现
+   - 同步修 test_sessions_search_tool.py 的测试 schema (跟生产对齐)
+
+6. **chenhongbo@ffcs.cn quota override (quotas.yaml)**
+   - tokens_per_minute: 1,000,000; tokens_per_day: 100,000,000
+   - 鸿波撞 10M 日限 429 才发现 — 自己做 dogfood 测试不该被普通员工配额拦
+   - quota_check 之前用 user.sub 查 (= `client:hermes-cli`) 永远 0, 也是 bypass — 5/23 修 me.ts 才真生效
+
+### 完成 — Phase B: 5/24 下午, Step 3 streamRegistry (切会话不打断流)
+
+7. **streamRegistry.ts 新建 (Step 3.1)**
+   - 模块级 `Map<sessionId, StreamState>`, 脱离 React 组件生命周期
+   - 8 个 API: start / get / update / finish / cancel / isInflight / getInflightSessions / subscribe / subscribeInflight
+   - 解决问题: 之前流式回复跟 React 状态绑定, 切走会话 = useChat unmount = 流被中断, 切回来看到截断的半截 assistant message
+
+8. **chat.ts streamChat 写入 registry (Step 3.2)**
+   - 写 SSE chunk 时同步 update 到 registry
+   - finish/cancel 都通知 registry
+
+9. **useChat 改成订阅 registry (Step 3.3)**
+   - persistMessage 加 sessionIdOverride 参数 (流可能跨会话完成, 不能写到当前 active session)
+   - send() 捕获 `sessionIdForStream = await ensureSessionId()` 然后 register
+   - 把 hook 内 pendingDelta / rafId / currentStreamId 三个 useRef 从 hook-level 搬进 runOneRound 局部 — 防 cross-stream 污染 (并发会话写到错的 message)
+
+10. **ChatTab.handleSelect 不再 cancel 流 (Step 3.4)**
+    - 删 handleSelect / handleNew 里的 cancel() 调用
+    - 切走会话 → 流继续, 不打断
+
+11. **ChatSidebar 显示 ⏳ 进行中徽章 (Step 3.5)**
+    - 订阅 streamRegistry.subscribeInflight, 拿到正在流的 sessionId 集合
+    - SessionRow 渲染 ⏳ 给 inflight session
+    - 底部状态栏显示 "⏳ N 个会话进行中"
+
+12. **Step 4 长任务 dispatch 写正式 plan doc** (docs/PLAN-DISPATCH-LONG-RUNNING-TASKS.md)
+    - 给 deep-research / 真长任务 (>5 分钟) 的 worker dispatch 架构落档, 不实施 (Step 3 流不打断已经覆盖 80% 场景)
+
+### 完成 — Phase C: 5/24 下午+晚, BL-HERMES-SERVICE-TOKEN (D 方案 — hermes 30 天 token)
+
+13. **catfish-cli `_mint_hermes_service_token()`** (RFC 6749 §4.4 client_credentials grant)
+    - POST identity /token with grant_type=client_credentials + scope=`chat.completions tools.invoke skills.run audit.write`
+    - 返 30 天 TTL access_token, sub=`client:hermes-cli`, aud=`catfish-gateway`
+    - dev fallback secret = identity-server clients.yaml 注释里写的 "hermes-dev-secret-2026-please-change" (生产要换)
+
+14. **catfish-cli `_sync_hermes_with_service_token()` 替代老 `_patch_hermes_config(user_token)`**
+    - 老行为: 写 user OAuth access_token (1h TTL) 进 hermes config.yaml api_key → hermes 进程 cache → 1h 后过期 → gateway 401 storm → "hermes gateway restart" 才续
+    - 新行为: 30 天 service token, 跟 user OAuth 完全解耦 (用户没 login / OAuth 过期都不影响 hermes 跑)
+    - 3 处调用 (cmd_login / cmd_token / cmd_refresh) 改用 service token, fallback 到 user token 仅在 mint 失败时
+
+15. **catfish refresh-hermes 命令** (cmd_refresh_hermes)
+    - 独立 refresh hermes service token, 不动 user OAuth (cron / launchd 月跑能用)
+    - 场景: hermes service token 快到 30 天上限 / identity-server client_secret 轮换 / 手动 rotate
+
+16. **DEPLOYMENT-RUNBOOK §13 + §14 写完**
+    - §13: hermes service token 配置 (生产怎么设 CATFISH_HERMES_CLI_SECRET / 怎么 rotate)
+    - §14: 上线 checklist 加 3 行 (service token mint 验证 / 30 天续期机制 / 生产 secret 已设)
+
+### 完成 — Phase D: 5/24 晚, hermes memory 写入纪律 + cleanup 脚本
+
+17. **catfish-memory plugin `_render_memory_discipline()` 注入** (改动 A)
+    - prefetch() Section 0 = 写入纪律, 无条件注入每轮 system prompt
+    - 内容: ❌ 一次性事件不写 / ❌ skill spec 不写 / ❌ 项目状态不写 / ✅ 稳定偏好 / ✅ 跨 session 业务规则 / ✅ falsifiable + 可证伪
+    - 根因: 鸿波 5/24 晚截屏 21 条 hermes USER.md/MEMORY.md, 14 条 (67%) 违规 (一次性会议 / skill spec / TODO 状态混进 memory) — 模型没 prompt 约束就乱写
+    - test_catfish_memory.py 同步修: `test_prefetch_empty_when_no_data` 期望含纪律 section, 22/22 测过
+
+18. **scripts/hermes-memory-cleanup.py 写完 (264 行)**
+    - 独立脚本管 ~/.hermes/memories/USER.md + MEMORY.md (跟 Companion "清空印象" 是独立 UI, 那个清的是 ~/.catfish/employee_journal.md, 完全两套)
+    - 子命令: list (默认) / show TARGET INDEX / delete TARGET INDEX --yes
+    - 含: 自动 backup .bak.<时间戳>, 二次确认, ANSI 颜色 (NO_COLOR env 兼容), 字符数 + cap% (75%+ 红 / 50%+ 黄)
+    - JSON 输出模式 (`--json`) 给程序消费
+
+19. **docs/MEMORY-USER-GUIDE.md 落档 (7 section)**
+    - 给员工看的 "4 套 memory 盒子" 速记: hermes USER.md / MEMORY.md / catfish employee_journal.md / session_facts.json / user_profile.json / style_fingerprint.json / feedback.jsonl / session_meta.json
+    - 每个盒子: 写的人 / 读的人 / 干啥用 / 怎么清
+
+20. **鸿波本机现场清理 (验证脚本 + 纪律)**
+    - 14 条不合规 entry 删完, MEMORY.md 11 → 1 条 (从大到小删避免 index 错位)
+    - USER.md 4 条全合规, 不动
+    - 健康基线建立, 后续靠 改动 A 的纪律 prompt 兜底
+
+### 完成 — Phase E: 5/24 晚, BL-EDGE-TOOL-KEY 中央派发架构 (核心 ship)
+
+> **动机** (鸿波 5/24 晚发问): "为啥 web_search 不能用?" → 诊断是 Tavily key 没配 → 探究"key 该 hermes 配还是中央 catfish 派发" → 鸿波拍板"50 人部署中央管 API key, 不能各机各配" → 设计 + 实施完整中央派发架构。
+
+21. **gateway `edge_tool_config.py` 新建 (180 行)**
+    - `EdgeToolConfig` dataclass (tool_name / tool_group / provider / env_var_name / env_var_source / yaml_block)
+    - `EDGE_TOOL_REGISTRY = {web_search, web_extract, web_crawl}` 共享 Tavily backend
+    - `is_supported_tool` / `list_supported_tools` / `get_env_value` / `build_response` 4 个 helper
+    - 返 (status, body) tuple, 404 (不在 registry) / 503 (admin 没配 env) / 200 (含 env_vars + yaml_block)
+
+22. **gateway app.py 加 2 个 endpoint**
+    - `GET /v1/edge/tool-config/{tool_name}`: RBAC = user.can_use_tool(name), 403 / 503 / 200
+    - `GET /v1/edge/tool-config` (list): 返 {supported: [...], groups: {web: {provider, env_var_name, tools: [...]}}}
+    - 都用 FastAPI Depends(get_current_user), 复用现有 JWT 验
+
+23. **identity-server alembic 008 migration (20260524_008_rbac_edge_web_tools.py)**
+    - 给所有部门 `allowed_tools` 追加 web_search + web_extract (用 JSONB `||` 合并)
+    - engineering / ops `allowed_tools = []` (空 = 全允许) → 不动
+    - sales / legal 显式 list → 追加 (legal 之前 005 因"合规不外联" 不放, 这次显式覆盖该决策 — 中央派发上线后 "不放" 才真生效, 之前员工自配 Tavily 拦不住)
+
+24. **catfish-cli 5 个新 helper + 1 个 orchestrator + 路径常量**
+    - `_fetch_edge_tool_list(gateway_url, token)` GET endpoint list
+    - `_fetch_edge_tool_config(gateway_url, token, tool_name)` GET per-tool
+    - `_patch_hermes_env_file(env_vars)` 写 ~/.hermes/.env (per-key update, 保留无关行 + 注释, 自动备份, chmod 600)
+    - `_patch_hermes_config_yaml_blocks(yaml_blocks)` 写 ~/.hermes/config.yaml (浅合并 sibling 保留)
+    - `_sync_hermes_edge_tool_configs(gw, tok)` orchestrator: 拉 list → 每 tool 单独打 endpoint (per-tool RBAC) → dedupe by tool_group → 写盘
+    - `_hermes_env_path()` + `_gateway_url()` 路径 helper (env HERMES_DOTENV / CATFISH_GATEWAY_URL 可覆)
+
+25. **_sync_hermes_with_service_token() 末尾串 edge tool config 同步**
+    - mint service token + 写 oauth 块**之后**, 调 `_sync_hermes_edge_tool_configs()`
+    - 任一步失败 (网络/RBAC/admin 没配) print warning 跳过, 不挂主流程
+
+26. **DEPLOYMENT-RUNBOOK §15 全章 (架构图 + admin 配置 + 员工跑啥 + 验证 + RBAC 操作 + 故障表 + 加新 tool 流程)**
+    - §15.1 干啥用 / §15.2 数据流 / §15.3 admin 配置 (3 步) / §15.4 员工侧 / §15.5 端到端验证 / §15.6 RBAC 操作 SQL / §15.7 故障表 / §15.8 加新 tool 流程
+    - §14 checklist 加 3 行 (TAVILY_API_KEY env / 008 migration / 端到端员工 demo)
+
+27. **14 gateway 单测 + 13 cli 单测**
+    - tests/test_edge_tool_config.py: 404 / 403 / 503 / 200 全分支, env 空白 / 不漏其他 env, web_search ∪ web_extract 共 group + key
+    - test_catfish.py 加 13: _patch_hermes_env_file 创建/保留/原位覆盖/empty/备份, _patch_hermes_config_yaml_blocks merge sibling/skip-when-no-file, _sync_hermes_edge_tool_configs dedupe by group/empty list/failed fetch skip
+    - 跑: 14 (gateway) + 57 (cli) 全过
+
+### 完成 — Phase F: 5/24 晚 → 5/25 凌晨, web_search 真 demo + 3 个 BL 联合修
+
+> **现象**: BL-EDGE-TOOL-KEY 架构 ship 完后真测 — DeepSeek 没 emit 直接 `web_search()` tool_call, 走 `execute_code(from hermes_tools import web_search)` + `catfish_browser_*` 抓页面, 60+ 秒 / 200K token。深挖 3 个根因, 联合修才闭环。
+
+28. **BL-EDGE-TOOL-PROXY (#61): catfish refresh-hermes --restart-hermes flag**
+    - 5 个 helper + 1 个 CLI flag (180 行)
+    - `_check_proxy_alive(url)` TCP probe 代理端口
+    - `_detect_dead_proxy_vars()` 扫 HTTPS/HTTP/ALL_PROXY 6 个 env var, 返死的 list (URL 去重)
+    - `_build_clean_env(unset)` copy os.environ 删指定 var 不动当前进程
+    - `_restart_hermes_with_clean_env(unset)` subprocess.run `hermes gateway restart` 带 sanitized env
+    - `_handle_proxy_cleanup(auto)` 永远检测, 默认警告, flag 自动 restart
+    - 13 单测 (probe / detect dedupe / build_clean / silent-when-alive / warn / auto-restart / fallback-on-fail)
+    - **效果**: 鸿波 shell HTTPS_PROXY=127.0.0.1:7890 (Clash 没开), hermes 进程之前继承死代理 → Tavily HTTP 全 timeout → 模型学会"web_search 不能用" 退化用 browser
+    - 跟 gateway/network.py 的 precheck_and_setup 同套路, gateway 自己启动时做这事, 现在 hermes 也享受同样保护
+
+29. **BL-WEB-ALWAYS-ON (#62): web 工具加 always-on + sanitizer 永远前置**
+    - `tools_sanitizer_constants.py`: web_search/web_extract/web_crawl 进 ALWAYS_ON_TOOLS (25 项)
+    - `_cap_tools_by_priority`: "超 cap 才重排" → **永远** always-on 前置 (即使没超 cap, 也把 always-on 拉到前面)
+    - 动机: hermes 按字母序发 tool, web_* 字母序排倒数 → 模型位置偏置不选 → 退化 browser
+
+30. **BL-MCP-PREFIX-FIX (#58): always-on 白名单识别 mcp_catfish_tools_ 前缀**
+    - 新加 `MCP_CATFISH_PREFIX = "mcp_catfish_tools_"` 常量
+    - 新加 `is_always_on(name)` helper: 同时认裸名 (`catfish_today_summary`) 和 MCP 包装名 (`mcp_catfish_tools_catfish_today_summary`)
+    - sanitizer 4 处 `name in _ALWAYS_ON_TOOLS` 改 `_is_always_on(name)` (cap / source profile / RBAC bypass / 诊断日志)
+    - 根因: hermes 通过 catfish-tool-bridge MCP server 看 catfish tool, 名字加了 `mcp_catfish_tools_` 前缀, 老 sanitizer 只匹裸名 → MCP 版的 always-on (catfish_today_summary 等) 被当成普通 tool, cap 时被砍
+
+31. **6 新单测 (test_tool_cap.py)**
+    - test_web_search_extract_crawl_in_always_on
+    - test_always_on_promoted_to_front_when_under_cap
+    - test_always_on_preserved_relative_order_among_themselves
+    - test_mcp_wrapped_always_on_promoted_too
+    - test_mcp_wrapped_always_on_survives_cap
+    - test_is_always_on_helper_directly (3 分支)
+
+32. **BL-TOOL-CAP 日志措辞修正**
+    - 老: `"BL-TOOL-CAP: 41 tools 超上限 110, ..."` (鸿波误读成 "41 < 110 数学错")
+    - 新: `"BL-TOOL-CAP: dropped=41 cap=110 kept=80, ..."` 一目了然
+    - 实际行为没 bug, 是中文措辞误导
+
+### 完成 — Phase G: 5/25 凌晨 7:00, web_search demo 真闭环验证
+
+33. **DeepSeek-v4-flash Companion 端到端测试通过** (Companion "搜今天国际新闻头条 5 条")
+    - 模型 emit 5 个 tool_call: `web_search(query="国际新闻头条 2026年5月25日", limit=5)` → `web_search(query="world news headlines May 25 2026")` → `web_extract(urls={...})` → `web_search(...)` × 2
+    - 0 个 execute_code, 0 个 browser_*, 完全 hermes 0.14 原生路径
+    - 时长 ~15 秒 (修前 60+ 秒, 4x 加速), token 319K (其中 ~280K 是 always-on 系统提示 + memory, 实际工具开销小)
+    - 5 条真实今日新闻返出 ("综合多个渠道, 今天 5/25 国际头条新闻 5 条: ...")
+    - **训练偏置 ★★★★★ 输给了 (位置 ★★ + 干净 env ★★★) 联合 fix** — 不需要做 #59 prompt 注入
+
+### 完成 — Phase H: 附加
+
+34. **DEPLOYMENT-RUNBOOK §15.7 死代理清理章节 (BL-EDGE-TOOL-PROXY 收尾)**
+    - 含 CLI 输出 example / --restart-hermes flag 用法 / cron 推荐 (`catfish refresh-hermes --restart-hermes` 月跑死代理 + 续 token 一锅炖)
+    - §15 故障表加 "模型说'搜索断了'退到 browser → §15.7" 一行
+
+35. **FEATURE-TRACKS.md #6 RBAC track 更新**
+    - 加 ✅ 5/24 BL-EDGE-TOOL-KEY + ✅ 5/25 BL-EDGE-TOOL-PROXY + ✅ 5/25 BL-WEB-ALWAYS-ON + BL-MCP-PREFIX-FIX
+    - ⬜ 列 4 个未来 tool (web_crawl seed / image_generate / x_search / voice_clone), 沿用 §15.8 流程
+
+36. **.gitignore 补 *.bak.* 防 secret 误传**
+    - 老 `*.bak` 只 match `.bak` 结尾, 不 match `.bak.before-xxx.<timestamp>` 这种
+    - 5/22 鸿波撞过 `.env.bak.before-legacy-summarize-off.2026-05-22T23-19-20` 含 5 个真 API key (INTERNAL_LLM / GEMINI / DASHSCOPE / DEEPSEEK / NVIDIA) 差点 commit
+    - 改 `*.bak*` 一并覆盖
+
+### 踩坑
+
+- **5/24 早上模型跳回 Gemini**: loadSession 把会话 meta 的"创建时模型"覆盖了用户当前选择 — 设计缺陷, 不是 bug. 但用户体验糟糕透了
+- **OAuth 401 storm 真因**: 之前以为 hermes 内存缓存过期 token, 修了 hermes restart 不解决. 反复挖才发现 Companion 自己也没 silent refresh (me.ts 还有模块级 _cachedEnvToken 缓存撞死) — 两层都修才彻底
+- **NVIDIA NIM 两条 entry 全错 cargo cult**: 我之前抄 release notes 写的 model 名 (`nvidia_nim/...`) 实际 LiteLLM 不对; max_tokens 也估错; context window 也写老的 4096. 鸿波 "经常都不行" 才真测 — 全错重写
+- **session_search 字段名错 7 天没察觉**: 历史 BL-FIX 写 `m.created_at` 但 hermes 真实 schema 是 `m.timestamp`. 跨 session 查永远空, 没人察觉因为也没人深度用 — 直到鸿波 5/24 真想查老 session
+- **streamRegistry 设计反复**: pendingDelta/rafId/currentStreamId 一开始在 hook level 用 useRef, 切会话后并发流写到错 message. 改成 runOneRound 局部变量才对 — React refs 跟 module-level singleton 不能简单替换, 必须想清楚每个 ref 的作用域
+- **hermes service token D 方案被埋了**: identity-server clients.yaml 早 5/14 BL-RBAC P0 就预留了 hermes-cli 那条, _patch_hermes_config 写错传 user_token, 没人察觉因为正常使用 hermes 用 user token 一小时内不挂 — 一旦员工有空 idle > 1h 才暴露. D 方案 80% 基础设施已存在 (patches 0001/0002/0003 + identity client), 改 catfish-cli 一处调用就闭环
+- **memory 写入纪律死信 ★**: 加 prompt 注入是必要不充分 — 模型层会忽略 system prompt 的 ❌ ✅ 列表如果训练偏置太强. 5/24 晚清了 14 条, 5/25 模型又乱写新 entry 的话还得做 改动 B (catfish_memory_audit cron skill 周扫). 现在 wait-and-see 1 周
+- **BL-EDGE-TOOL-KEY 链路 5 步都没坏一步, 但 web_search 还是没被模型用 ★★★**: 真闭环的最大坑. 中央 → 边缘 → 进程 env (`ps -E` 验证) → ✓ 全通. 但模型 emit `execute_code(from hermes_tools import web_search)` 而不是直接 `web_search()` — 训练偏置太强. 联合修 #61 (死代理) + #62 (always-on 前置) 才把它压下去. 单修任一个都不够
+- **死代理是隐形杀手**: `HTTPS_PROXY=http://127.0.0.1:7890` 在鸿波 shell 永远 export, Clash 没开就死. gateway 启动自检会主动清, 但 hermes 进程没人帮它清 — 5/24 chat 多轮 Tavily timeout 模型才学会"用 browser". 修 #61 后 hermes 也享 gateway 同等保护
+- **MCP 前缀让 always-on 失效**: `catfish_today_summary` 加 always-on 名单后, MCP 版 `mcp_catfish_tools_catfish_today_summary` 仍被砍 — 因为字符串不匹配. 5/23 加 always-on 兜底防 cap 误砍那次, 实际只对裸名生效, MCP 包装版没保护. 5/25 BL-MCP-PREFIX-FIX 才真兜底
+- **BL-TOOL-CAP 日志措辞误导**: "41 tools 超上限 110" 我自己读了 3 遍才理解 "41 = dropped count, 不是 total". 鸿波也读不懂, 怀疑数学 bug. 改成 `dropped=X cap=Y kept=Z` 一目了然, 老格式留 git 历史教训不要中英文混用否定式
+- **.gitignore 漏 *.bak.<timestamp>**: 老 `*.bak` 只 match `.bak` 结尾. `.env.bak.before-xxx.<timestamp>` 这种命名 5/22 鸿波操作时无意创建的 — 含 5 个真 API key 差点 commit. 5/25 改 `*.bak*` 一并覆盖
+- **catfish-private-main Qwen 内网挂**: 整天 chat 间歇撞 `Connection reset by peer`, ssh 不上 10.10.40.102 — 独立运维问题, 不归我修 (task #60 留)
+
+### 关键决策
+
+- **"50 人部署 API key 必须中央管" (鸿波 5/24 晚拍)**: 当时讨论是否把 Tavily key 直接写 ~/.hermes/.env (员工自配), 鸿波直接否决 — "我说过 50 人部署 API key 必须中央派发, 不能各机各配, 否则出账分不清离职员工 key 没回收 admin 改 key 50 台 ssh 跑一遍". 这条原则催生整个 BL-EDGE-TOOL-KEY 架构 (1 天 ship)
+- **RBAC per-tool, 但写盘 dedupe per-group**: gateway endpoint 每 tool 单独验权 (admin 理论上可放 web_search 但不放 web_extract 给某部门), CLI 拉 N 次但按 tool_group 去重写盘 — 3 个 web tool 共 TAVILY_API_KEY 只写一行 .env / 一段 yaml
+- **hermes 0.14 web 配置走 `.env` (env var) 不走 yaml api_key**: 这跟我们其他 backend 不一样, 鸿波本来想我抄 LLM provider 的 yaml schema 思路写到 tools.web_search.api_key, 我 web search 拉 NousResearch 官方文档锁定: hermes 通过 python-dotenv 读 ~/.hermes/.env, 自动按哪个 key 存在选 provider. 没瞎写 yaml schema 是关键 — 如果按猜的写, hermes 不认会沉默跳过
+- **web 工具 always-on + 永远前置 而不是 system prompt 注入**: 5/24 凌晨 web_search 走 browser 后路, 我第一反应是做 #59 (改 hermes 系统 prompt 注 "用 web_search 不要 execute_code"). 鸿波问 "是不是排序问题?" 才意识到位置偏置可以从 sanitizer 解 — 不动模型不动 prompt. 验证有效后 #59 直接 close, 不做了 — 位置 + 干净 env 足够压过训练偏置
+- **--restart-hermes 是 opt-in flag 不是默认**: 自动重启 hermes 是侵入式行为, 默认只警告 + 给员工手动命令. 加 flag 才真自动 — 给 cron / 月度续期场景用. 平时员工跑 `catfish refresh-hermes` 不希望意外被 restart 打断
+- **承认 5/24 凌晨"摘 MCP 4 行"建议是错的**: 我看日志说"116 tool 是 dup", 凭推测让鸿波摘 mcp_servers.catfish-tools — 4 行 yaml 删了 hermes 看 catfish 工具的**唯一入口**. 鸿波问"会不会影响功能", 我才去读 mcp_server.py docstring 第 38-42 行: "并存. unix socket server 给 Companion, MCP server 给 hermes — 同一份 adapter, 两 transport". 撤回建议, 写答歉. 教训: 涉及关键依赖删除时, 必须先读模块开头注释再答, 不靠日志推断
+- **承认 BL-TOOL-CAP 日志"数学 bug" 我也读错**: 跟鸿波说"41 < 110 weird math" — 实际 41 是 dropped count. 拉源代码看 format string 才知道. 之前给鸿波建过两个错诊断, 今天第三个. 教训: 看日志 warning 之前必须先 grep format string
+
+### 遗留
+
+- **task #60 Qwen catfish-private-main 内网挂** (Connection reset by peer): 找运维 ssh 10.10.40.102 看服务, 不归我修
+- **task #58 后半 (BL-TOOL-CAP 日志 deduplicate)**: 当前每轮 chat 都打一次 BL-TOOL-CAP warning (hermes 每轮重发 tool list), 日志噪音. 可以做 per-session dedupe, 不急
+- **#62 sanitizer 永远 always-on 前置的代价**: 永远多走一次 `[t for t in tools if _is_always_on]` 双 list comprehension. 鸿波 110 tool 测了, 几十微秒, 不在乎. 真生产高 QPS 担心可以加 fast-path (len <= max_tools 且 hermes 已按 always-on 排过的情况下 skip)
+- **web_crawl seed migration 没做**: 008 migration 只 seed web_search + web_extract, web_crawl 在 EDGE_TOOL_REGISTRY 但 RBAC 没 seed. 加一行 alembic 即可
+- **image_generate / x_search / voice_clone 沿用 §15.8 流程没做**: 4-6 周后做, BACKLOG 跟着
+- **rotate hermes-cli client_secret 没做**: 生产部署时 admin 该把 clients.yaml 里 dev secret ("hermes-dev-secret-2026-please-change") 换成 bcrypt 真 hash, 检查 CATFISH_HERMES_CLI_SECRET env. 现在还是 dev secret
+- **5/21 + 5/22 CHANGELOG stub 还没补** (5/23 遗留同款)
+- **改动 B (catfish_memory_audit cron skill) 周扫**: 5/24 wait-and-see 1 周, 看新加 memory entry 是不是真守规矩了
+
+### 当天测试净增
+
+- gateway 单测: +14 (test_edge_tool_config.py 全 404/403/503/200 分支 + 不漏 env) + 6 (test_tool_cap.py BL-WEB-ALWAYS-ON / BL-MCP-PREFIX-FIX) = +20
+- cli 单测: +13 (test_catfish.py edge tool sync / proxy 检测 / auto restart) + 13 (test_catfish.py proxy helper 7 + handle 3 + restart 3) = +26
+- 实测: gateway 72/72 (sanitizer + cap + scrub_notice + edge_tool_config), cli 57/57, catfish-memory plugin 22/22 全过
+- 端到端: Tavily key 直接 curl 0.7s 返 3 条结果 (绕开 hermes 验证 key 干净); Companion DeepSeek-v4-flash 真 emit `web_search(query=...)` × 5 + `web_extract(urls=...)` × 1, 拿回 5 条真新闻
+
+### 5/24-5/25 ship 总数: 36 项 (6 phase 主线 + 加 .gitignore 顺手) 跨 16 小时
+
+

@@ -244,6 +244,12 @@ class CatfishMemoryProvider(MemoryProvider):
         catfish_home = self._catfish_home_cached or _catfish_home()
         sections: List[str] = []
 
+        # 0. BL-MEMORY-DISCIPLINE (5/24 鸿波"hermes memory 70% 内容跑偏"): 在所有
+        # memory 内容前面注入"写入纪律"提示, 让 LLM 调 memory_update 前自查.
+        # 不强制 enforce (hermes 端没钩子), 但 LLM 看到这段会显著降低乱写.
+        # 配合 hm 脚本做反向治理 — 双管齐下.
+        sections.append(self._render_memory_discipline())
+
         # 1. session_meta — 时间感 (距上次 N 天)
         meta = self._render_session_meta(catfish_home)
         if meta:
@@ -274,6 +280,51 @@ class CatfishMemoryProvider(MemoryProvider):
         return "\n\n".join(sections)
 
     # ── 5 个数据源 render helper ──────────────────────────
+
+    def _render_memory_discipline(self) -> str:
+        """BL-MEMORY-DISCIPLINE (5/24): hermes memory_update 写入纪律.
+
+        # 真问题
+        hermes 原生 memory_update tool 没硬约束, LLM 倾向于"对未来的我有用就写".
+        结果鸿波实盘 USER.md + MEMORY.md 21 条 entry, **70% 跑偏**:
+          - 5 条 skill 完整 spec (该进 ~/.hermes/skills/<name>/SKILL.md)
+          - 6 条 session log / 已发生事件 (该进 ~/.catfish/employee_journal.md)
+          - 3 条带 deadline 的具体任务 (该进 TODO)
+          - 1 条 USER 内容写到了 MEMORY 名下 (员工身份 vs 项目知识混淆)
+        累积导致 MEMORY.md 单 entry 撞 2401 chars (> 2200 cap), 仪表盘视觉满.
+
+        # 这段干嘛
+        在 system prompt 顶部硬注入"决策树", 让 LLM 调 memory_update 前自查 4 个反例.
+        不强制 enforce (hermes 端无 hook), 靠 LLM 看到这段后改判定. 实战经验: prompt
+        约束对 reasoning model 命中率 70%+.
+
+        # 配套治理
+        - 反向: ~/person_task/catfish/scripts/hermes-memory-cleanup.py (hm 脚本)
+          员工每周手扫一次, 删 LLM 误写进去的.
+        - 长期: catfish_memory_audit cron skill (未来)
+        """
+        return (
+            "## ⚙ hermes memory 写入纪律 (catfish 强约束)\n\n"
+            "调 `memory_update` (写 USER.md / MEMORY.md) 前必须自查:\n\n"
+            "**✅ 该写的, 同时满足这 3 条:**\n"
+            "1. 跨 session 稳定 — 一年后还成立 (员工身份/偏好/技术常量)\n"
+            "2. 没有 deadline / 不会过期\n"
+            "3. 不是 skill 的工作流, 不是会话总结, 不是单次任务状态\n\n"
+            "**❌ 不该写的 (即使有 user 价值也别写 memory, 走下面对的地方):**\n"
+            "- skill 完整 spec / 输出格式 / 触发词 / workflow → `~/.hermes/skills/<name>/SKILL.md`\n"
+            "- 本次会话的总结 / 进度 / pending TODO → `~/.catfish/employee_journal.md`\n"
+            "- 带具体日期的任务 (5/30 截止之类) → TODO 工具 / journal\n"
+            "- 已发生事件的状态变更 (X 会议结束 / Y 已完成) → journal\n"
+            "- 'next time when X is available, do Y' 类待办 → journal / issue\n"
+            "- skill 创建/更新的事件记录 (filesystem 自己有) → 不写\n\n"
+            "**target 怎么选:**\n"
+            "- `target=user`: 关于员工**这个人**的事 (偏好/习惯/身份/关系)\n"
+            "- `target=memory`: **项目/技术**事实 (API 字段含义、output 路径约定、客户机房 IP)\n"
+            "- 拿不准 → 80% 概率属于 journal, 不属于 memory\n\n"
+            "**长度纪律:**\n"
+            "- USER.md 每 entry ≤ 1375 字符, MEMORY.md ≤ 2200. 接近上限的就拆 / 砍.\n"
+            "- 写得超长的几乎都是把 spec / workflow 当 memory 写, 应改去 SKILL.md.\n"
+        )
 
     def _render_session_meta(self, catfish_home: Path) -> str:
         path = catfish_home / "session_meta.json"

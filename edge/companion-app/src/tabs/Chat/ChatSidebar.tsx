@@ -21,6 +21,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { listSessions, countSessions, openTerminal, sessionSoftDelete } from "../../lib/tauri";
 import { groupSessionsByTitle, type SessionGroupEntry } from "../../lib/sessionGroup";
+import * as streamRegistry from "../../lib/streamRegistry";
 import type { SessionMeta } from "../../types/session";
 
 interface Props {
@@ -92,6 +93,18 @@ export default function ChatSidebar({
     }, POLL_MS);
     return () => window.clearInterval(t);
   }, [refresh]);
+
+  // BL-MULTI-SESSION-STREAM (5/24): 订阅 streamRegistry, 后台还在跑的 session
+  // 实时显 ⏳. registry.subscribeInflight 在任何 start/finish 时触发, 不是 polling.
+  const [inflightIds, setInflightIds] = useState<Set<string>>(
+    () => new Set(streamRegistry.getInflightSessions()),
+  );
+  useEffect(() => {
+    const update = () =>
+      setInflightIds(new Set(streamRegistry.getInflightSessions()));
+    update(); // 挂载时同步一次
+    return streamRegistry.subscribeInflight(update);
+  }, []);
 
   return (
     <aside
@@ -232,6 +245,7 @@ export default function ChatSidebar({
               onSelect={onSelect}
               onDelete={onDeleteHandler}
               streaming={busy}
+              inflightIds={inflightIds}
             />
           ));
         })()}
@@ -247,7 +261,9 @@ export default function ChatSidebar({
           gap: 6,
         }}
       >
-        {busy && (
+        {/* BL-MULTI-SESSION-STREAM (5/24): 替换老的"流式中, 切换会停止当前"
+            提示文案 — 切走不再中断了. 改成"N 个会话进行中", 准确反映同时跑几个流. */}
+        {inflightIds.size > 0 && (
           <div
             style={{
               fontSize: 11,
@@ -255,9 +271,9 @@ export default function ChatSidebar({
               padding: "2px 6px",
               textAlign: "center",
             }}
-            title="切换会话 / 新建对话会自动停止当前 LLM 流"
+            title="后台正在运行的 LLM 流数量. 切走不再中断, 切回看实时状态"
           >
-            ⏳ 流式中, 切换会停止当前
+            ⏳ {inflightIds.size} 个会话进行中
           </div>
         )}
         <button
@@ -273,7 +289,7 @@ export default function ChatSidebar({
             fontSize: 13,
             fontWeight: 500,
           }}
-          title={busy ? "停止当前流 + 开新对话" : "新对话"}
+          title="开新对话 (老对话继续在后台跑)"
         >
           + 新对话
         </button>
@@ -309,13 +325,17 @@ function SessionGroup({
   onSelect,
   onDelete,
   streaming,
+  inflightIds,
 }: {
   group: SessionGroupEntry;
   activeId: string | null;
   autoExpanded: boolean;
   onSelect: (id: string) => void;
   onDelete: (sessionId: string) => void;
+  /** 全局 busy 标 (老语义保留, 显文案 hint) */
   streaming: boolean;
+  /** BL-MULTI-SESSION-STREAM (5/24): 真正 per-session 在跑的 id 集合, 每条 row 看自己在不在里 */
+  inflightIds: Set<string>;
 }) {
   const [expanded, setExpanded] = useState(autoExpanded);
   // autoExpanded 跟 activeId 变化 — 鸿波点别处后再 active 切回组内仍展开
@@ -334,6 +354,7 @@ function SessionGroup({
         onClick={() => onSelect(s.id)}
         onDelete={onDelete}
         streaming={streaming}
+        isInflight={inflightIds.has(s.id)}
       />
     );
   }
@@ -367,6 +388,7 @@ function SessionGroup({
           onClick={() => onSelect(main.id)}
           onDelete={onDelete}
           streaming={streaming}
+          isInflight={inflightIds.has(main.id)}
         />
         {/* 撞名 chip + 展开按钮覆盖在主条右上角 */}
         <button
@@ -413,6 +435,7 @@ function SessionGroup({
             onDelete={onDelete}
             streaming={streaming}
             isSubRow
+            isInflight={inflightIds.has(s.id)}
           />
         </div>
       ))}
@@ -428,6 +451,7 @@ function SessionRow({
   onDelete,
   streaming = false,  // BL-COMPANION-UX2 (5/12): 提示用, 不再禁用
   isSubRow = false,    // BL-COMPANION-SESSION-DEDUP (5/20): 撞名展开里的 sub-session
+  isInflight = false,  // BL-MULTI-SESSION-STREAM (5/24): 这条 session 有 stream 在跑
 }: {
   session: SessionMeta;
   active: boolean;
@@ -437,6 +461,7 @@ function SessionRow({
   onDelete: (sessionId: string) => void;
   streaming?: boolean;
   isSubRow?: boolean;
+  isInflight?: boolean;
 }) {
   const [hover, setHover] = useState(false);
   // BL-SESSION-MGMT C (5/15): 二次确认状态. 首次点 × → confirming=true (按钮变 "确定?"),
@@ -502,6 +527,21 @@ function SessionRow({
         }}
       >
         <SourceBadge source={session.source} />
+        {/* BL-MULTI-SESSION-STREAM (5/24): 在跑的会话显 ⏳ 转圈, 让员工知道
+            "我已经切走但小鲶还在那边干活". active 也显, 提示当前流不再因切走中断. */}
+        {isInflight && (
+          <span
+            title="此会话有 LLM 流正在后台运行 (切走不再中断)"
+            style={{
+              fontSize: 11,
+              flexShrink: 0,
+              opacity: 0.9,
+              animation: "catfish-inflight-pulse 1.4s ease-in-out infinite",
+            }}
+          >
+            ⏳
+          </span>
+        )}
         <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>
           {title}
         </span>

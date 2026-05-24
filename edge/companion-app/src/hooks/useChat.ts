@@ -21,6 +21,7 @@ import {
 } from "../store/auto_continue";  // 5/13 鸿波"长程任务咋办" — gateway 删 BL-FIX23 后客户端补
 import { streamChat, type OpenAITool } from "../lib/chat";
 import { checkPromiseOnly } from "../lib/promiseCheck";
+import * as streamRegistry from "../lib/streamRegistry";
 import {
   toolBridgeCallTool,
   sessionCreate,
@@ -86,10 +87,18 @@ export function useChat(initialModel: string) {
     }
   }, [setPersistedSessionId]);
 
-  /** append 一条消息到 state.db, 失败静默(不能影响 UI 流). */
+  /** append 一条消息到 state.db, 失败静默(不能影响 UI 流).
+   *
+   * BL-MULTI-SESSION-STREAM (5/24): 加 sessionIdOverride 参数. 老代码读
+   * store.persistedSessionId — 但用户切走会话后这个值变了, 老 stream 的尾巴
+   * (onDone 的 final assistant + tool 消息) 会被写到 *新* session 名下,
+   * 老 session 收不到. 现在 send 开头 ensureSessionId 锁定一个 id, 整轮所有
+   * persistMessage 都用这个 override, 保证写到对的 session.
+   */
   const persistMessage = useCallback(
-    async (msg: ChatMessage): Promise<void> => {
-      const sessionId = useChatStore.getState().persistedSessionId;
+    async (msg: ChatMessage, sessionIdOverride?: string): Promise<void> => {
+      const sessionId =
+        sessionIdOverride ?? useChatStore.getState().persistedSessionId;
       if (!sessionId) return;
       try {
         await sessionMessageAppend({
@@ -127,27 +136,20 @@ export function useChat(initialModel: string) {
     setModelInStore(initialModel);
   }
 
-  const pendingDeltaRef = useRef("");
-  const rafRef = useRef<number | null>(null);
+  // 5/24 BL-MULTI-SESSION-STREAM: pendingDelta/raf/currentStreamId 从 hook 级 useRef
+  // 收进 runOneRound 局部. 否则两个 session 并发 streaming 时, 共享 ref 会让 A 的 delta
+  // 串到 B 的消息上 (B send 时 currentStreamIdRef 被覆盖, A 的下一个 flushPending 会
+  // 用 B 的 id 调 appendToMessage). 局部化后每条流自己一套 raf+pending+id, 不串.
+  // abortRef 保留 hook 级 — cancel() 走 registry 兜底用.
   const abortRef = useRef<AbortController | null>(null);
-  const currentStreamIdRef = useRef<string | null>(null);
-
-  const flushPending = useCallback(() => {
-    const delta = pendingDeltaRef.current;
-    pendingDeltaRef.current = "";
-    rafRef.current = null;
-    if (!delta || !currentStreamIdRef.current) return;
-    appendToMessage(currentStreamIdRef.current, delta);
-  }, [appendToMessage]);
-
-  const scheduleFlush = useCallback(() => {
-    if (rafRef.current !== null) return;
-    rafRef.current = requestAnimationFrame(flushPending);
-  }, [flushPending]);
 
   /** 单轮 streamChat,返回是否需要继续(tool_calls finish_reason)。
    *  把消息历史作为参数传入 (而不是依赖 store), 因为 React state 异步,
-   *  连续递归时拿到的是旧 snapshot。 */
+   *  连续递归时拿到的是旧 snapshot。
+   *
+   *  BL-MULTI-SESSION-STREAM (5/24): ctx 加 sessionId — 整轮 persistMessage 都
+   *  用它而不是读 store.persistedSessionId, 防 stream 进行中用户切走会话后
+   *  尾巴消息写到错的 session 名下. */
   const runOneRound = useCallback(
     async (
       ctx: {
@@ -155,6 +157,7 @@ export function useChat(initialModel: string) {
         roundIdx: number;
         currentMessages: ChatMessage[];
         tools: OpenAITool[];
+        sessionId: string | null;
       },
     ): Promise<{
       shouldContinue: boolean;
@@ -169,13 +172,33 @@ export function useChat(initialModel: string) {
         ts: nowIso(),
         status: "streaming",
       };
-      currentStreamIdRef.current = assistantId;
       addMessage(assistantMsg);
       setStreamingId(assistantId);
 
+      // 5/24 BL-MULTI-SESSION-STREAM: 局部 raf-throttled flush (不再共享 hook ref).
+      // 每条 stream 自己一套, 跨 session 并发不会串 delta.
+      let pendingDelta = "";
+      let rafId: number | null = null;
+      const flushThisRound = () => {
+        const delta = pendingDelta;
+        pendingDelta = "";
+        rafId = null;
+        if (!delta) return;
+        // appendToMessage 按 id 找, 老 id 不在 store 时 (用户切走了) 自动 no-op.
+        // 数据没丢: 最终 persistMessage 写完整 final assistant content 到 db.
+        appendToMessage(assistantId, delta);
+      };
+      const scheduleFlushThisRound = () => {
+        if (rafId !== null) return;
+        rafId = requestAnimationFrame(flushThisRound);
+      };
+
       // 用对象包裹规避 TS 的 flow narrowing —— `let x: T[] | null = null`
       // 在 await 之后会被错误收窄成 never,即使 callback 里改了 x。
-      const refs: { calls: ToolCall[] } = { calls: [] };
+      // 5/23 BL-COMPANION-HERMES-SESSION-REUSE (鸿波): 加 viaHermes flag.
+      // hermes 路径下 hermes 自己往 state.db 写 assistant message, companion
+      // 不能再 persistMessage 写一遍 (会双写, db 出现 2 条相同 assistant row).
+      const refs: { calls: ToolCall[]; viaHermes?: boolean } = { calls: [] };
 
       // 关键: model 从 store snapshot 读, 不用闭包捕获的 — 因为 send() 里
       // maybeSwitchToVision 可能在这一轮之前刚切过模型, closure 里的 model 还是旧值。
@@ -183,34 +206,49 @@ export function useChat(initialModel: string) {
         model: useChatStore.getState().model,
         messages: ctx.currentMessages,
         tools: ctx.tools,
+        // 5/23 BL-COMPANION-HERMES-SESSION-REUSE (鸿波): send() 开头已 ensureSessionId()
+        // lazy create state.db session, 这里读 store 把 id 透传给 hermes header.
+        // hermes 收到就复用, 不再 derive api-* 新 session → 修双开.
+        // 5/24 BL-MULTI-SESSION-STREAM: ctx.sessionId 是 send 入口锁定的, 不读 store,
+        // 防切走会话后这一轮的 hermes header 飘到新 session.
+        sessionId: ctx.sessionId ?? undefined,
         signal: ctx.ctrl.signal,
         onDelta: (text) => {
-          pendingDeltaRef.current += text;
-          scheduleFlush();
+          pendingDelta += text;
+          scheduleFlushThisRound();
         },
         onToolCalls: (calls) => {
           refs.calls = calls;
         },
         onDone: (info) => {
-          if (rafRef.current !== null) {
-            cancelAnimationFrame(rafRef.current);
-            rafRef.current = null;
+          if (rafId !== null) {
+            cancelAnimationFrame(rafId);
+            rafId = null;
           }
-          flushPending();
-          // BL-CONTEXT-COUNTER (5/13): 把 usage.prompt_tokens 写 store, 状态栏渲染
-          if (info?.usage?.prompt_tokens != null) {
+          flushThisRound();
+          // 5/23 BL-COMPANION-HERMES-SESSION-REUSE: 记本次走 hermes 没, 后面
+          // line 276 据此决定要不要 persist assistant (hermes 写过就别再写).
+          refs.viaHermes = info?.via_hermes === true;
+          // BL-CONTEXT-COUNTER (5/13): 把 usage.prompt_tokens 写 store, 状态栏渲染.
+          // 5/24 BL-MULTI-SESSION-STREAM: 只在当前看的 session 跟 stream 的 session
+          // 匹配时才写, 否则后台 stream 完成会污染前台 session 的 token 计数.
+          if (
+            info?.usage?.prompt_tokens != null
+            && useChatStore.getState().persistedSessionId === ctx.sessionId
+          ) {
             useChatStore.getState().setLastPromptTokens(info.usage.prompt_tokens);
           }
           // BL-TASK-ASSESS-3-UI (5/15 鸿波"客户端要评估完成情况"): 拿 gateway 给的
           // task_assessment 做 promise-vs-reality 检测, 命中嘴炮 → 写
           // assistant message._promise_check, UI 渲染 ⚠ badge + 催继续按钮.
-          if (info?.task_assessment && currentStreamIdRef.current) {
+          // 5/24: 用 assistantId (闭包内) 替代老 currentStreamIdRef, 不串.
+          if (info?.task_assessment) {
             const assistantContent =
-              useChatStore.getState().messages.find((m) => m.id === currentStreamIdRef.current)
+              useChatStore.getState().messages.find((m) => m.id === assistantId)
                 ?.content || "";
             const check = checkPromiseOnly(assistantContent, info.task_assessment);
             if (check.is_promise_only) {
-              updateMessage(currentStreamIdRef.current, {
+              updateMessage(assistantId, {
                 _promise_check: {
                   is_promise_only: true,
                   promised_paths: check.promised_paths,
@@ -224,17 +262,16 @@ export function useChat(initialModel: string) {
           }
         },
         onError: (err) => {
-          if (rafRef.current !== null) {
-            cancelAnimationFrame(rafRef.current);
-            rafRef.current = null;
+          if (rafId !== null) {
+            cancelAnimationFrame(rafId);
+            rafId = null;
           }
-          flushPending();
-          if (currentStreamIdRef.current) {
-            updateMessage(currentStreamIdRef.current, {
-              status: "error",
-              error: err,
-            });
-          }
+          flushThisRound();
+          // 5/24: 用 assistantId (闭包) 替代 currentStreamIdRef, 防并发串.
+          updateMessage(assistantId, {
+            status: "error",
+            error: err,
+          });
         },
       });
 
@@ -269,7 +306,14 @@ export function useChat(initialModel: string) {
         updateMessage(assistantId, { status: "done" });
       }
       // 持久化 assistant 消息(完整 content + tool_calls)
-      void persistMessage(finalAssistant);
+      // 5/23 BL-COMPANION-HERMES-SESSION-REUSE: hermes 路径下 hermes 自己已经写
+      // 了 assistant 到 state.db, companion 再写就双写 (用户看 UI 重复 2 次).
+      // 老 gateway 路径 hermes 不参与, companion 必须写.
+      // 5/24 BL-MULTI-SESSION-STREAM: 用 ctx.sessionId (send 入口锁定) 不读 store —
+      // 防用户切走后 final 消息写到新 session 名下.
+      if (!refs.viaHermes && ctx.sessionId) {
+        void persistMessage(finalAssistant, ctx.sessionId);
+      }
 
       // 重新拼当前 messages snapshot(给下一轮用)
       const updatedMessages: ChatMessage[] = [
@@ -306,12 +350,11 @@ export function useChat(initialModel: string) {
           // BL-TODO-BRIDGE-STORE follow-up (5/16): 实接 sessionId 透传, 让 per-session
           // stateful tool (hermes todo) 真按 session 隔离. 老 caller (Dashboard 各卡
           // 调 catfish_user_profile_* 等) 不传, 走 __default__ 行为不变.
-          const sessionId =
-            useChatStore.getState().persistedSessionId ?? undefined;
+          // 5/24 BL-MULTI-SESSION-STREAM: 用 ctx.sessionId (入口锁定) 不读 store.
           const res = await toolBridgeCallTool(
             tc.name,
             tc.args as Record<string, unknown>,
-            sessionId,
+            ctx.sessionId ?? undefined,
           );
           ok = res.ok;
           if (res.ok) {
@@ -355,20 +398,22 @@ export function useChat(initialModel: string) {
         };
         addMessage(toolMsg);
         updatedMessages.push(toolMsg);
-        // 持久化 tool 角色消息
-        void persistMessage(toolMsg);
+        // 持久化 tool 角色消息. 5/24 BL-MULTI-SESSION-STREAM: 同 final assistant
+        // 一样, 用 ctx.sessionId 锁定, 防切走会话后 tool 消息飘到错的 session.
+        if (ctx.sessionId) {
+          void persistMessage(toolMsg, ctx.sessionId);
+        }
       }
 
       // tool_calls 处理完 → 必继续下一轮 LLM 推理(让 LLM 看 tool 结果)
       return { shouldContinue: true, updatedMessages };
     },
     [
-      model,
+      // 5/24 BL-MULTI-SESSION-STREAM: 去掉 scheduleFlush/flushPending —
+      // 局部化进 runOneRound 内部, 不再走 hook ref. model 也不需要 — 内部读 store.
       addMessage,
       updateMessage,
       setStreamingId,
-      scheduleFlush,
-      flushPending,
       persistMessage,
     ],
   );
@@ -388,8 +433,11 @@ export function useChat(initialModel: string) {
       if (!trimmed && attachments.length === 0) return;
       if (isStreaming) return;
 
-      // 0. 第一次 send 时 lazy create state.db session (持久化的开端)
-      await ensureSessionId();
+      // 0. 第一次 send 时 lazy create state.db session (持久化的开端).
+      // 5/24 BL-MULTI-SESSION-STREAM: 捕获 id 到 closure, 整轮 persistMessage /
+      // tool 调用 / streamChat header 全用它, 防 stream 进行中切走 store 变了
+      // 把消息写到新 session.
+      const sessionIdForStream = await ensureSessionId();
 
       // 0.5. 如果带图但当前模型不支持视觉 → 透明切到视觉模型
       //      切了的话往聊天里追加一条 system 提示, 让员工知道发生了啥.
@@ -488,13 +536,33 @@ export function useChat(initialModel: string) {
         placeholderParts.length > 0
           ? `${trimmed}${trimmed ? "\n" : ""}[${placeholderParts.join(" + ")} — in-memory, 切会话不保留]`
           : trimmed;
-      void persistMessage({ ...userMsg, content: persistContent, attachments: undefined });
+      // 5/24 BL-MULTI-SESSION-STREAM: 用 sessionIdForStream 锁定持久化, 不读 store.
+      if (sessionIdForStream) {
+        void persistMessage(
+          { ...userMsg, content: persistContent, attachments: undefined },
+          sessionIdForStream,
+        );
+      }
       setIsStreaming(true);
 
       // 2. 拉 tools(第一次会调 tool_bridge,后续走 cache)
       const tools = await ensureTools();
 
-      const ctrl = new AbortController();
+      // 5/24 BL-MULTI-SESSION-STREAM: AbortController 走 registry, 跨 React 生命周期.
+      // 切走会话不再 abort, 老 stream 继续在 registry 里跑. cancel() 通过 registry
+      // 按 current sessionId 取 controller 调用 abort. Sidebar 通过 registry 显 ⏳.
+      // sessionIdForStream 是 null 的 fallback 走老的本地 controller (持久化失败时).
+      let ctrl: AbortController;
+      if (sessionIdForStream) {
+        const state = streamRegistry.start(
+          sessionIdForStream,
+          useChatStore.getState().model,
+          requestMessages,
+        );
+        ctrl = state.controller;
+      } else {
+        ctrl = new AbortController();
+      }
       abortRef.current = ctrl;
 
       try {
@@ -519,6 +587,7 @@ export function useChat(initialModel: string) {
             roundIdx: round,
             currentMessages,
             tools,
+            sessionId: sessionIdForStream,  // 5/24 BL-MULTI-SESSION-STREAM
           });
           currentMessages = result.updatedMessages;
 
@@ -584,7 +653,10 @@ export function useChat(initialModel: string) {
               };
               addMessage(continueMsg);
               currentMessages = [...currentMessages, continueMsg];
-              void persistMessage(continueMsg);
+              // 5/24 BL-MULTI-SESSION-STREAM
+              if (sessionIdForStream) {
+                void persistMessage(continueMsg, sessionIdForStream);
+              }
               continue;  // 跑下一轮
             }
             break;
@@ -603,16 +675,37 @@ export function useChat(initialModel: string) {
           }
         }
       } finally {
-        currentStreamIdRef.current = null;
-        setStreamingId(null);
-        setIsStreaming(false);
+        // 5/24 BL-MULTI-SESSION-STREAM: pendingDelta/raf/currentStreamId 已收进
+        // runOneRound 局部, 这里不需要清.
+        // 5/24 BL-MULTI-SESSION-STREAM: 只清当前还在显示这个 session 的 store 状态.
+        // 如果 stream 进行中用户切走了, 当前 store.persistedSessionId 已是另一个
+        // session, 不能把它的 isStreaming/streamingId 清掉 (那个 session 自己可能
+        // 也在 streaming). 用 sessionIdForStream 跟 store 当前对比.
+        const currentStoreSession = useChatStore.getState().persistedSessionId;
+        if (currentStoreSession === sessionIdForStream) {
+          setStreamingId(null);
+          setIsStreaming(false);
+        }
         abortRef.current = null;
+        // 通知 registry stream 结束 (sidebar ⏳ 也跟着消失)
+        if (sessionIdForStream) {
+          streamRegistry.finish(sessionIdForStream);
+        }
         // BL-HERMES013-RED-1A (5/13 借鉴 Hermes 0.13 ACP /queue): 当前 stream
         // 完成后看 store.queue 有没排队消息. 有就 dequeue + 立即 send 下一条.
         // 用户体验: 长任务跑完无缝接下一个问题, 不用手动按 send.
         // 用 setTimeout 避免 React state 还没 flush 就 send (跟 cancelAndSend 同模式).
+        // 5/24 BL-MULTI-SESSION-STREAM: queue 仍是 store 全局的 (单视图概念), 排队
+        // 只针对 user 当前看的 session. 如果 stream 是后台 (sessionIdForStream !=
+        // currentStoreSession), 别去 dequeue, queue 属于 currentStoreSession 那条线.
         const queue = useChatStore.getState().queue;
-        if (queue.length > 0 && !ctrl.signal.aborted) {
+        const isForegroundStream =
+          currentStoreSession === sessionIdForStream;
+        if (
+          queue.length > 0
+          && !ctrl.signal.aborted
+          && isForegroundStream
+        ) {
           setTimeout(() => {
             const head = useChatStore.getState().dequeueMessage();
             if (head) {
@@ -636,6 +729,16 @@ export function useChat(initialModel: string) {
   );
 
   const cancel = useCallback(() => {
+    // 5/24 BL-MULTI-SESSION-STREAM: cancel 按 current session 走 registry.
+    // 老逻辑 abortRef.current 是 "send 最后一次设的 controller", 用户切走会话
+    // 后这个 ref 还指向后台老 stream, cancel 会误杀后台. 现在精准: 拿 store
+    // current sessionId → registry.cancel(sessionId), 只动当前看的这条流.
+    // 如果当前 session 没在 stream → no-op, abortRef fallback (no-session 情况下用).
+    const curSession = useChatStore.getState().persistedSessionId;
+    if (curSession && streamRegistry.isInflight(curSession)) {
+      streamRegistry.cancel(curSession);
+      return;
+    }
     if (abortRef.current) abortRef.current.abort();
   }, []);
 
@@ -715,11 +818,11 @@ export function useChat(initialModel: string) {
   );
 
   const reset = useCallback(() => {
-    if (abortRef.current) abortRef.current.abort();
-    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-    pendingDeltaRef.current = "";
-    rafRef.current = null;
-    currentStreamIdRef.current = null;
+    // 5/24 BL-MULTI-SESSION-STREAM: reset 是"+ 新对话", 不再 abort 老 stream.
+    // 老 stream 在 streamRegistry 里继续跑直到 onDone 自然结束 / 持久化.
+    // 用户场景: 我在跑 A 的长任务, 想开新对话同时跟它聊 B, 老 A 继续没事.
+    // 真要 abort 老 stream → 走 cancel() (跟当前 visible session 走 registry).
+    // rafId/pendingDelta/currentStreamId 已经局部化进 runOneRound, 这里没 ref 可清.
     abortRef.current = null;
 
     // 关闭当前持久化的 session (写 ended_at)

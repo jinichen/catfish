@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 # ── 跟 Rust 端 regex 完全对齐 ────────────────────────────────────────────
 
@@ -271,3 +271,98 @@ def add_todo(
     # 没指定 section → 直接追加
     sep = "" if (content.endswith("\n") or not content) else "\n"
     return f"{content}{sep}{new_todo}\n"
+
+
+# ── archive ──────────────────────────────────────────────────────────────
+# 5/23 BL-JOURNAL-ARCHIVE (鸿波): journal 8400+ 行, deepseek `cat` 全文吃光 context,
+# 模型回退到 grep 才能干活. 解法 = 按"年"切, > N 天前的 section 整段切到
+# employee_journal_archive_YYYY.md (按 year 分多个文件). 主 journal 永远只剩近期.
+
+
+# section header 解析 ISO 时间: "## 2026-05-23 13:40 · session `…2dd174`"
+# 抓前 16 字 "YYYY-MM-DD HH:MM". 失败 (e.g. 没时间戳的老 section) 视为"无日期",
+# 永不归档 (留主 journal 端).
+_SECTION_TS_RE = re.compile(r"^##\s+(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})\b")
+
+
+def split_sections(content: str) -> list[tuple[str, str]]:
+    """切 markdown 成 [(header_line, body_with_trailing_newline), ...].
+
+    前导无 header 的部分作为单独 head item, header="" 永留主 journal.
+    """
+    sections: list[tuple[str, str]] = []
+    lines = content.splitlines(keepends=True)
+    cur_header = ""
+    cur_body: list[str] = []
+    for line in lines:
+        if SECTION_RE.match(line):
+            # flush 上一段
+            if cur_header or cur_body:
+                sections.append((cur_header, "".join(cur_body)))
+            cur_header = line.rstrip("\n").rstrip()
+            cur_body = [line]  # header 自己也算 body 第一行
+        else:
+            cur_body.append(line)
+    if cur_header or cur_body:
+        sections.append((cur_header, "".join(cur_body)))
+    return sections
+
+
+def _section_date_parts(header: str) -> Optional[tuple[int, int, int]]:
+    """从 '## YYYY-MM-DD HH:MM · ...' 抽 (year, month, day). 抽不到返 None."""
+    m = _SECTION_TS_RE.match(header)
+    if not m:
+        return None
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+
+
+def _date_to_ordinal(year: int, month: int, day: int) -> int:
+    """proleptic gregorian ordinal — 拿来比"早晚", 不算具体日数."""
+    from datetime import date
+    try:
+        return date(year, month, day).toordinal()
+    except ValueError:
+        # 月日越界 (regex 抓到但非法日期, e.g. 2-30)
+        return -1
+
+
+def archive_old(content: str, today_ordinal: int, cutoff_days: int = 30) -> dict[int, str]:
+    """按 cutoff_days 把 > N 天前的 section 切出去, 按 year 聚合.
+
+    返 {
+        "main": <剩下的主 journal>,
+        <year>: <该年所有归档 section markdown>,   # 多 year 一 dict 一 key
+        ...
+    }
+    section 抽不到日期 (空 header / 无时间戳) → 留主 journal.
+
+    today_ordinal: date.today().toordinal(), 给纯函数注入, 单测可控.
+    """
+    sections = split_sections(content)
+    main_parts: list[str] = []
+    archived_by_year: dict[int, list[str]] = {}
+
+    for header, body in sections:
+        if not header:
+            main_parts.append(body)
+            continue
+        date_parts = _section_date_parts(header)
+        if date_parts is None:
+            # 无日期 section 留主 journal (老格式 / 自定义段)
+            main_parts.append(body)
+            continue
+        year, _, _ = date_parts
+        sec_ord = _date_to_ordinal(*date_parts)
+        if sec_ord < 0:
+            main_parts.append(body)
+            continue
+        age_days = today_ordinal - sec_ord
+        if age_days <= cutoff_days:
+            main_parts.append(body)
+        else:
+            archived_by_year.setdefault(year, []).append(body)
+
+    result: dict[Any, str] = {"main": "".join(main_parts)}
+    for year, parts in archived_by_year.items():
+        result[year] = "".join(parts)
+    return result

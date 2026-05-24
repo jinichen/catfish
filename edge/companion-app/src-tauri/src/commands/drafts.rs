@@ -147,6 +147,10 @@ pub async fn draft_list_today() -> Result<Vec<DraftRef>, String> {
 }
 
 /// 调系统默认编辑器打开草稿. macOS = `open <path>`, 跟 Finder 双击同效.
+///
+/// 5/22 鸿波二修: 之前 `open` 命令对不存在的文件返 exit 1, 但前端 `console.warn` 吞了,
+/// 员工看到 UI 显"草稿已打开" 而实际没弹编辑器. 加 pre-check 文件存在, 给具体错让
+/// 前端能告诉员工是 LLM 编了 path 还是真打不开.
 #[tauri::command]
 pub async fn draft_open_in_editor(abs_path: String) -> Result<(), String> {
     // 防滥用: 只允许 outputs/ 下的路径
@@ -160,6 +164,21 @@ pub async fn draft_open_in_editor(abs_path: String) -> Result<(), String> {
         return Err(format!("路径含 ..: {abs_path}"));
     }
 
+    // 5/22 二修: pre-check 文件存在 — open 命令对不存在文件虽然返非 0,
+    // 但 stderr 可能空, 错信息不直观. 这里给清晰的中文错让前端能 hint
+    // "LLM 编了路径没真落盘"
+    let path = std::path::Path::new(&abs_path);
+    if !path.exists() {
+        return Err(format!(
+            "文件不存在: {abs_path}. \
+            可能 LLM 输出 draftPath 但没真调 catfish_draft_email_reply 落盘. \
+            可在 chat 让 catfish 重新起草."
+        ));
+    }
+    if !path.is_file() {
+        return Err(format!("不是文件 (是目录?): {abs_path}"));
+    }
+
     #[cfg(target_os = "macos")]
     {
         let out = std::process::Command::new("open")
@@ -167,9 +186,15 @@ pub async fn draft_open_in_editor(abs_path: String) -> Result<(), String> {
             .output()
             .map_err(|e| format!("调 open 失败: {e}"))?;
         if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr);
             return Err(format!(
-                "open 返非 0: {}",
-                String::from_utf8_lossy(&out.stderr)
+                "macOS open 返非 0 (.md 默认应用关联可能挂): {}. \
+                试在 Finder 双击 {abs_path} 看默认应用是啥.",
+                if stderr.trim().is_empty() {
+                    "(stderr 为空)".to_string()
+                } else {
+                    stderr.to_string()
+                }
             ));
         }
     }

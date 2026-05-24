@@ -198,16 +198,32 @@ def prepare_tool_messages(
 ) -> list[dict[str, Any]]:
     """gateway app.py 调的统一入口.
 
-    路径:
-      enabled & write 成功 → archive 模式
-      enabled & write 挂  → 降 FIX41 硬切 (features.fallback_to_fix41)
-      disabled            → FIX41 硬切 (老路径)
+    5/22 BL-CENTRAL-EDGE-TOOL-ARCHIVE Phase 6a (鸿波): gateway archive **强制停**.
+    边缘端 (catfish-tool-bridge adapter.py) 已经在 dispatch_tool 出口截胡, role=tool
+    message 内 content 进 gateway 时已经是 "[已归档: archive_ref=...]" 替换文本.
+    这层 gateway prepare_tool_messages 现在只做 fallback: 真有漏网的 (e.g. 第三方 plugin
+    直接调 LLM 没经过 catfish-tool-bridge), 走 FIX41 truncate 硬切, **不写 PG**.
 
-    session_id 没传 → 自动按 user_email + first user message hash 派生
-    origin_model: 当前 chat 用的 model name, summary_worker 优先用同款 (BL-Q3-ARCHIVE fix2).
+    走 env CATFISH_GATEWAY_TOOL_ARCHIVE_ENABLE 紧急回滚: 设 1 临时恢复老 PG archive
+    (debug 用, 默认 0 强制停).
+
+    路径:
+      env=0 (默认): FIX41 truncate, 不写 PG ← BOUNDARY 合规
+      env=1 (回滚): 老 archive 模式 (debug 用)
     """
+    import os  # noqa: PLC0415
+    pg_archive_enabled = os.environ.get(
+        "CATFISH_GATEWAY_TOOL_ARCHIVE_ENABLE", "0"
+    ).strip().lower() in ("1", "true", "yes", "on")
+
+    if not pg_archive_enabled:
+        # 5/22 BL-CENTRAL-EDGE-TOOL-ARCHIVE Phase 6a 默认路径: edge 已截胡, gateway
+        # 不再 PG archive. 漏网的 oversized 走 FIX41 硬切.
+        from ..tool_msg_truncator import truncate_tool_messages  # noqa: PLC0415
+        return truncate_tool_messages(messages)
+
+    # 老路径 (env=1 回滚, debug 用) ──────────────────────────────
     if not features.is_archive_enabled(user_email):
-        # 老路径 — FIX41 硬切. import 延后避免循环.
         from ..tool_msg_truncator import truncate_tool_messages  # noqa: PLC0415
         return truncate_tool_messages(messages)
 

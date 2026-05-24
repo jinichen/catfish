@@ -331,10 +331,32 @@ Companion → HTTPS OpenAI 兼容 → hermes serve (本机)
 - ✅ 21 单测过 (rbac 16 + dev_token 5)
 - ✅ **5/14 client_credentials grant + clients.yaml 服务身份注册 (OAuth 2.0 RFC 6749 §4.4)**
 - ✅ **5/18 BL-HERMES-AUTH-LONGLIVED: per-client TTL 配置, hermes-cli 30 天 token + cap 365 天 + floor 60 秒 + 6 新单测 + mint 脚本 + runbook**
+- ✅ **5/24 BL-EDGE-TOOL-KEY: 第三方 backend key 中央派发 (web_search + web_extract via Tavily)**:
+  - gateway `edge_tool_config.py` registry + `GET /v1/edge/tool-config[/{tool_name}]` endpoint (RBAC = `user.can_use_tool`)
+  - identity-server migration `20260524_008_rbac_edge_web_tools` seed 所有部门 allowed_tools 含 web_search/web_extract
+  - catfish-cli `_sync_hermes_edge_tool_configs()` 自动 fetch + 写员工 `~/.hermes/.env` + `config.yaml` (per-key update, 备份, 幂等)
+  - 14 gateway 单测 + 8 CLI 单测 全过, 文档 DEPLOYMENT-RUNBOOK.md §15
+- ✅ **5/25 BL-WEB-ALWAYS-ON + BL-MCP-PREFIX-FIX: web_search/web_extract/web_crawl 加 always-on + always-on 永远前置 + 识别 mcp_catfish_tools_ 前缀**:
+  - 修 5/24 web_search demo 的"模型走 browser 抓页面不走 web_search 直 tool_call"另一半根因 (前一半是 #61 死代理). 字母序 hermes 把 web_* 排末尾 → 模型位置偏置不选.
+  - `tools_sanitizer_constants.py`: 加 web_search/web_extract/web_crawl 到 ALWAYS_ON_TOOLS (25 个). 加 MCP_CATFISH_PREFIX 常量 + `is_always_on(name)` helper (strip mcp_catfish_tools_ 前缀再判).
+  - `tools_sanitizer.py:_cap_tools_by_priority` 改"超 cap 才重排"→"永远重排" (always_on 前置, other 在后, 都保 caller 给的相对顺序). 4 处 `name in _ALWAYS_ON_TOOLS` 改 `_is_always_on(name)`, MCP 包装版本一并保护.
+  - BL-TOOL-CAP 日志格式从 "X tools 超上限 Y" 改成 "dropped=X cap=Y kept=Z" — 老格式中文措辞让人误读成"X < Y 数学错", 实际 X 是 dropped count.
+  - 6 新单测覆盖: 裸名+MCP 包装名 promote / 同 always-on 保 caller 顺序 / MCP 包装的 always-on 不被 cap 砍 / is_always_on helper 直接断言. 总 72 测全过.
+- ✅ **5/25 BL-EDGE-TOOL-PROXY: catfish refresh-hermes 死代理自动检测 + 可选自动重启 hermes**:
+  - 解决 5/24 凌晨 web_search demo 暴露的根因 (员工 shell HTTPS_PROXY=127.0.0.1:7890 死端口 → hermes 继承 → Tavily 全 timeout → 模型退化用 browser)
+  - 抄 gateway/network.py 的 TCP probe 思路, 加 5 个 helper (`_check_proxy_alive`/`_detect_dead_proxy_vars`/`_build_clean_env`/`_restart_hermes_with_clean_env`/`_handle_proxy_cleanup`)
+  - 默认只警告 + 给手动 unset 命令; 加 `--restart-hermes` flag 自动用 sanitized env 拉 `hermes gateway restart` (推荐 cron 月度续期用)
+  - 13 单测 (probe / detect dedupe / build_clean / handle silent-when-alive / warn / auto-restart / fallback-on-fail), 总 57 CLI 单测全过
+  - 文档 DEPLOYMENT-RUNBOOK.md §15.7 + 故障表新加一行
 - ⬜ 实际接到所有路由 (现只 quota / audit / me) · 0.5 周
 - ⬜ Manager 改本部门 quota PUT 端点 (现 read-only) · 1 周
 - ⬜ Admin 全局聚合卡 · 0.5 周
 - ⬜ service token rotation 端点 + audit who-rotated · 0.5 周
+- ⬜ **BL-EDGE-TOOL-KEY 扩 4 个 tool** (用同一套架构, 沿用 DEPLOYMENT-RUNBOOK §15.8):
+  - `web_crawl` — Tavily 已支持, 跟 search/extract 共 key, 改 1 行 alembic seed 就行 · 30min
+  - `image_generate` — Stability / Replicate / OpenAI DALL-E 三选一, 加 STABILITY_API_KEY · 半天
+  - `x_search` — X (Twitter) API key, 看是否合规上线 · 1 天 (含合规审查)
+  - `voice_clone` / `tts` — 看是否走中央 (Cartesia / ElevenLabs 月费贵, 建议中央集采) · 1 天
 
 #### #7 Quota [Phase 2, 100%]  ★ 5/2 完整 ship
 > 三维滑动窗口 (用户/模型/部门) + 实时 chat 接通 + manager UI.

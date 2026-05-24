@@ -11,9 +11,11 @@ import pytest
 SRC = Path(__file__).resolve().parent.parent / "src"
 sys.path.insert(0, str(SRC))
 
+# 5/23 BL-GATEWAY-DROP-LEGACY-SUMMARIZE (task #5 Stage 1): inject_employee_journal
+# 已删 (5/20 已 disable, 5/23 真删函数体). 该测试文件 inject_employee_journal /
+# _empty_noop / _idempotent 3 个 test 跟着删 (见下方).
 from catfish_gateway.employee_journal import (  # noqa: E402
     append_to_journal,
-    inject_employee_journal,
     journal_path,
     read_journal,
 )
@@ -226,56 +228,8 @@ def test_append_to_journal_creates_file(tmp_path, monkeypatch):
     assert "第一条" in text and "第二条" in text
 
 
-def test_inject_employee_journal(tmp_path, monkeypatch):
-    fake_journal = tmp_path / ".catfish" / "employee_journal.md"
-    fake_journal.parent.mkdir(parents=True)
-    fake_journal.write_text(
-        "## 2026-04-29 - 资质汇报\n鸿波偏好 4 段格式.\n", encoding="utf-8"
-    )
-    monkeypatch.setattr(
-        "catfish_gateway.employee_journal.journal_path", lambda: fake_journal
-    )
-    msgs = [{"role": "system", "content": "sys"}]
-    out = inject_employee_journal(msgs)
-    assert "员工长期日记" in out[0]["content"]
-    assert "鸿波偏好 4 段格式" in out[0]["content"]
-
-
-def test_inject_employee_journal_empty_noop(tmp_path, monkeypatch):
-    """journal **+ distilled** 都不存在 → 不动 messages.
-
-    BL-EMPLOYEE-JOURNAL-EMPTY-NOOP fix (5/20): inject_employee_journal 的 noop
-    条件是 journal 跟 distilled 都空 (employee_journal.py:177). 老测试只 monkeypatch
-    了 journal_path, 没 monkeypatch distilled_facts.md 路径 (它走 hardcoded
-    Path.home() / ".catfish" / "distilled_facts.md"). 真 mac 上 distilled 文件
-    有 2KB 内容, 导致测试在生产 mac 跑会 fail (inject 真触发).
-
-    修法: 同时 monkeypatch distilled_facts.md 路径指向 tmp_path 的 missing 文件,
-    保证 distilled 也读不到, 触发真 noop 路径.
-    """
-    monkeypatch.setattr(
-        "catfish_gateway.employee_journal.journal_path",
-        lambda: tmp_path / ".catfish" / "missing.md",
-    )
-    # 同步 monkeypatch distilled_facts 路径, 防真 mac ~/.catfish/distilled_facts.md
-    # 内容污染测试. 5/20 修复.
-    monkeypatch.setattr(
-        "catfish_gateway.memory_distill.DISTILLED_FACTS_PATH",
-        tmp_path / ".catfish" / "distilled_missing.md",
-    )
-    msgs = [{"role": "system", "content": "sys"}]
-    out = inject_employee_journal(msgs)
-    assert out == msgs
-
-
-def test_inject_employee_journal_idempotent(tmp_path, monkeypatch):
-    fake_journal = tmp_path / ".catfish" / "employee_journal.md"
-    fake_journal.parent.mkdir(parents=True)
-    fake_journal.write_text("## entry\n内容\n", encoding="utf-8")
-    monkeypatch.setattr(
-        "catfish_gateway.employee_journal.journal_path", lambda: fake_journal
-    )
-    msgs = [{"role": "system", "content": "sys"}]
-    once = inject_employee_journal(msgs)
-    twice = inject_employee_journal(once)
-    assert once[0]["content"] == twice[0]["content"]
+# 5/23 BL-GATEWAY-DROP-LEGACY-SUMMARIZE (task #5 Stage 1):
+# test_inject_employee_journal / _empty_noop / _idempotent 3 个 test 整体删 —
+# inject_employee_journal 函数已从 employee_journal.py 删, catfish-memory plugin
+# (hermes 侧 prefetch) 接管注入路径. 真要测注入逻辑, 去
+# edge/hermes-plugins/catfish-memory/tests/ 看 _render_employee_journal 系列.

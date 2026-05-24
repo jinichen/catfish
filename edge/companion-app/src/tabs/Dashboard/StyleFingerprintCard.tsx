@@ -13,8 +13,22 @@
 
 import { useEffect, useState, useCallback } from "react";
 
+import { invoke } from "@tauri-apps/api/core";
+
 import { toolBridgeCallTool } from "../../lib/tauri";
 import { useAgentStore } from "../../store/agent";
+
+// 5/22 鸿波: scan_dirs UI 管理 — 后端 commands/style_fingerprint_dirs.rs
+interface ScanDirsResult {
+  userDirs: string[];
+  defaultDirs: string[];
+  yamlPath: string;
+}
+const scanDirsGet = () => invoke<ScanDirsResult>("style_fingerprint_scan_dirs_get");
+const scanDirsAdd = (path: string) =>
+  invoke<ScanDirsResult>("style_fingerprint_scan_dirs_add", { path });
+const scanDirsRemove = (path: string) =>
+  invoke<ScanDirsResult>("style_fingerprint_scan_dirs_remove", { path });
 
 interface FingerprintView {
   exists: boolean;
@@ -205,28 +219,23 @@ export default function StyleFingerprintCard() {
           {/* BL-STYLE-FP-EMPTY-HINT (5/20): source_count=0 时, 抽过但没扫到文档.
               提示加 yaml scan_dirs (~/.catfish/companion.yaml style_fingerprint.scan_dirs)
               或调用 refresh args.source_dirs 显式扫别处. */}
+          {/* 5/22 鸿波: scan_dirs UI 管理 — 替代老的"自己编 yaml" 提示.
+              source_count=0 时高亮显示, 否则折叠成"扫描目录 (3)" 一行可展开. */}
+          <ScanDirsManager
+            highlight={(view.source_count ?? 0) === 0}
+            onChanged={() => { /* 改完后员工自己点重新抽取按钮 ↑ */ }}
+          />
           {(view.source_count ?? 0) === 0 && (
             <div
               style={{
                 fontSize: 11,
                 color: "var(--catfish-text-muted)",
-                background: "var(--catfish-bg)",
-                border: "1px dashed var(--catfish-border)",
-                borderRadius: 4,
-                padding: "6px 10px",
-                marginBottom: "var(--space-3)",
+                marginBottom: "var(--space-2)",
                 lineHeight: 1.5,
               }}
             >
               扫了 <code>~/Documents/work/</code> + <code>~/.catfish/output/</code> 没找到 ≥200 字
-              的 .md/.docx/.txt. 加扫描目录: 编辑 <code>~/.catfish/companion.yaml</code> 加段:
-              <pre style={{ margin: "4px 0 0 0", padding: "4px 8px", background: "var(--catfish-bg-elevated)", fontSize: 10, borderRadius: 3 }}>
-{`style_fingerprint:
-  scan_dirs:
-    - ~/person_task/catfish/docs
-    - ~/work-reports`}
-              </pre>
-              保存后点 "重新抽取" ↑
+              的 .md/.docx/.txt. 上面加目录, 然后点 "重新抽取" ↑
             </div>
           )}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8, fontSize: 13, marginBottom: "var(--space-3)" }}>
@@ -314,6 +323,206 @@ export default function StyleFingerprintCard() {
             )}
           </div>
         </>
+      )}
+    </div>
+  );
+}
+
+// ─── BL-STYLE-FP-DIR-PICKER (5/22 鸿波): scan_dirs 列表 + 加/删 ─────
+
+function ScanDirsManager({
+  highlight,
+  onChanged,
+}: {
+  highlight: boolean;
+  onChanged: () => void;
+}) {
+  const [data, setData] = useState<ScanDirsResult | null>(null);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(highlight);
+
+  const reload = useCallback(async () => {
+    try {
+      const r = await scanDirsGet();
+      setData(r);
+      setErr(null);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  // highlight 变化 (扫到 0 时) 自动展开
+  useEffect(() => {
+    if (highlight) setExpanded(true);
+  }, [highlight]);
+
+  const onAdd = async () => {
+    const p = input.trim();
+    if (!p) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await scanDirsAdd(p);
+      setData(r);
+      setInput("");
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onRemove = async (path: string) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await scanDirsRemove(path);
+      setData(r);
+      onChanged();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const dirCount = (data?.userDirs.length ?? 0) + (data?.defaultDirs.length ?? 0);
+
+  return (
+    <div
+      style={{
+        background: "var(--catfish-bg)",
+        border: `1px ${highlight ? "solid" : "dashed"} ${highlight ? "#a16207" : "var(--catfish-border)"}`,
+        borderRadius: 4,
+        padding: "6px 10px",
+        marginBottom: "var(--space-3)",
+        fontSize: 12,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          cursor: "pointer",
+          color: highlight ? "#a16207" : "var(--catfish-text-muted)",
+        }}
+        onClick={() => setExpanded((e) => !e)}
+        title="展开/收起扫描目录管理"
+      >
+        <span>{expanded ? "▼" : "▶"}</span>
+        <span>📁 扫描目录 ({dirCount})</span>
+        {highlight && <span style={{ fontSize: 10 }}>← 当前扫不到文档, 加目录</span>}
+      </div>
+
+      {expanded && data && (
+        <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
+          {/* 默认目录 (不可改, 灰显) */}
+          {data.defaultDirs.map((d) => (
+            <div
+              key={`default-${d}`}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "2px 0",
+                color: "var(--catfish-text-muted)",
+              }}
+            >
+              <code style={{ fontSize: 11, flex: 1 }}>{d}</code>
+              <span style={{ fontSize: 10, opacity: 0.6 }}>(默认)</span>
+            </div>
+          ))}
+          {/* 用户加的目录 (可删) */}
+          {data.userDirs.map((d) => (
+            <div
+              key={`user-${d}`}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "2px 0",
+              }}
+            >
+              <code style={{ fontSize: 11, flex: 1, color: "var(--catfish-text)" }}>{d}</code>
+              <button
+                type="button"
+                onClick={() => void onRemove(d)}
+                disabled={busy}
+                style={{
+                  fontSize: 10,
+                  padding: "1px 6px",
+                  background: "transparent",
+                  border: "1px solid var(--catfish-border)",
+                  borderRadius: 3,
+                  cursor: busy ? "default" : "pointer",
+                  color: "var(--catfish-text-muted)",
+                }}
+                title="从 ~/.catfish/companion.yaml 删除这条"
+              >
+                ✗ 删
+              </button>
+            </div>
+          ))}
+          {/* 添加输入 */}
+          <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="~/person_task 或 /Users/your-name/Documents/汇报"
+              disabled={busy}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void onAdd();
+                }
+              }}
+              style={{
+                flex: 1,
+                fontSize: 11,
+                padding: "3px 6px",
+                background: "var(--catfish-bg-elevated)",
+                border: "1px solid var(--catfish-border)",
+                borderRadius: 3,
+                color: "var(--catfish-text)",
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => void onAdd()}
+              disabled={busy || !input.trim()}
+              style={{
+                fontSize: 11,
+                padding: "3px 10px",
+                background: input.trim() && !busy ? "var(--accent)" : "transparent",
+                border: "1px solid var(--catfish-border)",
+                borderRadius: 3,
+                cursor: input.trim() && !busy ? "pointer" : "default",
+                color: input.trim() && !busy ? "white" : "var(--catfish-text-muted)",
+              }}
+            >
+              + 添加
+            </button>
+          </div>
+          {err && (
+            <div style={{ fontSize: 11, color: "var(--status-err, #dc2626)", marginTop: 4 }}>
+              ⚠️ {err}
+            </div>
+          )}
+          {data.yamlPath && (
+            <div style={{ fontSize: 10, color: "var(--catfish-text-muted)", marginTop: 4, opacity: 0.7 }}>
+              写到 <code>{data.yamlPath}</code> · 改完点 "重新抽取" ↑
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

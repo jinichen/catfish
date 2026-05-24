@@ -19,7 +19,9 @@
 
 import { useRecModeStore } from "../../store/recmode";
 
-import { T } from "./RecMode/shared";
+// 5/23 鸿波: T (cyan/textSecondary 常量) 不再用 — RecModeToolbarButton 改用 CSS
+// 变量 var(--catfish-*) 跟 TeachingToggleButton 风格统一. T 之前唯一 caller 是
+// 这个按钮, 现在 import 移除 (tsc noUnusedLocals 卡 build).
 import SetupModal from "./RecMode/SetupModal";
 import RecordingOverlay from "./RecMode/RecordingOverlay";
 import ErrorBanner from "./RecMode/ErrorBanner";
@@ -56,18 +58,28 @@ function RecModeToolbarButton({ disabled }: { disabled?: boolean }) {
     <button
       onClick={openSetup}
       disabled={disabled || isActive}
-      title={isActive ? "录制中, 看右下角浮层" : "🎙 教鲶鱼一遍 (RecMode)"}
+      title={isActive ? "录制中, 看右下角浮层" : "🎬 教鲶鱼一遍 (RecMode 录屏+录音)"}
       style={{
-        background: "transparent",
-        border: "none",
+        // 5/23 鸿波: 之前 border: "none" + transparent, 跟旁边 📎 / 🎓 / 🎤
+        // 等带框按钮风格不一致, 视觉上像散落. 跟 TeachingToggleButton 对齐:
+        // 1px border + radius-sm + active 时变 cyan + cyan-dim 背景.
+        padding: "6px 10px",
+        border: "1px solid " + (isActive ? "var(--catfish-cyan)" : "var(--catfish-border)"),
+        borderRadius: "var(--radius-sm)",
+        background: isActive ? "var(--catfish-cyan-dim)" : "transparent",
+        color: isActive ? "var(--catfish-cyan)" : "var(--catfish-text-muted)",
+        fontSize: 14,
+        fontWeight: isActive ? 600 : 400,
         cursor: disabled || isActive ? "not-allowed" : "pointer",
-        opacity: disabled || isActive ? 0.5 : 1,
-        fontSize: 16,
-        padding: "4px 8px",
-        color: isActive ? T.cyan : T.textSecondary,
+        opacity: disabled ? 0.5 : 1,
+        lineHeight: 1,
+        minHeight: 36,
+        transition: "all 120ms ease",
       }}
     >
-      🎙
+      {/* 5/23 鸿波: 🎙 → 🎬 — 跟旁边普通 🎤 (语音输入) 拉开视觉, 员工不再分不清.
+       *  RecMode 是"你演一遍 catfish 学" 场景, 拍版 emoji 比麦克风更贴语义. */}
+      🎬
     </button>
   );
 }

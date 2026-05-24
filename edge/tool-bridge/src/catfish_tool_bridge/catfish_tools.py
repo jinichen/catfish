@@ -687,6 +687,9 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_recall_decision_history":
         from . import advisor_recall  # noqa: PLC0415
         return advisor_recall.recall_decision_history(args)
+    if name == "catfish_forget_about":
+        from . import forget_about  # noqa: PLC0415
+        return forget_about.forget_about(args)
     raise ValueError(f"unknown native tool: {name}")
 
 

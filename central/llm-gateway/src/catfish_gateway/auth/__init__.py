@@ -262,8 +262,15 @@ async def get_current_user(
     旧版"env != dev 时直接抛 501"已删 — 决策 6 dev_token 保留作 prod 兜底.
     """
     if not authorization:
+        # BL-DEBUG-401 (5/24 鸿波): 临时加, 定位 Companion silent refresh 后仍 401 的真因
+        logger.warning("BL-DEBUG-401: missing Authorization header")
         raise HTTPException(status_code=401, detail="missing Authorization header")
     if not authorization.lower().startswith("bearer "):
+        # BL-DEBUG-401: 头不对
+        logger.warning(
+            "BL-DEBUG-401: not Bearer prefix, got: %r (len=%d)",
+            authorization[:30], len(authorization),
+        )
         raise HTTPException(
             status_code=401,
             detail="Authorization must be a Bearer token",
@@ -271,6 +278,47 @@ async def get_current_user(
 
     user = _get_provider().verify_bearer(authorization)
     if user is None:
+        # BL-DEBUG-401 (5/24): 升级版 — decode JWT claims, 打 iss/aud/exp/iat
+        # 让一眼能看出: exp 过期? aud 不匹配? iss 不匹配? kid 不在 JWKS?
+        # decode 不验签 (验签已经在上面 verify_bearer 失败了, 这里只是拆 claims).
+        import json as _json
+        import base64 as _b64
+        import time as _time
+        token_part = authorization[7:]  # 去掉 "Bearer "
+        preview = token_part[:40] if len(token_part) >= 40 else token_part
+        # 拆 header.payload.sig
+        parts = token_part.split(".")
+        decoded_info = ""
+        try:
+            if len(parts) >= 2:
+                def _b64d(s: str) -> dict:
+                    s += "=" * (-len(s) % 4)
+                    return _json.loads(_b64.urlsafe_b64decode(s))
+                hdr = _b64d(parts[0])
+                pl = _b64d(parts[1])
+                now = int(_time.time())
+                exp = pl.get("exp")
+                iat = pl.get("iat")
+                exp_status = "?"
+                if isinstance(exp, int):
+                    diff = exp - now
+                    exp_status = (
+                        f"PAST EXPIRY by {-diff}s ({-diff/60:.1f}min)"
+                        if diff <= 0
+                        else f"valid {diff}s ({diff/60:.1f}min) left"
+                    )
+                decoded_info = (
+                    f" alg={hdr.get('alg')} kid={hdr.get('kid')}"
+                    f" iss={pl.get('iss')!r} aud={pl.get('aud')!r}"
+                    f" sub={pl.get('sub')!r}"
+                    f" iat={iat} exp={exp} now={now} → {exp_status}"
+                )
+        except Exception as _e:
+            decoded_info = f" (decode 失败: {_e})"
+        logger.warning(
+            "BL-DEBUG-401: invalid token; preview=%r len=%d%s",
+            preview, len(token_part), decoded_info,
+        )
         raise HTTPException(status_code=401, detail="invalid token")
     return user
 

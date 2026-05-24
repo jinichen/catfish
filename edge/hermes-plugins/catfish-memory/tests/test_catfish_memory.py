@@ -72,9 +72,24 @@ def test_prefetch_empty_when_not_initialized(fake_catfish_home, provider):
 
 
 def test_prefetch_empty_when_no_data(fake_catfish_home, provider):
-    """init 了但 ~/.catfish/ 全空 → prefetch 返空"""
+    """init 了但 ~/.catfish/ 全空 → prefetch 只含 memory 写入纪律 (BL-MEMORY-DISCIPLINE 5/24).
+
+    老语义"完全空" 不再成立 — 写入纪律 section 是无条件注入的 (无 ~/.catfish/ 依赖),
+    存在的目的就是约束 LLM 调 memory_update 行为, 哪怕没任何数据也该生效.
+    断言改成: 输出 *只* 含纪律 section, 不含 5 个数据源中的任何一个 marker.
+    """
     provider.initialize(session_id="s1")
-    assert provider.prefetch("hi") == ""
+    out = provider.prefetch("hi")
+    # 不空 (含纪律)
+    assert out, "应该至少返回纪律 section"
+    # 含纪律标志
+    assert "memory 写入纪律" in out
+    # 不含 5 个数据源 marker (这才是"无数据"的真正语义)
+    assert "时间感" not in out
+    assert "长期记忆" not in out
+    assert "长期日记" not in out
+    assert "可用技能" not in out
+    assert "员工反馈" not in out
 
 
 def test_prefetch_session_meta(fake_catfish_home, provider):

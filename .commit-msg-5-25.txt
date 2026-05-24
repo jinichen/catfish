@@ -1,0 +1,80 @@
+5/24-5/25: BL-EDGE-TOOL-KEY 中央派发 + 6 BL ship + 累积 5/22-5/23 未 commit
+
+详见 CHANGELOG.md 2026-05-24 section (47 项 ship, 6 phase 主线).
+
+主要主题:
+
+🔑 BL-EDGE-TOOL-KEY (中央派发 Tavily backend key, 50 人部署级架构)
+  - gateway edge_tool_config.py registry + 2 endpoint
+    (/v1/edge/tool-config[/{tool_name}], RBAC = user.can_use_tool)
+  - identity-server alembic 008 seed 部门 allowed_tools 含 web_search/web_extract
+  - catfish-cli _sync_hermes_edge_tool_configs() 自动 fetch + 写 ~/.hermes/.env
+    + config.yaml (per-key update, 备份, 幂等)
+  - 14 gateway + 13 cli 单测, DEPLOYMENT-RUNBOOK §15 (架构图 + 部署步骤 + 故障表)
+
+🌐 BL-EDGE-TOOL-PROXY (catfish refresh-hermes --restart-hermes flag)
+  - 5 helper + 13 单测: TCP probe 代理 / 检测死 / build clean env / restart 子进程
+  - 解决 hermes 进程继承 HTTPS_PROXY=127.0.0.1:7890 死端口 → Tavily 全 timeout
+    → 模型退化用 catfish_browser_* 抓页面 (慢 30 倍)
+  - 默认警告 + 给手动命令, --restart-hermes flag 自动用 sanitized env 重启 hermes
+
+📏 BL-WEB-ALWAYS-ON + BL-MCP-PREFIX-FIX
+  - tools_sanitizer_constants.py 拆出 (+ MCP_CATFISH_PREFIX 常量 + is_always_on() helper)
+  - web_search/web_extract/web_crawl 进 ALWAYS_ON_TOOLS (25 项)
+  - _cap_tools_by_priority: 超 cap 才重排 → 永远 always-on 前置 (即使没超 cap)
+  - 4 处 `name in _ALWAYS_ON_TOOLS` 改 _is_always_on(name) 识别 mcp_catfish_tools_ 前缀
+  - BL-TOOL-CAP 日志措辞: "X tools 超上限 Y" → "dropped=X cap=Y kept=Z"
+  - 6 新单测
+
+🔐 BL-HERMES-SERVICE-TOKEN (D 方案 — hermes 30 天 service token)
+  - _mint_hermes_service_token: RFC 6749 §4.4 client_credentials grant
+  - 替代老 user OAuth token 写 hermes config.yaml api_key (1h TTL 撞 401 storm bug)
+  - sub=client:hermes-cli, aud=catfish-gateway, scope=chat.completions tools.invoke ...
+  - catfish refresh-hermes 独立子命令 (cron/launchd 月跑)
+
+🔄 Step 3 streamRegistry (切会话不打断流)
+  - streamRegistry.ts 模块级 Map<sessionId, StreamState>, 脱离 React 生命周期
+  - useChat/ChatTab/ChatSidebar 改订阅模式, ⏳ 进行中徽章
+  - Step 4 长任务 dispatch 落正式 plan doc (PLAN-DISPATCH-LONG-RUNNING-TASKS.md)
+
+🧠 Memory 写入纪律
+  - catfish-memory plugin _render_memory_discipline() 注入 (每轮 system prompt)
+  - scripts/hermes-memory-cleanup.py (扫描/show/delete USER.md+MEMORY.md, 自动 backup)
+  - docs/MEMORY-USER-GUIDE.md (员工"4 套 memory 盒子" 速记)
+
+🐛 P0 bug 修
+  - 模型切回 Gemini bug: chat.ts loadSession 删覆盖 model 行
+  - OAuth 401 storm: oauth.rs silent refresh + me.ts 删 _cachedEnvToken 模块级缓存
+  - session_search SQL 字段名: m.created_at → m.timestamp (跨 session 查 7 天没察觉)
+  - NVIDIA NIM 两条 entry 全错: model + context_window + supports_tool_use 全改对
+  - Groq gpt-oss-120b 加 / Qwen-flash max_output_tokens 65536 (修空 400)
+  - chenhongbo@ffcs.cn quota override (避开 10M 日限拦住自己 dogfood)
+
+🧹 累积 5/22-5/23 未 commit (一并 ship)
+  - 物理删 memory_distill/session_summarizer/sessions_browse/tasks_browse 老模块
+    (5/23 决策: 不再走"独立 distill 服务", 改 catfish-memory plugin sync_turn)
+  - 物理删 catfish-todo-sync plugin (5/23: plugin loader bypass 老问题, 从来没真接上)
+  - tool_archive 重构 (5/22) + 局部 PG → 本地 SQLite 迁移
+  - autostart/watchdog/lib.rs 解耦 (5/22-5/23 BOUNDARY 整改)
+  - Phase 7 advisor (advisor_cache/config/task_state.rs, briefing_advisor.ts)
+  - RecMode 🎙→🎬 + border 风格统一 (5/23)
+  - state.db corrupt 重建 (5/23)
+  - .gitignore 补 *.bak.* 防 .env.bak.<timestamp> 误传 secret
+
+📦 端到端验证
+  Companion + DeepSeek-v4-flash 实测:
+  - 模型 emit web_search(query=...) × 5 + web_extract(urls=...) × 1 直 tool_call
+  - 0 个 execute_code/browser fallback (修前需要 10+ 工具轮)
+  - 15 秒拿 5 条今日真新闻 (修前 60+ 秒走 browser)
+  - 训练偏置 ★★★★★ 输给了 (位置 ★★ + 干净 env ★★★) 联合 fix
+
+测试: gateway 72/72 (sanitizer + cap + scrub_notice + edge_tool_config)
+     + cli 57/57 (auth + token + edge tool sync + proxy)
+     + catfish-memory plugin 22/22 (含 discipline 注入)
+     全过.
+
+遗留:
+  - task #60: Qwen catfish-private-main 内网挂 (Connection reset by peer, 找运维)
+  - 5/21 + 5/22 CHANGELOG stub 还没补 (历史欠债)
+  - rotate 生产 CATFISH_HERMES_CLI_SECRET (现还是 dev secret)
+  - image_generate / x_search / voice_clone 沿用 §15.8 流程 (4-6 周内)

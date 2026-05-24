@@ -73,11 +73,33 @@ DEFAULT_CLIENT_ID = "hermes-cli"
 DEFAULT_SCOPES = "openid email profile chat.completions audit.write tools.invoke skills.run"
 HERMES_PROVIDER_NAME = "Local (localhost:8999)"  # 跟用户 hermes setup 时填的 display name 对齐
 
+# BL-HERMES-SERVICE-TOKEN (5/24 鸿波"hermes 内存缓存过期 user token 撞 401"):
+# 之前 _patch_hermes_config(store.access_token) 把用户 OAuth access_token (1h TTL)
+# 写进 hermes config api_key. hermes 启动后读这个, 1 小时后过期 → gateway 验签
+# 拒 → 401 storm 直到 `hermes gateway restart` 手动续.
+#
+# 真正的修法 (D 方案, identity-server 5/14 BL-RBAC P0 就为此预留了基础设施):
+# hermes 用 client_credentials grant 拿"服务身份" token (sub=client:hermes-cli,
+# TTL 30 天), 不依赖任何用户的 OAuth 周期. 0002 patch 已经实现 X-Catfish-User
+# 转发, gateway 看 service token + header 一起识别真实员工身份做 audit/quota.
+#
+# client_secret 来源:
+#   1. env CATFISH_HERMES_CLI_SECRET (生产推荐, 跟 identity-server clients.yaml
+#      里 hermes-cli 的 bcrypt hash 对应的明文 secret)
+#   2. 默认 dev demo secret (跟 identity-server/config/clients.yaml line 30 注释
+#      里写的 "hermes-dev-secret-2026-please-change" 一致). 生产部署一定要改.
+DEFAULT_HERMES_CLI_CLIENT_ID = "hermes-cli"
+DEFAULT_HERMES_CLI_DEV_SECRET = "hermes-dev-secret-2026-please-change"
+HERMES_SERVICE_SCOPES = "chat.completions tools.invoke skills.run audit.write"
+
 #: token 过期前多少秒视为"快过期" (要重新拿)
 EXPIRY_BUFFER_SECS = 60
 
 #: 本地 callback 监听超时 (秒)
 CALLBACK_TIMEOUT_SECS = 300
+
+#: hermes-cli service token 剩余 < 这天数时, opportunistic 重新 mint (login/refresh 自动触发)
+HERMES_TOKEN_MIN_REMAINING_DAYS = 7
 
 
 def _auth_dir() -> Path:
@@ -95,6 +117,21 @@ def _hermes_config_path() -> Path:
     if env := os.environ.get("HERMES_CONFIG"):
         return Path(env).expanduser()
     return Path.home() / ".hermes" / "config.yaml"
+
+
+def _hermes_env_path() -> Path:
+    """~/.hermes/.env — hermes 0.14 读 backend API key 的文件 (TAVILY_API_KEY 等).
+
+    hermes 启动时自动 load 这个文件. 我们 (catfish) 写 per-key update, 保留无关行.
+    见 docs/DEPLOYMENT-RUNBOOK.md §15.
+    """
+    if env := os.environ.get("HERMES_DOTENV"):
+        return Path(env).expanduser()
+    return Path.home() / ".hermes" / ".env"
+
+
+def _gateway_url() -> str:
+    return os.environ.get("CATFISH_GATEWAY_URL", DEFAULT_GATEWAY_URL).rstrip("/")
 
 
 def _identity_url() -> str:
@@ -487,6 +524,509 @@ def _patch_hermes_config(token: str) -> Optional[str]:
     return target
 
 
+# ─── BL-HERMES-SERVICE-TOKEN (5/24): hermes service token mint + 同步 ──
+
+
+def _hermes_cli_client_secret() -> str:
+    """读 hermes-cli 的 client_secret.
+
+    生产: env CATFISH_HERMES_CLI_SECRET (跟 identity-server clients.yaml hermes-cli
+    那条 bcrypt hash 对应的明文).
+    Dev: fallback 到 identity-server clients.yaml 注释里写的 demo secret.
+
+    返空 → 抛错由 caller 处理.
+    """
+    return os.environ.get("CATFISH_HERMES_CLI_SECRET", DEFAULT_HERMES_CLI_DEV_SECRET)
+
+
+def _mint_hermes_service_token(
+    identity_url: str,
+    client_id: str = DEFAULT_HERMES_CLI_CLIENT_ID,
+    scopes: str = HERMES_SERVICE_SCOPES,
+) -> str:
+    """调 catfish-identity /token grant_type=client_credentials 拿 service token.
+
+    实施 BL-RBAC P0 (5/14) 设计的 RFC 6749 §4.4 client_credentials grant. 返
+    sub=client:hermes-cli, aud=catfish-gateway, TTL 30 天的 access_token.
+
+    跟用户 OAuth 完全独立 — 哪怕用户没 login / OAuth token 过期, hermes 也照常跑.
+
+    Returns: JWT 字符串 (~600-800 bytes).
+    Raises: RuntimeError on 网络 / HTTP / parse 失败.
+    """
+    secret = _hermes_cli_client_secret()
+    if not secret:
+        raise RuntimeError(
+            "hermes-cli client_secret 没配 (env CATFISH_HERMES_CLI_SECRET 空 + dev "
+            "fallback 也被清). 看 identity-server/config/clients.yaml hermes-cli 段."
+        )
+    body = urllib.parse.urlencode({
+        "grant_type": "client_credentials",
+        "client_id": client_id,
+        "client_secret": secret,
+        "scope": scopes,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        f"{identity_url.rstrip('/')}/token",
+        data=body,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body_str = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"client_credentials mint 失败 (HTTP {e.code}): {body_str}. "
+            f"检查 CATFISH_HERMES_CLI_SECRET 是否跟 identity-server 配的 hash 对得上."
+        ) from e
+    except (urllib.error.URLError, TimeoutError) as e:
+        raise RuntimeError(
+            f"catfish-identity ({identity_url}) 不可达: {e}. "
+            f"检查 identity-server 是否在跑."
+        ) from e
+
+    tok = data.get("access_token")
+    if not tok:
+        raise RuntimeError(f"identity 没返 access_token: {data}")
+    return tok
+
+
+# ─── BL-EDGE-TOOL-PROXY (5/25): 死代理检测 + 清理 hermes 进程 env ──────
+#
+# 背景 (5/24 凌晨鸿波 web_search demo 暴露):
+#   员工 shell 经常有 HTTPS_PROXY=http://127.0.0.1:7890 指向 Clash / Mihomo /
+#   v2ray, 但代理常常没开. hermes gateway restart 起的 hermes 进程**继承**这条
+#   死代理, 之后所有外网调用 (Tavily web_search / Firecrawl 等) 全撞墙 timeout,
+#   模型学会"web_search 不能用", 退化用 catfish_browser_* 抓页面 (慢 30 倍).
+#
+# Gateway 自己启动时跑过这个检测 (network.py:precheck_and_setup), 清掉了自己
+# 进程的死代理. 但 hermes 是单独进程, 没人帮它清. 现在 catfish refresh-hermes
+# 顺手帮 hermes 的 restart 把 env 清干净.
+#
+# 复用 gateway/network.py 的检测思路, 但不依赖那个模块 (catfish-cli 是单文件,
+# 不想加 import). 50 行抄过来 + 个性化 logging.
+
+
+_PROXY_ENV_VARS = (
+    "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY",
+    "https_proxy", "http_proxy", "all_proxy",
+)
+
+
+def _check_proxy_alive(proxy_url: str, timeout: float = 2.0) -> bool:
+    """TCP probe 代理端口是否能连上.
+
+    抄 gateway network.py:_check_tcp_port 同款. 不实际跑 HTTP, 只看 TCP 通不通
+    (端口接受连接 = 代理至少在跑, 哪怕配错也算"活着", 不在我们 scope).
+    """
+    if not proxy_url:
+        return False
+    from urllib.parse import urlparse  # noqa: PLC0415
+    if not proxy_url.startswith(("http://", "https://")):
+        proxy_url = "http://" + proxy_url
+    try:
+        parsed = urlparse(proxy_url)
+    except ValueError:
+        return False
+    host = parsed.hostname
+    if not host:
+        return False
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    import socket  # noqa: PLC0415
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except (TimeoutError, OSError):
+        return False
+
+
+def _detect_dead_proxy_vars() -> list[tuple[str, str]]:
+    """检测当前 shell env 里哪些 proxy var 指向死端口.
+
+    返 [(var_name, value), ...]. 全活或全没设返 []. 多个 var 指同一个 URL 算多条.
+
+    幂等 — 只读 env, 不修改.
+    """
+    seen_urls: dict[str, bool] = {}  # url → alive cache, 不重复 TCP probe
+    dead: list[tuple[str, str]] = []
+    for var in _PROXY_ENV_VARS:
+        val = os.environ.get(var, "").strip()
+        if not val:
+            continue
+        if val not in seen_urls:
+            seen_urls[val] = _check_proxy_alive(val)
+        if not seen_urls[val]:
+            dead.append((var, val))
+    return dead
+
+
+def _build_clean_env(unset_vars: list[str]) -> dict[str, str]:
+    """copy os.environ 然后删指定 var, 给 subprocess 用. 不动当前进程 env."""
+    env = os.environ.copy()
+    for v in unset_vars:
+        env.pop(v, None)
+    return env
+
+
+def _restart_hermes_with_clean_env(unset_vars: list[str]) -> int:
+    """spawn `hermes gateway restart` with proxy env vars removed.
+
+    返 hermes 命令的 exit code. 找不到 hermes 命令返 127.
+    不挂任何异常 — caller 应当吞掉 (这是 best-effort 帮员工省事).
+    """
+    import shutil  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+
+    hermes_bin = shutil.which("hermes")
+    if not hermes_bin:
+        print("  proxy-clean: ⚠ 找不到 hermes 命令 (PATH 没设?), 跳过自动 restart")
+        return 127
+
+    env = _build_clean_env(unset_vars)
+    try:
+        result = subprocess.run(
+            [hermes_bin, "gateway", "restart"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        print("  proxy-clean: ⚠ hermes gateway restart 60s 没返, 放弃")
+        return 124
+    except Exception as e:  # pragma: no cover
+        print(f"  proxy-clean: ⚠ hermes gateway restart 出错: {e}")
+        return 1
+
+    # hermes "✓ Service restarted" 这种行打到 stdout
+    if result.stdout:
+        for line in result.stdout.rstrip().split("\n"):
+            print(f"  hermes: {line}")
+    if result.returncode != 0 and result.stderr:
+        for line in result.stderr.rstrip().split("\n")[:5]:
+            print(f"  hermes(err): {line}")
+    return result.returncode
+
+
+def _handle_proxy_cleanup(auto_restart: bool) -> None:
+    """打 banner + 可选 auto restart hermes. 永远 best-effort, 不挂主流程.
+
+    auto_restart=True (传 --restart-hermes flag): 死代理 → unset + 重启 hermes.
+    auto_restart=False: 只警告, 给员工具体命令, 不动 hermes.
+
+    无死代理 → 静默不打字 (避免 banner 噪音).
+    """
+    dead = _detect_dead_proxy_vars()
+    if not dead:
+        return
+
+    # 打 banner
+    print()
+    print("⚠ 检测到死代理 (TCP 端口连不上):")
+    for var, val in dead:
+        print(f"    {var}={val}")
+    print("  hermes 进程继承这条会让 web_search / Firecrawl 等外网工具撞墙 timeout.")
+
+    var_names = sorted({v for v, _ in dead})
+    if auto_restart:
+        print(f"  → 自动用 clean env 重启 hermes (unset: {' '.join(var_names)})")
+        rc = _restart_hermes_with_clean_env(var_names)
+        if rc == 0:
+            print("  ✓ hermes 已用 clean env 重启, web_search 等工具应可正常调")
+        else:
+            print(f"  ✗ hermes restart 失败 (rc={rc}), 手动跑下面命令:")
+            print(f"    unset {' '.join(var_names)}")
+            print(f"    hermes gateway restart")
+    else:
+        print("  → 推荐用这两条手动重启 (跳过死代理):")
+        print(f"    unset {' '.join(var_names)}")
+        print(f"    hermes gateway restart")
+        print("  → 或下次 `catfish refresh-hermes --restart-hermes` 自动帮你做.")
+
+
+# ─── BL-EDGE-TOOL-KEY (5/24): 中央派发 hermes 边缘 backend key ─────
+#
+# 后续会扩到 image_generate / x_search / 等其他外部 key 工具. 不在 scope:
+# Tavily quota 不在 catfish 跟 (Tavily 自家 dashboard 看).
+# 详见 central/llm-gateway/src/catfish_gateway/edge_tool_config.py.
+
+
+def _fetch_edge_tool_list(gateway_url: str, token: str) -> list[str]:
+    """GET /v1/edge/tool-config → 拿支持的 tool 列表.
+
+    返空 list = gateway 不支持这接口 (老版本) 或网络挂. caller 应当跳过, 不挂.
+    """
+    req = urllib.request.Request(
+        f"{gateway_url.rstrip('/')}/v1/edge/tool-config",
+        headers={"Authorization": f"Bearer {token}"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        # 404 → gateway 老版本没这接口, 静默跳过.
+        if e.code == 404:
+            logger.info("[edge-tool] gateway %s 没 /v1/edge/tool-config (老版本?), 跳过", gateway_url)
+            return []
+        logger.warning("[edge-tool] list endpoint HTTP %d: %s", e.code, e.read()[:200])
+        return []
+    except (urllib.error.URLError, TimeoutError) as e:
+        logger.warning("[edge-tool] gateway %s 不可达: %s", gateway_url, e)
+        return []
+    return list(data.get("supported", []))
+
+
+def _fetch_edge_tool_config(
+    gateway_url: str, token: str, tool_name: str,
+) -> Optional[dict]:
+    """GET /v1/edge/tool-config/{tool_name} → 拿 env_vars + yaml_block.
+
+    返 None: 任何失败 (403 RBAC 拦 / 503 admin 没配 key / 网络).
+    caller 应当 print warning 跳过这个 tool, 不挂.
+    """
+    req = urllib.request.Request(
+        f"{gateway_url.rstrip('/')}/v1/edge/tool-config/{tool_name}",
+        headers={"Authorization": f"Bearer {token}"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")[:300]
+        if e.code == 403:
+            print(f"  edge-tool: ⏭ {tool_name} — 部门 RBAC 没批 (admin 加白名单后重试)")
+        elif e.code == 503:
+            print(f"  edge-tool: ⏭ {tool_name} — gateway 中央 .env 没配 key (admin 配后重启 gateway)")
+        elif e.code == 404:
+            # 接口存在但 tool 不在 registry — 不该发生 (我们从 list 拿的), log 一下
+            logger.warning("[edge-tool] %s 404: %s", tool_name, body)
+        else:
+            print(f"  edge-tool: ⏭ {tool_name} — gateway HTTP {e.code}")
+            logger.warning("[edge-tool] %s HTTP %d: %s", tool_name, e.code, body)
+        return None
+    except (urllib.error.URLError, TimeoutError) as e:
+        logger.warning("[edge-tool] %s 网络: %s", tool_name, e)
+        return None
+
+
+def _patch_hermes_env_file(env_vars: dict[str, str]) -> int:
+    """合并写 ~/.hermes/.env, per-key update, 保留无关行 + 注释.
+
+    格式: 每行 KEY=VALUE 或注释. 已存在的 key 就地覆盖, 不存在的追加在尾部.
+    我们的写入行带 catfish marker 注释让员工知道是 catfish 同步进来的.
+
+    返 patched 的 key 数 (0 = env_vars 空 / 全部没变化).
+
+    示例:
+        old .env:
+            FIRECRAWL_API_KEY=fc-old   # 员工手贴的
+        env_vars: {TAVILY_API_KEY: "tvly-new"}
+        new .env:
+            FIRECRAWL_API_KEY=fc-old   # 员工手贴的
+            # ── catfish-cli 同步 (BL-EDGE-TOOL-KEY) ──
+            TAVILY_API_KEY=tvly-new
+    """
+    if not env_vars:
+        return 0
+
+    env_path = _hermes_env_path()
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # 读现有内容 (不存在视为空文件)
+    lines: list[str] = []
+    if env_path.exists():
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+
+    # per-key update
+    seen: set[str] = set()
+    out_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        # 注释 / 空白 / 不含 = 的行: 原样保留
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            out_lines.append(line)
+            continue
+        key = stripped.split("=", 1)[0].strip()
+        if key in env_vars:
+            out_lines.append(f"{key}={env_vars[key]}")
+            seen.add(key)
+        else:
+            out_lines.append(line)
+
+    # 没出现过的 key → 追加 (带 marker, 一次写一组)
+    new_keys = [k for k in env_vars if k not in seen]
+    if new_keys:
+        if out_lines and out_lines[-1].strip() != "":
+            out_lines.append("")
+        out_lines.append("# ── catfish-cli 同步 (BL-EDGE-TOOL-KEY 中央派发) ──")
+        for k in new_keys:
+            out_lines.append(f"{k}={env_vars[k]}")
+
+    # 备份 + 原子写
+    if env_path.exists():
+        backup = env_path.with_suffix(".env.bak")
+        backup.write_text(env_path.read_text(encoding="utf-8"), encoding="utf-8")
+    tmp = env_path.with_suffix(".env.tmp")
+    tmp.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+    tmp.replace(env_path)
+    # chmod 600 — env 含 secret, 跟 token store 一个标准
+    try:
+        env_path.chmod(0o600)
+    except OSError:
+        pass
+
+    return len(env_vars)
+
+
+def _patch_hermes_config_yaml_blocks(yaml_blocks: list[dict]) -> int:
+    """合并写 ~/.hermes/config.yaml 的顶层段 (web/image/...), preserve sibling keys.
+
+    yaml_blocks: [{"web": {"backend": "tavily"}}, {"image": {...}}]
+      → 把每个 dict 的顶层 key 合并进 config.yaml 顶层.
+      已有的 sibling key (model / custom_providers / 等) 不动.
+
+    返 patched 的 top-level key 数. config.yaml 不存在则跳过 (返 0).
+    """
+    if not yaml_blocks:
+        return 0
+
+    try:
+        import yaml  # noqa: PLC0415
+    except ImportError:
+        logger.warning("PyYAML 没装, 跳过 ~/.hermes/config.yaml yaml block 同步")
+        return 0
+
+    cfg_path = _hermes_config_path()
+    if not cfg_path.exists():
+        # 没 config.yaml → 仅靠 .env 的 auto-detect 也能让 hermes web_search 跑
+        # (TAVILY_API_KEY 存在 → 自动选 Tavily). 跳过 yaml 不是错.
+        logger.info("hermes config (%s) 不存在, 跳过 yaml block 同步 (env 已写够用)", cfg_path)
+        return 0
+
+    cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+    patched_keys: list[str] = []
+    for block in yaml_blocks:
+        if not isinstance(block, dict):
+            continue
+        for top_key, top_val in block.items():
+            existing = cfg.get(top_key)
+            if isinstance(existing, dict) and isinstance(top_val, dict):
+                # 浅合并 — sibling sub-key 保留, 同名 sub-key 覆盖
+                existing.update(top_val)
+                cfg[top_key] = existing
+            else:
+                cfg[top_key] = top_val
+            patched_keys.append(top_key)
+
+    if not patched_keys:
+        return 0
+
+    # 备份 + 原子写 (跟 _patch_hermes_config 同款)
+    backup = cfg_path.with_suffix(".yaml.bak")
+    backup.write_text(cfg_path.read_text(encoding="utf-8"), encoding="utf-8")
+    tmp = cfg_path.with_suffix(".yaml.tmp")
+    tmp.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    tmp.replace(cfg_path)
+
+    return len(set(patched_keys))
+
+
+def _sync_hermes_edge_tool_configs(gateway_url: str, token: str) -> tuple[int, int]:
+    """把中央派发的 backend key 同步到 ~/.hermes/.env + config.yaml.
+
+    返 (env_key_count, yaml_top_key_count) 让 caller 打 summary.
+    任一步失败 (网络 / RBAC 拦 / 没配 key) 都不挂, 返 (0, 0).
+
+    幂等: 重跑只覆盖差异行, .env / yaml 里别的内容不动.
+    """
+    tools = _fetch_edge_tool_list(gateway_url, token)
+    if not tools:
+        return 0, 0
+
+    # RBAC 是 per-tool, 必须每个 tool 单独打 endpoint 让 gateway 判权
+    # (理论上 admin 可以放 web_search 但不放 web_extract 给某部门).
+    # 但**写盘 dedupe by tool_group** — 3 个 web tool 共用 TAVILY_API_KEY,
+    # 拉 3 次后只往 .env 写 1 行, yaml 也只更新 1 段.
+    env_vars: dict[str, str] = {}
+    yaml_blocks: list[dict] = []
+    seen_groups: set[str] = set()
+    for name in tools:
+        cfg = _fetch_edge_tool_config(gateway_url, token, name)
+        if cfg is None:
+            continue
+        group = cfg.get("tool_group") or name
+        if group in seen_groups:
+            continue
+        seen_groups.add(group)
+        env_vars.update(cfg.get("env_vars") or {})
+        yb = cfg.get("yaml_block")
+        if isinstance(yb, dict) and yb:
+            yaml_blocks.append(yb)
+
+    env_n = _patch_hermes_env_file(env_vars)
+    yaml_n = _patch_hermes_config_yaml_blocks(yaml_blocks)
+    return env_n, yaml_n
+
+
+def _sync_hermes_with_service_token(
+    identity_url: str,
+    user_fallback_token: Optional[str] = None,
+) -> Optional[str]:
+    """Mint hermes-cli service token + 写进 hermes config api_key.
+
+    主路径: client_credentials → 30 天 token → 写盘.
+    Fallback: 如果 mint 失败但 caller 给了 user_fallback_token, 退化到老行为
+    (用 user OAuth access_token, 1 小时后会撞 401, 但至少能立刻用).
+
+    返 _patch_hermes_config 的结果 (patched provider name 或 None).
+    """
+    try:
+        tok = _mint_hermes_service_token(identity_url)
+    except Exception as e:
+        logger.warning("[hermes-svc] mint 失败: %s", e)
+        if user_fallback_token:
+            logger.warning(
+                "[hermes-svc] fallback 写 user access_token (1h TTL, 之后会 401, "
+                "请检查 CATFISH_HERMES_CLI_SECRET / identity-server)"
+            )
+            return _patch_hermes_config(user_fallback_token)
+        return None
+
+    # 友好打印: service token 的 sub / exp 让员工知道发生了啥
+    payload = _decode_jwt_payload(tok)
+    sub = payload.get("sub", "?")
+    exp = payload.get("exp", 0)
+    if exp:
+        remaining_days = (exp - time.time()) / 86400.0
+        print(
+            f"  hermes-svc: ✓ 已 mint service token "
+            f"(sub={sub}, 还有 {remaining_days:.1f} 天有效)"
+        )
+    else:
+        print(f"  hermes-svc: ✓ 已 mint service token (sub={sub})")
+
+    patched = _patch_hermes_config(tok)
+
+    # BL-EDGE-TOOL-KEY (5/24): 顺手拉中央派发的 backend key (Tavily 等), 写进
+    # ~/.hermes/.env + config.yaml. 失败 (网络 / RBAC / admin 没配) 不挂主流程,
+    # hermes 自己 token 写完才是 critical path, 工具 key 是 nice-to-have.
+    try:
+        env_n, yaml_n = _sync_hermes_edge_tool_configs(_gateway_url(), tok)
+        if env_n or yaml_n:
+            print(
+                f"  edge-tool: ✓ 同步 {env_n} 个 env key + {yaml_n} 个 yaml 段 "
+                f"(~/.hermes/.env, ~/.hermes/config.yaml)"
+            )
+    except Exception as e:  # pragma: no cover — defensive
+        logger.warning("[edge-tool] 同步出错 (不影响 hermes token): %s", e)
+
+    return patched
+
+
 # ─── 命令实现 ───────────────────────────────────────────────
 
 
@@ -521,7 +1061,15 @@ def cmd_login(args) -> int:
     print(f"  已存:     {_token_path()}")
 
     # 同步 hermes config
-    patched = _patch_hermes_config(store.access_token)
+    # BL-HERMES-SERVICE-TOKEN (5/24): 不再写 store.access_token (user OAuth, 1h TTL)
+    # 改 mint hermes-cli service token (sub=client:hermes-cli, 30 天 TTL) 写进去.
+    # 这样 hermes 30 天不用动 token, 不再撞 "缓存 user token 1h 后过期" 那个 bug.
+    # user OAuth token 仍然存在 ~/.catfish/auth/token.json (catfish 自己用 +
+    # Companion 通过 `catfish token` 拿) — 两条 token 互不影响.
+    patched = _sync_hermes_with_service_token(
+        identity_url=identity_url,
+        user_fallback_token=store.access_token,
+    )
     if patched:
         print(f"  hermes:   ✓ 已更新 ~/.hermes/config.yaml provider '{patched}'")
         print(f"            (备份: {_hermes_config_path().with_suffix('.yaml.bak')})")
@@ -580,7 +1128,17 @@ def cmd_token(args) -> int:
             try:
                 store = _do_refresh(store)
                 save_token(store)
-                _patch_hermes_config(store.access_token)
+                # BL-HERMES-SERVICE-TOKEN (5/24): user OAuth refresh 顺便 opportunistic
+                # refresh hermes service token. 不影响主 cmd_token 返 user token 的语义,
+                # 只是让 hermes 那条独立链也跟上节奏. mint 失败不阻塞 cmd_token (caller
+                # 调 catfish token 是为了 user token, hermes 同步是副作用).
+                try:
+                    _sync_hermes_with_service_token(
+                        identity_url=store.issuer,
+                        user_fallback_token=store.access_token,
+                    )
+                except Exception as e:
+                    logger.warning("hermes service token 同步失败 (non-fatal): %s", e)
             except Exception as e:
                 print(f"ERROR: refresh 失败 ({e}), 跑: catfish login", file=sys.stderr)
                 return 1
@@ -596,13 +1154,21 @@ def cmd_token(args) -> int:
 
 
 def cmd_refresh(args) -> int:
-    """续 token. 有 refresh_token 走 refresh grant 无感续, 没 refresh_token 退化到重 login."""
+    """续 token. 有 refresh_token 走 refresh grant 无感续, 没 refresh_token 退化到重 login.
+
+    BL-HERMES-SERVICE-TOKEN (5/24): 顺手 refresh hermes service token (独立 client_credentials
+    grant, 跟 user OAuth refresh 完全解耦). 想纯 refresh hermes 不动 user 用 `catfish refresh-hermes`.
+    """
     store = load_token()
     if store and store.refresh_token:
         try:
             new_store = _do_refresh(store)
             save_token(new_store)
-            _patch_hermes_config(new_store.access_token)
+            # BL-HERMES-SERVICE-TOKEN (5/24): mint 新 service token 写 hermes config
+            _sync_hermes_with_service_token(
+                identity_url=new_store.issuer,
+                user_fallback_token=new_store.access_token,
+            )
             print(f"✓ token 已续 ({new_store.expires_in_secs()} 秒后过期, "
                   f"{_fmt_expires(new_store.expires_at)})")
             if store.user_email:
@@ -614,6 +1180,44 @@ def cmd_refresh(args) -> int:
     else:
         print("(没 refresh_token, 重做 login — 浏览器会再开一次)")
     return cmd_login(args)
+
+
+def cmd_refresh_hermes(args) -> int:
+    """BL-HERMES-SERVICE-TOKEN (5/24): 独立 refresh hermes service token, 不动 user OAuth.
+
+    使用场景:
+      - hermes service token 快到 30 天上限, 手动 rotate
+      - launchd / cron 每月跑一次防 token 过期
+      - identity-server 配置改了 (client_secret 轮换), 强制重新 mint
+
+    不需要先 catfish login — 完全 server-to-server, 不依赖任何 user 状态.
+    """
+    identity_url = (args.identity_url if hasattr(args, 'identity_url') else None) \
+        or _identity_url()
+    print(f"📡 catfish-identity:  {identity_url}")
+    print(f"🆔 client_id:         {DEFAULT_HERMES_CLI_CLIENT_ID}")
+    print(f"🎫 scopes:            {HERMES_SERVICE_SCOPES}")
+    print()
+
+    try:
+        patched = _sync_hermes_with_service_token(identity_url=identity_url)
+    except Exception as e:
+        print(f"\n❌ refresh-hermes 失败: {e}", file=sys.stderr)
+        return 1
+
+    if patched:
+        print(f"\n✓ hermes config 已更新 provider '{patched}'")
+        print(f"  接下来: hermes gateway restart  # 让 hermes 读新 token")
+    else:
+        print(f"\n⚠ hermes config 没更新 (~/.hermes/config.yaml 不存在 / 没匹配 provider).")
+        print(f"  先跑 hermes model 配 Custom endpoint (localhost:8999) 再来一次.")
+
+    # BL-EDGE-TOOL-PROXY (5/25): 死代理检测 + 可选 auto restart hermes.
+    # 解决 5/24 凌晨发现的 web_search 走 browser 后路问题 — hermes 进程继承
+    # 死 HTTPS_PROXY → Tavily HTTP 撞墙 → 模型退化用浏览器抓页面.
+    _handle_proxy_cleanup(auto_restart=getattr(args, "restart_hermes", False))
+
+    return 0 if patched else 1
 
 
 def _do_refresh(store: TokenStore) -> TokenStore:
@@ -699,6 +1303,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     refresh_p = sub.add_parser("refresh", parents=[common], help="续 token (现在重做 login)")
     refresh_p.set_defaults(func=cmd_refresh)
+
+    # BL-HERMES-SERVICE-TOKEN (5/24): 独立 refresh hermes service token, 不动 user OAuth.
+    # 适合 cron / 30 天前手动跑. 跟 `refresh` 命令的区别: refresh 续 user OAuth (顺手
+    # 也续 hermes); refresh-hermes 只续 hermes, 不需要 user 登录态.
+    refresh_hermes_p = sub.add_parser(
+        "refresh-hermes",
+        parents=[common],
+        help="Mint 新 hermes service token + 写 hermes config (30 天 TTL, 跟 user OAuth 解耦)",
+    )
+    # BL-EDGE-TOOL-PROXY (5/25): 默认只检测+警告死代理. 加 flag 才真自动 restart hermes
+    # 跟 clean env (unset 死的 HTTPS_PROXY/HTTP_PROXY/ALL_PROXY). 推荐 demo / cron 用.
+    refresh_hermes_p.add_argument(
+        "--restart-hermes",
+        action="store_true",
+        help="检测到死代理时, 用 clean env (unset HTTPS_PROXY 等) 自动 hermes gateway restart",
+    )
+    refresh_hermes_p.set_defaults(func=cmd_refresh_hermes)
 
     return p
 

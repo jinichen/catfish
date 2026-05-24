@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  BL-CATFISH-IDENTITY-LAUNCHD (5/23 鸿波 P0-1) — catfish-identity port 8998 长期 daemon.
+
+  catfish-identity 是 OIDC issuer (自建 SSO), 给 catfish-gateway / hermes API 验 JWT.
+  之前鸿波本机靠手动 `python -m catfish_identity` 跑, 关 terminal 就死 → gateway 拿不到 jwks
+  → 全链 401 (5/23 上午撞过一次). 加 launchctl daemon 长跑.
+
+  跟其它服务依赖关系:
+    - catfish-identity (port 8998, this): OIDC issuer, **必须最先起**
+    - com.catfish.gateway (port 8999): catfish LLM gateway, 启动时 fetch identity 的 jwks_uri
+    - ai.hermes.gateway (port 8642): hermes API server, proxy 到 catfish-gateway, 用 service token
+    - HERMES_SERVICE_TOKEN (~/.hermes/.env): identity 签发的长效 JWT, hermes-cli 转发用
+
+  装法:
+    cp ~/person_task/catfish/edge/catfish-cli/launchd/ai.catfish.identity.plist \
+       ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.catfish.identity.plist
+    launchctl kickstart gui/$(id -u)/ai.catfish.identity
+
+  卸法:
+    launchctl bootout gui/$(id -u)/ai.catfish.identity
+    rm ~/Library/LaunchAgents/ai.catfish.identity.plist
+
+  状态查询:
+    launchctl list | grep ai.catfish.identity
+    lsof -i :8998                                          # 看真在 listen
+    tail -50 /tmp/catfish-identity.log                     # stdout/stderr
+    curl -s http://127.0.0.1:8998/.well-known/jwks.json | head -c 200   # 健康检查 (应返 JSON)
+
+  跟 PG 依赖:
+    identity-server 启动时连 postgresql://catfish:***@localhost/catfish.
+    PG 必须先起 (brew services start postgresql / 或 launchctl plist 单独管 PG).
+    PG 没起 → identity-server crash → 看 /tmp/catfish-identity.log 找 "FATAL: connection refused".
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.catfish.identity</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <!-- 用 identity-server 自己的 venv (跟 gateway venv 独立, 依赖不同) -->
+        <string>/Users/chenhongbo/person_task/catfish/central/identity-server/venv/bin/python</string>
+        <string>-m</string>
+        <string>catfish_identity</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/chenhongbo/person_task/catfish/central/identity-server</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- identity-server 默认 listen 127.0.0.1:8998, 明确写让 launchctl env 干净 -->
+        <key>CATFISH_IDENTITY_HOST</key>
+        <string>127.0.0.1</string>
+        <key>CATFISH_IDENTITY_PORT</key>
+        <string>8998</string>
+        <key>CATFISH_ENV</key>
+        <string>prod</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/catfish-identity.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/catfish-identity.log</string>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+
+    <!-- Aqua: 只在用户 GUI 登录时跑 (identity 是为员工 Companion 服务的) -->
+    <key>LimitLoadToSessionType</key>
+    <string>Aqua</string>
+</dict>
+</plist>

@@ -54,6 +54,12 @@ button {
   50%      { transform: scale(1.06); box-shadow: 0 0 0 6px rgba(220, 38, 38, 0); }
 }
 
+/* BL-MULTI-SESSION-STREAM (5/24): 侧边栏 ⏳ 后台流转圈, 比 pulse 更轻 */
+@keyframes catfish-inflight-pulse {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
+}
+
 /* react-markdown 默认间距 */
 .markdown-body p {
   margin: 0 0 var(--space-2) 0;

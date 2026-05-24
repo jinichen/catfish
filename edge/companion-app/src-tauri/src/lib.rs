@@ -450,6 +450,20 @@ pub fn run() {
             commands::decisions::decision_record,
             commands::decisions::decision_list_recent,
             commands::decisions::decision_search,
+            // BL-ADVISOR-CACHE + CONFIG (5/22 Phase 7 cold start v3): 缓存 + yaml 时段配置
+            commands::advisor_cache::advisor_cache_get,
+            commands::advisor_cache::advisor_cache_save,
+            commands::advisor_cache::advisor_cache_clear,
+            commands::advisor_config::advisor_config_get,
+            // BL-ADVISOR-TASK-STATE (5/22 鸿波): 任务状态 done/snoozed/ignored
+            commands::advisor_task_state::advisor_task_state_get,
+            commands::advisor_task_state::advisor_task_state_set,
+            commands::advisor_task_state::advisor_task_state_clear,
+            commands::advisor_task_state::advisor_task_state_prune_old,
+            // BL-STYLE-FP-DIR-PICKER (5/22 鸿波): scan_dirs UI 管理
+            commands::style_fingerprint_dirs::style_fingerprint_scan_dirs_get,
+            commands::style_fingerprint_dirs::style_fingerprint_scan_dirs_add,
+            commands::style_fingerprint_dirs::style_fingerprint_scan_dirs_remove,
             // BL-MM4 v1 (5/5 晚): "鲶鱼记的硬事实" 版本卡 (跟 BL-MM2 配套)
             commands::memory_history::memory_history_summary,
             commands::memory_history::memory_history_clear_key,

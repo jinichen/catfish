@@ -2273,4 +2273,56 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    {
+        "name": "catfish_forget_about",
+        "description": (
+            "**跨源物理清除**特定关键词的记忆 (人/项目/客户/任何标识). 一次扫干净 5 类存储:\n"
+            "  - ~/.catfish/distilled_facts.md (按行删)\n"
+            "  - ~/.catfish/employee_journal.md (按 `## ` 段删整段)\n"
+            "  - ~/.hermes/memories/*.md (按行删)\n"
+            "  - ~/.catfish/decisions.jsonl (按行删 JSON)\n"
+            "  - ~/.catfish/profile.json 的 keyPeople / keyProjects (按字段删项)\n"
+            "  - ~/.catfish/advisor_cache.json (unlink, 触发 advisor 下次重算)\n\n"
+            "**何时调**:\n"
+            "  - 员工明说 '忘了老李' / '老李是测试数据, 清干净' / '把张三相关全删掉'\n"
+            "  - 员工纠正 '这条信息进错了, 别再蒸馏' 且涉及具体人/项目\n"
+            "  - 员工换岗后说 '之前 XX 项目的全清掉'\n\n"
+            "**何时不要调**:\n"
+            "  - 员工没明说 → 永远不主动清\n"
+            "  - 模糊请求 ('删点东西' / '清一下') → 反问到具体关键词\n"
+            "  - keyword < 2 字 → 拒 (误伤面太大)\n\n"
+            "**安全协议** (强制 2 步):\n"
+            "  1. **第一次**调一定 confirm=False (dry_run), 拿回 removed 计数报员工: "
+            "'扫到 distilled_facts 3 行, journal 12 段, decisions 0 条. 确认删?'\n"
+            "  2. 员工**明确**点头 ('确认' / '删' / '是的') → 再调一次 confirm=True 真删\n\n"
+            "**永远不动**: profile_hints.md (员工显式标的), session_goal.txt (太短), "
+            "~/.hermes/state.db (内容已抽到 journal, 清 journal 够).\n\n"
+            "**所有真删都带 .forget_backup/<ts>/ 备份**, 误删 24h 内可手工恢复.\n\n"
+            "**未来反弹**: 真清干净, 不留排除清单. 如果未来真有同名人 (新同事老李), "
+            "从邮件/日历重新学习, 自然进系统."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "keyword": {
+                    "type": "string",
+                    "description": "要清的关键词 (人名/项目名/客户名/标识). 至少 2 字, 不超 100 字.",
+                    "minLength": 2,
+                    "maxLength": 100,
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "description": (
+                        "True = 真删并备份. False (默认) = dry-run, 只统计不动文件. "
+                        "**默认先 False 报员工**, 员工点头后再 True."
+                    ),
+                    "default": False,
+                },
+            },
+            "required": ["keyword"],
+        },
+        "emoji": "🧹",
+        "toolset": "catfish_native",
+        "available": True,
+    },
 ]

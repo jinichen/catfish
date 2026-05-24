@@ -1,17 +1,27 @@
 """TodoStore 持久化 helpers — 抽自 adapter.py (5/21 拆分).
 
 存 hermes 内置 todo tool 的 TodoStore (in-memory) 到磁盘 (.catfish/todo_state/<session>.json),
-让 chat 重启 / 切 session 后 TODO 不丢. 跟 catfish-todo-sync plugin (5/20 ship)
-互补: catfish-todo-sync 是 monkey-patch write → 同步 journal, 这里是
-in-memory ↔ disk 持久化.
+让 chat 重启 / 切 session 后 TODO 不丢.
+
+5/23 BL-TODO-SYNC-INLINE (鸿波): 把老的 catfish-todo-sync hermes-plugin 同步逻辑搬进来.
+背景: plugin 设计依赖 hermes plugin loader import-time monkey-patch TodoStore.write,
+但 catfish 实际路径是 tool-bridge 直接 `from tools.todo_tool import TodoStore` —
+bypass plugin loader, monkey-patch 永远不跑. 5/23 验证: deepseek 在 chat 调 todo_write
+落了 10 项 TODO 进 TodoStore + ~/.catfish/todo_store/<sid>.json, 但 employee_journal.md
+完全没收到. 老 plugin 整套死代码.
+
+现在: 把 _sync_to_journal subprocess catfish-journal 调用直接放在 _persist_todo_store
+末尾 — tool-bridge 这条路径上 100% 跑得到, 不靠 hermes plugin loader.
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
+import shutil
+import subprocess
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("catfish.adapter")
 
@@ -64,7 +74,16 @@ def _load_todo_store_from_disk(session_id: str, store: Any) -> None:
 
 
 def _persist_todo_store(session_id: str, store: Any) -> None:
-    """dispatch 后写盘. 失败 silent (in-memory 仍 OK, 下次重启丢但不阻塞当前调用)."""
+    """dispatch 后写盘 + 同步到 employee_journal.md.
+
+    1. 写 ~/.catfish/todo_store/<sid>.json (per-session in-memory dump)
+    2. 5/23 BL-TODO-SYNC-INLINE (鸿波): 同步 pending/in_progress/completed/cancelled
+       到 ~/.catfish/employee_journal.md (跨 session 真待办). 这一步替代老的
+       catfish-todo-sync plugin (那个 plugin 的 monkey-patch 在 tool-bridge 路径
+       永远没被触发, 整套 ~280 行死代码).
+
+    全程失败静默 — TodoStore in-memory 不受影响, LLM 后续 todo_read 仍 OK.
+    """
     try:
         import json  # noqa: PLC0415
         items = getattr(store, "_items", None)
@@ -78,6 +97,14 @@ def _persist_todo_store(session_id: str, store: Any) -> None:
             "BL-TODO-STORE-PERSIST: persist session=%r 失败: %s",
             session_id, e,
         )
+        return  # json 都写不进, journal sync 也别试了
+
+    # 5/23 BL-TODO-SYNC-INLINE: 同步到 employee_journal.md (老 plugin 干的事)
+    try:
+        _sync_to_journal(items)
+    except Exception as e:
+        # 双重防御: _sync_to_journal 自己已 try/except, 这层是兜底
+        logger.debug("BL-TODO-SYNC-INLINE outer guard caught: %s", e)
 
 
 def _get_todo_store(session_id: Optional[str]):
@@ -127,6 +154,189 @@ def _get_todo_store(session_id: Optional[str]):
         )
         _todo_store_init_failed = True
         return None
+
+
+# ============================================================
+# 5/23 BL-TODO-SYNC-INLINE — TodoStore → employee_journal.md 同步
+# 抄自老的 edge/hermes-plugins/catfish-todo-sync/ (那 plugin 设计依赖 hermes
+# plugin loader monkey-patch, 在 tool-bridge 直接 import TodoStore 这条路径
+# 永远不跑). 5/23 鸿波拍: 搬进 tool-bridge 真路径, 删 plugin.
+# ============================================================
+
+
+def _find_catfish_journal_bin() -> Optional[str]:
+    """找 catfish-journal CLI. 优先 hermes venv (install.sh 装到这), 兜底 PATH."""
+    home = Path.home()
+    venv_bin = home / ".hermes/hermes-agent/venv/bin/catfish-journal"
+    if venv_bin.exists() and venv_bin.is_file():
+        return str(venv_bin)
+    return shutil.which("catfish-journal")
+
+
+def _sync_to_journal_batch(bin_path: str, todos: List[Dict[str, Any]]) -> bool:
+    """批量 sync: 一次 `catfish-journal sync --stdin` 处理所有 todos.
+
+    返 True = batch 成功 (或空 todos), False = batch 不可用 (老 CLI 没 sync /
+    timeout / 错). False 时 caller fallback 单调路径.
+
+    单次 subprocess 比 N 次单调省 N-1 次 Python 启动开销 (~50-200ms 每次).
+    """
+    if not todos:
+        return True
+    ops = []
+    for t in todos:
+        content = str(t.get("content", "")).strip()
+        status = str(t.get("status", "pending")).strip().lower()
+        if not content:
+            continue
+        ops.append({"content": content, "status": status})
+    if not ops:
+        return True
+    stdin_data = "\n".join(
+        json.dumps(op, ensure_ascii=False) for op in ops
+    ).encode("utf-8")
+    try:
+        result = subprocess.run(
+            [bin_path, "sync", "--stdin"],
+            input=stdin_data,
+            capture_output=True,
+            timeout=5,  # batch 比单调久, 5s 给 N todo + journal IO
+            check=False,
+        )
+        # 老 CLI 没 sync 子命令 → exit 2 + stderr 含 "invalid choice"
+        if result.returncode == 2 and b"invalid choice" in result.stderr:
+            logger.debug("BL-TODO-SYNC-INLINE: 老 CLI 无 sync 子命令, fallback 单调")
+            return False
+        if result.returncode != 0:
+            logger.debug(
+                "BL-TODO-SYNC-INLINE: sync exit=%d stderr=%s, fallback 单调",
+                result.returncode, result.stderr[:200],
+            )
+            return False
+        logger.debug(
+            "BL-TODO-SYNC-INLINE: batch ok %d ops, stats=%s",
+            len(ops), result.stdout.decode("utf-8", errors="replace")[:200],
+        )
+        return True
+    except subprocess.TimeoutExpired:
+        logger.debug("BL-TODO-SYNC-INLINE: sync timeout, fallback 单调")
+        return False
+    except Exception as e:
+        logger.debug("BL-TODO-SYNC-INLINE: sync 异常 (%s), fallback 单调", e)
+        return False
+
+
+def _find_todo_line_in_journal(
+    bin_path: str, content: str,
+) -> Optional[tuple[int, str]]:
+    """跑 catfish-journal list 找该 content 对应的 (line, hint).
+
+    返 None 表 journal 里没该 TODO. 用于 fallback 单调 done/delete 路径定位行号.
+    """
+    try:
+        result = subprocess.run(
+            [bin_path, "list", "--format=json"],
+            capture_output=True, timeout=3, check=False,
+        )
+        if result.returncode != 0:
+            return None
+        todos = json.loads(result.stdout.decode("utf-8") or "[]")
+        target = content.strip()
+        for t in todos:
+            if t.get("text", "").strip() == target:
+                return (int(t.get("line", 0)), target[:30])
+        return None
+    except (json.JSONDecodeError, subprocess.TimeoutExpired, Exception) as e:
+        logger.debug("BL-TODO-SYNC-INLINE: _find_todo_line_in_journal failed: %s", e)
+        return None
+
+
+def _sync_to_journal(todos: List[Dict[str, Any]]) -> None:
+    """同步 todos 到 ~/.catfish/employee_journal.md.
+
+    Status lifecycle:
+    - pending / in_progress → catfish-journal add (CLI 幂等, 重复不加)
+    - completed → catfish-journal done (- [ ] → - [x]); 找不到 line 时
+      add --done 补历史 [x] (LLM 直接标完成没经 add 的场景)
+    - cancelled → catfish-journal delete (整行删)
+
+    默认 batch 路径 (1 次 subprocess), fallback 老 CLI 走 N 次单调.
+    每次调用都 timeout, 出错静默 — 不阻塞 tool-bridge dispatch 主流程.
+    """
+    bin_path = _find_catfish_journal_bin()
+    if not bin_path:
+        logger.debug("BL-TODO-SYNC-INLINE: catfish-journal CLI 没找到, skip")
+        return
+
+    # 优先 batch
+    if _sync_to_journal_batch(bin_path, todos):
+        return
+
+    # fallback: 单调 N 次 (catfish-journal 老版本无 sync 子命令)
+    for t in todos:
+        try:
+            content = str(t.get("content", "")).strip()
+            status = str(t.get("status", "pending")).strip().lower()
+            if not content:
+                continue
+
+            if status in ("pending", "in_progress"):
+                subprocess.run(
+                    [bin_path, "add", content],
+                    capture_output=True, timeout=3, check=False,
+                )
+                logger.debug("BL-TODO-SYNC-INLINE wrote pending: %s", content[:60])
+
+            elif status == "completed":
+                located = _find_todo_line_in_journal(bin_path, content)
+                if located:
+                    line, hint = located
+                    subprocess.run(
+                        [bin_path, "done", "--line", str(line), "--hint", hint],
+                        capture_output=True, timeout=3, check=False,
+                    )
+                    logger.debug(
+                        "BL-TODO-SYNC-INLINE marked done: %s (line=%d)",
+                        content[:60], line,
+                    )
+                else:
+                    # 直接标完成没经 add → 补 [x] 历史 (CLI 幂等)
+                    subprocess.run(
+                        [bin_path, "add", content, "--done"],
+                        capture_output=True, timeout=3, check=False,
+                    )
+                    logger.debug(
+                        "BL-TODO-SYNC-INLINE: completed 直接标, 补 [x]: %s",
+                        content[:60],
+                    )
+
+            elif status == "cancelled":
+                located = _find_todo_line_in_journal(bin_path, content)
+                if located:
+                    line, hint = located
+                    subprocess.run(
+                        [bin_path, "delete", "--line", str(line), "--hint", hint],
+                        capture_output=True, timeout=3, check=False,
+                    )
+                    logger.debug(
+                        "BL-TODO-SYNC-INLINE deleted: %s (line=%d)",
+                        content[:60], line,
+                    )
+                else:
+                    logger.debug(
+                        "BL-TODO-SYNC-INLINE: cancelled 在 journal 找不到, skip",
+                    )
+            # 未知 status: 静默跳过
+        except subprocess.TimeoutExpired:
+            logger.debug(
+                "BL-TODO-SYNC-INLINE: subprocess timeout, skip: %s",
+                content[:30] if content else "?",
+            )
+        except Exception as e:
+            logger.debug("BL-TODO-SYNC-INLINE error (ignored): %s", e)
+
+
+# ============================================================
 
 
 def _read_hermes_memory_config() -> dict:
