@@ -1,0 +1,58 @@
+5/25 morning: BL-RECMODE-NO-AUTO-DELETE + BL-SKILLS-RAG-TOOL + DEPLOYMENT v1.2 H20
+
+详见 CHANGELOG.md 2026-05-24 section Phase I/J (项 37-44).
+
+🎬 BL-RECMODE-NO-AUTO-DELETE (#74)
+  - 鸿波 "录屏本来就在本机, catfish 凭啥后台删?" 哲学修正
+  - 撤掉 recmode/cleanup.py cleanup_daemon (后台 24h 自动删用户文件)
+  - app.py lifespan startup 删 cleanup 调度
+  - 加 list_recordings_with_meta() 给 Dashboard "我的录屏" 用 (size/started_at/
+    kept_forever/skill_drafts/path)
+  - 改 talking point: "录屏 100% 本机, 你硬盘你做主" (跟"中央 0 字节" 一致)
+  - +5 单测, 16/16 recmode 测全过
+
+🔧 BL-SKILLS-RAG-TOOL (#69) — Anthropic Progressive Disclosure 完整闭环
+  - tool-bridge 加 catfish_search_skills(query, top_k) native tool
+  - 新建 search_skills.py (250 行, BM25+tokenize 复制自 gateway 同算法)
+  - 跟 sessions_search.py 同 pattern: 本机直读 ~/.hermes/skills + ~/.catfish/skills,
+    不走 gateway HTTP, 快+鲁棒+解耦
+  - YAML frontmatter 解析 + mtime fingerprint cache
+  - catfish_tools.py dispatch + catfish_tool_schemas.py 完整 schema (3 tier 解释)
+  - 24 新单测 (tokenize 5 + BM25 3 + parse 4 + e2e 5 + dispatch 4 + cache 2 + clamp 1)
+  - 串成 3 tier 完整闭环:
+      Tier 1: system prompt top-K (gateway skills_inject)
+      Tier 2: 折叠区主动捞 (这工具) ← 此次 ship
+      Tier 3: catfish_run_skill _help 拿完整参数 schema
+
+📋 DEPLOYMENT-50-USERS.md v1.2 (#71/#72)
+  - 客户实际部署 H20 不是 H100 (鸿波 review HF 后纠正)
+  - 8× H20 (768 GB, ~¥60万) > 4× H100 (320 GB, ~¥80万): 更便宜+余量更大+周期短
+  - H20 不支持 FP4 必走 FP8 fallback (weights 284 GB), bandwidth 反超 H100
+  - V4 Hybrid Attention KV cache 仅 V3.2 10% (跟卡无关, 模型层优化)
+  - 加 §4.7 V4 unique 特性 + §4.8 trigger checklist + v1.2 changelog
+
+📚 docs/RECMODE-DASHBOARD-UI-PLAN.md (#75 follow-up)
+  - sandbox 没 cargo/npm 跑不通 Tauri build, 留 Mac 上做
+  - 完整 plan: 3 个 Tauri commands + TS wrapper + React component + 集成步骤
+  - 估 3-4h Mac 上一气做完
+
+🧪 测试 (累计跨 5/24-5/25)
+  - gateway: 123 (recmode + skills × 4 + sanitizer + cap + edge_tool_config)
+  - cli:     57
+  - tool-bridge: 39 (sessions_search + search_skills 24 新)
+  - memory plugin: 22 (含 discipline 注入)
+  - 总: 241 全过, 零下游破坏
+
+📝 文档
+  - docs/RECMODE-DASHBOARD-UI-PLAN.md 新建 (#75 plan)
+  - docs/DEPLOYMENT-50-USERS.md v1.2 (H20 主推修正)
+  - CHANGELOG.md 加 Phase I/J 段
+  - FEATURE-TRACKS.md (前次 commit 改过)
+
+🎯 task 状态
+  ✅ #66 #67 #68 #70  Skill Progressive Disclosure Phase 1/2/3 + VECTOR
+  ✅ #71 #72          部署清单 v1.1 / v1.2 修正
+  ✅ #74              撤 cleanup daemon
+  ✅ #69              catfish_search_skills tool (完整 ship)
+  ⬜ #75              Companion 我的录屏 Dashboard UI (有 plan doc, Mac build)
+  ⬜ #60              Qwen 内网挂 (独立问题, 找运维)

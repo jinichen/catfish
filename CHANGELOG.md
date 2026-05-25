@@ -6276,6 +6276,34 @@ TodoStore.write([{content, status=completed}])
     - 总 **202 skill+sanitizer+cap+edge_tool_config 测全过**, 没破任何下游
     - `docs/SKILL-PROGRESSIVE-DISCLOSURE.md` §9 加完整说明 (3 mode 切换 / 高可用 fallback / 测试覆盖)
 
-### 5/24-5/25 ship 总数: **41 项** (6 phase 主线 + .gitignore + Phase I 4 step skill progressive) 跨 16+ 小时
+### 完成 — Phase J (5/25 上午延伸): 客户落地框架 + tool-bridge 真闭环
+
+42. **BL-RECMODE-NO-AUTO-DELETE** (1h) — 撤掉 cleanup daemon
+    - 5/25 鸿波 "录屏本来就在本机, catfish 凭啥后台删?" 哲学修正
+    - `recmode/cleanup.py` 删 `cleanup_daemon()` + `DAEMON_INTERVAL_SECONDS`
+    - 加 `list_recordings_with_meta()` 给 Dashboard "我的录屏" 用 (返 size/started_at/kept_forever/skill_drafts/path)
+    - `app.py` lifespan startup 删 cleanup 调度 + 加 22 行哲学修正注释
+    - `/api/learn/cleanup` docstring 改 "唯一清理触发入口", 不再说 daemon
+    - +5 单测 (daemon 防回归 / list_recordings_with_meta 4 测), 16/16 全过
+    - 改 talking point: 老 "录屏 100% 本机, 14 天删" (撕裂) → 新 "录屏 100% 本机, 你硬盘你做主" (一致)
+
+43. **BL-SKILLS-RAG-TOOL** (#69 完整 ship, 1.5h) — tool-bridge 加 `catfish_search_skills`
+    - 新建 `edge/tool-bridge/.../search_skills.py` (250 行)
+    - BM25 + tokenize 复制自 gateway (跟 sessions_search 本机直读同 pattern)
+    - 扫 ~/.hermes/skills + ~/.catfish/skills, YAML frontmatter 解析, mtime fingerprint cache
+    - `catfish_tools.py` dispatch + `catfish_tool_schemas.py` 完整 schema (含 Anthropic Progressive Disclosure 3 tier 解释)
+    - 24 新单测全过 (tokenize 5 + BM25 3 + parse 4 + e2e 5 + dispatch 4 + cache 2 + clamp 1)
+    - 串成 Anthropic Progressive Disclosure 3 tier 完整闭环:
+      Tier 1 (system prompt catalog top-K) + Tier 2 (catfish_search_skills 折叠区主动捞) + Tier 3 (catfish_run_skill `_help` 拿参数)
+
+44. **docs/RECMODE-DASHBOARD-UI-PLAN.md** — #75 follow-up 实施 plan
+    - sandbox 没 cargo / npm 跑不通 Tauri build, 留 Mac 上做
+    - 完整 plan: 3 个 Tauri Rust commands + TS wrapper + RecordingsCard 组件 + 集成步骤 + 真测脚本
+    - 估 3-4h Mac 上一气做完
+
+### 5/24-5/25 ship 总数: **44 项** (6 phase 主线 + .gitignore + Phase I 4 step + Phase J 3 step) 跨 17+ 小时
+
+整夜测试净增累计: gateway 123 + cli 57 + tool-bridge 39 + memory plugin 22 = **241 测全过**, 零下游破坏.
+
 
 

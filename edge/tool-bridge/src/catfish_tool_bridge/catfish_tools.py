@@ -650,6 +650,10 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_email_search":
         from . import email_search  # noqa: PLC0415
         return email_search.tool_email_search(args)
+    # BL-SKILLS-RAG-TOOL (5/25 鸿波 "现在做") — Progressive Disclosure 折叠区主动捞
+    if name == "catfish_search_skills":
+        from . import search_skills  # noqa: PLC0415
+        return search_skills.tool_search_skills(args)
     # BL-FIX-TIMEOUT-OUTPUTS (5/13 鸿波"做不出文档")
     if name == "catfish_list_my_outputs":
         from . import recent_outputs  # noqa: PLC0415

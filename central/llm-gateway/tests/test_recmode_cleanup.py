@@ -143,3 +143,76 @@ def test_cleanup_skips_files_in_root(recordings_root):
     stats = cl.cleanup_old_recordings()
     assert (recordings_root / "junk.txt").exists()
     assert stats["scanned"] == 0
+
+
+# ── BL-RECMODE-NO-AUTO-DELETE (5/25 鸿波) ──────────────────────────
+
+
+def test_cleanup_daemon_is_removed():
+    """5/25 BL-RECMODE-NO-AUTO-DELETE: cleanup_daemon 必须删, 防回归.
+
+    哲学修正: catfish 不该后台自动删用户本机 ~/.catfish/recordings/.
+    cleanup_old_recordings 仍可用作显式 utility (Dashboard / CLI 触发).
+    """
+    assert not hasattr(cl, "cleanup_daemon"), (
+        "cleanup_daemon 必须删 — 不该后台自动删用户本机文件 "
+        "(BL-RECMODE-NO-AUTO-DELETE 5/25 鸿波修正)"
+    )
+    # exports 干净
+    assert "cleanup_daemon" not in cl.__all__
+    # 仍保留 utility
+    assert "cleanup_old_recordings" in cl.__all__
+    assert "list_recordings_with_meta" in cl.__all__
+
+
+def test_list_recordings_with_meta_empty():
+    """没 recordings root → 返空 list, 不挂."""
+    out = cl.list_recordings_with_meta()
+    # 没 fixture, 不该有 recordings, 应空
+    assert isinstance(out, list)
+
+
+def test_list_recordings_with_meta_basic(recordings_root):
+    """列出每个 session: id / started_at / size / kept_forever / skill_drafts / path."""
+    started = time.time() - 3 * 24 * 3600
+    sd = _mk_session(recordings_root, "rec_inv_1", started)
+    # 加一个 skill_draft
+    draft = sd / "skill_draft" / "productivity" / "weekly-report"
+    draft.mkdir(parents=True)
+    (draft / "SKILL.md").write_text("---\nname: weekly-report\n---\n", encoding="utf-8")
+
+    out = cl.list_recordings_with_meta()
+    assert len(out) == 1
+    item = out[0]
+    assert item["session_id"] == "rec_inv_1"
+    assert item["started_at"] == pytest.approx(started, abs=1)
+    assert item["size_bytes"] > 0
+    assert item["kept_forever"] is False
+    assert "productivity/weekly-report" in item["skill_drafts"]
+    assert item["path"].endswith("rec_inv_1")
+
+
+def test_list_recordings_with_meta_kept_forever_flag(recordings_root):
+    """kept_forever flag 正确反映 .keep_forever 文件."""
+    started = time.time() - 3 * 24 * 3600
+    _mk_session(recordings_root, "rec_keep", started, keep_forever=True)
+    _mk_session(recordings_root, "rec_normal", started)
+
+    out = cl.list_recordings_with_meta()
+    by_id = {item["session_id"]: item for item in out}
+    assert by_id["rec_keep"]["kept_forever"] is True
+    assert by_id["rec_normal"]["kept_forever"] is False
+
+
+def test_list_recordings_sorted_newest_first(recordings_root):
+    """新 session 排在前 (Dashboard 用户看的顺序)."""
+    now = time.time()
+    _mk_session(recordings_root, "rec_2025_01_05_old", now - 30 * 86400)
+    _mk_session(recordings_root, "rec_2025_05_24_new", now - 1 * 86400)
+    _mk_session(recordings_root, "rec_2025_05_10_mid", now - 15 * 86400)
+
+    out = cl.list_recordings_with_meta()
+    # session_id 字母倒序 (我们的 sort 是 reverse=True 按文件名 — 新日期 ID 更大)
+    ids = [item["session_id"] for item in out]
+    # 按 ID 字典序倒排, 最新 ID 在前 (假设 ID 是日期前缀格式)
+    assert ids == sorted(ids, reverse=True)

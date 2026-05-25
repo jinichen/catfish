@@ -1,22 +1,41 @@
-"""BL-LEARN-RECMODE / 隐私 cleanup (5/15 V2 #67).
+"""BL-LEARN-RECMODE / 录屏清理 utility (5/15 V2 #67 ship, 5/25 重定位).
 
-14 天自动删 ~/.catfish/recordings/<sid>/ 旧 session — 截图含业务数据
-(EIS 资质名 / 维护人 / 公司名), 不能永久留. 跟 macOS '最近文件'  / iCloud
-14 天回收同模式.
+# 5/25 鸿波"录屏本来就在本机, catfish 凭啥后台删?" 哲学修正
 
-opt-in '保留':
-- skill 文件夹 recmode_meta.json 含 "_keep_forever": true → 跳过 cleanup
-- 用户在 PreviewModal 勾"保留作 ground truth" 触发 (V2 #67 同时加 UI)
+## 旧设计 (5/15 V2 #67, ship 但 5/25 撤掉自动化)
 
-清理触发:
-1. gateway 启动时 reap 一次 (lifespan startup hook 同 BL-HERMES013-4)
-2. 后台 task 每 24h 跑一次 (gateway 长跑场景)
+- `cleanup_old_recordings` + `cleanup_daemon` 后台 24h 跑一次, 自动删
+  ~/.catfish/recordings/<sid>/ 超 14 天的 session
+- 理由当时是"截图含业务数据 (EIS 资质 / 维护人 / 公司名), 不能永久留"
+- 跟 macOS '最近文件' / iCloud 14 天回收"心智对齐"
 
-返清了几个 + 跳了几个 (透明给 admin 看).
+## 5/25 撤掉的真原因 (鸿波抓出来的)
+
+- catfish 给员工的 talking point 是 "录屏 100% 在你电脑本机, 中央 0 字节"
+- 但同时后台 daemon 自动删用户文件 = 嘴上不上传 + 暗中动你硬盘 = 信任撕裂
+- 真正的设计哲学: **中央不存 = 中央不管. 员工本机数据员工主权**
+- catfish 不是 OS 文件管理器, 不该代员工决定何时删本机文件
+- 录屏含敏感是员工的责任 (跟 Word 文档含客户合同条款一样, Word 也不会自动删)
+
+## 现在的位置
+
+`cleanup_old_recordings()` 函数保留作 **显式 utility**:
+- 员工 Dashboard "我的录屏" 区点 "全部清 N 天前" 按钮触发 (TODO #75)
+- admin 跑 `catfish-recordings prune --older-than 30d` CLI 触发 (TODO follow-up)
+- 测试 / 排错时手动调
+
+**不再自动跑** — gateway app.py 启动 hook 删了 `cleanup_daemon()` 调度.
+
+老的 `_is_kept_forever` 标志 + `.keep_forever` flag 文件保留作**向后兼容** (员工
+历史录屏可能勾过"保留作 ground truth"), 但**新录屏默认就不删**, 这标志成 cosmetic.
+
+# Returns
+
+`cleanup_old_recordings()` 返 dict {scanned, deleted, kept_forever, still_fresh,
+errors, freed_bytes, deleted_session_ids} 让 caller (Dashboard / CLI) 打 summary.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -26,11 +45,9 @@ from pathlib import Path
 
 logger = logging.getLogger("catfish.recmode.cleanup")
 
-# 14 天 = 1209600 秒. 跟 macOS / iCloud 回收周期对齐.
+# 5/25 BL-RECMODE-NO-AUTO-DELETE: 默认 TTL 留着, 但**不再有 daemon 自动触发**.
+# 仅在员工/admin 显式调 cleanup_old_recordings(ttl_seconds=N*86400) 时生效.
 DEFAULT_TTL_SECONDS = 14 * 24 * 3600
-
-# 后台 task 跑频率 (24h 一次, 跟 day rotation 对齐)
-DAEMON_INTERVAL_SECONDS = 24 * 3600
 
 
 def _recordings_root() -> Path:
@@ -42,9 +59,14 @@ def _recordings_root() -> Path:
 
 
 def _is_kept_forever(session_dir: Path) -> bool:
-    """看 session_dir 内任意 skill_draft/<ns>/<name>/recmode_meta.json 有没标 _keep_forever.
+    """老元数据兼容 — V2 #67 时代员工勾"保留作 ground truth" 会写 _keep_forever.
 
-    用户 PreviewModal 勾 '保留作 ground truth' 时, save_skill 写到 recmode_meta.json.
+    5/25 BL-RECMODE-NO-AUTO-DELETE 后语义变化:
+    - 老: 没标 → 14 天删. 标了 → 永久留 (opt-in 保留)
+    - 新: 没标 → 永久留 (新 default). 标了 → 仍永久留 (兼容历史录屏)
+
+    显式 `cleanup_old_recordings(ttl=N天)` 触发时, 标了的录屏仍跳过 (保护员工
+    主动标记的"重要" session 不被一锅烩删掉).
     """
     # 1. session_dir 自己有 KEEP flag 文件
     if (session_dir / ".keep_forever").exists():
@@ -64,22 +86,28 @@ def cleanup_old_recordings(
     ttl_seconds: int = DEFAULT_TTL_SECONDS,
     dry_run: bool = False,
 ) -> dict:
-    """扫 ~/.catfish/recordings/<sid>/, 删超 TTL 的 session.
+    """显式清理 ~/.catfish/recordings/<sid>/, 删超 TTL 的 session.
+
+    5/25 BL-RECMODE-NO-AUTO-DELETE: **不再被 daemon 自动调用** —
+    员工 Dashboard "我的录屏" 区 / admin CLI 显式触发.
 
     Args:
-        ttl_seconds: 默认 14 天
+        ttl_seconds: 默认 14 天. caller 可传 7/30/90/180 等任意值
         dry_run: 只看不删 (admin audit 用)
 
     Returns:
         {"scanned": N, "deleted": M, "kept_forever": K, "still_fresh": F,
-         "errors": [...], "freed_bytes": Y}
+         "errors": [...], "freed_bytes": Y, "deleted_session_ids": [...]}
     """
     root = _recordings_root()
     if not root.exists():
-        return {"scanned": 0, "deleted": 0, "kept_forever": 0, "still_fresh": 0, "errors": [], "freed_bytes": 0}
+        return {
+            "scanned": 0, "deleted": 0, "kept_forever": 0, "still_fresh": 0,
+            "errors": [], "freed_bytes": 0, "deleted_session_ids": [],
+        }
 
     cutoff = time.time() - ttl_seconds
-    stats = {
+    stats: dict = {
         "scanned": 0,
         "deleted": 0,
         "kept_forever": 0,
@@ -114,7 +142,7 @@ def cleanup_old_recordings(
             stats["still_fresh"] += 1
             continue
 
-        # opt-in 保留
+        # opt-in 保留 (历史员工显式标过的不一锅烩删)
         if _is_kept_forever(sd):
             stats["kept_forever"] += 1
             logger.debug("RecMode cleanup 跳过 %s (_keep_forever)", sd.name)
@@ -158,29 +186,65 @@ def cleanup_old_recordings(
     return stats
 
 
-async def cleanup_daemon():
-    """gateway 长跑场景 — 后台 task 每 24h 跑一次 cleanup.
+def list_recordings_with_meta() -> list[dict]:
+    """5/25 BL-RECMODE-NO-AUTO-DELETE: 给 Dashboard "我的录屏" 区用的 inventory.
 
-    跟 BL-HERMES013-4 reap_interrupted 同模式 (gateway lifespan startup
-    spawn asyncio.create_task).
+    返每个 session 的: id, started_at, size_bytes, kept_forever, skill_drafts.
+    员工自己看 + 决定何时清.
     """
-    while True:
+    root = _recordings_root()
+    if not root.exists():
+        return []
+
+    out: list[dict] = []
+    for sd in sorted(root.iterdir(), reverse=True):  # 新的在前
+        if not sd.is_dir():
+            continue
+
+        started_at = 0.0
+        meta_path = sd / "meta.json"
+        if meta_path.exists():
+            try:
+                data = json.loads(meta_path.read_text(encoding="utf-8"))
+                started_at = float(data.get("started_at") or 0)
+            except (OSError, json.JSONDecodeError):
+                pass
+        if started_at <= 0:
+            try:
+                started_at = sd.stat().st_mtime
+            except OSError:
+                started_at = 0.0
+
+        size = 0
         try:
-            stats = cleanup_old_recordings()
-            if stats["deleted"] > 0 or stats["scanned"] > 0:
-                logger.info(
-                    "RecMode cleanup daemon: scanned=%d deleted=%d kept_forever=%d "
-                    "still_fresh=%d freed=%.1f MB",
-                    stats["scanned"], stats["deleted"], stats["kept_forever"],
-                    stats["still_fresh"], stats["freed_bytes"] / 1024 / 1024,
-                )
-        except Exception:  # noqa: BLE001
-            logger.exception("RecMode cleanup daemon 失败 (不致命, 24h 后再试)")
-        await asyncio.sleep(DAEMON_INTERVAL_SECONDS)
+            for f in sd.rglob("*"):
+                if f.is_file():
+                    try:
+                        size += f.stat().st_size
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+
+        # 罗列 skill_drafts (帮员工识别"这录屏当初学的啥 skill")
+        skill_drafts = []
+        for draft in sd.glob("skill_draft/*/*/SKILL.md"):
+            ns_name = "/".join(draft.parent.relative_to(sd / "skill_draft").parts)
+            skill_drafts.append(ns_name)
+
+        out.append({
+            "session_id": sd.name,
+            "started_at": started_at,
+            "size_bytes": size,
+            "kept_forever": _is_kept_forever(sd),
+            "skill_drafts": skill_drafts,
+            "path": str(sd),
+        })
+    return out
 
 
 __all__ = [
     "cleanup_old_recordings",
-    "cleanup_daemon",
+    "list_recordings_with_meta",
     "DEFAULT_TTL_SECONDS",
 ]

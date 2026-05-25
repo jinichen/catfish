@@ -1949,6 +1949,55 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ── BL-SKILLS-RAG-TOOL (5/25 鸿波 "现在做") Progressive Disclosure 折叠区主动捞 ──
+    {
+        "name": "catfish_search_skills",
+        "description": (
+            "★★★ 跨 ~/.hermes/skills + ~/.catfish/skills BM25 搜 skill — "
+            "**当 system prompt 里 skill catalog 折叠了 N 个**(显示 '还有 N 个 skill, "
+            "想用调 catfish_search_skills') **必用这个找**.\n\n"
+            "✅ 调用场景:\n"
+            "  - system prompt 折叠区显示 'hermes:bundled 还有 168 个 skill' + 员工说 "
+            "'帮我做 ECharts 图' → query='ECharts 图表' (上方 catalog 没看到 echarts 类 skill)\n"
+            "  - 员工说 '有没有快速生成发票模板的 skill?' → query='发票模板 生成'\n"
+            "  - 员工说 '我想找跟 GitHub 同步的工具' → query='GitHub 同步'\n"
+            "  - 员工模糊问 '能帮我搞个 X 吗', 你 catalog 里没匹配 → 主动 search\n\n"
+            "❌ 不调用:\n"
+            "  - catalog 里 inline 显示的 skill (前 ~15 个 BM25 top-K) — 直接 catfish_run_skill\n"
+            "  - 已知 skill_path 想要参数 → catfish_run_skill(skill_path='...', params={'_help': True})\n"
+            "  - 找历史会话 → catfish_search_sessions\n"
+            "  - 找邮件 → catfish_email_search\n\n"
+            "返参:\n"
+            "  - matches: top-K skill 列表 {skill_path, name, description 摘要, namespace, score}\n"
+            "  - count: 命中数\n"
+            "  - total_indexed: 本机共扫到多少 skill\n"
+            "  - summary: 一句话归纳 + 建议下一步 (e.g. '找到 5 个, 调 catfish_run_skill _help 拿参数')\n"
+            "  - latency_ms\n\n"
+            "🔒 隐私: 直读员工 mac 本机 ~/.hermes/skills + ~/.catfish/skills, 不走 gateway, "
+            "不上行中央, 不跨员工.\n\n"
+            "💡 思路 (Anthropic Progressive Disclosure 3 层):\n"
+            "  Tier 1 (system prompt catalog) - 你已看见 top-K\n"
+            "  Tier 2 (这工具) - 折叠区 BM25 搜 + 拿 description 摘要\n"
+            "  Tier 3 (catfish_run_skill _help) - 决定调时拿完整 SKILL.md 参数 schema"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "搜的关键字 / 自然语言 ('ECharts 图表' / '发票模板' / 'GitHub 同步' 等)",
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "返多少个 (默认 10, 上限 30). 默认够用, 真没匹配再加大.",
+                },
+            },
+            "required": ["query"],
+        },
+        "emoji": "🔧",
+        "toolset": "catfish_native",
+        "available": True,
+    },
     # ── BL-FED2.3 (5/12 鸿波拍板) 跨员工路由 ──
     {
         "name": "catfish_expert_consult",

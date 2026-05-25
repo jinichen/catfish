@@ -270,33 +270,24 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("BL-Q3-ARCHIVE summary_worker 启动失败 (archive 仍能写, 只是不摘要): %s", e)
 
-    # BL-LEARN-RECMODE V2 #67 (5/15): 隐私 — 启动时清 14 天前 recordings,
-    # 后台 task 每 24h 重跑一次. 截图含业务数据不能永久留, 跟 macOS / iCloud
-    # 14 天回收同模式. opt-in '保留作 ground truth' 跳过.
-    recmode_cleanup_task = None
-    try:
-        from .recmode import cleanup as _recmode_cleanup  # noqa: PLC0415
-        # 启动时同步跑一次
-        stats0 = _recmode_cleanup.cleanup_old_recordings()
-        if stats0["scanned"] > 0:
-            logger.info(
-                "RecMode cleanup [startup]: scanned=%d deleted=%d kept_forever=%d freed=%.1f MB",
-                stats0["scanned"], stats0["deleted"], stats0["kept_forever"],
-                stats0["freed_bytes"] / 1024 / 1024,
-            )
-        # 起后台 daemon
-        recmode_cleanup_task = asyncio.create_task(_recmode_cleanup.cleanup_daemon())
-    except Exception as e:
-        logger.warning("RecMode cleanup 启动失败 (recordings 不会自动清): %s", e)
+    # BL-RECMODE-NO-AUTO-DELETE (5/25 鸿波): 撤掉 cleanup daemon.
+    #
+    # 旧设计 (V2 #67, 5/15): 启动时清 14 天前 recordings + 后台 24h daemon
+    # 自动删. 当时理由"截图含业务数据不能永久留".
+    #
+    # 5/25 哲学修正 — 录屏 100% 在员工本机 ~/.catfish/recordings/, 中央 0
+    # 字节. 既然中央不管, catfish 后台代码也不该后台自动删用户本机文件.
+    # 这跟 catfish 给员工的 talking point "你电脑你做主, 中央不存不管"
+    # 一致, 不再有"嘴上不上传 + 暗中删你硬盘" 的撕裂感.
+    #
+    # cleanup_old_recordings 函数留作 utility — 员工通过 Dashboard "我的录屏"
+    # 区点"清理" 显式触发, 或 admin 跑 catfish-recordings prune CLI.
+    # 详见 docs/EMPLOYEE-PRIVACY-COMMITMENT.md (TODO).
+    #
+    # 老的 _is_kept_forever 标志保留, 但语义反转: 默认 = 永久留 (不删),
+    # _keep_forever 字段成为 cosmetic 兼容老元数据.
 
     yield
-
-    if recmode_cleanup_task is not None:
-        recmode_cleanup_task.cancel()
-        try:
-            await recmode_cleanup_task
-        except asyncio.CancelledError:
-            pass
 
     if archive_summary_task is not None:
         archive_summary_task.cancel()
@@ -889,7 +880,11 @@ async def api_learn_cleanup(
     body: dict,
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """V2 #67: 手动触发 cleanup (admin / 测试用 — 不等 24h daemon).
+    """显式触发 RecMode 录屏清理.
+
+    5/25 BL-RECMODE-NO-AUTO-DELETE: catfish 后台 daemon 已撤掉, 此 endpoint
+    成为**唯一**的清理触发入口 — Dashboard "我的录屏" 区 / admin CLI / 测试
+    显式调. 没人调 = 录屏永久留 (员工本机, 员工自主).
 
     Body: {"dry_run"?: bool (默认 false 真删), "ttl_days"?: int (默认 14)}
     Returns: cleanup_old_recordings stats
