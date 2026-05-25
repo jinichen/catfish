@@ -5,9 +5,12 @@
 > **覆盖**：两套部署形态 —— 客户公有云（A）+ 客户内网完全私部（B）
 > **更新日期**：2026-05-25 (5/24 → 5/25 修正 — 见底部 changelog)
 >
-> **5/25 修正摘要 (鸿波 review HF [DeepSeek-V4-Flash](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash) 后)**:
-> - V4 Hybrid Attention (CSA+HCA) → KV cache **仅 V3.2 的 10%** (5/24 doc 没强调)
-> - 50 人 / 并发 15 推荐档从 **8× H100 → 4× H100** (省一半 GPU 投资, ~¥100 万 → ~¥50 万)
+> **5/25 修正摘要 v1.2 (鸿波 review HF + 提醒 "客户用 H20")**:
+> - **关键澄清**: 客户实际部署 **H20** (国产合规版, 96GB, **不支持原生 FP4**), 不是 H100. V4 Flash 必走 FP8 fallback, weights **284 GB** (不是 H100 mixed 178 GB)
+> - 50 人 / 并发 15 **H20 主推** = **8× H20 单机 (768 GB)** — 4 卡 H20 (384 GB) 装下但余量 63 GB 太紧, 长 context 撑不住
+> - H100/H200 (有 FP4) 仅作 alternative 列出, 客户实际不用
+> - V4 Hybrid Attention (CSA+HCA) → KV cache **仅 V3.2 的 10%** (跟卡无关, 模型层优化, H20 部署同样受益)
+> - H20 compute ~15% of H100 但 memory bandwidth 4.0 TB/s (H100 是 3.35 TB/s) — 反超! MoE active params 路由对 bandwidth 敏感, TTFT 仅慢 1.5-2x 可接受
 > - 加 4.7 V4 unique 特性 (3 种 reasoning mode / 无 Jinja chat template / HF 无 Inference Provider / Pre-train 32T tokens)
 > - 加 4.8 部署 trigger checklist (vLLM 0.7+ / CUDA 版本 / chat template 适配 / 真测 1M)
 
@@ -204,49 +207,66 @@
 | 支持工具调用 | ✓ | 官方 |
 | 支持视觉 | ✗（纯文本） | 官方 |
 
-### 4.2 内存预算（关键）
+### 4.2 内存预算（关键 — 5/25 v1.2 H20 主推重算）
 
-> **2026-05-25 实测更新**: 拉了 HF [`deepseek-ai/DeepSeek-V4-Flash`](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash) 真实数据 + 读了论文里"V4 Hybrid Attention (CSA+HCA) 让 KV cache 仅是 V3.2 的 10%" 关键描述. 重算如下 — **结论: 4 卡 H100 升级到"推荐 50 人 / 并发 15"档** (5/24 我估的 8 卡是 over-spec).
+> **2026-05-25 v1.2 更新**: 拉 HF [`deepseek-ai/DeepSeek-V4-Flash`](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash) + 论文"V4 Hybrid Attention (CSA+HCA) 让 KV cache 仅是 V3.2 的 10%" + 鸿波确认 **客户实际部署 H20** (国产合规版, 不支持 FP4).
 
 | 项 | 计算 | 占用 |
 |---|---|---|
-| 权重（FP4+FP8 mixed，HF Safetensors 实测 158B params） | mixed precision | **≈ 158–180 GB** |
-| 权重（纯 FP4） | 284B × 0.5 byte | ≈ 142 GB |
-| 权重（FP8 fallback，老卡跑） | 284B × 1 byte | ≈ 284 GB |
+| **★ 权重（FP8 fallback, H20/H800/A100 主用）** | 284B × 1 byte | **≈ 284 GB** |
+| 权重（FP4+FP8 mixed, 需 H100/H200/B 系列原生 FP4, HF 158B params） | mixed precision | ≈ 158–180 GB |
+| 权重（纯 FP4, 需 B100/B200） | 284B × 0.5 byte | ≈ 142 GB |
 | 框架开销（activation buffer + workspace） | +20% | +35 GB |
 | **KV cache 关键优化（V4 vs V3）**: V4 Hybrid Attention (CSA+HCA) → 仅 V3 的 10% | (V3 ~80 KB/token → V4 ~8 KB/token) | — |
 | KV cache（15 并发，平均 16K context, V4 优化后） | 15 × 16K × 8 KB | **≈ 2 GB** |
 | KV cache（1M context 极端单请求, V4 优化后） | 1M × 8 KB | **≈ 8 GB** |
-| **最低 VRAM 总量**（FP4+FP8 + 50 人并发 15） | 178 + 35 + 2 | **≈ 215 GB** |
-| **舒适 VRAM 总量**（含 1M 长上下文余量 × 2 并发） | 178 + 35 + 16 + 60 buf | **≈ 290 GB** |
+| **★ H20 最低 VRAM 总量**（FP8 + 50 人并发 15） | 284 + 35 + 2 | **≈ 321 GB** |
+| **★ H20 舒适 VRAM 总量**（含 1M 长上下文余量 × 2 并发） | 284 + 35 + 16 + 60 buf | **≈ 395 GB** |
+| H100 最低 VRAM（FP4+FP8 mixed, alternative） | 178 + 35 + 2 | ≈ 215 GB |
+| H100 舒适 VRAM | 178 + 35 + 16 + 60 | ≈ 290 GB |
 
-### 4.3 GPU 硬件清单（基于真实 284B 权重 + V4 KV cache 10% of V3.2）
+### 4.3 GPU 硬件清单（★ H20 主推 — 客户实际部署卡型）
 
-| 档位 | GPU 配置 | 总 VRAM | FP4 原生 | 最大并发 | TTFT | 月度电费 |
-|---|---|---|---|---|---|---|
-| **❌ 不可行** | 2× A100/H800 80G | 160 GB | ✗（FP8 fallback） | — | weights 都装不下 | — |
-| **❌ 不推荐** | 2× H100 80G | 160 GB | ✓ | — | weights 装不下 | — |
-| **入门 / PoC** | **3× H100 80G** | 240 GB | ✓ | 5–8 | 1.2s | ¥7,000 |
-| **★ 推荐 / 50 人 / 并发 15**（5/25 修正） | **4× H100 80G** | 320 GB | ✓ | **15–25** | 0.8s | ¥9,000 |
-| **推荐 · 长 context heavy** | **8× H100 80G** 单机 HGX | 640 GB | ✓ | 30–50 / 2-3 并发 1M context | 0.6s | ¥18,000 |
-| **国产替代**（FP8 fallback，weights ~284 GB） | **4× H800 80G** | 320 GB | ✗ | 8–12（速度差 ~2x） | 1.5s | ¥7,500 |
-| **国产推荐档** | **8× H800 80G** | 640 GB | ✗ | 18–25 | 1.5s | ¥15,000 |
-| **新一代首选** | **2× H200 141G** | 282 GB | ✓ | 12–20 | 0.7s | ¥6,000 |
-| **新一代推荐** | **4× H200 141G** | 564 GB | ✓ | 30–50 | 0.5s | ¥12,000 |
-| **国产新一代** | **4× H20 96G** | 384 GB | ✗（按 vLLM 进度看 FP8 可跑） | 15–22（FP8 fallback） | 1.0s | ¥7,000 |
+> **为什么是 H20 不是 H100**:
+> - H20 是国产 export-compliant 卡 (96GB HBM3, 跟 H800 一档), 国内供货稳, 客户内网现成就是这卡
+> - H20 **不支持原生 FP4** → V4 Flash 必走 FP8 fallback (`DeepSeek-V4-Flash-Base`), weights **284 GB**
+> - H20 compute ~15% of H100 (296 vs 1979 TFLOPS FP8), 但 memory bandwidth **4.0 TB/s** (H100 是 3.35 TB/s) **反超**
+> - MoE 推理 active 13B params 主要 memory-bound, bandwidth 反超让 TTFT 仅慢 H100 1.5-2x, 不是 7x compute 差距
 
-> ⚠️ **关键修正 (5/25 鸿波 review HF page 后)**:
-> - 5/24 我估"推荐 8 卡"是按 V3 KV cache 假设 (~80 KB/token) 算的, 没考虑 V4 论文里 Hybrid Attention (CSA+HCA) "KV cache 仅 V3.2 10%" 这条关键优化
-> - V4 实际 KV cache (~8 KB/token effective) → 15 并发 16K context **只占 2 GB**, 不是我之前估的 20 GB
-> - 4× H100 80G (320 GB) 实测**充裕**: 178 weights + 35 framework + 2 KV + 105 GB 余量 → 撑 50 人 / 并发 15 / 平均 16-32K context 完全 OK
-> - 8 卡只在"长 context heavy" (员工真用 256K-1M context 占大比例) 时需要
-> - **省一半 GPU 预算**: 4 卡 H100 ≈ ¥80-100 万投资, 8 卡 ≈ ¥160-200 万
+#### ★ H20 配置档 (主推)
+
+| 档位 | GPU 配置 | 总 VRAM | weights+fw+KV | 余量 | 最大并发 | TTFT | 月度电费 |
+|---|---|---|---|---|---|---|---|
+| **❌ 不可行** | 2× H20 | 192 GB | 284+35 = 319 GB | **-127 GB** | — | weights 装不下 | — |
+| **❌ 不推荐** | 3× H20 | 288 GB | 319 GB | **-31 GB** | — | 紧张, 框架挤死 | — |
+| **入门 / PoC** | **4× H20 96G** | 384 GB | 321 GB | **+63 GB** | 5–10 (16K avg) | 1.5–2.0s | ¥6,000 |
+| **★ 推荐 / 50 人 / 并发 15** | **8× H20 单机** | **768 GB** | 321 GB | **+447 GB** | **25–40** | 1.0–1.5s | ¥12,000 |
+| **长 context heavy** (1M 多并发) | 8× H20 × 2 台 (16 卡) | 1536 GB | 321 GB | +1215 GB | 60+ / 8–10 并发 1M | 0.8–1.2s | ¥24,000 |
+
+> ⚠️ **8 卡 H20 而不是 4 卡的真原因**:
+> - weights 284 GB + framework 35 GB = **319 GB**, 4 卡 H20 (384 GB) 只剩 63 GB 给 KV cache
+> - V4 优化后 15 并发 16K 只需 2 GB KV, 但**长 context 撑不住** — 1 个 1M context 就要 8 GB KV, 5 并发 1M = 40 GB 接近 4 卡上限
+> - **8 卡 H20 (768 GB) 给 447 GB KV 余量**, 1M 多并发不慌, 才是 50 人长期部署该上的配置
+> - 4 卡 H20 仅适合 PoC / 入门 (员工就 5-10 个先试) 或员工只跑短 context (8-32K) 场景
+
+#### 其他卡型 (alternative — 客户没 H20 / POC 借设备时用)
+
+| 档位 | GPU 配置 | 总 VRAM | FP4 原生 | 最大并发 | TTFT |
+|---|---|---|---|---|---|
+| H100 推荐 (FP4+FP8 mixed) | 4× H100 80G | 320 GB | ✓ | 15–25 | 0.8s |
+| H100 长 context | 8× H100 80G | 640 GB | ✓ | 30–50 | 0.6s |
+| H800 (FP8 fallback) | 8× H800 80G | 640 GB | ✗ | 18–25 | 1.5s |
+| H200 (新一代) | 4× H200 141G | 564 GB | ✓ | 30–50 | 0.5s |
+| A100 (FP8 fallback, 384 GB 紧巴, 推荐 8 卡) | 8× A100 80G | 640 GB | ✗ | 12–18 | 1.8s |
+| B100/B200 (新一代旗舰, 客户基本买不到) | 4× B100/B200 | 768+ GB | ✓ | 50+ | 0.4s |
+
+> ⚠️ **A100 / H800 / H20 / 国产 910C 不支持原生 FP4** → 跑 V4 Flash 走 FP8 fallback (`DeepSeek-V4-Flash-Base`), 显存翻倍 + TTFT 慢 1.5-2x.
 >
-> ⚠️ **A100 / H800 / H20 不支持原生 FP4**。它们跑 V4 Flash 需要走 FP8 版本 → 显存翻倍 (weights ~284 GB) + 速度差 ~2×。建议下 `DeepSeek-V4-Flash-Base` 的 FP8 Mixed 版本，不硬上 FP4 quant.
+> H100 / H200 / B100 / B200 才有原生 FP4 Tensor Core. 但客户内网现有 H20, 不用 H100.
 >
-> H100 / H200 / B100 / B200 才有原生 FP4 Tensor Core，跑 FP4+FP8 mixed 版本才能拿到设计算力。
+> **V4 KV cache 仅 V3.2 的 10%** 这优化是模型层 (Hybrid Attention CSA+HCA), 跟卡无关, H20 部署同样受益. 老 V3 部署经验估的 KV 大 10x, V4 用同样硬件能撑 5-10x 更多并发.
 >
-> 「最大并发」按平均 prompt 6K + completion 1K 估，1M context 长上下文会显著降低（4× H100 撑 1-2 个 1M 并发, 8× H100 撑 4-6 个）.
+> 「最大并发」按平均 prompt 6K + completion 1K 估, 1M context 显著降低 (8× H20 撑 5-8 个 1M 并发, 16× H20 撑 8-10 个).
 
 ### 4.4 推理软件栈
 
@@ -259,11 +279,31 @@
 | Python | 3.11+ | |
 | OpenAI-compatible server | vLLM 自带 / SGLang 自带 | catfish-gateway 通过 `INTERNAL_LLM_BASE_DEEPSEEK_V4_FLASH=http://10.x.x.x:port/v1` 调 |
 
-### 4.5 启动命令模板（vLLM，★ 4× H100 推荐档 ★）
+### 4.5 启动命令模板（vLLM，★ 8× H20 推荐档 ★）
 
 ```bash
-# FP4+FP8 mixed 版本，需要 H100/H200/B-系列
-# 5/25 修: 4 卡足够 50 人 / 并发 15 (V4 KV cache 仅 V3 10%, 之前 8 卡 over-spec)
+# ★ 客户内网 H20 主推: FP8 fallback (`-Base`), tensor parallel 8 卡
+# 5/25 v1.2 修: H20 不支持原生 FP4, 必走 FP8 Base 版本
+# weights 284 GB + framework 35 + KV ~10-30 GB = 充裕在 768 GB 总 VRAM 内
+python -m vllm.entrypoints.openai.api_server \
+  --model deepseek-ai/DeepSeek-V4-Flash-Base \
+  --tensor-parallel-size 8 \
+  --enable-expert-parallel \
+  --kv-cache-dtype fp8 \
+  --max-model-len 1048576 \
+  --max-num-seqs 32 \
+  --gpu-memory-utilization 0.92 \
+  --api-key $INTERNAL_LLM_KEY \
+  --port 8000
+```
+
+> **vLLM 版本要求**: H20 上跑 V4 Flash-Base FP8 需要 vLLM **0.7.0+** (老版 0.6.x 对 DeepSeek V4 MoE expert parallel 支持有问题). 装前先 `pip install -U vllm`.
+
+H100/H200 (有 FP4) alternative — 客户没 H20 借设备时用:
+
+```bash
+# FP4+FP8 mixed, 需要 H100/H200/B-系列原生 FP4
+# 4 卡足够 50 人 / 并发 15 (因为 weights 仅 178 GB vs H20 的 284 GB)
 python -m vllm.entrypoints.openai.api_server \
   --model deepseek-ai/DeepSeek-V4-Flash \
   --tensor-parallel-size 4 \
@@ -277,9 +317,7 @@ python -m vllm.entrypoints.openai.api_server \
   --port 8000
 ```
 
-> **关键 vLLM 版本要求**: V4 FP4+FP8 mixed 支持需要 vLLM **0.7.0+**. 老版本 (0.6.x) 不识别 `--quantization fp4_fp8_mixed`. 装版本前先 `pip install -U vllm`.
-
-国产 H800/H20 fallback（FP8 only, weights ~284 GB → 8 卡）：
+老 H800/A100 4 卡兜底（FP8 only, weights ~284 GB 紧巴, 推荐 8 卡）：
 
 ```bash
 # H800/H20 不支持原生 FP4 → 走 Base (FP8 mixed) 版本
@@ -665,6 +703,29 @@ CATFISH_AUDIT_PATH=/var/log/catfish/audit.jsonl
 
 ## 附 · 文档 changelog
 
+### v1.2 — 2026-05-25 凌晨 (鸿波二次修正: "客户用 H20 不是 H100")
+
+**触发**: 鸿波 review v1.1 后立刻提醒 "不是用 H20 吗?" — LLM 第一次按通用 H100 估的, 没区分客户实际部署 H20 (国产合规版, 不支持原生 FP4) 跟 alternative H100 (有 FP4) 的差异.
+
+**关键差异**:
+- H20 不支持 FP4 → 必走 FP8 fallback (`DeepSeek-V4-Flash-Base`), weights **284 GB** (不是 H100 mixed 178 GB)
+- 4× H20 (384 GB) 装下但余量 63 GB 太紧, 长 context 撑不住 → **必须 8× H20 (768 GB)**
+- H20 compute 比 H100 慢 7x 但 memory bandwidth 4.0 TB/s 反超 (H100 3.35) → MoE 推理 memory-bound, TTFT 仅慢 1.5-2x
+
+**改动**:
+- 头部修正摘要从 v1.1 (按 H100 算) 改 v1.2 (强调 H20 主推)
+- §4.2 内存预算: 把 H20 FP8 (284 GB) 作为 ★ 主推数, H100 mixed (178 GB) 作 alternative
+- §4.3 GPU 表: 完全重写, "★ 推荐 50 人 / 并发 15" = **8× H20 (768 GB)** 不是 4× H100. H100/H200 alternative 表降到下方
+- §4.5 启动命令: 默认走 H20 (FP8 Base 版本 + 8 卡 tensor parallel), H100 (FP4+FP8 mixed) 作 alternative
+
+**为啥 H20 8 卡比 H100 4 卡更贵但更合适**:
+| 配置 | 总 VRAM | weights | 余量 | 投资 | 适配性 |
+|---|---|---|---|---|---|
+| H100 4 卡 (FP4+FP8 mixed) | 320 GB | 178 GB | 142 GB | ~¥80 万 | ✓ 但 H20 客户买不到/不在内网 |
+| **H20 8 卡 (FP8)** | **768 GB** | **284 GB** | **484 GB** | **~¥60 万** | ✓ 客户实际部署, 余量更大 |
+
+**H20 反而更便宜的原因**: H20 单卡价 ~7-8 万 (国产合规版), H100 单卡价 ~20 万 (合规渠道). 8× H20 ~¥60 万 < 4× H100 ~¥80 万. 加上 H20 内网现有不用进口, 部署周期 2 周搞定; H100 走合规渠道 2-3 个月.
+
 ### v1.1 — 2026-05-25 (鸿波 review HF 后修正)
 
 **触发**: 鸿波直接拉 HF [`deepseek-ai/DeepSeek-V4-Flash`](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash) model card, 让 LLM 重新核对 GPU 数量推算.
@@ -694,4 +755,4 @@ CATFISH_AUDIT_PATH=/var/log/catfish/audit.jsonl
 
 ---
 
-*文档归属：catfish 平台团队 · 版本 1.1 · 2026-05-25*
+*文档归属：catfish 平台团队 · 版本 1.2 · 2026-05-25 (H20 主推修正)*
