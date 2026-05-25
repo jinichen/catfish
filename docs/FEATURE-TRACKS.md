@@ -389,15 +389,22 @@ Companion → HTTPS OpenAI 兼容 → hermes serve (本机)
 - ⬜ 多 gateway 实例共享 PG 测试 (BL-D17 完整) · 0.5 周
 - ⬜ ALEMBIC CI 集成 (.github/workflows/) · 0.5 周
 
-#### #10 Skill 系统 (load/run/inject/lifecycle) [Phase 1+2, 80%]
-> 设计 / 加载 / 调用 / inject / guard / 版本 / 下线 / 删除 / 审计 全套.
+#### #10 Skill 系统 (load/run/inject/lifecycle) [Phase 1+2+3, 95%]  ★ 5/25 Progressive Disclosure 3 phase ship
+> 设计 / 加载 / 调用 / inject / guard / 版本 / 下线 / 删除 / 审计 / **progressive disclosure** 全套.
 - ✅ catfish_run_skill (importlib 反射) + skill_guard REQUIRED block
 - ✅ inject_skills_catalog (注入到 system prompt)
 - ✅ 版本 (SemVer) + deprecated 字段 + 审计 jsonl
 - ✅ skill_install / skill_delete (30 天回收站) + Skills Hub MVP 本机版
 - ✅ 17 lifecycle 测过
+- ✅ **5/25 BL-SKILLS-TIER1-SHRINK (Phase 1, 1h)**: 单 skill 注入 5 行 → 1 行, `SKILL_DESC_CAP=80`, `_help` 提示挪 header. 单 skill 120 tokens → ~25 tokens, 5x 压缩
+- ✅ **5/25 BL-SKILLS-TIER1-FOLD (Phase 2, 1.5h)**: 按 namespace (catfish/hermes:bundled/github/hf/local) 分组渲染, catfish 排首位优先调. 段头打 count
+- ✅ **5/25 BL-SKILLS-RAG (Phase 3, 4h)**: skills_retrieval.py 新建 (BM25 from scratch, 零外部依赖). skill 数 > `RAG_THRESHOLD=30` + 有 user_query 时, 自动 top-`RAG_TOP_K=15` retrieve, catfish 永远全留, 其余按 namespace 折叠 + 提示调 `catfish_search_skills`. 26 新单测 (tokenize/BM25/RAG 集成/query 抽取), 总 57/57 skill 测 + 182/182 下游测全过
+- ✅ **5/25 docs/SKILL-PROGRESSIVE-DISCLOSURE.md** 落档 (3 tier 架构 + Anthropic 对齐 + 调优参数 + 测试覆盖 + 决策签名)
+- ✅ **5/25 BL-SKILLS-VECTOR (2h)**: skills_vector.py 新建 (VectorIndex 同 BM25Index 接口). env `CATFISH_SKILLS_RETRIEVAL=bm25|vector|hybrid` 切 backend. vector 走 catfish-private-embed (bge-m3 内网, 5/2 部署). hybrid = BM25 + vector RRF (k=60) 融合. 失败自动 fallback BM25 (高可用). embed_fn dependency injection (skills_vector 自己不 import litellm). 20 新单测, 总 202 skill+sanitizer+cap+edge_tool_config 测全过
+- ⬜ #69 BL-SKILLS-RAG-TOOL: tool-bridge 加 catfish_search_skills 让模型主动从折叠区捞 · 1-2h
 - ⬜ skill 创建后立即 dry-run 验证, 失败回滚 · 0.5 天 (BL-C12)
 - ⬜ skill 创建前重复检查 · 0.3 天 (BL-C13)
+- ⬜ vector index 持久化 (~/.catfish/skills_index.npz 增量) · 半周 (触发: skill > 200, 启动 embed > 30s)
 
 #### #11 Skills Hub (中央托管) [Phase 2, 90%]  ★ 5/6 sha256 + hub URL pull 闭环
 > 组织级技能市场, 让员工分享 skill, 部门集体学习.

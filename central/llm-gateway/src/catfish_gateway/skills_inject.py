@@ -46,23 +46,24 @@ def _fingerprint(skills: list[SkillMeta]) -> str:
     return "|".join(parts)
 
 
-def _get_skills_block() -> str:
-    """缓存版本: 取当前 skills 列表对应的 system prompt 块."""
+def _get_skills_block(user_query: str | None = None) -> str:
+    """缓存版本: 取当前 skills 列表对应的 system prompt 块.
+
+    BL-SKILLS-RAG (5/25): 接 user_query, skill 数超阈值时走 BM25 top-K.
+    cache 只缓 skills 列表 (mtime fingerprint), block 每次重渲染 (query 变 → block 变).
+    总 skill 列表稳态下 100ms 渲染没问题.
+    """
     skills = discover_skills()
     fp = _fingerprint(skills)
-    if fp == _cache["fingerprint"] and _cache["block"]:
-        return _cache["block"]
+    if fp != _cache["fingerprint"]:
+        _cache["fingerprint"] = fp
+        _cache["skills"] = skills
+        if skills:
+            logger.info("skills_inject: cache 刷新, %d skill", len(skills))
 
-    block = format_skills_block(skills)
-    _cache["fingerprint"] = fp
-    _cache["block"] = block
-    _cache["skills"] = skills
-    if skills:
-        logger.info(
-            "skills_inject: cache 刷新, %d skill, block %d 字节",
-            len(skills),
-            len(block),
-        )
+    # BL-SKILLS-RAG: block 每次渲染, 不缓 (query 变 → top-K 变).
+    # 渲染开销低 (~5ms BM25 + ~5ms format), 不值得缓.
+    block = format_skills_block(_cache["skills"], user_query=user_query)
     return block
 
 
@@ -76,13 +77,42 @@ def reset_cache() -> None:
 # ── 主入口 ──────────────────────────────────────────────────────
 
 
+def _extract_last_user_query(messages: list[dict[str, Any]]) -> str | None:
+    """BL-SKILLS-RAG: 提最后一条 user message 内容当 BM25 query.
+
+    content 是 str → 直接返
+    content 是 list (multimodal) → 拼所有 type=text 段
+    没 user message → None
+    """
+    for msg in reversed(messages):
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            return content.strip() or None
+        if isinstance(content, list):
+            text_parts: list[str] = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    t = part.get("text", "")
+                    if isinstance(t, str) and t.strip():
+                        text_parts.append(t.strip())
+            return " ".join(text_parts) if text_parts else None
+        return None
+    return None
+
+
 def inject_skills_catalog(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """在最后一条 system message 末尾追加 skill catalog block.
 
     没有 skill / 没有 system message → 原样返回.
     幂等 (block 已经在末尾时不重复追加).
+
+    BL-SKILLS-RAG (5/25): skill 数超阈值 + 有 user query 时, 注入 top-K 个最相关
+    (BM25) 的 skill, 其余按 namespace 折成 count.
     """
-    block = _get_skills_block()
+    user_query = _extract_last_user_query(messages)
+    block = _get_skills_block(user_query=user_query)
     if not block:
         return messages
 

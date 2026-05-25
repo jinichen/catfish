@@ -6208,6 +6208,74 @@ TodoStore.write([{content, status=completed}])
 - 实测: gateway 72/72 (sanitizer + cap + scrub_notice + edge_tool_config), cli 57/57, catfish-memory plugin 22/22 全过
 - 端到端: Tavily key 直接 curl 0.7s 返 3 条结果 (绕开 hermes 验证 key 干净); Companion DeepSeek-v4-flash 真 emit `web_search(query=...)` × 5 + `web_extract(urls=...)` × 1, 拿回 5 条真新闻
 
-### 5/24-5/25 ship 总数: 36 项 (6 phase 主线 + 加 .gitignore 顺手) 跨 16 小时
+### 完成 — Phase I (5/25 早晨延伸): BL-SKILLS-PROGRESSIVE-DISCLOSURE 3 phase 一气 ship
+
+> **动机** (鸿波 5/25 早 7:50): WeChat 文章 (Anthropic Skills "Progressive Disclosure" 中文解读) → "skill 越来越多会爆?" → 实地评估发现单 skill 当前 120 tokens (Anthropic 推荐 30-60, 2x), 100 skill 时 catalog ~12K tokens 开始挤. 鸿波拍 "现在就开始, 不要等排期" → 一夜 ship 3 phase.
+
+37. **Phase 1: BL-SKILLS-TIER1-SHRINK** (1h) — 单 skill 注入 5 行 → 1 行
+    - `format_skills_block` 重写: 单 skill `- \`path\` — name v1.0.0: desc_short` 一行格式 (老的 5 行)
+    - `SKILL_DESC_CAP = 80` 字符上限, `_shorten_description()` 截断 + … 标记
+    - `_help: True` 提示从"每 skill 重复打"挪到 header 一次说 (老格式重复 5x 浪费 token)
+    - **效果**: 单 skill 120 tokens → ~25 tokens, **5x 压缩**. 100 skill catalog 25K chars → 12.6K chars (~3K tokens)
+    - 5 单测覆盖 (cap 截断 / 单行 / _help 不重复 / 100 skill 总长 < 14K / deprecated 单行格式)
+
+38. **Phase 2: BL-SKILLS-TIER1-FOLD** (1.5h) — 按 namespace 分组渲染
+    - `_NAMESPACE_ORDER = (catfish, hermes:bundled, hermes:github, hermes:hf, hermes:local)`, catfish 排首位 (工程审定优先调)
+    - 段头打 emoji + count + 用途提示 (`#### 🎯 catfish (8 个 — 工程审定, 客户合规, 优先调)`)
+    - 加 helper: `_namespace_group_key` 归一化 `hermes:github:owner/repo` → `hermes:github`, `_group_skills_by_namespace`, `_render_skill_line`
+    - 硬规则加第 6 条: "多个 namespace 时优先 catfish (工程审定)"
+    - 6 单测覆盖 (分组 / catfish 排首 / 空 namespace 不渲染 / 段头 count / 长 namespace 归一 / 未知 namespace 兜底)
+
+39. **Phase 3: BL-SKILLS-RAG** (4h) — BM25 retrieval, 大规模 skill 自动 top-K
+    - 新建 `skills_retrieval.py` (~150 行): 手撸 Okapi BM25 (k1=1.5, b=0.75) + 中英混合 `tokenize` (ASCII 按词 + CJK char-level) + IDF +0.5 平滑. **零外部依赖** (没引 rank-bm25 / FAISS / 大型 vector lib)
+    - `format_skills_block(skills, user_query, rag_threshold=30, top_k=15)`: skill 数 > 30 + 有 query → catfish 全留 + hermes 按 BM25 top-15, 其余按 namespace 折叠成 count
+    - 折叠区渲染: `🗂 折叠区 - 🧰 hermes:bundled: 还有 168 个 skill ... 找不到合适的? 调 catfish_search_skills(query='...')`
+    - `skills_inject.py` 加 `_extract_last_user_query(messages)` 从最后一条 user message 抽 query (含 multimodal list 处理), 串进 `format_skills_block`
+    - 26 新单测覆盖: tokenize (9 个 ASCII/CJK/mixed/标点/空), BM25Index (7 个 empty/no-match/ranking/top-k/IDF), RAG 集成 (5 个 under-threshold/no-query/kicks-in/catfish-always-inline/folded-summary), query extraction (5 个 str/multimodal/no-user/empty)
+    - 总 51 skill 测 + 182 下游测 (含 sanitizer/cap/skill_guard/edge_tool_config) 全过
+
+40. **docs/SKILL-PROGRESSIVE-DISCLOSURE.md** 落档
+    - 3 tier 架构图 (Tier 1 metadata / Tier 2 SKILL.md 全文 / Tier 3 参考文件)
+    - Anthropic 推荐对比表 (我们 catfish 怎么实现各 tier)
+    - 调优参数表 (`SKILL_DESC_CAP` / `RAG_THRESHOLD` / `RAG_TOP_K` 各自含义 + 调大调小风险 + 推荐场景)
+    - 测试覆盖 (51 测, BL- tag grep 易找)
+    - 后续路线 (#69 catfish_search_skills tool 1-2h + vector upgrade 1 周)
+
+### 踩坑 — Phase I
+
+- **Anthropic 文章我开 fetch 失败 (mp.weixin.qq.com 不在 fetch 白名单)**, web 搜了一圈靠 Anthropic 官方 docs + 多个独立分析师讨论 + Claude Docs best practices 复盘核心观点. 没读到第一手中文译文, 但靠侧信源猜对了文章主体 (Progressive Disclosure 3 tier)
+- **Phase 1 测试 < 12K chars 太紧**: 实测 100 skill ~12.6K chars (110 chars/line × 100 + header 1.5K). 我把测试断言放到 < 14K + 单 skill < 130 chars, 实测健康
+- **Phase 2 测试 'hermes:local' not in block 误报**: 加完硬规则第 6 条 "多个 namespace 时优先 catfish, 不要选 hermes:local (员工本机自学未审定)" 后, header 段含 "hermes:local" 字符串. 测试断言改成只断 section header (`#### 📝 hermes:local` 不在), 不断 raw 字符串
+- **BM25 中文 char-level 准确率假设**: tokenize CJK 每字一 token, 没引 jieba. 对 80 chars desc 短文本应该够 (查"汇报材料" → "汇/报/材/料" 4 token 都精确匹配). 真生产数据上验证还没做, 文档里标了 P2 follow-up (vector upgrade)
+- **`catfish_search_skills` tool 没在本 sprint 写**: 折叠区已提示模型该工具存在, 但 tool 真实现在 tool-bridge 里待 #69. 不影响 RAG 主路径 (top-15 已够 90% 场景), 但模型想钻折叠区找时会 emit 不存在的 tool name → 报错. 接受短期 trade-off
+- **catfish 永远 inline 决策**: RAG 模式下 catfish skill 即使跟 query 完全不匹配也全展示. 设计选择: 工程审定 skill 是客户合同绑定, 不能被检索算法藏起来. 副作用: catfish skill > 30 时 catalog 仍然臃肿 (但当前 8 个, 离 30 还远)
+
+### 关键决策 — Phase I
+
+- **零外部依赖 BM25 (而非引 rank-bm25 / FAISS)**: BM25 一共 ~150 行手撸. 引外部 lib 优势 = 性能稍优 + 边界条件考虑全; 但 catfish venv 已经够臃肿 (LiteLLM + asyncpg + aiohttp + ...), 加 dep 增 ~20MB. 自己撸够用 + 易控
+- **catfish 优先 / hermes 平等**: RAG 模式 catfish 永远全留, 5 个 hermes:* namespace 一起算 top-K (没给 hermes:bundled 比 hermes:github 优先). 工程审定 > 员工自学, 这是核心哲学决策
+- **rag_threshold=30 的选择**: 实测低于 30 走 RAG 没必要 (BM25 排序开销不小于全展示). 高于 30 时 RAG 真省 token. 30 是 catfish + hermes:bundled 的中位预估
+- **vector retrieval 留 P2**: BM25 用 char-level CJK + 80 chars desc 应该够准. vector (bge-m3) 准确率会高, 但 + embedding 调用延迟 (~50ms / chat 入口) + 模型大. 等真测发现 BM25 召回率不足再升级
+- **接口稳定 (新参数全 optional)**: `format_skills_block(skills, user_query=None, ...)` 老 caller 不动也工作. `inject_skills_catalog(messages)` 接口不变, 内部 query 抽取对调用方透明. 这是 5 月 sprint 学到的 — 接口稳定让 phase 间不破坏
+
+### 测试净增 — Phase I
+
+- skills 相关单测: 8 (inject) + 12 (loader version, 老的 5/2) + 11 (Phase 1/2 新加) + 26 (Phase 3 新加) = **57 全过**
+- 下游回归: sanitizer / cap / skill_guard / edge_tool_config 7 个 test 文件 **182 全过**, 没破任何东西
+
+### 完成 — Phase I 续: BL-SKILLS-VECTOR (5/25 早晨, 鸿波 "开干" 加 vector 联动)
+
+41. **BL-SKILLS-VECTOR** (2h) — bge-m3 vector retrieval 联动 + 多 backend 切换
+    - 新建 `skills_vector.py` (~200 行): `VectorIndex` 同 `BM25Index` `.rank(query, top_k)` 接口. numpy 算 cosine sim, argpartition top-K 快 3x. 校验 ndim+count mismatch.
+    - **Dependency Injection**: `embed_fn: Callable` 由 caller 注入, `skills_vector` 自己**不 import litellm** — 测试用 hash-based fake, 生产用 `make_litellm_embed_fn(model_name, api_base, api_key)`
+    - `_select_skills_for_render` 加 env `CATFISH_SKILLS_RETRIEVAL = bm25|vector|hybrid` 切 backend (默认 bm25, 保持 5/25 凌晨行为不变)
+    - **hybrid = BM25 + Vector RRF 融合** (k=60 TREC 默认), 鲁棒性最高 — 单 ranker 漏的 doc 另一边可能补
+    - **高可用 fallback**: vector/hybrid 任一步挂 (bge-m3 不可达 / embed_fn 调用挂 / index build 失败) → log warning, 自动退回 BM25, 不挂主流程
+    - `_vector_cache` (按 skill_path + mtime fingerprint) — skill 不变不重 embed (启动 50ms 10 skill / 5s 100 skill / 50s 1000 skill)
+    - 20 新单测 (`test_skills_vector.py`): VectorIndex 基础 8 + env mode switch 4 + RRF 融合 3 + multi-backend orchestration 4 + 端到端 1
+    - 总 **202 skill+sanitizer+cap+edge_tool_config 测全过**, 没破任何下游
+    - `docs/SKILL-PROGRESSIVE-DISCLOSURE.md` §9 加完整说明 (3 mode 切换 / 高可用 fallback / 测试覆盖)
+
+### 5/24-5/25 ship 总数: **41 项** (6 phase 主线 + .gitignore + Phase I 4 step skill progressive) 跨 16+ 小时
 
 

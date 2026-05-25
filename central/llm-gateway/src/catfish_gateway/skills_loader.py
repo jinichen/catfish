@@ -401,15 +401,123 @@ def discover_skills() -> list[SkillMeta]:
     return results
 
 
-def format_skills_block(skills: list[SkillMeta]) -> str:
-    """把 skill 列表渲染成 system prompt 用的 markdown 块.
+# BL-SKILLS-TIER1-SHRINK (5/25 鸿波, "skill 越来越多会爆"): Anthropic Progressive
+# Disclosure 推荐单 skill metadata 30-60 tokens, 老格式 60-120 tokens (2x). 收紧策略:
+#   1. description 截到 SKILL_DESC_CAP 字符 (Tier 1 摘要), 详情走 _help (Tier 2)
+#   2. 每 skill 1 行 (老的 5 行), 5x 行数压缩
+#   3. _help 提示挪 header 一次说, 不再每 skill 重复
+# 100 skill 时从 ~12K → ~3K tokens. 详见 docs/SKILL-PROGRESSIVE-DISCLOSURE.md.
+SKILL_DESC_CAP = 80
 
-    设计:
-      - 每个 skill 一段, 标题 = skill_path, 正文 = description
-      - 顶部点出"用 catfish_run_skill 调用"
-      - 底部告诉 LLM 想看具体参数请看 SKILL.md
 
-    输出长度: 单 skill ~200-500 字, 总长跟 skill 数量线性. 5 个 skill 内可控.
+def _shorten_description(description: str, cap: int = SKILL_DESC_CAP) -> str:
+    """单行 cap 截断 (Tier 1 metadata), 详细说明走 _help (Tier 2)."""
+    flat = " ".join(description.split())  # 折叠换行 + 多空白
+    if len(flat) <= cap:
+        return flat
+    return flat[:cap].rstrip() + "…"
+
+
+# BL-SKILLS-TIER1-FOLD (5/25 鸿波): Phase 2 — 按 namespace 分组渲染, 让模型在
+# 50+ skill 时一眼看清"哪些是工程审定 (优先调) / 哪些是员工自学". 5 个 namespace
+# 按优先级排, catfish 排首位 (合规/审定/客户绑定 → 模型应优先选).
+_NAMESPACE_ORDER = (
+    "catfish",
+    "hermes:bundled",
+    "hermes:github",
+    "hermes:hf",
+    "hermes:local",
+)
+
+_NAMESPACE_LABELS: dict[str, tuple[str, str]] = {
+    "catfish":         ("🎯", "工程审定, 客户合规, **优先调**"),
+    "hermes:bundled":  ("🧰", "hermes 装机自带"),
+    "hermes:github":   ("🐱", "git clone 装"),
+    "hermes:hf":       ("🤗", "HuggingFace tap 装"),
+    "hermes:local":    ("📝", "员工本机自写"),
+}
+
+
+def _namespace_group_key(skill: SkillMeta) -> str:
+    """把 'hermes:github:owner/repo' 归一到 'hermes:github' 用作 group key.
+
+    catfish 已经是裸 'catfish', hermes:bundled 也已经裸, 不动.
+    带 owner/repo 的 hermes:github:* / hermes:hf:* / hermes:local:* 全归 ns 大类.
+    """
+    ns = skill.namespace
+    for prefix in ("hermes:github", "hermes:hf", "hermes:local"):
+        if ns == prefix or ns.startswith(prefix + ":"):
+            return prefix
+    return ns  # catfish / hermes:bundled / 未知 → 保原
+
+
+def _group_skills_by_namespace(skills: list[SkillMeta]) -> dict[str, list[SkillMeta]]:
+    """{namespace_label: [SkillMeta]}, 内部保 caller 给的相对顺序 (discover 已排过)."""
+    groups: dict[str, list[SkillMeta]] = {}
+    for s in skills:
+        key = _namespace_group_key(s)
+        groups.setdefault(key, []).append(s)
+    return groups
+
+
+def _render_skill_line(s: SkillMeta) -> str:
+    """单 skill 渲染成 1 行 (Phase 1 收紧后的格式)."""
+    version_tag = f" v{s.version}" if s.version != "0.1.0" else ""
+    if s.deprecated:
+        warn_text = s.deprecated_reason or "已下线, 不推荐调用"
+        warn_short = _shorten_description(warn_text, cap=SKILL_DESC_CAP)
+        return (
+            f"- `{s.skill_path}` — {s.name}{version_tag} "
+            f"⚠️ DEPRECATED: {warn_short}"
+        )
+    desc_short = _shorten_description(s.description)
+    return f"- `{s.skill_path}` — {s.name}{version_tag}: {desc_short}"
+
+
+# BL-SKILLS-RAG (5/25 鸿波): Phase 3 — BM25 retrieval. skill 数超 RAG_THRESHOLD 时,
+# 注入只露 top-K 个最匹配 user query 的 + 其余按 namespace 折成 count. 关键: 模型
+# 想找更多 → 调 catfish_search_skills(query) 工具 (tool-bridge 后续 ship).
+RAG_THRESHOLD = 30
+RAG_TOP_K = 15
+
+# BL-SKILLS-VECTOR (5/25 鸿波 "开干"): retrieval backend 切换. env 控.
+#   - "bm25"   (默认): 走 BM25Index, 零外部依赖, char-level CJK, 关键词精确匹配好
+#   - "vector": 走 VectorIndex (bge-m3 embed), 语义相似好 ("汇报" 找到 "述职报告")
+#   - "hybrid": vector + BM25 双跑, RRF 融合排序 (鲁棒性高)
+# 任何 mode 失败 → 自动回退 BM25 (高可用). 详见 skills_vector.py + docs/SKILL-PROGRESSIVE-DISCLOSURE.md
+SKILLS_RETRIEVAL_MODE_ENV = "CATFISH_SKILLS_RETRIEVAL"
+SKILLS_RETRIEVAL_DEFAULT = "bm25"
+
+# 缓存 — vector backend 启动一次 embed 全 skill (50ms-5s 看规模), 不该每次 rank 重建.
+# fingerprint 跟 skills mtime 一起算 (skills 变 → 重建).
+_vector_cache: dict = {"fingerprint": None, "index": None, "backend": None}
+
+
+def format_skills_block(
+    skills: list[SkillMeta],
+    user_query: str | None = None,
+    rag_threshold: int = RAG_THRESHOLD,
+    top_k: int = RAG_TOP_K,
+) -> str:
+    """渲染成 system prompt skill catalog (Tier 1 metadata).
+
+    BL-SKILLS-TIER1-SHRINK (5/25): Anthropic Progressive Disclosure 模式 —
+    Tier 1 只露 name + 一句话 desc, Tier 2 (完整 SKILL.md) 模型决定调时调 _help 拿,
+    Tier 3 (参考文件) skill 执行中按需 read_file.
+
+    BL-SKILLS-TIER1-FOLD (5/25): Phase 2 — 按 namespace 分组渲染.
+    catfish 排首位 (工程审定, 优先调), hermes:* 各成段. 模型看分组优先级 +
+    一行 metadata, 选 skill 后 _help 拿详情.
+
+    BL-SKILLS-RAG (5/25): Phase 3 — 当 skill 数 > rag_threshold (30) 且有 user_query
+    时, 用 BM25 算 top_k (15) 个最相关 skill 注入, 其余折成 namespace count 行.
+    模型想找更多 → catfish_search_skills(query) 工具.
+
+    输出长度:
+      - skills <= 30: 全部 grouped 渲染 (Phase 1+2 行为)
+      - skills >  30: top_K grouped + 折叠 footer "还有 N 个 skill, 调 catfish_search_skills"
+
+    详见 docs/SKILL-PROGRESSIVE-DISCLOSURE.md.
     """
     if not skills:
         return ""
@@ -428,47 +536,235 @@ def format_skills_block(skills: list[SkillMeta]) -> str:
         "3. **关键词模糊匹配**: 员工说\"汇报\" / \"汇报材料\" / \"请示\" / \"立项\" / "
         "\"决策事项\" / \"上报\" / \"呈报\" / \"工作总结\"等任何向**上级**提交的 .docx, "
         "都走 leadership-briefing skill — 即使员工没说\"用 skill\" / \"用模板\".",
-        "4. **不会的话先 _help**: 不知道某 skill 参数怎么传时, "
-        "`catfish_run_skill(skill_path='...', params={'_help': True})` 会返回完整 schema.",
-        "5. **跟员工对话补全参数**: skill 需要的字段 (例: 5 段汇报的 background / problems "
-        "/ solutions / next_steps) 员工没全部说? 主动**反问**他, 一次问 1-2 个, "
-        "不要等员工一次性给齐.",
+        "4. **不知道参数先 _help (重要!)**: 下面 skill 列表是 Tier 1 摘要 "
+        f"(每条 ≤ {SKILL_DESC_CAP} 字), 详细参数 schema 一定用 "
+        "`catfish_run_skill(skill_path='...', params={'_help': True})` 拿. "
+        "**别基于摘要瞎传参**.",
+        "5. **跟员工对话补全参数**: skill 需要的字段员工没全部说? "
+        "主动**反问**他, 一次问 1-2 个, 不要等员工一次性给齐.",
+        "6. **多个 namespace 时优先 catfish**: 同样能搞定时, 优先选 catfish 的 "
+        "(工程审定 + 客户合规), 不要选 hermes:local (员工本机自学未审定).",
         "",
         "### 调用方式",
         "",
         "```",
-        "catfish_run_skill(skill_path='<path>', params={...})",
+        "catfish_run_skill(skill_path='<path>', params={'_help': True})  # 先看 schema",
+        "catfish_run_skill(skill_path='<path>', params={...真参数...})    # 再真跑",
         "```",
         "",
         "返回 `{ok, files, summary}`. files 字段里的路径 Companion 会自动渲染成 "
         "可点击 pill 给员工.",
         "",
-        "### 当前可用 skill",
+        f"### 当前可用 skill ({len(skills)} 个, 详情用 _help 拿)",
         "",
     ]
-    for s in skills:
-        # 五一 sprint Day 2: 显示版本 + 下线警告
-        version_tag = f" `v{s.version}`" if s.version != "0.1.0" else ""
-        if s.deprecated:
-            lines.append(f"### `{s.skill_path}` — {s.name}{version_tag}  ⚠️ DEPRECATED")
-            lines.append("")
-            if s.deprecated_reason:
-                lines.append(f"**⚠️ 此 skill 已下线**: {s.deprecated_reason}")
-                lines.append("")
-                lines.append("除非员工明确要求, 否则不要调此 skill.")
-            else:
-                lines.append("**⚠️ 此 skill 已下线, 不推荐调用.**")
-        else:
-            lines.append(f"### `{s.skill_path}` — {s.name}{version_tag}")
+
+    # BL-SKILLS-RAG (Phase 3): skill 多 + 有 user_query → 只渲染 top-K 个最相关的.
+    # rendered_skills 是要 inline 展示的 (catfish 全留 + 其余 ns 留 top-K), folded 是
+    # 折成 namespace count 的 (catfish 之外的, 没进 top-K 的 hermes skill).
+    rendered_skills, folded_namespaces = _select_skills_for_render(
+        skills, user_query, rag_threshold, top_k
+    )
+
+    # BL-SKILLS-TIER1-FOLD: 按 namespace 分组. catfish 排首, hermes:* 各成段.
+    groups = _group_skills_by_namespace(rendered_skills)
+    for ns_key in _NAMESPACE_ORDER:
+        ns_skills = groups.get(ns_key)
+        if not ns_skills:
+            continue
+        emoji, hint = _NAMESPACE_LABELS[ns_key]
+        lines.append(f"#### {emoji} {ns_key} ({len(ns_skills)} 个 — {hint})")
         lines.append("")
-        lines.append(s.description)
+        for s in ns_skills:
+            lines.append(_render_skill_line(s))
+        lines.append("")
+
+    # 兜底: 未知 namespace (理论不该出现, 但写入纪律强一点 — 不丢)
+    unknown_keys = sorted(set(groups.keys()) - set(_NAMESPACE_ORDER))
+    for ns_key in unknown_keys:
+        ns_skills = groups[ns_key]
+        lines.append(f"#### ❓ {ns_key} ({len(ns_skills)} 个 — 未知 namespace)")
+        lines.append("")
+        for s in ns_skills:
+            lines.append(_render_skill_line(s))
+        lines.append("")
+
+    # BL-SKILLS-RAG: 折叠区 — 没进 top-K 的按 namespace 报 count + 提示用工具搜.
+    if folded_namespaces:
+        lines.append("#### 🗂 折叠区 (按相关性筛掉, 想用调 catfish_search_skills)")
+        lines.append("")
+        for ns_key, count in folded_namespaces:
+            emoji, hint = _NAMESPACE_LABELS.get(ns_key, ("❓", "未知 ns"))
+            lines.append(f"- {emoji} `{ns_key}`: 还有 {count} 个 skill ({hint})")
         lines.append("")
         lines.append(
-            f"💡 不知道 params 时: 调用 `catfish_run_skill(skill_path='{s.skill_path}', "
-            "params={'_help': True})` 拿到参数 schema."
+            "**找不到合适的? 调 `catfish_search_skills(query='...')` 在全部 skill 里搜.**"
         )
         lines.append("")
+
     return "\n".join(lines)
+
+
+def _retrieval_mode() -> str:
+    """env CATFISH_SKILLS_RETRIEVAL → mode. 未知值 → 默认 bm25."""
+    mode = os.environ.get(SKILLS_RETRIEVAL_MODE_ENV, SKILLS_RETRIEVAL_DEFAULT).lower()
+    if mode not in ("bm25", "vector", "hybrid"):
+        logger.warning(
+            "%s=%r 不合法, 回 'bm25'. 合法值: bm25 / vector / hybrid",
+            SKILLS_RETRIEVAL_MODE_ENV, mode,
+        )
+        return SKILLS_RETRIEVAL_DEFAULT
+    return mode
+
+
+def _skills_fingerprint(skills: list[SkillMeta]) -> str:
+    """skill 集合 fingerprint, 用 skill_path + mtime."""
+    parts = []
+    for s in skills:
+        try:
+            mt = s.skill_md_path.stat().st_mtime
+        except OSError:
+            mt = 0
+        parts.append(f"{s.skill_path}:{mt}")
+    return "|".join(parts)
+
+
+def _build_vector_index(other_skills: list[SkillMeta]):
+    """启动一次 embed 全 skill, 缓 _vector_cache. 返 VectorIndex 或 None (失败).
+
+    设计:
+      - skills 集合不变 → cache hit, 直接返
+      - 集合变 (新装/删/修 SKILL.md mtime) → 重建
+      - embed_fn 调用挂 (bge-m3 不可达 / API 错) → 返 None, caller fallback BM25
+    """
+    fp = _skills_fingerprint(other_skills)
+    if (_vector_cache["fingerprint"] == fp
+            and _vector_cache["backend"] == "vector"
+            and _vector_cache["index"] is not None):
+        return _vector_cache["index"]
+
+    # 懒 import — skills_vector 依赖 numpy, 不该在模块顶部 import (有的部署可能没 numpy)
+    try:
+        from .skills_vector import VectorIndex, make_litellm_embed_fn  # noqa: PLC0415
+    except ImportError as e:
+        logger.warning("BL-SKILLS-VECTOR: skills_vector 模块 import 失败 (%s), fallback BM25", e)
+        return None
+
+    # 找 embed 配置 — env 优先, 缺省取 catfish-private-embed
+    embed_model = os.environ.get("CATFISH_SKILLS_EMBED_MODEL", "openai/bge-m3")
+    embed_api_base = os.environ.get("CATFISH_SKILLS_EMBED_BASE", "") or None
+    embed_api_key = os.environ.get("CATFISH_SKILLS_EMBED_KEY", "") or None
+
+    docs = [
+        f"{s.skill_path} {s.name} {s.description}"
+        for s in other_skills
+    ]
+    try:
+        embed_fn = make_litellm_embed_fn(
+            model_name=embed_model,
+            api_base=embed_api_base,
+            api_key=embed_api_key,
+        )
+        idx = VectorIndex(docs, embed_fn=embed_fn)
+    except Exception as e:
+        logger.warning("BL-SKILLS-VECTOR: 建 VectorIndex 挂 (%s), fallback BM25", e)
+        return None
+
+    _vector_cache["fingerprint"] = fp
+    _vector_cache["index"] = idx
+    _vector_cache["backend"] = "vector"
+    logger.info(
+        "BL-SKILLS-VECTOR: VectorIndex 建好, %d skill, dim=%s, model=%s",
+        len(docs), getattr(idx, "_dim", "?"), embed_model,
+    )
+    return idx
+
+
+def _rrf_fuse(
+    bm25_ranked: list[tuple[int, float]],
+    vector_ranked: list[tuple[int, float]],
+    k: int = 60,
+    top_k: int = 15,
+) -> list[tuple[int, float]]:
+    """Reciprocal Rank Fusion — hybrid mode 用. k=60 是 TREC 默认.
+
+    score(doc) = sum over rankers: 1 / (k + rank_of_doc_in_ranker)
+
+    比简单 cosine + BM25 score 加权更鲁棒 (两个 ranker 的 score 量纲完全不同).
+    """
+    rrf_scores: dict[int, float] = {}
+    for ranked in (bm25_ranked, vector_ranked):
+        for rank, (doc_idx, _score) in enumerate(ranked):
+            rrf_scores[doc_idx] = rrf_scores.get(doc_idx, 0.0) + 1.0 / (k + rank + 1)
+    fused = sorted(rrf_scores.items(), key=lambda x: -x[1])
+    return fused[:top_k]
+
+
+def _select_skills_for_render(
+    skills: list[SkillMeta],
+    user_query: str | None,
+    rag_threshold: int,
+    top_k: int,
+) -> tuple[list[SkillMeta], list[tuple[str, int]]]:
+    """BL-SKILLS-RAG: 决定哪些 skill inline 渲染, 哪些折叠.
+
+    规则:
+      1. catfish skill 永远全 inline (工程审定, 关键, 总展示)
+      2. skill 总数 <= rag_threshold OR 没 user_query → 全 inline, 不折叠
+      3. skill 总数 > threshold + 有 query → 走 retrieval (BM25/vector/hybrid),
+         catfish 全留, hermes skill 只留前 top_k, 其余按 ns 折叠成 count
+
+    BL-SKILLS-VECTOR (5/25): retrieval backend env CATFISH_SKILLS_RETRIEVAL 切.
+    vector / hybrid 失败 → 自动回退 BM25 (高可用).
+    """
+    # 总 skill 数低 OR 没 query → 全 inline
+    if len(skills) <= rag_threshold or not user_query or not user_query.strip():
+        return skills, []
+
+    # 分: catfish 留, 其他走 retrieval
+    catfish_skills = [s for s in skills if s.namespace == "catfish"]
+    other_skills = [s for s in skills if s.namespace != "catfish"]
+
+    if not other_skills:
+        return skills, []
+
+    # 算 ranked = list of (doc_idx_in_other_skills, score). retrieval mode 切 backend.
+    from .skills_retrieval import BM25Index, tokenize  # noqa: PLC0415
+    bm25_docs = [
+        tokenize(f"{s.skill_path} {s.name} {s.description}")
+        for s in other_skills
+    ]
+    bm25_idx = BM25Index(bm25_docs)
+    bm25_ranked = bm25_idx.rank(user_query, top_k=top_k)
+
+    mode = _retrieval_mode()
+    if mode == "bm25":
+        ranked = bm25_ranked
+    else:
+        # vector / hybrid 都要建 vector index, 失败 → fallback bm25
+        v_idx = _build_vector_index(other_skills)
+        if v_idx is None:
+            logger.info("BL-SKILLS-VECTOR: vector index 不可用, 这轮回退 BM25")
+            ranked = bm25_ranked
+        else:
+            vector_ranked = v_idx.rank(user_query, top_k=top_k)
+            if mode == "vector":
+                ranked = vector_ranked
+            else:  # hybrid
+                ranked = _rrf_fuse(bm25_ranked, vector_ranked, top_k=top_k)
+
+    kept_indices = {i for i, _score in ranked}
+    kept_others = [s for i, s in enumerate(other_skills) if i in kept_indices]
+    folded_others = [s for i, s in enumerate(other_skills) if i not in kept_indices]
+
+    # folded 按 ns 数 count
+    fold_counts: dict[str, int] = {}
+    for s in folded_others:
+        key = _namespace_group_key(s)
+        fold_counts[key] = fold_counts.get(key, 0) + 1
+    folded_list = sorted(fold_counts.items(), key=lambda x: -x[1])
+
+    return catfish_skills + kept_others, folded_list
 
 
 # ── 单元测试 hook ───────────────────────────────────────────────
