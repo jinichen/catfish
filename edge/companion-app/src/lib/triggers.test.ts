@@ -156,5 +156,104 @@ console.log("\n## detectAnyTrigger 优先级");
   check("deadline 优先 silence/focus", r != null && r.kind === "deadline", JSON.stringify(r));
 }
 
+// ── BL-PROACTIVE-RUNAWAY (5/25 鸿波连发 7 条 spam 修) ───────────
+
+console.log("\n## BL-PROACTIVE-RUNAWAY: detectDeadline 返 dedupe_key");
+{
+  const r = detectDeadline({
+    journalText: "周一 5/26 跟省厅确认中电注册地修改",
+    now: new Date(2026, 4, 25, 14, 0),  // 5/25 14:00, 距 5/26 = 1 天
+  });
+  check("命中 deadline", r != null && r.kind === "deadline", JSON.stringify(r));
+  check("含 dedupe_key 'deadline:5/26'", r != null && r.dedupe_key === "deadline:5/26", JSON.stringify(r));
+}
+
+console.log("\n## BL-PROACTIVE-RUNAWAY: shouldStaySilent 看 dedupe_key 24h cooldown");
+{
+  const now = new Date(2026, 4, 25, 14, 0);
+  // 12h 前 fire 过同样 deadline:5/26
+  const firedLog = [
+    { kind: "deadline" as const, ts: now.getTime() - 12 * 3600_000, dedupe_key: "deadline:5/26" },
+  ];
+  const guard = shouldStaySilent({
+    now,
+    firedLog,
+    lastDismissTs: null,
+    candidateKind: "deadline",
+    candidateDedupeKey: "deadline:5/26",
+  });
+  check(
+    "同 deadline 12h 内静默 (24h cooldown)",
+    guard.silent && guard.reason.includes("content_cooldown"),
+    JSON.stringify(guard),
+  );
+}
+
+console.log("\n## BL-PROACTIVE-RUNAWAY: 不同 deadline 不受 content cooldown 影响");
+{
+  const now = new Date(2026, 4, 25, 14, 0);
+  const firedLog = [
+    { kind: "deadline" as const, ts: now.getTime() - 12 * 3600_000, dedupe_key: "deadline:5/26" },
+  ];
+  // 但同 kind 30 min cooldown 还在 — 12h 远超 30 min, 所以 same-kind 也不拦
+  const guard = shouldStaySilent({
+    now,
+    firedLog,
+    lastDismissTs: null,
+    candidateKind: "deadline",
+    candidateDedupeKey: "deadline:5/28",  // 不同 deadline
+  });
+  check(
+    "不同 deadline 不被 cooldown 拦",
+    !guard.silent,
+    JSON.stringify(guard),
+  );
+}
+
+console.log("\n## BL-PROACTIVE-RUNAWAY: MAX_PROACTIVE_PER_DAY 降到 2");
+{
+  const now = new Date(2026, 4, 25, 14, 0);
+  // 今天已 fire 2 次
+  const firedLog = [
+    { kind: "deadline" as const, ts: now.getTime() - 4 * 3600_000, dedupe_key: "deadline:5/26" },
+    { kind: "silence" as const, ts: now.getTime() - 2 * 3600_000, dedupe_key: "silence" },
+  ];
+  const guard = shouldStaySilent({
+    now,
+    firedLog,
+    lastDismissTs: null,
+    candidateKind: "focus",
+    candidateDedupeKey: "focus",
+  });
+  check(
+    "今天已 2 次 → 第 3 次被 daily_cap 拦",
+    guard.silent && guard.reason.includes("daily_cap"),
+    JSON.stringify(guard),
+  );
+}
+
+console.log("\n## BL-PROACTIVE-RUNAWAY: detectAnyTrigger 透传 dedupe_key 给 guard");
+{
+  const now = new Date(2026, 4, 25, 14, 0);
+  // 12h 前同 deadline 已 fire
+  const firedLog = [
+    { kind: "deadline" as const, ts: now.getTime() - 12 * 3600_000, dedupe_key: "deadline:5/26" },
+  ];
+  const r = detectAnyTrigger({
+    now,
+    messages: [],
+    journalText: "周一 5/26 跟省厅确认中电注册地修改",  // 同样 deadline
+    lastFocusLeftTs: null,
+    lastFocusReturnTs: null,
+    firedLog,
+    lastDismissTs: null,
+  });
+  check(
+    "同 deadline 12h 内 → detectAnyTrigger 返 null (被内容 cooldown 拦)",
+    r === null,
+    JSON.stringify(r),
+  );
+}
+
 console.log(`\n${pass} pass, ${fail} fail`);
 if (fail > 0) process.exit(1);

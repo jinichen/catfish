@@ -25,10 +25,27 @@ export interface TriggerResult {
   message: string; // 本地模板拼的话 (LLM 不可用时兜底)
   why: string; // 给开发 console / audit 看的触发原因
   context: Record<string, unknown>; // 5/6 Phase B: 给 gateway LLM 重写 starter 用的结构化 context
+  /**
+   * 5/25 BL-PROACTIVE-RUNAWAY: 内容级 dedupe key.
+   *
+   * - deadline trigger: "deadline:5/26"  (按日期, 同一 deadline 24h 内不重发)
+   * - silence trigger: "silence"          (没有内容粒度, 同 kind 30 min cooldown 就够)
+   * - focus trigger: "focus"              (同上)
+   *
+   * 没填默认 = kind 字符串. shouldStaySilent 看 dedupe_key 比 same-kind cooldown
+   * 更严的 cooldown (DEADLINE_CONTENT_COOLDOWN_MS) 来防"同 deadline 不同 ts 反复
+   * fire" 这种 bug.
+   */
+  dedupe_key?: string;
 }
 
-/** 不打扰: 一天最多主动几次 */
-export const MAX_PROACTIVE_PER_DAY = 5;
+/** 不打扰: 一天最多主动几次.
+ *
+ * 5/25 BL-PROACTIVE-RUNAWAY (鸿波线上撞 7 条 spam): 老 5 + scheduler 死时间 4 条 =
+ * 真上限 9 条/天, 过重. 降到 2 — scheduler 4 + triggers 2 = 真上限 6 条仍偏多, 但
+ * 起码 triggers 不再无脑加码. 真正修法是 scheduler + triggers 共享 firedLog (后续).
+ */
+export const MAX_PROACTIVE_PER_DAY = 2;
 /** dismiss 后多久内静默 */
 export const SNOOZE_AFTER_DISMISS_MS = 30 * 60_000;
 /** 同 kind 触发后多久内不重复 */
@@ -37,6 +54,9 @@ export const SAME_KIND_COOLDOWN_MS = 30 * 60_000;
 export const SILENCE_THRESHOLD_MS = 30 * 60_000;
 /** focus 切回 Companion 触发最低门槛 (距上次活跃) */
 export const FOCUS_RETURN_MIN_AWAY_MS = 30 * 60_000;
+/** 5/25 BL-PROACTIVE-RUNAWAY: 同一个 deadline (按 date_str 识别) 24h cooldown.
+ *  防同一个"5/26 周一" deadline 在 journal 多处出现导致 regex 多次匹配 spam. */
+export const DEADLINE_CONTENT_COOLDOWN_MS = 24 * 3600_000;
 
 /** 工作时段 (本地小时) */
 export const QUIET_HOURS_START = 22;
@@ -45,16 +65,19 @@ export const QUIET_HOURS_END = 7;
 interface FiredLogEntry {
   kind: TriggerKind;
   ts: number;
+  /** 5/25 BL-PROACTIVE-RUNAWAY: 内容级 dedupe key. 老 entry 没存默认 fallback 到 kind. */
+  dedupe_key?: string;
 }
 
-/** 时段 / 频率 / dismiss / cooldown 4 重不打扰. 返 true = 该静默. */
+/** 时段 / 频率 / dismiss / cooldown / content 5 重不打扰. 返 true = 该静默. */
 export function shouldStaySilent(args: {
   now: Date;
   firedLog: FiredLogEntry[];
   lastDismissTs: number | null;
   candidateKind: TriggerKind;
+  candidateDedupeKey?: string;
 }): { silent: boolean; reason: string } {
-  const { now, firedLog, lastDismissTs, candidateKind } = args;
+  const { now, firedLog, lastDismissTs, candidateKind, candidateDedupeKey } = args;
   const hour = now.getHours();
   if (hour >= QUIET_HOURS_START || hour < QUIET_HOURS_END) {
     return { silent: true, reason: `quiet_hours (${hour}:xx)` };
@@ -69,7 +92,25 @@ export function shouldStaySilent(args: {
   if (lastDismissTs && now.getTime() - lastDismissTs < SNOOZE_AFTER_DISMISS_MS) {
     return { silent: true, reason: "recent_dismiss" };
   }
-  // same-kind cooldown
+  // 5/25 BL-PROACTIVE-RUNAWAY: 内容级 dedupe — 同一个 deadline (按 date_str) 24h cooldown
+  if (candidateDedupeKey) {
+    const sameContentRecent = firedLog
+      .filter((e) => (e.dedupe_key || e.kind) === candidateDedupeKey)
+      .sort((a, b) => b.ts - a.ts)[0];
+    if (sameContentRecent) {
+      // deadline 类用 24h cooldown, 其他用 same-kind 30 min cooldown
+      const cooldown = candidateKind === "deadline"
+        ? DEADLINE_CONTENT_COOLDOWN_MS
+        : SAME_KIND_COOLDOWN_MS;
+      if (now.getTime() - sameContentRecent.ts < cooldown) {
+        return {
+          silent: true,
+          reason: `content_cooldown (${candidateDedupeKey}, ${Math.round((now.getTime() - sameContentRecent.ts) / 60_000)} min ago)`,
+        };
+      }
+    }
+  }
+  // same-kind cooldown (老的, 内容级没命中时仍然管)
   const sameKindRecent = firedLog
     .filter((e) => e.kind === candidateKind)
     .sort((a, b) => b.ts - a.ts)[0];
@@ -183,6 +224,8 @@ export function detectDeadline(args: {
           date_str: `${month}/${day}`,
           journal_excerpt: ctx.slice(0, 100),
         },
+        // 5/25 BL-PROACTIVE-RUNAWAY: 内容级 dedupe — 同一个 deadline 24h 内只 fire 1 次
+        dedupe_key: `deadline:${month}/${day}`,
       };
     }
   }
@@ -259,6 +302,7 @@ export function detectAnyTrigger(args: {
       firedLog: args.firedLog,
       lastDismissTs: args.lastDismissTs,
       candidateKind: c.kind,
+      candidateDedupeKey: c.dedupe_key,  // 5/25 BL-PROACTIVE-RUNAWAY 内容级 dedupe
     });
     if (guard.silent) {
       console.log(`[triggers] ${c.kind} 命中但被静默: ${guard.reason}`);

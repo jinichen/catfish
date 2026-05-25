@@ -6301,9 +6301,24 @@ TodoStore.write([{content, status=completed}])
     - 完整 plan: 3 个 Tauri Rust commands + TS wrapper + RecordingsCard 组件 + 集成步骤 + 真测脚本
     - 估 3-4h Mac 上一气做完
 
-### 5/24-5/25 ship 总数: **44 项** (6 phase 主线 + .gitignore + Phase I 4 step + Phase J 3 step) 跨 17+ 小时
+### 完成 — Phase K (5/25 中午紧急): BL-PROACTIVE-RUNAWAY P0 修
 
-整夜测试净增累计: gateway 123 + cli 57 + tool-bridge 39 + memory plugin 22 = **241 测全过**, 零下游破坏.
+45. **BL-PROACTIVE-RUNAWAY** (P0 紧急, 30 min) — 主动闲聊连发 7 条 spam 修
+    - **现象**: 鸿波线上撞 Companion 短时间内 assistant 主动 push 7 条消息, 其中 3 条几乎完全重复"周一跟省厅确认中电注册地修改"
+    - **根因 1**: scheduler (4 死时段) + triggers (3 信号) **两个 hook 各自 dedupe 互不相干**, 加起来日上限 9 条
+    - **根因 2**: `useProactiveTriggers` 没读 `catfish:proactive_enabled` flag → 关 scheduler 但 triggers 仍 fire
+    - **根因 3**: `detectDeadline` 同一 "5/26 周一" deadline 在 journal 多处 regex match, 只靠 30 min same-kind cooldown 防, 1.5h 内能 fire 3 次同内容
+    - **修法**:
+      - `triggers.ts`: `MAX_PROACTIVE_PER_DAY` 5 → 2 (跟 scheduler 4 加起来真上限 6 条)
+      - `triggers.ts`: 加 `DEADLINE_CONTENT_COOLDOWN_MS = 24h` + `dedupe_key` 字段 + `shouldStaySilent` 看 dedupe_key
+      - `detectDeadline`: 返 `dedupe_key: "deadline:{date_str}"` (e.g. `deadline:5/26`)
+      - `useProactiveTriggers`: 加 `isProactiveEnabled()` 检查, 跟 scheduler 共用 flag 一关全关
+      - `useProactiveTriggers`: firedLog entry 加 `dedupe_key` 字段供下次 tick 内容级判
+    - **测试**: triggers.test.ts +5 (deadline 返 dedupe_key / 同 deadline 12h 静默 / 不同 deadline 不被拦 / daily_cap 第 3 次拦 / detectAnyTrigger 透传 dedupe_key), vitest 跑 22/22 全过
+
+### 5/24-5/25 ship 总数: **45 项** (6 phase 主线 + .gitignore + Phase I 4 step + Phase J 3 step + Phase K P0) 跨 18+ 小时
+
+整夜测试净增累计: gateway 123 + cli 57 + tool-bridge 39 + memory plugin 22 + companion triggers 22 = **263 测全过**, 零下游破坏.
 
 
 

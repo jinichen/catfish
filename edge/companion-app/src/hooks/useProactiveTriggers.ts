@@ -32,11 +32,25 @@ const TICK_MS = 60_000;
 const FIRED_LOG_KEY = "catfish:proactive_triggers_fired_log";
 const FIRED_LOG_MAX_ENTRIES = 30;
 const DISMISS_TS_KEY = "catfish:proactive_triggers_last_dismiss";
+// 5/25 BL-PROACTIVE-RUNAWAY: 复用 scheduler 的 enable flag, 一关全关.
+// 老 useProactiveTriggers 没读这个, 鸿波关 scheduler 但 triggers 仍 fire 7 条 spam.
+const ENABLED_KEY = "catfish:proactive_enabled";
+
+function isProactiveEnabled(): boolean {
+  try {
+    const v = localStorage.getItem(ENABLED_KEY);
+    return v === null ? true : v === "true";
+  } catch {
+    return true;
+  }
+}
 
 interface FiredEntry {
   kind: TriggerKind;
   ts: number;
   why: string;
+  /** 5/25 BL-PROACTIVE-RUNAWAY: 内容级 dedupe key (跟 TriggerResult 同字段) */
+  dedupe_key?: string;
 }
 
 function loadFiredLog(): FiredEntry[] {
@@ -97,6 +111,11 @@ export function useProactiveTriggers(): void {
 
     const tick = async () => {
       if (cancelled) return;
+      // 5/25 BL-PROACTIVE-RUNAWAY: enable flag 检查 (跟 scheduler 同 key 一关全关).
+      // 老 hook 没这条, 鸿波关 scheduler 但 triggers 仍 7 条 spam.
+      if (!isProactiveEnabled()) {
+        return;
+      }
       try {
         const now = new Date();
         const messages = useChatStore.getState().messages;
@@ -129,7 +148,14 @@ export function useProactiveTriggers(): void {
         );
 
         // 落 fired log (写 localStorage 给下一 tick 防重)
-        firedLog.push({ kind: trigger.kind, ts: now.getTime(), why: trigger.why });
+        // 5/25 BL-PROACTIVE-RUNAWAY: 把 trigger.dedupe_key 也存进去, 给下一 tick 的
+        // shouldStaySilent 做内容级 dedupe (同一 "5/26 周一" deadline 24h 内不重发).
+        firedLog.push({
+          kind: trigger.kind,
+          ts: now.getTime(),
+          why: trigger.why,
+          dedupe_key: trigger.dedupe_key,
+        });
         saveFiredLog(firedLog);
 
         // Phase B: 先调 gateway 让 LLM 用信号 + context 重写 starter (5s timeout).
