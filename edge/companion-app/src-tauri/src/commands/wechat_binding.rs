@@ -206,8 +206,9 @@ pub fn wechat_binding_status() -> WeChatBindingStatus {
 // 并发: 不加跨进程锁. atomic_replace (tmp + rename) 防 partial write 就够 —
 // 最坏情况是员工同时在 Companion 点审批 + 终端跑 hermes pairing approve,
 // 后写盖前写; 数据本身不会坏. 实际触发概率 ~0.
+//
+// (fs / PathBuf 已在文件顶部 use 过, 这里只加新依赖.)
 
-use std::fs;
 use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
 

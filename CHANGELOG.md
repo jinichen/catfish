@@ -200,6 +200,30 @@ launchd `~/Library/LaunchAgents/ai.hermes.gateway.plist` 加 `CATFISH_DEFAULT_US
 
 **反思**: 5/26 晚连续两个迭代都是 "做完发现不可用". v1 安全模型套错场景 (单租户 ≠ 多租户), v2 才真做完. 教训: "管理员操作 UI 该不该放" 跟 "产品是单租户还是多租户" 强相关, 不该硬套通用安全准则.
 
+### 5/26 晚 v3 追加 · WeChatQrLoginModal 主动绑定
+
+**v2 用户反馈**: "我的意思是能不能再这单击微信绑定按钮, 就能调用 hermes 微信绑定端口, 在这个页面上或者弹出二维码, 支持绑定?" — v2 只能审批别人**已经发起**的接入, 但员工自己想用微信连鲶鱼仍要去终端跑 `hermes setup`. v3 把"主动发起接入"也搬进 UI.
+
+**改动跨 hermes + companion**:
+
+1. **`~/.hermes/hermes-agent/gateway/platforms/api_server.py`** 加 2 个 HTTP endpoint:
+   - `POST /api/platforms/wechat/qr_login/start` — 调 ilink iLink API 拿 `qrcode + qrcode_img_content`. 返 `{qrcode, qrcode_url, scan_data}`. server 内 in-memory map 维护 `qrcode → current_base_url` 处理 `scaned_but_redirect`.
+   - `GET /api/platforms/wechat/qr_login/poll?qrcode=X` — 返 status (wait/scaned/confirmed/expired). confirmed 时调 `save_weixin_account(get_hermes_home(), ...)` 持久化.
+   - 两 endpoint 都过 `_check_auth` + 注册在 catch-all proxy 之前 (aiohttp first-match-wins).
+   - hermes 自己没装 qrcode lib, 所以**只返二维码字符串**, PNG 渲染挪到前端.
+
+2. **Companion** (`edge/companion-app/`):
+   - `package.json` 加 `qrcode ^1.5.4` + `@types/qrcode ^1.5.5` 依赖
+   - `src/lib/wechat_qr.ts` — `wechatQrStart()` + `wechatQrPoll()` 走 `fetchWithAuth(config.backendUrl + ...)` (hermes 模式自动带 Bearer API_SERVER_KEY, tauri:// origin 永远 CORS allowed)
+   - `src/tabs/Dashboard/WeChatQrLoginModal.tsx` — overlay modal: 渲染 canvas 二维码 + 2s 轮询状态 + 状态文字 (请扫码 → 已扫码 → 已确认) + 过期重试按钮
+   - `WeChatBindingCard.tsx` 顶部加「📱 扫码绑微信」按钮, 点开 modal
+
+**为啥不用 Tauri 命令做 proxy**: hermes 8642 上 `tauri://localhost` 永远 allowed (api_server.py 的 `_TAURI_ORIGINS` 白名单), 前端直接 fetch 就行. 多走一层 Tauri shell-out 反而增加复杂度.
+
+**验证**: tsc --noEmit 0 error (需要 `npm install` 拉新加的 qrcode 包后) / hermes api_server.py SYNTAX OK / 真机测试: 鸿波 mac 上 `npm install && npm run tauri:dev` → 点扫码 → 微信扫 → 看见"已确认" → `~/.hermes/wechat_accounts/<account_id>.json` 落盘.
+
+**反思**: 5/26 晚三个迭代 v1→v2→v3 都是用户反馈推着走. 每次"我做完了"都不是真完成. 教训: 自己当一次用户跑一遍流程比写完发布更重要 — 我应该在做 v1 之前先问"打开这个 UI 我第一眼想做啥".
+
 ---
 
 ## 2026-05-25（周一）补 · BL-RECMODE-MIGRATE-TO-EDGE + 隐私自查全套

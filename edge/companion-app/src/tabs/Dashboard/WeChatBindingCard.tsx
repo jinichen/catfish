@@ -27,6 +27,7 @@ import * as React from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import { fetchMe, type MeInfo } from "../../lib/me";
+import WeChatQrLoginModal from "./WeChatQrLoginModal";
 
 interface BindingEntry {
   platform: string;
@@ -90,6 +91,8 @@ export default function WeChatBindingCard() {
   const [busy, setBusy] = React.useState<string | null>(null); // key of row being mutated
   const [editingEmailFor, setEditingEmailFor] = React.useState<string | null>(null);
   const [editEmailValue, setEditEmailValue] = React.useState("");
+  /** BL-WECHAT-CATFISH-BIND v3 (5/26): 微信扫码登录 modal */
+  const [qrModalOpen, setQrModalOpen] = React.useState(false);
 
   const reload = React.useCallback(async () => {
     try {
@@ -218,8 +221,18 @@ export default function WeChatBindingCard() {
       >
         <h3 style={{ margin: 0 }}>💬 微信 / 飞书 接入</h3>
         <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
-          别人想跟鲶鱼说话, 在这里审批 · 接入后 ta 跟你共享一个记忆 / 配额池
+          自己扫码绑微信, 或审批别人接入 · 接入后 ta 跟你共享一个记忆 / 配额池
         </span>
+        {/* BL-WECHAT-CATFISH-BIND v3 (5/26): 一键扫码绑自己微信. 后端走 hermes
+            /api/platforms/wechat/qr_login/start → ilink. 替代 hermes setup CLI. */}
+        <button
+          type="button"
+          onClick={() => setQrModalOpen(true)}
+          style={btnPrimary(false)}
+          title="弹出微信扫码登录 — 把你的微信号挂到 ClawBot 上"
+        >
+          📱 扫码绑微信
+        </button>
         <button
           type="button"
           onClick={() => void reload()}
@@ -228,6 +241,17 @@ export default function WeChatBindingCard() {
           🔄 刷新
         </button>
       </div>
+
+      {qrModalOpen && (
+        <WeChatQrLoginModal
+          onClose={() => setQrModalOpen(false)}
+          onConfirmed={() => {
+            // 登录成功 → 等几秒 (用户读完成功提示) 再 reload, ClawBot 重启后
+            // pending/approved 表会出新数据.
+            window.setTimeout(() => void reload(), 1500);
+          }}
+        />
+      )}
 
       {error && (
         <div
