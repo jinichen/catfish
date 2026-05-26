@@ -24,7 +24,7 @@ embed_fn 来源跟 vector 算法分开, 单测 + 替换 backend 都干净.
 # 持久化 (P2, 留 task)
 
 当前 build_index 启动时 embed 全 skill (10 个 skill ~500ms, 100 ~5s — gateway
-启动延迟可接受). 真上规模 (200+) 时该写 ~/.catfish/skills_index.npz, 按 skill_path
+启动延迟可接受). 真上规模 (200+) 时该写 ~/.catfish/skills_index.npz, 按 skill_path  # noqa: BOUNDARY (将来扩展讨论, 非当前路径)
 + SKILL.md mtime fingerprint 增量更新, 只 embed 变化的.
 """
 from __future__ import annotations

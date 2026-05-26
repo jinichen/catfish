@@ -2,7 +2,7 @@
 
 # 背景 (BL-EDGE-TOOL-KEY 5/24 鸿波)
 
-之前员工要用 web_search, 得自己在 ~/.hermes/.env 里贴 TAVILY_API_KEY. 50 人
+之前员工要用 web_search, 得自己在 ~/.hermes/.env 里贴 TAVILY_API_KEY. 50 人  # noqa: BOUNDARY (docstring 描述员工本地配置, 非真访问)
 部署后这个不可持续:
   - 出账分不清 (每人一个 key)
   - 离职员工 key 没回收
@@ -23,8 +23,8 @@ catfish-gateway (中央)
           ↓
 catfish-cli (边缘, refresh-hermes 命令)
   ├─ 对每个已知 tool 调一次 endpoint
-  ├─ env_vars 合并写 ~/.hermes/.env (per-key update, 保留无关行)
-  └─ yaml_block 合并写 ~/.hermes/config.yaml (preserve sibling keys)
+  ├─ env_vars 合并写 ~/.hermes/.env (per-key update, 保留无关行)  # noqa: BOUNDARY (描述 edge 行为)
+  └─ yaml_block 合并写 ~/.hermes/config.yaml (preserve sibling keys)  # noqa: BOUNDARY (描述 edge 行为)
 ```
 
 # 当前 scope (5/24 first ship)
@@ -64,7 +64,7 @@ class EdgeToolConfig:
     provider: str            # 当前选的 provider (tavily / firecrawl / 等)
     env_var_name: str        # 边缘 .env 文件里的 key 名
     env_var_source: str      # 中央 gateway 进程读 key 的 env 名 (通常 = env_var_name)
-    yaml_block: dict[str, Any]  # 写进 ~/.hermes/config.yaml 的 yaml 段
+    yaml_block: dict[str, Any]  # 写进 ~/.hermes/config.yaml 的 yaml 段  # noqa: BOUNDARY (描述 edge 行为)
 
     def to_response(self, env_value: str) -> dict[str, Any]:
         """生成给 CLI 的 JSON 响应. 真 key 值在这一步注入."""

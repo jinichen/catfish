@@ -5,6 +5,82 @@
 
 ---
 
+## 2026-05-25（周一）补 · BL-RECMODE-MIGRATE-TO-EDGE + 隐私自查全套
+
+### 触发: 鸿波 audit "录屏数据现在还有提交到中央的错误吗"
+
+PrivacyCard / talking point 一直说 "录屏 100% 本机", 当晚一次性 audit 发现 2 处违规:
+- `central/.../recmode/aggregator.py` 落 SKILL.md + main.py + recmode_meta.json (含 LLM 对截图完整 JSON 描述) 到 `~/.catfish/skills/`
+- `central/.../recmode/selector_repair.py` 同套路, 调 vision LLM 看截图
+
+物理上当前部署 (gateway 跟 Companion 同 Mac) `Path.home()` 落员工本机, 不算真违规;
+但代码在 `central/` 目录, SaaS 化后 = 真往中央 disk 写, 违背承诺.
+
+鸿波拍板 "现在必须现在转移 companion".
+
+### 搬迁动作 (8 个文件改 / 5 个新文件)
+
+| 文件 | 改动 |
+|---|---|
+| `edge/tool-bridge/.../recmode/__init__.py` 🆕 | 模块顶部 docstring 解释为什么搬 |
+| `edge/tool-bridge/.../recmode/aggregator.py` 🆕 | 从 central 整体复制, 0 改动 (无 gateway-internal import) |
+| `edge/tool-bridge/.../recmode/selector_repair.py` 🆕 | 同上 |
+| `edge/tool-bridge/.../server.py` | 加 2 个 JSON-RPC method: `recmode/analyze` + `recmode/repair_selector`. 故意不走 `tools/dispatch` 避免出现在 LLM tool list |
+| `central/.../tool_bridge_rpc.py` 🆕 | 86 行 Unix socket JSON-RPC client. ToolBridgeUnreachable / ToolBridgeRPCError 错误层 |
+| `central/.../app.py` | `/api/learn/analyze` + `/repair_selector` 改 thin proxy. HTTP 表面不变 (Companion / catfish_browser 0 改动). INVALID_PARAMS→400/404, INTERNAL→502, ValueError 转 422 |
+| `central/.../recmode/aggregator.py` | 改 fail-loud stub (`__getattr__` 抛 RuntimeError) |
+| `central/.../recmode/selector_repair.py` | 同上 stub |
+| `central/.../tests/test_recmode_aggregator.py` | 改 stub: 只测 "aggregator 真是 stub" 防回归 |
+| `central/.../tests/test_recmode_v2.py` | 删 selector_repair tests (搬 edge), 留 dom_summary |
+| `edge/tool-bridge/tests/recmode/test_aggregator.py` 🆕 | 原 central 测试搬这里, import 改 catfish_tool_bridge.recmode |
+| `edge/tool-bridge/tests/recmode/test_selector_repair.py` 🆕 | 同上 |
+| `central/.../tests/test_learn_endpoints.py` | analyze 测试改 mock `tool_bridge_rpc.call` 而不是 `aggregator.call_llm`. 加 4 个 proxy 行为测试 (unreachable→502 / params→400 / 不存在→404 / value→422) |
+| `central/.../tests/test_central_edge_boundary.py` | ALLOWLIST 移除 `recmode/aggregator.py` (现在干净). 历史 docstring 引用加 `# noqa: BOUNDARY` 标注 (edge_tool_config.py / skills_vector.py) |
+| `docs/CENTRAL-EDGE-DATA-BOUNDARY.md` | E.1 标 ✅ 已搬, 加迁移技术备注章节 |
+
+### 设计要点
+
+- **API 表面不变**: Companion `recmode.ts` POST `/api/learn/analyze` 0 改动. URL / body / response 全兼容
+- **SaaS-ready fail mode**: 真独立部署 gateway 时, `_socket_path()` 找不到员工本机的 `~/.catfish/tool-bridge.sock`, 抛 `ToolBridgeUnreachable` → 502 → 强制下次改 Companion 直连
+- **不走 LLM tool dispatch**: 故意用专属 `recmode/*` JSON-RPC method, 不挂 `tools/list`, 避免 vision endpoint 被 hermes 当 LLM 工具误调
+- **fail-loud stub**: central 端的 aggregator/selector_repair 用 `__getattr__` 抛 RuntimeError, 任何遗漏的 import 立刻炸, 不会偷偷复活
+
+### Verification (sandbox 能跑的全跑通)
+
+- ✅ `test_central_edge_boundary` 3 passed (新加的 noqa 都生效)
+- ✅ `test_recmode_aggregator` (stub 校验) 2 passed
+- ✅ `test_recmode_v2` (dom_summary) 8 passed
+- ✅ AST syntax check: 11 个改动文件全 clean
+- ⚠️ `test_learn_endpoints` 19 个 — sandbox 是 py3.10, gateway 要 py3.12 (`from datetime import UTC` py3.11+), litellm import 直接挂. Mac 上 `cd central/llm-gateway && venv/bin/pytest tests/test_learn_endpoints.py` 跑
+
+### Mac 上要补跑的 1 步
+
+```bash
+cd ~/person_task/catfish/central/llm-gateway
+venv/bin/pytest tests/ -q                  # 验全测仍通过 (含新加的 4 个 proxy 测试)
+
+cd ~/person_task/catfish/edge/tool-bridge
+venv/bin/pytest tests/recmode/ -q          # 验新搬过来的 aggregator + selector_repair 测试
+```
+
+### 隐私承诺最终状态
+
+| 数据 | 流向 | 落盘 |
+|---|---|---|
+| 录屏截图 PNG bytes | 员工 Mac → tool-bridge 进程 (edge) → vision LLM (transit) | ❌ 中央 0 字节 |
+| LLM 综合结果 (SKILL.md / main.py / recmode_meta.json) | tool-bridge 进程 → 员工 ~/.catfish/skills/ | ❌ 中央 0 字节 |
+| audit metadata (token 计数 / 模型 / 时间戳) | gateway → PG | ✅ 中央 (已公开承诺) |
+
+跟员工 doc `EMPLOYEE-PRIVACY-VERIFICATION.md` 完全对齐. PrivacyCard talking point 现在真站得住.
+
+---
+
+## 2026-05-25（周日凌晨 + 周日早晨）原批次
+
+(原 5/25 ship 的 #74 撤 cleanup daemon / #75 RecordingsCard / #76-79 隐私自查 4 件套)
+
+---
+
 ## 2026-04-22（周三）
 
 项目从 0 到 P0 · 网关 + 策略插件打通。
