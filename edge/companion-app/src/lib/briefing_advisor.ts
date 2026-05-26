@@ -176,7 +176,8 @@ const SYSTEM_PROMPT = `你是 catfish — 中国央国企员工的智能参谋. 
 // ─── 拼 user prompt ──────────────────────────────────────────────
 
 function buildUserPrompt(input: AdvisorInput): string {
-  const { profile, emails, events, todos, ctx, urgencyMap, sessionGoal } = input;
+  // 5/26: sessionGoal 字段删 — hermes 0.14 原生 /goal 替代, advisor 不再读 catfish 这套
+  const { profile, emails, events, todos, ctx, urgencyMap } = input;
   const parts: string[] = [];
 
   const today = new Date();
@@ -207,9 +208,7 @@ ${
     : "- 重点项目: (未识别)"
 }`);
 
-  if (sessionGoal.trim()) {
-    parts.push(`# 员工今日重点 (自己设的)\n${sessionGoal.trim()}`);
-  }
+  // sessionGoal 段 5/26 删 (hermes 0.14 原生 /goal 替代)
   if (ctx.workplan.trim()) {
     parts.push(`# 员工本周计划 (自己写的)\n${ctx.workplan.trim()}`);
   }
@@ -291,7 +290,7 @@ export interface AdvisorInput {
   todos: JournalTodo[];
   ctx: BriefingContext;
   urgencyMap: Record<string, string>;
-  sessionGoal: string;
+  // sessionGoal 5/26 删 — hermes 0.14 原生 /goal 替代
   model: string;
 }
 

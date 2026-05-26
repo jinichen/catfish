@@ -76,11 +76,11 @@ from .identity_inject import (  # noqa: E402
     request_skips_identity,
     inject_identity_if_needed,
 )
-from .inject_session_history import inject_session_history  # noqa: E402
+# 5/26 砍: inject_session_history + session_facts 真死代码 (grep 验 0 处真 caller),
+# catfish-memory hermes plugin 接管 memory 注入. import 删除.
 from .metrics import log_request_metadata  # noqa: E402
 from .multimodal_guard import route_to_vision_if_needed  # noqa: E402
 from .multimodal_tool_unwrap import unwrap_tool_images  # noqa: E402
-from .session_facts import inject_session_facts  # noqa: E402
 # 5/23 BL-GATEWAY-DROP-LEGACY-SUMMARIZE: session_summarizer 整文件已删, plugin 接管
 # (catfish-memory on_session_end 写 employee_journal). 老 import 移除.
 from .skill_guard import inject_skill_guard  # noqa: E402
@@ -235,14 +235,8 @@ async def lifespan(app: FastAPI):
         timeout=config.skills_hub.timeout,
     )
 
-    # 五一 sprint Day 5 (B 方案): 启动时自动 register 到 catfish-identity registry.
-    # 这样别的 catfish 实例 (Plan D Federation) 能通过 lookup 找到本机.
-    # 失败不阻塞启动 (a2a 不可用, 其他功能正常).
-    try:
-        from .a2a_self_register import self_register  # noqa: PLC0415
-        await self_register()
-    except Exception as e:
-        logger.warning("a2a_self_register 失败 (Plan D A2A 不可用): %s", e)
+    # A2A self_register 5/26 砍 — Plan D Federation 整套停 (0 真客户用, 详见
+    # docs/HERMES-013-ALIGN.md A2A 段). 不再调 self_register.
 
     # BL-HERMES013-4 (5/12 鸿波拍板): 启动时 reap 上次崩前没流完的 in-flight stream.
     # 写一条 'interrupted_resumed' audit 留痕迹, 然后 unlink 文件 (防累积).
@@ -363,14 +357,8 @@ app.add_middleware(
 )
 
 
-# 五一 sprint Day 4 (BL-M4.3): Plan D · A2A SSE endpoint (B 端).
-# /a2a/ask 接收其他 catfish 实例的问询, 验 JWT + 隐私拦截 + 转 LLM 流式返流.
-try:
-    from .a2a_server import build_a2a_router  # noqa: PLC0415
-    app.include_router(build_a2a_router())
-    logger.info("a2a_server: /a2a/ask SSE endpoint 已挂载")
-except Exception as e:
-    logger.warning("a2a_server 挂载失败 (Plan D 不可用): %s", e)
+# A2A /a2a/ask SSE endpoint 5/26 砍 — Plan D Federation 整套停 (0 真客户).
+# 详见 docs/HERMES-013-ALIGN.md A2A 段 + git history (恢复用 git log --follow a2a_server.py).
 
 # BL-D3 (5/9) Phase 1 收尾: mcp-registry 反向代理 router.
 # Companion 走单一 origin (gateway) 调 /v1/mcp/*, gateway 透传到 mcp-registry
@@ -422,46 +410,8 @@ except Exception as e:
     logger.warning("tool_archive_router 挂载失败: %s", e)
 
 
-# Plan D · A 端内部 endpoint — tool-bridge 通过 HTTP 调这个触发 A2A.
-# 简化版: 收完整 SSE 流, 一次返给 tool-bridge (不流式 UX, Phase 2 升级 Companion 直连 SSE).
-@app.post("/a2a/internal/ask")
-async def a2a_internal_ask(req: dict) -> dict:
-    """tool-bridge → gateway: 帮我问 to_sub 这个问题.
-
-    body: {from_sub, to_sub, question, purpose?, context_hint?, max_tokens?}
-    返: {ok, answer, audit_id_remote, error?}
-    """
-    from .a2a_client import ask_remote_agent  # noqa: PLC0415
-
-    from_sub = (req.get("from_sub") or "").strip()
-    to_sub = (req.get("to_sub") or "").strip()
-    question = (req.get("question") or "").strip()
-    if not from_sub or not to_sub or not question:
-        return {"ok": False, "error": "from_sub / to_sub / question 必填"}
-
-    chunks: list[str] = []
-    try:
-        async for chunk in ask_remote_agent(
-            from_sub=from_sub,
-            to_sub=to_sub,
-            question=question,
-            purpose=req.get("purpose", ""),
-            context_hint=req.get("context_hint", ""),
-            max_tokens=int(req.get("max_tokens") or 500),
-        ):
-            chunks.append(chunk)
-    except PermissionError as e:
-        return {"ok": False, "error": str(e), "error_type": "denied"}
-    except ConnectionError as e:
-        return {"ok": False, "error": str(e), "error_type": "connection"}
-    except Exception as e:
-        return {"ok": False, "error": str(e), "error_type": "internal"}
-
-    return {
-        "ok": True,
-        "answer": "".join(chunks),
-        "chunks_count": len(chunks),
-    }
+# /a2a/internal/ask endpoint 5/26 砍 — Plan D Federation 整套停, tool-bridge
+# 的 catfish_a2a_ask tool 同批砍.
 
 
 # Health
@@ -2643,21 +2593,10 @@ async def chat_completions(
     if model.mode != "chat":
         raise HTTPException(status_code=400, detail=f"model {model_name} is not a chat model")
 
-    # BL-HERMES013-3 (5/11): /goal Ralph loop client-side commands.
-    # 检测最后一条 user message 是不是 /goal 命令. 是的话直接返 fake SSE response,
-    # 不调 LLM, 不计 quota. 借鉴 Hermes 0.13 client-side slash commands 设计.
-    if not is_internal_call:
-        from .session_goals import detect_goal_command  # noqa: PLC0415
-        is_goal_cmd, goal_response = detect_goal_command(body.get("messages", []))
-        if is_goal_cmd and goal_response:
-            logger.info(
-                "/goal command intercepted (user=%s): %s",
-                user.sub, goal_response[:60]
-            )
-            return StreamingResponse(
-                _fake_sse_response(goal_response, model_name=model_name),
-                media_type="text/event-stream",
-            )
+    # BL-HERMES013-3 (5/11) /goal Ralph loop **5/26 砍** — hermes 0.14 原生
+    # /goal + /subgoal (#25449) 替代. Companion → hermes → gateway 链路里 hermes
+    # 自己拦 /goal, catfish gateway 永远收不到这命令, detect 拦截是死代码.
+    # 详见 session_goals.py 顶部 DEPRECATED 说明.
 
     # BL-GATEWAY-SOFT-HANDOFF (5/18 鸿波拍板): 跨 model 切换中间件.
     # client 自报上轮 model (X-Catfish-Prev-Model header), 跟本轮 body["model"] 不同 +
@@ -2748,12 +2687,10 @@ async def chat_completions(
     # BL-GATEWAY-CLEANUP-POST-HERMES (5/20 删): compound_intent.py 已删,
     # hermes-agent 自管 plan-execute (run_agent.py:12614 agent loop).
 
-    # 档 4 (BL-HERMES013-3 5/11): 注入员工 /goal 锁定目标. 借鉴 Hermes 0.13 Ralph
-    # loop. 单文件 ~/.catfish/session_goal.txt, 员工 /goal xxx 设, 每轮自动 inject
-    # 到 system 末尾, LLM 跑偏时被持续拉回. 跟 L7/L8/FIX46 (事后纠偏) 互补 — goal
-    # 是**事前锚定**.
-    from .session_goals import inject_session_goal  # noqa: PLC0415
-    body["messages"] = inject_session_goal(body["messages"])
+    # 档 4 (BL-HERMES013-3 5/11) /goal 注入 **5/26 砍** — hermes 0.14 原生 /goal
+    # 替代. catfish 自己注入的是 ~/.catfish/session_goal.txt (跟 hermes 内部 goal
+    # 状态独立), 双 inject 互不知道, 是状态分裂源. hermes 已统一管理 goal 注入.
+    # 详见 session_goals.py 顶部 DEPRECATED 说明.
 
     # BL-A1.2 / A1.3 / FIX24 — lean 模式全关.
     # 教学场景里 LLM 正常会"重复调"(再 snapshot 看 DOM 变化) / 中间停顿想一下 /

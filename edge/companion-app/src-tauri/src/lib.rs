@@ -407,7 +407,8 @@ pub fn run() {
             commands::journal::journal_delete_todo,
             commands::journal::journal_add_todo,
             // BL-BRIEFING-GOAL-INPUT (5/20): /goal UI 路径 — BriefingCard 输入框
-            // 写 ~/.catfish/session_goal.txt, gateway inject_session_goal 共享同文件
+            // 5/26 DEPRECATED: hermes 0.14 原生 /goal 替代. 3 个 command 改 stub 返 error
+            // 防回归. 保留 invoke_handler 注册防遗漏 JS caller 编译失败.
             commands::session_goal::session_goal_read,
             commands::session_goal::session_goal_write,
             commands::session_goal::session_goal_clear,

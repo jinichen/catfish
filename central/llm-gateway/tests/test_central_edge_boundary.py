@@ -48,20 +48,15 @@ FORBIDDEN_PATTERNS = [
 # 每个完成迁移 → 从这清单删 → 不再豁免.
 # **新加文件不许进这个 list**, 走 PR review 时 reviewer 拒绝.
 KNOWN_VIOLATIONS_ALLOWLIST: set[str] = {
-    # A 类 — Memory inject 链 (2 剩, was 5; 5/26 减 3)
-    # BL-GATEWAY-MEMORY-REGISTRY-DELETE (5/20): memory/providers/{employee_journal,
-    # feedback, hermes_memory, skills_catalog}.py 4 个删除. 5/19 BL-MEMORY-OWNERSHIP-FIX
-    # 已 disable, 5/20 audit verdict 确认 no-op 死代码, catfish-memory plugin (hermes
-    # 侧 prefetch) 接管.
-    # 5/26 真清: 亲眼 grep 后发现 session_facts.py / feedback_inject.py / metrics.py 真代码 0
-    # Path.home() (只 docstring 里有 ~/.catfish/ 字面引用), 加 # noqa: BOUNDARY 标即可,
-    # 已从 ALLOWLIST 移除. employee_journal + inject_session_history 真有 Path.home()
-    # 调用 (employee_journal:62 / inject_session_history:81 读 state.db), 保留待迁.
-    # 鸿波 5/26 "为什么这么乱" reflection: 不再信注释推断, 只信 grep 命中.
-    "inject_session_history.py",
-    "employee_journal.py",
-    # "session_facts.py" — 5/26 移除 (0 真代码 Path.home)
-    # "feedback_inject.py" — 5/26 移除 (0 真代码 Path.home)
+    # A 类 — Memory inject 链 (1 剩, was 5; 5/26 减 4 累计)
+    # BL-GATEWAY-MEMORY-REGISTRY-DELETE (5/20): memory/providers 4 个删除. 5/19
+    # BL-MEMORY-OWNERSHIP-FIX 已 disable, catfish-memory hermes plugin 接管.
+    # 5/26 早 真 grep 清 3 个 (session_facts/feedback_inject/metrics 真代码 0 Path.home).
+    # 5/26 下午 真砍 1 个: inject_session_history.py 真死代码 (app.py 只 import 不调),
+    #   改 fail-loud stub + 删 app.py import. (employee_journal 跟 A2A 整批同砍, 因
+    #   唯一 caller a2a_journal_hook 在 A2A 系列.)
+    # "inject_session_history.py" — 5/26 砍 (改 stub)
+    # "employee_journal.py" — 5/26 跟 A2A 同批砍 (唯一 caller 是 a2a_journal_hook)
     "identity_inject.py",
     # B 类 — 后台任务 (3) — 5/23 BL-GATEWAY-DROP-LEGACY-SUMMARIZE (task #5 Stage 1):
     # session_summarizer.py + memory_distill.py 整文件已 rm, catfish-memory plugin
@@ -76,12 +71,16 @@ KNOWN_VIOLATIONS_ALLOWLIST: set[str] = {
     # tests/test_sessions_browse.py + tests/test_tasks_browse.py. allowlist 也跟着删.
     "recent_outputs.py",
     "skills_loader.py",
-    # D 类 — A2A federation (5)
-    "a2a_audit.py",
-    "a2a_journal_hook.py",
-    "a2a_allow.py",
-    "a2a_jwt.py",
-    "a2a_self_register.py",
+    # D 类 — A2A federation · ✅ 5/26 整套全清 (5 剩 0)
+    # Plan D Federation (5/12 BL-FED2) 整批砍: 0 真客户 + 1695 LOC + 私钥违规.
+    # gateway 7 个 a2a_*.py 全 stub, app.py 3 处 caller 删, tool-bridge tool dispatch
+    # 改 deprecated error, identity-server /registry/by-expertise 返 410 GONE,
+    # employee_journal (唯一 caller a2a_journal_hook) 同批砍.
+    # "a2a_audit.py" — 5/26 砍
+    # "a2a_journal_hook.py" — 5/26 砍
+    # "a2a_allow.py" — 5/26 砍
+    # "a2a_jwt.py" — 5/26 砍 (私钥从中央代码清掉, 真要 federation 重做要在 Companion 持私钥)
+    # "a2a_self_register.py" — 5/26 砍
     # E 类 — RecMode · ✅ 5/26 全清
     # 5/25 batch 0: aggregator.py + selector_repair.py 搬 edge (E.1)
     # 5/26 batch 1: cdp_listener.py + cleanup.py 搬 edge (E.2)
@@ -95,9 +94,15 @@ KNOWN_VIOLATIONS_ALLOWLIST: set[str] = {
     # docs/CENTRAL-EDGE-DATA-BOUNDARY.md E 类全清 ✅
     # F 类 — Facts 上传 (1, facts_db.py 已合规走 PG-only 不留 jsonl 字面引用)
     "facts_router.py",
-    # G 类 — Resolver / metadata (2)
+    # G 类 — Resolver / metadata (1 剩, was 2)
+    # 5/26 砍 session_goals.py — hermes 0.14 原生 /goal + /subgoal (#25449) 替代,
+    # catfish 自己 BL-HERMES013-3 (5/11) 实现的 250 行变死代码 + 状态分裂源
+    # (catfish 注入 ~/.catfish/session_goal.txt vs hermes 注入 hermes 内部 goal,
+    # 双 inject 互不知道). gateway session_goals.py 改 fail-loud stub, app.py
+    # 2 处 caller 删, Companion session_goal.rs 改 stub, AdvisorView sessionGoal
+    # 字段删. 详见 docs/HERMES-013-ALIGN.md L137 BL-HERMES013-3 deprecation 标注.
+    # "session_goals.py" — 5/26 移除
     "user_model_resolver.py",
-    "session_goals.py",
     # H 类 — 半合规 (1 剩, was 2): quota.py 暂留 (sqlite 兜底,
     # BL-QUOTA-SQLITE-DEPRECATE 改造中)
     # 5/26 真清: metrics.py 真代码 0 Path.home (3 处 docstring ~/.catfish/ 加 noqa).

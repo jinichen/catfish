@@ -275,16 +275,11 @@ export const journalMarkTodoDone = (line: number, textHint: string) =>
 export const journalDeleteTodo = (line: number, textHint: string) =>
   rawInvoke<string>("journal_delete_todo", { line, textHint });
 
-// ── /goal UI 路径 (BL-BRIEFING-GOAL-INPUT 5/20) ───────────
-// BriefingCard "今日重点" 输入框写 ~/.catfish/session_goal.txt. gateway 端
-// inject_session_goal 仍读同一文件, chat 链路 inject 进 system 锚定 LLM.
-// CLI /goal xxx 仍工作, 共享同存储.
-export const sessionGoalRead = () =>
-  rawInvoke<string | null>("session_goal_read");
-export const sessionGoalWrite = (text: string) =>
-  rawInvoke<void>("session_goal_write", { text });
-export const sessionGoalClear = () =>
-  rawInvoke<void>("session_goal_clear");
+// ── /goal 已 deprecated 5/26 ─────────────────────────────
+// BL-BRIEFING-GOAL-INPUT (5/20) 的 BriefingCard 🎯 输入框其实从未 ship UI 闭环
+// (Tauri 后端 + 这 3 个 wrapper 写了, 但 React 组件没接). 5/26 鸿波拍板砍 —
+// hermes 0.14 原生 /goal + /subgoal (#25449) 替代. 员工在 chat 直接输 /goal xxx.
+// 3 个 export 删除, Tauri 后端改 stub 返 error 防回归.
 
 export const journalAddTodo = (text: string, section?: string) =>
   rawInvoke<string>("journal_add_todo", { text, section: section ?? null });
@@ -318,7 +313,7 @@ export interface WeeklyReportRef {
 export interface BriefingContext {
   distilledFacts: string;          // ~/.catfish/distilled_facts.md 全文
   recentSessionBriefs: SessionBrief[];  // 最近 7 天 sessions (Phase 6 扩到周维度)
-  sessionGoal: string;              // ~/.catfish/session_goal.txt 员工自设今日重点
+  // sessionGoal 5/26 删 — hermes 0.14 原生 /goal 替代, advisor 不再读 catfish 这套
   // 5/21 Phase 6 新加 3 个数据源
   workplan: string;                 // ~/.catfish/workplan.md 员工自写本周/本月计划
   projects: string;                 // ~/.catfish/projects.md 项目进度

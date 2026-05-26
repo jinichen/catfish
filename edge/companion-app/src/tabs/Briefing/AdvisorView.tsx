@@ -152,7 +152,7 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
           todos,
           ctx: ctxValue,
           urgencyMap,
-          sessionGoal: ctxValue.sessionGoal,
+          // sessionGoal 5/26 删 — hermes 0.14 原生 /goal 替代
           model,
         });
         if (cancelled) return;
@@ -508,7 +508,7 @@ function emptyCtx(): BriefingContext {
   return {
     distilledFacts: "",
     recentSessionBriefs: [],
-    sessionGoal: "",
+    // sessionGoal 5/26 删
     workplan: "",
     projects: "",
     weeklyReports: [],

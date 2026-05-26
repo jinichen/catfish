@@ -134,13 +134,33 @@
 - 不拦: `10.x` / `192.168` / `172.16` / `127.0.0.1` / `localhost`
 - 矩阵: 7 deny + 8 allow + 4 边界 全过
 
-### [BL-HERMES013-3] `/goal` Ralph loop (~250 行)
+### [BL-HERMES013-3] `/goal` Ralph loop (~250 行) — **⚠ 5/26 DEPRECATED**
 
-- 新模块 `central/llm-gateway/src/catfish_gateway/session_goals.py` — read/write/clear/detect_goal_command/inject_session_goal
-- 命令: `/goal xxx` 设, `/goal` 查, `/goal clear` / `/goal 清除` / `/goal off` 清
-- `app.py` chat_completions 早期拦截命令 → `_fake_sse_response` 返假 SSE (不调 LLM, 不计 quota)
-- inject pipeline 加 `inject_session_goal` (在 inject_feedback 之后, system 末尾)
-- `edge/identity/SOUL.md:450` 加 "★ /goal 锁定目标铁律" 段
+**5/26 鸿波拍板砍** — hermes 0.14 (v2026.5.16) 原生 `/goal` + `/subgoal` (#25449) 替代.
+
+砍的原因:
+1. 5/19 catfish cutover hermes 后 Companion → hermes → gateway, hermes 自己拦 /goal,
+   catfish `detect_goal_command` 死代码 (永远收不到 /goal 命令)
+2. catfish `inject_session_goal` 注入 `~/.catfish/session_goal.txt`, hermes 注入 hermes
+   自己的 goal 状态, **两套并行互不知道**, 是状态分裂源
+3. 5/20 BL-BRIEFING-GOAL-INPUT 的 BriefingCard 🎯 输入框 Tauri 后端 + tauri.ts wrapper
+   写了, 但 React 组件没接闭环, UI 实际从未 ship
+
+砍的范围 (~385 LOC 净削减):
+- `central/.../session_goals.py` → fail-loud stub (RuntimeError on import)
+- `central/.../app.py` 删 detect_goal_command 拦截 + inject_session_goal 调用
+- `edge/companion-app/src-tauri/src/commands/session_goal.rs` → stub 返 deprecated error
+- `edge/companion-app/src/lib/tauri.ts` 删 sessionGoalRead/Write/Clear 3 个 export
+- `BriefingContext.sessionGoal` 字段删 + `AdvisorInput.sessionGoal` 字段删
+- `AdvisorView.tsx` + `briefing_advisor.ts` 删 sessionGoal 引用 (dead branch)
+- ALLOWLIST 移除 `session_goals.py` (19 → 18)
+
+原 ship 内容 (供历史参考):
+- ~~新模块 `central/llm-gateway/src/catfish_gateway/session_goals.py` — read/write/clear/detect_goal_command/inject_session_goal~~
+- ~~命令: `/goal xxx` 设, `/goal` 查, `/goal clear` / `/goal 清除` / `/goal off` 清~~
+- ~~`app.py` chat_completions 早期拦截命令 → `_fake_sse_response` 返假 SSE~~
+- ~~inject pipeline 加 `inject_session_goal` (在 inject_feedback 之后, system 末尾)~~
+- ~~`edge/identity/SOUL.md:450` 加 "★ /goal 锁定目标铁律" 段~~ (5/26 该段改提示 hermes /goal)
 
 ### [BL-HERMES013-4] gateway atomic session persistence (~250 行 + 19 单测, 5/12 末)
 
