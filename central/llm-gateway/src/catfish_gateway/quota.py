@@ -14,7 +14,7 @@
 # 双 backend (五一 sprint 5/2 收尾加)
 
 - **PG (生产)**: env CATFISH_DB_URL 配 → quota_events 表, 跨 gateway 实例共享
-- **sqlite (dev / 单测)**: ~/.catfish/quota.db 兜底, 没 PG 配置时走
+- **sqlite (dev / 单测)**: ~/.catfish/quota.db 兜底, 没 PG 配置时走  # noqa: BOUNDARY
 
 切换透明 — 公共 API (record_usage / sum_*_since / top_users / audit_summary_dept)
 不变, 内部 _use_pg() 检测后分发. 表名 schema 一致 (PG: quota_events, sqlite: 同名).
@@ -43,7 +43,7 @@ logger = logging.getLogger("catfish.gateway.quota")
 # ── Backend 选择 (生产 PG-only; 单测可 sqlite override) ───────
 #
 # BL-QUOTA-SQLITE-DEPRECATE + BL-CENTRAL-EDGE-BOUNDARY (5/17 鸿波):
-#   规则: 中央端不许碰用户本机文件 (包括 ~/.catfish/quota.db). 生产必走 PG.
+#   规则: 中央端不许碰用户本机文件 (包括 ~/.catfish/quota.db). 生产必走 PG.  # noqa: BOUNDARY
 #   单测可以用 sqlite tmp 文件 (test fixture 设 CATFISH_QUOTA_DB 显式 override).
 #
 #   老逻辑: PG 写失败 → fallback sqlite (双写). 这违反规则因为 sqlite 落在员工
@@ -55,16 +55,16 @@ def _use_pg() -> bool:
     """生产 PG, 单测 sqlite (test fixture 通过 CATFISH_QUOTA_DB env override).
 
     返回:
-      True  — 走 PG (CATFISH_DB_URL 配了, 或 CATFISH_QUOTA_DB 没配 — 生产默认)
+      True  — 走 PG (CATFISH_DB_URL 配了 — 生产默认)
       False — 走 sqlite (CATFISH_QUOTA_DB 显式配了, 单测路径)
 
-    BL-CENTRAL-EDGE-BOUNDARY (5/17): 老逻辑允许"两者都没配 → 静默走默认
-    ~/.catfish/quota.db" 写员工本机, 违反规则. 现在: 启动期校验, 没 PG 没 test
-    override → log warning. 调用方代码该 raise / 丢数据, 不再静默 fallback.
+    BL-CENTRAL-EDGE-BOUNDARY (5/17): 两个 env 都没配 = 配置错误, 不再静默走
+    默认 ~/.catfish/quota.db (员工本机违规). 返 True 让调用方走 PG 路径 +  # noqa: BOUNDARY
+    在 _pg_conn 时撞 connect 错 fail-loud, 显式而不是默默写错地方.
     """
     if os.environ.get("CATFISH_QUOTA_DB"):
         return False  # 单测显式 sqlite 路径
-    return bool(os.environ.get("CATFISH_DB_URL", "").strip())
+    return True  # PG mode — 没配 CATFISH_DB_URL 也走 PG 路径, _pg_conn 时报错
 
 
 def _audit_backend_configured() -> bool:
@@ -98,11 +98,24 @@ def _pg_conn():
 
 
 def _quota_db_path() -> Path:
-    """quota.db 路径. CATFISH_QUOTA_DB env override (单元测试用)."""
+    """sqlite quota.db 路径 (只单元测试用, CATFISH_QUOTA_DB env 显式 override).
+
+    BL-QUOTA-SQLITE-DEPRECATE (5/17) + BL-CENTRAL-EDGE-BOUNDARY:
+      生产模式必走 PG (CATFISH_DB_URL). 此函数只在 _use_pg() == False 时调,
+      也就是单测路径. 单测 fixture 必须设 CATFISH_QUOTA_DB 显式指 tmp_path.
+      不再有 ~/.catfish/quota.db 默认 fallback (员工本机违反 boundary).  # noqa: BOUNDARY
+
+    调用 unreachable 在生产 — 但代码层强校验, 没设环境变量 fail-loud,
+    防开发期"忘了 setup" 静默写到 home dir.
+    """
     custom = os.environ.get("CATFISH_QUOTA_DB")
     if custom:
         return Path(custom).expanduser()
-    return Path.home() / ".catfish" / "quota.db"
+    raise RuntimeError(
+        "CATFISH_QUOTA_DB env 未设, 但 _use_pg() 返回 False 走到 sqlite 分支. "
+        "BL-CENTRAL-EDGE-BOUNDARY 不再 fallback ~/.catfish/quota.db. "  # noqa: BOUNDARY
+        "生产应配 CATFISH_DB_URL 走 PG; 单测应在 fixture 设 CATFISH_QUOTA_DB tmp 路径."
+    )
 
 
 def _quota_config_path() -> Path:
@@ -326,7 +339,7 @@ def record_usage(
     """请求完成后记真实 token 用量. 失败静默不影响主流程.
 
     BL-QUOTA-SQLITE-DEPRECATE (5/17 鸿波): 老逻辑 PG 写失败 → fallback sqlite
-    (写 ~/.catfish/quota.db, 员工本机文件). 违反 BL-CENTRAL-EDGE-BOUNDARY 规则.
+    (写 ~/.catfish/quota.db, 员工本机文件). 违反 BL-CENTRAL-EDGE-BOUNDARY 规则.  # noqa: BOUNDARY
     现在: 生产 PG-only, PG 失败 → log warning + 丢这条 audit. 单测走 sqlite
     (CATFISH_QUOTA_DB env override).
     """

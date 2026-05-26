@@ -115,11 +115,14 @@ KNOWN_VIOLATIONS_ALLOWLIST: set[str] = {
     # resolve_model_obj 纯查表保留, 不读 fs/db.
     # "session_goals.py" — 5/26 移除
     # "user_model_resolver.py" — 5/26 移除 (read fs/db 部分改 stub)
-    # H 类 — 半合规 (1 剩, was 2): quota.py 暂留 (sqlite 兜底,
-    # BL-QUOTA-SQLITE-DEPRECATE 改造中)
-    # 5/26 真清: metrics.py 真代码 0 Path.home (3 处 docstring ~/.catfish/ 加 noqa).
-    # 已从 ALLOWLIST 移除. 真活的 jsonl fallback 走 CATFISH_AUDIT_PATH env, 不 hardcode.
-    "quota.py",
+    # H 类 — 半合规 · ✅ 5/26 晚 全清 (0 剩, was 2)
+    # 5/26 早 真清 metrics.py: 真代码 0 Path.home, 3 处 docstring ~/.catfish/ 加 noqa.
+    # 5/26 晚 真清 quota.py:
+    #   1) _quota_db_path Path.home() fallback 删 (改 RuntimeError raise)
+    #   2) _use_pg 神逻辑修 (neither env set → True 让 _pg_conn 报错, 不再静默 sqlite)
+    #   3) 6 处 docstring ~/.catfish/quota.db 引用全加 noqa: BOUNDARY
+    #   生产 PG-only, 单测 sqlite 走 CATFISH_QUOTA_DB env 显式 override, 不 fallback 员工本机.
+    # "quota.py" — 5/26 晚移除
     # "metrics.py" — 5/26 移除 (0 真代码 Path.home)
     # 基础设施 (中性, request_id 状态)
     "inflight_streams.py",
