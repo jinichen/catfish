@@ -33,6 +33,7 @@ import catfish_memory  # noqa: E402
 from catfish_memory import (  # noqa: E402
     CatfishMemoryProvider,
     _append_journal,
+    _append_to_buffer,
     _extract_message_pairs,
     _format_journal_entry,
     _mark_distill_run,
@@ -40,6 +41,16 @@ from catfish_memory import (  # noqa: E402
     _should_run_distill,
     _write_distilled,
 )
+
+
+def _populate_buffer_from_messages(home: Path, messages: list, session_id: str) -> None:
+    """BL-MEMORY-SYNC-TURN-REFACTOR (5/20) 后, on_session_end 读 buffer 不读 messages 参数.
+    测试要先把 messages 当 sync_turn 同款推进 buffer, 再调 on_session_end 才走 LLM 路径."""
+    for m in messages:
+        role = m.get("role")
+        content = m.get("content", "")
+        if role in ("user", "assistant") and content:
+            _append_to_buffer(home, role, content, session_id)
 
 
 # ── fixtures ────────────────────────────────────────────
@@ -294,10 +305,13 @@ def test_on_session_end_proceeds_when_journal_older_than_dedup(
     monkeypatch.setattr(catfish_memory, "_call_summarize_llm", fake_summarize)
     monkeypatch.setattr(catfish_memory, "_call_distill_llm", fake_distill)
 
-    provider.on_session_end([
+    # BL-MEMORY-SYNC-TURN-REFACTOR (5/20): on_session_end 读 buffer 不读 messages 参数
+    msgs = [
         {"role": "user", "content": "用户说啥"},
         {"role": "assistant", "content": "助手回啥"},
-    ])
+    ]
+    _populate_buffer_from_messages(fake_home, msgs, "test-session-abc123")
+    provider.on_session_end(msgs)
 
     # journal 应该被追加 (旧内容 + 新一段)
     content = journal.read_text(encoding="utf-8")
@@ -337,10 +351,13 @@ def test_on_session_end_distill_runs_when_24h_passed(
     monkeypatch.setattr(catfish_memory, "_call_summarize_llm", fake_summarize)
     monkeypatch.setattr(catfish_memory, "_call_distill_llm", fake_distill)
 
-    provider.on_session_end([
+    # BL-MEMORY-SYNC-TURN-REFACTOR (5/20): on_session_end 读 buffer 不读 messages 参数
+    msgs = [
         {"role": "user", "content": "msg"},
         {"role": "assistant", "content": "back"},
-    ])
+    ]
+    _populate_buffer_from_messages(fake_home, msgs, "test-session-abc123")
+    provider.on_session_end(msgs)
 
     # journal + distilled 都应该写
     assert (fake_home / "employee_journal.md").exists()
@@ -369,10 +386,13 @@ def test_on_session_end_distill_skipped_when_within_24h(
     monkeypatch.setattr(catfish_memory, "_call_summarize_llm", fake_summarize)
     monkeypatch.setattr(catfish_memory, "_call_distill_llm", fake_distill)
 
-    provider.on_session_end([
+    # BL-MEMORY-SYNC-TURN-REFACTOR (5/20): on_session_end 读 buffer 不读 messages 参数
+    msgs = [
         {"role": "user", "content": "msg"},
         {"role": "assistant", "content": "back"},
-    ])
+    ]
+    _populate_buffer_from_messages(fake_home, msgs, "test-session-abc123")
+    provider.on_session_end(msgs)
 
     assert (fake_home / "employee_journal.md").exists()
     assert distill_called["n"] == 0  # 蒸馏没跑
