@@ -101,6 +101,27 @@ def _fallback_starter(now: datetime) -> str:
     return random.choice(pool)
 
 
+def _first_sentence(text: str, max_chars: int = 80) -> str:
+    """5/26 BL-PROACTIVE-FIRST-SENTENCE: LLM 经常违反"1 句话"要求生成多句, 截首句.
+
+    截 4 类句末: 中文 。 ? ! ; 跟英文 . ? !. 优先 . / 。 末尾 (问号 / 感叹号
+    保留全句). 都没找到末尾 → max_chars 截.
+
+    保留末尾的句号 / 问号 (跟同事说话感保持). 多个空行 → 第一段.
+    """
+    text = text.strip()
+    # 第一段 (\n\n 分段)
+    para = text.split("\n\n", 1)[0].strip()
+    # 找第一个中文 / 英文 句末
+    for i, ch in enumerate(para):
+        if ch in "。.?!?!":
+            # 包含这个 char 作为收尾
+            return para[: i + 1].strip()
+    # 没找到 → 单行截
+    one_line = para.split("\n", 1)[0].strip()
+    return one_line[:max_chars]
+
+
 # ── LLM 上下文感知 starter ──────────────────────────────────
 
 
@@ -221,29 +242,43 @@ async def generate_starter(
                         "model": chosen_model.name,
                         "messages": [{"role": "user", "content": user_prompt}],
                         "temperature": 0.7,
-                        "max_tokens": 120,
+                        # 5/26 BL-PROACTIVE-MAX-TOKENS-BUMP v2:
+                        # - 120 太小, thinking 模型 (deepseek-flash) reasoning 吃 token,
+                        #   实答案被截 ("周一 (5" 半截输出)
+                        # - 300 仍不够, gemini-flash 违反 "1 句 30 字" 指令产 296 tokens
+                        #   仍被截 ("1-5月份资质通报、" 半截)
+                        # - 600 给冗长 model 足够余量出完整答案. 我们 post-process 截首句,
+                        #   不展示完整 600 tokens. 1 次 starter 600 tokens 成本可忽略.
+                        "max_tokens": 600,
                         "stream": False,
                     },
                 )
             if resp.status_code == 200:
                 data = resp.json()
-                # BL-F19+ (5/5 18:30 鸿波报"切到 deepseek 成功但仍 fallback"):
-                # DeepSeek V4 thinking mode 时 content 可能空 (内容在 reasoning_content).
-                # 而我们之前只读 content, 拿到空字符串 → 后面 ValueError.
-                # 改: 优先 content, fallback reasoning_content (deepseek thinking 答案).
-                # 注: reasoning_content 可能含 <think> tag, strip 装饰后还能用.
-                msg = data.get("choices", [{}])[0].get("message", {}) if data.get("choices") else {}
+                choice = data.get("choices", [{}])[0] if data.get("choices") else {}
+                msg = choice.get("message", {}) if isinstance(choice, dict) else {}
+                finish_reason = choice.get("finish_reason") if isinstance(choice, dict) else None
+                # BL-F19+ (5/5 18:30): DeepSeek V4 thinking mode content 空 reasoning_content 有.
+                # 优先 content, fallback reasoning_content (可能含 <think> tag, strip 后能用).
                 text = (
                     (msg.get("content") or "")
                     or (msg.get("reasoning_content") or "")
                 ).strip()
+                # 5/26: finish_reason=length → 被截了, 答案不完整, fallback 模板比硬展示半截好
+                if finish_reason == "length":
+                    last_error = (
+                        f"finish_reason=length 答案被截 ({chosen_model.name}, "
+                        f"text={len(text)} 字, '{text[:30]}...')"
+                    )
+                    logger.warning("generate_starter %s 被 max_tokens 截, 切下一个 / fallback",
+                                   chosen_model.name)
+                    text = ""  # 清空, 否则 post-loop 会把半截内容当 starter 返出 (5/26 鸿波撞)
+                    continue
                 if attempt_idx > 1:
                     logger.info(
                         "generate_starter 切到第 %d 候选 %s 成功 (text=%d 字)",
                         attempt_idx, chosen_model.name, len(text),
                     )
-                # 如果 text 仍为空 (200 但 content + reasoning_content 都空, 罕见),
-                # 不 break, 切下一个候选试.
                 if not text:
                     last_error = f"200 但 content 空 ({chosen_model.name})"
                     logger.warning(
@@ -283,10 +318,13 @@ async def generate_starter(
         text = text.strip("`\"'*-> \n")
         if not text:
             raise ValueError(f"全候选 ({len(candidates)}) 都失败, 最后错: {last_error}")
+        # 5/26 BL-PROACTIVE-FIRST-SENTENCE: LLM 违反 "1 句话" 时截首句, 不展示长段
+        starter = _first_sentence(text, max_chars=80)
         return {
-            "starter": text[:120],
+            "starter": starter,
             "context_hint": (
                 f"journal 末尾 {len(journal_tail)} 字符 + 时段 {_time_window(now)}"
+                + (f" (LLM 多说了 {len(text) - len(starter)} 字, 截首句)" if len(text) > len(starter) else "")
                 if journal_tail
                 else "journal 空, 走轻邀请"
             ),
@@ -438,17 +476,29 @@ async def generate_contextual_starter(
                         "model": chosen_model.name,
                         "messages": [{"role": "user", "content": user_prompt}],
                         "temperature": 0.6,  # 信号触发更稳, 比死时间低一点
-                        "max_tokens": 80,
+                        # 5/26 BL-PROACTIVE-MAX-TOKENS-BUMP v2: 80 → 600 (跟 generate_starter
+                        # 同步, 防 thinking 模型 reasoning + 冗长 model 被截; post-process
+                        # 截首句不展示完整 600 tokens).
+                        "max_tokens": 600,
                         "stream": False,
                     },
                 )
             if resp.status_code == 200:
                 data = resp.json()
-                msg = data.get("choices", [{}])[0].get("message", {}) if data.get("choices") else {}
+                choice = data.get("choices", [{}])[0] if data.get("choices") else {}
+                msg = choice.get("message", {}) if isinstance(choice, dict) else {}
+                finish_reason = choice.get("finish_reason") if isinstance(choice, dict) else None
                 text = (
                     (msg.get("content") or "")
                     or (msg.get("reasoning_content") or "")
                 ).strip()
+                if finish_reason == "length":
+                    last_error = (
+                        f"finish_reason=length 答案被截 ({chosen_model.name}, "
+                        f"text={len(text)} 字)"
+                    )
+                    text = ""  # 清空, 防 post-loop 用半截内容
+                    continue
                 if not text:
                     last_error = f"200 但 content 空 ({chosen_model.name})"
                     continue
@@ -464,8 +514,10 @@ async def generate_contextual_starter(
 
     text = text.strip("`\"'*-> \n")
     if text:
+        # 5/26 BL-PROACTIVE-FIRST-SENTENCE: 截首句, 不展示长段
+        starter = _first_sentence(text, max_chars=80)
         return {
-            "starter": text[:120],
+            "starter": starter,
             "context_hint": f"signal={signal_kind}, llm via {len(candidates)} candidates",
             "source": "llm",
         }

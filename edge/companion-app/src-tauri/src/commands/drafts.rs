@@ -10,6 +10,8 @@
 //!   - draft_read: UI 展开 DraftPreview 时读全文
 //!   - draft_list_today: 列今天所有草稿元数据 (filename + size + mtime)
 //!   - draft_open_in_editor: 调系统默认编辑器打开 (员工自己改 + 复制后发)
+//!   - recent_outputs_list (5/26): 跨日期扫 outputs/<*>/<*>, 过去 N 小时改的文件,
+//!     给 chat timeout toast 用 (BL-X: 替代砍掉的 gateway recent_outputs.list_recent)
 
 use std::path::PathBuf;
 use chrono::Utc;
@@ -203,6 +205,80 @@ pub async fn draft_open_in_editor(abs_path: String) -> Result<(), String> {
         return Err("draft_open_in_editor 当前只支持 macOS".to_string());
     }
     Ok(())
+}
+
+// ── BL-X (5/26): chat timeout 自显本地 outputs ──────────────────────
+//
+// 5/26 audit 砍掉 gateway recent_outputs.list_recent (gateway 不再扫员工
+// ~/.catfish/outputs/). 替代方案: Companion (跑员工 mac) 自己扫, 在 chat
+// timeout 时 toast 列过去 N 小时改过的文件, 让员工看到鲶鱼写过哪些东西
+// (而不是误以为白干).
+//
+// 跟 draft_list_today 区别: 这个跨日期目录 (outputs/<date>/), 按 mtime ≤ N
+// 小时过滤, 不限当天.
+
+/// `recent_outputs_list(24)` → 过去 24 小时改过的 outputs 文件, mtime 倒序.
+///
+/// 扫 `~/.catfish/outputs/*/` 下所有文件 (跨日期目录), 不递归更深.
+/// 没目录 / 空 → 空 Vec. .tmp 跳过.
+#[tauri::command]
+pub async fn recent_outputs_list(hours: u64) -> Result<Vec<DraftRef>, String> {
+    let root = outputs_root()?;
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+    let cutoff = std::time::SystemTime::now()
+        .checked_sub(std::time::Duration::from_secs(hours.saturating_mul(3600)))
+        .ok_or_else(|| "hours 太大 SystemTime 减法溢出".to_string())?;
+
+    let mut out: Vec<DraftRef> = Vec::new();
+    // 一层日期目录 (outputs/<YYYY-MM-DD>/)
+    let date_dirs = std::fs::read_dir(&root)
+        .map_err(|e| format!("read_dir {} 失败: {e}", root.display()))?;
+    for date_entry in date_dirs.flatten() {
+        let date_path = date_entry.path();
+        if !date_path.is_dir() {
+            continue;
+        }
+        // 二层文件
+        let files = match std::fs::read_dir(&date_path) {
+            Ok(it) => it,
+            Err(_) => continue,
+        };
+        for file_entry in files.flatten() {
+            let p = file_entry.path();
+            if !p.is_file() {
+                continue;
+            }
+            let filename = match p.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+            if filename.ends_with(".tmp") {
+                continue;
+            }
+            let meta = match file_entry.metadata() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            let mtime = match meta.modified() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            if mtime < cutoff {
+                continue;
+            }
+            let dt: chrono::DateTime<chrono::Utc> = mtime.into();
+            out.push(DraftRef {
+                filename,
+                abs_path: p.to_string_lossy().to_string(),
+                modified_at: dt.to_rfc3339(),
+                bytes: meta.len(),
+            });
+        }
+    }
+    out.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
+    Ok(out)
 }
 
 #[cfg(test)]

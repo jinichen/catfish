@@ -25,6 +25,18 @@ export default function RecordingsCard() {
   const [recordings, setRecordings] = React.useState<recApi.RecordingMeta[] | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [deletingId, setDeletingId] = React.useState<string | null>(null);
+  /** 5/26 BL-RECORDINGS-DELETE-CONFIRM: 跟 BL-EMAIL-DELETE (5/18) 同款两步点击 —
+   * 第一次点 🗑️ 切到"再次点确认", 第二次点真删. 3s 自动取消恢复.
+   * 不用 window.confirm: Tauri WebView 下不可靠 (有的版本被吞, 静默返 false).
+   * 不用系统 dialog: 太打扰, 且需要 plugin-dialog 依赖. */
+  const [confirmId, setConfirmId] = React.useState<string | null>(null);
+
+  // 3s 自动取消 confirm 状态
+  React.useEffect(() => {
+    if (!confirmId) return;
+    const t = window.setTimeout(() => setConfirmId(null), 3000);
+    return () => window.clearTimeout(t);
+  }, [confirmId]);
 
   const reload = React.useCallback(async () => {
     try {
@@ -53,13 +65,13 @@ export default function RecordingsCard() {
   };
 
   const handleDelete = async (rec: recApi.RecordingMeta) => {
-    const sizeMB = (rec.size_bytes / 1024 / 1024).toFixed(1);
-    const kept = rec.kept_forever ? " (该 session 被标了 ⭐ 永久保留)" : "";
-    const ok = window.confirm(
-      `真删 ${rec.session_id}?${kept}\n` +
-        `会从你硬盘删除 ${sizeMB} MB. 不可恢复.`,
-    );
-    if (!ok) return;
+    // 两步点击: 第一次切 confirm 状态, 第二次真删
+    if (confirmId !== rec.session_id) {
+      setConfirmId(rec.session_id);
+      setError(null);
+      return;
+    }
+    setConfirmId(null);
     setDeletingId(rec.session_id);
     try {
       await recApi.deleteRecording(rec.session_id);
@@ -147,6 +159,8 @@ export default function RecordingsCard() {
           <tbody>
             {recordings.map((r) => {
               const isDeleting = deletingId === r.session_id;
+              const isPendingConfirm = confirmId === r.session_id;
+              const sizeMB = (r.size_bytes / 1024 / 1024).toFixed(1);
               return (
                 <tr
                   key={r.session_id}
@@ -190,10 +204,28 @@ export default function RecordingsCard() {
                       type="button"
                       onClick={() => void handleDelete(r)}
                       disabled={isDeleting}
-                      title="删除该录屏 (不可恢复)"
-                      style={{ ...btnStyle, marginLeft: 4 }}
+                      title={
+                        isPendingConfirm
+                          ? `再次点击确认: 真删 ${sizeMB} MB (不可恢复, 3s 后自动取消)`
+                          : r.kept_forever
+                            ? "删除该录屏 (⭐ 已标永久保留, 点两次)"
+                            : "删除该录屏 (点两次确认, 不可恢复)"
+                      }
+                      style={{
+                        ...btnStyle,
+                        marginLeft: 4,
+                        ...(isPendingConfirm
+                          ? {
+                              background: "var(--status-warn, #c98b00)",
+                              color: "#fff",
+                              borderColor: "var(--status-warn, #c98b00)",
+                              fontSize: 11,
+                              padding: "2px 6px",
+                            }
+                          : {}),
+                      }}
                     >
-                      {isDeleting ? "…" : "🗑️"}
+                      {isDeleting ? "…" : isPendingConfirm ? `再点确认 删 ${sizeMB}MB` : "🗑️"}
                     </button>
                   </td>
                 </tr>

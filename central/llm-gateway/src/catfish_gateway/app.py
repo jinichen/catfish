@@ -1446,28 +1446,35 @@ async def api_dev_users() -> dict[str, Any]:
 # Companion 调这个拿一句 LLM 生成的 starter, 显示在 Dashboard 卡 / macOS 通知里.
 
 
-@app.get("/api/proactive/starter")
+# 5/26 BL-PROACTIVE-DECOUPLE v2 (CORS 修):
+# 老 5/26 早版本用 header (X-Catfish-Journal-Tail-B64 + X-Catfish-Last-Model)
+# 透传, 但 Companion 走 hermes proxy CORS allowlist 不含这俩自定义 header,
+# 浏览器层 preflight 直接 block (TypeError: Load failed). 改 body 字段透传:
+#   - /api/proactive/starter: GET → POST, body 含 journal_tail + last_model
+#   - /api/proactive/contextual: 仍 POST, 加 last_model body 字段
+# body 走 Content-Type: application/json, 标准 CORS allowlist 无问题.
+# 老 GET caller (5/26 早版本 Companion) 走 405, 不致命 — caller 立即 fallback.
+
+
+@app.post("/api/proactive/starter")
 async def api_proactive_starter(
-    request: Request,
+    body: dict[str, Any] | None = None,
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     """返一个上下文感知的 starter (引用员工 journal + 时段). 失败返 fallback 模板.
 
     5/26 BL-PROACTIVE-DECOUPLE: gateway 不再读员工本机 journal + state.db.
-    Companion 通过 header 把 journal_tail (base64 UTF-8) + last_model 传过来.
-    老 Companion 不传 → fallback 模板 (功能退化, 不致命).
+    Companion 通过 body 字段透传:
+      body = {
+        "journal_tail": "<员工 ~/.catfish/employee_journal.md 末尾 UTF-8>",  # noqa: BOUNDARY
+        "last_model": "<员工最近 session 用的 model name>"
+      }
+    body 缺 / 字段空 → gateway fallback 模板.
     """
     from . import proactive
-    import base64 as _b64
-
-    journal_tail = ""
-    jt_b64 = request.headers.get("x-catfish-journal-tail-b64", "")
-    if jt_b64:
-        try:
-            journal_tail = _b64.b64decode(jt_b64).decode("utf-8", errors="replace")
-        except Exception:
-            journal_tail = ""
-    model_name = request.headers.get("x-catfish-last-model", "").strip() or None
+    b = body or {}
+    journal_tail = (b.get("journal_tail") or "")[:65536]  # cap 64K 防滥发
+    model_name = (b.get("last_model") or "").strip() or None
     return await proactive.generate_starter(
         user_email=user.sub, journal_tail=journal_tail, model_name=model_name,
     )
@@ -1477,13 +1484,12 @@ async def api_proactive_starter(
 @app.post("/api/proactive/contextual")
 async def api_proactive_contextual(
     body: dict[str, Any],
-    request: Request,
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """信号触发的 starter. body = {signal_kind: str, context: dict}.
+    """信号触发的 starter. body = {signal_kind: str, context: dict, last_model?: str}.
 
-    5/26 BL-PROACTIVE-DECOUPLE: model_name 从 header X-Catfish-Last-Model 拿
-    (Companion 传, gateway 不读 state.db).
+    5/26 BL-PROACTIVE-DECOUPLE v2: model_name 从 body 字段 last_model 拿
+    (老版本走 header, 撞 hermes CORS allowlist, 改 body 绕开).
     """
     from . import proactive
     signal_kind = (body.get("signal_kind") or "").strip()
@@ -1494,7 +1500,7 @@ async def api_proactive_contextual(
             "context_hint": "missing signal_kind or context",
             "source": "fallback",
         }
-    model_name = request.headers.get("x-catfish-last-model", "").strip() or None
+    model_name = (body.get("last_model") or "").strip() or None
     return await proactive.generate_contextual_starter(
         signal_kind, context, user_email=user.sub, model_name=model_name,
     )

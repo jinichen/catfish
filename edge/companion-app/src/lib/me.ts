@@ -14,7 +14,12 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
-import { gatewayGetDevToken, hermesApiConfigGet, hermesApiAuthHeader } from "./tauri";
+import {
+  gatewayGetDevToken,
+  hermesApiConfigGet,
+  hermesApiAuthHeader,
+  fetchProactiveContext,
+} from "./tauri";
 import { config } from "./env";
 
 // BL-ARCH1 P1 (5/10): 加 sysadmin (catfish-identity 超级管理员).
@@ -420,16 +425,49 @@ export interface ProactiveStarter {
   source: "llm" | "fallback";
 }
 
-/** 拉一个上下文感知的 starter. gateway 用 journal + 时段 + LLM 生成. */
+/** 拉一个上下文感知的 starter. gateway 用 journal + 时段 + LLM 生成.
+ *
+ * 5/26 BL-PROACTIVE-DECOUPLE: gateway 不再自读员工 fs / state.db. Companion (跑
+ * 员工 mac, 读自己 fs 合规) 在调前准备好 journal 末尾 + 最近 session model,
+ * 通过 header 传给 gateway:
+ *   - X-Catfish-Journal-Tail-B64: base64(journal_tail UTF-8) — gateway 解码喂 LLM
+ *   - X-Catfish-Last-Model:        员工最近用啥 model, 主动闲聊跟员工同款 (BL-INTERNAL-MODEL-FOLLOW-USER)
+ *
+ * 没拿到 / 文件不存在 → header 留空, gateway 自动 fallback 模板 (功能退化不致命).
+ */
 export async function fetchProactiveStarter(): Promise<ProactiveStarter | null> {
+  // BL-PROACTIVE-DECOUPLE v2 (5/26 CORS 修): 用 body 字段透传, 不用 header.
+  // 老版本走 X-Catfish-Journal-Tail-B64 + X-Catfish-Last-Model header, 但 hermes
+  // proxy CORS allowlist 不含, 浏览器 preflight block (TypeError: Load failed).
+  // 改 POST + body 字段, Content-Type: application/json 在标准 CORS allowlist.
+  let journalTail = "";
+  let lastModel = "";
   try {
-    // BL-FIX45 A+ (5/11): 走 fetchWithAuth — 鸿波截图 '今日话题拉不到' 真因是
-    // OAuth token 过期 401, Companion 没自动 reauth. 现在 wrapper 自动 reauth + 重发.
-    const url = `${config.backendUrl}/api/proactive/starter`;
-    const resp = await fetchWithAuth(url);
-    if (!resp.ok) return null;
+    const ctx = await fetchProactiveContext();
+    if (ctx.journal_tail) journalTail = ctx.journal_tail;
+    if (ctx.last_model) lastModel = ctx.last_model;
+  } catch (e) {
+    console.warn("[proactive] fetchProactiveContext 失败, body 留空 fallback:", e);
+  }
+
+  const url = `${config.backendUrl}/api/proactive/starter`;
+  const body = {
+    journal_tail: journalTail,
+    last_model: lastModel,
+  };
+  try {
+    const resp = await fetchWithAuth(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) {
+      console.warn(`[proactive] /api/proactive/starter 非 200: ${resp.status} ${resp.statusText}`);
+      return null;
+    }
     return (await resp.json()) as ProactiveStarter;
-  } catch {
+  } catch (e) {
+    console.warn("[proactive] fetchWithAuth 抛错:", e);
     return null;
   }
 }
@@ -447,6 +485,16 @@ export async function fetchContextualStarter(
   context: Record<string, unknown>,
 ): Promise<ProactiveStarter | null> {
   try {
+    // BL-PROACTIVE-DECOUPLE v2 (5/26 CORS 修): last_model 从 header 挪 body 字段,
+    // 跟 /api/proactive/starter 同款 (绕 hermes proxy CORS allowlist).
+    let lastModel = "";
+    try {
+      const ctx = await fetchProactiveContext();
+      if (ctx.last_model) lastModel = ctx.last_model;
+    } catch (e) {
+      console.warn("[proactive contextual] fetchProactiveContext 失败:", e);
+    }
+
     // BL-FIX45 A+ (5/11): 走 fetchWithAuth, 401 自动 reauth.
     const url = `${config.backendUrl}/api/proactive/contextual`;
     const ctrl = new AbortController();
@@ -454,10 +502,12 @@ export async function fetchContextualStarter(
     try {
       const resp = await fetchWithAuth(url, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ signal_kind: signalKind, context }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          signal_kind: signalKind,
+          context,
+          last_model: lastModel,  // BL-PROACTIVE-DECOUPLE v2: body 字段, 不再 header
+        }),
         signal: ctrl.signal,
       });
       if (!resp.ok) return null;
