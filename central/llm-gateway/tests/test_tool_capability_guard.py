@@ -132,7 +132,16 @@ def test_pick_alternative_returns_none_when_no_candidate():
 # ── route_to_tool_capable_if_needed ────────────────────────────
 
 
-def test_reroute_when_intent_and_no_tool_support():
+def test_no_reroute_after_intent_detection_deprecated():
+    """5/26: has_skill_intent 改为总返 False (skills_loader 砍, 没数据源).
+
+    老行为: 文本含"写周报"等关键词 → reroute 到 supports_tool_use=True 备选.
+    新行为: has_skill_intent 总返 False → 即使 supports_tool_use=False 也不
+    自动 reroute. LLM 看 hermes tool list 自然知道调 skill — supports_tool_use=False
+    的模型如果真不会调, 上游错误由 fallback 链处理 (跟 multimodal_guard 不同).
+
+    防回归: 别复活 intent text matching (违反 BL-SKILL-METADATA-DYNAMIC).
+    """
     config = _StubConfig(models=[
         _StubModel("flash", supports_tool_use=True, display_name="Qwen Flash"),
     ])
@@ -146,10 +155,9 @@ def test_reroute_when_intent_and_no_tool_support():
         ],
     }
     new_model, hint = route_to_tool_capable_if_needed(body, config, current)
-    assert new_model is not None
-    assert new_model.name == "flash"
-    assert "supports_tool_use=False" in hint
-    assert body["model"] == "flash"  # in-place
+    assert new_model is None, "5/26 intent detection 弃用, 不该 reroute"
+    assert hint is None
+    assert body["model"] == "qwen122b"  # 不动
 
 
 def test_no_reroute_when_intent_but_supports_tools():
@@ -196,8 +204,8 @@ def test_no_reroute_when_no_alternative():
     assert new_model is None
 
 
-def test_intent_keywords_coverage():
-    """各种 skill 触发关键词都触发 reroute."""
+def test_intent_keywords_no_longer_trigger_reroute():
+    """5/26 兑现校验: 各种"写周报"/"写汇报"等关键词不再触发 reroute (intent detection 弃用)."""
     config = _StubConfig(models=[
         _StubModel("good", supports_tool_use=True),
     ])
@@ -209,4 +217,7 @@ def test_intent_keywords_coverage():
             "messages": [{"role": "user", "content": intent}],
         }
         new_model, _ = route_to_tool_capable_if_needed(body, config, current)
-        assert new_model is not None, f"{intent!r} 没触发 reroute"
+        assert new_model is None, (
+            f"5/26 后 intent={intent!r} 不该触发 reroute (has_skill_intent 总 False). "
+            "若复活意味着 skill_guard 老逻辑被恢复, 违反 5/26 audit."
+        )

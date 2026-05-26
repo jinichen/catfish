@@ -217,30 +217,55 @@ def test_analyze_value_error_422(client, monkeypatch):
     assert r.status_code == 422
 
 
-def test_skill_content_endpoint(client, tmp_path):
-    """B: /api/learn/skill_content 读 SKILL.md + main.py"""
-    sd = tmp_path / "recordings" / "rec_x" / "skill_draft" / "personal" / "test_skill"
-    sd.mkdir(parents=True)
-    (sd / "SKILL.md").write_text("# test_skill\n\nhello", encoding="utf-8")
-    (sd / "main.py").write_text("def main(p): return {}\n", encoding="utf-8")
+# ─── BL-RECMODE-MIGRATE-TO-EDGE batch 2 (5/26): A/B/C 3 个 endpoint thin proxy 化 ──
+#
+# 老 e2e (真写 transcripts.jsonl / 真 mkdir skill_dir) 搬 edge/tool-bridge/tests/.
+# gateway 端只测 thin proxy: body 校验 + JSON-RPC code → HTTP code 映射 + viewer 注入.
 
-    r = client.get(f"/api/learn/skill_content?skill_dir={sd}")
+
+def test_skill_content_endpoint(client, monkeypatch):
+    """B: /api/learn/skill_content thin proxy → tool-bridge 返 {skill_md, main_py}."""
+    from catfish_gateway import tool_bridge_rpc as _tb_rpc
+    expected = {"skill_md": "# test_skill\n\nhello", "main_py": "def main(p): return {}\n"}
+
+    async def fake_call(method, params, **kw):
+        assert method == "recmode/skill_content"
+        assert "skill_dir" in params
+        return dict(expected)
+
+    monkeypatch.setattr(_tb_rpc, "call", fake_call)
+    r = client.get("/api/learn/skill_content?skill_dir=/tmp/any")
     assert r.status_code == 200, r.text
     out = r.json()
     assert "hello" in out["skill_md"]
     assert "def main" in out["main_py"]
+    assert out["viewer"] == "employee@ffcs.cn"
 
 
-def test_skill_content_path_traversal_blocked(client):
-    """B: 路径必须在 ~/.catfish/skills 或 recordings 下, 拒绝 /etc /root 等"""
+def test_skill_content_path_traversal_blocked(client, monkeypatch):
+    """B: 路径校验在 tool-bridge 端 (返 '受信') → gateway 映 403."""
+    from catfish_gateway import tool_bridge_rpc as _tb_rpc
+
+    async def fake_call(method, params, **kw):
+        raise _tb_rpc.ToolBridgeRPCError(_tb_rpc.JSONRPC_INVALID_PARAMS,
+                                          "skill_dir /etc 不在受信路径下")
+
+    monkeypatch.setattr(_tb_rpc, "call", fake_call)
     r = client.get("/api/learn/skill_content?skill_dir=/etc")
     assert r.status_code == 403
 
 
-def test_record_transcript_endpoint(client, tmp_path):
-    """A: /api/learn/record_transcript 写 transcripts.jsonl"""
-    rec_dir = tmp_path / "recordings" / "rec_t"
-    rec_dir.mkdir(parents=True)
+def test_record_transcript_endpoint(client, monkeypatch):
+    """A: /api/learn/record_transcript thin proxy → tool-bridge 返 {lines_count}."""
+    from catfish_gateway import tool_bridge_rpc as _tb_rpc
+
+    captured = {}
+    async def fake_call(method, params, **kw):
+        captured["method"] = method
+        captured["params"] = params
+        return {"lines_count": 1}
+
+    monkeypatch.setattr(_tb_rpc, "call", fake_call)
     r = client.post("/api/learn/record_transcript", json={
         "session_id": "rec_t",
         "text": "现在点应用 tab",
@@ -250,12 +275,21 @@ def test_record_transcript_endpoint(client, tmp_path):
     assert r.status_code == 200, r.text
     out = r.json()
     assert out["lines_count"] == 1
-    assert (rec_dir / "transcripts.jsonl").exists()
-    content = (rec_dir / "transcripts.jsonl").read_text()
-    assert "现在点应用" in content
+    assert out["viewer"] == "employee@ffcs.cn"
+    assert captured["method"] == "recmode/record_transcript"
+    assert captured["params"]["session_id"] == "rec_t"
+    assert captured["params"]["text"] == "现在点应用 tab"
 
 
-def test_record_transcript_session_not_found(client):
+def test_record_transcript_session_not_found(client, monkeypatch):
+    """A: tool-bridge 报 session '不存在' → gateway 映 404."""
+    from catfish_gateway import tool_bridge_rpc as _tb_rpc
+
+    async def fake_call(method, params, **kw):
+        raise _tb_rpc.ToolBridgeRPCError(_tb_rpc.JSONRPC_INVALID_PARAMS,
+                                          "session rec_nonexistent 不存在")
+
+    monkeypatch.setattr(_tb_rpc, "call", fake_call)
     r = client.post("/api/learn/record_transcript", json={
         "session_id": "rec_nonexistent",
         "text": "test",
@@ -300,28 +334,38 @@ def test_status_endpoint_unknown_404(client, monkeypatch):
     assert r.status_code == 404
 
 
-def test_save_skill_endpoint(client, tmp_path, monkeypatch):
-    """C: /api/learn/save_skill 把 draft 移到正式 skills"""
-    monkeypatch.setenv("CATFISH_HOME", str(tmp_path))
-    rec_dir = tmp_path / "recordings" / "rec_save" / "skill_draft" / "personal" / "save_test"
-    rec_dir.mkdir(parents=True)
-    (rec_dir / "SKILL.md").write_text("# save_test", encoding="utf-8")
-    (rec_dir / "main.py").write_text("def main(p): return {}", encoding="utf-8")
-    import json as _json
-    (rec_dir / "recmode_meta.json").write_text(_json.dumps({
-        "raw_llm_json": {"skill_name": "save_test", "namespace": "personal"},
-    }), encoding="utf-8")
+def test_save_skill_endpoint(client, monkeypatch):
+    """C: /api/learn/save_skill thin proxy → tool-bridge 返 {moved, final_dir}."""
+    from catfish_gateway import tool_bridge_rpc as _tb_rpc
 
-    r = client.post("/api/learn/save_skill", json={"draft_dir": str(rec_dir)})
+    captured = {}
+    async def fake_call(method, params, **kw):
+        captured["method"] = method
+        captured["params"] = params
+        return {"moved": True, "final_dir": "/tmp/skills/personal/save_test"}
+
+    monkeypatch.setattr(_tb_rpc, "call", fake_call)
+    r = client.post("/api/learn/save_skill", json={
+        "draft_dir": "/tmp/recordings/rec_save/skill_draft/personal/save_test",
+        "namespace": "personal",
+        "name": "save_test",
+    })
     assert r.status_code == 200, r.text
     out = r.json()
     assert out["moved"] is True
-    final = tmp_path / "skills" / "personal" / "save_test"
-    assert final.exists()
-    assert (final / "SKILL.md").exists()
+    assert out["viewer"] == "employee@ffcs.cn"
+    assert captured["method"] == "recmode/save_skill"
+    assert captured["params"]["namespace"] == "personal"
 
 
-def test_save_skill_rejects_path_outside_recordings(client, tmp_path):
-    """C: draft_dir 必须在 recordings/ 下, 拒 /etc /tmp 等"""
+def test_save_skill_rejects_path_outside_recordings(client, monkeypatch):
+    """C: draft_dir 校验在 tool-bridge 端 (返 '必须在') → gateway 映 403."""
+    from catfish_gateway import tool_bridge_rpc as _tb_rpc
+
+    async def fake_call(method, params, **kw):
+        raise _tb_rpc.ToolBridgeRPCError(_tb_rpc.JSONRPC_INVALID_PARAMS,
+                                          "draft_dir 必须在 recordings/ 下")
+
+    monkeypatch.setattr(_tb_rpc, "call", fake_call)
     r = client.post("/api/learn/save_skill", json={"draft_dir": "/etc"})
     assert r.status_code == 403

@@ -18,7 +18,7 @@
 | 鲶鱼对你的长期记忆 | `~/.hermes/memories/USER.md` etc. | 只有你 | ❌ 不上传 |
 | 第三方 API key (Tavily 等) | `~/.hermes/.env` | 只有你 | ❌ 不上传 |
 | 你的 OAuth token | `~/.catfish/auth/token.json` (chmod 600) | 只有你 (Unix 文件权限) | 仅 token 本身用于中央认证, 不含对话 |
-| 中央调用流水 (metadata 镜像) | `~/.catfish/gateway_audit.jsonl` | 只有你 | metadata 上传 (无 prompt/response 文本) |
+| 中央调用流水 (metadata) | 中央 PG `gateway_audit` 表 (5/9 前镜像在 `~/.catfish/gateway_audit.jsonl`, 后切 PG-only) | 你 + 你部门 manager + admin | metadata 上传 (无 prompt/response 文本) |
 | 中央存的你的 metadata | catfish 中央 PG/sqlite | 你 + 你部门 manager + admin | ✅ 上传 (按下面表) |
 
 **中央存了你啥** (跑 `catfish privacy-audit` 或开 Companion → 仪表盘 → 隐私状态 看实时):
@@ -154,20 +154,20 @@ UI 入口: 仪表盘 → 鲶鱼对你的认识 → HermesMemoryCard
 
 清空 (= 登出): `catfish logout`
 
-### 本机 audit log (`~/.catfish/gateway_audit.jsonl`)
+### 本机 audit log (`~/.catfish/gateway_audit.jsonl`) — 5/9 后历史归档
 
-边缘 gateway 自己写的副本. 每次中央调用记一行 JSON, 字段:
+**5/9 之前**: 边缘 gateway 写一份镜像到本机 jsonl, 跟中央应该对得上.
 
-```json
-{"ts": 1779660795, "user": "you@company.com", "model": "deepseek-v4-flash",
- "prompt_tokens": 1234, "completion_tokens": 567, "ttft_ms": 234,
- "status": "ok"}
-```
+**5/9 之后**: gateway 配了 `CATFISH_DB_URL` 切 **PG-only** backend (`metrics.py:79`),
+metrics 直接写中央 PG, 不再镜像本机. 老 jsonl 文件保留为历史归档, 不再更新.
 
-**对照设计**: 这份本机文件应该跟中央 `/api/audit/me` 数字对得上. `catfish privacy-audit`
-自动跑这个对照 — 差 5 条以内是正常 (边缘 / 中央写盘有 race), 差超过 5 条就有问题.
+**当前唯一真相** = 中央 PG (`gateway_audit` 表), 通过 `/api/audit/me` 暴露员工自己的部分.
 
-清空: `rm ~/.catfish/gateway_audit.jsonl` (不影响功能, 只影响本机自查能力)
+`catfish privacy-audit` 检测到本机 jsonl latest_ts < 中央 first_seen_ts 会自动
+标 "PG-only 模式", 不再跑"差 N 条"对照 (那个对照在 PG-only 时代没意义).
+
+清空: `rm ~/.catfish/gateway_audit.jsonl` (历史归档, 删了不影响任何功能 — 想留作
+5/9 前的本地审计副本就别删)
 
 ---
 

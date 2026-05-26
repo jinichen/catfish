@@ -1,30 +1,40 @@
-"""proactive.generate_starter 行为回归.
+"""proactive.generate_starter 行为回归 (5/26 BL-PROACTIVE-DECOUPLE 后).
 
-# 当前规则 (BL-INTERNAL-MODEL-FOLLOW-USER-FULL 5/17 拍板)
+# 5/26 重大变化 (BL-PROACTIVE-DECOUPLE)
 
-严格 **1 candidate** — 员工最近 session 的 model, 拿不到就 fallback 模板, **不切候选**.
+老 generate_starter 自己读员工本机 `~/.catfish/employee_journal.md` + hermes      # noqa: BOUNDARY
+state.db 拿最近 session model. 5/26 audit 砍 — gateway 不读员工 fs.
 
-历史背景 (供 git blame 追溯):
-  - BL-F19 (5/5): 老多候选 fallback chain (private-main → qwen-flash → deepseek-flash),
-    在 502 / 429 / 5xx 时切下一个. 当时是为了应对 VPN 断 + 公网配额耗光的混合故障.
-  - BL-INTERNAL-MODEL-FOLLOW-USER (5/17): 鸿波拍板 "选哪个 model 所有 LLM 都用同款".
-    多候选切换跟规则矛盾 — 员工选私有 main, proactive 偷偷切公网 qwen-flash 就是窜账.
-    删掉切换逻辑, 严格 1 candidate; 撞错就 fallback 模板.
+Companion 调 /api/proactive/starter 时把 `journal_tail` (Companion 自己读完
+裁切到 8KB) + `model_name` (Companion 从 hermes state.db 拿) 当 body 字段传过来.
+gateway 不再自读.
 
-# 这个 test 覆盖什么
+  - 没传 journal_tail / model_name → 立即返 fallback 模板, 不打 LLM
+  - 都传了 → 走 LLM, 失败 fallback (维持 BL-INTERNAL-MODEL-FOLLOW-USER 1 candidate 行为)
 
-  - 正常: 拿到员工 model + gateway 200 → source=llm
-  - 拿不到员工 model (新员工 / 老 schema) → fallback 模板, 不打 gateway
-  - 单 candidate 502 → fallback (不切候选, 没下一个)
-  - 单 candidate 401 → fallback (4xx 同 5xx 处理)
+# 这个 test 覆盖什么 (5/26 重写后)
+
+  - Companion 没传 model_name → fallback (gateway 不再自查 state.db)
+  - Companion 没传 journal_tail → fallback
+  - 都传了 + 200 → source=llm, starter 是 LLM 文本
+  - 都传了 + model 不可达 → fallback (resolve_model_obj 返 None)
+  - 都传了 + 502 → fallback (严格 1 candidate)
+  - 都传了 + 429 → fallback (严格 1 candidate, 不偷消耗别 model 配额)
+  - 都传了 + 401 → fallback
   - 200 但 content + reasoning_content 都空 → fallback
-  - DeepSeek thinking mode (content="" + reasoning_content 有内容) → 用 reasoning
-  - content 有值时优先 content 不动 reasoning_content
+  - DeepSeek thinking mode content="" reasoning_content 有 → 用 reasoning
+  - content 优先于 reasoning_content
+  - 请求里 model 字段是员工传过来的 model_name (防硬编码回归)
+
+# 历史背景 (供 git blame 追溯)
+
+  - BL-F19 (5/5): 老多候选 fallback chain. BL-INTERNAL-MODEL-FOLLOW-USER (5/17)
+    拍板严格 1 candidate. 5/26 BL-PROACTIVE-DECOUPLE 在此基础上把 model_name
+    /journal_tail 的来源从 "gateway 自己读" 改成 "Companion 透传".
 """
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -51,30 +61,26 @@ def _ok_resp(text: str = "今天进展如何, 卡哪了?") -> _MockResp:
     )
 
 
-def _patch_user_model(monkeypatch, *, model_name: str | None = "test-model"):
-    """patch user_model_resolver: 返指定 model_name (None 表示员工没 session model).
+def _patch_model_resolve(monkeypatch, *, model_name: str = "test-model",
+                         available: bool = True):
+    """patch resolve_model_obj — 返指定 model 对象 (available=False 模拟不可达).
 
-    BL-INTERNAL-MODEL-FOLLOW-USER (5/17): generate_starter 不再用 picker,
-    走 get_user_last_session_model + resolve_model_obj. 测试要 mock 这俩.
+    5/26 后: gateway 不再调 get_user_last_session_model (那是 stub 抛 RuntimeError).
+    只 patch resolve_model_obj + load_config.
     """
     fake_model = SimpleNamespace(
         name=model_name,
         mode="chat",
-        upstream=SimpleNamespace(is_available=True),
-    ) if model_name else None
-    monkeypatch.setattr(
-        "catfish_gateway.user_model_resolver.get_user_last_session_model",
-        lambda email: model_name,
+        upstream=SimpleNamespace(is_available=available),
     )
     monkeypatch.setattr(
         "catfish_gateway.user_model_resolver.resolve_model_obj",
-        lambda name, config: fake_model if name == model_name else None,
+        lambda name, config: fake_model if (name == model_name and available) else None,
     )
     monkeypatch.setattr(
         "catfish_gateway.config.load_config",
-        lambda: SimpleNamespace(models=[fake_model] if fake_model else []),
+        lambda: SimpleNamespace(models=[fake_model]),
     )
-    monkeypatch.setattr(proactive, "_read_journal_tail", lambda: "")
     return fake_model
 
 
@@ -101,64 +107,102 @@ def _patch_httpx(monkeypatch, post_handler):
     return call_count
 
 
-# ── 正常路径 ────────────────────────────────────────────
+# ── 5/26 新行为: 没传 journal_tail/model_name → fallback ────────
+
+
+@pytest.mark.asyncio
+async def test_no_journal_tail_returns_fallback(monkeypatch):
+    """Companion 没传 journal_tail body 字段 → fallback (gateway 不自读 fs)."""
+    call_count = _patch_httpx(monkeypatch, lambda n: _ok_resp("不该被调"))
+
+    result = await proactive.generate_starter(
+        user_email="zhang@example.com",
+        journal_tail="",  # 空 → fallback
+        model_name="catfish-private-main",
+    )
+    assert result["source"] == "fallback"
+    assert call_count["n"] == 0  # LLM 没被调
+    assert "Companion 没传" in result["context_hint"]
+
+
+@pytest.mark.asyncio
+async def test_no_model_name_returns_fallback(monkeypatch):
+    """Companion 没传 model_name → fallback (gateway 不再自查 state.db)."""
+    call_count = _patch_httpx(monkeypatch, lambda n: _ok_resp("不该被调"))
+
+    result = await proactive.generate_starter(
+        user_email="zhang@example.com",
+        journal_tail="# 今天的工作\n- 改 proactive",
+        model_name=None,
+    )
+    assert result["source"] == "fallback"
+    assert call_count["n"] == 0
+
+
+# ── 正常路径: 都传了 ────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_happy_path_returns_llm_source(monkeypatch):
-    """拿到员工 model + 200 → source=llm, starter 是 LLM 返的文本."""
-    _patch_user_model(monkeypatch, model_name="catfish-private-main")
+    """journal_tail + model_name 都传 + 200 → source=llm."""
+    _patch_model_resolve(monkeypatch, model_name="catfish-private-main")
     call_count = _patch_httpx(monkeypatch, lambda n: _ok_resp("hello from llm"))
 
-    result = await proactive.generate_starter(user_email="zhang@example.com")
+    result = await proactive.generate_starter(
+        user_email="zhang@example.com",
+        journal_tail="# 今天\n- 改 proactive",
+        model_name="catfish-private-main",
+    )
 
     assert result["source"] == "llm"
     assert "hello from llm" in result["starter"]
     assert call_count["n"] == 1  # 严格 1 candidate
 
 
-# ── Fallback 路径: 拿不到 model / 错误响应 ──────────────
+# ── Fallback 路径 ──────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_no_user_model_returns_fallback(monkeypatch):
-    """员工没最近 session model (新员工 / 老 schema) → fallback 模板, 不打 gateway.
-
-    BL-INTERNAL-MODEL-FOLLOW-USER: 不偷偷用别的 model.
-    """
-    _patch_user_model(monkeypatch, model_name=None)
+async def test_model_unavailable_returns_fallback(monkeypatch):
+    """传了 model_name 但 resolve_model_obj 返 None (model 不在 config 或挂) → fallback."""
+    _patch_model_resolve(monkeypatch, model_name="catfish-private-main", available=False)
     call_count = _patch_httpx(monkeypatch, lambda n: _ok_resp("不该被调"))
 
-    result = await proactive.generate_starter(user_email="newbie@example.com")
+    result = await proactive.generate_starter(
+        user_email="zhang@example.com",
+        journal_tail="# 今天\n- x",
+        model_name="catfish-private-main",
+    )
     assert result["source"] == "fallback"
-    assert call_count["n"] == 0  # gateway 没被打
+    assert call_count["n"] == 0
 
 
 @pytest.mark.asyncio
 async def test_502_falls_back_no_switch(monkeypatch):
-    """单 candidate 502 → fallback (不切候选, 没下一个).
-
-    跟老 BL-F19 时代不同 — 老代码会试 candidate 2/3 直到 success. 现在 1 个撞错就完.
-    """
-    _patch_user_model(monkeypatch, model_name="catfish-private-main")
+    """单 candidate 502 → fallback (严格 1 candidate, 不切)."""
+    _patch_model_resolve(monkeypatch, model_name="catfish-private-main")
     call_count = _patch_httpx(monkeypatch, lambda n: _MockResp(502))
 
-    result = await proactive.generate_starter(user_email="zhang@example.com")
+    result = await proactive.generate_starter(
+        user_email="zhang@example.com",
+        journal_tail="# x",
+        model_name="catfish-private-main",
+    )
     assert result["source"] == "fallback"
-    assert call_count["n"] == 1, f"严格 1 candidate, 实际 {call_count['n']}"
+    assert call_count["n"] == 1
 
 
 @pytest.mark.asyncio
 async def test_429_falls_back_no_switch(monkeypatch):
-    """单 candidate 429 quota_exceeded → fallback (不切候选).
-
-    跟老 BL-F19 时代不同 — 老代码会切下一个候选避开员工配额墙. 现在严格 1 candidate,
-    员工配额满就先看到 fallback 模板, 不偷偷消耗别的 model 配额.
-    """
-    _patch_user_model(monkeypatch, model_name="catfish-private-main")
+    """单 candidate 429 quota_exceeded → fallback (不偷消耗别 model 配额)."""
+    _patch_model_resolve(monkeypatch, model_name="catfish-private-main")
     call_count = _patch_httpx(monkeypatch, lambda n: _MockResp(429))
 
-    result = await proactive.generate_starter(user_email="zhang@example.com")
+    result = await proactive.generate_starter(
+        user_email="zhang@example.com",
+        journal_tail="# x",
+        model_name="catfish-private-main",
+    )
     assert result["source"] == "fallback"
     assert call_count["n"] == 1
 
@@ -166,24 +210,25 @@ async def test_429_falls_back_no_switch(monkeypatch):
 @pytest.mark.asyncio
 async def test_401_falls_back(monkeypatch):
     """4xx 非 429 (auth bad / schema 等) → fallback."""
-    _patch_user_model(monkeypatch, model_name="catfish-private-main")
+    _patch_model_resolve(monkeypatch, model_name="catfish-private-main")
     call_count = _patch_httpx(monkeypatch, lambda n: _MockResp(401))
 
-    result = await proactive.generate_starter(user_email="zhang@example.com")
+    result = await proactive.generate_starter(
+        user_email="zhang@example.com",
+        journal_tail="# x",
+        model_name="catfish-private-main",
+    )
     assert result["source"] == "fallback"
     assert call_count["n"] == 1
 
 
-# ── 200 但内容空 → fallback (不再切候选) ────────────────
+# ── 200 但内容空 → fallback ────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_200_but_empty_content_falls_back(monkeypatch):
-    """200 但 content + reasoning_content 都空 → fallback.
-
-    跟老 BL-F19 时代不同 — 老代码会切下一个候选试. 现在 1 candidate 没下一个, fallback.
-    """
-    _patch_user_model(monkeypatch, model_name="catfish-private-main")
+    """200 但 content + reasoning_content 都空 → fallback (没下一个 candidate 切)."""
+    _patch_model_resolve(monkeypatch, model_name="catfish-private-main")
 
     def _resp(_n):
         return _MockResp(
@@ -193,20 +238,22 @@ async def test_200_but_empty_content_falls_back(monkeypatch):
 
     call_count = _patch_httpx(monkeypatch, _resp)
 
-    result = await proactive.generate_starter(user_email="zhang@example.com")
+    result = await proactive.generate_starter(
+        user_email="zhang@example.com",
+        journal_tail="# x",
+        model_name="catfish-private-main",
+    )
     assert result["source"] == "fallback"
     assert call_count["n"] == 1
 
 
-# ── DeepSeek thinking mode reasoning_content 兼容 ──────
+# ── DeepSeek thinking mode reasoning_content 兼容 ──────────────
 
 
 @pytest.mark.asyncio
 async def test_deepseek_thinking_reasoning_content_fallback(monkeypatch):
-    """BL-F19+: deepseek V4 thinking mode 把内容写在 reasoning_content,
-    content 空. 改成 content 优先, reasoning_content fallback. 这条防回归.
-    """
-    _patch_user_model(monkeypatch, model_name="catfish-public-deepseek-flash")
+    """BL-F19+: deepseek V4 thinking mode content 空, 内容在 reasoning_content."""
+    _patch_model_resolve(monkeypatch, model_name="catfish-public-deepseek-flash")
 
     def _resp(_n):
         return _MockResp(
@@ -220,7 +267,11 @@ async def test_deepseek_thinking_reasoning_content_fallback(monkeypatch):
 
     _patch_httpx(monkeypatch, _resp)
 
-    result = await proactive.generate_starter(user_email="zhang@example.com")
+    result = await proactive.generate_starter(
+        user_email="zhang@example.com",
+        journal_tail="# x",
+        model_name="catfish-public-deepseek-flash",
+    )
     assert result["source"] == "llm"
     assert "今天工作如何" in result["starter"] or "<think>" in result["starter"]
 
@@ -228,7 +279,7 @@ async def test_deepseek_thinking_reasoning_content_fallback(monkeypatch):
 @pytest.mark.asyncio
 async def test_content_priority_over_reasoning(monkeypatch):
     """content 不空时, 优先用 content, 不动 reasoning_content."""
-    _patch_user_model(monkeypatch, model_name="catfish-private-main")
+    _patch_model_resolve(monkeypatch, model_name="catfish-private-main")
 
     def _resp(_n):
         return _MockResp(
@@ -241,22 +292,23 @@ async def test_content_priority_over_reasoning(monkeypatch):
 
     _patch_httpx(monkeypatch, _resp)
 
-    result = await proactive.generate_starter(user_email="zhang@example.com")
+    result = await proactive.generate_starter(
+        user_email="zhang@example.com",
+        journal_tail="# x",
+        model_name="catfish-private-main",
+    )
     assert result["source"] == "llm"
     assert "答案在 content" in result["starter"]
     assert "思考过程" not in result["starter"]
 
 
-# ── 验证 follow-user 透传: 员工 model 真被请求 ────────
+# ── 验证 follow-user 透传: Companion 传的 model 真被请求 ───────
 
 
 @pytest.mark.asyncio
 async def test_request_uses_user_model_not_hardcoded(monkeypatch):
-    """gateway 请求里 model 字段必须是员工 model, 不是写死的 'qwen-flash' / 别的.
-
-    防硬编码回归 (memory_distill 撞过的坑).
-    """
-    _patch_user_model(monkeypatch, model_name="catfish-public-nvidia-nemotron")
+    """gateway 请求里 model 字段必须是 Companion 传过来的 model_name, 不是写死."""
+    _patch_model_resolve(monkeypatch, model_name="catfish-public-nvidia-nemotron")
 
     captured_payloads: list[dict] = []
 
@@ -277,9 +329,13 @@ async def test_request_uses_user_model_not_hardcoded(monkeypatch):
     import httpx  # noqa: PLC0415
     monkeypatch.setattr(httpx, "AsyncClient", _MockClient)
 
-    await proactive.generate_starter(user_email="zhang@example.com")
+    await proactive.generate_starter(
+        user_email="zhang@example.com",
+        journal_tail="# x",
+        model_name="catfish-public-nvidia-nemotron",
+    )
 
     assert captured_payloads, "应至少 1 个 gateway 请求"
     assert captured_payloads[0].get("model") == "catfish-public-nvidia-nemotron", (
-        f"应原样用员工 model, 实际 {captured_payloads[0].get('model')!r}"
+        f"应原样用 Companion 透传的 model_name, 实际 {captured_payloads[0].get('model')!r}"
     )

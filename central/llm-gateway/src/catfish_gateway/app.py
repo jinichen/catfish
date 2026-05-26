@@ -84,7 +84,8 @@ from .multimodal_tool_unwrap import unwrap_tool_images  # noqa: E402
 # 5/23 BL-GATEWAY-DROP-LEGACY-SUMMARIZE: session_summarizer 整文件已删, plugin 接管
 # (catfish-memory on_session_end 写 employee_journal). 老 import 移除.
 from .skill_guard import inject_skill_guard  # noqa: E402
-from .skills_inject import inject_skills_catalog  # noqa: E402
+# 5/26 P0 砍 skills_inject (中央扫员工本机 SKILL.md → 上游 LLM, 隐私违规).
+# 详见 skills_loader.py 顶部 DEPRECATED 说明.
 from .stats_guard import inject_stats_guard  # noqa: E402
 from .model_handoff import apply_soft_handoff  # noqa: E402
 from .tool_capability_guard import route_to_tool_capable_if_needed  # noqa: E402
@@ -269,7 +270,7 @@ async def lifespan(app: FastAPI):
     # 旧设计 (V2 #67, 5/15): 启动时清 14 天前 recordings + 后台 24h daemon
     # 自动删. 当时理由"截图含业务数据不能永久留".
     #
-    # 5/25 哲学修正 — 录屏 100% 在员工本机 ~/.catfish/recordings/, 中央 0
+    # 5/25 哲学修正 — 录屏 100% 在员工本机 ~/.catfish/recordings/, 中央 0  # noqa: BOUNDARY
     # 字节. 既然中央不管, catfish 后台代码也不该后台自动删用户本机文件.
     # 这跟 catfish 给员工的 talking point "你电脑你做主, 中央不存不管"
     # 一致, 不再有"嘴上不上传 + 暗中删你硬盘" 的撕裂感.
@@ -390,7 +391,7 @@ except Exception as e:
     logger.warning("admin_proxy 挂载失败: %s", e)
 
 # BL-Q3-FACT P0 MVP (5/10): 事实补丁系统 — 政策变更 → diff → 找受影响 skill → 生成 patch
-# 数据落 ~/.catfish/facts/<id>/ (jsonl 临时, Q3 P1 迁 PG).
+# 数据落 ~/.catfish/facts/<id>/ (jsonl 临时, Q3 P1 迁 PG).  # noqa: BOUNDARY
 try:
     from .facts_router import router as facts_router  # noqa: PLC0415
     app.include_router(facts_router)
@@ -502,7 +503,7 @@ async def api_me(user: User = Depends(get_current_user)) -> dict[str, Any]:
 # BL-CENTRAL-WEB-PURGE-USERDATA (5/17 鸿波): 砍 /api/sessions/me/* 3 个端点.
 #
 # 老逻辑: 中央 web /sessions 页面调这些端点 → gateway 读员工本机
-# ~/.hermes/state.db → 返完整 chat messages 给 web. 违反 BL-CENTRAL-EDGE-BOUNDARY
+# ~/.hermes/state.db → 返完整 chat messages 给 web. 违反 BL-CENTRAL-EDGE-BOUNDARY  # noqa: BOUNDARY
 # (中央端不碰用户数据). Companion 自己有这功能.
 #
 # 砍 3 个: GET /api/sessions/me, /api/sessions/me/search, /api/sessions/me/{id}
@@ -517,8 +518,8 @@ async def api_me(user: User = Depends(get_current_user)) -> dict[str, Any]:
 # 后做 task_manager 中心 DB 持久化再扩.
 #
 # 数据源:
-#  - ~/.catfish/tasks.jsonl              tool-bridge task_manager (catfish_run_task)
-#  - ~/.catfish/a2a_notifications.jsonl  a2a 收件 (BL-FED2.6, 别人来求助)
+#  - ~/.catfish/tasks.jsonl              tool-bridge task_manager (catfish_run_task)  # noqa: BOUNDARY
+#  - ~/.catfish/a2a_notifications.jsonl  a2a 收件 (BL-FED2.6, 5/26 砍)  # noqa: BOUNDARY
 #
 # 跟 hermes 0.13 自带 Multi-Agent Kanban API 不冲突 — 5/15-5/18 接 hermes Kanban
 # 的话当一个 tile 嵌进来 (scope 2 补).
@@ -546,7 +547,7 @@ async def api_learn_start_recording(
     Returns: {session_id, started_at, output_dir}
 
     5/26 BL-RECMODE-MIGRATE-TO-EDGE batch 1: gateway 不再直接调 cdp_listener
-    (中央代码不读写 ~/.catfish/recordings/). 转 Unix socket JSON-RPC 给 tool-bridge.
+    (中央代码不读写 ~/.catfish/recordings/). 转 Unix socket JSON-RPC 给 tool-bridge.  # noqa: BOUNDARY
     """
     from . import tool_bridge_rpc as _tb_rpc  # noqa: PLC0415
 
@@ -611,46 +612,39 @@ async def api_learn_record_transcript(
     body: dict,
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """RecMode A (5/14 ship): Companion 把 whisper.cpp 转写出来的字符串落到
-    `~/.catfish/recordings/<session_id>/transcripts.jsonl`, 给 aggregator 用.
+    """RecMode A — thin proxy → edge tool-bridge.
 
-    BL-VOICE3 现状返字符串没写文件, 这是中间桥接 endpoint.
-
-    Body: {"session_id": str, "text": str, "ts_offset"?: float (默认 0,
-        相对 RecMode session 起始时间偏移), "duration"?: float}
-
-    Returns: {ok: True, transcripts_path: str, lines_count: int}
+    5/26 BL-RECMODE-MIGRATE-TO-EDGE batch 2 (E.1 收尾): batch 1 漏的 3 个
+    app.py 内联 endpoint 之一. gateway 不再直接写员工 recordings/transcripts.jsonl,
+    转 tool-bridge 处理.
     """
+    from . import tool_bridge_rpc as _tb_rpc  # noqa: PLC0415
+
     session_id = (body.get("session_id") or "").strip()
-    text = (body.get("text") or "").strip()
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id 不能空")
-    if not text:
-        return {"ok": True, "transcripts_path": "", "lines_count": 0, "skipped": "empty text"}
-    ts_offset = float(body.get("ts_offset") or 0.0)
-    duration = float(body.get("duration") or 0.0)
-
     catfish_home = os.environ.get("CATFISH_HOME", "").strip()
-    rec_root = (
-        Path(catfish_home).expanduser() / "recordings" if catfish_home
-        else Path.home() / ".catfish" / "recordings"
-    )
-    sd = rec_root / session_id
-    if not sd.exists():
-        raise HTTPException(status_code=404, detail=f"session_dir {sd} 不存在")
+    try:
+        out = await _tb_rpc.call(
+            "recmode/record_transcript",
+            {
+                "session_id": session_id,
+                "text": body.get("text", ""),
+                "ts_offset": body.get("ts_offset"),
+                "duration": body.get("duration"),
+                "catfish_home": catfish_home,
+            },
+        )
+    except _tb_rpc.ToolBridgeUnreachable as e:
+        raise HTTPException(status_code=502, detail=f"tool-bridge 不可达: {e}") from e
+    except _tb_rpc.ToolBridgeRPCError as e:
+        if "不存在" in e.message or "404" in e.message:
+            raise HTTPException(status_code=404, detail=e.message) from e
+        raise HTTPException(status_code=400, detail=e.message) from e
 
-    path = sd / "transcripts.jsonl"
-    record = {"ts": ts_offset, "duration": duration, "text": text}
-    import json as _json
-    with path.open("a", encoding="utf-8") as f:
-        f.write(_json.dumps(record, ensure_ascii=False) + "\n")
-    lines_count = sum(1 for _ in path.open("r", encoding="utf-8"))
-    return {
-        "ok": True,
-        "transcripts_path": str(path),
-        "lines_count": lines_count,
-        "viewer": user.sub,
-    }
+    if isinstance(out, dict):
+        out["viewer"] = user.sub
+    return out  # type: ignore[return-value]
 
 
 @app.get("/api/learn/skill_content")
@@ -658,57 +652,30 @@ async def api_learn_skill_content(
     skill_dir: str,
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """RecMode B (5/14 ship): preview UI 读 SKILL.md + main.py 文件内容显示.
+    """RecMode B — thin proxy → edge tool-bridge.
 
-    Companion Tauri webview 沙箱读不了任意路径, 需要 endpoint 代理.
-    skill_dir 必须在 ~/.catfish/skills/ 或 ~/.catfish/recordings/ 下,
-    防 path traversal.
-
-    Query: ?skill_dir=/Users/.../personal/skill_x
-
-    Returns: {skill_md: str, main_py: str, recmode_meta: dict | None}
+    5/26 BL-RECMODE-MIGRATE-TO-EDGE batch 2: gateway 不再读员工 fs, 转 tool-bridge.
     """
-    sd = Path(skill_dir).expanduser().resolve()
-    # path traversal 防御 — 必须在受信路径下
-    home = Path.home().resolve()
-    allowed_roots = [
-        home / ".catfish" / "skills",
-        home / ".catfish" / "recordings",
-    ]
+    from . import tool_bridge_rpc as _tb_rpc  # noqa: PLC0415
+
     catfish_home = os.environ.get("CATFISH_HOME", "").strip()
-    if catfish_home:
-        cf = Path(catfish_home).expanduser().resolve()
-        allowed_roots += [cf / "skills", cf / "recordings"]
-    if not any(str(sd).startswith(str(r)) for r in allowed_roots):
-        raise HTTPException(
-            status_code=403,
-            detail=f"skill_dir {sd} 不在受信路径下 (~/.catfish/skills/ 或 recordings/)",
+    try:
+        out = await _tb_rpc.call(
+            "recmode/skill_content",
+            {"skill_dir": skill_dir, "catfish_home": catfish_home},
         )
-    if not sd.exists():
-        raise HTTPException(status_code=404, detail=f"skill_dir {sd} 不存在")
+    except _tb_rpc.ToolBridgeUnreachable as e:
+        raise HTTPException(status_code=502, detail=f"tool-bridge 不可达: {e}") from e
+    except _tb_rpc.ToolBridgeRPCError as e:
+        if "404" in e.message or "不存在" in e.message:
+            raise HTTPException(status_code=404, detail=e.message) from e
+        if "受信" in e.message:
+            raise HTTPException(status_code=403, detail=e.message) from e
+        raise HTTPException(status_code=400, detail=e.message) from e
 
-    def _read_or_empty(p: Path) -> str:
-        try:
-            return p.read_text(encoding="utf-8") if p.exists() else ""
-        except OSError:
-            return ""
-
-    import json as _json
-    meta = None
-    meta_path = sd / "recmode_meta.json"
-    if meta_path.exists():
-        try:
-            meta = _json.loads(meta_path.read_text(encoding="utf-8"))
-        except Exception:
-            meta = None
-
-    return {
-        "skill_dir": str(sd),
-        "skill_md": _read_or_empty(sd / "SKILL.md"),
-        "main_py": _read_or_empty(sd / "main.py"),
-        "recmode_meta": meta,
-        "viewer": user.sub,
-    }
+    if isinstance(out, dict):
+        out["viewer"] = user.sub
+    return out  # type: ignore[return-value]
 
 
 @app.post("/api/learn/save_skill")
@@ -716,92 +683,40 @@ async def api_learn_save_skill(
     body: dict,
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """RecMode C (5/14 ship): 用户 review preview 后点'保存', 把 draft skill
-    从 recordings/<sid>/skill_draft/ 移到 ~/.catfish/skills/<namespace>/<name>/.
+    """RecMode C — thin proxy → edge tool-bridge.
 
-    Body: {"draft_dir": str, "namespace"?: str (覆盖 SKILL.md 默认),
-           "name"?: str (覆盖 SKILL.md 默认)}
-
-    Returns: {final_dir: str, moved: bool}
+    5/26 BL-RECMODE-MIGRATE-TO-EDGE batch 2: 整段 fs 操作 (mv draft → skills,
+    keep_forever flag) 搬 tool-bridge. gateway 不再 shutil.copytree 员工 fs.
     """
-    import shutil
-    draft_dir_str = (body.get("draft_dir") or "").strip()
-    if not draft_dir_str:
-        raise HTTPException(status_code=400, detail="draft_dir 不能空")
-    draft_dir = Path(draft_dir_str).expanduser().resolve()
-    home = Path.home().resolve()
+    from . import tool_bridge_rpc as _tb_rpc  # noqa: PLC0415
+
     catfish_home = os.environ.get("CATFISH_HOME", "").strip()
-    rec_root = (
-        Path(catfish_home).expanduser().resolve() / "recordings" if catfish_home
-        else home / ".catfish" / "recordings"
-    )
-    skills_root = (
-        Path(catfish_home).expanduser().resolve() / "skills" if catfish_home
-        else home / ".catfish" / "skills"
-    )
-    if not str(draft_dir).startswith(str(rec_root)):
-        raise HTTPException(status_code=403, detail=f"draft_dir 必须在 {rec_root} 下")
-    if not draft_dir.exists():
-        raise HTTPException(status_code=404, detail=f"draft_dir {draft_dir} 不存在")
-
-    # 从 SKILL.md / recmode_meta.json 读 namespace + name (caller 可覆盖)
-    meta_path = draft_dir / "recmode_meta.json"
-    namespace = (body.get("namespace") or "").strip()
-    name = (body.get("name") or "").strip()
-    if (not namespace or not name) and meta_path.exists():
-        import json as _json
-        try:
-            meta = _json.loads(meta_path.read_text(encoding="utf-8"))
-            raw = meta.get("raw_llm_json") or {}
-            namespace = namespace or raw.get("namespace", "personal")
-            name = name or raw.get("skill_name", "")
-        except Exception:
-            pass
-    if not namespace or not name:
-        raise HTTPException(
-            status_code=422,
-            detail="缺 namespace / name (recmode_meta.json 也没): 请显式传",
+    try:
+        out = await _tb_rpc.call(
+            "recmode/save_skill",
+            {
+                "draft_dir": body.get("draft_dir", ""),
+                "namespace": body.get("namespace", ""),
+                "name": body.get("name", ""),
+                "keep_forever": bool(body.get("keep_forever", False)),
+                "catfish_home": catfish_home,
+            },
+            timeout_s=60.0,  # copytree 可能慢
         )
+    except _tb_rpc.ToolBridgeUnreachable as e:
+        raise HTTPException(status_code=502, detail=f"tool-bridge 不可达: {e}") from e
+    except _tb_rpc.ToolBridgeRPCError as e:
+        if "404" in e.message or "不存在" in e.message:
+            raise HTTPException(status_code=404, detail=e.message) from e
+        if "受信" in e.message or "必须在" in e.message:
+            raise HTTPException(status_code=403, detail=e.message) from e
+        if "422" in e.message:
+            raise HTTPException(status_code=422, detail=e.message) from e
+        raise HTTPException(status_code=400, detail=e.message) from e
 
-    final_dir = skills_root / namespace / name
-    final_dir.parent.mkdir(parents=True, exist_ok=True)
-    if final_dir.exists():
-        # 已存在 (重名), 备份老的然后覆盖
-        backup = final_dir.with_name(f"{name}.bak.{int(time.time())}")
-        final_dir.rename(backup)
-    shutil.copytree(draft_dir, final_dir)
-
-    # V2 #67: opt-in '保留作 ground truth' — 用户勾了 keep_forever, 写 flag
-    # 到 session_dir 的 .keep_forever (cleanup 跳过整个 session_dir)
-    # + 写 _keep_forever: true 到 recmode_meta.json (双重保险)
-    keep_forever = bool(body.get("keep_forever", False))
-    if keep_forever:
-        # 找 draft_dir 上面的 session_dir (recordings/<sid>/skill_draft/<ns>/<name>/)
-        try:
-            session_dir = draft_dir.parent.parent.parent  # <ns> → skill_draft → <sid>
-            (session_dir / ".keep_forever").touch()
-            # 同时写到 recmode_meta.json
-            meta_path = final_dir / "recmode_meta.json"
-            if meta_path.exists():
-                import json as _json
-                meta = _json.loads(meta_path.read_text(encoding="utf-8"))
-                meta["_keep_forever"] = True
-                meta_path.write_text(
-                    _json.dumps(meta, indent=2, ensure_ascii=False),
-                    encoding="utf-8",
-                )
-        except Exception:  # noqa: BLE001
-            logger.warning("save_skill: keep_forever flag 写失败 (不致命)", exc_info=True)
-
-    return {
-        "ok": True,
-        "final_dir": str(final_dir),
-        "namespace": namespace,
-        "name": name,
-        "moved": True,
-        "keep_forever": keep_forever,
-        "viewer": user.sub,
-    }
+    if isinstance(out, dict):
+        out["viewer"] = user.sub
+    return out  # type: ignore[return-value]
 
 
 @app.post("/api/learn/repair_selector")
@@ -821,8 +736,8 @@ async def api_learn_repair_selector(
     Returns: {found, text, near_text, role, confidence, reason}
 
     5/25 BL-RECMODE-MIGRATE-TO-EDGE: gateway 不再直接调 selector_repair.
-    转 Unix socket JSON-RPC 给 edge tool-bridge (跑在 ~/.catfish/tool-bridge.sock).
-    中央代码 (`central/`) 不再读 / 写 ~/.catfish/recordings/. 详见
+    转 Unix socket JSON-RPC 给 edge tool-bridge (跑在 ~/.catfish/tool-bridge.sock).  # noqa: BOUNDARY
+    中央代码 (`central/`) 不再读 / 写 ~/.catfish/recordings/. 详见  # noqa: BOUNDARY
     `docs/CENTRAL-EDGE-DATA-BOUNDARY.md` E.1 / `tool_bridge_rpc.py`.
     """
     from . import tool_bridge_rpc as _tb_rpc  # noqa: PLC0415
@@ -921,7 +836,7 @@ async def api_learn_test_skill(
     if not sd.exists():
         raise HTTPException(status_code=404, detail=f"skill_dir {sd} 不存在")
 
-    # 从 skill_dir 推 namespace/name (路径形如 ~/.catfish/skills/personal/skill_x)
+    # 从 skill_dir 推 namespace/name (路径形如 ~/.catfish/skills/personal/skill_x)  # noqa: BOUNDARY
     parts = sd.parts
     if len(parts) < 2:
         raise HTTPException(status_code=422, detail="skill_dir 路径格式不对")
@@ -973,9 +888,9 @@ async def api_learn_analyze(
 ) -> dict[str, Any]:
     """触发 RecMode aggregator (thin proxy → edge tool-bridge): 读 session_dir →
     调 catfish-private-main → 解析 JSON → 落 SKILL.md + main.py 到
-    ~/.catfish/skills/<namespace>/<name>/.
+    ~/.catfish/skills/<namespace>/<name>/.  # noqa: BOUNDARY
 
-    Body: {"session_id": str, "skills_root": str (可选, 默认 ~/.catfish/skills)}
+    Body: {"session_id": str, "skills_root": str (可选, 默认 ~/.catfish/skills)}  # noqa: BOUNDARY
 
     Returns: {skill_name, namespace, skill_dir, steps_count, confidence,
               questions_for_user}
@@ -984,7 +899,7 @@ async def api_learn_analyze(
     → 拿 skill_dir → 读 SKILL.md / main.py 显 preview UI 给用户 review.
 
     5/25 BL-RECMODE-MIGRATE-TO-EDGE: gateway 不再直接调 aggregator (中央代码
-    不读写 ~/.catfish/recordings/ ~/.catfish/skills/). 透传 Unix socket JSON-RPC
+    不读写 ~/.catfish/recordings/ ~/.catfish/skills/). 透传 Unix socket JSON-RPC  # noqa: BOUNDARY
     到 edge tool-bridge, 由 tool-bridge 进程跑 aggregate_session + 落盘.
     详见 docs/CENTRAL-EDGE-DATA-BOUNDARY.md E.1 / tool_bridge_rpc.py.
     """
@@ -1084,7 +999,7 @@ async def api_learn_status(
 # BL-CENTRAL-WEB-PURGE-USERDATA (5/17 鸿波): 砍 /api/tasks/me 端点.
 #
 # 老逻辑: 中央 web /看板 页面调此端点 → gateway 读员工本机
-# ~/.catfish/tasks.jsonl → 返任务标题/状态给 web. 违反 BL-CENTRAL-EDGE-BOUNDARY.
+# ~/.catfish/tasks.jsonl → 返任务标题/状态给 web. 违反 BL-CENTRAL-EDGE-BOUNDARY.  # noqa: BOUNDARY
 # Companion 自己有任务看板. 配套 src/catfish_gateway/tasks_browse.py 不再被调用,
 # 但模块保留待 follow-up ticket 清理.
 
@@ -1137,7 +1052,7 @@ async def api_quota_department(
 # ── BL-EDGE-TOOL-KEY (5/24 鸿波): hermes 边缘工具中央派发 backend key ──
 #
 # 让 catfish-cli refresh-hermes 拉这个 endpoint, 把 Tavily/Firecrawl 等
-# 第三方 key 从中央 .env 同步到员工 ~/.hermes/.env, admin 改 key 50 台机器
+# 第三方 key 从中央 .env 同步到员工 ~/.hermes/.env, admin 改 key 50 台机器  # noqa: BOUNDARY
 # 下次 refresh 自动拿新值, 不用 ssh 全跑一遍.
 #
 # 详见 catfish_gateway/edge_tool_config.py docstring.
@@ -1158,8 +1073,8 @@ async def edge_tool_config(
 
     被调约定:
       - Bearer 任意 JWT (用户 OAuth token / hermes-cli service token 都行).
-      - CLI 拿到响应后, env_vars 合并写 ~/.hermes/.env (per-key update),
-        yaml_block 合并写 ~/.hermes/config.yaml (preserve sibling keys).
+      - CLI 拿到响应后, env_vars 合并写 ~/.hermes/.env (per-key update),  # noqa: BOUNDARY
+        yaml_block 合并写 ~/.hermes/config.yaml (preserve sibling keys).  # noqa: BOUNDARY
     """
     from . import edge_tool_config as etc  # 懒 import 防循环
 
@@ -1534,30 +1449,42 @@ async def api_dev_users() -> dict[str, Any]:
 
 @app.get("/api/proactive/starter")
 async def api_proactive_starter(
+    request: Request,
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     """返一个上下文感知的 starter (引用员工 journal + 时段). 失败返 fallback 模板.
 
-    BL-INTERNAL-MODEL-FOLLOW-USER (5/17): user.sub 透传, proactive 用员工最近
-    session 的 model. 没拿到 → fallback 模板.
+    5/26 BL-PROACTIVE-DECOUPLE: gateway 不再读员工本机 journal + state.db.
+    Companion 通过 header 把 journal_tail (base64 UTF-8) + last_model 传过来.
+    老 Companion 不传 → fallback 模板 (功能退化, 不致命).
     """
     from . import proactive
-    return await proactive.generate_starter(user_email=user.sub)
+    import base64 as _b64
+
+    journal_tail = ""
+    jt_b64 = request.headers.get("x-catfish-journal-tail-b64", "")
+    if jt_b64:
+        try:
+            journal_tail = _b64.b64decode(jt_b64).decode("utf-8", errors="replace")
+        except Exception:
+            journal_tail = ""
+    model_name = request.headers.get("x-catfish-last-model", "").strip() or None
+    return await proactive.generate_starter(
+        user_email=user.sub, journal_tail=journal_tail, model_name=model_name,
+    )
 
 
 # 5/6 BL-E13.5 真主动 Phase B: 信号触发的针对性 starter
 @app.post("/api/proactive/contextual")
 async def api_proactive_contextual(
     body: dict[str, Any],
+    request: Request,
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     """信号触发的 starter. body = {signal_kind: str, context: dict}.
 
-    signal_kind: 'silence' | 'deadline' | 'focus'
-    context: 各 kind 不同, 见 proactive.py _SIGNAL_KIND_PROMPTS
-
-    失败返 source='fallback', frontend 用本地模板兜底.
-    BL-INTERNAL-MODEL-FOLLOW-USER (5/17): 用员工最近 session 的 model.
+    5/26 BL-PROACTIVE-DECOUPLE: model_name 从 header X-Catfish-Last-Model 拿
+    (Companion 传, gateway 不读 state.db).
     """
     from . import proactive
     signal_kind = (body.get("signal_kind") or "").strip()
@@ -1568,7 +1495,10 @@ async def api_proactive_contextual(
             "context_hint": "missing signal_kind or context",
             "source": "fallback",
         }
-    return await proactive.generate_contextual_starter(signal_kind, context, user_email=user.sub)
+    model_name = request.headers.get("x-catfish-last-model", "").strip() or None
+    return await proactive.generate_contextual_starter(
+        signal_kind, context, user_email=user.sub, model_name=model_name,
+    )
 
 
 # Capability-probe stubs
@@ -2288,13 +2218,10 @@ async def _stream_chat_completion(
         # 看到 unknown object 会忽略 (extra-field 容忍). Companion 嗅 object
         # 字段拿 metadata.
         try:
-            from .skill_guard import has_skill_intent  # noqa: PLC0415
-            from .skills_loader import discover_skills  # noqa: PLC0415
-
-            sg_fired = has_skill_intent(
-                body.get("messages") or [],
-                skills=discover_skills(),
-            )
+            # 5/26 P0 砍: skills_loader.discover_skills + has_skill_intent 全砍
+            # (中央扫员工本机 SKILL.md → 上游 LLM, 隐私违规). sg_fired 永远 False
+            # 是预期行为 — LLM 走 hermes tool calling 自己知道有哪些 skill 可调.
+            sg_fired = False
 
             # 历史里 assistant 调过 catfish_run_skill 没?
             ever_called_skill = False
@@ -2334,7 +2261,7 @@ async def _stream_chat_completion(
         # 给客户端一个 friendly 错误 —— 把内部 trace 简化成人话
         friendly = _friendly_upstream_error(err)
         # BL-FIX-TIMEOUT-OUTPUTS (5/13 鸿波"做不出文档"): 上游 LLM 卡 / timeout
-        # 时, 副手实际可能已经写过文件 (execute_code 早跑了), 列最近 ~/.catfish/output/
+        # 时, 副手实际可能已经写过文件 (execute_code 早跑了), 列最近 ~/.catfish/output/  # noqa: BOUNDARY
         # 文件给员工看, 别让他以为"做不出来"实际"已经做了".
         err_low = err.lower()
         is_timeout_or_overload = (
@@ -2343,21 +2270,16 @@ async def _stream_chat_completion(
             or "broken pipe" in err_low or "connection error" in err_low
         )
         if is_timeout_or_overload:
-            try:
-                from . import recent_outputs  # noqa: PLC0415
-                outputs = recent_outputs.list_recent(hours_back=24, limit=5)
-                if outputs:
-                    friendly += "\n\n📁 **过去 24h 鲶鱼已写文件** (上游卡时她可能已经做过, 直接 open 看):\n"
-                    for o in outputs:
-                        friendly += f"  - `{o['path']}` ({o['size_human']}, {o['mtime_iso'][:16]})\n"
-                friendly += (
-                    "\n💡 上游模型可能拥堵, 试试:\n"
-                    "  - **切大模型**: 输入 `/model catfish-public-gemini-pro` (2M 上下文, 公网快)\n"
-                    "  - **新建会话** (Cmd+N): 减小 prompt 让上游推理更快\n"
-                    "  - 上游 catfish-private-main 是内网 122B Qwen, 长 prompt + 高负载下推理 5+ 分钟"
-                )
-            except Exception as _e:  # noqa: BLE001
-                logger.warning("BL-FIX-TIMEOUT-OUTPUTS: recent_outputs 失败 (静默): %s", _e)
+            # 5/26 BL-RECENT-OUTPUTS-DECOUPLE: gateway 不再读员工本机 ~/.catfish/output/.  # noqa: BOUNDARY
+            # 老 BL-FIX-TIMEOUT-OUTPUTS 在 timeout 错误段追加"过去 24h 已写文件"
+            # 列表, 现砍 — Companion 端在 timeout 时自己显示 toast 列本地 outputs
+            # (BL-X 后续做; recent_outputs.py 改 stub).
+            friendly += (
+                "\n💡 上游模型可能拥堵, 试试:\n"
+                "  - **切大模型**: 输入 `/model catfish-public-gemini-pro` (2M 上下文, 公网快)\n"
+                "  - **新建会话** (Cmd+N): 减小 prompt 让上游推理更快\n"
+                "  - 上游 catfish-private-main 是内网 122B Qwen, 长 prompt + 高负载下推理 5+ 分钟"
+            )
         yield f"data: {json.dumps({'error': friendly})}\n\n"
     finally:
         # BL-HERMES013-5 (5/12): 散点 audit/quota/context inline 调用 重构成
@@ -2688,7 +2610,7 @@ async def chat_completions(
     # hermes-agent 自管 plan-execute (run_agent.py:12614 agent loop).
 
     # 档 4 (BL-HERMES013-3 5/11) /goal 注入 **5/26 砍** — hermes 0.14 原生 /goal
-    # 替代. catfish 自己注入的是 ~/.catfish/session_goal.txt (跟 hermes 内部 goal
+    # 替代. catfish 自己注入的是 ~/.catfish/session_goal.txt (跟 hermes 内部 goal  # noqa: BOUNDARY
     # 状态独立), 双 inject 互不知道, 是状态分裂源. hermes 已统一管理 goal 注入.
     # 详见 session_goals.py 顶部 DEPRECATED 说明.
 

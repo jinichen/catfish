@@ -1,14 +1,26 @@
-"""session_meta 测试 — BL-E16 关系建立 (五一 sprint 5/3 晚).
+"""session_meta 测试 — BL-E16 关系建立 + 5/26 字段漂移修.
 
-覆盖:
-  - tick 第一次: 建文件 + today_count=1
+# 5/26 字段漂移修 (BL-E16 hidden bug)
+
+老 tick 写 `last_chat_at`, 但 catfish-memory plugin `_render_session_meta`
+(`edge/hermes-plugins/catfish-memory/catfish_memory.py`) 读的是 `last_chat_iso`.
+字段错位导致 plugin 端"🕒 时间感"长期渲染空. 5/26 改 gateway tick 写
+`last_chat_iso`, 跟 plugin 对齐.
+
+# 5/26 同批砍 build_meta_block + _humanize_delta
+
+老代码里 gateway 自己拼一个 "Session Meta" 段, 但 0 真 caller — 真正注入
+"🕒 时间感" 段的是 catfish-memory hermes plugin (它读 tick() 写的 json).
+gateway 的 build_meta_block 是死代码, 直接砍.
+
+# 覆盖
+
+  - tick 第一次: 建文件 + today_count=1 + last_chat_iso 字段
   - tick 同天: today_count + 1
   - tick 跨天: today_count reset 1
-  - build_meta_block 没文件: 返空 (不报错, 不污染 prompt)
-  - build_meta_block 同天 N 次: "今天第 N 次找我"
-  - build_meta_block 跨天: "距上次 N 天 N 小时前"
-  - _humanize_delta: 各时长格式
+  - tick 不再写老的 last_chat_at 字段 (防字段漂移回归)
   - 损坏 json 文件: 返空 + 自动重建 (不抛)
+  - 防回归: build_meta_block + _humanize_delta 不能复活
 """
 
 from __future__ import annotations
@@ -39,7 +51,17 @@ def test_tick_first_time_creates_file(tmp_meta: Path) -> None:
     data = json.loads(tmp_meta.read_text())
     assert data["today_count"] == 1
     assert "today_date" in data
-    assert "last_chat_at" in data
+    assert "last_chat_iso" in data, "5/26 字段对齐: 应写 last_chat_iso (跟 plugin 同源)"
+
+
+def test_tick_no_longer_writes_old_field_name(tmp_meta: Path) -> None:
+    """5/26 字段漂移修防回归: 老字段 last_chat_at 不能再写 (plugin 读 last_chat_iso)."""
+    session_meta.tick()
+    data = json.loads(tmp_meta.read_text())
+    assert "last_chat_at" not in data, (
+        "5/26 audit 改了 tick 写 last_chat_iso, last_chat_at 是老 bug 字段名. "
+        "若复活意味着 plugin '🕒 时间感' 段又渲染空了 (BL-E16 hidden bug 回归)."
+    )
 
 
 def test_tick_same_day_increments(tmp_meta: Path) -> None:
@@ -57,7 +79,7 @@ def test_tick_new_day_resets(tmp_meta: Path, monkeypatch: pytest.MonkeyPatch) ->
     session_meta.tick()
     # 改"今天" 为下一天
     yesterday_data = json.loads(tmp_meta.read_text())
-    fake_now = datetime.fromisoformat(yesterday_data["last_chat_at"]) + timedelta(days=1)
+    fake_now = datetime.fromisoformat(yesterday_data["last_chat_iso"]) + timedelta(days=1)
     monkeypatch.setattr(session_meta, "_now", lambda: fake_now)
     session_meta.tick()
     data = json.loads(tmp_meta.read_text())
@@ -73,64 +95,23 @@ def test_tick_corrupted_json_silent_recover(
     session_meta.tick()  # 不该抛
     data = json.loads(tmp_meta.read_text())
     assert data["today_count"] == 1
+    assert "last_chat_iso" in data
 
 
-# ─── build_meta_block ───
+# ─── 砍掉的 API 防回归 ───────────────────────────────────────
 
 
-def test_build_meta_no_file_returns_empty(tmp_meta: Path) -> None:
-    """没文件 (新装) → 空字符串, 不污染 prompt"""
-    assert session_meta.build_meta_block() == ""
+def test_build_meta_block_is_removed():
+    """5/26 砍: build_meta_block 是死代码 (0 真 caller), plugin 自己渲染 '🕒 时间感'."""
+    assert not hasattr(session_meta, "build_meta_block"), (
+        "build_meta_block 5/26 砍 (死代码). 真渲染在 catfish-memory plugin "
+        "_render_session_meta. 若复活意味着双重渲染 risk."
+    )
 
 
-def test_build_meta_same_day_says_today_count(tmp_meta: Path) -> None:
-    session_meta.tick()
-    session_meta.tick()
-    block = session_meta.build_meta_block()
-    assert "Session Meta" in block
-    assert "今天第 2 次" in block
-    assert "距上次找我" in block
-    assert "刚刚前" in block  # 测试中 tick 间隔几乎 0 → "刚刚"
-
-
-def test_build_meta_cross_day_says_days_ago(
-    tmp_meta: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """昨天 tick 过, 今天读 → 显示 '1 天 X 小时前'"""
-    fake_yesterday = datetime(2026, 5, 2, 10, 0, tzinfo=timezone.utc).astimezone()
-    monkeypatch.setattr(session_meta, "_now", lambda: fake_yesterday)
-    session_meta.tick()
-    # 切到 1 天 4 小时后
-    fake_today = fake_yesterday + timedelta(days=1, hours=4)
-    monkeypatch.setattr(session_meta, "_now", lambda: fake_today)
-    block = session_meta.build_meta_block()
-    assert "1 天 4 小时前" in block
-    # today_date 不一致 → today_count 这行不该出 (避免误报昨天的次数当今天)
-    assert "今天第" not in block
-
-
-def test_build_meta_today_first_time(
-    tmp_meta: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """今天没 tick 过 (新启动那一刻) → 不返今天计数"""
-    # 没文件
-    block = session_meta.build_meta_block()
-    assert block == ""
-
-
-# ─── _humanize_delta ───
-
-
-@pytest.mark.parametrize("secs,expected", [
-    (10, "刚刚"),
-    (59, "刚刚"),
-    (60, "1 分钟"),
-    (3599, "59 分钟"),
-    (3600, "1 小时"),
-    (3 * 3600 + 30 * 60, "3 小时 30 分"),
-    (86_400, "1 天"),
-    (86_400 + 3 * 3600, "1 天 3 小时"),
-    (3 * 86_400 + 12 * 3600, "3 天 12 小时"),
-])
-def test_humanize_delta(secs: int, expected: str) -> None:
-    assert session_meta._humanize_delta(timedelta(seconds=secs)) == expected
+def test_humanize_delta_is_removed():
+    """5/26 砍: _humanize_delta 是 build_meta_block 的 helper, 同批砍."""
+    assert not hasattr(session_meta, "_humanize_delta"), (
+        "_humanize_delta 5/26 砍 (build_meta_block 的 helper, 一起死). "
+        "若需要 humanize 时长, plugin 端自己实现 (gateway 不渲染)."
+    )

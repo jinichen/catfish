@@ -61,75 +61,32 @@ def _jsonl_path(session_id: str, ref: str) -> Path:
 
 
 def upsert_archive(row: dict) -> tuple[bool, str]:
-    """upsert 一条 archive. 返 (ok, backend) — backend ∈ {'pg', 'jsonl'}.
+    """upsert 一条 archive. 返 (ok, backend) — 5/26 后 backend 永远 'jsonl'.
 
     必填字段: ref / session_id / user_email / content / content_bytes / lines.
+
+    # 5/26 真隐私修: 砍 PG 路径
+
+    老逻辑: PG 写 content + jsonl 双写灾备. PG 那条把 **archive content** (大 tool
+    output: browser_screenshot base64 PNG / email_search 邮件内容 / browser_snapshot
+    HTML 等) 写到**中央 PG** → 违反 "中央只看 metadata" 承诺. content 是员工业务
+    数据, 不该上中央. 5/26 audit 抓到 (比 5/25 aggregator vision 更严重, 因为
+    aggregator 是 transit 不落盘, PG upsert 真持久化中央).
+
+    新逻辑: jsonl-only. content 永远员工 mac (~/.catfish/tool_archives/). PG schema
+    不再写 (老 PG 数据保留作历史, get_archive 也不再读 PG, 全走 jsonl).
     """
-    if _pg_upsert(row):
-        # 双写一份 jsonl 作 PG 灾备 (跟 facts 同思路 — PG 是主, jsonl 是审计兜底)
-        try:
-            _jsonl_write(row)
-        except Exception as e:  # noqa: BLE001
-            logger.debug("jsonl 双写失败 (不影响主路径): %s", e)
-        return True, "pg"
-    # PG 写失败 → 纯 jsonl
     try:
         _jsonl_write(row)
         return True, "jsonl"
     except Exception as e:  # noqa: BLE001
-        logger.error("upsert_archive 主备全挂 ref=%s err=%s", row.get("ref"), e)
+        logger.error("upsert_archive jsonl 写挂 ref=%s err=%s", row.get("ref"), e)
         return False, "none"
 
 
 def _pg_upsert(row: dict) -> bool:
-    if not _use_pg():
-        return False
-    try:
-        with _pg_conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO tool_archives (
-                    ref, session_id, user_email, tool_call_id, tool_name,
-                    content, content_bytes, lines,
-                    summary, summary_model, summary_at, summary_error,
-                    origin_model,
-                    created_at, expires_at
-                ) VALUES (
-                    %s, %s, %s, %s, %s,
-                    %s, %s, %s,
-                    %s, %s, %s, %s,
-                    %s,
-                    %s, %s
-                )
-                ON CONFLICT (ref) DO NOTHING
-                """,
-                (
-                    row["ref"],
-                    row["session_id"],
-                    row["user_email"],
-                    row.get("tool_call_id"),
-                    row.get("tool_name"),
-                    row["content"],
-                    int(row["content_bytes"]),
-                    int(row["lines"]),
-                    row.get("summary"),
-                    row.get("summary_model"),
-                    row.get("summary_at"),
-                    row.get("summary_error"),
-                    row.get("origin_model"),
-                    row.get("created_at", datetime.now(UTC)),
-                    row.get(
-                        "expires_at",
-                        datetime.now(UTC)
-                        + timedelta(days=RETENTION_DAYS),
-                    ),
-                ),
-            )
-            conn.commit()
-        return True
-    except Exception as e:  # noqa: BLE001
-        logger.warning("pg_upsert tool_archives 失败 (兜底走 jsonl): %s", e)
-        return False
+    """5/26 砍 — 真隐私违规 (PG 写 content 上中央). 留 stub 防回归."""
+    return False
 
 
 def _jsonl_write(row: dict) -> None:
@@ -164,36 +121,8 @@ def get_archive(ref: str) -> dict | None:
 
 
 def _pg_get(ref: str) -> dict | None:
-    if not _use_pg():
-        return None
-    try:
-        with _pg_conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT ref, session_id, user_email, tool_call_id, tool_name,
-                       content, content_bytes, lines,
-                       summary, summary_model, summary_at, summary_error,
-                       origin_model,
-                       created_at, expires_at
-                FROM tool_archives
-                WHERE ref = %s AND expires_at > NOW()
-                """,
-                (ref,),
-            )
-            r = cur.fetchone()
-            if not r:
-                return None
-            cols = [
-                "ref", "session_id", "user_email", "tool_call_id", "tool_name",
-                "content", "content_bytes", "lines",
-                "summary", "summary_model", "summary_at", "summary_error",
-                "origin_model",
-                "created_at", "expires_at",
-            ]
-            return dict(zip(cols, r))
-    except Exception as e:  # noqa: BLE001
-        logger.warning("pg_get tool_archives 失败 (走 jsonl): %s", e)
-        return None
+    """5/26 砍 — 跟 _pg_upsert 同批 (PG 不再存 content). 留 stub 防回归."""
+    return None
 
 
 def _jsonl_get(ref: str) -> dict | None:
@@ -228,37 +157,11 @@ def _jsonl_get(ref: str) -> dict | None:
 
 
 def pick_unsummarized(limit: int = 10) -> list[dict]:
-    """PG 优先扫. PG 没 / 挂 → jsonl 扫.
+    """jsonl-only (5/26 砍 PG 路径). 扫 ~/.catfish/tool_archives 找未摘要的.
 
     返回每条只含 ref / content / tool_name (摘要器够用了).
     """
-    if _use_pg():
-        try:
-            with _pg_conn() as conn, conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT ref, content, tool_name, origin_model
-                    FROM tool_archives
-                    WHERE summary IS NULL AND summary_error IS NULL
-                    ORDER BY created_at
-                    LIMIT %s
-                    """,
-                    (limit,),
-                )
-                rows = cur.fetchall()
-                return [
-                    {
-                        "ref": r[0],
-                        "content": r[1],
-                        "tool_name": r[2],
-                        "origin_model": r[3],
-                    }
-                    for r in rows
-                ]
-        except Exception as e:  # noqa: BLE001
-            logger.warning("pg pick_unsummarized 失败: %s", e)
-
-    # jsonl 兜底 — 扫文件
+    # 5/26: PG 路径砍 (PG 不再存 content), 整个走 jsonl.
     out: list[dict] = []
     if not ARCHIVE_DIR.exists():
         return out
@@ -300,26 +203,8 @@ def update_summary(
 
 
 def _pg_update_summary(ref, *, summary, model, error, at) -> bool:
-    if not _use_pg():
-        return False
-    try:
-        with _pg_conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE tool_archives
-                SET summary = %s,
-                    summary_model = %s,
-                    summary_at = %s,
-                    summary_error = %s
-                WHERE ref = %s
-                """,
-                (summary, model, at, error, ref),
-            )
-            conn.commit()
-        return True
-    except Exception as e:  # noqa: BLE001
-        logger.warning("pg update_summary 失败 ref=%s: %s", ref, e)
-        return False
+    """5/26 砍 — 跟 _pg_upsert 同批 (PG 不再存 content 也不存 summary). 留 stub."""
+    return False
 
 
 def _jsonl_update_summary(ref, *, summary, model, error, at) -> bool:
@@ -355,19 +240,8 @@ def gc_expired() -> int:
 
 
 def _pg_gc() -> int:
-    if not _use_pg():
-        return 0
-    try:
-        with _pg_conn() as conn, conn.cursor() as cur:
-            cur.execute("DELETE FROM tool_archives WHERE expires_at < NOW()")
-            n = cur.rowcount or 0
-            conn.commit()
-        if n > 0:
-            logger.info("PG GC: 删 %d 条过期 archive", n)
-        return n
-    except Exception as e:  # noqa: BLE001
-        logger.warning("pg_gc 失败: %s", e)
-        return 0
+    """5/26 砍 — PG 不再存 archive, GC 也没意义. 留 stub."""
+    return 0
 
 
 def _jsonl_gc() -> int:

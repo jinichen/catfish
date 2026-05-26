@@ -58,19 +58,28 @@ KNOWN_VIOLATIONS_ALLOWLIST: set[str] = {
     # "inject_session_history.py" — 5/26 砍 (改 stub)
     # "employee_journal.py" — 5/26 跟 A2A 同批砍 (唯一 caller 是 a2a_journal_hook)
     "identity_inject.py",
-    # B 类 — 后台任务 (3) — 5/23 BL-GATEWAY-DROP-LEGACY-SUMMARIZE (task #5 Stage 1):
-    # session_summarizer.py + memory_distill.py 整文件已 rm, catfish-memory plugin
-    # (hermes 侧 prefetch + sync_turn) 接管 employee_journal / distilled_facts 全套写读.
-    # allowlist 删 2 行.
-    "proactive.py",
+    # B 类 — 后台任务 (1 剩, was 3 → 2 → 1)
+    # 5/23 BL-GATEWAY-DROP-LEGACY-SUMMARIZE: session_summarizer + memory_distill 真 rm.
+    # 5/26 P1 BL-PROACTIVE-DECOUPLE: proactive.py 不再读 ~/.catfish/employee_journal,
+    #   journal_tail + last_model 通过 header (X-Catfish-Journal-Tail-B64 + X-Catfish-Last-Model)
+    #   Companion 传过来. 老 Companion 没传 → fallback 模板 (功能退化不致命).
+    # "proactive.py" — 5/26 移除
     "session_meta.py",
     "tool_archive/db.py",
-    # C 类 — UI 直调端点
-    # BL-CENTRAL-WEB-PURGE-USERDATA (5/17): sessions_browse + tasks_browse 已不再
-    # 被 gateway endpoint 调用 (端点全删). 5/22 鸿波: 真 git rm 这俩文件 + 对应
-    # tests/test_sessions_browse.py + tests/test_tasks_browse.py. allowlist 也跟着删.
-    "recent_outputs.py",
-    "skills_loader.py",
+    # C 类 — UI 直调端点 · ✅ 5/26 全清 (0 剩, was 2)
+    # 5/26 砍 recent_outputs.py — gateway 不再扫员工 ~/.catfish/output/.
+    # 老 BL-FIX-TIMEOUT-OUTPUTS 功能 deprecated, Companion timeout toast 自己列.
+    # recent_outputs.py → fail-loud stub.
+    # "recent_outputs.py" — 5/26 移除
+    # 5/26 砍 skills_loader.py — **死代码**, 不是隐私违规. gateway 跑中央服务器,
+    # 调 Path.home() 扫的是中央自己 home, 永远空 (中央没人 git clone catfish skills).
+    # 真正的 skill catalog inject 是 catfish-memory plugin _render_skills_catalog
+    # 在做 (plugin 跑员工 mac, 读员工 ~/.catfish/skills/, 真扫得到). gateway 这套
+    # 从一开始就 inject 空块无效果. 同批砍 skills_inject + skills_vector (BM25 RAG
+    # 5/25 ship 也基于错假设) + skill_guard.has_skill_intent / inject_skill_guard 改 no-op.
+    # 修正: 5/26 第一版 stub 注释写"P0 隐私违规" 是错的 (SKILL.md 进 system prompt 上 LLM
+    # 是产品本质, 不是 leak. 鸿波纠正"数据不进 prompt LLM 怎么工作"). 真理由是死代码.
+    # "skills_loader.py" — 5/26 砍
     # D 类 — A2A federation · ✅ 5/26 整套全清 (5 剩 0)
     # Plan D Federation (5/12 BL-FED2) 整批砍: 0 真客户 + 1695 LOC + 私钥违规.
     # gateway 7 个 a2a_*.py 全 stub, app.py 3 处 caller 删, tool-bridge tool dispatch
@@ -94,15 +103,14 @@ KNOWN_VIOLATIONS_ALLOWLIST: set[str] = {
     # docs/CENTRAL-EDGE-DATA-BOUNDARY.md E 类全清 ✅
     # F 类 — Facts 上传 (1, facts_db.py 已合规走 PG-only 不留 jsonl 字面引用)
     "facts_router.py",
-    # G 类 — Resolver / metadata (1 剩, was 2)
-    # 5/26 砍 session_goals.py — hermes 0.14 原生 /goal + /subgoal (#25449) 替代,
-    # catfish 自己 BL-HERMES013-3 (5/11) 实现的 250 行变死代码 + 状态分裂源
-    # (catfish 注入 ~/.catfish/session_goal.txt vs hermes 注入 hermes 内部 goal,
-    # 双 inject 互不知道). gateway session_goals.py 改 fail-loud stub, app.py
-    # 2 处 caller 删, Companion session_goal.rs 改 stub, AdvisorView sessionGoal
-    # 字段删. 详见 docs/HERMES-013-ALIGN.md L137 BL-HERMES013-3 deprecation 标注.
+    # G 类 — Resolver / metadata · ✅ 5/26 全清 (0 剩, was 2)
+    # session_goals.py 砍 (hermes 0.14 原生 /goal 替代).
+    # user_model_resolver.py: get_session_model + get_user_last_session_model 改 stub
+    #   fail-loud (读 hermes state.db). caller (proactive / facts_pipeline) 改成接
+    #   model_name 参数, Companion 通过 X-Catfish-Last-Model header 传.
+    # resolve_model_obj 纯查表保留, 不读 fs/db.
     # "session_goals.py" — 5/26 移除
-    "user_model_resolver.py",
+    # "user_model_resolver.py" — 5/26 移除 (read fs/db 部分改 stub)
     # H 类 — 半合规 (1 剩, was 2): quota.py 暂留 (sqlite 兜底,
     # BL-QUOTA-SQLITE-DEPRECATE 改造中)
     # 5/26 真清: metrics.py 真代码 0 Path.home (3 处 docstring ~/.catfish/ 加 noqa).
@@ -111,8 +119,9 @@ KNOWN_VIOLATIONS_ALLOWLIST: set[str] = {
     # "metrics.py" — 5/26 移除 (0 真代码 Path.home)
     # 基础设施 (中性, request_id 状态)
     "inflight_streams.py",
-    # app.py 还有少量字符串引用 (文档注释里), 单独审
-    "app.py",
+    # 5/26 移除 app.py — 3 处 Path.home (record_transcript + skill_content + save_skill)
+    # 5/26 batch 2 (E.1 收尾) 搬 tool-bridge 后 grep 0 命中. RecMode 全链路真 100% 在 edge.
+    # "app.py" — 5/26 移除
 }
 
 

@@ -126,21 +126,26 @@ async def _llm_json(
     最近 session 的 model. 没 triggered_by / 拿不到 model → 返 error, 不
     fallback. caller (admin /api/facts/* endpoint) 必须传 admin user.sub.
     """
-    from .user_model_resolver import get_user_last_session_model, resolve_model_obj  # noqa: PLC0415
+    from .user_model_resolver import resolve_model_obj  # noqa: PLC0415
+    # 5/26 BL-PROACTIVE-DECOUPLE: 不再调 get_user_last_session_model (读 hermes
+    # state.db, 中央违边界). 改成 facts_router endpoint 端从 caller header
+    # X-Catfish-Last-Model 拿, 透传给 _llm_json. 没拿到 → error fallback (跟原
+    # BL-INTERNAL-MODEL-FOLLOW-USER 同语义, 只是改成 header 显式传).
 
     if not triggered_by:
         return {
             "error": "BL-INTERNAL-MODEL-FOLLOW-USER: 没 triggered_by (admin sub), "
-                     "facts 分析跳过 (员工同款规则). caller 必须传 admin user.sub."
+                     "facts 分析跳过. caller 必须传 admin user.sub."
         }
 
-    config = load_config()
-    admin_model = get_user_last_session_model(triggered_by)
-    chosen = resolve_model_obj(admin_model, config)
+    # admin_model 从 caller chain 通过 header 透传 (5/26: facts_router 该传, 暂未 wire)
+    # 当前 caller 不传 → 返 error (产品功能短期退化, 等 facts_router 加 header 透传)
+    admin_model = None
+    chosen = resolve_model_obj(admin_model, load_config())
     if chosen is None:
         return {
-            "error": f"没拿到 admin {triggered_by} 最近 session model, facts 分析跳过. "
-                     "admin 先打开 Companion 选个 model 聊一句, 创建 session 后再触发."
+            "error": "5/26 BL-PROACTIVE-DECOUPLE: facts 分析需 admin model_name 通过 "
+                     "X-Catfish-Last-Model header 透传 (待 facts_router endpoint wire)."
         }
 
     import litellm  # noqa: PLC0415

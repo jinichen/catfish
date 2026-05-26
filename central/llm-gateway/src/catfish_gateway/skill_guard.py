@@ -129,34 +129,18 @@ def has_skill_intent(
     messages: list[dict[str, Any]],
     skills: Iterable[Any] | None = None,
 ) -> bool:
-    """检测最近 user message 是否触发任何 skill 意图.
+    """**5/26 DEPRECATED 总返 False** — skills_loader 整套砍后没法检测 skill intent.
 
-    Args:
-        messages: 当前请求 messages 数组.
-        skills:   SkillMeta 列表. None 时调 discover_skills() 取实时列表.
+    历史: 检测最近 user message 是否触发任何 skill 意图 (trigger 关键词或显式提及).
+    5/26 砍 skills_loader (中央扫员工本机 SKILL.md → 上游 LLM, P0 隐私违规),
+    discover_skills() 不再可用, 本函数总返 False (= 视为纯闲聊, 不触发 skill_guard
+    保护块注入). LLM 调 skill 走 hermes tool calling, gateway 不再参与 intent 检测.
 
-    Returns:
-        True 表示命中 (trigger 关键词 或 显式 skill_path 提及). False 表示纯闲聊.
+    返 False 的后果: app.py L2294 sg_fired 永远 False (不发 task_assessment SSE
+    metadata), inject_skill_guard 永远 no-op (不注入"必须调 catfish_run_skill" 铁律).
+    LLM 行为退化为"自己决定调不调 skill" — 但 hermes 0.14 tool calling 框架已
+    暴露 skill 作为 tool, LLM 看到 tool list 自然知道调.
     """
-    if skills is None:
-        from .skills_loader import discover_skills  # noqa: PLC0415, 避免循环 import
-
-        skills = discover_skills()
-    skills = list(skills)
-
-    user_text = _last_user_text(messages)
-    if not user_text:
-        return False
-
-    # 1. trigger 关键词命中
-    pattern, _ = _build_trigger_map(skills)
-    if pattern is not None and pattern.search(user_text):
-        return True
-
-    # 2. 显式 skill_path 提及
-    if _extract_explicit_skill_paths(user_text, skills):
-        return True
-
     return False
 
 
@@ -181,68 +165,19 @@ def inject_skill_guard(
     body: dict[str, Any] | None = None,
     skills: Iterable[Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """检测 skill 意图 + tools 就位状况, 在最后 system message 末尾追加保护块.
+    """**5/26 DEPRECATED 总返 messages 原样 (no-op)** — skills_loader 砍后失去检测基础.
 
-    Args:
-        messages: 当前 messages 数组.
-        body:     完整 chat body, 用于判断 catfish_run_skill 在 tools 里没. None
-                  时假设工具就位 (省调 — 跟历史行为兼容).
-        skills:   SkillMeta 列表. None 时调 discover_skills().
+    历史: 检测 skill 意图 → 注入"必须调 catfish_run_skill" 铁律到 system prompt.
+    5/26 skills_loader 砍 (中央扫员工本机 SKILL.md → 上游 LLM, P0 隐私违规),
+    discover_skills() 不可用 + skill 列表是错的 (gateway 中央 ~/.hermes/skills 永远空).  # noqa: BOUNDARY (docstring 描述历史 bug)
+
+    LLM 调 skill 走 hermes 0.14 tool calling: hermes 把每个 skill 当独立 tool 暴露,
+    LLM 看 tool list 自然知道. 不再需要 gateway 注入"必须调 catfish_run_skill" 铁律.
+
+    老 inject body (~60 行: 检测 matched / build required/missing block / 追加到 system)
+    已删 (git history 留作恢复参考).
     """
-    if skills is None:
-        from .skills_loader import discover_skills  # noqa: PLC0415
-
-        skills = discover_skills()
-    skills = list(skills)
-
-    user_text = _last_user_text(messages)
-    if not user_text:
-        return messages
-
-    matched = _match_skills(user_text, skills)
-    if not matched:
-        return messages
-
-    if not messages:
-        return messages
-
-    # 找最后 system 段
-    last_system_idx = -1
-    for i in range(len(messages) - 1, -1, -1):
-        if messages[i].get("role") == "system":
-            last_system_idx = i
-            break
-    if last_system_idx < 0:
-        return messages
-
-    tool_present = (
-        has_skill_tool_in_request(body) if body is not None else True
-    )
-
-    block = (
-        _build_required_block(matched, skills)
-        if tool_present
-        else _build_missing_block(matched)
-    )
-
-    # 幂等 — 追加过同块就不再追
-    sys_msg = messages[last_system_idx]
-    cur = sys_msg.get("content", "")
-    block_marker = "## ⚠ 本次员工要求用 catfish skill"
-    if isinstance(cur, str) and block_marker in cur:
-        return messages
-
-    out = deepcopy(messages)
-    sys_msg = out[last_system_idx]
-    if isinstance(sys_msg.get("content"), str):
-        sys_msg["content"] = sys_msg["content"].rstrip() + block
-        if logger.isEnabledFor(logging.INFO):
-            kind = "REQUIRED" if tool_present else "MISSING"
-            logger.info(
-                "skill_guard: 注入 %s block, 命中 skill=%s (tools=%s)",
-                kind, matched, tool_present,
-            )
-    return out
+    return messages
 
 
 # ─── helpers ───────────────────────────────────────────────────

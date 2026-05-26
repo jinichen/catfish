@@ -40,30 +40,11 @@ from typing import Any
 logger = logging.getLogger("catfish.gateway.proactive")
 
 
-_JOURNAL_PATH = Path.home() / ".catfish" / "employee_journal.md"
-_JOURNAL_PATH_FALLBACK = Path.home() / ".hermes" / "employee_journal.md"  # 老路径兼容
-_TAIL_BYTES = 8000  # ~30 行
-
-
-def _read_journal_tail() -> str:
-    """读 journal 末尾 ~8KB. 没有返空."""
-    for path in (_JOURNAL_PATH, _JOURNAL_PATH_FALLBACK):
-        try:
-            if path.exists():
-                with path.open("rb") as f:
-                    f.seek(0, 2)
-                    size = f.tell()
-                    f.seek(max(0, size - _TAIL_BYTES))
-                    raw = f.read()
-                # 截到第一个完整 段开头
-                text = raw.decode("utf-8", errors="ignore")
-                idx = text.find("\n## ")
-                if idx > 0:
-                    text = text[idx + 1:]
-                return text.strip()
-        except Exception as e:
-            logger.warning("读 journal %s 失败: %s", path, e)
-    return ""
+# 5/26 BL-PROACTIVE-DECOUPLE: gateway 不再读员工本机 journal 文件.
+# Companion (有自己的 journal_read Tauri 命令) 在调 /api/proactive/* 时
+# 把 journal_tail 当 body / 参数传过来. 老 Companion 不传 → fallback 模板.
+# Path home 死代码删, _read_journal_tail 函数删.
+_TAIL_BYTES = 8000  # ~30 行 (Companion 端裁切到这长度)
 
 
 # ── 时间段 → 默认 starter (LLM 失败兜底) ────────────────────
@@ -154,27 +135,48 @@ def _build_user_prompt(journal_tail: str, now: datetime) -> str:
 直接输出 1 句 starter, 不要前后缀, 不要 markdown."""
 
 
-async def generate_starter(user_email: str | None = None) -> dict[str, Any]:
+async def generate_starter(
+    user_email: str | None = None,
+    *,
+    journal_tail: str = "",
+    model_name: str | None = None,
+) -> dict[str, Any]:
     """生成主动闲聊 starter.
 
-    BL-INTERNAL-MODEL-FOLLOW-USER (5/17 鸿波): 严格用员工最近 session 的 model,
-    不 fallback. 拿不到 model → fallback 模板.
+    5/26 BL-PROACTIVE-DECOUPLE: gateway 不再读员工本机 journal 文件 + state.db.
+    Companion 调 endpoint 时把 journal_tail (8KB ~30 行, 已裁切) + model_name
+    (员工最近 session model 名) 当 body 字段传过来. 没传 → fallback 模板.
+
+    Args:
+        user_email: 员工 email (audit 用)
+        journal_tail: Companion 端读 ~/.catfish/employee_journal.md 末尾 8KB 传过来.  # noqa: BOUNDARY
+                      gateway 不再自己读. 空字符串 → 跳 LLM 走 fallback
+        model_name: Companion 端从自己 hermes state.db 拿员工最近用的 model 名,
+                    传过来. None → 跳 LLM 走 fallback
 
     返:
       {
         "starter": str,      # 1-2 句话, 给员工看的
-        "context_hint": str, # 用了 journal 的什么 (调试用, 前端可以选择不显示)
+        "context_hint": str, # 用了 journal 的什么 (调试用)
         "source": "llm" | "fallback",
       }
     """
     now = datetime.now()
-    journal_tail = _read_journal_tail()
 
-    # 拿员工最近 session 的 model (BL-INTERNAL-MODEL-FOLLOW-USER 5/17 严格规则)
+    # 5/26: Companion 没传 journal_tail/model_name → 直接 fallback (gateway 不读 fs)
+    if not journal_tail or not model_name:
+        return {
+            "starter": _fallback_starter(now),
+            "context_hint": (
+                "fallback (Companion 没传 journal_tail/model_name body 字段 — "
+                "老 Companion / 没设 journal / 跳 LLM)"
+            ),
+            "source": "fallback",
+        }
+
     from .config import load_config  # 懒 import
-    from .user_model_resolver import get_user_last_session_model, resolve_model_obj
+    from .user_model_resolver import resolve_model_obj
     config = load_config()
-    model_name = get_user_last_session_model(user_email or "")
     origin_obj = resolve_model_obj(model_name, config)
     if origin_obj is None:
         return {
@@ -369,44 +371,40 @@ async def generate_contextual_starter(
     signal_kind: str,
     context: dict[str, Any],
     user_email: str | None = None,
+    *,
+    model_name: str | None = None,
 ) -> dict[str, Any]:
     """生成信号触发的针对性 starter.
 
-    BL-INTERNAL-MODEL-FOLLOW-USER (5/17 鸿波): 严格用员工最近 session 的 model.
-
-    Args:
-      signal_kind: 'silence' | 'deadline' | 'focus'
-      context: signal 触发时的上下文 (frontend 拼好传过来)
-        silence: {minutes_ago, last_user_text, action_hits}
-        deadline: {days_until, date_str, journal_excerpt}
-        focus: {minutes_away, last_user_text}
-      user_email: 员工 email, 用于查最近 session model.
-
-    返:
-      {starter, context_hint, source: 'llm' | 'fallback'}
+    5/26 BL-PROACTIVE-DECOUPLE: gateway 不再读 state.db. Companion 调时传
+    model_name (从员工 hermes state.db 拿). 没传 → fallback.
     """
     now = datetime.now()
 
     # 校验 signal_kind
     if signal_kind not in _SIGNAL_KIND_PROMPTS:
         return {
-            "starter": "",  # frontend 走本地模板
+            "starter": "",
             "context_hint": f"unknown signal_kind: {signal_kind}",
             "source": "fallback",
         }
 
-    # BL-INTERNAL-MODEL-FOLLOW-USER (5/17): 用员工最近 session model, 严格一致.
+    # 5/26: Companion 没传 model_name → fallback (gateway 不读 state.db)
+    if not model_name:
+        return {
+            "starter": "",
+            "context_hint": "fallback (Companion 没传 model_name body 字段)",
+            "source": "fallback",
+        }
+
     from .config import load_config  # noqa: PLC0415
-    from .user_model_resolver import get_user_last_session_model, resolve_model_obj  # noqa: PLC0415
+    from .user_model_resolver import resolve_model_obj  # noqa: PLC0415
     config = load_config()
-    model_name = get_user_last_session_model(user_email or "")
     origin_obj = resolve_model_obj(model_name, config)
     if origin_obj is None:
         return {
             "starter": "",
-            "context_hint": (
-                f"fallback (没拿到 {user_email} 最近 session model, frontend 走本地模板)"
-            ),
+            "context_hint": f"fallback (model {model_name} 不可达, frontend 走本地模板)",
             "source": "fallback",
         }
     candidates = [origin_obj]

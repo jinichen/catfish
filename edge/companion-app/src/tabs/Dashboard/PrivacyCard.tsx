@@ -30,7 +30,7 @@ const LOCAL_DATA_ITEMS: { path: string; what: string; uploaded: boolean }[] = [
   { path: "~/.hermes/memories/", what: "鲶鱼对你的长期记忆 (USER.md / MEMORY.md)", uploaded: false },
   { path: "~/.hermes/.env", what: "第三方 API key (Tavily 等, 本机调外网用)", uploaded: false },
   { path: "~/.catfish/auth/token.json", what: "你的 OAuth token (中央认证用, 不是对话)", uploaded: false },
-  { path: "~/.catfish/gateway_audit.jsonl", what: "本机 audit log (中央调用流水镜像)", uploaded: true },
+  { path: "~/.catfish/gateway_audit.jsonl", what: "本机 audit log 历史归档 (PG-only 模式不再写, 见段 3 的 PG 数据)", uploaded: false },
 ];
 
 export default function PrivacyCard() {

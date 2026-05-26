@@ -98,128 +98,28 @@ def test_empty_skill_name_rejected():
     assert u.can_use_skill(None) is False  # type: ignore[arg-type]
 
 
-# ── skills_loader namespace 推导 (单元测) ──────────────────────
+# ── skills_loader (5/26 砍) ──────────────────────────────────
+#
+# 5/26 audit: gateway 不该扫 catfish 源码 skills/ — 那是去看员工 / 员工组织
+# 内部的 skill, 走中央代码读员工本机违反边界. 整个 skills_loader 砍, 在
+# hermes 进程由 catfish-memory plugin 通过 SkillProvider 接管.
+#
+# 这一段 (老的 SkillMeta.qualified_name + _infer_hermes_skill_namespace 单测)
+# 不再有 module 可测, 改成"验 skills_loader 真是 stub" 防回归.
 
 
-def test_qualified_name_catfish():
-    """catfish 自家 → 'catfish:<skill_path>'."""
-    from catfish_gateway.skills_loader import SkillMeta
-    from pathlib import Path  # noqa: PLC0415
+def test_skills_loader_module_is_stubbed_in_central():
+    """5/26 兑现校验: 中央 skills_loader 必须是 fail-loud stub.
 
-    s = SkillMeta(
-        skill_path="department/weekly-report",
-        name="weekly-report",
-        description="周报",
-        skill_md_path=Path("/tmp/x/SKILL.md"),
-        script_py_path=None,
-        namespace="catfish",
-    )
-    assert s.qualified_name() == "catfish:department/weekly-report"
+    防回归: SkillMeta 不能复活, _infer_hermes_skill_namespace 不能复活.
+    """
+    from catfish_gateway import skills_loader
 
+    with pytest.raises(RuntimeError, match="DEPRECATED 5/26"):
+        skills_loader.SkillMeta
 
-def test_qualified_name_hermes_github():
-    """hermes github 的 namespace 自带完整 owner/repo, qualified_name 直接返."""
-    from catfish_gateway.skills_loader import SkillMeta
-    from pathlib import Path  # noqa: PLC0415
+    with pytest.raises(RuntimeError, match="DEPRECATED 5/26"):
+        skills_loader._infer_hermes_skill_namespace
 
-    s = SkillMeta(
-        skill_path="frontend-slides",
-        name="frontend-slides",
-        description="HTML slides",
-        skill_md_path=Path("/tmp/x/SKILL.md"),
-        script_py_path=None,
-        namespace="hermes:github:zarazhangrui/frontend-slides",
-    )
-    assert s.qualified_name() == "hermes:github:zarazhangrui/frontend-slides"
-
-
-def test_qualified_name_hermes_local():
-    """hermes:local:<name>  完整 namespace 已带 name."""
-    from catfish_gateway.skills_loader import SkillMeta
-    from pathlib import Path  # noqa: PLC0415
-
-    s = SkillMeta(
-        skill_path="my-skill",
-        name="my-skill",
-        description="员工自写",
-        skill_md_path=Path("/tmp/x/SKILL.md"),
-        script_py_path=None,
-        namespace="hermes:local:my-skill",
-    )
-    assert s.qualified_name() == "hermes:local:my-skill"
-
-
-def test_qualified_name_hermes_bundled():
-    """hermes:bundled — namespace 没编 name, qualified_name 拼 skill_path."""
-    from catfish_gateway.skills_loader import SkillMeta
-    from pathlib import Path  # noqa: PLC0415
-
-    s = SkillMeta(
-        skill_path="read-file-skill",
-        name="read-file-skill",
-        description="hermes 自带",
-        skill_md_path=Path("/tmp/x/SKILL.md"),
-        script_py_path=None,
-        namespace="hermes:bundled",
-    )
-    assert s.qualified_name() == "hermes:bundled:read-file-skill"
-
-
-# ── namespace 推导 (filesystem) ────────────────────────────────
-
-
-def test_infer_hermes_namespace_github(tmp_path):
-    """有 .git/config 含 github.com → hermes:github:<owner>/<repo>."""
-    from catfish_gateway.skills_loader import _infer_hermes_skill_namespace
-
-    skill_dir = tmp_path / "frontend-slides"
-    skill_dir.mkdir()
-    git_dir = skill_dir / ".git"
-    git_dir.mkdir()
-    (git_dir / "config").write_text(
-        "[remote \"origin\"]\n"
-        "\turl = https://github.com/zarazhangrui/frontend-slides.git\n",
-        encoding="utf-8",
-    )
-
-    ns = _infer_hermes_skill_namespace(skill_dir)
-    assert ns == "hermes:github:zarazhangrui/frontend-slides"
-
-
-def test_infer_hermes_namespace_github_ssh(tmp_path):
-    """SSH remote URL 也能识别."""
-    from catfish_gateway.skills_loader import _infer_hermes_skill_namespace
-
-    skill_dir = tmp_path / "myskill"
-    skill_dir.mkdir()
-    (skill_dir / ".git").mkdir()
-    (skill_dir / ".git" / "config").write_text(
-        "[remote \"origin\"]\n"
-        "\turl = git@github.com:NousResearch/hermes-agent.git\n",
-        encoding="utf-8",
-    )
-    ns = _infer_hermes_skill_namespace(skill_dir)
-    assert ns == "hermes:github:NousResearch/hermes-agent"
-
-
-def test_infer_hermes_namespace_local(tmp_path):
-    """没 .git → hermes:local:<name>."""
-    from catfish_gateway.skills_loader import _infer_hermes_skill_namespace
-
-    skill_dir = tmp_path / "my-self-written"
-    skill_dir.mkdir()
-
-    ns = _infer_hermes_skill_namespace(skill_dir)
-    assert ns == "hermes:local:my-self-written"
-
-
-def test_infer_hermes_namespace_hf(tmp_path):
-    """有 .hf-skill 标记 → hermes:hf:<owner>/<name>."""
-    from catfish_gateway.skills_loader import _infer_hermes_skill_namespace
-
-    skill_dir = tmp_path / "video-gen"
-    skill_dir.mkdir()
-    (skill_dir / ".hf-skill").write_text("NousResearch/video-gen", encoding="utf-8")
-
-    ns = _infer_hermes_skill_namespace(skill_dir)
-    assert ns == "hermes:hf:NousResearch/video-gen"
+    with pytest.raises(RuntimeError, match="DEPRECATED 5/26"):
+        skills_loader.load_skills

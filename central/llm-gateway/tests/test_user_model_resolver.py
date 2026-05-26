@@ -1,26 +1,23 @@
-"""BL-RESOLVER-SOURCE-FIX (5/17): user_model_resolver 实盘 bug 防回归.
+"""STUB+API — 5/26 BL-PROACTIVE-DECOUPLE: get_session_model / get_user_last_session_model 砍.
 
-# 背景
+# 原测试搬哪了
 
-老版本 get_user_last_session_model 用 `WHERE source = ?` 匹配 user_email, 但
-Companion session_write.rs:127 写的是字面量 `source='companion'`. 这 SQL 永远
-match 不上 → memory_distill 7th use case 实际没生效 (一直 skip "拿不到 user
-最近 session model").
+无搬迁. 老测试覆盖 get_user_last_session_model 读 state.db 的所有边界
+(BL-RESOLVER-SOURCE-FIX 5/17). 5/26 这俩 API 整体砍 — gateway 不再读员工本机
+hermes state.db, Companion 通过 header `X-Catfish-Last-Model` 透传给 gateway.
 
-# 测试覆盖
+# 留的测试
 
-  - 真 hermes-shape state.db + Companion 写 source='companion' → 返 最新 model
-  - DB 不存在 → None
-  - 表空 → None
-  - 所有 session model 都 NULL → None
-  - user_email 传不传都不影响查询结果 (仅 log 上下文)
-  - 跟 identity.rs 同模式: ORDER BY started_at DESC, 取最新
+- 验 get_session_model / get_user_last_session_model 是 fail-loud stub (调即抛)
+- 验 resolve_model_obj (纯查表, 无 fs/db read) 保留正常工作
+
+# 关联
+
+- 5/17 BL-RESOLVER-SOURCE-FIX (老 bug 已通过砍函数彻底消除, 没源就没漂移)
+- 5/26 BL-PROACTIVE-DECOUPLE
+- Companion 改造 (header 透传) — separate ticket
 """
 from __future__ import annotations
-
-import sqlite3
-import time
-from pathlib import Path
 
 import pytest
 
@@ -28,160 +25,74 @@ from catfish_gateway import user_model_resolver
 from catfish_gateway.user_model_resolver import (
     get_session_model,
     get_user_last_session_model,
+    resolve_model_obj,
 )
 
 
-def _make_state_db(path: Path) -> sqlite3.Connection:
-    """造 hermes-shape state.db (跟 Companion session_write.rs 同 schema)."""
-    conn = sqlite3.connect(path)
-    conn.executescript(
-        """
-        CREATE TABLE sessions (
-            id TEXT PRIMARY KEY,
-            source TEXT,
-            model TEXT,
-            started_at REAL,
-            title TEXT
-        );
-        """
-    )
-    return conn
+# ─── 砍的 API: fail-loud stub 防回归 ─────────────────────────
 
 
-# ── BL-RESOLVER-SOURCE-FIX 主验证 ────────────────────
+def test_get_session_model_is_fail_loud_stub():
+    """5/26 兑现校验: get_session_model 调即抛 (gateway 不读员工 state.db)."""
+    with pytest.raises(RuntimeError, match="DEPRECATED 5/26"):
+        get_session_model("any_sid")
 
 
-def test_companion_source_literal_still_finds_model(tmp_path, monkeypatch):
-    """Companion 写 source='companion' (固定字面量, 不是 user_email).
-    resolver 不该依赖 source 字段匹配 email, 该照常返最新 model.
+def test_get_user_last_session_model_is_fail_loud_stub():
+    """5/26 兑现校验: get_user_last_session_model 调即抛."""
+    with pytest.raises(RuntimeError, match="DEPRECATED 5/26"):
+        get_user_last_session_model("x@y.com")
 
-    这是 5/17 实盘 bug 的最直接回归测试.
-    """
-    db = tmp_path / "state.db"
-    conn = _make_state_db(db)
-    now = time.time()
-    # 跟 Companion session_write.rs:127 行为完全一致: source 写 'companion'
-    conn.execute(
-        "INSERT INTO sessions VALUES (?, ?, ?, ?, ?)",
-        ("s_recent", "companion", "catfish-public-nvidia-nemotron", now, "test"),
-    )
-    conn.commit()
-    conn.close()
 
-    monkeypatch.setattr(user_model_resolver, "STATE_DB", db)
-    # user_email 传值 — 老 bug 时这里会去 SQL 匹配, 找不到返 None
-    out = get_user_last_session_model("chenhongbo@ffcs.cn")
-    assert out == "catfish-public-nvidia-nemotron", (
-        f"应返最近 session 的 model, 实际 {out!r}. "
-        "BL-RESOLVER-SOURCE-FIX 回归了?"
+def test_state_db_constant_removed():
+    """STATE_DB 常量也砍 (没人再用). 防回归: 不能复活."""
+    assert not hasattr(user_model_resolver, "STATE_DB"), (
+        "STATE_DB 5/26 砍, 不能复活. 改 caller 接 model_name 参数 + Companion header."
     )
 
 
-def test_returns_most_recent_by_started_at(tmp_path, monkeypatch):
-    """多 session → 取 started_at 最大的 (跟 identity.rs:124 同模式)."""
-    db = tmp_path / "state.db"
-    conn = _make_state_db(db)
-    now = time.time()
-    conn.execute(
-        "INSERT INTO sessions VALUES (?, ?, ?, ?, ?)",
-        ("s_old", "companion", "catfish-public-qwen-flash", now - 86400, "yesterday"),
-    )
-    conn.execute(
-        "INSERT INTO sessions VALUES (?, ?, ?, ?, ?)",
-        ("s_recent", "companion", "catfish-public-nvidia-nemotron", now, "now"),
-    )
-    conn.execute(
-        "INSERT INTO sessions VALUES (?, ?, ?, ?, ?)",
-        ("s_middle", "companion", "catfish-private-main", now - 3600, "1h ago"),
-    )
-    conn.commit()
-    conn.close()
-
-    monkeypatch.setattr(user_model_resolver, "STATE_DB", db)
-    out = get_user_last_session_model("chenhongbo@ffcs.cn")
-    assert out == "catfish-public-nvidia-nemotron"
+# ─── 保留的 API: resolve_model_obj 纯查表 ─────────────────────
 
 
-def test_no_user_email_still_works(tmp_path, monkeypatch):
-    """user_email 参数现在仅 log 用, 不传也该工作."""
-    db = tmp_path / "state.db"
-    conn = _make_state_db(db)
-    conn.execute(
-        "INSERT INTO sessions VALUES (?, ?, ?, ?, ?)",
-        ("s1", "companion", "catfish-private-main", time.time(), "x"),
-    )
-    conn.commit()
-    conn.close()
-
-    monkeypatch.setattr(user_model_resolver, "STATE_DB", db)
-    assert get_user_last_session_model() == "catfish-private-main"
-    assert get_user_last_session_model(None) == "catfish-private-main"
-    assert get_user_last_session_model("") == "catfish-private-main"
+class _FakeUpstream:
+    def __init__(self, available: bool):
+        self.is_available = available
 
 
-def test_db_missing_returns_none(tmp_path, monkeypatch):
-    monkeypatch.setattr(user_model_resolver, "STATE_DB", tmp_path / "nope.db")
-    assert get_user_last_session_model("x@y.com") is None
+class _FakeModel:
+    def __init__(self, name: str, available: bool = True):
+        self.name = name
+        self.upstream = _FakeUpstream(available)
 
 
-def test_empty_table_returns_none(tmp_path, monkeypatch):
-    db = tmp_path / "state.db"
-    _make_state_db(db).close()
-    monkeypatch.setattr(user_model_resolver, "STATE_DB", db)
-    assert get_user_last_session_model("x@y.com") is None
+class _FakeConfig:
+    def __init__(self, models: dict[str, _FakeModel]):
+        self._models = models
+
+    def get_model(self, name: str) -> _FakeModel | None:
+        return self._models.get(name)
 
 
-def test_all_models_null_returns_none(tmp_path, monkeypatch):
-    """老 session 没 model 字段 (5/15 之前 Companion 没写) → None, 不爆."""
-    db = tmp_path / "state.db"
-    conn = _make_state_db(db)
-    conn.execute(
-        "INSERT INTO sessions VALUES (?, ?, ?, ?, ?)",
-        ("s1", "companion", None, time.time(), "x"),
-    )
-    conn.execute(
-        "INSERT INTO sessions VALUES (?, ?, ?, ?, ?)",
-        ("s2", "companion", "", time.time() - 100, "y"),
-    )
-    conn.commit()
-    conn.close()
-    monkeypatch.setattr(user_model_resolver, "STATE_DB", db)
-    assert get_user_last_session_model("x@y.com") is None
+def test_resolve_model_obj_returns_none_for_empty_name():
+    cfg = _FakeConfig({})
+    assert resolve_model_obj(None, cfg) is None  # type: ignore[arg-type]
+    assert resolve_model_obj("", cfg) is None  # type: ignore[arg-type]
 
 
-def test_skips_null_picks_filled(tmp_path, monkeypatch):
-    """混合: 最新一条 model=NULL, 早一条有值 → 返早那条 (NULL 过滤掉)."""
-    db = tmp_path / "state.db"
-    conn = _make_state_db(db)
-    now = time.time()
-    conn.execute(
-        "INSERT INTO sessions VALUES (?, ?, ?, ?, ?)",
-        ("s_newest_null", "companion", None, now, "new"),
-    )
-    conn.execute(
-        "INSERT INTO sessions VALUES (?, ?, ?, ?, ?)",
-        ("s_older_valid", "companion", "catfish-private-main", now - 100, "old"),
-    )
-    conn.commit()
-    conn.close()
-    monkeypatch.setattr(user_model_resolver, "STATE_DB", db)
-    assert get_user_last_session_model("x@y.com") == "catfish-private-main"
+def test_resolve_model_obj_returns_none_when_not_found():
+    cfg = _FakeConfig({})
+    assert resolve_model_obj("no-such-model", cfg) is None  # type: ignore[arg-type]
 
 
-# ── get_session_model (by session_id) — 改动前后行为一致 ─
+def test_resolve_model_obj_returns_none_when_upstream_unavailable():
+    """模型存在但 upstream 标 unavailable → None (不让 caller 用挂的模型)."""
+    m = _FakeModel("catfish-private-main", available=False)
+    cfg = _FakeConfig({"catfish-private-main": m})
+    assert resolve_model_obj("catfish-private-main", cfg) is None  # type: ignore[arg-type]
 
 
-def test_get_session_model_by_id(tmp_path, monkeypatch):
-    """summarizer 用的路径: 按 session_id 精确查."""
-    db = tmp_path / "state.db"
-    conn = _make_state_db(db)
-    conn.execute(
-        "INSERT INTO sessions VALUES (?, ?, ?, ?, ?)",
-        ("specific_sid", "companion", "catfish-public-deepseek-flash", time.time(), "x"),
-    )
-    conn.commit()
-    conn.close()
-    monkeypatch.setattr(user_model_resolver, "STATE_DB", db)
-
-    assert get_session_model("specific_sid") == "catfish-public-deepseek-flash"
-    assert get_session_model("does_not_exist") is None
+def test_resolve_model_obj_returns_model_when_available():
+    m = _FakeModel("catfish-private-main", available=True)
+    cfg = _FakeConfig({"catfish-private-main": m})
+    out = resolve_model_obj("catfish-private-main", cfg)  # type: ignore[arg-type]
+    assert out is m

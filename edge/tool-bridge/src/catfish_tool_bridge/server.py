@@ -95,6 +95,13 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
         return await _handle_recmode_cleanup(req_id, params)
     if method == "recmode/list_with_meta":
         return await _handle_recmode_list_with_meta(req_id, params)
+    # 5/26 batch 2 (E.1 收尾): RecMode 3 个 app.py 内联 endpoint 搬过来 (batch 1 漏的)
+    if method == "recmode/record_transcript":
+        return await _handle_recmode_record_transcript(req_id, params)
+    if method == "recmode/skill_content":
+        return await _handle_recmode_skill_content(req_id, params)
+    if method == "recmode/save_skill":
+        return await _handle_recmode_save_skill(req_id, params)
 
     return _error(req_id, METHOD_NOT_FOUND, f"unknown method: {method}")
 
@@ -256,6 +263,161 @@ async def _handle_recmode_list_with_meta(req_id: Any, _params: Dict[str, Any]) -
     未来 catfish-web admin 用 (HTTP 访问 inventory)."""
     from .recmode import cleanup as _recmode_cleanup  # noqa: PLC0415
     return _success(req_id, {"recordings": _recmode_cleanup.list_recordings_with_meta()})
+
+
+# ── BL-RECMODE-MIGRATE-TO-EDGE batch 2 (5/26 E.1 收尾) ──
+#
+# 5/25 batch 1 漏搬的 3 个 app.py 内联 endpoint:
+# record_transcript / skill_content / save_skill. 都涉及 ~/.catfish/recordings/
+# 或 ~/.catfish/skills/ 文件操作, gateway 现在 thin proxy 转 tool-bridge 处理.
+
+
+async def _handle_recmode_record_transcript(req_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
+    """Companion whisper 转写落 ~/.catfish/recordings/<sid>/transcripts.jsonl.
+
+    Params: {session_id, text, ts_offset?, duration?, catfish_home?}
+    """
+    import json as _json
+    import os as _os
+    from pathlib import Path as _Path
+
+    session_id = (params.get("session_id") or "").strip()
+    text = (params.get("text") or "").strip()
+    if not session_id:
+        return _error(req_id, INVALID_PARAMS, "params.session_id 必填")
+    if not text:
+        return _success(req_id, {"ok": True, "transcripts_path": "", "lines_count": 0, "skipped": "empty text"})
+
+    ts_offset = float(params.get("ts_offset") or 0.0)
+    duration = float(params.get("duration") or 0.0)
+    catfish_home = (params.get("catfish_home") or _os.environ.get("CATFISH_HOME") or "").strip()
+    rec_root = (_Path(catfish_home).expanduser() / "recordings") if catfish_home else (_Path.home() / ".catfish" / "recordings")
+    sd = rec_root / session_id
+    if not sd.exists():
+        return _error(req_id, INVALID_PARAMS, f"session_dir {sd} 不存在 (404)")
+
+    path = sd / "transcripts.jsonl"
+    record = {"ts": ts_offset, "duration": duration, "text": text}
+    with path.open("a", encoding="utf-8") as f:
+        f.write(_json.dumps(record, ensure_ascii=False) + "\n")
+    lines_count = sum(1 for _ in path.open("r", encoding="utf-8"))
+    return _success(req_id, {"ok": True, "transcripts_path": str(path), "lines_count": lines_count})
+
+
+async def _handle_recmode_skill_content(req_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
+    """读 SKILL.md + main.py + recmode_meta.json. Companion preview UI 用.
+
+    Params: {skill_dir, catfish_home?}
+    Path traversal 防御: skill_dir 必须在受信路径下.
+    """
+    import json as _json
+    import os as _os
+    from pathlib import Path as _Path
+
+    skill_dir = (params.get("skill_dir") or "").strip()
+    if not skill_dir:
+        return _error(req_id, INVALID_PARAMS, "params.skill_dir 必填")
+    sd = _Path(skill_dir).expanduser().resolve()
+    home = _Path.home().resolve()
+    allowed_roots = [home / ".catfish" / "skills", home / ".catfish" / "recordings"]
+    catfish_home = (params.get("catfish_home") or _os.environ.get("CATFISH_HOME") or "").strip()
+    if catfish_home:
+        cf = _Path(catfish_home).expanduser().resolve()
+        allowed_roots += [cf / "skills", cf / "recordings"]
+    if not any(str(sd).startswith(str(r)) for r in allowed_roots):
+        return _error(req_id, INVALID_PARAMS, f"skill_dir {sd} 不在受信路径下 (~/.catfish/skills/ 或 recordings/)")
+    if not sd.exists():
+        return _error(req_id, INVALID_PARAMS, f"skill_dir {sd} 不存在 (404)")
+
+    def _read_or_empty(p: _Path) -> str:
+        try:
+            return p.read_text(encoding="utf-8") if p.exists() else ""
+        except OSError:
+            return ""
+
+    meta = None
+    meta_path = sd / "recmode_meta.json"
+    if meta_path.exists():
+        try:
+            meta = _json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            meta = None
+
+    return _success(req_id, {
+        "skill_dir": str(sd),
+        "skill_md": _read_or_empty(sd / "SKILL.md"),
+        "main_py": _read_or_empty(sd / "main.py"),
+        "recmode_meta": meta,
+    })
+
+
+async def _handle_recmode_save_skill(req_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
+    """RecMode C — draft skill mv → 正式 ~/.catfish/skills/<ns>/<name>/.
+
+    Params: {draft_dir, namespace?, name?, keep_forever?, catfish_home?}
+    """
+    import json as _json
+    import os as _os
+    import shutil
+    import time as _time
+    from pathlib import Path as _Path
+
+    draft_dir_str = (params.get("draft_dir") or "").strip()
+    if not draft_dir_str:
+        return _error(req_id, INVALID_PARAMS, "params.draft_dir 必填")
+
+    draft_dir = _Path(draft_dir_str).expanduser().resolve()
+    home = _Path.home().resolve()
+    catfish_home = (params.get("catfish_home") or _os.environ.get("CATFISH_HOME") or "").strip()
+    rec_root = (_Path(catfish_home).expanduser().resolve() / "recordings") if catfish_home else (home / ".catfish" / "recordings")
+    skills_root = (_Path(catfish_home).expanduser().resolve() / "skills") if catfish_home else (home / ".catfish" / "skills")
+    if not str(draft_dir).startswith(str(rec_root)):
+        return _error(req_id, INVALID_PARAMS, f"draft_dir 必须在 {rec_root} 下")
+    if not draft_dir.exists():
+        return _error(req_id, INVALID_PARAMS, f"draft_dir {draft_dir} 不存在 (404)")
+
+    meta_path = draft_dir / "recmode_meta.json"
+    namespace = (params.get("namespace") or "").strip()
+    name = (params.get("name") or "").strip()
+    if (not namespace or not name) and meta_path.exists():
+        try:
+            meta = _json.loads(meta_path.read_text(encoding="utf-8"))
+            raw = meta.get("raw_llm_json") or {}
+            namespace = namespace or raw.get("namespace", "personal")
+            name = name or raw.get("skill_name", "")
+        except Exception:
+            pass
+    if not namespace or not name:
+        return _error(req_id, INVALID_PARAMS, "缺 namespace / name (recmode_meta.json 也没): 请显式传 (422)")
+
+    final_dir = skills_root / namespace / name
+    final_dir.parent.mkdir(parents=True, exist_ok=True)
+    if final_dir.exists():
+        backup = final_dir.with_name(f"{name}.bak.{int(_time.time())}")
+        final_dir.rename(backup)
+    shutil.copytree(draft_dir, final_dir)
+
+    keep_forever = bool(params.get("keep_forever", False))
+    if keep_forever:
+        try:
+            session_dir = draft_dir.parent.parent.parent
+            (session_dir / ".keep_forever").touch()
+            new_meta_path = final_dir / "recmode_meta.json"
+            if new_meta_path.exists():
+                meta2 = _json.loads(new_meta_path.read_text(encoding="utf-8"))
+                meta2["_keep_forever"] = True
+                new_meta_path.write_text(_json.dumps(meta2, indent=2, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            logger.warning("save_skill: keep_forever flag 写失败 (不致命)", exc_info=True)
+
+    return _success(req_id, {
+        "ok": True,
+        "final_dir": str(final_dir),
+        "namespace": namespace,
+        "name": name,
+        "moved": True,
+        "keep_forever": keep_forever,
+    })
 
 
 async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
