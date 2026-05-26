@@ -1253,7 +1253,7 @@ _PRIVACY_SCAN_TARGETS = [
      "我的 OAuth token (中央认证用, 不含对话)",
      True),
     (".catfish/gateway_audit.jsonl",
-     "本机 audit log (中央调用流水, 含 token 数 / 模型 / 时间戳, 不含 prompt)",
+     "本机 audit log 历史归档 (PG 化前的镜像, 当前 PG-only 模式不再写)",
      False),
     (".catfish/",
      "catfish 数据目录 (token / 配置 / 边缘缓存)",
@@ -1505,19 +1505,38 @@ def cmd_privacy_audit(args) -> int:
             if item["file_count"] > 0:
                 print(f"      最近改动: {time.strftime('%Y-%m-%d %H:%M', time.localtime(item['mtime']))}")
 
-    print("\n── 段 2 · 本机 audit log (中央调用流水, 你电脑这份是镜像) ──")
+    # ── PG-only 模式检测 ──
+    # 5/9 之前 gateway 写 ~/.catfish/gateway_audit.jsonl (jsonl backend).
+    # 5/9 之后配 CATFISH_DB_URL → 切 PG-only, metrics.py 不再写 jsonl.
+    # 判定: 本机 latest_ts (jsonl 最后一条) < 中央 first_seen (PG 最早记录) → PG-only.
     a = local_audit_summary
+    pg_only_mode = False
+    if (a["exists"] and a.get("latest_ts")
+        and central_section["reachable"]
+        and central_section["data"]
+        and central_section["data"].get("first_seen_ts")):
+        local_latest_s = int(a["latest_ts"])
+        central_earliest_s = int(central_section["data"]["first_seen_ts"] / 1000)
+        if local_latest_s < central_earliest_s:
+            pg_only_mode = True
+
+    print("\n── 段 2 · 本机 audit log (历史镜像) ──")
     if not a["exists"]:
-        print(f"  (无 audit log: {local_audit_jsonl_path} 不存在 — 还没跟中央交互过, 或刚清空)")
+        print(f"  (无 jsonl: {local_audit_jsonl_path} 不存在 — 当前 PG-only 模式, 此为预期)")
     else:
         print(f"  路径: {a['path']}")
-        print(f"  今日: {a['request_count']} 请求, {a['total_tokens']} tokens")
-        if a["by_model"]:
-            print(f"  今日按模型:")
-            for r in a["by_model"][:10]:
-                print(f"    - {r['model']}: {r['count']} 次")
-        if a["earliest_ts"]:
-            print(f"  全量记录: {time.strftime('%Y-%m-%d', time.localtime(a['earliest_ts']))} ~ {time.strftime('%Y-%m-%d', time.localtime(a['latest_ts']))}")
+        if pg_only_mode:
+            print(f"  📦 PG-only 模式: gateway 5/9 后切 PG backend, 本机 jsonl 是历史归档不再更新.")
+            print(f"  历史范围: {time.strftime('%Y-%m-%d', time.localtime(a['earliest_ts']))} ~ {time.strftime('%Y-%m-%d', time.localtime(a['latest_ts']))}")
+            print(f"  (中央 PG 是当前唯一真相, 见段 3)")
+        else:
+            print(f"  今日: {a['request_count']} 请求, {a['total_tokens']} tokens")
+            if a["by_model"]:
+                print(f"  今日按模型:")
+                for r in a["by_model"][:10]:
+                    print(f"    - {r['model']}: {r['count']} 次")
+            if a["earliest_ts"]:
+                print(f"  全量记录: {time.strftime('%Y-%m-%d', time.localtime(a['earliest_ts']))} ~ {time.strftime('%Y-%m-%d', time.localtime(a['latest_ts']))}")
 
     print("\n── 段 3 · 中央存了我啥 (调 /api/audit/me 验) ──")
     if not central_section["reachable"]:
@@ -1540,14 +1559,25 @@ def cmd_privacy_audit(args) -> int:
             print(f"  中央对我的最早记录: {f_str}  最新: {l_str}")
         print(f"  schema_note: {d.get('schema_note', '')}")
 
-        # 自洽性检查: 本机 vs 中央今日数应该接近 (差几条正常 — 边缘 / 中央写盘有 race)
-        if a["exists"] and d.get("request_count", 0) > 0:
+        # 自洽性检查: 只在 jsonl backend 模式 (非 PG-only) 才对照
+        # PG-only 时本机 jsonl 不更新, 跟中央对比永远差一截 — 不该报警
+        if not pg_only_mode and a["exists"] and d.get("request_count", 0) > 0:
             diff = abs(d.get("request_count", 0) - a["request_count"])
             if diff > 5:
                 print(f"  ⚠ 本机今日 {a['request_count']} ≠ 中央 {d['request_count']} (差 {diff}), 可能漏统计 / 边缘gateway 没刷新")
 
+    # 契约文案按 backend 动态调整 — PG-only 跟 jsonl-mirror 时代说法不同
     print("\n── 隐私契约 (审计判定依据) ──")
-    for line in report["privacy_contract"]:
+    if pg_only_mode:
+        contracts = [
+            "中央只存 metadata (count / tokens / model / 时间戳), 不存 prompt / response 文本.",
+            "对话 / 长期记忆 / 第三方 API key 全在本机 (~/.hermes/, ~/.catfish/), 不上传.",
+            "中央当前走 PG-only backend (gateway metrics.py 直写 PG, 不再镜像本机 jsonl).",
+            "中央 /api/audit/me 返的就是 schema_note 写的字段, 多一个少一个就是契约违反.",
+        ]
+    else:
+        contracts = report["privacy_contract"]
+    for line in contracts:
         print(f"  · {line}")
 
     print(f"\n报告完成. 想给机器 / CI 看: 加 --json")
