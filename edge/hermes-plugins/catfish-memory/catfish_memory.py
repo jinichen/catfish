@@ -51,6 +51,7 @@ import logging
 import os
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -342,6 +343,55 @@ class CatfishMemoryProvider(MemoryProvider):
             logger.debug("session_meta render 失败 %s", e)
             return ""
 
+    def _tick_session_meta(self) -> None:
+        """BL-SESSION-META-PLUGIN-TAKEOVER (5/26): plugin 接管 session_meta.json 写.
+
+        老逻辑: gateway/session_meta.py 的 tick() 在 /v1/chat/completions 完成后调,
+        gateway 跑员工 mac 写 ~/.catfish/session_meta.json. SaaS 化后 gateway 跑客户
+        机房, 写不到员工 mac → 时间感段永远渲染空 (last_chat_iso 字段永远不更新).
+
+        新逻辑: plugin 跑员工 mac (跟 gateway 不同进程, 在 hermes 进程里), 写自己 fs
+        合规. sync_turn hook 已经 per-turn 触发, 这里跟着 tick 不需要新触发器.
+
+        字段对齐 _render_session_meta() 读的格式:
+          {
+            "last_chat_iso": "<UTC isoformat>",
+            "today_count": <int>,
+            "today_date":  "YYYY-MM-DD"
+          }
+        跨天 today_count reset 1, 同天 += 1. 写挂日志警告不抛 (不能让 sync_turn 失败).
+        """
+        home = self._catfish_home_cached or _catfish_home()
+        path = home / "session_meta.json"
+        now = datetime.now(timezone.utc).astimezone()
+        today_str = now.date().isoformat()
+        try:
+            if path.exists():
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                    if not isinstance(data, dict):
+                        data = {}
+                except (OSError, json.JSONDecodeError):
+                    data = {}
+            else:
+                data = {}
+            if data.get("today_date") == today_str:
+                data["today_count"] = int(data.get("today_count", 0)) + 1
+            else:
+                data["today_count"] = 1
+                data["today_date"] = today_str
+            data["last_chat_iso"] = now.isoformat()
+            # 原子写: tmp + rename, 避免半截写挂破坏 JSON
+            tmp = path.with_suffix(".json.tmp")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            tmp.replace(path)
+        except OSError as e:
+            logger.warning("catfish-memory _tick_session_meta 失败: %s", e)
+
     def _render_employee_journal(self, catfish_home: Path) -> str:
         # 优先 distilled_facts.md (LLM 蒸馏过), fallback employee_journal.md
         distilled = _read_text_safe(
@@ -497,6 +547,15 @@ class CatfishMemoryProvider(MemoryProvider):
             self._sync_turn_impl(user_content, assistant_content, session_id)
         except Exception as e:  # noqa: BLE001 - 全 catch, 不能让 hermes 挂
             logger.warning("catfish-memory sync_turn 失败 (静默): %s", e)
+        # BL-SESSION-META-PLUGIN-TAKEOVER (5/26): 每轮 tick 时间感. 老逻辑 gateway
+        # session_meta.tick() 在 chat 完成后写, SaaS 化后 gateway 不能写员工本机.
+        # plugin 跑员工 mac 写自己 fs 合规. 这里跟 sync_turn buffer 累积同 hook,
+        # 不再依赖 gateway 触发. 实际 chat 走 catfish-public 同款规则 (内部调用 + service
+        # token 不算"员工跟我聊", 这两个走 gateway 路径不会触发 sync_turn 所以天然 skip).
+        try:
+            self._tick_session_meta()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("catfish-memory tick_session_meta 失败 (静默): %s", e)
 
     def _sync_turn_impl(
         self,

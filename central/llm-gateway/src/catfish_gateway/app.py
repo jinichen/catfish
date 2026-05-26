@@ -52,7 +52,7 @@ from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import JSONResponse, StreamingResponse  # noqa: E402
 
 from . import quota as _quota_module  # noqa: E402  五一 sprint 5/2 收尾: chat 后写 quota_events
-from . import session_meta  # noqa: E402  BL-E16 关系建立: tick + inject 时间元
+# 5/26 BL-SESSION-META-PLUGIN-TAKEOVER: session_meta.tick() 砍, plugin 接管. import 删.
 from .auth import (  # noqa: E402
     User,
     X_CATFISH_USER_HEADER,
@@ -2663,17 +2663,12 @@ async def chat_completions(
         # 写多份文件) 会被误拦, 把正常流打成失败. duplicate_tool_call_guard.py 模块
         # 本身保留, 不再被 chat_completions 入口调用.
 
-    # BL-E16 关系建立: session_meta inject 已由 SessionMetaProvider (priority=30)
-    # 在 Registry inject_subset 阶段接管. 这里只剩 tick (写本次 chat 时间).
-    #
-    # BL-F17 后续 (5/5 凌晨 39060 次事故): internal 调用也跳 tick, 不然 summarizer
-    # 死循环时 today_count 暴涨 (5/4 凌晨 dev-user 跳到 39060). 跟 quota 同思路:
-    # 后台 housekeeping 不算"员工今天找了我".
-    if not is_internal_call:
-        try:
-            session_meta.tick()
-        except Exception as e:
-            logger.warning("session_meta tick 失败 (无关键路径): %s", e)
+    # 5/26 BL-SESSION-META-PLUGIN-TAKEOVER: 老 session_meta.tick() 砍 (gateway 不
+    # 再写员工本机 session_meta.json). catfish-memory hermes plugin sync_turn hook
+    # 接管 _tick_session_meta(), 在 plugin 进程里写自己 fs (合规). 这里删 caller
+    # — session_meta module 改 fail-loud stub, 防回归.
+    # (BL-F17 5/5 internal-call skip 逻辑也跟着不需要了 — plugin 只在真 chat
+    #  turn 同步, internal loopback 调用走 service token 不触发 plugin sync_turn.)
 
     # 5/23 BL-GATEWAY-DROP-LEGACY-SUMMARIZE (鸿波 task #5 Stage 1): 删 gateway 端
     # session_summarizer (trigger_background_summary) + memory_distill (maybe_run_llm_

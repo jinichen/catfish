@@ -1,17 +1,22 @@
-"""BL-HERMES013-4 测试 — gateway atomic in-flight stream tracking.
+"""BL-HERMES013-4 + BL-INFLIGHT-MEM (5/26) — gateway in-flight stream tracking
+in-memory 实现的测试.
 
-覆盖:
-- mark_started 写文件 atomic (tmp + rename + fsync)
-- mark_finished unlink
-- list_inflight 扫目录返残留
-- reap_interrupted 写 audit + 清文件
-- InflightCleanupTransform: ok / error 都清 / 没 request_id 跳
-- 隐私: 路径走 CATFISH_HOME 联动 (跟 employee_journal 一致, 多 agent 不撞)
+# 5/26 改造背景
+
+老逻辑用 ~/.catfish/inflight_streams/<req>.json 文件存 (gateway 跑员工 mac 写  # noqa: BOUNDARY
+本机). SaaS 化后 gateway 跑客户机房, 写不到员工本机 → 改 in-memory dict.
+
+# 覆盖
+
+  - mark_started / mark_finished 增减 in-memory 项
+  - list_inflight 返当前 snapshot
+  - reap_interrupted 永远返 0 (重启后 dict 已空, 不再走 fs 残留 audit)
+  - InflightCleanupTransform: ok / error 都从 dict 移除 / 没 request_id 跳
+
+老 fs-based 测试 (atomic write / fsync / corrupt json / 路径 CATFISH_HOME 联动)
+跟着 fs 实现一起 sunset — in-memory 没有这些概念.
 """
 from __future__ import annotations
-
-import json
-from pathlib import Path
 
 import pytest
 
@@ -20,17 +25,17 @@ from catfish_gateway import output_transforms as ot
 
 
 @pytest.fixture(autouse=True)
-def isolated_catfish_home(tmp_path: Path, monkeypatch):
-    home = tmp_path / "fake_catfish"
-    home.mkdir()
-    monkeypatch.setenv("CATFISH_HOME", str(home))
-    yield home
+def clear_inflight_dict():
+    """每个测试用独立 in-memory 状态 (清空 + run + 清空)."""
+    ifs.clear()
+    yield
+    ifs.clear()
 
 
 # ── mark_started ──────────────────────────────────────────
 
 
-def test_mark_started_writes_file(isolated_catfish_home: Path):
+def test_mark_started_adds_to_dict():
     ok = ifs.mark_started(
         "req-abc",
         user="alice@x",
@@ -38,143 +43,106 @@ def test_mark_started_writes_file(isolated_catfish_home: Path):
         message_count=5,
     )
     assert ok is True
-    f = isolated_catfish_home / "inflight_streams" / "req-abc.json"
-    assert f.exists()
-    data = json.loads(f.read_text(encoding="utf-8"))
-    assert data["request_id"] == "req-abc"
-    assert data["user"] == "alice@x"
-    assert data["model"] == "catfish-private-main"
-    assert data["message_count"] == 5
-    assert "started_at" in data
-    assert "started_iso" in data
+    items = ifs.list_inflight()
+    assert len(items) == 1
+    rec = items[0]
+    assert rec["request_id"] == "req-abc"
+    assert rec["user"] == "alice@x"
+    assert rec["model"] == "catfish-private-main"
+    assert rec["message_count"] == 5
+    assert "started_at" in rec
+    assert "started_iso" in rec
 
 
-def test_mark_started_includes_extra(isolated_catfish_home: Path):
+def test_mark_started_includes_extra():
     ifs.mark_started("req-1", user="a@x", extra={"is_internal": True, "trace_id": "xyz"})
-    f = isolated_catfish_home / "inflight_streams" / "req-1.json"
-    data = json.loads(f.read_text(encoding="utf-8"))
-    assert data["is_internal"] is True
-    assert data["trace_id"] == "xyz"
+    items = ifs.list_inflight()
+    assert len(items) == 1
+    rec = items[0]
+    assert rec["is_internal"] is True
+    assert rec["trace_id"] == "xyz"
 
 
-def test_mark_started_empty_request_id_returns_false(isolated_catfish_home: Path):
+def test_mark_started_empty_request_id_returns_false():
     assert ifs.mark_started("") is False
+    assert ifs.list_inflight() == []
 
 
-def test_mark_started_no_tmp_residue(isolated_catfish_home: Path):
-    """atomic write — tmp 文件应该在 rename 后消失."""
-    ifs.mark_started("req-1")
-    d = isolated_catfish_home / "inflight_streams"
-    files = sorted(p.name for p in d.iterdir())
-    assert files == ["req-1.json"]
+def test_mark_started_same_id_overwrites():
+    """同 request_id 调两次, 后调的 record 覆盖前一个 (业务上是 retry / 改 model)."""
+    ifs.mark_started("req-1", user="a@x", model="m1")
+    ifs.mark_started("req-1", user="a@x", model="m2")
+    items = ifs.list_inflight()
+    assert len(items) == 1
+    assert items[0]["model"] == "m2"
 
 
 # ── mark_finished ─────────────────────────────────────────
 
 
-def test_mark_finished_unlinks(isolated_catfish_home: Path):
+def test_mark_finished_removes_from_dict():
     ifs.mark_started("req-1")
-    assert (isolated_catfish_home / "inflight_streams" / "req-1.json").exists()
+    assert len(ifs.list_inflight()) == 1
     ok = ifs.mark_finished("req-1")
     assert ok is True
-    assert not (isolated_catfish_home / "inflight_streams" / "req-1.json").exists()
+    assert ifs.list_inflight() == []
 
 
-def test_mark_finished_missing_file_idempotent(isolated_catfish_home: Path):
-    """没文件也不抛."""
+def test_mark_finished_missing_id_idempotent():
+    """没 record 也不抛, 返 True (mark_started 失败过 / 已被别处清掉都正常)."""
     assert ifs.mark_finished("never-existed") is True
 
 
-def test_mark_finished_empty_request_id(isolated_catfish_home: Path):
+def test_mark_finished_empty_request_id():
     assert ifs.mark_finished("") is False
 
 
 # ── list_inflight ─────────────────────────────────────────
 
 
-def test_list_inflight_empty_when_no_dir(isolated_catfish_home: Path):
+def test_list_inflight_empty():
     assert ifs.list_inflight() == []
 
 
-def test_list_inflight_returns_residue(isolated_catfish_home: Path):
+def test_list_inflight_returns_all_in_dict():
     ifs.mark_started("req-a", user="alice@x")
     ifs.mark_started("req-b", user="bob@x")
     items = ifs.list_inflight()
     assert len(items) == 2
     subs = {i["user"] for i in items}
     assert subs == {"alice@x", "bob@x"}
-    # 每条都有 _path 让 reap 知道删哪
-    for i in items:
-        assert "_path" in i
 
 
-def test_list_inflight_skips_corrupt_json(isolated_catfish_home: Path):
-    """损坏 json 跳过, 不抛."""
-    d = isolated_catfish_home / "inflight_streams"
-    d.mkdir()
-    (d / "good.json").write_text('{"request_id":"good","user":"a@x"}', encoding="utf-8")
-    (d / "bad.json").write_text("not json", encoding="utf-8")
-    items = ifs.list_inflight()
-    assert len(items) == 1
-    assert items[0]["request_id"] == "good"
-
-
-def test_list_inflight_skips_non_json_files(isolated_catfish_home: Path):
-    d = isolated_catfish_home / "inflight_streams"
-    d.mkdir()
-    (d / "good.json").write_text('{"request_id":"good"}', encoding="utf-8")
-    (d / "stray.txt").write_text("ignored", encoding="utf-8")
-    items = ifs.list_inflight()
-    assert len(items) == 1
-
-
-# ── reap_interrupted ──────────────────────────────────────
-
-
-def test_reap_writes_audit_and_unlinks(isolated_catfish_home: Path):
-    """reap 写 audit + 清文件."""
-    ifs.mark_started("req-1", user="alice@x", model="m1")
-    ifs.mark_started("req-2", user="bob@x", model="m2")
-
-    audited = []
-    cleaned = ifs.reap_interrupted(audit_writer=lambda r: audited.append(r))
-    assert cleaned == 2
-    # 文件被清
-    assert ifs.list_inflight() == []
-    # audit 被调
-    assert len(audited) == 2
-    subs = {a["user"] for a in audited}
-    assert subs == {"alice@x", "bob@x"}
-
-
-def test_reap_audit_failure_still_unlinks(isolated_catfish_home: Path):
-    """audit 写失败也 unlink (防文件累积)."""
+def test_list_inflight_returns_snapshot_not_live():
+    """list_inflight 应该返新 list, 不能让 caller 修改影响内部 dict."""
     ifs.mark_started("req-1")
-
-    def boom(r):
-        raise RuntimeError("audit DB down")
-
-    cleaned = ifs.reap_interrupted(audit_writer=boom)
-    assert cleaned == 1
-    assert ifs.list_inflight() == []
+    items = ifs.list_inflight()
+    items.append({"injected": "external"})
+    # 内部仍只 1 项
+    assert len(ifs.list_inflight()) == 1
 
 
-def test_reap_empty_returns_zero(isolated_catfish_home: Path):
+# ── reap_interrupted (5/26 后简化) ───────────────────────────
+
+
+def test_reap_interrupted_always_returns_zero():
+    """5/26 改 in-memory 后, reap 永远返 0 (启动时 dict 自然为空).
+
+    防回归: 不再恢复 fs scan + audit "interrupted_resumed" 老路径.
+    """
+    # 即使现在有 in-flight 也不该被 reap 清 (留 active 给当前 process)
+    ifs.mark_started("req-active")
     assert ifs.reap_interrupted() == 0
+    # 这条 active 没动
+    assert len(ifs.list_inflight()) == 1
 
 
-def test_reap_default_writer_calls_log_request_metadata(monkeypatch, isolated_catfish_home: Path):
-    """默认 audit_writer 走 metrics.log_request_metadata."""
-    captured: dict = {}
-    monkeypatch.setattr(
-        "catfish_gateway.metrics.log_request_metadata",
-        lambda **kw: captured.update(kw),
-    )
-    ifs.mark_started("req-1", user="alice@x", model="m1")
-    ifs.reap_interrupted()  # 不传 writer, 走默认
-    assert captured["status"] == "interrupted_resumed"
-    assert captured["user"] == "alice@x"
-    assert "BL-HERMES013-4" in captured["error"]
+def test_reap_interrupted_ignores_audit_writer():
+    """audit_writer 参数保留兼容, 但 5/26 后不再调."""
+    called = []
+    ifs.mark_started("req-1")
+    ifs.reap_interrupted(audit_writer=lambda r: called.append(r))
+    assert called == []
 
 
 # ── InflightCleanupTransform ──────────────────────────────
@@ -198,30 +166,32 @@ def _ctx(request_id: str = "req-test", status: str = "ok") -> ot.OutputCtx:
     )
 
 
-def test_cleanup_transform_unlinks_on_complete(isolated_catfish_home: Path):
+def test_cleanup_transform_removes_on_complete():
     ifs.mark_started("req-test", user="alice@x")
-    assert (isolated_catfish_home / "inflight_streams" / "req-test.json").exists()
+    assert len(ifs.list_inflight()) == 1
     ot.InflightCleanupTransform().on_complete(_ctx("req-test"))
-    assert not (isolated_catfish_home / "inflight_streams" / "req-test.json").exists()
+    assert ifs.list_inflight() == []
 
 
-def test_cleanup_transform_unlinks_on_error(isolated_catfish_home: Path):
-    """error 路径也清 — Python 跑到 finally 说明 generator 至少正常 yielded
-    (上游 LLM 报错不算 'interrupted', 只是失败). 真崩才是断电 finally 不跑."""
+def test_cleanup_transform_removes_on_error():
+    """error 路径也清 — 上游 LLM 报错不是 'interrupted' (Python 跑到 finally 说明
+    generator 至少正常 yielded). 真崩才是断电 finally 不跑."""
     ifs.mark_started("req-test")
     ot.InflightCleanupTransform().on_error(_ctx("req-test", status="error"))
-    assert not (isolated_catfish_home / "inflight_streams" / "req-test.json").exists()
+    assert ifs.list_inflight() == []
 
 
-def test_cleanup_transform_skips_when_no_request_id(isolated_catfish_home: Path):
-    """没 request_id 不动文件 (向后兼容老代码路径)."""
+def test_cleanup_transform_skips_when_no_request_id():
+    """没 request_id 不动其他记录 (向后兼容)."""
     ifs.mark_started("req-other")
     ot.InflightCleanupTransform().on_complete(_ctx(""))
-    assert (isolated_catfish_home / "inflight_streams" / "req-other.json").exists()
+    items = ifs.list_inflight()
+    assert len(items) == 1
+    assert items[0]["request_id"] == "req-other"
 
 
-def test_cleanup_transform_in_default_chain(isolated_catfish_home: Path, monkeypatch):
-    """默认 chain 跑一遍真清掉 inflight 文件."""
+def test_cleanup_transform_in_default_chain(monkeypatch):
+    """默认 chain 跑一遍真清掉 inflight 记录."""
     monkeypatch.setattr(
         "catfish_gateway.metrics.log_request_metadata",
         lambda **kw: None,
@@ -232,4 +202,4 @@ def test_cleanup_transform_in_default_chain(isolated_catfish_home: Path, monkeyp
     )
     ifs.mark_started("req-chain")
     ot.build_default_chain().run(_ctx("req-chain"))
-    assert not (isolated_catfish_home / "inflight_streams" / "req-chain.json").exists()
+    assert ifs.list_inflight() == []

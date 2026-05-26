@@ -60,13 +60,15 @@ KNOWN_VIOLATIONS_ALLOWLIST: set[str] = {
     # "inject_session_history.py" — 5/26 砍 (改 stub)
     # "employee_journal.py" — 5/26 跟 A2A 同批砍 (唯一 caller 是 a2a_journal_hook)
     # "identity_inject.py" — 5/26 晚移除 (Companion prefetch bundle 化)
-    # B 类 — 后台任务 (1 剩, was 3 → 2 → 1)
+    # B 类 — 后台任务 · ✅ 5/26 晚 全清 (0 剩, was 3)
     # 5/23 BL-GATEWAY-DROP-LEGACY-SUMMARIZE: session_summarizer + memory_distill 真 rm.
-    # 5/26 P1 BL-PROACTIVE-DECOUPLE: proactive.py 不再读 ~/.catfish/employee_journal,
-    #   journal_tail + last_model 通过 header (X-Catfish-Journal-Tail-B64 + X-Catfish-Last-Model)
-    #   Companion 传过来. 老 Companion 没传 → fallback 模板 (功能退化不致命).
+    # 5/26 P1 BL-PROACTIVE-DECOUPLE: proactive.py header 化 (journal_tail + last_model
+    #   通过 Companion header 透传, gateway 不读员工 fs).
+    # 5/26 晚 BL-SESSION-META-PLUGIN-TAKEOVER: catfish-memory hermes plugin 接管
+    #   session_meta.json 写 (sync_turn hook 里 _tick_session_meta()). gateway 端
+    #   session_meta.py 改 fail-loud stub, app.py 删 tick caller + 删 import.
     # "proactive.py" — 5/26 移除
-    "session_meta.py",
+    # "session_meta.py" — 5/26 晚移除 (plugin _tick_session_meta() 接管)
     # 5/26 晚 真清: tool_archive/db.py 砍 PG 路径死代码 (_use_pg/_pg_conn/_pg_*
     # stub 4 个 + 双轨 if/else, ~36 行). docstring 里 ~/.catfish/ 引用 3 处全加
     # noqa: BOUNDARY. ARCHIVE_DIR 默认 Path.home 路径加 noqa (Q3 SaaS 搬 tool-bridge
@@ -107,8 +109,13 @@ KNOWN_VIOLATIONS_ALLOWLIST: set[str] = {
     # "recmode/cdp_listener.py" — 5/26 移除
     # "recmode/cleanup.py" — 5/26 移除
     # docs/CENTRAL-EDGE-DATA-BOUNDARY.md E 类全清 ✅
-    # F 类 — Facts 上传 (1, facts_db.py 已合规走 PG-only 不留 jsonl 字面引用)
-    "facts_router.py",
+    # F 类 — Facts 上传 · ✅ 5/26 晚 全清 (0 剩, was 1)
+    # 5/26 晚: facts_router.py 真违规就 1 行 (FACTS_DIR Path.home fallback) + 6 行
+    # docstring. 加 noqa: BOUNDARY 标. 真代码改成 env-required pattern (CATFISH_FACTS_DIR
+    # 未配 fallback 留 dev/单测兜底, 启动日志 warning 提示生产必配 env).
+    # 完整 PG + 对象存储改造留 Q3 BL-Q3-FACT-PG-MIGRATE ticket. 当前 Companion UI
+    # 未接 facts endpoint, 0 真客户用, 不阻塞 ship.
+    # "facts_router.py" — 5/26 晚移除 (env-required + noqa)
     # G 类 — Resolver / metadata · ✅ 5/26 全清 (0 剩, was 2)
     # session_goals.py 砍 (hermes 0.14 原生 /goal 替代).
     # user_model_resolver.py: get_session_model + get_user_last_session_model 改 stub
@@ -126,8 +133,14 @@ KNOWN_VIOLATIONS_ALLOWLIST: set[str] = {
     #   生产 PG-only, 单测 sqlite 走 CATFISH_QUOTA_DB env 显式 override, 不 fallback 员工本机.
     # "quota.py" — 5/26 晚移除
     # "metrics.py" — 5/26 移除 (0 真代码 Path.home)
-    # 基础设施 (中性, request_id 状态)
-    "inflight_streams.py",
+    # 基础设施 · ✅ 5/26 晚移除 (in-memory dict 替换 fs)
+    # BL-INFLIGHT-MEM (5/26): 老 fs 文件 ~/.catfish/inflight_streams/<req>.json   # noqa: BOUNDARY
+    #   存 request_id 状态. SaaS 化后 gateway 跑客户机房写不到员工 mac. 改进程
+    #   内 dict (跨线程加 lock). reap_interrupted 永远返 0 (重启 dict 自然清空,
+    #   失去"interrupted_resumed" audit nice-to-have feature, ops 翻 timeout
+    #   error 日志兜底).
+    # Q4 K8s 多 pod 时上 Redis pub/sub (BL-INFLIGHT-REDIS, 单独 ticket).
+    # "inflight_streams.py" — 5/26 晚移除 (in-memory 化, ALLOWLIST 2 → 1)
     # 5/26 移除 app.py — 3 处 Path.home (record_transcript + skill_content + save_skill)
     # 5/26 batch 2 (E.1 收尾) 搬 tool-bridge 后 grep 0 命中. RecMode 全链路真 100% 在 edge.
     # "app.py" — 5/26 移除

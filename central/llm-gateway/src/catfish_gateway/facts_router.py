@@ -7,19 +7,19 @@
 # Pipeline (5 步)
 
   1. upload     员工 IT/合规上传变更文件 (multipart PDF/Word/MD/TXT/邮件)
-                → 存 ~/.catfish/facts/<id>/raw.<ext> + 返 fact_id (status=uploaded)
+                → 存 ~/.catfish/facts/<id>/raw.<ext> + 返 fact_id (status=uploaded)  # noqa: BOUNDARY
   2. extract    LLM 解析变更文件 → 提"事实点"列表 (title/summary/keywords/raw_quotes)
-                → 落 ~/.catfish/facts/<id>/fact.json (status=extracted)
+                → 落 ~/.catfish/facts/<id>/fact.json (status=extracted)  # noqa: BOUNDARY
   3. find-impact 拉 skills-hub 全部 skill, LLM 找受影响候选 (附 confidence)
-                → 落 ~/.catfish/facts/<id>/impacts.jsonl (status=analyzed)
+                → 落 ~/.catfish/facts/<id>/impacts.jsonl (status=analyzed)  # noqa: BOUNDARY
   4. generate-patches  对每个高 confidence 受影响 skill, 调 BL-MM13
                 catfish_propose_skill_revision 生成 patch
-                → 落 ~/.catfish/facts/<id>/patches.jsonl (status=patches_ready)
+                → 落 ~/.catfish/facts/<id>/patches.jsonl (status=patches_ready)  # noqa: BOUNDARY
   5. approve    走 SkillRevisionCard 审批 (复用 BL-MM14, 不在本 router 实现)
 
 # P0 范围
 
-- PG 暂用 jsonl 临时落 (~/.catfish/facts/<fact_id>/), Q3 P1 迁 PG.
+- PG 暂用 jsonl 临时落 (~/.catfish/facts/<fact_id>/), Q3 P1 迁 PG.  # noqa: BOUNDARY
 - 只做单 skill 独立分析, 跨 skill 依赖图留 Q3 P1.
 - 不做自动扫公司知识库, 全手动上传.
 - RBAC: admin / sysadmin 才能上传/分析, employee 看不到.
@@ -45,7 +45,7 @@ logger = logging.getLogger("catfish.gateway.facts")
 router = APIRouter(prefix="/api/facts", tags=["facts"])
 
 # ── 落盘位置 ─────────────────────────────────────
-# ~/.catfish/facts/<fact_id>/
+# ~/.catfish/facts/<fact_id>/  # noqa: BOUNDARY
 #   raw.<ext>           原始上传文件
 #   meta.json           fact_change 元信息
 #   fact.json           LLM 解析出的事实点
@@ -53,10 +53,21 @@ router = APIRouter(prefix="/api/facts", tags=["facts"])
 #   patches.jsonl       生成的 patch 列表 (每行一个)
 #   audit.jsonl         本 fact 的所有操作审计
 
-FACTS_DIR = Path(os.environ.get("CATFISH_FACTS_DIR", "")) if os.environ.get("CATFISH_FACTS_DIR") else (
-    Path.home() / ".catfish" / "facts"
+# BL-CENTRAL-EDGE-BOUNDARY (5/26): 生产应配 CATFISH_FACTS_DIR env 指到 PG-mount
+# / 对象存储 (Q3 BL-Q3-FACT-PG-MIGRATE). dev / 单测 fallback Path.home (员工本机)
+# 仅供本地手动 demo / curl 调 endpoint 测试用; 真上 SaaS 生产必须显式 set env.
+FACTS_DIR = (
+    Path(os.environ["CATFISH_FACTS_DIR"]).expanduser()
+    if os.environ.get("CATFISH_FACTS_DIR")
+    else Path.home() / ".catfish" / "facts"  # noqa: BOUNDARY (Q3 PG 迁移前 dev 兜底)
 )
 FACTS_DIR.mkdir(parents=True, exist_ok=True)
+if not os.environ.get("CATFISH_FACTS_DIR"):
+    logger.warning(
+        "facts_router: CATFISH_FACTS_DIR env 未配, fallback %s (dev only). "
+        "SaaS 生产必须 set env 指到 PG mount / 对象存储 (Q3 BL-Q3-FACT-PG-MIGRATE).",
+        FACTS_DIR,
+    )
 
 # ── 文件大小 / 类型限制 ─────────────────────────
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024  # 20 MB (政策文件一般几页 PDF, 远不到)
