@@ -1,11 +1,26 @@
-"""BL-Q3-ARCHIVE — PG 主存储 + jsonl 兜底 (5/11).
-
-跟 facts_db.py / mcp-registry storage 同 `_use_pg()` 模式. PG 挂时降级 jsonl.
+"""BL-Q3-ARCHIVE — jsonl-only 落盘 (5/11 v1 → 5/26 v2 真隐私修).
 
 落盘:
-  ~/.catfish/tool_archives/<session_id_safe>/<ref>.json
+  ~/.catfish/tool_archives/<session_id_safe>/<ref>.json  # noqa: BOUNDARY
 
 session_id 做安全替换 (邮件含 @ / 路径 / 冒号 — 转 _ 防越权).
+
+# 5/26 真隐私修 (砍 PG 路径)
+
+老逻辑 (BL-Q3-ARCHIVE v1, 5/11): PG 写 content + jsonl 双写灾备. PG 那条把
+**archive content** (大 tool output: browser_screenshot base64 PNG / email_search
+邮件内容 / browser_snapshot HTML 等) 写到**中央 PG** → 违反 "中央只看 metadata"
+承诺. content 是员工业务数据, 不该上中央.
+
+新逻辑 (5/26 v2): jsonl-only. content 永远员工 mac. PG 路径整体砍 (_use_pg /
+_pg_conn / _pg_upsert / _pg_get / _pg_update_summary / _pg_gc 全删, ~50 行
+死代码清理). 历史 PG 数据保留作 reference, 不再读不再写.
+
+# Q3 SaaS 改造方向 (BL-TOOL-ARCHIVE-MIGRATE-TO-EDGE)
+
+整套 tool_archive (db.py / archiver.py / summary_worker.py / prompts.py / reader.py)
+搬 tool-bridge — tool 调用本来就在 tool-bridge 进程产出, 归档应该同处. 详见
+docs/CENTRAL-EDGE-DATA-BOUNDARY.md B 类.
 """
 from __future__ import annotations
 
@@ -21,23 +36,11 @@ logger = logging.getLogger("catfish.gateway.tool_archive.db")
 ARCHIVE_DIR = (
     Path(os.environ["CATFISH_TOOL_ARCHIVE_DIR"])
     if os.environ.get("CATFISH_TOOL_ARCHIVE_DIR")
-    else Path.home() / ".catfish" / "tool_archives"
+    else Path.home() / ".catfish" / "tool_archives"  # noqa: BOUNDARY (Q3 SaaS 搬 tool-bridge)
 )
 
 #: archive 默认保留天数
 RETENTION_DAYS = int(os.environ.get("CATFISH_TOOL_ARCHIVE_RETENTION_DAYS", "14"))
-
-
-def _use_pg() -> bool:
-    """有 CATFISH_DB_URL → PG. 跟 facts_db / metrics 同款."""
-    return bool(os.environ.get("CATFISH_DB_URL", "").strip())
-
-
-def _pg_conn():
-    """psycopg sync 连接. 复用 facts_db 同模板."""
-    import psycopg  # 懒 import
-
-    return psycopg.connect(os.environ["CATFISH_DB_URL"])
 
 
 def _safe_session_dir(session_id: str) -> str:
@@ -64,17 +67,6 @@ def upsert_archive(row: dict) -> tuple[bool, str]:
     """upsert 一条 archive. 返 (ok, backend) — 5/26 后 backend 永远 'jsonl'.
 
     必填字段: ref / session_id / user_email / content / content_bytes / lines.
-
-    # 5/26 真隐私修: 砍 PG 路径
-
-    老逻辑: PG 写 content + jsonl 双写灾备. PG 那条把 **archive content** (大 tool
-    output: browser_screenshot base64 PNG / email_search 邮件内容 / browser_snapshot
-    HTML 等) 写到**中央 PG** → 违反 "中央只看 metadata" 承诺. content 是员工业务
-    数据, 不该上中央. 5/26 audit 抓到 (比 5/25 aggregator vision 更严重, 因为
-    aggregator 是 transit 不落盘, PG upsert 真持久化中央).
-
-    新逻辑: jsonl-only. content 永远员工 mac (~/.catfish/tool_archives/). PG schema
-    不再写 (老 PG 数据保留作历史, get_archive 也不再读 PG, 全走 jsonl).
     """
     try:
         _jsonl_write(row)
@@ -82,11 +74,6 @@ def upsert_archive(row: dict) -> tuple[bool, str]:
     except Exception as e:  # noqa: BLE001
         logger.error("upsert_archive jsonl 写挂 ref=%s err=%s", row.get("ref"), e)
         return False, "none"
-
-
-def _pg_upsert(row: dict) -> bool:
-    """5/26 砍 — 真隐私违规 (PG 写 content 上中央). 留 stub 防回归."""
-    return False
 
 
 def _jsonl_write(row: dict) -> None:
@@ -113,16 +100,8 @@ def _jsonl_write(row: dict) -> None:
 
 
 def get_archive(ref: str) -> dict | None:
-    """按 ref 拿 archive 全量. None = 不存在 / 已过期."""
-    row = _pg_get(ref)
-    if row:
-        return row
+    """按 ref 拿 archive 全量. None = 不存在 / 已过期. (5/26 jsonl-only)."""
     return _jsonl_get(ref)
-
-
-def _pg_get(ref: str) -> dict | None:
-    """5/26 砍 — 跟 _pg_upsert 同批 (PG 不再存 content). 留 stub 防回归."""
-    return None
 
 
 def _jsonl_get(ref: str) -> dict | None:
@@ -157,7 +136,7 @@ def _jsonl_get(ref: str) -> dict | None:
 
 
 def pick_unsummarized(limit: int = 10) -> list[dict]:
-    """jsonl-only (5/26 砍 PG 路径). 扫 ~/.catfish/tool_archives 找未摘要的.
+    """jsonl-only (5/26 砍 PG 路径). 扫 ~/.catfish/tool_archives 找未摘要的.  # noqa: BOUNDARY
 
     返回每条只含 ref / content / tool_name (摘要器够用了).
     """
@@ -195,16 +174,9 @@ def update_summary(
     model: str | None = None,
     error: str | None = None,
 ) -> bool:
-    """summary IS NOT NULL 或 summary_error 都算"已处理过"."""
+    """summary IS NOT NULL 或 summary_error 都算"已处理过". (5/26 jsonl-only)."""
     now = datetime.now(UTC)
-    pg_ok = _pg_update_summary(ref, summary=summary, model=model, error=error, at=now)
-    jsonl_ok = _jsonl_update_summary(ref, summary=summary, model=model, error=error, at=now)
-    return pg_ok or jsonl_ok
-
-
-def _pg_update_summary(ref, *, summary, model, error, at) -> bool:
-    """5/26 砍 — 跟 _pg_upsert 同批 (PG 不再存 content 也不存 summary). 留 stub."""
-    return False
+    return _jsonl_update_summary(ref, summary=summary, model=model, error=error, at=now)
 
 
 def _jsonl_update_summary(ref, *, summary, model, error, at) -> bool:
@@ -233,15 +205,8 @@ def _jsonl_update_summary(ref, *, summary, model, error, at) -> bool:
 
 
 def gc_expired() -> int:
-    """删过期 archive. 返删除条数."""
-    n_pg = _pg_gc()
-    n_jsonl = _jsonl_gc()
-    return n_pg + n_jsonl
-
-
-def _pg_gc() -> int:
-    """5/26 砍 — PG 不再存 archive, GC 也没意义. 留 stub."""
-    return 0
+    """删过期 archive. 返删除条数. (5/26 jsonl-only)."""
+    return _jsonl_gc()
 
 
 def _jsonl_gc() -> int:

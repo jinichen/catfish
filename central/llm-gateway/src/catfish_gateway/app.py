@@ -72,7 +72,6 @@ from .feedback_inject import inject_feedback  # noqa: E402  BL-MM6
 from .gemini_guard import harden_for_gemini  # noqa: E402
 from .identity_inject import (  # noqa: E402
     header_agent_prefs,
-    header_skips_identity,  # noqa: F401 (5/21 留作 deprecated 引用)
     request_skips_identity,
     inject_identity_if_needed,
 )
