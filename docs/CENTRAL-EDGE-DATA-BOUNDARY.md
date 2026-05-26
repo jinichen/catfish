@@ -94,13 +94,23 @@
 | `a2a_jwt.py` | 读 `~/.catfish/identity/private.pem` | 私钥**只该在 Companion**, gateway 只用公钥验签 |
 | `a2a_self_register.py` | 读 ~/.catfish/identity | 同上 |
 
-### E 类 — RecMode (CDP 录制截图) · 3 个 · **极高敏感**
+### E 类 — RecMode (CDP 录制截图) · 2 个待迁 (was 3) · **极高敏感**
 
-| 文件 | 违规 | 该怎么改 |
+| 文件 | 状态 | 备注 |
 |---|---|---|
-| `recmode/aggregator.py` | 写 `~/.catfish/skills/` | 整模块搬 Companion (截图含业务数据, 绝不能进中央) |
-| `recmode/cdp_listener.py` | 写 `~/.catfish/recordings/` | 同上 |
-| `recmode/cleanup.py` | 清 recordings | 同上 |
+| ~~`recmode/aggregator.py`~~ | ✅ **5/25 已搬** | → `edge/tool-bridge/src/catfish_tool_bridge/recmode/aggregator.py`. central 端只剩 stub (RuntimeError on import). gateway `/api/learn/analyze` 改 thin proxy, 通过 Unix socket JSON-RPC 转 tool-bridge. 触发: 鸿波 5/25 audit "录屏数据现在还有提交到中央的错误吗" — 发现 aggregator 落 SKILL.md + main.py + recmode_meta.json 3 个文件到 `~/.catfish/skills/`, 含 LLM 对截图的完整原始 JSON 描述. 当前部署 gateway 跟 Companion 同 Mac 物理 OK, 但 SaaS 化即破承诺. 跑 boundary test 通过 (ALLOWLIST 移除). |
+| ~~`recmode/selector_repair.py`~~ | ✅ **5/25 同批搬** | 同上目标位置, 依赖 aggregator.call_llm, 不独立. central 端 stub fail-loud. |
+| `recmode/cdp_listener.py` | ⚠ 待迁 | 写 `~/.catfish/recordings/` (截图 + events.jsonl). 写盘行为是 listener 必需, 但 listener 在 central 跑就违边界. 下一 sprint 搬 edge/tool-bridge. |
+| `recmode/cleanup.py` | ⚠ 待迁 | 清 `~/.catfish/recordings/`. 跟 listener 一起搬 (它俩耦合). |
+
+#### aggregator 迁移技术备注 (5/25)
+
+- gateway 加 `tool_bridge_rpc.py` (Unix socket JSON-RPC client, 16MB readline limit 跟 tool-bridge 同源)
+- tool-bridge `server.py` 加 2 个 JSON-RPC method: `recmode/analyze`, `recmode/repair_selector` (不挂 tools/dispatch 避免出现在 LLM tool list)
+- gateway 端 `/api/learn/analyze` + `/api/learn/repair_selector` HTTP API 表面不变 (Companion / catfish_browser 老 caller 0 改动), 但 body → JSON-RPC 转发, central 进程不再读写 `~/.catfish/`
+- ToolBridgeUnreachable → HTTP 502, ToolBridgeRPCError → 透传 code (INVALID_PARAMS=400/404, INTERNAL=502)
+- 404 vs 400 区分: tool-bridge 抛"session_dir...不存在"映回 404 (跟老语义一致)
+- SaaS 化时这层 proxy 会 fail-loud (员工 Mac 上的 socket gateway 连不到), 强制下次 Companion 直连
 
 ### F 类 — Facts 上传 / 存储 · 2 个
 

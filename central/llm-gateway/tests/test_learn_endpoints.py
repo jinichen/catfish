@@ -96,63 +96,111 @@ def test_analyze_missing_session_id(client):
     assert r.status_code == 400
 
 
-def test_analyze_session_dir_not_found(client):
-    r = client.post("/api/learn/analyze", json={"session_id": "rec_no_such"})
+# ─── BL-RECMODE-MIGRATE-TO-EDGE (5/25) ────────────────────
+#
+# /api/learn/analyze + /repair_selector 现在是 thin proxy → edge tool-bridge.
+# 老 e2e 测试 mock 的是 aggregator.call_llm — 那个 module 现在是 stub
+# (RuntimeError on import). 改 mock 层到 tool_bridge_rpc.call, 测的就是
+# proxy 行为 (deserialize body → JSON-RPC call → 错误码映射), 真 aggregator
+# 落盘逻辑的 e2e 测试现在归 edge/tool-bridge/tests/.
+#
+# 测的边界:
+#   - 老 e2e ("session 真存在 → 落 SKILL.md") → 移 edge/tool-bridge/tests/
+#   - 这里只测 proxy 层 (body 校验 + JSON-RPC error code → HTTP 码 映射 + viewer 注入)
+
+
+def test_analyze_session_dir_not_found_via_proxy(client, monkeypatch):
+    """tool-bridge 报 INVALID_PARAMS 含 'session_dir...不存在' → gateway 应映 404."""
+    from catfish_gateway import tool_bridge_rpc as _tb_rpc
+
+    async def fake_call(method, params, **kw):
+        from catfish_gateway.tool_bridge_rpc import (
+            ToolBridgeRPCError,
+            JSONRPC_INVALID_PARAMS,
+        )
+        raise ToolBridgeRPCError(JSONRPC_INVALID_PARAMS, "session_dir /tmp/recordings/rec_no 不存在.")
+
+    monkeypatch.setattr(_tb_rpc, "call", fake_call)
+    r = client.post("/api/learn/analyze", json={"session_id": "rec_no"})
     assert r.status_code == 404
     assert "不存在" in r.json()["detail"]
 
 
-def test_analyze_e2e_with_mock_llm(client, tmp_path, monkeypatch):
-    """端到端 mock aggregator.call_llm → /api/learn/analyze 落 skill 文件."""
-    # 准备一个 fake recording session_dir
-    rec_dir = tmp_path / "recordings" / "rec_analyze"
-    rec_dir.mkdir(parents=True)
-    (rec_dir / "events.jsonl").write_text('{"ts": 0, "kind": "click"}\n', encoding="utf-8")
-    (rec_dir / "meta.json").write_text('{"session_id": "rec_analyze", "duration_s": 10}', encoding="utf-8")
+def test_analyze_proxy_success(client, monkeypatch):
+    """tool-bridge 返成功结果 → gateway 透传 + 注入 viewer."""
+    from catfish_gateway import tool_bridge_rpc as _tb_rpc
 
-    fake_response = '{"skill_name": "rec_analyze_test", "namespace": "personal", "description": "测试", "params_schema": [], "steps": [], "execute_code_segment": "", "output_schema": {}, "confidence": 0.7, "questions_for_user": []}'
+    expected = {
+        "skill_name": "rec_analyze_test",
+        "namespace": "personal",
+        "skill_dir": "/tmp/skills/personal/rec_analyze_test",
+        "confidence": 0.7,
+        "questions_for_user": [],
+        "steps_count": 3,
+    }
 
-    async def fake_call_llm(messages, **kw):
-        return fake_response
+    captured = {}
+    async def fake_call(method, params, **kw):
+        captured["method"] = method
+        captured["params"] = params
+        return dict(expected)
 
-    from catfish_gateway.recmode import aggregator
-    monkeypatch.setattr(aggregator, "call_llm", fake_call_llm)
-    monkeypatch.setenv("CATFISH_DEV_TOKEN", "fake")  # call_llm 不会用因为 mock 了
-
-    skills_root = tmp_path / "skills"
+    monkeypatch.setattr(_tb_rpc, "call", fake_call)
     r = client.post("/api/learn/analyze", json={
         "session_id": "rec_analyze",
-        "skills_root": str(skills_root),
-        "draft_only": False,  # 测老路径直接落正式 skills
+        "skills_root": "/tmp/skills",
+        "draft_only": False,
     })
     assert r.status_code == 200, r.text
     out = r.json()
     assert out["skill_name"] == "rec_analyze_test"
-    assert out["namespace"] == "personal"
     assert out["confidence"] == 0.7
-    assert (skills_root / "personal" / "rec_analyze_test" / "SKILL.md").exists()
+    assert "viewer" in out  # gateway 注入身份
+    # 校验 proxy 透传参数正确
+    assert captured["method"] == "recmode/analyze"
+    assert captured["params"]["session_id"] == "rec_analyze"
+    assert captured["params"]["skills_root"] == "/tmp/skills"
+    assert captured["params"]["draft_only"] is False
 
 
-def test_analyze_draft_default(client, tmp_path, monkeypatch):
-    """5/14 RecMode C: 默认 draft_only=True, 落 session_dir/skill_draft/"""
-    rec_dir = tmp_path / "recordings" / "rec_draft"
-    rec_dir.mkdir(parents=True)
-    (rec_dir / "events.jsonl").write_text('{"ts": 0, "kind": "click"}\n', encoding="utf-8")
-    (rec_dir / "meta.json").write_text('{"session_id": "rec_draft"}', encoding="utf-8")
+def test_analyze_tool_bridge_unreachable_502(client, monkeypatch):
+    """tool-bridge 没起 / socket 缺 → gateway 应返 502."""
+    from catfish_gateway import tool_bridge_rpc as _tb_rpc
 
-    fake_response = '{"skill_name": "drafted", "namespace": "personal", "description": "d", "params_schema": [], "steps": [], "execute_code_segment": "", "output_schema": {}, "confidence": 0.6, "questions_for_user": []}'
-    from catfish_gateway.recmode import aggregator
-    async def fake_call_llm(messages, **kw):
-        return fake_response
-    monkeypatch.setenv("CATFISH_DEV_TOKEN", "fake")
-    monkeypatch.setattr(aggregator, "call_llm", fake_call_llm)
+    async def fake_call(method, params, **kw):
+        raise _tb_rpc.ToolBridgeUnreachable("socket 不存在")
 
-    r = client.post("/api/learn/analyze", json={"session_id": "rec_draft"})
-    assert r.status_code == 200, r.text
-    out = r.json()
-    assert out["is_draft"] is True
-    # draft 在 recordings/rec_draft/skill_draft/personal/drafted/
-    assert (rec_dir / "skill_draft" / "personal" / "drafted" / "SKILL.md").exists()
+    monkeypatch.setattr(_tb_rpc, "call", fake_call)
+    r = client.post("/api/learn/analyze", json={"session_id": "any"})
+    assert r.status_code == 502
+    assert "tool-bridge 不可达" in r.json()["detail"]
+
+
+def test_analyze_tool_bridge_internal_error_502(client, monkeypatch):
+    """tool-bridge INTERNAL_ERROR (e.g. vision LLM 挂) → gateway 应返 502."""
+    from catfish_gateway import tool_bridge_rpc as _tb_rpc
+
+    async def fake_call(method, params, **kw):
+        raise _tb_rpc.ToolBridgeRPCError(_tb_rpc.JSONRPC_INTERNAL_ERROR,
+                                          "LLM call timeout")
+
+    monkeypatch.setattr(_tb_rpc, "call", fake_call)
+    r = client.post("/api/learn/analyze", json={"session_id": "any"})
+    assert r.status_code == 502
+    assert "LLM call timeout" in r.json()["detail"]
+
+
+def test_analyze_value_error_422(client, monkeypatch):
+    """tool-bridge 报 INTERNAL_ERROR 含 '参数错' (ValueError 转过来的) → 422."""
+    from catfish_gateway import tool_bridge_rpc as _tb_rpc
+
+    async def fake_call(method, params, **kw):
+        raise _tb_rpc.ToolBridgeRPCError(_tb_rpc.JSONRPC_INTERNAL_ERROR,
+                                          "aggregate_session 参数错 (422): bad skill_name")
+
+    monkeypatch.setattr(_tb_rpc, "call", fake_call)
+    r = client.post("/api/learn/analyze", json={"session_id": "any"})
+    assert r.status_code == 422
 
 
 def test_skill_content_endpoint(client, tmp_path):

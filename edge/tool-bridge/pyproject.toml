@@ -18,6 +18,12 @@ authors = [{ name = "Catfish Platform Team" }]
 # 同一个 venv 里，所有 tool 依赖（markitdown / browser / mcp / ...）天然解决
 dependencies = [
     "keyring >= 24; sys_platform == 'win32'",
+    # 5/25 BL-RECMODE-MIGRATE-TO-EDGE: aggregator.call_llm / selector_repair 调
+    # gateway /v1/chat/completions 走 httpx async client. 5/14 v0 在 central
+    # 跑的时候 gateway venv 自带, 5/25 搬到 edge tool-bridge 后这个进程需要自己装.
+    # 注意: 生产部署 tool-bridge 跟 hermes 共 venv, hermes 那个 venv 多半也装了
+    # httpx (litellm 依赖), 那时这条是冗余安全配置. 单独建 venv 跑测试时必装.
+    "httpx >= 0.27",
 ]
 
 [project.scripts]

@@ -68,7 +68,93 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
     if method == "health":
         return _success(req_id, adapter.health())
 
+    # ── BL-RECMODE-MIGRATE-TO-EDGE (5/25 鸿波拍板"现在必须现在转移") ──
+    # 中央 gateway /api/learn/analyze + /repair_selector 现在是 thin proxy,
+    # JSON-RPC 转发到这里. 这俩跑在 tool-bridge 进程 (edge), 中央代码
+    # (central/) 不再读写 ~/.catfish/recordings/ ~/.catfish/skills/.
+    # 详见 recmode/__init__.py + docs/CENTRAL-EDGE-DATA-BOUNDARY.md E.1.
+    #
+    # 故意不挂 tools/dispatch — 这俩是内部 RecMode pipeline, 不该出现在
+    # LLM 看的 tool list 里 (避免 LLM 误调). 走专属 method 名.
+    if method == "recmode/analyze":
+        return await _handle_recmode_analyze(req_id, params)
+    if method == "recmode/repair_selector":
+        return await _handle_recmode_repair_selector(req_id, params)
+
     return _error(req_id, METHOD_NOT_FOUND, f"unknown method: {method}")
+
+
+async def _handle_recmode_analyze(req_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
+    """读 session_dir → vision LLM → 落 SKILL.md + main.py.
+
+    Params: {session_id, skills_root?, draft_only?, auth_token?, catfish_home?}
+
+    catfish_home: 可选 override (env CATFISH_HOME 在 tool-bridge 进程拿不到时
+    caller 传过来). 不传按 ~/.catfish/recordings/ 找.
+    """
+    from pathlib import Path  # noqa: PLC0415
+    import os  # noqa: PLC0415
+    from .recmode import aggregator  # noqa: PLC0415
+
+    session_id = (params.get("session_id") or "").strip()
+    if not session_id:
+        return _error(req_id, INVALID_PARAMS, "params.session_id 必填")
+
+    skills_root_str = (params.get("skills_root") or "").strip()
+    skills_root = Path(skills_root_str).expanduser() if skills_root_str else None
+
+    catfish_home = (params.get("catfish_home") or os.environ.get("CATFISH_HOME") or "").strip()
+    rec_root = (
+        Path(catfish_home).expanduser() / "recordings" if catfish_home
+        else Path.home() / ".catfish" / "recordings"
+    )
+    session_dir = rec_root / session_id
+    if not session_dir.exists():
+        return _error(req_id, INVALID_PARAMS,
+                      f"session_dir {session_dir} 不存在. 先调 /start_recording 录一段.")
+
+    auth_token = params.get("auth_token") or os.environ.get("CATFISH_DEV_TOKEN", "")
+    draft_only = bool(params.get("draft_only", True))
+
+    try:
+        out = await aggregator.aggregate_session(
+            session_dir,
+            skills_root=skills_root,
+            auth_token=auth_token,
+            draft_only=draft_only,
+        )
+        return _success(req_id, out)
+    except RuntimeError as e:
+        # LLM call / 网络挂 — gateway proxy 会映射 502
+        return _error(req_id, INTERNAL_ERROR, f"aggregate_session 失败 (502): {e}")
+    except ValueError as e:
+        return _error(req_id, INVALID_PARAMS, f"aggregate_session 参数错 (422): {e}")
+
+
+async def _handle_recmode_repair_selector(req_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
+    """selector 漂移自动修复. Params: {hint, screenshot_b64, context?, auth_token?}."""
+    import os  # noqa: PLC0415
+    from .recmode import selector_repair  # noqa: PLC0415
+
+    hint = params.get("hint") or {}
+    screenshot = (params.get("screenshot_b64") or "").strip()
+    context = (params.get("context") or "").strip()
+    if not hint:
+        return _error(req_id, INVALID_PARAMS, "params.hint 必填")
+    if not screenshot:
+        return _error(req_id, INVALID_PARAMS, "params.screenshot_b64 必填 (vision 必须看图)")
+
+    auth_token = params.get("auth_token") or os.environ.get("CATFISH_DEV_TOKEN", "")
+    try:
+        out = await selector_repair.repair_selector(
+            hint=hint,
+            screenshot_b64=screenshot,
+            context=context,
+            auth_token=auth_token,
+        )
+        return _success(req_id, out)
+    except RuntimeError as e:
+        return _error(req_id, INTERNAL_ERROR, f"repair_selector 失败 (502): {e}")
 
 
 async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
