@@ -1,37 +1,32 @@
-/** BL-WECHAT-CATFISH-BIND v1 (5/26 鸿波): WeChat ↔ catfish 员工 email 绑定卡.
+/** BL-WECHAT-CATFISH-BIND v2 (5/26 鸿波): WeChat ↔ catfish 员工 email 绑定卡 (真 UI 版).
  *
- * # 这卡是干嘛的
+ * # v1 → v2 改的原因
  *
- * 鲶鱼 (catfish-gateway) 是按 "员工 email" 切隔离的 — 同一个员工的对话 / 记忆 /
- * 配额 / 审计都挂在 ta 的 email 下. 但 WeChat / 飞书等 IM 平台发过来的消息只
- * 带 openid, 跟员工 email 没天然映射. 之前 (5/26 早上) ClawBot 把所有 WeChat
- * 用户都映射到默认员工身上 — 100 个微信用户共用一个员工的记忆 = P0 隐私违规.
+ * v1 是 read-only "看一眼" 卡 + 折叠区贴了 4 行 CLI 命令. 鸿波 5/26 晚反馈
+ * "这种方案一般人怎么会用". 一般员工不会:
+ *   - 知道 hermes pairing list 是啥
+ *   - 知道 ClawBot 是啥
+ *   - 知道自己的 catfish email 怎么拼
  *
- * 修复后 (5/26 晚 BL-WECHAT-CATFISH-BIND v1):
- *   1. admin 用 `hermes pairing approve wechat <code> --email alice@company.com`
- *      把 openid 显式绑到真员工 → 该 WeChat 用户的消息走真员工身份.
- *   2. 没绑定的 → 走合成身份 <openid>@im.wechat (跟真员工隔离).
+ * v2 把所有 admin 操作都做成 UI 按钮 — 因为 catfish 是单租户员工电脑工具,
+ * Companion 本来只有员工自己能开, 员工给自己审批自己的 IM 接入 = 自己改自己
+ * mac 上的文件, 不需要 admin 权限. 后端 (wechat_binding.rs) 加了 4 个写命令
+ * 直接操 ~/.hermes/platforms/pairing/*.json.
  *
- * 这张卡负责把"已绑定 / 未绑定"看见, 让员工 / admin 一眼知道哪些 WeChat 用户
- * 已经绑了哪个真员工 email. 卡本身是 read-only — 写要走 hermes CLI (因为绑定
- * 是 admin 操作, 不该任何打开 Companion 的人都能改).
+ * # UI 三态
  *
- * # 数据流
+ * 1. 还没有 IM 数据 → 空状态引导 + "去工作台连微信"
+ * 2. 有 pending (等审批) → 突出显示在最上面, 一键 ✅ 同意接入 + 绑到我自己
+ * 3. 已审批列表 → 表格 + 改绑/解绑按钮
  *
- * Tauri command `wechat_binding_status` 读 ~/.hermes/platforms/pairing/<platform>-approved.json,
- * 一次返所有平台的绑定状态. Companion 跑在员工 mac, 读自己的 ~/.hermes 天然合规
- * (中央 0 字节红线只管中央 PG/disk, 不管员工本机).
- *
- * # 故意不做
- *
- * - 不在 UI 里直接改绑定: 绑定 = admin 操作, 走 CLI 留 shell history, 不在 web UI 放按钮.
- * - 不显示 openid 全文以外的 PII: openid 已经是 platform-internal id, user_name 是平台昵称,
- *   都不算隐私扩散.
- * - 不轮询: 绑定改动频率极低 (人肉运维), 用户点"刷新"按钮就够.
+ * 默认勾"绑到我自己 (autofill 当前员工 email)" — 单租户 99% case 是员工给
+ * 自己的微信号绑自己, 不该让人每次都重选.
  */
 
 import * as React from "react";
 import { invoke } from "@tauri-apps/api/core";
+
+import { fetchMe, type MeInfo } from "../../lib/me";
 
 interface BindingEntry {
   platform: string;
@@ -49,29 +44,158 @@ interface BindingStatus {
   pairing_dir_exists: boolean;
 }
 
+interface PendingEntry {
+  platform: string;
+  code: string;
+  user_id: string;
+  user_name: string;
+  created_at: number;
+  age_minutes: number;
+}
+
+function fmtPlatform(p: string): string {
+  switch (p) {
+    case "wechat":
+      return "微信";
+    case "feishu":
+      return "飞书";
+    case "telegram":
+      return "Telegram";
+    case "discord":
+      return "Discord";
+    case "whatsapp":
+      return "WhatsApp";
+    case "slack":
+      return "Slack";
+    default:
+      return p;
+  }
+}
+
+function fmtTime(unixSec: number): string {
+  if (!unixSec || unixSec <= 0) return "—";
+  return new Date(unixSec * 1000).toLocaleString();
+}
+
+function shortenId(id: string): string {
+  if (id.length <= 12) return id;
+  return id.slice(0, 6) + "…" + id.slice(-4);
+}
+
 export default function WeChatBindingCard() {
   const [status, setStatus] = React.useState<BindingStatus | null>(null);
+  const [pending, setPending] = React.useState<PendingEntry[] | null>(null);
+  const [me, setMe] = React.useState<MeInfo | null>(null);
   const [error, setError] = React.useState<string | null>(null);
-  const [loading, setLoading] = React.useState(false);
+  const [busy, setBusy] = React.useState<string | null>(null); // key of row being mutated
+  const [editingEmailFor, setEditingEmailFor] = React.useState<string | null>(null);
+  const [editEmailValue, setEditEmailValue] = React.useState("");
 
   const reload = React.useCallback(async () => {
-    setLoading(true);
     try {
-      const r = await invoke<BindingStatus>("wechat_binding_status");
-      setStatus(r);
+      const [s, p] = await Promise.all([
+        invoke<BindingStatus>("wechat_binding_status"),
+        invoke<PendingEntry[]>("wechat_binding_pending_list"),
+      ]);
+      setStatus(s);
+      setPending(p);
       setError(null);
     } catch (e) {
       setError(String(e));
-    } finally {
-      setLoading(false);
     }
   }, []);
 
   React.useEffect(() => {
     void reload();
+    // 拿一次员工 email 作 autofill
+    fetchMe()
+      .then(setMe)
+      .catch(() => {
+        // 拿不到不致命 — 审批时改邮箱输入框默认空, 员工手填
+      });
   }, [reload]);
 
-  const unboundCount = status ? status.total_approved - status.total_bound : 0;
+  // ========== 操作 handlers ==========
+
+  const handleApprove = async (
+    p: PendingEntry,
+    bindToMe: boolean,
+    customEmail: string,
+  ) => {
+    const key = `pending:${p.platform}:${p.code}`;
+    setBusy(key);
+    setError(null);
+    try {
+      const email = bindToMe ? (me?.email ?? "") : customEmail.trim();
+      await invoke("wechat_binding_approve", {
+        platform: p.platform,
+        code: p.code,
+        catfishEmail: email || null,
+      });
+      await reload();
+    } catch (e) {
+      setError(`审批失败: ${e}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleReject = async (p: PendingEntry) => {
+    const key = `reject:${p.platform}:${p.code}`;
+    setBusy(key);
+    setError(null);
+    try {
+      await invoke("wechat_binding_reject", { platform: p.platform, code: p.code });
+      await reload();
+    } catch (e) {
+      setError(`拒绝失败: ${e}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleSetEmail = async (e: BindingEntry, newEmail: string) => {
+    const key = `setemail:${e.platform}:${e.user_id}`;
+    setBusy(key);
+    setError(null);
+    try {
+      await invoke("wechat_binding_set_email", {
+        platform: e.platform,
+        userId: e.user_id,
+        catfishEmail: newEmail.trim(),
+      });
+      setEditingEmailFor(null);
+      setEditEmailValue("");
+      await reload();
+    } catch (err) {
+      setError(`改绑失败: ${err}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleRevoke = async (e: BindingEntry) => {
+    const ok = window.confirm(
+      `解绑 ${fmtPlatform(e.platform)} 用户 ${e.user_name || shortenId(e.user_id)}?\n\n` +
+        `Ta 下次再发消息会重新出现在"待审批"里, 不是真删数据.`,
+    );
+    if (!ok) return;
+    const key = `revoke:${e.platform}:${e.user_id}`;
+    setBusy(key);
+    setError(null);
+    try {
+      await invoke("wechat_binding_revoke", { platform: e.platform, userId: e.user_id });
+      await reload();
+    } catch (err) {
+      setError(`解绑失败: ${err}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const hasPending = (pending?.length ?? 0) > 0;
+  const hasApproved = (status?.entries.length ?? 0) > 0;
+  const isLoading = status === null && pending === null;
 
   return (
     <div
@@ -92,176 +216,427 @@ export default function WeChatBindingCard() {
           flexWrap: "wrap",
         }}
       >
-        <h3 style={{ margin: 0 }}>💬 IM 平台 ↔ 员工绑定</h3>
+        <h3 style={{ margin: 0 }}>💬 微信 / 飞书 接入</h3>
         <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
-          WeChat / 飞书 等用户 ↔ catfish 真员工 email 映射 · 隔离记忆 / 配额 / 审计
+          别人想跟鲶鱼说话, 在这里审批 · 接入后 ta 跟你共享一个记忆 / 配额池
         </span>
         <button
           type="button"
           onClick={() => void reload()}
-          disabled={loading}
-          style={{
-            marginLeft: "auto",
-            background: "transparent",
-            border: "1px solid var(--catfish-border)",
-            borderRadius: 4,
-            padding: "2px 8px",
-            cursor: loading ? "default" : "pointer",
-            fontSize: 12,
-            opacity: loading ? 0.6 : 1,
-          }}
+          style={btnGhost(false)}
         >
-          {loading ? "…" : "🔄 刷新"}
+          🔄 刷新
         </button>
       </div>
 
       {error && (
-        <div style={{ fontSize: 12, color: "var(--status-err, #c93a3a)", marginBottom: 8 }}>
-          读取失败: {error}
+        <div
+          style={{
+            fontSize: 12,
+            color: "var(--status-err, #c93a3a)",
+            marginBottom: 10,
+            padding: 6,
+            background: "rgba(201, 58, 58, 0.08)",
+            borderRadius: 4,
+          }}
+        >
+          {error}
         </div>
       )}
 
-      {status === null && !error && <div style={{ fontSize: 13 }}>加载中…</div>}
+      {isLoading && <div style={{ fontSize: 13 }}>加载中…</div>}
 
-      {status !== null && !status.pairing_dir_exists && (
+      {/* ========== 状态 1: 空状态引导 ========== */}
+      {!isLoading && !hasPending && !hasApproved && (
         <div style={{ fontSize: 13, color: "var(--catfish-text-muted)" }}>
           <p style={{ margin: 0 }}>
-            还没跑过 hermes pairing 流程 — ~/.hermes/platforms/pairing/ 不存在.
+            <strong>还没人通过 IM 找鲶鱼.</strong>
           </p>
-          <p style={{ margin: "6px 0 0 0", fontSize: 12 }}>
-            想用 IM 平台 (WeChat / 飞书) 接 catfish? 先跑 <code>hermes setup</code> 选平台,
-            ClawBot 把 IM 消息送进 hermes 后, 这里就会出现待审批用户.
+          <p style={{ margin: "6px 0 0 0", lineHeight: 1.7 }}>
+            想用微信 / 飞书跟鲶鱼说话? 流程是:
+          </p>
+          <ol style={{ margin: "4px 0 0 0", paddingLeft: 20, lineHeight: 1.7 }}>
+            <li>
+              在终端跑 <code>hermes setup</code> 选平台 (微信走 ClawBot)
+            </li>
+            <li>
+              在那个 IM 里给绑定的 bot 发一句话 — 比如"你好"
+            </li>
+            <li>这张卡上会出现"待审批"提示, 一键同意就接入了</li>
+          </ol>
+          <p style={{ margin: "10px 0 0 0", fontSize: 11 }}>
+            (技术细节: bot 给每个 IM 用户发个一次性 pairing code, 你在这里批 = 把 code 标
+            approved, ta 下次就能直接用了)
           </p>
         </div>
       )}
 
-      {status !== null && status.pairing_dir_exists && status.entries.length === 0 && (
-        <div style={{ fontSize: 13, color: "var(--catfish-text-muted)" }}>
-          目录在, 但还没有任何已审批用户. 在 IM 上对 bot 发一句话 → 跑{" "}
-          <code>hermes pairing list</code> 看 pending → <code>hermes pairing approve</code>{" "}
-          批准 (可选 <code>--email alice@company.com</code> 直接绑真员工).
-        </div>
-      )}
-
-      {status !== null && status.entries.length > 0 && (
-        <>
+      {/* ========== 状态 2: pending 待审批 (最显眼) ========== */}
+      {hasPending && (
+        <div style={{ marginBottom: hasApproved ? 16 : 0 }}>
           <div
             style={{
               display: "flex",
-              gap: 16,
-              fontSize: 12,
-              color: "var(--catfish-text-muted)",
+              alignItems: "center",
+              gap: 8,
               marginBottom: 8,
-              flexWrap: "wrap",
             }}
           >
-            <span>
-              已审批 <strong>{status.total_approved}</strong> 人
+            <strong style={{ fontSize: 13, color: "var(--status-warn, #c98b00)" }}>
+              🔔 等你审批 ({pending!.length})
+            </strong>
+            <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
+              点同意 = 这个人下次发消息能直通鲶鱼; 点拒绝 = 静悄悄不处理
             </span>
-            <span>
-              已绑真员工 <strong style={{ color: "var(--status-ok, #2a8b3f)" }}>{status.total_bound}</strong>
-            </span>
-            {unboundCount > 0 && (
-              <span>
-                走合成身份{" "}
-                <strong style={{ color: "var(--status-warn, #c98b00)" }}>{unboundCount}</strong>
-                <span style={{ marginLeft: 4, opacity: 0.8 }}>
-                  (走 &lt;openid&gt;@im.&lt;platform&gt;, 跟真员工隔离)
-                </span>
-              </span>
-            )}
           </div>
+          {pending!.map((p) => (
+            <PendingRow
+              key={`${p.platform}:${p.code}`}
+              p={p}
+              myEmail={me?.email ?? ""}
+              busy={busy}
+              onApprove={handleApprove}
+              onReject={handleReject}
+            />
+          ))}
+        </div>
+      )}
 
+      {/* ========== 状态 3: 已审批列表 ========== */}
+      {hasApproved && (
+        <div>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              marginBottom: 8,
+              fontSize: 13,
+            }}
+          >
+            <strong>🔗 已接入 ({status!.entries.length})</strong>
+            <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
+              {status!.total_bound} 个绑了真员工 ·{" "}
+              {status!.total_approved - status!.total_bound} 个走合成身份 (跟真员工隔离)
+            </span>
+          </div>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead>
               <tr style={{ textAlign: "left", color: "var(--catfish-text-muted)" }}>
-                <th style={{ padding: "4px 8px 4px 0", fontWeight: 400 }}>平台</th>
-                <th style={{ padding: "4px 8px", fontWeight: 400 }}>平台用户 ID</th>
-                <th style={{ padding: "4px 8px", fontWeight: 400 }}>昵称</th>
-                <th style={{ padding: "4px 8px", fontWeight: 400 }}>绑定的真员工 email</th>
-                <th style={{ padding: "4px 0", fontWeight: 400 }}>审批时间</th>
+                <th style={th()}>平台</th>
+                <th style={th()}>谁</th>
+                <th style={th()}>绑到的员工身份</th>
+                <th style={th()}>接入时间</th>
+                <th style={{ ...th(), textAlign: "right" }}>操作</th>
               </tr>
             </thead>
             <tbody>
-              {status.entries.map((e) => (
-                <tr
-                  key={`${e.platform}:${e.user_id}`}
-                  style={{ borderTop: "1px solid var(--catfish-border)" }}
-                >
-                  <td style={{ padding: "6px 8px 6px 0", fontFamily: "monospace" }}>{e.platform}</td>
-                  <td
-                    style={{
-                      padding: "6px 8px",
-                      fontFamily: "monospace",
-                      maxWidth: 240,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                    title={e.user_id}
-                  >
-                    {e.user_id}
-                  </td>
-                  <td style={{ padding: "6px 8px", color: "var(--catfish-text-muted)" }}>
-                    {e.user_name || "—"}
-                  </td>
-                  <td style={{ padding: "6px 8px" }}>
-                    {e.catfish_email ? (
-                      <span style={{ color: "var(--status-ok, #2a8b3f)" }}>
-                        ✓ {e.catfish_email}
-                      </span>
-                    ) : (
-                      <span style={{ color: "var(--status-warn, #c98b00)" }}>
-                        未绑定 · 走 <code style={{ fontSize: 11 }}>{e.user_id}@im.{e.platform}</code>
-                      </span>
-                    )}
-                  </td>
-                  <td style={{ padding: "6px 0", color: "var(--catfish-text-muted)" }}>
-                    {fmtTime(e.approved_at)}
-                  </td>
-                </tr>
-              ))}
+              {status!.entries.map((e) => {
+                const rowKey = `${e.platform}:${e.user_id}`;
+                const setEmailBusy = busy === `setemail:${e.platform}:${e.user_id}`;
+                const revokeBusy = busy === `revoke:${e.platform}:${e.user_id}`;
+                const isEditing = editingEmailFor === rowKey;
+                return (
+                  <tr key={rowKey} style={{ borderTop: "1px solid var(--catfish-border)" }}>
+                    <td style={td()}>{fmtPlatform(e.platform)}</td>
+                    <td style={td()}>
+                      <div style={{ fontWeight: 500 }}>{e.user_name || "(没昵称)"}</div>
+                      <div
+                        style={{
+                          fontFamily: "monospace",
+                          fontSize: 10,
+                          color: "var(--catfish-text-muted)",
+                        }}
+                        title={e.user_id}
+                      >
+                        {shortenId(e.user_id)}
+                      </div>
+                    </td>
+                    <td style={td()}>
+                      {isEditing ? (
+                        <div style={{ display: "flex", gap: 4 }}>
+                          <input
+                            type="email"
+                            value={editEmailValue}
+                            onChange={(ev) => setEditEmailValue(ev.target.value)}
+                            placeholder="alice@company.com"
+                            style={{
+                              flex: 1,
+                              padding: "2px 6px",
+                              fontSize: 12,
+                              background: "var(--catfish-bg-base, #1a1d23)",
+                              border: "1px solid var(--catfish-border)",
+                              color: "inherit",
+                              borderRadius: 3,
+                            }}
+                            autoFocus
+                          />
+                          <button
+                            type="button"
+                            onClick={() => void handleSetEmail(e, editEmailValue)}
+                            disabled={setEmailBusy || !editEmailValue.trim()}
+                            style={btnPrimary(setEmailBusy)}
+                          >
+                            ✓
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingEmailFor(null);
+                              setEditEmailValue("");
+                            }}
+                            style={btnGhost(false)}
+                          >
+                            取消
+                          </button>
+                        </div>
+                      ) : e.catfish_email ? (
+                        <span style={{ color: "var(--status-ok, #2a8b3f)" }}>
+                          ✓ {e.catfish_email}
+                        </span>
+                      ) : (
+                        <span style={{ color: "var(--status-warn, #c98b00)" }}>
+                          ⚠ 未绑 · 走合成{" "}
+                          <code style={{ fontSize: 10 }}>
+                            {e.user_id}@im.{e.platform}
+                          </code>
+                        </span>
+                      )}
+                    </td>
+                    <td style={{ ...td(), color: "var(--catfish-text-muted)" }}>
+                      {fmtTime(e.approved_at)}
+                    </td>
+                    <td style={{ ...td(), textAlign: "right", whiteSpace: "nowrap" }}>
+                      {!isEditing && (
+                        <>
+                          {!e.catfish_email && me?.email && (
+                            <button
+                              type="button"
+                              onClick={() => void handleSetEmail(e, me.email)}
+                              disabled={setEmailBusy}
+                              title={`绑到我自己 (${me.email})`}
+                              style={btnPrimary(setEmailBusy)}
+                            >
+                              绑到我
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingEmailFor(rowKey);
+                              setEditEmailValue(e.catfish_email ?? me?.email ?? "");
+                            }}
+                            style={{ ...btnGhost(false), marginLeft: 4 }}
+                          >
+                            改绑
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleRevoke(e)}
+                            disabled={revokeBusy}
+                            style={{
+                              ...btnGhost(revokeBusy),
+                              marginLeft: 4,
+                              color: "var(--status-err, #c93a3a)",
+                            }}
+                          >
+                            {revokeBusy ? "…" : "解绑"}
+                          </button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
-        </>
+        </div>
       )}
 
-      <details style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 12 }}>
-        <summary style={{ cursor: "pointer" }}>怎么绑定 / 解绑?</summary>
-        <pre
-          style={{
-            fontSize: 11,
-            background: "var(--catfish-bg-base, #0f1216)",
-            padding: 8,
-            borderRadius: 4,
-            margin: "6px 0 0 0",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-all",
-          }}
-        >
-{`# 1. 看待审批
-hermes pairing list
-
-# 2. 审批 + 直接绑真员工 (推荐 — 一步到位)
-hermes pairing approve wechat ABCD1234 --email alice@company.com
-
-# 3. 给已审批用户后补绑定 / 改绑
-hermes pairing bind-email wechat <openid> alice@company.com
-
-# 4. 解绑 (整个移出 approved 表)
-hermes pairing revoke wechat <openid>
-`}
-        </pre>
-        <p style={{ margin: "6px 0 0 0" }}>
-          绑定 = admin 操作, 故意不放 UI 按钮 — 走 CLI 留 shell history 便于审计.
-        </p>
-      </details>
+      <p
+        style={{
+          fontSize: 10,
+          color: "var(--catfish-text-muted)",
+          marginTop: 12,
+          marginBottom: 0,
+        }}
+      >
+        绑定数据存 <code>~/.hermes/platforms/pairing/</code>, 100% 本机, 不上传中央.
+        终端跑 <code>hermes pairing list</code> 也能看, 跟这里同一份数据.
+      </p>
     </div>
   );
 }
 
-function fmtTime(unixSec: number): string {
-  if (!unixSec || unixSec <= 0) return "—";
-  const d = new Date(unixSec * 1000);
-  return d.toLocaleString();
+// ============== sub-components ==============
+
+interface PendingRowProps {
+  p: PendingEntry;
+  myEmail: string;
+  busy: string | null;
+  onApprove: (p: PendingEntry, bindToMe: boolean, customEmail: string) => Promise<void>;
+  onReject: (p: PendingEntry) => Promise<void>;
+}
+
+function PendingRow({ p, myEmail, busy, onApprove, onReject }: PendingRowProps) {
+  const [bindToMe, setBindToMe] = React.useState(true);
+  const [customEmail, setCustomEmail] = React.useState("");
+  const approveKey = `pending:${p.platform}:${p.code}`;
+  const rejectKey = `reject:${p.platform}:${p.code}`;
+  const isApproving = busy === approveKey;
+  const isRejecting = busy === rejectKey;
+
+  return (
+    <div
+      style={{
+        border: "1px solid var(--status-warn, #c98b00)",
+        borderRadius: 6,
+        padding: 10,
+        marginBottom: 6,
+        background: "rgba(201, 139, 0, 0.06)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          gap: 8,
+          flexWrap: "wrap",
+          marginBottom: 6,
+        }}
+      >
+        <strong style={{ fontSize: 13 }}>
+          {fmtPlatform(p.platform)} · {p.user_name || "(没昵称)"}
+        </strong>
+        <span
+          style={{
+            fontSize: 10,
+            fontFamily: "monospace",
+            color: "var(--catfish-text-muted)",
+          }}
+          title={p.user_id}
+        >
+          {shortenId(p.user_id)}
+        </span>
+        <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
+          {p.age_minutes < 1 ? "刚刚" : `${p.age_minutes} 分钟前`}发起接入请求
+        </span>
+      </div>
+
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          alignItems: "center",
+          flexWrap: "wrap",
+          fontSize: 12,
+          marginBottom: 6,
+        }}
+      >
+        <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={bindToMe}
+            onChange={(e) => setBindToMe(e.target.checked)}
+            disabled={!myEmail}
+          />
+          <span>
+            绑到我自己{" "}
+            {myEmail ? (
+              <code style={{ fontSize: 11 }}>({myEmail})</code>
+            ) : (
+              <span style={{ color: "var(--status-warn, #c98b00)" }}>
+                — 还没拿到你的 email, 请在下面手填
+              </span>
+            )}
+          </span>
+        </label>
+        {!bindToMe && (
+          <input
+            type="email"
+            placeholder="或填别人的 email (代审批)"
+            value={customEmail}
+            onChange={(e) => setCustomEmail(e.target.value)}
+            style={{
+              flex: 1,
+              minWidth: 200,
+              padding: "2px 6px",
+              fontSize: 12,
+              background: "var(--catfish-bg-base, #1a1d23)",
+              border: "1px solid var(--catfish-border)",
+              color: "inherit",
+              borderRadius: 3,
+            }}
+          />
+        )}
+      </div>
+
+      <div style={{ display: "flex", gap: 6 }}>
+        <button
+          type="button"
+          onClick={() => void onApprove(p, bindToMe, customEmail)}
+          disabled={
+            isApproving ||
+            isRejecting ||
+            (bindToMe && !myEmail) ||
+            (!bindToMe && !customEmail.trim())
+          }
+          style={{
+            ...btnPrimary(isApproving),
+            padding: "4px 12px",
+          }}
+        >
+          {isApproving ? "处理中…" : "✅ 同意接入"}
+        </button>
+        <button
+          type="button"
+          onClick={() => void onReject(p)}
+          disabled={isApproving || isRejecting}
+          style={{
+            ...btnGhost(isRejecting),
+            padding: "4px 12px",
+            color: "var(--status-err, #c93a3a)",
+          }}
+        >
+          {isRejecting ? "…" : "❌ 拒绝"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ============== styles ==============
+
+function th(): React.CSSProperties {
+  return { padding: "4px 8px 4px 0", fontWeight: 400 };
+}
+
+function td(): React.CSSProperties {
+  return { padding: "8px 8px 8px 0", verticalAlign: "top" };
+}
+
+function btnGhost(disabled: boolean): React.CSSProperties {
+  return {
+    background: "transparent",
+    border: "1px solid var(--catfish-border)",
+    borderRadius: 4,
+    padding: "2px 8px",
+    cursor: disabled ? "default" : "pointer",
+    fontSize: 12,
+    opacity: disabled ? 0.6 : 1,
+    color: "inherit",
+  };
+}
+
+function btnPrimary(busy: boolean): React.CSSProperties {
+  return {
+    background: "var(--catfish-accent, #2a7fbb)",
+    border: "1px solid var(--catfish-accent, #2a7fbb)",
+    borderRadius: 4,
+    padding: "2px 8px",
+    cursor: busy ? "default" : "pointer",
+    fontSize: 12,
+    color: "#fff",
+    opacity: busy ? 0.6 : 1,
+  };
 }

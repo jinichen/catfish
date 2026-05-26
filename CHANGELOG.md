@@ -171,6 +171,35 @@ launchd `~/Library/LaunchAgents/ai.hermes.gateway.plist` 加 `CATFISH_DEFAULT_US
 
 **隐私边界**: Companion 读自家 `~/.hermes` 天然合规 (中央 0 字节红线只管中央 PG/disk). 绑定关系不进中央 — 中央只看到最终的 X-Catfish-User 字符串, 不知道它怎么来的.
 
+### 5/26 晚 v2 追加 · WeChatBindingCard 真 UI 化
+
+**v1 用户反馈**: "这种方案一般人怎么会用？" — read-only 卡 + 4 行 CLI 文档 = 让员工自己跑 hermes 命令 = 没做 UI. 鸿波点破后立即重做.
+
+**安全模型反思**: 之前刻意 read-only 的逻辑是"绑定 = admin 操作", 这套不上 catfish 场景 — 这是**单租户员工电脑工具**, Companion 只有员工自己能开, 员工给自己批自己的 IM 接入 = 自己改自己 mac 文件, 不存在 admin 越权问题. UI 能改 = 跟现实安全级别对齐.
+
+**v2 改动**:
+
+1. **`edge/companion-app/src-tauri/src/commands/wechat_binding.rs`** 加 5 个写命令:
+   - `wechat_binding_pending_list()` — 列待审批 (跳过期)
+   - `wechat_binding_approve(platform, code, catfish_email?)` — 审批 + 可选绑 email
+   - `wechat_binding_set_email(...)` — 改绑
+   - `wechat_binding_revoke(...)` — 解绑已审批用户
+   - `wechat_binding_reject(...)` — 拒绝 pending (不进 approved)
+   - Rust 重实现 `_EMAIL_SHAPE_RE` + `_normalize_email` 与 Python PairingStore 对齐
+   - 文件 IO 走 tmp + atomic rename + chmod 0600 (跟 Python `_secure_write` 同语义)
+   - 不复制 lockout / rate-limit (那俩防 IM 远端用户 brute force, 员工自己点不需要)
+
+2. **`edge/companion-app/src/tabs/Dashboard/WeChatBindingCard.tsx`** 完全重写:
+   - 三态: 空状态引导 / pending 警示卡 (默认勾"绑到我自己" + autofill 当前员工 email) / 已审批表格 (改绑 / 绑到我 / 解绑 按钮)
+   - 平台名中文化 (wechat → 微信, feishu → 飞书 ...)
+   - 长 openid 截短显示 (`o12345…abcd`) + hover 看全
+   - 改邮箱走 inline 输入框, 不弹 dialog
+   - 解绑走 `window.confirm` 二次确认
+
+**验证**: tsc --noEmit 0 error / hermes pairing 29 个原测试仍全过 / Rust 后端 schema 跟 Python PairingStore 用同一份 JSON 文件 — Companion 改了 hermes CLI 立刻看到一致状态.
+
+**反思**: 5/26 晚连续两个迭代都是 "做完发现不可用". v1 安全模型套错场景 (单租户 ≠ 多租户), v2 才真做完. 教训: "管理员操作 UI 该不该放" 跟 "产品是单租户还是多租户" 强相关, 不该硬套通用安全准则.
+
 ---
 
 ## 2026-05-25（周一）补 · BL-RECMODE-MIGRATE-TO-EDGE + 隐私自查全套
