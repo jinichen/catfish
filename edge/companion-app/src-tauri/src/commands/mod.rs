@@ -54,3 +54,4 @@ pub mod tool_bridge;
 // BL-VOICE2 (5/10): Piper local TTS, 跟 speech.rs (whisper STT) 对称
 pub mod tts;
 pub mod types;
+pub mod wechat_binding;  // BL-WECHAT-CATFISH-BIND v1 (5/26): WeChat ↔ catfish 员工绑定状态

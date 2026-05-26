@@ -93,6 +93,10 @@ import PrivacyCard from "./PrivacyCard";
 // BL-RECMODE-DASHBOARD-UI (#75, 5/25): "我的录屏" 卡 — 跟 PrivacyCard 同 section
 // (本机数据员工主权). 配套 #74 backend 撤了 cleanup daemon, 让员工自己列/删录屏.
 import RecordingsCard from "./RecordingsCard";
+// BL-WECHAT-CATFISH-BIND v1 (5/26 鸿波): WeChat ↔ catfish 员工 email 绑定状态卡.
+// 跟隐私同 section — IM 平台用户 ↔ 真员工 隔离也是隐私红线 (防 100 个 WeChat
+// 用户记忆串到一个虚拟员工身上).
+import WeChatBindingCard from "./WeChatBindingCard";
 
 export default function DashboardTab() {
   // BL-ARCH2 (5/10): role 不再决定 Dashboard 卡片, manager/admin 也走 web 看管理.
@@ -145,10 +149,13 @@ export default function DashboardTab() {
       <CollapsibleSection
         id="privacy"
         title="🔒 隐私 / 本机数据"
-        count={2}
+        count={3}
       >
         <PrivacyCard />
         <RecordingsCard />
+        {/* BL-WECHAT-CATFISH-BIND v1 (5/26 鸿波): IM 平台用户 ↔ 真员工 email 绑定状态.
+            放隐私 section: 绑错 = 不同员工记忆串话 = 跟"本机数据归属"同级别隐私问题. */}
+        <WeChatBindingCard />
       </CollapsibleSection>
 
       {/* 第三组: 鲶鱼对你的认识 — 透明性 (默认开, 员工要能看清楚被学了什么)

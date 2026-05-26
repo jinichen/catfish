@@ -137,6 +137,40 @@ launchd `~/Library/LaunchAgents/ai.hermes.gateway.plist` 加 `CATFISH_DEFAULT_US
 **客户产出**:
 - `catfish-数字员工-方案建议书.docx` ~17 页通用客户模板
 
+### 5/26 晚追加 · BL-WECHAT-CATFISH-BIND v1
+
+**触发**: 鸿波 audit "鲶鱼界面能不能设置微信绑定 hermes". 5/26 早改完 ClawBot multi-tenant (WeChat openid 当 effective user) 后, 默认是合成身份 `<openid>@im.wechat` — 跟真员工隔离防串话, 但也意味着用 IM 接 catfish 的人没有"我就是 alice@company.com"的身份继承. v1 给 admin 一个显式绑定钩子.
+
+**改动跨 hermes + companion**:
+
+1. **`~/.hermes/hermes-agent/gateway/pairing.py`** (仓外 monkey-patch)
+   - `_normalize_email()` helper (与 catfish-gateway `_EMAIL_SHAPE_RE` 同步)
+   - `_approve_user()` 加 `catfish_email` 可选参数
+   - `approve_code()` 加 `catfish_email` 参数, 返回值加 `catfish_email` 字段
+   - 新增 `get_email(platform, user_id)` — run_agent 决定 X-Catfish-User 时调
+   - 新增 `set_email(platform, user_id, email)` — 后补绑定 / 改绑
+   - 入参非法 email shape 静默丢 (CLI 层先校验; 同 schema 防破坏)
+
+2. **`~/.hermes/hermes-agent/hermes_cli/main.py + pairing.py`**
+   - `hermes pairing approve <platform> <code> --email alice@company.com` 一步审批+绑
+   - `hermes pairing bind-email <platform> <user_id> <email>` 后补绑定
+   - `hermes pairing list` 输出加 "Catfish Email" 列
+   - email 非法 shape → 审批 abort + 打错误信息 (主动失败, 不静默)
+
+3. **`~/.hermes/hermes-agent/run_agent.py`** (BL-CATFISH-USER-FOR-PLATFORM-MSG v3)
+   - X-Catfish-User 解析顺序: pairing.get_email() → email-shaped user_id → 合成 `<sanitized_uid>@im.<platform>` → env CATFISH_DEFAULT_USER
+   - 合成路径走 regex sanitize, 防奇怪字符进 email shape regex 卡 catfish-gateway 400
+   - pairing 模块缺失 / IO 错 → 静默走 fallback, 不让"绑定表读不到"卡 LLM 调用
+
+4. **Companion** (`edge/companion-app/`)
+   - 新 Tauri 命令 `wechat_binding_status` (src-tauri/src/commands/wechat_binding.rs) — 读 `~/.hermes/platforms/pairing/<platform>-approved.json` 返 entries + 统计
+   - 新卡 `WeChatBindingCard.tsx` 落 🔒 隐私 section — 列已审批 IM 用户 + 真员工 email 绑定状态. 故意 read-only, 写绑定走 CLI (留 shell history 审计)
+   - DashboardTab.tsx 注册卡; count 2→3
+
+**测试**: pairing.py 29 个原测试全过 + 新加 _normalize_email / set_email / approve_code(email) / 非法 email 静默丢 / revoke 联动 共 10+ 个手工 case 全过.
+
+**隐私边界**: Companion 读自家 `~/.hermes` 天然合规 (中央 0 字节红线只管中央 PG/disk). 绑定关系不进中央 — 中央只看到最终的 X-Catfish-User 字符串, 不知道它怎么来的.
+
 ---
 
 ## 2026-05-25（周一）补 · BL-RECMODE-MIGRATE-TO-EDGE + 隐私自查全套

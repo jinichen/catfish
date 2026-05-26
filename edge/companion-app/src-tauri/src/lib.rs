@@ -408,6 +408,8 @@ pub fn run() {
             commands::journal::journal_add_todo,
             // BL-PROACTIVE-DECOUPLE (5/26): journal_tail + last_model 一次拿, 给 /api/proactive/* header 透传
             commands::proactive::proactive_context,
+            // BL-WECHAT-CATFISH-BIND v1 (5/26): WeChat openid ↔ catfish 员工 email 绑定表读取
+            commands::wechat_binding::wechat_binding_status,
             // BL-IDENTITY-INJECT-DECOUPLE (5/26): SOUL/USER/memories 6 字段, 给 /v1/chat/completions body 透传
             commands::identity_bundle::identity_bundle,
             // BL-BRIEFING-GOAL-INPUT (5/20): /goal UI 路径 — BriefingCard 输入框
