@@ -4,16 +4,30 @@
     "复杂度集中在 gateway 一层，客户端零负担"
 
 读取顺序:
-    1. ~/.hermes/SOUL.md             鲶鱼人格定义（员工已通过 catfish/edge/identity 装好）
-    2. ~/.hermes/USER.md             用户级长期 memory (Hermes 自带写入)
-    3. ~/.hermes/memories/*.md       Hermes 写入的 per-topic memory（如果有）
+    1. ~/.hermes/SOUL.md             鲶鱼人格定义（员工已通过 catfish/edge/identity 装好）  # noqa: BOUNDARY
+    2. ~/.hermes/USER.md             用户级长期 memory (Hermes 自带写入)                       # noqa: BOUNDARY
+    3. ~/.hermes/memories/*.md       Hermes 写入的 per-topic memory（如果有）                  # noqa: BOUNDARY
 
 注入策略:
     - 客户端发的 messages 已含 system → **不动**（尊重 Hermes 等已自注入的 client）
     - 没 system → 把 SOUL + memory 拼成一个 system message 插到首位
     - HTTP header `X-Catfish-Skip-Identity: true` → 强制不注入（客户端 opt-out）
 
-文件 IO 用 mtime 做缓存，SOUL.md 改了下次请求自动用新版（不需要重启 gateway）。
+# 5/26 P0 BL-IDENTITY-INJECT-DECOUPLE: Companion prefetch + bundle 透传
+
+老逻辑: gateway 自己 Path.home() 读员工本机 ~/.hermes/. SaaS 后 gateway 在客户  # noqa: BOUNDARY
+机房 / 我们 cloud, 读不到员工 mac, 鲶鱼退化成 ChatGPT (无人格 / 无记忆).
+
+新逻辑: 接受可选的 `bundle` 参数 (Companion 在员工 mac 读好打包传过来):
+  - build_identity_content(tools, bundle=None): bundle 是 dict, 含
+    {soul, soul_customer, soul_browser, soul_execute_code, user_memory,
+     memory_dir} 6 个字段, 各对应一个原文件. 有 bundle 用 bundle, 没就 fs 兜底
+  - inject_identity_if_needed(..., bundle=None) 同上透传
+  - app.py 在 /v1/chat/completions 从 body 提取 `_catfish_identity_bundle` 字段,
+    pop 后传过来 (不 forward 给 upstream LLM)
+
+文件 IO 用 mtime 做缓存 (用于 dev 兜底), SOUL.md 改了下次请求自动用新版.
+Q3 SaaS 时 fs 兜底永远走不到 (员工本机文件路径不存在), 唯一数据源是 bundle.
 """
 
 from __future__ import annotations
@@ -30,7 +44,7 @@ def _hermes_home() -> Path:
     """允许 env 覆盖（用于测试 / 容器化部署 / 多账号）。"""
     if env := os.environ.get("HERMES_HOME"):
         return Path(env).expanduser()
-    return Path.home() / ".hermes"
+    return Path.home() / ".hermes"  # noqa: BOUNDARY (Q3 SaaS 后 fs 兜底 unreachable, bundle 唯一数据源)
 
 
 # ─────────────────────────────────────────────
@@ -82,7 +96,7 @@ def _read_soul() -> str:
 
 
 def _read_soul_customer() -> str:
-    """5/13 拆分: 读客户特定 SOUL (~/.hermes/SOUL_<CUSTOMER>.md).
+    """5/13 拆分: 读客户特定 SOUL (~/.hermes/SOUL_<CUSTOMER>.md).  # noqa: BOUNDARY
 
     `CATFISH_CUSTOMER` env 决定挑哪份 (默认 'ffcs' 兼容现有部署).
     业务环境特定段 (内网域名 / 系统简称 / 公文称谓) 应该写在这, 不污染通用 SOUL.
@@ -140,7 +154,7 @@ def _detect_scenarios(tools: list[dict[str, Any]] | None) -> list[tuple[str, str
 
 
 def _read_scenario(filename: str) -> str:
-    """读 ~/.hermes/<filename>, 失败返空 (静默)."""
+    """读 ~/.hermes/<filename>, 失败返空 (静默).  # noqa: BOUNDARY"""
     return _cache.read(_hermes_home() / filename)
 
 
@@ -149,7 +163,7 @@ def _read_user_memory() -> str:
 
 
 def _read_memory_dir() -> str:
-    """读 ~/.hermes/memories/ 下所有 .md 文件,按文件名排序拼接。"""
+    """读 ~/.hermes/memories/ 下所有 .md 文件,按文件名排序拼接。  # noqa: BOUNDARY"""
     mem_dir = _hermes_home() / "memories"
     if not mem_dir.is_dir():
         return ""
@@ -161,7 +175,10 @@ def _read_memory_dir() -> str:
     return "\n\n".join(parts)
 
 
-def build_identity_content(tools: list[dict[str, Any]] | None = None) -> str:
+def build_identity_content(
+    tools: list[dict[str, Any]] | None = None,
+    bundle: dict[str, Any] | None = None,
+) -> str:
     """读 SOUL + 按 tools 决定的场景段 + USER memory + memories/, 拼成单个 system
     message 内容字符串。
 
@@ -169,32 +186,52 @@ def build_identity_content(tools: list[dict[str, Any]] | None = None) -> str:
     要不要注入 SOUL_BROWSER.md / SOUL_EXECUTE_CODE.md 等场景段. None / 空 → 不注入
     场景段 (简单 chat 不调工具时省 token).
 
+    bundle (5/26 BL-IDENTITY-INJECT-DECOUPLE): Companion 在员工 mac 读好打包传的
+    身份内容. 6 字段 dict:
+      {
+        "soul":              "~/.hermes/SOUL.md 内容",                 # noqa: BOUNDARY
+        "soul_customer":     "~/.hermes/SOUL_<CUST>.md 内容",          # noqa: BOUNDARY
+        "soul_browser":      "~/.hermes/SOUL_BROWSER.md 内容",         # noqa: BOUNDARY
+        "soul_execute_code": "~/.hermes/SOUL_EXECUTE_CODE.md 内容",    # noqa: BOUNDARY
+        "user_memory":       "~/.hermes/USER.md 内容",                 # noqa: BOUNDARY
+        "memory_dir":        "concat 拼好的 ~/.hermes/memories/*.md",  # noqa: BOUNDARY
+      }
+    各字段缺 / 空 → 该段不注入. 有 bundle 时**不读 fs**, 走纯 bundle 内容.
+    bundle=None → fs 兜底 (向后兼容老 Companion + dev 模式).
+
     返回空字符串说明无任何身份内容（员工还没装 SOUL.md / Hermes 还没写过 memory）。
     """
     parts: list[str] = []
 
-    soul = _read_soul().strip()
+    # SOUL — bundle 优先, 否则 fs
+    soul = (bundle.get("soul", "") if bundle else _read_soul()).strip()
     if soul:
         parts.append(f"# Identity (SOUL)\n\n{soul}")
 
-    # 5/13 拆分: 客户特定段紧跟 CORE SOUL, 让 LLM 看到 "通用 + 客户" 一气呵成
-    soul_cust = _read_soul_customer().strip()
+    # 5/13 拆分: 客户特定段紧跟 CORE SOUL
+    soul_cust = (bundle.get("soul_customer", "") if bundle else _read_soul_customer()).strip()
     if soul_cust:
         import os  # noqa: PLC0415
         cust_label = (os.environ.get("CATFISH_CUSTOMER") or "ffcs").upper()
         parts.append(f"# Identity (SOUL_{cust_label} — 客户业务环境)\n\n{soul_cust}")
 
     # BL-SOUL-SCENARIO P2 (5/13): 按 tool 候选注入场景段
+    # bundle 模式下 Companion 传所有 scenario 内容, gateway 按命中的 SCENARIO_RULES 挑
     for label, filename in _detect_scenarios(tools):
-        content = _read_scenario(filename).strip()
+        if bundle is not None:
+            # filename 形如 'SOUL_BROWSER.md' → bundle key 'soul_browser'
+            bundle_key = filename.lower().removesuffix(".md")
+            content = (bundle.get(bundle_key, "") or "").strip()
+        else:
+            content = _read_scenario(filename).strip()
         if content:
             parts.append(f"# Identity (SOUL_{label} — 场景纪律)\n\n{content}")
 
     memory_blocks: list[str] = []
-    user_mem = _read_user_memory().strip()
+    user_mem = (bundle.get("user_memory", "") if bundle else _read_user_memory()).strip()
     if user_mem:
         memory_blocks.append(user_mem)
-    dir_mem = _read_memory_dir().strip()
+    dir_mem = (bundle.get("memory_dir", "") if bundle else _read_memory_dir()).strip()
     if dir_mem:
         memory_blocks.append(dir_mem)
 
@@ -221,6 +258,7 @@ def inject_identity_if_needed(
     agent_name: str = "",
     agent_personality: str = "",
     tools: list[dict[str, Any]] | None = None,
+    bundle: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """如果 messages 里没 system message 且 skip=False, 在前面插 SOUL+memory 作为 system。
 
@@ -234,6 +272,11 @@ def inject_identity_if_needed(
         员工自定义"小鲶"叫啥 + 人设. 默认空 = 用 SOUL 默认 (小鲶 + 温柔同事).
         非空时在 SOUL 前插 personalization preamble, 优先级高于 SOUL 默认人格.
         头通过 X-Catfish-Agent-Name / X-Catfish-Agent-Personality 由 Companion 传.
+
+    bundle (5/26 BL-IDENTITY-INJECT-DECOUPLE):
+        Companion 端读员工本机打包好的 6 个 identity 文件内容. None → gateway
+        fs 兜底 (老 Companion / dev). 有 bundle → 走 bundle 内容, gateway 不读 fs.
+        SaaS 化前 dev 默认 fs, SaaS 化后必须 Companion 传, 否则身份注入失效.
     """
     if skip:
         return messages or []
@@ -242,7 +285,7 @@ def inject_identity_if_needed(
         # 客户端有自己的 system prompt, 尊重它的意图
         return messages
 
-    content = build_identity_content(tools=tools)
+    content = build_identity_content(tools=tools, bundle=bundle)
     if not content:
         # 员工还没装 SOUL.md / 没 memory, 静默跳过
         return messages or []

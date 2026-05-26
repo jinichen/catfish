@@ -2550,6 +2550,13 @@ async def chat_completions(
         skip = True
         logger.info("BL-LEAN-CHAT: service token (sub=%s) auto-skip identity", user.sub)
     agent_name, agent_personality = header_agent_prefs(request.headers)
+    # BL-IDENTITY-INJECT-DECOUPLE (5/26): Companion 在员工 mac 读好 SOUL/USER/memories,
+    # body 里塞 _catfish_identity_bundle 字段传过来. pop 后不再 forward 给 upstream LLM
+    # (这是 gateway 内部消费的字段, 不该出现在 OpenAI-compat 请求里).
+    # bundle 缺 → fs 兜底 (向后兼容 dev / 老 Companion). SaaS 后 fs 兜底永远命中空.
+    identity_bundle = body.pop("_catfish_identity_bundle", None)
+    if identity_bundle is not None and not isinstance(identity_bundle, dict):
+        identity_bundle = None  # 防御: 客户端格式错就当没传
     body["messages"] = inject_identity_if_needed(
         body.get("messages", []),
         skip=skip,
@@ -2558,6 +2565,7 @@ async def chat_completions(
         # BL-SOUL-SCENARIO P2 (5/13): 透传 tools 让 inject 按 tool 候选注入
         # SOUL_BROWSER.md / SOUL_EXECUTE_CODE.md 等场景段, 不再永远全量灌.
         tools=body.get("tools"),
+        bundle=identity_bundle,
     )
 
     # ────────────────────────────────────────────────────────────────────

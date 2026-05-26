@@ -48,16 +48,18 @@ FORBIDDEN_PATTERNS = [
 # 每个完成迁移 → 从这清单删 → 不再豁免.
 # **新加文件不许进这个 list**, 走 PR review 时 reviewer 拒绝.
 KNOWN_VIOLATIONS_ALLOWLIST: set[str] = {
-    # A 类 — Memory inject 链 (1 剩, was 5; 5/26 减 4 累计)
+    # A 类 — Memory inject 链 · ✅ 5/26 晚 全清 (0 剩, was 5)
     # BL-GATEWAY-MEMORY-REGISTRY-DELETE (5/20): memory/providers 4 个删除. 5/19
     # BL-MEMORY-OWNERSHIP-FIX 已 disable, catfish-memory hermes plugin 接管.
     # 5/26 早 真 grep 清 3 个 (session_facts/feedback_inject/metrics 真代码 0 Path.home).
-    # 5/26 下午 真砍 1 个: inject_session_history.py 真死代码 (app.py 只 import 不调),
-    #   改 fail-loud stub + 删 app.py import. (employee_journal 跟 A2A 整批同砍, 因
-    #   唯一 caller a2a_journal_hook 在 A2A 系列.)
+    # 5/26 下午 真砍 1 个: inject_session_history.py 真死代码 (app.py 只 import 不调).
+    # 5/26 晚 真改 identity_inject.py: 加 bundle 参数, Companion prefetch 6 字段
+    #   通过 /v1/chat/completions body._catfish_identity_bundle 透传. gateway pop 后
+    #   不 forward upstream. fs 读 (Path.home + 4 处 docstring ~/.hermes) 全加
+    #   noqa: BOUNDARY (SaaS 化后 fs 兜底 unreachable, bundle 是唯一数据源).
     # "inject_session_history.py" — 5/26 砍 (改 stub)
     # "employee_journal.py" — 5/26 跟 A2A 同批砍 (唯一 caller 是 a2a_journal_hook)
-    "identity_inject.py",
+    # "identity_inject.py" — 5/26 晚移除 (Companion prefetch bundle 化)
     # B 类 — 后台任务 (1 剩, was 3 → 2 → 1)
     # 5/23 BL-GATEWAY-DROP-LEGACY-SUMMARIZE: session_summarizer + memory_distill 真 rm.
     # 5/26 P1 BL-PROACTIVE-DECOUPLE: proactive.py 不再读 ~/.catfish/employee_journal,

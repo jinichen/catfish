@@ -406,6 +406,10 @@ pub fn run() {
             commands::journal::journal_mark_todo_done,
             commands::journal::journal_delete_todo,
             commands::journal::journal_add_todo,
+            // BL-PROACTIVE-DECOUPLE (5/26): journal_tail + last_model 一次拿, 给 /api/proactive/* header 透传
+            commands::proactive::proactive_context,
+            // BL-IDENTITY-INJECT-DECOUPLE (5/26): SOUL/USER/memories 6 字段, 给 /v1/chat/completions body 透传
+            commands::identity_bundle::identity_bundle,
             // BL-BRIEFING-GOAL-INPUT (5/20): /goal UI 路径 — BriefingCard 输入框
             // 5/26 DEPRECATED: hermes 0.14 原生 /goal 替代. 3 个 command 改 stub 返 error
             // 防回归. 保留 invoke_handler 注册防遗漏 JS caller 编译失败.
@@ -451,6 +455,8 @@ pub fn run() {
             commands::drafts::draft_read,
             commands::drafts::draft_list_today,
             commands::drafts::draft_open_in_editor,
+            // BL-X (5/26): chat timeout toast 自显本地 outputs (替代砍掉的 gateway recent_outputs.list_recent)
+            commands::drafts::recent_outputs_list,
             // BL-ADVISOR-DECISIONS (5/21 Phase 7 第 2 步): ~/.catfish/decisions.jsonl 决策留痕
             commands::decisions::decision_record,
             commands::decisions::decision_list_recent,

@@ -14,6 +14,8 @@
 import type { ChatMessage, ToolCall } from "../types/chat";
 import { config } from "./env";
 import { fetchWithAuth } from "./me";
+import { formatRecentOutputsFootnote } from "./drafts";
+import { fetchIdentityBundle } from "./tauri";
 import { useAgentStore } from "../store/agent";
 import { useChatStore } from "../store/chat";
 import { useTeachingStore } from "../store/teaching";
@@ -210,6 +212,31 @@ export async function streamChat(params: SendChatParams): Promise<void> {
     // tool_choice 默认 auto, 让 LLM 自己决定要不要调
   }
 
+  // BL-IDENTITY-INJECT-DECOUPLE (5/26): Companion 在员工 mac 读 SOUL/USER/memories
+  // 6 字段, body 塞 _catfish_identity_bundle. gateway 解出后注入 system prompt,
+  // pop 掉不 forward 给 upstream LLM. 失败 → 不挂 bundle, gateway fallback fs (dev OK,
+  // SaaS 化后 fallback 永远空字符串, 鲶鱼退化无人格但服务不挂).
+  //
+  // 只 gateway 路径加 — hermes 自己有 identity 注入层, 不走 gateway 的 identity_inject.
+  if (!useHermes) {
+    try {
+      const idBundle = await fetchIdentityBundle();
+      // 任一字段非空 = 有内容. 全空 = 员工还没装 SOUL.md / Hermes 没写过 memory.
+      const hasAny =
+        idBundle.soul ||
+        idBundle.soul_customer ||
+        idBundle.soul_browser ||
+        idBundle.soul_execute_code ||
+        idBundle.user_memory ||
+        idBundle.memory_dir;
+      if (hasAny) {
+        body._catfish_identity_bundle = idBundle;
+      }
+    } catch {
+      // Tauri 命令挂 → 不挂 bundle, gateway fs fallback
+    }
+  }
+
   // BL-E11 命名权: 把当前员工自定义的 agent name + personality 带过去, gateway
   // 拼 personalization preamble 在 SOUL 前面 (非默认值才发, 省 header 大小).
   const agentSnap = useAgentStore.getState();
@@ -382,11 +409,14 @@ export async function streamChat(params: SendChatParams): Promise<void> {
       }
 
       // retry 仍失败 → 诚实报错, 不替员工做主切别的 model
+      // BL-X (5/26): 附"过去 24h 鲶鱼已写文件" — 替代砍掉的 gateway recent_outputs inject
+      const recentBlock = await formatRecentOutputsFootnote(24);
       onError(
         `⚠️ \`${model}\` 上游 ${resp.status} 不可达 (5s 后重试仍失败). ` +
           `上游 LLM 服务挂了, 你可以: (1) 换一个 model 重发 ` +
           `(2) 稍后再试 (3) 排查 gateway log + 上游 LLM 服务状态.` +
-          (detail ? ` 详细: ${detail.slice(0, 200)}` : ""),
+          (detail ? ` 详细: ${detail.slice(0, 200)}` : "") +
+          recentBlock,
       );
       return;
     }
@@ -566,7 +596,9 @@ export async function streamChat(params: SendChatParams): Promise<void> {
       onDone({ finish_reason: "abort", usage, task_assessment: taskAssessment });
       return;
     }
-    onError(`stream 中断: ${stringify(e)}`);
+    // BL-X (5/26): stream 中断 (网络挂 / fetch timeout / 上游切断) 时也带上"鲶鱼已写文件"
+    const recentBlock = await formatRecentOutputsFootnote(24);
+    onError(`stream 中断: ${stringify(e)}${recentBlock}`);
   }
 }
 

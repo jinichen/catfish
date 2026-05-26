@@ -267,6 +267,49 @@ export const journalTodosFetch = () =>
 export const journalReadRecent = () =>
   rawInvoke<string>("journal_read_recent");
 
+// ── proactive context (BL-PROACTIVE-DECOUPLE 5/26) ────────
+//
+// 给 /api/proactive/starter + /api/proactive/contextual header 透传准备:
+//   - X-Catfish-Journal-Tail-B64: base64(journal_tail)
+//   - X-Catfish-Last-Model:        last_model
+//
+// 5/26 audit 砍 gateway 自读员工 fs / state.db 后, 由 Companion (员工 mac 本地
+// 跑, 读自己 fs 合规) 准备好, 通过 header 传给 gateway. caller 见 lib/me.ts.
+
+export interface ProactiveContextInfo {
+  /** ~/.catfish/employee_journal.md 末尾 ~8KB (UTF-8, 切到 char boundary 不切坏中文). */
+  journal_tail: string;
+  /** hermes state.db 最近 session 用的 model name. 无 → null. */
+  last_model: string | null;
+}
+
+export const fetchProactiveContext = () =>
+  rawInvoke<ProactiveContextInfo>("proactive_context");
+
+// ── identity bundle (BL-IDENTITY-INJECT-DECOUPLE 5/26) ────
+//
+// 给 /v1/chat/completions body 字段 `_catfish_identity_bundle` 透传准备.
+// 5/26 audit 砍 gateway 自读 ~/.hermes/SOUL.md 等后, 由 Companion (员工 mac 本地
+// 跑, 读自己 fs 合规) 准备好打包传给 gateway. caller 见 lib/chat.ts.
+
+export interface IdentityBundle {
+  /** ~/.hermes/SOUL.md (核心人格) */
+  soul: string;
+  /** ~/.hermes/SOUL_<CUST>.md (客户特定 — env CATFISH_CUSTOMER 默认 FFCS) */
+  soul_customer: string;
+  /** ~/.hermes/SOUL_BROWSER.md (浏览器场景纪律) */
+  soul_browser: string;
+  /** ~/.hermes/SOUL_EXECUTE_CODE.md (代码执行场景纪律) */
+  soul_execute_code: string;
+  /** ~/.hermes/USER.md (用户长期 memory) */
+  user_memory: string;
+  /** concat 好的 ~/.hermes/memories/*.md (按文件名排序) */
+  memory_dir: string;
+}
+
+export const fetchIdentityBundle = () =>
+  rawInvoke<IdentityBundle>("identity_bundle");
+
 /** BL-JOURNAL-TODO-EDIT-CHAT Stage 1 (5/20): journal CRUD 给 LLM tool calling 用.
  * 双重定位 line + text_hint 防误伤 (员工改 journal 后行号偏移). */
 export const journalMarkTodoDone = (line: number, textHint: string) =>
