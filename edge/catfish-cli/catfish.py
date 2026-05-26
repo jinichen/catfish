@@ -1220,6 +1220,340 @@ def cmd_refresh_hermes(args) -> int:
     return 0 if patched else 1
 
 
+# ─── BL-EMPLOYEE-PRIVACY-VERIFICATION (#76, 5/25) ─────────────────
+#
+# `catfish privacy-audit`: 员工自己跑一发, 输出 "我本机存了啥 + 中央存了我啥"
+# 报告. 目的不是给运维诊断, 是给员工"我能验证, 不需要信任公司说辞".
+#
+# 报告分 3 段:
+#   1. 本机数据 (员工电脑上的): catfish 目录 / hermes 目录 / token / 配置.
+#      列文件路径 + 大小 + 权限 + 内容类别 (token / 对话 / 日志 / 缓存).
+#      员工看完知道 "哦, 对话历史在我电脑这, 不在中央" / "中央拿不到我 prompt".
+#   2. 中央存了我啥 (调 /api/audit/me): 全是 metadata (count / token / model / 时间戳).
+#      schema_note 让员工知道"中央只看 metadata, 不看 prompt/response 文本".
+#   3. 上传记录 (本机 audit jsonl): 我电脑往中央发了啥 (按模型分布 / 今日量).
+#
+# 防误判设计:
+#   - 调中央失败不 fail-hard (本机段照样输出, 中央段标"未连通", 让离线员工也能审)
+#   - --json 给机器 (CI / 软著合规检查脚本接), 默认人类可读 (员工平常用)
+#   - 路径全用 expanduser, 写绝对 (~/.catfish/... → /Users/xxx/.catfish/...), 复制粘贴可验
+#   - 权限位单独列, 600 / 644 / 755 一眼看 "token 文件是 600 ✓ 私有 / 还是 644 ✗ 漏权限"
+#
+# 不做:
+#   - 不读对话文件内容打印 (那是 privacy nightmare, 员工想看自己开 ~/.catfish 看)
+#   - 不删任何东西 (审计 ≠ 清理. 清理用 catfish logout / 手动 rm)
+#   - 不联网下载任何"判定规则" (全本地逻辑, 防中央偷偷改判定)
+
+
+# 本机数据扫描的目录清单 (按"员工最该知道的"排序).
+#
+# (相对 home, 是路径, 描述, 是否敏感) — 敏感=含 prompt 内容 / token.
+_PRIVACY_SCAN_TARGETS = [
+    (".catfish/auth/token.json",
+     "我的 OAuth token (中央认证用, 不含对话)",
+     True),
+    (".catfish/gateway_audit.jsonl",
+     "本机 audit log (中央调用流水, 含 token 数 / 模型 / 时间戳, 不含 prompt)",
+     False),
+    (".catfish/",
+     "catfish 数据目录 (token / 配置 / 边缘缓存)",
+     False),
+    (".hermes/sessions/",
+     "hermes 对话会话 (含 prompt + response 全文 — 本机, 不上传)",
+     True),
+    (".hermes/memories/",
+     "hermes 长期记忆 (USER.md / MEMORY.md, LLM 学的事实 — 本机, 不上传)",
+     True),
+    (".hermes/config.yaml",
+     "hermes 配置 (含 service token, 不含对话)",
+     True),
+    (".hermes/.env",
+     "hermes 第三方 API key (Tavily / 等, 本机调外网用)",
+     True),
+]
+
+
+def _stat_path(p: Path) -> dict:
+    """收 path 的 size / mode / 文件数 / 最新 mtime. 不存在返 exists=False."""
+    if not p.exists():
+        return {"exists": False, "path": str(p)}
+
+    out: dict = {"exists": True, "path": str(p)}
+    if p.is_file():
+        st = p.stat()
+        out.update({
+            "kind": "file",
+            "size_bytes": st.st_size,
+            "mode_oct": oct(st.st_mode & 0o777),
+            "mtime": int(st.st_mtime),
+        })
+    elif p.is_dir():
+        # 目录: 算总大小 + 文件数, 不递归打印每个
+        total = 0
+        count = 0
+        latest_mtime = 0
+        try:
+            for f in p.rglob("*"):
+                if f.is_file():
+                    try:
+                        s = f.stat()
+                        total += s.st_size
+                        latest_mtime = max(latest_mtime, int(s.st_mtime))
+                        count += 1
+                    except OSError:
+                        # symlink 断 / 权限不够 跳
+                        continue
+        except OSError as e:
+            out["scan_error"] = str(e)
+        st = p.stat()
+        out.update({
+            "kind": "dir",
+            "file_count": count,
+            "total_bytes": total,
+            "mode_oct": oct(st.st_mode & 0o777),
+            "mtime": int(latest_mtime or st.st_mtime),
+        })
+    return out
+
+
+def _fmt_bytes(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024:
+            return f"{n:.0f}{unit}" if unit == "B" else f"{n:.1f}{unit}"
+        n /= 1024  # type: ignore[assignment]
+    return f"{n:.1f}TB"
+
+
+def _fetch_audit_me(token: str, gateway: str) -> dict:
+    """调 GET /api/audit/me. 任何失败抛 RuntimeError (让 caller 决定 fail-soft)."""
+    url = f"{gateway}/api/audit/me"
+    req = urllib.request.Request(
+        url,
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")[:200]
+        raise RuntimeError(f"HTTP {e.code}: {body}") from e
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"连不上 gateway ({url}): {e.reason}") from e
+
+
+def _scan_local_audit_jsonl(p: Path, since_ts: int) -> dict:
+    """扫本机 ~/.catfish/gateway_audit.jsonl, 算今天往中央发了啥.
+
+    返:
+      - request_count: 今天总请求数
+      - total_tokens:  今天 token 总数
+      - by_model:      [{model, count}]
+      - earliest_ts / latest_ts: 文件内最早 / 最新一条 (反映"我电脑上 audit 留多久")
+    """
+    empty = {
+        "exists": False,
+        "request_count": 0,
+        "total_tokens": 0,
+        "by_model": [],
+        "earliest_ts": None,
+        "latest_ts": None,
+    }
+    if not p.exists():
+        return empty
+
+    count_today = 0
+    tokens_today = 0
+    by_model_today: dict = {}
+    earliest = None
+    latest = None
+    try:
+        with p.open("r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                ts = int(r.get("ts") or 0)
+                if not ts:
+                    continue
+                earliest = ts if earliest is None else min(earliest, ts)
+                latest = ts if latest is None else max(latest, ts)
+                if ts < since_ts:
+                    continue
+                count_today += 1
+                tokens_today += int(r.get("prompt_tokens", 0) or 0) + int(r.get("completion_tokens", 0) or 0)
+                m = r.get("model", "")
+                by_model_today[m] = by_model_today.get(m, 0) + 1
+    except OSError as e:
+        logger.warning("scan audit jsonl: %s", e)
+        return empty
+
+    return {
+        "exists": True,
+        "path": str(p),
+        "request_count": count_today,
+        "total_tokens": tokens_today,
+        "by_model": [{"model": m, "count": c} for m, c in sorted(by_model_today.items(), key=lambda x: -x[1])],
+        "earliest_ts": earliest,
+        "latest_ts": latest,
+    }
+
+
+def cmd_privacy_audit(args) -> int:
+    """BL-EMPLOYEE-PRIVACY-VERIFICATION (#76, 5/25): 员工自查 "本机存了啥 + 中央存了我啥".
+
+    给员工"我能验证, 不需要纯信任公司"的工具. 跟 #77 (Dashboard 隐私 tab) /
+    #79 (gateway /api/audit/me) / #78 (员工 doc) 配套.
+
+    退码:
+      0: 全段成功 (含中央段)
+      1: 中央段失败 (离线 / 未登录 / 中央挂), 本机段照样输出
+    """
+    json_mode = getattr(args, "json", False)
+    home = Path.home()
+    today_start = int(time.time()) - 86400  # 本机 audit jsonl ts 用秒, 跟 audit.rs 一致
+
+    # ── 段 1: 本机数据 ────────────────────────────
+    local_items = []
+    for rel, desc, sensitive in _PRIVACY_SCAN_TARGETS:
+        p = home / rel
+        info = _stat_path(p)
+        info["description"] = desc
+        info["sensitive"] = sensitive
+        local_items.append(info)
+
+    local_audit_jsonl_path = home / ".catfish" / "gateway_audit.jsonl"
+    local_audit_summary = _scan_local_audit_jsonl(local_audit_jsonl_path, today_start)
+
+    # ── 段 2: 中央 (/api/audit/me) ────────────────
+    central_section: dict = {"reachable": False, "reason": "", "data": None}
+    store = load_token()
+    if not store:
+        central_section["reason"] = "未登录 (没 token, 跑: catfish login)"
+    elif store.is_expired(buffer=0) and not store.refresh_token:
+        central_section["reason"] = "token 过期且无 refresh_token (跑: catfish login)"
+    else:
+        # 过期但有 refresh, 自动 refresh 一次
+        if store.is_expired():
+            try:
+                store = _do_refresh(store)
+                save_token(store)
+            except Exception as e:
+                central_section["reason"] = f"refresh 失败: {e}"
+                store = None  # 不再尝试
+
+        if store is not None:
+            try:
+                gw = _gateway_url()
+                data = _fetch_audit_me(store.access_token, gw)
+                central_section["reachable"] = True
+                central_section["data"] = data
+                central_section["gateway"] = gw
+            except RuntimeError as e:
+                central_section["reason"] = str(e)
+
+    report = {
+        "version": 1,
+        "generated_at": int(time.time()),
+        "user_email": (store.user_email if store else None) or "(未登录)",
+        "local": {
+            "scanned_paths": local_items,
+            "local_audit_jsonl_summary": local_audit_summary,
+        },
+        "central": central_section,
+        "privacy_contract": [
+            "中央只存 metadata (count / tokens / model / 时间戳), 不存 prompt / response 文本.",
+            "对话 / 长期记忆 / 第三方 API key 全在本机 (~/.hermes/, ~/.catfish/), 不上传.",
+            "本机 audit jsonl 是边缘 gateway 自己写的副本, 跟中央存的内容一致.",
+            "中央 /api/audit/me 跟本机 audit jsonl 数字对得上 → 没偷偷上传额外字段.",
+        ],
+    }
+
+    if json_mode:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0 if central_section["reachable"] else 1
+
+    # ── 人类可读输出 ──────────────────────────────
+    print("═" * 60)
+    print("  catfish 隐私自查报告")
+    print(f"  员工: {report['user_email']}")
+    print(f"  时间: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}")
+    print("═" * 60)
+
+    print("\n── 段 1 · 本机数据 (在你电脑上, 不上传) ──")
+    for item in local_items:
+        marker = "🔒" if item.get("sensitive") else "📄"
+        if not item["exists"]:
+            print(f"  {marker} (不存在) {item['path']}")
+            print(f"      {item['description']}")
+            continue
+        if item["kind"] == "file":
+            size = _fmt_bytes(item["size_bytes"])
+            print(f"  {marker} {item['path']}")
+            print(f"      {item['description']}")
+            print(f"      大小: {size}  权限: {item['mode_oct']}  改动: {time.strftime('%Y-%m-%d %H:%M', time.localtime(item['mtime']))}")
+            # token 文件权限不是 600 → 警告
+            if item["path"].endswith("token.json") and item["mode_oct"] != "0o600":
+                print(f"      ⚠ token 文件权限不是 600! 任何同机器其他用户可读. 建议: chmod 600 {item['path']}")
+        else:  # dir
+            size = _fmt_bytes(item["total_bytes"])
+            print(f"  {marker} {item['path']}/  ({item['file_count']} 个文件, {size})")
+            print(f"      {item['description']}")
+            if item["file_count"] > 0:
+                print(f"      最近改动: {time.strftime('%Y-%m-%d %H:%M', time.localtime(item['mtime']))}")
+
+    print("\n── 段 2 · 本机 audit log (中央调用流水, 你电脑这份是镜像) ──")
+    a = local_audit_summary
+    if not a["exists"]:
+        print(f"  (无 audit log: {local_audit_jsonl_path} 不存在 — 还没跟中央交互过, 或刚清空)")
+    else:
+        print(f"  路径: {a['path']}")
+        print(f"  今日: {a['request_count']} 请求, {a['total_tokens']} tokens")
+        if a["by_model"]:
+            print(f"  今日按模型:")
+            for r in a["by_model"][:10]:
+                print(f"    - {r['model']}: {r['count']} 次")
+        if a["earliest_ts"]:
+            print(f"  全量记录: {time.strftime('%Y-%m-%d', time.localtime(a['earliest_ts']))} ~ {time.strftime('%Y-%m-%d', time.localtime(a['latest_ts']))}")
+
+    print("\n── 段 3 · 中央存了我啥 (调 /api/audit/me 验) ──")
+    if not central_section["reachable"]:
+        print(f"  ⚠ 中央段未连通: {central_section['reason']}")
+        print(f"  (本机段照样有效, 离线员工也能审本机数据)")
+    else:
+        d = central_section["data"]
+        print(f"  gateway: {central_section.get('gateway', '?')}")
+        print(f"  user_email: {d.get('user_email')}")
+        print(f"  department: {d.get('department') or '(未配置)'}")
+        print(f"  今日: {d.get('request_count', 0)} 请求, {d.get('total_tokens', 0)} tokens")
+        bm = d.get("by_model") or []
+        if bm:
+            print(f"  今日按模型:")
+            for r in bm[:10]:
+                print(f"    - {r['model']}: {r['count']} 次, {r['total_tokens']} tokens")
+        if d.get("first_seen_ts"):
+            f_str = time.strftime('%Y-%m-%d', time.localtime(d["first_seen_ts"] / 1000))
+            l_str = time.strftime('%Y-%m-%d', time.localtime((d.get("last_seen_ts") or d["first_seen_ts"]) / 1000))
+            print(f"  中央对我的最早记录: {f_str}  最新: {l_str}")
+        print(f"  schema_note: {d.get('schema_note', '')}")
+
+        # 自洽性检查: 本机 vs 中央今日数应该接近 (差几条正常 — 边缘 / 中央写盘有 race)
+        if a["exists"] and d.get("request_count", 0) > 0:
+            diff = abs(d.get("request_count", 0) - a["request_count"])
+            if diff > 5:
+                print(f"  ⚠ 本机今日 {a['request_count']} ≠ 中央 {d['request_count']} (差 {diff}), 可能漏统计 / 边缘gateway 没刷新")
+
+    print("\n── 隐私契约 (审计判定依据) ──")
+    for line in report["privacy_contract"]:
+        print(f"  · {line}")
+
+    print(f"\n报告完成. 想给机器 / CI 看: 加 --json")
+    return 0 if central_section["reachable"] else 1
+
+
 def _do_refresh(store: TokenStore) -> TokenStore:
     """调 catfish-identity /token grant_type=refresh_token, 拿新 access + 新 refresh.
 
@@ -1320,6 +1654,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="检测到死代理时, 用 clean env (unset HTTPS_PROXY 等) 自动 hermes gateway restart",
     )
     refresh_hermes_p.set_defaults(func=cmd_refresh_hermes)
+
+    # BL-EMPLOYEE-PRIVACY-VERIFICATION (#76, 5/25): 员工自查 "本机存了啥 + 中央存了我啥"
+    privacy_p = sub.add_parser(
+        "privacy-audit",
+        help="员工自查: 本机存了啥 + 中央存了我啥 (透明性卖点兑现)",
+    )
+    privacy_p.add_argument(
+        "--json",
+        action="store_true",
+        help="输出 JSON (供 CI / 软著合规脚本机器读)",
+    )
+    privacy_p.set_defaults(func=cmd_privacy_audit)
 
     return p
 

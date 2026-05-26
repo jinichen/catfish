@@ -277,6 +277,30 @@ export async function fetchDepartmentAudit(dept: string): Promise<DepartmentAudi
   return (await resp.json()) as DepartmentAudit;
 }
 
+// ── BL-EMPLOYEE-PRIVACY-VERIFICATION (#79, 5/25): 员工自查中央存了我啥 ──
+//
+// /api/audit/me 返本员工的 metadata (无 prompt / response 文本).
+// PrivacyCard + privacy-audit CLI 都用这条.
+
+export interface MyAuditSummary {
+  user_email: string;
+  department: string;
+  since_ms: number;
+  schema_note: string;
+  request_count: number;
+  total_tokens: number;
+  by_model: { model: string; count: number; total_tokens: number }[];
+  first_seen_ts: number | null;
+  last_seen_ts: number | null;
+}
+
+export async function fetchMyAudit(): Promise<MyAuditSummary> {
+  const url = `${config.backendUrl}/api/audit/me`;
+  const resp = await fetchWithAuth(url);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return (await resp.json()) as MyAuditSummary;
+}
+
 // ── 多账号切换器 (dev only) ──────────────────────────────────
 
 export interface DevUser {

@@ -86,6 +86,13 @@ import TasksCard from "./TasksCard";
 // import CuratorCard from "./CuratorCard";
 import CollapsibleSection from "./CollapsibleSection";
 import WebPortalLink from "./WebPortalLink";
+// BL-EMPLOYEE-PRIVACY-VERIFICATION (#77, 5/25): 员工自查"中央存了我啥 / 本机存了啥".
+// 跟 #76 (CLI privacy-audit) / #79 (gateway /api/audit/me) / #78 (员工 doc) 配套.
+// 单独 section 让员工一眼看到"我能自验"信号 — 透明性 = 信任卖点.
+import PrivacyCard from "./PrivacyCard";
+// BL-RECMODE-DASHBOARD-UI (#75, 5/25): "我的录屏" 卡 — 跟 PrivacyCard 同 section
+// (本机数据员工主权). 配套 #74 backend 撤了 cleanup daemon, 让员工自己列/删录屏.
+import RecordingsCard from "./RecordingsCard";
 
 export default function DashboardTab() {
   // BL-ARCH2 (5/10): role 不再决定 Dashboard 卡片, manager/admin 也走 web 看管理.
@@ -129,6 +136,19 @@ export default function DashboardTab() {
         count={1}
       >
         <AgentPrefsCard />
+      </CollapsibleSection>
+
+      {/* BL-EMPLOYEE-PRIVACY-VERIFICATION (#77, 5/25) + BL-RECMODE-DASHBOARD-UI (#75, 5/25):
+          隐私 + 本机数据主权一组. 默认开 — 透明性卖点要让员工立刻看到, 不藏折叠下.
+          PrivacyCard: 中央存了啥 metadata + 本机数据归属表 + CLI/doc 入口.
+          RecordingsCard: 我的录屏列表 (本机) + Finder 跳转 + 手动删 (catfish 不自动删). */}
+      <CollapsibleSection
+        id="privacy"
+        title="🔒 隐私 / 本机数据"
+        count={2}
+      >
+        <PrivacyCard />
+        <RecordingsCard />
       </CollapsibleSection>
 
       {/* 第三组: 鲶鱼对你的认识 — 透明性 (默认开, 员工要能看清楚被学了什么)

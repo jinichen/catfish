@@ -842,7 +842,7 @@ async def api_learn_repair_selector(
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     """V2 #68 selector 漂移修复: skill 跑时 find_by_text(hint) 找不到 →
-    catfish_browser_runtime POST 这里, gateway 调 main vision 看截图找新 selector.
+    catfish_browser_runtime POST 这里, gateway 转 tool-bridge 调 vision 看截图找新 selector.
 
     Body: {
         "hint": {"text": "应用", "near_text": "通讯录", "role": "tab"},
@@ -851,8 +851,13 @@ async def api_learn_repair_selector(
     }
 
     Returns: {found, text, near_text, role, confidence, reason}
+
+    5/25 BL-RECMODE-MIGRATE-TO-EDGE: gateway 不再直接调 selector_repair.
+    转 Unix socket JSON-RPC 给 edge tool-bridge (跑在 ~/.catfish/tool-bridge.sock).
+    中央代码 (`central/`) 不再读 / 写 ~/.catfish/recordings/. 详见
+    `docs/CENTRAL-EDGE-DATA-BOUNDARY.md` E.1 / `tool_bridge_rpc.py`.
     """
-    from .recmode import selector_repair  # noqa: PLC0415
+    from . import tool_bridge_rpc as _tb_rpc  # noqa: PLC0415
     hint = body.get("hint") or {}
     screenshot = (body.get("screenshot_b64") or "").strip()
     context = (body.get("context") or "").strip()
@@ -863,16 +868,29 @@ async def api_learn_repair_selector(
 
     auth_token = os.environ.get("CATFISH_DEV_TOKEN", "")
     try:
-        out = await selector_repair.repair_selector(
-            hint=hint,
-            screenshot_b64=screenshot,
-            context=context,
-            auth_token=auth_token,
+        out = await _tb_rpc.call(
+            "recmode/repair_selector",
+            {
+                "hint": hint,
+                "screenshot_b64": screenshot,
+                "context": context,
+                "auth_token": auth_token,
+            },
         )
+    except _tb_rpc.ToolBridgeUnreachable as e:
+        # tool-bridge 没起 / socket 缺 — caller (skill runtime) 期望 502
+        raise HTTPException(
+            status_code=502,
+            detail=f"tool-bridge 不可达, RecMode vision 不可用: {e}",
+        ) from e
+    except _tb_rpc.ToolBridgeRPCError as e:
+        # tool-bridge 自己抛错. INVALID_PARAMS 转 400, 别的转 502
+        status = 400 if e.code == _tb_rpc.JSONRPC_INVALID_PARAMS else 502
+        raise HTTPException(status_code=status, detail=e.message) from e
+
+    if isinstance(out, dict):
         out["viewer"] = user.sub
-        return out
-    except RuntimeError as e:
-        raise HTTPException(status_code=502, detail=str(e)) from e
+    return out  # type: ignore[return-value]
 
 
 @app.post("/api/learn/cleanup")
@@ -975,8 +993,9 @@ async def api_learn_analyze(
     body: dict,
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """触发 RecMode aggregator: 读 session_dir → 调 catfish-private-main →
-    解析 JSON → 落 SKILL.md + main.py 到 ~/.catfish/skills/<namespace>/<name>/.
+    """触发 RecMode aggregator (thin proxy → edge tool-bridge): 读 session_dir →
+    调 catfish-private-main → 解析 JSON → 落 SKILL.md + main.py 到
+    ~/.catfish/skills/<namespace>/<name>/.
 
     Body: {"session_id": str, "skills_root": str (可选, 默认 ~/.catfish/skills)}
 
@@ -985,47 +1004,56 @@ async def api_learn_analyze(
 
     Caller (Companion): 录屏完点 ✅ → 先 POST /stop_recording → 再 POST /analyze
     → 拿 skill_dir → 读 SKILL.md / main.py 显 preview UI 给用户 review.
+
+    5/25 BL-RECMODE-MIGRATE-TO-EDGE: gateway 不再直接调 aggregator (中央代码
+    不读写 ~/.catfish/recordings/ ~/.catfish/skills/). 透传 Unix socket JSON-RPC
+    到 edge tool-bridge, 由 tool-bridge 进程跑 aggregate_session + 落盘.
+    详见 docs/CENTRAL-EDGE-DATA-BOUNDARY.md E.1 / tool_bridge_rpc.py.
     """
-    from .recmode import aggregator  # noqa: PLC0415
+    from . import tool_bridge_rpc as _tb_rpc  # noqa: PLC0415
+
     session_id = (body.get("session_id") or "").strip()
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id 不能空")
 
-    # 找 session_dir — caller 可显式传, 否则按 cdp_listener 默认路径推
     skills_root_str = (body.get("skills_root") or "").strip()
-    skills_root = Path(skills_root_str).expanduser() if skills_root_str else None
-
+    # CATFISH_HOME 透传给 tool-bridge (它进程可能没拿到同样的 env)
     catfish_home = os.environ.get("CATFISH_HOME", "").strip()
-    rec_root = (
-        Path(catfish_home).expanduser() / "recordings" if catfish_home
-        else Path.home() / ".catfish" / "recordings"
-    )
-    session_dir = rec_root / session_id
-    if not session_dir.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"session_dir {session_dir} 不存在. 先调 /start_recording 录一段.",
-        )
-
-    # auth_token 从 caller 透传 — 让 RecMode 走 caller 自己的 quota / RBAC.
-    # dev token 路径直接复用; OIDC 路径 5/26 加.
     auth_token = os.environ.get("CATFISH_DEV_TOKEN", "")
-    # RecMode C: 默认 draft_only — 落 session_dir/skill_draft/, 用户 review
-    # 后调 /api/learn/save_skill 才正式. caller 显式传 false 跳过 draft 流程.
     draft_only = bool(body.get("draft_only", True))
+
     try:
-        out = await aggregator.aggregate_session(
-            session_dir,
-            skills_root=skills_root,
-            auth_token=auth_token,
-            draft_only=draft_only,
+        out = await _tb_rpc.call(
+            "recmode/analyze",
+            {
+                "session_id": session_id,
+                "skills_root": skills_root_str,
+                "catfish_home": catfish_home,
+                "auth_token": auth_token,
+                "draft_only": draft_only,
+            },
         )
+    except _tb_rpc.ToolBridgeUnreachable as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"tool-bridge 不可达, RecMode aggregate 不可用: {e}",
+        ) from e
+    except _tb_rpc.ToolBridgeRPCError as e:
+        # session_dir 不存在 / params 错 → 400, 别的 → 502
+        # (tool-bridge server.py 用 INVALID_PARAMS 报 "session_dir 不存在", 我们
+        #  把这种保留 404 语义 — caller Companion UI 依据 404 提示员工先录屏)
+        if e.code == _tb_rpc.JSONRPC_INVALID_PARAMS:
+            # 区分 "session_dir 不存在" vs 别的参数错
+            status = 404 if "session_dir" in e.message and "不存在" in e.message else 400
+            raise HTTPException(status_code=status, detail=e.message) from e
+        # INTERNAL_ERROR — aggregator 内部 (LLM 挂 / JSON 解析挂)
+        if "参数错" in e.message:  # ValueError 转过来的
+            raise HTTPException(status_code=422, detail=e.message) from e
+        raise HTTPException(status_code=502, detail=e.message) from e
+
+    if isinstance(out, dict):
         out["viewer"] = user.sub
-        return out
-    except RuntimeError as e:
-        raise HTTPException(status_code=502, detail=str(e)) from e
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
+    return out  # type: ignore[return-value]
 
 
 @app.get("/api/learn/active")
@@ -1202,6 +1230,38 @@ def _group_metadata() -> dict[str, dict[str, Any]]:
     for g in out.values():
         g["tools"].sort()
     return out
+
+
+# /api/audit/me — 员工自查 "中央到底存了我啥".
+#
+# BL-EMPLOYEE-PRIVACY-VERIFICATION (#79, 5/25): Companion 隐私 tab + privacy-audit
+# CLI 都接这条. 员工不需要任何 RBAC 角色, 谁登录返谁的数据.
+#
+# Privacy contract (写死, 永远不回退):
+#   1. 返的字段全是 metadata (count / token / model / 时间戳), 没有 prompt / response
+#   2. 员工只能拿到自己 sub 的数据 (filter 在 quota.audit_summary_user_since 里, 不走 query 参数 — 防 IDOR)
+#   3. first_seen_ts / last_seen_ts 不局限 cutoff_ms, 让员工知道"中央存了我多久"
+
+
+@app.get("/api/audit/me")
+async def api_audit_me(
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """员工自查: 中央对我存了啥 metadata. 不需 RBAC, 谁登录返谁的."""
+    from . import quota
+
+    now_ms = int(time.time() * 1000)
+    day_cutoff = now_ms - 86_400_000
+
+    summary = quota.audit_summary_user_since(user.sub, day_cutoff)
+    return {
+        "user_email": user.sub,
+        "department": user.department,
+        "since_ms": day_cutoff,
+        # 让客户端知道"中央存的字段长这样", 防员工担心还有别的没暴露
+        "schema_note": "本端点只返 metadata: count / tokens / model / 时间戳. 中央不存 prompt / response 文本.",
+        **summary,  # request_count / total_tokens / by_model / first_seen_ts / last_seen_ts
+    }
 
 
 # /api/audit/department/{dept} — manager / admin 看本部门 audit 聚合

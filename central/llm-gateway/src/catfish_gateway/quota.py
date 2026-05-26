@@ -417,6 +417,118 @@ def sum_tokens_model_since(model: str, cutoff_ms: int) -> int:
     )
 
 
+def audit_summary_user_since(user_email: str, cutoff_ms: int) -> dict:
+    """单员工的 audit 聚合 — 给 /api/audit/me 用 (员工自查 "中央到底存了我啥").
+
+    跟 audit_summary_dept_since 同套路, 区别:
+      - 按 user_email 过滤 (不是 department)
+      - 不返 by_user (按定义就一个员工自己)
+      - 加 first_seen_ts / last_seen_ts (员工想知道"中央从哪天开始有我的记录")
+
+    返:
+      - request_count: 我今日请求总数
+      - total_tokens:  我今日 token 总数
+      - by_model:      [{model, count, total_tokens}]
+      - first_seen_ts / last_seen_ts: 中央这个员工的首/末次记录 ms
+                                       (不局限 cutoff, 反映"中央到底存了多久")
+
+    Privacy contract:
+      返的字段全是 metadata (count / token / model / 时间戳), 没有对话内容.
+      audit/me 是给员工自查"中央存了我啥", 跟客户买 catfish 时承诺的
+      "中央只看 metadata, 不看 prompt/response" 一致.
+    """
+    empty = {
+        "request_count": 0,
+        "total_tokens": 0,
+        "by_model": [],
+        "first_seen_ts": None,
+        "last_seen_ts": None,
+    }
+
+    if _use_pg():
+        try:
+            with _pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT COUNT(*), COALESCE(SUM(tokens_in + tokens_out), 0)
+                           FROM quota_events WHERE user_email = %s AND ts_ms >= %s""",
+                        (user_email, cutoff_ms),
+                    )
+                    row = cur.fetchone()
+                    request_count = int(row[0] or 0)
+                    total_tokens = int(row[1] or 0)
+
+                    cur.execute(
+                        """SELECT model, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS used
+                           FROM quota_events WHERE user_email = %s AND ts_ms >= %s
+                           GROUP BY model ORDER BY used DESC LIMIT 20""",
+                        (user_email, cutoff_ms),
+                    )
+                    by_model = [
+                        {"model": r[0], "count": int(r[1]), "total_tokens": int(r[2] or 0)}
+                        for r in cur.fetchall()
+                    ]
+
+                    cur.execute(
+                        """SELECT MIN(ts_ms), MAX(ts_ms) FROM quota_events
+                           WHERE user_email = %s""",
+                        (user_email,),
+                    )
+                    fmin, fmax = cur.fetchone() or (None, None)
+
+            return {
+                "request_count": request_count,
+                "total_tokens": total_tokens,
+                "by_model": by_model,
+                "first_seen_ts": int(fmin) if fmin else None,
+                "last_seen_ts": int(fmax) if fmax else None,
+            }
+        except Exception as e:
+            logger.warning("audit_summary_user_since PG 失败: %s", e)
+            return empty
+
+    try:
+        conn = _get_conn()
+        cur = conn.execute(
+            """SELECT COUNT(*), COALESCE(SUM(tokens_in + tokens_out), 0)
+               FROM quota_events WHERE user_email = ? AND ts >= ?""",
+            (user_email, cutoff_ms),
+        )
+        row = cur.fetchone()
+        request_count = int(row[0] or 0)
+        total_tokens = int(row[1] or 0)
+
+        cur = conn.execute(
+            """SELECT model, COUNT(*) AS cnt, SUM(tokens_in + tokens_out) AS used
+               FROM quota_events WHERE user_email = ? AND ts >= ?
+               GROUP BY model ORDER BY used DESC LIMIT 20""",
+            (user_email, cutoff_ms),
+        )
+        by_model = [
+            {"model": r[0], "count": int(r[1]), "total_tokens": int(r[2] or 0)}
+            for r in cur.fetchall()
+        ]
+
+        cur = conn.execute(
+            """SELECT MIN(ts), MAX(ts) FROM quota_events
+               WHERE user_email = ?""",
+            (user_email,),
+        )
+        fmin, fmax = cur.fetchone() or (None, None)
+
+        conn.close()
+        return {
+            "request_count": request_count,
+            "total_tokens": total_tokens,
+            "by_model": by_model,
+            "first_seen_ts": int(fmin) if fmin else None,
+            "last_seen_ts": int(fmax) if fmax else None,
+        }
+    except Exception as e:
+        logger.warning("audit_summary_user_since sqlite 失败: %s", e)
+        return empty
+
+
 def sum_tokens_dept_since(department: str, cutoff_ms: int) -> int:
     return _sum_tokens(
         "department = ? AND ts >= ?",
