@@ -48,15 +48,20 @@ FORBIDDEN_PATTERNS = [
 # 每个完成迁移 → 从这清单删 → 不再豁免.
 # **新加文件不许进这个 list**, 走 PR review 时 reviewer 拒绝.
 KNOWN_VIOLATIONS_ALLOWLIST: set[str] = {
-    # A 类 — Memory inject 链 (5; 5/20 减 4)
+    # A 类 — Memory inject 链 (2 剩, was 5; 5/26 减 3)
     # BL-GATEWAY-MEMORY-REGISTRY-DELETE (5/20): memory/providers/{employee_journal,
     # feedback, hermes_memory, skills_catalog}.py 4 个删除. 5/19 BL-MEMORY-OWNERSHIP-FIX
     # 已 disable, 5/20 audit verdict 确认 no-op 死代码, catfish-memory plugin (hermes
     # 侧 prefetch) 接管.
+    # 5/26 真清: 亲眼 grep 后发现 session_facts.py / feedback_inject.py / metrics.py 真代码 0
+    # Path.home() (只 docstring 里有 ~/.catfish/ 字面引用), 加 # noqa: BOUNDARY 标即可,
+    # 已从 ALLOWLIST 移除. employee_journal + inject_session_history 真有 Path.home()
+    # 调用 (employee_journal:62 / inject_session_history:81 读 state.db), 保留待迁.
+    # 鸿波 5/26 "为什么这么乱" reflection: 不再信注释推断, 只信 grep 命中.
     "inject_session_history.py",
     "employee_journal.py",
-    "session_facts.py",
-    "feedback_inject.py",
+    # "session_facts.py" — 5/26 移除 (0 真代码 Path.home)
+    # "feedback_inject.py" — 5/26 移除 (0 真代码 Path.home)
     "identity_inject.py",
     # B 类 — 后台任务 (3) — 5/23 BL-GATEWAY-DROP-LEGACY-SUMMARIZE (task #5 Stage 1):
     # session_summarizer.py + memory_distill.py 整文件已 rm, catfish-memory plugin
@@ -93,10 +98,12 @@ KNOWN_VIOLATIONS_ALLOWLIST: set[str] = {
     # G 类 — Resolver / metadata (2)
     "user_model_resolver.py",
     "session_goals.py",
-    # H 类 — 半合规 (2): quota.py / metrics.py 暂留 (sqlite 兜底 + jsonl 兜底,
+    # H 类 — 半合规 (1 剩, was 2): quota.py 暂留 (sqlite 兜底,
     # BL-QUOTA-SQLITE-DEPRECATE 改造中)
+    # 5/26 真清: metrics.py 真代码 0 Path.home (3 处 docstring ~/.catfish/ 加 noqa).
+    # 已从 ALLOWLIST 移除. 真活的 jsonl fallback 走 CATFISH_AUDIT_PATH env, 不 hardcode.
     "quota.py",
-    "metrics.py",
+    # "metrics.py" — 5/26 移除 (0 真代码 Path.home)
     # 基础设施 (中性, request_id 状态)
     "inflight_streams.py",
     # app.py 还有少量字符串引用 (文档注释里), 单独审

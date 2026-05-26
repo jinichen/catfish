@@ -17,14 +17,14 @@
   - 状态 (ok / error) + 错误码 (短文本, 截 200 字)
 
 跟边缘 tool-bridge 的 audit.jsonl 严格分开:
-  - gateway audit (本模块): 中央侧, 只 metadata, 写 ~/.catfish/gateway_audit.jsonl,
+  - gateway audit (本模块): 中央侧, 只 metadata, 写 ~/.catfish/gateway_audit.jsonl,  # noqa: BOUNDARY (docstring 描述路径, 真代码走 CATFISH_AUDIT_PATH env 或 PG)
     Phase 2 客户合同里"中央只看用量"承诺的具体数据源, 提供给客户 IT 自审
   - tool-bridge audit (catfish_tool_bridge.audit): 边缘侧, 含 args_preview (员工本机,
     不外发), 给 Skill lifecycle 健康面板用
 
 # 持久化路径
 ==========
-默认 ~/.catfish/gateway_audit.jsonl (开发本机 / 私有部署 default)
+默认 ~/.catfish/gateway_audit.jsonl (开发本机 / 私有部署 default)  # noqa: BOUNDARY (docstring 描述默认 path)
 生产可配 CATFISH_AUDIT_PATH env var (例: /var/log/catfish/gateway_audit.jsonl)
 
 # 写失败永远不抛
@@ -56,7 +56,7 @@ def audit_path() -> Path:
 
     优先级:
       1. CATFISH_AUDIT_PATH env var (生产部署用)
-      2. ~/.catfish/gateway_audit.jsonl (默认)
+      2. ~/.catfish/gateway_audit.jsonl (默认)  # noqa: BOUNDARY (docstring 描述 fallback)
     """
     global _audit_path
     if _audit_path is None:

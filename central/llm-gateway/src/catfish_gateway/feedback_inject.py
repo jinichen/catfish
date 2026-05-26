@@ -4,7 +4,7 @@
 
 跟 BL-MM5 主动学习 (SOUL 软纪律) 配合, 这条是**显式 + 工程级**:
   - SOUL BL-MM5: LLM 自觉观察员工偏好, 攒 3 次主动问后落 memory_save
-  - 本模块: 员工**显式**点 👎 / 改, 写到 ~/.catfish/feedback.jsonl
+  - 本模块: 员工**显式**点 👎 / 改, 写到 ~/.catfish/feedback.jsonl  # noqa: BOUNDARY (docstring, 真路径取决于 edge 写入方)
     gateway 把最近 N 条 negative feedback inject 到 system prompt
   - 两者互补: 软纪律 + 硬反馈, 让 LLM 越用越懂员工
 

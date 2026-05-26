@@ -7,14 +7,14 @@ qwen_v3_5_122b_a10b 长对话 attention 飘, 员工 5 分钟前明确说的硬�
 (靠模型自觉 quote), 不一定每次都执行.
 
 工程级兜底: 模型听到员工硬事实时调 `catfish_remember(key, value)`
-(tool-bridge 写 ~/.catfish/session_facts.json), gateway 在每次 chat 请求
+(tool-bridge 写 ~/.catfish/session_facts.json), gateway 在每次 chat 请求  # noqa: BOUNDARY (docstring 描述 edge 行为)
 **自动**把这个文件内容拼到 system prompt 末尾 — 永远在最近 token, 不依赖
 attention.
 
 # 跟 inject_identity 的关系
 =========================
 inject_identity_if_needed: 注入 SOUL.md / USER.md / MEMORY.md (跨 session 内容)
-inject_session_facts:      注入 ~/.catfish/session_facts.json (当前 session 内容)
+inject_session_facts:      注入 ~/.catfish/session_facts.json (当前 session 内容)  # noqa: BOUNDARY
 
 执行顺序:
     inject_identity → inject_session_facts → 其他 (sanitize_tools / multimodal_guard)
@@ -59,7 +59,7 @@ logger = logging.getLogger("catfish.gateway.session_facts")
 
 
 def _facts_path() -> Path:
-    """~/.catfish/session_facts.json. 跟 tool-bridge SESSION_FACTS_PATH 同步."""
+    """~/.catfish/session_facts.json. 跟 tool-bridge SESSION_FACTS_PATH 同步."""  # noqa: BOUNDARY
     home = os.environ.get("HOME") or os.environ.get("USERPROFILE") or "."
     return Path(home) / ".catfish" / "session_facts.json"
 
@@ -171,7 +171,7 @@ def render_facts_block(facts: dict[str, list[dict[str, Any]]]) -> str:
     lines.append("")
     lines.append(
         "员工要更新这些事实 → 调 catfish_remember(key, value) 重存. "
-        "session 结束员工自己 rm ~/.catfish/session_facts.json 清空."
+        "session 结束员工自己 rm ~/.catfish/session_facts.json 清空."  # noqa: BOUNDARY
     )
     return "\n".join(lines)
 
