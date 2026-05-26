@@ -37,6 +37,7 @@ pub mod decisions;  // BL-ADVISOR-DECISIONS (5/21 Phase 7): ~/.catfish/decisions
 pub mod drafts;     // BL-ADVISOR-DRAFTS (5/21 Phase 7): ~/.catfish/outputs/<date>/ 草稿存储
 pub mod pet;
 pub mod profile;    // BL-ADVISOR-PROFILE (5/21 Phase 7): 员工职级 + 画像自动识别
+pub mod recordings; // BL-RECMODE-DASHBOARD-UI (#75, 5/25): 我的录屏 inventory / show in Finder / delete
 pub mod relation;
 pub mod session_goal;  // BL-BRIEFING-GOAL-INPUT (5/20): /goal UI 路径
 pub mod session_write;

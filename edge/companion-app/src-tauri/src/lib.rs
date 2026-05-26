@@ -345,6 +345,10 @@ pub fn run() {
             commands::learning::skill_proposal_accept,
             commands::learning::skill_proposal_reject,
             commands::audit::audit_summary,
+            // BL-RECMODE-DASHBOARD-UI (#75, 5/25): 我的录屏 inventory + Finder + delete
+            commands::recordings::recordings_list,
+            commands::recordings::recordings_show_in_finder,
+            commands::recordings::recordings_delete,
             // SSO Phase 1C: OAuth flow + Keychain
             commands::auth::auth_whoami,
             commands::auth::auth_login,

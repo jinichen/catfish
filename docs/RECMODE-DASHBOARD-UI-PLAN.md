@@ -1,5 +1,42 @@
 # BL-RECMODE-DASHBOARD-UI 实施 plan (#75)
 
+> **5/25 22:30 ship 状态**: 代码全写完 (Rust + TS + React + 集成), tsc 全过.
+> sandbox 没 cargo → `cargo check` + `npm run tauri dev` 真测留给 Mac 一气做.
+>
+> ## 实际落地的文件 (5/25 ship)
+>
+> | 文件 | 状态 |
+> |---|---|
+> | `edge/companion-app/src-tauri/src/commands/recordings.rs` | ✅ 写完, 3 个 `#[tauri::command]` + 4 个单测 + path traversal 防御 |
+> | `edge/companion-app/src-tauri/src/commands/mod.rs` | ✅ `pub mod recordings` 加 |
+> | `edge/companion-app/src-tauri/src/lib.rs` | ✅ `invoke_handler` 注册 3 个 command |
+> | `edge/companion-app/src/lib/recordings.ts` | ✅ TS wrapper + RecordingMeta 类型 (跟 Rust 字段对齐) |
+> | `edge/companion-app/src/tabs/Dashboard/RecordingsCard.tsx` | ✅ 跟 PrivacyCard / AuditCard 同风格 |
+> | `edge/companion-app/src/tabs/Dashboard/DashboardTab.tsx` | ✅ 接入 "🔒 隐私 / 本机数据" section (跟 PrivacyCard 并列) |
+>
+> **跟 #77 PrivacyCard 配套**: 5/25 同批 ship 的 #76/#77/#78/#79 (隐私自查 4 件套) +
+> #75 (本机录屏管理) 一起兑现"本机数据员工主权"卖点.
+>
+> ## Mac 上要跑的最后 3 步
+>
+> ```bash
+> cd ~/person_task/catfish/edge/companion-app
+> (cd src-tauri && cargo check)          # 先单看 Rust 编译
+> npm run tauri dev                       # 启 dev mode, 打开 Dashboard 看 📹 我的录屏
+> # 真测: 点 📁 → Finder 弹高亮该文件夹
+> # 真测: 点 🗑️ → 二次确认 → 真删 + 列表 optimistic 更新
+> # 真测: 没录屏时显示友好提示 (RecMode opt-in 解释)
+> ```
+>
+> 跑得通就是 ship 完成. 跑不通的 issue:
+> - Rust 端缺 dep: `Cargo.toml` 已有 serde / serde_json / tauri, 不需要加
+> - macOS 权限: `open -R` 不需特权, 不会触发 macOS 安全弹窗
+> - path traversal 被防住: 单测 `validate_session_id_rejects_traversal` 覆盖
+>
+> ---
+>
+> # 原始 plan (5/25 凌晨写的, 留作设计参考)
+>
 > 5/25 ship 完 #74 (backend 撤掉 cleanup daemon + 加 `list_recordings_with_meta` 给 Dashboard 用), 但 Companion UI 这层留 follow-up (需要 Tauri cargo build, sandbox 没 cargo). 这个 doc 给你回头一气做参考.
 
 ## 工作量估算
