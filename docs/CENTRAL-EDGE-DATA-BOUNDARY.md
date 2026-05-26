@@ -94,14 +94,16 @@
 | `a2a_jwt.py` | 读 `~/.catfish/identity/private.pem` | 私钥**只该在 Companion**, gateway 只用公钥验签 |
 | `a2a_self_register.py` | 读 ~/.catfish/identity | 同上 |
 
-### E 类 — RecMode (CDP 录制截图) · 2 个待迁 (was 3) · **极高敏感**
+### E 类 — RecMode (CDP 录制截图) · ✅ **5/26 全清 (0 剩, was 3)** · **极高敏感**
 
 | 文件 | 状态 | 备注 |
 |---|---|---|
-| ~~`recmode/aggregator.py`~~ | ✅ **5/25 已搬** | → `edge/tool-bridge/src/catfish_tool_bridge/recmode/aggregator.py`. central 端只剩 stub (RuntimeError on import). gateway `/api/learn/analyze` 改 thin proxy, 通过 Unix socket JSON-RPC 转 tool-bridge. 触发: 鸿波 5/25 audit "录屏数据现在还有提交到中央的错误吗" — 发现 aggregator 落 SKILL.md + main.py + recmode_meta.json 3 个文件到 `~/.catfish/skills/`, 含 LLM 对截图的完整原始 JSON 描述. 当前部署 gateway 跟 Companion 同 Mac 物理 OK, 但 SaaS 化即破承诺. 跑 boundary test 通过 (ALLOWLIST 移除). |
-| ~~`recmode/selector_repair.py`~~ | ✅ **5/25 同批搬** | 同上目标位置, 依赖 aggregator.call_llm, 不独立. central 端 stub fail-loud. |
-| `recmode/cdp_listener.py` | ⚠ 待迁 | 写 `~/.catfish/recordings/` (截图 + events.jsonl). 写盘行为是 listener 必需, 但 listener 在 central 跑就违边界. 下一 sprint 搬 edge/tool-bridge. |
-| `recmode/cleanup.py` | ⚠ 待迁 | 清 `~/.catfish/recordings/`. 跟 listener 一起搬 (它俩耦合). |
+| ~~`recmode/aggregator.py`~~ | ✅ **5/25 已搬** (batch 0) | → `edge/tool-bridge/src/catfish_tool_bridge/recmode/aggregator.py`. central 端 stub. gateway `/api/learn/analyze` thin proxy. |
+| ~~`recmode/selector_repair.py`~~ | ✅ **5/25 同批搬** | 同上目标位置, central stub fail-loud. gateway `/api/learn/repair_selector` thin proxy. |
+| ~~`recmode/cdp_listener.py`~~ | ✅ **5/26 已搬** (batch 1) | → `edge/tool-bridge/.../recmode/cdp_listener.py`. central stub. gateway `/api/learn/{start_recording, stop_recording, active, status}` 4 个 endpoint thin proxy. tool-bridge `server.py` 加 4 个 JSON-RPC method. 测试搬到 `edge/tool-bridge/tests/recmode/test_cdp_listener.py`. |
+| ~~`recmode/cleanup.py`~~ | ✅ **5/26 同批搬** | → `edge/tool-bridge/.../recmode/cleanup.py`. central stub. gateway `/api/learn/cleanup` thin proxy. 顺手加 `recmode/list_with_meta` JSON-RPC method 给 future catfish-web admin 用. |
+
+**E 类全清意义**: 录屏全链路 (录制 / 综合 / 清理 / selector 修复) 100% 在 edge tool-bridge 进程. central 代码 0 行读写 `~/.catfish/recordings/` `~/.catfish/skills/`. PrivacyCard "录屏 100% 本机" 卖点真正兑现.
 
 #### aggregator 迁移技术备注 (5/25)
 

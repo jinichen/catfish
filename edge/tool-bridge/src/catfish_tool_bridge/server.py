@@ -80,6 +80,21 @@ async def _handle_request(req: Dict[str, Any]) -> Dict[str, Any]:
         return await _handle_recmode_analyze(req_id, params)
     if method == "recmode/repair_selector":
         return await _handle_recmode_repair_selector(req_id, params)
+    # 5/26 BL-RECMODE-MIGRATE-TO-EDGE batch 1 (E.2): cdp_listener + cleanup 搬过来.
+    # gateway /api/learn/{start_recording, stop_recording, active, status, cleanup}
+    # 5 个 endpoint 改 thin proxy 走这条.
+    if method == "recmode/start_recording":
+        return await _handle_recmode_start_recording(req_id, params)
+    if method == "recmode/stop_recording":
+        return await _handle_recmode_stop_recording(req_id, params)
+    if method == "recmode/active":
+        return await _handle_recmode_active(req_id, params)
+    if method == "recmode/status":
+        return await _handle_recmode_status(req_id, params)
+    if method == "recmode/cleanup":
+        return await _handle_recmode_cleanup(req_id, params)
+    if method == "recmode/list_with_meta":
+        return await _handle_recmode_list_with_meta(req_id, params)
 
     return _error(req_id, METHOD_NOT_FOUND, f"unknown method: {method}")
 
@@ -155,6 +170,92 @@ async def _handle_recmode_repair_selector(req_id: Any, params: Dict[str, Any]) -
         return _success(req_id, out)
     except RuntimeError as e:
         return _error(req_id, INTERNAL_ERROR, f"repair_selector 失败 (502): {e}")
+
+
+# ── BL-RECMODE-MIGRATE-TO-EDGE batch 1 (5/26): cdp_listener + cleanup handlers ──
+#
+# 5 个 JSON-RPC method 对应 gateway /api/learn/{start_recording, stop_recording,
+# active, status, cleanup} thin proxy. cdp_listener 文件 5/26 从 central 搬过来,
+# 真接 websockets ws://localhost:9222 + Page.captureScreenshot. 详见
+# recmode/cdp_listener.py 头部注释.
+
+
+async def _handle_recmode_start_recording(req_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
+    """开 RecMode session. Params: {session_id, chrome_ws?, connect_ws?}."""
+    from .recmode import cdp_listener  # noqa: PLC0415
+
+    session_id = (params.get("session_id") or "").strip()
+    if not session_id:
+        return _error(req_id, INVALID_PARAMS, "params.session_id 必填")
+    chrome_ws = (params.get("chrome_ws") or "ws://localhost:9222").strip()
+    connect_ws = bool(params.get("connect_ws", True))
+
+    try:
+        info = await cdp_listener.start_recording(
+            session_id, chrome_ws=chrome_ws, connect_ws=connect_ws,
+        )
+        return _success(req_id, info)
+    except ValueError as e:
+        # 重复 session 等 → gateway 映 409
+        return _error(req_id, INVALID_PARAMS, f"start_recording 重复 (409): {e}")
+    except RuntimeError as e:
+        # ws 连不上 / websockets 没装 → 503
+        return _error(req_id, INTERNAL_ERROR, f"start_recording 失败 (503): {e}")
+
+
+async def _handle_recmode_stop_recording(req_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
+    """停 RecMode session. Params: {session_id}."""
+    from .recmode import cdp_listener  # noqa: PLC0415
+
+    session_id = (params.get("session_id") or "").strip()
+    if not session_id:
+        return _error(req_id, INVALID_PARAMS, "params.session_id 必填")
+    try:
+        summary = await cdp_listener.stop_recording(session_id)
+        return _success(req_id, summary)
+    except ValueError as e:
+        # session 不存在 → gateway 映 404
+        return _error(req_id, INVALID_PARAMS, f"session {session_id} 不存在 (404)")
+
+
+async def _handle_recmode_active(req_id: Any, _params: Dict[str, Any]) -> Dict[str, Any]:
+    """列当前在录的 session id."""
+    from .recmode import cdp_listener  # noqa: PLC0415
+    return _success(req_id, {"active_session_ids": cdp_listener.list_active()})
+
+
+async def _handle_recmode_status(req_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
+    """单 session 实时状态. Params: {session_id}. None → INVALID_PARAMS 让 gateway 映 404."""
+    from .recmode import cdp_listener  # noqa: PLC0415
+
+    session_id = (params.get("session_id") or "").strip()
+    if not session_id:
+        return _error(req_id, INVALID_PARAMS, "params.session_id 必填")
+    s = cdp_listener.session_status(session_id)
+    if s is None:
+        return _error(req_id, INVALID_PARAMS, f"session {session_id} 没在录 (404)")
+    return _success(req_id, s)
+
+
+async def _handle_recmode_cleanup(req_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
+    """显式触发录屏清理. Params: {dry_run?, ttl_days?}."""
+    from .recmode import cleanup as _recmode_cleanup  # noqa: PLC0415
+
+    dry_run = bool(params.get("dry_run", False))
+    ttl_days = int(params.get("ttl_days") or 14)
+    stats = _recmode_cleanup.cleanup_old_recordings(
+        ttl_seconds=ttl_days * 24 * 3600,
+        dry_run=dry_run,
+    )
+    return _success(req_id, stats)
+
+
+async def _handle_recmode_list_with_meta(req_id: Any, _params: Dict[str, Any]) -> Dict[str, Any]:
+    """5/25 RecordingsCard 用 — 列所有 session inventory (id / started_at / size /
+    kept_forever / skill_drafts). Tauri 端 #75 当前直接 fs 读, 这个 method 留作
+    未来 catfish-web admin 用 (HTTP 访问 inventory)."""
+    from .recmode import cleanup as _recmode_cleanup  # noqa: PLC0415
+    return _success(req_id, {"recordings": _recmode_cleanup.list_recordings_with_meta()})
 
 
 async def _handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:

@@ -24,6 +24,10 @@ dependencies = [
     # 注意: 生产部署 tool-bridge 跟 hermes 共 venv, hermes 那个 venv 多半也装了
     # httpx (litellm 依赖), 那时这条是冗余安全配置. 单独建 venv 跑测试时必装.
     "httpx >= 0.27",
+    # 5/26 BL-RECMODE-MIGRATE-TO-EDGE batch 1: cdp_listener 搬到 edge 后, tool-bridge
+    # 进程需要 websockets 连 Chrome ws://localhost:9222. central venv 之前装过, 这里
+    # 单独建 venv 跑测试时必装. 跟 httpx 同性质 (生产部署跟 hermes 共 venv 通常已有).
+    "websockets >= 12.0",
 ]
 
 [project.scripts]

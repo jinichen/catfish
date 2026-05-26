@@ -82,17 +82,17 @@ KNOWN_VIOLATIONS_ALLOWLIST: set[str] = {
     "a2a_allow.py",
     "a2a_jwt.py",
     "a2a_self_register.py",
-    # E 类 — RecMode (2 remaining, was 3) **极高敏感**
-    # 5/25 BL-RECMODE-MIGRATE-TO-EDGE: aggregator.py + selector_repair.py 整体搬
-    # edge/tool-bridge/, central 端只剩 stub (RuntimeError on import). 老 ALLOWLIST
-    # 里的 "recmode/aggregator.py" 已移除 — stub 不再含 Path.home() 落盘代码,
-    # 测试自然 pass. 还在 ALLOWLIST 的 cdp_listener / cleanup 写 ~/.catfish/recordings/
-    # 是 CDP listener + cleanup utility (不调 vision LLM, 不存 LLM 分析结果),
-    # 跟搬走的"截图字节 + LLM 分析结果落盘"不是同一类敏感. 仍标待迁 (下一 sprint).
-    # "recmode/aggregator.py" — 5/25 移除 (搬到 edge/tool-bridge)
-    # "recmode/selector_repair.py" — 5/25 同批搬走, 从未在 ALLOWLIST (无 Path.home)
-    "recmode/cdp_listener.py",
-    "recmode/cleanup.py",
+    # E 类 — RecMode · ✅ 5/26 全清
+    # 5/25 batch 0: aggregator.py + selector_repair.py 搬 edge (E.1)
+    # 5/26 batch 1: cdp_listener.py + cleanup.py 搬 edge (E.2)
+    # central 端 4 个 module 全是 fail-loud stub (RuntimeError on import).
+    # gateway /api/learn/* 5 个 endpoint (start/stop/active/status/cleanup) 都是
+    # thin proxy 走 tool_bridge_rpc → tool-bridge Unix socket.
+    # "recmode/aggregator.py" — 5/25 移除
+    # "recmode/selector_repair.py" — 5/25 同批搬走 (从未在 ALLOWLIST)
+    # "recmode/cdp_listener.py" — 5/26 移除
+    # "recmode/cleanup.py" — 5/26 移除
+    # docs/CENTRAL-EDGE-DATA-BOUNDARY.md E 类全清 ✅
     # F 类 — Facts 上传 (1, facts_db.py 已合规走 PG-only 不留 jsonl 字面引用)
     "facts_router.py",
     # G 类 — Resolver / metadata (2)

@@ -39,9 +39,9 @@ def client(monkeypatch, tmp_path):
     yield c
     from catfish_gateway.app import app
     app.dependency_overrides.clear()
-    # 清掉残留 RecMode session 防 test 间污染
-    from catfish_gateway.recmode import cdp_listener
-    cdp_listener._active_sessions.clear()
+    # 5/26 BL-RECMODE-MIGRATE-TO-EDGE batch 1: cdp_listener 搬 edge, central stub.
+    # 不再需要清理 central _active_sessions (那是 stub 永远抛 RuntimeError).
+    # 真 session 状态在 tool-bridge 进程, 跨 test 隔离由测试 mock 提供.
 
 
 def test_start_recording_missing_session_id(client):
@@ -50,40 +50,54 @@ def test_start_recording_missing_session_id(client):
     assert "session_id" in r.json()["detail"]
 
 
-def test_start_then_active_then_stop_roundtrip(client):
-    r = client.post("/api/learn/start_recording", json={"session_id": "rec_e2e", "connect_ws": False})
+# 5/26 BL-RECMODE-MIGRATE-TO-EDGE batch 1: start/stop/active/status/cleanup 改 thin
+# proxy 后, 原 e2e roundtrip 测试 (真起 listener + active 列出 + stop) 搬到
+# edge/tool-bridge/tests/recmode/test_cdp_listener.py — 那是真 cdp_listener 的家.
+# 这里只测 gateway 端 proxy 行为 (body 校验 + JSON-RPC code → HTTP code 映射).
+
+
+def test_start_recording_proxy_success(client, monkeypatch):
+    """tool-bridge 返成功 → gateway 透传 + 注 viewer."""
+    from catfish_gateway import tool_bridge_rpc as _tb_rpc
+    expected = {"session_id": "rec_x", "started_at": 1234567890, "output_dir": "/tmp/rec_x"}
+
+    async def fake_call(method, params, **kw):
+        assert method == "recmode/start_recording"
+        assert params["session_id"] == "rec_x"
+        return dict(expected)
+
+    monkeypatch.setattr(_tb_rpc, "call", fake_call)
+    r = client.post("/api/learn/start_recording", json={"session_id": "rec_x", "connect_ws": False})
     assert r.status_code == 200, r.text
-    data = r.json()
-    assert data["session_id"] == "rec_e2e"
-    assert "started_at" in data
-    assert data["viewer"] == "employee@ffcs.cn"
-
-    r = client.get("/api/learn/active")
-    assert r.status_code == 200
-    assert "rec_e2e" in r.json()["active_session_ids"]
-
-    r = client.post("/api/learn/stop_recording", json={"session_id": "rec_e2e", "connect_ws": False})
-    assert r.status_code == 200
-    summary = r.json()
-    assert summary["session_id"] == "rec_e2e"
-    assert "events_count" in summary
-    assert "duration_s" in summary
-
-    r = client.get("/api/learn/active")
-    assert "rec_e2e" not in r.json()["active_session_ids"]
+    out = r.json()
+    assert out["session_id"] == "rec_x"
+    assert out["viewer"] == "employee@ffcs.cn"
 
 
-def test_duplicate_start_409(client):
-    client.post("/api/learn/start_recording", json={"session_id": "rec_dup", "connect_ws": False})
+def test_start_recording_duplicate_409(client, monkeypatch):
+    """tool-bridge 报"重复" → gateway 映 409."""
+    from catfish_gateway import tool_bridge_rpc as _tb_rpc
+
+    async def fake_call(method, params, **kw):
+        raise _tb_rpc.ToolBridgeRPCError(_tb_rpc.JSONRPC_INVALID_PARAMS,
+                                          "start_recording 重复 (409): session 已在录中")
+
+    monkeypatch.setattr(_tb_rpc, "call", fake_call)
     r = client.post("/api/learn/start_recording", json={"session_id": "rec_dup", "connect_ws": False})
     assert r.status_code == 409
-    assert "已在录中" in r.json()["detail"]
 
 
-def test_stop_nonexistent_404(client):
+def test_stop_recording_not_found_404(client, monkeypatch):
+    """tool-bridge 报"不存在" → gateway 映 404."""
+    from catfish_gateway import tool_bridge_rpc as _tb_rpc
+
+    async def fake_call(method, params, **kw):
+        raise _tb_rpc.ToolBridgeRPCError(_tb_rpc.JSONRPC_INVALID_PARAMS,
+                                          "session rec_nope 不存在 (404)")
+
+    monkeypatch.setattr(_tb_rpc, "call", fake_call)
     r = client.post("/api/learn/stop_recording", json={"session_id": "rec_nope"})
     assert r.status_code == 404
-    assert "没在录中" in r.json()["detail"]
 
 
 def test_stop_missing_session_id(client):
@@ -249,22 +263,39 @@ def test_record_transcript_session_not_found(client):
     assert r.status_code == 404
 
 
-def test_status_endpoint_active(client):
-    """F: /api/learn/status/<sid> 返实时 keyframes / events 计数"""
-    client.post("/api/learn/start_recording", json={
-        "session_id": "rec_status_t", "connect_ws": False,
-    })
+def test_status_endpoint_proxy_success(client, monkeypatch):
+    """F: /api/learn/status/<sid> proxy → tool-bridge 返成功"""
+    from catfish_gateway import tool_bridge_rpc as _tb_rpc
+    expected = {
+        "session_id": "rec_status_t",
+        "elapsed_s": 5.2,
+        "events_count": 12,
+        "keyframes_count": 3,
+        "ws_connected": True,
+    }
+
+    async def fake_call(method, params, **kw):
+        assert method == "recmode/status"
+        assert params["session_id"] == "rec_status_t"
+        return dict(expected)
+
+    monkeypatch.setattr(_tb_rpc, "call", fake_call)
     r = client.get("/api/learn/status/rec_status_t")
     assert r.status_code == 200, r.text
     out = r.json()
     assert out["session_id"] == "rec_status_t"
-    assert "elapsed_s" in out
-    assert "events_count" in out
-    assert "keyframes_count" in out
-    client.post("/api/learn/stop_recording", json={"session_id": "rec_status_t"})
+    assert out["keyframes_count"] == 3
 
 
-def test_status_endpoint_unknown_404(client):
+def test_status_endpoint_unknown_404(client, monkeypatch):
+    """tool-bridge 报"没在录" → gateway 映 404."""
+    from catfish_gateway import tool_bridge_rpc as _tb_rpc
+
+    async def fake_call(method, params, **kw):
+        raise _tb_rpc.ToolBridgeRPCError(_tb_rpc.JSONRPC_INVALID_PARAMS,
+                                          "session rec_no_such 没在录 (404)")
+
+    monkeypatch.setattr(_tb_rpc, "call", fake_call)
     r = client.get("/api/learn/status/rec_no_such")
     assert r.status_code == 404
 

@@ -589,30 +589,41 @@ async def api_learn_start_recording(
     body: dict,
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """开 RecMode session — 连 Catfish Chrome CDP + 起后台 listener.
+    """开 RecMode session — 连 Catfish Chrome CDP + 起后台 listener (thin proxy → edge tool-bridge).
 
     Body: {"session_id": str, "chrome_ws": str (可选, 默认 ws://localhost:9222)}
 
     Returns: {session_id, started_at, output_dir}
+
+    5/26 BL-RECMODE-MIGRATE-TO-EDGE batch 1: gateway 不再直接调 cdp_listener
+    (中央代码不读写 ~/.catfish/recordings/). 转 Unix socket JSON-RPC 给 tool-bridge.
     """
-    from .recmode import cdp_listener  # noqa: PLC0415
+    from . import tool_bridge_rpc as _tb_rpc  # noqa: PLC0415
+
     session_id = (body.get("session_id") or "").strip()
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id 不能空")
     chrome_ws = (body.get("chrome_ws") or "ws://localhost:9222").strip()
-    # connect_ws 可由 caller 关 (test / dev 不真连 Chrome 时), 默认真连
     connect_ws = bool(body.get("connect_ws", True))
+
     try:
-        info = await cdp_listener.start_recording(
-            session_id, chrome_ws=chrome_ws, connect_ws=connect_ws,
+        out = await _tb_rpc.call(
+            "recmode/start_recording",
+            {"session_id": session_id, "chrome_ws": chrome_ws, "connect_ws": connect_ws},
         )
-        info["viewer"] = user.sub
-        return info
-    except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e)) from e
-    except RuntimeError as e:
-        # ws 连接失败 / websockets 没装 → 503
-        raise HTTPException(status_code=503, detail=str(e)) from e
+    except _tb_rpc.ToolBridgeUnreachable as e:
+        raise HTTPException(status_code=502, detail=f"tool-bridge 不可达: {e}") from e
+    except _tb_rpc.ToolBridgeRPCError as e:
+        # tool-bridge INVALID_PARAMS 含 "重复" → 409, 含 "失败" (RuntimeError) → 503
+        if "重复" in e.message or "409" in e.message:
+            raise HTTPException(status_code=409, detail=e.message) from e
+        if "503" in e.message:
+            raise HTTPException(status_code=503, detail=e.message) from e
+        raise HTTPException(status_code=502, detail=e.message) from e
+
+    if isinstance(out, dict):
+        out["viewer"] = user.sub
+    return out  # type: ignore[return-value]
 
 
 @app.post("/api/learn/stop_recording")
@@ -620,22 +631,29 @@ async def api_learn_stop_recording(
     body: dict,
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """停 RecMode session — flush events.jsonl + meta.json.
+    """停 RecMode session — flush events.jsonl + meta.json (thin proxy → edge tool-bridge).
 
     Body: {"session_id": str}
-
     Returns: meta dict (events_count, keyframes_count, duration_s, output_dir)
     """
-    from .recmode import cdp_listener  # noqa: PLC0415
+    from . import tool_bridge_rpc as _tb_rpc  # noqa: PLC0415
+
     session_id = (body.get("session_id") or "").strip()
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id 不能空")
     try:
-        summary = await cdp_listener.stop_recording(session_id)
-        summary["viewer"] = user.sub
-        return summary
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
+        out = await _tb_rpc.call("recmode/stop_recording", {"session_id": session_id})
+    except _tb_rpc.ToolBridgeUnreachable as e:
+        raise HTTPException(status_code=502, detail=f"tool-bridge 不可达: {e}") from e
+    except _tb_rpc.ToolBridgeRPCError as e:
+        # tool-bridge "不存在" → gateway 映 404
+        if "不存在" in e.message or "404" in e.message:
+            raise HTTPException(status_code=404, detail=e.message) from e
+        raise HTTPException(status_code=502, detail=e.message) from e
+
+    if isinstance(out, dict):
+        out["viewer"] = user.sub
+    return out  # type: ignore[return-value]
 
 
 @app.post("/api/learn/record_transcript")
@@ -898,7 +916,7 @@ async def api_learn_cleanup(
     body: dict,
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """显式触发 RecMode 录屏清理.
+    """显式触发 RecMode 录屏清理 (thin proxy → edge tool-bridge).
 
     5/25 BL-RECMODE-NO-AUTO-DELETE: catfish 后台 daemon 已撤掉, 此 endpoint
     成为**唯一**的清理触发入口 — Dashboard "我的录屏" 区 / admin CLI / 测试
@@ -906,16 +924,26 @@ async def api_learn_cleanup(
 
     Body: {"dry_run"?: bool (默认 false 真删), "ttl_days"?: int (默认 14)}
     Returns: cleanup_old_recordings stats
+
+    5/26 BL-RECMODE-MIGRATE-TO-EDGE batch 1: cleanup.py 搬 edge, gateway thin proxy.
     """
-    from .recmode import cleanup as _recmode_cleanup  # noqa: PLC0415
+    from . import tool_bridge_rpc as _tb_rpc  # noqa: PLC0415
+
     dry_run = bool(body.get("dry_run", False))
     ttl_days = int(body.get("ttl_days") or 14)
-    stats = _recmode_cleanup.cleanup_old_recordings(
-        ttl_seconds=ttl_days * 24 * 3600,
-        dry_run=dry_run,
-    )
-    stats["viewer"] = user.sub
-    return stats
+    try:
+        stats = await _tb_rpc.call(
+            "recmode/cleanup",
+            {"dry_run": dry_run, "ttl_days": ttl_days},
+        )
+    except _tb_rpc.ToolBridgeUnreachable as e:
+        raise HTTPException(status_code=502, detail=f"tool-bridge 不可达: {e}") from e
+    except _tb_rpc.ToolBridgeRPCError as e:
+        raise HTTPException(status_code=502, detail=e.message) from e
+
+    if isinstance(stats, dict):
+        stats["viewer"] = user.sub
+    return stats  # type: ignore[return-value]
 
 
 @app.post("/api/learn/test_skill")
@@ -1060,12 +1088,21 @@ async def api_learn_analyze(
 async def api_learn_active(
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """列当前在录的 RecMode session (调试 / 监控用)."""
-    from .recmode import cdp_listener  # noqa: PLC0415
-    return {
-        "active_session_ids": cdp_listener.list_active(),
-        "viewer": user.sub,
-    }
+    """列当前在录的 RecMode session (调试 / 监控用) — thin proxy → edge tool-bridge.
+
+    5/26 BL-RECMODE-MIGRATE-TO-EDGE batch 1.
+    """
+    from . import tool_bridge_rpc as _tb_rpc  # noqa: PLC0415
+    try:
+        out = await _tb_rpc.call("recmode/active", {})
+    except _tb_rpc.ToolBridgeUnreachable as e:
+        raise HTTPException(status_code=502, detail=f"tool-bridge 不可达: {e}") from e
+    except _tb_rpc.ToolBridgeRPCError as e:
+        raise HTTPException(status_code=502, detail=e.message) from e
+
+    if isinstance(out, dict):
+        out["viewer"] = user.sub
+    return out  # type: ignore[return-value]
 
 
 @app.get("/api/learn/status/{session_id}")
@@ -1073,17 +1110,25 @@ async def api_learn_status(
     session_id: str,
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """RecMode F (5/14): 单 session 实时状态 — Companion 录制浮层 polling.
+    """RecMode F (5/14): 单 session 实时状态 — Companion 录制浮层 polling (thin proxy).
 
     返 elapsed_s + events_count + keyframes_count + ws_connected.
     没在录中 → 404 (Companion 应停 polling).
     """
-    from .recmode import cdp_listener  # noqa: PLC0415
-    s = cdp_listener.session_status(session_id)
-    if s is None:
-        raise HTTPException(status_code=404, detail=f"session {session_id} 没在录")
-    s["viewer"] = user.sub
-    return s
+    from . import tool_bridge_rpc as _tb_rpc  # noqa: PLC0415
+    try:
+        out = await _tb_rpc.call("recmode/status", {"session_id": session_id})
+    except _tb_rpc.ToolBridgeUnreachable as e:
+        raise HTTPException(status_code=502, detail=f"tool-bridge 不可达: {e}") from e
+    except _tb_rpc.ToolBridgeRPCError as e:
+        # tool-bridge "没在录" → gateway 映 404 (老语义)
+        if "没在录" in e.message or "404" in e.message:
+            raise HTTPException(status_code=404, detail=f"session {session_id} 没在录") from e
+        raise HTTPException(status_code=502, detail=e.message) from e
+
+    if isinstance(out, dict):
+        out["viewer"] = user.sub
+    return out  # type: ignore[return-value]
 
 
 # BL-CENTRAL-WEB-PURGE-USERDATA (5/17 鸿波): 砍 /api/tasks/me 端点.
