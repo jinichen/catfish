@@ -492,52 +492,17 @@ def build_registry_router() -> APIRouter:
         tag: str = Query(..., description="要查的专长 tag (大小写不敏感)"),
         online_only: bool = Query(False, description="只返在线 (last_seen <2min)"),
     ) -> ByExpertiseResponse:
-        """BL-FED2.2 (5/12 鸿波拍板) 黄页 — 按专长 tag 查员工.
+        """⚠ DEPRECATED 5/26 — A2A federation 整套砍, 此 endpoint 直接返 410 GONE.
 
-        **隐私边界**:
-          - 只返 employee 主动 register 上来的 expertise tag (member 自己机器
-            上 catfish_confirm_expertise 通过的)
-          - **不返** jwks_uri / public_pem / catfish_endpoint (敏感, 走 lookup
-            才出)
-          - 调用方拿 sub 后, 还要走 lookup + A2A 流程才能联系到员工 — 给员工
-            "拒接" 的二次窗口
+        原 BL-FED2.2 (5/12) 黄页查员工功能, 配合 Plan D A2A 用. 0 真客户用 +
+        1695 LOC + 私钥违规, 5/26 鸿波拍板停整套 federation. 详见
+        docs/HERMES-013-ALIGN.md A2A 段.
+
+        真要查员工 expertise 走 catfish-web /admin 直接看 PG 表.
         """
-        if not tag or not tag.strip():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="tag 必填",
-            )
-        norm_tag = tag.strip().lower()
-        entries = await _load_registry_async()
-
-        matches: list[ByExpertiseMatch] = []
-        for e in entries.values():
-            # 大小写不敏感匹配
-            if any(t.strip().lower() == norm_tag for t in (e.expertise or [])):
-                if online_only and not e.is_online():
-                    continue
-                matches.append(
-                    ByExpertiseMatch(
-                        sub=e.sub,
-                        department=e.department,
-                        expertise=e.expertise,
-                        online=e.is_online(),
-                        last_seen=e.last_seen_iso,
-                    )
-                )
-
-        # 在线优先, 再按 last_seen 降序
-        matches.sort(key=lambda m: (not m.online, m.last_seen), reverse=False)
-        # last_seen 降序需要单独 — 拆两步: 先在线, 再按时间倒序
-        on = sorted([m for m in matches if m.online], key=lambda m: m.last_seen, reverse=True)
-        off = sorted([m for m in matches if not m.online], key=lambda m: m.last_seen, reverse=True)
-        ordered = on + off
-
-        return ByExpertiseResponse(
-            tag=tag,
-            matched_count=len(ordered),
-            online_count=sum(1 for m in ordered if m.online),
-            matches=ordered,
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="A2A federation 5/26 deprecated. 真要查员工 expertise 走 catfish-web /admin.",
         )
 
     return router

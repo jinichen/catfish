@@ -542,7 +542,8 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_skill_delete":
         return skill_delete(args)
     if name == "catfish_a2a_ask":
-        return a2a_ask(args)
+        # 5/26 DEPRECATED: A2A federation 整套砍 (0 真客户 + 1695 LOC).
+        return {"type": "error", "error": "catfish_a2a_ask 5/26 deprecated — Plan D Federation 整套停, 详见 docs/HERMES-013-ALIGN.md"}
     # BL-MEMORY-DEDUPE-COMPRESS (5/17 凌晨)
     if name == "catfish_memory_dedupe":
         return memory_dedupe(args)
@@ -638,10 +639,9 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_expert_consult":
         from . import expert_consult  # noqa: PLC0415
         return expert_consult.tool_expert_consult(args)
-    # BL-FED2.6 (5/12) a2a 协助通知主动审计
+    # 5/26 DEPRECATED: A2A federation 整套砍.
     if name == "catfish_list_a2a_help":
-        from . import a2a_notifications  # noqa: PLC0415
-        return a2a_notifications.tool_list_a2a_help(args)
+        return {"type": "error", "error": "catfish_list_a2a_help 5/26 deprecated — A2A 整套停"}
     # BL-FIX-SESSION-SEARCH (5/13 鸿波"历史会话搜不到")
     if name == "catfish_search_sessions":
         from . import sessions_search  # noqa: PLC0415
