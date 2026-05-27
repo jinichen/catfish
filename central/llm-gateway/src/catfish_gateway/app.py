@@ -934,8 +934,12 @@ async def api_learn_analyze(
     effective_user = (getattr(user, "email", "") or "").strip()
     if not effective_user:
         effective_user = (request.headers.get("X-Catfish-User", "") or "").strip()
-    logger.warning(
-        "BL-RECMODE-AUTH-FORWARD DEBUG: api_learn_analyze user.email=%r "
+    # BL-RECMODE-AUTH-FORWARD (5/27): info-level 留诊断, 不污染 warning 流.
+    # TODO 5/28: 内网验完 effective_user 是否拿到员工 email 后, 可降级 debug 或砍.
+    # (踩过的坑: user.email 是空 → 从 X-Catfish-User header 兜底; 看 log 这条
+    #  能直接确认是哪段拿到的)
+    logger.info(
+        "BL-RECMODE-AUTH-FORWARD: api_learn_analyze user.email=%r "
         "X-Catfish-User-header=%r → effective_user=%r auth_token_present=%s",
         getattr(user, "email", None),
         request.headers.get("X-Catfish-User"),

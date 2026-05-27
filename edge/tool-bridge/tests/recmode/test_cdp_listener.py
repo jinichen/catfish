@@ -198,3 +198,110 @@ async def test_long_pause_detector_fires(tmp_path, monkeypatch):
     kf_id = await cdp_listener._capture_screenshot(sess.state)
     assert kf_id.startswith("kf_")
     assert sess.state.keyframe_count == 1
+
+
+# ============================================================
+# BL-RECMODE-NO-PROXY-LOCALHOST regression (5/27 鸿波 自己 patch 引的 'os' bug)
+# ============================================================
+#
+# 5/27 加 proxy bypass 时函数内重 import os, Python 把整个 start() scope 的
+# os 当 local, 让函数早些行的 os.environ.get 报 UnboundLocalError.
+# 加结构性检查 + smoke test 防回归.
+
+
+def test_no_duplicate_os_import_in_start():
+    """BL-RECMODE-NO-PROXY-LOCALHOST regression: start() 函数内不能再 import os.
+
+    踩过的坑: 函数内 `import os` 让 Python 把整个函数 scope 的 os 当 local,
+    函数早些行的 os.environ.get 当未初始化变量, 直接 UnboundLocalError.
+
+    这条静态检查放这里防回归 — 任何人改 cdp_listener.py 在函数内加 import os
+    就会被这条测试挡住.
+    """
+    import ast
+    import inspect
+
+    src = inspect.getsource(cdp_listener)
+    tree = ast.parse(src)
+
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        # 只看函数 (async / sync) 内部
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Import):
+                    for alias in sub.names:
+                        # 允许 import httpx / websockets / 等其他模块, 但 os
+                        # 已经在模块顶部 import 过, 函数内再 import 就是 bug
+                        if alias.name == "os":
+                            offenders.append(
+                                f"{node.name} (line {sub.lineno}): import os"
+                            )
+    assert not offenders, (
+        f"start() 等函数内不能再 import os (模块顶部已有). 触发 UnboundLocalError "
+        f"风险. 命中: {offenders}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_start_uses_output_root_without_unbound_os(tmp_path):
+    """BL-RECMODE-NO-PROXY-LOCALHOST regression: start() 走 output_root 分支不挂.
+
+    5/27 那个 'os' bug 在 line 395 `os.environ.get("CATFISH_HOME")` — 进入
+    `if output_root is None` 分支才会触发. 这条测试**故意不传 output_root**,
+    走默认分支, 确保 os 能 access (没被 shadow 成 local).
+    """
+    # 显式不传 output_root, 让代码走 env 兜底分支
+    # 用 monkeypatch 把 HOME 指 tmp_path, 防真写到员工 ~/.catfish/
+    import os as _real_os
+    saved_home = _real_os.environ.get("HOME")
+    saved_catfish_home = _real_os.environ.get("CATFISH_HOME")
+    _real_os.environ["HOME"] = str(tmp_path)
+    _real_os.environ.pop("CATFISH_HOME", None)
+    try:
+        sess = await cdp_listener.CDPRecordingSession.start(
+            session_id="test_no_unbound_os",
+            chrome_ws="ws://localhost:9222",
+            output_root=None,  # 关键: 走默认分支才会撞 'os' bug
+            connect_ws=False,
+        )
+        # 跑到这里说明 os scope 没出问题
+        assert sess.state.output_dir.exists()
+        await sess.stop()
+    finally:
+        if saved_home is not None:
+            _real_os.environ["HOME"] = saved_home
+        if saved_catfish_home is not None:
+            _real_os.environ["CATFISH_HOME"] = saved_catfish_home
+
+
+def test_resolve_page_ws_url_disables_env_proxy():
+    """BL-RECMODE-NO-PROXY-LOCALHOST: httpx 必须用 trust_env=False, 防 Clash 拦.
+
+    国内开发环境很可能设 HTTPS_PROXY=http://127.0.0.1:7890 (Clash). httpx
+    默认 trust_env=True 让 localhost 也走代理, 代理一关录屏直接挂. 这条静态
+    检查防 trust_env=False 被改回去.
+    """
+    import inspect
+    src = inspect.getsource(cdp_listener._resolve_page_ws_url)
+    assert "trust_env=False" in src, (
+        "_resolve_page_ws_url 必须用 httpx.AsyncClient(trust_env=False), "
+        "否则 Clash 类 HTTPS_PROXY env 会让 localhost:9222 走代理失败. "
+        "改回去前先看 5/27 BL-RECMODE-NO-PROXY-LOCALHOST 反思."
+    )
+
+
+def test_websockets_connect_disables_proxy():
+    """BL-RECMODE-NO-PROXY-LOCALHOST: websockets.connect 也得绕开 HTTPS_PROXY.
+
+    websockets 14+ 读 https_proxy env. 跟 httpx 同理, 防 Clash 一关 RecMode 挂.
+    """
+    import inspect
+    src = inspect.getsource(cdp_listener.CDPRecordingSession.start)
+    # 双保险: 要么显式 proxy=None, 要么 env-clear http_proxy / https_proxy
+    has_proxy_none = "proxy=None" in src
+    has_env_clear = "https_proxy" in src and "environ.pop" in src
+    assert has_proxy_none or has_env_clear, (
+        "start() 调 websockets.connect 必须绕 proxy env. 没 proxy=None 也没 "
+        "env-clear → Clash 一关录屏挂. 见 5/27 BL-RECMODE-NO-PROXY-LOCALHOST."
+    )
