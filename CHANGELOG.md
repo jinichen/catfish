@@ -5,6 +5,56 @@
 
 ---
 
+## 2026-05-27（周三）· LLM 工具循环失败修 — BL-TOOLBRIDGE-CONSOLE-TOOL + BL-AGENT-LOOP-DEDUP
+
+### 触发: 5/26 晚 LLM 卡死循环, 鸿波诊断 + 当晚修
+
+5/26 晚 LLM 在 Companion chat 里操作浏览器时反复调 `catfish_browser_goto(expression="document.querySelector(...)")` 卡死循环, 文字 self-correct 几十次说"我换用 browser_console"但实际工具调用永远一样, 烧 token 到 context 上限. 鸿波诊断后 5/27 凌晨修.
+
+### 根因 (三层叠加)
+
+1. **catfish-tool-bridge 没暴露 JS eval 工具**. LLM 从 prior 假设有 `browser_console`, 但 schema 里只有 goto/click/fill/snapshot/screenshot/find_by_text. tool_call 受 schema 约束只能选清单里的, LLM fallback 到看起来最接近的 `browser_goto` 误用 `expression` 字段.
+
+2. **`catfish_browser_goto` schema 没 `additionalProperties: false`**. LLM 传 `expression=...` schema 不拒, 后端 `_browser_goto_impl` 读 `args.get("url")` 是空, 返"url 必填". LLM 拿到错码但**学不会** — 因为它的 prior 太强 "expression 一定是 JS eval", 继续 retry.
+
+3. **hermes 只有同一轮内 dedup, 没跨轮 dedup**. `_deduplicate_tool_calls` 砍同轮重复, 但跨轮一样的 tool_call 不拦截. LLM 一直跑, 一直转.
+
+### 修法
+
+**catfish (edge/tool-bridge)**:
+
+1. **`catfish_tools_browser.py` 加 `browser_evaluate(expression, timeout_seconds?)`**:
+   走 Playwright `page.evaluate()` 跑 JS, 返序列化值 + value_type + page_url + page_title. JS 错 friendly text. 巨型字符串/对象自动截断.
+
+2. **`catfish_tools.py` dispatch 加路由** — `catfish_browser_evaluate` 和 `catfish_browser_console` 两个名字同一个 impl. LLM 抓哪个名字都行 (Anthropic Computer Use / 老 Playwright MCP 习惯叫 console, 自定义规范叫 evaluate, 双口入都接). 防 ghost tool 死循环.
+
+3. **`catfish_tool_schemas.py` 三处改**:
+   - `catfish_browser_goto` schema 加 `additionalProperties: false` + description 显式写 "不要用这个跑 JS, 用 catfish_browser_evaluate"
+   - 加 `catfish_browser_evaluate` schema (规范名, JSON-safe value, 用法示例)
+   - 加 `catfish_browser_console` schema (alias, description 指向 evaluate)
+
+**hermes (~/.hermes/hermes-agent/, 仓外 monkey-patch)**:
+
+4. **`run_agent.py` 加跨轮 dedup (BL-AGENT-LOOP-DEDUP)**:
+   - `__init__` 加 `_recent_tool_call_signatures: deque(maxlen=4)` + `_loop_breaker_armed: bool`
+   - 新方法 `_enforce_cross_turn_dedup(tool_calls)`: 记每轮 tool_call 签名 (排序后 (name, args) 元组). **连续 3 轮一样** → 砍空 tool_calls + 注入提示 "你卡循环了, 工具名/参数检查, 下轮必须换或回答用户". armed 后第二次直接砍不重复插提示.
+   - 主 agent loop 在 `_deduplicate_tool_calls` 后调用, 提示拼到 `assistant_message.content`, 下轮 LLM 看 history 时被读到.
+
+### 验证
+
+- Python AST: catfish_tools_browser.py / catfish_tools.py / catfish_tool_schemas.py / run_agent.py 全 OK
+- BL-AGENT-LOOP-DEDUP smoke test 跑通: 三轮同 tool_call → 第三轮砍 + 注入提示; 第四轮 armed 后直接砍; 参数变化的不触发
+
+### 反思
+
+5/26 晚那个 LLM 死循环烧了几千 token + 用户耐心. 根因不在 LLM 笨, 在工具暴露不全 + schema 验证宽松. 教训:
+
+- **MCP 工具暴露要够全 — 模型 prior 会假设有标准工具 (console / evaluate / screenshot)**, 缺一个就抓另一个误用. 暴露 30 个比暴露 6 个稳得多.
+- **schema 一定要 `additionalProperties: false`**. 宽松 schema 让模型试错试不到底, 死循环.
+- **跨轮 dedup 是 agent loop 的基本盘**. hermes 之前只做同轮, 等于半套. 双层防护.
+
+---
+
 ## 2026-05-26（周二）· ALLOWLIST 33 → 0 全清 + Companion follow-up + ClawBot 多租户
 
 ### 主线: BL-CENTRAL-EDGE-BOUNDARY 收尾

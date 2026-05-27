@@ -81,6 +81,7 @@ from .catfish_tools_today import (  # noqa: E402, F401
 
 from .catfish_tools_browser import (  # noqa: E402
     browser_click,
+    browser_evaluate,
     browser_fill,
     browser_find_by_text,
     browser_goto,
@@ -533,6 +534,11 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
         return browser_screenshot(args)
     if name == "catfish_browser_find_by_text":
         return browser_find_by_text(args)
+    # BL-TOOLBRIDGE-CONSOLE-TOOL (5/27 鸿波): 两个名字, 同一个实现 — 防 LLM 在
+    # console/evaluate 之间反复 self-correct 但抓不到. Anthropic Computer Use /
+    # Playwright MCP 习惯叫 console, 自己定的规范叫 evaluate, 双口入都接.
+    if name in ("catfish_browser_evaluate", "catfish_browser_console"):
+        return browser_evaluate(args)
     if name == "catfish_skill_backup":
         return skill_backup(args)
     if name == "catfish_run_skill":

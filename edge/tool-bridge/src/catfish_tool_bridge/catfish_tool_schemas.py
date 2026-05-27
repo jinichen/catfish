@@ -304,9 +304,11 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_browser_goto",
         "description": (
-            "在 Chrome 当前 tab 打开一个 URL. **走 Playwright 后端** (不再是直 CDP), "
-            "Playwright 内部包了 auto-waiting + retry, 比直 CDP 稳得多. 复用 Companion 起的"
-            "隔离 Chrome 已登录态 (connect_over_cdp). \n\n"
+            "**仅用于 URL 导航** — 在 Chrome 当前 tab 打开一个 URL. 走 Playwright "
+            "`page.goto()` (connect_over_cdp 复用 Companion 起的 Chrome). \n\n"
+            "❌ **不要用这个工具跑 JavaScript / DOM 查询.** 想 `document.querySelector(...)` "
+            "/ 读 DOM 用 **catfish_browser_evaluate**, 不是 goto. goto 的 `expression` "
+            "字段**不存在**, 传了 schema 直接拒. \n\n"
             "✅ **浏览器导航永远用这个**, 不要用 hermes browser_navigate (那个直 CDP, 失败率高). \n\n"
             "wait_until 选项: 'load' (默认, 等所有资源加载完) / 'domcontentloaded' (只等 DOM, "
             "更快但 JS 可能没跑完) / 'networkidle' (等 500ms 无网络活动, 适合 SPA). \n\n"
@@ -329,8 +331,81 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
                 },
             },
             "required": ["url"],
+            # BL-TOOLBRIDGE-CONSOLE-TOOL (5/27 鸿波): 5/26 晚 LLM 死循环踩过坑 —
+            # 模型传 expression=... 想跑 JS, schema 之前没拒, 后端检查 url 是空
+            # 报"url 必填", LLM retry 再 retry 一直转. additionalProperties:false
+            # 让未知字段在 schema 验证层拒, 强迫 LLM 看 description 切去 evaluate.
+            "additionalProperties": False,
         },
         "emoji": "🌐",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    # BL-TOOLBRIDGE-CONSOLE-TOOL (5/27 鸿波): JS eval 工具 — 修 5/26 晚的死循环
+    # 起源见 catfish_tools_browser.py::browser_evaluate. 双名: evaluate (规范) +
+    # console (alias, LLM 习惯). dispatch 两个都路同一 impl.
+    {
+        "name": "catfish_browser_evaluate",
+        "description": (
+            "在 Chrome 当前 page 跑一段 **JavaScript** 表达式, 返结果值. 走 Playwright "
+            "`page.evaluate()`, 跟在 DevTools Console 跑 JS 等价能力. \n\n"
+            "✅ **想读 DOM / 查元素 / 跑 JS 算法都用这个**: \n"
+            "  - `document.title` → 拿页面标题\n"
+            "  - `document.querySelectorAll('a').length` → 数链接\n"
+            "  - `document.querySelector('li[data-id=42]')?.textContent` → 取元素文本\n"
+            "  - `Array.from(document.querySelectorAll('.item')).map(x=>x.innerText)` → 抽列表\n\n"
+            "❌ **不要用 catfish_browser_goto 跑 JS** — 那个只接 URL.\n\n"
+            "返的 value 是 JSON-safe (字符串 / 数字 / null / 数组 / 对象). DOM Node 之类"
+            "不可序列化的会变 None 或字符串. 巨型字符串 / 对象会被截断.\n\n"
+            "**安全**: 跟 DevTools 同权限. 跑前确认页面不是敏感页 (银行 / 政务)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "expression": {
+                    "type": "string",
+                    "description": (
+                        "JavaScript 表达式 (推荐) 或 IIFE. 例: 'document.title', "
+                        "'(() => Array.from(document.querySelectorAll(\"li\")).map(x=>x.innerText))()'. "
+                        "**不要传裸语句** (`let x = 1`), 那不是表达式会报 SyntaxError."
+                    ),
+                },
+                "timeout_seconds": {
+                    "type": "number",
+                    "default": 10.0,
+                    "description": "JS 执行超时 (秒). 默认 10s, 上限 30s.",
+                },
+            },
+            "required": ["expression"],
+            "additionalProperties": False,
+        },
+        "emoji": "🟨",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_browser_console",
+        "description": (
+            "**catfish_browser_evaluate 的 alias** — 推荐用 evaluate; 这个保留是因为"
+            "有些 prior (Anthropic Computer Use / 老 Playwright MCP) 习惯叫 console. "
+            "参数 / 返回 / 行为跟 catfish_browser_evaluate 完全一致."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "expression": {
+                    "type": "string",
+                    "description": "JavaScript 表达式, 跟 catfish_browser_evaluate 一致.",
+                },
+                "timeout_seconds": {
+                    "type": "number",
+                    "default": 10.0,
+                },
+            },
+            "required": ["expression"],
+            "additionalProperties": False,
+        },
+        "emoji": "🟨",
         "toolset": "catfish_native",
         "available": True,
     },

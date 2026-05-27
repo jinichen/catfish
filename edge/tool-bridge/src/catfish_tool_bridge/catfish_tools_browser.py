@@ -313,6 +313,123 @@ def _browser_goto_impl(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"type": "error", "error": f"playwright goto 异常: {type(e).__name__}: {e}"}
 
 
+# ============================================================
+# BL-TOOLBRIDGE-CONSOLE-TOOL (5/27 鸿波): browser_evaluate — 跑 JS 拿值
+# ============================================================
+#
+# 起源: 5/26 晚那次 LLM 死循环 — 模型一直调 `catfish_browser_goto(expression=
+# "document.querySelector(...)")`, 想跑 JS 但 catfish-tool-bridge 之前**根本没暴露
+# JS eval 工具**. 模型从 prior 假设有 `browser_console`, schema 不让它选,
+# fallback 到 goto 误用 expression 字段, error 拿到也学不会, 卡死循环烧 token.
+#
+# 修法:
+#   1. 加 `catfish_browser_evaluate(expression)` — 走 Playwright `page.evaluate()`,
+#      返序列化值 (字符串/数字/object/null), 加错误 friendly text.
+#   2. 同函数注册两个 schema 名: `catfish_browser_evaluate` (规范名) +
+#      `catfish_browser_console` (LLM 习惯叫法的 alias, 模型抓哪个都行).
+#   3. browser_goto schema 收紧 additionalProperties: false, expression 字段直接
+#      被 schema 拒, error message 显式提示 "你想跑 JS 用 catfish_browser_evaluate".
+
+def browser_evaluate(args: Dict[str, Any]) -> Dict[str, Any]:
+    """硬 timeout 兜底 wrapper, 走 _impl."""
+    return _run_with_hard_timeout(_browser_evaluate_impl, args)
+
+
+def _browser_evaluate_impl(args: Dict[str, Any]) -> Dict[str, Any]:
+    """在 Chrome 当前 page 跑一段 JS, 返表达式值.
+
+    用法:
+      browser_evaluate(expression="document.title")
+      browser_evaluate(expression="document.querySelectorAll('a').length")
+      browser_evaluate(expression="document.querySelector('li[data-id=42]')?.textContent")
+
+    返回 {type: ok, value, value_type, summary} 或 {type: error, error}.
+
+    安全: Playwright `page.evaluate` 是合法 JS eval, 跟 DevTools Console 一样
+    能力 — 员工本机自己用没 sandbox 顾虑. 网络隔离层之上 (员工已经登录的页面)
+    跑什么 JS 都是员工权限. **不**做 SSRF / 内容白名单 — 这是 dev tool.
+    """
+    expression = args.get("expression")
+    if not isinstance(expression, str) or not expression.strip():
+        return {
+            "type": "error",
+            "error": "expression 必填, 且必须是 JS 表达式字符串. 例: 'document.title'",
+        }
+    expression = expression.strip()
+
+    # 用户的 expression 可能是多行函数 / IIFE / 直接表达式 — Playwright
+    # page.evaluate 接受任一形式 (会自动包成 async). 但如果是裸语句 (`let x = 1`)
+    # 而非表达式, page.evaluate 会抛 SyntaxError, 让 caller 自己看.
+    timeout_ms = int(float(args.get("timeout_seconds") or 10.0) * 1000)
+    timeout_ms = max(1000, min(timeout_ms, 30_000))
+
+    try:
+        sync_playwright = _import_playwright()
+    except RuntimeError as e:
+        return {"type": "error", "error": str(e)}
+
+    try:
+        with sync_playwright() as p:
+            try:
+                browser, context, page = _connect_playwright_browser(p)
+            except RuntimeError as e:
+                return {"type": "error", "error": str(e)}
+
+            page.set_default_timeout(timeout_ms)
+            try:
+                value = page.evaluate(expression)
+            except Exception as e:
+                # Playwright 把 JS 语法/运行错包成 Error, msg 里会带 stack
+                # 给 LLM 看时截短, 防 stack 太长污染 context
+                msg = f"{type(e).__name__}: {e}"
+                if len(msg) > 800:
+                    msg = msg[:800] + "…"
+                return {
+                    "type": "error",
+                    "error": f"JS 执行失败: {msg}",
+                    "expression": expression[:200],
+                }
+
+            # 序列化 value — 已是 JSON-safe (Playwright evaluate 走 CDP 序列化协议)
+            # 但保险起见, 不可 JSON 的类型 (DOM Node 等) Playwright 自己已经
+            # 转 None / 字符串, 这里只截长字符串
+            value_type = type(value).__name__
+            display: Any = value
+            if isinstance(display, str) and len(display) > 4000:
+                display = display[:4000] + f"…(truncated, full {len(value)} chars)"
+            elif isinstance(display, (list, dict)):
+                try:
+                    serialized = json.dumps(display, ensure_ascii=False)
+                    if len(serialized) > 4000:
+                        display = (
+                            json.loads(serialized[:4000]) if False
+                            else f"<{value_type} 大对象, {len(serialized)} chars, 截断>"
+                        )
+                except Exception:
+                    display = str(display)[:4000]
+
+            actual_url = page.url
+            page_title = ""
+            try:
+                page_title = page.title()
+            except Exception:
+                pass
+
+            return {
+                "type": "ok",
+                "value": display,
+                "value_type": value_type,
+                "page_url": actual_url,
+                "page_title": page_title,
+                "summary": f"在 {actual_url} 跑 JS, 返 {value_type}",
+            }
+    except Exception as e:
+        return {
+            "type": "error",
+            "error": f"playwright evaluate 异常: {type(e).__name__}: {e}",
+        }
+
+
 def browser_click(args: Dict[str, Any]) -> Dict[str, Any]:
     """硬 timeout 兜底 wrapper, 调 _impl. 防 Playwright 卡死锁住整个 daemon."""
     return _run_with_hard_timeout(_browser_click_impl, args)
