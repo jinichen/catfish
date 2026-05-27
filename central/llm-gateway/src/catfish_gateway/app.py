@@ -929,7 +929,19 @@ async def api_learn_analyze(
         auth_token = os.environ.get("CATFISH_DEV_TOKEN", "")
     # X-Catfish-User: service token 模式 (sub=client:hermes-cli) 必须带, 否则
     # 下游 gateway BL-AUTH-DECOUPLE-A1 直接 400. user 已经从 OAuth/header 解出.
+    # BL-RECMODE-AUTH-FORWARD fallback: user.email 空时, 尝试从 caller 的
+    # X-Catfish-User header 兜底 (Companion 在 hermes 模式下本来就带这 header).
     effective_user = (getattr(user, "email", "") or "").strip()
+    if not effective_user:
+        effective_user = (request.headers.get("X-Catfish-User", "") or "").strip()
+    logger.warning(
+        "BL-RECMODE-AUTH-FORWARD DEBUG: api_learn_analyze user.email=%r "
+        "X-Catfish-User-header=%r → effective_user=%r auth_token_present=%s",
+        getattr(user, "email", None),
+        request.headers.get("X-Catfish-User"),
+        effective_user,
+        bool(auth_token),
+    )
 
     draft_only = bool(body.get("draft_only", True))
 

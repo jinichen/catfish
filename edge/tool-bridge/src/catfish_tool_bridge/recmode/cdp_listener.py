@@ -115,12 +115,17 @@ async def _resolve_page_ws_url(chrome_ws: str) -> tuple[str, str]:
     type='page' 的 tab. 没 page → 友好错: 让用户先在 Chrome 里打开网页.
 
     返 (page_ws_url, page_title) — title 给 log 用.
+
+    BL-RECMODE-NO-PROXY-LOCALHOST (5/27 鸿波): 员工 mac 装了 Clash 之类的代理,
+    `HTTPS_PROXY` env 指向 127.0.0.1:7890. httpx 默认 trust_env=True 会让连
+    localhost:9222 也走代理, 代理一关 RecMode 直接挂. 用 trust_env=False 显式
+    禁 env-proxy — 连 localhost 没必要 proxy.
     """
     import httpx
     http_url = chrome_ws.replace("ws://", "http://").replace("wss://", "https://").rstrip("/")
     list_url = f"{http_url}/json"
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=5.0, trust_env=False) as client:
             resp = await client.get(list_url)
             resp.raise_for_status()
             tabs = resp.json()
@@ -413,13 +418,40 @@ class CDPRecordingSession:
             #   2. 选 type=page 的第一个 → 拿完整 webSocketDebuggerUrl
             #   3. connect 那个完整 URL
             page_ws_url, page_title = await _resolve_page_ws_url(chrome_ws)
+            # BL-RECMODE-NO-PROXY-LOCALHOST (5/27 鸿波): websockets 14+ 会读
+            # `https_proxy` / `http_proxy` env 当 proxy. Clash 类代理一关 → RecMode
+            # 连 localhost 也走代理失败 (Errno 61 connect call failed
+            # ('127.0.0.1', 7890)). 用临时清 env + 显式 proxy=None 双保险.
+            # NOTE: 模块顶部已 `import os`, 这里直接用. 函数内**不要** re-import,
+            # 否则 Python 会把整个函数 scope 的 os 当 local, 让函数早些行 (line 395
+            # output_root 那块) 的 `os.environ.get` 报 UnboundLocalError "cannot
+            # access local variable 'os' where it is not associated with a value".
+            _proxy_env_keys = (
+                "http_proxy", "https_proxy", "all_proxy",
+                "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+            )
+            _saved_proxy_env = {k: os.environ.pop(k, None) for k in _proxy_env_keys}
             try:
-                state._ws = await websockets.connect(page_ws_url, max_size=20 * 1024 * 1024)
+                # 先试带 proxy=None (websockets 14+ 支持显式禁代理)
+                try:
+                    state._ws = await websockets.connect(
+                        page_ws_url, max_size=20 * 1024 * 1024, proxy=None,
+                    )
+                except TypeError:
+                    # 老版本 websockets (< 14) 没 proxy 参数, 靠 env-clear 兜底
+                    state._ws = await websockets.connect(
+                        page_ws_url, max_size=20 * 1024 * 1024,
+                    )
             except Exception as e:
                 raise RuntimeError(
                     f"连 Catfish Chrome page CDP 失败 ({page_ws_url}): {e}. "
                     f"Chrome 还在跑吗?"
                 ) from e
+            finally:
+                # 还原 env (其他代码可能依赖)
+                for k, v in _saved_proxy_env.items():
+                    if v is not None:
+                        os.environ[k] = v
             logger.info("RecMode CDP 连上 page '%s' (%s)", page_title, page_ws_url)
             # 起 event loop (recv ws + dispatch handlers)
             state._bg_tasks.append(asyncio.create_task(_event_loop(state)))

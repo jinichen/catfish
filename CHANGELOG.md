@@ -5,6 +5,46 @@
 
 ---
 
+## 2026-05-27（周三 傍晚）· BL-RECMODE-NO-PROXY-LOCALHOST — 录屏起不来修
+
+### 触发
+鸿波修完 BL-RECMODE-AUTH-FORWARD 之后试 RecMode "开录屏", 报:
+```
+开录屏失败: HTTP 503: start_recording 失败 (503): 连 Catfish Chrome page CDP 失败
+(ws://localhost:9222/devtools/page/...): [Errno 61] Connect call failed
+('127.0.0.1', 7890). Chrome 还在跑吗?
+```
+
+### 根因
+错误信息**两层**误导: 文字说连 9222, 但实际 errno 61 connect failed 是 **127.0.0.1:7890** — 那是 Clash 代理端口. 员工 mac 上有 `HTTPS_PROXY=http://127.0.0.1:7890` env, `httpx` (httpx.AsyncClient 默认 trust_env=True) 和 `websockets` 14+ 都读这俩 env, 连 localhost 也走代理. 代理 (Clash) 没起 → connection refused.
+
+### 修法
+`edge/tool-bridge/.../recmode/cdp_listener.py` 两处:
+
+1. **`_resolve_page_ws_url`** httpx 客户端加 `trust_env=False` — 显式禁 env-proxy (含 SSL_CERT_FILE 等也一起禁, 但连 localhost 不需要). httpx 0.27+ 本来对 localhost 也有自动 bypass, 但保险显式禁掉.
+
+2. **websockets.connect** 加 env-clear + `proxy=None` 双保险:
+   ```python
+   _saved = {k: os.environ.pop(k, None) for k in (
+       "http_proxy", "https_proxy", "all_proxy",
+       "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+   )}
+   try:
+       try:
+           ws = await websockets.connect(uri, proxy=None)  # websockets 14+
+       except TypeError:
+           ws = await websockets.connect(uri)  # 老版本 fallback
+   finally:
+       for k, v in _saved.items():
+           if v is not None: os.environ[k] = v
+   ```
+   `proxy=None` 是 websockets 14+ 的显式参数; 老版本不支持 → fallback 靠 env-clear. 改完 env 还原, 不影响 process 其他模块.
+
+### 反思
+4 月装 Clash 后所有 catfish 服务都用过 `trust_env=False`/`NO_PROXY=localhost` 这一层防御, 但 RecMode 5/15 写 cdp_listener 时漏了一处. 这种 "本机服务连本机端口被全局代理拦" 在国内开发环境**特别常见**, 应该有个全局守则: **catfish 所有 httpx / websockets / aiohttp 客户端连 localhost / 127.0.0.1 时**都默认 `trust_env=False` 或显式 bypass proxy. 加 backlog **BL-NO-PROXY-LOCALHOST-AUDIT (P2)**: grep 全仓 `httpx.AsyncClient \| websockets.connect \| aiohttp.ClientSession` 检查每条连 localhost 的路径都带了 proxy bypass.
+
+---
+
 ## 2026-05-27（周三 下午）· BL-RECMODE-AUTH-FORWARD — 视频教学 502 修
 
 ### 触发
