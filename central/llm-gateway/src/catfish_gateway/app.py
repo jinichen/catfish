@@ -883,6 +883,7 @@ async def api_learn_test_skill(
 @app.post("/api/learn/analyze")
 async def api_learn_analyze(
     body: dict,
+    request: Request,
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     """触发 RecMode aggregator (thin proxy → edge tool-bridge): 读 session_dir →
@@ -901,6 +902,11 @@ async def api_learn_analyze(
     不读写 ~/.catfish/recordings/ ~/.catfish/skills/). 透传 Unix socket JSON-RPC  # noqa: BOUNDARY
     到 edge tool-bridge, 由 tool-bridge 进程跑 aggregate_session + 落盘.
     详见 docs/CENTRAL-EDGE-DATA-BOUNDARY.md E.1 / tool_bridge_rpc.py.
+
+    5/27 BL-RECMODE-AUTH-FORWARD (鸿波): aggregator 调 LLM 时之前只读 env
+    CATFISH_DEV_TOKEN, 5/19 BL-AUTH-DECOUPLE 切到 API_SERVER_KEY + OAuth 后
+    env 多半没设 → 报"没 auth token" 502. 改成透传 caller 的 Authorization
+    + user.email 当 X-Catfish-User, 让 aggregator 用员工身份调 catfish-gateway.
     """
     from . import tool_bridge_rpc as _tb_rpc  # noqa: PLC0415
 
@@ -911,7 +917,20 @@ async def api_learn_analyze(
     skills_root_str = (body.get("skills_root") or "").strip()
     # CATFISH_HOME 透传给 tool-bridge (它进程可能没拿到同样的 env)
     catfish_home = os.environ.get("CATFISH_HOME", "").strip()
-    auth_token = os.environ.get("CATFISH_DEV_TOKEN", "")
+
+    # BL-RECMODE-AUTH-FORWARD (5/27 鸿波): 优先用 caller 的 Bearer (Companion
+    # 在 hermes 模式下带 API_SERVER_KEY service token, 在 OAuth 模式下带员工
+    # token). env CATFISH_DEV_TOKEN 当兜底, 保留单机 dev 流程能跑.
+    auth_token = ""
+    incoming_auth = request.headers.get("Authorization", "") or ""
+    if incoming_auth.lower().startswith("bearer "):
+        auth_token = incoming_auth[7:].strip()
+    if not auth_token:
+        auth_token = os.environ.get("CATFISH_DEV_TOKEN", "")
+    # X-Catfish-User: service token 模式 (sub=client:hermes-cli) 必须带, 否则
+    # 下游 gateway BL-AUTH-DECOUPLE-A1 直接 400. user 已经从 OAuth/header 解出.
+    effective_user = (getattr(user, "email", "") or "").strip()
+
     draft_only = bool(body.get("draft_only", True))
 
     try:
@@ -922,6 +941,7 @@ async def api_learn_analyze(
                 "skills_root": skills_root_str,
                 "catfish_home": catfish_home,
                 "auth_token": auth_token,
+                "effective_user": effective_user,
                 "draft_only": draft_only,
             },
         )

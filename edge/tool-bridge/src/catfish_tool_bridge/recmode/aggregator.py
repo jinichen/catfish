@@ -250,6 +250,7 @@ async def call_llm(
     *,
     gateway_url: str | None = None,
     auth_token: str | None = None,
+    effective_user: str | None = None,
     timeout_s: float = 300.0,
     temperature: float = 0.3,  # RecMode 综合要稳, 不要太创造
     max_tokens: int = 8000,
@@ -298,6 +299,13 @@ async def call_llm(
         "Authorization": f"Bearer {tok}",
         "Content-Type": "application/json",
     }
+    # BL-RECMODE-AUTH-FORWARD (5/27 鸿波): 5/19 BL-AUTH-DECOUPLE-A1 后 catfish-gateway
+    # 对 service token (sub=client:hermes-cli) 强制要求 X-Catfish-User. Companion
+    # 走 hermes 模式时 Authorization 是 API_SERVER_KEY 这类 service token, 不带
+    # X-Catfish-User 会被 gateway 400. caller (gateway endpoint) 把 user.email
+    # 透下来, 这里附到 header.
+    if effective_user:
+        headers["X-Catfish-User"] = effective_user.strip()
 
     logger.info(
         "RecMode aggregator: 发 main %d messages (含 multipart 截图) → %s",
@@ -523,12 +531,15 @@ async def aggregate_session(
     *,
     gateway_url: str | None = None,
     auth_token: str | None = None,
+    effective_user: str | None = None,
     draft_only: bool = True,  # 5/14 RecMode C: 默认落 draft, 用户 review 后 /api/learn/save_skill 才正式
 ) -> dict:
     """端到端: 读 session → 调 LLM → parse → 落 skill 文件.
 
     Caller (gateway endpoint /api/learn/analyze) 拿 auth_token 从当前 user
-    的 dev_token / OIDC token, 传给 call_llm 走自己 gateway.
+    的 dev_token / OIDC token, 传给 call_llm 走自己 gateway. 5/27 BL-RECMODE-
+    AUTH-FORWARD: 同时拿 user.email 当 effective_user, call_llm 用它当
+    X-Catfish-User (service token 模式必需).
 
     draft_only=True (默认): 落到 session_dir/skill_draft/, 用户 preview 看完
         点'保存'调 /api/learn/save_skill 才 mv 到正式 ~/.catfish/skills/.
@@ -537,7 +548,12 @@ async def aggregate_session(
     """
     inputs = load_recording_inputs(session_dir)
     messages = build_messages(inputs)
-    raw_text = await call_llm(messages, gateway_url=gateway_url, auth_token=auth_token)
+    raw_text = await call_llm(
+        messages,
+        gateway_url=gateway_url,
+        auth_token=auth_token,
+        effective_user=effective_user,
+    )
     skill = parse_llm_output(raw_text)
     meta_path = session_dir / "meta.json"
     recording_meta = json.loads(meta_path.read_text()) if meta_path.exists() else None

@@ -137,11 +137,13 @@ async def repair_selector(
     *,
     gateway_url: str | None = None,
     auth_token: str | None = None,
+    effective_user: str | None = None,
 ) -> dict:
     """v0 端到端: hint + 截图 → 调 main → parse → 返新 selector.
 
     跟 aggregator.call_llm 同模式 — httpx POST /v1/chat/completions, 走自己
-    gateway 复用 RBAC + quota.
+    gateway 复用 RBAC + quota. 5/27 BL-RECMODE-AUTH-FORWARD: caller 透
+    effective_user (员工 email), call_llm 用它当 X-Catfish-User.
     """
     from . import aggregator  # noqa: PLC0415  复用 call_llm
     messages = build_repair_messages(hint, screenshot_b64, context)
@@ -149,6 +151,7 @@ async def repair_selector(
         messages,
         gateway_url=gateway_url,
         auth_token=auth_token,
+        effective_user=effective_user,
         temperature=0.2,  # repair 要稳, 不创造
         max_tokens=500,
     )

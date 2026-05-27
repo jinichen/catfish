@@ -136,6 +136,10 @@ async def _handle_recmode_analyze(req_id: Any, params: Dict[str, Any]) -> Dict[s
                       f"session_dir {session_dir} 不存在. 先调 /start_recording 录一段.")
 
     auth_token = params.get("auth_token") or os.environ.get("CATFISH_DEV_TOKEN", "")
+    # BL-RECMODE-AUTH-FORWARD (5/27 鸿波): caller 把 user.email 透下来,
+    # aggregator.call_llm 用它当 X-Catfish-User 调下游 catfish-gateway. 服务
+    # token 模式 (sub=client:hermes-cli) 这字段是必需的, BL-AUTH-DECOUPLE-A1.
+    effective_user = (params.get("effective_user") or "").strip()
     draft_only = bool(params.get("draft_only", True))
 
     try:
@@ -143,6 +147,7 @@ async def _handle_recmode_analyze(req_id: Any, params: Dict[str, Any]) -> Dict[s
             session_dir,
             skills_root=skills_root,
             auth_token=auth_token,
+            effective_user=effective_user,
             draft_only=draft_only,
         )
         return _success(req_id, out)
@@ -167,12 +172,15 @@ async def _handle_recmode_repair_selector(req_id: Any, params: Dict[str, Any]) -
         return _error(req_id, INVALID_PARAMS, "params.screenshot_b64 必填 (vision 必须看图)")
 
     auth_token = params.get("auth_token") or os.environ.get("CATFISH_DEV_TOKEN", "")
+    # BL-RECMODE-AUTH-FORWARD (5/27 鸿波): 同 analyze handler — 透 effective_user
+    effective_user = (params.get("effective_user") or "").strip()
     try:
         out = await selector_repair.repair_selector(
             hint=hint,
             screenshot_b64=screenshot,
             context=context,
             auth_token=auth_token,
+            effective_user=effective_user,
         )
         return _success(req_id, out)
     except RuntimeError as e:

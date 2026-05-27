@@ -5,7 +5,42 @@
 
 ---
 
-## 2026-05-27（周三）· LLM 工具循环失败修 — BL-TOOLBRIDGE-CONSOLE-TOOL + BL-AGENT-LOOP-DEDUP
+## 2026-05-27（周三 下午）· BL-RECMODE-AUTH-FORWARD — 视频教学 502 修
+
+### 触发
+鸿波下午测视频教学 "完成教学", 报 `HTTP 502: aggregate_session 失败 (502): RecMode aggregator.call_llm: 没 auth token. 设 CATFISH_DEV_TOKEN env 或 caller 显式传 auth_token`.
+
+### 根因
+5/19 `BL-AUTH-DECOUPLE-A1` 把 Companion → gateway 切到 API_SERVER_KEY service token + X-Catfish-User 模式, 但 5/25 `BL-RECMODE-MIGRATE-TO-EDGE` 搬 aggregator 到 edge/tool-bridge 时**没适配新认证**:
+- gateway endpoint `/api/learn/analyze` 只读 env `CATFISH_DEV_TOKEN` (老 dev 路径), env 没设就传空 → tool-bridge → aggregator.call_llm 报"没 auth token"
+- aggregator.call_llm 调 catfish-gateway `/v1/chat/completions` 时不带 `X-Catfish-User`, 即便 token 对了 BL-AUTH-DECOUPLE-A1 还是 400
+
+### 修法 — 3 文件加 effective_user 透传链
+1. **`central/llm-gateway/.../app.py::api_learn_analyze`**
+   - 加 `request: Request` 参数, 从 `Authorization: Bearer ...` header 拿 caller token
+   - 拿到 `user.email` 当 effective_user, 一并塞 tool-bridge RPC body
+
+2. **`edge/tool-bridge/.../server.py`**:
+   - `_handle_recmode_analyze` 接 `params.effective_user` 透 aggregator.aggregate_session
+   - `_handle_recmode_repair_selector` 同改 (selector_repair 走同一条 LLM 调用链)
+
+3. **`edge/tool-bridge/.../recmode/aggregator.py`**:
+   - `call_llm` + `aggregate_session` 加 `effective_user` kwarg
+   - `call_llm` httpx headers 里加 `X-Catfish-User: <effective_user>`, 满足 BL-AUTH-DECOUPLE-A1
+
+4. **`edge/tool-bridge/.../recmode/selector_repair.py`**:
+   - `repair_selector` 同加 `effective_user` kwarg, 透给 aggregator.call_llm
+
+### 验证
+- Python AST 4 文件全 OK
+- 函数签名 check: call_llm / aggregate_session / repair_selector 都有 effective_user kwarg
+
+### 反思
+5/19 BL-AUTH-DECOUPLE 改了 Companion → gateway 这一段, 但 gateway → tool-bridge → 回 gateway 的内嵌路径没扫. 这次是被用户碰到才修. **教训**: 大的 auth 重构后, 把所有 "self-call 自己 gateway" 的内部路径都过一遍 (RecMode aggregator / selector_repair / 任何 a2a 内部模型调用). backlog 加一项: BL-AUTH-DECOUPLE-A6 (P2) — audit 所有 gateway 内部 self-call 路径, 全部走 caller token 透传 + X-Catfish-User.
+
+---
+
+## 2026-05-27（周三 凌晨）· LLM 工具循环失败修 — BL-TOOLBRIDGE-CONSOLE-TOOL + BL-AGENT-LOOP-DEDUP
 
 ### 触发: 5/26 晚 LLM 卡死循环, 鸿波诊断 + 当晚修
 
