@@ -56,7 +56,10 @@ import { maybeSwitchToVision } from "./chat/visionSwitch";
 
 // ─── 主 hook ───────────────────────────────────
 
-export function useChat(initialModel: string) {
+export function useChat(_initialModel: string) {
+  // 5/28 鸿波: initialModel 参数保留 (caller 仍传), 但 useChat 内部不再用 —
+  // 原 line 130-137 render-time setModelInStore(initialModel) 已 disable
+  // (那段是 picker 覆盖 bug 的根因, 任何 re-render 都把 store 拉回 catalog.default).
   const messages = useChatStore((s) => s.messages);
   const isStreaming = useChatStore((s) => s.isStreaming);
   const streamingId = useChatStore((s) => s.streamingId);
@@ -127,14 +130,19 @@ export function useChat(initialModel: string) {
     [],
   );
 
-  // 首次进入,如果 store 里 model 还是默认值,用 caller 传的 initialModel
-  if (
-    model === "catfish-private-main" &&
-    initialModel &&
-    initialModel !== model
-  ) {
-    setModelInStore(initialModel);
-  }
+  // [5/28 鸿波 21:30 disable] 这段 render-time 副作用是 picker 不生效的根因 —
+  // 任何重 render (useCatalog 15s polling / HMR / 别的 state 变) 都触发, model
+  // 一被某地方设回 "main" 就立刻覆盖成 catalog.default (= deepseek-flash 因为
+  // main 内网挂 is_available=false). picker 切 Gemini 后下一次 render 这条 trigger,
+  // 又把 store.model 覆盖回 deepseek. picker 看起来生效 (UI 一闪 Gemini) 实际 store 仍 deepseek.
+  // Disable — picker 选啥就是啥, 不自动覆盖 store.
+  // if (
+  //   model === "catfish-private-main" &&
+  //   initialModel &&
+  //   initialModel !== model
+  // ) {
+  //   setModelInStore(initialModel);
+  // }
 
   // 5/24 BL-MULTI-SESSION-STREAM: pendingDelta/raf/currentStreamId 从 hook 级 useRef
   // 收进 runOneRound 局部. 否则两个 session 并发 streaming 时, 共享 ref 会让 A 的 delta
@@ -158,6 +166,10 @@ export function useChat(initialModel: string) {
         currentMessages: ChatMessage[];
         tools: OpenAITool[];
         sessionId: string | null;
+        // 5/28 鸿波 P0: send 入口快照 model, 整个 send 流程用同一值, 不依赖
+        // useChatStore.getState() 实时读 (vite HMR + zustand 可能让 store 双 instance,
+        // picker 拿一份 getState 拿另一份). Vision switch 改 store 时也更新这个值.
+        sendModel: string;
       },
     ): Promise<{
       shouldContinue: boolean;
@@ -200,10 +212,13 @@ export function useChat(initialModel: string) {
       // 不能再 persistMessage 写一遍 (会双写, db 出现 2 条相同 assistant row).
       const refs: { calls: ToolCall[]; viaHermes?: boolean } = { calls: [] };
 
-      // 关键: model 从 store snapshot 读, 不用闭包捕获的 — 因为 send() 里
-      // maybeSwitchToVision 可能在这一轮之前刚切过模型, closure 里的 model 还是旧值。
+      // 5/28 鸿波 P0 fix: 用 ctx.sendModel (send 入口快照), 不读 store getState.
+      // 旧实现 useChatStore.getState().model — vite HMR + zustand 多 instance 时
+      // picker UI 跟 send 拿到的 store 不一致, picker 显 Gemini 但 send 真发 deepseek.
+      // ctx.sendModel 在 send 入口锁定 picker 当前值, 整个 send 流程稳定一致.
+      // (Vision switch 改 store 仍然 work — send 会 update ctx.sendModel 跟着切.)
       await streamChat({
-        model: useChatStore.getState().model,
+        model: ctx.sendModel,
         messages: ctx.currentMessages,
         tools: ctx.tools,
         // 5/23 BL-COMPANION-HERMES-SESSION-REUSE (鸿波): send() 开头已 ensureSessionId()
@@ -443,6 +458,11 @@ export function useChat(initialModel: string) {
       //      切了的话往聊天里追加一条 system 提示, 让员工知道发生了啥.
       //      没视觉模型可切 → 给员工 error 消息, **abort 这次发送** —
       //      硬发 deepseek-flash + image_url 上游会 400, 浪费一轮还误导员工.
+      // vision switch 移到 for round 之前已经做过 (line 451). 这里改用 sendModel
+      // 不是闭包 model — 防 send 入口之前的旧 model 飘. 但 sendModel 在下面 let
+      // 才声明, 这里用闭包 model 是 send 入口快照前的, OK (vision 判断只看带图与否).
+      // 切到 vision 后, 下面 sendModel 也要同步 update. 这里改 store 不影响 sendModel
+      // 直到下面赋值. 注: hello 不带图不进这分支, 不影响今晚的 picker 锁问题.
       if (attachments.some((a) => a.kind === "image")) {
         const sw = await maybeSwitchToVision(model);
         if (sw.switched) {
@@ -578,6 +598,12 @@ export function useChat(initialModel: string) {
         let hadToolCallThisSend = false;
         // 自动续跑次数 — 上限 MAX_AUTO_CONTINUES (3), 防死循环
         let autoContinues = 0;
+        // 5/28 鸿波 P0 fix: send 入口快照 model, 整个 send 流程用这个值.
+        // 防 vite HMR + zustand 多 instance race — picker UI 显 X 但 send 真发 Y.
+        // 闭包 model (line 63 useChatStore selector) 是 hook render 时的值, 在 send
+        // 调用瞬间已经 fresh (picker 最近 onChange 触发 re-render). vision switch 改
+        // store 后这个 let 也要更新 (line 449 下面 sendModel = sw.newModel).
+        const sendModel = useChatStore.getState().model;
 
         for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
           if (ctrl.signal.aborted) break;
@@ -588,6 +614,7 @@ export function useChat(initialModel: string) {
             currentMessages,
             tools,
             sessionId: sessionIdForStream,  // 5/24 BL-MULTI-SESSION-STREAM
+            sendModel,
           });
           currentMessages = result.updatedMessages;
 
