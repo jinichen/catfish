@@ -18,6 +18,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("catfish.memory")
 
+#: 默认 catfish 数据目录 (员工本机). env CATFISH_HOME 覆盖.
+#: 5/28 鸿波: helper 之前 reference 这个 constant 但**没定义**, 导致 is_available()
+#: NameError, 整个 plugin 永远报 unavailable → hermes 报 "no provider instance found".
+#: 这是 plugin 5/19 装好但 9 天一直没真注册的根因之二 (第一个根因是 __init__.py
+#: import 链失败, 第二个就是这里).
+_DEFAULT_CATFISH_HOME: Path = Path.home() / ".catfish"
+
+
 def _catfish_home() -> Path:
     """`~/.catfish/` 或 env CATFISH_HOME 指定的目录."""
     env = os.environ.get("CATFISH_HOME")

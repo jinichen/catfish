@@ -117,9 +117,15 @@ _DEFAULT_CATFISH_HOME = Path.home() / ".catfish"
 
 
 # 5/21 拆: 50+ helpers 抽到 catfish_memory_helpers.py (~523 行)
-# catfish-memory plugin 不是 Python package, 不能 relative import. hermes loader
-# 把 plugin 目录加进 sys.path, sibling 模块用绝对 import.
-from catfish_memory_helpers import (  # noqa: F401
+# 5/28 鸿波修: 原注释里说"不能 relative import" 是错的 — hermes plugin loader
+# (~/.hermes/hermes-agent/plugins/memory/__init__.py line 240-255) 用
+# `spec_from_file_location` 给 plugin 设 `submodule_search_locations=[provider_dir]`,
+# 这让 **relative import** 真 work, 但 **absolute import** 找不到 sibling
+# (plugin 目录不在 sys.path). 原 `from catfish_memory_helpers import ...` 走
+# absolute, hermes 加载时静默失败 (logger.debug, 默认不显示), register() 也
+# 跟着挂, hermes 报"loaded but no provider instance found". plugin 5/19 装好
+# 9 天没工作的根因之一. 改 relative import 修.
+from .catfish_memory_helpers import (  # noqa: F401
     # 函数
     _append_journal,
     _append_to_buffer,
