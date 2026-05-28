@@ -90,6 +90,16 @@ SYSTEM_PROMPT = """你是 catfish-skill-author. 用户刚录了一段教学过�
 5. **steps 必含至少一步 LLM-only "返结果"** — 不绑死下游动作 (e.g. 不在 skill 里
    循环创建日历事件, 留给 LLM 看结果决定 dedup).
 6. **看不全就直接写 questions_for_user** — 别瞎猜, 不确定列出来给用户 confirm.
+7. **🇨🇳 所有自然语言字符串必须用中文** (BL-RECMODE-ZH-OUTPUT, 5/27 鸿波):
+   - `description` / `intent_summary` / `steps[].intent` / `steps[].expected_after` /
+     `questions_for_user` 一律用简体中文写
+   - **不要英文**, 也**不要中英混杂** ("用户 demonstrate ..." / "Browse the homepage to ..."
+     全错). 用户是中文母语员工, skill 给非技术同事看
+   - 例: `description: "浏览智慧学习平台首页, 查看推荐课程和热门专区"`
+     而**不是**: `description: "Browse the AI learning platform homepage to view recommended courses and hot zones"`
+   - 唯一允许英文的字段: `skill_name` (snake_case), `namespace`, `tool` (catfish_browser_*),
+     `args_template` 里的 selector / key 名, `output_schema` 里的 JSON key.
+     **value 仍然中文** — 比如 `output_schema: {"课程标题": "string"}` 才对, `{"title": "string"}` 不对.
 """
 
 
@@ -198,6 +208,13 @@ def build_messages(inputs: RecordingInputs) -> list[dict]:
 
             综合上面 events + 语音 + 截图, 输出 SKILL.md + main.py 的 JSON.
             严格按 system prompt 里的 schema, 不要 prose 不要 markdown 围栏.
+
+            **重要**: 所有自然语言描述字段 (description / intent_summary /
+            steps[].intent / steps[].expected_after / questions_for_user) 一律
+            **用简体中文**. 不要英文, 不要中英混杂. 例:
+              ✓ `"description": "浏览学习平台首页, 查看推荐课程"`
+              ✗ `"description": "Browse the homepage to view courses"`
+              ✗ `"description": "Browse 首页 to view 课程"`
         """)
     })
     for kf_id, png_bytes in inputs.screenshots:
