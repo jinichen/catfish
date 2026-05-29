@@ -1,0 +1,9 @@
+name: catfish-xcatfish-user
+version: 0.1.0
+# 显式声明 kind=standalone — 阻止 hermes_cli/plugins.py:1318 auto-detect 误归类:
+# 我们 __init__.py docstring 提了 "MemoryProvider"/"register_memory_provider"
+# 解释跟 catfish-memory 的区别, 关键词撞 auto-detect 会被误归 exclusive
+# (memory provider), routed 到 memory discovery 跳过 general loader, register()
+# 永远不被调.
+kind: standalone
+description: "Catfish 多租户 X-Catfish-User header 注入 — monkey-patch hermes 0.15 共 11 处 (agent_init / _current_main_runtime / auxiliary_client / auto_title_session / APIServerAdapter._create_agent + _handle_companion_proxy + CORS / connect 路由 / _apply_client_headers_for_base_url / picker model_override aiohttp middleware). 等价于 5/27-5/29 在 hermes 仓 5 文件改的内容, 但留 hermes 仓 pristine. 详 README.md + plugin.py docstring."
