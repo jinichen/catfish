@@ -265,17 +265,21 @@ pub async fn attachment_list_by_user(
         let limit = input.limit.unwrap_or(50).clamp(1, 500);
         let days_back = input.days_back.unwrap_or(90);
         let cutoff = now_unix() - (days_back as f64 * 86400.0);
-        let rows = if let Some(fk) = input.file_kind.as_deref() {
+        // borrow checker: 把 query_map 结果绑 local var, 让 stmt 在 collect 之后再 drop.
+        // 之前写法 stmt 在 block end drop, 但 .map_err(...)? 留下的临时 ControlFlow
+        // 还借着 stmt → "stmt dropped while still borrowed".
+        let rows: Vec<AttachmentRow> = if let Some(fk) = input.file_kind.as_deref() {
             let sql = format!(
                 "SELECT {SELECT_COLS} FROM attachments \
                  WHERE user_id = ?1 AND file_kind = ?2 AND created_at >= ?3 \
                  ORDER BY created_at DESC LIMIT ?4"
             );
             let mut stmt = conn.prepare(&sql).map_err(|e| format!("prepare: {e}"))?;
-            stmt.query_map(params![input.user_id, fk, cutoff, limit as i64], row_to_attachment)
-                .map_err(|e| format!("query: {e}"))?
-                .filter_map(|r| r.ok())
-                .collect()
+            let mapped = stmt
+                .query_map(params![input.user_id, fk, cutoff, limit as i64], row_to_attachment)
+                .map_err(|e| format!("query: {e}"))?;
+            let v: Vec<AttachmentRow> = mapped.filter_map(|r| r.ok()).collect();
+            v
         } else {
             let sql = format!(
                 "SELECT {SELECT_COLS} FROM attachments \
@@ -283,10 +287,11 @@ pub async fn attachment_list_by_user(
                  ORDER BY created_at DESC LIMIT ?3"
             );
             let mut stmt = conn.prepare(&sql).map_err(|e| format!("prepare: {e}"))?;
-            stmt.query_map(params![input.user_id, cutoff, limit as i64], row_to_attachment)
-                .map_err(|e| format!("query: {e}"))?
-                .filter_map(|r| r.ok())
-                .collect()
+            let mapped = stmt
+                .query_map(params![input.user_id, cutoff, limit as i64], row_to_attachment)
+                .map_err(|e| format!("query: {e}"))?;
+            let v: Vec<AttachmentRow> = mapped.filter_map(|r| r.ok()).collect();
+            v
         };
         Ok::<Vec<AttachmentRow>, String>(rows)
     })
