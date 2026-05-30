@@ -1,39 +1,34 @@
-"""BL-FILE-SESSION-INDEX-V1 Phase 2 (5/30) — catfish_search_attachments tool.
+"""BL-FILE-SESSION-INDEX-V1 attachments 元数据 + 反向索引工具.
 
-跨会话搜员工上传过的附件 (PDF / Excel / Word / 图片 / 音频).
+# 历史决策反转 (5/30 鸿波)
 
-# 真问题
-catfish_search_sessions (BL-FIX-SESSION-SEARCH) 只搜对话 content (messages.content
-里的文字), 完全不搜附件. 用户问"上次客户 X 的 PDF 里说啥" / "我上传过的 Excel
-里关于 Y 的内容" 全都搜不到 — 因为附件内容不在 messages.content.
+Phase 2 (5/30 早) 我自己写了 BM25 sidecar 跨会话搜附件内容. **过度工程** —
+local_search (catfish-local-search MCP server) 早就有 FTS5 trigram + bm25
+能力, 跨文件搜远比我们的 subprocess BM25 helper 稳.
 
-# 怎么做
-两层搜:
-1. **名字搜** (按 attachments.name LIKE) — 快, 找 "客户合同_v3.pdf" 这种
-2. **内容搜** (走每个匹配附件的 BM25 sidecar) — 准, 找 PDF 里某段话
+Phase 4 (5/30 晚 鸿波拍板) 把 `~/.catfish/uploads/` 加进 local_search 默认
+search-scope. uploads 文件被 local_search 一并索引, **内容搜归一到 local_search**.
 
-Phase 1 (Companion 端 Rust) 已经把附件 metadata 写到 ~/.catfish/attachments.db
-含 kept_path / parsed_text_path. 本工具直读 sqlite + 跑 BM25 sidecar.
+本文件**只保留两项 attachments.db 独有的能力**:
+  1. 按名字搜 (name LIKE) + 拿到 session_id (LLM 反查 "在哪个会话提到的")
+  2. 反向索引 (list_by_user_grouped) — "我上传过的所有 Excel" + 每个文件出现在哪些会话
 
-# 数据源
-~/.catfish/attachments.db (read-only, Companion 写) — 跟 sessions_search 同源风格:
-- read-only 连接 (mode=ro)
-- 永不抛 (失败返空 + 友好 summary)
-- LIKE 转义防 wildcard
-- user_id 隔离 — 必须指定 user_id, 不串其它员工
+# 内容搜怎么走
 
-# BM25 复用
-Companion 已经把每个大文件 (≥50KB) 解析时写了 .parsed.txt sidecar (BL-L26).
-本工具直接调跟 file_parse.rs:attachment_bm25_search 用的同 Python helper
-(attachment_bm25.py), 不要 Companion 中转 — 直接读 sidecar 跑 BM25.
+LLM 应调 local_search(query="xxx") — 它自然 cover 员工本机 + Companion uploads.
+schema description 已引导.
+
+# 设计原则
+
+  - 中央 0 红线 — attachments.db 在边缘 ~/.catfish/, 不上中央
+  - user_id 强制隔离 — query 必带 WHERE user_id = ?
+  - 永不抛 — db 不存在/损坏返空 + 友好 summary, LLM 看到接得住
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 import sqlite3
-import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -44,8 +39,6 @@ logger = logging.getLogger("catfish.tool_bridge.attachments_search")
 _DEFAULT_DAYS_BACK = 90
 _DEFAULT_LIMIT = 20
 _MAX_LIMIT = 100
-_BM25_TOP_K_PER_FILE = 3   # 每个匹配附件取 top-N BM25 段落
-_BM25_TIMEOUT_SEC = 5      # 单个文件 BM25 计算上限
 
 
 def _db_path() -> Path | None:
@@ -64,65 +57,6 @@ def _connect_ro() -> sqlite3.Connection | None:
     except sqlite3.Error as e:
         logger.warning("BL-FILE-SESSION-INDEX-V1: 连 attachments.db 失败: %s", e)
         return None
-
-
-def _find_bm25_helper() -> Path | None:
-    """按优先级查 attachment_bm25.py helper 真实路径.
-
-    Companion 装到 mac 后路径跟 dev 不同, 走 3 候选:
-      1. env CATFISH_BM25_HELPER (显式覆盖)
-      2. ~/.catfish/scripts/attachment_bm25.py (生产装位置, 由 Companion 安装时拷)
-      3. ~/person_task/catfish/edge/companion-app/src-tauri/scripts/attachment_bm25.py (dev)
-
-    都没找到返 None — caller 不要 BM25, 退化到名字搜.
-    """
-    env_path = os.environ.get("CATFISH_BM25_HELPER", "").strip()
-    if env_path:
-        p = Path(env_path).expanduser()
-        if p.exists():
-            return p
-    candidates = [
-        Path.home() / ".catfish" / "scripts" / "attachment_bm25.py",
-        Path.home() / "person_task" / "catfish" / "edge" / "companion-app" / "src-tauri" / "scripts" / "attachment_bm25.py",
-    ]
-    for c in candidates:
-        if c.exists():
-            return c
-    return None
-
-
-def _bm25_search_sidecar(sidecar_path: str, query: str, top_k: int = _BM25_TOP_K_PER_FILE) -> list[dict[str, Any]]:
-    """调 attachment_bm25.py helper 跑 BM25, 返 top-K 段落.
-
-    复用 Companion file_parse.rs 用的同 Python helper (单进程 stateless).
-    失败返 [] (不抛).
-    """
-    helper = _find_bm25_helper()
-    if helper is None:
-        logger.debug("attachment_bm25.py helper 找不到, 跳过内容搜 (仅名字搜可用)")
-        return []
-    if not Path(sidecar_path).exists():
-        return []
-    try:
-        proc = subprocess.run(
-            [
-                "python3", str(helper),
-                "--text-path", sidecar_path,
-                "--query", query,
-                "--top-k", str(top_k),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=_BM25_TIMEOUT_SEC,
-        )
-        if proc.returncode != 0:
-            logger.debug("BM25 helper 非 0 退出 (%s): %s", sidecar_path, proc.stderr[:200])
-            return []
-        data = json.loads(proc.stdout)
-        return data.get("passages", []) or []
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError) as e:
-        logger.debug("BM25 search 失败 (%s): %s", sidecar_path, e)
-        return []
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -186,78 +120,16 @@ def search_by_name(
     return [_row_to_dict(r) for r in rows]
 
 
-def _all_attachments_for_user(
-    user_id: str,
-    *,
-    days_back: int = _DEFAULT_DAYS_BACK,
-    limit: int = 200,
-) -> list[dict[str, Any]]:
-    """列员工所有附件 (按时间倒序). 用于内容搜的候选 — 先取 N 个最近, 再跑 BM25."""
-    if not user_id.strip():
-        return []
-    conn = _connect_ro()
-    if conn is None:
-        return []
-    cutoff = (datetime.now() - timedelta(days=max(0, days_back))).timestamp()
-    limit = max(1, min(500, int(limit)))
-    try:
-        rows = conn.execute(
-            f"SELECT {_SELECT_COLS} FROM attachments "
-            f"WHERE user_id = ? AND created_at >= ? "
-            f"ORDER BY created_at DESC LIMIT ?",
-            (user_id, cutoff, limit),
-        ).fetchall()
-        conn.close()
-    except sqlite3.Error as e:
-        logger.warning("attachments _all_attachments_for_user 失败: %s", e)
-        return []
-    return [_row_to_dict(r) for r in rows]
-
-
-def search_by_content(
-    user_id: str,
-    query: str,
-    *,
-    days_back: int = _DEFAULT_DAYS_BACK,
-    limit: int = _DEFAULT_LIMIT,
-    candidate_pool: int = 100,
-) -> list[dict[str, Any]]:
-    """内容搜: 取最近 candidate_pool 个附件, 对每个有 parsed_text_path 的跑 BM25.
-
-    返 [{ ...attachment metadata, bm25_passages: [{text, score}, ...] }]
-    只返有 BM25 命中的. score 倒序.
-    """
-    if not user_id.strip() or not query.strip():
-        return []
-    candidates = _all_attachments_for_user(user_id, days_back=days_back, limit=candidate_pool)
-    if not candidates:
-        return []
-    out: list[dict[str, Any]] = []
-    for att in candidates:
-        sidecar = att.get("parsed_text_path") or ""
-        if not sidecar:
-            continue
-        passages = _bm25_search_sidecar(sidecar, query)
-        if not passages:
-            continue
-        top_score = max((p.get("score", 0.0) for p in passages), default=0.0)
-        out.append({
-            **att,
-            "bm25_passages": passages,
-            "top_score": top_score,
-        })
-    out.sort(key=lambda x: x.get("top_score", 0.0), reverse=True)
-    return out[:limit]
-
-
 def tool_search_attachments(args: dict[str, Any]) -> dict[str, Any]:
     """catfish_search_attachments tool 入口.
 
+    Phase 4 (5/30): 只剩 name mode (按文件名搜). content mode 退役,
+    内容搜走 local_search (catfish-local-search MCP).
+
     args:
       user_id: str (必填) — 限定员工
-      query: str (必填) — 关键字
-      mode: 'name' | 'content' | 'both' (默认 'both')
-      days_back: int (默认 90) — 搜过去几天
+      query: str (必填) — 关键字 (匹配文件名)
+      days_back: int (默认 90)
       limit: int (默认 20, 上限 100)
     """
     user_id = (args.get("user_id") or "").strip()
@@ -266,9 +138,6 @@ def tool_search_attachments(args: dict[str, Any]) -> dict[str, Any]:
     query = (args.get("query") or "").strip()
     if not query:
         return {"ok": False, "error": "query 必填"}
-    mode = (args.get("mode") or "both").lower()
-    if mode not in ("name", "content", "both"):
-        mode = "both"
     try:
         days_back = int(args.get("days_back") or _DEFAULT_DAYS_BACK)
     except (TypeError, ValueError):
@@ -278,34 +147,19 @@ def tool_search_attachments(args: dict[str, Any]) -> dict[str, Any]:
     except (TypeError, ValueError):
         limit = _DEFAULT_LIMIT
 
-    by_name: list[dict[str, Any]] = []
-    by_content: list[dict[str, Any]] = []
-    if mode in ("name", "both"):
-        by_name = search_by_name(user_id, query, days_back=days_back, limit=limit)
-    if mode in ("content", "both"):
-        by_content = search_by_content(user_id, query, days_back=days_back, limit=limit)
-
-    # 合并去重 (按 attachment id), 内容搜结果优先 (有 bm25_passages 更有用)
-    merged: dict[str, dict[str, Any]] = {}
-    for m in by_content:
-        merged[m["id"]] = m
-    for m in by_name:
-        if m["id"] not in merged:
-            merged[m["id"]] = m
-    matches = list(merged.values())[:limit]
-
+    matches = search_by_name(user_id, query, days_back=days_back, limit=limit)
     if not matches:
         return {
             "ok": True,
             "matches": [],
             "count": 0,
             "summary": (
-                f"🔍 搜员工 {user_id} 上传过的附件含 '{query}' (过去 {days_back} 天): 0 条命中. "
-                f"试试: 改关键词 / 加大 days_back / 用 catfish_list_my_outputs 看 AI 产出"
+                f"🔍 员工 {user_id} 上传过的附件**文件名**含 '{query}' (过去 {days_back} 天): 0 条命中. "
+                f"💡 想搜文件**内容**? 调 local_search(query='{query}') — 走 FTS5 全文索引, "
+                f"覆盖员工 Documents/Desktop/Downloads + 上传到鲶鱼的附件."
             ),
         }
 
-    # 摘要 — 按 file_kind 分组列
     by_kind: dict[str, int] = {}
     for m in matches:
         fk = m.get("file_kind") or m.get("kind") or "?"
@@ -317,9 +171,9 @@ def tool_search_attachments(args: dict[str, Any]) -> dict[str, Any]:
         "count": len(matches),
         "matches": matches,
         "summary": (
-            f"🔍 搜员工 {user_id} 上传过的附件含 '{query}': 命中 {len(matches)} 条 "
-            f"({kind_summary}). 按相关度倒序. 每条带 session_id / kept_path / "
-            f"bm25_passages (如有). 想看全文调 catfish_read_file(path=kept_path)."
+            f"🔍 员工 {user_id} 上传过的附件文件名含 '{query}': 命中 {len(matches)} 条 "
+            f"({kind_summary}). 每条带 session_id 可反查会话. "
+            f"💡 想看附件全文内容 → catfish_read_file(path=kept_path) 或 local_search(query='{query}')."
         ),
     }
 
@@ -367,7 +221,7 @@ def list_by_user_grouped(
         logger.warning("attachments list_by_user_grouped 失败: %s", e)
         return []
 
-    # 按 name 聚合, 每组合并 sessions list
+    # 按 name 聚合
     by_name: dict[str, dict[str, Any]] = {}
     for r in rows:
         d = _row_to_dict(r)
@@ -384,20 +238,17 @@ def list_by_user_grouped(
                 "last_seen_iso": d["created_iso"],
                 "reference_count": 0,
                 "sessions": [],
-                # 最大的那条记录作 representative (拿 kept_path)
                 "kept_path": d["kept_path"],
                 "parsed_text_path": d["parsed_text_path"],
                 "size_bytes": d["size_bytes"],
             }
         g = by_name[name]
         g["reference_count"] += 1
-        # session 去重 (同 session 多次提到同名文件算 1 次)
         if d["session_id"] not in {s["session_id"] for s in g["sessions"]}:
             g["sessions"].append({
                 "session_id": d["session_id"],
                 "first_seen_iso": d["created_iso"],
             })
-        # 更新 first/last seen
         if d["created_at"] < g["first_seen"]:
             g["first_seen"] = d["created_at"]
             g["first_seen_iso"] = d["created_iso"]
@@ -405,7 +256,6 @@ def list_by_user_grouped(
             g["last_seen"] = d["created_at"]
             g["last_seen_iso"] = d["created_iso"]
 
-    # 按 last_seen 倒序 (最近用的在前)
     out = sorted(by_name.values(), key=lambda x: x["last_seen"], reverse=True)
     return out[:limit]
 
@@ -414,12 +264,12 @@ def tool_list_my_attachments(args: dict[str, Any]) -> dict[str, Any]:
     """catfish_list_my_attachments tool 入口.
 
     args:
-      user_id: str (必填) — 限定员工
-      file_kind: str (可选) — 'pdf' / 'xlsx' / 'docx' / ... filter
+      user_id: str (必填)
+      file_kind: str (可选) — 'pdf' / 'xlsx' / ... filter
       days_back: int (默认 90)
       limit: int (默认 50, 上限 500)
 
-    返每条文件 + 它被引用过的所有 session_id, 给 LLM 做反向索引用 ('这个 PDF 在哪些会话里').
+    返每条文件 + 它被引用过的所有 session_id (反向索引).
     """
     user_id = (args.get("user_id") or "").strip()
     if not user_id:
@@ -445,11 +295,10 @@ def tool_list_my_attachments(args: dict[str, Any]) -> dict[str, Any]:
             "files": [],
             "summary": (
                 f"📚 员工 {user_id} 过去 {days_back} 天{kind_filter} 没上传过附件. "
-                f"用户上传过附件后再调本工具."
+                f"💡 想看员工硬盘所有文档? 调 local_search."
             ),
         }
 
-    # 摘要 — 列 top-5 + 总数 + kind 分布
     kind_count: dict[str, int] = {}
     for f in files:
         fk = f.get("file_kind") or f.get("kind") or "?"
@@ -473,7 +322,6 @@ def tool_list_my_attachments(args: dict[str, Any]) -> dict[str, Any]:
 
 __all__ = [
     "search_by_name",
-    "search_by_content",
     "list_by_user_grouped",
     "tool_search_attachments",
     "tool_list_my_attachments",

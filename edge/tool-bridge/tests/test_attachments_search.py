@@ -162,11 +162,12 @@ def test_tool_no_matches_returns_summary(tmp_db):
     assert "0 条命中" in out["summary"]
 
 
-def test_tool_name_mode_only(tmp_db):
+def test_tool_name_search(tmp_db):
+    """Phase 4: 已无 mode 参数, 只 name 搜."""
     conn, _ = tmp_db
     _insert(conn, id="a", user_id="u", session_id="s", name="客户合同.pdf")
     out = attachments_search.tool_search_attachments({
-        "user_id": "u", "query": "客户合同", "mode": "name",
+        "user_id": "u", "query": "客户合同",
     })
     assert out["ok"] is True
     assert out["count"] == 1
@@ -180,13 +181,13 @@ def test_tool_summary_includes_file_kind(tmp_db):
     _insert(conn, id="c", user_id="u", session_id="s", name="c.xlsx", file_kind="xlsx")
 
     out = attachments_search.tool_search_attachments({
-        "user_id": "u", "query": "", "mode": "name",
+        "user_id": "u", "query": "",
     })
     # query 空 → 工具拒绝 (ok=False)
     assert out["ok"] is False
 
     out = attachments_search.tool_search_attachments({
-        "user_id": "u", "query": ".", "mode": "name",
+        "user_id": "u", "query": ".",
     })
     assert out["count"] == 3
     # summary 含 kind 统计
@@ -194,13 +195,13 @@ def test_tool_summary_includes_file_kind(tmp_db):
     assert "xlsx: 1" in out["summary"]
 
 
-def test_tool_invalid_mode_falls_back_to_both(tmp_db):
+def test_tool_unknown_mode_ignored(tmp_db):
+    """Phase 4: mode 参数已退役, 传啥都不影响 (向后兼容老 LLM call)."""
     conn, _ = tmp_db
     _insert(conn, id="a", user_id="u", session_id="s", name="x.pdf")
     out = attachments_search.tool_search_attachments({
         "user_id": "u", "query": "x", "mode": "garbage_mode",
     })
-    # 没炸, 默认 both
     assert out["ok"] is True
 
 

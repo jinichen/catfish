@@ -119,6 +119,17 @@ def _index_one(conn: sqlite3.Connection, path: Path) -> bool:
 
     # 标题简单取文件名（不含扩展名）
     title = path.stem
+    # BL-FILE-SESSION-INDEX-V1 Phase 4 (5/30): ~/.catfish/uploads/ 下文件名带
+    # <unix_secs>- 前缀 (Companion file_parse.rs 防同名冲突写的). 索引时 title
+    # 去掉前缀, 让按原始文件名搜准确. 不去掉的话搜 "客户合同.pdf" 命中
+    # "1748582400-客户合同.pdf" 但 title 显示前缀, 体验差.
+    # path (绝对路径) 不动 — query.py 返参用 path, UI 仍能跳转到真文件.
+    parts = str(path).split("/")
+    if ".catfish" in parts and "uploads" in parts:
+        import re as _re
+        _m = _re.match(r"^\d{10,13}-(.+)$", title)
+        if _m:
+            title = _m.group(1)
 
     # 内容过长截断，防止单条超大
     content = text[:500_000]

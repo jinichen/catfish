@@ -1973,50 +1973,44 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
-    # ── BL-FILE-SESSION-INDEX-V1 Phase 2 (5/30 鸿波"文件历史检索很弱") ─────
+    # ── BL-FILE-SESSION-INDEX-V1 Phase 4 (5/30 鸿波"C 才是正解") ─────
+    # 历史决策反转: Phase 2 (早) 自己写 BM25 sidecar 跨会话搜过度工程,
+    # Phase 4 (晚) 把 ~/.catfish/uploads/ 加进 local_search 索引, 内容搜归一
+    # 到 local_search FTS5. 本工具只剩元数据 / session 关联职责.
     {
         "name": "catfish_search_attachments",
         "description": (
-            "★★★ 跨会话搜员工上传过的附件 (PDF / Excel / Word / 图片 / 音频). "
-            "**catfish_search_sessions 只搜对话文字, 不搜附件** — 找附件内容用这个.\n\n"
+            "★★★ 按**文件名**搜员工上传过的附件 + 拿到 session_id (反查"
+            "'在哪个会话提到的'). 跨会话, 限定 user_id.\n\n"
             "✅ 调用场景:\n"
-            "  - 员工问 '上次客户 X 的 PDF 里说啥' → query='客户 X', mode='content'\n"
-            "  - 员工问 '我上传过的所有 Excel' → query='', file_kind 不填, 走 catfish_list_my_outputs 替代\n"
-            "  - 员工问 '哪个会议录音提到了 EIS' → query='EIS', mode='content'\n"
-            "  - LLM 自己想找 '员工传过的合同里某条款' → query=条款, mode='content'\n\n"
-            "❌ 不调用:\n"
-            "  - 找 AI 产出的文件 → catfish_list_my_outputs\n"
+            "  - 员工问 '我之前传的客户合同 PDF 在哪个会话提到' → query='客户合同'\n"
+            "  - LLM 自己想找 '员工有没有传过 XX 文档' → query='XX'\n"
+            "  - 想知道某附件出现在哪几个会话 → 配 catfish_list_my_attachments\n\n"
+            "❌ 不调用 (路由到别的工具):\n"
+            "  - **找附件内容里某段话 / 跨附件语义搜 → local_search** (FTS5 全文索引,\n"
+            "    Phase 4 把 ~/.catfish/uploads/ 加进 search-scope, 已覆盖)\n"
+            "  - 找 AI 产出文件 → catfish_list_my_outputs\n"
             "  - 找历史对话文字 → catfish_search_sessions\n"
             "  - 找邮件 → catfish_email_search\n\n"
-            "搜两层:\n"
-            "  - 名字搜 (mode='name'): 按附件 name LIKE, 快, 找 '客户合同_v3.pdf' 这种\n"
-            "  - 内容搜 (mode='content'): 走每个附件的 BM25 sidecar, 准, 找 PDF 里某段话\n"
-            "  - 默认 mode='both': 两个都跑然后合并 (按相关度倒序)\n\n"
             "返参:\n"
-            "  - matches: 命中 list, 每条带 {id, session_id, name, kept_path, "
-            "    bm25_passages?: [{text, score}]}\n"
-            "  - 想看附件全文 → catfish_read_file(path=kept_path)\n\n"
-            "🔒 隐私: user_id 必填, 物理隔离, 不串其它员工. 直读 ~/.catfish/attachments.db."
+            "  - matches: 命中 list, 每条 {id, session_id, name, kept_path, file_kind, created_iso}\n"
+            "  - 想看附件全文 → local_search(query) 或 catfish_read_file(path=kept_path)\n\n"
+            "🔒 隐私: user_id 必填, 物理隔离, 不串其它员工."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "user_id": {
                     "type": "string",
-                    "description": "员工 ID (email 形态 chenhongbo@ffcs.cn 或合成 openid@im.weixin). 必填, 防跨员工串.",
+                    "description": "员工 ID (email 或 openid@im.platform 合成). 必填.",
                 },
                 "query": {
                     "type": "string",
-                    "description": "搜的关键字 (中文 OK, 内容搜走 BM25 中文分词)",
-                },
-                "mode": {
-                    "type": "string",
-                    "enum": ["name", "content", "both"],
-                    "description": "name=名字搜, content=内容搜 (BM25), both=两个合并 (默认)",
+                    "description": "文件名关键字 (中文/英文 OK)",
                 },
                 "days_back": {
                     "type": "integer",
-                    "description": "搜过去多少天的附件 (默认 90, 上限可加大)",
+                    "description": "搜过去多少天 (默认 90)",
                 },
                 "limit": {
                     "type": "integer",

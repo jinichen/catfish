@@ -22,6 +22,12 @@ include:
   - ~/Desktop
   - ~/Downloads
 
+  # BL-FILE-SESSION-INDEX-V1 Phase 4 (5/30): 员工拖给鲶鱼的附件
+  # (Companion 解析 file 时落到这, file_parse.rs:265-276). 索引进 local_search
+  # 让 "上次拖过来的 PDF 里说啥" 这种内容搜走统一 FTS5, 不再单独维护 BM25 sidecar
+  # 跨会话搜. 元数据 + session 关联仍走 ~/.catfish/attachments.db.
+  - ~/.catfish/uploads
+
   # 按需打开下面这些（取消前面的 #）：
   # - ~/work
   # - ~/code
