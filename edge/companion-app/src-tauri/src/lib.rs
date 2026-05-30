@@ -371,6 +371,13 @@ pub fn run() {
             commands::file_parse::parse_file_from_b64,
             // BL-L26 (5/7): 大文件 (≥50KB) BM25 段落检索
             commands::file_parse::attachment_bm25_search,
+            // BL-FILE-SESSION-INDEX-V1 Phase 1 (5/30): 附件 metadata 持久化 ~/.catfish/attachments.db
+            commands::attachments::attachment_record,
+            commands::attachments::attachment_list_by_session,
+            commands::attachments::attachment_list_by_user,
+            commands::attachments::attachment_search_local,
+            commands::attachments::attachment_delete,
+            commands::attachments::attachment_delete_by_user,
             // skill_audit (五一 sprint Day 2: skill 调用审计 + 30 天未用统计)
             commands::skill_audit::skill_audit_summary,
             // speech (五一 sprint Day 1 方案 C+: ffmpeg 录 + Whisper.cpp 转, 全本地)

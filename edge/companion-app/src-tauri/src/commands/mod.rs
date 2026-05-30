@@ -9,6 +9,7 @@
 //!     错误统一序列化成字符串给前端
 
 pub mod agent;
+pub mod attachments;  // BL-FILE-SESSION-INDEX-V1 Phase 1 (5/30): 附件 metadata 持久化到 ~/.catfish/attachments.db, 跨会话恢复 + 列表
 pub mod audit;
 pub mod auth;
 pub mod briefing_context;  // BL-BRIEFING-DECISION (5/21 Phase 5): distilled_facts + recent sessions

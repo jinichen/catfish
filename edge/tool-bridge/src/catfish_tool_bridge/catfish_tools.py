@@ -652,6 +652,12 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_search_sessions":
         from . import sessions_search  # noqa: PLC0415
         return sessions_search.tool_search_sessions(args)
+    # BL-FILE-SESSION-INDEX-V1 Phase 2 (5/30): 跨会话搜员工上传过的附件
+    # (PDF/Excel/Word/图片/音频), 走名字 LIKE + 内容 BM25 双层. 配合 Phase 1
+    # ~/.catfish/attachments.db (Companion attachment_record 写入).
+    if name == "catfish_search_attachments":
+        from . import attachments_search  # noqa: PLC0415
+        return attachments_search.tool_search_attachments(args)
     # BL-EMAIL-SEARCH-TOOL (5/18 鸿波"对话里检索没搜到邮件")
     if name == "catfish_email_search":
         from . import email_search  # noqa: PLC0415

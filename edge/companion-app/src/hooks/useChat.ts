@@ -540,7 +540,10 @@ export function useChat(_initialModel: string) {
       };
       const requestMessages = [...useChatStore.getState().messages, userMsg];
       addMessage(userMsg);
-      // 持久化到 state.db: 附件不落库 (图片 base64 / 文件 text 都太大), 只存文字 + 占位
+      // 持久化到 state.db: 附件内容不落 messages 表 (base64 / text 太大), 只存文字 + 占位.
+      // BL-FILE-SESSION-INDEX-V1 Phase 1 (5/30): 附件 metadata 单独写
+      // ~/.catfish/attachments.db 让切会话后能恢复 chip + 跨会话工具能搜.
+      // 内容仍只在物理文件 (kept_path / parsed_text_path), db 只存路径.
       const imgN = attachments.filter((a) => a.kind === "image").length;
       const fileN = attachments.filter((a) => a.kind === "file").length;
       const placeholderParts: string[] = [];
@@ -552,9 +555,11 @@ export function useChat(_initialModel: string) {
           .join(", ");
         placeholderParts.push(`📄 ${fileN} 份文档 (${fileNames})`);
       }
+      // BL-FILE-SESSION-INDEX-V1: 占位文字保留 (向后兼容老 state.db reader),
+      // 但去掉 "切会话不保留" 这句 — 现在 metadata 保留了, chip 切回还在.
       const persistContent =
         placeholderParts.length > 0
-          ? `${trimmed}${trimmed ? "\n" : ""}[${placeholderParts.join(" + ")} — in-memory, 切会话不保留]`
+          ? `${trimmed}${trimmed ? "\n" : ""}[${placeholderParts.join(" + ")}]`
           : trimmed;
       // 5/24 BL-MULTI-SESSION-STREAM: 用 sessionIdForStream 锁定持久化, 不读 store.
       if (sessionIdForStream) {
@@ -562,6 +567,46 @@ export function useChat(_initialModel: string) {
           { ...userMsg, content: persistContent, attachments: undefined },
           sessionIdForStream,
         );
+
+        // BL-FILE-SESSION-INDEX-V1 Phase 1: 写 attachments metadata
+        // 不阻塞 send (Promise 自跑, 失败仅 console.warn, chat 仍工作)
+        if (enrichedAttachments.length > 0) {
+          // 拿员工 email (跟 chat.ts hermesAuth 路径同). authWhoami 失败时
+          // user_id 用 "anonymous" — Companion 还 work, 但跨员工隔离弱化.
+          void (async () => {
+            let userId = "anonymous";
+            try {
+              const { authWhoami } = await import("../lib/me");
+              const who = await authWhoami();
+              if (who.authenticated && who.email) userId = who.email;
+            } catch {
+              // 拿不到就 anonymous
+            }
+            for (const a of enrichedAttachments) {
+              try {
+                await invoke("attachment_record", {
+                  input: {
+                    userId,
+                    sessionId: sessionIdForStream,
+                    messageId: userMsg.id,
+                    kind: a.kind,
+                    fileKind: a.kind === "file" ? (a as Attachment & { fileKind?: string }).fileKind ?? null : null,
+                    name: a.name,
+                    mimeType: a.mimeType ?? null,
+                    sizeBytes: a.sizeBytes ?? null,
+                    keptPath: a.kind === "file" ? (a as Attachment & { keptPath?: string }).keptPath ?? null : null,
+                    parsedTextPath: a.kind === "file" ? (a as Attachment & { parsedTextPath?: string }).parsedTextPath ?? null : null,
+                    meta: a.kind === "file" && (a as Attachment & { meta?: Record<string, unknown> }).meta
+                      ? JSON.stringify((a as Attachment & { meta?: Record<string, unknown> }).meta)
+                      : null,
+                  },
+                });
+              } catch (e) {
+                console.warn("[BL-FILE-SESSION-INDEX-V1] attachment_record 失败:", e);
+              }
+            }
+          })();
+        }
       }
       setIsStreaming(true);
 

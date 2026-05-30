@@ -1973,6 +1973,62 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ── BL-FILE-SESSION-INDEX-V1 Phase 2 (5/30 鸿波"文件历史检索很弱") ─────
+    {
+        "name": "catfish_search_attachments",
+        "description": (
+            "★★★ 跨会话搜员工上传过的附件 (PDF / Excel / Word / 图片 / 音频). "
+            "**catfish_search_sessions 只搜对话文字, 不搜附件** — 找附件内容用这个.\n\n"
+            "✅ 调用场景:\n"
+            "  - 员工问 '上次客户 X 的 PDF 里说啥' → query='客户 X', mode='content'\n"
+            "  - 员工问 '我上传过的所有 Excel' → query='', file_kind 不填, 走 catfish_list_my_outputs 替代\n"
+            "  - 员工问 '哪个会议录音提到了 EIS' → query='EIS', mode='content'\n"
+            "  - LLM 自己想找 '员工传过的合同里某条款' → query=条款, mode='content'\n\n"
+            "❌ 不调用:\n"
+            "  - 找 AI 产出的文件 → catfish_list_my_outputs\n"
+            "  - 找历史对话文字 → catfish_search_sessions\n"
+            "  - 找邮件 → catfish_email_search\n\n"
+            "搜两层:\n"
+            "  - 名字搜 (mode='name'): 按附件 name LIKE, 快, 找 '客户合同_v3.pdf' 这种\n"
+            "  - 内容搜 (mode='content'): 走每个附件的 BM25 sidecar, 准, 找 PDF 里某段话\n"
+            "  - 默认 mode='both': 两个都跑然后合并 (按相关度倒序)\n\n"
+            "返参:\n"
+            "  - matches: 命中 list, 每条带 {id, session_id, name, kept_path, "
+            "    bm25_passages?: [{text, score}]}\n"
+            "  - 想看附件全文 → catfish_read_file(path=kept_path)\n\n"
+            "🔒 隐私: user_id 必填, 物理隔离, 不串其它员工. 直读 ~/.catfish/attachments.db."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "user_id": {
+                    "type": "string",
+                    "description": "员工 ID (email 形态 chenhongbo@ffcs.cn 或合成 openid@im.weixin). 必填, 防跨员工串.",
+                },
+                "query": {
+                    "type": "string",
+                    "description": "搜的关键字 (中文 OK, 内容搜走 BM25 中文分词)",
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["name", "content", "both"],
+                    "description": "name=名字搜, content=内容搜 (BM25), both=两个合并 (默认)",
+                },
+                "days_back": {
+                    "type": "integer",
+                    "description": "搜过去多少天的附件 (默认 90, 上限可加大)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "最多返多少条 (默认 20, 上限 100)",
+                },
+            },
+            "required": ["user_id", "query"],
+        },
+        "emoji": "📎",
+        "toolset": "catfish_native",
+        "available": True,
+    },
     # ── BL-EMAIL-SEARCH-TOOL (5/18 鸿波"对话里检索没搜到邮件") ──────────
     {
         "name": "catfish_email_search",
