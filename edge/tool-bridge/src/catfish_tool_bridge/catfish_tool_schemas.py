@@ -2029,6 +2029,50 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ── BL-FILE-SESSION-INDEX-V1 Phase 3 (5/30 反向索引) ─────────────
+    {
+        "name": "catfish_list_my_attachments",
+        "description": (
+            "★★★ 列员工所有上传过的附件 + 每个文件出现在哪些会话 (反向索引). "
+            "**catfish_search_attachments 是按内容/名字搜, 本工具是按 owner 全列**.\n\n"
+            "✅ 调用场景:\n"
+            "  - 员工问 '我上传过的所有 Excel' → file_kind='xlsx'\n"
+            "  - 员工问 '最近 30 天我用过的文档' → days_back=30\n"
+            "  - 员工问 '我那个客户合同文档在哪几个会话引用了' → 在 files 里查 name + sessions\n"
+            "  - LLM 自己想了解员工常用文件 → 不带 file_kind 拿全部\n\n"
+            "❌ 不调用:\n"
+            "  - 按内容关键词搜 → catfish_search_attachments\n"
+            "  - 列 AI 产出文件 → catfish_list_my_outputs\n\n"
+            "返参 files 每条: {name, file_kind, kept_path, reference_count, sessions: [{session_id, first_seen_iso}], first_seen_iso, last_seen_iso}\n"
+            "按 last_seen 倒序 (最近用的在前). 同一文件去重, sessions 列出现 session 集合.\n\n"
+            "🔒 隐私: user_id 必填, 物理隔离, 不串其它员工."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "user_id": {
+                    "type": "string",
+                    "description": "员工 ID. 必填, 防跨员工串.",
+                },
+                "file_kind": {
+                    "type": "string",
+                    "description": "可选 filter: pdf / xlsx / docx / csv / txt / md / image / audio 等",
+                },
+                "days_back": {
+                    "type": "integer",
+                    "description": "搜过去多少天 (默认 90)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "最多返多少个文件 (默认 50, 上限 500)",
+                },
+            },
+            "required": ["user_id"],
+        },
+        "emoji": "📚",
+        "toolset": "catfish_native",
+        "available": True,
+    },
     # ── BL-EMAIL-SEARCH-TOOL (5/18 鸿波"对话里检索没搜到邮件") ──────────
     {
         "name": "catfish_email_search",

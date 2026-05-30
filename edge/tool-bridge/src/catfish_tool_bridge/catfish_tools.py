@@ -658,6 +658,12 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_search_attachments":
         from . import attachments_search  # noqa: PLC0415
         return attachments_search.tool_search_attachments(args)
+    # BL-FILE-SESSION-INDEX-V1 Phase 3 (5/30): 反向索引 — 列员工所有上传过的
+    # 附件 + 每个文件出现在哪些会话. 给 '我所有上传过的 Excel' / '这个 PDF
+    # 在哪些会话被引用' 场景.
+    if name == "catfish_list_my_attachments":
+        from . import attachments_search  # noqa: PLC0415
+        return attachments_search.tool_list_my_attachments(args)
     # BL-EMAIL-SEARCH-TOOL (5/18 鸿波"对话里检索没搜到邮件")
     if name == "catfish_email_search":
         from . import email_search  # noqa: PLC0415

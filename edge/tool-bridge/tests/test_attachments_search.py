@@ -202,3 +202,85 @@ def test_tool_invalid_mode_falls_back_to_both(tmp_db):
     })
     # 没炸, 默认 both
     assert out["ok"] is True
+
+
+# ───────────────────────────────────────────────────────────────
+# Phase 3: list_by_user_grouped + tool_list_my_attachments
+# ───────────────────────────────────────────────────────────────
+
+def test_grouped_dedup_by_name_aggregates_sessions(tmp_db):
+    """同一文件名在 3 个会话出现 → 应只 1 条 + sessions 列 3 个."""
+    conn, _ = tmp_db
+    import time
+    base = time.time()
+    _insert(conn, id="r1", user_id="u", session_id="sess-A", name="客户合同.pdf", created_at=base - 100)
+    _insert(conn, id="r2", user_id="u", session_id="sess-B", name="客户合同.pdf", created_at=base - 50)
+    _insert(conn, id="r3", user_id="u", session_id="sess-A", name="客户合同.pdf", created_at=base - 10)
+    _insert(conn, id="r4", user_id="u", session_id="sess-C", name="客户合同.pdf", created_at=base)
+
+    files = attachments_search.list_by_user_grouped("u")
+    assert len(files) == 1, "同名文件应去重"
+    f = files[0]
+    assert f["name"] == "客户合同.pdf"
+    assert f["reference_count"] == 4
+    sess_ids = {s["session_id"] for s in f["sessions"]}
+    assert sess_ids == {"sess-A", "sess-B", "sess-C"}
+    assert len(f["sessions"]) == 3, "session 也去重 (sess-A 多次提到 算 1 次)"
+
+
+def test_grouped_sorts_by_last_seen_desc(tmp_db):
+    conn, _ = tmp_db
+    import time
+    base = time.time()
+    _insert(conn, id="old", user_id="u", session_id="s", name="老文档.pdf", created_at=base - 10000)
+    _insert(conn, id="new", user_id="u", session_id="s", name="新文档.pdf", created_at=base - 10)
+
+    files = attachments_search.list_by_user_grouped("u")
+    assert len(files) == 2
+    assert files[0]["name"] == "新文档.pdf", "新的在前"
+    assert files[1]["name"] == "老文档.pdf"
+
+
+def test_grouped_file_kind_filter(tmp_db):
+    conn, _ = tmp_db
+    _insert(conn, id="a", user_id="u", session_id="s", name="a.pdf", file_kind="pdf")
+    _insert(conn, id="b", user_id="u", session_id="s", name="b.xlsx", file_kind="xlsx")
+    _insert(conn, id="c", user_id="u", session_id="s", name="c.pdf", file_kind="pdf")
+
+    only_pdf = attachments_search.list_by_user_grouped("u", file_kind="pdf")
+    assert len(only_pdf) == 2
+    assert {f["name"] for f in only_pdf} == {"a.pdf", "c.pdf"}
+
+
+def test_grouped_user_isolation(tmp_db):
+    conn, _ = tmp_db
+    _insert(conn, id="mine", user_id="me@x.com", session_id="s", name="敏感.pdf")
+    _insert(conn, id="other", user_id="other@x.com", session_id="s", name="敏感.pdf")
+
+    mine = attachments_search.list_by_user_grouped("me@x.com")
+    assert len(mine) == 1
+    assert mine[0]["reference_count"] == 1, "只算自己的, 不串 other"
+
+
+def test_tool_list_my_attachments_missing_user(tmp_db):
+    out = attachments_search.tool_list_my_attachments({})
+    assert out["ok"] is False
+
+
+def test_tool_list_my_attachments_empty(tmp_db):
+    out = attachments_search.tool_list_my_attachments({"user_id": "u@x.com"})
+    assert out["ok"] is True
+    assert out["count"] == 0
+    assert "没上传过" in out["summary"]
+
+
+def test_tool_list_my_attachments_summary_includes_top_files(tmp_db):
+    conn, _ = tmp_db
+    for i in range(7):
+        _insert(conn, id=f"r{i}", user_id="u", session_id=f"s{i}", name=f"doc_{i}.pdf")
+    out = attachments_search.tool_list_my_attachments({"user_id": "u", "limit": 10})
+    assert out["ok"] is True
+    assert out["count"] == 7
+    # top 5 在 summary 里
+    assert "doc_6.pdf" in out["summary"]
+    assert "pdf: 7" in out["summary"]
