@@ -576,7 +576,7 @@ export function useChat(_initialModel: string) {
           void (async () => {
             let userId = "anonymous";
             try {
-              const { authWhoami } = await import("../lib/me");
+              const { authWhoami } = await import("../lib/tauri");
               const who = await authWhoami();
               if (who.authenticated && who.email) userId = who.email;
             } catch {
