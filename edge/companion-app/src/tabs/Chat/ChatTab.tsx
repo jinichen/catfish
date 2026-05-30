@@ -38,6 +38,7 @@ export default function ChatTab() {
 
   const persistedSessionId = useChatStore((s) => s.persistedSessionId);
   const loadSession = useChatStore((s) => s.loadSession);
+  const loadSessionAttachments = useChatStore((s) => s.loadSessionAttachments);
 
   /** 父组件持有 sidebar 的 refresh key —— 发完一条消息后 bump 让左侧列表重拉 */
   const [refreshKey, setRefreshKey] = useState(0);
@@ -60,13 +61,16 @@ export default function ChatTab() {
       try {
         const detail = await getSession(id);
         loadSession(detail);
+        // BL-FILE-SESSION-INDEX-V1 Phase 1 (5/30): 异步拉该 session 历史附件 list.
+        // 不阻塞 loadSession (附件慢一点显出来不影响读消息). store 内部有 race 防护.
+        void loadSessionAttachments(id);
         setLoadError(null);
       } catch (e) {
         console.error("[catfish chat] 切换会话失败:", e);
         setLoadError(`切换失败: ${e}`);
       }
     },
-    [persistedSessionId, loadSession],
+    [persistedSessionId, loadSession, loadSessionAttachments],
   );
 
   /** BL-COMPANION-UX2 (5/12): streaming 中也能点"+ 新对话".
@@ -121,6 +125,9 @@ export default function ChatTab() {
         if (dbCount > lastMsgCount) {
           lastMsgCount = dbCount;
           loadSession(detail);
+          // BL-FILE-SESSION-INDEX-V1 Phase 1: polling 拉新消息时同步刷附件 list
+          // (微信/飞书新消息可能带附件 metadata)
+          void loadSessionAttachments(persistedSessionId);
           // 同时 bump refreshKey, sidebar 也跟着刷
           setRefreshKey((k) => k + 1);
         }
@@ -129,7 +136,7 @@ export default function ChatTab() {
       }
     }, POLL_MS);
     return () => window.clearInterval(t);
-  }, [persistedSessionId, isStreaming, messages.length, loadSession]);
+  }, [persistedSessionId, isStreaming, messages.length, loadSession, loadSessionAttachments]);
 
   return (
     <div
@@ -236,6 +243,8 @@ export default function ChatTab() {
           </div>
         )}
 
+        <SessionAttachmentsBar />
+
         <div style={{ flex: 1, minHeight: 0 }}>
           <ChatPanel
             messages={messages}
@@ -250,6 +259,80 @@ export default function ChatTab() {
           />
         </div>
       </div>
+    </div>
+  );
+}
+
+/** BL-FILE-SESSION-INDEX-V1 Phase 1 (5/30): session 顶部历史附件 chip bar.
+ *  切回老会话时显示该会话所有上传过的附件 (从 ~/.catfish/attachments.db 读).
+ *  无附件不渲染. 点击 chip 展开 (后续做), 当前先列名字.
+ *
+ *  跟 LLM 那边的 catfish_search_attachments 工具数据源是同一张表 —
+ *  UI 看到的就是 LLM 能搜的. 双向一致.
+ */
+function SessionAttachmentsBar() {
+  const sessionAttachments = useChatStore((s) => s.sessionAttachments);
+  if (sessionAttachments.length === 0) return null;
+  // 去重按 name (同一文件可能被 record 多次 — 比如同一附件在多轮提及)
+  const byName = new Map<string, typeof sessionAttachments[number]>();
+  for (const a of sessionAttachments) {
+    if (!byName.has(a.name)) byName.set(a.name, a);
+  }
+  const unique = Array.from(byName.values()).slice(0, 12);
+  const more = byName.size > unique.length ? byName.size - unique.length : 0;
+  return (
+    <div
+      title="本会话历史附件 — 切回会话时从本机 db 恢复, LLM 也能通过工具查到"
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        alignItems: "center",
+        gap: 6,
+        padding: "6px 12px",
+        fontSize: 11,
+        background: "var(--catfish-bg-elevated)",
+        borderBottom: "1px solid var(--catfish-border)",
+        color: "var(--catfish-text-muted)",
+      }}
+    >
+      <span style={{ marginRight: 4 }}>📎 本会话历史附件:</span>
+      {unique.map((a) => {
+        const iconByKind: Record<string, string> = {
+          image: "🖼",
+          file: "📄",
+          audio: "🎙",
+        };
+        const icon = iconByKind[a.kind] ?? "📎";
+        return (
+          <span
+            key={a.id}
+            title={`${a.name}${a.sizeBytes ? ` · ${(a.sizeBytes / 1024).toFixed(1)} KB` : ""}${a.keptPath ? `\n${a.keptPath}` : ""}`}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              padding: "2px 8px",
+              borderRadius: 10,
+              background: "rgba(14, 158, 140, 0.12)",
+              color: "var(--catfish-accent, #0e9e8c)",
+              maxWidth: 220,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            <span>{icon}</span>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+              {a.name}
+            </span>
+          </span>
+        );
+      })}
+      {more > 0 && (
+        <span style={{ marginLeft: 4, fontStyle: "italic" }}>
+          +{more} 更多
+        </span>
+      )}
     </div>
   );
 }

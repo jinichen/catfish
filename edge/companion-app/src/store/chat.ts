@@ -7,9 +7,30 @@
  * Week 3 持久化 (state.db 持久 + sidebar 切换 + resume 历史) 钩这个 store。
  */
 
+import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import type { ChatMessage, ToolCall } from "../types/chat";
 import type { SessionDetail, SessionMessage } from "../types/session";
+
+/** BL-FILE-SESSION-INDEX-V1 Phase 1 (5/30): session 级附件 row.
+ *  对齐 Rust commands/attachments.rs AttachmentRow.
+ *  切回老会话时调 attachment_list_by_session 拿到这份 list, 显示在 ChatTab
+ *  顶部 ("📎 本会话历史附件: ..."), LLM 也能通过 catfish_search_attachments 查到. */
+export interface SessionAttachment {
+  id: string;
+  userId: string;
+  sessionId: string;
+  messageId: string;
+  kind: string;            // "image" | "file" | "audio"
+  fileKind: string | null;  // "pdf" | "xlsx" | ...
+  name: string;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  keptPath: string | null;
+  parsedTextPath: string | null;
+  meta: string | null;     // JSON string
+  createdAt: number;
+}
 
 interface ChatState {
   /** 当前对话所有消息 */
@@ -37,6 +58,11 @@ interface ChatState {
    *  send. 跟 BL-COMPANION-UX1 ⏹ 停下接着发 互补 (一个停一个排队).
    *  attachments 暂不支持 (内存) — 排队消息只能纯文字. */
   queue: Array<{ id: string; text: string; ts: string }>;
+  /** BL-FILE-SESSION-INDEX-V1 Phase 1 (5/30): 当前 session 的所有历史附件 list.
+   *  loadSession 后由 loadSessionAttachments 异步拉. ChatTab UI 顶部显示
+   *  ("📎 本会话历史附件: a.pdf, b.xlsx"). LLM 也能通过 catfish_search_attachments
+   *  查到. 切 session 时 reset 清零. */
+  sessionAttachments: SessionAttachment[];
 
   // ── actions ──
   setMessages: (msgs: ChatMessage[]) => void;
@@ -68,6 +94,9 @@ interface ChatState {
    *   还能按"旧 model → picker 新 model"做 soft handoff 的 tool-history 转译。
    */
   loadSession: (detail: SessionDetail) => void;
+  /** BL-FILE-SESSION-INDEX-V1 Phase 1 (5/30): loadSession 后异步拉附件 list.
+   *  失败仅 console.warn (chat 仍 work). */
+  loadSessionAttachments: (sessionId: string) => Promise<void>;
   reset: () => void;
 }
 
@@ -132,6 +161,7 @@ export const useChatStore = create<ChatState>((set) => ({
   lastPromptTokens: null,
   prevSentModel: null,
   queue: [],
+  sessionAttachments: [],
 
   setMessages: (messages) => set({ messages }),
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
@@ -198,6 +228,9 @@ export const useChatStore = create<ChatState>((set) => ({
       messages: detail.messages.map(dbMessageToChat),
       isStreaming: false,
       streamingId: null,
+      // BL-FILE-SESSION-INDEX-V1 Phase 1: 切会话先清空附件 list, 等
+      // loadSessionAttachments 异步填充. 防上个会话的附件残留显错.
+      sessionAttachments: [],
       // BL-GLOBAL-MODEL (5/23): 切会话**不动 model**. picker 是全局选择,
       // 选了 deepseek 就一直用 deepseek, 不要因为历史会话最后一次用的是 gemini
       // 就把 picker 拽回 gemini. 用户反复反馈这个行为反直觉.
@@ -209,6 +242,23 @@ export const useChatStore = create<ChatState>((set) => ({
       // 这样 picker 当前 model ≠ session 上次 model 时, gateway 才知道要做转译.
       prevSentModel: detail.meta.model,
     }),
+  loadSessionAttachments: async (sessionId: string) => {
+    if (!sessionId) return;
+    try {
+      const rows = await invoke<SessionAttachment[]>(
+        "attachment_list_by_session",
+        { sessionId },
+      );
+      // 防 race: 异步 invoke 期间用户可能已切走 session.
+      // 拿到结果时如果 persistedSessionId 已变, 不 set (不污染新会话).
+      set((s) => {
+        if (s.persistedSessionId !== sessionId) return s;
+        return { sessionAttachments: rows };
+      });
+    } catch (e) {
+      console.warn("[BL-FILE-SESSION-INDEX-V1] loadSessionAttachments 失败:", e);
+    }
+  },
   reset: () =>
     set({
       messages: [],
@@ -218,5 +268,6 @@ export const useChatStore = create<ChatState>((set) => ({
       lastPromptTokens: null,  // BL-CONTEXT-COUNTER: 切会话清零
       prevSentModel: null,     // BL-GATEWAY-SOFT-HANDOFF: 新 session 没"上次"
       queue: [],  // BL-HERMES013-RED-1A: 切会话清队列
+      sessionAttachments: [],  // BL-FILE-SESSION-INDEX-V1 Phase 1
     }),
 }));
