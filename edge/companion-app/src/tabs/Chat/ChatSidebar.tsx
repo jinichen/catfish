@@ -38,6 +38,31 @@ interface Props {
   busy?: boolean;
 }
 
+// BL-SESSIONS-FILTER-PROACTIVE (5/31 鸿波): 工作台 sessions 列表里, proactive
+// trigger / time anchor / IMPORTANT user-context 这些自动生成的 "会话" 不该跟
+// 员工真聊的混. 按 title / firstUserMessage 前缀识别, 默认隐藏 + toggle 显示.
+//
+// 识别模式 (覆盖现观察到的所有 auto trigger):
+//   - "# 时间锚点" — useProactiveTriggers 启动时插的时间锚消息
+//   - "现在 HH:MM. 日历:" — proactive scheduler 周期触发的状态摘要
+//   - "[IMPORTANT:" / "[IMPORTANT" — user-context wrapper (5/26 BL-IDENTITY-INJECT)
+//   - "📅 " / "⏰ " 前缀的 emoji starter — early proactive prototype 残留
+const AUTO_TRIGGER_PATTERNS: RegExp[] = [
+  /^#\s*时间锚点/,
+  /^现在\s+\d{1,2}[:：]\d{2}/,
+  /^\[IMPORTANT[:\s]/i,
+  /^📅\s/,
+  /^⏰\s/,
+];
+
+function isAutoTriggerSession(s: SessionMeta): boolean {
+  const probe = (s.title?.trim() || s.firstUserMessage?.trim() || "").slice(0, 60);
+  if (!probe) return false;
+  return AUTO_TRIGGER_PATTERNS.some((re) => re.test(probe));
+}
+
+const SHOW_AUTO_LS_KEY = "catfish:sessions:show_auto_trigger";
+
 export default function ChatSidebar({
   activeId,
   onSelect,
@@ -50,6 +75,14 @@ export default function ChatSidebar({
   const [totalCount, setTotalCount] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // BL-SESSIONS-FILTER-PROACTIVE (5/31): 默认隐藏自动 trigger
+  const [showAuto, setShowAuto] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem(SHOW_AUTO_LS_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
 
   const refresh = useCallback(async () => {
     try {
@@ -66,6 +99,24 @@ export default function ChatSidebar({
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  // 应用 filter: showAuto=false 时滤掉 auto trigger 会话
+  const visibleSessions = showAuto
+    ? sessions
+    : sessions.filter((s) => !isAutoTriggerSession(s));
+  const hiddenAutoCount = sessions.length - visibleSessions.length;
+
+  const toggleShowAuto = useCallback(() => {
+    setShowAuto((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(SHOW_AUTO_LS_KEY, next ? "1" : "0");
+      } catch {
+        /* localStorage 不可用 (隐私模式) — 不致命 */
+      }
+      return next;
+    });
   }, []);
 
   useEffect(() => {
@@ -137,30 +188,53 @@ export default function ChatSidebar({
           title={
             totalCount !== null && totalCount > sessions.length
               ? `state.db 共 ${totalCount} 条, 此处展示 ${sessions.length} 条 (安全上限 10000)`
-              : `共 ${sessions.length} 条会话`
+              : `共 ${sessions.length} 条会话` +
+                (hiddenAutoCount > 0
+                  ? `, 已隐藏 ${hiddenAutoCount} 条自动触发 (时间锚点 / 日历 / IMPORTANT)`
+                  : "")
           }
         >
-          会话 · {sessions.length}
+          会话 · {visibleSessions.length}
           {totalCount !== null && totalCount > sessions.length && (
             <span style={{ color: "var(--catfish-text-muted)", fontWeight: 400 }}>
               {" "}/ 共 {totalCount}
             </span>
           )}
         </span>
-        <button
-          onClick={() => refresh()}
-          title="刷新"
-          style={{
-            background: "transparent",
-            border: 0,
-            color: "var(--catfish-text-muted)",
-            cursor: "pointer",
-            fontSize: 12,
-            padding: 2,
-          }}
-        >
-          ↻
-        </button>
+        <span style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          {/* BL-SESSIONS-FILTER-PROACTIVE (5/31): toggle 显隐自动 trigger */}
+          {hiddenAutoCount > 0 && (
+            <button
+              onClick={toggleShowAuto}
+              title={showAuto ? "隐藏自动触发会话" : `显示 ${hiddenAutoCount} 条自动触发会话`}
+              style={{
+                background: "transparent",
+                border: 0,
+                color: showAuto ? "var(--catfish-cyan)" : "var(--catfish-text-muted)",
+                cursor: "pointer",
+                fontSize: 11,
+                padding: "2px 4px",
+                fontFamily: "var(--font-mono)",
+              }}
+            >
+              {showAuto ? "−自动" : `+${hiddenAutoCount}自动`}
+            </button>
+          )}
+          <button
+            onClick={() => refresh()}
+            title="刷新"
+            style={{
+              background: "transparent",
+              border: 0,
+              color: "var(--catfish-text-muted)",
+              cursor: "pointer",
+              fontSize: 12,
+              padding: 2,
+            }}
+          >
+            ↻
+          </button>
+        </span>
       </header>
 
       <div
@@ -193,7 +267,7 @@ export default function ChatSidebar({
             读 state.db 失败: {error}
           </div>
         )}
-        {!loading && !error && sessions.length === 0 && (
+        {!loading && !error && visibleSessions.length === 0 && (
           <div
             style={{
               padding: "var(--space-3)",
@@ -210,7 +284,7 @@ export default function ChatSidebar({
             那个 sub. LLM 生成 title 算法对相似 prompt 出同名, 没去堆叠 sidebar
             一眼看不出哪条是哪条. */}
         {!loading && !error && (() => {
-          const groups = groupSessionsByTitle(sessions);
+          const groups = groupSessionsByTitle(visibleSessions);
           // 当 activeId 在某 group 的 sibling 里, 自动展开那组
           const autoExpanded = new Set<string>();
           if (activeId) {
