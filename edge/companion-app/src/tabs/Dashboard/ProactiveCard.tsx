@@ -34,10 +34,19 @@ export default function ProactiveCard() {
         setStarter(s);
         setError(null);
       } else {
-        setError("拉不到话题, 看 gateway 起没起");
+        // BL-LONG-RUNNING-V1-FOLLOWUP (5/31): "看 gateway 起没起" 是开发文案,
+        // 员工看不懂. 换成员工视角 — null 返回基本就是离线/未登录, 跟 401 一样
+        // 友好提示, 不暴露内部组件名.
+        setError("__OFFLINE__");
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      // 401 / unauthorized / 网络都归一成 OFFLINE, 显示统一友好提示
+      if (/401|unauthorized|network|fetch/i.test(msg)) {
+        setError("__OFFLINE__");
+      } else {
+        setError(msg);
+      }
     } finally {
       setLoading(false);
     }
@@ -93,8 +102,18 @@ export default function ProactiveCard() {
       )}
 
       {error && !starter && (
-        <div style={{ fontSize: 13, color: "var(--catfish-text-muted)" }}>
-          {error}
+        <div style={{ fontSize: 13, color: "var(--catfish-text-muted)", lineHeight: 1.5 }}>
+          {error === "__OFFLINE__" ? (
+            <>
+              暂时拉不到话题. 可能是没登录或在离线 — 30s 自动重试.
+              <br />
+              <span style={{ fontSize: 11 }}>
+                你跟我聊的内容仍在你本机, 不受影响.
+              </span>
+            </>
+          ) : (
+            error
+          )}
         </div>
       )}
 
