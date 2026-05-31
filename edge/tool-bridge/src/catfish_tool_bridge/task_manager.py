@@ -60,6 +60,7 @@ import os
 import json
 import os
 import secrets
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -160,17 +161,40 @@ class TaskManager:
                         task_id, exc_info=True,
                     )
 
-        # asyncio.create_task 立即调度, 不等
+        # BL-LONG-RUNNING-V1-FIX (5/31): tool-bridge call_tool 入口是 sync,
+        # 没 running event loop, 老代码直接标 failed → 用户调 catfish_run_task
+        # 立刻报 "no event loop". 修: detect 后 spawn 专线程跑 asyncio.run().
+        # async caller (本来就有 loop, 例 hermes streaming) 走原 create_task 分支.
+        #
+        # WARN 修: 先建 coroutine 拿引用, async 路径成功就 await, 失败时显式
+        # close() 防 "coroutine was never awaited" RuntimeWarning.
+        coro = _run_wrapper()
         try:
-            task._async_task = asyncio.create_task(_run_wrapper())
-        except RuntimeError as e:
-            # 没在 event loop 里 (testing 环境直接调 submit), 标 failed
-            logger.warning(
-                "submit: 没找到 event loop, task 直接 failed: %s", e,
+            task._async_task = asyncio.create_task(coro)
+        except RuntimeError:
+            # 显式回收原 coroutine 防 RuntimeWarning, 然后在 thread 里 new 一个.
+            coro.close()
+            # 没 running loop — 起一个 daemon thread 跑自己的 loop.
+            # daemon=True 让进程退出时不卡 (任务半截死可接受, jsonl 已记 pending).
+            def _thread_target() -> None:
+                try:
+                    asyncio.run(_run_wrapper())
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        "submit-via-thread: asyncio.run 内部异常: task_id=%s",
+                        task_id,
+                    )
+            t = threading.Thread(
+                target=_thread_target,
+                name=f"catfish-task-{task_id}",
+                daemon=True,
             )
-            task.status = "failed"
-            task.error = f"no event loop: {e}"
-            task.finished_at = time.time()
+            t.start()
+            # _async_task 留空, 别处 (cancel) 已经处理 None 兜底.
+            logger.info(
+                "submit: 无 running loop → spawn daemon thread tid=%s for task_id=%s",
+                t.ident, task_id,
+            )
         return task
 
     def get(self, task_id: str) -> Task | None:

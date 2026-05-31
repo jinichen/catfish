@@ -211,6 +211,71 @@ class TestTaskManager(unittest.TestCase):
 
         _run(_t())
 
+    # BL-LONG-RUNNING-V1-FIX (5/31): tool-bridge sync call_tool 路径
+    # 老代码 asyncio.create_task 在 sync caller 抛 RuntimeError → 标 failed.
+    # 修复: detect 后 spawn daemon thread 跑 asyncio.run(). 这两个测试覆盖
+    # 真实生产路径 (LLM → tool-bridge HTTP → sync call_tool → submit).
+    def test_submit_from_sync_caller_spawns_thread(self):
+        """sync caller 调 submit (无 running loop), task 应正常跑完, 不再 failed."""
+        mgr = task_manager.manager()
+
+        result_box = {}
+
+        async def runner():
+            await asyncio.sleep(0.05)
+            result_box["v"] = "from-thread"
+            return result_box["v"]
+
+        # 直接 sync 调, 不在 async _run() 里
+        task = mgr.submit("execute_code", "sync-caller", runner)
+
+        # 立即查 — 不应该是 failed (我们的修复关键点)
+        self.assertNotEqual(
+            task.status, "failed",
+            f"sync caller 不应直接失败, error={task.error}",
+        )
+        # 应该是 pending 或 running (asyncio.run 在另一线程内启)
+        self.assertIn(task.status, ("pending", "running", "completed"))
+
+        # 等 thread 跑完 (轮询, 不依赖 _async_task — sync 路径 _async_task=None)
+        deadline = time.time() + 3.0
+        while time.time() < deadline:
+            if task.status in ("completed", "failed"):
+                break
+            time.sleep(0.05)
+
+        self.assertEqual(task.status, "completed", f"task error={task.error}")
+        self.assertEqual(task.result, "from-thread")
+
+    def test_submit_typed_task_from_sync_caller(self):
+        """submit_typed_task (LLM 调 catfish_run_task 的真实入口) 应在 sync 也 work."""
+        # 这跟 catfish_tools.py:call_tool sync 入口路径一致
+        result = task_manager.submit_typed_task(
+            kind="execute_code",
+            payload={"code": "print('hello sync')", "lang": "python", "timeout_s": 10},
+            label="sync-execute-test",
+        )
+        self.assertTrue(
+            result["ok"],
+            f"sync 入口不应失败, error={result.get('error')}",
+        )
+        self.assertTrue(result["task_id"].startswith("task_"))
+        # status 此刻可能 pending/running, 等它完
+        task_id = result["task_id"]
+        mgr = task_manager.manager()
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            t = mgr.get(task_id)
+            if t and t.status in ("completed", "failed"):
+                break
+            time.sleep(0.05)
+        t = mgr.get(task_id)
+        self.assertIsNotNone(t)
+        self.assertEqual(
+            t.status, "completed",
+            f"sync-spawned task 应完成, error={t.error}",
+        )
+
 
 class TestTaskNotification(unittest.TestCase):
     """BL-A2.3: 任务完成通知 (macOS + 桌宠 bubble)."""
