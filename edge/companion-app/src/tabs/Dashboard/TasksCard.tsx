@@ -11,7 +11,8 @@
  *   - 完成任务 24h 后自动从 list 消失 (task_manager TTL)
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 
 import { toolBridgeCallTool } from "../../lib/tauri";
 
@@ -24,6 +25,8 @@ interface Task {
   finished_at?: number | null;
   elapsed_s?: number;
   error?: string | null;
+  result_preview?: string | null;  // BL-LONG-RUNNING-V1: 来自 tasks.jsonl
+  source?: "live" | "history";     // 标识来自 in-memory 还是 jsonl
 }
 
 const REFRESH_MS = 5000;  // 5 秒刷新, 跟 tasks 状态变化相对快
@@ -47,18 +50,81 @@ export default function TasksCard() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // BL-LONG-RUNNING-V1 (5/30): 跟踪上一轮 status, 看到 running → completed/failed
+  // 触发 macOS notification. 避免每次 polling 都通知 (只通知状态变化的那一刻).
+  // Ref 不放 state 防 re-render race.
+  const prevStatusByIdRef = useRef<Map<string, Task["status"]>>(new Map());
+
   const load = async () => {
     try {
-      const result = await toolBridgeCallTool("catfish_task_list", {});
-      if (result.ok && result.result && typeof result.result === "object") {
-        const tasksRaw = (result.result as { tasks?: unknown }).tasks;
+      // 并行拉: in-memory active + jsonl 历史
+      const [liveResult, historyRaw] = await Promise.all([
+        toolBridgeCallTool("catfish_task_list", {}),
+        invoke<Array<{
+          task_id: string;
+          kind: string;
+          label: string;
+          status: string;
+          started_at: number;
+          finished_at: number | null;
+          elapsed_s: number | null;
+          error: string | null;
+          result_preview: string | null;
+        }>>("tasks_history_read", {
+          input: { hoursBack: 72, limit: 50 },
+        }).catch(() => []),
+      ]);
+
+      // in-memory active (含 running/pending + 24h 内 completed/failed)
+      const live: Task[] = [];
+      if (liveResult.ok && liveResult.result && typeof liveResult.result === "object") {
+        const tasksRaw = (liveResult.result as { tasks?: unknown }).tasks;
         if (Array.isArray(tasksRaw)) {
-          setTasks(tasksRaw as Task[]);
-          setError(null);
+          for (const t of tasksRaw as Task[]) {
+            live.push({ ...t, source: "live" });
+          }
         }
       } else {
-        setError(result.error || "拉不到任务列表");
+        setError(liveResult.error || "拉不到任务列表");
       }
+
+      // jsonl 历史 (24h+ 老 completed/failed)
+      const history: Task[] = (historyRaw || []).map((h) => ({
+        task_id: h.task_id,
+        kind: h.kind,
+        label: h.label,
+        status: h.status as Task["status"],
+        started_at: h.started_at,
+        finished_at: h.finished_at,
+        elapsed_s: h.elapsed_s ?? undefined,
+        error: h.error,
+        result_preview: h.result_preview,
+        source: "history",
+      }));
+
+      // 合并去重: 同 task_id 优先 in-memory (status 更新)
+      const seen = new Set(live.map((t) => t.task_id));
+      const merged = [...live, ...history.filter((h) => !seen.has(h.task_id))];
+
+      // BL-LONG-RUNNING-V1: 检测状态变化, 发 macOS notification
+      const prev = prevStatusByIdRef.current;
+      const next = new Map<string, Task["status"]>();
+      for (const t of merged) {
+        next.set(t.task_id, t.status);
+        const old = prev.get(t.task_id);
+        if (
+          old &&
+          (old === "running" || old === "pending") &&
+          (t.status === "completed" || t.status === "failed")
+        ) {
+          // 任务刚完成 — 发系统通知
+          void notifyTaskDone(t);
+        }
+      }
+      prevStatusByIdRef.current = next;
+
+      setTasks(merged);
+      if (live.length || history.length) setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -85,7 +151,8 @@ export default function TasksCard() {
 
   // BL-TASKS-CARD-HIDE-WHEN-EMPTY (5/16): 99% 时间无任务, 空卡占地不值.
   // 无任务 + 不 loading + 不 error → 整张卡不渲染, ProactiveCard 自动占满
-  // (grid auto-fit + minmax 280px 父布局会自适应). 真有任务时 pop 出来.
+  // BL-LONG-RUNNING-V1 (5/30): tasks 现在含历史 (jsonl) — 一旦员工跑过任何任务,
+  // 卡片会一直显示, 不再隐藏. 实际隐藏条件是真零任务过 (新 mac / 没用过).
   if (!loading && !error && tasks.length === 0) {
     return null;
   }
@@ -228,4 +295,40 @@ function TaskRow({ task }: { task: Task }) {
       )}
     </div>
   );
+}
+
+/** BL-LONG-RUNNING-V1 (5/30): 任务从 running/pending → completed/failed 时发
+ *  macOS native notification, 即使 Companion 不在前台 / 锁屏也能弹.
+ *
+ *  走 commands/system.rs:notify Tauri command (osascript display notification).
+ *  失败仅 console.warn, 不阻塞 chat / dashboard 主流程.
+ */
+async function notifyTaskDone(task: Task) {
+  const label = task.label || task.kind || "后台任务";
+  if (task.status === "completed") {
+    const preview = task.result_preview ? ` · ${task.result_preview.slice(0, 80)}` : "";
+    const elapsed = task.elapsed_s
+      ? task.elapsed_s < 60
+        ? ` (${task.elapsed_s.toFixed(0)}s)`
+        : ` (${(task.elapsed_s / 60).toFixed(1)}min)`
+      : "";
+    try {
+      await invoke("notify", {
+        title: `✅ ${label} 完成${elapsed}`,
+        body: preview || "鲶鱼后台任务执行完毕, 打开 Companion 查看结果.",
+      });
+    } catch (e) {
+      console.warn("[BL-LONG-RUNNING-V1] notify (completed) 失败:", e);
+    }
+  } else if (task.status === "failed") {
+    const errPreview = task.error ? task.error.slice(0, 100) : "(无错误信息)";
+    try {
+      await invoke("notify", {
+        title: `❌ ${label} 失败`,
+        body: errPreview,
+      });
+    } catch (e) {
+      console.warn("[BL-LONG-RUNNING-V1] notify (failed) 失败:", e);
+    }
+  }
 }

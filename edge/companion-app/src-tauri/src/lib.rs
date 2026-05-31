@@ -378,6 +378,8 @@ pub fn run() {
             commands::attachments::attachment_search_local,
             commands::attachments::attachment_delete,
             commands::attachments::attachment_delete_by_user,
+            // BL-LONG-RUNNING-V1 (5/30): 读 ~/.catfish/tasks.jsonl 历史任务
+            commands::tasks_history::tasks_history_read,
             // skill_audit (五一 sprint Day 2: skill 调用审计 + 30 天未用统计)
             commands::skill_audit::skill_audit_summary,
             // speech (五一 sprint Day 1 方案 C+: ffmpeg 录 + Whisper.cpp 转, 全本地)

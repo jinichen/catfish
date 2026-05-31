@@ -51,6 +51,7 @@ pub mod skill_revision;
 pub mod skills;
 pub mod speech;
 pub mod system;
+pub mod tasks_history;  // BL-LONG-RUNNING-V1 (5/30): 读 ~/.catfish/tasks.jsonl 历史任务
 pub mod tool_bridge;
 // BL-VOICE2 (5/10): Piper local TTS, 跟 speech.rs (whisper STT) 对称
 pub mod tts;
