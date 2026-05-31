@@ -72,20 +72,44 @@ audit 真元凶:
   - hermes 8642 /api/me + 64hex → 401
   - gateway 8999 /api/me + oauth → 200 OK ✓
 
-**871c6dd BL-HERMES-PROXY-AUTH-ME 治本**:
-- `me.ts:fetchWithAuth` 加 path 感知:
-  - `isApiPath()`: URL.pathname.startsWith("/api/")
-  - `rewriteToGateway()`: backendUrl (hermes 8642) → gatewayUrl (8999)
-  - /api/* → fetchWithOAuth(rewrite) — 绕 hermes
-  - /v1/* → fetchWithHermes() — 保 BL-A5 设计
-- `setup-catfish-edge.sh` 加详细注释 (enabled=true 保留, path 感知补救)
-- **11/11 vitest 全过** (3 hermes /v1/* + 4 /api/* 新 + 2 灰度 + 2 切换)
+**871c6dd BL-HERMES-PROXY-AUTH-ME 第一版 (path 感知补丁)**:
+- `me.ts:fetchWithAuth` 加 path 感知, /api/* 绕 hermes 直连 8999
+- 11/11 vitest 全过, console 0 个 401
 
-验证: Companion 重启 console **0 个 401**, /api/me /api/audit /api/quota /api/proactive 全 200 OK, chat 仍走 hermes service token.
+**但这只是补丁层**. 真元凶后面 6/1 早第二轮 audit 才找到 (见下).
 
 ---
 
-## 7 个 commit (按时间顺序)
+### 6/1 早 07:00-07:30 — 真治本 + 砍补丁 (鸿波 "为什么留尾巴")
+
+鸿波 review 看 plugin 后:
+> "之前不是为了不影响 hermes 升级, 已经把和 hermes 的代码都抽出来了吗?
+>  是不是再仔细分析代码, 包括 catfish 的"
+
+我重新 audit `edge/hermes-plugins/catfish-xcatfish-user/plugin.py`. **真元凶**: P7 catch-all proxy `_handle_companion_proxy` 透传 client Authorization (= API_SERVER_KEY 64hex) 给 gateway 8999, gateway 不认 → 401. **是 plugin 自己的 bug, 不是 hermes 上游, 不是 Companion**.
+
+**d94b306 三层一次性治本**:
+
+1. **plugin.py P7 `_handle_companion_proxy`** 加 `os.environ.get("HERMES_SERVICE_TOKEN")` swap Authorization. 砍硬编码 `gateway_base` → `CATFISH_GATEWAY_URL` env fallback (鸿波 "你用了硬编码?")
+
+2. **gateway app.py `/api/me` + `/api/audit/me`** 加 `X-Catfish-User` Header 参数 + `resolve_effective_user_email` (跟 `/api/quota/me` 同款). 之前直接返 `user.sub`, service token 路径下显 `client:hermes-cli`.
+
+3. **gateway db.py + app.py** 新 `fetch_user_metadata(email)` 查 catfish-identity `users` 表 (PG, gateway 跟 identity 共用) 拿真 department/role/managed_dept. fallback: PG 没配 / 没找到 → service token 元数据 (graceful dev). JSONB 解析 bug 同时修 (asyncpg 返 str 时手动 json.loads, 之前拿 `"[]"` → `list()` 拆成 `["[","]"]`).
+
+4. **Companion `me.ts` 砍 path 感知** (BL-HERMES-PROXY-AUTH-ME 退役 -50 行). `me.test.ts` 砍 4 path 感知测试, 恢复 3 hermes 测试 = 7/7 pass. `setup-catfish-edge.sh` 注释改 hybrid 设计说明.
+
+**端到端验证**:
+- vitest: 7/7 pass
+- launchctl kickstart hermes (PID 22304) plugin 11 patches applied ✓
+- curl 8642 `/api/me` + X-Catfish-User + 64hex key → HTTP 200 + 全是真员工 metadata
+- `/api/audit/me`: request_count=51 真员工 audit, by_model 真分布
+- Companion Dashboard: "今天找我 **51 次, 1.08M 额度, 最近一次 06:43:13**"
+
+**0 尾巴**: 全部 P0/P1 一个 commit ship, 无 follow-up.
+
+---
+
+## 9 个 commit (按时间顺序)
 
 | commit | 内容 |
 |---|---|
@@ -94,18 +118,28 @@ audit 真元凶:
 | `77d8358` | BL-LONG-RUNNING-V1-SCROLL + FOLLOWUP (TasksCard 滚 + Privacy + Proactive 友好) |
 | `f185463` | BL-SESSIONS-FILTER-PROACTIVE (sidebar regex 隐藏自动 trigger) |
 | `5143aa1` | .gitignore: 内部讲稿不入仓 |
-| `871c6dd` | **BL-HERMES-PROXY-AUTH-ME** (path 感知治本, 11 测试) |
+| `871c6dd` | BL-HERMES-PROXY-AUTH-ME (path 感知 — 后退役) |
 | `ee8e686` | BL-LONG-RUNNING-V1-PHASE-E (sidebar ⌛ 推断标识) |
+| `be23a56` | daily report 留档 (本文件 v1) |
+| `d94b306` | **BL-PLUGIN-P7-PROXY-TOKEN-SWAP + A1-API-ME-FIX** (真治本 6 文件, 砍 path 感知补丁) |
 
 ---
 
-## 真正学到的 3 个教训
+## 真正学到的 4 个教训 (6/1 早多一个)
 
 ### 1. P0 先看代码, 不猜
 
 5/31 22:00 撞 401 时, 我反应是猜 "长期 bug 不修" + 让鸿波 kill 错进程. 浪费 2 小时.
 
 6/1 早 audit `scripts/setup-catfish-edge.sh` 找到元凶 line 172 — **5 分钟**.
+
+### 1.5 第一次"治本" 也可能是补丁
+
+6/1 早 07:00 我做完 BL-HERMES-PROXY-AUTH-ME 自以为"治本" — 但其实是 Companion 端**补丁层** (path 感知绕过 hermes). 真元凶在 plugin P7 + gateway resolve + identity users 查询**三层共错**.
+
+鸿波 review 一句话: "之前不是把和 hermes 的代码都抽出来了吗? 再仔细分析." 让我看 catfish-xcatfish-user plugin **真元凶** `_handle_companion_proxy` line 521 透传 — 这 1 行才是真根因.
+
+**教训**: 别把"补丁修了表象"当"治本". 治本意思是修在**正确层**, 补丁意思是修在**离用户最近的层**. 两者差别大.
 
 写进 SOUL: **P0 第一反应不是猜原因, 是 grep 源码定位**.
 
@@ -126,6 +160,14 @@ tool-bridge 跑两个进程:
 实际 audit: hermes proxy 设计是想全路径透传 service token, 只是 /api/* 上游没实现. 不是"长期就坏", 是"主线没用 /api/me 所以没人撞".
 
 **修复策略**: 用 "之前 work 吗" 强制自己确认问题是新的还是老的, 别把老 bug 当不解决.
+
+### 4. "为什么留尾巴" — 治本就该一次到位
+
+6/1 早第二轮干 P7 swap + gateway resolve 时, 我 fix 了 email 字段但 department/role 还返 service token 的, **本能想留 backlog "复杂度高单独 ticket"**.
+
+鸿波 "为什么又留尾巴?" — 一句话让我立刻干 db.py `fetch_user_metadata` + JSONB parse bug + Companion 端砍 path 感知补丁. 全部一个 commit ship.
+
+**教训**: 当我想"留 follow-up"时, 默认意味着我**没真审完代码**. 真审完, 该一次到位. 留 backlog 是失败信号, 不是工程美德.
 
 ---
 
@@ -164,25 +206,34 @@ tool-bridge 跑两个进程:
 
 | ID | 工程量 | 价值 | 何时做 |
 |---|---|---|---|
-| **BL-HERMES-UPSTREAM-FIX** | 等 hermes 0.15 | 治根 (path 感知可砍) | 上游升级时 |
+| ~~BL-HERMES-UPSTREAM-FIX~~ | ~~等 hermes 0.15~~ | ~~治根~~ | **❌ 撤销** — 6/1 早发现真元凶在 catfish plugin P7 不是 hermes, 已治本 ship (d94b306) |
 | **BL-LONG-RUNNING-V1 Phase C 检查点** | ~2 小时 | 任务中断续接 | 下周 |
 | **BL-LONG-RUNNING-V1 Phase D 失败重试** | ~1 小时 | model fallback / 指数退避 | 下周 |
 | **BL-AUTH-DECOUPLE-A6 audit** | ~1 小时 | gateway 内部 self-call 安全 | 本周 |
 | **Phase 7 智能参谋** | 3-5 天 | 质变 KPI | 等鸿波 review 设计稿 |
 | **BL-WECHAT-V2** | 半天 | 多用户 openid → email | 微信用户增长前 |
 
+**注**: 6/1 早 audit 推翻"hermes 上游 bug"的假设. 真元凶在 catfish 自己的
+plugin (`edge/hermes-plugins/catfish-xcatfish-user/plugin.py:521`) — 抽出的 11 处 hermes patch 之一, P7 catch-all proxy 透传 token 没替换. **跟 hermes 升级无关**, 治本在我们仓里 ship 完了.
+
 ---
 
 ## 个人感受
 
-5/29 plugin 战 1 天, 5/30 文件索引战 1 天, 5/31 long running 战 1 晚 + 6/1 早 治 hermes auth — **连续 4 天主线 ship**, 累但都是真东西.
+5/29 plugin 战 1 天, 5/30 文件索引战 1 天, 5/31 long running 战 1 晚 + 6/1 早 治 hermes auth (两轮 audit) — **连续 4 天主线 ship**, 累但都是真东西.
 
-**最有收获的是 6/1 早那次 audit**. 5/31 晚我猜 "长期 bug", 鸿波两次纠正 + 一次火 ("不修明天怎么工作"). 我才老实看代码 — `scripts/setup-catfish-edge.sh` line 172 元凶 5 分钟定位.
+**6/1 早两次 audit 推翻**:
+1. 第一轮 (07:00 前) 猜 "hermes 上游 bug 等 0.15 修". 鸿波 "你不是把 hermes 代码抽出来了吗?" — 让我重 audit catfish 自家 plugin, 5 分钟找到 P7 真元凶.
+2. 第二轮 (07:15 后) 想 "department/role 留 backlog". 鸿波 "为什么又留尾巴?" — 让我立刻打 db.py + identity users 表 lookup, 全治本.
 
-**P0 真原则**: 不猜源头. 不假设"早就坏的". 先 grep 代码.
+**P0 真原则 (反复确认)**:
+- 不猜源头. 不假设"早就坏的".
+- 先 grep 代码.
+- 别把"补丁修了表象"当"治本".
+- "想留 backlog" = "没真审完代码" 的信号.
 
 ---
 
 *作者: 鸿波 + Claude (Cowork)*
-*配套: BL-HERMES-PROXY-AUTH-ME, BL-LONG-RUNNING-V1, BL-SESSIONS-FILTER-PROACTIVE*
-*生成时间: 2026-06-01 06:30*
+*配套: BL-HERMES-PROXY-AUTH-ME (退役), BL-PLUGIN-P7-PROXY-TOKEN-SWAP, BL-AUTH-DECOUPLE-A1-API-ME-FIX, BL-LONG-RUNNING-V1, BL-SESSIONS-FILTER-PROACTIVE*
+*生成时间: 2026-06-01 06:30 (v1), 2026-06-01 07:35 (v2 加 6/1 早两轮 audit)*
