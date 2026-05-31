@@ -134,67 +134,21 @@ export async function fetchWithAuth(
   opts: { skipReauth?: boolean } = {},
 ): Promise<Response> {
   // BL-AUTH-DECOUPLE-A5 Phase 2 (5/19): hermes 路径走静态 API_SERVER_KEY +
-  // X-Catfish-User 透传 user identity. hermes proxy 拿 service token 替换
-  // Authorization 调下游 gateway, identity 从 X-Catfish-User 读.
+  // X-Catfish-User 透传 user identity. 不再 OAuth 1h JWT (那是给 catfish-gateway
+  // 老路径用的). hermes proxy 拿 service token 替换 Authorization 调下游 gateway,
+  // identity 从 X-Catfish-User 读. 详见 BL-AUTH-DECOUPLE-A1/A2/A3 + Phase 1 总览.
   //
-  // BL-HERMES-PROXY-AUTH-ME (6/1 鸿波实盘): hermes 端 /api/* 路径 (me / audit /
-  // quota / proactive) 没实现 service token 替换, 透传 64hex API_SERVER_KEY 给
-  // gateway, gateway 期望 JWT 不认 → 401. 验证:
-  //   - 直 curl 8999 /api/me + oauth id_token → 200 OK
-  //   - hermes 8642 /api/me + API_SERVER_KEY → 401 invalid token
-  // /v1/chat/completions 路径 hermes 有专门 handler 替换 OK (chat work).
+  // BL-PLUGIN-P7-PROXY-TOKEN-SWAP (6/1): 之前 me.ts 加了 path 感知补丁
+  // (/api/* 强制 OAuth 直连 8999) 绕过 hermes P7 catch-all 的 token swap bug.
+  // 真元凶定位在 catfish-xcatfish-user plugin _handle_companion_proxy line 521
+  // — 透传 client Bearer 没替换. 改 plugin (6/1 audit), me.ts path 感知补丁
+  // 退役. 现在 /api/* /v1/* 全走 hermes, plugin P7 替换 service token 转发.
   //
-  // 修法: path 感知. /api/* 强制走 OAuth + 绕过 hermes 直连 gateway 8999.
-  // /v1/* 仍走 hermes (chat 路径不通过 me.ts, chat.ts 自己判断).
-  // 等 hermes 上游补 /api/* token 替换后这个分支可砍.
-  if (isApiPath(input)) {
-    return fetchWithOAuth(rewriteToGateway(input), init, opts);
-  }
-
   // 灰度: config.useHermes=false 时仍走老 OAuth 路径 (backward compat + 安全降级).
   if (config.useHermes && config.hermesAuthHeader) {
     return fetchWithHermes(input, init);
   }
   return fetchWithOAuth(input, init, opts);
-}
-
-/** BL-HERMES-PROXY-AUTH-ME (6/1): 提取 URL path, 检测 /api/ 前缀. */
-function isApiPath(input: RequestInfo | URL): boolean {
-  let urlStr: string;
-  if (typeof input === "string") {
-    urlStr = input;
-  } else if (input instanceof URL) {
-    urlStr = input.toString();
-  } else {
-    urlStr = (input as Request).url;
-  }
-  try {
-    return new URL(urlStr).pathname.startsWith("/api/");
-  } catch {
-    // 相对 URL fallback: 字符串 includes "/api/"
-    return urlStr.includes("/api/");
-  }
-}
-
-/** BL-HERMES-PROXY-AUTH-ME (6/1): URL host 从 backendUrl (可能是 hermes 8642)
- *  改回 gatewayUrl (8999, catfish-gateway 直连), 绕过 hermes proxy. */
-function rewriteToGateway(input: RequestInfo | URL): RequestInfo | URL {
-  // backendUrl === gatewayUrl 说明没启 hermes (enabled=false), 不需要改
-  if (config.backendUrl === config.gatewayUrl) return input;
-
-  const urlStr =
-    typeof input === "string"
-      ? input
-      : input instanceof URL
-        ? input.toString()
-        : (input as Request).url;
-
-  if (urlStr.startsWith(config.backendUrl)) {
-    const rewritten = urlStr.replace(config.backendUrl, config.gatewayUrl);
-    // string / URL 入参回 string, Request 入参重建 (init headers/body 在 fetchWithOAuth 里处理)
-    return typeof input === "string" || input instanceof URL ? rewritten : new Request(rewritten, input as Request);
-  }
-  return input;
 }
 
 /** BL-AUTH-DECOUPLE-A5 (5/19): hermes 静态 key 路径. 不 reauth (key 不会过期).

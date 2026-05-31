@@ -488,13 +488,44 @@ async def quota_me(
 
 
 @app.get("/api/me")
-async def api_me(user: User = Depends(get_current_user)) -> dict[str, Any]:
-    """返当前 user 元信息. Companion useMe() 调."""
+async def api_me(
+    user: User = Depends(get_current_user),
+    x_catfish_user: str | None = Header(default=None, alias="X-Catfish-User"),
+) -> dict[str, Any]:
+    """返当前 user 元信息. Companion useMe() 调.
+
+    BL-AUTH-DECOUPLE-A1-API-ME-FIX (6/1 鸿波实盘): 之前直接返 user.sub +
+    user.department/role, hermes service token (sub=client:hermes-cli) 时
+    返了 service token 自己的元数据, 不是真员工.
+
+    修: 用 resolve_effective_user_email 拿真员工 email, 再调
+    fetch_user_metadata 查 identity users 表拿真 department/role/managed_dept.
+    fallback: PG 没配 / 没找到员工 → 退到 service token 自己的元数据 (兼容
+    单机 dev). 关键展示字段全对了, Companion conditional render 对路径.
+    """
+    from .db import fetch_user_metadata
+
+    effective_email = resolve_effective_user_email(user, x_catfish_user)
+
+    # 查真员工 metadata. service token 路径下用 effective email 查 identity
+    # users 表; 普通 user token 路径下 effective_email == user.sub, 查到的应
+    # 该跟 token claims 一致 (双重确认).
+    real_meta = await fetch_user_metadata(effective_email)
+    if real_meta is not None:
+        department = real_meta["department"]
+        role = real_meta["role"]
+        managed_departments = real_meta["managed_departments"]
+    else:
+        # PG 没配 / 没找到 → fallback service token 元数据 (graceful)
+        department = user.department
+        role = user.role
+        managed_departments = user.managed_departments or []
+
     return {
-        "email": user.sub,
-        "department": user.department,
-        "role": user.role,
-        "managed_departments": user.managed_departments or [],
+        "email": effective_email,
+        "department": department,
+        "role": role,
+        "managed_departments": managed_departments,
         "auth_method": user.auth_method,
     }
 
@@ -1191,17 +1222,32 @@ def _group_metadata() -> dict[str, dict[str, Any]]:
 @app.get("/api/audit/me")
 async def api_audit_me(
     user: User = Depends(get_current_user),
+    x_catfish_user: str | None = Header(default=None, alias="X-Catfish-User"),
 ) -> dict[str, Any]:
-    """员工自查: 中央对我存了啥 metadata. 不需 RBAC, 谁登录返谁的."""
+    """员工自查: 中央对我存了啥 metadata. 不需 RBAC, 谁登录返谁的.
+
+    BL-AUTH-DECOUPLE-A1-API-ME-FIX (6/1): 跟 /api/me + /api/quota/me 同款 resolve.
+    chat 写 quota_events 用 effective_user_email (真员工 chenhongbo@ffcs.cn),
+    audit_summary_user_since 查也要按 effective 查, 才能找回真员工 audit 记录.
+    """
     from . import quota
+
+    from .db import fetch_user_metadata
+
+    effective_email = resolve_effective_user_email(user, x_catfish_user)
+
+    # 查真员工 department (同 /api/me 处理) — service token 时 user.department 是
+    # service 维度 (infra), 真员工 department 在 identity users 表.
+    real_meta = await fetch_user_metadata(effective_email)
+    real_department = real_meta["department"] if real_meta else user.department
 
     now_ms = int(time.time() * 1000)
     day_cutoff = now_ms - 86_400_000
 
-    summary = quota.audit_summary_user_since(user.sub, day_cutoff)
+    summary = quota.audit_summary_user_since(effective_email, day_cutoff)
     return {
-        "user_email": user.sub,
-        "department": user.department,
+        "user_email": effective_email,
+        "department": real_department,
         "since_ms": day_cutoff,
         # 让客户端知道"中央存的字段长这样", 防员工担心还有别的没暴露
         "schema_note": "本端点只返 metadata: count / tokens / model / 时间戳. 中央不存 prompt / response 文本.",

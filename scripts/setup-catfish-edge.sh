@@ -169,18 +169,18 @@ if cfg_path.exists():
     backup.write_text(cfg_path.read_text("utf-8"), "utf-8")
 
 data.setdefault("hermes_api", {}).update({
-    # BL-HERMES-PROXY-AUTH-ME (6/1): enabled=true 让 Companion 走 hermes proxy
-    # 服务 chat (/v1/chat/completions) — hermes 有专门 handler 用 service token
-    # 替换转发 gateway, 配 X-Catfish-User 走 BL-AUTH-DECOUPLE-A5 设计.
+    # BL-AUTH-DECOUPLE-A5 (5/19) + BL-PLUGIN-P7-PROXY-TOKEN-SWAP (6/1):
+    # enabled=true 让 Companion 走 hermes 8642 + API_SERVER_KEY 认证.
+    # hermes_cli /v1/chat/completions 用内部 LiteLLM (model.api_key = service token).
+    # hermes catch-all /api/* 走 catfish-xcatfish-user plugin P7,
+    # _handle_companion_proxy 替换 Authorization 成 HERMES_SERVICE_TOKEN
+    # 转发 gateway, X-Catfish-User 透传 user identity.
     #
-    # 但 /api/me /api/audit/me /api/quota/me /api/proactive/* 这几条路径
-    # hermes 端**没实现** token 替换, 透传 64hex API_SERVER_KEY 给 gateway,
-    # gateway 期 JWT → 401. 这是 hermes 上游 bug.
-    #
-    # Companion 端 me.ts:fetchWithAuth 有 path 感知补救: /api/* 自动绕过
-    # hermes 走 OAuth 直连 gatewayUrl. 所以 enabled=true 仍安全.
-    #
-    # 等 hermes 上游补 /api/* 替换后 me.ts path 感知可砍.
+    # 必需 env (~/.hermes/.env, 本脚本 step 2 写):
+    #   API_SERVER_ENABLED=true        — hermes 起 8642 API server
+    #   API_SERVER_KEY=<64hex>          — Companion 认证用
+    #   HERMES_SERVICE_TOKEN=<JWT>     — plugin P7 替换转发 gateway 用
+    #                                    (mint via mint-hermes-service-token.sh)
     "enabled": True,
     "url": url,
     "key": key,

@@ -513,12 +513,47 @@ def _patch_p7_companion_proxy_route() -> None:
     from gateway.platforms.api_server import APIServerAdapter
 
     async def _handle_companion_proxy(self, request):
-        """透传 request 到 catfish-gateway 8999, X-Catfish-User 沿用 request header."""
+        """透传 request 到 catfish-gateway 8999, X-Catfish-User 沿用 request header.
+
+        BL-PLUGIN-P7-PROXY-TOKEN-SWAP (6/1 鸿波实盘 audit):
+        老实现透传 client Authorization, Companion 客户端用 hermes API_SERVER_KEY
+        (64 hex), gateway 期 OIDC JWT, 不认 → 401 invalid token. 影响所有
+        /api/me /api/audit/me /api/quota/me /api/proactive/* 端点.
+
+        修: 替换 Authorization 成 service token (HERMES_SERVICE_TOKEN, sub=
+        client:hermes-cli). hermes_cli 自己的 /v1/chat/completions 路径不走这,
+        走内部 LiteLLM acompletion, model.api_key 拿 service token (同 token
+        不同入口). User identity 走 X-Catfish-User 透传, gateway 用它取 user.
+
+        前提: HERMES_SERVICE_TOKEN env 已配 (~/.hermes/.env, 由
+        scripts/setup-catfish-edge.sh 装机时写). 没配则 swap 不发生, 老
+        行为 — gateway 仍 401, 用户从错误看出 setup 没走完.
+        """
         import aiohttp
-        gateway_base = "http://127.0.0.1:8999"  # 应该读 config, 这里 hardcode 占位
+        import os
+        # BL-PLUGIN-P7-PROXY-TOKEN-SWAP (6/1 鸿波 audit): 砍硬编码, env 覆盖.
+        # 老代码 `gateway_base = "http://127.0.0.1:8999"` 注释 "应该读 config 这里
+        # hardcode 占位" 一直没改. 加 CATFISH_GATEWAY_URL env, 默认仍 localhost:8999
+        # (开发机 / 标准装机). 生产环境 catfish-cli 装机 (setup-catfish-edge.sh)
+        # 应该写这个 env 进 ~/.hermes/.env. TODO (P2): 改读 hermes config
+        # `model.base_url`, 去 /v1 后缀.
+        gateway_base = os.environ.get(
+            "CATFISH_GATEWAY_URL", "http://127.0.0.1:8999"
+        ).rstrip("/")
         target_url = f"{gateway_base}{request.path_qs}"
         body = await request.read()
         headers = {k: v for k, v in request.headers.items() if k.lower() != "host"}
+
+        # BL-PLUGIN-P7-PROXY-TOKEN-SWAP: 关键 swap.
+        svc_token = os.environ.get("HERMES_SERVICE_TOKEN")
+        if svc_token:
+            headers["Authorization"] = f"Bearer {svc_token}"
+        else:
+            logger.warning(
+                "P7 proxy: HERMES_SERVICE_TOKEN env 没配, Authorization 透传 "
+                "client Bearer. gateway 大概率 401. 跑 scripts/setup-catfish-edge.sh."
+            )
+
         async with aiohttp.ClientSession() as session:
             async with session.request(
                 method=request.method,

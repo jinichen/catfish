@@ -138,9 +138,64 @@ async def close_pool() -> None:
         _POOL = None
 
 
+async def fetch_user_metadata(email: str) -> dict | None:
+    """查 catfish-identity `users` 表拿真员工 metadata.
+
+    BL-AUTH-DECOUPLE-A1-API-ME-FIX (6/1 鸿波): service token + X-Catfish-User
+    场景下, gateway 拿不到 on-behalf user 的 department/role (这些在
+    identity 仓 users 表, gateway 跟 identity 共用 PG). 显示 API (/api/me)
+    需要真员工元数据让 Companion conditional render 对.
+
+    返 dict: {department, role, managed_departments} 或 None.
+    None 含义: PG 没配 (dev/单机 sqlite fallback) / asyncpg 没装 / email 不存在
+    / 软删. caller 应该 fallback 到 service token 自己的元数据 (graceful).
+    """
+    import json
+    pool = await get_pool()
+    if pool is None:
+        return None
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT department, role, managed_departments "
+                "FROM users WHERE email = $1 AND deleted_at IS NULL",
+                email,
+            )
+            if row is None:
+                return None
+            # managed_departments 在 identity 仓 schema 是 JSONB (db.py:167,
+            # alembic 20260502_001). asyncpg 默认不自动 JSON decode JSONB —
+            # 返字符串. 没装 JSON codec 时手动 json.loads. 已装 codec 拿到
+            # list 直接用. None / 空串 → [].
+            mds_raw = row["managed_departments"]
+            if mds_raw is None:
+                mds = []
+            elif isinstance(mds_raw, str):
+                try:
+                    mds = json.loads(mds_raw) if mds_raw.strip() else []
+                except json.JSONDecodeError:
+                    logger.warning(
+                        "managed_departments not valid JSON for email=%s: %r",
+                        email, mds_raw[:100],
+                    )
+                    mds = []
+            elif isinstance(mds_raw, list):
+                mds = mds_raw
+            else:
+                mds = []
+            return {
+                "department": row["department"],
+                "role": row["role"],
+                "managed_departments": mds,
+            }
+    except Exception:
+        logger.exception("fetch_user_metadata failed for email=%s", email)
+        return None
+
+
 def _mask_url(url: str) -> str:
     """日志里隐藏密码."""
     return re.sub(r"(://[^:]+:)([^@]+)(@)", r"\1***\3", url)
 
 
-__all__ = ["get_pool", "close_pool", "db_url"]
+__all__ = ["get_pool", "close_pool", "db_url", "fetch_user_metadata"]
