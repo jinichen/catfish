@@ -44,6 +44,16 @@ pub struct SessionMeta {
     /// 还没生成时当 fallback 显示, 比 timestamp `(20260515_xxx)` 友好多了.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub first_user_message: Option<String>,
+    /// BL-LONG-RUNNING-V1-PHASE-E (6/1): "可能在 hermes 后台仍 streaming" 的 heuristic.
+    ///
+    /// Companion 重开后 streamRegistry 内存丢, 但 hermes 是独立 launchctl 服务,
+    /// 长任务还在跑. 没法直接查 hermes 内存, 用 state.db 推断:
+    ///   - ended_at IS NULL AND end_reason IS NULL  (hermes 没正式 end)
+    ///   - 最近 message < 5 分钟前 (太老的大概率 hermes crash 没清 ended_at)
+    ///
+    /// sidebar 给这种 session 一个 ⏳ 标识, 提示用户切回看看.
+    /// 跟内存里 streamRegistry 标识区分 (那个是 100% 在跑, 这个是"可能").
+    pub is_possibly_streaming: bool,
 }
 
 /// 完整消息 —— 给 ChatPanel resume 历史用 (Plan C Week 3)
@@ -155,7 +165,18 @@ fn list_blocking() -> Result<Vec<SessionMeta>, String> {
                 (SELECT m.content FROM messages m
                  WHERE m.session_id = s.id AND m.role = 'user'
                    AND m.content IS NOT NULL AND m.content != ''
-                 ORDER BY m.timestamp ASC, m.rowid ASC LIMIT 1) AS first_user_message
+                 ORDER BY m.timestamp ASC, m.rowid ASC LIMIT 1) AS first_user_message,
+                -- BL-LONG-RUNNING-V1-PHASE-E (6/1): heuristic is_possibly_streaming.
+                -- hermes 没 end + 最近 5 分钟有消息 → 可能仍在跑.
+                -- messages.timestamp 是 unix sec (float), 跟 sessions.started_at 同存储.
+                -- 用 strftime('%s','now') 拿当前 unix sec, CAST 防 SQLite TEXT/REAL 比较 quirk.
+                CASE
+                    WHEN s.ended_at IS NULL AND s.end_reason IS NULL
+                         AND (SELECT MAX(m.timestamp) FROM messages m
+                              WHERE m.session_id = s.id)
+                             > CAST(strftime('%s', 'now') AS REAL) - 300.0
+                    THEN 1 ELSE 0
+                END AS is_possibly_streaming
             FROM sessions s
             WHERE s.deleted_at IS NULL
             ORDER BY s.started_at DESC
@@ -206,7 +227,15 @@ fn meta_by_id(conn: &Connection, id: &str) -> Result<SessionMeta, String> {
             (SELECT m.content FROM messages m
              WHERE m.session_id = s.id AND m.role = 'user'
                AND m.content IS NOT NULL AND m.content != ''
-             ORDER BY m.timestamp ASC, m.rowid ASC LIMIT 1) AS first_user_message
+             ORDER BY m.timestamp ASC, m.rowid ASC LIMIT 1) AS first_user_message,
+            -- BL-LONG-RUNNING-V1-PHASE-E (6/1): 同 list_blocking heuristic
+            CASE
+                WHEN s.ended_at IS NULL AND s.end_reason IS NULL
+                     AND (SELECT MAX(m.timestamp) FROM messages m
+                          WHERE m.session_id = s.id)
+                         > CAST(strftime('%s', 'now') AS REAL) - 300.0
+                THEN 1 ELSE 0
+            END AS is_possibly_streaming
         FROM sessions s
         WHERE s.id = ?1
     "#,
@@ -247,7 +276,8 @@ fn last_message(conn: &Connection, id: &str, role: &str) -> Result<Option<String
 }
 
 /// SQL row → SessionMeta 的共享转换器
-/// 列序: id, title, model, started_at, ended_at, end_reason, message_count, total_tokens, source
+/// 列序: id, title, model, started_at, ended_at, end_reason, message_count,
+///       total_tokens, source, first_user_message, is_possibly_streaming
 fn row_to_meta(row: &rusqlite::Row) -> rusqlite::Result<SessionMeta> {
     Ok(SessionMeta {
         id: row.get(0)?,
@@ -272,6 +302,8 @@ fn row_to_meta(row: &rusqlite::Row) -> rusqlite::Result<SessionMeta> {
                 t.to_string()
             }
         }).filter(|s| !s.is_empty()),
+        // BL-LONG-RUNNING-V1-PHASE-E (6/1): col 10 = 0/1 (SQLite CASE 结果)
+        is_possibly_streaming: row.get::<_, i64>(10).unwrap_or(0) != 0,
     })
 }
 

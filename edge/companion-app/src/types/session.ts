@@ -22,6 +22,11 @@ export interface SessionMeta {
   source?: string;
   /** BL-SESSION-MGMT A (5/15): 首条 user message 前 80 字, title 没生成时 sidebar 用作 fallback. */
   firstUserMessage?: string;
+  /** BL-LONG-RUNNING-V1-PHASE-E (6/1): "可能在 hermes 后台仍跑" 的 heuristic.
+   *  Rust 端从 state.db 算: ended_at IS NULL + end_reason IS NULL + 最近 5 分钟有消息.
+   *  Companion 关 / 重启后 streamRegistry 内存丢, 这字段帮员工识别"昨天那个长任务跑完没".
+   *  跟 streamRegistry 实时标识区分: streamRegistry 100% 在跑, 这个是"可能". */
+  isPossiblyStreaming: boolean;
 }
 
 /** 单条消息 —— 跟 Rust SessionMessage 对齐, resume 时会 map 成 ChatMessage 灌进 store */

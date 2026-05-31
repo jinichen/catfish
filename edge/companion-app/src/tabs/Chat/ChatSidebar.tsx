@@ -616,6 +616,22 @@ function SessionRow({
             ⏳
           </span>
         )}
+        {/* BL-LONG-RUNNING-V1-PHASE-E (6/1): 推断"可能仍在 hermes 后台跑"的标识.
+            只在 isInflight=false (内存里没看到) 但 db 推断"未 end + 最近活动" 时显.
+            灰色 ⌛, 不 pulse — 跟 isInflight ⏳ cyan pulse 区分. 提示员工切回看看. */}
+        {!isInflight && session.isPossiblyStreaming && (
+          <span
+            title="此会话可能仍在 hermes 后台跑 (没正式结束 + 最近 5 分钟活动). 点开看看."
+            style={{
+              fontSize: 11,
+              flexShrink: 0,
+              opacity: 0.55,
+              color: "var(--catfish-text-muted)",
+            }}
+          >
+            ⌛
+          </span>
+        )}
         <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>
           {title}
         </span>
