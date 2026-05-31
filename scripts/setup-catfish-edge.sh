@@ -169,6 +169,18 @@ if cfg_path.exists():
     backup.write_text(cfg_path.read_text("utf-8"), "utf-8")
 
 data.setdefault("hermes_api", {}).update({
+    # BL-HERMES-PROXY-AUTH-ME (6/1): enabled=true 让 Companion 走 hermes proxy
+    # 服务 chat (/v1/chat/completions) — hermes 有专门 handler 用 service token
+    # 替换转发 gateway, 配 X-Catfish-User 走 BL-AUTH-DECOUPLE-A5 设计.
+    #
+    # 但 /api/me /api/audit/me /api/quota/me /api/proactive/* 这几条路径
+    # hermes 端**没实现** token 替换, 透传 64hex API_SERVER_KEY 给 gateway,
+    # gateway 期 JWT → 401. 这是 hermes 上游 bug.
+    #
+    # Companion 端 me.ts:fetchWithAuth 有 path 感知补救: /api/* 自动绕过
+    # hermes 走 OAuth 直连 gatewayUrl. 所以 enabled=true 仍安全.
+    #
+    # 等 hermes 上游补 /api/* 替换后 me.ts path 感知可砍.
     "enabled": True,
     "url": url,
     "key": key,
