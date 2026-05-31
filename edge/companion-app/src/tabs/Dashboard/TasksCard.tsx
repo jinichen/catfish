@@ -207,7 +207,22 @@ export default function TasksCard() {
       )}
 
       {sortedTasks.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
+        // BL-LONG-RUNNING-V1-SCROLL (5/31 鸿波): jsonl 历史一加进来动辄 20+
+        // 条, 不限高把 Dashboard 撑爆. max-height 大约容 7 条, 多了滚动.
+        // sortedTasks 已经按 running > pending > completed > failed + 时间倒序
+        // 排过, 最新最重要的永远在视窗内.
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: "var(--space-2)",
+            maxHeight: "360px",
+            overflowY: "auto",
+            // iOS 风格细滚动条: 不抢视觉
+            scrollbarWidth: "thin",
+            scrollbarColor: "var(--catfish-border) transparent",
+          }}
+        >
           {sortedTasks.map((task) => (
             <TaskRow key={task.task_id} task={task} />
           ))}
