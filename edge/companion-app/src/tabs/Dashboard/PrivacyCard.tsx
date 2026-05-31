@@ -136,14 +136,41 @@ export default function PrivacyCard() {
           公司服务器看到的 — 全部在这了
         </h4>
 
-        {error && (
-          <div style={{ fontSize: 12, color: "var(--status-err, #c93a3a)" }}>
-            拉失败: {error} <br />
-            <span style={{ color: "var(--catfish-text-muted)", fontSize: 11 }}>
-              (离线 / 未登录 / 服务器挂. 你本机数据不受影响.)
-            </span>
-          </div>
-        )}
+        {error && (() => {
+          // BL-LONG-RUNNING-V1-FOLLOWUP (5/31): 401 是 token 过期, 不是 "Error"
+          // 别用冷红色吓员工 — 改友好提示 + 引导重登. 其它错误 (5xx / 网络)
+          // 保持原灰色, 跟"你本机数据不受影响"同一调.
+          const is401 = /401|unauthorized/i.test(error);
+          if (is401) {
+            return (
+              <div
+                style={{
+                  fontSize: 12,
+                  color: "var(--catfish-text)",
+                  background: "var(--catfish-bg)",
+                  border: "1px solid var(--catfish-border)",
+                  borderRadius: "var(--radius-sm)",
+                  padding: "var(--space-2)",
+                }}
+              >
+                登录过期了, 公司服务器那条拉不到 — 这页 30s 自动重试.
+                <br />
+                <span style={{ color: "var(--catfish-text-muted)", fontSize: 11 }}>
+                  你跟我聊的内容仍只在你本机. 重登就行: 顶上 "工作台" → 头像 → 退出 → 重新登录.
+                </span>
+              </div>
+            );
+          }
+          return (
+            <div style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>
+              暂时拉不到 ({error}).
+              <br />
+              <span style={{ fontSize: 11 }}>
+                (离线 / 服务器挂 — 你本机数据不受影响, 30s 自动重试.)
+              </span>
+            </div>
+          );
+        })()}
 
         {!data && !error && <div style={{ fontSize: 12 }}>加载中…</div>}
 
