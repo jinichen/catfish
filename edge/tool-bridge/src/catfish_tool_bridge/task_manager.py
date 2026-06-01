@@ -81,11 +81,15 @@ class Task:
     task_id: str
     kind: str
     label: str  # 给员工看的人类可读描述
-    status: str = "pending"  # pending / running / completed / failed
+    status: str = "pending"  # pending / running / completed / failed / interrupted
     started_at: float = field(default_factory=time.time)
     finished_at: float | None = None
     result: Any = None
     error: str | None = None
+    # BL-LONG-RUNNING-V1-PHASE-C (6/1): payload 跨重启保留, retry 时拿来重启同样
+    # input. 不暴露给 LLM (status_dict 不带), jsonl 持久化 (本机, 跟 task metadata
+    # 同密级).
+    payload: dict = field(default_factory=dict, repr=False)
     # 内部 asyncio task 引用, 不序列化给 LLM
     _async_task: asyncio.Task | None = field(default=None, repr=False)
 
@@ -108,6 +112,8 @@ class TaskManager:
         kind: str,
         label: str,
         runner: Callable[[], Awaitable[Any]],
+        *,
+        payload: dict | None = None,
     ) -> Task:
         """启动后台任务, 立即返 Task (status=pending → running 异步).
 
@@ -115,13 +121,31 @@ class TaskManager:
             kind: 任务类型枚举
             label: 给员工看的描述 (例 "修订《资质管理办法》")
             runner: 真正跑任务的 async coroutine factory
+            payload: BL-LONG-RUNNING-V1-PHASE-C (6/1) — 保存原 input 供 retry.
+                     用 submit_typed_task 入口时这个会被自动传入. 直接调 submit()
+                     的老 caller 不传时默认空 dict (能 work, 但 retry 失效).
 
         Returns:
             Task 对象 (含 task_id 等)
         """
         task_id = self._new_task_id()
-        task = Task(task_id=task_id, kind=kind, label=label)
+        task = Task(
+            task_id=task_id, kind=kind, label=label,
+            payload=payload or {},
+        )
         self._tasks[task_id] = task
+
+        # BL-LONG-RUNNING-V1-PHASE-C (6/1): submit 时立即写 jsonl status=pending
+        # row, 含 payload. 这样进程崩了重启扫 jsonl 能发现哪些 task stuck (有
+        # pending 没对应 completed/failed), 标 interrupted; 也给 retry 工具拿
+        # 到原 input. 失败 swallow (jsonl 是非关键路径).
+        try:
+            _persist_task_started_to_jsonl(task)
+        except Exception:
+            logger.warning(
+                "task jsonl started 写失败 (非关键): id=%s",
+                task_id, exc_info=True,
+            )
 
         async def _run_wrapper():
             task.status = "running"
@@ -268,10 +292,21 @@ _manager: TaskManager | None = None
 
 
 def manager() -> TaskManager:
-    """全局 task manager (lazy)."""
+    """全局 task manager (lazy).
+
+    BL-LONG-RUNNING-V1-PHASE-C (6/1): 首次 init 时扫 jsonl 找 stuck task 标
+    interrupted. 进程重启后, Companion 看到的 stuck task 立刻翻 "中断" 状态.
+    幂等: 已经 interrupted 的 task 不重复标. 不阻塞 manager 初始化 (有异常 swallow).
+    """
     global _manager
     if _manager is None:
         _manager = TaskManager()
+        try:
+            n = mark_interrupted_on_startup()
+            if n:
+                logger.info("manager init: 启动扫到 %d 个 stuck task 已标 interrupted", n)
+        except Exception:
+            logger.warning("manager init: mark_interrupted 失败 (非关键)", exc_info=True)
     return _manager
 
 
@@ -302,6 +337,33 @@ def _tasks_jsonl_path() -> Path:
     if catfish_home:
         return Path(catfish_home).expanduser() / "tasks.jsonl"
     return Path.home() / ".catfish" / "tasks.jsonl"
+
+
+def _persist_task_started_to_jsonl(task: Task) -> None:
+    """BL-LONG-RUNNING-V1-PHASE-C (6/1): submit 时写 jsonl status=pending row.
+
+    含 payload (retry 用) + kind + label + started_at. 跟 _persist_task_to_jsonl
+    写的 completed/failed row 同 schema (后者会再 append 一行同 task_id,
+    新 status). 重启扫 jsonl 时: 同 task_id 最后一行是 pending → stuck.
+    """
+    path = _tasks_jsonl_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "task_id": task.task_id,
+        "kind": task.kind,
+        "label": task.label,
+        "status": "pending",
+        "started_at": task.started_at,
+        "finished_at": None,
+        "elapsed_s": 0.0,
+        "error": None,
+        "result_preview": "",
+        # PHASE-C 关键: payload 跨重启保留供 retry. 跟 task metadata 同密级,
+        # ~/.catfish/tasks.jsonl 跟 attachments.db 一样在员工本机.
+        "payload": task.payload,
+    }
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
 def _persist_task_to_jsonl(task: Task) -> None:
@@ -357,9 +419,121 @@ def _persist_task_to_jsonl(task: Task) -> None:
         ),
         "error": task.error,
         "result_preview": result_preview,
+        # BL-LONG-RUNNING-V1-PHASE-C (6/1): payload 重复写 (跟 _persist_task_started
+        # 那行重复, 冗余但简化 reader — scan 时不用 join 两行就拿到完整 task 信息).
+        "payload": task.payload,
     }
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def mark_interrupted_on_startup(stuck_threshold_secs: int = 300) -> int:
+    """BL-LONG-RUNNING-V1-PHASE-C (6/1): 启动时扫 jsonl 找 stuck task.
+
+    场景: tool-bridge / hermes 进程跑 long task 时被 kill / 系统重启 / oom,
+    task 永远停在 status=running, in-memory dict 重启丢. Companion TasksCard
+    显"运行中" 但实际进程死了.
+
+    实现:
+      1. scan jsonl, 按 task_id group, 取每个 task_id 最后一条 record
+      2. 如果最后一条 status=pending (= submit 时写的) 且 started_at 早于
+         now - stuck_threshold_secs (default 5 分钟) → stuck
+      3. append 一行 status=interrupted, error="进程重启/崩溃, 未完成"
+
+    返清了几条. caller 一般是 manager() 单例首次 init 时调一次.
+    """
+    path = _tasks_jsonl_path()
+    if not path.exists():
+        return 0
+    # 读全部, 按 task_id group 找 latest record
+    latest_by_task: dict[str, dict] = {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                tid = rec.get("task_id")
+                if not tid:
+                    continue
+                latest_by_task[tid] = rec  # 顺序读, 后写覆盖前
+    except Exception:
+        logger.exception("mark_interrupted: 读 jsonl 失败")
+        return 0
+
+    now = time.time()
+    interrupted_count = 0
+    for tid, rec in latest_by_task.items():
+        if rec.get("status") != "pending":
+            continue  # 已经 completed / failed / interrupted, 跳过
+        started_at = rec.get("started_at", 0)
+        if not isinstance(started_at, (int, float)):
+            continue
+        age = now - started_at
+        if age < stuck_threshold_secs:
+            continue  # 还不算 stuck, 给当前进程一个机会
+        # 写 interrupted row
+        interrupted_record = {
+            "task_id": tid,
+            "kind": rec.get("kind", ""),
+            "label": rec.get("label", ""),
+            "status": "interrupted",
+            "started_at": started_at,
+            "finished_at": now,
+            "elapsed_s": age,
+            "error": f"进程重启/崩溃, 未完成 (stuck {age:.0f}s)",
+            "result_preview": "",
+            "payload": rec.get("payload", {}),
+        }
+        try:
+            with path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(interrupted_record, ensure_ascii=False) + "\n")
+            interrupted_count += 1
+        except Exception:
+            logger.warning("mark_interrupted: append failed for %s", tid, exc_info=True)
+    if interrupted_count:
+        logger.info(
+            "mark_interrupted_on_startup: 标记 %d 个 stuck task interrupted",
+            interrupted_count,
+        )
+    return interrupted_count
+
+
+def find_task_payload_by_id(task_id: str) -> tuple[str, dict, str] | None:
+    """BL-LONG-RUNNING-V1-PHASE-C (6/1): 从 jsonl 找 task_id 的 kind + payload + label.
+
+    给 retry 用 — 重启同一 input 跑新 task. 返 (kind, payload, label) 或 None.
+    扫 jsonl 找含 task_id 的**第一条** record (= submit 时写的 pending row, 含
+    原始 payload). 后续 completed/interrupted row 也含 payload, 但拿 first row
+    确保是原始 input (没被中途改).
+    """
+    path = _tasks_jsonl_path()
+    if not path.exists():
+        return None
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if rec.get("task_id") == task_id:
+                    kind = rec.get("kind", "")
+                    payload = rec.get("payload", {}) or {}
+                    label = rec.get("label", "")
+                    if kind:
+                        return (kind, payload, label)
+        return None
+    except Exception:
+        logger.exception("find_task_payload_by_id: 读 jsonl 失败")
+        return None
 
 
 def read_tasks_from_jsonl(
@@ -529,7 +703,11 @@ def _platform_is_macos() -> bool:
 
 
 def submit_typed_task(kind: str, payload: dict, label: str = "") -> dict:
-    """工具调用入口: 按 kind 选 runner, 启 task, 返 status_dict."""
+    """工具调用入口: 按 kind 选 runner, 启 task, 返 status_dict.
+
+    BL-LONG-RUNNING-V1-PHASE-C (6/1): payload 透传给 manager.submit() 保存,
+    用于 retry. 老 caller 行为不变 (payload 不返给 LLM).
+    """
     runner_factory = _KIND_RUNNERS.get(kind)
     if runner_factory is None:
         return {
@@ -544,6 +722,7 @@ def submit_typed_task(kind: str, payload: dict, label: str = "") -> dict:
         kind=kind,
         label=label or f"{kind} task",
         runner=_bound_runner,
+        payload=payload,  # PHASE-C: 保存供 retry
     )
     return {
         "ok": True,
@@ -551,3 +730,41 @@ def submit_typed_task(kind: str, payload: dict, label: str = "") -> dict:
         "status": task.status,
         "label": task.label,
     }
+
+
+def retry_task(args: dict) -> dict:
+    """BL-LONG-RUNNING-V1-PHASE-C (6/1): retry 中断或失败的任务.
+
+    入参: {"task_id": "task_xxx"}
+    行为:
+      1. 从 jsonl 找原 task_id 的 kind + payload + label
+      2. 找不到 → ok=False
+      3. 启一个新 task (新 task_id), 拿原 payload 当 input
+      4. 返新 task_id 给 caller (LLM 拿去 catfish_task_status 跟踪)
+
+    设计选择: 新 task_id 不复用原 id. 防 jsonl 状态混乱 (原 id 已有 pending/
+    interrupted row, 新 id 干净). 关联通过 result_preview 描述 "retry of
+    task_xxx" — 不在 schema 加 retry_of 字段 (避免 schema 蔓延).
+    """
+    task_id = (args.get("task_id") or "").strip()
+    if not task_id:
+        return {"ok": False, "error": "缺 task_id"}
+
+    found = find_task_payload_by_id(task_id)
+    if found is None:
+        return {
+            "ok": False,
+            "error": f"找不到 task_id={task_id!r} (jsonl 没记录 / payload 字段缺 — "
+                     f"task 是 5/8 ~ 6/1 老 schema 的, 无 retry 支持)",
+        }
+    kind, payload, label = found
+
+    new_label = f"重试 {label}" if label else f"retry of {task_id}"
+    result = submit_typed_task(kind=kind, payload=payload, label=new_label)
+    if result.get("ok"):
+        logger.info(
+            "retry_task: 原 %s (kind=%s) → 新 %s",
+            task_id, kind, result.get("task_id"),
+        )
+        result["original_task_id"] = task_id
+    return result

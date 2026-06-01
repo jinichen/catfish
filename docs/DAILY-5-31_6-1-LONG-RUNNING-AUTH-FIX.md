@@ -169,6 +169,26 @@ tool-bridge 跑两个进程:
 
 **教训**: 当我想"留 follow-up"时, 默认意味着我**没真审完代码**. 真审完, 该一次到位. 留 backlog 是失败信号, 不是工程美德.
 
+### 5. backlog 列表也不能猜 — Explore agent / paraphrase 全要核实
+
+6/1 上午我交 backlog 表给鸿波看 (daily v2), **6 条全错**:
+- BL-WECHAT-V2 5/26 早 ship, 我误挂"半天 todo"
+- BL-LONG-RUNNING-V1 Phase C 我自己今晨已 ship, 还写"~2 小时 下周"
+- BL-LONG-RUNNING-V1 Phase D 早 ship (gateway 自带 fallback chain + auto_fallback toggle), 不需要做
+- BL-AUTH-DECOUPLE-A6 跟 5/17 BL-AUDIT-INTERNAL-SPLIT 设计意图冲突, 不该做
+- BL-HERMES-UPSTREAM-FIX 真元凶在 catfish plugin, 不是 hermes
+- **Phase 7 智能参谋** — 我以为"待开工", 实际 **5/21 晚已 ship + 5/22 cold start fix**, 2892 行已落地
+
+鸿波 4 次纠正:
+1. "微信 openid 对多是什么意思?" → 发现 v2 5/26 早 ship
+2. "BL-HERMES-UPSTREAM-FIX 详细内容?" → audit plugin 找到真元凶
+3. "错误的先更正, 再走下一步" → 系统 audit, 砍 4 条
+4. "智能参谋做什么?" → 读 §13 实施记录, 发现也 ship
+
+**教训**: 我**每次只看 doc 前 1/3** 就给结论. CATFISH-ADVISOR-DESIGN.md 975 行, 我之前只看到 line 120 (设计稿 + 职级识别 + KPI), 完全没看到 line 834 的 §13 "实施记录". 同样 backlog 列表里 6 条都得**完整读 doc + grep 代码**, 不能 paraphrase.
+
+**真 audit 后**: 5/29-6/1 主线全 ship, 没有真的"下一项大工程". 剩都是小迭代.
+
 ---
 
 ## 死代码 audit
@@ -202,19 +222,26 @@ tool-bridge 跑两个进程:
 
 ---
 
-## 后续 (留 backlog)
+## 后续 (留 backlog) — v4 最终更正版
 
-| ID | 工程量 | 价值 | 何时做 |
-|---|---|---|---|
-| ~~BL-HERMES-UPSTREAM-FIX~~ | ~~等 hermes 0.15~~ | ~~治根~~ | **❌ 撤销** — 6/1 早发现真元凶在 catfish plugin P7 不是 hermes, 已治本 ship (d94b306) |
-| **BL-LONG-RUNNING-V1 Phase C 检查点** | ~2 小时 | 任务中断续接 | 下周 |
-| **BL-LONG-RUNNING-V1 Phase D 失败重试** | ~1 小时 | model fallback / 指数退避 | 下周 |
-| **BL-AUTH-DECOUPLE-A6 audit** | ~1 小时 | gateway 内部 self-call 安全 | 本周 |
-| **Phase 7 智能参谋** | 3-5 天 | 质变 KPI | 等鸿波 review 设计稿 |
-| **BL-WECHAT-V2** | 半天 | 多用户 openid → email | 微信用户增长前 |
+**v2 列了 6 条, v3 砍掉 4 条错误, v4 发现 Phase 7 也早 ship**. 完整核实:
 
-**注**: 6/1 早 audit 推翻"hermes 上游 bug"的假设. 真元凶在 catfish 自己的
-plugin (`edge/hermes-plugins/catfish-xcatfish-user/plugin.py:521`) — 抽出的 11 处 hermes patch 之一, P7 catch-all proxy 透传 token 没替换. **跟 hermes 升级无关**, 治本在我们仓里 ship 完了.
+| ID | 真状态 |
+|---|---|
+| ~~BL-HERMES-UPSTREAM-FIX~~ | ✅ **撤销** — 真元凶在 catfish 自家 plugin P7, 已 ship (d94b306) |
+| ~~BL-LONG-RUNNING-V1 Phase C~~ | ✅ **6/1 早 ship A+B** + C 入 future plan |
+| ~~BL-LONG-RUNNING-V1 Phase D~~ | ❌ **不该做** — gateway 已有 fallback + auto_fallback + LiteLLM retry |
+| ~~BL-AUTH-DECOUPLE-A6~~ | ✅ **撤销** — `quota.py:880` BL-AUDIT-INTERNAL-SPLIT (5/17) 设计意图 |
+| ~~BL-WECHAT-V2~~ | ✅ **5/26 已 ship** (WeChatBindingCard.tsx) |
+| ~~Phase 7 智能参谋~~ | ✅ **5/21 晚 ship**, 5/22 4 轮 cold start fix. 总 2892 行 (Rust 665 + Python 589 + TS 1638), 11 新文件. 见 `CATFISH-ADVISOR-DESIGN.md` §13 |
+
+**剩**: Phase 7 §13 末尾 6 条**小迭代** (不是新开工):
+1. profile prompt 调优 (生产观察 1-2 周再说)
+2. advisor tool V2 (keyword → LLM 智能扫描)
+3. 草稿 PPTX/DOCX (V1 只 markdown)
+4. 真集成测试 (V1 只 smoke)
+5. 首次 chat SOUL 引导段 (task #23, 跟 BL-CENTRAL-EDGE-BOUNDARY 重审)
+6. LLM 服从程度调优 (option 个数 / tone enum 严格性)
 
 ---
 
@@ -235,5 +262,5 @@ plugin (`edge/hermes-plugins/catfish-xcatfish-user/plugin.py:521`) — 抽出的
 ---
 
 *作者: 鸿波 + Claude (Cowork)*
-*配套: BL-HERMES-PROXY-AUTH-ME (退役), BL-PLUGIN-P7-PROXY-TOKEN-SWAP, BL-AUTH-DECOUPLE-A1-API-ME-FIX, BL-LONG-RUNNING-V1, BL-SESSIONS-FILTER-PROACTIVE*
-*生成时间: 2026-06-01 06:30 (v1), 2026-06-01 07:35 (v2 加 6/1 早两轮 audit)*
+*配套: BL-HERMES-PROXY-AUTH-ME (退役), BL-PLUGIN-P7-PROXY-TOKEN-SWAP, BL-AUTH-DECOUPLE-A1-API-ME-FIX, BL-LONG-RUNNING-V1 (Phase C A+B ship), BL-SESSIONS-FILTER-PROACTIVE*
+*生成时间: 2026-06-01 06:30 (v1), 07:35 (v2 加 6/1 早两轮 audit), 08:30 (v3 更正 4 错), 08:45 (v4 加 Phase 7 也已 ship)*

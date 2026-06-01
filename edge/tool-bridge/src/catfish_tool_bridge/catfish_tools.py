@@ -595,6 +595,10 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_task_result":
         from . import task_manager  # noqa: PLC0415
         return task_manager.manager().result_dict(args.get("task_id") or "")
+    # BL-LONG-RUNNING-V1-PHASE-C (6/1): retry 中断/失败任务
+    if name == "catfish_task_retry":
+        from . import task_manager  # noqa: PLC0415
+        return task_manager.retry_task(args)
     # BL-D2 (5/10) Skills Hub publish
     if name == "catfish_skill_publish":
         from . import skill_publish  # noqa: PLC0415

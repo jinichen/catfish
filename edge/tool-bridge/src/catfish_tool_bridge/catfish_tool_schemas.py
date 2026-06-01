@@ -1036,6 +1036,33 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # BL-LONG-RUNNING-V1-PHASE-C (6/1): retry interrupted/failed task
+    {
+        "name": "catfish_task_retry",
+        "description": (
+            "★ 重试一个**中断或失败**的后台任务. 拿原 task 的 kind + payload "
+            "启一个新 task (新 task_id), 等价于"重跑同一 input".\n\n"
+            "✅ 调用场景:\n"
+            "  - 员工看 Dashboard 发现某个 task '中断' (进程重启 / oom 没跑完)\n"
+            "  - 员工说 '那个分析的 task 再跑一次'\n"
+            "  - 任务 failed (上游 model 挂), 网络恢复后想 retry\n\n"
+            "返 {ok, task_id (新), original_task_id, status, label}. "
+            "找不到原 task 时返 ok=False (jsonl 没记录 / 老 schema 没存 payload)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "原任务 ID, 从 catfish_task_list / 桌宠通知拿.",
+                },
+            },
+            "required": ["task_id"],
+        },
+        "emoji": "🔁",
+        "toolset": "catfish_native",
+        "available": True,
+    },
     # ── BL-MM9 (5/8) — agent 自动抽 skill ──
     {
         "name": "catfish_propose_skill",
