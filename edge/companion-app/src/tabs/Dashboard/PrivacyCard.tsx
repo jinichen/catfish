@@ -84,10 +84,12 @@ export default function PrivacyCard() {
         </span>
       </div>
 
-      {/* ── 区 1: 本机数据 ───────────────────────── */}
+      {/* ── 本机存储 — 6/1 BL-PRIVACY-CARD-SIMPLIFY 鸿波拍 ─────────────
+          原来 3 区 + 5 折叠 + 技术路径 + "看不到 X" 暗示 + IT 命令, 国企
+          员工/领导消化不了. 简化到 2 大块, 没折叠, 没暗示, 没技术名词. */}
       <section style={{ marginBottom: "var(--space-4)" }}>
         <h4 style={{ margin: "0 0 var(--space-2)", fontSize: 13 }}>
-          这些东西在你电脑这, <strong style={{ color: "var(--catfish-cyan)" }}>公司一个字都看不到</strong>
+          🟢 本机存储 — <strong style={{ color: "var(--catfish-cyan)" }}>公司一个字都看不到</strong>
         </h4>
         <ul
           style={{
@@ -110,30 +112,15 @@ export default function PrivacyCard() {
             >
               <span style={{ color: "var(--catfish-cyan)", fontSize: 14, flexShrink: 0 }}>✓</span>
               <span style={{ flex: 1, color: "var(--catfish-text)" }}>{it.what}</span>
-              <span
-                style={{
-                  fontFamily: "monospace",
-                  fontSize: 10,
-                  color: "var(--catfish-text-muted)",
-                  flexShrink: 0,
-                }}
-                title="技术路径 (IT 自查时用)"
-              >
-                {it.path}
-              </span>
             </li>
           ))}
         </ul>
-        <p style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 10 }}>
-          不放心? 在 Finder 按 ⌘+⇧+G 输入上面任一路径, 自己进去看. 或终端跑{" "}
-          <code>catfish privacy-audit</code> 一次性扫全.
-        </p>
       </section>
 
-      {/* ── 区 2: 公司服务器看到啥 ─────────────────── */}
+      {/* ── 服务器存储 — 简化版 ──────────────────────── */}
       <section style={{ marginBottom: "var(--space-4)" }}>
         <h4 style={{ margin: "0 0 var(--space-2)", fontSize: 13 }}>
-          公司服务器看到的 — 全部在这了
+          🟡 服务器存储 — 公司能看到这些
         </h4>
 
         {error && (() => {
@@ -176,7 +163,7 @@ export default function PrivacyCard() {
 
         {data && (
           <>
-            {/* 看到 / 看不到 二分清楚 */}
+            {/* 服务器存储内容 — 只正面陈述. "看不到 X" 那行删 (反向暗示让员工联想). */}
             <div
               style={{
                 padding: "10px 12px",
@@ -188,14 +175,7 @@ export default function PrivacyCard() {
                 lineHeight: 1.7,
               }}
             >
-              <div>
-                <span style={{ color: "var(--catfish-cyan)", marginRight: 6 }}>✓ 公司看到</span>
-                你的邮箱 · 调用时间 · 用了哪个模型 · 用了多少额度
-              </div>
-              <div>
-                <span style={{ color: "var(--status-warn, #c98b00)", marginRight: 6 }}>✗ 公司看不到</span>
-                你说的内容 · 我回的内容 · 你上传的文件
-              </div>
+              邮箱 · 调用时间 · 用了哪个模型 · 用了多少额度
             </div>
 
             {/* 今天活动 */}
@@ -251,69 +231,11 @@ export default function PrivacyCard() {
               </p>
             )}
 
-            {data.by_model.length > 0 && (
-              <details style={{ fontSize: 12 }}>
-                <summary style={{ cursor: "pointer", color: "var(--catfish-text-muted)" }}>
-                  按模型拆开 ({data.by_model.length} 个)
-                </summary>
-                <ul style={{ marginTop: 4, paddingLeft: 20 }}>
-                  {data.by_model.slice(0, 10).map((m) => (
-                    <li key={m.model}>
-                      {m.model}: {m.count} 次, {formatTokens(m.total_tokens)} 额度
-                    </li>
-                  ))}
-                </ul>
-              </details>
-            )}
-
-            {/* 技术细节折叠 — 默认收起, 老板 / IT 自验时点开 */}
-            <details
-              style={{
-                fontSize: 11,
-                color: "var(--catfish-text-muted)",
-                marginTop: 10,
-              }}
-            >
-              <summary style={{ cursor: "pointer" }}>技术细节 (IT / 合规审计自验用)</summary>
-              <p style={{ marginTop: 6, padding: "6px 8px", border: "1px dashed var(--catfish-border)", borderRadius: 4 }}>
-                数据从 <code>GET /api/audit/me</code> 实时拉, 30 秒自动刷新. 服务器响应只含
-                metadata: count / tokens / model / 时间戳, 代码层面没有 prompt / response
-                字段. 完整 schema: {data.schema_note}
-              </p>
-            </details>
+            {/* "按模型拆开" / "技术细节" / "想给老板看" 区全删 (6/1 鸿波拍简化) —
+                普通员工/领导消化不了, 反而引发"为啥要技术细节"联想. IT/合规有自己
+                的手段 (catfish privacy-audit CLI), 不需要在这卡里教. */}
           </>
         )}
-      </section>
-
-      {/* ── 区 3: 给老板看 / 想自己核 ─────────────── */}
-      <section>
-        <h4 style={{ margin: "0 0 var(--space-2)", fontSize: 13 }}>想给老板 / 合规看?</h4>
-        <ul style={{ fontSize: 13, paddingLeft: 20, margin: 0, lineHeight: 1.8 }}>
-          <li>
-            <strong>最快</strong>: 把这页截图发给老板. 上面看到啥老板就看到啥, 你跟我聊的内容
-            不在.
-          </li>
-          <li>
-            <strong>给 IT / 合规</strong>: 终端跑 <code>catfish privacy-audit --json</code>,
-            生成一份本机 + 服务器的扫描报告 (机读 / 入存档).
-          </li>
-          <li>
-            <strong>看每条数据具体啥意思</strong>:{" "}
-            <a
-              href="https://github.com/example/catfish/blob/main/docs/EMPLOYEE-PRIVACY-VERIFICATION.md"
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ color: "var(--catfish-cyan)" }}
-            >
-              员工隐私自验手册
-            </a>{" "}
-            — 写给员工看, 不是给程序员.
-          </li>
-          <li>
-            <strong>想撤掉服务器上的记录</strong>? 你自己改不了 (admin 权限). 走 catfish-web
-            /admin 提工单, IT 处理.
-          </li>
-        </ul>
       </section>
     </div>
   );
