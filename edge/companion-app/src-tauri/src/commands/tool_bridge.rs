@@ -140,10 +140,15 @@ pub async fn tool_bridge_status() -> Result<ServiceStatus, String> {
         .and_then(|p| process::read_pid_file_alive_strict(&p, "catfish_tool_bridge"));
 
     if pid.is_none() {
-        // BL-TOOL-BRIDGE-SOCK-FALLBACK (6/1): pid 文件没但 socket 可能仍在
-        // (autostart spawn 后写 pid 失败 / 外部 supervisor / dev 残留). 走
-        // socket health RPC 探活 — 探到 → 标 running, 避免 ServicesCard 误报
-        // "未启动" 让员工再点启动按钮 (会跟现有进程冲 socket).
+        // BL-TOOL-BRIDGE-SOCK-FALLBACK (6/1): 兜底外部托管场景 — 别的工具 / 员工
+        // 手动 / dev 残留起的 tool-bridge socket 模式进程, 没经过 autostart 写
+        // pid 文件. 走 socket health RPC 探活 — 探到 → 标 running, 不误报"未启动".
+        //
+        // 历史: 6/1 加这 fallback 时误诊了一次 — 我们以为 autostart spawn 后 fs::write
+        // pid 失败, 但**真因是 catfish_task_schemas.py:1044 syntax bug** (同 commit
+        // 修了): tool-bridge 启动立刻 exit, read_pid_file_alive_strict 检测 PID 死
+        // 自动删 stale pid, 看上去像"pid 文件没写". syntax 修后正常路径完全 work.
+        // fallback 留着对真外部托管场景仍有兜底价值, 没副作用.
         if let Some(sock) = catfish_paths::tool_bridge_socket() {
             if sock.exists() {
                 let healthy = matches!(
