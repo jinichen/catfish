@@ -104,7 +104,7 @@ export default function OnboardingWizard() {
           color: "var(--catfish-text)",
         }}
       >
-        {/* 步骤指示 (5/3 晚 BL-E11: 4 → 5 步) */}
+        {/* 步骤指示 (5/3 晚 BL-E11: 4 → 5 步, 6/1 BL-ONBOARDING-DOC-DIRS-STEP: 6 → 7 步加文书目录) */}
         <div
           style={{
             display: "flex",
@@ -113,7 +113,7 @@ export default function OnboardingWizard() {
             justifyContent: "center",
           }}
         >
-          {[0, 1, 2, 3, 4, 5].map((i) => (
+          {[0, 1, 2, 3, 4, 5, 6].map((i) => (
             <div
               key={i}
               style={{
@@ -137,7 +137,11 @@ export default function OnboardingWizard() {
         )}
         {/* 5/7 BL-CR: Curator consent toggle (步骤 3 of 集成方案) */}
         {step === 4 && <StepCurator onNext={next} onBack={back} onSkip={close} />}
-        {step === 5 && (
+        {/* 6/1 BL-ONBOARDING-DOC-DIRS-STEP (鸿波拍 C1): 加文书目录, 解决默认 ~/Documents/work
+            命中率低问题 — 50 员工 mac 上各种自定义目录 (~/项目/ / ~/文稿/ / ~/work/),
+            不让员工指目录则文书风格永远 0 文档. */}
+        {step === 5 && <StepDocDirs onNext={next} onBack={back} onSkip={close} />}
+        {step === 6 && (
           <StepTryChat
             onFinish={(seedMessage) => {
               // BL-MEMORY-ONBOARDING-SEED (5/16): seedMessage 来自 StepTryChat 4 选 1
@@ -536,6 +540,112 @@ function StepCurator({
   );
 }
 
+// ── BL-ONBOARDING-DOC-DIRS-STEP (鸿波 6/1 拍 C1) ─────────────────
+// 默认 ~/Documents/work 命中率低 (中文用户用 ~/文稿/, 程序员 ~/projects/,
+// 国企 ~/项目/ 各种自定义). 不让员工显式指目录, 文书风格永远 0 文档抽不到风格.
+// 这步: 让员工手输 1 个目录, 调 style_fingerprint_scan_dirs_add 写 yaml.
+// 跳过 → 用默认, StyleFingerprintCard 里仍能自己加.
+interface ScanDirsResult {
+  userDirs: string[];
+  defaultDirs: string[];
+  yamlPath: string;
+}
+
+function StepDocDirs({
+  onNext,
+  onBack,
+  onSkip,
+}: {
+  onNext: () => void;
+  onBack: () => void;
+  onSkip: () => void;
+}) {
+  const [path, setPath] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSave = async () => {
+    const trimmed = path.trim();
+    if (!trimmed) {
+      setError("请输入目录路径, 或点跳过");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await invoke<ScanDirsResult>("style_fingerprint_scan_dirs_add", {
+        path: trimmed,
+      });
+      onNext();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      // 后端验证: 目录不存在 / 不是目录 / 已存在 等
+      setError(msg);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <>
+      <h3 style={{ marginTop: 0 }}>4️⃣ 学你的文风</h3>
+      <p style={{ fontSize: 13, lineHeight: 1.6, color: "var(--catfish-text-muted)" }}>
+        鲶鱼会扫你的历史文档抽统计特征 (句长 / 用词 / 标点习惯), 帮你起草汇报时
+        模仿你的风格 — 不上传, 全在你本机.
+        <br />
+        <strong>你工作文档在哪个文件夹?</strong>
+      </p>
+
+      <div
+        style={{
+          padding: "var(--space-3)",
+          background: "var(--catfish-bg)",
+          border: "1px solid var(--catfish-border)",
+          borderRadius: 6,
+          marginTop: "var(--space-3)",
+        }}
+      >
+        <input
+          type="text"
+          value={path}
+          onChange={(e) => setPath(e.target.value)}
+          placeholder="~/Documents · ~/work · ~/项目 · ~/桌面/资料 ..."
+          style={{
+            width: "100%",
+            padding: "8px 10px",
+            fontSize: 13,
+            fontFamily: "var(--font-mono, monospace)",
+            background: "var(--catfish-bg-elevated)",
+            border: "1px solid var(--catfish-border)",
+            borderRadius: 4,
+            color: "var(--catfish-text)",
+            boxSizing: "border-box",
+          }}
+          autoFocus
+        />
+        <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 8, lineHeight: 1.5 }}>
+          常见路径: <code>~/Documents</code> · <code>~/work</code> · <code>~/项目</code> · <code>~/文稿</code>
+          <br />
+          后面在仪表盘 "文书风格" 卡随时改 / 加多个.
+        </div>
+      </div>
+
+      {error && (
+        <div style={{ color: "var(--status-err)", fontSize: 12, marginTop: 8 }}>
+          {error}
+        </div>
+      )}
+
+      <Buttons
+        onNext={handleSave}
+        nextLabel={saving ? "保存中…" : "保存 →"}
+        onBack={onBack}
+        onSkip={onSkip}
+        skipLabel="跳过 (用默认)"
+      />
+    </>
+  );
+}
 
 function StepTryChat({
   onFinish,
@@ -559,7 +669,7 @@ function StepTryChat({
   ];
   return (
     <>
-      <h3 style={{ marginTop: 0 }}>3️⃣ 试聊 — 教小鲶记住你</h3>
+      <h3 style={{ marginTop: 0 }}>5️⃣ 试聊 — 教小鲶记住你</h3>
       <p style={{ fontSize: 13, lineHeight: 1.6, color: "var(--catfish-text-muted)" }}>
         小鲶有跨 session 长期记忆 (在你本机 <code>~/.hermes/memories/USER.md</code>, 永不上传).
         第一次聊建议**教它几条基础事实**, 今后它就懂你, 不用每次重复.
@@ -608,11 +718,15 @@ function Buttons({
   onBack,
   onSkip,
   nextLabel = "下一步 →",
+  skipLabel = "稍后再说",
 }: {
   onNext: () => void;
   onBack?: () => void;
   onSkip: () => void;
   nextLabel?: string;
+  /** BL-ONBOARDING-DOC-DIRS-STEP (6/1): 默认"稍后再说", 加 skipLabel 让 StepDocDirs
+   *  显"跳过 (用默认)" 更准确表达员工选择. */
+  skipLabel?: string;
 }) {
   return (
     <div
@@ -635,7 +749,7 @@ function Buttons({
           padding: 4,
         }}
       >
-        稍后再说
+        {skipLabel}
       </button>
       <div style={{ display: "flex", gap: "var(--space-2)" }}>
         {onBack && (
