@@ -112,8 +112,9 @@ export default function HermesMemoryCard() {
         <h3 style={{ margin: 0, display: "inline-flex", alignItems: "center", gap: 8 }}>
           🧠 我的 hermes memory
         </h3>
+        {/* 6/1 鸿波 ABBB: 改成员工能懂的语言, 删 dev 术语 (target=user, memory). */}
         <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 2 }}>
-          跨 session 永久事实 · target=user (员工本人) + memory (项目/技术)
+          永久记住的关于你的事实
         </div>
       </div>
 

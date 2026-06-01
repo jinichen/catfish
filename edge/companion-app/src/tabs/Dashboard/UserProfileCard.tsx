@@ -156,8 +156,9 @@ export default function UserProfileCard() {
     >
       <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)", marginBottom: "var(--space-2)" }}>
         <h3 style={{ margin: 0 }}>👤 {agentName}对你的画像</h3>
+        {/* 6/1 鸿波 ABBB: 简化, "跨 session 长期画像" 删 (dev 术语 + 重复信息). */}
         <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
-          {fields.length} 项 · 跨 session 长期画像 · 你随时改 / 锁 / 清
+          {fields.length} 项 · 你随时改 / 锁 / 清
         </span>
       </div>
 

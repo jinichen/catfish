@@ -186,8 +186,9 @@ export default function StyleFingerprintCard() {
     >
       <div style={{ display: "flex", alignItems: "baseline", gap: "var(--space-2)", marginBottom: "var(--space-2)" }}>
         <h3 style={{ margin: 0 }}>✍️ 你的文书风格 (隐式)</h3>
+        {/* 6/1 鸿波 ABBB: 简化, 删 "从你历史文档抽的统计" (dev 解释 = 联想). 留真用途. */}
         <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
-          从你历史文档抽的统计 · {agentName}写汇报时模仿
+          学你写汇报的风格
         </span>
         <button
           onClick={() => void refresh()}

@@ -92,16 +92,12 @@ export default function RelationCard() {
           marginBottom: "var(--space-3)",
         }}
       >
-        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-          <h3 style={{ margin: 0, display: "inline-flex", alignItems: "center", gap: 8 }}>
-            <img src="/catfish-avatar.svg" alt="" width={20} height={20} style={{ display: "block" }} />
-            {agentName}对你的印象
-          </h3>
-          {/* 5/5 鸿波: '印象' vs '硬事实' 区分不清, 加副标题让员工一眼看懂 */}
-          <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", paddingLeft: 28 }}>
-            我帮你总结过的对话主题 (像日记)
-          </span>
-        </div>
+        <h3 style={{ margin: 0, display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <img src="/catfish-avatar.svg" alt="" width={20} height={20} style={{ display: "block" }} />
+          {agentName}对你的印象
+        </h3>
+        {/* 6/1 鸿波 ABBB: 副标题删 (自我解释卡标题, 无新信息. 5/5 加是
+            为区分"印象"vs"硬事实", 现在画像卡已分开足够清楚, 不需要副标题) */}
         <button
           type="button"
           onClick={refresh}
@@ -301,7 +297,9 @@ function RelationEntry({ title, body }: { title: string; body: string }) {
       {body && (
         <div
           style={{
-            color: "var(--catfish-text-muted)",
+            // BL-CONTRAST-FIX (6/1 鸿波): 改 --catfish-text 主色, 之前用
+            // --catfish-text-muted 深模下 #8A9692 灰青 + 背景 #2A3438 深青对比度低看不清.
+            color: "var(--catfish-text)",
             lineHeight: 1.6,
             whiteSpace: "pre-wrap",
           }}
