@@ -77,7 +77,12 @@ import HermesMemoryCard from "./HermesMemoryCard";  // BL-DASHBOARD-HERMES-MEMOR
 // import FeedbackSummaryCard from "./FeedbackSummaryCard";
 import UserProfileCard from "./UserProfileCard";
 import StyleFingerprintCard from "./StyleFingerprintCard";
-import TasksCard from "./TasksCard";
+// BL-TASKS-CARD-KILL (6/1 鸿波): TasksCard 从 Dashboard 删. 5 个用户场景全有
+// 别处 UX 覆盖 — ChatSidebar ⌛ (5/30 在跑任务 affordance), macOS 系统通知
+// (5/30 完成/失败), LLM 工具 catfish_task_list/_status/_retry (历史查询/重试).
+// Dashboard 占黄金位是冗余. 文件留着 git history 备用, tasks_history_read
+// Rust command 留着 (LLM 工具可能间接用).
+// import TasksCard from "./TasksCard";
 // BL-CURATOR-CARD-KILL (5/16): hermes 0.12 Curator daemon 透明性卡, 但价值低:
 // 1. catfish 自家 skill 在 catfish/skills/ 物理隔离, Curator 不动
 // 2. ~/.hermes/skills/ 员工基本不存东西, 99% 时间"无变化"
@@ -118,17 +123,17 @@ export default function DashboardTab() {
       {/* BL-ARCH2 (5/10): 顶部 banner — "去中央门户 →" 按 role 显示锚点 */}
       <WebPortalLink />
 
-      {/* 第一组: 今日 — 主动闲聊 + 后台任务 (高频, 默认开, 顶部).
+      {/* 第一组: 今日 — 主动闲聊 (高频, 默认开, 顶部).
           5/18 BL-COMPANION-EMAIL-DIGEST-REMOVE-FROM-DASHBOARD: 邮件简报挪 📧 邮件 tab.
           5/20 BL-COMPANION-DAILY-BRIEFING-MVP (step1.5): 早安播报挪独立"早安" tab.
-                count 一直 2 (BriefingCard 早上短暂在这停留半天就移走了). */}
+          6/1 BL-TASKS-CARD-KILL (鸿波): TasksCard 删 — ChatSidebar ⌛ + macOS
+          通知 + LLM 工具已覆盖所有用户场景, Dashboard 上是冗余. */}
       <CollapsibleSection
         id="today"
         title="🔥 今日"
-        count={2}
+        count={1}
       >
         <ProactiveCard />
-        <TasksCard />
       </CollapsibleSection>
 
       {/* 第二组: 小鲶设置 — 鲶鱼名 / 人设 / 桌宠. 5/16 砍 IdentityCard (BL-IDENTITY-CARD-KILL)
