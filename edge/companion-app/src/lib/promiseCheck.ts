@@ -41,8 +41,11 @@ import type { TaskAssessment } from "./chat";
  *    "让我直接 / 让我先 / 让我手动 / 让我用 / 让我想想 / 让我去 / 让我重新"
  *    Let me / I will / I'll
  */
+// BL-PROMISE-CHECK-FIX (6/1): 加 "保存到 / 已经创建" 等口语化承诺词. 5/15 ship
+// 时只覆盖 "已 X" 紧凑式, 实测 LLM 偶尔说 "保存到 ~/.catfish/xxx" / "已经创建"
+// 等 — 5/15 时已有测试 case 期待抽路径但 PROMISE_PATTERN 没覆盖, 测试 fail.
 const PROMISE_PATTERN =
-  /已生成|生成完毕|生成完成|完成了|已完成|写入完成|已写入|已保存|已创建|已输出|输出完成|done|generated|saved|created|让我[直先手用想去重再立]|让我[直先手用想去重再立].{0,2}[基用执做继读写改试想]|Let me\s|I'll\s|I will\s|我现在|我立刻/i;
+  /已生成|生成完毕|生成完成|完成了|已完成|写入完成|已写入|已保存|保存到|保存成|已创建|已经创建|创建完成|已输出|输出完成|done|generated|saved|created|让我[直先手用想去重再立]|让我[直先手用想去重再立].{0,2}[基用执做继读写改试想]|Let me\s|I'll\s|I will\s|我现在|我立刻/i;
 
 /** 扫文件路径 (中文/英文目录, 含扩展名) */
 const PATH_PATTERN = /(~\/[\w./\-_一-鿿]+|\/Users\/[\w./\-_一-鿿]+|[A-Za-z]:\\[\w.\\\-_一-鿿]+|\.\/[\w./\-_一-鿿]+|[\w\-_一-鿿]+\.(?:html?|docx?|xlsx?|pptx?|pdf|md|txt|csv|json|py|js|ts|jsx|tsx))/gi;

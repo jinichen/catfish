@@ -33,11 +33,23 @@ const SERVICE_LLM_QUERY = "?catfish_source=companion-advisor&catfish_skip_identi
 
 // ─── 输出 schema (UI ActionCard 渲染输入) ───────────────────────
 
+/** BL-ADVISOR-PROMPT-CONFORMANCE (6/1 鸿波): tone 严格 enum, parseMainTask
+ *  把非 enum 归一到 'balanced' + warn. decisions.jsonl 留档一致性靠这个保证. */
+export const VALID_TONES = [
+  "strict",
+  "balanced",
+  "friendly",
+  "formal",
+  "urgent",
+  "hold",
+] as const;
+export type AdvisorTone = typeof VALID_TONES[number];
+
 export interface AdvisorOption {
   /** "A" / "B" / "C" */
   label: string;
-  /** "strict" / "balanced" / "friendly" / "formal" / "urgent" / "hold" 等 */
-  tone: string;
+  /** enum 严格 (parseMainTask 校验 + 非 enum 归一到 balanced). */
+  tone: AdvisorTone;
   /** 这个选项的一句话总结 (给员工选时用) */
   summary: string;
   /** LLM 倾向哪个 — 唯一一条 true. UI 角标"我倾向" */
@@ -171,6 +183,32 @@ const SYSTEM_PROMPT = `你是 catfish — 中国央国企员工的智能参谋. 
 - 必须结构化 JSON, 不允许返一段散文.
 - options 里 aiLean=true 的最多 1 条 (倾向只一个).
 - 高层 tier (senior) 可以出现"异常例外型" 主菜 — options 可以为空 [], 只列风险.
+
+# BL-ADVISOR-PROMPT-CONFORMANCE (6/1 鸿波, 5/22 实测 3 类 LLM 失误的修)
+
+## 1) tone 严格 enum (不许编新词)
+options[].tone **必须**是这 6 个之一: "strict" / "balanced" / "friendly" /
+"formal" / "urgent" / "hold". 不允许出 "prepare" / "consider" / "neutral"
+等. 客户端会归一不 enum 到 "balanced" + warn, 但靠你严格守约定才不浪费.
+
+## 2) options 必须 2-3 条 (frontline / mid)
+每个主菜 **2 或 3 个** options. 1 个不达标 — 失"建议选项"价值, 员工等于
+没选择. 真没第 2 种合理口径 → 改主菜表达, 别勉强减 options.
+**例外**: senior tier "异常例外型" 主菜可以 options=[] 只列风险 (上面已说).
+
+## 3) draftPath 跟 tool call 绑定 (5/22 撞过的)
+options[].draftPath 只能从你**真调** catfish_draft_email_reply /
+catfish_draft_meeting_brief / catfish_compose_followup_list 后**返回的 path**
+字段填. 没调 tool → **不填 draftPath**, 或填 null. 客户端会:
+- 检测 draftPath 不在 ~/.catfish/outputs/ → 清掉 (5/22 BL-DRAFTPATH-WHITELIST)
+- 后续 (待 ship) 检测 options 有 draftPath 但 chat 没 tool_call → 拒回复
+
+**真路径**:
+1. 先调 tool 起草 → 拿 returns.path
+2. 再写 options[].draftPath = <path>
+3. 不调 tool 就不写 draftPath, 让 UI 显"自己写"
+
+不允许编路径绕过. 员工点开发现空草稿 = 鲶鱼失信.
 `;
 
 // ─── 拼 user prompt ──────────────────────────────────────────────
@@ -533,9 +571,22 @@ function parseMainTask(t: Record<string, unknown>): MainTask | null {
       if (!o || typeof o !== "object") continue;
       const op = o as Record<string, unknown>;
       const label = typeof op.label === "string" ? op.label : null;
-      const tone = typeof op.tone === "string" ? op.tone : null;
+      const rawTone = typeof op.tone === "string" ? op.tone.toLowerCase() : null;
       const summary = typeof op.summary === "string" ? op.summary : "";
-      if (!label || !tone) continue;
+      if (!label || !rawTone) continue;
+      // BL-ADVISOR-PROMPT-CONFORMANCE #6a (6/1): tone enum 归一化.
+      // 5/22 实测 LLM 偶尔出 "prepare" / "consider" 等非 enum tone. UI 不依赖
+      // tone 选颜色 (只当 string 传 decisionRecord), 但 decisions.jsonl 留档
+      // 时统计困难 — 改归一到 'balanced' + warn. SYSTEM_PROMPT 已说 enum,
+      // 这里是兜底 fallback (不影响主线).
+      const tone: AdvisorTone = (VALID_TONES as readonly string[]).includes(rawTone)
+        ? (rawTone as AdvisorTone)
+        : "balanced";
+      if (tone !== rawTone) {
+        console.warn(
+          `[advisor] LLM 返非 enum tone='${op.tone}' (task: ${title}), 归一到 'balanced'`,
+        );
+      }
       // 5/22 鸿波 BL-DRAFTPATH-WHITELIST: 防 LLM 幻觉路径.
       // LLM 偶尔不听 SYSTEM_PROMPT, 编一个 /Users/.../Documents/xxx.md 进来.
       // 客户端二次过滤: 只接 ~/.catfish/outputs/ 下的 path, 其它当 null.
@@ -562,6 +613,16 @@ function parseMainTask(t: Record<string, unknown>): MainTask | null {
         draftPath: safeDraft,
       });
     }
+  }
+
+  // BL-ADVISOR-PROMPT-CONFORMANCE #6b (6/1): options 数量校验 (warn only, 不
+  // 拒). senior tier 允许 0 options ("异常例外型" 主菜只列风险, SYSTEM_PROMPT
+  // 已说). 但 frontline/mid tier 出 1 options 是 LLM 没按 "2-3 个建议选项"
+  // 出, 失"建议选项"价值. warn 不修, 真改靠 SYSTEM_PROMPT 强约束 (#6c).
+  if (options.length === 1) {
+    console.warn(
+      `[advisor] task '${title}' 只 1 个 option, LLM 没按 SYSTEM_PROMPT 出 2-3 个`,
+    );
   }
 
   const complianceFlags: ComplianceFlag[] = [];
