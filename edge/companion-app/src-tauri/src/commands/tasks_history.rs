@@ -107,12 +107,22 @@ pub async fn tasks_history_read(
             }
         }
 
-        // 倒序 (最新在前) + limit
+        // BL-LONG-RUNNING-V1-PHASE-C-DEDUP (6/1): jsonl 现在每 task 多行
+        // (pending submit row + completed/failed row + 可能的 interrupted row).
+        // 6/1 早 PHASE-C-A 加的 _persist_task_started_to_jsonl 引入. 这里按
+        // task_id group, 保留**最新一条** (finished_at 优先, 没就 started_at).
+        // 否则 TasksCard 渲染同 task_id 多 row → React 报 key 重复警告.
         out.sort_by(|a, b| {
             let ta = a.finished_at.unwrap_or(a.started_at);
             let tb = b.finished_at.unwrap_or(b.started_at);
             tb.partial_cmp(&ta).unwrap_or(std::cmp::Ordering::Equal)
         });
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let dedup: Vec<TaskHistoryEntry> = out
+            .into_iter()
+            .filter(|e| seen.insert(e.task_id.clone()))
+            .collect();
+        let mut out = dedup;
         out.truncate(limit);
 
         Ok(out)
