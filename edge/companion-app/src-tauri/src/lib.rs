@@ -363,6 +363,8 @@ pub fn run() {
             // BL-CALENDAR (5/14 0:30): macOS Calendar.app 集成 — 时间锚定事件
             commands::system::create_calendar_event,
             commands::system::list_calendars,
+            // BL-CATFISH-HERMES-VERSION-SYNC-B (6/1): AboutModal 显 hermes 版本
+            commands::system::get_hermes_version,
             // file (Phase 2 优雅下载: skill 生成的 .docx/.xlsx/.pptx 在 Finder 显示)
             commands::file::reveal_in_finder,
             commands::file::open_file,

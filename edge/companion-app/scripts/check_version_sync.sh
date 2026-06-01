@@ -51,7 +51,27 @@ fi
 
 if [ "$PKG_VER" = "$CARGO_VER" ] && [ "$CARGO_VER" = "$TAURI_VER" ]; then
     echo "✓ Companion 版本一致: $PKG_VER"
-    echo "  (release runbook 提醒: hermes 升级时记得跟 ~/.hermes/hermes-agent VERSION 对齐)"
+
+    # BL-CATFISH-HERMES-VERSION-SYNC-B (6/1 鸿波): 本机有 hermes 时也检 hermes
+    # 版本, 不一致 warn 但不 fail (CI runner 上没 hermes 跳过, 本机 dev 看到 warn
+    # 立刻 bump catfish 跟上).
+    # 设计意图: 5/18 BL-COMPANION-VERSION-SYNC 时同步靠 runbook §3b 人手, 5/18→6/1
+    # 间 hermes 0.14→0.15.1 但 catfish 没跟. 人手 runbook 必漂, 改成 lint 见效.
+    HERMES_PYPROJECT="${HOME}/.hermes/hermes-agent/pyproject.toml"
+    if [ -f "$HERMES_PYPROJECT" ]; then
+        HERMES_VER="$(awk -F'"' '/^version[[:space:]]*=/ {print $2; exit}' "$HERMES_PYPROJECT" 2>/dev/null)"
+        if [ -n "$HERMES_VER" ]; then
+            if [ "$HERMES_VER" = "$PKG_VER" ]; then
+                echo "✓ hermes 版本同步: $HERMES_VER"
+            else
+                echo "⚠ hermes 版本漂移 (不 fail, 仅提醒):"
+                echo "  catfish: $PKG_VER"
+                echo "  hermes : $HERMES_VER  ($HERMES_PYPROJECT)"
+                echo "  按 docs/HERMES-014-UPGRADE-RUNBOOK.md §3b 跑 sed bump."
+            fi
+        fi
+    fi
+    # 没 hermes (CI runner) → 静默跳过, 不 fail.
     exit 0
 fi
 

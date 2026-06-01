@@ -11,6 +11,7 @@
 
 import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
 
 import { useUIStore } from "../store/ui";
 
@@ -18,6 +19,9 @@ export default function AboutModal() {
   const open = useUIStore((s) => s.aboutOpen);
   const close = useUIStore((s) => s.closeAbout);
   const [version, setVersion] = useState<string>("…");
+  // BL-CATFISH-HERMES-VERSION-SYNC-B (6/1 鸿波): hermes 版本 + 漂移 warn.
+  // null = 没装 hermes / 读不到 → AboutModal 静默不显这行 (兼容非 Tauri / 老员工 mac).
+  const [hermesVersion, setHermesVersion] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -28,6 +32,12 @@ export default function AboutModal() {
         // eslint-disable-next-line no-console
         console.warn("[AboutModal] getVersion 失败:", e);
         setVersion("?");
+      });
+    invoke<string | null>("get_hermes_version")
+      .then((v) => setHermesVersion(v))
+      .catch(() => {
+        // 不致命 — 没装 hermes 或非 Tauri 环境, 不显这行就行
+        setHermesVersion(null);
       });
   }, [open]);
 
@@ -120,6 +130,24 @@ export default function AboutModal() {
         >
           <div>版本</div>
           <div style={{ fontFamily: "var(--font-mono, monospace)" }}>v{version}</div>
+          {hermesVersion && (
+            <>
+              <div>hermes</div>
+              <div style={{ fontFamily: "var(--font-mono, monospace)" }}>
+                v{hermesVersion}
+                {hermesVersion !== version && (
+                  <span style={{
+                    marginLeft: 8,
+                    fontSize: 11,
+                    color: "var(--status-warn, #c98b00)",
+                    fontFamily: "inherit",
+                  }}>
+                    ⚠ 跟鲶鱼版本不一致, 提醒升级
+                  </span>
+                )}
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

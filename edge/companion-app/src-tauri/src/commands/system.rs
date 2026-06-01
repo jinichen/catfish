@@ -448,3 +448,42 @@ end tell"#;
         Err("list_calendars: 当前平台未实现 (只 macOS)".into())
     }
 }
+
+/// 读 ~/.hermes/hermes-agent/pyproject.toml 抽 version (BL-CATFISH-HERMES-VERSION-SYNC-B, 6/1).
+///
+/// AboutModal 显 "鲶鱼 v0.15.1 · hermes 0.15.1 (一致)" / "· hermes 0.15.1 (⚠ 漂移)".
+/// hermes 没装 / 路径不对 → 返 None (前端不显这行).
+///
+/// 设计:
+///   - 不 spawn `hermes --version` 进程 (慢 + venv activate 复杂)
+///   - 直读 pyproject.toml 第一个 `version = "..."` 行 (toml crate 不引入新依赖)
+///   - 永不抛 — 拿不到返 None, AboutModal 静默隐藏
+#[tauri::command]
+pub async fn get_hermes_version() -> Result<Option<String>, String> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let Some(home) = home else { return Ok(None); };
+    let path = home.join(".hermes/hermes-agent/pyproject.toml");
+    let content = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return Ok(None), // 没装 hermes / 路径不对 — 静默
+    };
+    // 找第一个 `version = "X.Y.Z"` 行 (pyproject.toml [project] 段第一项一般是 name 然后 version)
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("version") {
+            // 匹配 `version = "..."` 或 `version="..."` (空格 / 引号)
+            let rest = rest.trim_start();
+            if !rest.starts_with('=') { continue; }
+            let rest = rest[1..].trim_start();
+            if let Some(start) = rest.find('"') {
+                if let Some(end) = rest[start + 1..].find('"') {
+                    let v = &rest[start + 1..start + 1 + end];
+                    if !v.is_empty() {
+                        return Ok(Some(v.to_string()));
+                    }
+                }
+            }
+        }
+    }
+    Ok(None)
+}
