@@ -105,6 +105,45 @@ def register(ctx) -> None:
                 "catfish-xcatfish-user register_hook fail: %s (fail-loud 降级)", e
             )
 
+    # Step 2.5: BL-MEMORY-ROUTER-A2-V3 (6/2 凌晨鸿波拍): 替换 hermes builtin memory tool.
+    # browser_navigate 5/6 同 pattern. catfish-memory plugin (5/19 ship) 在 gateway
+    # mode 不 load, 真 enforce 位置在这里 (catfish-xcatfish-user plugin 真装载).
+    # 5 kind 路由 (identity/project_fact/workflow/journal/todo), LLM 自己填 kind,
+    # 0 后端 LLM 调用, 0 性能损失.
+    if hasattr(ctx, "register_tool"):
+        try:
+            # 懒加载 memory_router (跟 plugin.py / pre_tool_call_safety_check 同 pattern)
+            from pathlib import Path as _Path
+            import importlib.util as _iu
+            _router_py = _Path(__file__).parent / "memory_router.py"
+            _spec = _iu.spec_from_file_location(
+                "_catfish_xcatfish_user_memory_router", _router_py
+            )
+            _router = _iu.module_from_spec(_spec)
+            _spec.loader.exec_module(_router)
+
+            ctx.register_tool(
+                name="memory",
+                toolset="memory",
+                schema=_router.CATFISH_MEMORY_SCHEMA,
+                handler=lambda args, **kw: _router.handle_memory_tool(args, **kw),
+                override=True,
+                emoji="🧠",
+                description=(
+                    "catfish 智能 memory 路由器 (替换 hermes builtin). "
+                    "按 kind 路由 5 仓库: identity/project_fact/workflow/journal/todo."
+                ),
+            )
+            logger.info(
+                "catfish-xcatfish-user: memory tool override ✓ (5 kind 路由)"
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "catfish-xcatfish-user: memory tool override 失败 (ignored): %s. "
+                "退化到 hermes builtin (70%% 跑偏问题不修).",
+                e,
+            )
+
     # Step 3: 后台线程等主流程 ready 再 install
     # 6/1 修: ready 判定只看 model_tools fully init (主线程过了 partial init 段).
     # run_agent / agent.agent_init 是 lazy import (LLM call 时才 import), 不应作
