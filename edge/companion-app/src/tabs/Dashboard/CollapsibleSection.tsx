@@ -21,6 +21,10 @@ interface Props {
    *  当时为了 5 类 widget 看起来有结构感, 砍卡后 count 一直变, 维护成本反而出来,
    *  而且 dashboard widget 计数对员工没产品价值 (不是 list count). */
   count?: number;
+  /** BL-SECTION-MAX-COLS (6/1 鸿波): 限最大列数. 默认 undefined = auto-fit
+   *  (当前所有 section 都是这模式). 鲶鱼对你的认识 4 卡传 2 → 2x2 整齐, 不
+   *  会 3 列第二行孤零零. */
+  maxColumns?: number;
 }
 
 const STORAGE_PREFIX = "dashboard_section_";
@@ -49,6 +53,7 @@ export default function CollapsibleSection({
   defaultCollapsed = false,
   children,
   count: _count,  // BL-SECTION-COUNT-KILL: 接收不渲染 (兼容现有调用方传 count)
+  maxColumns,
 }: Props) {
   const [collapsed, setCollapsed] = useState(() =>
     readCollapsed(id, defaultCollapsed)
@@ -117,7 +122,11 @@ export default function CollapsibleSection({
             // BL-FIX20 (5/8): 加响应式 — 宽屏 (>1400px) 自动 3 列, 窄屏 1 列, 中屏 2 列.
             //   auto-fit + minmax(280px, 1fr) 让 grid 自动决定列数, 280 是单卡最小
             //   可读宽度 (再窄文字挤).
-            gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+            // BL-SECTION-MAX-COLS (6/1 鸿波): 限最大列数 — 4 卡传 maxColumns=2
+            //   → 2x2 整齐, 不会 3 列第二行孤零零.
+            gridTemplateColumns: maxColumns
+              ? `repeat(${maxColumns}, minmax(0, 1fr))`
+              : "repeat(auto-fit, minmax(280px, 1fr))",
             gap: "var(--space-3)",
           }}
         >

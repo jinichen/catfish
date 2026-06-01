@@ -169,6 +169,7 @@ export default function DashboardTab() {
         id="rel"
         title="🐟 鲶鱼对你的认识"
         count={4}
+        maxColumns={2}
       >
         <RelationCard />
         <HermesMemoryCard />  {/* BL-DASHBOARD-HERMES-MEMORY-CARD (5/16): hermes 真活 memory */}
