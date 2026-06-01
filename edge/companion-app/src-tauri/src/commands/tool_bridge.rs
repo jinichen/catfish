@@ -140,6 +140,29 @@ pub async fn tool_bridge_status() -> Result<ServiceStatus, String> {
         .and_then(|p| process::read_pid_file_alive_strict(&p, "catfish_tool_bridge"));
 
     if pid.is_none() {
+        // BL-TOOL-BRIDGE-SOCK-FALLBACK (6/1): pid 文件没但 socket 可能仍在
+        // (autostart spawn 后写 pid 失败 / 外部 supervisor / dev 残留). 走
+        // socket health RPC 探活 — 探到 → 标 running, 避免 ServicesCard 误报
+        // "未启动" 让员工再点启动按钮 (会跟现有进程冲 socket).
+        if let Some(sock) = catfish_paths::tool_bridge_socket() {
+            if sock.exists() {
+                let healthy = matches!(
+                    call_rpc("health", json!(null)).await,
+                    Ok(v) if v.get("ok").and_then(|b| b.as_bool()).unwrap_or(false)
+                );
+                if healthy {
+                    return Ok(ServiceStatus {
+                        running: true,
+                        healthy: true,
+                        pid: None,
+                        port: None,
+                        message: Some(
+                            "已就绪 (无 pid 文件 — 外部托管或 autostart 异常)".into(),
+                        ),
+                    });
+                }
+            }
+        }
         return Ok(ServiceStatus::down(
             None,
             "未启动 — 点 \"启动\" 拉起（让 Companion 调 hermes 35 tools）",

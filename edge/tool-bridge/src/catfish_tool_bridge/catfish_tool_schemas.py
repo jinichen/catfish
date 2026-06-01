@@ -1041,7 +1041,7 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "name": "catfish_task_retry",
         "description": (
             "★ 重试一个**中断或失败**的后台任务. 拿原 task 的 kind + payload "
-            "启一个新 task (新 task_id), 等价于"重跑同一 input".\n\n"
+            "启一个新 task (新 task_id), 等价于'重跑同一 input'.\n\n"
             "✅ 调用场景:\n"
             "  - 员工看 Dashboard 发现某个 task '中断' (进程重启 / oom 没跑完)\n"
             "  - 员工说 '那个分析的 task 再跑一次'\n"
