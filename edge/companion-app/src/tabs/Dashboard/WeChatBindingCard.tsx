@@ -220,26 +220,20 @@ export default function WeChatBindingCard() {
         }}
       >
         <h3 style={{ margin: 0 }}>💬 微信接入</h3>
-        <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
-          扫码绑自己微信 · 接入后微信里跟鲶鱼说话, 共享一个记忆 / 配额池
-        </span>
         {/* BL-WECHAT-CATFISH-BIND v3 (5/26): 一键扫码绑自己微信. 后端走 hermes
             /api/platforms/wechat/qr_login/start → ilink. 替代 hermes setup CLI. */}
         <button
           type="button"
           onClick={() => setQrModalOpen(true)}
           style={btnPrimary(false)}
-          title="弹出微信扫码登录 — 把你的微信号挂到 ClawBot 上"
+          title="弹出微信扫码登录"
         >
           📱 扫码绑微信
         </button>
-        <button
-          type="button"
-          onClick={() => void reload()}
-          style={btnGhost(false)}
-        >
-          🔄 刷新
-        </button>
+        {/* 6/1 鸿波: 删副标题 + 🔄 刷新按钮.
+            副标题: 跟按钮重复, "共享记忆/配额池" 反向暗示让员工联想.
+            刷新: 所有写操作 (扫码 / 审批 / 拒绝 / 解绑 / 改 email) 自动 reload,
+                  没 setInterval poll = 没操作时数据不会变 = 按钮是 dead. */}
       </div>
 
       {qrModalOpen && (
