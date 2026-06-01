@@ -83,12 +83,22 @@ pub async fn healthz() -> Result<HealthzResp, String> {
 /// 这是 BL-AUTH-DECOUPLE-A5 Phase 2 部署后 model selector 退化的根因.
 #[tauri::command]
 pub async fn catalog() -> Result<Value, String> {
+    // 6/1 BL-CATALOG-DIRECT-GATEWAY (鸿波"模型列表又出不来了"):
+    // 原走 backend_base() = hermes 8642 (BL-AUTH-DECOUPLE-A5 5/19 设计走 P7
+    // catch-all proxy 透传 gateway). 但 hermes 0.15.1 升级后 P7 middleware
+    // Application.__init__ 注入时机**晚于 Application 创建** — Application 是
+    // 主线程 import gateway.platforms.api_server 时就实例化, plugin install 后台
+    // 0.2s 跑时 Application 已创建完, _patched_app_init 来不及注入 mw.
+    // → hermes 8642 /v1/catalog 真返 404 (无 P7 catch), 客户端退化到默认硬编码
+    // catfish-private-main 单 model.
+    //
+    // 真修要重构 P7 让 Application.__init__ patch 在 register 时立刻跑 (无 hermes
+    // 模块依赖, 可立刻 monkey-patch). 但这是 architectural 改造, 留周一.
+    // 临时绕开: catalog 直接走 gateway 8999 (catalog 是 catfish 概念, hermes 没,
+    // gateway /v1/catalog 公开匿名 OK). 1 行修立刻见效.
     let client = build_client()?;
-    let base = backend_base();
-    let mut req = client.get(format!("{base}/v1/catalog"));
-    if let Some(auth) = backend_auth_header() {
-        req = req.header("Authorization", auth);
-    }
+    let base = endpoints::endpoints().gateway_base();
+    let req = client.get(format!("{base}/v1/catalog"));
     let resp = req
         .send()
         .await
