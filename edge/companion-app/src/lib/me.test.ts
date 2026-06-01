@@ -113,7 +113,7 @@ describe("fetchWithAuth — hermes 路径 (useHermes=true)", () => {
     });
     const { calls } = setFetchMock(() => jsonResp(200, { ok: true }));
 
-    const resp = await fetchWithAuth(`${config.backendUrl}/api/me`);
+    const resp = await fetchWithAuth(`${config.gatewayUrl}/api/me`);
     expect(resp.status).toBe(200);
 
     expect(calls).toHaveLength(1);
@@ -139,7 +139,7 @@ describe("fetchWithAuth — hermes 路径 (useHermes=true)", () => {
     });
     const { calls } = setFetchMock(() => jsonResp(401));
 
-    const resp = await fetchWithAuth(`${config.backendUrl}/api/me`);
+    const resp = await fetchWithAuth(`${config.gatewayUrl}/api/me`);
     // hermes 路径**不 retry** 401, 直接透传
     expect(resp.status).toBe(401);
     expect(calls).toHaveLength(1);
@@ -160,7 +160,7 @@ describe("fetchWithAuth — hermes 路径 (useHermes=true)", () => {
     });
     const { calls } = setFetchMock(() => jsonResp(401));
 
-    const resp = await fetchWithAuth(`${config.backendUrl}/api/me`);
+    const resp = await fetchWithAuth(`${config.gatewayUrl}/api/me`);
     expect(resp.status).toBe(401);
     expect(calls).toHaveLength(1);  // 只发一次, 不 retry
     expect(invokeMock.mock.calls.find((c) => c[0] === "auth_login")).toBeUndefined();
@@ -179,7 +179,7 @@ describe("fetchWithAuth — 灰度回退路径 (useHermes=false)", () => {
     });
     const { calls } = setFetchMock(() => jsonResp(200, { ok: true }));
 
-    const resp = await fetchWithAuth(`${config.backendUrl}/api/me`);
+    const resp = await fetchWithAuth(`${config.gatewayUrl}/api/me`);
     expect(resp.status).toBe(200);
     expect(calls).toHaveLength(1);
     expect(calls[0].headers["authorization"]).toBe("Bearer oauth-jwt-12345");
@@ -210,7 +210,7 @@ describe("fetchWithAuth — 灰度回退路径 (useHermes=false)", () => {
       },
     );
 
-    const resp = await fetchWithAuth(`${config.backendUrl}/api/me`);
+    const resp = await fetchWithAuth(`${config.gatewayUrl}/api/me`);
     expect(resp.status).toBe(200);
     expect(calls).toHaveLength(2);
     expect(calls[0].headers["authorization"]).toBe("Bearer old-token-expired");

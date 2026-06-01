@@ -30,8 +30,12 @@ export interface QuotaMe {
 //
 // BL-AUTH-DECOUPLE-A5 Phase 2 (5/19): 改走 fetchWithAuth — hermes 路径 + OAuth
 // 路径分支 wrapper 内部处理. URL 也走 backendUrl (hermes proxy 转发 /api/quota/me).
+//
+// 6/2 BL-API-DIRECT-GATEWAY: /api/* 改走 gatewayUrl 直连 — hermes 0.15.1 升级
+// 后 P7 catch-all middleware 时机问题, /api/* 在 hermes 端 404. 跟 me.ts /
+// catalog 同步修. 真修 P7 时机留周一 BL-P7-EARLY-PATCH.
 export async function fetchQuotaMe(): Promise<QuotaMe> {
-  const url = `${config.backendUrl}/api/quota/me`;
+  const url = `${config.gatewayUrl}/api/quota/me`;
   const resp = await fetchWithAuth(url);
   if (!resp.ok) {
     throw new Error(`HTTP ${resp.status}`);
