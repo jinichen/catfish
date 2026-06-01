@@ -115,49 +115,118 @@ _APISERVER_METHOD_TARGETS = [
 ]
 
 
-def _verify_patch_targets() -> None:
-    """启动时跑. 任一引用的目标缺失立刻 ImportError, 阻止 hermes 启动.
+# 6/1 BL-PLUGIN-HERMES-015-LAZY-INSTALL (鸿波 6/1 必须今晚): 改延迟 install.
+#
+# # 真因 (audit 完整 stack)
+# hermes 0.15.1 (5/29 升级) tools/skills_tool.py:850 顶部触发 discover_plugins().
+# 由于 model_tools.py:32 顶部 `from tools.registry import discover_builtin_tools`,
+# tools.registry 扫 tools/*.py 文件, 包括 tools/skills_tool.py 触发 plugin
+# discovery, 链路:
+#
+#   主线程: import model_tools (partial init 中)
+#     → tools/registry top-level (扫 tools/*)
+#       → tools/skills_tool.py:850 调 discover_plugins()
+#         → catfish-xcatfish-user.register(ctx)
+#           → install() → _verify → import_module("run_agent")
+#             → run_agent 顶部 `from model_tools import get_tool_definitions`
+#               → model_tools 主线程 partial init 中 → ImportError circular ❌
+#
+# 主线程同步栈, retry / wait / `import model_tools` 都解不了 (同 frame 卡 partial).
+#
+# # 修法 (这次真有效)
+# 1. _verify_patch_targets 改静态文件检查 (grep source code, 不 import 触发链路)
+# 2. install() 不在 register(ctx) 立刻跑, 用后台线程等主流程 ready 再 install
+# 3. _INSTALLED flag + pre_tool_call hook 兜底 fail-loud — 真 LLM call 时 plugin
+#    没装载就 raise (维持"避免 silent 跨员工串数据 P0 漏洞" 设计意图)
 
-    避免 plugin 半推半就加载 (会导致 silent 跨员工串数据 = P0 隐私漏洞).
+# 全局 install 状态 flag — register 立刻 False, 真 install 完成置 True.
+# pre_tool_call hook 检查它, 没装载就 raise (LLM 进不到真 tool call, 安全 fail).
+_INSTALLED = False
+
+
+def _check_attr_in_source(module_path: str, attr: str) -> bool:
+    """静态文件检查 attribute 是否在 source code 里 (不 import, 避开 circular).
+
+    用法: plugin 加载早期主线程在 model_tools partial init 中, 不能 import 真模块.
+    用文件 grep 兜底 — 看 attribute 是否 def/class/var 形式在 source 里.
+    真 patch 时 (主流程 ready 后) module 会被正常 import.
     """
-    import importlib
+    import os
+    import re
+    hermes_root = os.environ.get("HERMES_ROOT") or os.path.expanduser("~/.hermes/hermes-agent")
+    # module_path "agent.agent_init" → 文件 agent/agent_init.py
+    file_path = os.path.join(hermes_root, module_path.replace(".", "/") + ".py")
+    if not os.path.exists(file_path):
+        return False
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            src = f.read()
+        # 匹配 def attr( / async def attr( / class attr / attr = / attr:
+        pattern = rf"^\s*(?:def|async def|class)\s+{re.escape(attr)}\b|^{re.escape(attr)}\s*[:=]"
+        return bool(re.search(pattern, src, re.MULTILINE))
+    except Exception:
+        return False
 
+
+def _check_class_method_in_source(module_path: str, class_name: str, method: str) -> bool:
+    """静态文件检查 class 是否含某 method (不 import). 同 _check_attr_in_source."""
+    import os
+    import re
+    hermes_root = os.environ.get("HERMES_ROOT") or os.path.expanduser("~/.hermes/hermes-agent")
+    file_path = os.path.join(hermes_root, module_path.replace(".", "/") + ".py")
+    if not os.path.exists(file_path):
+        return False
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            src = f.read()
+        # 找 class XXX 后任意位置 def method(
+        class_pattern = rf"class\s+{re.escape(class_name)}\b[^:]*:"
+        class_match = re.search(class_pattern, src)
+        if not class_match:
+            return False
+        # class 之后的代码里找 def method (允许 indent)
+        rest = src[class_match.end():]
+        method_pattern = rf"^\s+(?:def|async def)\s+{re.escape(method)}\b"
+        return bool(re.search(method_pattern, rest, re.MULTILINE))
+    except Exception:
+        return False
+
+
+def _verify_patch_targets() -> None:
+    """静态文件检查 patch target 存在 (不 import — 避开 hermes 0.15.1 circular).
+
+    真 patch 时 (后台线程主流程 ready 后) 才 import 真模块, 那时不再撞 partial.
+
+    fail-loud 时机: 真 patch fail (in _patch_pX) OR pre_tool_call hook 检测 _INSTALLED.
+    """
     missing = []
     for module_path, attr, kind in _PATCH_TARGETS:
-        try:
-            mod = importlib.import_module(module_path)
-            if not hasattr(mod, attr):
-                missing.append(f"{module_path}.{attr} (expected {kind})")
-        except ImportError as e:
-            missing.append(f"{module_path} (import failed: {e})")
+        if not _check_attr_in_source(module_path, attr):
+            missing.append(f"{module_path}.{attr} (expected {kind})")
 
-    # AIAgent method check
-    try:
-        from run_agent import AIAgent
-        for method in _AIAGENT_METHOD_TARGETS:
-            if not hasattr(AIAgent, method):
-                missing.append(f"run_agent.AIAgent.{method}")
-    except ImportError:
-        pass  # 上面 _PATCH_TARGETS 已覆盖
+    # AIAgent method 静态检查
+    for method in _AIAGENT_METHOD_TARGETS:
+        if not _check_class_method_in_source("run_agent", "AIAgent", method):
+            missing.append(f"run_agent.AIAgent.{method}")
 
-    # APIServerAdapter method check
-    try:
-        from gateway.platforms.api_server import APIServerAdapter
-        for method in _APISERVER_METHOD_TARGETS:
-            if not hasattr(APIServerAdapter, method):
-                missing.append(f"gateway.platforms.api_server.APIServerAdapter.{method}")
-    except ImportError:
-        pass
+    # APIServerAdapter method 静态检查
+    for method in _APISERVER_METHOD_TARGETS:
+        if not _check_class_method_in_source(
+            "gateway.platforms.api_server", "APIServerAdapter", method
+        ):
+            missing.append(
+                f"gateway.platforms.api_server.APIServerAdapter.{method}"
+            )
 
     if missing:
         raise ImportError(
             "catfish-xcatfish-user plugin: hermes refactor 破坏了 patch targets. "
-            "缺失 attributes: " + ", ".join(missing) + ". "
+            "缺失 attributes (静态文件检查): " + ", ".join(missing) + ". "
             "不允许半加载 (会导致跨员工串数据). 升级 plugin 或回滚 hermes."
         )
 
     logger.info(
-        "catfish-xcatfish-user: patch target verify ✓ (%d module + %d method)",
+        "catfish-xcatfish-user: patch target verify ✓ (静态文件检查 %d module + %d method)",
         len(_PATCH_TARGETS),
         len(_AIAGENT_METHOD_TARGETS) + len(_APISERVER_METHOD_TARGETS),
     )
@@ -774,7 +843,7 @@ def install() -> None:
 
     幂等: 重复调不会重 patch (避免 double-wrap 导致 5 步链跑 5 次).
     """
-    global _PATCHED
+    global _PATCHED, _INSTALLED
     if _PATCHED:
         logger.debug("catfish-xcatfish-user already installed, skip")
         return
@@ -782,8 +851,24 @@ def install() -> None:
     _verify_patch_targets()
     _apply_patches()
     _PATCHED = True
+    _INSTALLED = True  # 6/1 BL-PLUGIN-HERMES-015-LAZY-INSTALL: pre_tool_call hook 看这个
 
     logger.info("catfish-xcatfish-user plugin installed ✓ (11 patches applied)")
+
+
+# 6/1 BL-PLUGIN-HERMES-015-LAZY-INSTALL — pre_tool_call hook 兜底 fail-loud.
+# 真正的 "避免 silent 跨员工串数据 P0 漏洞" 安全检查: 第一次 LLM tool call 之前,
+# 看 _INSTALLED. 没装 plugin 等于跨员工 header 没注入 — 立刻 raise, hermes 拒服务.
+# 比 plugin 加载时 fail 更精准: 真用到时检, 不在加载时.
+def pre_tool_call_safety_check(*args, **kwargs):
+    """hermes pre_tool_call hook. 检测 plugin 真装载, 没装就 raise 拒服务."""
+    if not _INSTALLED:
+        raise RuntimeError(
+            "catfish-xcatfish-user 未装载: hermes 主流程 ready 后后台 install 没完成. "
+            "可能 hermes 0.15+ 内部变化, 看 ~/.hermes/logs/mcp-stderr.log. "
+            "跨员工数据 P0 风险, 拒服务."
+        )
+    return None  # 让 tool call 继续
 
 
 # hermes 0.14+ plugin discovery 自动调 __init__.py 里的 install() 或类似 hook.

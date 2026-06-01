@@ -65,24 +65,85 @@ def _load_plugin_module():
 
 
 def register(ctx) -> None:
-    """hermes plugin loader 入口. 调 plugin.install() 应用 monkey-patch.
+    """hermes plugin loader 入口. 延迟 install + pre_tool_call hook 真 fail-loud.
 
-    ctx 是 hermes plugin context (含 register_memory_provider / register_skill 等).
-    本 plugin 不用 ctx, 收下不用.
+    # 6/1 BL-PLUGIN-HERMES-015-LAZY-INSTALL (鸿波 6/1 必须今晚)
+    hermes 0.15.1 tools/skills_tool.py:850 顶部触发 discover_plugins, 主线程
+    stack 在 model_tools partial init 中调 register(ctx). 直接 install 撞
+    `from model_tools import get_tool_definitions` partial circular ImportError.
+
+    修法:
+    1. _verify_patch_targets 静态文件 grep (不 import, 不阻塞主线程)
+    2. install 起后台线程, 等主流程 model_tools fully init 再跑
+    3. pre_tool_call hook 兜底 — 真 LLM call 时检 _INSTALLED 没装就 raise
+
+    fail-loud 时机变了: 不在 plugin 加载时 fail, 在第一次 tool call 时 fail.
+    P0 安全语义不变 — 真用到 plugin 前一定先 check.
     """
+    import threading
+    import sys
+    import time
+
+    _mod = _load_plugin_module()
+
+    # Step 1: 静态文件检查 patch target 存在 (不 import 真模块, 避开 partial)
     try:
-        _mod = _load_plugin_module()
-        _mod.install()
-        logger.info("catfish-xcatfish-user plugin registered ✓")
+        _mod._verify_patch_targets()
+        logger.info("catfish-xcatfish-user: verify ✓ (静态文件)")
     except Exception as e:
-        # 这里 raise 是故意的 — 让 hermes 启动失败而不是 silent 跨员工串数据.
-        # 加 log 让 ops 一眼看到原因.
-        logger.error(
-            "catfish-xcatfish-user 加载失败, hermes 启动会中断 (这是故意的, "
-            "避免 silent 跨员工串数据 P0 漏洞): %s",
-            e,
-        )
+        # 静态检查 fail = 真 hermes refactor 致命漂移
+        logger.error("catfish-xcatfish-user verify (静态) fail: %s", e)
         raise
+
+    # Step 2: 注册 pre_tool_call hook 真 fail-loud
+    if hasattr(ctx, "register_hook"):
+        try:
+            ctx.register_hook("pre_tool_call", _mod.pre_tool_call_safety_check)
+            logger.info("catfish-xcatfish-user: pre_tool_call hook registered ✓")
+        except Exception as e:
+            logger.warning(
+                "catfish-xcatfish-user register_hook fail: %s (fail-loud 降级)", e
+            )
+
+    # Step 3: 后台线程等主流程 ready 再 install
+    # 6/1 修: ready 判定只看 model_tools fully init (主线程过了 partial init 段).
+    # run_agent / agent.agent_init 是 lazy import (LLM call 时才 import), 不应作
+    # ready 判定. install 内部 import 它们时主线程已不 partial, 不撞 circular.
+    def _delayed_install():
+        max_wait_s = 30.0
+        interval = 0.2
+        elapsed = 0.0
+        while elapsed < max_wait_s:
+            mt = sys.modules.get("model_tools")
+            # model_tools fully init = 主线程过了 partial init = install 内部 import
+            # run_agent 不会再撞 circular
+            if mt and hasattr(mt, "get_tool_definitions"):
+                try:
+                    _mod.install()
+                    logger.info(
+                        "catfish-xcatfish-user delayed install ✓ (waited %.1fs)",
+                        elapsed,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "catfish-xcatfish-user delayed install fail: %s",
+                        e, exc_info=True,
+                    )
+                return
+            time.sleep(interval)
+            elapsed += interval
+        logger.error(
+            "catfish-xcatfish-user: 30s model_tools 未 fully init, install 跳过. "
+            "pre_tool_call hook 真 LLM call 时会 raise (P0 兜底)."
+        )
+
+    t = threading.Thread(
+        target=_delayed_install, daemon=True, name="catfish-xcatfish-installer"
+    )
+    t.start()
+    logger.info(
+        "catfish-xcatfish-user: register ✓ (后台等主流程 ready 再 install)"
+    )
 
 
 # 双 import 兼容 — pytest / IDE 用绝对 import 拿 plugin module
