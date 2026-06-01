@@ -1932,6 +1932,44 @@ def _http_code_for_upstream(err_msg: str) -> int:
     return 502
 
 
+# BL-ADVISOR-UPSTREAM-ERROR-AS-CONTENT (6/1 鸿波): 已知上游错误关键词
+# (catfish-private-main / LiteLLM 私有 LLM streaming fail 时返 200 + content=这些).
+# Source: ~/.hermes/logs/gateway.log 实测 "API call failed after 3 retries: An error
+# occurred during streaming" 是 LiteLLM 标准 retry exhausted 错误.
+_UPSTREAM_ERROR_AS_CONTENT_PATTERNS = (
+    "API call failed after",
+    "after 3 retries",
+    "retries exhausted",
+    "An error occurred during streaming",
+    "Max retries (3) exhausted",
+)
+
+
+def _extract_content_text(response_dict: dict) -> str:
+    """从 chat completion response dict 抽 message.content 文本. 失败返空串."""
+    try:
+        choices = response_dict.get("choices") or []
+        if not choices:
+            return ""
+        msg = choices[0].get("message") or {}
+        content = msg.get("content")
+        return content if isinstance(content, str) else ""
+    except Exception:
+        return ""
+
+
+def _looks_like_upstream_error_as_content(response_dict: dict) -> bool:
+    """detect 上游 LiteLLM-based LLM 服务把内部 retry 失败 message 当作 LLM 输出返回.
+
+    保守判定: content 长度 < 500 字符 + 匹配已知错误关键词. 真 LLM 输出长篇复读
+    错误词概率极低, 但短 + 关键词 = 上游真错的高置信号.
+    """
+    content = _extract_content_text(response_dict)
+    if not content or len(content) > 500:
+        return False
+    return any(pat in content for pat in _UPSTREAM_ERROR_AS_CONTENT_PATTERNS)
+
+
 def _raise_upstream_error(
     exc: Exception,
     *,
@@ -2533,7 +2571,34 @@ async def _invoke_chat_completion(
             tokens_in=prompt_tokens,
             tokens_out=completion_tokens,
         )
-    return response.model_dump() if hasattr(response, "model_dump") else response
+
+    # BL-ADVISOR-UPSTREAM-ERROR-AS-CONTENT (6/1 鸿波): 上游某些 LiteLLM-based 私有 LLM
+    # 服务 (e.g. catfish-private-main) streaming fail 重试用尽后, 把 error 当作
+    # completion content 返 200 OK, gateway 透传 → 客户端 (advisor / chat) 看 200
+    # 走 JSON.parse 失败, 误判 "LLM 返非 JSON", 真因 (上游挂) 完全隐藏.
+    #
+    # 这里 detect 已知错误关键词 → 转 502 让客户端正确知道上游问题, 不污染 quota.
+    # 真 LLM 输出含这些词 (e.g. 用户问"What's API call failed?" LLM 复读) 概率极低,
+    # 但避免误杀: 只在 content 是**纯错误文本** (不超 500 字) 时识别.
+    result = response.model_dump() if hasattr(response, "model_dump") else response
+    if _looks_like_upstream_error_as_content(result):
+        upstream_msg = _extract_content_text(result)[:300]
+        logger.warning(
+            "BL-ADVISOR-UPSTREAM-ERROR-AS-CONTENT: 上游 LLM 返 200 但 content 是错误文本, "
+            "转 502 给客户端. model=%s user=%s content=%r",
+            used_model.name, user_sub, upstream_msg[:200],
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": "upstream_error_as_content",
+                "error_type": "UpstreamErrorAsContent",
+                "message": upstream_msg,
+                "friendly": "上游 LLM 服务暂时不可用 (重试用尽), 稍后再试.",
+                "model": used_model.name,
+            },
+        )
+    return result
 
 
 @app.post("/v1/chat/completions")

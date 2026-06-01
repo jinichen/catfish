@@ -463,6 +463,19 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
     }
     console.log("[advisor] raw content (前 400):", content.slice(0, 400));
 
+    // BL-ADVISOR-UPSTREAM-ERROR-AS-CONTENT (6/1 鸿波): gateway 端已加 detect 转 502
+    // (双层防御之一). 客户端兜底再判一次, 真 LiteLLM 私有 LLM (catfish-private-main)
+    // streaming fail 时返 200 + content="API call failed after 3 retries..." 标准
+    // pattern. 即使 gateway 端 detect 漏掉某变体, 这里仍能识别避免"JSON 解析失败"灰区.
+    const upstreamErrorPattern = /API call failed|after \d+ retries|during streaming|retries exhausted/i;
+    if (content.length < 500 && upstreamErrorPattern.test(content)) {
+      console.warn(
+        "[advisor] 上游 LLM 错误作 content 返 (HTTP 200 + 错误文本), 真因: 上游 LLM 服务挂. " +
+        "原文:", content.slice(0, 200),
+      );
+      return null;
+    }
+
     // 5/22 cold start 修: 鲁棒 JSON 解析 — LLM 输出常含前后解释文字
     // (e.g. "现在我已经分析完..."), 不只 strip markdown 反引号.
     const parsed = robustJsonParse(content);
