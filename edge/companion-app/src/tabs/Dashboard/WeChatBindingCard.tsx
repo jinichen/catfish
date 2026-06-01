@@ -219,9 +219,9 @@ export default function WeChatBindingCard() {
           flexWrap: "wrap",
         }}
       >
-        <h3 style={{ margin: 0 }}>💬 微信 / 飞书 接入</h3>
+        <h3 style={{ margin: 0 }}>💬 微信接入</h3>
         <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
-          自己扫码绑微信, 或审批别人接入 · 接入后 ta 跟你共享一个记忆 / 配额池
+          扫码绑自己微信 · 接入后微信里跟鲶鱼说话, 共享一个记忆 / 配额池
         </span>
         {/* BL-WECHAT-CATFISH-BIND v3 (5/26): 一键扫码绑自己微信. 后端走 hermes
             /api/platforms/wechat/qr_login/start → ilink. 替代 hermes setup CLI. */}
@@ -270,27 +270,11 @@ export default function WeChatBindingCard() {
 
       {isLoading && <div style={{ fontSize: 13 }}>加载中…</div>}
 
-      {/* ========== 状态 1: 空状态引导 ========== */}
+      {/* ========== 状态 1: 空状态引导 (6/1 鸿波: 简化, 去 3 步 CLI 过时流程) ========== */}
       {!isLoading && !hasPending && !hasApproved && (
         <div style={{ fontSize: 13, color: "var(--catfish-text-muted)" }}>
-          <p style={{ margin: 0 }}>
-            <strong>还没人通过 IM 找鲶鱼.</strong>
-          </p>
-          <p style={{ margin: "6px 0 0 0", lineHeight: 1.7 }}>
-            想用微信 / 飞书跟鲶鱼说话? 流程是:
-          </p>
-          <ol style={{ margin: "4px 0 0 0", paddingLeft: 20, lineHeight: 1.7 }}>
-            <li>
-              在终端跑 <code>hermes setup</code> 选平台 (微信走 ClawBot)
-            </li>
-            <li>
-              在那个 IM 里给绑定的 bot 发一句话 — 比如"你好"
-            </li>
-            <li>这张卡上会出现"待审批"提示, 一键同意就接入了</li>
-          </ol>
-          <p style={{ margin: "10px 0 0 0", fontSize: 11 }}>
-            (技术细节: bot 给每个 IM 用户发个一次性 pairing code, 你在这里批 = 把 code 标
-            approved, ta 下次就能直接用了)
+          <p style={{ margin: 0, lineHeight: 1.7 }}>
+            点上面 <strong>📱 扫码绑微信</strong> 按钮, 跟着提示扫一下就好.
           </p>
         </div>
       )}
@@ -477,17 +461,9 @@ export default function WeChatBindingCard() {
         </div>
       )}
 
-      <p
-        style={{
-          fontSize: 10,
-          color: "var(--catfish-text-muted)",
-          marginTop: 12,
-          marginBottom: 0,
-        }}
-      >
-        绑定数据存 <code>~/.hermes/platforms/pairing/</code>, 100% 本机, 不上传中央.
-        终端跑 <code>hermes pairing list</code> 也能看, 跟这里同一份数据.
-      </p>
+      {/* 6/1 鸿波: 删底部 "~/.hermes/platforms/pairing + hermes pairing list" 技术细节,
+          跟隐私卡同原则 — 不让员工联想, 也不教 CLI. 真员工 IT 自查走另外的 catfish
+          privacy-audit CLI. */}
     </div>
   );
 }
