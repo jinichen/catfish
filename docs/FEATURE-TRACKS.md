@@ -806,12 +806,32 @@ Companion → HTTPS OpenAI 兼容 → hermes serve (本机)
 
 ### Phase 2/3 · 长期 backlog (不细列)
 
-#### #22 三层统一搜索 [Phase 1.5, 0%]
-> 公网 + 公司内 + 本地, 智能路由. (BL-E25, 1-2 周)
-- ✅ 本地 FTS5 已 ship (edge/local-search)
-- ⬜ 公司内 (Browser Agent + MCP)
-- ⬜ 公网 (现走 Browser Agent)
-- ⬜ 智能路由层
+#### #22 三层统一搜索 [Phase 1.5, ~70%]  ★ 6/1 鸿波 audit 校准 (原标 0% 误导)
+> 公网 + 公司内 + 本地, 智能路由. (BL-E25, 三层接入都 ship, 缺智能路由层 1-2 周)
+- ✅ 本地 FTS5 已 ship (edge/local-search, mac/win/linux 跨平台 watcher + indexer + mcp_server)
+- ✅ 公网搜索 — Tavily (5/24 BL-EDGE-TOOL-KEY ship) 主, Browser Agent (5/6) 补
+  - hermes 0.14 三个 web tool 全走 Tavily backend (web_search / web_extract / web_crawl)
+  - 配置 ~/.hermes/config.yaml `web.backend: tavily`, 员工零配置 (catfish-cli setup 一次性拉 key)
+  - 选 Tavily 不选 Firecrawl: 国内访问稳 + 1k 搜/月免费够 demo
+  - Browser Agent 用于交互式 / 复杂网页 / PDF 抽
+- ✅ 公司内 — Browser Agent 通用覆盖 (catfish-browser-task skill 5/6 ship)
+  - 国内企业内部系统**基本都浏览器访问** (6/1 鸿波确认), Browser Agent 通用
+    skill 覆盖 90%+ (OA / EIS / 内部 wiki / 报销 / 流程审批 / Jira / Confluence)
+  - 走员工真 chrome session (已 SSO 登录), Playwright connect_over_cdp 后端,
+    失败率 ~5%. 客户企业 IT **零接入工作量** — 员工自己 chrome 登过就能用
+  - 补充: MCP-registry (jira/gitlab/time/filesystem manifest 4 个公网 SaaS),
+    真国企用得少 (内部系统少有标准 MCP)
+  - 补充: Email Agent (Apple Mail / Foxmail / Outlook win 待) 桌面客户端集成
+  - 补充: 微信 IM (5/26 ClawBot ship), 飞书/钉钉/企微 ⬜
+- ⬜ **智能路由层** (真核心未做, 工程量 1-2 周)
+  - 路由本质不是"决定查哪个业务系统", 是 LLM 决定**走哪种工具能力**:
+    · 公开网络 → Tavily (快/便宜)
+    · 公司内具体页面 → Browser Agent (员工真 chrome / 数据不出公网)
+    · 本地公司文件 → FTS5 (本机 / 0 延迟)
+    · 公司邮件 → Email Agent
+    · 公司 IM → 平台 SDK
+  - LLM 根据 query 类型 + 数据敏感度 + 速度需求自动选, 可并行多层 + 合并
+  - 现状: LLM 看到 35+ tool, 自己 prompt 决策, 没专门 router 层
 
 #### #23 长期人机关系 / 反直觉特性 [Phase 3+, 5%]  ★ 5/2 部分 (BL-E13 MVP)
 > 鲶鱼晨报 / 周末不干活 / 主动闲聊 / 情绪 / 社交健康检查 / 学习清单等 (BL-E1~E20).
