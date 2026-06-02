@@ -973,12 +973,21 @@ BACKLOG.md (本)        ─→  全量积压 (每周 review)            →   �
        >= 500 chars 或 (>= 200 + 2 关键词) → inject propose_skill_hint, 0 LLM 调).
 
 ### P2
-- memory char limit 调高
-- query 相关性筛 entry 注入 (借鉴 honcho token budget)
-- 周报 cron 摘要 journal
-- BL-MEMORY-SKILLS-CATALOG-EMPTY: skills_catalog 真返空真因 — ~/.catfish/skills/ 真无 mirror.
-       真该 mirror 员工 RecMode + propose_skill 产 skill 真到此 (或改 _render_skills_catalog
-       真读 ~/.hermes/skills/*).
+- ✓ **memory char limit 调高** (5/27 之前真已做) — ~/.hermes/config.yaml
+       user_char_limit=3500 / memory_char_limit=5000 (default 1375/2200).
+- ✓ **query 相关性筛 entry 注入** (6/3 真做完, BL-MEMORY-P2-2-APPLY) —
+       catfish_memory.py _render_skills_catalog 加 query 参数 + char-level Jaccard
+       (name_score*3 + head_score) 真排序. query 真有 budget cap 5000 chars (砍 75%).
+       query 真空兼容旧行为 (全 67 skill 注入 20K). 不依赖 jieba (plugin light), 不调 LLM.
+       smoke 真验: query='周报' 真 catfish-weekly-report 真排第 1.
+- ~~周报 cron 摘要 journal~~ **真撤回 (鸿波 6/3 拍)** — 鸿波 verbatim
+       "周报还是我每周手动提出, 然后调用周报SKILL 的方式". 真符合**员工主权红线**:
+       周报真员工亲自触发, 真不自动. 真聚合 journal 真"本周周报草稿" 真也无意义
+       (真只为周报 skill 服务, 周报手动后真聚合无价值). 真避免未来 sprint 真重提.
+- ✓ **BL-MEMORY-SKILLS-CATALOG-EMPTY** (6/3 真做完, BL-MEMORY-P2-4-APPLY) —
+       _render_skills_catalog dual-path: ~/.catfish/skills/ 优先 → ~/.hermes/skills/
+       fallback. 支持两层结构 (skill 直接含 SKILL.md 或 category/skill). dedupe by
+       skill 名. smoke 真验 fallback 真扫到 67 skill (29 hermes + RecMode + symlink).
 
 ### 24h 验证
 - ~/.catfish/memory_audit.jsonl 真生效: source_tool=memory(catfish-router) + 新加
