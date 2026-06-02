@@ -148,6 +148,85 @@ def test_word_freq_returns_dict_even_no_jieba(sf, monkeypatch):
     assert isinstance(freq, dict)
 
 
+# ── BL-STYLE-FP-NOISE-FILTER (2026-06-03) regression ──
+
+
+def test_filter_noise_removes_code_blocks(sf):
+    """``` code blocks ``` 真整段去 (Python/bash 真英文 alpha 真大量 noise)."""
+    text = "公司资质管理\n```python\nimport os\nprint('hello')\n```\n推进 ISO 审核"
+    out = sf._filter_noise(text)
+    assert "import os" not in out
+    assert "print" not in out
+    assert "公司资质管理" in out
+    assert "推进 ISO 审核" in out
+
+
+def test_filter_noise_removes_inline_code(sf):
+    """`inline code` 真去 (函数名/变量名 noise)."""
+    text = "调 `catfish_memory_dedupe` 真合并重复 entry"
+    out = sf._filter_noise(text)
+    assert "catfish_memory_dedupe" not in out
+    assert "真合并重复" in out
+
+
+def test_filter_noise_removes_urls(sf):
+    """https?://URL 真去 (Top 高频词 https/com/github 主源)."""
+    text = "详见 https://github.com/catfish/repo 的 BACKLOG 章节"
+    out = sf._filter_noise(text)
+    assert "https" not in out
+    assert "github.com" not in out
+    assert "详见" in out
+    assert "章节" in out
+
+
+def test_filter_noise_preserves_markdown_link_text(sf):
+    """[text](url) 真留 text (一般是中文标题)."""
+    text = "看 [资质建设方案](https://docs.example.com/qual.md) 详情"
+    out = sf._filter_noise(text)
+    assert "资质建设方案" in out
+    assert "https" not in out
+    assert "docs.example.com" not in out
+
+
+def test_filter_noise_removes_html_tags(sf):
+    """<html tags> 真去."""
+    text = "<div class='note'>请注意资质评审时间</div>"
+    out = sf._filter_noise(text)
+    assert "<div" not in out
+    assert "class='note'" not in out
+    assert "请注意资质评审时间" in out
+
+
+def test_filter_noise_preserves_structure_markers(sf):
+    """真**保留** # / - / 数字. 真 _structure_pref 真识别 list/heading."""
+    text = "## 标题\n\n- 列表项 1\n- 列表项 2\n\n1. 编号项"
+    out = sf._filter_noise(text)
+    # markers 真保留 (_structure_pref 真识别需要)
+    assert "## 标题" in out
+    assert "- 列表项 1" in out
+    assert "1. 编号项" in out
+
+
+def test_word_freq_excludes_pure_english(sf):
+    """BL-STYLE-FP-NOISE-FILTER: 真**只**留含中文 word, 禁纯英文 (the/com/of/and 等).
+
+    真兼容两种 mode: 有 jieba (生产) → 留中文 word 真有数据;
+    无 jieba (sandbox) → fallback char n-gram 真也**不**含英文 (空也满足条件).
+    """
+    text = "the catfish 项目管理 hermes 的 com 和 github 资质评审 推进 审核"
+    freq = sf._word_freq(text)
+    # 真禁纯英文 (两 mode 都必须满足)
+    assert "the" not in freq
+    assert "catfish" not in freq
+    assert "hermes" not in freq
+    assert "com" not in freq
+    assert "github" not in freq
+    # 所有 key 真都含中文 (真禁纯英文 真验)
+    for k in freq:
+        # 真 key 真至少含 1 个中文字符 (U+4E00-U+9FFF)
+        assert any("一" <= c <= "鿿" for c in k), f"key {k!r} 真不含中文真不该进 freq"
+
+
 def test_punctuation_pref_counts(sf):
     text = "句子一, 句子二, 句子三; 句子四！句子五？"
     p = sf._punctuation_pref(text)

@@ -146,8 +146,51 @@ STOPWORDS_CN = set(
 # ============================================================
 
 
+# BL-STYLE-FP-NOISE-FILTER (2026-06-03): 真去 markdown noise 真不影响员工公文风格抽取.
+#
+# 真生产 bug: 真鸿波 Dashboard 真 Top 高频词 'https/the/com/to/github/catfish/of/and/is/hermes'
+# — 真扫到 catfish 项目 docs (BACKLOG/PITFALLS/SKILL.md) 真 URL + code blocks + 英文标识符.
+# 真**真不该** 作为员工公文 sample. 真 LLM 真按这 fingerprint 真模仿员工写周报 → 真公文味丢.
+#
+# 真过滤策略 (保留结构 markers 给 _structure_pref 用, 只清 noise source):
+# 1. ``` code blocks ``` → 真整段去 (Python/bash 真英文 alpha 真大量)
+# 2. `inline code` → 真去 (函数名/变量名)
+# 3. https?://URLs → 真去 (https/com/github noise 主源)
+# 4. ![img](url) / [text](url) → 真去 (markdown 真 link 语法, 留 text)
+# 5. <html tags> → 真去
+# 6. **保留** # / - / * / 数字. (真 _structure_pref 真靠这些识别 list/heading)
+_RE_CODE_BLOCK = re.compile(r"```.*?```", re.DOTALL)
+_RE_INLINE_CODE = re.compile(r"`[^`\n]+`")
+_RE_URL = re.compile(r"https?://\S+")
+_RE_MD_IMG = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+_RE_MD_LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
+_RE_HTML_TAG = re.compile(r"<[^>]+>")
+
+
+def _filter_noise(text: str) -> str:
+    """真去 markdown 代码/URL/HTML noise, 保留中英文自然语言 + 结构 markers.
+
+    真适合员工公文风格抽取 — 真排除 catfish 项目 docs 真 noise.
+    真保留 # / - / * / 数字. (真 _structure_pref 真识别 list/heading).
+    """
+    if not text:
+        return ""
+    # 真先去整块 noise (code blocks 真先, 真免内层 inline 错处理)
+    text = _RE_CODE_BLOCK.sub(" ", text)
+    text = _RE_MD_IMG.sub(" ", text)
+    text = _RE_MD_LINK.sub(r"\1", text)  # 真保留 link 真文字 (一般是中文标题)
+    text = _RE_URL.sub(" ", text)
+    text = _RE_INLINE_CODE.sub(" ", text)
+    text = _RE_HTML_TAG.sub(" ", text)
+    return text
+
+
 def _read_doc(path: Path) -> Optional[str]:
-    """读一个文档. 不支持的类型 / 太大 / 读失败 → None."""
+    """读一个文档. 不支持的类型 / 太大 / 读失败 → None.
+
+    BL-STYLE-FP-NOISE-FILTER (2026-06-03): markdown / 文本类真**自动过滤 noise**
+    (URL / code blocks / inline code). docx 真**已经是纯文本** 不需要过滤.
+    """
     try:
         size = path.stat().st_size
     except OSError:
@@ -158,7 +201,8 @@ def _read_doc(path: Path) -> Optional[str]:
     suffix = path.suffix.lower()
     try:
         if suffix in {".md", ".txt", ".markdown"}:
-            return path.read_text(encoding="utf-8", errors="replace")
+            raw = path.read_text(encoding="utf-8", errors="replace")
+            return _filter_noise(raw)  # 真过滤 markdown noise
         if suffix == ".docx":
             try:
                 from docx import Document  # noqa: PLC0415
@@ -214,6 +258,11 @@ def _word_freq(text: str) -> Dict[str, int]:
     """词频. 优先 jieba (中文), 退 char-level n-gram (2-字).
 
     返 {word: count}, 已过滤 stopword + 短于 2 字 + 纯标点.
+
+    BL-STYLE-FP-NOISE-FILTER (2026-06-03): **只**留含中文 word.
+    真生产员工写公文真**中文为主**, 真英文术语 (catfish/hermes/skill) 真**只 noise**
+    充 Top 高频词 (https/the/com/to/and/of/is). 真**禁英文** 真**双保险**配
+    _filter_noise (清 URL/code).
     """
     freq: Dict[str, int] = {}
     try:
@@ -225,8 +274,9 @@ def _word_freq(text: str) -> Dict[str, int]:
                 continue
             if w in STOPWORDS_CN:
                 continue
-            if not _CN_CHAR_RE.search(w) and not w.isalpha():
-                continue  # 跳标点 / 数字
+            # BL-STYLE-FP-NOISE-FILTER: **只**留含中文 word, 禁纯英文 (the/com/of/and 等)
+            if not _CN_CHAR_RE.search(w):
+                continue
             freq[w] = freq.get(w, 0) + 1
     except ImportError:
         # fallback: char-level 2-gram (无 jieba 时只能粗糙的 freq)
