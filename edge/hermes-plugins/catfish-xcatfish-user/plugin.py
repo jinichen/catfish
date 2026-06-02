@@ -764,6 +764,34 @@ def _patch_p8_p9_cors() -> None:
     else:
         logger.warning("P8: cannot find origin check method, Tauri origin NOT allowed via CORS")
 
+    # 6/2 晚 BL-CORS-RETURN-HEADERS: wrap `_cors_headers_for_origin` 真返 CORS headers
+    # 给 tauri/dev origin. 真生产事故续: 上一 commit 加 dev origin 到 _TAURI_ORIGINS,
+    # `_origin_allowed` 真过, 但 hermes cors_middleware 之后调 `_cors_headers_for_origin`,
+    # 这函数**没被 patch**, 看 self._cors_origins (空, 因 hermes config 没设) 返 None.
+    # OPTIONS + cors_headers is None → 403.
+    # 加 patch: tauri origin 时构造 headers (Allow-Origin = origin, Allow-Headers 来自
+    # module-level _CORS_HEADERS 含 P9 加的 X-Catfish-* 全套).
+    if hasattr(APIServerAdapter, "_cors_headers_for_origin"):
+        _orig_cors_headers = APIServerAdapter._cors_headers_for_origin
+
+        def patched_cors_headers(self, origin: str, _orig=_orig_cors_headers):
+            # Tauri / dev origin: 自己构造 headers, 不走原函数 (它要求 _cors_origins
+            # 非空才返). 直接用 module-level _CORS_HEADERS (含 P9 扩的 Allow-Headers).
+            if self._is_tauri_origin(origin):
+                from gateway.platforms import api_server as _api_server_mod
+                headers = dict(_api_server_mod._CORS_HEADERS)
+                headers["Access-Control-Allow-Origin"] = origin
+                headers["Vary"] = "Origin"
+                headers["Access-Control-Max-Age"] = "600"
+                return headers
+            # 非 tauri/dev origin: 走原 hermes 逻辑 (按 self._cors_origins 配)
+            return _orig(self, origin)
+
+        APIServerAdapter._cors_headers_for_origin = patched_cors_headers
+        logger.info("P8 _cors_headers_for_origin patched ✓ (tauri/dev origin 真返 CORS headers)")
+    else:
+        logger.warning("P8: APIServerAdapter._cors_headers_for_origin 不存在, dev origin 仍会 403")
+
     # P11: 注册 stash middleware 到 self._app.
     # hermes 0.15: self._app 在 async connect() 里建 (api_server.py:4653
     # `self._app = web.Application(middlewares=mws, ...)`), 不是 __init__.
