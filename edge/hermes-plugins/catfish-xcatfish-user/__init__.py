@@ -144,10 +144,43 @@ def register(ctx) -> None:
                 e,
             )
 
+    # Step 2.7: 6/2 晚 BL-CORS-PREV-MODEL-SYNC — **同步**跑 P8/P9 CORS patch.
+    #
+    # 真生产事故 (鸿波 6/2 晚 截图全 chat 挂 "无法连接 hermes API: Load failed"):
+    #
+    # 真因 audit 完毕: P9 CORS patch 一直在 install() 里, 而 install() 跑在
+    # _delayed_install 后台线程, 等 model_tools fully init. 但 hermes gateway 进程
+    # (微信/飞书 + api_server 8642) **不 import model_tools** (那是 chat agent 用的) →
+    # 30s timeout 后 install 跳过 → **P9 patch 从来没真跑过**.
+    #
+    # 5/18 BL-GATEWAY-SOFT-HANDOFF 加 X-Catfish-Prev-Model header 之后 16 天没出问题,
+    # 是因为之前 Companion 走 gateway 8999 直连绕过 hermes CORS. 6/1 BL-API-PATH-AWARE-AUTH
+    # 改走 hermes 8642 后, 真撞到这个一直没生效的 CORS 缺口.
+    #
+    # P9 patch 只依赖 gateway.platforms.api_server module (hermes 启动早期就 import),
+    # **不依赖 model_tools**, 可以同步跑. 提前跑还保证 api_server bind 8642 前
+    # _CORS_HEADERS 就是新值, 第一个 OPTIONS preflight 就含完整 allowlist.
+    try:
+        # 跑 P8 (Tauri origin) + P9 (Allow-Headers 扩 X-Catfish-*) 单独一组
+        _mod._patch_p8_p9_cors()
+        logger.info(
+            "catfish-xcatfish-user: P8/P9 CORS patch 同步应用 ✓ "
+            "(_CORS_HEADERS X-Catfish-* allowlist 真生效, Companion chat 不再撞 preflight)"
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "catfish-xcatfish-user: P8/P9 CORS patch 同步应用失败 (ignored): %s. "
+            "Companion chat 走 hermes 8642 时仍会撞 preflight 拒",
+            e,
+            exc_info=True,
+        )
+
     # Step 3: 后台线程等主流程 ready 再 install
     # 6/1 修: ready 判定只看 model_tools fully init (主线程过了 partial init 段).
     # run_agent / agent.agent_init 是 lazy import (LLM call 时才 import), 不应作
     # ready 判定. install 内部 import 它们时主线程已不 partial, 不撞 circular.
+    # 6/2 晚: P8/P9 同步跑了, install 仍跑全套 (会重复跑 P8/P9 但幂等 — dict update
+    # 是 set-based merge, 重跑等于 no-op).
     def _delayed_install():
         max_wait_s = 30.0
         interval = 0.2
