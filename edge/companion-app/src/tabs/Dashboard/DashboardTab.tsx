@@ -44,6 +44,11 @@ import QuotaCard from "./QuotaCard";
 // import { SessionCleanupCard } from "./SessionCleanupCard";
 import CatalogCard from "./CatalogCard";
 import SkillsMcpCard from "./SkillsMcpCard";
+// 6/2 BL-SKILLS-CARD-SPLIT (鸿波 6/2 凌晨拍 方案 C): MySkillsCard 显员工自己 RecMode
+// 录的 + propose_skill 落地的 skill (~/.catfish/skills/), 含共享按钮占位. 主卡, 上.
+// SkillsMcpCard 改成只显内置+装的, 次卡, 下. 配套 catfish 5 大卖点之 "员工自助生成
+// + 共享" 真兑现 UI.
+import MySkillsCard from "./MySkillsCard";
 // BL-LEARN-SECTION-KILL (5/16): 整个"学习/改进" section 砍 (两张卡都对一般员工无效).
 // - LearningCard: 4 个数字里 3 个是开发者维度 (tool_calls / ship_skill / token=0 bug),
 //   只"对话 24 次"对员工有点用 — ROI 太低不值留卡
@@ -191,8 +196,10 @@ export default function DashboardTab() {
         <ServicesCard />
         <QuotaCard />
         <CatalogCard />
-        {/* SkillsMcpCard = 我装的 skill / mcp 列表 (跟广场浏览不同, 留这里).
-            广场: catfish-web /skills /mcp. */}
+        {/* 6/2 BL-SKILLS-CARD-SPLIT (鸿波 方案 C): "我录的 skill" 主卡上, "已装的" 次卡下.
+            主卡兑现 catfish "员工自助生成 + 共享" 卖点, 共享按钮占位 (skills-hub 周一接);
+            次卡保留作 power-user 排错 (catfish 仓库 8 + ~/.hermes/skills/ 96). */}
+        <MySkillsCard />
         <SkillsMcpCard />
         {/* <CuratorCard /> — 5/16 砍 (BL-CURATOR-CARD-KILL), 见 import 段注释 */}
         {/* BL-SESSION-CLEANUP-KILL (5/16): SessionCleanupCard 已砍.

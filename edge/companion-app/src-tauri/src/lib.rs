@@ -337,7 +337,12 @@ pub fn run() {
             // identity
             commands::identity::identity_info,
             // skills + mcp
+            // 6/2 BL-SKILLS-CARD-SPLIT (鸿波): 拆 2 命令 — list_my_skills (扫 ~/.catfish/skills/,
+            // 员工真生成) + list_installed_skills (扫 catfish 仓库 + ~/.hermes/skills/, 内置/装的).
+            // list_skills 保留 (内部转 installed) — backward compat 兜底.
             commands::skills::list_skills,
+            commands::skills::list_my_skills,
+            commands::skills::list_installed_skills,
             commands::skills::list_mcp_servers,
             // self-evolution: 鲶鱼今天学了什么
             commands::learning::learning_today_stats,

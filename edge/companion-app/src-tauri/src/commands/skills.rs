@@ -155,7 +155,43 @@ fn scan_skills_root(root: &Path, ns_prefix: &str) -> Vec<SkillNamespace> {
     result
 }
 
-fn list_skills_blocking() -> Result<Vec<SkillNamespace>, String> {
+// 6/2 BL-SKILLS-CARD-SPLIT (鸿波 6/2 凌晨拍 方案 C): 真员工生成的 skill 跟内置/装的
+// skill 来源不同, Dashboard 拆成 2 张卡 — "🐟 我录的" (主, 含共享按钮) + "已装的"
+// (次, 排错 / power-user 查). 真物理位置 3 套, 路由表:
+//
+//   ~/.catfish/skills/              → "我录的" (RecMode 真生成 + propose_skill 落地)
+//   <catfish_root>/skills/          → "已装的" - 团队审定 (catfish 仓库公文/合规模板)
+//   ~/.hermes/skills/               → "已装的" - 内置 + marketplaces + LLM 自学
+//
+// 老 list_skills_blocking 现 = list_installed_skills_blocking (合并扫 catfish 仓库 + hermes),
+// list_skills() Tauri 命令保留作 backward compat 返同一份 (实际无外部 caller, 但保
+// 一刻 safety net).
+
+/// 扫 ~/.catfish/skills/ — 员工自己生成的 skill (RecMode + LLM propose_skill).
+/// 共享按钮 (BL-SKILLS-SHARE 5/27 backlog) 的真对象就是这套.
+fn list_my_skills_blocking() -> Result<Vec<SkillNamespace>, String> {
+    let mut result = Vec::new();
+
+    // ~/.catfish/skills/ — aggregator save_skill RPC + propose_skill 真落地
+    // 跟 tool-bridge skill_freeze._resolve_local_skills_root() 同根, env CATFISH_HOME 优先.
+    let my_skills_root = if let Some(home_env) = std::env::var_os("CATFISH_HOME") {
+        PathBuf::from(home_env).join("skills")
+    } else if let Some(home) = home_dir() {
+        home.join(".catfish").join("skills")
+    } else {
+        return Ok(result);  // 没 HOME 也没 CATFISH_HOME → 空
+    };
+
+    // 不加 prefix — 命名空间就是员工自己起的 (personal / <部门>), 不加 🐟 也明确"我"
+    let mut my_namespaces = scan_skills_root(&my_skills_root, "");
+    my_namespaces.sort_by(|a, b| a.namespace.cmp(&b.namespace));
+    result.extend(my_namespaces);
+    Ok(result)
+}
+
+/// 扫 catfish 仓库 + ~/.hermes/skills/ — 团队审定 + 内置 + marketplaces 装的.
+/// 给"已装的 skill / MCP" 次卡用, 给员工排错 / power-user 查"我能用哪些 anthropic skill".
+fn list_installed_skills_blocking() -> Result<Vec<SkillNamespace>, String> {
     let mut result = Vec::new();
 
     // 1. catfish 工程审定 skill — 顶部显示, 带 🐟 前缀强调来源
@@ -167,7 +203,7 @@ fn list_skills_blocking() -> Result<Vec<SkillNamespace>, String> {
         result.extend(catfish_namespaces);
     }
 
-    // 2. hermes skills (LLM 自学 + 内置)
+    // 2. hermes skills (LLM 自学 + 内置 + marketplaces 装的)
     if let Some(home) = home_dir() {
         let hermes_skills = home.join(".hermes").join("skills");
         let mut hermes_namespaces = scan_skills_root(&hermes_skills, "");
@@ -176,6 +212,12 @@ fn list_skills_blocking() -> Result<Vec<SkillNamespace>, String> {
     }
 
     Ok(result)
+}
+
+/// @deprecated 6/2 BL-SKILLS-CARD-SPLIT: 老 caller 兼容, 内部转 installed. 没真 caller
+/// (Companion 已经走拆分后的 2 命令), 留作 safety net 防意外耦合.
+fn list_skills_blocking() -> Result<Vec<SkillNamespace>, String> {
+    list_installed_skills_blocking()
 }
 
 fn list_mcp_servers_blocking() -> Result<Vec<McpServerEntry>, String> {
@@ -224,6 +266,23 @@ fn list_mcp_servers_blocking() -> Result<Vec<McpServerEntry>, String> {
     Ok(result)
 }
 
+/// 6/2 BL-SKILLS-CARD-SPLIT: 拆分后两条新命令.
+#[tauri::command]
+pub async fn list_my_skills() -> Result<Vec<SkillNamespace>, String> {
+    tokio::task::spawn_blocking(list_my_skills_blocking)
+        .await
+        .map_err(|e| format!("内部错误: {e}"))?
+}
+
+#[tauri::command]
+pub async fn list_installed_skills() -> Result<Vec<SkillNamespace>, String> {
+    tokio::task::spawn_blocking(list_installed_skills_blocking)
+        .await
+        .map_err(|e| format!("内部错误: {e}"))?
+}
+
+/// @deprecated 6/2 BL-SKILLS-CARD-SPLIT: 内部转 list_installed_skills 兼容老 caller.
+/// 没真 caller (Companion 已拆 2 命令), 保留作 safety net.
 #[tauri::command]
 pub async fn list_skills() -> Result<Vec<SkillNamespace>, String> {
     tokio::task::spawn_blocking(list_skills_blocking)

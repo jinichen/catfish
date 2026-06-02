@@ -2,15 +2,20 @@
  *
  * Skills 按 namespace 折叠：默认显示 namespace + skill 数，
  * 点击展开看每个 skill 的 name/description。
+ *
+ * 6/2 BL-SKILLS-CARD-SPLIT (鸿波 6/2 凌晨拍 方案 C): 这卡现在**只显内置 / 装的**
+ * skill (catfish 仓库 skills/ + ~/.hermes/skills/), 员工自己生成的拆到 MySkillsCard
+ * 主卡. 卡标题改 "已装的 skill / MCP", 副标"团队审定 + 装的", 给 power-user 排错
+ * 或查"我能用哪些 anthropic skill" 用. hook 从 useSkillsAndMcp → useInstalledSkillsAndMcp.
  */
 
 import { useState } from "react";
-import { useSkillsAndMcp } from "../../hooks/useIdentity";
+import { useInstalledSkillsAndMcp } from "../../hooks/useIdentity";
 import type { SkillNamespace } from "../../types/identity";
 import StatusDot from "../../components/StatusDot";
 
 export default function SkillsMcpCard() {
-  const { skills, mcps, error } = useSkillsAndMcp();
+  const { skills, mcps, error } = useInstalledSkillsAndMcp();
 
   const totalSkills = skills?.reduce((sum, ns) => sum + ns.skills.length, 0) ?? 0;
   const totalNamespaces = skills?.length ?? 0;
@@ -25,7 +30,10 @@ export default function SkillsMcpCard() {
         gridColumn: "1 / -1", // 占整行: skills 列表多, 用宽度比用高度更好读
       }}
     >
-      <h3 style={{ marginBottom: "var(--space-3)" }}>Skills & MCP</h3>
+      <h3 style={{ marginBottom: "var(--space-1)" }}>已装的 skill / MCP</h3>
+      <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginBottom: "var(--space-3)" }}>
+        团队审定 + 内置 + marketplaces 装的 · 排错 / 查"我能用哪些"
+      </div>
 
       {error && (
         <div style={{ color: "var(--status-err)", fontSize: 12 }}>{error}</div>
