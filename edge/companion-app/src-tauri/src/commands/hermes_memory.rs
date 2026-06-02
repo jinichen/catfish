@@ -15,6 +15,11 @@ use std::fs;
 
 const ENTRY_DELIMITER: &str = "\n§\n";
 
+// BL-DASHBOARD-MEMORY-CAP-FROM-CONFIG (2026-06-03): hermes 默认 cap
+// 仅当 ~/.hermes/config.yaml memory 节缺失时兜底
+const DEFAULT_USER_CHAR_LIMIT: usize = 1375;
+const DEFAULT_MEMORY_CHAR_LIMIT: usize = 2200;
+
 #[derive(Debug, Serialize)]
 pub struct HermesMemoryView {
     /// USER.md 里的 entries (target=user 写的, 员工身份/关系/偏好)
@@ -35,6 +40,34 @@ fn home_dir() -> Option<std::path::PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(std::path::PathBuf::from)
+}
+
+/// BL-DASHBOARD-MEMORY-CAP-FROM-CONFIG (2026-06-03): 真读 ~/.hermes/config.yaml
+/// 真 memory.user_char_limit / memory.memory_char_limit 真值. fallback default.
+///
+/// 真之前 hermes_memory_read 真硬编码 1375/2200, 真鸿波 config.yaml 真 3500/5000
+/// 真生效在 hermes service (agent_init.py:1079 真 mem_config.get), 真 Dashboard
+/// 真显假象 (USER 1059/1375 真 77% 撞 cap, 真实 1059/3500 真 30%).
+fn read_hermes_config_limits(home: &std::path::Path) -> (usize, usize) {
+    let config_path = home.join(".hermes").join("config.yaml");
+    let Ok(text) = fs::read_to_string(&config_path) else {
+        return (DEFAULT_USER_CHAR_LIMIT, DEFAULT_MEMORY_CHAR_LIMIT);
+    };
+    let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(&text) else {
+        return (DEFAULT_USER_CHAR_LIMIT, DEFAULT_MEMORY_CHAR_LIMIT);
+    };
+    let memory_node = value.get("memory");
+    let user_limit = memory_node
+        .and_then(|m| m.get("user_char_limit"))
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(DEFAULT_USER_CHAR_LIMIT);
+    let memory_limit = memory_node
+        .and_then(|m| m.get("memory_char_limit"))
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(DEFAULT_MEMORY_CHAR_LIMIT);
+    (user_limit, memory_limit)
 }
 
 fn parse_entries(content: &str) -> Vec<String> {
@@ -67,13 +100,16 @@ pub fn hermes_memory_read() -> Result<HermesMemoryView, String> {
     let user_size = fs::metadata(&user_path).map(|m| m.len()).unwrap_or(0);
     let memory_size = fs::metadata(&memory_path).map(|m| m.len()).unwrap_or(0);
 
+    // BL-DASHBOARD-MEMORY-CAP-FROM-CONFIG (2026-06-03): 真读 config.yaml 真实 cap
+    // 真不再硬编码 (鸿波 config.yaml 真 3500/5000, 真之前 UI 真显假象 77%)
+    let (user_char_limit, memory_char_limit) = read_hermes_config_limits(&home);
+
     Ok(HermesMemoryView {
         user_entries: parse_entries(&user_content),
         memory_entries: parse_entries(&memory_content),
         total_bytes: user_size + memory_size,
-        // hermes config.yaml 默认值, UI 显示 usage 比例用
-        user_char_limit: 1375,
-        memory_char_limit: 2200,
+        user_char_limit,
+        memory_char_limit,
         user_file_path: user_path.to_string_lossy().to_string(),
         memory_file_path: memory_path.to_string_lossy().to_string(),
     })
