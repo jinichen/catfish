@@ -1803,6 +1803,11 @@ def _apply_max_tokens(params: dict, model) -> None:
 #   gemini: 转 cached_content (有 32K 最低 cache size, gemini-3.5-flash; pro 4K)
 #   deepseek: openai 协议透传, server 端自动 implicit cache (不依赖客户端标记)
 #   私有 vLLM (openai/qwen_*): vLLM prefix cache 自动, 加标记 silently 忽略
+#
+# 6/2 晚事故经审: 鸿波生产 chat 全挂的真原因是 **hermes API server 8642 CORS 缺
+# X-Catfish-* header allowlist**, request preflight 就被浏览器拒, 根本没到 gateway.
+# 跟本 cache_control 0 关系. 我曾误"预防性"改 allowlist 收紧, 已 revert. 保持原
+# blocklist 模式.
 _CACHE_UNSUPPORTED_PROVIDERS = ("nvidia_nim/", "groq/")
 
 

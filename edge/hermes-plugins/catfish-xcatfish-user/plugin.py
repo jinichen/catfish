@@ -685,6 +685,14 @@ _TAURI_ORIGINS = ("tauri://localhost", "http://tauri.localhost")
 _CATFISH_EXTRA_CORS_HEADERS = (
     "X-Catfish-User",
     "X-Catfish-Internal",
+    # 6/2 晚 BL-CORS-PREV-MODEL: 真生产事故 — Companion chat.ts 真发 X-Catfish-Prev-Model
+    # (跟 internal_models follow-user model 联动), hermes CORS preflight 拒, 整个
+    # /v1/chat/completions 死. 浏览器 console:
+    #   "Request header field X-Catfish-Prev-Model is not allowed by
+    #    Access-Control-Allow-Headers"
+    # 单条不在 allowlist 整 preflight 失败, 顺带把 X-Catfish-User 也报错. 加上.
+    "X-Catfish-Prev-Model",
+    "X-Catfish-Source",  # 顺手 — BL-RBAC-DAY4-HARDENING audit header, Companion 可能发
     "X-Hermes-Session-Id",
     "X-Hermes-Session-Key",
 )
