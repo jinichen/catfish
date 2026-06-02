@@ -1837,7 +1837,14 @@ def _apply_prompt_cache_markers(params: dict, model) -> None:
     2 个未来扩展 (user history 长 prompt 时再加).
 
     幂等: 若 content 已经是 list-of-blocks 且最后块已有 cache_control, 不重复.
+
+    6/2 晚 BL-CACHE-MARKER-EMERGENCY-OFF v2: 真生产 CORS 修通后所有 model
+    撞 400 BadRequest, 不只 Gemini. 真原因暂不明 (可能 LiteLLM 1.86 对所有 provider
+    都不接 cache_control content list-of-blocks), 暂时**默认关** 防生产挂.
+    env CATFISH_CACHE_MARKER_ENABLE=1 显式开 (上线前周一真测过几个 provider 再 toggle).
     """
+    if os.environ.get("CATFISH_CACHE_MARKER_ENABLE", "").lower() not in ("1", "true", "yes"):
+        return  # 6/2 晚事故: 默认关, 真生产稳定为先
     if not _provider_supports_cache_marker(model.upstream.model):
         return
 

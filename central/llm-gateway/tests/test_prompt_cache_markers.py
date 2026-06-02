@@ -26,6 +26,13 @@ from catfish_gateway.app import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _enable_cache_marker_for_test(monkeypatch):
+    """6/2 晚 BL-CACHE-MARKER-EMERGENCY-OFF v2: 默认关后, test 显式 set env 开,
+    保留 apply_markers 真行为单测覆盖. 生产默认仍关 (env 不设)."""
+    monkeypatch.setenv("CATFISH_CACHE_MARKER_ENABLE", "1")
+
+
 def _model(upstream_name: str) -> SimpleNamespace:
     return SimpleNamespace(upstream=SimpleNamespace(model=upstream_name))
 
