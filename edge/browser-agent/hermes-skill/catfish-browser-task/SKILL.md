@@ -321,3 +321,79 @@ terminal 调：curl -s https://api.github.com/repos/NousResearch/hermes-agent | 
 - **永不存**：cookies、Authorization header、session token
 
 如果员工问"记一下我公司 Jira 地址是 X"，可以用 memory 工具记，但**只记公开信息**，不记凭据。
+
+---
+
+## 中国企业内部平台特征 (2026-05-27 mylearning.cn 实战经验)
+
+中国电信 mylearning.cn / 知识中心 kc.zhixueyun.com 等中国企业内部学习/OA 平台有一类共性反 catfish_browser_* 标准模式特征，全部踩过坑，记在这做参考。
+
+### 1. session 黏着 (mylearning.cn 真生产)
+
+一旦访问了 `cms.mylearning.cn` 的子页面 (如人工智能学习专区)，再导航到 `www.mylearning.cn/p5/index.html` 会被**自动重定向回之前访问的子页面**。这是 cookies/session 状态保持。
+
+**对策**: 要清除黏着, 需要 (a) 清 cookie / (b) 用全新 browser session / (c) 永远从 `www.mylearning.cn/p5/index.html` 进入, 不要从 root `www.mylearning.cn` 进 (root 会 session 黏着撞 execution context destroyed)。
+
+### 2. tab 切换 3 种模式
+
+| 模式 | 行为 | 验证信号 |
+|---|---|---|
+| 经典 SPA | 点 tab → AJAX 内容替换, URL 不变 | snapshot diff |
+| 搜索 + tab 混合 | 点 "人工智能" tab → **自动填入搜索框 "人工智能" + 触发搜索** + SPA 切换 | 搜索框 value = tab 名 |
+| swiper/carousel + tab | swiper 内 tab 切换, tab 元素**常为 LI 不在 accessibility tree** | DOM 直查 (createTreeWalker / querySelectorAll) |
+
+**坑**: `catfish_browser_snapshot` 默认走 accessibility tree, LI tab 取不到. 真生产 mylearning.cn 5/27 踩过.
+
+**对策**:
+- LI tab → 用 `browser_console` 跑 JS `document.querySelectorAll('.tab-item')` 定位
+- swiper 元素要先 `el.scrollIntoView({block: 'center'})` 再 `.click()`
+- 坐标点击不一定触发 SPA 事件处理器, 用 `browser_console execute JS click()` 替代
+
+### 3. 跨域 OAuth 授权跳转链 (mylearning.cn → 知识中心)
+
+点击"人工智能课程库"卡片真触发跨域 OAuth 链:
+
+```
+search.mlt-med.com (搜索结果)
+  → open.mylearning.cn (授权确认页, 点 a[name="verifyBtn"])
+  → kc.zhixueyun.com (知识中心 SPA, /#/study/subject/detail/{uuid})
+```
+
+**坑**:
+- 直接导航 kc.zhixueyun.com 的 `#/study/subject/detail/{uuid}` 只显示导航壳不加载内容
+- **必须**从 mylearning.cn 首页经 OAuth 链跳进来才能正常渲染
+- open.mylearning.cn 授权页要主动点 `a[name="verifyBtn"]` 才放行
+
+### 4. kc.zhixueyun.com SPA 特征
+
+- 导航栏 (推荐 / 课程 / 专题 / AI学) 是 **DIV 非 A 标签**, 坐标点击可能不触发 SPA 事件处理器 → 用 JS `.click()` 替代
+- 首页搜索框 `input.ant-input` (placeholder="请输入您要搜索的内容") 但**按 Enter 不一定触发搜索** → 改用 input event + 找搜索按钮真点击
+- mylearning.cn 首页搜索框依赖 JS 动态加载, 初始 DOM 没有 input — 先等 (auto-waiting) 再操作
+
+### 5. 工具可用性 (真生产 2026-05-27 验)
+
+| 工具 | 真状态 | 备注 |
+|---|---|---|
+| `browser_vision` | ✗ 认证失败 | 缺 X-Catfish-User header, 待平台修 |
+| `catfish_browser_screenshot` | ✗ 内部错误 | `_MAX_SCREENSHOT_BYTES not defined`, 待修 |
+| `catfish_browser_*` (goto/click/fill/snapshot) | ✓ | 正常 |
+| `catfish_screenshot mode=fullscreen` | ✓ | 拍主屏 Chrome 兜底, 精度 OK |
+| `browser_console` (JS 直执行) | ✓ | 处理 LI tab / DIV 导航必备 |
+
+### 真生产场景模板
+
+```
+员工: 帮我登 mylearning.cn 看人工智能课程库
+
+正确路径:
+1. catfish_browser_goto https://www.mylearning.cn/p5/index.html  (不是 root!)
+2. catfish_browser_snapshot 拿首页
+3. 找"人工智能"tab/卡片 → 看是不是在 accessibility tree
+   - 在 → catfish_browser_click ref=e22
+   - 不在 (LI / swiper) → browser_console "document.querySelector('.tab-item:nth-child(N)').click()"
+4. 等 OAuth 跳转链
+   - 落 open.mylearning.cn → catfish_browser_click 'a[name="verifyBtn"]'
+   - 落 kc.zhixueyun.com → 内容应已渲染
+5. 抓课程列表 (走 catfish_browser_snapshot)
+```
+
