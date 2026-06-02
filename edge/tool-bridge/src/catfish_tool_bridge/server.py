@@ -418,6 +418,25 @@ async def _handle_recmode_save_skill(req_id: Any, params: Dict[str, Any]) -> Dic
         except Exception:
             logger.warning("save_skill: keep_forever flag 写失败 (不致命)", exc_info=True)
 
+    # 6/2 BL-RECMODE-AUTO-CLEAN-RAW (鸿波 6/2 凌晨): skill 真保存后, 该 session
+    # 的训练原料 (events.jsonl + screenshots/ + transcripts.jsonl) 变成历史冗余,
+    # 5-50 MB 占员工硬盘. 默认调 cleanup_consumed_raw 删原料 (保留 meta.json +
+    # skill_draft/ — 员工成果范畴, 不动). _keep_forever 标过的整 session 跳.
+    # 失败完全不致命 — log warning 不影响 save_skill 主结果.
+    cleanup_result: dict[str, Any] = {"ok": False, "skipped": True, "reason": "未调"}
+    if not keep_forever:
+        try:
+            from .recmode import cleanup as _rec_cleanup
+            session_dir = draft_dir.parent.parent.parent
+            cleanup_result = _rec_cleanup.cleanup_consumed_raw(
+                session_dir, skills_root=skills_root
+            )
+        except Exception as _clean_err:  # noqa: BLE001
+            logger.warning(
+                "save_skill: cleanup_consumed_raw 失败 (不致命): %s", _clean_err, exc_info=True,
+            )
+            cleanup_result = {"ok": False, "error": str(_clean_err)}
+
     return _success(req_id, {
         "ok": True,
         "final_dir": str(final_dir),
@@ -425,6 +444,9 @@ async def _handle_recmode_save_skill(req_id: Any, params: Dict[str, Any]) -> Dic
         "name": name,
         "moved": True,
         "keep_forever": keep_forever,
+        # 6/2 BL-RECMODE-AUTO-CLEAN-RAW: 回 cleanup 结果让 Companion / 单测能看
+        # 真删了多少 MB (Toast "释放 X MB 硬盘" 给员工反馈). 失败时 ok=False.
+        "raw_cleanup": cleanup_result,
     })
 
 

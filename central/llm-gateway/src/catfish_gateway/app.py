@@ -1245,12 +1245,23 @@ async def api_audit_me(
     day_cutoff = now_ms - 86_400_000
 
     summary = quota.audit_summary_user_since(effective_email, day_cutoff)
+
+    # 6/2 BL-PRIVACY-CARD-QUOTA-PROGRESS (鸿波 6/2 凌晨): PrivacyCard 把"今天用了
+    # 7.99M"改成 quota 进度条. 这里加 quota_day_limit 字段, 客户端就能渲染
+    # 已用/上限 = 百分比. /api/quota/me 早已返这字段, 但 PrivacyCard 调的是
+    # /api/audit/me — 不给员工拼两个 API, 直接在这条加上.
+    # tokens_per_day=0 表示该 user 不限 (yaml overrides 没配 → 走 default_user 1M).
+    quota_cfg = quota.load_quota_config()
+    user_q = quota_cfg.per_user_for(effective_email)
+    quota_day_limit = user_q.tokens_per_day  # 0 = 不限
+
     return {
         "user_email": effective_email,
         "department": real_department,
         "since_ms": day_cutoff,
         # 让客户端知道"中央存的字段长这样", 防员工担心还有别的没暴露
         "schema_note": "本端点只返 metadata: count / tokens / model / 时间戳. 中央不存 prompt / response 文本.",
+        "quota_day_limit": quota_day_limit,
         **summary,  # request_count / total_tokens / by_model / first_seen_ts / last_seen_ts
     }
 

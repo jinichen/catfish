@@ -32,10 +32,29 @@
 老的 `_is_kept_forever` 标志 + `.keep_forever` flag 文件保留作**向后兼容** (员工
 历史录屏可能勾过"保留作 ground truth"), 但**新录屏默认就不删**, 这标志成 cosmetic.
 
+# 6/2 BL-RECMODE-AUTO-CLEAN-RAW (鸿波 6/2 凌晨追加)
+
+5/25 哲学保留 — 整 session 不自动删. 但**拆开看**: 训练原料 (events.jsonl + 截图
++ 转写) 跟员工成果 (skill 本身 + skill_draft + meta.json) 是两类东西. 原料消费完
+就是历史冗余 (5-50 MB / session 占员工硬盘大头, selector_repair 也用不到, skill
+runtime 看 SKILL.md + main.py).
+
+新增 `cleanup_consumed_raw(session_dir)`:
+- save_skill RPC (员工点"保存") 完成后**自动调一次**
+- 只删原料 3 文件/目录 (events.jsonl / screenshots/ / transcripts.jsonl)
+- 保留员工成果 (meta.json / skill_draft/)
+- .keep_forever 标过的整 session 跳 (员工opt-out 主权)
+
+不破"员工主权" — 没动员工"做的东西", 只清"训练用的原料". 跟"Word 自动清剪贴板"
+不删 .docx 本身同理.
+
 # Returns
 
 `cleanup_old_recordings()` 返 dict {scanned, deleted, kept_forever, still_fresh,
 errors, freed_bytes, deleted_session_ids} 让 caller (Dashboard / CLI) 打 summary.
+
+`cleanup_consumed_raw(session_dir)` 返 dict {ok, has_saved_skill, removed_files,
+freed_bytes, error} 让 caller (save_skill RPC / Companion) 反馈"释放 X MB".
 """
 from __future__ import annotations
 
@@ -187,6 +206,169 @@ def cleanup_old_recordings(
             logger.warning("RecMode cleanup 删 %s 失败: %s", sd.name, e)
 
     return stats
+
+
+# ── 6/2 BL-RECMODE-AUTO-CLEAN-RAW (鸿波 6/2 凌晨) ────────────────────────
+#
+# 5/25 BL-RECMODE-NO-AUTO-DELETE 撤了"后台 daemon 全删整个 session", 设计哲学
+# "员工主权, catfish 不删". 6/2 鸿波重新审视: 训练原料 (events.jsonl + 截图 +
+# 转写) skill 真"保存"到 ~/.catfish/skills/ 后变成历史冗余, 5-50 MB / session
+# 占员工硬盘大头. 跟"员工成果" (skill 本身 + skill_draft 草稿 + meta.json) 不
+# 同性质 — 原料是消费完的工业垃圾.
+#
+# 拆分清理: skill 真保存后, 删该 session 的**原料**, 保留**成果**.
+# 不破"员工主权" — 没删员工"做的东西", 只清"训练用的原料".
+
+# 训练原料文件名 (相对 session_dir 的 path). _consumable_raw = 跑完可以丢的.
+# screenshots/ 是目录, 删整个; events.jsonl / transcripts.jsonl 是单文件.
+_CONSUMABLE_RAW_TARGETS = ("events.jsonl", "transcripts.jsonl", "screenshots")
+
+
+def _skills_root() -> Path:
+    """~/.catfish/skills/ — 员工真"保存" 的 skill 落地处."""
+    catfish_home = os.environ.get("CATFISH_HOME", "").strip()
+    if catfish_home:
+        return Path(catfish_home).expanduser() / "skills"
+    return Path.home() / ".catfish" / "skills"
+
+
+def _session_has_saved_skill(session_dir: Path, skills_root: Path) -> bool:
+    """查 session_dir/skill_draft/<ns>/<name>/ 是否至少有 1 个真"保存" 到 skills_root.
+
+    "保存" 的判定: skills_root/<ns>/<name>/SKILL.md 真存在.
+    save_skill RPC 用 shutil.copytree 复制整个 draft 到 skills_root, SKILL.md
+    是 write_skill_files 一定写的 file, 用它判断 skill 真在.
+    """
+    draft_root = session_dir / "skill_draft"
+    if not draft_root.exists():
+        return False
+    # session_dir/skill_draft/<ns>/<name>/SKILL.md (2 层 glob)
+    for skill_md in draft_root.glob("*/*/SKILL.md"):
+        # skill_md.parent.parent = <ns>, skill_md.parent = <name>
+        ns = skill_md.parent.parent.name
+        name = skill_md.parent.name
+        if (skills_root / ns / name / "SKILL.md").exists():
+            return True
+    return False
+
+
+def cleanup_consumed_raw(
+    session_dir: Path,
+    skills_root: Path | None = None,
+    dry_run: bool = False,
+) -> dict:
+    """删 session 的训练原料 (events.jsonl + screenshots/ + transcripts.jsonl).
+
+    6/2 BL-RECMODE-AUTO-CLEAN-RAW: save_skill RPC 完成后自动调一次. skill 真
+    "保存" 后, 原料是历史冗余, 不属于"员工成果" 范畴, 清掉省员工硬盘.
+
+    保留 (员工成果):
+    - meta.json (session 元数据, KB 级, 给 Dashboard 列录屏用)
+    - skill_draft/ (没保存的草稿可能还在, 员工后续可能补存)
+    - .keep_forever (员工显式标记 — 整 session 跳过任何清理)
+
+    删 (训练原料, 已消费):
+    - events.jsonl (CDP 操作流, ~50-500 KB)
+    - screenshots/ (截图 PNG, 大头 5-50 MB)
+    - transcripts.jsonl (语音转写, KB 级)
+
+    Args:
+        session_dir: ~/.catfish/recordings/<sid>/
+        skills_root: ~/.catfish/skills/ (默认 home, 单测可传 tmp 路径)
+        dry_run: 只看不删
+
+    Returns:
+        {ok: bool, has_saved_skill: bool, removed_files: [...],
+         freed_bytes: int, error: str | None}
+
+    Safety:
+    - session 没真"保存" skill (skills_root/<ns>/<name>/ 都不在) → 不删, ok=False
+    - .keep_forever 标了 → 跳过, ok=False
+    - 文件不存在 → 跳过 (不算错)
+    - 路径必须在 session_dir 范围内 (防 symlink/.. 越界)
+    """
+    result: dict = {
+        "ok": False,
+        "has_saved_skill": False,
+        "removed_files": [],
+        "freed_bytes": 0,
+        "error": None,
+    }
+
+    if not session_dir.exists() or not session_dir.is_dir():
+        result["error"] = f"session_dir 不存在或不是目录: {session_dir}"
+        return result
+
+    sr = (skills_root or _skills_root()).resolve()
+    sd = session_dir.resolve()
+
+    # opt-out: 员工显式标了 .keep_forever 整 session 都跳
+    if _is_kept_forever(sd):
+        result["error"] = "session 标了 .keep_forever, 跳过清原料"
+        logger.info("cleanup_consumed_raw 跳过 %s (.keep_forever)", sd.name)
+        return result
+
+    has_saved = _session_has_saved_skill(sd, sr)
+    result["has_saved_skill"] = has_saved
+    if not has_saved:
+        result["error"] = "session 没任何 skill 真保存到 skills_root, 不清原料"
+        logger.debug("cleanup_consumed_raw 跳过 %s (no saved skill)", sd.name)
+        return result
+
+    # 真删原料 (3 个 target)
+    freed = 0
+    removed: list[str] = []
+    for target in _CONSUMABLE_RAW_TARGETS:
+        p = sd / target
+        if not p.exists():
+            continue
+        # 路径越界保险 (防 symlink 跳出 sd) — resolve 后必须仍在 sd 子树
+        try:
+            if not str(p.resolve()).startswith(str(sd)):
+                logger.warning("cleanup_consumed_raw: %s resolve 越界 %s, 跳", target, sd)
+                continue
+        except OSError:
+            continue
+        # 算大小
+        size = 0
+        if p.is_dir():
+            try:
+                for f in p.rglob("*"):
+                    if f.is_file():
+                        try:
+                            size += f.stat().st_size
+                        except OSError:
+                            pass
+            except OSError:
+                pass
+        else:
+            try:
+                size = p.stat().st_size
+            except OSError:
+                pass
+        if dry_run:
+            removed.append(str(p))
+            freed += size
+            continue
+        try:
+            if p.is_dir():
+                shutil.rmtree(p)
+            else:
+                p.unlink()
+            removed.append(str(p))
+            freed += size
+        except OSError as e:
+            logger.warning("cleanup_consumed_raw: 删 %s 失败 (不致命): %s", p, e)
+
+    result["ok"] = True
+    result["removed_files"] = removed
+    result["freed_bytes"] = freed
+    logger.info(
+        "cleanup_consumed_raw %s%s: skill 已保存, 删 %d 个原料文件/目录, 释放 %.1f MB",
+        sd.name, " [dry_run]" if dry_run else "",
+        len(removed), freed / 1024 / 1024,
+    )
+    return result
 
 
 def list_recordings_with_meta() -> list[dict]:

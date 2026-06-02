@@ -95,6 +95,39 @@ def register(ctx) -> None:
     ctx.register_memory_provider(provider)
     logger.info("catfish-memory plugin registered ✓")
 
+    # 6/2 BL-MEMORY-ROUTER-A2 (鸿波 6/2 凌晨拍): catfish-memory 接管 memory tool.
+    # 用 ctx.register_tool(override=True) 替换 hermes builtin memory tool (跟
+    # browser_navigate 5/6 同 pattern), 5 kind 路由 (identity / project_fact /
+    # workflow / journal / todo). 修 5/24 实盘 70% 跑偏问题.
+    try:
+        if hasattr(ctx, "register_tool"):
+            ctx.register_tool(
+                name="memory",
+                toolset="memory",
+                schema=provider.get_catfish_memory_schema(),
+                handler=lambda args, **kw: provider.handle_memory_tool(args, **kw),
+                check_fn=lambda: provider.is_available(),
+                override=True,
+                emoji="🧠",
+                description=(
+                    "catfish 智能 memory 路由器 (替换 hermes builtin). 按 kind 路由 5 仓库."
+                ),
+            )
+            logger.info(
+                "catfish-memory: 替换 hermes builtin memory tool ✓ (5 kind 路由)"
+            )
+        else:
+            logger.warning(
+                "catfish-memory: ctx.register_tool 不支持, memory tool override 跳过. "
+                "hermes 0.15 起应该有, 检查 PluginContext."
+            )
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "catfish-memory: memory tool override 失败 (ignored): %s. "
+            "退化到 hermes builtin memory tool (70%% 跑偏问题不修).",
+            e,
+        )
+
     # 5/20 BL-CATFISH-TODO-SYNC v0.1.6: catfish-memory 顺手 exec catfish-todo-sync
     # 的 catfish_todo_sync.py 文件, 直接调 _apply_patch 应用 monkey-patch.
     # 用 importlib.util.spec_from_file_location 绕过 "包名带连字符不能 import" 问题.

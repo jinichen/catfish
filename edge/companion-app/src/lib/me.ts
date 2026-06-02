@@ -321,6 +321,9 @@ export interface MyAuditSummary {
   by_model: { model: string; count: number; total_tokens: number }[];
   first_seen_ts: number | null;
   last_seen_ts: number | null;
+  /** 6/2 BL-PRIVACY-CARD-QUOTA-PROGRESS: 员工本日 token 上限. 0 = 不限.
+   * PrivacyCard 用来渲染"本月配额 ███░░ 用了 / 上限" 进度条. */
+  quota_day_limit: number;
 }
 
 export async function fetchMyAudit(): Promise<MyAuditSummary> {

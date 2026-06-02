@@ -95,9 +95,11 @@ import WebPortalLink from "./WebPortalLink";
 // 跟 #76 (CLI privacy-audit) / #79 (gateway /api/audit/me) / #78 (员工 doc) 配套.
 // 单独 section 让员工一眼看到"我能自验"信号 — 透明性 = 信任卖点.
 import PrivacyCard from "./PrivacyCard";
-// BL-RECMODE-DASHBOARD-UI (#75, 5/25): "我的录屏" 卡 — 跟 PrivacyCard 同 section
-// (本机数据员工主权). 配套 #74 backend 撤了 cleanup daemon, 让员工自己列/删录屏.
-import RecordingsCard from "./RecordingsCard";
+// 6/2 BL-DASHBOARD-DROP-RECORDINGS-CARD (鸿波 6/2 凌晨): RecordingsCard 整卡删.
+// 前提是 #17 BL-RECMODE-AUTO-CLEAN-RAW 默认 skill 生成完自动清原料 → 录屏目录
+// 99% 时间空 / 只剩 KB 级 meta + skill_draft, 卡 99% 空着 = UI noise. PrivacyCard
+// 🟢 本机存储区加 1 行说明 (路径仍指向 ~/.catfish/recordings/, Finder/CLI 还能用).
+// import RecordingsCard from "./RecordingsCard";  // 删 ← 历史: 5/25 #75 ship
 // BL-WECHAT-CATFISH-BIND v1 (5/26 鸿波): WeChat ↔ catfish 员工 email 绑定状态卡.
 // 跟隐私同 section — IM 平台用户 ↔ 真员工 隔离也是隐私红线 (防 100 个 WeChat
 // 用户记忆串到一个虚拟员工身上).
@@ -147,17 +149,17 @@ export default function DashboardTab() {
         <AgentPrefsCard />
       </CollapsibleSection>
 
-      {/* BL-EMPLOYEE-PRIVACY-VERIFICATION (#77, 5/25) + BL-RECMODE-DASHBOARD-UI (#75, 5/25):
+      {/* BL-EMPLOYEE-PRIVACY-VERIFICATION (#77, 5/25):
           隐私 + 本机数据主权一组. 默认开 — 透明性卖点要让员工立刻看到, 不藏折叠下.
-          PrivacyCard: 中央存了啥 metadata + 本机数据归属表 + CLI/doc 入口.
-          RecordingsCard: 我的录屏列表 (本机) + Finder 跳转 + 手动删 (catfish 不自动删). */}
+          PrivacyCard: 中央存了啥 metadata + 本机数据归属表 (含录屏路径) + quota 进度.
+          6/2 BL-DASHBOARD-DROP-RECORDINGS-CARD (鸿波): 删 RecordingsCard, 录屏说明
+          1 行挪进 PrivacyCard. count 3→2. */}
       <CollapsibleSection
         id="privacy"
         title="🔒 隐私 / 本机数据"
-        count={3}
+        count={2}
       >
         <PrivacyCard />
-        <RecordingsCard />
         {/* BL-WECHAT-CATFISH-BIND v1 (5/26 鸿波): IM 平台用户 ↔ 真员工 email 绑定状态.
             放隐私 section: 绑错 = 不同员工记忆串话 = 跟"本机数据归属"同级别隐私问题. */}
         <WeChatBindingCard />

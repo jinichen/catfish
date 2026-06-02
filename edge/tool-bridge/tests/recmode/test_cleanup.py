@@ -118,6 +118,129 @@ def test_cleanup_custom_ttl(recordings_root):
     assert stats["deleted"] == 1
 
 
+# ── 6/2 BL-RECMODE-AUTO-CLEAN-RAW: cleanup_consumed_raw 测试 ─────────────
+
+
+def _mk_session_with_full_raw(
+    root: Path,
+    sid: str,
+    *,
+    keep_forever: bool = False,
+    with_draft_skill: tuple[str, str] | None = ("personal", "demo_skill"),
+):
+    """造 session 含完整原料 (events.jsonl + screenshots/*.png + transcripts.jsonl)
+    + 可选 skill_draft/<ns>/<name>/SKILL.md."""
+    sd = root / sid
+    sd.mkdir(parents=True)
+    (sd / "meta.json").write_text(
+        json.dumps({"session_id": sid, "started_at": time.time()}), encoding="utf-8",
+    )
+    if keep_forever:
+        (sd / ".keep_forever").touch()
+    # 训练原料 3 类
+    (sd / "events.jsonl").write_text('{"e": 1}\n{"e": 2}\n', encoding="utf-8")
+    (sd / "screenshots").mkdir()
+    (sd / "screenshots" / "001.png").write_bytes(b"png" * 1000)  # ~3 KB
+    (sd / "screenshots" / "002.png").write_bytes(b"png" * 1000)
+    (sd / "transcripts.jsonl").write_text('{"t": "hello"}\n', encoding="utf-8")
+    # skill_draft
+    if with_draft_skill:
+        ns, name = with_draft_skill
+        draft = sd / "skill_draft" / ns / name
+        draft.mkdir(parents=True)
+        (draft / "SKILL.md").write_text("# demo", encoding="utf-8")
+        (draft / "main.py").write_text("def run(): pass\n", encoding="utf-8")
+        (draft / "recmode_meta.json").write_text(
+            json.dumps({"namespace": ns, "name": name}), encoding="utf-8",
+        )
+    return sd
+
+
+def test_cleanup_consumed_raw_skipped_when_no_saved_skill(recordings_root, tmp_path):
+    """没真"保存"到 skills_root → 不删任何东西."""
+    sd = _mk_session_with_full_raw(recordings_root, "rec_unsaved")
+    skills_root = tmp_path / "skills"
+    skills_root.mkdir()
+    # 故意不 copy 到 skills_root
+    result = cl.cleanup_consumed_raw(sd, skills_root=skills_root)
+    assert result["ok"] is False
+    assert result["has_saved_skill"] is False
+    # 原料 3 类全留
+    assert (sd / "events.jsonl").exists()
+    assert (sd / "screenshots").exists()
+    assert (sd / "transcripts.jsonl").exists()
+
+
+def test_cleanup_consumed_raw_deletes_when_skill_saved(recordings_root, tmp_path):
+    """skill 真在 ~/.catfish/skills/<ns>/<name>/ → 删 3 类原料, 保留 meta + draft."""
+    sd = _mk_session_with_full_raw(recordings_root, "rec_saved")
+    skills_root = tmp_path / "skills"
+    saved = skills_root / "personal" / "demo_skill"
+    saved.mkdir(parents=True)
+    (saved / "SKILL.md").write_text("# demo", encoding="utf-8")  # 模拟员工已保存
+    result = cl.cleanup_consumed_raw(sd, skills_root=skills_root)
+    assert result["ok"] is True
+    assert result["has_saved_skill"] is True
+    # 原料 3 类删
+    assert not (sd / "events.jsonl").exists()
+    assert not (sd / "screenshots").exists()
+    assert not (sd / "transcripts.jsonl").exists()
+    # 成果保留
+    assert (sd / "meta.json").exists()
+    assert (sd / "skill_draft" / "personal" / "demo_skill" / "SKILL.md").exists()
+    # 释放字节数 > 0
+    assert result["freed_bytes"] > 0
+
+
+def test_cleanup_consumed_raw_keep_forever_skipped(recordings_root, tmp_path):
+    """.keep_forever 标了 → 跳过 (员工 opt-out 主权)."""
+    sd = _mk_session_with_full_raw(recordings_root, "rec_keep", keep_forever=True)
+    skills_root = tmp_path / "skills"
+    saved = skills_root / "personal" / "demo_skill"
+    saved.mkdir(parents=True)
+    (saved / "SKILL.md").write_text("# demo", encoding="utf-8")
+    result = cl.cleanup_consumed_raw(sd, skills_root=skills_root)
+    assert result["ok"] is False
+    assert "keep_forever" in (result["error"] or "")
+    assert (sd / "events.jsonl").exists()  # 没删
+
+
+def test_cleanup_consumed_raw_dry_run(recordings_root, tmp_path):
+    """dry_run=True 计数有但实际没删."""
+    sd = _mk_session_with_full_raw(recordings_root, "rec_dry")
+    skills_root = tmp_path / "skills"
+    saved = skills_root / "personal" / "demo_skill"
+    saved.mkdir(parents=True)
+    (saved / "SKILL.md").write_text("# demo", encoding="utf-8")
+    result = cl.cleanup_consumed_raw(sd, skills_root=skills_root, dry_run=True)
+    assert result["ok"] is True
+    assert result["freed_bytes"] > 0  # 计数仍有
+    # 但实际文件没删
+    assert (sd / "events.jsonl").exists()
+    assert (sd / "screenshots").exists()
+
+
+def test_cleanup_consumed_raw_no_draft(recordings_root, tmp_path):
+    """session 没 skill_draft (录屏失败/没 aggregate) → has_saved_skill=False, 不删."""
+    sd = _mk_session_with_full_raw(
+        recordings_root, "rec_no_draft", with_draft_skill=None,
+    )
+    skills_root = tmp_path / "skills"
+    skills_root.mkdir()
+    result = cl.cleanup_consumed_raw(sd, skills_root=skills_root)
+    assert result["ok"] is False
+    assert result["has_saved_skill"] is False
+    assert (sd / "events.jsonl").exists()
+
+
+def test_cleanup_consumed_raw_session_dir_missing(tmp_path):
+    """session_dir 不存在 → error 返, 不挂."""
+    fake = tmp_path / "nope"
+    result = cl.cleanup_consumed_raw(fake, skills_root=tmp_path / "skills")
+    assert result["ok"] is False
+    assert "不存在" in (result["error"] or "")
+
+
 def test_cleanup_freed_bytes(recordings_root):
     """freed_bytes 算 session 文件总大小"""
     old_ts = time.time() - 30 * 24 * 3600
