@@ -686,12 +686,16 @@ _TAURI_ORIGINS = (
     "tauri://localhost",
     "http://tauri.localhost",
     # 6/2 晚 BL-CORS-DEV-ORIGIN: dev mode 真用 origin — Companion vite dev server.
-    # 鸿波 6/2 晚生产事故 audit: webview console "[vite] connecting..." 真证. 真
-    # Companion dev mode 浏览器 origin 是 http://localhost:5173 / http://127.0.0.1:5173,
-    # P8 allowlist 之前只含 tauri://, dev mode CORS preflight 403.
+    # 鸿波 6/2 晚生产事故 audit: webview console "[vite] connecting..." 真证.
+    #
+    # 6/2 晚 BL-CORS-DEV-ORIGIN-1420 (鸿波 21:15 真 paste vite log 抓的): vite 真启动
+    # log "Local: http://localhost:1420/" — Tauri 模板默认 vite 端口是 1420 (Tauri
+    # 文档推荐, 跟 vite 标准 5173 不同). 我下午盲加 5173 是错的, 加 1420 才真生效.
+    "http://localhost:1420",
+    "http://127.0.0.1:1420",
+    # 保留 5173 作 fallback (有些员工自己改了 vite.config.ts 用 5173)
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-    # 备份: vite 可能换端口 (3000/4000 等), 但目前 catfish dev mode 锁 5173
 )
 _CATFISH_EXTRA_CORS_HEADERS = (
     "X-Catfish-User",
