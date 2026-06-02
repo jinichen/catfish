@@ -681,7 +681,18 @@ _proxy_404_middleware = _proxy_404_middleware_factory()
 
 # ── P8 / P9 ──────────────────────────────────────────────────────────────
 
-_TAURI_ORIGINS = ("tauri://localhost", "http://tauri.localhost")
+_TAURI_ORIGINS = (
+    # packaged Tauri app 真用 origin
+    "tauri://localhost",
+    "http://tauri.localhost",
+    # 6/2 晚 BL-CORS-DEV-ORIGIN: dev mode 真用 origin — Companion vite dev server.
+    # 鸿波 6/2 晚生产事故 audit: webview console "[vite] connecting..." 真证. 真
+    # Companion dev mode 浏览器 origin 是 http://localhost:5173 / http://127.0.0.1:5173,
+    # P8 allowlist 之前只含 tauri://, dev mode CORS preflight 403.
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    # 备份: vite 可能换端口 (3000/4000 等), 但目前 catfish dev mode 锁 5173
+)
 _CATFISH_EXTRA_CORS_HEADERS = (
     "X-Catfish-User",
     "X-Catfish-Internal",
