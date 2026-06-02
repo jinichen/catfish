@@ -357,6 +357,21 @@ def handle_memory_tool(args: Dict[str, Any], **kw: Any) -> str:
     )
     _append_audit_log(audit_record)
 
+    # BL-MEMORY-B3 (2026-06-03): identity/project_fact add 真跑 heuristic detect,
+    # 触发就在 result 真 inject propose_skill_hint. workflow kind 已经在
+    # _route_to_propose_skill 自带 hint, 不重复.
+    if action == "add" and kind in ("identity", "project_fact"):
+        spec_detect = _detect_workflow_spec_pattern(content or "")
+        if spec_detect:
+            # 真解析 result 真 inject hint (保留原 success/error 真状态)
+            try:
+                result_parsed = json.loads(result) if isinstance(result, str) else result
+                if isinstance(result_parsed, dict):
+                    result_parsed["propose_skill_hint"] = spec_detect
+                    result = json.dumps(result_parsed, ensure_ascii=False)
+            except (json.JSONDecodeError, TypeError):
+                pass  # 解析失败不影响主 result return
+
     return result
 
 
@@ -437,3 +452,73 @@ def _route_to_propose_skill(content: str) -> str:
         ),
         "content_recap": content[:200] if content else "",
     }, ensure_ascii=False)
+
+
+# ── BL-MEMORY-B3 (2026-06-03): 静态 heuristic detect 长 entry 真像 workflow/spec ──
+#
+# 真问题: LLM 真可能把 SKILL.md 的 workflow/spec 内容当 identity / project_fact 写,
+# 走 hermes USER.md / MEMORY.md 落盘. kind=workflow 真已经有 propose_skill hint (上面
+# _route_to_propose_skill), 但 kind=identity/project_fact add action 真没拦截 — 真
+# 6/3 早 audit 真生产 MEMORY.md 16 entry 真有 12 条是 skill spec, 真就是这个漏.
+#
+# 真补救: identity/project_fact add 时真跑 heuristic, 触发就在 result 真 inject
+# propose_skill_hint, LLM 看 hint 真自然调 catfish_propose_skill(triggered_by='auto')
+# 改 skill 路径. 0 LLM 调真 light-weight (跟 A3 LLM dedupe 真互补 — A3 reactive 员工
+# 真按钮触发, B3 proactive 每次 add 自动跑).
+#
+# 不强制 enforce (LLM 真可不听), 但 hint 真显眼真显著降低 mis-classify (BL-MEMORY-
+# DISCIPLINE 真经验: prompt 约束 reasoning model 命中率 ~70%).
+
+# 真 spec/workflow 关键词 (中英文 mixed, 真按 5/24 MEMORY.md 70% 跑偏 entry 真总结)
+_WORKFLOW_KEYWORDS = (
+    "步骤", "流程", "触发词", "铁律", "必触发", "调用",
+    "记得", "必须", "如何", "应该",
+    "## ", "**", "`", "1.", "2.", "3.",  # markdown 结构
+    "- [ ]", "- [x]",  # TODO checkbox
+    "✅", "❌", "⚠", "⭐",  # SKILL.md 真常用 marker
+    "skill", "SKILL.md", "tool_call", "workflow",
+)
+
+
+def _detect_workflow_spec_pattern(content: str) -> Optional[Dict[str, Any]]:
+    """真静态 heuristic 真检 content 是不是 SKILL.md 的 workflow/spec 不是 fact.
+
+    真触发条件 (短路 OR — 任 1 条触发):
+    1. 长度 >= 500 chars (USER.md cap 1375 / MEMORY.md cap 2200, 单 entry 500 真"超长")
+    2. 长度 >= 200 chars **且** 含 >= 2 个 workflow 关键词
+
+    返 hint dict 或 None. None = 真 fact 不触发.
+    """
+    if not content or not isinstance(content, str):
+        return None
+    length = len(content)
+    hit_keywords = [kw for kw in _WORKFLOW_KEYWORDS if kw in content]
+    hit_count = len(hit_keywords)
+
+    # 真触发短路
+    triggered = False
+    reason_parts: List[str] = []
+    if length >= 500:
+        triggered = True
+        reason_parts.append(f"长度 {length} chars >= 500 (单 entry 超长)")
+    if length >= 200 and hit_count >= 2:
+        triggered = True
+        reason_parts.append(
+            f"含 {hit_count} 个 workflow 关键词 ({', '.join(hit_keywords[:5])})"
+        )
+
+    if not triggered:
+        return None
+    return {
+        "triggered": True,
+        "reason": "; ".join(reason_parts),
+        "content_length": length,
+        "hit_keywords": hit_keywords[:10],
+        "hint": (
+            "⚠ 这条 entry 看起来更像 SKILL.md 的 workflow/spec, 不像稳定 fact. "
+            "真建议: 真主动调 catfish_propose_skill(triggered_by='auto') 把内容固化为 skill, "
+            "然后 memory(action='remove') 删这条 entry. "
+            "BL-MEMORY-DISCIPLINE: USER.md/MEMORY.md 真该装 fact (员工身份/技术常量), "
+            "不装流程 (那是 SKILL.md 的事)."
+        ),
+    }
