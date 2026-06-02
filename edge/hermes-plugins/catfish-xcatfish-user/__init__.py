@@ -160,17 +160,30 @@ def register(ctx) -> None:
     # P9 patch 只依赖 gateway.platforms.api_server module (hermes 启动早期就 import),
     # **不依赖 model_tools**, 可以同步跑. 提前跑还保证 api_server bind 8642 前
     # _CORS_HEADERS 就是新值, 第一个 OPTIONS preflight 就含完整 allowlist.
+    # 6/2 晚 round 2 (鸿波 22:00 真生产 400 audit): CORS 修通后 chat 撞 400
+    # "service token (sub=client:hermes-cli) requires X-Catfish-User header" —
+    # hermes proxy → gateway 转发没真透传 X-Catfish-User. 真因: P1/P7/P10 (X-Catfish-User
+    # 透传链) 也在 install() 后台等 model_tools, 跟 P8/P9 同病, 永远没跑.
+    #
+    # 真扩 Step 2.7: 同步跑所有不依赖 model_tools 的 patch (P0/P1/P3/P4/P7/P8/P9/P10).
+    # P5/P6/P11 (依赖 _create_agent → agent_init → model_tools) 仍走 install 后台
+    # (那些是 chat agent 路径, gateway 进程不需要).
     try:
-        # 跑 P8 (Tauri origin) + P9 (Allow-Headers 扩 X-Catfish-*) 单独一组
-        _mod._patch_p8_p9_cors()
+        _mod._patch_asyncio_executor_for_contextvars()  # P0
+        _mod._patch_p1_agent_init()                      # P1
+        _mod._patch_p3_auxiliary_client()                # P3
+        _mod._patch_p4_auto_title_session()              # P4
+        _mod._patch_p7_companion_proxy_route()           # P7 ← X-Catfish-User 透传真关键
+        _mod._patch_p8_p9_cors()                         # P8/P9
+        _mod._patch_p10_apply_client_headers_localhost()  # P10
         logger.info(
-            "catfish-xcatfish-user: P8/P9 CORS patch 同步应用 ✓ "
-            "(_CORS_HEADERS X-Catfish-* allowlist 真生效, Companion chat 不再撞 preflight)"
+            "catfish-xcatfish-user: 同步 patch ✓ (P0/P1/P3/P4/P7/P8/P9/P10) — "
+            "X-Catfish-User 透传 + CORS allowlist 真生效"
         )
     except Exception as e:  # noqa: BLE001
         logger.error(
-            "catfish-xcatfish-user: P8/P9 CORS patch 同步应用失败 (ignored): %s. "
-            "Companion chat 走 hermes 8642 时仍会撞 preflight 拒",
+            "catfish-xcatfish-user: 同步 patch 失败 (ignored): %s. "
+            "X-Catfish-User 透传或 CORS allowlist 可能没生效, Companion chat 可能撞 400/403",
             e,
             exc_info=True,
         )
