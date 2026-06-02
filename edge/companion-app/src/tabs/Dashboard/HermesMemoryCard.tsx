@@ -39,6 +39,41 @@ async function removeEntry(
   });
 }
 
+/** BL-MEMORY-A3 (2026-06-03): replace hermes memory entry.
+ * 用于 dedupe verdict=same 真合并 — 删 shorter + replace longer 内容. */
+async function replaceEntry(
+  target: "user" | "memory",
+  oldText: string,
+  newContent: string,
+): Promise<void> {
+  await toolBridgeCallTool("memory", {
+    action: "replace",
+    target,
+    old_text: oldText,
+    content: newContent,
+  });
+}
+
+/** BL-MEMORY-A3: dedupe suggestion 真 schema (跟 memory_dedupe Python 真返一致). */
+interface DedupeSuggestion {
+  target: "user" | "memory";
+  entries: [string, string];
+  similarity: number;
+  llm_verdict: "same" | "related" | null;
+  llm_reason?: string;
+  suggested_keep: string | null;
+  suggested_remove: string | null;
+  suggested_merge: string | null;
+  hint?: string;
+}
+
+interface ProposeSkillHint {
+  target: "user" | "memory";
+  entry_text: string;
+  proposed_skill_name: string;
+  reason: string;
+}
+
 export default function HermesMemoryCard() {
   const [view, setView] = useState<HermesMemoryView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -46,6 +81,12 @@ export default function HermesMemoryCard() {
   // BL-MEMORY-EDIT-UI fix (5/16): Tauri webview 默认禁 native confirm(), 改 inline
   // 二次点击 — 点第 1 次 🗑 进 confirming 态 (按钮变红 ✓), 点第 2 次真删.
   const [confirming, setConfirming] = useState<string | null>(null);
+  // BL-MEMORY-A3 (2026-06-03): dedupe state
+  const [dedupeSuggestions, setDedupeSuggestions] = useState<DedupeSuggestion[] | null>(null);
+  const [proposeHints, setProposeHints] = useState<ProposeSkillHint[]>([]);
+  const [dedupeRunning, setDedupeRunning] = useState(false);
+  const [dedupeError, setDedupeError] = useState<string | null>(null);
+  const [applying, setApplying] = useState<string | null>(null);  // 哪条 suggestion 在 apply
 
   const load = async () => {
     try {
@@ -80,6 +121,60 @@ export default function HermesMemoryCard() {
     }
   };
 
+  // BL-MEMORY-A3 (2026-06-03): 真触发 catfish_memory_dedupe + 解析 suggestions
+  const runDedupe = async () => {
+    setDedupeRunning(true);
+    setDedupeError(null);
+    setDedupeSuggestions(null);
+    setProposeHints([]);
+    try {
+      const resp = await toolBridgeCallTool("catfish_memory_dedupe", {
+        threshold: 0.6,
+        prefilter_threshold: 0.4,
+      });
+      if (!resp.ok) {
+        throw new Error(resp.error ?? "dedupe 真撞错");
+      }
+      // resp.result 真是 Python dict, type unknown — 真 cast
+      const r = (resp.result ?? {}) as {
+        suggestions?: DedupeSuggestion[];
+        propose_skill_hints?: ProposeSkillHint[];
+        suggestions_count?: number;
+      };
+      setDedupeSuggestions(r.suggestions ?? []);
+      setProposeHints(r.propose_skill_hints ?? []);
+    } catch (e) {
+      setDedupeError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDedupeRunning(false);
+    }
+  };
+
+  // BL-MEMORY-A3: 真 apply 1 条 suggestion (verdict=same): 删 shorter + replace longer 真合并
+  const applySuggestion = async (s: DedupeSuggestion) => {
+    if (s.llm_verdict !== "same" && s.llm_verdict !== null) return;  // related/different 不动
+    if (!s.suggested_keep || !s.suggested_remove) return;
+    const key = `${s.target}-${s.entries[0].slice(0, 30)}`;
+    setApplying(key);
+    try {
+      // 1. 删 shorter
+      await removeEntry(s.target, s.suggested_remove);
+      // 2. replace longer (verdict=same 真 merge 就是 longer 不变)
+      if (s.suggested_merge && s.suggested_merge !== s.suggested_keep) {
+        await replaceEntry(s.target, s.suggested_keep, s.suggested_merge);
+      }
+      // 3. 刷新 entries + 真从 suggestions 移掉这条
+      await load();
+      setDedupeSuggestions(
+        (cur) => cur?.filter((x) => x !== s) ?? null,
+      );
+    } catch (e) {
+      setDedupeError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setApplying(null);
+    }
+  };
+
   useEffect(() => {
     void load();
     const t = window.setInterval(() => void load(), REFRESH_MS);
@@ -108,19 +203,156 @@ export default function HermesMemoryCard() {
         flexDirection: "column",
       }}
     >
-      <div style={{ marginBottom: "var(--space-2)" }}>
-        <h3 style={{ margin: 0, display: "inline-flex", alignItems: "center", gap: 8 }}>
-          🧠 我的 hermes memory
-        </h3>
-        {/* 6/1 鸿波 ABBB: 改成员工能懂的语言, 删 dev 术语 (target=user, memory). */}
-        <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 2 }}>
-          永久记住的关于你的事实
+      <div
+        style={{
+          marginBottom: "var(--space-2)",
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: 8,
+        }}
+      >
+        <div>
+          <h3 style={{ margin: 0, display: "inline-flex", alignItems: "center", gap: 8 }}>
+            🧠 我的 hermes memory
+          </h3>
+          {/* 6/1 鸿波 ABBB: 改成员工能懂的语言, 删 dev 术语 (target=user, memory). */}
+          <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 2 }}>
+            永久记住的关于你的事实
+          </div>
         </div>
+        {/* BL-MEMORY-A3 (2026-06-03): 整理记忆按钮 — 真调 catfish_memory_dedupe LLM 语义判定 */}
+        <button
+          type="button"
+          onClick={() => void runDedupe()}
+          disabled={dedupeRunning}
+          title="LLM 真判语义是否重复, 不真改盘 — 你看了再决定要不要合并"
+          style={{
+            background: dedupeRunning ? "var(--catfish-bg)" : "var(--catfish-cyan)",
+            color: dedupeRunning ? "var(--catfish-text-muted)" : "white",
+            border: "none",
+            borderRadius: "var(--radius-sm)",
+            padding: "4px 10px",
+            fontSize: 11,
+            cursor: dedupeRunning ? "default" : "pointer",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {dedupeRunning ? "扫描中..." : "🧹 整理记忆"}
+        </button>
       </div>
 
       {error && (
         <div style={{ color: "var(--status-err)", fontSize: 12, marginBottom: 8 }}>
           读取失败: {error}
+        </div>
+      )}
+
+      {dedupeError && (
+        <div style={{ color: "var(--status-err)", fontSize: 12, marginBottom: 8 }}>
+          整理失败: {dedupeError}
+        </div>
+      )}
+
+      {/* BL-MEMORY-A3 (2026-06-03): dedupe suggestions inline 展开 */}
+      {dedupeSuggestions !== null && (
+        <div
+          style={{
+            marginBottom: "var(--space-3)",
+            padding: "8px 12px",
+            background: "var(--catfish-bg)",
+            border: "1px dashed var(--catfish-cyan)",
+            borderRadius: 6,
+            fontSize: 12,
+            maxHeight: 240,
+            overflowY: "auto",
+          }}
+        >
+          <div style={{ fontWeight: 600, color: "var(--catfish-cyan)", marginBottom: 6 }}>
+            🧹 LLM 真找到 {dedupeSuggestions.length} 条可能重复
+            {proposeHints.length > 0 ? ` + ${proposeHints.length} 条像 skill 流程` : ""}
+          </div>
+          {dedupeSuggestions.length === 0 && proposeHints.length === 0 ? (
+            <div style={{ color: "var(--catfish-text-muted)", fontStyle: "italic" }}>
+              没真找到重复 — 你的 memory 真干净 ✓
+            </div>
+          ) : (
+            <>
+              {dedupeSuggestions.map((s, i) => {
+                const key = `${s.target}-${s.entries[0].slice(0, 30)}`;
+                const isApplying = applying === key;
+                const isSame = s.llm_verdict === "same" || s.llm_verdict === null;
+                return (
+                  <div
+                    key={i}
+                    style={{
+                      padding: "6px 0",
+                      borderBottom: "1px dotted var(--catfish-border)",
+                      opacity: isApplying ? 0.4 : 1,
+                    }}
+                  >
+                    <div style={{ fontSize: 10, color: "var(--catfish-text-muted)", marginBottom: 2 }}>
+                      {s.target.toUpperCase()} · 相似度 {(s.similarity * 100).toFixed(0)}%
+                      {s.llm_verdict ? ` · LLM 判: ${s.llm_verdict}` : " · jaccard fallback"}
+                      {s.llm_reason ? ` · ${s.llm_reason}` : ""}
+                    </div>
+                    <div style={{ fontSize: 11, marginBottom: 2 }}>
+                      <strong>A:</strong> {s.entries[0].slice(0, 120)}
+                      {s.entries[0].length > 120 ? "..." : ""}
+                    </div>
+                    <div style={{ fontSize: 11, marginBottom: 4 }}>
+                      <strong>B:</strong> {s.entries[1].slice(0, 120)}
+                      {s.entries[1].length > 120 ? "..." : ""}
+                    </div>
+                    {isSame ? (
+                      <button
+                        type="button"
+                        onClick={() => void applySuggestion(s)}
+                        disabled={isApplying}
+                        style={{
+                          background: "var(--catfish-cyan)",
+                          color: "white",
+                          border: "none",
+                          borderRadius: 3,
+                          padding: "2px 8px",
+                          fontSize: 10,
+                          cursor: isApplying ? "default" : "pointer",
+                        }}
+                      >
+                        {isApplying ? "..." : "合并 (留长的, 删短的)"}
+                      </button>
+                    ) : (
+                      <div style={{ fontSize: 10, color: "var(--catfish-text-muted)", fontStyle: "italic" }}>
+                        {s.hint ?? "主题相关但不重复 — 各留一条"}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {proposeHints.map((h, i) => (
+                <div
+                  key={`hint-${i}`}
+                  style={{
+                    padding: "6px 0",
+                    borderBottom: "1px dotted var(--catfish-border)",
+                  }}
+                >
+                  <div style={{ fontSize: 10, color: "var(--catfish-warning, #d70)", marginBottom: 2 }}>
+                    💡 {h.target.toUpperCase()} · 像 skill 流程 → 建议存成 skill
+                  </div>
+                  <div style={{ fontSize: 11, marginBottom: 2 }}>
+                    {h.entry_text.slice(0, 150)}
+                    {h.entry_text.length > 150 ? "..." : ""}
+                  </div>
+                  <div style={{ fontSize: 10, color: "var(--catfish-text-muted)", fontStyle: "italic" }}>
+                    {h.reason} · 跟{" "}
+                    <code style={{ fontSize: 10 }}>{h.proposed_skill_name}</code>{" "}
+                    说"存成 skill" 让鲶鱼帮你做
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
         </div>
       )}
 
