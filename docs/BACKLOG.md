@@ -933,3 +933,7 @@ BACKLOG.md (本)        ─→  全量积压 (每周 review)            →   �
 >
 > 后续按"维护规则" §4 持续更新 — **每天收工时回写 ✅, 严禁再漂**.
 > 重大优先级调整 (例如 P3 提到 P1 / 整段砍掉) 在 git log commit message 里写明原因.
+- BL-P10-GATEWAY-HOSTS-ENV (6/2 22:50 audit 发现): plugin.py P10 hard-code
+       localhost:8999 + 127.0.0.1:8999, 但 5/29 直 patch hermes 时真用
+       CATFISH_GATEWAY_HOSTS env 灵活配置. 真客户机房部署用内网 IP 时, P10
+       不会识别 catfish-gateway → X-Catfish-User 不注入 → 撞 400. 加 env 回来.

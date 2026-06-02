@@ -26,6 +26,20 @@ session start → 先读 CATFISH-CORE-IDENTITY.md (定位锚)
 
 ---
 
+## 给 AI session (Claude / Codex 等) 用 sandbox audit 时的真坑
+
+### Pit -1: sandbox fuse mount cache 不可靠, 真文件存在性必须让用户 mac 端验证
+
+| 项 | 真值 |
+|---|---|
+| **现象** | 6/2 22:35 sandbox `ls /sessions/.../mnt/.hermes/.../api_server.py*` 真返 4 个文件 (含 .orig/.rej/.rej.orig), 同时鸿波 mac 真 ls 只有 1 个 (api_server.py 本身), 其它 3 个**真不存在** |
+| **真因** | sandbox 通过 fuse virtiofs mount 看用户 mac 文件 (`/mnt/.virtiofs-root/shared/Users/chenhongbo/...`), 真有**inode cache 延迟**. mac 端文件被 rm / 移动后, sandbox 可能仍看到旧 dirent (`relatime` mount option 让 cache 更久) |
+| **真做法** | AI session 在 sandbox audit 文件**存在性** (尤其是 `.orig` / `.rej` / 缓存 / 临时文件) 时, **不能直接断言**, 必须**让用户 mac 端 `ls` 一次确认**, 否则真可能给错信息 |
+| **真案例** | 我 22:35 写"5/29 真留 .orig/.rej 文件该清", 鸿波 22:42 真 ls 发现没了. 多浪费 1 round |
+| **真检测** | 任何"建议用户清理 / 删 / 改某文件" 前, 先让用户 `ls -la <真路径>` 确认存在, 不能只信 sandbox |
+
+---
+
 ## 反 pattern 工程纪律 (反盲猜 7 条)
 
 我 6/2 真犯过的, 每一条都让真生产挂过 / 多 round 浪费时间:
