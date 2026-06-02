@@ -116,6 +116,32 @@ logger = logging.getLogger("catfish.memory.plugin")
 _DEFAULT_CATFISH_HOME = Path.home() / ".catfish"
 
 
+# ── BL-MEMORY-P2-2 (2026-06-03): query 相关性 helper ─────────────────
+# 真简单字符级 Jaccard, 真不依赖 jieba (plugin 真 light, jieba 真启动 100ms+).
+# 真给 _render_skills_catalog 真 top-K 排序用. 真不调 LLM (省钱, prefetch 每轮跑).
+#
+# 真效果跟 jieba 差不多 (中文 char-level overlap 真粗但 OK), 真适合短 query
+# (用户 message 真平均 < 100 chars).
+
+_STOPCHARS = set("的了是在我你他她我们你们和跟也都就这那有没不,.,。?!、 \n()—,—:;\"'")
+
+
+def _query_token_set(text: str) -> set:
+    """字符级 set (去停用字), 真返用作 Jaccard 输入. 真不分词省 jieba 启动."""
+    if not text:
+        return set()
+    return {c for c in text if c not in _STOPCHARS and c.strip()}
+
+
+def _jaccard_similarity(a: set, b: set) -> float:
+    """Jaccard |a ∩ b| / |a ∪ b|. 真空返 0."""
+    if not a or not b:
+        return 0.0
+    inter = len(a & b)
+    union = len(a | b)
+    return inter / union if union > 0 else 0.0
+
+
 # 5/21 拆: 50+ helpers 抽到 catfish_memory_helpers.py (~523 行)
 # 5/28 鸿波修: 原注释里说"不能 relative import" 是错的 — hermes plugin loader
 # (~/.hermes/hermes-agent/plugins/memory/__init__.py line 240-255) 用
@@ -267,8 +293,8 @@ class CatfishMemoryProvider(MemoryProvider):
         if journal:
             sections.append(journal)
 
-        # 3. skills_catalog — 可用 catfish 技能
-        skills = self._render_skills_catalog(catfish_home)
+        # 3. skills_catalog — 可用 catfish 技能 (BL-MEMORY-P2-2: query top-K 筛)
+        skills = self._render_skills_catalog(catfish_home, query=query)
         if skills:
             sections.append(skills)
 
@@ -414,34 +440,117 @@ class CatfishMemoryProvider(MemoryProvider):
             return f"## 📝 员工长期日记 (catfish)\n\n{raw}"
         return ""
 
-    def _render_skills_catalog(self, catfish_home: Path) -> str:
-        skills_dir = catfish_home / "skills"
-        if not skills_dir.is_dir():
+    def _render_skills_catalog(
+        self, catfish_home: Path, query: str = "",
+    ) -> str:
+        """BL-MEMORY-P2-4 (2026-06-03): dual-path fallback.
+        BL-MEMORY-P2-2 (2026-06-03): query 相关性 top-K 真筛.
+
+        真问题: 老版只扫 ~/.catfish/skills/, 真生产员工 mac 真无目录, 真返空.
+        6/3 真生产 dump 真验 5 数据源里 skills_catalog 真缺位 (鸿波 BL-TOKEN-AUDIT
+        '5 数据源痕迹没看见' 真因之一).
+
+        真新逻辑 (按优先级扫, 真合并 budget):
+        1. ~/.catfish/skills/ (员工录的 RecMode + propose_skill 真生成的, 真用户首选)
+        2. ~/.hermes/skills/ (hermes 自带 29 skill + catfish 真 symlink 装的)
+
+        真 dedupe by skill 真名 (优先 catfish 自家版本, 真覆盖 hermes 默认).
+
+        真 query 筛 (P2-2):
+        - query 真空 (initial / no message) → 全注入按字母序 (旧行为)
+        - query 真有 → 算每 skill name+desc head 的 jieba/字符级 Jaccard, top-K 留
+          (按 budget 截断, 真不漏高分 skill)
+        """
+        candidates: List[Path] = []
+        catfish_skills = catfish_home / "skills"
+        if catfish_skills.is_dir():
+            candidates.append(catfish_skills)
+        # 真 fallback: hermes skills (真常用真路径)
+        hermes_skills = Path.home() / ".hermes" / "skills"
+        if hermes_skills.is_dir():
+            candidates.append(hermes_skills)
+
+        if not candidates:
             return ""
-        # 简单列子目录名 + 每个 skill 的 SKILL.md 头部 (Phase 2 POC, 不做
-        # 复杂相关性筛选)
-        entries: List[str] = []
-        budget = _BUDGETS["skills_catalog"]
+
+        # 真先收集 (skill_name, skill_head) 真候选 list, 真不截 budget
+        candidates_list: List[tuple] = []
+        seen_names: set = set()
         try:
-            for child in sorted(skills_dir.iterdir()):
-                if not child.is_dir():
-                    continue
-                manifest = child / "SKILL.md"
-                if not manifest.exists():
-                    continue
-                head = _read_text_safe(manifest, 800)  # 每个 skill 800 字节摘要
-                if not head:
-                    continue
-                entry = f"### {child.name}\n\n{head.strip()[:600]}\n"
-                if len(entry) > budget:
-                    break
-                entries.append(entry)
-                budget -= len(entry)
+            for skills_root in candidates:
+                # 真两层: skills_root 直接含 skill 目录 (catfish_home/skills),
+                # 或 skills_root 含 category/skill 二层 (hermes 真 productivity/, devops/ 等)
+                skill_dirs: List[Path] = []
+                for child in sorted(skills_root.iterdir()):
+                    if not child.is_dir():
+                        continue
+                    # 真 child 自身有 SKILL.md? → 它就是 skill 真目录
+                    if (child / "SKILL.md").exists():
+                        skill_dirs.append(child)
+                    else:
+                        # 真 category 层, 真扫一级子目录
+                        try:
+                            for grandchild in sorted(child.iterdir()):
+                                if (grandchild.is_dir() and
+                                        (grandchild / "SKILL.md").exists()):
+                                    skill_dirs.append(grandchild)
+                        except OSError:
+                            continue
+
+                for skill_dir in skill_dirs:
+                    name = skill_dir.name
+                    if name in seen_names:
+                        continue  # 真 dedupe (优先 catfish 自家版本)
+                    head = _read_text_safe(skill_dir / "SKILL.md", 800)
+                    if not head:
+                        continue
+                    candidates_list.append((name, head.strip()[:600]))
+                    seen_names.add(name)
         except OSError:
             pass
+
+        if not candidates_list:
+            return ""
+
+        # 真 P2-2: query 真打分排序
+        query_clean = (query or "").strip()
+        if query_clean:
+            # 真用 char-level set 真简单 Jaccard (无 jieba 依赖, plugin 真 light)
+            q_chars = _query_token_set(query_clean)
+            scored: List[tuple] = []
+            for name, head in candidates_list:
+                # 真 name 真权重更高 (skill 真定位作用)
+                name_score = _jaccard_similarity(q_chars, _query_token_set(name)) * 3.0
+                head_score = _jaccard_similarity(q_chars, _query_token_set(head))
+                total = name_score + head_score
+                scored.append((total, name, head))
+            scored.sort(key=lambda t: -t[0])
+            ordered = [(name, head) for _score, name, head in scored]
+        else:
+            # 真 query 空 → 按字母序 (老行为)
+            ordered = candidates_list
+
+        # 真按 budget 真截
+        entries: List[str] = []
+        budget = _BUDGETS["skills_catalog"]
+        # 真 P2-2: query 真有 → 真 cap 砍到 5000 chars (top-K 真够, 减 system prompt)
+        if query_clean:
+            budget = min(budget, 5000)
+        for name, head in ordered:
+            entry = f"### {name}\n\n{head}\n"
+            if len(entry) > budget:
+                break
+            entries.append(entry)
+            budget -= len(entry)
+            if budget <= 0:
+                break
+
         if not entries:
             return ""
-        return "## 🛠 可用技能 (catfish skills)\n\n" + "\n".join(entries)
+        title = "## 🛠 可用技能 (catfish skills)"
+        if query_clean and len(entries) < len(candidates_list):
+            title += f" — 按当前话题筛 top {len(entries)}/{len(candidates_list)}"
+        return f"{title}\n\n" + "\n".join(entries)
 
     def _render_feedback(self, catfish_home: Path) -> str:
         records = _read_jsonl_tail(

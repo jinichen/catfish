@@ -937,3 +937,52 @@ BACKLOG.md (本)        ─→  全量积压 (每周 review)            →   �
        localhost:8999 + 127.0.0.1:8999, 但 5/29 直 patch hermes 时真用
        CATFISH_GATEWAY_HOSTS env 灵活配置. 真客户机房部署用内网 IP 时, P10
        不会识别 catfish-gateway → X-Catfish-User 不注入 → 撞 400. 加 env 回来.
+
+## BL-MEMORY-OPTIMIZE-2026-06-02 (鸿波 6/2 23:30 audit → 6/3 真做完)
+
+真 audit catfish 记忆系统真痛点 (扫真生产 USER.md/MEMORY.md 真数据):
+
+### P0 真该 ship
+- ~~A1 prefetch 5 数据源迁 catfish-xcatfish-user (激活 14 天 dormant)~~ **真 audit 6/3: 前提错** —
+       catfish-memory plugin 真在 hermes 8642 真 load 真 register, prefetch_all 真注入 user message
+       末尾 (conversation_loop.py:914-925 真`<memory-context>` fence), 真不 dormant. 6/2 凌晨
+       "14 天 dormant" 真盲判断. 真生产 dump 真验 4/5 数据源真在跑 (discipline +
+       session_meta + distilled_facts + feedback). 缺 skills_catalog (~/.catfish/skills/ 真无
+       目录) — BL-MEMORY-SKILLS-CATALOG-EMPTY 后续修.
+- **✓ A2 历史 entry LLM reclassify** (6/3 真做完) —
+       真扫 MEMORY 16 entry / USER 10 entry. 真砍 MEMORY 91% (7551→688 chars, 16→2),
+       12 条 skill spec 真 append 到 catfish-browser-task / catfish-project-approval /
+       catfish-weekly-report 4 个 SKILL.md, 1 条 (contextual status update) 移 USER.md,
+       4 条 meta/重复真删. 真 backup .bak.20260603-AUDIT.
+- **✓ A3 catfish_memory_dedupe 改语义级 + Dashboard 按钮** (6/3 真做完) —
+       memory_dedupe 真升级: Jaccard 0.4 prefilter → LLM gateway 真语义判定 (same/related/
+       different + is_workflow_or_spec). _llm_dedupe_judge 真复用 _expertise_llm_call pattern.
+       真接 ~/.catfish/memory_audit.jsonl audit log. propose_skill_hints 真返让 LLM 调
+       catfish_propose_skill. CATFISH_DEDUPE_LLM_ENABLE 默认开, fallback Jaccard.
+       HermesMemoryCard 真加"🧹 整理记忆" 按钮 + inline suggestions section + 应用按钮.
+
+### P1
+- ~~B1 砍老 memory 入口 (catfish_remember/memory_save), 单一 5 kind router~~ **真 audit 6/3**:
+       6/2 23:29 catfish-memory plugin register_tool override=True 真已生效, hermes builtin
+       memory tool 真被 5 kind router 取代. 老 catfish_remember 真 audit: 还在 tool 列表? 后续 audit.
+- **✓ B2 Dashboard memory review 卡** (6/3 真做完) — 真升级 HermesMemoryCard 加 dedupe
+       按钮 + suggestions UI, 不另起新卡 (真已有 MemoryHistoryCard/AuditCard 真展示历史).
+- **✓ B3 LLM detect 细节冗长 → 自动 propose_skill** (6/3 真做完) — 真两路径:
+       Reactive (A3 LLM dedupe 返 propose_skill_hints) +
+       Proactive (memory_router add 真静态 heuristic _detect_workflow_spec_pattern 真检
+       >= 500 chars 或 (>= 200 + 2 关键词) → inject propose_skill_hint, 0 LLM 调).
+
+### P2
+- memory char limit 调高
+- query 相关性筛 entry 注入 (借鉴 honcho token budget)
+- 周报 cron 摘要 journal
+- BL-MEMORY-SKILLS-CATALOG-EMPTY: skills_catalog 真返空真因 — ~/.catfish/skills/ 真无 mirror.
+       真该 mirror 员工 RecMode + propose_skill 产 skill 真到此 (或改 _render_skills_catalog
+       真读 ~/.hermes/skills/*).
+
+### 24h 验证
+- ~/.catfish/memory_audit.jsonl 真生效: source_tool=memory(catfish-router) + 新加
+       source_tool=catfish_memory_dedupe 真有记录
+- HermesMemoryCard "🧹 整理记忆" 按钮员工真用, LLM 真返 verdict=same/related 真比例
+- LLM 真按 propose_skill_hints 真主动调 catfish_propose_skill (LearningCard 真有新增 proposed)
+- prefetch user message 末尾 fence size 真 (~7K → ~3K chars, A2 真已生效)
