@@ -118,6 +118,20 @@ session start → 先读 CATFISH-CORE-IDENTITY.md (定位锚)
 
 ---
 
+## 红线 — 不改 hermes 源码, 只 monkey-patch
+
+### Pit 0: catfish 永远不 fork / 不改 hermes 源码
+
+| 项 | 真值 |
+|---|---|
+| **真原则** | catfish 用 `catfish-xcatfish-user` plugin **runtime monkey-patch** hermes 对象 (set class attribute / mutate module dict), **永远不改 `~/.hermes/hermes-agent/*.py` 文件** |
+| **真原因** | hermes 是 upstream, fork = 每次 hermes 升级 (e.g. 6/1 0.14 → 0.15.1) 都要 merge conflict, 真负担太重. monkey-patch 让 catfish 只需要 audit 11 个 patch 是否仍兼容新 hermes, 文件本身不动 |
+| **真做法** | 任何想"动 hermes 行为" 的改动 → 加进 `catfish-xcatfish-user/plugin.py` 的 `_patch_p*` 系列, 在 plugin install 时 runtime 注入. **绝不**直接 edit hermes 源文件 |
+| **真后果 if 违反** | 5/29 真曾改过 hermes `api_server.py` (用 patch 工具), 留下 `.orig` + `.rej` 文件. 6/1 hermes 0.15.1 升级时, 那些直改的内容真丢了 (catfish 不知道 hermes 升级带来了什么), 留下隐藏 bug 等以后撞 |
+| **真检测** | `find ~/.hermes/hermes-agent -name "*.orig" -o -name "*.rej"` — 有就说明真改过 hermes 源, **该清理 + 把改动迁到 plugin monkey-patch** |
+
+---
+
 ## 历史真坑 (5/X 已踩, 上下文用)
 
 ### Pit 9: catfish-memory plugin 5/19 ship 但 14 天 0 active
