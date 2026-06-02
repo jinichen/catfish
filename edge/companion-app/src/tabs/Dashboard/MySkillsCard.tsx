@@ -17,20 +17,108 @@
  * 多数员工第一次开 Companion 还没录任何 skill, 卡显空状态 + 引导去录: 工作台 →
  * 🎬 录屏 → 操作演示 → catfish 自动生成 skill. 跟 OnboardingWizard 第 7 步串联.
  *
- * # 共享按钮 (占位)
+ * # 共享按钮真接 (6/2 BL-SKILLS-PUBLISH-WIRE 鸿波下午 audit)
  *
- * 后端 (skills-hub 中央上传 + 团队订阅) 是 BL-SKILLS-SHARE 5/27 backlog, 当前
- * 没接. 按钮渲染但 disabled + tooltip "周一接后端". 避免假承诺.
+ * 真状态发现: skills-hub 全栈 5/2 ship, catfish_skill_publish 工具 5/10 ship,
+ * tool_bridge_call_tool Tauri 命令 + toolBridgeCallTool TS wrapper 早就在. 唯一缺
+ * "员工点按钮" 这步 (5/16 BL-ARCH2 砍 SkillsHubCard 后没人补).
+ *
+ * 真链路:
+ *   按钮点击 → confirm dialog → toolBridgeCallTool("catfish_skill_publish",
+ *     {skill_path, namespace}) → tool-bridge Python skill_publish 跑 3 层扫描
+ *     (凭据/PII/内网 URL) → 任一命中拒并提示 → 全过 → multipart POST /v1/hub/skills/{ns}
+ *     → gateway proxy → skills-hub PG + 文件存. Toast 显结果或错误.
+ *
+ * 3 层安全扫描完全在 server 端 (skill_publish.py:205-244), 客户端 0 重做.
  */
 
+import { useState } from "react";
+
 import { useMySkills } from "../../hooks/useIdentity";
-import type { SkillNamespace } from "../../types/identity";
+import { toolBridgeCallTool } from "../../lib/tauri";
+import type { SkillEntry, SkillNamespace } from "../../types/identity";
+
+/** 共享操作的状态机.
+ * idle → confirming (员工点 📤, 弹 confirm) → publishing (调 tool) → done/error.
+ * 用 sessionId 字段绑定具体哪条 skill 在共享 — 防止快速点多个不同 skill 时弹错对话框. */
+interface ShareState {
+  phase: "idle" | "confirming" | "publishing" | "done" | "error";
+  /** 当前操作的 skill 的 "namespace/name" 标识 — 跨阶段一致, UI 用它定位 */
+  skillKey?: string;
+  /** Toast 文案 (done/error 阶段显示) */
+  message?: string;
+  /** 服务器返的 hub_url, done 阶段供员工点击 */
+  hubUrl?: string;
+}
 
 export default function MySkillsCard() {
   const { skills, error } = useMySkills();
   const totalSkills = skills?.reduce((sum, ns) => sum + ns.skills.length, 0) ?? 0;
   const totalNamespaces = skills?.length ?? 0;
   const hasAny = totalSkills > 0;
+
+  const [share, setShare] = useState<ShareState>({ phase: "idle" });
+
+  /** 6/2 BL-SKILLS-PUBLISH-WIRE: 真调 catfish_skill_publish 工具.
+   *
+   * 真 result shape (adapter.dispatch_tool 388-394):
+   *   ToolCallResult.ok    — dispatch_tool 是否抓住异常 (true = tool 函数没 raise)
+   *   ToolCallResult.result — 嵌套真 tool 返 (skill_publish 自己的 dict)
+   *
+   * skill_publish 返 (skill_publish.py:290 / :180):
+   *   成功: {ok: True, namespace, name, version, hub_url, files_count, ...}
+   *   失败: {ok: False, error: "凭据扫描命中..."} (3 层安全扫描命中 / 缺 token / gateway 502)
+   *
+   * 所以**两层 ok 都要查** — dispatch_tool.ok=True 但 tool 内 ok=False = 真业务失败. */
+  const handlePublish = async (ns: string, skill: SkillEntry) => {
+    const skillKey = `${ns}/${skill.name}`;
+    setShare({ phase: "publishing", skillKey });
+    try {
+      const result = await toolBridgeCallTool(
+        "catfish_skill_publish",
+        { skill_path: skill.path, namespace: ns },
+      );
+      // L1: dispatch_tool 自己有没有异常 (网络/挂)
+      if (!result.ok) {
+        setShare({
+          phase: "error",
+          skillKey,
+          message: result.error || "tool dispatch 失败 (tool-bridge 不可达?)",
+        });
+        return;
+      }
+      const inner = result.result as {
+        ok?: boolean;
+        error?: string;
+        hub_url?: string;
+        version?: string;
+        name?: string;
+      } | null;
+      // L2: tool 内部业务成功 / 失败 (3 层扫描命中 / 缺 token / gateway 502 等)
+      if (!inner || inner.ok === false) {
+        setShare({
+          phase: "error",
+          skillKey,
+          message: inner?.error || "tool 内部返失败 (无 error 字段)",
+        });
+        return;
+      }
+      setShare({
+        phase: "done",
+        skillKey,
+        message: `✓ 已共享 ${ns}/${inner.name || skill.name}${inner.version ? " v" + inner.version : ""}`,
+        hubUrl: inner.hub_url,
+      });
+    } catch (e) {
+      setShare({ phase: "error", skillKey, message: `调 tool 异常: ${e}` });
+    }
+  };
+
+  const startConfirm = (ns: string, skill: SkillEntry) => {
+    setShare({ phase: "confirming", skillKey: `${ns}/${skill.name}` });
+  };
+
+  const dismiss = () => setShare({ phase: "idle" });
 
   return (
     <div
@@ -109,49 +197,177 @@ export default function MySkillsCard() {
             }}
           >
             {skills.map((ns) => (
-              <NamespaceBlock key={ns.namespace} ns={ns} />
+              <NamespaceBlock
+                key={ns.namespace}
+                ns={ns}
+                share={share}
+                onShare={startConfirm}
+              />
             ))}
           </ul>
 
-          {/* 共享按钮 — BL-SKILLS-SHARE 5/27 backlog 占位.
-              真后端 (skills-hub 中央上传 + 团队订阅) 周一接. 现在 disabled 防假承诺. */}
-          <div
-            style={{
-              marginTop: "var(--space-3)",
-              paddingTop: "var(--space-3)",
-              borderTop: "1px solid var(--catfish-border)",
-              display: "flex",
-              gap: "var(--space-2)",
-              alignItems: "center",
-            }}
-          >
-            <button
-              type="button"
-              disabled
-              title="共享 skill 给同事 — 后端 (skills-hub 中央) 周一接, 现在按钮占位"
+          {/* 6/2 BL-SKILLS-PUBLISH-WIRE: 共享按钮**真接** (audit 完毕 skills-hub
+              全栈 5/2 ship, catfish_skill_publish 5/10 ship, tool_bridge_call_tool 在).
+              每条 skill 旁边自带 📤 按钮, 不再底部一个全局按钮.
+              这里改成提示行 + 错误/成功 toast.  */}
+          {share.phase !== "idle" && (
+            <div
               style={{
-                background: "transparent",
-                border: "1px solid var(--catfish-border)",
-                borderRadius: 4,
-                padding: "4px 12px",
-                fontSize: 12,
-                cursor: "not-allowed",
-                opacity: 0.5,
+                marginTop: "var(--space-3)",
+                paddingTop: "var(--space-3)",
+                borderTop: "1px solid var(--catfish-border)",
               }}
             >
-              📤 共享给同事
-            </button>
-            <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
-              skills-hub 中央周一接, 现按钮占位
-            </span>
-          </div>
+              <ShareStatusBar share={share} onDismiss={dismiss} onPublish={(ns, s) => void handlePublish(ns, s)} skills={skills} />
+            </div>
+          )}
         </>
       )}
     </div>
   );
 }
 
-function NamespaceBlock({ ns }: { ns: SkillNamespace }) {
+/** 6/2 BL-SKILLS-PUBLISH-WIRE: 共享状态条 — 1 个组件覆盖 4 个状态 (confirming/
+ * publishing/done/error). 跟独立 dialog 不同, 这里 inline 在卡底, 让员工保留 skill
+ * 列表视觉上下文, 不弹窗打断. */
+function ShareStatusBar({
+  share,
+  onDismiss,
+  onPublish,
+  skills,
+}: {
+  share: ShareState;
+  onDismiss: () => void;
+  onPublish: (ns: string, skill: SkillEntry) => void;
+  skills: SkillNamespace[];
+}) {
+  // 通过 share.skillKey 反查 namespace + skill
+  const found = (() => {
+    if (!share.skillKey) return null;
+    const [ns, name] = share.skillKey.split("/", 2);
+    const nsObj = skills.find((s) => s.namespace === ns);
+    const skill = nsObj?.skills.find((s) => s.name === name);
+    if (!nsObj || !skill) return null;
+    return { ns, skill };
+  })();
+
+  if (!found) return null;
+  const { ns, skill } = found;
+
+  if (share.phase === "confirming") {
+    return (
+      <div style={{ fontSize: 12, color: "var(--catfish-text)" }}>
+        共享 <code style={{ fontFamily: "var(--font-mono)" }}>{ns}/{skill.name}</code>
+        {skill.version && <span style={{ opacity: 0.6 }}> v{skill.version}</span>}
+        {" "}到中央 hub? 同事在 catfish-web /skills 看得到.
+        <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+          <button
+            type="button"
+            onClick={() => onPublish(ns, skill)}
+            style={{
+              background: "var(--catfish-cyan, #38b2ac)",
+              color: "#fff",
+              border: "none",
+              borderRadius: 4,
+              padding: "4px 12px",
+              fontSize: 12,
+              cursor: "pointer",
+            }}
+          >
+            确认共享
+          </button>
+          <button
+            type="button"
+            onClick={onDismiss}
+            style={{
+              background: "transparent",
+              border: "1px solid var(--catfish-border)",
+              borderRadius: 4,
+              padding: "4px 12px",
+              fontSize: 12,
+              cursor: "pointer",
+            }}
+          >
+            取消
+          </button>
+        </div>
+        <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 6 }}>
+          📋 共享前服务器自动跑 3 道扫描: 凭据 (密码/api key) / PII (身份证/手机号) / 内网 URL.
+          任一命中拒并提示改法.
+        </div>
+      </div>
+    );
+  }
+
+  if (share.phase === "publishing") {
+    return (
+      <div style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>
+        正在共享 <code style={{ fontFamily: "var(--font-mono)" }}>{ns}/{skill.name}</code>… (3 道安全扫描 + 上传, 通常几秒)
+      </div>
+    );
+  }
+
+  if (share.phase === "done") {
+    return (
+      <div style={{ fontSize: 12 }}>
+        <span style={{ color: "var(--catfish-cyan, #38b2ac)" }}>{share.message}</span>
+        {share.hubUrl && (
+          <span style={{ marginLeft: 8, fontSize: 11, color: "var(--catfish-text-muted)" }}>
+            · 链接: <code style={{ fontFamily: "var(--font-mono)" }}>{share.hubUrl}</code>
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={onDismiss}
+          style={{
+            marginLeft: 12,
+            background: "transparent",
+            border: "1px solid var(--catfish-border)",
+            borderRadius: 4,
+            padding: "2px 8px",
+            fontSize: 11,
+            cursor: "pointer",
+          }}
+        >
+          关闭
+        </button>
+      </div>
+    );
+  }
+
+  // error
+  return (
+    <div style={{ fontSize: 12, color: "var(--status-err, #c93a3a)" }}>
+      ✗ 共享失败: {share.message}
+      <button
+        type="button"
+        onClick={onDismiss}
+        style={{
+          marginLeft: 12,
+          background: "transparent",
+          border: "1px solid var(--catfish-border)",
+          borderRadius: 4,
+          padding: "2px 8px",
+          fontSize: 11,
+          cursor: "pointer",
+          color: "var(--catfish-text)",
+        }}
+      >
+        关闭
+      </button>
+    </div>
+  );
+}
+
+function NamespaceBlock({
+  ns,
+  share,
+  onShare,
+}: {
+  ns: SkillNamespace;
+  share: ShareState;
+  onShare: (ns: string, skill: SkillEntry) => void;
+}) {
   return (
     <li
       style={{
@@ -179,29 +395,76 @@ function NamespaceBlock({ ns }: { ns: SkillNamespace }) {
           margin: 0,
         }}
       >
-        {ns.skills.map((s) => (
-          <li
-            key={s.name}
-            title={s.description}
-            style={{
-              fontSize: 12,
-              padding: "2px 0",
-              color: "var(--catfish-text-muted)",
-            }}
-          >
-            <span style={{ fontFamily: "var(--font-mono)", color: "var(--catfish-text)" }}>
-              {s.name}
-            </span>
-            {s.version && (
-              <span style={{ marginLeft: 6, opacity: 0.6, fontSize: 11 }}>v{s.version}</span>
-            )}
-            {s.description && s.description !== "(no description)" && (
-              <span style={{ marginLeft: 8, fontSize: 11, opacity: 0.7 }}>
-                · {s.description.length > 60 ? s.description.slice(0, 60) + "…" : s.description}
+        {ns.skills.map((s) => {
+          // 6/2 BL-SKILLS-PUBLISH-WIRE: 这条 skill 是不是正在共享流程中
+          const myKey = `${ns.namespace}/${s.name}`;
+          const isActive = share.skillKey === myKey;
+          const isBusy = isActive && (share.phase === "publishing" || share.phase === "confirming");
+          // 共享中 (publishing) 或弹了 confirm 让员工先决定 → 禁用本按钮防多点
+          const otherBusy = !isActive && (share.phase === "publishing" || share.phase === "confirming");
+
+          return (
+            <li
+              key={s.name}
+              title={s.description}
+              style={{
+                fontSize: 12,
+                padding: "2px 0",
+                color: "var(--catfish-text-muted)",
+                display: "flex",
+                alignItems: "baseline",
+                gap: "var(--space-2)",
+              }}
+            >
+              <span style={{ fontFamily: "var(--font-mono)", color: "var(--catfish-text)" }}>
+                {s.name}
               </span>
-            )}
-          </li>
-        ))}
+              {s.version && (
+                <span style={{ opacity: 0.6, fontSize: 11 }}>v{s.version}</span>
+              )}
+              {s.description && s.description !== "(no description)" && (
+                <span
+                  style={{
+                    fontSize: 11,
+                    opacity: 0.7,
+                    flex: 1,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  · {s.description.length > 60 ? s.description.slice(0, 60) + "…" : s.description}
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => onShare(ns.namespace, s)}
+                disabled={isBusy || otherBusy}
+                title={
+                  isBusy
+                    ? "正在处理这条..."
+                    : otherBusy
+                      ? "先处理完上一条共享"
+                      : "共享给同事 — 走 catfish_skill_publish 含 3 道安全扫描"
+                }
+                style={{
+                  marginLeft: "auto",
+                  background: "transparent",
+                  border: "1px solid var(--catfish-border)",
+                  borderRadius: 4,
+                  padding: "1px 6px",
+                  fontSize: 11,
+                  cursor: isBusy || otherBusy ? "not-allowed" : "pointer",
+                  opacity: isBusy || otherBusy ? 0.4 : 1,
+                  color: "var(--catfish-text)",
+                  flexShrink: 0,
+                }}
+              >
+                {isBusy && share.phase === "publishing" ? "…" : "📤"}
+              </button>
+            </li>
+          );
+        })}
       </ul>
     </li>
   );

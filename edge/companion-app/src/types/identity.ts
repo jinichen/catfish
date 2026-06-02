@@ -16,6 +16,9 @@ export interface SkillEntry {
   name: string;
   description: string;
   version?: string;
+  /** 6/2 BL-SKILLS-PUBLISH-WIRE: 真 skill 目录绝对路径. MySkillsCard 共享按钮
+   * 直接传给 catfish_skill_publish(skill_path=...). Rust serde camelCase 单字段不变. */
+  path: string;
 }
 
 export interface SkillNamespace {

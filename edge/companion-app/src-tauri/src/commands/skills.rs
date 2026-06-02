@@ -36,6 +36,10 @@ pub struct SkillEntry {
     pub name: String,
     pub description: String,
     pub version: Option<String>,
+    /// 6/2 BL-SKILLS-PUBLISH-WIRE: 真 skill 目录绝对路径 (含 SKILL.md 的父目录).
+    /// 给 MySkillsCard 的"共享" 按钮调 catfish_skill_publish(skill_path=...) 用.
+    /// camelCase serde 让 TS 看到 `path` (单字段不变).
+    pub path: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -59,13 +63,20 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// 解析 SKILL.md 的 YAML frontmatter
-fn parse_skill_md(path: &Path) -> Option<SkillEntry> {
-    let text = std::fs::read_to_string(path).ok()?;
+/// 解析 SKILL.md 的 YAML frontmatter.
+///
+/// 6/2 BL-SKILLS-PUBLISH-WIRE: 返 SkillEntry.path = SKILL.md 父目录 (skill 真根目录),
+/// MySkillsCard 共享按钮拿来直接传 catfish_skill_publish(skill_path=...).
+fn parse_skill_md(manifest_path: &Path) -> Option<SkillEntry> {
+    let skill_dir_path = manifest_path
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let text = std::fs::read_to_string(manifest_path).ok()?;
     let trimmed = text.trim_start();
     if !trimmed.starts_with("---") {
         // 没 frontmatter，用文件名兜底
-        let name = path
+        let name = manifest_path
             .parent()
             .and_then(|p| p.file_name())
             .map(|s| s.to_string_lossy().to_string())
@@ -74,6 +85,7 @@ fn parse_skill_md(path: &Path) -> Option<SkillEntry> {
             name,
             description: "(无 SKILL.md frontmatter)".into(),
             version: None,
+            path: skill_dir_path,
         });
     }
     // 找 frontmatter 边界：---\n....---\n
@@ -100,6 +112,7 @@ fn parse_skill_md(path: &Path) -> Option<SkillEntry> {
         name,
         description,
         version,
+        path: skill_dir_path,
     })
 }
 
@@ -542,5 +555,27 @@ version: "1.0.0""#,
         let all = scan_skills_root(tmp.path(), "");
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].skills.len(), 2);
+    }
+
+    /// 6/2 BL-SKILLS-PUBLISH-WIRE: SkillEntry.path 真填 skill 目录绝对路径,
+    /// MySkillsCard 共享按钮调 catfish_skill_publish(skill_path=...) 用.
+    #[test]
+    fn test_skill_entry_path_filled_with_skill_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let department = tmp.path().join("department");
+        let skill_dir = department.join("eis-login");
+        _write_skill_md(
+            &skill_dir,
+            r#"name: eis-login
+version: "0.1.0-frozen"
+description: 登录 EIS"#,
+        );
+        let result = scan_skills_root(tmp.path(), "");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].skills.len(), 1);
+        let entry = &result[0].skills[0];
+        assert_eq!(entry.name, "eis-login");
+        // path 应该是 skill_dir 真绝对路径, MySkillsCard 直接传给 publish tool
+        assert_eq!(entry.path, skill_dir.to_string_lossy().to_string());
     }
 }
