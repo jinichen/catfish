@@ -1,4 +1,4 @@
-"""catfish memory router — 替换 hermes builtin memory tool, 5 仓库智能路由.
+"""catfish memory router — 替换 hermes builtin memory tool, 5 仓库智能路由 + audit trail.
 
 # BL-MEMORY-ROUTER-A2-V3 (6/2 凌晨鸿波拍 V3)
 
@@ -32,6 +32,38 @@ LLM 在 tool call 时自己填 kind, 0 后端 LLM 调用. 单次 write < 50ms �
 
 ctx.register_tool(override=True) 让 hermes builtin memory tool 不在 LLM tool list
 出现, LLM 看到的就是 catfish 5 选 1 schema. 命中率从 0% (现状) → 95%+.
+
+# 6/2 BL-MEMORY-AUDIT-TRAIL (鸿波 6/2 下午拍, 4 选项全推荐)
+
+## 真问题 (鸿波 6/2 audit 抓的)
+
+hermes 原 memory_tool replace/remove **直接覆盖, 无 history** — 老 entry 永久消失.
+.bak.<ts> 只在 drift detection 触发 (外部 patch/shell 改文件), 非每次修改. 实地
+证: ~/.hermes/memories/ 现 13 个 .bak 全是 5/24 一天 drift 触发, 之后 9 天 0 backup.
+
+追溯问题麻烦: "鲶鱼上周记得我说啥来着?" / "为啥 LLM 突然忘了?" / 政企客户合规审计.
+
+## 设计 (4 选项全推荐拍后)
+
+- 落盘: ~/.catfish/memory_audit.jsonl (append-only, 100% 本机, 中央 0 红线)
+- 覆盖: 5 kind 全过 audit — identity/project_fact/workflow/journal/todo
+- prev_value 读取: replace/remove 前 file 直读 hermes USER.md / MEMORY.md, 用
+  ENTRY_DELIMITER "\\n§\\n" 解析, 找含 old_text 的 entry. 不调 hermes tool (hermes
+  原 schema 没 read action, 加 read = fork upstream, 不值).
+- jsonl 每条: ts/user_email/kind/action/content/old_text/prev_value/success/error
+- 失败也 audit (success=false + error). LLM 撞 limit / drift 都留痕.
+- audit 失败 (磁盘满 / 权限错) 不阻塞 memory 写 — log warning, audit best-effort.
+
+## UI (今晚最小)
+
+PrivacyCard 🟢 本机存储 加 1 行 "我对你的记忆修改历史 (覆盖/删除全留, 可查可追溯)"
++ 路径 ~/.catfish/memory_audit.jsonl. 真 Card 周一 review 再加.
+
+## 跟 BL-MM3 (老 memory_save inline backup) 关系
+
+BL-MM3 是对 hermes 老 memory_save 工具 (key-value) 的 inline 备注, 只保留上一轮
+200 字. 跟新 memory_tool (USER.md/MEMORY.md) **不同接口**. 本 audit 不动 BL-MM3,
+两者共存 (老路径仍有, 新路径 audit 全量).
 """
 
 from __future__ import annotations
@@ -41,7 +73,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("catfish.xcatfish_user.memory_router")
 
@@ -54,6 +86,161 @@ def _catfish_home() -> Path:
     if env:
         return Path(env).expanduser()
     return Path.home() / ".catfish"
+
+
+# ── 6/2 BL-MEMORY-AUDIT-TRAIL: audit log 助手 ────────────────────────────
+
+# hermes memory entry delimiter — 跟 hermes_agent/tools/memory_tool.py 同源.
+# 改这个常量 = 跟 hermes 内部解析逻辑解耦风险. 这格式 5+ 年没变 (hermes 0.10 以前定的),
+# fork 风险极低. 真改时这里编译期发现 (找不到 entry), test 会报.
+_HERMES_ENTRY_DELIMITER = "\n§\n"
+
+
+def _hermes_memory_dir() -> Path:
+    """~/.hermes/memories/ 或 ${HERMES_HOME}/memories/.
+
+    跟 hermes_agent/tools/memory_tool.py:get_memory_dir() 同语义. 不能直接 import
+    hermes 是因为 plugin 装载顺序下 hermes_constants 可能不在 sys.path.
+    """
+    env = os.environ.get("HERMES_HOME")
+    if env:
+        return Path(env).expanduser() / "memories"
+    return Path.home() / ".hermes" / "memories"
+
+
+def _read_hermes_entries(target: str) -> List[str]:
+    """File 直读 hermes USER.md / MEMORY.md, 用 \\n§\\n 分隔返 entry list.
+
+    跟 hermes _read_file() 同语义. 文件不存在 / 读失败 → 返 [] (不阻塞).
+    """
+    if target not in ("user", "memory"):
+        return []
+    fname = "USER.md" if target == "user" else "MEMORY.md"
+    path = _hermes_memory_dir() / fname
+    if not path.exists():
+        return []
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except (OSError, IOError) as e:
+        logger.warning("_read_hermes_entries 读 %s 失败 (audit prev_value 缺失): %s", path, e)
+        return []
+    if not raw.strip():
+        return []
+    entries = [e.strip() for e in raw.split(_HERMES_ENTRY_DELIMITER)]
+    return [e for e in entries if e]
+
+
+def _find_entry_containing(entries: List[str], old_text: str) -> Optional[str]:
+    """模仿 hermes replace/remove 的 substring 匹配, 返第一个匹配的完整 entry.
+
+    跟 hermes memory_tool.replace/remove 同算法: 找含 old_text 子串的 entry.
+    多个匹配返第一个 (hermes 多匹配时返 error, 但 audit 在 hermes 拒之前就读了,
+    所以可能找到也可能找不到 — best-effort).
+    """
+    if not old_text or not entries:
+        return None
+    for e in entries:
+        if old_text in e:
+            return e
+    return None
+
+
+def _audit_log_path() -> Path:
+    """~/.catfish/memory_audit.jsonl"""
+    return _catfish_home() / "memory_audit.jsonl"
+
+
+def _read_prev_value_for_audit(kind: str, action: str, old_text: Optional[str]) -> Optional[str]:
+    """replace/remove 前从 hermes file 读 prev_value 给 audit log 用.
+
+    只对真"覆盖/删除" 操作有 prev_value 概念:
+    - identity replace/remove → 读 USER.md
+    - project_fact replace/remove → 读 MEMORY.md
+    - 其它 kind / action=add → prev_value 不适用, 返 None
+
+    读失败 → None (audit 仍记, 只是缺这字段). 不阻塞主流程.
+    """
+    if action not in ("replace", "remove") or not old_text:
+        return None
+    if kind == "identity":
+        entries = _read_hermes_entries("user")
+    elif kind == "project_fact":
+        entries = _read_hermes_entries("memory")
+    else:
+        return None  # workflow/journal/todo 没"修改"语义 (都是 append-only)
+    return _find_entry_containing(entries, old_text)
+
+
+def _build_audit_record(
+    kind: str,
+    action: str,
+    args: Dict[str, Any],
+    prev_value: Optional[str],
+    result_json: str,
+    user_email: Optional[str],
+) -> Dict[str, Any]:
+    """构造 audit jsonl 一条记录.
+
+    success / error 从 result_json 解出 (hermes tool 返 JSON string with "success" field).
+    """
+    success = True
+    error_msg = None
+    try:
+        parsed = json.loads(result_json) if isinstance(result_json, str) else result_json
+        if isinstance(parsed, dict):
+            if parsed.get("success") is False:
+                success = False
+                error_msg = parsed.get("error")
+    except (json.JSONDecodeError, TypeError):
+        pass  # 解析不出来不影响 audit (只是 success/error 缺)
+
+    return {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "user_email": user_email,
+        "kind": kind,
+        "action": action,
+        "content": args.get("content"),
+        "old_text": args.get("old_text"),
+        "prev_value": prev_value,
+        "success": success,
+        "error": error_msg,
+        "source_tool": "memory(catfish-router)",
+    }
+
+
+def _append_audit_log(record: Dict[str, Any]) -> None:
+    """append jsonl, best-effort. 失败 log warning, 不阻塞 memory 主写.
+
+    BL-MEMORY-AUDIT-TRAIL: audit 失败 (磁盘满 / 权限错) **不能** 阻塞 memory 写 —
+    员工记忆比 audit 历史重要 1 等级. log warning 让运维知道.
+    """
+    try:
+        path = _audit_log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        line = json.dumps(record, ensure_ascii=False)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except (OSError, IOError) as e:
+        logger.warning(
+            "memory audit log write 失败 (不阻塞主写, audit 缺这条): %s",
+            e,
+        )
+
+
+def _extract_user_email(kw: Dict[str, Any]) -> Optional[str]:
+    """从 ctx.register_tool handler 传的 kwargs 拿员工 email.
+
+    hermes plugin tool handler 的 kw 可能含 store / session_id / user 等. 单机版
+    employees=1 通常空, 但留字段, multi-tenant 时 hermes upstream 加进 kw 就接得到.
+    """
+    # 候选 key 顺序试 (hermes 上游可能换名字, 多试一个抗漂移)
+    for k in ("user_email", "user", "effective_user_email"):
+        v = kw.get(k)
+        if isinstance(v, str) and v.strip():
+            return v
+    # 兜底从 env (single-employee 部署常用)
+    env = os.environ.get("CATFISH_EFFECTIVE_USER", "").strip()
+    return env if env else None
 
 
 # ── tool schema ───────────────────────────────────────────────────────────
@@ -99,6 +286,9 @@ def handle_memory_tool(args: Dict[str, Any], **kw: Any) -> str:
 
     按 kind 路由到 5 个仓库. 0 后端 LLM 调用 (LLM 自己填 kind), 0 性能损失.
     return JSON string (跟 hermes 原 memory_tool 同接口).
+
+    6/2 BL-MEMORY-AUDIT-TRAIL: 每条 add/replace/remove 落 ~/.catfish/memory_audit.jsonl.
+    replace/remove 前先读 prev_value (file 直读 hermes USER.md/MEMORY.md). 失败也 audit.
     """
     action = args.get("action", "add")
     kind = args.get("kind")
@@ -110,37 +300,64 @@ def handle_memory_tool(args: Dict[str, Any], **kw: Any) -> str:
             "error": "kind 必填 (identity/project_fact/workflow/journal/todo).",
         }, ensure_ascii=False)
 
-    # action=replace/remove 仍走 hermes 原生 (改 USER.md / MEMORY.md 入口)
-    if action in ("replace", "remove"):
-        return _call_hermes_original_memory_tool(args, **kw)
+    # 6/2 BL-MEMORY-AUDIT-TRAIL: replace/remove 前**先读 prev_value** — 必须在 hermes
+    # 写之前读, 写完老值就没了. add 不需要 (没"被覆盖" 的对象).
+    prev_value = _read_prev_value_for_audit(kind, action, args.get("old_text"))
+    user_email = _extract_user_email(kw)
 
-    # action=add: 按 kind 路由
+    # 主路由
     try:
-        if kind == "todo":
-            return _route_to_reminder(content)
+        if action in ("replace", "remove"):
+            # replace/remove 仍走 hermes 原生 (改 USER.md / MEMORY.md 入口)
+            # hermes target 推断: identity → user / project_fact → memory / 其它 → memory 兜底
+            if kind == "identity":
+                hermes_args = {**args, "target": "user"}
+            elif kind == "project_fact":
+                hermes_args = {**args, "target": "memory"}
+            else:
+                # workflow/journal/todo replace/remove 没真路径 — 兜底走 hermes memory
+                # (LLM 不该这么调, 但留底防异常)
+                hermes_args = {**args, "target": "memory"}
+            result = _call_hermes_original_memory_tool(hermes_args, **kw)
+        elif kind == "todo":
+            result = _route_to_reminder(content)
         elif kind == "journal":
-            return _route_to_journal(content)
+            result = _route_to_journal(content)
         elif kind == "workflow":
-            return _route_to_propose_skill(content)
+            result = _route_to_propose_skill(content)
         elif kind == "identity":
-            return _call_hermes_original_memory_tool(
+            result = _call_hermes_original_memory_tool(
                 {**args, "target": "user"}, **kw
             )
         elif kind == "project_fact":
-            return _call_hermes_original_memory_tool(
+            result = _call_hermes_original_memory_tool(
                 {**args, "target": "memory"}, **kw
             )
         else:
-            return json.dumps({
+            result = json.dumps({
                 "success": False,
                 "error": f"unknown kind '{kind}'. 看 schema 选 5 个之一.",
             }, ensure_ascii=False)
     except Exception as e:  # noqa: BLE001
         logger.exception("catfish memory router 异常: %s", e)
-        return json.dumps({
+        result = json.dumps({
             "success": False,
             "error": f"catfish memory router 异常: {e}",
         }, ensure_ascii=False)
+
+    # 6/2 BL-MEMORY-AUDIT-TRAIL: 不管成功失败都 audit (失败也是历史) — append jsonl.
+    # _append_audit_log 自己 best-effort, 失败不抛, 不阻塞主 return.
+    audit_record = _build_audit_record(
+        kind=kind,
+        action=action,
+        args=args,
+        prev_value=prev_value,
+        result_json=result,
+        user_email=user_email,
+    )
+    _append_audit_log(audit_record)
+
+    return result
 
 
 # ── 5 个路由 helper ───────────────────────────────────────────────────────

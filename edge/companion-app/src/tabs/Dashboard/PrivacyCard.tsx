@@ -36,6 +36,10 @@ const LOCAL_DATA_ITEMS: { what: string; path: string; uploaded: boolean }[] = [
   // 卡是 UI noise), 录屏说明 1 行挪进来. 路径仍可在 Finder/CLI 进, 但默认 skill
   // 生成完自动清原料 (#17), 员工大多数情况下进去看就是空的.
   { what: "你录过的屏 (skill 生成完自动清原料, 没生成的留着等你保存)", path: "~/.catfish/recordings/", uploaded: false },
+  // 6/2 BL-MEMORY-AUDIT-TRAIL: 替 hermes 原生 memory_tool 的"replace/remove 直接覆盖
+  // 无 history" 兜底. 每次 add/replace/remove 落 jsonl, prev_value 全保留. 周一拍
+  // 专卡 + Tauri 命令前, 员工/IT 想查直接 cat / jq 这文件.
+  { what: "我对你的记忆修改历史 (覆盖/删除全留, 可查可追溯)", path: "~/.catfish/memory_audit.jsonl", uploaded: false },
 ];
 
 export default function PrivacyCard() {
