@@ -345,3 +345,173 @@ def test_with_fallback_candidate_non_fallbackable_propagates() -> None:
 
     # 应该试 a + b (b 挂了非 fallback-able), c 不试
     assert invoked == ["a", "b"]
+
+
+# ── 6/2 BL-TRANSIENT-NETWORK-RETRY (鸿波 6/2 下午 audit) ────────────────────
+
+
+from catfish_gateway.fallback import (
+    _call_with_transient_retry,
+    _is_transient_network_error,
+)
+
+
+class FakeServerDisconnected(Exception):
+    """模拟 aiohttp.client_exceptions.ServerDisconnectedError (类名匹配)."""
+    pass
+FakeServerDisconnected.__name__ = "ServerDisconnectedError"
+
+
+class FakeConnectionReset(Exception):
+    pass
+FakeConnectionReset.__name__ = "ConnectionResetError"
+
+
+class FakeLitellmInternal(Exception):
+    """模拟 litellm.InternalServerError, 消息含 'Connection error' (鸿波 6/2 log 真错).
+
+    litellm 把网络层错包装成 InternalServerError + 字符串, 类型层抓不到, 必须看消息.
+    """
+    pass
+
+
+class FakeUnrelated400(Exception):
+    """模拟业务错 (e.g. schema 错 400), 不该被 transient retry."""
+    status_code = 400
+
+
+def test_transient_detect_class_name() -> None:
+    """类名匹配: ServerDisconnectedError / ConnectionResetError 真识别."""
+    assert _is_transient_network_error(FakeServerDisconnected("idle gone")) is True
+    assert _is_transient_network_error(FakeConnectionReset("[Errno 54]")) is True
+
+
+def test_transient_detect_message_substring() -> None:
+    """消息层 fallback — litellm 包装的 'Connection error' 字符串 (6/2 鸿波 log 真错)."""
+    e = FakeLitellmInternal(
+        "litellm.InternalServerError: InternalServerError: OpenAIException - Connection error."
+    )
+    assert _is_transient_network_error(e) is True
+
+    e2 = Exception("Server disconnected while reading")
+    assert _is_transient_network_error(e2) is True
+
+    e3 = Exception("[Errno 54] Connection reset by peer")
+    assert _is_transient_network_error(e3) is True
+
+
+def test_transient_detect_cause_chain() -> None:
+    """嵌套异常链 — litellm 套 openai 套 httpx 套 aiohttp, 最内层才是 transient."""
+    inner = FakeServerDisconnected("aiohttp keep-alive idle")
+    middle = Exception("httpx ReadError wrap")
+    outer = Exception("litellm wrap")
+    try:
+        try:
+            try:
+                raise inner
+            except Exception as e1:
+                raise middle from e1
+        except Exception as e2:
+            raise outer from e2
+    except Exception as final_exc:
+        assert _is_transient_network_error(final_exc) is True
+
+
+def test_transient_does_not_match_business_errors() -> None:
+    """业务错 (4xx/429/500) 不该被识别为 transient."""
+    assert _is_transient_network_error(FakeUnrelated400("schema bad")) is False
+    assert _is_transient_network_error(FakeRateLimit("rate limited")) is False
+    assert _is_transient_network_error(Exception("API error 503")) is False
+    assert _is_transient_network_error(Exception("Bad request - missing field")) is False
+
+
+def test_call_with_transient_retry_succeeds_on_second_attempt() -> None:
+    """模拟鸿波 6/2 真场景: 第一次 transient, 第二次新连接好."""
+    m = _model("private-main")
+    attempts = []
+
+    async def invoke(model):
+        attempts.append(model.name)
+        if len(attempts) == 1:
+            raise FakeServerDisconnected("keep-alive idle gone")
+        return "ok"
+
+    result = asyncio.run(_call_with_transient_retry(invoke, m))
+    assert result == "ok"
+    assert len(attempts) == 2  # 重试了 1 次
+
+
+def test_call_with_transient_retry_does_not_retry_business_error() -> None:
+    """业务错 (e.g. 400 schema 错) 不该 retry, 第一次抛立即上去."""
+    m = _model("private-main")
+    attempts = []
+
+    async def invoke(model):
+        attempts.append(model.name)
+        raise FakeUnrelated400("schema bad")
+
+    with pytest.raises(FakeUnrelated400):
+        asyncio.run(_call_with_transient_retry(invoke, m))
+    assert len(attempts) == 1  # 没重试
+
+
+def test_call_with_transient_retry_second_failure_propagates() -> None:
+    """第二次仍 transient → 抛上去 (说明真上游挂了, 不只是残连)."""
+    m = _model("private-main")
+    attempts = []
+
+    async def invoke(model):
+        attempts.append(model.name)
+        raise FakeServerDisconnected("really down")
+
+    with pytest.raises(FakeServerDisconnected):
+        asyncio.run(_call_with_transient_retry(invoke, m))
+    assert len(attempts) == 2  # 重试了 1 次, 仍失败
+
+
+def test_with_fallback_transient_retry_saves_primary() -> None:
+    """end-to-end: with_fallback 看到 primary transient retry 成功 → 不走 chain.
+
+    鸿波 6/2 真场景: catfish-private-main 第一次 ServerDisconnectedError, 第二次 OK
+    → 不该切到公网 fallback (虽然 chain 配了但不需要).
+    """
+    a = _model("a", fallback=_fb(["b"]))
+    b = _model("b")
+    cfg = _config(a, b, auto_fallback=True)
+    attempts = []
+
+    async def invoke(m):
+        attempts.append(m.name)
+        if m.name == "a" and len(attempts) == 1:
+            raise FakeServerDisconnected("idle")
+        return f"served by {m.name}"
+
+    result, used, _hops = asyncio.run(with_fallback(cfg, a, invoke))
+    assert used.name == "a"   # primary 成功 (第二次), 没切到 b
+    assert result == "served by a"
+    assert attempts == ["a", "a"]  # transient retry 真发生
+
+
+def test_with_fallback_transient_then_real_failure_goes_to_chain() -> None:
+    """primary 两次都挂 (第二次仍 transient = 真上游 down) → 切到 chain.
+
+    on_errors 用 should_fallback 真匹配的 keyword ("Connection error" / "Server
+    disconnected"), 异常 msg 也含这些字串 — should_fallback 子串匹配能命中切链.
+    """
+    a = _model("a", fallback=_fb(["b"], on_errors=[
+        "Connection error", "Server disconnected", 429,
+    ]))
+    b = _model("b")
+    cfg = _config(a, b, auto_fallback=True)
+    attempts = []
+
+    async def invoke(m):
+        attempts.append(m.name)
+        if m.name == "a":
+            # msg 含 "Server disconnected" 让 should_fallback 命中 (transient retry 内自己用类名匹配)
+            raise FakeServerDisconnected("Server disconnected: upstream really down")
+        return f"served by {m.name}"
+
+    result, used, _hops = asyncio.run(with_fallback(cfg, a, invoke))
+    assert used.name == "b"
+    assert attempts == ["a", "a", "b"]  # primary transient retry 2 次, 然后 chain b

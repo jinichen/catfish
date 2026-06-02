@@ -1945,7 +1945,7 @@ def _http_code_for_upstream(err_msg: str) -> int:
 
 # BL-ADVISOR-UPSTREAM-ERROR-AS-CONTENT (6/1 鸿波): 已知上游错误关键词
 # (catfish-private-main / LiteLLM 私有 LLM streaming fail 时返 200 + content=这些).
-# Source: ~/.hermes/logs/gateway.log 实测 "API call failed after 3 retries: An error
+# Source: ~/.hermes/logs/gateway.log 实测 "API call failed after 3 retries: An error  # noqa: BOUNDARY
 # occurred during streaming" 是 LiteLLM 标准 retry exhausted 错误.
 _UPSTREAM_ERROR_AS_CONTENT_PATTERNS = (
     "API call failed after",

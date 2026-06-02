@@ -308,6 +308,90 @@ def resolve_chain(
 # ============================================================
 
 
+# ── 6/2 BL-TRANSIENT-NETWORK-RETRY (鸿波 6/2 下午 audit) ────────────────────
+#
+# 现象 (鸿波 log): "每次成功一轮回答, 下一轮就会出错, 再发就正常"
+#
+# 真 root cause (代码层):
+# 1. app.py:1809 `num_retries: 0` — LiteLLM 不重试, 为防业务错被静默吞
+# 2. fallback.py BL-FALLBACK-TOGGLE: auto_fallback 默认 False — 业务错直抛
+# 3. 私有 LLM 服务器 (10.10.40.102:32730) HTTP keep-alive idle timeout 关连接,
+#    aiohttp pool 池里残连下次复用撞 ServerDisconnectedError / Connection reset by peer
+#
+# 三者叠加 → "残连第一次必撞, 直抛 502, 第二次新建连接好".
+#
+# 修法: 只对**已知网络层 transient 错**重试 1 次新建连接. 业务错 (4xx/5xx)
+# **不动** — 跟 num_retries=0 + auto_fallback=False 原设计语义解耦 (那俩管业务错
+# 暴露, 本 retry 管网络残连).
+
+# 异常类名 — 类型层抓
+_TRANSIENT_EXC_NAMES = (
+    "ServerDisconnectedError",   # aiohttp keep-alive 残连
+    "ConnectionResetError",       # OS 层 errno 54 reset
+    "ClientOSError",              # aiohttp [Errno 54]
+    "ConnectError",               # httpx 包装
+    "ReadError",                  # httpx 读时断
+    "APIConnectionError",         # openai 包装
+)
+
+# 异常消息子串 — litellm 把网络错包成 InternalServerError("OpenAIException - Connection error.")
+# 这种 case 类型层抓不到 (变成 litellm.InternalServerError), 必须看消息
+_TRANSIENT_MSG_SUBSTRINGS = (
+    "Connection error",
+    "Server disconnected",
+    "reset by peer",
+)
+
+
+def _is_transient_network_error(exc: BaseException) -> bool:
+    """检测 HTTP keep-alive idle 残连这类网络层 transient 错.
+
+    跟上游业务错 (400/429/503) 不同 — 业务错重发同样错, 应该走 fallback chain.
+    transient 错 client 重新建连接即恢复, retry 1 次省整个 fallback 链消耗.
+
+    匹配两类:
+    1. 异常类名 (含 __cause__ / __context__ 链最多 5 层): aiohttp / httpx / openai
+       任一层的网络异常 — litellm 套 openai 套 httpx 套 aiohttp 多层嵌套, 最外层
+       可能是 InternalServerError, 内层才是 ServerDisconnectedError.
+    2. 异常消息含 "Connection error" / "Server disconnected" / "reset by peer" —
+       litellm 把网络层错**字符串化**成 InternalServerError 消息, 类型层完全抓不到.
+    """
+    # 1. 异常链类名扫描
+    cur: BaseException | None = exc
+    for _ in range(5):
+        if cur is None:
+            break
+        if type(cur).__name__ in _TRANSIENT_EXC_NAMES:
+            return True
+        cur = cur.__cause__ or cur.__context__
+    # 2. 消息层 fallback (litellm 包装的字符串模式)
+    msg = str(exc)
+    return any(s in msg for s in _TRANSIENT_MSG_SUBSTRINGS)
+
+
+async def _call_with_transient_retry(invoke_one, model: ModelConfig):
+    """对 invoke_one(model) 加 1 次 transient 重试 — 6/2 BL-TRANSIENT-NETWORK-RETRY.
+
+    设计:
+    - 只重试**已知网络层 transient** (类名 + 消息双匹配), 业务错原样抛
+    - 重试 1 次足够 (残连第二次新建必好), 不指数退避 (transient 错 ~ms 级恢复)
+    - 第二次失败说明真上游挂了, 抛给 caller (with_fallback) 决定是否切链
+    - aiohttp/httpx connector 看到 ServerDisconnectedError 自动 evict 死连接,
+      下次 acquire 新建 — 所以第二次调用必然是 fresh socket
+    """
+    try:
+        return await invoke_one(model)
+    except Exception as e:
+        if not _is_transient_network_error(e):
+            raise
+        logger.warning(
+            "BL-TRANSIENT-NETWORK-RETRY: model=%s transient %s (%s), 重试 1 次新建连接",
+            model.name, type(e).__name__, str(e)[:120],
+        )
+        # 第 2 次 — 新连接, 残连必好. 仍失败说明真上游挂了, 抛上去让 fallback chain 决定
+        return await invoke_one(model)
+
+
 async def with_fallback(
     config: Config,
     primary: ModelConfig,
@@ -344,8 +428,10 @@ async def with_fallback(
     )
 
     # 第一次: 主模型
+    # 6/2 BL-TRANSIENT-NETWORK-RETRY: invoke_one 包 transient retry — 残连第一次必撞,
+    # 第二次新建必好. 业务错 (4xx/5xx) 不动, 仍原样抛走 fallback / 直抛.
     try:
-        result = await invoke_one(primary)
+        result = await _call_with_transient_retry(invoke_one, primary)
         attempts.append(f"{primary.name}=ok")
         return result, primary, attempts
     except Exception as e:
@@ -405,7 +491,8 @@ async def with_fallback(
             type(last_exc).__name__,
         )
         try:
-            result = await invoke_one(candidate)
+            # 6/2 BL-TRANSIENT-NETWORK-RETRY: candidate 也包 transient retry
+            result = await _call_with_transient_retry(invoke_one, candidate)
             attempts.append(f"{candidate.name}=ok")
             logger.info(
                 "fallback succeeded after %d hop(s): %s served (primary was %s)",
