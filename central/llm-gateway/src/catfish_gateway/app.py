@@ -1794,6 +1794,82 @@ def _apply_max_tokens(params: dict, model) -> None:
         params["max_tokens"] = allowed
 
 
+# 6/2 BL-PROMPT-CACHE-PHASE1 (鸿波 6/2 下午拍): provider 真不支持 cache_control 标记
+# 的 prefix. LiteLLM 1.86 实测: nvidia_nim / groq 没 cache transform, 标记可能让 NIM
+# 严格 schema 校验报 400 BadRequest. 这些 provider 跳过, 0 标记 0 副作用.
+#
+# 真支持矩阵 (LiteLLM llms/<provider>/chat/transformation.py 含 cache_control 处理):
+#   anthropic / dashscope / openrouter / cometapi 真转
+#   gemini: 转 cached_content (有 32K 最低 cache size, gemini-3.5-flash; pro 4K)
+#   deepseek: openai 协议透传, server 端自动 implicit cache (不依赖客户端标记)
+#   私有 vLLM (openai/qwen_*): vLLM prefix cache 自动, 加标记 silently 忽略
+_CACHE_UNSUPPORTED_PROVIDERS = ("nvidia_nim/", "groq/")
+
+
+def _provider_supports_cache_marker(upstream_model: str) -> bool:
+    """True 时给 system + tools 加 cache_control 标记.
+
+    LiteLLM 转上游时:
+    - 支持的 (anthropic/dashscope/gemini): 真省 input tokens 计费
+    - 透传不破的 (deepseek/私有 vLLM): silently 忽略, 0 副作用
+    - 真破的 (nvidia_nim/groq): 跳过, 防 400 BadRequest
+    """
+    if not upstream_model:
+        return False
+    for bad in _CACHE_UNSUPPORTED_PROVIDERS:
+        if upstream_model.startswith(bad):
+            return False
+    return True
+
+
+def _apply_prompt_cache_markers(params: dict, model) -> None:
+    """6/2 BL-PROMPT-CACHE-PHASE1: 给 messages[0] (system) + tools[-1] 加 cache_control.
+
+    Anthropic 风格: 在 system message content list 最后块 + tools 数组最后一个 tool
+    上各加一个 cache_control breakpoint. LiteLLM 转给各 provider 原生协议.
+
+    最多 4 个 cache breakpoint (Anthropic 限制), 我们用 2 个 (system / tools), 留
+    2 个未来扩展 (user history 长 prompt 时再加).
+
+    幂等: 若 content 已经是 list-of-blocks 且最后块已有 cache_control, 不重复.
+    """
+    if not _provider_supports_cache_marker(model.upstream.model):
+        return
+
+    messages = params.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return
+
+    # ── system message: content str → list-of-blocks + cache_control ──
+    # 注意 hermes 真生产里第一条总是 system (BL-FIX2 pre-unwrap 也保证), 真实操作上
+    # 14.5K 大头都在这条 — 缓存它是收益最大的.
+    first = messages[0]
+    if first.get("role") == "system":
+        content = first.get("content")
+        if isinstance(content, str) and content.strip():
+            first["content"] = [
+                {
+                    "type": "text",
+                    "text": content,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        elif isinstance(content, list) and content:
+            # 已是 list (vision 或 历史 multipart). 给最后一块 text 加 cache_control.
+            for block in reversed(content):
+                if isinstance(block, dict) and block.get("type") == "text":
+                    if "cache_control" not in block:
+                        block["cache_control"] = {"type": "ephemeral"}
+                    break
+
+    # ── tools: 最后一个 tool 加 cache_control (Anthropic 风格 — 标 prefix 结尾) ──
+    tools = params.get("tools")
+    if isinstance(tools, list) and tools:
+        last = tools[-1]
+        if isinstance(last, dict) and "cache_control" not in last:
+            last["cache_control"] = {"type": "ephemeral"}
+
+
 def _build_litellm_params(body: dict, model) -> dict:
     """Map gateway request -> litellm call params.
 
@@ -1813,6 +1889,20 @@ def _build_litellm_params(body: dict, model) -> dict:
     _apply_max_tokens(params, model)
     if model.upstream.api_base:
         params["api_base"] = model.upstream.api_base
+
+    # 6/2 BL-PROMPT-CACHE-PHASE1 (鸿波 6/2 下午拍): 给 system message + tools
+    # 加 cache_control. audit 显示真 prompt 34K 里 19K 是 tools + 14.5K 是 system,
+    # 99% 是固定开销, 真 user input 占 3%. 上游缓存这部分能省 70-90%.
+    #
+    # 兼容矩阵 (6/2 audit, LiteLLM 1.86.0):
+    #   - deepseek      : 服务端自动 implicit cache, 客户端标记 silently 忽略, 0 副作用
+    #   - dashscope     : LiteLLM dashscope transformation 真转 (catfish-public-qwen-flash)
+    #   - gemini        : LiteLLM 转 cached_content (gemini-3.5-flash 32K 最低, pro 4K)
+    #   - anthropic     : 原生 cache_control 协议 (catfish 现在没用 anthropic 直连)
+    #   - 私有 vLLM qwen: vLLM 自动 prefix cache, 标记忽略 (省 GPU 时间不省 token)
+    #   - nvidia_nim    : 不支持, 标记可能让 NIM 校验报错 (跳过)
+    #   - groq          : 不支持, 标记跳过
+    _apply_prompt_cache_markers(params, model)
 
     # BL-FIX34 (5/10 鸿波诊断): streaming 默认上游不送 usage chunk, gateway
     # 抽 prompt_tokens / completion_tokens 永远 0, audit 写 status=ok tokens=0,
@@ -1841,6 +1931,25 @@ def _build_litellm_params(body: dict, model) -> dict:
             logger.info("applied param_overrides for %s: %s", model.name, changed)
 
     return params
+
+
+def _pick_cache_read_from_streaming_usage(usage: dict, current: int) -> int:
+    """6/2 BL-CACHE-AUDIT-PROVIDER-FIELDS: streaming chunk 里抓 cache_read.
+
+    优先级:
+      1. cache_read_input_tokens (Anthropic 顶层, 旧字段)
+      2. prompt_tokens_details.cached_tokens (OpenAI/DeepSeek/DashScope/Gemini LiteLLM 统一)
+    任一拿到非 0 就用, 否则保留 current.
+    """
+    v = usage.get("cache_read_input_tokens")
+    if v:
+        return int(v)
+    details = usage.get("prompt_tokens_details") or {}
+    if isinstance(details, dict):
+        v2 = details.get("cached_tokens")
+        if v2:
+            return int(v2)
+    return current
 
 
 def _extract_nested_usage(usage, key: str) -> int:
@@ -2252,12 +2361,13 @@ async def _stream_chat_completion(
                 usage = data.get("usage") or {}
                 prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
                 completion_tokens = usage.get("completion_tokens", completion_tokens)
-                # BL-CACHE-AUDIT (5/17): Anthropic cache tokens
+                # BL-CACHE-AUDIT (5/17 + 6/2 BL-CACHE-AUDIT-PROVIDER-FIELDS):
+                # Anthropic 顶层字段 + LiteLLM 统一字段 (deepseek/dashscope/gemini/openai).
                 _stream_cache_creation = (
                     usage.get("cache_creation_input_tokens", _stream_cache_creation) or _stream_cache_creation
                 )
-                _stream_cache_read = (
-                    usage.get("cache_read_input_tokens", _stream_cache_read) or _stream_cache_read
+                _stream_cache_read = _pick_cache_read_from_streaming_usage(
+                    usage, _stream_cache_read,
                 )
                 choices = data.get("choices") or []
                 if choices:
@@ -2293,12 +2403,12 @@ async def _stream_chat_completion(
                 usage = data.get("usage") or {}
                 prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
                 completion_tokens = usage.get("completion_tokens", completion_tokens)
-                # BL-CACHE-AUDIT (5/17): Anthropic cache tokens, final chunk usage
+                # BL-CACHE-AUDIT (5/17 + 6/2 cache_read 兼容统一字段): final chunk usage
                 _stream_cache_creation = (
                     usage.get("cache_creation_input_tokens", _stream_cache_creation) or _stream_cache_creation
                 )
-                _stream_cache_read = (
-                    usage.get("cache_read_input_tokens", _stream_cache_read) or _stream_cache_read
+                _stream_cache_read = _pick_cache_read_from_streaming_usage(
+                    usage, _stream_cache_read,
                 )
                 choices = data.get("choices") or []
                 if choices:
@@ -2535,9 +2645,19 @@ async def _invoke_chat_completion(
     completion_tokens = getattr(usage, "completion_tokens", 0) if usage else 0
     # BL-CACHE-AUDIT (5/17): Anthropic prompt cache hit metrics.
     # Anthropic 在 usage 里返 cache_creation_input_tokens (首次写 cache 的 tokens)
-    # + cache_read_input_tokens (命中 cache 复用的 tokens). LiteLLM 透传到
-    # response.usage 上, 不同 model 字段位置可能不同 (有些挂 usage 顶, 有些挂
-    # prompt_tokens_details), 都试一遍.
+    # + cache_read_input_tokens (命中 cache 复用的 tokens).
+    #
+    # 6/2 BL-CACHE-AUDIT-PROVIDER-FIELDS (鸿波 6/2 晚抓的真问题): 5/17 只抓 Anthropic
+    # 字段, 但 catfish 真用的 deepseek/dashscope/gemini/openai 走 LiteLLM 统一字段
+    # `usage.prompt_tokens_details.cached_tokens` (OpenAI 标准). 抓不到导致鸿波重启
+    # 后 cache_read=0 误以为 cache 没生效. 加 cached_tokens fallback.
+    #
+    # LiteLLM 1.86 真实测 (llms/dashscope/cost_calculator.py:28-30 真证):
+    #   - DashScope qwen-max:    usage.prompt_tokens_details.cached_tokens
+    #   - DeepSeek API:           usage.prompt_tokens_details.cached_tokens
+    #   - Gemini (cached_content):usage.prompt_tokens_details.cached_tokens
+    #   - OpenAI gpt-4o:          usage.prompt_tokens_details.cached_tokens
+    #   - Anthropic Claude:      usage.cache_read_input_tokens (顶层, 旧字段)
     cache_creation = (
         getattr(usage, "cache_creation_input_tokens", 0)
         or _extract_nested_usage(usage, "cache_creation_input_tokens")
@@ -2546,6 +2666,7 @@ async def _invoke_chat_completion(
     cache_read = (
         getattr(usage, "cache_read_input_tokens", 0)
         or _extract_nested_usage(usage, "cache_read_input_tokens")
+        or _extract_nested_usage(usage, "cached_tokens")  # 6/2 LiteLLM 统一字段
         or 0
     ) if usage else 0
     if cache_creation or cache_read:
