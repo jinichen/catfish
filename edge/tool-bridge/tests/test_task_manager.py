@@ -248,33 +248,55 @@ class TestTaskManager(unittest.TestCase):
         self.assertEqual(task.result, "from-thread")
 
     def test_submit_typed_task_from_sync_caller(self):
-        """submit_typed_task (LLM 调 catfish_run_task 的真实入口) 应在 sync 也 work."""
-        # 这跟 catfish_tools.py:call_tool sync 入口路径一致
-        result = task_manager.submit_typed_task(
-            kind="execute_code",
-            payload={"code": "print('hello sync')", "lang": "python", "timeout_s": 10},
-            label="sync-execute-test",
-        )
-        self.assertTrue(
-            result["ok"],
-            f"sync 入口不应失败, error={result.get('error')}",
-        )
-        self.assertTrue(result["task_id"].startswith("task_"))
-        # status 此刻可能 pending/running, 等它完
-        task_id = result["task_id"]
-        mgr = task_manager.manager()
-        deadline = time.time() + 5.0
-        while time.time() < deadline:
+        """submit_typed_task (LLM 调 catfish_run_task 的真实入口) 应在 sync 也 work.
+
+        BL-CI-TASK-MANAGER-RACE (6/3): mock sandbox.run_in_sandbox 立即返,
+        本测试**真目的**是验 sync 入口 → spawn daemon thread → 后台 asyncio.run
+        → task.status="completed" 真链路, 跟 sandbox 真行为 (nsjail/docker cold
+        start 真慢) 无关. CI 上不 mock 时, sandbox spawn 真 timeout > 5s deadline
+        撞 'running != completed'.
+        """
+        from unittest import mock as _mock
+        from catfish_tool_bridge import sandbox as _sandbox
+
+        # 真 mock sandbox 立即返成功 — 测真 sync 入口路径不测 sandbox
+        fake_result = {
+            "ok": True,
+            "sandbox_used": True,
+            "sandbox_kind": "fake",
+            "stdout": "hello sync\n",
+            "stderr": "",
+            "rc": 0,
+            "elapsed_ms": 1.0,
+            "timed_out": False,
+        }
+        with _mock.patch.object(_sandbox, "run_in_sandbox", return_value=fake_result):
+            # 这跟 catfish_tools.py:call_tool sync 入口路径一致
+            result = task_manager.submit_typed_task(
+                kind="execute_code",
+                payload={"code": "print('hello sync')", "lang": "python", "timeout_s": 10},
+                label="sync-execute-test",
+            )
+            self.assertTrue(
+                result["ok"],
+                f"sync 入口不应失败, error={result.get('error')}",
+            )
+            self.assertTrue(result["task_id"].startswith("task_"))
+            # status 此刻可能 pending/running, 等它完
+            task_id = result["task_id"]
+            mgr = task_manager.manager()
+            deadline = time.time() + 5.0
+            while time.time() < deadline:
+                t = mgr.get(task_id)
+                if t and t.status in ("completed", "failed"):
+                    break
+                time.sleep(0.05)
             t = mgr.get(task_id)
-            if t and t.status in ("completed", "failed"):
-                break
-            time.sleep(0.05)
-        t = mgr.get(task_id)
-        self.assertIsNotNone(t)
-        self.assertEqual(
-            t.status, "completed",
-            f"sync-spawned task 应完成, error={t.error}",
-        )
+            self.assertIsNotNone(t)
+            self.assertEqual(
+                t.status, "completed",
+                f"sync-spawned task 应完成, error={t.error}",
+            )
 
 
 class TestTaskNotification(unittest.TestCase):
