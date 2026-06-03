@@ -995,3 +995,20 @@ BACKLOG.md (本)        ─→  全量积压 (每周 review)            →   �
 - HermesMemoryCard "🧹 整理记忆" 按钮员工真用, LLM 真返 verdict=same/related 真比例
 - LLM 真按 propose_skill_hints 真主动调 catfish_propose_skill (LearningCard 真有新增 proposed)
 - prefetch user message 末尾 fence size 真 (~7K → ~3K chars, A2 真已生效)
+
+## BL-CI-TOOLBRIDGE-TESTS-DEBT (6/3 留)
+
+CI tool-bridge job 跑 844 tests, 760 pass / 18 fail. fail 真 3 类历史债:
+
+1. **缺 python-docx**: test_run_skill (5 个) 真调 leadership-briefing skill script.py,
+   script.py import docx (python-docx). CI install 没装. 修: ci.yml tool-bridge install
+   加 'python-docx'.
+
+2. **screenshot 测试真 macOS-only**: test_screenshot (5 个) 期望 macOS 路径,
+   GitHub Actions ubuntu runner 真返 '不支持平台 Linux'. 修: 加 @pytest.mark.skipif(sys.platform != 'darwin').
+
+3. **测试 mock 真过期**: test_screenshot 真 7 个 AttributeError — catfish_tools.py
+   重构后 _MAX_SCREENSHOT_BYTES / _import_playwright / _flatten_a11y 改名或删. 修:
+   更新测试 mock 用真当前 API.
+
+3 类都是 pre-existing 测试维护债, 跟员工功能 0 关系. 真不阻塞 ship.
