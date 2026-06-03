@@ -1012,3 +1012,17 @@ CI tool-bridge job 跑 844 tests, 760 pass / 18 fail. fail 真 3 类历史债:
    更新测试 mock 用真当前 API.
 
 3 类都是 pre-existing 测试维护债, 跟员工功能 0 关系. 真不阻塞 ship.
+
+## BL-CI-TASK-MANAGER-SYNC-RACE (6/3 留, CI 唯一遗留 fail)
+
+tests/test_task_manager.py::test_submit_typed_task_from_sync_caller — `'running' != 'completed'`.
+
+5s deadline 等 `print('hello sync')` 完成, CI 上 5s 还 'running'. 真根因待审:
+  - submit_typed_task sync 入口真 spawn 后台 thread 时机问题?
+  - 或测试 deadline 真太短 (Linux runner 慢)?
+  - 或 task_manager._manager singleton 真在 test 间没 reset?
+
+不阻塞今晚 ship — 跟 14 commit 真 0 关系. 修法:
+  A. 调 deadline 5s → 30s (粗糙)
+  B. audit submit_typed_task sync 入口真 race
+推荐 B.
