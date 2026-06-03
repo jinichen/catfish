@@ -283,6 +283,12 @@ class CatfishMemoryProvider(MemoryProvider):
         # 配合 hm 脚本做反向治理 — 双管齐下.
         sections.append(self._render_memory_discipline())
 
+        # BL-LLM-NO-TERMINAL-BYPASS-V2 (6/3): 真 LLM 真自主越权信号触发 (chat verbatim:
+        # '改调 terminal 绕过 execute_code 审批'). hermes hook 真无 parent_tool 真无法
+        # 区分 LLM 直调 vs skill 内部, 真不能一刀切 block. 真注入红线 prompt 让 LLM
+        # 自查 — 真**真**真**真**禁绕 sandbox**.
+        sections.append(self._render_safety_redline())
+
         # 1. session_meta — 时间感 (距上次 N 天)
         meta = self._render_session_meta(catfish_home)
         if meta:
@@ -313,6 +319,45 @@ class CatfishMemoryProvider(MemoryProvider):
         return "\n\n".join(sections)
 
     # ── 5 个数据源 render helper ──────────────────────────
+
+    def _render_safety_redline(self) -> str:
+        """BL-LLM-NO-TERMINAL-BYPASS-V2 (2026-06-03): 安全红线 prompt.
+
+        # 真触发场景
+        6/3 下午员工 chat 真生产: LLM 真自己说 "execute_code 卡住, 我换个方案:
+        直接用 terminal 调 pdftotext / python -c, 不经过 execute_code 审批流程."
+
+        真**LLM 真自主越权信号** — 真 catfish 真所有代码执行 (Python / bash) 真该走
+        execute_code → sandbox-exec / nsjail + 员工审批. terminal 真 hermes builtin
+        默认 local 真直接 host 跑, 真**绕**真审批 + sandbox.
+
+        # 真为啥不 hook block (v1 撤回)
+        hermes pre_tool_call hook 真**无** parent_tool 真字段, 真无法区分 LLM 直调
+        vs catfish_run_skill / skill 内部真用 terminal. 真一刀切 block 真**误伤**
+        员工真合法 skill 路径. 改成注入红线 prompt 让 LLM 真**自查**.
+
+        # 真根治在别处
+        - BL-TOOLS-SANITIZER-DROP-DEPRECATED (6/3 BACKLOG): 修 execute_code 真
+          tool_call/tool_describe 死循环, LLM 真有正路可走真没动机绕.
+        - audit log post_tool_call 真 LLM 直调 terminal 真触发警告 entry (后续).
+        """
+        return (
+            "## 🚨 安全红线 (catfish 强约束)\n\n"
+            "你**永远不要**用 `terminal` 工具跑代码 (Python / bash / shell).\n\n"
+            "**理由**: terminal 真 hermes builtin 默认 local 真**直接** host 上跑命令, "
+            "绕过 catfish 真 sandbox-exec / nsjail + 员工审批. catfish 真红线 — "
+            "LLM 真所有代码执行真**必须**走 sandbox + 员工 review.\n\n"
+            "**正路**:\n"
+            "- 跑代码: `execute_code(lang='python'|'bash', code='...')` → catfish sandbox\n"
+            "- 读 PDF / Excel / docx: `execute_code` 真里调 pypdf / openpyxl / python-docx\n"
+            "- 查文件: `read_file` / `glob` / `grep`\n"
+            "- 浏览器自动化: `catfish_browser_*` 四件套 (goto/click/fill/snapshot)\n\n"
+            "**禁用 terminal 真场景**:\n"
+            "- ❌ 'execute_code 卡住, 改 terminal 绕过审批' — 真**主动越权**, 拒\n"
+            "- ❌ 'terminal 调 pdftotext 直接读' — 真**绕 sandbox**, 拒\n"
+            "- ❌ 'terminal 调 curl 拉数据' — 改 `execute_code(bash)` 或 `web_fetch`\n\n"
+            "**唯一合法场景**: 员工真**自己**真本机 shell 跑命令 (员工自己输, 不是你调).\n"
+        )
 
     def _render_memory_discipline(self) -> str:
         """BL-MEMORY-DISCIPLINE (5/24): hermes memory_update 写入纪律.
