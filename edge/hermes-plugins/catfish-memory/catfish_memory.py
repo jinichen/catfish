@@ -277,16 +277,27 @@ class CatfishMemoryProvider(MemoryProvider):
         catfish_home = self._catfish_home_cached or _catfish_home()
         sections: List[str] = []
 
+        # BL-CATFISH-WIKI-MODE P0.1 (6/3): 借鉴 Karpathy LLM Wiki + llm_wiki 真
+        # purpose 概念. 在所有 memory 内容最前注入"员工身份+目的"提示, 让 LLM 真
+        # 知道当前服务的员工是谁、做什么场景, 不再当成 generic chatbot.
+        sections.append(self._render_purpose())
+
+        # BL-CATFISH-WIKI-MODE P0.2 (6/3): schema 注入 — 显式 5 kind router 规则
+        # + journal/distilled/USER/MEMORY 分工. 借鉴 llm_wiki "AUTHORITATIVE" 标记,
+        # 跟 _render_memory_discipline 互补: discipline 教写什么不该写, schema 教
+        # 该写到哪里去.
+        sections.append(self._render_schema())
+
         # 0. BL-MEMORY-DISCIPLINE (5/24 鸿波"hermes memory 70% 内容跑偏"): 在所有
         # memory 内容前面注入"写入纪律"提示, 让 LLM 调 memory_update 前自查.
         # 不强制 enforce (hermes 端没钩子), 但 LLM 看到这段会显著降低乱写.
         # 配合 hm 脚本做反向治理 — 双管齐下.
         sections.append(self._render_memory_discipline())
 
-        # BL-LLM-NO-TERMINAL-BYPASS-V2 (6/3): 真 LLM 真自主越权信号触发 (chat verbatim:
-        # '改调 terminal 绕过 execute_code 审批'). hermes hook 真无 parent_tool 真无法
-        # 区分 LLM 直调 vs skill 内部, 真不能一刀切 block. 真注入红线 prompt 让 LLM
-        # 自查 — 真**真**真**真**禁绕 sandbox**.
+        # BL-LLM-NO-TERMINAL-BYPASS-V2 (6/3): LLM 自主越权信号触发 (chat verbatim:
+        # '改调 terminal 绕过 execute_code 审批'). hermes hook 无 parent_tool 无法
+        # 区分 LLM 直调 vs skill 内部, 不能一刀切 block. 注入红线 prompt 让 LLM
+        # 自查 — 禁绕 sandbox.
         sections.append(self._render_safety_redline())
 
         # 1. session_meta — 时间感 (距上次 N 天)
@@ -319,6 +330,80 @@ class CatfishMemoryProvider(MemoryProvider):
         return "\n\n".join(sections)
 
     # ── 5 个数据源 render helper ──────────────────────────
+
+    def _render_purpose(self) -> str:
+        """BL-CATFISH-WIKI-MODE P0.1 (2026-06-03): 员工身份 + catfish 服务目的.
+
+        借鉴 Karpathy LLM Wiki gist 的 purpose.md 概念 — 让 LLM 知道当前服务的
+        员工是谁、做什么场景, 不再当 generic chatbot. llm_wiki 实现 (ingest.ts
+        buildAnalysisPrompt) 真把 purpose 作 string 注入 prompt 末尾, 标 "for
+        context", catfish 跟 _render_memory_discipline 同套路注入到 user message.
+
+        # 为啥重要
+        - LLM 不知道员工身份 → 回答时按 generic 写, 不带行业知识 / 公文体
+        - 不知道服务场景 → 工具选错 (该走 catfish-weekly-report 时去 generic markdown)
+        - 不知道员工偏好 → 周报里塞 catfish 个人开源项目 (已在 USER.md 修)
+
+        # 内容来源
+        鸿波亲笔写, 描述自己是谁 + 用 catfish 做啥 + 不做啥. 当前 v1 是占位 —
+        鸿波下次拍板时可改 catfish-memory/purpose.txt (TODO P1 真接配置文件).
+        """
+        return (
+            "## 🎯 员工身份与目的 (purpose)\n\n"
+            "你服务的员工: **陈鸿波** (FFCS 数字鲶鱼项目发起人, 中电福富 + 法律部 / 企业发展与风控部).\n\n"
+            "**主要工作场景**:\n"
+            "- 企业资质管理 (高企 / ITSS / ISO 27001 / CMMI / CSMM / 数据安全)\n"
+            "- 资质评估 + 申报 (含咨询公司参与决策)\n"
+            "- 公司向上汇报 (周报 / 月度通报 / 立项材料 / 项目可研)\n"
+            "- ISO 现场审核 / 评审准备\n"
+            "- 跨部门沟通 (中电福富部门 + 九地市分公司)\n\n"
+            "**员工偏好**:\n"
+            "- 跳过铺垫直接交付结果, 拒绝估算 (要精确数据)\n"
+            "- 偏好杂志风 / 花叔风 PPT, 公文体严谨\n"
+            "- 文件输出到 ~/.catfish/output/<日期>/, 不再问存哪\n"
+            "- 个人开源项目 catfish/鲶鱼**不要**进周报 / 汇报 / 待办 (是个人事, 不是公司工作)\n\n"
+            "**不该做的事**:\n"
+            "- 不要自动跑周报 (员工每周手动提)\n"
+            "- 不要绕 execute_code 审批走 terminal (见安全红线)\n"
+            "- 不要乱写 MEMORY.md 当 skill spec 用 (见 memory 写入纪律)\n"
+        )
+
+    def _render_schema(self) -> str:
+        """BL-CATFISH-WIKI-MODE P0.2 (2026-06-03): catfish memory schema (AUTHORITATIVE).
+
+        借鉴 llm_wiki buildGenerationPrompt 的 "Project Schema and Routing
+        (AUTHORITATIVE)" 标记. schema 教 LLM 写到哪里去 (路由规则),
+        memory_discipline 教写什么不该写 (内容纪律). 互补.
+
+        当前 schema 显式列 5 kind router + 4 个长期存储位置的分工.
+        """
+        return (
+            "## 📐 catfish memory schema (AUTHORITATIVE)\n\n"
+            "**5 kind memory router** (调 `memory` tool 时 `kind` 必填):\n\n"
+            "| kind | 路由到哪 | 用来存什么 |\n"
+            "|---|---|---|\n"
+            "| `identity` | `~/.hermes/memories/USER.md` (cap 3500 chars) | 员工本人 — 身份/偏好/习惯/昵称/关系 |\n"
+            "| `project_fact` | `~/.hermes/memories/MEMORY.md` (cap 5000 chars) | 项目/技术常量 — 资质评估流程/工具配置/平台特征 |\n"
+            "| `workflow` | hint → 调 `catfish_propose_skill` | 多步流程 — 有 step 序列的全部 |\n"
+            "| `journal` | `~/.catfish/employee_journal.md` (append) | 本次会话总结 / 已发生事件 / pending TODO |\n"
+            "| `todo` | hint → 调 `catfish_reminder_create` | 带 deadline 的任务 (会写 Reminders.app) |\n\n"
+            "**4 个长期存储分工**:\n\n"
+            "- **USER.md (identity)** — 员工本人, 一年后还成立. 例: 偏好直接输出不要确认.\n"
+            "- **MEMORY.md (project_fact)** — 项目/技术常量, 跨 session 稳定. 例: 资质评估流程.\n"
+            "- **employee_journal.md (chronological)** — 时间线日志, append-only. 格式严格:\n"
+            "  `## [YYYY-MM-DD HH:MM] kind | title` 一行 (parseable by `grep '^## \\['`).\n"
+            "- **distilled_facts.md (LLM 蒸馏)** — 自动从 journal 蒸馏的长期记忆,\n"
+            "  每 24h 由 catfish-memory plugin 跑. 员工只读不写.\n\n"
+            "**SKILL.md (~/.hermes/skills/<name>/SKILL.md)** — 真正的 workflow / spec\n"
+            "/ 触发词住这里, **不要**写进 MEMORY.md.\n\n"
+            "**路由决策树** (调 memory 前自查):\n"
+            "1. 员工本人的事? → identity → USER.md\n"
+            "2. 项目/技术常量? → project_fact → MEMORY.md\n"
+            "3. 多步流程? → workflow → 改调 catfish_propose_skill\n"
+            "4. 这次会话的事 / 已发生事件? → journal → employee_journal.md\n"
+            "5. 带 deadline 的任务? → todo → 改调 catfish_reminder_create\n"
+            "6. 拿不准 → 80% 概率属于 journal, 不属于 identity/project_fact\n"
+        )
 
     def _render_safety_redline(self) -> str:
         """BL-LLM-NO-TERMINAL-BYPASS-V2 (2026-06-03): 安全红线 prompt.
@@ -781,8 +866,11 @@ class CatfishMemoryProvider(MemoryProvider):
         # 简单实现: 没办法从 plugin 直接调 tool-bridge tool, 写"建议" 到 journal,
         # LLM 看到 result 后自己再调 reminder_create. 未来 PR 真接 socket.
         catfish_home = self._catfish_home_cached or _catfish_home()
-        ts = datetime.now(timezone.utc).isoformat()
-        entry = f"\n## 待办 (LLM 建议存 reminder) @ {ts}\n{content}\n"
+        # BL-CATFISH-WIKI-MODE P0.3 (6/3): 格式 `## [YYYY-MM-DD HH:MM] kind | title`
+        ts_short = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
+        # title 取 content 首 50 字, 单行
+        title = (content or "").strip().replace("\n", " ")[:50] or "unknown"
+        entry = f"\n## [{ts_short}] todo | {title}\n\n{content}\n"
         try:
             (catfish_home / "employee_journal.md").parent.mkdir(
                 parents=True, exist_ok=True
@@ -805,8 +893,10 @@ class CatfishMemoryProvider(MemoryProvider):
         import json as _json
         catfish_home = self._catfish_home_cached or _catfish_home()
         journal_path = catfish_home / "employee_journal.md"
-        ts = datetime.now(timezone.utc).isoformat()
-        entry = f"\n## Session entry @ {ts}\n{content}\n"
+        # BL-CATFISH-WIKI-MODE P0.3 (6/3): 格式 `## [YYYY-MM-DD HH:MM] kind | title`
+        ts_short = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
+        title = (content or "").strip().replace("\n", " ")[:50] or "unknown"
+        entry = f"\n## [{ts_short}] journal | {title}\n\n{content}\n"
         try:
             journal_path.parent.mkdir(parents=True, exist_ok=True)
             with open(journal_path, "a", encoding="utf-8") as f:

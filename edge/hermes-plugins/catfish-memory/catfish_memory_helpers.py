@@ -161,10 +161,12 @@ def _extract_message_pairs(messages: List[Dict[str, Any]]) -> List[Tuple[str, st
 
 
 def _format_journal_entry(session_id: str, summary: str) -> str:
-    """格式 journal entry — 加日期 + session_id 短前缀, 跟老 gateway 输出一致."""
+    """格式 journal entry. BL-CATFISH-WIKI-MODE P0.3 (6/3): 改用 Karpathy LLM Wiki
+    log.md 风格 `## [YYYY-MM-DD HH:MM] kind | title`, 一行可 grep 解析.
+    grep '^## \\[' employee_journal.md | tail -5 拉最近 5 条."""
     date_str = time.strftime("%Y-%m-%d %H:%M")
     sid_short = (session_id[-6:] if len(session_id) > 6 else session_id) or "unknown"
-    return f"## {date_str} · session `…{sid_short}`\n\n{summary.strip()}\n"
+    return f"## [{date_str}] session | …{sid_short}\n\n{summary.strip()}\n"
 
 
 def _append_journal(catfish_home: Path, entry: str) -> None:
