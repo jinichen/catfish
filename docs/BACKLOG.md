@@ -1026,3 +1026,125 @@ tests/test_task_manager.py::test_submit_typed_task_from_sync_caller — `'runnin
   A. 调 deadline 5s → 30s (粗糙)
   B. audit submit_typed_task sync 入口真 race
 推荐 B.
+
+## BL-CATFISH-WIKI-MODE (6/3 留, 长期 sprint, 借鉴 Karpathy LLM Wiki + nashsu/llm_wiki)
+
+借鉴对象:
+- **Karpathy gist** (https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — 原始抽象 pattern
+- **nashsu/llm_wiki** (https://github.com/nashsu/llm_wiki) — Tauri+React+sigma.js 完整实现
+
+核心思想: LLM 不要每次 RAG re-derive, 而是**增量建+维护持久 wiki** (结构化 markdown 文件 +
+wikilinks + frontmatter). 知识编译一次, 持续 current, 不是每查再生.
+
+跟 catfish 现状对照:
+
+| Karpathy/llm_wiki | catfish 现状 | gap |
+|---|---|---|
+| 3 层: Raw / Wiki / Schema | journal+distilled = Wiki 雏形, USER/MEMORY 散页, 无 Raw | 缺 Raw + 缺正规 Wiki 结构 |
+| Ingest 两步 (Analysis+Generation) | sync_turn → distill 单步 | 缺 Analysis 阶段 + 输出无 frontmatter |
+| Query (答案 file 回 wiki) | chat 真消失除非 explicit memory_update | 缺自动沉淀 |
+| Lint 定期 health check | hm 脚本反向治理 (员工手扫) | 缺 contradiction/stale/orphan 检测 |
+| index.md content catalog | 无 | 缺 |
+| log.md chronological parseable | journal 有但格式不严 | 改格式 `## [YYYY-MM-DD] kind \| title` |
+| wikilinks + 图谱 | 无 cross-reference | 缺 |
+| Obsidian 兼容 vault | 散在 ~/.catfish/ 各处 | catfish_home 改 vault 结构员工就能用 Obsidian 看 |
+| Schema 注入 system prompt | _render_memory_discipline + _render_safety_redline 同精神 | 缺正规 schema + purpose |
+
+catfish 领先 llm_wiki:
+- 执行能力 (skill / 浏览器 / 邮件)
+- 跨员工 skill 共享 + RecMode
+- 审批 sandbox + 安全红线
+- Companion Dashboard 多 tab
+- 同 stack (Tauri 2.11 + React 19)
+
+### P0 — 立即可做, 1 commit ~30 行, 立竿见影
+
+**P0.1 _render_purpose 注入** (catfish-memory plugin)
+- 加 _render_purpose 跟 _render_memory_discipline 同套路, 注入 user message 末尾
+- 内容鸿波亲自写一遍 (员工是谁: 资质管理负责人 / 服务什么场景: 合规审核/ISO/客户调研)
+- 让 LLM 每轮看到员工身份+目的, 减跑偏
+
+**P0.2 _render_schema 注入** (catfish-memory plugin)
+- 把 5 kind router 规则 + journal/distilled 分工 + memory cap 显式写出来
+- 跟 P0.1 同位置注入
+- 借鉴 llm_wiki "Project Schema and Routing (AUTHORITATIVE)" 标记
+
+**P0.3 journal log 格式严格化**
+- 改 journal append 格式: `## [YYYY-MM-DD] kind | title` 一行
+- catfish-tool-bridge 真 journal_append 写时按这格式
+- 改完后 `grep "^## \[" employee_journal.md | tail -5` 拉最近 5 条
+- LLM prefetch journal 时也按这格式提取最近 N 条
+
+### P1 — 下周 sprint, 3-5 天
+
+**P1.1 拆 _call_distill_llm 为两步**
+- Step 1 Analysis (entity/concept/contradiction/recommendations 结构化)
+- Step 2 Generation (输出 frontmatter 真 wiki page)
+- 借鉴 llm_wiki buildAnalysisPrompt + buildGenerationPrompt
+- 输出位置: ~/.catfish/wiki/entities/ + ~/.catfish/wiki/concepts/
+
+**P1.2 Query-as-Source (Karpathy 第 5 条)**
+- 员工真在 chat 问完, Companion 加按钮 "存进 wiki"
+- 点了, LLM 把这轮 Q&A 写成 wiki/queries/<日期>-<主题>.md (带 frontmatter sources: [chat])
+- 自动 ingest 抽 entity/concept (走 P1.1 pipeline)
+- 高价值: 员工真问过的不丢, 沉淀进知识体系
+
+**P1.3 Obsidian 兼容**
+- 改 ~/.catfish/ 真 vault 结构:
+  - `.obsidian/` 自动生成 (推荐 settings + plugins)
+  - `raw/sources/` — 员工导入文件 (PDF/邮件附件等), immutable
+  - `wiki/` — LLM 生成 (entities/concepts/sources/queries/log.md/index.md)
+  - 保留 `~/.catfish/output/` (skill 真自动生成文件)
+- 员工真用 Obsidian 打开 ~/.catfish/ 就是个 vault
+
+### P2 — 2-3 周
+
+**P2.1 catfish_memory_lint tool**
+- 借鉴 llm_wiki runSemanticLint
+- LLM tool 输入: 全 MEMORY/USER/distilled, 输出 contradiction/stale/missing-page/suggestion
+- Dashboard 加 "记忆体检" 卡, 员工每周点一次
+- 触发: 手动 (Phase 1) → scheduled (Phase 2)
+
+**P2.2 Structural lint** (员工自己跑, 不调 LLM)
+- 借鉴 llm_wiki runStructuralLint
+- 扫 wiki/**/*.md 抽 [[wikilinks]], 找 orphan/broken-link/no-outlinks
+- 跟 hm 脚本风格一致 (员工跑 catfish-cli 命令), 0 LLM 调用
+
+### P3 — 1-2 月
+
+**P3.1 CJK bigram tokenization**
+- 改 _query_token_set 从 char-level set 升 bigram (每个 → [每, 个, 每个])
+- 1 行修, 立刻改善 skills_catalog 真 query 匹配
+
+**P3.2 4 信号 relevance**
+- direct link (×3) + source overlap (×4) + Adamic-Adar (×1.5) + type affinity (×1)
+- 前置依赖: P1.1 出 frontmatter sources/type, P1.3 出 vault 结构
+- 替换 _render_skills_catalog 真 char-Jaccard
+- 也用作 query-time wiki 页排序 (P2 用)
+
+**P3.3 Dashboard wiki tab + sigma.js 知识图谱**
+- Companion 加 "🧠 知识体系" tab
+- 左边 wiki 树, 中间页面 preview, 右边图谱 (sigma.js + graphology)
+- 借鉴 llm_wiki 3 列布局
+- 员工真看到自己资质管理领域真完整知识图
+
+### 风险 + 取舍
+
+1. **LLM 调用真贵**: P1.1 两步 ingest 真每 source 多 1 次 LLM call, P2.1 lint 每周 1 次大 prompt.
+   token 预算压力. 配 CATFISH_WIKI_ENABLE env 真默认关, 员工拍才开.
+
+2. **vault 结构变更**: P1.3 改 ~/.catfish/ 真目录, 需 migration 脚本. backup + dry-run 必须.
+
+3. **跟 catfish 现有 memory 体系并存**: MEMORY.md / USER.md / journal / distilled_facts 都保留,
+   wiki 是 superset. memory_router 5 kind 真不动. 真长期看是 wiki/entities/ 真吃掉
+   USER.md, wiki/concepts/ 真吃掉 MEMORY.md, 但**渐进迁**.
+
+4. **员工主权红线**: 数据 0 出端 ✓ (wiki 都本地). 真 Obsidian 兼容真让员工直接用熟悉
+   工具看, 真不强 lock 在 Companion. 真符合 catfish 价值观.
+
+### 24h 验证 (P0 真 ship 后)
+
+- prefetch user message 末尾真出现 "## 🎯 员工身份与目的 (purpose)" 段
+- 也出现 "## 📐 catfish memory schema (规则)" 段
+- LLM 真自我介绍时真说自己是 "鸿波真资质管理副手" 不是 generic "AI 助手"
+- journal 真 grep "^## \[" 真拉得到最近 5 条 ingest/query/lint 记录
