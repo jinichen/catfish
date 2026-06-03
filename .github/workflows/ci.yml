@@ -42,7 +42,7 @@ jobs:
           # BL-CI-TOOLBRIDGE-DOCX (6/3): test_run_skill (5 个) 真调
           # leadership-briefing skill script.py, script.py import docx (python-docx).
           pip install pytest pytest-asyncio pyyaml httpx jieba pydantic python-dotenv \
-            python-docx
+            python-docx Pillow
 
       - name: Run tool-bridge tests
         working-directory: edge/tool-bridge
