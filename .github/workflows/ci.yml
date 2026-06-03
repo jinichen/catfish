@@ -36,7 +36,10 @@ jobs:
       - name: Install pytest + deps
         run: |
           python -m pip install --upgrade pip
-          pip install pytest pytest-asyncio
+          # BL-CI-MISSING-DEPS (6/3): test_search_skills / test_skill_register 用 yaml.
+          # 装项目真依赖更稳, 但 tool-bridge pyproject 真 deps 很重 (含 hermes /
+          # browser 库), CI 不需要全装 — 只补 import 时真触发的最小集.
+          pip install pytest pytest-asyncio pyyaml httpx jieba pydantic python-dotenv
 
       - name: Run tool-bridge tests
         working-directory: edge/tool-bridge
@@ -72,7 +75,10 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install pytest pytest-asyncio python-dotenv litellm fastapi httpx 'pydantic>=2'
+          # BL-CI-MISSING-DEPS (6/3): catfish_gateway.auth.oidc 真 import jwt + cryptography.
+          # pyyaml: test_allowed_models / 其他 test 可能 import yaml 的配置.
+          pip install pytest pytest-asyncio python-dotenv litellm fastapi httpx 'pydantic>=2' \
+            pyjwt cryptography pyyaml
 
       - name: Run gateway tests
         working-directory: central/llm-gateway
