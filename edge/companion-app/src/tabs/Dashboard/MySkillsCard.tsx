@@ -38,6 +38,50 @@ import { useMySkills } from "../../hooks/useIdentity";
 import { toolBridgeCallTool } from "../../lib/tauri";
 import type { SkillEntry, SkillNamespace } from "../../types/identity";
 
+/** BL-MYSKILLS-CARD-UI-CLEAN (2026-06-03): 从 SKILL.md frontmatter description 字段
+ * 抽员工友好的简短描述. catfish convention:
+ *   ⚠ MUST CALL: ... — BL-LLM-PLAN-WITHOUT-ACT 红线.   ← LLM 指令, 员工不该看
+ *
+ *   ⭐ 登录 EIS 一站式信息门户 (...)                       ← ⭐ 后是真员工描述
+ *
+ *   ◉ 由 catfish_freeze_skill 自动凝固 (...)             ← 元信息, 员工不该看
+ *
+ * 优先提 ⭐ / ⭐️ 后段; 没找到则剥 'MUST CALL' / 'BL-XXX' / '⚠/⚠️' 整行留剩下.
+ */
+function extractFriendlyDescription(desc: string | undefined | null): string {
+  if (!desc) return "";
+
+  // 1. 优先提 ⭐ 后段 (catfish convention)
+  for (const marker of ["⭐", "⭐️"]) {
+    const idx = desc.indexOf(marker);
+    if (idx < 0) continue;
+    let rest = desc.slice(idx + marker.length).trim();
+    // 截到下一个 emoji 锚点 / 双换行
+    let end = rest.length;
+    for (const stop of ["\n\n", "◉", "⚠", "⚠️", "✅", "❌", "📌"]) {
+      const i = rest.indexOf(stop);
+      if (i >= 0 && i < end) end = i;
+    }
+    return rest.slice(0, end).trim();
+  }
+
+  // 2. fallback: 按行剥 LLM 指令 / dev 标记
+  const lines = desc.split("\n");
+  const cleaned: string[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    // 跳 LLM 指令行
+    if (/^[⚠⚠️]?\s*MUST CALL/i.test(trimmed)) continue;
+    // 跳 BL-XXX 标记行
+    if (/^BL-[A-Z0-9-]+/.test(trimmed)) continue;
+    // 跳元信息 (catfish_freeze_skill 自动凝固 ...)
+    if (trimmed.includes("自动凝固") || trimmed.includes("freeze_skill")) continue;
+    cleaned.push(trimmed);
+  }
+  return cleaned.join(" ").trim() || desc.slice(0, 80);
+}
+
 /** 共享操作的状态机.
  * idle → confirming (员工点 📤, 弹 confirm) → publishing (调 tool) → done/error.
  * 用 sessionId 字段绑定具体哪条 skill 在共享 — 防止快速点多个不同 skill 时弹错对话框. */
@@ -139,7 +183,7 @@ export default function MySkillsCard() {
           flexWrap: "wrap",
         }}
       >
-        <h3 style={{ margin: 0 }}>🐟 我录的 skill</h3>
+        <h3 style={{ margin: 0 }}>🎬 我录的 skill</h3>
         <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
           RecMode 录屏 + LLM propose · 100% 本机 · 想共享自己点
         </span>
@@ -403,10 +447,13 @@ function NamespaceBlock({
           // 共享中 (publishing) 或弹了 confirm 让员工先决定 → 禁用本按钮防多点
           const otherBusy = !isActive && (share.phase === "publishing" || share.phase === "confirming");
 
+          // BL-MYSKILLS-CARD-UI-CLEAN: 从 SKILL.md description 提员工友好描述,
+          // 剥掉 LLM 指令 (MUST CALL / BL-XXX / 自动凝固).
+          const friendlyDesc = extractFriendlyDescription(s.description);
           return (
             <li
               key={s.name}
-              title={s.description}
+              title={friendlyDesc || s.description}
               style={{
                 fontSize: 12,
                 padding: "2px 0",
@@ -422,7 +469,7 @@ function NamespaceBlock({
               {s.version && (
                 <span style={{ opacity: 0.6, fontSize: 11 }}>v{s.version}</span>
               )}
-              {s.description && s.description !== "(no description)" && (
+              {friendlyDesc && friendlyDesc !== "(no description)" && (
                 <span
                   style={{
                     fontSize: 11,
@@ -433,7 +480,7 @@ function NamespaceBlock({
                     whiteSpace: "nowrap",
                   }}
                 >
-                  · {s.description.length > 60 ? s.description.slice(0, 60) + "…" : s.description}
+                  · {friendlyDesc.length > 60 ? friendlyDesc.slice(0, 60) + "…" : friendlyDesc}
                 </span>
               )}
               <button
