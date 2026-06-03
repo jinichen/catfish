@@ -17,6 +17,11 @@ from unittest import mock
 import pytest
 
 from catfish_tool_bridge import catfish_tools
+# BL-CI-TOOLBRIDGE-MOCK-DRIFT (2026-06-03): catfish_tools.py 重构后, capture_screenshot
+# 真在 catfish_tools_today.py:571, browser tool 在 catfish_tools_browser.py.
+# 函数内部用真 today/browser module 的 platform/shutil/subprocess/tempfile,
+# 测试 mock catfish_tools.platform 不生效. 改 mock target 到真新 module path.
+from catfish_tool_bridge import catfish_tools_today, catfish_tools_browser
 
 
 # 一张最小的 PNG (1x1 红点) — 用作 fake screencapture 输出
@@ -106,9 +111,9 @@ def test_unknown_mode_returns_error() -> None:
 # ============================================================
 
 
-@mock.patch.object(catfish_tools, "platform")
-@mock.patch.object(catfish_tools, "shutil")
-@mock.patch.object(catfish_tools, "subprocess")
+@mock.patch.object(catfish_tools_today, "platform")
+@mock.patch.object(catfish_tools_today, "shutil")
+@mock.patch.object(catfish_tools_today, "subprocess")
 def test_macos_interactive_success(
     mock_sub: mock.MagicMock,
     mock_shutil: mock.MagicMock,
@@ -134,7 +139,7 @@ def test_macos_interactive_success(
     # tempfile.gettempdir() 缓存第一次调用结果, setenv TMPDIR 不再生效 →
     # 直接打 catfish_tools.tempfile.gettempdir 强制改路径 (隔离每个测试)
     monkeypatch.setattr(
-        catfish_tools.tempfile, "gettempdir", lambda: str(tmp_path)
+        catfish_tools_today.tempfile, "gettempdir", lambda: str(tmp_path)
     )
 
     result = catfish_tools.capture_screenshot(
@@ -157,9 +162,9 @@ def test_macos_interactive_success(
     assert "-x" in cmd_used  # 必须静音(无快门声)
 
 
-@mock.patch.object(catfish_tools, "platform")
-@mock.patch.object(catfish_tools, "shutil")
-@mock.patch.object(catfish_tools, "subprocess")
+@mock.patch.object(catfish_tools_today, "platform")
+@mock.patch.object(catfish_tools_today, "shutil")
+@mock.patch.object(catfish_tools_today, "subprocess")
 def test_macos_user_cancelled(
     mock_sub: mock.MagicMock,
     mock_shutil: mock.MagicMock,
@@ -177,7 +182,7 @@ def test_macos_user_cancelled(
     # tempfile.gettempdir() 缓存第一次调用结果, setenv TMPDIR 不再生效 →
     # 直接打 catfish_tools.tempfile.gettempdir 强制改路径 (隔离每个测试)
     monkeypatch.setattr(
-        catfish_tools.tempfile, "gettempdir", lambda: str(tmp_path)
+        catfish_tools_today.tempfile, "gettempdir", lambda: str(tmp_path)
     )
 
     result = catfish_tools.capture_screenshot(
@@ -187,9 +192,9 @@ def test_macos_user_cancelled(
     assert "取消" in result["error"]
 
 
-@mock.patch.object(catfish_tools, "platform")
-@mock.patch.object(catfish_tools, "shutil")
-@mock.patch.object(catfish_tools, "subprocess")
+@mock.patch.object(catfish_tools_today, "platform")
+@mock.patch.object(catfish_tools_today, "shutil")
+@mock.patch.object(catfish_tools_today, "subprocess")
 def test_macos_empty_file_treated_as_cancel(
     mock_sub: mock.MagicMock,
     mock_shutil: mock.MagicMock,
@@ -210,7 +215,7 @@ def test_macos_empty_file_treated_as_cancel(
     # tempfile.gettempdir() 缓存第一次调用结果, setenv TMPDIR 不再生效 →
     # 直接打 catfish_tools.tempfile.gettempdir 强制改路径 (隔离每个测试)
     monkeypatch.setattr(
-        catfish_tools.tempfile, "gettempdir", lambda: str(tmp_path)
+        catfish_tools_today.tempfile, "gettempdir", lambda: str(tmp_path)
     )
 
     result = catfish_tools.capture_screenshot(
@@ -220,8 +225,8 @@ def test_macos_empty_file_treated_as_cancel(
     assert "取消" in result["error"]
 
 
-@mock.patch.object(catfish_tools, "platform")
-@mock.patch.object(catfish_tools, "shutil")
+@mock.patch.object(catfish_tools_today, "platform")
+@mock.patch.object(catfish_tools_today, "shutil")
 def test_macos_no_screencapture_binary(
     mock_shutil: mock.MagicMock,
     mock_platform: mock.MagicMock,
@@ -237,9 +242,9 @@ def test_macos_no_screencapture_binary(
     assert "screencapture" in result["error"]
 
 
-@mock.patch.object(catfish_tools, "platform")
-@mock.patch.object(catfish_tools, "shutil")
-@mock.patch.object(catfish_tools, "subprocess")
+@mock.patch.object(catfish_tools_today, "platform")
+@mock.patch.object(catfish_tools_today, "shutil")
+@mock.patch.object(catfish_tools_today, "subprocess")
 def test_macos_window_mode_uses_W_flag(
     mock_sub: mock.MagicMock,
     mock_shutil: mock.MagicMock,
@@ -260,7 +265,7 @@ def test_macos_window_mode_uses_W_flag(
     # tempfile.gettempdir() 缓存第一次调用结果, setenv TMPDIR 不再生效 →
     # 直接打 catfish_tools.tempfile.gettempdir 强制改路径 (隔离每个测试)
     monkeypatch.setattr(
-        catfish_tools.tempfile, "gettempdir", lambda: str(tmp_path)
+        catfish_tools_today.tempfile, "gettempdir", lambda: str(tmp_path)
     )
 
     result = catfish_tools.capture_screenshot(
@@ -272,9 +277,9 @@ def test_macos_window_mode_uses_W_flag(
     assert "-i" in cmd_used  # 也要 interactive (员工点哪个窗口)
 
 
-@mock.patch.object(catfish_tools, "platform")
-@mock.patch.object(catfish_tools, "shutil")
-@mock.patch.object(catfish_tools, "subprocess")
+@mock.patch.object(catfish_tools_today, "platform")
+@mock.patch.object(catfish_tools_today, "shutil")
+@mock.patch.object(catfish_tools_today, "subprocess")
 def test_macos_fullscreen_mode_no_i_flag(
     mock_sub: mock.MagicMock,
     mock_shutil: mock.MagicMock,
@@ -295,7 +300,7 @@ def test_macos_fullscreen_mode_no_i_flag(
     # tempfile.gettempdir() 缓存第一次调用结果, setenv TMPDIR 不再生效 →
     # 直接打 catfish_tools.tempfile.gettempdir 强制改路径 (隔离每个测试)
     monkeypatch.setattr(
-        catfish_tools.tempfile, "gettempdir", lambda: str(tmp_path)
+        catfish_tools_today.tempfile, "gettempdir", lambda: str(tmp_path)
     )
 
     result = catfish_tools.capture_screenshot(
@@ -335,9 +340,9 @@ def test_no_get_frontmost_window_id_func() -> None:
 # ============================================================
 
 
-@mock.patch.object(catfish_tools, "platform")
-@mock.patch.object(catfish_tools, "shutil")
-@mock.patch.object(catfish_tools, "subprocess")
+@mock.patch.object(catfish_tools_today, "platform")
+@mock.patch.object(catfish_tools_today, "shutil")
+@mock.patch.object(catfish_tools_today, "subprocess")
 def test_macos_oversize_file_rejected(
     mock_sub: mock.MagicMock,
     mock_shutil: mock.MagicMock,
@@ -350,7 +355,7 @@ def test_macos_oversize_file_rejected(
     mock_shutil.which.return_value = "/usr/sbin/screencapture"
 
     # 假装拍了一张比 max 还大 1 字节的图
-    huge_size = catfish_tools._MAX_SCREENSHOT_BYTES + 1
+    huge_size = catfish_tools_today._MAX_SCREENSHOT_BYTES + 1
 
     def fake_run(cmd: Any, **_: Any) -> Any:
         Path(cmd[-1]).write_bytes(b"\x00" * huge_size)
@@ -361,7 +366,7 @@ def test_macos_oversize_file_rejected(
     # tempfile.gettempdir() 缓存第一次调用结果, setenv TMPDIR 不再生效 →
     # 直接打 catfish_tools.tempfile.gettempdir 强制改路径 (隔离每个测试)
     monkeypatch.setattr(
-        catfish_tools.tempfile, "gettempdir", lambda: str(tmp_path)
+        catfish_tools_today.tempfile, "gettempdir", lambda: str(tmp_path)
     )
 
     result = catfish_tools.capture_screenshot(
@@ -376,7 +381,7 @@ def test_macos_oversize_file_rejected(
 # ============================================================
 
 
-@mock.patch.object(catfish_tools, "platform")
+@mock.patch.object(catfish_tools_today, "platform")
 def test_unsupported_platform(mock_platform: mock.MagicMock) -> None:
     """非 Darwin / Windows → 友好报错, 不抛"""
     mock_platform.system.return_value = "Linux"
@@ -403,7 +408,7 @@ def test_dispatch_unknown_returns_error() -> None:
         catfish_tools.dispatch_native("not_a_real_tool", {})
 
 
-@mock.patch.object(catfish_tools, "platform")
+@mock.patch.object(catfish_tools_today, "platform")
 def test_dispatch_screenshot_routes_correctly(
     mock_platform: mock.MagicMock,
 ) -> None:
@@ -459,7 +464,7 @@ def test_browser_goto_no_playwright_installed(
     """playwright 没装 → 友好提示装"""
     def fake_import() -> object:
         raise RuntimeError("缺 playwright 包. 装一下...")
-    monkeypatch.setattr(catfish_tools, "_import_playwright", fake_import)
+    monkeypatch.setattr(catfish_tools_browser, "_import_playwright", fake_import)
     result = catfish_tools.browser_goto({"url": "https://example.com"})
     assert result["type"] == "error"
     assert "playwright" in result["error"]
@@ -545,7 +550,7 @@ def test_browser_fill_secret_ref_env_resolves(
         def __exit__(self, *_):
             pass
 
-    monkeypatch.setattr(catfish_tools, "_import_playwright", lambda: FakePlaywright)
+    monkeypatch.setattr(catfish_tools_browser, "_import_playwright", lambda: FakePlaywright)
 
     result = catfish_tools.browser_fill({
         "selector": "input[name='password']",
@@ -602,7 +607,7 @@ def test_browser_fill_password_allowed_with_audit_marker(
         def __exit__(self, *_):
             pass
 
-    monkeypatch.setattr(catfish_tools, "_import_playwright", lambda: FakePlaywright)
+    monkeypatch.setattr(catfish_tools_browser, "_import_playwright", lambda: FakePlaywright)
 
     result = catfish_tools.browser_fill({
         "selector": "input[name='password']",
@@ -640,7 +645,7 @@ def test_browser_fill_pwd_keyword_variants_all_marked(
         def __exit__(self, *_):
             pass
 
-    monkeypatch.setattr(catfish_tools, "_import_playwright", lambda: FakePlaywright)
+    monkeypatch.setattr(catfish_tools_browser, "_import_playwright", lambda: FakePlaywright)
 
     for sel in ["input#pwd", "input[name='passwd']", "#user-password"]:
         result = catfish_tools.browser_fill({"selector": sel, "text": "x"})
@@ -673,7 +678,7 @@ def test_browser_fill_non_password_no_marker(
         def __exit__(self, *_):
             pass
 
-    monkeypatch.setattr(catfish_tools, "_import_playwright", lambda: FakePlaywright)
+    monkeypatch.setattr(catfish_tools_browser, "_import_playwright", lambda: FakePlaywright)
 
     result = catfish_tools.browser_fill({
         "selector": "input[name='username']",
@@ -721,7 +726,7 @@ def test_dispatch_browser_snapshot_routes(
     """snapshot 不需要必填参数, 路由直接进去, 没 playwright 则友好报错"""
     def fake_import() -> object:
         raise RuntimeError("缺 playwright 包...")
-    monkeypatch.setattr(catfish_tools, "_import_playwright", fake_import)
+    monkeypatch.setattr(catfish_tools_browser, "_import_playwright", fake_import)
     result = catfish_tools.dispatch_native("catfish_browser_snapshot", {})
     assert result["type"] == "error"
 
@@ -733,7 +738,7 @@ def test_dispatch_browser_snapshot_routes(
 
 def test_flatten_a11y_empty() -> None:
     out: list = []
-    catfish_tools._flatten_a11y(None, out)
+    catfish_tools_browser._flatten_a11y(None, out)
     assert out == []
 
 
@@ -741,7 +746,7 @@ def test_flatten_a11y_button() -> None:
     """有 name + role=button 的节点收进 out"""
     node = {"role": "button", "name": "提交", "children": []}
     out: list = []
-    catfish_tools._flatten_a11y(node, out)
+    catfish_tools_browser._flatten_a11y(node, out)
     assert len(out) == 1
     assert out[0]["role"] == "button"
     assert out[0]["name"] == "提交"
@@ -751,7 +756,7 @@ def test_flatten_a11y_unnamed_skipped() -> None:
     """没 name + 不在 interesting roles 的不收"""
     node = {"role": "generic", "name": "", "children": []}
     out: list = []
-    catfish_tools._flatten_a11y(node, out)
+    catfish_tools_browser._flatten_a11y(node, out)
     assert out == []
 
 
@@ -766,7 +771,7 @@ def test_flatten_a11y_max_count_caps() -> None:
         cur = next_node
 
     out: list = []
-    catfish_tools._flatten_a11y(node, out, max_count=10)
+    catfish_tools_browser._flatten_a11y(node, out, max_count=10)
     assert len(out) == 10  # 严格上限, 不会超
 
 
@@ -782,7 +787,7 @@ def test_flatten_a11y_recursive() -> None:
         ],
     }
     out: list = []
-    catfish_tools._flatten_a11y(node, out)
+    catfish_tools_browser._flatten_a11y(node, out)
     # form + 3 children = 4
     assert len(out) == 4
     roles = [e["role"] for e in out]
@@ -874,8 +879,8 @@ def _patch_connect(monkeypatch: pytest.MonkeyPatch, page: _FakePage) -> None:
     def fake_connect(_p: Any) -> Any:
         return (None, None, page)
 
-    monkeypatch.setattr(catfish_tools, "_import_playwright", fake_import)
-    monkeypatch.setattr(catfish_tools, "_connect_playwright_browser", fake_connect)
+    monkeypatch.setattr(catfish_tools_browser, "_import_playwright", fake_import)
+    monkeypatch.setattr(catfish_tools_browser, "_connect_playwright_browser", fake_connect)
 
 
 def test_evaluate_dom_snapshot_normalizes_dirty_input(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -891,7 +896,7 @@ def test_evaluate_dom_snapshot_normalizes_dirty_input(monkeypatch: pytest.Monkey
         def evaluate(self, _js: str, *_args: Any) -> Any:
             return raw
 
-    out = catfish_tools._evaluate_dom_snapshot(_FakeP(), max_count=200)
+    out = catfish_tools_browser._evaluate_dom_snapshot(_FakeP(), max_count=200)
     # garbage / None 过滤掉, 剩 2 条
     assert len(out) == 2
     assert out[0] == {"role": "button", "name": "提交", "depth": 5, "selector_hint": "#submit"}
@@ -906,7 +911,7 @@ def test_evaluate_dom_snapshot_returns_empty_on_none(monkeypatch: pytest.MonkeyP
         def evaluate(self, _js: str, *_args: Any) -> Any:
             return None
 
-    out = catfish_tools._evaluate_dom_snapshot(_FakeP(), max_count=200)
+    out = catfish_tools_browser._evaluate_dom_snapshot(_FakeP(), max_count=200)
     assert out == []
 
 
@@ -1252,8 +1257,8 @@ def _patch_browser_connect(monkeypatch: pytest.MonkeyPatch, page: _FakeBrowserPa
     def fake_connect(_p: Any) -> Any:
         return (None, None, page)
 
-    monkeypatch.setattr(catfish_tools, "_import_playwright", fake_import)
-    monkeypatch.setattr(catfish_tools, "_connect_playwright_browser", fake_connect)
+    monkeypatch.setattr(catfish_tools_browser, "_import_playwright", fake_import)
+    monkeypatch.setattr(catfish_tools_browser, "_connect_playwright_browser", fake_connect)
 
 
 def test_browser_screenshot_in_native_tools() -> None:
@@ -1373,7 +1378,7 @@ def test_dispatch_browser_screenshot_routes(monkeypatch: pytest.MonkeyPatch) -> 
     """dispatch_native 能路由 catfish_browser_screenshot → browser_screenshot"""
     def fake_import() -> object:
         raise RuntimeError("缺 playwright")
-    monkeypatch.setattr(catfish_tools, "_import_playwright", fake_import)
+    monkeypatch.setattr(catfish_tools_browser, "_import_playwright", fake_import)
     result = catfish_tools.dispatch_native("catfish_browser_screenshot", {})
     assert result["type"] == "error"
     assert "playwright" in result["error"]
@@ -1465,7 +1470,7 @@ def test_run_with_hard_timeout_normal_case() -> None:
     def fast_fn(_args: Any) -> Dict[str, Any]:
         return {"type": "ok", "result": "fast"}
 
-    result = catfish_tools._run_with_hard_timeout(fast_fn, {}, hard_timeout_sec=2.0)
+    result = catfish_tools_browser._run_with_hard_timeout(fast_fn, {}, hard_timeout_sec=2.0)
     assert result == {"type": "ok", "result": "fast"}
 
 
@@ -1476,7 +1481,7 @@ def test_run_with_hard_timeout_hits_timeout() -> None:
         _time.sleep(5.0)  # 比 timeout 长
         return {"type": "ok", "result": "never reached"}
 
-    result = catfish_tools._run_with_hard_timeout(slow_fn, {}, hard_timeout_sec=0.5)
+    result = catfish_tools_browser._run_with_hard_timeout(slow_fn, {}, hard_timeout_sec=0.5)
     assert result["type"] == "error"
     assert "硬超时" in result["error"]
     assert "0.5s" in result["error"]
@@ -1491,7 +1496,7 @@ def test_run_with_hard_timeout_inner_exception() -> None:
 
     import pytest as _pytest
     with _pytest.raises(RuntimeError, match="inner boom"):
-        catfish_tools._run_with_hard_timeout(boom_fn, {}, hard_timeout_sec=2.0)
+        catfish_tools_browser._run_with_hard_timeout(boom_fn, {}, hard_timeout_sec=2.0)
 
 
 def test_browser_goto_routes_through_hard_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1500,7 +1505,7 @@ def test_browser_goto_routes_through_hard_timeout(monkeypatch: pytest.MonkeyPatc
     def fake_impl(_args: Any) -> Dict[str, Any]:
         called["impl"] = True
         return {"type": "ok", "marker": "via_impl"}
-    monkeypatch.setattr(catfish_tools, "_browser_goto_impl", fake_impl)
+    monkeypatch.setattr(catfish_tools_browser, "_browser_goto_impl", fake_impl)
 
     result = catfish_tools.browser_goto({"url": "http://x"})
     assert called["impl"] is True
@@ -1513,7 +1518,7 @@ def test_browser_screenshot_routes_through_hard_timeout(monkeypatch: pytest.Monk
     def fake_impl(_args: Any) -> Dict[str, Any]:
         called["impl"] = True
         return {"type": "image", "marker": "via_impl"}
-    monkeypatch.setattr(catfish_tools, "_browser_screenshot_impl", fake_impl)
+    monkeypatch.setattr(catfish_tools_browser, "_browser_screenshot_impl", fake_impl)
 
     result = catfish_tools.browser_screenshot({})
     assert called["impl"] is True
@@ -1526,7 +1531,7 @@ def test_browser_snapshot_routes_through_hard_timeout(monkeypatch: pytest.Monkey
     def fake_impl(_args: Any) -> Dict[str, Any]:
         called["impl"] = True
         return {"type": "ok", "elements": []}
-    monkeypatch.setattr(catfish_tools, "_browser_snapshot_impl", fake_impl)
+    monkeypatch.setattr(catfish_tools_browser, "_browser_snapshot_impl", fake_impl)
 
     catfish_tools.browser_snapshot({})
     assert called["impl"] is True
@@ -1549,7 +1554,7 @@ def test_run_with_hard_timeout_actually_returns_quickly() -> None:
         return {"type": "ok", "result": "should not reach"}
 
     start = _time.monotonic()
-    result = catfish_tools._run_with_hard_timeout(stuck_fn, {}, hard_timeout_sec=1.0)
+    result = catfish_tools_browser._run_with_hard_timeout(stuck_fn, {}, hard_timeout_sec=1.0)
     elapsed = _time.monotonic() - start
 
     # 关键 assert: wrapper 1s 后必须返, 不能等到 stuck_fn 自己结束 (60s)
@@ -1718,7 +1723,7 @@ def test_find_by_text_routes_through_hard_timeout(
         called["impl"] = True
         return {"type": "ok", "element_count": 0, "elements": []}
 
-    monkeypatch.setattr(catfish_tools, "_browser_find_by_text_impl", fake_impl)
+    monkeypatch.setattr(catfish_tools_browser, "_browser_find_by_text_impl", fake_impl)
     catfish_tools.browser_find_by_text({"text": "test"})
     assert called["impl"] is True
 

@@ -13,6 +13,7 @@ _unix_to_iso) — 主文件 catfish_tools.py 其他段 (skill_backup / a2a_ask) 
 """
 from __future__ import annotations
 
+import base64  # BL-CI-TOOLBRIDGE-MOCK-DRIFT (6/3): 5/20 拆分时漏 import, capture_screenshot:636 真用 base64.b64encode 撞 NameError
 import json
 import os
 import platform

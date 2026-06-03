@@ -39,7 +39,10 @@ jobs:
           # BL-CI-MISSING-DEPS (6/3): test_search_skills / test_skill_register 用 yaml.
           # 装项目真依赖更稳, 但 tool-bridge pyproject 真 deps 很重 (含 hermes /
           # browser 库), CI 不需要全装 — 只补 import 时真触发的最小集.
-          pip install pytest pytest-asyncio pyyaml httpx jieba pydantic python-dotenv
+          # BL-CI-TOOLBRIDGE-DOCX (6/3): test_run_skill (5 个) 真调
+          # leadership-briefing skill script.py, script.py import docx (python-docx).
+          pip install pytest pytest-asyncio pyyaml httpx jieba pydantic python-dotenv \
+            python-docx
 
       - name: Run tool-bridge tests
         working-directory: edge/tool-bridge

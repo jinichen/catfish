@@ -15,12 +15,19 @@ await asyncio.to_thread 包装.
 """
 from __future__ import annotations
 
+import base64  # BL-CI-TOOLBRIDGE-MOCK-DRIFT (6/3): 5/20 拆分漏 import, browser_screenshot 真用 base64.b64encode
 import json
 import os
 import re
 import subprocess
 import time
 from typing import Any, Dict, List, Optional, Tuple
+
+# BL-CI-TOOLBRIDGE-MOCK-DRIFT (6/3): 5/20 拆分时漏 import — catfish_tools_today 真 helper
+# 真生产 catfish_browser_screenshot 真撞 NameError:
+#   - _MAX_SCREENSHOT_BYTES: line 1124, 1129 size 检查
+#   - _unix_to_iso: line 1147 captured_at meta
+from .catfish_tools_today import _MAX_SCREENSHOT_BYTES, _unix_to_iso  # noqa: F401
 
 # ============================================================
 # 浏览器全栈 (catfish_browser_*) — 走 Playwright connect_over_cdp
