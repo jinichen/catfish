@@ -327,7 +327,26 @@ class CatfishMemoryProvider(MemoryProvider):
 
         if not sections:
             return ""
-        return "\n\n".join(sections)
+        result = "\n\n".join(sections)
+        # BL-CATFISH-WIKI-MODE diag (6/4 凌晨): 6 小时 audit 没找到 4 marker 注入,
+        # 直接调 plugin prefetch 返 10395c 全 ✓, 但 dump 真 user message 0 marker.
+        # 加 log 看 runtime prefetch 真实际返值 — 看是不是 hermes 注入 path 真问题.
+        # 24h 观察后删掉这行 log 真.
+        try:
+            logger.info(
+                "catfish-memory prefetch: returning %d chars "
+                "(markers: purpose=%s schema=%s disc=%s safe=%s, query_len=%d, session=%s)",
+                len(result),
+                '员工身份与目的' in result,
+                'catfish memory schema' in result,
+                'memory 写入纪律' in result,
+                '安全红线' in result,
+                len(query or ""),
+                session_id or self._session_id or "?",
+            )
+        except Exception:
+            pass
+        return result
 
     # ── 5 个数据源 render helper ──────────────────────────
 
