@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -1012,11 +1013,140 @@ def _parse_generation_output(text: str) -> Dict[str, str]:
     return files
 
 
+_FM_LIST_FIELDS_UNION = ("tags", "related", "sources", "aliases")
+_FM_LIST_RE = re.compile(r"^([a-z_]+):\s*\[(.*?)\]\s*$", re.MULTILINE)
+_FM_SCALAR_RE = re.compile(r"^([a-z_]+):\s*(.+?)\s*$", re.MULTILINE)
+
+
+def _split_frontmatter_body(text: str) -> Tuple[str, str]:
+    """切 markdown 真 (frontmatter_yaml, body). 没 frontmatter 返 ('', text)."""
+    if not text.startswith("---\n"):
+        return "", text
+    end = text.find("\n---\n", 4)
+    if end < 0:
+        return "", text
+    return text[4:end], text[end + 5 :]
+
+
+def _parse_frontmatter_lists(fm: str) -> Dict[str, List[str]]:
+    """从 YAML frontmatter 抠 list 字段 ([\"[[a]]\", \"b\"]). 简单 regex,
+    不全 YAML, 但对 prompt 真**`生成`** 真 format 够用.
+
+    fix (6/5 测): 之前 regex `([^,]+)` 把 `, ` 真**`分隔符`** 真**也 match`** 当 item
+    → tags 重复. 改用先 split 再清, 简单稳.
+    """
+    out: Dict[str, List[str]] = {}
+    for m in _FM_LIST_RE.finditer(fm):
+        key = m.group(1)
+        if key not in _FM_LIST_FIELDS_UNION:
+            continue
+        inner = m.group(2).strip()
+        if not inner:
+            out[key] = []
+            continue
+        # 先 split by `,` (不在 `[[..]]` 内), 再 strip quotes
+        # 简化: regex 抓所有 quoted (带 [[..]] 或纯字符串) 优先, 否则裸 token
+        parts = re.findall(r'"([^"]+)"|\'([^\']+)\'', inner)
+        items = [a or b for (a, b) in parts]
+        if not items:
+            # 没 quoted, 退裸 split (e.g. `tags: [a, b, c]`)
+            items = [s.strip() for s in inner.split(",")]
+        items = [s for s in items if s and s not in ("[", "]")]
+        out[key] = items
+    return out
+
+
+def _parse_frontmatter_scalar(fm: str, key: str) -> Optional[str]:
+    """抠 scalar 字段 (created / type / title 这种). 跳过 list ([..])."""
+    for m in _FM_SCALAR_RE.finditer(fm):
+        if m.group(1) == key:
+            val = m.group(2).strip()
+            if val.startswith("["):
+                continue
+            return val.strip('"').strip("'")
+    return None
+
+
+def _merge_wiki_file(old_text: str, new_text: str) -> str:
+    """P18 (6/5 鸿波) — 重名 entity/concept merge 法 (纯 Python, 不烧 LLM).
+
+    策略:
+      frontmatter list 字段 (tags/related/sources/aliases): 旧 ∪ 新 (去重保序)
+      frontmatter scalar:
+        created: 保留旧 (entity 真**`真**`身份历史不丢`**)
+        updated: 用新 (今天日期)
+        title / *_type: 用新 (允许 reclassify)
+      body: 用新, 旧 body 转 HTML 注释 `<!-- legacy body (created=<旧updated>) -->`
+            放文末, 便于人工对照. 多次 update 真**`只保留最近一份 legacy`**.
+    """
+    old_fm, old_body = _split_frontmatter_body(old_text)
+    new_fm, new_body = _split_frontmatter_body(new_text)
+    if not new_fm:  # 新 file 没 frontmatter → 异常, 直接返新 (上层 fallback)
+        return new_text
+
+    old_lists = _parse_frontmatter_lists(old_fm)
+    new_lists = _parse_frontmatter_lists(new_fm)
+
+    # 1. list 字段并集替换到 new_fm
+    merged_fm = new_fm
+    for field in _FM_LIST_FIELDS_UNION:
+        union = list(old_lists.get(field, []))
+        for v in new_lists.get(field, []):
+            if v not in union:
+                union.append(v)
+        if not union:
+            continue
+        # 双引号包每个 item (跟 Generation prompt 规范一致)
+        quoted = ", ".join(f'"{v}"' if not v.startswith('"') else v for v in union)
+        new_line = f"{field}: [{quoted}]"
+        # 替已存的 list 字段; 没的话不动 (let new_fm 真**自然的没**)
+        merged_fm = re.sub(
+            rf"^{field}:\s*\[.*?\]\s*$",
+            new_line,
+            merged_fm,
+            count=1,
+            flags=re.MULTILINE,
+        )
+
+    # 2. created 保留旧 (新生成的 created=今天, 改回旧)
+    old_created = _parse_frontmatter_scalar(old_fm, "created")
+    if old_created:
+        merged_fm = re.sub(
+            r"^created:\s*.+$",
+            f"created: {old_created}",
+            merged_fm,
+            count=1,
+            flags=re.MULTILINE,
+        )
+
+    # 3. body: 新 + 旧 legacy 注释
+    old_updated = _parse_frontmatter_scalar(old_fm, "updated") or "unknown"
+    stripped_old = old_body.strip()
+    if stripped_old:
+        # 防嵌套: 如果旧 body 已含 legacy 注释, 抽 inner 替, 不层叠
+        inner_old = re.sub(
+            r"<!--\s*legacy body \(.*?\)\s*-->\n?(.*?)\n?<!--\s*/legacy\s*-->",
+            "",
+            stripped_old,
+            flags=re.DOTALL,
+        ).strip()
+        if inner_old:
+            legacy_block = (
+                f"\n\n<!-- legacy body (last updated={old_updated}) -->\n"
+                f"{inner_old}\n"
+                f"<!-- /legacy -->\n"
+            )
+            new_body = new_body.rstrip() + legacy_block
+
+    return f"---\n{merged_fm}\n---\n{new_body}"
+
+
 def _write_wiki_files(catfish_home: Path, files: Dict[str, str]) -> Tuple[int, int]:
     """写 wiki files 真 ~/.catfish/wiki/entities/ + wiki/concepts/. 返 (n_entities, n_concepts).
 
-    每 file overwrite (按 slug 唯一性 — 同 slug 真 update). 真 race window 不
-    过滤 (24h cooldown 真够避并发).
+    P18 (6/5 鸿波): 同 slug 触发 _merge_wiki_file (frontmatter list 并集 +
+    保留 created + body 新+ 旧 legacy 注释留底), 不再无脑 overwrite.
+    新建 file (不重名) 沿用 overwrite.
     """
     if not files:
         return (0, 0)
@@ -1026,7 +1156,23 @@ def _write_wiki_files(catfish_home: Path, files: Dict[str, str]) -> Tuple[int, i
         target = catfish_home / rel_path
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content + "\n", encoding="utf-8")
+            final_content = content
+            if target.exists():
+                # 重名 — merge mode
+                try:
+                    old_text = target.read_text(encoding="utf-8")
+                    final_content = _merge_wiki_file(old_text, content)
+                    logger.info(
+                        "catfish-memory wiki merge: %s (frontmatter 并集 + body 新, 旧版 legacy 注释留底)",
+                        rel_path,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "catfish-memory wiki merge %s 失败 (fallback overwrite): %s",
+                        rel_path, e,
+                    )
+                    final_content = content
+            target.write_text(final_content + ("\n" if not final_content.endswith("\n") else ""), encoding="utf-8")
             if "entities/" in rel_path:
                 n_entities += 1
             elif "concepts/" in rel_path:
