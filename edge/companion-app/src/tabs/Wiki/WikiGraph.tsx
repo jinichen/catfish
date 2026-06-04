@@ -69,8 +69,8 @@ export default function WikiGraph() {
         if (g.hasEdge(edgeKey)) continue;
         try {
           g.addEdgeWithKey(edgeKey, f.rel_path, target.rel_path, {
-            size: 0.5,
-            color: "#cccccc88",
+            size: 1,
+            color: "rgba(120, 120, 120, 0.6)",
           });
         } catch {
           /* duplicate / 真**真**真**真 silent skip */
@@ -126,8 +126,8 @@ export default function WikiGraph() {
       labelSize: 12,
       labelWeight: "500",
       labelColor: { color: "#444" },
-      defaultEdgeColor: "rgba(150, 150, 150, 0.35)",
-      defaultEdgeType: "arrow",
+      defaultEdgeColor: "rgba(120, 120, 120, 0.6)",
+      defaultEdgeType: "line",
       minCameraRatio: 0.05,
       maxCameraRatio: 10,
     });
