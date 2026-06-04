@@ -160,8 +160,12 @@ export async function fileToAttachment(file: File): Promise<Attachment> {
  *
  *  跳过的 kind:
  *   - image: 走 vision, 没文本可 ingest
- *   - excel/csv: LLM 用 execute_code 走 pandas 读, ingest markdown 噪声大
- *   - audio/video: previewText 是 whisper 转录文字, 视情况可入. 暂入 (转录就是 text).
+ *
+ *  入的 kind:
+ *   - pdf / word / text: 全文 (大文件走 sidecar)
+ *   - excel / csv: preview = Sheet 名 + 列头 + 前 N 行 markdown, 够 LLM 抽 entity
+ *     (6/5 鸿波实测: xlsx 入库失败 → 改成入. LLM 也会另调 execute_code 取细节.)
+ *   - audio / video: previewText 是 whisper 转录文字
  */
 export function ingestAttachmentSourceFireForget(att: {
   kind: "image" | "file";
@@ -173,7 +177,6 @@ export function ingestAttachmentSourceFireForget(att: {
 }): void {
   if (att.kind !== "file") return;
   const fk = (att.fileKind || "").toLowerCase();
-  if (fk === "excel" || fk === "csv") return;
   // preview 空且没 sidecar → 没东西可 ingest
   if (!att.previewText && !att.parsedTextPath) return;
 
