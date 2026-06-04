@@ -116,6 +116,10 @@ _DEFAULT_GATEWAY_URL = "http://127.0.0.1:8999/v1/chat/completions"
 #: HTTP 超时 (LLM 总结+蒸馏不应该超 60s; 真超就 cooldown 等下次).
 _LLM_HTTP_TIMEOUT = 60.0
 
+#: P1.1.1 wiki Step 2 Generation 单独超时 — 生 ~4000 tokens 长 response,
+#: 60s 真**不够** (6/4 12:55 实测 ReadTimeout). 180s 给 LLM 慢慢生.
+_GENERATION_HTTP_TIMEOUT = 180.0
+
 #: 每个 session 取最多 N 条消息进 prompt (防长 session 撑爆 LLM context).
 _MAX_MESSAGES_PER_SUMMARY = 60
 
@@ -752,7 +756,9 @@ async def _call_generation_llm(
     except ImportError:
         return None
     try:
-        async with httpx.AsyncClient(timeout=_LLM_HTTP_TIMEOUT) as client:
+        # P1.1.1 fix (6/4): generation 单独 180s timeout — 4096 tokens 真**生 LLM**
+        # 60s 真**不够** (12:55 ReadTimeout 实测).
+        async with httpx.AsyncClient(timeout=_GENERATION_HTTP_TIMEOUT) as client:
             resp = await client.post(
                 _gateway_url(),
                 headers={
