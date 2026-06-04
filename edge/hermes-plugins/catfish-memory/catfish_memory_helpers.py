@@ -808,8 +808,11 @@ async def _call_generation_llm(
 
 
 # 路径白名单 — 防 LLM 输出真 ---FILE: 真**逃逸 wiki/ 根**.
+# P1.1.1 fix (6/4): \w + re.UNICODE 让 slug 接受中文 (LLM 不遵守拼音, 直接用中文 name —
+# Obsidian 真**也支持 unicode slug**, 没必要强制 ASCII).
 _WIKI_PATH_PATTERN = __import__("re").compile(
-    r"^wiki/(entities|concepts)/[a-z0-9][a-z0-9_-]*\.md$"
+    r"^wiki/(entities|concepts)/[\w][\w_-]*\.md$",
+    __import__("re").UNICODE,
 )
 
 # sentinel pattern 真 ---FILE: <path>--- 行.
