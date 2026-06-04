@@ -945,7 +945,7 @@ def install() -> None:
     _PATCHED = True
     _INSTALLED = True  # 6/1 BL-PLUGIN-HERMES-015-LAZY-INSTALL: pre_tool_call hook 看这个
 
-    logger.info("catfish-xcatfish-user plugin installed ✓ (11 patches applied)")
+    logger.info("catfish-xcatfish-user plugin installed ✓ (12 patches applied)")
 
 
 # 6/1 BL-PLUGIN-HERMES-015-LAZY-INSTALL — pre_tool_call hook 兜底 fail-loud.
