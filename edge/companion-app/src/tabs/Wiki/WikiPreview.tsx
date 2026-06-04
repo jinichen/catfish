@@ -9,6 +9,7 @@ import { useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useWikiStore } from "../../store/wiki";
+import { topKRelated } from "../../lib/wikiRelevance";
 
 export default function WikiPreview() {
   const selectedFile = useWikiStore((s) => s.selectedFile);
@@ -154,6 +155,9 @@ export default function WikiPreview() {
         )}
       </div>
 
+      {/* P3.2 4 信号 相关推荐 — 渲染 in body 前, 真**bottom 真**真**先 build top-K** */}
+      <RelatedRecommend info={info} />
+
       {/* markdown body */}
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
@@ -192,6 +196,70 @@ export default function WikiPreview() {
       >
         {rendered}
       </ReactMarkdown>
+    </div>
+  );
+}
+
+function RelatedRecommend({ info }: { info: import("../../lib/tauri").WikiFileInfo }) {
+  const files = useWikiStore((s) => s.files);
+  const selectFile = useWikiStore((s) => s.selectFile);
+
+  const recommends = useMemo(() => topKRelated(info, files, 5), [info, files]);
+
+  if (recommends.length === 0) return null;
+
+  return (
+    <div
+      style={{
+        marginTop: "var(--space-3)",
+        marginBottom: "var(--space-4)",
+        padding: "var(--space-3)",
+        background: "var(--catfish-bg-elevated)",
+        borderRadius: 8,
+        border: "1px solid var(--catfish-border)",
+      }}
+    >
+      <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>
+        📊 相关推荐 (4 信号 ranked)
+      </div>
+      <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginBottom: 8 }}>
+        direct link (×3) · source overlap (×4) · Adamic-Adar (×1.5) · type affinity (×1)
+      </div>
+      <ul style={{ listStyle: "none", margin: 0, padding: 0, fontSize: 12 }}>
+        {recommends.map(({ file, breakdown }) => {
+          const signals: string[] = [];
+          if (breakdown.direct > 0) signals.push("↔");
+          if (breakdown.sourceOverlap > 0) signals.push("◇");
+          if (breakdown.adamicAdar > 0) signals.push("∗");
+          if (breakdown.typeAffinity > 0) signals.push("≈");
+          return (
+            <li key={file.rel_path} style={{ padding: "3px 0" }}>
+              <button
+                onClick={() => void selectFile(file.rel_path)}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "var(--catfish-accent, #4a9eff)",
+                  cursor: "pointer",
+                  textDecoration: "underline",
+                  padding: 0,
+                  fontSize: 12,
+                }}
+              >
+                {file.kind === "entity" ? "🧑" : file.kind === "concept" ? "📐" : "💬"}{" "}
+                {file.title}
+              </button>
+              <span style={{ marginLeft: 8, color: "var(--catfish-text-muted)", fontSize: 11 }}>
+                score: {breakdown.total.toFixed(2)} {signals.join(" ")}
+                {breakdown.direct > 0 && ` · 直链`}
+                {breakdown.sourceOverlap > 0 && ` · 共源 ${breakdown.sourceOverlap.toFixed(1)}`}
+                {breakdown.adamicAdar > 0 && ` · 共邻 ${breakdown.adamicAdar.toFixed(1)}`}
+                {breakdown.typeAffinity > 0 && ` · 同型`}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
