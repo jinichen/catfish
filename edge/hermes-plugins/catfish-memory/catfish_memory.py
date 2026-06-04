@@ -262,6 +262,71 @@ class CatfishMemoryProvider(MemoryProvider):
             session_id, self._catfish_home_cached, self._hermes_home,
         )
 
+    def system_prompt_block(self) -> str:
+        """BL-CATFISH-WIKI-MODE P3.3.13 (6/4): system prompt 真**禁编造 rule** 强 instruction.
+
+        6/4 17:39 chat qwen_v3_5_122b 严重 hallucinate (陈淡孜儿子 / Demo User /
+        公司资质管理办法修订版). prefetch 真**user msg 末尾真 rule LLM 真**真**ignore**真.
+        改用 system_prompt_block 真**真 static system prompt** — 真**LLM 严守 rule**真.
+
+        放 wiki title list 在 system prompt 真**真**真**LLM 真**真**真**每轮**真**看**真**精确**真
+        reference target.
+        """
+        if not self._initialized:
+            return ""
+        catfish_home = self._catfish_home_cached or _catfish_home()
+        wiki_dir = catfish_home / "wiki"
+        if not wiki_dir.is_dir():
+            return ""
+
+        entities: list[str] = []
+        concepts: list[str] = []
+        try:
+            ent_dir = wiki_dir / "entities"
+            if ent_dir.is_dir():
+                for f in sorted(ent_dir.glob("*.md")):
+                    entities.append(f.stem)
+            con_dir = wiki_dir / "concepts"
+            if con_dir.is_dir():
+                for f in sorted(con_dir.glob("*.md")):
+                    concepts.append(f.stem)
+        except OSError:
+            return ""
+
+        if not entities and not concepts:
+            return ""
+
+        lines = [
+            "## 🚨 catfish 真**信息源 + 禁编造 铁律** (catfish-memory plugin P3.3.13)",
+            "",
+            "回答员工有关 **业务 / 人物 / 项目 / 决策 / 事件** 真问题时, **必须**真"
+            "依据下面这些**真实信息源**真**:",
+            "",
+            "1. **USER PROFILE** (~/.hermes/memories/USER.md) — 员工身份/偏好/昵称",
+            "2. **MEMORY.md** (~/.hermes/memories/MEMORY.md) — 项目真**真**真**真**真**真**fact**真",
+            "3. **employee_journal.md** (~/.catfish/employee_journal.md) — 时间线日志",
+            "4. **distilled_facts.md** (~/.catfish/distilled_facts.md) — 24h 蒸馏长期",
+            "5. **catfish wiki** (~/.catfish/wiki/) — 见下面 title list, 用 [[标题]] 真**reference**",
+            "",
+            "### ❌ 禁止 行为 (严守, 违反真**直接**真**真**真**真扣信任分**):",
+            "",
+            "- 不允许编造**没在上面 5 个源里出现**真**人物 / 项目代号 / 决策 / 事件**.",
+            "- 没记录就**真**真**直接说 \"我没在 catfish 记忆里找到这条\"**, 不要靠 training prior 编.",
+            "- 真**catfish / 鲶鱼 / 小鲶 / 胖胖** 是 **AI 副手 + 员工个人开源项目**, 真**不**真"
+            "真**真**真**真**真**业务 entity** (跟周报 / 汇报 / 待办 / 工作总结 不沾边).",
+            "",
+            "### ✅ wiki 真**已有 title** (chat 真**reference**真**真**用 `[[标题]]`):",
+            "",
+        ]
+        if entities:
+            lines.append(f"**实体 ({len(entities)})**: " + " · ".join(f"`[[{n}]]`" for n in entities[:50]))
+        if concepts:
+            lines.append(f"\n**概念 ({len(concepts)})**: " + " · ".join(f"`[[{n}]]`" for n in concepts[:50]))
+        lines.append("")
+        lines.append("员工 chat 提到上述 title 真**直接**真**reference**真, 真**不要**真**重复抽**真.")
+
+        return "\n".join(lines)
+
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
         """不暴露 tool — catfish tool 走 catfish-tool-bridge plugin, 不重复.
 
@@ -402,9 +467,9 @@ class CatfishMemoryProvider(MemoryProvider):
             "- 不要乱写 MEMORY.md 当 skill spec 用 (见 memory 写入纪律)\n\n"
             "**禁止幻觉 (重要)**:\n"
             "- 引用员工历史 / 项目 / 决策 时, **必须**真**来自下面注入真 wiki / journal / "
-            "USER PROFILE / MEMORY.md**真. 不允许编造\"老李\"\"KA017\"\"5/3 跟老板争论\""
-            "等**没在注入数据里出现**的人 / 项目 / 事件.\n"
-            "- 没真**真**真**记录就**真**真**真**直接说 \"我没在你 catfish 记忆里找到这条\", "
+            "USER PROFILE / MEMORY.md / SOUL.md**. 不允许编造**没在注入数据里出现**的人 / "
+            "项目 / 事件.\n"
+            "- 没记录就**直接说 \"我没在你 catfish 记忆里找到这条\"**, "
             "不要靠 training prior 编 confabulation.\n"
             "- 真**真**reference 真员工业务真 entity / concept 时**真**用真 `[[wiki title]]` "
             "精确链接** (见下面 P3.3 wiki summary 注入真 title list).\n"
