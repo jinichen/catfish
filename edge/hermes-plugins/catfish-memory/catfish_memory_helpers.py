@@ -719,6 +719,12 @@ async def _call_analysis_llm(
                 return None
             data = resp.json()
             text = data.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+            # P1.1.1 debug (6/4): 写 raw Step 1 output 到 file. 跑通后删.
+            try:
+                _debug_dump = Path.home() / ".catfish" / "last_wiki_analysis.txt"
+                _debug_dump.write_text(text, encoding="utf-8")
+            except Exception:  # noqa: BLE001
+                pass
             return text.strip() or None
     except Exception as e:  # noqa: BLE001
         logger.warning("catfish-memory analysis 异常: %s", e)
@@ -771,6 +777,13 @@ async def _call_generation_llm(
                 return None
             data = resp.json()
             text = data.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+            # P1.1.1 debug (6/4): 写 raw LLM output 到 file 看 sentinel 不符原因.
+            # 跑通后删 (BL-CATFISH-WIKI-MODE P1.1.2 cleanup).
+            try:
+                _debug_dump = Path.home() / ".catfish" / "last_wiki_generation.txt"
+                _debug_dump.write_text(text, encoding="utf-8")
+            except Exception:  # noqa: BLE001
+                pass
             return text.strip() or None
     except Exception as e:  # noqa: BLE001
         logger.warning("catfish-memory generation 异常: %s", e)
