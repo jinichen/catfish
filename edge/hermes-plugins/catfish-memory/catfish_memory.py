@@ -127,10 +127,25 @@ _STOPCHARS = set("的了是在我你他她我们你们和跟也都就这那有�
 
 
 def _query_token_set(text: str) -> set:
-    """字符级 set (去停用字), 真返用作 Jaccard 输入. 真不分词省 jieba 启动."""
+    """字符级 + bigram set (去停用字), 真返用作 Jaccard 输入.
+
+    BL-CATFISH-WIKI-MODE P3.1 (6/4): char-only → char + bigram.
+    Phrase 完整匹配 (e.g. "月度通报" 完整 hit "月度通报模板") 真**Jaccard**真**升**,
+    partial match (e.g. "月度发布" 只 hit "月度") 真**降**. 跟 BACKLOG P3.1 BL 一致.
+    不依赖 jieba (plugin light, jieba 启动 100ms+).
+    """
     if not text:
         return set()
-    return {c for c in text if c not in _STOPCHARS and c.strip()}
+    chars = {c for c in text if c not in _STOPCHARS and c.strip()}
+    bigrams = {
+        text[i : i + 2]
+        for i in range(len(text) - 1)
+        if text[i] not in _STOPCHARS
+        and text[i + 1] not in _STOPCHARS
+        and text[i].strip()
+        and text[i + 1].strip()
+    }
+    return chars | bigrams
 
 
 def _jaccard_similarity(a: set, b: set) -> float:
