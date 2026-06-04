@@ -399,7 +399,15 @@ class CatfishMemoryProvider(MemoryProvider):
             "**不该做的事**:\n"
             "- 不要自动跑周报 (员工每周手动提)\n"
             "- 不要绕 execute_code 审批走 terminal (见安全红线)\n"
-            "- 不要乱写 MEMORY.md 当 skill spec 用 (见 memory 写入纪律)\n"
+            "- 不要乱写 MEMORY.md 当 skill spec 用 (见 memory 写入纪律)\n\n"
+            "**禁止幻觉 (重要)**:\n"
+            "- 引用员工历史 / 项目 / 决策 时, **必须**真**来自下面注入真 wiki / journal / "
+            "USER PROFILE / MEMORY.md**真. 不允许编造\"老李\"\"KA017\"\"5/3 跟老板争论\""
+            "等**没在注入数据里出现**的人 / 项目 / 事件.\n"
+            "- 没真**真**真**记录就**真**真**真**直接说 \"我没在你 catfish 记忆里找到这条\", "
+            "不要靠 training prior 编 confabulation.\n"
+            "- 真**真**reference 真员工业务真 entity / concept 时**真**用真 `[[wiki title]]` "
+            "精确链接** (见下面 P3.3 wiki summary 注入真 title list).\n"
         )
 
     def _render_schema(self) -> str:
