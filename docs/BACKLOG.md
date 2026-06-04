@@ -1128,6 +1128,44 @@ catfish 领先 llm_wiki:
 - 借鉴 llm_wiki 3 列布局
 - 员工真看到自己资质管理领域真完整知识图
 
+### P3.3 三级拆分 (6/4 鸿波拍 — 商用必须真**open 即用 不装 Obsidian**)
+
+6/4 实测 Obsidian 打开 ~/.catfish/ vault 真**graph view 完美渲染**, 真**真**file explorer noise 真**真**Obsidian 设计**真**没原生 hide**. 商用真**不能让员工装 Obsidian + 配置 File Hider plugin**, 必须 catfish Dashboard 自己 ship.
+
+**P3.3a Level 1 — Dashboard summary card (1 天)**
+- "仪表盘" tab 内加 `🧠 知识体系` card
+- counts (N entities / M concepts / K queries) + 最近 3 个 distill timeline + Top 5 hub entity (按 related count)
+- 点 card → open Finder 跳 ~/.catfish/wiki/
+- read-only summary, 入门版
+
+**P3.3b Level 2 — 独立 tab (2-3 天)**
+- 顶部 tab bar 加 `🧠 知识体系` (并列 早安 / 工作台 / 邮件 / 仪表盘)
+- 3 列布局:
+  - 左: tree (entities / concepts / queries 3 group + 搜索 box)
+  - 中: 选中 file 真 Markdown render (含 `[[wikilink]]` clickable 跳转)
+  - 右: sigma.js + graphology 真**graph view** (跟 Obsidian 同 capability)
+- 数据: 前端 Tauri fs API 直接 read `~/.catfish/wiki/*.md` + gray-matter parse frontmatter + regex 抽 wikilink edge
+- 依赖已就绪: package.json 真**Tauri 2.11 + React 19 + sigma + graphology 全 install** (5/29 audit llm_wiki 时确认)
+
+**P3.3c Level 3 — 商业 polish (1-2 周)**
+- filter + 搜索 (tag / entity_type / concept_type / 最近 N 天)
+- `+ 新建 entity / concept` button (员工手动加 — LLM 抽不全的补)
+- dataview 类预制 query 模板: "本周新增 entity" / "孤立 concept" / "Top 10 trending tag"
+- broken link 检测 (依赖 P2.2 structural lint) + 红色提示 + 修复建议
+- (长期 P4) 团队协作 — wiki 多员工 share (本地 own + 可选 publish 团队)
+
+### catfish 商业差异化 (vs Obsidian / Notion / ChatGPT)
+
+| | catfish (商用版 P3.3 后) | Obsidian | Notion/feishu | ChatGPT UI |
+|---|---|---|---|---|
+| open 即用 | ✓ Companion 启动即 vault | ✗ 自己装 + 配置 | ✓ 但中心存 | ✓ 但无 vault |
+| 全本地 | ✓ | ✓ | ✗ | ✗ |
+| LLM 自动生 wiki | ✓ chat → ingest | ✗ 手动写 | ✗ | ✗ |
+| 中央 0 红线 | ✓ | ✓ | ✗ | ✗ |
+| 长期记忆累积 | ✓ entities + concepts + queries | ✗ | ✗ | ✗ |
+| markdown 自由迁移 | ✓ Obsidian 兼容 vault | ✓ | ✗ proprietary | ✗ |
+| 团队协作 (未来) | ✓ 本地 own + 可选 publish | 第三方 plugin | ✓ | ✗ |
+
 ### 风险 + 取舍
 
 1. **LLM 调用真贵**: P1.1 两步 ingest 真每 source 多 1 次 LLM call, P2.1 lint 每周 1 次大 prompt.
