@@ -185,6 +185,27 @@ export default function FeedbackButtons({ messageId, preview, hidden }: Props) {
       >
         ✏️ 改
       </FeedbackBtn>
+      <FeedbackBtn
+        title="把这轮 chat 存进 wiki/queries/, 24h 后自动抽 entity/concept (BL-CATFISH-WIKI-MODE P1.2)"
+        onClick={() => {
+          // P1.2.1 ship (6/4): 前端 button stub. 后端 P1.2.2 写 ~/.catfish/wiki/queries/
+          // <date>-<topic>.md, P1.2.3 触发 plugin ingest pipeline.
+          // 这一步只验 UI 触发 OK — 点 → toast + console.log(messageId, preview).
+          console.log("[P1.2.1 wiki_save stub]", {
+            messageId,
+            sessionId,
+            preview: preview.slice(0, 100),
+          });
+          alert(
+            "已记录 (待 P1.2.2 后端 ship)\n\n" +
+            `messageId: ${messageId.slice(0, 12)}...\n` +
+            `session: ${sessionId.slice(0, 12)}...\n` +
+            "回答前 100 字: " + preview.slice(0, 100)
+          );
+        }}
+      >
+        💾 存 wiki
+      </FeedbackBtn>
       {error && (
         <span style={{ fontSize: 11, color: "var(--status-err)", marginLeft: 6 }}>
           {error}
