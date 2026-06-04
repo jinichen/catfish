@@ -247,6 +247,7 @@ def _apply_patches() -> None:
     _patch_p7_companion_proxy_route()
     _patch_p8_p9_cors()
     _patch_p10_apply_client_headers_localhost()
+    _patch_p12_update_system_prompt_safe()
 
 
 # ── P1 ───────────────────────────────────────────────────────────────────
@@ -880,6 +881,45 @@ def _patch_p10_apply_client_headers_localhost() -> None:
         return _orig(self, base_url)
 
     AIAgent._apply_client_headers_for_base_url = patched
+
+
+# ── P12 ──────────────────────────────────────────────────────────────────
+
+def _patch_p12_update_system_prompt_safe() -> None:
+    """BL-HERMES-SYSTEM-PROMPT-PERSIST-BROKEN (6/4): hermes_state.update_system_prompt
+    silent fail bug 真**`monkey-patch fix`**.
+
+    Bug: hermes_state.HermesState.update_system_prompt 真 SQL 直接 `UPDATE sessions
+    SET system_prompt = ? WHERE id = ?`, 真**`没 _insert_session_row 保护`**真. 真
+    concurrent load (cron + kanban + delegate_task) 时, create_session() race condition
+    真**`session row 没真 insert 上`**真 → UPDATE silent affect 0 rows → 下次 read
+    system_prompt 真**`null`** → conversation_loop 真**`'Stored system prompt is null'`**
+    warning + 真**`每 turn rebuild + prefix cache miss (~29K tokens)`**.
+
+    对比同 file `update_token_counts` (line 967-971) 真**已加** INSERT OR IGNORE pre-call
+    保护 — 真**`update_system_prompt 漏改了`**.
+
+    Fix: wrap 真**`call 前 _insert_session_row(session_id, "unknown")`** 真**`保证 row 存`**真.
+    幂等 — INSERT OR IGNORE 真**`真**`真**`真**`已 在 row 真**`noop`**真.
+    """
+    try:
+        from hermes_state import HermesState
+    except ImportError:
+        logger.warning("P12: hermes_state.HermesState import 失败, skip patch")
+        return
+
+    _orig = HermesState.update_system_prompt
+
+    def patched(self, session_id: str, system_prompt: str) -> None:
+        # 真**`保证 session row 存`** — 真**`INSERT OR IGNORE 幂等`**真.
+        try:
+            self._insert_session_row(session_id, "unknown")
+        except Exception as e:  # noqa: BLE001
+            logger.debug("P12 _insert_session_row 异常 (ignored): %s", e)
+        return _orig(self, session_id, system_prompt)
+
+    HermesState.update_system_prompt = patched
+    logger.info("P12 update_system_prompt 真**`+ INSERT OR IGNORE`** 真**`✓ patched`**")
 
 
 # ─────────────────────────────────────────────────────────────────────────
