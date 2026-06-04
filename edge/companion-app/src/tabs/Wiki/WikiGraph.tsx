@@ -35,7 +35,7 @@ export default function WikiGraph() {
   const graph = useMemo(() => {
     const g = new Graph({ multi: false, type: "directed" });
 
-    // 1. node — 每 file 1 node
+    // 1. node — 每 file 1 node (size 4-8 范围, 跟 Obsidian 一致小巧)
     for (const f of files) {
       const color = COLOR[f.kind] || "#888";
       g.addNode(f.rel_path, {
@@ -43,7 +43,7 @@ export default function WikiGraph() {
         kind: f.kind,
         slug: f.slug,
         color,
-        size: 4, // 基础大小, 下面按 degree 调
+        size: 4,
       });
     }
 
@@ -78,30 +78,28 @@ export default function WikiGraph() {
       }
     }
 
-    // 3. size by degree (inbound + outbound) — hub 节点真大
+    // 3. size by degree — hub 略大但保紧凑 (4-8 范围, Obsidian 风格)
     g.forEachNode((node) => {
       const degree = g.degree(node);
-      g.setNodeAttribute(node, "size", 3 + Math.min(degree * 1.5, 12));
+      g.setNodeAttribute(node, "size", 4 + Math.min(degree * 0.4, 4));
     });
 
-    // 4. positions — random 起始 (circular 真**真**真**力拉真**真**真**真**会**真**圆形**真,
-    //    用 random 真**真**真**真**真**力 ForceAtlas2 真**真**自动**真**真**散开**真) +
-    //    ForceAtlas2 强 1000 iterations 让 converge — 跟 Obsidian graph view 同 algorithm.
-    random.assign(g, { scale: 1000, center: 0 });
+    // 4. positions — 真 random scale 小 + ForceAtlas2 适度 iter — 让节点紧凑成 cluster,
+    //    不飞散到边. Obsidian graph view 同风格.
+    random.assign(g, { scale: 100, center: 0 });
     if (g.order > 1) {
-      const settings = forceAtlas2.inferSettings(g);
       forceAtlas2.assign(g, {
-        iterations: 1000,
+        iterations: 300,
         settings: {
-          ...settings,
-          gravity: 0.5,
-          scalingRatio: 20,
-          slowDown: 1,
+          gravity: 1,
+          scalingRatio: 5,
+          slowDown: 2,
           barnesHutOptimize: true,
-          strongGravityMode: false,
+          strongGravityMode: true,
           linLogMode: false,
           outboundAttractionDistribution: false,
           edgeWeightInfluence: 1,
+          adjustSizes: true,
         },
       });
     }
