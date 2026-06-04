@@ -727,7 +727,10 @@ async def _call_analysis_llm(
                 pass
             return text.strip() or None
     except Exception as e:  # noqa: BLE001
-        logger.warning("catfish-memory analysis 异常: %s", e)
+        logger.warning(
+            "catfish-memory analysis 异常 [%s]: %r",
+            type(e).__name__, e,
+        )
         return None
 
 
@@ -765,7 +768,10 @@ async def _call_generation_llm(
                          "content": _build_generation_prompt() + "\n\n## Analysis\n\n" + analysis}
                     ],
                     "temperature": 0.3,
-                    "max_tokens": 7000,
+                    # P1.1.1 fix (6/4): 7000 → 4096 兼容 deepseek-flash /
+                    # catfish-private-main 真 output cap. Generation 真
+                    # ~3 concept + ~5 entity 估 3500 tokens 够.
+                    "max_tokens": 4096,
                     "stream": False,
                 },
             )
@@ -786,7 +792,12 @@ async def _call_generation_llm(
                 pass
             return text.strip() or None
     except Exception as e:  # noqa: BLE001
-        logger.warning("catfish-memory generation 异常: %s", e)
+        # P1.1.1 fix (6/4): str(e) 真**空时 type(e).__name__ + repr** 真 hint —
+        # 之前 'generation 异常: ' 空 message 真**直接看不出真什么 error**.
+        logger.warning(
+            "catfish-memory generation 异常 [%s]: %r",
+            type(e).__name__, e,
+        )
         return None
 
 
