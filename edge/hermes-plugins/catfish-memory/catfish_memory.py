@@ -1214,6 +1214,34 @@ class CatfishMemoryProvider(MemoryProvider):
         except OSError:
             return False
 
+    def _build_raw_journal_fallback(
+        self, pairs: List[Tuple[str, str]]
+    ) -> str:
+        """LLM 总结失败时, 保留最近 N pairs raw 作 journal 内容, 避免 silent drop.
+
+        BL-CATFISH-MEMORY-SUMMARIZE-UPSTREAM-502 (6/4 凌晨 ship, BACKLOG 9c15942):
+        catfish gateway 上游 100% 502 → 之前 silent drop → journal 全丢.
+        改 raw fallback: 保 data 不丢, 符合 catfish 价值观 "中央不存 = 中央不管"
+        (raw 留, LLM 总结异步补).
+
+        每 pair 截 200 chars + 最多 keep 5 pairs, 避免 entry 过长.
+        """
+        keep_last_n = min(5, len(pairs))
+        if keep_last_n == 0:
+            return "[LLM 总结失败 (上游 502 等), 0 pairs 保留]"
+        lines = [
+            f"[LLM 总结失败 (上游 502 等), raw {keep_last_n} pairs 保留 — "
+            "可下次 sync_turn 重新蒸馏]",
+            "",
+        ]
+        for u, a in pairs[-keep_last_n:]:
+            u_short = (u or "").strip().replace("\n", " ")[:200]
+            a_short = (a or "").strip().replace("\n", " ")[:200]
+            lines.append(f"- 鸿波: {u_short}")
+            lines.append(f"- 小鲶: {a_short}")
+            lines.append("")
+        return "\n".join(lines).rstrip()
+
     async def _summarize_and_distill_async(
         self,
         session_id: str,
@@ -1229,11 +1257,15 @@ class CatfishMemoryProvider(MemoryProvider):
             # 1. 总结
             summary = await _call_summarize_llm(message_pairs, model)
             if not summary:
+                # BL-CATFISH-MEMORY-SUMMARIZE-UPSTREAM-502 (6/4 凌晨):
+                # 之前 silent drop → catfish gateway 100% 502 时 journal 全丢.
+                # 改 raw fallback: 保 data 不丢. LLM 总结异步补 (下次 distill 跑).
+                summary = self._build_raw_journal_fallback(message_pairs)
                 logger.info(
-                    "catfish-memory bg session=%s: LLM 总结返空, 跳过 (不写 journal)",
-                    session_id,
+                    "catfish-memory bg session=%s: LLM 总结返空 → "
+                    "改写 raw fallback (%d pairs 保留)",
+                    session_id, len(message_pairs),
                 )
-                return
 
             # 2. 写 journal
             entry = _format_journal_entry(session_id, summary)
