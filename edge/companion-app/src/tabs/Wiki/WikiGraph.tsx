@@ -13,7 +13,7 @@
 import { useEffect, useRef, useMemo } from "react";
 import Graph from "graphology";
 import Sigma from "sigma";
-import { circular } from "graphology-layout";
+import { random } from "graphology-layout";
 import forceAtlas2 from "graphology-layout-forceatlas2";
 import { useWikiStore } from "../../store/wiki";
 import type { WikiFileInfo } from "../../lib/tauri";
@@ -84,17 +84,20 @@ export default function WikiGraph() {
       g.setNodeAttribute(node, "size", 3 + Math.min(degree * 1.5, 12));
     });
 
-    // 4. positions — circular 起始 + ForceAtlas2 算 force-directed layout
-    //    (跟 Obsidian graph view 同 algorithm — hub 自然聚中, cluster 自然分)
-    circular.assign(g);
+    // 4. positions — random 起始 (circular 真**真**真**力拉真**真**真**真**会**真**圆形**真,
+    //    用 random 真**真**真**真**真**力 ForceAtlas2 真**真**自动**真**真**散开**真) +
+    //    ForceAtlas2 强 1000 iterations 让 converge — 跟 Obsidian graph view 同 algorithm.
+    random.assign(g, { scale: 1000, center: 0 });
     if (g.order > 1) {
+      const settings = forceAtlas2.inferSettings(g);
       forceAtlas2.assign(g, {
-        iterations: 200,
+        iterations: 1000,
         settings: {
-          gravity: 1,
-          scalingRatio: 10,
-          slowDown: 5,
-          barnesHutOptimize: g.order > 30,
+          ...settings,
+          gravity: 0.5,
+          scalingRatio: 20,
+          slowDown: 1,
+          barnesHutOptimize: true,
           strongGravityMode: false,
           linLogMode: false,
           outboundAttractionDistribution: false,
