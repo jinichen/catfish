@@ -1254,3 +1254,57 @@ WARNING agent.conversation_loop: Stored system prompt for session 20260604_08402
 - 真 verification 真**专用 CLI** 真 `hermes session dump latest --type chat` 真**直接拉**真**最新员工 chat dump**
 
 risk 真**低** — 真**hermes 真 upstream**, catfish monkey-patch 真**要慎重**. 真**优先**真**catfish 自己**真**写真验证 CLI**, 真**真**真**绕过 dump 文件命名**问题.
+
+---
+
+## BL-CATFISH-WIKI-MODE P1.1 + P1.1.1 ship 记录 (6/4 下午)
+
+P1.1 = 拆 distill 两步生 wiki/entities/ + wiki/concepts/
+P1.1.1 = 6 fix prompt + max_tokens + timeout + unicode slug
+
+### Ship 历程 (9 commit)
+
+| commit | 内容 |
+|---|---|
+| c5059de | P1.1 wiki two-step ship — Analysis + Generation + ---FILE: sentinel parser + ~/.catfish/wiki/ 写盘 (327 行) |
+| fe45ae0 | P1.1.1 prompt 3 fix: catfish skip rule / concepts 先 entities 后 / related YAML 双引号 |
+| 12785f9 | debug: 加 raw LLM 输出 dump (last_wiki_analysis.txt + last_wiki_generation.txt) |
+| cf19df8 | max_tokens 7000 → 4096 (catfish-private-main output cap) + 异常 log 加 `[Type]: repr` hint |
+| b8c5b89 | _GENERATION_HTTP_TIMEOUT = 180s (60s 真**ReadTimeout 实测**, LLM 生 4096 tokens 真长) |
+| 27b9639 | _WIKI_PATH_PATTERN 加 re.UNICODE — slug 接受中文 (`资质申报流程.md` / `中电.md`) |
+
+### 实测 13:12 输出
+
+```
+✓ wiki ship 5 entities + 5 concepts
+journal: ## [2026-06-04 13:12] distill | 5 entities, 5 concepts
+```
+
+- entities (5, 真**全工作业务**, catfish skip ✓): FFCS数字鲶鱼 / ISO22301 / 北京福富高新 / 鸿波 / 中电
+- concepts (5, P1.1.1 强化生效): 文档交付标准 / 周报生成规范 / 资质申报流程 / 资质通报模板 / 资质优先级管理
+- related YAML: `["[[资质申报流程]]", "[[资质优先级管理]]", ...]` 真**双引号 string list 兼容 Obsidian + YAML**
+- unicode slug 写盘 OK (中文文件名)
+
+### 教训 (P1.1.1 6 个 fix 顺序)
+
+1. **prompt example 真 LLM 跟得太死** — `<slug>` placeholder 第一次跑 LLM 真**填真**, 但 polish 后真**LLM 真**保留 example literal** 真**parse 0 file**. → 真**加 raw dump 真 debug 真**真**最快定位**.
+2. **`str(e)` 真空** 真**catch 异常时 type hint 真必加** — `[%s]: %r` 直接显示 `ReadTimeout / RemoteProtocolError / etc` 真**根因 直接知**.
+3. **max_tokens 真**真**模型 真 cap 真 model-specific** — catfish-private-main 真**4096 真cap**, 7000 真**直接抛 `httpx.ReadTimeout`** (gateway 真**等 generate 真超时**). 真**未来 plugin 真**真**真**真**真**真 model metadata 真 cap detection** 真**自动 cap_max_tokens** 真 helpful.
+4. **timeout 60s 真**真**LLM 生 4096 tokens 真**真**不够** (~90s+). 真**generation 真单独 180s 真 robust**.
+5. **path 白名单 ASCII-only 真**真**踩坑** — LLM 真**中文 slug 真**自然真**用**, 真**白名单**真**真**真**要 Unicode**. 真**`re.UNICODE` 真 `\w` 真**简单**真.
+6. **catfish/AI 工具 skip rule 真**真**入 Analysis prompt 真**最早一段** — 优先级最高, 真**LLM 真**真**严守**真.
+
+### 24h 观察期 + cleanup
+
+明天 8:40+ (P0 ship 真**24h 满**):
+- 删 plugin prefetch 末尾 diag log (line 328-345 真 `logger.info("catfish-memory prefetch: returning...")`)
+- 删 `_call_analysis_llm` / `_call_generation_llm` 真 `last_wiki_*.txt` raw dump
+- catfish-doctor.sh 真**追加 wiki health check** — 真**`ls wiki/concepts/ | wc -l` >= 3** 真**`ls wiki/entities/ | wc -l` >= 3** 真验
+
+### 下一步 P1.2 Query-as-Source
+
+- Companion chat UI 加按钮 "💾 存进 wiki"
+- 点了, 真 LLM 把这轮 Q&A 写 `~/.catfish/wiki/queries/<日期>-<主题>.md`
+- frontmatter: `sources: [chat]`, `related: [<auto-抽 entity/concept>]`
+- 自动走 P1.1 真 Analysis + Generation pipeline 真**抽 entity/concept**
+- 估 3-5 天 (前端 button + 后端 plugin pipeline)
