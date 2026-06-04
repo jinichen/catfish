@@ -649,9 +649,11 @@ def apply_patches(action: str) -> int:
     fails = 0
     for p in patches:
         # 1. 检查是否已 apply: reverse dry-run 能过 = patch 已在文件里
+        # 真**`stdin=DEVNULL`** 防 patch 真**`Reversed prompt 真`** 真**`等 tty hang`** (6/4 实测)
         already_applied = subprocess.run(
             ["patch", "-p1", "-R", "--dry-run", "-i", str(p)],
-            cwd=HERMES_ROOT, capture_output=True, text=True
+            cwd=HERMES_ROOT, capture_output=True, text=True,
+            stdin=subprocess.DEVNULL,
         ).returncode == 0
 
         if action == "apply":
@@ -661,6 +663,7 @@ def apply_patches(action: str) -> int:
             r = subprocess.run(
                 ["patch", "-p1", "-i", str(p)],
                 cwd=HERMES_ROOT, capture_output=True, text=True,
+                stdin=subprocess.DEVNULL,
             )
             if r.returncode == 0:
                 print(f"  PATCH  {p.name}")
@@ -678,6 +681,7 @@ def apply_patches(action: str) -> int:
             r = subprocess.run(
                 ["patch", "-p1", "-R", "-i", str(p)],
                 cwd=HERMES_ROOT, capture_output=True, text=True,
+                stdin=subprocess.DEVNULL,
             )
             if r.returncode == 0:
                 print(f"  REVERT {p.name}")
@@ -703,6 +707,7 @@ def apply_patches(action: str) -> int:
             r = subprocess.run(
                 ["patch", "-p1", "--dry-run", "-i", str(p)],
                 cwd=HERMES_ROOT, capture_output=True, text=True,
+                stdin=subprocess.DEVNULL,
             )
             if r.returncode == 0:
                 print(f"  WOULD  {p.name} (apply 能成功)")
