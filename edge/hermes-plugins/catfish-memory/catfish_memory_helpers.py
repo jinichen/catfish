@@ -138,6 +138,102 @@ _DISTILL_PROMPT = (
     "格式 markdown bullet, 一类一段. 不复述原文, 只抽结论性事实.\n"
 )
 
+# ── BL-CATFISH-WIKI-MODE P1.1 (6/4) ──────────────────────
+# 借 llm_wiki buildAnalysisPrompt + buildGenerationPrompt 拆 distill 为两步:
+# Step 1 Analysis — 结构化抽 entities / concepts / decisions / contradictions
+# Step 2 Generation — 每 entity/concept 生成 1 markdown page (frontmatter +
+#                     ---FILE: <path>--- sentinel parser)
+# 输出 ~/.catfish/wiki/entities/ + ~/.catfish/wiki/concepts/
+# CATFISH_WIKI_ENABLE env toggle 默认 off (LLM 调用贵, 24h 1 次).
+
+#: Step 1 Analysis prompt — 结构化抽 4 类. 中文优先 (员工日志中文为主).
+_ANALYSIS_PROMPT = (
+    "你是企业知识体系分析师. 下面是员工工作日志, 抽以下 4 类结构化信息.\n\n"
+    "**输出格式严格**:\n\n"
+    "## Entities\n"
+    "- <name> | <type: person/org/system/cert/project> | <一句话, ≤50字>\n"
+    "- ... (≤8 条, 按重要性排)\n\n"
+    "## Concepts\n"
+    "- <name> | <type: process/rule/principle/standard> | <一句话, ≤50字>\n"
+    "- ... (≤6 条)\n\n"
+    "## Decisions\n"
+    "- <YYYY-MM-DD> | <who> | <decided what> | <why>\n"
+    "- ... (≤5 条, 最近)\n\n"
+    "## Contradictions\n"
+    "- <pair A vs B>: <冲突点, ≤80字>\n"
+    "- ... (≤3 条, 没有就写 `(无)`)\n\n"
+    "**约束**:\n"
+    "- entity name 简短 (人名/机构缩写/产品名), 拼写跟员工原文一致\n"
+    "- 不抽闲聊 / 待办 (待办在 journal 已有)\n"
+    "- 不复述原文, 只抽结论性事实\n"
+    "- 中文优先, 必要时带英文 (e.g. ISO 27001)\n"
+    "- 输出≤2000 字总\n"
+)
+
+#: Step 2 Generation prompt — 借 llm_wiki ---FILE: sentinel pattern.
+#: 输入 = Analysis 输出, 输出 = 多 file markdown 拼接, 按 ---FILE: <path>--- 切分.
+_GENERATION_PROMPT_TEMPLATE = (
+    "你是企业知识体系作者. 下面是结构化分析结果 (Entities + Concepts + Decisions + "
+    "Contradictions). 为**每个 entity 和 concept** 各生成 1 个 markdown 页, "
+    "用 sentinel 切分.\n\n"
+    "**输出格式严格**:\n\n"
+    "```\n"
+    "---FILE: wiki/entities/<slug>.md---\n"
+    "---\n"
+    "type: entity\n"
+    "title: <name>\n"
+    "entity_type: <person/org/system/cert/project>\n"
+    "created: {today}\n"
+    "updated: {today}\n"
+    "tags: [<tag1>, <tag2>]\n"
+    "related: [[[<other entity 1>]], [[<other concept 1>]]]\n"
+    "sources: [employee_journal]\n"
+    "---\n\n"
+    "# <name>\n\n"
+    "<2-4 段正文, 总 ≤400 字. 1 段概述, 1 段关键关系/决策, 1 段贡献/角色.>\n"
+    "\n"
+    "## Related\n"
+    "- [[<other entity>]] — <为什么相关, ≤30字>\n"
+    "- ... (≤4 条)\n"
+    "\n"
+    "---FILE: wiki/concepts/<slug>.md---\n"
+    "---\n"
+    "type: concept\n"
+    "title: <name>\n"
+    "concept_type: <process/rule/principle/standard>\n"
+    "created: {today}\n"
+    "updated: {today}\n"
+    "tags: [...]\n"
+    "related: [...]\n"
+    "sources: [employee_journal]\n"
+    "---\n\n"
+    "# <name>\n\n"
+    "<3-5 段正文, 总 ≤600 字. 定义 / 适用场景 / 跟其它 concept 真区别 / 案例.>\n"
+    "\n"
+    "## Related\n"
+    "- ... (≤4 条)\n"
+    "```\n\n"
+    "**约束**:\n"
+    "- slug = name 小写 + 中文转拼音首字母 + 连字符 (e.g. ISO 27001 → iso-27001, "
+    "陈鸿波 → chenhongbo, 中电福富 → zdff). entity slug 跟 concept slug 不冲突\n"
+    "- frontmatter YAML 严格合法 (Obsidian 解析)\n"
+    "- 每 file 真**title 不重复**\n"
+    "- related wikilinks 真 [[name]] 必须真**指真**真 Analysis 里出现真 name\n"
+    "- 同 slug 真 entity vs concept 真不允许 (按 type 分)\n"
+    "- 全部输出 ≤6000 字\n"
+)
+
+
+def _build_generation_prompt() -> str:
+    """注 {today} 真生成 prompt."""
+    return _GENERATION_PROMPT_TEMPLATE.format(today=time.strftime("%Y-%m-%d"))
+
+
+def _wiki_enabled() -> bool:
+    """CATFISH_WIKI_ENABLE env 控 P1.1 wiki two-step 开关. 默认 off (LLM 调用贵)."""
+    val = os.environ.get("CATFISH_WIKI_ENABLE", "").strip().lower()
+    return val in ("1", "true", "yes", "on")
+
 
 def _extract_message_pairs(messages: List[Dict[str, Any]]) -> List[Tuple[str, str]]:
     """从 hermes message list 抽 (role, content) 对.
@@ -549,5 +645,182 @@ async def _call_distill_llm(
     if not results:
         return None
     return "\n\n".join(results)
+
+
+# ── BL-CATFISH-WIKI-MODE P1.1 wiki two-step ─────────────────────
+
+async def _call_analysis_llm(
+    journal_text: str, model: str,
+) -> Optional[str]:
+    """Step 1 Analysis: 结构化抽 entities/concepts/decisions/contradictions.
+
+    输入 = 全 journal_text (≤ _DISTILL_CHUNK_CHARS 真 chunk).
+    输出 = markdown 结构化 (4 个 ## 段) 或 None (失败).
+
+    比 _call_distill_llm 真区别: 输出结构化 (parseable), 不是 bullet list.
+    """
+    if not journal_text.strip():
+        return None
+    token = _gateway_dev_token()
+    if not token:
+        return None
+    try:
+        import httpx
+    except ImportError:
+        return None
+
+    # 单 chunk 走 (journal 真大时切前 _DISTILL_CHUNK_CHARS — 最新优先 tail).
+    chunk = journal_text[-_DISTILL_CHUNK_CHARS:] if len(journal_text) > _DISTILL_CHUNK_CHARS else journal_text
+
+    try:
+        async with httpx.AsyncClient(timeout=_LLM_HTTP_TIMEOUT) as client:
+            resp = await client.post(
+                _gateway_url(),
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "X-Catfish-Skip-Identity": "true",
+                    "X-Catfish-Internal": "true",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": _ANALYSIS_PROMPT + "\n\n" + chunk}],
+                    "temperature": 0.2,
+                    "max_tokens": 2500,
+                    "stream": False,
+                },
+            )
+            if resp.status_code != 200:
+                logger.warning(
+                    "catfish-memory analysis: HTTP %d (%s), skip",
+                    resp.status_code, resp.text[:200],
+                )
+                return None
+            data = resp.json()
+            text = data.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+            return text.strip() or None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("catfish-memory analysis 异常: %s", e)
+        return None
+
+
+async def _call_generation_llm(
+    analysis: str, model: str,
+) -> Optional[str]:
+    """Step 2 Generation: 把 analysis 转 wiki pages (---FILE: sentinel).
+
+    输入 = Step 1 真 analysis text (~2000 字).
+    输出 = ---FILE: <path>--- 切分真 multi-file markdown 或 None.
+    """
+    if not analysis.strip():
+        return None
+    token = _gateway_dev_token()
+    if not token:
+        return None
+    try:
+        import httpx
+    except ImportError:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=_LLM_HTTP_TIMEOUT) as client:
+            resp = await client.post(
+                _gateway_url(),
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "X-Catfish-Skip-Identity": "true",
+                    "X-Catfish-Internal": "true",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "user",
+                         "content": _build_generation_prompt() + "\n\n## Analysis\n\n" + analysis}
+                    ],
+                    "temperature": 0.3,
+                    "max_tokens": 7000,
+                    "stream": False,
+                },
+            )
+            if resp.status_code != 200:
+                logger.warning(
+                    "catfish-memory generation: HTTP %d (%s), skip",
+                    resp.status_code, resp.text[:200],
+                )
+                return None
+            data = resp.json()
+            text = data.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+            return text.strip() or None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("catfish-memory generation 异常: %s", e)
+        return None
+
+
+# 路径白名单 — 防 LLM 输出真 ---FILE: 真**逃逸 wiki/ 根**.
+_WIKI_PATH_PATTERN = __import__("re").compile(
+    r"^wiki/(entities|concepts)/[a-z0-9][a-z0-9_-]*\.md$"
+)
+
+# sentinel pattern 真 ---FILE: <path>--- 行.
+_FILE_SENTINEL = __import__("re").compile(r"^---FILE:\s*(.+?)\s*---\s*$", __import__("re").MULTILINE)
+
+
+def _parse_generation_output(text: str) -> Dict[str, str]:
+    """切 LLM 输出按 ---FILE: <path>--- sentinel, 返 {rel_path: content} dict.
+
+    路径白名单 _WIKI_PATH_PATTERN — 只允 wiki/entities/<slug>.md /
+    wiki/concepts/<slug>.md. 其它 path silent skip (LLM 真乱写 / 真逃逸防护).
+    """
+    if not text:
+        return {}
+    # 找所有 sentinel 真 (path, start_offset) 真
+    matches = list(_FILE_SENTINEL.finditer(text))
+    if not matches:
+        return {}
+
+    files: Dict[str, str] = {}
+    for i, m in enumerate(matches):
+        rel_path = m.group(1).strip()
+        # 白名单验
+        if not _WIKI_PATH_PATTERN.match(rel_path):
+            logger.debug("catfish-memory wiki parse: skip 非白名单 path %r", rel_path)
+            continue
+        content_start = m.end()
+        content_end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        content = text[content_start:content_end].strip()
+        # 真 strip trailing fence 真 ``` (LLM 真有时 wrap markdown)
+        if content.endswith("```"):
+            content = content[:-3].rstrip()
+        if content.startswith("```"):
+            # 真 strip first line 真 ``` / ```markdown 之类
+            content = content.split("\n", 1)[-1].lstrip()
+        if not content:
+            continue
+        files[rel_path] = content
+    return files
+
+
+def _write_wiki_files(catfish_home: Path, files: Dict[str, str]) -> Tuple[int, int]:
+    """写 wiki files 真 ~/.catfish/wiki/entities/ + wiki/concepts/. 返 (n_entities, n_concepts).
+
+    每 file overwrite (按 slug 唯一性 — 同 slug 真 update). 真 race window 不
+    过滤 (24h cooldown 真够避并发).
+    """
+    if not files:
+        return (0, 0)
+    n_entities = 0
+    n_concepts = 0
+    for rel_path, content in files.items():
+        target = catfish_home / rel_path
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content + "\n", encoding="utf-8")
+            if "entities/" in rel_path:
+                n_entities += 1
+            elif "concepts/" in rel_path:
+                n_concepts += 1
+        except OSError as e:
+            logger.warning("catfish-memory write wiki file %s 失败: %s", rel_path, e)
+    return (n_entities, n_concepts)
 
 

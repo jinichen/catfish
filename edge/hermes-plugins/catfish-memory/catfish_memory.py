@@ -156,7 +156,9 @@ from .catfish_memory_helpers import (  # noqa: F401
     _append_journal,
     _append_to_buffer,
     _buffer_file_path,
+    _call_analysis_llm,
     _call_distill_llm,
+    _call_generation_llm,
     _call_summarize_llm,
     _catfish_home,
     _clear_buffer,
@@ -166,6 +168,7 @@ from .catfish_memory_helpers import (  # noqa: F401
     _gateway_url,
     _load_plugin_config,
     _mark_distill_run,
+    _parse_generation_output,
     _plugin_config_path,
     _read_buffer,
     _read_full_journal,
@@ -174,8 +177,10 @@ from .catfish_memory_helpers import (  # noqa: F401
     _read_text_safe,
     _should_run_distill,
     _state_file_path,
+    _wiki_enabled,
     _write_distilled,
     _write_state,
+    _write_wiki_files,
     # module-level 常量
     _BUDGETS,
     _BUFFER_FILENAME,
@@ -1300,14 +1305,62 @@ class CatfishMemoryProvider(MemoryProvider):
             journal_text = _read_full_journal(catfish_home)
             if not journal_text:
                 return
+
+            # 3a. legacy single-step distill (保留 — 兼容老 distilled_facts.md path)
             distilled = await _call_distill_llm(journal_text, model)
             if distilled:
                 _write_distilled(catfish_home, distilled)
                 _mark_distill_run(catfish_home)
                 logger.info(
-                    "catfish-memory bg session=%s: ✓ 蒸馏 %d 字节",
+                    "catfish-memory bg session=%s: ✓ 蒸馏 %d 字节 (distilled_facts.md)",
                     session_id, len(distilled.encode("utf-8")),
                 )
+
+            # 3b. BL-CATFISH-WIKI-MODE P1.1 (6/4): wiki two-step ingest
+            #     CATFISH_WIKI_ENABLE=1 默认 off (LLM 调用贵, 24h 1 次).
+            #     Step 1 Analysis → Step 2 Generation → parse + 写文件 + journal
+            if _wiki_enabled():
+                try:
+                    analysis = await _call_analysis_llm(journal_text, model)
+                    if not analysis:
+                        logger.info(
+                            "catfish-memory bg session=%s: wiki Step 1 analysis 返空 (skip)",
+                            session_id,
+                        )
+                    else:
+                        generation = await _call_generation_llm(analysis, model)
+                        if not generation:
+                            logger.info(
+                                "catfish-memory bg session=%s: wiki Step 2 generation 返空 (skip)",
+                                session_id,
+                            )
+                        else:
+                            files = _parse_generation_output(generation)
+                            n_e, n_c = _write_wiki_files(catfish_home, files)
+                            if n_e + n_c > 0:
+                                # journal 加 distill entry — Karpathy log.md 风格
+                                ts_short = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
+                                distill_entry = (
+                                    f"\n## [{ts_short}] distill | "
+                                    f"{n_e} entities, {n_c} concepts\n\n"
+                                    f"wiki/entities/ + wiki/concepts/ 已更新 "
+                                    f"({len(files)} pages, ~{len(generation)//1024}KB).\n"
+                                )
+                                _append_journal(catfish_home, distill_entry)
+                                logger.info(
+                                    "catfish-memory bg session=%s: ✓ wiki ship %d entities + %d concepts",
+                                    session_id, n_e, n_c,
+                                )
+                            else:
+                                logger.info(
+                                    "catfish-memory bg session=%s: wiki parse 0 file (LLM 输出不符 sentinel)",
+                                    session_id,
+                                )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "catfish-memory bg session=%s: wiki two-step 异常 (静默): %s",
+                        session_id, e,
+                    )
         except Exception as e:  # noqa: BLE001
             logger.warning(
                 "catfish-memory bg session=%s 异常 (静默): %s", session_id, e,
