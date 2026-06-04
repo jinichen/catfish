@@ -389,6 +389,39 @@ cmd_check_plugins() {
     else
         echo "    ${YELLOW}缺${RESET} ~/.catfish/distilled_facts.md (24h 蒸馏后生)"
     fi
+    echo
+
+    # 5f. BL-CATFISH-MEMORY-SUMMARIZE-UPSTREAM-502 (6/4 鸿波): off-site detection
+    # 离单位 → 内部算力 (INTERNAL_LLM_BASE_QWEN_MAIN) 不可达, gateway fallback chain
+    # 落到公网 Google AI Studio / NVIDIA NIM 免费套餐 → 502 / rate limit 高频, 触发
+    # catfish-memory raw fallback (_build_raw_journal_fallback). 这是预期行为, 数据 0 丢.
+    # 这 check 给鸿波一眼看出 "在单位 / 离单位" 状态, 解释 raw fallback 是否会触发.
+    echo "${BOLD}[Network (内部算力)]${RESET}"
+    local internal_url
+    internal_url="$(launchctl getenv INTERNAL_LLM_BASE_QWEN_MAIN 2>/dev/null || echo '')"
+    if [ -z "$internal_url" ]; then
+        internal_url="${INTERNAL_LLM_BASE_QWEN_MAIN:-}"
+    fi
+    if [ -z "$internal_url" ]; then
+        echo "    ${YELLOW}未配${RESET} INTERNAL_LLM_BASE_QWEN_MAIN env 没设 (off-site / 公网模式)"
+        echo "         distill / summary 走公网 fallback (dashscope/deepseek/nvidia 免费套餐)"
+        echo "         502 / rate limit 高频是预期, raw fallback 兜底, 数据 0 丢"
+    elif command -v curl >/dev/null 2>&1; then
+        local code
+        code="$(curl -sS -o /dev/null -m 3 --connect-timeout 2 -w '%{http_code}' "$internal_url" 2>/dev/null || echo '000')"
+        case "$code" in
+            2*|3*|4*)
+                echo "    ${GREEN}OK${RESET} 内部算力可达 ($internal_url → HTTP $code)"
+                ;;
+            *)
+                echo "    ${YELLOW}WARN${RESET} 内部算力不可达 ($internal_url → $code, 多半 off-site / VPN 断)"
+                echo "         gateway fallback 落公网套餐, 502 / rate limit 高频是预期"
+                echo "         raw fallback 兜底, 数据 0 丢 (BL-CATFISH-MEMORY-SUMMARIZE-UPSTREAM-502)"
+                ;;
+        esac
+    else
+        echo "    ${YELLOW}SKIP${RESET} curl 没装, 无法测连通"
+    fi
 }
 
 cmd_doctor() {
