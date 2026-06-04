@@ -15,6 +15,7 @@ import ChatTab from "./tabs/Chat/ChatTab";
 import BriefingTab from "./tabs/Briefing/BriefingTab";  // 5/20 BL-COMPANION-DAILY-BRIEFING-MVP
 import DashboardTab from "./tabs/Dashboard/DashboardTab";
 import EmailTab from "./tabs/Email/EmailTab";  // 5/18 BL-COMPANION-EMAIL-TAB
+import WikiTab from "./tabs/Wiki/WikiTab";  // BL-CATFISH-WIKI-MODE P3.3 (6/4)
 import { useUIStore } from "./store/ui";
 import { useAgentStore } from "./store/agent";
 import { useFocusStore } from "./store/focus";
@@ -220,6 +221,7 @@ function AppShell({ activeTab }: { activeTab: string }) {
         {activeTab === "briefing" && <BriefingTab />}
         {activeTab === "dashboard" && <DashboardTab />}
         {activeTab === "email" && <EmailTab />}
+        {activeTab === "wiki" && <WikiTab />}
       </main>
     </div>
   );

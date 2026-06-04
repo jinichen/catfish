@@ -18,6 +18,8 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "email", label: "邮件" },
   // { id: "console", label: "控制台" },  // 5/16 砍
   { id: "dashboard", label: "仪表盘" },
+  // BL-CATFISH-WIKI-MODE P3.3 (6/4): 知识体系 tab — 3 列 wiki UI
+  { id: "wiki", label: "🧠 知识体系" },
 ];
 
 export default function TabBar() {

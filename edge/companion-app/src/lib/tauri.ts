@@ -190,6 +190,31 @@ export const wikiSaveChatMessage = (args: {
     assistantResponse: args.assistantResponse,
   });
 
+// ── BL-CATFISH-WIKI-MODE P3.3.2: wiki read API ──
+export interface WikiFileInfo {
+  rel_path: string;
+  kind: "entity" | "concept" | "query";
+  slug: string;
+  title: string;
+  subtype: string | null;
+  tags: string[];
+  related: string[];
+  sources: string[];
+  size_bytes: number;
+  mtime: number;
+}
+
+export interface WikiFileFull {
+  info: WikiFileInfo;
+  content: string;
+  frontmatter: string;
+  body: string;
+}
+
+export const wikiListFiles = () => rawInvoke<WikiFileInfo[]>("wiki_list_files");
+export const wikiReadFile = (relPath: string) =>
+  rawInvoke<WikiFileFull>("wiki_read_file", { relPath });
+
 // ── BL-E27 spike: 桌宠副窗 ─────────────────────────────────
 export const petShow = () => rawInvoke<void>("pet_show");
 export const petHide = () => rawInvoke<void>("pet_hide");
