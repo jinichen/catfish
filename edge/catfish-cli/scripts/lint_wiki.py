@@ -40,6 +40,9 @@ def parse_related(fm: str) -> list[str]:
     ]
 
 
+_KIND_MAP = {"entities": "entity", "concepts": "concept", "queries": "query"}
+
+
 def scan_files() -> dict[str, dict]:
     """Return rel_path -> info dict."""
     files = {}
@@ -63,7 +66,7 @@ def scan_files() -> dict[str, dict]:
             files[rel_path] = {
                 "title": title,
                 "slug": f.stem,
-                "kind": sub.rstrip("s"),  # entities → entity / concepts → concept / queries → query
+                "kind": _KIND_MAP[sub],  # entities→entity (rstrip('s') 真**真 char-strip 真 bug**)
                 "related": related,
                 "body_links": body_links,
                 "all_outbound": list(set(related + body_links)),
