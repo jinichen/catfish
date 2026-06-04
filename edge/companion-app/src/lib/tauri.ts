@@ -215,6 +215,25 @@ export const wikiListFiles = () => rawInvoke<WikiFileInfo[]>("wiki_list_files");
 export const wikiReadFile = (relPath: string) =>
   rawInvoke<WikiFileFull>("wiki_read_file", { relPath });
 
+// ── BL-CATFISH-WIKI-MODE P3.3.7: wiki write API ──
+export interface WikiWriteResult {
+  rel_path: string;
+  bytes: number;
+  created: boolean;
+}
+
+export const wikiCreateEntityOrConcept = (args: {
+  kind: "entity" | "concept";
+  title: string;
+  subtype: string;
+  tags: string[];
+  related: string[];
+  body: string;
+}) => rawInvoke<WikiWriteResult>("wiki_create_entity_or_concept", args);
+
+export const wikiUpdateFile = (relPath: string, content: string) =>
+  rawInvoke<WikiWriteResult>("wiki_update_file", { relPath, content });
+
 // ── BL-E27 spike: 桌宠副窗 ─────────────────────────────────
 export const petShow = () => rawInvoke<void>("pet_show");
 export const petHide = () => rawInvoke<void>("pet_hide");

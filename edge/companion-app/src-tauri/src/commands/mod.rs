@@ -59,3 +59,4 @@ pub mod types;
 pub mod wechat_binding;  // BL-WECHAT-CATFISH-BIND v1 (5/26): WeChat ↔ catfish 员工绑定状态
 pub mod wiki_read;  // BL-CATFISH-WIKI-MODE P3.3.2 (6/4): wiki read API (list_files + read_file)
 pub mod wiki_save;  // BL-CATFISH-WIKI-MODE P1.2.2 (6/4): chat 真 💾 button → wiki/queries/ 写盘
+pub mod wiki_write; // BL-CATFISH-WIKI-MODE P3.3.7 (6/4): wiki write API (create_entity_or_concept + update_file)

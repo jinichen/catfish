@@ -539,6 +539,9 @@ pub fn run() {
             // BL-CATFISH-WIKI-MODE P3.3.2 (6/4): wiki read API
             commands::wiki_read::wiki_list_files,
             commands::wiki_read::wiki_read_file,
+            // BL-CATFISH-WIKI-MODE P3.3.7 (6/4): wiki write API
+            commands::wiki_write::wiki_create_entity_or_concept,
+            commands::wiki_write::wiki_update_file,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

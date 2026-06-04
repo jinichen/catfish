@@ -5,9 +5,10 @@
  * 点击 file → store.selectFile(rel_path) → 中列 preview 加载.
  */
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useWikiStore } from "../../store/wiki";
 import type { WikiFileInfo } from "../../lib/tauri";
+import WikiCreateModal from "./WikiCreateModal";
 
 export default function WikiTree() {
   const files = useWikiStore((s) => s.files);
@@ -20,6 +21,7 @@ export default function WikiTree() {
   const selectFile = useWikiStore((s) => s.selectFile);
   const setSearch = useWikiStore((s) => s.setSearch);
   const setKindFilter = useWikiStore((s) => s.setKindFilter);
+  const [showCreate, setShowCreate] = useState(false);
 
   // 进 tab 时 load files
   useEffect(() => {
@@ -59,21 +61,41 @@ export default function WikiTree() {
     <div style={{ padding: "var(--space-3)", fontSize: 12 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "var(--space-3)" }}>
         <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>知识体系</h3>
-        <button
-          onClick={() => void loadFiles()}
-          title="刷新"
-          style={{
-            background: "transparent",
-            border: "1px solid var(--catfish-border)",
-            borderRadius: 4,
-            padding: "2px 8px",
-            fontSize: 11,
-            cursor: "pointer",
-          }}
-        >
-          ↻
-        </button>
+        <div style={{ display: "flex", gap: 4 }}>
+          <button
+            onClick={() => setShowCreate(true)}
+            title="新建 entity / concept"
+            style={{
+              background: "var(--catfish-accent, #4a9eff)",
+              border: "none",
+              borderRadius: 4,
+              padding: "2px 10px",
+              fontSize: 11,
+              color: "#fff",
+              cursor: "pointer",
+              fontWeight: 600,
+            }}
+          >
+            + 新建
+          </button>
+          <button
+            onClick={() => void loadFiles()}
+            title="刷新"
+            style={{
+              background: "transparent",
+              border: "1px solid var(--catfish-border)",
+              borderRadius: 4,
+              padding: "2px 8px",
+              fontSize: 11,
+              cursor: "pointer",
+            }}
+          >
+            ↻
+          </button>
+        </div>
       </div>
+
+      {showCreate && <WikiCreateModal onClose={() => setShowCreate(false)} />}
 
       <input
         type="text"
