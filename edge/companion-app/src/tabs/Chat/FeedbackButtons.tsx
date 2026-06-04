@@ -15,7 +15,7 @@
  */
 
 import { useState } from "react";
-import { feedbackRecord } from "../../lib/tauri";
+import { feedbackRecord, wikiSaveChatMessage } from "../../lib/tauri";
 import { useChatStore } from "../../store/chat";
 
 interface Props {
@@ -186,22 +186,54 @@ export default function FeedbackButtons({ messageId, preview, hidden }: Props) {
         ✏️ 改
       </FeedbackBtn>
       <FeedbackBtn
-        title="把这轮 chat 存进 wiki/queries/, 24h 后自动抽 entity/concept (BL-CATFISH-WIKI-MODE P1.2)"
-        onClick={() => {
-          // P1.2.1 ship (6/4): 前端 button stub. 后端 P1.2.2 写 ~/.catfish/wiki/queries/
-          // <date>-<topic>.md, P1.2.3 触发 plugin ingest pipeline.
-          // 这一步只验 UI 触发 OK — 点 → toast + console.log(messageId, preview).
-          console.log("[P1.2.1 wiki_save stub]", {
-            messageId,
-            sessionId,
-            preview: preview.slice(0, 100),
-          });
-          alert(
-            "已记录 (待 P1.2.2 后端 ship)\n\n" +
-            `messageId: ${messageId.slice(0, 12)}...\n` +
-            `session: ${sessionId.slice(0, 12)}...\n` +
-            "回答前 100 字: " + preview.slice(0, 100)
-          );
+        title="把这轮 Q&A 存进 wiki/queries/, 自动抽 entity/concept (BL-CATFISH-WIKI-MODE P1.2)"
+        onClick={async () => {
+          // P1.2.2 ship (6/4): 真**调** tauri command wiki_save_chat_message,
+          // 写 ~/.catfish/wiki/queries/<date>-<slug>.md (frontmatter + Q&A).
+          // P1.2.3 plugin watch 触发 Analysis/Generation ingest.
+          try {
+            // 从 store 拿当前 messages, 找 assistant message 真前一条 user
+            const allMessages = useChatStore.getState().messages;
+            const assistantIdx = allMessages.findIndex((m) => m.id === messageId);
+            if (assistantIdx < 0) {
+              setError("找不到当前 assistant 消息");
+              return;
+            }
+            // 倒着找最近一条 user
+            let userMsg = "";
+            for (let i = assistantIdx - 1; i >= 0; i--) {
+              if (allMessages[i].role === "user") {
+                userMsg = allMessages[i].content;
+                break;
+              }
+            }
+            if (!userMsg) {
+              setError("找不到对应 user message");
+              return;
+            }
+            const assistantMsg = allMessages[assistantIdx].content;
+            const now = new Date();
+            const pad = (n: number) => String(n).padStart(2, "0");
+            const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+            const time = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+            const result = await wikiSaveChatMessage({
+              date,
+              time,
+              sessionId,
+              messageId,
+              userMessage: userMsg,
+              assistantResponse: assistantMsg,
+            });
+            // 真**success toast — 用 alert 简单, future 可换 sonner toast**
+            alert(
+              `✓ 已存进 wiki/queries/\n\n` +
+              `${result.path.split("/").pop()}\n` +
+              `${(result.bytes / 1024).toFixed(1)} KB\n\n` +
+              `下次 distill 跑时自动抽 entity/concept.`
+            );
+          } catch (e) {
+            setError(String(e));
+          }
         }}
       >
         💾 存 wiki

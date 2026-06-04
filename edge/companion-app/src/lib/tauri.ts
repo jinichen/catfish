@@ -167,6 +167,29 @@ export const feedbackSummary = () =>
 
 export const feedbackClear = () => rawInvoke<void>("feedback_clear");
 
+// ── BL-CATFISH-WIKI-MODE P1.2.2: chat 真 💾 button → wiki/queries/ 写盘 ──
+export interface WikiQueryWriteResult {
+  path: string;
+  bytes: number;
+}
+
+export const wikiSaveChatMessage = (args: {
+  date: string; // YYYY-MM-DD
+  time: string; // HH:MM
+  sessionId: string;
+  messageId: string;
+  userMessage: string;
+  assistantResponse: string;
+}) =>
+  rawInvoke<WikiQueryWriteResult>("wiki_save_chat_message", {
+    date: args.date,
+    time: args.time,
+    sessionId: args.sessionId,
+    messageId: args.messageId,
+    userMessage: args.userMessage,
+    assistantResponse: args.assistantResponse,
+  });
+
 // ── BL-E27 spike: 桌宠副窗 ─────────────────────────────────
 export const petShow = () => rawInvoke<void>("pet_show");
 export const petHide = () => rawInvoke<void>("pet_hide");

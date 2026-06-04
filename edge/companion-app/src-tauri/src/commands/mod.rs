@@ -57,3 +57,4 @@ pub mod tool_bridge;
 pub mod tts;
 pub mod types;
 pub mod wechat_binding;  // BL-WECHAT-CATFISH-BIND v1 (5/26): WeChat ↔ catfish 员工绑定状态
+pub mod wiki_save;  // BL-CATFISH-WIKI-MODE P1.2.2 (6/4): chat 真 💾 button → wiki/queries/ 写盘

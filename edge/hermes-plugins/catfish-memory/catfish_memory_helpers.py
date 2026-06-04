@@ -310,6 +310,85 @@ def _read_full_journal(catfish_home: Path) -> str:
         return ""
 
 
+# ── BL-CATFISH-WIKI-MODE P1.2.3 (6/4) — wiki/queries/ 触发 partial ingest ──
+
+def _wiki_ingested_state_path(catfish_home: Path) -> Path:
+    """记 哪些 wiki/queries/*.md 已被 ingest, 避免重复处理."""
+    return catfish_home / "wiki_ingested_state.json"
+
+
+def _read_wiki_ingested_state(catfish_home: Path) -> Dict[str, float]:
+    """返 {file_basename: ingested_ts} dict."""
+    p = _wiki_ingested_state_path(catfish_home)
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {}
+
+
+def _mark_wiki_queries_ingested(catfish_home: Path, file_names: List[str]) -> None:
+    """append 已 ingest 真 queries file 名 + ts 到 wiki_ingested_state.json."""
+    if not file_names:
+        return
+    state = _read_wiki_ingested_state(catfish_home)
+    now = time.time()
+    for name in file_names:
+        state[name] = now
+    p = _wiki_ingested_state_path(catfish_home)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        p.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as e:
+        logger.warning("写 wiki_ingested_state.json 失败: %s", e)
+
+
+def _list_pending_queries(catfish_home: Path) -> List[Path]:
+    """列 wiki/queries/ 真未 ingest 真 *.md file (按 mtime 排, 最旧先)."""
+    queries_dir = catfish_home / "wiki" / "queries"
+    if not queries_dir.is_dir():
+        return []
+    state = _read_wiki_ingested_state(catfish_home)
+    pending = []
+    try:
+        for f in queries_dir.glob("*.md"):
+            if f.name not in state:
+                pending.append(f)
+    except OSError:
+        return []
+    # 按 mtime 排 (旧 → 新)
+    try:
+        pending.sort(key=lambda p: p.stat().st_mtime)
+    except OSError:
+        pass
+    return pending
+
+
+def _read_queries_concat(query_files: List[Path], max_chars: int = 12000) -> str:
+    """读所有 queries file 拼一段 text 给 Analysis. 总 cap max_chars 防爆.
+
+    格式: 每 file 加 `### query: <filename>` 头. content 真**整 file** (含
+    frontmatter — Analysis LLM 能看 metadata).
+    """
+    if not query_files:
+        return ""
+    parts = []
+    used = 0
+    for f in query_files:
+        try:
+            text = f.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        block = f"### query: {f.name}\n\n{text.strip()}\n"
+        if used + len(block) > max_chars:
+            break
+        parts.append(block)
+        used += len(block)
+    return "\n\n".join(parts)
+
+
 def _should_run_distill(catfish_home: Path) -> bool:
     """24h 内跑过 → False (不再跑). 没跑过 / 已超 24h → True."""
     state_path = catfish_home / "memory_distill_state.json"

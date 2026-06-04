@@ -166,13 +166,16 @@ from .catfish_memory_helpers import (  # noqa: F401
     _format_journal_entry,
     _gateway_dev_token,
     _gateway_url,
+    _list_pending_queries,
     _load_plugin_config,
     _mark_distill_run,
+    _mark_wiki_queries_ingested,
     _parse_generation_output,
     _plugin_config_path,
     _read_buffer,
     _read_full_journal,
     _read_jsonl_tail,
+    _read_queries_concat,
     _read_state,
     _read_text_safe,
     _should_run_distill,
@@ -1299,29 +1302,51 @@ class CatfishMemoryProvider(MemoryProvider):
                 session_id, len(entry.encode("utf-8")),
             )
 
-            # 3. 满足 24h 间隔 → 蒸馏
-            if not _should_run_distill(catfish_home):
+            # 3. 24h 间隔满 OR queries 有未 ingest file → 跑 distill
+            #    BL-CATFISH-WIKI-MODE P1.2.3 (6/4): queries 触发也跑 — 绕 24h cooldown.
+            cooldown_passed = _should_run_distill(catfish_home)
+            pending_queries = _list_pending_queries(catfish_home) if _wiki_enabled() else []
+            if not cooldown_passed and not pending_queries:
                 return
             journal_text = _read_full_journal(catfish_home)
-            if not journal_text:
+            if not journal_text and not pending_queries:
                 return
 
-            # 3a. legacy single-step distill (保留 — 兼容老 distilled_facts.md path)
-            distilled = await _call_distill_llm(journal_text, model)
-            if distilled:
-                _write_distilled(catfish_home, distilled)
-                _mark_distill_run(catfish_home)
-                logger.info(
-                    "catfish-memory bg session=%s: ✓ 蒸馏 %d 字节 (distilled_facts.md)",
-                    session_id, len(distilled.encode("utf-8")),
-                )
+            # 3a. legacy single-step distill (cooldown 满才跑, queries 触发不重复跑)
+            if cooldown_passed and journal_text:
+                distilled = await _call_distill_llm(journal_text, model)
+                if distilled:
+                    _write_distilled(catfish_home, distilled)
+                    _mark_distill_run(catfish_home)
+                    logger.info(
+                        "catfish-memory bg session=%s: ✓ 蒸馏 %d 字节 (distilled_facts.md)",
+                        session_id, len(distilled.encode("utf-8")),
+                    )
 
             # 3b. BL-CATFISH-WIKI-MODE P1.1 (6/4): wiki two-step ingest
             #     CATFISH_WIKI_ENABLE=1 默认 off (LLM 调用贵, 24h 1 次).
             #     Step 1 Analysis → Step 2 Generation → parse + 写文件 + journal
+            #     P1.2.3 (6/4): queries 真有未 ingest file → 合并真 Analysis input
             if _wiki_enabled():
                 try:
-                    analysis = await _call_analysis_llm(journal_text, model)
+                    # P1.2.3: 合并 journal + queries 真 Analysis input
+                    if pending_queries:
+                        queries_text = _read_queries_concat(pending_queries)
+                        if queries_text:
+                            combined_input = (
+                                journal_text + "\n\n## Recent chat queries (P1.2)\n\n"
+                                + queries_text
+                            )
+                            logger.info(
+                                "catfish-memory bg session=%s: P1.2.3 queries 触发, "
+                                "%d files merged into Analysis input",
+                                session_id, len(pending_queries),
+                            )
+                        else:
+                            combined_input = journal_text
+                    else:
+                        combined_input = journal_text
+                    analysis = await _call_analysis_llm(combined_input, model)
                     if not analysis:
                         logger.info(
                             "catfish-memory bg session=%s: wiki Step 1 analysis 返空 (skip)",
@@ -1351,6 +1376,16 @@ class CatfishMemoryProvider(MemoryProvider):
                                     "catfish-memory bg session=%s: ✓ wiki ship %d entities + %d concepts",
                                     session_id, n_e, n_c,
                                 )
+                                # P1.2.3: mark queries 已 ingest, 下次不重复
+                                if pending_queries:
+                                    _mark_wiki_queries_ingested(
+                                        catfish_home,
+                                        [p.name for p in pending_queries],
+                                    )
+                                    logger.info(
+                                        "catfish-memory bg session=%s: ✓ marked %d queries ingested",
+                                        session_id, len(pending_queries),
+                                    )
                             else:
                                 logger.info(
                                     "catfish-memory bg session=%s: wiki parse 0 file (LLM 输出不符 sentinel)",

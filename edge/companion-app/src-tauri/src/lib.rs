@@ -534,6 +534,8 @@ pub fn run() {
             commands::skill_revision::skill_revision_accept,
             commands::skill_revision::skill_revision_reject,
             commands::skill_revision::skill_revision_check_effectiveness,
+            // BL-CATFISH-WIKI-MODE P1.2.2 (6/4): chat 真 💾 button → wiki/queries/ 写盘
+            commands::wiki_save::wiki_save_chat_message,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
