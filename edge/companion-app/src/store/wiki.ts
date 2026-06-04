@@ -26,11 +26,20 @@ interface WikiState {
 
   search: string;
   kindFilter: "all" | "entity" | "concept" | "query";
+  query:
+    | "none"
+    | "recent-week" // 真 7 天 mtime
+    | "orphan-concept" // 概念 真**真**真**0 inbound link**真**
+    | "top-tag" // top tag 真**filter (后续选 tag)
+    | "dangling"; // file 含真 dangling wikilink
+  selectedTag: string | null;
 
   loadFiles: () => Promise<void>;
   selectFile: (relPath: string) => Promise<void>;
   setSearch: (s: string) => void;
   setKindFilter: (k: "all" | "entity" | "concept" | "query") => void;
+  setQuery: (q: WikiState["query"]) => void;
+  setSelectedTag: (tag: string | null) => void;
 }
 
 export const useWikiStore = create<WikiState>((set) => ({
@@ -45,6 +54,8 @@ export const useWikiStore = create<WikiState>((set) => ({
 
   search: "",
   kindFilter: "all",
+  query: "none",
+  selectedTag: null,
 
   loadFiles: async () => {
     set({ filesLoading: true, filesError: null });
@@ -68,4 +79,6 @@ export const useWikiStore = create<WikiState>((set) => ({
 
   setSearch: (s) => set({ search: s }),
   setKindFilter: (k) => set({ kindFilter: k }),
+  setQuery: (q) => set({ query: q, selectedTag: q === "top-tag" ? null : null }),
+  setSelectedTag: (tag) => set({ selectedTag: tag, query: tag ? "top-tag" : "none" }),
 }));

@@ -318,6 +318,13 @@ class CatfishMemoryProvider(MemoryProvider):
         if journal:
             sections.append(journal)
 
+        # 2b. BL-CATFISH-WIKI-MODE P3.3.11 (6/4): wiki summary —
+        # 列 wiki/entities + concepts 真**top hub** 真**真**让 LLM chat 时**真**真**知道**
+        # 员工 wiki 真**真**已有真 entity / concept 真**真**避免重复抽** + 真**reference 真精确**真
+        wiki = self._render_wiki_summary(catfish_home)
+        if wiki:
+            sections.append(wiki)
+
         # 3. skills_catalog — 可用 catfish 技能 (BL-MEMORY-P2-2: query top-K 筛)
         skills = self._render_skills_catalog(catfish_home, query=query)
         if skills:
@@ -708,6 +715,54 @@ class CatfishMemoryProvider(MemoryProvider):
         if query_clean and len(entries) < len(candidates_list):
             title += f" — 按当前话题筛 top {len(entries)}/{len(candidates_list)}"
         return f"{title}\n\n" + "\n".join(entries)
+
+    def _render_wiki_summary(self, catfish_home: Path) -> str:
+        """BL-CATFISH-WIKI-MODE P3.3.11 (6/4): wiki summary 注入 prefetch.
+
+        列 wiki/entities + wiki/concepts 真**所有 file title**, 真**让 LLM 知道**:
+          - 员工 wiki 真**真**已有什么 entity / concept** (避免 chat 重复抽)
+          - reference 时真**真**精确 用 wiki 真 title** (e.g. `[[ISO 27001]]`)
+          - 真**真**真**真**人工新建真 file 真**真**真**自动**真**真**进**真 prefetch (file system → read 实时)
+
+        cap 50 entries 真**避免 prompt 撑爆**. P3.3.11 真**真**re-ingest hook 简化 真**:
+        plugin 不需"真**watch + trigger ingest"** — 真**read on prefetch** 就够了,
+        因 chat LLM 真**每轮 都看新 wiki**.
+        """
+        wiki_dir = catfish_home / "wiki"
+        if not wiki_dir.is_dir():
+            return ""
+        entities_dir = wiki_dir / "entities"
+        concepts_dir = wiki_dir / "concepts"
+
+        entities: list[str] = []
+        if entities_dir.is_dir():
+            try:
+                for f in sorted(entities_dir.glob("*.md")):
+                    entities.append(f.stem)
+            except OSError:
+                pass
+        concepts: list[str] = []
+        if concepts_dir.is_dir():
+            try:
+                for f in sorted(concepts_dir.glob("*.md")):
+                    concepts.append(f.stem)
+            except OSError:
+                pass
+
+        if not entities and not concepts:
+            return ""
+
+        lines = ["## 🧠 员工 wiki 已有 (P3.3 知识体系 tab)"]
+        if entities:
+            lines.append(f"\n**实体 ({len(entities)})**: " + " · ".join(f"[[{n}]]" for n in entities[:50]))
+            if len(entities) > 50:
+                lines.append(f"_(还有 {len(entities) - 50} 个未列, 全列在 Companion 真知识体系 tab)_")
+        if concepts:
+            lines.append(f"\n**概念 ({len(concepts)})**: " + " · ".join(f"[[{n}]]" for n in concepts[:50]))
+            if len(concepts) > 50:
+                lines.append(f"_(还有 {len(concepts) - 50} 个未列)_")
+        lines.append("\n_chat 时引用员工 wiki 真**真**用真 `[[标题]]` 真**精确链接**真._")
+        return "\n".join(lines)
 
     def _render_feedback(self, catfish_home: Path) -> str:
         records = _read_jsonl_tail(

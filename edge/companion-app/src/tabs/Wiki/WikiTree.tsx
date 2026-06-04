@@ -17,10 +17,14 @@ export default function WikiTree() {
   const selectedPath = useWikiStore((s) => s.selectedPath);
   const search = useWikiStore((s) => s.search);
   const kindFilter = useWikiStore((s) => s.kindFilter);
+  const query = useWikiStore((s) => s.query);
+  const selectedTag = useWikiStore((s) => s.selectedTag);
   const loadFiles = useWikiStore((s) => s.loadFiles);
   const selectFile = useWikiStore((s) => s.selectFile);
   const setSearch = useWikiStore((s) => s.setSearch);
   const setKindFilter = useWikiStore((s) => s.setKindFilter);
+  const setQuery = useWikiStore((s) => s.setQuery);
+  const setSelectedTag = useWikiStore((s) => s.setSelectedTag);
   const [showCreate, setShowCreate] = useState(false);
 
   // 进 tab 时 load files
@@ -30,18 +34,81 @@ export default function WikiTree() {
     }
   }, [files.length, filesLoading, loadFiles]);
 
-  // filter + search
+  // 真 inbound link count per file (dangling/orphan 用)
+  const inboundMap = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const f of files) {
+      for (const r of f.related) {
+        // 真**真**真**name match 真**真**真**target file 真 title / slug**真
+        const lower = r.toLowerCase();
+        const target = files.find(
+          (x) =>
+            x.title.toLowerCase() === lower ||
+            x.slug.toLowerCase() === lower ||
+            x.title.toLowerCase().includes(lower)
+        );
+        if (target) {
+          m.set(target.rel_path, (m.get(target.rel_path) || 0) + 1);
+        }
+      }
+    }
+    return m;
+  }, [files]);
+
+  // dangling wikilinks (file 真**真**related 含真 target 找不到)
+  const danglingMap = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const f of files) {
+      const dangling: string[] = [];
+      for (const r of f.related) {
+        const lower = r.toLowerCase();
+        const found = files.some(
+          (x) =>
+            x.title.toLowerCase() === lower ||
+            x.slug.toLowerCase() === lower ||
+            x.title.toLowerCase().includes(lower)
+        );
+        if (!found) dangling.push(r);
+      }
+      if (dangling.length > 0) m.set(f.rel_path, dangling);
+    }
+    return m;
+  }, [files]);
+
+  // top tag count
+  const topTags = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const f of files) {
+      for (const t of f.tags) {
+        counts.set(t, (counts.get(t) || 0) + 1);
+      }
+    }
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10);
+  }, [files]);
+
+  // filter + search + query
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
+    const oneWeekAgo = Date.now() / 1000 - 7 * 86400;
     return files.filter((f) => {
       if (kindFilter !== "all" && f.kind !== kindFilter) return false;
       if (q) {
         const hay = (f.title + " " + f.slug).toLowerCase();
         if (!hay.includes(q)) return false;
       }
+      // query 模板 filter
+      if (query === "recent-week" && f.mtime < oneWeekAgo) return false;
+      if (query === "orphan-concept") {
+        if (f.kind !== "concept") return false;
+        if ((inboundMap.get(f.rel_path) || 0) > 0) return false;
+      }
+      if (query === "dangling" && !danglingMap.has(f.rel_path)) return false;
+      if (query === "top-tag" && selectedTag && !f.tags.includes(selectedTag)) return false;
       return true;
     });
-  }, [files, search, kindFilter]);
+  }, [files, search, kindFilter, query, selectedTag, inboundMap, danglingMap]);
 
   const grouped = useMemo(() => {
     const g = {
@@ -114,7 +181,7 @@ export default function WikiTree() {
         }}
       />
 
-      <div style={{ display: "flex", gap: 4, marginBottom: "var(--space-3)" }}>
+      <div style={{ display: "flex", gap: 4, marginBottom: "var(--space-2)" }}>
         {(["all", "entity", "concept", "query"] as const).map((k) => (
           <button
             key={k}
@@ -134,6 +201,54 @@ export default function WikiTree() {
           </button>
         ))}
       </div>
+
+      {/* P3.3.9 dataview 预制 query */}
+      <select
+        value={query}
+        onChange={(e) => {
+          const v = e.target.value as typeof query;
+          setQuery(v);
+          if (v !== "top-tag") setSelectedTag(null);
+        }}
+        style={{
+          width: "100%",
+          padding: "4px 8px",
+          fontSize: 11,
+          border: "1px solid var(--catfish-border)",
+          borderRadius: 4,
+          marginBottom: "var(--space-2)",
+          background: query !== "none" ? "rgba(74, 158, 255, 0.15)" : "var(--catfish-bg)",
+          color: "var(--catfish-text)",
+        }}
+      >
+        <option value="none">— 预制 query —</option>
+        <option value="recent-week">📅 本周新增 (mtime &lt; 7d)</option>
+        <option value="orphan-concept">🏝️ 孤立概念 (0 inbound)</option>
+        <option value="dangling">⚠️ 含 dangling wikilink</option>
+        <option value="top-tag">🏷️ 按标签 filter</option>
+      </select>
+
+      {query === "top-tag" && topTags.length > 0 && (
+        <div style={{ marginBottom: "var(--space-2)", display: "flex", flexWrap: "wrap", gap: 4 }}>
+          {topTags.map(([tag, count]) => (
+            <button
+              key={tag}
+              onClick={() => setSelectedTag(selectedTag === tag ? null : tag)}
+              style={{
+                padding: "2px 6px",
+                fontSize: 10,
+                border: "1px solid var(--catfish-border)",
+                borderRadius: 10,
+                background: selectedTag === tag ? "var(--catfish-accent, #4a9eff)" : "var(--catfish-bg)",
+                color: selectedTag === tag ? "#fff" : "var(--catfish-text)",
+                cursor: "pointer",
+              }}
+            >
+              #{tag} ({count})
+            </button>
+          ))}
+        </div>
+      )}
 
       {filesLoading && <div style={{ color: "var(--catfish-text-muted)" }}>加载中...</div>}
       {filesError && (
