@@ -13,6 +13,8 @@
 import { useEffect, useRef, useMemo } from "react";
 import Graph from "graphology";
 import Sigma from "sigma";
+import { circular } from "graphology-layout";
+import forceAtlas2 from "graphology-layout-forceatlas2";
 import { useWikiStore } from "../../store/wiki";
 import type { WikiFileInfo } from "../../lib/tauri";
 
@@ -77,20 +79,29 @@ export default function WikiGraph() {
     }
 
     // 3. size by degree (inbound + outbound) — hub 节点真大
-    g.forEachNode((node, attrs) => {
+    g.forEachNode((node) => {
       const degree = g.degree(node);
       g.setNodeAttribute(node, "size", 3 + Math.min(degree * 1.5, 12));
     });
 
-    // 4. positions — 简单**circular layout** (P3.3.5 mvp; future ForceAtlas2)
-    const nodes = g.nodes();
-    const N = nodes.length;
-    const radius = Math.max(200, N * 8);
-    nodes.forEach((node, i) => {
-      const angle = (i / N) * Math.PI * 2;
-      g.setNodeAttribute(node, "x", Math.cos(angle) * radius);
-      g.setNodeAttribute(node, "y", Math.sin(angle) * radius);
-    });
+    // 4. positions — circular 起始 + ForceAtlas2 算 force-directed layout
+    //    (跟 Obsidian graph view 同 algorithm — hub 自然聚中, cluster 自然分)
+    circular.assign(g);
+    if (g.order > 1) {
+      forceAtlas2.assign(g, {
+        iterations: 200,
+        settings: {
+          gravity: 1,
+          scalingRatio: 10,
+          slowDown: 5,
+          barnesHutOptimize: g.order > 30,
+          strongGravityMode: false,
+          linLogMode: false,
+          outboundAttractionDistribution: false,
+          edgeWeightInfluence: 1,
+        },
+      });
+    }
 
     return g;
   }, [files]);
@@ -109,10 +120,48 @@ export default function WikiGraph() {
 
     const sigma = new Sigma(graph, containerRef.current, {
       renderEdgeLabels: false,
-      labelRenderedSizeThreshold: 6,
+      labelRenderedSizeThreshold: 1,
       labelFont: "ui-sans-serif, -apple-system, sans-serif",
-      labelSize: 11,
-      defaultEdgeColor: "#cccccc88",
+      labelSize: 12,
+      labelWeight: "500",
+      labelColor: { color: "#444" },
+      defaultEdgeColor: "rgba(150, 150, 150, 0.35)",
+      defaultEdgeType: "arrow",
+      minCameraRatio: 0.05,
+      maxCameraRatio: 10,
+    });
+
+    // hover: highlight 真节点 + 邻居, 其余 fade (跟 Obsidian graph 一致)
+    let hoveredNode: string | null = null;
+    const refreshFade = () => {
+      const g = sigma.getGraph();
+      const neighbors = new Set<string>();
+      if (hoveredNode) {
+        neighbors.add(hoveredNode);
+        g.forEachNeighbor(hoveredNode, (n) => neighbors.add(n));
+      }
+      sigma.setSetting("nodeReducer", (node, data) => {
+        if (!hoveredNode) return data;
+        if (neighbors.has(node)) return data;
+        return { ...data, color: "#e0e0e0", label: "" };
+      });
+      sigma.setSetting("edgeReducer", (edge, data) => {
+        if (!hoveredNode) return data;
+        const [src, dst] = g.extremities(edge);
+        if (src === hoveredNode || dst === hoveredNode) {
+          return { ...data, color: "rgba(80, 80, 80, 0.8)" };
+        }
+        return { ...data, color: "rgba(220, 220, 220, 0.2)" };
+      });
+    };
+
+    sigma.on("enterNode", ({ node }) => {
+      hoveredNode = node;
+      refreshFade();
+    });
+    sigma.on("leaveNode", () => {
+      hoveredNode = null;
+      refreshFade();
     });
 
     sigma.on("clickNode", ({ node }) => {

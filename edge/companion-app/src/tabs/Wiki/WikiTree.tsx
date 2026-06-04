@@ -58,7 +58,7 @@ export default function WikiTree() {
   return (
     <div style={{ padding: "var(--space-3)", fontSize: 12 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "var(--space-3)" }}>
-        <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>🧠 知识体系</h3>
+        <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>知识体系</h3>
         <button
           onClick={() => void loadFiles()}
           title="刷新"
