@@ -284,12 +284,110 @@ cmd_status() {
     fi
     echo
 
+    # 4b. BL-HERMES-UPGRADE-PLUGIN-AUDIT (6/4): check plugin symlink + config.
+    # 防 5/29 hermes 0.15.2 升级 wipe plugin install 那种情况 (上次 6 小时 audit).
+    cmd_check_plugins
+
     # 5. Hermes 本体
     echo "${BOLD}[Hermes Runtime]${RESET}"
     if command -v "$HERMES_BIN" >/dev/null 2>&1; then
         echo "    ${GREEN}OK${RESET} $($HERMES_BIN --version 2>/dev/null | head -1 || echo "$HERMES_BIN")"
     else
         echo "    ${YELLOW}未装${RESET} 装 Hermes Agent"
+    fi
+}
+
+# BL-HERMES-UPGRADE-PLUGIN-AUDIT (6/4 鸿波): 检 plugin symlink + config + launchctl env.
+# 5/29 hermes 0.15.2 升级 wipe 了 catfish-memory plugin install (symlink + memory.provider 字段),
+# 害 6 小时 audit 才发现根因. 这函数确保 catfish 关键 install state 完整.
+cmd_check_plugins() {
+    # 5a. ~/.hermes/plugins/ symlink
+    echo "${BOLD}[Plugins (~/.hermes/plugins/)]${RESET}"
+    _check_plugin_symlink() {
+        local name="$1"
+        local expected_substr="$2"
+        local link_path="$HOME/.hermes/plugins/$name"
+        if [ -L "$link_path" ]; then
+            local target
+            target="$(readlink "$link_path")"
+            if [[ "$target" == *"$expected_substr"* ]]; then
+                echo "    ${GREEN}OK${RESET} $name → $target"
+            else
+                echo "    ${YELLOW}WARN${RESET} $name → $target (target 异常, 期望含 $expected_substr)"
+            fi
+        else
+            echo "    ${YELLOW}缺${RESET} $link_path 不存在"
+            echo "         5/29 hermes 升级会 wipe 这个 symlink! 修法:"
+            echo "         ln -s ~/person_task/catfish/edge/hermes-plugins/$name ~/.hermes/plugins/$name"
+        fi
+    }
+    _check_plugin_symlink "catfish-memory" "hermes-plugins/catfish-memory"
+    _check_plugin_symlink "catfish-xcatfish-user" "hermes-plugins/catfish-xcatfish-user"
+    echo
+
+    # 5b. config.yaml memory.provider 字段
+    echo "${BOLD}[Config (~/.hermes/config.yaml)]${RESET}"
+    if [ -f "$HOME/.hermes/config.yaml" ]; then
+        if grep -qE "^\s*provider:\s*catfish-memory" "$HOME/.hermes/config.yaml"; then
+            echo "    ${GREEN}OK${RESET} memory.provider: catfish-memory"
+        else
+            echo "    ${YELLOW}缺${RESET} memory.provider 不是 catfish-memory (默认 hermes builtin)"
+            echo "         5/29 升级 reset 此字段! 修法: 在 ~/.hermes/config.yaml 真 memory: 块加"
+            echo "         memory:"
+            echo "           provider: catfish-memory"
+        fi
+    else
+        echo "    ${YELLOW}缺${RESET} ~/.hermes/config.yaml 不存在"
+    fi
+    echo
+
+    # 5c. CATFISH_WIKI_ENABLE env (P1.1 wiki two-step ingest 开关)
+    echo "${BOLD}[Wiki Mode (CATFISH_WIKI_ENABLE)]${RESET}"
+    local wiki_env
+    wiki_env="$(launchctl getenv CATFISH_WIKI_ENABLE 2>/dev/null || echo '')"
+    if [ "$wiki_env" = "1" ]; then
+        echo "    ${GREEN}OK${RESET} CATFISH_WIKI_ENABLE=1 (wiki two-step ingest 启用)"
+    else
+        echo "    ${YELLOW}默认${RESET} CATFISH_WIKI_ENABLE 未设 (wiki distill 不跑, journal+legacy distill 仍写)"
+        echo "         开: launchctl setenv CATFISH_WIKI_ENABLE 1 && hermes gateway stop && hermes gateway start"
+    fi
+    echo
+
+    # 5d. ~/.catfish/wiki/ 目录 + counts
+    echo "${BOLD}[Wiki Vault (~/.catfish/wiki/)]${RESET}"
+    if [ -d "$HOME/.catfish/wiki" ]; then
+        local n_ent n_con n_que
+        n_ent=$(ls "$HOME/.catfish/wiki/entities" 2>/dev/null | grep -c '\.md$' || echo 0)
+        n_con=$(ls "$HOME/.catfish/wiki/concepts" 2>/dev/null | grep -c '\.md$' || echo 0)
+        n_que=$(ls "$HOME/.catfish/wiki/queries" 2>/dev/null | grep -c '\.md$' || echo 0)
+        echo "    ${GREEN}OK${RESET} $n_ent entities · $n_con concepts · $n_que queries"
+    else
+        echo "    ${YELLOW}空${RESET} ~/.catfish/wiki/ 不存在 (chat 真**真**真**`💾 存 wiki` 后 触发 distill 自动生**)"
+    fi
+    echo
+
+    # 5e. journal mtime + distilled facts
+    echo "${BOLD}[Memory Files]${RESET}"
+    local journal="$HOME/.catfish/employee_journal.md"
+    if [ -f "$journal" ]; then
+        local mtime size
+        if command -v stat >/dev/null 2>&1; then
+            mtime="$(stat -f '%Sm' -t '%Y-%m-%d %H:%M' "$journal" 2>/dev/null || stat -c '%y' "$journal" 2>/dev/null | cut -d. -f1)"
+            size="$(stat -f '%z' "$journal" 2>/dev/null || stat -c '%s' "$journal" 2>/dev/null)"
+            echo "    ${GREEN}OK${RESET} employee_journal.md ($size bytes, last $mtime)"
+        else
+            echo "    ${GREEN}OK${RESET} employee_journal.md exists"
+        fi
+    else
+        echo "    ${YELLOW}缺${RESET} ~/.catfish/employee_journal.md (chat 真 sync_turn 触发后生)"
+    fi
+    local distilled="$HOME/.catfish/distilled_facts.md"
+    if [ -f "$distilled" ]; then
+        local size
+        size="$(stat -f '%z' "$distilled" 2>/dev/null || stat -c '%s' "$distilled" 2>/dev/null)"
+        echo "    ${GREEN}OK${RESET} distilled_facts.md ($size bytes)"
+    else
+        echo "    ${YELLOW}缺${RESET} ~/.catfish/distilled_facts.md (24h 蒸馏后生)"
     fi
 }
 
