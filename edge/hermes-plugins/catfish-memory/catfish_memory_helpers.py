@@ -389,6 +389,85 @@ def _read_queries_concat(query_files: List[Path], max_chars: int = 12000) -> str
     return "\n\n".join(parts)
 
 
+# ── P16 (6/5 鸿波) — wiki/raw/sources/ 触发 partial ingest ─────────────────
+# 对话上传文件 → ~/.catfish/wiki/raw/sources/<ts>-<slug>.md (含 frontmatter
+# + 全文 body, Companion wiki_ingest_source 真**`Tauri command 写**真). 这
+# 一组 helper 跟 P1.2.3 queries hook 同结构, 复用 wiki_ingested_state.json
+# (key 加 `source:` 前缀防与 queries 冲突).
+# sync_turn 3b 会把 sources + queries 一起 merge 进 Analysis input → LLM
+# 抽 entity/concept → wiki/entities/ + wiki/concepts/.
+
+
+def _list_pending_sources(catfish_home: Path) -> List[Path]:
+    """列 wiki/raw/sources/ 真未 ingest 真 *.md file (按 mtime 排, 最旧先)."""
+    sources_dir = catfish_home / "wiki" / "raw" / "sources"
+    if not sources_dir.is_dir():
+        return []
+    state = _read_wiki_ingested_state(catfish_home)
+    pending = []
+    try:
+        for f in sources_dir.glob("*.md"):
+            key = f"source:{f.name}"
+            if key not in state:
+                pending.append(f)
+    except OSError:
+        return []
+    try:
+        pending.sort(key=lambda p: p.stat().st_mtime)
+    except OSError:
+        pass
+    return pending
+
+
+def _read_sources_concat(source_files: List[Path], max_chars: int = 24000) -> str:
+    """读所有 sources file 拼一段 text 给 Analysis. 总 cap max_chars 防爆.
+
+    Sources 全文体积比 queries 大 (PDF/Word 转出来), max_chars 默认 24K
+    (queries 12K 真 2 倍). 还是会被 cap, 单文件超 24K 会 break.
+
+    格式: 每 file 加 `### source: <filename>` 头. content 真**整 file** 含
+    frontmatter (Analysis LLM 能看 filename / kind / uploaded date).
+    """
+    if not source_files:
+        return ""
+    parts = []
+    used = 0
+    for f in source_files:
+        try:
+            text = f.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        block = f"### source: {f.name}\n\n{text.strip()}\n"
+        if used + len(block) > max_chars:
+            # 超 cap 但还想塞点 — 截前 (max_chars - used) 字进去 + 标记截断
+            remain = max_chars - used
+            if remain > 500:
+                parts.append(block[:remain] + "\n\n[... source 内容截断, 剩余下次 ingest]")
+                used = max_chars
+            break
+        parts.append(block)
+        used += len(block)
+    return "\n\n".join(parts)
+
+
+def _mark_wiki_sources_ingested(catfish_home: Path, file_names: List[str]) -> None:
+    """append 已 ingest 真 sources file 名 + ts 到 wiki_ingested_state.json.
+    key 加 `source:` 前缀防与 queries 冲突 (queries 用裸 file_name).
+    """
+    if not file_names:
+        return
+    state = _read_wiki_ingested_state(catfish_home)
+    now = time.time()
+    for name in file_names:
+        state[f"source:{name}"] = now
+    p = _wiki_ingested_state_path(catfish_home)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        p.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as e:
+        logger.warning("写 wiki_ingested_state.json (sources) 失败: %s", e)
+
+
 def _should_run_distill(catfish_home: Path) -> bool:
     """24h 内跑过 → False (不再跑). 没跑过 / 已超 24h → True."""
     state_path = catfish_home / "memory_distill_state.json"

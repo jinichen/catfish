@@ -182,15 +182,18 @@ from .catfish_memory_helpers import (  # noqa: F401
     _gateway_dev_token,
     _gateway_url,
     _list_pending_queries,
+    _list_pending_sources,
     _load_plugin_config,
     _mark_distill_run,
     _mark_wiki_queries_ingested,
+    _mark_wiki_sources_ingested,
     _parse_generation_output,
     _plugin_config_path,
     _read_buffer,
     _read_full_journal,
     _read_jsonl_tail,
     _read_queries_concat,
+    _read_sources_concat,
     _read_state,
     _read_text_safe,
     _should_run_distill,
@@ -1445,14 +1448,16 @@ class CatfishMemoryProvider(MemoryProvider):
                 session_id, len(entry.encode("utf-8")),
             )
 
-            # 3. 24h 间隔满 OR queries 有未 ingest file → 跑 distill
-            #    BL-CATFISH-WIKI-MODE P1.2.3 (6/4): queries 触发也跑 — 绕 24h cooldown.
+            # 3. 24h 间隔满 OR queries / sources 有未 ingest file → 跑 distill
+            #    P1.2.3 (6/4): queries 触发也跑 — 绕 24h cooldown.
+            #    P16 (6/5): sources 触发也跑 — 对话上传文件即时入库.
             cooldown_passed = _should_run_distill(catfish_home)
             pending_queries = _list_pending_queries(catfish_home) if _wiki_enabled() else []
-            if not cooldown_passed and not pending_queries:
+            pending_sources = _list_pending_sources(catfish_home) if _wiki_enabled() else []
+            if not cooldown_passed and not pending_queries and not pending_sources:
                 return
             journal_text = _read_full_journal(catfish_home)
-            if not journal_text and not pending_queries:
+            if not journal_text and not pending_queries and not pending_sources:
                 return
 
             # 3a. legacy single-step distill (cooldown 满才跑, queries 触发不重复跑)
@@ -1472,23 +1477,30 @@ class CatfishMemoryProvider(MemoryProvider):
             #     P1.2.3 (6/4): queries 真有未 ingest file → 合并真 Analysis input
             if _wiki_enabled():
                 try:
-                    # P1.2.3: 合并 journal + queries 真 Analysis input
+                    # P1.2.3 / P16 (6/5): 合并 journal + queries + sources 真 Analysis input
+                    combined_input = journal_text
                     if pending_queries:
                         queries_text = _read_queries_concat(pending_queries)
                         if queries_text:
-                            combined_input = (
-                                journal_text + "\n\n## Recent chat queries (P1.2)\n\n"
-                                + queries_text
+                            combined_input += (
+                                "\n\n## Recent chat queries (P1.2)\n\n" + queries_text
                             )
                             logger.info(
                                 "catfish-memory bg session=%s: P1.2.3 queries 触发, "
                                 "%d files merged into Analysis input",
                                 session_id, len(pending_queries),
                             )
-                        else:
-                            combined_input = journal_text
-                    else:
-                        combined_input = journal_text
+                    if pending_sources:
+                        sources_text = _read_sources_concat(pending_sources)
+                        if sources_text:
+                            combined_input += (
+                                "\n\n## Uploaded raw sources (P16)\n\n" + sources_text
+                            )
+                            logger.info(
+                                "catfish-memory bg session=%s: P16 sources 触发, "
+                                "%d files merged into Analysis input",
+                                session_id, len(pending_sources),
+                            )
                     analysis = await _call_analysis_llm(combined_input, model)
                     if not analysis:
                         logger.info(
@@ -1528,6 +1540,16 @@ class CatfishMemoryProvider(MemoryProvider):
                                     logger.info(
                                         "catfish-memory bg session=%s: ✓ marked %d queries ingested",
                                         session_id, len(pending_queries),
+                                    )
+                                # P16 (6/5): mark sources 已 ingest, 下次不重复
+                                if pending_sources:
+                                    _mark_wiki_sources_ingested(
+                                        catfish_home,
+                                        [p.name for p in pending_sources],
+                                    )
+                                    logger.info(
+                                        "catfish-memory bg session=%s: ✓ marked %d sources ingested",
+                                        session_id, len(pending_sources),
                                     )
                             else:
                                 logger.info(

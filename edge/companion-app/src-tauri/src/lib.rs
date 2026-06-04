@@ -542,6 +542,8 @@ pub fn run() {
             // BL-CATFISH-WIKI-MODE P3.3.7 (6/4): wiki write API
             commands::wiki_write::wiki_create_entity_or_concept,
             commands::wiki_write::wiki_update_file,
+            // P16 (6/5): 对话上传文件 auto ingest → wiki/raw/sources/
+            commands::wiki_write::wiki_ingest_source,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

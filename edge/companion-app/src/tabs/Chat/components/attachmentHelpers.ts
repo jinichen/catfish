@@ -153,3 +153,48 @@ export async function fileToAttachment(file: File): Promise<Attachment> {
   };
 }
 
+/** P16 (6/5 鸿波): fire-and-forget ingest attachment 全文 → ~/.catfish/wiki/raw/sources/.
+ *
+ *  调用时机: ChatInput.submit() 在 onSend 之后. 不 await, 不 throw, 失败静默.
+ *  catfish-memory plugin 后台 sync_turn 3b 扫 sources dir merge 进 Analysis input.
+ *
+ *  跳过的 kind:
+ *   - image: 走 vision, 没文本可 ingest
+ *   - excel/csv: LLM 用 execute_code 走 pandas 读, ingest markdown 噪声大
+ *   - audio/video: previewText 是 whisper 转录文字, 视情况可入. 暂入 (转录就是 text).
+ */
+export function ingestAttachmentSourceFireForget(att: {
+  kind: "image" | "file";
+  fileKind?: string;
+  name?: string;
+  previewText?: string;
+  keptPath?: string;
+  parsedTextPath?: string;
+}): void {
+  if (att.kind !== "file") return;
+  const fk = (att.fileKind || "").toLowerCase();
+  if (fk === "excel" || fk === "csv") return;
+  // preview 空且没 sidecar → 没东西可 ingest
+  if (!att.previewText && !att.parsedTextPath) return;
+
+  invoke<{ rel_path: string; bytes: number; full_text_chars: number }>(
+    "wiki_ingest_source",
+    {
+      keptPath: att.keptPath || "",
+      parsedTextPath: att.parsedTextPath,
+      previewText: att.previewText || "",
+      filename: att.name || "upload",
+      kind: fk || "text",
+    },
+  )
+    .then((r) => {
+      // 静默成功 (console 调试用, 不弹 toast 防干扰输入)
+      console.info(
+        `[P16] wiki ingest ✓ ${r.rel_path} (${r.full_text_chars} chars)`,
+      );
+    })
+    .catch((e) => {
+      console.warn("[P16] wiki_ingest_source 失败 (静默):", e);
+    });
+}
+

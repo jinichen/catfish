@@ -179,3 +179,98 @@ fn days_to_ymd(z: i64) -> (i64, u32, u32) {
     let y = if m <= 2 { y + 1 } else { y };
     (y, m, d)
 }
+
+// ============================================================
+// P16 (6/5 鸿波): 对话上传文件 auto ingest → wiki/raw/sources/
+//
+// chat 上传 PDF/Word/Text/CSV/Excel → parse_file_from_b64 已 ship preview
+// + sidecar (大文件 .parsed.txt 在 ~/.catfish/uploads/). 这命令把全文
+// (sidecar 优先, 小文件 preview=full) 写到 ~/.catfish/wiki/raw/sources/
+// <ts>-<slug>.md, frontmatter 标 type:source / source:upload.
+//
+// catfish-memory plugin 后台 sync_turn 3b 会扫这 dir 真未 ingest *.md
+// merge 进 Analysis input → 抽 entity/concept → wiki/entities/ + concepts/.
+//
+// 与 wiki/queries/ 区别: queries 是 dataview-style "请基于现有 wiki 答 X",
+// sources 是 "这是新原始资料". P1.2.3 hook 复用同样 ingested state JSON
+// (key 前缀 `source:` 防冲突).
+// ============================================================
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct WikiIngestSourceResult {
+    pub rel_path: String,
+    pub bytes: u64,
+    pub full_text_chars: usize,
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn wiki_ingest_source(
+    kept_path: String,
+    parsed_text_path: Option<String>,
+    preview_text: String,
+    filename: String,
+    kind: String, // pdf / word / text / csv / excel / audio / image / video
+) -> Result<WikiIngestSourceResult, String> {
+    // 1. 读全文: sidecar 优先 (大文件 ≥50KB), fallback preview (小文件 preview = full)
+    let full_text: String = if let Some(sp) = parsed_text_path.as_deref() {
+        match fs::read_to_string(sp) {
+            Ok(t) if !t.trim().is_empty() => t,
+            _ => preview_text.clone(),
+        }
+    } else {
+        preview_text.clone()
+    };
+
+    if full_text.trim().is_empty() {
+        return Err("全文空, 跳过 ingest".to_string());
+    }
+
+    // 2. 目标目录 + 文件名 (<ts>-<slug>.md)
+    let home = catfish_home()?;
+    let dir = home.join("wiki").join("raw").join("sources");
+    fs::create_dir_all(&dir).map_err(|e| format!("建目录 {dir:?} 失败: {e}"))?;
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let stem_part = std::path::Path::new(&filename)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("upload");
+    let slug = slugify(stem_part, 60);
+    let safe_slug = if slug.is_empty() { "upload".to_string() } else { slug };
+    let final_name = format!("{ts}-{safe_slug}.md");
+    let path = dir.join(&final_name);
+
+    // 3. frontmatter + body. 全文直接塞 body (后台 Analysis LLM 拿 full text 抽 entity/concept).
+    let today = chrono_today();
+    let bytes_n = full_text.len();
+    let safe_kept = kept_path.replace('\n', " ").replace('\r', " ");
+    let safe_filename = filename.replace('\n', " ").replace('\r', " ");
+
+    let content = format!(
+        "---\n\
+         type: source\n\
+         filename: {safe_filename}\n\
+         kind: {kind}\n\
+         uploaded: {today}\n\
+         kept_path: {safe_kept}\n\
+         bytes: {bytes_n}\n\
+         source: upload\n\
+         ---\n\
+         \n\
+         # Upload: {safe_filename}\n\
+         \n\
+         {full_text}\n",
+    );
+
+    fs::write(&path, &content).map_err(|e| format!("写 {path:?} 失败: {e}"))?;
+
+    Ok(WikiIngestSourceResult {
+        rel_path: format!("wiki/raw/sources/{final_name}"),
+        bytes: content.len() as u64,
+        full_text_chars: full_text.chars().count(),
+    })
+}

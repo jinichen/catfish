@@ -41,6 +41,7 @@ interface Props {
 // 5/20 拆 1107 → ~600: helpers + 5 子组件抽到 components/
 import {
   fileToAttachment,
+  ingestAttachmentSourceFireForget,
   MAX_ATTACHMENTS,
   SUPPORTED_AUDIO_EXTS,
 } from "./components/attachmentHelpers";
@@ -193,6 +194,12 @@ export default function ChatInput({
       onCancelAndSend(t, attachments);
     } else {
       onSend(t, attachments);
+    }
+    // P16 (6/5 鸿波): 对话上传文件 → 全文入 ~/.catfish/wiki/raw/sources/.
+    // fire-and-forget, 不 block UI 不 throw. catfish-memory plugin 后台
+    // sync_turn 3b 会扫这 dir merge 进 Analysis input 抽 entity/concept.
+    for (const att of attachments) {
+      ingestAttachmentSourceFireForget(att);
     }
     setText("");
     setAttachments([]);
