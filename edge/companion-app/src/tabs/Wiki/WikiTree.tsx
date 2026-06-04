@@ -27,12 +27,15 @@ export default function WikiTree() {
   const setSelectedTag = useWikiStore((s) => s.setSelectedTag);
   const [showCreate, setShowCreate] = useState(false);
 
-  // 进 tab 时 load files
+  // P17 (6/5 鸿波): 切到知识体系 tab 立即 reload (App.tsx 真`activeTab === 'wiki'
+  // && <WikiTab/>` 真 conditional render — 切走 unmount, 切回 mount 跑这 effect).
+  // 不用 cache expiry — 鸿波要求即刻刷新, 防 LLM 外部 write_file 后 list 老.
   useEffect(() => {
-    if (files.length === 0 && !filesLoading) {
+    if (!filesLoading) {
       void loadFiles();
     }
-  }, [files.length, filesLoading, loadFiles]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 真 inbound link count per file (dangling/orphan 用)
   const inboundMap = useMemo(() => {

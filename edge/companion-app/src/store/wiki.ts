@@ -24,6 +24,10 @@ interface WikiState {
   selectedLoading: boolean;
   selectedError: string | null;
 
+  // P17 (6/5 鸿波): 上次 loadFiles 成功的时间 (debug 用, 当前 WikiTree
+  // 真**`mount 时无脑 reload`**真**`不依赖**它**). 真**`留字段 future 算 cache 用`**.
+  lastLoadTs: number;
+
   search: string;
   kindFilter: "all" | "entity" | "concept" | "query";
   query:
@@ -46,6 +50,7 @@ export const useWikiStore = create<WikiState>((set) => ({
   files: [],
   filesLoading: false,
   filesError: null,
+  lastLoadTs: 0,
 
   selectedPath: null,
   selectedFile: null,
@@ -61,7 +66,7 @@ export const useWikiStore = create<WikiState>((set) => ({
     set({ filesLoading: true, filesError: null });
     try {
       const files = await wikiListFiles();
-      set({ files, filesLoading: false });
+      set({ files, filesLoading: false, lastLoadTs: Date.now() });
     } catch (e) {
       set({ filesLoading: false, filesError: String(e) });
     }

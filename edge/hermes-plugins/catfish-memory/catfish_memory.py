@@ -1224,7 +1224,19 @@ class CatfishMemoryProvider(MemoryProvider):
             last_ts > 0 and elapsed >= min_interval and n_pairs >= 1
         )
 
-        if not (triggered_by_n or triggered_by_time):
+        # P16 (6/5 鸿波): 上传文件后立即触发 — wiki/raw/sources/ 或 wiki/queries/
+        # 真**`pending`** → 不等 5 pair 不等 30 分钟, 当前轮就 trigger bg distill.
+        # 体感: 拖个 PDF 进 chat + 一句"记一下" → 几十秒后就能在知识体系看到新 entity.
+        # 触发 LLM 调用一次 (Analysis+Generation), 走 fallback chain.
+        triggered_by_pending_ingest = False
+        try:
+            if _wiki_enabled() and n_pairs >= 1:
+                if _list_pending_sources(home) or _list_pending_queries(home):
+                    triggered_by_pending_ingest = True
+        except Exception:  # noqa: BLE001
+            pass
+
+        if not (triggered_by_n or triggered_by_time or triggered_by_pending_ingest):
             return
 
         # Trigger: snapshot buffer + 清 file + update state
