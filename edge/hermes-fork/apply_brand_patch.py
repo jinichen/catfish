@@ -81,6 +81,20 @@ RULES: list[tuple[str, str, str, str]] = [
         "鲶鱼平台 · 员工的数字副手",
         "branding: tagline in main banner",
     ),
+    # 5/29 hermes 0.15.2 升级新增真 TAG_MID / TAG_TINY 变量 (中等 + 短 banner 真 fallback).
+    # 含上下文真`= '...'` 防误伤别处 cli arg desc 真 Nous Research.
+    (
+        "ui-tui/src/components/branding.tsx",
+        "TAG_MID = 'Messenger of the Digital Gods'",
+        "TAG_MID = '员工的数字副手'",
+        "branding.tsx: TAG_MID (0.15.2 新加变量)",
+    ),
+    (
+        "ui-tui/src/components/branding.tsx",
+        "TAG_TINY = 'Nous Research'",
+        "TAG_TINY = '鲶鱼'",
+        "branding.tsx: TAG_TINY (0.15.2 新加变量)",
+    ),
     (
         "ui-tui/src/components/branding.tsx",
         " · Nous Research",
