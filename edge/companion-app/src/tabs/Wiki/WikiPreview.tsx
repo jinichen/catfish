@@ -14,7 +14,6 @@ export default function WikiPreview() {
   const selectedFile = useWikiStore((s) => s.selectedFile);
   const selectedLoading = useWikiStore((s) => s.selectedLoading);
   const selectedError = useWikiStore((s) => s.selectedError);
-  const selectedPath = useWikiStore((s) => s.selectedPath);
   const files = useWikiStore((s) => s.files);
   const selectFile = useWikiStore((s) => s.selectFile);
 
