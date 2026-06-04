@@ -681,7 +681,7 @@ def apply_patches(action: str) -> int:
                 print(f"  SKIP   {p.name} (没 apply, 不用 revert)")
                 continue
             r = subprocess.run(
-                ["patch", "-p1", "-R", "-i", str(p)],
+                ["patch", "-p1", "-R", "--batch", "--force", "-i", str(p)],
                 cwd=HERMES_ROOT, capture_output=True, text=True,
                 stdin=subprocess.DEVNULL,
             timeout=30,
@@ -708,7 +708,7 @@ def apply_patches(action: str) -> int:
                 print(f"  DONE   {p.name} (已 apply, dry-run 跳过)")
                 continue
             r = subprocess.run(
-                ["patch", "-p1", "--dry-run", "-i", str(p)],
+                ["patch", "-p1", "--dry-run", "--batch", "--force", "-i", str(p)],
                 cwd=HERMES_ROOT, capture_output=True, text=True,
                 stdin=subprocess.DEVNULL,
             timeout=30,
