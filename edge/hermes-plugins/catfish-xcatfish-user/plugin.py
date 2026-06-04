@@ -903,12 +903,13 @@ def _patch_p12_update_system_prompt_safe() -> None:
     幂等 — INSERT OR IGNORE 真**`真**`真**`真**`已 在 row 真**`noop`**真.
     """
     try:
-        from hermes_state import HermesState
-    except ImportError:
-        logger.warning("P12: hermes_state.HermesState import 失败, skip patch")
+        # 真**`真**`真**`真**`实际 class name 是 SessionDB (audit hermes_state.py:354), 不是 HermesState`**真
+        from hermes_state import SessionDB
+    except ImportError as e:
+        logger.warning("P12: hermes_state.SessionDB import 失败 (%s), skip patch", e)
         return
 
-    _orig = HermesState.update_system_prompt
+    _orig = SessionDB.update_system_prompt
 
     def patched(self, session_id: str, system_prompt: str) -> None:
         # 真**`保证 session row 存`** — 真**`INSERT OR IGNORE 幂等`**真.
@@ -918,8 +919,8 @@ def _patch_p12_update_system_prompt_safe() -> None:
             logger.debug("P12 _insert_session_row 异常 (ignored): %s", e)
         return _orig(self, session_id, system_prompt)
 
-    HermesState.update_system_prompt = patched
-    logger.info("P12 update_system_prompt 真**`+ INSERT OR IGNORE`** 真**`✓ patched`**")
+    SessionDB.update_system_prompt = patched
+    logger.info("P12 SessionDB.update_system_prompt + INSERT OR IGNORE patched")
 
 
 # ─────────────────────────────────────────────────────────────────────────
