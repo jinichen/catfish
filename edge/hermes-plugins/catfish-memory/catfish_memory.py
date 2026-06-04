@@ -184,6 +184,7 @@ from .catfish_memory_helpers import (  # noqa: F401
     _list_pending_queries,
     _list_pending_sources,
     _load_plugin_config,
+    merge_files_with_llm,
     _mark_distill_run,
     _mark_wiki_queries_ingested,
     _mark_wiki_sources_ingested,
@@ -1528,7 +1529,28 @@ class CatfishMemoryProvider(MemoryProvider):
                             )
                         else:
                             files = _parse_generation_output(generation)
-                            n_e, n_c = _write_wiki_files(catfish_home, files)
+                            # P19 (6/5 鸿波): 同名 entity/concept 让 LLM 合并叙述
+                            # (不是 P18 regex 留底). LLM merge 失败的 path 落 P18
+                            # regex 安全网, 不丢数据.
+                            llm_merged_paths: set = set()
+                            if files:
+                                try:
+                                    merged_files, llm_merged_paths, n_llm_fail = await merge_files_with_llm(
+                                        catfish_home, files, model,
+                                    )
+                                    files = merged_files
+                                    if llm_merged_paths or n_llm_fail:
+                                        logger.info(
+                                            "catfish-memory bg session=%s: P19 LLM merge "
+                                            "%d ok / %d fail (fail → P18 regex 安全网)",
+                                            session_id, len(llm_merged_paths), n_llm_fail,
+                                        )
+                                except Exception as e:  # noqa: BLE001
+                                    logger.warning(
+                                        "catfish-memory P19 merge_files_with_llm 异常 (fallback P18): %s",
+                                        e,
+                                    )
+                            n_e, n_c = _write_wiki_files(catfish_home, files, skip_merge_paths=llm_merged_paths)
                             if n_e + n_c > 0:
                                 # journal 加 distill entry — Karpathy log.md 风格
                                 ts_short = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")

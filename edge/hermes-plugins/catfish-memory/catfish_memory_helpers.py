@@ -966,6 +966,165 @@ async def _call_generation_llm(
         return None
 
 
+# ============================================================
+# P19 (6/5 鸿波) — LLM merge mode: 同名 entity/concept 让 LLM 真合并叙述,
+# 不是 P18 真**`body 替换 + 旧 body 注释留底`** 真**`(留底法)`**.
+#
+# 触发时机: _write_wiki_files 检测重名 → 上层 sync_turn 3b 在 await
+# _call_generation_llm 后, 调 _call_merge_llm 替换 file dict 真**`重名 entry`**.
+# LLM 失败 → fallback 走 _merge_wiki_file (P18 regex merge 当安全网).
+#
+# Prompt 设计: 给 LLM 两版 (OLD + NEW) 真**`整 markdown`** 真, 让它生 merged
+# 完整 markdown (frontmatter + body). frontmatter 规则 LLM 自己读 prompt,
+# body 真**`不直接拼接, 而是合一个连贯叙述, 矛盾的标 OLD/NEW 两段**.
+# ============================================================
+
+_MERGE_PROMPT_TEMPLATE = (
+    "你是企业知识体系维护员. 下面是同一个 wiki 页 (entity 或 concept) 真两个版本:\n"
+    "OLD (现有 wiki, 已存) 和 NEW (基于新 source 生成).\n"
+    "你的任务: 合并真一个最终版.\n\n"
+    "**合并规则**:\n\n"
+    "frontmatter:\n"
+    "- title: 用 NEW (允许改名)\n"
+    "- created: 用 OLD (保留身份历史, 不丢)\n"
+    "- updated: {today}\n"
+    "- entity_type / concept_type: 用 NEW (允许 reclassify)\n"
+    "- tags / related / sources / aliases: 并集去重 (旧 ∪ 新)\n\n"
+    "body:\n"
+    "- **不直接拼接** 两版段落; 合一个连贯叙述\n"
+    "- 重复信息只说一次\n"
+    "- 矛盾的标 'OLD: 之前 X' 跟 'NEW: 现在 Y' 两个 paragraph, 注明日期\n"
+    "- 保留 NEW 真**所有新事实, OLD 真**`只丢与 NEW 矛盾或过期`** 部分\n"
+    "- 总字数: entity ≤500 / concept ≤700\n"
+    "- 文末加 `## 变更历史` section, 1 行 bullet:\n"
+    "  `- {today}: 基于 <source> 更新, 主要变化: <一句话>`\n\n"
+    "**输出**: ONLY 最终 markdown (含 frontmatter + body), 无其他说明 / 解释 / 引号.\n"
+    "frontmatter `related:` 字段必须 `[\"[[name]]\", ...]` 真**双引号 string list**.\n\n"
+    "=== OLD (已存 wiki) ===\n"
+    "{old_text}\n"
+    "=== END OLD ===\n\n"
+    "=== NEW (基于新 source 生) ===\n"
+    "{new_text}\n"
+    "=== END NEW ==="
+)
+
+
+def _build_merge_prompt(old_text: str, new_text: str) -> str:
+    return _MERGE_PROMPT_TEMPLATE.format(
+        today=time.strftime("%Y-%m-%d"),
+        old_text=old_text.strip(),
+        new_text=new_text.strip(),
+    )
+
+
+async def _call_merge_llm(
+    old_text: str, new_text: str, model: str,
+) -> Optional[str]:
+    """Step 3 Merge (P19, 6/5): 同名 wiki 真两版让 LLM 合并真一版.
+
+    输入: 旧 markdown (含 frontmatter) + 新 markdown (LLM 真生成的 NEW).
+    返: merged markdown 或 None (LLM 失败 → caller fallback regex merge).
+
+    timeout 60s — 单 entity merge prompt 短, 比 generation 快.
+    """
+    if not old_text.strip() or not new_text.strip():
+        return None
+    token = _gateway_dev_token()
+    if not token:
+        return None
+    try:
+        import httpx
+    except ImportError:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=_LLM_HTTP_TIMEOUT) as client:
+            resp = await client.post(
+                _gateway_url(),
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "X-Catfish-Skip-Identity": "true",
+                    "X-Catfish-Internal": "true",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "user",
+                         "content": _build_merge_prompt(old_text, new_text)},
+                    ],
+                    "temperature": 0.3,
+                    "max_tokens": 2048,  # single entity merge, 4096 没必要
+                    "stream": False,
+                },
+            )
+            if resp.status_code != 200:
+                logger.warning(
+                    "catfish-memory merge: HTTP %d (%s), skip",
+                    resp.status_code, resp.text[:200],
+                )
+                return None
+            data = resp.json()
+            text = data.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+            text = text.strip()
+            # 校验: 必须 `---\n` 开头 (frontmatter 存在), 否则 LLM 没遵守输出格式
+            if not text.startswith("---\n"):
+                logger.warning(
+                    "catfish-memory merge: LLM output 不以 frontmatter 开头, skip"
+                )
+                return None
+            return text
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "catfish-memory merge 异常 [%s]: %r",
+            type(e).__name__, e,
+        )
+        return None
+
+
+async def merge_files_with_llm(
+    catfish_home: Path,
+    files: Dict[str, str],
+    model: str,
+) -> Tuple[Dict[str, str], set, int]:
+    """P19: 遍历 LLM 生的 file dict, 重名走 LLM merge.
+
+    返 (final_files, ok_paths_set, n_failed).
+    - ok_paths_set: 真 LLM merge 成功的 rel_path 集合 — 传给 _write_wiki_files
+      真 skip_merge_paths, 跳过 P18 regex merge (因 LLM 已合).
+    - 失败的 entry 真**`保持原 LLM 生成 content (新版)`**, 落到 P18 regex 安全网.
+    """
+    out = dict(files)
+    ok_paths: set = set()
+    n_failed = 0
+    for rel_path, new_content in files.items():
+        target = catfish_home / rel_path
+        if not target.exists():
+            # 新建, 无需 merge
+            continue
+        try:
+            old_text = target.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        try:
+            merged = await _call_merge_llm(old_text, new_content, model)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "catfish-memory merge_llm %s 异常 [%s]: %r",
+                rel_path, type(e).__name__, e,
+            )
+            merged = None
+        if merged:
+            out[rel_path] = merged
+            ok_paths.add(rel_path)
+            logger.info(
+                "catfish-memory wiki LLM merge ✓ %s (%d → %d chars)",
+                rel_path, len(new_content), len(merged),
+            )
+        else:
+            n_failed += 1
+    return out, ok_paths, n_failed
+
+
 # 路径白名单 — 防 LLM 输出真 ---FILE: 真**逃逸 wiki/ 根**.
 # P1.1.1 fix (6/4): \w + re.UNICODE 让 slug 接受中文 (LLM 不遵守拼音, 直接用中文 name —
 # Obsidian 真**也支持 unicode slug**, 没必要强制 ASCII).
@@ -1141,15 +1300,22 @@ def _merge_wiki_file(old_text: str, new_text: str) -> str:
     return f"---\n{merged_fm}\n---\n{new_body}"
 
 
-def _write_wiki_files(catfish_home: Path, files: Dict[str, str]) -> Tuple[int, int]:
+def _write_wiki_files(
+    catfish_home: Path,
+    files: Dict[str, str],
+    skip_merge_paths: Optional[set] = None,
+) -> Tuple[int, int]:
     """写 wiki files 真 ~/.catfish/wiki/entities/ + wiki/concepts/. 返 (n_entities, n_concepts).
 
     P18 (6/5 鸿波): 同 slug 触发 _merge_wiki_file (frontmatter list 并集 +
     保留 created + body 新+ 旧 legacy 注释留底), 不再无脑 overwrite.
+    P19 (6/5 鸿波): skip_merge_paths 真 path set 已被 _call_merge_llm 处理过
+    (LLM merge), 直接 overwrite. 没 merge 真**`走 P18 regex merge 安全网`**.
     新建 file (不重名) 沿用 overwrite.
     """
     if not files:
         return (0, 0)
+    skip = skip_merge_paths or set()
     n_entities = 0
     n_concepts = 0
     for rel_path, content in files.items():
@@ -1157,13 +1323,13 @@ def _write_wiki_files(catfish_home: Path, files: Dict[str, str]) -> Tuple[int, i
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             final_content = content
-            if target.exists():
-                # 重名 — merge mode
+            if target.exists() and rel_path not in skip:
+                # 重名 + LLM 没处理 → P18 regex merge 安全网
                 try:
                     old_text = target.read_text(encoding="utf-8")
                     final_content = _merge_wiki_file(old_text, content)
                     logger.info(
-                        "catfish-memory wiki merge: %s (frontmatter 并集 + body 新, 旧版 legacy 注释留底)",
+                        "catfish-memory wiki regex merge (P18 fallback): %s",
                         rel_path,
                     )
                 except Exception as e:  # noqa: BLE001
