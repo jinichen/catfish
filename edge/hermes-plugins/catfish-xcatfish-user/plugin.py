@@ -248,6 +248,7 @@ def _apply_patches() -> None:
     _patch_p8_p9_cors()
     _patch_p10_apply_client_headers_localhost()
     _patch_p12_update_system_prompt_safe()
+    _patch_p13_dump_naming_type_tag()
 
 
 # ── P1 ───────────────────────────────────────────────────────────────────
@@ -923,6 +924,70 @@ def _patch_p12_update_system_prompt_safe() -> None:
     logger.info("P12 SessionDB.update_system_prompt + INSERT OR IGNORE patched")
 
 
+# ── P13 ──────────────────────────────────────────────────────────────────
+
+def _patch_p13_dump_naming_type_tag() -> None:
+    """BL-DUMP-FILE-NAMING-INCONSISTENT (6/4): dump filename 加 caller type tag.
+
+    Bug: agent_runtime_helpers.dump_api_request_debug @ line 1123 真**`生`**
+    `request_dump_{session_id}_{timestamp}.json` — 真**`无 type prefix`**真.
+    audit 时 chat / background-review (curator) / cron 真**`真`** 真**`dump 都`**
+    真**`一起 排序混杂`**, 真**`grep 找员工真 chat dump 真`** 真**`真**`6 小时 audit slow`**真
+    (6/4 凌晨 catfish-memory P0 验证 真踩坑).
+
+    Fix: dump filename 真前缀加 type tag, 真**从 threading.current_thread().name 真**`检`**:
+    - `bg-review` thread → `bg`
+    - 默认 (main thread, chat session) → `chat`
+
+    new format: `request_dump_<type>_<session_id>_<ts>.json`
+    e.g. `request_dump_chat_20260604_125823_d77073_20260604_130043.json`
+         `request_dump_bg_20260604_125823_d77073_20260604_130100.json`
+
+    audit 时**`ls request_dump_chat_*` 真**`真**`只`** 真**`真**`员工 chat dump`** — 真**`真**`不混真 curator`**真.
+    """
+    try:
+        from agent import agent_runtime_helpers
+    except ImportError as e:
+        logger.warning("P13: agent.agent_runtime_helpers import 失败 (%s), skip patch", e)
+        return
+
+    _orig = agent_runtime_helpers.dump_api_request_debug
+
+    def patched(agent, api_kwargs, *, reason, error=None):
+        import threading
+        import re
+        from pathlib import Path
+
+        thread_name = threading.current_thread().name or ""
+        if "bg-review" in thread_name.lower() or "background" in thread_name.lower():
+            type_tag = "bg"
+        elif thread_name.lower().startswith("thread-") or thread_name == "MainThread":
+            type_tag = "chat"
+        else:
+            type_tag = "chat"  # safe default
+
+        # Call orig — 真**`真**`真**`真**`原 logic 写`** `request_dump_<sid>_<ts>.json`**真
+        result = _orig(agent, api_kwargs, reason=reason, error=error)
+        if result is None or not isinstance(result, Path):
+            return result
+
+        # Rename 真**加 type tag**真**: `request_dump_<sid>_<ts>.json` → `request_dump_<type>_<sid>_<ts>.json`
+        try:
+            old_name = result.name
+            if old_name.startswith("request_dump_") and f"_{type_tag}_" not in old_name:
+                new_name = old_name.replace("request_dump_", f"request_dump_{type_tag}_", 1)
+                new_path = result.parent / new_name
+                if not new_path.exists():
+                    result.rename(new_path)
+                    return new_path
+        except Exception as e:  # noqa: BLE001
+            logger.debug("P13 rename 异常 (ignored, 保留 orig path): %s", e)
+        return result
+
+    agent_runtime_helpers.dump_api_request_debug = patched
+    logger.info("P13 dump_api_request_debug + type tag (chat/bg) patched")
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # Step 3: plugin entry point
 # ─────────────────────────────────────────────────────────────────────────
@@ -945,7 +1010,7 @@ def install() -> None:
     _PATCHED = True
     _INSTALLED = True  # 6/1 BL-PLUGIN-HERMES-015-LAZY-INSTALL: pre_tool_call hook 看这个
 
-    logger.info("catfish-xcatfish-user plugin installed ✓ (12 patches applied)")
+    logger.info("catfish-xcatfish-user plugin installed ✓ (13 patches applied)")
 
 
 # 6/1 BL-PLUGIN-HERMES-015-LAZY-INSTALL — pre_tool_call hook 兜底 fail-loud.
