@@ -468,6 +468,23 @@ cmd_brand_fix() {
     cmd_brand_check
 }
 
+# BL-CATFISH-WIKI-MODE P2.2 (6/4 鸿波): structural lint for ~/.catfish/wiki/.
+# 扫 wiki/*.md 抽 [[wikilinks]] + frontmatter, 报 broken-link / orphan / no-outlinks.
+# 0 LLM 调用. 用法: catfish lint  或  catfish lint --json
+cmd_lint() {
+    local repo
+    if ! repo="$(locate_catfish_repo)"; then
+        echo "${YELLOW}找不到 catfish 仓库根. 设 CATFISH_REPO_ROOT=<path>${RESET}" >&2
+        return 1
+    fi
+    local script="$repo/edge/catfish-cli/scripts/lint_wiki.py"
+    if [ ! -f "$script" ]; then
+        echo "${YELLOW}缺 $script${RESET}" >&2
+        return 1
+    fi
+    python3 "$script" "$@"
+}
+
 # ---------- 主分发 ----------
 
 main() {
@@ -497,6 +514,11 @@ main() {
             cmd_brand_fix "$@"
             exit $?
             ;;
+        lint)
+            shift
+            cmd_lint "$@"
+            exit $?
+            ;;
         --raw)
             shift
             nuke_proxy_for_hermes
@@ -523,6 +545,7 @@ ${BOLD}catfish${RESET} - 鲶鱼平台员工入口
     catfish doctor             深度自检 (含 brand patch 状态)
     catfish brand-check        手动跑 brand patch 完整性检查 (升级 hermes 后跑)
     catfish brand-fix          自动 re-apply brand patch (hermes 升级后第一次跑)
+    catfish lint               扫 wiki/ 真**broken-link / orphan concept / dead-end** (--json 真**机器读**)
     catfish version            看版本
     catfish <hermes 子命令>    透传给 hermes（chat / model / mcp / sessions ...）
 
