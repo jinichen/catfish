@@ -1148,3 +1148,109 @@ catfish 领先 llm_wiki:
 - 也出现 "## 📐 catfish memory schema (规则)" 段
 - LLM 真自我介绍时真说自己是 "鸿波真资质管理副手" 不是 generic "AI 助手"
 - journal 真 grep "^## \[" 真拉得到最近 5 条 ingest/query/lint 记录
+
+### P0 ship 真根因排查 (6/4 凌晨)
+
+P0 commit 8075d2e ship 6/3 晚 + hermes 重启, 但 6/4 凌晨验真 4 marker 全 ✗.
+逐层 audit 暴露根因 — **catfish-memory plugin 真 5/29 hermes 0.15.2 升级后没补回 install**:
+
+1. `~/.hermes/plugins/` 真只有 catfish-policy + catfish-xcatfish-user, **没 catfish-memory symlink**
+2. `~/.hermes/config.yaml` 真 `memory:` 块 **没 `provider: catfish-memory` 字段**
+3. 真 hermes `~/.hermes/hermes-agent/plugins/memory/__init__.py:308 _get_active_memory_provider` 读 `cfg_get(config, "memory", "provider")` — 没真返 None, 真**不装外部 provider**
+4. 所以 6/3 整天写真 _render_purpose / _render_schema / journal 格式严格化代码全**没生效** — 真**有改没装**
+
+修法 (6/4 08:30~08:40, 2 步):
+```bash
+# 1. 补 symlink
+ln -s ~/person_task/catfish/edge/hermes-plugins/catfish-memory ~/.hermes/plugins/catfish-memory
+
+# 2. config.yaml memory 块加
+#   provider: catfish-memory
+```
+重启 hermes + Companion 新 chat → log 真 5 条 register/activate/initialize/sync_turn 真**全出现** + LLM 真自我介绍真**"我是小鲶, 你的副手"** (跟之前 "鸿波, 在." generic 真不同) — P0 真**真**真**真**真**生效**.
+
+教训: hermes 升级要带 **plugin install 真 audit step** — `ls ~/.hermes/plugins/` + `grep provider ~/.hermes/config.yaml`. 真**版本升级 reset 真配置真 silent**.
+
+---
+
+## BL-HERMES-UPGRADE-PLUGIN-AUDIT (6/4 凌晨发现, P1)
+
+hermes 真版本升级 (5/29 真 0.15.2) 真**reset / wipe** 真:
+1. `~/.hermes/plugins/` 真 user-installed symlink (catfish-memory 真没了)
+2. `~/.hermes/config.yaml` 真 memory.provider 真字段 (真**5/19 真加** → 5/29 升级真**没**)
+
+后果: 真 plugin 真**silent 真**不装载, 真 6/3 整天**改代码没生效**, 真**6/4 凌晨**真才查出.
+
+**修法**:
+- catfish 真 hermes 升级 script (`scripts/upgrade-hermes.sh` 或类似) 加 **pre-upgrade snapshot** + **post-upgrade restore**:
+  - 保存 `~/.hermes/plugins/` 真所有 symlink 真 target
+  - 保存 `~/.hermes/config.yaml` 真 `memory.provider / plugins.enabled / mcp_servers` 字段
+  - 升级完真**自动 restore + 真**`hermes plugin verify` 真验
+- 加 `catfish doctor` CLI 命令 — 真**每周一**真**自动跑**, 真扫 `~/.hermes/plugins/` 真 vs catfish 真**真期望** 真**plugin 列表** (catfish-memory / catfish-xcatfish-user / catfish-policy), 不齐**红色提醒**
+
+risk: catfish-policy 也在 `disabled` 列表里, 真**6/4 凌晨没动** — 真要追真**这个 plugin 真什么时候 真**真**为什么真 disabled**.
+
+---
+
+## BL-CATFISH-MEMORY-SUMMARIZE-UPSTREAM-502 (6/4 凌晨发现, P2)
+
+log 真**第 1 次** chat (session=20260604_084022_0f4973, 真 "你好" pairs=10 触发 sync_turn) 真:
+```
+WARNING catfish.memory: catfish-memory summarize: HTTP 502
+  litellm.InternalServerError: OpenAIException - Connection error
+INFO catfish.memory.plugin: catfish-memory bg session=...: LLM 总结返空, 跳过 (不写 journal)
+```
+
+bg session 真总结调真**catfish gateway 8999 真上游** (litellm 真 OpenAI provider) 真**connection error**. 真**真**真**直接后果**: 真**这次 chat 真**真**没进 journal**.
+
+**修法**:
+- catfish-memory plugin sync_turn 真**重试 retry-with-backoff** 真 (2 次 retry, 真**指数 backoff** 2s / 8s)
+- 重试都失败 — 真**真 buffer 真**真**留**真**到下次 sync_turn**, 真**不**真**silent drop**.
+- 真**buffer 真有 cap** (e.g. 50 pairs), 防内存涨
+
+真**根因**真**catfish gateway 上游 instability** (litellm 接 OpenAI 失败 / rate limit) — 真**长期看** catfish-public-deepseek-flash 真 catfish gateway 真**failover 真补救** (BL-CATFISH-GATEWAY-FAILOVER, 真**别真 BL 真已经有**).
+
+---
+
+## BL-HERMES-SYSTEM-PROMPT-PERSIST-BROKEN (6/4 凌晨发现, P2)
+
+log 真:
+```
+WARNING agent.conversation_loop: Stored system prompt for session 20260604_084022_0f4973 is null;
+  rebuilding from scratch this turn. Prefix cache will miss until the rebuild persists.
+  Investigate the previous turn's update_system_prompt write path.
+```
+
+每 chat session 真**第一 turn** 真**system_prompt persist** 真**没写** → **下一 turn rebuild from scratch** → **prefix cache miss** → 真**每 turn 真重新 prefix encode 29K+ tokens**.
+
+后果:
+- prompt caching 真**99% → 0%** 真**第一 turn miss**
+- 真**真长期看** 真 token cost 大涨, latency 慢
+- 真 hermes 0.15.2 升级真新引入 bug 真**或**真**catfish-xcatfish-user 真 monkey-patch** 真**踩到 update_system_prompt 真**真**写路径**
+
+**audit**:
+- 真 hermes `agent.conversation_loop._update_system_prompt` (路径自己找) 真写 path
+- 真 catfish-xcatfish-user 真 11 个 patch 里真**有没**真 patch 真 system_prompt 真**写真**
+- 真**reproduce** — 真新开 session 真**第 2 turn** 真**log grep** "Stored system prompt is null"
+
+阻塞依赖: 真**5/29 升级真 11 patch 真完整 audit** (BL-HERMES-0152-PATCH-AUDIT 真**有的话**已有).
+
+---
+
+## BL-DUMP-FILE-NAMING-INCONSISTENT (6/4 凌晨发现, P3)
+
+真 hermes session dump 真两种文件名 pattern, 真**鸿波 6/4 凌晨 grep** 真**找错文件**真**误判** P0 真**没生效**:
+
+1. `request_dump_<session_id>_<ts>.json` (e.g. `request_dump_20260604_071823_...json`) — 真**skill_curator 后台 LLM call** 真 dump, **5940 chars 固定** (curator prompt), **不含** catfish-memory marker
+2. `request_dump_api-<hash>_<ts>.json` (e.g. `request_dump_api-3832a9e072a2f450_...json`) — 真**员工 chat 真 dump**, **12K+ chars 真**含真 timeline / employee profile / marker
+
+真**问题**:
+- 真**naming 真不区分** 真 caller (curator vs employee chat vs background task), 真**grep 验证 真踩坑**
+- 真 6/4 08:40 chat session `20260604_084022_0f4973` 真 **api- dump 真没生成** — 真**dump 真 sample / conditional 真**真**写真**, 真**不每次写**
+
+**改法**:
+- dump filename 真加 source tag: `request_dump_<source>_<session>_<ts>.json` (source = `chat` / `curator` / `bg`)
+- 真**或者**真**目录分** `~/.hermes/sessions/dumps/chat/` / `dumps/curator/` / `dumps/bg/`
+- 真 verification 真**专用 CLI** 真 `hermes session dump latest --type chat` 真**直接拉**真**最新员工 chat dump**
+
+risk 真**低** — 真**hermes 真 upstream**, catfish monkey-patch 真**要慎重**. 真**优先**真**catfish 自己**真**写真验证 CLI**, 真**真**真**绕过 dump 文件命名**问题.
