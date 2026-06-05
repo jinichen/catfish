@@ -51,6 +51,16 @@ export default function ChatToolCall({ call }: Props) {
   const filePaths =
     call.status === "done" ? extractFilePaths(resultStr) : [];
 
+  // P27 (6/5 鸿波): hermes approval pending 检测.
+  // hermes check_execute_code_guard / check_dangerous_command 真**`pending`** 时返
+  // tool message 含 "Asking the user for approval" + code/command. LLM 真 chat 里
+  // 翻译成"请批准", 但 user 没 inline button 没法点. 这里直接渲染按钮, 点击发
+  // /approve | /approve always | /deny 走 hermes 原 slash command handler.
+  const isApprovalPending =
+    call.status === "done" &&
+    typeof resultStr === "string" &&
+    /Asking the user for approval|approval_pending/i.test(resultStr);
+
   return (
     <div
       style={{
@@ -147,9 +157,82 @@ export default function ChatToolCall({ call }: Props) {
               </pre>
             </Section>
           )}
+          {isApprovalPending && <ApprovalButtons />}
+        </div>
+      )}
+      {/* 折叠状态下也显 approval button — 不用展开就能点 */}
+      {!open && isApprovalPending && (
+        <div
+          style={{
+            padding: "8px var(--space-3) 10px",
+            borderTop: "1px solid var(--catfish-border)",
+            background: "var(--catfish-bg-elevated, var(--catfish-bg))",
+          }}
+        >
+          <ApprovalButtons />
         </div>
       )}
     </div>
+  );
+}
+
+/** P27 (6/5): hermes approval pending → inline 按钮.
+ *  点击 dispatch CustomEvent, ChatPanel useEffect 监听调 onSend.
+ *  Hermes 收到 /approve / /deny 走 _handle_approve_command path resolve block.
+ */
+function ApprovalButtons() {
+  const dispatch = (text: string) =>
+    window.dispatchEvent(
+      new CustomEvent("catfish:approval-send", { detail: { text } }),
+    );
+  return (
+    <div
+      style={{
+        display: "flex",
+        gap: "var(--space-2)",
+        flexWrap: "wrap",
+        alignItems: "center",
+        fontSize: 12,
+      }}
+    >
+      <span style={{ color: "var(--catfish-text-muted)", marginRight: 4 }}>
+        等待批准:
+      </span>
+      <ApprovalBtn label="✓ 批准" color="var(--status-ok, #16a34a)" onClick={() => dispatch("/approve")} />
+      <ApprovalBtn label="✓ 始终批准" color="var(--catfish-cyan-dim, #0891b2)" onClick={() => dispatch("/approve always")} />
+      <ApprovalBtn label="✗ 拒绝" color="var(--status-err, #dc2626)" onClick={() => dispatch("/deny")} />
+    </div>
+  );
+}
+
+function ApprovalBtn({
+  label,
+  color,
+  onClick,
+}: {
+  label: string;
+  color: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      style={{
+        background: "transparent",
+        border: `1px solid ${color}`,
+        color,
+        borderRadius: 4,
+        padding: "3px 10px",
+        fontSize: 12,
+        cursor: "pointer",
+        fontWeight: 500,
+      }}
+    >
+      {label}
+    </button>
   );
 }
 

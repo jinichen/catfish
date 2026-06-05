@@ -230,9 +230,21 @@ class Config(BaseModel):
 
 
 def load_config(path: Path | None = None) -> Config:
-    """Load models.yaml. Path can be overridden by CATFISH_CONFIG env."""
+    """Load models.yaml. Path 优先级 (高→低):
+        1. caller path 参数
+        2. CATFISH_CONFIG env (单文件 override)
+        3. CATFISH_GATEWAY_CONFIG_PATH/models.yaml (P26: 统一目录 env)
+        4. config/models.yaml (repo 内默认)
+    """
     if path is None:
-        path = Path(os.environ.get("CATFISH_CONFIG", "config/models.yaml"))
+        env_single = os.environ.get("CATFISH_CONFIG", "").strip()
+        env_dir = os.environ.get("CATFISH_GATEWAY_CONFIG_PATH", "").strip()
+        if env_single:
+            path = Path(env_single)
+        elif env_dir:
+            path = Path(env_dir) / "models.yaml"
+        else:
+            path = Path("config/models.yaml")
 
     if not path.is_absolute():
         # try both cwd and the installed package dir
@@ -245,7 +257,8 @@ def load_config(path: Path | None = None) -> Config:
     if not Path(path).exists():
         raise FileNotFoundError(
             f"models config not found: {path} "
-            "(set CATFISH_CONFIG env or place it in config/models.yaml)"
+            "(set CATFISH_CONFIG env, CATFISH_GATEWAY_CONFIG_PATH (目录), "
+            "or place it in config/models.yaml)"
         )
 
     with open(path) as f:

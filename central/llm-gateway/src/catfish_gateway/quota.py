@@ -119,13 +119,17 @@ def _quota_db_path() -> Path:
 
 
 def _quota_config_path() -> Path:
-    """quotas.yaml 路径. CATFISH_QUOTAS_PATH env override.
-
-    默认: <repo>/central/llm-gateway/config/quotas.yaml (跟 models.yaml 同目录).
+    """quotas.yaml 路径. 优先级 (高→低):
+        1. CATFISH_QUOTAS_PATH env (单文件 override)
+        2. CATFISH_GATEWAY_CONFIG_PATH/quotas.yaml (P26: 统一目录 env)
+        3. <repo>/central/llm-gateway/config/quotas.yaml (默认)
     """
-    custom = os.environ.get("CATFISH_QUOTAS_PATH")
+    custom = os.environ.get("CATFISH_QUOTAS_PATH", "").strip()
     if custom:
         return Path(custom).expanduser()
+    env_dir = os.environ.get("CATFISH_GATEWAY_CONFIG_PATH", "").strip()
+    if env_dir:
+        return Path(env_dir).expanduser() / "quotas.yaml"
     # quota.py → catfish_gateway/ → src/ → llm-gateway/  (3 个 parent)
     pkg_root = Path(__file__).resolve().parent.parent.parent
     return pkg_root / "config" / "quotas.yaml"

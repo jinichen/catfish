@@ -502,6 +502,58 @@ cmd_brand_fix() {
 }
 
 # BL-CATFISH-WIKI-MODE P2.2 (6/4 鸿波): structural lint for ~/.catfish/wiki/.
+# P25 (6/5 鸿波) — 商用部署 onboarding: 检测 ~/.catfish/ 缺 yaml → cp example,
+# 客户开箱即用. 已有 yaml → skip + 提示 path.
+cmd_init() {
+    local repo
+    if ! repo="$(locate_catfish_repo)"; then
+        echo "${YELLOW}找不到 catfish 仓库根. 设 CATFISH_REPO_ROOT=<path>${RESET}" >&2
+        return 1
+    fi
+    local templates="$repo/edge/catfish-cli/templates"
+    local target_dir="$HOME/.catfish"
+    mkdir -p "$target_dir"
+
+    echo "${BOLD}=== catfish init: 配置文件初始化 ===${RESET}"
+    echo
+
+    # 1. companion.yaml
+    local companion="$target_dir/companion.yaml"
+    if [ -f "$companion" ]; then
+        echo "    ${YELLOW}已存${RESET} $companion (skip, 不覆盖)"
+    elif [ -f "$templates/companion.yaml.example" ]; then
+        cp "$templates/companion.yaml.example" "$companion"
+        echo "    ${GREEN}OK${RESET} cp → $companion"
+    else
+        echo "    ${YELLOW}缺${RESET} $templates/companion.yaml.example 不存在"
+    fi
+
+    # 2. memory_plugin.yaml
+    local memplugin="$target_dir/memory_plugin.yaml"
+    if [ -f "$memplugin" ]; then
+        echo "    ${YELLOW}已存${RESET} $memplugin (skip, 不覆盖)"
+    elif [ -f "$templates/memory_plugin.yaml.example" ]; then
+        cp "$templates/memory_plugin.yaml.example" "$memplugin"
+        chmod 600 "$memplugin"  # secret 防泄露
+        echo "    ${GREEN}OK${RESET} cp → $memplugin (chmod 600)"
+    else
+        echo "    ${YELLOW}缺${RESET} $templates/memory_plugin.yaml.example 不存在"
+    fi
+
+    echo
+    echo "${BOLD}下一步${RESET}:"
+    echo "  1. vim $companion"
+    echo "     改 endpoints.gateway_url (中央部署 IP)"
+    echo "  2. vim $memplugin"
+    echo "     改 gateway.url + gateway.token"
+    echo "  3. ls -l $memplugin"
+    echo "     验 chmod 600 (已自动设)"
+    echo "  4. catfish doctor"
+    echo "     自检, 看 [Network] / [Plugins] 全绿"
+    echo "  5. hermes gateway stop && hermes gateway start"
+    echo "     reload plugin"
+}
+
 # 扫 wiki/*.md 抽 [[wikilinks]] + frontmatter, 报 broken-link / orphan / no-outlinks.
 # 0 LLM 调用. 用法: catfish lint  或  catfish lint --json
 cmd_lint() {
@@ -552,6 +604,11 @@ main() {
             cmd_lint "$@"
             exit $?
             ;;
+        init|setup)
+            shift
+            cmd_init "$@"
+            exit $?
+            ;;
         --raw)
             shift
             nuke_proxy_for_hermes
@@ -579,6 +636,7 @@ ${BOLD}catfish${RESET} - 鲶鱼平台员工入口
     catfish brand-check        手动跑 brand patch 完整性检查 (升级 hermes 后跑)
     catfish brand-fix          自动 re-apply brand patch (hermes 升级后第一次跑)
     catfish lint               扫 wiki/ 真**broken-link / orphan concept / dead-end** (--json 真**机器读**)
+    catfish init               初始化 ~/.catfish/{companion,memory_plugin}.yaml (商用首次部署)
     catfish version            看版本
     catfish <hermes 子命令>    透传给 hermes（chat / model / mcp / sessions ...）
 

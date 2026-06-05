@@ -92,13 +92,17 @@ class _DevConfig:
 
 
 def _dev_users_path() -> Path:
-    """dev_users.yaml 路径. CATFISH_DEV_USERS_PATH env override.
-
-    默认: <repo>/central/llm-gateway/config/dev_users.yaml
+    """dev_users.yaml 路径. 优先级 (高→低):
+        1. CATFISH_DEV_USERS_PATH env (单文件 override)
+        2. CATFISH_GATEWAY_CONFIG_PATH/dev_users.yaml (P26: 统一目录 env)
+        3. <repo>/central/llm-gateway/config/dev_users.yaml (默认)
     """
-    custom = os.environ.get("CATFISH_DEV_USERS_PATH")
+    custom = os.environ.get("CATFISH_DEV_USERS_PATH", "").strip()
     if custom:
         return Path(custom).expanduser()
+    env_dir = os.environ.get("CATFISH_GATEWAY_CONFIG_PATH", "").strip()
+    if env_dir:
+        return Path(env_dir).expanduser() / "dev_users.yaml"
     # dev_token.py → auth/ → catfish_gateway/ → src/ → llm-gateway/  (4 个 parent)
     pkg_root = Path(__file__).resolve().parent.parent.parent.parent
     return pkg_root / "config" / "dev_users.yaml"

@@ -512,9 +512,48 @@ def _write_distilled(catfish_home: Path, text: str) -> None:
         logger.warning("写 distilled_facts.md 失败: %s", e)
 
 
+_GATEWAY_URL_DEPRECATION_LOGGED = False
+
+
 def _gateway_url() -> str:
-    """gateway loopback URL — env CATFISH_GATEWAY_INTERNAL_URL 覆盖默认."""
-    return os.environ.get("CATFISH_GATEWAY_INTERNAL_URL", _DEFAULT_GATEWAY_URL).strip() or _DEFAULT_GATEWAY_URL
+    """gateway loopback URL.
+
+    P23 (6/5 鸿波): 统一 env 名 `CATFISH_GATEWAY_URL` (base URL, 不带 path) 跟
+    Companion / catfish-xcatfish-user plugin 对齐. 老名 `CATFISH_GATEWAY_INTERNAL_URL`
+    保留兼容 (含 full path), 设了 → 打 deprecation warning 用一次提醒.
+
+    P24 (6/5 鸿波): yaml 接入 — ~/.catfish/memory_plugin.yaml 加 `gateway.url`
+    字段 (跟 env 同义, 但客户端友好 — 不用 launchctl 改).
+
+    优先级 (高→低):
+      1. CATFISH_GATEWAY_INTERNAL_URL env (老, full URL e.g. http://x/v1/chat/completions)
+      2. CATFISH_GATEWAY_URL env (新统一名, base URL), 自动拼 /v1/chat/completions
+      3. yaml gateway.url (base URL), 自动拼 /v1/chat/completions
+      4. _DEFAULT_GATEWAY_URL (http://127.0.0.1:8999/v1/chat/completions)
+    """
+    global _GATEWAY_URL_DEPRECATION_LOGGED
+    full = os.environ.get("CATFISH_GATEWAY_INTERNAL_URL", "").strip()
+    if full:
+        if not _GATEWAY_URL_DEPRECATION_LOGGED:
+            logger.warning(
+                "P23 deprecation: CATFISH_GATEWAY_INTERNAL_URL 老 env 名, "
+                "改用 CATFISH_GATEWAY_URL (base URL, 不带 path). 这次先兼容."
+            )
+            _GATEWAY_URL_DEPRECATION_LOGGED = True
+        return full
+    base = os.environ.get("CATFISH_GATEWAY_URL", "").strip().rstrip("/")
+    if base:
+        return f"{base}/v1/chat/completions"
+    # P24 yaml 兜底
+    cfg = _load_plugin_config()
+    yaml_base = ""
+    if isinstance(cfg, dict):
+        gw = cfg.get("gateway", {})
+        if isinstance(gw, dict):
+            yaml_base = str(gw.get("url", "")).strip().rstrip("/")
+    if yaml_base:
+        return f"{yaml_base}/v1/chat/completions"
+    return _DEFAULT_GATEWAY_URL
 
 
 # ── 文件持久化 buffer + state (BL-MEMORY-SYNC-TURN-REFACTOR Day 2, 5/20) ───
@@ -693,10 +732,22 @@ def _gateway_dev_token() -> str:
     同一个值 → 退让成显式预设到 .env 文件. 文件 chmod 600 + .gitignore 兜底
     安全性. 跟 HERMES_SERVICE_TOKEN 同套路.
 
-    env: CATFISH_INTERNAL_DEV_TOKEN (跟 gateway auth/dev_token.py 同名,
-    部署时设一处, 两进程共享)
+    P24 (6/5 鸿波): yaml 接入 — ~/.catfish/memory_plugin.yaml 加 `gateway.token`
+    兜底 (env 优先). yaml 文件本身应 chmod 600 防 secret 泄露.
+
+    优先级:
+      1. env CATFISH_INTERNAL_DEV_TOKEN (跟 gateway auth/dev_token.py 同名)
+      2. yaml gateway.token
     """
-    return os.environ.get("CATFISH_INTERNAL_DEV_TOKEN", "").strip()
+    token = os.environ.get("CATFISH_INTERNAL_DEV_TOKEN", "").strip()
+    if token:
+        return token
+    cfg = _load_plugin_config()
+    if isinstance(cfg, dict):
+        gw = cfg.get("gateway", {})
+        if isinstance(gw, dict):
+            return str(gw.get("token", "")).strip()
+    return ""
 
 
 async def _call_summarize_llm(

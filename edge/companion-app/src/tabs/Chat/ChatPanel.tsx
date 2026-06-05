@@ -49,6 +49,22 @@ export default function ChatPanel({
     }
   }, [messages]);
 
+  // P27 (6/5 鸿波): 监听 ChatToolCall approval inline button 触发的 send event.
+  // ChatToolCall → window.dispatchEvent('catfish:approval-send', detail.text)
+  // → 这里 listen, 直接调 onSend 走跟员工手动发同款 path (走 hermes /approve handler
+  // + P14 中文 alias monkey-patch 都能 work, 不需要新 endpoint).
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const ev = e as CustomEvent<{ text: string }>;
+      const text = ev.detail?.text;
+      if (text && typeof text === "string") {
+        onSend(text, []);
+      }
+    };
+    window.addEventListener("catfish:approval-send", handler as EventListener);
+    return () => window.removeEventListener("catfish:approval-send", handler as EventListener);
+  }, [onSend]);
+
   const isEmpty = messages.length === 0;
 
   return (

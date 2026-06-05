@@ -1,0 +1,29 @@
+# ~/.catfish/memory_plugin.yaml — catfish-memory plugin 配置
+#
+# 装法:
+#   1. cp ~/person_task/catfish/edge/catfish-cli/templates/memory_plugin.yaml.example \
+#         ~/.catfish/memory_plugin.yaml
+#   2. 改 gateway.url + gateway.token
+#   3. chmod 600 ~/.catfish/memory_plugin.yaml   # secret 防泄露
+#   4. hermes gateway stop && hermes gateway start (reload plugin)
+#
+# 优先级: env > yaml > default.
+# env 名:
+#   CATFISH_GATEWAY_URL          (base URL, 不带 path) — 跟 Companion / catfish-xcatfish-user 同名
+#   CATFISH_INTERNAL_DEV_TOKEN   gateway 内部调用 token
+#   CATFISH_WIKI_ENABLE          (1/0) wiki two-step distill 开关
+
+gateway:
+  # gateway base URL — 跟 Companion endpoints.gateway_url 同 (一处改, 全栈生效)
+  # 本机: http://127.0.0.1:8999
+  # 中央部署: http://10.10.40.50:8999
+  url: http://127.0.0.1:8999
+
+  # gateway 内部调用 token (auth/dev_token.py 同名), 部署时 gateway 进程 + plugin
+  # 进程都设这个值. 留空 → plugin 跳过 LLM 调用 (env 必须有, 不然 distill/wiki 不跑).
+  token: ""
+
+# 节流参数 (可选, 默认值即可)
+# summarize:
+#   n_turns_threshold: 5     # 每 N pair 触发 sync_turn → bg distill
+#   min_interval_seconds: 1800  # 或 30 分钟到了也触发
