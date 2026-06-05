@@ -249,6 +249,7 @@ def _apply_patches() -> None:
     _patch_p10_apply_client_headers_localhost()
     _patch_p12_update_system_prompt_safe()
     _patch_p13_dump_naming_type_tag()
+    _patch_p14_approve_chinese_alias()
 
 
 # ── P1 ───────────────────────────────────────────────────────────────────
@@ -1041,6 +1042,89 @@ def pre_tool_call_safety_check(*args, **kwargs):
         )
 
     return None  # 让 tool call 继续
+
+
+# ── P14 ──────────────────────────────────────────────────────────────────
+#
+# P14 (6/5 鸿波) — 中文 "批准" / "拒绝" → hermes /approve / /deny slash command
+#
+# 背景: hermes execute_code guard (approval.py:1455) 在 gateway/ask context 走
+# notify_cb 等用户决定. Companion 没注册 notify_cb (P22 BL), fallback 走 message
+# field "Asking the user for approval" + 等 user 真**`/approve` 文字命令解除. LLM
+# 看到 message 翻译成中文 "请批准", 鸿波打 "批准" — hermes 不识别中文 alias →
+# 不 dispatch 到 _handle_approve_command → 死循环.
+#
+# 本 patch: HermesGateway._handle_message 真**入口前**预处理 event.text, 中文
+# alias → 改成 /approve / /deny 真 slash command 真**`字面**, 走原 hermes
+# dispatch flow. 不动 hermes approval 逻辑 (松耦合).
+#
+# 别名设计 (鸿波语义习惯, 6/5 拍):
+#   "批准"/"同意"/"通过"/"确认"/"审批" → /approve  (单次)
+#   "总是批准"/"始终批准"           → /approve always (永久)
+#   "本会话批准"/"会话批准"        → /approve session (本 session)
+#   "拒绝"/"驳回"/"不同意"/"取消"   → /deny
+
+_APPROVE_ALIASES = {
+    "批准": "/approve",
+    "同意": "/approve",
+    "通过": "/approve",
+    "确认": "/approve",
+    "审批": "/approve",
+    "ok": "/approve",
+    "好的": "/approve",
+    "可以": "/approve",
+    "总是批准": "/approve always",
+    "始终批准": "/approve always",
+    "总是允许": "/approve always",
+    "本会话批准": "/approve session",
+    "会话批准": "/approve session",
+    "拒绝": "/deny",
+    "驳回": "/deny",
+    "不同意": "/deny",
+    "取消": "/deny",
+    "no": "/deny",
+}
+
+
+def _patch_p14_approve_chinese_alias() -> None:
+    """HermesGateway._handle_message 真**入口前**预处理 event.text 中文 → slash.
+
+    只在 session 有 blocking approval 时触发别名 (has_blocking_approval),
+    避免误改正常 chat (员工说 "可以" / "好的" 当聊天话不该被吞)真.
+    """
+    try:
+        from gateway.run import HermesGateway
+        from tools.approval import has_blocking_approval
+    except ImportError as e:
+        logger.warning("P14: HermesGateway / has_blocking_approval import 失败 (%s), skip", e)
+        return
+
+    _orig_handle = HermesGateway._handle_message
+
+    async def patched(self, event):
+        try:
+            raw = (event.text or "").strip()
+            if raw and not raw.startswith("/"):
+                # 拿 session_key — 借用 HermesGateway 真**`_session_key_for_source`**
+                try:
+                    session_key = self._session_key_for_source(event.source)
+                except Exception:
+                    session_key = ""
+                # 只在有 pending approval 时触发 alias — 避免误吞正常 chat
+                if session_key and has_blocking_approval(session_key):
+                    alias = _APPROVE_ALIASES.get(raw.lower())
+                    if alias:
+                        logger.info(
+                            "P14 approve alias: '%s' → '%s' (session=%s)",
+                            raw, alias, session_key[:12],
+                        )
+                        event.text = alias
+        except Exception as e:  # noqa: BLE001
+            logger.debug("P14 alias preprocess 异常 (ignored): %s", e)
+        return await _orig_handle(self, event)
+
+    HermesGateway._handle_message = patched
+    logger.info("P14 chinese approval alias patched (HermesGateway._handle_message)")
 
 
 # hermes 0.14+ plugin discovery 自动调 __init__.py 里的 install() 或类似 hook.
