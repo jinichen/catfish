@@ -129,8 +129,7 @@ export default function ServerConfigCard() {
           marginBottom: 12,
         }}
       >
-        gateway 地址 — 改成中央部署 IP (e.g. http://10.10.40.50:8999) 后, Companion
-        + catfish-memory plugin 都走中央 gateway. 改完重启 hermes-gateway + Companion 生效.
+        客户端直连的 3 个 server. 改完重启 hermes-gateway + Companion 生效.
       </div>
 
       {/* gateway URL */}
@@ -174,51 +173,6 @@ export default function ServerConfigCard() {
           <code style={codeStyle}>{cfg?.secret_broker_url || "(默认)"}</code>
         )}
       </Row>
-
-      <div
-        style={{
-          fontSize: 10,
-          color: "var(--catfish-text-muted)",
-          marginTop: 6,
-          marginBottom: 8,
-        }}
-      >
-        其它 2 服务 (mcp-registry 8996 / skills-hub 8997) 共享 gateway / hermes,
-        无需单独配.
-      </div>
-
-      {/* 3 类 token 说明 — 员工自己不在 UI 配, 但要知道各自在哪 */}
-      <details
-        style={{
-          marginTop: 16,
-          fontSize: 11,
-          color: "var(--catfish-text-muted)",
-        }}
-      >
-        <summary style={{ cursor: "pointer", userSelect: "none" }}>
-          token 在哪? (3 类不在这卡里配)
-        </summary>
-        <div style={{ marginTop: 8, paddingLeft: 12, lineHeight: 1.7 }}>
-          <div>
-            <b>1. 登录 token</b> (JWT, Companion / hermes chat → gateway):
-            <br />
-            自动管, 终端跑 <code style={inlineCodeStyle}>catfish login</code> 刷新.
-            存 <code style={inlineCodeStyle}>~/.hermes/config.yaml</code>.
-          </div>
-          <div style={{ marginTop: 6 }}>
-            <b>2. 内部 dev token</b> (plugin → gateway, distill / wiki 后台调用):
-            <br />
-            server 端自动生成 + 同步本机. 员工不用手填.
-            存 <code style={inlineCodeStyle}>~/.catfish/memory_plugin.yaml</code>{" "}
-            或 env <code style={inlineCodeStyle}>CATFISH_INTERNAL_DEV_TOKEN</code>.
-          </div>
-          <div style={{ marginTop: 6 }}>
-            <b>3. 上游 LLM API key</b> (gateway → OpenAI/DeepSeek/Gemini/...):
-            <br />
-            server admin 配, 员工本机看不到.
-          </div>
-        </div>
-      </details>
 
       {/* action bar */}
       {editing && (
@@ -346,14 +300,6 @@ const inlineCode: React.CSSProperties = {
   borderRadius: 2,
 };
 
-const inlineCodeStyle: React.CSSProperties = {
-  fontFamily: "var(--font-mono)",
-  fontSize: 10,
-  background: "rgba(0,0,0,0.06)",
-  padding: "0 4px",
-  borderRadius: 2,
-  color: "var(--catfish-text)",
-};
 
 const smallBtn: React.CSSProperties = {
   background: "transparent",
