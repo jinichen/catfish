@@ -77,10 +77,13 @@ pub async fn tool_bridge_start() -> Result<(), String> {
     // 让 tool-bridge 启动时能调 gateway /v1/mcp/subscribed 拉员工真订阅, 自动
     // spawn jira/gitlab 等 mcp servers. 没登录 (没 token) 时 tool-bridge fallback
     // 走硬编码 autostart (CATFISH_MCP_AUTOSTART='time').
-    let gateway_url = std::env::var("CATFISH_GATEWAY_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:8999".to_string());
+    // P29 (6/5 鸿波): 走 services::endpoints (yaml > env > default) — 客户改
+    // ~/.catfish/companion.yaml endpoints.{gateway_url,secret_broker_url} 即时生效,
+    // 不用 launchctl setenv. env 仍优先 (dev/test 临时 override).
+    let ep = crate::services::endpoints::endpoints();
+    let gateway_url = std::env::var("CATFISH_GATEWAY_URL").unwrap_or_else(|_| ep.gateway_base());
     let secret_broker_url = std::env::var("CATFISH_SECRET_BROKER_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:8995".to_string());
+        .unwrap_or_else(|_| ep.secret_broker_base());
     let mut env_pairs: Vec<(String, String)> = vec![
         ("PYTHONPATH".into(), pythonpath),
         ("CATFISH_MCP_REGISTRY_URL".into(), gateway_url.clone()),

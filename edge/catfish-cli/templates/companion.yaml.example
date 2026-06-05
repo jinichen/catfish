@@ -1,24 +1,41 @@
 # ~/.catfish/companion.yaml — Companion 桌面 app 配置
 #
 # 装法:
-#   1. cp ~/person_task/catfish/edge/catfish-cli/templates/companion.yaml.example \
-#         ~/.catfish/companion.yaml
-#   2. 改你需要的字段
-#   3. 重启 Companion 生效 (yaml 进程内只读一次, 不 hot-reload)
+#   1. catfish init     (一键 cp 这个 example 真**`到 ~/.catfish/`** 真)
+#   2. vim ~/.catfish/companion.yaml
+#   3. 改 endpoints + oidc 段真**`URL 改成中央部署 IP`**真
+#   4. 重启 Companion 生效 (yaml 进程内只读一次)
 #
-# 优先级: env > yaml > default. 这文件管 yaml; env 看 catfish doctor / endpoints.rs 注释.
+# 优先级: env > yaml > default.
 
+# P29 (6/5 鸿波) — 5 个后端服务 URL. 中央部署改 IP 时改这.
 endpoints:
-  # 网关地址 — 默认 127.0.0.1:8999 (本机 hermes-gateway).
-  # 内网中央部署改成 e.g. http://10.10.40.50:8999, 客户端不用打包 gateway.
-  # env override: CATFISH_GATEWAY_URL (完整 URL) / CATFISH_GATEWAY_HOST + CATFISH_GATEWAY_PORT
+  # 1) gateway (主 LLM proxy, chat/tools/audit). 默认本机 127.0.0.1:8999.
+  # 中央部署: http://10.10.40.50:8999 或 https://gw.client.com
+  # env override: CATFISH_GATEWAY_URL
   gateway_url: http://127.0.0.1:8999
 
-  # Chrome remote debug (Claude in Chrome plugin 用). 一般本机, 不用动.
+  # 2) secret-broker (员工 SSO 拿 secret, e.g. 邮件密码 / 第三方 API key).
+  # 默认本机 127.0.0.1:8995. 跟 gateway 通常同 host (路由不同 port).
+  # env override: CATFISH_SECRET_BROKER_URL
+  secret_broker_url: http://127.0.0.1:8995
+
+  # 3) mcp-registry (8996) — Companion 自动跟 gateway 共享 host, 不用单独配
+  # 4) skills-hub (8997) — hermes auxiliary 自动走, 不用单独配
+
+  # Chrome remote debug (Claude in Chrome plugin 用). 一般本机.
   # env override: CATFISH_CHROME_DEBUG_HOST + CATFISH_CHROME_DEBUG_PORT
   chrome_debug_url: http://127.0.0.1:9222
 
   # catfish-web 中央门户 (Dashboard "去 web 看 →" 锚点). dev 默认 vite 5173,
-  # 生产建议 nginx 同域 (跟 gateway 同 origin) 或独立 web 服务.
-  # 留空 → 推导 (本机→localhost:5173, 远程→gateway 同 host).
+  # 生产建议 nginx 同域 或独立 web 服务. 留空 → 推导.
   web_url: ""
+
+# 5) identity-server (OIDC issuer, `catfish login` 走这). 默认本机 127.0.0.1:8998.
+# 中央部署 SSO: https://sso.client.com
+# env override: CATFISH_OIDC_ISSUER
+oidc:
+  issuer: http://127.0.0.1:8998
+  client_id: catfish-companion
+  audience: catfish-companion
+  scope: openid email profile

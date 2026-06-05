@@ -20,8 +20,14 @@ pub struct ServerConfig {
     pub gateway_url: String,
     /// catfish-memory plugin → gateway 内部 token (sensitive)
     pub gateway_token: String,
-    /// 当前 token 是否从 env 拿 (yaml 空时回退到 env, UI 真**`提示用 env`** 真)
+    /// 当前 token 是否从 env 拿 (yaml 空时回退到 env)
     pub token_source: String, // "yaml" | "env" | "none"
+    /// P29 (6/5): identity-server URL (OIDC issuer, `catfish login` 走这).
+    /// 读自 ~/.catfish/companion.yaml oidc.issuer 或 env CATFISH_OIDC_ISSUER.
+    pub identity_url: String,
+    /// P29 (6/5): secret-broker URL — 员工 SSO 拿 secret.
+    /// 读自 endpoints.secret_broker_url > env > default localhost:8995.
+    pub secret_broker_url: String,
 }
 
 fn catfish_home() -> Result<PathBuf, String> {
@@ -163,10 +169,30 @@ pub fn read_server_config() -> Result<ServerConfig, String> {
         }
     }
 
+    // P29: identity-server URL (OIDC issuer)
+    let mut identity_url = String::new();
+    if let Ok(text) = fs::read_to_string(&companion) {
+        if let Some(v) = read_yaml_field(&text, "oidc", "issuer") {
+            identity_url = v;
+        }
+    }
+    if identity_url.is_empty() {
+        identity_url = std::env::var("CATFISH_OIDC_ISSUER").unwrap_or_default();
+    }
+    if identity_url.is_empty() {
+        identity_url = "http://127.0.0.1:8998".to_string();
+    }
+
+    // P29: secret-broker URL — 走 endpoints (yaml > env > default)
+    let secret_broker_url = std::env::var("CATFISH_SECRET_BROKER_URL")
+        .unwrap_or_else(|_| crate::services::endpoints::endpoints().secret_broker_base());
+
     Ok(ServerConfig {
         gateway_url: url,
         gateway_token: token,
         token_source: source.to_string(),
+        identity_url,
+        secret_broker_url,
     })
 }
 
@@ -174,6 +200,8 @@ pub fn read_server_config() -> Result<ServerConfig, String> {
 pub fn write_server_config(
     gateway_url: String,
     gateway_token: String,
+    identity_url: Option<String>,
+    secret_broker_url: Option<String>,
 ) -> Result<(), String> {
     let home = catfish_home()?;
     fs::create_dir_all(&home).map_err(|e| format!("建 {home:?} 失败: {e}"))?;
@@ -189,17 +217,50 @@ pub fn write_server_config(
     }
     let url_clean = trimmed_url.trim_end_matches('/');
 
-    // 1. companion.yaml: endpoints.gateway_url
-    let companion_text = fs::read_to_string(&companion).unwrap_or_else(|_| {
+    // 1. companion.yaml: endpoints.gateway_url + (可选) oidc.issuer + endpoints.secret_broker_url
+    let mut companion_text = fs::read_to_string(&companion).unwrap_or_else(|_| {
         "endpoints:\n  gateway_url: http://127.0.0.1:8999\n".to_string()
     });
-    let new_companion = replace_or_insert_yaml_field(
+    companion_text = replace_or_insert_yaml_field(
         &companion_text,
         "endpoints",
         "gateway_url",
         url_clean,
     );
-    fs::write(&companion, new_companion)
+
+    // P29: identity_url → oidc.issuer (oauth.rs 读这)
+    if let Some(id_url) = identity_url.as_ref() {
+        let trimmed = id_url.trim().trim_end_matches('/');
+        if !trimmed.is_empty() {
+            if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+                return Err(format!("identity_url 必须 http:// 或 https:// 开头: {trimmed}"));
+            }
+            companion_text = replace_or_insert_yaml_field(
+                &companion_text,
+                "oidc",
+                "issuer",
+                trimmed,
+            );
+        }
+    }
+
+    // P29: secret_broker_url → endpoints.secret_broker_url
+    if let Some(sb_url) = secret_broker_url.as_ref() {
+        let trimmed = sb_url.trim().trim_end_matches('/');
+        if !trimmed.is_empty() {
+            if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+                return Err(format!("secret_broker_url 必须 http:// 或 https:// 开头: {trimmed}"));
+            }
+            companion_text = replace_or_insert_yaml_field(
+                &companion_text,
+                "endpoints",
+                "secret_broker_url",
+                trimmed,
+            );
+        }
+    }
+
+    fs::write(&companion, companion_text)
         .map_err(|e| format!("写 {companion:?} 失败: {e}"))?;
 
     // 2. memory_plugin.yaml: gateway.url + gateway.token (chmod 600)

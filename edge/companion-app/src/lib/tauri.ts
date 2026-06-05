@@ -234,18 +234,31 @@ export const wikiCreateEntityOrConcept = (args: {
 export const wikiUpdateFile = (relPath: string, content: string) =>
   rawInvoke<WikiWriteResult>("wiki_update_file", { relPath, content });
 
-// P28 (6/5 鸿波): Companion Dashboard 改 gateway URL/token
+// P28 / P29 (6/5 鸿波): Companion Dashboard 改 gateway/identity/secret-broker URL
 export interface ServerConfig {
   gateway_url: string;
   gateway_token: string;
   token_source: "yaml" | "env" | "none";
+  // P29: 5 服务真**`另 2 个独立 URL`** (mcp-registry / skills-hub 共享 gateway/hermes, 不暴露)
+  identity_url: string;
+  secret_broker_url: string;
 }
 
 export const readServerConfig = () =>
   rawInvoke<ServerConfig>("read_server_config");
 
-export const writeServerConfig = (gatewayUrl: string, gatewayToken: string) =>
-  rawInvoke<void>("write_server_config", { gatewayUrl, gatewayToken });
+export const writeServerConfig = (
+  gatewayUrl: string,
+  gatewayToken: string,
+  identityUrl?: string,
+  secretBrokerUrl?: string,
+) =>
+  rawInvoke<void>("write_server_config", {
+    gatewayUrl,
+    gatewayToken,
+    identityUrl,
+    secretBrokerUrl,
+  });
 
 // ── BL-E27 spike: 桌宠副窗 ─────────────────────────────────
 export const petShow = () => rawInvoke<void>("pet_show");

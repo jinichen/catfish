@@ -23,6 +23,8 @@ export default function ServerConfigCard() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [draftUrl, setDraftUrl] = useState("");
+  const [draftIdentity, setDraftIdentity] = useState("");
+  const [draftSecretBroker, setDraftSecretBroker] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -35,6 +37,8 @@ export default function ServerConfigCard() {
         if (!alive) return;
         setCfg(c);
         setDraftUrl(c.gateway_url);
+        setDraftIdentity(c.identity_url);
+        setDraftSecretBroker(c.secret_broker_url);
       })
       .catch((e) => {
         if (!alive) return;
@@ -51,6 +55,8 @@ export default function ServerConfigCard() {
   const startEdit = () => {
     if (!cfg) return;
     setDraftUrl(cfg.gateway_url);
+    setDraftIdentity(cfg.identity_url);
+    setDraftSecretBroker(cfg.secret_broker_url);
     setEditing(true);
     setErr(null);
     setSaved(false);
@@ -69,12 +75,21 @@ export default function ServerConfigCard() {
       if (!/^https?:\/\//.test(url)) {
         throw new Error("gateway URL 必须 http:// 或 https:// 开头");
       }
-      // Internal Token 砍了, 写 yaml 时保留原 token (caller token 参数仍要传给 Tauri command)
+      const idUrl = draftIdentity.trim().replace(/\/+$/, "");
+      if (idUrl && !/^https?:\/\//.test(idUrl)) {
+        throw new Error("identity URL 必须 http:// 或 https:// 开头");
+      }
+      const sbUrl = draftSecretBroker.trim().replace(/\/+$/, "");
+      if (sbUrl && !/^https?:\/\//.test(sbUrl)) {
+        throw new Error("secret-broker URL 必须 http:// 或 https:// 开头");
+      }
       const keepToken = cfg?.gateway_token || "";
-      await writeServerConfig(url, keepToken);
+      await writeServerConfig(url, keepToken, idUrl || undefined, sbUrl || undefined);
       const fresh = await readServerConfig();
       setCfg(fresh);
       setDraftUrl(fresh.gateway_url);
+      setDraftIdentity(fresh.identity_url);
+      setDraftSecretBroker(fresh.secret_broker_url);
       setEditing(false);
       setSaved(true);
       setTimeout(() => setSaved(false), 6000);
@@ -131,6 +146,46 @@ export default function ServerConfigCard() {
           <code style={codeStyle}>{cfg?.gateway_url}</code>
         )}
       </Row>
+
+      {/* P29: Identity (OIDC) URL — catfish login 走这 */}
+      <Row label="Identity URL">
+        {editing ? (
+          <input
+            value={draftIdentity}
+            onChange={(e) => setDraftIdentity(e.target.value)}
+            placeholder="http://127.0.0.1:8998"
+            style={inputStyle}
+          />
+        ) : (
+          <code style={codeStyle}>{cfg?.identity_url || "(默认)"}</code>
+        )}
+      </Row>
+
+      {/* P29: Secret Broker URL — 员工 SSO 拿 secret */}
+      <Row label="Secret Broker URL">
+        {editing ? (
+          <input
+            value={draftSecretBroker}
+            onChange={(e) => setDraftSecretBroker(e.target.value)}
+            placeholder="http://127.0.0.1:8995"
+            style={inputStyle}
+          />
+        ) : (
+          <code style={codeStyle}>{cfg?.secret_broker_url || "(默认)"}</code>
+        )}
+      </Row>
+
+      <div
+        style={{
+          fontSize: 10,
+          color: "var(--catfish-text-muted)",
+          marginTop: 6,
+          marginBottom: 8,
+        }}
+      >
+        其它 2 服务 (mcp-registry 8996 / skills-hub 8997) 共享 gateway / hermes,
+        无需单独配.
+      </div>
 
       {/* 3 类 token 说明 — 员工自己不在 UI 配, 但要知道各自在哪 */}
       <details
