@@ -204,3 +204,37 @@ models:
     recommended_for: [fast, cheap, general, bulk]
     cost_tier: paid
 
+
+# ============================================================
+# P31 (6/5 鸿波) — mcp-registry / skills-hub reverse proxy upstream
+# ============================================================
+# gateway 接 /v1/mcp/* 和 /v1/hub/* 路径反向代理到 2 个独立 service.
+# 部署模式 (3 选 1):
+#
+#   A. 单机部署 (个人 / 小客户 / dev):
+#      gateway + mcp-registry + skills-hub 都跑本机, 走 127.0.0.1 默认.
+#      此段可不写, Pydantic field default 兜底.
+#
+#   B. 同主机多 service (中小客户):
+#      docker-compose / systemd 起 3 服务在同 host. 内部 loopback 通信,
+#      仍走 127.0.0.1, 此段可不写.
+#
+#   C. 跨主机 (大客户 / k8s):
+#      gateway 1 台机, mcp-registry / skills-hub 各自独立机 (或 k8s
+#      不同 pod). admin 必须改 upstream_url 指向真实位置.
+#      e.g.:
+#        upstream_url: http://mcp-registry.catfish.svc.cluster.local:8996
+#        upstream_url: http://10.10.40.51:8997    # 内网 IP
+#        upstream_url: http://hub.client.lan      # 域名 + nginx 反代 443
+#
+# enabled=false 临时关掉某段 (e.g. 客户没买 skills-hub).
+
+mcp_registry:
+  upstream_url: http://127.0.0.1:8996
+  enabled: true
+  timeout: 10  # 秒, registry 操作快, 10s 够
+
+skills_hub:
+  upstream_url: http://127.0.0.1:8997
+  enabled: true
+  timeout: 30  # 秒, publish multipart 可能稍慢, 给 30s
