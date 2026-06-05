@@ -5,11 +5,12 @@
  * 顶部 frontmatter metadata 块 (title / type / tags / related / sources / mtime).
  */
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useWikiStore } from "../../store/wiki";
 import { topKRelated } from "../../lib/wikiRelevance";
+import { wikiUpdateFile } from "../../lib/tauri";
 
 export default function WikiPreview() {
   const selectedFile = useWikiStore((s) => s.selectedFile);
@@ -17,6 +18,53 @@ export default function WikiPreview() {
   const selectedError = useWikiStore((s) => s.selectedError);
   const files = useWikiStore((s) => s.files);
   const selectFile = useWikiStore((s) => s.selectFile);
+  const loadFiles = useWikiStore((s) => s.loadFiles);
+
+  // P35 (6/5 鸿波): inline 编辑器 state. editing=true 时 body 渲染 textarea.
+  const [editing, setEditing] = useState(false);
+  const [draftBody, setDraftBody] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+
+  // selectedFile 切换时 reset edit state
+  useEffect(() => {
+    setEditing(false);
+    setSaveErr(null);
+    if (selectedFile) {
+      setDraftBody(selectedFile.body);
+    }
+  }, [selectedFile?.info.rel_path]);
+
+  const startEdit = () => {
+    if (!selectedFile) return;
+    setDraftBody(selectedFile.body);
+    setEditing(true);
+    setSaveErr(null);
+  };
+
+  const cancelEdit = () => {
+    setEditing(false);
+    setSaveErr(null);
+  };
+
+  const saveEdit = async () => {
+    if (!selectedFile) return;
+    setSaving(true);
+    setSaveErr(null);
+    try {
+      // 拼 full content: --- frontmatter --- + body
+      const fm = selectedFile.frontmatter.trim();
+      const content = `---\n${fm}\n---\n\n${draftBody}\n`;
+      await wikiUpdateFile(selectedFile.info.rel_path, content);
+      await loadFiles();
+      await selectFile(selectedFile.info.rel_path); // 重 fetch 看新 body
+      setEditing(false);
+    } catch (e) {
+      setSaveErr(String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   // wikilink → 替换 真**custom html marker**, react-markdown 透传
   const rendered = useMemo(() => {
@@ -158,7 +206,102 @@ export default function WikiPreview() {
       {/* P3.2 4 信号 相关推荐 — 渲染 in body 前, 真**bottom 真**真**先 build top-K** */}
       <RelatedRecommend info={info} />
 
-      {/* markdown body */}
+      {/* P35 (6/5): 编辑 toggle + action bar */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "flex-end",
+          gap: 8,
+          marginBottom: 8,
+          alignItems: "center",
+        }}
+      >
+        {!editing && (
+          <button
+            onClick={startEdit}
+            style={{
+              background: "transparent",
+              border: "1px solid var(--catfish-border)",
+              color: "var(--catfish-text)",
+              borderRadius: 4,
+              padding: "4px 12px",
+              fontSize: 12,
+              cursor: "pointer",
+            }}
+            title="编辑 body markdown"
+          >
+            ✏️ 编辑
+          </button>
+        )}
+        {editing && (
+          <>
+            <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginRight: 8 }}>
+              ⚠️ frontmatter 不动, 改 body
+            </span>
+            <button
+              onClick={saveEdit}
+              disabled={saving}
+              style={{
+                background: "var(--catfish-teal, #0d9488)",
+                border: "1px solid var(--catfish-teal, #0d9488)",
+                color: "#fff",
+                borderRadius: 4,
+                padding: "4px 14px",
+                fontSize: 12,
+                cursor: "pointer",
+                fontWeight: 500,
+              }}
+            >
+              {saving ? "保存中…" : "💾 保存"}
+            </button>
+            <button
+              onClick={cancelEdit}
+              disabled={saving}
+              style={{
+                background: "transparent",
+                border: "1px solid var(--catfish-border)",
+                color: "var(--catfish-text)",
+                borderRadius: 4,
+                padding: "4px 12px",
+                fontSize: 12,
+                cursor: "pointer",
+              }}
+            >
+              取消
+            </button>
+          </>
+        )}
+      </div>
+
+      {saveErr && (
+        <div style={{ color: "var(--status-err)", fontSize: 12, marginBottom: 8 }}>
+          ✗ 保存失败: {saveErr}
+        </div>
+      )}
+
+      {/* P35 (6/5): editing → textarea; 否则 → markdown */}
+      {editing ? (
+        <textarea
+          value={draftBody}
+          onChange={(e) => setDraftBody(e.target.value)}
+          spellCheck={false}
+          style={{
+            width: "100%",
+            minHeight: 400,
+            padding: 12,
+            fontFamily: "var(--font-mono)",
+            fontSize: 13,
+            lineHeight: 1.6,
+            border: "1px solid var(--catfish-border)",
+            borderRadius: 6,
+            background: "var(--catfish-bg)",
+            color: "var(--catfish-text)",
+            boxSizing: "border-box",
+            resize: "vertical",
+          }}
+        />
+      ) : (
+      /* markdown body */
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
@@ -196,6 +339,7 @@ export default function WikiPreview() {
       >
         {rendered}
       </ReactMarkdown>
+      )}
     </div>
   );
 }
