@@ -66,18 +66,37 @@ export default function WikiPreview() {
     }
   };
 
+  // P39 (6/5 鸿波): 变更历史 collapsible — 检测 body 末尾 "## 变更历史" 段 (P19 LLM
+  // merge 真自动生成 真**`section**`), 拆 main body + history section. UI 默认 collapsed.
+  const { mainBody, historyBody } = useMemo(() => {
+    if (!selectedFile) return { mainBody: "", historyBody: "" };
+    const body = selectedFile.body;
+    // 匹配 "## 变更历史" 或 "## 变更日志" / "## Changelog" — 兼容 LLM 生成的不同标题
+    const re = /^(##\s+(?:变更历史|变更日志|更新历史|Changelog|Change Log)\s*)$/im;
+    const match = body.match(re);
+    if (!match || match.index === undefined) {
+      return { mainBody: body, historyBody: "" };
+    }
+    return {
+      mainBody: body.slice(0, match.index).trimEnd(),
+      historyBody: body.slice(match.index),
+    };
+  }, [selectedFile]);
+
   // wikilink → 替换 真**custom html marker**, react-markdown 透传
   const rendered = useMemo(() => {
     if (!selectedFile) return "";
     // [[name]] → 真**special token <wikilink:name>**真**真**真 ReactMarkdown 真**真**components.a 真**hook**真**或** custom regex 处理
-    return selectedFile.body.replace(
+    return mainBody.replace(
       /\[\[([^\]|]+?)(?:\|([^\]]+?))?\]\]/g,
       (_match, name, alias) => {
         const display = alias || name;
         return `[${display}](catfish-wikilink://${encodeURIComponent(name)})`;
       }
     );
-  }, [selectedFile]);
+  }, [mainBody, selectedFile]);
+
+  const [showHistory, setShowHistory] = useState(false);
 
   function handleWikilinkClick(name: string) {
     // 找 title / slug match 真 file
@@ -339,6 +358,34 @@ export default function WikiPreview() {
       >
         {rendered}
       </ReactMarkdown>
+      )}
+
+      {/* P39 (6/5 鸿波): 变更历史 collapsible — P19 LLM merge 真生 真 ## 变更历史 段. */}
+      {!editing && historyBody && (
+        <div style={{ marginTop: 16, borderTop: "1px dashed var(--catfish-border)", paddingTop: 12 }}>
+          <button
+            onClick={() => setShowHistory(!showHistory)}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "var(--catfish-text-muted)",
+              fontSize: 12,
+              cursor: "pointer",
+              padding: 0,
+              fontWeight: 500,
+            }}
+          >
+            {showHistory ? "▼" : "▶"} 📜 变更历史
+            <span style={{ marginLeft: 6, fontSize: 10, opacity: 0.7 }}>
+              (LLM merge 真自动记录)
+            </span>
+          </button>
+          {showHistory && (
+            <div style={{ marginTop: 8, fontSize: 12, opacity: 0.85 }}>
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{historyBody}</ReactMarkdown>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

@@ -539,6 +539,8 @@ pub fn run() {
             // BL-CATFISH-WIKI-MODE P3.3.2 (6/4): wiki read API
             commands::wiki_read::wiki_list_files,
             commands::wiki_read::wiki_read_file,
+            // P37 (6/5): wiki 全文搜索 (BM25 score)
+            commands::wiki_read::wiki_search_text,
             // BL-CATFISH-WIKI-MODE P3.3.7 (6/4): wiki write API
             commands::wiki_write::wiki_create_entity_or_concept,
             commands::wiki_write::wiki_update_file,

@@ -187,6 +187,131 @@ pub async fn wiki_list_files() -> Result<Vec<WikiFileInfo>, String> {
     Ok(out)
 }
 
+// ============================================================
+// P37 (6/5 鸿波) — wiki 全文搜索 (BM25 + scoring)
+// ============================================================
+
+#[derive(Debug, serde::Serialize)]
+pub struct WikiSearchHit {
+    pub rel_path: String,
+    pub title: String,
+    pub kind: String,
+    pub score: f64,
+    /// matched body snippet (~120 chars 含 query, 高亮 in UI)
+    pub snippet: String,
+    /// match locations: "title" / "body" / "tags"
+    pub matched_in: Vec<String>,
+}
+
+/// 简化 BM25: 1) title 完全 match score +10; 2) title contains +5;
+/// 3) body word count for each query token; 4) tag match +3.
+/// 不是真 BM25 (没 doc freq / length norm), 但够 1000 entries 内 work.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn wiki_search_text(query: String) -> Result<Vec<WikiSearchHit>, String> {
+    let q = query.trim().to_lowercase();
+    if q.is_empty() {
+        return Ok(vec![]);
+    }
+    let home = catfish_home()?;
+    let mut hits: Vec<WikiSearchHit> = Vec::new();
+    let tokens: Vec<&str> = q.split_whitespace().collect();
+
+    for sub in &["wiki/entities", "wiki/concepts", "wiki/queries"] {
+        let dir = home.join(sub);
+        if !dir.is_dir() {
+            continue;
+        }
+        let entries = fs::read_dir(&dir)
+            .map_err(|e| format!("read_dir {dir:?} 失败: {e}"))?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("md") {
+                continue;
+            }
+            let info = match build_file_info(&home, &path) {
+                Some(i) => i,
+                None => continue,
+            };
+            let content = match fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            let content_lower = content.to_lowercase();
+            let title_lower = info.title.to_lowercase();
+            let tags_lower: Vec<String> = info.tags.iter().map(|t| t.to_lowercase()).collect();
+
+            let mut score = 0.0f64;
+            let mut matched_in: Vec<String> = Vec::new();
+            let mut hit_pos: Option<usize> = None;
+
+            // title match
+            if title_lower == q {
+                score += 20.0;
+                matched_in.push("title".into());
+            } else if title_lower.contains(&q) {
+                score += 10.0;
+                matched_in.push("title".into());
+            }
+            // tag match (任一 tag 含 query)
+            if tags_lower.iter().any(|t| t.contains(&q)) {
+                score += 5.0;
+                matched_in.push("tags".into());
+            }
+            // body: 每 token 出现次数
+            for tok in &tokens {
+                if tok.is_empty() {
+                    continue;
+                }
+                let count = content_lower.matches(tok).count();
+                if count > 0 {
+                    score += (count as f64).min(10.0);
+                    if hit_pos.is_none() {
+                        hit_pos = content_lower.find(tok);
+                    }
+                }
+            }
+            if hit_pos.is_some() && !matched_in.contains(&"body".to_string()) {
+                matched_in.push("body".into());
+            }
+            if score <= 0.0 {
+                continue;
+            }
+
+            // snippet: 含 hit_pos 真**`±60 chars`**, 没 hit_pos 用 body 前 120
+            let snippet = if let Some(pos) = hit_pos {
+                let start = pos.saturating_sub(60);
+                let end = (pos + 60).min(content.len());
+                // 安全 slice (按 char boundary)
+                let safe_slice = content
+                    .char_indices()
+                    .filter(|(i, _)| *i >= start && *i < end)
+                    .map(|(_, c)| c)
+                    .collect::<String>();
+                format!("…{}…", safe_slice.replace('\n', " "))
+            } else {
+                content
+                    .chars()
+                    .take(120)
+                    .collect::<String>()
+                    .replace('\n', " ")
+            };
+
+            hits.push(WikiSearchHit {
+                rel_path: info.rel_path.clone(),
+                title: info.title.clone(),
+                kind: info.kind.clone(),
+                score,
+                snippet,
+                matched_in,
+            });
+        }
+    }
+    // 高 score 优先
+    hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    hits.truncate(50); // top-50 cap
+    Ok(hits)
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub async fn wiki_read_file(rel_path: String) -> Result<WikiFileFull, String> {
     // 真**安全**: rel_path 必须 `wiki/{entities|concepts|queries}/<slug>.md`,

@@ -211,6 +211,19 @@ export interface WikiFileFull {
   body: string;
 }
 
+// P37 (6/5 鸿波): wiki 全文搜索 — BM25 + title/tag scoring
+export interface WikiSearchHit {
+  rel_path: string;
+  title: string;
+  kind: string;
+  score: number;
+  snippet: string;
+  matched_in: string[];
+}
+
+export const wikiSearchText = (query: string) =>
+  rawInvoke<WikiSearchHit[]>("wiki_search_text", { query });
+
 export const wikiListFiles = () => rawInvoke<WikiFileInfo[]>("wiki_list_files");
 export const wikiReadFile = (relPath: string) =>
   rawInvoke<WikiFileFull>("wiki_read_file", { relPath });

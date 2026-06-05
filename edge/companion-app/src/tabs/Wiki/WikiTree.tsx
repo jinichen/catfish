@@ -27,6 +27,33 @@ export default function WikiTree() {
   const setSelectedTag = useWikiStore((s) => s.setSelectedTag);
   const [showCreate, setShowCreate] = useState(false);
 
+  // P37 (6/5 鸿波): 全文搜模式 + Tauri wiki_search_text 结果
+  const [bodySearch, setBodySearch] = useState(false);
+  const [searchHits, setSearchHits] = useState<import("../../lib/tauri").WikiSearchHit[]>([]);
+  const [searching, setSearching] = useState(false);
+
+  // 全文搜 debounce 300ms
+  useEffect(() => {
+    if (!bodySearch || !search.trim()) {
+      setSearchHits([]);
+      return;
+    }
+    const handle = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const { wikiSearchText } = await import("../../lib/tauri");
+        const hits = await wikiSearchText(search);
+        setSearchHits(hits);
+      } catch (e) {
+        console.warn("[wiki search] 失败:", e);
+        setSearchHits([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [search, bodySearch]);
+
   // P17 (6/5 鸿波): 切到知识体系 tab 立即 reload (App.tsx 真`activeTab === 'wiki'
   // && <WikiTab/>` 真 conditional render — 切走 unmount, 切回 mount 跑这 effect).
   // 不用 cache expiry — 鸿波要求即刻刷新, 防 LLM 外部 write_file 后 list 老.
@@ -167,22 +194,47 @@ export default function WikiTree() {
 
       {showCreate && <WikiCreateModal onClose={() => setShowCreate(false)} />}
 
-      <input
-        type="text"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="搜索 title / slug..."
-        style={{
-          width: "100%",
-          padding: "6px 8px",
-          fontSize: 12,
-          border: "1px solid var(--catfish-border)",
-          borderRadius: 4,
-          marginBottom: "var(--space-2)",
-          background: "var(--catfish-bg)",
-          color: "var(--catfish-text)",
-        }}
-      />
+      <div style={{ position: "relative", marginBottom: "var(--space-2)" }}>
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder={bodySearch ? "搜索全文 body..." : "搜索 title / slug..."}
+          style={{
+            width: "100%",
+            padding: "6px 8px",
+            paddingRight: 64,
+            fontSize: 12,
+            border: "1px solid var(--catfish-border)",
+            borderRadius: 4,
+            background: "var(--catfish-bg)",
+            color: "var(--catfish-text)",
+            boxSizing: "border-box",
+          }}
+        />
+        {/* P37 (6/5 鸿波): 全文搜 toggle 嵌入 search box 真 — 默认关 (title/slug);
+            开 = 全文 BM25 grep, 结果显在下方 list. */}
+        <button
+          onClick={() => setBodySearch(!bodySearch)}
+          title={bodySearch ? "切回 title / slug 搜索" : "切到 全文 (body grep)"}
+          style={{
+            position: "absolute",
+            right: 4,
+            top: "50%",
+            transform: "translateY(-50%)",
+            background: bodySearch ? "var(--catfish-teal, #0d9488)" : "transparent",
+            border: "1px solid var(--catfish-border)",
+            color: bodySearch ? "#fff" : "var(--catfish-text-muted)",
+            borderRadius: 3,
+            padding: "2px 6px",
+            fontSize: 10,
+            cursor: "pointer",
+            fontWeight: bodySearch ? 600 : 400,
+          }}
+        >
+          全文
+        </button>
+      </div>
 
       <div style={{ display: "flex", gap: 4, marginBottom: "var(--space-2)" }}>
         {(["all", "entity", "concept", "query"] as const).map((k) => (
@@ -264,9 +316,23 @@ export default function WikiTree() {
         <EmptyOnboarding onCreateClick={() => setShowCreate(true)} />
       )}
 
-      <Group label="实体 (entities)" emoji="🧑" color="#4a9eff" files={grouped.entity} selectedPath={selectedPath} onSelect={selectFile} />
-      <Group label="概念 (concepts)" emoji="📐" color="#ff9933" files={grouped.concept} selectedPath={selectedPath} onSelect={selectFile} />
-      <Group label="查询 (queries)" emoji="💬" color="#5fc878" files={grouped.query} selectedPath={selectedPath} onSelect={selectFile} />
+      {/* P37 (6/5 鸿波): 全文搜模式 → search hits 列表替 group tree */}
+      {bodySearch && search.trim() && (
+        <SearchResults
+          hits={searchHits}
+          searching={searching}
+          selectedPath={selectedPath}
+          onSelect={selectFile}
+        />
+      )}
+
+      {!(bodySearch && search.trim()) && (
+        <>
+          <Group label="实体 (entities)" emoji="🧑" color="#4a9eff" files={grouped.entity} selectedPath={selectedPath} onSelect={selectFile} />
+          <Group label="概念 (concepts)" emoji="📐" color="#ff9933" files={grouped.concept} selectedPath={selectedPath} onSelect={selectFile} />
+          <Group label="查询 (queries)" emoji="💬" color="#5fc878" files={grouped.query} selectedPath={selectedPath} onSelect={selectFile} />
+        </>
+      )}
     </div>
   );
 }
@@ -327,6 +393,85 @@ function Group({
       </ul>
     </div>
   );
+}
+
+/** P37 (6/5 鸿波) — 全文搜 results list (替 group tree). */
+function SearchResults({
+  hits,
+  searching,
+  selectedPath,
+  onSelect,
+}: {
+  hits: import("../../lib/tauri").WikiSearchHit[];
+  searching: boolean;
+  selectedPath: string | null;
+  onSelect: (relPath: string) => Promise<void>;
+}) {
+  if (searching && hits.length === 0) {
+    return (
+      <div style={{ color: "var(--catfish-text-muted)", fontSize: 11, padding: 8 }}>
+        🔍 搜索中…
+      </div>
+    );
+  }
+  if (hits.length === 0) {
+    return (
+      <div style={{ color: "var(--catfish-text-muted)", fontSize: 11, padding: 8 }}>
+        没匹配 (title / body / tags 都试过)
+      </div>
+    );
+  }
+  return (
+    <div style={{ marginTop: "var(--space-2)" }}>
+      <div style={{ fontSize: 10, color: "var(--catfish-text-muted)", marginBottom: 4 }}>
+        🔍 全文搜 — {hits.length} 个结果
+      </div>
+      <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+        {hits.map((h) => (
+          <li
+            key={h.rel_path}
+            onClick={() => void onSelect(h.rel_path)}
+            style={{
+              padding: "6px 8px",
+              marginBottom: 4,
+              cursor: "pointer",
+              borderRadius: 4,
+              fontSize: 11,
+              background:
+                selectedPath === h.rel_path ? "var(--catfish-bg-elevated, rgba(0,0,0,0.05))" : "transparent",
+              borderLeft: `2px solid ${kindColor(h.kind)}`,
+            }}
+          >
+            <div style={{ fontWeight: 600, marginBottom: 2 }}>
+              {kindEmoji(h.kind)} {h.title}
+              <span style={{ marginLeft: 6, fontSize: 9, color: "var(--catfish-text-muted)", fontWeight: 400 }}>
+                {h.matched_in.join(" · ")} · {h.score.toFixed(1)}
+              </span>
+            </div>
+            <div
+              style={{
+                color: "var(--catfish-text-muted)",
+                fontSize: 10,
+                lineHeight: 1.4,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              {h.snippet}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function kindColor(k: string): string {
+  return k === "entity" ? "#4a9eff" : k === "concept" ? "#ff9933" : "#5fc878";
+}
+function kindEmoji(k: string): string {
+  return k === "entity" ? "🧑" : k === "concept" ? "📐" : "💬";
 }
 
 /** P36 (6/5 鸿波) — 知识体系 tab 空状态 onboarding.
