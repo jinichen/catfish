@@ -38,9 +38,61 @@ import 阶段就跑 _verify_patch_targets() — 看每个 patch 引用的 attrib
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
+from urllib.parse import urlparse
 
 logger = logging.getLogger("catfish.xcatfish_user.plugin")
+
+
+# ── P29 (6/5 鸿波) — gateway URL detection helper ─────────────────────────
+#
+# 商用部署改 IP 时 base_url 会变 (e.g. http://10.10.40.50:8999), 之前 P3/P10
+# 硬编码 "localhost:8999" / "127.0.0.1:8999" 字符串匹配 → 中央部署检测不到 →
+# X-Catfish-User 跨员工 header 不注入 → 跨员工数据 P0 风险.
+#
+# helper: 走 env CATFISH_GATEWAY_URL (跟 Companion / catfish-memory 同名) 解析
+# host:port → 跟 base_url host:port 比. 兼容老硬编码 default (localhost:8999).
+# host + port 都 match 才算同一 gateway (防别人也起 8999 端口被误判).
+
+def _get_catfish_gateway_host_port() -> set[tuple[str, int]]:
+    """返当前 catfish-gateway 真**`(host, port)`** 真集合 (兼容多默认).
+
+    包括: env CATFISH_GATEWAY_URL 解析出 + 老硬编码默认 (localhost:8999 +
+    127.0.0.1:8999). 多 default 防员工只设 host 不设 port 时漏配.
+    """
+    hosts_ports: set[tuple[str, int]] = {
+        ("localhost", 8999),
+        ("127.0.0.1", 8999),
+    }
+    env_url = os.environ.get("CATFISH_GATEWAY_URL", "").strip()
+    if env_url:
+        try:
+            parsed = urlparse(env_url if "://" in env_url else f"http://{env_url}")
+            if parsed.hostname and parsed.port:
+                hosts_ports.add((parsed.hostname.lower(), parsed.port))
+        except Exception:  # noqa: BLE001
+            pass
+    return hosts_ports
+
+
+def _is_catfish_gateway_base_url(base_url: str) -> bool:
+    """base_url 真是不是 catfish-gateway (P3 / P10 真**`X-Catfish-User`** header 注入判断).
+
+    走 _get_catfish_gateway_host_port() 真 set, 比 host + port. 失败 fallback
+    走老 "localhost:8999 / 127.0.0.1:8999" 字符串匹配 (兼容性).
+    """
+    if not base_url:
+        return False
+    try:
+        parsed = urlparse(base_url if "://" in base_url else f"http://{base_url}")
+        if parsed.hostname and parsed.port:
+            return (parsed.hostname.lower(), parsed.port) in _get_catfish_gateway_host_port()
+    except Exception:  # noqa: BLE001
+        pass
+    # fallback: 字符串包含 (老硬编码兼容, 中央部署不 work 但至少 dev 仍 work)
+    bu = base_url.lower()
+    return "localhost:8999" in bu or "127.0.0.1:8999" in bu
 
 
 def _import_sibling(module_name: str):
@@ -324,8 +376,10 @@ def _patch_p3_auxiliary_client() -> None:
             cf_user = (runtime.get("catfish_outgoing_user") or "").strip()
             if not cf_user:
                 return client, model
-            base_url = str(getattr(client, "base_url", "") or "").lower()
-            if "localhost:8999" not in base_url and "127.0.0.1:8999" not in base_url:
+            base_url = str(getattr(client, "base_url", "") or "")
+            # P29 (6/5): 走 _is_catfish_gateway_base_url 真 env-aware 检测,
+            # 不再硬编码 localhost:8999 字符串 (中央部署 IP 会变)真.
+            if not _is_catfish_gateway_base_url(base_url):
                 return client, model
             cls = type(client)
             if cls.__name__ not in ("OpenAI", "AsyncOpenAI"):
@@ -871,8 +925,8 @@ def _patch_p10_apply_client_headers_localhost() -> None:
     _orig = AIAgent._apply_client_headers_for_base_url
 
     def patched(self, base_url: str) -> None:
-        bu = (base_url or "").lower()
-        if "localhost:8999" in bu or "127.0.0.1:8999" in bu:
+        # P29 (6/5): env-aware gateway 检测, 不再硬编码 localhost:8999.
+        if _is_catfish_gateway_base_url(base_url or ""):
             cf_user = resolver.resolve_for_agent(self)
             if cf_user:
                 self._client_kwargs["default_headers"] = {"X-Catfish-User": cf_user}

@@ -1,7 +1,14 @@
-/** P28 (6/5 鸿波) — Dashboard 卡 — 改 gateway URL/token.
+/** P28 (6/5 鸿波) — Dashboard 卡 — 改 gateway URL.
  *
  * 商用部署员工不会 vim ~/.catfish/*.yaml. 这卡读 ~/.catfish/companion.yaml +
- * memory_plugin.yaml 真**gateway 字段**, UI 改完写回去 + 提示 reload.
+ * memory_plugin.yaml 真**gateway.url 字段**, UI 改完写回去 + 提示 reload.
+ *
+ * 砍 Internal Token UI (6/5 audit fix): token 是 server admin 工具 (catfish gateway
+ * 内部 dev token), 员工填了客户端也没用 — gateway validator 不认这值. 员工真正
+ * 关心 3 类 token 都不在这里:
+ *   - hermes-cli JWT: `catfish login` 自动写 ~/.hermes/config.yaml
+ *   - dev token: server admin 配置 + .env 自动生成
+ *   - provider keys: server 端配 (OpenAI/DeepSeek/...)
  *
  * 不 hot-reload: yaml 文件 plugin/Companion 启动时读一次. 改完要:
  *   - 重启 Companion (前端读 companion.yaml)
@@ -16,11 +23,9 @@ export default function ServerConfigCard() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [draftUrl, setDraftUrl] = useState("");
-  const [draftToken, setDraftToken] = useState("");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  const [showToken, setShowToken] = useState(false);
 
   // 初次加载
   useEffect(() => {
@@ -30,7 +35,6 @@ export default function ServerConfigCard() {
         if (!alive) return;
         setCfg(c);
         setDraftUrl(c.gateway_url);
-        setDraftToken(c.token_source === "env" ? "" : c.gateway_token);
       })
       .catch((e) => {
         if (!alive) return;
@@ -47,8 +51,6 @@ export default function ServerConfigCard() {
   const startEdit = () => {
     if (!cfg) return;
     setDraftUrl(cfg.gateway_url);
-    // env 来源的 token 不预填 (不让 yaml 覆盖 env), 留空表示"不动"
-    setDraftToken(cfg.token_source === "env" ? "" : cfg.gateway_token);
     setEditing(true);
     setErr(null);
     setSaved(false);
@@ -67,20 +69,14 @@ export default function ServerConfigCard() {
       if (!/^https?:\/\//.test(url)) {
         throw new Error("gateway URL 必须 http:// 或 https:// 开头");
       }
-      // 空 token + env 来源 → 保持 env (不写 yaml), 否则用 draft
-      const tokenToWrite =
-        cfg?.token_source === "env" && !draftToken.trim()
-          ? cfg.gateway_token  // 把 env 真值写进 yaml 当 fallback (env 没了也 work)
-          : draftToken.trim();
-      await writeServerConfig(url, tokenToWrite);
-      // 重读, 状态对齐
+      // Internal Token 砍了, 写 yaml 时保留原 token (caller token 参数仍要传给 Tauri command)
+      const keepToken = cfg?.gateway_token || "";
+      await writeServerConfig(url, keepToken);
       const fresh = await readServerConfig();
       setCfg(fresh);
       setDraftUrl(fresh.gateway_url);
-      setDraftToken(fresh.token_source === "env" ? "" : fresh.gateway_token);
       setEditing(false);
       setSaved(true);
-      // 3 秒后清 saved 提示
       setTimeout(() => setSaved(false), 6000);
     } catch (e) {
       setErr(String(e));
@@ -118,7 +114,8 @@ export default function ServerConfigCard() {
           marginBottom: 12,
         }}
       >
-        gateway 地址 + 内部 token. 改完重启 hermes-gateway + Companion 生效.
+        gateway 地址 — 改成中央部署 IP (e.g. http://10.10.40.50:8999) 后, Companion
+        + catfish-memory plugin 都走中央 gateway. 改完重启 hermes-gateway + Companion 生效.
       </div>
 
       {/* gateway URL */}
@@ -135,58 +132,38 @@ export default function ServerConfigCard() {
         )}
       </Row>
 
-      {/* token */}
-      <Row label="Internal Token">
-        {editing ? (
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <input
-              type={showToken ? "text" : "password"}
-              value={draftToken}
-              onChange={(e) => setDraftToken(e.target.value)}
-              placeholder={
-                cfg?.token_source === "env"
-                  ? "(env 已设, 留空保持; 填则覆盖)"
-                  : cfg?.token_source === "yaml"
-                    ? "(已存)"
-                    : "粘贴 CATFISH_INTERNAL_DEV_TOKEN"
-              }
-              style={{ ...inputStyle, fontFamily: "var(--font-mono)" }}
-            />
-            <button
-              onClick={() => setShowToken(!showToken)}
-              style={{ ...smallBtn, padding: "3px 8px" }}
-            >
-              {showToken ? "藏" : "看"}
-            </button>
+      {/* 3 类 token 说明 — 员工自己不在 UI 配, 但要知道各自在哪 */}
+      <details
+        style={{
+          marginTop: 16,
+          fontSize: 11,
+          color: "var(--catfish-text-muted)",
+        }}
+      >
+        <summary style={{ cursor: "pointer", userSelect: "none" }}>
+          token 在哪? (3 类不在这卡里配)
+        </summary>
+        <div style={{ marginTop: 8, paddingLeft: 12, lineHeight: 1.7 }}>
+          <div>
+            <b>1. 登录 token</b> (JWT, Companion / hermes chat → gateway):
+            <br />
+            自动管, 终端跑 <code style={inlineCodeStyle}>catfish login</code> 刷新.
+            存 <code style={inlineCodeStyle}>~/.hermes/config.yaml</code>.
           </div>
-        ) : (
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <code style={codeStyle}>
-              {cfg?.gateway_token
-                ? showToken
-                  ? cfg.gateway_token
-                  : "•••••••• (" + cfg.gateway_token.length + " 字符)"
-                : "(空)"}
-            </code>
-            {cfg?.gateway_token && (
-              <button
-                onClick={() => setShowToken(!showToken)}
-                style={{ ...smallBtn, padding: "2px 6px", fontSize: 10 }}
-              >
-                {showToken ? "藏" : "看"}
-              </button>
-            )}
-            <span
-              style={{
-                fontSize: 10,
-                color: "var(--catfish-text-muted)",
-              }}
-            >
-              来源: {tokenSourceLabel(cfg?.token_source)}
-            </span>
+          <div style={{ marginTop: 6 }}>
+            <b>2. 内部 dev token</b> (plugin → gateway, distill / wiki 后台调用):
+            <br />
+            server 端自动生成 + 同步本机. 员工不用手填.
+            存 <code style={inlineCodeStyle}>~/.catfish/memory_plugin.yaml</code>{" "}
+            或 env <code style={inlineCodeStyle}>CATFISH_INTERNAL_DEV_TOKEN</code>.
           </div>
-        )}
-      </Row>
+          <div style={{ marginTop: 6 }}>
+            <b>3. 上游 LLM API key</b> (gateway → OpenAI/DeepSeek/Gemini/...):
+            <br />
+            server admin 配, 员工本机看不到.
+          </div>
+        </div>
+      </details>
 
       {/* action bar */}
       {editing && (
@@ -271,17 +248,6 @@ function Row({
   );
 }
 
-function tokenSourceLabel(src?: string): string {
-  switch (src) {
-    case "yaml":
-      return "memory_plugin.yaml";
-    case "env":
-      return "env CATFISH_INTERNAL_DEV_TOKEN";
-    default:
-      return "未设 (LLM 调用会跳)";
-  }
-}
-
 const cardStyle: React.CSSProperties = {
   padding: "var(--space-4)",
   border: "1px solid var(--catfish-border)",
@@ -323,6 +289,15 @@ const inlineCode: React.CSSProperties = {
   background: "rgba(0,0,0,0.06)",
   padding: "1px 4px",
   borderRadius: 2,
+};
+
+const inlineCodeStyle: React.CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  fontSize: 10,
+  background: "rgba(0,0,0,0.06)",
+  padding: "0 4px",
+  borderRadius: 2,
+  color: "var(--catfish-text)",
 };
 
 const smallBtn: React.CSSProperties = {
