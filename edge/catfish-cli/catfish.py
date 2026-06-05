@@ -1402,6 +1402,63 @@ def _scan_local_audit_jsonl(p: Path, since_ts: int) -> dict:
     }
 
 
+def cmd_init(args) -> int:
+    """P25 (6/5 鸿波): 商用部署 onboarding.
+
+    cp ~/person_task/catfish/edge/catfish-cli/templates/{companion,memory_plugin}.yaml.example
+       到 ~/.catfish/{companion,memory_plugin}.yaml (chmod 600 后者).
+    已存 skip (不覆盖, 保护客户已改的 config).
+
+    退码: 0 (always — 已存也算成功).
+    """
+    GREEN = "\033[1;32m"
+    YELLOW = "\033[1;33m"
+    BOLD = "\033[1m"
+    RESET = "\033[0m"
+
+    # 定位 templates dir (从本脚本相对位置)
+    script_dir = Path(__file__).resolve().parent  # edge/catfish-cli/
+    templates_dir = script_dir / "templates"
+
+    target_dir = Path.home() / ".catfish"
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"{BOLD}=== catfish init: 配置文件初始化 ==={RESET}\n")
+
+    for name, chmod_secret in (
+        ("companion.yaml", False),
+        ("memory_plugin.yaml", True),  # 含 token, chmod 600
+    ):
+        example = templates_dir / f"{name}.example"
+        target = target_dir / name
+
+        if target.exists():
+            print(f"    {YELLOW}已存{RESET} {target} (skip, 不覆盖)")
+            continue
+        if not example.exists():
+            print(f"    {YELLOW}缺{RESET} template {example} 不存在")
+            continue
+
+        try:
+            target.write_bytes(example.read_bytes())
+            if chmod_secret:
+                target.chmod(0o600)  # secret 防泄露
+                print(f"    {GREEN}OK{RESET} cp → {target} (chmod 600)")
+            else:
+                print(f"    {GREEN}OK{RESET} cp → {target}")
+        except OSError as e:
+            print(f"    {YELLOW}失败{RESET} {target}: {e}")
+
+    print(f"\n{BOLD}下一步{RESET}:")
+    print(f"  1. vim {target_dir / 'companion.yaml'}")
+    print(f"     改 endpoints.gateway_url (中央部署 IP)")
+    print(f"  2. vim {target_dir / 'memory_plugin.yaml'}")
+    print(f"     改 gateway.url + gateway.token")
+    print(f"  3. catfish status         自检")
+    print(f"  4. hermes gateway stop && hermes gateway start    reload plugin")
+    return 0
+
+
 def cmd_privacy_audit(args) -> int:
     """BL-EMPLOYEE-PRIVACY-VERIFICATION (#76, 5/25): 员工自查 "本机存了啥 + 中央存了我啥".
 
@@ -1696,6 +1753,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="输出 JSON (供 CI / 软著合规脚本机器读)",
     )
     privacy_p.set_defaults(func=cmd_privacy_audit)
+
+    # P25 (6/5 鸿波): 商用部署 onboarding — cp companion.yaml + memory_plugin.yaml
+    # example 到 ~/.catfish/, 客户开箱即用. 已存 skip (不覆盖)真.
+    init_p = sub.add_parser(
+        "init",
+        aliases=["setup"],
+        help="初始化 ~/.catfish/{companion,memory_plugin}.yaml (商用首次部署)",
+    )
+    init_p.set_defaults(func=cmd_init)
 
     return p
 
