@@ -18,3 +18,9 @@
 # 2. skills-hub app.py 旧版 line 156 的 curl docstring
 #    (现在迁到 line 216, 但 commit blob 里旧版仍触发 curl-auth-header 规则)
 2762b2486b6a1b8bfc7c82503273e49382543dfb:central/skills-hub/src/catfish_skills_hub/app.py:curl-auth-header:156
+
+# 3. P42 (6/5 鸿波) — memory_distill.py:280 LLM API call "max_tokens": 400 真**`参数**`,
+#    不是 secret. gitleaks generic-api-key rule fuzzy match 真**`"frequency_penalty"`** /
+#    `"presence_penalty"` 这种 LLM 调参 dict key 真**`误报**` 真.
+#    file 真**`已被 refactor (现 repo 不存)**, 但 commit 3151362f 真**`git history**` 真**`一直 trigger**真.
+3151362ff559d583a8b98353d2bdafc29de75866:central/llm-gateway/src/catfish_gateway/memory_distill.py:generic-api-key:280
