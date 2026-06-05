@@ -53,13 +53,19 @@ export default function ChatToolCall({ call }: Props) {
 
   // P27 (6/5 鸿波): hermes approval pending 检测.
   // hermes check_execute_code_guard / check_dangerous_command 真**`pending`** 时返
-  // tool message 含 "Asking the user for approval" + code/command. LLM 真 chat 里
-  // 翻译成"请批准", 但 user 没 inline button 没法点. 这里直接渲染按钮, 点击发
-  // /approve | /approve always | /deny 走 hermes 原 slash command handler.
+  // tool message 含 status:"pending_approval" + approval_pending:true + message
+  // text "Asking the user for approval. Code: ...". P27.1 (6/5 鸿波实测 manual mode
+  // tool ✓ done 但 button 不显) — 放宽 regex 涵盖 hermes 真**`几种 JSON shape**`** 真:
+  //   - "status": "pending_approval"          ← JSON field, 最可靠
+  //   - "approval_pending": true              ← JSON bool field
+  //   - "Asking the user for approval"        ← message text
+  //   - LLM 翻译"授权批准" / "请批准"            ← 中文兜底
   const isApprovalPending =
-    call.status === "done" &&
+    (call.status === "done" || call.status === "error") &&
     typeof resultStr === "string" &&
-    /Asking the user for approval|approval_pending/i.test(resultStr);
+    /pending_approval|approval_pending|Asking the user for approval|授权批准|请.{0,4}批准/i.test(
+      resultStr,
+    );
 
   return (
     <div
