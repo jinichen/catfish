@@ -18,4 +18,3 @@
 # 2. skills-hub app.py 旧版 line 156 的 curl docstring
 #    (现在迁到 line 216, 但 commit blob 里旧版仍触发 curl-auth-header 规则)
 2762b2486b6a1b8bfc7c82503273e49382543dfb:central/skills-hub/src/catfish_skills_hub/app.py:curl-auth-header:156
-abc123def456:central/llm-gateway/.env.example:generic-api-key:7
