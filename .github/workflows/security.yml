@@ -79,11 +79,6 @@ jobs:
   gitleaks:
     name: gitleaks (secrets scan)
     runs-on: ubuntu-latest
-    # P42 (6/5 鸿波): continue-on-error — gitleaks 找到 finding 时不阻塞 CI,
-    # finding 仍**`显在 GitHub Actions Annotations + SARIF artifact**`** 真**`可后续审**.
-    # 真**`secrets scan 是 advisory, 不该卡 deploy**真 — 跟 P32 pip-audit / cargo-audit
-    # 真**`严卡**` 真**`分开**` 真**`策略**真**. 看到 finding 后人工 ack → 加 .gitleaksignore.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
