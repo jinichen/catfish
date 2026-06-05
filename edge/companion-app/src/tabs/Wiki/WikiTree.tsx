@@ -226,10 +226,10 @@ export default function WikiTree() {
         onChange={(e) => setSearch(e.target.value)}
         placeholder={
           searchMode === "title"
-            ? "搜索 title / slug..."
+            ? "🏷️ 标题 / slug 搜索..."
             : searchMode === "body"
-              ? "全文 BM25 搜索..."
-              : "🧠 语义搜索 (BGE-M3)..."
+              ? "🔤 全文 BM25 搜索..."
+              : "🧠 语义搜索 (BGE-M3 本机)..."
         }
         style={{
           width: "100%",
@@ -260,7 +260,7 @@ export default function WikiTree() {
               fontWeight: searchMode === m ? 600 : 400,
             }}
           >
-            {m === "title" ? "title" : m === "body" ? "全文" : "🧠 语义"}
+            {m === "title" ? "🏷️ 标题" : m === "body" ? "🔤 全文" : "🧠 语义"}
           </button>
         ))}
       </div>
@@ -399,12 +399,53 @@ function Group({
   selectedPath: string | null;
   onSelect: (relPath: string) => void;
 }) {
+  // P40 (6/5 鸿波): Group collapsible. localStorage 记 collapse state per label.
+  // 默认: entities (常长 21+) 折起; concepts/queries 展开. Wiki 累积后 sidebar
+  // 一眼看 3 group header, 不用 scroll.
+  const lsKey = `wiki_group_collapsed_${label}`;
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem(lsKey);
+      if (v === null) return label.includes("实体"); // entity 默认折 (最长)
+      return v === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggle = () => {
+    setCollapsed((c) => {
+      const next = !c;
+      try {
+        localStorage.setItem(lsKey, next ? "1" : "0");
+      } catch {
+        /* 配额满 ignore */
+      }
+      return next;
+    });
+  };
   if (files.length === 0) return null;
   return (
     <div style={{ marginTop: "var(--space-3)" }}>
-      <div style={{ fontWeight: 600, fontSize: 11, color, marginBottom: 4 }}>
-        {emoji} {label} <span style={{ fontWeight: 400, color: "var(--catfish-text-muted)" }}>({files.length})</span>
+      <div
+        onClick={toggle}
+        style={{
+          fontWeight: 600,
+          fontSize: 11,
+          color,
+          marginBottom: 4,
+          cursor: "pointer",
+          userSelect: "none",
+        }}
+      >
+        <span style={{ display: "inline-block", width: 12, textAlign: "center" }}>
+          {collapsed ? "▶" : "▼"}
+        </span>{" "}
+        {emoji} {label}{" "}
+        <span style={{ fontWeight: 400, color: "var(--catfish-text-muted)" }}>
+          ({files.length})
+        </span>
       </div>
+      {!collapsed && (
       <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
         {files.map((f) => {
           const active = selectedPath === f.rel_path;
@@ -438,6 +479,7 @@ function Group({
           );
         })}
       </ul>
+      )}
     </div>
   );
 }

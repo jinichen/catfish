@@ -119,14 +119,20 @@ export default function WikiGraph() {
 
     if (graph.order === 0) return;
 
+    // P41 (6/5 鸿波): 暗色 mode 真**`label color **真**`runtime detect**, 不再硬编码
+    // #444 (暗背景下不可读).
+    const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const labelColor = isDark ? "#e0e0e0" : "#444";
+    const edgeColor = isDark ? "rgba(180, 180, 180, 0.4)" : "rgba(120, 120, 120, 0.6)";
+
     const sigma = new Sigma(graph, containerRef.current, {
       renderEdgeLabels: false,
       labelRenderedSizeThreshold: 1,
       labelFont: "ui-sans-serif, -apple-system, sans-serif",
       labelSize: 12,
       labelWeight: "500",
-      labelColor: { color: "#444" },
-      defaultEdgeColor: "rgba(120, 120, 120, 0.6)",
+      labelColor: { color: labelColor },
+      defaultEdgeColor: edgeColor,
       defaultEdgeType: "line",
       minCameraRatio: 0.05,
       maxCameraRatio: 10,
