@@ -224,6 +224,24 @@ export interface WikiSearchHit {
 export const wikiSearchText = (query: string) =>
   rawInvoke<WikiSearchHit[]>("wiki_search_text", { query });
 
+// P38 (6/5 鸿波): wiki 语义搜索 (本机 BGE-M3 ONNX). model 未装时 hits=[] + message 提示装法.
+export interface WikiSemanticHit {
+  rel_path: string;
+  title: string;
+  kind: string;
+  score: number;
+  snippet: string;
+}
+export interface WikiSemanticResult {
+  hits: WikiSemanticHit[];
+  model_loaded: boolean;
+  indexed_count: number;
+  message: string;
+}
+
+export const wikiSearchSemantic = (query: string, topK?: number) =>
+  rawInvoke<WikiSemanticResult>("wiki_search_semantic", { query, topK });
+
 export const wikiListFiles = () => rawInvoke<WikiFileInfo[]>("wiki_list_files");
 export const wikiReadFile = (relPath: string) =>
   rawInvoke<WikiFileFull>("wiki_read_file", { relPath });

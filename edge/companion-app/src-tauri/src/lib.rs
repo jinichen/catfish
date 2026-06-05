@@ -541,6 +541,8 @@ pub fn run() {
             commands::wiki_read::wiki_read_file,
             // P37 (6/5): wiki 全文搜索 (BM25 score)
             commands::wiki_read::wiki_search_text,
+            // P38 (6/5): wiki 语义搜索 (本机 BGE-M3 ONNX)
+            commands::wiki_embed::wiki_search_semantic,
             // BL-CATFISH-WIKI-MODE P3.3.7 (6/4): wiki write API
             commands::wiki_write::wiki_create_entity_or_concept,
             commands::wiki_write::wiki_update_file,

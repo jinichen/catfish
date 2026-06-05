@@ -27,32 +27,58 @@ export default function WikiTree() {
   const setSelectedTag = useWikiStore((s) => s.setSelectedTag);
   const [showCreate, setShowCreate] = useState(false);
 
-  // P37 (6/5 鸿波): 全文搜模式 + Tauri wiki_search_text 结果
-  const [bodySearch, setBodySearch] = useState(false);
+  // P37 (BM25) + P38 (语义) — mode tristate: "title" | "body" | "semantic"
+  const [searchMode, setSearchMode] = useState<"title" | "body" | "semantic">("title");
   const [searchHits, setSearchHits] = useState<import("../../lib/tauri").WikiSearchHit[]>([]);
   const [searching, setSearching] = useState(false);
+  const [semanticMessage, setSemanticMessage] = useState<string>("");
 
-  // 全文搜 debounce 300ms
+  // P37/P38: body/semantic 真 debounce 300ms
   useEffect(() => {
-    if (!bodySearch || !search.trim()) {
+    if (searchMode === "title" || !search.trim()) {
       setSearchHits([]);
+      setSemanticMessage("");
       return;
     }
     const handle = setTimeout(async () => {
       setSearching(true);
+      setSemanticMessage("");
       try {
-        const { wikiSearchText } = await import("../../lib/tauri");
-        const hits = await wikiSearchText(search);
-        setSearchHits(hits);
+        const tauri = await import("../../lib/tauri");
+        if (searchMode === "body") {
+          const hits = await tauri.wikiSearchText(search);
+          setSearchHits(hits);
+        } else {
+          // semantic
+          const res = await tauri.wikiSearchSemantic(search);
+          if (!res.model_loaded) {
+            setSearchHits([]);
+            setSemanticMessage(res.message);
+          } else {
+            // 复用 WikiSearchHit shape: score / snippet / matched_in
+            setSearchHits(
+              res.hits.map((h) => ({
+                rel_path: h.rel_path,
+                title: h.title,
+                kind: h.kind,
+                score: h.score,
+                snippet: h.snippet,
+                matched_in: ["semantic"],
+              })),
+            );
+            setSemanticMessage(`✓ ${res.indexed_count} entries 已 index`);
+          }
+        }
       } catch (e) {
         console.warn("[wiki search] 失败:", e);
         setSearchHits([]);
+        setSemanticMessage(String(e));
       } finally {
         setSearching(false);
       }
-    }, 300);
+    }, searchMode === "semantic" ? 500 : 300);   // semantic 真**`后台 indexer 慢, 500ms debounce**真
     return () => clearTimeout(handle);
-  }, [search, bodySearch]);
+  }, [search, searchMode]);
 
   // P17 (6/5 鸿波): 切到知识体系 tab 立即 reload (App.tsx 真`activeTab === 'wiki'
   // && <WikiTab/>` 真 conditional render — 切走 unmount, 切回 mount 跑这 effect).
@@ -194,47 +220,68 @@ export default function WikiTree() {
 
       {showCreate && <WikiCreateModal onClose={() => setShowCreate(false)} />}
 
-      <div style={{ position: "relative", marginBottom: "var(--space-2)" }}>
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder={bodySearch ? "搜索全文 body..." : "搜索 title / slug..."}
+      <input
+        type="text"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder={
+          searchMode === "title"
+            ? "搜索 title / slug..."
+            : searchMode === "body"
+              ? "全文 BM25 搜索..."
+              : "🧠 语义搜索 (BGE-M3)..."
+        }
+        style={{
+          width: "100%",
+          padding: "6px 8px",
+          fontSize: 12,
+          border: "1px solid var(--catfish-border)",
+          borderRadius: 4,
+          marginBottom: 4,
+          background: "var(--catfish-bg)",
+          color: "var(--catfish-text)",
+          boxSizing: "border-box",
+        }}
+      />
+      {/* P37+P38 (6/5 鸿波): 3 mode toggle (title / body / semantic) */}
+      <div style={{ display: "flex", gap: 2, marginBottom: "var(--space-2)", fontSize: 10 }}>
+        {(["title", "body", "semantic"] as const).map((m) => (
+          <button
+            key={m}
+            onClick={() => setSearchMode(m)}
+            style={{
+              flex: 1,
+              padding: "3px 4px",
+              border: "1px solid var(--catfish-border)",
+              borderRadius: 3,
+              background: searchMode === m ? "var(--catfish-teal, #0d9488)" : "transparent",
+              color: searchMode === m ? "#fff" : "var(--catfish-text-muted)",
+              cursor: "pointer",
+              fontWeight: searchMode === m ? 600 : 400,
+            }}
+          >
+            {m === "title" ? "title" : m === "body" ? "全文" : "🧠 语义"}
+          </button>
+        ))}
+      </div>
+      {semanticMessage && (
+        <div
           style={{
-            width: "100%",
-            padding: "6px 8px",
-            paddingRight: 64,
-            fontSize: 12,
-            border: "1px solid var(--catfish-border)",
-            borderRadius: 4,
-            background: "var(--catfish-bg)",
-            color: "var(--catfish-text)",
-            boxSizing: "border-box",
-          }}
-        />
-        {/* P37 (6/5 鸿波): 全文搜 toggle 嵌入 search box 真 — 默认关 (title/slug);
-            开 = 全文 BM25 grep, 结果显在下方 list. */}
-        <button
-          onClick={() => setBodySearch(!bodySearch)}
-          title={bodySearch ? "切回 title / slug 搜索" : "切到 全文 (body grep)"}
-          style={{
-            position: "absolute",
-            right: 4,
-            top: "50%",
-            transform: "translateY(-50%)",
-            background: bodySearch ? "var(--catfish-teal, #0d9488)" : "transparent",
-            border: "1px solid var(--catfish-border)",
-            color: bodySearch ? "#fff" : "var(--catfish-text-muted)",
-            borderRadius: 3,
-            padding: "2px 6px",
             fontSize: 10,
-            cursor: "pointer",
-            fontWeight: bodySearch ? 600 : 400,
+            color: "var(--catfish-text-muted)",
+            marginBottom: 6,
+            padding: "4px 6px",
+            background: "var(--catfish-bg-elevated, rgba(0,0,0,0.04))",
+            borderRadius: 3,
+            whiteSpace: "pre-wrap",
+            fontFamily: semanticMessage.startsWith("BGE-M3 model 未装")
+              ? "var(--font-mono)"
+              : undefined,
           }}
         >
-          全文
-        </button>
-      </div>
+          {semanticMessage}
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: 4, marginBottom: "var(--space-2)" }}>
         {(["all", "entity", "concept", "query"] as const).map((k) => (
@@ -316,8 +363,8 @@ export default function WikiTree() {
         <EmptyOnboarding onCreateClick={() => setShowCreate(true)} />
       )}
 
-      {/* P37 (6/5 鸿波): 全文搜模式 → search hits 列表替 group tree */}
-      {bodySearch && search.trim() && (
+      {/* P37+P38 (6/5 鸿波): body/semantic 模式 → hits 列表替 group tree */}
+      {searchMode !== "title" && search.trim() && (
         <SearchResults
           hits={searchHits}
           searching={searching}
@@ -326,7 +373,7 @@ export default function WikiTree() {
         />
       )}
 
-      {!(bodySearch && search.trim()) && (
+      {!(searchMode !== "title" && search.trim()) && (
         <>
           <Group label="实体 (entities)" emoji="🧑" color="#4a9eff" files={grouped.entity} selectedPath={selectedPath} onSelect={selectFile} />
           <Group label="概念 (concepts)" emoji="📐" color="#ff9933" files={grouped.concept} selectedPath={selectedPath} onSelect={selectFile} />
