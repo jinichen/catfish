@@ -220,6 +220,38 @@ def _check_attr_in_source(module_path: str, attr: str) -> bool:
         return False
 
 
+def _check_p15_stream_q_in_source() -> bool:
+    """P15 fragile patch verify: 检测 hermes _handle_chat_completions 内部
+    streaming branch 仍含 ``_stream_q.put`` 用法.
+
+    P15 通过 ``_on_delta.__closure__`` 闭包反射拿 ``_stream_q`` (queue.Queue)
+    引用, 推 approval event 给 SSE writer. 这条**硬依赖 hermes 内部 local 变量名**:
+    hermes 重构改名 `_stream_q` → `_stream_queue` / `_q` / 不用 queue, P15
+    silent break (闭包反射拿不到, _approval_notify 不注册, fallback path 跑,
+    button 不弹, 用户看不出来).
+
+    本检查在 install 时静态 grep, 一旦变量名变了 → fail-loud, 不让 plugin 半加载.
+    """
+    import os
+    import re
+    hermes_root = os.environ.get("HERMES_ROOT") or os.path.expanduser("~/.hermes/hermes-agent")
+    file_path = os.path.join(hermes_root, "gateway/platforms/api_server.py")
+    if not os.path.exists(file_path):
+        return False
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            src = f.read()
+        # 必须见: `_stream_q` 变量 + `_stream_q.put` (P15 闭包反射的 free var)
+        # 必须见: `async def _on_delta` (P15 闭包反射的 target callback)
+        has_stream_q_put = bool(re.search(r"\b_stream_q\.put\b", src))
+        has_on_delta = bool(
+            re.search(r"def\s+_on_delta\s*\(", src)
+        )
+        return has_stream_q_put and has_on_delta
+    except Exception:
+        return False
+
+
 def _check_class_method_in_source(module_path: str, class_name: str, method: str) -> bool:
     """静态文件检查 class 是否含某 method (不 import). 同 _check_attr_in_source."""
     import os
@@ -270,6 +302,17 @@ def _verify_patch_targets() -> None:
                 f"gateway.platforms.api_server.APIServerAdapter.{method}"
             )
 
+    # P15 fragile verify: 闭包反射 _stream_q 强依赖 hermes 内部变量名 (silent
+    # break 风险). hermes 升级改 _on_delta 闭包 / streaming impl 时, 这里 fail-loud.
+    if not _check_p15_stream_q_in_source():
+        missing.append(
+            "gateway.platforms.api_server._handle_chat_completions 内 "
+            "_stream_q / _on_delta 闭包结构 (P15 闭包反射依赖此变量名). "
+            "hermes 重构改了 streaming impl, P15 会 silent break. "
+            "audit api_server.py:1892+ streaming branch, 同步更新 P15 反射目标 "
+            "(plugin.py:_patch_p15_chat_completions_approval _stream_q name)."
+        )
+
     if missing:
         raise ImportError(
             "catfish-xcatfish-user plugin: hermes refactor 破坏了 patch targets. "
@@ -278,7 +321,8 @@ def _verify_patch_targets() -> None:
         )
 
     logger.info(
-        "catfish-xcatfish-user: patch target verify ✓ (静态文件检查 %d module + %d method)",
+        "catfish-xcatfish-user: patch target verify ✓ "
+        "(静态文件检查 %d module + %d method + P15 _stream_q 闭包)",
         len(_PATCH_TARGETS),
         len(_AIAGENT_METHOD_TARGETS) + len(_APISERVER_METHOD_TARGETS),
     )
