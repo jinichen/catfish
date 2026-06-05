@@ -4,6 +4,19 @@ import { useState } from "react";
 import type { ToolCall } from "../../types/chat";
 import { extractFilePaths } from "../../lib/path_detect";
 import { FilePillList } from "../../components/FilePill";
+import { toolBridgeChatApproval } from "../../lib/tauri";
+
+// P44 (6/5 鸿波 marathon): chat completions approval — session_key 从 SSE event
+// `hermes.tool.progress` (status=approval_pending) 拿. plugin P15 注的
+// _approval_notify push 这个 event. 全局 mutable 一个 latest session_key (chat
+// 一次只可能有 1 个 pending block, 不会并发), ApprovalButton onClick 用.
+let _latestApprovalSessionKey: string | null = null;
+if (typeof window !== "undefined") {
+  window.addEventListener("catfish:approval-pending", (e: Event) => {
+    const ev = e as CustomEvent<{ approval_session_key?: string }>;
+    _latestApprovalSessionKey = ev.detail?.approval_session_key ?? null;
+  });
+}
 
 interface Props {
   call: ToolCall;
@@ -163,16 +176,17 @@ export default function ChatToolCall({ call }: Props) {
               </pre>
             </Section>
           )}
-          {isApprovalPending && <ApprovalButtons />}
         </div>
       )}
-      {/* 折叠状态下也显 approval button — 不用展开就能点 */}
-      {!open && isApprovalPending && (
+      {/* P27.2 (6/5 鸿波): approval button 真**`折叠状态也要显**真.
+       * 之前 button 真**`在 `{open && ...}` block 内**真 → 员工不展开 toolcall
+       * 看不到 button → 卡死. 现在搬出去, ✓ done + approval pending 时
+       * 总是显, 跟 file pill 一致 (filePaths 也是折叠也显). */}
+      {isApprovalPending && (
         <div
           style={{
-            padding: "8px var(--space-3) 10px",
+            padding: "0 var(--space-3) var(--space-2)",
             borderTop: "1px solid var(--catfish-border)",
-            background: "var(--catfish-bg-elevated, var(--catfish-bg))",
           }}
         >
           <ApprovalButtons />
@@ -182,15 +196,42 @@ export default function ChatToolCall({ call }: Props) {
   );
 }
 
-/** P27 (6/5): hermes approval pending → inline 按钮.
- *  点击 dispatch CustomEvent, ChatPanel useEffect 监听调 onSend.
- *  Hermes 收到 /approve / /deny 走 _handle_approve_command path resolve block.
+/** P27 + P44 (6/5 鸿波 marathon): hermes approval pending inline 按钮.
+ *  - P44 path (新): 优先调 toolBridgeChatApproval(session_key, choice) →
+ *    plugin P15.2 注的 tool-bridge RPC tools/chat_approval →
+ *    resolve_gateway_approval. session_key 来自 SSE event approval-pending.
+ *  - P27 fallback (老): 没拿到 session_key 时 dispatch "/approve" user
+ *    message (兼容老 flow / 历史 session 加载渲染的 button).
  */
 function ApprovalButtons() {
-  const dispatch = (text: string) =>
+  const handleChoice = async (choice: "once" | "session" | "always" | "deny") => {
+    const sid = _latestApprovalSessionKey;
+    if (sid) {
+      try {
+        await toolBridgeChatApproval(sid, choice);
+        // 解 block 成功 — 清 session_key 防重复点击
+        _latestApprovalSessionKey = null;
+        return;
+      } catch (e) {
+        // P44 RPC 失败 → fallback 老 path
+        // eslint-disable-next-line no-console
+        console.warn("[P44] chat_approval RPC 失败, fallback /approve:", e);
+      }
+    }
+    // P27 fallback: 没 session_key (历史 toolcall) 或 RPC 失败 → 老 path
+    const text =
+      choice === "always"
+        ? "/approve always"
+        : choice === "session"
+          ? "/approve session"
+          : choice === "deny"
+            ? "/deny"
+            : "/approve";
     window.dispatchEvent(
       new CustomEvent("catfish:approval-send", { detail: { text } }),
     );
+  };
+
   return (
     <div
       style={{
@@ -204,9 +245,9 @@ function ApprovalButtons() {
       <span style={{ color: "var(--catfish-text-muted)", marginRight: 4 }}>
         等待批准:
       </span>
-      <ApprovalBtn label="✓ 批准" color="var(--status-ok, #16a34a)" onClick={() => dispatch("/approve")} />
-      <ApprovalBtn label="✓ 始终批准" color="var(--catfish-cyan-dim, #0891b2)" onClick={() => dispatch("/approve always")} />
-      <ApprovalBtn label="✗ 拒绝" color="var(--status-err, #dc2626)" onClick={() => dispatch("/deny")} />
+      <ApprovalBtn label="✓ 批准" color="var(--status-ok, #16a34a)" onClick={() => void handleChoice("once")} />
+      <ApprovalBtn label="✓ 始终批准" color="var(--catfish-cyan-dim, #0891b2)" onClick={() => void handleChoice("always")} />
+      <ApprovalBtn label="✗ 拒绝" color="var(--status-err, #dc2626)" onClick={() => void handleChoice("deny")} />
     </div>
   );
 }

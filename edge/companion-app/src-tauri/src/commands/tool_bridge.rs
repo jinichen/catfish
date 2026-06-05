@@ -227,6 +227,20 @@ pub async fn tool_bridge_call_tool(
         .map_err(|e| format!("解析 tools/dispatch 失败: {e}"))
 }
 
+// P44 (6/5 鸿波 marathon): chat/completions approval — resolve pending block.
+// session_key 来自 SSE event `hermes.tool.progress` (status=approval_pending)
+// 的 approval_session_key 字段. choice ∈ {"once","session","always","deny"}.
+// 调 plugin patched tool-bridge RPC `tools/chat_approval` →
+// resolve_gateway_approval(session_key, choice).
+#[tauri::command]
+pub async fn tool_bridge_chat_approval(
+    session_key: String,
+    choice: String,
+) -> Result<Value, String> {
+    let params = json!({ "session_key": session_key, "choice": choice });
+    call_rpc("tools/chat_approval", params).await
+}
+
 // ============================================================
 // internal: unix socket NDJSON RPC
 // ============================================================

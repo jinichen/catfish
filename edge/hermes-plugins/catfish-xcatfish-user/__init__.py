@@ -176,9 +176,14 @@ def register(ctx) -> None:
         _mod._patch_p7_companion_proxy_route()           # P7 ← X-Catfish-User 透传真关键
         _mod._patch_p8_p9_cors()                         # P8/P9
         _mod._patch_p10_apply_client_headers_localhost()  # P10
+        # P15.2 (6/6 鸿波 marathon): chat_approval middleware 必须在 Application()
+        # init **之前**注册 _chat_approval_middleware 给 _patched_app_init 看. 走
+        # delayed install (Step 3) 太晚 — Application() init 在 connect() trigger,
+        # 早于 delayed install 完成. 同步跑这条让 module global 立即设上.
+        _mod._patch_p15_2_chat_approval_route()
         logger.info(
-            "catfish-xcatfish-user: 同步 patch ✓ (P0/P1/P3/P4/P7/P8/P9/P10) — "
-            "X-Catfish-User 透传 + CORS allowlist 真生效"
+            "catfish-xcatfish-user: 同步 patch ✓ (P0/P1/P3/P4/P7/P8/P9/P10/P15.2) — "
+            "X-Catfish-User 透传 + CORS allowlist + chat_approval 真生效"
         )
     except Exception as e:  # noqa: BLE001
         logger.error(

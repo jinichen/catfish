@@ -225,7 +225,33 @@ export const useChatStore = create<ChatState>((set) => ({
   clearQueue: () => set({ queue: [] }),
   loadSession: (detail) =>
     set({
-      messages: detail.messages.map(dbMessageToChat),
+      // P27.3 真根因 fix (6/5 鸿波 audit 后): dbMessageToChat 1-to-1 map 丢了
+      // tool_calls[i].result. state.db 里 tool result 存在另一行 role:"tool" +
+      // tool_call_id 的 message content. 历史加载时必须 join 回 tool_calls[i].result,
+      // 否则 ChatToolCall 渲染 call.result===undefined → 显示 (空), P27 approval
+      // button regex 也 test 空字符串不 match → 永远不弹. 这是为什么 marathon
+      // 25h+ 一直 debug "button 不弹" — 真根因不是 UI render 路径, 是历史加载丢字段.
+      messages: (() => {
+        const mapped = detail.messages.map(dbMessageToChat);
+        // 第二遍: tool_call_id → content 索引, 回填 assistant.tool_calls[i].result
+        const toolResultByCallId = new Map<string, string>();
+        for (const m of mapped) {
+          if (m.role === "tool" && m.tool_call_id) {
+            toolResultByCallId.set(m.tool_call_id, m.content);
+          }
+        }
+        for (const m of mapped) {
+          if (m.role === "assistant" && m.tool_calls?.length) {
+            for (const tc of m.tool_calls) {
+              const result = toolResultByCallId.get(tc.id);
+              if (result !== undefined) {
+                tc.result = result;
+              }
+            }
+          }
+        }
+        return mapped;
+      })(),
       isStreaming: false,
       streamingId: null,
       // BL-FILE-SESSION-INDEX-V1 Phase 1: 切会话先清空附件 list, 等

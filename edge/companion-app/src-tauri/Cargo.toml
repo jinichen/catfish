@@ -47,11 +47,11 @@ regex = "1"
 # P38 (6/5 鸿波): 本机 ONNX embedding (BGE-M3) — wiki 语义搜索, 完全离线.
 # ort 2.0 用 onnxruntime native runtime, Apple Silicon CPU backend 默认.
 # CoreML provider 留 P38.3 (要 feature flag + extra link). CPU INT8 已 ~300ms / query.
-ort = { version = "2.0.0-rc.4", default-features = false, features = ["download-binaries", "ndarray"] }
+# default features 真**`含 download-binaries + tls-rustls**, 不要 default-features=false.
+ort = "2.0.0-rc.12"
 # tokenizer: BGE-M3 用 XLM-R BPE, tokenizers crate 直接 load tokenizer.json
-tokenizers = { version = "0.20", default-features = false, features = ["onig", "esaxx_fast"] }
-# ndarray: ort 真**`输入/输出`** 走 ArrayN, cosine similarity
-ndarray = "0.16"
+tokenizers = "0.20"
+# 不显式依赖 ndarray — ort 内部用 0.17, 我们走 tuple syntax (shape, Vec<T>) 避免 version 冲突
 
 [dev-dependencies]
 # tempfile: 给单测建临时 ~/.hermes 目录用 (session_write / learning / endpoints)

@@ -498,11 +498,44 @@ export async function streamChat(params: SendChatParams): Promise<void> {
         const chunk = buf.slice(0, idx);
         buf = buf.slice(idx + 2);
 
+        // P44 (6/5 鸿波 marathon audit): SSE message 可能跨多行 (event + data),
+        // 老实现只看 data: 行 → hermes 发的 `event: hermes.tool.progress` event 被
+        // silently 忽略. 现在先 scan 整 chunk 拿 event_type, 再 scan data.
         const lines = chunk.split("\n");
+        let sseEventType: string | null = null;
+        let sseData: string | null = null;
         for (const line of lines) {
-          if (!line.startsWith("data:")) continue;
-          const data = line.slice(5).trim();
-          if (!data) continue;
+          if (line.startsWith("event:")) {
+            sseEventType = line.slice(6).trim();
+          } else if (line.startsWith("data:")) {
+            // 一个 message 内只取最后一个 data: (SSE spec 是多 data 拼接, 但我们的
+            // hermes server 一个 message 只发一个 data 行, 拿最后一行 = 拿唯一)
+            sseData = line.slice(5).trim();
+          }
+        }
+        if (!sseData) continue;
+
+        // 处理 hermes 自定义 event (line 2156 `event: hermes.tool.progress`).
+        // payload 含 status: "approval_pending" 时, dispatch CustomEvent 让
+        // ChatToolCall 弹 approval button. 其它 tool.progress 状态 (running/
+        // completed) 暂时也 silently ignore (chat UI 走 OpenAI delta.tool_calls
+        // 拼装, 不需要 hermes.tool.progress 这套额外协议).
+        if (sseEventType === "hermes.tool.progress") {
+          try {
+            const ev = JSON.parse(sseData);
+            if (ev?.status === "approval_pending") {
+              window.dispatchEvent(
+                new CustomEvent("catfish:approval-pending", { detail: ev }),
+              );
+            }
+          } catch {
+            // ignore parse error
+          }
+          continue;
+        }
+
+        const data = sseData;
+        {
           if (data === "[DONE]") {
             finalizeToolCallsIfAny();
             onDone({ finish_reason: finishReason, usage, task_assessment: taskAssessment, via_hermes: useHermes });

@@ -314,6 +314,7 @@ pub fn run() {
             commands::tool_bridge::tool_bridge_status,
             commands::tool_bridge::tool_bridge_list_tools,
             commands::tool_bridge::tool_bridge_call_tool,
+            commands::tool_bridge::tool_bridge_chat_approval,
             // health
             commands::health::healthz,
             commands::health::catalog,

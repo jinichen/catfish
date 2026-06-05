@@ -14,16 +14,16 @@
 //!
 //! 没下载 → wiki_search_semantic 返 fallback hint "model not loaded".
 
-use ndarray::{Array1, Array2, ArrayView1};
 use ort::session::{Session, builder::GraphOptimizationLevel};
 use ort::value::Value;
 use serde::Serialize;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use tokenizers::Tokenizer;
 
-static MODEL_SESSION: OnceLock<Option<Session>> = OnceLock::new();
+// ort 2.0 Session::run 要 &mut self → 走 Mutex 包. 单查 query 真序列化, 不 bottleneck.
+static MODEL_SESSION: OnceLock<Option<Mutex<Session>>> = OnceLock::new();
 static TOKENIZER: OnceLock<Option<Tokenizer>> = OnceLock::new();
 
 const MAX_TOKENS: usize = 512;
@@ -50,7 +50,7 @@ fn embed_db_path() -> Result<PathBuf, String> {
 
 /// init_session: load BGE-M3 ONNX 真**`OnceLock cache**真. 失败 (model 文件缺)
 /// 返 None → caller 走 fallback path.
-fn init_session() -> Option<&'static Session> {
+fn init_session() -> Option<&'static Mutex<Session>> {
     MODEL_SESSION
         .get_or_init(|| {
             let path = model_path().ok()?;
@@ -59,14 +59,15 @@ fn init_session() -> Option<&'static Session> {
                 return None;
             }
             log::info!("P38 wiki embed: 加载 BGE-M3 ONNX {:?}", path);
-            Session::builder()
+            let session = Session::builder()
                 .ok()?
                 .with_optimization_level(GraphOptimizationLevel::Level3)
                 .ok()?
                 .with_intra_threads(4)
                 .ok()?
                 .commit_from_file(&path)
-                .ok()
+                .ok()?;
+            Some(Mutex::new(session))
         })
         .as_ref()
 }
@@ -86,7 +87,7 @@ fn init_tokenizer() -> Option<&'static Tokenizer> {
 
 /// embed_text: text → 1024-dim f32 vector. 失败返 None (caller 走 fallback).
 fn embed_text(text: &str) -> Option<Vec<f32>> {
-    let session = init_session()?;
+    let session_mutex = init_session()?;
     let tokenizer = init_tokenizer()?;
 
     let encoding = tokenizer
@@ -101,18 +102,15 @@ fn embed_text(text: &str) -> Option<Vec<f32>> {
     let input_ids: Vec<i64> = ids[..n].iter().map(|&x| x as i64).collect();
     let attention_mask: Vec<i64> = mask[..n].iter().map(|&x| x as i64).collect();
 
-    let input_ids_array = Array2::from_shape_vec((1, n), input_ids)
-        .map_err(|e| log::warn!("input_ids reshape 失败: {e}"))
-        .ok()?;
-    let attention_mask_array = Array2::from_shape_vec((1, n), attention_mask)
-        .map_err(|e| log::warn!("attention_mask reshape 失败: {e}"))
-        .ok()?;
-
+    // P38 fix (6/5): 用 ort tuple syntax (shape, Vec<T>) 不依赖 ndarray version
+    // (ort-rc12 内部用 ndarray 0.17, 我们的 0.16 冲突 → 改 tuple)
+    let shape = vec![1_i64, n as i64];
     let inputs = ort::inputs![
-        "input_ids" => Value::from_array(input_ids_array).ok()?,
-        "attention_mask" => Value::from_array(attention_mask_array).ok()?,
+        "input_ids" => Value::from_array((shape.clone(), input_ids)).ok()?,
+        "attention_mask" => Value::from_array((shape, attention_mask)).ok()?,
     ];
 
+    let mut session = session_mutex.lock().ok()?;
     let outputs = session.run(inputs).ok()?;
     // BGE-M3 ONNX 输出 last_hidden_state shape [1, seq_len, 1024]
     // 真**`mean pooling**` 真**`真**真**` 真**`[seq_len, 1024] → [1024]**真
@@ -140,8 +138,16 @@ fn embed_text(text: &str) -> Option<Vec<f32>> {
     Some(pooled)
 }
 
-fn cosine(a: ArrayView1<f32>, b: ArrayView1<f32>) -> f32 {
-    a.dot(&b)
+/// L2-normalized vectors 真 dot product = cosine similarity (我们 embed_text 已 L2 norm 真)
+fn cosine(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() {
+        return 0.0;
+    }
+    let mut s = 0.0f32;
+    for i in 0..a.len() {
+        s += a[i] * b[i];
+    }
+    s
 }
 
 /// 跟 wiki_search_text 同 schema 让前端共用 UI.
@@ -199,7 +205,6 @@ pub async fn wiki_search_semantic(
 
     // embed query
     let query_vec = embed_text(q).ok_or_else(|| "query embedding 失败".to_string())?;
-    let query_arr = Array1::from(query_vec);
 
     // load all from db, cosine
     let db_path = embed_db_path()?;
@@ -230,8 +235,7 @@ pub async fn wiki_search_semantic(
                 vec_blob[i * 4 + 3],
             ]);
         }
-        let arr = Array1::from(v);
-        let score = cosine(query_arr.view(), arr.view()) as f64;
+        let score = cosine(&query_vec, &v) as f64;
         hits.push(WikiSemanticHit {
             rel_path,
             title,

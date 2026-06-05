@@ -12,6 +12,7 @@
  */
 
 import { invoke as rawInvoke } from "@tauri-apps/api/core";
+import { config } from "./env";
 import type { ServiceStatus } from "../types/service";
 import type { SessionMeta, SessionDetail } from "../types/session";
 import type { CatalogResponse } from "../types/catalog";
@@ -68,6 +69,39 @@ export const toolBridgeCallTool = (
     args,
     sessionId,  // Tauri 命令 camelCase ↔ Rust snake_case 自动转换
   });
+
+/** P44 (6/5 鸿波 marathon) / P44.4 真根因 fix (6/6): Companion ApprovalButton
+ *  onClick 调这个 — fetch hermes API server POST /v1/sessions/{sid}/approval
+ *  (plugin P15.2 加的 route). 走 hermes daemon 进程内 resolve_gateway_approval,
+ *  跟 P15 _approval_notify 在同一进程, _gateway_queues dict 共享.
+ *
+ *  老实现走 tool-bridge socket — 跨进程, _gateway_queues 是空 dict, resolve
+ *  返 0, block 不解. 已改 fetch 模式.
+ *
+ *  session_key 从 SSE event `hermes.tool.progress` (status=approval_pending) 的
+ *  approval_session_key 字段拿. choice ∈ "once"|"session"|"always"|"deny". */
+export const toolBridgeChatApproval = async (
+  sessionKey: string,
+  choice: "once" | "session" | "always" | "deny",
+): Promise<{ resolved?: number; choice?: string }> => {
+  const url = `${config.backendUrl}/v1/sessions/${encodeURIComponent(sessionKey)}/approval`;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (config.useHermes && config.hermesAuthHeader) {
+    headers["Authorization"] = config.hermesAuthHeader;
+  }
+  const resp = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ choice }),
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new Error(`chat_approval HTTP ${resp.status}: ${text.slice(0, 200)}`);
+  }
+  return (await resp.json()) as { resolved?: number; choice?: string };
+};
 
 // BL-DASHBOARD-HERMES-MEMORY-CARD (5/16): 读 hermes 0.13 真活 memory 文件
 export interface HermesMemoryView {

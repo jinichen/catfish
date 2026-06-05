@@ -302,6 +302,8 @@ def _apply_patches() -> None:
     _patch_p12_update_system_prompt_safe()
     _patch_p13_dump_naming_type_tag()
     _patch_p14_approve_chinese_alias()
+    _patch_p15_chat_completions_approval()
+    _patch_p15_2_chat_approval_route()
 
 
 # ── P1 ───────────────────────────────────────────────────────────────────
@@ -886,8 +888,20 @@ def _patch_p8_p9_cors() -> None:
                         mws_list.append(_request_stash_middleware)
                     if _proxy_404_middleware not in mws_list:
                         mws_list.append(_proxy_404_middleware)
+                    # P15.2 (6/6): chat_approval middleware. None 时 skip (P15.2 patch
+                    # 还没注册到 module global). 注册顺序: install() 里 P15.2 在 P8/P9
+                    # 之前 — 但 init 时 Application.__init__ 真正 trigger 是 connect()
+                    # 时. 到那时 P15.2 已经跑过, _chat_approval_middleware 非 None.
                     logger.info(
-                        "P7/P11 middlewares injected via Application.__init__ fence ✓"
+                        "P15.2 DEBUG: _chat_approval_middleware=%r, in_list=%s",
+                        _chat_approval_middleware,
+                        _chat_approval_middleware in mws_list if _chat_approval_middleware else False,
+                    )
+                    if _chat_approval_middleware is not None and _chat_approval_middleware not in mws_list:
+                        mws_list.append(_chat_approval_middleware)
+                        logger.info("P15.2 DEBUG: appended chat_approval to mws_list (len=%d)", len(mws_list))
+                    logger.info(
+                        "P7/P11/P15.2 middlewares injected via Application.__init__ fence ✓"
                     )
             except Exception as _e:
                 logger.debug("middleware inject fence check failed: %s", _e)
@@ -1065,7 +1079,7 @@ def install() -> None:
     _PATCHED = True
     _INSTALLED = True  # 6/1 BL-PLUGIN-HERMES-015-LAZY-INSTALL: pre_tool_call hook 看这个
 
-    logger.info("catfish-xcatfish-user plugin installed ✓ (13 patches applied)")
+    logger.info("catfish-xcatfish-user plugin installed ✓ (15 patches applied)")
 
 
 # 6/1 BL-PLUGIN-HERMES-015-LAZY-INSTALL — pre_tool_call hook 兜底 fail-loud.
@@ -1179,6 +1193,228 @@ def _patch_p14_approve_chinese_alias() -> None:
 
     GatewayRunner._handle_message = patched
     logger.info("P14 chinese approval alias patched (GatewayRunner._handle_message)")
+
+
+# ── P15 ──────────────────────────────────────────────────────────────────
+#
+# P15 (6/5 鸿波 marathon audit) — Companion chat/completions 真 approval 闭环.
+#
+# 背景 (audit api_server.py:1892-1987 + tools/approval.py:1454-1574):
+#   1. Companion 走 /v1/chat/completions (chat.ts:190). 这条 path 不 register
+#      _gateway_notify_cbs (跟 /v1/runs path 不同, 后者 line 3802 注册).
+#   2. execute_code 触发 check_execute_code_guard → 走 approval.py:1554 fallback
+#      (notify_cb is None) → 立即 return pending dict, agent 不阻塞继续下一轮.
+#   3. 用户点 button 发 "/approve" user message → chat completions 没 slash command
+#      hook → LLM 直接看 "/approve" 编释义. 永远不解 block.
+#   4. _gateway_queues vs _pending 是两个独立 dict — fallback 写 _pending,
+#      resolve_gateway_approval 操作 _gateway_queues. 没人 resolve fallback.
+#
+# 修法 (不 fork _handle_chat_completions, 用 Python 闭包反射):
+#   - hermes 闭包 _on_delta 持有 local 变量 _stream_q (api_server.py:1896).
+#   - patched _run_agent 通过 stream_delta_callback.__closure__ 拿 _stream_q ref.
+#   - 注册 _approval_notify 到 _gateway_notify_cbs[session_key], notify 时把
+#     approval data 走现有 ("__tool_progress__", dict) tuple pattern push 进
+#     _stream_q. _write_sse_chat_completion._emit (line 2156) 自动写出
+#     `event: hermes.tool.progress` SSE event 给 Companion (复用现有协议, 不动
+#     hermes 一行代码).
+#   - Companion 端 chat.ts 解析 SSE event 行 (新增), 检测 status==approval_pending
+#     时 ChatToolCall 弹 button, onClick → tool-bridge RPC `chat_approval`
+#     (plugin 加的 RPC method) → resolve_gateway_approval(sid, choice) 解 block.
+#
+# 风险评估:
+#   - 闭包反射 _on_delta.__closure__ 依赖 hermes 内部变量名 `_stream_q`. hermes
+#     0.16+ 改名 / 改实现 → patch 失效 (silent fail, 只是 button 不工作,
+#     不会 crash). 加 verify_target check 用 grep 检测变量名仍存.
+#   - patch _run_agent (公开 method) 比 fork streaming branch 风险低 1 个数量级.
+
+_APPROVE_REQUEST_TOOL_MARKER = "_approval_request"  # Companion 检测这字符串
+
+
+def _patch_p15_chat_completions_approval() -> None:
+    """patch APIServerAdapter._run_agent — chat/completions 注入 _approval_notify."""
+    try:
+        from gateway.platforms.api_server import APIServerAdapter
+        from tools.approval import (
+            register_gateway_notify,
+            reset_current_session_key,
+            set_current_session_key,
+            unregister_gateway_notify,
+        )
+    except ImportError as e:
+        logger.warning("P15: api_server / approval import 失败 (%s), skip patch", e)
+        return
+
+    _orig = APIServerAdapter._run_agent
+
+    async def patched_run_agent(self, *args, **kwargs):
+        cb = kwargs.get("stream_delta_callback")
+        sid = (
+            kwargs.get("gateway_session_key")
+            or kwargs.get("session_id")
+        )
+
+        # 反射拿 _stream_q (api_server.py:1896 _on_delta 闭包持有这个 local 变量)
+        stream_q = None
+        if cb is not None and getattr(cb, "__closure__", None) is not None:
+            try:
+                freevars = cb.__code__.co_freevars
+                for i, name in enumerate(freevars):
+                    if name == "_stream_q":
+                        stream_q = cb.__closure__[i].cell_contents
+                        break
+            except Exception as e:  # noqa: BLE001
+                logger.debug("P15: closure 反射失败 (%s), 跳过 approval 注入", e)
+
+        notify_cb = None
+        if stream_q is not None and sid:
+            def _approval_notify(approval_data):
+                """Push approval event 到 chat completion SSE stream.
+
+                复用 hermes 现有 ("__tool_progress__", dict) tuple pattern —
+                _write_sse_chat_completion._emit (api_server.py:2156) 把这种
+                tuple 写为 `event: hermes.tool.progress\\ndata: {...}` SSE event,
+                Companion chat.ts 解析检测 status==approval_pending.
+                """
+                event = {
+                    "tool": _APPROVE_REQUEST_TOOL_MARKER,
+                    "status": "approval_pending",
+                    "approval_session_key": sid,
+                    "command": approval_data.get("command", ""),
+                    "pattern_key": approval_data.get("pattern_key", ""),
+                    "description": approval_data.get("description", ""),
+                    "choices": ["once", "session", "always", "deny"],
+                }
+                try:
+                    stream_q.put(("__tool_progress__", event))
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("P15: stream_q.put 失败 (%s)", e)
+
+            notify_cb = _approval_notify
+            try:
+                register_gateway_notify(sid, notify_cb)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("P15: register_gateway_notify 失败 (%s)", e)
+                notify_cb = None
+
+        # P15 真根因 fix (00:30 audit): approval.py:1521 `session_key =
+        # get_current_session_key()` 拿 _approval_session_key contextvar. chat
+        # completions path 没 set 这个 contextvar, 默认 fallback "default" 字符串.
+        # plugin register_gateway_notify 用的 sid (e.g. session_id) ≠ "default",
+        # 所以 _gateway_notify_cbs.get("default") = None, notify_cb 没调 → 走 fallback.
+        # set_current_session_key(sid) 跟 /v1/runs path (api_server.py:3797) 一样,
+        # 让 approval.py 内 get 拿到匹配的 sid → notify_cb 命中. P0 patch_asyncio
+        # _executor_for_contextvars 保证 contextvar 跨 run_in_executor 透传.
+        approval_token = None
+        if sid:
+            try:
+                approval_token = set_current_session_key(sid)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("P15: set_current_session_key 失败 (%s)", e)
+
+        try:
+            return await _orig(self, *args, **kwargs)
+        finally:
+            if approval_token is not None:
+                try:
+                    reset_current_session_key(approval_token)
+                except Exception:  # noqa: BLE001
+                    pass
+            if notify_cb is not None:
+                try:
+                    unregister_gateway_notify(sid)
+                except Exception:  # noqa: BLE001
+                    pass
+
+    APIServerAdapter._run_agent = patched_run_agent
+    logger.info(
+        "P15 chat/completions approval patched (_run_agent wrapped, "
+        "approval flows through hermes.tool.progress SSE event)"
+    )
+
+
+# ── P15.2 ──────────────────────────────────────────────────────────────
+#
+# P15.2 (6/6 鸿波 audit 真根因): 跨进程 dict 问题.
+# tool-bridge 进程 vs hermes daemon 进程独立, _gateway_queues 不共享.
+# P15 register_gateway_notify 在 hermes daemon 进程 (_run_agent patch),
+# entry 入队 _gateway_queues 在 hermes daemon 内存. tool-bridge 进程的
+# _gateway_queues 是空 dict. resolve_gateway_approval 在 tool-bridge
+# 进程 lookup 拿不到 entry → 返 0 → block 不解.
+#
+# 修法: P15.2 改成 patch hermes API server 加新 HTTP route POST
+# /v1/sessions/{session_id}/approval, Companion fetch 这条 endpoint
+# (走 hermes proxy 8642), 这调用走 hermes daemon 进程, resolve 真起效.
+
+def _patch_p15_2_chat_approval_route() -> None:
+    """注册 chat_approval middleware 到 hermes api_server.
+
+    aiohttp Application 在 AppRunner.setup() 后 frozen, 不能加 route. 跟 P7 一样
+    用 middleware 拦截 path. _patched_app_init (在 _patch_p8_p9_cors 里) 创建
+    hermes _app 时 inject middlewares, 这里把 chat_approval_middleware 也 inject.
+    middleware 检测 POST /v1/sessions/{sid}/approval, 调 resolve_gateway_approval.
+
+    跑在 hermes daemon 进程 (因为这是 hermes APIServerAdapter), _gateway_queues
+    跟 P15 register 的 entry 共享.
+    """
+    try:
+        import aiohttp.web as _aw
+        from tools.approval import resolve_gateway_approval
+    except ImportError as e:
+        logger.warning("P15.2: aiohttp / approval import 失败 (%s), skip", e)
+        return
+
+    @_aw.middleware
+    async def chat_approval_middleware(request, handler):
+        # P15.2 debug: log 每个 request 进 middleware. 找 bug 时用, 验证后删掉.
+        logger.info(
+            "P15.2 mw FIRED: %s %s",
+            request.method, request.path,
+        )
+        # path match: /v1/sessions/<sid>/approval
+        if request.method == "POST":
+            path = request.path
+            if path.startswith("/v1/sessions/") and path.endswith("/approval"):
+                parts = path.strip("/").split("/")
+                if len(parts) == 4 and parts[3] == "approval":
+                    session_id = parts[2]
+                    try:
+                        body = await request.json()
+                    except Exception:
+                        return _aw.json_response(
+                            {"error": "JSON body required"}, status=400
+                        )
+                    choice = str(body.get("choice", "")).strip().lower()
+                    resolve_all = bool(body.get("all", False))
+                    if choice not in {"once", "session", "always", "deny"}:
+                        return _aw.json_response(
+                            {"error": f"choice ∈ once/session/always/deny, got: {choice!r}"},
+                            status=400,
+                        )
+                    try:
+                        resolved = resolve_gateway_approval(
+                            session_id, choice, resolve_all=resolve_all,
+                        )
+                        logger.info(
+                            "P15.2 chat_approval resolved=%d choice=%s sid=%s",
+                            resolved, choice, session_id[:24],
+                        )
+                        return _aw.json_response(
+                            {"resolved": resolved, "choice": choice}
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        logger.exception("P15.2: chat_approval resolve 异常")
+                        return _aw.json_response({"error": str(e)}, status=500)
+        return await handler(request)
+
+    # 注册到 module global, _patched_app_init 会读这个 list (跟 P7 一样的 pattern).
+    # _patch_p8_p9_cors 里 inject middlewares. 这里 expose 给那边 import.
+    global _chat_approval_middleware  # noqa: PLW0603
+    _chat_approval_middleware = chat_approval_middleware
+    logger.info("P15.2 chat_approval middleware registered (waiting for app init)")
+
+
+# module-level reference for _patched_app_init in P7 path
+_chat_approval_middleware = None  # noqa: PLW0603
 
 
 # hermes 0.14+ plugin discovery 自动调 __init__.py 里的 install() 或类似 hook.

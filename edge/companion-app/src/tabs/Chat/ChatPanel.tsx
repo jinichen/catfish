@@ -1,10 +1,18 @@
 /** 聊天主面板 —— 消息流 + 输入框,自动滚到底部 */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import ChatMessage from "./ChatMessage";
 import ChatInput from "./ChatInput";
 import type { Attachment, ChatMessage as Msg } from "../../types/chat";
 import { useAgentStore } from "../../store/agent";
+import { toolBridgeChatApproval } from "../../lib/tauri";
+
+interface PendingApproval {
+  approval_session_key: string;
+  command: string;
+  description: string;
+  pattern_key: string;
+}
 
 interface Props {
   messages: Msg[];
@@ -48,6 +56,34 @@ export default function ChatPanel({
       el.scrollTop = el.scrollHeight;
     }
   }, [messages]);
+
+  // P44.3 (6/6 鸿波 marathon): floating approval banner — 在 LLM stream 期间立即弹.
+  // 背景: hermes _gateway_approval 阻塞等 decision 时, chat completions stream
+  // 没 finalize → ChatToolCall 卡片不渲染 → P27 inline button 不出. hermes 60s
+  // 后 timeout 解 block 太晚, button 失效. 这里 listen catfish:approval-pending
+  // event (P15 _approval_notify 发的 SSE event), 立即弹 banner 给员工点.
+  const [pending, setPending] = useState<PendingApproval | null>(null);
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const ev = e as CustomEvent<PendingApproval>;
+      if (ev.detail?.approval_session_key) {
+        setPending(ev.detail);
+      }
+    };
+    window.addEventListener("catfish:approval-pending", handler as EventListener);
+    return () => window.removeEventListener("catfish:approval-pending", handler as EventListener);
+  }, []);
+
+  const handleApproval = async (choice: "once" | "session" | "always" | "deny") => {
+    if (!pending) return;
+    try {
+      await toolBridgeChatApproval(pending.approval_session_key, choice);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("[P44.3] chat_approval RPC 失败:", err);
+    }
+    setPending(null);
+  };
 
   // P27 (6/5 鸿波): 监听 ChatToolCall approval inline button 触发的 send event.
   // ChatToolCall → window.dispatchEvent('catfish:approval-send', detail.text)
@@ -99,6 +135,66 @@ export default function ChatPanel({
           />
         ))}
       </div>
+      {pending && (
+        <div
+          style={{
+            padding: "10px 14px",
+            margin: "0 var(--space-3) 8px",
+            borderRadius: 8,
+            background: "var(--catfish-bg-elevated, #1a1f2e)",
+            border: "1px solid var(--catfish-cyan-dim, #0891b2)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+          }}
+        >
+          <div style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>
+            ⚠️ hermes 等批准: <code style={{ background: "transparent" }}>{pending.pattern_key}</code>
+          </div>
+          <div
+            style={{
+              fontSize: 11,
+              fontFamily: "var(--font-mono)",
+              color: "var(--catfish-text)",
+              background: "var(--catfish-bg)",
+              padding: "6px 8px",
+              borderRadius: 4,
+              maxHeight: 80,
+              overflow: "auto",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-all",
+            }}
+          >
+            {pending.command}
+          </div>
+          <div style={{ display: "flex", gap: 8, fontSize: 12 }}>
+            <button
+              onClick={() => void handleApproval("once")}
+              style={btnStyle("var(--status-ok, #16a34a)")}
+            >
+              ✓ 批准
+            </button>
+            <button
+              onClick={() => void handleApproval("session")}
+              style={btnStyle("var(--catfish-cyan-dim, #0891b2)")}
+            >
+              ✓ 本会话批准
+            </button>
+            <button
+              onClick={() => void handleApproval("always")}
+              style={btnStyle("var(--catfish-cyan-dim, #0891b2)")}
+            >
+              ✓ 始终批准
+            </button>
+            <button
+              onClick={() => void handleApproval("deny")}
+              style={btnStyle("var(--status-err, #dc2626)")}
+            >
+              ✗ 拒绝
+            </button>
+          </div>
+        </div>
+      )}
       <ChatInput
         isStreaming={isStreaming}
         onSend={onSend}
@@ -110,6 +206,19 @@ export default function ChatPanel({
       />
     </div>
   );
+}
+
+function btnStyle(color: string): React.CSSProperties {
+  return {
+    background: "transparent",
+    border: `1px solid ${color}`,
+    color,
+    borderRadius: 4,
+    padding: "4px 10px",
+    fontSize: 12,
+    cursor: "pointer",
+    fontWeight: 500,
+  };
 }
 
 function EmptyState() {
