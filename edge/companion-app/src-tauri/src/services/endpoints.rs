@@ -123,10 +123,7 @@ struct EndpointsYaml {
     secret_broker_url: Option<String>,
     secret_broker_host: Option<String>,
     secret_broker_port: Option<u16>,
-    /// P29 (6/5 鸿波): identity-server (OIDC issuer) URL. 显式重复 oidc.issuer
-    /// 以便 yaml 真**`endpoints 段一目了然 5 服务`**真, 但 oauth.rs 仍读 oidc.issuer
-    /// (跟历史保持兼容). 优先级: endpoints.identity_url > oidc.issuer.
-    identity_url: Option<String>,
+    // identity URL 不在这 — 走 oauth.rs OidcConfig 读 yaml.oidc.issuer (协议术语)
 }
 
 fn yaml_path() -> Option<std::path::PathBuf> {

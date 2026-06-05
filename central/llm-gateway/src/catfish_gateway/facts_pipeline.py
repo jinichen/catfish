@@ -244,8 +244,16 @@ async def run_extract(meta: dict, triggered_by: str | None = None) -> dict:
 
 # ── Step 2: find_impact ─────────────────────────
 
-SKILLS_HUB_BASE = "http://127.0.0.1:8997"  # BL-D2 默认, 跟 skills_hub_proxy 同
+# P30 (6/5 鸿波): 砍硬编码 127.0.0.1:8997. 改 lazy function — 第一次 call 时
+# 走 load_config().skills_hub.upstream_url, 跟 skills_hub_proxy 同 source.
+# 让 skills-hub 能跨主机部署 (大客户 k8s 不同 pod / nginx 反代).
 SKILLS_HUB_TIMEOUT = 10.0
+
+
+def _skills_hub_base() -> str:
+    """读 gateway config 真 skills_hub.upstream_url. 走 load_config 单例缓存,
+    overhead 微 (毫秒级 dict lookup, 不重读 yaml)."""
+    return load_config().skills_hub.upstream_url.rstrip("/")
 
 
 async def _fetch_all_skills(user: User) -> list[dict]:
@@ -261,7 +269,7 @@ async def _fetch_all_skills(user: User) -> list[dict]:
     }
     async with httpx.AsyncClient(timeout=SKILLS_HUB_TIMEOUT) as client:
         try:
-            resp = await client.get(f"{SKILLS_HUB_BASE}/skills", headers=headers)
+            resp = await client.get(f"{_skills_hub_base()}/skills", headers=headers)
             resp.raise_for_status()
             skills_meta = resp.json().get("skills", [])
         except Exception as e:  # noqa: BLE001
@@ -278,7 +286,7 @@ async def _fetch_all_skills(user: User) -> list[dict]:
                 continue
             try:
                 md_resp = await client.get(
-                    f"{SKILLS_HUB_BASE}/skills/{ns}/{name}/{version}/files/SKILL.md",
+                    f"{_skills_hub_base()}/skills/{ns}/{name}/{version}/files/SKILL.md",
                     headers=headers,
                 )
                 md_content = md_resp.text if md_resp.status_code == 200 else ""
@@ -383,14 +391,14 @@ async def run_generate_patches(
             ns = imp["skill_namespace"]
             name = imp["skill_name"]
             try:
-                latest = await client.get(f"{SKILLS_HUB_BASE}/skills/{ns}/{name}", headers=headers)
+                latest = await client.get(f"{_skills_hub_base()}/skills/{ns}/{name}", headers=headers)
                 latest.raise_for_status()
                 version = latest.json().get("version", "")
                 if not version:
                     logger.warning("拉 skill %s/%s latest 没 version, 跳过", ns, name)
                     continue
                 md_resp = await client.get(
-                    f"{SKILLS_HUB_BASE}/skills/{ns}/{name}/{version}/files/SKILL.md",
+                    f"{_skills_hub_base()}/skills/{ns}/{name}/{version}/files/SKILL.md",
                     headers=headers,
                 )
                 full_md = md_resp.text if md_resp.status_code == 200 else ""
