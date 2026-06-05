@@ -234,6 +234,19 @@ export const wikiCreateEntityOrConcept = (args: {
 export const wikiUpdateFile = (relPath: string, content: string) =>
   rawInvoke<WikiWriteResult>("wiki_update_file", { relPath, content });
 
+// P28 (6/5 鸿波): Companion Dashboard 改 gateway URL/token
+export interface ServerConfig {
+  gateway_url: string;
+  gateway_token: string;
+  token_source: "yaml" | "env" | "none";
+}
+
+export const readServerConfig = () =>
+  rawInvoke<ServerConfig>("read_server_config");
+
+export const writeServerConfig = (gatewayUrl: string, gatewayToken: string) =>
+  rawInvoke<void>("write_server_config", { gatewayUrl, gatewayToken });
+
 // ── BL-E27 spike: 桌宠副窗 ─────────────────────────────────
 export const petShow = () => rawInvoke<void>("pet_show");
 export const petHide = () => rawInvoke<void>("pet_hide");

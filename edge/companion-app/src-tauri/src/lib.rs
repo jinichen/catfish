@@ -544,6 +544,9 @@ pub fn run() {
             commands::wiki_write::wiki_update_file,
             // P16 (6/5): 对话上传文件 auto ingest → wiki/raw/sources/
             commands::wiki_write::wiki_ingest_source,
+            // P28 (6/5): Companion Dashboard 改 gateway URL/token
+            commands::server_config::read_server_config,
+            commands::server_config::write_server_config,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

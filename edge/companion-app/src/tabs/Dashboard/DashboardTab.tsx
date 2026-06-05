@@ -67,6 +67,7 @@ import MySkillsCard from "./MySkillsCard";
 // import BriefingCard from "./BriefingCard";
 import ProactiveCard from "./ProactiveCard";
 import AgentPrefsCard from "./AgentPrefsCard";
+import ServerConfigCard from "./ServerConfigCard"; // P28 (6/5 鸿波): UI 改 gateway URL/token
 import RelationCard from "./RelationCard";
 import HermesMemoryCard from "./HermesMemoryCard";  // BL-DASHBOARD-HERMES-MEMORY-CARD (5/16)
 // BL-MEMORY-HISTORY-KILL (5/16): catfish_remember 5/16 A 黑名单后, session_facts.json
@@ -152,6 +153,18 @@ export default function DashboardTab() {
         count={1}
       >
         <AgentPrefsCard />
+      </CollapsibleSection>
+
+      {/* P28 (6/5 鸿波): 服务器配置 — gateway URL + internal token.
+          商用部署员工不会 vim ~/.catfish/*.yaml, 这卡 UI 改完写回 yaml +
+          提示重启 hermes/Companion. 默认收 (大部分时间不动). */}
+      <CollapsibleSection
+        id="server"
+        title="🌐 服务器配置"
+        count={1}
+        defaultCollapsed
+      >
+        <ServerConfigCard />
       </CollapsibleSection>
 
       {/* BL-EMPLOYEE-PRIVACY-VERIFICATION (#77, 5/25):
