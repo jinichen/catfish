@@ -53,6 +53,7 @@ import logging
 import os
 import secrets
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -1402,6 +1403,56 @@ def _scan_local_audit_jsonl(p: Path, since_ts: int) -> dict:
     }
 
 
+def _delegate_to_bash_catfish(subcommand: str, extra_args: list[str]) -> int:
+    """P33 (6/5 鸿波) — Python CLI 装的员工 → bash CLI 的 doctor / lint / brand-*
+    走 subprocess 透传, 不 Python 重写一遍. 实时 stdout (capture_output=False).
+
+    bash CLI 位置: <repo>/edge/branding/catfish (从 catfish.py 相对推).
+    """
+    script_dir = Path(__file__).resolve().parent  # edge/catfish-cli/
+    bash_cli = script_dir.parent / "branding" / "catfish"  # edge/branding/catfish
+    if not bash_cli.exists():
+        print(
+            f"✗ bash catfish CLI 找不到: {bash_cli}\n"
+            f"  设 CATFISH_REPO_ROOT=<repo> 或 cd 到 catfish 仓库后重跑",
+            file=sys.stderr,
+        )
+        return 1
+    cmd = ["bash", str(bash_cli), subcommand, *extra_args]
+    try:
+        proc = subprocess.run(cmd, check=False)
+        return proc.returncode
+    except FileNotFoundError:
+        print(f"✗ bash 不在 PATH", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 130
+
+
+def cmd_doctor(args) -> int:
+    """完整自检 — Gateway / Chrome / Plugins / Wiki / Memory / Network / Brand patch.
+    透传到 bash catfish doctor (含 P15 [Network] off-site check).
+    """
+    return _delegate_to_bash_catfish("doctor", getattr(args, "passthrough", []) or [])
+
+
+def cmd_lint(args) -> int:
+    """扫 ~/.catfish/wiki/ 真**broken-link / orphan concept / dead-end**.
+    透传到 bash catfish lint (跑 scripts/lint_wiki.py).
+    """
+    return _delegate_to_bash_catfish("lint", getattr(args, "passthrough", []) or [])
+
+
+def cmd_brand_check(args) -> int:
+    """校 hermes brand patch 完整性 (升 hermes 后跑). 透传 bash."""
+    return _delegate_to_bash_catfish("brand-check", getattr(args, "passthrough", []) or [])
+
+
+def cmd_brand_fix(args) -> int:
+    """re-apply hermes brand patch (升 hermes 后第一次跑). 透传 bash."""
+    return _delegate_to_bash_catfish("brand-fix", getattr(args, "passthrough", []) or [])
+
+
 def cmd_init(args) -> int:
     """P25 (6/5 鸿波): 商用部署 onboarding.
 
@@ -1763,7 +1814,41 @@ def build_parser() -> argparse.ArgumentParser:
     )
     init_p.set_defaults(func=cmd_init)
 
+    # P33 (6/5 鸿波): bash CLI 真 doctor / lint / brand-* 透传 Python CLI,
+    # 鸿波装 Python entry-point 也能跑全套自检 + brand patch 管理.
+    doctor_p = sub.add_parser(
+        "doctor",
+        aliases=["self-check", "check"],
+        help="完整自检 — Gateway / Chrome / Plugins / Wiki / Memory / Network / Brand patch",
+    )
+    doctor_p.add_argument("passthrough", nargs="*", help="透传给 bash catfish doctor")
+    doctor_p.set_defaults(func=cmd_doctor)
+
+    lint_p = sub.add_parser(
+        "lint",
+        help="扫 ~/.catfish/wiki/ broken-link / orphan / dead-end (--json 机器读)",
+    )
+    lint_p.add_argument("passthrough", nargs="*", help="透传给 bash catfish lint")
+    lint_p.set_defaults(func=cmd_lint)
+
+    brand_check_p = sub.add_parser(
+        "brand-check",
+        help="校 hermes brand patch 完整性 (升 hermes 后跑)",
+    )
+    brand_check_p.add_argument("passthrough", nargs="*", help="透传给 bash catfish brand-check")
+    brand_check_p.set_defaults(func=cmd_brand_check)
+
+    brand_fix_p = sub.add_parser(
+        "brand-fix",
+        help="re-apply hermes brand patch (升 hermes 后第一次跑)",
+    )
+    brand_fix_p.add_argument("passthrough", nargs="*", help="透传给 bash catfish brand-fix")
+    brand_fix_p.set_defaults(func=cmd_brand_fix)
+
     return p
+
+
+_PASSTHROUGH_COMMANDS = {"doctor", "self-check", "check", "lint", "brand-check", "brand-fix"}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1772,7 +1857,17 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
     parser = build_parser()
-    args = parser.parse_args(argv)
+    raw_argv = list(argv) if argv is not None else sys.argv[1:]
+    # P33 (6/5 鸿波): doctor/lint/brand-* 真**`bash CLI 透传`** 真 — args 可能带
+    # --json 之类真**`不在 Python parser 注册`** 真**`flag`**, 用 parse_known_args
+    # 收 unknown args 全塞 passthrough.
+    if raw_argv and raw_argv[0] in _PASSTHROUGH_COMMANDS:
+        args, extra = parser.parse_known_args(raw_argv)
+        # 跟 nargs="*" 收的合并
+        prev = getattr(args, "passthrough", None) or []
+        args.passthrough = list(prev) + list(extra)
+    else:
+        args = parser.parse_args(argv)
     return args.func(args)
 
 
