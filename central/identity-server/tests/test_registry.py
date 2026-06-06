@@ -307,7 +307,17 @@ def test_persistence_yaml(tmp_path: Path, monkeypatch) -> None:
 
 # ────────────────────────────────────────────────────────────────
 # BL-FED2.2 (5/12 鸿波拍板) — expertise 字段 + /by-expertise 黄页
+# C4 (6/6 鸿波 CI matrix audit): /by-expertise endpoint 已废弃返 410 Gone
+# (federation 5/26 砍 Plan D Federation 整套停, 详 docs/HERMES-013-ALIGN.md).
+# 8 个 test_by_expertise_* 标 xfail (留 audit trail 防忘),
+# 等 federation v2 重启时 重写 endpoint + test.
+# 其它 test (test_register_with_expertise / lookup / list) 仍跑.
 # ────────────────────────────────────────────────────────────────
+
+_FED_GONE = pytest.mark.xfail(
+    reason="BL-FED2.2 /by-expertise endpoint 5/26 废弃 (federation 砍), 等 federation v2 重启",
+    strict=False,
+)
 
 
 def test_register_with_expertise(client: TestClient) -> None:
@@ -326,6 +336,7 @@ def test_register_with_expertise(client: TestClient) -> None:
     assert look["expertise"] == ["资质管理", "外勤报销"]
 
 
+@_FED_GONE
 def test_by_expertise_hit(client: TestClient) -> None:
     client.post(
         "/registry/register",
@@ -354,6 +365,7 @@ def test_by_expertise_hit(client: TestClient) -> None:
     assert subs == {"alice@ffcs.cn", "bob@ffcs.cn"}
 
 
+@_FED_GONE
 def test_by_expertise_case_insensitive(client: TestClient) -> None:
     """tag 大小写不敏感匹配."""
     client.post(
@@ -370,6 +382,7 @@ def test_by_expertise_case_insensitive(client: TestClient) -> None:
     assert data["matched_count"] == 1
 
 
+@_FED_GONE
 def test_by_expertise_no_match(client: TestClient) -> None:
     client.post(
         "/registry/register",
@@ -386,17 +399,20 @@ def test_by_expertise_no_match(client: TestClient) -> None:
     assert data["matches"] == []
 
 
+@_FED_GONE
 def test_by_expertise_empty_tag(client: TestClient) -> None:
     """tag 必填."""
     resp = client.get("/registry/by-expertise?tag=")
     assert resp.status_code in (400, 422)
 
 
+@_FED_GONE
 def test_by_expertise_no_param(client: TestClient) -> None:
     resp = client.get("/registry/by-expertise")
     assert resp.status_code == 422  # FastAPI required query param
 
 
+@_FED_GONE
 def test_by_expertise_excludes_no_expertise(client: TestClient) -> None:
     """没注册 expertise 的 agent 不出现在黄页."""
     client.post(
@@ -421,6 +437,7 @@ def test_by_expertise_excludes_no_expertise(client: TestClient) -> None:
     assert data["matches"][0]["sub"] == "bob@ffcs.cn"
 
 
+@_FED_GONE
 def test_by_expertise_online_only(client: TestClient, monkeypatch) -> None:
     """online_only=true 过滤掉离线 agent."""
     # alice 刚 register (在线)
@@ -458,6 +475,7 @@ def test_by_expertise_online_only(client: TestClient, monkeypatch) -> None:
     assert on_resp["matches"][0]["sub"] == "alice@ffcs.cn"
 
 
+@_FED_GONE
 def test_by_expertise_response_no_sensitive_fields(client: TestClient) -> None:
     """**隐私铁律** — by-expertise 不返 jwks_uri / public_pem / catfish_endpoint."""
     client.post(
@@ -482,6 +500,7 @@ def test_by_expertise_response_no_sensitive_fields(client: TestClient) -> None:
     assert "online" in match
 
 
+@_FED_GONE
 def test_by_expertise_online_first_ordering(client: TestClient) -> None:
     """在线员工优先于离线员工排在前面."""
     for sub in ["alice@ffcs.cn", "bob@ffcs.cn", "charlie@ffcs.cn"]:

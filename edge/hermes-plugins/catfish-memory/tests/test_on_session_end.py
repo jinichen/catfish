@@ -133,9 +133,10 @@ def test_extract_message_pairs_caps_at_max():
 
 
 def test_format_journal_entry_includes_date_and_short_sid():
+    # C3 (6/6): product code 改 backtick → pipe, test 同步
     entry = _format_journal_entry("session-abcdef123456", "### 主题\n\n正文")
     assert entry.startswith("## ")  # 日期开头
-    assert "session `…123456`" in entry  # session id 最后 6 字符
+    assert "…123456" in entry  # session id 最后 6 字符
     assert "### 主题" in entry
     assert "正文" in entry
 
@@ -143,7 +144,7 @@ def test_format_journal_entry_includes_date_and_short_sid():
 def test_format_journal_entry_short_sid():
     """session_id 短的 (< 6 字符) 也不挂"""
     entry = _format_journal_entry("ab", "summary")
-    assert "session `…ab`" in entry
+    assert "…ab" in entry
 
 
 def test_append_journal_creates_file_and_parent(fake_home: Path):

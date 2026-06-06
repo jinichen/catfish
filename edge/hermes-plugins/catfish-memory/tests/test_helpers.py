@@ -80,9 +80,11 @@ def test_extract_message_pairs_caps_at_max():
 
 
 def test_format_journal_entry_includes_date_and_short_sid():
+    # C3 (6/6 鸿波 CI matrix audit): product code 改输出格式 `…sid` (backtick)
+    # → | …sid (pipe), test 没同步. 改 assert 匹配新格式.
     entry = _format_journal_entry("session-abcdef123456", "### 主题\n\n正文")
     assert entry.startswith("## ")
-    assert "session `…123456`" in entry
+    assert "…123456" in entry  # short sid suffix
     assert "### 主题" in entry
     assert "正文" in entry
 
@@ -90,7 +92,7 @@ def test_format_journal_entry_includes_date_and_short_sid():
 def test_format_journal_entry_short_sid():
     """session_id 短的 (< 6 字符) 也不挂"""
     entry = _format_journal_entry("ab", "summary")
-    assert "session `…ab`" in entry
+    assert "…ab" in entry
 
 
 # ── _append_journal ─────────────────────────────

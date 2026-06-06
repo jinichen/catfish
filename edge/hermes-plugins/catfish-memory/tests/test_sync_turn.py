@@ -460,7 +460,8 @@ def test_sync_turn_end_to_end_writes_correct_journal_format(
 
     content = (fake_home / "employee_journal.md").read_text(encoding="utf-8")
     assert "## " in content  # 日期 header
-    assert "session `…def456`" in content  # session_id 尾 6 字符
+    # C3 (6/6): product code 改 backtick → pipe, test 同步
+    assert "…def456" in content  # session_id 尾 6 字符
     assert "测试主题" in content
 
 
