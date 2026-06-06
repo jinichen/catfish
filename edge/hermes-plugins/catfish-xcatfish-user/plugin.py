@@ -932,18 +932,11 @@ def _patch_p8_p9_cors() -> None:
                         mws_list.append(_request_stash_middleware)
                     if _proxy_404_middleware not in mws_list:
                         mws_list.append(_proxy_404_middleware)
-                    # P15.2 (6/6): chat_approval middleware. None 时 skip (P15.2 patch
-                    # 还没注册到 module global). 注册顺序: install() 里 P15.2 在 P8/P9
-                    # 之前 — 但 init 时 Application.__init__ 真正 trigger 是 connect()
-                    # 时. 到那时 P15.2 已经跑过, _chat_approval_middleware 非 None.
-                    logger.info(
-                        "P15.2 DEBUG: _chat_approval_middleware=%r, in_list=%s",
-                        _chat_approval_middleware,
-                        _chat_approval_middleware in mws_list if _chat_approval_middleware else False,
-                    )
+                    # P15.2 (6/6): chat_approval middleware. 必须 register 阶段同步跑
+                    # (__init__.py:Step 2.7), delayed install 太晚 — Application.__init__
+                    # 在 connect() 立即 trigger, 早于 delayed install 3 分钟.
                     if _chat_approval_middleware is not None and _chat_approval_middleware not in mws_list:
                         mws_list.append(_chat_approval_middleware)
-                        logger.info("P15.2 DEBUG: appended chat_approval to mws_list (len=%d)", len(mws_list))
                     logger.info(
                         "P7/P11/P15.2 middlewares injected via Application.__init__ fence ✓"
                     )
@@ -1409,11 +1402,6 @@ def _patch_p15_2_chat_approval_route() -> None:
 
     @_aw.middleware
     async def chat_approval_middleware(request, handler):
-        # P15.2 debug: log 每个 request 进 middleware. 找 bug 时用, 验证后删掉.
-        logger.info(
-            "P15.2 mw FIRED: %s %s",
-            request.method, request.path,
-        )
         # path match: /v1/sessions/<sid>/approval
         if request.method == "POST":
             path = request.path

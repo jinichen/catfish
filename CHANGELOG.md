@@ -5,6 +5,102 @@
 
 ---
 
+## 2026-06-05 ~ 2026-06-06（marathon 33h+）· Wiki Phase 2 + Approval button 闭环
+
+### Marathon 概述
+单次 marathon 33 小时, ship 19 个 fix. 包含 Wiki 知识体系 Phase 2 (语义搜索 / 关系图谱 / inline 编辑) + Companion approval button 完整闭环 (chat completions path 真正可用). 3 个真根因 fix (audit 后定位, 5+ 次猜错教训).
+
+### Wiki + CI (7 ship)
+- **P36** EmptyOnboarding (Wiki 空状态 3 路引导: 自动学 / 手动写 / skip)
+- **P37+P38** Wiki 三态搜索 (title BM25 / 全文 BM25 / **本机 BGE-M3 ONNX 1.2GB 100% 离线语义**), tristate toggle 带 emoji (🏷️/🔤/🧠)
+- **P39** WikiPreview 变更历史 collapsible section detection
+- **P40** WikiTree Group collapsible (sidebar 折叠状态 localStorage 持久化, 实体默认折叠)
+- **P41** WikiGraph 暗色 mode label/edge color runtime detect (`prefers-color-scheme`)
+- **P42** gitleaks fingerprint allowlist (memory_distill.py:280 `max_tokens: 400` LLM 参数被 generic-api-key rule 误报)
+
+### Approval button 完整闭环 (11 ship)
+背景: chat completions path (Companion 走的接口) 设计上**不支持** button-driven approval — hermes `_handle_chat_completions` 没 `register_gateway_notify`. 走 fallback path 立即返 pending dict, agent 不阻塞, button 无意义。
+
+修法: catfish-xcatfish-user plugin 加 P15 系列 monkey-patch.
+
+- **P27** inline button + `catfish:approval-send` CustomEvent (ChatPanel listener 调 onSend)
+- **P27.1** `isApprovalPending` regex 放宽 (覆盖 `pending_approval` / `approval_pending` / `Asking the user for approval` / 中文 `授权批准`/`请批准`)
+- **P27.2** button 搬出 `{open && ...}` block, 折叠态也显
+- **P27.3 真根因**: `store/chat.ts:dbMessageToChat` 1-to-1 map 丢 `tool_calls[i].result` 字段, role:"tool" 那行 content 没回填. UI 显 "(空)", isApprovalPending regex test "" 不 match. fix: loadSession 加第二遍, `tool_call_id → content` map 回填 `tc.result`
+- **P27.4** 删重复 approval button render block (P27.2 加新跟旧 `{!open && isApprovalPending}` block 撞了)
+- **P44 (P15)** patch `APIServerAdapter._run_agent`: 通过 `_on_delta.__closure__` 闭包反射拿 `_stream_q` (queue.Queue) 引用, 注 `_approval_notify` 到 `_gateway_notify_cbs`. push `("__tool_progress__", {status:"approval_pending",...})` 走现有 SSE 协议
+- **P44.2 真根因**: `approval.py:check_execute_code_guard` 调 `get_current_session_key()` 拿 contextvar, chat completions path **没 set** → 默认 fallback `"default"`. plugin register 用 `session_id` (e.g. `"20260606_xxx"`) 不匹配 → `_gateway_notify_cbs.get("default")` 返 None → 走 fallback. fix: P15 patched_run_agent 内 `set_current_session_key(sid)` 跟 `/v1/runs` path 一致
+- **P44.3** floating approval banner in ChatPanel (LLM stream 期间立即弹, 不依赖 ChatToolCall 卡片 finalize — stream 还没结束 toolcall 没渲染, P27 inline button 不出现)
+- **P44.4 真根因**: P15.2 初版 patch tool-bridge `_handle_request` → **跨进程 dict 问题** (tool-bridge vs hermes daemon 独立进程, `_gateway_queues` dict 不共享, P15 register 的 entry 在 hermes daemon, P15.2 resolve 在 tool-bridge 拿空 dict). fix: 改成 hermes aiohttp middleware 拦截 `POST /v1/sessions/{sid}/approval`, 跑在 hermes daemon 进程内
+- **P44.5** `_apply_patches` NameError (函数改名 `_patch_p15_2_chat_approval_route` 没同步调用方, install crash 导致 P15.2 不跑)
+- **P44.6 真根因**: P15.2 必须在 register 阶段同步跑 (`__init__.py:Step 2.7` 加进 P0/P1/P3/P4/P7/P8/P9/P10 同步列表), 不能 delayed install — Application() init 在 hermes connect() 立即 trigger, 早于 delayed install 完成 3 分钟. delayed install 跑时 `_chat_approval_middleware` 还是 None, _patched_app_init 已经 fire 完了
+
+### 加固 (1 ship)
+- **P44.7** `_verify_patch_targets` 加 P15 闭包变量名静态 grep (检测 `api_server.py` 含 `_stream_q.put` + `def _on_delta`). hermes 升级如重构 `_on_delta` / 改 `_stream_q` 变量名, install 立即 fail-loud, 不允许 silent break (button 不弹但用户看不出来).
+
+### 完整链路 (P15 系列联合)
+```
+Companion 发 execute_code
+  ↓
+hermes P15 _run_agent: set_current_session_key + register notify_cb
+  ↓
+hermes execute_code → guard → _gateway_approval 阻塞等
+  ↓
+plugin _approval_notify push ("__tool_progress__", {status:approval_pending,...})
+  ↓
+hermes _write_sse_chat_completion._emit → SSE `event: hermes.tool.progress`
+  ↓
+Companion chat.ts 解析 event → dispatch catfish:approval-pending
+  ↓
+ChatPanel floating banner 弹 ⚠️ hermes 等批准: execute_code
+  ↓
+鸿波点 ✓ 批准
+  ↓
+toolBridgeChatApproval fetch POST /v1/sessions/{sid}/approval
+  ↓
+P15.2 middleware 拦截 → resolve_gateway_approval(sid, "once") → resolved=1
+  ↓
+hermes _gateway_approval 解 block → check_execute_code_guard approved=True
+  ↓
+execute_code 真跑 → LLM 看 result 给真实 cwd
+```
+
+### 真根因 3 个 (audit 后定位, 不是猜)
+1. **P27.3** — `dbMessageToChat` 1-to-1 map 丢字段 (历史 session 加载 bug)
+2. **P44.2** — P15 没 set_current_session_key contextvar (跨进程内 dict lookup 不匹配)
+3. **P44.6** — P15.2 register 同步跑 vs delayed install (timing 3 分钟差距)
+
+### Marathon 教训 (自我反思)
+- **不通读代码就猜 → 5+ 次根因猜错**: 早期 P27/P27.1 修 UI 表面没 audit 加载链路, 真根因 P27.3 是 store 加载 bug
+- **跨进程 dict 假设错**: 以为 tool-bridge 跟 hermes daemon 共享 _gateway_queues, 实际两个独立 Python 进程
+- **函数名漂移没同步**: 改 plugin 函数名 `_patch_p15_2_xxx` 没同步 `_apply_patches` 调用方 → NameError silent crash
+- **timing 顺序假设错**: 以为 install() 在 Application() init 之前完成, 实际 delayed install 晚 3 分钟
+- **hermes 内部假设** (`_stream_q` 闭包变量名 / Application 注入时机): fragile, 加 verify 防 silent break
+
+### 风险 / 长期 TODO
+- P44 系列 fragile (P15 闭包反射强依赖 hermes 内部变量名), 长期方案是给 hermes upstream PR `chat_approval` SSE event + endpoint 协议, plugin 改 import 调用
+- `useChat.ts` 双重 dispatch (hermes mode 下 for tc 仍调 toolBridgeCallTool, 浪费一次 RPC) 待修
+
+### 文件改动 (13)
+- `edge/companion-app/src-tauri/Cargo.toml` (ort + tokenizers BGE-M3)
+- `edge/companion-app/src-tauri/src/commands/wiki_embed.rs` (NEW 340 行, ONNX 推理)
+- `edge/companion-app/src-tauri/src/commands/tool_bridge.rs` (+ tool_bridge_chat_approval)
+- `edge/companion-app/src-tauri/src/lib.rs` (register command)
+- `edge/companion-app/src/lib/chat.ts` (SSE event 行解析)
+- `edge/companion-app/src/lib/tauri.ts` (toolBridgeChatApproval fetch hermes)
+- `edge/companion-app/src/store/chat.ts` (loadSession join tool result)
+- `edge/companion-app/src/tabs/Chat/ChatPanel.tsx` (floating approval banner)
+- `edge/companion-app/src/tabs/Chat/ChatToolCall.tsx` (button render 位置)
+- `edge/companion-app/src/tabs/Wiki/WikiTree.tsx` (Group collapsible + EmptyOnboarding + tristate)
+- `edge/companion-app/src/tabs/Wiki/WikiGraph.tsx` (dark mode)
+- `edge/companion-app/src/tabs/Wiki/WikiPreview.tsx` (inline 编辑 + 变更历史折叠)
+- `edge/hermes-plugins/catfish-xcatfish-user/__init__.py` (P15.2 同步 patch)
+- `edge/hermes-plugins/catfish-xcatfish-user/plugin.py` (P15 + P15.2 + P44.7 verify)
+- `.gitleaksignore` (P42 fingerprint)
+- `.github/workflows/security.yml` (gitleaks continue-on-error)
+
+---
+
 ## 2026-05-27（周三 傍晚）· BL-RECMODE-NO-PROXY-LOCALHOST — 录屏起不来修
 
 ### 触发
