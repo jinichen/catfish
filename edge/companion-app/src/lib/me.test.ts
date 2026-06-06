@@ -97,10 +97,12 @@ afterEach(() => {
 });
 
 describe("fetchWithAuth — hermes 路径 (useHermes=true)", () => {
-  // BL-PLUGIN-P7-PROXY-TOKEN-SWAP (6/1): plugin P7 修后 /api/* 也走 hermes,
-  // plugin _handle_companion_proxy 替换 service token 转发 gateway. /api/me
-  // 跟 /v1/chat/completions 都走 fetchWithHermes, 一致.
-  it("/api/me Authorization 用 hermesAuthHeader, 不调 OAuth", async () => {
+  // C2 (6/6 鸿波 CI matrix audit): test URL 改 /v1/chat/completions —
+  // me.ts:165 BL-API-PATH-AWARE-AUTH (6/2 加) 把 /api/* + /v1/catalog 强制走
+  // OAuth 直连 gateway (避开 hermes P7 catch-all token swap bug). 这 3 个 test
+  // 5/19 写时假设 /api/me 走 hermes path, 6/2 改实现后 test 没同步 → CI 挂.
+  // 改测真走 hermes path 的 URL (/v1/chat/completions, 不含 /api/ 不含 /v1/catalog).
+  it("/v1/chat/completions Authorization 用 hermesAuthHeader, 不调 OAuth", async () => {
     config.useHermes = true;
     config.hermesAuthHeader = "Bearer hermes-static-key-abc";
     config.backendUrl = "http://localhost:8642";
@@ -113,11 +115,11 @@ describe("fetchWithAuth — hermes 路径 (useHermes=true)", () => {
     });
     const { calls } = setFetchMock(() => jsonResp(200, { ok: true }));
 
-    const resp = await fetchWithAuth(`${config.gatewayUrl}/api/me`);
+    const resp = await fetchWithAuth(`${config.backendUrl}/v1/chat/completions`);
     expect(resp.status).toBe(200);
 
     expect(calls).toHaveLength(1);
-    expect(calls[0].url).toBe("http://localhost:8642/api/me");
+    expect(calls[0].url).toBe("http://localhost:8642/v1/chat/completions");
     expect(calls[0].headers["authorization"]).toBe("Bearer hermes-static-key-abc");
     expect(calls[0].headers["x-catfish-user"]).toBe("alice@catfish.dev");
 
@@ -139,7 +141,7 @@ describe("fetchWithAuth — hermes 路径 (useHermes=true)", () => {
     });
     const { calls } = setFetchMock(() => jsonResp(401));
 
-    const resp = await fetchWithAuth(`${config.gatewayUrl}/api/me`);
+    const resp = await fetchWithAuth(`${config.backendUrl}/v1/chat/completions`);
     // hermes 路径**不 retry** 401, 直接透传
     expect(resp.status).toBe(401);
     expect(calls).toHaveLength(1);
@@ -160,7 +162,7 @@ describe("fetchWithAuth — hermes 路径 (useHermes=true)", () => {
     });
     const { calls } = setFetchMock(() => jsonResp(401));
 
-    const resp = await fetchWithAuth(`${config.gatewayUrl}/api/me`);
+    const resp = await fetchWithAuth(`${config.backendUrl}/v1/chat/completions`);
     expect(resp.status).toBe(401);
     expect(calls).toHaveLength(1);  // 只发一次, 不 retry
     expect(invokeMock.mock.calls.find((c) => c[0] === "auth_login")).toBeUndefined();

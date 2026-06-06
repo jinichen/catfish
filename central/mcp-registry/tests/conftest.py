@@ -30,12 +30,17 @@ def registry(manifests_dir: Path) -> ManifestRegistry:
 
 
 @pytest.fixture
-def db() -> SubscriptionDB:
-    """每测一个独立 sqlite :memory: db (单测不依赖 PG, fallback 走 sqlite).
+def db(tmp_path: Path) -> SubscriptionDB:
+    """每测一个独立 sqlite db (单测不依赖 PG, fallback 走 sqlite).
+
+    C5 (6/6 鸿波 CI matrix audit): 原本用 :memory: 不行 — _sqlite_conn 用
+    contextmanager `with` 每次创建/关闭 connection, :memory: db 是 per-connection,
+    _init_sqlite_schema 建的表在 conn1 关闭后丢, 后续 test 拿新 conn2 看不到表 →
+    "no such table" 失败. fix: 用 tmp file (pytest tmp_path), 多 connection 共享.
 
     集成测试 (真 PG) 在 tests/integration/ 单独跑, 需 docker postgres + alembic.
     """
-    return SubscriptionDB(backend="sqlite", sqlite_path=Path(":memory:"))
+    return SubscriptionDB(backend="sqlite", sqlite_path=tmp_path / "test.db")
 
 
 @pytest.fixture
