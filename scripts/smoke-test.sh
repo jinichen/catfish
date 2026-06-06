@@ -183,8 +183,12 @@ else
   section "6. P15.2 resolve endpoint"
 
   # 提取 approval_session_key 从 SSE 流. set -e + pipefail 下, grep 无匹配
-  # 返 1 会让 script exit, 加 || true 兜底 (没匹配也走 fake SID branch).
-  SID=$(echo "$SSE_OUT" | grep -o '"approval_session_key":"[^"]*"' 2>/dev/null | head -1 | sed 's/"approval_session_key":"//;s/"//' || true)
+  # 返 1 会让 script exit, 加 || true 兜底.
+  #
+  # regex 真根因 (6/6 鸿波 audit): json.dumps 默认输出 `"key": "value"` (冒号
+  # 后有 1 个空格), 老 grep `"approval_session_key":"..."` 要求无空格 → 永远不
+  # 匹配, 走 fake sid path. 用 -E 加可选空格 ` *` 通用化.
+  SID=$(echo "$SSE_OUT" | grep -oE '"approval_session_key": *"[^"]*"' 2>/dev/null | head -1 | sed -E 's/"approval_session_key": *"//;s/"$//' || true)
   if [[ -z "$SID" ]]; then
     SID="smoke-test-$(date +%s)"
     echo -e "     ${YELLOW}↳${NC} 没从 SSE 拿到 sid, 用 fake $SID 测 endpoint 返码"
