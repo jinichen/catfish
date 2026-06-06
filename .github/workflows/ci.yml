@@ -138,23 +138,227 @@ jobs:
         run: bash scripts/check_version_sync.sh
 
   # ════════════════════════════════════════════════════════════
-  # 4. 全套总结 — 所有 job 都过才算 CI 绿
+  # 4. 中央服务 (skills-hub / mcp-registry / secret-broker / identity-server) — Python 3.12
   # ════════════════════════════════════════════════════════════
+  # B3 (6/6 鸿波 audit): 之前 CI 只跑 tool-bridge + gateway 2 个模块, 剩 10 个全
+  # 没跑. 按 TESTING-SPEC.md §4 扩 matrix. fail-fast: false 让一个 module 挂
+  # 不影响其它 job 跑完, 报告全部失败一次性看清.
+  central-services:
+    name: central/${{ matrix.module }} tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - module: skills-hub
+            extra_deps: "fastapi 'pydantic>=2' pyyaml python-multipart sqlalchemy alembic python-dotenv httpx"
+          - module: mcp-registry
+            extra_deps: "fastapi 'pydantic>=2' pyyaml httpx pyjwt cryptography python-dotenv sqlalchemy alembic"
+          - module: secret-broker
+            extra_deps: "fastapi 'pydantic>=2' python-dotenv keyring httpx anyio"
+          - module: identity-server
+            extra_deps: "fastapi 'pydantic>=2' pyyaml pyjwt bcrypt cryptography python-dotenv python-multipart"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-asyncio ${{ matrix.extra_deps }}
+
+      - name: Run tests
+        working-directory: central/${{ matrix.module }}
+        run: |
+          PYTHONPATH=src python -m pytest tests/ -v -p no:cacheprovider
+
+  # ════════════════════════════════════════════════════════════
+  # 5. Edge agents (local-search / journal-agent / email-agent) — Python 3.10+
+  # ════════════════════════════════════════════════════════════
+  # 这 3 个标准库为主, deps 很少. local-search 走 3.9+ 但 ubuntu 自带 3.12 也兼容.
+  edge-agents:
+    name: edge/${{ matrix.module }} tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - module: local-search
+            python: "3.10"
+            extra_deps: "pyyaml"
+          - module: journal-agent
+            python: "3.10"
+            extra_deps: ""
+          - module: email-agent
+            python: "3.10"
+            extra_deps: "pytest-mock"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-asyncio ${{ matrix.extra_deps }}
+
+      - name: Run tests
+        working-directory: edge/${{ matrix.module }}
+        run: |
+          PYTHONPATH=src python -m pytest tests/ -v -p no:cacheprovider
+
+  # ════════════════════════════════════════════════════════════
+  # 6. hermes plugins (catfish-memory / catfish-xcatfish-user) — 特殊路径
+  # ════════════════════════════════════════════════════════════
+  # plugin 没 pyproject.toml, tests/conftest.py 用 sys.path hack 加 plugin 目录.
+  # 真 runtime 需要 hermes-agent 内部 module (gateway / model_tools 等), CI 装不上,
+  # 所以这 2 个 module 测试主要是 monkey-patch 单测 (mock hermes module).
+  hermes-plugins:
+    name: edge/hermes-plugins/${{ matrix.module }} tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [catfish-memory, catfish-xcatfish-user]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          # plugin tests mock 大部分 hermes module, 只装公共依赖
+          pip install pytest pytest-asyncio pyyaml httpx 'pydantic>=2' python-dotenv
+
+      - name: Run tests
+        working-directory: edge/hermes-plugins/${{ matrix.module }}
+        run: |
+          python -m pytest tests/ -v -p no:cacheprovider
+
+  # ════════════════════════════════════════════════════════════
+  # 7. Companion vitest (TypeScript 单测)
+  # ════════════════════════════════════════════════════════════
+  # B4 (6/6 鸿波 audit): 8 个 *.test.ts 之前 CI 没跑. companion job 只跑 tsc + vite build,
+  # 没跑 vitest. 加这个 job 真跑 unit tests.
+  companion-vitest:
+    name: companion-app vitest
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: edge/companion-app/package-lock.json
+
+      - name: Install deps
+        working-directory: edge/companion-app
+        run: npm ci --no-audit --no-fund
+
+      - name: Run vitest
+        working-directory: edge/companion-app
+        run: npx vitest run --reporter=verbose
+
+  # ════════════════════════════════════════════════════════════
+  # 8. Companion Rust 单测 (cargo test inline modules)
+  # ════════════════════════════════════════════════════════════
+  # B4: 25 个 .rs 含 #[cfg(test)] inline 模块, CI 之前没跑. macOS-latest 必须 (Tauri
+  # 平台特定 code, e.g. AppleScript / Cocoa FFI). Linux runner 部分 platform-gated
+  # 代码 skip, 但 #[cfg(test)] inline 大部分能跑.
+  companion-cargo:
+    name: companion-app cargo test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            edge/companion-app/src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('edge/companion-app/src-tauri/Cargo.lock') }}
+
+      - name: Install Linux Tauri deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: cargo test
+        working-directory: edge/companion-app/src-tauri
+        # B4: --lib 跑 src/ 内 inline tests (25 个 #[cfg(test)] mod tests), 不跑 integration
+        # tests/ 目录 (parse_file_test.py 是 Python, 不是 Rust). 失败不阻塞 CI overall
+        # (Tauri 跨平台 code 可能 Linux 跑不通), 但 log 留痕. P1 之后加 macOS runner.
+        run: cargo test --lib --no-fail-fast || echo "::warning::cargo test 有失败 (可能 Linux 平台限制), 详情看 log"
+
+  # ════════════════════════════════════════════════════════════
+  # 9. 全套总结 — 核心 job 都过才算 CI 绿
+  # ════════════════════════════════════════════════════════════
+  # 核心 (必过): tool-bridge / gateway / companion (tsc+build) / central-services /
+  # edge-agents / hermes-plugins / companion-vitest
+  # 非核心 (warn 不阻塞): companion-cargo (Linux 平台限制可能 partial fail)
   ci-pass:
     name: CI pass
     runs-on: ubuntu-latest
-    needs: [tool-bridge, gateway, companion]
+    needs:
+      - tool-bridge
+      - gateway
+      - companion
+      - central-services
+      - edge-agents
+      - hermes-plugins
+      - companion-vitest
     if: always()
     steps:
-      - name: Check all jobs passed
+      - name: Check all core jobs passed
         run: |
-          if [ "${{ needs.tool-bridge.result }}" != "success" ] || \
-             [ "${{ needs.gateway.result }}" != "success" ] || \
-             [ "${{ needs.companion.result }}" != "success" ]; then
-            echo "❌ 至少一个 job 失败"
-            echo "  tool-bridge: ${{ needs.tool-bridge.result }}"
-            echo "  gateway:     ${{ needs.gateway.result }}"
-            echo "  companion:   ${{ needs.companion.result }}"
+          declare -A results
+          results[tool-bridge]="${{ needs.tool-bridge.result }}"
+          results[gateway]="${{ needs.gateway.result }}"
+          results[companion]="${{ needs.companion.result }}"
+          results[central-services]="${{ needs.central-services.result }}"
+          results[edge-agents]="${{ needs.edge-agents.result }}"
+          results[hermes-plugins]="${{ needs.hermes-plugins.result }}"
+          results[companion-vitest]="${{ needs.companion-vitest.result }}"
+
+          failed=0
+          for job in "${!results[@]}"; do
+            if [ "${results[$job]}" != "success" ]; then
+              echo "❌ $job: ${results[$job]}"
+              failed=1
+            else
+              echo "✅ $job"
+            fi
+          done
+          if [ $failed -eq 1 ]; then
+            echo ""
+            echo "❌ CI 至少一个 core job 失败"
             exit 1
           fi
-          echo "✅ 全套 CI 绿"
+          echo ""
+          echo "✅ 全套 core CI 绿 (cargo test 非阻塞, 详情看 companion-cargo job log)"
