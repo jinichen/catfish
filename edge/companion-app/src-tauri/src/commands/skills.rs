@@ -40,6 +40,11 @@ pub struct SkillEntry {
     /// 给 MySkillsCard 的"共享" 按钮调 catfish_skill_publish(skill_path=...) 用.
     /// camelCase serde 让 TS 看到 `path` (单字段不变).
     pub path: String,
+    /// E7.P1 (6/6): 团队审定 / 内置 标记. true = 不能让员工删 (catfish_root/skills/
+    /// 下的工程审定模板, e.g. leadership-briefing). false = 用户装的 (~/.hermes/skills/
+    /// + ~/.claude/skills/), 或员工自己录的 (~/.catfish/skills/), 可删可改.
+    /// 由 scan_skills_root_filtered 按 root 路径决定, 后端逻辑唯一来源 (前端只读).
+    pub is_protected: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -55,6 +60,9 @@ pub struct McpServerEntry {
     pub name: String,
     pub command: String,
     pub args: Vec<String>,
+    /// E7.P1 (6/6): catfish-tools 或 catfish-* 前缀 = 核心 MCP (主链路依赖), 不能删.
+    /// 员工自加的 (e.g. slack-mcp) is_protected=false.
+    pub is_protected: bool,
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -67,7 +75,14 @@ fn home_dir() -> Option<PathBuf> {
 ///
 /// 6/2 BL-SKILLS-PUBLISH-WIRE: 返 SkillEntry.path = SKILL.md 父目录 (skill 真根目录),
 /// MySkillsCard 共享按钮拿来直接传 catfish_skill_publish(skill_path=...).
+#[allow(dead_code)]
 fn parse_skill_md(manifest_path: &Path) -> Option<SkillEntry> {
+    parse_skill_md_with_protected(manifest_path, false)
+}
+
+/// E7.P1 (6/6): 跟 parse_skill_md 同, 但传入 is_protected (由 scan_skills_root 决定).
+/// catfish_root/skills/ → protected=true (工程审定不能删), 其它路径 false (员工录的 / 装的).
+fn parse_skill_md_with_protected(manifest_path: &Path, is_protected: bool) -> Option<SkillEntry> {
     let skill_dir_path = manifest_path
         .parent()
         .map(|p| p.to_string_lossy().to_string())
@@ -86,6 +101,7 @@ fn parse_skill_md(manifest_path: &Path) -> Option<SkillEntry> {
             description: "(无 SKILL.md frontmatter)".into(),
             version: None,
             path: skill_dir_path,
+            is_protected,
         });
     }
     // 找 frontmatter 边界：---\n....---\n
@@ -113,6 +129,7 @@ fn parse_skill_md(manifest_path: &Path) -> Option<SkillEntry> {
         description,
         version,
         path: skill_dir_path,
+        is_protected,
     })
 }
 
@@ -171,10 +188,21 @@ fn is_recmode_frozen_skill(manifest_path: &Path) -> bool {
 ///
 /// 6/2 BL-SKILLS-CARD-CLASSIFY-FROZEN: `filter` 可选 — 给每个 SKILL.md path 调,
 /// 返 true 才收. None = 全收. 用来给 list_my/list_installed 按 frozen marker 分流.
+/// E7.P1 (6/6): 加 `is_protected` 参数, 透传给 parse_skill_md_with_protected.
+/// catfish_root/skills/ 树调时 is_protected=true, 其它 root 都 false.
 fn scan_skills_root_filtered(
     root: &Path,
     ns_prefix: &str,
     filter: Option<&dyn Fn(&Path) -> bool>,
+) -> Vec<SkillNamespace> {
+    scan_skills_root_filtered_full(root, ns_prefix, filter, false)
+}
+
+fn scan_skills_root_filtered_full(
+    root: &Path,
+    ns_prefix: &str,
+    filter: Option<&dyn Fn(&Path) -> bool>,
+    is_protected: bool,
 ) -> Vec<SkillNamespace> {
     let mut result = Vec::new();
     if !root.exists() {
@@ -211,7 +239,7 @@ fn scan_skills_root_filtered(
                         continue;
                     }
                 }
-                if let Some(entry) = parse_skill_md(&manifest) {
+                if let Some(entry) = parse_skill_md_with_protected(&manifest, is_protected) {
                     skills.push(entry);
                 }
             }
@@ -306,13 +334,15 @@ fn list_installed_skills_blocking() -> Result<Vec<SkillNamespace>, String> {
     let mut result = Vec::new();
 
     // 1. catfish 工程审定 skill — 顶部显示, 带 🐟 前缀. **过滤掉 frozen 教学产物**.
+    // E7.P1 (6/6): is_protected=true — 不能让员工删 (git 仓库管控, 删了下次 pull 还回来).
     if let Some(catfish_root) = catfish_paths::catfish_root() {
         let catfish_skills_root = catfish_root.join("skills");
         let not_frozen_filter: &dyn Fn(&Path) -> bool = &|p| !is_recmode_frozen_skill(p);
-        let mut catfish_namespaces = scan_skills_root_filtered(
+        let mut catfish_namespaces = scan_skills_root_filtered_full(
             &catfish_skills_root,
             "🐟 catfish:",
             Some(not_frozen_filter),
+            true,  // protected
         );
         catfish_namespaces.sort_by(|a, b| a.namespace.cmp(&b.namespace));
         result.extend(catfish_namespaces);
@@ -372,10 +402,14 @@ fn list_mcp_servers_blocking() -> Result<Vec<McpServerEntry>, String> {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        // E7.P1 (6/6): catfish-* 前缀 = 主链路 MCP, 不能删. 员工自加的 (slack-mcp 等)
+        // is_protected=false (phase 2 加卸载按钮).
+        let is_protected = name.starts_with("catfish-") || name == "catfish-tools";
         result.push(McpServerEntry {
             name,
             command,
             args,
+            is_protected,
         });
     }
     result.sort_by(|a, b| a.name.cmp(&b.name));

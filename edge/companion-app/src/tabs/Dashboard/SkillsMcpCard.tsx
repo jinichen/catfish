@@ -7,9 +7,17 @@
  * skill (catfish 仓库 skills/ + ~/.hermes/skills/), 员工自己生成的拆到 MySkillsCard
  * 主卡. 卡标题改 "已装的 skill / MCP", 副标"团队审定 + 装的", 给 power-user 排错
  * 或查"我能用哪些 anthropic skill" 用. hook 从 useSkillsAndMcp → useInstalledSkillsAndMcp.
+ *
+ * E7.P1 (6/6): 视觉分层 ship — 内"团队审定" / "我装的" 2 段, 锁 icon 区分.
+ *   - 团队审定 (catfish 仓库 skills/, isProtected=true): 灰显 + 🔒 锁图标
+ *     hover 提示 "由 catfish 仓库管控"
+ *   - 我装的 (~/.hermes/skills/, isProtected=false): 正常显, 右侧预留"卸载" slot
+ *     (phase 2 接 install_skill_from_url / uninstall_skill subprocess)
+ *   - MCP 同模式 (catfish-tools 锁 / 员工接的可删)
+ * brand 跟 E5 一致, 走 globals.css `.dashboard-skills*` class 群.
  */
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useInstalledSkillsAndMcp } from "../../hooks/useIdentity";
 import type { SkillNamespace } from "../../types/identity";
 import StatusDot from "../../components/StatusDot";
@@ -17,103 +25,121 @@ import StatusDot from "../../components/StatusDot";
 export default function SkillsMcpCard() {
   const { skills, mcps, error } = useInstalledSkillsAndMcp();
 
-  const totalSkills = skills?.reduce((sum, ns) => sum + ns.skills.length, 0) ?? 0;
+  // E7.P1: 按 isProtected 拆 2 段 — 团队审定 vs 我装的.
+  // namespace 内可能混 (e.g. productivity 有 catfish-* skill protected + 普通 skill),
+  // 所以要按 skill 粒度分流, 不是 namespace 粒度.
+  const { protectedNs, openNs } = useMemo(() => {
+    if (!skills) return { protectedNs: [], openNs: [] };
+    const protectedAcc: SkillNamespace[] = [];
+    const openAcc: SkillNamespace[] = [];
+    for (const ns of skills) {
+      const prot = ns.skills.filter((s) => s.isProtected);
+      const open = ns.skills.filter((s) => !s.isProtected);
+      if (prot.length > 0) {
+        protectedAcc.push({ namespace: ns.namespace, skills: prot });
+      }
+      if (open.length > 0) {
+        openAcc.push({ namespace: ns.namespace, skills: open });
+      }
+    }
+    return { protectedNs: protectedAcc, openNs: openAcc };
+  }, [skills]);
+
+  const totalSkills =
+    skills?.reduce((sum, ns) => sum + ns.skills.length, 0) ?? 0;
   const totalNamespaces = skills?.length ?? 0;
+  const protectedMcps = mcps?.filter((m) => m.isProtected) ?? [];
+  const openMcps = mcps?.filter((m) => !m.isProtected) ?? [];
 
   return (
-    <div
-      style={{
-        background: "var(--catfish-bg-elevated)",
-        border: "1px solid var(--catfish-border)",
-        borderRadius: "var(--radius-md)",
-        padding: "var(--space-4)",
-        gridColumn: "1 / -1", // 占整行: skills 列表多, 用宽度比用高度更好读
-      }}
-    >
-      <h3 style={{ marginBottom: "var(--space-1)" }}>已装的 skill / MCP</h3>
-      <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginBottom: "var(--space-3)" }}>
+    <div className="dashboard-skills">
+      <h3 className="dashboard-skills__title">已装的 skill / MCP</h3>
+      <div className="dashboard-skills__sub">
         团队审定 + 内置 + marketplaces 装的 · 排错 / 查"我能用哪些"
       </div>
 
-      {error && (
-        <div style={{ color: "var(--status-err)", fontSize: 12 }}>{error}</div>
-      )}
+      {error && <div className="dashboard-skills__err">{error}</div>}
 
       {!error && (skills || mcps) && (
         <>
-          {/* 数量概览 */}
-          <div
-            style={{
-              display: "flex",
-              gap: "var(--space-4)",
-              fontSize: 13,
-              marginBottom: "var(--space-3)",
-              paddingBottom: "var(--space-3)",
-              borderBottom: "1px solid var(--catfish-border)",
-            }}
-          >
-            <Stat label="Skills" value={`${totalSkills} 个 / ${totalNamespaces} 类`} />
+          {/* 数量概览 — 拆 2 列 (审定 / 装的), 跟下方分段呼应 */}
+          <div className="dashboard-skills__stats">
+            <Stat
+              label="Skills"
+              value={`${totalSkills} 个 / ${totalNamespaces} 类`}
+            />
             <Stat label="MCP" value={`${mcps?.length ?? 0} 个`} />
           </div>
 
-          {/* MCP 列表 */}
-          {mcps && mcps.length > 0 && (
+          {/* MCP servers — 拆 2 段 */}
+          {(protectedMcps.length > 0 || openMcps.length > 0) && (
             <Section title="MCP servers">
-              <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-                {mcps.map((m) => (
-                  <li
-                    key={m.name}
-                    style={{
-                      display: "flex",
-                      gap: "var(--space-2)",
-                      alignItems: "center",
-                      fontSize: 12,
-                      padding: "var(--space-1) 0",
-                      fontFamily: "var(--font-mono)",
-                    }}
-                    title={m.command}
-                  >
-                    <StatusDot status="ok" />
-                    <span style={{ fontWeight: 600 }}>{m.name}</span>
-                    <span
-                      style={{
-                        color: "var(--catfish-text-muted)",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {m.command.split("/").slice(-2).join("/")}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+              {protectedMcps.length > 0 && (
+                <SubGroup label="核心 · 主链路依赖" locked>
+                  <ul className="dashboard-skills__mcp-list">
+                    {protectedMcps.map((m) => (
+                      <McpRow key={m.name} m={m} locked />
+                    ))}
+                  </ul>
+                </SubGroup>
+              )}
+              {openMcps.length > 0 && (
+                <SubGroup label="我接的">
+                  <ul className="dashboard-skills__mcp-list">
+                    {openMcps.map((m) => (
+                      <McpRow key={m.name} m={m} locked={false} />
+                    ))}
+                  </ul>
+                </SubGroup>
+              )}
+              {openMcps.length === 0 && (
+                <div className="dashboard-skills__hint">
+                  暂未接入员工 MCP (phase 2 加 "+ 接入新工具" 按钮)
+                </div>
+              )}
             </Section>
           )}
 
-          {/* Skills 折叠列表 — grid 多列, 利用宽度 */}
-          {skills && skills.length > 0 && (
+          {/* Skills — 拆 2 段 */}
+          {(protectedNs.length > 0 || openNs.length > 0) && (
             <Section title="Skills (按 namespace)">
-              <ul
-                style={{
-                  listStyle: "none",
-                  padding: 0,
-                  margin: 0,
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
-                  gap: "var(--space-1) var(--space-3)",
-                }}
-              >
-                {skills.map((ns) => (
-                  <NamespaceRow key={ns.namespace} ns={ns} />
-                ))}
-              </ul>
+              {protectedNs.length > 0 && (
+                <SubGroup
+                  label={`团队审定 · ${protectedNs.reduce(
+                    (s, n) => s + n.skills.length,
+                    0,
+                  )} 个`}
+                  locked
+                >
+                  <ul className="dashboard-skills__ns-grid">
+                    {protectedNs.map((ns) => (
+                      <NamespaceRow key={ns.namespace} ns={ns} locked />
+                    ))}
+                  </ul>
+                </SubGroup>
+              )}
+              {openNs.length > 0 && (
+                <SubGroup
+                  label={`我装的 · ${openNs.reduce(
+                    (s, n) => s + n.skills.length,
+                    0,
+                  )} 个`}
+                >
+                  <ul className="dashboard-skills__ns-grid">
+                    {openNs.map((ns) => (
+                      <NamespaceRow key={ns.namespace} ns={ns} locked={false} />
+                    ))}
+                  </ul>
+                </SubGroup>
+              )}
             </Section>
           )}
         </>
       )}
 
-      {!error && !skills && !mcps && <div>加载中…</div>}
+      {!error && !skills && !mcps && (
+        <div className="dashboard-skills__hint">加载中…</div>
+      )}
     </div>
   );
 }
@@ -121,12 +147,8 @@ export default function SkillsMcpCard() {
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
-        {label}
-      </div>
-      <div style={{ fontWeight: 600, fontFamily: "var(--font-mono)" }}>
-        {value}
-      </div>
+      <div className="dashboard-skills__stat-label">{label}</div>
+      <div className="dashboard-skills__stat-value">{value}</div>
     </div>
   );
 }
@@ -139,79 +161,116 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <div style={{ marginBottom: "var(--space-3)" }}>
-      <h4
-        style={{
-          fontSize: 11,
-          color: "var(--catfish-text-muted)",
-          marginBottom: "var(--space-2)",
-          textTransform: "uppercase",
-          letterSpacing: 0.5,
-          fontWeight: 600,
-        }}
-      >
-        {title}
-      </h4>
+    <div className="dashboard-skills__section">
+      <h4 className="dashboard-skills__section-title">{title}</h4>
       {children}
     </div>
   );
 }
 
-function NamespaceRow({ ns }: { ns: SkillNamespace }) {
-  const [open, setOpen] = useState(false);
+/** E7.P1: 2 段分组 sub-header. locked=true 加 🔒 锁标 + muted 提示. */
+function SubGroup({
+  label,
+  locked,
+  children,
+}: {
+  label: string;
+  locked?: boolean;
+  children: React.ReactNode;
+}) {
   return (
-    <li style={{ marginBottom: "var(--space-1)" }}>
+    <div
+      className={
+        "dashboard-skills__subgroup" +
+        (locked ? " dashboard-skills__subgroup--locked" : "")
+      }
+    >
+      <div className="dashboard-skills__subgroup-label">
+        {locked && (
+          <span
+            className="dashboard-skills__lock"
+            title="由 catfish 仓库 / 主链路管控, 不可删"
+            aria-label="锁定"
+          >
+            ◆
+          </span>
+        )}
+        {label}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function McpRow({
+  m,
+  locked,
+}: {
+  m: { name: string; command: string };
+  locked: boolean;
+}) {
+  return (
+    <li
+      className={
+        "dashboard-skills__mcp-item" +
+        (locked ? " dashboard-skills__mcp-item--locked" : "")
+      }
+      title={m.command}
+    >
+      <StatusDot status="ok" />
+      <span className="dashboard-skills__mcp-name">{m.name}</span>
+      <span className="dashboard-skills__mcp-cmd">
+        {m.command.split("/").slice(-2).join("/")}
+      </span>
+    </li>
+  );
+}
+
+function NamespaceRow({
+  ns,
+  locked,
+}: {
+  ns: SkillNamespace;
+  locked: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const toggle = () => setOpen(!open);
+  return (
+    <li className="dashboard-skills__ns">
       <div
-        onClick={() => setOpen(!open)}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "var(--space-2)",
-          cursor: "pointer",
-          fontSize: 12,
-          padding: "2px 0",
+        className={
+          "dashboard-skills__ns-header" +
+          (open ? " dashboard-skills__ns-header--open" : "") +
+          (locked ? " dashboard-skills__ns-header--locked" : "")
+        }
+        onClick={toggle}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            toggle();
+          }
         }}
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
       >
-        <span
-          style={{
-            display: "inline-block",
-            width: 10,
-            color: "var(--catfish-text-muted)",
-            fontSize: 10,
-          }}
-        >
-          {open ? "▼" : "▶"}
-        </span>
-        <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>
-          {ns.namespace}
-        </span>
-        <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
-          {ns.skills.length} 个
-        </span>
+        <span className="dashboard-skills__ns-caret">▶</span>
+        <span className="dashboard-skills__ns-name">{ns.namespace}</span>
+        <span className="dashboard-skills__ns-count">{ns.skills.length} 个</span>
       </div>
       {open && (
-        <ul
-          style={{
-            listStyle: "none",
-            padding: "0 0 0 20px",
-            margin: "var(--space-1) 0 0 0",
-          }}
-        >
+        <ul className="dashboard-skills__skill-list">
           {ns.skills.map((s) => (
             <li
               key={s.name}
-              style={{
-                fontSize: 11,
-                padding: "2px 0",
-                color: "var(--catfish-text-muted)",
-              }}
+              className="dashboard-skills__skill-item"
               title={s.description}
             >
-              <span style={{ fontFamily: "var(--font-mono)", color: "var(--catfish-text)" }}>
-                {s.name}
-              </span>
+              <span className="dashboard-skills__skill-name">{s.name}</span>
               {s.version && (
-                <span style={{ marginLeft: 6, opacity: 0.6 }}>v{s.version}</span>
+                <span className="dashboard-skills__skill-version">
+                  v{s.version}
+                </span>
               )}
             </li>
           ))}

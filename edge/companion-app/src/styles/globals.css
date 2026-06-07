@@ -1,3 +1,230 @@
+/* ─────────────────────────────────────────────────────────────────────
+ * Dashboard SkillsMcpCard (E7.P1 taste-skill 改造 6/6)
+ *
+ * 老 anti-pattern:
+ *   ✗ 1 张大卡 read-only flat list (无分层, 员工不知"哪些能动")
+ *   ✗ 团队审定 + 我装的混在 namespace 折叠里
+ *   ✗ 没视觉提示 "core MCP 不能删"
+ *
+ * 新:
+ *   ✓ 2 段 (团队审定 / 我装的) + 锁标 ◆ 区分 ownership
+ *   ✓ catfish-tools / catfish 仓库 skill → 灰显 + locked 标
+ *   ✓ ~/.hermes/, ~/.claude/ skill → 正常显, 右侧预留卸载 slot (phase 2 接)
+ *   ✓ namespace 折叠 caret rotate (跟 E3 toolcall / E5 wiki 一致 pattern)
+ *   ✓ brand 墨青 single accent (locked muted gray)
+ * ─────────────────────────────────────────────────────────────────────*/
+
+.dashboard-skills {
+  background: var(--catfish-bg-elevated);
+  border-radius: 10px;
+  padding: var(--space-4);
+  grid-column: 1 / -1;
+  box-shadow:
+    0 1px 2px rgba(14, 95, 102, 0.04),
+    0 4px 16px -8px rgba(14, 95, 102, 0.12);
+}
+.dashboard-skills__title {
+  margin-bottom: 4px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--catfish-text);
+}
+.dashboard-skills__sub {
+  font-size: 11px;
+  color: var(--catfish-text-muted);
+  margin-bottom: var(--space-3);
+}
+.dashboard-skills__err {
+  color: var(--status-err);
+  font-size: 12px;
+  padding: 8px 10px;
+  background: rgba(217, 83, 79, 0.06);
+  border-radius: 6px;
+}
+.dashboard-skills__hint {
+  font-size: 12px;
+  color: var(--catfish-text-muted);
+  font-style: italic;
+  padding: 8px 0;
+}
+
+.dashboard-skills__stats {
+  display: flex;
+  gap: var(--space-4);
+  font-size: 13px;
+  margin-bottom: var(--space-3);
+  padding-bottom: var(--space-3);
+  /* 用 subtle 渐变替 1px border (跟 Wiki history 同 pattern) */
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    rgba(14, 95, 102, 0.08) 20%,
+    rgba(14, 95, 102, 0.08) 80%,
+    transparent 100%
+  ) bottom / 100% 1px no-repeat;
+}
+.dashboard-skills__stat-label {
+  font-size: 11px;
+  color: var(--catfish-text-muted);
+}
+.dashboard-skills__stat-value {
+  font-weight: 600;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.dashboard-skills__section {
+  margin-bottom: var(--space-3);
+}
+.dashboard-skills__section-title {
+  font-size: 11px;
+  color: var(--catfish-text-muted);
+  margin-bottom: var(--space-2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+
+/* 2 段子分组 — locked (团队审定) vs open (我装的) */
+.dashboard-skills__subgroup {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  background: var(--catfish-bg-cream);
+  border-radius: 8px;
+}
+.dashboard-skills__subgroup--locked {
+  background: rgba(107, 119, 117, 0.06);  /* 更冷 muted 跟 wiki-kind-badge--query 同色系 */
+}
+.dashboard-skills__subgroup-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--catfish-text-muted);
+  margin-bottom: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.dashboard-skills__subgroup--locked .dashboard-skills__subgroup-label {
+  color: #5A6664;
+}
+.dashboard-skills__lock {
+  display: inline-block;
+  font-size: 9px;
+  color: var(--catfish-text-muted);
+  transform: rotate(45deg);
+}
+
+/* MCP list */
+.dashboard-skills__mcp-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.dashboard-skills__mcp-item {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  font-size: 12px;
+  padding: 4px 6px;
+  margin: 0 -6px;
+  font-family: var(--font-mono);
+  border-radius: 4px;
+  transition: background-color 150ms ease;
+}
+.dashboard-skills__mcp-item:hover {
+  background: var(--catfish-bg-elevated);
+}
+.dashboard-skills__mcp-item--locked {
+  opacity: 0.7;
+}
+.dashboard-skills__mcp-name {
+  font-weight: 600;
+}
+.dashboard-skills__mcp-cmd {
+  color: var(--catfish-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+/* Skills namespace grid (复用 E4 .wiki-group caret rotate) */
+.dashboard-skills__ns-grid {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 2px var(--space-3);
+}
+.dashboard-skills__ns {
+  margin-bottom: 2px;
+}
+.dashboard-skills__ns-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 3px 4px;
+  margin: 0 -4px;
+  border-radius: 4px;
+  transition: background-color 150ms ease;
+}
+.dashboard-skills__ns-header:hover {
+  background: var(--catfish-bg-elevated);
+}
+.dashboard-skills__ns-header:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(14, 95, 102, 0.25);
+}
+.dashboard-skills__ns-header--locked {
+  opacity: 0.7;
+}
+.dashboard-skills__ns-caret {
+  display: inline-block;
+  width: 10px;
+  color: var(--catfish-text-muted);
+  font-size: 9px;
+  transition: transform 200ms ease;
+}
+.dashboard-skills__ns-header--open .dashboard-skills__ns-caret {
+  transform: rotate(90deg);
+}
+.dashboard-skills__ns-name {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--catfish-text);
+}
+.dashboard-skills__ns-count {
+  font-size: 11px;
+  color: var(--catfish-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.dashboard-skills__skill-list {
+  list-style: none;
+  padding: 0 0 0 22px;
+  margin: 2px 0 4px 0;
+}
+.dashboard-skills__skill-item {
+  font-size: 11px;
+  padding: 2px 0;
+  color: var(--catfish-text-muted);
+}
+.dashboard-skills__skill-name {
+  font-family: var(--font-mono);
+  color: var(--catfish-text);
+}
+.dashboard-skills__skill-version {
+  margin-left: 6px;
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
