@@ -396,6 +396,16 @@ try:
 except Exception as e:
     logger.warning("facts_router 挂载失败: %s", e)
 
+# 6/7 BL-MANIFESTO-ADVISORY-PHASE1: advisory feed (pull-based, manifesto 公理 4).
+# Server publish + 客户端自己 pull 决定怎么处理, 不 push, 不查员工设备状态.
+# Spec: docs/ADVISORY-FEED-SPEC.md
+try:
+    from .advisory_router import router as advisory_router  # noqa: PLC0415
+    app.include_router(advisory_router)
+    logger.info("advisory_router: /advisory/feed.json 已挂载 (manifesto Phase 1)")
+except Exception as e:
+    logger.warning("advisory_router 挂载失败: %s", e)
+
 # 6/7 BL-CATFISH-MANIFESTO clean-up: /api/tool-archives/* router 整套撤.
 # 历史:
 #   - 5/11 BL-Q3-ARCHIVE v1: gateway 端 PG archive HTTP API

@@ -3,6 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 
 import AboutModal from "./components/AboutModal";
+import AdvisoryBanner from "./components/AdvisoryBanner";  // 6/7 BL-MANIFESTO-ADVISORY-PHASE1
 import AuthBanner from "./components/AuthBanner";
 import DevUserSwitcher from "./components/DevUserSwitcher";
 import FocusModeView from "./components/FocusModeView";
@@ -202,6 +203,7 @@ function AppShell({ activeTab }: { activeTab: string }) {
     return (
       <div className="app-shell">
         <AuthBanner />
+        <AdvisoryBanner />
         <DevUserSwitcher />
         <TabBar />
         <main style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>

@@ -1,0 +1,68 @@
+# Catfish Advisory Feed — 静态 yaml 源 (Phase 1)
+#
+# Spec: docs/ADVISORY-FEED-SPEC.md
+#
+# Phase 2 (BL): 改为 PG `advisories` 表, admin UI publish. 现在 yaml + git push 测试.
+#
+# Severity:
+#   critical → 红色 banner 不可 dismiss, 24h 重新弹
+#   high     → 红色 banner, 可"稍后提醒" 24h
+#   medium   → 黄色 banner, 可 dismiss
+#   low      → 灰色 banner (折叠)
+#   info     → 仅 advisory 列表, 不打扰
+#
+# Category:
+#   skill_vulnerability  → target.skill 命中已装 skill
+#   mcp_vulnerability    → target.mcp_name 命中已配 MCP
+#   catfish_update       → target.catfish_version_pattern 命中本机版本
+#   policy_recommendation→ 全员相关 (无 target)
+#   external_status      → 第三方 LLM API 状态
+#   deprecation_notice   → 弃用通知
+
+advisories:
+  # demo advisory 1: policy recommendation (全员相关, info 级)
+  - id: CATFISH-ADV-2026-001
+    severity: info
+    category: policy_recommendation
+    title: Catfish 中央服务设计宣言 (manifesto) ship
+    description: |
+      Catfish 6/7 ship 中央服务设计宣言 (docs/CATFISH-CENTRAL-MANIFESTO.md).
+
+      4 条核心公理:
+        1. 员工主权 — 你的对话/录屏/wiki/skill 归你
+        2. 数据零出端 — 永远本机存
+        3. 中央 0 控制 — 中央不能强制你做任何事
+        4. API 物理无能 — 中央服务的 API surface 设计上就没控制能力
+
+      你可以通过"设置 → 隐私 → 我的数据外发记录"自己审计 catfish 跟中央
+      服务交换了什么数据.
+    recommendation: 阅读 manifesto, 了解你的数据主权
+    published: "2026-06-07T10:00:00Z"
+    tags: [manifesto, philosophy]
+    references:
+      - https://github.com/catfish/catfish/blob/main/docs/CATFISH-CENTRAL-MANIFESTO.md
+
+  # demo advisory 2: catfish_update (medium, 命中老版本本机)
+  - id: CATFISH-ADV-2026-002
+    severity: medium
+    category: catfish_update
+    title: Catfish 0.15.2 推荐升级
+    target:
+      catfish_version_pattern: "<0.15.2"
+    description: |
+      Catfish 0.15.2 含 6/7 ship 的 manifesto cleanup + 死代码清理:
+
+      - 清理 6 个 dead module (1602 行)
+      - 删 ops 后门 (env=1 PG archive 回滚)
+      - 强化 BOUNDARY (中央 API 物理无能)
+
+      0.15.2 之前不影响功能, 但建议升级跟随社区进度.
+    recommendation: 在"设置 → 关于"点检查更新升级到 0.15.2
+    published: "2026-06-07T10:30:00Z"
+    expires: "2026-12-07T00:00:00Z"
+    tags: [update, manifesto]
+    remediation_actions:
+      - label: 检查更新
+        kind: open_settings
+        params:
+          section: about

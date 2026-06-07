@@ -8,6 +8,7 @@
 //!   - 每个 #[tauri::command] 必须返回 Result<T, String>，
 //!     错误统一序列化成字符串给前端
 
+pub mod advisory;  // 6/7 BL-MANIFESTO-ADVISORY-PHASE1: advisory local state (~/.catfish/advisory_state.db)
 pub mod agent;
 pub mod attachments;  // BL-FILE-SESSION-INDEX-V1 Phase 1 (5/30): 附件 metadata 持久化到 ~/.catfish/attachments.db, 跨会话恢复 + 列表
 pub mod audit;

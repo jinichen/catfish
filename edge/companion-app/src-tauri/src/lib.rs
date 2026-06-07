@@ -351,6 +351,13 @@ pub fn run() {
             commands::skills::restore_skill,
             commands::skills::add_mcp_server,
             commands::skills::remove_mcp_server,
+            // 6/7 BL-MANIFESTO-ADVISORY-PHASE1: advisory local state (本机 SQLite)
+            commands::advisory::advisory_list_local_states,
+            commands::advisory::advisory_get_local_state,
+            commands::advisory::advisory_mark_shown,
+            commands::advisory::advisory_ack,
+            commands::advisory::advisory_snooze,
+            commands::advisory::advisory_dismiss,
             // self-evolution: 鲶鱼今天学了什么
             commands::learning::learning_today_stats,
             // BL-MM9-accept (5/9): skill proposal accept/reject 按钮

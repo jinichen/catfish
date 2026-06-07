@@ -1,4 +1,111 @@
 /* ─────────────────────────────────────────────────────────────────────
+ * AdvisoryBanner (6/7 BL-MANIFESTO-ADVISORY-PHASE1)
+ *
+ * 顶部 advisory banner — 跟主流 fleet 强 push 反向, 这是 pull-based + 员工
+ * 有"忽略"选项. brand 一致 (跟 .approval-banner E2 同 design system).
+ *
+ * severity 4 色:
+ *   critical → 红 (rgba 217,83,79) + 不可永久 dismiss
+ *   high     → 红 (略浅) + 可 snooze
+ *   medium   → 黄 (#E8A33D) + 可 dismiss
+ *   low/info → 不在 banner 显, 进 advisory list 页
+ * ─────────────────────────────────────────────────────────────────────*/
+
+.advisory-banner {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 10px 16px;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(14, 95, 102, 0.08);
+  animation: catfish-advisory-slide 220ms ease;
+}
+
+@keyframes catfish-advisory-slide {
+  from { transform: translateY(-4px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.advisory-banner--critical {
+  background: rgba(217, 83, 79, 0.08);
+  color: var(--catfish-text);
+  border-left: 3px solid var(--status-err, #d9534f);
+}
+.advisory-banner--high {
+  background: rgba(217, 83, 79, 0.05);
+  color: var(--catfish-text);
+  border-left: 3px solid var(--status-err, #d9534f);
+}
+.advisory-banner--medium {
+  background: rgba(232, 163, 61, 0.06);
+  color: var(--catfish-text);
+  border-left: 3px solid #E8A33D;
+}
+
+.advisory-banner__icon {
+  font-size: 16px;
+  line-height: 1.5;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.advisory-banner__body {
+  flex: 1;
+  min-width: 0;
+}
+.advisory-banner__title {
+  font-weight: 600;
+  margin-bottom: 2px;
+  color: var(--catfish-text);
+}
+.advisory-banner__rec {
+  font-size: 12px;
+  color: var(--catfish-text-muted);
+  line-height: 1.5;
+}
+
+.advisory-banner__actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+  align-items: center;
+}
+
+.advisory-banner__btn {
+  background: transparent;
+  border: none;
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-weight: 500;
+  border-radius: 4px;
+  transition: background-color 150ms ease, color 150ms ease;
+  white-space: nowrap;
+}
+.advisory-banner__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.advisory-banner__btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(14, 95, 102, 0.18);
+}
+.advisory-banner__btn--primary {
+  background: var(--catfish-cyan);
+  color: white;
+}
+.advisory-banner__btn--primary:hover:not(:disabled) {
+  background: var(--catfish-cyan-bright);
+}
+.advisory-banner__btn--link {
+  color: var(--catfish-text-muted);
+}
+.advisory-banner__btn--link:hover:not(:disabled) {
+  background: rgba(14, 95, 102, 0.06);
+  color: var(--catfish-text);
+}
+
+/* ─────────────────────────────────────────────────────────────────────
  * Dashboard SkillsMcpCard (E7.P1 taste-skill 改造 6/6)
  *
  * 老 anti-pattern:
