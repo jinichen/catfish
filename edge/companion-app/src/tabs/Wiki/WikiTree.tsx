@@ -180,38 +180,27 @@ export default function WikiTree() {
     return g;
   }, [filtered]);
 
+  // E4 (6/6 taste-skill 改造): 走 globals.css `.wiki-*` class.
+  // 主要改: hardcoded `#0d9488` `#4a9eff` 非 brand 色统一到 brand 墨青;
+  // mode + kind toggle 改 pill segmented control; 去 emoji; 加 hover/focus.
   return (
     <div style={{ padding: "var(--space-3)", fontSize: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "var(--space-3)" }}>
-        <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>知识体系</h3>
-        <div style={{ display: "flex", gap: 4 }}>
+      <div className="wiki-tree__title">
+        <h3>知识体系</h3>
+        <div style={{ display: "flex", gap: 6 }}>
           <button
             onClick={() => setShowCreate(true)}
             title="新建 entity / concept"
-            style={{
-              background: "var(--catfish-accent, #4a9eff)",
-              border: "none",
-              borderRadius: 4,
-              padding: "2px 10px",
-              fontSize: 11,
-              color: "#fff",
-              cursor: "pointer",
-              fontWeight: 600,
-            }}
+            className="approval-banner__btn-primary"
+            style={{ padding: "4px 12px", fontSize: 12 }}
           >
             + 新建
           </button>
           <button
             onClick={() => void loadFiles()}
             title="刷新"
-            style={{
-              background: "transparent",
-              border: "1px solid var(--catfish-border)",
-              borderRadius: 4,
-              padding: "2px 8px",
-              fontSize: 11,
-              cursor: "pointer",
-            }}
+            className="approval-banner__btn-link"
+            style={{ padding: "4px 10px", fontSize: 13 }}
           >
             ↻
           </button>
@@ -226,78 +215,46 @@ export default function WikiTree() {
         onChange={(e) => setSearch(e.target.value)}
         placeholder={
           searchMode === "title"
-            ? "🏷️ 标题 / slug 搜索..."
+            ? "按标题 / slug 搜..."
             : searchMode === "body"
-              ? "🔤 全文 BM25 搜索..."
-              : "🧠 语义搜索 (BGE-M3 本机)..."
+              ? "全文 BM25 搜..."
+              : "语义搜索 (BGE-M3 本机)..."
         }
-        style={{
-          width: "100%",
-          padding: "6px 8px",
-          fontSize: 12,
-          border: "1px solid var(--catfish-border)",
-          borderRadius: 4,
-          marginBottom: 4,
-          background: "var(--catfish-bg)",
-          color: "var(--catfish-text)",
-          boxSizing: "border-box",
-        }}
+        className="wiki-search-input"
+        style={{ marginBottom: 6 }}
       />
-      {/* P37+P38 (6/5 鸿波): 3 mode toggle (title / body / semantic) */}
-      <div style={{ display: "flex", gap: 2, marginBottom: "var(--space-2)", fontSize: 10 }}>
+      {/* P37+P38 (6/5) mode toggle — E4 改 pill segmented, 单 brand 墨青 accent */}
+      <div className="wiki-segmented">
         {(["title", "body", "semantic"] as const).map((m) => (
           <button
             key={m}
             onClick={() => setSearchMode(m)}
-            style={{
-              flex: 1,
-              padding: "3px 4px",
-              border: "1px solid var(--catfish-border)",
-              borderRadius: 3,
-              background: searchMode === m ? "var(--catfish-teal, #0d9488)" : "transparent",
-              color: searchMode === m ? "#fff" : "var(--catfish-text-muted)",
-              cursor: "pointer",
-              fontWeight: searchMode === m ? 600 : 400,
-            }}
+            className="wiki-segmented__btn"
+            data-active={searchMode === m}
           >
-            {m === "title" ? "🏷️ 标题" : m === "body" ? "🔤 全文" : "🧠 语义"}
+            {m === "title" ? "标题" : m === "body" ? "全文" : "语义"}
           </button>
         ))}
       </div>
       {semanticMessage && (
         <div
-          style={{
-            fontSize: 10,
-            color: "var(--catfish-text-muted)",
-            marginBottom: 6,
-            padding: "4px 6px",
-            background: "var(--catfish-bg-elevated, rgba(0,0,0,0.04))",
-            borderRadius: 3,
-            whiteSpace: "pre-wrap",
-            fontFamily: semanticMessage.startsWith("BGE-M3 model 未装")
-              ? "var(--font-mono)"
-              : undefined,
-          }}
+          className={
+            "wiki-semantic-msg " +
+            (semanticMessage.startsWith("BGE-M3 model 未装") ? "wiki-semantic-msg--mono" : "")
+          }
         >
           {semanticMessage}
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 4, marginBottom: "var(--space-2)" }}>
+      {/* kind filter — 跟 mode toggle 同 segmented pattern, 视觉一致 */}
+      <div className="wiki-segmented">
         {(["all", "entity", "concept", "query"] as const).map((k) => (
           <button
             key={k}
             onClick={() => setKindFilter(k)}
-            style={{
-              flex: 1,
-              padding: "4px 6px",
-              fontSize: 11,
-              border: "1px solid var(--catfish-border)",
-              borderRadius: 4,
-              background: kindFilter === k ? "var(--catfish-accent, #4a9eff)" : "transparent",
-              color: kindFilter === k ? "#fff" : "var(--catfish-text)",
-              cursor: "pointer",
-            }}
+            className="wiki-segmented__btn"
+            data-active={kindFilter === k}
           >
             {k === "all" ? "全部" : k === "entity" ? "实体" : k === "concept" ? "概念" : "查询"}
           </button>
@@ -425,24 +382,25 @@ function Group({
   };
   if (files.length === 0) return null;
   return (
-    <div style={{ marginTop: "var(--space-3)" }}>
+    <div className={"wiki-group " + (collapsed ? "" : "wiki-group--open")}>
       <div
+        className="wiki-group__header"
         onClick={toggle}
-        style={{
-          fontWeight: 600,
-          fontSize: 11,
-          color,
-          marginBottom: 4,
-          cursor: "pointer",
-          userSelect: "none",
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            toggle();
+          }
         }}
+        role="button"
+        tabIndex={0}
+        aria-expanded={!collapsed}
+        style={{ color }}
       >
-        <span style={{ display: "inline-block", width: 12, textAlign: "center" }}>
-          {collapsed ? "▶" : "▼"}
-        </span>{" "}
-        {emoji} {label}{" "}
-        <span style={{ fontWeight: 400, color: "var(--catfish-text-muted)" }}>
-          ({files.length})
+        <span className="wiki-group__caret">▶</span>
+        <span>{emoji} {label}</span>
+        <span style={{ fontWeight: 400, color: "var(--catfish-text-muted)", marginLeft: "auto" }}>
+          {files.length}
         </span>
       </div>
       {!collapsed && (

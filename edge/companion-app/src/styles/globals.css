@@ -92,3 +92,938 @@ button {
   border-left: 3px solid var(--catfish-border);
   color: var(--catfish-text-muted);
 }
+
+/* ─────────────────────────────────────────────────────────────────────
+ * Approval banner (P44.3 + E2 taste-skill 改造 6/6)
+ *
+ * 老版 anti-pattern (audit redesign-existing-projects SKILL):
+ *   ✗ 4 个 ghost button 平铺等宽 + 3 个 accent color (cyan/green/red)
+ *   ✗ generic `#1a1f2e` 不走 brand tokens
+ *   ✗ 内联 style 没法加 :hover :active :focus
+ *   ✗ 无 loading state / countdown
+ *   ✗ 主 action (批准) 跟次 action 视觉重量相同
+ *
+ * 新版 (按 redesign-skill priority 1-5):
+ *   ✓ 单 accent: brand 墨青 (var(--catfish-cyan)); deny 用 muted gray text-link
+ *   ✓ 主 action `批准` filled, `本会话/始终批准` 文字链, `拒绝` 右对齐 ghost
+ *   ✓ hover (背景 shift) / active (translateY 1px) / focus-visible (双圈 ring)
+ *   ✓ transition 180ms cubic-bezier
+ *   ✓ shadow elevation 代替 border (depth 不靠 generic 1px border)
+ *   ✓ varied border-radius: banner 10px / button 6px
+ *   ✓ title SemiBold(600) + tabular-nums monospace `pattern_key`
+ *   ✓ loading state (button disabled + spinner) 等 RPC 返回
+ *   ✓ 60s timeout 倒计时 (hermes config approvals.timeout)
+ * ─────────────────────────────────────────────────────────────────────*/
+
+.approval-banner {
+  margin: 0 var(--space-3) var(--space-2);
+  padding: 14px 16px 12px;
+  border-radius: 10px;
+  background: var(--catfish-bg-elevated);
+  /* 单层 elevation, tinted shadow (hue 跟 brand 墨青走): */
+  box-shadow:
+    0 1px 2px rgba(14, 95, 102, 0.06),
+    0 8px 24px -8px rgba(14, 95, 102, 0.18);
+  /* 替代 generic 1px border: 用 1px 顶部 highlight (subtle, brand 色透明) */
+  border-top: 1px solid rgba(14, 95, 102, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  /* 微动作 enter (scale + opacity), CPU 友好 */
+  animation: approval-banner-enter 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes approval-banner-enter {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.approval-banner__header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--catfish-text);
+}
+
+.approval-banner__header .pattern {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--catfish-bg-cream);
+  color: var(--catfish-cyan);
+}
+
+.approval-banner__header .countdown {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--catfish-text-muted);
+}
+
+.approval-banner__code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--catfish-text);
+  background: var(--catfish-bg-cream);
+  padding: 8px 10px;
+  border-radius: 6px;
+  max-height: 96px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.approval-banner__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+}
+
+/* Primary: filled 实色, 主 action */
+.approval-banner__btn-primary {
+  background: var(--catfish-cyan);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  cursor: pointer;
+  transition:
+    background-color 180ms cubic-bezier(0.16, 1, 0.3, 1),
+    transform 80ms ease,
+    box-shadow 180ms ease;
+  box-shadow: 0 1px 2px rgba(14, 95, 102, 0.18);
+}
+.approval-banner__btn-primary:hover {
+  background: var(--catfish-cyan-dim);
+  box-shadow: 0 2px 6px rgba(14, 95, 102, 0.28);
+}
+.approval-banner__btn-primary:active {
+  transform: translateY(1px);
+  box-shadow: 0 1px 2px rgba(14, 95, 102, 0.18);
+}
+.approval-banner__btn-primary:focus-visible {
+  outline: 2px solid var(--catfish-cyan-bright);
+  outline-offset: 2px;
+}
+.approval-banner__btn-primary:disabled {
+  background: var(--status-idle);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* Tertiary 文字链 (本会话 / 始终批准 — 降级到 link, 减视觉噪声) */
+.approval-banner__btn-link {
+  background: transparent;
+  border: none;
+  color: var(--catfish-text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 180ms ease, background-color 180ms ease;
+}
+.approval-banner__btn-link:hover {
+  color: var(--catfish-cyan);
+  background: var(--catfish-bg-cream);
+}
+.approval-banner__btn-link:focus-visible {
+  outline: 2px solid var(--catfish-cyan-bright);
+  outline-offset: 2px;
+}
+.approval-banner__btn-link:disabled {
+  color: var(--status-idle);
+  cursor: not-allowed;
+}
+
+/* Destructive ghost (拒绝 — 右对齐, muted red, 不抢主 action) */
+.approval-banner__btn-deny {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--catfish-text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 180ms ease, border-color 180ms ease, background-color 180ms ease;
+}
+.approval-banner__btn-deny:hover {
+  color: var(--status-err);
+  border-color: rgba(217, 83, 79, 0.4);
+  background: rgba(217, 83, 79, 0.06);
+}
+.approval-banner__btn-deny:focus-visible {
+  outline: 2px solid var(--status-err);
+  outline-offset: 2px;
+}
+.approval-banner__btn-deny:disabled {
+  color: var(--status-idle);
+  cursor: not-allowed;
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+ * ChatToolCall (E2 taste-skill 改造 6/6)
+ *
+ * 老 anti-pattern:
+ *   ✗ 1px border 围卡 + 内部 border-top hairline (generic AI dashboard)
+ *   ✗ `参数`/`结果`/`错误` UPPERCASE + letter-spacing 0.5 (README 头号反例)
+ *   ✗ header cursor:pointer 但无 hover state / 无键盘可点
+ *   ✗ ▶ ↔ ▼ emoji swap 无 rotate transition (硬切)
+ *
+ * 新 (按 redesign-skill):
+ *   ✓ 4px left-bar status-color 替代 1px 全包围 border, elevation 用 subtle shadow
+ *   ✓ section label lowercase italic 11px (替 uppercase letter-spacing)
+ *   ✓ header hover bg-cream micro shift + focus-visible ring + tabIndex 键盘可点
+ *   ✓ ▶ rotate 90deg 180ms transition (一个 icon 不变 emoji swap)
+ *   ✓ varied radius: 卡 10px / pre 6px
+ *   ✓ ok = brand 墨青 (跟 banner 单 accent 一致), err = status-err
+ * ─────────────────────────────────────────────────────────────────────*/
+
+.toolcall {
+  margin: var(--space-2) 0;
+  position: relative;
+  border-radius: 10px;
+  background: var(--catfish-bg);
+  overflow: hidden;
+  /* status-color left bar (4px), 用 currentColor 让 CSS var 控制 */
+  --toolcall-accent: var(--catfish-border);
+  box-shadow:
+    inset 4px 0 0 var(--toolcall-accent),
+    0 1px 2px rgba(14, 95, 102, 0.04);
+}
+.toolcall--done    { --toolcall-accent: var(--catfish-cyan); }
+.toolcall--running { --toolcall-accent: var(--catfish-orange); }
+.toolcall--error   { --toolcall-accent: var(--status-err); }
+.toolcall--pending { --toolcall-accent: var(--catfish-text-muted); }
+
+.toolcall__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 8px 12px 8px 16px;  /* 左 padding 留 4px bar */
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  user-select: none;
+  transition: background-color 180ms cubic-bezier(0.16, 1, 0.3, 1);
+  outline: none;
+}
+.toolcall__header:hover {
+  background: var(--catfish-bg-cream);
+}
+.toolcall__header:focus-visible {
+  background: var(--catfish-bg-cream);
+  box-shadow: inset 0 0 0 2px var(--catfish-cyan-bright);
+}
+
+.toolcall__status {
+  color: var(--toolcall-accent);
+  width: 14px;
+  text-align: center;
+  font-size: 13px;
+}
+
+.toolcall__caret {
+  color: var(--catfish-text-muted);
+  font-size: 10px;
+  transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
+  display: inline-block;
+}
+.toolcall--open .toolcall__caret {
+  transform: rotate(90deg);
+}
+
+.toolcall__name {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--catfish-text);
+  letter-spacing: -0.005em;
+}
+
+.toolcall__args-preview {
+  color: var(--catfish-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+}
+
+.toolcall__running-label {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--catfish-orange);
+  font-family: var(--font-sans);
+}
+
+.toolcall__filepills {
+  padding: 0 var(--space-3) 8px 16px;
+}
+
+.toolcall__body {
+  padding: var(--space-3) var(--space-3) var(--space-3) 16px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  background: var(--catfish-bg-cream);
+  animation: toolcall-body-enter 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes toolcall-body-enter {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.toolcall__section { margin-bottom: var(--space-2); }
+.toolcall__section:last-child { margin-bottom: 0; }
+
+/* Section label: lowercase italic 替代 UPPERCASE letter-spacing (README 头号反例) */
+.toolcall__section-label {
+  font-size: 11px;
+  font-style: italic;
+  font-weight: 500;
+  color: var(--catfish-text-muted);
+  font-family: var(--font-sans);
+  margin-bottom: 2px;
+}
+
+.toolcall__pre {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--catfish-bg);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--catfish-text);
+}
+.toolcall__pre--error {
+  color: var(--status-err);
+}
+.toolcall__pre--result {
+  max-height: 300px;
+  overflow: auto;
+}
+
+.toolcall__approval-slot {
+  padding: var(--space-2) var(--space-3) var(--space-2) 16px;
+  /* 1px border-top → subtle inset shadow 替 (跟 graph header 同 pattern) */
+  box-shadow: inset 0 1px 0 rgba(14, 95, 102, 0.08);
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: 12px;
+}
+.toolcall__approval-label {
+  color: var(--catfish-text-muted);
+  margin-right: 4px;
+  font-size: 11px;
+  font-style: italic;
+}
+.toolcall__approval-btn {
+  background: transparent;
+  border: none;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  font-weight: 500;
+  border-radius: 4px;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+.toolcall__approval-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(14, 95, 102, 0.18);
+}
+.toolcall__approval-btn--primary {
+  color: var(--catfish-cyan);
+}
+.toolcall__approval-btn--primary:hover {
+  background: rgba(14, 95, 102, 0.08);
+  color: var(--catfish-cyan-bright);
+}
+.toolcall__approval-btn--always {
+  color: var(--catfish-text-muted);
+}
+.toolcall__approval-btn--always:hover {
+  background: var(--catfish-bg-cream);
+  color: var(--catfish-text);
+}
+.toolcall__approval-btn--deny {
+  color: var(--status-err);
+}
+.toolcall__approval-btn--deny:hover {
+  background: rgba(217, 83, 79, 0.08);
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+ * Wiki Tab (E4 taste-skill 改造 6/6)
+ *
+ * 老 anti-pattern:
+ *   ✗ 3 列 1px hairline border 切 — generic AI panel dashboard
+ *   ✗ 顶部 search + mode toggle + kind filter 3 套等宽 flex:1 button group
+ *   ✗ hardcoded `#0d9488` `#4a9eff` 不在 brand tokens (墨青 #0E5F66 / 暖橙 #F47B3D)
+ *   ✗ emoji 在 button (🏷️🔤🧠) generic
+ *   ✗ 切换无 transition / 无 hover state
+ *   ✗ fontSize 10/11 密集, 缺 whitespace
+ *
+ * 新:
+ *   ✓ 3 列用 bg shift 分隔 (elevated / cream / elevated), 不用 1px border
+ *   ✓ search input focus-visible 2px brand ring
+ *   ✓ mode/kind toggle: pill segmented control, 单 accent (brand 墨青), active filled
+ *   ✓ 去 emoji 用纯文字
+ *   ✓ transition 180ms cubic-bezier on toggle
+ *   ✓ Group caret rotate 90deg + hover bg-cream
+ * ─────────────────────────────────────────────────────────────────────*/
+
+/* WikiTab 3 列 — bg shift 替 1px border */
+.wikitab {
+  display: flex;
+  height: 100%;
+  background: var(--catfish-bg);
+  overflow: hidden;
+}
+.wikitab__pane-tree {
+  width: 320px;
+  min-width: 280px;
+  background: var(--catfish-bg-elevated);
+  overflow-y: auto;
+  /* subtle right edge highlight, 替代 1px border */
+  box-shadow: inset -1px 0 0 rgba(14, 95, 102, 0.06);
+}
+.wikitab__pane-preview {
+  flex: 1;
+  min-width: 400px;
+  overflow-y: auto;
+  padding: var(--space-6);
+  background: var(--catfish-bg);
+}
+.wikitab__pane-graph {
+  width: 480px;
+  min-width: 360px;
+  background: var(--catfish-bg-elevated);
+  position: relative;
+  box-shadow: inset 1px 0 0 rgba(14, 95, 102, 0.06);
+}
+
+/* WikiTree search input */
+.wiki-search-input {
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  border: 1px solid var(--catfish-border);
+  border-radius: 8px;
+  background: var(--catfish-bg);
+  color: var(--catfish-text);
+  outline: none;
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+  box-sizing: border-box;
+}
+.wiki-search-input:hover {
+  border-color: var(--catfish-cyan-bright);
+}
+.wiki-search-input:focus-visible {
+  border-color: var(--catfish-cyan);
+  box-shadow: 0 0 0 3px rgba(14, 95, 102, 0.12);
+}
+.wiki-search-input::placeholder {
+  color: var(--catfish-text-muted);
+}
+
+/* Wiki toggle — pill segmented control (替 3-4 button equal width flex:1) */
+.wiki-segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 8px;
+  background: var(--catfish-bg-cream);
+  margin-bottom: var(--space-2);
+  width: 100%;
+  box-sizing: border-box;
+}
+.wiki-segmented__btn {
+  flex: 1;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: inherit;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--catfish-text-muted);
+  cursor: pointer;
+  transition: all 180ms cubic-bezier(0.16, 1, 0.3, 1);
+  letter-spacing: -0.005em;
+}
+.wiki-segmented__btn:hover:not([data-active="true"]) {
+  color: var(--catfish-cyan);
+}
+.wiki-segmented__btn[data-active="true"] {
+  background: var(--catfish-bg-elevated);
+  color: var(--catfish-cyan);
+  font-weight: 600;
+  box-shadow:
+    0 1px 2px rgba(14, 95, 102, 0.12),
+    0 0 0 1px rgba(14, 95, 102, 0.06);
+}
+.wiki-segmented__btn:focus-visible {
+  outline: 2px solid var(--catfish-cyan-bright);
+  outline-offset: 2px;
+}
+
+/* WikiTree Group folding (P40 改造) */
+.wiki-group {
+  margin-top: var(--space-3);
+}
+.wiki-group__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--catfish-text-muted);
+  letter-spacing: -0.005em;
+  transition: background-color 180ms ease;
+}
+.wiki-group__header:hover {
+  background: var(--catfish-bg-cream);
+}
+.wiki-group__caret {
+  display: inline-block;
+  font-size: 9px;
+  color: var(--catfish-text-muted);
+  transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.wiki-group--open .wiki-group__caret {
+  transform: rotate(90deg);
+}
+
+/* WikiTree title row */
+.wiki-tree__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-3);
+}
+.wiki-tree__title h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--catfish-text);
+}
+
+/* ─────────────────────────────────────────────────────────────────────
+ * WikiPreview (E4 改造)
+ *
+ * 老 anti-pattern:
+ *   ✗ metadata card 1px border + radius 8 generic AI card
+ *   ✗ tag chip 1px border radius 10 pill (cliche)
+ *   ✗ wikilink hardcoded `#4a9eff` 蓝 / `#d33` 红 (非 brand)
+ *   ✗ 编辑 / 保存 button hardcoded `#0d9488` 青 + emoji prefix (✏️/💾)
+ *   ✗ textarea 无 focus state
+ *   ✗ 变更历史 emoji swap `▶/▼` + `📜` (Phosphor / 自定义比 emoji 好)
+ *   ✗ borderTop 1px dashed 切 (重 hairline)
+ *
+ * 新:
+ *   ✓ metadata card 用 elevation shadow + 暖米底 (替 1px border)
+ *   ✓ tag chip bg-cream 无 border, hover → brand 墨青
+ *   ✓ wikilink brand 墨青 (active link), dangling 用 status-err muted
+ *   ✓ 编辑/保存 button 复用 .approval-banner__btn-primary / __btn-link (brand 一致)
+ *   ✓ textarea focus-visible 3px ring
+ *   ✓ 变更历史走 .wiki-group caret rotate (跟 WikiTree Group 一致)
+ *   ✓ 替 dashed border 为 subtle bg shift
+ * ─────────────────────────────────────────────────────────────────────*/
+
+.wiki-preview {
+  max-width: 720px;
+  margin: 0 auto;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.wiki-preview__meta {
+  padding: 14px 18px;
+  background: var(--catfish-bg-elevated);
+  border-radius: 10px;
+  margin-bottom: var(--space-4);
+  box-shadow:
+    0 1px 2px rgba(14, 95, 102, 0.04),
+    0 4px 16px -8px rgba(14, 95, 102, 0.12);
+  font-size: 12px;
+}
+
+.wiki-preview__meta-title {
+  font-weight: 600;
+  font-size: 17px;
+  letter-spacing: -0.01em;
+  margin-bottom: 8px;
+  color: var(--catfish-text);
+}
+
+.wiki-preview__meta-row {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  color: var(--catfish-text-muted);
+  font-size: 12px;
+}
+.wiki-preview__meta-row code {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  background: var(--catfish-bg-cream);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.wiki-preview__tag {
+  display: inline-block;
+  padding: 2px 8px;
+  margin: 0 6px 4px 0;
+  background: var(--catfish-bg-cream);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--catfish-text-muted);
+  transition: color 180ms ease, background-color 180ms ease;
+  cursor: default;
+}
+.wiki-preview__tag:hover {
+  color: var(--catfish-cyan);
+  background: var(--catfish-bg);
+}
+
+.wiki-preview__wikilink {
+  border: none;
+  background: transparent;
+  color: var(--catfish-cyan);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(14, 95, 102, 0.25);
+  cursor: pointer;
+  padding: 0 1px;
+  margin: 0 4px 0 0;
+  font-size: inherit;
+  font-weight: 500;
+  transition: color 180ms ease, border-color 180ms ease;
+}
+.wiki-preview__wikilink:hover {
+  color: var(--catfish-cyan-bright);
+  border-bottom-color: var(--catfish-cyan-bright);
+}
+.wiki-preview__wikilink--dangling {
+  color: var(--status-err);
+  font-style: italic;
+  border-bottom-color: rgba(217, 83, 79, 0.3);
+  border-bottom-style: dashed;
+}
+.wiki-preview__wikilink--dangling:hover {
+  color: var(--status-err);
+}
+
+.wiki-preview__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-bottom: 12px;
+  align-items: center;
+}
+
+.wiki-preview__edit-hint {
+  font-size: 11px;
+  color: var(--catfish-text-muted);
+  margin-right: 8px;
+  font-style: italic;
+}
+
+.wiki-preview__textarea {
+  width: 100%;
+  min-height: 400px;
+  padding: 14px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.65;
+  border: 1px solid var(--catfish-border);
+  border-radius: 8px;
+  background: var(--catfish-bg-elevated);
+  color: var(--catfish-text);
+  box-sizing: border-box;
+  resize: vertical;
+  outline: none;
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+.wiki-preview__textarea:focus-visible {
+  border-color: var(--catfish-cyan);
+  box-shadow: 0 0 0 3px rgba(14, 95, 102, 0.12);
+}
+
+.wiki-preview__save-err {
+  color: var(--status-err);
+  font-size: 12px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  background: rgba(217, 83, 79, 0.06);
+  border-radius: 6px;
+}
+
+/* kind badge — 替 emoji 🧑📐💬 走 brand 一致 chip
+ *   --entity = 墨青 (主), --concept = 暖橙, --query = muted gray */
+.wiki-kind-badge {
+  display: inline-block;
+  padding: 1px 7px;
+  margin-right: 8px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  vertical-align: 2px;
+}
+.wiki-kind-badge--entity {
+  background: rgba(14, 95, 102, 0.1);
+  color: var(--catfish-cyan);
+}
+.wiki-kind-badge--concept {
+  background: rgba(244, 123, 61, 0.12);
+  color: #C45A20;
+}
+.wiki-kind-badge--query {
+  background: rgba(107, 119, 117, 0.12);
+  color: #5A6664;
+}
+
+.wiki-preview__meta-section {
+  margin-top: 8px;
+}
+.wiki-preview__meta-section-label {
+  font-size: 10px;
+  color: var(--catfish-text-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-right: 6px;
+  font-style: italic;
+}
+
+/* WikiPreview 变更历史 — 复用 .wiki-group caret rotate pattern */
+.wiki-preview__history {
+  margin-top: 28px;
+  padding-top: 18px;
+  /* subtle 顶部分隔 — 用 bg gradient 替 1px dashed (cliche AI border) */
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    rgba(14, 95, 102, 0.08) 20%,
+    rgba(14, 95, 102, 0.08) 80%,
+    transparent 100%
+  ) top / 100% 1px no-repeat;
+}
+.wiki-preview__history-toggle {
+  background: transparent;
+  border: none;
+  color: var(--catfish-text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px 0;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: color 180ms ease;
+}
+.wiki-preview__history-toggle:hover {
+  color: var(--catfish-text);
+}
+.wiki-preview__history-toggle:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(14, 95, 102, 0.18);
+  border-radius: 4px;
+}
+.wiki-preview__history-caret {
+  display: inline-block;
+  font-size: 10px;
+  transition: transform 200ms ease;
+  color: var(--catfish-text-muted);
+}
+.wiki-preview__history--open .wiki-preview__history-caret {
+  transform: rotate(90deg);
+}
+.wiki-preview__history-hint {
+  font-size: 10px;
+  opacity: 0.65;
+  font-style: italic;
+}
+.wiki-preview__history-body {
+  margin-top: 10px;
+  padding-left: 14px;
+  font-size: 12px;
+  color: var(--catfish-text-muted);
+  border-left: 2px solid rgba(14, 95, 102, 0.15);
+}
+
+/* RelatedRecommend — 走 elevation shadow 替 1px border
+ * 老 anti-pattern: 1px border + radius 8 + 📊 emoji header */
+.wiki-related {
+  margin: var(--space-3) 0 var(--space-4);
+  padding: 14px 18px;
+  background: var(--catfish-bg-elevated);
+  border-radius: 10px;
+  box-shadow:
+    0 1px 2px rgba(14, 95, 102, 0.04),
+    0 4px 16px -8px rgba(14, 95, 102, 0.12);
+}
+.wiki-related__header {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--catfish-text-muted);
+  margin-bottom: 6px;
+}
+.wiki-related__sub {
+  font-size: 10px;
+  color: var(--catfish-text-muted);
+  margin-bottom: 10px;
+  font-style: italic;
+  opacity: 0.85;
+}
+.wiki-related__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 13px;
+}
+.wiki-related__item {
+  padding: 4px 8px;
+  margin: 0 -8px;
+  border-radius: 5px;
+  transition: background-color 150ms ease;
+}
+.wiki-related__item:hover {
+  background: var(--catfish-bg-cream);
+}
+.wiki-related__link {
+  background: transparent;
+  border: none;
+  color: var(--catfish-cyan);
+  cursor: pointer;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 500;
+  transition: color 180ms ease;
+}
+.wiki-related__link:hover {
+  color: var(--catfish-cyan-bright);
+  text-decoration: underline;
+}
+.wiki-related__score {
+  margin-left: 8px;
+  color: var(--catfish-text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* WikiPreview empty / loading */
+.wiki-preview__empty {
+  color: var(--catfish-text-muted);
+  font-size: 13px;
+  text-align: center;
+  margin-top: 80px;
+  padding: 20px;
+}
+.wiki-preview__empty-icon {
+  font-size: 44px;
+  margin-bottom: 14px;
+  opacity: 0.4;
+}
+.wiki-preview__empty-title {
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--catfish-text);
+  font-size: 15px;
+}
+
+/* WikiGraph */
+.wiki-graph__header {
+  padding: 10px 14px;
+  font-size: 11px;
+  color: var(--catfish-text-muted);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  /* subtle bottom shadow 替 1px border */
+  box-shadow: inset 0 -1px 0 rgba(14, 95, 102, 0.06);
+}
+.wiki-graph__legend {
+  display: flex;
+  gap: 12px;
+  font-size: 10px;
+}
+.wiki-graph__legend-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+.wiki-graph__empty {
+  padding: 32px 20px;
+  text-align: center;
+  color: var(--catfish-text-muted);
+  font-size: 13px;
+}
+.wiki-graph__empty-icon {
+  font-size: 40px;
+  margin-bottom: 12px;
+  opacity: 0.5;
+}
+
+/* WikiTree semantic message banner */
+.wiki-semantic-msg {
+  font-size: 11px;
+  color: var(--catfish-text-muted);
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  background: var(--catfish-bg-cream);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+.wiki-semantic-msg--mono {
+  font-family: var(--font-mono);
+}
+
+/* Loading state: button 内 spinner */
+.approval-banner__spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: approval-spin 0.7s linear infinite;
+  margin-right: 6px;
+  vertical-align: -1px;
+}
+@keyframes approval-spin {
+  to { transform: rotate(360deg); }
+}

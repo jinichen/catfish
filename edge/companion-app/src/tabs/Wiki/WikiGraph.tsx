@@ -1,13 +1,18 @@
 /** BL-CATFISH-WIKI-MODE P3.3.5 (6/4) — sigma + graphology graph view.
  *
- * 真**Obsidian graph view 类**:
- *   - entities 蓝 (#4a9eff) / concepts 橙 (#ff9933) / queries 绿 (#5fc878)
+ * Obsidian graph view 风:
+ *   - entities 墨青 / concepts 暖橙 / queries 灰青
  *   - 节点 size ~ inbound link count (degree centrality)
  *   - 点击 node → store.selectFile (跳 preview)
  *   - hover 显示 title
  *   - drag + zoom + pan (sigma default)
  *
- * graph build from frontmatter.related (wikilink edges, name → file 真 title match).
+ * graph build from frontmatter.related (wikilink edges, name → file title match).
+ *
+ * E5 (6/6 taste-skill 改造): COLOR 常量从 hardcoded 三原色 (#4a9eff/#ff9933/#5fc878)
+ * 换 brand 一致 — entity = catfish-cyan 墨青, concept = catfish-orange 暖橙,
+ * query = muted teal (跟 cyan 同系, low-saturation). selected 高亮也换 brand
+ * cyan-bright (替 #ff3366 粉红). header 走 .wiki-graph__header className.
  */
 
 import { useEffect, useRef, useMemo } from "react";
@@ -18,11 +23,14 @@ import forceAtlas2 from "graphology-layout-forceatlas2";
 import { useWikiStore } from "../../store/wiki";
 import type { WikiFileInfo } from "../../lib/tauri";
 
+// E5: brand 一致 3 色 (tokens.css 没暴露 hex 给 JS, 这里 mirror).
+// 跟 .wiki-kind-badge--<kind> 视觉一致.
 const COLOR = {
-  entity: "#4a9eff",
-  concept: "#ff9933",
-  query: "#5fc878",
+  entity: "#0E5F66",   // 墨青 (catfish-cyan)
+  concept: "#F47B3D",  // 暖橙 (catfish-orange)
+  query: "#6B8589",    // 灰青 (low-saturation, muted)
 };
+const COLOR_SELECTED = "#1A8A95"; // cyan-bright (替 #ff3366 粉红)
 
 export default function WikiGraph() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -190,37 +198,46 @@ export default function WikiGraph() {
     const g = sigma.getGraph();
     g.forEachNode((node) => {
       const original = COLOR[g.getNodeAttribute(node, "kind") as "entity" | "concept" | "query"] || "#888";
-      g.setNodeAttribute(node, "color", node === selectedPath ? "#ff3366" : original);
+      g.setNodeAttribute(node, "color", node === selectedPath ? COLOR_SELECTED : original);
     });
     sigma.refresh();
   }, [selectedPath]);
 
   if (files.length === 0) {
     return (
-      <div style={{ padding: 20, textAlign: "center", color: "var(--catfish-text-muted)", fontSize: 12 }}>
-        <div style={{ fontSize: 48, marginBottom: 8 }}>🕸️</div>
-        <div>wiki/ 真空, 暂无图谱</div>
+      <div className="wiki-graph__empty">
+        <div className="wiki-graph__empty-icon">○</div>
+        <div>wiki/ 暂无图谱</div>
       </div>
     );
   }
 
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column" }}>
-      <div
-        style={{
-          padding: "var(--space-2) var(--space-3)",
-          borderBottom: "1px solid var(--catfish-border)",
-          fontSize: 11,
-          color: "var(--catfish-text-muted)",
-          display: "flex",
-          justifyContent: "space-between",
-        }}
-      >
-        <span>关系图谱 ({files.length} nodes)</span>
-        <span>
-          <span style={{ color: COLOR.entity }}>● 实体</span>{" "}
-          <span style={{ color: COLOR.concept }}>● 概念</span>{" "}
-          <span style={{ color: COLOR.query }}>● 查询</span>
+      <div className="wiki-graph__header">
+        <span>关系图谱 · {files.length} 节点</span>
+        <span className="wiki-graph__legend">
+          <span>
+            <span
+              className="wiki-graph__legend-dot"
+              style={{ background: COLOR.entity }}
+            />
+            实体
+          </span>
+          <span>
+            <span
+              className="wiki-graph__legend-dot"
+              style={{ background: COLOR.concept }}
+            />
+            概念
+          </span>
+          <span>
+            <span
+              className="wiki-graph__legend-dot"
+              style={{ background: COLOR.query }}
+            />
+            查询
+          </span>
         </span>
       </div>
       <div ref={containerRef} style={{ flex: 1, background: "var(--catfish-bg)" }} />

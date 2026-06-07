@@ -29,12 +29,8 @@ const STATUS_EMOJI: Record<ToolCall["status"], string> = {
   error: "✗",
 };
 
-const STATUS_COLOR: Record<ToolCall["status"], string> = {
-  pending: "var(--catfish-text-muted)",
-  running: "var(--catfish-cyan-dim)",
-  done: "var(--status-ok)",
-  error: "var(--status-err)",
-};
+// E2 (6/6): STATUS_COLOR 删 — 颜色走 CSS class `.toolcall--<status>` 控制 4px
+// left-bar accent (见 globals.css). preStyle / Section 也删 — 走 CSS class.
 
 export default function ChatToolCall({ call }: Props) {
   const [open, setOpen] = useState(false);
@@ -80,101 +76,68 @@ export default function ChatToolCall({ call }: Props) {
       resultStr,
     );
 
+  // E2 (6/6 taste-skill 改造): className-based, 详 globals.css `.toolcall*`.
+  // 5 大类 anti-pattern 修法见 globals.css 注释.
+  const cardClass = [
+    "toolcall",
+    `toolcall--${call.status}`,
+    open ? "toolcall--open" : "",
+  ].filter(Boolean).join(" ");
+
   return (
-    <div
-      style={{
-        margin: "var(--space-2) 0",
-        border: "1px solid var(--catfish-border)",
-        borderRadius: "var(--radius-sm)",
-        background: "var(--catfish-bg)",
-        overflow: "hidden",
-      }}
-    >
+    <div className={cardClass}>
       <div
+        className="toolcall__header"
         onClick={() => setOpen(!open)}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "var(--space-2)",
-          padding: "6px var(--space-3)",
-          cursor: "pointer",
-          fontFamily: "var(--font-mono)",
-          fontSize: 12,
-          userSelect: "none",
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setOpen(!open);
+          }
         }}
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        aria-label={`Tool call ${call.name}, ${open ? "已展开" : "已折叠"}`}
       >
-        <span style={{ color: STATUS_COLOR[call.status], width: 14 }}>
-          {STATUS_EMOJI[call.status]}
-        </span>
-        <span
-          style={{
-            color: "var(--catfish-text-muted)",
-            fontSize: 10,
-          }}
-        >
-          {open ? "▼" : "▶"}
-        </span>
-        <strong style={{ fontSize: 12 }}>{call.name}</strong>
-        <span
-          style={{
-            color: "var(--catfish-text-muted)",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            flex: 1,
-            minWidth: 0,
-          }}
-        >
-          ({argsPreview(call.args)})
-        </span>
+        <span className="toolcall__status">{STATUS_EMOJI[call.status]}</span>
+        <span className="toolcall__caret">▶</span>
+        <span className="toolcall__name">{call.name}</span>
+        <span className="toolcall__args-preview">({argsPreview(call.args)})</span>
         {call.status === "running" && (
-          <span style={{ fontSize: 11, color: "var(--catfish-cyan-dim)" }}>
-            执行中…
-          </span>
+          <span className="toolcall__running-label">执行中…</span>
         )}
       </div>
       {/* 文件 pill —— 折叠状态下也显示, 让员工不必展开就看见"下载入口" */}
       {filePaths.length > 0 && (
-        <div
-          style={{
-            padding: "0 var(--space-3) 6px",
-            borderTop: "1px solid var(--catfish-border)",
-          }}
-        >
+        <div className="toolcall__filepills">
           <FilePillList paths={filePaths} />
         </div>
       )}
       {open && (
-        <div
-          style={{
-            borderTop: "1px solid var(--catfish-border)",
-            padding: "var(--space-3)",
-            fontFamily: "var(--font-mono)",
-            fontSize: 11,
-            lineHeight: 1.5,
-          }}
-        >
-          <Section label="参数">
-            <pre style={preStyle}>{argsStr}</pre>
-          </Section>
+        <div className="toolcall__body">
+          <div className="toolcall__section">
+            <div className="toolcall__section-label">参数</div>
+            <pre className="toolcall__pre">{argsStr}</pre>
+          </div>
           {(call.status === "done" || call.status === "error") && (
-            <Section label={call.status === "error" ? "错误" : "结果"}>
+            <div className="toolcall__section">
+              <div className="toolcall__section-label">
+                {call.status === "error" ? "错误" : "结果"}
+              </div>
               <pre
-                style={{
-                  ...preStyle,
-                  color:
-                    call.status === "error"
-                      ? "var(--status-err)"
-                      : "var(--catfish-text)",
-                  maxHeight: 300,
-                  overflow: "auto",
-                }}
+                className={
+                  "toolcall__pre " +
+                  (call.status === "error"
+                    ? "toolcall__pre--error"
+                    : "toolcall__pre--result")
+                }
               >
                 {call.status === "error"
                   ? call.error || resultDisplay
                   : resultDisplay || "(空)"}
               </pre>
-            </Section>
+            </div>
           )}
         </div>
       )}
@@ -183,12 +146,7 @@ export default function ChatToolCall({ call }: Props) {
        * 看不到 button → 卡死. 现在搬出去, ✓ done + approval pending 时
        * 总是显, 跟 file pill 一致 (filePaths 也是折叠也显). */}
       {isApprovalPending && (
-        <div
-          style={{
-            padding: "0 var(--space-3) var(--space-2)",
-            borderTop: "1px solid var(--catfish-border)",
-          }}
-        >
+        <div className="toolcall__approval-slot">
           <ApprovalButtons />
         </div>
       )}
@@ -232,50 +190,47 @@ function ApprovalButtons() {
     );
   };
 
+  // E5 (6/6): 删 inline style + hardcoded #16a34a/#0891b2/#dc2626 outline button.
+  // 走 .toolcall__approval-btn className, brand 一致 (墨青 primary + muted always
+  // + status-err deny). 删 emoji ✓/✗ prefix (banner 同).
+  // .toolcall__approval-slot 已 display:flex, 这里 fragment 让 button 直接成为 slot 子节点.
   return (
-    <div
-      style={{
-        display: "flex",
-        gap: "var(--space-2)",
-        flexWrap: "wrap",
-        alignItems: "center",
-        fontSize: 12,
-      }}
-    >
-      <span style={{ color: "var(--catfish-text-muted)", marginRight: 4 }}>
-        等待批准:
-      </span>
-      <ApprovalBtn label="✓ 批准" color="var(--status-ok, #16a34a)" onClick={() => void handleChoice("once")} />
-      <ApprovalBtn label="✓ 始终批准" color="var(--catfish-cyan-dim, #0891b2)" onClick={() => void handleChoice("always")} />
-      <ApprovalBtn label="✗ 拒绝" color="var(--status-err, #dc2626)" onClick={() => void handleChoice("deny")} />
-    </div>
+    <>
+      <span className="toolcall__approval-label">等待批准</span>
+      <ApprovalBtn
+        label="批准"
+        variant="primary"
+        onClick={() => void handleChoice("once")}
+      />
+      <ApprovalBtn
+        label="始终批准"
+        variant="always"
+        onClick={() => void handleChoice("always")}
+      />
+      <ApprovalBtn
+        label="拒绝"
+        variant="deny"
+        onClick={() => void handleChoice("deny")}
+      />
+    </>
   );
 }
 
 function ApprovalBtn({
   label,
-  color,
+  variant,
   onClick,
 }: {
   label: string;
-  color: string;
+  variant: "primary" | "always" | "deny";
   onClick: () => void;
 }) {
   return (
     <button
+      className={`toolcall__approval-btn toolcall__approval-btn--${variant}`}
       onClick={(e) => {
         e.stopPropagation();
         onClick();
-      }}
-      style={{
-        background: "transparent",
-        border: `1px solid ${color}`,
-        color,
-        borderRadius: 4,
-        padding: "3px 10px",
-        fontSize: 12,
-        cursor: "pointer",
-        fontWeight: 500,
       }}
     >
       {label}
@@ -283,39 +238,7 @@ function ApprovalBtn({
   );
 }
 
-const preStyle: React.CSSProperties = {
-  margin: "4px 0 0",
-  padding: 0,
-  background: "transparent",
-  border: "none",
-  whiteSpace: "pre-wrap",
-  wordBreak: "break-all",
-};
-
-function Section({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div style={{ marginBottom: "var(--space-2)" }}>
-      <div
-        style={{
-          fontSize: 10,
-          color: "var(--catfish-text-muted)",
-          textTransform: "uppercase",
-          fontWeight: 600,
-          letterSpacing: 0.5,
-        }}
-      >
-        {label}
-      </div>
-      {children}
-    </div>
-  );
-}
+// E2 (6/6): preStyle / Section 删 — 走 globals.css `.toolcall__pre`/`.toolcall__section*`.
 
 /** 参数 inline 预览 —— 折叠时显示前几个 key=value, 太长截断 */
 function argsPreview(args: Record<string, unknown>): string {

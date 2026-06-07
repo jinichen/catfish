@@ -15,52 +15,20 @@ import WikiPreview from "./WikiPreview";
 import WikiGraph from "./WikiGraph";
 
 export default function WikiTab() {
+  // E4 (6/6 taste-skill 改造): 走 className `.wikitab*` (见 globals.css).
+  // 老版 3 列 1px hairline border → bg shift (elevated/cream/elevated) + 内
+  // box-shadow subtle 边界, 减视觉噪声, 跟 brand 墨青 hue tinted.
   return (
-    <div
-      style={{
-        display: "flex",
-        height: "100%",
-        background: "var(--catfish-bg)",
-        overflow: "hidden",
-      }}
-    >
-      {/* 左: tree + 搜索 + filter */}
-      <div
-        style={{
-          width: 320,
-          minWidth: 280,
-          borderRight: "1px solid var(--catfish-border)",
-          background: "var(--catfish-bg-elevated)",
-          overflowY: "auto",
-        }}
-      >
+    <div className="wikitab">
+      <aside className="wikitab__pane-tree">
         <WikiTree />
-      </div>
-
-      {/* 中: preview (Markdown) */}
-      <div
-        style={{
-          flex: 1,
-          minWidth: 400,
-          overflowY: "auto",
-          padding: "var(--space-4)",
-        }}
-      >
+      </aside>
+      <main className="wikitab__pane-preview">
         <WikiPreview />
-      </div>
-
-      {/* 右: graph (sigma) */}
-      <div
-        style={{
-          width: 480,
-          minWidth: 360,
-          borderLeft: "1px solid var(--catfish-border)",
-          background: "var(--catfish-bg-elevated)",
-          position: "relative",
-        }}
-      >
+      </main>
+      <aside className="wikitab__pane-graph">
         <WikiGraph />
-      </div>
+      </aside>
     </div>
   );
 }

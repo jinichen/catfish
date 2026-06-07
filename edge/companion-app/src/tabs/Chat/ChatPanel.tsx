@@ -62,26 +62,57 @@ export default function ChatPanel({
   // 没 finalize → ChatToolCall 卡片不渲染 → P27 inline button 不出. hermes 60s
   // 后 timeout 解 block 太晚, button 失效. 这里 listen catfish:approval-pending
   // event (P15 _approval_notify 发的 SSE event), 立即弹 banner 给员工点.
+  //
+  // E2 (6/6 taste-skill 改造): UI 按 redesign-existing-projects skill 重写.
+  // 5 大类全过 (typography / color / layout / interactivity / content), 7 步
+  // fix priority 走了 1-5 步. CSS class 走 globals.css `.approval-banner*`
+  // (内联 style 没法加 :hover :active :focus). 新增 loading state +
+  // 60s 倒计时 (hermes config approvals.timeout 是 60).
   const [pending, setPending] = useState<PendingApproval | null>(null);
+  const [submittingChoice, setSubmittingChoice] = useState<
+    "once" | "session" | "always" | "deny" | null
+  >(null);
+  const [secondsLeft, setSecondsLeft] = useState(60);
+
   useEffect(() => {
     const handler = (e: Event) => {
       const ev = e as CustomEvent<PendingApproval>;
       if (ev.detail?.approval_session_key) {
         setPending(ev.detail);
+        setSecondsLeft(60);  // 重置倒计时
       }
     };
     window.addEventListener("catfish:approval-pending", handler as EventListener);
     return () => window.removeEventListener("catfish:approval-pending", handler as EventListener);
   }, []);
 
-  const handleApproval = async (choice: "once" | "session" | "always" | "deny") => {
+  // 60s countdown — hermes _gateway_approval 默认 timeout 60s,
+  // 超时 hermes 自己 fallback 返回 "BLOCKED: timed out", banner 没意义自动消失.
+  useEffect(() => {
     if (!pending) return;
+    const tick = setInterval(() => {
+      setSecondsLeft((s) => {
+        if (s <= 1) {
+          clearInterval(tick);
+          setPending(null);  // timeout 自动清, 防 stale banner
+          return 0;
+        }
+        return s - 1;
+      });
+    }, 1000);
+    return () => clearInterval(tick);
+  }, [pending]);
+
+  const handleApproval = async (choice: "once" | "session" | "always" | "deny") => {
+    if (!pending || submittingChoice) return;
+    setSubmittingChoice(choice);
     try {
       await toolBridgeChatApproval(pending.approval_session_key, choice);
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn("[P44.3] chat_approval RPC 失败:", err);
     }
+    setSubmittingChoice(null);
     setPending(null);
   };
 
@@ -136,61 +167,48 @@ export default function ChatPanel({
         ))}
       </div>
       {pending && (
-        <div
-          style={{
-            padding: "10px 14px",
-            margin: "0 var(--space-3) 8px",
-            borderRadius: 8,
-            background: "var(--catfish-bg-elevated, #1a1f2e)",
-            border: "1px solid var(--catfish-cyan-dim, #0891b2)",
-            display: "flex",
-            flexDirection: "column",
-            gap: 8,
-          }}
-        >
-          <div style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>
-            ⚠️ hermes 等批准: <code style={{ background: "transparent" }}>{pending.pattern_key}</code>
+        <div className="approval-banner">
+          <div className="approval-banner__header">
+            <span>hermes 等批准</span>
+            <code className="pattern">{pending.pattern_key}</code>
+            <span className="countdown" aria-live="polite">
+              {secondsLeft}s
+            </span>
           </div>
-          <div
-            style={{
-              fontSize: 11,
-              fontFamily: "var(--font-mono)",
-              color: "var(--catfish-text)",
-              background: "var(--catfish-bg)",
-              padding: "6px 8px",
-              borderRadius: 4,
-              maxHeight: 80,
-              overflow: "auto",
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-all",
-            }}
-          >
-            {pending.command}
-          </div>
-          <div style={{ display: "flex", gap: 8, fontSize: 12 }}>
+          <div className="approval-banner__code">{pending.command}</div>
+          <div className="approval-banner__actions">
             <button
+              className="approval-banner__btn-primary"
               onClick={() => void handleApproval("once")}
-              style={btnStyle("var(--status-ok, #16a34a)")}
+              disabled={submittingChoice !== null}
+              autoFocus
             >
-              ✓ 批准
+              {submittingChoice === "once" && <span className="approval-banner__spinner" />}
+              批准
             </button>
             <button
+              className="approval-banner__btn-link"
               onClick={() => void handleApproval("session")}
-              style={btnStyle("var(--catfish-cyan-dim, #0891b2)")}
+              disabled={submittingChoice !== null}
             >
-              ✓ 本会话批准
+              {submittingChoice === "session" && <span className="approval-banner__spinner" />}
+              本会话允许
             </button>
             <button
+              className="approval-banner__btn-link"
               onClick={() => void handleApproval("always")}
-              style={btnStyle("var(--catfish-cyan-dim, #0891b2)")}
+              disabled={submittingChoice !== null}
             >
-              ✓ 始终批准
+              {submittingChoice === "always" && <span className="approval-banner__spinner" />}
+              始终允许
             </button>
             <button
+              className="approval-banner__btn-deny"
               onClick={() => void handleApproval("deny")}
-              style={btnStyle("var(--status-err, #dc2626)")}
+              disabled={submittingChoice !== null}
             >
-              ✗ 拒绝
+              {submittingChoice === "deny" && <span className="approval-banner__spinner" />}
+              拒绝
             </button>
           </div>
         </div>
@@ -206,19 +224,6 @@ export default function ChatPanel({
       />
     </div>
   );
-}
-
-function btnStyle(color: string): React.CSSProperties {
-  return {
-    background: "transparent",
-    border: `1px solid ${color}`,
-    color,
-    borderRadius: 4,
-    padding: "4px 10px",
-    fontSize: 12,
-    cursor: "pointer",
-    fontWeight: 500,
-  };
 }
 
 function EmptyState() {
