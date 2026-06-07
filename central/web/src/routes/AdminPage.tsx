@@ -25,6 +25,8 @@ import { SystemPage } from "./admin/SystemPage";
 import { FactsPage } from "./admin/FactsPage";
 // BL-RBAC-DAY7 (5/17): 4 维 RBAC dept 管理
 import { AccessPage } from "./admin/AccessPage";
+// 6/7 BL-MANIFESTO-ADVISORY-PHASE2: Advisory 管理 (sysadmin only)
+import { AdvisoryPage } from "./admin/AdvisoryPage";
 
 export function AdminPage() {
   // BL-ARCH1 P1 (5/10): admin 默认能进, sysadmin 看 system. /admin/users 内部不再
@@ -35,6 +37,7 @@ export function AdminPage() {
         <Route index element={<AdminHome />} />
         <Route path="users/*" element={<UsersPage />} />
         <Route path="access/*" element={<AccessPage />} />
+        <Route path="advisory" element={<AdvisoryPage />} />
         <Route path="system/*" element={<SystemPage />} />
         <Route path="facts/*" element={<FactsPage />} />
         <Route path="quota" element={<AdminQuota />} />
@@ -93,6 +96,7 @@ function AdminHome() {
         <NavTile to="/admin/access" icon="🔑" title="部门 RBAC" desc="模型 / 工具 / 技能 / 配额 — 按部门配置" />
         {/* BL-Q3-FACT P0 MVP (5/10): 事实补丁系统 — 政策变更自动同步到员工 skill */}
         <NavTile to="/admin/facts" icon="📋" title="政策同步 (FACT)" desc="政策变更 → 找受影响 skill → 生成 patch" />
+        <NavTile to="/admin/advisory" icon="🛡" title="Advisory 管理 (sysadmin)" desc="publish + revoke. pull-based, 跟 fleet 强 push 反向" />
         <NavTile to="/admin/quota" icon="🎯" title="配额规则" desc="defaults / per_model / per_dept" />
         {/* BL-ADMIN-AUDIT (5/12 鸿波): 逐条 quota / audit 历史日志 */}
         <NavTile to="/admin/quota/events" icon="📊" title="Quota 历史日志" desc="逐条 + 4 维筛选 + 分页 + CSV" />

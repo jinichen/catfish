@@ -137,3 +137,119 @@ def test_is_active_past_expires():
     advisory = {"id": "x", "expires": "2020-01-01T00:00:00Z"}
     now = datetime.now(timezone.utc)
     assert not _is_active(advisory, now)
+
+
+# ─── Phase 2: admin CRUD + RBAC (mock advisory_db, 不真连 PG) ───
+#
+# 6/7 BL-MANIFESTO-ADVISORY-PHASE2. 真 PG 集成 test 鸿波本地跑.
+
+
+def test_phase2_require_sysadmin_rejects_non_sysadmin():
+    """RBAC: admin / manager / employee 都不能 publish advisory, 必须 sysadmin.
+
+    跟 manifesto 公理 4 一致 — advisory 是给全员看的, publish 权限是 release
+    manager 级别, 不是普通 admin."""
+    from catfish_gateway.advisory_router import _require_sysadmin
+    from catfish_gateway.auth.base import User
+    from fastapi import HTTPException
+
+    for role in ["employee", "manager", "admin"]:
+        user = User(sub="t@x.com", role=role)
+        with pytest.raises(HTTPException) as exc_info:
+            _require_sysadmin(user)
+        assert exc_info.value.status_code == 403
+
+
+def test_phase2_require_sysadmin_accepts_sysadmin():
+    from catfish_gateway.advisory_router import _require_sysadmin
+    from catfish_gateway.auth.base import User
+
+    user = User(sub="t@x.com", role="sysadmin")
+    # 不 raise = 通过
+    _require_sysadmin(user)
+
+
+def test_phase2_advisory_id_pattern_validation():
+    """ID 必须 CATFISH-ADV-YYYY-NNN 格式. 防 admin 误传 free-form id."""
+    from catfish_gateway.advisory_router import _ADVISORY_ID_PATTERN
+
+    assert _ADVISORY_ID_PATTERN.match("CATFISH-ADV-2026-001")
+    assert _ADVISORY_ID_PATTERN.match("CATFISH-ADV-2026-999")
+    assert _ADVISORY_ID_PATTERN.match("CATFISH-ADV-2026-1000")  # 4 位也允许
+
+    assert not _ADVISORY_ID_PATTERN.match("CATFISH-ADV-2026")  # 缺 NNN
+    assert not _ADVISORY_ID_PATTERN.match("CATFISH-ADV-001")  # 缺 YYYY
+    assert not _ADVISORY_ID_PATTERN.match("CVE-2026-001")  # 错 prefix
+    assert not _ADVISORY_ID_PATTERN.match("CATFISH-ADV-2026-01")  # NNN < 3 位
+    assert not _ADVISORY_ID_PATTERN.match("catfish-adv-2026-001")  # 小写
+
+
+def test_phase2_use_pg_env_check(monkeypatch):
+    """advisory_db.use_pg() 跟 facts_db 同 pattern."""
+    from catfish_gateway import advisory_db
+
+    monkeypatch.delenv("CATFISH_DB_URL", raising=False)
+    assert not advisory_db.use_pg()
+
+    monkeypatch.setenv("CATFISH_DB_URL", "postgresql://x")
+    assert advisory_db.use_pg()
+
+
+def test_phase2_pg_insert_without_db_url_raises(monkeypatch):
+    """advisory publish 必须 PG 模式. 没配 CATFISH_DB_URL → 直接 raise RuntimeError.
+
+    跟 manifesto 公理 4 一致 — 中央服务可以**优雅降级**到 yaml-only read mode,
+    但 admin publish/revoke 必须有 DB (admin 看到错误自己 fix DB 配置)."""
+    from catfish_gateway import advisory_db
+
+    monkeypatch.delenv("CATFISH_DB_URL", raising=False)
+    with pytest.raises(RuntimeError) as exc_info:
+        advisory_db.pg_insert({"id": "x"}, published_by="admin@x.com")
+    assert "CATFISH_DB_URL" in str(exc_info.value)
+
+
+def test_phase2_pg_list_active_without_db_returns_empty(monkeypatch):
+    """没 PG → list_active 返空 list (不 raise, feed.json 会 fallback yaml)."""
+    from catfish_gateway import advisory_db
+
+    monkeypatch.delenv("CATFISH_DB_URL", raising=False)
+    assert advisory_db.pg_list_active() == []
+
+
+def test_phase2_feed_fallback_yaml_when_pg_empty(yaml_with_2_advisories, monkeypatch):
+    """PG 配了但表空 → feed 仍 fallback yaml (seed / demo).
+
+    跟 spec 一致 — yaml 是 Phase 1 兼容路径, Phase 2 后 yaml 作 seed."""
+    from catfish_gateway.advisory_router import _load_active_advisories
+    from catfish_gateway import advisory_db
+
+    # mock PG 返空 list
+    monkeypatch.setattr(advisory_db, "use_pg", lambda: True)
+    monkeypatch.setattr(advisory_db, "pg_list_active", lambda: [])
+
+    advisories = _load_active_advisories()
+    # 应 fallback yaml, yaml 含 1 active (TEST-001) + 1 expired (TEST-002), 过滤后 1
+    assert len(advisories) == 1
+    assert advisories[0]["id"] == "CATFISH-ADV-TEST-001"
+
+
+def test_phase2_feed_prefers_pg_when_has_data(yaml_with_2_advisories, monkeypatch):
+    """PG 有数据 → 用 PG, 不读 yaml (避免双数据源混乱)."""
+    from catfish_gateway.advisory_router import _load_active_advisories
+    from catfish_gateway import advisory_db
+
+    pg_advisory = {
+        "id": "CATFISH-ADV-FROM-PG-001",
+        "severity": "high",
+        "category": "skill_vulnerability",
+        "title": "PG advisory",
+        "published": "2026-06-07T10:00:00Z",
+        "published_by": "admin@x.com",
+    }
+    monkeypatch.setattr(advisory_db, "use_pg", lambda: True)
+    monkeypatch.setattr(advisory_db, "pg_list_active", lambda: [pg_advisory])
+
+    advisories = _load_active_advisories()
+    assert len(advisories) == 1
+    assert advisories[0]["id"] == "CATFISH-ADV-FROM-PG-001"  # PG, 不是 yaml
+
