@@ -119,6 +119,32 @@ class FallbackConfig(BaseModel):
     max_hops: int = 2
 
 
+class RateLimitsConfig(BaseModel):
+    """6/7 BL-GROQ-TPM-PREFLIGHT: 上游 provider 限速字段, 让 gateway preflight.
+
+    鸿波 6/7 22:43 撞 Groq Free Plan TPM=8K, 单次 95K 请求 → 上游 413 +
+    rate_limit_exceeded. Catfish 之前没 preflight, 直接抛 stack trace 给员工.
+
+    现在 chat completion 前 check estimate_prompt_tokens > tpm × 0.9, 超就
+    返友好 413 + 替代 model 建议. 跟 LiteLLM 的 num_retries=0 + auto_fallback
+    取舍 (永久错不重试) 一致.
+
+    字段语义跟 Groq docs (console.groq.com/docs/rate-limits) 一致:
+    - tpm: tokens per minute (主要)
+    - rpm: requests per minute
+    - rpd: requests per day
+    - tpd: tokens per day
+    - tier: 上游 service tier 标识 (groq-free / groq-dev / openai-paid / etc.),
+           给员工友好提示用 ("升级到 Groq Dev Tier 解锁 60K TPM")
+    """
+
+    tpm: int | None = None
+    rpm: int | None = None
+    rpd: int | None = None
+    tpd: int | None = None
+    tier: str | None = None
+
+
 class ModelConfig(BaseModel):
     """A single model the gateway can route to."""
 
@@ -144,6 +170,9 @@ class ModelConfig(BaseModel):
 
     # P1: 上游失败时自动切到 chain 里下一个模型。空 chain (默认) 表示不 fallback。
     fallback: FallbackConfig | None = None
+
+    # 6/7 BL-GROQ-TPM-PREFLIGHT: 上游 rate limits (preflight 用, 防 413 暴露 stack)
+    rate_limits: RateLimitsConfig | None = None
 
 
 class McpRegistryConfig(BaseModel):

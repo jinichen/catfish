@@ -2349,6 +2349,10 @@ async def _stream_chat_completion(
             model=model.upstream.model,
             tools=body.get("tools"),
         )
+        # 6/7 BL-GROQ-TPM-PREFLIGHT: 检查上游 rate_limits.tpm, 超就 raise 413 +
+        # 友好中文 + 替代 model. 拦下来不让员工看 stack trace.
+        from .rate_limit_preflight import preflight_check_rate_limits  # noqa: PLC0415
+        preflight_check_rate_limits(model, prompt_estimate, config=config)
         (iterator, first_chunk), used_model, attempts_log = await with_fallback(
             config, model, _start_stream, prompt_estimate=prompt_estimate,
         )
@@ -2624,6 +2628,9 @@ async def _invoke_chat_completion(
             model=model.upstream.model,
             tools=call_body.get("tools"),
         )
+        # 6/7 BL-GROQ-TPM-PREFLIGHT: 拦超 TPM 请求 (友好 413 替 stack trace)
+        from .rate_limit_preflight import preflight_check_rate_limits  # noqa: PLC0415
+        preflight_check_rate_limits(model, pe, config=config)
         resp, used, _attempts = await with_fallback(
             config, model, _call, prompt_estimate=pe,
         )

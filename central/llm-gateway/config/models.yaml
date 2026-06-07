@@ -493,6 +493,18 @@ models:
     recommended_for: [client_demo_optional]
     cost_tier: paid
 
+    # 6/7 BL-GROQ-TPM-PREFLIGHT (鸿波 22:43 撞 413): Groq Free Plan 限速.
+    # 官方 docs: https://console.groq.com/docs/rate-limits
+    # context 128K 但 Free TPM 只 8K — 单次大 prompt 立马 413. preflight check
+    # 在 chat completion 前估 token, 超就直接返友好 413 + 替代 model 建议.
+    # 升 Dev Tier 60K TPM 后改 tier: "groq-dev" + tpm: 60000.
+    rate_limits:
+      tpm: 8000        # tokens / min — 关键限制
+      rpm: 30          # requests / min
+      rpd: 1000        # requests / day
+      tpd: 200000      # tokens / day
+      tier: "groq-free"
+
     # 故意**不配 fallback 块** — 跟 nvidia-llama / nemotron 同款 BL-NVIDIA-NIM-MANUAL-ONLY
     # 思路: 客户基建调研模型, 跪了直接报客户端, 不绕弯到其他公网. 防 demo 时
     # 'Groq 失败但 gateway 静默切到 DashScope, 客户以为 Groq 跑得很好'.
