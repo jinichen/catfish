@@ -54,10 +54,10 @@ def yaml_with_2_advisories(monkeypatch):
 def test_load_advisories_filters_expired(yaml_with_2_advisories):
     """active 2 个写到 yaml, 但 1 个已过期 → loader 返 2 个 (loader 不 filter),
     /feed.json 才 filter expired."""
-    from catfish_gateway.advisory_router import _is_active, _load_advisories
+    from catfish_gateway.advisory_router import _is_active, _load_yaml_advisories
     from datetime import datetime, timezone
 
-    advisories = _load_advisories()
+    advisories = _load_yaml_advisories()
     assert len(advisories) == 2
 
     now = datetime.now(timezone.utc)
@@ -69,9 +69,9 @@ def test_load_advisories_filters_expired(yaml_with_2_advisories):
 def test_advisory_yaml_missing_returns_empty(monkeypatch):
     """yaml 不存在 → 空 list, 不 panic (manifest 公理 4 — 中央 publish 优雅降级)."""
     monkeypatch.setenv("CATFISH_ADVISORIES_YAML", "/nonexistent/path.yaml")
-    from catfish_gateway.advisory_router import _load_advisories
+    from catfish_gateway.advisory_router import _load_yaml_advisories
 
-    assert _load_advisories() == []
+    assert _load_yaml_advisories() == []
 
 
 def test_advisory_yaml_malformed_returns_empty(monkeypatch):
@@ -81,8 +81,8 @@ def test_advisory_yaml_malformed_returns_empty(monkeypatch):
     yaml_path.write_text("not: valid: yaml: [", encoding="utf-8")
     monkeypatch.setenv("CATFISH_ADVISORIES_YAML", str(yaml_path))
 
-    from catfish_gateway.advisory_router import _load_advisories
-    assert _load_advisories() == []
+    from catfish_gateway.advisory_router import _load_yaml_advisories
+    assert _load_yaml_advisories() == []
 
 
 def test_compute_etag_stable_for_same_set():

@@ -48,7 +48,7 @@ advisories:
     category: catfish_update
     title: Catfish 0.15.2 推荐升级
     target:
-      catfish_version_pattern: "<0.15.2"
+      catfish_version_pattern: "<=0.15.2"
     description: |
       Catfish 0.15.2 含 6/7 ship 的 manifesto cleanup + 死代码清理:
 

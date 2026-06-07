@@ -18,6 +18,28 @@ from pathlib import Path
 from alembic import context
 from sqlalchemy import create_engine, pool
 
+
+# 6/7 BL-MANIFESTO-ADVISORY-PHASE2: alembic CLI 不像 gateway 进程, 不自动读
+# .env. 鸿波直接 `alembic upgrade head` 时 CATFISH_DB_URL 没 export → 报错
+# "alembic 需要 PG URL". 这里加跟 catfish_gateway/app.py 同 pattern 自动加载,
+# 让 `alembic upgrade head` 不需要手动 export.
+def _load_dotenv() -> Path | None:
+    try:
+        from dotenv import load_dotenv  # noqa: PLC0415
+    except ImportError:
+        return None
+    for p in [
+        Path.cwd() / ".env",
+        Path(__file__).resolve().parent.parent / ".env",
+    ]:
+        if p.exists():
+            load_dotenv(p, override=False)
+            return p
+    return None
+
+
+_load_dotenv()
+
 # 加 src 到 path 复用 catfish_gateway.db.db_url
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from catfish_gateway.db import db_url  # noqa: E402

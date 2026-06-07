@@ -35,6 +35,29 @@ from typing import Any
 logger = logging.getLogger("catfish.gateway.advisory_db")
 
 
+# 6/7 fix: 防 log spam — PG 表不存在 (alembic 没跑) 时, 每次 client pull 都 warn
+# 一次是 spam. module-level flag 让同样的错只 warn 一次, 后续 silent fallback yaml.
+# 鸿波 fix DB 后 (跑 alembic) 重启 gateway 重置 flag.
+_PG_LIST_ACTIVE_WARNED = False
+_PG_LIST_ALL_WARNED = False
+_PG_GET_WARNED = False
+
+
+def _warn_once(flag_name: str, msg: str, exc: Exception) -> None:
+    """同样的 PG 错只 warn 一次 (防 spam, 跟 alembic 没跑 / 表不存在场景)."""
+    g = globals()
+    if not g.get(flag_name, False):
+        g[flag_name] = True
+        if "does not exist" in str(exc).lower() or "relation" in str(exc).lower():
+            # schema 缺失 (典型 alembic 未跑) — 给出明确提示
+            logger.warning(
+                "%s — 表不存在. 跑 `alembic upgrade head` 创 schema, 否则只能 yaml 模式. 详: %s",
+                msg, exc,
+            )
+        else:
+            logger.warning("%s: %s", msg, exc)
+
+
 def use_pg() -> bool:
     """有 CATFISH_DB_URL → PG. 否则 dev / yaml-only 模式 (Phase 1 兼容)."""
     return bool(os.environ.get("CATFISH_DB_URL", "").strip())
@@ -113,7 +136,7 @@ def pg_list_active() -> list[dict[str, Any]]:
             rows = cur.fetchall()
         return [_row_to_advisory(r, cols) for r in rows]
     except Exception as e:  # noqa: BLE001
-        logger.warning("pg_list_active 失败 (返空 list): %s", e)
+        _warn_once("_PG_LIST_ACTIVE_WARNED", "pg_list_active 失败 (返空 list, fallback yaml)", e)
         return []
 
 
@@ -139,7 +162,7 @@ def pg_list_all(include_revoked: bool = True) -> list[dict[str, Any]]:
             rows = cur.fetchall()
         return [_row_to_advisory(r, cols) for r in rows]
     except Exception as e:  # noqa: BLE001
-        logger.warning("pg_list_all 失败: %s", e)
+        _warn_once("_PG_LIST_ALL_WARNED", "pg_list_all 失败", e)
         return []
 
 
@@ -160,7 +183,7 @@ def pg_get(advisory_id: str) -> dict[str, Any] | None:
             row = cur.fetchone()
         return _row_to_advisory(row, cols) if row else None
     except Exception as e:  # noqa: BLE001
-        logger.warning("pg_get 失败: %s", e)
+        _warn_once("_PG_GET_WARNED", "pg_get 失败", e)
         return None
 
 
