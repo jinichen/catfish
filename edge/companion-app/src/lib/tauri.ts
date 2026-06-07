@@ -385,6 +385,47 @@ export const fetchInstalledSkills = () => rawInvoke<SkillNamespace[]>("list_inst
 export const fetchMcpServers = () =>
   rawInvoke<McpServerEntry[]>("list_mcp_servers");
 
+// ── E7 phase 2 (6/6): skill 安装/卸载, MCP 接入/移除 ───────────
+//
+// 流程:
+//   - installSkillFromUrl: 走 `npx -y skills add <url>` (Tauri spawn npx subprocess),
+//     返 stdout / stderr / exitCode 让 UI 显安装日志
+//   - uninstallSkill: 移到 ~/.catfish/.trash/skills/<ts>/, 返 trashPath + originalPath,
+//     UI 5 秒 toast 内可调 restoreSkill 恢复
+//   - restoreSkill: undo button onClick, 5 秒内有效, 把 trash 内的 skill 移回原路径
+//   - addMcpServer / removeMcpServer: 改 ~/.hermes/config.yaml, 重启 hermes 后生效
+//     拒绝员工动 catfish-* 命名 (主链路核心 — 后端 hard reject)
+
+export interface InstallResult {
+  success: boolean;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+}
+
+export interface UninstallResult {
+  trashPath: string;
+  originalPath: string;
+}
+
+export const installSkillFromUrl = (url: string) =>
+  rawInvoke<InstallResult>("install_skill_from_url", { url });
+
+export const uninstallSkill = (skillPath: string) =>
+  rawInvoke<UninstallResult>("uninstall_skill", { skillPath });
+
+export const restoreSkill = (trashPath: string, originalPath: string) =>
+  rawInvoke<void>("restore_skill", { trashPath, originalPath });
+
+export const addMcpServer = (
+  name: string,
+  command: string,
+  args: string[],
+) => rawInvoke<void>("add_mcp_server", { name, command, args });
+
+export const removeMcpServer = (name: string) =>
+  rawInvoke<void>("remove_mcp_server", { name });
+
 // ── self-evolution ──────────────────────────────────────
 import type { TodayLearningStats } from "../types/learning";
 export const fetchTodayLearningStats = () =>

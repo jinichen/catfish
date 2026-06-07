@@ -447,6 +447,311 @@ pub async fn list_mcp_servers() -> Result<Vec<McpServerEntry>, String> {
         .map_err(|e| format!("内部错误: {e}"))?
 }
 
+// ── E7 phase 2 (6/6 鸿波 setup): skill 安装/卸载, MCP 接入/移除 ─────────
+//
+// 设计原则:
+//   1. 安全 — 卸载不真删, 移到 ~/.catfish/.trash/skills/<ts>/, 5 秒 undo
+//   2. 信任分层 — is_protected=true 的 skill / MCP 拒绝卸载 (catfish 仓库 + catfish-* MCP)
+//   3. 路径校验 — uninstall_skill 必须在合法 root (~/.hermes/, ~/.claude/, ~/.catfish/),
+//      防止前端误传任意路径删 user files
+//   4. CLI wrap — install 走 `npx -y skills add <url>` (跟员工 terminal 装 taste-skill 同 path)
+//   5. PATH 兜底 — npx 在 mac 上常在 /usr/local/bin / /opt/homebrew/bin / ~/.nvm/, 加 augmented PATH
+
+/// E7 phase 2 (6/6): skill 安装结果. stdout / stderr 全返让员工排错.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallResult {
+    pub success: bool,
+    pub stdout: String,
+    pub stderr: String,
+    pub exit_code: Option<i32>,
+}
+
+/// 卸载返 trash 路径 — 给前端 undo button 用 (5 秒内可恢复).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UninstallResult {
+    /// trash dir 内 skill 完整新位置 (用 restore_skill 调回).
+    pub trash_path: String,
+    /// 原 skill 位置 (restore 时移回).
+    pub original_path: String,
+}
+
+/// PATH augment — mac 下 npx 常在 homebrew / nvm. 直接 exec npx 可能 PATH 找不到.
+fn augmented_path() -> String {
+    let current = std::env::var("PATH").unwrap_or_default();
+    let extra = [
+        "/usr/local/bin",
+        "/opt/homebrew/bin",
+        "/usr/bin",
+        "/bin",
+    ];
+    // nvm 默认路径 — 不 glob (没装 nvm 时 entry 不存在不影响 exec)
+    let mut paths = current;
+    for p in extra {
+        if !paths.split(':').any(|x| x == p) {
+            if !paths.is_empty() {
+                paths.push(':');
+            }
+            paths.push_str(p);
+        }
+    }
+    // nvm latest — 用 ~/.nvm/versions/node/*/bin 第一个 (没装也 OK)
+    if let Some(home) = home_dir() {
+        let nvm = home.join(".nvm").join("versions").join("node");
+        if let Ok(entries) = std::fs::read_dir(&nvm) {
+            for e in entries.flatten() {
+                let bin = e.path().join("bin");
+                if bin.exists() {
+                    if !paths.is_empty() {
+                        paths.push(':');
+                    }
+                    paths.push_str(&bin.to_string_lossy());
+                }
+            }
+        }
+    }
+    paths
+}
+
+/// 校验 skill_path 在合法 root 下. 防前端误传 `/etc/passwd` 等任意路径删 user file.
+/// 合法 root: ~/.hermes/skills/, ~/.claude/skills/, ~/.catfish/skills/.
+/// catfish 仓库 skills/ 不算合法 (那是 protected, 不应进 uninstall).
+fn is_legal_skill_root(skill_path: &Path) -> bool {
+    let Some(home) = home_dir() else {
+        return false;
+    };
+    let legal_roots = [
+        home.join(".hermes").join("skills"),
+        home.join(".claude").join("skills"),
+        home.join(".catfish").join("skills"),
+    ];
+    let canonical = match std::fs::canonicalize(skill_path) {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    legal_roots.iter().any(|root| {
+        std::fs::canonicalize(root)
+            .map(|r| canonical.starts_with(&r))
+            .unwrap_or(false)
+    })
+}
+
+fn install_skill_from_url_blocking(url: String) -> Result<InstallResult, String> {
+    // 基础校验 — url 至少 http(s) 或 github: 前缀, 防员工误传"rm -rf /"
+    if !url.starts_with("http://")
+        && !url.starts_with("https://")
+        && !url.starts_with("github:")
+        && !url.starts_with("@")
+    {
+        return Err(format!(
+            "url 格式不识 (要 http(s)://… / github:… / @scope/pkg): {url}"
+        ));
+    }
+    let path = augmented_path();
+    let output = std::process::Command::new("npx")
+        .args(["-y", "skills", "add", &url])
+        .env("PATH", &path)
+        .output()
+        .map_err(|e| format!("启 npx 失败 (检 PATH / Node 装了吗): {e}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    Ok(InstallResult {
+        success: output.status.success(),
+        stdout,
+        stderr,
+        exit_code: output.status.code(),
+    })
+}
+
+fn uninstall_skill_blocking(skill_path: String) -> Result<UninstallResult, String> {
+    let skill_p = PathBuf::from(&skill_path);
+    if !skill_p.exists() {
+        return Err(format!("skill 路径不存在: {skill_path}"));
+    }
+    if !is_legal_skill_root(&skill_p) {
+        return Err(format!(
+            "拒绝: skill 路径不在合法 root (~/.hermes/, ~/.claude/, ~/.catfish/): {skill_path}"
+        ));
+    }
+    // trash dir: ~/.catfish/.trash/skills/<ts>/<original-basename>
+    let home = home_dir().ok_or("找不到 HOME")?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let trash_root = home
+        .join(".catfish")
+        .join(".trash")
+        .join("skills")
+        .join(format!("{ts}"));
+    std::fs::create_dir_all(&trash_root)
+        .map_err(|e| format!("创 trash 目录失败: {e}"))?;
+    let basename = skill_p
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".into());
+    let trash_dest = trash_root.join(&basename);
+    std::fs::rename(&skill_p, &trash_dest)
+        .map_err(|e| format!("移到 trash 失败: {e}"))?;
+    Ok(UninstallResult {
+        trash_path: trash_dest.to_string_lossy().into_owned(),
+        original_path: skill_path,
+    })
+}
+
+fn restore_skill_blocking(trash_path: String, original_path: String) -> Result<(), String> {
+    let trash_p = PathBuf::from(&trash_path);
+    if !trash_p.exists() {
+        return Err(format!("trash 路径不存在 (可能已被 GC 清): {trash_path}"));
+    }
+    let orig_p = PathBuf::from(&original_path);
+    if orig_p.exists() {
+        return Err(format!("原位置已被占 (有同名 skill 存在了): {original_path}"));
+    }
+    // 确保原目录的父级存在
+    if let Some(parent) = orig_p.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("创建原父目录失败: {e}"))?;
+    }
+    std::fs::rename(&trash_p, &orig_p)
+        .map_err(|e| format!("还原失败: {e}"))?;
+    Ok(())
+}
+
+fn add_mcp_server_blocking(
+    name: String,
+    command: String,
+    args: Vec<String>,
+) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("name 不能空".into());
+    }
+    if name.starts_with("catfish-") || name == "catfish-tools" {
+        return Err(format!(
+            "拒绝: catfish-* 是核心 MCP 保留命名, 不允许员工自加 (改用别的名字): {name}"
+        ));
+    }
+    let home = home_dir().ok_or("找不到 HOME")?;
+    let cfg_path = home.join(".hermes").join("config.yaml");
+    let text = std::fs::read_to_string(&cfg_path)
+        .map_err(|e| format!("读 ~/.hermes/config.yaml 失败: {e}"))?;
+    let mut value: serde_yaml::Value = serde_yaml::from_str(&text)
+        .map_err(|e| format!("解析 config.yaml 失败: {e}"))?;
+    // 找 mcp_servers map, 没就建
+    let mapping = value
+        .as_mapping_mut()
+        .ok_or("config.yaml 顶层不是 mapping")?;
+    let key = serde_yaml::Value::String("mcp_servers".into());
+    if !mapping.contains_key(&key) {
+        mapping.insert(
+            key.clone(),
+            serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
+        );
+    }
+    let mcp_map = mapping
+        .get_mut(&key)
+        .and_then(|v| v.as_mapping_mut())
+        .ok_or("mcp_servers 段不是 mapping")?;
+    let mcp_name_key = serde_yaml::Value::String(name.clone());
+    if mcp_map.contains_key(&mcp_name_key) {
+        return Err(format!("MCP {name} 已存在, 先移除再加"));
+    }
+    let mut entry = serde_yaml::Mapping::new();
+    entry.insert(
+        serde_yaml::Value::String("command".into()),
+        serde_yaml::Value::String(command),
+    );
+    if !args.is_empty() {
+        let args_seq: Vec<serde_yaml::Value> = args
+            .into_iter()
+            .map(serde_yaml::Value::String)
+            .collect();
+        entry.insert(
+            serde_yaml::Value::String("args".into()),
+            serde_yaml::Value::Sequence(args_seq),
+        );
+    }
+    mcp_map.insert(mcp_name_key, serde_yaml::Value::Mapping(entry));
+    let new_text = serde_yaml::to_string(&value)
+        .map_err(|e| format!("序列化失败: {e}"))?;
+    std::fs::write(&cfg_path, new_text)
+        .map_err(|e| format!("写 config.yaml 失败: {e}"))?;
+    Ok(())
+}
+
+fn remove_mcp_server_blocking(name: String) -> Result<(), String> {
+    if name.starts_with("catfish-") || name == "catfish-tools" {
+        return Err(format!(
+            "拒绝: catfish-* 是核心 MCP, 不能删 (主链路依赖): {name}"
+        ));
+    }
+    let home = home_dir().ok_or("找不到 HOME")?;
+    let cfg_path = home.join(".hermes").join("config.yaml");
+    let text = std::fs::read_to_string(&cfg_path)
+        .map_err(|e| format!("读 ~/.hermes/config.yaml 失败: {e}"))?;
+    let mut value: serde_yaml::Value = serde_yaml::from_str(&text)
+        .map_err(|e| format!("解析 config.yaml 失败: {e}"))?;
+    let mapping = value
+        .as_mapping_mut()
+        .ok_or("config.yaml 顶层不是 mapping")?;
+    let key = serde_yaml::Value::String("mcp_servers".into());
+    let mcp_map = mapping
+        .get_mut(&key)
+        .and_then(|v| v.as_mapping_mut())
+        .ok_or("mcp_servers 段不存在")?;
+    let mcp_name_key = serde_yaml::Value::String(name.clone());
+    if mcp_map.remove(&mcp_name_key).is_none() {
+        return Err(format!("MCP {name} 不存在"));
+    }
+    let new_text = serde_yaml::to_string(&value)
+        .map_err(|e| format!("序列化失败: {e}"))?;
+    std::fs::write(&cfg_path, new_text)
+        .map_err(|e| format!("写 config.yaml 失败: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn install_skill_from_url(url: String) -> Result<InstallResult, String> {
+    tokio::task::spawn_blocking(move || install_skill_from_url_blocking(url))
+        .await
+        .map_err(|e| format!("内部错误: {e}"))?
+}
+
+#[tauri::command]
+pub async fn uninstall_skill(skill_path: String) -> Result<UninstallResult, String> {
+    tokio::task::spawn_blocking(move || uninstall_skill_blocking(skill_path))
+        .await
+        .map_err(|e| format!("内部错误: {e}"))?
+}
+
+#[tauri::command]
+pub async fn restore_skill(
+    trash_path: String,
+    original_path: String,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || restore_skill_blocking(trash_path, original_path))
+        .await
+        .map_err(|e| format!("内部错误: {e}"))?
+}
+
+#[tauri::command]
+pub async fn add_mcp_server(
+    name: String,
+    command: String,
+    args: Vec<String>,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || add_mcp_server_blocking(name, command, args))
+        .await
+        .map_err(|e| format!("内部错误: {e}"))?
+}
+
+#[tauri::command]
+pub async fn remove_mcp_server(name: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || remove_mcp_server_blocking(name))
+        .await
+        .map_err(|e| format!("内部错误: {e}"))?
+}
 
 // ── 6/2 BL-SKILLS-CARD-CLASSIFY-FROZEN tests ───────────────────────────
 

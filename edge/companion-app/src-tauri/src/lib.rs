@@ -345,6 +345,12 @@ pub fn run() {
             commands::skills::list_my_skills,
             commands::skills::list_installed_skills,
             commands::skills::list_mcp_servers,
+            // E7 phase 2 (6/6): skill 安装/卸载, MCP 接入/移除 + undo 5s
+            commands::skills::install_skill_from_url,
+            commands::skills::uninstall_skill,
+            commands::skills::restore_skill,
+            commands::skills::add_mcp_server,
+            commands::skills::remove_mcp_server,
             // self-evolution: 鲶鱼今天学了什么
             commands::learning::learning_today_stats,
             // BL-MM9-accept (5/9): skill proposal accept/reject 按钮

@@ -225,6 +225,272 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* E7.P2 (6/6): 顶部 + 安装/接入 action row */
+.dashboard-skills__top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+.dashboard-skills__top-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* E7.P2: hover 显的 "卸载" / "移除" 行内 action link */
+.dashboard-skills__row-action {
+  background: transparent;
+  border: none;
+  color: var(--catfish-text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 8px;
+  margin-left: 8px;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity 150ms ease, color 150ms ease, background-color 150ms ease;
+}
+.dashboard-skills__mcp-item:hover .dashboard-skills__row-action,
+.dashboard-skills__skill-item:hover .dashboard-skills__row-action,
+.dashboard-skills__row-action:focus-visible {
+  opacity: 1;
+}
+.dashboard-skills__row-action:hover {
+  color: var(--status-err);
+  background: rgba(217, 83, 79, 0.06);
+}
+.dashboard-skills__row-action:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(217, 83, 79, 0.2);
+}
+
+/* ─── install dialog (modal) ─── */
+.install-dialog__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 28, 30, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: catfish-dialog-fade 180ms ease;
+}
+@keyframes catfish-dialog-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.install-dialog {
+  background: var(--catfish-bg-elevated);
+  border-radius: 12px;
+  min-width: 420px;
+  max-width: 560px;
+  max-height: 80vh;
+  overflow: auto;
+  box-shadow:
+    0 4px 16px rgba(14, 95, 102, 0.12),
+    0 16px 64px -16px rgba(14, 95, 102, 0.24);
+  animation: catfish-dialog-pop 180ms ease;
+}
+@keyframes catfish-dialog-pop {
+  from { transform: translateY(8px) scale(0.98); opacity: 0; }
+  to { transform: translateY(0) scale(1); opacity: 1; }
+}
+.install-dialog__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 18px 8px;
+}
+.install-dialog__header h4 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--catfish-text);
+  margin: 0;
+}
+.install-dialog__close {
+  background: transparent;
+  border: none;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--catfish-text-muted);
+  cursor: pointer;
+  padding: 0 6px;
+  border-radius: 4px;
+  transition: color 150ms ease, background-color 150ms ease;
+}
+.install-dialog__close:hover {
+  color: var(--catfish-text);
+  background: var(--catfish-bg-cream);
+}
+.install-dialog__body {
+  padding: 4px 18px 18px;
+}
+.install-dialog__hint {
+  font-size: 12px;
+  color: var(--catfish-text-muted);
+  line-height: 1.6;
+  margin-bottom: 12px;
+}
+.install-dialog__hint code {
+  background: var(--catfish-bg-cream);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+.install-dialog__label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--catfish-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 10px 0 4px;
+}
+.install-dialog__input {
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-family: var(--font-mono);
+  background: var(--catfish-bg);
+  border: 1px solid var(--catfish-border);
+  border-radius: 6px;
+  color: var(--catfish-text);
+  outline: none;
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+  box-sizing: border-box;
+}
+.install-dialog__input:focus-visible {
+  border-color: var(--catfish-cyan);
+  box-shadow: 0 0 0 3px rgba(14, 95, 102, 0.12);
+}
+.install-dialog__warn {
+  color: var(--status-err);
+  font-size: 11px;
+  margin-top: 4px;
+  font-style: italic;
+}
+.install-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+.install-dialog__running {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0 12px;
+  font-size: 13px;
+  color: var(--catfish-text);
+}
+.install-dialog__running code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--catfish-bg-cream);
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+.install-dialog__spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--catfish-border);
+  border-top-color: var(--catfish-cyan);
+  border-radius: 50%;
+  animation: catfish-spin 700ms linear infinite;
+  flex-shrink: 0;
+}
+@keyframes catfish-spin {
+  to { transform: rotate(360deg); }
+}
+.install-dialog__summary {
+  font-size: 11px;
+  color: var(--catfish-text-muted);
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+  padding: 4px 0;
+}
+.install-dialog__output {
+  background: var(--catfish-bg-cream);
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow: auto;
+  color: var(--catfish-text);
+  margin-bottom: 8px;
+}
+.install-dialog__output--err {
+  background: rgba(217, 83, 79, 0.06);
+  color: var(--catfish-text);
+}
+
+/* ─── undo toast ─── */
+.undo-toast {
+  position: fixed;
+  bottom: 28px;
+  right: 28px;
+  z-index: 2000;
+  background: var(--catfish-bg-elevated);
+  color: var(--catfish-text);
+  padding: 10px 14px;
+  border-radius: 8px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  font-size: 13px;
+  box-shadow:
+    0 2px 8px rgba(14, 95, 102, 0.12),
+    0 8px 32px -8px rgba(14, 95, 102, 0.24);
+  animation: catfish-toast-slide 200ms ease;
+}
+@keyframes catfish-toast-slide {
+  from { transform: translateY(8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+.undo-toast code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--catfish-text-muted);
+}
+.undo-toast__icon {
+  color: var(--catfish-cyan);
+  font-weight: 600;
+}
+.undo-toast__btn {
+  background: transparent;
+  border: none;
+  color: var(--catfish-cyan);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 4px;
+  transition: background-color 150ms ease;
+}
+.undo-toast__btn:hover {
+  background: rgba(14, 95, 102, 0.08);
+}
+.undo-toast__btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(14, 95, 102, 0.25);
+}
+.undo-toast__countdown {
+  font-size: 11px;
+  color: var(--catfish-text-muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 22px;
+  text-align: right;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
