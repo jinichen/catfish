@@ -77,27 +77,16 @@ export default function PrivacyCard() {
         gridColumn: "1 / -1",
       }}
     >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "var(--space-2)",
-          marginBottom: "var(--space-3)",
-          flexWrap: "wrap",
-        }}
-      >
-        <h3 style={{ margin: 0 }}>🔒 隐私状态</h3>
-        <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
-          这页让你自己看 — 不用问 IT · 30s 自动刷新
-        </span>
-      </div>
+      {/* 6/6 鸿波: 副标 "这页让你自己看 — 不用问 IT · 30s 自动刷新" 删, 卡内信息密度
+       *  已经足够自解释 (绿/黄 灯 + 复选 list), 副标重复反而稀释主旨. */}
+      <h3 style={{ margin: "0 0 var(--space-3) 0" }}>🔒 隐私状态</h3>
 
       {/* ── 本机存储 — 6/1 BL-PRIVACY-CARD-SIMPLIFY 鸿波拍 ─────────────
           原来 3 区 + 5 折叠 + 技术路径 + "看不到 X" 暗示 + IT 命令, 国企
           员工/领导消化不了. 简化到 2 大块, 没折叠, 没暗示, 没技术名词. */}
       <section style={{ marginBottom: "var(--space-4)" }}>
         <h4 style={{ margin: "0 0 var(--space-2)", fontSize: 13 }}>
-          🟢 本机存储 — <strong style={{ color: "var(--catfish-cyan)" }}>公司一个字都看不到</strong>
+          🟢 本机存储
         </h4>
         <ul
           style={{
@@ -128,7 +117,7 @@ export default function PrivacyCard() {
       {/* ── 服务器存储 — 简化版 ──────────────────────── */}
       <section style={{ marginBottom: "var(--space-4)" }}>
         <h4 style={{ margin: "0 0 var(--space-2)", fontSize: 13 }}>
-          🟡 服务器存储 — 公司能看到这些
+          🟡 服务器存储
         </h4>
 
         {error && (() => {
