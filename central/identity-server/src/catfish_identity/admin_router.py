@@ -294,6 +294,30 @@ def make_admin_router(registry: UserRegistry) -> APIRouter:
         req: LockUserReq,
         caller: CallerContext = Depends(require_admin_or_above),
     ) -> dict[str, Any]:
+        """撤销 / 恢复中央 SSO seat.
+
+        ## 跟 catfish-central-manifesto 公理 3 的关系
+
+        manifesto 公理 3: 中央不能"强制员工设备做事". 这个 endpoint **不违反**
+        — 它是"撤销中央 license seat", 不是"远程禁用员工本机 catfish".
+
+        ## 实际效果
+
+        - lock=true: 员工不能再通过 catfish 中央 SSO 鉴权 → 中央 LLM 调用配额
+          停止 → 员工**本机 catfish 仍能跑** (用 BYO API key 调外部 LLM 即可)
+        - lock=false: 恢复 SSO seat
+
+        ## 跟"远程 wipe / 远程禁用"的本质区别
+
+        - 远程 wipe (catfish 不做): IT 主动改员工本机数据
+        - lock (catfish 做): IT 撤销中央服务给员工的 SSO 凭证, 员工本机不受影响
+
+        类似 GitHub admin "revoke seat" — 撤销 GitHub Enterprise 席位, 但员工
+        本机的 git repo / SSH key / 已 clone 代码不动. 是 BYOD 哲学的体现.
+
+        response.affects_local_data=false 是给 admin UI 显示用, 让 IT 明白
+        这操作不动员工本机数据.
+        """
         target = registry.find(email)
         if target is None:
             raise HTTPException(status_code=404, detail=f"user {email} 不存在")
@@ -306,7 +330,13 @@ def make_admin_router(registry: UserRegistry) -> APIRouter:
         )
         if not ok:
             raise HTTPException(status_code=400, detail=err)
-        return {"ok": True, "locked": req.locked}
+        return {
+            "ok": True,
+            "locked": req.locked,
+            # 6/7 BL-CATFISH-MANIFESTO: 明示 admin / IT 这操作不动员工本机.
+            "affects_local_data": False,
+            "scope": "central_sso_seat_only",
+        }
 
     @router.post("/users/{email}/reset-password")
     async def reset_password(
@@ -314,6 +344,31 @@ def make_admin_router(registry: UserRegistry) -> APIRouter:
         req: ResetPasswordReq,
         caller: CallerContext = Depends(require_admin_or_above),
     ) -> dict[str, Any]:
+        """重置员工密码.
+
+        ## 跟 catfish-central-manifesto 的关系
+
+        当前实现 (admin 直接 set 新密码 + force_change) **跟 manifesto 公理 3
+        有摩擦** — admin 强制改员工凭证. 但因为:
+        1. 这只影响**中央 SSO 凭证** (不动员工本机 catfish 数据)
+        2. force_change=true 时员工**首次登录会强制再改一次密码** (admin 不
+           知道员工最终密码)
+        3. 实际触发场景通常是"员工忘记密码 + 找 admin 帮忙重置" — 员工
+           **主动**请求, admin 协助
+
+        所以这个 endpoint 短期保留, 但**标记为 deprecated**.
+
+        ## TODO: BL-MANIFESTO-RESET-FLOW
+
+        长期改为**员工 self-serve reset flow** + admin 只能 trigger reset
+        link 不能 set 密码:
+        - 员工触发: `/auth/forgot-password` → 发 reset token 到员工 email/IM
+        - admin 协助: `POST /admin/users/:email/request-password-reset` →
+          帮员工发 reset token (admin 看不到 token 内容, 只能 trigger)
+        - 员工自己点 link → `/auth/reset?token=...` → 自己输新密码
+
+        改造完成后 deprecate 当前 endpoint. 6/7 暂保留 (后续 BL 改造).
+        """
         target = registry.find(email)
         if target is None:
             raise HTTPException(status_code=404, detail=f"user {email} 不存在")
@@ -327,7 +382,19 @@ def make_admin_router(registry: UserRegistry) -> APIRouter:
         )
         if not ok:
             raise HTTPException(status_code=400, detail=err)
-        return {"ok": True, "force_change": req.force_change}
+        return {
+            "ok": True,
+            "force_change": req.force_change,
+            # 6/7 BL-CATFISH-MANIFESTO: 明示中央 SSO scope, 不动本机.
+            "affects_local_data": False,
+            "scope": "central_sso_password_only",
+            # deprecated marker — 长期会改员工 self-serve reset flow
+            "deprecated": True,
+            "deprecated_note": (
+                "此 endpoint 短期保留. 长期 BL-MANIFESTO-RESET-FLOW 改为 "
+                "admin trigger reset link + 员工自助改密码, admin 不再能直接 set 密码."
+            ),
+        }
 
     @router.get("/users-audit")
     async def list_users_audit(

@@ -324,40 +324,44 @@ def test_features_threshold_env(monkeypatch):
 # ─── prepare_tool_messages 整合 ────────────────────────────────
 
 
-def test_prepare_enabled_archives(monkeypatch):
-    # 5/22 BL-CENTRAL-EDGE-TOOL-ARCHIVE Phase 6a: gateway PG archive 默认停 (合规).
-    # 老 archive 路径 (env=1 回滚 / debug) 仍能跑, 这条 test 保它覆盖度.
-    monkeypatch.setenv("CATFISH_GATEWAY_TOOL_ARCHIVE_ENABLE", "1")
+def test_prepare_always_truncates_never_archives(monkeypatch):
+    """6/7 BL-CATFISH-MANIFESTO clean-up: prepare_tool_messages **永远 truncate**,
+    永不写 PG archive. 删 env=1 回滚 → 即使 env=1 也走 truncate.
+
+    跟 catfish-central-manifesto 公理 4 "API surface 物理无能" 一致 — 中央服务
+    物理上不存对话内容的 archive. 这条 test 保 hard guarantee 不被回滚."""
+    monkeypatch.setenv("CATFISH_GATEWAY_TOOL_ARCHIVE_ENABLE", "1")  # 旧 env 设了也没用
     monkeypatch.setenv("CATFISH_TOOL_ARCHIVE_ENABLED", "1")
     from catfish_gateway.tool_archive import archiver
     msgs = [{"role": "tool", "tool_call_id": "a", "content": "x" * 10000}]
     out = archiver.prepare_tool_messages(msgs, user_email="t@x.com")
-    assert "已归档" in out[0]["content"]
+    # 永远走 truncate, 永不进 archive
+    assert "已截断" in out[0]["content"]
+    assert "已归档" not in out[0]["content"]
     assert len(out) == 1
 
 
-def test_prepare_disabled_falls_back_to_fix41(monkeypatch):
-    # 5/22 BL-CENTRAL-EDGE-TOOL-ARCHIVE Phase 6a: env=1 + 子开关 disable → truncate.
-    monkeypatch.setenv("CATFISH_GATEWAY_TOOL_ARCHIVE_ENABLE", "1")
-    monkeypatch.setenv("CATFISH_TOOL_ARCHIVE_ENABLED", "0")
+def test_prepare_default_truncates(monkeypatch):
+    """默认 (env 不设) 也走 truncate (跟 enabled 同 — 现在没区别了)."""
+    monkeypatch.delenv("CATFISH_GATEWAY_TOOL_ARCHIVE_ENABLE", raising=False)
+    monkeypatch.setenv("CATFISH_TOOL_ARCHIVE_ENABLED", "1")
     from catfish_gateway.tool_archive import archiver
     msgs = [{"role": "tool", "tool_call_id": "a", "content": "x" * 10000}]
     out = archiver.prepare_tool_messages(msgs, user_email="t@x.com")
-    # FIX41 标记
     assert "已截断" in out[0]["content"]
     assert "已归档" not in out[0]["content"]
 
 
-def test_prepare_default_phase6a_disables_pg_archive(monkeypatch):
-    """5/22 BL-CENTRAL-EDGE-TOOL-ARCHIVE Phase 6a: 默认 (env 不设) 强制 truncate,
-    跳过 PG archive. BOUNDARY 合规的核心保证, 不能回归."""
-    monkeypatch.delenv("CATFISH_GATEWAY_TOOL_ARCHIVE_ENABLE", raising=False)
-    monkeypatch.setenv("CATFISH_TOOL_ARCHIVE_ENABLED", "1")  # 子开关开都没用
+def test_prepare_env_rollback_blocked(monkeypatch):
+    """6/7 BL-CATFISH-MANIFESTO: 即使设了 CATFISH_GATEWAY_TOOL_ARCHIVE_ENABLE=1
+    回滚 env, 也不能恢复 PG archive 路径 (彻底删了, 不是开关). 防 ops 手抖回滚."""
+    monkeypatch.setenv("CATFISH_GATEWAY_TOOL_ARCHIVE_ENABLE", "true")  # 老 ops 习惯写 true
     from catfish_gateway.tool_archive import archiver
     msgs = [{"role": "tool", "tool_call_id": "a", "content": "x" * 10000}]
     out = archiver.prepare_tool_messages(msgs, user_email="t@x.com")
-    assert "已截断" in out[0]["content"]  # 走 truncate
-    assert "已归档" not in out[0]["content"]  # 不进 PG archive
+    # truncate, 即使老回滚 env 也救不回
+    assert "已截断" in out[0]["content"]
+    assert "已归档" not in out[0]["content"]
 
 
 def test_derive_session_id_with_messages():

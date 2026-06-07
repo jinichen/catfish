@@ -252,17 +252,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("BL-HERMES013-4 reap_interrupted 失败 (静默): %s", e)
 
-    # BL-Q3-ARCHIVE (5/11): tool message archive 后台 haiku 摘要 worker.
-    # 异步扫 tool_archives 表 (summary IS NULL), 调 gateway loopback chat 走
-    # tool_summarizer use_case (haiku tier=private). 失败 silent, 不阻塞 chat.
+    # 6/7 BL-CATFISH-MANIFESTO clean-up: tool message archive summary_worker
+    # 整套停. 历史:
+    #   - 5/11 BL-Q3-ARCHIVE v1: gateway 端写 PG tool_archives 表 + haiku 摘要
+    #   - 5/22 BL-CENTRAL-EDGE-TOOL-ARCHIVE Phase 6a: gateway PG archive 强制
+    #     停, edge 端 (tool-bridge tool_archive_local.py) 接管 archive 写读
+    #   - 5/26 BL-BOUNDARY: db.py 砍 PG 路径死代码, content 全员工本机
+    #   - 6/7 (现在): summary_worker 没新 archive 进 PG 可摘要了, 跑空, 整套停
+    # summary_worker 死代码留 git history, 后续 BL-MANIFESTO-CLEAN-DEAD 整套 rm.
     archive_summary_task = None
-    try:
-        from .tool_archive.summary_worker import start_summary_worker  # noqa: PLC0415
-        archive_summary_task = start_summary_worker()
-        if archive_summary_task is not None:
-            logger.info("BL-Q3-ARCHIVE summary_worker 已启动")
-    except Exception as e:
-        logger.warning("BL-Q3-ARCHIVE summary_worker 启动失败 (archive 仍能写, 只是不摘要): %s", e)
 
     # BL-RECMODE-NO-AUTO-DELETE (5/25 鸿波): 撤掉 cleanup daemon.
     #
@@ -398,16 +396,19 @@ try:
 except Exception as e:
     logger.warning("facts_router 挂载失败: %s", e)
 
-# BL-Q3-ARCHIVE (5/11): tool message archive 路由.
-# /api/tool-archives/read  — LLM 调 catfish_read_tool_archive 工具走这条
-# /api/tool-archives/{ref} — admin 自查 / debug 用
-# /api/tool-archives/gc    — 手动 GC (sysadmin)
-try:
-    from .tool_archive.router import router as tool_archive_router  # noqa: PLC0415
-    app.include_router(tool_archive_router)
-    logger.info("tool_archive_router: /api/tool-archives/* 已挂载 (BL-Q3-ARCHIVE)")
-except Exception as e:
-    logger.warning("tool_archive_router 挂载失败: %s", e)
+# 6/7 BL-CATFISH-MANIFESTO clean-up: /api/tool-archives/* router 整套撤.
+# 历史:
+#   - 5/11 BL-Q3-ARCHIVE v1: gateway 端 PG archive HTTP API
+#   - 5/22 BL-CENTRAL-EDGE-TOOL-ARCHIVE: edge 端接管, catfish_read_tool_archive
+#     从 HTTP gateway 改 tool_archive_local.py 本机读 sqlite + jsonl
+#   - 5/26 BL-BOUNDARY: db.py PG 路径砍, content 全员工本机
+#   - 6/7 (现在): HTTP router 死代码 (没员工 caller), 整套不再 mount
+#
+# 跟 catfish-central-manifesto 公理 4 "API surface 物理无能" 一致 — 中央服务
+# 物理不提供"读员工 tool 调用结果"的 API. 哪怕 admin 也调不到.
+#
+# 死代码 file 留 git history (router.py / db.py / reader.py / summary_worker.py
+# / archiver.py PG fallback), 后续 BL-MANIFESTO-CLEAN-DEAD 整套 rm.
 
 
 # /a2a/internal/ask endpoint 5/26 砍 — Plan D Federation 整套停, tool-bridge
