@@ -3043,18 +3043,25 @@ async def chat_completions(
         if is_folding_enabled():
             body["messages"] = fold_history_images(body["messages"])
 
-        # BL-Q3-ARCHIVE (5/11): tool message 内容 archive + 摘要双层.
-        # 替代 BL-FIX41 硬切 — lossless 保留, LLM 主动 catfish_read_tool_archive
-        # 召回中段. 含 features.is_archive_enabled() 灰度开关 (默认开). archive
-        # 写挂 → 自动降级 FIX41 硬切 (兜底). 内部用 derive_session_id 自动从
-        # first user message hash 派生 session_id, 同会话稳定.
-        # BL-AUTH-DECOUPLE-A1 (5/19): service token on-behalf-of 模式时 user_email
-        # 用 effective_user_email (X-Catfish-User), tool archive 按 user 隔离.
+        # tool message 长内容兜底: 走 FIX41 硬切 (truncate) — 永远不写 PG.
+        #
+        # 历史:
+        #   - 5/11 BL-Q3-ARCHIVE v1: gateway PG archive + summary worker
+        #   - 5/22 BL-CENTRAL-EDGE-TOOL-ARCHIVE Phase 6a: edge 端 (tool-bridge
+        #     tool_archive_local.py) 接管, gateway PG 路径 default 禁用
+        #   - 5/26 BL-BOUNDARY: db.py 砍 PG, content 100% 员工本机
+        #   - 6/7 BL-CATFISH-MANIFESTO + CLEAN-DEAD: 删 env=1 PG 回滚后门 + rm
+        #     6 个 dead module (router/db/reader/prompts/features/summary_worker),
+        #     archiver.py 缩到只剩 prepare_tool_messages truncate-only wrapper
+        #
+        # 现在 prepare_tool_messages 物理上**只能 truncate** — 跟 manifesto 公理 4
+        # "API surface 物理无能"一致, 没任何回滚到 PG archive 的能力.
+        #
+        # 真 archive 在 edge 端 tool-bridge tool_archive_local.py 做, gateway 看不到.
         from .tool_archive import prepare_tool_messages  # noqa: PLC0415
         body["messages"] = prepare_tool_messages(
             body["messages"],
-            user_email=effective_user_email,  # User.sub = email (决策 3), A1 后 X-Catfish-User 覆盖
-            origin_model=model_name,  # fix2: summary_worker 用 chat 同款模型
+            user_email=effective_user_email,  # X-Catfish-User on-behalf-of 模式覆盖
         )
 
     # 含图自动 reroute 到 vision 模型: 防止主力模型 (非 vision) 收到 image_url
