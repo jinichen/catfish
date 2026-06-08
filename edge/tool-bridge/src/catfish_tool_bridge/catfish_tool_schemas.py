@@ -2194,6 +2194,50 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ── BL-STRATEGIC-DOC-SYNC Phase 3 (6/7 鸿波 audit) 战略 doc 搜索 ──
+    {
+        "name": "catfish_search_docs",
+        "description": (
+            "★★ 搜员工本机战略 / 设计 doc (~/.catfish/strategic_docs/*.md) — "
+            "**当 system prompt 折叠区显示 'catfish strategic docs 还有 N 份'** 或员工问 "
+            "catfish 自己内部设计 (manifesto / patent / moat / 沙盒 / advisory 等) 必用.\n\n"
+            "✅ 调用场景:\n"
+            "  - 员工问 'catfish manifesto 第几条说不能 push?' → query='manifesto'\n"
+            "  - 员工问 'catfish 沙盒怎么做的?' → query='沙盒 audit'\n"
+            "  - 员工问 '我们 patent 主打哪个方向?' → query='patent 方向 优先级'\n"
+            "  - 员工问 'catfish 跟主流对比的护城河' → query='moat counter-positioning'\n\n"
+            "❌ 不调用:\n"
+            "  - prefetch 已经 inline 显示的 doc — 直接引用其中内容\n"
+            "  - 找员工自己 wiki — 用 wiki_search_text / wiki_search_semantic\n"
+            "  - 找邮件 / 会话 — 走对应的 catfish_* tool\n\n"
+            "返参:\n"
+            "  - matches: top-K doc {name, title, head 摘要 1500 字, path, score}\n"
+            "  - count, total_indexed, summary, latency_ms\n\n"
+            "🔒 隐私: 直读员工 mac 本机 ~/.catfish/strategic_docs/, 不走 gateway, "
+            "不上行中央. 跟 manifesto 公理 2 一致.\n\n"
+            "💡 思路 (跟 catfish_search_skills 同 Progressive Disclosure):\n"
+            "  Tier 1 (system prompt strategic_docs 段) - 你已看见 head 关键段\n"
+            "  Tier 2 (这工具) - 折叠区 BM25 搜 + 拿 head 1500 字 + 路径\n"
+            "  Tier 3 (员工调 wiki_read 拿全文) - 客户端 UI 操作, LLM 无 tool"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "搜的关键字 / 自然语言 ('manifesto 公理' / 'sandbox fork bomb' / 'patent 方向' 等)",
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "返多少份 (默认 5, 上限 15)",
+                },
+            },
+            "required": ["query"],
+        },
+        "emoji": "📘",
+        "toolset": "catfish_native",
+        "available": True,
+    },
     # ── BL-FED2.3 (5/12 鸿波拍板) 跨员工路由 ──
     {
         "name": "catfish_expert_consult",

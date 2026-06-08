@@ -35,9 +35,13 @@ def _catfish_home() -> Path:
 
 #: 每个数据源单独 budget (字节), 跟老 gateway provider 对齐.
 #: 超出部分尾部截 (留前段更重要内容). 总 cap ~30KB, system prompt 容得下.
+#: BL-STRATEGIC-DOC-SYNC (6/7): strategic_docs 子段 budget — 战略/设计 doc
+#:   (manifesto / patent / moat 类). query 空走 8KB (cap 5 份 × ~1.5KB), query
+#:   触发 top-K 时 _render_strategic_docs 内部 cap 到 5KB.
 _BUDGETS: Dict[str, int] = {
     "employee_journal": 5000,
     "skills_catalog": 20000,
+    "strategic_docs": 8000,
     "feedback": 2000,
     "session_meta": 500,
     "skill_guard": 3000,

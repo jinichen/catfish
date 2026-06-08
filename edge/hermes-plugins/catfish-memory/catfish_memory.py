@@ -414,6 +414,15 @@ class CatfishMemoryProvider(MemoryProvider):
         if skills:
             sections.append(skills)
 
+        # 3b. BL-STRATEGIC-DOC-SYNC (6/7): 战略 / 设计 doc 注入 (manifesto /
+        # patent landscape / moat assessment / capability gaps 等). 跟
+        # _render_skills_catalog 同 pattern: query 空 → 全注入字母序, query 有
+        # → Jaccard top-K cap 5KB. 文件在 ~/.catfish/strategic_docs/*.md.
+        # 跟 wiki/concepts/ 分开 (避免污染 catfish-memory distill 真 entity 抽取).
+        strategic = self._render_strategic_docs(catfish_home, query=query)
+        if strategic:
+            sections.append(strategic)
+
         # 4. feedback — 员工 thumbs 反馈
         feedback = self._render_feedback(catfish_home)
         if feedback:
@@ -804,6 +813,100 @@ class CatfishMemoryProvider(MemoryProvider):
         if not entries:
             return ""
         title = "## 🛠 可用技能 (catfish skills)"
+        if query_clean and len(entries) < len(candidates_list):
+            title += f" — 按当前话题筛 top {len(entries)}/{len(candidates_list)}"
+        return f"{title}\n\n" + "\n".join(entries)
+
+    def _render_strategic_docs(
+        self, catfish_home: Path, query: str = "",
+    ) -> str:
+        """BL-STRATEGIC-DOC-SYNC (6/7 鸿波 audit 后 ship): 战略 / 设计 doc 注入.
+
+        # 用例
+
+        把 14 份战略 / 战术 doc (manifesto / patent landscape / moat assessment
+        / capability gaps / advisory spec / sandbox audit 等) 拷到
+        ~/.catfish/strategic_docs/*.md, 这里自动 inject 关键段进 LLM prefetch.
+
+        跟 _render_skills_catalog 同 pattern, 几个细节区别:
+
+        - 文件结构: 平的 (无嵌套), 每个 .md 直接读
+        - head 限: 1500 byte (跟 wiki concept 类似篇幅)
+        - frontmatter 去掉 (markdown YAML 头部)
+        - query 空 → 全注入字母序 cap 8KB (_BUDGETS["strategic_docs"])
+        - query 触发 → top-K Jaccard 排序 + cap 5KB
+
+        # 跟 wiki/concepts/ 区别
+
+        wiki/concepts/ 是 catfish-memory plugin distill 出来的 entity/concept (短),
+        会被 plugin distill 流程当源数据再处理 (污染 entity 抽取). strategic_docs
+        是**原始战略 doc**, 不该进 distill 链 — 独立目录隔开.
+
+        # 跟 manifesto 公理一致
+
+        - 数据在 ~/.catfish/strategic_docs/ 员工本机, 不上传中央
+        - LLM 主动看 / 员工 chat 提到关键词 → inject, pull-based
+        """
+        docs_root = catfish_home / "strategic_docs"
+        if not docs_root.is_dir():
+            return ""
+
+        candidates_list: List[tuple] = []  # (name, head)
+        try:
+            for child in sorted(docs_root.iterdir()):
+                if not child.is_file() or child.suffix.lower() != ".md":
+                    continue
+                name = child.stem  # foo.md → "foo"
+                # 读前 1500 byte (含 frontmatter, 下面去掉)
+                head = _read_text_safe(child, 1500)
+                if not head:
+                    continue
+                # 去 frontmatter (--- ... ---)
+                if head.startswith("---\n"):
+                    end = head.find("\n---\n", 4)
+                    if end > 0:
+                        head = head[end + 5:]  # 跳过结束 ---\n
+                candidates_list.append((name, head.strip()[:1200]))
+        except OSError:
+            pass
+
+        if not candidates_list:
+            return ""
+
+        # query 打分排序 (跟 _render_skills_catalog 同套 helper)
+        query_clean = (query or "").strip()
+        if query_clean:
+            q_chars = _query_token_set(query_clean)
+            scored: List[tuple] = []
+            for name, head in candidates_list:
+                # name 权重更高 (doc 标题最语义浓)
+                name_score = _jaccard_similarity(q_chars, _query_token_set(name)) * 3.0
+                head_score = _jaccard_similarity(q_chars, _query_token_set(head))
+                total = name_score + head_score
+                scored.append((total, name, head))
+            scored.sort(key=lambda t: -t[0])
+            ordered = [(name, head) for _score, name, head in scored]
+        else:
+            ordered = candidates_list
+
+        # budget 截
+        entries: List[str] = []
+        budget = _BUDGETS.get("strategic_docs", 8000)
+        # query 有 → cap 5KB (top-K 够用, 减 system prompt 噪音)
+        if query_clean:
+            budget = min(budget, 5000)
+        for name, head in ordered:
+            entry = f"### {name}\n\n{head}\n"
+            if len(entry) > budget:
+                break
+            entries.append(entry)
+            budget -= len(entry)
+            if budget <= 0:
+                break
+
+        if not entries:
+            return ""
+        title = "## 📘 战略 / 设计 doc (catfish strategic docs)"
         if query_clean and len(entries) < len(candidates_list):
             title += f" — 按当前话题筛 top {len(entries)}/{len(candidates_list)}"
         return f"{title}\n\n" + "\n".join(entries)

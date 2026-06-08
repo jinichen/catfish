@@ -676,6 +676,10 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_search_skills":
         from . import search_skills  # noqa: PLC0415
         return search_skills.tool_search_skills(args)
+    # BL-STRATEGIC-DOC-SYNC Phase 3 (6/7 鸿波 audit) — 搜战略 doc (manifesto / patent / ...)
+    if name == "catfish_search_docs":
+        from . import search_docs  # noqa: PLC0415
+        return search_docs.tool_search_docs(args)
     # BL-FIX-TIMEOUT-OUTPUTS (5/13 鸿波"做不出文档")
     if name == "catfish_list_my_outputs":
         from . import recent_outputs  # noqa: PLC0415
