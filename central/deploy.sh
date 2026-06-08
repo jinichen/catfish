@@ -114,7 +114,8 @@ if ! docker compose version >/dev/null 2>&1; then
 fi
 ok "docker compose: $(docker compose version --short)"
 
-# 1.2 端口冲突? (8999 gateway, 8998 identity, 8997 hub, 80/443 nginx, 5432 PG 本机)
+# 1.2 端口冲突? 6/9 BL-WEB+MCP+BROKER-DEPLOY 加 8996 mcp-registry.
+# 注: secret-broker 8995 跟 web :80 (容器内) 都不绑宿主机, 不检查.
 check_port() {
     local port=$1
     local svc=$2
@@ -125,10 +126,11 @@ check_port() {
     return 0
 }
 PORT_OK=true
-for p in 80 443 8997 8998 8999; do
+for p in 80 443 8996 8997 8998 8999; do
     case $p in
         80)   svc="nginx http" ;;
         443)  svc="nginx https" ;;
+        8996) svc="mcp-registry" ;;
         8997) svc="skills-hub" ;;
         8998) svc="identity" ;;
         8999) svc="gateway" ;;
@@ -296,6 +298,22 @@ SMOKE_OK=true
 smoke_curl "http://127.0.0.1:8999/healthz" "gateway /healthz" || SMOKE_OK=false
 smoke_curl "http://127.0.0.1:8998/.well-known/openid-configuration" "identity OIDC discovery" || SMOKE_OK=false
 smoke_curl "http://127.0.0.1:8997/healthz" "skills-hub /healthz" || SMOKE_OK=false
+# 6/9 BL-WEB+MCP+BROKER-DEPLOY 加: 3 个新服务 smoke
+smoke_curl "http://127.0.0.1:8996/health" "mcp-registry /health" || SMOKE_OK=false
+# secret-broker 不绑宿主机, 走 docker exec curl 容器内
+if docker compose -f "$COMPOSE_FILE" exec -T secret-broker curl -fsS "http://localhost:8995/health" >/dev/null 2>&1; then
+    ok "secret-broker /health (容器内): 200"
+else
+    err "secret-broker /health (容器内): 失败. master_key 没生成 / PG 连不上"
+    SMOKE_OK=false
+fi
+# web 不绑宿主机, 走中央 nginx (HTTP 80 / 80 → 301 → 443) 看 / 返 200
+# 跳过 SSL 验证 (deploy 时可能还没 cert)
+if curl -fskS -o /dev/null -w "%{http_code}" -L "http://127.0.0.1/" 2>/dev/null | grep -qE "200|301"; then
+    ok "web SPA via nginx /: 200/301"
+else
+    warn "web SPA via nginx /: 验证不过 — 可能 nginx.conf 还没改 server_name / cert 没配"
+fi
 
 # uvicorn 多 worker 验证 (BL-F10 真根因 fix)
 GATEWAY_WORKERS_ACTUAL=$(docker compose -f "$COMPOSE_FILE" logs gateway 2>&1 | grep -c "Started server process" || echo "0")
