@@ -1,0 +1,78 @@
+# BL-F11 identity-server bench client registry — 不污染 prod config/clients.yaml.
+#
+# 5 个虚拟 service client, 共享同一个 secret (bench-secret-2026).
+# locust 随机选一个 client_id, POST /token grant_type=client_credentials.
+# 每请求 server 跑一次 bcrypt verify (12 rounds, 真 prod 速度).
+#
+# bcrypt hash 来源 (rounds=12):
+#   python3 -c "import bcrypt; print(bcrypt.hashpw(b'bench-secret-2026', bcrypt.gensalt(rounds=12)).decode())"
+#
+# 同 hash 共用 5 client = OK, 因为 bcrypt salt 在 hash 里, 5 个 client 同 secret 跑 5
+# 次不同 verify (timing 一样, 不是 cache 命中).
+#
+# 跑:
+#   docker-compose-identity-bench.yml 把 CATFISH_IDENTITY_CLIENTS_PATH 指到这文件
+#   identity-locustfile.py 随机选 client_id, server 按 client_id 找 hash + verify secret
+
+clients:
+  - client_id: bench-client-1
+    client_secret_hash: $2b$12$Yx7pHssvZNtTxHZXYU92iOo1c0RF.52F5Fq.NRygTh0E6uU0oT0gG
+    name: Bench Client 1
+    description: BL-F11 bench client_credentials grant 压测
+    allowed_grant_types:
+      - client_credentials
+    allowed_scopes:
+      - chat.completions
+      - audit.write
+      - tools.invoke
+    department: bench-infra
+    role: service
+    enabled: true
+
+  - client_id: bench-client-2
+    client_secret_hash: $2b$12$Yx7pHssvZNtTxHZXYU92iOo1c0RF.52F5Fq.NRygTh0E6uU0oT0gG
+    name: Bench Client 2
+    description: BL-F11 bench client_credentials grant 压测
+    allowed_grant_types:
+      - client_credentials
+    allowed_scopes:
+      - chat.completions
+    department: bench-infra
+    role: service
+    enabled: true
+
+  - client_id: bench-client-3
+    client_secret_hash: $2b$12$Yx7pHssvZNtTxHZXYU92iOo1c0RF.52F5Fq.NRygTh0E6uU0oT0gG
+    name: Bench Client 3
+    description: BL-F11 bench client_credentials grant 压测
+    allowed_grant_types:
+      - client_credentials
+    allowed_scopes:
+      - chat.completions
+    department: bench-infra
+    role: service
+    enabled: true
+
+  - client_id: bench-client-4
+    client_secret_hash: $2b$12$Yx7pHssvZNtTxHZXYU92iOo1c0RF.52F5Fq.NRygTh0E6uU0oT0gG
+    name: Bench Client 4
+    description: BL-F11 bench client_credentials grant 压测
+    allowed_grant_types:
+      - client_credentials
+    allowed_scopes:
+      - chat.completions
+    department: bench-eng
+    role: service
+    enabled: true
+
+  - client_id: bench-client-5
+    client_secret_hash: $2b$12$Yx7pHssvZNtTxHZXYU92iOo1c0RF.52F5Fq.NRygTh0E6uU0oT0gG
+    name: Bench Client 5
+    description: BL-F11 bench client_credentials grant 压测
+    allowed_grant_types:
+      - client_credentials
+    allowed_scopes:
+      - chat.completions
+    department: bench-eng
+    role: service
+    enabled: true

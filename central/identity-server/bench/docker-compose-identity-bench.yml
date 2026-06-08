@@ -1,0 +1,66 @@
+# BL-F11 identity-server bench stack: identity + PG.
+#
+# 怎么跑:
+#   cd central/identity-server
+#   bash bench/run.sh                          # 默认 1000 user / 5min / 2 worker
+#   IDENTITY_WORKERS=4 bash bench/run.sh       # 4 worker 对比
+#
+# 跟 prod docker-compose.yml 区别:
+#   - 加内嵌 PG (生产连外部 PG)
+#   - identity 用 bench 的 clients.yaml + users.yaml (不用 prod config)
+#   - PORT 8998 跟 prod 一致
+
+services:
+  pg:
+    # 跟 BL-F10 gateway bench 同模式
+    image: ${DOCKER_REGISTRY:-}postgres:16-alpine
+    container_name: catfish-bench-identity-pg
+    environment:
+      POSTGRES_USER: catfish
+      POSTGRES_PASSWORD: bench
+      POSTGRES_DB: catfish_bench
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "catfish", "-d", "catfish_bench"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  identity:
+    build:
+      # bench 专属 Dockerfile (清华 mirror 绕 Clash)
+      context: ..
+      dockerfile: bench/Dockerfile.identity
+    container_name: catfish-bench-identity
+    depends_on:
+      pg:
+        condition: service_healthy
+    ports:
+      - "${IDENTITY_PORT:-8998}:8998"
+    environment:
+      CATFISH_ENV: prod  # bench 模拟 prod, 不走 dev_token
+      CATFISH_DB_URL: postgresql://catfish:bench@pg:5432/catfish_bench
+      CATFISH_IDENTITY_PORT: 8998
+      CATFISH_IDENTITY_HOST: 0.0.0.0
+      CATFISH_OIDC_ISSUER: http://localhost:8998
+      # bench 用自己的 clients.yaml / users.yaml (不用 prod config/)
+      CATFISH_IDENTITY_CLIENTS_PATH: /app/bench/clients.bench.yaml
+      CATFISH_IDENTITY_USERS_PATH: /app/bench/users.bench.yaml
+      # BL-F10 真根因 fix: uvicorn workers 必须传 (gateway 那次撞过). 默认 2.
+      # 重跑改 4: IDENTITY_WORKERS=4 bash bench/run.sh
+      UVICORN_WORKERS: ${IDENTITY_WORKERS:-2}
+      LOG_LEVEL: WARNING  # 1000 RPS 时 INFO 撑爆 disk
+    volumes:
+      # 路径相对 compose file (bench/), ../bench 跳到 identity-server/bench
+      # 跟 gateway BL-F10 撞过同 bug: 直接 ./bench 会指 bench/bench/ (不存在)
+      - ../bench:/app/bench:ro
+      - ../config:/app/config:ro
+    # 资源限制 — 模拟客户机房 4 vCPU / 4GB
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 4G
+
+  # locust 跟 gateway BL-F10 一样跑 host 不进 docker (daocloud 不代理 locustio).

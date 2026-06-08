@@ -1,0 +1,8 @@
+# BL-F11 identity-server bench 输出 — 每次 run.sh 重生, 不入库.
+# 源文件 (Dockerfile.identity / *.yml / *.yaml / *.py / *.sh / README.md / .gitignore) 都入库.
+csv-identity-*.csv
+report-identity-*.html
+docker-stats-identity-*.txt
+identity-log-*.txt
+pg-state-identity-*.txt
+.stats.pid

@@ -1,0 +1,11 @@
+# BL-F11 identity-server bench users — 占位, client_credentials 不走 user path.
+# 留这文件是因为 identity 启动可能扫 users.yaml, 没有会 warn (不影响功能但脏 log).
+# 真要测 authorization_code grant (员工浏览器 SSO), 加 user + 跑 /authorize → /token.
+
+users:
+  - email: bench-stub@catfish.bench
+    # bcrypt of 'bench-stub-not-used', client_credentials 路径不会 verify
+    password_hash: $2b$12$Yx7pHssvZNtTxHZXYU92iOo1c0RF.52F5Fq.NRygTh0E6uU0oT0gG
+    name: Bench Stub (not used)
+    department: bench-stub
+    tier: employee

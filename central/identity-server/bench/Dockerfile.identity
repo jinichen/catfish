@@ -1,0 +1,74 @@
+# BL-F11 bench 专属 identity Dockerfile.
+#
+# 跟 gateway bench/Dockerfile.gateway 同模式:
+#   1. Debian apt source 改清华 mirror (绕 Clash 拦 deb.debian.org)
+#   2. pip 改清华 pypi mirror
+#
+# 不污染 prod ../Dockerfile — bench 跑完 down 即可, 生产仍用 prod Dockerfile.
+
+FROM python:3.12-slim AS builder
+
+RUN set -eux; \
+    if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+        sed -i 's|http://deb.debian.org|https://mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources; \
+    fi; \
+    if [ -f /etc/apt/sources.list ]; then \
+        sed -i 's|http://deb.debian.org|https://mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list; \
+    fi
+
+WORKDIR /build
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+
+COPY pyproject.toml README.md ./
+COPY src ./src
+
+RUN python -m venv /opt/venv && \
+    /opt/venv/bin/pip install --no-cache-dir --upgrade pip && \
+    /opt/venv/bin/pip install --no-cache-dir .
+
+
+# ── runtime ──
+FROM python:3.12-slim AS runtime
+
+RUN set -eux; \
+    if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+        sed -i 's|http://deb.debian.org|https://mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources; \
+    fi; \
+    if [ -f /etc/apt/sources.list ]; then \
+        sed -i 's|http://deb.debian.org|https://mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list; \
+    fi
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libpq5 \
+        ca-certificates \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --create-home --shell /bin/bash --uid 1000 catfish
+
+COPY --from=builder /opt/venv /opt/venv
+COPY --chown=catfish:catfish src /app/src
+COPY --chown=catfish:catfish alembic.ini /app/
+COPY --chown=catfish:catfish alembic /app/alembic
+COPY --chown=catfish:catfish config /app/config
+
+ENV PATH="/opt/venv/bin:$PATH"
+ENV PYTHONPATH=/app/src
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+USER catfish
+
+EXPOSE 8998
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl -fsS http://localhost:8998/healthz || exit 1
+
+CMD ["sh", "-c", "alembic upgrade head && python -m catfish_identity.app"]
