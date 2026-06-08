@@ -65,7 +65,7 @@ clients:
     refresh_db = tmp_path / "refresh.db"
     signer = JwtSigner(key_dir=keys_dir)
     registry = UserRegistry(users_path=users_yaml)
-    code_store = _CodeStore()
+    code_store = _CodeStore(db_path=tmp_path / "codes.db")
     client_registry = ClientRegistry(clients_path=clients_yaml)
     refresh_token_store = RefreshTokenStore(db_path=refresh_db)
 
@@ -297,7 +297,7 @@ users:
         issuer="http://test:8998",
         signer=JwtSigner(key_dir=tmp_path / "k"),
         registry=UserRegistry(users_path=users_yaml),
-        code_store=_CodeStore(),
+        code_store=_CodeStore(db_path=tmp_path / "codes.db"),
         refresh_token_store=None,  # 没配
     ))
     c = TestClient(fastapi_app)

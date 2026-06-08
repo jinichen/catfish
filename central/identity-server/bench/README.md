@@ -2,20 +2,17 @@
 
 > 验 identity-server 在 1000 并发下 POST /token client_credentials grant 撑不撑得住.
 
-## ⚠️ 已知限制 (6/9 实测撞)
+## 6/9 BL-F11.P2 ship: identity 真支持 multi-worker
 
-**identity 暂时强制 workers=1**, 不接受 IDENTITY_WORKERS=N (N>1).
+老版 uvicorn factory=True + workers>1 在 macOS docker 跑 multiprocess 撞 port bind
+竞态, hard-code workers=1, P99 = 189s @ 1000 user.
 
-真根因: `uvicorn.run(factory=True, workers=N>1)` 在 macOS docker desktop
-multiprocess 模式下, port bind 跟 SO_REUSEPORT 有竞态. 实测 1000 user 100%
-status 0 (TCP refused), CPU 185% 但 port 没 listen.
+下午 ship: `_CodeStore` 从 in-memory 移到 sqlite (跨 worker 共享 authorization_code
+state) + `create_app` 拆 dependency 注入 + module-level lazy `app` 单例, uvicorn
+走 import string `catfish_identity.app:app` 不走 factory, multi-worker 真稳.
 
-短期: workers=1 跑. bcrypt 12 round 单 worker ~3-4 verify/s, 撑 prod 1000 employee
-够 (employee 每 1h 才 refresh token, 持续 ~0.28 verify/s, 远低于 3-4 上限).
-
-长期 (TODO BL-F11.P2): 重构 `create_app` 把 RSA signer + registry 移到模块级
-单例, 然后用 `catfish_identity.app:app` import string 替代 factory=True, multi-worker
-就稳了. 详情看 `src/catfish_identity/app.py:222` 注释.
+默认 2 worker (跟 prod 默认对齐). `IDENTITY_WORKERS=4 bash bench/run.sh` 看 4
+worker scaling.
 
 ## 快速跑
 

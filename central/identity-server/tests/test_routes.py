@@ -32,7 +32,7 @@ users:
     keys_dir = tmp_path / "keys"
     signer = JwtSigner(key_dir=keys_dir)
     registry = UserRegistry(users_path=users_yaml)
-    code_store = _CodeStore()
+    code_store = _CodeStore(db_path=tmp_path / "codes.db")
 
     fastapi_app = FastAPI()
     fastapi_app.include_router(

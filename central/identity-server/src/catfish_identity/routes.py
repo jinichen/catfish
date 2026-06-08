@@ -27,19 +27,24 @@
 from __future__ import annotations
 
 import logging
-import secrets
 import time
-from dataclasses import dataclass, field
 from urllib.parse import urlencode
 
 import jwt
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
+from fastapi import APIRouter, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from .clients import ClientRegistry
+from .code_store import AuthCodeRecord, CodeStore
 from .jwt_signer import JwtSigner
 from .refresh_tokens import RefreshTokenStore
-from .users import IdentityUser, UserRegistry
+from .users import UserRegistry
+
+# 6/9 BL-F11.P2 (鸿波): _CodeStore 从 in-memory dict 移到 sqlite 持久化, 让 multi-worker
+# 部署能跨 worker 共享 authorization_code state. 老 in-memory 版本旧测试 5 处用
+# `_CodeStore()` 实例化, 这里给老符号一个 alias 保持源码兼容 (测试加 db_path=tmp 改一下).
+_CodeStore = CodeStore
+_AuthCode = AuthCodeRecord
 
 logger = logging.getLogger("catfish.identity.routes")
 
@@ -59,51 +64,9 @@ _SERVICE_TOKEN_TTL_SECS_MAX = 365 * 24 * 3600
 _SERVICE_TOKEN_AUDIENCE = "catfish-gateway"
 
 
-@dataclass
-class _AuthCode:
-    """一次性 authorization code 的内存记录."""
-
-    code: str
-    user: IdentityUser
-    client_id: str
-    redirect_uri: str
-    scope: str
-    nonce: str
-    issued_at: float
-    used: bool = False  # 一次性, 用过就废
-
-
-@dataclass
-class _CodeStore:
-    """简单内存 code 存储. Phase 2 换 sqlite/redis."""
-
-    codes: dict[str, _AuthCode] = field(default_factory=dict)
-
-    def issue(self, **kwargs) -> _AuthCode:
-        code = secrets.token_urlsafe(32)
-        record = _AuthCode(code=code, issued_at=time.time(), **kwargs)
-        self.codes[code] = record
-        # 清理过期 (lazy)
-        now = time.time()
-        expired = [
-            c for c, r in self.codes.items() if now - r.issued_at > _CODE_TTL_SECS
-        ]
-        for c in expired:
-            self.codes.pop(c, None)
-        return record
-
-    def consume(self, code: str) -> _AuthCode | None:
-        """一次性使用. used=True 之后再调返 None."""
-        record = self.codes.get(code)
-        if record is None:
-            return None
-        if record.used:
-            return None
-        if time.time() - record.issued_at > _CODE_TTL_SECS:
-            self.codes.pop(code, None)
-            return None
-        record.used = True
-        return record
+# 6/9 BL-F11.P2: _AuthCode + _CodeStore 移到 code_store.py (sqlite 持久化, 跨
+# worker 共享 authorization_code state). 上面 import 给了 _CodeStore / _AuthCode
+# 兼容别名, 测试源码不破.
 
 
 def make_router(
@@ -111,7 +74,7 @@ def make_router(
     issuer: str,
     signer: JwtSigner,
     registry: UserRegistry,
-    code_store: _CodeStore,
+    code_store: CodeStore,
     client_registry: ClientRegistry | None = None,
     refresh_token_store: RefreshTokenStore | None = None,
 ) -> APIRouter:
@@ -245,8 +208,10 @@ def make_router(
                 },
             )
 
+        # 6/9 BL-F11.P2: 改存 user_email (sqlite 不存对象). consume 后 routes_token
+        # 用 registry.find(user_email) 回查 user.
         record = code_store.issue(
-            user=user,
+            user_email=user.email,
             client_id=client_id,
             redirect_uri=redirect_uri,
             scope=scope,
@@ -303,6 +268,7 @@ def make_router(
                 client_id=client_id,
                 client_secret=client_secret,  # 不验, 占位接收
                 code_store=code_store,
+                registry=registry,  # 6/9 BL-F11.P2: handler 用 user_email 回查 user
                 signer=signer,
                 issuer=issuer,
                 refresh_token_store=refresh_token_store,

@@ -62,9 +62,10 @@ _ENV_FILE_LOADED = _load_dotenv()
 
 
 from .clients import ClientRegistry
+from .code_store import CodeStore
 from .jwt_signer import JwtSigner
 from .refresh_tokens import RefreshTokenStore
-from .routes import _CodeStore, make_router
+from .routes import make_router
 from .users import UserRegistry
 
 logger = logging.getLogger("catfish.identity")
@@ -84,23 +85,41 @@ def _issuer_url() -> str:
     return f"http://{host}:{port}"
 
 
-def create_app() -> FastAPI:
+def create_app(
+    *,
+    signer: JwtSigner | None = None,
+    registry: UserRegistry | None = None,
+    code_store: CodeStore | None = None,
+    client_registry: ClientRegistry | None = None,
+    refresh_token_store: RefreshTokenStore | None = None,
+) -> FastAPI:
     """组装 fastapi app + 所有依赖.
 
     依赖通过闭包注入到 router (不用 fastapi global state, 测试可以构造小 app).
+
+    6/9 BL-F11.P2 (鸿波): 所有依赖支持注入. 不传 → 用默认构造 (生产模式, RSA key
+    从 ~/.catfish 加载, yaml 从默认路径加载). 传 → 用测试 fixture.
+
+    multi-worker 部署用 module 底部的 lazy `app` 单例 (uvicorn import string
+    `catfish_identity.app:app` 触发 PEP 562 __getattr__ 一次性构造).
     """
     issuer = _issuer_url()
-    signer = JwtSigner()
-    registry = UserRegistry()
-    code_store = _CodeStore()
+    signer = signer if signer is not None else JwtSigner()
+    registry = registry if registry is not None else UserRegistry()
+    # 6/9 BL-F11.P2: code_store sqlite 持久化, 跨 worker 共享 authorization_code state.
+    # 老版 in-memory dict 在 multi-worker 下 75% 登不进 (worker A 颁的 code worker B
+    # 找不到). sqlite 短连接 + busy_timeout 5s 串行化写, 4 worker 不撞.
+    code_store = code_store if code_store is not None else CodeStore()
     # BL-RBAC P0 + B sprint Day 1 (5/14): OAuth client_credentials grant.
     # ClientRegistry 加载 clients.yaml (没文件 → 空注册表, /token client_credentials
     # 返 503 cleanly degrade). 见 docs/RBAC-DESIGN.md §10/§12.
-    client_registry = ClientRegistry()
+    client_registry = client_registry if client_registry is not None else ClientRegistry()
     # BL-IDENTITY-REFRESH-TOKEN (5/15 凌晨): refresh_token grant 让 access_token 过期
     # 后无感续 (catfish login CLI / hermes-cli 用). sqlite 单文件存. 见
     # refresh_tokens.py 模块顶部 doc.
-    refresh_token_store = RefreshTokenStore()
+    refresh_token_store = (
+        refresh_token_store if refresh_token_store is not None else RefreshTokenStore()
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -208,6 +227,35 @@ def create_app() -> FastAPI:
     return app
 
 
+# 6/9 BL-F11.P2 (鸿波): module-level lazy app singleton — 让 uvicorn workers>1 跑稳.
+#
+# 老版用 `uvicorn.run("catfish_identity.app:create_app", factory=True, workers=N)`,
+# factory + workers>1 在 macOS docker 跑 multiprocess 撞 port bind 竞态. 新版改用
+# `uvicorn.run("catfish_identity.app:app", workers=N)` — uvicorn import 这模块时
+# PEP 562 __getattr__ 触发一次性构造, 主进程 fork N worker 后各 worker 继承同
+# RSA signer / yaml registry (read-only copy-on-write OK); _CodeStore /
+# RefreshTokenStore 已 sqlite 化, 跨 worker 共享.
+#
+# Lazy 不是 module-top `app = create_app()`: 那样测试 `from catfish_identity.app
+# import create_app` 也触发 heavy init (yaml load, sqlite open, RSA gen), 拖慢
+# 测试 + 污染 default ~/.catfish 路径.
+_module_app: FastAPI | None = None
+
+
+def __getattr__(name: str):
+    """PEP 562 module-level __getattr__: lazy build module singleton app.
+
+    只有访问 `catfish_identity.app.app` (= uvicorn import string) 时才 init.
+    测试 `from catfish_identity.app import create_app` 不触发.
+    """
+    global _module_app
+    if name == "app":
+        if _module_app is None:
+            _module_app = create_app()
+        return _module_app
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 def main() -> None:
     """命令行入口: python -m catfish_identity"""
     import uvicorn  # noqa: PLC0415
@@ -219,32 +267,25 @@ def main() -> None:
 
     host = os.environ.get("CATFISH_IDENTITY_HOST", DEFAULT_HOST)
     port = int(os.environ.get("CATFISH_IDENTITY_PORT", str(DEFAULT_PORT)))
-    # 6/9 鸿波 BL-F11 真实测: uvicorn factory=True + workers>1 在 macOS docker
-    # 跑 multiprocess 模式下不可靠 (port bind 跟 SO_REUSEPORT 竞态, 1000 user 100%
-    # status 0). 跟 gateway 不一样, gateway uvicorn.run 用 import string 不走 factory.
+    # 6/9 BL-F11.P2 ship: identity 真支持 multi-worker.
     #
-    # 短期方案: identity 强制 workers=1 (跟修 fix 前一样). bcrypt 12 round + JWT RSA
-    # sign 单 worker 极限 ~3-4 verify/s, 撑 prod 1000 employee 实测可以 (employee
-    # 每 1h 才 refresh 一次, 持续 ~0.28 verify/s).
+    # 历史: BL-F11 6/9 上午发现 factory=True + workers>1 不兼容 (port bind 竞态),
+    # 短期 hard-code workers=1. 上午 bench 跑出来 P99 189s (1000 user / 单 worker
+    # bcrypt 12 round 排队). 下午鸿波说"直接上 B, 代码又不多" — 把 _CodeStore 从
+    # in-memory 移到 sqlite (跨 worker 共享 authorization_code state), create_app
+    # 拆 dependency 注入 + module-level lazy app 单例, uvicorn 改 import string
+    # 路径不走 factory, multi-worker 起来稳.
     #
-    # 长期方案 (TODO BL-F11.P2): 重构 create_app 把 RSA signer / registry 移到模块
-    # 级单例, 然后用 `catfish_identity.app:app` import string 替代 factory=True, 让
-    # uvicorn 多 worker 跑稳. 或者改用 gunicorn `--workers N` 跑 uvicorn worker.
-    requested_workers = int(os.environ.get("UVICORN_WORKERS", "1"))
-    if requested_workers > 1:
-        import warnings
-        warnings.warn(
-            f"UVICORN_WORKERS={requested_workers} 暂时无效 — identity factory pattern 跟 "
-            f"uvicorn workers>1 不兼容. 强制 workers=1. 详情看 src/catfish_identity/app.py:222.",
-            stacklevel=2,
-        )
+    # 默认 2 worker (跟 docker-compose.yml / .env.production.example 一致). 重负
+    # 载机房 IDENTITY_WORKERS=4. 单 worker 极限 ~5-7 verify/s (实测), 4 worker 应
+    # 该接近 20 verify/s — bench 重跑验证.
+    workers = max(1, int(os.environ.get("UVICORN_WORKERS", "2")))
 
     uvicorn.run(
-        "catfish_identity.app:create_app",
-        factory=True,
+        "catfish_identity.app:app",  # ← 不用 factory=True, 走 module-level lazy 单例
         host=host,
         port=port,
-        workers=1,  # ← 强制 1, 看上面注释
+        workers=workers,
         log_level="info",
     )
 

@@ -17,9 +17,10 @@ from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
 from .clients import ClientRegistry
+from .code_store import CodeStore
 from .jwt_signer import JwtSigner
 from .refresh_tokens import RefreshTokenStore
-from .users import IdentityUser, UserRegistry
+from .users import UserRegistry
 
 logger = logging.getLogger("catfish.identity.routes")
 
@@ -44,7 +45,8 @@ async def _handle_authorization_code(
     redirect_uri: str,
     client_id: str,
     client_secret: str,  # noqa: ARG001 — Phase 1B-1 不验
-    code_store: _CodeStore,
+    code_store: CodeStore,
+    registry: UserRegistry,
     signer: JwtSigner,
     issuer: str,
     refresh_token_store: RefreshTokenStore | None = None,
@@ -52,6 +54,9 @@ async def _handle_authorization_code(
     """authorization_code grant — 用户走 SSO 后浏览器换 id_token + access_token.
 
     Phase 1B-1 不验 client_secret. Phase 2 加 client registration + secret 验证.
+
+    6/9 BL-F11.P2: code_store 从 in-memory 改 sqlite, record 不再带 user 对象只带
+    user_email. 这里 consume 后用 registry.find(user_email) 回查 user.
     """
     if not code:
         raise HTTPException(
@@ -97,14 +102,26 @@ async def _handle_authorization_code(
             },
         )
 
+    # 6/9 BL-F11.P2: 回查 user — sqlite 不存对象, 只存 email. user 可能在 code 颁发
+    # 后被 admin 删 / 锁, 检查.
+    user = registry.find(record.user_email)
+    if user is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_grant",
+                "error_description": "user 不存在或已删除",
+            },
+        )
+
     # 组装 ID Token (含 user claims, audience=client_id 表示这 token 给 client 看)
     # BL-RBAC-DAY3B (5/17): 用 async 版本拿 effective_allowed_models (合并 user+dept)
-    id_claims = await record.user.to_oidc_claims_async()
+    id_claims = await user.to_oidc_claims_async()
     if record.nonce:
         id_claims["nonce"] = record.nonce
     id_token = signer.sign_id_token(
         issuer=issuer,
-        subject=record.user.email,
+        subject=user.email,
         audience=client_id,
         claims=id_claims,
         ttl_seconds=_TOKEN_TTL_SECS,
@@ -127,7 +144,7 @@ async def _handle_authorization_code(
     access_token_claims["token_use"] = "access"
     access_token = signer.sign_id_token(
         issuer=issuer,
-        subject=record.user.email,
+        subject=user.email,
         audience=_SERVICE_TOKEN_AUDIENCE,  # catfish-gateway, 跟 service token 一致
         claims=access_token_claims,
         ttl_seconds=_TOKEN_TTL_SECS,
@@ -143,7 +160,7 @@ async def _handle_authorization_code(
     }
     if refresh_token_store is not None:
         rt = refresh_token_store.issue(
-            sub=record.user.email,
+            sub=user.email,
             client_id=client_id,
             scope=record.scope,
         )
@@ -151,7 +168,7 @@ async def _handle_authorization_code(
         response_body["refresh_expires_in"] = int(rt.expires_at - time.time())
     logger.info(
         "token OK (auth_code): user=%s client=%s refresh=%s",
-        record.user.email, client_id,
+        user.email, client_id,
         "yes" if refresh_token_store is not None else "no",
     )
     return JSONResponse(response_body)

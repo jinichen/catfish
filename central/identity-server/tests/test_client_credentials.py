@@ -71,7 +71,7 @@ clients:
     keys_dir = tmp_path / "keys"
     signer = JwtSigner(key_dir=keys_dir)
     registry = UserRegistry(users_path=users_yaml)
-    code_store = _CodeStore()
+    code_store = _CodeStore(db_path=tmp_path / "codes.db")
     client_registry = ClientRegistry(clients_path=clients_yaml)
 
     fastapi_app = FastAPI()
@@ -255,7 +255,7 @@ users:
             issuer="http://test:8998",
             signer=signer,
             registry=registry,
-            code_store=_CodeStore(),
+            code_store=_CodeStore(db_path=tmp_path / "codes.db"),
             client_registry=None,  # 没配
         )
     )
@@ -355,7 +355,7 @@ clients:
             issuer="http://test:8998",
             signer=signer,
             registry=registry,
-            code_store=_CodeStore(),
+            code_store=_CodeStore(db_path=tmp_path / "codes.db"),
             client_registry=client_registry,
         )
     )
