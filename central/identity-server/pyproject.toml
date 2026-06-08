@@ -11,7 +11,10 @@ dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     "pyyaml>=6.0.2",
-    "pydantic>=2.9.0",
+    # admin_router.py:143 CreateUserReq 用 pydantic EmailStr, 这需要 [email] extras
+    # (pulls in email-validator). 6/9 BL-F11 bench 撞: 没装 → ImportError → uvicorn
+    # factory 抛, container restart loop, 1000 user 看 94% fail / 339 个 401.
+    "pydantic[email]>=2.9.0",
     "PyJWT[crypto]>=2.9.0",
     "bcrypt>=4.2.0",
     "cryptography>=43.0.0",
