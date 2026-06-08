@@ -135,7 +135,84 @@ services:
       timeout: 3s
       retries: 3
 
-  # nginx 反代: SSL 卸载 + 路由 / -> gateway, /sso/ -> identity, /hub/ -> skills-hub
+  # 6/9 BL-WEB-DEPLOY: web SPA (vite + nginx) 集成进 prod stack.
+  # 只服静态 dist/, 不直接暴露 ports — 中央 nginx 反代 / → web:80.
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    image: catfish-web:0.1.0
+    container_name: catfish-web
+    restart: unless-stopped
+    # 内部 service, 不需要 ports — 中央 nginx 走 docker network 名解析 (web:80)
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  # 6/9 BL-MCP-DEPLOY: mcp-registry 企业 MCP 连接器仓库.
+  # 员工通过 web UI 订阅 Jira/GitLab/filesystem 等 MCP, OAuth flow 走这.
+  mcp-registry:
+    build:
+      context: ./mcp-registry
+      dockerfile: Dockerfile
+    image: catfish-mcp-registry:0.1.0
+    container_name: catfish-mcp-registry
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      secret-broker:
+        condition: service_started
+    environment:
+      CATFISH_DB_URL: postgresql://${PG_USER:-catfish}:${PG_PASSWORD}@postgres:5432/${PG_DB:-catfish}
+      CATFISH_ENV: prod
+      PORT: 8996
+      # OIDC: 验员工 JWT (跟 gateway 共享 issuer)
+      CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://identity:8998}
+      # 调 secret-broker 写 OAuth refresh token (内网名解析)
+      CATFISH_SECRET_BROKER_URL: http://secret-broker:8995
+    ports:
+      - "127.0.0.1:8996:8996"   # 只内网, 走 nginx /mcp/ 暴露
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8996/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  # 6/9 BL-BROKER-DEPLOY: secret-broker 凭据集中存储, PG 加密后端.
+  # !! 不暴露 ports 给员工 — 内网 service 名调 (mcp-registry / gateway 走 docker network).
+  # PG 加密: master key 从 env (deploy.sh 自动生成), AES-256-GCM 每条 secret 独立 nonce.
+  secret-broker:
+    build:
+      context: ./secret-broker
+      dockerfile: Dockerfile
+    image: catfish-secret-broker:0.1.0
+    container_name: catfish-secret-broker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      CATFISH_DB_URL: postgresql://${PG_USER:-catfish}:${PG_PASSWORD}@postgres:5432/${PG_DB:-catfish}
+      CATFISH_SECRET_BROKER_BACKEND: pg
+      # 加密 master key (deploy.sh 自动 openssl rand -base64 32 生成首次)
+      CATFISH_SECRET_MASTER_KEY: ${CATFISH_SECRET_MASTER_KEY}
+      PORT: 8995
+    # 不挂 ports — 只 docker network 内访问
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8995/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  # nginx 反代: SSL 卸载 + 路由
+  #   / → web (SPA)
+  #   /v1/ /api/ /healthz → gateway
+  #   /sso/ → identity
+  #   /hub/ → skills-hub
+  #   /mcp/ → mcp-registry  (6/9 BL-MCP-DEPLOY 新加)
   # 客户改 nginx.conf.example → nginx.conf 配域名 + Let's Encrypt cert
   nginx:
     image: nginx:1.27-alpine
@@ -145,6 +222,8 @@ services:
       - gateway
       - identity
       - skills-hub
+      - web
+      - mcp-registry
     ports:
       - "443:443"
       - "80:80"  # http → 301 https

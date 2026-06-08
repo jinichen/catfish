@@ -91,10 +91,26 @@ http {
             client_max_body_size 100M;  # skill multipart 可能含大文件
         }
 
-        # 根路径 — 默认丢给 gateway (可自定义首页)
+        # ── /mcp/* → mcp-registry  (6/9 BL-MCP-DEPLOY) ──
+        # 员工 self-service 订阅 Jira/GitLab/filesystem 等 MCP 连接器, OAuth flow
+        location ~ ^/mcp/ {
+            rewrite ^/mcp/(.*)$ /$1 break;
+            proxy_pass http://mcp-registry:8996;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+        }
+
+        # ── / → web SPA  (6/9 BL-WEB-DEPLOY) ──
+        # 员工浏览器访问 catfish.client.com/ 看 web UI. web 容器内自己有 SPA
+        # fallback 逻辑 (try_files / index.html), 这里只反代.
         location / {
-            return 200 "🐟 catfish gateway alive\n";
-            add_header Content-Type text/plain;
+            proxy_pass http://web:80;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
         }
     }
 }
