@@ -77,17 +77,18 @@ export default function PrivacyCard() {
         gridColumn: "1 / -1",
       }}
     >
-      {/* 6/6 鸿波: 副标 "这页让你自己看 — 不用问 IT · 30s 自动刷新" 删, 卡内信息密度
-       *  已经足够自解释 (绿/黄 灯 + 复选 list), 副标重复反而稀释主旨. */}
+      {/* 6/8 layout-v2 (鸿波 6/8): 改 macOS Settings 风格 2 列 row.
+          左列 ~180px 固定 (label + 1 行说明), 右列流式 (实际数据). 减纵向长度
+          + 视觉分组更清晰. 6/6 删的副标 (那是顶部副标) 不变.
+          6/1 BL-PRIVACY-CARD-SIMPLIFY 简化精神保留 — 仍 2 大块本机/服务器
+          + 自助, 没折叠 / 没技术路径 / 没"看不到 X"暗示. */}
       <h3 style={{ margin: "0 0 var(--space-3) 0" }}>🔒 隐私状态</h3>
 
-      {/* ── 本机存储 — 6/1 BL-PRIVACY-CARD-SIMPLIFY 鸿波拍 ─────────────
-          原来 3 区 + 5 折叠 + 技术路径 + "看不到 X" 暗示 + IT 命令, 国企
-          员工/领导消化不了. 简化到 2 大块, 没折叠, 没暗示, 没技术名词. */}
-      <section style={{ marginBottom: "var(--space-4)" }}>
-        <h4 style={{ margin: "0 0 var(--space-2)", fontSize: 13 }}>
-          🟢 本机存储
-        </h4>
+      {/* row 1: 本机存储 */}
+      <Row
+        title="🟢 本机存储"
+        subtitle="只在你电脑上, 不上传"
+      >
         <ul
           style={{
             listStyle: "none",
@@ -96,15 +97,15 @@ export default function PrivacyCard() {
             fontSize: 13,
           }}
         >
-          {LOCAL_DATA_ITEMS.map((it) => (
+          {LOCAL_DATA_ITEMS.map((it, i) => (
             <li
               key={it.path}
               style={{
                 display: "flex",
                 alignItems: "center",
                 gap: "var(--space-2)",
-                padding: "8px 0",
-                borderTop: "1px solid var(--catfish-border)",
+                padding: "6px 0",
+                borderTop: i === 0 ? "none" : "1px solid var(--catfish-border)",
               }}
             >
               <span style={{ color: "var(--catfish-cyan)", fontSize: 14, flexShrink: 0 }}>✓</span>
@@ -112,18 +113,14 @@ export default function PrivacyCard() {
             </li>
           ))}
         </ul>
-      </section>
+      </Row>
 
-      {/* ── 服务器存储 — 简化版 ──────────────────────── */}
-      <section style={{ marginBottom: "var(--space-4)" }}>
-        <h4 style={{ margin: "0 0 var(--space-2)", fontSize: 13 }}>
-          🟡 服务器存储
-        </h4>
-
+      {/* row 2: 服务器存储 */}
+      <Row
+        title="🟡 服务器存储"
+        subtitle="只 meta data, 不存对话"
+      >
         {error && (() => {
-          // BL-LONG-RUNNING-V1-FOLLOWUP (5/31): 401 是 token 过期, 不是 "Error"
-          // 别用冷红色吓员工 — 改友好提示 + 引导重登. 其它错误 (5xx / 网络)
-          // 保持原灰色, 跟"你本机数据不受影响"同一调.
           const is401 = /401|unauthorized/i.test(error);
           if (is401) {
             return (
@@ -160,28 +157,20 @@ export default function PrivacyCard() {
 
         {data && (
           <>
-            {/* 服务器存储内容 — 只正面陈述. "看不到 X" 那行删 (反向暗示让员工联想). */}
             <div
               style={{
-                padding: "10px 12px",
+                padding: "8px 10px",
                 background: "var(--catfish-bg, transparent)",
                 border: "1px solid var(--catfish-border)",
                 borderRadius: 4,
-                marginBottom: "var(--space-3)",
+                marginBottom: "var(--space-2)",
                 fontSize: 13,
-                lineHeight: 1.7,
+                lineHeight: 1.6,
               }}
             >
               邮箱 · 调用时间 · 用了哪个模型 · 用了多少额度
             </div>
 
-            {/* 6/2 BL-PRIVACY-CARD-QUOTA-PROGRESS (鸿波 6/2 凌晨): 原 3 Stat (今天找我
-                221 次 / 今天用了 7.99M / 最近一次 07:16:54) 砍 2 留 1 + 改进度条.
-                - "今天找我 X 次": 砍. 次数对员工 99% 没用 (quota 按 token 不按次数).
-                - "最近一次": 砍. 员工现在就在用 Companion, 显然知道. 冗余信息.
-                - "今天用了 X": 留并升级 — 加 quota_day_limit 进度条, 真兑现 quota.py
-                  三维限流的"员工能自查". 之前光显示数字没参照系 = 死数字.
-                quota_day_limit=0 表示该 user 不限 → 显示"今天用了 X (不限)". */}
             {data.request_count > 0 ? (
               <QuotaProgressBar used={data.total_tokens} limit={data.quota_day_limit} />
             ) : (
@@ -190,7 +179,7 @@ export default function PrivacyCard() {
                   fontSize: 13,
                   color: "var(--catfish-text-muted)",
                   margin: "0 0 var(--space-2)",
-                  padding: "10px 12px",
+                  padding: "8px 10px",
                   background: "var(--catfish-bg, transparent)",
                   border: "1px dashed var(--catfish-border)",
                   borderRadius: 4,
@@ -200,9 +189,8 @@ export default function PrivacyCard() {
               </p>
             )}
 
-            {/* 历史 — 简短一行, 不抢眼 */}
             {(data.first_seen_ts || data.last_seen_ts) && (
-              <p style={{ fontSize: 11, color: "var(--catfish-text-muted)", margin: "0 0 var(--space-2)" }}>
+              <p style={{ fontSize: 11, color: "var(--catfish-text-muted)", margin: "var(--space-2) 0 0" }}>
                 历史记录:{" "}
                 {data.first_seen_ts && (
                   <>
@@ -217,31 +205,30 @@ export default function PrivacyCard() {
                 )}
               </p>
             )}
-
-            {/* "按模型拆开" / "技术细节" / "想给老板看" 区全删 (6/1 鸿波拍简化) —
-                普通员工/领导消化不了, 反而引发"为啥要技术细节"联想. IT/合规有自己
-                的手段 (catfish privacy-audit CLI), 不需要在这卡里教. */}
           </>
         )}
-      </section>
+      </Row>
 
-      {/* 6/8 BL-EMPLOYEE-SELF-SERVE A1+A2+A4: 员工自助工具入口. manifesto 公理 1
-          (员工主权) 产品落地 — IT 没远程触发能力, 全员工自己点 button. */}
-      <SelfServeButtons />
+      {/* row 3: 员工自助工具 (manifesto 公理 1 落地) */}
+      <Row
+        title="🔧 员工自助工具"
+        subtitle="你自己管, IT 不能动"
+        last
+      >
+        <SelfServeButtons />
+      </Row>
     </div>
   );
 }
 
-/** 6/8 BL-EMPLOYEE-SELF-SERVE UI v2 真根因 fix: macOS WKWebView 默认禁用
- *  window.prompt() / window.alert() / window.confirm() (Apple 安全策略,
- *  Tauri 1+ 都遵守), 静默返回 null/undefined — 看起来按钮"无效".
+/** 6/8 BL-EMPLOYEE-SELF-SERVE UI v2 (Phase 1 fix + Phase 2 减负):
  *
- *  改 React state inline panel:
- *  - 重置: 两段 inline 确认 (preview 展示 + 输入"我确认"+ 按钮)
- *  - 导出: inline path input + button (不依赖 file picker)
- *  - 外发记录: 展开 inline table (10 条) + inline 上下行总量, 没 modal
+ *  Phase 1 真根因 fix: macOS WKWebView 默认禁用 window.prompt()/alert()/
+ *  confirm() (Apple 安全策略), 静默 null. 改 React state inline panel.
  *
- *  操作完, inline 显示状态 toast (5s 后自动消失或下次操作清除).
+ *  Phase 2 减负: "我的数据外发记录" 按钮 + inline log table 迁到独立
+ *  OutboundLogCard (filter / paginate / export CSV 全功能). PrivacyCard
+ *  只留重置 / 导出 (manifesto 公理 1 直接自助), log 走独立卡.
  */
 type Mode =
   | { kind: "idle" }
@@ -250,11 +237,7 @@ type Mode =
       summary: import("../../lib/tauri").ResetSummary;
       confirmStr: string;
     }
-  | { kind: "export"; path: string }
-  | {
-      kind: "log";
-      result: import("../../lib/tauri").TransparentLogQueryResult;
-    };
+  | { kind: "export"; path: string };
 
 function SelfServeButtons() {
   const [mode, setMode] = React.useState<Mode>({ kind: "idle" });
@@ -350,25 +333,20 @@ function SelfServeButtons() {
     setBusy(false);
   };
 
-  const onLogClick = async () => {
+  // log 走独立 OutboundLogCard, button 改成 scrollTo
+  const onLogClick = () => {
     setToast(null);
-    setBusy(true);
-    try {
-      const lib = await import("../../lib/tauri");
-      const result = await lib.transparentLogQuery(undefined, undefined, 50);
-      setMode({ kind: "log", result });
-    } catch (e) {
-      setToast({ kind: "err", msg: `查询失败: ${e}` });
+    const el = document.getElementById("outbound-log-card");
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+    } else {
+      setToast({ kind: "err", msg: "找不到 OutboundLogCard (排版问题, 滚一下找找)" });
     }
-    setBusy(false);
   };
 
   return (
-    <section style={{ marginTop: "var(--space-4)", paddingTop: "var(--space-3)" }}>
-      <h4 style={{ margin: "0 0 var(--space-2)", fontSize: 13 }}>🔧 员工自助工具</h4>
-      <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginBottom: 10 }}>
-        manifesto 公理 1: 员工主权. 没人能远程触发这些 — 全你自己点.
-      </div>
+    <div>
+      {/* 6/8 layout-v2: 标题 + 副标 移到外层 Row, 这里只剩 3 button + inline panel. */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button
           onClick={() => void onResetClick()}
@@ -387,12 +365,12 @@ function SelfServeButtons() {
           导出我的所有数据
         </button>
         <button
-          onClick={() => void onLogClick()}
+          onClick={onLogClick}
           disabled={busy}
           style={btnStyle("normal")}
-          title="审计本机跟 catfish 中央服务交换的每个 HTTP 请求"
+          title="跳转到下面的'数据外发记录'卡 (filter / paginate / 导出 CSV)"
         >
-          {busy && mode.kind === "idle" ? "查询中…" : "我的数据外发记录"}
+          ↓ 我的数据外发记录
         </button>
       </div>
 
@@ -523,113 +501,59 @@ function SelfServeButtons() {
         </div>
       )}
 
-      {/* inline panel — outbound log 表 */}
-      {mode.kind === "log" && (
-        <div
-          style={{
-            marginTop: 10,
-            padding: 12,
-            border: "1px solid var(--catfish-border)",
-            borderRadius: 4,
-            background: "var(--catfish-bg)",
-            fontSize: 12,
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "baseline",
-              marginBottom: 8,
-            }}
-          >
-            <span style={{ fontWeight: 600 }}>
-              📊 数据外发记录 (近 {mode.result.entries.length} / 共 {mode.result.total})
-            </span>
-            <button onClick={() => setMode({ kind: "idle" })} style={btnStyle("normal")}>
-              收起
-            </button>
-          </div>
-          <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginBottom: 8 }}>
-            累计上行 {(mode.result.bytesUploadedTotal / 1024).toFixed(1)} KB / 下行{" "}
-            {(mode.result.bytesDownloadedTotal / 1024).toFixed(1)} KB.
-            <br />
-            sqlite3 ~/.catfish/outbound_log.db 也可看原始数据 (绕过此 UI, 物理可证).
-          </div>
-          <div
-            style={{
-              maxHeight: 280,
-              overflow: "auto",
-              border: "1px solid var(--catfish-border)",
-              borderRadius: 4,
-              fontFamily: "monospace",
-              fontSize: 11,
-            }}
-          >
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ background: "var(--catfish-bg-elevated)" }}>
-                  <th style={thStyle}>时间</th>
-                  <th style={thStyle}>方法</th>
-                  <th style={thStyle}>URL</th>
-                  <th style={thStyle}>类</th>
-                  <th style={thStyle}>状态</th>
-                  <th style={{ ...thStyle, textAlign: "right" }}>上↑</th>
-                  <th style={{ ...thStyle, textAlign: "right" }}>下↓</th>
-                </tr>
-              </thead>
-              <tbody>
-                {mode.result.entries.map((e) => (
-                  <tr key={e.id} style={{ borderTop: "1px solid var(--catfish-border)" }}>
-                    <td style={tdStyle}>{e.tsRequest.slice(11, 19)}</td>
-                    <td style={tdStyle}>{e.method}</td>
-                    <td
-                      style={{
-                        ...tdStyle,
-                        maxWidth: 280,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                      title={e.url}
-                    >
-                      {e.url.replace(/^https?:\/\/[^/]+/, "")}
-                    </td>
-                    <td style={tdStyle}>{e.category ?? "-"}</td>
-                    <td style={tdStyle}>{e.status ?? (e.error ? "ERR" : "?")}</td>
-                    <td style={{ ...tdStyle, textAlign: "right" }}>{e.requestBytes}</td>
-                    <td style={{ ...tdStyle, textAlign: "right" }}>{e.responseBytes}</td>
-                  </tr>
-                ))}
-                {mode.result.entries.length === 0 && (
-                  <tr>
-                    <td colSpan={7} style={{ ...tdStyle, color: "var(--catfish-text-muted)" }}>
-                      还没有 outbound 请求记录 — 启动 catfish 后会自动累积.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-    </section>
+      {/* 注: outbound log table 已迁到独立 OutboundLogCard (filter/paginate/CSV) */}
+    </div>
   );
 }
 
-const thStyle: React.CSSProperties = {
-  padding: "4px 6px",
-  textAlign: "left",
-  fontWeight: 600,
-  fontSize: 11,
-  color: "var(--catfish-text-muted)",
-};
-
-const tdStyle: React.CSSProperties = {
-  padding: "3px 6px",
-  fontSize: 11,
-  color: "var(--catfish-text)",
-};
+/** 6/8 layout-v2 (鸿波 6/8): macOS Settings App 风格 row.
+ *
+ * 左列固定 ~180px (label + subtitle), 右列流式 (实际内容). 用于隐私 / 服务器
+ * 存储 / 自助工具 等 row. 让长卡的纵向高度压缩 + 视觉分组更清晰.
+ *
+ * 比单纯堆 h4 + content 短约 30%, 因为左右并排不重复占行.
+ *
+ * - title: section 标题 (e.g. "🟢 本机存储")
+ * - subtitle: 副标 (1 行内, e.g. "只在你电脑上, 不上传"), 帮员工 0.5s 理解 row 主旨
+ * - last: 最后一 row 不画底分割线
+ * - children: 右列内容 (list / progress / button group / ...)
+ */
+function Row({
+  title,
+  subtitle,
+  last,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  last?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "180px 1fr",
+        gap: "var(--space-4)",
+        padding: "var(--space-3) 0",
+        borderTop: "1px solid var(--catfish-border)",
+        borderBottom: last ? "none" : undefined,
+      }}
+    >
+      <div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "var(--catfish-text)" }}>
+          {title}
+        </div>
+        {subtitle && (
+          <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 4 }}>
+            {subtitle}
+          </div>
+        )}
+      </div>
+      <div style={{ minWidth: 0 /* 防 grid blowout */ }}>{children}</div>
+    </div>
+  );
+}
 
 function btnStyle(kind: "danger" | "primary" | "normal"): React.CSSProperties {
   const base: React.CSSProperties = {

@@ -250,7 +250,9 @@ fn simple_hash(s: &str) -> u64 {
 fn query_blocking(
     since: Option<String>,
     category_filter: Option<String>,
+    url_filter: Option<String>,
     limit: u32,
+    offset: u32,
 ) -> Result<QueryResult, String> {
     let conn = open_db()?;
 
@@ -266,6 +268,11 @@ fn query_blocking(
         where_parts.push("category = ?".into());
         params_vec.push(c.into());
     }
+    if let Some(u) = url_filter {
+        let pat = if u.contains('%') { u } else { format!("%{u}%") };
+        where_parts.push("url LIKE ?".into());
+        params_vec.push(pat.into());
+    }
 
     let where_clause = if where_parts.is_empty() {
         String::new()
@@ -278,10 +285,11 @@ fn query_blocking(
                 response_bytes, status, request_payload_preview, request_payload_path,
                 response_summary, error, category
          FROM outbound_log {where_clause}
-         ORDER BY ts_request DESC LIMIT ?"
+         ORDER BY ts_request DESC LIMIT ? OFFSET ?"
     );
     let mut all_params = params_vec.clone();
     all_params.push((limit as i64).into());
+    all_params.push((offset as i64).into());
 
     let mut stmt = conn.prepare(&sql).map_err(|e| format!("prepare query: {e}"))?;
     let rows = stmt
@@ -313,12 +321,16 @@ fn query_blocking(
         entries.push(r.map_err(|e| format!("row: {e}"))?);
     }
 
-    // totals (agg)
+    // totals: 跟 query filter 一致 (filter 后的 count + 上下行) — 让"共 N 条"
+    // 跟 paginate 总数一致, 不然分页器算页数会跟"全库 total" 错位.
+    let count_sql = format!(
+        "SELECT COUNT(*), COALESCE(SUM(request_bytes), 0), COALESCE(SUM(response_bytes), 0)
+         FROM outbound_log {where_clause}"
+    );
     let (total, bytes_up, bytes_down): (u64, u64, u64) = conn
         .query_row(
-            "SELECT COUNT(*), COALESCE(SUM(request_bytes), 0), COALESCE(SUM(response_bytes), 0)
-             FROM outbound_log",
-            [],
+            &count_sql,
+            rusqlite::params_from_iter(params_vec.clone()),
             |row| {
                 Ok((
                     row.get::<_, i64>(0)? as u64,
@@ -335,6 +347,100 @@ fn query_blocking(
         bytes_uploaded_total: bytes_up,
         bytes_downloaded_total: bytes_down,
     })
+}
+
+/// 把整个 outbound_log 表 (按当前 filter 限定) 导出 CSV 到 output_path.
+/// 列: id, ts_request, ts_response, method, url, request_bytes, response_bytes,
+///   status, category, response_summary, error.
+/// payload preview / payload_path 不入 CSV (隐私 + 大). 想看 payload 用 sqlite3.
+fn export_csv_blocking(
+    output_path: String,
+    since: Option<String>,
+    category_filter: Option<String>,
+    url_filter: Option<String>,
+) -> Result<u64, String> {
+    let conn = open_db()?;
+
+    let mut where_parts: Vec<String> = vec![];
+    let mut params_vec: Vec<rusqlite::types::Value> = vec![];
+    if let Some(s) = since {
+        where_parts.push("ts_request >= ?".into());
+        params_vec.push(s.into());
+    }
+    if let Some(c) = category_filter {
+        where_parts.push("category = ?".into());
+        params_vec.push(c.into());
+    }
+    if let Some(u) = url_filter {
+        let pat = if u.contains('%') { u } else { format!("%{u}%") };
+        where_parts.push("url LIKE ?".into());
+        params_vec.push(pat.into());
+    }
+    let where_clause = if where_parts.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", where_parts.join(" AND "))
+    };
+
+    let sql = format!(
+        "SELECT id, ts_request, ts_response, method, url, request_bytes,
+                response_bytes, status, category, response_summary, error
+         FROM outbound_log {where_clause}
+         ORDER BY ts_request DESC"
+    );
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| format!("prepare csv: {e}"))?;
+    let rows = stmt
+        .query_map(
+            rusqlite::params_from_iter(params_vec),
+            |row| -> rusqlite::Result<Vec<String>> {
+                Ok(vec![
+                    row.get::<_, i64>(0)?.to_string(),
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?.to_string(),
+                    row.get::<_, i64>(6)?.to_string(),
+                    row.get::<_, Option<i64>>(7)?
+                        .map(|s| s.to_string())
+                        .unwrap_or_default(),
+                    row.get::<_, Option<String>>(8)?.unwrap_or_default(),
+                    row.get::<_, Option<String>>(9)?.unwrap_or_default(),
+                    row.get::<_, Option<String>>(10)?.unwrap_or_default(),
+                ])
+            },
+        )
+        .map_err(|e| format!("csv query: {e}"))?;
+
+    // 写 CSV — 不依赖 csv crate, RFC 4180 简实现 ("" escape, 含逗号/引号/换行就裹引号)
+    let header = "id,ts_request,ts_response,method,url,request_bytes,response_bytes,status,category,response_summary,error\n";
+    let mut buf = String::with_capacity(4096);
+    buf.push_str(header);
+    let mut count: u64 = 0;
+    for r in rows {
+        let cells = r.map_err(|e| format!("csv row: {e}"))?;
+        for (i, cell) in cells.iter().enumerate() {
+            if i > 0 {
+                buf.push(',');
+            }
+            buf.push_str(&csv_quote(cell));
+        }
+        buf.push('\n');
+        count += 1;
+    }
+
+    std::fs::write(&output_path, &buf).map_err(|e| format!("写 csv: {e}"))?;
+    Ok(count)
+}
+
+fn csv_quote(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
+        let escaped = s.replace('"', "\"\"");
+        format!("\"{escaped}\"")
+    } else {
+        s.to_string()
+    }
 }
 
 fn gc_blocking() -> Result<u64, String> {
@@ -375,11 +481,35 @@ pub async fn transparent_log_record(req: RecordReq) -> Result<i64, String> {
 pub async fn transparent_log_query(
     since: Option<String>,
     category: Option<String>,
+    url_filter: Option<String>,
     limit: Option<u32>,
+    offset: Option<u32>,
 ) -> Result<QueryResult, String> {
-    tokio::task::spawn_blocking(move || query_blocking(since, category, limit.unwrap_or(100)))
-        .await
-        .map_err(|e| format!("内部错误: {e}"))?
+    tokio::task::spawn_blocking(move || {
+        query_blocking(
+            since,
+            category,
+            url_filter,
+            limit.unwrap_or(100),
+            offset.unwrap_or(0),
+        )
+    })
+    .await
+    .map_err(|e| format!("内部错误: {e}"))?
+}
+
+#[tauri::command]
+pub async fn transparent_log_export_csv(
+    output_path: String,
+    since: Option<String>,
+    category: Option<String>,
+    url_filter: Option<String>,
+) -> Result<u64, String> {
+    tokio::task::spawn_blocking(move || {
+        export_csv_blocking(output_path, since, category, url_filter)
+    })
+    .await
+    .map_err(|e| format!("内部错误: {e}"))?
 }
 
 #[tauri::command]

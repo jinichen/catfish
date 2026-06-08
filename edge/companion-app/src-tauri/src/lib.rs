@@ -366,6 +366,7 @@ pub fn run() {
             // 6/8 BL-EMPLOYEE-SELF-SERVE A4: 数据外发日志 (员工自审 catfish 中央交换)
             commands::transparent_log::transparent_log_record,
             commands::transparent_log::transparent_log_query,
+            commands::transparent_log::transparent_log_export_csv,
             commands::transparent_log::transparent_log_gc,
             // self-evolution: 鲶鱼今天学了什么
             commands::learning::learning_today_stats,

@@ -110,6 +110,10 @@ import PrivacyCard from "./PrivacyCard";
 // 跟隐私同 section — IM 平台用户 ↔ 真员工 隔离也是隐私红线 (防 100 个 WeChat
 // 用户记忆串到一个虚拟员工身上).
 import WeChatBindingCard from "./WeChatBindingCard";
+// 6/8 BL-EMPLOYEE-SELF-SERVE A4 Phase 2: 数据外发记录独立卡 (filter / paginate /
+// 导出 CSV). 跟 PrivacyCard 同 section, 因为它是"员工自查中央实际收到什么"的核心
+// 落地, 是公理 2 (数据零出端) 的**可证明 enforcement** 层.
+import OutboundLogCard from "./OutboundLogCard";
 
 export default function DashboardTab() {
   // BL-ARCH2 (5/10): role 不再决定 Dashboard 卡片, manager/admin 也走 web 看管理.
@@ -175,9 +179,13 @@ export default function DashboardTab() {
       <CollapsibleSection
         id="privacy"
         title="🔒 隐私 / 本机数据"
-        count={2}
+        count={3}
       >
         <PrivacyCard />
+        {/* 6/8 BL-EMPLOYEE-SELF-SERVE A4 Phase 2: 跟 PrivacyCard 紧挨, PrivacyCard
+            的"↓ 我的数据外发记录"按钮 scrollIntoView 来这. 卡内 filter / paginate /
+            导出 CSV — manifesto 公理 2 的物理可证明实施. */}
+        <OutboundLogCard />
         {/* BL-WECHAT-CATFISH-BIND v1 (5/26 鸿波): IM 平台用户 ↔ 真员工 email 绑定状态.
             放隐私 section: 绑错 = 不同员工记忆串话 = 跟"本机数据归属"同级别隐私问题. */}
         <WeChatBindingCard />

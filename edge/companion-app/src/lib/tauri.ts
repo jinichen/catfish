@@ -472,12 +472,40 @@ export interface TransparentLogQueryResult {
 export const transparentLogRecord = (req: TransparentLogRecord) =>
   rawInvoke<number>("transparent_log_record", { req });
 
-/** A4: 查询 log (Dashboard outbound log card 用). */
+/** A4: 查询 log (Dashboard outbound log card 用).
+ *
+ * 6/8 Phase 2: 加 urlFilter (SQL LIKE) + offset 支持分页. 后端 query_blocking
+ * 跟 filter 一起算 total / bytes_uploaded_total / bytes_downloaded_total —
+ * 分页器算页数跟 stat 一致.
+ */
 export const transparentLogQuery = (
   since?: string,
   category?: string,
+  urlFilter?: string,
   limit?: number,
-) => rawInvoke<TransparentLogQueryResult>("transparent_log_query", { since, category, limit });
+  offset?: number,
+) =>
+  rawInvoke<TransparentLogQueryResult>("transparent_log_query", {
+    since,
+    category,
+    urlFilter,
+    limit,
+    offset,
+  });
+
+/** A4: 导出当前 filter 的 log 到 CSV. 返写入行数. */
+export const transparentLogExportCsv = (
+  outputPath: string,
+  since?: string,
+  category?: string,
+  urlFilter?: string,
+) =>
+  rawInvoke<number>("transparent_log_export_csv", {
+    outputPath,
+    since,
+    category,
+    urlFilter,
+  });
 
 /** A4: GC 过期 (9 天前). 启动时跑一次. */
 export const transparentLogGc = () => rawInvoke<number>("transparent_log_gc");
