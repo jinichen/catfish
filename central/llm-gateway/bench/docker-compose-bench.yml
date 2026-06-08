@@ -1,0 +1,101 @@
+# BL-F10 bench stack: gateway + mock_upstream + PG.
+#
+# 怎么跑:
+#   cd central/llm-gateway
+#   docker compose -f bench/docker-compose-bench.yml up -d
+#   # 等 30s 让 gateway alembic upgrade head + healthcheck 转绿
+#   bash bench/run.sh 100   # 跑 100 用户 scenario
+#   docker compose -f bench/docker-compose-bench.yml down -v
+#
+# 跟生产 docker-compose.yml 区别:
+# - 加 PG (生产是连外部 PG, bench 内嵌 postgres:16-alpine)
+# - 加 mock_upstream (生产指真 LLM)
+# - gateway 用 models.bench.yaml (mock model 替代真 LLM)
+# - PORT 8999 跟 prod 一致 (locust 配置不变)
+
+services:
+  pg:
+    # BL-F10 网络: 默认 docker.io 国内访问不通, 加 ${DOCKER_REGISTRY:-} 让用户
+    # 切镜像源. 也支持环境变量 override.
+    # 跑时 export DOCKER_REGISTRY=docker.m.daocloud.io/  (注意尾斜杠)
+    image: ${DOCKER_REGISTRY:-}postgres:16-alpine
+    container_name: catfish-bench-pg
+    environment:
+      POSTGRES_USER: catfish
+      POSTGRES_PASSWORD: bench
+      POSTGRES_DB: catfish_bench
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "catfish", "-d", "catfish_bench"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    tmpfs:
+      # bench 用 tmpfs 加速, 跑完即丢 (不要持久, 防 quota 累积污染下次)
+      - /var/lib/postgresql/data
+
+  mock_upstream:
+    build:
+      context: ..
+      dockerfile: bench/Dockerfile.mock
+      args:
+        DOCKER_REGISTRY: ${DOCKER_REGISTRY:-}
+    container_name: catfish-bench-mock-upstream
+    environment:
+      MOCK_LATENCY_PER_TOKEN_MS_MIN: ${MOCK_LATENCY_PER_TOKEN_MS_MIN:-30}
+      MOCK_LATENCY_PER_TOKEN_MS_MAX: ${MOCK_LATENCY_PER_TOKEN_MS_MAX:-80}
+      MOCK_TOKENS_PER_RESPONSE: ${MOCK_TOKENS_PER_RESPONSE:-50}
+      MOCK_FAIL_RATE: ${MOCK_FAIL_RATE:-0.0}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9999/v1/models', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  gateway:
+    build:
+      # bench 专属 Dockerfile — 用清华 apt/pip mirror 绕 Clash TUN 拦
+      # deb.debian.org. 不动 prod ../Dockerfile.
+      context: ..
+      dockerfile: bench/Dockerfile.gateway
+    container_name: catfish-bench-gateway
+    depends_on:
+      pg:
+        condition: service_healthy
+      mock_upstream:
+        condition: service_healthy
+    ports:
+      - "${PORT:-8999}:8999"
+    environment:
+      CATFISH_ENV: dev  # bench 走 dev (让 dev_token provider 加载 dev_users.yaml)
+      CATFISH_CONFIG: /app/bench/models.bench.yaml
+      CATFISH_DEV_USERS_PATH: /app/bench/dev_users.bench.yaml  # 5 个 bench user
+      CATFISH_DEV_TOKEN: bench-fallback-token  # 兜底, locust 不会用这个
+      CATFISH_DB_URL: postgresql://catfish:bench@pg:5432/catfish_bench
+      MOCK_UPSTREAM_URL: http://mock_upstream:9999/v1
+      MOCK_API_KEY: bench-no-validation
+      LOG_LEVEL: WARNING  # 降噪, bench 跑 1000 RPS 时 INFO 日志会把 disk 撑爆
+      HOST: 0.0.0.0
+      PORT: 8999
+      # uvicorn worker 数 — 默认 1, 测多 worker 改 4 重跑对比
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-1}
+    volumes:
+      # 6/8 鸿波修: 之前写 `./bench:/app/bench:ro` 撞 docker compose v2
+      # "volume 路径相对 compose file 目录" 默认行为 — `./bench` 在
+      # `bench/docker-compose-bench.yml` context 里指 `bench/bench/`, host 没此
+      # 目录, docker 默认建空目录 mount → /app/bench/dev_users.bench.yaml
+      # 看不到, dev_token provider 加载空 cfg, 5 个 bench-token-* 全 verify None →
+      # 100% 401 invalid token (locust 跑 1000 RPS 全废). 改 `..` 跳到
+      # llm-gateway/ 再下 bench, 走真路径.
+      - ../bench:/app/bench:ro
+      - ../config:/app/config:ro
+    # 资源限制 — 模拟客户机房 4 vCPU / 4GB (跟 BACKLOG.md Phase 2 部署假设一致)
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 4G
+
+  # 6/8 BL-F10 locust 走 host 不进 docker:
+  # daocloud 国内镜像 403 拒 locustio/* namespace 拉不到. run.sh 改成
+  # `pip install locust` 在 host venv 跑, host 网络通 gateway 的 ports 暴露
+  # (8999:8999) 即可. 更快 + 不依赖 docker hub locustio image.

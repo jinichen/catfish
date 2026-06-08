@@ -1,0 +1,45 @@
+# BL-F10 bench 专用 dev_users — 不污染 prod config/dev_users.yaml.
+#
+# 5 个虚拟员工 (1 admin + 4 employee 跨 2 部门), 让 bench 既能测:
+#   - 同 user 高并发 quota PG race (100 locust users / 5 = 20 并发/user)
+#   - per-department quota 聚合 (BL-D9 RBAC)
+#
+# 跑:
+#   docker-compose-bench.yml 把 CATFISH_DEV_USERS_PATH 指这文件
+#   locustfile.py 随机选 token, gateway 按 token → user 真分账
+
+users:
+  - email: bench-admin@catfish.bench
+    token: bench-token-admin
+    name: "Bench Admin"
+    department: bench-admin
+    role: admin
+    managed_departments: []
+
+  - email: bench-alice@catfish.bench
+    token: bench-token-alice
+    name: "Alice (eng)"
+    department: bench-eng
+    role: employee
+    managed_departments: []
+
+  - email: bench-bob@catfish.bench
+    token: bench-token-bob
+    name: "Bob (eng)"
+    department: bench-eng
+    role: employee
+    managed_departments: []
+
+  - email: bench-carol@catfish.bench
+    token: bench-token-carol
+    name: "Carol (sales)"
+    department: bench-sales
+    role: employee
+    managed_departments: []
+
+  - email: bench-dave@catfish.bench
+    token: bench-token-dave
+    name: "Dave (sales)"
+    department: bench-sales
+    role: employee
+    managed_departments: []

@@ -1,0 +1,8 @@
+# BL-F10 bench 输出 — 每次 run.sh 重生, 不入库
+# 源文件 (Dockerfile.* / *.py / *.yml / *.yaml / *.sh / README.md / .gitignore) 都入库.
+csv-*.csv
+report-*.html
+docker-stats-*.txt
+gateway-log-*.txt
+pg-quota-*.txt
+.stats.pid

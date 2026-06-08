@@ -1,0 +1,35 @@
+# BL-F10 性能基准用 models 配置. 跟 prod models.yaml 隔离, 不污染.
+#
+# 唯一 model: catfish-mock-bench → 指向 bench/mock_upstream.py (本机 :9999).
+# 上游模拟 sonnet/groq 平均延迟 (50 token × 30-80ms = 1.5-4s 总).
+#
+# 跑:
+#   CATFISH_CONFIG=bench/models.bench.yaml uvicorn catfish_gateway.app:app ...
+
+version: 1
+
+models:
+  - name: catfish-mock-bench
+    tier: public
+    display_name: "Mock Upstream (bench only)"
+    mode: chat
+    default: true
+
+    upstream:
+      # litellm OpenAI 兼容协议 — provider 前缀 openai/, 让 litellm 走 OpenAI client
+      model: openai/mock-bench
+      # 本机 mock_upstream 端口. docker-compose-bench.yml 里改成 service name
+      api_base: ${MOCK_UPSTREAM_URL:-http://localhost:9999/v1}
+      # mock 不验, 但 litellm 要 key 才能初始化 client
+      api_key_env: MOCK_API_KEY
+      timeout: 60
+
+    context_window: 32000
+    supports_tool_use: false  # mock 暂不模拟 tool_call (测 gateway 主链, 不测 tool)
+    supports_streaming: true
+    supports_vision: false
+    recommended_for: [bench, load_test]
+    cost_tier: free
+
+    # 故意不设 fallback — 单 model 测主链, 不测 fallback 在并发下行为.
+    # 测 fallback 用另一个 scenario (MOCK_FAIL_RATE=0.1 + 加二号 mock model).
