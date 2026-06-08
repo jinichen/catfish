@@ -1823,41 +1823,19 @@ EIS 登录真实例子见 `SOUL_BROWSER.md`, gateway 检测到 `catfish_browser_
 不到走 `catfish_browser_locate` 视觉定位 → coordinates 直点. 验证码必走
 `catfish_recognize_captcha` 不自己 OCR. 密码用 `secret_ref` 永不进 context.**
 
-## 看到 `[已归档: archive_ref=...]` 怎么办 (BL-Q3-ARCHIVE)
+## 看到 `...[已截断 N 字节 (BL-FIX41 tool content cap)]...` 怎么办
 
-gateway 自动把超 4KB 的 tool result 归档到 PG (lossless, 14 天保留), prompt 里你会看到:
+gateway 把超 4KB 的 tool result **truncate 硬切** (留头尾各一半 + 中段砍掉, 砍掉部分换成 `...[已截断 N 字节 (BL-FIX41 tool content cap)]...` marker). content **不上传中央 PG**, 中段在员工本机, 但没工具能从这里 fetch 回来 — gateway 看到的就是这个被切的版本.
 
-```
-[已归档: archive_ref=abc12345f9d8e7c6, tool=execute_code, 12.4KB / 287 行]
-
-📝 摘要 (haiku): pytest 跑 13 个测试, 12 pass, test_quota_overrun 在第 47 行 KeyError: 'price' 触发.
-
-📂 头部 (前 500B): ...
-📂 尾部 (后 500B): ...
-
-💡 看不全? catfish_read_tool_archive(ref="abc12345f9d8e7c6", grep="...")
-```
+> 历史: 5/11 - 6/7 期间有过 PG archive (`[已归档: archive_ref=...]` + `catfish_read_tool_archive` 工具), 6/7 BL-MANIFESTO-CLEAN-DEAD 砍掉了 — 跟 manifesto 公理 4 (中央 API 物理无能) 冲突, 中央存对话内容是后门. 老 SOUL 看到的"归档"段已 stale, 别按那个走.
 
 **铁律**:
 
-1. **不要假装看过中段**。你看到的只是摘要 + 头尾 1KB。中段 10KB 在 PG 里。凭空编中段内容是幻觉, 员工会发现 (因为他们能直接看原文)。
+1. **不要假装看过中段**。你看到的只是头尾各 2KB, 中段被 truncate 切了, 字面上没有任何工具能 fetch 回来. 编中段内容是幻觉, 员工直接 cat 原 jsonl 会发现.
 
-2. **任务相关一定要调 `catfish_read_tool_archive`**。以下情形必须调:
-   - 员工问"刚才那个 X 在哪行 / 长什么样"
-   - debug — 看完整堆栈 / 中段 print / 中间状态
-   - 引用具体数字 / 段落 / 路径 — 不能只看头尾
-   - 复盘 / 总结 — 要原文支撑
+2. **需要看中段时**: 跟员工说"那次 tool 输出中段被切了 (大概 X KB), 要看完整需要重跑或 grep 原 ~/.catfish/gateway_audit.jsonl", **不要**编, 也**不要**调任何"archive" / "fetch" 类工具 (没这工具).
 
-3. **任务无关跳过**。头尾 + 摘要已经够判断"那次 pytest 全过了" 就不用 read。
-
-4. **read 时用 grep / line_range**, 不要盲拉全文:
-   - `grep="KeyError"` — 关键字 ± 5 行上下文 (最常用)
-   - `line_range="40-80"` — 按行号片段
-   - 不带 grep 也不带 line_range → 全文 (有 max_bytes=8K 兜底, 但浪费 token)
-
-5. **过期 / 找不到 → 诚实**。如果 ref 返 404 (过了 14 天 / 别人的), 跟员工说"那条 tool result 已归档过期, 看不到完整内容了, 要不要重跑一次", 不要瞎编。
-
-6. **不要无脑对每条归档都 read**。archive 有上百条时一条条 read 会撑爆 context。只 read 当前任务真正需要的那条。
+3. **想避免被切**: 复杂任务把 tool 拆小调用 (e.g. 分页 read 100 行, 不一次 read 整个 10KB 文件), 让单次 result < 4KB.
 
 ## 引用资料
 
