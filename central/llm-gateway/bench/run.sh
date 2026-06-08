@@ -37,9 +37,18 @@ LOCUST_VERSION="$(locust --version 2>&1 | head -1)"
 echo "    locust: $LOCUST_VERSION"
 
 # 1. 启 stack (不含 locust)
+# 6/9 鸿波修: 加 --build — 前次撞 pyproject.toml 改了 (python-multipart 漏依赖)
+# 但 docker image cache 还是旧的, 重跑不生效. --build 强制按当前 Dockerfile +
+# pyproject 重 build, 改源/依赖立刻可见. 已 build cache 命中还是快, 没成本.
+# Set BENCH_NO_BUILD=1 跳过 build (调试 docker compose 自身用).
 echo ""
 echo "==> docker compose up..."
-docker compose -f bench/docker-compose-bench.yml up -d pg mock_upstream gateway
+BUILD_FLAG="--build"
+if [ "${BENCH_NO_BUILD:-0}" = "1" ]; then
+    BUILD_FLAG=""
+    echo "    BENCH_NO_BUILD=1, 跳过 build (用现 cached image)"
+fi
+docker compose -f bench/docker-compose-bench.yml up -d $BUILD_FLAG pg mock_upstream gateway
 
 # 2. 等 gateway healthcheck (host 上 curl, docker ports 暴露 :8999)
 echo ""
