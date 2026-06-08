@@ -219,12 +219,17 @@ def main() -> None:
 
     host = os.environ.get("CATFISH_IDENTITY_HOST", DEFAULT_HOST)
     port = int(os.environ.get("CATFISH_IDENTITY_PORT", str(DEFAULT_PORT)))
+    # 6/9 鸿波修: 跟 gateway 同 bug — 之前 uvicorn.run 没传 workers, UVICORN_WORKERS
+    # env 完全被忽略, 永远单 worker. BL-F10 1000 user bench 暴露. identity 负载
+    # 比 gateway 轻 (只 JWKS / token verify), 默认 2 worker 就够, 4+ 看部署规模.
+    workers = int(os.environ.get("UVICORN_WORKERS", "2"))
 
     uvicorn.run(
         "catfish_identity.app:create_app",
         factory=True,
         host=host,
         port=port,
+        workers=workers,
         log_level="info",
     )
 

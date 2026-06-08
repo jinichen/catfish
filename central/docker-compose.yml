@@ -50,6 +50,9 @@ services:
       CATFISH_DB_URL: postgresql://${PG_USER:-catfish}:${PG_PASSWORD}@postgres:5432/${PG_DB:-catfish}
       CATFISH_ENV: prod
       CATFISH_IDENTITY_PORT: 8998
+      # 6/9 BL-F10: uvicorn 多 worker (单 worker GIL 卡死 1000 user). identity
+      # 负载比 gateway 轻 (只 JWKS / token verify), 默认 2 worker.
+      UVICORN_WORKERS: ${IDENTITY_WORKERS:-2}
       # OIDC 配置 (跟 gateway 共享)
       CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://identity:8998}
     ports:
@@ -79,22 +82,35 @@ services:
       CATFISH_ENV: prod
       PORT: 8999
       CATFISH_CONFIG: /app/config/models.yaml
+      # 6/9 BL-F10 真实测: 单 worker GIL 卡死, 1000 user P99=34s; 4 worker P99=15s
+      # (2.2× 吞吐, 56% latency 降). 默认 4, 4 vCPU 客户机房刚好用满. 8 vCPU 改 8.
+      UVICORN_WORKERS: ${GATEWAY_WORKERS:-4}
       # OIDC: 验真 SSO token, 不走 dev_token
       CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://identity:8998}
       CATFISH_OIDC_AUDIENCE: ${CATFISH_OIDC_AUDIENCE:-catfish-gateway}
+      # facts_router 文件落地 (BL-Q3-FACT-PG-MIGRATE 之前的临时方案)
+      CATFISH_FACTS_DIR: ${CATFISH_FACTS_DIR:-/home/catfish/.catfish/facts}
       # API keys (公网 LLM, 私网 LLM 用 base_url)
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      INTERNAL_LLM_KEY: ${INTERNAL_LLM_KEY:-}
     ports:
       - "8999:8999"  # gateway 对员工 Companion 暴露, 反代 nginx 处理 SSL
     volumes:
       - ./llm-gateway/config:/app/config:ro
-      - gateway_data:/home/catfish/.catfish  # quota.db (sqlite fallback) / audit jsonl
+      - gateway_data:/home/catfish/.catfish  # quota.db (sqlite fallback) / audit jsonl / facts
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8999/healthz"]
       interval: 30s
       timeout: 3s
       retries: 3
+    # 6/9 BL-F10: 4 worker × Python = 内存 4×. 1024MB 实测够 (峰值 1014). 客户
+    # 机房按 4 vCPU / 2-4GB 规划. 超过 1000 user 横向扩多机, 不是单机加 worker.
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 4G
 
   skills-hub:
     build:
