@@ -3351,8 +3351,13 @@ def run():
             "仅服务器部署用. 员工电脑应改回 127.0.0.1.",
             flush=True,
         )
+    # 6/9 鸿波修: 之前 uvicorn.run 没传 workers, UVICORN_WORKERS env 完全被忽略,
+    # 永远跑 1 个 worker. BL-F10 bench 1000 user 时单 worker GIL 卡死 (P50 31s).
+    # 加 workers env 支持 — 默认 1 保持向后兼容, 部署文档建议 prod 用 4+ worker.
+    # 注意: uvicorn workers > 1 必须用 import string 调 app (不是 app 对象), 已是.
+    workers = int(os.environ.get("UVICORN_WORKERS", "1"))
     print(
-        f"[catfish] starting uvicorn on {host}:{port} "
+        f"[catfish] starting uvicorn on {host}:{port} workers={workers} "
         f"(HOST source={host_source}, PORT={port_str} source={port_source})",
         flush=True,
     )
@@ -3360,6 +3365,7 @@ def run():
         "catfish_gateway.app:app",
         host=host,
         port=port,
+        workers=workers,
         reload=False,
     )
 
