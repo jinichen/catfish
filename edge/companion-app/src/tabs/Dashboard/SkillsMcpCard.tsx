@@ -157,9 +157,30 @@ export default function SkillsMcpCard() {
     <div className="dashboard-skills">
       <div className="dashboard-skills__top">
         <div>
-          <h3 className="dashboard-skills__title">已装的 skill / MCP</h3>
+          {/* 6/8 BL-SKILL-CARD-DISAMBIG (鸿波): 跟 "🎬 我录的技能" 区分明示来源.
+              这是**装好的、可直接用**的 — 跟"我录的" 录制原料不是一回事. */}
+          <h3
+            className="dashboard-skills__title"
+            style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}
+          >
+            📦 已装技能库 (可直接用)
+            <span
+              style={{
+                fontSize: 10,
+                padding: "2px 6px",
+                background: "var(--catfish-bg)",
+                border: "1px solid var(--catfish-border)",
+                borderRadius: 4,
+                color: "var(--catfish-text-muted)",
+                fontFamily: "monospace",
+                fontWeight: 400,
+              }}
+            >
+              ~/.hermes/skills/
+            </span>
+          </h3>
           <div className="dashboard-skills__sub">
-            团队审定 + 内置 + marketplaces 装的 · 排错 / 查"我能用哪些"
+            团队审定 + 内置 + marketplaces 装的 · 鲶鱼说话时可调
           </div>
         </div>
         <div className="dashboard-skills__top-actions">

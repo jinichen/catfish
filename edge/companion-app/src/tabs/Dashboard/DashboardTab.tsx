@@ -203,35 +203,62 @@ export default function DashboardTab() {
         id="rel"
         title="🐟 鲶鱼对你的认识"
         count={4}
-        maxColumns={2}
       >
-        <RelationCard />
-        <HermesMemoryCard />  {/* BL-DASHBOARD-HERMES-MEMORY-CARD (5/16): hermes 真活 memory */}
-        {/* <MemoryHistoryCard /> — 5/16 砍 (BL-MEMORY-HISTORY-KILL) */}
-        <UserProfileCard />
-        <StyleFingerprintCard />
-        {/* <FeedbackSummaryCard /> — 5/16 砍 (BL-FEEDBACK-CARD-KILL) */}
+        {/* 6/8 BL-REL-SECTION-TABS (鸿波 6/8): 跟隐私 section 同 pattern, 4 卡
+            → 4 tabs. 空间利用率 +25%, 切换更清晰. default = 小鲶对你的印象
+            (4 卡里"看时间感 + 整体关系"最直观, 进 section 先看这个). */}
+        <SectionTabs
+          storageKey="rel"
+          defaultKey="impression"
+          tabs={[
+            { key: "impression", label: "📈 小鲶对你的印象", render: () => <RelationCard /> },
+            { key: "memory", label: "🧠 我的 hermes memory", render: () => <HermesMemoryCard /> },
+            { key: "profile", label: "👤 小鲶对你的画像", render: () => <UserProfileCard /> },
+            { key: "style", label: "✍️ 你的文书风格", render: () => <StyleFingerprintCard /> },
+          ]}
+        />
       </CollapsibleSection>
 
-      {/* 第四组: 服务 — gateway / quota / catalog / 我装的 skill+mcp / curator (默认收) */}
+      {/* 6/8 BL-SKILLS-SECTION-SPLIT (鸿波 6/8): 技能独立成一级 section.
+          原跟服务/配额混 (5 tabs), 现拆 — skill 是员工核心创作物 (manifesto 公理 1
+          员工主权落地), 应跟"服务/配额" 运维类区分. 默认开 (常看, 录完 → 共享 / 排错
+          看是不是装上了). 2 tab: 我录的 / 已装的 — 边界明示来源 (上一段
+          BL-SKILL-CARD-DISAMBIG 同步改了 2 卡 h3 + 来源 path badge). */}
+      <CollapsibleSection
+        id="skills"
+        title="🎬 技能"
+        count={2}
+      >
+        <SectionTabs
+          storageKey="skills"
+          defaultKey="my-skills"
+          tabs={[
+            { key: "my-skills", label: "🎬 我录的技能 (本机)", render: () => <MySkillsCard /> },
+            { key: "installed", label: "📦 已装技能库 (可直接用)", render: () => <SkillsMcpCard /> },
+          ]}
+        />
+      </CollapsibleSection>
+
+      {/* 第五组: 服务 / 配额 — 砍 my-skills/installed 2 tab 后留 3 tab.
+          gateway / quota / catalog 都是运维 / 配额类, 跟"技能 (员工创作)"
+          完全不同概念, 拆开. 默认收 (员工不常看, 排错才看). */}
       <CollapsibleSection
         id="services"
         title="⚙️ 服务 / 配额"
         defaultCollapsed
-        count={4}
+        count={3}
       >
-        <ServicesCard />
-        <QuotaCard />
-        <CatalogCard />
-        {/* 6/2 BL-SKILLS-CARD-SPLIT (鸿波 方案 C): "我录的 skill" 主卡上, "已装的" 次卡下.
-            主卡兑现 catfish "员工自助生成 + 共享" 卖点, 共享按钮占位 (skills-hub 周一接);
-            次卡保留作 power-user 排错 (catfish 仓库 8 + ~/.hermes/skills/ 96). */}
-        <MySkillsCard />
-        <SkillsMcpCard />
-        {/* <CuratorCard /> — 5/16 砍 (BL-CURATOR-CARD-KILL), 见 import 段注释 */}
-        {/* BL-SESSION-CLEANUP-KILL (5/16): SessionCleanupCard 已砍.
-            原因: 治标不治本 / 跟 Curator 重叠 / 客户 demo 负面信号.
-            未来: sidebar 加 FTS5 搜索框替代 (P2). */}
+        <SectionTabs
+          storageKey="services"
+          defaultKey="status"
+          tabs={[
+            { key: "status", label: "🌐 服务状态", render: () => <ServicesCard /> },
+            { key: "quota", label: "📊 我的配额", render: () => <QuotaCard /> },
+            { key: "catalog", label: "🧩 可用模型", render: () => <CatalogCard /> },
+          ]}
+        />
+        {/* <CuratorCard /> — 5/16 砍 (BL-CURATOR-CARD-KILL) */}
+        {/* BL-SESSION-CLEANUP-KILL (5/16): SessionCleanupCard 已砍. */}
       </CollapsibleSection>
 
       {/* 第五组 "📚 学习/改进" 5/16 整组砍 (BL-LEARN-SECTION-KILL):

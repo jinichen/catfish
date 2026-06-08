@@ -183,9 +183,23 @@ export default function MySkillsCard() {
           flexWrap: "wrap",
         }}
       >
-        <h3 style={{ margin: 0 }}>🎬 我录的 skill</h3>
+        <h3 style={{ margin: 0 }}>🎬 我录的技能 (本机)</h3>
+        {/* 6/8 BL-SKILL-CARD-DISAMBIG (鸿波): 边界 vs "📦 已装技能库" 卡明示来源. */}
+        <span
+          style={{
+            fontSize: 10,
+            padding: "2px 6px",
+            background: "var(--catfish-bg)",
+            border: "1px solid var(--catfish-border)",
+            borderRadius: 4,
+            color: "var(--catfish-text-muted)",
+            fontFamily: "monospace",
+          }}
+        >
+          ~/.catfish/skills/
+        </span>
         <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
-          RecMode 录屏 + LLM propose · 100% 本机 · 想共享自己点
+          RecMode 录屏 + LLM propose · 100% 本机 · 想共享自己点 📤
         </span>
         {hasAny && (
           <span
