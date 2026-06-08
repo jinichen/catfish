@@ -29,6 +29,14 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    volumes:
+      # 6/8 鸿波修: bench 撞 `relation "users" does not exist` —
+      # users 表归 identity-server 管, prod 共享 PG 下能查到, bench
+      # 只跑 gateway alembic 不会建. 用 postgres 官方 entrypoint 机制
+      # 容器 first start 自动跑 init SQL, 建 identity 那 3 张表 + seed
+      # 5 个 bench 员工 (跟 dev_users.bench.yaml 一致).
+      # 路径同前 fix: 相对 compose file dir = bench/, 用 ../bench 跳出.
+      - ../bench/init-identity-schema.sql:/docker-entrypoint-initdb.d/01-identity.sql:ro
     tmpfs:
       # bench 用 tmpfs 加速, 跑完即丢 (不要持久, 防 quota 累积污染下次)
       - /var/lib/postgresql/data

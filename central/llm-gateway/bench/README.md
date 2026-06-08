@@ -57,8 +57,25 @@ row lock. 这是 BL-F10 暴露 + 修的真 bug.
 - `locustfile.py` — Locust task class, 模拟员工 (60% chat / 20% quota / 15% audit / 5% advisory)
 - `models.bench.yaml` — 单 mock-bench model, 替 prod models.yaml
 - `Dockerfile.mock` — mock upstream 镜像
-- `docker-compose-bench.yml` — pg + mock_upstream + gateway + locust 一键起
+- `Dockerfile.gateway` — gateway 镜像 (清华 mirror, 绕 Clash)
+- `docker-compose-bench.yml` — pg + mock_upstream + gateway 一键起
+- `dev_users.bench.yaml` — 5 个 bench 员工 (gateway dev_token provider 加载)
+- `init-identity-schema.sql` — PG init script, 建 identity 表 + seed 5 user (见下)
 - `run.sh` — 跑 + 收报告 + down
+
+## identity 表 init (`init-identity-schema.sql`)
+
+users / users_audit / registry_agents 这三张表 **归 identity-server 管, 不归 gateway**.
+prod 部署下两边共享同一 PG, identity 先跑自己的 alembic 建好这些表, gateway 才查得到.
+bench 只跑 gateway alembic (不引 identity-server), 所以这些表必须 bench 自己建.
+
+机制: postgres 官方 docker entrypoint 在容器 first start 自动跑
+`/docker-entrypoint-initdb.d/*.sql`. 把 identity 的 schema (alembic
+`20260502_001_initial_users_registry.py` + `20260510_002_users_admin_fields.py`)
+inline 进来, 加 5 个 bench user seed.
+
+**同步**: 如果以后 identity-server 加 users 表字段, 这个文件要同步改 — 不然
+gateway 改了查询会撞 column 不存在.
 
 ## 跟 manifesto 一致
 
