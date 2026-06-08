@@ -50,9 +50,10 @@ services:
       CATFISH_DB_URL: postgresql://${PG_USER:-catfish}:${PG_PASSWORD}@postgres:5432/${PG_DB:-catfish}
       CATFISH_ENV: prod
       CATFISH_IDENTITY_PORT: 8998
-      # 6/9 BL-F10: uvicorn 多 worker (单 worker GIL 卡死 1000 user). identity
-      # 负载比 gateway 轻 (只 JWKS / token verify), 默认 2 worker.
-      UVICORN_WORKERS: ${IDENTITY_WORKERS:-2}
+      # 6/9 BL-F11 实测: identity uvicorn factory=True + workers>1 不兼容
+      # (port bind 竞态), 暂时强制 workers=1. 代码 src/catfish_identity/app.py:222
+      # 已 hard-code 1, 这个 env 当前没用, 留是为 TODO BL-F11.P2 重构后能直接用.
+      UVICORN_WORKERS: ${IDENTITY_WORKERS:-1}
       # OIDC 配置 (跟 gateway 共享)
       CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://identity:8998}
     ports:

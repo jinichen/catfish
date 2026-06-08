@@ -47,9 +47,11 @@ services:
       # bench 用自己的 clients.yaml / users.yaml (不用 prod config/)
       CATFISH_IDENTITY_CLIENTS_PATH: /app/bench/clients.bench.yaml
       CATFISH_IDENTITY_USERS_PATH: /app/bench/users.bench.yaml
-      # BL-F10 真根因 fix: uvicorn workers 必须传 (gateway 那次撞过). 默认 2.
-      # 重跑改 4: IDENTITY_WORKERS=4 bash bench/run.sh
-      UVICORN_WORKERS: ${IDENTITY_WORKERS:-2}
+      # BL-F11 实测 (6/9): uvicorn factory=True + workers>1 在 macOS docker 跑
+      # multiprocess 不兼容 (port bind 竞态). identity 代码已 hard-code workers=1
+      # (src/catfish_identity/app.py:222). 这 env 当前没用, 留 TODO BL-F11.P2
+      # 重构 RSA signer 到模块级单例后, 改回 import string 路径, 这 env 才生效.
+      UVICORN_WORKERS: ${IDENTITY_WORKERS:-1}
       LOG_LEVEL: WARNING  # 1000 RPS 时 INFO 撑爆 disk
     volumes:
       # 路径相对 compose file (bench/), ../bench 跳到 identity-server/bench

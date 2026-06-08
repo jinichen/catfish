@@ -1,7 +1,21 @@
 # BL-F11 identity-server 性能基准 (跟 BL-F10 gateway 同模板)
 
 > 验 identity-server 在 1000 并发下 POST /token client_credentials grant 撑不撑得住.
-> 真重点: bcrypt 12-round verify 是不是单 worker GIL 瓶颈, 多 worker 真有 scale.
+
+## ⚠️ 已知限制 (6/9 实测撞)
+
+**identity 暂时强制 workers=1**, 不接受 IDENTITY_WORKERS=N (N>1).
+
+真根因: `uvicorn.run(factory=True, workers=N>1)` 在 macOS docker desktop
+multiprocess 模式下, port bind 跟 SO_REUSEPORT 有竞态. 实测 1000 user 100%
+status 0 (TCP refused), CPU 185% 但 port 没 listen.
+
+短期: workers=1 跑. bcrypt 12 round 单 worker ~3-4 verify/s, 撑 prod 1000 employee
+够 (employee 每 1h 才 refresh token, 持续 ~0.28 verify/s, 远低于 3-4 上限).
+
+长期 (TODO BL-F11.P2): 重构 `create_app` 把 RSA signer + registry 移到模块级
+单例, 然后用 `catfish_identity.app:app` import string 替代 factory=True, multi-worker
+就稳了. 详情看 `src/catfish_identity/app.py:222` 注释.
 
 ## 快速跑
 

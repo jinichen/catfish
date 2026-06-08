@@ -219,17 +219,32 @@ def main() -> None:
 
     host = os.environ.get("CATFISH_IDENTITY_HOST", DEFAULT_HOST)
     port = int(os.environ.get("CATFISH_IDENTITY_PORT", str(DEFAULT_PORT)))
-    # 6/9 鸿波修: 跟 gateway 同 bug — 之前 uvicorn.run 没传 workers, UVICORN_WORKERS
-    # env 完全被忽略, 永远单 worker. BL-F10 1000 user bench 暴露. identity 负载
-    # 比 gateway 轻 (只 JWKS / token verify), 默认 2 worker 就够, 4+ 看部署规模.
-    workers = int(os.environ.get("UVICORN_WORKERS", "2"))
+    # 6/9 鸿波 BL-F11 真实测: uvicorn factory=True + workers>1 在 macOS docker
+    # 跑 multiprocess 模式下不可靠 (port bind 跟 SO_REUSEPORT 竞态, 1000 user 100%
+    # status 0). 跟 gateway 不一样, gateway uvicorn.run 用 import string 不走 factory.
+    #
+    # 短期方案: identity 强制 workers=1 (跟修 fix 前一样). bcrypt 12 round + JWT RSA
+    # sign 单 worker 极限 ~3-4 verify/s, 撑 prod 1000 employee 实测可以 (employee
+    # 每 1h 才 refresh 一次, 持续 ~0.28 verify/s).
+    #
+    # 长期方案 (TODO BL-F11.P2): 重构 create_app 把 RSA signer / registry 移到模块
+    # 级单例, 然后用 `catfish_identity.app:app` import string 替代 factory=True, 让
+    # uvicorn 多 worker 跑稳. 或者改用 gunicorn `--workers N` 跑 uvicorn worker.
+    requested_workers = int(os.environ.get("UVICORN_WORKERS", "1"))
+    if requested_workers > 1:
+        import warnings
+        warnings.warn(
+            f"UVICORN_WORKERS={requested_workers} 暂时无效 — identity factory pattern 跟 "
+            f"uvicorn workers>1 不兼容. 强制 workers=1. 详情看 src/catfish_identity/app.py:222.",
+            stacklevel=2,
+        )
 
     uvicorn.run(
         "catfish_identity.app:create_app",
         factory=True,
         host=host,
         port=port,
-        workers=workers,
+        workers=1,  # ← 强制 1, 看上面注释
         log_level="info",
     )
 
