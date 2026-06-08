@@ -224,8 +224,444 @@ export default function PrivacyCard() {
           </>
         )}
       </section>
+
+      {/* 6/8 BL-EMPLOYEE-SELF-SERVE A1+A2+A4: 员工自助工具入口. manifesto 公理 1
+          (员工主权) 产品落地 — IT 没远程触发能力, 全员工自己点 button. */}
+      <SelfServeButtons />
     </div>
   );
+}
+
+/** 6/8 BL-EMPLOYEE-SELF-SERVE UI v2 真根因 fix: macOS WKWebView 默认禁用
+ *  window.prompt() / window.alert() / window.confirm() (Apple 安全策略,
+ *  Tauri 1+ 都遵守), 静默返回 null/undefined — 看起来按钮"无效".
+ *
+ *  改 React state inline panel:
+ *  - 重置: 两段 inline 确认 (preview 展示 + 输入"我确认"+ 按钮)
+ *  - 导出: inline path input + button (不依赖 file picker)
+ *  - 外发记录: 展开 inline table (10 条) + inline 上下行总量, 没 modal
+ *
+ *  操作完, inline 显示状态 toast (5s 后自动消失或下次操作清除).
+ */
+type Mode =
+  | { kind: "idle" }
+  | {
+      kind: "reset-preview";
+      summary: import("../../lib/tauri").ResetSummary;
+      confirmStr: string;
+    }
+  | { kind: "export"; path: string }
+  | {
+      kind: "log";
+      result: import("../../lib/tauri").TransparentLogQueryResult;
+    };
+
+function SelfServeButtons() {
+  const [mode, setMode] = React.useState<Mode>({ kind: "idle" });
+  const [busy, setBusy] = React.useState(false);
+  const [toast, setToast] = React.useState<{ kind: "ok" | "err"; msg: string } | null>(null);
+
+  // toast 5s 自动消
+  React.useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 5000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  // 默认 export path (员工 home Desktop, 后端会自动 ~ → $HOME 展开 ... 实际不会, 这里用占位)
+  const defaultExportPath = React.useMemo(() => {
+    const date = new Date().toISOString().slice(0, 10);
+    return `/tmp/catfish-export-${date}.tar.gz`;
+  }, []);
+
+  const onResetClick = async () => {
+    setToast(null);
+    setBusy(true);
+    try {
+      const lib = await import("../../lib/tauri");
+      const summary = await lib.selfServePreviewReset();
+      setMode({ kind: "reset-preview", summary, confirmStr: "" });
+    } catch (e) {
+      setToast({ kind: "err", msg: `预览失败: ${e}` });
+    }
+    setBusy(false);
+  };
+
+  const onResetConfirm = async () => {
+    if (mode.kind !== "reset-preview") return;
+    if (mode.confirmStr !== "我确认") {
+      setToast({ kind: "err", msg: '必须输入"我确认"4 字' });
+      return;
+    }
+    setBusy(true);
+    try {
+      const lib = await import("../../lib/tauri");
+      const result = await lib.selfServeExecuteReset("我确认");
+      setMode({ kind: "idle" });
+      setToast({
+        kind: "ok",
+        msg: `✓ 重置完成. trash: ${result.trashPath} (5 秒内可 sqlite3/Finder 手工恢复)`,
+      });
+    } catch (e) {
+      setToast({ kind: "err", msg: `重置失败: ${e}` });
+    }
+    setBusy(false);
+  };
+
+  const onExportClick = () => {
+    setToast(null);
+    setMode({ kind: "export", path: defaultExportPath });
+  };
+
+  const onExportRun = async () => {
+    if (mode.kind !== "export") return;
+    let path = mode.path.trim();
+    if (!path) {
+      setToast({ kind: "err", msg: "路径不能为空" });
+      return;
+    }
+    if (path.startsWith("~/")) {
+      setToast({
+        kind: "err",
+        msg: "需要给绝对路径 (e.g. /Users/你的名字/Desktop/catfish-export.tar.gz)",
+      });
+      return;
+    }
+    setBusy(true);
+    try {
+      const lib = await import("../../lib/tauri");
+      const result = await lib.selfServeExportData(
+        {
+          includeConversations: true,
+          includeRecordings: true,
+          includeWiki: true,
+          includeSkills: true,
+          includeStrategicDocs: true,
+          includeConfig: true,
+        },
+        path,
+      );
+      const mb = (result.bytesWritten / (1024 * 1024)).toFixed(1);
+      setMode({ kind: "idle" });
+      setToast({ kind: "ok", msg: `✓ 导出完成. ${mb} MB → ${result.outputPath}` });
+    } catch (e) {
+      setToast({ kind: "err", msg: `导出失败: ${e}` });
+    }
+    setBusy(false);
+  };
+
+  const onLogClick = async () => {
+    setToast(null);
+    setBusy(true);
+    try {
+      const lib = await import("../../lib/tauri");
+      const result = await lib.transparentLogQuery(undefined, undefined, 50);
+      setMode({ kind: "log", result });
+    } catch (e) {
+      setToast({ kind: "err", msg: `查询失败: ${e}` });
+    }
+    setBusy(false);
+  };
+
+  return (
+    <section style={{ marginTop: "var(--space-4)", paddingTop: "var(--space-3)" }}>
+      <h4 style={{ margin: "0 0 var(--space-2)", fontSize: 13 }}>🔧 员工自助工具</h4>
+      <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginBottom: 10 }}>
+        manifesto 公理 1: 员工主权. 没人能远程触发这些 — 全你自己点.
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button
+          onClick={() => void onResetClick()}
+          disabled={busy}
+          style={btnStyle("danger")}
+          title="移 ~/.catfish/ 到 trash"
+        >
+          {busy && mode.kind === "idle" ? "处理中…" : "重置我的所有数据"}
+        </button>
+        <button
+          onClick={onExportClick}
+          disabled={busy}
+          style={btnStyle("primary")}
+          title="打包 ~/.catfish/ 到 .tar.gz"
+        >
+          导出我的所有数据
+        </button>
+        <button
+          onClick={() => void onLogClick()}
+          disabled={busy}
+          style={btnStyle("normal")}
+          title="审计本机跟 catfish 中央服务交换的每个 HTTP 请求"
+        >
+          {busy && mode.kind === "idle" ? "查询中…" : "我的数据外发记录"}
+        </button>
+      </div>
+
+      {/* toast */}
+      {toast && (
+        <div
+          style={{
+            marginTop: 10,
+            padding: "8px 10px",
+            fontSize: 12,
+            background: toast.kind === "ok" ? "var(--catfish-bg)" : "var(--catfish-bg)",
+            border: `1px solid ${toast.kind === "ok" ? "var(--catfish-cyan)" : "var(--status-err, #d9534f)"}`,
+            color: toast.kind === "ok" ? "var(--catfish-cyan)" : "var(--status-err, #d9534f)",
+            borderRadius: 4,
+          }}
+        >
+          {toast.msg}
+        </div>
+      )}
+
+      {/* inline panel — 重置预览/二次确认 */}
+      {mode.kind === "reset-preview" && (
+        <div
+          style={{
+            marginTop: 10,
+            padding: 12,
+            border: "1px solid var(--status-err, #d9534f)",
+            borderRadius: 4,
+            background: "var(--catfish-bg)",
+            fontSize: 13,
+          }}
+        >
+          <div style={{ marginBottom: 8, fontWeight: 600 }}>⚠ 真要重置吗?</div>
+          <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7 }}>
+            <li>{mode.summary.conversationsDeleted} 个对话历史</li>
+            <li>{mode.summary.recordingsDeleted} 个录屏</li>
+            <li>{mode.summary.wikiFilesDeleted} 个 wiki 笔记</li>
+            <li>{mode.summary.skillsDeleted} 个 skill</li>
+            <li>共 {(mode.summary.bytesFreedTotal / (1024 * 1024)).toFixed(1)} MB</li>
+          </ul>
+          <div style={{ marginTop: 8, fontSize: 12, color: "var(--catfish-text-muted)" }}>
+            数据先移到 ~/.catfish-reset-trash/&lt;ts&gt;/, 你可 Finder/CLI 手工 mv 回去.
+          </div>
+          <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              type="text"
+              placeholder='输入"我确认"'
+              value={mode.confirmStr}
+              onChange={(e) =>
+                setMode({ ...mode, confirmStr: e.target.value })
+              }
+              style={{
+                padding: "4px 8px",
+                fontSize: 12,
+                border: "1px solid var(--catfish-border)",
+                borderRadius: 4,
+                background: "var(--catfish-bg-elevated)",
+                color: "var(--catfish-text)",
+              }}
+            />
+            <button
+              onClick={() => void onResetConfirm()}
+              disabled={busy || mode.confirmStr !== "我确认"}
+              style={btnStyle("danger")}
+            >
+              {busy ? "重置中…" : "确认重置"}
+            </button>
+            <button
+              onClick={() => setMode({ kind: "idle" })}
+              disabled={busy}
+              style={btnStyle("normal")}
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* inline panel — 导出路径输入 */}
+      {mode.kind === "export" && (
+        <div
+          style={{
+            marginTop: 10,
+            padding: 12,
+            border: "1px solid var(--catfish-cyan)",
+            borderRadius: 4,
+            background: "var(--catfish-bg)",
+            fontSize: 13,
+          }}
+        >
+          <div style={{ marginBottom: 6 }}>导出到 (.tar.gz 绝对路径):</div>
+          <input
+            type="text"
+            value={mode.path}
+            onChange={(e) => setMode({ ...mode, path: e.target.value })}
+            style={{
+              width: "100%",
+              padding: "4px 8px",
+              fontSize: 12,
+              border: "1px solid var(--catfish-border)",
+              borderRadius: 4,
+              background: "var(--catfish-bg-elevated)",
+              color: "var(--catfish-text)",
+              fontFamily: "monospace",
+            }}
+          />
+          <div style={{ marginTop: 8, fontSize: 11, color: "var(--catfish-text-muted)" }}>
+            含: conversations / recordings / wiki / skills / strategic_docs / config.
+            <br />
+            tar 后台跑, 大目录可能 10-30s.
+          </div>
+          <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
+            <button
+              onClick={() => void onExportRun()}
+              disabled={busy}
+              style={btnStyle("primary")}
+            >
+              {busy ? "导出中…" : "开始导出"}
+            </button>
+            <button
+              onClick={() => setMode({ kind: "idle" })}
+              disabled={busy}
+              style={btnStyle("normal")}
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* inline panel — outbound log 表 */}
+      {mode.kind === "log" && (
+        <div
+          style={{
+            marginTop: 10,
+            padding: 12,
+            border: "1px solid var(--catfish-border)",
+            borderRadius: 4,
+            background: "var(--catfish-bg)",
+            fontSize: 12,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "baseline",
+              marginBottom: 8,
+            }}
+          >
+            <span style={{ fontWeight: 600 }}>
+              📊 数据外发记录 (近 {mode.result.entries.length} / 共 {mode.result.total})
+            </span>
+            <button onClick={() => setMode({ kind: "idle" })} style={btnStyle("normal")}>
+              收起
+            </button>
+          </div>
+          <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginBottom: 8 }}>
+            累计上行 {(mode.result.bytesUploadedTotal / 1024).toFixed(1)} KB / 下行{" "}
+            {(mode.result.bytesDownloadedTotal / 1024).toFixed(1)} KB.
+            <br />
+            sqlite3 ~/.catfish/outbound_log.db 也可看原始数据 (绕过此 UI, 物理可证).
+          </div>
+          <div
+            style={{
+              maxHeight: 280,
+              overflow: "auto",
+              border: "1px solid var(--catfish-border)",
+              borderRadius: 4,
+              fontFamily: "monospace",
+              fontSize: 11,
+            }}
+          >
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: "var(--catfish-bg-elevated)" }}>
+                  <th style={thStyle}>时间</th>
+                  <th style={thStyle}>方法</th>
+                  <th style={thStyle}>URL</th>
+                  <th style={thStyle}>类</th>
+                  <th style={thStyle}>状态</th>
+                  <th style={{ ...thStyle, textAlign: "right" }}>上↑</th>
+                  <th style={{ ...thStyle, textAlign: "right" }}>下↓</th>
+                </tr>
+              </thead>
+              <tbody>
+                {mode.result.entries.map((e) => (
+                  <tr key={e.id} style={{ borderTop: "1px solid var(--catfish-border)" }}>
+                    <td style={tdStyle}>{e.tsRequest.slice(11, 19)}</td>
+                    <td style={tdStyle}>{e.method}</td>
+                    <td
+                      style={{
+                        ...tdStyle,
+                        maxWidth: 280,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                      title={e.url}
+                    >
+                      {e.url.replace(/^https?:\/\/[^/]+/, "")}
+                    </td>
+                    <td style={tdStyle}>{e.category ?? "-"}</td>
+                    <td style={tdStyle}>{e.status ?? (e.error ? "ERR" : "?")}</td>
+                    <td style={{ ...tdStyle, textAlign: "right" }}>{e.requestBytes}</td>
+                    <td style={{ ...tdStyle, textAlign: "right" }}>{e.responseBytes}</td>
+                  </tr>
+                ))}
+                {mode.result.entries.length === 0 && (
+                  <tr>
+                    <td colSpan={7} style={{ ...tdStyle, color: "var(--catfish-text-muted)" }}>
+                      还没有 outbound 请求记录 — 启动 catfish 后会自动累积.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+const thStyle: React.CSSProperties = {
+  padding: "4px 6px",
+  textAlign: "left",
+  fontWeight: 600,
+  fontSize: 11,
+  color: "var(--catfish-text-muted)",
+};
+
+const tdStyle: React.CSSProperties = {
+  padding: "3px 6px",
+  fontSize: 11,
+  color: "var(--catfish-text)",
+};
+
+function btnStyle(kind: "danger" | "primary" | "normal"): React.CSSProperties {
+  const base: React.CSSProperties = {
+    padding: "6px 12px",
+    fontSize: 12,
+    borderRadius: 4,
+    cursor: "pointer",
+    border: "1px solid",
+  };
+  switch (kind) {
+    case "danger":
+      return {
+        ...base,
+        background: "transparent",
+        color: "var(--status-err, #d9534f)",
+        borderColor: "var(--status-err, #d9534f)",
+      };
+    case "primary":
+      return {
+        ...base,
+        background: "var(--catfish-cyan)",
+        color: "white",
+        borderColor: "var(--catfish-cyan)",
+      };
+    case "normal":
+      return {
+        ...base,
+        background: "transparent",
+        color: "var(--catfish-text)",
+        borderColor: "var(--catfish-border)",
+      };
+  }
 }
 
 /** 6/2 BL-PRIVACY-CARD-QUOTA-PROGRESS: quota 进度条 — 真兑现 quota.py 三维限流的

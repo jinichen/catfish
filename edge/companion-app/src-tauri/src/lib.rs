@@ -358,6 +358,15 @@ pub fn run() {
             commands::advisory::advisory_ack,
             commands::advisory::advisory_snooze,
             commands::advisory::advisory_dismiss,
+            // 6/8 BL-EMPLOYEE-SELF-SERVE A1+A2: 重置 / 导出 (manifesto 公理 1 员工主权)
+            commands::self_serve::self_serve_preview_reset,
+            commands::self_serve::self_serve_execute_reset,
+            commands::self_serve::self_serve_restore_reset,
+            commands::self_serve::self_serve_export_data,
+            // 6/8 BL-EMPLOYEE-SELF-SERVE A4: 数据外发日志 (员工自审 catfish 中央交换)
+            commands::transparent_log::transparent_log_record,
+            commands::transparent_log::transparent_log_query,
+            commands::transparent_log::transparent_log_gc,
             // self-evolution: 鲶鱼今天学了什么
             commands::learning::learning_today_stats,
             // BL-MM9-accept (5/9): skill proposal accept/reject 按钮

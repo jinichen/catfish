@@ -163,10 +163,79 @@ export async function fetchWithAuth(
     ? input
     : input instanceof URL ? input.href : input.url;
   const isGatewayDirectPath = url.includes("/api/") || url.includes("/v1/catalog");
-  if (config.useHermes && config.hermesAuthHeader && !isGatewayDirectPath) {
-    return fetchWithHermes(input, init);
+
+  // 6/8 BL-EMPLOYEE-SELF-SERVE A4 ⭐: transparent log middleware. 包 fetchWithAuth
+  // 的真实 dispatch (Hermes / OAuth path), 每个 outbound 请求都记本机 SQLite ~/.catfish/outbound_log.db.
+  // 让员工**自己审计** catfish 中央服务交换数据是不是符合 "数据零出端" 承诺.
+  // manifesto 公理 2 的 enforcement 层 — 不是 "我们承诺" 而是 "你自己看".
+  return logOutbound(url, init, async () => {
+    if (config.useHermes && config.hermesAuthHeader && !isGatewayDirectPath) {
+      return fetchWithHermes(input, init);
+    }
+    return fetchWithOAuth(input, init, opts);
+  });
+}
+
+/** 6/8 A4: transparent log middleware. 调真 fetch + 把 metadata 写本机 SQLite.
+ *
+ * 失败 silent (Tauri command 挂了不该阻塞 chat). 只记 metadata + body preview (4KB
+ * cap, Rust 端再 cap), 不记 response body (隐私 + 大). 9 天 GC.
+ *
+ * 走 dynamic import 防 storybook / dev mode 没 Tauri 时崩 (跟 env.ts 同 pattern).
+ */
+async function logOutbound(
+  url: string,
+  init: RequestInit | undefined,
+  realFetch: () => Promise<Response>,
+): Promise<Response> {
+  const method = (init?.method || "GET").toUpperCase();
+  const bodyStr =
+    typeof init?.body === "string"
+      ? init.body
+      : init?.body != null
+        ? "[binary or non-string body]"
+        : undefined;
+
+  let resp: Response | null = null;
+  let networkErr: unknown = null;
+  try {
+    resp = await realFetch();
+  } catch (e) {
+    networkErr = e;
   }
-  return fetchWithOAuth(input, init, opts);
+
+  // 后台 record (不 await 不阻塞主 fetch)
+  void (async () => {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      let respSummary: string | undefined;
+      let respBytes: number | undefined;
+      if (resp) {
+        const ctype = resp.headers.get("content-type") || "";
+        respSummary = `${resp.status} ${ctype.split(";")[0] || "unknown"}`;
+        const clen = resp.headers.get("content-length");
+        if (clen) respBytes = Number(clen);
+      }
+      await invoke("transparent_log_record", {
+        req: {
+          method,
+          url,
+          requestBody: bodyStr,
+          status: resp?.status,
+          responseBytes: respBytes,
+          responseSummary: respSummary,
+          error: networkErr ? String(networkErr) : undefined,
+        },
+      });
+    } catch {
+      // silent. transparent log 是辅助, 挂了不影响主 fetch.
+    }
+  })();
+
+  if (networkErr) {
+    throw networkErr;
+  }
+  return resp!;
 }
 
 /** BL-AUTH-DECOUPLE-A5 (5/19): hermes 静态 key 路径. 不 reauth (key 不会过期).

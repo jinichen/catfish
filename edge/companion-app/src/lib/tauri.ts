@@ -385,6 +385,103 @@ export const fetchInstalledSkills = () => rawInvoke<SkillNamespace[]>("list_inst
 export const fetchMcpServers = () =>
   rawInvoke<McpServerEntry[]>("list_mcp_servers");
 
+// ── 6/8 BL-EMPLOYEE-SELF-SERVE A1+A2+A4 ──────────────────────
+//
+// 跟 manifesto 公理 1 (员工主权) 一致 — IT 无远程触发能力, 员工通过 catfish UI
+// 自己点 button 才执行. spec: docs/EMPLOYEE-SELF-SERVE-TOOLS-SPEC.md
+
+export interface ResetSummary {
+  conversationsDeleted: number;
+  recordingsDeleted: number;
+  wikiFilesDeleted: number;
+  skillsDeleted: number;
+  bytesFreedTotal: number;
+  trashPath: string; // empty if preview
+}
+
+/** A1: 重置 — preview (不真删, 只算数). */
+export const selfServePreviewReset = () =>
+  rawInvoke<ResetSummary>("self_serve_preview_reset");
+
+/** A1: 重置 — 真执行. confirmation 必须是 "我确认" 才行. */
+export const selfServeExecuteReset = (confirmation: string) =>
+  rawInvoke<ResetSummary>("self_serve_execute_reset", { confirmation });
+
+/** A1: 重置 — 5s 内 undo (trash 还在). 失败 = trash 已过期或目标位置已有数据. */
+export const selfServeRestoreReset = (trashPath: string) =>
+  rawInvoke<void>("self_serve_restore_reset", { trashPath });
+
+export interface ExportOptions {
+  includeConversations: boolean;
+  includeRecordings: boolean;
+  includeWiki: boolean;
+  includeSkills: boolean;
+  includeStrategicDocs: boolean;
+  includeConfig: boolean;
+}
+
+export interface ExportResult {
+  outputPath: string;
+  bytesWritten: number;
+  filesIncluded: number;
+}
+
+/** A2: 导出 — 打包 ~/.catfish/ 子目录到 .tar.gz. outputPath 由员工 Tauri dialog 选. */
+export const selfServeExportData = (
+  options: ExportOptions,
+  outputPath: string,
+) => rawInvoke<ExportResult>("self_serve_export_data", { options, outputPath });
+
+// ── A4: 数据外发日志 (transparent log) ──────────────────────
+
+export interface TransparentLogRecord {
+  method: string;
+  url: string;
+  requestBody?: string;
+  status?: number;
+  responseBytes?: number;
+  responseSummary?: string;
+  error?: string;
+  category?: string;
+}
+
+export interface TransparentLogEntry {
+  id: number;
+  tsRequest: string;
+  tsResponse?: string;
+  method: string;
+  url: string;
+  requestBytes: number;
+  responseBytes: number;
+  status?: number;
+  requestPayloadPreview?: string;
+  requestPayloadFullAvailable: boolean;
+  responseSummary?: string;
+  error?: string;
+  category?: string;
+}
+
+export interface TransparentLogQueryResult {
+  entries: TransparentLogEntry[];
+  total: number;
+  bytesUploadedTotal: number;
+  bytesDownloadedTotal: number;
+}
+
+/** A4: 记 1 个 outbound 请求 (me.ts middleware 调). */
+export const transparentLogRecord = (req: TransparentLogRecord) =>
+  rawInvoke<number>("transparent_log_record", { req });
+
+/** A4: 查询 log (Dashboard outbound log card 用). */
+export const transparentLogQuery = (
+  since?: string,
+  category?: string,
+  limit?: number,
+) => rawInvoke<TransparentLogQueryResult>("transparent_log_query", { since, category, limit });
+
+/** A4: GC 过期 (9 天前). 启动时跑一次. */
+export const transparentLogGc = () => rawInvoke<number>("transparent_log_gc");
+
 // ── E7 phase 2 (6/6): skill 安装/卸载, MCP 接入/移除 ───────────
 //
 // 流程:
