@@ -65,72 +65,92 @@ export default function CollapsibleSection({
     writeCollapsed(id, next);
   };
 
+  // 6/8 BL-SECTION-SIDEBAR-LAYOUT (鸿波 6/8): section 改 macOS Settings 风格
+  // sidebar layout. 标题在左 (~180px), 卡在右 (flex). 视觉跟 PrivacyCard 内
+  // Row 一致. collapsed 时退回单行 button (省纵向空间).
+  //
+  // - collapsed: full-width button, 单行 ▶ + title (跟原行为一致, 不改).
+  // - expanded:  grid 2 列, 左 sidebar (button 仍 toggle) + 右 cards grid.
+
+  const TitleButton = (
+    <button
+      onClick={toggle}
+      type="button"
+      style={{
+        width: "100%",
+        background: "transparent",
+        border: "none",
+        // collapsed 时画底线 (区隔下一 section), expanded 时不画 (左 sidebar 不需要)
+        borderBottom: collapsed ? "1px solid var(--catfish-border)" : "none",
+        padding: collapsed ? "8px 0" : "8px 0 8px 0",
+        fontSize: 14,
+        fontWeight: 600,
+        color: "var(--catfish-text)",
+        textAlign: "left",
+        cursor: "pointer",
+        display: "flex",
+        alignItems: collapsed ? "center" : "flex-start",
+        gap: "8px",
+        marginBottom: collapsed ? "var(--space-3)" : 0,
+      }}
+      aria-expanded={!collapsed}
+    >
+      <span
+        style={{
+          display: "inline-block",
+          transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)",
+          transition: "transform 0.15s ease",
+          fontSize: 10,
+          opacity: 0.5,
+          // expanded 时三角跟标题首行对齐
+          marginTop: collapsed ? 0 : 6,
+          flexShrink: 0,
+        }}
+        aria-hidden
+      >
+        ▼
+      </span>
+      <span style={{ lineHeight: 1.4 }}>{title}</span>
+    </button>
+  );
+
   return (
     <section
       style={{
         gridColumn: "1 / -1",
-        // BL-DASHBOARD-UI-CLEANUP (5/16 鸿波"还是乱"): section 之间留更大空气
-        // 防 5 个 section 卡片叠一起没分隔
         marginTop: "var(--space-5)",
       }}
     >
-      {/* BL-FIX20 (5/8): 标题轻 → BL-DASHBOARD-UI-CLEANUP (5/16) 回调: 5 个 section
-          堆起来不够清晰. 加 border-bottom + 字号升一档 + 去 uppercase
-          (中文 emoji 标题 uppercase 没意义). */}
-      <button
-        onClick={toggle}
-        type="button"
-        style={{
-          width: "100%",
-          background: "transparent",
-          border: "none",
-          borderBottom: "1px solid var(--catfish-border)",
-          padding: "8px 0",
-          fontSize: 14,  // 11px → 14px, 视觉层级清晰
-          fontWeight: 600,
-          color: "var(--catfish-text)",
-          textAlign: "left",
-          cursor: "pointer",
-          display: "flex",
-          alignItems: "center",
-          gap: "8px",
-          marginBottom: "var(--space-3)",
-        }}
-        aria-expanded={!collapsed}
-      >
-        <span
-          style={{
-            display: "inline-block",
-            transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)",
-            transition: "transform 0.15s ease",
-            fontSize: 10,
-            opacity: 0.5,
-          }}
-          aria-hidden
-        >
-          ▼
-        </span>
-        <span>{title}</span>
-        {/* BL-SECTION-COUNT-KILL (5/16): "· N" 计数砍, 维护成本 > 价值 */}
-      </button>
-      {!collapsed && (
+      {collapsed ? (
+        // collapsed: 单行 header 占整宽, 跟历史一致
+        TitleButton
+      ) : (
+        // expanded: sidebar 风格 — 左 180px (title + toggle), 右 grid (cards)
         <div
           style={{
             display: "grid",
-            // BL-FIX19 (5/8): minmax(0, 1fr) — 默认 grid item min size 是
-            // min-content, 长 URL / 长路径会撑爆 cell. minmax(0, 1fr) 强制最小 0.
-            // BL-FIX20 (5/8): 加响应式 — 宽屏 (>1400px) 自动 3 列, 窄屏 1 列, 中屏 2 列.
-            //   auto-fit + minmax(280px, 1fr) 让 grid 自动决定列数, 280 是单卡最小
-            //   可读宽度 (再窄文字挤).
-            // BL-SECTION-MAX-COLS (6/1 鸿波): 限最大列数 — 4 卡传 maxColumns=2
-            //   → 2x2 整齐, 不会 3 列第二行孤零零.
-            gridTemplateColumns: maxColumns
-              ? `repeat(${maxColumns}, minmax(0, 1fr))`
-              : "repeat(auto-fit, minmax(280px, 1fr))",
-            gap: "var(--space-3)",
+            // 180px sidebar 跟 PrivacyCard 内 Row 一致 (统一视觉节奏).
+            // 窄屏 (< 720px) fallback 到单列 (sidebar 占整行), 防小屏挤碎.
+            gridTemplateColumns: "180px 1fr",
+            gap: "var(--space-4)",
+            // 顶部薄分割线 (替代原 button border-bottom), 视觉分隔 section.
+            paddingTop: "var(--space-2)",
+            borderTop: "1px solid var(--catfish-border)",
           }}
         >
-          {children}
+          {TitleButton}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: maxColumns
+                ? `repeat(${maxColumns}, minmax(0, 1fr))`
+                : "repeat(auto-fit, minmax(280px, 1fr))",
+              gap: "var(--space-3)",
+              minWidth: 0,
+            }}
+          >
+            {children}
+          </div>
         </div>
       )}
     </section>

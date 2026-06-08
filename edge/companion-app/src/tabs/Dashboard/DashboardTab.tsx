@@ -114,6 +114,8 @@ import WeChatBindingCard from "./WeChatBindingCard";
 // 导出 CSV). 跟 PrivacyCard 同 section, 因为它是"员工自查中央实际收到什么"的核心
 // 落地, 是公理 2 (数据零出端) 的**可证明 enforcement** 层.
 import OutboundLogCard from "./OutboundLogCard";
+// 6/8 BL-PRIVACY-SECTION-TABS: 隐私 section 内 3 卡 → 3 tabs (空间 +25%).
+import SectionTabs from "./SectionTabs";
 
 export default function DashboardTab() {
   // BL-ARCH2 (5/10): role 不再决定 Dashboard 卡片, manager/admin 也走 web 看管理.
@@ -181,14 +183,18 @@ export default function DashboardTab() {
         title="🔒 隐私 / 本机数据"
         count={3}
       >
-        <PrivacyCard />
-        {/* 6/8 BL-EMPLOYEE-SELF-SERVE A4 Phase 2: 跟 PrivacyCard 紧挨, PrivacyCard
-            的"↓ 我的数据外发记录"按钮 scrollIntoView 来这. 卡内 filter / paginate /
-            导出 CSV — manifesto 公理 2 的物理可证明实施. */}
-        <OutboundLogCard />
-        {/* BL-WECHAT-CATFISH-BIND v1 (5/26 鸿波): IM 平台用户 ↔ 真员工 email 绑定状态.
-            放隐私 section: 绑错 = 不同员工记忆串话 = 跟"本机数据归属"同级别隐私问题. */}
-        <WeChatBindingCard />
+        {/* 6/8 BL-PRIVACY-SECTION-TABS (鸿波 6/8): 3 卡 → 3 tabs.
+            空间利用率 +25%, 切换更清晰. PrivacyCard 默认 (透明卖点立刻看到).
+            PrivacyCard 内 "↓ 我的数据外发记录" 按钮直接切到外发 tab (不再 scroll). */}
+        <SectionTabs
+          storageKey="privacy"
+          defaultKey="status"
+          tabs={[
+            { key: "status", label: "🔒 隐私状态", render: () => <PrivacyCard /> },
+            { key: "outbound", label: "📊 数据外发记录", render: () => <OutboundLogCard /> },
+            { key: "wechat", label: "💬 微信接入", render: () => <WeChatBindingCard /> },
+          ]}
+        />
       </CollapsibleSection>
 
       {/* 第三组: 鲶鱼对你的认识 — 透明性 (默认开, 员工要能看清楚被学了什么)

@@ -333,16 +333,8 @@ function SelfServeButtons() {
     setBusy(false);
   };
 
-  // log 走独立 OutboundLogCard, button 改成 scrollTo
-  const onLogClick = () => {
-    setToast(null);
-    const el = document.getElementById("outbound-log-card");
-    if (el) {
-      el.scrollIntoView({ behavior: "smooth", block: "start" });
-    } else {
-      setToast({ kind: "err", msg: "找不到 OutboundLogCard (排版问题, 滚一下找找)" });
-    }
-  };
+  // 6/8 BL-PRIVACY-SECTION-TABS: outbound log 现在是隐私 section 内并列 tab,
+  // 不需要 PrivacyCard 内的快捷按钮. 员工点上面 "📊 数据外发记录" tab 即可.
 
   return (
     <div>
@@ -364,14 +356,9 @@ function SelfServeButtons() {
         >
           导出我的所有数据
         </button>
-        <button
-          onClick={onLogClick}
-          disabled={busy}
-          style={btnStyle("normal")}
-          title="跳转到下面的'数据外发记录'卡 (filter / paginate / 导出 CSV)"
-        >
-          ↓ 我的数据外发记录
-        </button>
+        {/* "↓ 我的数据外发记录" 按钮 6/8 BL-PRIVACY-SECTION-TABS 砍 —
+            outbound log 已在隐私 section 同级 tab, 员工点 "📊 数据外发记录"
+            tab 即可. 内部跳转按钮反而冗余. */}
       </div>
 
       {/* toast */}

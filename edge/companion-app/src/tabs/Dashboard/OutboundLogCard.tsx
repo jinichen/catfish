@@ -22,24 +22,9 @@ import {
 } from "../../lib/tauri";
 
 const PAGE_SIZE = 50;
-const COLLAPSE_KEY = "outbound_log_card_collapsed";
-
-function readCollapsed(): boolean {
-  try {
-    const v = localStorage.getItem(COLLAPSE_KEY);
-    return v === null ? true : v === "1"; // 默认收起 (鸿波 6/8: 99% 时间不用看)
-  } catch {
-    return true;
-  }
-}
-
-function writeCollapsed(v: boolean): void {
-  try {
-    localStorage.setItem(COLLAPSE_KEY, v ? "1" : "0");
-  } catch {
-    /* localStorage 禁/满, silent */
-  }
-}
+// 6/8 BL-PRIVACY-SECTION-TABS (鸿波 6/8): OutboundLogCard 进 SectionTabs 后,
+// "show / hide" 由 tab 选中接管, 这里**砍内部 collapsed**. tab 切到外发记录
+// = 展开, 切走 = 不渲染. 双层 collapse 体验差.
 
 const CATEGORY_OPTIONS: { value: string; label: string }[] = [
   { value: "", label: "全部分类" },
@@ -70,7 +55,6 @@ function timeRangeToIsoSince(range: string): string | undefined {
 }
 
 export default function OutboundLogCard() {
-  const [collapsed, setCollapsed] = React.useState(readCollapsed);
   const [category, setCategory] = React.useState("");
   const [timeRange, setTimeRange] = React.useState("");
   const [urlFilter, setUrlFilter] = React.useState("");
@@ -82,12 +66,6 @@ export default function OutboundLogCard() {
   const [error, setError] = React.useState<string | null>(null);
   const [toast, setToast] = React.useState<{ kind: "ok" | "err"; msg: string } | null>(null);
 
-  const toggle = () => {
-    const next = !collapsed;
-    setCollapsed(next);
-    writeCollapsed(next);
-  };
-
   // url filter debounce 300ms
   React.useEffect(() => {
     const t = setTimeout(() => {
@@ -97,9 +75,8 @@ export default function OutboundLogCard() {
     return () => clearTimeout(t);
   }, [urlInput]);
 
-  // 拉数据: collapsed 时只要 summary (limit=1 拿 total/bytes), expanded 拉 50 行.
-  // backend count_sql 跟 filter 一致 — collapsed 也能显当前 filter 下的数字.
-  // (collapsed 通常 filter 都是 "全部分类/全部时间", 显全库 stat.)
+  // 拉数据 — 6/8 BL-PRIVACY-SECTION-TABS 砍 collapsed 后, 永远拉 50 行.
+  // 进 SectionTabs 后, tab 选中才渲染本 component, 不浪费.
   React.useEffect(() => {
     let cancelled = false;
     setBusy(true);
@@ -110,8 +87,8 @@ export default function OutboundLogCard() {
           since,
           category || undefined,
           urlFilter || undefined,
-          collapsed ? 1 : PAGE_SIZE,
-          collapsed ? 0 : page * PAGE_SIZE,
+          PAGE_SIZE,
+          page * PAGE_SIZE,
         );
         if (!cancelled) {
           setData(result);
@@ -125,7 +102,7 @@ export default function OutboundLogCard() {
     return () => {
       cancelled = true;
     };
-  }, [collapsed, category, timeRange, urlFilter, page]);
+  }, [category, timeRange, urlFilter, page]);
 
   // toast 5s auto clear
   React.useEffect(() => {
@@ -183,87 +160,36 @@ export default function OutboundLogCard() {
     setBusy(false);
   };
 
-  // 6/8 (鸿波): 默认收起. collapsed 时 header 显单行 summary
-  // (条数 + 上下行 KB), 员工点开才看详情. localStorage 记忆下次展开状态.
-  const summaryLine = data
-    ? `${data.total} 条 · 上行 ${upKB} KB / 下行 ${downKB} KB · 9 天自动 GC`
-    : "加载中…";
-
   return (
     <div
       style={{
         background: "var(--catfish-bg-elevated)",
         border: "1px solid var(--catfish-border)",
         borderRadius: "var(--radius-md)",
-        padding: collapsed ? "var(--space-3)" : "var(--space-4)",
+        padding: "var(--space-4)",
         gridColumn: "1 / -1",
       }}
       id="outbound-log-card"
     >
-      {/* clickable header — collapsed/expanded 同 button, 让全 header 都可点 toggle */}
-      <button
-        type="button"
-        onClick={toggle}
-        aria-expanded={!collapsed}
+      <div
         style={{
-          width: "100%",
-          background: "transparent",
-          border: "none",
-          padding: 0,
-          textAlign: "left",
-          cursor: "pointer",
-          color: "var(--catfish-text)",
           display: "flex",
           justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: collapsed ? 0 : "var(--space-3)",
+          alignItems: "baseline",
+          marginBottom: "var(--space-3)",
           gap: 12,
         }}
       >
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0, flex: 1 }}>
-          <span
-            style={{
-              display: "inline-block",
-              transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)",
-              transition: "transform 0.15s ease",
-              fontSize: 10,
-              opacity: 0.5,
-              flexShrink: 0,
-            }}
-            aria-hidden
-          >
-            ▼
-          </span>
-          <h3 style={{ margin: 0, fontSize: 15, flexShrink: 0 }}>📊 数据外发记录</h3>
-          {/* collapsed 时 summary 跟标题同行, expanded 时藏 (下面有专 stat 3 卡) */}
-          {collapsed && (
-            <span
-              style={{
-                fontSize: 12,
-                color: "var(--catfish-text-muted)",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-                minWidth: 0,
-              }}
-            >
-              · {summaryLine}
-            </span>
-          )}
-        </div>
-        {!collapsed && (
-          <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", flexShrink: 0 }}>
-            ~/.catfish/outbound_log.db · sqlite3 也能查
-          </span>
-        )}
-      </button>
+        <h3 style={{ margin: 0, fontSize: 15 }}>📊 数据外发记录</h3>
+        <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
+          ~/.catfish/outbound_log.db · sqlite3 也能查
+        </span>
+      </div>
 
-      {collapsed ? null : (
-        <>
-          <div style={{ fontSize: 12, color: "var(--catfish-text-muted)", marginBottom: "var(--space-3)" }}>
-            catfish 客户端跟中央服务的每个 HTTP 请求都自动记到本机 SQLite. 跟 manifesto
-            公理 2 (数据零出端) 验证 — 员工**自己**审计中央实际收到什么, 不是"我们承诺".
-          </div>
+      <div style={{ fontSize: 12, color: "var(--catfish-text-muted)", marginBottom: "var(--space-3)" }}>
+        catfish 客户端跟中央服务的每个 HTTP 请求都自动记到本机 SQLite. 跟 manifesto
+        公理 2 (数据零出端) 验证 — 员工**自己**审计中央实际收到什么, 不是"我们承诺".
+      </div>
 
       {/* 累计 stat */}
       <div
@@ -489,8 +415,6 @@ export default function OutboundLogCard() {
             下一页 →
           </button>
         </div>
-      )}
-        </>
       )}
     </div>
   );
