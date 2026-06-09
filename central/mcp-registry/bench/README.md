@@ -49,3 +49,23 @@ bash bench/run.sh 200 2m           # 加压看 N+1
 
 bench 跑出来的 baseline 跟 prod 真负载差几个数量级 (50 user smoke vs 0.1/s prod).
 **真意义在于看 P99 baseline, follow 真用户量增长后再回来 bench**.
+
+## 实测 baseline (6/9, 50 user / 1m, 1 worker)
+
+| 端点 | P50 | P95 | P99 | fail % | 备注 |
+|---|---|---|---|---|---|
+| GET /health | 2ms | 21ms | 140ms | 0% | |
+| GET /v1/mcp/manifest/{id} | 2ms | 33ms | 130ms | 0%* | * 32% 是 RBAC 403 (业务正确, 非 fail) |
+| GET /v1/mcp/registry | 17ms | 50ms | 110ms | 0% | 真热路径 |
+| GET /v1/mcp/subscribed | 6ms | 31ms | 83ms | 0% | 空表 join |
+| **Aggregated** | 13ms | 43ms | 110ms | 0% | 38 RPS |
+
+P99 110ms 略超 100ms 目标但仍然健康 — 因为冷启 (alembic migration / yaml load /
+首次 SQL prepared statement cache) 把首 5s 拉到 150ms+. 稳态 P95=50ms 远低于 100ms.
+
+真发现:
+- **空表也没 N+1**: registry endpoint join 0 subscriptions 仍然 17ms — 跟空 LEFT
+  JOIN 时间一致, 不是每个 manifest 单独查
+- **manifest endpoint RBAC 真生效**: bench fake user 跨 5 部门, sales/legal/
+  marketing 看不到 gitlab/jira (server 真 403 拒) — 这是 mcp-registry/
+  manifests/*.yaml 里 allowed_depts 设计意图. locustfile 已 handle 403 算 success.

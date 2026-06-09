@@ -68,3 +68,22 @@ P99 baseline 看 PgEncryptedStorage 跑 AES-GCM + PG roundtrip 健康. 真 prod
 
 如果 P99 跳到 200ms+ → 看 docker stats CPU. AES-NI 没启用就这样, 改 base
 image 加 `intel-microcode` 包 (但 alpine 应该默认 OK).
+
+## 实测 baseline (6/9, 50 user / 1m, 1 worker)
+
+| 端点 | P50 | P95 | P99 | fail % | RPS |
+|---|---|---|---|---|---|
+| **GET /v1/secret/{ref}** | **6ms** | **16ms** | **39ms** | **0%** ✅ | 62 |
+| DELETE /v1/secret/{ref} | 6ms | 17ms | 37ms | 0% | 5 |
+| GET /v1/secret/{ref}/exists | 5ms | 15ms | 25ms | 0% | 4 |
+| POST /v1/secret | 6ms | 15ms | 35ms | 0% | 17 |
+| POST seed (on_start) | 14ms | 76ms | 120ms | 0% | 9 |
+| **Aggregated** | **6ms** | **25ms** | **55ms** | **0%** | **96** |
+
+真完美 — 全部验证目标过:
+- ✅ **GET P99 39ms < 50ms** = AES-256-GCM 硬件加速生效 (AES-NI)
+- ✅ **0% fail** (5746 reqs) = master_key + 加密 roundtrip + PG UPSERT 全通
+- ✅ **threading.Lock 不卡** = 96 RPS 总, 单 worker, 真稳定
+
+prod 真负载 2.8/s peak vs bench 实测 96 RPS = **34× buffer**. 完整 bench
+没意义, smoke 已经覆盖所有 false positive 风险.

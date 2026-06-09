@@ -80,6 +80,13 @@ class CatfishMcpRegistryUser(HttpUser):
             elif r.status_code == 404:
                 # bench 数据 / manifests 不齐时可能 404, 算 success 防误报 fail
                 r.success()
+            elif r.status_code == 403:
+                # 6/9 第一跑实测: bench fake user 跨 5 部门 (engineering / sales /
+                # legal / marketing / qa), gitlab manifest allowed_depts=
+                # [engineering, devops, qa], jira allowed_depts=[engineering,
+                # product, qa, devops]. sales/legal/marketing 调 gitlab/jira →
+                # 真返 403 是业务逻辑正确 (mcp-registry RBAC 设计内). 算 success.
+                r.success()
             else:
                 r.failure(f"status {r.status_code}: {r.text[:200]}")
 
