@@ -1,0 +1,53 @@
+# BL-MCP-BENCH bench stack: mcp-registry + PG (6/9 鸿波建议 B 方案轻量 smoke).
+#
+# 怎么跑:
+#   cd central/mcp-registry
+#   bash bench/run.sh                          # 默认 50 user / 1min / 2 worker
+#   MCP_WORKERS=4 bash bench/run.sh 200 2m     # 重负载对比
+#
+# 跟 prod docker-compose.yml 区别:
+#   - 加内嵌 PG (生产连外部 PG)
+#   - mcp-registry 不连真 secret-broker (bench 不测 OAuth callback 链路)
+#   - PORT 8996 跟 prod 一致
+
+services:
+  pg:
+    image: ${DOCKER_REGISTRY:-}postgres:16-alpine
+    container_name: catfish-bench-mcp-pg
+    environment:
+      POSTGRES_USER: catfish
+      POSTGRES_PASSWORD: bench
+      POSTGRES_DB: catfish_bench
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "catfish", "-d", "catfish_bench"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  mcp-registry:
+    build:
+      # 直接复用 prod Dockerfile (没有 bench-specific 改动)
+      context: ..
+      dockerfile: Dockerfile
+    container_name: catfish-bench-mcp-registry
+    depends_on:
+      pg:
+        condition: service_healthy
+    ports:
+      - "${MCP_PORT:-8996}:8996"
+    environment:
+      CATFISH_ENV: prod
+      CATFISH_DB_URL: postgresql://catfish:bench@pg:5432/catfish_bench
+      PORT: 8996
+      # bench 不测 OIDC, 测试用 fake issuer (mcp-registry 只验 header, 不验 JWT)
+      CATFISH_OIDC_ISSUER: http://localhost:8998
+      # bench 不调真 broker (test_pg_encrypted 单测已验过)
+      CATFISH_SECRET_BROKER_URL: http://localhost:65535
+      LOG_LEVEL: WARNING   # 高 RPS 时 INFO 撑爆 disk
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 2G

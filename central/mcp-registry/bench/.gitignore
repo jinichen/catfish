@@ -1,0 +1,7 @@
+# BL-MCP-BENCH 输出 — 每次 run.sh 重生, 不入库.
+# 源文件 (*.yml / *.py / *.sh / README.md / .gitignore) 都入库.
+csv-mcp-*.csv
+report-mcp-*.html
+docker-stats-mcp-*.txt
+mcp-log-*.txt
+.stats.pid

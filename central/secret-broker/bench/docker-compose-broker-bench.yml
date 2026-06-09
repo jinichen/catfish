@@ -1,0 +1,49 @@
+# BL-BROKER-BENCH bench stack: secret-broker + PG (6/9 鸿波 B 方案).
+#
+# 真验证目标:
+#   - PgEncryptedStorage threading.Lock 多 worker 不卡
+#   - AES-256-GCM 解密路径 (硬件加速) 真 < 1ms
+#
+# !! bench 强制暴露 :8995 (prod 不暴露). 否则 locust 跑 host 调不到.
+
+services:
+  pg:
+    image: ${DOCKER_REGISTRY:-}postgres:16-alpine
+    container_name: catfish-bench-broker-pg
+    environment:
+      POSTGRES_USER: catfish
+      POSTGRES_PASSWORD: bench
+      POSTGRES_DB: catfish_bench
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "catfish", "-d", "catfish_bench"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  secret-broker:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: catfish-bench-secret-broker
+    depends_on:
+      pg:
+        condition: service_healthy
+    ports:
+      - "${BROKER_PORT:-8995}:8995"
+    environment:
+      CATFISH_DB_URL: postgresql://catfish:bench@pg:5432/catfish_bench
+      CATFISH_SECRET_BROKER_BACKEND: pg
+      # bench 用固定 master key (32 byte base64, deterministic for bench reproducibility).
+      # 生成方式 (任何 32 byte 都行, 这里取确定值方便 diff):
+      #   python3 -c "import base64; print(base64.b64encode(b'BENCH_AES256_BENCH_AES256_BENCH_').decode())"
+      # 注: 这 key 只 bench 跑用, 不影响 prod (bench PG 用 tmpfs, down -v 清掉)
+      CATFISH_SECRET_MASTER_KEY: "QkVOQ0hfQUVTMjU2X0JFTkNIX0FFUzI1Nl9CRU5DSF8="
+      PORT: 8995
+      LOG_LEVEL: WARNING
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 2G
