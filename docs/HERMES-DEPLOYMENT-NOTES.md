@@ -380,3 +380,90 @@ catfish 集成 (反射目标 10/10 全在).
 | Companion retry banner 增加到 3 次 + 渐进 backoff (5s / 15s / 30s) | catfish 仓库 |
 | 装机 hermes 时自动 patch plist + .env (写进 catfish init 脚本) | catfish 仓库 |
 | **简化 com.catfish.gateway.plist 让 launchctl bootstrap 过** (现在 IO error 5) | catfish 仓库 |
+
+## A2A 跨 mac agent 协作 — future, 不做 (2026-06-10 决策)
+
+### 触发讨论
+
+社区文章 (test-github-repo.vercel.app cross-mac-hermes-api-server-2026-06-08)
+讲怎么把 hermes 8642 API server 暴露到 LAN 让另一台 mac 直接 curl
+`/v1/chat/completions`. 文章作者自己也写了: ✅ 跨 Mac, ❌ 不是真 A2A 对话.
+
+### 这条路的根本局限 (看代码 ground truth)
+
+| 局限 | 代码层证据 |
+|---|---|
+| A 看不到 B 的 thinking / tool calls 过程 | `api_server.py` 的 chat completions 只返最终 response, tool progress 通过 SSE event 但只对本进程, 不跨网 |
+| 同步阻塞 | B agent loop 没完成 A 卡死 |
+| B 不能主动 push 给 A | hermes API server 是 server-only, 不会反向 connect |
+| 无持续会话 | `X-Hermes-Session-Id` 是 client 自报, 不是真 federation session |
+| 安全模型混乱 | `X-Catfish-User` header 是 client 自报, B 没法验是不是真用户 |
+| LAN 0.0.0.0 暴露 | 同 WiFi 任何设备能调你 hermes |
+
+文章 3 个真坑跟 catfish 今天 marathon 撞的事一字不差:
+- 真坑 #1 (API server 默认 127.0.0.1) = catfish BL-F10 + commit ec44b0a (5 服务 HOST=0.0.0.0)
+- 真坑 #2 (Telegram `***` 截断 secret) = hermes `agent/redact.py` secret 替换
+- 真坑 #3 (macOS Tahoe `launchctl bootstrap` IO5) = catfish-gateway plist 装不上, 同根因
+
+### 真 A2A 协议要的能力
+
+- Peer 发现 (谁能联系谁)
+- 双向 SSE stream (A 看 B 全过程, B 能反问 A)
+- Async task 模型 (提任务 / 看进度 / 拿结果)
+- 持续会话跨 peer
+- 认证 (per-task token, capability scope)
+- 中断 / 撤销 / 超时
+- 审计 (中央 0 红线 — 谁让谁做了什么)
+
+实施成本: 1-3 人月.
+
+### catfish 之前做过, 5/26 砍了
+
+`central/llm-gateway/src/catfish_gateway/app.py` 注释 verbatim:
+
+```
+A2A self_register 5/26 砍 — Plan D Federation 整套停 (0 真客户用,
+详见 docs/HERMES-013-ALIGN.md A2A 段). 不再调 self_register.
+```
+
+砍掉的全部组件:
+- `/a2a/ask` SSE endpoint
+- `/a2a/internal/ask` 内部调用 endpoint
+- `a2a_server.py` (整文件, git log --follow 能找回)
+- `catfish_a2a_ask` tool-bridge tool
+- `~/.catfish/a2a_notifications.jsonl` 收件
+- `self_register` (agent 互相注册)
+
+砍的真原因: **0 真客户用**. 不是技术做不到.
+
+### 短期决策 (今天 + 这季度): 不做
+
+理由:
+1. catfish 当前主线: "客户机房私有部署 + 数据合规优先 + 员工的数字副手" — 单 agent 视角, A2A 不是主线
+2. 上次 Plan D 5/26 砍, 客户场景没变, 重做大概率还是 0 客户用
+3. IM 中转 (飞书/微信群 + `require_mention`) 能 cover 80% 跨 agent 需求 (Alice 让 Bob 帮跑任务 / B 完成后 push Alice / 异步)
+4. catfish 现在 hermes v0.16 + Companion graceful retry 刚 ship, 稳定性观察期, 不该开新摊子
+
+### 中期触发条件 (重启 A2A 讨论)
+
+任一条出现:
+- 客户明确说 "我想看其他 agent 跑的过程 (live thinking + tool calls)"
+- 客户要 "多 agent 协同看板" (3 个 agent 同时跑, 实时进度合并视图)
+- catfish 第二代产品 roadmap 决定走 multi-agent orchestration
+
+### 如果将来真要做
+
+**不要重新自造协议**. 用 Google **A2A standard** (https://github.com/google/A2A):
+- upstream 已有规范 + reference implementation
+- 跟 hermes 集成: 在 `gateway/platforms/api_server.py` 加 `/a2a/*` aiohttp middleware route handler
+- 复用 hermes 现有 `_stream_q` + tool progress event 走 SSE
+- 复用 hermes session DB 做 task 持久化
+
+5/26 砍的 catfish Plan D 代码不要恢复 — 它是自造协议, 跟未来标准不兼容. git log --follow 留作"曾经做过"档案即可.
+
+### 关联文件 (审计用)
+
+- `central/llm-gateway/src/catfish_gateway/app.py` line 238/358/424/563 — Plan D 砍痕迹
+- `docs/HERMES-013-ALIGN.md` A2A 段 — 5/26 决策真原因 (TODO: 这份 doc 我没读, 决策前要先读)
+- `gateway/platforms/api_server.py` line 4326 — `_PROXY_ALLOWED_PREFIXES` 含 `/a2a/`, 当前是 dead config (B 收到 /a2a/* 透传给上游但没人接)
+- models.yaml 里部分 model `recommended_for` 含 `a2a_aux` — dead config tag, 清理优先级低
