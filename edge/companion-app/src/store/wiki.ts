@@ -39,7 +39,7 @@ interface WikiState {
   selectedTag: string | null;
 
   loadFiles: () => Promise<void>;
-  selectFile: (relPath: string) => Promise<void>;
+  selectFile: (relPath: string | null) => Promise<void>;
   setSearch: (s: string) => void;
   setKindFilter: (k: "all" | "entity" | "concept" | "query") => void;
   setQuery: (q: WikiState["query"]) => void;
@@ -72,7 +72,17 @@ export const useWikiStore = create<WikiState>((set) => ({
     }
   },
 
-  selectFile: async (relPath: string) => {
+  selectFile: async (relPath: string | null) => {
+    // P3.3.4 (6/9): 删 entity 后传 null 清 selection, list 回退到默认无选中
+    if (relPath === null) {
+      set({
+        selectedPath: null,
+        selectedFile: null,
+        selectedLoading: false,
+        selectedError: null,
+      });
+      return;
+    }
     set({ selectedPath: relPath, selectedLoading: true, selectedError: null });
     try {
       const full = await wikiReadFile(relPath);

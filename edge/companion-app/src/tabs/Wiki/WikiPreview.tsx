@@ -13,7 +13,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useWikiStore } from "../../store/wiki";
 import { topKRelated } from "../../lib/wikiRelevance";
-import { wikiUpdateFile } from "../../lib/tauri";
+import { wikiDeleteFile, wikiUpdateFile } from "../../lib/tauri";
 
 const KIND_LABEL: Record<string, string> = {
   entity: "实体",
@@ -34,15 +34,29 @@ export default function WikiPreview() {
   const [draftBody, setDraftBody] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
+  // P3.3.4 (6/9 鸿波): 软删 state — confirmDelete=true 第一次点变红色 "确认删除",
+  // 5 秒不点再变回 "删除" (跟 SkillEntry undo toast 风格一致).
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteErr, setDeleteErr] = useState<string | null>(null);
 
   // selectedFile 切换时 reset edit state
   useEffect(() => {
     setEditing(false);
     setSaveErr(null);
+    setConfirmDelete(false);
+    setDeleteErr(null);
     if (selectedFile) {
       setDraftBody(selectedFile.body);
     }
   }, [selectedFile?.info.rel_path]);
+
+  // P3.3.4: confirmDelete 5 秒自动 reset (防员工悬停太久误点)
+  useEffect(() => {
+    if (!confirmDelete) return;
+    const t = setTimeout(() => setConfirmDelete(false), 5000);
+    return () => clearTimeout(t);
+  }, [confirmDelete]);
 
   const startEdit = () => {
     if (!selectedFile) return;
@@ -54,6 +68,28 @@ export default function WikiPreview() {
   const cancelEdit = () => {
     setEditing(false);
     setSaveErr(null);
+  };
+
+  // P3.3.4 (6/9): 软删流程 — 第一次点变 confirm, 第二次点真删 (5 秒 timeout reset)
+  const handleDeleteClick = async () => {
+    if (!selectedFile) return;
+    if (!confirmDelete) {
+      setConfirmDelete(true);
+      return;
+    }
+    setDeleting(true);
+    setDeleteErr(null);
+    try {
+      await wikiDeleteFile(selectedFile.info.rel_path);
+      // 删完清 selection, 刷新 list
+      await selectFile(null);
+      await loadFiles();
+    } catch (e) {
+      setDeleteErr(String(e));
+      setConfirmDelete(false);
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const saveEdit = async () => {
@@ -221,15 +257,39 @@ export default function WikiPreview() {
       <RelatedRecommend info={info} />
 
       {/* P35 (6/5): 编辑 toggle + action bar — 复用 banner btn 系列 */}
+      {/* P3.3.4 (6/9): action bar 加删除按钮 (mv 到 wiki/.trash/<ts>-原名.md) */}
       <div className="wiki-preview__actions">
         {!editing && (
-          <button
-            className="approval-banner__btn-link"
-            onClick={startEdit}
-            title="编辑 body markdown"
-          >
-            编辑
-          </button>
+          <>
+            <button
+              className="approval-banner__btn-link"
+              onClick={startEdit}
+              title="编辑 body markdown"
+              disabled={deleting}
+            >
+              编辑
+            </button>
+            <button
+              className={
+                confirmDelete
+                  ? "approval-banner__btn-deny"
+                  : "approval-banner__btn-link"
+              }
+              onClick={handleDeleteClick}
+              disabled={deleting}
+              title={
+                confirmDelete
+                  ? "再点一次确认删除 (mv 到 wiki/.trash/)"
+                  : "删除这个 entity/concept/query — 软删, 5 秒内再点确认"
+              }
+            >
+              {deleting
+                ? "删除中…"
+                : confirmDelete
+                  ? "确认删除"
+                  : "删除"}
+            </button>
+          </>
         )}
         {editing && (
           <>
@@ -256,6 +316,9 @@ export default function WikiPreview() {
 
       {saveErr && (
         <div className="wiki-preview__save-err">保存失败: {saveErr}</div>
+      )}
+      {deleteErr && (
+        <div className="wiki-preview__save-err">删除失败: {deleteErr}</div>
       )}
 
       {/* P35 (6/5): editing → textarea; 否则 → markdown */}

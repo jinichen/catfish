@@ -299,6 +299,11 @@ export const wikiCreateEntityOrConcept = (args: {
 export const wikiUpdateFile = (relPath: string, content: string) =>
   rawInvoke<WikiWriteResult>("wiki_update_file", { relPath, content });
 
+/** P3.3.4 (6/9 鸿波): 软删 entity/concept/query → mv 到 wiki/.trash/<ts>-原名.md.
+ * list/graph 立即看不到, 想 restore 自己 Finder 把文件 mv 回 entities/. */
+export const wikiDeleteFile = (relPath: string) =>
+  rawInvoke<WikiWriteResult>("wiki_delete_file", { relPath });
+
 // P28 / P29 (6/5 鸿波): Companion Dashboard 改 gateway/identity/secret-broker URL
 export interface ServerConfig {
   gateway_url: string;

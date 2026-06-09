@@ -211,6 +211,73 @@ pub async fn wiki_update_file(
     })
 }
 
+// ============================================================
+// P3.3.4 (6/9 鸿波) — wiki 软删 (move to .trash)
+//
+// 之前 wiki 系统只有 create / update / ingest, 没 delete. 员工想清错误 entity
+// 唯一办法是手动 rm ~/.catfish/wiki/entities/*.md, 体验差 + 容易误删别的.
+//
+// 软删策略 (跟 session_soft_delete 风格一致):
+//   - mv 文件到 ~/.catfish/wiki/.trash/<unix_ts>-<原文件名>.md
+//   - .trash 不在 wiki_list_files 扫描目录内, list / graph 立即看不到
+//   - 员工想 restore 自己 mv 回来 (有 grace 期但没 UI restore button)
+//   - 30+ 天后员工自己清 .trash, 不加 cron (catfish 没 cron 设施)
+// ============================================================
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn wiki_delete_file(rel_path: String) -> Result<WikiWriteResult, String> {
+    // 路径白名单 — 同 wiki_read_file / wiki_update_file
+    if rel_path.contains("..") || !rel_path.starts_with("wiki/") {
+        return Err(format!("rel_path 白名单不通过: {rel_path}"));
+    }
+    // 不准删 .trash 自身 (防递归 / 防员工误操作)
+    if rel_path.starts_with("wiki/.trash/") {
+        return Err("不能删 .trash 内文件 (用 Finder/Terminal 手动清)".to_string());
+    }
+    // 只允许删 entities/ concepts/ queries/ 下 .md
+    let allowed_dir = rel_path.starts_with("wiki/entities/")
+        || rel_path.starts_with("wiki/concepts/")
+        || rel_path.starts_with("wiki/queries/");
+    if !allowed_dir {
+        return Err(format!(
+            "只能删 wiki/entities/ wiki/concepts/ wiki/queries/ 下文件: {rel_path}"
+        ));
+    }
+    if !rel_path.ends_with(".md") {
+        return Err(format!("只能删 .md 文件: {rel_path}"));
+    }
+
+    let home = catfish_home()?;
+    let abs = home.join(&rel_path);
+    if !abs.is_file() {
+        return Err(format!("file 不存在: {rel_path}"));
+    }
+
+    // mv 到 .trash/<ts>-<原文件名>.md, 不覆盖 (ts 保证唯一)
+    let trash_dir = home.join("wiki").join(".trash");
+    fs::create_dir_all(&trash_dir)
+        .map_err(|e| format!("建 .trash 目录失败: {e}"))?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let fname = abs
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("无法取文件名")?;
+    let trashed_name = format!("{ts}-{fname}");
+    let dst = trash_dir.join(&trashed_name);
+
+    let bytes = fs::metadata(&abs).map(|m| m.len()).unwrap_or(0);
+    fs::rename(&abs, &dst).map_err(|e| format!("mv {abs:?} → {dst:?} 失败: {e}"))?;
+
+    Ok(WikiWriteResult {
+        rel_path: format!("wiki/.trash/{trashed_name}"),
+        bytes,
+        created: false,
+    })
+}
+
 /// 真**简单 today 真 YYYY-MM-DD format** — 不引 chrono dep (太重), 用 std time + hand calc.
 fn chrono_today() -> String {
     let secs = std::time::SystemTime::now()
