@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WikiWriteResult {
@@ -44,6 +44,55 @@ fn validate_slug(slug: &str) -> Result<(), String> {
         return Err(format!("slug 不能 - / . 开头: {slug}"));
     }
     Ok(())
+}
+
+/// P3.3.3 (6/9 鸿波) — slug normalize, 防 `FFCS数字鲶鱼` / `FFCS 数字鲶鱼` /
+/// `FFCS-数字鲶鱼` / `ffcs_数字鲶鱼` 被当成 4 个不同 entity.
+///
+/// 规则: 去所有 whitespace / `-` / `_` / `.`, 再 lowercase.
+/// 比对用, 不参与文件名生成 (文件名仍走 slugify).
+fn normalize_slug(s: &str) -> String {
+    s.chars()
+        .filter(|c| {
+            !c.is_whitespace()
+                && *c != '-'
+                && *c != '_'
+                && *c != '.'
+                && *c != '\u{3000}' // 全角空格
+        })
+        .collect::<String>()
+        .to_lowercase()
+}
+
+/// 扫现有 entities/ / concepts/ 找 normalize-等价的 slug, 命中返已有 rel_path.
+fn find_normalized_collision(
+    home: &Path,
+    sub_dir: &str,
+    new_slug: &str,
+) -> Option<String> {
+    let norm_new = normalize_slug(new_slug);
+    if norm_new.is_empty() {
+        return None;
+    }
+    let dir = home.join(sub_dir);
+    if !dir.is_dir() {
+        return None;
+    }
+    let entries = fs::read_dir(&dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+        let stem = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(s) => s,
+            None => continue,
+        };
+        if normalize_slug(stem) == norm_new {
+            return Some(format!("{sub_dir}/{stem}.md"));
+        }
+    }
+    None
 }
 
 /// title slugify — 真**真**真**简单**真**replace 非 word char 真 `-`** (跟 P1.2.2 wiki_save 真 slugify 一致).
@@ -91,7 +140,16 @@ pub async fn wiki_create_entity_or_concept(
 
     let path = dir.join(format!("{slug}.md"));
     if path.exists() {
-        return Err(format!("file 已存在: {sub_dir}/{slug}.md (用 update 不真**真**create)"));
+        return Err(format!("file 已存在: {sub_dir}/{slug}.md (用 update 不 create)"));
+    }
+
+    // P3.3.3 (6/9): normalize-等价 slug 防重复 — 例如 `FFCS数字鲶鱼` 跟
+    // `FFCS 数字鲶鱼` / `ffcs-数字鲶鱼` 都规范化到同一 key, 命中报错让 LLM 改走 update.
+    if let Some(existing) = find_normalized_collision(&home, sub_dir, &slug) {
+        return Err(format!(
+            "等价 slug 已存在: {existing} — '{slug}' 规范化后等同已有文件. \
+             用 wiki_update_file 改原文件, 不要 create 新的."
+        ));
     }
 
     let today = chrono_today();

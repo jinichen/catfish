@@ -111,7 +111,54 @@ fn parse_related(fm: &str) -> Vec<String> {
         .collect()
 }
 
+/// P3.3.3 (6/9 鸿波): tombstone 识别 — 防同 entity 多文件 (空格 vs 无空格 slug
+/// 等情况) 在 list / graph 里都显示. tombstone 标准:
+///   - 文件 <= 256 字节 (足够装 frontmatter `deprecated: true` + 一行注释)
+///   - **且** (没 frontmatter, **或** frontmatter 含 `deprecated: true`)
+///   - **且** body 命中废弃 marker (HTML 注释含"废弃"/"deprecated"/"请参见"/"tombstone",
+///         或纯空 body)
+///
+/// list/graph 跳过 tombstone, 但 `wiki_read_file` 仍能读 (允许员工手动打开看 marker).
+fn is_tombstone(size_bytes: u64, fm: &str, body: &str) -> bool {
+    if size_bytes > 256 {
+        return false;
+    }
+    let has_fm = !fm.is_empty();
+    let fm_marks_deprecated = fm
+        .lines()
+        .any(|l| {
+            let t = l.trim().to_lowercase();
+            t == "deprecated: true" || t == "tombstone: true"
+        });
+    if has_fm && !fm_marks_deprecated {
+        return false;
+    }
+    let body_trim = body.trim();
+    if body_trim.is_empty() {
+        return true;
+    }
+    let lower = body_trim.to_lowercase();
+    // HTML 注释 (开头 <!-- ) + 含废弃 marker keyword
+    let in_comment = lower.starts_with("<!--") && lower.trim_end().ends_with("-->");
+    let has_marker = lower.contains("废弃")
+        || lower.contains("deprecated")
+        || lower.contains("tombstone")
+        || lower.contains("请参见")
+        || lower.contains("已迁移")
+        || lower.contains("see also");
+    in_comment && has_marker
+}
+
 fn build_file_info(home: &Path, abs_path: &Path) -> Option<WikiFileInfo> {
+    build_file_info_inner(home, abs_path, /* allow_tombstone */ false)
+}
+
+/// allow_tombstone=true 时不跳 tombstone (wiki_read_file 用, 员工想直接打开看).
+fn build_file_info_inner(
+    home: &Path,
+    abs_path: &Path,
+    allow_tombstone: bool,
+) -> Option<WikiFileInfo> {
     let rel_path = abs_path.strip_prefix(home).ok()?.to_string_lossy().to_string();
     let kind = if rel_path.starts_with("wiki/entities/") {
         "entity"
@@ -129,7 +176,14 @@ fn build_file_info(home: &Path, abs_path: &Path) -> Option<WikiFileInfo> {
         .map(|s| s.to_string())
         .unwrap_or_default();
     let content = fs::read_to_string(abs_path).ok()?;
-    let (fm, _body) = split_frontmatter(&content);
+    let (fm, body) = split_frontmatter(&content);
+    let meta = fs::metadata(abs_path).ok()?;
+    let size_bytes = meta.len();
+
+    // P3.3.3: tombstone 直接跳, list/graph 看不到 (wiki_read_file 用 inner+true 仍能读)
+    if !allow_tombstone && is_tombstone(size_bytes, &fm, &body) {
+        return None;
+    }
 
     let title = parse_frontmatter_field(&fm, "title").unwrap_or_else(|| slug.clone());
     let subtype = parse_frontmatter_field(&fm, "entity_type")
@@ -137,9 +191,6 @@ fn build_file_info(home: &Path, abs_path: &Path) -> Option<WikiFileInfo> {
     let tags = parse_list_field(&fm, "tags");
     let related = parse_related(&fm);
     let sources = parse_list_field(&fm, "sources");
-
-    let meta = fs::metadata(abs_path).ok()?;
-    let size_bytes = meta.len();
     let mtime = meta
         .modified()
         .ok()
@@ -326,7 +377,8 @@ pub async fn wiki_read_file(rel_path: String) -> Result<WikiFileFull, String> {
     }
     let content = fs::read_to_string(&abs_path)
         .map_err(|e| format!("read {abs_path:?} 失败: {e}"))?;
-    let info = build_file_info(&home, &abs_path)
+    // P3.3.3: tombstone 也能读 (员工想看为啥废弃), 用 inner + allow_tombstone=true
+    let info = build_file_info_inner(&home, &abs_path, /* allow_tombstone */ true)
         .ok_or_else(|| format!("build_file_info 失败: {rel_path}"))?;
     let (frontmatter, body) = split_frontmatter(&content);
     Ok(WikiFileFull {

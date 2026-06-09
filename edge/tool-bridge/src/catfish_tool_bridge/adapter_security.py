@@ -84,6 +84,13 @@ _EXECUTE_CODE_DANGEROUS_PATTERNS: tuple[tuple[str, str], ...] = (
     ("/etc/shadow", "读 Linux 密码 hash — 严禁"),
     ("/etc/passwd", "读系统账户清单 — 严禁"),
     ("netrc", "读 ~/.netrc 凭证 — 严禁"),
+    # ── 鲶鱼自身目录 raw write (防绕过 wiki_*/journal_* tool) ──
+    # P3.3.3 (6/9): LLM 走 execute_code 直接 open(...,'w') 写 ~/.catfish/wiki/ 会绕过
+    # wiki_create_entity_or_concept 的 slug 校验 + normalize-dedup, 落盘成 orphan
+    # 文件 (例如 `FFCS 数字鲶鱼.md` 跟 `FFCS数字鲶鱼.md` 共存). 走 wiki_* tool.
+    ("/.catfish/wiki/", "写鲶鱼知识库 — 走 wiki_create_entity_or_concept / wiki_update_file"),
+    ("/.catfish/journal/", "写鲶鱼 journal — 走 catfish_journal_write tool"),
+    ("/.catfish/memory/", "写鲶鱼 memory — 走 memory tool, 不要 raw write"),
     # ── 网络外联 (data exfil 风险) ────────────────
     ("curl http", "外联网络 — 严禁 (用 catfish_browser_* / catfish_fetch_url, 走 audit)"),
     ("curl -x", "外联网络 — 严禁"),
