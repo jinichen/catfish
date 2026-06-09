@@ -121,6 +121,45 @@ grep "^#\?FEISHU_APP" ~/.hermes/.env
 # 5. Companion 工作台发条消息 — 应该通
 ```
 
+## 真实部署坑 — catfish-gateway launchd Bootstrap fail (6/9)
+
+`com.catfish.gateway.plist` 装机时 `launchctl bootstrap` 报:
+
+```
+Bootstrap failed: 5: Input/output error
+Try re-running the command as root for richer errors.
+```
+
+诊断 (已验证):
+
+- `plutil -lint` plist 语法 OK
+- `xattr -c` 清掉 `com.apple.provenance` 后还失败
+- venv python 路径真实存在
+- `sudo launchctl bootstrap` 同样失败 (不是权限)
+- `log show --predicate 'process == "launchd"'` 没找到拒原因
+
+可能根因 (没确诊): macOS 15/16 Sequoia/Tahoe 加严 LaunchAgent 限制,
+对 `~/person_task/` 下面的 binary / `LimitLoadToSessionType: Aqua` +
+`ProcessType: Interactive` 组合不再接受, 但 launchd 不给具体错.
+
+**Fallback** (实测可用): 用 `crontab @reboot` + shell alias 替代 launchd:
+
+```bash
+# 1. 开机自启 (crontab)
+(crontab -l 2>/dev/null;
+ echo "@reboot /Users/chenhongbo/person_task/catfish/central/llm-gateway/venv/bin/python -m catfish_gateway.app > /tmp/catfish-gateway.log 2>&1"
+) | crontab -
+
+# 2. 手动拉 alias (挂了重启用)
+echo "alias catfish-gateway-start='cd ~/person_task/catfish/central/llm-gateway && nohup ./venv/bin/python -m catfish_gateway.app > /tmp/catfish-gateway.log 2>&1 &'" >> ~/.zshrc
+```
+
+代价: 没 KeepAlive 自动重启, 挂了得手动. 但比 launchd 装不上强.
+
+后续要修: 简化 plist (砍 ProcessType / LimitLoadToSessionType / 复杂
+EnvironmentVariables), 或者整体迁移到 user-level systemd-like 方案
+(launchd 在 mac 上越来越折腾, 部署给客户成本高).
+
 ## 长期 TODO
 
 | 项 | 归属 |
@@ -129,3 +168,4 @@ grep "^#\?FEISHU_APP" ~/.hermes/.env
 | 找/恢复 `catfish_feishu` Python 包源, 让 ai.catfish.feishu-monitor 真工作 | catfish 仓库 (新功能) |
 | Companion retry banner 增加到 3 次 + 渐进 backoff (5s / 15s / 30s) | catfish 仓库 |
 | 装机 hermes 时自动 patch plist + .env (写进 catfish init 脚本) | catfish 仓库 |
+| **简化 com.catfish.gateway.plist 让 launchctl bootstrap 过** (现在 IO error 5) | catfish 仓库 |
