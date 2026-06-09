@@ -160,6 +160,217 @@ echo "alias catfish-gateway-start='cd ~/person_task/catfish/central/llm-gateway 
 EnvironmentVariables), 或者整体迁移到 user-level systemd-like 方案
 (launchd 在 mac 上越来越折腾, 部署给客户成本高).
 
+## v0.15.2 → v0.16.0 实测升级流程 (2026-06-10 鸿波)
+
+跨一个 minor (0.15→0.16) 但 hermes upstream 内部塞了 874 commit / 1962
+files / 205K insertions / 46K deletions, 实际是大版本变更. 升级原因:
+CVE-2026-48710 (Starlette BadHost) 修复需要 Starlette ≥1.0.1, v0.15.2
+pin 的是 1.0.0.
+
+### 前提状态
+
+本地 fork (`5-27-catfish-contrib` branch) 比 upstream main 多 7 个 catfish
+commit, 其中:
+- 3 个 5/29 当天 加 + 砍 (net-zero, 不需 cherry-pick):
+  `9c42b2f65 BL-HERMES-PICKER-WIRE-MODEL-OVERRIDE` (5/29 加 638 行)
+  `b9be2464d BL-CATFISH-USER-FORWARD-AUX-PORT-015` (5/29 加 137 行)
+  `7dad3a88d BL-CATFISH-PATCH-REVERT-TO-PLUGIN` (5/29 砍上面 + 改走 plugin)
+- 4 个 真要 cherry-pick:
+  `13223aff0` cors: allow tauri://localhost origin
+  `92eb9a221` cors: allow X-Catfish-User header
+  `112fcdcc6` cors: allow http://localhost:1420 (Tauri 2 vite devUrl)
+  `a18c25b3c` BL-HERMES-CATFISH-SKIN (鲶鱼 brand banner / tips / UI)
+
+另外 working tree 有 580 行未 commit 的 catfish 6/4 patch (api_server.py
++505 / run_agent.py +73 / branding.tsx ±4 / uv.lock ±2), 是 5/29
+REVERT-TO-PLUGIN 后实测 plugin cover 不全又加回来的源码层 patch.
+
+### Phase 1 — commit working tree
+
+```bash
+cd ~/.hermes/hermes-agent
+
+# clean .orig / .rej (patch 失败副产物)
+rm gateway/platforms/api_server.py.orig gateway/platforms/api_server.py.rej \
+   gateway/platforms/api_server.py.rej.orig run_agent.py.orig
+
+# commit 6/4 未 commit 的 catfish 源码层 patch (X-Catfish-User 透传必需)
+git add gateway/platforms/api_server.py run_agent.py \
+        ui-tui/src/components/branding.tsx uv.lock
+git commit -m "BL-CATFISH-RUNTIME-PATCH-RESTORE 6/4: catfish_outgoing_user inject 重新 patch 进源码"
+# → commit 8d5845aaa
+
+# 备份
+git tag pre-v0.16-upgrade-$(date +%Y%m%d-%H%M%S)
+git branch backup-v0.15.2
+cp -r venv venv.bak.v0.15.2
+cp ~/.hermes/.env ~/.hermes/.env.bak.pre-v0.16
+cp ~/.hermes/config.yaml ~/.hermes/config.yaml.bak.pre-v0.16
+```
+
+### Phase 2 — checkout v0.16 + cherry-pick
+
+```bash
+git checkout -b upgrade-v0.16 v2026.6.5
+
+# 5 个 commit 一次 cherry-pick (上面 4 个 + 6/4 那个 8d5845aaa)
+git cherry-pick 13223aff0 92eb9a221 112fcdcc6 a18c25b3c 8d5845aaa
+```
+
+冲突结果 (实测):
+| commit | 状态 |
+|---|---|
+| 13223aff0 (cors tauri) | ✓ auto-merge 干净 |
+| 92eb9a221 (cors X-Catfish-User) | ✓ auto-merge 干净 |
+| 112fcdcc6 (cors localhost:1420) | ✓ auto-merge 干净 |
+| **a18c25b3c (brand skin)** | ✗ 撞 `hermes_cli/banner.py` + `hermes_cli/tips.py` — **skip** (cosmetic, 不影响 chat) |
+| 8d5845aaa (BL-CATFISH-RUNTIME-PATCH-RESTORE) | ⚠️ 撞 3 文件: `uv.lock` / `ui-tui/branding.tsx` / `gateway/platforms/api_server.py` |
+
+#### resolve 策略
+
+```bash
+# brand skin 撞 → 跳过
+git cherry-pick --skip
+
+# 8d5845aaa 撞:
+# 1. uv.lock keep ours (pip install 会重生成)
+git checkout --ours uv.lock && git add uv.lock
+
+# 2. branding.tsx keep ours (cosmetic)
+git checkout --ours ui-tui/src/components/branding.tsx
+git add ui-tui/src/components/branding.tsx
+
+# 3. api_server.py 只 1 处冲突 (line 3833-3839), theirs 块跟前面
+#    92eb9a221 cherry-pick 重复 (都加 catfish_outgoing_user_run = ...)
+#    → 删 conflict markers + theirs 块
+sed -i.bak '3833,3839d' gateway/platforms/api_server.py
+rm gateway/platforms/api_server.py.bak
+git add gateway/platforms/api_server.py
+
+# 继续
+git cherry-pick --continue
+```
+
+最终落 4 个 commit (跳过 brand skin):
+```
+5dfdeece8 BL-CATFISH-RUNTIME-PATCH-RESTORE
+3f84e53b0 cors: allow http://localhost:1420
+78b615099 cors: allow X-Catfish-User header
+f0aaedfd5 api_server: allow tauri://localhost origin
+3c231eb39 chore: release v0.16.0 (2026.6.5) ← v0.16 base
+```
+
+### Phase 3 — 装依赖
+
+```bash
+source venv/bin/activate
+pip install -e . --upgrade        # hermes 0.15.1 → 0.16.0
+pip install 'starlette>=1.0.1'    # CVE-2026-48710 (1.0.0 → 1.2.1)
+```
+
+实测装上的新依赖: `pathspec 1.1.1`, `Markdown 3.10.2`.
+
+### Phase 4 — catfish plugin self-test (反射目标静态 grep)
+
+```bash
+python3 -c "
+import os, re
+root = os.path.expanduser('~/.hermes/hermes-agent')
+api = open(f'{root}/gateway/platforms/api_server.py').read()
+appr = open(f'{root}/tools/approval.py').read()
+
+checks = {
+    'P15 _stream_q.put':              r'\b_stream_q\.put\b',
+    'P15 _on_delta':                  r'def\s+_on_delta\s*\(',
+    'P7 _create_agent':               r'def\s+_create_agent\s*\(',
+    'P8 _CORS_HEADERS':               r'_CORS_HEADERS',
+    'P8 _cors_headers_for_origin':    r'def\s+_cors_headers_for_origin\s*\(',
+    'P8 _TAURI_ORIGINS':              r'_TAURI_ORIGINS',
+    'P5 _extract_catfish_outgoing_user': r'def\s+_extract_catfish_outgoing_user\s*\(',
+}
+for name, pat in checks.items():
+    print(f'{name:40s}', bool(re.search(pat, api)))
+
+for name, pat in {
+    'P15.2 resolve_gateway_approval': r'def\s+resolve_gateway_approval',
+    'P15.2 register_gateway_notify':  r'def\s+register_gateway_notify',
+    'P15.2 _gateway_queues':          r'\b_gateway_queues\b',
+}.items():
+    print(f'{name:40s}', bool(re.search(pat, appr)))
+"
+```
+
+期望: **10/10 全 True**. 实测全过. 关键发现是 v0.16 把 `_extract_catfish_outgoing_user` 从 upstream 删了 (`X-Catfish-User` 协议 hermes
+不再原生支持), 必须靠 catfish patch 重新加回 — 这正是 `8d5845aaa`
+BL-CATFISH-RUNTIME-PATCH-RESTORE commit 干的事.
+
+### Phase 5 — 重启 hermes
+
+```bash
+# ⚠️ ThrottleInterval=300 注意: hermes 死后 launchd 等 5 分钟才会拉新
+# 如果 kickstart -k 后立即查 lsof 没 LISTEN, 别慌, 等几分钟. 或者用
+# launchctl kickstart (不带 -k) 触发 launchd 立即拉.
+
+launchctl kickstart gui/$(id -u)/ai.hermes.gateway
+
+sleep 8
+lsof -i :8642                                       # python LISTEN
+launchctl list | grep ai.hermes.gateway             # PID + exit code
+tail -50 ~/.hermes/logs/gateway.log
+```
+
+期望:
+```
+Starting Hermes Gateway...
+✓ api_server connected
+✓ weixin connected
+Gateway running with 2 platform(s)
+Cron ticker / kanban dispatcher OK
+```
+
+(feishu 关了, 不应该 connect)
+
+### Phase 6 — Companion 工作台验证
+
+发条 hello, 应该:
+- ✓ LLM 回复 ("你好! 我是小鲶...")
+- ✓ token usage 显示 (例如 `63.4K/1000K`)
+- ✓ model picker 显示 (Gemini 3.5 Flash 等)
+- ✓ tool call 测试: 发 "现在几点了" → LLM 调 `terminal(command="date")` → 返时间
+
+### 回滚 (任何一步出问题)
+
+```bash
+cd ~/.hermes/hermes-agent
+git checkout backup-v0.15.2
+
+mv venv venv.v0.16-failed
+mv venv.bak.v0.15.2 venv
+
+launchctl kickstart -k gui/$(id -u)/ai.hermes.gateway
+sleep 8
+lsof -i :8642
+```
+
+### 升级后 7 commit 的 5 个跳过原因
+
+| commit | 升级时处理 | 原因 |
+|---|---|---|
+| `9c42b2f65 / b9be2464d / 7dad3a88d` | 全跳过 | 5/29 当天 加+砍 net-zero, v0.16 base 干净 |
+| `13223aff0 / 92eb9a221 / 112fcdcc6` | cherry-pick (3 个) | CORS 基础设施, v0.16 也需要 |
+| `a18c25b3c (brand skin)` | skip | cosmetic, 撞 banner.py / tips.py, 不影响 chat |
+| `8d5845aaa` (新 commit, working tree 化) | cherry-pick + 手 resolve | catfish_outgoing_user 透传必需, v0.16 删了 upstream 自带的 `_extract_catfish_outgoing_user` |
+
+### v0.16 真正的新东西 (对 catfish 价值评估)
+
+v0.16 主线 "The Surface Release" 改 Electron desktop / Web admin / 远程
+hermes / 简体中文 i18n / QQBot — **对 catfish 全部零价值** (Companion
+自己是 GUI, 不用 hermes desktop). 唯一硬刚理由是 CVE Starlette.
+
+实测升级后**没修** hermes 间歇 SIGTERM 循环, 仍要 ThrottleInterval=300
++ Companion banner retry 兜底. v0.16 没什么"必须升"的功能, 但也没破坏
+catfish 集成 (反射目标 10/10 全在).
+
 ## 长期 TODO
 
 | 项 | 归属 |
