@@ -17,9 +17,11 @@ const TABS: { id: TabId; label: string }[] = [
   // (单独加图标视觉不一致, 鸿波 5/18 反馈)
   { id: "email", label: "邮件" },
   // { id: "console", label: "控制台" },  // 5/16 砍
-  { id: "dashboard", label: "仪表盘" },
   // BL-CATFISH-WIKI-MODE P3.3 (6/4): 知识体系 tab — 跟其它 tab 纯文字对齐, 无 emoji
+  // 6/9 鸿波: 知识体系 ↔ 仪表盘 互换. 知识体系日常翻看比仪表盘多, 放中段.
+  //          仪表盘 (本地服务 / 配额 / 隐私 / 技能) 是配置看不勤, 放最右当"设置".
   { id: "wiki", label: "知识体系" },
+  { id: "dashboard", label: "仪表盘" },
 ];
 
 export default function TabBar() {
