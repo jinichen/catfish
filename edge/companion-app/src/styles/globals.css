@@ -21,6 +21,44 @@
   animation: catfish-advisory-slide 220ms ease;
 }
 
+/* P3.3.5 (6/9 鸿波): hermes 重连 banner — 走跟 advisory medium 同色系
+ * (琥珀, 不当 critical 红色), 加 spinner 旋转动画 + 倒计时. */
+.hermes-reconnect-banner {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 16px;
+  font-size: 13px;
+  background: rgba(232, 163, 61, 0.08);
+  color: var(--catfish-text);
+  border-left: 3px solid #E8A33D;
+  border-bottom: 1px solid rgba(232, 163, 61, 0.18);
+  animation: catfish-advisory-slide 220ms ease;
+}
+
+.hermes-reconnect-banner__spinner {
+  display: inline-block;
+  font-size: 14px;
+  line-height: 1;
+  color: #E8A33D;
+  animation: catfish-spin 1.2s linear infinite;
+}
+
+@keyframes catfish-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.hermes-reconnect-banner__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.hermes-reconnect-banner__countdown {
+  color: var(--catfish-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
 @keyframes catfish-advisory-slide {
   from { transform: translateY(-4px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }

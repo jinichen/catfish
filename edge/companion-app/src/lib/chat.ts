@@ -59,6 +59,9 @@ interface SendChatParams {
     /** @deprecated 5/18 BL-CHAT-FALLBACK-MODEL-REVERT, 不再用 */
     fallback?: number;
     upstreamFinalRetry?: number;
+    /** P3.3.5 (6/9): hermes connection error 自动重试计数 (max 1).
+     *  TypeError: Load failed → dispatch banner + sleep 5s + recursive 重发. */
+    connRetry?: number;
   };
 }
 
@@ -316,7 +319,66 @@ export async function streamChat(params: SendChatParams): Promise<void> {
       });
     }
   } catch (e) {
-    onError(`无法连接 ${useHermes ? "hermes API" : "gateway"}: ${stringify(e)}`);
+    // P3.3.5 (6/9 鸿波): hermes connection error (TypeError: Load failed /
+    // Failed to fetch / NetworkError) → dispatch banner event + auto retry 1 次
+    // 5 秒后. hermes launchd KeepAlive 重启 + ThrottleInterval=300 兜底, 5s 通常
+    // 够老 instance shutdown + 新 instance 接管.
+    //
+    // 真根因: hermes 内置 lark/weixin platform 在 DNS 失败时触发 sys.exit, launchd
+    // 拉回 — 这段窗口 Companion fetch 必挂. 之前直接 onError 显红框, 用户得手动
+    // 重发. 现在 banner + 自动重试一次, 用户体感 "卡 5-10s 后通了" 而不是红框.
+    const isConnError =
+      e instanceof TypeError &&
+      /Load failed|Failed to fetch|NetworkError|ERR_CONNECTION/i.test(
+        stringify(e),
+      );
+    if (isConnError && !_retryCounters?.connRetry) {
+      // 通知 UI 显重连 banner
+      window.dispatchEvent(
+        new CustomEvent("catfish:hermes-reconnecting", {
+          detail: { attempt: 1, max: 1 },
+        }),
+      );
+      await new Promise((r) => setTimeout(r, 5000));
+      // 检查 signal 是否已 cancel (用户手动停了)
+      if (signal?.aborted) {
+        window.dispatchEvent(new CustomEvent("catfish:hermes-reconnect-end"));
+        return;
+      }
+      // recursive retry, 标 connRetry=1 防死循环
+      return streamChat({
+        model,
+        messages,
+        tools,
+        sessionId,
+        onDelta,
+        onToolCalls,
+        onDone: (info) => {
+          window.dispatchEvent(
+            new CustomEvent("catfish:hermes-reconnect-end"),
+          );
+          onDone(info);
+        },
+        onError: (msg) => {
+          window.dispatchEvent(
+            new CustomEvent("catfish:hermes-reconnect-end"),
+          );
+          onError(msg);
+        },
+        signal,
+        _retryCounters: { ..._retryCounters, connRetry: 1 },
+      });
+    }
+    // 真挂或非 connection error → onError 走老路
+    if (isConnError) {
+      window.dispatchEvent(new CustomEvent("catfish:hermes-reconnect-end"));
+      onError(
+        `无法连接 ${useHermes ? "hermes API" : "gateway"} (已自动重试 1 次仍失败). ` +
+          `hermes 可能在重启中, 等几秒后手动重发. 详细: ${stringify(e)}`,
+      );
+    } else {
+      onError(`无法连接 ${useHermes ? "hermes API" : "gateway"}: ${stringify(e)}`);
+    }
     return;
   }
 

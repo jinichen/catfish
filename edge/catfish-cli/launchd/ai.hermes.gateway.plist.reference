@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  P3.3.5 (6/9 鸿波) — hermes gateway LaunchAgent reference.
+
+  ⚠️ 这不是装机源, 是参考样板. hermes 装机走 hermes upstream `hermes init`,
+  自动生成 ~/Library/LaunchAgents/ai.hermes.gateway.plist. 但 catfish 部署
+  时**必须**做下面 2 处调整, 不然 hermes 会反复被 launchd 重启:
+
+  1. 加 ThrottleInterval=300 — 防 hermes cascade restart 风暴
+  2. KeepAlive 加 Crashed=true — 限定只 crashed 重启, 避免 SuccessfulExit
+     非 0 时 launchd 立刻拉新 instance 导致 --replace SIGTERM 老 instance
+
+  装法:
+    # hermes upstream 初装
+    hermes init  # 会生成默认 plist
+
+    # 拿这份 reference 覆盖
+    cp ai.hermes.gateway.plist.reference \
+       ~/Library/LaunchAgents/ai.hermes.gateway.plist
+    # ⚠️ 改路径 — ProgramArguments / WorkingDirectory / StandardOutPath
+    # 必须改成你 mac 上实际的 hermes-agent 路径!
+
+    launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/ai.hermes.gateway.plist
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.hermes.gateway.plist
+
+  装机后必跑 (跟 P3.3.5 一起):
+    # 关 hermes 内置 feishu (不然 lark reconnect 风暴触发 sys.exit)
+    # 注释 ~/.hermes/.env 里 FEISHU_APP_ID / FEISHU_APP_SECRET 两行
+    sed -i.bak 's/^FEISHU_APP_ID=/#FEISHU_APP_ID=/' ~/.hermes/.env
+    sed -i.bak 's/^FEISHU_APP_SECRET=/#FEISHU_APP_SECRET=/' ~/.hermes/.env
+
+  状态查询:
+    launchctl list | grep ai.hermes.gateway
+    lsof -i :8642
+    tail -50 ~/.hermes/logs/gateway.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.hermes.gateway</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <!-- ⚠️ 改成你 mac 实际路径 -->
+        <string>/Users/REPLACE_ME/.hermes/hermes-agent/venv/bin/python</string>
+        <string>-m</string>
+        <string>hermes_cli.main</string>
+        <string>gateway</string>
+        <string>run</string>
+        <string>--replace</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/REPLACE_ME/.hermes/hermes-agent</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/REPLACE_ME/.hermes/hermes-agent/venv/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>VIRTUAL_ENV</key>
+        <string>/Users/REPLACE_ME/.hermes/hermes-agent/venv</string>
+        <key>HERMES_HOME</key>
+        <string>/Users/REPLACE_ME/.hermes</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- P3.3.5: KeepAlive 限定 — 只在崩溃 (SIGSEGV / non-zero exit) 时重启,
+         正常 sys.exit(0) / SIGTERM by user 不重启. 配合 ThrottleInterval=300
+         可以避免 hermes upstream 内部 watchdog sys.exit 后 launchd cascade. -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+
+    <!-- P3.3.5: 5 分钟 throttle — hermes 启动后 5 分钟内死, launchd 等满
+         5 分钟才再拉. 防 hermes 起来 30 秒又被 lark/weixin reconnect 触发
+         死, 反复 cascade restart 风暴. -->
+    <key>ThrottleInterval</key>
+    <integer>300</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/REPLACE_ME/.hermes/logs/gateway.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/REPLACE_ME/.hermes/logs/gateway.error.log</string>
+</dict>
+</plist>
