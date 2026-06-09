@@ -45,13 +45,22 @@ docker compose -f bench/docker-compose-mcp-bench.yml up -d $BUILD_FLAG
 # 2. 等 mcp-registry 健康
 echo ""
 echo "==> 等 mcp-registry 健康 ($MCP_HOST/health)..."
+HEALTHY=false
 for i in $(seq 1 60); do
     if curl -fs "$MCP_HOST/health" >/dev/null 2>&1; then
         echo "    mcp-registry up after ${i}s"
+        HEALTHY=true
         break
     fi
     sleep 1
 done
+if [ "$HEALTHY" != "true" ]; then
+    echo "    !! mcp-registry 60s 内没 healthy, 不跑 locust 浪费时间"
+    echo "    !! 看 log: docker compose -f bench/docker-compose-mcp-bench.yml logs mcp-registry"
+    docker compose -f bench/docker-compose-mcp-bench.yml logs mcp-registry --no-color | tail -30
+    docker compose -f bench/docker-compose-mcp-bench.yml down -v
+    exit 1
+fi
 
 # 3. docker stats 后台采
 STATS_FILE="bench/docker-stats-mcp-${USERS}-${TS}.txt"

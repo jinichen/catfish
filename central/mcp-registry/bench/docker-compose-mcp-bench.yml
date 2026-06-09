@@ -40,6 +40,8 @@ services:
     environment:
       CATFISH_ENV: prod
       CATFISH_DB_URL: postgresql://catfish:bench@pg:5432/catfish_bench
+      # 6/9 BL-DOCKER-HOST 真坑: app.py 默认 127.0.0.1, 必须 0.0.0.0
+      HOST: 0.0.0.0
       PORT: 8996
       # bench 不测 OIDC, 测试用 fake issuer (mcp-registry 只验 header, 不验 JWT)
       CATFISH_OIDC_ISSUER: http://localhost:8998

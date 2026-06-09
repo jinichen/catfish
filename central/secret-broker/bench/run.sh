@@ -40,13 +40,22 @@ docker compose -f bench/docker-compose-broker-bench.yml up -d $BUILD_FLAG
 # 2. 等 broker 健康
 echo ""
 echo "==> 等 secret-broker 健康 ($BROKER_HOST/health)..."
+HEALTHY=false
 for i in $(seq 1 60); do
     if curl -fs "$BROKER_HOST/health" >/dev/null 2>&1; then
         echo "    secret-broker up after ${i}s"
+        HEALTHY=true
         break
     fi
     sleep 1
 done
+if [ "$HEALTHY" != "true" ]; then
+    echo "    !! secret-broker 60s 内没 healthy, 不跑 locust"
+    echo "    !! 看 log: docker compose -f bench/docker-compose-broker-bench.yml logs secret-broker"
+    docker compose -f bench/docker-compose-broker-bench.yml logs secret-broker --no-color | tail -30
+    docker compose -f bench/docker-compose-broker-bench.yml down -v
+    exit 1
+fi
 
 # 3. docker stats 后台采
 STATS_FILE="bench/docker-stats-broker-${USERS}-${TS}.txt"

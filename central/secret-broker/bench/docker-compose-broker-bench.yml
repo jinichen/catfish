@@ -40,6 +40,8 @@ services:
       #   python3 -c "import base64; print(base64.b64encode(b'BENCH_AES256_BENCH_AES256_BENCH_').decode())"
       # 注: 这 key 只 bench 跑用, 不影响 prod (bench PG 用 tmpfs, down -v 清掉)
       CATFISH_SECRET_MASTER_KEY: "QkVOQ0hfQUVTMjU2X0JFTkNIX0FFUzI1Nl9CRU5DSF8="
+      # 6/9 BL-DOCKER-HOST 真坑: app.py 默认 127.0.0.1, 必须 0.0.0.0
+      HOST: 0.0.0.0
       PORT: 8995
       LOG_LEVEL: WARNING
     deploy:
