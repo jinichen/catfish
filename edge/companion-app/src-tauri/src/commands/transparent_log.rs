@@ -234,8 +234,14 @@ fn preview_bytes(s: &str, max: usize) -> String {
     if s.len() <= max {
         return s.to_string();
     }
-    let s = &s[..max.min(s.len())];
-    format!("{s}\n...[truncated, full payload in fs]")
+    // P3.3.5 (6/9): byte slice 必须落在 UTF-8 char boundary, 不然 panic.
+    // 中文 prompt 含 3-byte char (e.g. '情' 在 bytes 4095..4098), max=4096
+    // 切到字符中间. 往前找最近 char boundary.
+    let mut cut = max.min(s.len());
+    while cut > 0 && !s.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!("{}\n...[truncated, full payload in fs]", &s[..cut])
 }
 
 fn simple_hash(s: &str) -> u64 {

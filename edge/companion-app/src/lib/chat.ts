@@ -332,7 +332,7 @@ export async function streamChat(params: SendChatParams): Promise<void> {
       /Load failed|Failed to fetch|NetworkError|ERR_CONNECTION/i.test(
         stringify(e),
       );
-    if (isConnError && !_retryCounters?.connRetry) {
+    if (isConnError && !params._retryCounters?.connRetry) {
       // 通知 UI 显重连 banner
       window.dispatchEvent(
         new CustomEvent("catfish:hermes-reconnecting", {
@@ -366,7 +366,7 @@ export async function streamChat(params: SendChatParams): Promise<void> {
           onError(msg);
         },
         signal,
-        _retryCounters: { ..._retryCounters, connRetry: 1 },
+        _retryCounters: { ...params._retryCounters, connRetry: 1 },
       });
     }
     // 真挂或非 connection error → onError 走老路
