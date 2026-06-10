@@ -79,6 +79,10 @@ export interface PoliticalFlag {
 export interface MainTask {
   /** 当天主菜 id (LLM 自己排 1, 2, 3...) */
   id: number;
+  /** P3.3.9 (6/10): 跨 refresh 稳定 key, 6 字符 [a-z0-9]. LLM 生成 + 上次 cache 注入
+   *  让 LLM 同业务复用旧 uid. task_chat / decisions 等持久化用此 key, 不用 title
+   *  (title 每次 refresh LLM 会重写). */
+  taskUid: string;
   /** 一句话标题 */
   title: string;
   /** "high" / "medium" / "low" — UI 边框颜色 */
@@ -156,6 +160,7 @@ const SYSTEM_PROMPT = `你是 catfish — 中国央国企员工的智能参谋. 
   "main_tasks": [
     {
       "id": 1,
+      "task_uid": "li5d3k",
       "title": "老李催资质方案范围",
       "urgency": "high",
       "reason": "影响项目 A 客户关系",
@@ -196,6 +201,22 @@ options[].tone **必须**是这 6 个之一: "strict" / "balanced" / "friendly" 
 没选择. 真没第 2 种合理口径 → 改主菜表达, 别勉强减 options.
 **例外**: senior tier "异常例外型" 主菜可以 options=[] 只列风险 (上面已说).
 
+## 4) task_uid 跨 refresh 复用 (P3.3.9, 6/10)
+
+每个 main_task 必须有 task_uid (**6 字符**, 只能 [a-z0-9]).
+
+user prompt 里如果给了 "# 上次 advisor 输出" section, 列出 12 小时内出现过的
+task (含 uid + title + urgency), 你**必须**:
+- 判定 "业务实质相同" 的 task → **复用旧 task_uid**, 不要新生成
+- 判定标准 = 同项目 / 同人 / 同截止 / 同业务环节 / 同实质动作.
+  title 表述差异不算新 task:
+  · "CSMM-4 评估撰写" ≡ "CSMM-4 正式评估准备" → 复用同一 uid
+  · "中电福富研发立项" ≡ "中电北京福富资质申报" → 复用同一 uid
+- 真新业务 (上次没见过) → 自己生成 6 字符 [a-z0-9] uid, 例 "csmm4z" / "bjffr1"
+
+task_uid 用作员工跟这条 task 的 task chat 文件名. 你重写 title 会导致旧
+chat 找不到, 必须复用 uid 才能让员工跨 refresh 看到历史对话.
+
 ## 3) draftPath 跟 tool call 绑定 (5/22 撞过的)
 options[].draftPath 只能从你**真调** catfish_draft_email_reply /
 catfish_draft_meeting_brief / catfish_compose_followup_list 后**返回的 path**
@@ -215,7 +236,7 @@ catfish_draft_meeting_brief / catfish_compose_followup_list 后**返回的 path*
 
 function buildUserPrompt(input: AdvisorInput): string {
   // 5/26: sessionGoal 字段删 — hermes 0.14 原生 /goal 替代, advisor 不再读 catfish 这套
-  const { profile, emails, events, todos, ctx, urgencyMap } = input;
+  const { profile, emails, events, todos, ctx, urgencyMap, previousTasks } = input;
   const parts: string[] = [];
 
   const today = new Date();
@@ -301,6 +322,18 @@ ${
     parts.push(`# 工作计划 TODO (${todos.length} 件)\n${lines.join("\n")}`);
   }
 
+  // P3.3.9 (6/10): 上次 advisor 输出 — 让 LLM 复用 task_uid (跨 refresh 稳定)
+  if (previousTasks && previousTasks.length > 0) {
+    const lines = previousTasks.map(
+      (t) => `- ${t.taskUid} | ${t.urgency} | ${t.title}`,
+    );
+    parts.push(`# 上次 advisor 输出 (12 小时内)
+**同业务必须复用 task_uid, 不要新生成**. 判定标准 = 同项目/同人/同截止/同业务环节.
+title 表述差异不算新 task. 详见 SYSTEM_PROMPT § "task_uid 跨 refresh 复用".
+
+${lines.join("\n")}`);
+  }
+
   parts.push(`# 任务
 按 system prompt 指示, 出 JSON. 严格按 tier=${profile.tier} 的粒度:
 ${
@@ -330,6 +363,9 @@ export interface AdvisorInput {
   urgencyMap: Record<string, string>;
   // sessionGoal 5/26 删 — hermes 0.14 原生 /goal 替代
   model: string;
+  /** P3.3.9 (6/10): 上次 advisor 输出 (12h 内 cache), 让 LLM 复用 task_uid.
+   *  fetchBriefingAdvisor 内部从 advisorCacheGet 拉, 不需要 caller 传. */
+  previousTasks?: Array<{ taskUid: string; title: string; urgency: string }>;
 }
 
 /** 5/22 cold start 修锁: 同时只允许一个 advisor LLM call 跑.
@@ -427,7 +463,30 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
     return null;
   }
 
-  const userPrompt = buildUserPrompt(input);
+  // P3.3.9 (6/10): caller 没传 previousTasks 时, 内部从 advisorCacheGet 拉
+  //   (含 stale, 让 LLM 复用 uid). 老 cache 没 taskUid 字段就跳过, 不出错.
+  let inputWithPrev = input;
+  if (!input.previousTasks) {
+    try {
+      const { advisorCacheGet } = await import("./advisor_cache");
+      const cached = await advisorCacheGet();
+      if (cached && cached.result?.mainTasks?.length > 0) {
+        const prev = cached.result.mainTasks
+          .filter((t) => typeof t.taskUid === "string" && t.taskUid.length > 0)
+          .map((t) => ({ taskUid: t.taskUid, title: t.title, urgency: t.urgency }));
+        if (prev.length > 0) {
+          inputWithPrev = { ...input, previousTasks: prev };
+          console.log(
+            `[advisor] 注入上次 ${prev.length} 条 task_uid (复用让 chat 跨 refresh 不丢)`,
+          );
+        }
+      }
+    } catch (e) {
+      console.warn("[advisor] 拉 advisor_cache 失败 (P3.3.9 uid 复用降级):", e);
+    }
+  }
+
+  const userPrompt = buildUserPrompt(inputWithPrev);
   const url = `${config.backendUrl}/v1/chat/completions${SERVICE_LLM_QUERY}`;
   console.log("[advisor] 发 fetch:", url, "prompt 长度:", userPrompt.length);
 
@@ -567,10 +626,29 @@ function parseAdvisorResult(raw: unknown): AdvisorResult | null {
   return { tier, mainTasks, handledSilently };
 }
 
+/** P3.3.9 (6/10): 生成 6 字符 [a-z0-9] uid. LLM 没返 task_uid 时 fallback 用. */
+function generateTaskUid(): string {
+  return Math.random().toString(36).slice(2, 8).padEnd(6, "0");
+}
+
 function parseMainTask(t: Record<string, unknown>): MainTask | null {
   const title = t.title;
   if (typeof title !== "string" || !title.trim()) return null;
   const id = typeof t.id === "number" ? t.id : 0;
+
+  // P3.3.9 (6/10): task_uid 读, 兼容 task_uid / taskUid; 没返 fallback 生成新.
+  const rawUid =
+    typeof t.task_uid === "string" && t.task_uid.length >= 4
+      ? t.task_uid
+      : typeof t.taskUid === "string" && t.taskUid.length >= 4
+      ? t.taskUid
+      : null;
+  const taskUid = rawUid
+    ? rawUid.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 12) || generateTaskUid()
+    : generateTaskUid();
+  if (!rawUid) {
+    console.warn(`[advisor] task '${title}' LLM 没返 task_uid, fallback 新生成 '${taskUid}' (跨 refresh chat 历史会丢)`);
+  }
 
   const urgencyRaw = typeof t.urgency === "string" ? t.urgency.toLowerCase() : "medium";
   const urgency: "high" | "medium" | "low" =
@@ -707,6 +785,7 @@ function parseMainTask(t: Record<string, unknown>): MainTask | null {
 
   return {
     id,
+    taskUid,
     title,
     urgency,
     reason,

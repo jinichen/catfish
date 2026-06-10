@@ -204,13 +204,17 @@ pub async fn weather_get(force: Option<bool>) -> Result<WeatherCache, String> {
     let force = force.unwrap_or(false);
     let path = cache_path()?;
 
-    // 1. 看 cache
+    // 1. 看 cache.
+    //   P3.3.8 fix2 (6/10): cache 里 entries 空 / 有 error = 失败状态,
+    //   不要算 fresh — 否则 wttr.in 第一次拉失败后 6h 内都黑屏, 刷新按钮也救不了
+    //   (BriefingCard 调 weatherGet(false) 不 force). 强制视同 stale 让下次重拉.
     if !force && path.exists() {
         if let Ok(content) = std::fs::read_to_string(&path) {
             if let Ok(mut cache) = serde_json::from_str::<WeatherCache>(&content) {
                 if let Ok(fetched) = cache.fetched_at.parse::<DateTime<Utc>>() {
                     let age_hours = (Utc::now() - fetched).num_hours();
-                    cache.stale = age_hours >= CACHE_TTL_HOURS;
+                    let cache_is_failed = cache.entries.is_empty() || cache.error.is_some();
+                    cache.stale = age_hours >= CACHE_TTL_HOURS || cache_is_failed;
                     if !cache.stale {
                         return Ok(cache);
                     }

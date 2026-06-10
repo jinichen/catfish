@@ -1,14 +1,20 @@
 /** P3.3.6 (2026-06-10 鸿波) — 早安 tab 左右两栏 view.
- * P3.3.7 Phase 1 (6/10 鸿波): DetailPane 砍'目标/进展/建议' 静态段, 改成 in-memory
- * task-scoped chat. system prompt 注入 task 上下文 (title / reason / contextRefs /
- * flags / 早晨 options). 历史不持久 — 切 task / 刷新都重置. 不调 tool.
+ *
+ * P3.3.7 Phase 1 (6/10): DetailPane 砍'目标/进展/建议' 静态段, 改成 in-memory
+ * task-scoped chat. system prompt 注入 task 上下文.
+ * P3.3.7 Phase 2 (6/10): chat 持久化到 ~/.catfish/task_chat/<key>.jsonl
+ * P3.3.8/.9 (6/10): 天气 / task_uid stable key
+ * P3.3.10 (6/10): chat 升到工作台同款 — useTaskChat hook (含 tool calling),
+ *   ChatToolCall 卡片 render tool 进度 / 调用结果, P15/P15.2 approval banner
+ *   监听 catfish:approval-pending event 弹顶部, catfish:approval-send event
+ *   走 send 路径.
  *
  * 左 sidebar 按 urgency 分组 (急/中/低/已默认处理) 保持不变.
  *
- * 数据 0 后端改动: 复用 MainTask / HandledSilentlyItem / streamChat / advisorTaskState.
+ * 数据 0 后端改动: 复用 MainTask / HandledSilentlyItem / advisorTaskState.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   advisorTaskStateClear,
@@ -16,14 +22,25 @@ import {
   type TaskStateFetch,
   type TaskStatus,
 } from "../../../lib/advisor_cache";
-import { streamChat } from "../../../lib/chat";
 import type {
   HandledSilentlyItem,
   MainTask,
 } from "../../../lib/briefing_advisor";
 import { taskChatAppend, taskChatClear, taskChatGet } from "../../../lib/task_chat";
+import { toolBridgeChatApproval } from "../../../lib/tauri";
 import type { ChatMessage } from "../../../types/chat";
 import { useChatStore } from "../../../store/chat";
+import { useTaskChat } from "../../../hooks/useTaskChat";
+import ChatToolCall from "../../Chat/ChatToolCall";
+import { Markdown } from "../../../lib/markdown";  // P3.3.10 fix (6/10): 复用工作台 markdown render (粗体/列表/代码块)
+
+/** P3.3.10: hermes approval pending event 数据 (跟 ChatPanel PendingApproval 同款). */
+interface PendingApproval {
+  approval_session_key: string;
+  command: string;
+  description: string;
+  pattern_key: string;
+}
 
 interface BriefingTwoColumnViewProps {
   tasks: MainTask[];                                  // 已 filter ignored
@@ -204,6 +221,15 @@ function buildTaskSystemPrompt(task: MainTask): string {
     "- 起草内容 / 帮她做决策 / 给具体下一步.",
     "- 如果她说 '我准备做 A' / '已经做完' / '推迟' 之类的, 提醒她用底部按钮记录状态.",
     "- 简洁回答, 不要重复早晨已给过的建议.",
+    "",
+    "## 工具使用 (P3.3.10)",
+    "- 你能调 tool (catfish_draft_email_reply / catfish_compose_followup_list /",
+    "  catfish_check_compliance / catfish_political_sensitivity_scan /",
+    "  execute_code / catfish_run_skill 等). 跟工作台 chat 同款.",
+    "- 该调就调, 不要装看不到 tool. 起草邮件用 catfish_draft_email_reply, 跑数算用",
+    "  execute_code, 写报告/PPT 用 catfish_run_skill.",
+    "- 重要 tool (write_file / execute_code / send_email 等) 中央会拦下来弹批准框,",
+    "  你只管调, 员工点 '批准' 就放行.",
   );
   return lines.join("\n");
 }
@@ -223,46 +249,122 @@ function DetailPane({
     task.urgency === "high" ? "#c2410c" :
     task.urgency === "medium" ? "#a16207" : "#6b7280";
 
-  // Phase 2 — chat state. mount 时从 ~/.catfish/task_chat/<key>.jsonl load 历史.
-  // 切 task 自动 reset 因 parent key={task.id}. 跟 in-memory 差别: 重启 / 刷新保留.
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // P3.3.9 (6/10): chat key 用 task.taskUid (LLM 给的稳定 6 字符 uid),
+  //   fallback title (老数据 / 极端情况 taskUid 为空). 这样 LLM 每天重写
+  //   title 也不会让 chat 历史丢, 因为 uid 在 advisor_cache 里复用了.
+  const chatKey = task.taskUid || task.title;
+  const model = useChatStore((s) => s.model);
+
+  // P3.3.10: system prompt + persist 走 useTaskChat hook 接口.
+  //   buildSystemPrompt 用 ref 拿当前 task 不停, 不重建 hook.
+  const taskRef = useRef(task);
+  taskRef.current = task;
+  const chatKeyRef = useRef(chatKey);
+  chatKeyRef.current = chatKey;
+
+  const buildSystemPrompt = useCallback(
+    () => buildTaskSystemPrompt(taskRef.current),
+    [],
+  );
+  // P3.3.11: onPersist 接完整 ChatMessage, 把 tool_calls / tool_call_id 也写 jsonl.
+  //   user / assistant (含 tool_calls) / tool 各类 emit. system 不 emit (LLM
+  //   每次 send 都重算 system prompt, 不需要持久化).
+  const onPersist = useCallback((msg: ChatMessage) => {
+    if (msg.role === "system") return;
+    void taskChatAppend(
+      chatKeyRef.current,
+      msg.role as "user" | "assistant" | "tool",
+      msg.content,
+      {
+        toolCalls: msg.tool_calls,
+        toolCallId: msg.tool_call_id,
+      },
+    ).catch((e) => {
+      console.warn(`[BriefingTwoColumn] append ${msg.role} 失败:`, e);
+    });
+  }, []);
+
+  const taskChat = useTaskChat({ model, buildSystemPrompt, onPersist });
+  const { messages, isStreaming, send, cancel, loadHistory } = taskChat;
+
   const [input, setInput] = useState("");
-  const [streaming, setStreaming] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
   const [backendError, setBackendError] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(true);
-  const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
-  const model = useChatStore((s) => s.model);
+  // P3.3.10 floating approval banner state (跟 ChatPanel 同款逻辑).
+  //   hermes _gateway_approval 阻塞期间 chat completions 不 finalize → 立即弹 banner.
+  const [pending, setPending] = useState<PendingApproval | null>(null);
+  const [submittingChoice, setSubmittingChoice] = useState<
+    "once" | "session" | "always" | "deny" | null
+  >(null);
+  const [secondsLeft, setSecondsLeft] = useState(60);
 
-  // Phase 2: mount 时 load 历史
+  // mount 时 load 历史. P3.3.9: 先 try uid, 没历史回退 title.
   useEffect(() => {
     let cancelled = false;
     setHistoryLoading(true);
-    void taskChatGet(task.title)
-      .then((hist) => {
+    void (async () => {
+      try {
+        let hist = await taskChatGet(chatKey);
+        if (hist.length === 0 && chatKey !== task.title) {
+          // 兼容 P3.3.9 之前以 title 命名的老 jsonl
+          const oldHist = await taskChatGet(task.title).catch(() => []);
+          if (oldHist.length > 0) {
+            console.log(
+              `[BriefingTwoColumn] 老 title jsonl 命中 (${oldHist.length} 条), uid='${chatKey}' title='${task.title}'`,
+            );
+            hist = oldHist;
+          }
+        }
         if (cancelled) return;
-        // 把 TaskChatMsg 转 ChatMessage (加 id + status="done")
-        const loaded: ChatMessage[] = hist.map((m, i) => ({
+        // P3.3.11: load 时反序列化 tool_calls + tool_call_id, 并 join tool result
+        //   回 assistant.tool_calls[i].result (跟工作台 P27.3 state.db load 同款).
+        //   做法: 先全部转 ChatMessage, 然后扫 tool 角色 row 把 content 写回对应
+        //   assistant.tool_calls[i].result. tool row 本身不进可见 messages
+        //   (ChatMsg 函数会跳过 role === "tool", 跟工作台 ChatMessage 同款).
+        const all: ChatMessage[] = hist.map((m, i) => ({
           id: `hist-${i}-${m.ts}`,
           role: m.role as ChatMessage["role"],
           content: m.content,
+          tool_calls: m.toolCalls,
+          tool_call_id: m.toolCallId,
           ts: m.ts,
           status: "done",
         }));
-        setMessages(loaded);
-      })
-      .catch((e) => {
+        // 建 tool_call_id → result content 索引
+        const toolResultByCallId = new Map<string, string>();
+        for (const m of all) {
+          if (m.role === "tool" && m.tool_call_id) {
+            toolResultByCallId.set(m.tool_call_id, m.content);
+          }
+        }
+        // join result 回 assistant.tool_calls[i].result
+        const joined = all.map((m) => {
+          if (m.role !== "assistant" || !m.tool_calls?.length) return m;
+          return {
+            ...m,
+            tool_calls: m.tool_calls.map((tc) => {
+              const r = toolResultByCallId.get(tc.id);
+              if (r === undefined) return tc;
+              return { ...tc, result: r, status: "done" as const };
+            }),
+          };
+        });
+        loadHistory(joined);
+      } catch (e) {
         console.warn("[BriefingTwoColumn] load task chat 历史失败:", e);
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setHistoryLoading(false);
-      });
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, [task.title]);
+    // 切 task (chatKey 变) 重 load. loadHistory 是稳定 useCallback ref.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatKey, task.title]);
 
   // 新消息进来自动滚到底
   useEffect(() => {
@@ -271,95 +373,84 @@ function DetailPane({
     }
   }, [messages]);
 
+  // P3.3.10: 监听 catfish:approval-pending event → 弹 banner.
+  //   chat.ts streamChat 在解 hermes SSE 看到 status=approval_pending 时 dispatch.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const ev = e as CustomEvent<PendingApproval>;
+      if (ev.detail?.approval_session_key) {
+        setPending(ev.detail);
+        setSecondsLeft(60); // 重置倒计时
+      }
+    };
+    window.addEventListener("catfish:approval-pending", handler as EventListener);
+    return () => window.removeEventListener("catfish:approval-pending", handler as EventListener);
+  }, []);
+
+  // 60s countdown — hermes _gateway_approval 默认 timeout 60s, 自动消失
+  useEffect(() => {
+    if (!pending) return;
+    const tick = setInterval(() => {
+      setSecondsLeft((s) => {
+        if (s <= 1) {
+          clearInterval(tick);
+          setPending(null);
+          return 0;
+        }
+        return s - 1;
+      });
+    }, 1000);
+    return () => clearInterval(tick);
+  }, [pending]);
+
+  // P3.3.10: 监听 ChatToolCall approval inline button 触发的 send event.
+  //   ChatToolCall → dispatch catfish:approval-send → 这里走 send (跟员工同款 path).
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const ev = e as CustomEvent<{ text: string }>;
+      const text = ev.detail?.text;
+      if (text && typeof text === "string") {
+        void send(text);
+      }
+    };
+    window.addEventListener("catfish:approval-send", handler as EventListener);
+    return () => window.removeEventListener("catfish:approval-send", handler as EventListener);
+  }, [send]);
+
+  const handleApproval = async (choice: "once" | "session" | "always" | "deny") => {
+    if (!pending || submittingChoice) return;
+    setSubmittingChoice(choice);
+    try {
+      await toolBridgeChatApproval(pending.approval_session_key, choice);
+    } catch (err) {
+      console.warn("[BriefingTwoColumn] chat_approval RPC 失败:", err);
+    }
+    setSubmittingChoice(null);
+    setPending(null);
+  };
+
   const handleSend = async () => {
     const text = input.trim();
-    if (!text || streaming) return;
+    if (!text || isStreaming) return;
     setChatError(null);
     setInput("");
-
-    const userMsg: ChatMessage = {
-      id: crypto.randomUUID(),
-      role: "user",
-      content: text,
-      ts: new Date().toISOString(),
-      status: "done",
-    };
-    const assistantMsg: ChatMessage = {
-      id: crypto.randomUUID(),
-      role: "assistant",
-      content: "",
-      ts: new Date().toISOString(),
-      status: "streaming",
-    };
-    setMessages((prev) => [...prev, userMsg, assistantMsg]);
-    setStreaming(true);
-
-    // Phase 2: 立即把 user 消息持久化 (不等 assistant 完成)
-    void taskChatAppend(task.title, "user", text).catch((e) => {
-      console.warn("[BriefingTwoColumn] append user 失败:", e);
-    });
-
-    // 构造发给 LLM 的 messages: system + 历史 + 新 user
-    const systemMsg: ChatMessage = {
-      id: "task-system",
-      role: "system",
-      content: buildTaskSystemPrompt(task),
-      ts: new Date().toISOString(),
-      status: "done",
-    };
-    const wireMessages = [systemMsg, ...messages, userMsg];
-
-    abortRef.current = new AbortController();
-    let assistantFinalContent = "";
     try {
-      await streamChat({
-        model,
-        messages: wireMessages,
-        onDelta: (chunk) => {
-          assistantFinalContent += chunk;
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantMsg.id ? { ...m, content: m.content + chunk } : m,
-            ),
-          );
-        },
-        onDone: () => {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantMsg.id ? { ...m, status: "done" } : m,
-            ),
-          );
-          setStreaming(false);
-          // Phase 2: assistant 完成后持久化完整 content (空 content 不写)
-          if (assistantFinalContent.trim().length > 0) {
-            void taskChatAppend(task.title, "assistant", assistantFinalContent).catch((e) => {
-              console.warn("[BriefingTwoColumn] append assistant 失败:", e);
-            });
-          }
-        },
-        onError: (msg) => {
-          setChatError(msg);
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantMsg.id ? { ...m, status: "error", error: msg } : m,
-            ),
-          );
-          setStreaming(false);
-        },
-        signal: abortRef.current.signal,
-      });
+      await send(text);
     } catch (e) {
       setChatError(String(e));
-      setStreaming(false);
     }
   };
 
-  // Phase 2: 清掉这个 task 的 chat 历史
+  // P3.3.9: clear uid + 也 try clear 老 title file (兼容老 jsonl)
   const handleClearChat = async () => {
     if (!window.confirm("清掉这条待办的所有对话历史? 不可撤销.")) return;
     try {
-      await taskChatClear(task.title);
-      setMessages([]);
+      cancel();
+      await taskChatClear(chatKey);
+      if (chatKey !== task.title) {
+        await taskChatClear(task.title).catch(() => undefined);
+      }
+      loadHistory([]);
     } catch (e) {
       console.warn("[BriefingTwoColumn] clear task chat 失败:", e);
     }
@@ -421,6 +512,50 @@ function DetailPane({
         )}
       </div>
 
+      {/* P3.3.10: floating approval banner (跟工作台 ChatPanel 同款 UI) */}
+      {pending && (
+        <div className="approval-banner">
+          <div className="approval-banner__header">
+            <span>hermes 等批准</span>
+            <code className="pattern">{pending.pattern_key}</code>
+            <span className="countdown" aria-live="polite">{secondsLeft}s</span>
+          </div>
+          <div className="approval-banner__code">{pending.command}</div>
+          <div className="approval-banner__actions">
+            <button
+              className="approval-banner__btn-primary"
+              onClick={() => void handleApproval("once")}
+              disabled={submittingChoice !== null}
+              autoFocus
+            >
+              {submittingChoice === "once" && <span className="approval-banner__spinner" />}
+              批准
+            </button>
+            <button
+              className="approval-banner__btn-secondary"
+              onClick={() => void handleApproval("session")}
+              disabled={submittingChoice !== null}
+            >
+              本会话始终
+            </button>
+            <button
+              className="approval-banner__btn-secondary"
+              onClick={() => void handleApproval("always")}
+              disabled={submittingChoice !== null}
+            >
+              永久
+            </button>
+            <button
+              className="approval-banner__btn-danger"
+              onClick={() => void handleApproval("deny")}
+              disabled={submittingChoice !== null}
+            >
+              拒绝
+            </button>
+          </div>
+        </div>
+      )}
+
       {messages.length > 0 && (
         <div className="briefing-2col__chat-toolbar">
           <button
@@ -445,17 +580,17 @@ function DetailPane({
               void handleSend();
             }
           }}
-          placeholder={streaming ? "AI 回答中…" : "Enter 发送 · Shift+Enter 换行"}
+          placeholder={isStreaming ? "AI 回答中…" : "Enter 发送 · Shift+Enter 换行"}
           rows={2}
-          disabled={streaming}
+          disabled={isStreaming}
         />
         <button
           type="button"
           className="briefing-2col__chat-send"
           onClick={() => void handleSend()}
-          disabled={!input.trim() || streaming}
+          disabled={!input.trim() || isStreaming}
         >
-          {streaming ? "…" : "发送"}
+          {isStreaming ? "…" : "发送"}
         </button>
       </div>
 
@@ -504,12 +639,23 @@ function DetailPane({
 
 function ChatMsg({ msg }: { msg: ChatMessage }) {
   if (msg.role === "user") {
+    // user bubble teal fill + 白字, Markdown 默认黑字会撞色 — user 消息走纯文本.
+    // whiteSpace pre-wrap 保留换行.
     return (
-      <div className="briefing-2col__msg briefing-2col__msg--user">
+      <div
+        className="briefing-2col__msg briefing-2col__msg--user"
+        style={{ whiteSpace: "pre-wrap" }}
+      >
         {msg.content}
       </div>
     );
   }
+  // tool 角色不直接渲染 — 已经通过 ChatToolCall 卡片在 assistant.tool_calls[i].result 里显
+  if (msg.role === "tool" || msg.role === "system") return null;
+
+  // assistant: markdown 文本 + tool_calls 卡片 (P3.3.10 fix 6/10: 用 Markdown 组件)
+  const hasContent = (msg.content ?? "").length > 0;
+  const hasToolCalls = (msg.tool_calls ?? []).length > 0;
   return (
     <div
       className={
@@ -518,7 +664,15 @@ function ChatMsg({ msg }: { msg: ChatMessage }) {
         (msg.status === "error" ? " briefing-2col__msg--error" : "")
       }
     >
-      {msg.content || (msg.status === "streaming" ? "…" : "")}
+      {hasContent && <Markdown text={msg.content} />}
+      {!hasContent && !hasToolCalls && msg.status === "streaming" ? "…" : null}
+      {hasToolCalls && (
+        <div style={{ marginTop: hasContent ? 8 : 0 }}>
+          {msg.tool_calls!.map((tc) => (
+            <ChatToolCall key={tc.id} call={tc} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

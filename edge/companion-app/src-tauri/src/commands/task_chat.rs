@@ -1,16 +1,23 @@
 //! P3.3.7 Phase 2 (6/10 鸿波): task-scoped chat 持久化.
 //!
 //! 早安 tab detail pane 嵌入的 task chat (P3.3.7 Phase 1 in-memory) 持久化到
-//! ~/.catfish/task_chat/<task_key>.jsonl. Append-only, 每行一条 JSON {role, content, ts}.
+//! ~/.catfish/task_chat/<task_key>.jsonl. Append-only, 每行一条 JSON.
 //!
-//! task_key = task.title sanitize 后 (path-unsafe 字符替换 _). 跨天同标题 task
-//! 共享 chat 历史 (LLM 重生成同标题 task 时仍能看到之前进度).
+//! task_key = P3.3.9 后用 task.taskUid (LLM 生成 6 字符稳定 uid), 跨 refresh 不漂.
+//! P3.3.9 之前是 sanitize(task.title), 老 jsonl 文件仍能 load (DetailPane 兜底回退).
 //!
 //! 跟 BL-CENTRAL-EDGE: 员工本机数据, 不出端.
 //!
+//! P3.3.11 (6/10) schema 扩:
+//!   - role 增加 "tool" (LLM 调 tool 后写 tool result row)
+//!   - tool_calls?: Vec<serde_json::Value> — assistant 消息附带的 tool 调用列表
+//!     (id / name / args / status / result / error 字段, 跟 TS ToolCall 同款)
+//!   - tool_call_id?: String — tool 角色消息关联到 assistant 的 tool_calls[i].id
+//!   老 jsonl 没这俩字段 — serde 默认 None, 向后兼容.
+//!
 //! Tauri commands:
 //!   - task_chat_get(taskKey) → Vec<TaskChatMsg>
-//!   - task_chat_append(taskKey, role, content) → ()
+//!   - task_chat_append(taskKey, role, content, toolCalls?, toolCallId?) → ()
 //!   - task_chat_clear(taskKey) → ()  // 给"重新开始"按钮用
 
 use std::path::PathBuf;
@@ -20,9 +27,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskChatMsg {
-    pub role: String,    // "user" / "assistant" / "system"
+    pub role: String,    // "user" / "assistant" / "tool" / "system"
     pub content: String,
     pub ts: String,      // ISO-8601
+    /// P3.3.11: assistant 消息附带的 tool calls. None / 缺字段 = 没 tool calls.
+    /// 用 Value 不绑死类型 — TS ToolCall shape 演化时 Rust 不用跟改.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<serde_json::Value>>,
+    /// P3.3.11: tool 角色消息关联到 assistant.tool_calls[i].id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 // ── 路径 + sanitize ──────────────────────────────────────────────────
@@ -90,13 +104,16 @@ pub async fn task_chat_get(task_key: String) -> Result<Vec<TaskChatMsg>, String>
 }
 
 /// Append 一条 message 到 task chat. 自动填 ts (UTC).
+/// P3.3.11: 加 tool_calls / tool_call_id 可选参数 (assistant 含 tool 调用 / tool 角色用).
 #[tauri::command(rename_all = "camelCase")]
 pub async fn task_chat_append(
     task_key: String,
     role: String,
     content: String,
+    tool_calls: Option<Vec<serde_json::Value>>,
+    tool_call_id: Option<String>,
 ) -> Result<(), String> {
-    if role != "user" && role != "assistant" && role != "system" {
+    if role != "user" && role != "assistant" && role != "system" && role != "tool" {
         return Err(format!("invalid role: {role}"));
     }
     let path = chat_file_for(&task_key)?;
@@ -104,6 +121,8 @@ pub async fn task_chat_append(
         role,
         content,
         ts: Utc::now().to_rfc3339(),
+        tool_calls,
+        tool_call_id,
     };
     let line = serde_json::to_string(&msg)
         .map_err(|e| format!("serialize 失败: {e}"))?;
