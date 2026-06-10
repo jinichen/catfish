@@ -144,6 +144,203 @@ def _scan_intranet(file_map: dict[str, bytes]) -> list[str]:
     return hits
 
 
+# ── P3.3.17 (6/10): auto-scrub — 把命中的 PII / 内网 URL 换成占位 ──────────
+#
+# 凭据 (api_key / password / 私钥) 永不自动 scrub — 改了员工自己都不知道,
+# 必须手动. PII 跟内网 URL 可 scrub: 替换成 {{placeholder_N}} + SKILL.md 注
+# params: 区告诉装的员工/LLM "这是占位, 装上后填".
+#
+# 设计:
+#   - 同值同占位 (dedup): 5 处 "13800138000" 全换成 {{phone_1}}, 不分 phone_1/2/3
+#   - 不同值递增: 138... → phone_1, 139... → phone_2
+#   - 整 match 替换 (不解 capture group). 工号 pattern 含 prefix "工号:", 整段
+#     替换成 {{employee_id_1}}, 接受 prefix 被吃的副作用 (LLM 看占位仍懂语义)
+
+
+_PII_LABELS = ["id_card", "phone", "employee_id", "bank_card"]
+_PII_DESC = ["身份证号", "手机号", "工号 (含'工号:'前缀一起替换)", "银行卡号"]
+
+
+def _scrub_pii(
+    file_map: dict[str, bytes],
+) -> tuple[dict[str, bytes], list[dict[str, str]], dict[str, str]]:
+    """扫所有文件提取 unique PII, 替换成占位 (in-memory, 不改员工本机文件).
+
+    返:
+      new_file_map: 替换后副本
+      records: [{file, original (脱敏显示), placeholder, type}] 给 LLM 显
+      params: {placeholder_bare_name → 描述} 用来注入 SKILL.md frontmatter
+    """
+    # 1. 扫一遍 — 收集 unique 值 + 分配 placeholder
+    unique_values: dict[str, str] = {}  # 原始 match → placeholder ('{{phone_1}}')
+    counter = [0, 0, 0, 0]
+    records: list[dict[str, str]] = []
+    first_seen: dict[str, str] = {}  # 原始 match → 第一个看到它的文件
+
+    for rel, content in file_map.items():
+        try:
+            text = content.decode("utf-8", errors="ignore")
+        except Exception:
+            continue
+        for idx, pat in enumerate(_PII_PATTERNS):
+            for m in pat.finditer(text):
+                val = m.group()
+                if val in unique_values:
+                    continue  # 同值 dedup, 已分配过 placeholder
+                counter[idx] += 1
+                placeholder = f"{{{{{_PII_LABELS[idx]}_{counter[idx]}}}}}"
+                unique_values[val] = placeholder
+                first_seen[val] = rel
+                # 显示用脱敏 — 前 4 + *** + 后 2 (太短直接全 ***)
+                masked = (val[:4] + "***" + val[-2:]) if len(val) >= 8 else "***"
+                records.append({
+                    "file": rel,
+                    "original_masked": masked,
+                    "placeholder": placeholder,
+                    "type": _PII_DESC[idx],
+                })
+
+    if not unique_values:
+        return dict(file_map), [], {}
+
+    # 2. 替换 — 整 match 替换
+    new_file_map: dict[str, bytes] = {}
+    for rel, content in file_map.items():
+        try:
+            text = content.decode("utf-8", errors="ignore")
+        except Exception:
+            new_file_map[rel] = content
+            continue
+        for val, placeholder in unique_values.items():
+            text = text.replace(val, placeholder)
+        new_file_map[rel] = text.encode("utf-8")
+
+    # 3. 整 params
+    params: dict[str, str] = {}
+    for val, placeholder in unique_values.items():
+        bare = placeholder.strip("{}").strip()  # 'phone_1'
+        # 拆出 label 来查 desc (e.g. 'phone_1' → 'phone')
+        label = bare.rsplit("_", 1)[0]
+        try:
+            desc = _PII_DESC[_PII_LABELS.index(label)]
+        except ValueError:
+            desc = "员工 PII (装上 skill 后填)"
+        params[bare] = f"装上 skill 后必填 — {desc} (源文件: {first_seen[val]})"
+
+    return new_file_map, records, params
+
+
+# 内网 pattern idx → placeholder label (跟 _INTRANET_PATTERNS 顺序对齐)
+_INTRANET_LABELS = [
+    "INTRANET_IP",      # 10.x.x.x
+    "INTRANET_IP",      # 192.168.x.x (同 IP 类, 共享 counter)
+    "INTRANET_IP",      # 172.16-31.x.x
+    "INTRANET_URL",     # https://*.corp / *.internal / *.intra / *.local
+    "INTRANET_EIS",     # eis.*
+    "INTRANET_OA",      # oa.*
+]
+
+
+def _scrub_intranet(
+    file_map: dict[str, bytes],
+) -> tuple[dict[str, bytes], list[dict[str, str]], dict[str, str]]:
+    """扫所有文件提取 unique 内网 URL/hostname, 替换成占位."""
+    unique_values: dict[str, str] = {}
+    label_counter: dict[str, int] = {}
+    records: list[dict[str, str]] = []
+    first_seen: dict[str, str] = {}
+
+    for rel, content in file_map.items():
+        try:
+            text = content.decode("utf-8", errors="ignore")
+        except Exception:
+            continue
+        for idx, pat in enumerate(_INTRANET_PATTERNS):
+            for m in pat.finditer(text):
+                val = m.group()
+                if val in unique_values:
+                    continue
+                label = _INTRANET_LABELS[idx]
+                label_counter[label] = label_counter.get(label, 0) + 1
+                placeholder = f"{{{{{label}_{label_counter[label]}}}}}"
+                unique_values[val] = placeholder
+                first_seen[val] = rel
+                records.append({
+                    "file": rel,
+                    "original": val,
+                    "placeholder": placeholder,
+                    "type": "内网地址",
+                })
+
+    if not unique_values:
+        return dict(file_map), [], {}
+
+    new_file_map: dict[str, bytes] = {}
+    for rel, content in file_map.items():
+        try:
+            text = content.decode("utf-8", errors="ignore")
+        except Exception:
+            new_file_map[rel] = content
+            continue
+        for val, placeholder in unique_values.items():
+            text = text.replace(val, placeholder)
+        new_file_map[rel] = text.encode("utf-8")
+
+    params: dict[str, str] = {}
+    for val, placeholder in unique_values.items():
+        bare = placeholder.strip("{}").strip()
+        params[bare] = f"装上 skill 后必填 — 你公司内网的对应地址 (源: {first_seen[val]})"
+
+    return new_file_map, records, params
+
+
+def _inject_params_to_skill_md(file_map: dict[str, bytes], new_params: dict[str, str]) -> dict[str, bytes]:
+    """给 SKILL.md frontmatter 末尾加 params: 段. 已有 params: 跳过 (不动员工已写的).
+
+    frontmatter parsing: 找 '---\\n' ... '\\n---\\n' 段, 在 closing '---' 前插入.
+    不引 yaml 依赖, 用字符串拼接.
+    """
+    if not new_params:
+        return file_map
+    skill_md_bytes = file_map.get("SKILL.md")
+    if not skill_md_bytes:
+        return file_map  # 缺 SKILL.md 主流程已挡, 这里防御性
+
+    text = skill_md_bytes.decode("utf-8", errors="ignore")
+    if not text.startswith("---"):
+        return file_map  # 没 frontmatter — 跳, 注入会破 SKILL.md 解析
+
+    # 找 closing ---
+    end_idx = text.find("\n---", 3)
+    if end_idx < 0:
+        return file_map
+
+    # 看现有 frontmatter 里是不是已有 params: 一级 key
+    frontmatter = text[:end_idx]
+    has_params = False
+    for line in frontmatter.split("\n"):
+        if line.startswith("params:"):
+            has_params = True
+            break
+
+    if has_params:
+        # 不动员工已写的, P3.3.17 v1 简单实现. 后续可 merge
+        return file_map
+
+    # 在 closing --- 前插入 params section
+    params_block = ["", "# P3.3.17 auto-scrub 注入 — 装上后必填占位, LLM 看到 {{xxx}} 应主动问员工要值", "params:"]
+    for bare_name, desc in new_params.items():
+        # 简单 yaml: bare_name: 'desc'
+        desc_safe = desc.replace("'", "\\'")
+        params_block.append(f"  {bare_name}: '{desc_safe}'")
+    new_frontmatter = frontmatter + "\n" + "\n".join(params_block)
+    new_text = new_frontmatter + text[end_idx:]
+
+    new_file_map = dict(file_map)
+    new_file_map["SKILL.md"] = new_text.encode("utf-8")
+    return new_file_map
+
+
 def _collect_files(skill_dir: Path) -> dict[str, bytes]:
     """递归扫 skill 目录, 只收 _SKILL_FILE_EXTS 后缀的小文件 (单文件 < 1MB)."""
     if not skill_dir.exists() or not skill_dir.is_dir():
@@ -168,9 +365,17 @@ def skill_publish(args: dict[str, Any]) -> dict[str, Any]:
     参数:
       skill_path (必): 本机 skill 目录 (含 SKILL.md)
       namespace (必): hub 上 namespace
+      auto_scrub_pii (可选, 默认 false, P3.3.17): 命中 PII 时自动替换成
+        {{phone_1}} / {{employee_id_1}} 等占位 (in-memory, 不改员工本机文件).
+        SKILL.md frontmatter 加 params: 段告诉装的员工/LLM 哪些占位需要填.
+      auto_scrub_intranet (可选, 默认 false, P3.3.17): 命中内网 URL 时同款.
+      凭据 (api_key / password / 私钥): **永不**自动 scrub, 太敏感, 改了员工
+        自己都不知道. 命中永远拒, 让员工本机手动改后重试.
     """
     skill_path = (args.get("skill_path") or "").strip()
     namespace = (args.get("namespace") or "").strip()
+    auto_scrub_pii = bool(args.get("auto_scrub_pii", False))
+    auto_scrub_intranet = bool(args.get("auto_scrub_intranet", False))
 
     if not skill_path:
         return {"ok": False, "error": "skill_path 必填"}
@@ -217,31 +422,83 @@ def skill_publish(args: dict[str, Any]) -> dict[str, Any]:
         }
 
     # (b) PII (5/21 方案 1) — 防身份证号 / 手机号 / 工号 / 银行卡号上传
+    # P3.3.17 (6/10): auto_scrub_pii=true 时自动替换占位 + 注入 frontmatter params, 不拒
     pii_hits = _scan_pii(file_map)
+    pii_scrub_records: list[dict[str, str]] = []
+    pii_params_added: dict[str, str] = {}
     if pii_hits:
-        return {
-            "ok": False,
-            "error": (
-                "publish 前 PII 扫描命中, 拒绝上传 (教学录屏可能写进 hardcode 数据):\n  "
-                + "\n  ".join(pii_hits)
-                + "\n请把员工 PII 改成占位符 (例 '{{employee_id}}') 或参数 (params) 后重试."
-            ),
-            "scan_phase": "pii",
-        }
+        if auto_scrub_pii:
+            file_map, pii_scrub_records, pii_params_added = _scrub_pii(file_map)
+            # 注入 frontmatter
+            file_map = _inject_params_to_skill_md(file_map, pii_params_added)
+            # re-scan verify — 确认 scrub 没漏 (防 pattern bug)
+            still_pii = _scan_pii(file_map)
+            if still_pii:
+                return {
+                    "ok": False,
+                    "error": (
+                        "auto_scrub_pii 后再扫仍命中 PII (scrub helper bug?), 拒上传:\n  "
+                        + "\n  ".join(still_pii)
+                    ),
+                    "scan_phase": "pii_postscrub",
+                }
+            logger.info(
+                "P3.3.17 auto_scrub_pii: 替换 %d 个 PII 占位, 注入 frontmatter %d 个 param",
+                len(pii_scrub_records), len(pii_params_added),
+            )
+        else:
+            return {
+                "ok": False,
+                "error": (
+                    "publish 前 PII 扫描命中, 拒绝上传:\n  "
+                    + "\n  ".join(pii_hits)
+                    + "\n两个选择:\n"
+                    + "  1) 员工本机手动改成占位符 / 参数后 retry\n"
+                    + "  2) 让 LLM 加 auto_scrub_pii=true 重调本工具, 自动替换\n"
+                    + "     占位 (e.g. 13800138000 → {{phone_1}}) + SKILL.md\n"
+                    + "     frontmatter 加 params: 段告诉装的员工填什么"
+                ),
+                "scan_phase": "pii",
+                "auto_scrub_available": True,
+            }
 
     # (c) 内网 URL (5/21 方案 1) — 防内网拓扑信息泄漏
+    # P3.3.17: auto_scrub_intranet=true 同款 scrub
     intranet_hits = _scan_intranet(file_map)
+    intranet_scrub_records: list[dict[str, str]] = []
+    intranet_params_added: dict[str, str] = {}
     if intranet_hits:
-        return {
-            "ok": False,
-            "error": (
-                "publish 前内网 URL 扫描命中, 拒绝上传:\n  "
-                + "\n  ".join(intranet_hits)
-                + "\n请把内网域名 / IP 改成 example.com / 环境变量 (例 "
-                "{{INTRANET_OA_URL}}) 或占位符后重试."
-            ),
-            "scan_phase": "intranet",
-        }
+        if auto_scrub_intranet:
+            file_map, intranet_scrub_records, intranet_params_added = _scrub_intranet(file_map)
+            file_map = _inject_params_to_skill_md(file_map, intranet_params_added)
+            still_intranet = _scan_intranet(file_map)
+            if still_intranet:
+                return {
+                    "ok": False,
+                    "error": (
+                        "auto_scrub_intranet 后再扫仍命中, 拒上传:\n  "
+                        + "\n  ".join(still_intranet)
+                    ),
+                    "scan_phase": "intranet_postscrub",
+                }
+            logger.info(
+                "P3.3.17 auto_scrub_intranet: 替换 %d 个内网占位, 注入 frontmatter %d param",
+                len(intranet_scrub_records), len(intranet_params_added),
+            )
+        else:
+            return {
+                "ok": False,
+                "error": (
+                    "publish 前内网 URL 扫描命中, 拒绝上传:\n  "
+                    + "\n  ".join(intranet_hits)
+                    + "\n两个选择:\n"
+                    + "  1) 员工本机手动改成 example.com / 占位符后 retry\n"
+                    + "  2) 让 LLM 加 auto_scrub_intranet=true 重调, 自动替换\n"
+                    + "     占位 (e.g. http://eis.corp.local → {{INTRANET_EIS_1}})"
+                ),
+                "scan_phase": "intranet",
+                "auto_scrub_available": True,
+            }
 
     # 拿 OAuth id_token
     token = _read_id_token()
@@ -287,7 +544,7 @@ def skill_publish(args: dict[str, Any]) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {"ok": False, "error": f"gateway 返非 json: {resp.text[:200]}"}
 
-    return {
+    result = {
         "ok": True,
         "namespace": data.get("namespace", namespace),
         "name": data.get("name"),
@@ -296,3 +553,15 @@ def skill_publish(args: dict[str, Any]) -> dict[str, Any]:
         "files_count": len(file_map),
         "hub_url": f"{GATEWAY_URL}/v1/hub/skills/{namespace}/{data.get('name')}",
     }
+    # P3.3.17: scrub 跑过就告诉 LLM 替换了什么, LLM 应转告员工
+    if pii_scrub_records or intranet_scrub_records:
+        result["scrub_summary"] = {
+            "pii": pii_scrub_records,
+            "intranet": intranet_scrub_records,
+            "frontmatter_params_added": list(pii_params_added.keys()) + list(intranet_params_added.keys()),
+            "note": (
+                "scrub 只改 hub 上传副本, 员工本机文件没动. "
+                "装上 skill 的员工看 SKILL.md frontmatter params: 段了解要填什么."
+            ),
+        }
+    return result

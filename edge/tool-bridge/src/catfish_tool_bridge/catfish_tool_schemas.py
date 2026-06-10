@@ -1238,13 +1238,19 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
             "input:\n"
             "  - skill_path: 本机 skill 目录, 必须含 SKILL.md (例 ~/.hermes/skills/my-skill)\n"
             "  - namespace: hub 上分类 (例 'department' / 'personal' / 'finance')\n"
-            "    用员工部门时, 找 catfish_today_summary 的 department 字段\n\n"
+            "    用员工部门时, 找 catfish_today_summary 的 department 字段\n"
+            "  - auto_scrub_pii / auto_scrub_intranet (P3.3.17): 自动脱敏开关\n\n"
             "成功返:\n"
-            "  {ok:true, namespace, name, version, published_at, hub_url}\n"
+            "  {ok:true, namespace, name, version, published_at, hub_url, scrub_summary?}\n"
             "失败返:\n"
-            "  {ok:false, error}\n\n"
-            "❌ 别在没员工 explicit 确认时调用. 别把含敏感 path / 凭据的 skill 发上去 — "
-            "publish 前要 grep 是否含 password / api_key / token 字眼.\n\n"
+            "  {ok:false, error, scan_phase?, auto_scrub_available?}\n\n"
+            "❌ 别在没员工 explicit 确认时调用. 别把含敏感 path / 凭据的 skill 发上去.\n\n"
+            "🔁 失败 + auto_scrub_available=true 的处理 (P3.3.17, 6/10):\n"
+            "  scan_phase=pii / intranet 命中时, error 给员工看 (含具体撞到啥),\n"
+            "  问员工 '要不要让我自动把这些 PII / 内网地址替换成占位, 装上的同事自己填?'.\n"
+            "  员工同意 → 再调本工具 with auto_scrub_pii=true (或 auto_scrub_intranet=true).\n"
+            "  scrub 只改 hub 上传副本, 员工本机文件不动. SKILL.md 自动加 params: 段.\n"
+            "  scan_phase=credentials 永不 auto_scrub — 凭据要员工本机手动改成 keychain:// ref.\n\n"
             "底层: 走 gateway /v1/hub/skills/{namespace} POST multipart, 跟 mcp-registry 同套 OIDC 鉴权."
         ),
         "input_schema": {
@@ -1257,6 +1263,25 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
                 "namespace": {
                     "type": "string",
                     "description": "hub 上 namespace (例 'department' / 'personal')",
+                },
+                "auto_scrub_pii": {
+                    "type": "boolean",
+                    "description": (
+                        "P3.3.17 (6/10): 命中 PII (身份证 / 手机号 / 工号 / 银行卡) 时, "
+                        "true=自动替换成 {{phone_1}} 等占位 + 注入 SKILL.md frontmatter "
+                        "params: 段; false=拒上传 (默认). 第一次 publish 撞到 PII 时, "
+                        "先把 error 给员工看 + 问员工同意, 同意后再加这个参数 retry."
+                    ),
+                    "default": False,
+                },
+                "auto_scrub_intranet": {
+                    "type": "boolean",
+                    "description": (
+                        "P3.3.17 (6/10): 命中内网 URL (10.x.x.x / 192.168.x.x / *.corp / "
+                        "eis.* / oa.* 等) 时, true=自动替换成 {{INTRANET_EIS_1}} 等占位 + "
+                        "frontmatter params; false=拒 (默认). 同 auto_scrub_pii, 第一次失败后跟员工确认再 retry."
+                    ),
+                    "default": False,
                 },
             },
             "required": ["skill_path", "namespace"],

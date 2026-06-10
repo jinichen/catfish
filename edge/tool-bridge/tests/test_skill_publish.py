@@ -187,3 +187,155 @@ def test_publish_rejects_credentials_first(monkeypatch, tmp_path):
     })
     assert result["ok"] is False
     assert result.get("scan_phase") == "credentials"
+
+
+# ─── P3.3.17 (6/10) auto-scrub helper unit tests ──────────────────────
+
+
+def test_scrub_pii_replaces_phone_single_value():
+    """单个手机号 → 替换成 {{phone_1}} 占位, records / params 都正确返."""
+    fm = {"script.py": b"phone = '13800138000'\nprint(phone)"}
+    new_fm, records, params = skill_publish._scrub_pii(fm)
+    assert b"13800138000" not in new_fm["script.py"]
+    assert b"{{phone_1}}" in new_fm["script.py"]
+    assert len(records) == 1
+    assert records[0]["placeholder"] == "{{phone_1}}"
+    assert "phone_1" in params
+
+
+def test_scrub_pii_dedup_same_value_across_files():
+    """同手机号在 2 个文件 5 处 → 全部换成同一个 {{phone_1}}, records 只 1 条 (第一次见)."""
+    fm = {
+        "a.py": b"a = '13800138000'\nb = '13800138000'",
+        "b.py": b"x = '13800138000'\ny = '13800138000'\nz = '13800138000'",
+    }
+    new_fm, records, params = skill_publish._scrub_pii(fm)
+    assert b"13800138000" not in new_fm["a.py"]
+    assert b"13800138000" not in new_fm["b.py"]
+    assert new_fm["a.py"].count(b"{{phone_1}}") == 2
+    assert new_fm["b.py"].count(b"{{phone_1}}") == 3
+    assert len(records) == 1  # 只第一次见报一次
+    assert len(params) == 1
+
+
+def test_scrub_pii_multiple_different_values_get_indexed():
+    """两个不同手机号 → phone_1 / phone_2 索引."""
+    fm = {"x.py": b"a = '13800138000'\nb = '13900139000'"}
+    new_fm, records, params = skill_publish._scrub_pii(fm)
+    assert b"{{phone_1}}" in new_fm["x.py"]
+    assert b"{{phone_2}}" in new_fm["x.py"]
+    assert len(records) == 2
+    assert len(params) == 2
+
+
+def test_scrub_pii_no_pii_returns_unchanged():
+    """干净 file_map → records / params 空, file_map 原样返."""
+    fm = {"SKILL.md": "# clean skill\n用 keychain://x 读密码".encode("utf-8")}
+    new_fm, records, params = skill_publish._scrub_pii(fm)
+    assert new_fm == fm
+    assert records == []
+    assert params == {}
+
+
+def test_scrub_intranet_replaces_corp_domain():
+    """*.corp / *.local URL → {{INTRANET_URL_1}} (pattern 3 优先于 eis pattern).
+    pattern 3 ('https?://.*\\.(corp|internal|intra|local)') 抢先匹配整个 URL,
+    eis pattern 不会再扫到子串. 这是预期行为 — 整 URL 替换更安全."""
+    fm = {"script.py": b"url = 'http://eis.corp.local/login'"}
+    new_fm, records, params = skill_publish._scrub_intranet(fm)
+    assert b"eis.corp" not in new_fm["script.py"]
+    # 接受任一 INTRANET_* placeholder, 主要验证替换发生
+    assert b"{{INTRANET_" in new_fm["script.py"]
+    assert len(records) >= 1
+    assert any(p.startswith("INTRANET_") for p in params.keys())
+
+
+def test_scrub_intranet_replaces_pure_eis_hostname():
+    """裸 eis-host hostname (无 protocol) → eis pattern 抓到 → {{INTRANET_EIS_1}}."""
+    fm = {"script.py": b"host = 'eis-prod-01'"}
+    new_fm, records, params = skill_publish._scrub_intranet(fm)
+    assert b"eis-prod" not in new_fm["script.py"]
+    assert b"{{INTRANET_EIS_1}}" in new_fm["script.py"]
+
+
+def test_scrub_intranet_replaces_10_net_ip():
+    """RFC 1918 10.x.x.x → {{INTRANET_IP_1}}."""
+    fm = {"config.yaml": b"server: 10.0.0.5"}
+    new_fm, records, params = skill_publish._scrub_intranet(fm)
+    assert b"10.0.0.5" not in new_fm["config.yaml"]
+    assert b"{{INTRANET_IP_1}}" in new_fm["config.yaml"]
+
+
+def test_inject_params_to_skill_md_adds_section():
+    """SKILL.md frontmatter 末尾加 params: 段, 不破坏现有 frontmatter."""
+    fm = {
+        "SKILL.md": b"---\nname: foo\nversion: '1.0.0'\n---\n\n# Body\n",
+    }
+    new_params = {"phone_1": "员工手机号", "INTRANET_EIS_1": "公司 EIS URL"}
+    new_fm = skill_publish._inject_params_to_skill_md(fm, new_params)
+    new_text = new_fm["SKILL.md"].decode("utf-8")
+    assert "params:" in new_text
+    assert "phone_1" in new_text
+    assert "INTRANET_EIS_1" in new_text
+    # 现有字段不动
+    assert "name: foo" in new_text
+    assert "version: '1.0.0'" in new_text
+    # frontmatter 结构没破 (--- 仍 close 在 body 前)
+    assert new_text.startswith("---")
+    fm_end = new_text.find("\n---", 3)
+    assert fm_end > 0
+    assert new_text[fm_end + 4:].strip().startswith("# Body")
+
+
+def test_inject_params_skips_when_existing_params():
+    """SKILL.md 已有 params: 段 → 不动 (v1 简单实现, 不 merge)."""
+    fm = {
+        "SKILL.md": "---\nname: foo\nparams:\n  existing: '老员工写的'\n---\n# Body\n".encode("utf-8"),
+    }
+    new_fm = skill_publish._inject_params_to_skill_md(fm, {"phone_1": "x"})
+    # 没注入新 params, 原 file_map 原样返
+    assert new_fm["SKILL.md"] == fm["SKILL.md"]
+
+
+def test_publish_pii_default_still_rejects(monkeypatch, tmp_path):
+    """默认 auto_scrub_pii=false → 撞 PII 仍拒, error 提示有 auto_scrub_available."""
+    skill_dir = tmp_path / "skills" / "personal" / "p3_pii_default"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: p3\n---\nphone = '13800138000'\n", encoding="utf-8",
+    )
+    fake_token = tmp_path / "id_token"
+    fake_token.write_text("fake-token", encoding="utf-8")
+    monkeypatch.setattr(skill_publish, "OAUTH_ID_TOKEN_PATH", fake_token)
+
+    result = skill_publish.skill_publish({
+        "skill_path": str(skill_dir),
+        "namespace": "personal",
+    })
+    assert result["ok"] is False
+    assert result.get("scan_phase") == "pii"
+    assert result.get("auto_scrub_available") is True
+
+
+def test_publish_pii_auto_scrub_passes_postscan(monkeypatch, tmp_path):
+    """auto_scrub_pii=true → 替换 + re-scan 不再撞. 但 OAuth 缺会卡在后续步骤,
+    我们只验扫过 + scrub_records 准备好 (不真 publish)."""
+    skill_dir = tmp_path / "skills" / "personal" / "p3_pii_scrub"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: p3\n---\nphone = '13800138000'\n", encoding="utf-8",
+    )
+    # OAuth 不存在 → upload 步骤失败, 我们检查的是 error 不是 PII 命中
+    monkeypatch.setattr(
+        skill_publish, "OAUTH_ID_TOKEN_PATH", tmp_path / "no_such_token",
+    )
+
+    result = skill_publish.skill_publish({
+        "skill_path": str(skill_dir),
+        "namespace": "personal",
+        "auto_scrub_pii": True,
+    })
+    # PII scrub 成功, 但 upload 时 OAuth 缺 → 失败. 这证明 PII scan 已过 (不再 scan_phase=pii)
+    assert result["ok"] is False
+    assert result.get("scan_phase") != "pii"
+    assert "OAuth id_token" in result.get("error", "")
