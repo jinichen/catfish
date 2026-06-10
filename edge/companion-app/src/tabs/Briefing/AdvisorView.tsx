@@ -24,7 +24,6 @@ import {
   type AdvisorCache,
   type AdvisorConfig,
   type TaskStateFetch,
-  type TaskStatus,
 } from "../../lib/advisor_cache";
 import {
   ADVISOR_TIMEOUT,
@@ -45,8 +44,7 @@ import {
 import { useChatStore } from "../../store/chat";
 import { useEmailStore } from "../../store/email";
 
-import ActionCard from "./components/ActionCard";
-import HandledSilently from "./components/HandledSilently";
+import BriefingTwoColumnView from "./components/BriefingTwoColumnView";  // P3.3.6 (6/10): 左右两栏 layout
 
 interface AdvisorViewProps {
   /** 父组件 (BriefingCard) 触发 refresh 时调本 props 后会 reload */
@@ -324,28 +322,26 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
       </div>
 
       {(() => {
-        // 5/22 鸿波: 过滤 ignored 的 (今天不再出); done/snoozed 折叠展示 (在 ActionCard 内)
+        // P3.3.6 (6/10): 平铺 ActionCard → 左右两栏 layout
+        // 过滤 ignored 的 (今天不再出); done/snoozed 仍在 sidebar 显示 (变灰)
         const visibleTasks = result.mainTasks.filter((t) => {
           const s = taskState.today[t.title]?.status;
           return s !== "ignored";
         });
-        if (visibleTasks.length === 0) {
-          return <Placeholder text="今天的主菜都处理完了, 喝杯茶吧 ☕" />;
-        }
-        return visibleTasks.map((task) => (
-          <ActionCard
-            key={task.id}
-            task={task}
-            initialStatus={(taskState.today[task.title]?.status ?? null) as TaskStatus | null}
-            wasSnoozedYesterday={taskState.yesterdaySnoozed.includes(task.title)}
-            onStatusChange={(newStatus) => {
+        return (
+          <BriefingTwoColumnView
+            tasks={visibleTasks}
+            handledItems={result.handledSilently}
+            taskState={taskState}
+            wasSnoozedYesterday={(title) => taskState.yesterdaySnoozed.includes(title)}
+            onStatusChange={(title, newStatus) => {
               // 切状态后本地立刻反映 (不等下次 refresh)
               setTaskState((prev) => {
                 const today = { ...prev.today };
                 if (newStatus === null) {
-                  delete today[task.title];
+                  delete today[title];
                 } else {
-                  today[task.title] = {
+                  today[title] = {
                     status: newStatus,
                     ts: new Date().toISOString(),
                   };
@@ -354,10 +350,8 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
               });
             }}
           />
-        ));
+        );
       })()}
-
-      <HandledSilently items={result.handledSilently} />
     </div>
   );
 }

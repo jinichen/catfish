@@ -13,8 +13,8 @@ export default function BriefingTab() {
   return (
     <div
       style={{
-        // 居中容器, max-width 防过宽屏看着空, padding 跟其他 tab 一致
-        maxWidth: 720,
+        // P3.3.6 (6/10): 两栏 layout 需要更宽, max-width 720 → 980
+        maxWidth: 980,
         margin: "0 auto",
         padding: "var(--space-4)",
         width: "100%",

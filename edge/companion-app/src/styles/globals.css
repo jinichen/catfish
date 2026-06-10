@@ -1665,3 +1665,253 @@ button {
 @keyframes approval-spin {
   to { transform: rotate(360deg); }
 }
+
+/* ─── P3.3.6 (2026-06-10 鸿波): 早安 tab 左右两栏 layout ─────────
+ * 左 sidebar 按 urgency 分组, 右侧详情区显目标/进展/建议. */
+.briefing-2col {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 16px;
+  margin-top: 12px;
+}
+@media (max-width: 720px) {
+  .briefing-2col { grid-template-columns: 1fr; }
+}
+.briefing-2col__empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--catfish-text-muted);
+  font-style: italic;
+  font-size: 13px;
+  background: var(--catfish-bg);
+  border: 1px dashed var(--catfish-border);
+  border-radius: var(--radius-md);
+  margin-top: 12px;
+}
+.briefing-2col__sidebar {
+  background: var(--catfish-bg-elevated);
+  border: 1px solid var(--catfish-border);
+  border-radius: var(--radius-md);
+  padding: 10px 8px;
+  align-self: start;
+}
+.briefing-2col__sidebar-label {
+  font-size: 10px;
+  color: var(--catfish-text-muted);
+  padding: 2px 8px 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.briefing-2col__group-header {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 8px 4px;
+}
+.briefing-2col__task-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-left: 2px solid transparent;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  padding: 6px 10px;
+  margin-bottom: 2px;
+  cursor: pointer;
+  transition: background 120ms ease;
+  font: inherit;
+  color: inherit;
+}
+.briefing-2col__task-row:hover {
+  background: var(--catfish-bg);
+}
+.briefing-2col__task-row--selected {
+  /* color/bg set inline 用 urgency accent */
+}
+.briefing-2col__task-row--done { opacity: 0.5; text-decoration: line-through; }
+.briefing-2col__task-row--snoozed { opacity: 0.55; }
+.briefing-2col__task-title {
+  font-size: 13px;
+  color: var(--catfish-text);
+  line-height: 1.4;
+}
+.briefing-2col__task-subtitle {
+  font-size: 11px;
+  color: var(--catfish-text-muted);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+.briefing-2col__handled {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--catfish-border);
+}
+.briefing-2col__handled-row {
+  padding: 3px 10px;
+  font-size: 11px;
+  color: var(--catfish-text-muted);
+  line-height: 1.5;
+}
+.briefing-2col__detail {
+  background: var(--catfish-bg-elevated);
+  border: 1px solid var(--catfish-border);
+  border-radius: var(--radius-md);
+  padding: 16px 20px;
+}
+.briefing-2col__detail-empty {
+  text-align: center;
+  color: var(--catfish-text-muted);
+  font-size: 13px;
+  padding: 40px 20px;
+  font-style: italic;
+}
+.briefing-2col__detail-header {
+  border-left: 3px solid var(--catfish-border);
+  padding-left: 12px;
+  margin-bottom: 16px;
+}
+.briefing-2col__detail-badges {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+.briefing-2col__detail-title {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--catfish-text);
+  margin: 0;
+  line-height: 1.4;
+}
+.briefing-2col__badge-warn {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  color: #a16207;
+  background: #a1620715;
+  border: 1px solid #a1620740;
+}
+.briefing-2col__badge-done {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  color: #16a34a;
+  background: #16a34a15;
+  border: 1px solid #16a34a40;
+}
+.briefing-2col__section {
+  margin-bottom: 16px;
+}
+.briefing-2col__section-title {
+  font-size: 11px;
+  color: var(--catfish-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.briefing-2col__section-body {
+  padding-left: 10px;
+  border-left: 2px solid var(--catfish-border);
+}
+.briefing-2col__section-text {
+  font-size: 13px;
+  color: var(--catfish-text);
+  line-height: 1.6;
+  margin: 0 0 6px 0;
+}
+.briefing-2col__option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 1px solid var(--catfish-border);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.briefing-2col__option:hover {
+  border-color: var(--catfish-text-muted);
+}
+.briefing-2col__option--selected {
+  /* set inline 用 urgency accent */
+}
+.briefing-2col__option-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.briefing-2col__option-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--catfish-text);
+}
+.briefing-2col__option-ailean {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--catfish-bg);
+  color: var(--catfish-text-muted);
+  flex-shrink: 0;
+}
+.briefing-2col__option-tone {
+  font-size: 11px;
+  color: var(--catfish-text-muted);
+  margin-top: 2px;
+}
+.briefing-2col__option-opened {
+  font-size: 11px;
+  color: #16a34a;
+  margin-top: 4px;
+}
+.briefing-2col__option-err {
+  font-size: 11px;
+  color: #dc2626;
+  margin-top: 4px;
+  white-space: pre-wrap;
+}
+.briefing-2col__flag {
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--catfish-border);
+  margin-bottom: 6px;
+  line-height: 1.5;
+}
+.briefing-2col__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--catfish-border);
+}
+.briefing-2col__action-btn {
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 4px;
+  border: 1px solid var(--catfish-border);
+  background: transparent;
+  color: var(--catfish-text);
+  cursor: pointer;
+}
+.briefing-2col__action-btn:hover {
+  background: var(--catfish-bg);
+}
+.briefing-2col__action-btn--done   { color: #16a34a; border-color: #16a34a40; }
+.briefing-2col__action-btn--snooze { color: #a16207; border-color: #a1620740; }
+.briefing-2col__action-btn--ignore { color: #6b7280; border-color: #6b728040; }
+.briefing-2col__backend-err {
+  font-size: 11px;
+  color: #dc2626;
+  background: #dc262610;
+  border: 1px solid #dc262640;
+  border-radius: 4px;
+  padding: 6px 10px;
+  margin-top: 8px;
+}
