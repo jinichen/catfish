@@ -1915,3 +1915,112 @@ button {
   padding: 6px 10px;
   margin-top: 8px;
 }
+
+/* ─── P3.3.7 Phase 1 (6/10): task-scoped chat 嵌入 detail pane ────── */
+.briefing-2col__detail-inner {
+  display: flex;
+  flex-direction: column;
+  min-height: 400px;
+}
+.briefing-2col__detail-reason {
+  font-size: 11px;
+  color: var(--catfish-text-muted);
+  flex: 1;
+}
+.briefing-2col__chat-thread {
+  flex: 1;
+  min-height: 200px;
+  max-height: 480px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+  padding: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.briefing-2col__chat-empty {
+  padding: 24px 12px;
+  text-align: center;
+  color: var(--catfish-text-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.briefing-2col__chat-empty-hint {
+  font-size: 11px;
+  margin-top: 6px;
+  opacity: 0.75;
+}
+.briefing-2col__msg {
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-width: 88%;
+}
+.briefing-2col__msg--user {
+  align-self: flex-end;
+  background: var(--catfish-accent, #0E5F66);
+  color: white;
+}
+.briefing-2col__msg--assistant {
+  align-self: flex-start;
+  background: var(--catfish-bg);
+  color: var(--catfish-text);
+  border: 1px solid var(--catfish-border);
+}
+.briefing-2col__msg--streaming { opacity: 0.75; }
+.briefing-2col__msg--error {
+  background: #dc262610;
+  border-color: #dc262640;
+  color: #dc2626;
+}
+.briefing-2col__chat-err {
+  font-size: 11px;
+  color: #dc2626;
+  padding: 4px 8px;
+}
+.briefing-2col__chat-input-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.briefing-2col__chat-input {
+  flex: 1;
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 10px;
+  border: 1px solid var(--catfish-border);
+  border-radius: var(--radius-md);
+  background: var(--catfish-bg);
+  color: var(--catfish-text);
+  resize: vertical;
+  min-height: 36px;
+  line-height: 1.5;
+}
+.briefing-2col__chat-input:focus {
+  outline: none;
+  border-color: var(--catfish-accent, #0E5F66);
+}
+.briefing-2col__chat-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.briefing-2col__chat-send {
+  font: inherit;
+  font-size: 12px;
+  padding: 0 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--catfish-accent, #0E5F66);
+  background: var(--catfish-accent, #0E5F66);
+  color: white;
+  cursor: pointer;
+  white-space: nowrap;
+  align-self: flex-start;
+  height: 36px;
+}
+.briefing-2col__chat-send:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

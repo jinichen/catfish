@@ -1,14 +1,14 @@
-/** P3.3.6 (2026-06-10 鸿波): 早安 tab 左右两栏 view.
+/** P3.3.6 (2026-06-10 鸿波) — 早安 tab 左右两栏 view.
+ * P3.3.7 Phase 1 (6/10 鸿波): DetailPane 砍'目标/进展/建议' 静态段, 改成 in-memory
+ * task-scoped chat. system prompt 注入 task 上下文 (title / reason / contextRefs /
+ * flags / 早晨 options). 历史不持久 — 切 task / 刷新都重置. 不调 tool.
  *
- * 替代 ActionCard 平铺 — left sidebar 按 urgency 分类 (急/中/低/已默认处理),
- * 右侧详情区显 选中 task 的: 目标 (reason) / 当前进展 (contextRefs + flags) /
- * 建议 (options + aiLean + complianceFlag) / 行动按钮.
+ * 左 sidebar 按 urgency 分组 (急/中/低/已默认处理) 保持不变.
  *
- * 数据复用现有 MainTask / HandledSilentlyItem, 0 后端改动. 行动按钮逻辑直接
- * 内联 (跟 ActionCard 一致: setStatus + advisorTaskStateSet/Clear + onStatusChange).
+ * 数据 0 后端改动: 复用 MainTask / HandledSilentlyItem / streamChat / advisorTaskState.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   advisorTaskStateClear,
@@ -16,15 +16,13 @@ import {
   type TaskStateFetch,
   type TaskStatus,
 } from "../../../lib/advisor_cache";
-import { decisionRecord } from "../../../lib/decisions";
-import { draftOpenInEditor } from "../../../lib/drafts";
+import { streamChat } from "../../../lib/chat";
 import type {
-  AdvisorOption,
-  ComplianceFlag,
   HandledSilentlyItem,
   MainTask,
-  PoliticalFlag,
 } from "../../../lib/briefing_advisor";
+import type { ChatMessage } from "../../../types/chat";
+import { useChatStore } from "../../../store/chat";
 
 interface BriefingTwoColumnViewProps {
   tasks: MainTask[];                                  // 已 filter ignored
@@ -149,6 +147,7 @@ export default function BriefingTwoColumnView({
       <main className="briefing-2col__detail">
         {selected ? (
           <DetailPane
+            key={selected.id}
             task={selected}
             status={(taskState.today[selected.title]?.status ?? null) as TaskStatus | null}
             wasSnoozedYesterday={wasSnoozedYesterday(selected.title)}
@@ -162,7 +161,51 @@ export default function BriefingTwoColumnView({
   );
 }
 
-// ─── 右侧详情 ──────────────────────────────────────────────────────
+// ─── 右侧详情 (Phase 1 6/10): task-scoped chat ────────────────────
+
+function buildTaskSystemPrompt(task: MainTask): string {
+  const lines: string[] = [
+    "你是 catfish, 员工的工作参谋. 现在跟员工讨论一条具体待办.",
+    "",
+    "## 待办",
+    `标题: ${task.title}`,
+    `紧急度: ${task.urgency === "high" ? "急" : task.urgency === "medium" ? "中" : "低"}`,
+  ];
+  if (task.reason) {
+    lines.push(`理由: ${task.reason}`);
+  }
+  if (task.contextRefs.length > 0) {
+    lines.push("", "## 历史上下文");
+    task.contextRefs.forEach((r) => lines.push(`- ${r}`));
+  }
+  if (task.complianceFlags.length > 0) {
+    lines.push("", "## 合规提示");
+    task.complianceFlags.forEach((f) => {
+      lines.push(`- ${f.severity} 合规 (${f.type}): ${f.reason}${f.suggestion ? ` — 建议: ${f.suggestion}` : ""}`);
+    });
+  }
+  if (task.politicalFlags.length > 0) {
+    lines.push("", "## 关键关系");
+    task.politicalFlags.forEach((f) => {
+      lines.push(`- ${f.severity}: ${f.reason}`);
+    });
+  }
+  if (task.options.length > 0) {
+    lines.push("", "## 早晨 LLM 给的 3 个口径建议 (参考, 你可以反驳或调整)");
+    task.options.forEach((o) => {
+      lines.push(`${o.label} (${o.tone}): ${o.summary}${o.aiLean ? " [早晨 AI 倾向]" : ""}`);
+    });
+  }
+  lines.push(
+    "",
+    "## 你的工作",
+    "- 员工现在跟你直接说. 回答她关于这条待办的具体问题.",
+    "- 起草内容 / 帮她做决策 / 给具体下一步.",
+    "- 如果她说 '我准备做 A' / '已经做完' / '推迟' 之类的, 提醒她用底部按钮记录状态.",
+    "- 简洁回答, 不要重复早晨已给过的建议.",
+  );
+  return lines.join("\n");
+}
 
 function DetailPane({
   task,
@@ -175,48 +218,95 @@ function DetailPane({
   wasSnoozedYesterday: boolean;
   onStatusChange: (s: TaskStatus | null) => void;
 }) {
-  const [selectedLabel, setSelectedLabel] = useState<string | null>(null);
-  const [openErr, setOpenErr] = useState<string | null>(null);
-  const [openedPath, setOpenedPath] = useState<string | null>(null);
-  const [backendError, setBackendError] = useState<string | null>(null);
-
   const accent =
     task.urgency === "high" ? "#c2410c" :
     task.urgency === "medium" ? "#a16207" : "#6b7280";
 
-  const handleSelect = async (opt: AdvisorOption) => {
-    setSelectedLabel(opt.label);
-    setOpenErr(null);
-    setOpenedPath(null);
+  // Phase 1 — in-memory chat state (切 task 自动 reset 因 parent key={task.id})
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState("");
+  const [streaming, setStreaming] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [backendError, setBackendError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  const model = useChatStore((s) => s.model);
+
+  // 新消息进来自动滚到底
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages]);
+
+  const handleSend = async () => {
+    const text = input.trim();
+    if (!text || streaming) return;
+    setChatError(null);
+    setInput("");
+
+    const userMsg: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: text,
+      ts: new Date().toISOString(),
+      status: "done",
+    };
+    const assistantMsg: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content: "",
+      ts: new Date().toISOString(),
+      status: "streaming",
+    };
+    setMessages((prev) => [...prev, userMsg, assistantMsg]);
+    setStreaming(true);
+
+    // 构造发给 LLM 的 messages: system + 历史 + 新 user
+    const systemMsg: ChatMessage = {
+      id: "task-system",
+      role: "system",
+      content: buildTaskSystemPrompt(task),
+      ts: new Date().toISOString(),
+      status: "done",
+    };
+    const wireMessages = [systemMsg, ...messages, userMsg];
+
+    abortRef.current = new AbortController();
     try {
-      await decisionRecord({
-        mainTaskId: task.id,
-        taskTitle: task.title,
-        optionsOffered: task.options.map((o) => ({ label: o.label, tone: o.tone, summary: o.summary })),
-        aiLean: task.options.find((o) => o.aiLean)?.label,
-        userChoice: opt.label,
-        userAction: opt.draftPath ? "drafted_but_held" : "ignored",
-        complianceFlagsAtDecision: task.complianceFlags.map((f) => f.type),
-        contextRefs: task.contextRefs,
-        draftPathChosen: opt.draftPath,
+      await streamChat({
+        model,
+        messages: wireMessages,
+        onDelta: (chunk) => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsg.id ? { ...m, content: m.content + chunk } : m,
+            ),
+          );
+        },
+        onDone: () => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsg.id ? { ...m, status: "done" } : m,
+            ),
+          );
+          setStreaming(false);
+        },
+        onError: (msg) => {
+          setChatError(msg);
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsg.id ? { ...m, status: "error", error: msg } : m,
+            ),
+          );
+          setStreaming(false);
+        },
+        signal: abortRef.current.signal,
       });
     } catch (e) {
-      console.warn("[BriefingTwoColumn] decision 留痕失败:", e);
-    }
-    if (opt.draftPath) {
-      try {
-        await draftOpenInEditor(opt.draftPath);
-        setOpenedPath(opt.draftPath);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        let hint = "";
-        if (msg.includes("不在 outputs/") || msg.includes("路径含")) {
-          hint = " (LLM 编了不合法路径)";
-        } else if (msg.toLowerCase().includes("no such file") || msg.includes("不存在")) {
-          hint = " (LLM 给了 draftPath 但没真调 draft tool 落盘)";
-        }
-        setOpenErr(`${msg}${hint}\n路径: ${opt.draftPath}`);
-      }
+      setChatError(String(e));
+      setStreaming(false);
     }
   };
 
@@ -233,13 +323,15 @@ function DetailPane({
   };
 
   return (
-    <div>
-      {/* 标题区 */}
+    <div className="briefing-2col__detail-inner">
       <div className="briefing-2col__detail-header" style={{ borderLeftColor: accent }}>
         <div className="briefing-2col__detail-badges">
           <span style={{ color: accent, fontSize: 12, fontWeight: 600 }}>
             {task.urgency === "high" ? "急" : task.urgency === "medium" ? "中" : "低"}
           </span>
+          {task.reason && (
+            <span className="briefing-2col__detail-reason">{task.reason}</span>
+          )}
           {wasSnoozedYesterday && (
             <span className="briefing-2col__badge-warn">⏰ 昨天推过</span>
           )}
@@ -249,49 +341,51 @@ function DetailPane({
         <h3 className="briefing-2col__detail-title">{task.title}</h3>
       </div>
 
-      {/* 目标 */}
-      {task.reason && (
-        <Section title="目标">
-          <p className="briefing-2col__section-text">{task.reason}</p>
-        </Section>
-      )}
+      <div ref={scrollRef} className="briefing-2col__chat-thread">
+        {messages.length === 0 && (
+          <div className="briefing-2col__chat-empty">
+            <div>跟 AI 直接说这条待办 — 报进度 / 起草 / 问下一步.</div>
+            <div className="briefing-2col__chat-empty-hint">
+              AI 已经知道: 标题 · 紧急度 · 历史{task.complianceFlags.length > 0 ? " · 合规提示" : ""}
+              {task.politicalFlags.length > 0 ? " · 关键关系" : ""}
+              {task.options.length > 0 ? ` · ${task.options.length} 个早晨口径` : ""}.
+              直接问.
+            </div>
+          </div>
+        )}
+        {messages.map((m) => (
+          <ChatMsg key={m.id} msg={m} />
+        ))}
+        {chatError && (
+          <div className="briefing-2col__chat-err">⚠️ {chatError}</div>
+        )}
+      </div>
 
-      {/* 当前进展 — contextRefs + flags */}
-      {(task.contextRefs.length > 0 || task.complianceFlags.length > 0 || task.politicalFlags.length > 0) && (
-        <Section title="当前进展">
-          {task.contextRefs.length > 0 && (
-            <p className="briefing-2col__section-text">
-              <span style={{ color: "var(--catfish-text-muted)", fontSize: 11 }}>🔗 历史: </span>
-              {task.contextRefs.join(" / ")}
-            </p>
-          )}
-          {task.complianceFlags.map((f, i) => (
-            <ComplianceFlagInline key={`c-${i}`} flag={f} />
-          ))}
-          {task.politicalFlags.map((f, i) => (
-            <PoliticalFlagInline key={`p-${i}`} flag={f} />
-          ))}
-        </Section>
-      )}
+      <div className="briefing-2col__chat-input-row">
+        <textarea
+          className="briefing-2col__chat-input"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              void handleSend();
+            }
+          }}
+          placeholder={streaming ? "AI 回答中…" : "Enter 发送 · Shift+Enter 换行"}
+          rows={2}
+          disabled={streaming}
+        />
+        <button
+          type="button"
+          className="briefing-2col__chat-send"
+          onClick={() => void handleSend()}
+          disabled={!input.trim() || streaming}
+        >
+          {streaming ? "…" : "发送"}
+        </button>
+      </div>
 
-      {/* 建议 = options */}
-      {task.options.length > 0 && (
-        <Section title={`建议 · ${task.options.length} 个口径`}>
-          {task.options.map((opt) => (
-            <OptionRow
-              key={opt.label}
-              option={opt}
-              selected={selectedLabel === opt.label}
-              openError={selectedLabel === opt.label ? openErr : null}
-              openedPath={selectedLabel === opt.label ? openedPath : null}
-              accent={accent}
-              onSelect={() => void handleSelect(opt)}
-            />
-          ))}
-        </Section>
-      )}
-
-      {/* 行动按钮 */}
       <div className="briefing-2col__actions">
         {status === "done" ? (
           <button type="button" className="briefing-2col__action-btn" onClick={() => void handleStatusChange(null)}>
@@ -335,85 +429,27 @@ function DetailPane({
   );
 }
 
-// ─── helpers ──────────────────────────────────────────────────────
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="briefing-2col__section">
-      <div className="briefing-2col__section-title">{title}</div>
-      <div className="briefing-2col__section-body">{children}</div>
-    </div>
-  );
-}
-
-function OptionRow({
-  option,
-  selected,
-  openError,
-  openedPath,
-  accent,
-  onSelect,
-}: {
-  option: AdvisorOption;
-  selected: boolean;
-  openError: string | null;
-  openedPath: string | null;
-  accent: string;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className={"briefing-2col__option" + (selected ? " briefing-2col__option--selected" : "")}
-      style={selected ? { borderColor: accent, background: `${accent}10` } : undefined}
-    >
-      <div className="briefing-2col__option-header">
-        <span className="briefing-2col__option-label">
-          {option.label} · {option.summary}
-        </span>
-        {option.aiLean && <span className="briefing-2col__option-ailean">我倾向</span>}
+function ChatMsg({ msg }: { msg: ChatMessage }) {
+  if (msg.role === "user") {
+    return (
+      <div className="briefing-2col__msg briefing-2col__msg--user">
+        {msg.content}
       </div>
-      {option.tone && (
-        <div className="briefing-2col__option-tone">tone: {option.tone}</div>
-      )}
-      {openedPath && (
-        <div className="briefing-2col__option-opened">📄 草稿已打开: {openedPath.split("/").pop()}</div>
-      )}
-      {openError && (
-        <div className="briefing-2col__option-err">⚠️ {openError}</div>
-      )}
-    </button>
-  );
-}
-
-function ComplianceFlagInline({ flag }: { flag: ComplianceFlag }) {
-  const sev = flag.severity;
-  const color = sev === "high" ? "#dc2626" : sev === "medium" ? "#a16207" : "#6b7280";
+    );
+  }
   return (
-    <div className="briefing-2col__flag" style={{ borderColor: `${color}40`, background: `${color}08` }}>
-      <span style={{ color, fontWeight: 600 }}>⚠️ 合规 ({sev})</span>: {flag.reason}
-      {flag.suggestion && (
-        <div style={{ marginTop: 4, color: "var(--catfish-text-muted)" }}>建议: {flag.suggestion}</div>
-      )}
+    <div
+      className={
+        "briefing-2col__msg briefing-2col__msg--assistant" +
+        (msg.status === "streaming" ? " briefing-2col__msg--streaming" : "") +
+        (msg.status === "error" ? " briefing-2col__msg--error" : "")
+      }
+    >
+      {msg.content || (msg.status === "streaming" ? "…" : "")}
     </div>
   );
 }
 
-function PoliticalFlagInline({ flag }: { flag: PoliticalFlag }) {
-  const sev = flag.severity;
-  const color = sev === "high" ? "#7c3aed" : sev === "medium" ? "#a16207" : "#6b7280";
-  return (
-    <div className="briefing-2col__flag" style={{ borderColor: `${color}40`, background: `${color}08` }}>
-      <span style={{ color, fontWeight: 600 }}>
-        {flag.advisoryOnly ? "🔔 提醒" : "⚠️ 关键关系"} ({sev})
-      </span>
-      : {flag.reason}
-      {flag.suggestedPhrasings && flag.suggestedPhrasings.length > 0 && (
-        <div style={{ marginTop: 4, color: "var(--catfish-text-muted)" }}>
-          建议口径: {flag.suggestedPhrasings.join(" / ")}
-        </div>
-      )}
-    </div>
-  );
-}
+// (P3.3.7 Phase 1: Section / OptionRow / ComplianceFlagInline / PoliticalFlagInline
+//  砍掉, 因为 detail pane 改成 chat. flag / option 信息已经在 system prompt 里注入,
+//  LLM 会主动用. 老 helper 在 git history 6/10 之前的 commit 找得回.)
