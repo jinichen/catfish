@@ -1974,11 +1974,31 @@ button {
 .briefing-2col__msg {
   font-size: 13px;
   line-height: 1.6;
-  padding: 8px 12px;
+  /* P3.3.15 (6/10): padding 8px 12px → 12px 16px 跟工作台 AssistantBubble 对齐.
+     旧值是纯文本时设的, 改 Markdown render 后 markdown-body 默认 p/ul margin
+     让气泡显挤. 加大 padding + markdown 内首末段 margin reset 一起协调. */
+  padding: 12px 16px;
   border-radius: var(--radius-md);
   white-space: pre-wrap;
   word-break: break-word;
   max-width: 88%;
+}
+/* P3.3.15: Markdown 组件首段 margin reset, 防气泡上方出现空白带.
+   markdown.tsx 已 reset p:last-child margin-bottom, 但 first-child 还没.
+   selector 限定在 briefing-2col 下, 不影响工作台 chat. */
+.briefing-2col__msg .markdown-body > p:first-child,
+.briefing-2col__msg .markdown-body > ul:first-child,
+.briefing-2col__msg .markdown-body > ol:first-child,
+.briefing-2col__msg .markdown-body > h1:first-child,
+.briefing-2col__msg .markdown-body > h2:first-child,
+.briefing-2col__msg .markdown-body > h3:first-child,
+.briefing-2col__msg .markdown-body > h4:first-child {
+  margin-top: 0;
+}
+.briefing-2col__msg .markdown-body > p:last-child,
+.briefing-2col__msg .markdown-body > ul:last-child,
+.briefing-2col__msg .markdown-body > ol:last-child {
+  margin-bottom: 0;
 }
 .briefing-2col__msg--user {
   align-self: flex-end;

@@ -12,7 +12,7 @@
  * Tool 循环跟 useChat.runOneRound 用同款 logic, 只是 state 是 local.
  */
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { streamChat } from "../lib/chat";
 import { ensureTools } from "./chat/toolsCache";
 import { toolBridgeCallTool } from "../lib/tauri";
@@ -20,6 +20,11 @@ import type { ChatMessage, ToolCall } from "../types/chat";
 
 /** 跟 useChat 同款上限. 跨 skill 一次最多 20 轮 (5/13 鸿波拍). */
 const MAX_TOOL_ROUNDS = 20;
+
+/** P3.3.14 (6/10): 单次 send 最多带 N 条历史 message 进 LLM history.
+ *  audit (#2): 没截窗时 100 轮 chat ≈ 16K token / 次 send, 重复发整个历史浪费.
+ *  40 条 ≈ 20 轮对话 (user/assistant 配对), 够 LLM 拿上下文, 又控 token. */
+const HISTORY_WINDOW = 40;
 
 function uuid(): string {
   return crypto.randomUUID
@@ -54,6 +59,24 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+
+  // P3.3.13 (6/10): mountedRef 防 unmount 后 setState ghost write.
+  //   audit 报告 (#5): 切 task 时 DetailPane unmount + remount, 老 useTaskChat
+  //   abortRef 引用丢, fetch closure 持有 signal 仍跑, onError / onDone 仍
+  //   触发 setMessages — React 18+ 是 no-op 但 onPersist 仍会写到 jsonl 老 key,
+  //   切回新 task 看到诡异"消息凭空出现". fix: unmount cleanup 立即 abort,
+  //   且 mountedRef 拦 setMessages 跟 onPersist.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      // 切 task 立即放弃 in-flight stream. ctrl.abort() → streamChat 读 signal
+      // 触发 AbortError → onError 跑但 mountedRef.current=false → 跳过 persist.
+      abortRef.current?.abort();
+      abortRef.current = null;
+    };
+  }, []);
 
   // opts 用 ref, 闭包稳定不重建 send (model / buildSystemPrompt 都可能每次 render 变)
   const optsRef = useRef(opts);
@@ -96,6 +119,9 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
       curMessages = [...prev, userMsg];
       return curMessages;
     });
+    // P3.3.13: user msg 一定是 mounted 时刚发的, 不用判. 后面 assistant /
+    //   tool persist 必须判 mountedRef (unmount 后 stream onError/onDone 仍可能
+    //   触发, 不能写 ghost row 到 jsonl).
     optsRef.current.onPersist?.(userMsg);
     setIsStreaming(true);
 
@@ -110,7 +136,10 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
       ts: nowIso(),
       status: "done",
     };
-    let history: ChatMessage[] = [sysMsg, ...curMessages];
+    // P3.3.14: 截最近 HISTORY_WINDOW 条进 LLM history. 老历史仍在 jsonl, UI
+    //   也仍显, 只是不发给 LLM (advisor task chat summary 已 capture 老脉络).
+    const windowedMessages = curMessages.slice(-HISTORY_WINDOW);
+    let history: ChatMessage[] = [sysMsg, ...windowedMessages];
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
@@ -186,7 +215,12 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
         //   tool_calls 此刻还是 pending/running (tool 还没真跑), result 字段缺.
         //   后面 tool 跑完会再 persist 一条完整 assistant 覆盖 (append-only 写新一行,
         //   load 时按 id 取最后一行).
-        if (finalContent.trim().length > 0 || collectedCalls.length > 0) {
+        // P3.3.13: mounted 时才 persist — unmount 后 stream onDone 可能仍触发,
+        //   不能写 ghost row 到老 task 的 jsonl.
+        if (
+          mountedRef.current &&
+          (finalContent.trim().length > 0 || collectedCalls.length > 0)
+        ) {
           optsRef.current.onPersist?.(doneAssistant);
         }
         history = [...history, doneAssistant];
@@ -260,7 +294,11 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
 
           // P3.3.11: tool result 也 persist — load 时 DetailPane 把 result join
           //   回 assistant.tool_calls[i].result (跟工作台 state.db load 同款思路).
-          optsRef.current.onPersist?.(toolMsg);
+          // P3.3.13: mounted 时才 persist (防 ghost write — 切走 task 后 stream
+          //   还可能跑完一个 tool, 不能写到老 task 的 jsonl).
+          if (mountedRef.current) {
+            optsRef.current.onPersist?.(toolMsg);
+          }
         }
       }
     } catch (e) {

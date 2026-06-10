@@ -307,10 +307,12 @@ function DetailPane({
     setHistoryLoading(true);
     void (async () => {
       try {
-        let hist = await taskChatGet(chatKey);
+        // P3.3.14: load 时只取最近 200 条防大 jsonl UI 卡. 老历史仍在文件里,
+        //   advisor summary 拉时不传 limit 拿全部 (老脉络才有总结意义).
+        let hist = await taskChatGet(chatKey, 200);
         if (hist.length === 0 && chatKey !== task.title) {
           // 兼容 P3.3.9 之前以 title 命名的老 jsonl
-          const oldHist = await taskChatGet(task.title).catch(() => []);
+          const oldHist = await taskChatGet(task.title, 200).catch(() => []);
           if (oldHist.length > 0) {
             console.log(
               `[BriefingTwoColumn] 老 title jsonl 命中 (${oldHist.length} 条), uid='${chatKey}' title='${task.title}'`,

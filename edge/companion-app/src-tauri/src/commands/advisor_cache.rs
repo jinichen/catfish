@@ -27,6 +27,11 @@ pub struct AdvisorCache {
     /// 用了多少 token (可选, debug 用).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub prompt_tokens: Option<u32>,
+    /// P3.3.12 (6/10): task chat summary cache — key=task_uid, val={summary,
+    /// jsonlSize, computedAt}. jsonl size 没变就复用, 不再调 LLM. Rust 不解析直接
+    /// 透传 (跟 result 同款不绑死 schema, TS 端定义形状).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub task_chat_summaries: Option<serde_json::Value>,
 }
 
 fn cache_path() -> Result<PathBuf, String> {

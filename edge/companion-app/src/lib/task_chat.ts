@@ -27,9 +27,11 @@ export interface TaskChatMsg {
   toolCallId?: string;
 }
 
-/** 读 task chat 全部历史. 没历史返空 []. */
-export const taskChatGet = (taskKey: string) =>
-  rawInvoke<TaskChatMsg[]>("task_chat_get", { taskKey });
+/** 读 task chat 历史. 没历史返空 [].
+ *  P3.3.14 (6/10): limit > 0 时只返最近 N 条 (DetailPane load 用 200 防 UI 卡;
+ *  advisor summary 拉时用全部 — 老脉络才有意义). */
+export const taskChatGet = (taskKey: string, limit?: number) =>
+  rawInvoke<TaskChatMsg[]>("task_chat_get", { taskKey, limit });
 
 /** Append 一条到 task chat. 自动填 ts.
  *  P3.3.11: 加 toolCalls / toolCallId 可选, 默认 undefined 写老 schema (前向兼容). */
@@ -50,3 +52,8 @@ export const taskChatAppend = (
 /** 清掉 task chat (rm file). 给"重新开始" 按钮用. */
 export const taskChatClear = (taskKey: string) =>
   rawInvoke<void>("task_chat_clear", { taskKey });
+
+/** P3.3.12 (6/10): jsonl 文件 size (字节). 不存在返 0.
+ *  advisor task chat summary cache 用 — size 一致 → 没新消息 → 复用 cached summary. */
+export const taskChatSize = (taskKey: string) =>
+  rawInvoke<number>("task_chat_size", { taskKey });

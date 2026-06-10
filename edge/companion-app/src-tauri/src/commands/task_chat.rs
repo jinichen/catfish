@@ -77,9 +77,15 @@ fn chat_file_for(task_key: &str) -> Result<PathBuf, String> {
 
 // ── Tauri commands ────────────────────────────────────────────────────
 
-/// 读 task chat 全部历史. 没文件返空列表.
+/// 读 task chat 历史. 没文件返空列表.
+/// P3.3.14 (6/10): 加 optional limit — None / 0 = 全部, N > 0 = 最近 N 条.
+/// 实现: 先全 parse 再截尾 (jsonl 一般几百行级, parse 不贵; 真大 file > 10K 行
+/// 时优化点是 reverse iterate, 不读 head — 现状未到这量级).
 #[tauri::command(rename_all = "camelCase")]
-pub async fn task_chat_get(task_key: String) -> Result<Vec<TaskChatMsg>, String> {
+pub async fn task_chat_get(
+    task_key: String,
+    limit: Option<usize>,
+) -> Result<Vec<TaskChatMsg>, String> {
     let path = chat_file_for(&task_key)?;
     if !path.exists() {
         return Ok(Vec::new());
@@ -98,6 +104,13 @@ pub async fn task_chat_get(task_key: String) -> Result<Vec<TaskChatMsg>, String>
                 // skip 单行解析错, 不让一条坏 row 把整条历史阻断
                 eprintln!("[task_chat] {path:?} 第 {} 行解析失败: {e}", i + 1);
             }
+        }
+    }
+    // P3.3.14: limit > 0 时只返最近 N 条
+    if let Some(n) = limit {
+        if n > 0 && out.len() > n {
+            let skip = out.len() - n;
+            out = out.split_off(skip);
         }
     }
     Ok(out)
@@ -136,6 +149,20 @@ pub async fn task_chat_append(
     writeln!(file, "{line}")
         .map_err(|e| format!("写 {path:?} 失败: {e}"))?;
     Ok(())
+}
+
+/// P3.3.12 (6/10): 返 jsonl 文件 size (字节). 不存在返 0.
+/// 给 advisor task chat summary cache 用 — size 没变 → 没新消息 → 复用 cached summary.
+/// 不用 SHA 是因为 append-only 文件 size 是充分 hash (历史一致 + 总长 → 内容必相同).
+#[tauri::command(rename_all = "camelCase")]
+pub async fn task_chat_size(task_key: String) -> Result<u64, String> {
+    let path = chat_file_for(&task_key)?;
+    if !path.exists() {
+        return Ok(0);
+    }
+    let meta = std::fs::metadata(&path)
+        .map_err(|e| format!("stat {path:?} 失败: {e}"))?;
+    Ok(meta.len())
 }
 
 /// 清除 task chat 历史 (rm file). 给"重新开始" 按钮用. 不存在不报错.

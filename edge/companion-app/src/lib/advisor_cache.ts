@@ -14,6 +14,19 @@ export interface AdvisorCache {
   result: AdvisorResult;
   model?: string;
   promptTokens?: number;
+  /** P3.3.12 (6/10): task chat summary cache, key=taskUid.
+   *  jsonl size 没变就复用 — 没有新消息进 chat, summary 还是有效的. */
+  taskChatSummaries?: Record<string, TaskChatSummary>;
+}
+
+/** P3.3.12: 单条 task chat 的 LLM summary cache 项. */
+export interface TaskChatSummary {
+  /** LLM 给的 100-150 字 summary, 说明员工跟这条 task 聊到哪. */
+  summary: string;
+  /** jsonl 文件 size 当时是多少 (byte). 跟当前对比, 一致就复用. */
+  jsonlSize: number;
+  /** ISO-8601, summary 算出来的时刻. */
+  computedAt: string;
 }
 
 export interface AdvisorConfig {
