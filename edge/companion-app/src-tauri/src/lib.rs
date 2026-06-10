@@ -511,6 +511,10 @@ pub fn run() {
             commands::task_chat::task_chat_get,
             commands::task_chat::task_chat_append,
             commands::task_chat::task_chat_clear,
+            // P3.3.8 (6/10): 早安天气
+            commands::weather::weather_get,
+            commands::weather::weather_config_get,
+            commands::weather::weather_config_set,
             commands::decisions::decision_list_recent,
             commands::decisions::decision_search,
             // BL-ADVISOR-CACHE + CONFIG (5/22 Phase 7 cold start v3): 缓存 + yaml 时段配置

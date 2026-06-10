@@ -41,6 +41,7 @@ pub mod style_fingerprint_dirs;  // BL-STYLE-FP-DIR-PICKER (5/22 鸿波): scan_d
 pub mod decisions;  // BL-ADVISOR-DECISIONS (5/21 Phase 7): ~/.catfish/decisions.jsonl 决策留痕
 pub mod drafts;     // BL-ADVISOR-DRAFTS (5/21 Phase 7): ~/.catfish/outputs/<date>/ 草稿存储
 pub mod task_chat;  // P3.3.7 Phase 2 (6/10): ~/.catfish/task_chat/<key>.jsonl task-scoped chat 持久化
+pub mod weather;    // P3.3.8 (6/10): 早安天气 (wttr.in + IP 定位 + 多城市 + 6h cache)
 pub mod pet;
 pub mod proactive;  // BL-PROACTIVE-DECOUPLE (5/26): journal_tail + last_model 给 /api/proactive/* header 透传
 pub mod profile;    // BL-ADVISOR-PROFILE (5/21 Phase 7): 员工职级 + 画像自动识别

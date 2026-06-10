@@ -7,13 +7,29 @@
  *   - 本文件就一个壳, 刷新按钮 increment refreshKey 让 AdvisorView re-load
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import AdvisorView from "../Briefing/AdvisorView";
 import { getGreeting } from "../Briefing/components/helpers";
+import { weatherGet, type WeatherCache } from "../../lib/weather";  // P3.3.8 (6/10): 早安天气
 
 export default function BriefingCard() {
   const [refreshKey, setRefreshKey] = useState(0);
+  // P3.3.8 (6/10): 早安天气 — 走 ~/.catfish/weather_cache.json (6h cache).
+  // mount 时拉一次, refresh 按钮也触发. wttr.in 国内访问慢 / Clash 拦时显错.
+  const [weather, setWeather] = useState<WeatherCache | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void weatherGet(false /* not force, 走 cache */).then((w) => {
+      if (!cancelled) setWeather(w);
+    }).catch((e) => {
+      console.warn("[BriefingCard] weather 拉失败:", e);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshKey]);
 
   const greeting = getGreeting();
   const today = new Date().toLocaleDateString("zh-CN", {
@@ -42,6 +58,37 @@ export default function BriefingCard() {
       >
         <strong style={{ fontSize: 15, color: "var(--catfish-text)" }}>{greeting}</strong>
         <span style={{ fontSize: 12, color: "var(--catfish-text-muted)" }}>{today}</span>
+        {weather && weather.entries.length > 0 && (
+          <span
+            style={{
+              fontSize: 12,
+              color: "var(--catfish-text-muted)",
+              display: "inline-flex",
+              gap: 8,
+              alignItems: "center",
+            }}
+            title={
+              weather.stale
+                ? `天气数据 stale (>6h), 刷新拉新. fetched=${weather.fetchedAt}`
+                : `wttr.in · fetched=${weather.fetchedAt}`
+            }
+          >
+            {weather.entries.map((e, i) => (
+              <span key={i}>
+                {e.icon} {e.city || "本地"} {e.tempC}°C
+                {e.desc && <span style={{ opacity: 0.7 }}> {e.desc}</span>}
+              </span>
+            ))}
+          </span>
+        )}
+        {weather?.error && weather.entries.length === 0 && (
+          <span
+            style={{ fontSize: 11, color: "var(--catfish-text-muted)", opacity: 0.7 }}
+            title={weather.error}
+          >
+            🌐 天气不可用
+          </span>
+        )}
         <button
           type="button"
           onClick={() => setRefreshKey((k) => k + 1)}
