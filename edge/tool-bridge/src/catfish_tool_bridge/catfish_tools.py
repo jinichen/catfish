@@ -603,6 +603,16 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_skill_publish":
         from . import skill_publish  # noqa: PLC0415
         return skill_publish.skill_publish(args)
+    # P3.3.18 (6/10) Wiki Hub publish / install / unpublish (manifesto 公理 2 例外)
+    if name == "catfish_wiki_publish":
+        from . import wiki_publish  # noqa: PLC0415
+        return wiki_publish.wiki_publish(args)
+    if name == "catfish_wiki_install":
+        from . import wiki_install  # noqa: PLC0415
+        return wiki_install.wiki_install(args)
+    if name == "catfish_wiki_unpublish":
+        from . import wiki_install  # noqa: PLC0415  (同 module)
+        return wiki_install.wiki_unpublish(args)
     # BL-Q3-ARCHIVE (5/11) tool message archive 读回
     if name == "catfish_read_tool_archive":
         from . import read_tool_archive  # noqa: PLC0415

@@ -44,6 +44,8 @@ import QuotaCard from "./QuotaCard";
 // import { SessionCleanupCard } from "./SessionCleanupCard";
 import CatalogCard from "./CatalogCard";
 import SkillsMcpCard from "./SkillsMcpCard";
+// P3.3.18 (6/10): 部门 wiki publish 市场, 跟 SkillsMcpCard 并列 (manifesto 公理 2 例外)
+import WikiHubCard from "./WikiHubCard";
 // 6/2 BL-SKILLS-CARD-SPLIT (鸿波 6/2 凌晨拍 方案 C): MySkillsCard 显员工自己 RecMode
 // 录的 + propose_skill 落地的 skill (~/.catfish/skills/), 含共享按钮占位. 主卡, 上.
 // SkillsMcpCard 改成只显内置+装的, 次卡, 下. 配套 catfish 5 大卖点之 "员工自助生成
@@ -235,6 +237,8 @@ export default function DashboardTab() {
           tabs={[
             { key: "my-skills", label: "🎬 我录的技能 (本机)", render: () => <MySkillsCard /> },
             { key: "installed", label: "📦 已装技能库 (可直接用)", render: () => <SkillsMcpCard /> },
+            // P3.3.18 (6/10): 部门 wiki 跟技能在概念上都是"部门 share 资源", 同 section.
+            { key: "wiki-hub", label: "📚 部门 wiki (浏览 / 安装)", render: () => <WikiHubCard /> },
           ]}
         />
       </CollapsibleSection>

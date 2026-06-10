@@ -1,0 +1,38 @@
+[project]
+name = "catfish-wiki-hub"
+version = "0.1.0"
+description = "Catfish 中央 Wiki Hub — 员工 publish / pull 部门 wiki 笔记的 FastAPI 服务 (P3.3.18, 6/10)"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Catfish Platform Team" }]
+
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pyyaml>=6.0.2",
+    "pydantic>=2.9.0",
+    "python-multipart>=0.0.20",
+    # PG 元数据存储, 跟 skills-hub / mcp-registry / gateway 同套. 没配
+    # CATFISH_DB_URL 时 storage.py 自动 fallback FS, 不强依赖 PG.
+    "psycopg[binary]>=3.2.0",
+    "alembic>=1.13.0",
+    "sqlalchemy>=2.0.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

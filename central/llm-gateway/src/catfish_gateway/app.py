@@ -235,6 +235,11 @@ async def lifespan(app: FastAPI):
         timeout=config.skills_hub.timeout,
     )
 
+    # P3.3.18 (6/10): wiki-hub 反代 httpx client, 同模式
+    app.state.wiki_hub_client = httpx.AsyncClient(
+        timeout=config.wiki_hub.timeout,
+    )
+
     # A2A self_register 5/26 砍 — Plan D Federation 整套停 (0 真客户用, 详见
     # docs/HERMES-013-ALIGN.md A2A 段). 不再调 self_register.
 
@@ -305,6 +310,12 @@ async def lifespan(app: FastAPI):
         await app.state.skills_hub_client.aclose()
     except Exception as e:
         logger.debug("skills_hub_client aclose: %s", e)
+
+    # P3.3.18 (6/10): 关 wiki-hub httpx client
+    try:
+        await app.state.wiki_hub_client.aclose()
+    except Exception as e:
+        logger.debug("wiki_hub_client aclose: %s", e)
 
     # BL-F13 (5/4): 清 LiteLLM 内部 aiohttp / httpx client, 减少 "Unclosed client session"
     # warning. LiteLLM 1.50+ 用 httpx 主路径但仍持有少量 aiohttp module-level client,
@@ -378,6 +389,15 @@ try:
     logger.info("skills_hub_proxy: /v1/hub/* 反代已挂载")
 except Exception as e:
     logger.warning("skills_hub_proxy 挂载失败 (BL-D2 反代不可用): %s", e)
+
+# P3.3.18 (6/10): wiki-hub 反代, /v1/wiki/* → :8994. 部门 wiki publish.
+# manifesto 公理 2 例外 (员工主动 push) — 详见 CATFISH-CENTRAL-MANIFESTO.md.
+try:
+    from .wiki_hub_proxy import router as wiki_hub_router  # noqa: PLC0415
+    app.include_router(wiki_hub_router)
+    logger.info("wiki_hub_proxy: /v1/wiki/* 反代已挂载 (P3.3.18)")
+except Exception as e:
+    logger.warning("wiki_hub_proxy 挂载失败 (P3.3.18 反代不可用): %s", e)
 
 # BL-ARCH1 P1 (5/10): identity-server admin 反代, /api/admin/* → :8998
 try:

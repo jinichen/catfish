@@ -13,7 +13,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useWikiStore } from "../../store/wiki";
 import { topKRelated } from "../../lib/wikiRelevance";
-import { wikiDeleteFile, wikiUpdateFile } from "../../lib/tauri";
+import { wikiDeleteFile, wikiUpdateFile, toolBridgeCallTool } from "../../lib/tauri";
 
 const KIND_LABEL: Record<string, string> = {
   entity: "实体",
@@ -39,6 +39,17 @@ export default function WikiPreview() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteErr, setDeleteErr] = useState<string | null>(null);
+
+  // P3.3.18 (6/10): 分享到部门 dialog state. 走 catfish_wiki_publish tool.
+  // 强警告员工 "已 pull 副本撤不回" (manifesto 公理 4). 第一次失败若 warnings
+  // (PII / 内网 / 敏感词), 显警告 + ack checkbox + 再 retry with acknowledge_warnings=true.
+  const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const [shareNamespace, setShareNamespace] = useState("");
+  const [shareAck, setShareAck] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const [shareWarnings, setShareWarnings] = useState<Array<{ category: string; hits: any[]; advice: string }>>([]);
+  const [shareError, setShareError] = useState<string | null>(null);
+  const [shareSuccess, setShareSuccess] = useState<string | null>(null);
 
   // selectedFile 切换时 reset edit state
   useEffect(() => {
@@ -108,6 +119,72 @@ export default function WikiPreview() {
       setSaveErr(String(e));
     } finally {
       setSaving(false);
+    }
+  };
+
+  // P3.3.18 share dialog — selectedFile 变时 reset state
+  useEffect(() => {
+    setShareDialogOpen(false);
+    setShareAck(false);
+    setShareWarnings([]);
+    setShareError(null);
+    setShareSuccess(null);
+  }, [selectedFile?.info.rel_path]);
+
+  const openShareDialog = () => {
+    if (!selectedFile) return;
+    setShareDialogOpen(true);
+    setShareAck(false);
+    setShareWarnings([]);
+    setShareError(null);
+    setShareSuccess(null);
+    // 不预填 namespace, 让员工 explicit 填 — manifesto 公理 3 (不静默自决)
+  };
+
+  const handleShare = async (acknowledgeWarnings: boolean) => {
+    if (!selectedFile) return;
+    const ns = shareNamespace.trim();
+    if (!ns) {
+      setShareError("namespace 必填 (例 dept/finance)");
+      return;
+    }
+    if (!/^dept\/[a-z][a-z0-9_-]{0,40}$/.test(ns)) {
+      setShareError("namespace 格式必须 'dept/<部门>' (小写字母数字 / - / _)");
+      return;
+    }
+    if (!shareAck) {
+      setShareError("必须勾选 '我知道已 pull 副本撤不回' 才能继续");
+      return;
+    }
+    setSharing(true);
+    setShareError(null);
+    try {
+      const res = await toolBridgeCallTool("catfish_wiki_publish", {
+        wiki_rel_path: selectedFile.info.rel_path,
+        namespace: ns,
+        acknowledge_warnings: acknowledgeWarnings,
+      });
+      const result: any = res.result;
+      if (res.ok && result?.ok) {
+        setShareSuccess(`已 publish 到 ${ns} · file_id=${result.file_id}`);
+        setShareWarnings([]);
+      } else {
+        // 看是不是 warnings (默认拒)
+        const errResult = result || {};
+        if (errResult.scan_phase === "warnings" && errResult.warnings?.length) {
+          setShareWarnings(errResult.warnings);
+          setShareError(null);
+        } else {
+          setShareError(
+            errResult.error ||
+              (typeof result === "string" ? result : JSON.stringify(result || res)),
+          );
+        }
+      }
+    } catch (e) {
+      setShareError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSharing(false);
     }
   };
 
@@ -269,6 +346,15 @@ export default function WikiPreview() {
             >
               编辑
             </button>
+            {/* P3.3.18 (6/10): 分享到部门 — 强警告 dialog 跟 manifesto 公理 4 提醒 */}
+            <button
+              className="approval-banner__btn-link"
+              onClick={openShareDialog}
+              disabled={deleting || sharing}
+              title="把这条 wiki 发布到部门 wiki-hub — 部门同事能看到, 已 pull 副本撤不回"
+            >
+              📤 分享到部门
+            </button>
             <button
               className={
                 confirmDelete
@@ -319,6 +405,197 @@ export default function WikiPreview() {
       )}
       {deleteErr && (
         <div className="wiki-preview__save-err">删除失败: {deleteErr}</div>
+      )}
+
+      {/* P3.3.18 (6/10): 分享 dialog */}
+      {shareDialogOpen && selectedFile && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.5)",
+            zIndex: 1000,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+          }}
+          onClick={() => setShareDialogOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "var(--catfish-bg-elevated)",
+              border: "1px solid var(--catfish-border)",
+              borderRadius: "var(--radius-md)",
+              padding: 24,
+              maxWidth: 560,
+              width: "100%",
+              maxHeight: "90vh",
+              overflowY: "auto",
+            }}
+          >
+            <h3 style={{ margin: "0 0 12px", display: "flex", alignItems: "center", gap: 8 }}>
+              📤 分享 wiki 到部门
+            </h3>
+            <div style={{ fontSize: 13, color: "var(--catfish-text-muted)", marginBottom: 16 }}>
+              要分享: <code>{selectedFile.info.rel_path}</code>
+            </div>
+
+            {/* 强警告 banner — 用户拍要的, manifesto 公理 4 提醒 */}
+            <div
+              style={{
+                background: "#fef3c7",
+                border: "1px solid #f59e0b",
+                color: "#78350f",
+                padding: 12,
+                borderRadius: 6,
+                fontSize: 13,
+                lineHeight: 1.6,
+                marginBottom: 16,
+              }}
+            >
+              <strong>⚠️ 重要提醒</strong> (manifesto 公理 4)
+              <ul style={{ margin: "6px 0 0", paddingLeft: 20 }}>
+                <li>分享后, 部门所有同事能看到 / 装这条 wiki 到本机</li>
+                <li>
+                  你后面 <strong>哪怕撤回</strong>, 中央那一份会清零 + 标 stale, 但 <strong>已 pull 装本机的副本撤不回</strong>
+                </li>
+                <li>已扩散的信息在部门里"永久存在", 跟 OneNote / Confluence 一回事</li>
+                <li>客户名 / 项目细节 / 关键人名 这种敏感内容, 决定前想清楚</li>
+              </ul>
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <label
+                style={{
+                  display: "block",
+                  fontSize: 12,
+                  color: "var(--catfish-text-muted)",
+                  marginBottom: 6,
+                }}
+              >
+                目标部门 namespace (格式 dept/&lt;部门&gt;)
+              </label>
+              <input
+                type="text"
+                value={shareNamespace}
+                onChange={(e) => setShareNamespace(e.target.value)}
+                placeholder="dept/finance"
+                style={{
+                  width: "100%",
+                  padding: "8px 12px",
+                  fontSize: 13,
+                  border: "1px solid var(--catfish-border)",
+                  borderRadius: 4,
+                  background: "var(--catfish-bg)",
+                  color: "var(--catfish-text)",
+                  fontFamily: "var(--font-mono)",
+                }}
+                disabled={sharing}
+              />
+              <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 4 }}>
+                例: dept/finance, dept/sales, dept/it. 当前只接受 dept/ 开头.
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ fontSize: 13, display: "flex", gap: 8, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={shareAck}
+                  onChange={(e) => setShareAck(e.target.checked)}
+                  disabled={sharing}
+                />
+                <span>
+                  <strong>我知道</strong> 已 pull 副本撤不回, 信息会在部门里扩散
+                </span>
+              </label>
+            </div>
+
+            {/* warnings 显 (PII / 内网 / 敏感词命中) */}
+            {shareWarnings.length > 0 && (
+              <div
+                style={{
+                  background: "#fee2e2",
+                  border: "1px solid #dc2626",
+                  color: "#7f1d1d",
+                  padding: 12,
+                  borderRadius: 6,
+                  fontSize: 12,
+                  marginBottom: 16,
+                }}
+              >
+                <strong>扫到 {shareWarnings.length} 类内容警告</strong>:
+                <ul style={{ margin: "6px 0 0", paddingLeft: 20 }}>
+                  {shareWarnings.map((w, i) => (
+                    <li key={i}>
+                      <strong>{w.category}</strong>: {w.advice} ({w.hits.length} 处)
+                    </li>
+                  ))}
+                </ul>
+                <div style={{ marginTop: 8, color: "#7f1d1d" }}>
+                  确认要继续 share 这些内容到部门? 点"我看过了, 强发"再发一次.
+                </div>
+              </div>
+            )}
+
+            {shareError && (
+              <div
+                style={{
+                  background: "#fee2e2",
+                  border: "1px solid #dc2626",
+                  color: "#7f1d1d",
+                  padding: 10,
+                  borderRadius: 4,
+                  fontSize: 12,
+                  marginBottom: 16,
+                }}
+              >
+                {shareError}
+              </div>
+            )}
+
+            {shareSuccess && (
+              <div
+                style={{
+                  background: "#d1fae5",
+                  border: "1px solid #16a34a",
+                  color: "#14532d",
+                  padding: 10,
+                  borderRadius: 4,
+                  fontSize: 12,
+                  marginBottom: 16,
+                }}
+              >
+                ✓ {shareSuccess}
+              </div>
+            )}
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button
+                className="approval-banner__btn-link"
+                onClick={() => setShareDialogOpen(false)}
+                disabled={sharing}
+              >
+                {shareSuccess ? "关闭" : "取消"}
+              </button>
+              {!shareSuccess && (
+                <button
+                  className="approval-banner__btn-primary"
+                  onClick={() => void handleShare(shareWarnings.length > 0)}
+                  disabled={sharing || !shareAck}
+                >
+                  {sharing
+                    ? "分享中…"
+                    : shareWarnings.length > 0
+                      ? "我看过了, 强发"
+                      : "确认分享"}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* P35 (6/5): editing → textarea; 否则 → markdown */}

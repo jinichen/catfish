@@ -502,90 +502,35 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
 
   // P3.3.9 (6/10): caller 没传 previousTasks 时, 内部从 advisorCacheGet 拉
   //   (含 stale, 让 LLM 复用 uid). 老 cache 没 taskUid 字段就跳过, 不出错.
-  // P3.3.12 (6/10): 并发拉每条 prev task 的 chat summary 注入. cache 用
-  //   advisor_cache.taskChatSummaries (key=uid), jsonl size 没变就复用不调 LLM.
+  // P3.3.12.1 (6/10): summary 只从 cache 读 (不再现场跑 LLM). 拉 summary 是
+  //   ensureTaskChatSummariesFresh 的活, 它由 AdvisorView mount 时后台调,
+  //   跟 advisor 主 LLM call 解耦 — cache 命中场景也能更新. 这里只读最新 cache.
   let inputWithPrev = input;
   if (!input.previousTasks) {
     try {
-      const advisorCacheMod = await import("./advisor_cache");
-      const { advisorCacheGet, advisorCacheSave } = advisorCacheMod;
-      type TaskChatSummary = import("./advisor_cache").TaskChatSummary;
-      const { taskChatGet, taskChatSize } = await import("./task_chat");
+      const { advisorCacheGet } = await import("./advisor_cache");
       const cached = await advisorCacheGet();
       if (cached && cached.result?.mainTasks?.length > 0) {
-        const prevBase = cached.result.mainTasks
+        const summaries = cached.taskChatSummaries ?? {};
+        const enriched = cached.result.mainTasks
           .filter((t) => typeof t.taskUid === "string" && t.taskUid.length > 0)
-          .map((t) => ({ taskUid: t.taskUid, title: t.title, urgency: t.urgency }));
-        if (prevBase.length > 0) {
-          // 并发拉 summary (cache 命中复用, 不命中调 LLM)
-          const cachedSummaries: Record<string, TaskChatSummary> =
-            cached.taskChatSummaries ?? {};
-          const newSummaries: Record<string, TaskChatSummary> = { ...cachedSummaries };
-          let llmCalls = 0;
-          let cacheHits = 0;
-
-          const enriched = await Promise.all(
-            prevBase.map(async (t) => {
-              try {
-                const size = await taskChatSize(t.taskUid);
-                if (size === 0) {
-                  return { ...t, chatSummary: "" };
-                }
-                const hit = cachedSummaries[t.taskUid];
-                if (hit && hit.jsonlSize === size && hit.summary) {
-                  cacheHits++;
-                  return { ...t, chatSummary: hit.summary };
-                }
-                // miss → 拉 jsonl + 跑 LLM summary
-                llmCalls++;
-                const messages = await taskChatGet(t.taskUid);
-                if (messages.length === 0) return { ...t, chatSummary: "" };
-                const summary = await summarizeTaskChat(
-                  t.title,
-                  t.taskUid,
-                  messages,
-                  input.model,
-                );
-                if (summary) {
-                  newSummaries[t.taskUid] = {
-                    summary,
-                    jsonlSize: size,
-                    computedAt: new Date().toISOString(),
-                  };
-                }
-                return { ...t, chatSummary: summary };
-              } catch (e) {
-                console.warn(`[advisor summary] enrich ${t.taskUid} 失败:`, e);
-                return { ...t, chatSummary: "" };
-              }
-            }),
-          );
-
+          .map((t) => ({
+            taskUid: t.taskUid,
+            title: t.title,
+            urgency: t.urgency,
+            chatSummary: summaries[t.taskUid]?.summary ?? "",
+          }));
+        if (enriched.length > 0) {
           inputWithPrev = { ...input, previousTasks: enriched };
           const withSummary = enriched.filter((t) => t.chatSummary).length;
           console.log(
             `[advisor] 注入 ${enriched.length} 条 prev task ` +
-              `(${withSummary} 含 chat summary, cache 命中 ${cacheHits}, LLM 调 ${llmCalls})`,
+              `(${withSummary} 含 chat summary, 全部来自 cache)`,
           );
-
-          // 立即把新 summaries 写回 cache. 主 advisor LLM call 完毕后, finally
-          // save 会读这份 cache 拿到 summaries 一起 save. 不用怕双写竞争 — advisor
-          // in-flight 锁保证同时只一个 advisor 跑.
-          if (llmCalls > 0) {
-            try {
-              await advisorCacheSave({
-                ...cached,
-                taskChatSummaries: newSummaries,
-              });
-              console.log("[advisor summary] 已写 cache (含新 summary)");
-            } catch (e) {
-              console.warn("[advisor summary] 写 cache 挂:", e);
-            }
-          }
         }
       }
     } catch (e) {
-      console.warn("[advisor] 拉 advisor_cache / task chat summary 失败:", e);
+      console.warn("[advisor] 拉 advisor_cache 失败 (P3.3.9 uid 复用降级):", e);
     }
   }
 
@@ -732,6 +677,112 @@ function parseAdvisorResult(raw: unknown): AdvisorResult | null {
 /** P3.3.9 (6/10): 生成 6 字符 [a-z0-9] uid. LLM 没返 task_uid 时 fallback 用. */
 function generateTaskUid(): string {
   return Math.random().toString(36).slice(2, 8).padEnd(6, "0");
+}
+
+/** P3.3.12.1 (6/10): ensure 每个 mainTask 的 chat summary 是最新的 (jsonl size 没变就跳).
+ *
+ *  独立于 advisor 主 LLM call — 这样 cache 命中场景 (主 advisor 没跑) 仍能更新
+ *  summary, 下次 advisor 真要跑时直接读 cache 即可.
+ *
+ *  AdvisorView mount 后异步调一次 (cache 命中也调), 不阻塞 UI.
+ *  refreshKey 变 (员工点刷新) 也调.
+ *
+ *  实测烧 token 风险: 每个 jsonl size 变 task 跑一次 LLM. 4 task 全变 ≈ 4 次 LLM call,
+ *  跟主 advisor 一次 call 比是几分之一. 失败不阻塞, summary 留旧的就旧的.
+ *
+ *  in-flight 锁: 跟主 advisor 同款 — React StrictMode dev useEffect 双调会让本函数
+ *  瞬间双跑, 两次都读老 cache 各跑 4 次 LLM, 浪费 8 次 token. 锁复用 promise. */
+export async function ensureTaskChatSummariesFresh(model: string): Promise<void> {
+  if (_summaryEnsureInFlight) {
+    console.log("[advisor summary] ensure 已在跑, 复用 in-flight promise");
+    return _summaryEnsureInFlight;
+  }
+  const p = _ensureTaskChatSummariesFreshImpl(model);
+  _summaryEnsureInFlight = p;
+  try {
+    await p;
+  } finally {
+    if (_summaryEnsureInFlight === p) _summaryEnsureInFlight = null;
+  }
+}
+
+let _summaryEnsureInFlight: Promise<void> | null = null;
+
+async function _ensureTaskChatSummariesFreshImpl(model: string): Promise<void> {
+  try {
+    const { advisorCacheGet, advisorCacheSave } = await import("./advisor_cache");
+    const { taskChatGet, taskChatSize } = await import("./task_chat");
+    const cached = await advisorCacheGet();
+    if (!cached || !Array.isArray(cached.result?.mainTasks)) {
+      console.log("[advisor summary] ensure 跳过 — 没 cache 或没 mainTasks");
+      return;
+    }
+    const mainTasks = cached.result.mainTasks.filter(
+      (t: { taskUid?: string }) =>
+        typeof t.taskUid === "string" && t.taskUid.length > 0,
+    );
+    if (mainTasks.length === 0) {
+      console.log("[advisor summary] ensure 跳过 — mainTasks 全没 taskUid");
+      return;
+    }
+
+    const cachedSummaries = (cached.taskChatSummaries ?? {}) as Record<
+      string,
+      { summary: string; jsonlSize: number; computedAt: string }
+    >;
+    const newSummaries = { ...cachedSummaries };
+    let llmCalls = 0;
+    let cacheHits = 0;
+    let emptyJsonl = 0;
+
+    await Promise.all(
+      mainTasks.map(async (t: { taskUid: string; title: string }) => {
+        try {
+          const size = await taskChatSize(t.taskUid);
+          if (size === 0) {
+            emptyJsonl++;
+            return;
+          }
+          const hit = cachedSummaries[t.taskUid];
+          if (hit && hit.jsonlSize === size && hit.summary) {
+            cacheHits++;
+            return;
+          }
+          llmCalls++;
+          const messages = await taskChatGet(t.taskUid);
+          if (messages.length === 0) {
+            emptyJsonl++;
+            return;
+          }
+          const summary = await summarizeTaskChat(t.title, t.taskUid, messages, model);
+          if (summary) {
+            newSummaries[t.taskUid] = {
+              summary,
+              jsonlSize: size,
+              computedAt: new Date().toISOString(),
+            };
+          }
+        } catch (e) {
+          console.warn(`[advisor summary] ensure ${t.taskUid} 失败:`, e);
+        }
+      }),
+    );
+
+    console.log(
+      `[advisor summary] ensure 完成 — ${mainTasks.length} task ` +
+        `(${emptyJsonl} 没聊过, ${cacheHits} cache 命中, ${llmCalls} 调 LLM)`,
+    );
+
+    if (llmCalls > 0) {
+      await advisorCacheSave({
+        ...cached,
+        taskChatSummaries: newSummaries,
+      });
+      console.log("[advisor summary] 已写 cache (含新 summary)");
+    }
+  } catch (e) {
+    console.warn("[advisor summary] ensure 顶层异常:", e);
+  }
 }
 
 /** P3.3.12 (6/10): 调 LLM 出 task chat summary. 100-150 字, 客观描述员工

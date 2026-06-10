@@ -1290,6 +1290,139 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ── P3.3.18 (6/10) Wiki Hub publish / install / unpublish ────────────
+    # manifesto 公理 2 例外条款明示允许员工主动 push wiki 到团队 marketplace
+    # (CATFISH-CENTRAL-MANIFESTO.md line 34-36).
+    {
+        "name": "catfish_wiki_publish",
+        "description": (
+            "★ 把员工本机一条 wiki 笔记 (~/.catfish/wiki/{entities,concepts,queries}/X.md) "
+            "发布到部门 wiki-hub (全部门可见).\n\n"
+            "✅ 调用时机:\n"
+            "  - 员工说'把这条 wiki 分享给部门' / '让 X 部门看下我这条笔记'\n"
+            "  - **绝不**在没员工 explicit 确认时调用 (跟 skill_publish 同纪律)\n"
+            "  - 员工自动学的 wiki (catfish-memory plugin 后台抽的) 不要主动 publish, "
+            "    要员工亲自看完同意才发\n\n"
+            "🛑 强警告对员工说 (publish 前必转告):\n"
+            "  '部门 wiki 已 pull 的副本你管不了 (manifesto 公理 4 — 中央不能反向触及员工本机). "
+            "  哪怕你后面撤回, 5 个同事本机各有副本, 信息已扩散. 你确定吗?'\n\n"
+            "input:\n"
+            "  - wiki_rel_path: 本机 rel_path, 以 'wiki/' 开头 (例 'wiki/entities/老李.md')\n"
+            "  - namespace: 部门 namespace, 必须 'dept/<部门>' 格式 (例 'dept/finance')\n"
+            "    用 catfish_today_summary 拿 department 字段拼\n"
+            "  - acknowledge_warnings (可选): false 时撞 PII/内网/敏感词警告就拒. true 跳警告\n"
+            "  - file_id (可选): 重发同一 wiki 时传上次拿到的, 让中央 update 同 row\n\n"
+            "扫描行为 (跟 skill_publish 不同):\n"
+            "  - 凭据扫: 命中**永拒** (wiki 写密码是 mistake)\n"
+            "  - PII / 内网 URL / 敏感词扫: 命中**只警告**, 返 warnings 字段, 默认拒\n"
+            "    LLM 必须把 warnings 转告员工, 员工 confirm 后 LLM 才能加\n"
+            "    acknowledge_warnings=true retry. wiki 内容不能自动脱敏\n"
+            "    (脱敏后笔记就没意义), 员工要自己拍.\n"
+            "  - 敏感词扫从 ~/.catfish/wiki/sensitive_terms.txt 读员工自配 list\n\n"
+            "成功返:\n"
+            "  {ok:true, namespace, file_id, hub_url, published_at, summary, acknowledged_warnings?}\n"
+            "警告 (默认拒):\n"
+            "  {ok:false, scan_phase:'warnings', warnings:[...], acknowledge_warnings_available:true}\n"
+            "凭据撞:\n"
+            "  {ok:false, scan_phase:'credentials', error}\n\n"
+            "底层: POST gateway /v1/wiki/documents/{namespace} JSON body, 跟 mcp-registry "
+            "同 OIDC 鉴权 (X-Catfish-User-Sub 注入)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "wiki_rel_path": {
+                    "type": "string",
+                    "description": "本机 wiki rel_path, 'wiki/' 开头 (例 'wiki/entities/老李.md')",
+                },
+                "namespace": {
+                    "type": "string",
+                    "description": "部门 namespace, 必须 'dept/<部门>' (例 'dept/finance')",
+                },
+                "acknowledge_warnings": {
+                    "type": "boolean",
+                    "description": (
+                        "默认 false. 撞 PII / 内网 / 敏感词警告就拒. true 跳警告强 publish. "
+                        "第一次失败拿到 warnings 后, 转告员工同意, 才能加这个参数 retry."
+                    ),
+                    "default": False,
+                },
+                "file_id": {
+                    "type": "string",
+                    "description": (
+                        "可选. 重发同一 wiki (含修改) 时传上次拿到的 file_id, "
+                        "服务端 upsert 同 row. 不传则服务端分配新 UUID."
+                    ),
+                },
+            },
+            "required": ["wiki_rel_path", "namespace"],
+        },
+        "emoji": "📤",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_wiki_install",
+        "description": (
+            "★ 从部门 wiki-hub 拉一条 wiki 装本机 (~/.catfish/wiki-shared/<ns>/<file_id>.md).\n\n"
+            "✅ 调用时机:\n"
+            "  - 员工在 WikiHubCard 浏览部门 wiki 后说'把这条装到本机'\n"
+            "  - 员工说'查下部门里关于 X 客户的笔记'时, 找到 hub 上的相关 wiki 后\n\n"
+            "input:\n"
+            "  - hub_namespace: 'dept/<部门>'\n"
+            "  - hub_file_id: 服务端分配的 file_id (从 list_documents 拿)\n\n"
+            "Stale 拒绝:\n"
+            "  如果该 wiki 已被原作者撤回 (stale_after_unpublish=true), 中央 body 已清零, "
+            "  本工具拒装并告诉员工.\n\n"
+            "装上后:\n"
+            "  - WikiTree 'wiki-shared/<ns>' 下能看到 (Phase 3 加 UI)\n"
+            "  - 文件 read-only (员工不能修改部门 wiki, 改了 publish 也不会触发更新)\n"
+            "  - 写 install_meta sidecar (.meta.json) 记 publisher / pull 时间, 用于 stale 检查"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "hub_namespace": {"type": "string", "description": "部门 namespace ('dept/finance' 等)"},
+                "hub_file_id": {"type": "string", "description": "服务端 file_id (从 list_documents 拿)"},
+            },
+            "required": ["hub_namespace", "hub_file_id"],
+        },
+        "emoji": "📥",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_wiki_unpublish",
+        "description": (
+            "★ 撤回员工自己 publish 过的某条部门 wiki.\n\n"
+            "✅ 调用时机:\n"
+            "  - 员工说'撤回我之前 publish 的那条 X' / '别让部门看了'\n"
+            "  - **必须**确认是员工本人发的 (服务端会拦 — 只能撤自己的, admin 例外)\n\n"
+            "🛑 Manifesto 公理 4 提醒员工 (撤回前转告):\n"
+            "  '中央那一份会清零 + 标 stale. 但已经 pull 装本机的同事副本不动 — "
+            "  manifesto 禁中央触及员工本机. 信息已扩散这条撤不回, 心理上要接受.'\n\n"
+            "input:\n"
+            "  - hub_namespace: 'dept/<部门>'\n"
+            "  - hub_file_id: 要撤回的 file_id\n"
+            "  - reason (可选): 撤回原因, 写 audit\n\n"
+            "成功:\n"
+            "  - 中央 PG row 保留 (audit 需要), body_md / frontmatter 清零\n"
+            "  - 中央 FS 镜像物理删\n"
+            "  - 标 stale_after_unpublish=true. 客户端下次 list 看到 stale 标"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "hub_namespace": {"type": "string", "description": "部门 namespace"},
+                "hub_file_id": {"type": "string", "description": "要撤回的 file_id"},
+                "reason": {"type": "string", "description": "撤回原因 (写 audit, 可空)"},
+            },
+            "required": ["hub_namespace", "hub_file_id"],
+        },
+        "emoji": "🗑️",
+        "toolset": "catfish_native",
+        "available": True,
+    },
     # ── BL-Q3-WEBSKILL (5/11) 视觉定位 — 找页面元素位置 ───────────────
     {
         "name": "catfish_browser_locate",

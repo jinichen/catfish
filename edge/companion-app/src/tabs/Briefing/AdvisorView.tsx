@@ -27,6 +27,7 @@ import {
 } from "../../lib/advisor_cache";
 import {
   ADVISOR_TIMEOUT,
+  ensureTaskChatSummariesFresh,
   fetchBriefingAdvisor,
   type AdvisorResult,
 } from "../../lib/briefing_advisor";
@@ -76,6 +77,15 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
 
   const urgencyMap = useEmailStore((s) => s.urgencyMap);
   const model = useChatStore((s) => s.model);
+
+  // P3.3.12.1 (6/10): mount / refresh 时后台 ensure 每条 mainTask 的 task chat
+  //   summary 是最新的 (jsonl size 没变跳, 变了重跑 LLM 写 cache). 跟 advisor
+  //   主 LLM call 解耦 — cache 命中场景也能更新 summary. 异步不阻塞 UI.
+  useEffect(() => {
+    void ensureTaskChatSummariesFresh(model).catch((e) => {
+      console.warn("[AdvisorView] ensure summary 异常 (不阻塞 UI):", e);
+    });
+  }, [refreshKey, model]);
 
   // 5/22 时段触发: 拉 yaml 配置 (refresh_times + cache_max_age_minutes)
   useEffect(() => {

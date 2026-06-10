@@ -213,11 +213,35 @@ class SkillsHubConfig(BaseModel):
     timeout: int = 30  # 秒, publish multipart 文件传输可能超 10s
 
 
+class WikiHubConfig(BaseModel):
+    """P3.3.18 (6/10): 反向代理 catfish-wiki-hub 服务 (部门 wiki publish).
+
+    跟 skills_hub 同模式. gateway 收 /v1/wiki/* → 上游 :8994. 注入
+    X-Catfish-User-Sub/-Dept/-Role. 上游 wiki-hub 信任 header.
+
+    端口约定: 8642 hermes / 8995 secret-broker / 8996 mcp-registry /
+    8997 skills-hub / 8998 identity-server / 8999 gateway / 8994 wiki-hub.
+
+        wiki_hub:
+          upstream_url: http://127.0.0.1:8994
+          enabled: true     # 客户不需要部门 wiki 时可关
+          timeout: 20
+
+    Manifesto: 公理 2 例外 (员工主动 push), 公理 3/4 (中央无 push / 无反向拉).
+    """
+
+    upstream_url: str = "http://127.0.0.1:8994"
+    enabled: bool = True
+    timeout: int = 20  # 秒, wiki body 一般小, 20s 够
+
+
 class Config(BaseModel):
     version: int = 1
     models: list[ModelConfig]
     mcp_registry: McpRegistryConfig = Field(default_factory=McpRegistryConfig)
     skills_hub: SkillsHubConfig = Field(default_factory=SkillsHubConfig)
+    # P3.3.18 (6/10): wiki-hub 配置默认 enabled — 客户不要部门 wiki 时 yaml 关
+    wiki_hub: WikiHubConfig = Field(default_factory=WikiHubConfig)
 
     # BL-FALLBACK-TOGGLE (2026-05-16 鸿波):
     # 默认 false — 上游挂直接返客户端, **不自动跳别的 model**.
