@@ -1667,15 +1667,26 @@ button {
 }
 
 /* ─── P3.3.6 (2026-06-10 鸿波): 早安 tab 左右两栏 layout ─────────
- * 左 sidebar 按 urgency 分组, 右侧详情区显目标/进展/建议. */
+ * 左 sidebar 按 urgency 分组, 右侧详情区显 task chat.
+ * P3.3.7 Phase 2 follow-up (6/10): sidebar 跟 detail 各自独立滚动,
+ *   不再跟着 outer 一起滚 (BriefingCard 高度撑死, 两栏内部 overflow-y auto). */
 .briefing-2col {
   display: grid;
   grid-template-columns: 220px 1fr;
   gap: 16px;
   margin-top: 12px;
+  /* 关键: 固定高度让两栏内部能 overflow-y. 减去 TabBar (~52) + AuthBanner
+   * (~36) + BriefingCard header (~80) + padding (~32) ≈ 200px 顶部固定. */
+  height: calc(100vh - 200px);
+  min-height: 400px;
+  overflow: hidden;
 }
 @media (max-width: 720px) {
-  .briefing-2col { grid-template-columns: 1fr; }
+  .briefing-2col {
+    grid-template-columns: 1fr;
+    height: auto;       /* 窄屏 stack, 走外层 scroll */
+    overflow: visible;
+  }
 }
 .briefing-2col__empty {
   padding: 24px;
@@ -1693,7 +1704,9 @@ button {
   border: 1px solid var(--catfish-border);
   border-radius: var(--radius-md);
   padding: 10px 8px;
-  align-self: start;
+  /* P3.3.7 Phase 2 follow-up: 独立滚动, 不跟 detail 一起滚 */
+  overflow-y: auto;
+  height: 100%;
 }
 .briefing-2col__sidebar-label {
   font-size: 10px;
@@ -1757,6 +1770,13 @@ button {
   border: 1px solid var(--catfish-border);
   border-radius: var(--radius-md);
   padding: 16px 20px;
+  /* P3.3.7 Phase 2 follow-up: 跟 sidebar 独立. 内部用 flex column —
+   *   header / chat thread (flex 1 自己滚) / input / actions 各占位.
+   *   不在 .briefing-2col__detail 自己 overflow, 内部 chat-thread overflow. */
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 .briefing-2col__detail-empty {
   text-align: center;
@@ -1920,7 +1940,9 @@ button {
 .briefing-2col__detail-inner {
   display: flex;
   flex-direction: column;
-  min-height: 400px;
+  flex: 1;
+  min-height: 0;       /* 让 chat-thread overflow 能算高度 (flex parent 必备) */
+  width: 100%;
 }
 .briefing-2col__detail-reason {
   font-size: 11px;
@@ -1929,8 +1951,7 @@ button {
 }
 .briefing-2col__chat-thread {
   flex: 1;
-  min-height: 200px;
-  max-height: 480px;
+  min-height: 0;       /* 让 overflow-y 在 flex 内能生效 */
   overflow-y: auto;
   margin-bottom: 8px;
   padding: 8px 0;
