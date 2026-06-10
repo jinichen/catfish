@@ -5,6 +5,64 @@
 
 ---
 
+## 2026-06-09 ~ 2026-06-10 · 早安 tab BriefingTab 体验跃迁 + hermes v0.16 升级
+
+### Marathon 概述
+两天 18 个 ship — 围绕"早安 tab 从只读 advisor 卡片改成可操作工作区". 终态: 左侧 sidebar 按 urgency 分组, 右侧 detail pane 直接跟 AI 聊这条 task (含 tool calling + approval banner + 跨刷新历史不丢). 同期 hermes v0.15.2 → v0.16.0 升级 + 天气模块 + 多个真坑修复.
+
+### BriefingTab 改造 (P3.3.6 → P3.3.11, 6 个子 phase)
+- **P3.3.6** 左右两栏布局 — 左 sidebar 按 急/中/低 分组 task list, 右 detail pane 显选中 task. 独立滚动 (sidebar 跟 detail 各自滚, 不再 detail 滚拉走 sidebar).
+- **P3.3.7 Phase 1** Detail pane 砍"目标/进展/建议"静态段, 改 in-memory task-scoped chat. system prompt 注入 task 上下文 (title / reason / contextRefs / flags / 早晨 options). 切 task 重置.
+- **P3.3.7 Phase 2** chat 持久化到 `~/.catfish/task_chat/<key>.jsonl`. append-only, 切 task / 关 Companion 再回来都保留.
+- **P3.3.8** 早安天气 — wttr.in (无 API key) + IP 自动定位 + 多城市 (常驻 + 临时) + 6h cache. 显在 BriefingCard 头部 (日期后面).
+- **P3.3.9** task_uid stable key — LLM 每次刷新会重写 title ("CSMM-4 评估撰写" → "CSMM-4 正式评估准备"), 老 jsonl 文件名失配 chat 历史全丢. 真根因 fix: LLM 给每条 task 生成 6 字符 [a-z0-9] uid, advisor_cache 注入上次 prev_tasks 给 LLM, 同业务 LLM 复用 uid. task_chat 文件名改用 uid 不用 title. 老 title-命名 jsonl 仍可 fallback 读 (兼容期).
+- **P3.3.10** task chat 升到工作台同款 — 新写 `useTaskChat` hook (~230 行), per-task local state (不动 useChatStore 避跟工作台 chat 串), 接 tool calling 循环 (ensureTools / streamChat / toolBridgeCallTool 直到 finish_reason 非 tool_calls 或 MAX_ROUNDS=20). 复用 ChatToolCall 卡片 render tool 进度. 监听 `catfish:approval-pending` event 弹 floating banner (P15.2 走), 监听 `catfish:approval-send` event 走 send. assistant 消息走 Markdown 组件 render (`**` / 列表 / 代码块都渲).
+- **P3.3.11** task_chat jsonl schema 扩 tool 历史. Rust TaskChatMsg 加 `tool_calls?: Vec<Value>` + `tool_call_id?: String` (serde default 老 jsonl 缺字段→None, 向后兼容). useTaskChat onPersist 改成接完整 ChatMessage, 每条 tool 跑完 emit 一条 tool row. DetailPane load 时按 P27.3 工作台同款思路 join tool result 回 assistant.tool_calls[i].result, 重启后 ChatToolCall 卡片完整还原.
+
+### hermes 间歇 SIGTERM 收敛 (P3.3.5)
+- 检测 hermes API server 8642 不可达 → 加 retry banner (顶部固定) + 自动重试 1 次, 用户能看到 "正在重连"
+- chat.ts 加 hermes-unreachable detect (TypeError: Load failed) → dispatch banner event + sleep 5s + recursive 重发 (max 1 次)
+- transparent_log.rs:237 UTF-8 字符边界 panic 修 (byte slice 在中文字符中间, `is_char_boundary` 检查)
+- `chat.ts _retryCounters` destructure fix (老 fallback 字段已 deprecate, 解构 undefined 让 fix45 重置炸)
+
+### hermes v0.15.2 → v0.16.0 升级 (marathon 第二段, 6/9)
+- audit v0.16 反射目标真存在性 (`_stream_q`, `_on_delta`, `_apply_patches`, P15.2 middleware 注入点) 全 ✓
+- cherry-pick upstream 4 commit (skip 1 个 brand skin commit, 8d5845aaa 等)
+- 手动 resolve api_server.py:3833 重复 block conflict
+- 入档 docs/HERMES-DEPLOYMENT-NOTES.md "v0.15.2 → v0.16 实测升级流程"
+
+### Wiki dedup 三层防御 (P3.3.3 + P3.3.4)
+- 用户撞 "删了又冒出来" — LLM 自动重写 wiki entity 撞老文件 (slug 不同 / 大小写不同 / 中英混)
+- **A 层** `wiki_read.rs` 加 tombstone 识别 (`.trash/` 前缀文件不进 query 结果)
+- **B 层** `wiki_write.rs` 加 normalize_slug + 写前 dedup (路径已存或 normalize 后已存 → 不写新 file)
+- **C 层** macOS sandbox + adapter_security 拦 LLM 直接 raw write `wiki/` (必须走 catfish memory plugin endpoint)
+- 删 FFCS 残留 tombstone + cargo check + commit
+- 加 wiki_delete_file Rust command + WikiPreview 删除按钮 (二次确认 + soft delete 到 `.trash/`)
+
+### feishu-monitor + plist (6/9 早)
+- bootout 坏的 `ai.catfish.feishu-monitor` LaunchAgent (ImportError 死循环 SIGTERM hermes)
+- hermes plist 加 ThrottleInterval=300 (5min minimum restart 间隔, 防 daemon thrash)
+- 入档 docs/HERMES-DEPLOYMENT-NOTES.md "feishu-monitor 排查 + plist 加固"
+
+### Tab swap + A2A future 决策
+- 知识体系 ↔ 仪表盘 tab 位置互换 (用户日常用知识体系频次更高)
+- A2A future 决策入档 backlog (5月 demo 不做, Q4 评估)
+
+### 同期真坑
+- weather wttr.in 默认 gzip 压缩, reqwest 缺 feature → `error decoding response body`. Cargo.toml 加 `"gzip", "deflate", "brotli"` feature
+- weather cache 第一次失败后 6h 内不重拉 → 加 cache_is_failed 判断 (entries 空 OR error 有值视同 stale)
+- briefing_advisor SYSTEM_PROMPT template literal 内 `` ` `` 没 escape 导致 ts parse 失败, 换 `"` 引号
+- task_chat jsonl 历史在 P3.3.9 之前以 sanitize(title) 命名, P3.3.9 切 uid 命名后老文件孤儿 → DetailPane load fallback 兜底读 title-命名 jsonl
+
+### 实机回归 (6/10 21:00 用户实测)
+- ✓ 天气显 "San Jose 20°C Sunny"
+- ✓ task chat 渲染 markdown 加粗 / 列表
+- ⏳ tool calling 端到端 (待 cargo build + 重启验)
+- ⏳ approval banner 真触发 (execute_code 调用)
+- ⏳ 跨重启 tool 历史还原 (P3.3.11)
+
+---
+
 ## 2026-06-05 ~ 2026-06-06（marathon 33h+）· Wiki Phase 2 + Approval button 闭环
 
 ### Marathon 概述

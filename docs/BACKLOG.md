@@ -1346,3 +1346,64 @@ journal: ## [2026-06-04 13:12] distill | 5 entities, 5 concepts
 - frontmatter: `sources: [chat]`, `related: [<auto-抽 entity/concept>]`
 - 自动走 P1.1 真 Analysis + Generation pipeline 真**抽 entity/concept**
 - 估 3-5 天 (前端 button + 后端 plugin pipeline)
+
+---
+
+## BL-BRIEFING-TWO-COL (6/10 ship, P3.3.6-11) — 早安 tab 从 read-only 卡片到可操作工作区
+
+**rationale**: P3.3.6 之前 BriefingTab 只显 advisor 卡片 (主菜 + 3 个建议口径 + draft 草稿 link), 员工没办法在这里"做事" — 想跟 AI 聊任务进度得切到工作台 chat tab. 改造目标: 让早安 tab 自身成为完整工作区, 选 task → 跟 AI 直接说 → AI 能调 tool (起草邮件 / 跑数 / 写报告) → 状态记录, 一站式.
+
+### 子 phase ship 记录
+
+| phase | ship | 说明 |
+|---|---|---|
+| **P3.3.6** | 6/10 | 左右两栏布局 — sidebar 按 urgency 分组, detail pane 独立滚动 |
+| **P3.3.7 Phase 1** | 6/10 | Detail pane 砍静态段, 改 in-memory task chat (system prompt 注入 task 上下文) |
+| **P3.3.7 Phase 2** | 6/10 | chat 持久化 ~/.catfish/task_chat/<key>.jsonl (append-only) |
+| **P3.3.8** | 6/10 | 早安天气 wttr.in + IP 自动 + 多城市 + 6h cache (BriefingCard 头部) |
+| **P3.3.9** | 6/10 | task_uid stable key — LLM 重写 title 也不丢 chat. advisor 注入 prev_tasks 让 LLM 复用旧 uid |
+| **P3.3.10** | 6/10 | task chat 升到工作台同款 — useTaskChat hook + ensureTools + ChatToolCall + approval banner |
+| **P3.3.11** | 6/10 | jsonl schema 扩 tool_calls / tool_call_id, 重启后 tool 卡片完整还原 |
+
+### 关键文件
+
+新建:
+- `src/hooks/useTaskChat.ts` (~230 行) — per-task chat hook, 跟 useChat 解耦不绑 useChatStore
+- `src-tauri/src/commands/weather.rs` — wttr.in 拉 + 6h cache + 多城市
+- `src-tauri/src/commands/task_chat.rs` — jsonl 持久化 (P3.3.7 Phase 2 起)
+- `src/lib/weather.ts` / `src/lib/task_chat.ts` — TS wrapper
+- `src/tabs/Briefing/components/BriefingTwoColumnView.tsx` — 两栏 view + DetailPane
+
+改:
+- `src/tabs/Briefing/AdvisorView.tsx` — 接 BriefingTwoColumnView
+- `src/tabs/Dashboard/BriefingCard.tsx` — 加天气头部
+- `src/lib/briefing_advisor.ts` — MainTask 加 taskUid, SYSTEM_PROMPT 加 task_uid 复用段, parseMainTask 兼容 task_uid/taskUid + fallback gen, _fetchBriefingAdvisorImpl 自拉 cache 注入 previousTasks
+
+### 真坑日记
+
+1. **task chat 一刷新就丢** (用户实测撞): P3.3.7 Phase 2 chat 用 sanitize(title) 当文件名, 但 LLM 每次 advisor 刷新会重写 title ("CSMM-4 评估撰写" → "CSMM-4 正式评估准备"), 老 jsonl 失配. 真根因 fix = P3.3.9 task_uid (LLM 给 6 字符稳定 uid, advisor 复用注入)
+
+2. **天气拉失败** (用户实测撞): reqwest 默认无 gzip feature, wttr.in 返 gzip body → `error decoding response body`. Cargo.toml 加 `["gzip", "deflate", "brotli"]` feature
+
+3. **天气死锁 6h 不重拉** (用户实测撞 v2): 第一次失败 cache 写了 entries=[] + error, 6h 内被判 fresh, 刷新按钮也救不了 (`weatherGet(false)`). fix: cache 里 `entries.is_empty() || error.is_some()` 视同 stale 强制重拉
+
+4. **task chat markdown 不渲染** (用户实测撞): DetailPane ChatMsg 直接显 `{msg.content}`, `**xxx**` 当字面量. fix: 复用 `lib/markdown.tsx` 的 Markdown 组件 (跟工作台 ChatMessage 同款)
+
+5. **tool 历史重启丢**: P3.3.10 ship 时 jsonl schema 只存 user/assistant text, tool_calls / tool result 在内存. 重启后 chat 文本在但 tool 卡片消失. P3.3.11 fix = schema 加 tool_calls / tool_call_id, load 时 join 回 assistant.tool_calls[i].result
+
+6. **SYSTEM_PROMPT template literal 内 backtick 没 escape**: 加 P3.3.9 task_uid 段时 `# 上次 advisor 输出` 内 backtick 让 ts 把整个 SYSTEM_PROMPT 解析炸. fix: 换 `"` 引号
+
+### 设计取舍
+
+- **useTaskChat 不复用 useChat**: useChat 928 行强耦合 useChatStore 单例 store, 多实例会跟工作台 chat 串. 选 fork 一个轻量 (~230 行) 而不是改 useChat 支持 multi-instance — 后者动太多, 风险大
+- **不持久化 system prompt 也不持久化 sessionId**: 每次 send 重算 system (task 上下文可能变), 也不进 state.db (task chat 用自己的 jsonl, 不混进工作台 session 历史)
+- **approval banner 全局 event listener**: BriefingTab 跟工作台 ChatTab 是 activeTab 条件 render, 不同时 mount, listener 自动 cleanup, 不会双触发
+- **老 jsonl 不迁移**: P3.3.9 后老 title-命名 jsonl 留盘上, DetailPane load 时 fallback 兜底读. 不主动迁移 (减少破窗风险), 让员工新对话写 uid jsonl 自然过渡
+
+### 待办 (留 P3.3.12+)
+
+- BriefingTwoColumnView 改 `__msg` css 让 `.markdown-body` 跟气泡背景协调 (assistant 气泡可能 over-padding)
+- task_chat jsonl 没 prune 机制 — 一年后单 file 几 MB. 加 archive 老条目 / 截断 N 轮前
+- approval banner pattern_key / command 字段 chat completions path 真**没填**, banner 显空白. 跟工作台一样的体验缺漏, 不阻塞
+- task chat tool 调用历史不进 advisor cache, advisor 下次 refresh 看不到 "员工跟 AI 在这条 task 上聊过什么" — context drift 风险
+- 多 task 并发 chat (员工开 task A chat 中, 切到 task B 再 chat) — 当前 useTaskChat 实例随 DetailPane unmount, A 的 stream 会被打断. 需 stream registry 化 (跟 useChat BL-MULTI-SESSION-STREAM 5/24 同款)
