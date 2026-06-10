@@ -24,7 +24,7 @@ tauri-plugin-global-shortcut = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "gzip", "deflate", "brotli"] }  # P3.3.8 (6/10) fix: wttr.in 默认 gzip 压缩, 不加 feature 时 decode UTF-8 错 "error decoding response body"
 urlencoding = "2.1"  # P3.3.8 (6/10): weather command 拉 wttr.in 时 encode 中文城市名
 # SQLite，bundled 自带 sqlite3，免装 libsqlite3-dev
 rusqlite = { version = "0.32", features = ["bundled"] }
