@@ -21,6 +21,7 @@ import type {
   HandledSilentlyItem,
   MainTask,
 } from "../../../lib/briefing_advisor";
+import { taskChatAppend, taskChatClear, taskChatGet } from "../../../lib/task_chat";
 import type { ChatMessage } from "../../../types/chat";
 import { useChatStore } from "../../../store/chat";
 
@@ -222,16 +223,46 @@ function DetailPane({
     task.urgency === "high" ? "#c2410c" :
     task.urgency === "medium" ? "#a16207" : "#6b7280";
 
-  // Phase 1 — in-memory chat state (切 task 自动 reset 因 parent key={task.id})
+  // Phase 2 — chat state. mount 时从 ~/.catfish/task_chat/<key>.jsonl load 历史.
+  // 切 task 自动 reset 因 parent key={task.id}. 跟 in-memory 差别: 重启 / 刷新保留.
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
   const [backendError, setBackendError] = useState<string | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(true);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const model = useChatStore((s) => s.model);
+
+  // Phase 2: mount 时 load 历史
+  useEffect(() => {
+    let cancelled = false;
+    setHistoryLoading(true);
+    void taskChatGet(task.title)
+      .then((hist) => {
+        if (cancelled) return;
+        // 把 TaskChatMsg 转 ChatMessage (加 id + status="done")
+        const loaded: ChatMessage[] = hist.map((m, i) => ({
+          id: `hist-${i}-${m.ts}`,
+          role: m.role as ChatMessage["role"],
+          content: m.content,
+          ts: m.ts,
+          status: "done",
+        }));
+        setMessages(loaded);
+      })
+      .catch((e) => {
+        console.warn("[BriefingTwoColumn] load task chat 历史失败:", e);
+      })
+      .finally(() => {
+        if (!cancelled) setHistoryLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [task.title]);
 
   // 新消息进来自动滚到底
   useEffect(() => {
@@ -263,6 +294,11 @@ function DetailPane({
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
     setStreaming(true);
 
+    // Phase 2: 立即把 user 消息持久化 (不等 assistant 完成)
+    void taskChatAppend(task.title, "user", text).catch((e) => {
+      console.warn("[BriefingTwoColumn] append user 失败:", e);
+    });
+
     // 构造发给 LLM 的 messages: system + 历史 + 新 user
     const systemMsg: ChatMessage = {
       id: "task-system",
@@ -274,11 +310,13 @@ function DetailPane({
     const wireMessages = [systemMsg, ...messages, userMsg];
 
     abortRef.current = new AbortController();
+    let assistantFinalContent = "";
     try {
       await streamChat({
         model,
         messages: wireMessages,
         onDelta: (chunk) => {
+          assistantFinalContent += chunk;
           setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantMsg.id ? { ...m, content: m.content + chunk } : m,
@@ -292,6 +330,12 @@ function DetailPane({
             ),
           );
           setStreaming(false);
+          // Phase 2: assistant 完成后持久化完整 content (空 content 不写)
+          if (assistantFinalContent.trim().length > 0) {
+            void taskChatAppend(task.title, "assistant", assistantFinalContent).catch((e) => {
+              console.warn("[BriefingTwoColumn] append assistant 失败:", e);
+            });
+          }
         },
         onError: (msg) => {
           setChatError(msg);
@@ -307,6 +351,17 @@ function DetailPane({
     } catch (e) {
       setChatError(String(e));
       setStreaming(false);
+    }
+  };
+
+  // Phase 2: 清掉这个 task 的 chat 历史
+  const handleClearChat = async () => {
+    if (!window.confirm("清掉这条待办的所有对话历史? 不可撤销.")) return;
+    try {
+      await taskChatClear(task.title);
+      setMessages([]);
+    } catch (e) {
+      console.warn("[BriefingTwoColumn] clear task chat 失败:", e);
     }
   };
 
@@ -342,24 +397,42 @@ function DetailPane({
       </div>
 
       <div ref={scrollRef} className="briefing-2col__chat-thread">
-        {messages.length === 0 && (
+        {historyLoading && (
+          <div className="briefing-2col__chat-empty">
+            <div style={{ opacity: 0.7 }}>加载历史对话…</div>
+          </div>
+        )}
+        {!historyLoading && messages.length === 0 && (
           <div className="briefing-2col__chat-empty">
             <div>跟 AI 直接说这条待办 — 报进度 / 起草 / 问下一步.</div>
             <div className="briefing-2col__chat-empty-hint">
               AI 已经知道: 标题 · 紧急度 · 历史{task.complianceFlags.length > 0 ? " · 合规提示" : ""}
               {task.politicalFlags.length > 0 ? " · 关键关系" : ""}
               {task.options.length > 0 ? ` · ${task.options.length} 个早晨口径` : ""}.
-              直接问.
+              对话历史会保留, 关 Companion / 切 task 再回来都还在.
             </div>
           </div>
         )}
-        {messages.map((m) => (
+        {!historyLoading && messages.map((m) => (
           <ChatMsg key={m.id} msg={m} />
         ))}
         {chatError && (
           <div className="briefing-2col__chat-err">⚠️ {chatError}</div>
         )}
       </div>
+
+      {messages.length > 0 && (
+        <div className="briefing-2col__chat-toolbar">
+          <button
+            type="button"
+            className="briefing-2col__chat-clear-btn"
+            onClick={() => void handleClearChat()}
+            title="清掉这个待办的所有对话历史 (不可撤销)"
+          >
+            清空对话
+          </button>
+        </div>
+      )}
 
       <div className="briefing-2col__chat-input-row">
         <textarea

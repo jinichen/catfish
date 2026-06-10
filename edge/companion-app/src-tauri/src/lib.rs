@@ -507,6 +507,10 @@ pub fn run() {
             commands::drafts::recent_outputs_list,
             // BL-ADVISOR-DECISIONS (5/21 Phase 7 第 2 步): ~/.catfish/decisions.jsonl 决策留痕
             commands::decisions::decision_record,
+            // P3.3.7 Phase 2 (6/10): task-scoped chat 持久化
+            commands::task_chat::task_chat_get,
+            commands::task_chat::task_chat_append,
+            commands::task_chat::task_chat_clear,
             commands::decisions::decision_list_recent,
             commands::decisions::decision_search,
             // BL-ADVISOR-CACHE + CONFIG (5/22 Phase 7 cold start v3): 缓存 + yaml 时段配置

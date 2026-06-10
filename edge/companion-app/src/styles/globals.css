@@ -2024,3 +2024,22 @@ button {
   opacity: 0.5;
   cursor: not-allowed;
 }
+.briefing-2col__chat-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 4px;
+}
+.briefing-2col__chat-clear-btn {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  border: 1px solid var(--catfish-border);
+  background: transparent;
+  color: var(--catfish-text-muted);
+  cursor: pointer;
+}
+.briefing-2col__chat-clear-btn:hover {
+  color: #dc2626;
+  border-color: #dc262640;
+  background: #dc262608;
+}
