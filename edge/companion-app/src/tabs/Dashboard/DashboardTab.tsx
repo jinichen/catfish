@@ -235,7 +235,9 @@ export default function DashboardTab() {
           storageKey="skills"
           defaultKey="my-skills"
           tabs={[
-            { key: "my-skills", label: "🎬 我录的技能 (本机)", render: () => <MySkillsCard /> },
+            // P3.3.24 (6/11): "我录的技能" 已名实不副 — 4 条 skill 里 RecMode 录 0,
+            //   3 个部门 publish + 1 个 zip 装. 改"我的技能" — 表"个人本机管", 不绑生成方式.
+            { key: "my-skills", label: "🧰 我的技能 (本机)", render: () => <MySkillsCard /> },
             { key: "installed", label: "📦 已装技能库 (可直接用)", render: () => <SkillsMcpCard /> },
             // P3.3.18 (6/10): 部门 wiki 跟技能在概念上都是"部门 share 资源", 同 section.
             { key: "wiki-hub", label: "📚 部门 wiki (浏览 / 安装)", render: () => <WikiHubCard /> },

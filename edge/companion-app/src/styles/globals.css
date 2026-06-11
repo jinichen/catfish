@@ -711,7 +711,16 @@ button {
   padding-left: 24px;
 }
 .markdown-body li {
-  margin: 4px 0;
+  margin: 2px 0;
+}
+/* P3.3.24 polish (6/11): loose list (LLM 输出 bullet 间夹空行) 时, react-markdown
+ *   把每条 li 内容包 <p>, <p> 自身 margin: 0 0 8px 让 bullet 间距视觉 ~20px 过大.
+ *   重置 li > p margin: 0, 多段 li 内的 p+p 留 4px gap (li 内多段仍可读). */
+.markdown-body li > p {
+  margin: 0;
+}
+.markdown-body li > p + p {
+  margin-top: 4px;
 }
 .markdown-body h1,
 .markdown-body h2,

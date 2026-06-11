@@ -38,6 +38,13 @@ import { useMySkills } from "../../hooks/useIdentity";
 import { installSkillFromZip, toolBridgeCallTool } from "../../lib/tauri";
 import type { SkillEntry, SkillNamespace } from "../../types/identity";
 
+// P3.3.24 (6/11): namespace 中文 label — 给员工看. unknown ns 走原名.
+//   department / external 是当前两个固定 namespace, 其他 (员工自起) 显原名.
+const NAMESPACE_LABEL: Record<string, string> = {
+  department: "部门共享",
+  external: "外部装的",
+};
+
 // P3.3.23 (6/11): 装外部 skill zip — file picker → installSkillFromZip Tauri 命令.
 //   状态机: idle → picking → installing → done / error → (3s) idle.
 type InstallZipState =
@@ -246,24 +253,12 @@ export default function MySkillsCard() {
           flexWrap: "wrap",
         }}
       >
-        <h3 style={{ margin: 0 }}>🎬 我录的技能 (本机)</h3>
-        {/* 6/8 BL-SKILL-CARD-DISAMBIG (鸿波): 边界 vs "📦 已装技能库" 卡明示来源. */}
-        <span
-          style={{
-            fontSize: 10,
-            padding: "2px 6px",
-            background: "var(--catfish-bg)",
-            border: "1px solid var(--catfish-border)",
-            borderRadius: 4,
-            color: "var(--catfish-text-muted)",
-            fontFamily: "monospace",
-          }}
-        >
-          ~/.catfish/skills/
-        </span>
-        <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
-          RecMode 录屏 + LLM propose · 100% 本机 · 想共享自己点 📤
-        </span>
+        {/* P3.3.24 (6/11): 标题改"我的技能 (本机)", 删 ~/.catfish/skills/ 路径 +
+            副文案 — 给员工看不需要技术细节. emoji 🎬 → 🧰 (skill = 工具箱, 不只是录的).
+            namespace 行 (NamespaceBlock) 改中文 label 体现来源 (部门共享 / 外部装的). */}
+        <h3 style={{ margin: 0 }} title="装本机的所有 skill — RecMode 录屏 / 装 zip / 部门共享 都进这里. 数据 100% 你本机, 公司服务器看不到.">
+          🧰 我的技能 (本机)
+        </h3>
         {/* P3.3.23 (6/11): 装外部 skill zip 按钮 — ClawHub / Anthropic .skill / 任何
             SKILL.md zip 一键装. 默认 namespace=external (跟 RecMode 教学产物 dept
             分开). 隐藏 input + 点 button 触发 file picker. */}
@@ -418,12 +413,24 @@ export default function MySkillsCard() {
             borderRadius: 4,
           }}
         >
-          还没录过 skill. 在<strong>工作台</strong>点{" "}
-          <code style={{ fontSize: 11 }}>🎬 录屏</code> 演示一遍, catfish 自动学会
-          → 下次说"帮我跑一次"就行.
-          <br />
+          {/* P3.3.24 (6/11): 空状态文案改 — 3 个来源都列, 不只是 RecMode 录屏.
+              员工知道还能装 zip / 拉部门共享. */}
+          还没有任何 skill. 3 个来源任选:
+          <ul style={{ fontSize: 12, margin: "8px 0 4px 18px", padding: 0, lineHeight: 1.7 }}>
+            <li>
+              <strong>录屏教</strong> — 工作台 <code style={{ fontSize: 11 }}>🎬</code> 录一遍,
+              catfish 自动学会
+            </li>
+            <li>
+              <strong>装外部 skill</strong> — 顶部 <code style={{ fontSize: 11 }}>📥</code> 选 zip
+              (ClawHub / 同事发的)
+            </li>
+            <li>
+              <strong>拉部门共享</strong> — 切到上方 <code style={{ fontSize: 11 }}>📚 部门 wiki</code> tab
+            </li>
+          </ul>
           <span style={{ fontSize: 11, opacity: 0.7 }}>
-            (录的内容存你本机 <code>~/.catfish/skills/</code>, 公司服务器一个字看不到.)
+            (都存你本机, 数据 100% 私有.)
           </span>
         </div>
       )}
@@ -618,15 +625,29 @@ function NamespaceBlock({
       <div
         style={{
           fontSize: 12,
-          fontFamily: "var(--font-mono)",
           fontWeight: 600,
           color: "var(--catfish-text)",
           marginBottom: 4,
         }}
       >
-        {ns.namespace}{" "}
+        {/* P3.3.24 (6/11): namespace 中文 label (NAMESPACE_LABEL) + 原名小字提示
+            (员工偶尔需要看 raw ns 排错). 字体回 sans-serif, 不用 mono. */}
+        {NAMESPACE_LABEL[ns.namespace] ?? ns.namespace}
+        {NAMESPACE_LABEL[ns.namespace] && (
+          <span
+            style={{
+              fontSize: 10,
+              color: "var(--catfish-text-muted)",
+              fontWeight: 400,
+              fontFamily: "var(--font-mono)",
+              marginLeft: 6,
+            }}
+          >
+            {ns.namespace}/
+          </span>
+        )}{" "}
         <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", fontWeight: 400 }}>
-          {ns.skills.length} 个
+          · {ns.skills.length} 个
         </span>
       </div>
       <ul
