@@ -1988,9 +1988,13 @@ button {
      让气泡显挤. 加大 padding + markdown 内首末段 margin reset 一起协调. */
   padding: 12px 16px;
   border-radius: var(--radius-md);
-  white-space: pre-wrap;
   word-break: break-word;
   max-width: 88%;
+  /* P3.3.27 (6/11): white-space: pre-wrap 移到 .briefing-2col__msg--user 单独设.
+     原因: assistant 走 Markdown 渲染, pre-wrap 会把 markdown source 里 bullet
+     之间的 \n\n 当真实空行渲染, P3.3.24 加 li > p {margin: 0} 没用 — 真凶是
+     text node 里的 literal 换行不是 CSS. user 消息纯文本仍需 pre-wrap 保留员工
+     手动换行, 单独挂. */
 }
 /* P3.3.15: Markdown 组件首段 margin reset, 防气泡上方出现空白带.
    markdown.tsx 已 reset p:last-child margin-bottom, 但 first-child 还没.
@@ -2013,6 +2017,8 @@ button {
   align-self: flex-end;
   background: var(--catfish-accent, #0E5F66);
   color: white;
+  /* P3.3.27 (6/11): user 纯文本走 pre-wrap, 保留员工手动换行 */
+  white-space: pre-wrap;
 }
 .briefing-2col__msg--assistant {
   align-self: flex-start;
