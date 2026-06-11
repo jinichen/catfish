@@ -3096,9 +3096,14 @@ async def chat_completions(
         #
         # 真 archive 在 edge 端 tool-bridge tool_archive_local.py 做, gateway 看不到.
         from .tool_archive import prepare_tool_messages  # noqa: PLC0415
+        # P3.3.30 (6/12): 传 model_context_window + origin_model → 走动态截,
+        #   真要爆 context 才截. 真因 BL-FIX41 老 2K 无脑截破坏多轮 xlsx 修改
+        #   (鸿波 6/11 周报反复改 6-7 轮才修对的原因). 异常 fallback 静态截.
         body["messages"] = prepare_tool_messages(
             body["messages"],
             user_email=effective_user_email,  # X-Catfish-User on-behalf-of 模式覆盖
+            model_context_window=getattr(model, "context_window", None),
+            origin_model=model_name,
         )
 
     # 含图自动 reroute 到 vision 模型: 防止主力模型 (非 vision) 收到 image_url

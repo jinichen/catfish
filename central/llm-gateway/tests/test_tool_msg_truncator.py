@@ -51,7 +51,8 @@ def test_message_count_preserved():
             "content": "",
             "tool_calls": [{"id": "b", "type": "function", "function": {"name": "x", "arguments": "{}"}}],
         },
-        {"role": "tool", "tool_call_id": "b", "content": "PASSED " * 2000},  # ~14KB
+        # P3.3.30 (6/12): cap 2K→20K 后 14KB 不再触发截, 改 35KB 确保超新 cap.
+        {"role": "tool", "tool_call_id": "b", "content": "PASSED " * 5000},  # ~35KB
     ]
     out = truncate_tool_messages(msgs)
     assert len(out) == len(msgs)
@@ -133,8 +134,11 @@ def test_realistic_overflow_scenario():
         for m in out
     )
     assert len(out) == len(big), "消息数量不能变"
-    # 至少省 140KB (3 条 50KB 巨型 → 6KB)
-    assert before - after > 140_000
+    # P3.3.30 (6/12): 改 cap-aware 计算, 不再硬编 140KB.
+    #   3 条 50KB 巨型 → 每条截到 ~MAX_BYTES_PER_TOOL, 总省 ~3 * (50K - cap).
+    #   留 5KB 误差给 head/tail/marker. cap=2K 老阈值 → 省 ~144K, cap=20K → 省 ~85K
+    expected_min_saved = 3 * (50_000 - MAX_BYTES_PER_TOOL) - 5_000
+    assert before - after > expected_min_saved
 
 
 def test_min_trigger_just_above_cap():

@@ -36,10 +36,30 @@ def prepare_tool_messages(
     *,
     user_email: str,  # noqa: ARG001 (历史 caller 还传, 留 sig)
     session_id: str | None = None,  # noqa: ARG001
-    conversation_id: str | None = None,  # noqa: ARG001
-    origin_model: str | None = None,  # noqa: ARG001
+    conversation_id: str | None = None,
+    origin_model: str | None = None,
+    model_context_window: int | None = None,
 ) -> list[dict[str, Any]]:
-    """gateway app.py 调的统一入口 — **强制走 FIX41 truncate, 永不写 PG**."""
+    """gateway app.py 调的统一入口 — **强制走 FIX41 truncate, 永不写 PG**.
+
+    P3.3.30 (6/12): 加 model_context_window + origin_model 两个 kwargs.
+      - 都给 → 走动态截 (truncate_tool_messages_dynamic) — 真要爆才截
+      - 任一缺 → 走老静态截 (truncate_tool_messages) — BC 跟 5/11 BL-FIX41 一致
+    动态截内部异常会自动 fallback 静态截, 不会比老行为差.
+    """
+    # 故意没 ARG001 — 这两个新参在下面用了
+    _ = conversation_id  # 仍接受老 caller 传 (会被忽略)
+
+    if model_context_window is not None and model_context_window > 0:
+        # P3.3.30 (6/12): 动态截路径
+        from ..tool_msg_truncator import truncate_tool_messages_dynamic  # noqa: PLC0415
+        return truncate_tool_messages_dynamic(
+            messages,
+            model_context_window=model_context_window,
+            model_name=origin_model,
+        )
+
+    # 老路径 (BC): ctx_window 没传 → 老 static
     from ..tool_msg_truncator import truncate_tool_messages  # noqa: PLC0415
     return truncate_tool_messages(messages)
 
