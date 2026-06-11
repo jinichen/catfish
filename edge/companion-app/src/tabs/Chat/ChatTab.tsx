@@ -213,7 +213,17 @@ export default function ChatTab() {
             }}
           >
             {/* 五一 sprint 5/3 BL-D11: 占位 🐟 → 小尺寸正式头像 */}
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            {/* P3.3.22 (6/11): flex-shrink: 0 + nowrap — 防 TaskPicker 加进来后
+                "对话" 两字被竖向压扁 (header 一行塞太多撞挤). */}
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                flexShrink: 0,
+                whiteSpace: "nowrap",
+              }}
+            >
               <img src="/catfish-avatar.svg" alt="" width={18} height={18} style={{ display: "block" }} />
               对话
             </span>
@@ -228,7 +238,9 @@ export default function ChatTab() {
                   overflow: "hidden",
                   textOverflow: "ellipsis",
                   whiteSpace: "nowrap",
-                  maxWidth: 200,
+                  // P3.3.22 (6/11): 200 → 140, 给 TaskPicker 让位
+                  maxWidth: 140,
+                  flexShrink: 1,
                 }}
               >
                 · {persistedSessionId}
@@ -240,6 +252,8 @@ export default function ChatTab() {
                   fontSize: 11,
                   color: "var(--catfish-text-muted)",
                   fontWeight: 400,
+                  flexShrink: 0,
+                  whiteSpace: "nowrap",
                 }}
               >
                 · {messages.length} 条
@@ -247,7 +261,15 @@ export default function ChatTab() {
             )}
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+          {/* P3.3.22 (6/11): 右组 flex-shrink: 0 防被左组 sessionId 撑挤. */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "var(--space-2)",
+              flexShrink: 0,
+            }}
+          >
             {/* P3.3.19 C Phase 3 (6/11): task picker — 让员工从工作台直接进
                 早安 task 上下文聊. 选了 task 走跟 DetailPane 同 sessionId. */}
             <TaskPicker

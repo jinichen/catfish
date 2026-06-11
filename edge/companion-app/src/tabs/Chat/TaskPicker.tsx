@@ -117,16 +117,24 @@ export default function TaskPicker({
   }
 
   return (
+    /* P3.3.22 (6/11): flex-shrink: 0 + nowrap — 防工作台 header 一行挤撞时
+       这块自己内部换行 ("🎯 task:" 跟 select 之间撕开). */
     <div
       style={{
         display: "inline-flex",
         alignItems: "center",
         gap: 6,
         fontSize: 12,
+        flexShrink: 0,
+        whiteSpace: "nowrap",
       }}
     >
       <span
-        style={{ color: "var(--catfish-text-muted)" }}
+        style={{
+          color: "var(--catfish-text-muted)",
+          flexShrink: 0,
+          whiteSpace: "nowrap",
+        }}
         title="进任一早安主菜的 task 上下文 — 跟早安 DetailPane 共享同一 session"
       >
         🎯 task:
@@ -143,16 +151,18 @@ export default function TaskPicker({
           border: "1px solid var(--catfish-border)",
           borderRadius: 4,
           cursor: disabled || loading ? "wait" : "pointer",
-          maxWidth: 240,
+          // P3.3.22 (6/11): 240 → 180, 配合 option title 18 字截短让 dropdown 不挤
+          maxWidth: 180,
         }}
       >
         <option value="">— 普通对话 —</option>
         {tasks.map((t) => {
           const u = URGENCY_LABEL[t.urgency] ?? "?";
+          // P3.3.22 (6/11): 22 → 16 字, 配合 select maxWidth 180 不挤
           const title =
-            t.title.length > 22 ? t.title.slice(0, 22) + "…" : t.title;
+            t.title.length > 16 ? t.title.slice(0, 16) + "…" : t.title;
           return (
-            <option key={t.taskUid} value={t.taskUid}>
+            <option key={t.taskUid} value={t.taskUid} title={t.title}>
               [{u}] {title}
             </option>
           );
