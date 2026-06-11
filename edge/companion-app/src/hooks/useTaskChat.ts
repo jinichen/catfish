@@ -16,7 +16,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { streamChat } from "../lib/chat";
 import { ensureTools } from "./chat/toolsCache";
 import { toolBridgeCallTool, sessionMessageAppend } from "../lib/tauri";
-import type { ChatMessage, ToolCall } from "../types/chat";
+import type { Attachment, ChatMessage, ToolCall } from "../types/chat";
 
 /** 跟 useChat 同款上限. 跨 skill 一次最多 20 轮 (5/13 鸿波拍). */
 const MAX_TOOL_ROUNDS = 20;
@@ -52,7 +52,9 @@ export interface UseTaskChatReturn {
   isStreaming: boolean;
   /** 直接 set 一组消息 (mount 时 load jsonl 历史用). */
   loadHistory: (msgs: ChatMessage[]) => void;
-  send: (text: string) => Promise<void>;
+  /** P3.3.20 (6/11): attachments 走 in-memory (跟 useChat 同款 MVP),
+   *  关掉再回来附件丢, state.db 只存占位文字 "[📎 N 张图 + 📄 M 份文档]". */
+  send: (text: string, attachments?: Attachment[]) => Promise<void>;
   cancel: () => void;
   reset: () => void;
 }
@@ -136,20 +138,23 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
     setIsStreaming(false);
   }, []);
 
-  const send = useCallback(async (text: string) => {
+  const send = useCallback(async (text: string, attachments?: Attachment[]) => {
     const trimmed = text.trim();
-    if (!trimmed) return;
+    const atts = attachments ?? [];
+    // P3.3.20 (6/11): 纯文字或纯附件都允许 (跟 useChat 同款).
+    if (!trimmed && atts.length === 0) return;
     // 跟 useChat 同款保护: 流中再发会撞, caller 应 disable 输入框
     if (abortRef.current && !abortRef.current.signal.aborted) {
       console.warn("[useTaskChat] 流进行中, 跳过 send");
       return;
     }
 
-    // 1. append user msg + persist
+    // 1. append user msg (带 attachments, in-memory only) + persist
     const userMsg: ChatMessage = {
       id: uuid(),
       role: "user",
       content: trimmed,
+      attachments: atts.length > 0 ? atts : undefined,
       ts: nowIso(),
       status: "done",
     };
@@ -162,7 +167,24 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
     //   tool persist 必须判 mountedRef (unmount 后 stream onError/onDone 仍可能
     //   触发, 不能写 ghost row 到 state.db).
     // P3.3.19 C Phase 2c (6/11): persist 走 state.db (sessionMessageAppend) 而非 jsonl.
-    void persistMessage(userMsg);
+    // P3.3.20 (6/11): 附件内容不落 state.db (base64 / preview 太大),
+    //   只存 "[📎 N 张图 + 📄 M 份文档]" 占位 — 跟 useChat 同款 (useChat.ts:560).
+    const imgN = atts.filter((a) => a.kind === "image").length;
+    const fileN = atts.filter((a) => a.kind === "file").length;
+    const placeholderParts: string[] = [];
+    if (imgN > 0) placeholderParts.push(`📎 ${imgN} 张图`);
+    if (fileN > 0) {
+      const fileNames = atts
+        .filter((a) => a.kind === "file")
+        .map((a) => a.name)
+        .join(", ");
+      placeholderParts.push(`📄 ${fileN} 份文档 (${fileNames})`);
+    }
+    const persistContent =
+      placeholderParts.length > 0
+        ? `${trimmed}${trimmed ? "\n" : ""}[${placeholderParts.join(" + ")}]`
+        : trimmed;
+    void persistMessage({ ...userMsg, content: persistContent, attachments: undefined });
     setIsStreaming(true);
 
     // 2. 拉 tools (跟工作台同款 — 60s TTL cache, tool_bridge 不可达返 [])

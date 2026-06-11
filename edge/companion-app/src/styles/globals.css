@@ -2026,6 +2026,9 @@ button {
   display: flex;
   gap: 8px;
   margin-bottom: 8px;
+  /* P3.3.20 polish (6/11): 按钮跟 textarea 底部对齐 — 不是靠顶 (textarea
+   *   可 vertical resize, 拖大后按钮悬空在顶丑). 跟工作台 ChatInput 同款 (alignItems: flex-end). */
+  align-items: flex-end;
 }
 .briefing-2col__chat-input {
   flex: 1;
@@ -2036,7 +2039,11 @@ button {
   border-radius: var(--radius-md);
   background: var(--catfish-bg);
   color: var(--catfish-text);
-  resize: vertical;
+  /* P3.3.20 polish (6/11): 改 resize: none + rows=1 + min-height 36px,
+   *   跟工作台 ChatInput 同款 — textarea 始终 36px, 跟 📎 / 发送按钮齐平,
+   *   多行内容 textarea 内部 scroll. (老 resize: vertical 让 textarea 比按钮高
+   *   一截视觉割裂.) */
+  resize: none;
   min-height: 36px;
   line-height: 1.5;
 }
@@ -2058,8 +2065,8 @@ button {
   color: white;
   cursor: pointer;
   white-space: nowrap;
-  align-self: flex-start;
   height: 36px;
+  /* align-self 删 — 父 align-items: flex-end 接管, 按钮贴 textarea 底 */
 }
 .briefing-2col__chat-send:disabled {
   opacity: 0.5;
@@ -2083,4 +2090,50 @@ button {
   color: #dc2626;
   border-color: #dc262640;
   background: #dc262608;
+}
+
+/* P3.3.20 (6/11): 附件预览 + 📎 按钮 + 拖入提示 — 跟工作台 ChatInput 同款行为,
+ *   但 layout 更紧凑 (早安 detail pane 宽度受限). */
+.briefing-2col__chat-attach-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.briefing-2col__chat-attach-error {
+  font-size: 11px;
+  color: #dc2626;
+  margin-bottom: 6px;
+  padding: 4px 8px;
+  background: #dc262610;
+  border-radius: 3px;
+}
+.briefing-2col__chat-input-row--dragover {
+  outline: 2px dashed var(--catfish-accent, #0E5F66);
+  outline-offset: -2px;
+  border-radius: var(--radius-md);
+}
+.briefing-2col__chat-attach-btn {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  font-size: 16px;
+  line-height: 1;
+  border: 1px solid var(--catfish-border);
+  border-radius: var(--radius-md);
+  background: var(--catfish-bg);
+  color: var(--catfish-text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* align-self 删 — 父 align-items: flex-end 接管, 按钮贴 textarea 底齐发送按钮 */
+}
+.briefing-2col__chat-attach-btn:hover:not(:disabled) {
+  color: var(--catfish-accent, #0E5F66);
+  border-color: var(--catfish-accent, #0E5F66);
+}
+.briefing-2col__chat-attach-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }

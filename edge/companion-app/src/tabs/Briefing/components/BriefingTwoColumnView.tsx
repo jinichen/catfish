@@ -37,7 +37,17 @@ import {
 import { loadSessionMessagesAsChat } from "../../../lib/sessionMessages";
 // P3.3.19 C Phase 3 (6/11): buildTaskSystemPrompt 抽到 lib 共享 (ChatTab 也用)
 import { buildTaskSystemPrompt } from "../../../lib/taskSystemPrompt";
-import type { ChatMessage } from "../../../types/chat";
+import type { Attachment, ChatMessage } from "../../../types/chat";
+// P3.3.20 (6/11): 复用工作台 chat input 附件三件套 — helpers / chip / thumb
+//   都独立于 useChat / useChatStore, 不耦合 ChatInput.tsx ~600 行那套.
+import {
+  fileToAttachment,
+  MAX_ATTACHMENTS,
+  SUPPORTED_AUDIO_EXTS,
+  SUPPORTED_FILE_EXTS,
+} from "../../Chat/components/attachmentHelpers";
+import FileChip from "../../Chat/components/FileChip";
+import ThumbCard from "../../Chat/components/ThumbCard";
 import { useChatStore } from "../../../store/chat";
 import { useTaskChat } from "../../../hooks/useTaskChat";
 import ChatToolCall from "../../Chat/ChatToolCall";
@@ -241,6 +251,12 @@ function DetailPane({
   const { messages, isStreaming, send, cancel, loadHistory } = taskChat;
 
   const [input, setInput] = useState("");
+  // P3.3.20 (6/11): in-memory attachments — image base64 / file preview,
+  //   关掉再回来丢, state.db 只存占位 "[📎 N 张图 + 📄 M 份文档]" (跟工作台同款 MVP).
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [attachError, setAttachError] = useState<string | null>(null);
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [chatError, setChatError] = useState<string | null>(null);
   const [backendError, setBackendError] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(true);
@@ -416,14 +432,80 @@ function DetailPane({
 
   const handleSend = async () => {
     const text = input.trim();
-    if (!text || isStreaming) return;
+    // P3.3.20 (6/11): 纯文字或纯附件都允许发, 跟 useChat 同款.
+    if ((!text && attachments.length === 0) || isStreaming) return;
     setChatError(null);
     setInput("");
+    const atts = attachments;
+    setAttachments([]);
+    setAttachError(null);
     try {
-      await send(text);
+      await send(text, atts);
     } catch (e) {
       setChatError(String(e));
     }
+  };
+
+  // P3.3.20 (6/11): 文件接收 — 📎 picker / 粘贴 / 拖入 共用入口.
+  //   并行跑 fileToAttachment (图 base64 / 文档走 parse_file → preview / 音频走 whisper).
+  //   超过 MAX_ATTACHMENTS 截断 + 提示; 单文件挂不阻塞其他.
+  const ingestFiles = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0) return;
+      setAttachError(null);
+      const room = MAX_ATTACHMENTS - attachments.length;
+      if (room <= 0) {
+        setAttachError(`最多 ${MAX_ATTACHMENTS} 个附件, 先删几个`);
+        return;
+      }
+      const accept = files.slice(0, room);
+      if (files.length > room) {
+        setAttachError(`只收了前 ${room} 个 (上限 ${MAX_ATTACHMENTS})`);
+      }
+      const results = await Promise.allSettled(accept.map((f) => fileToAttachment(f)));
+      const ok: Attachment[] = [];
+      const errs: string[] = [];
+      results.forEach((r, i) => {
+        if (r.status === "fulfilled") ok.push(r.value);
+        else errs.push(`${accept[i].name}: ${String(r.reason).slice(0, 80)}`);
+      });
+      if (ok.length > 0) setAttachments((prev) => [...prev, ...ok]);
+      if (errs.length > 0) setAttachError(errs.join(" · "));
+    },
+    [attachments.length],
+  );
+
+  const onPickFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    void ingestFiles(files);
+    // reset 让同一文件能再选
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const onPasteInput = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files: File[] = [];
+    for (const item of Array.from(e.clipboardData?.items ?? [])) {
+      if (item.kind === "file") {
+        const f = item.getAsFile();
+        if (f) files.push(f);
+      }
+    }
+    if (files.length > 0) {
+      e.preventDefault();
+      void ingestFiles(files);
+    }
+  };
+
+  const onDropInput = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDraggingOver(false);
+    const files = Array.from(e.dataTransfer?.files ?? []);
+    if (files.length > 0) void ingestFiles(files);
+  };
+
+  const removeAttachment = (idx: number) => {
+    setAttachments((prev) => prev.filter((_, i) => i !== idx));
+    setAttachError(null);
   };
 
   // P3.3.9: clear uid + 也 try clear 老 title file (兼容老 jsonl)
@@ -554,26 +636,77 @@ function DetailPane({
         </div>
       )}
 
-      <div className="briefing-2col__chat-input-row">
+      {/* P3.3.20 (6/11): 附件预览 — image 走 ThumbCard, file/audio 走 FileChip. */}
+      {attachments.length > 0 && (
+        <div className="briefing-2col__chat-attach-preview">
+          {attachments.map((a, i) =>
+            a.kind === "image" ? (
+              <ThumbCard key={i} attachment={a} onRemove={() => removeAttachment(i)} />
+            ) : (
+              <FileChip key={i} attachment={a} onRemove={() => removeAttachment(i)} />
+            ),
+          )}
+        </div>
+      )}
+      {attachError && (
+        <div className="briefing-2col__chat-attach-error">{attachError}</div>
+      )}
+
+      <div
+        className={`briefing-2col__chat-input-row${isDraggingOver ? " briefing-2col__chat-input-row--dragover" : ""}`}
+        onDragOver={(e) => {
+          if (Array.from(e.dataTransfer?.items ?? []).some((it) => it.kind === "file")) {
+            e.preventDefault();
+            setIsDraggingOver(true);
+          }
+        }}
+        onDragLeave={() => setIsDraggingOver(false)}
+        onDrop={onDropInput}
+      >
+        {/* P3.3.20 (6/11): 📎 文件 picker 按钮 + 隐藏 input. */}
+        <button
+          type="button"
+          className="briefing-2col__chat-attach-btn"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={isStreaming || attachments.length >= MAX_ATTACHMENTS}
+          title={`加附件 (图片 / PDF / Excel / Word / CSV / TXT / MD / 音频, 最多 ${MAX_ATTACHMENTS} 个; 也可粘贴 / 拖入)`}
+        >
+          📎
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept={`image/*,${SUPPORTED_FILE_EXTS.join(",")},${SUPPORTED_AUDIO_EXTS.join(",")}`}
+          style={{ display: "none" }}
+          onChange={onPickFiles}
+        />
         <textarea
           className="briefing-2col__chat-input"
           value={input}
           onChange={(e) => setInput(e.target.value)}
+          onPaste={onPasteInput}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               void handleSend();
             }
           }}
-          placeholder={isStreaming ? "AI 回答中…" : "Enter 发送 · Shift+Enter 换行"}
-          rows={2}
+          placeholder={
+            isStreaming
+              ? "AI 回答中…"
+              : isDraggingOver
+                ? "松开鼠标加附件"
+                : "Enter 发送 · Shift+Enter 换行 · 粘贴 / 拖入加附件"
+          }
+          rows={1}
           disabled={isStreaming}
         />
         <button
           type="button"
           className="briefing-2col__chat-send"
           onClick={() => void handleSend()}
-          disabled={!input.trim() || isStreaming}
+          disabled={(!input.trim() && attachments.length === 0) || isStreaming}
         >
           {isStreaming ? "…" : "发送"}
         </button>
