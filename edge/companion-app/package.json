@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "tauri:install": "bash scripts/install-mac.sh",
+    "tauri:build:install": "npm run tauri:build && npm run tauri:install"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
