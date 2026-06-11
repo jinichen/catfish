@@ -401,6 +401,34 @@ export const sessionUpdateTitle = (sessionId: string, title: string) =>
 export const sessionCheck = (sessionId: string) =>
   rawInvoke<string | null>("session_check", { sessionId });
 
+// ── P3.3.19 (6/11) C 路线 Phase 1: task ↔ session 关联 sidecar ──────────
+//
+// 不动 hermes 上游 sessions 表, 加 catfish_session_metadata 隔离自家.
+// 1 task 可关联 N session (老历史 + 新对话), 查时按 started_at DESC 取 latest.
+
+export interface SessionTaskAssoc {
+  sessionId: string;
+  taskUid: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** 绑 / 改 session 跟 task 的关联. null 取消关联 */
+export const sessionSetTaskUid = (sessionId: string, taskUid: string | null) =>
+  rawInvoke<void>("session_set_task_uid", { sessionId, taskUid });
+
+/** 查某 session 关联的 task_uid (null = 没绑) */
+export const sessionGetTaskUid = (sessionId: string) =>
+  rawInvoke<string | null>("session_get_task_uid", { sessionId });
+
+/** 查 task 关联的 latest session_id. None = 这 task 还没 session */
+export const sessionGetByTaskUid = (taskUid: string) =>
+  rawInvoke<string | null>("session_get_by_task_uid", { taskUid });
+
+/** 列 task 关联的所有 session (按 started_at DESC) */
+export const listSessionsByTaskUid = (taskUid: string) =>
+  rawInvoke<SessionTaskAssoc[]>("list_sessions_by_task_uid", { taskUid });
+
 // ── identity ─────────────────────────────────────────────
 import type {
   IdentityInfo,

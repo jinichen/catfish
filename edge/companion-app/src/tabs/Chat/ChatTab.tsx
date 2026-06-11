@@ -11,11 +11,14 @@ import { useCallback, useEffect, useState } from "react";
 import { useChat } from "../../hooks/useChat";
 import { useChatStore } from "../../store/chat";
 import { useCatalog } from "../../hooks/useCatalog";
-import { getSession } from "../../lib/tauri";
+import { getSession, sessionGetTaskUid } from "../../lib/tauri";
 import ChatPanel from "./ChatPanel";
 import ChatModelPicker from "./ChatModelPicker";
 import ChatSidebar from "./ChatSidebar";
 import ContextCounter from "./ContextCounter";  // BL-CONTEXT-COUNTER (5/13)
+// P3.3.19 C Phase 3 (6/11): 工作台 chat 加 task picker, 让员工直接从工作台进 task 上下文
+// (跟早安 DetailPane 共享同一 session, 哪边发都进同条 db row)
+import TaskPicker from "./TaskPicker";
 
 export default function ChatTab() {
   const { catalog } = useCatalog();
@@ -39,6 +42,30 @@ export default function ChatTab() {
   const persistedSessionId = useChatStore((s) => s.persistedSessionId);
   const loadSession = useChatStore((s) => s.loadSession);
   const loadSessionAttachments = useChatStore((s) => s.loadSessionAttachments);
+
+  // P3.3.19 C Phase 3 (6/11): 当前 session 关联的 task_uid (null = 普通对话).
+  // sidecar catfish_session_metadata 查. 每次 session 切换重拉.
+  const [currentTaskUid, setCurrentTaskUid] = useState<string | null>(null);
+  useEffect(() => {
+    if (!persistedSessionId) {
+      setCurrentTaskUid(null);
+      return;
+    }
+    let cancelled = false;
+    void sessionGetTaskUid(persistedSessionId)
+      .then((uid) => {
+        if (!cancelled) setCurrentTaskUid(uid);
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          console.warn("[ChatTab] sessionGetTaskUid 失败:", e);
+          setCurrentTaskUid(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [persistedSessionId]);
 
   /** 父组件持有 sidebar 的 refresh key —— 发完一条消息后 bump 让左侧列表重拉 */
   const [refreshKey, setRefreshKey] = useState(0);
@@ -221,6 +248,20 @@ export default function ChatTab() {
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+            {/* P3.3.19 C Phase 3 (6/11): task picker — 让员工从工作台直接进
+                早安 task 上下文聊. 选了 task 走跟 DetailPane 同 sessionId. */}
+            <TaskPicker
+              currentTaskUid={currentTaskUid}
+              onSelectSession={(sid) => {
+                if (sid) {
+                  void handleSelect(sid);
+                } else {
+                  void handleNew();
+                }
+              }}
+              model={model}
+              disabled={isStreaming}
+            />
             {/* BL-CONTEXT-COUNTER (5/13): prompt_tokens / context_window 状态指示
                 配合 5/13 早上加的 _is_context_overflowed 监控, 让员工自己看到
                 当前会话烧到 context 多少, 接近上限主动 Cmd+N. 没数据时不渲染. */}

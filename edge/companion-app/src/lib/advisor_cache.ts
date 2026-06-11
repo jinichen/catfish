@@ -23,8 +23,13 @@ export interface AdvisorCache {
 export interface TaskChatSummary {
   /** LLM 给的 100-150 字 summary, 说明员工跟这条 task 聊到哪. */
   summary: string;
-  /** jsonl 文件 size 当时是多少 (byte). 跟当前对比, 一致就复用. */
+  /** P3.3.12 老字段 — jsonl file size (byte). 跟当前 jsonlSize 对比一致复用.
+   *  P3.3.19 C Phase 5: 改 state.db 后 jsonlSize 不再用. messageCount 是新 source of truth.
+   *  保留字段名做 backward compat — 老 cache 没破坏. */
   jsonlSize: number;
+  /** P3.3.19 C Phase 5 (6/11): state.db session.meta.messageCount. 优先用这个判断
+   *  cache 失效 (jsonl 时代去了). 没 messageCount 字段时 fallback jsonlSize. */
+  messageCount?: number;
   /** ISO-8601, summary 算出来的时刻. */
   computedAt: string;
 }

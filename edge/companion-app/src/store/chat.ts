@@ -9,8 +9,10 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
-import type { ChatMessage, ToolCall } from "../types/chat";
-import type { SessionDetail, SessionMessage } from "../types/session";
+import type { ChatMessage } from "../types/chat";
+import type { SessionDetail } from "../types/session";
+// P3.3.19 C Phase 2b (6/11): db→chat 转换 + tool result join 抽到 lib/sessionMessages
+import { loadSessionMessagesAsChat } from "../lib/sessionMessages";
 
 /** BL-FILE-SESSION-INDEX-V1 Phase 1 (5/30): session 级附件 row.
  *  对齐 Rust commands/attachments.rs AttachmentRow.
@@ -100,57 +102,9 @@ interface ChatState {
   reset: () => void;
 }
 
-/** SessionMessage (DB 行) -> ChatMessage (UI 运行时) 映射。
- *  - tool_calls JSON 反序列化成 ToolCall[], status 一律 "done" (历史已完成)
- *  - 不解析 tool 角色消息的 result 字段, 直接当 content 显示
- */
-function dbMessageToChat(m: SessionMessage): ChatMessage {
-  let toolCalls: ToolCall[] | undefined;
-  if (m.toolCalls) {
-    try {
-      const parsed = JSON.parse(m.toolCalls);
-      if (Array.isArray(parsed)) {
-        toolCalls = parsed.map((tc, i) => ({
-          id: String(tc.id ?? `historical-${m.id}-${i}`),
-          name: String(tc.function?.name ?? tc.name ?? "(unknown)"),
-          args: safeParseArgs(tc.function?.arguments ?? tc.arguments),
-          status: "done" as const,
-        }));
-      }
-    } catch {
-      // 解析坏了不致命, 历史记录里有畸形 tool_calls 就忽略
-    }
-  }
-  // ChatRole 是 union, 兜底成 "assistant" 避免 string 不被接受
-  const role = (["user", "assistant", "system", "tool"] as const).includes(
-    m.role as never,
-  )
-    ? (m.role as ChatMessage["role"])
-    : "assistant";
-  return {
-    id: `db-${m.id}`,
-    role,
-    content: m.content,
-    tool_calls: toolCalls,
-    tool_call_id: m.toolCallId,
-    ts: m.timestamp,
-    status: "done",
-  };
-}
-
-function safeParseArgs(raw: unknown): Record<string, unknown> {
-  if (raw == null) return {};
-  if (typeof raw === "object") return raw as Record<string, unknown>;
-  if (typeof raw === "string") {
-    try {
-      const v = JSON.parse(raw);
-      return v && typeof v === "object" ? (v as Record<string, unknown>) : {};
-    } catch {
-      return {};
-    }
-  }
-  return {};
-}
+// P3.3.19 C Phase 2b (6/11): dbMessageToChat + safeParseArgs + tool result join
+// 抽到 lib/sessionMessages.ts (单独 file 避 cyclic — lib/chat.ts 已 import
+// store/chat.ts, 反向 import 会 cyclic). useTaskChat 共用同一 helper.
 
 export const useChatStore = create<ChatState>((set) => ({
   messages: [],
@@ -231,27 +185,9 @@ export const useChatStore = create<ChatState>((set) => ({
       // 否则 ChatToolCall 渲染 call.result===undefined → 显示 (空), P27 approval
       // button regex 也 test 空字符串不 match → 永远不弹. 这是为什么 marathon
       // 25h+ 一直 debug "button 不弹" — 真根因不是 UI render 路径, 是历史加载丢字段.
-      messages: (() => {
-        const mapped = detail.messages.map(dbMessageToChat);
-        // 第二遍: tool_call_id → content 索引, 回填 assistant.tool_calls[i].result
-        const toolResultByCallId = new Map<string, string>();
-        for (const m of mapped) {
-          if (m.role === "tool" && m.tool_call_id) {
-            toolResultByCallId.set(m.tool_call_id, m.content);
-          }
-        }
-        for (const m of mapped) {
-          if (m.role === "assistant" && m.tool_calls?.length) {
-            for (const tc of m.tool_calls) {
-              const result = toolResultByCallId.get(tc.id);
-              if (result !== undefined) {
-                tc.result = result;
-              }
-            }
-          }
-        }
-        return mapped;
-      })(),
+      // P3.3.19 C Phase 2b (6/11): 整段 logic 抽到 lib/sessionMessages.ts
+      // loadSessionMessagesAsChat. useTaskChat 共用. 行为不变.
+      messages: loadSessionMessagesAsChat(detail),
       isStreaming: false,
       streamingId: null,
       // BL-FILE-SESSION-INDEX-V1 Phase 1: 切会话先清空附件 list, 等

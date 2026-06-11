@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { streamChat } from "../lib/chat";
 import { ensureTools } from "./chat/toolsCache";
-import { toolBridgeCallTool } from "../lib/tauri";
+import { toolBridgeCallTool, sessionMessageAppend } from "../lib/tauri";
 import type { ChatMessage, ToolCall } from "../types/chat";
 
 /** 跟 useChat 同款上限. 跨 skill 一次最多 20 轮 (5/13 鸿波拍). */
@@ -40,9 +40,11 @@ export interface UseTaskChatOpts {
   model: string;
   /** system prompt 注入. 每次 send 都重算 (task 上下文可能变). */
   buildSystemPrompt: () => string;
-  /** P3.3.11: 持久化回调, 接完整 ChatMessage. caller 把它写 task_chat jsonl.
-   *  user / assistant (含 tool_calls) / tool 各类都会 emit. system 不 emit. */
-  onPersist?: (msg: ChatMessage) => void;
+  /** P3.3.19 C Phase 2c (6/11): caller 必传 — DetailPane 先 sessionGetByTaskUid
+   *  / sessionCreate 拿 hermes session id 后传进来. send 内每条 msg persist
+   *  走 sessionMessageAppend(sessionId, ...) 写 state.db. 跟工作台 chat 同 db.
+   *  改造前是 onPersist callback 写 task_chat jsonl (P3.3.7 Phase 2), 现统一 state.db. */
+  sessionId: string;
 }
 
 export interface UseTaskChatReturn {
@@ -81,6 +83,43 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
   // opts 用 ref, 闭包稳定不重建 send (model / buildSystemPrompt 都可能每次 render 变)
   const optsRef = useRef(opts);
   optsRef.current = opts;
+
+  /** P3.3.19 C Phase 2c (6/11): 把 ChatMessage append 进 hermes state.db.
+   *  跟 useChat persistMessage 同款 (复制自 useChat.ts:101-131), 不动 useChatStore.
+   *  失败静默 — chat UI 仍 work, 只是该条 msg 没进 db. */
+  const persistMessage = useCallback(
+    async (msg: ChatMessage): Promise<void> => {
+      const sessionId = optsRef.current.sessionId;
+      if (!sessionId) {
+        console.warn("[useTaskChat] sessionId 缺, 跳过 persist");
+        return;
+      }
+      try {
+        await sessionMessageAppend({
+          sessionId,
+          role: msg.role,
+          content: msg.content,
+          toolCalls: msg.tool_calls
+            ? JSON.stringify(
+                msg.tool_calls.map((tc) => ({
+                  id: tc.id,
+                  type: "function",
+                  function: {
+                    name: tc.name,
+                    arguments: JSON.stringify(tc.args ?? {}),
+                  },
+                })),
+              )
+            : undefined,
+          toolCallId: msg.tool_call_id,
+          finishReason: msg.status === "error" ? "error" : undefined,
+        });
+      } catch (e) {
+        console.warn("[useTaskChat] sessionMessageAppend 失败:", e);
+      }
+    },
+    [],
+  );
 
   const loadHistory = useCallback((msgs: ChatMessage[]) => {
     setMessages(msgs);
@@ -121,8 +160,9 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
     });
     // P3.3.13: user msg 一定是 mounted 时刚发的, 不用判. 后面 assistant /
     //   tool persist 必须判 mountedRef (unmount 后 stream onError/onDone 仍可能
-    //   触发, 不能写 ghost row 到 jsonl).
-    optsRef.current.onPersist?.(userMsg);
+    //   触发, 不能写 ghost row 到 state.db).
+    // P3.3.19 C Phase 2c (6/11): persist 走 state.db (sessionMessageAppend) 而非 jsonl.
+    void persistMessage(userMsg);
     setIsStreaming(true);
 
     // 2. 拉 tools (跟工作台同款 — 60s TTL cache, tool_bridge 不可达返 [])
@@ -216,12 +256,13 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
         //   后面 tool 跑完会再 persist 一条完整 assistant 覆盖 (append-only 写新一行,
         //   load 时按 id 取最后一行).
         // P3.3.13: mounted 时才 persist — unmount 后 stream onDone 可能仍触发,
-        //   不能写 ghost row 到老 task 的 jsonl.
+        //   不能写 ghost row 到老 task 的 state.db session.
+        // P3.3.19 C Phase 2c: persist 走 state.db.
         if (
           mountedRef.current &&
           (finalContent.trim().length > 0 || collectedCalls.length > 0)
         ) {
-          optsRef.current.onPersist?.(doneAssistant);
+          void persistMessage(doneAssistant);
         }
         history = [...history, doneAssistant];
 
@@ -292,12 +333,12 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
           };
           history = [...history, toolMsg];
 
-          // P3.3.11: tool result 也 persist — load 时 DetailPane 把 result join
-          //   回 assistant.tool_calls[i].result (跟工作台 state.db load 同款思路).
+          // P3.3.11: tool result 也 persist — load 时 join 回 assistant.tool_calls[i].result.
           // P3.3.13: mounted 时才 persist (防 ghost write — 切走 task 后 stream
-          //   还可能跑完一个 tool, 不能写到老 task 的 jsonl).
+          //   还可能跑完一个 tool, 不能写到老 task 的 session).
+          // P3.3.19 C Phase 2c: persist 走 state.db (sessionMessageAppend).
           if (mountedRef.current) {
-            optsRef.current.onPersist?.(toolMsg);
+            void persistMessage(toolMsg);
           }
         }
       }

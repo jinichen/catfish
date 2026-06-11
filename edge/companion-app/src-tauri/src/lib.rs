@@ -279,6 +279,35 @@ pub fn run() {
             // 配置走 ~/.catfish/companion.yaml email 段; poll_secs=0 关.
             services::email_scheduler::schedule_email_scheduler(app.handle().clone());
 
+            // P3.3.19 C Phase 4 (6/11): jsonl → state.db 一次性 migration. flag
+            // ~/.catfish/migration_v1_done 存在跳过. fire-and-forget 后台跑,
+            // 不阻塞 UI. 量级估 < 300ms (8 file / 40KB). log 完成报告给员工排错.
+            // 用 std::thread (sync rusqlite) 而非 tokio::spawn —
+            // setup hook 不在 tokio runtime context, tokio::spawn 当场 panic.
+            std::thread::spawn(|| {
+                match commands::task_chat_migration::run_migration() {
+                    Ok(report) => {
+                        if report.already_done {
+                            log::info!("[migration v1] 已 done, 跳过 (~/.catfish/migration_v1_done 存在)");
+                        } else {
+                            log::info!(
+                                "[migration v1] 完成: scanned={} sessions={} msgs={} skipped={} failed={} elapsed={}ms",
+                                report.jsonl_files_scanned,
+                                report.sessions_created,
+                                report.messages_imported,
+                                report.skipped_already_exists,
+                                report.failed_files.len(),
+                                report.elapsed_ms,
+                            );
+                            for f in &report.failed_files {
+                                log::warn!("[migration v1] failed: {f}");
+                            }
+                        }
+                    }
+                    Err(e) => log::warn!("[migration v1] 跑挂 (不阻塞启动): {e}"),
+                }
+            });
+
             // 5/6 BL-E27.2: 桌宠 hover tracker — 80ms 一次轮询鼠标位置,
             // 切 set_ignore_cursor_events 让透明区真透 (附近点击穿到桌面),
             // 桌宠区接事件 (能点能拖). 见 services/pet_hover.rs.
@@ -335,6 +364,11 @@ pub fn run() {
             commands::session_write::session_finalize,
             commands::session_write::session_update_title,
             commands::session_write::session_check,
+            // P3.3.19 (6/11) C 路线 Phase 1: task ↔ session 关联 sidecar
+            commands::session_write::session_set_task_uid,
+            commands::session_write::session_get_task_uid,
+            commands::session_write::session_get_by_task_uid,
+            commands::session_write::list_sessions_by_task_uid,
             // identity
             commands::identity::identity_info,
             // skills + mcp
@@ -588,6 +622,8 @@ pub fn run() {
             commands::wiki_write::wiki_uninstall_shared,
             // P3.3.18 Phase 4 P2 (6/10): 敏感词文件 onboarding (catfish_wiki_publish 扫用)
             commands::wiki_write::wiki_sensitive_terms_ensure,
+            // P3.3.19 C Phase 4 (6/11): task_chat jsonl → state.db 一次性 migration
+            commands::task_chat_migration::task_chat_migrate_to_state_db,
             // P16 (6/5): 对话上传文件 auto ingest → wiki/raw/sources/
             commands::wiki_write::wiki_ingest_source,
             // P28 (6/5): Companion Dashboard 改 gateway URL/token

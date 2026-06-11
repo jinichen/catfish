@@ -26,8 +26,17 @@ import type {
   HandledSilentlyItem,
   MainTask,
 } from "../../../lib/briefing_advisor";
-import { taskChatAppend, taskChatClear, taskChatGet } from "../../../lib/task_chat";
-import { toolBridgeChatApproval } from "../../../lib/tauri";
+import { taskChatClear, taskChatGet } from "../../../lib/task_chat";
+import {
+  toolBridgeChatApproval,
+  getSession,
+  sessionCreate,
+  sessionGetByTaskUid,
+  sessionSetTaskUid,
+} from "../../../lib/tauri";
+import { loadSessionMessagesAsChat } from "../../../lib/sessionMessages";
+// P3.3.19 C Phase 3 (6/11): buildTaskSystemPrompt 抽到 lib 共享 (ChatTab 也用)
+import { buildTaskSystemPrompt } from "../../../lib/taskSystemPrompt";
 import type { ChatMessage } from "../../../types/chat";
 import { useChatStore } from "../../../store/chat";
 import { useTaskChat } from "../../../hooks/useTaskChat";
@@ -181,58 +190,8 @@ export default function BriefingTwoColumnView({
 
 // ─── 右侧详情 (Phase 1 6/10): task-scoped chat ────────────────────
 
-function buildTaskSystemPrompt(task: MainTask): string {
-  const lines: string[] = [
-    "你是 catfish, 员工的工作参谋. 现在跟员工讨论一条具体待办.",
-    "",
-    "## 待办",
-    `标题: ${task.title}`,
-    `紧急度: ${task.urgency === "high" ? "急" : task.urgency === "medium" ? "中" : "低"}`,
-  ];
-  if (task.reason) {
-    lines.push(`理由: ${task.reason}`);
-  }
-  if (task.contextRefs.length > 0) {
-    lines.push("", "## 历史上下文");
-    task.contextRefs.forEach((r) => lines.push(`- ${r}`));
-  }
-  if (task.complianceFlags.length > 0) {
-    lines.push("", "## 合规提示");
-    task.complianceFlags.forEach((f) => {
-      lines.push(`- ${f.severity} 合规 (${f.type}): ${f.reason}${f.suggestion ? ` — 建议: ${f.suggestion}` : ""}`);
-    });
-  }
-  if (task.politicalFlags.length > 0) {
-    lines.push("", "## 关键关系");
-    task.politicalFlags.forEach((f) => {
-      lines.push(`- ${f.severity}: ${f.reason}`);
-    });
-  }
-  if (task.options.length > 0) {
-    lines.push("", "## 早晨 LLM 给的 3 个口径建议 (参考, 你可以反驳或调整)");
-    task.options.forEach((o) => {
-      lines.push(`${o.label} (${o.tone}): ${o.summary}${o.aiLean ? " [早晨 AI 倾向]" : ""}`);
-    });
-  }
-  lines.push(
-    "",
-    "## 你的工作",
-    "- 员工现在跟你直接说. 回答她关于这条待办的具体问题.",
-    "- 起草内容 / 帮她做决策 / 给具体下一步.",
-    "- 如果她说 '我准备做 A' / '已经做完' / '推迟' 之类的, 提醒她用底部按钮记录状态.",
-    "- 简洁回答, 不要重复早晨已给过的建议.",
-    "",
-    "## 工具使用 (P3.3.10)",
-    "- 你能调 tool (catfish_draft_email_reply / catfish_compose_followup_list /",
-    "  catfish_check_compliance / catfish_political_sensitivity_scan /",
-    "  execute_code / catfish_run_skill 等). 跟工作台 chat 同款.",
-    "- 该调就调, 不要装看不到 tool. 起草邮件用 catfish_draft_email_reply, 跑数算用",
-    "  execute_code, 写报告/PPT 用 catfish_run_skill.",
-    "- 重要 tool (write_file / execute_code / send_email 等) 中央会拦下来弹批准框,",
-    "  你只管调, 员工点 '批准' 就放行.",
-  );
-  return lines.join("\n");
-}
+// P3.3.19 C Phase 3 (6/11): buildTaskSystemPrompt 抽到 lib/taskSystemPrompt.ts.
+// DetailPane + ChatTab task picker 共享同一份. 改 system prompt 必须改 lib 那份.
 
 function DetailPane({
   task,
@@ -266,25 +225,19 @@ function DetailPane({
     () => buildTaskSystemPrompt(taskRef.current),
     [],
   );
-  // P3.3.11: onPersist 接完整 ChatMessage, 把 tool_calls / tool_call_id 也写 jsonl.
-  //   user / assistant (含 tool_calls) / tool 各类 emit. system 不 emit (LLM
-  //   每次 send 都重算 system prompt, 不需要持久化).
-  const onPersist = useCallback((msg: ChatMessage) => {
-    if (msg.role === "system") return;
-    void taskChatAppend(
-      chatKeyRef.current,
-      msg.role as "user" | "assistant" | "tool",
-      msg.content,
-      {
-        toolCalls: msg.tool_calls,
-        toolCallId: msg.tool_call_id,
-      },
-    ).catch((e) => {
-      console.warn(`[BriefingTwoColumn] append ${msg.role} 失败:`, e);
-    });
-  }, []);
+  // P3.3.19 C Phase 2d (6/11): 用 hermes state.db session 替代 task_chat jsonl.
+  //   mount 时 sessionGetByTaskUid 找 task 关联的 latest session, 找不到则 sessionCreate
+  //   + sessionSetTaskUid 建关联. useTaskChat 拿 sessionId 后内部 persist 走 state.db,
+  //   不再走 jsonl. 跟工作台 chat 共享同 session — 哪边发都进同条 db row.
+  //
+  //   sessionId === null 时 useTaskChat 不该 send (caller 用 loading 状态防 race).
+  const [sessionId, setSessionId] = useState<string | null>(null);
 
-  const taskChat = useTaskChat({ model, buildSystemPrompt, onPersist });
+  const taskChat = useTaskChat({
+    model,
+    buildSystemPrompt,
+    sessionId: sessionId ?? "",  // 空字符串 = mount 还没建好 session, persist 会 warn 跳过
+  });
   const { messages, isStreaming, send, cancel, loadHistory } = taskChat;
 
   const [input, setInput] = useState("");
@@ -301,62 +254,92 @@ function DetailPane({
   >(null);
   const [secondsLeft, setSecondsLeft] = useState(60);
 
-  // mount 时 load 历史. P3.3.9: 先 try uid, 没历史回退 title.
+  // P3.3.19 C Phase 2d (6/11): mount 时拿 task 的 hermes session id, 拉 messages.
+  //   1. sessionGetByTaskUid(taskUid) — 该 task 是否已有 session
+  //   2. 有: sessionsGet → loadSessionMessagesAsChat → loadHistory + setSessionId
+  //   3. 没: sessionCreate({model, title=task.title, systemPrompt=buildTaskSystemPrompt})
+  //          + sessionSetTaskUid 建关联 → setSessionId + loadHistory([])
+  //   Phase 2e fallback: state.db messages 为空 + 老 jsonl 有 → 显 jsonl 历史 (read-only,
+  //   不 persist 进 db, Phase 4 一次性 migration 才 import).
   useEffect(() => {
     let cancelled = false;
     setHistoryLoading(true);
+    setSessionId(null);
     void (async () => {
       try {
-        // P3.3.14: load 时只取最近 200 条防大 jsonl UI 卡. 老历史仍在文件里,
-        //   advisor summary 拉时不传 limit 拿全部 (老脉络才有总结意义).
-        let hist = await taskChatGet(chatKey, 200);
-        if (hist.length === 0 && chatKey !== task.title) {
-          // 兼容 P3.3.9 之前以 title 命名的老 jsonl
-          const oldHist = await taskChatGet(task.title, 200).catch(() => []);
-          if (oldHist.length > 0) {
-            console.log(
-              `[BriefingTwoColumn] 老 title jsonl 命中 (${oldHist.length} 条), uid='${chatKey}' title='${task.title}'`,
-            );
-            hist = oldHist;
+        let sid = await sessionGetByTaskUid(task.taskUid);
+        let dbMessagesCount = 0;
+        if (sid) {
+          // 已有 session — 拉历史
+          const detail = await getSession(sid).catch(() => null);
+          if (detail && !cancelled) {
+            const chatMessages = loadSessionMessagesAsChat(detail);
+            dbMessagesCount = chatMessages.length;
+            if (chatMessages.length > 0) {
+              loadHistory(chatMessages);
+            }
           }
+        } else {
+          // 没 session — 建一个
+          const created = await sessionCreate({
+            model,
+            title: task.title,
+            systemPrompt: buildTaskSystemPrompt(task),
+          });
+          sid = created.id;
+          await sessionSetTaskUid(sid, task.taskUid).catch((e) => {
+            console.warn("[BriefingTwoColumn] sessionSetTaskUid 失败:", e);
+          });
         }
         if (cancelled) return;
-        // P3.3.11: load 时反序列化 tool_calls + tool_call_id, 并 join tool result
-        //   回 assistant.tool_calls[i].result (跟工作台 P27.3 state.db load 同款).
-        //   做法: 先全部转 ChatMessage, 然后扫 tool 角色 row 把 content 写回对应
-        //   assistant.tool_calls[i].result. tool row 本身不进可见 messages
-        //   (ChatMsg 函数会跳过 role === "tool", 跟工作台 ChatMessage 同款).
-        const all: ChatMessage[] = hist.map((m, i) => ({
-          id: `hist-${i}-${m.ts}`,
-          role: m.role as ChatMessage["role"],
-          content: m.content,
-          tool_calls: m.toolCalls,
-          tool_call_id: m.toolCallId,
-          ts: m.ts,
-          status: "done",
-        }));
-        // 建 tool_call_id → result content 索引
-        const toolResultByCallId = new Map<string, string>();
-        for (const m of all) {
-          if (m.role === "tool" && m.tool_call_id) {
-            toolResultByCallId.set(m.tool_call_id, m.content);
+
+        // Phase 2e fallback: db 空 + 老 jsonl 有 → 显 jsonl. Phase 4 一次性 migration.
+        if (dbMessagesCount === 0) {
+          let hist = await taskChatGet(chatKey, 200).catch(() => []);
+          if (hist.length === 0 && chatKey !== task.title) {
+            const oldHist = await taskChatGet(task.title, 200).catch(() => []);
+            if (oldHist.length > 0) {
+              console.log(
+                `[BriefingTwoColumn] 老 title jsonl 命中 fallback (${oldHist.length} 条), uid='${chatKey}'`,
+              );
+              hist = oldHist;
+            }
+          }
+          if (hist.length > 0 && !cancelled) {
+            // jsonl → ChatMessage[] (跟 P3.3.11 load 逻辑同款)
+            const all: ChatMessage[] = hist.map((m, i) => ({
+              id: `hist-${i}-${m.ts}`,
+              role: m.role as ChatMessage["role"],
+              content: m.content,
+              tool_calls: m.toolCalls,
+              tool_call_id: m.toolCallId,
+              ts: m.ts,
+              status: "done",
+            }));
+            const toolResultByCallId = new Map<string, string>();
+            for (const m of all) {
+              if (m.role === "tool" && m.tool_call_id) {
+                toolResultByCallId.set(m.tool_call_id, m.content);
+              }
+            }
+            const joined = all.map((m) => {
+              if (m.role !== "assistant" || !m.tool_calls?.length) return m;
+              return {
+                ...m,
+                tool_calls: m.tool_calls.map((tc) => {
+                  const r = toolResultByCallId.get(tc.id);
+                  if (r === undefined) return tc;
+                  return { ...tc, result: r, status: "done" as const };
+                }),
+              };
+            });
+            loadHistory(joined);
           }
         }
-        // join result 回 assistant.tool_calls[i].result
-        const joined = all.map((m) => {
-          if (m.role !== "assistant" || !m.tool_calls?.length) return m;
-          return {
-            ...m,
-            tool_calls: m.tool_calls.map((tc) => {
-              const r = toolResultByCallId.get(tc.id);
-              if (r === undefined) return tc;
-              return { ...tc, result: r, status: "done" as const };
-            }),
-          };
-        });
-        loadHistory(joined);
+
+        setSessionId(sid);
       } catch (e) {
-        console.warn("[BriefingTwoColumn] load task chat 历史失败:", e);
+        console.warn("[BriefingTwoColumn] mount session 链路失败:", e);
       } finally {
         if (!cancelled) setHistoryLoading(false);
       }
@@ -364,9 +347,9 @@ function DetailPane({
     return () => {
       cancelled = true;
     };
-    // 切 task (chatKey 变) 重 load. loadHistory 是稳定 useCallback ref.
+    // 切 task 重跑. loadHistory 稳定 ref.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatKey, task.title]);
+  }, [chatKey, task.taskUid, task.title]);
 
   // 新消息进来自动滚到底
   useEffect(() => {

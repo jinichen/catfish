@@ -46,7 +46,32 @@ fn open_db_for_write() -> Result<Connection, String> {
     conn.busy_timeout(std::time::Duration::from_millis(BUSY_TIMEOUT_MS as u64))
         .map_err(|e| format!("设 busy_timeout 失败: {e}"))?;
     // 不强制设 WAL —— hermes 自己起来时会设, 我们尊重它的配置
+
+    // P3.3.19 (6/11): catfish sidecar 表 — 不动 hermes 上游 sessions/messages,
+    // 加自家表存 task_uid 关联 (跟 hermes 0.16 schema 隔离, 上游升级不冲突).
+    ensure_catfish_sidecar_schema(&conn)?;
+
     Ok(conn)
+}
+
+/// P3.3.19 (6/11): 建 catfish 自家 sidecar 表 (IF NOT EXISTS 幂等).
+/// 不动 hermes sessions / messages. 跟 hermes 0.16 升级隔离 (公理: monkey-patch
+/// 不 fork 上游). 表前缀 catfish_ 防撞.
+fn ensure_catfish_sidecar_schema(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS catfish_session_metadata (
+            session_id TEXT PRIMARY KEY,
+            task_uid TEXT,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_catfish_metadata_task_uid
+            ON catfish_session_metadata(task_uid);
+        "#,
+    )
+    .map_err(|e| format!("建 catfish_session_metadata 表失败: {e}"))?;
+    Ok(())
 }
 
 fn now_unix() -> f64 {
@@ -287,6 +312,136 @@ pub async fn session_check(session_id: String) -> Result<Option<String>, String>
             .optional()
             .map_err(|e| format!("查 session 失败: {e}"))?;
         Ok::<Option<String>, String>(source)
+    })
+    .await
+    .map_err(|e| format!("内部错误: {e}"))?
+}
+
+// ============================================================
+// P3.3.19 (6/11): catfish_session_metadata sidecar — task_uid ↔ session_id 关联
+//
+// 设计:
+//   - 1 task 可关联 N session (老 task chat 历史 + 新对话不强制合并)
+//   - latest session 走 ORDER BY created_at DESC LIMIT 1
+//   - DetailPane / ChatTab 都查 sidecar 找 task 的 session, 在哪边发都进同一 session
+//   - manifesto 兼容: 这是员工本机, 中央不读 (公理 4)
+// ============================================================
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTaskAssoc {
+    pub session_id: String,
+    pub task_uid: Option<String>,
+    pub created_at: f64,
+    pub updated_at: f64,
+}
+
+/// 绑/改 一条 session 的 task_uid. 同 session_id 多次调 → UPDATE.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn session_set_task_uid(
+    session_id: String,
+    task_uid: Option<String>,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let conn = open_db_for_write()?;
+        let now = now_unix();
+        conn.execute(
+            r#"
+            INSERT INTO catfish_session_metadata (session_id, task_uid, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?3)
+            ON CONFLICT(session_id) DO UPDATE SET
+                task_uid = excluded.task_uid,
+                updated_at = excluded.updated_at
+            "#,
+            params![session_id, task_uid, now],
+        )
+        .map_err(|e| format!("写 catfish_session_metadata 失败: {e}"))?;
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|e| format!("内部错误: {e}"))?
+}
+
+/// 查 session_id 对应的 task_uid (None = 没绑或老 session).
+#[tauri::command(rename_all = "camelCase")]
+pub async fn session_get_task_uid(session_id: String) -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        let conn = open_db_for_write()?;
+        let task_uid: Option<String> = conn
+            .query_row(
+                "SELECT task_uid FROM catfish_session_metadata WHERE session_id = ?1",
+                params![session_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("查 task_uid 失败: {e}"))?
+            .flatten();
+        Ok::<Option<String>, String>(task_uid)
+    })
+    .await
+    .map_err(|e| format!("内部错误: {e}"))?
+}
+
+/// 查 task_uid 对应的 latest session_id (一个 task 可能多 session, 取 created_at desc 第一).
+/// 返 None = 这 task 还没 session, caller 应 sessionCreate + session_set_task_uid.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn session_get_by_task_uid(task_uid: String) -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        let conn = open_db_for_write()?;
+        let session_id: Option<String> = conn
+            .query_row(
+                r#"
+                SELECT m.session_id
+                FROM catfish_session_metadata m
+                JOIN sessions s ON s.id = m.session_id
+                WHERE m.task_uid = ?1
+                ORDER BY s.started_at DESC
+                LIMIT 1
+                "#,
+                params![task_uid],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("查 session by task_uid 失败: {e}"))?;
+        Ok::<Option<String>, String>(session_id)
+    })
+    .await
+    .map_err(|e| format!("内部错误: {e}"))?
+}
+
+/// 列 task_uid 对应的所有 session (按 started_at desc). 给 ChatSidebar 显 task 历史.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn list_sessions_by_task_uid(
+    task_uid: String,
+) -> Result<Vec<SessionTaskAssoc>, String> {
+    tokio::task::spawn_blocking(move || {
+        let conn = open_db_for_write()?;
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT m.session_id, m.task_uid, m.created_at, m.updated_at
+                FROM catfish_session_metadata m
+                JOIN sessions s ON s.id = m.session_id
+                WHERE m.task_uid = ?1
+                ORDER BY s.started_at DESC
+                "#,
+            )
+            .map_err(|e| format!("prepare 失败: {e}"))?;
+        let rows = stmt
+            .query_map(params![task_uid], |row| {
+                Ok(SessionTaskAssoc {
+                    session_id: row.get(0)?,
+                    task_uid: row.get(1)?,
+                    created_at: row.get(2)?,
+                    updated_at: row.get(3)?,
+                })
+            })
+            .map_err(|e| format!("query_map 失败: {e}"))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| format!("row decode 失败: {e}"))?);
+        }
+        Ok::<Vec<SessionTaskAssoc>, String>(out)
     })
     .await
     .map_err(|e| format!("内部错误: {e}"))?

@@ -712,6 +712,8 @@ async function _ensureTaskChatSummariesFreshImpl(model: string): Promise<void> {
   try {
     const { advisorCacheGet, advisorCacheSave } = await import("./advisor_cache");
     const { taskChatGet, taskChatSize } = await import("./task_chat");
+    const { sessionGetByTaskUid, getSession } = await import("./tauri");
+    const { loadSessionMessagesAsChat } = await import("./sessionMessages");
     const cached = await advisorCacheGet();
     if (!cached || !Array.isArray(cached.result?.mainTasks)) {
       console.log("[advisor summary] ensure 跳过 — 没 cache 或没 mainTasks");
@@ -728,37 +730,89 @@ async function _ensureTaskChatSummariesFreshImpl(model: string): Promise<void> {
 
     const cachedSummaries = (cached.taskChatSummaries ?? {}) as Record<
       string,
-      { summary: string; jsonlSize: number; computedAt: string }
+      { summary: string; jsonlSize: number; messageCount?: number; computedAt: string }
     >;
     const newSummaries = { ...cachedSummaries };
     let llmCalls = 0;
     let cacheHits = 0;
-    let emptyJsonl = 0;
+    let emptyTasks = 0;
+    let fromStateDb = 0;
+    let fromJsonl = 0;
 
     await Promise.all(
       mainTasks.map(async (t: { taskUid: string; title: string }) => {
         try {
-          const size = await taskChatSize(t.taskUid);
-          if (size === 0) {
-            emptyJsonl++;
-            return;
+          // P3.3.19 C Phase 5 (6/11): 优先拉 state.db. fallback 老 jsonl.
+          //   1. sessionGetByTaskUid(taskUid) → 有 sessionId 就用 state.db
+          //   2. 没有 sessionId (advisor 早过 task chat 但还没 DetailPane mount 触发 sessionCreate)
+          //      → 退回 jsonl (Phase 4 migration 不一定已跑完)
+          const sid = await sessionGetByTaskUid(t.taskUid).catch(() => null);
+
+          let messages: Array<{ role: string; content: string; ts: string }> = [];
+          let currentCount = 0;
+
+          if (sid) {
+            // state.db 路径
+            try {
+              const detail = await getSession(sid);
+              currentCount = detail.meta?.messageCount ?? detail.messages.length;
+              if (currentCount === 0) {
+                emptyTasks++;
+                return;
+              }
+              // 转 ChatMessage 后再降级成 summarizeTaskChat 接受的 shape
+              const chatMessages = loadSessionMessagesAsChat(detail);
+              messages = chatMessages.map((m) => ({
+                role: m.role,
+                content: m.content,
+                ts: m.ts,
+              }));
+              fromStateDb++;
+            } catch (e) {
+              console.warn(`[advisor summary] state.db 拉 ${sid} 失败, fallback jsonl:`, e);
+              sid && (await null); // noop, fall through
+            }
           }
+
+          if (!sid || messages.length === 0) {
+            // jsonl fallback (Phase 4 migration 未跑完 / 没 session 时)
+            const size = await taskChatSize(t.taskUid).catch(() => 0);
+            if (size === 0) {
+              emptyTasks++;
+              return;
+            }
+            const jsonlMsgs = await taskChatGet(t.taskUid).catch(() => []);
+            if (jsonlMsgs.length === 0) {
+              emptyTasks++;
+              return;
+            }
+            messages = jsonlMsgs.map((m) => ({
+              role: m.role,
+              content: m.content,
+              ts: m.ts,
+            }));
+            currentCount = size; // 老 hash 用 size
+            fromJsonl++;
+          }
+
+          // cache 失效判断: 优先 messageCount 对比 (state.db), 没 messageCount 则 jsonlSize
           const hit = cachedSummaries[t.taskUid];
-          if (hit && hit.jsonlSize === size && hit.summary) {
+          const cacheValid = hit && hit.summary && (
+            (typeof hit.messageCount === "number" && hit.messageCount === currentCount) ||
+            (typeof hit.messageCount !== "number" && hit.jsonlSize === currentCount)
+          );
+          if (cacheValid) {
             cacheHits++;
             return;
           }
+
           llmCalls++;
-          const messages = await taskChatGet(t.taskUid);
-          if (messages.length === 0) {
-            emptyJsonl++;
-            return;
-          }
           const summary = await summarizeTaskChat(t.title, t.taskUid, messages, model);
           if (summary) {
             newSummaries[t.taskUid] = {
               summary,
-              jsonlSize: size,
+              jsonlSize: currentCount,  // backward compat 留同字段, value 取 messageCount/size
+              messageCount: currentCount,
               computedAt: new Date().toISOString(),
             };
           }
@@ -770,7 +824,8 @@ async function _ensureTaskChatSummariesFreshImpl(model: string): Promise<void> {
 
     console.log(
       `[advisor summary] ensure 完成 — ${mainTasks.length} task ` +
-        `(${emptyJsonl} 没聊过, ${cacheHits} cache 命中, ${llmCalls} 调 LLM)`,
+        `(${emptyTasks} 没聊过, ${cacheHits} cache 命中, ${llmCalls} 调 LLM; ` +
+        `源: ${fromStateDb} state.db / ${fromJsonl} jsonl)`,
     );
 
     if (llmCalls > 0) {
