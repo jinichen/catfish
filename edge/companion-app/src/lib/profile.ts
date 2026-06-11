@@ -532,18 +532,79 @@ export async function recomputeProfile(model: string): Promise<Profile | null> {
 
   _recomputingProfile = (async () => {
     const nextRecomputeAt = await profileNextRecomputeAt(7);
-    const llmProfile = await inferProfileFromContext(m);
-    if (llmProfile) {
-      llmProfile.nextRecomputeAt = nextRecomputeAt;
-      await profileSave(llmProfile);
+
+    // P3.3.28 (6/11): 加 race timeout, 跟 P3.3.25 advisor 同款思路.
+    //   早安卡在"员工画像识别中" 真因: catfish-private-main TTFT 86s 极慢
+    //   (gateway log 自己 warning "上游可能拥堵"), 老代码同步 await 永远挂.
+    //   timeout 超时返 placeholder 或 saved profile (见 fix 段) → AdvisorView 走 no_profile.
+    //   后台 inferProfileFromContext 跑完仍会 profileSave (覆盖 placeholder),
+    //   下次 ensureRecomputed 命中 saved profile, 不用再调 LLM.
+    // 6/11 follow-up: 60_000 → 180_000 跟 advisor 一致. 60s 私有模型撑挂概率太
+    //   大每次都 race timeout, 真值进不来. 180s 给私有模型足够时间.
+    const LLM_TIMEOUT_MS = 180_000;
+    const llmPromise = inferProfileFromContext(m);
+
+    // 后台 LLM 跑完总是写 saved (race 输了也写 — 下次 mount 命中)
+    void llmPromise
+      .then(async (llm) => {
+        if (!llm) return;
+        llm.nextRecomputeAt = nextRecomputeAt;
+        await profileSave(llm).catch((e) =>
+          console.warn("[profile] 后台 save 挂:", e),
+        );
+        console.log("[profile] LLM 推断 OK (后台写)", {
+          tier: llm.tier,
+          centralState: llm.centralState,
+          confidence: llm.confidence,
+        });
+      })
+      .catch((e) => console.warn("[profile] 后台 LLM 挂:", e));
+
+    const timeoutPromise = new Promise<"TIMEOUT">((resolve) =>
+      setTimeout(() => {
+        console.warn(
+          `[profile] LLM 客户端 ${LLM_TIMEOUT_MS / 1000}s 超时, 返占位 ` +
+            "(后台 fetch 仍在跑, 完成会写 cache, 下次 mount 命中)",
+        );
+        resolve("TIMEOUT");
+      }, LLM_TIMEOUT_MS),
+    );
+
+    const winner = await Promise.race<Profile | null | "TIMEOUT">([
+      llmPromise,
+      timeoutPromise,
+    ]);
+
+    if (winner !== "TIMEOUT" && winner) {
+      // LLM 在 60s 内完成 — 直接返 (后台 then 块也会再写一遍, save 幂等)
+      winner.nextRecomputeAt = nextRecomputeAt;
+      await profileSave(winner);
       console.log("[profile] LLM 推断 OK", {
-        tier: llmProfile.tier,
-        centralState: llmProfile.centralState,
-        confidence: llmProfile.confidence,
+        tier: winner.tier,
+        centralState: winner.centralState,
+        confidence: winner.confidence,
       });
-      return llmProfile;
+      return winner;
     }
-    // LLM 挂或数据空 → 占位
+
+    // P3.3.28 fix (6/11): race timeout 时**不要覆盖已有 saved profile**.
+    //   之前 bug: race timeout 写 placeholder confidence=0 → 覆盖了之前 0.88
+    //   的好 profile → AdvisorView ConfidenceHint 显"🪴刚认识你"黄条假性提示.
+    //   修: timeout 时先看有没 saved, 有就返 saved (保留 0.88), 没才写 placeholder.
+    //   后台 LLM 完成仍会 profileSave 真值 (覆盖 placeholder 或更新 saved).
+    if (winner === "TIMEOUT") {
+      const existing = await profileGet().catch(() => null);
+      if (existing && existing.confidence > 0) {
+        console.log(
+          "[profile] race timeout 返已有 saved profile (confidence=",
+          existing.confidence,
+          ", 后台 LLM 完成仍会更新)",
+        );
+        return existing;
+      }
+    }
+
+    // race timeout 但没 saved (新员工首启) 或 LLM 真返 null → 占位
     const placeholder: Profile = {
       tier: "mid",
       centralState: "weak",
@@ -551,7 +612,10 @@ export async function recomputeProfile(model: string): Promise<Profile | null> {
       keyPeople: [],
       keyProjects: [],
       confidence: 0.0,
-      evidence: ["LLM 推断挂 / 数据稀疏, 占位中. 用 catfish 几天后自动校准"],
+      evidence:
+        winner === "TIMEOUT"
+          ? ["LLM 推断 60s 超时 (私有模型慢), 占位中. 下次 mount 后台完成会自动更新"]
+          : ["LLM 推断挂 / 数据稀疏, 占位中. 用 catfish 几天后自动校准"],
       updatedAt: new Date().toISOString(),
       nextRecomputeAt,
     };
