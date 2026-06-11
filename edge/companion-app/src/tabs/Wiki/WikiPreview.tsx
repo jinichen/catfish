@@ -13,7 +13,16 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useWikiStore } from "../../store/wiki";
 import { topKRelated } from "../../lib/wikiRelevance";
-import { wikiDeleteFile, wikiUpdateFile, toolBridgeCallTool } from "../../lib/tauri";
+import {
+  wikiDeleteFile,
+  wikiUpdateFile,
+  toolBridgeCallTool,
+  wikiUninstallShared,
+  wikiSensitiveTermsEnsure,
+} from "../../lib/tauri";
+// P3.3.18 Phase 4 P2 (6/10): 检 hub 是否 stale
+import { config } from "../../lib/env";
+import { fetchWithAuth } from "../../lib/me";
 
 const KIND_LABEL: Record<string, string> = {
   entity: "实体",
@@ -50,6 +59,78 @@ export default function WikiPreview() {
   const [shareWarnings, setShareWarnings] = useState<Array<{ category: string; hits: any[]; advice: string }>>([]);
   const [shareError, setShareError] = useState<string | null>(null);
   const [shareSuccess, setShareSuccess] = useState<string | null>(null);
+
+  // P3.3.18 Phase 4 P2 (6/10): 卸载本机部门 wiki 副本 state. 5 秒 confirm 同款.
+  const [confirmUninstall, setConfirmUninstall] = useState(false);
+  const [uninstalling, setUninstalling] = useState(false);
+  const [uninstallErr, setUninstallErr] = useState<string | null>(null);
+
+  // P3.3.18 Phase 4 P2 (6/10): hub stale check for 部门 wiki. 选了 wiki-shared/
+  // 文件时, 后台拉 /v1/wiki/documents/<ns>/<file_id>, 看 stale_after_unpublish.
+  // 不写本机 .stale sidecar (manifesto 公理 4 — 中央不直接动员工本机文件).
+  // 只在 UI 显警告 banner.
+  const [hubStaleInfo, setHubStaleInfo] = useState<{
+    stale: boolean;
+    unpublished_at: string | null;
+    unpublished_reason: string | null;
+  } | null>(null);
+  useEffect(() => {
+    setHubStaleInfo(null);
+    if (!selectedFile) return;
+    const rp = selectedFile.info.rel_path;
+    if (!rp.startsWith("wiki-shared/dept/")) return;
+    // parse "wiki-shared/dept/<部门>/<file_id>.md" → ns=dept/<部门>, file_id=<stem>
+    const m = rp.match(/^wiki-shared\/(dept\/[^/]+)\/([^/]+)\.md$/);
+    if (!m) return;
+    const ns = m[1];
+    const fileId = m[2];
+    let cancelled = false;
+    void (async () => {
+      try {
+        const url = `${config.backendUrl}/v1/wiki/documents/${encodeURIComponent(ns)}/${encodeURIComponent(fileId)}`;
+        const res = await fetchWithAuth(url);
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (cancelled) return;
+        setHubStaleInfo({
+          stale: data?.stale_after_unpublish === true,
+          unpublished_at: data?.unpublished_at ?? null,
+          unpublished_reason: data?.unpublished_reason ?? null,
+        });
+      } catch (e) {
+        // 不阻塞 — 网络挂时不影响员工看本机副本
+        console.warn("[WikiPreview] hub stale check 失败:", e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedFile?.info.rel_path]);
+  useEffect(() => {
+    if (!confirmUninstall) return;
+    const t = setTimeout(() => setConfirmUninstall(false), 5000);
+    return () => clearTimeout(t);
+  }, [confirmUninstall]);
+
+  const handleUninstallClick = async () => {
+    if (!selectedFile) return;
+    if (!confirmUninstall) {
+      setConfirmUninstall(true);
+      return;
+    }
+    setUninstalling(true);
+    setUninstallErr(null);
+    try {
+      await wikiUninstallShared(selectedFile.info.rel_path);
+      await selectFile(null);
+      await loadFiles();
+    } catch (e) {
+      setUninstallErr(String(e));
+      setConfirmUninstall(false);
+    } finally {
+      setUninstalling(false);
+    }
+  };
 
   // selectedFile 切换时 reset edit state
   useEffect(() => {
@@ -131,6 +212,9 @@ export default function WikiPreview() {
     setShareSuccess(null);
   }, [selectedFile?.info.rel_path]);
 
+  // P3.3.18 Phase 4 P2 (6/10): 敏感词文件 onboarding state
+  const [sensitiveTermsHint, setSensitiveTermsHint] = useState<string | null>(null);
+
   const openShareDialog = () => {
     if (!selectedFile) return;
     setShareDialogOpen(true);
@@ -138,7 +222,21 @@ export default function WikiPreview() {
     setShareWarnings([]);
     setShareError(null);
     setShareSuccess(null);
+    setSensitiveTermsHint(null);
     // 不预填 namespace, 让员工 explicit 填 — manifesto 公理 3 (不静默自决)
+  };
+
+  const handleEnsureSensitiveTerms = async () => {
+    try {
+      const result = await wikiSensitiveTermsEnsure();
+      if (result.created) {
+        setSensitiveTermsHint(`✓ 已创建模板: ${result.path}. 用 Finder 打开编辑, 删 # 启用对应行.`);
+      } else {
+        setSensitiveTermsHint(`✓ 已存在: ${result.path}. 用 Finder 打开编辑.`);
+      }
+    } catch (e) {
+      setSensitiveTermsHint(`✗ 创建失败: ${e instanceof Error ? e.message : String(e)}`);
+    }
   };
 
   const handleShare = async (acknowledgeWarnings: boolean) => {
@@ -333,24 +431,80 @@ export default function WikiPreview() {
       {/* P3.2 4 信号 相关推荐 — 渲染 in body 前, 先 build top-K */}
       <RelatedRecommend info={info} />
 
+      {/* P3.3.18 Phase 4 P2 (6/10): 部门 wiki 已被原作者撤回的警告 banner — 选了
+        wiki-shared/ 时后台 fetch hub 检查 stale_after_unpublish=true 时显. */}
+      {hubStaleInfo?.stale && (
+        <div
+          style={{
+            background: "#fef3c7",
+            border: "1px solid #f59e0b",
+            color: "#78350f",
+            padding: "10px 12px",
+            borderRadius: 6,
+            fontSize: 13,
+            lineHeight: 1.5,
+            marginBottom: 10,
+          }}
+        >
+          <strong>⚠ 原作者已撤回这条 wiki</strong>
+          {hubStaleInfo.unpublished_at && (
+            <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.8 }}>
+              ({hubStaleInfo.unpublished_at.slice(0, 10)})
+            </span>
+          )}
+          <div style={{ marginTop: 4 }}>
+            中央 hub body 已清零, 但你本机这份副本不动 (manifesto 公理 4 — 中央不强制清你本机).
+            自己决定是否点 "🗑 卸载本机副本".
+          </div>
+          {hubStaleInfo.unpublished_reason && (
+            <div style={{ marginTop: 4, fontStyle: "italic" }}>
+              原作者撤回原因: {hubStaleInfo.unpublished_reason}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* P35 (6/5): 编辑 toggle + action bar — 复用 banner btn 系列 */}
       {/* P3.3.4 (6/9): action bar 加删除按钮 (mv 到 wiki/.trash/<ts>-原名.md) */}
       {/* P3.3.18 Phase 4 (6/10): 已装部门 wiki (wiki-shared/) read-only, 不显编辑/删除/分享 */}
       <div className="wiki-preview__actions">
         {selectedFile?.info.rel_path.startsWith("wiki-shared/") && (
-          <span
-            style={{
-              fontSize: 12,
-              color: "var(--catfish-text-muted)",
-              padding: "4px 10px",
-              background: "rgba(124,58,237,0.08)",
-              border: "1px solid rgba(124,58,237,0.2)",
-              borderRadius: 4,
-            }}
-            title="来自部门 wiki-hub 的副本, 不能本机改也不能再 share. 原作者撤回时这里会显 stale 标."
-          >
-            📥 部门 wiki · read-only (来自 hub)
-          </span>
+          <>
+            <span
+              style={{
+                fontSize: 12,
+                color: "var(--catfish-text-muted)",
+                padding: "4px 10px",
+                background: "rgba(124,58,237,0.08)",
+                border: "1px solid rgba(124,58,237,0.2)",
+                borderRadius: 4,
+              }}
+              title="来自部门 wiki-hub 的副本, 不能本机改也不能再 share. 原作者撤回时这里会显 stale 标."
+            >
+              📥 部门 wiki · read-only (来自 hub)
+            </span>
+            {/* P3.3.18 Phase 4 P2 (6/10): 卸载本机副本 — 5 秒 confirm */}
+            <button
+              className={
+                confirmUninstall
+                  ? "approval-banner__btn-deny"
+                  : "approval-banner__btn-link"
+              }
+              onClick={handleUninstallClick}
+              disabled={uninstalling}
+              title={
+                confirmUninstall
+                  ? "再点一次确认卸载 (mv 到 wiki-shared/.trash/)"
+                  : "卸载本机这份部门 wiki 副本 — 软删, 5 秒内再点确认. 中央 hub 那一份不动."
+              }
+            >
+              {uninstalling
+                ? "卸载中…"
+                : confirmUninstall
+                  ? "确认卸载"
+                  : "🗑 卸载本机副本"}
+            </button>
+          </>
         )}
         {!editing && !selectedFile?.info.rel_path.startsWith("wiki-shared/") && (
           <>
@@ -422,6 +576,9 @@ export default function WikiPreview() {
       {deleteErr && (
         <div className="wiki-preview__save-err">删除失败: {deleteErr}</div>
       )}
+      {uninstallErr && (
+        <div className="wiki-preview__save-err">卸载失败: {uninstallErr}</div>
+      )}
 
       {/* P3.3.18 (6/10): 分享 dialog */}
       {shareDialogOpen && selectedFile && (
@@ -481,6 +638,56 @@ export default function WikiPreview() {
                 <li>客户名 / 项目细节 / 关键人名 这种敏感内容, 决定前想清楚</li>
               </ul>
             </div>
+
+            {/* P3.3.18 Phase 4 P2: 敏感词文件 onboarding hint */}
+            <div
+              style={{
+                background: "rgba(74,158,255,0.08)",
+                border: "1px solid rgba(74,158,255,0.2)",
+                padding: "8px 12px",
+                borderRadius: 4,
+                fontSize: 12,
+                marginBottom: 12,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+              }}
+            >
+              <span style={{ flex: 1 }}>
+                💡 想扫客户名/项目代号? 配 <code>~/.catfish/wiki/sensitive_terms.txt</code>
+              </span>
+              <button
+                onClick={() => void handleEnsureSensitiveTerms()}
+                disabled={sharing}
+                style={{
+                  fontSize: 11,
+                  padding: "3px 10px",
+                  background: "transparent",
+                  color: "var(--catfish-text)",
+                  border: "1px solid var(--catfish-border)",
+                  borderRadius: 3,
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                创建模板
+              </button>
+            </div>
+            {sensitiveTermsHint && (
+              <div
+                style={{
+                  fontSize: 11,
+                  marginBottom: 12,
+                  color: sensitiveTermsHint.startsWith("✗") ? "#dc2626" : "#16a34a",
+                  padding: "4px 8px",
+                  background: sensitiveTermsHint.startsWith("✗") ? "#fee2e2" : "#d1fae5",
+                  borderRadius: 3,
+                }}
+              >
+                {sensitiveTermsHint}
+              </div>
+            )}
 
             <div style={{ marginBottom: 16 }}>
               <label

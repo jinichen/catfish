@@ -584,6 +584,10 @@ pub fn run() {
             commands::wiki_write::wiki_update_file,
             // P3.3.4 (6/9): wiki 软删 (mv 到 .trash)
             commands::wiki_write::wiki_delete_file,
+            // P3.3.18 Phase 4 P2 (6/10): 卸载本机部门 wiki 副本 (软删 → wiki-shared/.trash/)
+            commands::wiki_write::wiki_uninstall_shared,
+            // P3.3.18 Phase 4 P2 (6/10): 敏感词文件 onboarding (catfish_wiki_publish 扫用)
+            commands::wiki_write::wiki_sensitive_terms_ensure,
             // P16 (6/5): 对话上传文件 auto ingest → wiki/raw/sources/
             commands::wiki_write::wiki_ingest_source,
             // P28 (6/5): Companion Dashboard 改 gateway URL/token

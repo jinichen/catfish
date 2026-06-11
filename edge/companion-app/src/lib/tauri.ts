@@ -280,6 +280,19 @@ export const wikiListFiles = () => rawInvoke<WikiFileInfo[]>("wiki_list_files");
 export const wikiReadFile = (relPath: string) =>
   rawInvoke<WikiFileFull>("wiki_read_file", { relPath });
 
+// P3.3.18 Phase 4 P2 (6/10): 卸载本机部门 wiki 副本 (软删 → wiki-shared/.trash/)
+export const wikiUninstallShared = (relPath: string) =>
+  rawInvoke<WikiWriteResult>("wiki_uninstall_shared", { relPath });
+
+// P3.3.18 Phase 4 P2 (6/10): 敏感词文件 onboarding (catfish_wiki_publish 扫用)
+export interface SensitiveTermsCheck {
+  exists: boolean;
+  path: string;
+  created: boolean;  // true = 本次刚创建模板
+}
+export const wikiSensitiveTermsEnsure = () =>
+  rawInvoke<SensitiveTermsCheck>("wiki_sensitive_terms_ensure");
+
 // P3.3.18 Phase 4 (6/10): 扫 ~/.catfish/wiki-shared/ 已装部门 wiki
 export interface InstalledWikiSharedInfo {
   relPath: string;          // wiki-shared/dept/<name>/<file_id>.md (相对 ~/.catfish/)

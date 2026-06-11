@@ -278,6 +278,136 @@ pub async fn wiki_delete_file(rel_path: String) -> Result<WikiWriteResult, Strin
     })
 }
 
+// ============================================================
+// P3.3.18 Phase 4 P2 (6/10): 卸载本机部门 wiki 副本
+//
+// manifesto 公理 3/4 compliant — 这是**员工自己点 button**触发, 不是中央 push.
+// 走跟 wiki_delete_file 同款软删 (mv 到 .trash 目录), 同时删 .meta.json sidecar.
+// 软删 30 天后员工自己用 Finder/Terminal 清.
+// ============================================================
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn wiki_uninstall_shared(rel_path: String) -> Result<WikiWriteResult, String> {
+    // 路径白名单 — 只接受 wiki-shared/dept/<部门>/<file_id>.md
+    if rel_path.contains("..") {
+        return Err(format!("rel_path 含 ..: {rel_path}"));
+    }
+    if !rel_path.starts_with("wiki-shared/dept/") {
+        return Err(format!(
+            "只能卸载 wiki-shared/dept/<部门>/ 下文件 (拿到 {rel_path})"
+        ));
+    }
+    if !rel_path.ends_with(".md") {
+        return Err(format!("只能卸载 .md 文件: {rel_path}"));
+    }
+
+    let home = catfish_home()?;
+    let abs = home.join(&rel_path);
+    if !abs.is_file() {
+        return Err(format!("file 不存在: {rel_path}"));
+    }
+
+    let stem = abs
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or("无法取 file stem")?
+        .to_string();
+    let meta_path = abs
+        .parent()
+        .ok_or("无 parent dir")?
+        .join(format!("{stem}.meta.json"));
+
+    // mv 到 wiki-shared/.trash/<ts>-<orig-path>.md, .meta.json 一起
+    let trash_dir = home.join("wiki-shared").join(".trash");
+    fs::create_dir_all(&trash_dir)
+        .map_err(|e| format!("建 wiki-shared/.trash 目录失败: {e}"))?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    // 给 trash 文件名带上 dept 路径片段防撞 (a/b/c.md → ts-a_b_c.md)
+    let safe_orig = rel_path.replace('/', "_");
+    let trashed_name = format!("{ts}-{safe_orig}");
+    let dst = trash_dir.join(&trashed_name);
+
+    let bytes = fs::metadata(&abs).map(|m| m.len()).unwrap_or(0);
+    fs::rename(&abs, &dst).map_err(|e| format!("mv {abs:?} → {dst:?} 失败: {e}"))?;
+
+    // sidecar 一起 mv (不在意失败 — sidecar 是辅助)
+    if meta_path.exists() {
+        let meta_trashed = trash_dir.join(format!("{ts}-{safe_orig}.meta.json"));
+        let _ = fs::rename(&meta_path, &meta_trashed);
+    }
+
+    Ok(WikiWriteResult {
+        rel_path: format!("wiki-shared/.trash/{trashed_name}"),
+        bytes,
+        created: false,
+    })
+}
+
+// ============================================================
+// P3.3.18 Phase 4 P2 (6/10): 敏感词文件 onboarding
+//
+// catfish_wiki_publish 扫敏感词从 ~/.catfish/wiki/sensitive_terms.txt 读 (Phase 2).
+// 文件不存在时 publish 不扫敏感词 (其他 3 层凭据/PII/内网 仍扫). 这命令给员工首次
+// 创建默认模板, WikiTree 顶部"敏感词文件没设"提示按钮触发.
+// ============================================================
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SensitiveTermsCheck {
+    pub exists: bool,
+    pub path: String,
+    pub created: bool,
+}
+
+#[tauri::command]
+pub async fn wiki_sensitive_terms_ensure() -> Result<SensitiveTermsCheck, String> {
+    let home = catfish_home()?;
+    let wiki_dir = home.join("wiki");
+    fs::create_dir_all(&wiki_dir)
+        .map_err(|e| format!("建 wiki/ 目录失败: {e}"))?;
+    let path = wiki_dir.join("sensitive_terms.txt");
+    if path.exists() {
+        return Ok(SensitiveTermsCheck {
+            exists: true,
+            path: path.to_string_lossy().to_string(),
+            created: false,
+        });
+    }
+
+    // 默认模板 — 全部注释掉, 员工自己填
+    let template = "# ~/.catfish/wiki/sensitive_terms.txt — 员工自配 wiki publish 敏感词\n\
+# 一行一个词. # 开头注释跳过. 大小写不敏感, 子串匹配.\n\
+# catfish_wiki_publish 扫到给 warning (不自动 redact, 员工自己拍).\n\
+#\n\
+# 推荐列:\n\
+#   - 客户名 (e.g. FFCS / 中电福富 / ...)\n\
+#   - 项目代号 (e.g. CSMM-4 / ITSS / ...)\n\
+#   - 关键人姓名 (e.g. 老李 / 黄捷 / ...)\n\
+#\n\
+# 改了不用重启, 下次 catfish_wiki_publish 即时生效.\n\
+#\n\
+# === 删 # 启用对应行, 或自己加新行 ===\n\
+# FFCS\n\
+# 中电福富\n\
+# CSMM-4\n\
+# ITSS\n\
+# 老李\n\
+# 黄捷\n";
+
+    fs::write(&path, template)
+        .map_err(|e| format!("写 sensitive_terms.txt 失败: {e}"))?;
+
+    Ok(SensitiveTermsCheck {
+        exists: true,
+        path: path.to_string_lossy().to_string(),
+        created: true,
+    })
+}
+
 /// 真**简单 today 真 YYYY-MM-DD format** — 不引 chrono dep (太重), 用 std time + hand calc.
 fn chrono_today() -> String {
     let secs = std::time::SystemTime::now()
