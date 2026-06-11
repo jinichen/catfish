@@ -77,7 +77,10 @@ export default function WikiHubCard() {
 
   const refresh = async () => {
     try {
-      const url = `${config.backendUrl}/v1/wiki/documents`;
+      // P3.3.37 (6/12 鸿波 audit): backendUrl 切 8642 hermes proxy 对 /v1/wiki/*
+      //   返 500. 用 gatewayUrl 永远 8999 直连 (P3.3.37 isGatewayDirectPath 白名单
+      //   已让 fetchWithAuth 走 OAuth path).
+      const url = `${config.gatewayUrl}/v1/wiki/documents`;
       // 并发拉 hub + 本机已装. 本机失败不阻塞.
       const [hubRes, installedResult] = await Promise.allSettled([
         fetchWithAuth(url),
@@ -98,13 +101,14 @@ export default function WikiHubCard() {
 
       // hub
       if (hubRes.status === "rejected") {
-        setError(hubRes.reason instanceof Error ? hubRes.reason.message : String(hubRes.reason));
+        // P3.3.36 (6/12): 翻 Tauri webview "Load failed" 原始英文 → 中文友好
+        setError(friendlyWikiHubError(hubRes.reason));
         return;
       }
       const res = hubRes.value;
       if (!res.ok) {
         if (res.status === 502) {
-          setError("wiki-hub 未启动 (dev: python -m catfish_wiki_hub.app, port 8994)");
+          setError("中央 wiki-hub 服务未就绪 (gateway :8994 反代未启动)");
         } else if (res.status === 401) {
           setError("鉴权失败 — 请重新登录");
         } else {
@@ -116,11 +120,22 @@ export default function WikiHubCard() {
       setDocs(data.documents || []);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(friendlyWikiHubError(e));
     } finally {
       setLoading(false);
     }
   };
+
+  /** P3.3.36 文案翻译, P3.3.37 真 root cause 修后罕见触发.
+   *  真因是 /v1/wiki/* 走 hermes proxy 500, P3.3.37 加白名单直连 gateway 修好.
+   *  helper 留作 safety net — 真网络挂 / VPN 异常时给友好 message. */
+  function friendlyWikiHubError(raw: unknown): string {
+    const msg = raw instanceof Error ? raw.message : String(raw);
+    if (/load failed|failed to fetch|networkerror/i.test(msg)) {
+      return "网络层挂了 (检查 LLM Gateway 是否在跑 / VPN / 防火墙). 真挂可看 console 详细错";
+    }
+    return msg;
+  }
 
   useEffect(() => {
     void refresh();
@@ -195,8 +210,9 @@ export default function WikiHubCard() {
           marginBottom: "var(--space-3)",
         }}
       >
+        {/* P3.3.38 (6/12): "Wiki Hub" → "知识库" 中文化 */}
         <h3 style={{ margin: 0 }}>
-          📚 {agentName} Wiki Hub
+          📚 {agentName} 知识库
           <span
             style={{
               fontSize: 12,
@@ -245,7 +261,7 @@ export default function WikiHubCard() {
             color: "var(--catfish-text-muted)",
           }}
         >
-          部门 wiki 市场 · 每分钟刷新
+          部门共享的知识文档 · 每分钟刷新
         </span>
       </div>
 

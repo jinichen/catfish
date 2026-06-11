@@ -104,7 +104,10 @@ export default function SkillsHubCard() {
   const refresh = async () => {
     // 并发拉 hub + 本机 my skills (本机失败不阻塞 hub 显)
     try {
-      const url = `${config.backendUrl}/v1/hub/skills`;
+      // P3.3.37 (6/12 鸿波 audit): config.backendUrl 在 hermes proxy 开时切 8642,
+      //   hermes proxy 对 /v1/hub/* 返 500. 改 config.gatewayUrl 永远 8999 直连
+      //   (P3.3.37 isGatewayDirectPath 白名单已让 fetchWithAuth 走 OAuth path).
+      const url = `${config.gatewayUrl}/v1/hub/skills`;
       const [hubRes, myResult] = await Promise.allSettled([
         fetchWithAuth(url),
         fetchMySkills(),
@@ -126,13 +129,14 @@ export default function SkillsHubCard() {
 
       // hub 拉
       if (hubRes.status === "rejected") {
-        setError(hubRes.reason instanceof Error ? hubRes.reason.message : String(hubRes.reason));
+        // P3.3.36 (6/12): 翻 Tauri webview "Load failed" 原始英文 → 中文友好
+        setError(friendlySkillsHubError(hubRes.reason));
         return;
       }
       const res = hubRes.value;
       if (!res.ok) {
         if (res.status === 502) {
-          setError("skills-hub 未启动 (dev: python -m catfish_skills_hub.app, port 8997)");
+          setError("中央 skills-hub 服务未就绪 (gateway :8997 反代未启动)");
         } else if (res.status === 401) {
           setError("鉴权失败 — 请重新登录");
         } else {
@@ -144,11 +148,27 @@ export default function SkillsHubCard() {
       setSkills(data.skills || []);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(friendlySkillsHubError(e));
     } finally {
       setLoading(false);
     }
   };
+
+  /** P3.3.36 (6/12) 文案翻译, P3.3.37 (6/12) 真 root cause 修后罕见触发.
+   *
+   *  P3.3.36 改前的真因: /v1/hub/* 走 hermes proxy 8642, hermes 对这 endpoint
+   *  返 500, webview fetch reject = "Load failed". P3.3.37 把 /v1/hub/* 加进
+   *  isGatewayDirectPath 白名单, OAuth 直连 gateway 8999, 真路径修好.
+   *
+   *  这 helper 保留作 safety net — 真有其他场景 fetch reject (网络真挂 / 防火墙
+   *  / VPN 异常) 时给员工友好 message, 不是原始英文 "Load failed". */
+  function friendlySkillsHubError(raw: unknown): string {
+    const msg = raw instanceof Error ? raw.message : String(raw);
+    if (/load failed|failed to fetch|networkerror/i.test(msg)) {
+      return "网络层挂了 (检查 LLM Gateway 是否在跑 / VPN / 防火墙). 真挂可看 console 详细错";
+    }
+    return msg;
+  }
 
   useEffect(() => {
     void refresh();
@@ -182,7 +202,8 @@ export default function SkillsHubCard() {
     if (installingKey) return;
     setInstallingKey(key);
     try {
-      const hubUrl = `${config.backendUrl}/v1/hub`;
+      // P3.3.37: 同步用 gatewayUrl 直连 8999 (不走 hermes proxy)
+      const hubUrl = `${config.gatewayUrl}/v1/hub`;
       const res = await toolBridgeCallTool("catfish_skill_install", {
         hub_skill: `${s.namespace}/${s.name}@${s.latest_version}`,
         hub_url: hubUrl,
@@ -237,8 +258,9 @@ export default function SkillsHubCard() {
           marginBottom: "var(--space-3)",
         }}
       >
+        {/* P3.3.38 (6/12): "Skills Hub" → "技能分享" 中文化 */}
         <h3 style={{ margin: 0 }}>
-          🛠️ {agentName} Skills Hub
+          🛠️ {agentName} 技能分享
           <span
             style={{
               fontSize: 12,
@@ -247,7 +269,7 @@ export default function SkillsHubCard() {
               marginLeft: "var(--space-2)",
             }}
           >
-            ({skills.length} skill / {namespaces.length} namespace)
+            ({skills.length} skill / {namespaces.length} 分组)
           </span>
           {upgradeCount > 0 && (
             <span
@@ -272,7 +294,7 @@ export default function SkillsHubCard() {
             color: "var(--catfish-text-muted)",
           }}
         >
-          中央 skill 市场 · 每分钟刷新
+          内部员工分享的 skill · 每分钟刷新
         </span>
       </div>
 

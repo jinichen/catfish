@@ -16,18 +16,27 @@
  *   - 加 .install-dialog* / .undo-toast* CSS class 群 (globals.css)
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useInstalledSkillsAndMcp } from "../../hooks/useIdentity";
 import type { McpServerEntry, SkillEntry, SkillNamespace } from "../../types/identity";
 import StatusDot from "../../components/StatusDot";
 import {
   addMcpServer,
   installSkillFromUrl,
+  installSkillFromZip,
   removeMcpServer,
   restoreSkill,
   uninstallSkill,
   type InstallResult,
 } from "../../lib/tauri";
+
+// P3.3.34 (6/12): zip 装入口从 MySkillsCard 挪到这 — 集中 skill 装入口防割裂.
+//   状态机: idle → installing → done / error → (用户点 dismiss) idle.
+type InstallZipState =
+  | { phase: "idle" }
+  | { phase: "installing"; filename: string }
+  | { phase: "done"; message: string; installedPath: string; warnings: string[] }
+  | { phase: "error"; message: string };
 
 type Modal =
   | { kind: "none" }
@@ -54,6 +63,58 @@ export default function SkillsMcpCard() {
   const [modal, setModal] = useState<Modal>({ kind: "none" });
   const [undo, setUndo] = useState<UndoState | null>(null);
   const [actionErr, setActionErr] = useState<string | null>(null);
+
+  // P3.3.34 (6/12): zip 装 state — 从 MySkillsCard 挪过来, 集中入口
+  const [installZip, setInstallZip] = useState<InstallZipState>({ phase: "idle" });
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  /** P3.3.34 (6/12): 装外部 skill zip 流程 (P3.3.23 复用):
+   *    1. 隐藏 input → 拿 File 对象
+   *    2. window.prompt 拿 namespace (默认 external, 可改)
+   *    3. arrayBuffer → Uint8Array → number[] 给 Rust
+   *    4. 调 installSkillFromZip → 成功 reload + 弹 done 卡; 失败 弹 error 卡 */
+  const handleZipPicked = async (file: File) => {
+    const nsInput = window.prompt(
+      `把 "${file.name}" 装到哪个 namespace? (a-z 0-9 _ -; 留空 = external)`,
+      "external",
+    );
+    if (nsInput === null) return;
+    const namespace = nsInput.trim() || "external";
+    if (!/^[a-z0-9_-]+$/.test(namespace)) {
+      setInstallZip({
+        phase: "error",
+        message: `namespace 只许 a-z 0-9 _ -, 传了: ${namespace}`,
+      });
+      return;
+    }
+    setInstallZip({ phase: "installing", filename: file.name });
+    try {
+      const buf = await file.arrayBuffer();
+      const bytes = Array.from(new Uint8Array(buf));
+      const result = await installSkillFromZip(bytes, namespace);
+      if (!result.success) {
+        setInstallZip({ phase: "error", message: "Rust 返 success=false (上下文不明)" });
+        return;
+      }
+      setInstallZip({
+        phase: "done",
+        message: `✓ 装好 ${result.filesCount} 个文件 → ${namespace}/`,
+        installedPath: result.installedPath,
+        warnings: result.warnings,
+      });
+      reload(); // 装的归"已装技能库", reload 让本卡立刻看到新 skill
+    } catch (e) {
+      setInstallZip({ phase: "error", message: String(e) });
+    }
+  };
+
+  const onZipInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) void handleZipPicked(file);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const dismissInstallZip = () => setInstallZip({ phase: "idle" });
 
   // E7.P1: 按 isProtected 拆 2 段 — 团队审定 vs 我装的.
   const { protectedNs, openNs } = useMemo(() => {
@@ -157,39 +218,43 @@ export default function SkillsMcpCard() {
     <div className="dashboard-skills">
       <div className="dashboard-skills__top">
         <div>
-          {/* 6/8 BL-SKILL-CARD-DISAMBIG (鸿波): 跟 "🎬 我录的技能" 区分明示来源.
-              这是**装好的、可直接用**的 — 跟"我录的" 录制原料不是一回事. */}
+          {/* P3.3.31 (6/12): 跟 P3.3.24 改 MySkillsCard 同款 polish —
+              删 ~/.hermes/skills/ 路径徽章 + 副文案, 给员工看技术细节是噪音.
+              hover 标题看 title 解释三个来源. */}
+          {/* P3.3.32 (6/12): 删 "(可直接用)" — 我的技能也可直接用, 括号误导
+              P3.3.35 (6/12): "已装技能库" → "技能库" — 跟"我的技能"对仗 */}
           <h3
             className="dashboard-skills__title"
             style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}
+            title="装好可直接用的 skill — 团队审定 / 内置 / marketplaces 装的 / 装的 zip + URL / 部门 publish. 鲶鱼对话时自动可调."
           >
-            📦 已装技能库 (可直接用)
-            <span
-              style={{
-                fontSize: 10,
-                padding: "2px 6px",
-                background: "var(--catfish-bg)",
-                border: "1px solid var(--catfish-border)",
-                borderRadius: 4,
-                color: "var(--catfish-text-muted)",
-                fontFamily: "monospace",
-                fontWeight: 400,
-              }}
-            >
-              ~/.hermes/skills/
-            </span>
+            📦 技能库
           </h3>
-          <div className="dashboard-skills__sub">
-            团队审定 + 内置 + marketplaces 装的 · 鲶鱼说话时可调
-          </div>
         </div>
         <div className="dashboard-skills__top-actions">
           <button
             className="approval-banner__btn-link"
             onClick={() => setModal({ kind: "install-skill" })}
+            title="装 hub URL / github / npm 包 — 走 npx skills add"
           >
-            + 安装 skill
+            + 装 URL
           </button>
+          {/* P3.3.34 (6/12): 装 zip 入口从 MySkillsCard 挪过来集中 */}
+          <button
+            className="approval-banner__btn-link"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={installZip.phase === "installing"}
+            title="选 zip / .skill 文件 (ClawHub 下载的 / 同事发的 / 自己导出的). 解到 ~/.catfish/skills/external/. 文件白名单 .md/.json/.txt/.yaml, 最大 50MB."
+          >
+            + 装 zip
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".zip,.skill"
+            style={{ display: "none" }}
+            onChange={onZipInputChange}
+          />
           <button
             className="approval-banner__btn-link"
             onClick={() => setModal({ kind: "add-mcp" })}
@@ -198,6 +263,99 @@ export default function SkillsMcpCard() {
           </button>
         </div>
       </div>
+
+      {/* P3.3.34 (6/12): zip 装状态 3 态 banner — 从 MySkillsCard 挪过来 */}
+      {installZip.phase === "installing" && (
+        <div
+          style={{
+            padding: "8px 12px",
+            marginBottom: 8,
+            borderRadius: 4,
+            background: "rgba(74,158,255,0.08)",
+            fontSize: 12,
+            color: "var(--catfish-text)",
+          }}
+        >
+          ⏳ 装 {installZip.filename} ...
+        </div>
+      )}
+      {installZip.phase === "done" && (
+        <div
+          style={{
+            padding: "8px 12px",
+            marginBottom: 8,
+            borderRadius: 4,
+            background: "rgba(34,197,94,0.08)",
+            border: "1px solid rgba(34,197,94,0.3)",
+            fontSize: 12,
+            color: "var(--catfish-text)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ flex: 1 }}>{installZip.message}</span>
+            <button
+              type="button"
+              onClick={dismissInstallZip}
+              style={{
+                fontSize: 11,
+                padding: "2px 8px",
+                borderRadius: 3,
+                border: "1px solid var(--catfish-border)",
+                background: "transparent",
+                color: "var(--catfish-text-muted)",
+                cursor: "pointer",
+              }}
+            >
+              知道了
+            </button>
+          </div>
+          <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", fontFamily: "monospace" }}>
+            {installZip.installedPath}
+          </div>
+          {installZip.warnings.length > 0 && (
+            <div style={{ fontSize: 11, color: "#ca8a04" }}>
+              ⚠ 跳了 {installZip.warnings.length} 个非白名单文件: {installZip.warnings.slice(0, 3).join(" · ")}
+              {installZip.warnings.length > 3 && ` (+ ${installZip.warnings.length - 3})`}
+            </div>
+          )}
+        </div>
+      )}
+      {installZip.phase === "error" && (
+        <div
+          style={{
+            padding: "8px 12px",
+            marginBottom: 8,
+            borderRadius: 4,
+            background: "rgba(220,38,38,0.08)",
+            border: "1px solid rgba(220,38,38,0.3)",
+            fontSize: 12,
+            color: "#dc2626",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          <span style={{ flex: 1 }}>❌ 装失败: {installZip.message}</span>
+          <button
+            type="button"
+            onClick={dismissInstallZip}
+            style={{
+              fontSize: 11,
+              padding: "2px 8px",
+              borderRadius: 3,
+              border: "1px solid var(--catfish-border)",
+              background: "transparent",
+              color: "var(--catfish-text-muted)",
+              cursor: "pointer",
+            }}
+          >
+            知道了
+          </button>
+        </div>
+      )}
 
       {error && <div className="dashboard-skills__err">{error}</div>}
       {actionErr && (

@@ -51,6 +51,9 @@ import WikiHubCard from "./WikiHubCard";
 // SkillsMcpCard 改成只显内置+装的, 次卡, 下. 配套 catfish 5 大卖点之 "员工自助生成
 // + 共享" 真兑现 UI.
 import MySkillsCard from "./MySkillsCard";
+// P3.3.31 (6/12): 5/10 BL-ARCH2 砍后又加回 — 员工心智里"别人分享的 skill"
+//   就应该在仪表盘"技能" section 找, 不是顶部 banner. SkillsHubCard 完整保留没 rm.
+import SkillsHubCard from "./SkillsHubCard";
 // BL-LEARN-SECTION-KILL (5/16): 整个"学习/改进" section 砍 (两张卡都对一般员工无效).
 // - LearningCard: 4 个数字里 3 个是开发者维度 (tool_calls / ship_skill / token=0 bug),
 //   只"对话 24 次"对员工有点用 — ROI 太低不值留卡
@@ -237,10 +240,20 @@ export default function DashboardTab() {
           tabs={[
             // P3.3.24 (6/11): "我录的技能" 已名实不副 — 4 条 skill 里 RecMode 录 0,
             //   3 个部门 publish + 1 个 zip 装. 改"我的技能" — 表"个人本机管", 不绑生成方式.
-            { key: "my-skills", label: "🧰 我的技能 (本机)", render: () => <MySkillsCard /> },
-            { key: "installed", label: "📦 已装技能库 (可直接用)", render: () => <SkillsMcpCard /> },
+            // P3.3.32 (6/12): 删 "(本机)" / "(可直接用)" — 两边都装本机都可用,
+            //   括号误导. 区别只是"谁装的", 副文案在卡内说.
+            // P3.3.35 (6/12): "已装技能库" → "技能库" — "已装" 字眼跟"技能库"重复,
+            //   跟"我的技能" 对仗 ("我的" vs "库"=系统的)
+            { key: "my-skills", label: "🧰 我的技能", render: () => <MySkillsCard /> },
+            { key: "installed", label: "📦 技能库", render: () => <SkillsMcpCard /> },
+            // P3.3.31 (6/12): 加回 SkillsHubCard — "别人分享的 skill" 在心智里
+            //   就该在仪表盘技能 section 找, 不是顶部 banner 跳出去 catfish-web.
+            //   原 5/10 BL-ARCH2 砍错了 (当时跟 manager 管理类一起挪走), 现在补.
+            // P3.3.38 (6/12): "中央市场 (别人分享的)" → "内部技能分享" — 不再"市场"
+            //   (商业感), 强调"内部分享". "部门 wiki" → "部门知识库" 中文化.
+            { key: "hub", label: "🌐 内部技能分享", render: () => <SkillsHubCard /> },
             // P3.3.18 (6/10): 部门 wiki 跟技能在概念上都是"部门 share 资源", 同 section.
-            { key: "wiki-hub", label: "📚 部门 wiki (浏览 / 安装)", render: () => <WikiHubCard /> },
+            { key: "wiki-hub", label: "📚 部门知识库", render: () => <WikiHubCard /> },
           ]}
         />
       </CollapsibleSection>

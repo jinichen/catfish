@@ -181,6 +181,21 @@ fn is_recmode_frozen_skill(manifest_path: &Path) -> bool {
     version_has_frozen || description_has_marker
 }
 
+/// P3.3.33 (6/12): 判断 namespace 是不是 "publish / zip install 装的", 反过来"我录的".
+///
+/// convention 黑名单 (跟 catfish-companion-app 各 install 流程默认 namespace 约定一致):
+///   - "department" — P3.3.18 部门 wiki publish 装的部门 share skill
+///   - "external"   — P3.3.23 zip 装的外部 skill (ClawHub / Anthropic .skill 等)
+///
+/// "我录的" RecMode freeze 走 namespace=<skill 名> 或员工自起 ns, 不会用 'department'
+/// 或 'external' 这种系统约定名 (即便起了, 视为"装的"也合理).
+///
+/// 长期更稳: RecMode freeze 时给 SKILL.md frontmatter 写 source: recorded 字段, 用
+/// source marker 而不是 namespace 黑名单. 留 P3.3.34 做.
+fn is_installed_namespace(name: &str) -> bool {
+    matches!(name, "department" | "external")
+}
+
 /// 扫一个 skills root 目录, 返回所有 namespace + skill.
 ///
 /// `ns_prefix` 给 namespace 名加前缀 (例如 "🐟 catfish:" 让 catfish skill 视觉
@@ -286,7 +301,17 @@ fn list_my_skills_blocking() -> Result<Vec<SkillNamespace>, String> {
     let mut result = Vec::new();
 
     // 源 1: ~/.catfish/skills/ — aggregator save_skill RPC + propose_skill + freeze
-    // target=local (5/21 后 default) 落地处. **全收**, 不过滤 — 这路径只装教学产物.
+    // target=local (5/21 后 default) 落地处.
+    //
+    // P3.3.33 (6/12): 老版**全收**假设挂了 — P3.3.18 (6/10) 部门 wiki publish 装
+    //   department/ ns + P3.3.23 (6/11) zip 装外部 skill 装 external/ ns 后,
+    //   ~/.catfish/skills/ 不再只装教学产物.
+    //
+    //   不能用 frozen marker 过滤 — eis-* 是别同事录的 publish 给部门, 装回本机
+    //   仍带 frozen marker, 不是"我自己录的". 改 namespace 黑名单 (convention):
+    //     - department / external → 装的 (归 list_installed)
+    //     - 其他 ns → 我录的 (归 list_my, freeze target=local 默认走 namespace=<skill 名>)
+    //   长期更稳应该 RecMode freeze 时写 source marker, 留 P3.3.34 做.
     let local_skills_root = if let Some(home_env) = std::env::var_os("CATFISH_HOME") {
         PathBuf::from(home_env).join("skills")
     } else if let Some(home) = home_dir() {
@@ -295,6 +320,8 @@ fn list_my_skills_blocking() -> Result<Vec<SkillNamespace>, String> {
         return Ok(result);
     };
     let mut local_namespaces = scan_skills_root(&local_skills_root, "");
+    // P3.3.33: 排除 publish / zip install 的 namespace, 它们归 list_installed
+    local_namespaces.retain(|ns| !is_installed_namespace(&ns.namespace));
 
     // 源 2: <catfish_root>/skills/ 里**含 frozen marker 的教学产物** — 5/21 前
     // freeze target=workspace 老历史. 用 is_recmode_frozen_skill 过滤, 工程审定的
@@ -355,6 +382,23 @@ fn list_installed_skills_blocking() -> Result<Vec<SkillNamespace>, String> {
         let mut hermes_namespaces = scan_skills_root(&hermes_skills, "");
         hermes_namespaces.sort_by(|a, b| a.namespace.cmp(&b.namespace));
         result.extend(hermes_namespaces);
+    }
+
+    // 3. P3.3.33 (6/12): ~/.catfish/skills/ 里 publish / zip install 的 namespace.
+    //   P3.3.18 部门 wiki publish 装 department/, P3.3.23 zip 装外部 skill 装
+    //   external/. 老 6/2 分类漏这条让它们被误归"我的技能". 加进 list_installed.
+    //   用 is_installed_namespace 黑名单 (跟 list_my 同 convention, 互补).
+    let local_skills_root_for_installed = if let Some(home_env) = std::env::var_os("CATFISH_HOME") {
+        Some(PathBuf::from(home_env).join("skills"))
+    } else {
+        home_dir().map(|h| h.join(".catfish").join("skills"))
+    };
+    if let Some(local_root) = local_skills_root_for_installed {
+        let mut local_installed = scan_skills_root(&local_root, "");
+        // 只收 publish / zip install 的 namespace (跟 list_my 互补)
+        local_installed.retain(|ns| is_installed_namespace(&ns.namespace));
+        local_installed.sort_by(|a, b| a.namespace.cmp(&b.namespace));
+        result.extend(local_installed);
     }
 
     Ok(result)

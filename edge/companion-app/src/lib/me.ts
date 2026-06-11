@@ -162,7 +162,17 @@ export async function fetchWithAuth(
   const url = typeof input === "string"
     ? input
     : input instanceof URL ? input.href : input.url;
-  const isGatewayDirectPath = url.includes("/api/") || url.includes("/v1/catalog");
+  // P3.3.37 (6/12 鸿波): /v1/hub/* (SkillsHub) + /v1/wiki/* (WikiHub) 加直连白名单.
+  //   gateway 8999 反代 /v1/hub/* → :8997, /v1/wiki/* → :8994, 设计是 Companion
+  //   OAuth 直连 gateway, 不该走 hermes proxy 8642 path.
+  //   漏配真因: P3.3.18 (wiki, 6/10) + 5/16 SkillsHub 加 fetch URL 时没同步
+  //   isGatewayDirectPath 白名单. hermes proxy 对这俩 endpoint 返 500 (实测
+  //   curl http://127.0.0.1:8642/v1/hub/skills) — 用户看的 "Load failed" 真因.
+  const isGatewayDirectPath =
+    url.includes("/api/") ||
+    url.includes("/v1/catalog") ||
+    url.includes("/v1/hub/") ||
+    url.includes("/v1/wiki/");
 
   // 6/8 BL-EMPLOYEE-SELF-SERVE A4 ⭐: transparent log middleware. 包 fetchWithAuth
   // 的真实 dispatch (Hermes / OAuth path), 每个 outbound 请求都记本机 SQLite ~/.catfish/outbound_log.db.
