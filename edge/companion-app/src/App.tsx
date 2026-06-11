@@ -200,7 +200,11 @@ function AppShell({ activeTab }: { activeTab: string }) {
   // 对话 tab 自己管 padding/scroll, 不复用 .app-main padding
   // 品牌 (鲶鱼 Companion) 已在 macOS 原生标题栏显示, 应用内不再加 BrandHeader.
   // 版本号 v0.1.0 移到 Dashboard IdentityCard 的"版本"行.
-  if (activeTab === "chat") {
+  // P3.3.29 (6/11): briefing 也走 main overflow:hidden 路径 — BriefingTab 内
+  //   .briefing-2col 已用 calc(100vh - 200px) 自管 sidebar/detail 独立 scroll,
+  //   app-main 的 overflow-y:auto 跟它撞车导致外层多一根滚动条 (内容区左右各
+  //   自滚 ✓, 外层也滚 ✗). 给 briefing 单独走 chat 同款 main 即可.
+  if (activeTab === "chat" || activeTab === "briefing") {
     return (
       <div className="app-shell">
         <AuthBanner />
@@ -209,7 +213,7 @@ function AppShell({ activeTab }: { activeTab: string }) {
         <DevUserSwitcher />
         <TabBar />
         <main style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-          <ChatTab />
+          {activeTab === "chat" ? <ChatTab /> : <BriefingTab />}
         </main>
       </div>
     );
