@@ -575,6 +575,8 @@ pub fn run() {
             commands::wiki_read::wiki_read_file,
             // P37 (6/5): wiki 全文搜索 (BM25 score)
             commands::wiki_read::wiki_search_text,
+            // P3.3.18 Phase 4 (6/10): 已装部门 wiki 扫描 (~/.catfish/wiki-shared/)
+            commands::wiki_read::list_installed_wiki_shared,
             // P38 (6/5): wiki 语义搜索 (本机 BGE-M3 ONNX)
             commands::wiki_embed::wiki_search_semantic,
             // BL-CATFISH-WIKI-MODE P3.3.7 (6/4): wiki write API

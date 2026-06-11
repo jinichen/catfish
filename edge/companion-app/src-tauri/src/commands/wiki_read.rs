@@ -160,16 +160,22 @@ fn build_file_info_inner(
     allow_tombstone: bool,
 ) -> Option<WikiFileInfo> {
     let rel_path = abs_path.strip_prefix(home).ok()?.to_string_lossy().to_string();
+    // P3.3.18 Phase 4 (6/10): wiki-shared/<dept>/<部门>/<file_id>.md 也支持读 — 已装
+    // 部门 wiki. kind 从 frontmatter type 抽 (publish 时已写).
     let kind = if rel_path.starts_with("wiki/entities/") {
-        "entity"
+        "entity".to_string()
     } else if rel_path.starts_with("wiki/concepts/") {
-        "concept"
+        "concept".to_string()
     } else if rel_path.starts_with("wiki/queries/") {
-        "query"
+        "query".to_string()
+    } else if rel_path.starts_with("wiki-shared/dept/") {
+        // 已装部门 wiki — kind 从 frontmatter type 抽, fallback entity
+        let content_peek = fs::read_to_string(abs_path).ok()?;
+        let (fm_peek, _) = split_frontmatter(&content_peek);
+        parse_frontmatter_field(&fm_peek, "type").unwrap_or_else(|| "entity".to_string())
     } else {
         return None;
-    }
-    .to_string();
+    };
     let slug = abs_path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -235,6 +241,146 @@ pub async fn wiki_list_files() -> Result<Vec<WikiFileInfo>, String> {
     }
     // 按 mtime 真**最近真**优先
     out.sort_by(|a, b| b.mtime.partial_cmp(&a.mtime).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(out)
+}
+
+// ============================================================
+// P3.3.18 Phase 4 (6/10) — wiki-shared 已装部门 wiki 扫描
+// ============================================================
+
+/// 已装部门 wiki 项. 跟 WikiFileInfo 不同:
+/// - 含 namespace (dept/finance / dept/sales) 跟 file_id (UUID)
+/// - 含 published_by / published_at / installed_at (来自 .meta.json sidecar)
+/// - rel_path 是 `wiki-shared/<ns>/<file_id>.md` 相对 ~/.catfish/
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledWikiSharedInfo {
+    /// rel path from ~/.catfish/, e.g. "wiki-shared/dept/finance/abc123.md"
+    pub rel_path: String,
+    /// 部门 namespace (e.g. "dept/finance")
+    pub namespace: String,
+    /// hub 分配的 file_id (UUID)
+    pub file_id: String,
+    /// 标题 (从 sidecar.title 或 frontmatter title)
+    pub title: String,
+    /// kind: entity / concept / query
+    pub kind: String,
+    /// 原 publisher sub (e.g. "alice@ffcs.cn")
+    pub published_by: String,
+    /// 原 publish 时刻 (ISO-8601), 没 sidecar 时空字符串
+    pub published_at: String,
+    /// 本机装上时刻 (ISO-8601)
+    pub installed_at: String,
+    /// 文件 byte size
+    pub size_bytes: u64,
+}
+
+#[tauri::command]
+pub async fn list_installed_wiki_shared() -> Result<Vec<InstalledWikiSharedInfo>, String> {
+    let home = catfish_home()?;
+    let shared_root = home.join("wiki-shared");
+    let mut out = Vec::new();
+
+    if !shared_root.is_dir() {
+        return Ok(out);
+    }
+
+    // 结构: ~/.catfish/wiki-shared/dept/<部门>/<file_id>.md
+    //                                            <file_id>.meta.json
+    // 我们 walk 两层目录 dept/* 然后扫每个部门里的 .md
+    let dept_outer = match fs::read_dir(&shared_root) {
+        Ok(d) => d,
+        Err(_) => return Ok(out),  // 目录不存在不报错
+    };
+
+    for outer in dept_outer.flatten() {
+        let outer_path = outer.path();
+        if !outer_path.is_dir() {
+            continue;
+        }
+        // outer_path 应该是 wiki-shared/dept
+        let dept_name = outer_path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if dept_name.is_empty() {
+            continue;
+        }
+        let dept_inner = match fs::read_dir(&outer_path) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        for inner in dept_inner.flatten() {
+            let inner_path = inner.path();
+            if !inner_path.is_dir() {
+                // 单层 wiki-shared/<file_id>.md 不允许, 必须 dept/<name>/file_id.md
+                continue;
+            }
+            let inner_name = inner_path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            let namespace = format!("{}/{}", dept_name, inner_name);
+            // 扫 .md 文件
+            let files = match fs::read_dir(&inner_path) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            for file in files.flatten() {
+                let path = file.path();
+                if path.extension().and_then(|s| s.to_str()) != Some("md") {
+                    continue;
+                }
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+                if stem.is_empty() {
+                    continue;
+                }
+
+                // 算 rel_path
+                let rel_path = match path.strip_prefix(&home) {
+                    Ok(p) => p.to_string_lossy().replace('\\', "/"),
+                    Err(_) => continue,
+                };
+                let size_bytes = path.metadata().map(|m| m.len()).unwrap_or(0);
+
+                // 尝试读 .meta.json sidecar
+                let meta_path = inner_path.join(format!("{stem}.meta.json"));
+                let mut title = stem.clone();
+                let mut kind = String::from("entity");
+                let mut published_by = String::new();
+                let mut published_at = String::new();
+                let mut installed_at = String::new();
+                if let Ok(meta_text) = fs::read_to_string(&meta_path) {
+                    if let Ok(meta_json) = serde_json::from_str::<serde_json::Value>(&meta_text) {
+                        if let Some(t) = meta_json.get("title").and_then(|v| v.as_str()) {
+                            title = t.to_string();
+                        }
+                        if let Some(k) = meta_json.get("kind").and_then(|v| v.as_str()) {
+                            kind = k.to_string();
+                        }
+                        if let Some(p) = meta_json.get("published_by").and_then(|v| v.as_str()) {
+                            published_by = p.to_string();
+                        }
+                        if let Some(p) = meta_json.get("published_at").and_then(|v| v.as_str()) {
+                            published_at = p.to_string();
+                        }
+                        if let Some(p) = meta_json.get("installed_at").and_then(|v| v.as_str()) {
+                            installed_at = p.to_string();
+                        }
+                    }
+                }
+
+                out.push(InstalledWikiSharedInfo {
+                    rel_path,
+                    namespace: namespace.clone(),
+                    file_id: stem,
+                    title,
+                    kind,
+                    published_by,
+                    published_at,
+                    installed_at,
+                    size_bytes,
+                });
+            }
+        }
+    }
+
+    // 按 installed_at desc 排
+    out.sort_by(|a, b| b.installed_at.cmp(&a.installed_at));
     Ok(out)
 }
 
@@ -365,9 +511,13 @@ pub async fn wiki_search_text(query: String) -> Result<Vec<WikiSearchHit>, Strin
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn wiki_read_file(rel_path: String) -> Result<WikiFileFull, String> {
-    // 真**安全**: rel_path 必须 `wiki/{entities|concepts|queries}/<slug>.md`,
-    // 不允许真**`..`** 真**path traversal**
-    if rel_path.contains("..") || !rel_path.starts_with("wiki/") {
+    // 真**安全**: rel_path 必须 `wiki/{entities|concepts|queries}/<slug>.md`
+    // 或 P3.3.18 Phase 4: `wiki-shared/dept/<部门>/<file_id>.md` (已装部门 wiki).
+    // 不允许真**`..`** 真**path traversal**.
+    let allowed = (rel_path.starts_with("wiki/")
+        || rel_path.starts_with("wiki-shared/dept/"))
+        && !rel_path.contains("..");
+    if !allowed {
         return Err(format!("rel_path 真**白名单不通过: {rel_path}"));
     }
     let home = catfish_home()?;

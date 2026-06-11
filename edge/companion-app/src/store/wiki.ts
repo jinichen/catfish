@@ -10,14 +10,19 @@ import { create } from "zustand";
 import {
   wikiListFiles,
   wikiReadFile,
+  listInstalledWikiShared,
   type WikiFileInfo,
   type WikiFileFull,
+  type InstalledWikiSharedInfo,
 } from "../lib/tauri";
 
 interface WikiState {
   files: WikiFileInfo[];
   filesLoading: boolean;
   filesError: string | null;
+
+  // P3.3.18 Phase 4 (6/10): 已装部门 wiki (~/.catfish/wiki-shared/), read-only
+  sharedFiles: InstalledWikiSharedInfo[];
 
   selectedPath: string | null;
   selectedFile: WikiFileFull | null;
@@ -50,6 +55,7 @@ export const useWikiStore = create<WikiState>((set) => ({
   files: [],
   filesLoading: false,
   filesError: null,
+  sharedFiles: [],  // P3.3.18 Phase 4
   lastLoadTs: 0,
 
   selectedPath: null,
@@ -65,8 +71,29 @@ export const useWikiStore = create<WikiState>((set) => ({
   loadFiles: async () => {
     set({ filesLoading: true, filesError: null });
     try {
-      const files = await wikiListFiles();
-      set({ files, filesLoading: false, lastLoadTs: Date.now() });
+      // P3.3.18 Phase 4: 并发拉个人 wiki + 已装部门 wiki. 部门 wiki 失败不阻塞.
+      const [filesRes, sharedRes] = await Promise.allSettled([
+        wikiListFiles(),
+        listInstalledWikiShared(),
+      ]);
+      const files =
+        filesRes.status === "fulfilled" ? filesRes.value : [];
+      const sharedFiles =
+        sharedRes.status === "fulfilled" ? sharedRes.value : [];
+      if (filesRes.status === "rejected") {
+        set({
+          filesLoading: false,
+          filesError: String(filesRes.reason),
+          sharedFiles,
+        });
+        return;
+      }
+      set({
+        files,
+        sharedFiles,
+        filesLoading: false,
+        lastLoadTs: Date.now(),
+      });
     } catch (e) {
       set({ filesLoading: false, filesError: String(e) });
     }

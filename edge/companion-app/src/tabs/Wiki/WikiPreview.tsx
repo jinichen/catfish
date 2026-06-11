@@ -335,8 +335,24 @@ export default function WikiPreview() {
 
       {/* P35 (6/5): 编辑 toggle + action bar — 复用 banner btn 系列 */}
       {/* P3.3.4 (6/9): action bar 加删除按钮 (mv 到 wiki/.trash/<ts>-原名.md) */}
+      {/* P3.3.18 Phase 4 (6/10): 已装部门 wiki (wiki-shared/) read-only, 不显编辑/删除/分享 */}
       <div className="wiki-preview__actions">
-        {!editing && (
+        {selectedFile?.info.rel_path.startsWith("wiki-shared/") && (
+          <span
+            style={{
+              fontSize: 12,
+              color: "var(--catfish-text-muted)",
+              padding: "4px 10px",
+              background: "rgba(124,58,237,0.08)",
+              border: "1px solid rgba(124,58,237,0.2)",
+              borderRadius: 4,
+            }}
+            title="来自部门 wiki-hub 的副本, 不能本机改也不能再 share. 原作者撤回时这里会显 stale 标."
+          >
+            📥 部门 wiki · read-only (来自 hub)
+          </span>
+        )}
+        {!editing && !selectedFile?.info.rel_path.startsWith("wiki-shared/") && (
           <>
             <button
               className="approval-banner__btn-link"

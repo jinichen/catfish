@@ -12,6 +12,8 @@ import WikiCreateModal from "./WikiCreateModal";
 
 export default function WikiTree() {
   const files = useWikiStore((s) => s.files);
+  // P3.3.18 Phase 4 (6/10): 已装部门 wiki
+  const sharedFiles = useWikiStore((s) => s.sharedFiles);
   const filesLoading = useWikiStore((s) => s.filesLoading);
   const filesError = useWikiStore((s) => s.filesError);
   const selectedPath = useWikiStore((s) => s.selectedPath);
@@ -335,6 +337,32 @@ export default function WikiTree() {
           <Group label="实体 (entities)" emoji="🧑" color="#4a9eff" files={grouped.entity} selectedPath={selectedPath} onSelect={selectFile} />
           <Group label="概念 (concepts)" emoji="📐" color="#ff9933" files={grouped.concept} selectedPath={selectedPath} onSelect={selectFile} />
           <Group label="查询 (queries)" emoji="💬" color="#5fc878" files={grouped.query} selectedPath={selectedPath} onSelect={selectFile} />
+          {/* P3.3.18 Phase 4 (6/10): 已装部门 wiki — read-only, 跟个人 wiki 视觉分离 */}
+          {sharedFiles.length > 0 && (
+            <Group
+              label="部门 wiki (read-only)"
+              emoji="📥"
+              color="#7c3aed"
+              files={sharedFiles.map((s) => {
+                const kindNarrow: "entity" | "concept" | "query" =
+                  s.kind === "concept" || s.kind === "query" ? s.kind : "entity";
+                return {
+                  rel_path: s.relPath,
+                  kind: kindNarrow,
+                  slug: s.fileId,
+                  title: `${s.title} · ${s.namespace.replace("dept/", "")}`,
+                  subtype: null,
+                  tags: [],
+                  related: [],
+                  sources: [`by ${s.publishedBy || "?"}`],
+                  size_bytes: s.sizeBytes,
+                  mtime: 0,
+                };
+              })}
+              selectedPath={selectedPath}
+              onSelect={selectFile}
+            />
+          )}
         </>
       )}
     </div>

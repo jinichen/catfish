@@ -280,6 +280,21 @@ export const wikiListFiles = () => rawInvoke<WikiFileInfo[]>("wiki_list_files");
 export const wikiReadFile = (relPath: string) =>
   rawInvoke<WikiFileFull>("wiki_read_file", { relPath });
 
+// P3.3.18 Phase 4 (6/10): 扫 ~/.catfish/wiki-shared/ 已装部门 wiki
+export interface InstalledWikiSharedInfo {
+  relPath: string;          // wiki-shared/dept/<name>/<file_id>.md (相对 ~/.catfish/)
+  namespace: string;        // dept/finance
+  fileId: string;           // hub 分配的 UUID
+  title: string;
+  kind: string;             // entity | concept | query
+  publishedBy: string;
+  publishedAt: string;      // ISO-8601 or ""
+  installedAt: string;      // ISO-8601 or ""
+  sizeBytes: number;
+}
+export const listInstalledWikiShared = () =>
+  rawInvoke<InstalledWikiSharedInfo[]>("list_installed_wiki_shared");
+
 // ── BL-CATFISH-WIKI-MODE P3.3.7: wiki write API ──
 export interface WikiWriteResult {
   rel_path: string;

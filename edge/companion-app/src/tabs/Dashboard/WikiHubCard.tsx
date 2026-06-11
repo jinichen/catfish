@@ -17,7 +17,11 @@ import { useEffect, useState } from "react";
 
 import { config } from "../../lib/env";
 import { fetchWithAuth } from "../../lib/me";
-import { toolBridgeCallTool } from "../../lib/tauri";
+import {
+  toolBridgeCallTool,
+  listInstalledWikiShared,
+  type InstalledWikiSharedInfo,
+} from "../../lib/tauri";
 import { useAgentStore } from "../../store/agent";
 
 interface WikiDoc {
@@ -68,11 +72,36 @@ export default function WikiHubCard() {
   const [loading, setLoading] = useState(true);
   const [installingKey, setInstallingKey] = useState<string | null>(null);
   const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  // P3.3.18 Phase 4 (6/10): 本机已装 wiki-shared 索引 (ns/file_id → InstalledWikiSharedInfo)
+  const [installedByKey, setInstalledByKey] = useState<Map<string, InstalledWikiSharedInfo>>(new Map());
 
   const refresh = async () => {
     try {
       const url = `${config.backendUrl}/v1/wiki/documents`;
-      const res = await fetchWithAuth(url);
+      // 并发拉 hub + 本机已装. 本机失败不阻塞.
+      const [hubRes, installedResult] = await Promise.allSettled([
+        fetchWithAuth(url),
+        listInstalledWikiShared(),
+      ]);
+
+      // 本机已装
+      if (installedResult.status === "fulfilled") {
+        const m = new Map<string, InstalledWikiSharedInfo>();
+        for (const w of installedResult.value) {
+          m.set(`${w.namespace}/${w.fileId}`, w);
+        }
+        setInstalledByKey(m);
+      } else {
+        console.warn("[WikiHubCard] listInstalledWikiShared 失败:", installedResult.reason);
+        setInstalledByKey(new Map());
+      }
+
+      // hub
+      if (hubRes.status === "rejected") {
+        setError(hubRes.reason instanceof Error ? hubRes.reason.message : String(hubRes.reason));
+        return;
+      }
+      const res = hubRes.value;
       if (!res.ok) {
         if (res.status === 502) {
           setError("wiki-hub 未启动 (dev: python -m catfish_wiki_hub.app, port 8994)");
@@ -143,6 +172,10 @@ export default function WikiHubCard() {
   }
   const namespaces = Object.keys(grouped).sort();
   const staleCount = docs.filter((d) => d.stale_after_unpublish).length;
+  // P3.3.18 Phase 4: 本机已装 + hub 已 stale 的 "需要员工注意" 计数
+  const installedStaleCount = docs.filter(
+    (d) => d.stale_after_unpublish && installedByKey.has(`${d.namespace}/${d.file_id}`),
+  ).length;
 
   return (
     <div
@@ -187,6 +220,22 @@ export default function WikiHubCard() {
               title={`${staleCount} 条已被原作者撤回 (灰色显示, 无法安装)`}
             >
               ⏸ {staleCount} stale
+            </span>
+          )}
+          {installedStaleCount > 0 && (
+            <span
+              style={{
+                fontSize: 11,
+                color: "#dc2626",
+                background: "rgba(220,38,38,0.1)",
+                padding: "2px 6px",
+                borderRadius: 3,
+                marginLeft: "var(--space-2)",
+                fontWeight: 600,
+              }}
+              title={`${installedStaleCount} 条你本机有副本, 但原作者已撤回 — 你可以决定是否本机也卸 (manifesto 公理 4)`}
+            >
+              ⚠ {installedStaleCount} 你装的已撤回
             </span>
           )}
         </h3>
@@ -270,10 +319,12 @@ export default function WikiHubCard() {
               >
                 {grouped[ns].map((doc) => {
                   const key = `${doc.namespace}/${doc.file_id}`;
+                  const installed = installedByKey.get(key);
                   return (
                     <WikiRow
                       key={key}
                       doc={doc}
+                      installed={installed}
                       installing={installingKey === key}
                       onInstall={() => void handleInstall(doc)}
                     />
@@ -290,15 +341,23 @@ export default function WikiHubCard() {
 
 function WikiRow({
   doc,
+  installed,
   installing,
   onInstall,
 }: {
   doc: WikiDoc;
+  installed: InstalledWikiSharedInfo | undefined;
   installing: boolean;
   onInstall: () => void;
 }) {
   const stale = doc.stale_after_unpublish;
+  const isInstalled = installed !== undefined;
   const kindLabel = KIND_LABEL[doc.kind] || doc.kind;
+  // P3.3.18 Phase 4: 4 状态分支
+  //   - stale + installed: 本机有副本但原作者撤回了 (manifesto 公理 4 — 员工自己决定)
+  //   - stale + !installed: hub 已撤回 (灰显, 不让装)
+  //   - !stale + installed: 已装, 显 ✓ badge, 不显安装按钮
+  //   - !stale + !installed: 可装, 显安装按钮
   return (
     <div
       style={{
@@ -331,7 +390,24 @@ function WikiRow({
           {kindLabel}
         </span>
       </div>
-      {stale ? (
+      {stale && isInstalled ? (
+        // P3.3.18 Phase 4 关键: 本机有副本, hub 已撤回 → manifesto 公理 4 提示
+        <div
+          style={{
+            color: "#dc2626",
+            fontSize: 12,
+            marginBottom: "var(--space-1)",
+            background: "rgba(220,38,38,0.08)",
+            padding: "4px 8px",
+            borderRadius: 4,
+            border: "1px solid rgba(220,38,38,0.2)",
+          }}
+          title={doc.unpublished_reason || ""}
+        >
+          ⚠ 原作者已撤回 ({humanTime(doc.unpublished_at)}). 你本机仍有副本
+          (~/.catfish/wiki-shared/{doc.namespace}/{doc.file_id}.md), 自己决定是否卸. (manifesto 公理 4 — 中央不强制清你本机)
+        </div>
+      ) : stale ? (
         <div
           style={{
             color: "var(--catfish-text-muted)",
@@ -372,7 +448,21 @@ function WikiRow({
         <span>
           👤 {doc.published_by || "?"} · {humanTime(doc.updated_at || doc.published_at)}
         </span>
-        {!stale && (
+        {!stale && isInstalled && (
+          <span
+            style={{
+              fontSize: 11,
+              color: "#16a34a",
+              background: "rgba(22,163,74,0.1)",
+              padding: "1px 6px",
+              borderRadius: 3,
+            }}
+            title={`已装 ${humanTime(installed.installedAt)}`}
+          >
+            ✓ 已装
+          </span>
+        )}
+        {!stale && !isInstalled && (
           <button
             type="button"
             onClick={onInstall}
