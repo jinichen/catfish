@@ -13,7 +13,18 @@ export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024; // 20MB
 export const MAX_AUDIO_BYTES = 100 * 1024 * 1024;
 export const MAX_ATTACHMENTS = 6;
 
-export const SUPPORTED_FILE_EXTS = [".pdf", ".xlsx", ".xls", ".docx", ".csv", ".txt", ".md", ".markdown", ".log"];
+// P3.3.21 (6/11): 加 .xlsm (macro 启用 xlsx, openpyxl 直接吃) / .pptx (python-pptx)
+//   / .json (内置嗅 dict / list). 老 .ppt / .doc / .rtf 在 parse_file.py 给友好
+//   "另存为新格式" 错, 不进白名单 (避免员工选了 picker 才知道不行).
+export const SUPPORTED_FILE_EXTS = [
+  ".pdf",
+  ".xlsx", ".xlsm", ".xls",
+  ".docx",
+  ".pptx",
+  ".csv",
+  ".json",
+  ".txt", ".md", ".markdown", ".log",
+];
 export const SUPPORTED_AUDIO_EXTS = [".mp3", ".m4a", ".wav", ".aac", ".ogg", ".flac", ".opus", ".wma"];
 
 /** 看文件是图片 / 文档 / 音频. 都不是就 throw. */

@@ -73,7 +73,15 @@ def _truncate(s: str, limit: int = PREVIEW_MAX_CHARS) -> str:
 # ============================================================
 
 def parse_excel_preview(path: Path) -> tuple[str, dict[str, Any]]:
-    """Excel 各 sheet 列头 + 前 20 行 + 总行数."""
+    """Excel 各 sheet 列头 + 前 20 行 + 总行数.
+
+    P3.3.21 (6/11): 老 .xls (97-2003 binary) openpyxl 不吃, 走 xlrd 分支.
+    .xlsx / .xlsm (xlsx + macro) 走 openpyxl. .xlsb 用户极少, 暂不支持.
+    """
+    ext = path.suffix.lower()
+    if ext == ".xls":
+        return _parse_xls_preview(path)
+
     try:
         from openpyxl import load_workbook  # noqa: PLC0415
     except ImportError:
@@ -119,6 +127,155 @@ def parse_excel_preview(path: Path) -> tuple[str, dict[str, Any]]:
         "row_counts": row_counts,
         "total_sheets": len(sheets),
     }
+    return text, meta
+
+
+# P3.3.21 (6/11): 老 .xls (97-2003 binary) 走 xlrd<2.0.
+# xlrd 2.0+ 砍掉 .xls 支持 (只剩 .xlsx 没意义, openpyxl 更全), 必须 1.x.
+def _parse_xls_preview(path: Path) -> tuple[str, dict[str, Any]]:
+    """老 .xls (Excel 97-2003 binary) 用 xlrd 1.2.0 解."""
+    try:
+        import xlrd  # noqa: PLC0415
+    except ImportError:
+        raise RuntimeError(
+            "老 .xls (Excel 97-2003 格式) 需 xlrd 1.2.0. "
+            "解法: (1) pip install 'xlrd<2.0' 或 "
+            "(2) Excel 打开 → 另存为 .xlsx (openpyxl 兼容更好)"
+        )
+
+    wb = xlrd.open_workbook(str(path), on_demand=True)
+    parts: list[str] = []
+    sheets: list[str] = []
+    row_counts: dict[str, int] = {}
+
+    for sheet_name in wb.sheet_names():
+        sheet = wb.sheet_by_name(sheet_name)
+        sheets.append(sheet_name)
+        total_rows = sheet.nrows
+        row_counts[sheet_name] = total_rows
+        parts.append(f"## Sheet: {sheet_name}  (共 {total_rows} 行)")
+
+        if total_rows == 0:
+            parts.append("  (空 sheet)")
+            parts.append("")
+            continue
+
+        max_rows = min(PREVIEW_ROWS + 1, total_rows)
+        for r in range(max_rows):
+            cells = [str(sheet.cell_value(r, c)) for c in range(sheet.ncols)]
+            if any(cells):
+                parts.append("\t".join(cells))
+        if total_rows > max_rows:
+            parts.append(f"  (... 还有 {total_rows - max_rows} 行未显示, 用 execute_code 读完整)")
+        parts.append("")
+
+    text = _truncate("\n".join(parts))
+    meta: dict[str, Any] = {
+        "sheets": sheets,
+        "row_counts": row_counts,
+        "total_sheets": len(sheets),
+        "format": "xls",  # 给 LLM 看 — 老格式 execute_code 时要 pandas + engine='xlrd'
+    }
+    return text, meta
+
+
+# ============================================================
+# PowerPoint (.pptx) — P3.3.21 (6/11)
+# ============================================================
+
+def parse_pptx_preview(path: Path) -> tuple[str, dict[str, Any]]:
+    """.pptx 每页 title + 正文 text. .ppt 老格式不支持 — 装 python-pptx 即可."""
+    try:
+        from pptx import Presentation  # noqa: PLC0415
+    except ImportError:
+        raise RuntimeError(
+            "python-pptx 未装. 跑: pip install python-pptx  "
+            "(注: 老 .ppt 97-2003 格式不支持, 请另存为 .pptx)"
+        )
+
+    prs = Presentation(str(path))
+    parts: list[str] = []
+    slide_titles: list[str] = []
+    total_slides = len(prs.slides)
+    parts.append(f"## PPTX  (共 {total_slides} 页)")
+
+    # PREVIEW_ROWS 复用 — pptx 前 N 页 preview, 跟 PDF 一致
+    max_slides = min(PREVIEW_ROWS, total_slides)
+    for i, slide in enumerate(prs.slides):
+        if i >= max_slides:
+            break
+        title = ""
+        body_lines: list[str] = []
+        for shape in slide.shapes:
+            if not shape.has_text_frame:
+                continue
+            tf = shape.text_frame
+            txt = (tf.text or "").strip()
+            if not txt:
+                continue
+            # 第一个有文字的 placeholder 当 title (粗略, 大多 ppt 是这样)
+            if not title:
+                title = txt.split("\n", 1)[0][:80]
+            body_lines.append(txt)
+        slide_titles.append(title or f"(第 {i + 1} 页, 无标题)")
+        parts.append(f"### 第 {i + 1} 页: {title or '(无标题)'}")
+        for line in body_lines:
+            parts.append(line)
+        parts.append("")
+
+    if total_slides > max_slides:
+        parts.append(f"  (... 还有 {total_slides - max_slides} 页未显示, 用 execute_code 读完整)")
+
+    text = _truncate("\n".join(parts))
+    meta: dict[str, Any] = {
+        "total_slides": total_slides,
+        "slide_titles": slide_titles,
+    }
+    return text, meta
+
+
+# ============================================================
+# JSON — P3.3.21 (6/11): 比纯 text 多 schema 嗅探
+# ============================================================
+
+def parse_json_preview(path: Path) -> tuple[str, dict[str, Any]]:
+    """JSON: 嗅 top-level type (dict/list) + 前 N 项预览."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        raise RuntimeError(f"JSON 解析失败: {e}")
+
+    parts: list[str] = []
+    meta: dict[str, Any] = {}
+    if isinstance(data, dict):
+        keys = list(data.keys())
+        meta["top_type"] = "object"
+        meta["top_keys"] = keys[:50]
+        meta["top_key_count"] = len(keys)
+        parts.append(f"## JSON object  ({len(keys)} 个 top-level key)")
+        parts.append(f"keys: {', '.join(repr(k) for k in keys[:30])}")
+        if len(keys) > 30:
+            parts.append(f"  (... 还有 {len(keys) - 30} 个 key)")
+        parts.append("")
+        # 整体 dump (截 ~5K 字)
+        parts.append(json.dumps(data, ensure_ascii=False, indent=2))
+    elif isinstance(data, list):
+        meta["top_type"] = "array"
+        meta["top_length"] = len(data)
+        parts.append(f"## JSON array  (共 {len(data)} 项)")
+        max_items = min(PREVIEW_ROWS, len(data))
+        for i in range(max_items):
+            parts.append(f"### [{i}]")
+            parts.append(json.dumps(data[i], ensure_ascii=False, indent=2))
+        if len(data) > max_items:
+            parts.append(f"  (... 还有 {len(data) - max_items} 项未显示, 用 execute_code 读完整)")
+    else:
+        meta["top_type"] = type(data).__name__
+        parts.append(f"## JSON ({type(data).__name__})")
+        parts.append(repr(data))
+
+    text = _truncate("\n".join(parts))
     return text, meta
 
 
@@ -622,9 +779,12 @@ def maybe_write_sidecar(path: Path, kind: str) -> str | None:
 PARSERS = {
     ".pdf": ("pdf", parse_pdf_preview),
     ".xlsx": ("excel", parse_excel_preview),
-    ".xls": ("excel", parse_excel_preview),
+    ".xlsm": ("excel", parse_excel_preview),  # P3.3.21: macro 启用 xlsx, openpyxl 直接吃
+    ".xls": ("excel", parse_excel_preview),   # P3.3.21: 老格式内部 dispatch 到 xlrd
     ".docx": ("word", parse_docx_preview),
+    ".pptx": ("ppt", parse_pptx_preview),     # P3.3.21
     ".csv": ("csv", parse_csv_preview),
+    ".json": ("json", parse_json_preview),    # P3.3.21
     ".txt": ("text", parse_text_preview),
     ".md": ("text", parse_text_preview),
     ".markdown": ("text", parse_text_preview),
@@ -644,6 +804,15 @@ PARSERS = {
     ".webm": ("video", parse_video_preview),
 }
 
+# P3.3.21 (6/11): 老格式没纯 Python 支持的, 给友好错让员工另存为新格式.
+#   .ppt / .doc binary 格式纯 Python 解很弱 (antiword/catdoc 是 CLI, libreoffice
+#   convert 重量级), 不值得引依赖 — 一行提示比"装 antiword" 友好.
+LEGACY_HINTS = {
+    ".ppt": "老 .ppt (PowerPoint 97-2003) 不支持. 请 PowerPoint 打开 → 另存为 .pptx",
+    ".doc": "老 .doc (Word 97-2003) 不支持. 请 Word 打开 → 另存为 .docx",
+    ".rtf": "RTF 不支持. 请另存为 .docx 或 .txt",
+}
+
 
 def main() -> int:
     if len(sys.argv) < 2:
@@ -661,9 +830,14 @@ def main() -> int:
     ext = path.suffix.lower()
     entry = PARSERS.get(ext)
     if entry is None:
-        print(json.dumps({
-            "error": f"不支持 {ext}. 支持: {', '.join(sorted(PARSERS.keys()))}"
-        }, ensure_ascii=False))
+        # P3.3.21 (6/11): 老格式 (.ppt/.doc/.rtf) 给具体迁移指引,
+        #   比"不支持" 友好得多 — 员工知道下一步该按什么.
+        if ext in LEGACY_HINTS:
+            print(json.dumps({"error": LEGACY_HINTS[ext]}, ensure_ascii=False))
+        else:
+            print(json.dumps({
+                "error": f"不支持 {ext}. 支持: {', '.join(sorted(PARSERS.keys()))}"
+            }, ensure_ascii=False))
         return 4
 
     kind, parser = entry
