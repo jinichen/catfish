@@ -176,14 +176,15 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
               computedAt: stale.computedAt,
               ageMin: cacheAgeMinutes(stale),
             });
+            // P3.3.25 (6/11): 60s → 180s, 文案同步
             setStaleNotice(
-              `⚠️ 公司内网模型响应慢 (>60s), 显示上次结果. 后台仍在算, 完成会自动更新.`,
+              `⚠️ 公司内网模型响应慢 (>180s), 显示上次结果. 后台仍在算, 完成会自动更新.`,
             );
             setPhase("stale_fallback");
           } else {
             setStaleNotice("");
             setErrorMsg(
-              "公司内网模型响应慢 (>60s), 也没有历史缓存可显示. 等几分钟点刷新重试.",
+              "公司内网模型响应慢 (>180s), 也没有历史缓存可显示. 等几分钟点刷新重试.",
             );
             setPhase("error");
           }

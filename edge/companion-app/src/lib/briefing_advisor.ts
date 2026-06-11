@@ -411,7 +411,13 @@ let _advisorInFlight: Promise<AdvisorResult | null> | null = null;
  *  TIMEOUT, 调用方走 stale cache fallback. */
 export const ADVISOR_TIMEOUT = Symbol("advisor-timeout");
 export type AdvisorFetchResult = AdvisorResult | null | typeof ADVISOR_TIMEOUT;
-const CLIENT_TIMEOUT_MS = 60_000;
+// P3.3.25 (6/11): 60_000 → 180_000.
+//   gateway log 看 catfish-private-main (40K prompt + 私有推理) latency 70-100s
+//   常态. 60s race timeout 几乎每次都触发, 走 stale fallback, 但 stale 是 null →
+//   红条 "LLM 返空或解析失败". 改 180s 给私有模型充分时间, 也保留 fail-safe.
+//   仍然不挂 AbortSignal — Tauri webview suspend 时 fetch 自然 pending, race 让
+//   UI 不无限等. 后台 fetch 完成会写 cache, 下次时段触发能用.
+const CLIENT_TIMEOUT_MS = 180_000;
 
 /** 主入口. 不挂 AbortSignal (Tauri webview suspend 经验, 5/21 学到). */
 export async function fetchBriefingAdvisor(input: AdvisorInput): Promise<AdvisorFetchResult> {
