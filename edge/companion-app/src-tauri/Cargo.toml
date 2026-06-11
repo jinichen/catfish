@@ -53,6 +53,9 @@ ort = "2.0.0-rc.12"
 # tokenizer: BGE-M3 用 XLM-R BPE, tokenizers crate 直接 load tokenizer.json
 tokenizers = "0.20"
 # 不显式依赖 ndarray — ort 内部用 0.17, 我们走 tuple syntax (shape, Vec<T>) 避免 version 冲突
+# P3.3.23 (6/11): 装外部 skill zip 解压. 默认 features 含 deflate / bzip2 不需要,
+#   bzip2 需要 C 依赖 — 关 default-features 只留 deflate. 50MB 上限防 bomb.
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 # tempfile: 给单测建临时 ~/.hermes 目录用 (session_write / learning / endpoints)

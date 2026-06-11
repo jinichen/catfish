@@ -32,11 +32,19 @@
  * 3 层安全扫描完全在 server 端 (skill_publish.py:205-244), 客户端 0 重做.
  */
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { useMySkills } from "../../hooks/useIdentity";
-import { toolBridgeCallTool } from "../../lib/tauri";
+import { installSkillFromZip, toolBridgeCallTool } from "../../lib/tauri";
 import type { SkillEntry, SkillNamespace } from "../../types/identity";
+
+// P3.3.23 (6/11): 装外部 skill zip — file picker → installSkillFromZip Tauri 命令.
+//   状态机: idle → picking → installing → done / error → (3s) idle.
+type InstallZipState =
+  | { phase: "idle" }
+  | { phase: "installing"; filename: string }
+  | { phase: "done"; message: string; installedPath: string; warnings: string[] }
+  | { phase: "error"; message: string };
 
 /** BL-MYSKILLS-CARD-UI-CLEAN (2026-06-03): 从 SKILL.md frontmatter description 字段
  * 抽员工友好的简短描述. catfish convention:
@@ -96,12 +104,67 @@ interface ShareState {
 }
 
 export default function MySkillsCard() {
-  const { skills, error } = useMySkills();
+  const { skills, error, reload } = useMySkills();
   const totalSkills = skills?.reduce((sum, ns) => sum + ns.skills.length, 0) ?? 0;
   const totalNamespaces = skills?.length ?? 0;
   const hasAny = totalSkills > 0;
 
   const [share, setShare] = useState<ShareState>({ phase: "idle" });
+  // P3.3.23 (6/11): 装外部 skill zip 状态
+  const [installZip, setInstallZip] = useState<InstallZipState>({ phase: "idle" });
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  /** P3.3.23 (6/11): 装外部 skill zip 流程.
+   *   1. 隐藏 input → 拿 File 对象
+   *   2. window.prompt 拿 namespace (默认 external, 可改)
+   *   3. arrayBuffer → Uint8Array → number[] 给 Rust
+   *   4. 调 installSkillFromZip → 成功 reload + 弹 done 卡; 失败 弹 error 卡
+   *   5. 3s 后 setState idle (除非用户没手动 dismiss) */
+  const handleZipPicked = async (file: File) => {
+    // 简单 namespace 输入 — 用 prompt, 后续 polish 可改 modal
+    const nsInput = window.prompt(
+      `把 "${file.name}" 装到哪个 namespace? (a-z 0-9 _ -; 留空 = external)`,
+      "external",
+    );
+    if (nsInput === null) return; // 用户点 cancel
+    const namespace = nsInput.trim() || "external";
+    if (!/^[a-z0-9_-]+$/.test(namespace)) {
+      setInstallZip({
+        phase: "error",
+        message: `namespace 只许 a-z 0-9 _ -, 传了: ${namespace}`,
+      });
+      return;
+    }
+
+    setInstallZip({ phase: "installing", filename: file.name });
+    try {
+      const buf = await file.arrayBuffer();
+      const bytes = Array.from(new Uint8Array(buf));
+      const result = await installSkillFromZip(bytes, namespace);
+      if (!result.success) {
+        setInstallZip({ phase: "error", message: "Rust 返 success=false (上下文不明)" });
+        return;
+      }
+      setInstallZip({
+        phase: "done",
+        message: `✓ 装好 ${result.filesCount} 个文件 → ${namespace}/`,
+        installedPath: result.installedPath,
+        warnings: result.warnings,
+      });
+      reload(); // 刷 useMySkills, 立刻看到新 skill
+    } catch (e) {
+      setInstallZip({ phase: "error", message: String(e) });
+    }
+  };
+
+  const onZipInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) void handleZipPicked(file);
+    // reset 让同一文件能再选
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const dismissInstall = () => setInstallZip({ phase: "idle" });
 
   /** 6/2 BL-SKILLS-PUBLISH-WIRE: 真调 catfish_skill_publish 工具.
    *
@@ -201,6 +264,33 @@ export default function MySkillsCard() {
         <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
           RecMode 录屏 + LLM propose · 100% 本机 · 想共享自己点 📤
         </span>
+        {/* P3.3.23 (6/11): 装外部 skill zip 按钮 — ClawHub / Anthropic .skill / 任何
+            SKILL.md zip 一键装. 默认 namespace=external (跟 RecMode 教学产物 dept
+            分开). 隐藏 input + 点 button 触发 file picker. */}
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={installZip.phase === "installing"}
+          title="选 zip / .skill 文件 (ClawHub 下载的 / 同事发的 / 自己导出的). 解压后装到 ~/.catfish/skills/external/. 文件白名单 .md/.json/.txt/.yaml, 最大 50MB."
+          style={{
+            fontSize: 11,
+            padding: "3px 10px",
+            borderRadius: 4,
+            border: "1px solid var(--catfish-border)",
+            background: "var(--catfish-bg)",
+            color: "var(--catfish-text)",
+            cursor: installZip.phase === "installing" ? "wait" : "pointer",
+          }}
+        >
+          📥 装外部 skill (zip)
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".zip,.skill"
+          style={{ display: "none" }}
+          onChange={onZipInputChange}
+        />
         {hasAny && (
           <span
             style={{
@@ -213,6 +303,99 @@ export default function MySkillsCard() {
           </span>
         )}
       </div>
+
+      {/* P3.3.23 (6/11): 装外部 skill zip 状态卡 — installing / done / error */}
+      {installZip.phase === "installing" && (
+        <div
+          style={{
+            padding: "8px 12px",
+            marginBottom: 8,
+            borderRadius: 4,
+            background: "rgba(74,158,255,0.08)",
+            fontSize: 12,
+            color: "var(--catfish-text)",
+          }}
+        >
+          ⏳ 装 {installZip.filename} ...
+        </div>
+      )}
+      {installZip.phase === "done" && (
+        <div
+          style={{
+            padding: "8px 12px",
+            marginBottom: 8,
+            borderRadius: 4,
+            background: "rgba(34,197,94,0.08)",
+            border: "1px solid rgba(34,197,94,0.3)",
+            fontSize: 12,
+            color: "var(--catfish-text)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ flex: 1 }}>{installZip.message}</span>
+            <button
+              type="button"
+              onClick={dismissInstall}
+              style={{
+                fontSize: 11,
+                padding: "2px 8px",
+                borderRadius: 3,
+                border: "1px solid var(--catfish-border)",
+                background: "transparent",
+                color: "var(--catfish-text-muted)",
+                cursor: "pointer",
+              }}
+            >
+              知道了
+            </button>
+          </div>
+          <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", fontFamily: "monospace" }}>
+            {installZip.installedPath}
+          </div>
+          {installZip.warnings.length > 0 && (
+            <div style={{ fontSize: 11, color: "#ca8a04" }}>
+              ⚠ 跳了 {installZip.warnings.length} 个非白名单文件: {installZip.warnings.slice(0, 3).join(" · ")}
+              {installZip.warnings.length > 3 && ` (+ ${installZip.warnings.length - 3})`}
+            </div>
+          )}
+        </div>
+      )}
+      {installZip.phase === "error" && (
+        <div
+          style={{
+            padding: "8px 12px",
+            marginBottom: 8,
+            borderRadius: 4,
+            background: "rgba(220,38,38,0.08)",
+            border: "1px solid rgba(220,38,38,0.3)",
+            fontSize: 12,
+            color: "#dc2626",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          <span style={{ flex: 1 }}>❌ 装失败: {installZip.message}</span>
+          <button
+            type="button"
+            onClick={dismissInstall}
+            style={{
+              fontSize: 11,
+              padding: "2px 8px",
+              borderRadius: 3,
+              border: "1px solid var(--catfish-border)",
+              background: "transparent",
+              color: "var(--catfish-text-muted)",
+              cursor: "pointer",
+            }}
+          >
+            知道了
+          </button>
+        </div>
+      )}
 
       {error && (
         <div style={{ fontSize: 12, color: "var(--status-err)", marginBottom: 8 }}>

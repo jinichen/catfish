@@ -43,18 +43,27 @@ export function useIdentity() {
 export function useMySkills() {
   const [skills, setSkills] = useState<SkillNamespace[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // P3.3.23 (6/11): 加 reload — 装外部 skill (install_skill_from_zip) 完成后调用
+  //   让 MySkillsCard 立刻看到新装的 skill, 不用重启 Companion 或切 tab.
+  const [tick, setTick] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     fetchMySkills()
-      .then((s) => !cancelled && setSkills(s))
+      .then((s) => {
+        if (cancelled) return;
+        setSkills(s);
+        setError(null); // reload 成功清错
+      })
       .catch((e) => !cancelled && setError(String(e)));
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [tick]);
 
-  return { skills, error };
+  const reload = () => setTick((t) => t + 1);
+
+  return { skills, error, reload };
 }
 
 /** 6/2 BL-SKILLS-CARD-SPLIT: 内置 + 装的 skill + MCP. 次卡 SkillsMcpCard.

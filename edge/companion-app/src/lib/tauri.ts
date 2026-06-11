@@ -597,6 +597,23 @@ export interface UninstallResult {
 export const installSkillFromUrl = (url: string) =>
   rawInvoke<InstallResult>("install_skill_from_url", { url });
 
+// P3.3.23 (6/11): 装外部 skill zip (ClawHub / Anthropic .skill / 任何 SKILL.md zip).
+//   zipBytes 走 Vec<u8> (从 File.arrayBuffer() → Array.from(new Uint8Array(buf))).
+//   namespace 默认 "external", 装到 ~/.catfish/skills/<ns>/<slug>/.
+//   warnings 含跳过的非白名单文件名 (.exe / .py 等被滤).
+export interface InstallSkillFromZipResult {
+  success: boolean;
+  installedPath: string;
+  filesCount: number;
+  warnings: string[];
+}
+
+export const installSkillFromZip = (zipBytes: number[], namespace?: string) =>
+  rawInvoke<InstallSkillFromZipResult>("install_skill_from_zip", {
+    zipBytes,
+    namespace: namespace ?? null,
+  });
+
 export const uninstallSkill = (skillPath: string) =>
   rawInvoke<UninstallResult>("uninstall_skill", { skillPath });
 
