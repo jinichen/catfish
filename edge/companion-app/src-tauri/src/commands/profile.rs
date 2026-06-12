@@ -14,8 +14,16 @@
 //! 跟 BL-CENTRAL-EDGE 边界 (5/17): profile 是员工本机数据, 写 ~/.catfish/, 不出端.
 
 use std::path::PathBuf;
+use std::sync::Mutex;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
+
+/// P3.3.50 (6/12 鸿波 "rename profile.json 失败 No such file or directory"):
+/// 全局 Mutex 串行化 profile_save. 多场景并发 (advisor refresh + 后台 trigger +
+/// AdvisorView mount) 会同时跑 profile_save, A 写 tmp → B 写 tmp 覆盖 → A rename
+/// 走 tmp → B rename 找不到 tmp 报错. 弹到 UI 让员工以为大事 (实际数据已 A 保存).
+/// 加锁后两个调用串行, 不互相覆盖 tmp. Mutex::new const since Rust 1.63 → 直 static.
+static PROFILE_SAVE_LOCK: Mutex<()> = Mutex::new(());
 
 /// 员工画像 (catfish 自动识别, 员工不直接编辑).
 ///
@@ -180,19 +188,31 @@ pub async fn profile_get() -> Result<Option<Profile>, String> {
 }
 
 /// 前端 TS 调 gateway LLM 推断完, 调这个写回. 原子写 (tmp + rename), 防半途崩.
+/// P3.3.50 (6/12 鸿波): 加 PROFILE_SAVE_LOCK 串行化 — 防多个并发 saver 互相覆盖
+/// tmp 文件导致 rename 失败"No such file or directory". 锁 OK 失败也兜底友好降级.
 #[tauri::command]
 pub async fn profile_save(profile: Profile) -> Result<(), String> {
+    // 拿锁串行 — async fn 里同步 Mutex 拿短锁 (写文件 ms 级) 不阻塞 tokio 太久
+    let _guard = PROFILE_SAVE_LOCK.lock().map_err(|e| {
+        format!("PROFILE_SAVE_LOCK 中毒: {e} (前次 panic 留下的, 应该不会)")
+    })?;
+
     let dir = catfish_dir()?;
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("创建 ~/.catfish/ 失败: {e}"))?;
 
     let target = profile_path()?;
-    let tmp = target.with_extension("json.tmp");
+    // P3.3.50: tmp 文件名加 nanos 时间戳, 即使锁失败也尽量不撞 (双保险)
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let tmp = target.with_extension(format!("json.tmp.{nanos}"));
 
     let text = serde_json::to_string_pretty(&profile)
         .map_err(|e| format!("serialize profile 失败: {e}"))?;
     std::fs::write(&tmp, text)
-        .map_err(|e| format!("写 profile.json.tmp 失败: {e}"))?;
+        .map_err(|e| format!("写 {} 失败: {e}", tmp.display()))?;
     std::fs::rename(&tmp, &target)
         .map_err(|e| format!("rename profile.json 失败: {e}"))?;
     Ok(())
