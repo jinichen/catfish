@@ -115,6 +115,10 @@ export interface HermesMemoryView {
 }
 export const hermesMemoryRead = () =>
   rawInvoke<HermesMemoryView>("hermes_memory_read");
+// P3.3.49 (6/12): Rust 端直接改 ~/.hermes/memories/{USER,MEMORY}.md, 绕过
+// hermes memory_tool silent fail. byte-exact match + trim() fallback.
+export const hermesMemoryRemove = (target: "user" | "memory", entryText: string) =>
+  rawInvoke<void>("hermes_memory_remove", { target, entryText });
 
 // ── health ───────────────────────────────────────────────
 export const fetchHealthz = () =>

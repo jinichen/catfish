@@ -19,6 +19,7 @@ import { useEffect, useState } from "react";
 
 import {
   hermesMemoryRead,
+  hermesMemoryRemove,  // P3.3.49 (6/12): Rust 直写, 绕过 memory_tool silent fail
   toolBridgeCallTool,
   type HermesMemoryView,
 } from "../../lib/tauri";
@@ -27,16 +28,24 @@ const REFRESH_MS = 30_000;  // 30s polling 跟其他卡一致
 
 /** BL-MEMORY-EDIT-UI (5/16 P0): 删 hermes memory entry.
  * 走 toolBridgeCallTool memory(action=remove), 复用 BL-MEMORY-BRIDGE-STORE 全链路.
- * hermes memory_tool 内部 atomic_replace + file lock 保证安全. */
+ * hermes memory_tool 内部 atomic_replace + file lock 保证安全.
+ *
+ * P3.3.47 (6/12 鸿波 "MEMORY 删除无效") — 修了 resp.ok 检查, 但 root cause 错层.
+ * P3.3.48 (6/12 鸿波证据 console "删除成功 x3" entry 仍在): 真因是 hermes
+ * memory_tool.remove 内部 fail 时返 {"success": False, "error": "No entry
+ * matched 'xxx'"} (e.g. UI 显示 entry 跟文件里有空格/换行差异). tool_bridge
+ * 把它当作"tool 执行成功" 封装成 {ok: true, result: {success: false, error}}.
+ * 所以必须解 resp.result.success, 不是 resp.ok.
+ *
+ * 修正后: P3.3.48 真正反映 hermes 端是否真删了文件. */
 async function removeEntry(
   target: "user" | "memory",
   entryText: string,
 ): Promise<void> {
-  await toolBridgeCallTool("memory", {
-    action: "remove",
-    target,
-    old_text: entryText,
-  });
+  // P3.3.49 (6/12 鸿波): Rust hermes_memory_remove 直接改 USER.md/MEMORY.md, 不走
+  // hermes memory_tool (它 silent fail, P3.3.47/48 修不过来). Rust 端 atomic 写,
+  // 找不到 entry 时返清晰错误 ("找不到 entry (前 50 字: ...). 文件 N 条 entry...").
+  await hermesMemoryRemove(target, entryText);
 }
 
 /** BL-MEMORY-A3 (2026-06-03): replace hermes memory entry.
@@ -46,12 +55,20 @@ async function replaceEntry(
   oldText: string,
   newContent: string,
 ): Promise<void> {
-  await toolBridgeCallTool("memory", {
+  const resp = await toolBridgeCallTool("memory", {
     action: "replace",
     target,
     old_text: oldText,
     content: newContent,
   });
+  // P3.3.48: 双检 (tool_bridge.ok + hermes memory_tool.success)
+  if (!resp.ok) {
+    throw new Error(`tool_bridge 调用挂: ${resp.error ?? "无具体错误"}`);
+  }
+  const r = (resp.result ?? {}) as { success?: boolean; error?: string };
+  if (r.success !== true) {
+    throw new Error(`hermes memory_tool replace 真失败: ${r.error ?? "未知"}`);
+  }
 }
 
 /** BL-MEMORY-A3: dedupe suggestion 真 schema (跟 memory_dedupe Python 真返一致). */
@@ -77,9 +94,12 @@ interface ProposeSkillHint {
 export default function HermesMemoryCard() {
   const [view, setView] = useState<HermesMemoryView | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // P3.3.47 (6/12): 区分"读取失败"跟"删除失败" — 文案不混
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);  // 哪条正在删
   // BL-MEMORY-EDIT-UI fix (5/16): Tauri webview 默认禁 native confirm(), 改 inline
   // 二次点击 — 点第 1 次 🗑 进 confirming 态 (按钮变红 ✓), 点第 2 次真删.
+  // P3.3.47: 3s timeout 太短, 鸿波读完 entry 文本就过了, 改 8s.
   const [confirming, setConfirming] = useState<string | null>(null);
   // BL-MEMORY-A3 (2026-06-03): dedupe state
   const [dedupeSuggestions, setDedupeSuggestions] = useState<DedupeSuggestion[] | null>(null);
@@ -102,20 +122,25 @@ export default function HermesMemoryCard() {
     // 第 1 次点 → 进 confirming 态
     if (confirming !== entry) {
       setConfirming(entry);
-      // 3 秒后自动 reset confirming, 防误存
+      setDeleteError(null);  // P3.3.47: 清掉上次的删除错误条
+      // P3.3.47 (6/12): 3s → 8s. 鸿波读完 entry 文本就 >3s, 第二次点已 reset.
       setTimeout(() => {
         setConfirming((cur) => (cur === entry ? null : cur));
-      }, 3000);
+      }, 8000);
       return;
     }
     // 第 2 次点 → 真删
     setConfirming(null);
     setRemoving(entry);
+    setDeleteError(null);
     try {
       await removeEntry(target, entry);
+      console.log("[HermesMemoryCard] P3.3.47 删除成功:", entry.slice(0, 50));
       await load();  // 刷新
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("[HermesMemoryCard] P3.3.47 删除失败:", msg);
+      setDeleteError(msg);
     } finally {
       setRemoving(null);
     }
@@ -245,6 +270,27 @@ export default function HermesMemoryCard() {
       {error && (
         <div style={{ color: "var(--status-err)", fontSize: 12, marginBottom: 8 }}>
           读取失败: {error}
+        </div>
+      )}
+
+      {/* P3.3.47 (6/12 鸿波 "删除无效"): silent fail 改 surface 显错误 */}
+      {deleteError && (
+        <div
+          style={{
+            color: "var(--status-err)",
+            fontSize: 12,
+            marginBottom: 8,
+            padding: "6px 10px",
+            background: "rgba(220,38,38,0.05)",
+            border: "1px solid rgba(220,38,38,0.3)",
+            borderRadius: 4,
+          }}
+        >
+          🚫 删除失败: {deleteError}
+          <div style={{ fontSize: 10, marginTop: 4, opacity: 0.8 }}>
+            常见原因: hermes memory 文件 entry 内容跟 UI 显示有细微差 (空格/换行/编码),
+            atomic_replace 找不到完全匹配. 检查 ~/.hermes/memories/ 真文件.
+          </div>
         </div>
       )}
 

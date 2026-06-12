@@ -26,6 +26,7 @@ import type {
   HandledSilentlyItem,
   MainTask,
 } from "../../../lib/briefing_advisor";
+// P3.3.43 (6/12 鸿波): revert P3.3.41 — 砍 options/合规/历史 渲染 import
 import { taskChatClear, taskChatGet } from "../../../lib/task_chat";
 import {
   toolBridgeChatApproval,
@@ -261,6 +262,8 @@ function DetailPane({
   const [backendError, setBackendError] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(true);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  // P3.3.43 (6/12 鸿波 "全部删掉"): revert P3.3.41 加的 selectedOptLabel /
+  // selectedOpenError / selectedOpenedPath / handleOptionSelect — chat 才是 main UI.
 
   // P3.3.10 floating approval banner state (跟 ChatPanel 同款逻辑).
   //   hermes _gateway_approval 阻塞期间 chat completions 不 finalize → 立即弹 banner.
@@ -553,6 +556,11 @@ function DetailPane({
         </div>
         <h3 className="briefing-2col__detail-title">{task.title}</h3>
       </div>
+
+      {/* P3.3.43 (6/12 鸿波 "不要给建议的这个框，把这个代码全部删掉"):
+       *  P3.3.41 在这里加了 options/合规/政治/历史 渲染框. 鸿波明确不要.
+       *  catfish 哲学也支持 — chat 是员工跟 AI 直接对话的入口, 不需要 UI 预先 push
+       *  建议/警告. AI 按需在 chat 里说就行. */}
 
       <div ref={scrollRef} className="briefing-2col__chat-thread">
         {historyLoading && (

@@ -87,6 +87,83 @@ fn parse_entries(content: &str) -> Vec<String> {
         .collect()
 }
 
+/// P3.3.49 (6/12 鸿波 "MEMORY 删除无效"): 直写 ~/.hermes/memories/{USER,MEMORY}.md
+/// 删 entry. 绕过 hermes memory_tool — 它 silent fail (返 success=false 但 error
+/// 字段也丢了, P3.3.47/48 修不过来).
+///
+/// catfish hermes_memory_read 已经在直接读这两文件, 加配套写不算 fork hermes —
+/// Python hermes 进程没动, 只是 Rust 端在 catfish + hermes 共享文件上写.
+///
+/// 匹配规则:
+///   1. byte-exact match (跟 UI 显示的 entry 字符串完全一致)
+///   2. fallback: trim() 后再比 (容忍 UI/文件之间空白差)
+///   3. 仍找不到: 返清晰错误含 entry 前 50 字让员工 debug
+///
+/// 原子写: 写到 .tmp 然后 rename, 防中途崩坏文件.
+#[tauri::command]
+pub fn hermes_memory_remove(target: String, entry_text: String) -> Result<(), String> {
+    if target != "user" && target != "memory" {
+        return Err(format!("target 必须是 'user' 或 'memory', 真给的: {target}"));
+    }
+    let home = home_dir().ok_or_else(|| "HOME 环境变量缺失".to_string())?;
+    let mem_dir = home.join(".hermes").join("memories");
+    let path = mem_dir.join(if target == "user" { "USER.md" } else { "MEMORY.md" });
+
+    let content = fs::read_to_string(&path)
+        .map_err(|e| format!("读 {} 失败: {e}", path.display()))?;
+
+    let entries: Vec<String> = content
+        .split(ENTRY_DELIMITER)
+        .map(|s| s.to_string())
+        .collect();
+
+    let target_trim = entry_text.trim();
+    // Pass 1: byte-exact match (含原 trailing/leading whitespace)
+    let mut found_idx: Option<usize> = None;
+    for (i, e) in entries.iter().enumerate() {
+        if e == &entry_text {
+            found_idx = Some(i);
+            break;
+        }
+    }
+    // Pass 2: trim() match (容忍 UI parse_entries 已 trim, 但文件里可能有 leading/trailing whitespace)
+    if found_idx.is_none() {
+        for (i, e) in entries.iter().enumerate() {
+            if e.trim() == target_trim {
+                found_idx = Some(i);
+                break;
+            }
+        }
+    }
+
+    let Some(idx) = found_idx else {
+        let preview: String = entry_text.chars().take(50).collect();
+        return Err(format!(
+            "找不到 entry (前 50 字: '{preview}'). 文件 {} 共 {} 条 entry, \
+             第 1 条前 30 字 = '{}'. 文件可能跟 UI 显示有细微差.",
+            path.display(),
+            entries.len(),
+            entries
+                .first()
+                .map(|s| s.chars().take(30).collect::<String>())
+                .unwrap_or_default(),
+        ));
+    };
+
+    let mut new_entries = entries;
+    new_entries.remove(idx);
+    let new_content = new_entries.join(ENTRY_DELIMITER);
+
+    // 原子写: tmp + rename
+    let tmp_path = path.with_extension("md.tmp");
+    fs::write(&tmp_path, &new_content)
+        .map_err(|e| format!("写 tmp 文件失败 ({}): {e}", tmp_path.display()))?;
+    fs::rename(&tmp_path, &path)
+        .map_err(|e| format!("rename {} → {} 失败: {e}", tmp_path.display(), path.display()))?;
+
+    Ok(())
+}
+
 #[tauri::command]
 pub fn hermes_memory_read() -> Result<HermesMemoryView, String> {
     let home = home_dir().ok_or_else(|| "HOME 环境变量缺失".to_string())?;

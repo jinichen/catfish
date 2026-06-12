@@ -591,22 +591,9 @@ function OptionRow({
           </div>
         </div>
       )}
-      {selected && !openError && !draft && (
-        <div
-          style={{
-            fontSize: 11,
-            color: "var(--catfish-text-muted)",
-            background: "rgba(37,99,235,0.05)",
-            border: "1px dashed rgba(37,99,235,0.3)",
-            borderTop: "none",
-            borderRadius: "0 0 4px 4px",
-            padding: "4px 10px",
-            lineHeight: 1.5,
-          }}
-        >
-          ✓ 已记下你选了 {option.label}. 自己动手写, catfish 不替你做.
-        </div>
-      )}
+      {/* P3.3.42 (6/12 鸿波 "不要出这个提示，遮挡对话，耽误事"): 砍 "已记下你选了 X" 蓝条
+       *  decisionRecord 已留痕到 decisions.jsonl, UI 提示纯冗余. 选了的视觉态由
+       *  OptionRow 的 selected 边框/背景表达即可. */}
     </div>
   );
 }

@@ -235,6 +235,31 @@ user prompt 的 "# 上次 advisor 输出" section 里, 某些 prev task 后会�
 不要忽略 chat summary — 它代表员工跟 task 的真实进度, 比 advisor 上次的
 建议口径权威多了 (advisor 是猜的, summary 是员工真做过的).
 
+## 4.2) BL-ADVISOR-RESOLVED-DROP (P3.3.39, 6/12 鸿波撞误报后这条仍出): 已 resolved 不放 main_tasks
+
+chat summary 含以下任一**已结案信号**关键字时, **task 不能再放 main_tasks**:
+
+  - "已确认" + 否定语 (是误报 / 不存在 / 不是 / 没有 / 无 / 已撤销 / 已结项)
+  - "已完成" / "已结项" / "已 done" / "已处理完" / "已交付" / "已发出" / "已签字"
+  - "已发起申请" + 等审批 (员工把球踢出去了, 等对方)
+  - "不再有效" / "已作废" / "已撤回" / "确认无风险"
+  - "是误报" / "属误报" / "误报修正" / "查证不存在"
+  - "已发邮件催了" + 没下文 → 不算 resolved, 仍放 main_tasks 但 urgency 降
+
+  正面识别例:
+  · "员工已确认 5 封安全预警邮件不存在, 待办为误报" → **drop**
+  · "黄捷已签字, 材料已交到资质办" → **drop** (踢给对方)
+  · "已发邮件催专审报告, 等回" → **不 drop** (还在等)
+  · "已发起加计扣除申请, 等审批" → **drop** (员工动作完成, 等审批不是员工 follow-up)
+
+resolved task 处理方式 (2 选 1):
+  (a) 放 handled_silently — {type: "task_resolved", count: 1, category:
+      "<title> 已结/误报/无风险"}, 让员工在折叠区看得到但不占急/中/低名额
+  (b) 完全不出现 — 适合 chat summary 明确说"不再有效 / 已作废"
+
+判定**保守**: 模糊时仍放 main_tasks (低 urgency) — 错放 cost 是员工多看一眼,
+错 drop cost 是员工漏掉真要做的事. 保守原则.
+
 ## 3) draftPath 跟 tool call 绑定 (5/22 撞过的)
 options[].draftPath 只能从你**真调** catfish_draft_email_reply /
 catfish_draft_meeting_brief / catfish_compose_followup_list 后**返回的 path**
@@ -354,6 +379,10 @@ ${
 **同业务必须复用 task_uid, 不要新生成**. 判定标准 = 同项目/同人/同截止/同业务环节.
 title 表述差异不算新 task. 详见 SYSTEM_PROMPT § "task_uid 跨 refresh 复用".
 **已聊过的 task (含 chat summary), 你这次应该 follow-up 进度 / 帮员工往前推, 不要重推同样建议**.
+
+**P3.3.39 强约束**: chat summary 含 "已确认/是误报/不存在/已结项/已完成/已发起申请等审批"
+等**已结案信号**时, 这条 task 必须挪去 handled_silently 或不出现, **绝不能再放 main_tasks**.
+详细规则见 SYSTEM_PROMPT § 4.2 BL-ADVISOR-RESOLVED-DROP. 这是 6/12 鸿波明确反馈的 bug.
 
 ${lines.join("\n")}`);
   }
@@ -510,10 +539,22 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
   //   (含 stale, 让 LLM 复用 uid). 老 cache 没 taskUid 字段就跳过, 不出错.
   // P3.3.12.1 (6/10): summary 只从 cache 读 (不再现场跑 LLM). 拉 summary 是
   //   ensureTaskChatSummariesFresh 的活, 它由 AdvisorView mount 时后台调,
-  //   跟 advisor 主 LLM call 解耦 — cache 命中场景也能更新. 这里只读最新 cache.
+  //   跟 advisor 主 LLM call 解耦 — cache 命中场景也能更新.
+  //
+  // P3.3.46 BL-ADVISOR-MEMORY-RACE-HARDFIX (6/12 鸿波 "MEMORY 没更新混乱"):
+  //   原 P3.3.12.1 设计有 race — AdvisorView effect1 跑 ensureSummary (慢, LLM
+  //   5-30s), effect2 跑主 advisor (快). effect2 读 cache 时 effect1 还没写完,
+  //   read stale summary → LLM 看到老 MEMORY 推理混乱.
+  //   Fix: 这里 await ensureTaskChatSummariesFresh 先把 MEMORY 写新, 再读 cache.
+  //   ensureTaskChatSummariesFresh 内部有 in-flight 锁, AdvisorView effect1 跟
+  //   这里调的会复用同一 promise, 不双倍烧 token.
   let inputWithPrev = input;
   if (!input.previousTasks) {
     try {
+      // P3.3.46: await summary fresh 先 (内部 in-flight 锁防双调)
+      await ensureTaskChatSummariesFresh(input.model).catch((e) => {
+        console.warn("[advisor] P3.3.46 await ensureSummary 失败 (降级用 stale):", e);
+      });
       const { advisorCacheGet } = await import("./advisor_cache");
       const cached = await advisorCacheGet();
       if (cached && cached.result?.mainTasks?.length > 0) {
@@ -598,11 +639,118 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
       return null;
     }
 
-    return parseAdvisorResult(parsed);
+    const result = parseAdvisorResult(parsed);
+    // P3.3.40 BL-ADVISOR-RESOLVED-HARDFILTER (6/12 鸿波): prompt 里加了 §4.2
+    // (P3.3.39), 但 LLM 听话率 80-90%, 仍会漏. 这里加 deterministic 客户端
+    // 后处理 — 拿 prev task chatSummary + 当前 title, 命中"已结案信号"关键字
+    // 强制挪去 handledSilently. 不依赖 LLM, 100% 命中.
+    if (result && inputWithPrev.previousTasks && inputWithPrev.previousTasks.length > 0) {
+      return filterResolvedTasks(result, inputWithPrev.previousTasks);
+    }
+    return result;
   } catch (e) {
     console.warn("[advisor] LLM 调用挂:", e);
     return null;
   }
+}
+
+// ─── P3.3.40 BL-ADVISOR-RESOLVED-HARDFILTER ───────────────────────────
+//
+// 客户端 deterministic 后处理 — LLM 漏 §4.2 (BL-ADVISOR-RESOLVED-DROP) 时兜底.
+// LLM 不听话, 这里硬把 resolved task 移出 mainTasks → handledSilently.
+//
+// 触发条件 (任一即可):
+//   1. prev task chatSummary 含 RESOLVED_KEYWORDS_RE 任一
+//   2. 当前 mainTask.title 含 RESOLVED_TITLE_RE 任一
+//
+// "已发邮件催了" / "等回复" 不算 resolved — 球还在员工手里, 仍放 main_tasks.
+
+/** chat summary 命中即视 task 已结案 — 员工已说"是误报"/"已签字"/"已发起审批" 等. */
+const RESOLVED_SUMMARY_PATTERNS: RegExp[] = [
+  // "已确认 ... 是误报 / 不存在 / 没有 / 不是 / 已撤销"
+  /已确认.*?(误报|不存在|没有|不是|已撤|无风险|已撤销|已结项)/,
+  // 误报 直接命中
+  /(是误报|属误报|误报修正|查证不存在|不存在.*待办|待办.*?不存在|不存在.*?预警)/,
+  // 显式 resolved 语
+  /(已结项|已 ?done|已处理完|已交付|已发出|已签字|已完成).*?(交付|审批|签字|发出|结项)?/,
+  // 已发起申请 + 审批中 (球已踢出去) — 中间 30 字内可含业务名 (e.g. "已发起加计扣除申请流程")
+  /已(发起|提交|递交)[\s\S]{0,30}?(申请|审批|流程|请示|报批|批复)/,
+  // 显式作废
+  /(不再有效|已作废|已撤回|确认无风险|已撤销)/,
+];
+
+/** title 命中关键字也强 — LLM 把"误报修正"写进 title 仍放 main_tasks, hard drop. */
+const RESOLVED_TITLE_PATTERNS: RegExp[] = [
+  /误报修正/,
+  /(是|属|为)误报/,
+  /已结项|已作废|已撤销|已撤回/,
+];
+
+function chatSummaryLooksResolved(summary: string): boolean {
+  if (!summary || summary.length < 4) return false;
+  return RESOLVED_SUMMARY_PATTERNS.some((re) => re.test(summary));
+}
+
+function titleLooksResolved(title: string): boolean {
+  if (!title) return false;
+  return RESOLVED_TITLE_PATTERNS.some((re) => re.test(title));
+}
+
+function filterResolvedTasks(
+  result: AdvisorResult,
+  previousTasks: NonNullable<AdvisorInput["previousTasks"]>,
+): AdvisorResult {
+  // build uid → summary map
+  const summaryByUid = new Map<string, string>();
+  for (const pt of previousTasks) {
+    if (pt.taskUid && pt.chatSummary) {
+      summaryByUid.set(pt.taskUid, pt.chatSummary);
+    }
+  }
+
+  const keptTasks: MainTask[] = [];
+  const droppedTitles: string[] = [];
+
+  for (const mt of result.mainTasks) {
+    const prevSummary = summaryByUid.get(mt.taskUid) ?? "";
+    const summaryResolved = chatSummaryLooksResolved(prevSummary);
+    const titleResolved = titleLooksResolved(mt.title);
+
+    if (summaryResolved || titleResolved) {
+      const reason = summaryResolved && titleResolved
+        ? "summary+title"
+        : summaryResolved
+          ? "summary"
+          : "title";
+      console.log(
+        `[advisor BL-ADVISOR-RESOLVED-HARDFILTER] drop ${mt.taskUid} "${mt.title}" ` +
+          `(${reason} 命中 resolved 关键字)`,
+      );
+      droppedTitles.push(mt.title);
+      continue;
+    }
+    keptTasks.push(mt);
+  }
+
+  if (droppedTitles.length === 0) {
+    return result;
+  }
+
+  // 重排 id (LLM 排的 1, 2, 3 留个洞不好看, 重排 1..N)
+  const renumberedKept = keptTasks.map((t, i) => ({ ...t, id: i + 1 }));
+
+  // 把 dropped 加进 handledSilently — 让员工在折叠区看得到
+  const handledExtra: HandledSilentlyItem[] = droppedTitles.map((title) => ({
+    type: "task_resolved",
+    count: 1,
+    category: `${title} 已结/误报/无风险 (BL-ADVISOR-RESOLVED-HARDFILTER 兜底)`,
+  }));
+
+  return {
+    ...result,
+    mainTasks: renumberedKept,
+    handledSilently: [...result.handledSilently, ...handledExtra],
+  };
 }
 
 // ─── 鲁棒 JSON 解析 (5/22 cold start 修) ──────────────────────────
@@ -1071,3 +1219,15 @@ function parseMainTask(t: Record<string, unknown>): MainTask | null {
     contextRefs,
   };
 }
+
+
+// ─── 测试 export — P3.3.40 ────────────────────────────────────────
+//
+// 单测拿这套出来跑, 生产代码不用.
+export const __test__ = {
+  filterResolvedTasks,
+  chatSummaryLooksResolved,
+  titleLooksResolved,
+  RESOLVED_SUMMARY_PATTERNS,
+  RESOLVED_TITLE_PATTERNS,
+};

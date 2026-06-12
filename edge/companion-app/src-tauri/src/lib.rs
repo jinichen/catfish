@@ -574,6 +574,8 @@ pub fn run() {
             commands::memory_history::memory_history_forget_all,
             // BL-DASHBOARD-HERMES-MEMORY-CARD (5/16): 读 hermes 0.13 真活 memory 文件
             commands::hermes_memory::hermes_memory_read,
+            // P3.3.49 (6/12 鸿波 "删除无效"): Rust 直写, 绕过 memory_tool silent fail
+            commands::hermes_memory::hermes_memory_remove,
             // BL-MM6 (5/5 晚): 显式 feedback 👍/👎/改 + ~/.catfish/feedback.jsonl
             commands::feedback::feedback_record,
             commands::feedback::feedback_summary,
