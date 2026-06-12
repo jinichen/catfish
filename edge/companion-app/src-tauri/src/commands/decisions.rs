@@ -15,10 +15,16 @@ use std::path::PathBuf;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
+use super::audit_chain::chain_append_impl;
+
 /// 员工最终选 / 操作记录. 每次 ActionCard 触发 → append 一行.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DecisionRecord {
+    /// P3.3.52 (6/12): 记录类型 — "decision_choice" (员工选 A/B/C) / "status_change"
+    /// (员工"标记完成 / 推迟 / 不做") / 老数据可为 None.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_kind: Option<String>,
     /// ISO-8601 timestamp.
     pub ts: String,
     /// 当次主菜 id (本地序号, e.g. 当天主菜 1/2/3).
@@ -39,6 +45,12 @@ pub struct DecisionRecord {
     pub context_refs: Vec<String>,
     /// 草稿路径 (员工最终选用的那份, null = 没选草稿).
     pub draft_path_chosen: Option<String>,
+    /// P3.3.52: status_change 类型用 — 员工切到哪个状态 ("done" / "snoozed" / "ignored")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_status: Option<String>,
+    /// P3.3.52: status_change 用 — task 的 stable uid (跨 refresh)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_uid: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,22 +74,55 @@ fn decisions_path() -> Result<PathBuf, String> {
 // ── Tauri commands ────────────────────────────────────────────────────
 
 /// Append 一条决策记录. 自动填 ts (Utc::now), caller 不用传.
+///
+/// P3.3.52 (6/12): 改走 audit_chain::chain_append_impl, 让 decisions.jsonl 自动
+/// 加 sha256+prev_sha256, 配套 decisions.jsonl.chain.json 防篡改. 老 caller (P3.3.43
+/// 之前的 ActionCard) 签名不变.
 #[tauri::command]
 pub async fn decision_record(mut record: DecisionRecord) -> Result<(), String> {
     record.ts = Utc::now().to_rfc3339();
+    if record.record_kind.is_none() {
+        record.record_kind = Some("decision_choice".to_string());
+    }
 
     let path = decisions_path()?;
-    let line = serde_json::to_string(&record)
+    let value = serde_json::to_value(&record)
         .map_err(|e| format!("serialize record 失败: {e}"))?;
+    chain_append_impl(path.to_string_lossy().to_string(), value).await?;
+    Ok(())
+}
 
-    use std::io::Write;
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .map_err(|e| format!("打开 decisions.jsonl 失败: {e}"))?;
-    writeln!(file, "{line}")
-        .map_err(|e| format!("写 decisions.jsonl 失败: {e}"))?;
+/// P3.3.52 (6/12): 员工在早安 detail pane 点"标记完成 / 推迟 / 不做" 时调.
+/// 不依赖 ActionCard (P3.3.43 已删 options 框), 在 BriefingTwoColumnView
+/// handleStatusChange 里 hook. 不打扰员工, 只留档.
+///
+/// new_status: "done" / "snoozed" / "ignored" / "cleared" (null)
+#[tauri::command]
+pub async fn decision_record_status_change(
+    task_uid: String,
+    task_title: String,
+    new_status: String,
+) -> Result<(), String> {
+    let record = DecisionRecord {
+        record_kind: Some("status_change".to_string()),
+        ts: Utc::now().to_rfc3339(),
+        main_task_id: 0,  // status_change 不一定有 mainTaskId, 0 占位
+        task_title,
+        options_offered: Vec::new(),
+        ai_lean: None,
+        user_choice: None,
+        user_action: None,
+        compliance_flags_at_decision: Vec::new(),
+        context_refs: Vec::new(),
+        draft_path_chosen: None,
+        new_status: Some(new_status),
+        task_uid: Some(task_uid),
+    };
+
+    let path = decisions_path()?;
+    let value = serde_json::to_value(&record)
+        .map_err(|e| format!("serialize record 失败: {e}"))?;
+    chain_append_impl(path.to_string_lossy().to_string(), value).await?;
     Ok(())
 }
 
@@ -159,6 +204,7 @@ mod tests {
 
     fn sample_record() -> DecisionRecord {
         DecisionRecord {
+            record_kind: Some("decision_choice".to_string()),  // P3.3.52
             ts: String::new(),  // 会被 decision_record 覆盖
             main_task_id: 1,
             task_title: "老李催资质方案范围".to_string(),
@@ -180,6 +226,8 @@ mod tests {
             compliance_flags_at_decision: vec!["iso_audit_relevant".to_string()],
             context_refs: vec!["catfish-history://session/abc".to_string()],
             draft_path_chosen: Some("outputs/2026-05-22/reply-laoli-balanced.md".to_string()),
+            new_status: None,  // P3.3.52: status_change 用
+            task_uid: None,    // P3.3.52: status_change 用
         }
     }
 

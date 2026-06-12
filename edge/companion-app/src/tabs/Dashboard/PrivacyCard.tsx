@@ -19,6 +19,7 @@ import * as React from "react";
 
 import { fetchMyAudit, type MyAuditSummary } from "../../lib/me";
 import { formatTokens } from "../../lib/format";
+import { useUIStore } from "../../store/ui";  // P3.3.55 (6/12): 审计视图 tab 开关
 
 // 30s 轮询 — 跟 AuditCard 同节奏 (避免一个卡 30s 一个卡 5s 让 UI 不同步)
 const POLL_MS = 30_000;
@@ -336,6 +337,11 @@ function SelfServeButtons() {
   // 6/8 BL-PRIVACY-SECTION-TABS: outbound log 现在是隐私 section 内并列 tab,
   // 不需要 PrivacyCard 内的快捷按钮. 员工点上面 "📊 数据外发记录" tab 即可.
 
+  // P3.3.55 (6/12): 审计视图 tab 开关 — 跟 manifesto 公理 1 员工主权,
+  // 员工自己决定何时给审计员看. 默认关. 持久 localStorage.
+  const auditViewEnabled = useUIStore((s) => s.auditViewEnabled);
+  const setAuditViewEnabled = useUIStore((s) => s.setAuditViewEnabled);
+
   return (
     <div>
       {/* 6/8 layout-v2: 标题 + 副标 移到外层 Row, 这里只剩 3 button + inline panel. */}
@@ -359,6 +365,31 @@ function SelfServeButtons() {
         {/* "↓ 我的数据外发记录" 按钮 6/8 BL-PRIVACY-SECTION-TABS 砍 —
             outbound log 已在隐私 section 同级 tab, 员工点 "📊 数据外发记录"
             tab 即可. 内部跳转按钮反而冗余. */}
+      </div>
+
+      {/* P3.3.55 (6/12 鸿波 "信合规审计闭环"): 审计视图 tab 开关 */}
+      <div
+        style={{
+          marginTop: 12,
+          padding: "8px 10px",
+          background: "rgba(31,78,121,0.04)",
+          border: "1px dashed rgba(31,78,121,0.25)",
+          borderRadius: 4,
+          fontSize: 12,
+        }}
+      >
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={auditViewEnabled}
+            onChange={(e) => setAuditViewEnabled(e.target.checked)}
+          />
+          <span style={{ fontWeight: 500 }}>🔍 启用审计视图 tab</span>
+        </label>
+        <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 4, paddingLeft: 24 }}>
+          打开后, 隐私 section 多一个 "审计视图" tab — 信合规 / 内审 / 党办上门时表格化呈现
+          决策留痕 / 工具调用 / 数据外发 + 现场跑哈希校验. 不需要时关掉, tab 隐藏.
+        </div>
       </div>
 
       {/* toast */}

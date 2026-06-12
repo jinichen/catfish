@@ -592,19 +592,23 @@ export async function recomputeProfile(model: string): Promise<Profile | null> {
     //   的好 profile → AdvisorView ConfidenceHint 显"🪴刚认识你"黄条假性提示.
     //   修: timeout 时先看有没 saved, 有就返 saved (保留 0.88), 没才写 placeholder.
     //   后台 LLM 完成仍会 profileSave 真值 (覆盖 placeholder 或更新 saved).
-    if (winner === "TIMEOUT") {
-      const existing = await profileGet().catch(() => null);
-      if (existing && existing.confidence > 0) {
-        console.log(
-          "[profile] race timeout 返已有 saved profile (confidence=",
-          existing.confidence,
-          ", 后台 LLM 完成仍会更新)",
-        );
-        return existing;
-      }
+    //
+    // P3.3.56 fix (6/12 鸿波撞 confidence=0 占位回潮): P3.3.28 只保护 TIMEOUT 路径,
+    //   没保护 inferProfileFromContext 内 9 个 return null 路径 (LLM 调用挂 /
+    //   JSON parse 失败 / schema 错). winner=null 仍走 placeholder 覆盖 saved
+    //   0.88. 把 existing check 提到 fallback 统一入口, TIMEOUT 跟 null 两路径
+    //   都先看 existing.
+    const existing = await profileGet().catch(() => null);
+    if (existing && existing.confidence > 0) {
+      const reason = winner === "TIMEOUT" ? "race timeout" : "LLM 返 null";
+      console.log(
+        `[profile] ${reason}, 但 existing.confidence=${existing.confidence} > 0, ` +
+          "不覆盖 saved (后台 LLM 完成仍会更新)",
+      );
+      return existing;
     }
 
-    // race timeout 但没 saved (新员工首启) 或 LLM 真返 null → 占位
+    // 真没 existing (新员工首启) 或 existing 已经是 placeholder (confidence=0) → 写 placeholder
     const placeholder: Profile = {
       tier: "mid",
       centralState: "weak",

@@ -535,6 +535,19 @@ function DetailPane({
       const msg = e instanceof Error ? e.message : String(e);
       setBackendError(`状态没存 (Rust 后端没 build?): ${msg.slice(0, 100)}`);
     }
+    // P3.3.52 (6/12 鸿波): decisions audit 留痕. 不阻塞 UI, 错只 warn.
+    //   走 audit_chain → decisions.jsonl 含 sha256 防篡改.
+    //   "cleared" = s===null (员工撤销之前的状态).
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("decision_record_status_change", {
+        taskUid: task.taskUid,
+        taskTitle: task.title,
+        newStatus: s ?? "cleared",
+      });
+    } catch (e) {
+      console.warn("[BriefingTwoColumn] P3.3.52 audit 留痕失败 (不阻塞):", e);
+    }
     onStatusChange(s);
   };
 

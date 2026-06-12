@@ -308,6 +308,41 @@ pub fn run() {
                 }
             });
 
+            // P3.3.52 (6/12 鸿波): decisions.jsonl pre-chain 迁移. 一次性, 不阻塞启动.
+            // 鸿波 6/12 拍板 A 方案: 历史数据不参与 hash chain, 整体 rename .pre-chain.bak.
+            // 判定条件: ~/.catfish/decisions.jsonl 存在 + decisions.jsonl.chain.json 不存在.
+            std::thread::spawn(|| {
+                let Ok(home) = std::env::var("HOME") else {
+                    log::warn!("[decisions migration] HOME 未设, 跳过");
+                    return;
+                };
+                let dir = std::path::PathBuf::from(home).join(".catfish");
+                let jsonl = dir.join("decisions.jsonl");
+                let chain = dir.join("decisions.jsonl.chain.json");
+                if !jsonl.exists() {
+                    log::info!("[decisions migration] decisions.jsonl 不存在, 跳过");
+                    return;
+                }
+                if chain.exists() {
+                    log::info!("[decisions migration] chain.json 已存在, 跳过 (已迁移过或 fresh start)");
+                    return;
+                }
+                let nanos = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let bak = dir.join(format!("decisions.jsonl.pre-chain.bak.{nanos}"));
+                match std::fs::rename(&jsonl, &bak) {
+                    Ok(_) => log::info!(
+                        "[decisions migration] {} → {} (P3.3.52 A 方案, 历史不参与 chain)",
+                        jsonl.display(), bak.display(),
+                    ),
+                    Err(e) => log::warn!(
+                        "[decisions migration] rename 失败 (不阻塞启动): {e}",
+                    ),
+                }
+            });
+
             // 5/6 BL-E27.2: 桌宠 hover tracker — 80ms 一次轮询鼠标位置,
             // 切 set_ignore_cursor_events 让透明区真透 (附近点击穿到桌面),
             // 桌宠区接事件 (能点能拖). 见 services/pet_hover.rs.
@@ -409,6 +444,15 @@ pub fn run() {
             commands::learning::skill_proposal_accept,
             commands::learning::skill_proposal_reject,
             commands::audit::audit_summary,
+            // P3.3.51 (6/12 鸿波): audit hash chain — decisions / political_scan jsonl 防篡改
+            commands::audit_chain::audit_chain_append,
+            commands::audit_chain::audit_chain_verify,
+            commands::audit_chain::audit_chain_status,
+            // P3.3.54 (6/12 鸿波): 审计员看的 xlsx 多 sheet 导出 (~/.catfish/exports/)
+            commands::audit_export::audit_export_xlsx,
+            // P3.3.55 (6/12 鸿波): 审计视图 Tab 表格化呈现 jsonl raw read
+            commands::audit_export::audit_decisions_raw_read,
+            commands::audit_export::audit_hermes_jsonl_read,
             // BL-RECMODE-DASHBOARD-UI (#75, 5/25): 我的录屏 inventory + Finder + delete
             commands::recordings::recordings_list,
             commands::recordings::recordings_show_in_finder,
@@ -554,6 +598,8 @@ pub fn run() {
             commands::weather::weather_config_set,
             commands::decisions::decision_list_recent,
             commands::decisions::decision_search,
+            // P3.3.52 (6/12 鸿波): 员工"标记完成 / 推迟 / 不做" 时同步留痕到 decisions.jsonl
+            commands::decisions::decision_record_status_change,
             // BL-ADVISOR-CACHE + CONFIG (5/22 Phase 7 cold start v3): 缓存 + yaml 时段配置
             commands::advisor_cache::advisor_cache_get,
             commands::advisor_cache::advisor_cache_save,

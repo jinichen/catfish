@@ -94,6 +94,7 @@ mod tests {
             }),
             model: Some("catfish-public-deepseek-flash".to_string()),
             prompt_tokens: Some(4854),
+            task_chat_summaries: None,  // P3.3.12 字段; 老 test 没填, P3.3.51 跑 cargo test 暴露
         }
     }
 
@@ -115,6 +116,7 @@ mod tests {
             result: serde_json::json!({}),
             model: None,
             prompt_tokens: None,
+            task_chat_summaries: None,  // P3.3.12 字段
         };
         let json = serde_json::to_value(&minimal).expect("serialize");
         // None 应被 skip

@@ -20,6 +20,11 @@ interface UIState {
    *  这个字段保留 (兼容 ChatInput consumeChatPrefill 调用), 但永远空字符串.
    *  pendingChatPrefill = "" 永远 → ChatInput 不会自动 prefill. */
   pendingChatPrefill: string;
+  /** P3.3.55 (6/12 鸿波 "信合规审计闭环"): 员工自己开/关审计视图 tab.
+   *  默认关. 关时 Dashboard 隐私 section 没第 5 tab "审计视图"; 开时显.
+   *  跟 manifesto 公理 1 (员工主权): 员工**自己**决定何时给审计员看. 持久 localStorage. */
+  auditViewEnabled: boolean;
+  setAuditViewEnabled: (enabled: boolean) => void;
   setActiveTab: (tab: TabId) => void;
   toggleDarkMode: () => void;
   openAbout: () => void;
@@ -41,6 +46,22 @@ export const useUIStore = create<UIState>((set, get) => ({
   darkMode: false,
   aboutOpen: false,
   pendingChatPrefill: "",
+  // P3.3.55: 从 localStorage 恢复, 默认 false
+  auditViewEnabled: (() => {
+    try {
+      return localStorage.getItem("catfish:auditViewEnabled") === "1";
+    } catch {
+      return false;
+    }
+  })(),
+  setAuditViewEnabled: (enabled) => {
+    try {
+      localStorage.setItem("catfish:auditViewEnabled", enabled ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+    set({ auditViewEnabled: enabled });
+  },
   setActiveTab: (tab) => set({ activeTab: tab }),
   toggleDarkMode: () => set((s) => ({ darkMode: !s.darkMode })),
   openAbout: () => set({ aboutOpen: true }),

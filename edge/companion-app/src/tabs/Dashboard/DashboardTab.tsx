@@ -119,12 +119,17 @@ import WeChatBindingCard from "./WeChatBindingCard";
 // 导出 CSV). 跟 PrivacyCard 同 section, 因为它是"员工自查中央实际收到什么"的核心
 // 落地, 是公理 2 (数据零出端) 的**可证明 enforcement** 层.
 import OutboundLogCard from "./OutboundLogCard";
+import AuditExportCard from "./AuditExportCard";  // P3.3.54 (6/12 鸿波): 审计员看的 xlsx 导出
+import AuditViewCard from "./AuditViewCard";  // P3.3.55 (6/12 鸿波): 审计员现场看的 tab
+import { useUIStore } from "../../store/ui";  // P3.3.55 (6/12): auditViewEnabled 开关
 // 6/8 BL-PRIVACY-SECTION-TABS: 隐私 section 内 3 卡 → 3 tabs (空间 +25%).
 import SectionTabs from "./SectionTabs";
 
 export default function DashboardTab() {
   // BL-ARCH2 (5/10): role 不再决定 Dashboard 卡片, manager/admin 也走 web 看管理.
   // 顶部 WebPortalLink 按 role 显示锚点; useMe 在内部用, 这里不再分支.
+  // P3.3.55 (6/12 鸿波): 审计视图 tab 条件渲染 — PrivacyCard toggle 控
+  const auditViewEnabled = useUIStore((s) => s.auditViewEnabled);
 
   return (
     <div
@@ -197,6 +202,12 @@ export default function DashboardTab() {
           tabs={[
             { key: "status", label: "🔒 隐私状态", render: () => <PrivacyCard /> },
             { key: "outbound", label: "📊 数据外发记录", render: () => <OutboundLogCard /> },
+            // P3.3.54 (6/12 鸿波): 审计导出 — 给信合规 / 内审 / 党办手动交付
+            { key: "audit-export", label: "📦 审计导出", render: () => <AuditExportCard /> },
+            // P3.3.55 (6/12 鸿波): 审计视图 tab — 默认关 (PrivacyCard toggle 开)
+            ...(auditViewEnabled
+              ? [{ key: "audit-view", label: "🔍 审计视图", render: () => <AuditViewCard /> }]
+              : []),
             { key: "wechat", label: "💬 微信接入", render: () => <WeChatBindingCard /> },
           ]}
         />

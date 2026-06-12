@@ -120,6 +120,66 @@ export const hermesMemoryRead = () =>
 export const hermesMemoryRemove = (target: "user" | "memory", entryText: string) =>
   rawInvoke<void>("hermes_memory_remove", { target, entryText });
 
+// P3.3.54 (6/12 鸿波): 审计员看的 xlsx 多 sheet 导出.
+export interface AuditExportResult {
+  outputPath: string;
+  bytesWritten: number;
+  decisionsCount: number;
+  toolCallsCount: number;
+  outboundCount: number;
+  chainOk: boolean;
+  chainBrokenReason: string | null;
+}
+export const auditExportXlsx = (
+  fromTs: string | null,
+  toTs: string | null,
+  includeDecisions: boolean,
+  includeToolCalls: boolean,
+  includeOutbound: boolean,
+) =>
+  rawInvoke<AuditExportResult>("audit_export_xlsx", {
+    fromTs,
+    toTs,
+    includeDecisions,
+    includeToolCalls,
+    includeOutbound,
+  });
+
+// P3.3.55 (6/12 鸿波): 审计视图 Tab 拿 raw jsonl row 列表.
+export interface ToolCallRow {
+  ts: string;
+  tool: string;
+  ok: boolean;
+  error: string | null;
+  latencyMs: number;
+  argsPreview: string;
+}
+export const auditDecisionsRawRead = (
+  fromTs: string | null,
+  toTs: string | null,
+  limit: number,
+) => rawInvoke<Record<string, unknown>[]>("audit_decisions_raw_read", { fromTs, toTs, limit });
+
+export const auditHermesJsonlRead = (
+  fromTs: string | null,
+  toTs: string | null,
+  limit: number,
+) => rawInvoke<ToolCallRow[]>("audit_hermes_jsonl_read", { fromTs, toTs, limit });
+
+// P3.3.55: 校验哈希链
+export interface ChainVerifyReport {
+  ok: boolean;
+  totalLines: number;
+  expectedCount: number;
+  verifiedLines: number;
+  brokenAt: number | null;
+  brokenReason: string | null;
+  chainFirstSha256: string;
+  chainLastSha256: string;
+}
+export const auditChainVerify = (jsonlPath: string) =>
+  rawInvoke<ChainVerifyReport>("audit_chain_verify", { jsonlPath });
+
 // ── health ───────────────────────────────────────────────
 export const fetchHealthz = () =>
   rawInvoke<{ status: string; service: string }>("healthz");
