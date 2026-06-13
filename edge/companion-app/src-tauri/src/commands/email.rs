@@ -344,7 +344,6 @@ pub async fn email_political_scan_now(
     let msg = crate::services::political_scan::MessageData {
         id: &id,
         subject: &subject,
-        sender: &sender,
         body_text: &body,
     };
     let result = crate::services::political_scan::scan_rules(&msg);

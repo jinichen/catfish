@@ -99,12 +99,12 @@ impl Default for Severity {
     }
 }
 
-/// 输入: 单封邮件元数据.
+/// 输入: 单封邮件元数据. scan 当前只看 subject + body_text — sender 由 caller
+/// 直接传给 persist_audit (跟入 jsonl, 不用塞 MessageData).
 #[derive(Debug, Clone)]
 pub struct MessageData<'a> {
     pub id: &'a str,
     pub subject: &'a str,
-    pub sender: &'a str,
     pub body_text: &'a str,
 }
 
@@ -324,7 +324,6 @@ mod tests {
         MessageData {
             id: "test-id",
             subject,
-            sender: "test@example.com",
             body_text: body,
         }
     }
