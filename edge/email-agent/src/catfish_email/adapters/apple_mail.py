@@ -68,7 +68,21 @@ logger = logging.getLogger("catfish_email.adapters.apple_mail")
 FS = "\x1f"  # field separator (单元分隔符)
 RS = "\x1e"  # record separator (记录分隔符)
 
-_OSASCRIPT_TIMEOUT_SECS = 30.0
+# P3.3.66 (6/13 鸿波): 30s → 60s. 大邮箱同步 / 慢网 / Mail.app 正在拉新邮件
+# 时偶发 30s 不够撞 TimeoutExpired. 60s 给更宽松窗口. 集团 / 员工本机如果
+# 还需要调可走 env CATFISH_OSASCRIPT_TIMEOUT (秒, 整数).
+def _resolve_osascript_timeout() -> float:
+    env = os.environ.get("CATFISH_OSASCRIPT_TIMEOUT", "").strip()
+    if env:
+        try:
+            v = float(env)
+            if v > 0:
+                return v
+        except ValueError:
+            pass
+    return 60.0
+
+_OSASCRIPT_TIMEOUT_SECS = _resolve_osascript_timeout()
 
 
 # ── AppleScript templates (字符串模板, 用 .replace 注入) ──────────
