@@ -107,62 +107,13 @@ pub struct AttachmentInfo {
     pub content_type: String,
 }
 
-// ─── 规则数据 (35 条起步, V2 扩到 50+) ────────────────────────
+// ─── 规则数据 ────────────────────────────────────────────────
+//
+// P3.3.65 (6/13 鸿波): 规则全搬到 phishing_config.rs, 这里只 import.
+// yaml 没设 → 用 PhishingConfig::from_defaults() 即原 P3.3.58 默认值,
+// 单测 / 单员工本机行为不变. 集团下发 yaml 覆盖.
 
-/// 紧迫感关键词 (中英) — 触发 medium
-const URGENT_KEYWORDS_CN: &[&str] = &[
-    "24小时内", "48小时内", "立即处理", "立刻处理", "尽快处理",
-    "账户冻结", "账户异常", "账户锁定", "立即冻结",
-    "验证身份", "验证账户", "验证密码", "验证您的",
-    "重置密码", "恢复账户", "重新登录",
-    "付款逾期", "欠费", "立即缴费", "停服通知",
-    "可疑活动", "异常登录", "异地登录",
-    "中奖", "抽奖", "奖金领取",
-    "退税", "补贴", "政府补助",
-    "包裹异常", "海关扣押", "签收失败",
-    "法院传票", "法律警告", "起诉",
-];
-
-const URGENT_KEYWORDS_EN: &[&str] = &[
-    "urgent action required", "verify your account", "reset your password",
-    "account suspended", "unusual activity", "click here to verify",
-    "your payment is overdue", "claim your prize",
-];
-
-/// 个人信息请求 — 触发 high (问敏感信息的几乎都是钓鱼)
-const PERSONAL_INFO_KEYWORDS: &[&str] = &[
-    "身份证号", "银行卡号", "信用卡号", "手机验证码", "短信验证码",
-    "登录密码", "支付密码", "动态口令",
-    "ssn", "social security", "credit card number",
-];
-
-/// 加密货币 / 汇款 (常见诈骗主题)
-const CRYPTO_TRANSFER_KEYWORDS: &[&str] = &[
-    "比特币", "BTC", "USDT", "以太坊", "ETH", "数字货币钱包",
-    "境外汇款", "私人转账", "公对私转账", "电汇",
-];
-
-/// 短链域名
-const SHORT_LINK_DOMAINS: &[&str] = &[
-    "bit.ly", "tinyurl.com", "t.co", "t.cn", "suo.im",
-    "dwz.cn", "url.cn", "goo.gl", "ow.ly", "is.gd",
-];
-
-/// 可疑顶级域 (常用于钓鱼活动)
-const SUSPICIOUS_TLDS: &[&str] = &[".tk", ".ml", ".ga", ".cf", ".top"];
-
-/// 可执行附件扩展名 (即拒)
-const EXEC_EXTENSIONS: &[&str] = &[
-    ".exe", ".com", ".pif", ".scr", ".bat", ".cmd",
-    ".vbs", ".js", ".wsh", ".hta", ".ps1", ".jar",
-    ".lnk", ".url",
-];
-
-/// macro 文档扩展 (高风险)
-const MACRO_EXTENSIONS: &[&str] = &[".docm", ".xlsm", ".pptm", ".dotm", ".xlam"];
-
-/// 镜像 / 容器格式 (绕过 Mark of the Web)
-const CONTAINER_EXTENSIONS: &[&str] = &[".iso", ".img", ".vhd", ".vhdx"];
+use super::phishing_config::{phishing_config, PhishingConfig};
 
 // ─── 工具函数 ────────────────────────────────────────────────
 
@@ -263,161 +214,179 @@ fn ext_of(filename: &str) -> String {
 
 // ─── 5 类扫描函数 ────────────────────────────────────────────
 
-fn scan_sender(msg: &MessageData, flags: &mut Vec<PhishingFlag>) {
+fn scan_sender(msg: &MessageData, cfg: &PhishingConfig, flags: &mut Vec<PhishingFlag>) {
     let (display, addr, domain) = parse_sender(msg.sender);
 
+    // P3.3.65 政企白名单: domain 在 org_whitelist 整段 sender 扫跳过 — 政企内部
+    // 域名 (chinatelecom.cn 等) 不可能假阳触发 PHISH-001/002/003/006/008.
+    if !domain.is_empty() && cfg.is_whitelisted_domain(&domain) {
+        return;
+    }
+
     // PHISH-001: 显示名含"安全/客服/技术/财务/行政"等组织角色, 但邮箱域不在白名单
-    let role_keywords = [
-        "信安部", "信安中心", "信息安全", "客服中心", "技术支持",
-        "财务部", "人事部", "行政部", "总裁办", "董事会",
-    ];
-    let display_has_role = role_keywords.iter().any(|kw| display.contains(kw));
-    let domain_in_white = msg.our_domains.iter().any(|d| domain.ends_with(d.as_str()));
-    if display_has_role && !domain_in_white && !domain.is_empty() {
-        flags.push(PhishingFlag {
-            rule_id: "PHISH-001-display-name-mismatch".into(),
-            severity: Severity::High,
-            category: Category::SenderSpoofing,
-            reason: format!(
-                "发件人显示名含组织角色 '{}', 但邮箱域 '{}' 不在企业白名单",
-                display, domain,
-            ),
-            matched_text: Some(msg.sender.to_string()),
-        });
-    }
-
-    // PHISH-002: 域名同形异义 (chinatelecom vs ch1natelecom)
-    if let Some(ours) = looks_like_homograph(&domain, msg.our_domains) {
-        flags.push(PhishingFlag {
-            rule_id: "PHISH-002-similar-domain".into(),
-            severity: Severity::High,
-            category: Category::SenderSpoofing,
-            reason: format!("发件人域 '{}' 跟企业域 '{}' 同形异义 (字符替换/连字符)", domain, ours),
-            matched_text: Some(domain.clone()),
-        });
-    }
-
-    // PHISH-003: 子域名仿冒 (secure-chinatelecom.attacker.com)
-    for ours in msg.our_domains {
-        // 检查 our_domain 出现在子域名位置但不是真正的 root
-        if domain.contains(ours.as_str()) && !domain.ends_with(ours.as_str()) {
+    if cfg.is_rule_enabled("PHISH-001") {
+        let display_has_role = cfg.keywords.role_titles.iter().any(|kw| display.contains(kw.as_str()));
+        let domain_in_white = msg.our_domains.iter().any(|d| domain.ends_with(d.as_str()));
+        if display_has_role && !domain_in_white && !domain.is_empty() {
             flags.push(PhishingFlag {
-                rule_id: "PHISH-003-subdomain-spoofing".into(),
+                rule_id: "PHISH-001-display-name-mismatch".into(),
                 severity: Severity::High,
                 category: Category::SenderSpoofing,
                 reason: format!(
-                    "发件人域 '{}' 含企业名 '{}' 但实际根域不同 (子域仿冒)",
-                    domain, ours,
+                    "发件人显示名含组织角色 '{}', 但邮箱域 '{}' 不在企业白名单",
+                    display, domain,
                 ),
-                matched_text: Some(domain.clone()),
-            });
-            break;
-        }
-    }
-
-    // PHISH-006: 可疑 TLD (.tk .ml .ga .cf)
-    for sus in SUSPICIOUS_TLDS {
-        if domain.ends_with(sus) {
-            flags.push(PhishingFlag {
-                rule_id: "PHISH-006-suspicious-tld".into(),
-                severity: Severity::Medium,
-                category: Category::SenderSpoofing,
-                reason: format!("发件人域使用可疑顶级域 '{}'", sus),
-                matched_text: Some(domain.clone()),
-            });
-            break;
-        }
-    }
-
-    // PHISH-008: 显示名**真像邮箱地址** (含 @ + 含 .) 但跟 from 地址不同.
-    // P3.3.59 fix: 老版只 check '@' 撞 false positive (e.g. "Aria @ HeyGen" 不是邮箱
-    // 但含 @). 现在再 check 域名部分含点 + 至少 4 字符像域名形状, 才算真"显示名是
-    // 邮箱地址".
-    if display.contains('@') && !addr.is_empty() && display != addr {
-        // display 切 @ 看后半像不像域名 (含 dot + 2+ 字符)
-        let display_looks_like_email = display
-            .split('@')
-            .nth(1)
-            .map(|d| d.contains('.') && d.len() >= 4 && !d.contains(' '))
-            .unwrap_or(false);
-        if display_looks_like_email {
-            flags.push(PhishingFlag {
-                rule_id: "PHISH-008-display-no-domain".into(),
-                severity: Severity::High,
-                category: Category::SenderSpoofing,
-                reason: format!("显示名 '{}' 是邮箱地址, 跟实际 from '{}' 不同 (隐藏真实发件人)", display, addr),
                 matched_text: Some(msg.sender.to_string()),
             });
         }
     }
+
+    // PHISH-002: 域名同形异义 (chinatelecom vs ch1natelecom)
+    if cfg.is_rule_enabled("PHISH-002") {
+        if let Some(ours) = looks_like_homograph(&domain, msg.our_domains) {
+            flags.push(PhishingFlag {
+                rule_id: "PHISH-002-similar-domain".into(),
+                severity: Severity::High,
+                category: Category::SenderSpoofing,
+                reason: format!("发件人域 '{}' 跟企业域 '{}' 同形异义 (字符替换/连字符)", domain, ours),
+                matched_text: Some(domain.clone()),
+            });
+        }
+    }
+
+    // PHISH-003: 子域名仿冒 (secure-chinatelecom.attacker.com)
+    if cfg.is_rule_enabled("PHISH-003") {
+        for ours in msg.our_domains {
+            if domain.contains(ours.as_str()) && !domain.ends_with(ours.as_str()) {
+                flags.push(PhishingFlag {
+                    rule_id: "PHISH-003-subdomain-spoofing".into(),
+                    severity: Severity::High,
+                    category: Category::SenderSpoofing,
+                    reason: format!(
+                        "发件人域 '{}' 含企业名 '{}' 但实际根域不同 (子域仿冒)",
+                        domain, ours,
+                    ),
+                    matched_text: Some(domain.clone()),
+                });
+                break;
+            }
+        }
+    }
+
+    // PHISH-006: 可疑 TLD (.tk .ml .ga .cf)
+    if cfg.is_rule_enabled("PHISH-006") {
+        for sus in &cfg.domain_lists.suspicious_tld {
+            if domain.ends_with(sus.as_str()) {
+                flags.push(PhishingFlag {
+                    rule_id: "PHISH-006-suspicious-tld".into(),
+                    severity: Severity::Medium,
+                    category: Category::SenderSpoofing,
+                    reason: format!("发件人域使用可疑顶级域 '{}'", sus),
+                    matched_text: Some(domain.clone()),
+                });
+                break;
+            }
+        }
+    }
+
+    // PHISH-008: 显示名**真像邮箱地址** (含 @ + 含 .) 但跟 from 地址不同.
+    // P3.3.59 fix: display 后半要含 . + ≥4 字符 + 无空格 才算真"显示名是邮箱".
+    if cfg.is_rule_enabled("PHISH-008") {
+        if display.contains('@') && !addr.is_empty() && display != addr {
+            let display_looks_like_email = display
+                .split('@')
+                .nth(1)
+                .map(|d| d.contains('.') && d.len() >= 4 && !d.contains(' '))
+                .unwrap_or(false);
+            if display_looks_like_email {
+                flags.push(PhishingFlag {
+                    rule_id: "PHISH-008-display-no-domain".into(),
+                    severity: Severity::High,
+                    category: Category::SenderSpoofing,
+                    reason: format!("显示名 '{}' 是邮箱地址, 跟实际 from '{}' 不同 (隐藏真实发件人)", display, addr),
+                    matched_text: Some(msg.sender.to_string()),
+                });
+            }
+        }
+    }
 }
 
-fn scan_urgent_keywords(msg: &MessageData, flags: &mut Vec<PhishingFlag>) {
+fn scan_urgent_keywords(msg: &MessageData, cfg: &PhishingConfig, flags: &mut Vec<PhishingFlag>) {
     let haystack = format!("{} {}", msg.subject, msg.body_text).to_lowercase();
     let subject_lower = msg.subject.to_lowercase();
 
-    let mut hits = 0;
-    let mut matched: Option<String> = None;
-    for kw in URGENT_KEYWORDS_CN.iter().chain(URGENT_KEYWORDS_EN.iter()) {
-        if haystack.contains(&kw.to_lowercase()) {
-            hits += 1;
-            if matched.is_none() {
-                matched = Some((*kw).to_string());
+    // PHISH-011: 紧迫感关键词 (中英 合扫)
+    if cfg.is_rule_enabled("PHISH-011") {
+        let mut hits = 0;
+        let mut matched: Option<String> = None;
+        for kw in cfg.keywords.urgent_cn.iter().chain(cfg.keywords.urgent_en.iter()) {
+            if haystack.contains(&kw.to_lowercase()) {
+                hits += 1;
+                if matched.is_none() {
+                    matched = Some(kw.clone());
+                }
             }
         }
-    }
-    if hits > 0 {
-        let sev = if hits >= 2 || subject_lower.contains("紧急") || subject_lower.contains("urgent") {
-            Severity::High
-        } else {
-            Severity::Medium
-        };
-        flags.push(PhishingFlag {
-            rule_id: "PHISH-011-urgent-keywords".into(),
-            severity: sev,
-            category: Category::UrgentKeywords,
-            reason: format!("命中 {} 个紧迫感关键词 (e.g. '{}')", hits, matched.as_deref().unwrap_or("")),
-            matched_text: matched,
-        });
+        if hits > 0 {
+            let subj_urgent = cfg.patterns.urgent_subject
+                .iter()
+                .any(|p| subject_lower.contains(&p.to_lowercase()));
+            let sev = if hits >= cfg.thresholds.urgent_kw_hits_for_high || subj_urgent {
+                Severity::High
+            } else {
+                Severity::Medium
+            };
+            flags.push(PhishingFlag {
+                rule_id: "PHISH-011-urgent-keywords".into(),
+                severity: sev,
+                category: Category::UrgentKeywords,
+                reason: format!("命中 {} 个紧迫感关键词 (e.g. '{}')", hits, matched.as_deref().unwrap_or("")),
+                matched_text: matched,
+            });
+        }
     }
 
     // PHISH-013: 含个人信息请求 (身份证 / 银行卡 / 验证码)
-    let mut info_hits = 0;
-    let mut info_match: Option<String> = None;
-    for kw in PERSONAL_INFO_KEYWORDS {
-        if haystack.contains(&kw.to_lowercase()) {
-            info_hits += 1;
-            if info_match.is_none() {
-                info_match = Some((*kw).to_string());
+    if cfg.is_rule_enabled("PHISH-013") {
+        let mut info_hits = 0;
+        let mut info_match: Option<String> = None;
+        for kw in &cfg.keywords.personal_info {
+            if haystack.contains(&kw.to_lowercase()) {
+                info_hits += 1;
+                if info_match.is_none() {
+                    info_match = Some(kw.clone());
+                }
             }
         }
-    }
-    if info_hits > 0 {
-        flags.push(PhishingFlag {
-            rule_id: "PHISH-013-personal-info-request".into(),
-            severity: Severity::High,
-            category: Category::UrgentKeywords,
-            reason: format!("邮件含个人敏感信息请求 (e.g. '{}')", info_match.as_deref().unwrap_or("")),
-            matched_text: info_match,
-        });
+        if info_hits > 0 {
+            flags.push(PhishingFlag {
+                rule_id: "PHISH-013-personal-info-request".into(),
+                severity: Severity::High,
+                category: Category::UrgentKeywords,
+                reason: format!("邮件含个人敏感信息请求 (e.g. '{}')", info_match.as_deref().unwrap_or("")),
+                matched_text: info_match,
+            });
+        }
     }
 
     // PHISH-044: 加密货币 / 私人汇款
-    for kw in CRYPTO_TRANSFER_KEYWORDS {
-        if haystack.contains(&kw.to_lowercase()) {
-            flags.push(PhishingFlag {
-                rule_id: "PHISH-044-crypto-or-wire".into(),
-                severity: Severity::High,
-                category: Category::ContentAnomaly,
-                reason: format!("邮件含加密货币 / 私人汇款关键词 '{}'", kw),
-                matched_text: Some((*kw).to_string()),
-            });
-            break;
+    if cfg.is_rule_enabled("PHISH-044") {
+        for kw in &cfg.keywords.crypto_transfer {
+            if haystack.contains(&kw.to_lowercase()) {
+                flags.push(PhishingFlag {
+                    rule_id: "PHISH-044-crypto-or-wire".into(),
+                    severity: Severity::High,
+                    category: Category::ContentAnomaly,
+                    reason: format!("邮件含加密货币 / 私人汇款关键词 '{}'", kw),
+                    matched_text: Some(kw.clone()),
+                });
+                break;
+            }
         }
     }
 }
 
-fn scan_links(msg: &MessageData, flags: &mut Vec<PhishingFlag>) {
+fn scan_links(msg: &MessageData, cfg: &PhishingConfig, flags: &mut Vec<PhishingFlag>) {
     let urls = extract_urls(msg.body_text, msg.body_html);
     if urls.is_empty() {
         return;
@@ -427,50 +396,61 @@ fn scan_links(msg: &MessageData, flags: &mut Vec<PhishingFlag>) {
 
     for url in &urls {
         let host = url_host(url);
+        // P3.3.65: org_whitelist 域名链接不触发任何 link 规则 (内部链接不应被钓鱼判)
+        if cfg.is_whitelisted_domain(&host) {
+            domains.insert(host.clone());
+            continue;
+        }
         domains.insert(host.clone());
 
         // PHISH-021: 短链
-        for short in SHORT_LINK_DOMAINS {
-            if host == *short || host.ends_with(&format!(".{short}")) {
-                flags.push(PhishingFlag {
-                    rule_id: "PHISH-021-shortlink".into(),
-                    severity: Severity::High,
-                    category: Category::SuspiciousLink,
-                    reason: format!("链接使用短链域名 '{}' (隐藏真实地址)", host),
-                    matched_text: Some(url.clone()),
-                });
-                break;
+        if cfg.is_rule_enabled("PHISH-021") {
+            for short in &cfg.domain_lists.short_link {
+                if host == *short || host.ends_with(&format!(".{short}")) {
+                    flags.push(PhishingFlag {
+                        rule_id: "PHISH-021-shortlink".into(),
+                        severity: Severity::High,
+                        category: Category::SuspiciousLink,
+                        reason: format!("链接使用短链域名 '{}' (隐藏真实地址)", host),
+                        matched_text: Some(url.clone()),
+                    });
+                    break;
+                }
             }
         }
 
         // PHISH-022: 裸 IP URL
-        let parts: Vec<&str> = host.split('.').collect();
-        if parts.len() == 4 && parts.iter().all(|p| p.parse::<u8>().is_ok()) {
-            flags.push(PhishingFlag {
-                rule_id: "PHISH-022-ip-url".into(),
-                severity: Severity::High,
-                category: Category::SuspiciousLink,
-                reason: format!("链接直接使用 IP 地址 '{}' (非域名)", host),
-                matched_text: Some(url.clone()),
-            });
-        }
-
-        // PHISH-024: 可疑 TLD 链接
-        for sus in SUSPICIOUS_TLDS {
-            if host.ends_with(sus) {
+        if cfg.is_rule_enabled("PHISH-022") {
+            let parts: Vec<&str> = host.split('.').collect();
+            if parts.len() == 4 && parts.iter().all(|p| p.parse::<u8>().is_ok()) {
                 flags.push(PhishingFlag {
-                    rule_id: "PHISH-024-suspicious-tld-link".into(),
-                    severity: Severity::Medium,
+                    rule_id: "PHISH-022-ip-url".into(),
+                    severity: Severity::High,
                     category: Category::SuspiciousLink,
-                    reason: format!("链接指向可疑顶级域 '{}'", sus),
+                    reason: format!("链接直接使用 IP 地址 '{}' (非域名)", host),
                     matched_text: Some(url.clone()),
                 });
-                break;
             }
         }
 
-        // PHISH-026: URL 异常长 (>200 字)
-        if url.len() > 200 {
+        // PHISH-024: 可疑 TLD 链接
+        if cfg.is_rule_enabled("PHISH-024") {
+            for sus in &cfg.domain_lists.suspicious_tld {
+                if host.ends_with(sus.as_str()) {
+                    flags.push(PhishingFlag {
+                        rule_id: "PHISH-024-suspicious-tld-link".into(),
+                        severity: Severity::Medium,
+                        category: Category::SuspiciousLink,
+                        reason: format!("链接指向可疑顶级域 '{}'", sus),
+                        matched_text: Some(url.clone()),
+                    });
+                    break;
+                }
+            }
+        }
+
+        // PHISH-026: URL 异常长
+        if cfg.is_rule_enabled("PHISH-026") && url.len() > cfg.thresholds.max_url_len {
             flags.push(PhishingFlag {
                 rule_id: "PHISH-026-long-url".into(),
                 severity: Severity::Medium,
@@ -480,22 +460,23 @@ fn scan_links(msg: &MessageData, flags: &mut Vec<PhishingFlag>) {
             });
         }
 
-        // PHISH-030: http (非 https) 含 login/verify/pay
-        if url.starts_with("http://")
-            && (url.contains("login") || url.contains("verify") || url.contains("pay") || url.contains("signin"))
-        {
-            flags.push(PhishingFlag {
-                rule_id: "PHISH-030-http-login-page".into(),
-                severity: Severity::Medium,
-                category: Category::SuspiciousLink,
-                reason: "登录/支付/验证页未走 https".into(),
-                matched_text: Some(url.clone()),
-            });
+        // PHISH-030: http (非 https) 含 login/verify/pay/signin
+        if cfg.is_rule_enabled("PHISH-030") && url.starts_with("http://") {
+            let hits_login = cfg.patterns.login_keywords.iter().any(|kw| url.contains(kw.as_str()));
+            if hits_login {
+                flags.push(PhishingFlag {
+                    rule_id: "PHISH-030-http-login-page".into(),
+                    severity: Severity::Medium,
+                    category: Category::SuspiciousLink,
+                    reason: "登录/支付/验证页未走 https".into(),
+                    matched_text: Some(url.clone()),
+                });
+            }
         }
     }
 
-    // PHISH-029: 单封邮件含 5+ 不同域名 (撒网)
-    if domains.len() >= 5 {
+    // PHISH-029: 单封邮件含 N+ 不同域名 (撒网)
+    if cfg.is_rule_enabled("PHISH-029") && domains.len() >= cfg.thresholds.max_domains_per_email {
         flags.push(PhishingFlag {
             rule_id: "PHISH-029-multiple-domains".into(),
             severity: Severity::Medium,
@@ -506,32 +487,39 @@ fn scan_links(msg: &MessageData, flags: &mut Vec<PhishingFlag>) {
     }
 }
 
-fn scan_attachments(msg: &MessageData, flags: &mut Vec<PhishingFlag>) {
+fn scan_attachments(msg: &MessageData, cfg: &PhishingConfig, flags: &mut Vec<PhishingFlag>) {
     for att in msg.attachments {
         let ext = ext_of(&att.filename);
 
-        // PHISH-035: 双扩展名 — 在 PHISH-031 之前 check (双扩展 catfish 钓鱼信号更强)
-        let parts: Vec<&str> = att.filename.split('.').collect();
-        if parts.len() >= 3 {
-            let last_two = format!(".{}.{}", parts[parts.len() - 2], parts[parts.len() - 1]);
-            let common_doc_exts = [".pdf", ".docx", ".xlsx", ".jpg", ".png"];
-            let last_dot_ext = format!(".{}", parts[parts.len() - 1]);
-            if common_doc_exts.iter().any(|d| last_two.starts_with(d))
-                && EXEC_EXTENSIONS.contains(&last_dot_ext.as_str())
-            {
-                flags.push(PhishingFlag {
-                    rule_id: "PHISH-035-double-extension".into(),
-                    severity: Severity::High,
-                    category: Category::SuspiciousAttachment,
-                    reason: format!("附件 '{}' 双扩展名 (伪装常见文档为可执行)", att.filename),
-                    matched_text: Some(att.filename.clone()),
-                });
-                continue;  // 双扩展已经标了, 不重复 PHISH-031
+        // PHISH-035: 双扩展名 — 在 PHISH-031 之前 check (双扩展信号更强)
+        if cfg.is_rule_enabled("PHISH-035") {
+            let parts: Vec<&str> = att.filename.split('.').collect();
+            if parts.len() >= 3 {
+                let last_two = format!(".{}.{}", parts[parts.len() - 2], parts[parts.len() - 1]);
+                let last_dot_ext = format!(".{}", parts[parts.len() - 1]);
+                let hits_doc = cfg.attachment_lists.common_doc_ext
+                    .iter()
+                    .any(|d| last_two.starts_with(d.as_str()));
+                let hits_exec = cfg.attachment_lists.exec_ext
+                    .iter()
+                    .any(|e| e.as_str() == last_dot_ext.as_str());
+                if hits_doc && hits_exec {
+                    flags.push(PhishingFlag {
+                        rule_id: "PHISH-035-double-extension".into(),
+                        severity: Severity::High,
+                        category: Category::SuspiciousAttachment,
+                        reason: format!("附件 '{}' 双扩展名 (伪装常见文档为可执行)", att.filename),
+                        matched_text: Some(att.filename.clone()),
+                    });
+                    continue;  // 双扩展已经标了, 不重复 PHISH-031
+                }
             }
         }
 
         // PHISH-031: 可执行附件
-        if EXEC_EXTENSIONS.contains(&ext.as_str()) {
+        if cfg.is_rule_enabled("PHISH-031")
+            && cfg.attachment_lists.exec_ext.iter().any(|e| e.as_str() == ext.as_str())
+        {
             flags.push(PhishingFlag {
                 rule_id: "PHISH-031-exec-attachment".into(),
                 severity: Severity::High,
@@ -543,7 +531,9 @@ fn scan_attachments(msg: &MessageData, flags: &mut Vec<PhishingFlag>) {
         }
 
         // PHISH-033: macro 文档
-        if MACRO_EXTENSIONS.contains(&ext.as_str()) {
+        if cfg.is_rule_enabled("PHISH-033")
+            && cfg.attachment_lists.macro_ext.iter().any(|e| e.as_str() == ext.as_str())
+        {
             flags.push(PhishingFlag {
                 rule_id: "PHISH-033-macro-doc".into(),
                 severity: Severity::High,
@@ -555,7 +545,9 @@ fn scan_attachments(msg: &MessageData, flags: &mut Vec<PhishingFlag>) {
         }
 
         // PHISH-037: ISO / VHD 镜像 (绕过 MotW)
-        if CONTAINER_EXTENSIONS.contains(&ext.as_str()) {
+        if cfg.is_rule_enabled("PHISH-037")
+            && cfg.attachment_lists.container_ext.iter().any(|e| e.as_str() == ext.as_str())
+        {
             flags.push(PhishingFlag {
                 rule_id: "PHISH-037-iso-img".into(),
                 severity: Severity::High,
@@ -567,67 +559,74 @@ fn scan_attachments(msg: &MessageData, flags: &mut Vec<PhishingFlag>) {
         }
 
         // PHISH-038: 文件名扩展 vs MIME 不匹配
-        let mime_says_exec = att.content_type.contains("msdownload")
-            || att.content_type.contains("x-executable")
-            || att.content_type.contains("x-msdos-program");
-        let ext_says_doc = matches!(
-            ext.as_str(),
-            ".pdf" | ".docx" | ".xlsx" | ".pptx" | ".txt" | ".jpg" | ".png"
-        );
-        if mime_says_exec && ext_says_doc {
-            flags.push(PhishingFlag {
-                rule_id: "PHISH-038-mime-mismatch".into(),
-                severity: Severity::High,
-                category: Category::SuspiciousAttachment,
-                reason: format!(
-                    "附件 '{}' 扩展名是文档, 但 MIME '{}' 实际是可执行",
-                    att.filename, att.content_type,
-                ),
-                matched_text: Some(att.filename.clone()),
-            });
+        if cfg.is_rule_enabled("PHISH-038") {
+            let mime_says_exec = cfg.patterns.exec_mime_substrings
+                .iter()
+                .any(|sub| att.content_type.contains(sub.as_str()));
+            let ext_says_doc = cfg.attachment_lists.safe_doc_ext
+                .iter()
+                .any(|e| e.as_str() == ext.as_str());
+            if mime_says_exec && ext_says_doc {
+                flags.push(PhishingFlag {
+                    rule_id: "PHISH-038-mime-mismatch".into(),
+                    severity: Severity::High,
+                    category: Category::SuspiciousAttachment,
+                    reason: format!(
+                        "附件 '{}' 扩展名是文档, 但 MIME '{}' 实际是可执行",
+                        att.filename, att.content_type,
+                    ),
+                    matched_text: Some(att.filename.clone()),
+                });
+            }
         }
     }
 }
 
-fn scan_content(msg: &MessageData, flags: &mut Vec<PhishingFlag>) {
-    // PHISH-046: 收件人 > 50 人 (撒网)
-    if msg.recipients.len() > 50 {
+fn scan_content(msg: &MessageData, cfg: &PhishingConfig, flags: &mut Vec<PhishingFlag>) {
+    // PHISH-046: 收件人 > N 人 (撒网)
+    if cfg.is_rule_enabled("PHISH-046") && msg.recipients.len() > cfg.thresholds.max_recipients {
         flags.push(PhishingFlag {
             rule_id: "PHISH-046-mass-recipients".into(),
             severity: Severity::Low,
             category: Category::ContentAnomaly,
-            reason: format!("收件人 {} 人 (>50, 撒网式钓鱼常见)", msg.recipients.len()),
+            reason: format!(
+                "收件人 {} 人 (>{}, 撒网式钓鱼常见)",
+                msg.recipients.len(),
+                cfg.thresholds.max_recipients,
+            ),
             matched_text: None,
         });
     }
 
-    // PHISH-048: 邮件正文 < 30 字但含链接 (诱饵)
-    let body_compact = msg.body_text.trim();
-    if body_compact.chars().count() < 30 && (body_compact.contains("http://") || body_compact.contains("https://")) {
-        flags.push(PhishingFlag {
-            rule_id: "PHISH-048-short-body-link".into(),
-            severity: Severity::Medium,
-            category: Category::ContentAnomaly,
-            reason: "邮件正文极短但含链接 (典型诱饵邮件)".into(),
-            matched_text: None,
-        });
+    // PHISH-048: 邮件正文 < N 字但含链接 (诱饵)
+    if cfg.is_rule_enabled("PHISH-048") {
+        let body_compact = msg.body_text.trim();
+        if body_compact.chars().count() < cfg.thresholds.min_body_chars_with_link
+            && (body_compact.contains("http://") || body_compact.contains("https://"))
+        {
+            flags.push(PhishingFlag {
+                rule_id: "PHISH-048-short-body-link".into(),
+                severity: Severity::Medium,
+                category: Category::ContentAnomaly,
+                reason: "邮件正文极短但含链接 (典型诱饵邮件)".into(),
+                matched_text: None,
+            });
+        }
     }
 
     // PHISH-049: 通用打招呼 (Dear Customer, 尊敬的用户) — 没有员工姓名
-    let generic_greetings = [
-        "Dear Customer", "Dear User", "Dear Valued Customer",
-        "尊敬的用户", "尊敬的客户", "亲爱的用户",
-    ];
-    for greet in &generic_greetings {
-        if msg.body_text.contains(greet) {
-            flags.push(PhishingFlag {
-                rule_id: "PHISH-049-generic-greeting".into(),
-                severity: Severity::Low,
-                category: Category::ContentAnomaly,
-                reason: format!("通用打招呼 '{}' (合法邮件通常含真实姓名)", greet),
-                matched_text: Some((*greet).to_string()),
-            });
-            break;
+    if cfg.is_rule_enabled("PHISH-049") {
+        for greet in &cfg.keywords.generic_greetings {
+            if msg.body_text.contains(greet.as_str()) {
+                flags.push(PhishingFlag {
+                    rule_id: "PHISH-049-generic-greeting".into(),
+                    severity: Severity::Low,
+                    category: Category::ContentAnomaly,
+                    reason: format!("通用打招呼 '{}' (合法邮件通常含真实姓名)", greet),
+                    matched_text: Some(greet.clone()),
+                });
+                break;
+            }
         }
     }
 }
@@ -635,13 +634,17 @@ fn scan_content(msg: &MessageData, flags: &mut Vec<PhishingFlag>) {
 // ─── 核心 scan ──────────────────────────────────────────────
 
 /// 跑全规则集. 不走 LLM (由 caller 异步调 batch_llm_review).
+///
+/// P3.3.65 (6/13 鸿波): 内部读 phishing_config(), yaml 没设 → 用默认值,
+/// 行为跟 P3.3.58 一致. 集团下发 yaml 后, 启停 / 关键词 / 阈值 / 白名单可配.
 pub fn scan_rules(msg: &MessageData) -> PhishingScanResult {
+    let cfg = phishing_config();
     let mut flags = Vec::new();
-    scan_sender(msg, &mut flags);
-    scan_urgent_keywords(msg, &mut flags);
-    scan_links(msg, &mut flags);
-    scan_attachments(msg, &mut flags);
-    scan_content(msg, &mut flags);
+    scan_sender(msg, cfg, &mut flags);
+    scan_urgent_keywords(msg, cfg, &mut flags);
+    scan_links(msg, cfg, &mut flags);
+    scan_attachments(msg, cfg, &mut flags);
+    scan_content(msg, cfg, &mut flags);
 
     let highest_severity = flags
         .iter()

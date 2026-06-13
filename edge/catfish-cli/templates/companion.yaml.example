@@ -39,3 +39,64 @@ oidc:
   client_id: catfish-companion
   audience: catfish-companion
   scope: openid email profile
+
+# P3.3.65 (6/13 鸿波) — 钓鱼规则可配置.
+#
+# 全字段都可省略 — 没设的字段走 catfish 内置默认值 (跟 P3.3.58 一致).
+# 集团信安统一下发本段, 政企事业部加 org_whitelist (chinatelecom.cn / ctyun.cn).
+# 改后**重启 Companion** 生效 (OnceLock 单例不 hot-reload, 跟 email 同 pattern).
+#
+# 在 Dashboard 看当前 effective: 调 phishing_config_get Tauri command (待补 UI).
+phishing:
+  # 规则启停 (按 PHISH-NNN 前缀匹配; disabled 优先级 > enabled).
+  # enabled 留空 = 全启 (默认行为).
+  enabled_rules: []
+  disabled_rules:
+    # 默认不关任何规则, 列在这里方便集团需要时直接打开
+    # - PHISH-049         # generic_greeting 误报多时可关
+    # - PHISH-046         # 群发员工经常收到 > 50 人邮件时可关
+
+  # 关键词 (留空 = 用 catfish 默认; 配了 = 用配置覆盖)
+  keywords:
+    urgent_cn: []         # 紧急中文关键词. 集团可加本省诈骗常见词
+    urgent_en: []
+    personal_info: []     # 个人信息请求词
+    crypto_transfer: []   # 加密货币 / 私人汇款
+    role_titles: []       # 信安部 / 客服 / 财务 等组织角色 (PHISH-001 用)
+    generic_greetings: [] # Dear Customer 等通用打招呼 (PHISH-049 用)
+
+  # 域名列表
+  domain_lists:
+    short_link: []           # 短链域名 (bit.ly 等)
+    suspicious_tld: []       # 可疑顶级域 (.tk .ml 等)
+    # ★ 政企关键 — 集团 / 各省域名加这里, 不会被钓鱼规则误判.
+    # 域名前可带或不带 ".", 子域自动匹配.
+    org_whitelist: []
+    # 集团示例:
+    # org_whitelist:
+    #   - chinatelecom.cn
+    #   - ctyun.cn
+    #   - 189.cn
+    #   - tianyikeji.com
+
+  # 附件扩展名
+  attachment_lists:
+    exec_ext: []          # 可执行扩展 (.exe .scr 等)
+    macro_ext: []         # 含 macro 文档 (.docm .xlsm 等)
+    container_ext: []     # 镜像格式 (.iso .img 等)
+    common_doc_ext: []    # 双扩展判定用 (.pdf.exe 这种)
+    safe_doc_ext: []      # MIME vs ext 不匹配判定用
+
+  # 阈值 (留 0 / 不写 = 用默认)
+  thresholds:
+    max_url_len: 200                # PHISH-026: URL 超 N 字算异常
+    max_domains_per_email: 5        # PHISH-029: 单封 ≥N 个不同域名算撒网
+    urgent_kw_hits_for_high: 2      # PHISH-011: 紧迫关键词命中 ≥N 升 High
+    max_recipients: 50              # PHISH-046: 收件人 >N 人算撒网
+    min_body_chars_with_link: 30    # PHISH-048: 正文 <N 字 + 含链接算诱饵
+
+  # 模式串 (空 = 用默认)
+  patterns:
+    urgent_subject: []              # 主题含这些词 → PHISH-011 升 High
+    login_keywords: []              # URL 含 login/verify/pay/signin → PHISH-030 命中
+    exec_mime_substrings: []        # MIME 含 msdownload 等 → PHISH-038 命中
