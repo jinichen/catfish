@@ -24,9 +24,11 @@ import {
   emailAccountsFetch,
   emailClassifyNow,
   emailPhishingScanNow,           // P3.3.58 段 2B (6/12 鸿波)
+  emailPoliticalGet,              // P3.3.53.2 (6/13 鸿波): list 仅查已扫
   type EmailDigestItem,
   type EmailAccountItem,
   type PhishingScanResult,        // P3.3.58 段 2B
+  type PoliticalScanResult,       // P3.3.53.2
 } from "../../lib/tauri";
 import { useEmailStore } from "../../store/email";
 import { useUIStore } from "../../store/ui";
@@ -49,6 +51,10 @@ export default function EmailTab() {
   const [loading, setLoading] = useState(false);
   // P3.3.58 段 2B (6/12 鸿波): 钓鱼扫描结果 in-memory map (重启丢, 跟 scheduler PHISHING_STORE 同步)
   const [phishingMap, setPhishingMap] = useState<Record<string, PhishingScanResult>>({});
+  // P3.3.53.2 (6/13 鸿波): 政治敏感扫描结果. 跟 phishing 不同 — list 阶段不扫,
+  // 仅 DetailPane 打开邮件时扫. 这里 emailPoliticalGet 只查 store 已扫过的,
+  // 让员工看完 detail 切回 list 时 badge 能显. 不调 scan_now 批量 (避白扫).
+  const [politicalMap, setPoliticalMap] = useState<Record<string, PoliticalScanResult>>({});
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<FullMessage | null>(null);
@@ -151,6 +157,23 @@ export default function EmailTab() {
     })();
     return () => { cancelled = true; };
   }, [items, phishingMap]);
+
+  // P3.3.53.2 (6/13 鸿波): 政治敏感 list 刷新 — 仅查已扫的 (DetailPane 打开过的
+  // 邮件才在 POLITICAL_STORE 里). 不扫新 id, 避免对全量邮件白扫 (yaml 默认关时
+  // 全部返 engineEnabled=false, 也是浪费). 真扫由 DetailPane 触发.
+  useEffect(() => {
+    if (items.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const map = await emailPoliticalGet(items.map((it) => it.id));
+        if (!cancelled) setPoliticalMap(map);
+      } catch {
+        // 查失败静默 — 跟 phishing 一致
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [items]);
 
   // 前端 filter: 主题 / 发件人 / 账号 substring (case-insensitive)
   const filteredItems = useMemo(() => {
@@ -370,6 +393,7 @@ export default function EmailTab() {
               active={selectedId === m.id}
               urgency={urgencyMap[m.id]}
               phishing={phishingMap[m.id]}  // P3.3.58 段 2B
+              political={politicalMap[m.id]}  // P3.3.53.2
               onClick={() => setSelectedId(m.id)}
             />
           ))}

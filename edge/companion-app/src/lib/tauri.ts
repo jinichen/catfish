@@ -180,6 +180,44 @@ export const emailPhishingScanNow = (
   }>,
 ) => rawInvoke<Record<string, PhishingScanResult>>("email_phishing_scan_now", { items });
 
+// P3.3.53 (6/13 鸿波): 政治敏感规则引擎 — yaml 可配置, 默认关.
+// 集团信安 / 党办下发 keywords_l1 / keywords_l2 / regex_patterns 后, 员工
+// 打开邮件 detail pane 时本机扫. 默认 enabled=false 时 engineEnabled=false 返,
+// 前端不显 badge / 红条.
+export type PoliticalSeverity = "high" | "medium" | "low" | "none";
+export type PoliticalFlagLevel = "l1_redline" | "l2_sensitive" | "regex";
+export interface PoliticalFlag {
+  ruleId: string;
+  level: PoliticalFlagLevel;
+  severity: PoliticalSeverity;
+  matchedLabel: string;     // 关键词脱敏 (前 4 字 + 长度) 防日志回显
+  excerpt?: string | null;  // 命中位置上下文 (前后 20 字)
+}
+export interface PoliticalScanResult {
+  messageId: string;
+  scannedAt: string;
+  flags: PoliticalFlag[];
+  highestSeverity: PoliticalSeverity;
+  llmVerdict?: string | null;
+  llmReason?: string | null;
+  /** 引擎是否开启. false → flags 必空, UI 不挂 badge */
+  engineEnabled: boolean;
+}
+
+/** detail pane 打开邮件时调 — 拿到 body 后扫. 已扫过的 id 直接返缓存. */
+export const emailPoliticalScanNow = (
+  id: string,
+  subject: string,
+  sender: string,
+  body: string,
+) => rawInvoke<PoliticalScanResult>("email_political_scan_now", {
+  id, subject, sender, body,
+});
+
+/** 批量查已扫的结果 (从 POLITICAL_STORE), 没扫过的 id 不出现在返 map. */
+export const emailPoliticalGet = (ids: string[]) =>
+  rawInvoke<Record<string, PoliticalScanResult>>("email_political_get", { ids });
+
 // P3.3.55 (6/12 鸿波): 审计视图 Tab 拿 raw jsonl row 列表.
 export interface ToolCallRow {
   ts: string;

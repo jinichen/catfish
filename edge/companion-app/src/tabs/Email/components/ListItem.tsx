@@ -3,7 +3,7 @@
  * 列表单条邮件渲染. urgency badge (急/中/低) + sender + subject + date.
  */
 
-import type { EmailDigestItem, PhishingScanResult } from "../../../lib/tauri";
+import type { EmailDigestItem, PhishingScanResult, PoliticalScanResult } from "../../../lib/tauri";
 import { _extractSenderName, _formatShortDate } from "./helpers";
 
 
@@ -12,12 +12,14 @@ function ListItem({
   active,
   urgency,
   phishing,
+  political,
   onClick,
 }: {
   item: EmailDigestItem;
   active: boolean;
   urgency?: string;  // '急' / '中' / '低', undef = scheduler 还没评级
   phishing?: PhishingScanResult;  // P3.3.58 段 2B: 钓鱼扫描结果
+  political?: PoliticalScanResult; // P3.3.53.2: 政治敏感扫描 (仅 detail 打开过的有)
   onClick: () => void;
 }) {
   return (
@@ -148,6 +150,39 @@ function ListItem({
             title={`${phishing.flags.length} 条规则触发, LLM: ${phishing.llmVerdict ?? "未跑"}`}
           >
             ⚠ 可疑
+          </span>
+        )}
+        {/* P3.3.53.2: 政治敏感 badge (仅 detail 打开过的, 引擎开 + 命中). */}
+        {political && political.engineEnabled && political.highestSeverity === "high" && (
+          <span
+            style={{
+              flex: "0 0 auto",
+              fontSize: 9,
+              padding: "1px 5px",
+              background: "rgba(220,38,38,0.2)",
+              color: "rgb(185,28,28)",
+              borderRadius: 3,
+              fontWeight: 700,
+            }}
+            title={`${political.flags.length} 条规则触发, 请咨询信安 / 党办`}
+          >
+            ⚠ 合规
+          </span>
+        )}
+        {political && political.engineEnabled && political.highestSeverity === "medium" && (
+          <span
+            style={{
+              flex: "0 0 auto",
+              fontSize: 9,
+              padding: "1px 5px",
+              background: "rgba(234,179,8,0.18)",
+              color: "rgb(133,77,14)",
+              borderRadius: 3,
+              fontWeight: 600,
+            }}
+            title={`${political.flags.length} 条规则触发, 请复核`}
+          >
+            ⚠ 待复核
           </span>
         )}
         <span style={{ flex: "0 0 auto", color: "var(--catfish-text-muted)", fontSize: 11 }}>

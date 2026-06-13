@@ -14,8 +14,10 @@ import {
   emailDeleteMessage,
   emailSendMessage,
   emailPhishingGet,                 // P3.3.58 段 2C (6/12 鸿波)
+  emailPoliticalScanNow,            // P3.3.53.2 (6/13 鸿波)
   type EmailDigestItem,
   type PhishingScanResult,          // P3.3.58 段 2C
+  type PoliticalScanResult,         // P3.3.53.2
 } from "../../../lib/tauri";
 import { _extractSenderName, _replyAddress } from "./helpers";
 
@@ -106,6 +108,29 @@ function DetailPane({
     })();
     return () => { cancelled = true; };
   }, [msg.id]);
+
+  // P3.3.53.2 (6/13 鸿波): 政治敏感扫描 — detail pane 打开时主动扫.
+  // 默认 yaml political.enabled=false → 返 engineEnabled=false, 不显红条.
+  // 集团下发词库后, 本机扫 + LRU 缓存防重扫, 0 字节数据出端.
+  const [political, setPolitical] = useState<PoliticalScanResult | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setPolitical(null);
+    (async () => {
+      try {
+        const r = await emailPoliticalScanNow(
+          msg.id,
+          msg.subject || "",
+          msg.sender || "",
+          msg.body_text || "",
+        );
+        if (!cancelled) setPolitical(r);
+      } catch {
+        // 扫失败静默 — 不挂红条, 跟 phishing 一致
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [msg.id, msg.subject, msg.sender, msg.body_text]);
 
   const handleDelete = async () => {
     if (!confirmPending) {
@@ -317,6 +342,63 @@ function DetailPane({
                 }}
               >
                 审慎打开链接 / 附件 / 回复, 如不确定请咨询信安部门.
+              </div>
+            </div>
+          )}
+        {/* P3.3.53.2 (6/13 鸿波): 政治敏感红条 — 引擎开 + high/medium 触发 */}
+        {political && political.engineEnabled &&
+          (political.highestSeverity === "high" || political.highestSeverity === "medium") && (
+            <div
+              style={{
+                marginBottom: 12,
+                padding: "10px 12px",
+                background: political.highestSeverity === "high"
+                  ? "rgba(220,38,38,0.10)"
+                  : "rgba(234,179,8,0.10)",
+                border: political.highestSeverity === "high"
+                  ? "1.5px solid rgba(220,38,38,0.5)"
+                  : "1px solid rgba(234,179,8,0.5)",
+                borderRadius: 4,
+                fontSize: 12,
+              }}
+            >
+              <div
+                style={{
+                  fontWeight: 700,
+                  color: political.highestSeverity === "high"
+                    ? "rgb(185,28,28)"
+                    : "rgb(133,77,14)",
+                  marginBottom: 6,
+                }}
+              >
+                {political.highestSeverity === "high"
+                  ? "⚠ catfish 标记此邮件含合规红线提醒"
+                  : "⚠ catfish 标记此邮件需要复核"}
+              </div>
+              {political.flags.length > 0 && (
+                <div style={{ marginBottom: 4, color: "var(--catfish-text)" }}>
+                  触发规则 ({political.flags.length}):{" "}
+                  {political.flags.slice(0, 4).map((f) => f.ruleId).join(", ")}
+                  {political.flags.length > 4 && ` 等 ${political.flags.length} 条`}
+                </div>
+              )}
+              {political.llmVerdict && (
+                <div style={{ marginBottom: 4, color: "var(--catfish-text)" }}>
+                  LLM 复审: <strong>{political.llmVerdict}</strong>
+                  {political.llmReason ? ` — ${political.llmReason}` : ""}
+                </div>
+              )}
+              <div
+                style={{
+                  marginTop: 4,
+                  fontWeight: 600,
+                  color: political.highestSeverity === "high"
+                    ? "rgb(185,28,28)"
+                    : "rgb(133,77,14)",
+                }}
+              >
+                如不确定请咨询信安部门 / 党办 / 法务. catfish 仅本机识别提示,
+                不上行邮件原文.
               </div>
             </div>
           )}
