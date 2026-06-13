@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Sequence
 
 from .. import foxmail_db
+from ..html_strip import strip_html  # P3.3.60 (6/12 鸿波): 共享 helper, 砍 inline _strip_html
 from .base import (
     Account,
     Attachment,
@@ -387,12 +388,12 @@ def _extract_body_text(msg) -> str:
         if not body:
             for part in msg.walk():
                 if part.get_content_type() == "text/html":
-                    body = _strip_html(_decode_payload(part))
+                    body = strip_html(_decode_payload(part))
                     break
     else:
         body = _decode_payload(msg)
         if msg.get_content_type() == "text/html":
-            body = _strip_html(body)
+            body = strip_html(body)
     return body
 
 
@@ -424,14 +425,5 @@ def _decode_payload(part) -> str:
     return payload.decode("utf-8", errors="replace")
 
 
-def _strip_html(html: str) -> str:
-    if not html:
-        return ""
-    import re
-    html = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", html, flags=re.S | re.I)
-    html = re.sub(r"<br\s*/?>", "\n", html, flags=re.I)
-    html = re.sub(r"</p>", "\n", html, flags=re.I)
-    html = re.sub(r"<[^>]+>", "", html)
-    html = re.sub(r"[ \t]+", " ", html)
-    html = re.sub(r"\n{3,}", "\n\n", html)
-    return html.strip()
+# P3.3.60 (6/12 鸿波): _strip_html 抽到 ../html_strip.py 共享给 apple_mail.py.
+# 老 inline 删, caller 改 import strip_html (HTML 实体也走 stdlib html.unescape).

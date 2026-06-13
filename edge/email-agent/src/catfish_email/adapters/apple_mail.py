@@ -50,6 +50,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Sequence
 
+from ..html_strip import strip_html  # P3.3.60 (6/12 鸿波): HTML-only fallback
 from .base import (
     Account,
     ClientNotRunningError,
@@ -355,6 +356,15 @@ class AppleMailAdapter(EmailAdapter):
                 logger.warning("body tmp 文件读失败: %s", e)
             # BL-EMAIL-APPLEMAIL-FULL (5/18): 从 source RFC822 抽 body_html
             body_html = _extract_html_from_source_file(source_path)
+            # P3.3.60 (6/12 鸿波): HTML-only 邮件 (HeyGen newsletter / Google Calendar
+            # invite 等) AS 返 body 为空但 RFC822 含 body_html. fallback strip HTML
+            # 让 detail pane 不再显 (无正文).
+            if not body_text.strip() and body_html:
+                body_text = strip_html(body_html)
+                logger.debug(
+                    "apple_mail read_message: body_text 空, 从 body_html strip 出 %d 字 fallback",
+                    len(body_text),
+                )
             return Message(
                 id=message_id,
                 account=account_name,
