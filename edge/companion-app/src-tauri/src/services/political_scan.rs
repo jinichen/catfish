@@ -320,7 +320,7 @@ mod tests {
         c
     }
 
-    fn msg(subject: &str, body: &str) -> MessageData<'_> {
+    fn msg<'a>(subject: &'a str, body: &'a str) -> MessageData<'a> {
         MessageData {
             id: "test-id",
             subject,
