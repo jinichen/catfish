@@ -326,3 +326,43 @@ pub async fn email_phishing_get(ids: Vec<String>) -> Result<HashMap<String, Phis
     }
     Ok(out)
 }
+
+/// P3.3.53 (6/13 鸿波): 给前端 detail pane 打开邮件时调 — 拿到 body 后扫
+/// 政治敏感. yaml political.enabled=false 时整套引擎跳 (engine_enabled=false 返).
+/// 结果存 POLITICAL_STORE, 后续重复打开同 id 不重复扫.
+#[tauri::command]
+pub async fn email_political_scan_now(
+    id: String,
+    subject: String,
+    sender: String,
+    body: String,
+) -> Result<crate::services::political_scan::PoliticalScanResult, String> {
+    // 已经扫过 → 直接返
+    if let Some(r) = email_scheduler::political_for_message(&id) {
+        return Ok(r);
+    }
+    let msg = crate::services::political_scan::MessageData {
+        id: &id,
+        subject: &subject,
+        sender: &sender,
+        body_text: &body,
+    };
+    let result = crate::services::political_scan::scan_rules(&msg);
+    email_scheduler::political_store_insert(&id, &result);
+    crate::services::political_scan::persist_audit(&result, &subject, &sender).await;
+    Ok(result)
+}
+
+/// P3.3.53: 批量查邮件政治敏感扫描结果. 跟 email_phishing_get 同款.
+#[tauri::command]
+pub async fn email_political_get(
+    ids: Vec<String>,
+) -> Result<HashMap<String, crate::services::political_scan::PoliticalScanResult>, String> {
+    let mut out = HashMap::new();
+    for id in ids {
+        if let Some(r) = email_scheduler::political_for_message(&id) {
+            out.insert(id, r);
+        }
+    }
+    Ok(out)
+}

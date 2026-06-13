@@ -558,12 +558,17 @@ pub fn run() {
             commands::email::email_send_message,
             // P3.3.58 (6/12 鸿波): 批量查邮件钓鱼扫描结果
             commands::email::email_phishing_get,
+            // P3.3.53 (6/13): 政治敏感扫描 — 给前端 detail pane 调
+            commands::email::email_political_scan_now,
+            commands::email::email_political_get,
             // BL-COMPANION-EMAIL-TAB-STEP2 (5/18): 评级 badge 取数
             services::email_scheduler::email_urgency_map,
             // BL-COMPANION-PREFS-TOGGLES (5/20): 暴露 email config 给前端 AgentPrefsCard 展示
             services::email_config::email_config_get,
             // P3.3.65 (6/13): 钓鱼规则可配置 — 仪表盘显当前 effective 配置
             services::phishing_config::phishing_config_get,
+            // P3.3.53 (6/13): 政治敏感规则可配置 — 仪表盘显当前 effective 配置
+            services::political_config::political_config_get,
             // BL-EMAIL-URGENCY-BADGE (5/18): 前端主动 batch 评级 (历史邮件也能评)
             services::email_scheduler::email_classify_now,
             // P3.3.58 段 2B (6/12 鸿波): 前端 trigger 钓鱼扫描

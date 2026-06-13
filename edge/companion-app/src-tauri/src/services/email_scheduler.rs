@@ -516,6 +516,35 @@ pub fn phishing_for_message(id: &str) -> Option<PhishingScanResult> {
     phishing_store().lock().ok().and_then(|m| m.get(id).cloned())
 }
 
+// ─── P3.3.53 political scan 集成 ──────────────────────────────
+//
+// 跟 phishing 同 in-memory store pattern, 但 list 阶段不扫 (主题信息少, 真敏感词
+// 通常在 body 里). 仅 detail pane 打开时调 email_political_scan_now 拿 body
+// 后扫. 默认 enabled=false 不会触发任何 scan / audit.
+use super::political_scan::PoliticalScanResult;
+static POLITICAL_STORE: OnceLock<Mutex<HashMap<String, PoliticalScanResult>>> = OnceLock::new();
+fn political_store() -> &'static Mutex<HashMap<String, PoliticalScanResult>> {
+    POLITICAL_STORE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 前端查单封邮件的 political 结果. 没扫过 → None.
+pub fn political_for_message(id: &str) -> Option<PoliticalScanResult> {
+    political_store().lock().ok().and_then(|m| m.get(id).cloned())
+}
+
+/// 写入 POLITICAL_STORE. 超 500 时丢一半 (跟 phishing 同 LRU 策略).
+pub fn political_store_insert(id: &str, result: &PoliticalScanResult) {
+    if let Ok(mut store) = political_store().lock() {
+        store.insert(id.to_string(), result.clone());
+        if store.len() > 500 {
+            let keys: Vec<_> = store.keys().take(250).cloned().collect();
+            for k in keys {
+                store.remove(&k);
+            }
+        }
+    }
+}
+
 /// 从 EmailItem 列表抽 our_domains (员工账号自己的域名).
 /// 简单从 EmailItem.account 抽 (account 是邮箱地址形式 abc@xxx.cn).
 fn our_domains_from_items(items: &[EmailItem]) -> Vec<String> {

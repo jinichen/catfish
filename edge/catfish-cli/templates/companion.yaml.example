@@ -100,3 +100,56 @@ phishing:
     urgent_subject: []              # 主题含这些词 → PHISH-011 升 High
     login_keywords: []              # URL 含 login/verify/pay/signin → PHISH-030 命中
     exec_mime_substrings: []        # MIME 含 msdownload 等 → PHISH-038 命中
+
+# P3.3.53 (6/13 鸿波) — 政治敏感规则引擎.
+#
+# 默认 enabled=false + 全空 = 关. catfish 不预设任何敏感词,
+# 由集团信安 / 党办 / 法务统一下发实际词库.
+#
+# 行为分级:
+#   - L1 红线词 命中 → High severity (邮件 detail 大红条, 提醒咨询信安)
+#   - L2 敏感词 命中 → Medium (黄条, 提醒员工自查)
+#   - regex pattern → 按 pattern 自带 severity
+#   - whitelist_phrases 命中 → 整封跳, 不报 flag (避新闻引用 / 学术讨论假阳)
+#   - llm_review (可选) → 给上下文判别真意, default 关
+#
+# 触发: 员工在 Companion 邮件 tab 打开 detail pane 时扫 (拿到 body 后, 不在
+#       list 阶段扫). 默认关时不会触发任何 LLM call / audit 留档.
+#
+# 改后**重启 Companion** 生效.
+political:
+  enabled: false
+
+  # L1 红线词 (命中 High). 集团下发, 空 = 不挂.
+  keywords_l1: []
+
+  # L2 敏感词 (命中 Medium). 同上.
+  keywords_l2: []
+
+  # 复杂模式 (regex 语法). 每条:
+  #   - id: 可省略 (会用 pattern hash 兜底). 建议手填便于审计追溯
+  #   - pattern: regex (case-insensitive)
+  #   - severity: high / medium / low (省 = medium)
+  #   - note: 给员工看的提示语
+  regex_patterns: []
+  # 示例 (不下发实际词):
+  # regex_patterns:
+  #   - id: POL-R001
+  #     pattern: "PATTERN_A.{0,10}PATTERN_B"
+  #     severity: high
+  #     note: "A 与 B 组合需复核"
+
+  # 排除上下文 — 含这些短语的邮件整封跳过, 不报 flag.
+  # 用于避新闻引述、学术讨论、政策解读类邮件假阳.
+  whitelist_phrases: []
+  # 示例:
+  # whitelist_phrases:
+  #   - 新闻报道
+  #   - 政策解读
+  #   - 学术研究引述
+
+  # LLM 复审 (默认关). 引擎不上正文出端 — 仅在员工本机调 catfish-gateway
+  # 内网模型. 关时纯 deterministic.
+  llm_review:
+    enabled: false
+    model: ""
