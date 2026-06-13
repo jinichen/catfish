@@ -145,6 +145,41 @@ export const auditExportXlsx = (
     includeOutbound,
   });
 
+// P3.3.58 (6/12 鸿波): 钓鱼邮件识别 — 批量查邮件 phishing 扫描结果.
+export type PhishingSeverity = "high" | "medium" | "low" | "none";
+export interface PhishingFlag {
+  ruleId: string;
+  severity: PhishingSeverity;
+  category: string;
+  reason: string;
+  matchedText?: string | null;
+}
+export interface PhishingScanResult {
+  messageId: string;
+  scannedAt: string;
+  flags: PhishingFlag[];
+  highestSeverity: PhishingSeverity;
+  llmVerdict?: string | null;
+  llmReason?: string | null;
+}
+export const emailPhishingGet = (ids: string[]) =>
+  rawInvoke<Record<string, PhishingScanResult>>("email_phishing_get", { ids });
+
+/** P3.3.58 段 2B (6/12 鸿波): 前端 trigger 钓鱼扫描. 跟 emailClassifyNow 同款.
+ *  items 跟 email_classify_now 同 shape (id/subject/sender/account/date/is_read).
+ *  返完整 store snapshot. 已扫的跳过, 新 id 走 light scan + LLM batch.
+ */
+export const emailPhishingScanNow = (
+  items: Array<{
+    id: string;
+    subject: string;
+    sender: string;
+    account?: string;
+    date?: string;
+    is_read?: boolean;
+  }>,
+) => rawInvoke<Record<string, PhishingScanResult>>("email_phishing_scan_now", { items });
+
 // P3.3.55 (6/12 鸿波): 审计视图 Tab 拿 raw jsonl row 列表.
 export interface ToolCallRow {
   ts: string;

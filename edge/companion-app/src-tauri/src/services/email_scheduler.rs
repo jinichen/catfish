@@ -40,6 +40,10 @@ use tauri::{AppHandle, Emitter};
 use tokio::time;
 
 use crate::services::{email_config, endpoints, oauth};
+// P3.3.58 (6/12 鸿波): 段 2A 集成 phishing_scan
+use crate::services::phishing_scan::{
+    self, LlmReviewInput, PhishingScanResult, Severity,
+};
 
 // BL-COMPANION-BRIEFING-V2 sub-task 2 (5/20): 通知去重 + 评级持久化.
 //
@@ -294,6 +298,41 @@ pub async fn email_classify_now(
     Ok(urgency_cache().lock().map(|c| c.clone()).unwrap_or_default())
 }
 
+/// P3.3.58 段 2B (6/12 鸿波): 前端打开邮件 tab 时主动 trigger 钓鱼扫描.
+/// 跟 email_classify_now 同 pattern — 跳过已 scan 的 id 省 LLM call, 新 id 走
+/// scan_phishing_for_new (light scan + LLM batch + store + audit).
+///
+/// Returns: PHISHING_STORE 完整 snapshot (id → result), 调用方一次拿全.
+#[tauri::command]
+pub async fn email_phishing_scan_now(
+    items: Vec<EmailItemInput>,
+) -> Result<HashMap<String, PhishingScanResult>, String> {
+    // 跳过已 scan 的
+    let to_scan: Vec<EmailItem> = {
+        let store = phishing_store().lock().map_err(|e| e.to_string())?;
+        items
+            .iter()
+            .filter(|it| !store.contains_key(&it.id))
+            .map(|it| EmailItem {
+                id: it.id.clone(),
+                subject: it.subject.clone(),
+                sender: it.sender.clone(),
+            })
+            .collect()
+    };
+
+    if !to_scan.is_empty() {
+        log::info!(
+            "email_phishing_scan_now: 钓鱼扫描 {} 封 (跳过 {} 已扫)",
+            to_scan.len(),
+            items.len() - to_scan.len(),
+        );
+        scan_phishing_for_new(&to_scan).await;
+    }
+
+    Ok(phishing_store().lock().map(|s| s.clone()).unwrap_or_default())
+}
+
 /// 前端传给 email_classify_now 用的 input shape (比 EmailItem 多 Option, 兼容 list_fetch
 /// JSON 字段缺失场景). 多余字段 (account/date/is_read) 仅作 future-proof 接收, 不读.
 #[derive(serde::Deserialize)]
@@ -368,6 +407,9 @@ pub fn schedule_email_scheduler(app: AppHandle) {
                             );
                             // step3: 评级 → 只"急"通知
                             let rated = rate_emails(&new_items).await;
+
+                            // P3.3.58 (6/12 鸿波): 钓鱼 light scan + LLM 复审, 失败静默
+                            scan_phishing_for_new(&new_items).await;
 
                             // step2 (BL-COMPANION-EMAIL-TAB-STEP2): 写 urgency 缓存
                             // 给前端 EmailTab badge 用. 老 id 已读 → baseline 自然
@@ -458,6 +500,142 @@ async fn fetch_unread() -> Result<Vec<EmailItem>, String> {
 
     serde_json::from_str::<Vec<EmailItem>>(&stdout)
         .map_err(|e| format!("JSON 解析失败: {e}"))
+}
+
+// ─── P3.3.58 phishing scan 集成 (段 2A) ──────────────────────
+//
+// in-memory store, 重启丢 (段 2B/2C 再加 persist + UI). 给前端通过
+// phishing_for_message 查.
+static PHISHING_STORE: OnceLock<Mutex<HashMap<String, PhishingScanResult>>> = OnceLock::new();
+fn phishing_store() -> &'static Mutex<HashMap<String, PhishingScanResult>> {
+    PHISHING_STORE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 前端查单封邮件的 phishing 结果. 没扫过 → None.
+pub fn phishing_for_message(id: &str) -> Option<PhishingScanResult> {
+    phishing_store().lock().ok().and_then(|m| m.get(id).cloned())
+}
+
+/// 从 EmailItem 列表抽 our_domains (员工账号自己的域名).
+/// 简单从 EmailItem.account 抽 (account 是邮箱地址形式 abc@xxx.cn).
+fn our_domains_from_items(items: &[EmailItem]) -> Vec<String> {
+    let mut set = std::collections::HashSet::new();
+    for it in items {
+        // EmailItem 没 account 字段, 走 sender 抽不太准. 暂时用 hardcoded 央企域 +
+        // sender domain 都加. 段 2B 改成读 ~/.hermes/auth.json 拿员工真正账号.
+        if let Some(domain) = it.sender.rfind('@').and_then(|i| Some(it.sender[i + 1..].trim_end_matches('>').to_lowercase())) {
+            if !domain.is_empty() && domain != "<unknown>" {
+                set.insert(domain);
+            }
+        }
+    }
+    // 央企常用域兜底
+    set.insert("chinatelecom.cn".into());
+    set.insert("ffcs.cn".into());
+    set.into_iter().collect()
+}
+
+/// 段 2A: 对 new_items 跑 light scan + LLM batch 复审, 存 PHISHING_STORE +
+/// audit chain 留档. 失败静默, 不阻塞 scheduler.
+///
+/// 鸿波 6/12 拍板:
+///   - 所有邮件都调 LLM 复审 (含未触发规则的)
+///   - audit 只记触发规则或 LLM 标 phishing/suspicious 的
+async fn scan_phishing_for_new(new_items: &[EmailItem]) {
+    if new_items.is_empty() { return; }
+
+    let our_domains = our_domains_from_items(new_items);
+
+    // 1. 规则 light scan
+    let mut scans: Vec<PhishingScanResult> = new_items
+        .iter()
+        .map(|it| phishing_scan::scan_rules_light(&it.id, &it.subject, &it.sender, &our_domains))
+        .collect();
+
+    // 2. LLM batch 复审 (鸿波拍板"所有邮件都调")
+    let llm_inputs: Vec<LlmReviewInput> = new_items
+        .iter()
+        .zip(scans.iter())
+        .map(|(it, sr)| {
+            let summary = if sr.flags.is_empty() {
+                "无触发".to_string()
+            } else {
+                sr.flags.iter()
+                    .map(|f| format!("{} ({:?})", f.rule_id, f.severity))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            LlmReviewInput {
+                subject: it.subject.clone(),
+                sender: it.sender.clone(),
+                rule_summary: summary,
+            }
+        })
+        .collect();
+
+    // gateway + token + model (复用 email scheduler 同款)
+    let token = match oauth::current_access_token() {
+        Some(t) => t,
+        None => {
+            log::debug!("[phishing] 没 access_token, 跳过 LLM 复审 (仅规则结果存盘)");
+            store_and_audit(new_items, scans).await;
+            return;
+        }
+    };
+    let gateway = endpoints::endpoints().gateway_base();
+    let model = email_config::email_config().rate_model.clone();
+
+    match phishing_scan::batch_llm_review(&llm_inputs, &gateway, &token, &model).await {
+        Ok(verdicts) if verdicts.len() == scans.len() => {
+            for (s, v) in scans.iter_mut().zip(verdicts.iter()) {
+                s.llm_verdict = Some(v.verdict.clone());
+                s.llm_reason = Some(v.reason.clone());
+                // 如果 LLM 标 phishing 但规则没触发, 也算 medium severity 让 UI 显
+                if (v.verdict == "phishing" || v.verdict == "suspicious")
+                    && s.highest_severity == Severity::None
+                {
+                    s.highest_severity = if v.verdict == "phishing" {
+                        Severity::High
+                    } else {
+                        Severity::Medium
+                    };
+                }
+            }
+            log::info!(
+                "[phishing] LLM 复审 {} 封: {} phishing / {} suspicious",
+                scans.len(),
+                scans.iter().filter(|s| s.llm_verdict.as_deref() == Some("phishing")).count(),
+                scans.iter().filter(|s| s.llm_verdict.as_deref() == Some("suspicious")).count(),
+            );
+        }
+        Ok(verdicts) => {
+            log::warn!("[phishing] LLM 返 {} verdict != {} 期望 (仅规则)", verdicts.len(), scans.len());
+        }
+        Err(e) => {
+            log::debug!("[phishing] LLM 复审挂 (仅规则结果): {e}");
+        }
+    }
+
+    store_and_audit(new_items, scans).await;
+}
+
+/// store + audit 提抽成单独函数防多入口重复.
+async fn store_and_audit(items: &[EmailItem], scans: Vec<PhishingScanResult>) {
+    // store
+    if let Ok(mut store) = phishing_store().lock() {
+        for s in &scans {
+            store.insert(s.message_id.clone(), s.clone());
+        }
+        // 简单 LRU: 超 500 时丢一半
+        if store.len() > 500 {
+            let keys: Vec<_> = store.keys().take(250).cloned().collect();
+            for k in keys { store.remove(&k); }
+        }
+    }
+    // audit (鸿波拍板"只记触发规则的", persist_audit 内部已 filter)
+    for (it, s) in items.iter().zip(scans.iter()) {
+        phishing_scan::persist_audit(s, &it.subject, &it.sender).await;
+    }
 }
 
 /// 评级新邮件. 调 gateway 快速 model. 失败 fallback 全标 Medium (不通知 + 不阻塞).

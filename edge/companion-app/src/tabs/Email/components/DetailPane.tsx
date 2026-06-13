@@ -13,7 +13,9 @@ import {
   emailCreateDraft,
   emailDeleteMessage,
   emailSendMessage,
+  emailPhishingGet,                 // P3.3.58 段 2C (6/12 鸿波)
   type EmailDigestItem,
+  type PhishingScanResult,          // P3.3.58 段 2C
 } from "../../../lib/tauri";
 import { _extractSenderName, _replyAddress } from "./helpers";
 
@@ -21,6 +23,39 @@ interface FullMessage extends EmailDigestItem {
   recipients?: string[];
   cc?: string[];
   attachments?: Array<{ filename: string; size_bytes: number; content_type: string }>;
+}
+
+/** P3.3.57 (6/12 鸿波): 大群发邮件 header 收件人/抄送默认折叠.
+ *  默认显前 N 个 + "... 共 X 人 [展开]", 点击切换 [折叠].
+ *  防 81 收件人 + 30 抄送一次铺开把邮件正文挤出 viewport.
+ */
+function CollapsibleAddresses({ addrs, previewN = 3 }: { addrs: string[]; previewN?: number }) {
+  const [expanded, setExpanded] = useState(false);
+  if (addrs.length <= previewN) {
+    return <>{addrs.join(", ")}</>;
+  }
+  return (
+    <>
+      {expanded ? addrs.join(", ") : addrs.slice(0, previewN).join(", ")}
+      {!expanded && <span style={{ color: "var(--catfish-text-muted)" }}>... 共 {addrs.length} 人</span>}
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        style={{
+          marginLeft: 6,
+          background: "transparent",
+          border: "1px solid var(--catfish-border)",
+          borderRadius: 3,
+          padding: "0 6px",
+          fontSize: 10,
+          color: "var(--catfish-cyan)",
+          cursor: "pointer",
+        }}
+      >
+        {expanded ? "折叠" : "展开"}
+      </button>
+    </>
+  );
 }
 
 
@@ -54,6 +89,22 @@ function DetailPane({
   useEffect(() => {
     setConfirmPending(false);
     setDeleteError(null);
+  }, [msg.id]);
+
+  // P3.3.58 段 2C (6/12 鸿波): 拉单封邮件的钓鱼扫描结果, 显红条
+  const [phishing, setPhishing] = useState<PhishingScanResult | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setPhishing(null);
+    (async () => {
+      try {
+        const map = await emailPhishingGet([msg.id]);
+        if (!cancelled) setPhishing(map[msg.id] ?? null);
+      } catch {
+        // 拉失败静默 — 没扫过的 detail pane 不显红条 OK
+      }
+    })();
+    return () => { cancelled = true; };
   }, [msg.id]);
 
   const handleDelete = async () => {
@@ -213,6 +264,62 @@ function DetailPane({
           background: "var(--catfish-bg-elevated)",
         }}
       >
+        {/* P3.3.58 段 2C (6/12 鸿波): 钓鱼红条 — high/medium 触发规则或 LLM 标 phishing/suspicious */}
+        {phishing &&
+          (phishing.highestSeverity === "high" || phishing.highestSeverity === "medium") && (
+            <div
+              style={{
+                marginBottom: 12,
+                padding: "10px 12px",
+                background: phishing.highestSeverity === "high"
+                  ? "rgba(220,38,38,0.08)"
+                  : "rgba(251,146,60,0.08)",
+                border: phishing.highestSeverity === "high"
+                  ? "1px solid rgba(220,38,38,0.4)"
+                  : "1px solid rgba(251,146,60,0.4)",
+                borderRadius: 4,
+                fontSize: 12,
+              }}
+            >
+              <div
+                style={{
+                  fontWeight: 700,
+                  color: phishing.highestSeverity === "high"
+                    ? "rgb(185,28,28)"
+                    : "rgb(194,65,12)",
+                  marginBottom: 6,
+                }}
+              >
+                {phishing.highestSeverity === "high"
+                  ? "⚠ catfish 标记此邮件有钓鱼嫌疑"
+                  : "⚠ catfish 标记此邮件可疑"}
+              </div>
+              {phishing.flags.length > 0 && (
+                <div style={{ marginBottom: 4, color: "var(--catfish-text)" }}>
+                  触发规则 ({phishing.flags.length}):{" "}
+                  {phishing.flags.slice(0, 4).map((f) => f.ruleId).join(", ")}
+                  {phishing.flags.length > 4 && ` 等 ${phishing.flags.length} 条`}
+                </div>
+              )}
+              {phishing.llmVerdict && (
+                <div style={{ marginBottom: 4, color: "var(--catfish-text)" }}>
+                  LLM 复审: <strong>{phishing.llmVerdict}</strong>
+                  {phishing.llmReason ? ` — ${phishing.llmReason}` : ""}
+                </div>
+              )}
+              <div
+                style={{
+                  marginTop: 4,
+                  fontWeight: 600,
+                  color: phishing.highestSeverity === "high"
+                    ? "rgb(185,28,28)"
+                    : "rgb(194,65,12)",
+                }}
+              >
+                审慎打开链接 / 附件 / 回复, 如不确定请咨询信安部门.
+              </div>
+            </div>
+          )}
         <h2
           style={{
             margin: 0,
@@ -239,13 +346,13 @@ function DetailPane({
           {msg.recipients && msg.recipients.length > 0 && (
             <>
               <div>收件人</div>
-              <div>{msg.recipients.join(", ")}</div>
+              <div><CollapsibleAddresses addrs={msg.recipients} /></div>
             </>
           )}
           {msg.cc && msg.cc.length > 0 && (
             <>
               <div>抄送</div>
-              <div>{msg.cc.join(", ")}</div>
+              <div><CollapsibleAddresses addrs={msg.cc} /></div>
             </>
           )}
           <div>时间</div>

@@ -23,8 +23,10 @@ import {
   emailReadMessage,
   emailAccountsFetch,
   emailClassifyNow,
+  emailPhishingScanNow,           // P3.3.58 段 2B (6/12 鸿波)
   type EmailDigestItem,
   type EmailAccountItem,
+  type PhishingScanResult,        // P3.3.58 段 2B
 } from "../../lib/tauri";
 import { useEmailStore } from "../../store/email";
 import { useUIStore } from "../../store/ui";
@@ -45,6 +47,8 @@ export default function EmailTab() {
   const [unreadOnly, setUnreadOnly] = useState(true);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
+  // P3.3.58 段 2B (6/12 鸿波): 钓鱼扫描结果 in-memory map (重启丢, 跟 scheduler PHISHING_STORE 同步)
+  const [phishingMap, setPhishingMap] = useState<Record<string, PhishingScanResult>>({});
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<FullMessage | null>(null);
@@ -116,6 +120,37 @@ export default function EmailTab() {
     };
     // 依赖 items.length + 第一条 id 防 items 引用变更 (filteredItems 重新算) 触发重跑
   }, [items, urgencyMap]);
+
+  // P3.3.58 段 2B (6/12 鸿波): 钓鱼扫描. 跟 urgency 评级同款 — 已扫的跳过省 LLM,
+  // 新 id 走 light scan + LLM batch. 失败静默不阻塞 UI.
+  useEffect(() => {
+    if (items.length === 0) return;
+    const unscanned = items.filter((it) => !phishingMap[it.id]);
+    if (unscanned.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const BATCH = 20;
+      for (let i = 0; i < unscanned.length; i += BATCH) {
+        if (cancelled) return;
+        const batch = unscanned.slice(i, i + BATCH);
+        try {
+          const updated = await emailPhishingScanNow(batch.map((it) => ({
+            id: it.id,
+            subject: it.subject,
+            sender: it.sender,
+            account: it.account,
+            date: it.date,
+            is_read: it.is_read,
+          })));
+          if (!cancelled) setPhishingMap(updated);
+        } catch {
+          // 扫描失败 (gateway 挂 / 规则 panic), badge 维持空白不阻塞
+          return;
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [items, phishingMap]);
 
   // 前端 filter: 主题 / 发件人 / 账号 substring (case-insensitive)
   const filteredItems = useMemo(() => {
@@ -334,6 +369,7 @@ export default function EmailTab() {
               item={m}
               active={selectedId === m.id}
               urgency={urgencyMap[m.id]}
+              phishing={phishingMap[m.id]}  // P3.3.58 段 2B
               onClick={() => setSelectedId(m.id)}
             />
           ))}

@@ -556,12 +556,16 @@ pub fn run() {
             commands::email::email_delete_message,
             // BL-EMAIL-COMPOSE-SEND (5/18): 把 Drafts 草稿真发出去 (人工 confirm 红线)
             commands::email::email_send_message,
+            // P3.3.58 (6/12 鸿波): 批量查邮件钓鱼扫描结果
+            commands::email::email_phishing_get,
             // BL-COMPANION-EMAIL-TAB-STEP2 (5/18): 评级 badge 取数
             services::email_scheduler::email_urgency_map,
             // BL-COMPANION-PREFS-TOGGLES (5/20): 暴露 email config 给前端 AgentPrefsCard 展示
             services::email_config::email_config_get,
             // BL-EMAIL-URGENCY-BADGE (5/18): 前端主动 batch 评级 (历史邮件也能评)
             services::email_scheduler::email_classify_now,
+            // P3.3.58 段 2B (6/12 鸿波): 前端 trigger 钓鱼扫描
+            services::email_scheduler::email_phishing_scan_now,
             // BL-COMPANION-HERMES-API-CONFIG (5/19 Phase 2-2A): 暴露 hermes_api 配置给 React
             services::hermes_api_config::hermes_api_config_get,
             // BL-COMPANION-CHAT-SWITCH-TO-HERMES (5/19 Phase 2-2B): chat.ts 走 hermes 时拿 auth header

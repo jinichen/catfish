@@ -13,8 +13,12 @@
 //!   - 出错不阻塞 — 没装 catfish-email / Mail.app 没开 / Automation 没权限,
 //!     都返 Err(String), 前端显错误不挂卡
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
+
+use crate::services::email_scheduler;
+use crate::services::phishing_scan::PhishingScanResult;
 
 /// 找 catfish-email 二进制. 优先用 ~/.local/bin (catfish-email install.sh 软链到此),
 /// 兜底 PATH 查找.
@@ -308,4 +312,17 @@ pub async fn email_accounts_fetch() -> Result<String, String> {
         });
     }
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// P3.3.58 (6/12 鸿波): 批量查邮件钓鱼扫描结果. 给前端列表 / 详情 UI 用.
+/// 没扫过的 id 在返 map 中不出现 (前端按需 fallback "未扫描").
+#[tauri::command]
+pub async fn email_phishing_get(ids: Vec<String>) -> Result<HashMap<String, PhishingScanResult>, String> {
+    let mut out = HashMap::new();
+    for id in ids {
+        if let Some(r) = email_scheduler::phishing_for_message(&id) {
+            out.insert(id, r);
+        }
+    }
+    Ok(out)
 }

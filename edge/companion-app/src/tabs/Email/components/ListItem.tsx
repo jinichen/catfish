@@ -3,7 +3,7 @@
  * 列表单条邮件渲染. urgency badge (急/中/低) + sender + subject + date.
  */
 
-import type { EmailDigestItem } from "../../../lib/tauri";
+import type { EmailDigestItem, PhishingScanResult } from "../../../lib/tauri";
 import { _extractSenderName, _formatShortDate } from "./helpers";
 
 
@@ -11,11 +11,13 @@ function ListItem({
   item,
   active,
   urgency,
+  phishing,
   onClick,
 }: {
   item: EmailDigestItem;
   active: boolean;
   urgency?: string;  // '急' / '中' / '低', undef = scheduler 还没评级
+  phishing?: PhishingScanResult;  // P3.3.58 段 2B: 钓鱼扫描结果
   onClick: () => void;
 }) {
   return (
@@ -113,6 +115,39 @@ function ListItem({
             }}
           >
             低
+          </span>
+        )}
+        {/* P3.3.58 段 2B (6/12 鸿波): 钓鱼 ⚠️ badge — high=红 / medium=橙 / 其他不显 */}
+        {phishing && phishing.highestSeverity === "high" && (
+          <span
+            style={{
+              flex: "0 0 auto",
+              fontSize: 9,
+              padding: "1px 5px",
+              background: "rgba(220,38,38,0.2)",
+              color: "rgb(185,28,28)",
+              borderRadius: 3,
+              fontWeight: 700,
+            }}
+            title={`${phishing.flags.length} 条规则触发, LLM: ${phishing.llmVerdict ?? "未跑"}`}
+          >
+            ⚠ 钓鱼
+          </span>
+        )}
+        {phishing && phishing.highestSeverity === "medium" && (
+          <span
+            style={{
+              flex: "0 0 auto",
+              fontSize: 9,
+              padding: "1px 5px",
+              background: "rgba(251,146,60,0.18)",
+              color: "rgb(194,65,12)",
+              borderRadius: 3,
+              fontWeight: 600,
+            }}
+            title={`${phishing.flags.length} 条规则触发, LLM: ${phishing.llmVerdict ?? "未跑"}`}
+          >
+            ⚠ 可疑
           </span>
         )}
         <span style={{ flex: "0 0 auto", color: "var(--catfish-text-muted)", fontSize: 11 }}>
