@@ -434,8 +434,14 @@ end _pad4
 """
 
 # create_draft: body 从 temp 文件读; 支持 to/cc/bcc
+#
+# P3.3.63 (6/13 hb): 顶部加 activate. visible:true 让草稿窗口本来就弹,
+# 但 Mail.app 不在前台时窗口藏背景, 员工还得 cmd+tab 找. activate 把
+# Mail.app 切前台, 员工放完草稿直接看见草稿窗口, 审 / 改 / cmd+shift+D
+# 发送一步到位 (catfish 不替员工按 send, 红线还在)
 _AS_CREATE_DRAFT = """
 tell application "Mail"
+    activate
     set accName to "{ACCOUNT}"
     set subj to "{SUBJECT}"
     set bodyPath to "{BODY_PATH}"

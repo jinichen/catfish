@@ -8,18 +8,51 @@
  *     而 Word 启动慢且员工要先看一下文件在哪
  *   - 次按钮: "打开" —— 隐藏在 ⋯ 里? 不, 直接放出来, 操作要平铺
  *   - 错误处理: revealInFinder 失败 (路径不存在 / 权限不够) → 短暂红字提示, 不弹 alert
+ *
+ * P3.3.64 (6/13 hb): chat 里如果路径是 ~/.catfish/outputs/<date>/reply-*.md,
+ *   自动 parse header, 加第 3 按钮 [📥 放 Mail.app 草稿箱]. 点 → emailCreateDraft
+ *   → Mail.app 切前台 + 草稿窗口弹. 员工不用再切去 Dashboard 草稿 tab 找.
  */
 
-import { useState } from "react";
-import { revealInFinder, openFile } from "../lib/tauri";
+import { useEffect, useState } from "react";
+import { revealInFinder, openFile, emailCreateDraft } from "../lib/tauri";
+import { draftParseMd, type ParsedDraft } from "../lib/drafts";
 import { basename, fileEmoji } from "../lib/path_detect";
 
 interface Props {
   path: string;
 }
 
+/** 判 path 是不是 reply-*.md (放在 ~/.catfish/outputs/<date>/ 下). */
+function isReplyDraftPath(path: string): boolean {
+  // 简单匹配: 含 /.catfish/outputs/ 且 basename 以 reply- 开头 .md 结尾
+  return (
+    path.includes("/.catfish/outputs/") &&
+    /\/reply-[^/]+\.md$/.test(path)
+  );
+}
+
 export default function FilePill({ path }: Props) {
   const [err, setErr] = useState<string | null>(null);
+  const [parsed, setParsed] = useState<ParsedDraft | null>(null);
+  const [sending, setSending] = useState(false);
+  const [sendOk, setSendOk] = useState(false);
+
+  // 仅 reply-*.md 才 parse (拿 recipient/subject/threadId 给 emailCreateDraft)
+  useEffect(() => {
+    if (!isReplyDraftPath(path)) return;
+    let cancel = false;
+    draftParseMd(path)
+      .then((p) => {
+        if (!cancel) setParsed(p);
+      })
+      .catch(() => {
+        // parse 失败默默, 退化只显前 2 个按钮
+      });
+    return () => {
+      cancel = true;
+    };
+  }, [path]);
 
   const handleReveal = async () => {
     setErr(null);
@@ -38,6 +71,35 @@ export default function FilePill({ path }: Props) {
       setErr(formatErr(e));
     }
   };
+
+  const handleSendToMail = async () => {
+    if (!parsed || parsed.kind !== "reply") return;
+    if (!parsed.recipient || !parsed.subject) {
+      setErr("草稿缺收件人 / 主题, 无法放 Mail.app");
+      return;
+    }
+    setErr(null);
+    setSending(true);
+    setSendOk(false);
+    try {
+      await emailCreateDraft({
+        to: parsed.recipient,
+        subject: parsed.subject,
+        body: parsed.body,
+        inReplyTo: parsed.threadId ?? undefined,
+      });
+      setSendOk(true);
+      // 6s 后清掉 OK 提示, 给员工的回信草稿弹出窗口时间
+      setTimeout(() => setSendOk(false), 6000);
+    } catch (e) {
+      setErr(formatErr(e));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const canSendToMail =
+    parsed?.kind === "reply" && !!parsed.recipient && !!parsed.subject;
 
   return (
     <div
@@ -79,10 +141,25 @@ export default function FilePill({ path }: Props) {
         >
           {basename(path)}
         </span>
+        {canSendToMail && (
+          <button
+            type="button"
+            onClick={handleSendToMail}
+            disabled={sending}
+            style={{
+              ...pillBtnStyle("primary"),
+              background: "var(--catfish-blue, #2563eb)",
+              opacity: sending ? 0.5 : 1,
+            }}
+            title="放 Mail.app 草稿箱 (Mail.app 自动切前台 + 草稿窗口弹), 你审改后 ⌘+Shift+D 发送"
+          >
+            {sending ? "放中…" : "📥 放 Mail.app 草稿箱"}
+          </button>
+        )}
         <button
           type="button"
           onClick={handleReveal}
-          style={pillBtnStyle("primary")}
+          style={pillBtnStyle(canSendToMail ? "secondary" : "primary")}
           title="在 Finder 显示"
         >
           在 Finder 显示
@@ -96,6 +173,19 @@ export default function FilePill({ path }: Props) {
           打开
         </button>
       </div>
+      {sendOk && (
+        <div
+          style={{
+            fontSize: 10,
+            color: "var(--status-ok, #065f46)",
+            paddingLeft: 10,
+            maxWidth: 360,
+          }}
+        >
+          ✓ 已放 Mail.app 草稿箱, Mail.app 已切前台 + 草稿窗口弹出 —
+          审改后按 ⌘+Shift+D 发送 (catfish 不替你按, 红线)
+        </div>
+      )}
       {err && (
         <div
           style={{

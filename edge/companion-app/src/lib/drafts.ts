@@ -28,6 +28,37 @@ export const draftListToday = () =>
 export const draftOpenInEditor = (absPath: string) =>
   rawInvoke<void>("draft_open_in_editor", { absPath });
 
+/** P3.3.62 (6/13): advisor 起草 .md 结构化字段.
+ *
+ * 跟 advisor_drafts.py 输出 3 类对应:
+ *   - kind="reply": 有 recipient / subject / thread_id, 能调 emailCreateDraft 放
+ *     Mail.app 草稿箱 (TodayDraftsCard "放入 Mail.app 草稿箱" 按钮)
+ *   - kind="meeting-brief": 有 eventTitle + uncertainPoints, 仅展开看
+ *   - kind="followup": 有 project, 仅展开看
+ *   - kind="unknown": 员工手贴的 .md, 仅 body
+ */
+export interface ParsedDraft {
+  kind: "reply" | "meeting-brief" | "followup" | "unknown";
+  tone: string | null;
+  recipient: string | null;
+  subject: string | null;
+  threadId: string | null;
+  eventTitle: string | null;
+  project: string | null;
+  createdAt: string | null;
+  complianceNotes: string[];
+  uncertainPoints: string[];
+  body: string;
+}
+
+/** P3.3.62: 读 outputs/ 下 .md, parse advisor header. */
+export const draftParseMd = (absPath: string) =>
+  rawInvoke<ParsedDraft>("draft_parse_md", { absPath });
+
+/** P3.3.62: 删本机草稿 (UI 必须 8s confirming, 红线: 仅 outputs/ 下). */
+export const draftDeleteMd = (absPath: string) =>
+  rawInvoke<void>("draft_delete_md", { absPath });
+
 /** BL-X (5/26): 跨日期扫 outputs/, 过去 N 小时改的文件, mtime 倒序.
  *
  * 给 chat timeout toast 用 — 5/26 audit 砍掉 gateway recent_outputs.list_recent,

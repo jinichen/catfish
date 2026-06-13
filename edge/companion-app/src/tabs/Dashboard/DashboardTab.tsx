@@ -121,6 +121,7 @@ import WeChatBindingCard from "./WeChatBindingCard";
 import OutboundLogCard from "./OutboundLogCard";
 import AuditExportCard from "./AuditExportCard";  // P3.3.54 (6/12 鸿波): 审计员看的 xlsx 导出
 import AuditViewCard from "./AuditViewCard";  // P3.3.55 (6/12 鸿波): 审计员现场看的 tab
+import TodayDraftsCard from "./TodayDraftsCard";  // P3.3.62 (6/13 鸿波): advisor 起草 → Mail.app Drafts 链路
 import { useUIStore } from "../../store/ui";  // P3.3.55 (6/12): auditViewEnabled 开关
 // 6/8 BL-PRIVACY-SECTION-TABS: 隐私 section 内 3 卡 → 3 tabs (空间 +25%).
 import SectionTabs from "./SectionTabs";
@@ -218,11 +219,12 @@ export default function DashboardTab() {
       <CollapsibleSection
         id="rel"
         title="🐟 鲶鱼对你的认识"
-        count={4}
+        count={5}
       >
-        {/* 6/8 BL-REL-SECTION-TABS (鸿波 6/8): 跟隐私 section 同 pattern, 4 卡
-            → 4 tabs. 空间利用率 +25%, 切换更清晰. default = 小鲶对你的印象
-            (4 卡里"看时间感 + 整体关系"最直观, 进 section 先看这个). */}
+        {/* 6/8 BL-REL-SECTION-TABS (鸿波 6/8): 4 卡 → 4 tabs.
+            P3.3.62 (6/13 鸿波): +1 tab "🤖 今日 AI 草稿" — 草稿是鲶鱼为你产出的物,
+            主题贴 "鲶鱼对你的认识 / 产出". reply 类一键放 Mail.app Drafts, 闭三·沟通环.
+            default = 小鲶对你的印象 (5 卡里"看时间感 + 整体关系"最直观). */}
         <SectionTabs
           storageKey="rel"
           defaultKey="impression"
@@ -231,6 +233,7 @@ export default function DashboardTab() {
             { key: "memory", label: "🧠 我的 hermes memory", render: () => <HermesMemoryCard /> },
             { key: "profile", label: "👤 小鲶对你的画像", render: () => <UserProfileCard /> },
             { key: "style", label: "✍️ 你的文书风格", render: () => <StyleFingerprintCard /> },
+            { key: "drafts", label: "🤖 今日 AI 草稿", render: () => <TodayDraftsCard /> },
           ]}
         />
       </CollapsibleSection>

@@ -471,7 +471,8 @@ function DetailPane({
           )}
           {draftResult && (
             <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
-              ✓ 草稿已落 Mail Drafts (5/18 起 Companion 也能直接发了, 用 "✏️ 回复")
+              ✓ 草稿已落 Mail.app Drafts, Mail.app 已切前台 + 草稿窗口弹出 —
+              在那审改后按 ⌘+Shift+D 发送
             </span>
           )}
           {draftError && (

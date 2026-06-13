@@ -281,9 +281,230 @@ pub async fn recent_outputs_list(hours: u64) -> Result<Vec<DraftRef>, String> {
     Ok(out)
 }
 
+// ── P3.3.62 (6/13 鸿波): 草稿接 Mail.app Drafts 链路 ─────────────────
+//
+// 三·沟通能力闭环: advisor LLM 调 catfish_draft_email_reply tool → 落
+// ~/.catfish/outputs/<today>/reply-*.md (advisor_drafts.py:65)
+// → 员工看见 TodayDraftsCard → 一键放 Mail.app 草稿箱 (调 email_create_draft)
+// → 员工自己审 / 改 / 发. AI 永不代发 (manifesto 公理 4 红线).
+//
+// 这一层提供:
+//   - draft_parse_md: 读 .md, parse advisor header (kind / tone / recipient /
+//     subject / thread_id / created_at) + body
+//   - draft_delete_md: 删本机草稿 (path-traversal guard, UI 8s confirming)
+
+/// 草稿 markdown parse 出来的结构化字段.
+///
+/// kind 区分 3 类 advisor tool 产出 (advisor_drafts.py):
+///   - "reply" (reply-*.md): 有 recipient / subject / thread_id, 能放 Mail.app
+///   - "meeting-brief" (meeting-brief-*.md): 有 event 标题, 不能放邮件
+///   - "followup" (followup-*.md): 项目催办, 不能直接放邮件
+///   - "unknown": 其它员工手贴的 .md, 仅作通用展开
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParsedDraft {
+    /// 草稿类型 ("reply" / "meeting-brief" / "followup" / "unknown")
+    pub kind: String,
+    /// tone (仅 reply 有, e.g. "balanced" / "strict")
+    pub tone: Option<String>,
+    /// 收件人 (reply 才有)
+    pub recipient: Option<String>,
+    /// 邮件主题 (reply 才有)
+    pub subject: Option<String>,
+    /// thread_id (reply 才有)
+    pub thread_id: Option<String>,
+    /// 会议标题 (meeting-brief 才有)
+    pub event_title: Option<String>,
+    /// 项目名 (followup 才有)
+    pub project: Option<String>,
+    /// header 里 "catfish 起草时间" (ISO-8601)
+    pub created_at: Option<String>,
+    /// 合规提示 (reply 才有, 可空)
+    pub compliance_notes: Vec<String>,
+    /// 待员工确认 (meeting-brief 才有, 可空)
+    pub uncertain_points: Vec<String>,
+    /// 正文 (---  分割后的 body, 不含 header)
+    pub body: String,
+}
+
+/// guard: 路径必须在 ~/.catfish/outputs/ 下, 不含 .., 文件存在.
+fn guard_outputs_path(abs_path: &str) -> Result<std::path::PathBuf, String> {
+    let outputs = outputs_root()?;
+    let outputs_str = outputs.to_string_lossy().to_string();
+    // 关键: 前缀必须带尾 "/", 否则 "<...>/outputs-evil/foo" 会假阳通过.
+    let outputs_prefix = format!("{}/", outputs_str);
+    if !abs_path.starts_with(&outputs_prefix) {
+        return Err(format!("路径不在 outputs/ 下, 拒操作: {abs_path}"));
+    }
+    if abs_path.contains("..") {
+        return Err(format!("路径含 ..: {abs_path}"));
+    }
+    let p = std::path::PathBuf::from(abs_path);
+    if !p.exists() {
+        return Err(format!("文件不存在: {abs_path}"));
+    }
+    if !p.is_file() {
+        return Err(format!("不是文件: {abs_path}"));
+    }
+    Ok(p)
+}
+
+/// 从 markdown 行抽 `- key: value` 形式的 header 字段 (容错: 含中文 key).
+///
+/// 输入 line 例: "- 收件人: alice@example.com"
+/// 返 ("收件人", "alice@example.com"); 非 `- k: v` 形式 → None.
+fn parse_header_line(line: &str) -> Option<(String, String)> {
+    let s = line.trim_start();
+    let s = s.strip_prefix("- ")?;
+    let (k, v) = s.split_once(':')?;
+    Some((k.trim().to_string(), v.trim().to_string()))
+}
+
+/// parse advisor 起草的 .md (3 类 + unknown fallback).
+///
+/// 格式 (advisor_drafts.py:54):
+///   # 邮件回信草稿 (balanced)         ← title 行, 含 tone
+///   - 收件人: ...                      ← header keys
+///   - 主题: ...
+///   - thread_id: ...
+///   - catfish 起草时间: ...
+///   (可选)
+///   ## 合规提示                         ← 子 section
+///   - ...
+///   ---                                ← 分割
+///   (body)
+#[tauri::command]
+pub async fn draft_parse_md(abs_path: String) -> Result<ParsedDraft, String> {
+    let path = guard_outputs_path(&abs_path)?;
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|e| format!("读 .md 失败: {e}"))?;
+
+    // kind 从文件名前缀判
+    let filename = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    let kind = if filename.starts_with("reply-") {
+        "reply"
+    } else if filename.starts_with("meeting-brief-") {
+        "meeting-brief"
+    } else if filename.starts_with("followup-") {
+        "followup"
+    } else {
+        "unknown"
+    }
+    .to_string();
+
+    // 分 header 段 / body 段 — 用第一个独立 "---" 行
+    let (header_part, body_part) = match raw.split_once("\n---\n") {
+        Some((h, b)) => (h, b.trim_start_matches('\n')),
+        None => (raw.as_str(), ""), // 没 ---, 退化: 当全是 header / 当全是 body 都不太对
+                                    // 退化为: 整个当 body, header 解析空
+    };
+
+    let mut tone: Option<String> = None;
+    let mut recipient: Option<String> = None;
+    let mut subject: Option<String> = None;
+    let mut thread_id: Option<String> = None;
+    let mut event_title: Option<String> = None;
+    let mut project: Option<String> = None;
+    let mut created_at: Option<String> = None;
+    let mut compliance_notes: Vec<String> = Vec::new();
+    let mut uncertain_points: Vec<String> = Vec::new();
+
+    // 第一行 `# ... (tone)` 抽 tone (reply 才有 — meeting-brief / followup 不带括号)
+    let first_line = header_part.lines().next().unwrap_or("");
+    if kind == "reply" {
+        if let Some(start) = first_line.rfind('(') {
+            if let Some(end) = first_line[start..].find(')') {
+                let t = first_line[start + 1..start + end].trim().to_string();
+                if !t.is_empty() {
+                    tone = Some(t);
+                }
+            }
+        }
+    }
+
+    // 扫 header 行 — 兼容 "## 合规提示" / "## ⚠️ 待员工确认的内容点" 子 section
+    let mut current_subsection: Option<&str> = None;
+    for line in header_part.lines() {
+        let trimmed = line.trim_end();
+        if trimmed.starts_with("## ") {
+            // 判子 section 类型
+            current_subsection = if trimmed.contains("合规") {
+                Some("compliance")
+            } else if trimmed.contains("待员工确认") {
+                Some("uncertain")
+            } else {
+                None
+            };
+            continue;
+        }
+        if let Some((k, v)) = parse_header_line(trimmed) {
+            // 子 section 里的 `- xxx` 进对应 vec; header 主区 `- key: value` 进字段
+            match current_subsection {
+                Some("compliance") => compliance_notes.push(format!("{k}: {v}")),
+                Some("uncertain") => uncertain_points.push(format!("{k}: {v}")),
+                _ => match k.as_str() {
+                    "收件人" => recipient = Some(v),
+                    "主题" => subject = Some(v),
+                    "thread_id" => thread_id = Some(v),
+                    "会议" => event_title = Some(v),
+                    "event_id" => {} // 元数据, 不暴露给 UI
+                    "项目" => project = Some(v),
+                    "源决议" => {} // 仅 followup, 暂不展示
+                    "catfish 起草时间" => created_at = Some(v),
+                    _ => {}
+                },
+            }
+        } else if current_subsection.is_some() && trimmed.starts_with("- ") {
+            // 子 section 里的 "- 纯字符串"  (无 key: value)
+            let item = trimmed.trim_start_matches("- ").to_string();
+            match current_subsection {
+                Some("compliance") => compliance_notes.push(item),
+                Some("uncertain") => uncertain_points.push(item),
+                _ => {}
+            }
+        }
+    }
+
+    Ok(ParsedDraft {
+        kind,
+        tone,
+        recipient,
+        subject,
+        thread_id,
+        event_title,
+        project,
+        created_at,
+        compliance_notes,
+        uncertain_points,
+        body: body_part.trim_end().to_string(),
+    })
+}
+
+/// 删本机草稿 (员工在 TodayDraftsCard 点 8s confirming 红钮后调).
+///
+/// 红线:
+///   - 仅 outputs/ 下文件能删 (guard_outputs_path)
+///   - 不递归, 不删目录
+///   - 删完写一条 audit (decisions.jsonl 同条) — TODO 留给后续, 当前先直删
+#[tauri::command]
+pub async fn draft_delete_md(abs_path: String) -> Result<(), String> {
+    let path = guard_outputs_path(&abs_path)?;
+    std::fs::remove_file(&path)
+        .map_err(|e| format!("删 draft 失败 ({}): {e}", path.display()))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// 单测里改 HOME env 是 process 全局, parallel 会 race.
+    /// 凡是用 ENV_LOCK::lock() 包的 test, cargo test 内串行跑这一组.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn safe_filename_rejects_traversal() {
@@ -300,5 +521,236 @@ mod tests {
         assert!(date_dir("../etc").is_err());
         assert!(date_dir("2026/05/22").is_err());  // / 被过滤
         assert!(date_dir("20260522").is_err());   // 长度不对
+    }
+
+    // ── P3.3.62: parse_header_line ────────────────────────────────────
+
+    #[test]
+    fn parse_header_line_basic() {
+        assert_eq!(
+            parse_header_line("- 收件人: alice@example.com"),
+            Some(("收件人".into(), "alice@example.com".into()))
+        );
+        assert_eq!(
+            parse_header_line("- thread_id: msg-123"),
+            Some(("thread_id".into(), "msg-123".into()))
+        );
+    }
+
+    #[test]
+    fn parse_header_line_with_colon_in_value() {
+        // 值里含 : 不应被切, split_once 只切第一个
+        assert_eq!(
+            parse_header_line("- 主题: Re: 关于 Q4 评审"),
+            Some(("主题".into(), "Re: 关于 Q4 评审".into()))
+        );
+    }
+
+    #[test]
+    fn parse_header_line_rejects_non_list() {
+        assert_eq!(parse_header_line("普通行"), None);
+        assert_eq!(parse_header_line("# 标题"), None);
+        assert_eq!(parse_header_line("## 子段"), None);
+        assert_eq!(parse_header_line("- 无冒号"), None);
+    }
+
+    // ── draft_parse_md: 跨 advisor_drafts.py 3 类 ─────────────────────
+
+    /// 仿照 advisor_drafts.py:54 draft_email_reply 输出格式造 reply 草稿.
+    fn make_reply_md() -> String {
+        "# 邮件回信草稿 (balanced)\n\
+         \n\
+         - 收件人: alice@example.com\n\
+         - 主题: Re: Q4 评审\n\
+         - thread_id: msg-abc-123\n\
+         - catfish 起草时间: 2026-06-13T10:00:00+08:00\n\
+         \n\
+         ## 合规提示\n\
+         \n\
+         - 涉及报价, 请确认对外口径\n\
+         \n\
+         ---\n\
+         \n\
+         Alice 你好,\n\
+         \n\
+         Q4 评审材料已附上, 请查收.\n\
+         \n\
+         鸿波\n"
+            .into()
+    }
+
+    fn make_meeting_brief_md() -> String {
+        "# 会议汇报材料草稿\n\
+         \n\
+         - 会议: Q4 经管会\n\
+         - event_id: cal-evt-9\n\
+         - catfish 起草时间: 2026-06-13T09:00:00+08:00\n\
+         \n\
+         ## ⚠️ 待员工确认的内容点\n\
+         \n\
+         - 营收口径是含税还是不含税\n\
+         - 客户数是签约 vs 活跃\n\
+         \n\
+         ---\n\
+         \n\
+         ## 经营回顾\n\
+         \n\
+         本季度营收 X 元 (含税)...\n"
+            .into()
+    }
+
+    fn make_followup_md() -> String {
+        "# 项目催办名单 — 鲶鱼线\n\
+         \n\
+         - 项目: 鲶鱼线\n\
+         - 源决议: 6/5 周会 #3\n\
+         - catfish 起草时间: 2026-06-13T11:00:00+08:00\n\
+         \n\
+         ---\n\
+         \n\
+         ## 张三\n\
+         \n\
+         请补 P3.3.51 单测覆盖.\n"
+            .into()
+    }
+
+    /// 把生成的 .md 写到临时 outputs/<today>/ 后跑 draft_parse_md.
+    ///
+    /// 注意: guard_outputs_path 检查 outputs_root() 是 $HOME/.catfish/outputs/,
+    /// 单测不能动员工本机, 这里用 setenv HOME 改到 tempdir.
+    async fn parse_md_in_tmp(filename: &str, content: &str) -> ParsedDraft {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::env::set_var("HOME", tmp.path());
+        let outputs = outputs_root().expect("outputs_root");
+        let date_dir = outputs.join("2026-06-13");
+        std::fs::create_dir_all(&date_dir).expect("mkdir");
+        let path = date_dir.join(filename);
+        std::fs::write(&path, content).expect("write");
+        draft_parse_md(path.to_string_lossy().into())
+            .await
+            .expect("parse")
+    }
+
+    #[tokio::test]
+    async fn parse_reply_full_fields() {
+        let p = parse_md_in_tmp("reply-alice-balanced.md", &make_reply_md()).await;
+        assert_eq!(p.kind, "reply");
+        assert_eq!(p.tone.as_deref(), Some("balanced"));
+        assert_eq!(p.recipient.as_deref(), Some("alice@example.com"));
+        assert_eq!(p.subject.as_deref(), Some("Re: Q4 评审"));
+        assert_eq!(p.thread_id.as_deref(), Some("msg-abc-123"));
+        assert_eq!(
+            p.created_at.as_deref(),
+            Some("2026-06-13T10:00:00+08:00")
+        );
+        assert_eq!(p.compliance_notes.len(), 1);
+        assert!(p.compliance_notes[0].contains("涉及报价"));
+        assert!(p.body.contains("Alice 你好"));
+        assert!(p.body.contains("Q4 评审材料"));
+        // body 里不该混 header
+        assert!(!p.body.contains("收件人:"));
+        assert!(!p.body.contains("## 合规提示"));
+    }
+
+    #[tokio::test]
+    async fn parse_meeting_brief() {
+        let p = parse_md_in_tmp("meeting-brief-Q4经管会.md", &make_meeting_brief_md()).await;
+        assert_eq!(p.kind, "meeting-brief");
+        assert_eq!(p.tone, None); // meeting-brief 没 tone
+        assert_eq!(p.event_title.as_deref(), Some("Q4 经管会"));
+        assert_eq!(p.uncertain_points.len(), 2);
+        assert!(p.uncertain_points[0].contains("营收口径"));
+        assert!(p.body.contains("经营回顾"));
+    }
+
+    #[tokio::test]
+    async fn parse_followup() {
+        let p = parse_md_in_tmp("followup-鲶鱼线.md", &make_followup_md()).await;
+        assert_eq!(p.kind, "followup");
+        assert_eq!(p.project.as_deref(), Some("鲶鱼线"));
+        assert!(p.body.contains("张三"));
+        assert!(p.body.contains("P3.3.51"));
+    }
+
+    #[tokio::test]
+    async fn parse_unknown_falls_back() {
+        let p = parse_md_in_tmp("random-note.md", "just some text\n").await;
+        assert_eq!(p.kind, "unknown");
+        // 没 --- 退化: body 进退化路径
+        // (split_once 找不到 \n---\n, 退化 body_part = "")
+        // 不强检 body, 主要看 kind 正确
+    }
+
+    #[tokio::test]
+    async fn parse_handles_subject_with_colon() {
+        // 主题里含 ":" — split_once(":") 必须只切第一个
+        let md = "# 邮件回信草稿 (formal)\n\n\
+                  - 收件人: bob@x.com\n\
+                  - 主题: Re: Re: 跨季对账\n\
+                  - thread_id: t-1\n\
+                  - catfish 起草时间: 2026-06-13T10:00:00+08:00\n\
+                  \n---\n\n\
+                  body...\n";
+        let p = parse_md_in_tmp("reply-bob-formal.md", md).await;
+        assert_eq!(p.subject.as_deref(), Some("Re: Re: 跨季对账"));
+    }
+
+    // ── draft_delete_md / guard_outputs_path 红线 ──────────────────────
+
+    #[tokio::test]
+    async fn delete_rejects_path_outside_outputs() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::env::set_var("HOME", tmp.path());
+        // 放一个非 outputs/ 下的文件
+        let outside = tmp.path().join("evil.txt");
+        std::fs::write(&outside, "x").expect("write");
+        let err = draft_delete_md(outside.to_string_lossy().into())
+            .await
+            .expect_err("应拒绝");
+        assert!(err.contains("不在 outputs/"), "实际 err: {err}");
+        // 文件不动
+        assert!(outside.exists());
+    }
+
+    #[tokio::test]
+    async fn delete_rejects_traversal() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::env::set_var("HOME", tmp.path());
+        let outputs = outputs_root().unwrap();
+        let date_dir = outputs.join("2026-06-13");
+        std::fs::create_dir_all(&date_dir).expect("mkdir");
+        // 关键: 真在 outputs 上一级放个文件, 然后从 outputs/.. 引用它,
+        // 若 guard 只 starts_with 不 reject .., 就会被穿越逃出去
+        let escape_path = outputs.parent().unwrap().join("escape.md");
+        std::fs::write(&escape_path, "should-not-touch").expect("write");
+        // 构造 outputs/.../../../escape.md 形式 (含 ..)
+        let bad = format!("{}/../escape.md", outputs.display());
+        let err = draft_delete_md(bad).await.expect_err("应拒绝");
+        assert!(
+            err.contains("..") || err.contains("不在 outputs"),
+            "实际 err: {err}"
+        );
+        // 关键: escape.md 不能被删
+        assert!(escape_path.exists());
+    }
+
+    #[tokio::test]
+    async fn delete_succeeds_for_valid_draft() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::env::set_var("HOME", tmp.path());
+        let outputs = outputs_root().unwrap();
+        let date_dir = outputs.join("2026-06-13");
+        std::fs::create_dir_all(&date_dir).expect("mkdir");
+        let path = date_dir.join("reply-x-y.md");
+        std::fs::write(&path, "hi").expect("write");
+        assert!(path.exists());
+        draft_delete_md(path.to_string_lossy().into())
+            .await
+            .expect("应成功");
+        assert!(!path.exists());
     }
 }
