@@ -229,10 +229,11 @@ async def audit_endpoint(
 
 def run() -> None:
     import uvicorn  # noqa: PLC0415
-    # 端口约定 (跟其他 catfish service 错开):
-    #   8642 hermes / 8995 secret-broker / 8996 mcp-registry /
+    # 端口约定 (跟其他 catfish service 错开, P3.4.1 6/13 砍 8995):
+    #   8642 hermes / 8996 mcp-registry /
     #   8997 skills-hub / 8998 identity-server / 8999 gateway
     #   8994 catfish-wiki-hub (本服务)
+    #   ~~8995 secret-broker~~ (P3.4.1 砍, OAuth token 改员工本机存)
     port = int(os.environ.get("PORT", "8994"))
     host = os.environ.get("HOST", "127.0.0.1")
     if host == "0.0.0.0":

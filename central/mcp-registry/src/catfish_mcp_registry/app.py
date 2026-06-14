@@ -5,14 +5,15 @@ Phase 1 endpoints:
   GET  /v1/mcp/registry      列连接器 (按部门过滤, 含订阅状态/订阅人数)
   GET  /v1/mcp/manifest/{id} 单连接器详情 (含 OAuth / mcp_command 内部字段)
 
-Phase 2 (5/9 加):
+Phase 2 (5/9 加, P3.4.1 6/13 改):
   POST   /v1/mcp/subscribe              员工订阅 (auth_type=none → 直 active;
                                                  oauth2 → pending_oauth)
-  DELETE /v1/mcp/subscribe/{sub_id}     取消订阅 (status=revoked, secret 删)
+  DELETE /v1/mcp/subscribe/{sub_id}     取消订阅 (status=revoked, Companion 自删本机 token)
   GET    /v1/mcp/subscribed             我订阅的列表
   POST   /v1/mcp/oauth/start            返 authorize_url (Phase 2 mock 模式 dev)
-  POST   /v1/mcp/oauth/callback         OAuth code → exchange → 写 secret-broker
-                                        → mark active
+  POST   /v1/mcp/oauth/callback         OAuth code → exchange → 直接返 access_token
+                                        给 Companion 落本机 + mark active
+                                        (P3.4.1: 中央不再持 token, 不再 POST secret-broker)
 
 鉴权: 信任 X-Catfish-User-Sub / X-Catfish-User-Dept header (走 catfish-gateway
 转发, 网关已 verify JWT 注入). 直连本服务 dev 时也可手填.
@@ -355,7 +356,9 @@ async def unsubscribe(
     request: Request,
     x_catfish_user_sub: str | None = Header(default=None),
 ) -> SubscriptionView:
-    """取消订阅. 标 revoked + 删 secret-broker 里的 token (best-effort)."""
+    """取消订阅. 标 revoked. P3.4.1 (6/13 hb): 中央不再持 token, 不删 secret-broker.
+    Companion 端拿 oauth_token_ref 自己删 ~/.catfish/mcp/oauth-tokens/<ref>.
+    """
     user_sub = _require_user_sub(x_catfish_user_sub)
     db = request.app.state.db
 
@@ -452,7 +455,10 @@ async def oauth_callback(
     request: Request,
     x_catfish_user_sub: str | None = Header(default=None),
 ) -> OAuthCallbackResponse:
-    """OAuth callback — code 换 token + 写 secret-broker + mark active.
+    """OAuth callback — code 换 token + 直接返 access_token 给 Companion + mark active.
+
+    P3.4.1 (6/13 hb): 中央不再写 secret-broker. token 在 response 里返,
+    Companion 落 ~/.catfish/mcp/oauth-tokens/<ref> 本机文件 0600.
 
     Phase 2 dev mock 模式: body.mock_token 直接当 access_token 存. 真接时用
     code 调 manifest.oauth.token_url exchange.
@@ -590,12 +596,12 @@ def main() -> None:
     import uvicorn
 
     host = os.environ.get("HOST", "127.0.0.1")
-    # 端口约定 (5/9):
+    # 端口约定 (5/9, P3.4.1 6/13 砍 8995):
     #   8998 catfish-identity     (OIDC + a2a registry)
     #   8999 catfish-gateway      (LLM 主网关)
     #   8997 catfish-skills-hub   (历史占)
     #   8996 catfish-mcp-registry (本服务, 5/9 加, 避 skills-hub)
-    #   8995 catfish-secret-broker (BL-G6 Phase 2)
+    #   ~~8995 catfish-secret-broker~~ (P3.4.1 砍, OAuth token 改员工本机存)
     port = int(os.environ.get("PORT", "8996"))
     uvicorn.run(
         "catfish_mcp_registry.app:app",

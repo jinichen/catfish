@@ -219,8 +219,9 @@ class WikiHubConfig(BaseModel):
     跟 skills_hub 同模式. gateway 收 /v1/wiki/* → 上游 :8994. 注入
     X-Catfish-User-Sub/-Dept/-Role. 上游 wiki-hub 信任 header.
 
-    端口约定: 8642 hermes / 8995 secret-broker / 8996 mcp-registry /
+    端口约定 (P3.4.1 6/13 砍 8995): 8642 hermes / 8996 mcp-registry /
     8997 skills-hub / 8998 identity-server / 8999 gateway / 8994 wiki-hub.
+    (~~8995 secret-broker~~ — P3.4.1 砍, OAuth token 改员工本机存)
 
         wiki_hub:
           upstream_url: http://127.0.0.1:8994
