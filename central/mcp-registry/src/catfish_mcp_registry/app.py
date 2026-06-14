@@ -563,16 +563,16 @@ async def oauth_callback(
 
     # P3.4.1 (6/13 hb): 砍中央 secret-broker 写入 — token 不再上中央.
     #
-    # 老逻辑: token POST 到 secret-broker (中央 :8995 集中存储). 跟 manifesto
-    # "信息分级保护 / 数据本地化处理" 红线冲突 — 中央拿到员工 token 等于能
-    # 以员工身份操作 SaaS, 政企信安场景下不合规.
+    # (P3.4.1 砍) 老逻辑: token POST 到 secret-broker (中央 :8995 集中存储).
+    # 跟 manifesto "信息分级保护 / 数据本地化处理" 红线冲突 — 中央拿到员工 token
+    # 等于能以员工身份操作 SaaS, 政企信安场景下不合规.
     #
     # 新逻辑: token 直接返 Companion, Companion 落本机
     # ~/.catfish/mcp/oauth-tokens/<token_ref_local> 文件 0600. 中央仅留
     # token_ref_local 作为标识符 (不含 value), 用于 unsubscribe 时通知
     # Companion 删本机.
     #
-    # oauth_token_ref 字段含义变更: 老语义 = secret-broker ref;
+    # oauth_token_ref 字段含义变更: (P3.4.1 砍) 老语义 = secret-broker ref;
     # 新语义 = Companion 本机文件名 (相对 ~/.catfish/mcp/oauth-tokens/).
     token_ref_local = f"{sub['connector_id']}-{user_sub.replace('@', '-at-')}.token"
     sub_after = db.mark_active(sub["id"], oauth_token_ref=token_ref_local)
