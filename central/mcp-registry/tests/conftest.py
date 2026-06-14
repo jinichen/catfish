@@ -1,9 +1,12 @@
-"""pytest fixtures (BL-D3 Phase 1+2)."""
+"""pytest fixtures (BL-D3 Phase 1+2).
+
+P3.4.1 (6/13 hb): 删 secret_client_mock — 中央不再持 token, app 启动也不再
+建 secret_client httpx 客户端.
+"""
 from __future__ import annotations
 
 import os
 from pathlib import Path
-from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -44,27 +47,16 @@ def db(tmp_path: Path) -> SubscriptionDB:
 
 
 @pytest.fixture
-def secret_client_mock():
-    """mock httpx client for secret-broker — 不真起服务. 默认 set 都成功."""
-    mock = AsyncMock()
-    # post → 200
-    import httpx
-    mock.post.return_value = httpx.Response(200, json={"ref": "x", "exists": True})
-    mock.get.return_value = httpx.Response(404, content=b'{"detail":"not found"}')
-    mock.delete.return_value = httpx.Response(200, json={"ref": "x", "exists": False})
-    return mock
-
-
-@pytest.fixture
 def client(
     registry: ManifestRegistry,
     db: SubscriptionDB,
-    secret_client_mock,
 ):
-    """FastAPI TestClient — registry/db/secret_client 都挂 app.state, 跳 lifespan."""
+    """FastAPI TestClient — registry/db 都挂 app.state, 跳 lifespan.
+
+    P3.4.1: 不再挂 secret_client (中央已不持员工 token).
+    """
     app.state.registry = registry
     app.state.db = db
-    app.state.secret_client = secret_client_mock
     return TestClient(app)
 
 

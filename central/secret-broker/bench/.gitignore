@@ -1,7 +1,0 @@
-# BL-BROKER-BENCH 输出 — 每次 run.sh 重生, 不入库.
-# 源文件 (*.yml / *.py / *.sh / README.md / .gitignore) 都入库.
-csv-broker-*.csv
-report-broker-*.html
-docker-stats-broker-*.txt
-broker-log-*.txt
-.stats.pid

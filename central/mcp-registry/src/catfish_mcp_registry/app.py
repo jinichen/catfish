@@ -53,7 +53,7 @@ def _load_dotenv() -> Path | None:
 _ENV_FILE_LOADED = _load_dotenv()
 
 
-from . import __version__, secret_broker_client
+from . import __version__
 from .db import make_db
 from .loader import ManifestRegistry
 from .models import (
@@ -92,27 +92,23 @@ def _default_manifests_dir() -> Path:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """startup: 扫 manifests/*.yaml + 起 sqlite db + httpx client (Phase 2)."""
+    """startup: 扫 manifests/*.yaml + 起 sqlite db.
+
+    P3.4.1 (6/13 hb): 删 secret-broker httpx 客户端. 中央不再持员工 token.
+    """
     registry = ManifestRegistry(_default_manifests_dir())
     count = registry.load_all()
     app.state.registry = registry
 
-    # Phase 2 (5/9): 持久化 + secret-broker 客户端
     app.state.db = make_db()
-    app.state.secret_client = httpx.AsyncClient(timeout=10)
 
     logger.info(
-        "catfish-mcp-registry v%s startup: %d manifests, db backend=%s, secret-broker=%s",
+        "catfish-mcp-registry v%s startup: %d manifests, db backend=%s",
         __version__,
         count,
         app.state.db.backend,
-        secret_broker_client.get_url(),
     )
     yield
-    try:
-        await app.state.secret_client.aclose()
-    except Exception as e:
-        logger.debug("secret_client aclose: %s", e)
     logger.info("catfish-mcp-registry shutdown")
 
 
@@ -372,16 +368,10 @@ async def unsubscribe(
 
     db.revoke(subscription_id)
 
-    # 删 secret-broker token (best-effort, 失败不阻塞 unsubscribe)
-    if sub.get("oauth_token_ref"):
-        try:
-            await secret_broker_client.delete_secret(
-                request.app.state.secret_client,
-                ref=sub["oauth_token_ref"],
-                user_sub=user_sub,
-            )
-        except secret_broker_client.SecretBrokerError as e:
-            logger.warning("secret-broker delete 失败 (不影响 unsubscribe): %s", e)
+    # P3.4.1 (6/13 hb): 中央不再持 token, 没什么需要清的.
+    # Companion 端拿 oauth_token_ref 字段自己删本机 ~/.catfish/mcp/oauth-tokens/.
+    # (sub_after.oauth_token_ref 仍在 response 里, Companion 拉 my_subscriptions
+    # 时拿不到老 ref 就触发本机删除; 或者前端 unsubscribe 调用后自己删本机)
 
     db.write_audit(
         user_sub=user_sub,
@@ -565,36 +555,33 @@ async def oauth_callback(
                 detail=f"token endpoint 返回无 access_token 字段: {token_data}",
             )
 
-    token_ref = f"{sub['connector_id']}-oauth-{user_sub.replace('@', '-at-')}"
-    try:
-        await secret_broker_client.set_secret(
-            request.app.state.secret_client,
-            ref=token_ref,
-            value=access_token,
-            user_sub=user_sub,
-        )
-    except secret_broker_client.SecretBrokerError as e:
-        db.write_audit(
-            user_sub=user_sub,
-            connector_id=sub["connector_id"],
-            action="oauth_failed",
-            meta={"reason": "secret_broker", "error": str(e)},
-        )
-        raise HTTPException(
-            status_code=502, detail=f"secret-broker 写 token 失败: {e}",
-        ) from e
-
-    sub_after = db.mark_active(sub["id"], oauth_token_ref=token_ref)
+    # P3.4.1 (6/13 hb): 砍中央 secret-broker 写入 — token 不再上中央.
+    #
+    # 老逻辑: token POST 到 secret-broker (中央 :8995 集中存储). 跟 manifesto
+    # "信息分级保护 / 数据本地化处理" 红线冲突 — 中央拿到员工 token 等于能
+    # 以员工身份操作 SaaS, 政企信安场景下不合规.
+    #
+    # 新逻辑: token 直接返 Companion, Companion 落本机
+    # ~/.catfish/mcp/oauth-tokens/<token_ref_local> 文件 0600. 中央仅留
+    # token_ref_local 作为标识符 (不含 value), 用于 unsubscribe 时通知
+    # Companion 删本机.
+    #
+    # oauth_token_ref 字段含义变更: 老语义 = secret-broker ref;
+    # 新语义 = Companion 本机文件名 (相对 ~/.catfish/mcp/oauth-tokens/).
+    token_ref_local = f"{sub['connector_id']}-{user_sub.replace('@', '-at-')}.token"
+    sub_after = db.mark_active(sub["id"], oauth_token_ref=token_ref_local)
     db.write_audit(
         user_sub=user_sub,
         connector_id=sub["connector_id"],
         action="oauth_complete",
-        meta={"token_ref": token_ref},
+        meta={"token_ref_local": token_ref_local},  # 不记 token value
     )
 
     manifest = _registry(request).get(sub["connector_id"])
     return OAuthCallbackResponse(
-        subscription=_sub_row_to_view(sub_after, manifest)  # type: ignore[arg-type]
+        subscription=_sub_row_to_view(sub_after, manifest),  # type: ignore[arg-type]
+        access_token=access_token,
+        token_ref_local=token_ref_local,
     )
 
 

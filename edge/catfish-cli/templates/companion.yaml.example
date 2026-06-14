@@ -15,10 +15,10 @@ endpoints:
   # env override: CATFISH_GATEWAY_URL
   gateway_url: http://127.0.0.1:8999
 
-  # 2) secret-broker (员工 SSO 拿 secret, e.g. 邮件密码 / 第三方 API key).
-  # 默认本机 127.0.0.1:8995. 跟 gateway 通常同 host (路由不同 port).
-  # env override: CATFISH_SECRET_BROKER_URL
-  secret_broker_url: http://127.0.0.1:8995
+  # 2) secret-broker — P3.4.1 (6/13 hb) 砍掉 中央 secret-broker 服务. mcp OAuth
+  #    token 改 Companion 本机存 (~/.catfish/mcp/oauth-tokens/<ref> 文件 0600),
+  #    中央 0 持有员工 token. 旧 yaml 含 secret_broker_url 字段会被 serde 安静
+  #    忽略, 不抛错. 删除该行可让 yaml 整洁.
 
   # 3) mcp-registry (8996) — Companion 自动跟 gateway 共享 host, 不用单独配
   # 4) skills-hub (8997) — hermes auxiliary 自动走, 不用单独配

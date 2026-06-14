@@ -218,6 +218,20 @@ export const emailPoliticalScanNow = (
 export const emailPoliticalGet = (ids: string[]) =>
   rawInvoke<Record<string, PoliticalScanResult>>("email_political_get", { ids });
 
+// P3.4.1 (6/13 鸿波): mcp OAuth token 本机存. callback 拿到 token 后立即落
+// ~/.catfish/mcp/oauth-tokens/<token_ref_local> 文件 0600. 中央 0 持有.
+export interface McpOauthTokenSaveResult {
+  absPath: string;
+  bytes: number;
+}
+export const mcpOauthTokenSave = (tokenRefLocal: string, accessToken: string) =>
+  rawInvoke<McpOauthTokenSaveResult>("mcp_oauth_token_save", {
+    tokenRefLocal,
+    accessToken,
+  });
+export const mcpOauthTokenDelete = (tokenRefLocal: string) =>
+  rawInvoke<void>("mcp_oauth_token_delete", { tokenRefLocal });
+
 // P3.3.55 (6/12 鸿波): 审计视图 Tab 拿 raw jsonl row 列表.
 export interface ToolCallRow {
   ts: string;
@@ -469,14 +483,16 @@ export const wikiUpdateFile = (relPath: string, content: string) =>
 export const wikiDeleteFile = (relPath: string) =>
   rawInvoke<WikiWriteResult>("wiki_delete_file", { relPath });
 
-// P28 / P29 (6/5 鸿波): Companion Dashboard 改 gateway/identity/secret-broker URL
+// P28 / P29 (6/5 鸿波): Companion Dashboard 改 gateway/identity URL
+// P3.4.1 (6/13 hb): 砍 secret_broker_url — 中央 secret-broker 服务删, OAuth
+// token 改 Companion 本机存. ServerConfigCard 不再让员工配 broker URL.
 export interface ServerConfig {
   gateway_url: string;
   gateway_token: string;
   token_source: "yaml" | "env" | "none";
-  // P29: 5 服务真**`另 2 个独立 URL`** (mcp-registry / skills-hub 共享 gateway/hermes, 不暴露)
   identity_url: string;
-  secret_broker_url: string;
+  // secret_broker_url 字段砍, 旧 build 兼容靠 optional
+  secret_broker_url?: string;  // deprecated, 永远不返
 }
 
 export const readServerConfig = () =>
@@ -486,13 +502,11 @@ export const writeServerConfig = (
   gatewayUrl: string,
   gatewayToken: string,
   identityUrl?: string,
-  secretBrokerUrl?: string,
 ) =>
   rawInvoke<void>("write_server_config", {
     gatewayUrl,
     gatewayToken,
     identityUrl,
-    secretBrokerUrl,
   });
 
 // ── BL-E27 spike: 桌宠副窗 ─────────────────────────────────

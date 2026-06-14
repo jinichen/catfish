@@ -24,7 +24,7 @@ export default function ServerConfigCard() {
   const [editing, setEditing] = useState(false);
   const [draftUrl, setDraftUrl] = useState("");
   const [draftIdentity, setDraftIdentity] = useState("");
-  const [draftSecretBroker, setDraftSecretBroker] = useState("");
+  // P3.4.1: secret-broker 服务删, 不再让员工配 broker URL
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -38,7 +38,6 @@ export default function ServerConfigCard() {
         setCfg(c);
         setDraftUrl(c.gateway_url);
         setDraftIdentity(c.identity_url);
-        setDraftSecretBroker(c.secret_broker_url);
       })
       .catch((e) => {
         if (!alive) return;
@@ -56,7 +55,6 @@ export default function ServerConfigCard() {
     if (!cfg) return;
     setDraftUrl(cfg.gateway_url);
     setDraftIdentity(cfg.identity_url);
-    setDraftSecretBroker(cfg.secret_broker_url);
     setEditing(true);
     setErr(null);
     setSaved(false);
@@ -79,17 +77,12 @@ export default function ServerConfigCard() {
       if (idUrl && !/^https?:\/\//.test(idUrl)) {
         throw new Error("identity URL 必须 http:// 或 https:// 开头");
       }
-      const sbUrl = draftSecretBroker.trim().replace(/\/+$/, "");
-      if (sbUrl && !/^https?:\/\//.test(sbUrl)) {
-        throw new Error("secret-broker URL 必须 http:// 或 https:// 开头");
-      }
       const keepToken = cfg?.gateway_token || "";
-      await writeServerConfig(url, keepToken, idUrl || undefined, sbUrl || undefined);
+      await writeServerConfig(url, keepToken, idUrl || undefined);
       const fresh = await readServerConfig();
       setCfg(fresh);
       setDraftUrl(fresh.gateway_url);
       setDraftIdentity(fresh.identity_url);
-      setDraftSecretBroker(fresh.secret_broker_url);
       setEditing(false);
       setSaved(true);
       setTimeout(() => setSaved(false), 6000);
@@ -160,19 +153,9 @@ export default function ServerConfigCard() {
         )}
       </Row>
 
-      {/* P29: Secret Broker URL — 员工 SSO 拿 secret */}
-      <Row label="Secret Broker URL">
-        {editing ? (
-          <input
-            value={draftSecretBroker}
-            onChange={(e) => setDraftSecretBroker(e.target.value)}
-            placeholder="http://127.0.0.1:8995"
-            style={inputStyle}
-          />
-        ) : (
-          <code style={codeStyle}>{cfg?.secret_broker_url || "(默认)"}</code>
-        )}
-      </Row>
+      {/* P3.4.1 (6/13 hb): 砍 Secret Broker URL 行 — 中央服务已删, OAuth token
+          改 Companion 本机存 (~/.catfish/mcp/oauth-tokens/). 员工不再需要配
+          broker URL. */}
 
       {/* action bar */}
       {editing && (

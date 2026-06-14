@@ -89,8 +89,12 @@ def test_subscribe_401_no_user(client: TestClient):
     assert r.status_code == 401
 
 
-def test_oauth_start_then_callback_flow(client: TestClient, auth_headers, secret_client_mock):
-    """完整 OAuth flow: subscribe → oauth/start → oauth/callback → active."""
+def test_oauth_start_then_callback_flow(client: TestClient, auth_headers):
+    """完整 OAuth flow: subscribe → oauth/start → oauth/callback → active.
+
+    P3.4.1 (6/13 hb): 中央不再 POST secret-broker. callback response 直接返
+    access_token 给 Companion 落本机, oauth_token_ref 改成本机文件 ref.
+    """
     # subscribe (pending_oauth)
     r = client.post(
         "/v1/mcp/subscribe",
@@ -118,16 +122,15 @@ def test_oauth_start_then_callback_flow(client: TestClient, auth_headers, secret
         headers=auth_headers,
     )
     assert r.status_code == 200
-    after = r.json()["subscription"]
+    body = r.json()
+    after = body["subscription"]
     assert after["status"] == "active"
-    assert after["oauth_token_ref"] == "jira-oauth-alice-at-catfish.dev"
+    # oauth_token_ref 改成本机文件 ref (P3.4.1)
+    assert after["oauth_token_ref"] == "jira-alice-at-catfish.dev.token"
 
-    # secret-broker 真被 POST 调过, 写 token
-    assert secret_client_mock.post.called
-    call = secret_client_mock.post.call_args
-    payload = call.kwargs["json"]
-    assert payload["ref"] == "jira-oauth-alice-at-catfish.dev"
-    assert payload["value"] == "real-jira-token-xyz"
+    # P3.4.1: token 应该直接出现在 callback response, 不再走中央
+    assert body["access_token"] == "real-jira-token-xyz"
+    assert body["token_ref_local"] == "jira-alice-at-catfish.dev.token"
 
 
 def test_oauth_callback_replay_rejected(client: TestClient, auth_headers):
@@ -214,8 +217,12 @@ def test_subscribed_filter_active(client: TestClient, auth_headers):
     assert r.json()["subscriptions"][0]["connector_id"] == "filesystem"
 
 
-def test_unsubscribe(client: TestClient, auth_headers, secret_client_mock):
-    """订阅 + 完整 OAuth → unsubscribe → status revoked + secret 删."""
+def test_unsubscribe(client: TestClient, auth_headers):
+    """订阅 + 完整 OAuth → unsubscribe → status revoked.
+
+    P3.4.1 (6/13 hb): 中央 unsubscribe 不再调 secret-broker. Companion 自己
+    根据 oauth_token_ref 删本机 ~/.catfish/mcp/oauth-tokens/<ref>.
+    """
     # 跑完整 flow
     r = client.post(
         "/v1/mcp/subscribe", json={"connector_id": "jira"}, headers=auth_headers,
@@ -237,9 +244,6 @@ def test_unsubscribe(client: TestClient, auth_headers, secret_client_mock):
     r = client.delete(f"/v1/mcp/subscribe/{sub_id}", headers=auth_headers)
     assert r.status_code == 200
     assert r.json()["status"] == "revoked"
-
-    # secret-broker delete 被调
-    assert secret_client_mock.delete.called
 
 
 def test_unsubscribe_other_user_403(client: TestClient, auth_headers):

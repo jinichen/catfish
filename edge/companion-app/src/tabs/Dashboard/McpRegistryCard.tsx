@@ -17,6 +17,8 @@ import { config } from "../../lib/env";
 // BL-AUTH-DECOUPLE-A5 Phase 2 (5/19): 改走 fetchWithAuth, 不再 inline getToken +
 // raw fetch — wrapper 内部按 useHermes 切 API_SERVER_KEY / OAuth, 加 X-Catfish-User.
 import { fetchWithAuth } from "../../lib/me";
+// P3.4.1 (6/13 鸿波): OAuth token 本机存, 中央不再持有.
+import { mcpOauthTokenSave, mcpOauthTokenDelete } from "../../lib/tauri";
 
 interface ConnectorTool {
   name: string;
@@ -149,12 +151,31 @@ export default function McpRegistryCard() {
             mock_token: `mock-${c.id}-token`,
           }),
         });
-        if (cbRes.ok) {
-          showFlash(`已订阅 ${c.name} (mock OAuth 完成)`);
-          await refresh();
-        } else {
+        if (!cbRes.ok) {
           showFlash(`OAuth callback 失败: HTTP ${cbRes.status}`);
+          return;
         }
+        // P3.4.1 (6/13 hb): callback 返 access_token + token_ref_local,
+        // 立即落本机文件. 失败也只 warn, 不阻塞订阅 (中央已 active).
+        const cbJson = (await cbRes.json()) as {
+          subscription: { id: string };
+          access_token?: string | null;
+          token_ref_local?: string | null;
+        };
+        if (cbJson.access_token && cbJson.token_ref_local) {
+          try {
+            await mcpOauthTokenSave(cbJson.token_ref_local, cbJson.access_token);
+          } catch (e) {
+            showFlash(
+              `订阅成功但 token 落本机失败 (mcp 调用可能受影响): ${
+                e instanceof Error ? e.message : String(e)
+              }`,
+            );
+            return;
+          }
+        }
+        showFlash(`已订阅 ${c.name} (token 落本机, 中央 0 持有)`);
+        await refresh();
         return;
       }
       window.open(startJson.authorize_url, "_blank");
@@ -177,7 +198,12 @@ export default function McpRegistryCard() {
         return;
       }
       const subsJson = (await subsRes.json()) as {
-        subscriptions: { id: string; connector_id: string; status: string }[];
+        subscriptions: {
+          id: string;
+          connector_id: string;
+          status: string;
+          oauth_token_ref?: string | null;
+        }[];
       };
       const mine = subsJson.subscriptions.find(
         (s) => s.connector_id === c.id && s.status === "active",
@@ -186,11 +212,23 @@ export default function McpRegistryCard() {
         showFlash(`未找到 ${c.name} 的活跃订阅`);
         return;
       }
+      const tokenRef = mine.oauth_token_ref; // P3.4.1: 本机文件 ref
       const r = await fetchWithAuth(
         `${config.backendUrl}/v1/mcp/subscribe/${mine.id}`,
         { method: "DELETE" },
       );
       if (r.ok) {
+        // P3.4.1: 中央 revoked 后, Companion 自己删本机 token (中央不持有,
+        // 中央 unsubscribe 不会清本机)
+        if (tokenRef) {
+          try {
+            await mcpOauthTokenDelete(tokenRef);
+          } catch (e) {
+            // 删本机失败不影响 unsubscribe (中央已 revoked), 只 log
+            // eslint-disable-next-line no-console
+            console.warn("[mcp] 删本机 token 失败 (中央已 revoked):", e);
+          }
+        }
         showFlash(`已取消订阅 ${c.name}`);
         await refresh();
       } else {

@@ -25,9 +25,8 @@ pub struct ServerConfig {
     /// P29 (6/5): identity-server URL (OIDC issuer, `catfish login` 走这).
     /// 读自 ~/.catfish/companion.yaml oidc.issuer 或 env CATFISH_OIDC_ISSUER.
     pub identity_url: String,
-    /// P29 (6/5): secret-broker URL — 员工 SSO 拿 secret.
-    /// 读自 endpoints.secret_broker_url > env > default localhost:8995.
-    pub secret_broker_url: String,
+    // P3.4.1 (6/13 hb): secret_broker_url 字段砍 — 中央服务删,
+    // OAuth token 改 Companion 本机存 (~/.catfish/mcp/oauth-tokens/).
 }
 
 fn catfish_home() -> Result<PathBuf, String> {
@@ -183,16 +182,13 @@ pub fn read_server_config() -> Result<ServerConfig, String> {
         identity_url = "http://127.0.0.1:8998".to_string();
     }
 
-    // P29: secret-broker URL — 走 endpoints (yaml > env > default)
-    let secret_broker_url = std::env::var("CATFISH_SECRET_BROKER_URL")
-        .unwrap_or_else(|_| crate::services::endpoints::endpoints().secret_broker_base());
+    // P3.4.1 (6/13 hb): secret_broker_url 砍, 服务删了不需要展示给员工
 
     Ok(ServerConfig {
         gateway_url: url,
         gateway_token: token,
         token_source: source.to_string(),
         identity_url,
-        secret_broker_url,
     })
 }
 
@@ -201,8 +197,12 @@ pub fn write_server_config(
     gateway_url: String,
     gateway_token: String,
     identity_url: Option<String>,
+    // P3.4.1 (6/13 hb): secret_broker_url 参数留, 但忽略 — 给前端旧 build 兼容,
+    // 老 ServerConfigCard 调时仍传值, 服务端不再写入 yaml. 下次 UI clean
+    // 时可彻底删.
     secret_broker_url: Option<String>,
 ) -> Result<(), String> {
+    let _ = secret_broker_url; // 显式忽略
     let home = catfish_home()?;
     fs::create_dir_all(&home).map_err(|e| format!("建 {home:?} 失败: {e}"))?;
     let companion = home.join("companion.yaml");
@@ -244,21 +244,7 @@ pub fn write_server_config(
         }
     }
 
-    // P29: secret_broker_url → endpoints.secret_broker_url
-    if let Some(sb_url) = secret_broker_url.as_ref() {
-        let trimmed = sb_url.trim().trim_end_matches('/');
-        if !trimmed.is_empty() {
-            if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
-                return Err(format!("secret_broker_url 必须 http:// 或 https:// 开头: {trimmed}"));
-            }
-            companion_text = replace_or_insert_yaml_field(
-                &companion_text,
-                "endpoints",
-                "secret_broker_url",
-                trimmed,
-            );
-        }
-    }
+    // P3.4.1 (6/13 hb): secret_broker_url 不再写 yaml, secret-broker 服务删了
 
     fs::write(&companion, companion_text)
         .map_err(|e| format!("写 {companion:?} 失败: {e}"))?;

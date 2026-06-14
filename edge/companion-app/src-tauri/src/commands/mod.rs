@@ -70,3 +70,4 @@ pub mod wiki_save;  // BL-CATFISH-WIKI-MODE P1.2.2 (6/4): chat 真 💾 button �
 pub mod wiki_write; // BL-CATFISH-WIKI-MODE P3.3.7 (6/4): wiki write API (create_entity_or_concept + update_file)
 pub mod server_config; // P28 (6/5 鸿波): Companion Dashboard 改 gateway URL/token, 不 vim yaml
 pub mod wiki_embed; // P38 (6/5 鸿波): 本机 ONNX BGE-M3 wiki 语义搜索, 100% 离线
+pub mod mcp_oauth; // P3.4.1 (6/13 鸿波): mcp OAuth token 本机存 ~/.catfish/mcp/oauth-tokens/ (砍 secret-broker)

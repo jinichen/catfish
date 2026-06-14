@@ -173,6 +173,11 @@ class OAuthCallbackRequest(BaseModel):
 
 class OAuthCallbackResponse(BaseModel):
     subscription: SubscriptionView
+    # P3.4.1 (6/13 hb): token 不再走中央 secret-broker. 中央 callback 拿到 token
+    # 后直接返给 Companion, Companion 落本机 ~/.catfish/mcp/oauth-tokens/<ref>.
+    # 中央对 token 不留存, audit 也只记 token_ref (不含 value).
+    access_token: str | None = None
+    token_ref_local: str | None = None  # Companion 本机存档建议用的 ref
 
 
 class SubscriptionListResponse(BaseModel):

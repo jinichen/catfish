@@ -32,9 +32,8 @@ const DEFAULT_GATEWAY_HOST: &str = "127.0.0.1";
 const DEFAULT_GATEWAY_PORT: u16 = 8999;
 const DEFAULT_CHROME_HOST: &str = "127.0.0.1";
 const DEFAULT_CHROME_PORT: u16 = 9222;
-// P29 (6/5 鸿波) — secret-broker 中央部署改 IP 时要跟着改, 加 yaml/env 配置.
-const DEFAULT_SECRET_BROKER_HOST: &str = "127.0.0.1";
-const DEFAULT_SECRET_BROKER_PORT: u16 = 8995;
+// P3.4.1 (6/13 hb): 砍 DEFAULT_SECRET_BROKER_* — secret-broker 中央服务删,
+// OAuth token 改 Companion 本机存 (~/.catfish/mcp/oauth-tokens/).
 // BL-ARCH2 fix2 (5/10): catfish-web 中央门户. 不再前端硬编码 localhost:5173,
 // 走跟 gateway 同款 yaml 配置. 默认 dev 5173 (vite), 生产改 nginx 同域 (跟
 // gateway 同 origin) 或独立 web 服务器, 通过 yaml endpoints.web_url override.
@@ -50,9 +49,6 @@ pub struct Endpoints {
     /// BL-ARCH2 fix2 (5/10): 完整 web URL (包含 scheme), 用 String 而非
     /// host/port 因为生产可能 https + 路径前缀 (e.g. https://catfish.client.com).
     pub web_url: String,
-    /// P29 (6/5 鸿波): secret-broker URL (员工 SSO 拿 secret).
-    pub secret_broker_host: String,
-    pub secret_broker_port: u16,
 }
 
 impl Endpoints {
@@ -66,11 +62,6 @@ impl Endpoints {
 
     pub fn web_base(&self) -> String {
         self.web_url.clone()
-    }
-
-    /// P29 (6/5): secret-broker base URL.
-    pub fn secret_broker_base(&self) -> String {
-        format!("http://{}:{}", self.secret_broker_host, self.secret_broker_port)
     }
 }
 
@@ -119,10 +110,8 @@ struct EndpointsYaml {
     web_url: Option<String>,
     web_host: Option<String>,
     web_port: Option<u16>,
-    /// P29 (6/5 鸿波): secret-broker URL — 员工 SSO 拿 secret. 中央部署改.
-    secret_broker_url: Option<String>,
-    secret_broker_host: Option<String>,
-    secret_broker_port: Option<u16>,
+    // P3.4.1 (6/13 hb): 砍 secret_broker_* — 服务删, yaml 字段也删
+    // (旧 yaml 含 secret_broker_url 字段会被 serde 忽略 = 安静, 不抛错)
     // identity URL 不在这 — 走 oauth.rs OidcConfig 读 yaml.oidc.issuer (协议术语)
 }
 
@@ -233,32 +222,12 @@ fn build() -> Endpoints {
     });
     log::info!("BL-ARCH2 endpoints: web_url={}", web_url);
 
-    // P29 (6/5 鸿波): secret-broker — yaml.secret_broker_url > yaml.host/port > env > default
-    let (secret_broker_host, secret_broker_port) = (|| -> Option<(String, u16)> {
-        let y = yaml.as_ref()?;
-        if let Some(url) = &y.secret_broker_url {
-            if let Some((h, p)) = parse_url_host_port(url) {
-                log::info!("P29 endpoints: secret-broker 走 yaml URL={}", url);
-                return Some((h, p));
-            }
-        }
-        let h = y.secret_broker_host.clone()?;
-        let p = y.secret_broker_port?;
-        Some((h, p))
-    })()
-    .unwrap_or_else(|| (
-        read_host("CATFISH_SECRET_BROKER_HOST", DEFAULT_SECRET_BROKER_HOST),
-        read_port("CATFISH_SECRET_BROKER_PORT", DEFAULT_SECRET_BROKER_PORT),
-    ));
-
     Endpoints {
         gateway_host,
         gateway_port,
         chrome_host,
         chrome_port,
         web_url,
-        secret_broker_host,
-        secret_broker_port,
     }
 }
 
@@ -325,11 +294,8 @@ mod tests {
             chrome_host: "127.0.0.1".into(),
             chrome_port: 9222,
             web_url: "http://127.0.0.1:8999".into(),
-            secret_broker_host: "127.0.0.1".into(),
-            secret_broker_port: 8995,
         };
         assert_eq!(ep.gateway_base(), "http://127.0.0.1:8999");
         assert_eq!(ep.chrome_base(), "http://127.0.0.1:9222");
-        assert_eq!(ep.secret_broker_base(), "http://127.0.0.1:8995");
     }
 }

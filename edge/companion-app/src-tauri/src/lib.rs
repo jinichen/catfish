@@ -569,6 +569,9 @@ pub fn run() {
             services::phishing_config::phishing_config_get,
             // P3.3.53 (6/13): 政治敏感规则可配置 — 仪表盘显当前 effective 配置
             services::political_config::political_config_get,
+            // P3.4.1 (6/13): mcp OAuth token 本机存 (砍 secret-broker 中央存储)
+            commands::mcp_oauth::mcp_oauth_token_save,
+            commands::mcp_oauth::mcp_oauth_token_delete,
             // BL-EMAIL-URGENCY-BADGE (5/18): 前端主动 batch 评级 (历史邮件也能评)
             services::email_scheduler::email_classify_now,
             // P3.3.58 段 2B (6/12 鸿波): 前端 trigger 钓鱼扫描
