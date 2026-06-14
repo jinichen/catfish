@@ -118,10 +118,23 @@ pub async fn ensure_tool_bridge_running() {
 // ============================================================
 
 pub async fn ensure_local_search_running() {
-    if pid_alive(catfish_paths::local_search_pid_file().as_deref(), "catfish_search") {
-        log::info!("autostart: local-search already running");
-        return;
-    }
+    // P3.4.2 (6/15 鸿波): 强制清旧进程后重启 — 不再"在跑就 return".
+    //
+    // # 老逻辑的问题
+    // 老 ensure: pid_file 那个 PID 活着就 early return. 副作用:
+    //   - 老 watcher 不知道 ~/.catfish/search-scope.yaml 改了 (没 SIGHUP / reload)
+    //   - 老 watcher 不知道 catfish_search 包代码更新了 (Python module 已载入)
+    //   - pid_file 只记 1 个 PID, 历史 race 留下的孤儿进程不被清理
+    //
+    // 鸿波本机实测撞过: 进程 5/8 起跑 1 个多月, 后续 yaml 加 ~/Documents 实时索引
+    // 不生效, 因为老 watcher 用 5/8 的 yaml.
+    //
+    // # 新逻辑
+    // 每次 Companion 启动 pkill -f 'catfish_search.cli watch' 清孤儿, 再 spawn 新的.
+    // 启动慢 5-15s (初始 reconcile), 但行为可预测.
+    //
+    // pkill 仅 macOS/Linux 有, Windows 暂不支持 (Companion 当前只 macOS 发布).
+    pkill_local_search_watchers();
 
     let dir = match catfish_paths::local_search_dir() {
         Some(d) => d,
@@ -250,6 +263,46 @@ pub async fn ensure_chrome_running() {
 // ============================================================
 // helpers
 // ============================================================
+
+/// P3.4.2 (6/15 鸿波): pkill 所有 catfish_search.cli watch 进程 (含孤儿).
+///
+/// 跟 pid_alive 配套使用: 既然不能 reload yaml / 不能热更代码, 干脆每次 Companion
+/// 启动都把所有 watcher 都杀掉, 然后由 ensure_local_search_running spawn 新的.
+///
+/// 用 pkill -f 模糊匹配 cmdline. 'catfish_search.cli watch' 这串够特异, 不会
+/// 误杀别的进程. 失败静默 (没 pkill 命令 / 没匹配进程都不算错).
+///
+/// macOS / Linux only. Windows 暂不处理 (Companion 当前只 macOS).
+///
+/// pub: commands/local_search.rs:local_search_start 也调 (UI 重启路径).
+pub fn pkill_local_search_watchers() {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let out = std::process::Command::new("pkill")
+            .args(["-f", "catfish_search.cli watch"])
+            .output();
+        match out {
+            Ok(o) if o.status.success() => {
+                log::info!(
+                    "autostart: pkill 清掉旧 local-search watcher (确保新进程用最新 yaml + 代码)"
+                );
+                // pkill 完后 fsnotify subscribe 释放需要一小段, 给 0.5s 缓冲
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            Ok(_) => {
+                // pkill 返非 0 通常是"无匹配进程" (exit 1), 这是正常情况
+                log::debug!("autostart: pkill local-search 无匹配进程 (首次启动 / 已清干净)");
+            }
+            Err(e) => {
+                log::warn!("autostart: pkill local-search 失败 (不阻塞 spawn): {e}");
+            }
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        log::debug!("autostart: pkill_local_search_watchers 跳过 (非 unix)");
+    }
+}
 
 fn pid_alive(pid_file: Option<&Path>, cmdline_substr: &str) -> bool {
     pid_file

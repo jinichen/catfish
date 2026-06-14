@@ -11,15 +11,19 @@
 //! 后台 watcher 没有端口可探，状态完全靠 PID 文件 + is_alive 判断。
 
 use crate::commands::types::ServiceStatus;
-use crate::services::{catfish_paths, process};
+use crate::services::{autostart, catfish_paths, process};
 
 #[tauri::command]
 pub async fn local_search_start() -> Result<(), String> {
-    if let Some(pid_file) = catfish_paths::local_search_pid_file() {
-        if let Some(pid) = process::read_pid_file_alive_strict(&pid_file, "catfish_search") {
-            return Err(format!("Local Search watcher 已在跑（PID {pid}）"));
-        }
-    }
+    // P3.4.2 (6/15 鸿波): UI 点"启动" 时也清孤儿后重起.
+    //
+    // 老逻辑撞错: pid_file 那个进程在跑就 reject. 但常见场景是员工撞 yaml /
+    // 老进程跑的代码版本不对, 想重起 — 老逻辑要先点"停止"才让"启动" work,
+    // UX 差. 新逻辑: 直接 pkill 所有 catfish_search.cli watch (含 pid_file 没记
+    // 的孤儿) 再 spawn, 等价"重启" 语义.
+    //
+    // 等价行为: 跟 autostart::ensure_local_search_running 同款, 调同一个 helper.
+    autostart::pkill_local_search_watchers();
 
     let dir = catfish_paths::local_search_dir().ok_or_else(|| {
         "找不到 local-search 目录 — 设 CATFISH_LOCAL_SEARCH_DIR 或确保 \
