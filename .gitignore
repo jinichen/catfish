@@ -166,3 +166,7 @@ docs/CATFISH-INTRO-SPEAKER-SCRIPT.md
 # Marathon 6/5-6/6 误创建 / 工具产物
 edge/companion-app/0
 edge/companion-app/work/
+
+# P3.5.x sprint dev artifacts
+*.before-prune-*
+*_archive_*
