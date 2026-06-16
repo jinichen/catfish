@@ -168,11 +168,22 @@ export async function fetchWithAuth(
   //   漏配真因: P3.3.18 (wiki, 6/10) + 5/16 SkillsHub 加 fetch URL 时没同步
   //   isGatewayDirectPath 白名单. hermes proxy 对这俩 endpoint 返 500 (实测
   //   curl http://127.0.0.1:8642/v1/hub/skills) — 用户看的 "Load failed" 真因.
+  // P3.4.E (6/15 鸿波): catfish_direct=1 query 强走 OAuth 直连 gateway 8999, 不走
+  //   hermes 8642 agent loop.
+  //   真因: hermes _handle_chat_completions (api_server.py:1820) 把 client request 重 framing
+  //   成 agent run (调 _run_agent), **完全不读 client 的 tools / tool_choice 字段** —
+  //   client 传啥 tools 都被 hermes 丢弃, 改用 hermes 自己注册的 tools 跑 agent loop.
+  //   profile.ts (single-shot) + advisor.ts Call 2 (single-shot 转结构化) 需要 tool_choice
+  //   强制 LLM 返结构化, 必须 bypass hermes agent loop 直走 catfish-gateway 8999 (LiteLLM
+  //   纯 passthrough, OpenAI 协议透传 DeepSeek).
+  //   设计点: 不动 hermes 路由 (那是 hermes 核心), 用 query flag 让客户端能按 endpoint
+  //   选择是否走 hermes — caller 显式标 catfish_direct=1 才直走 8999.
   const isGatewayDirectPath =
     url.includes("/api/") ||
     url.includes("/v1/catalog") ||
     url.includes("/v1/hub/") ||
-    url.includes("/v1/wiki/");
+    url.includes("/v1/wiki/") ||
+    url.includes("catfish_direct=1");
 
   // 6/8 BL-EMPLOYEE-SELF-SERVE A4 ⭐: transparent log middleware. 包 fetchWithAuth
   // 的真实 dispatch (Hermes / OAuth path), 每个 outbound 请求都记本机 SQLite ~/.catfish/outbound_log.db.

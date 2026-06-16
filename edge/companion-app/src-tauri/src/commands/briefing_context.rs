@@ -48,6 +48,27 @@ pub struct BriefingContext {
     /// 给 LLM 知道"员工上周/本周生成过哪些周报". 内容不读 (.docx/.xlsx 二进制),
     /// 只列文件名 + 时间. LLM 综合时知道员工有/没有周报历史.
     pub weekly_reports: Vec<WeeklyReportRef>,
+
+    /// P3.4.6 (6/15 鸿波): ~/.hermes/memories/MEMORY.md 近期 § 段, 当"近期事项
+    /// context" 喂 advisor.
+    ///
+    /// # 背景
+    /// hermes memory_tool 写 MEMORY.md 时按 § 分段追加, 每段一个语义单元
+    /// (资质评估 / 月度通报模版 / 一级建造师补位 / 6/10 待办...). 这些段是
+    /// **员工最有营养的近期事实**, 但之前 advisor 完全看不到 — catfish-memory
+    /// plugin prefetch 只注 wiki 标题列表, 不动 hermes MEMORY 内容.
+    ///
+    /// # 为啥不直接当 TODO 喂 journal_todos_fetch
+    /// MEMORY.md 设计上**不是** TODO 列表, 是员工长期记忆 (含事实 / 决策 /
+    /// 待办碎片混在一起). 直接抽段当 TODO 显示在早安卡 "TODO" 卡片里会让
+    /// 员工误以为 "AI 把我的 hermes memory 都当作必须办的事" — 反而误导.
+    /// 当 advisor prompt 的"近期事项 context"用 (不强制 advisor 推 TODO 卡)
+    /// 语义最稳, 跟 distilled_facts 同位 (长期画像 vs 近期事项 两层).
+    ///
+    /// # 实现
+    /// 读 MEMORY.md (max 8KB) → split('§') → trim 空段 → 倒序累加到 max 3KB → 翻回正序 → join.
+    /// 文件不存在 / 读失败 → 空字符串 (跟其他字段同模式).
+    pub hermes_memory_recent: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -118,6 +139,13 @@ pub async fn briefing_context_fetch() -> Result<BriefingContext, String> {
     let outputs_dir = catfish_dir.join("outputs");
     let weekly_reports = scan_weekly_reports(&outputs_dir).unwrap_or_default();
 
+    // P3.4.6 (6/15 鸿波): 抽 hermes MEMORY.md 近期 § 段当"近期事项 context".
+    //   ~/.catfish/employee_journal.md 不存在时, 之前 advisor 三件套 todos 全空,
+    //   但 hermes MEMORY 里其实有大量员工实质内容 (鸿波 case: 资质评估 / 一级建造师
+    //   补位 / 6/10 待办), 不喂可惜. 注: 不当 TODO, 当 context — TODO 严格走
+    //   employee_journal - [ ] 显式 checkbox (journal_todos_fetch 行为不变).
+    let hermes_memory_recent = read_hermes_memory_recent(3000);
+
     Ok(BriefingContext {
         distilled_facts,
         recent_session_briefs,
@@ -125,7 +153,141 @@ pub async fn briefing_context_fetch() -> Result<BriefingContext, String> {
         workplan,
         projects,
         weekly_reports,
+        hermes_memory_recent,
     })
+}
+
+/// P3.4.6 (6/15 鸿波): 读 ~/.hermes/memories/MEMORY.md 近期 § 段, 喂 advisor 当
+/// "近期事项 context".
+///
+/// 算法:
+///   1. 读 max 8KB (防大文件占内存, 同 read_file_safe 走 utf-8 boundary)
+///   2. 委托 extract_recent_segments 抽段 (纯函数, 见下面单测)
+///
+/// 文件不存在 / 读失败 → 空字符串 (跟 read_file_safe 同模式).
+fn read_hermes_memory_recent(max_bytes: usize) -> String {
+    let home = match std::env::var("HOME") {
+        Ok(h) => h,
+        Err(_) => return String::new(),
+    };
+    let path = PathBuf::from(home)
+        .join(".hermes")
+        .join("memories")
+        .join("MEMORY.md");
+    if !path.exists() {
+        return String::new();
+    }
+    let raw = read_file_safe(&path, 8192);
+    extract_recent_segments(&raw, max_bytes)
+}
+
+/// P3.4.6 (6/15 鸿波): 抽 § 段算法 — 纯函数, 单测覆盖.
+///
+/// 算法:
+///   1. split('§') 切段, trim 每段, 过滤空
+///   2. 倒序累加段长度 (= "近期", hermes append-only 末尾段是最新写的) 到
+///      max_bytes 止
+///   3. 翻回正序, join("\n§\n") 还原分隔符
+///
+/// 边界:
+///   - 空输入 → 空字符串
+///   - 全是 § / 全空段 → 空字符串
+///   - 第一段就超 max_bytes → 仍至少返 1 段 (不能因 max 卡死, 不然 advisor 啥都看不到)
+pub(crate) fn extract_recent_segments(raw: &str, max_bytes: usize) -> String {
+    if raw.is_empty() {
+        return String::new();
+    }
+
+    let segments: Vec<&str> = raw
+        .split('§')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if segments.is_empty() {
+        return String::new();
+    }
+
+    // 倒序累加段, 到 max_bytes 止 (但至少返 1 段). 然后翻正序.
+    //   每段算 len + 4 ("\n§\n" 分隔符开销 + 容差)
+    let mut out: Vec<&str> = Vec::new();
+    let mut total = 0usize;
+    for seg in segments.iter().rev() {
+        let len = seg.len() + 4;
+        if !out.is_empty() && total + len > max_bytes {
+            break;
+        }
+        out.push(seg);
+        total += len;
+    }
+    out.reverse();
+    out.join("\n§\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_empty_input() {
+        assert_eq!(extract_recent_segments("", 1000), "");
+    }
+
+    #[test]
+    fn test_extract_only_separators() {
+        assert_eq!(extract_recent_segments("§§§", 1000), "");
+        assert_eq!(extract_recent_segments("§\n§\n§", 1000), "");
+    }
+
+    #[test]
+    fn test_extract_single_segment() {
+        let raw = "资质评估流程：以后决定资质是否需要建设之前, 必须进行正式评估.";
+        let out = extract_recent_segments(raw, 1000);
+        assert_eq!(out, "资质评估流程：以后决定资质是否需要建设之前, 必须进行正式评估.");
+    }
+
+    #[test]
+    fn test_extract_multiple_under_limit() {
+        let raw = "段一\n§\n段二\n§\n段三";
+        let out = extract_recent_segments(raw, 1000);
+        assert_eq!(out, "段一\n§\n段二\n§\n段三");
+    }
+
+    #[test]
+    fn test_extract_trim_whitespace() {
+        let raw = "  段一  \n§\n\n  段二  \n";
+        let out = extract_recent_segments(raw, 1000);
+        assert_eq!(out, "段一\n§\n段二");
+    }
+
+    #[test]
+    fn test_extract_recent_under_limit() {
+        // 鸿波 MEMORY.md 真实示例 (摘): 5 个段, max_bytes 充裕 → 全返
+        let raw = "资质评估流程：必须正式评估.\n§\nmylearning.cn 代理模式补充.\n§\n月度资质通报模版.\n§\n一级建造师补位已完成.\n§\n中电高新发票佐证已发起.";
+        let out = extract_recent_segments(raw, 2000);
+        assert!(out.contains("资质评估流程"));
+        assert!(out.contains("中电高新发票"));
+        assert!(out.matches("§").count() >= 4);
+    }
+
+    #[test]
+    fn test_extract_recent_over_limit_keeps_tail() {
+        // 5 段, 每段 ~50 bytes, max_bytes=120 → 只能放后 2-3 段
+        let raw = "段 1 内容大约 50 字节长的文本占位 padding xxxxx\n§\n段 2 内容大约 50 字节长的文本占位 padding xxxxx\n§\n段 3 内容大约 50 字节长的文本占位 padding xxxxx\n§\n段 4 内容大约 50 字节长的文本占位 padding xxxxx\n§\n段 5 内容大约 50 字节长的文本占位 padding xxxxx";
+        let out = extract_recent_segments(raw, 120);
+        // 必须包含末尾 (近期) 段, 不能含前几段
+        assert!(out.contains("段 5"), "应保留末尾段 (近期); out: {out}");
+        assert!(!out.contains("段 1"), "不应保留开头段 (旧); out: {out}");
+        assert!(out.len() <= 200);  // 留点容差
+    }
+
+    #[test]
+    fn test_extract_single_seg_over_limit_still_returned() {
+        // 单段超 max_bytes: 仍返 1 段 (不卡死 advisor 啥都看不到)
+        let raw = "这是一个很长的单段, 长度肯定超过 10 字节的 max 限制. 仍然要返回.";
+        let out = extract_recent_segments(raw, 10);
+        assert!(!out.is_empty(), "单段超 max 时仍应返 1 段, 当前: {out:?}");
+        assert!(out.contains("很长的单段"));
+    }
 }
 
 /// 5/21 Phase 6: 扫 ~/.catfish/outputs/ 下文件名含 'weekly' 的, 列文件名 + mtime.

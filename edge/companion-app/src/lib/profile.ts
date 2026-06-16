@@ -171,9 +171,118 @@ const PROFILE_SYSTEM_PROMPT = `你是 catfish 员工画像分析师. 看以下�
 }
 
 数据稀疏 (一些字段空) → confidence 低 (0.3-0.5), 不要瞎填. 数据多且一致 → confidence
-高 (0.7-0.95). 没数据完全无法判断 → confidence 0.0, 字段填保守默认.`;
+高 (0.7-0.95). 没数据完全无法判断 → confidence 0.0, 字段填保守默认.
 
-const PROFILE_LLM_QUERY = "?catfish_source=companion-profile&catfish_skip_identity=1&catfish_internal=1";
+# BL-PROFILE-JSON-STRICT (P3.4.9, 6/15 鸿波撞 DeepSeek Flash 返英文 markdown 后)
+
+profile 推断也走 hermes agent loop, 同 advisor 风险. 实测 LLM 返:
+
+  "Let me analyze the data provided.
+
+   Key observations:
+   - Mailbox: mostly Superlinear Academy notifications, personal/learning emails..."
+
+完全没有 JSON. UI 显示 "[profile] LLM 返非 JSON" warning, 兜底走占位 profile.
+
+## 铁律 (必读)
+
+1. 你的回复**第一个字符必须是 \`{\`**, 最后一个字符必须是 \`}\`.
+2. **不能**以以下 prefix 开头:
+   - 英文: "Let me analyze" / "Key observations" / "Based on" / "Looking at" /
+     "I'll examine" / "Here is my analysis"
+   - 中文: "让我分析" / "根据数据" / "首先" / "以下是" / "经分析"
+3. **不能**含 markdown 反引号 / 加粗 ** / 列表 1. 2. 3. / 表情.
+4. **不能**用英文叙述 profile 字段. 字段值中文 (英文 enum 如 "mid" / "strong" 除外).
+5. 直接 dump JSON, 不要 reasoning 独白.
+
+❌ Bad (鸿波 6/15 实测):
+\`\`\`
+Let me analyze the data provided.
+
+Key observations:
+- Mailbox: mostly Superlinear Academy notifications, personal/learning emails — no work emails visible.
+\`\`\`
+
+✓ Good:
+\`\`\`
+{"tier":"mid","centralState":"strong","style":"合规优先","keyPeople":[...],"keyProjects":[...],"confidence":0.85,"evidence":["邮件 sender 高频出现 XX","..."],"personality":{...}}
+\`\`\``;
+
+// P3.4.E (6/15 鸿波): catfish_direct=1 让 me.ts fetchWithAuth 走 OAuth 直 gateway 8999,
+//   bypass hermes 8642 agent loop. 真因: hermes _handle_chat_completions 不读 client tools /
+//   tool_choice, 我们要 strict function calling 必须直走 LiteLLM passthrough (8999).
+const PROFILE_LLM_QUERY = "?catfish_source=companion-profile&catfish_skip_identity=1&catfish_internal=1&catfish_direct=1";
+
+/** P3.4.E (6/15 鸿波): OpenAI function calling parameters schema, 跟 Profile interface 严格对齐.
+ *
+ *  tool_choice: {type:"function", function:{name:"submit_profile"}} 强制 LLM 必须以 tool_call
+ *  形式返结构化 args (而不是 free-text content). DeepSeek beta endpoint (P3.4.E.1 改) 完整支持
+ *  specific-function tool_choice + JSON Schema 约束.
+ *
+ *  跟 PROFILE_SYSTEM_PROMPT § BL-PROFILE-JSON-STRICT 互补: prompt 给 LLM 业务语义指导, schema
+ *  给 LLM 字段级硬约束 (DeepSeek API 拒绝不匹配 schema 的 tool_call args).
+ *
+ *  注: required 只列 tier/centralState/style/keyPeople/keyProjects/confidence/evidence (跟
+ *  Profile interface required 字段对齐). personality 是 optional (cold start 时可 fingerprint 缺).
+ *  updatedAt / nextRecomputeAt 客户端自己填 (LLM 不算时间), schema 不约束这俩.
+ */
+const PROFILE_JSON_SCHEMA = {
+  type: "object",
+  properties: {
+    tier: { type: "string", enum: ["frontline", "mid", "senior"] },
+    centralState: { type: "string", enum: ["none", "weak", "strong"] },
+    style: { type: "string", description: "合规优先 / 业务优先 / 关系优先 / 数字优先 四选一" },
+    keyPeople: {
+      type: "array",
+      maxItems: 10,
+      items: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          relation: { type: "string", description: "上级/客户/下属/平级/同事/兄弟单位" },
+          project: { type: "string" },
+          lastContact: { type: "string", description: "ISO-8601 日期, 可省" },
+        },
+        required: ["name", "relation"],
+      },
+    },
+    keyProjects: {
+      type: "array",
+      maxItems: 5,
+      items: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          status: { type: "string", description: "进行中/暂停/完成/待启动" },
+          client: { type: "string" },
+          deadline: { type: "string", description: "ISO-8601 日期, 可省" },
+        },
+        required: ["name", "status"],
+      },
+    },
+    confidence: { type: "number", minimum: 0, maximum: 1 },
+    evidence: {
+      type: "array",
+      maxItems: 5,
+      items: { type: "string" },
+      description: "3-5 条证据, 引用具体语料",
+    },
+    personality: {
+      type: "object",
+      description: "员工写作 / 沟通风格 (cold start 可省)",
+      properties: {
+        verbosity: { type: "string", enum: ["concise", "balanced", "verbose"] },
+        structure: { type: "string", enum: ["list_heavy", "balanced", "prose_heavy"] },
+        formality: { type: "string", enum: ["formal", "balanced", "casual"] },
+        signatureWords: { type: "array", maxItems: 10, items: { type: "string" } },
+        sampleSentences: { type: "array", maxItems: 3, items: { type: "string" } },
+        sourceCount: { type: "integer", minimum: 0 },
+      },
+      required: ["verbosity", "structure", "formality", "signatureWords", "sampleSentences", "sourceCount"],
+    },
+  },
+  required: ["tier", "centralState", "style", "keyPeople", "keyProjects", "confidence", "evidence"],
+} as const;
 
 /** 调 LLM 真识别员工画像. 不挂 AbortSignal (Tauri suspend 经验).
  *  挂了返 null, caller 兜底用占位.
@@ -314,7 +423,20 @@ async function inferProfileFromContext(model: string): Promise<Profile | null> {
       "**含 personality 字段** (cold start 时 sourceCount=0 仍可推 verbosity/formality 粗略).",
   );
 
-  const url = `${config.backendUrl}/v1/chat/completions${PROFILE_LLM_QUERY}`;
+  // P3.4.9 (6/15 鸿波): user prompt 末尾 directive — 跟 PROFILE_SYSTEM_PROMPT 末尾
+  //   BL-PROFILE-JSON-STRICT 双重保险. last word 帮 LLM 守住 JSON 约束.
+  parts.push(
+    "# 输出格式 (必读)\n\n" +
+      "直接输出 JSON, 不要 \"Let me analyze\" / \"Key observations\" / \"让我分析\" 等 prefix.\n" +
+      "第一个字符 = `{`, 最后一个字符 = `}`. 中间不要 markdown 反引号 / 加粗 / 列表标号.\n" +
+      "见 SYSTEM_PROMPT § BL-PROFILE-JSON-STRICT.",
+  );
+
+  // P3.4.E (6/15 鸿波): URL 改 gatewayUrl (8999, LiteLLM passthrough) — bypass hermes
+  //   8642 agent loop. hermes _handle_chat_completions (api_server.py:1820) 不读 client
+  //   tools / tool_choice 字段, 走 8999 直连才能用 strict function calling.
+  //   catfish_direct=1 query 让 me.ts isGatewayDirectPath 命中走 OAuth path.
+  const url = `${config.gatewayUrl}/v1/chat/completions${PROFILE_LLM_QUERY}`;
   console.log("[profile] 调 LLM 推断, prompt 长度:", parts.join("\n\n").length);
 
   try {
@@ -327,9 +449,34 @@ async function inferProfileFromContext(model: string): Promise<Profile | null> {
           { role: "system", content: PROFILE_SYSTEM_PROMPT },
           { role: "user", content: parts.join("\n\n") },
         ],
-        max_tokens: 1000,
+        // P3.4.C (6/15 鸿波): 1000 → 2500.
+        //   真因: profile keyPeople 10 人 + keyProjects 5 个 + evidence 3-5 条
+        //   + personality 6 字段 = ~1500-2000 tokens 输出. max_tokens=1000 装不下,
+        //   JSON 在 keyPeople 数组中间截断 (鸿波 6/15 console 验证). 2500 装下.
+        max_tokens: 2500,
         temperature: 0.3,
         stream: false,
+        // P3.4.10 (6/15 鸿波): 跟 briefing_advisor.ts 同款, OpenAI 协议强制 JSON.
+        //   P3.4.E 加 tools + tool_choice 后这个 response_format 是 "双保险" — 即使
+        //   LLM 不调 tool (边缘场景 fallback path), 仍走 json_object mode. 保留.
+        response_format: { type: "json_object" },
+        // P3.4.E (6/15 鸿波): OpenAI function calling 强制 LLM 必返 submit_profile tool_call.
+        //   真因: P3.4.9 prompt + P3.4.10 response_format 都治标 — DeepSeek Flash reasoning
+        //   倾向仍把 free-text reasoning 当 content 返 (鸿波 6/15 console 实测).
+        //   单 tool_choice="required" 让 LLM 必返 tool_calls, 不允许 free-text content.
+        //   schema 给字段级硬约束 (DeepSeek beta endpoint 拒不匹配 schema 的 args).
+        //   走 8999 直连 LiteLLM 才能透传 (hermes 8642 agent loop 不读 client tools).
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "submit_profile",
+              description: "提交员工画像识别结果. 必须调这个 tool, 不允许 free-text content.",
+              parameters: PROFILE_JSON_SCHEMA,
+            },
+          },
+        ],
+        tool_choice: { type: "function", function: { name: "submit_profile" } },
       }),
     });
     if (!resp.ok) {
@@ -337,11 +484,34 @@ async function inferProfileFromContext(model: string): Promise<Profile | null> {
       return null;
     }
     const data = await resp.json();
-    const content = data?.choices?.[0]?.message?.content;
+    const msg = data?.choices?.[0]?.message;
+
+    // P3.4.E (6/15 鸿波) primary path: 拿 tool_calls[0].function.arguments (100% JSON Schema 校验过).
+    const toolCalls = msg?.tool_calls;
+    if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+      const args = toolCalls[0]?.function?.arguments;
+      if (typeof args === "string" && args.trim()) {
+        try {
+          const parsed = JSON.parse(args);
+          console.log("[profile] P3.4.E tool_call 路径成功, args 长度:", args.length);
+          return parseProfileFromLLM(parsed);
+        } catch (e) {
+          console.warn("[profile] P3.4.E tool_call args JSON.parse 挂 (DeepSeek beta truncate?):", e);
+          // 落到 robustJsonParse fallback
+          const fallback = robustJsonParse(args);
+          if (fallback) return parseProfileFromLLM(fallback);
+        }
+      }
+    }
+
+    // Fallback path: LLM 没遵守 tool_choice (DeepSeek 边缘场景), 回退 content + robustJsonParse.
+    //   P3.4.10 response_format=json_object 仍生效, content 应该是 JSON-ish.
+    const content = msg?.content;
     if (typeof content !== "string") {
-      console.warn("[profile] LLM 返非字符串", content);
+      console.warn("[profile] LLM 返既没 tool_calls 也没 string content:", msg);
       return null;
     }
+    console.log("[profile] P3.4.E tool_call 路径未命中, fallback content + robustJsonParse");
     const parsed = robustJsonParse(content);
     if (parsed === null) {
       console.warn("[profile] LLM 返非 JSON, 原文前 200:", content.slice(0, 200));
@@ -355,33 +525,61 @@ async function inferProfileFromContext(model: string): Promise<Profile | null> {
 }
 
 /** 鲁棒 JSON 解析 — LLM 输出常含前后解释文字 (e.g. "现在我已经分析完..."),
- *  剥 markdown 反引号 + 截取第一个 `{` 到最后一个 `}` 之间.
- *  失败返 null, 不抛. */
+ *  剥 markdown 反引号 + brace-balanced match 找第一个完整 `{...}` 块.
+ *  失败返 null, 不抛.
+ *
+ *  P3.4.C (6/15 鸿波): 改算法 indexOf+lastIndexOf → brace counting balanced.
+ *  跟 briefing_advisor.ts robustJsonParse 同款修, 救 LLM truncated JSON.
+ *  老算法在 LLM 输出 truncated 时挂 (lastIndexOf("}") 命中 reasoning 引用里的
+ *  `}` 不是 JSON 闭合, 截出来不合法).
+ */
 function robustJsonParse(content: string): unknown | null {
   if (typeof content !== "string") return null;
-  let s = content
+  const s = content
     .trim()
     .replace(/^```(?:json)?\s*/i, "")
     .replace(/```$/, "")
     .trim();
-  // 尝试直接 parse
+  // 1. 直接 parse 试一次
   try {
     return JSON.parse(s);
   } catch {
-    /* 落空, 走截取 */
+    /* 落空走 brace counting */
   }
-  // 截第一个 { 到最后一个 } (含)
+  // 2. brace counting — 找第一个 balanced `{...}` 跳过 reasoning 里的 `{}` 引用
   const first = s.indexOf("{");
-  const last = s.lastIndexOf("}");
-  if (first >= 0 && last > first) {
-    s = s.slice(first, last + 1);
-    try {
-      return JSON.parse(s);
-    } catch {
-      return null;
+  if (first < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = first; i < s.length; i++) {
+    const c = s[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (c === "\\" && inString) {
+      escape = true;
+      continue;
+    }
+    if (c === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) {
+        try {
+          return JSON.parse(s.slice(first, i + 1));
+        } catch {
+          return null;
+        }
+      }
     }
   }
-  return null;
+  return null;  // LLM 输出真截断, JSON 未闭合
 }
 
 /** 5/22 cold start 修锁: 同时只允许一个 recompute 跑.
@@ -541,7 +739,9 @@ export async function recomputeProfile(model: string): Promise<Profile | null> {
     //   下次 ensureRecomputed 命中 saved profile, 不用再调 LLM.
     // 6/11 follow-up: 60_000 → 180_000 跟 advisor 一致. 60s 私有模型撑挂概率太
     //   大每次都 race timeout, 真值进不来. 180s 给私有模型足够时间.
-    const LLM_TIMEOUT_MS = 180_000;
+    // P3.4.8 (6/15 鸿波): 180_000 → 300_000 跟 advisor 一致. 同样背景:
+    //   profile 推断也走 hermes agent loop, 不止单次 LLM call. 180s 撑不下来.
+    const LLM_TIMEOUT_MS = 300_000;
     const llmPromise = inferProfileFromContext(m);
 
     // 后台 LLM 跑完总是写 saved (race 输了也写 — 下次 mount 命中)
@@ -560,20 +760,36 @@ export async function recomputeProfile(model: string): Promise<Profile | null> {
       })
       .catch((e) => console.warn("[profile] 后台 LLM 挂:", e));
 
-    const timeoutPromise = new Promise<"TIMEOUT">((resolve) =>
-      setTimeout(() => {
+    // P3.4.3 (6/15 鸿波): timer id 拿出来 race resolve 后 clearTimeout. 跟
+    //   briefing_advisor.ts:raceWithTimeout 同款修. 老 setTimeout 没 clear —
+    //   race 已 resolve (后台 LLM 早返, 或者 inferProfileFromContext 命中已
+    //   cache 占位走快路径) 后, 180s 那个 setTimeout 仍 spew console.warn,
+    //   误导 debug. 6/15 鸿波早安卡 console 一起被两条误报警告 (advisor +
+    //   profile) 带偏方向.
+    //
+    //   修法: setTimeout 回调里只 resolve, console.warn 移到 race 后看
+    //   winner === "TIMEOUT" 才打. finally clearTimeout 防 race 赢后 timer
+    //   残留 fire.
+    let timerId: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<"TIMEOUT">((resolve) => {
+      timerId = setTimeout(() => resolve("TIMEOUT"), LLM_TIMEOUT_MS);
+    });
+
+    let winner: Profile | null | "TIMEOUT";
+    try {
+      winner = await Promise.race<Profile | null | "TIMEOUT">([
+        llmPromise,
+        timeoutPromise,
+      ]);
+      if (winner === "TIMEOUT") {
         console.warn(
           `[profile] LLM 客户端 ${LLM_TIMEOUT_MS / 1000}s 超时, 返占位 ` +
             "(后台 fetch 仍在跑, 完成会写 cache, 下次 mount 命中)",
         );
-        resolve("TIMEOUT");
-      }, LLM_TIMEOUT_MS),
-    );
-
-    const winner = await Promise.race<Profile | null | "TIMEOUT">([
-      llmPromise,
-      timeoutPromise,
-    ]);
+      }
+    } finally {
+      if (timerId !== undefined) clearTimeout(timerId);
+    }
 
     if (winner !== "TIMEOUT" && winner) {
       // LLM 在 60s 内完成 — 直接返 (后台 then 块也会再写一遍, save 幂等)
@@ -618,7 +834,9 @@ export async function recomputeProfile(model: string): Promise<Profile | null> {
       confidence: 0.0,
       evidence:
         winner === "TIMEOUT"
-          ? ["LLM 推断 60s 超时 (私有模型慢), 占位中. 下次 mount 后台完成会自动更新"]
+          // P3.4.8 (6/15 鸿波): 文案 60s → 5min, 跟 LLM_TIMEOUT_MS=300_000 同步.
+          //   原因: profile 推断也走 hermes agent loop, 不止单次 LLM call.
+          ? ["LLM 推断 >5min 超时 (agent loop 跑不完), 占位中. 下次 mount 后台完成会自动更新"]
           : ["LLM 推断挂 / 数据稀疏, 占位中. 用 catfish 几天后自动校准"],
       updatedAt: new Date().toISOString(),
       nextRecomputeAt,

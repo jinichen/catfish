@@ -28,11 +28,15 @@ use crate::services::{catfish_paths, endpoints, process};
 /// autostart 入口 —— Tauri setup hook 里 spawn 一次, 起 3 个本地客户端服务.
 ///
 /// 5/22 鸿波拍: gateway 解耦 (launchctl 管), 这层只管 3 个 client-side service.
+///
+/// P3.4.7c (6/15 鸿波): 加 maybe_run_weekly_reset 钩子 — 跨过周一就自动 reset
+/// current_todos.md (本周待办文件: 已完成清, 未完成带入新一周).
 pub fn schedule_autostart() {
     tauri::async_runtime::spawn(async move {
         ensure_tool_bridge_running().await;
         ensure_local_search_running().await;
         ensure_chrome_running().await;
+        maybe_run_weekly_reset().await;
     });
 }
 
@@ -301,6 +305,49 @@ pub fn pkill_local_search_watchers() {
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         log::debug!("autostart: pkill_local_search_watchers 跳过 (非 unix)");
+    }
+}
+
+// ============================================================
+// P3.4.7c (6/15 鸿波): 每周日 00:00 自动 reset current_todos.md
+// ============================================================
+
+/// 启动钩子: 判断 + 跑 weekly reset.
+///
+/// 算法:
+///   - should_run_weekly_reset 读 ~/.catfish/.weekly_reset_last marker, 跟今天本
+///     周一比较 — 跨过周一了就跑.
+///   - 没跑 reset 的情况包括: marker 不存在 (首次启动) / marker 比本周一更早.
+///   - current_todos_weekly_reset 内部: 改写 current_todos.md (删 - [x] 行) +
+///     audit chain append (跟 P3.3.51 同模式) + 更新 marker.
+///
+/// 失败静默 (log.warn) — 不阻塞 Companion 其他启动流程.
+async fn maybe_run_weekly_reset() {
+    use crate::commands::journal;
+
+    if !journal::should_run_weekly_reset() {
+        log::debug!("autostart: 本周已 reset 过 current_todos.md, 跳过");
+        return;
+    }
+
+    log::info!("autostart: 触发 current_todos.md 周末 reset (跨过周一 / 首次启动)");
+    match journal::current_todos_weekly_reset().await {
+        Ok(report) if report.skipped => {
+            log::info!(
+                "autostart: 周末 reset 跳过 ({}) — marker 仍写, 下周再判",
+                report.skipped_reason
+            );
+        }
+        Ok(report) => {
+            log::info!(
+                "autostart: 周末 reset 完成 — 删 {} 已完成, 留 {} 未完成带入新一周",
+                report.completed_removed,
+                report.pending_kept
+            );
+        }
+        Err(e) => {
+            log::warn!("autostart: 周末 reset 失败 (不阻塞): {e}");
+        }
     }
 }
 

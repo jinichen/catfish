@@ -101,6 +101,31 @@ pub fn tool_bridge_dir() -> Option<PathBuf> {
     catfish_root().map(|r| r.join("edge").join("tool-bridge"))
 }
 
+// —————————————— catfish-memory plugin (P3.5.1 Dream Engine) ——————————————
+
+/// catfish-memory plugin 目录 — 含 catfish_memory.py + dream_cli.py.
+///
+/// P3.5.1.7 (6/15 鸿波撞 chunk 0/?): catfish-memory/ 目录名带横线, 不是合法 Python
+/// module 名. 老 `python -m catfish_memory.dream_cli` 找不到 module → import error
+/// → UI 卡 "chunk 0/?". 改 spawn 绝对路径 dream_cli.py, 它内部 sys.path 加自己 dir,
+/// `from catfish_memory import ...` 拿同目录 catfish_memory.py 文件作 module.
+///
+/// 优先级: env CATFISH_MEMORY_PLUGIN_DIR > catfish_root()/edge/hermes-plugins/catfish-memory
+pub fn catfish_memory_plugin_dir() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("CATFISH_MEMORY_PLUGIN_DIR") {
+        let path = PathBuf::from(p);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    catfish_root().map(|r| r.join("edge").join("hermes-plugins").join("catfish-memory"))
+}
+
+/// Dream Engine CLI 绝对路径 — companion Rust spawn 用.
+pub fn dream_cli_path() -> Option<PathBuf> {
+    catfish_memory_plugin_dir().map(|d| d.join("dream_cli.py"))
+}
+
 pub fn tool_bridge_pid_file() -> Option<PathBuf> {
     companion_state_dir().map(|d| d.join("tool-bridge.pid"))
 }

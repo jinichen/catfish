@@ -46,6 +46,8 @@ import { useChatStore } from "../../store/chat";
 import { useEmailStore } from "../../store/email";
 
 import BriefingTwoColumnView from "./components/BriefingTwoColumnView";  // P3.3.6 (6/10): 左右两栏 layout
+import { DataDiagnosisCard } from "./components/DataDiagnosisCard";  // P3.4.4 (6/15): 三件套全空诊断卡, 替换老 "LLM 返空" 红字
+import type { SourceStatus } from "./diagnosis_types";
 
 interface AdvisorViewProps {
   /** 父组件 (BriefingCard) 触发 refresh 时调本 props 后会 reload */
@@ -57,8 +59,15 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
   const [result, setResult] = useState<AdvisorResult | null>(null);
   const [cacheInfo, setCacheInfo] = useState<{ computedAt: string; ageMin: number } | null>(null);
   const [config, setConfig] = useState<AdvisorConfig | null>(null);
-  const [phase, setPhase] = useState<"booting" | "profile_loading" | "data_loading" | "llm_running" | "done" | "no_profile" | "error" | "cache_hit" | "stale_fallback">("booting");
+  const [phase, setPhase] = useState<"booting" | "profile_loading" | "data_loading" | "llm_running" | "done" | "no_profile" | "no_data" | "error" | "cache_hit" | "stale_fallback">("booting");
   const [errorMsg, setErrorMsg] = useState<string>("");
+  // P3.4.4 (6/15 鸿波): 三件套各自拉取状态, no_data 阶段渲染诊断卡用.
+  //   parseJsonList 老 helper 把失败原因吞成 [], 改 parseJsonListWithDiagnosis 保留 reason.
+  const [sourceStatuses, setSourceStatuses] = useState<{
+    emails: SourceStatus;
+    events: SourceStatus;
+    todos: SourceStatus;
+  } | null>(null);
   /** 5/22 上游拥堵 fallback: TIMEOUT 时显的灰条提示 */
   const [staleNotice, setStaleNotice] = useState<string>("");
   /** 5/22 鸿波: 任务状态 (key = task.title → status). 启动时从后端拉. */
@@ -145,11 +154,37 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
         ]);
         if (cancelled) return;
 
-        const emails = parseJsonList<EmailDigestItem>(emailRes);
-        const events = parseJsonList<CalendarEvent>(eventsRes);
-        const todos = parseJsonList<JournalTodo>(todosRes);
+        // P3.4.4 (6/15 鸿波): 用 parseJsonListWithDiagnosis 保留每个 source
+        //   真实失败原因 (Tauri rejected reason / JSON parse err), 给诊断卡用.
+        //   老 parseJsonList 把 rejected/无效都吞成 [], reason 全丢, calendar.rs
+        //   :451 那段精彩"仅添加访问权限...必须 Cmd+Q 重启" 文案推不到 UI.
+        const emailDiag = parseJsonListWithDiagnosis<EmailDigestItem>(emailRes);
+        const eventsDiag = parseJsonListWithDiagnosis<CalendarEvent>(eventsRes);
+        const todosDiag = parseJsonListWithDiagnosis<JournalTodo>(todosRes);
         const ctxValue =
           ctx.status === "fulfilled" ? ctx.value as BriefingContext : emptyCtx();
+
+        const statuses = {
+          emails: { ok: emailDiag.ok, count: emailDiag.items.length, reason: emailDiag.reason },
+          events: { ok: eventsDiag.ok, count: eventsDiag.items.length, reason: eventsDiag.reason },
+          todos:  { ok: todosDiag.ok,  count: todosDiag.items.length,  reason: todosDiag.reason  },
+        };
+        setSourceStatuses(statuses);
+
+        // P3.4.4 (6/15 鸿波): 三件套全空 → 不调 advisor LLM (briefing_advisor.ts:533
+        //   也有同款 short-circuit, 但走到那再返 null UI 只能渲老红字 lying 文案
+        //   "LLM 返空或解析失败". 改: 这里直接 short-circuit 走 no_data, 渲诊断卡
+        //   显每个 source 真状态.
+        const totalCount = emailDiag.items.length + eventsDiag.items.length + todosDiag.items.length;
+        if (totalCount === 0) {
+          console.log("[advisor] 三件套全空, 跳 LLM, 走数据诊断卡", statuses);
+          setPhase("no_data");
+          return;
+        }
+
+        const emails = emailDiag.items;
+        const events = eventsDiag.items;
+        const todos = todosDiag.items;
 
         // ─── 4. 调 LLM (advisor) — 60s 客户端超时, 超时走 stale cache fallback ───
         setPhase("llm_running");
@@ -165,9 +200,12 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
         });
         if (cancelled) return;
 
-        // 5/22 上游拥堵 fallback: 60s 超时 → 拉 stale cache 撑场面 (即使过期)
+        // 5/22 上游拥堵 fallback: 客户端 timeout → 拉 stale cache 撑场面 (即使过期).
+        // P3.3.25 (6/11): 60s → 180s; P3.4.8 (6/15 鸿波): 180s → 300s (5min,
+        //   因为 advisor 走 hermes agent loop 多轮, 实际跑完 ~2-3min, 见
+        //   briefing_advisor.ts:CLIENT_TIMEOUT_MS 注释).
         if (r === ADVISOR_TIMEOUT) {
-          console.warn("[advisor] 60s 超时, 走 stale cache fallback");
+          console.warn("[advisor] 客户端 timeout, 走 stale cache fallback");
           const stale = await advisorCacheGet();
           if (cancelled) return;
           if (stale) {
@@ -176,15 +214,14 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
               computedAt: stale.computedAt,
               ageMin: cacheAgeMinutes(stale),
             });
-            // P3.3.25 (6/11): 60s → 180s, 文案同步
             setStaleNotice(
-              `⚠️ 公司内网模型响应慢 (>180s), 显示上次结果. 后台仍在算, 完成会自动更新.`,
+              `⚠️ 公司内网模型响应慢 (>5min), 显示上次结果. 后台仍在算, 完成会自动更新.`,
             );
             setPhase("stale_fallback");
           } else {
             setStaleNotice("");
             setErrorMsg(
-              "公司内网模型响应慢 (>180s), 也没有历史缓存可显示. 等几分钟点刷新重试.",
+              "公司内网模型响应慢 (>5min), 也没有历史缓存可显示. 等几分钟点刷新重试.",
             );
             setPhase("error");
           }
@@ -276,11 +313,29 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
     return <Placeholder text={`出错了: ${errorMsg}`} error />;
   }
 
+  // P3.4.4 (6/15 鸿波): 三件套全空走诊断卡, 替换老 "LLM 返空" 红字 lying 文案
+  //   (LLM 一次没调, 是数据全空 short-circuit). DataDiagnosisCard 显每个 source
+  //   独立状态 + 修复指引 (calendar.rs:451 错误文案推到 UI).
+  if (phase === "no_data" && sourceStatuses) {
+    return (
+      <DataDiagnosisCard
+        statuses={sourceStatuses}
+        onRetry={() => {
+          // 重新触发 mount effect — 跟父组件 refresh 同款语义
+          setPhase("booting");
+          setSourceStatuses(null);
+        }}
+      />
+    );
+  }
+
   // phase === "done" / "cache_hit" / "stale_fallback"
+  // 这里 !result 是 LLM 真返 null (LLM 调用失败 / 解析失败), 不是数据全空 —
+  // 数据全空已经在 phase === "no_data" 分支接掉了 (P3.4.4).
   if (!result) {
     return (
       <Placeholder
-        text="LLM 返空或解析失败. 数据有可能不够 (邮件/日历/TODO 全空), 或网络挂. 点刷新重试."
+        text="advisor LLM 调用失败 (网络挂 / 模型解析返非预期结构). 点刷新重试."
         error
       />
     );
@@ -291,14 +346,16 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
       {/* 5/21 cold start 3: confidence 分层 UI 提示 */}
       {profile && <ConfidenceHint profile={profile} />}
 
-      {/* 5/22 上游拥堵 fallback: 显示 stale cache 时顶上挂提示 */}
+      {/* 5/22 上游拥堵 fallback: 显示 stale cache 时顶上挂提示
+       *  P3.4.E.9 (6/15 鸿波): 跟 ConfidenceHint 同源 hardcode hex 问题, 用 hint-amber var.
+       *  老 #a16207 深琥珀在暗模式不可读. tokens.css --catfish-hint-amber-* 双模式定义. */}
       {phase === "stale_fallback" && staleNotice && (
         <div
           style={{
             fontSize: 12,
-            background: "rgba(251, 191, 36, 0.12)",
-            border: "1px solid rgba(251, 191, 36, 0.35)",
-            color: "#a16207",
+            background: "var(--catfish-hint-amber-bg)",
+            border: "1px solid var(--catfish-hint-amber-border)",
+            color: "var(--catfish-hint-amber-text)",
             padding: "8px 12px",
             borderRadius: 6,
             marginBottom: 10,
@@ -416,9 +473,12 @@ function ConfidenceHint({ profile }: { profile: Profile }) {
   if (c >= 0.7) return null;  // 高置信度无提示
 
   const isLow = c < 0.3;
-  const bg = isLow ? "rgba(146,64,14,0.08)" : "rgba(37,99,235,0.06)";
-  const border = isLow ? "#92400e40" : "#2563eb40";
-  const color = isLow ? "#92400e" : "#1e3a8a";
+  // P3.4.E.9 (6/15 鸿波): 用 tokens.css 双模式 hint CSS var, 替换老 hardcode hex.
+  //   老 #1e3a8a 深蓝 / #92400e 深棕在暗模式 (--catfish-bg #131C1F) 上看不清.
+  //   tokens.css :root + @media dark 各定义一套 hint-blue / hint-amber, 暗模式自动提亮.
+  const bg = isLow ? "var(--catfish-hint-amber-bg)" : "var(--catfish-hint-blue-bg)";
+  const border = isLow ? "var(--catfish-hint-amber-border)" : "var(--catfish-hint-blue-border)";
+  const color = isLow ? "var(--catfish-hint-amber-text)" : "var(--catfish-hint-blue-text)";
   const icon = isLow ? "🪴" : "📊";
   const title = isLow ? "刚认识你" : "画像中";
   const body = isLow
@@ -499,13 +559,28 @@ function NoProfileNotice({ hasProfileButZero }: { hasProfileButZero: boolean }) 
 
 // ─── helpers ─────────────────────────────────────────────────────
 
-function parseJsonList<T>(res: PromiseSettledResult<string>): T[] {
-  if (res.status !== "fulfilled") return [];
+/** P3.4.4 (6/15 鸿波): 解析 Promise.allSettled 单个 source 结果, 保留失败原因
+ *  (Tauri reject / JSON parse err / 非数组). DataDiagnosisCard 拿这条 reason
+ *  匹配指引文案 (e.g. calendar.rs:451 "仅添加访问权限...必须 Cmd+Q 重启" 直接
+ *  推到 UI 让员工照做).
+ *
+ *  替换 P3.4.4 前的 parseJsonList<T>(res) — 那版把失败 / 非数组都吞成 [],
+ *  reason 全丢. 6/15 鸿波早安卡 console 看不到真错因, 排错绕一通弯路.
+ */
+function parseJsonListWithDiagnosis<T>(
+  res: PromiseSettledResult<string>,
+): { items: T[]; ok: boolean; reason?: string } {
+  if (res.status === "rejected") {
+    return { items: [], ok: false, reason: String(res.reason) };
+  }
   try {
     const arr = JSON.parse(res.value);
-    return Array.isArray(arr) ? (arr as T[]) : [];
-  } catch {
-    return [];
+    if (!Array.isArray(arr)) {
+      return { items: [], ok: false, reason: `返回不是 JSON 数组: ${res.value.slice(0, 200)}` };
+    }
+    return { items: arr as T[], ok: true };
+  } catch (e) {
+    return { items: [], ok: false, reason: `JSON 解析失败: ${e}` };
   }
 }
 
@@ -517,5 +592,6 @@ function emptyCtx(): BriefingContext {
     workplan: "",
     projects: "",
     weeklyReports: [],
+    hermesMemoryRecent: "",  // P3.4.6 (6/15 鸿波)
   };
 }

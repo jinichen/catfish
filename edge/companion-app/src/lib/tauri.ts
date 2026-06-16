@@ -871,11 +871,21 @@ export const fetchIdentityBundle = () =>
 
 /** BL-JOURNAL-TODO-EDIT-CHAT Stage 1 (5/20): journal CRUD 给 LLM tool calling 用.
  * 双重定位 line + text_hint 防误伤 (员工改 journal 后行号偏移). */
-export const journalMarkTodoDone = (line: number, textHint: string) =>
-  rawInvoke<string>("journal_mark_todo_done", { line, textHint });
+// P3.4.7b (6/15 鸿波): origin 路由 — weekly→current_todos.md, journal→employee_journal.md.
+//   None (老 caller 兼容) → Rust 端双文件试. TodosDetail 应该传 t.origin (P3.4.7a 加).
+export const journalMarkTodoDone = (
+  line: number,
+  textHint: string,
+  origin?: "weekly" | "journal",
+) =>
+  rawInvoke<string>("journal_mark_todo_done", { line, textHint, origin: origin ?? null });
 
-export const journalDeleteTodo = (line: number, textHint: string) =>
-  rawInvoke<string>("journal_delete_todo", { line, textHint });
+export const journalDeleteTodo = (
+  line: number,
+  textHint: string,
+  origin?: "weekly" | "journal",
+) =>
+  rawInvoke<string>("journal_delete_todo", { line, textHint, origin: origin ?? null });
 
 // ── /goal 已 deprecated 5/26 ─────────────────────────────
 // BL-BRIEFING-GOAL-INPUT (5/20) 的 BriefingCard 🎯 输入框其实从未 ship UI 闭环
@@ -883,8 +893,18 @@ export const journalDeleteTodo = (line: number, textHint: string) =>
 // hermes 0.14 原生 /goal + /subgoal (#25449) 替代. 员工在 chat 直接输 /goal xxx.
 // 3 个 export 删除, Tauri 后端改 stub 返 error 防回归.
 
-export const journalAddTodo = (text: string, section?: string) =>
-  rawInvoke<string>("journal_add_todo", { text, section: section ?? null });
+// P3.4.7b (6/15 鸿波): origin 路由跟 mark/delete 同款 — 默认 weekly (current_todos.md),
+//   section 给了隐式走 journal (employee_journal.md 流水帐), 显式 origin 优先.
+export const journalAddTodo = (
+  text: string,
+  section?: string,
+  origin?: "weekly" | "journal",
+) =>
+  rawInvoke<string>("journal_add_todo", {
+    text,
+    section: section ?? null,
+    origin: origin ?? null,
+  });
 
 export interface JournalTodo {
   text: string;
@@ -895,6 +915,10 @@ export interface JournalTodo {
   // text 字段已去除前缀, UI 看到 is_priority 自己打 ⭐ 标. 早安播报 priority 项排序置顶.
   // 后端 Rust 端 (src-tauri/src/commands/journal.rs) 跟着加 serde 字段, 没加就 undefined.
   is_priority?: boolean;
+  // P3.4.7a (6/15 鸿波): 来源文件 — "weekly" (current_todos.md) | "journal"
+  //   (employee_journal.md 流水帐, 向后兼容). UI 可按 origin 分组显 "本周" / "流水帐".
+  //   老 Rust 不返该字段时 undefined, UI 容忍.
+  origin?: "weekly" | "journal";
 }
 
 // ── BL-BRIEFING-DECISION (5/21 Phase 5): 综合判断上下文包 ─────────────
@@ -920,6 +944,9 @@ export interface BriefingContext {
   workplan: string;                 // ~/.catfish/workplan.md 员工自写本周/本月计划
   projects: string;                 // ~/.catfish/projects.md 项目进度
   weeklyReports: WeeklyReportRef[]; // outputs/ 下 weekly-* 文件 + mtime
+  // P3.4.6 (6/15 鸿波): hermes MEMORY 近期 § 段, 当"近期事项 context" 喂 advisor.
+  //   不当 TODO — todo 严格走 employee_journal - [ ] checkbox.
+  hermesMemoryRecent: string;
 }
 
 export const briefingContextFetch = () =>

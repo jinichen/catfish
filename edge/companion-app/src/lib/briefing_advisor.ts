@@ -31,6 +31,110 @@ import type {
 const SERVICE_LLM_HEADERS = { "Content-Type": "application/json" };
 const SERVICE_LLM_QUERY = "?catfish_source=companion-advisor&catfish_skip_identity=1&catfish_internal=1";
 
+// P3.4.E (6/15 鸿波): Call 2 transformToStructured 直走 catfish-gateway 8999 (LiteLLM passthrough),
+//   bypass hermes 8642 agent loop. 真因: hermes _handle_chat_completions 不读 client tools / tool_choice
+//   (api_server.py:1820 把 request 重 framing 成 agent run), 必须直 LiteLLM 才能用 strict function calling.
+//   catfish_direct=1 query 让 me.ts isGatewayDirectPath 命中走 OAuth path (跟 profile.ts 同款).
+const ADVISOR_DIRECT_QUERY = "?catfish_source=companion-advisor-transform&catfish_skip_identity=1&catfish_internal=1&catfish_direct=1";
+
+/** P3.4.E (6/15 鸿波): AdvisorResult OpenAI function calling schema, 跟 AdvisorResult interface 严格对齐.
+ *
+ *  用于 Call 2 transformToStructured — 拿 Call 1 (hermes agent loop) 的 raw content (可能是
+ *  reasoning + 部分 JSON 混合 / 也可能纯 reasoning 无 JSON), 单 shot 让 LLM 转结构化 tool_call.
+ *  tool_choice: {type:"function", function:{name:"submit_advisor_result"}} 100% 强制
+ *  LLM 返 tool_calls 不允许 free-text content. DeepSeek beta endpoint (P3.4.E.1 改) 完整支持.
+ *
+ *  跟 parseAdvisorResult 双层校验: schema 给 LLM API 层硬约束, parseAdvisorResult 给客户端额外
+ *  enum 归一 + 默认值兜底 (e.g. tone 非法 → balanced, P3.3.9 taskUid 缺失生成).
+ */
+const ADVISOR_JSON_SCHEMA = {
+  type: "object",
+  properties: {
+    tier: { type: "string", enum: ["frontline", "mid", "senior"] },
+    mainTasks: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "integer", minimum: 1 },
+          taskUid: {
+            type: "string",
+            description: "6 字符 [a-z0-9] 稳定 key, 跨 refresh 复用. 如无 prev cache 可生成新值.",
+          },
+          title: { type: "string" },
+          urgency: { type: "string", enum: ["high", "medium", "low"] },
+          reason: { type: "string" },
+          options: {
+            type: "array",
+            description: "2-3 个口径选项 (senior tier 异常型主菜可 0 选项, frontline/mid tier 必须 ≥2 个)",
+            // P3.4.E.7 (6/15 鸿波): minItems 2 给 frontline/mid 强约束.
+            //   真因: P3.3.40 #6b 老只 warn 不修, 鸿波 6/15 撞 'task 巡视巡察整改回头看确认 只 1 个 option'.
+            //   Call 1 走 hermes 没法强 schema, parseAdvisorResult tier-aware 校验 + Call 2 strict schema 双层.
+            //   senior tier 0 options OK 时, transformToStructured 内部按 tier 动态切 schema (见下方实现).
+            minItems: 2,
+            items: {
+              type: "object",
+              properties: {
+                label: { type: "string", description: 'A / B / C' },
+                tone: { type: "string", enum: ["strict", "balanced", "friendly", "formal", "urgent", "hold"] },
+                summary: { type: "string" },
+                aiLean: { type: "boolean", description: "唯一一条 true" },
+                draftPath: { type: "string" },
+              },
+              required: ["label", "tone", "summary"],
+            },
+          },
+          complianceFlags: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                type: { type: "string", description: 'e.g. iso_audit_relevant' },
+                severity: { type: "string", enum: ["high", "medium", "low"] },
+                reason: { type: "string" },
+                matchedKeyword: { type: "string" },
+                suggestion: { type: "string" },
+              },
+              required: ["type", "severity", "reason"],
+            },
+          },
+          politicalFlags: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                type: { type: "string" },
+                severity: { type: "string", enum: ["high", "medium", "low"] },
+                person: { type: "string" },
+                reason: { type: "string" },
+                matchedKeyword: { type: "string" },
+                suggestedPhrasings: { type: "array", items: { type: "string" } },
+                advisoryOnly: { type: "boolean", description: "senior tier + high 时 true" },
+              },
+              required: ["type", "severity", "reason"],
+            },
+          },
+          contextRefs: { type: "array", items: { type: "string" } },
+        },
+        required: ["id", "taskUid", "title", "urgency", "options", "complianceFlags", "politicalFlags", "contextRefs"],
+      },
+    },
+    handledSilently: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          type: { type: "string", description: 'e.g. email_archive / calendar_accept / todo_dedup' },
+          count: { type: "integer", minimum: 1 },
+          category: { type: "string" },
+        },
+        required: ["type", "count", "category"],
+      },
+    },
+  },
+  required: ["tier", "mainTasks", "handledSilently"],
+} as const;
+
 // ─── 输出 schema (UI ActionCard 渲染输入) ───────────────────────
 
 /** BL-ADVISOR-PROMPT-CONFORMANCE (6/1 鸿波): tone 严格 enum, parseMainTask
@@ -273,6 +377,48 @@ catfish_draft_meeting_brief / catfish_compose_followup_list 后**返回的 path*
 3. 不调 tool 就不写 draftPath, 让 UI 显"自己写"
 
 不允许编路径绕过. 员工点开发现空草稿 = 鲶鱼失信.
+
+# BL-ADVISOR-JSON-STRICT (P3.4.9, 6/15 鸿波撞 DeepSeek Flash 返英文 markdown 后)
+
+模型在 agent loop 多轮 + tool use 之后, **极易 drift 出 SYSTEM_PROMPT 的 JSON 约束**,
+返 markdown 叙述 (SYSTEM_PROMPT 影响力随 turn 数衰减). 实测原文:
+
+  "Now I have a comprehensive picture. Let me synthesize:
+   **Key findings from session analysis:**
+   1. **巡视巡察整改** — drop
+   2. ..."
+
+这种输出客户端 robustJsonParse 救不了 (一个 \`{\` 都没有), 直接 UI 红字 "advisor LLM 调用失败".
+
+## 铁律 (跑完所有 tool, 准备返 final answer 时必读)
+
+1. 你的回复**第一个字符必须是 \`{\`**, 最后一个字符必须是 \`}\`.
+2. **不能**以以下 prefix 开头 (实测高频 drift):
+   - 英文: "Now I have" / "Let me synthesize" / "Key findings" / "Based on the data" /
+     "I'll analyze" / "Here is" / "After analyzing"
+   - 中文: "现在我" / "让我" / "总结一下" / "根据数据" / "经过分析" / "首先" / "以下是"
+3. **不能**含 markdown 反引号 (\`\`\`json\`\`\`) / 加粗 (**) / 列表 (1. 2. 3. -) / 表情 (✓ ✗ ⚠️).
+   这些都在 JSON 字段值里用, 不能在 JSON 外部包裹.
+4. **不能**用英文叙述 advisor 决策. 全部 JSON 字段值中文 (英文术语如 "high" / "balanced" 除外).
+5. 跑完 tool 拿数据后, **直接** 把数据 json 化输出, 不要 "reasoning out loud" 内部独白.
+
+## 例子
+
+❌ Bad (鸿波 6/15 实测, agent loop 跑完后输出):
+\`\`\`
+Now I have a comprehensive picture. Let me synthesize:
+
+**Key findings from session analysis:**
+1. **巡视巡察整改回头看** — 员工已说"已经会给刘佳了" → **resolved, drop**
+2. **安全预警误报备案** — ...
+\`\`\`
+
+✓ Good (无 prefix, 第一个字符就是 \`{\`):
+\`\`\`
+{"tier":"mid","main_tasks":[{"id":1,"task_uid":"xunshi","title":"...","urgency":"medium","reason":"...","options":[...]}],"handled_silently":[{"type":"task_resolved","count":1,"category":"巡视巡察 已结案 (员工说已给刘佳)"}]}
+\`\`\`
+
+(实际输出可以多行 + 缩进, 但**必须 \`{\` 开头**.)
 `;
 
 // ─── 拼 user prompt ──────────────────────────────────────────────
@@ -281,6 +427,13 @@ function buildUserPrompt(input: AdvisorInput): string {
   // 5/26: sessionGoal 字段删 — hermes 0.14 原生 /goal 替代, advisor 不再读 catfish 这套
   const { profile, emails, events, todos, ctx, urgencyMap, previousTasks } = input;
   const parts: string[] = [];
+
+  // P3.5.5 (6/16 鸿波): catfish-advisor sparse mode marker — catfish-memory plugin
+  //   prefetch 检测到这个 marker 后, 只返核心 4 段 (purpose+discipline+safety+meta ~3KB),
+  //   砍 skills_catalog/strategic_docs/journal/wiki/feedback 7 段 (~30KB).
+  //   advisor 业务上不需要这些 (它自己 user prompt 已注入 distilled+memory+todos).
+  //   真因: Qwen 内网 prompt 44K 跑 100-200s, sparse 后 ~10K 跑 20-30s.
+  parts.push("<!-- catfish:advisor-sparse -->");
 
   const today = new Date();
   parts.push(`# 时间锚点
@@ -319,6 +472,16 @@ ${
   }
   if (ctx.distilledFacts.trim()) {
     parts.push(`# 关于这个员工 (长期画像)\n${ctx.distilledFacts.trim()}`);
+  }
+
+  // P3.4.6 (6/15 鸿波): hermes MEMORY 近期 § 段 — "近期事项 context".
+  //   跟 distilledFacts 两层: distilledFacts = 长期画像 (员工偏好 / 客户 / 项目),
+  //   hermesMemoryRecent = 近期事实 (e.g. "一级建造师补位 6/12 戴明利已入职"
+  //   "6/10 下午沟通单已反馈邱益亮暂停" "中电高新资质申报发票佐证已发起申请").
+  //   不是 TODO — todo 严格走 employee_journal - [ ] checkbox.
+  if (ctx.hermesMemoryRecent.trim()) {
+    parts.push(`# 近期事项 (员工 hermes memory 近期 § 段, 含近期事实 / 决策 / 跟进点, 非 TODO)
+${ctx.hermesMemoryRecent.trim()}`);
   }
 
   // 周报历史 (文件名 + 时间, 不读内容)
@@ -402,6 +565,18 @@ ${
     : "央国企信号弱 — 跳过合规/政治扫描."
 }`);
 
+  // P3.4.9 (6/15 鸿波): user prompt 末尾再强调一次 JSON-only — 跟 SYSTEM_PROMPT
+  //   末尾 BL-ADVISOR-JSON-STRICT 双重保险. agent loop 跑完 tool 后 final
+  //   message 时, 最近上下文的指令影响力 > 老 SYSTEM_PROMPT, user 末尾这条
+  //   是 "last word" 帮 LLM 守住 JSON 约束.
+  parts.push(`# 输出格式 (必读 — 跑完 tool 后 final answer 阶段)
+
+跑完所有 tool 拿到数据后, **直接输出 JSON**, 不要 "Now I have a comprehensive picture" /
+"Let me synthesize" / "Key findings" / "现在我..." 等任何 prefix.
+
+第一个字符 = \`{\`, 最后一个字符 = \`}\`. 中间不要 markdown 反引号 / 加粗 / 列表标号 / 表情.
+跑完 tool 时直接 dump JSON, 不要 "reasoning out loud". 见 SYSTEM_PROMPT § BL-ADVISOR-JSON-STRICT.`);
+
   return parts.join("\n\n");
 }
 
@@ -446,7 +621,13 @@ export type AdvisorFetchResult = AdvisorResult | null | typeof ADVISOR_TIMEOUT;
 //   红条 "LLM 返空或解析失败". 改 180s 给私有模型充分时间, 也保留 fail-safe.
 //   仍然不挂 AbortSignal — Tauri webview suspend 时 fetch 自然 pending, race 让
 //   UI 不无限等. 后台 fetch 完成会写 cache, 下次时段触发能用.
-const CLIENT_TIMEOUT_MS = 180_000;
+// P3.4.8 (6/15 鸿波): 180_000 → 300_000.
+//   真因 (从 ~/.hermes/logs/agent.log 看): advisor 一次 POST /v1/chat/completions
+//   不是单次 LLM call, 是 hermes 跑完整 agent session — 8 次 API call + 多次
+//   tool 调用 (read_file / session_search 一次 76s / tool_search / recall_decision_history),
+//   总耗时 ~2:40. 180s 客户端 timeout 擦边超出 60-90s, 几乎每次撞超时走 stale fallback.
+//   改 300s 给 agent loop 跑完时间. stale fallback 仍保留 (真 5min 还没回就是上游真挂).
+const CLIENT_TIMEOUT_MS = 300_000;
 
 /** 主入口. 不挂 AbortSignal (Tauri webview suspend 经验, 5/21 学到). */
 export async function fetchBriefingAdvisor(input: AdvisorInput): Promise<AdvisorFetchResult> {
@@ -457,6 +638,10 @@ export async function fetchBriefingAdvisor(input: AdvisorInput): Promise<Advisor
     return raceWithTimeout(_advisorInFlight);
   }
 
+  // P3.4.E.6 (6/15 鸿波): 记开始时间, 后台 finally 算耗时判真 timeout / race 内完成.
+  //   老 log "可能已 TIMEOUT 走 stale" 永远打 — 不论 race 是否真超时, 误导诊断
+  //   方向 (P3.4.3 同款 pattern, 鸿波 6/15 撞到误以为 LLM 慢, 实际 race 内完成).
+  const startMs = Date.now();
   const myPromise = _fetchBriefingAdvisorImpl(input);
   _advisorInFlight = myPromise;
   // 注: 不 await 整个 promise (它要 5min), 用 race 让本次调用早返;
@@ -469,6 +654,7 @@ export async function fetchBriefingAdvisor(input: AdvisorInput): Promise<Advisor
     void myPromise
       .then(async (result) => {
         if (!result) return;
+        const elapsedMs = Date.now() - startMs;
         try {
           const { advisorCacheGet, advisorCacheSave } = await import("./advisor_cache");
           // P3.3.12 (6/10): save 前先读老 cache 拿到 taskChatSummaries — 老 cache
@@ -481,7 +667,20 @@ export async function fetchBriefingAdvisor(input: AdvisorInput): Promise<Advisor
             model: input.model,
             taskChatSummaries: oldCache?.taskChatSummaries,
           });
-          console.log("[advisor] 后台完成, 已写 cache (调用方可能已 TIMEOUT 走 stale)");
+          // P3.4.E.6 (6/15 鸿波): 区分 race 内完成 / race 外完成. 实际多数 cache 写
+          //   在 race 内 (主 caller 拿到结果 + cache 同步写), 老文案"可能已 TIMEOUT"
+          //   不准, 误导. 真 timeout 时主 caller 已返 ADVISOR_TIMEOUT, 后台 promise
+          //   仍在跑, 完成后才打这条 log.
+          const elapsedSec = (elapsedMs / 1000).toFixed(1);
+          if (elapsedMs < CLIENT_TIMEOUT_MS) {
+            console.log(
+              `[advisor] 后台完成, 已写 cache (race 内完成 ${elapsedSec}s < timeout ${CLIENT_TIMEOUT_MS / 1000}s, 主 caller 已用上结果)`,
+            );
+          } else {
+            console.log(
+              `[advisor] 后台完成, 已写 cache (race 外完成 ${elapsedSec}s >= timeout ${CLIENT_TIMEOUT_MS / 1000}s, 主 caller 已走 stale fallback, cache 下次时段触发用)`,
+            );
+          }
         } catch (e) {
           console.warn("[advisor] 后台写 cache 挂:", e);
         }
@@ -495,21 +694,165 @@ export async function fetchBriefingAdvisor(input: AdvisorInput): Promise<Advisor
   }
 }
 
+// ─── P3.5.4 (6/16 鸿波): BGE-M3 相关性筛选 ────────────────────────────
+//
+// distilled_facts / hermes memory § / prev_tasks 都按今天输入 (todos+emails+events)
+// 算语义相关性, top-K 注入. 砍 prompt 50%+, advisor Call 1 不再 truncated.
+//
+// 失败 fallback 返原 input (model 缺 / embed 异常都 silent).
+// caller 拿到的"过滤后 input" 喂 buildUserPrompt, buildUserPrompt 不需要改 — 它直接读
+// ctx.distilledFacts / ctx.hermesMemoryRecent / previousTasks, 我们只是替换这 3 个字段值.
+
+const RELEVANCE_TOP_K_DISTILLED = 3;     // distilled_facts 段保留前 N
+const RELEVANCE_TOP_K_MEMORY = 5;        // memory § 保留前 N
+const RELEVANCE_TOP_K_PREV_TASKS = 5;    // prev_tasks 保留前 N (LLM 复用 task_uid)
+
+async function applyRelevanceFilter(input: AdvisorInput): Promise<AdvisorInput> {
+  // 构造 query: 今天员工真要处理的事 (todos + emails subject + events summary)
+  const queryParts: string[] = [];
+  if (input.todos.length > 0) {
+    queryParts.push(input.todos.map((t) => t.text).join(" "));
+  }
+  if (input.emails.length > 0) {
+    queryParts.push(
+      input.emails.map((m) => `${m.sender}: ${m.subject}`).join(" "),
+    );
+  }
+  if (input.events.length > 0) {
+    queryParts.push(input.events.map((e) => e.summary).join(" "));
+  }
+  const query = queryParts.join("\n").trim();
+
+  if (!query) {
+    // 今天啥也没 (advisor 实际不会跑到这, 上游已 short-circuit), fallback
+    return input;
+  }
+
+  // 切段
+  const {
+    splitDistilledFacts,
+    splitMemoryRecent,
+    rankRelevance,
+    pickTopK,
+  } = await import("./advisor_relevance");
+
+  const distilledSegs = splitDistilledFacts(input.ctx.distilledFacts || "");
+  const memorySegs = splitMemoryRecent(input.ctx.hermesMemoryRecent || "");
+  const prevTaskTexts: string[] = (input.previousTasks ?? []).map((t) => {
+    // prev_task embed 输入: title + chatSummary (chat summary 更精准反映"已聊过啥")
+    return t.chatSummary ? `${t.title}\n${t.chatSummary}` : t.title;
+  });
+
+  // 没东西可筛 → fallback (不调 BGE-M3)
+  if (
+    distilledSegs.length <= RELEVANCE_TOP_K_DISTILLED &&
+    memorySegs.length <= RELEVANCE_TOP_K_MEMORY &&
+    prevTaskTexts.length <= RELEVANCE_TOP_K_PREV_TASKS
+  ) {
+    return input;
+  }
+
+  // 并发 3 个 rank
+  const [distilledRes, memoryRes, prevRes] = await Promise.all([
+    distilledSegs.length > RELEVANCE_TOP_K_DISTILLED
+      ? rankRelevance(query, distilledSegs, "distilled")
+      : Promise.resolve(null),
+    memorySegs.length > RELEVANCE_TOP_K_MEMORY
+      ? rankRelevance(query, memorySegs, "memory")
+      : Promise.resolve(null),
+    prevTaskTexts.length > RELEVANCE_TOP_K_PREV_TASKS
+      ? rankRelevance(query, prevTaskTexts, "prev_task")
+      : Promise.resolve(null),
+  ]);
+
+  // model 全挂 → fallback 全量
+  if (
+    distilledRes?.modelLoaded === false &&
+    memoryRes?.modelLoaded === false &&
+    prevRes?.modelLoaded === false
+  ) {
+    console.warn("[advisor relevance] BGE-M3 model 全挂, fallback 全量注入");
+    return input;
+  }
+
+  // 拼新 ctx + previousTasks
+  let newDistilled = input.ctx.distilledFacts;
+  let newMemory = input.ctx.hermesMemoryRecent;
+  let newPrevTasks = input.previousTasks;
+
+  if (distilledRes && distilledRes.modelLoaded && distilledRes.ranked.length > 0) {
+    const top = pickTopK(distilledSegs, distilledRes.ranked, RELEVANCE_TOP_K_DISTILLED);
+    newDistilled = top.join("\n\n");
+    const cacheHits = distilledRes.ranked.slice(0, RELEVANCE_TOP_K_DISTILLED).filter((r) => r.fromCache).length;
+    console.log(
+      `[advisor relevance] distilled: ${distilledSegs.length} → top-${top.length}, ` +
+        `${cacheHits} cache 命中, scores: [${distilledRes.ranked.slice(0, 3).map((r) => r.score.toFixed(3)).join(",")}]`,
+    );
+  }
+  if (memoryRes && memoryRes.modelLoaded && memoryRes.ranked.length > 0) {
+    const top = pickTopK(memorySegs, memoryRes.ranked, RELEVANCE_TOP_K_MEMORY);
+    newMemory = top.join("\n§\n");
+    const cacheHits = memoryRes.ranked.slice(0, RELEVANCE_TOP_K_MEMORY).filter((r) => r.fromCache).length;
+    console.log(
+      `[advisor relevance] memory: ${memorySegs.length} → top-${top.length}, ` +
+        `${cacheHits} cache 命中, scores: [${memoryRes.ranked.slice(0, 5).map((r) => r.score.toFixed(3)).join(",")}]`,
+    );
+  }
+  if (
+    prevRes && prevRes.modelLoaded && prevRes.ranked.length > 0 &&
+    input.previousTasks && input.previousTasks.length > RELEVANCE_TOP_K_PREV_TASKS
+  ) {
+    const topIndices = prevRes.ranked.slice(0, RELEVANCE_TOP_K_PREV_TASKS).map((r) => r.idx);
+    newPrevTasks = topIndices
+      .map((i) => input.previousTasks?.[i])
+      .filter((t): t is NonNullable<typeof t> => t !== undefined);
+    const cacheHits = prevRes.ranked.slice(0, RELEVANCE_TOP_K_PREV_TASKS).filter((r) => r.fromCache).length;
+    console.log(
+      `[advisor relevance] prev_tasks: ${prevTaskTexts.length} → top-${newPrevTasks.length}, ` +
+        `${cacheHits} cache 命中, scores: [${prevRes.ranked.slice(0, 5).map((r) => r.score.toFixed(3)).join(",")}]`,
+    );
+  }
+
+  return {
+    ...input,
+    ctx: {
+      ...input.ctx,
+      distilledFacts: newDistilled,
+      hermesMemoryRecent: newMemory,
+    },
+    previousTasks: newPrevTasks,
+  };
+}
+
 async function raceWithTimeout(
   p: Promise<AdvisorResult | null>,
 ): Promise<AdvisorFetchResult> {
-  return Promise.race<AdvisorFetchResult>([
-    p,
-    new Promise<typeof ADVISOR_TIMEOUT>((resolve) =>
-      setTimeout(() => {
-        console.warn(
-          `[advisor] 客户端 ${CLIENT_TIMEOUT_MS / 1000}s 超时, 返 TIMEOUT (fetch 仍在后台跑, ` +
-            "完成会写 cache, 下次时段触发能用).",
-        );
-        resolve(ADVISOR_TIMEOUT);
-      }, CLIENT_TIMEOUT_MS),
-    ),
-  ]);
+  // P3.4.3 (6/15 鸿波): timer id 拿出来 race resolve 后 clearTimeout.
+  //   老 setTimeout 没 clear — race 已 resolve (LLM 早返 / short-circuit 返 null
+  //   见 _fetchBriefingAdvisorImpl:533 "数据全空 不调 LLM") 后, 180s 那个
+  //   setTimeout 仍跑回调 console.warn "客户端 180s 超时", 但实际 race 早结束
+  //   了, 这条 warning 是误报. 6/15 鸿波早安卡 console 看到这条 warning 误把
+  //   "数据全空"诊断方向带偏成"LLM 慢", 排了一通错路.
+  //
+  //   修法: setTimeout 回调里只 resolve, console.warn 移到 race 外, 看 winner
+  //   真等于 ADVISOR_TIMEOUT 才 warn. try/finally clearTimeout 防 race 赢后
+  //   timer 残留再 fire (即使 resolve 没用了, console.warn 也别再 spew).
+  let timerId: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<typeof ADVISOR_TIMEOUT>((resolve) => {
+    timerId = setTimeout(() => resolve(ADVISOR_TIMEOUT), CLIENT_TIMEOUT_MS);
+  });
+  try {
+    const winner = await Promise.race<AdvisorFetchResult>([p, timeoutPromise]);
+    if (winner === ADVISOR_TIMEOUT) {
+      console.warn(
+        `[advisor] 客户端 ${CLIENT_TIMEOUT_MS / 1000}s 超时, 返 TIMEOUT (fetch 仍在后台跑, ` +
+          "完成会写 cache, 下次时段触发能用).",
+      );
+    }
+    return winner;
+  } finally {
+    if (timerId !== undefined) clearTimeout(timerId);
+  }
 }
 
 async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorResult | null> {
@@ -581,9 +924,26 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
     }
   }
 
-  const userPrompt = buildUserPrompt(inputWithPrev);
+  // P3.5.4 (6/16 鸿波): BGE-M3 相关性筛选 — 砍 distilled / memory / prev_tasks
+  //   按今天输入语义相关性, 不是粗暴 slice. 失败 silent fallback 返原 input.
+  //   model 缺 (~/.catfish/models/bge-m3.onnx 没下载) 时也 fallback.
+  const filteredInput = await applyRelevanceFilter(inputWithPrev);
+
+  const userPrompt = buildUserPrompt(filteredInput);
   const url = `${config.backendUrl}/v1/chat/completions${SERVICE_LLM_QUERY}`;
   console.log("[advisor] 发 fetch:", url, "prompt 长度:", userPrompt.length);
+
+  // P3.4.6 (6/15 鸿波) sanity: hermes MEMORY 近期事项段是否真拼到 prompt 里.
+  //   - "✓ 已注入" = Rust briefing_context_fetch 返了 hermes_memory_recent, 内容非空, prompt 拼了 "# 近期事项" 段
+  //   - "✗ 未注入" = MEMORY.md 不存在 / 全是空 § 段 / Rust 端没读 / advisor.ts buildUserPrompt 漏拼
+  // 完整 prompt dump: 在 DevTools Console 跑 localStorage.setItem("catfish:debug_advisor_prompt", "true") 再刷新.
+  console.log(
+    "[advisor] P3.4.6 hermes memory 近期事项注入:",
+    userPrompt.includes("# 近期事项") ? "✓ 已注入" : "✗ 未注入 (ctx.hermesMemoryRecent 空 / MEMORY.md 不存在 / 全空 § 段)",
+  );
+  if (typeof localStorage !== "undefined" && localStorage.getItem("catfish:debug_advisor_prompt") === "true") {
+    console.log("[advisor] 完整 prompt (P3.4.6 debug 模式, localStorage flag 打开):\n" + userPrompt);
+  }
 
   // 不挂 AbortSignal — Tauri webview 失焦会 suspend, 让 fetch 自己生命周期
   try {
@@ -596,9 +956,27 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
           { role: "system", content: SYSTEM_PROMPT },
           { role: "user", content: userPrompt },
         ],
-        max_tokens: 3000,
+        // P3.4.C (6/15 鸿波): 3000 → 6000.
+        //   真因 (鸿波 6/15 console raw content audit): DeepSeek Flash 仍
+        //   "reasoning out loud" — 跑完 tool 后输出 "所有扫描完成。结果汇总: ...
+        //   现在输出最终 JSON。{ "tier": "mid", "main_tasks": [{...]" — reasoning
+        //   prose ~1500 tokens + JSON ~1500 tokens, max_tokens=3000 边界刚好,
+        //   JSON 经常截断 (没闭合 ] }), robustJsonParse 救不了 truncated JSON.
+        //   6000 给 reasoning + JSON 都装下. 跟 P3.4.D robustJsonParse 改 brace
+        //   balanced match 一起救 truncated 场景.
+        max_tokens: 6000,
         temperature: 0.4,
         stream: false,
+        // P3.4.10 (6/15 鸿波): OpenAI 协议强制 JSON. P3.4.9 prompt 加强对
+        //   DeepSeek Flash 无效 (LLM 仍 "Good — consistent with TODO list.
+        //   Let me finalize..." 输出 markdown reasoning). 真因是 reasoning
+        //   model 倾向 think out loud, prompt 压不住. response_format 是 API
+        //   层面强制.
+        //
+        //   兼容性: catfish-gateway facts_pipeline.py:165 已有同款用法, 注释
+        //   "部分模型支持, 不支持的会忽略" — 加上零风险, 不破坏现有调用.
+        //   DeepSeek API / Anthropic Claude / OpenAI gpt-4o-mini 全支持.
+        response_format: { type: "json_object" },
       }),
     });
 
@@ -633,13 +1011,49 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
     // 5/22 cold start 修: 鲁棒 JSON 解析 — LLM 输出常含前后解释文字
     // (e.g. "现在我已经分析完..."), 不只 strip markdown 反引号.
     const parsed = robustJsonParse(content);
-    if (parsed === null) {
-      console.warn("[advisor] JSON 解析失败 (LLM 返非 JSON), 原文前 200:",
-        content.slice(0, 200));
-      return null;
-    }
 
-    const result = parseAdvisorResult(parsed);
+    // P3.4.E (6/15 鸿波): robustJsonParse 失败 → 调 Call 2 transformToStructured 100% 转结构化.
+    //   真因: P3.4.9/.10/.C 累积修治标 80%, 仍 20% LLM 纯 reasoning 无 JSON / truncated 救不回.
+    //   Call 2 single-shot + tool_choice strict 100% 拿到结构化结果 (代价 +1-2s latency).
+    //   两层叠加 (Call 1 fast path / Call 2 strict fallback) — 多数 cache hit 走 fast,
+    //   少数 reasoning out loud 才触发 Call 2, 平均 latency 影响小.
+    let result: AdvisorResult | null;
+    if (parsed === null) {
+      console.warn(
+        "[advisor] robustJsonParse 失败 (LLM 纯 reasoning / truncated), 触发 P3.4.E Call 2 转结构化. 原文前 200:",
+        content.slice(0, 200),
+      );
+      result = await transformToStructured(content, input.model, input.profile.tier);
+      if (result === null) {
+        console.warn("[advisor] P3.4.E Call 2 也挂, 返 null (UI 显数据诊断卡)");
+        return null;
+      }
+    } else {
+      result = parseAdvisorResult(parsed, "strict");
+      // P3.4.E: parsed 拿到了但 parseAdvisorResult strict 返 null (e.g. mainTasks 缺失 / tier 非法
+      //   / P3.4.E.7 frontline/mid options<2). 走 Call 2 strict schema 救场.
+      if (result === null) {
+        console.warn(
+          "[advisor] parseAdvisorResult strict 失败 (parsed 有但 schema 不匹配 / options<2), 触发 P3.4.E Call 2",
+        );
+        result = await transformToStructured(content, input.model, input.profile.tier);
+
+        // P3.4.E.7 (6/15 鸿波): 第 3 层 lenient 兜底 — Call 2 也挂时, 用 lenient mode
+        //   重新 parse Call 1 原 parsed (LLM 极端不听话场景, schema 都强不动).
+        //   至少给员工看 LLM 给的内容, 不让 UI 完全空数据诊断卡.
+        //   lenient 接受 options<2, 只 warn 不拒.
+        if (result === null) {
+          console.warn(
+            "[advisor] P3.4.E Call 2 也挂, 尝试 lenient mode 兜底 (接受 options<2 不空 UI)",
+          );
+          result = parseAdvisorResult(parsed, "lenient");
+          if (result === null) {
+            console.warn("[advisor] P3.4.E.7 lenient 兜底也挂 (schema 真坏), 返 null UI 显数据诊断卡");
+            return null;
+          }
+        }
+      }
+    }
     // P3.3.40 BL-ADVISOR-RESOLVED-HARDFILTER (6/12 鸿波): prompt 里加了 §4.2
     // (P3.3.39), 但 LLM 听话率 80-90%, 仍会漏. 这里加 deterministic 客户端
     // 后处理 — 拿 prev task chatSummary + 当前 title, 命中"已结案信号"关键字
@@ -755,36 +1169,211 @@ function filterResolvedTasks(
 
 // ─── 鲁棒 JSON 解析 (5/22 cold start 修) ──────────────────────────
 
-/** LLM 输出常含前后解释文字, 剥 markdown 反引号 + 截 `{...}` 之间.
- *  失败返 null, 不抛. */
+/** LLM 输出常含前后解释文字, 剥 markdown 反引号 + 找 balanced { ... } JSON 块.
+ *  失败返 null, 不抛.
+ *
+ *  P3.4.C (6/15 鸿波): 改用 brace counting 找第一个 balanced `{...}` 块.
+ *  老 indexOf("{") + lastIndexOf("}") 在 LLM 输出 truncated 时挂 — 因为 LLM
+ *  reasoning 里也含 `{tool_call}` / `{`uid`}` 等单独 `}`, lastIndexOf 命中那条,
+ *  截出来 JSON 不闭合. brace counting 找真 balanced 块, 即使 LLM 后面截断也救
+ *  开头那个完整 JSON.
+ *
+ *  实测鸿波 6/15: LLM 输出 "所有扫描完成。结果汇总: ... 现在输出最终 JSON。
+ *  {tier: ..., main_tasks: [...]}" — 前面 reasoning 含 `{...}` (引用 task_uid 等),
+ *  lastIndexOf 命中那种, 老算法 parse 挂. brace counting 找第一个真 balanced
+ *  跳过 reasoning 引用.
+ */
 function robustJsonParse(content: string): unknown | null {
   if (typeof content !== "string") return null;
-  let s = content
+  const s = content
     .trim()
     .replace(/^```(?:json)?\s*/i, "")
     .replace(/```$/, "")
     .trim();
+  // 1. 先全文 parse 试试 (LLM 听话只输出 JSON 时走这条)
   try {
     return JSON.parse(s);
   } catch {
-    /* 落空走截取 */
+    /* 落空走 brace counting */
   }
+
+  // 2. brace counting — 从第一个 `{` 起, count 字符串字面量内的 brace 不算,
+  //    找到 balanced `}` 立即返. 救 LLM truncated 输出.
   const first = s.indexOf("{");
-  const last = s.lastIndexOf("}");
-  if (first >= 0 && last > first) {
-    s = s.slice(first, last + 1);
-    try {
-      return JSON.parse(s);
-    } catch {
-      return null;
+  if (first < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = first; i < s.length; i++) {
+    const c = s[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (c === "\\" && inString) {
+      escape = true;
+      continue;
+    }
+    if (c === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) {
+        // 找到 balanced — 截出 [first, i+1) parse
+        try {
+          return JSON.parse(s.slice(first, i + 1));
+        } catch {
+          // 这个 balanced 块本身不是合法 JSON (e.g. trailing comma) — 再往下找
+          // 下一个 balanced 块. 但代价大, 简化: 直接返 null 让调用方降级.
+          return null;
+        }
+      }
     }
   }
+  // 跑完没遇到 depth=0 → LLM 输出真截断, JSON 未闭合. 返 null.
   return null;
+}
+
+// ─── P3.4.E (6/15 鸿波): Call 2 transformToStructured — strict tool_choice 100% JSON ──
+//
+// 设计:
+//   Call 1 (现 _fetchBriefingAdvisorImpl 的 hermes agent loop): LLM 跑业务 tool
+//     (catfish_check_compliance / political_sensitivity_scan 等), 拿 raw final content.
+//     大多场景 content 已含合法 JSON, robustJsonParse 直接救场, 不进 Call 2.
+//   Call 2 (本函数): 只在 robustJsonParse 失败 (LLM 纯 reasoning 无 JSON / truncated 救不回)
+//     才触发. 单 shot 直走 catfish-gateway 8999 + tool_choice 强制 LLM 返结构化 tool_call.
+//     prompt 给 LLM Call 1 的 raw final content, 让它 "把这个推理结论转成 advisor JSON".
+//
+// 为什么不 Call 1 就强 tool_choice:
+//   Call 1 走 hermes 8642 agent loop, hermes 不读 client tools / tool_choice (api_server.py:1820).
+//   就算 hermes 透传, advisor first turn 必调业务 tool (catfish_check_compliance 等), tool_choice
+//   强制 submit_advisor_result 会跳过业务 tool 调用, 失去 agent loop 业务能力.
+//   Two-call architecture 保留 agent loop 业务能力 + 加 100% 结构化保证. 代价 +1-2s latency.
+//
+// 兜底: Call 2 自己挂 → 返 null, caller 走老 robustJsonParse 失败路径 (返 null UI 显示数据诊断卡).
+async function transformToStructured(
+  rawContent: string,
+  model: string,
+  tier: "frontline" | "mid" | "senior",
+): Promise<AdvisorResult | null> {
+  const url = `${config.gatewayUrl}/v1/chat/completions${ADVISOR_DIRECT_QUERY}`;
+  const trimmed = rawContent.length > 12000 ? rawContent.slice(0, 12000) + "\n\n[已截 ...]" : rawContent;
+
+  // P3.4.E.7 (6/15 鸿波): senior tier 异常型主菜 0 options 合法, frontline/mid 必须 ≥2.
+  //   ADVISOR_JSON_SCHEMA 默认 minItems=2 给 frontline/mid 强约束. senior 时动态 deep-clone
+  //   去掉 minItems 让 senior 0 options 合法.
+  let schemaForCall: typeof ADVISOR_JSON_SCHEMA | Record<string, unknown> = ADVISOR_JSON_SCHEMA;
+  if (tier === "senior") {
+    // 浅 deep-clone (JSON 不含函数 / 循环引用, 安全)
+    const cloned = JSON.parse(JSON.stringify(ADVISOR_JSON_SCHEMA));
+    // 路径: properties.mainTasks.items.properties.options.minItems
+    const opt = cloned?.properties?.mainTasks?.items?.properties?.options;
+    if (opt && typeof opt === "object") {
+      delete opt.minItems;
+      opt.description = "senior tier 异常型主菜可 0 个 options, 只列例外 + 风险";
+    }
+    schemaForCall = cloned;
+  }
+
+  const tierDirective =
+    tier === "senior"
+      ? "员工是 senior tier — 异常例外型主菜可 0 个 options, 只列例外 + 风险."
+      : `员工是 ${tier} tier — 每个 mainTask 必须 2-3 个 options (口径/语气选项), 不达标 schema 会拒.`;
+
+  const sys =
+    "你是 catfish advisor 结构化转换器. 收到 advisor 的最终推理结论 (可能含 reasoning prose + 部分 JSON 混合), 必须调 submit_advisor_result tool 提交结构化 AdvisorResult. " +
+    "不要返 free-text content, 不要解释, 直接调 tool. 字段缺失就用合理默认值 (mainTasks 至少含已识别的, handledSilently 缺就 []). taskUid 如原文有就复用, 没有就生成 6 字符 [a-z0-9]. " +
+    tierDirective;
+  const userPrompt = `# advisor 原始结论 (转结构化)\n\n${trimmed}`;
+
+  console.log(
+    "[advisor] P3.4.E Call 2 transformToStructured 触发, tier:",
+    tier,
+    "rawContent 长:",
+    rawContent.length,
+  );
+
+  try {
+    const resp = await fetchWithAuth(url, {
+      method: "POST",
+      headers: SERVICE_LLM_HEADERS,
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: sys },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: 6000,  // 跟 Call 1 同, transform 不可能比 Call 1 输出大
+        temperature: 0.1,  // 转换任务用低温, 不要 LLM 重新发挥
+        stream: false,
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "submit_advisor_result",
+              description: "提交结构化 advisor 结果. 必须调这个 tool, 不允许 free-text content.",
+              parameters: schemaForCall,
+            },
+          },
+        ],
+        tool_choice: { type: "function", function: { name: "submit_advisor_result" } },
+      }),
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      console.warn("[advisor] P3.4.E Call 2 非 2xx:", resp.status, text.slice(0, 200));
+      return null;
+    }
+    const data = await resp.json();
+    const msg = data?.choices?.[0]?.message;
+
+    const toolCalls = msg?.tool_calls;
+    if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+      const args = toolCalls[0]?.function?.arguments;
+      if (typeof args === "string" && args.trim()) {
+        try {
+          const parsed = JSON.parse(args);
+          console.log("[advisor] P3.4.E Call 2 tool_call 路径成功, args 长:", args.length);
+          return parseAdvisorResult(parsed);
+        } catch (e) {
+          console.warn("[advisor] P3.4.E Call 2 args JSON.parse 挂:", e);
+          const fallback = robustJsonParse(args);
+          if (fallback) return parseAdvisorResult(fallback);
+        }
+      }
+    }
+    // LLM 仍没遵 tool_choice (DeepSeek 边缘 fallback) — 试 content
+    const content = msg?.content;
+    if (typeof content === "string") {
+      const parsed = robustJsonParse(content);
+      if (parsed) {
+        console.log("[advisor] P3.4.E Call 2 tool_call 未命中, content fallback 成功");
+        return parseAdvisorResult(parsed);
+      }
+    }
+    console.warn("[advisor] P3.4.E Call 2 没拿到结构化结果, msg:", msg);
+    return null;
+  } catch (e) {
+    console.warn("[advisor] P3.4.E Call 2 调用挂:", e);
+    return null;
+  }
 }
 
 // ─── 解析 LLM JSON 输出 ────────────────────────────────────────
 
-function parseAdvisorResult(raw: unknown): AdvisorResult | null {
+/** P3.4.E.7 (6/15 鸿波): mode 参数 — strict frontline/mid options<2 拒, lenient 兜底接受.
+ *
+ *  设计:
+ *   - Call 1 (hermes agent loop) parse: strict — 让 options 不足触发 Call 2 strict schema 重做
+ *   - Call 2 (transformToStructured) parse: strict — Call 2 已用 minItems schema 强约束, 应该过
+ *   - 第 3 层兜底: Call 1 + Call 2 都挂 (LLM 极端不听话), _fetchBriefingAdvisorImpl 用 lenient
+ *     重新 parse Call 1 原 content — 至少给员工看 LLM 给的内容, 不让 UI 完全空数据诊断卡.
+ */
+function parseAdvisorResult(raw: unknown, mode: "strict" | "lenient" = "strict"): AdvisorResult | null {
   if (!raw || typeof raw !== "object") return null;
   const obj = raw as Record<string, unknown>;
 
@@ -822,6 +1411,37 @@ function parseAdvisorResult(raw: unknown): AdvisorResult | null {
         count,
         category: typeof it.category === "string" ? it.category : "",
       });
+    }
+  }
+
+  // P3.4.E.7 (6/15 鸿波): tier-aware options 数量强校验 — 不达标 return null 强逼走 Call 2.
+  //   真因: BL-ADVISOR-PROMPT-CONFORMANCE #6b (parseMainTask line 1512) 老只 warn 不修,
+  //   鸿波 6/15 撞 'task 巡视巡察整改回头看确认 只 1 个 option'. SYSTEM_PROMPT 强约束
+  //   "2-3 个 options" LLM 仍漏 — Call 1 走 hermes 没法用 strict schema.
+  //   修法: parseAdvisorResult 加 tier-aware 校验 → return null → _fetchBriefingAdvisorImpl
+  //   走 Call 2 fallback (transformToStructured + ADVISOR_JSON_SCHEMA options.minItems=2
+  //   strict schema) → DeepSeek beta 拒不符合 schema 的 args, 100% 强制 ≥2 option.
+  //   senior tier "异常例外型主菜" 允许 0 options (SYSTEM_PROMPT §3 已说), 不校验.
+  if (mode === "strict" && (tier === "frontline" || tier === "mid")) {
+    for (const task of mainTasks) {
+      if (task.options.length < 2) {
+        console.warn(
+          `[advisor] P3.4.E.7 strict 校验失败: task '${task.title}' options=${task.options.length} < 2 ` +
+            `(tier=${tier}), return null 触发 P3.4.E Call 2 strict schema 重做`,
+        );
+        return null;
+      }
+    }
+  }
+  // lenient mode: 接受 options<2 (Call 1+Call 2 都 strict 挂时兜底), 但仍 warn.
+  if (mode === "lenient" && (tier === "frontline" || tier === "mid")) {
+    for (const task of mainTasks) {
+      if (task.options.length < 2) {
+        console.warn(
+          `[advisor] P3.4.E.7 lenient 模式接受 options<2: task '${task.title}' options=${task.options.length} ` +
+            `(tier=${tier}, LLM 不听话兜底, UI 显示但只 1 个选项)`,
+        );
+      }
     }
   }
 

@@ -55,17 +55,37 @@ pub async fn advisor_cache_get() -> Result<Option<AdvisorCache>, String> {
     Ok(Some(c))
 }
 
-/// 写 cache. 原子写 (tmp + rename).
+/// 写 cache. 原子写 (tmp + rename), 失败 fallback 直写.
+///
+/// P3.4.C (6/15 鸿波): 加 fallback 直写, 解 P3.3.50 同款 race.
+/// 鸿波 6/15 console 撞 "rename cache.json 失败: No such file or directory" —
+/// 两个 advisor call 并发, 后到的 rename 时 tmp 已被前者 rename 走. fallback
+/// fs::write 直写 (非原子但 advisor cache 不致命, 最差 partial-write 下次重写).
 #[tauri::command]
 pub async fn advisor_cache_save(cache: AdvisorCache) -> Result<(), String> {
     let target = cache_path()?;
     let tmp = target.with_extension("json.tmp");
     let text = serde_json::to_string_pretty(&cache)
         .map_err(|e| format!("serialize cache 失败: {e}"))?;
-    std::fs::write(&tmp, text)
-        .map_err(|e| format!("写 cache.json.tmp 失败: {e}"))?;
-    std::fs::rename(&tmp, &target)
-        .map_err(|e| format!("rename cache.json 失败: {e}"))?;
+
+    // 原子路径: tmp + rename
+    if let Err(e) = std::fs::write(&tmp, &text) {
+        log::warn!(
+            "[advisor_cache] tmp 写挂 ({e}), fallback 直写 (非原子但不致命)"
+        );
+        return std::fs::write(&target, &text)
+            .map_err(|e2| format!("fallback 直写 cache.json 失败: {e2}"));
+    }
+    if let Err(e) = std::fs::rename(&tmp, &target) {
+        // rename 挂 — tmp 可能已被并发 rename 走 (P3.3.50 同 race), 或 target 目录消失.
+        // 删 tmp (best-effort) + fallback 直写.
+        log::warn!(
+            "[advisor_cache] rename 挂 ({e}), fallback 直写"
+        );
+        let _ = std::fs::remove_file(&tmp);
+        return std::fs::write(&target, &text)
+            .map_err(|e2| format!("fallback 直写 cache.json 失败: {e2}"));
+    }
     Ok(())
 }
 

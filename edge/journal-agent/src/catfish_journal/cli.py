@@ -27,6 +27,12 @@ from . import core
 
 JOURNAL_PATH = Path.home() / ".catfish" / "employee_journal.md"
 
+# P3.4.7b (6/15 鸿波): current_todos.md = 本周待办主源 (鸿波 hermes MEMORY 写过的设计,
+#   "每周日 reset, 过周未完成自动带入新一周, 已完成清掉"). 跟 Rust journal.rs:current_todos_path
+#   同模式. cmd_add --origin 路由用. cmd_list/done/delete/sync 暂仍走 employee_journal.md
+#   (向后兼容老 catfish-todo-sync plugin + hermes skill 调用), 双源 list 下次重构.
+CURRENT_TODOS_PATH = Path.home() / ".catfish" / "current_todos.md"
+
 
 def _read_journal() -> str:
     """读 journal 全文, 没文件返空字符串."""
@@ -39,6 +45,19 @@ def _write_journal(content: str) -> None:
     """写 journal. 自动建 ~/.catfish 目录."""
     JOURNAL_PATH.parent.mkdir(parents=True, exist_ok=True)
     JOURNAL_PATH.write_text(content, encoding="utf-8")
+
+
+def _read_file_safe(path: Path) -> str:
+    """P3.4.7b: 读任意 path, 不存在返空 (跟 _read_journal 同语义但 path 显式)."""
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8")
+
+
+def _write_file(path: Path, content: str) -> None:
+    """P3.4.7b: 写任意 path, 自动建父目录 (跟 _write_journal 同语义但 path 显式)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
 
 
 # ── 子命令 implementations ────────────────────────────────────────────
@@ -260,7 +279,19 @@ def cmd_archive(args: argparse.Namespace) -> int:
 
 
 def cmd_add(args: argparse.Namespace) -> int:
-    content = _read_journal()
+    # P3.4.7b (6/15 鸿波): 路由 — 跟 Rust journal.rs:journal_add_todo 同优先级.
+    #   显式 --origin > 隐式 (section 给了→journal, 否则→weekly) > 默认 weekly.
+    if args.origin == "journal":
+        target_path = JOURNAL_PATH
+    elif args.origin == "weekly":
+        target_path = CURRENT_TODOS_PATH
+    elif args.section and args.section.strip():
+        # section 概念在流水帐 ## 日期段 才有意义 → journal
+        target_path = JOURNAL_PATH
+    else:
+        target_path = CURRENT_TODOS_PATH  # 默认本周待办
+
+    content = _read_file_safe(target_path)
     try:
         new_content = core.add_todo(
             content, args.text, args.section, done=args.done
@@ -269,11 +300,15 @@ def cmd_add(args: argparse.Namespace) -> int:
         print(f"✗ {e}", file=sys.stderr)
         return 2
 
-    _write_journal(new_content)
+    _write_file(target_path, new_content)
+
     section_info = f" [section: {args.section}]" if args.section else ""
     state_emoji = "✅" if args.done else "📝"
     state_label = "(已完成)" if args.done else ""
-    print(f"{state_emoji} 已加{state_label}: {args.text.strip()[:60]!r}{section_info}")
+    print(
+        f"{state_emoji} 已加{state_label} 到 {target_path.name}: "
+        f"{args.text.strip()[:60]!r}{section_info}"
+    )
     return 0
 
 
@@ -345,12 +380,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_add.add_argument(
         "--section",
         default=None,
-        help="所属段标题 (默认追加到文末; 给定则插到该段尾)",
+        help="所属段标题 (默认追加到文末; 给定则插到该段尾). "
+             "P3.4.7b: section 给了隐式走 employee_journal.md (流水帐), 否则 current_todos.md (本周).",
     )
     p_add.add_argument(
         "--done",
         action="store_true",
         help="加 `- [x]` 已完成行 (历史记录场景, BL-CATFISH-TODO-SYNC v0.1.9 用), 默认 `- [ ]`",
+    )
+    # P3.4.7b (6/15 鸿波): origin 路由跟 Rust journal.rs 同步 — weekly→current_todos.md,
+    #   journal→employee_journal.md. 默认: section 给了→journal, 否则→weekly.
+    p_add.add_argument(
+        "--origin",
+        choices=["weekly", "journal"],
+        default=None,
+        help="目标文件: weekly→current_todos.md (本周待办), journal→employee_journal.md "
+             "(流水帐). 默认: section 给了→journal, 否则→weekly. 跟 Rust journal_add_todo 路由对齐.",
     )
     p_add.set_defaults(func=cmd_add)
 

@@ -141,29 +141,80 @@ pub async fn session_create(
 
         // user_id 留空, system_prompt 可选(SOUL 内容)
         // model_config 用空 JSON, 后续如有需要再扩展
-        conn.execute(
-            r#"
-            INSERT INTO sessions (
-                id, source, model, model_config, system_prompt,
-                started_at, message_count, tool_call_count,
-                input_tokens, output_tokens, cache_read_tokens,
-                cache_write_tokens, reasoning_tokens, title
-            ) VALUES (
-                ?1, 'companion', ?2, '{}', ?3,
-                ?4, 0, 0,
-                0, 0, 0,
-                0, 0, ?5
-            )
-        "#,
-            params![
-                id,
-                input.model,
-                input.system_prompt,
-                started_at,
-                input.title,
-            ],
-        )
-        .map_err(|e| format!("插入 session 失败: {e}"))?;
+        //
+        // P3.4.E.8 (6/15 鸿波): 撞 UNIQUE constraint 自动 retry with title 后缀.
+        //   真因: hermes 创建 state.db 时加了 `CREATE UNIQUE INDEX idx_sessions_title_unique
+        //   ON sessions(title) WHERE title IS NOT NULL` (见 hermes session-storage.md:69).
+        //   场景:
+        //     1. BriefingTwoColumn 切 task A → sessionCreate(title='task A') 成功
+        //     2. advisor refresh, LLM 重生成 task list, 新 taskUid 但 LLM 给同 title (业务一致)
+        //     3. mount 新 taskUid → sessionGetByTaskUid 返 null → sessionCreate(title='task A') 撞
+        //     4. 或 React StrictMode dev 双 mount race — 两次同时跑 sessionCreate(title 同) 撞
+        //   不该 silent fail (caller 要 id) 不该 ON CONFLICT(title) DO UPDATE (新业务不该串老 session)
+        //   也不该改 hermes schema (manifesto: monkey-patch 不 fork). retry with suffix " (2)" 最稳.
+        //
+        //   注: title 为 None 时, hermes UNIQUE INDEX `WHERE title IS NOT NULL` 不约束 NULL,
+        //   多个 NULL title session 共存合法, 不会撞 UNIQUE, retry 也不影响.
+        let base_title = input.title.clone();
+        let mut attempt_title = base_title.clone();
+        let mut suffix = 1u32;
+        loop {
+            let r = conn.execute(
+                r#"
+                INSERT INTO sessions (
+                    id, source, model, model_config, system_prompt,
+                    started_at, message_count, tool_call_count,
+                    input_tokens, output_tokens, cache_read_tokens,
+                    cache_write_tokens, reasoning_tokens, title
+                ) VALUES (
+                    ?1, 'companion', ?2, '{}', ?3,
+                    ?4, 0, 0,
+                    0, 0, 0,
+                    0, 0, ?5
+                )
+            "#,
+                params![
+                    id,
+                    input.model,
+                    input.system_prompt,
+                    started_at,
+                    attempt_title,
+                ],
+            );
+            match r {
+                Ok(_) => break,
+                Err(e) => {
+                    // string match "UNIQUE constraint" 比 rusqlite::ErrorCode::ConstraintViolation
+                    // 更兼容 rusqlite 版本变动. SQLite UNIQUE 错文案稳定 "UNIQUE constraint failed".
+                    let s = e.to_string();
+                    if s.contains("UNIQUE constraint") {
+                        // base title None 不该撞 UNIQUE (hermes index WHERE title IS NOT NULL),
+                        // 如果撞了说明 schema 真坏 — 直接报错 (不无限循环).
+                        let Some(base) = base_title.as_ref() else {
+                            return Err(format!(
+                                "插入 session 失败: title=NULL 仍撞 UNIQUE (hermes schema 异常?): {e}"
+                            ));
+                        };
+                        suffix += 1;
+                        if suffix > 20 {
+                            return Err(format!(
+                                "插入 session 失败: title '{}' 重试 20 次仍撞 UNIQUE (DB 真坏?)",
+                                base
+                            ));
+                        }
+                        let new_title = format!("{} ({})", base, suffix);
+                        log::info!(
+                            "[session_write] P3.4.E.8 title '{}' 撞 UNIQUE, retry with '{}'",
+                            base,
+                            new_title
+                        );
+                        attempt_title = Some(new_title);
+                    } else {
+                        return Err(format!("插入 session 失败: {e}"));
+                    }
+                }
+            }
+        }
 
         Ok::<SessionCreateOutput, String>(SessionCreateOutput { id, started_at })
     })
@@ -498,6 +549,12 @@ mod tests {
                 token_count INTEGER,
                 finish_reason TEXT
             );
+            -- P3.4.E.8 (6/15 鸿波): 跟 hermes 真实 db 一致, 加 partial UNIQUE INDEX on title.
+            -- 见 hermes session-storage.md:69 — "CREATE UNIQUE INDEX IF NOT EXISTS
+            -- idx_sessions_title_unique ON sessions(title) WHERE title IS NOT NULL".
+            -- 不加这个 index 测不出 P3.4.E.8 retry 行为.
+            CREATE UNIQUE INDEX idx_sessions_title_unique
+                ON sessions(title) WHERE title IS NOT NULL;
             "#,
         )
         .expect("create_test_schema");
@@ -559,6 +616,90 @@ mod tests {
     }
 
     // ---------- happy paths ----------
+
+    /// P3.4.E.8 (6/15 鸿波): 验证 UNIQUE constraint 撞了能自动 retry with suffix.
+    /// 场景: hermes 真实 db 有 `idx_sessions_title_unique`, BriefingTwoColumn mount
+    /// 同 title 第二次会撞. 老代码直接 'UNIQUE constraint failed' 报错, UI 红条.
+    /// 新代码 retry → 第二次自动用 'title (2)' 不撞, caller 拿到 id.
+    #[tokio::test]
+    async fn session_create_retries_on_unique_title_collision() {
+        let (_tmp, _g) = setup_test_env();
+        // 第一次: title='巡视巡察整改回头看确认' → 成功, title 不变
+        let out1 = session_create(SessionCreateInput {
+            model: "test-model".into(),
+            title: Some("巡视巡察整改回头看确认".into()),
+            system_prompt: None,
+        })
+        .await
+        .expect("first create");
+        // 第二次: 同 title → 应该 retry 用 'title (2)'
+        let out2 = session_create(SessionCreateInput {
+            model: "test-model".into(),
+            title: Some("巡视巡察整改回头看确认".into()),
+            system_prompt: None,
+        })
+        .await
+        .expect("second create with same title should retry");
+        // 第三次: 再撞 → 'title (3)'
+        let out3 = session_create(SessionCreateInput {
+            model: "test-model".into(),
+            title: Some("巡视巡察整改回头看确认".into()),
+            system_prompt: None,
+        })
+        .await
+        .expect("third create with same title should retry to (3)");
+
+        assert_ne!(out1.id, out2.id, "id 必须不同");
+        assert_ne!(out2.id, out3.id, "id 必须不同");
+
+        let conn = Connection::open(state_db_path().unwrap()).unwrap();
+        let title1: String = conn
+            .query_row(
+                "SELECT title FROM sessions WHERE id = ?1",
+                params![out1.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let title2: String = conn
+            .query_row(
+                "SELECT title FROM sessions WHERE id = ?1",
+                params![out2.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let title3: String = conn
+            .query_row(
+                "SELECT title FROM sessions WHERE id = ?1",
+                params![out3.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(title1, "巡视巡察整改回头看确认");
+        assert_eq!(title2, "巡视巡察整改回头看确认 (2)");
+        assert_eq!(title3, "巡视巡察整改回头看确认 (3)");
+    }
+
+    /// P3.4.E.8: title=None 时多次插入仍 OK (hermes UNIQUE INDEX `WHERE title IS NOT NULL`
+    /// 不约束 NULL, retry 不该影响 None title 场景).
+    #[tokio::test]
+    async fn session_create_null_title_no_collision() {
+        let (_tmp, _g) = setup_test_env();
+        let out1 = session_create(SessionCreateInput {
+            model: "m".into(),
+            title: None,
+            system_prompt: None,
+        })
+        .await
+        .expect("first null-title create");
+        let out2 = session_create(SessionCreateInput {
+            model: "m".into(),
+            title: None,
+            system_prompt: None,
+        })
+        .await
+        .expect("second null-title create (should not retry, NULL not in UNIQUE)");
+        assert_ne!(out1.id, out2.id);
+    }
 
     #[tokio::test]
     async fn session_create_inserts_row() {

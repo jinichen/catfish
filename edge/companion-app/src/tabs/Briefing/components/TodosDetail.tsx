@@ -47,7 +47,10 @@ export default function TodosDetailSection({
     }
     setBusy((b) => new Set(b).add(k));
     try {
-      await journalMarkTodoDone(t.line, t.text.slice(0, 30));
+      // P3.4.7b (6/15 鸿波): 传 t.origin 路由到正确文件 (weekly→current_todos.md /
+      //   journal→employee_journal.md). 双源下同 line 号歧义, 没 origin Rust 会双
+      //   文件试但慢一倍. 老 JournalTodo 没 origin 字段时 undefined, Rust 端兼容.
+      await journalMarkTodoDone(t.line, t.text.slice(0, 30), t.origin);
       setOptimisticDone((s) => new Set(s).add(k));
       setActionError(null);
       onChanged?.();
@@ -71,7 +74,8 @@ export default function TodosDetailSection({
     }
     setBusy((b) => new Set(b).add(k));
     try {
-      await journalDeleteTodo(t.line, t.text.slice(0, 30));
+      // P3.4.7b (6/15 鸿波): 传 t.origin 路由到正确文件 (见 handleMarkDone 注释)
+      await journalDeleteTodo(t.line, t.text.slice(0, 30), t.origin);
       setOptimisticDeleted((s) => new Set(s).add(k));
       setActionError(null);
       onChanged?.();
