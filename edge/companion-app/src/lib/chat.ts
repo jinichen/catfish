@@ -203,6 +203,19 @@ export async function streamChat(params: SendChatParams): Promise<void> {
   // (deepseek-flash) — 40K context 不稳, 一调 skill 就 streaming error.
   const effectiveModel = model;
 
+  // P3.5.2 (6/16 鸿波): 持久化 picker model 到 ~/.catfish/picker_state.json.
+  //   catfish-memory plugin (in-hermes) sync_turn 读这个文件作为 summary model 来源,
+  //   让 plugin 自动跟随 picker (绕过 hermes MemoryProvider API 没透传 picker 的限制).
+  //   fire-and-forget, 失败静默, 不阻塞 chat send.
+  void (async () => {
+    try {
+      const { savePickerState } = await import("./picker_state");
+      savePickerState(effectiveModel);
+    } catch (e) {
+      console.warn("[chat] savePickerState import 失败 (静默):", e);
+    }
+  })();
+
   const body: Record<string, unknown> = {
     model: effectiveModel,
     messages: toWire(messages),

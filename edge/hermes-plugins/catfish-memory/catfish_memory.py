@@ -193,6 +193,7 @@ from .catfish_memory_helpers import (  # noqa: F401
     _read_buffer,
     _read_full_journal,
     _read_jsonl_tail,
+    _read_picker_state_model,
     _read_queries_concat,
     _read_sources_concat,
     _read_state,
@@ -362,9 +363,26 @@ class CatfishMemoryProvider(MemoryProvider):
         失败的子数据源跳过, 不影响其它.
 
         返空字符串 = 这轮没有 memory context (hermes 会 skip 注入).
+
+        # P3.5.5 (6/16 鸿波) advisor sparse mode
+
+        catfish-advisor 流程在 user prompt 顶部加 marker `<!-- catfish:advisor-sparse -->`.
+        plugin 检测到 → 只返核心 4 段 (purpose + discipline + safety_redline + session_meta,
+        ~3-4KB), 砍其余 7 段 (schema/journal/wiki/skills_catalog/strategic_docs/feedback/
+        skill_guard, ~30KB).
+
+        真因: catfish-advisor 自己 user prompt 已经注入员工画像 / 长期画像 (distilled) /
+        近期事项 (memory) / todos / emails. plugin 全量 prefetch 38KB 跟它**重复**, 而且
+        advisor 不调 catfish skill (不需要 skills_catalog), 不引用 wiki / strategic_docs.
+        实测鸿波 6/16 advisor Qwen 内网 prompt 44K 跑 100-200s, sparse 后预期 20-30s.
+
+        chat / dream / 别的路径 (没 marker) 走全量, 行为不变.
         """
         if not self._initialized:
             return ""
+
+        # P3.5.5: sparse mode 检测
+        is_advisor_sparse = bool(query) and "catfish:advisor-sparse" in query
 
         catfish_home = self._catfish_home_cached or _catfish_home()
         sections: List[str] = []
@@ -378,7 +396,9 @@ class CatfishMemoryProvider(MemoryProvider):
         # + journal/distilled/USER/MEMORY 分工. 借鉴 llm_wiki "AUTHORITATIVE" 标记,
         # 跟 _render_memory_discipline 互补: discipline 教写什么不该写, schema 教
         # 该写到哪里去.
-        sections.append(self._render_schema())
+        # P3.5.5 sparse: 跳过 — advisor 不写 memory, 不需要 router schema.
+        if not is_advisor_sparse:
+            sections.append(self._render_schema())
 
         # 0. BL-MEMORY-DISCIPLINE (5/24 鸿波"hermes memory 70% 内容跑偏"): 在所有
         # memory 内容前面注入"写入纪律"提示, 让 LLM 调 memory_update 前自查.
@@ -397,45 +417,57 @@ class CatfishMemoryProvider(MemoryProvider):
         if meta:
             sections.append(meta)
 
-        # 2. employee_journal — 员工长期记忆
-        journal = self._render_employee_journal(catfish_home)
-        if journal:
-            sections.append(journal)
+        # P3.5.5 sparse: 下面 7 段是 advisor 不需要的 (employee_journal / wiki /
+        #   skills_catalog / strategic_docs / feedback / skill_guard / schema 已上面跳过).
+        #   advisor 自己 user prompt 已注入 distilled + memory + todos + emails 完整上下文.
+        if not is_advisor_sparse:
+            # 2. employee_journal — 员工长期记忆
+            journal = self._render_employee_journal(catfish_home)
+            if journal:
+                sections.append(journal)
 
-        # 2b. BL-CATFISH-WIKI-MODE P3.3.11 (6/4): wiki summary —
-        # 列 wiki/entities + concepts 真**top hub** 真**真**让 LLM chat 时**真**真**知道**
-        # 员工 wiki 真**真**已有真 entity / concept 真**真**避免重复抽** + 真**reference 真精确**真
-        wiki = self._render_wiki_summary(catfish_home)
-        if wiki:
-            sections.append(wiki)
+            # 2b. BL-CATFISH-WIKI-MODE P3.3.11 (6/4): wiki summary —
+            # 列 wiki/entities + concepts 真**top hub** 真**真**让 LLM chat 时**真**真**知道**
+            # 员工 wiki 真**真**已有真 entity / concept 真**真**避免重复抽** + 真**reference 真精确**真
+            wiki = self._render_wiki_summary(catfish_home)
+            if wiki:
+                sections.append(wiki)
 
-        # 3. skills_catalog — 可用 catfish 技能 (BL-MEMORY-P2-2: query top-K 筛)
-        skills = self._render_skills_catalog(catfish_home, query=query)
-        if skills:
-            sections.append(skills)
+            # 3. skills_catalog — 可用 catfish 技能 (BL-MEMORY-P2-2: query top-K 筛)
+            skills = self._render_skills_catalog(catfish_home, query=query)
+            if skills:
+                sections.append(skills)
 
-        # 3b. BL-STRATEGIC-DOC-SYNC (6/7): 战略 / 设计 doc 注入 (manifesto /
-        # patent landscape / moat assessment / capability gaps 等). 跟
-        # _render_skills_catalog 同 pattern: query 空 → 全注入字母序, query 有
-        # → Jaccard top-K cap 5KB. 文件在 ~/.catfish/strategic_docs/*.md.
-        # 跟 wiki/concepts/ 分开 (避免污染 catfish-memory distill 真 entity 抽取).
-        strategic = self._render_strategic_docs(catfish_home, query=query)
-        if strategic:
-            sections.append(strategic)
+            # 3b. BL-STRATEGIC-DOC-SYNC (6/7): 战略 / 设计 doc 注入 (manifesto /
+            # patent landscape / moat assessment / capability gaps 等). 跟
+            # _render_skills_catalog 同 pattern: query 空 → 全注入字母序, query 有
+            # → Jaccard top-K cap 5KB. 文件在 ~/.catfish/strategic_docs/*.md.
+            # 跟 wiki/concepts/ 分开 (避免污染 catfish-memory distill 真 entity 抽取).
+            strategic = self._render_strategic_docs(catfish_home, query=query)
+            if strategic:
+                sections.append(strategic)
 
-        # 4. feedback — 员工 thumbs 反馈
-        feedback = self._render_feedback(catfish_home)
-        if feedback:
-            sections.append(feedback)
+            # 4. feedback — 员工 thumbs 反馈
+            feedback = self._render_feedback(catfish_home)
+            if feedback:
+                sections.append(feedback)
 
-        # 5. skill_guard — 员工提 skill 时铁律 (条件触发)
-        guard = self._render_skill_guard(query)
-        if guard:
-            sections.append(guard)
+            # 5. skill_guard — 员工提 skill 时铁律 (条件触发)
+            guard = self._render_skill_guard(query)
+            if guard:
+                sections.append(guard)
 
         if not sections:
             return ""
         result = "\n\n".join(sections)
+
+        # P3.5.5 sparse mode 单独 log, 跟原 log 区分
+        if is_advisor_sparse:
+            logger.info(
+                "catfish-memory prefetch SPARSE (advisor): %d chars (砍 7 段 ~30KB, 留核心 4 段)",
+                len(result),
+            )
+            return result
         # BL-CATFISH-WIKI-MODE diag (6/4 凌晨): 6 小时 audit 没找到 4 marker 注入,
         # 直接调 plugin prefetch 返 10395c 全 ✓, 但 dump 真 user message 0 marker.
         # 加 log 看 runtime prefetch 真实际返值 — 看是不是 hermes 注入 path 真问题.
@@ -1459,8 +1491,28 @@ class CatfishMemoryProvider(MemoryProvider):
         return _DEFAULT_MIN_SUMMARY_INTERVAL_SECONDS
 
     def _get_summarize_model(self) -> str:
-        """LLM model. 优先 yaml > env. 没设返空字符串 (caller skip)."""
-        cfg = _load_plugin_config(self._catfish_home_cached or _catfish_home())
+        """LLM model. 优先级 picker_state.json > yaml > env. 没设返空字符串 (caller skip).
+
+        P3.5.2 (6/16 鸿波): 加 picker_state.json 最高优先级 — companion chat.ts 每次 send
+        前 fire-and-forget 写 ~/.catfish/picker_state.json 含当前 picker model. 这让 plugin
+        sync_turn 自动跟随 picker, 解决方案 D 的 split 问题 (员工切 picker 后 summary 模型
+        立即同步, 不再 yaml 静态).
+
+        真因 audit: hermes MemoryProvider.sync_turn 签名是
+        `(user_content, assistant_content, session_id)`, 没 client request header 入参.
+        plugin 直接拿不到 picker. 文件中转是 hermes API 限制下的最简解法.
+
+        文件不存在 / parse 错 / chat_model 缺 → fallback yaml → fallback env. 兼容老路径.
+        """
+        home = self._catfish_home_cached or _catfish_home()
+
+        # P3.5.2: picker_state.json 最高优先级 (chat.ts 每次 send 写)
+        picker_model = _read_picker_state_model(home)
+        if picker_model:
+            return picker_model
+
+        # Fallback: yaml > env (老逻辑保留)
+        cfg = _load_plugin_config(home)
         yaml_val = cfg.get("summarize", {}).get("model") if isinstance(cfg, dict) else None
         if isinstance(yaml_val, str) and yaml_val.strip():
             return yaml_val.strip()
@@ -1702,3 +1754,110 @@ class CatfishMemoryProvider(MemoryProvider):
             logger.warning(
                 "catfish-memory bg session=%s 异常 (静默): %s", session_id, e,
             )
+
+
+# ──────────────────────────────────────────────────────────────────────
+# P3.5.1.2 (6/15 鸿波 Dream Engine): module-level entry — 员工主动触发蒸馏.
+#
+# 设计核心 (鸿波 6/15 拍方案 D):
+#   - 复用 plugin 现有 distill 算法 (_call_distill_llm + _write_distilled + _mark_distill_run),
+#     不重复实现.
+#   - Model 是显式参数 (Dream Engine 用 companion picker 当前选的 model), 不读 yaml/env —
+#     跟 instance method _get_summarize_model() 行为分离, 保留 yaml/env 给 plugin auto path.
+#   - force=True 跳 24h cooldown — 员工"现在就想跑"时不该被 cooldown 拦.
+#   - 跑完写 _mark_distill_run → plugin auto path 的 _should_run_distill 看 cooldown
+#     state 自然 24h skip. **零冲突, 不撞** (这是方案 D 跟 C 的关键差异).
+#   - progress_cb 透传给 _call_distill_llm (后者 P3.5.1.1 已支持). dream_cli 用它
+#     stdout 流式 JSON 给 companion Tauri 端转 event 显进度.
+#
+# 调用方: catfish-memory/dream_cli.py (P3.5.1.3) 通过 asyncio.run() 跑.
+# 不调 instance, 不依赖 hermes — 单独 CLI 直跑.
+# ──────────────────────────────────────────────────────────────────────
+
+
+async def run_distill_for_dream_engine(
+    model: str,
+    *,
+    force: bool = True,
+    progress_cb=None,
+    catfish_home_override: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Dream Engine 入口: 立即蒸馏 employee_journal.md → distilled_facts.md.
+
+    Args:
+        model: companion picker 当前选的 model (e.g. catfish-public-deepseek-flash).
+               必传, 跟 instance _get_summarize_model() (yaml/env) 隔离.
+        force: True 跳 24h cooldown (员工主动触发场景默认 True).
+               False 时 cooldown 内返 {ok: False, reason: 'cooldown'}.
+        progress_cb: 可选 (done_idx, total) -> None. 透传给 _call_distill_llm.
+        catfish_home_override: 测试用 — 覆盖 ~/.catfish.
+
+    Returns:
+        {
+          "ok": bool,
+          "reason": str,            # 失败原因 (cooldown / empty_journal / llm_fail / model_empty)
+          "chunks_total": int,      # 切了几段
+          "bytes_written": int,     # 写了多少字节 distilled_facts.md
+          "model": str,             # 实际用的 model
+          "took_seconds": float,
+        }
+    """
+    started = time.time()
+
+    if not model or not model.strip():
+        return {
+            "ok": False, "reason": "model_empty",
+            "chunks_total": 0, "bytes_written": 0,
+            "model": "", "took_seconds": 0.0,
+        }
+    model = model.strip()
+
+    home = catfish_home_override or _catfish_home()
+
+    # cooldown check (force=True 时跳)
+    if not force and not _should_run_distill(home):
+        return {
+            "ok": False, "reason": "cooldown",
+            "chunks_total": 0, "bytes_written": 0,
+            "model": model, "took_seconds": time.time() - started,
+        }
+
+    # 读 journal 全文
+    journal_text = _read_full_journal(home)
+    if not journal_text.strip():
+        return {
+            "ok": False, "reason": "empty_journal",
+            "chunks_total": 0, "bytes_written": 0,
+            "model": model, "took_seconds": time.time() - started,
+        }
+
+    # 估 chunk 数, 给 progress_cb 早期反馈 (不调 _call_distill_llm 之前)
+    estimated_chunks = max(1, (len(journal_text) + _DISTILL_CHUNK_CHARS - 1) // _DISTILL_CHUNK_CHARS)
+    if progress_cb is not None:
+        try:
+            progress_cb(0, estimated_chunks)
+        except Exception:  # noqa: BLE001
+            pass
+
+    distilled = await _call_distill_llm(
+        journal_text, model, progress_cb=progress_cb,
+    )
+
+    if not distilled:
+        return {
+            "ok": False, "reason": "llm_fail",
+            "chunks_total": estimated_chunks, "bytes_written": 0,
+            "model": model, "took_seconds": time.time() - started,
+        }
+
+    _write_distilled(home, distilled)
+    # 写 cooldown state — 让 plugin auto path 24h 内自然 skip (零冲突核心)
+    _mark_distill_run(home)
+
+    return {
+        "ok": True, "reason": "",
+        "chunks_total": estimated_chunks,
+        "bytes_written": len(distilled.encode("utf-8")),
+        "model": model,
+        "took_seconds": time.time() - started,
+    }

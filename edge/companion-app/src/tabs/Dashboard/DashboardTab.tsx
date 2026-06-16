@@ -51,6 +51,8 @@ import WikiHubCard from "./WikiHubCard";
 // SkillsMcpCard 改成只显内置+装的, 次卡, 下. 配套 catfish 5 大卖点之 "员工自助生成
 // + 共享" 真兑现 UI.
 import MySkillsCard from "./MySkillsCard";
+// P3.5.1 (6/15 鸿波 Dream Engine): 员工主动触发 long-term 蒸馏 (跟 picker model)
+import DreamCard from "./DreamCard";
 // P3.3.31 (6/12): 5/10 BL-ARCH2 砍后又加回 — 员工心智里"别人分享的 skill"
 //   就应该在仪表盘"技能" section 找, 不是顶部 banner. SkillsHubCard 完整保留没 rm.
 import SkillsHubCard from "./SkillsHubCard";
@@ -219,12 +221,14 @@ export default function DashboardTab() {
       <CollapsibleSection
         id="rel"
         title="🐟 鲶鱼对你的认识"
-        count={5}
+        count={6}
       >
         {/* 6/8 BL-REL-SECTION-TABS (鸿波 6/8): 4 卡 → 4 tabs.
             P3.3.62 (6/13 鸿波): +1 tab "🤖 今日 AI 草稿" — 草稿是鲶鱼为你产出的物,
             主题贴 "鲶鱼对你的认识 / 产出". reply 类一键放 Mail.app Drafts, 闭三·沟通环.
-            default = 小鲶对你的印象 (5 卡里"看时间感 + 整体关系"最直观). */}
+            default = 小鲶对你的印象 (5 卡里"看时间感 + 整体关系"最直观).
+            P3.5.1 (6/15 鸿波): +1 tab "🌙 Dream Engine" — 员工主动触发 long-term 蒸馏.
+            跟现有 distilled_facts / employee_journal 同源 (画像基底), 同 section. */}
         <SectionTabs
           storageKey="rel"
           defaultKey="impression"
@@ -234,6 +238,7 @@ export default function DashboardTab() {
             { key: "profile", label: "👤 小鲶对你的画像", render: () => <UserProfileCard /> },
             { key: "style", label: "✍️ 你的文书风格", render: () => <StyleFingerprintCard /> },
             { key: "drafts", label: "🤖 今日 AI 草稿", render: () => <TodayDraftsCard /> },
+            { key: "dream", label: "🌙 Dream Engine", render: () => <DreamCard /> },
           ]}
         />
       </CollapsibleSection>

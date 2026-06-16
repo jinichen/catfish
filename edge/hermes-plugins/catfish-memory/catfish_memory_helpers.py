@@ -40,8 +40,14 @@ def _catfish_home() -> Path:
 #:   触发 top-K 时 _render_strategic_docs 内部 cap 到 5KB.
 _BUDGETS: Dict[str, int] = {
     "employee_journal": 5000,
-    "skills_catalog": 20000,
-    "strategic_docs": 8000,
+    # P3.5.5 (6/16 鸿波): skills_catalog 20K → 5K. 真因: 鸿波 advisor 流程 Qwen 内网
+    #   prompt 44K 跑 100-200s. 真大头是 catfish-memory plugin prefetch 38.5KB 全量注入,
+    #   单 skills_catalog 占 20K. 实测 chat 用 5K 够 (top-K 5 个 skill, 每 skill ~1K),
+    #   员工 chat 时常用 skill 就那几个, 全列没必要. 砍 15K, advisor 提速 60%+.
+    "skills_catalog": 5000,
+    # P3.5.5 (6/16 鸿波): strategic_docs 8K → 3K. 战略 doc 是 manifesto / moat 类,
+    #   员工 chat 时偶尔参考, 不需要全注入. 3K 够留 top-K 2 段.
+    "strategic_docs": 3000,
     "feedback": 2000,
     "session_meta": 500,
     "skill_guard": 3000,
@@ -260,7 +266,36 @@ def _build_generation_prompt() -> str:
 
 
 def _wiki_enabled() -> bool:
-    """CATFISH_WIKI_ENABLE env 控 P1.1 wiki two-step 开关. 默认 off (LLM 调用贵)."""
+    """P1.1 wiki two-step 开关 — 优先 yaml, env 兜底, 默认 off (LLM 调用贵).
+
+    P3.5.12 (6/16 鸿波): 加 yaml 守门, 优先级 yaml > env > default False.
+
+    真因: 6/16 早 entities/concepts 真被自动写入 19+34 条, 鸿波反馈"对话自动入
+    知识库会很乱". audit 证实: 当时 shell `CATFISH_WIKI_ENABLE=1` 被 hermes
+    继承 → 此函数返 True → wiki two-step 跑. 老逻辑只读 env 不可靠 — env
+    可能从任何 init script / launchd plist 传, 难根治.
+
+    新逻辑: yaml `wiki.auto_ingest` 优先 (永久声明性配置, 跟 env 解耦).
+    yaml 配 false → env 设 =1 也不动. yaml 不配 → fallback env (向后兼容).
+    yaml + env 都没配 → default False.
+
+    yaml 配法: ~/.catfish/memory_plugin.yaml 加段:
+        wiki:
+          auto_ingest: false   # 永远不自动入库, 员工 ChatBubble "💾 存 wiki" 手动入
+    """
+    # 优先级 1: yaml `wiki.auto_ingest` (单一权威配置)
+    try:
+        cfg = _load_plugin_config()
+        if isinstance(cfg, dict):
+            wiki_cfg = cfg.get("wiki", {})
+            if isinstance(wiki_cfg, dict):
+                ai = wiki_cfg.get("auto_ingest")
+                if isinstance(ai, bool):
+                    return ai
+    except Exception:  # noqa: BLE001 - 配置读失败回退 env, 不挂 plugin
+        pass
+
+    # 优先级 2: CATFISH_WIKI_ENABLE env (向后兼容, 历史路径)
     val = os.environ.get("CATFISH_WIKI_ENABLE", "").strip().lower()
     return val in ("1", "true", "yes", "on")
 
@@ -302,6 +337,41 @@ def _append_journal(catfish_home: Path, entry: str) -> None:
     body = entry.strip() + "\n\n"
     with path.open("a", encoding="utf-8") as f:
         f.write(body)
+
+
+def _read_picker_state_model(catfish_home: Path) -> str:
+    """P3.5.2 (6/16 鸿波): 读 ~/.catfish/picker_state.json 拿 companion chat picker 当前 model.
+
+    companion chat.ts 每次 send 前 fire-and-forget 写这个文件, atomic write.
+    plugin sync_turn 触发时读, 让 summary model 自动跟随 picker (而不是 yaml 静态).
+
+    设计 (方案 B, 6/16 鸿波拍): hermes MemoryProvider.sync_turn 签名没 picker 入参,
+    plugin 拿不到 picker 状态. 文件中转是绕过 hermes API 限制的最简方案.
+
+    优先级 (caller _get_summarize_model): picker_state.json > yaml > env > 空.
+
+    Args:
+        catfish_home: ~/.catfish 目录
+
+    Returns:
+        picker model 字符串. 文件不存在 / parse 错 / chat_model 字段缺 → 空字符串.
+        Caller 看到空就走 fallback (yaml/env).
+    """
+    path = catfish_home / "picker_state.json"
+    if not path.exists():
+        return ""
+    try:
+        text = path.read_text(encoding="utf-8")
+        data = json.loads(text)
+        if isinstance(data, dict):
+            model = data.get("chat_model", "")
+            if isinstance(model, str) and model.strip():
+                return model.strip()
+    except (OSError, ValueError, json.JSONDecodeError) as e:
+        logger.debug(
+            "catfish-memory: read picker_state.json 失败 (fallback yaml/env): %s", e,
+        )
+    return ""
 
 
 def _read_full_journal(catfish_home: Path) -> str:
@@ -819,6 +889,7 @@ async def _call_summarize_llm(
 
 async def _call_distill_llm(
     journal_text: str, model: str,
+    progress_cb=None,
 ) -> Optional[str]:
     """调 gateway 蒸馏老 journal. 失败返 None.
 
@@ -826,6 +897,11 @@ async def _call_distill_llm(
       - 切 _DISTILL_CHUNK_CHARS 大小 chunk
       - 每 chunk 走 gateway 抽人/项目/偏好/决策
       - 全部失败返 None, 部分成功合并返
+
+    P3.5.1.1 (6/15 鸿波 Dream Engine): 加可选 progress_cb(done_idx, total) —
+      Dream Engine UI 进度条用. 每 chunk 跑前调一次 (done_idx 从 0 开始 = "马上跑第 1 段"),
+      全部跑完再调一次 (done=total). 现有 sync_turn/on_session_end caller 不传 = None,
+      不影响行为. progress_cb 抛错被吞 (诊断 UI 挂不该拖累 distill).
     """
     if not journal_text.strip():
         return None
@@ -846,9 +922,20 @@ async def _call_distill_llm(
     if not chunks:
         return None
 
+    total = len(chunks)
+
+    def _notify(done: int) -> None:
+        if progress_cb is None:
+            return
+        try:
+            progress_cb(done, total)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("distill progress_cb 抛错 (吞掉, 不影响 distill): %s", e)
+
     results: List[str] = []
     async with httpx.AsyncClient(timeout=_LLM_HTTP_TIMEOUT) as client:
-        for chunk in chunks:
+        for idx, chunk in enumerate(chunks):
+            _notify(idx)
             try:
                 resp = await client.post(
                     _gateway_url(),
@@ -880,6 +967,8 @@ async def _call_distill_llm(
             except Exception as e:  # noqa: BLE001
                 logger.debug("catfish-memory distill chunk 异常 (跳过): %s", e)
                 continue
+
+    _notify(total)  # 跑完通知一次
 
     if not results:
         return None
