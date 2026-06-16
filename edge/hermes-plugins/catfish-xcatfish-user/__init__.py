@@ -144,6 +144,11 @@ def register(ctx) -> None:
                 e,
             )
 
+    # Step 2.6 (P3.4.B 6/15 鸿波): 撤掉 ctx.register_tool session_search override —
+    # 实测无效, hermes builtin 反向覆盖 (memory tool 生效, session_search 不生效,
+    # 实测 76-101s 同原生). P3.4.C 改成 plugin.py _patch_p16_session_search hard
+    # monkey-patch 函数本体 (跟 P1-P15 同模式, 100% 真生效).
+
     # Step 2.7: 6/2 晚 BL-CORS-PREV-MODEL-SYNC — **同步**跑 P8/P9 CORS patch.
     #
     # 真生产事故 (鸿波 6/2 晚 截图全 chat 挂 "无法连接 hermes API: Load failed"):

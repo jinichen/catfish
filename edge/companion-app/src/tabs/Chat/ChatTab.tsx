@@ -42,6 +42,11 @@ export default function ChatTab() {
   const persistedSessionId = useChatStore((s) => s.persistedSessionId);
   const loadSession = useChatStore((s) => s.loadSession);
   const loadSessionAttachments = useChatStore((s) => s.loadSessionAttachments);
+  // P3.5.8 BL-FILE-SESSION-INDEX-V1 Phase 2 (6/16 鸿波): resume 时还原历史 image
+  // base64 到 message.attachments, 让后续 toWire 走 multipart 带图给 vision LLM.
+  // 老 Phase 1 只持久化 metadata, 切走 session / 重启 Companion 后历史图在 wire
+  // 里失踪, gateway user_multipart=0, 私有 vision 模型空跑, 小鲶编借口.
+  const restoreImageAttachments = useChatStore((s) => s.restoreImageAttachments);
 
   // P3.3.19 C Phase 3 (6/11): 当前 session 关联的 task_uid (null = 普通对话).
   // sidecar catfish_session_metadata 查. 每次 session 切换重拉.
@@ -91,13 +96,18 @@ export default function ChatTab() {
         // BL-FILE-SESSION-INDEX-V1 Phase 1 (5/30): 异步拉该 session 历史附件 list.
         // 不阻塞 loadSession (附件慢一点显出来不影响读消息). store 内部有 race 防护.
         void loadSessionAttachments(id);
+        // P3.5.8 Phase 2 (6/16): 同上 fire-and-forget — 异步读图片 base64 还原
+        // message.attachments. UI 先显纯文字 + "[📎 1 张图]" 占位, base64 拉好后
+        // patch 进 messages. 切走 session 时 store 用 persistedSessionId 防 race
+        // 不污染新会话.
+        void restoreImageAttachments(detail);
         setLoadError(null);
       } catch (e) {
         console.error("[catfish chat] 切换会话失败:", e);
         setLoadError(`切换失败: ${e}`);
       }
     },
-    [persistedSessionId, loadSession, loadSessionAttachments],
+    [persistedSessionId, loadSession, loadSessionAttachments, restoreImageAttachments],
   );
 
   /** BL-COMPANION-UX2 (5/12): streaming 中也能点"+ 新对话".

@@ -99,12 +99,19 @@ export function useChat(_initialModel: string) {
    * persistMessage 都用这个 override, 保证写到对的 session.
    */
   const persistMessage = useCallback(
-    async (msg: ChatMessage, sessionIdOverride?: string): Promise<void> => {
+    async (
+      msg: ChatMessage,
+      sessionIdOverride?: string,
+    ): Promise<number | null> => {
+      // P3.5.8 BL-FILE-SESSION-INDEX-V1 Phase 2 (6/16): 返 state.db rowid 让
+      // attachment_record 用 rowid 当 messageId. 否则 uuid (userMsg.id) ≠ rowid,
+      // resume 时 sessionMessages.indexAttachmentsByMessageId join 不上,
+      // image attachments 还原不出来 → 后续 wire 仍丢图.
       const sessionId =
         sessionIdOverride ?? useChatStore.getState().persistedSessionId;
-      if (!sessionId) return;
+      if (!sessionId) return null;
       try {
-        await sessionMessageAppend({
+        const rowid = await sessionMessageAppend({
           sessionId,
           role: msg.role,
           content: msg.content,
@@ -123,8 +130,10 @@ export function useChat(_initialModel: string) {
           toolCallId: msg.tool_call_id,
           finishReason: msg.status === "error" ? "error" : undefined,
         });
+        return rowid;
       } catch (e) {
         console.warn("[catfish chat] session_message_append 失败:", e);
+        return null;
       }
     },
     [],
@@ -563,50 +572,82 @@ export function useChat(_initialModel: string) {
           : trimmed;
       // 5/24 BL-MULTI-SESSION-STREAM: 用 sessionIdForStream 锁定持久化, 不读 store.
       if (sessionIdForStream) {
-        void persistMessage(
-          { ...userMsg, content: persistContent, attachments: undefined },
-          sessionIdForStream,
-        );
+        // P3.5.8 BL-FILE-SESSION-INDEX-V1 Phase 2 (6/16): 改 fire-and-forget →
+        // async chain — 先 await persistMessage 拿 state.db rowid, 再用 rowid 调
+        // attachment_record. 旧路径用 userMsg.id (uuid) 当 messageId, resume 时
+        // SessionMessage.id 是 rowid (number), uuid ≠ rowid, join 不上, 历史图
+        // 在 wire 里失踪 (gateway user_multipart=0). 整段仍 fire-and-forget 不阻塞
+        // chat send — 同步链放到 IIFE 里跑, send 主流程不等.
+        void (async () => {
+          const rowid = await persistMessage(
+            { ...userMsg, content: persistContent, attachments: undefined },
+            sessionIdForStream,
+          );
 
-        // BL-FILE-SESSION-INDEX-V1 Phase 1: 写 attachments metadata
-        // 不阻塞 send (Promise 自跑, 失败仅 console.warn, chat 仍工作)
-        if (enrichedAttachments.length > 0) {
-          // 拿员工 email (跟 chat.ts hermesAuth 路径同). authWhoami 失败时
-          // user_id 用 "anonymous" — Companion 还 work, 但跨员工隔离弱化.
-          void (async () => {
-            let userId = "anonymous";
+          // BL-FILE-SESSION-INDEX-V1 Phase 1: 写 attachments metadata.
+          // Phase 2: 用 rowid 当 messageId (而非 client uuid), 让 resume 时
+          // sessionMessages.indexAttachmentsByMessageId 能 join 上.
+          if (enrichedAttachments.length === 0) return;
+          if (rowid == null) {
+            console.warn(
+              "[BL-FILE-SESSION-INDEX-V1 Phase 2] persistMessage 没返 rowid, " +
+                "attachment 无法 join, image 在 resume 后将失踪",
+            );
+            return;
+          }
+
+          let userId = "anonymous";
+          try {
+            const { authWhoami } = await import("../lib/tauri");
+            const who = await authWhoami();
+            if (who.authenticated && who.email) userId = who.email;
+          } catch {
+            // 拿不到就 anonymous
+          }
+          for (const a of enrichedAttachments) {
             try {
-              const { authWhoami } = await import("../lib/tauri");
-              const who = await authWhoami();
-              if (who.authenticated && who.email) userId = who.email;
-            } catch {
-              // 拿不到就 anonymous
-            }
-            for (const a of enrichedAttachments) {
-              try {
-                await invoke("attachment_record", {
-                  input: {
-                    userId,
-                    sessionId: sessionIdForStream,
-                    messageId: userMsg.id,
-                    kind: a.kind,
-                    fileKind: a.kind === "file" ? (a as Attachment & { fileKind?: string }).fileKind ?? null : null,
-                    name: a.name,
-                    mimeType: a.mimeType ?? null,
-                    sizeBytes: a.sizeBytes ?? null,
-                    keptPath: a.kind === "file" ? (a as Attachment & { keptPath?: string }).keptPath ?? null : null,
-                    parsedTextPath: a.kind === "file" ? (a as Attachment & { parsedTextPath?: string }).parsedTextPath ?? null : null,
-                    meta: a.kind === "file" && (a as Attachment & { meta?: Record<string, unknown> }).meta
-                      ? JSON.stringify((a as Attachment & { meta?: Record<string, unknown> }).meta)
+              await invoke("attachment_record", {
+                input: {
+                  userId,
+                  sessionId: sessionIdForStream,
+                  messageId: String(rowid), // rowid → string (db schema TEXT)
+                  kind: a.kind,
+                  fileKind:
+                    a.kind === "file"
+                      ? (a as Attachment & { fileKind?: string }).fileKind ?? null
                       : null,
-                  },
-                });
-              } catch (e) {
-                console.warn("[BL-FILE-SESSION-INDEX-V1] attachment_record 失败:", e);
-              }
+                  name: a.name,
+                  mimeType: a.mimeType ?? null,
+                  sizeBytes: a.sizeBytes ?? null,
+                  // P3.5.8 Phase 2 (6/16): image 也存 keptPath (attachment_save_image
+                  // 落盘后填的). 旧只 file 存 — image 一直没 keptPath, resume 时
+                  // attachment_load_base64 没文件可读. 现统一: 两类都从 attachment
+                  // 自身的 keptPath 字段取.
+                  keptPath:
+                    (a as Attachment & { keptPath?: string }).keptPath ?? null,
+                  parsedTextPath:
+                    a.kind === "file"
+                      ? (a as Attachment & { parsedTextPath?: string })
+                          .parsedTextPath ?? null
+                      : null,
+                  meta:
+                    a.kind === "file" &&
+                    (a as Attachment & { meta?: Record<string, unknown> }).meta
+                      ? JSON.stringify(
+                          (a as Attachment & { meta?: Record<string, unknown> })
+                            .meta,
+                        )
+                      : null,
+                },
+              });
+            } catch (e) {
+              console.warn(
+                "[BL-FILE-SESSION-INDEX-V1] attachment_record 失败:",
+                e,
+              );
             }
-          })();
-        }
+          }
+        })();
       }
       setIsStreaming(true);
 

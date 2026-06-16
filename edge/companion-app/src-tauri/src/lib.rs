@@ -488,6 +488,11 @@ pub fn run() {
             commands::attachments::attachment_search_local,
             commands::attachments::attachment_delete,
             commands::attachments::attachment_delete_by_user,
+            // P3.5.8 Phase 2 (6/16): image 落盘 + 从 keptPath 读 base64.
+            //   - attachment_save_image: 上传时调一次, 写到 ~/.catfish/uploads/, 返 keptPath
+            //   - attachment_load_base64: resume 时调一次, 读回 base64 填 attachments
+            commands::attachments::attachment_save_image,
+            commands::attachments::attachment_load_base64,
             // BL-LONG-RUNNING-V1 (5/30): 读 ~/.catfish/tasks.jsonl 历史任务
             commands::tasks_history::tasks_history_read,
             // skill_audit (五一 sprint Day 2: skill 调用审计 + 30 天未用统计)
@@ -525,6 +530,8 @@ pub fn run() {
             commands::journal::journal_mark_todo_done,
             commands::journal::journal_delete_todo,
             commands::journal::journal_add_todo,
+            // P3.4.7c (6/15 鸿波): current_todos.md 每周日 reset (autostart 自动跑 + 员工手动触发)
+            commands::journal::current_todos_weekly_reset,
             // BL-PROACTIVE-DECOUPLE (5/26): journal_tail + last_model 一次拿, 给 /api/proactive/* header 透传
             commands::proactive::proactive_context,
             // BL-WECHAT-CATFISH-BIND v1 + v2 (5/26): WeChat openid ↔ catfish 员工 email 绑定
@@ -543,6 +550,15 @@ pub fn run() {
             commands::session_goal::session_goal_read,
             commands::session_goal::session_goal_write,
             commands::session_goal::session_goal_clear,
+            // P3.5.1 (6/15 鸿波): Dream Engine — 员工主动触发 long-term 蒸馏, 用 picker model
+            commands::dream::dream_distill_run,
+            commands::dream::dream_distill_status,
+            // P3.5.2 (6/16 鸿波): chat picker 持久化 → plugin sync_turn 跟随 picker (绕过 hermes API 没透传 picker 限制)
+            commands::picker_state::picker_state_save,
+            commands::picker_state::picker_state_get,
+            // P3.5.4 (6/16 鸿波): BGE-M3 advisor 注入相关性筛选 — 砍 prompt + 砍 LLM 输出, advisor 不再 truncated
+            commands::advisor_relevance::advisor_rank_relevance,
+            commands::advisor_relevance::advisor_relevance_cache_stats,
             // BL-COMPANION-EMAIL-DIGEST (5/18): 邮件简报 shell-out
             commands::email::email_digest_fetch,
             commands::email::email_accounts_fetch,

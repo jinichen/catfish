@@ -12,7 +12,10 @@ import { create } from "zustand";
 import type { ChatMessage } from "../types/chat";
 import type { SessionDetail } from "../types/session";
 // P3.3.19 C Phase 2b (6/11): db→chat 转换 + tool result join 抽到 lib/sessionMessages
-import { loadSessionMessagesAsChat } from "../lib/sessionMessages";
+import {
+  loadSessionMessagesAsChat,
+  loadSessionMessagesAsChatAsync,
+} from "../lib/sessionMessages";
 
 /** BL-FILE-SESSION-INDEX-V1 Phase 1 (5/30): session 级附件 row.
  *  对齐 Rust commands/attachments.rs AttachmentRow.
@@ -99,6 +102,10 @@ interface ChatState {
   /** BL-FILE-SESSION-INDEX-V1 Phase 1 (5/30): loadSession 后异步拉附件 list.
    *  失败仅 console.warn (chat 仍 work). */
   loadSessionAttachments: (sessionId: string) => Promise<void>;
+  /** P3.5.8 BL-FILE-SESSION-INDEX-V1 Phase 2 (6/16 鸿波): loadSession 后异步还原
+   *  历史 image attachments base64, 让 toWire 走 multipart 带图给 LLM. 同步 set
+   *  messages 后立刻 fire-and-forget. 失败仅 console.warn, chat 仍 work (只是没图). */
+  restoreImageAttachments: (detail: SessionDetail) => Promise<void>;
   reset: () => void;
 }
 
@@ -219,6 +226,28 @@ export const useChatStore = create<ChatState>((set) => ({
       });
     } catch (e) {
       console.warn("[BL-FILE-SESSION-INDEX-V1] loadSessionAttachments 失败:", e);
+    }
+  },
+  restoreImageAttachments: async (detail: SessionDetail) => {
+    const sessionId = detail.meta.id;
+    if (!sessionId) return;
+    try {
+      // loadSessionMessagesAsChatAsync 内部 query attachments + 读 base64 + 填回
+      // message.attachments. 整 messages 数组返新引用 (老 messages 不动).
+      const restored = await loadSessionMessagesAsChatAsync(detail);
+      // 防 race: invoke 期间用户可能已切走 session, 拿到结果时校验 persistedSessionId.
+      set((s) => {
+        if (s.persistedSessionId !== sessionId) return s;
+        // 也防 race: streaming 中可能新 message 已 push, restored 是切前的快照
+        // 不能直接覆盖. 但 restore 通常在切会话刚发生时跑, 那时 isStreaming=false,
+        // 这种 race 极少. 简单起见: 直接覆盖. 复杂场景由下次 loadSession 兜底.
+        return { messages: restored };
+      });
+    } catch (e) {
+      console.warn(
+        "[BL-FILE-SESSION-INDEX-V1 Phase 2] restoreImageAttachments 失败:",
+        e,
+      );
     }
   },
   reset: () =>

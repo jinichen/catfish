@@ -101,7 +101,7 @@ export async function fileToAttachment(file: File): Promise<Attachment> {
   }
 
   if (kind === "image") {
-    // 图片: FileReader → base64 (gateway 拼 data URI 给 vision 模型)
+    // 图片: FileReader → base64 (in-memory, 当轮 send wire 用)
     const dataUri = await new Promise<string>((resolve, reject) => {
       const r = new FileReader();
       r.onload = () => resolve(r.result as string);
@@ -110,12 +110,36 @@ export async function fileToAttachment(file: File): Promise<Attachment> {
     });
     const comma = dataUri.indexOf(",");
     const base64 = comma >= 0 ? dataUri.slice(comma + 1) : dataUri;
+
+    // P3.5.8 BL-FILE-SESSION-INDEX-V1 Phase 2 (6/16 鸿波): 落盘到
+    // ~/.catfish/uploads/, 拿 keptPath. 让 attachment_record 把 keptPath 也存到
+    // attachments.db, resume 时 attachment_load_base64 读回 base64 还原 attachments.
+    // 旧路径: image 只 in-memory base64 → 切走 session / 重启 Companion 后
+    // wire 里失踪, 小鲶看不到图编借口. 同步 await — chat send 前要这 keptPath.
+    // 失败软退化: keptPath=undefined, 当轮 send 仍带 in-memory base64 (UI 不挂),
+    // 但下次 resume 这张图就丢. console.warn 让员工 / 开发者知道.
+    let keptPath: string | undefined;
+    try {
+      const r = await invoke<{ keptPath: string; sizeBytes: number }>(
+        "attachment_save_image",
+        { base64Data: base64, filename: file.name || "pasted-image.png" },
+      );
+      keptPath = r.keptPath;
+    } catch (e) {
+      console.warn(
+        "[BL-FILE-SESSION-INDEX-V1 Phase 2] attachment_save_image 失败 — " +
+          "本轮 image 仍能发, 但 resume 后会丢:",
+        e,
+      );
+    }
+
     return {
       kind: "image",
       mimeType: file.type,
       name: file.name || "pasted-image.png",
       base64,
       sizeBytes: file.size,
+      keptPath,
     };
   }
 

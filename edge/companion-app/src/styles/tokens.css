@@ -29,6 +29,16 @@
   --status-err: #D9534F;          /* 略带暖意的红, 不刺眼 */
   --status-idle: #A8A29E;
 
+  /* —— Hint 卡 (画像中/刚认识你 等温和提示横条, AdvisorView ConfidenceHint 用) —— */
+  /* P3.4.E.9 (6/15 鸿波): 老 ConfidenceHint hardcode #1e3a8a / #92400e 在暗模式不可读.
+   *   蓝系 = 中置信度 (画像中); 琥珀系 = 低置信度 (刚认识你 cold start). */
+  --catfish-hint-blue-text: #1e3a8a;
+  --catfish-hint-blue-bg: rgba(37, 99, 235, 0.06);
+  --catfish-hint-blue-border: rgba(37, 99, 235, 0.25);
+  --catfish-hint-amber-text: #92400e;
+  --catfish-hint-amber-bg: rgba(146, 64, 14, 0.08);
+  --catfish-hint-amber-border: rgba(146, 64, 14, 0.25);
+
   /* —— 间距 —— */
   --space-1: 4px;
   --space-2: 8px;
@@ -63,5 +73,14 @@
     --catfish-border: #2E3F44;
     --catfish-text: #E8E4DC;        /* 暖米色文字, 不用纯白 */
     --catfish-text-muted: #8A9692;
+
+    /* P3.4.E.9 (6/15 鸿波): 暗模式 hint 横条 text 提亮 (深蓝→亮蓝, 深棕→亮琥珀),
+     * bg/border 透明度调高让暗底对比清楚. 跟 --catfish-cyan 提亮策略一致. */
+    --catfish-hint-blue-text: #93c5fd;    /* tailwind blue-300, 暗底可读 */
+    --catfish-hint-blue-bg: rgba(59, 130, 246, 0.14);
+    --catfish-hint-blue-border: rgba(96, 165, 250, 0.40);
+    --catfish-hint-amber-text: #fbbf24;   /* tailwind amber-400, 暗底可读 */
+    --catfish-hint-amber-bg: rgba(245, 158, 11, 0.14);
+    --catfish-hint-amber-border: rgba(251, 191, 36, 0.40);
   }
 }

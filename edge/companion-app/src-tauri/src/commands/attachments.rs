@@ -21,10 +21,19 @@
 //!   - attachment_delete_by_user: 离职清理整 user 所有附件 (X-Catfish-User 限定)
 //!
 //! Phase 2 (tool-bridge 那边) 会读这个 db 做跨会话 BM25 搜.
+//!
+//! P3.5.8 (6/16 鸿波 BL-FILE-SESSION-INDEX-V1 Phase 2 真补): 加 attachment_load_base64
+//! 命令读 keptPath 转 base64. 让 sessionMessages.ts resume 时把图片还原到
+//! message.attachments, chatWire.toWire 看到 attachments 才走 multipart 分支带
+//! image_url 给上游 LLM 看. Phase 1 (5/30) 只持久化 metadata 不还原 base64, 切走
+//! session / 重启 Companion 后历史图片在 wire 里全失踪, gateway 看到 user_multipart=0,
+//! 小鲶真没看到图编借口糊弄 ("X-Catfish-User 认证头" 类). 私有 Qwen3.5 122B /
+//! Qwen3-VL 30B 都 supports_vision=true, 锅在客户端 wire 链路.
 
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use base64::Engine;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
@@ -450,6 +459,149 @@ pub async fn attachment_delete_by_user(
         Ok::<AttachmentDeleteByUserOutput, String>(AttachmentDeleteByUserOutput {
             rows_deleted,
             files_removed,
+        })
+    })
+    .await
+    .map_err(|e| format!("内部错误: {e}"))?
+}
+
+// ============================================================
+// P3.5.8 Phase 2: image 落盘 + 从 keptPath 读 base64
+// ============================================================
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentSaveImageOutput {
+    /// 持久化到 ~/.catfish/uploads/<ts>-<safe-name> 的绝对路径.
+    /// 写入 attachments.db keptPath 字段, resume 时 attachment_load_base64 读这个路径还原 base64.
+    pub kept_path: String,
+    pub size_bytes: u64,
+}
+
+/// 把 base64 image 写到 ~/.catfish/uploads/, 返 keptPath.
+///
+/// attachmentHelpers.ts image 分支调一次. 之前 image 只 in-memory base64 → 切走 session
+/// 后 wire 里失踪. 现在跟 file attachment 同款 — 落盘 + 写 attachments.db keptPath,
+/// resume 时 sessionMessages.loadSessionMessagesAsChatAsync → attachment_load_base64
+/// 读回 base64 填回 message.attachments, wire 重新带 image_url 给 vision LLM.
+///
+/// 文件名: `<unix-ts>-<safe-name>`. ts 防同名覆盖, safe-name 砍 / \ \0 防注入.
+///
+/// size 上限 20MB (跟 attachment_load_base64 一致).
+#[tauri::command(rename_all = "camelCase")]
+pub async fn attachment_save_image(
+    base64_data: String,
+    filename: String,
+) -> Result<AttachmentSaveImageOutput, String> {
+    tokio::task::spawn_blocking(move || {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(base64_data.trim())
+            .map_err(|e| format!("base64 解码失败: {e}"))?;
+        let size_bytes = bytes.len() as u64;
+        const MAX_BYTES: u64 = 20 * 1024 * 1024;
+        if size_bytes > MAX_BYTES {
+            return Err(format!(
+                "图片 {} bytes 超过 20MB 上限, 拒收",
+                size_bytes
+            ));
+        }
+        if bytes.is_empty() {
+            return Err("空图片".to_string());
+        }
+
+        let home = home_dir().ok_or_else(|| "找不到 home 目录".to_string())?;
+        let uploads_dir = home.join(".catfish").join("uploads");
+        std::fs::create_dir_all(&uploads_dir)
+            .map_err(|e| format!("建 uploads dir 失败: {e}"))?;
+
+        let safe = filename
+            .replace(['/', '\\', '\0'], "_")
+            .chars()
+            .take(120)  // 防超长 filename 撞 ext4 / apfs 上限
+            .collect::<String>();
+        let safe = if safe.is_empty() { "pasted-image.png".to_string() } else { safe };
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        // 加 nanos 防同秒多次粘贴撞名
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
+        let kept = uploads_dir.join(format!("{ts}-{nanos}-{safe}"));
+
+        std::fs::write(&kept, &bytes).map_err(|e| format!("写 image 失败: {e}"))?;
+
+        Ok::<AttachmentSaveImageOutput, String>(AttachmentSaveImageOutput {
+            kept_path: kept.to_string_lossy().to_string(),
+            size_bytes,
+        })
+    })
+    .await
+    .map_err(|e| format!("内部错误: {e}"))?
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentLoadBase64Output {
+    /// 文件 base64 编码 (不带 data: 前缀, 前端自己拼 `data:${mimeType};base64,${base64}`)
+    pub base64: String,
+    /// 文件实际字节数 (sanity check: 跟 attachments.db 里 sizeBytes 对得上)
+    pub size_bytes: u64,
+}
+
+/// 从 keptPath 文件读字节 → base64 encode → 返前端拼 data URL.
+///
+/// 用途: BL-FILE-SESSION-INDEX-V1 Phase 2. session resume 时 sessionMessages.ts
+/// 对每条 image attachment 调一次, 把 base64 填回 ChatMessage.attachments,
+/// 让后续 toWire 走 multipart 分支带 image_url 给上游 LLM.
+///
+/// 安全:
+///   - 路径必须在 ~/.catfish/uploads/ 下 (防员工传任意路径让 Companion 读敏感文件)
+///   - 文件 size 上限 20MB (image 一般 < 5MB, 给宽裕; 防误读巨大 file 内存爆)
+#[tauri::command(rename_all = "camelCase")]
+pub async fn attachment_load_base64(
+    kept_path: String,
+) -> Result<AttachmentLoadBase64Output, String> {
+    tokio::task::spawn_blocking(move || {
+        // 路径白名单: 必须在 ~/.catfish/uploads/ 下 (Companion 自己存的)
+        let home = home_dir().ok_or_else(|| "找不到 home 目录".to_string())?;
+        let uploads_root = home.join(".catfish").join("uploads");
+        let path = PathBuf::from(&kept_path);
+        let canonical = path
+            .canonicalize()
+            .map_err(|e| format!("路径不存在或无法访问: {kept_path} ({e})"))?;
+        let uploads_canonical = uploads_root
+            .canonicalize()
+            .map_err(|e| format!("~/.catfish/uploads/ 不存在: {e}"))?;
+        if !canonical.starts_with(&uploads_canonical) {
+            return Err(format!(
+                "拒载 — 路径不在 ~/.catfish/uploads/ 白名单内: {}",
+                canonical.display()
+            ));
+        }
+
+        // size 上限 20MB
+        let meta = std::fs::metadata(&canonical)
+            .map_err(|e| format!("读 metadata 失败: {e}"))?;
+        let size_bytes = meta.len();
+        const MAX_BYTES: u64 = 20 * 1024 * 1024;
+        if size_bytes > MAX_BYTES {
+            return Err(format!(
+                "文件 {} bytes 超过 20MB 上限, 拒载",
+                size_bytes
+            ));
+        }
+
+        // 读 + base64
+        let bytes = std::fs::read(&canonical)
+            .map_err(|e| format!("读文件失败: {e}"))?;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+
+        Ok::<AttachmentLoadBase64Output, String>(AttachmentLoadBase64Output {
+            base64: b64,
+            size_bytes,
         })
     })
     .await

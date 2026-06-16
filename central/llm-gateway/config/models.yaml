@@ -152,7 +152,7 @@ models:
       #   curl https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions \
       #     -H "Authorization: Bearer $DASHSCOPE_API_KEY" \
       #     -d '{"model":"qwen3.6-max-preview","messages":[{"role":"user","content":"hi"}]}'
-      model: openai/qwen3.7-max-2026-05-20
+      model: openai/qwen3.7-plus-2026-05-26
       api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
       api_key_env: DASHSCOPE_API_KEY
       timeout: 90  # 多模态请求图像/视频处理偏慢, 给宽裕
@@ -204,7 +204,17 @@ models:
 
     upstream:
       model: deepseek/deepseek-v4-flash
-      api_base: https://api.deepseek.com/v1
+      # P3.4.E (6/15 鸿波): /v1 → /beta 启 chat prefix completion + 严格 tool_choice 透传.
+      #   真因: advisor "reasoning out loud" 顽疾 (P3.4.9/.10/.C 累积都治标), 真根治路径 =
+      #   advisor.ts Call 2 single-shot + tool_choice={type:function,function:submit_advisor_result}
+      #   强制 LLM 返结构化 tool_calls (100% JSON). 但 /v1 production endpoint 对 specific-function
+      #   tool_choice 支持弱, /beta 完整支持 (LiteLLM deepseek/chat/transformation.py:100 默认 beta).
+      #   profile.ts 同款修. catfish-gateway 这里改 endpoint 让 LiteLLM 透传整个 OpenAI 协议给 beta.
+      #
+      #   风险: 5/5 BL-D11+ thinking mode reasoning_content 透传 bug. 当时迫使关 thinking + 改 v1
+      #   双保险. 但 thinking 仍 disabled (下面 param_overrides), 即使切 beta 也不触发 thinking 路径,
+      #   reasoning_content bug 不复现. /v1 → /beta 改动隔离, 不再退路.
+      api_base: https://api.deepseek.com/beta
       api_key_env: DEEPSEEK_API_KEY
       timeout: 90
       # 5/5 BL-D11+ 鸿波报: deepseek thinking mode 多轮对话 (含 tool call) 时
@@ -302,57 +312,57 @@ models:
   # 注: catalog 内部 name 保留 'nvidia-llama' 不改 — 避免动 5 处 fallback chain
   # 引用导致 startup warn. display_name 用真实模型名 (GLM-5.1).
   # 长期: 如果要新加真 Llama, 用 catfish-public-nvidia-llama-real 或类似新 name.
-  - name: catfish-public-nvidia-llama
-    tier: public
-    display_name: "DeepSeek V4 Flash (NVIDIA NIM) · 客户内网同款备胎（公共付费）"
-    mode: chat
+  # - name: catfish-public-nvidia-llama
+  #   tier: public
+  #   display_name: "DeepSeek V4 Flash (NVIDIA NIM) · 客户内网同款备胎（公共付费）"
+  #   mode: chat
 
-    upstream:
-      # 5/15 22:10-22:25 鸿波实测演进:
-      #   v1 glm-5.1                            → 63K prompt TTFT 145s, 太慢
-      #   v2 meta/llama-3.3-70b-instruct        → "太老的模型不能用"
-      #   v3 qwen3-235b-a22b-instruct-2507      → 404 不存在 (我编的 ID)
-      #   v4 qwen3.5-397b-a17b                  → "一点反应都没有",
-      #     NVIDIA 免费 tier 可能排队等很久 / 资源不够
-      #   v5 (历史) qwen/qwen3.5-122b-a10b      → **NIM 上没有这个 model id, silent 404**,
-      #     之后被改成 minimaxai/minimax-m2.7 应急, display_name 没同步, 长期不一致.
-      #   v6 (5/24, 现在) deepseek-ai/deepseek-v4-flash
-      #     ✓ **跟客户内网 catfish-private-deepseek-flash 同款** —
-      #       客户开始用 DeepSeek V4, NIM 上也有同名, demo 故事直接走通.
-      #     ✓ 备胎语义最干净: "客户内网挂了, NVIDIA NIM 上同款 DeepSeek V4 Flash 接管"
-      #     ✓ 国央企接受度: 已经在 catfish-private-deepseek-flash 落了的客户, 这里
-      #       同 model id, 输出风格一致, 切过来不需要 retest.
-      #     ✓ DeepSeek 在 NIM 上 v4-flash 起步快, 不像 Qwen 122B 那样排长队.
-      #
-      # 设计思路: 备胎 = 同型号公网托管, 不是"更强的兜底". 体验一致最重要,
-      # demo 故事: "客户内网挂了, 公网 NVIDIA NIM 上有同款 DeepSeek V4 Flash 接管,
-      # 业务不中断". 比"切 Llama / 切 Gemini" 卖点强 — 客户 IT 听得懂同型号备胎.
-      #
-      # catalog 内部 name 仍叫 'nvidia-llama' — 历史命名, 改名会破坏 state.db /
-      # 历史 session 的 model id 引用. display_name 已对齐真实模型.
-      model: nvidia_nim/deepseek-ai/deepseek-v4-flash
-      api_base: https://integrate.api.nvidia.com/v1
-      api_key_env: NVIDIA_API_KEY
-      # DeepSeek V4 Flash 在 NIM 上 TTFT 通常 1-3s, 给 90s 足够.
-      timeout: 90
+  #   upstream:
+  #     # 5/15 22:10-22:25 鸿波实测演进:
+  #     #   v1 glm-5.1                            → 63K prompt TTFT 145s, 太慢
+  #     #   v2 meta/llama-3.3-70b-instruct        → "太老的模型不能用"
+  #     #   v3 qwen3-235b-a22b-instruct-2507      → 404 不存在 (我编的 ID)
+  #     #   v4 qwen3.5-397b-a17b                  → "一点反应都没有",
+  #     #     NVIDIA 免费 tier 可能排队等很久 / 资源不够
+  #     #   v5 (历史) qwen/qwen3.5-122b-a10b      → **NIM 上没有这个 model id, silent 404**,
+  #     #     之后被改成 minimaxai/minimax-m2.7 应急, display_name 没同步, 长期不一致.
+  #     #   v6 (5/24, 现在) deepseek-ai/deepseek-v4-flash
+  #     #     ✓ **跟客户内网 catfish-private-deepseek-flash 同款** —
+  #     #       客户开始用 DeepSeek V4, NIM 上也有同名, demo 故事直接走通.
+  #     #     ✓ 备胎语义最干净: "客户内网挂了, NVIDIA NIM 上同款 DeepSeek V4 Flash 接管"
+  #     #     ✓ 国央企接受度: 已经在 catfish-private-deepseek-flash 落了的客户, 这里
+  #     #       同 model id, 输出风格一致, 切过来不需要 retest.
+  #     #     ✓ DeepSeek 在 NIM 上 v4-flash 起步快, 不像 Qwen 122B 那样排长队.
+  #     #
+  #     # 设计思路: 备胎 = 同型号公网托管, 不是"更强的兜底". 体验一致最重要,
+  #     # demo 故事: "客户内网挂了, 公网 NVIDIA NIM 上有同款 DeepSeek V4 Flash 接管,
+  #     # 业务不中断". 比"切 Llama / 切 Gemini" 卖点强 — 客户 IT 听得懂同型号备胎.
+  #     #
+  #     # catalog 内部 name 仍叫 'nvidia-llama' — 历史命名, 改名会破坏 state.db /
+  #     # 历史 session 的 model id 引用. display_name 已对齐真实模型.
+  #     model: nvidia_nim/deepseek-ai/deepseek-v4-flash
+  #     api_base: https://integrate.api.nvidia.com/v1
+  #     api_key_env: NVIDIA_API_KEY
+  #     # DeepSeek V4 Flash 在 NIM 上 TTFT 通常 1-3s, 给 90s 足够.
+  #     timeout: 90
 
-    context_window: 131072  # NIM 实测 max_model_len=131072 (128K)
-    # BL-MAX-OUTPUT-TOKENS (5/24 鸿波实盘补): NVIDIA NIM 所有 chat model 的
-    # max_tokens 上限 = max_model_len = 131072 (128K). curl 探测 5/24 09:30:
-    #   "max_tokens=999999 cannot be greater than max_model_len=max_total_tokens=131072"
-    # 注意是 *total* 上限 (prompt + completion), 不是 *单独* output 上限. dyn
-    # 算法 cw - prompt - safety 已经覆盖, 这里设 131072 是双保险 + 防 picker 选
-    # 老 model 时大 prompt 撞 400.
-    max_output_tokens: 1000000
-    supports_tool_use: true
-    supports_streaming: true
-    # DeepSeek V4 Flash 是纯文本 (跟 catfish-public-deepseek-flash 同), 不支持视觉
-    supports_vision: false
-    # BL-NVIDIA-NIM-MANUAL-ONLY (5/15 22:55 鸿波): 'fallback' 标签也去掉 — NVIDIA 不
-     # 当任何用例的兜底, 也不被 picker / fallback 选, 只能员工/客户在 companion 模型
-     # 选择器手选. 推理 / 长指令场景从这清单挪走, 实际由内网 main + gemini-pro 兜.
-    recommended_for: [client_demo_optional]
-    cost_tier: paid
+  #   context_window: 131072  # NIM 实测 max_model_len=131072 (128K)
+  #   # BL-MAX-OUTPUT-TOKENS (5/24 鸿波实盘补): NVIDIA NIM 所有 chat model 的
+  #   # max_tokens 上限 = max_model_len = 131072 (128K). curl 探测 5/24 09:30:
+  #   #   "max_tokens=999999 cannot be greater than max_model_len=max_total_tokens=131072"
+  #   # 注意是 *total* 上限 (prompt + completion), 不是 *单独* output 上限. dyn
+  #   # 算法 cw - prompt - safety 已经覆盖, 这里设 131072 是双保险 + 防 picker 选
+  #   # 老 model 时大 prompt 撞 400.
+  #   max_output_tokens: 1000000
+  #   supports_tool_use: true
+  #   supports_streaming: true
+  #   # DeepSeek V4 Flash 是纯文本 (跟 catfish-public-deepseek-flash 同), 不支持视觉
+  #   supports_vision: false
+  #   # BL-NVIDIA-NIM-MANUAL-ONLY (5/15 22:55 鸿波): 'fallback' 标签也去掉 — NVIDIA 不
+  #    # 当任何用例的兜底, 也不被 picker / fallback 选, 只能员工/客户在 companion 模型
+  #    # 选择器手选. 推理 / 长指令场景从这清单挪走, 实际由内网 main + gemini-pro 兜.
+  #   recommended_for: [client_demo_optional]
+  #   cost_tier: paid
 
     # BL-NVIDIA-NIM-MANUAL-ONLY (5/15 22:55 鸿波 'NVIDIA 都不要 fallback, 只手选'):
     # 删 fallback 块 — NVIDIA 跪了直接报客户端, 不绕弯到其他公网. 语义:
@@ -361,50 +371,50 @@ models:
     #     "gateway 静默切到 DashScope 看起来一切正常" — 那等于骗自己
     # 历史 fallback chain (qwen-flash → deepseek → gemini) 完全删掉, 不再绕.
 
-  # ---------- 公共 · NVIDIA Nemotron Super 49B（推理 + 长指令跟随） ----------
-  # NVIDIA 在 Llama 3.3 基础上自己微调的 reasoning 模型
-  # 用途: 复合任务 plan-execute / 长指令跟随 (花叔 60KB SKILL.md 这种)
-  - name: catfish-public-nvidia-nemotron
-    tier: public
-    display_name: "Nemotron Super 49B v1.5 (NVIDIA NIM) · 推理增强（公共付费）"
-    mode: chat
+  # # ---------- 公共 · NVIDIA Nemotron Super 49B（推理 + 长指令跟随） ----------
+  # # NVIDIA 在 Llama 3.3 基础上自己微调的 reasoning 模型
+  # # 用途: 复合任务 plan-execute / 长指令跟随 (花叔 60KB SKILL.md 这种)
+  # - name: catfish-public-nvidia-nemotron
+  #   tier: public
+  #   display_name: "Nemotron Super 49B v1.5 (NVIDIA NIM) · 推理增强（公共付费）"
+  #   mode: chat
 
-    upstream:
-      # 5/15 22:14: 升 v1 → v1.5 (NVIDIA list 里两个都有), NVIDIA 在 Llama 3.3
-      # 上加推理的更新版. Nemotron 系列负责"推理强"场景, Qwen3.5 397B 负责
-      # "国产 + 通用主力" 场景.
-      # 5/24 (鸿波): 历史漂移修. 不知何时这条被改成 minimaxai/minimax-m2.7, display
-      # 跟实际 model 完全不符 (员工选"Nemotron 推理增强"得到 minimax 输出风格).
-      # curl https://integrate.api.nvidia.com/v1/models 确认真名是
-      # 'nvidia/llama-3.3-nemotron-super-49b-v1.5', 改回.
-      model: nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5
-      api_base: https://integrate.api.nvidia.com/v1
-      api_key_env: NVIDIA_API_KEY
-      # reasoning 模型偏慢, 给宽裕 timeout
-      timeout: 180
+  #   upstream:
+  #     # 5/15 22:14: 升 v1 → v1.5 (NVIDIA list 里两个都有), NVIDIA 在 Llama 3.3
+  #     # 上加推理的更新版. Nemotron 系列负责"推理强"场景, Qwen3.5 397B 负责
+  #     # "国产 + 通用主力" 场景.
+  #     # 5/24 (鸿波): 历史漂移修. 不知何时这条被改成 minimaxai/minimax-m2.7, display
+  #     # 跟实际 model 完全不符 (员工选"Nemotron 推理增强"得到 minimax 输出风格).
+  #     # curl https://integrate.api.nvidia.com/v1/models 确认真名是
+  #     # 'nvidia/llama-3.3-nemotron-super-49b-v1.5', 改回.
+  #     model: nvidia_nim/nvidia/llama-3.3-nemotron-super-49b-v1.5
+  #     api_base: https://integrate.api.nvidia.com/v1
+  #     api_key_env: NVIDIA_API_KEY
+  #     # reasoning 模型偏慢, 给宽裕 timeout
+  #     timeout: 180
 
-    # 5/24 鸿波实盘修: 老配 context_window: 4096 是离谱的小 (NVIDIA NIM Nemotron
-    # 真实 max_model_len = 131072 = 128K, curl probe 5/24 09:30 实测确认).
-    # 4K 上下文意味着员工只要发稍长一点的 prompt 就 400, 这就是为啥"经常都不行".
-    context_window: 131072
-    # BL-MAX-OUTPUT-TOKENS (5/24 鸿波实盘补): NVIDIA NIM 所有 chat model 同款 cap.
-    #   "max_tokens=999999 cannot be greater than max_model_len=max_total_tokens=131072"
-    max_output_tokens: 131072
-    # BL-NEMOTRON-NO-TOOL-USE (5/24 鸿波实盘 "现在怎么都无法打开网页"): 改 false.
-    # 原因: Nemotron Super 49B v1.5 是 reasoning 模型, 即便 NVIDIA 文档说"支持
-    # function calling", 实际行为是模型把 tool call 当文字写进 reasoning_content
-    # 或 content (e.g. '[{"name":"browser_navigate","arguments":{...}}]' 当文本),
-    # 不走 OpenAI 标准 tool_calls 结构. Companion 收到"纯文字", 不执行工具, 浏览器
-    # 永远停 about:blank, 员工以为"打不开网页".
-    # 标 false 后 picker 选 Nemotron 时, gateway / chat.ts 不传 tools 参数 → 模型
-    # 不再尝试塞工具 → 当纯推理 model 用 (它真正擅长的事).
-    supports_tool_use: false
-    supports_streaming: true
-    supports_vision: false
-    # BL-NEMOTRON-NO-TOOL-USE (5/24): recommended_for 窄化, 防止任何"工具型"
-    # 用例自动挑中它. 只用于纯文本推理 / 长指令场景.
-    recommended_for: [pure_reasoning, complex_reasoning_no_tool]
-    cost_tier: paid
+  #   # 5/24 鸿波实盘修: 老配 context_window: 4096 是离谱的小 (NVIDIA NIM Nemotron
+  #   # 真实 max_model_len = 131072 = 128K, curl probe 5/24 09:30 实测确认).
+  #   # 4K 上下文意味着员工只要发稍长一点的 prompt 就 400, 这就是为啥"经常都不行".
+  #   context_window: 131072
+  #   # BL-MAX-OUTPUT-TOKENS (5/24 鸿波实盘补): NVIDIA NIM 所有 chat model 同款 cap.
+  #   #   "max_tokens=999999 cannot be greater than max_model_len=max_total_tokens=131072"
+  #   max_output_tokens: 131072
+  #   # BL-NEMOTRON-NO-TOOL-USE (5/24 鸿波实盘 "现在怎么都无法打开网页"): 改 false.
+  #   # 原因: Nemotron Super 49B v1.5 是 reasoning 模型, 即便 NVIDIA 文档说"支持
+  #   # function calling", 实际行为是模型把 tool call 当文字写进 reasoning_content
+  #   # 或 content (e.g. '[{"name":"browser_navigate","arguments":{...}}]' 当文本),
+  #   # 不走 OpenAI 标准 tool_calls 结构. Companion 收到"纯文字", 不执行工具, 浏览器
+  #   # 永远停 about:blank, 员工以为"打不开网页".
+  #   # 标 false 后 picker 选 Nemotron 时, gateway / chat.ts 不传 tools 参数 → 模型
+  #   # 不再尝试塞工具 → 当纯推理 model 用 (它真正擅长的事).
+  #   supports_tool_use: false
+  #   supports_streaming: true
+  #   supports_vision: false
+  #   # BL-NEMOTRON-NO-TOOL-USE (5/24): recommended_for 窄化, 防止任何"工具型"
+  #   # 用例自动挑中它. 只用于纯文本推理 / 长指令场景.
+  #   recommended_for: [pure_reasoning, complex_reasoning_no_tool]
+  #   cost_tier: paid
 
     # BL-NVIDIA-NIM-MANUAL-ONLY (5/15 22:55 鸿波 'NVIDIA 都不要 fallback, 只手选'):
     # 删 fallback 块 — 跪了直接报客户端. 同 nvidia-llama 同段注释.
@@ -462,50 +472,50 @@ models:
   # 同款思路: 客户基建调研模型独立, 不混进自动切换链.
   #
   # 5/23 鸿波拍板: 主手选, 不入 fallback 链 ('demo 时要客户看得清现在用什么').
-  - name: catfish-public-groq-gptoss-120b
-    tier: public
-    display_name: "gpt-oss-120b · Groq 高速推理（公共付费）"
-    mode: chat
+  # - name: catfish-public-groq-gptoss-120b
+  #   tier: public
+  #   display_name: "gpt-oss-120b · Groq 高速推理（公共付费）"
+  #   mode: chat
 
-    upstream:
-      # LiteLLM Groq provider: prefix=groq/, 后接 Groq 的 model_id.
-      # Groq 把 OpenAI 开源 gpt-oss 命名为 'openai/gpt-oss-120b' (provider 命名空间).
-      # 完整 LiteLLM 名: groq/openai/gpt-oss-120b. 没 api_base — LiteLLM 自带
-      # https://api.groq.com/openai/v1.
-      model: groq/openai/gpt-oss-120b
-      api_key_env: GROQ_API_KEY
-      # Groq LPU 通常很快, 60s 足够; reasoning 模式 high effort 稍慢, 给 90s 保险.
-      timeout: 90
+  #   upstream:
+  #     # LiteLLM Groq provider: prefix=groq/, 后接 Groq 的 model_id.
+  #     # Groq 把 OpenAI 开源 gpt-oss 命名为 'openai/gpt-oss-120b' (provider 命名空间).
+  #     # 完整 LiteLLM 名: groq/openai/gpt-oss-120b. 没 api_base — LiteLLM 自带
+  #     # https://api.groq.com/openai/v1.
+  #     model: groq/openai/gpt-oss-120b
+  #     api_key_env: GROQ_API_KEY
+  #     # Groq LPU 通常很快, 60s 足够; reasoning 模式 high effort 稍慢, 给 90s 保险.
+  #     timeout: 90
 
-    context_window: 131072  # 128K
-    # BL-MAX-OUTPUT-TOKENS (5/23 鸿波实盘补): Groq gpt-oss-120b context 128K, 但单次
-    # output 上限 65536 (跟 Gemini 同档). 第一次跑撞 400:
-    #   "max_tokens must be less than or equal to 65536, the maximum value for
-    #    max_tokens is less than the context_window for this model"
-    # dyn 算法默认拿 cw=128K 算 ~128K, 超 Groq 单次 cap. 直接配 65536, dyn 会自动
-    # clip 到 min(cw, max_output_tokens).
-    max_output_tokens: 65536
-    supports_tool_use: true
-    supports_streaming: true
-    supports_vision: false
-    # 跟 nvidia-llama / nemotron 同款 manual-only 标签: 'client_demo_optional'
-    # 表示 picker 里能选, 但不被推理/通用任何场景自动挑中.
-    recommended_for: [client_demo_optional]
-    cost_tier: paid
+  #   context_window: 131072  # 128K
+  #   # BL-MAX-OUTPUT-TOKENS (5/23 鸿波实盘补): Groq gpt-oss-120b context 128K, 但单次
+  #   # output 上限 65536 (跟 Gemini 同档). 第一次跑撞 400:
+  #   #   "max_tokens must be less than or equal to 65536, the maximum value for
+  #   #    max_tokens is less than the context_window for this model"
+  #   # dyn 算法默认拿 cw=128K 算 ~128K, 超 Groq 单次 cap. 直接配 65536, dyn 会自动
+  #   # clip 到 min(cw, max_output_tokens).
+  #   max_output_tokens: 65536
+  #   supports_tool_use: true
+  #   supports_streaming: true
+  #   supports_vision: false
+  #   # 跟 nvidia-llama / nemotron 同款 manual-only 标签: 'client_demo_optional'
+  #   # 表示 picker 里能选, 但不被推理/通用任何场景自动挑中.
+  #   recommended_for: [client_demo_optional]
+  #   cost_tier: paid
 
-    # 6/7 BL-GROQ-TPM-PREFLIGHT (鸿波 22:43 撞 413): Groq Free Plan 限速.
-    # 官方 docs: https://console.groq.com/docs/rate-limits
-    # context 128K 但 Free TPM 只 8K — 单次大 prompt 立马 413. preflight check
-    # 在 chat completion 前估 token, 超就直接返友好 413 + 替代 model 建议.
-    # 升 Dev Tier 60K TPM 后改 tier: "groq-dev" + tpm: 60000.
-    rate_limits:
-      tpm: 8000        # tokens / min — 关键限制
-      rpm: 30          # requests / min
-      rpd: 1000        # requests / day
-      tpd: 200000      # tokens / day
-      tier: "groq-free"
+  #   # 6/7 BL-GROQ-TPM-PREFLIGHT (鸿波 22:43 撞 413): Groq Free Plan 限速.
+  #   # 官方 docs: https://console.groq.com/docs/rate-limits
+  #   # context 128K 但 Free TPM 只 8K — 单次大 prompt 立马 413. preflight check
+  #   # 在 chat completion 前估 token, 超就直接返友好 413 + 替代 model 建议.
+  #   # 升 Dev Tier 60K TPM 后改 tier: "groq-dev" + tpm: 60000.
+  #   rate_limits:
+  #     tpm: 8000        # tokens / min — 关键限制
+  #     rpm: 30          # requests / min
+  #     rpd: 1000        # requests / day
+  #     tpd: 200000      # tokens / day
+  #     tier: "groq-free"
 
-    # 故意**不配 fallback 块** — 跟 nvidia-llama / nemotron 同款 BL-NVIDIA-NIM-MANUAL-ONLY
-    # 思路: 客户基建调研模型, 跪了直接报客户端, 不绕弯到其他公网. 防 demo 时
-    # 'Groq 失败但 gateway 静默切到 DashScope, 客户以为 Groq 跑得很好'.
+  #   # 故意**不配 fallback 块** — 跟 nvidia-llama / nemotron 同款 BL-NVIDIA-NIM-MANUAL-ONLY
+  #   # 思路: 客户基建调研模型, 跪了直接报客户端, 不绕弯到其他公网. 防 demo 时
+  #   # 'Groq 失败但 gateway 静默切到 DashScope, 客户以为 Groq 跑得很好'.
 

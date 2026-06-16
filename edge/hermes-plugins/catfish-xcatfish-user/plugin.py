@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import urlparse
 
 logger = logging.getLogger("catfish.xcatfish_user.plugin")
@@ -348,6 +348,289 @@ def _apply_patches() -> None:
     _patch_p14_approve_chinese_alias()
     _patch_p15_chat_completions_approval()
     _patch_p15_2_chat_approval_route()
+    # P3.4.C 6/15 鸿波: hard replace session_search. 用 try/except 包住 — P16 挂也不
+    #   阻塞 hermes 启动 (鸿波 6/15 21:35 撞 hermes 起不来 "Could not connect", 真因
+    #   推测是 P16 抛异常导致 _apply_patches 整体挂). P3.4.C fail-safe 设计.
+    try:
+        _patch_p16_session_search()
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "P16: _patch_p16_session_search 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
+            e, exc_info=True,
+        )
+    # P3.4.D 6/15 鸿波: bg-review HTTP 400 X-Catfish-User missing — patch AIAgent.__init__
+    #   post-init, bg-review review_agent 从 session_registry 拿 parent cf_user 注入.
+    try:
+        _patch_p17_bg_review_inject()
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "P17: _patch_p17_bg_review_inject 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
+            e, exc_info=True,
+        )
+
+
+# ── P16 (P3.4.C 6/15 鸿波: session_search 76s → 340ms) ──────────────────
+
+def _patch_p16_session_search() -> None:
+    """直接替换 tools.session_search_tool.session_search 函数本体.
+
+    # 真因 (鸿波 ~/.hermes/logs/agent.log)
+    hermes 原生 session_search 的 _discover mode 76-101s, 改 hard monkey-patch
+    走 catfish 340ms 快版 (跟 P1-P15 同模式).
+
+    # 路由
+    - discovery (query 非空, 无 session_id/around_message_id/profile) → catfish 快版
+    - scroll / read / browse / cross-profile → fallback 原 hermes session_search
+
+    # P3.4.C fail-safe
+    **整个函数体外层 try/except** — patch 失败也不阻塞 hermes 启动 (鸿波 6/15 21:35
+    撞 "Could not connect to the server" hermes 起不来, 真因可能是 P16 抛异常导
+    致 _apply_patches 整体挂). fail-silent 退化到 hermes 原生 76s.
+    """
+    try:
+        from tools import session_search_tool
+    except ImportError as e:
+        logger.warning("P16: tools.session_search_tool import 不到, 跳过: %s", e)
+        return
+
+    try:
+        _orig_session_search = session_search_tool.session_search
+    except AttributeError as e:
+        logger.error(
+            "P16: tools.session_search_tool 没 session_search 属性 (hermes 升级改了模块结构?), 跳过: %s",
+            e,
+        )
+        return
+
+    # 懒加载 session_search_router (避免 import-time 循环依赖, 跟 memory_router 同模式)
+    try:
+        from pathlib import Path as _Path  # noqa: PLC0415
+        import importlib.util as _iu  # noqa: PLC0415
+        _ssr_py = _Path(__file__).parent / "session_search_router.py"
+        _spec = _iu.spec_from_file_location(
+            "_catfish_xcatfish_user_session_search_router_p16", _ssr_py
+        )
+        if _spec is None or _spec.loader is None:
+            logger.error("P16: spec_from_file_location 返 None, 跳过 patch")
+            return
+        _ssr = _iu.module_from_spec(_spec)
+        _spec.loader.exec_module(_ssr)
+    except Exception as e:  # noqa: BLE001
+        logger.error("P16: session_search_router.py 加载失败, 跳过 patch: %s", e)
+        return
+
+    def patched_session_search(
+        query: str = "",
+        role_filter: Optional[str] = None,
+        limit: int = 3,
+        db: Any = None,
+        current_session_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        around_message_id: Optional[int] = None,
+        window: int = 5,
+        sort: Optional[str] = None,
+        profile: Optional[str] = None,
+    ) -> str:
+        """P3.4.C (6/15 鸿波): discovery 走 catfish 快版, 其他透传原生."""
+        # patched 函数内部的所有异常都 try/except 包住, 退化到原生.
+        try:
+            # 非 discovery (scroll / read / browse / cross-profile) → 透传原生
+            if session_id or around_message_id is not None or profile:
+                return _orig_session_search(
+                    query=query, role_filter=role_filter, limit=limit, db=db,
+                    current_session_id=current_session_id, session_id=session_id,
+                    around_message_id=around_message_id, window=window, sort=sort,
+                    profile=profile,
+                )
+            if not query or not isinstance(query, str) or not query.strip():
+                return _orig_session_search(
+                    query=query, role_filter=role_filter, limit=limit, db=db,
+                    current_session_id=current_session_id,
+                )
+
+            # Discovery → catfish 快版
+            try:
+                return _ssr._discovery_via_catfish(query.strip(), {"limit": limit})
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "P16 catfish 快版异常, fallback hermes 原生: %s", e, exc_info=True
+                )
+                return _orig_session_search(
+                    query=query, role_filter=role_filter, limit=limit, db=db,
+                    current_session_id=current_session_id,
+                )
+        except Exception as e:  # noqa: BLE001
+            # 兜底: patched 函数本身挂 (e.g. _orig_session_search 不接受某个 kwarg) →
+            # 不抛出, 返友好错误 JSON. 不阻塞 agent loop.
+            logger.error("P16 patched_session_search 顶层异常: %s", e, exc_info=True)
+            import json as _json  # noqa: PLC0415
+            return _json.dumps({
+                "success": False,
+                "error": f"P16 patched session_search 异常: {e}",
+                "_catfish_p16_fault": True,
+            }, ensure_ascii=False)
+
+    try:
+        session_search_tool.session_search = patched_session_search
+    except Exception as e:  # noqa: BLE001
+        # 极少: module 是 read-only / immutable — 不阻塞 hermes 启动
+        logger.error(
+            "P16: session_search_tool.session_search 赋值失败 (跳过 patch, 用 hermes 原生): %s",
+            e,
+        )
+        return
+
+    logger.info(
+        "catfish-xcatfish-user: P16 session_search hard patch ✓ "
+        "(P3.4.C: 76-101s → ~340ms discovery, scroll/read/browse 透传)"
+    )
+
+
+# ── P17 (P3.4.D 6/15 鸿波: bg-review HTTP 400 X-Catfish-User missing) ──
+
+def _patch_p17_bg_review_inject() -> None:
+    """patch AIAgent.__init__ post-init — bg-review review_agent 自动注 X-Catfish-User.
+
+    # 真因 (鸿波 6/15 ~/.hermes/logs/errors.log 反复出现)
+
+    "[api-XXX] agent.conversation_loop: API call failed (attempt 1/3)
+     error_type=BadRequestError thread=bg-review:NNN ... HTTP 400:
+     'service token (sub=client:hermes-cli) requires X-Catfish-User header
+     to identify on-behalf-of user'"
+
+    每次 advisor agent loop 跑完都触发, 浪费 1 次重试 + 污染 log.
+
+    # 真因路径 (audit ~/.hermes/hermes-agent/agent/background_review.py:402)
+
+    bg-review 走 `review_agent = AIAgent(...)` 直接构造, **不调 agent_init.init_agent**.
+    catfish-xcatfish-user 的 P1 wrap 的是 init_agent, bg-review 漏掉.
+
+    review_agent 没继承 parent agent 的 `_catfish_outgoing_user` 属性
+    (catfish 自己的属性, hermes init 不知道). resolver.resolve_for_agent 拿不到,
+    headers 不注入 X-Catfish-User, gateway 400.
+
+    # 修法
+
+    hook AIAgent.__init__ post-init:
+      1. 检测 thread name 含 "bg-review" → bg-review review_agent 场景
+      2. parent_session_id 不空 → session_registry.lookup 拿 parent cf_user
+      3. 设 self._catfish_outgoing_user = cf_user
+      4. 调 _apply_client_headers_for_base_url + _replace_primary_openai_client (跟 P1 同)
+      5. idempotent (检 _catfish_p17_injected 标记防重)
+      6. fail-safe (任一步挂不阻塞 AIAgent 构造)
+
+    主 chat agent (走 init_agent → P1 处理) 不受影响 — P17 仅在 bg-review thread 触发.
+    """
+    try:
+        from run_agent import AIAgent
+    except ImportError as e:
+        logger.warning("P17: run_agent.AIAgent import 不到, 跳过: %s", e)
+        return
+
+    try:
+        _orig_init = AIAgent.__init__
+    except AttributeError as e:
+        logger.error("P17: AIAgent 没 __init__ (hermes 升级?), 跳过: %s", e)
+        return
+
+    def patched_init(self: Any, *args: Any, **kwargs: Any) -> None:
+        # P3.4.D follow-up 1: 在 _orig_init 跑前抓 kwargs 里的 parent_session_id —
+        #   实测 hermes AIAgent.__init__ 接 parent_session_id kwarg (见 hermes
+        #   agent/background_review.py:402), 但**不存到 self.parent_session_id**.
+        #   下面 getattr 拿不到, 必须从 kwargs 直接抓 (在原 init 跑前抓, 防 kwargs 被 pop).
+        parent_session_id_from_kwargs = (kwargs.get("parent_session_id") or "")
+        if not isinstance(parent_session_id_from_kwargs, str):
+            parent_session_id_from_kwargs = ""
+
+        # 1. 先跑原 __init__
+        _orig_init(self, *args, **kwargs)
+
+        # 2. post-init bg-review 注入 (fail-safe — 任一步挂不阻塞)
+        try:
+            import threading  # noqa: PLC0415
+            thread_name = threading.current_thread().name or ""
+
+            # 只覆盖 bg-review thread, chat agent 走 P1 (init_agent post-hook)
+            if "bg-review" not in thread_name.lower():
+                return
+
+            # idempotent — 同 agent 多次 init 不要重复注入
+            if getattr(self, "_catfish_p17_injected", False):
+                return
+
+            # 优先 kwargs (hermes 不存 self.parent_session_id), fallback attribute
+            parent_session_id = parent_session_id_from_kwargs or (
+                getattr(self, "parent_session_id", "") or ""
+            )
+            if not parent_session_id:
+                logger.warning(
+                    "P17: bg-review thread '%s' review_agent 无 parent_session_id "
+                    "(kwargs 也无), 无法 lookup cf_user. session_id=%s. "
+                    "(hermes 升级改了 background_review.py 构造参数?)",
+                    thread_name,
+                    getattr(self, "session_id", "(unset)"),
+                )
+                return
+
+            cf_user = session_registry.lookup(parent_session_id)
+            if not cf_user:
+                # fallback (P3.4.D follow-up): 直接调 resolver.resolve_for_agent 走 5 步,
+                # 含 (e) env CATFISH_DEFAULT_USER 兜底. 这样即使 session_registry 没 register
+                # (chat agent 的 _current_main_runtime 没跑过), env 兜底也能注入.
+                cf_user = resolver.resolve_for_agent(self)
+                if cf_user:
+                    logger.info(
+                        "P17: bg-review parent_session=%s session_registry 没 cf_user, "
+                        "resolver fallback 拿到: %s",
+                        parent_session_id[:12], cf_user,
+                    )
+                else:
+                    import os as _os  # noqa: PLC0415
+                    logger.warning(
+                        "P17: bg-review 拿不到 cf_user — session_registry.lookup('%s')=None, "
+                        "resolver.resolve_for_agent 也 None (CATFISH_DEFAULT_USER=%r). "
+                        "chat agent 这条路径可能没 register cf_user (e.g. advisor companion-internal "
+                        "走 service token skip_identity, 没设 _catfish_outgoing_user). "
+                        "set env CATFISH_DEFAULT_USER 或确认 P2 cf_user 注入路径",
+                        parent_session_id[:12],
+                        _os.environ.get("CATFISH_DEFAULT_USER", "(unset)"),
+                    )
+                    return
+
+            # 真注入 — 跟 P1 同 2 步: 设 attr + 调 2 个 method
+            self._catfish_outgoing_user = cf_user
+            if hasattr(self, "_apply_client_headers_for_base_url"):
+                self._apply_client_headers_for_base_url(
+                    str(getattr(self, "base_url", "") or "")
+                )
+            if hasattr(self, "_replace_primary_openai_client"):
+                self._replace_primary_openai_client(
+                    reason="catfish_xcatfish_user_p17_bg_review_inject"
+                )
+            self._catfish_p17_injected = True
+            logger.info(
+                "P17: bg-review review_agent X-Catfish-User 注入 ✓ "
+                "(cf_user=%s, parent_session=%s, thread=%s)",
+                cf_user,
+                parent_session_id[:12],
+                thread_name,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "P17: bg-review X-Catfish-User 注入异常 (不阻塞 agent 构造): %s",
+                e, exc_info=True,
+            )
+
+    try:
+        AIAgent.__init__ = patched_init
+    except Exception as e:  # noqa: BLE001
+        logger.error("P17: AIAgent.__init__ 赋值失败 (跳过 patch): %s", e)
+        return
+
+    logger.info(
+        "catfish-xcatfish-user: P17 bg-review X-Catfish-User 注入 hook ✓ "
+        "(P3.4.D: bg-review HTTP 400 fix)"
+    )
 
 
 # ── P1 ───────────────────────────────────────────────────────────────────
