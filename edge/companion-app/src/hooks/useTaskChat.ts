@@ -40,11 +40,16 @@ export interface UseTaskChatOpts {
   model: string;
   /** system prompt 注入. 每次 send 都重算 (task 上下文可能变). */
   buildSystemPrompt: () => string;
-  /** P3.3.19 C Phase 2c (6/11): caller 必传 — DetailPane 先 sessionGetByTaskUid
-   *  / sessionCreate 拿 hermes session id 后传进来. send 内每条 msg persist
-   *  走 sessionMessageAppend(sessionId, ...) 写 state.db. 跟工作台 chat 同 db.
-   *  改造前是 onPersist callback 写 task_chat jsonl (P3.3.7 Phase 2), 现统一 state.db. */
-  sessionId: string;
+  /** P3.5.10 (6/16 鸿波 lazy create): caller 提供 lazy ensure session callback.
+   *  send 入口调一次, 拿到真 sessionId 后用于本轮所有 persistMessage.
+   *  返 null = 建 session 失败, 该轮 chat 仍能跑但不 persist.
+   *
+   *  改前 (P3.3.19 C Phase 2c): caller mount 即 sessionGetByTaskUid /
+   *  sessionCreate 把 sessionId prop 传进来. 副作用: 早安 tab 默认选中第一个
+   *  task → DetailPane mount → 立即建空 session, 即使员工没真聊. advisor 每次
+   *  refresh tasks 变 → DetailPane 重 mount → 又建新空 session. 累积一堆
+   *  0 条 session 污染工作台 sidebar. lazy create 后纯浏览不建. */
+  ensureSessionId: () => Promise<string | null>;
 }
 
 export interface UseTaskChatReturn {
@@ -88,10 +93,13 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
 
   /** P3.3.19 C Phase 2c (6/11): 把 ChatMessage append 进 hermes state.db.
    *  跟 useChat persistMessage 同款 (复制自 useChat.ts:101-131), 不动 useChatStore.
-   *  失败静默 — chat UI 仍 work, 只是该条 msg 没进 db. */
+   *  失败静默 — chat UI 仍 work, 只是该条 msg 没进 db.
+   *
+   *  P3.5.10 (6/16): sessionId 改 caller 传, 不再读 opts. send 入口先 await
+   *  ensureSessionId 拿真 sid, 整轮所有 persist 都用这个 sid (跟 useChat
+   *  sessionIdForStream 同思路, 防 send 中途用户切走 task 让 persist 落到错 session). */
   const persistMessage = useCallback(
-    async (msg: ChatMessage): Promise<void> => {
-      const sessionId = optsRef.current.sessionId;
+    async (msg: ChatMessage, sessionId: string | null): Promise<void> => {
       if (!sessionId) {
         console.warn("[useTaskChat] sessionId 缺, 跳过 persist");
         return;
@@ -184,7 +192,14 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
       placeholderParts.length > 0
         ? `${trimmed}${trimmed ? "\n" : ""}[${placeholderParts.join(" + ")}]`
         : trimmed;
-    void persistMessage({ ...userMsg, content: persistContent, attachments: undefined });
+
+    // P3.5.10 (6/16 鸿波 lazy create): 在 persist user msg 之前 await
+    // ensureSessionId 拿真 sid. caller 内部: 已有 sid 直接返, 没就 sessionCreate
+    // + sessionSetTaskUid 建关联 + setSessionId. 整轮 send 都用这一个 sid
+    // (snapshot, 防 send 中途用户切走 task 让后续 assistant/tool persist 落到错 session).
+    // 拿不到 (建 session 失败) → null → persistMessage 软退化跳过 persist, chat UI 仍 work.
+    const sidForRound = await optsRef.current.ensureSessionId();
+    void persistMessage({ ...userMsg, content: persistContent, attachments: undefined }, sidForRound);
     setIsStreaming(true);
 
     // 2. 拉 tools (跟工作台同款 — 60s TTL cache, tool_bridge 不可达返 [])
@@ -280,11 +295,14 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
         // P3.3.13: mounted 时才 persist — unmount 后 stream onDone 可能仍触发,
         //   不能写 ghost row 到老 task 的 state.db session.
         // P3.3.19 C Phase 2c: persist 走 state.db.
+        // P3.5.10: 用 send 入口 snapshot 的 sidForRound (lazy create 拿到的 sid),
+        //   防 streaming 期间用户切走 task → setSessionId(null) → 后续 persist
+        //   落到错 session. sidForRound 是 closure 捕获的本轮锁定值.
         if (
           mountedRef.current &&
           (finalContent.trim().length > 0 || collectedCalls.length > 0)
         ) {
-          void persistMessage(doneAssistant);
+          void persistMessage(doneAssistant, sidForRound);
         }
         history = [...history, doneAssistant];
 
@@ -359,8 +377,9 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
           // P3.3.13: mounted 时才 persist (防 ghost write — 切走 task 后 stream
           //   还可能跑完一个 tool, 不能写到老 task 的 session).
           // P3.3.19 C Phase 2c: persist 走 state.db (sessionMessageAppend).
+          // P3.5.10: sidForRound 是 send 入口 snapshot, 锁本轮 session.
           if (mountedRef.current) {
-            void persistMessage(toolMsg);
+            void persistMessage(toolMsg, sidForRound);
           }
         }
       }

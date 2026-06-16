@@ -236,18 +236,51 @@ function DetailPane({
     () => buildTaskSystemPrompt(taskRef.current),
     [],
   );
-  // P3.3.19 C Phase 2d (6/11): 用 hermes state.db session 替代 task_chat jsonl.
-  //   mount 时 sessionGetByTaskUid 找 task 关联的 latest session, 找不到则 sessionCreate
-  //   + sessionSetTaskUid 建关联. useTaskChat 拿 sessionId 后内部 persist 走 state.db,
-  //   不再走 jsonl. 跟工作台 chat 共享同 session — 哪边发都进同条 db row.
-  //
-  //   sessionId === null 时 useTaskChat 不该 send (caller 用 loading 状态防 race).
+  // P3.3.19 C Phase 2d (6/11) + P3.5.10 (6/16 鸿波 lazy create):
+  //   mount 只 sessionGetByTaskUid 拿已有 sid (sid 有 → loadHistory; 没 → 显空白).
+  //   不再 mount 就 sessionCreate — 那会导致打开早安 tab 默认选中的 task / 切别的
+  //   task 卡片时建一堆空 session 污染工作台 sidebar (鸿波 6/16 16:00 反馈).
+  //   真建 session 推迟到 ensureSessionId callback, useTaskChat.send 入口才调.
   const [sessionId, setSessionId] = useState<string | null>(null);
+  // P3.5.10: sessionId 给 ref, 让 ensureSessionId callback 不需要重建 (避免
+  // useTaskChat opts 闭包随每次 setSessionId 重新 init).
+  const sessionIdRef = useRef<string | null>(null);
+  sessionIdRef.current = sessionId;
+
+  /** P3.5.10 (6/16 鸿波): lazy ensure session.
+   *  - 已有 sid → 直接返
+   *  - 没 sid → sessionCreate + sessionSetTaskUid 建关联 + setSessionId
+   *  - sessionCreate 失败 → 返 null, useTaskChat 软退化跳过 persist (chat 仍 work)
+   *
+   *  ensureSessionId 不依赖 selectedId 变化 — 切走 task 后 sessionIdRef 会被新
+   *  task useEffect 改 (mount → sessionGetByTaskUid 或 null), 但本轮 send 已经
+   *  snapshot 了 sid 到 sidForRound, 不受影响. */
+  const ensureSessionId = useCallback(async (): Promise<string | null> => {
+    if (sessionIdRef.current) return sessionIdRef.current;
+    const taskNow = taskRef.current;
+    try {
+      const created = await sessionCreate({
+        model,
+        title: taskNow.title,
+        systemPrompt: buildTaskSystemPrompt(taskNow),
+      });
+      sessionIdRef.current = created.id;
+      setSessionId(created.id);
+      // 关联 task uid, 下次 mount sessionGetByTaskUid 能找回这条
+      await sessionSetTaskUid(created.id, taskNow.taskUid).catch((e) => {
+        console.warn("[BriefingTwoColumn lazy] sessionSetTaskUid 失败:", e);
+      });
+      return created.id;
+    } catch (e) {
+      console.warn("[BriefingTwoColumn lazy] sessionCreate 失败, persist 跳过:", e);
+      return null;
+    }
+  }, [model]);
 
   const taskChat = useTaskChat({
     model,
     buildSystemPrompt,
-    sessionId: sessionId ?? "",  // 空字符串 = mount 还没建好 session, persist 会 warn 跳过
+    ensureSessionId,
   });
   const { messages, isStreaming, send, cancel, loadHistory } = taskChat;
 
@@ -273,20 +306,29 @@ function DetailPane({
   >(null);
   const [secondsLeft, setSecondsLeft] = useState(60);
 
-  // P3.3.19 C Phase 2d (6/11): mount 时拿 task 的 hermes session id, 拉 messages.
-  //   1. sessionGetByTaskUid(taskUid) — 该 task 是否已有 session
-  //   2. 有: sessionsGet → loadSessionMessagesAsChat → loadHistory + setSessionId
-  //   3. 没: sessionCreate({model, title=task.title, systemPrompt=buildTaskSystemPrompt})
-  //          + sessionSetTaskUid 建关联 → setSessionId + loadHistory([])
-  //   Phase 2e fallback: state.db messages 为空 + 老 jsonl 有 → 显 jsonl 历史 (read-only,
-  //   不 persist 进 db, Phase 4 一次性 migration 才 import).
+  // P3.3.19 C Phase 2d (6/11) + P3.5.10 (6/16 鸿波 lazy create):
+  //   mount 只拿已有 sid + 历史, **不 mount 即建 session**.
+  //
+  //   旧路径 (P3.3.19): 没 sid 直接 sessionCreate + sessionSetTaskUid + setSessionId.
+  //   副作用 (6/16 鸿波看到): 早安 tab 打开默认选中第一个 task, DetailPane mount
+  //   立刻建空 session. advisor 每次 refresh tasks 数组变, defaultId 变,
+  //   selectedId 切换, DetailPane 重 mount, 又建新空 session. 累积一堆 0 条
+  //   session 污染工作台 sidebar — title 还是 task 名 ("加计扣除申报..." 等),
+  //   员工迷惑.
+  //
+  //   新路径 (P3.5.10): mount 不 sessionCreate, 真建推迟到员工第一次发消息时
+  //   (useTaskChat.send → ensureSessionId callback 内部建). 纯浏览看 task 详情
+  //   不再污染 sidebar.
+  //
+  //   Phase 2e fallback (老 jsonl 仍读): db sid 没拿到时仍尝试 taskChat jsonl
+  //   历史显示 read-only — 老历史能看, 但要回复就触发 lazy create.
   useEffect(() => {
     let cancelled = false;
     setHistoryLoading(true);
     setSessionId(null);
     void (async () => {
       try {
-        let sid = await sessionGetByTaskUid(task.taskUid);
+        const sid = await sessionGetByTaskUid(task.taskUid);
         let dbMessagesCount = 0;
         if (sid) {
           // 已有 session — 拉历史
@@ -298,18 +340,10 @@ function DetailPane({
               loadHistory(chatMessages);
             }
           }
-        } else {
-          // 没 session — 建一个
-          const created = await sessionCreate({
-            model,
-            title: task.title,
-            systemPrompt: buildTaskSystemPrompt(task),
-          });
-          sid = created.id;
-          await sessionSetTaskUid(sid, task.taskUid).catch((e) => {
-            console.warn("[BriefingTwoColumn] sessionSetTaskUid 失败:", e);
-          });
         }
+        // 注意: 没拿到 sid 不 sessionCreate. setSessionId(null) 保持, 等
+        // ensureSessionId callback (员工发第一句时) 才真建. UI 仍可显示
+        // jsonl fallback 历史 (read-only).
         if (cancelled) return;
 
         // Phase 2e fallback: db 空 + 老 jsonl 有 → 显 jsonl. Phase 4 一次性 migration.
@@ -356,6 +390,9 @@ function DetailPane({
           }
         }
 
+        // sid 可能是 null (没 session) — 不变成 ""空字符串, 保持 null 让 UI 能区分
+        // "还没建过 session" vs "建过 session id=空字符串". ensureSessionId 看
+        // sessionIdRef.current 为 null 时才真建.
         setSessionId(sid);
       } catch (e) {
         console.warn("[BriefingTwoColumn] mount session 链路失败:", e);
