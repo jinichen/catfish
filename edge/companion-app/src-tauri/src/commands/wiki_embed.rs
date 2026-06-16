@@ -13,21 +13,20 @@
 //!     https://huggingface.co/Xenova/bge-m3/resolve/main/tokenizer.json
 //!
 //! 没下载 → wiki_search_semantic 返 fallback hint "model not loaded".
+//!
+//! # P3.5.4.1 (6/16 鸿波) refactor
+//!
+//! `embed_text` / `cosine` / model session / tokenizer / EMBED_DIM 移到
+//! `services::embedding`, 让 advisor_relevance + 后续场景共享同一份 ONNX session.
+//! wiki_embed 这里只剩 wiki 业务路径 (wiki_search_semantic + ensure_index).
 
-use ort::session::{Session, builder::GraphOptimizationLevel};
-use ort::value::Value;
 use serde::Serialize;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
-use tokenizers::Tokenizer;
 
-// ort 2.0 Session::run 要 &mut self → 走 Mutex 包. 单查 query 真序列化, 不 bottleneck.
-static MODEL_SESSION: OnceLock<Option<Mutex<Session>>> = OnceLock::new();
-static TOKENIZER: OnceLock<Option<Tokenizer>> = OnceLock::new();
-
-const MAX_TOKENS: usize = 512;
-const EMBED_DIM: usize = 1024;
+use crate::services::embedding::{
+    cosine, embed_text, is_provider_ready, vector_from_blob, vector_to_blob,
+};
 
 fn home_dir() -> Result<PathBuf, String> {
     std::env::var("HOME")
@@ -36,118 +35,8 @@ fn home_dir() -> Result<PathBuf, String> {
         .map_err(|_| "找不到 HOME".to_string())
 }
 
-fn model_path() -> Result<PathBuf, String> {
-    Ok(home_dir()?.join(".catfish").join("models").join("bge-m3.onnx"))
-}
-
-fn tokenizer_path() -> Result<PathBuf, String> {
-    Ok(home_dir()?.join(".catfish").join("models").join("tokenizer.json"))
-}
-
 fn embed_db_path() -> Result<PathBuf, String> {
     Ok(home_dir()?.join(".catfish").join("wiki_embeddings.db"))
-}
-
-/// init_session: load BGE-M3 ONNX 真**`OnceLock cache**真. 失败 (model 文件缺)
-/// 返 None → caller 走 fallback path.
-fn init_session() -> Option<&'static Mutex<Session>> {
-    MODEL_SESSION
-        .get_or_init(|| {
-            let path = model_path().ok()?;
-            if !path.exists() {
-                log::warn!("P38 wiki embed: model 文件不存在 {:?}, 走 fallback", path);
-                return None;
-            }
-            log::info!("P38 wiki embed: 加载 BGE-M3 ONNX {:?}", path);
-            let session = Session::builder()
-                .ok()?
-                .with_optimization_level(GraphOptimizationLevel::Level3)
-                .ok()?
-                .with_intra_threads(4)
-                .ok()?
-                .commit_from_file(&path)
-                .ok()?;
-            Some(Mutex::new(session))
-        })
-        .as_ref()
-}
-
-fn init_tokenizer() -> Option<&'static Tokenizer> {
-    TOKENIZER
-        .get_or_init(|| {
-            let path = tokenizer_path().ok()?;
-            if !path.exists() {
-                log::warn!("P38: tokenizer.json 缺 {:?}, 走 fallback", path);
-                return None;
-            }
-            Tokenizer::from_file(&path).ok()
-        })
-        .as_ref()
-}
-
-/// embed_text: text → 1024-dim f32 vector. 失败返 None (caller 走 fallback).
-fn embed_text(text: &str) -> Option<Vec<f32>> {
-    let session_mutex = init_session()?;
-    let tokenizer = init_tokenizer()?;
-
-    let encoding = tokenizer
-        .encode(text, true)
-        .map_err(|e| log::warn!("tokenizer encode 失败: {e}"))
-        .ok()?;
-    let ids = encoding.get_ids();
-    let mask = encoding.get_attention_mask();
-
-    // truncate to MAX_TOKENS
-    let n = ids.len().min(MAX_TOKENS);
-    let input_ids: Vec<i64> = ids[..n].iter().map(|&x| x as i64).collect();
-    let attention_mask: Vec<i64> = mask[..n].iter().map(|&x| x as i64).collect();
-
-    // P38 fix (6/5): 用 ort tuple syntax (shape, Vec<T>) 不依赖 ndarray version
-    // (ort-rc12 内部用 ndarray 0.17, 我们的 0.16 冲突 → 改 tuple)
-    let shape = vec![1_i64, n as i64];
-    let inputs = ort::inputs![
-        "input_ids" => Value::from_array((shape.clone(), input_ids)).ok()?,
-        "attention_mask" => Value::from_array((shape, attention_mask)).ok()?,
-    ];
-
-    let mut session = session_mutex.lock().ok()?;
-    let outputs = session.run(inputs).ok()?;
-    // BGE-M3 ONNX 输出 last_hidden_state shape [1, seq_len, 1024]
-    // 真**`mean pooling**` 真**`真**真**` 真**`[seq_len, 1024] → [1024]**真
-    let (_, output_data) = outputs[0].try_extract_tensor::<f32>().ok()?;
-    if output_data.len() < EMBED_DIM {
-        log::warn!("ONNX output too short: {}", output_data.len());
-        return None;
-    }
-    // mean pool: avg over seq_len dim
-    let seq_len = output_data.len() / EMBED_DIM;
-    let mut pooled = vec![0.0f32; EMBED_DIM];
-    for s in 0..seq_len {
-        for i in 0..EMBED_DIM {
-            pooled[i] += output_data[s * EMBED_DIM + i];
-        }
-    }
-    for v in pooled.iter_mut() {
-        *v /= seq_len as f32;
-    }
-    // L2 normalize (cosine 真**`等价**` 真**`dot product**真)
-    let norm = (pooled.iter().map(|v| v * v).sum::<f32>()).sqrt().max(1e-8);
-    for v in pooled.iter_mut() {
-        *v /= norm;
-    }
-    Some(pooled)
-}
-
-/// L2-normalized vectors 真 dot product = cosine similarity (我们 embed_text 已 L2 norm 真)
-fn cosine(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() {
-        return 0.0;
-    }
-    let mut s = 0.0f32;
-    for i in 0..a.len() {
-        s += a[i] * b[i];
-    }
-    s
 }
 
 /// 跟 wiki_search_text 同 schema 让前端共用 UI.
@@ -185,26 +74,29 @@ pub async fn wiki_search_semantic(
         });
     }
 
-    // 检查 model + tokenizer
-    if init_session().is_none() || init_tokenizer().is_none() {
+    // P3.5.15: 检查 active provider 就绪. 改 is_provider_ready() 后兼容 local / remote /
+    //   auto 三种 backend, 不再绑死 local ONNX 文件存在.
+    if !is_provider_ready() {
         return Ok(WikiSemanticResult {
             hits: vec![],
             model_loaded: false,
             indexed_count: 0,
             message: format!(
-                "BGE-M3 model 未装. 手动下载: \n\
-                 mkdir -p ~/.catfish/models && \n\
-                 curl -L -o ~/.catfish/models/bge-m3.onnx https://huggingface.co/Xenova/bge-m3/resolve/main/onnx/model_quantized.onnx && \n\
-                 curl -L -o ~/.catfish/models/tokenizer.json https://huggingface.co/Xenova/bge-m3/resolve/main/tokenizer.json"
+                "embedding provider 未就绪.\n\
+                 走本机 ONNX 时手动下载:\n\
+                  mkdir -p ~/.catfish/models && \n\
+                  curl -L -o ~/.catfish/models/bge-m3.onnx https://huggingface.co/Xenova/bge-m3/resolve/main/onnx/model_quantized.onnx && \n\
+                  curl -L -o ~/.catfish/models/tokenizer.json https://huggingface.co/Xenova/bge-m3/resolve/main/tokenizer.json\n\
+                 走 catfish-gateway 远程时: 检查 ~/.hermes/.env 里 CATFISH_INTERNAL_DEV_TOKEN 是否配置."
             ),
         });
     }
 
     // ensure index up-to-date (简化: 每次重 index, 56 entries < 5s)
-    let indexed = ensure_index().map_err(|e| format!("index 失败: {e}"))?;
+    let indexed = ensure_index().await.map_err(|e| format!("index 失败: {e}"))?;
 
     // embed query
-    let query_vec = embed_text(q).ok_or_else(|| "query embedding 失败".to_string())?;
+    let query_vec = embed_text(q).await.ok_or_else(|| "query embedding 失败".to_string())?;
 
     // load all from db, cosine
     let db_path = embed_db_path()?;
@@ -223,18 +115,10 @@ pub async fn wiki_search_semantic(
         let kind: String = row.get(2).map_err(|e| format!("col 2: {e}"))?;
         let snippet: String = row.get(3).map_err(|e| format!("col 3: {e}"))?;
         let vec_blob: Vec<u8> = row.get(4).map_err(|e| format!("col 4: {e}"))?;
-        if vec_blob.len() != EMBED_DIM * 4 {
-            continue;
-        }
-        let mut v = vec![0.0f32; EMBED_DIM];
-        for i in 0..EMBED_DIM {
-            v[i] = f32::from_le_bytes([
-                vec_blob[i * 4],
-                vec_blob[i * 4 + 1],
-                vec_blob[i * 4 + 2],
-                vec_blob[i * 4 + 3],
-            ]);
-        }
+        let v = match vector_from_blob(&vec_blob) {
+            Some(v) => v,
+            None => continue,  // blob 长度不对 (schema 不匹配?), 跳过这一行
+        };
         let score = cosine(&query_vec, &v) as f64;
         hits.push(WikiSemanticHit {
             rel_path,
@@ -261,7 +145,9 @@ pub async fn wiki_search_semantic(
 
 /// ensure_index — 简化版: 每次重 index 全 wiki/, 内存够小不 incremental.
 /// 返 indexed count.
-fn ensure_index() -> Result<usize, String> {
+///
+/// P3.5.15: 改 async 因内部 embed_text 走 provider (local 同步 / remote HTTP), 都需要 .await.
+async fn ensure_index() -> Result<usize, String> {
     let home = home_dir()?;
     let db_path = embed_db_path()?;
 
@@ -328,14 +214,11 @@ fn ensure_index() -> Result<usize, String> {
             // parse 真**`title + kind`** 真**`frontmatter`** + snippet
             let (title, kind, snippet) = parse_for_embed(&content);
             // embed full content (frontmatter + body)
-            let vec = match embed_text(&content) {
+            let vec = match embed_text(&content).await {
                 Some(v) => v,
                 None => continue,
             };
-            let mut blob = Vec::with_capacity(EMBED_DIM * 4);
-            for v in &vec {
-                blob.extend_from_slice(&v.to_le_bytes());
-            }
+            let blob = vector_to_blob(&vec);
             conn.execute(
                 "INSERT OR REPLACE INTO wiki_embed (rel_path, title, kind, snippet, vector, mtime)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",

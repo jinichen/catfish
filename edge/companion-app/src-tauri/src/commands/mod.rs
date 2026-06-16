@@ -8,6 +8,7 @@
 //!   - 每个 #[tauri::command] 必须返回 Result<T, String>，
 //!     错误统一序列化成字符串给前端
 
+pub mod advisor_relevance;  // P3.5.4.2 (6/16 鸿波): BGE-M3 advisor 注入相关性筛选 + sqlite cache
 pub mod advisory;  // 6/7 BL-MANIFESTO-ADVISORY-PHASE1: advisory local state (~/.catfish/advisory_state.db)
 pub mod agent;
 pub mod self_serve;  // 6/8 BL-EMPLOYEE-SELF-SERVE: A1 重置 / A2 导出 / A3 导入 (BL)
@@ -21,6 +22,8 @@ pub mod briefing_context;  // BL-BRIEFING-DECISION (5/21 Phase 5): distilled_fac
 pub mod calendar;  // BL-CALENDAR-INTEGRATION (5/20): macOS Calendar.app via osascript JXA
 pub mod chrome;
 pub mod curator;
+pub mod dream;  // P3.5.1 (6/15 鸿波): Dream Engine — 员工主动触发 long-term 蒸馏, picker model
+pub mod picker_state;  // P3.5.2 (6/16 鸿波): chat picker 持久化 ~/.catfish/picker_state.json — plugin sync_turn 跟随
 pub mod email;  // BL-COMPANION-EMAIL-DIGEST (5/18): 邮件简报卡的后端 shell-out
 pub mod endpoints;
 pub mod feedback;

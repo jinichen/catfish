@@ -1,0 +1,77 @@
+# ~/.catfish/embedding.yaml — P3.5.15 (6/16 鸿波)
+#
+# 装法:
+#   1. cp ~/person_task/catfish/edge/companion-app/src-tauri/src/services/embedding.yaml.example \
+#         ~/.catfish/embedding.yaml
+#   2. 改 backend / model 等参数
+#   3. 重启 Companion (Cargo build + Tauri 重启) → 重新读 yaml
+#
+# 不装这个 yaml → 走 default = P3.5.4 老硬编码值 (本机 BGE-M3 ONNX, ~/.catfish/models/).
+# 完全向后兼容, 老员工不动也 work.
+
+embedding:
+  # backend 选择 (3 种):
+  #   auto   — 启动 ping remote /v1/models (3s timeout), 通则 remote, 否则 local. 推荐默认.
+  #   local  — 强制本机 ONNX. 离线 / 出差场景, 或者懒得装 remote token 时.
+  #   remote — 强制 catfish-gateway /v1/embeddings. 中央 GPU 算力, mac 不烧 CPU.
+  #            内网时推荐 (推理快 + 准, mac 不预装 570MB 模型).
+  backend: auto
+
+  # ─── 本机 ONNX 配置 (backend=local / auto fallback 时用) ────────────
+  local:
+    # ONNX 模型路径. 默认 BGE-M3 INT8 quantized.
+    # 想换模型? 改这里 + tokenizer_path + embed_dim. 别忘了 onnx 输出维度跟 embed_dim 必须对得上.
+    model_path: ~/.catfish/models/bge-m3.onnx
+    tokenizer_path: ~/.catfish/models/tokenizer.json
+    # 必须跟模型输出维度一致, 启动校验. BGE-M3=1024 / bge-small-zh=512 / e5-base=768.
+    embed_dim: 1024
+    # 输入 token 截断上限. BGE-M3 原生 8192, 但 512 性能折中. 长文本召回想要更好可调大 (慢).
+    max_tokens: 512
+    # ort Session intra-op 线程数. M3 Max 可 8, 老 mac 2-4. 默认 4.
+    intra_threads: 4
+
+  # ─── 远程 catfish-gateway 配置 (backend=remote / auto OK 时用) ────────────
+  remote:
+    # gateway base URL. 本机 dev 用 127.0.0.1:8999, 中央部署改 IP.
+    gateway_url: http://127.0.0.1:8999
+    # model 名 — catfish-gateway models.yaml 里 mode=embedding 的 model.
+    # 默认 catfish-private-embed (内网 BGE-M3 endpoint).
+    # 想用别的: 在 catfish-gateway models.yaml 新增 entry 然后改这里.
+    model: catfish-private-embed
+    # HTTP timeout. 默认 10s. 长文本可调大.
+    timeout_seconds: 10
+    # 必须跟 remote 模型输出维度对得上. 跟 model 绑死.
+    embed_dim: 1024
+    # auth: 从 env CATFISH_INTERNAL_DEV_TOKEN 读, 不放 yaml 文件 (secret 防泄露).
+    # 在 ~/.hermes/.env 设, hermes / Companion 都能读.
+
+# ─── 切换 backend 后的缓存行为 ────────────
+#
+# advisor_relevance.rs / wiki_embed.rs 都有 sqlite cache (BLOB 长度 = embed_dim*4).
+# 切 backend / 换模型 / 改 embed_dim 后:
+#   - advisor_embed_cache.db 启动看 _meta.embed_dim 跟当前不匹配 → 自动 DROP + 重建
+#   - wiki_embeddings.db 同理 (后续工程加)
+# 第一次跑会 cold (重 embed 全部), 之后稳定. 不会出现"半新半旧"灾难态.
+
+# ─── 真实切换示例 ────────────
+#
+# 1. 上班在公司内网 (有 GPU 算力):
+#    backend: auto    # 自动用 remote, mac 几乎不烧 CPU
+#
+# 2. 出差/在家 (没内网):
+#    backend: local   # 强制本机 ONNX, 不试 remote 省启动时间
+#
+# 3. 临时换模型试 bge-large-zh:
+#    backend: local
+#    local:
+#      model_path: ~/.catfish/models/bge-large-zh.onnx
+#      tokenizer_path: ~/.catfish/models/bge-large-zh-tokenizer.json
+#      embed_dim: 1024              # bge-large-zh 是 1024
+#      max_tokens: 512
+#
+# 4. 想用 e5-multilingual (768 维) 而不是 BGE-M3:
+#    在 catfish-gateway models.yaml 加 entry e5-multilingual, 然后:
+#    backend: remote
+#    remote:
+#      model: catfish-private-e5-multi
+#      embed_dim: 768               # ★ 必须改这, 不然 cache miss + 写错

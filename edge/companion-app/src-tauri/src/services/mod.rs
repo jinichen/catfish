@@ -10,6 +10,8 @@ pub mod curator_config;
 pub mod curator_state;
 pub mod email_config;     // BL-COMPANION-EMAIL-YAML-CONFIG (5/18)
 pub mod email_scheduler;  // BL-COMPANION-EMAIL-DIGEST-STEP2 (5/18)
+pub mod embedding;        // P3.5.4.1 (6/16 鸿波): 公共 BGE-M3 ONNX, 给 advisor + wiki 共享同一 model session
+pub mod embedding_config; // P3.5.15 (6/16 鸿波): embedding provider yaml 配置 (本机/远程切换 + 参数可调)
 pub mod endpoints;
 pub mod phishing_scan;    // P3.3.58 (6/12 鸿波): 钓鱼邮件 deterministic 规则集 + audit chain 留档
 pub mod phishing_config;  // P3.3.65 (6/13 鸿波): 钓鱼规则可配置 yaml + 政企域名白名单

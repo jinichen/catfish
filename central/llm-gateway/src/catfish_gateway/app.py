@@ -1662,6 +1662,17 @@ def _model_info_payload(m) -> dict[str, Any]:
     """OpenAI-compatible model metadata.
 
     Clients like Hermes use it to decide context compression, tool support, etc.
+
+    P3.5.13 (6/16 鸿波): 加 'context_length' 字段镜像 context_window, 终结
+    hermes 反复探 /api/show 撞 404 的循环.
+    真因: hermes agent/model_metadata.py:818 _resolve_endpoint_context_length 用
+    matched.get('context_length') (OpenAI / OpenRouter 协议常见命名), 我们返
+    context_window / max_context_length 它认不到 → 兜底走 _query_ollama_api_show
+    探 Ollama /api/show → 我们不实现 → 404 → 整链路最终 DEFAULT_FALLBACK_CONTEXT,
+    没拿到真 ctx 不写 cache (~/.hermes/context_length_cache.yaml). 每次 _create_agent
+    (每次 chat 新建) 都走同一套, log 一直 404.
+    加 context_length 后, hermes 步骤 2 拿到真 ctx → save_context_length 写 cache
+    → 后续同 model+url 直接从 cache 返 → /api/show 探测整链路 short-circuit.
     """
     return {
         "id": m.name,
@@ -1671,6 +1682,8 @@ def _model_info_payload(m) -> dict[str, Any]:
         # Extended fields many OpenAI-compatible clients inspect:
         "context_window": m.context_window,
         "max_context_length": m.context_window,
+        # P3.5.13: hermes / OpenAI / OpenRouter 协议查 context_length, 镜像同值
+        "context_length": m.context_window,
         "supports_tool_use": m.supports_tool_use,
         "supports_vision": m.supports_vision,
         "supports_streaming": m.supports_streaming,
