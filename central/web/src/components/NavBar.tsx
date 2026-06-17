@@ -36,6 +36,12 @@ export function NavBar() {
   return (
     <nav
       style={{
+        // P3.5.26.2 (6/17 鸿波"头部不动, 只内容滚动"): NavBar 真**单独 sticky**.
+        // 整页正常 window scroll, NavBar 真**永远 stick** 在 viewport top.
+        // 不嵌套 main overflow (P3.5.26 试过那条 path, 撞抖动 + KPI 卡层叠 bug).
+        position: "sticky",
+        top: 0,
+        zIndex: 100,
         background: "var(--bg-elev)",
         borderBottom: "1px solid var(--border)",
         padding: "var(--space-3) var(--space-4)",

@@ -66,38 +66,20 @@ export function AuditPage() {
         {loading && !audit && <div>加载中…</div>}
         {audit && (
           <>
-            {/* P3.5.26.1 (6/17 鸿波"滚动到底再往上抖动"): 改 sticky 不用 negative
-                coord. 原 commit 6ebdce7 用 top: -16px + marginLeft/Right/Top: -16px
-                抵消 main padding 真**已知 Webkit sticky bug** — sticky 元素负 top +
-                负 margin 当 scroll 真临界 (overscroll bounce / 边界 reflow) 时
-                browser 重 compute bounding box 触发 repaint 抖动.
-                修法: top: 0 + 真**不抵消** main padding. sticky 真**贴 main 真
-                有效 scroll viewport** (在 main padding-top 之下 16px gap),
-                视觉上头部不贴 NavBar 真底, 但真**稳定不抖**. trade off 接受. */}
-            <div
-              style={{
-                position: "sticky",
-                top: 0,
-                zIndex: 5,
-                background: "var(--bg)",
-                paddingBottom: "var(--space-3)",
-                borderBottom: "1px solid var(--border)",
-                display: "flex",
-                flexDirection: "column",
-                gap: "var(--space-3)",
-              }}
-            >
-              {/* ── 标题区 + 工具栏 (BL-AUDIT-UX-P1: 时间窗切换 + CSV 导出) ── */}
-              <PageHeader
-                audit={audit}
-                sinceHours={sinceHours}
-                onChangeWindow={setSinceHours}
-                loading={loading}
-              />
+            {/* P3.5.26.2 (6/17): revert sticky 头部. NavBar 真**单独 sticky** (新),
+                audit 内容真**正常 scroll**. KPI / tables / PageHeader 都跟整页一起
+                滚, NavBar 永远 top. 简单, 无 sticky 头部跟 KPI 卡层叠/抖动问题. */}
 
-              {/* ── BL-AUDIT-UX-P2: 当前 filter pill chip (仅有 filter 时显) ── */}
-              <FilterPillBar filter={filter} onClear={clearFilter} />
-            </div>
+            {/* ── 标题区 + 工具栏 (BL-AUDIT-UX-P1: 时间窗切换 + CSV 导出) ── */}
+            <PageHeader
+              audit={audit}
+              sinceHours={sinceHours}
+              onChangeWindow={setSinceHours}
+              loading={loading}
+            />
+
+            {/* ── BL-AUDIT-UX-P2: 当前 filter pill chip (仅有 filter 时显) ── */}
+            <FilterPillBar filter={filter} onClear={clearFilter} />
 
             {/* ── 异常告警条 (BL-AUDIT-UX-P0 占位, P1 backend 出 trend 后实数) ── */}
             <AnomalyBanner audit={audit} />

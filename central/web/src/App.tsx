@@ -161,27 +161,25 @@ export function App() {
   }
 
   return (
-    // P3.5.26 (6/17 鸿波"头部不动, 只内容滚动"): 改 flex column + height 100vh
-    // + main overflow-y auto. NavBar 真**永远固定**头部, scroll 只在 main 内.
-    // 替换之前 minHeight: 100vh 整页 window scroll (NavBar 跟着 viewport 走).
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        height: "100vh",
-        background: "var(--bg)",
-      }}
-    >
+    // P3.5.26.2 (6/17 鸿波): 改 cleaner 路径 — 整页 window scroll, NavBar 真
+    // `position: sticky` 单独 stick top. main 真**不**overflow (无嵌套 scroll container).
+    //
+    // 6/17 history:
+    // - 6ebdce7 P3.5.26: 试 flex column + height 100vh + main overflowY auto +
+    //   audit sticky 头部 (negative margin 抵消 main padding). 撞 Webkit sticky bug
+    //   滚动抖动 + KPI 卡 z-index/层叠 怪状态 (KPI titles 真透 sticky 头部).
+    // - 654c978 P3.5.26.1: 拆 negative coord 修抖动, 仍 KPI 卡覆盖问题.
+    // - 这次 (P3.5.26.2): revert 整套. NavBar sticky 真**单独**, main 真正常 scroll.
+    //   audit 页内不 sticky 头部. KPI / tables 都跟整页一起滚, NavBar 永远 top.
+    //
+    // 简单可靠, 无 sticky 头部跟 KPI 卡层叠 / 抖动问题.
+    <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
       <NavBar />
       <main
         style={{
-          flex: 1,
-          overflowY: "auto",
           maxWidth: 1280,
           margin: "0 auto",
-          width: "100%",
           padding: "var(--space-4)",
-          boxSizing: "border-box",
         }}
       >
         <Routes>
