@@ -147,7 +147,17 @@ export const useChatStore = create<ChatState>((set) => ({
     })),
   setIsStreaming: (v) => set({ isStreaming: v }),
   setStreamingId: (id) => set({ streamingId: id }),
-  setModel: (model) => set({ model }),
+  setModel: (model) => {
+    set({ model });
+    // P3.5.28 (6/17 鸿波"picker 联动现在就应该做"): 真**桥**给 Rust background task
+    // (email_scheduler / phishing_scan). 写文件 ~/.catfish/picker_model 让 background
+    // task 真 tick 时读. 员工 chat picker 切换真**下次 tick 生效**.
+    //
+    // Fire-and-forget — 不 throw, 不阻塞 picker UI. 失败仅 console.warn.
+    invoke("set_picker_model", { name: model }).catch((e: unknown) => {
+      console.warn("[P3.5.28 picker_model bridge] 写文件失败:", e);
+    });
+  },
   setPersistedSessionId: (persistedSessionId) =>
     set({ persistedSessionId }),
   markModelSent: () => set((s) => ({ prevSentModel: s.model })),

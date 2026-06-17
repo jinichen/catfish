@@ -20,6 +20,7 @@ pub mod political_config; // P3.3.53 (6/13 鸿波): 政治敏感规则配置 —
 pub mod hermes_api_config; // BL-COMPANION-HERMES-API-CONFIG (5/19, Phase 2-2A)
 pub mod oauth;
 pub mod pet_hover;
+pub mod picker_config;    // P3.5.28 (6/17 鸿波): chat picker 选的 model 真**桥**给 background task
 pub mod pet_status;
 pub mod process;
 pub mod watchdog;

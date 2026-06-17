@@ -581,6 +581,9 @@ pub fn run() {
             services::email_scheduler::email_urgency_map,
             // BL-COMPANION-PREFS-TOGGLES (5/20): 暴露 email config 给前端 AgentPrefsCard 展示
             services::email_config::email_config_get,
+            // P3.5.28 (6/17 鸿波"picker 联动现在就应该做"): chat picker 选的 model 写文件,
+            // background task (email_scheduler / phishing_scan) 真**跟着**用员工选的 model.
+            services::picker_config::set_picker_model,
             // P3.3.65 (6/13): 钓鱼规则可配置 — 仪表盘显当前 effective 配置
             services::phishing_config::phishing_config_get,
             // P3.3.53 (6/13): 政治敏感规则可配置 — 仪表盘显当前 effective 配置
