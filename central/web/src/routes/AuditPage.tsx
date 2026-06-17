@@ -66,16 +66,41 @@ export function AuditPage() {
         {loading && !audit && <div>加载中…</div>}
         {audit && (
           <>
-            {/* ── 标题区 + 工具栏 (BL-AUDIT-UX-P1: 时间窗切换 + CSV 导出) ── */}
-            <PageHeader
-              audit={audit}
-              sinceHours={sinceHours}
-              onChangeWindow={setSinceHours}
-              loading={loading}
-            />
+            {/* P3.5.26 (6/17 鸿波"头部不动, 只内容滚动"): PageHeader + FilterPillBar
+                sticky 在 main 真顶, 内容 (KPI + Cards) 真**正常 scroll**.
+                top: 0 在 main scroll container 顶部. zIndex: 5 真高于内容卡.
+                marginLeft/Right + paddingLeft/Right 抵消 main padding (var(--space-4))
+                让 sticky bar 横跨全宽. 真**视觉边界** 用 borderBottom 标示. */}
+            <div
+              style={{
+                position: "sticky",
+                top: "calc(var(--space-4) * -1)",
+                zIndex: 5,
+                background: "var(--bg)",
+                marginLeft: "calc(var(--space-4) * -1)",
+                marginRight: "calc(var(--space-4) * -1)",
+                marginTop: "calc(var(--space-4) * -1)",
+                paddingLeft: "var(--space-4)",
+                paddingRight: "var(--space-4)",
+                paddingTop: "var(--space-4)",
+                paddingBottom: "var(--space-3)",
+                borderBottom: "1px solid var(--border)",
+                display: "flex",
+                flexDirection: "column",
+                gap: "var(--space-3)",
+              }}
+            >
+              {/* ── 标题区 + 工具栏 (BL-AUDIT-UX-P1: 时间窗切换 + CSV 导出) ── */}
+              <PageHeader
+                audit={audit}
+                sinceHours={sinceHours}
+                onChangeWindow={setSinceHours}
+                loading={loading}
+              />
 
-            {/* ── BL-AUDIT-UX-P2: 当前 filter pill chip (仅有 filter 时显) ── */}
-            <FilterPillBar filter={filter} onClear={clearFilter} />
+              {/* ── BL-AUDIT-UX-P2: 当前 filter pill chip (仅有 filter 时显) ── */}
+              <FilterPillBar filter={filter} onClear={clearFilter} />
+            </div>
 
             {/* ── 异常告警条 (BL-AUDIT-UX-P0 占位, P1 backend 出 trend 后实数) ── */}
             <AnomalyBanner audit={audit} />

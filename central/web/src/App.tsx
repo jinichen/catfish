@@ -161,13 +161,27 @@ export function App() {
   }
 
   return (
-    <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
+    // P3.5.26 (6/17 鸿波"头部不动, 只内容滚动"): 改 flex column + height 100vh
+    // + main overflow-y auto. NavBar 真**永远固定**头部, scroll 只在 main 内.
+    // 替换之前 minHeight: 100vh 整页 window scroll (NavBar 跟着 viewport 走).
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        height: "100vh",
+        background: "var(--bg)",
+      }}
+    >
       <NavBar />
       <main
         style={{
+          flex: 1,
+          overflowY: "auto",
           maxWidth: 1280,
           margin: "0 auto",
+          width: "100%",
           padding: "var(--space-4)",
+          boxSizing: "border-box",
         }}
       >
         <Routes>
