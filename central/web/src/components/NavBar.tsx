@@ -36,12 +36,9 @@ export function NavBar() {
   return (
     <nav
       style={{
-        // P3.5.26.2 (6/17 鸿波"头部不动, 只内容滚动"): NavBar 真**单独 sticky**.
-        // 整页正常 window scroll, NavBar 真**永远 stick** 在 viewport top.
-        // 不嵌套 main overflow (P3.5.26 试过那条 path, 撞抖动 + KPI 卡层叠 bug).
-        position: "sticky",
-        top: 0,
-        zIndex: 100,
+        // P3.5.26.3 (6/17 鸿波"页面固定一屏高度"): App.tsx 真用 flex column + main
+        // overflow 让 NavBar 自然 flex: 0 stay top, 不需要 sticky. 整页 viewport
+        // 1 屏, scrollbar 只在 main 内.
         background: "var(--bg-elev)",
         borderBottom: "1px solid var(--border)",
         padding: "var(--space-3) var(--space-4)",

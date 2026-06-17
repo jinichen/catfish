@@ -161,25 +161,40 @@ export function App() {
   }
 
   return (
-    // P3.5.26.2 (6/17 鸿波): 改 cleaner 路径 — 整页 window scroll, NavBar 真
-    // `position: sticky` 单独 stick top. main 真**不**overflow (无嵌套 scroll container).
+    // P3.5.26.3 (6/17 鸿波"页面固定一屏高度, 滚动条仅仅只能是内容区域"):
+    // flex column + height 100vh, NavBar flex: 0 真**永远 top** (自然高度),
+    // main flex: 1 + overflowY auto 真**独立 scroll**. 整页不 scroll, 浏览器
+    // window 真**没 scrollbar**.
     //
-    // 6/17 history:
-    // - 6ebdce7 P3.5.26: 试 flex column + height 100vh + main overflowY auto +
-    //   audit sticky 头部 (negative margin 抵消 main padding). 撞 Webkit sticky bug
-    //   滚动抖动 + KPI 卡 z-index/层叠 怪状态 (KPI titles 真透 sticky 头部).
-    // - 654c978 P3.5.26.1: 拆 negative coord 修抖动, 仍 KPI 卡覆盖问题.
-    // - 这次 (P3.5.26.2): revert 整套. NavBar sticky 真**单独**, main 真正常 scroll.
-    //   audit 页内不 sticky 头部. KPI / tables 都跟整页一起滚, NavBar 永远 top.
-    //
-    // 简单可靠, 无 sticky 头部跟 KPI 卡层叠 / 抖动问题.
-    <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
+    // 6/17 history (3 次撞坑后真**最简方案**):
+    // - 6ebdce7 P3.5.26: height 100vh + main overflow (✓ layout 对) + AuditPage
+    //   sticky 头部 negative margin (✗ 撞 Webkit sticky bug + KPI 卡层叠).
+    // - 654c978 P3.5.26.1: 去 negative coord 修抖动, 仍 KPI 卡透 sticky.
+    // - 1f6b59c P3.5.26.2: revert 整套, NavBar position: sticky 单独, 整页 window scroll.
+    //   NavBar 真贴 top 但**整页超 viewport scroll 时晃动** (sticky + window scroll
+    //   交互).
+    // - 这次 P3.5.26.3: 恢复 height: 100vh + main overflow (P3.5.26 layout), 但
+    //   **不**加 sticky 头部. AuditPage PageHeader 真**普通**, 在 main scroll
+    //   内自然 scroll. NavBar 真 flex: 0 永远 top, 不需要 sticky (它本来就在
+    //   flex column 顶, 不会随 main scroll 移动).
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        height: "100vh",
+        background: "var(--bg)",
+      }}
+    >
       <NavBar />
       <main
         style={{
+          flex: 1,
+          overflowY: "auto",
           maxWidth: 1280,
           margin: "0 auto",
+          width: "100%",
           padding: "var(--space-4)",
+          boxSizing: "border-box",
         }}
       >
         <Routes>
