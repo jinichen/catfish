@@ -325,19 +325,29 @@ export function useChat(_initialModel: string) {
       }
       // 持久化 assistant 消息(完整 content + tool_calls)
       //
-      // P3.5.21 (6/17 鸿波"丢数据 critical"): 5/23 BL-COMPANION-HERMES-SESSION-REUSE
-      // 老逻辑 `if (!refs.viaHermes && ctx.sessionId)` 走 hermes 路径跳过 persist,
-      // 信任 hermes 自己写 state.db. 但 hermes 真有不 persist 的 case (鸿波 6/17
-      // 12:46 turn end log "history=58" 应该 59, 差 1 = 上 turn assistant 没 persist
-      // 到老 session). Companion 切走再回来 load 不见 → 丢数据.
+      // P3.5.25 (6/17 鸿波"还是重复") **revert P3.5.21**: 改回 5/23
+      // BL-COMPANION-HERMES-SESSION-REUSE 老逻辑.
       //
-      // 修法: 改 `if (ctx.sessionId)` 总 persist. 双写风险 (5/23 撞过 UI 重复 2 条
-      // assistant) 由 session_message_append.rs idempotent 兜底 — assistant role
-      // INSERT 前 query 同 session 最后一条 assistant, content + tool_calls 完全
-      // 一样 → skip + 返已有 rowid.
+      // P3.5.21 误诊: 我看 hermes log "history=58 应该 59 差 1" 就跳结论"assistant 没 persist".
+      // 鸿波本机 db query 真证: hermes per-segment 写 (一个 turn 内每个 tool_call
+      // response 段单独 1 行, 4-6 行/turn), 而 P3.5.21 改 Companion 总 persist 时
+      // Companion 写 per-turn 整段 (1 行 = 4 段拼接 + "\n\n" 前缀, length 257 vs
+      // hermes 的 23/40/84/96). 两边 content **fundamentally byte 不同**,
+      // idempotent (严格 == 或 trim) 都不命中 → 双写 → UI 真重复, 鸿波 6/17 screenshot 验证.
       //
-      // 5/24 BL-MULTI-SESSION-STREAM 保留: 用 ctx.sessionId (send 入口锁定) 不读 store.
-      if (ctx.sessionId) {
+      // P3.5.24 加 trim() + IMMEDIATE 也救不了 (60 chars vs 257 chars 完全不同 string).
+      //
+      // revert P3.5.21 → Companion 不写, 信任 hermes per-segment 真持久化. 没重复.
+      //
+      // P3.5.21 真诉求"切走再回来不见" — 留 fresh session 真 audit, 真因可能在
+      // loadSession 路径或 UI render bug, 不靠 hermes log 推测.
+      //
+      // Rust session_write.rs idempotent (P3.5.21 + .24 trim+IMMEDIATE) 留不动 —
+      // 无害, Companion 不调就不触发. 后续若真要复用同款防双写做 atomic dedup,
+      // 现成 transaction 包好.
+      //
+      // 5/24 BL-MULTI-SESSION-STREAM 保留.
+      if (!refs.viaHermes && ctx.sessionId) {
         void persistMessage(finalAssistant, ctx.sessionId);
       }
 
