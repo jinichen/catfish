@@ -49,10 +49,6 @@ interface ChatState {
   /** 写入 ~/.hermes/state.db 的 session id (Plan C Week 2 持久化)
    *  null = 还没创建 (lazy create on first send) */
   persistedSessionId: string | null;
-  /** BL-CONTEXT-COUNTER (5/13 借鉴 Hermes 0.13): 最近一轮 LLM 完成时的
-   *  prompt_tokens, 给状态栏 context counter 用 (xxK / 128K, 80% 黄, 95% 红).
-   *  reset / 切 session 时清零, 每次 onDone 时更新. */
-  lastPromptTokens: number | null;
   /** BL-GATEWAY-SOFT-HANDOFF (5/18): 上轮请求用的 model 名. 切 model 后下一轮请求
    *  会带 X-Catfish-Prev-Model header, gateway 据此做 tool-history 兼容转译.
    *  null = 本 session 还没发过任何请求, 或者 reset 过. setModel 不动这个,
@@ -80,7 +76,6 @@ interface ChatState {
   setStreamingId: (id: string | null) => void;
   setModel: (m: string) => void;
   setPersistedSessionId: (id: string | null) => void;
-  setLastPromptTokens: (n: number | null) => void;
   /** BL-GATEWAY-SOFT-HANDOFF (5/18): 标记一次 send 已用过当前 model, 下次发送
    *  时如果 model 变了, X-Catfish-Prev-Model header 就带上这个旧值. */
   markModelSent: () => void;
@@ -119,7 +114,6 @@ export const useChatStore = create<ChatState>((set) => ({
   streamingId: null,
   model: "catfish-private-main",
   persistedSessionId: null,
-  lastPromptTokens: null,
   prevSentModel: null,
   queue: [],
   sessionAttachments: [],
@@ -156,8 +150,6 @@ export const useChatStore = create<ChatState>((set) => ({
   setModel: (model) => set({ model }),
   setPersistedSessionId: (persistedSessionId) =>
     set({ persistedSessionId }),
-  setLastPromptTokens: (lastPromptTokens) =>
-    set({ lastPromptTokens }),
   markModelSent: () => set((s) => ({ prevSentModel: s.model })),
   enqueueMessage: (text) =>
     set((s) => ({
@@ -256,7 +248,6 @@ export const useChatStore = create<ChatState>((set) => ({
       isStreaming: false,
       streamingId: null,
       persistedSessionId: null,
-      lastPromptTokens: null,  // BL-CONTEXT-COUNTER: 切会话清零
       prevSentModel: null,     // BL-GATEWAY-SOFT-HANDOFF: 新 session 没"上次"
       queue: [],  // BL-HERMES013-RED-1A: 切会话清队列
       sessionAttachments: [],  // BL-FILE-SESSION-INDEX-V1 Phase 1

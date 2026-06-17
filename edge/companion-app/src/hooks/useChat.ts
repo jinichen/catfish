@@ -253,16 +253,10 @@ export function useChat(_initialModel: string) {
           // 5/23 BL-COMPANION-HERMES-SESSION-REUSE: 记本次走 hermes 没, 后面
           // line 276 据此决定要不要 persist assistant (hermes 写过就别再写).
           refs.viaHermes = info?.via_hermes === true;
-          // BL-CONTEXT-COUNTER (5/13): 把 usage.prompt_tokens 写 store, 状态栏渲染.
-          // 5/24 BL-MULTI-SESSION-STREAM: 只在当前看的 session 跟 stream 的 session
-          // 匹配时才写, 否则后台 stream 完成会污染前台 session 的 token 计数.
-          if (
-            info?.usage?.prompt_tokens != null
-            && useChatStore.getState().persistedSessionId === ctx.sessionId
-          ) {
-            useChatStore.getState().setLastPromptTokens(info.usage.prompt_tokens);
-          }
-          // BL-TASK-ASSESS-3-UI (5/15 鸿波"客户端要评估完成情况"): 拿 gateway 给的
+          // P3.5.17.c.2 (6/17): 5/13 BL-CONTEXT-COUNTER setLastPromptTokens 砍 —
+          // info.usage.prompt_tokens 是 hermes turn 内多 LLM API call 累加 cost,
+          // 不是 ctx 占用. ContextCounter / ContextOverflowBanner 都砍, store 字段拆.
+// BL-TASK-ASSESS-3-UI (5/15 鸿波"客户端要评估完成情况"): 拿 gateway 给的
           // task_assessment 做 promise-vs-reality 检测, 命中嘴炮 → 写
           // assistant message._promise_check, UI 渲染 ⚠ badge + 催继续按钮.
           // 5/24: 用 assistantId (闭包内) 替代老 currentStreamIdRef, 不串.

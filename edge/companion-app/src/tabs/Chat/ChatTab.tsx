@@ -15,7 +15,8 @@ import { getSession, sessionGetTaskUid } from "../../lib/tauri";
 import ChatPanel from "./ChatPanel";
 import ChatModelPicker from "./ChatModelPicker";
 import ChatSidebar from "./ChatSidebar";
-import ContextCounter from "./ContextCounter";  // BL-CONTEXT-COUNTER (5/13)
+// P3.5.17.c.2 (6/17): ContextCounter 砍 — cumulative cost ≠ ctx 占用, 同款数学错.
+// import ContextCounter from "./ContextCounter";  // BL-CONTEXT-COUNTER (5/13)
 // P3.3.19 C Phase 3 (6/11): 工作台 chat 加 task picker, 让员工直接从工作台进 task 上下文
 // (跟早安 DetailPane 共享同一 session, 哪边发都进同条 db row)
 import TaskPicker from "./TaskPicker";
@@ -294,10 +295,8 @@ export default function ChatTab() {
               model={model}
               disabled={isStreaming}
             />
-            {/* BL-CONTEXT-COUNTER (5/13): prompt_tokens / context_window 状态指示
-                配合 5/13 早上加的 _is_context_overflowed 监控, 让员工自己看到
-                当前会话烧到 context 多少, 接近上限主动 Cmd+N. 没数据时不渲染. */}
-            <ContextCounter />
+            {/* P3.5.17.c.2 (6/17): ContextCounter 砍 — cumulative cost / ctx_window
+                数学错, 误导. hermes 自带 ContextCompressor 处理 ctx, 不需 Companion 算. */}
             <ChatModelPicker current={model} onChange={setModel} />
           </div>
         </header>
