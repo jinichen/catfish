@@ -5,7 +5,11 @@ import { listen } from "@tauri-apps/api/event";
 import AboutModal from "./components/AboutModal";
 import AdvisoryBanner from "./components/AdvisoryBanner";  // 6/7 BL-MANIFESTO-ADVISORY-PHASE1
 import AuthBanner from "./components/AuthBanner";
-import ContextOverflowBanner from "./components/ContextOverflowBanner";  // P3.5.17 (6/17): prompt > 80% 顶部告警
+// P3.5.17.c.2 (6/17): ContextOverflowBanner 砍 — Companion lastPromptTokens
+// 是 hermes 一个 chat completion 内**所有 LLM API call 累加** prompt_tokens
+// (cumulative cost), 不是当前 ctx 占用. 拿累加 cost 跟 ctx_window 比数学就错.
+// 5/13 ContextCounter 状态栏小标签保留 (cumulative cost 语义合理).
+// import ContextOverflowBanner from "./components/ContextOverflowBanner";
 import HermesReconnectBanner from "./components/HermesReconnectBanner";  // P3.3.5 (6/9): hermes 重连 banner
 import DevUserSwitcher from "./components/DevUserSwitcher";
 import FocusModeView from "./components/FocusModeView";
@@ -210,7 +214,7 @@ function AppShell({ activeTab }: { activeTab: string }) {
       <div className="app-shell">
         <AuthBanner />
         <AdvisoryBanner />
-        <ContextOverflowBanner />
+        {/* P3.5.17.c.2 (6/17): ContextOverflowBanner 砍, 看顶部注释. */}
         <HermesReconnectBanner />
         <DevUserSwitcher />
         <TabBar />
