@@ -1,40 +1,44 @@
-/** P3.5.17 (6/17 鸿波) — context 上下文占用顶部横条警告.
+/** P3.5.17 (6/17 鸿波) — context 上下文占用顶部横条 (信息流, 不是操作流).
  *
- * # 为啥需要
+ * # 为啥是信息流
  *
- * 5/13 BL-CONTEXT-COUNTER 加的 ContextCounter (ChatTab.tsx:297 状态栏角落小标签)
- * 已经显 prompt_tokens / context_window 三档颜色. 但鸿波 6/16 实跑撞 304K / 128K
- * (238% overflow), **没注意到状态栏小标签** — 状态栏在 chat 输入框旁边, 长任务
- * 跑时员工眼睛盯着会话内容, 角落标签变红没人看. 撞 SSE friendly error 才反应
- * "原来 context 已经爆了".
+ * P3.5.17.b 修了 hermes 自带 ContextCompressor auth (catfish-gateway auth fallback
+ * 让 hermes-cli auxiliary 缺 X-Catfish-User 不报 400) — 现在 hermes 下次发送时
+ * 会**自动 preflight 压缩** (config.yaml threshold=0.5, prompt > 50% × ctx_window
+ * 触发). 员工**不需要手动** Cmd+N / 切大模型, 等 hermes 自己压就行.
  *
- * # 改法
+ * 老 banner v1 (6/17 早上版本) 提示 "立刻 Cmd+N / 切 catfish-public-gemini-pro"
+ * 是 5/13 时代话术 — 那时候 hermes 自动压缩 broken, 只能员工手动 escape.
+ * 鸿波看 banner 反馈"自动压缩, 提示这个奇怪", 对的, **跟新世界观矛盾**. 改.
  *
- * 跟 AuthBanner / AdvisoryBanner 同款顶部横条 — 醒目位置, 不容易忽略.
- *
- * # 显示规则 (按优先级, 红 > 黄 > 不显)
+ * # 显示规则 v2 (信息流)
  *
  *   pct < 80%   → 不显 (常态, 不打扰)
- *   pct ≥ 80%   → 黄色 ⚠ "接近上限, 建议长任务跑完后 Cmd+N 新建会话"
- *   pct ≥ 95%   → 红色 🚨 "已超 95%, gateway 可能 truncate 输入,
- *                  立刻 Cmd+N / 切 catfish-public-gemini-pro (2M)"
- *   pct ≥ 100%  → 红色 🚨 "已 overflow, 上游 LLM 会 silent truncate, 必须新建"
+ *   pct ≥ 80%   → 黄色 ℹ "下次发送时 hermes 会自动压缩, 不用动"
+ *                  (信息预告, 让员工知道压缩在即, 不慌不动手)
+ *   pct ≥ 100%  → 红色 🚨 "已超上限 — 自动压缩本应已触发. 没生效则检查
+ *                  ~/.hermes/logs/agent.log 看 'context compression' 行,
+ *                  或手动 /compress"
+ *                  (诊断方向, 不再喊员工 Cmd+N — 那是放弃自动压缩)
+ *
+ * 95% 那档跟 80% 合并 — 既然交给 hermes, 80% / 95% / 100% 之前都是 hermes
+ * 自己负责, 员工不用做 anything. 信号噪声合并.
  *
  * # 跟 ContextCounter 共存
  *
- * 不删 ContextCounter — 状态栏小标签**常态可见**, 让员工随时知道占用. Banner
- * 只在 80%+ 时 pop 顶部 — 这两个是 layered 设计 (常态信号 vs 告警信号).
+ * 不删 ContextCounter — 状态栏小标签**常态可见**显具体数字. Banner 只在 80%+
+ * 时 pop 顶部告诉员工 "hermes 在准备/已经在压了". 两个互补, 一个看数据一个看
+ * 状态.
  *
  * # 数据来源
  *
- * 跟 ContextCounter 同 — useChatStore.lastPromptTokens (useChat.onDone 写) +
- * useCatalog 找当前 model 的 context_window. 切会话 lastPromptTokens=null,
- * banner 自动消失.
+ * useChatStore.lastPromptTokens (useChat.onDone 写) + useCatalog 当前 model
+ * context_window. 切会话 lastPromptTokens=null, banner 自动消失.
  *
- * # 红线
+ * # 红线没变
  *
- * UI 不能 **自动切模型** (会撞 5/15 BL-FALLBACK-CAP-SCOPE 红线 —
- * private prompt 不静默飞 public). 只**提示员工自己切**, 保持员工主权.
+ * UI 不**自动切模型**, 不提示员工切 (5/15 BL-FALLBACK-CAP-SCOPE — private 不
+ * 静默飞 public). 压缩在 private 之内做 (hermes 自带 compressor 不出端).
  */
 
 import { useChatStore } from "../store/chat";
@@ -63,7 +67,7 @@ export default function ContextOverflowBanner() {
   // < 80% → 不显, 不打扰员工 (ContextCounter 状态栏角落仍显)
   if (pct < 80) return null;
 
-  // ≥ 100% → 红色 overflow
+  // ≥ 100% → 红色: 已超上限, 自动压缩本应已触发, 没生效给诊断方向
   if (pct >= 100) {
     return (
       <div
@@ -76,33 +80,15 @@ export default function ContextOverflowBanner() {
         }}
       >
         🚨 当前 prompt {Math.round(lastPromptTokens / 1000)}K / {Math.round(contextWindow / 1000)}K
-        ({pct.toFixed(0)}%) 已超 context_window — 上游 LLM 会 silent truncate, 长任务可能"谎报生成".
-        立刻 <strong>Cmd+N</strong> 新建会话, 或切 <strong>catfish-public-gemini-pro</strong> (2M).
+        ({pct.toFixed(0)}%) 已超上限 — hermes 自动压缩本应已触发. 没生效则查
+        {" "}<code style={{ background: "rgba(0,0,0,0.06)", padding: "0 4px", borderRadius: 3 }}>
+          ~/.hermes/logs/agent.log
+        </code> 看 'context compression' 行, 或手动 <strong>/compress</strong>.
       </div>
     );
   }
 
-  // 95-100% → 红色 near-overflow
-  if (pct >= 95) {
-    return (
-      <div
-        style={{
-          ...BANNER_BASE,
-          background: "rgba(220, 38, 38, 0.12)",
-          borderBottomColor: "rgba(220, 38, 38, 0.35)",
-          color: "#dc2626",
-          fontWeight: 600,
-        }}
-      >
-        🚨 prompt 已用 {pct.toFixed(0)}% ({Math.round(lastPromptTokens / 1000)}K /
-        {" "}{Math.round(contextWindow / 1000)}K) — 即将撞 overflow.
-        建议 <strong>Cmd+N</strong> 新建, 或 <strong>/compress</strong> 当前主题压缩,
-        或切 <strong>catfish-public-gemini-pro</strong>.
-      </div>
-    );
-  }
-
-  // 80-95% → 黄色 warning
+  // 80-100% → 黄色: 信息预告 hermes 自动压缩在即
   return (
     <div
       style={{
@@ -112,9 +98,8 @@ export default function ContextOverflowBanner() {
         color: "#d97706",
       }}
     >
-      ⚠ prompt 已用 {pct.toFixed(0)}% ({Math.round(lastPromptTokens / 1000)}K /
-      {" "}{Math.round(contextWindow / 1000)}K) — 接近 context 上限.
-      长任务跑完后建议 <strong>Cmd+N</strong> 新建, 或用 <strong>/compress</strong> 保留主题.
+      ℹ prompt 已用 {pct.toFixed(0)}% ({Math.round(lastPromptTokens / 1000)}K /
+      {" "}{Math.round(contextWindow / 1000)}K) — 下次发消息时 hermes 会自动压缩, 不用动.
     </div>
   );
 }
