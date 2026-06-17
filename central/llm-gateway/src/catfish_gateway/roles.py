@@ -225,9 +225,12 @@ def resolve_fallback_chain() -> list[str]:
         if role_str in _roles:
             # role ref → resolve
             model_name = _roles[role_str]
-            if model_name in _roles and model_name != role_str:
-                # 真**间接** role ref (e.g. fallback chain 引用 chat_default,
-                # chat_default 真又是 role name 不是 model name — 很罕见但要支持)
+            # 真**间接** role ref (model_name 真也是 role name) → 继续 _walk.
+            # P3.5.29.1 (6/17 鸿波本机 pytest): 去掉 `model_name != role_str`
+            # 真**short-circuit** — 自循环 (loop_role: loop_role) 真**漏检**:
+            # 第一次 visited.add 后 short-circuit 直接 append 不递归. 让自循环
+            # 也走 _walk → 第二次 visited 命中 raise CircularRoleError.
+            if model_name in _roles:
                 _walk(model_name)
             else:
                 result.append(model_name)
