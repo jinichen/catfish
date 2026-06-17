@@ -90,14 +90,9 @@ export interface ChatMessage {
   /** BL-AUTO-CONTINUE (5/13 鸿波"长程任务咋办"): 这条 user msg 是 Companion
    *  自动续跑发的, UI 渲染要标记 (淡色 + "🔄 自动续 N/M" 角标). 用户原发的没这字段. */
   _autoContinue?: { round: number; max: number };
-  /** BL-HERMES013-RED-1B (5/13 借鉴 Hermes 0.13 ACP /steer): 这条 user msg 是
-   *  用户在 LLM 还在 stream 时按 [🎯 改主意] 触发的 in-flight 插话 (路径 A:
-   *  断流 + 续接). atContent = LLM 被打断时已生成的内容 (前 200 字给 LLM 上下文).
-   *  toWire 拼 "[STEER · 用户中途插话] (我打断你时你正说到 ...)" prefix 给 LLM,
-   *  UI 渲染时 user bubble 显角标 "🎯 已插话改方向". 跟 /queue (排队等下一轮)
-   *  互补 — /steer 是当前轮就改, /queue 是等当前完了才发. */
-  _steered?: { atContent: string };
-  /** BL-TASK-ASSESS (5/15 鸿波"客户端要评估完成情况"): assistant message stream
+  // P3.5.20.1 (6/17 鸿波): _steered 字段砍 — BL-HERMES013-RED-1B (5/13) 设计
+  // 意图 (LLM 看 partial 接力) 未实现, 跟 cancelAndSend 实测同效. 砍整链.
+/** BL-TASK-ASSESS (5/15 鸿波"客户端要评估完成情况"): assistant message stream
    *  结束后的"嘴炮断言"结果. is_promise_only=true 表示模型说了"已生成/完成/写入"
    *  但 cum_has_tool_call=false + 文件路径不存在 → UI 渲染 ⚠ 嘴炮 badge +
    *  "自动催继续 (剩 N 次)" 按钮. 只在 assistant role 上设. */

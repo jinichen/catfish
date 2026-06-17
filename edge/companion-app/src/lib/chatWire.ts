@@ -8,7 +8,7 @@
  */
 
 import type { ChatMessage } from "../types/chat";
-import { applySteerPrefix } from "./steer";
+// P3.5.20.1 (6/17): applySteerPrefix import 砍 — steer 整链退役.
 
 
 // ── OpenAI 兼容线格式 ──
@@ -228,9 +228,7 @@ export function toWire(messages: ChatMessage[]): OpenAIWireMessage[] {
           .join("");
         textContent = `${textContent}${fileBlocks}`;
       }
-      // BL-HERMES013-RED-1B: /steer 中途插话 — 拼 STEER prefix 给 LLM 看,
-      // 防止 LLM 误以为前一轮 assistant 是它正常说完的.
-      textContent = applySteerPrefix(textContent, m._steered);
+      // P3.5.20.1 (6/17): applySteerPrefix 调用砍, _steered 字段已退役.
 
       // 没图片附件: 直接返普通 string content (兼容非 vision 模型)
       if (imageAttachments.length === 0) {
@@ -248,11 +246,11 @@ export function toWire(messages: ChatMessage[]): OpenAIWireMessage[] {
       }
       return { role: "user", content: parts };
     }
-    // user 无附件 — 也要 detect _steered 拼 STEER prefix
+    // P3.5.20.1 (6/17): user 无附件 — steer prefix 调用砍.
     if (m.role === "user") {
       return {
         role: "user",
-        content: applySteerPrefix(m.content || "", m._steered),
+        content: m.content || "",
       };
     }
     return {
@@ -262,5 +260,5 @@ export function toWire(messages: ChatMessage[]): OpenAIWireMessage[] {
   });
 }
 
-// applySteerPrefix 提到 lib/steer.ts 单独存放, 让 steer.test.ts 不用拉 env.ts.
+// P3.5.20.1 (6/17): steer 整链退役, lib/steer.ts → stub (待 git rm).
 

@@ -21,7 +21,7 @@ import { useChatStore } from "../store/chat";
 import { useTeachingStore } from "../store/teaching";
 // 5/18 BL-CHAT-FALLBACK-MODEL-REVERT: fetchCatalog import 删了
 // (老 BL-FIX45 B fallback 切模型用的). 删 import 防 tsc unused warning.
-// 5/20 拆: applySteerPrefix 用在 chatWire.toWire 内部, 不再直接 import 这里
+// P3.5.20.1 (6/17): applySteerPrefix 注释痕迹砍 — steer 整链退役.
 // 5/19 BL-COMPANION-CHAT-SWITCH-TO-HERMES Phase 2-2B: hermes API server 路径配置
 import { hermesApiConfigGet, hermesApiAuthHeader, authWhoami } from "./tauri";
 

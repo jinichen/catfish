@@ -29,11 +29,7 @@ interface Props {
   /** BL-HERMES013-RED-1A (5/13 借鉴 Hermes 0.13 ACP /queue): streaming 中
    *  排队下一条, 等当前 [DONE] 自动 send. 跟 onCancelAndSend 互补 (一个停一个排队). */
   onEnqueue: (text: string) => void;
-  /** BL-HERMES013-RED-1B (5/13 借鉴 Hermes 0.13 ACP /steer): streaming 中
-   *  中途插话改方向 — abort 当前 + send 新轮带 _steered metadata, LLM 看到
-   *  partial content + 新指令综合考虑. 跟 cancelAndSend 区别: cancelAndSend
-   *  扔掉当前回答重问, steer 让 LLM 看自己刚说的部分 + 新方向接力. */
-  onSteer: (text: string) => void;
+  // P3.5.20.1 (6/17): onSteer prop 砍 — steer 整链退役.
   onReset: () => void;
 }
 
@@ -57,8 +53,6 @@ export default function ChatInput({
   onCancel,
   onCancelAndSend,
   onEnqueue,
-  // onSteer prop 仍 declared 在 Props (避免 cascading ChatPanel/ChatTab 改),
-  // P3.5.20 砍 [🎯 改主意] 按钮后无人 use, 不 destructure 防 tsc noUnusedParameters warn.
   onReset,
 }: Props) {
   // BL-E11 后续: placeholder 用员工自定义名 ("跟老李说话…")
@@ -221,11 +215,9 @@ export default function ChatInput({
     setAttachError(null);
   }
 
-  // P3.5.20 (6/17 鸿波) 砍 steerSubmit: BL-HERMES013-RED-1B [🎯 改主意] 设计
-  // 意图 (LLM 看 partial 接力) 未实现 — lib/steer.ts:26 只塞 partial 末尾 200 字
-  // 给 user prefix, LLM 没真看到完整 partial assistant. 鸿波实测两个按钮行为
-  // 一样. 砍按钮入口, useChat.steer / lib/steer.ts / chatWire.applySteerPrefix
-  // 链留作 dead code (后续 fresh session 真清). onSteer prop 仍 declared 兼容.
+  // P3.5.20 / P3.5.20.1 (6/17 鸿波): steerSubmit + [🎯 改主意] button + onSteer
+  // prop + useChat.steer + lib/steer.ts + chatWire.applySteerPrefix + _steered
+  // field + ChatMessage isSteered render 整链砍 — 设计意图未实现, 实测同效.
 
   function onKey(e: KeyboardEvent<HTMLTextAreaElement>) {
     // Cmd/Ctrl+L 清屏
