@@ -57,7 +57,8 @@ export default function ChatInput({
   onCancel,
   onCancelAndSend,
   onEnqueue,
-  onSteer,
+  // onSteer prop 仍 declared 在 Props (避免 cascading ChatPanel/ChatTab 改),
+  // P3.5.20 砍 [🎯 改主意] 按钮后无人 use, 不 destructure 防 tsc noUnusedParameters warn.
   onReset,
 }: Props) {
   // BL-E11 后续: placeholder 用员工自定义名 ("跟老李说话…")
@@ -220,21 +221,11 @@ export default function ChatInput({
     setAttachError(null);
   }
 
-  /** BL-HERMES013-RED-1B (5/13): streaming 中"中途插话改方向" (ACP /steer 等价).
-   *  abort 当前 stream → send 新轮带 _steered metadata, LLM 看到自己 partial
-   *  output + 新指令综合考虑. 跟 cancelAndSend 区别: cancelAndSend 扔掉当前回答,
-   *  steer 让 LLM 看自己刚说的接力. 附件场景 → 让员工走 cancelAndSend 一键停止+发. */
-  function steerSubmit() {
-    const t = text.trim();
-    if (!t) return;
-    if (attachments.length > 0) {
-      setAttachError("插话改方向暂不支持附件 — 想带图改方向? 用 [⏹ 停下接着发] 重问.");
-      return;
-    }
-    onSteer(t);
-    setText("");
-    setAttachError(null);
-  }
+  // P3.5.20 (6/17 鸿波) 砍 steerSubmit: BL-HERMES013-RED-1B [🎯 改主意] 设计
+  // 意图 (LLM 看 partial 接力) 未实现 — lib/steer.ts:26 只塞 partial 末尾 200 字
+  // 给 user prefix, LLM 没真看到完整 partial assistant. 鸿波实测两个按钮行为
+  // 一样. 砍按钮入口, useChat.steer / lib/steer.ts / chatWire.applySteerPrefix
+  // 链留作 dead code (后续 fresh session 真清). onSteer prop 仍 declared 兼容.
 
   function onKey(e: KeyboardEvent<HTMLTextAreaElement>) {
     // Cmd/Ctrl+L 清屏
@@ -548,23 +539,8 @@ export default function ChatInput({
             >
               ⏳ 排队
             </button>
-            <button
-              onClick={steerSubmit}
-              title="🎯 中途插话改方向 (借鉴 Hermes 0.13 ACP /steer). LLM 看到自己刚说的部分 + 你的新指令, 综合考虑继续 — 不像 [停下接着发] 那样扔掉当前回答重问. 暂不支持附件."
-              style={{
-                padding: "var(--space-2) var(--space-3)",
-                border: "1px solid var(--status-warn)",
-                borderRadius: "var(--radius-sm)",
-                background: "transparent",
-                color: "var(--status-warn)",
-                fontSize: 13,
-                fontWeight: 500,
-                minWidth: 80,
-                cursor: "pointer",
-              }}
-            >
-              🎯 改主意
-            </button>
+            {/* P3.5.20 (6/17 鸿波): [🎯 改主意] 按钮砍 — 设计意图 (LLM 看 partial
+                接力) 未实现, 跟 [⏹ 停下接着发] 实测行为一样, 砍掉减歧义. */}
             <button
               onClick={submit}
               title="停止当前流, 立刻发送新消息 (Enter 同效, LLM 看不到自己刚说的, 完全重新回答)"
