@@ -268,6 +268,10 @@ def _llm_dedupe_judge(
         "- 真 propose_skill_name 给 1 个 kebab-case 名 (例 'catfish-X-handler')"
     )
 
+    # P3.5.29 Phase 5 (6/17 鸿波): role_resolver — chat_default 默认 catfish-private-main
+    # (员工 memory 真**敏感 原话**, 必走内网 chat_default, 不走 rate_fast 公网 flash).
+    from . import role_resolver  # noqa: PLC0415
+    model_name = role_resolver.resolve("chat_default") or "catfish-private-main"
     try:
         with httpx.Client(timeout=30.0) as client:
             resp = client.post(
@@ -277,7 +281,7 @@ def _llm_dedupe_judge(
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "catfish-private-main",
+                    "model": model_name,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.0,
                     "max_tokens": 300,

@@ -761,10 +761,15 @@ def _load_employee_journal() -> str:
 
 
 def _expertise_llm_call(prompt: str) -> str:
-    """走 gateway loopback POST /v1/chat/completions, model=catfish-private-main.
+    """走 gateway loopback POST /v1/chat/completions, model=role_resolver(chat_default).
 
     复用 browser_locate 同一套 GATEWAY_URL + id_token 模式. 不抛异常 — 失败返
     空串, 让 expertise.extract_from_journal 走"返非 JSON"分支自然降级.
+
+    P3.5.29 Phase 5 (6/17 鸿波): model 真**role-resolved** —
+    ``role_resolver.resolve("chat_default")`` 优先, 失败 fallback hardcoded
+    ``catfish-private-main`` (客户改 roles.yaml 真**全代码跟着走**, 这里**0**
+    硬编码改 sed 真**Companion / hermes / tool-bridge 同步**).
     """
     try:
         import httpx  # noqa: PLC0415
@@ -777,6 +782,8 @@ def _expertise_llm_call(prompt: str) -> str:
     token = _read_id_token()
     if not token:
         return ""
+    from . import role_resolver  # noqa: PLC0415
+    model_name = role_resolver.resolve("chat_default") or "catfish-private-main"
     try:
         with httpx.Client(timeout=60.0) as client:
             resp = client.post(
@@ -786,7 +793,7 @@ def _expertise_llm_call(prompt: str) -> str:
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "catfish-private-main",
+                    "model": model_name,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.1,
                     "max_tokens": 2000,

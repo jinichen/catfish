@@ -54,7 +54,7 @@ roles:
   # email_scheduler / phishing_scan / political_scan 真 background task.
   # 默认 catfish-private-main 内网, 数据零出端 (P3.5.27). 客户嫌慢可显式
   # override 成 public flash 接受数据出端.
-  rate_fast: catfish-private-main
+  rate_fast: catfish-public-qwen-flash
 
   # ─── 长 context 总结 ────────────────────────────────
   # catfish-memory dream / cross-session journal summarizer. 1M+ context.

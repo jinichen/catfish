@@ -263,7 +263,7 @@ def _format_transcripts_table(transcripts: list[dict]) -> str:
 
 async def call_llm(
     messages: list[dict],
-    model: str = "catfish-private-main",
+    model: str | None = None,
     *,
     gateway_url: str | None = None,
     auth_token: str | None = None,
@@ -272,15 +272,20 @@ async def call_llm(
     temperature: float = 0.3,  # RecMode 综合要稳, 不要太创造
     max_tokens: int = 8000,
 ) -> str:
-    """调 catfish-private-main 综合录屏 → 输出 JSON 字符串 (caller 自己 parse_llm_output).
+    """调主力 chat 综合录屏 → 输出 JSON 字符串 (caller 自己 parse_llm_output).
 
     走自己 gateway /v1/chat/completions (复用 RBAC + quota + fallback cap),
     不直连 LiteLLM. gateway_url 默认 http://localhost:8999, auth_token 默认走
     CATFISH_DEV_TOKEN env (跟 internal_models.py 的 a2a 调用同模式).
 
+    P3.5.29 Phase 5 (6/17 鸿波): ``model`` 真**None default** —
+    body 真 ``role_resolver.resolve("chat_default")`` 拿真当前部署 model name.
+    caller 真**显式传** ``model=...`` 仍优先 (selector_repair / 测试可 override).
+    fail-silent: gateway 没起 → 真**hardcoded fallback** ``catfish-private-main``.
+
     Args:
         messages: build_messages(inputs) 输出
-        model: 模型 id (默认 catfish-private-main, multi-modal)
+        model: 模型 id (None default → role_resolver "chat_default"; 显式传 override)
         gateway_url: 默认 http://localhost:8999 (env CATFISH_GATEWAY_URL 覆盖)
         auth_token: 默认 env CATFISH_DEV_TOKEN
         timeout_s: 长 multipart messages 大约 60-180s, 给 300s
@@ -304,6 +309,12 @@ async def call_llm(
             "RecMode aggregator.call_llm: 没 auth token. "
             "设 CATFISH_DEV_TOKEN env 或 caller 显式传 auth_token."
         )
+
+    # P3.5.29 Phase 5 (6/17 鸿波): model None → role_resolver chat_default.
+    # 真**caller 显式传** override 优先 (selector_repair / tests 用).
+    if model is None:
+        from .. import role_resolver  # noqa: PLC0415
+        model = role_resolver.resolve("chat_default") or "catfish-private-main"
 
     payload = {
         "model": model,
