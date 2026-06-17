@@ -237,6 +237,22 @@ pub struct MessageAppendInput {
 }
 
 /// 追加一条消息到 messages 表, 顺便更新 sessions.message_count + token 统计。
+///
+/// P3.5.21 (6/17 鸿波): assistant role 加 idempotent — INSERT 前 query 同 session
+/// 最后一条 assistant, content + tool_calls 完全一样 → skip + 返已有 rowid.
+///
+/// 真因: Companion useChat.ts:332 之前 `if (!refs.viaHermes && ctx.sessionId)` 走
+/// hermes 路径跳过 persist 信任 hermes 自己写. 但 hermes 真有不 persist 的 case
+/// (鸿波 6/17 12:46 turn end hermes log "history=58" 应该 59, 差 1 = 上 turn assistant
+/// 没 persist 到老 session). Companion 切走再回来从 state.db load 不见 → 丢数据.
+///
+/// 修法: Companion 改总 persist (useChat.ts:332 拆 !viaHermes 守门). 风险 = 5/23
+/// BL-COMPANION-HERMES-SESSION-REUSE 撞过双写 UI 重复 (hermes 也写 + Companion 也写).
+/// 这里 idempotent 是双写防护底: 同 session 最后一条 assistant + 同 content + 同
+/// tool_calls JSON → 第 2 次 INSERT skip 返已有 rowid.
+///
+/// 不动 user / tool role — user "继续" 真会反复发 (鸿波长程任务习惯), 不能 dedup.
+/// tool 是 hermes 独自 emit, Companion 不会写, 不会双写.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn session_message_append(
     input: MessageAppendInput,
@@ -244,6 +260,31 @@ pub async fn session_message_append(
     tokio::task::spawn_blocking(move || {
         let conn = open_db_for_write()?;
         let ts = now_unix();
+
+        // P3.5.21 idempotent guard: assistant role + 同 session 最后一条 assistant
+        // 内容相同 → skip insert, 返已有 rowid. 防 hermes / Companion 双写.
+        if input.role == "assistant" {
+            let last: Option<(i64, Option<String>, Option<String>)> = conn
+                .query_row(
+                    "SELECT id, content, tool_calls FROM messages \
+                     WHERE session_id = ?1 AND role = 'assistant' \
+                     ORDER BY id DESC LIMIT 1",
+                    params![input.session_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .ok();
+            if let Some((existing_id, existing_content, existing_tool_calls)) = last {
+                let content_same = existing_content.as_deref() == input.content.as_deref();
+                let tools_same = existing_tool_calls.as_deref() == input.tool_calls.as_deref();
+                if content_same && tools_same {
+                    log::info!(
+                        "P3.5.21 idempotent skip: session={} assistant content + tool_calls 跟最后一条 (rowid={}) 完全一样, 防双写",
+                        input.session_id, existing_id,
+                    );
+                    return Ok::<i64, String>(existing_id);
+                }
+            }
+        }
 
         conn.execute(
             r#"

@@ -324,12 +324,20 @@ export function useChat(_initialModel: string) {
         updateMessage(assistantId, { status: "done" });
       }
       // 持久化 assistant 消息(完整 content + tool_calls)
-      // 5/23 BL-COMPANION-HERMES-SESSION-REUSE: hermes 路径下 hermes 自己已经写
-      // 了 assistant 到 state.db, companion 再写就双写 (用户看 UI 重复 2 次).
-      // 老 gateway 路径 hermes 不参与, companion 必须写.
-      // 5/24 BL-MULTI-SESSION-STREAM: 用 ctx.sessionId (send 入口锁定) 不读 store —
-      // 防用户切走后 final 消息写到新 session 名下.
-      if (!refs.viaHermes && ctx.sessionId) {
+      //
+      // P3.5.21 (6/17 鸿波"丢数据 critical"): 5/23 BL-COMPANION-HERMES-SESSION-REUSE
+      // 老逻辑 `if (!refs.viaHermes && ctx.sessionId)` 走 hermes 路径跳过 persist,
+      // 信任 hermes 自己写 state.db. 但 hermes 真有不 persist 的 case (鸿波 6/17
+      // 12:46 turn end log "history=58" 应该 59, 差 1 = 上 turn assistant 没 persist
+      // 到老 session). Companion 切走再回来 load 不见 → 丢数据.
+      //
+      // 修法: 改 `if (ctx.sessionId)` 总 persist. 双写风险 (5/23 撞过 UI 重复 2 条
+      // assistant) 由 session_message_append.rs idempotent 兜底 — assistant role
+      // INSERT 前 query 同 session 最后一条 assistant, content + tool_calls 完全
+      // 一样 → skip + 返已有 rowid.
+      //
+      // 5/24 BL-MULTI-SESSION-STREAM 保留: 用 ctx.sessionId (send 入口锁定) 不读 store.
+      if (ctx.sessionId) {
         void persistMessage(finalAssistant, ctx.sessionId);
       }
 
