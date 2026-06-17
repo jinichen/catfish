@@ -46,6 +46,14 @@ interface ChatState {
   streamingId: string | null;
   /** 选中的模型 id */
   model: string;
+  /** P3.5.18 Phase 2 (6/17 鸿波"自动进行压缩, 提示这个不是觉得奇怪"): hermes preflight
+   * 自动压缩时 真**inline status text** 真**streaming 期间显**, stream done 后清 null.
+   * plugin P19 真**桥** agent.status_callback → SSE `hermes.tool.progress` (tool="catfish-lifecycle").
+   * lib/chat.ts 真**handle** → onLifecycle("running" | "completed", text). useChat 真**setLifecycleStatus**.
+   * null = 真**当前没**lifecycle 真**inline 不显**. 字符串 = 真**显** (e.g. "📦 Preflight compression: ...").
+   */
+  lifecycleStatus: string | null;
+
   /** P3.5.29 Phase 6.3 (6/17 鸿波): 真**modelPickedByUser flag** 真**修 picker 不
    * 联动 yaml chat_default bug**.
    *
@@ -91,6 +99,8 @@ interface ChatState {
   incrementPromiseNudge: (id: string) => void;
   setIsStreaming: (v: boolean) => void;
   setStreamingId: (id: string | null) => void;
+  /** P3.5.18 Phase 2 (6/17 鸿波): inline lifecycle status (压缩进度). */
+  setLifecycleStatus: (s: string | null) => void;
   /** P3.5.29 Phase 6.3 (6/17 鸿波): pickedByUser **默认 true** — 老 caller 真**全
    * 用户 picker path 真**0 改**. 真**internal** call (ChatTab catalog effect) 显式
    * 传 false 真**signal "yaml 自动 propagate, 不是用户选"**.
@@ -134,6 +144,8 @@ export const useChatStore = create<ChatState>((set) => ({
   isStreaming: false,
   streamingId: null,
   model: "catfish-private-main",
+  // P3.5.18 Phase 2 (6/17 鸿波): hermes preflight 自动压缩 真**inline 状态文本**.
+  lifecycleStatus: null,
   // P3.5.29 Phase 6.3 (6/17 鸿波): 真**modelPickedByUser flag** 真**修联动 bug**.
   // 初始 false — ChatTab mount useEffect 真**catalog.default 真**catfish 真**propagate**.
   modelPickedByUser: false,
@@ -171,6 +183,7 @@ export const useChatStore = create<ChatState>((set) => ({
     })),
   setIsStreaming: (v) => set({ isStreaming: v }),
   setStreamingId: (id) => set({ streamingId: id }),
+  setLifecycleStatus: (s) => set({ lifecycleStatus: s }),
   setModel: (model, pickedByUser = true) => {
     // P3.5.29 Phase 6.3 (6/17 鸿波): pickedByUser **默认 true** — 老 caller (chat
     // picker onChange / visionSwitch) 真**全用户主动 path 真**0 改**, 真**signal
@@ -295,5 +308,7 @@ export const useChatStore = create<ChatState>((set) => ({
       // 真**老 session 真**load**: loadSession 真**不动 model** (line 205 BL-GLOBAL-MODEL
       // 5/23 注释), 真**不动 modelPickedByUser** 真**保留切会话前的 lock 状态**.
       modelPickedByUser: false,
+      // P3.5.18 Phase 2 (6/17 鸿波): 新对话清 lifecycleStatus.
+      lifecycleStatus: null,
     }),
 }));

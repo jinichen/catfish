@@ -5,6 +5,7 @@ import ChatMessage from "./ChatMessage";
 import ChatInput from "./ChatInput";
 import type { Attachment, ChatMessage as Msg } from "../../types/chat";
 import { useAgentStore } from "../../store/agent";
+import { useChatStore } from "../../store/chat";
 import { toolBridgeChatApproval } from "../../lib/tauri";
 
 interface PendingApproval {
@@ -40,6 +41,9 @@ export default function ChatPanel({
   onReset,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  // P3.5.18 Phase 2 (6/17 鸿波): hermes preflight 自动压缩 inline status. plugin P19 桥
+  // status_callback → SSE. lib/chat.ts onLifecycle → useChat setLifecycleStatus.
+  const lifecycleStatus = useChatStore((s) => s.lifecycleStatus);
 
   // 新消息或 streaming token 来,自动滚到底
   useEffect(() => {
@@ -162,6 +166,29 @@ export default function ChatPanel({
             onNudge={() => onSend("继续", [])}
           />
         ))}
+        {/* P3.5.18 Phase 2 (6/17 鸿波): hermes preflight 自动压缩 真**inline 状态**.
+            stream done 后 useChat 真**清 lifecycleStatus = null** → 自动消失.
+            只 streaming 中 + 真**lifecycleStatus 非 null** 才显. 不打扰 message 流. */}
+        {isStreaming && lifecycleStatus && (
+          <div
+            style={{
+              padding: "var(--space-2) var(--space-3)",
+              margin: "var(--space-2) 0",
+              fontSize: 12,
+              color: "var(--catfish-text-muted)",
+              background: "var(--catfish-bg-elevated)",
+              border: "1px solid var(--catfish-border)",
+              borderRadius: "var(--radius-sm)",
+              fontStyle: "italic",
+              display: "flex",
+              alignItems: "center",
+              gap: "var(--space-2)",
+            }}
+            aria-live="polite"
+          >
+            <span style={{ display: "inline-block" }}>{lifecycleStatus}</span>
+          </div>
+        )}
       </div>
       {pending && (
         <div className="approval-banner">

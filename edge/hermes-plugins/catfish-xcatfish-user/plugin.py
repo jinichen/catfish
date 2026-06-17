@@ -377,6 +377,18 @@ def _apply_patches() -> None:
             "P18: _patch_p18_compress_endpoint 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
             e, exc_info=True,
         )
+    # P3.5.18 Phase 2 (6/17 鸿波"自动进行压缩, 提示这个不是觉得奇怪"): hermes preflight
+    # 自动压缩时**Companion 0 反馈** — chat 卡 30 秒不知道发生啥. 修法:
+    # _create_agent post-init 注入 status_callback 桥 tool_progress_callback,
+    # preflight `_emit_status('📦 Preflight compression...')` 真**经 catfish-lifecycle
+    # tool name 走 SSE hermes.tool.progress channel** → Companion 接 + 显 inline.
+    try:
+        _patch_p19_status_callback_bridge()
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "P19: _patch_p19_status_callback_bridge 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
+            e, exc_info=True,
+        )
 
 
 # ── P16 (P3.4.C 6/15 鸿波: session_search 76s → 340ms) ──────────────────
@@ -2034,6 +2046,105 @@ def _patch_p18_compress_endpoint() -> None:
     logger.info(
         "P18 APIServerAdapter._handle_compress_session_stream 已挂 ✓ "
         "(route 由 Application.__init__ patch 真**未 freeze 时**注册)"
+    )
+
+
+# ── P19 (P3.5.18 Phase 2, 6/17 鸿波 audit miss revert 后 真**正确路径**) ─
+#
+# # 真**鸿波诉求 verbatim 链** (P3.5.17.c.1 commit + P3.5.18 design doc)
+#
+# > "自动进行压缩, 提示这个不是觉得奇怪" (P3.5.17.c.1 commit verbatim)
+# > "为什么还是提示, 直接压缩, 压缩过程可以弹窗显示压缩进度" (P3.5.18 design)
+#
+# 真**P3.5.17.b 已修** hermes 自带 ContextCompressor (catfish-gateway auth fallback
+# 让 hermes-cli auxiliary 缺 X-Catfish-User 不再 400 paused). 真**hermes preflight
+# 真**自动 trigger compress_context**, 真**但 真**Companion 0 反馈** — chat 卡 30s
+# 不知道发生啥, 真**鸿波感知 "怎么还没回?"**.
+#
+# # 真**真**audit 真因** (6/17 22:50)
+#
+# hermes 真**`_create_agent` (api_server.py:1068) 真**0 status_callback 参数**:
+#   def _create_agent(self, ..., stream_delta_callback, tool_progress_callback,
+#                     tool_start_callback, tool_complete_callback, ...):
+#
+# 真**`_run_agent` (line 3584) 真**call _create_agent 真**也没传 status_callback**.
+# 真**`AIAgent(model=, ..., status_callback=status_callback)` 真**永 None**.
+#
+# 真**preflight `agent._emit_status("📦 Preflight compression: ...")` (run_agent.py:761)**
+# → 真**`self._vprint(...)` 真 CLI 显** + 真**`self.status_callback(...)` 真 None skip**.
+# → 真**API server (Companion) 0 收**, telegram/discord/slack 真 wire callback 真 收.
+#
+# # 真**修法**
+#
+# P19 wrap `APIServerAdapter._create_agent` post-init:
+#   1. 真**捕获 kwargs.tool_progress_callback** (hermes `_run_agent` 真传)
+#   2. 真**create `catfish_status_callback(kind, message)`** 真**桥 tool_progress_callback**:
+#      tool_progress_callback(
+#          event_type=f"catfish.lifecycle.{kind}",
+#          tool_name="catfish-lifecycle",
+#          preview=message,
+#      )
+#   3. 真**`agent.status_callback = catfish_status_callback`** (instance attr set)
+#
+# 真**`tool_progress_callback` 真**stream_q.put(("__tool_progress__", payload))**
+# → SSE 真`event: hermes.tool.progress` (api_server.py:2207) 真**Companion 接** 真**显**.
+#
+# 真**Companion 真**配套改 lib/chat.ts**: 真**handle `tool === "catfish-lifecycle"`**
+# → 真**onLifecycle callback** → useChat → ChatPanel inline 显 "📦 Compacting...".
+#
+# # 真**和 P11 model_override 真**叠加 wrap**
+#
+# P5/P6/P11 已 wrap `_create_agent` (line 930). P19 真**叠加同样 pattern** —
+# `_orig_create_agent = APIServerAdapter._create_agent` 真**这时拿到 真**P5/P6/P11-wrapped
+# 版本**, 真**call 完后 真**post-init inject status_callback**. 真**不破 P5/P6/P11**.
+
+def _patch_p19_status_callback_bridge() -> None:
+    """P19: post-init 注入 agent.status_callback 桥 tool_progress_callback.
+
+    真**让 hermes preflight 自动压缩 真**SSE 推 progress 给 Companion**, 真**用户
+    看 chat 真**不再卡 30s 不知道发生啥**.
+    """
+    from gateway.platforms.api_server import APIServerAdapter
+
+    _orig_create_agent_p19 = APIServerAdapter._create_agent
+
+    def patched_create_agent_p19(self, *args, **kwargs):
+        agent = _orig_create_agent_p19(self, *args, **kwargs)
+        # 真**捕获 tool_progress_callback** (hermes _run_agent line 3617 真传)
+        tpc = kwargs.get("tool_progress_callback")
+        if tpc is None or not callable(tpc):
+            # 真**caller 真**没传 callback** (e.g. non-stream path) — skip wire.
+            return agent
+
+        def catfish_status_callback(kind, message=""):  # noqa: ANN001
+            """真**桥** `agent._emit_status(msg)` → SSE hermes.tool.progress.
+
+            真**kind 真**hermes 真**'lifecycle' / 'warn'** (run_agent.py:777/794).
+            真**Companion 真**tool="catfish-lifecycle" 真**marker** 真**分发 inline
+            进度 UI 真**不污染 tool_calls list**.
+            """
+            try:
+                tpc(
+                    event_type=f"catfish.lifecycle.{kind}",
+                    tool_name="catfish-lifecycle",
+                    preview=str(message)[:500],
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.debug("P19 catfish_status_callback push 失败 (静默): %s", e)
+
+        try:
+            agent.status_callback = catfish_status_callback
+            logger.debug(
+                "P19 agent.status_callback 已注入 (桥 tool_progress_callback)"
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("P19 agent.status_callback set 失败: %s", e)
+        return agent
+
+    APIServerAdapter._create_agent = patched_create_agent_p19
+    logger.info(
+        "P19 APIServerAdapter._create_agent post-init wraps status_callback "
+        "→ SSE catfish-lifecycle ✓"
     )
 
 

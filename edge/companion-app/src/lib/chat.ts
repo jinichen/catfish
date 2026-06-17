@@ -45,6 +45,14 @@ interface SendChatParams {
   onDone: (info?: ChatStreamDoneInfo) => void;
   /** 任何错误 */
   onError: (msg: string) => void;
+  /** P3.5.18 Phase 2 (6/17 鸿波): hermes preflight 自动压缩 真**进度推 SSE**.
+   *  plugin.py P19 真**桥** agent.status_callback → tool_progress_callback(
+   *    event_type="catfish.lifecycle.lifecycle|warn", tool_name="catfish-lifecycle", preview=msg).
+   *  hermes 真**SSE emit `hermes.tool.progress`** 真`{tool: "catfish-lifecycle", label, status}`.
+   *  Companion handle 真**dispatch onLifecycle**. text 真**preview 字段** ("📦 Preflight compression...").
+   *  status: "running" (push) or "completed" (清 inline).
+   */
+  onLifecycle?: (status: "running" | "completed", text: string) => void;
   signal?: AbortSignal;
   /** BL-FIX45 (5/11) 内部递归用 — 错误恢复 retry 计数, 防死循环.
    *  外部调用方不应传, 仅 streamChat 自己 retry 时传.
@@ -595,10 +603,21 @@ export async function streamChat(params: SendChatParams): Promise<void> {
         // ChatToolCall 弹 approval button. 其它 tool.progress 状态 (running/
         // completed) 暂时也 silently ignore (chat UI 走 OpenAI delta.tool_calls
         // 拼装, 不需要 hermes.tool.progress 这套额外协议).
+        //
+        // P3.5.18 Phase 2 (6/17 鸿波): tool === "catfish-lifecycle" 是 plugin P19
+        // 桥 agent.status_callback → tool_progress_callback 的 marker. 这是 preflight
+        // 压缩 / context warning 等 lifecycle event, 不是真**真**tool call**. 走 onLifecycle
+        // 让 useChat 设 inline status, 不进 tool_calls 列表 (avoid pollution).
         if (sseEventType === "hermes.tool.progress") {
           try {
             const ev = JSON.parse(sseData);
-            if (ev?.status === "approval_pending") {
+            if (ev?.tool === "catfish-lifecycle") {
+              const status = ev?.status === "completed" ? "completed" : "running";
+              const text = String(ev?.label ?? ev?.preview ?? "").trim();
+              if (params.onLifecycle) {
+                params.onLifecycle(status, text);
+              }
+            } else if (ev?.status === "approval_pending") {
               window.dispatchEvent(
                 new CustomEvent("catfish:approval-pending", { detail: ev }),
               );

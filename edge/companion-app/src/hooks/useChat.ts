@@ -69,6 +69,8 @@ export function useChat(_initialModel: string) {
   const appendToMessage = useChatStore((s) => s.appendToMessage);
   const setIsStreaming = useChatStore((s) => s.setIsStreaming);
   const setStreamingId = useChatStore((s) => s.setStreamingId);
+  // P3.5.18 Phase 2 (6/17 鸿波): hermes preflight 自动压缩 inline status.
+  const setLifecycleStatus = useChatStore((s) => s.setLifecycleStatus);
   const setModelInStore = useChatStore((s) => s.setModel);
   const setPersistedSessionId = useChatStore((s) => s.setPersistedSessionId);
   const resetStore = useChatStore((s) => s.reset);
@@ -299,6 +301,17 @@ export function useChat(_initialModel: string) {
             status: "error",
             error: err,
           });
+        },
+        // P3.5.18 Phase 2 (6/17 鸿波): plugin P19 桥 hermes preflight `_emit_status`
+        // → SSE `hermes.tool.progress` (tool="catfish-lifecycle") → 这里 set inline 状态.
+        // status "running" → 显; "completed" → 清 (但 hermes 真**目前不发 completed** —
+        // preflight emit 一次后 compress 跑完 stream 自然 done, finally block 清).
+        onLifecycle: (status, text) => {
+          if (status === "completed" || !text) {
+            setLifecycleStatus(null);
+          } else {
+            setLifecycleStatus(text);
+          }
         },
       });
 
@@ -823,6 +836,8 @@ export function useChat(_initialModel: string) {
         if (currentStoreSession === sessionIdForStream) {
           setStreamingId(null);
           setIsStreaming(false);
+          // P3.5.18 Phase 2: stream 结束 真**清 inline lifecycle status**.
+          setLifecycleStatus(null);
         }
         abortRef.current = null;
         // 通知 registry stream 结束 (sidebar ⏳ 也跟着消失)
