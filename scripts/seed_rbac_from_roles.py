@@ -69,8 +69,10 @@ def main() -> int:
     parser.add_argument(
         "--dsn",
         type=str,
-        default=os.environ.get("CATFISH_PG_DSN", ""),
-        help="DB connection 真**DSN** (默认: env CATFISH_PG_DSN)",
+        default=None,
+        help="DB connection 真**DSN** (默认: env CATFISH_PG_DSN). "
+             "P3.5.29.2 改 None default — shell `--dsn $VAR` 真**展开空** 不再"
+             "撞 argparse 'expected one argument' 错.",
     )
     parser.add_argument(
         "--apply",
@@ -144,9 +146,17 @@ def main() -> int:
         return 0
 
     # 真**实际**写 db
-    if not args.dsn:
+    # P3.5.29.2: --dsn 真**优先**, 真不传 fallback env CATFISH_PG_DSN.
+    dsn = args.dsn or os.environ.get("CATFISH_PG_DSN", "")
+    if not dsn:
         print(
-            "❌ 真**--dsn** 没传, env CATFISH_PG_DSN 也没设. 退出.",
+            "❌ 真**没 DSN** — --dsn 没传 (或真**shell 展开成空**), "
+            "env CATFISH_PG_DSN 也没设. 退出.\n"
+            "   真**用法**:\n"
+            "     export CATFISH_PG_DSN=postgresql://catfish:pw@localhost/catfish\n"
+            "     python3 scripts/seed_rbac_from_roles.py --apply\n"
+            "   或:\n"
+            "     python3 scripts/seed_rbac_from_roles.py --apply --dsn 'postgresql://...'",
             file=sys.stderr,
         )
         return 1
@@ -161,11 +171,11 @@ def main() -> int:
         return 1
 
     print("=" * 60)
-    print(f"真**执行** UPDATE 到 db: {args.dsn[:30]}...")
+    print(f"真**执行** UPDATE 到 db: {dsn[:30]}...")
     print("=" * 60)
 
     affected = 0
-    with psycopg.connect(args.dsn, autocommit=False) as conn:
+    with psycopg.connect(dsn, autocommit=False) as conn:
         with conn.cursor() as cur:
             for dept, models in sql_list:
                 models_jsonb = json.dumps(models, ensure_ascii=False)
