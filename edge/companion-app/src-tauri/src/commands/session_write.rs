@@ -258,13 +258,25 @@ pub async fn session_message_append(
     input: MessageAppendInput,
 ) -> Result<i64, String> {
     tokio::task::spawn_blocking(move || {
-        let conn = open_db_for_write()?;
+        let mut conn = open_db_for_write()?;
         let ts = now_unix();
 
-        // P3.5.21 idempotent guard: assistant role + 同 session 最后一条 assistant
-        // 内容相同 → skip insert, 返已有 rowid. 防 hermes / Companion 双写.
+        // P3.5.21 + P3.5.24 (6/17 鸿波 "回答都是重复的") idempotent guard:
+        // assistant role + 同 session 最后一条 assistant 内容相同 → skip insert.
+        //
+        // P3.5.24 改进 2 条:
+        //   1. **trim() 兜 byte 差**: hermes _persist_session vs Companion onDone
+        //      写的 content 可能末尾 trailing newline/whitespace 一字之差, 严格 ==
+        //      不命中导致 idempotent 失效, UI 显双写. 改成 trim() 后字符串比.
+        //   2. **BEGIN IMMEDIATE transaction 兜 race**: hermes 跟 Companion 真并发
+        //      onDone 后都跑 persist, query SELECT 时 race window 没命中 last row →
+        //      都 INSERT → 双写. BEGIN IMMEDIATE 锁 db, query+INSERT 原子, race 消失.
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|e| format!("BEGIN IMMEDIATE 失败: {e}"))?;
+
         if input.role == "assistant" {
-            let last: Option<(i64, Option<String>, Option<String>)> = conn
+            let last: Option<(i64, Option<String>, Option<String>)> = tx
                 .query_row(
                     "SELECT id, content, tool_calls FROM messages \
                      WHERE session_id = ?1 AND role = 'assistant' \
@@ -274,21 +286,24 @@ pub async fn session_message_append(
                 )
                 .ok();
             if let Some((existing_id, existing_content, existing_tool_calls)) = last {
-                // input.content 是 String (非 Option), 用 as_str(); existing_content
-                // 是 Option<String> 走 as_deref() → Option<&str>. 比较时 input 包 Some.
-                let content_same = existing_content.as_deref() == Some(input.content.as_str());
+                // P3.5.24: 用 trim() 兜 trailing whitespace/newline 差异.
+                let existing_trimmed = existing_content.as_deref().map(|s| s.trim());
+                let input_trimmed = input.content.as_str().trim();
+                let content_same = existing_trimmed == Some(input_trimmed);
                 let tools_same = existing_tool_calls.as_deref() == input.tool_calls.as_deref();
                 if content_same && tools_same {
                     log::info!(
-                        "P3.5.21 idempotent skip: session={} assistant content + tool_calls 跟最后一条 (rowid={}) 完全一样, 防双写",
+                        "P3.5.21+24 idempotent skip: session={} assistant content+tool_calls 跟 last (rowid={}) 等 (trim 后), 防双写",
                         input.session_id, existing_id,
                     );
+                    // commit transaction (no-op, 没 INSERT) — 防 tx Drop 时 ROLLBACK warn.
+                    let _ = tx.commit();
                     return Ok::<i64, String>(existing_id);
                 }
             }
         }
 
-        conn.execute(
+        tx.execute(
             r#"
             INSERT INTO messages (
                 session_id, role, content, tool_call_id, tool_calls, tool_name,
@@ -310,7 +325,7 @@ pub async fn session_message_append(
         .map_err(|e| format!("插入 message 失败: {e}"))?;
 
         // 更新 session 的 message_count
-        conn.execute(
+        tx.execute(
             "UPDATE sessions SET message_count = message_count + 1 WHERE id = ?1",
             params![input.session_id],
         )
@@ -318,14 +333,16 @@ pub async fn session_message_append(
 
         // 如果是 tool_calls 消息, 增加 tool_call_count
         if input.tool_calls.is_some() {
-            conn.execute(
+            tx.execute(
                 "UPDATE sessions SET tool_call_count = tool_call_count + 1 WHERE id = ?1",
                 params![input.session_id],
             )
             .ok();
         }
 
-        let row_id = conn.last_insert_rowid();
+        let row_id = tx.last_insert_rowid();
+        // P3.5.24: 提交 transaction 释放 IMMEDIATE 锁, 让别的进程能写.
+        tx.commit().map_err(|e| format!("transaction commit 失败: {e}"))?;
         Ok::<i64, String>(row_id)
     })
     .await
