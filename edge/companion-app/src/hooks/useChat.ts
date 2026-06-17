@@ -208,6 +208,15 @@ export function useChat(_initialModel: string) {
         // appendToMessage 按 id 找, 老 id 不在 store 时 (用户切走了) 自动 no-op.
         // 数据没丢: 最终 persistMessage 写完整 final assistant content 到 db.
         appendToMessage(assistantId, delta);
+        // P3.5.30 (6/17 鸿波): 5/24 BL-MULTI-SESSION-STREAM 真**补齐 registry mirror**.
+        // 镜像 store messages 到 registry, 真**ChatTab unmount 后 stream 继续累**, 真**切回时 mount restore**
+        // 真**看到 stream 中 / final 状态**. 真**stream 中切走 → 切回 0 延迟**真**关键**.
+        if (ctx.sessionId) {
+          streamRegistry.update(ctx.sessionId, (s) => {
+            s.messages = useChatStore.getState().messages;
+            s.streamingId = assistantId;
+          });
+        }
       };
       const scheduleFlushThisRound = () => {
         if (rafId !== null) return;
@@ -322,6 +331,15 @@ export function useChat(_initialModel: string) {
         });
       } else {
         updateMessage(assistantId, { status: "done" });
+      }
+      // P3.5.30 (6/17 鸿波): 真**round 结束 镜像 final messages 到 registry**.
+      // ChatTab 切回时 mount restore (60 秒 TTL 内) 真**0 延迟看 final**.
+      // 多轮 tool_call 真**每轮都 sync**, 真**最后一轮 finally streamRegistry.finish() 真**标 not running**.
+      if (ctx.sessionId) {
+        streamRegistry.update(ctx.sessionId, (s) => {
+          s.messages = useChatStore.getState().messages;
+          s.streamingId = null;
+        });
       }
       // 持久化 assistant 消息(完整 content + tool_calls)
       //

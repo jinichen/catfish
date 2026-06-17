@@ -12,6 +12,7 @@ import { useChat } from "../../hooks/useChat";
 import { useChatStore } from "../../store/chat";
 import { useCatalog } from "../../hooks/useCatalog";
 import { getSession, sessionGetTaskUid } from "../../lib/tauri";
+import * as streamRegistry from "../../lib/streamRegistry";
 import ChatPanel from "./ChatPanel";
 import ChatModelPicker from "./ChatModelPicker";
 import ChatSidebar from "./ChatSidebar";
@@ -43,6 +44,8 @@ export default function ChatTab() {
   const persistedSessionId = useChatStore((s) => s.persistedSessionId);
   const loadSession = useChatStore((s) => s.loadSession);
   const loadSessionAttachments = useChatStore((s) => s.loadSessionAttachments);
+  // P3.5.30 (6/17 鸿波): registry restore 真**消费 stream 中 / 完后真 messages 镜像**.
+  const setMessages = useChatStore((s) => s.setMessages);
   // P3.5.8 BL-FILE-SESSION-INDEX-V1 Phase 2 (6/16 鸿波): resume 时还原历史 image
   // base64 到 message.attachments, 让后续 toWire 走 multipart 带图给 vision LLM.
   // 老 Phase 1 只持久化 metadata, 切走 session / 重启 Companion 后历史图在 wire
@@ -140,6 +143,48 @@ export default function ChatTab() {
     },
     [cancelAndSend],
   );
+
+  /** P3.5.30 (6/17 鸿波) — registry restore + 实时 sync.
+   *
+   * 真**修 P3.5.21 原 bug** "切走 chat 再回来不见消息": 5/24 BL-MULTI-SESSION-STREAM
+   * 真**只 ship 半边** — controller 跨生命周期跑, 真**镜像 messages + restore 没 wire**.
+   * 用户 stream 中切 tab → stream 完成 → 老 finish() 立即 delete registry → 切回
+   * Chat tab 真**store 真 stream 之前 snapshot** → 真**等 polling 5 秒**才 sync db.
+   *
+   * 真**这 effect**:
+   *   1. mount 时 get(persistedSessionId) → 真**有 stream 中 / 完后镜像** → setMessages
+   *      恢复. stream 完成态真**dismiss(清 registry)**.
+   *   2. subscribe 真**stream 中 切回 真**实时 sync** (onDelta 真 ms 级更新 UI).
+   *      stream 结束 → 真**dismiss**.
+   *
+   * 真**前提**: useChat.flushThisRound / onDone 真**镜像 store messages → registry.update**
+   * (P3.5.30 配套改动). 真**老路径 (没镜像)**: registry 真**只 messages = []** 真**restore 不到**,
+   * setMessages 真**清空 store 真**bug**. 真**guard**: state.messages.length > 0 才 restore.
+   */
+  useEffect(() => {
+    if (!persistedSessionId) return;
+
+    const tryRestore = (): boolean => {
+      const state = streamRegistry.get(persistedSessionId);
+      if (!state) return false;
+      // 真**guard**: registry messages 真**空** 真**stale 老 useChat path 真**没镜像**, 别覆盖 store.
+      if (state.messages.length === 0) return false;
+      setMessages(state.messages);
+      if (!state.isStreaming) {
+        streamRegistry.dismiss(persistedSessionId);
+      }
+      return true;
+    };
+
+    // mount 时立即 restore (用户切回真**0 延迟看 final**)
+    tryRestore();
+
+    // stream 中 切回 真**实时 sync** (subscribe 真**onDelta raf 触发**)
+    const unsub = streamRegistry.subscribe(persistedSessionId, () => {
+      tryRestore();
+    });
+    return unsub;
+  }, [persistedSessionId, setMessages]);
 
   // 5/7 BL-D14: 当前选中的 session 也自动 polling — 5s 一次重拉 detail.
   // 让微信 / 飞书 / 企微进来的新消息自动 append 到 chat 面板.
