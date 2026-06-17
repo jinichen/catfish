@@ -115,11 +115,21 @@ fn init_active_provider() -> Provider {
     }
 }
 
-/// 同步 ping remote /v1/models. 启动期用 (在 init_active_provider 内, sync context).
-/// 不发真 embed 请求 — 只 GET /v1/models 检查可达, 几十 ms. 失败返 false → fallback local.
+/// 同步 ping remote /v1/catalog. 启动期用 (在 init_active_provider 内, sync context).
+/// 不发真 embed 请求 — 只 GET /v1/catalog 检查可达, 几十 ms. 失败返 false → fallback local.
+///
+/// P3.5.22 (6/17 鸿波) 改 /v1/models → /v1/catalog 真因:
+///   /v1/models 强 auth (app.py:1695 Depends(get_current_user)), 需 Bearer token.
+///   auth_token() 从 env CATFISH_INTERNAL_DEV_TOKEN 读, 但 macOS GUI Tauri app
+///   不继承 ~/.hermes/.env 的 env var → token 真空 → 不带 header → gateway 401.
+///   每次 Companion 启动 + 周期性重 init 都撞 401 noise (鸿波 14:37/14:43 log 验证).
+///
+///   /v1/catalog 是 anon endpoint (no auth required) — 鸿波本机 log 一直
+///   `GET /v1/catalog 200 OK` 频繁验证 anon 通. 用它当 "gateway 是否在线" 代理
+///   判断, 语义跟 /v1/models 等价, 不再 401.
 fn probe_remote_alive(remote: &RemoteProvider) -> bool {
     let url = format!(
-        "{}/v1/models",
+        "{}/v1/catalog",
         remote.config.gateway_url.trim_end_matches('/')
     );
     let probe_timeout = Duration::from_secs(remote.config.timeout_seconds.min(3));
@@ -130,12 +140,8 @@ fn probe_remote_alive(remote: &RemoteProvider) -> bool {
         Ok(c) => c,
         Err(_) => return false,
     };
-    let token = auth_token();
-    let mut req = client.get(&url);
-    if !token.is_empty() {
-        req = req.bearer_auth(&token);
-    }
-    matches!(req.send(), Ok(r) if r.status().is_success())
+    // /v1/catalog 不需 auth, 不再带 bearer_auth.
+    matches!(client.get(&url).send(), Ok(r) if r.status().is_success())
 }
 
 /// 暴露 active provider (lazy init). 全 process 唯一.
