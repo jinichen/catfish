@@ -1213,13 +1213,28 @@ def check_quota(
     return QuotaCheck(allowed=True)
 
 
+def _resolve_friendly_model(role_str: str, fallback: str) -> str:
+    """P3.5.29 Phase 2 (6/17 鸿波): error message 真**用 role 动态 resolve**,
+    不 hardcode model name. 客户部署改 roles.yaml → error message 真**跟着走**.
+    roles 没 load (gateway startup 失败) → fallback 字符串 (老 hardcode 兼容).
+    """
+    try:
+        from . import roles as roles_module
+        return roles_module.resolve(role_str)
+    except Exception:
+        return fallback
+
+
 def friendly_quota_message(qc: QuotaCheck, user_email: str, model: str) -> str:
     """超额时给员工友好的提示. 不是 stack trace."""
     if qc.dimension == "per_user_minute":
         secs = max(qc.reset_at - int(time.time()), 1)
+        # P3.5.29 Phase 2: chat_default 真**主力内网** (默认 catfish-private-main,
+        # 客户改 yaml 真**跟着改**), 不 hardcode.
+        chat_default = _resolve_friendly_model("chat_default", "catfish-private-main")
         return (
             f"你这分钟 token 用得太多 ({qc.current:,}/{qc.limit:,}). "
-            f"等 {secs} 秒后再试, 或换 catfish-private-main (内网不限)."
+            f"等 {secs} 秒后再试, 或换 {chat_default} (内网不限)."
         )
     if qc.dimension == "per_user_day":
         return (
@@ -1227,9 +1242,12 @@ def friendly_quota_message(qc: QuotaCheck, user_email: str, model: str) -> str:
             "明天重置. 急用找 manager 临时升 quota."
         )
     if qc.dimension == "per_model_day":
+        # P3.5.29 Phase 2: chat_default + public_flash 真**dynamic resolve**.
+        chat_default = _resolve_friendly_model("chat_default", "catfish-private-main")
+        public_flash = _resolve_friendly_model("public_flash", "catfish-public-qwen-flash")
         return (
             f"模型 {model} 今天全员 quota 满了 ({qc.current:,}/{qc.limit:,}). "
-            "换 catfish-private-main 或 catfish-public-qwen-flash."
+            f"换 {chat_default} 或 {public_flash}."
         )
     if qc.dimension == "per_dept_day":
         return (
