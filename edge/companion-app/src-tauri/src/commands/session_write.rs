@@ -274,7 +274,9 @@ pub async fn session_message_append(
                 )
                 .ok();
             if let Some((existing_id, existing_content, existing_tool_calls)) = last {
-                let content_same = existing_content.as_deref() == input.content.as_deref();
+                // input.content 是 String (非 Option), 用 as_str(); existing_content
+                // 是 Option<String> 走 as_deref() → Option<&str>. 比较时 input 包 Some.
+                let content_same = existing_content.as_deref() == Some(input.content.as_str());
                 let tools_same = existing_tool_calls.as_deref() == input.tool_calls.as_deref();
                 if content_same && tools_same {
                     log::info!(
