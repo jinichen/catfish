@@ -66,23 +66,20 @@ export function AuditPage() {
         {loading && !audit && <div>加载中…</div>}
         {audit && (
           <>
-            {/* P3.5.26 (6/17 鸿波"头部不动, 只内容滚动"): PageHeader + FilterPillBar
-                sticky 在 main 真顶, 内容 (KPI + Cards) 真**正常 scroll**.
-                top: 0 在 main scroll container 顶部. zIndex: 5 真高于内容卡.
-                marginLeft/Right + paddingLeft/Right 抵消 main padding (var(--space-4))
-                让 sticky bar 横跨全宽. 真**视觉边界** 用 borderBottom 标示. */}
+            {/* P3.5.26.1 (6/17 鸿波"滚动到底再往上抖动"): 改 sticky 不用 negative
+                coord. 原 commit 6ebdce7 用 top: -16px + marginLeft/Right/Top: -16px
+                抵消 main padding 真**已知 Webkit sticky bug** — sticky 元素负 top +
+                负 margin 当 scroll 真临界 (overscroll bounce / 边界 reflow) 时
+                browser 重 compute bounding box 触发 repaint 抖动.
+                修法: top: 0 + 真**不抵消** main padding. sticky 真**贴 main 真
+                有效 scroll viewport** (在 main padding-top 之下 16px gap),
+                视觉上头部不贴 NavBar 真底, 但真**稳定不抖**. trade off 接受. */}
             <div
               style={{
                 position: "sticky",
-                top: "calc(var(--space-4) * -1)",
+                top: 0,
                 zIndex: 5,
                 background: "var(--bg)",
-                marginLeft: "calc(var(--space-4) * -1)",
-                marginRight: "calc(var(--space-4) * -1)",
-                marginTop: "calc(var(--space-4) * -1)",
-                paddingLeft: "var(--space-4)",
-                paddingRight: "var(--space-4)",
-                paddingTop: "var(--space-4)",
                 paddingBottom: "var(--space-3)",
                 borderBottom: "1px solid var(--border)",
                 display: "flex",
