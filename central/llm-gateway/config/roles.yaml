@@ -1,0 +1,138 @@
+# ============================================================
+# 鲶鱼 · model role 映射 (P3.5.29, 6/17 鸿波)
+# ============================================================
+#
+# 真**单一**业务意图 → 物理 model name 映射. 客户部署改这一文件,
+# 全代码 (catfish-gateway / Companion / hermes-plugins / tool-bridge)
+# **跟着走**, 不需要 sed 86 处 hardcode.
+#
+# # 真**用法**
+#
+# 1. 代码引用 role (不引用 model name):
+#    ```python
+#    # gateway 内部
+#    from catfish_gateway.roles import resolve, Role
+#    model = resolve(Role.RATE_FAST)
+#    ```
+#    ```rust
+#    // companion-app
+#    let model = role_config::resolve("rate_fast")?;
+#    ```
+#
+# 2. 客户部署只改这一 yaml:
+#    ```yaml
+#    # 客户 A
+#    roles:
+#      chat_default: customer-a-main
+#      rate_fast: customer-a-flash
+#    ```
+#
+# 3. 启动 gateway → `GET /v1/roles` 返 resolved mapping, 别的 service 拉.
+#
+# # 真**优先级 (高 → 低)** (代码 resolve 时)
+#
+#   1. picker_model 文件 (员工 chat picker 真选, P3.5.28)
+#   2. roles.yaml 真这里
+#   3. service per-service config (e.g. email.rate_model yaml override)
+#   4. hardcoded DEFAULT (兜底, 已弃)
+#
+# # 真**roles 命名 convention**
+#
+#   - 业务**意图** 命名, 不带"flash" / "pro" / "fast" 真**实现细节**
+#   - snake_case
+#   - 真**唯一**抽象层 — 别的 yaml (email.rate_model 等) 真**降级为 override**
+# ============================================================
+
+version: 1
+
+roles:
+  # ─── 主力 chat ───────────────────────────────────────
+  # Companion picker 真默认值. 员工日常 chat / advisor / briefing 都走这.
+  chat_default: catfish-private-main
+
+  # ─── 快速评级 / 后台扫描 ────────────────────────────
+  # email_scheduler / phishing_scan / political_scan 真 background task.
+  # 默认 catfish-private-main 内网, 数据零出端 (P3.5.27). 客户嫌慢可显式
+  # override 成 public flash 接受数据出端.
+  rate_fast: catfish-private-main
+
+  # ─── 长 context 总结 ────────────────────────────────
+  # catfish-memory dream / cross-session journal summarizer. 1M+ context.
+  # 默认 gemini-pro 2M (公网, 但**真**总结的是聚合 wiki 不是员工原话, 风险低).
+  # 客户嫌出端可改 catfish-private-main 128K (短一点接受).
+  summarize: catfish-public-gemini-pro
+
+  # ─── 多模态 (含图) ──────────────────────────────────
+  # multimodal_guard 真 detect 含图 → reroute 到这个 role.
+  vision: catfish-private-vision
+
+  # ─── embedding ────────────────────────────────────────
+  # advisor_relevance / wiki 语义搜索 / catfish-memory embedding.
+  # /v1/embeddings 真用这个 model.
+  embedding: catfish-private-embed
+
+  # ─── advisor 真 Call 2 single-shot tool_use ─────────
+  # /beta endpoint 强 tool_choice 支持 — DeepSeek V4 beta 真支持完整,
+  # Qwen 真不完整 (P3.4.E 鸿波 audit). 客户可换自家强 tool_use 模型.
+  advisor_call2: catfish-public-deepseek-flash
+
+  # ─── 备用公网 flash (rename-safe alias) ─────────────
+  # fallback_chain 真**递归 resolve**, 避免直接写 model name.
+  public_flash: catfish-public-qwen-flash
+
+# ─── fallback chain ────────────────────────────────────
+# chat_default 真**挂了**的 fallback 顺序. 真**引用 role**, 不引用 model name.
+# resolve 时**递归** (DFS visited set 防循环).
+fallback_chain:
+  - chat_default
+  - rate_fast
+  - public_flash
+
+# ─── RBAC 默认允许 (alembic migration 真用 role 展开) ──
+# 真**role refs**, alembic seed 时 resolve → model name list 写 db.
+# 老 row 真**手 SQL** patch (留 fresh session 真**migration script**).
+rbac_default_allowed:
+  employee:
+    - chat_default
+  manager:
+    - chat_default
+    - vision
+    - summarize
+  admin:
+    - chat_default
+    - vision
+    - summarize
+    - public_flash
+  sysadmin:
+    - chat_default
+    - vision
+    - summarize
+    - public_flash
+    - advisor_call2
+
+# ============================================================
+# 客户部署 examples
+# ============================================================
+#
+# 客户 A (自家命名空间):
+#   roles:
+#     chat_default: customer-a-main
+#     rate_fast: customer-a-flash
+#     vision: customer-a-vlm
+#     embedding: customer-a-bge
+#     summarize: customer-a-long-ctx
+#     advisor_call2: customer-a-tool
+#     public_flash: customer-a-cheap
+#
+# 客户 B (完全不同 model 集):
+#   roles:
+#     chat_default: llama-70b-zh
+#     rate_fast: llama-8b-zh
+#     vision: clip-vit-l
+#     embedding: bge-m3
+#     summarize: yi-200k
+#     advisor_call2: deepseek-coder-v4
+#     public_flash: llama-8b-zh
+#
+# 代码 0 改动, 真 docker pull 或 git pull 就能跑新部署.
+# ============================================================

@@ -139,6 +139,19 @@ async def lifespan(app: FastAPI):
     else:
         logger.info(".env not found -- using process env vars only")
 
+    # P3.5.29 (6/17 鸿波) — model role 抽象层 load. config/roles.yaml 真**业务
+    # 意图 → 物理 model name** 映射, 客户改这一文件全代码跟着走.
+    # load 失败真**只 warn** — gateway 还能跑 (老代码 hardcode 兼容), 但 GET
+    # /v1/roles 真**返 503**. fresh sprint 真**逐 phase** 切代码引用 role.
+    try:
+        from . import roles as roles_module
+        roles_module.load_roles()
+    except Exception as e:
+        logger.warning(
+            "roles.yaml 真**加载失败** — GET /v1/roles 真**503**, "
+            "代码兼容 hardcode 继续跑: %s", e,
+        )
+
     env_mode = os.environ.get("CATFISH_ENV", "dev")
     dev_token = os.environ.get("CATFISH_DEV_TOKEN", "dev-token-local")
     # Only show a fingerprint of the token, not the value itself
@@ -1689,6 +1702,31 @@ def _model_info_payload(m) -> dict[str, Any]:
         "supports_streaming": m.supports_streaming,
         "tier": m.tier,
     }
+
+
+@app.get("/v1/roles")
+async def list_roles() -> dict[str, Any]:
+    """P3.5.29 (6/17 鸿波) — model role 抽象 真**机器可读 mapping**.
+
+    返 roles.yaml 真**resolve 后**全 payload: roles dict + fallback_chain
+    (flat model names, 已递归 resolve) + rbac_default_allowed (RBAC role
+    → model list).
+
+    真**anonymous endpoint** (不要求 auth) — Companion / hermes 启动时拉真**预 auth**.
+    内容真**不敏感** (业务意图 → model name, 没 token / 没员工数据).
+
+    真**failure mode**:
+        - roles.yaml 没 load (startup 失败 / 文件不存在) → 503
+        - load 成功 → 200 + 完整 payload
+    """
+    from . import roles as roles_module
+    try:
+        return roles_module.to_public_dict()
+    except roles_module.RolesNotLoadedError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"roles.yaml 真**没加载** — gateway startup 失败 / 文件不存在: {e}",
+        )
 
 
 @app.get("/v1/models")
