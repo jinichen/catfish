@@ -1209,6 +1209,7 @@ def _patch_p8_p9_cors() -> None:
 
         def _patched_app_init(self, *args, middlewares=(), **kwargs):
             mws_list = list(middlewares) if middlewares else []
+            is_hermes_app_local = False
             try:
                 from gateway.platforms.api_server import (
                     cors_middleware,
@@ -1216,11 +1217,11 @@ def _patch_p8_p9_cors() -> None:
                 )
                 # fence: 只对 hermes api_server App 注入. 别的 aiohttp Application
                 # (Companion 本地 server / 别的 plugin) 不动.
-                is_hermes_app = (
+                is_hermes_app_local = (
                     cors_middleware in mws_list
                     or security_headers_middleware in mws_list
                 )
-                if is_hermes_app:
+                if is_hermes_app_local:
                     if _request_stash_middleware not in mws_list:
                         mws_list.append(_request_stash_middleware)
                     if _proxy_404_middleware not in mws_list:
@@ -1235,7 +1236,38 @@ def _patch_p8_p9_cors() -> None:
                     )
             except Exception as _e:
                 logger.debug("middleware inject fence check failed: %s", _e)
-            return _orig_app_init(self, *args, middlewares=tuple(mws_list), **kwargs)
+            _orig_app_init(self, *args, middlewares=tuple(mws_list), **kwargs)
+            # P18 (P3.5.18 6/17 鸿波) — post-init add_post 真**router 未 freeze 前**.
+            #
+            # 真**问题 (6/17 22:16 鸿波本机 catch)**: 之前 P18 真**wrap connect post**
+            # _orig_connect 真**runner.setup() → app.freeze()** 已跑, add_post 真**too late**
+            # 撞 'Cannot register a resource into frozen router'. 真**真**fix**: 真**Application
+            # 真创建时** add_post (此刻 router 真**未 freeze**, hermes 自己 connect 真**add_post
+            # 真**同时机**). handler 真**runtime call** `adapter._handle_compress_session_stream`
+            # via P7 stashed `request.app["_catfish_apiserver_adapter"]` (line 1241).
+            if is_hermes_app_local:
+                try:
+                    async def _p18_compress_handler(request):
+                        adapter = request.app.get("_catfish_apiserver_adapter")
+                        if adapter is None:
+                            return _aw.json_response(
+                                {"error": "P18 adapter not ready (P7 stash missing)"},
+                                status=503,
+                            )
+                        return await adapter._handle_compress_session_stream(request)
+                    self.router.add_post(
+                        "/api/sessions/{session_id}/compress/stream",
+                        _p18_compress_handler,
+                    )
+                    logger.info(
+                        "P18 route POST /api/sessions/{id}/compress/stream registered "
+                        "(via Application.__init__) ✓"
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "P18 add_post 失败 (via Application.__init__): %s", e,
+                    )
+            return None
 
         _patched_app_init._catfish_patched = True  # type: ignore[attr-defined]
         _aw.Application.__init__ = _patched_app_init
@@ -1984,35 +2016,25 @@ async def _handle_compress_session_stream(self, request):
 
 
 def _patch_p18_compress_endpoint() -> None:
-    """P18: 注册 POST /api/sessions/{session_id}/compress/stream SSE endpoint.
+    """P18: 真**注册 POST /api/sessions/{session_id}/compress/stream SSE handler**.
 
-    真**叠加 wrap connect()** (P7 已 wrap 过, 这里 wrap P7-wrapped 版本).
-    真**add_post 真 connect() 内** — hermes Application 真**run_app 后才 freeze**,
-    真**add_post 真**safe** (hermes 真 _orig_connect 真**自己 add_post 全 native routes**).
+    真**6/17 22:16 鸿波本机 bug fix**: 之前 P18 wrap connect → _orig_connect 真**runner.setup()
+    后 router 已 freeze** → add_post 撞 'Cannot register a resource into frozen router'.
+
+    真**真**新 path**: route 真**Application.__init__ patch (line 1200+)** 真**post _orig_app_init
+    add_post** (router 真**未 freeze**, 跟 hermes 自己 connect add_post 同时机). 这里只 attach
+    handler method 给 APIServerAdapter class — handler 真**实例 method**, 真**Application.__init__
+    时 已经 attached** (plugin import 时 _apply_patches 真先跑 _patch_p18 真**attach class
+    attribute**, 之后 hermes 真**create APIServerAdapter 实例 + Application 真**触发
+    _patched_app_init** 真**add_post 真 closure handler 真 runtime call adapter method**).
     """
     from gateway.platforms.api_server import APIServerAdapter
 
     APIServerAdapter._handle_compress_session_stream = _handle_compress_session_stream
-    logger.info("P18 APIServerAdapter._handle_compress_session_stream 已挂 ✓")
-
-    _orig_connect_p18 = APIServerAdapter.connect
-
-    async def patched_connect_p18(self, *args, **kwargs):
-        result = await _orig_connect_p18(self, *args, **kwargs)
-        try:
-            if getattr(self, "_app", None) is not None:
-                self._app.router.add_post(
-                    "/api/sessions/{session_id}/compress/stream",
-                    lambda req: self._handle_compress_session_stream(req),
-                )
-                logger.info(
-                    "P18 route POST /api/sessions/{id}/compress/stream 已注册 ✓"
-                )
-        except Exception as e:  # noqa: BLE001
-            logger.warning("P18 route 注册失败 (跳过, hermes 启动继续): %s", e)
-        return result
-
-    APIServerAdapter.connect = patched_connect_p18
+    logger.info(
+        "P18 APIServerAdapter._handle_compress_session_stream 已挂 ✓ "
+        "(route 由 Application.__init__ patch 真**未 freeze 时**注册)"
+    )
 
 
 # hermes 0.14+ plugin discovery 自动调 __init__.py 里的 install() 或类似 hook.
