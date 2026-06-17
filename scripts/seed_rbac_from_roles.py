@@ -18,14 +18,16 @@ roles.resolve() resolve role refs → UPDATE departments. 客户改 yaml 真**�
 # 真**预览**模式 (默认): 真**不动 db**, print SQL
 python scripts/seed_rbac_from_roles.py
 
-# 真**实际**写 db
+# 真**实际**写 db — 真**推荐** env 真**先 export**, 不传 --dsn:
+export CATFISH_PG_DSN=postgresql://<user>:<password>@<host>/<db>
 python scripts/seed_rbac_from_roles.py --apply
 
 # 真**指定** roles.yaml 路径 (默认 central/llm-gateway/config/roles.yaml)
 python scripts/seed_rbac_from_roles.py --roles-yaml /path/to/roles.yaml --apply
 
-# 真**指定** DB connection (默认 env CATFISH_PG_DSN)
-python scripts/seed_rbac_from_roles.py --dsn postgresql://user:pw@host/db --apply
+# 真**指定** DB connection (--dsn 真**override env**. 注意真**别 copy
+# placeholder**真**字面**, 真**填**你**真自己的** user/pw/host/db):
+python scripts/seed_rbac_from_roles.py --dsn 'postgresql://<u>:<p>@<h>/<d>' --apply
 ```
 
 # 真**RBAC role → department name** 映射
