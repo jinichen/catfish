@@ -21,7 +21,9 @@
 //! ## 配置
 //!
 //! - env `CATFISH_EMAIL_POLL_SECS`: 轮询间隔秒数, 默认 600 (10 min). 设 0 关.
-//! - env `CATFISH_EMAIL_RATE_MODEL`: 评级用 model, 默认 catfish-public-deepseek-flash.
+//! - env `CATFISH_EMAIL_RATE_MODEL`: 评级用 model, 默认 catfish-private-main.
+//!   P3.5.27 (6/17 鸿波"数据零出端"): 之前默认 catfish-public-deepseek-flash
+//!   (公网 DeepSeek) 违数据零出端红线 — 邮件主题 + 发件人飞公网 LLM. 改 private.
 //! - env `CATFISH_EMAIL_RATE`: 1=开 (默认) / 0=关 (回 step2 任何新邮件都通知).
 //!
 //! ## 红线

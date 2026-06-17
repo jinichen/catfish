@@ -10,7 +10,13 @@
 //!
 //! 1. `~/.catfish/companion.yaml` 的 `email:` 段 — 客户调这个 (双击 .app 也读)
 //! 2. env var `CATFISH_EMAIL_*` — dev / 测试 / 临时 override
-//! 3. 代码默认值 — 600 秒 / 评级开 / deepseek-flash
+//! 3. 代码默认值 — 600 秒 / 评级开 / catfish-private-main
+//!
+//! P3.5.27 (6/17 鸿波"数据零出端"红线): 默认 catfish-public-deepseek-flash →
+//!   catfish-private-main. 鸿波 6/17 audit 发现 email scheduler 默认走公网
+//!   deepseek-flash, 真**邮件主题 + 发件人**经过公网 LLM, 真违反数据零出端
+//!   红线 (DashScope / DeepSeek 都是 China public cloud). 改 private-main
+//!   内网 model, 数据不出端. yaml/env rate_model 仍可覆盖 (想用便宜 flash 还能改).
 //!
 //! # yaml 例子
 //!
@@ -21,7 +27,7 @@
 //! email:
 //!   poll_secs: 30           # 邮件扫描间隔, 默认 600 (10 分钟). 0=关.
 //!   rate_enabled: true      # LLM 评级: true=只急通知 / false=任何新邮件都通知
-//!   rate_model: catfish-public-deepseek-flash  # 评级用的快速 model
+//!   rate_model: catfish-private-main  # 评级用的 model (默认内网主力, 数据不出端)
 //! ```
 
 use std::sync::OnceLock;
@@ -29,7 +35,10 @@ use std::sync::OnceLock;
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_POLL_SECS: u64 = 600;
-const DEFAULT_RATE_MODEL: &str = "catfish-public-deepseek-flash";
+// P3.5.27 (6/17 鸿波"数据零出端"): catfish-public-deepseek-flash → catfish-private-main.
+// 公网 deepseek-flash 真让邮件主题 + 发件人飞出公司 LLM API, 违数据零出端红线.
+// 内网 main 真**主力数据不出端**, 即使慢一点 (10s vs 1s) 也比红线安全.
+const DEFAULT_RATE_MODEL: &str = "catfish-private-main";
 
 #[derive(Debug, Clone)]
 pub struct EmailConfig {

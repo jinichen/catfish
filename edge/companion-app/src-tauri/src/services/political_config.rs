@@ -37,7 +37,9 @@
 //!   whitelist_phrases: []    # 排除短语 (新闻引用 / 学术讨论场景)
 //!   llm_review:
 //!     enabled: false
-//!     model: "catfish-public-deepseek-flash"
+//!     model: "catfish-private-main"  # P3.5.27 (6/17 鸿波"数据零出端"):
+//!                                     # 公网 deepseek-flash 让邮件正文/政治敏感
+//!                                     # 内容飞公网 LLM, 违红线. 改 private-main.
 //! ```
 
 use std::sync::OnceLock;
