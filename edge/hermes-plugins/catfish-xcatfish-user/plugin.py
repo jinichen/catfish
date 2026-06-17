@@ -367,6 +367,16 @@ def _apply_patches() -> None:
             "P17: _patch_p17_bg_review_inject 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
             e, exc_info=True,
         )
+    # P3.5.18 (6/17 鸿波"直接压缩, 弹窗显示压缩进度"): 加 POST /api/sessions/{id}/compress/stream
+    # SSE endpoint, Companion 主动 trigger hermes compress + 真**进度推 UI**.
+    # 抄 hermes Slack /compress + _handle_session_chat_stream SSE 模板.
+    try:
+        _patch_p18_compress_endpoint()
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "P18: _patch_p18_compress_endpoint 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
+            e, exc_info=True,
+        )
 
 
 # ── P16 (P3.4.C 6/15 鸿波: session_search 76s → 340ms) ──────────────────
@@ -1730,6 +1740,279 @@ def _patch_p15_2_chat_approval_route() -> None:
 
 # module-level reference for _patched_app_init in P7 path
 _chat_approval_middleware = None  # noqa: PLW0603
+
+
+# ── P18 (P3.5.18 6/17 鸿波: 主动压缩 + SSE 进度弹窗) ────────────────────
+#
+# # 真因背景 (鸿波 6/17 verbatim)
+#
+# > "为什么还是提示, 直接压缩, 压缩过程可以弹窗显示压缩进度"
+#
+# P3.5.17.c banner 真**信息流** (下次发消息时 hermes 自动压缩), 鸿波要的是
+# Companion 检测 80%+ ctx 时**主动 trigger hermes 压缩** + **弹窗显进度**
+# (类似 mac 系统更新).
+#
+# # 真**抄什么**
+#
+# hermes 真**全 工具 现成**:
+#   - compress_context(agent, messages, system_message, *, approx_tokens, focus_topic, force)
+#     → ~/.hermes/hermes-agent/agent/conversation_compression.py:271
+#   - SessionDB.{get_session, get_messages, replace_messages}
+#     → ~/.hermes/hermes-agent/hermes_state.py:1358/2112/2026
+#   - summarize_manual_compression(before_messages, after_messages, before_tokens, after_tokens)
+#     → ~/.hermes/hermes-agent/agent/manual_compression_feedback.py:8
+#   - estimate_request_tokens_rough(messages, *, system_prompt, tools)
+#     → ~/.hermes/hermes-agent/agent/model_metadata.py:1887
+#   - AIAgent(model=, ephemeral_system_prompt=, session_id=, status_callback=, session_db=)
+#     → ~/.hermes/hermes-agent/run_agent.py:336 (init)
+#     注意: 真**model= (不是 model_name=)**, 真**ephemeral_system_prompt= (不是
+#     system_prompt=)** — design doc 真**bug**, 6/17 audit catch.
+#   - status_callback(kind: str, message: str)
+#     → ~/.hermes/hermes-agent/run_agent.py:761 (_emit_status / _emit_warning)
+#     kind 真**"lifecycle" / "warn"**.
+#   - SSE 模板 _handle_session_chat_stream
+#     → ~/.hermes/hermes-agent/gateway/platforms/api_server.py:1679
+
+async def _handle_compress_session_stream(self, request):
+    """POST /api/sessions/{session_id}/compress/stream
+
+    Body (JSON, optional): {"focus_topic": "...", "force": true|false}
+    Response: SSE 事件流
+      - event: compress.started      data: {messages_count, approx_tokens, model}
+      - event: compress.progress     data: {kind: "lifecycle", text}
+      - event: compress.warn         data: {text}
+      - event: compress.completed    data: {before_count, after_count, headline, token_line, note, noop}
+      - event: compress.failed       data: {error}
+
+    真**fail-silent on disconnect** — 用户切走 / 弹窗关 真**抛 ConnectionResetError**,
+    真**try/except 兜底** 不阻塞 compress_future. compress_future 真**继续跑完写 db**.
+    """
+    import asyncio
+    import json
+
+    from aiohttp import web
+
+    # 走跟 _handle_session_chat_stream 同款 auth (X-Hermes-API-Key / Bearer)
+    auth_err = self._check_auth(request)
+    if auth_err:
+        return auth_err
+
+    session_id = request.match_info["session_id"]
+
+    # SSE setup
+    resp = web.StreamResponse(
+        status=200,
+        headers={
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+    await resp.prepare(request)
+
+    async def send_event(event: str, data: dict) -> bool:
+        """写 SSE 帧. 真**ConnectionResetError 兜底**返 False (client 断), 调用方真**别再写**.
+        compress_future 真**继续跑** (执行器线程), 写 db 真**完整**.
+        """
+        try:
+            line = f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+            await resp.write(line.encode("utf-8"))
+            return True
+        except (ConnectionResetError, asyncio.CancelledError, RuntimeError) as e:
+            logger.debug("P18 SSE write 失败 (client 断?): %s", e)
+            return False
+
+    try:
+        # 1. SessionDB load + verify session 真存在
+        db = self._ensure_session_db()
+        if db is None:
+            await send_event("compress.failed", {"error": "SessionDB unavailable"})
+            await resp.write_eof()
+            return resp
+
+        session_row = db.get_session(session_id)
+        if session_row is None:
+            await send_event("compress.failed", {"error": f"session not found: {session_id}"})
+            await resp.write_eof()
+            return resp
+
+        messages = db.get_messages(session_id)
+        if len(messages) < 4:
+            await send_event("compress.failed", {
+                "error": f"too few messages to compress ({len(messages)} < 4)",
+            })
+            await resp.write_eof()
+            return resp
+
+        # 2. 估 token + emit started
+        from agent.model_metadata import estimate_request_tokens_rough
+        # session_row 真 dict 真**有 model / ephemeral_system_prompt / system_prompt 字段**
+        # 真**老 session 真**model 字段** 真**可能 None** — 真**fallback role_default**
+        # 真**或** "catfish-private-main" (compress 不实际 inference, 只 aux LLM).
+        model_name = (
+            session_row.get("model")
+            or session_row.get("model_name")
+            or "catfish-private-main"
+        )
+        system_prompt = (
+            session_row.get("ephemeral_system_prompt")
+            or session_row.get("system_prompt")
+            or ""
+        )
+        approx_tokens = estimate_request_tokens_rough(
+            messages, system_prompt=system_prompt, tools=None,
+        )
+        before_count = len(messages)
+        if not await send_event("compress.started", {
+            "messages_count": before_count,
+            "approx_tokens": approx_tokens,
+            "model": model_name,
+        }):
+            # client 真**已断**: 跑 compress 但不再 emit SSE (写 db 仍 useful).
+            pass
+
+        # 3. body 解析 (optional focus_topic / force)
+        try:
+            body = await request.json() if request.can_read_body else {}
+        except Exception:  # noqa: BLE001
+            body = {}
+        focus_topic = str(body.get("focus_topic", "") or "").strip() or None
+        force = bool(body.get("force", False))
+
+        # 4. 真**临时 AIAgent** 跟 Slack /compress 同款 tmp_agent pattern.
+        # status_callback 真**桥** AIAgent._emit_status / _emit_warning → SSE queue.
+        from run_agent import AIAgent
+        from agent.conversation_compression import compress_context
+        from agent.manual_compression_feedback import summarize_manual_compression
+
+        status_queue: asyncio.Queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def status_callback(kind: str, message: str = "") -> None:
+            # 真**executor 线程**调 — run_coroutine_threadsafe 把 event 推 main loop 真 queue.
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    status_queue.put((kind, message)), loop,
+                )
+            except RuntimeError:
+                # main loop 真**已关** (client 断 + cleanup) — 忽略, compress_future 真**自跑完**.
+                pass
+
+        tmp_agent = AIAgent(
+            session_id=session_id,
+            model=model_name,                          # 真**hermes API 真 model=, 不是 model_name=**
+            ephemeral_system_prompt=system_prompt,     # 真**hermes API 真 ephemeral_system_prompt=**
+            status_callback=status_callback,
+            session_db=db,                             # 真**复用 同 SessionDB, compress_context 写回**
+        )
+
+        # 5. compress in executor + 并发 drain status_queue 推 SSE
+        compress_future = loop.run_in_executor(
+            None,
+            lambda: compress_context(
+                tmp_agent, messages, system_prompt,
+                approx_tokens=approx_tokens,
+                focus_topic=focus_topic,
+                force=force,
+            ),
+        )
+
+        async def drain_status() -> None:
+            """真**轮询 status_queue 真**0.5 秒**, compress_future 完了真**退出**."""
+            while True:
+                try:
+                    kind, text = await asyncio.wait_for(
+                        status_queue.get(), timeout=0.5,
+                    )
+                except asyncio.TimeoutError:
+                    if compress_future.done():
+                        return
+                    continue
+                if kind == "warn":
+                    await send_event("compress.warn", {"text": text})
+                else:
+                    await send_event("compress.progress", {"kind": kind, "text": text})
+
+        drain_task = asyncio.create_task(drain_status())
+        try:
+            compressed_messages, _new_system_prompt = await compress_future
+        finally:
+            drain_task.cancel()
+            try:
+                await drain_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+
+        # 6. compress_context 真**已经写回 SessionDB** (line 271 真**split the session in SQLite**).
+        # 真**无需 再调 db.replace_messages** — 老 /fork pattern 真**create child + replace**,
+        # 但 compress_context 真**直接 in-place rotate** 真 session.
+
+        # 7. summary + emit completed
+        after_count = len(compressed_messages)
+        after_tokens = estimate_request_tokens_rough(
+            compressed_messages, system_prompt=system_prompt, tools=None,
+        )
+        summary = summarize_manual_compression(
+            before_messages=messages,
+            after_messages=compressed_messages,
+            before_tokens=approx_tokens,
+            after_tokens=after_tokens,
+            # 真**注意**: hermes summarize_manual_compression 真**不接 focus_topic 参数**
+            # (design doc bug 6/17 audit catch).
+        )
+        await send_event("compress.completed", {
+            "before_count": before_count,
+            "after_count": after_count,
+            "before_tokens": approx_tokens,
+            "after_tokens": after_tokens,
+            **summary,  # {headline, token_line, note, noop}
+        })
+
+    except Exception as e:  # noqa: BLE001
+        logger.exception("P18 _handle_compress_session_stream 异常")
+        try:
+            await send_event("compress.failed", {"error": str(e)})
+        except Exception:  # noqa: BLE001
+            pass
+
+    try:
+        await resp.write_eof()
+    except Exception:  # noqa: BLE001
+        pass
+    return resp
+
+
+def _patch_p18_compress_endpoint() -> None:
+    """P18: 注册 POST /api/sessions/{session_id}/compress/stream SSE endpoint.
+
+    真**叠加 wrap connect()** (P7 已 wrap 过, 这里 wrap P7-wrapped 版本).
+    真**add_post 真 connect() 内** — hermes Application 真**run_app 后才 freeze**,
+    真**add_post 真**safe** (hermes 真 _orig_connect 真**自己 add_post 全 native routes**).
+    """
+    from gateway.platforms.api_server import APIServerAdapter
+
+    APIServerAdapter._handle_compress_session_stream = _handle_compress_session_stream
+    logger.info("P18 APIServerAdapter._handle_compress_session_stream 已挂 ✓")
+
+    _orig_connect_p18 = APIServerAdapter.connect
+
+    async def patched_connect_p18(self, *args, **kwargs):
+        result = await _orig_connect_p18(self, *args, **kwargs)
+        try:
+            if getattr(self, "_app", None) is not None:
+                self._app.router.add_post(
+                    "/api/sessions/{session_id}/compress/stream",
+                    lambda req: self._handle_compress_session_stream(req),
+                )
+                logger.info(
+                    "P18 route POST /api/sessions/{id}/compress/stream 已注册 ✓"
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("P18 route 注册失败 (跳过, hermes 启动继续): %s", e)
+        return result
+
+    APIServerAdapter.connect = patched_connect_p18
 
 
 # hermes 0.14+ plugin discovery 自动调 __init__.py 里的 install() 或类似 hook.
