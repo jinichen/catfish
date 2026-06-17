@@ -44,8 +44,14 @@ import type { TaskAssessment } from "./chat";
 // BL-PROMISE-CHECK-FIX (6/1): 加 "保存到 / 已经创建" 等口语化承诺词. 5/15 ship
 // 时只覆盖 "已 X" 紧凑式, 实测 LLM 偶尔说 "保存到 ~/.catfish/xxx" / "已经创建"
 // 等 — 5/15 时已有测试 case 期待抽路径但 PROMISE_PATTERN 没覆盖, 测试 fail.
+//
+// P3.5.23 (6/17 鸿波): 加 "我先[用做读写跑去执拿调把开]" — Qwen 122B Turn 1 嘴炮
+// "我先用 execute_code 完整读取两份数据..." (60 chars stop, tool_turns=0) 真没匹配
+// 现有 pattern (现有 "让我X"+"我现在"+"我立刻", 缺 "我先X" 这种 plan-only stop).
+// 鸿波 15:33:59 真证: turn 1 0 tool 调用, LLM 只输出 plan-only 文字就 stop, UI 没显
+// 嘴炮 badge → 鸿波误以为"路径不对". 真因 = PROMISE_PATTERN 漏 "我先X" 形态.
 const PROMISE_PATTERN =
-  /已生成|生成完毕|生成完成|完成了|已完成|写入完成|已写入|已保存|保存到|保存成|已创建|已经创建|创建完成|已输出|输出完成|done|generated|saved|created|让我[直先手用想去重再立]|让我[直先手用想去重再立].{0,2}[基用执做继读写改试想]|Let me\s|I'll\s|I will\s|我现在|我立刻/i;
+  /已生成|生成完毕|生成完成|完成了|已完成|写入完成|已写入|已保存|保存到|保存成|已创建|已经创建|创建完成|已输出|输出完成|done|generated|saved|created|让我[直先手用想去重再立]|让我[直先手用想去重再立].{0,2}[基用执做继读写改试想]|Let me\s|I'll\s|I will\s|我现在|我立刻|我先[用做读写跑去执拿调把开看试]/i;
 
 /** 扫文件路径 (中文/英文目录, 含扩展名) */
 const PATH_PATTERN = /(~\/[\w./\-_一-鿿]+|\/Users\/[\w./\-_一-鿿]+|[A-Za-z]:\\[\w.\\\-_一-鿿]+|\.\/[\w./\-_一-鿿]+|[\w\-_一-鿿]+\.(?:html?|docx?|xlsx?|pptx?|pdf|md|txt|csv|json|py|js|ts|jsx|tsx))/gi;
