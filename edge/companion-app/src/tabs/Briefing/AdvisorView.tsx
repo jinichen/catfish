@@ -365,29 +365,29 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
         </div>
       )}
 
-      <div
-        style={{
-          fontSize: 11,
-          color: "var(--catfish-text-muted)",
-          marginBottom: 10,
-          paddingLeft: 4,
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "baseline",
-        }}
-      >
-        <span>
-          鲶鱼参谋 · tier={result.tier}
-          {phase === "cache_hit" && " · 缓存中"}
-          {phase === "stale_fallback" && " · 显示历史结果"}
-        </span>
-        {cacheInfo && config && (
+      {/* P3.5.17.c.3 (6/17 鸿波): "鲶鱼参谋 · tier=..." inline 砍 — tier 是
+          profile 内部分级 (frontline/mid/senior 影响 advisor 语气), UI 显是
+          debug 痕迹无意义. "缓存中" / "显示历史结果" 也砍 — stale_fallback
+          有独立 staleNotice warning channel (line 358-366), 不依赖 inline.
+          只留 RefreshInfo (上次刷新时间 + 下次自动刷新), 真有用. */}
+      {cacheInfo && config && (
+        <div
+          style={{
+            fontSize: 11,
+            color: "var(--catfish-text-muted)",
+            marginBottom: 10,
+            paddingLeft: 4,
+            display: "flex",
+            justifyContent: "flex-end",
+            alignItems: "baseline",
+          }}
+        >
           <RefreshInfo
             cacheInfo={cacheInfo}
             refreshTimes={config.refreshTimes}
           />
-        )}
-      </div>
+        </div>
+      )}
 
       {(() => {
         // P3.3.6 (6/10): 平铺 ActionCard → 左右两栏 layout
