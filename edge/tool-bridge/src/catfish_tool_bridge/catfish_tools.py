@@ -782,8 +782,15 @@ def _expertise_llm_call(prompt: str) -> str:
     token = _read_id_token()
     if not token:
         return ""
-    from . import role_resolver  # noqa: PLC0415
-    model_name = role_resolver.resolve("chat_default") or "catfish-private-main"
+    # P3.5.29 Phase 8 (6/17 鸿波): model 真**chain** picker > role > 兜底.
+    # picker_state.json 真**Companion chat.ts setModel 写**, 真**员工临时切影响这 LLM 调**.
+    # 真**roles.yaml chat_default 真**中央默认 真**客户控制**.
+    from . import picker_state, role_resolver  # noqa: PLC0415
+    model_name = (
+        picker_state.read_picker_model()
+        or role_resolver.resolve("chat_default")
+        or "catfish-private-main"
+    )
     try:
         with httpx.Client(timeout=60.0) as client:
             resp = client.post(

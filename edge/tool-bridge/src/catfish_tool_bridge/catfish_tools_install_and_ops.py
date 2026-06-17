@@ -270,8 +270,14 @@ def _llm_dedupe_judge(
 
     # P3.5.29 Phase 5 (6/17 鸿波): role_resolver — chat_default 默认 catfish-private-main
     # (员工 memory 真**敏感 原话**, 必走内网 chat_default, 不走 rate_fast 公网 flash).
-    from . import role_resolver  # noqa: PLC0415
-    model_name = role_resolver.resolve("chat_default") or "catfish-private-main"
+    # P3.5.29 Phase 8 (6/17 鸿波): 加 picker_state 真**优先级最高** — 真**员工临时切 picker
+    # 真**dedupe 也走真选**. 真**敏感数据**真**员工自己选 Gemini chat 也接受 dedupe 走 Gemini**.
+    from . import picker_state, role_resolver  # noqa: PLC0415
+    model_name = (
+        picker_state.read_picker_model()
+        or role_resolver.resolve("chat_default")
+        or "catfish-private-main"
+    )
     try:
         with httpx.Client(timeout=30.0) as client:
             resp = client.post(

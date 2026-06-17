@@ -312,9 +312,14 @@ async def call_llm(
 
     # P3.5.29 Phase 5 (6/17 鸿波): model None → role_resolver chat_default.
     # 真**caller 显式传** override 优先 (selector_repair / tests 用).
+    # P3.5.29 Phase 8 (6/17 鸿波): 加 picker_state 真**真**员工临时切 picker 真**录屏综合也走真选**.
     if model is None:
-        from .. import role_resolver  # noqa: PLC0415
-        model = role_resolver.resolve("chat_default") or "catfish-private-main"
+        from .. import picker_state, role_resolver  # noqa: PLC0415
+        model = (
+            picker_state.read_picker_model()
+            or role_resolver.resolve("chat_default")
+            or "catfish-private-main"
+        )
 
     payload = {
         "model": model,
