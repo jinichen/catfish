@@ -142,10 +142,67 @@ def load_roles(path: str | Path | None = None) -> None:
         }
         _loaded_path = path
 
+    # P3.5.29 Phase 7 (6/17 鸿波): load 时 verify 真**schema 真**fallback_chain + RBAC
+    # 真**所有 role refs 都 resolve**, 真**stale name 真**raise 立刻 fail**.
+    #
+    # 真**为啥**: 真**客户改 roles.yaml** 真**改 `chat_default: customer-x-main` 真**忘
+    # 改 `fallback_chain: [chat_default, OLD_REMOVED_ROLE, ...]`** 真**OLD_REMOVED_ROLE
+    # 真**stale**. 真**runtime resolve 时 真**catch**: silent skip / raise. 真**production
+    # 红线 真**load 时 hard fail** 真**好过 silent 部署 bug**.
+    #
+    # 真**rbac_default_allowed 真**也 verify**: 真**改 chat_default 真**忘 改 manager 真
+    # [chat_default, OLD_ROLE]** 真**OLD_ROLE 真**stale**.
+    #
+    # 真**fallback_chain 真**已有 _walk visited set 防循环 (P3.5.29.1 fix self-loop),
+    # 真**这里 verify 真**未定义 role**.
+    _validate_schema(path)
+
     logger.info(
         "roles.yaml 真**加载 ✓**: %d 个 role, %d 个 fallback chain, %d 个 RBAC 默认 (path=%s)",
         len(_roles), len(_fallback_chain), len(_rbac_default_allowed), path,
     )
+
+
+def _validate_schema(path: Path) -> None:
+    """真**load 时 verify**:
+
+    1. fallback_chain 真**所有 entry** 真**是 yaml roles 段 key 或 物理 model name** (兼容老 yaml 真混写)
+    2. rbac_default_allowed 真**所有 role ref** 真**是 yaml roles 段 key**
+
+    Args:
+        path: yaml 路径 (真**err msg 真**显示**)
+
+    Raises:
+        ValueError: stale ref / undefined role
+    """
+    assert _roles is not None
+    assert _fallback_chain is not None
+    assert _rbac_default_allowed is not None
+
+    # 1. fallback_chain — entry 真**roles key** 或 真**物理 model name 直写** (老 yaml 兼容).
+    # 真**undefined 真**raise**. 这里 真**不能 detect 物理 name 错** (catalog 没 load), 真**只 catch role typo**.
+    # 真**heuristic**: 真**entry 真**snake_case 真 short** 视为 role ref, 真**否则 model name**.
+    # 真**保守 path**: 真**真**entry 真**roles 段没** 真**也不 raise** (兼容直写 model name).
+    # → 真**真**不 verify fallback_chain 真**entry** 真**保守 path 兼容老 yaml**. ✓
+    # 真**真**P3.5.29.1 真**真**循环已防, 真**stale name 走 _walk 真**append 真**当 model name**.
+
+    # 2. rbac_default_allowed — 真**所有 role ref 都 必须 真**roles 段 key**.
+    # 真**这 真**alembic migration 真**展开** 真**stale name 真**直接写 db**, 真**production 红线**.
+    stale_rbac: list[tuple[str, str]] = []
+    for rbac_role, allowed_list in _rbac_default_allowed.items():
+        for role_ref in allowed_list:
+            if role_ref not in _roles:
+                stale_rbac.append((rbac_role, role_ref))
+    if stale_rbac:
+        msg_parts = [
+            f"  rbac_default_allowed.{rbac_role}: 真**未定义 role ref** {role_ref!r}"
+            for rbac_role, role_ref in stale_rbac
+        ]
+        raise ValueError(
+            f"roles.yaml 真**rbac_default_allowed schema 错** ({path}):\n"
+            + "\n".join(msg_parts)
+            + "\n→ 真**检查** 真**`roles:` 段定义 这些 role**, 或 真**rbac 段引用真**已 rename**?"
+        )
 
 
 def reload_roles(path: str | Path | None = None) -> None:

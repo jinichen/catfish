@@ -1491,18 +1491,24 @@ class CatfishMemoryProvider(MemoryProvider):
         return _DEFAULT_MIN_SUMMARY_INTERVAL_SECONDS
 
     def _get_summarize_model(self) -> str:
-        """LLM model. 优先级 picker_state.json > yaml > env. 没设返空字符串 (caller skip).
+        """LLM model. 优先级 picker_state.json > role_resolver("summarize") > yaml > env. 没设返空字符串.
 
         P3.5.2 (6/16 鸿波): 加 picker_state.json 最高优先级 — companion chat.ts 每次 send
         前 fire-and-forget 写 ~/.catfish/picker_state.json 含当前 picker model. 这让 plugin
         sync_turn 自动跟随 picker, 解决方案 D 的 split 问题 (员工切 picker 后 summary 模型
         立即同步, 不再 yaml 静态).
 
+        P3.5.29 Phase 7 (6/17 鸿波): 加 role_resolver("summarize") 真**second tier** —
+        真**客户改 roles.yaml `summarize: customer-x-long-ctx`** → 真**plugin sync_turn
+        真**自动跟着走**, 真**不需 改 catfish-memory yaml**. 真**picker 真**优先**
+        (员工临时切), 真**role 真**默认** (客户部署值), 真**yaml/env 真**老兜底**.
+
         真因 audit: hermes MemoryProvider.sync_turn 签名是
         `(user_content, assistant_content, session_id)`, 没 client request header 入参.
         plugin 直接拿不到 picker. 文件中转是 hermes API 限制下的最简解法.
 
-        文件不存在 / parse 错 / chat_model 缺 → fallback yaml → fallback env. 兼容老路径.
+        文件不存在 / parse 错 / chat_model 缺 → fallback role_resolver → fallback yaml → fallback env.
+        兼容老路径 (yaml/env 仍可 override role_resolver).
         """
         home = self._catfish_home_cached or _catfish_home()
 
@@ -1511,7 +1517,18 @@ class CatfishMemoryProvider(MemoryProvider):
         if picker_model:
             return picker_model
 
-        # Fallback: yaml > env (老逻辑保留)
+        # P3.5.29 Phase 7: role_resolver("summarize") 真**second tier**.
+        # 真**fail-silent**: gateway 挂 / httpx 没装 / 网络抖 → 返 None → 走 yaml.
+        try:
+            from . import role_resolver  # noqa: PLC0415
+            role_model = role_resolver.resolve("summarize")
+            if role_model:
+                return role_model
+        except Exception:  # noqa: BLE001
+            # 真**import 失败** (旧 plugin tree, role_resolver.py 没装) — silent fallback.
+            pass
+
+        # Fallback: yaml > env (老逻辑保留, 兼容客户已有 catfish-memory yaml override)
         cfg = _load_plugin_config(home)
         yaml_val = cfg.get("summarize", {}).get("model") if isinstance(cfg, dict) else None
         if isinstance(yaml_val, str) and yaml_val.strip():

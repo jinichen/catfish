@@ -270,3 +270,90 @@ def test_production_roles_yaml_loads():
     assert len(chain) > 0
     # rbac employee 真有
     assert roles_module.list_models_for_rbac("employee")
+
+
+# ─── Phase 7 (6/17 鸿波) — schema validation ──────────────────────
+
+
+def test_rbac_stale_role_ref_raises_at_load():
+    """真**rbac_default_allowed** 真**引用 yaml 真**未定义 role** → load_roles raise.
+
+    真**production 红线**: 客户改 roles.yaml `chat_default: customer-x-main`
+    真**忘改** rbac `manager: [OLD_RENAMED_ROLE, vision]` 真**OLD_RENAMED_ROLE
+    真**stale** → 真**alembic migration 真**展开** 真**stale name 真**写 db**, RBAC
+    真**永远 stale**.
+
+    真**load 时 hard fail** 真**好过 silent 部署 bug**.
+    """
+    path = _write_yaml(
+        """
+roles:
+  chat_default: main
+  vision: vlm
+rbac_default_allowed:
+  employee:
+    - chat_default
+  manager:
+    - chat_default
+    - OLD_REMOVED_ROLE
+    - vision
+"""
+    )
+    with pytest.raises(ValueError, match=r"未定义 role ref.*OLD_REMOVED_ROLE"):
+        roles_module.load_roles(path)
+
+
+def test_rbac_multiple_stale_roles_listed_all():
+    """真**多 stale** 真**一次 raise 真**列全**, 真**真**客户 真**一次改完**."""
+    path = _write_yaml(
+        """
+roles:
+  chat_default: main
+rbac_default_allowed:
+  employee:
+    - chat_default
+    - STALE_ONE
+  admin:
+    - STALE_TWO
+    - chat_default
+"""
+    )
+    with pytest.raises(ValueError) as excinfo:
+        roles_module.load_roles(path)
+    assert "STALE_ONE" in str(excinfo.value)
+    assert "STALE_TWO" in str(excinfo.value)
+
+
+def test_rbac_all_valid_no_raise():
+    """真**rbac 真**全 valid** 真**load 真 OK** (真**P3.5.29 Phase 7 真**真**不破老 happy path**)."""
+    path = _write_yaml(
+        """
+roles:
+  chat_default: main
+  vision: vlm
+  summarize: long
+rbac_default_allowed:
+  employee:
+    - chat_default
+  manager:
+    - chat_default
+    - vision
+    - summarize
+"""
+    )
+    roles_module.load_roles(path)
+    assert roles_module.list_models_for_rbac("employee") == ["main"]
+    assert roles_module.list_models_for_rbac("manager") == ["main", "vlm", "long"]
+
+
+def test_no_rbac_section_loads_ok():
+    """真**rbac_default_allowed 真**完全缺** 真**OK** — 真**rbac 段可选** (P3.5.29 Phase 1)."""
+    path = _write_yaml(
+        """
+roles:
+  chat_default: main
+"""
+    )
+    roles_module.load_roles(path)
+    # 真**有 role 但 0 rbac**
+    assert roles_module.resolve("chat_default") == "main"
