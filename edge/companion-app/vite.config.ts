@@ -11,10 +11,51 @@ export default defineConfig(async () => ({
 
   // 5/5 BL-E27 spike: 多入口 (主 Companion + 桌宠副窗 pet.html)
   build: {
+    // P3.5.29 Phase 6.2 (6/17 鸿波): main bundle 1.17 MB → chunkSizeWarningLimit
+    // 设 800 KB 真**降 warning 噪音**, 真**真**code split** 见 manualChunks.
+    chunkSizeWarningLimit: 800,
     rollupOptions: {
       input: {
         main: "index.html",
         pet: "pet.html",
+      },
+      output: {
+        // P3.5.29 Phase 6.2 (6/17 鸿波) — 真**vendor chunk split**.
+        // 老 main bundle 真**1,173 kB / gzip 363 kB** — 第三方 lib 全打一起.
+        // 真**chunk 拆**:
+        //   - react-vendor: react / react-dom / scheduler — UI core, 缓存友好
+        //   - tauri-vendor: @tauri-apps/* — 桌面端 API, 切版本时只 invalidate 自己
+        //   - state-vendor: zustand — store 框架
+        //   - markdown-vendor: react-markdown / remark-* / rehype-* / micromark/mdast/unist —
+        //     真**最大 chunk**, 只 ChatMessage 渲染时用
+        //   - utils-vendor: uuid / date-fns / 等小 util
+        // 真**预期**: main bundle ~600 KB, react ~150 KB, markdown ~250 KB, tauri ~80 KB.
+        // 真**真**实测见 npm run build 输出**.
+        manualChunks: (id: string) => {
+          if (!id.includes("node_modules")) return undefined;
+          if (id.includes("/react/") || id.includes("/react-dom/") || id.includes("/scheduler/")) {
+            return "react-vendor";
+          }
+          if (id.includes("/@tauri-apps/")) {
+            return "tauri-vendor";
+          }
+          if (id.includes("/zustand/")) {
+            return "state-vendor";
+          }
+          if (
+            id.includes("/react-markdown/")
+            || id.includes("/remark-")
+            || id.includes("/rehype-")
+            || id.includes("/micromark")
+            || id.includes("/mdast-")
+            || id.includes("/unist-")
+            || id.includes("/hast-")
+          ) {
+            return "markdown-vendor";
+          }
+          // 其他 node_modules 真**进**默认 vendor chunk (rollup 自动)
+          return undefined;
+        },
       },
     },
   },
