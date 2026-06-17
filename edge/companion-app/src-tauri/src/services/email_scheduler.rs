@@ -41,7 +41,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tokio::time;
 
-use crate::services::{email_config, endpoints, oauth, picker_config};
+use crate::services::{email_config, endpoints, oauth, picker_config, role_config};
 // P3.3.58 (6/12 鸿波): 段 2A 集成 phishing_scan
 use crate::services::phishing_scan::{
     self, LlmReviewInput, PhishingScanResult, Severity,
@@ -614,10 +614,11 @@ async fn scan_phishing_for_new(new_items: &[EmailItem]) {
         }
     };
     let gateway = endpoints::endpoints().gateway_base();
-    // P3.5.28 (6/17 鸿波"picker 联动现在就应该做"): 同 call_rate_llm 真**优先级**
-    // picker > yaml > default. 钓鱼复审跟评级共享 picker 模型 — 员工 chat picker
-    // 切 private-main, phishing scan 真**跟着**走 private. 数据零出端红线一致.
+    // P3.5.29 Phase 4 (6/17 鸿波): 钓鱼复审跟评级真**共享** chain picker > role >
+    // yaml > default. 员工 chat picker 切 private, phishing scan 真**跟着**走.
+    // 数据零出端红线一致 + 客户改 roles.yaml 真**跟着**走.
     let model = picker_config::current_model()
+        .or_else(|| role_config::resolve("rate_fast"))
         .unwrap_or_else(|| email_config::email_config().rate_model.clone());
 
     match phishing_scan::batch_llm_review(&llm_inputs, &gateway, &token, &model).await {
@@ -736,11 +737,17 @@ async fn call_rate_llm(items: &[EmailItem]) -> Result<Vec<Urgency>, String> {
     let token = oauth::current_access_token()
         .ok_or_else(|| "没拿到 access_token (员工没登录)".to_string())?;
     let gateway = endpoints::endpoints().gateway_base();
-    // P3.5.28 (6/17 鸿波"picker 联动现在就应该做"): 优先级 picker > yaml > default.
-    // chat picker 选的 model 真**优先**, yaml/env rate_model 真**override**兜底.
-    // picker_model 真**每次 tick 重读** ~/.catfish/picker_model 文件 — 员工 picker
-    // 切换真**下次 tick 生效**, 不需要重启 Companion.
+    // P3.5.29 Phase 4 (6/17 鸿波"啥意思不干活"): 真**chain** picker > role > yaml > default.
+    //   1. picker_config::current_model() — 员工 chat picker 真选 (P3.5.28)
+    //   2. role_config::resolve("rate_fast") — gateway /v1/roles 真**roles.yaml**
+    //      (P3.5.29 Phase 4 真**HTTP fetch + 5min cache**)
+    //   3. email_config().rate_model — yaml/env override
+    //   4. DEFAULT_RATE_MODEL — 兜底 (P3.5.27 改 private-main)
+    //
+    // 客户改 roles.yaml `rate_fast` 真**5 分钟后** 邮件评级真**跟着走**, 真**不需要**
+    // 改 Companion yaml.
     let model = picker_config::current_model()
+        .or_else(|| role_config::resolve("rate_fast"))
         .unwrap_or_else(|| email_config::email_config().rate_model.clone());
 
     let list = items
