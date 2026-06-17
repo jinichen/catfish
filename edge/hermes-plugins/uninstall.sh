@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
-# 卸载 catfish Hermes 插件。
+# 卸载 catfish Hermes 插件 catfish-autocompress.
+#
+# P3.5.17 (6/17 鸿波): catfish-autocompress 退役 — hermes 自带 ContextCompressor
+# 已 cover. 这个脚本仍然有用 —— 清掉老员工机器上残留的 dangling 软链 +
+# 把 config.yaml engine 字段从 catfish-autocompress 改回 compressor (hermes 默认).
+#
 # 做两件事：
-#   1. 把 ~/.hermes/config.yaml 的 context.engine 改回默认（删掉该键）
+#   1. 把 ~/.hermes/config.yaml 的 context.engine 改回默认 (compressor)
 #   2. 删软链 ~/.hermes/hermes-agent/plugins/context_engine/catfish-autocompress
 
 set -euo pipefail
@@ -60,4 +65,4 @@ fi
 
 echo
 echo "=== 已卸载 ==="
-echo "重启 hermes 后 Hermes 回到默认 ContextCompressor（75% 触发）"
+echo "重启 hermes 后 Hermes 回到默认 ContextCompressor (P3.5.17 走 50% 触发, see ~/.hermes/config.yaml compression.threshold)"

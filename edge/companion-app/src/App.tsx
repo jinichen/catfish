@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import AboutModal from "./components/AboutModal";
 import AdvisoryBanner from "./components/AdvisoryBanner";  // 6/7 BL-MANIFESTO-ADVISORY-PHASE1
 import AuthBanner from "./components/AuthBanner";
+import ContextOverflowBanner from "./components/ContextOverflowBanner";  // P3.5.17 (6/17): prompt > 80% 顶部告警
 import HermesReconnectBanner from "./components/HermesReconnectBanner";  // P3.3.5 (6/9): hermes 重连 banner
 import DevUserSwitcher from "./components/DevUserSwitcher";
 import FocusModeView from "./components/FocusModeView";
@@ -209,6 +210,7 @@ function AppShell({ activeTab }: { activeTab: string }) {
       <div className="app-shell">
         <AuthBanner />
         <AdvisoryBanner />
+        <ContextOverflowBanner />
         <HermesReconnectBanner />
         <DevUserSwitcher />
         <TabBar />

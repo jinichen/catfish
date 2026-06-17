@@ -1,4 +1,17 @@
 #!/usr/bin/env bash
+# ⚠️ P3.5.17 (6/17 鸿波) DEPRECATED — catfish-autocompress 已退役.
+#
+#   退役原因: hermes 自带 ContextCompressor (~/.hermes/config.yaml context.engine
+#   = compressor) 已经 cover preflight 压缩, catfish-autocompress 仓库源码
+#   早已删 (./catfish-autocompress 目录不存在), ~/.hermes/...plugins/context_engine/
+#   catfish-autocompress 是 dangling 软链. 真因鸿波 6/16 撞 304K 不压缩 = hermes
+#   auxiliary_client 调 gateway 缺 X-Catfish-User header → 400 (P3.5.17.b 已修).
+#
+#   不再有 catfish 自定义 context engine. 留这两个脚本只供历史 uninstall 用 —
+#   跑 ./uninstall.sh 清掉老员工机器上的 dangling 软链 + 把 config.yaml engine
+#   字段切回 compressor.
+#
+# ── 历史 (deprecated install 流程, 保留 git blame 用) ─────────────────────────
 # 把 catfish 自己的 Hermes 插件装进 ~/.hermes/hermes-agent/plugins/ 相应目录。
 #
 # 目前只有一个插件：catfish-autocompress（context engine）。
@@ -6,6 +19,15 @@
 #
 # 插件生效还需要改 ~/.hermes/config.yaml 把 context.engine 改成 catfish-autocompress。
 # 本脚本会问员工要不要自动改（默认 Y）。
+# ─────────────────────────────────────────────────────────────────────────
+
+# P3.5.17 早 abort, 防新员工误装
+echo ""
+echo "⚠️  catfish-autocompress 已退役 (P3.5.17, 6/17 鸿波)."
+echo "   hermes 自带 ContextCompressor 已 cover. 不再装 catfish-autocompress."
+echo "   要清老 dangling 软链, 跑: bash $(dirname "$0")/uninstall.sh"
+echo ""
+exit 0
 
 set -euo pipefail
 

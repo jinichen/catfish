@@ -1,8 +1,39 @@
 # catfish / edge / hermes-plugins
 
-鲶鱼自己开发的 Hermes 插件。目前只有一个：`catfish-autocompress`。
+鲶鱼自己开发的 Hermes 插件目录.
 
-## catfish-autocompress
+## 现状 (P3.5.17, 6/17 鸿波)
+
+**catfish-autocompress 已退役** — hermes 自带 ContextCompressor 已 cover preflight
+压缩 (`~/.hermes/config.yaml` 里 `context.engine: compressor` + `compression.threshold: 0.5`).
+catfish-autocompress 子目录源码早已删 (`./catfish-autocompress/` 目录在仓库里不存在).
+
+### 鸿波 6/16 撞 304K 不压缩的真因
+
+不是 hermes 自带 compressor 不行 — 是 **hermes auxiliary_client (压缩 summary 调用) 调
+catfish-gateway 时缺 `X-Catfish-User` header**, 触发 gateway 400, 然后 hermes 压缩
+"Further summary attempts paused for 60 seconds". 长任务永远没机会压缩.
+
+P3.5.17.b 修在 `catfish-gateway/src/catfish_gateway/auth/__init__.py:resolve_effective_user_email`
+— hermes-cli service token 缺 header 时 fallback 到 sub (= `client:hermes-cli`), 不报 400.
+hermes 自带压缩链路打通.
+
+### 现在的 catfish-memory 还在用这个目录
+
+`catfish-memory/` 还是 active plugin (跨 session 记忆), 走 `install-catfish-memory.sh`.
+不受 catfish-autocompress 退役影响.
+
+### 老员工机器怎么清
+
+跑 `bash edge/hermes-plugins/uninstall.sh` —
+1. 删 dangling 软链 `~/.hermes/hermes-agent/plugins/context_engine/catfish-autocompress`
+2. `~/.hermes/config.yaml` 里如果还写 `engine: catfish-autocompress` 改回默认 `compressor`
+
+跑完重启 hermes, ContextCompressor 自动接管.
+
+---
+
+## 历史: catfish-autocompress (DEPRECATED, 保留作 git blame 用)
 
 **自动上下文压缩**，在 Hermes 的 ctx 占用超过阈值时自动触发压缩（调用内置 `/compress` 的底层逻辑）。
 

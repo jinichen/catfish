@@ -143,13 +143,25 @@ def resolve_effective_user_email(
     # 允许 override 的 service token (e.g. hermes-cli)
     raw = (x_catfish_user_header or "").strip()
     if not raw:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"service token (sub={user.sub}) requires "
-                f"{X_CATFISH_USER_HEADER} header to identify on-behalf-of user"
-            ),
+        # P3.5.17 (6/17 鸿波): hermes 自带 auxiliary_client (压缩 summary 用)
+        # 调 gateway 时**不传** X-Catfish-User — 这是 hermes 内部 system 行为
+        # (背景压缩, 不属于某个员工请求). 原来 raise 400 让 context_compressor
+        # 报 "Failed to generate context summary: Error code: 400" + 60s pause,
+        # 鸿波 304K 长任务永远不压缩. 真因.
+        #
+        # 修法: 缺 header → fallback 到 sub (e.g. "client:hermes-cli"), 跟 case 3
+        # (不在白名单的 service) 行为一致. quota / RBAC / audit 归 service 自己头上,
+        # 不绕审计 (effective_email 仍是可追溯字符串). chat 路径 hermes 仍会传 header,
+        # 行为不变, 不影响主路径.
+        #
+        # 风险: 失去对 hermes-cli 强制传 user header 的硬约束. 但 hermes chat 路径
+        # 现实里**一定**会传 (Companion 走 sub_email 必传), 没传 = 后台 auxiliary,
+        # 此时归到 client:hermes-cli 头上是更准确的语义.
+        logger.debug(
+            "service token sub=%s 缺 %s header, fallback effective_email=sub "
+            "(hermes auxiliary path, P3.5.17)", user.sub, X_CATFISH_USER_HEADER,
         )
+        return user.sub
     if not _EMAIL_SHAPE_RE.match(raw):
         # 不像 email — 拒 (防 garbage / injection)
         raise HTTPException(
