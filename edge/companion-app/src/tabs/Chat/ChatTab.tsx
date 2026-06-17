@@ -46,6 +46,10 @@ export default function ChatTab() {
   const loadSessionAttachments = useChatStore((s) => s.loadSessionAttachments);
   // P3.5.30 (6/17 鸿波): registry restore 真**消费 stream 中 / 完后真 messages 镜像**.
   const setMessages = useChatStore((s) => s.setMessages);
+  // P3.5.29 Phase 6.3 (6/17 鸿波): catalog.default → picker 真**联动**, 真**用户
+  // picker 选过的 真**不被覆盖** (modelPickedByUser flag).
+  const modelPickedByUser = useChatStore((s) => s.modelPickedByUser);
+  const setModelInStore = useChatStore((s) => s.setModel);
   // P3.5.8 BL-FILE-SESSION-INDEX-V1 Phase 2 (6/16 鸿波): resume 时还原历史 image
   // base64 到 message.attachments, 让后续 toWire 走 multipart 带图给 vision LLM.
   // 老 Phase 1 只持久化 metadata, 切走 session / 重启 Companion 后历史图在 wire
@@ -143,6 +147,29 @@ export default function ChatTab() {
     },
     [cancelAndSend],
   );
+
+  /** P3.5.29 Phase 6.3 (6/17 鸿波) — catalog.default → picker 真**联动**.
+   *
+   * 真**鸿波诉求 (P3.5.29 verbatim)**: "改 yaml 全代码跟着走" → picker 也该联动.
+   * 真**5/28 disable render-time setModel 副作用 真**保留** (修 picker 反 bug 真**核心**).
+   * 真**真**这 effect**: 真**只在用户没主动 picker 选过** (`!modelPickedByUser`) 时**
+   * 真**接 catalog.default → store.model**. 用户 picker 选过 → 真**永不被覆盖**.
+   *
+   * 真**生命周期**:
+   *   - 首次启动: modelPickedByUser=false, catalog.default 真**fetch 后**触发 effect
+   *     → setModelInStore(default, **false**) → modelPickedByUser 仍 false.
+   *   - 用户 picker 改: setModel(m, true) → modelPickedByUser=true → effect 真**跳过**.
+   *   - reset() (+新对话): modelPickedByUser=false → effect 真**重新接管**.
+   *   - catalog 15s polling 改 default: effect deps catalog?.default 真**触发** →
+   *     **如果 !modelPickedByUser** 真**propagate**, 否则**跳过**.
+   */
+  useEffect(() => {
+    if (modelPickedByUser) return;
+    if (!catalog?.default) return;
+    if (catalog.default === model) return;
+    // 真**pickedByUser = false** — signal catalog 自动 propagate, 不锁 picker
+    setModelInStore(catalog.default, false);
+  }, [catalog?.default, modelPickedByUser, model, setModelInStore]);
 
   /** P3.5.30 (6/17 鸿波) — registry restore + 实时 sync.
    *

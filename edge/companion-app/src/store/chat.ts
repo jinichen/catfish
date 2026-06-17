@@ -46,6 +46,23 @@ interface ChatState {
   streamingId: string | null;
   /** 选中的模型 id */
   model: string;
+  /** P3.5.29 Phase 6.3 (6/17 鸿波): 真**modelPickedByUser flag** 真**修 picker 不
+   * 联动 yaml chat_default bug**.
+   *
+   * 真**问题**: 5/28 disable 真**render-time setModel(initialModel) 副作用** (修
+   * picker UI 反 bug) 后, 真**catalog.default 改了 picker 不跟走**. 鸿波诉求
+   * "改 yaml 全代码跟着走" → picker 真**也该联动**, 真**但**只在用户没主动选
+   * 时**联动 (保留 5/28 fix 真**核心**: 用户 picker 选啥**永不被覆盖**).
+   *
+   * 真**生命周期**:
+   *   - 启动: false (zustand init). chat.ts:115 model hardcode 真**fallback 兜底**.
+   *   - ChatTab mount useEffect 真**catalog.default 真**fetch** 后**: 真**触发**
+   *     setModelStoreInternal(catalog.default, **false**) → 真**继续 false**.
+   *   - 用户主动 picker: ChatModelPicker onChange → setModel(m, **true**, 真**默认**).
+   *     → 真**modelPickedByUser = true**, 真**effect 真**`!modelPickedByUser` 跳过**.
+   *   - reset() (+新对话): 真**清 false**, 真**下个 effect tick 真**catalog 真接管**.
+   */
+  modelPickedByUser: boolean;
   /** 写入 ~/.hermes/state.db 的 session id (Plan C Week 2 持久化)
    *  null = 还没创建 (lazy create on first send) */
   persistedSessionId: string | null;
@@ -74,7 +91,11 @@ interface ChatState {
   incrementPromiseNudge: (id: string) => void;
   setIsStreaming: (v: boolean) => void;
   setStreamingId: (id: string | null) => void;
-  setModel: (m: string) => void;
+  /** P3.5.29 Phase 6.3 (6/17 鸿波): pickedByUser **默认 true** — 老 caller 真**全
+   * 用户 picker path 真**0 改**. 真**internal** call (ChatTab catalog effect) 显式
+   * 传 false 真**signal "yaml 自动 propagate, 不是用户选"**.
+   */
+  setModel: (m: string, pickedByUser?: boolean) => void;
   setPersistedSessionId: (id: string | null) => void;
   /** BL-GATEWAY-SOFT-HANDOFF (5/18): 标记一次 send 已用过当前 model, 下次发送
    *  时如果 model 变了, X-Catfish-Prev-Model header 就带上这个旧值. */
@@ -113,6 +134,9 @@ export const useChatStore = create<ChatState>((set) => ({
   isStreaming: false,
   streamingId: null,
   model: "catfish-private-main",
+  // P3.5.29 Phase 6.3 (6/17 鸿波): 真**modelPickedByUser flag** 真**修联动 bug**.
+  // 初始 false — ChatTab mount useEffect 真**catalog.default 真**catfish 真**propagate**.
+  modelPickedByUser: false,
   persistedSessionId: null,
   prevSentModel: null,
   queue: [],
@@ -147,8 +171,13 @@ export const useChatStore = create<ChatState>((set) => ({
     })),
   setIsStreaming: (v) => set({ isStreaming: v }),
   setStreamingId: (id) => set({ streamingId: id }),
-  setModel: (model) => {
-    set({ model });
+  setModel: (model, pickedByUser = true) => {
+    // P3.5.29 Phase 6.3 (6/17 鸿波): pickedByUser **默认 true** — 老 caller (chat
+    // picker onChange / visionSwitch) 真**全用户主动 path 真**0 改**, 真**signal
+    // "用户主动 select → 锁定 picker, 不被 catalog.default 覆盖"**.
+    // internal call (ChatTab catalog effect) 真**显式传 false** 真**signal "yaml
+    // 自动 propagate"**, 真**允许后续 yaml 改时 picker 真**继续跟走**.
+    set({ model, modelPickedByUser: pickedByUser });
     // P3.5.28 (6/17 鸿波"picker 联动现在就应该做"): 真**桥**给 Rust background task
     // (email_scheduler / phishing_scan). 写文件 ~/.catfish/picker_model 让 background
     // task 真 tick 时读. 员工 chat picker 切换真**下次 tick 生效**.
@@ -261,5 +290,10 @@ export const useChatStore = create<ChatState>((set) => ({
       prevSentModel: null,     // BL-GATEWAY-SOFT-HANDOFF: 新 session 没"上次"
       queue: [],  // BL-HERMES013-RED-1A: 切会话清队列
       sessionAttachments: [],  // BL-FILE-SESSION-INDEX-V1 Phase 1
+      // P3.5.29 Phase 6.3 (6/17 鸿波): 新对话真**清 picker lock** 真**让 catalog.default
+      // 真**重新接管** — 真**最常见用例**: 客户改 yaml 后, 员工开新对话真**应看到新默认**.
+      // 真**老 session 真**load**: loadSession 真**不动 model** (line 205 BL-GLOBAL-MODEL
+      // 5/23 注释), 真**不动 modelPickedByUser** 真**保留切会话前的 lock 状态**.
+      modelPickedByUser: false,
     }),
 }));
