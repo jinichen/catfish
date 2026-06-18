@@ -70,6 +70,13 @@ interface SendChatParams {
     /** P3.3.5 (6/9): hermes connection error 自动重试计数 (max 1).
      *  TypeError: Load failed → dispatch banner + sleep 5s + recursive 重发. */
     connRetry?: number;
+    /** P3.5.34 修-A (6/18 鸿波 catch '对话框跑一半停下来 = 上游响应慢中断'):
+     *  stream 90-180s 无 chunk → 主动 abort + retry 1 次. model-aware:
+     *  catfish-private-* 给 180s (上游慢), 其它 90s. */
+    idleRetry?: number;
+    /** P3.5.34 修-D: stream 自然结束但 finish_reason 缺失 (= server 主动 close
+     *  stream 没补 finish chunk) → 视同上游 timeout 切流, retry 1 次. */
+    finishReasonRetry?: number;
   };
 }
 
@@ -148,6 +155,22 @@ interface ToolCallAcc {
   id: string;
   name: string;
   argumentsJson: string;
+}
+
+/** P3.5.34 修-A (6/18 鸿波 catch '对话框跑一半停下来'): model-aware idle timeout 计算.
+ *
+ * stream idle (90-180s 无 chunk) → 主动 abort + retry 1 次. 不同 model 上游速度差大:
+ *   - catfish-private-main / private-vision / private-coder: 内网模型, 40K context
+ *     80-150s 单 call. 给 180s 容忍单 call. hermes 路径有 SSE keepalive 兜底, 不会真
+ *     idle; gateway 路径无 keepalive, 180s 是上限.
+ *   - 其它 (deepseek-flash / public qwen / gemini-pro 等): 快, 90s 足够.
+ *
+ * 抽 export 便于单测. 改动: 调用方 chat.ts 内一处, 老 inline 公式删.
+ */
+export function computeIdleTimeoutMs(model: string): number {
+  return /catfish-private-(main|vision|coder)/i.test(model)
+    ? 180_000
+    : 90_000;
 }
 
 export async function streamChat(params: SendChatParams): Promise<void> {
@@ -303,6 +326,47 @@ export async function streamChat(params: SendChatParams): Promise<void> {
   // 5/19 Phase 2-2B: hermes 路径**不走 fetchWithAuth** (它假设 OIDC token 401
   // 后 reauth, 但 hermes 用 API_SERVER_KEY 静态 token, 401 reauth 没意义). 改
   // 直接 fetch + hermes auth header (Rust 端拼好的 "Bearer <key>").
+
+  // P3.5.34 修-A (6/18 鸿波 catch '对话框跑一半停下来 = 上游响应慢造成中断'):
+  //   audit (chat.ts line 574-577): stream loop reader.read() while 循环 0 idle
+  //   timeout, 上游卡死时客户端永远等. catfish-private-main 内网模型 80-150s/call,
+  //   gateway 300s timeout 切流时**没发 finish_reason**, 客户端走 onDone path
+  //   不抛 exception, UI 显 done 但 content 是 partial — 体感"跑一半".
+  //   hermes 路径 (api_server.py:2235) 已有 SSE keepalive, 不会真 idle. gateway 路径
+  //   没 keepalive — idle timer 真有用.
+  // model-aware: catfish-private-* 慢 (40K context 80-150s 单 call), 给 180s; 其它 90s.
+  const IDLE_TIMEOUT_MS = computeIdleTimeoutMs(effectiveModel);
+
+  // P3.5.34 修-A: internal AbortController, 链上 caller signal. caller abort → internal abort.
+  // idle timer 到时也 abort internal — catch e 通过 idleAborted 标志 distinguish.
+  const internalCtrl = new AbortController();
+  let idleAborted = false;
+  if (signal) {
+    if (signal.aborted) {
+      internalCtrl.abort();
+    } else {
+      signal.addEventListener(
+        "abort",
+        () => internalCtrl.abort(),
+        { once: true },
+      );
+    }
+  }
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  const resetIdleTimer = () => {
+    if (idleTimer !== null) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      idleAborted = true;
+      internalCtrl.abort();
+    }, IDLE_TIMEOUT_MS);
+  };
+  const clearIdleTimer = () => {
+    if (idleTimer !== null) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+  };
+
   let resp: Response;
   try {
     if (useHermes) {
@@ -326,7 +390,9 @@ export async function streamChat(params: SendChatParams): Promise<void> {
         method: "POST",
         headers: hermesHeaders,
         body: JSON.stringify(body),
-        signal,
+        // P3.5.34 修-A: 用 internalCtrl.signal 替 caller signal.
+        // caller abort → internal abort (chained); idle timer 到也 abort internal.
+        signal: internalCtrl.signal,
       });
     } else {
       resp = await fetchWithAuth(url, {
@@ -336,7 +402,7 @@ export async function streamChat(params: SendChatParams): Promise<void> {
           ...agentHeaders,
         },
         body: JSON.stringify(body),
-        signal,
+        signal: internalCtrl.signal,
       });
     }
   } catch (e) {
@@ -534,6 +600,63 @@ export async function streamChat(params: SendChatParams): Promise<void> {
   // index → ToolCallAcc
   const toolCallsAcc: Record<number, ToolCallAcc> = {};
 
+  // P3.5.34 修-D (6/18 鸿波 catch '对话框跑一半停下来'):
+  //   stream 自然/[DONE] 结束但 finish_reason 缺失 (= server 主动 close stream
+  //   没补 finish chunk, 例 hermes ConnectionReset / gateway upstream timeout 切流
+  //   场景), 视同上游 timeout, retry 1 次.
+  //   触发条件: 没 finish_reason + 没 tool_calls + 没用过该 counter.
+  //   有 tool_calls 表示 LLM 已经决定调工具, 不该 retry (会重复 dispatch tool).
+  //   audit 兼容性: hermes 正常完成 finish_reason="stop" (api_server.py:2257),
+  //   不会误 trigger. gateway 路径正常完成上游 LLM 返 finish_reason, 也不会误 trigger.
+  async function tryDoneOrRetry(): Promise<void> {
+    clearIdleTimer();
+    finalizeToolCallsIfAny();
+    const hasToolCalls = Object.keys(toolCallsAcc).length > 0;
+    const isAbnormalStop = !finishReason;
+    if (
+      isAbnormalStop &&
+      !hasToolCalls &&
+      !params._retryCounters?.finishReasonRetry
+    ) {
+      console.warn(
+        "[chat] P3.5.34 修-D: finish_reason 缺失 + 无 tool_calls, 视同上游 timeout 切流, 3s 后 retry",
+      );
+      onDelta(
+        `\n⚠️ 上游可能 timeout 切流 (无 finish_reason), 3 秒后自动重试一次 (这段时间按 ⏸ 取消)...\n`,
+      );
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const t = setTimeout(resolve, 3000);
+          if (signal) {
+            const onAbort = () => {
+              clearTimeout(t);
+              reject(new Error("aborted"));
+            };
+            if (signal.aborted) onAbort();
+            else signal.addEventListener("abort", onAbort, { once: true });
+          }
+        });
+      } catch {
+        // 员工 abort 等待期 → 走正常 abort 路径
+        onDone({ finish_reason: "abort", usage, task_assessment: taskAssessment });
+        return;
+      }
+      return streamChat({
+        ...params,
+        _retryCounters: {
+          ...params._retryCounters,
+          finishReasonRetry: 1,
+        },
+      });
+    }
+    onDone({
+      finish_reason: finishReason,
+      usage,
+      task_assessment: taskAssessment,
+      via_hermes: useHermes,
+    });
+  }
+
   function finalizeToolCallsIfAny() {
     const indices = Object.keys(toolCallsAcc).map(Number).sort((a, b) => a - b);
     if (indices.length === 0) return;
@@ -570,10 +693,14 @@ export async function streamChat(params: SendChatParams): Promise<void> {
     }
   }
 
+  // P3.5.34 修-A: stream 开始 → 启动 idle timer. 每次收到 chunk reset.
+  resetIdleTimer();
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      // P3.5.34 修-A: 收到 chunk → 重置 idle timer (上游还在活).
+      resetIdleTimer();
       buf += decoder.decode(value, { stream: true });
 
       let idx;
@@ -631,8 +758,8 @@ export async function streamChat(params: SendChatParams): Promise<void> {
         const data = sseData;
         {
           if (data === "[DONE]") {
-            finalizeToolCallsIfAny();
-            onDone({ finish_reason: finishReason, usage, task_assessment: taskAssessment, via_hermes: useHermes });
+            // P3.5.34 修-D: 走 helper, finish_reason 缺失时兜底 retry.
+            await tryDoneOrRetry();
             return;
           }
 
@@ -715,11 +842,56 @@ export async function streamChat(params: SendChatParams): Promise<void> {
         }
       }
     }
-    // 流自然结束(没 [DONE]):也 finalize
-    finalizeToolCallsIfAny();
-    onDone({ finish_reason: finishReason, usage, task_assessment: taskAssessment, via_hermes: useHermes });
+    // 流自然结束(没 [DONE]):走 helper 兜底
+    // P3.5.34 修-D: 兜底 finish_reason 缺失场景
+    await tryDoneOrRetry();
   } catch (e) {
+    clearIdleTimer();
     if ((e as Error).name === "AbortError") {
+      // P3.5.34 修-A: 区分 idle abort vs caller abort.
+      if (idleAborted) {
+        // 上游卡了 IDLE_TIMEOUT_MS 没新 chunk → 自动 retry 1 次, 不显错给员工.
+        if (!params._retryCounters?.idleRetry) {
+          const idleSec = Math.round(IDLE_TIMEOUT_MS / 1000);
+          console.warn(
+            `[chat] P3.5.34 修-A: idle ${idleSec}s 无 chunk, 上游可能卡死, 3s 后 retry`,
+          );
+          onDelta(
+            `\n⚠️ 上游 ${idleSec}s 无响应, 3 秒后自动重试一次 (这段时间按 ⏸ 取消)...\n`,
+          );
+          try {
+            await new Promise<void>((resolve, reject) => {
+              const t = setTimeout(resolve, 3000);
+              if (signal) {
+                const onAbort = () => {
+                  clearTimeout(t);
+                  reject(new Error("aborted"));
+                };
+                if (signal.aborted) onAbort();
+                else signal.addEventListener("abort", onAbort, { once: true });
+              }
+            });
+          } catch {
+            onDone({ finish_reason: "abort", usage, task_assessment: taskAssessment });
+            return;
+          }
+          return streamChat({
+            ...params,
+            _retryCounters: {
+              ...params._retryCounters,
+              idleRetry: 1,
+            },
+          });
+        }
+        // 已 retry 过 1 次还 idle → 诚实报错让员工拍
+        const recentBlock = await formatRecentOutputsFootnote(24);
+        onError(
+          `⚠️ 上游响应过慢 (idle 重试 1 次仍无响应). 可以: (1) 换 model ` +
+            `(2) 稍后再试 (3) 检查上游 LLM 服务${recentBlock}`,
+        );
+        return;
+      }
+      // caller abort (员工手动停)
       onDone({ finish_reason: "abort", usage, task_assessment: taskAssessment });
       return;
     }
