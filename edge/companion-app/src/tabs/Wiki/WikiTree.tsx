@@ -578,13 +578,13 @@ function EmptyOnboarding({ onCreateClick }: { onCreateClick: () => void }) {
 
       <Step n={1} title="拖文件进 chat" body={
         <>
-          PDF / Word / Excel / 文本拖进 💬 对话框, 真**`小鲶`** 真**`自动`** 真**`保存全文到`** <code style={ocode}>~/.catfish/wiki/raw/sources/</code>, 24 小时内 distill 生成 entity/concept. 适合**`资料 / 文档**`** 真**`入库`**真.
+          PDF / Word / Excel / 文本拖进 💬 对话框, 小鲶自动保存全文到 <code style={ocode}>~/.catfish/wiki/raw/sources/</code>, 24 小时内 distill 生成 entity / concept. 适合资料 / 文档入库.
         </>
       } />
 
       <Step n={2} title="跟小鲶聊" body={
         <>
-          普通 chat 对话, 小鲶**后台**自动记日记 (<code style={ocode}>employee_journal.md</code>), 24 小时蒸馏 → 抽出 entity (人 / 机构 / 项目) + concept (流程 / 规则 / 标准). 适合**`日常工作`** 真**`沉淀**真**真**`.
+          普通 chat 对话, 小鲶后台自动记日记 (<code style={ocode}>employee_journal.md</code>), 24 小时蒸馏 → 抽出 entity (人 / 机构 / 项目) + concept (流程 / 规则 / 标准). 适合日常工作沉淀.
         </>
       } />
 
@@ -606,7 +606,7 @@ function EmptyOnboarding({ onCreateClick }: { onCreateClick: () => void }) {
           >
             + 新建
           </button>
-          点这或顶部 + 新建 按钮, 直接建 entity / concept, 自己填 markdown body. 适合**`已知**`** 真**`想立刻沉淀的`** 真**`知识点**真.
+          点这或顶部 + 新建 按钮, 直接建 entity / concept, 自己填 markdown body. 适合已知想立刻沉淀的知识点.
         </>
       } />
 
