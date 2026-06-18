@@ -728,7 +728,13 @@ export type AdvisorFetchResult = AdvisorResult | null | typeof ADVISOR_TIMEOUT;
 //   tool 调用 (read_file / session_search 一次 76s / tool_search / recall_decision_history),
 //   总耗时 ~2:40. 180s 客户端 timeout 擦边超出 60-90s, 几乎每次撞超时走 stale fallback.
 //   改 300s 给 agent loop 跑完时间. stale fallback 仍保留 (真 5min 还没回就是上游真挂).
-const CLIENT_TIMEOUT_MS = 300_000;
+// P3.5.32.6 (6/18 鸿波 catch '完全卡死, 处理任务太多'): 300_000 → 600_000.
+// 真因: 鸿波 picker = catfish-private-main (P3.5.29 Phase 6.3 catalog.default).
+// gateway log 实测 profile 单 LLM call 116s, advisor hermes agent loop 多轮串行
+// 5-10 min real. profile + advisor 累计 7-12 min, 300s timeout 全部走 stale cache.
+// 600s 给内网模型留时间. 长期 fix (留 Phase 11): profile/advisor 脱钩 chat picker,
+// 用专用 fast role (e.g. role rate_fast = qwen-flash, 5s 跑完).
+const CLIENT_TIMEOUT_MS = 600_000;
 
 /** 主入口. 不挂 AbortSignal (Tauri webview suspend 经验, 5/21 学到). */
 export async function fetchBriefingAdvisor(input: AdvisorInput): Promise<AdvisorFetchResult> {

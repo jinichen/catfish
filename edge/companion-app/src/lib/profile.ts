@@ -741,7 +741,10 @@ export async function recomputeProfile(model: string): Promise<Profile | null> {
     //   大每次都 race timeout, 真值进不来. 180s 给私有模型足够时间.
     // P3.4.8 (6/15 鸿波): 180_000 → 300_000 跟 advisor 一致. 同样背景:
     //   profile 推断也走 hermes agent loop, 不止单次 LLM call. 180s 撑不下来.
-    const LLM_TIMEOUT_MS = 300_000;
+    // P3.5.32.6 (6/18 鸿波 catch '完全卡死'): 300_000 → 600_000.
+    // 真因 + 同步 fix 详见 briefing_advisor.ts:731 注释. 鸿波本机 catfish-private-main
+    // profile 单 LLM call 116s, 300s 不够大 buffer.
+    const LLM_TIMEOUT_MS = 600_000;
     const llmPromise = inferProfileFromContext(m);
 
     // 后台 LLM 跑完总是写 saved (race 输了也写 — 下次 mount 命中)
