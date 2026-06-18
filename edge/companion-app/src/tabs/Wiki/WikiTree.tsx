@@ -584,7 +584,7 @@ function EmptyOnboarding({ onCreateClick }: { onCreateClick: () => void }) {
 
       <Step n={2} title="跟小鲶聊" body={
         <>
-          普通 chat 对话, 小鲶后台自动记日记 (<code style={ocode}>employee_journal.md</code>), 24 小时蒸馏 → 抽出 entity (人 / 机构 / 项目) + concept (流程 / 规则 / 标准). 适合日常工作沉淀.
+          chat 时小鲶后台记日记 (<code style={ocode}>employee_journal.md</code>). 想沉淀对话进 wiki, 在消息右下角点 💾 存 wiki 手动存.
         </>
       } />
 
