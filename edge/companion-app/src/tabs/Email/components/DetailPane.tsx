@@ -792,19 +792,21 @@ function DetailPane({
           </div>
         </div>
       ) : msg.body_html ? (
-        /* P3.5.31 (6/17 鸿波 catch): HTML 邮件 iframe srcdoc render 真**和 Apple Mail 一致**.
-           真**sandbox=""** 真**禁所有 active features** (script execution / form submit /
-           popup / top navigation), img/CSS 仍 OK (sandbox 不 block img src 加载).
-           真**安全**: 邮件 真**外部 source**, iframe 真**隔离 Companion 主 webview** —
-           XSS / CSRF / parent.location 真**全 block**.
-           真**height**: max 70vh + overflow inside iframe scroll. 真**autosize** 留 fresh
-           session (ResizeObserver + postMessage 真**复杂**, 真**fixed max-height** 已 cover
-           大部分邮件).
-           真**bg 白**: 邮件 真**默认 white**, override Companion dark theme 避免 字看不清. */
+        /* P3.5.31 (6/17 鸿波 catch): HTML 邮件 iframe srcdoc render 跟 Apple Mail 一致.
+           P3.5.38 (6/18 鸿波 catch '邮件内容的链接单击无效'): P3.5.31 sandbox="" 全禁
+           popup + top navigation, <a href> click silent ignored. 修:
+           - sandbox 加 allow-popups + allow-popups-to-escape-sandbox: 让 target=_blank
+             开新窗口, 弹出的新窗口不继承 sandbox 限制 (escape 到系统浏览器).
+           - srcDoc prefix <base target="_blank">: 邮件 HTML 可能没显式 target, base 标签
+             强制所有 a tag 默认新窗口. 防 click 在 iframe 内 navigate 把邮件替换掉.
+           - 不加 allow-scripts (邮件 JS 仍禁 XSS 防御) / allow-same-origin (邮件不能
+             访问 Companion cookies) / allow-forms (钓鱼 form 仍禁) / allow-top-navigation
+             (邮件不能替换 Companion 主页面). 跟 Gmail / Apple Mail / Outlook 同 setup.
+           bg 白: 邮件默认 white, override Companion dark theme 避免字看不清. */
         <iframe
           title="邮件正文"
-          srcDoc={msg.body_html}
-          sandbox=""
+          srcDoc={`<base target="_blank">${msg.body_html}`}
+          sandbox="allow-popups allow-popups-to-escape-sandbox"
           style={{
             flex: 1,
             width: "100%",
