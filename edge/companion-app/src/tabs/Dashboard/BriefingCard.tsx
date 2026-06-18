@@ -41,10 +41,11 @@ export default function BriefingCard() {
   return (
     <div
       style={{
-        background: "var(--catfish-bg-elevated)",
-        border: "1px solid var(--catfish-border)",
-        borderRadius: "var(--radius-md)",
-        padding: "var(--space-4)",
+        // P3.5.32.8 (6/18 鸿波 catch '外框浪费空间'):
+        //   老 bg-elevated + border + padding var(--space-4) 形成卡片外框,
+        //   跟 BriefingTab outer container 双层 framing, 双侧大量浪费.
+        //   改: 砍 bg + border, 让内容直接在 tab bg 上显. 留小 padding 防边贴边.
+        padding: "var(--space-2)",
         alignSelf: "start",
       }}
     >

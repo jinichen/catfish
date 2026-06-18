@@ -13,10 +13,15 @@ export default function BriefingTab() {
   return (
     <div
       style={{
-        // P3.3.6 (6/10): 两栏 layout 需要更宽, max-width 720 → 980
-        maxWidth: 980,
+        // P3.5.32.8 (6/18 鸿波 catch '外框浪费空间'):
+        //   老 maxWidth 980 + padding var(--space-4) → 2204px viewport 只用 44%, 双侧
+        //   大量留白 + BriefingCard 卡片样式形成两层 framing.
+        //   改: maxWidth 1280 (大屏更撑开), padding 减半 (空间紧凑).
+        // P3.3.6 (6/10): 两栏 layout 需要更宽, max-width 720 → 980 (老);
+        // P3.5.32.8 (6/18): 980 → 1280
+        maxWidth: 1280,
         margin: "0 auto",
-        padding: "var(--space-4)",
+        padding: "var(--space-2) var(--space-3)",
         width: "100%",
         boxSizing: "border-box",
       }}
