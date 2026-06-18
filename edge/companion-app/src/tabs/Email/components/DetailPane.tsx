@@ -7,7 +7,7 @@
  * BL-EMAIL-COMPOSE-SEND 红线: AI 不能绕过 panel 直发 send.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   emailCreateDraft,
@@ -192,37 +192,48 @@ function DetailPane({
     setSendConfirmPending(false);
   }, [msg.id]);
 
-  // P3.5.38.1 (6/18 鸿波 catch '邮件链接还是无效'):
-  //   audit (markdown.tsx:211 BL-ARCH2 fix1 5/10): Tauri webview 默认吞 <a target="_blank">,
-  //   必须程序化调 shell.open 才能真在系统浏览器开. P3.5.38 改 sandbox + base target 没用
-  //   因为 popup 本身就被 Tauri webview 吞.
-  //   修: iframe srcDoc 注入 click 拦截脚本 → postMessage URL 给 parent → parent
-  //   调 @tauri-apps/plugin-shell.open. iframe sandbox 加 allow-scripts (脚本能跑),
-  //   不加 allow-same-origin (邮件 script 是 opaque origin, 拿不到 cookies/parent).
+  // P3.5.38.2 (6/18 鸿波 catch '6.18 dev 模式有效但 build 无效'):
+  //   P3.5.38.1 用 iframe srcDoc 注入 inline <script> + postMessage 在 dev 跑 (vite 接管,
+  //   CSP 不严格). build 时 Tauri 把 tauri.conf.json 的 CSP script-src 'self' (没 'unsafe-inline')
+  //   注入到 index.html meta tag → iframe 内 inline script 被 block.
+  //   audit (tauri.conf.json:55): "script-src": "'self' 'wasm-unsafe-eval'" 没 'unsafe-inline'.
+  //   正解: sandbox 改 'allow-same-origin', parent 拿 iframe.contentDocument 直接
+  //   addEventListener click — parent JS 跑, 跟 sandbox 限制无关. 不需要 iframe 内任何
+  //   script, dev + build 都 work.
+  //   安全: 不加 'allow-scripts' (邮件原 script 不能跑, XSS 防御保留), 不加 'allow-forms'
+  //   (钓鱼禁), 不加 'allow-top-navigation' (主页面不能替换). 同源带来的风险只有 parent JS
+  //   能访问 contentDocument — 但 parent JS 是 catfish 自家代码, 不是邮件给的.
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
   useEffect(() => {
-    const onMessage = (e: MessageEvent) => {
-      const data = e.data;
-      if (
-        data &&
-        typeof data === "object" &&
-        data.type === "catfish-email-link-click" &&
-        typeof data.url === "string" &&
-        // 防注入: 只接受 http/https/mailto, 砍 javascript: / data: 等
-        /^(https?|mailto):/i.test(data.url)
-      ) {
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+    const onLoad = () => {
+      const doc = iframe.contentDocument;
+      if (!doc) return;
+      const onClick = (e: Event) => {
+        let t = e.target as HTMLElement | null;
+        while (t && t.tagName !== "A") t = t.parentElement;
+        if (!t) return;
+        const url = (t as HTMLAnchorElement).href;
+        if (!url) return;
+        if (!/^(https?|mailto):/i.test(url)) return;
+        e.preventDefault();
+        e.stopPropagation();
         void (async () => {
           try {
             const { open } = await import("@tauri-apps/plugin-shell");
-            await open(data.url);
+            await open(url);
           } catch (err) {
             console.warn("[EmailDetail] shell.open 失败:", err);
           }
         })();
-      }
+      };
+      doc.addEventListener("click", onClick, true);
     };
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, []);
+    iframe.addEventListener("load", onLoad);
+    // msg.id 变 → iframe 重 load → listener auto re-bind
+    return () => iframe.removeEventListener("load", onLoad);
+  }, [msg.id]);
 
   /** 5/18 BL-EMAIL-COMPOSE-SEND: 点 "起草回复" 不再立即建 draft, 而是开
    *  compose panel 让员工编辑. 这样:
@@ -824,22 +835,19 @@ function DetailPane({
           </div>
         </div>
       ) : msg.body_html ? (
-        /* P3.5.31 (6/17): HTML 邮件 iframe srcdoc render 跟 Apple Mail 一致.
-           P3.5.38 (6/18, revert): 单加 sandbox allow-popups + base target 无效,
-             因为 Tauri webview 默认吞 <a target="_blank"> (markdown.tsx:211 BL-ARCH2
-             fix1 5/10 鸿波反馈实证).
-           P3.5.38.1 (6/18 鸿波 catch '还是无效'): 正解 — iframe 内注入 click 拦截
-             脚本, 拦 a tag click → postMessage URL → parent useEffect 收 → 调
-             @tauri-apps/plugin-shell.open 跳系统浏览器.
-           sandbox 加 allow-scripts (注入脚本能跑) — 不加 allow-same-origin (邮件 script
-             opaque origin, 拿不到 cookies / parent), 不加 allow-forms / allow-top-navigation.
-             邮件原 script 也能跑, 但 opaque origin 风险可控 (跟 Gmail / Outlook 同 setup).
-           parent useEffect (上面 P3.5.38.1) 白名单 http/https/mailto, 砍 javascript:/data: 防注入.
+        /* P3.5.31 (6/17): HTML 邮件 iframe srcdoc render.
+           P3.5.38.2 (6/18 鸿波 catch '6.18 dev 模式有效 build 无效'): sandbox 改
+           'allow-same-origin' (parent 拿 contentDocument 直接 addEventListener click),
+           不再走 inline script + postMessage (build 时 CSP 'self' block inline script).
+           不加 allow-scripts → 邮件原 script 仍禁 (XSS 防御保留). 不加 allow-forms / top-navigation.
+           parent useEffect (上面 P3.5.38.2) 拿 contentDocument addEventListener,
+           白名单 http/https/mailto, 调 @tauri-apps/plugin-shell.open 跳系统浏览器.
            bg 白: 邮件默认 white, override Companion dark theme. */
         <iframe
+          ref={iframeRef}
           title="邮件正文"
-          srcDoc={buildEmailSrcDoc(msg.body_html)}
-          sandbox="allow-scripts"
+          srcDoc={`<base target="_blank">${msg.body_html}`}
+          sandbox="allow-same-origin"
           style={{
             flex: 1,
             width: "100%",
@@ -871,43 +879,7 @@ function DetailPane({
 
 /** ─── 工具函数 ───────────────────────────────────────── */
 
-/** P3.5.38.1 (6/18 鸿波 catch '邮件链接还是无效'): 构造邮件 iframe srcDoc.
- *
- * 注入 click 拦截脚本 — 拦 a tag click + preventDefault + postMessage URL 给 parent.
- * parent 在 DetailPane useEffect 收到后调 @tauri-apps/plugin-shell.open 跳系统浏览器.
- *
- * 跟 markdown.tsx:213 a renderer 同模式 (BL-ARCH2 fix1 5/10 鸿波反馈 — Tauri webview
- * 默认吞 target=_blank, 必须 shell.open). 这里 iframe sandbox 内不能直接 import,
- * 走 postMessage 桥.
- *
- * <base target="_blank"> 保留 (邮件 HTML 没显式 target 时也能在 popup 试一次,
- * 跟 sandbox allow-scripts 注入脚本组合冗余兜底).
- *
- * script 用 capture phase 拦截 (true 第三参), 因为 e.target 可能是 a 内部 <span>/<img>,
- * 需向上找到 a 元素拿 href.
- */
-function buildEmailSrcDoc(bodyHtml: string): string {
-  const interceptScript = `
-<script>
-(function() {
-  document.addEventListener('click', function(e) {
-    var t = e.target;
-    while (t && t.tagName !== 'A') t = t.parentElement;
-    if (t && t.href) {
-      e.preventDefault();
-      e.stopPropagation();
-      try {
-        window.parent.postMessage({
-          type: 'catfish-email-link-click',
-          url: t.href
-        }, '*');
-      } catch (err) { /* silent */ }
-    }
-  }, true);
-})();
-</script>`;
-  return `<base target="_blank">${bodyHtml}${interceptScript}`;
-}
+/** P3.5.38.1 → 砍. P3.5.38.2 不需要注入 script, parent 直接拿 contentDocument 监听 click. */
 
 export default DetailPane;
 export type { FullMessage };
