@@ -517,6 +517,15 @@ advisor 回顾).
 
 reflectPrompt 例: "GTC2026 你想去吗? 要请假吗?"
 
+## 3.4 必须返这 3 字段 (即使空)
+
+JSON 输出**必须**含 subconscious / graveyard / blindSpots 三个字段, 没找到 item
+时返空数组. 不能省略字段, 不能返 null. 客户端用空数组判断 "本周没发现需要反思
+的". 省略 → 客户端拿不到信号.
+
+如果 7 天数据真不够 / sessions 太少 (<5 session) — 仍返字段, 每个值是空数组,
+不要硬凑.
+
 # BL-ADVISOR-JSON-STRICT (P3.4.9, 6/15 鸿波撞 DeepSeek Flash 返英文 markdown 后)
 
 模型在 agent loop 多轮 + tool use 之后, **极易 drift 出 SYSTEM_PROMPT 的 JSON 约束**,
@@ -1651,6 +1660,23 @@ function parseAdvisorResult(raw: unknown, mode: "strict" | "lenient" = "strict")
     }
   }
 
+  // P3.5.32.2 (6/18 鸿波 debug): 显式 log 3 维 parse 结果, 方便鸿波 devtools console
+  // 看 LLM 到底返了什么. 鸿波本机 6/18 上午看不到 cards, 真因可能是:
+  //   (a) cache 老数据 (computedAt 早于 P3.5.32 ship) → 点"刷新"触发 fresh LLM
+  //   (b) LLM Call 1 没 emit 3 字段 (hermes 弱 schema, LLM 自由发挥, 可能漏)
+  //   (c) 数据真不够 (7 天 sessions < 5) → LLM 返空 array, cards 0 渲染
+  console.log("[advisor] P3.5.32 3 维 parse:", {
+    subconscious: subconscious.length,
+    graveyard: graveyard.length,
+    blindSpots: blindSpots.length,
+    rawHasSubconscious:
+      "subconscious" in (obj as Record<string, unknown>)
+      || "sub_conscious" in (obj as Record<string, unknown>),
+    rawHasGraveyard: "graveyard" in (obj as Record<string, unknown>),
+    rawHasBlindSpots:
+      "blindSpots" in (obj as Record<string, unknown>)
+      || "blind_spots" in (obj as Record<string, unknown>),
+  });
   return {
     tier,
     mainTasks,
