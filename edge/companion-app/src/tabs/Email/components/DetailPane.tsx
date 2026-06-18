@@ -25,6 +25,13 @@ interface FullMessage extends EmailDigestItem {
   recipients?: string[];
   cc?: string[];
   attachments?: Array<{ filename: string; size_bytes: number; content_type: string }>;
+  /** P3.5.31 (6/17 鸿波 catch): rust email_read_message 返 JSON 真**已含 body_html**
+   *  (catfish-email Python adapter 真**MIME extract HTML part 填**, base.py:114).
+   *  老 type 真**0 declare** → DetailPane 真**只 access body_text** (strip 后 plain) →
+   *  和 Apple Mail rendered HTML 真**不一致**. 加 field 让 DetailPane 走 iframe render.
+   *  read 场景填; list 场景空字符串 (节省 IPC, base.py:115 注释).
+   */
+  body_html?: string;
 }
 
 /** P3.3.57 (6/12 鸿波): 大群发邮件 header 收件人/抄送默认折叠.
@@ -784,8 +791,30 @@ function DetailPane({
             </button>
           </div>
         </div>
+      ) : msg.body_html ? (
+        /* P3.5.31 (6/17 鸿波 catch): HTML 邮件 iframe srcdoc render 真**和 Apple Mail 一致**.
+           真**sandbox=""** 真**禁所有 active features** (script execution / form submit /
+           popup / top navigation), img/CSS 仍 OK (sandbox 不 block img src 加载).
+           真**安全**: 邮件 真**外部 source**, iframe 真**隔离 Companion 主 webview** —
+           XSS / CSRF / parent.location 真**全 block**.
+           真**height**: max 70vh + overflow inside iframe scroll. 真**autosize** 留 fresh
+           session (ResizeObserver + postMessage 真**复杂**, 真**fixed max-height** 已 cover
+           大部分邮件).
+           真**bg 白**: 邮件 真**默认 white**, override Companion dark theme 避免 字看不清. */
+        <iframe
+          title="邮件正文"
+          srcDoc={msg.body_html}
+          sandbox=""
+          style={{
+            flex: 1,
+            width: "100%",
+            border: "none",
+            background: "white",
+          }}
+        />
       ) : (
-        /* 正文 (非 compose 时) */
+        /* 正文 (非 compose 时, body_html 空 真**fallback plain text**)
+           触发场景: 纯文本邮件 (CTFF 通知 / 系统通知) — body_html 空, body_text 唯一来源 */
         <div
           style={{
             flex: 1,
