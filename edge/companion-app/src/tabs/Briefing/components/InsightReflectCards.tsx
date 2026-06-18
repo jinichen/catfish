@@ -57,7 +57,7 @@ export function SubconsciousCard({ items, onReflect }: SubconsciousProps) {
           color: "var(--catfish-text)",
         }}
       >
-        🧠 无意识 ({items.length}) — 你**问真**多**但**没专门深入**
+        🌊 反复出现 ({items.length}) — 多次咨询但没深入**
       </summary>
       <div style={{ padding: "4px 12px 12px", paddingLeft: 16 }}>
         {items.map((item, i) => (
@@ -141,7 +141,7 @@ export function GraveyardCard({ items }: GraveyardProps) {
           color: "var(--catfish-text)",
         }}
       >
-        🪦 墓地 ({items.length}) — 装了但**0 回顾**
+        📦 久未使用 ({items.length}) — 装了但很少打开
       </summary>
       <div style={{ padding: "4px 12px 12px", paddingLeft: 16 }}>
         {items.map((item, i) => (
@@ -184,7 +184,7 @@ export function GraveyardCard({ items }: GraveyardProps) {
             fontStyle: "italic",
           }}
         >
-          注: catfish 不删. 想清理去对应 tab 真**自己决定**.
+          注: catfish 不删. 想清理去对应 tab 自己决定.
         </div>
       </div>
     </details>
@@ -216,7 +216,7 @@ export function BlindSpotsCard({ items, onReflect }: BlindSpotsProps) {
           color: "var(--catfish-text)",
         }}
       >
-        👁️ 盲点 ({items.length}) — 标重要但**0 行动**
+        ⚠️ 需要关注 ({items.length}) — 标重要但还没跟进
       </summary>
       <div style={{ padding: "4px 12px 12px", paddingLeft: 16 }}>
         {items.map((item, i) => (

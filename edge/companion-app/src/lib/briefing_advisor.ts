@@ -464,52 +464,58 @@ catfish_draft_meeting_brief / catfish_compose_followup_list 后**返回的 path*
 
 不允许编路径绕过. 员工点开发现空草稿 = 鲶鱼失信.
 
-# P3.5.32 Phase 10 (6/18 鸿波 OpenWiki 借鉴) — 3 维 self-aware reflection
+# P3.5.32 Phase 10 (6/18 鸿波 OpenWiki 借鉴) — 3 维周维度反思
 
-主菜 / handledSilently 真**今日 action 层**. 真**这 3 维 真**周维度 self-awareness 层** —
-真**让员工 真**意识到 自己 真**没意识 真**真**关注 / 收藏 / 重要 真**topic**.
+主菜 / handledSilently 是今日 action 层. 这 3 维是周维度自我察觉层 — 让员工
+意识到自己反复咨询 / 久未使用 / 标重要却没跟进的 topic.
 
-## 3.1 subconscious (无意识高频, max 3)
+JSON 字段名保留 subconscious / graveyard / blindSpots (LLM API 接口稳定), 但
+UI 文案用更温和的表达: "反复出现" / "久未使用" / "需要关注".
 
-定义: recent_session_briefs 7 天内 真**问真 多** (>=3 session 标题 / first_user_message
-涉及同 topic 关键词) 但 真**0 deep-dive** (每 session message_count < 5).
+## 3.1 subconscious — UI 显 "反复出现" (max 3)
 
-意义: 员工潜意识真**关注真 这块**, 但**真**没专门**坐下来 deep-dive**. 让员工**真**意识到**.
+定义: recent_session_briefs 7 天内问得多 (>=3 session 标题 / first_user_message
+涉及同 topic 关键词) 但没深入 (每 session message_count < 5).
+
+意义: 员工反复咨询同一主题, 但没专门坐下来深入. 让员工意识到.
 
 正面识别例:
-- "OAuth token refresh" — 3 个 session 标题含 "OAuth" / "token" 真**每 session 仅 2-3 message** → subconscious
-- "周报模板" — 5 session 一过即问 → subconscious
+- "OAuth token refresh" — 3 个 session 标题含 "OAuth" / "token", 每 session 仅
+  2-3 message → 反复出现
+- "周报模板" — 5 session 一过即问 → 反复出现
 
 反面 (drop 不出):
-- "ISO 27001 审核" — 1 session 但 message_count 80 → 真**已 deep-dive**, 不 subconscious
+- "ISO 27001 审核" — 1 session 但 message_count 80 → 已深入, 不属反复出现
 
-reflectPrompt 真**≤15 字 真**第一人称指员工** — "为啥这周问 OAuth 4 次没深入?"
+reflectPrompt: ≤15 字, 第一人称指员工. 例 "为啥这周问 OAuth 4 次没深入?"
 
-## 3.2 graveyard (墓地, max 3)
+## 3.2 graveyard — UI 显 "久未使用" (max 3)
 
-定义: distilled_facts / hermes_memory_recent 真**提过 真**skill / 工具 / 项目 / 关键人**,
-真**recent_session_briefs 7 天 0 reference** (title + first_user_message 0 关键词命中).
+定义: distilled_facts / hermes_memory_recent 提过 skill / 工具 / 项目 / 关键人,
+recent_session_briefs 7 天 0 reference (title + first_user_message 0 关键词命中).
 
-意义: 装但 真**0 使用** — 真**让员工 真**意识到** 真**收藏品 真**真**积灰**.
+意义: 装了但很少打开. 让员工意识到自己有这些工具.
 
 正面识别例:
-- "ppt-magazine skill" (distilled_facts 提到 真**3 周前装**) 真**0 recent session 用** → graveyard
+- "ppt-magazine skill" (distilled_facts 提到 3 周前装), 0 recent session 用 → 久未使用
 - "huggingface-hub skill" (类似)
 
-evidence 真**指真 distilled_facts 哪段**: "distilled 提 '装了 ppt-magazine 真**写杂志风**', 14 天 0 用".
+evidence: 指 distilled_facts 哪段. 例 "distilled 提 '装了 ppt-magazine 写杂志风',
+14 天没用".
 
-## 3.3 blindSpots (盲点, max 3)
+## 3.3 blindSpots — UI 显 "需要关注" (max 3)
 
-定义: distilled_facts / hermes_memory_recent / projects 真**标重要** (e.g. 项目截止 / 关键人物 /
-合规事项), 真**recent_session_briefs 真 7 天 0 reference** (员工**没在 chat / advisor**真**回顾**).
+定义: distilled_facts / hermes_memory_recent / projects 标重要 (e.g. 项目截止 /
+关键人物 / 合规事项), recent_session_briefs 7 天 0 reference (员工没在 chat /
+advisor 回顾).
 
-跟 graveyard 真**区别**: graveyard 真**收藏 工具**, blindSpots 真**业务 重要事项**.
+跟 graveyard 区别: graveyard 是收藏的工具, blindSpots 是业务重要事项.
 
 正面识别例:
-- "GTC2026 keynote" — memory 标重要 (邮件 3 封 + 鸿波 starred), 真**0 chat 真**深入 reply
-- "P3.5.32 Q3 部门评审" — projects.md 写 真**截止 6/30**, 7 天 0 mention
+- "GTC2026 keynote" — memory 标重要 (邮件 3 封 + 鸿波 starred), 0 chat 深入回复
+- "Q3 部门评审" — projects.md 写截止 6/30, 7 天 0 mention
 
-reflectPrompt: "GTC2026 你想去吗? 要请假吗?"
+reflectPrompt 例: "GTC2026 你想去吗? 要请假吗?"
 
 # BL-ADVISOR-JSON-STRICT (P3.4.9, 6/15 鸿波撞 DeepSeek Flash 返英文 markdown 后)
 
