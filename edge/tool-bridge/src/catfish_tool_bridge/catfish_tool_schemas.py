@@ -1046,8 +1046,15 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
             "  - 员工看 Dashboard 发现某个 task '中断' (进程重启 / oom 没跑完)\n"
             "  - 员工说 '那个分析的 task 再跑一次'\n"
             "  - 任务 failed (上游 model 挂), 网络恢复后想 retry\n\n"
-            "返 {ok, task_id (新), original_task_id, status, label}. "
-            "找不到原 task 时返 ok=False (jsonl 没记录 / 老 schema 没存 payload)."
+            "P3.5.33 (6/18) 评估 gate:\n"
+            "  - retry_count >= max_retries → 拒 (默认上限 3 次)\n"
+            "  - last_error_type=permanent (401 / 404 / payload 错) → 拒\n"
+            "  - 其它情况正常 retry, retry_count + 1, parent_task_id 串链路\n\n"
+            "P3.5.33 启动自动 retry: tool-bridge 启动时 auto_retry_interrupted_on_startup\n"
+            "扫 interrupted task 自动触发 retry (白名单 + 评估 gate). LLM 显式调本 tool\n"
+            "只用于: 员工主动要求 / failed 状态非 interrupted / 老 task / 白名单外 kind.\n\n"
+            "返 {ok, task_id (新), original_task_id, retry_count, status, label}. "
+            "找不到原 task / 评估 gate 拒时返 ok=False + error 说原因."
         ),
         "input_schema": {
             "type": "object",
