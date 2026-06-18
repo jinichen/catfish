@@ -690,6 +690,10 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_search_docs":
         from . import search_docs  # noqa: PLC0415
         return search_docs.tool_search_docs(args)
+    # P3.5.35 (6/18 鸿波 catch 'chat 没接 wiki_search') — 员工 wiki + 装机部门 wiki BM25
+    if name == "catfish_wiki_search":
+        from . import wiki_search  # noqa: PLC0415
+        return wiki_search.tool_wiki_search(args)
     # BL-FIX-TIMEOUT-OUTPUTS (5/13 鸿波"做不出文档")
     if name == "catfish_list_my_outputs":
         from . import recent_outputs  # noqa: PLC0415

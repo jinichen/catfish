@@ -167,66 +167,58 @@ async fn ensure_index() -> Result<usize, String> {
     )
     .map_err(|e| format!("create table: {e}"))?;
 
+    // P3.5.35 (6/18 鸿波 catch '装到本机后部门 wiki 不就是自家了吗'):
+    // 用 collect_all_wiki_md helper 一并索引自家 + 装机部门 wiki, 不再 hardcode 3 子目录.
+    // catfish_home: collect_all_wiki_md 用 home.join(".catfish") — 老代码也是 home.join(".catfish").join(sub),
+    // 路径根一致. rel_path 改成相对 ~/.catfish/ (strip_prefix 算), 兼容 wiki/ 跟 wiki-shared/dept/<部门>/.
+    let catfish_root = home.join(".catfish");
     let mut count = 0usize;
-    for sub in &["wiki/entities", "wiki/concepts", "wiki/queries"] {
-        let dir = home.join(".catfish").join(sub);
-        if !dir.is_dir() {
+    for path in crate::commands::wiki_read::collect_all_wiki_md(&catfish_root) {
+        // rel_path 改用 strip_prefix, 兼容 wiki-shared/dept/<部门>/file_id.md 嵌套.
+        let rel_path = match path.strip_prefix(&catfish_root) {
+            Ok(p) => p.to_string_lossy().replace('\\', "/"),
+            Err(_) => continue,
+        };
+        let content = match fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let mtime = path
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        // skip 真**`如果 mtime 没**变`** 真**`SQLite cache 真**`** 真**`hit`**
+        let cached_mtime: Option<i64> = conn
+            .query_row(
+                "SELECT mtime FROM wiki_embed WHERE rel_path = ?1",
+                [&rel_path],
+                |row| row.get(0),
+            )
+            .ok();
+        if cached_mtime == Some(mtime) {
+            count += 1;
             continue;
         }
-        let entries = fs::read_dir(&dir).map_err(|e| format!("read_dir: {e}"))?;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) != Some("md") {
-                continue;
-            }
-            let rel_path = format!(
-                "{}/{}",
-                sub,
-                path.file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("")
-            );
-            let content = match fs::read_to_string(&path) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-            let mtime = entry
-                .metadata()
-                .ok()
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
 
-            // skip 真**`如果 mtime 没**变`** 真**`SQLite cache 真**`** 真**`hit`**
-            let cached_mtime: Option<i64> = conn
-                .query_row(
-                    "SELECT mtime FROM wiki_embed WHERE rel_path = ?1",
-                    [&rel_path],
-                    |row| row.get(0),
-                )
-                .ok();
-            if cached_mtime == Some(mtime) {
-                count += 1;
-                continue;
-            }
-
-            // parse 真**`title + kind`** 真**`frontmatter`** + snippet
-            let (title, kind, snippet) = parse_for_embed(&content);
-            // embed full content (frontmatter + body)
-            let vec = match embed_text(&content).await {
-                Some(v) => v,
-                None => continue,
-            };
-            let blob = vector_to_blob(&vec);
-            conn.execute(
-                "INSERT OR REPLACE INTO wiki_embed (rel_path, title, kind, snippet, vector, mtime)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                rusqlite::params![rel_path, title, kind, snippet, blob, mtime],
-            )
-            .map_err(|e| format!("insert: {e}"))?;
-            count += 1;
-        }
+        // parse 真**`title + kind`** 真**`frontmatter`** + snippet
+        let (title, kind, snippet) = parse_for_embed(&content);
+        // embed full content (frontmatter + body)
+        let vec = match embed_text(&content).await {
+            Some(v) => v,
+            None => continue,
+        };
+        let blob = vector_to_blob(&vec);
+        conn.execute(
+            "INSERT OR REPLACE INTO wiki_embed (rel_path, title, kind, snippet, vector, mtime)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![rel_path, title, kind, snippet, blob, mtime],
+        )
+        .map_err(|e| format!("insert: {e}"))?;
+        count += 1;
     }
     Ok(count)
 }

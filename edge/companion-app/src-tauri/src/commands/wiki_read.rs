@@ -218,6 +218,55 @@ fn build_file_info_inner(
     })
 }
 
+/// P3.5.35 (6/18 鸿波 catch '装到本机后部门 wiki 不就是自家了吗'):
+/// 收集所有员工本机 wiki MD 文件路径 — 自家 (wiki/{entities,concepts,queries}/)
+/// + 装机部门 (wiki-shared/dept/<部门>/).
+///
+/// 之前 wiki_search_text + wiki_embed.rs::ensure_index hardcode 只扫自家 3 子目录,
+/// 部门 wiki 装机后**搜不到 / 不索引**, 实际上物理位置同在 ~/.catfish/ 员工本机, 跟自家
+/// 边界相同, 是 bug 不是设计. 抽 helper 让 wiki_search_text + ensure_index 都复用.
+///
+/// 不存在 / IO 错都 swallow, 返已扫到的部分 (跟现有 wiki_list_files 同容错).
+pub fn collect_all_wiki_md(home: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    // 自家三子目录
+    for sub in &["wiki/entities", "wiki/concepts", "wiki/queries"] {
+        let dir = home.join(sub);
+        if !dir.is_dir() {
+            continue;
+        }
+        if let Ok(entries) = fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.extension().and_then(|s| s.to_str()) == Some("md") {
+                    paths.push(p);
+                }
+            }
+        }
+    }
+    // 装机部门 wiki-shared/dept/<部门>/*.md
+    let shared_root = home.join("wiki-shared").join("dept");
+    if shared_root.is_dir() {
+        if let Ok(dept_entries) = fs::read_dir(&shared_root) {
+            for dept_entry in dept_entries.flatten() {
+                let dept_dir = dept_entry.path();
+                if !dept_dir.is_dir() {
+                    continue;
+                }
+                if let Ok(files) = fs::read_dir(&dept_dir) {
+                    for file in files.flatten() {
+                        let p = file.path();
+                        if p.extension().and_then(|s| s.to_str()) == Some("md") {
+                            paths.push(p);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    paths
+}
+
 #[tauri::command]
 pub async fn wiki_list_files() -> Result<Vec<WikiFileInfo>, String> {
     let home = catfish_home()?;
@@ -413,95 +462,85 @@ pub async fn wiki_search_text(query: String) -> Result<Vec<WikiSearchHit>, Strin
     let mut hits: Vec<WikiSearchHit> = Vec::new();
     let tokens: Vec<&str> = q.split_whitespace().collect();
 
-    for sub in &["wiki/entities", "wiki/concepts", "wiki/queries"] {
-        let dir = home.join(sub);
-        if !dir.is_dir() {
+    // P3.5.35 (6/18 鸿波 catch '装到本机后部门 wiki 不就是自家了吗'):
+    // 用 collect_all_wiki_md helper 一并扫自家 + 装机部门 wiki, 不再 hardcode 3 子目录.
+    for path in collect_all_wiki_md(&home) {
+        let info = match build_file_info(&home, &path) {
+            Some(i) => i,
+            None => continue,
+        };
+        let content = match fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let content_lower = content.to_lowercase();
+        let title_lower = info.title.to_lowercase();
+        let tags_lower: Vec<String> = info.tags.iter().map(|t| t.to_lowercase()).collect();
+
+        let mut score = 0.0f64;
+        let mut matched_in: Vec<String> = Vec::new();
+        let mut hit_pos: Option<usize> = None;
+
+        // title match
+        if title_lower == q {
+            score += 20.0;
+            matched_in.push("title".into());
+        } else if title_lower.contains(&q) {
+            score += 10.0;
+            matched_in.push("title".into());
+        }
+        // tag match (任一 tag 含 query)
+        if tags_lower.iter().any(|t| t.contains(&q)) {
+            score += 5.0;
+            matched_in.push("tags".into());
+        }
+        // body: 每 token 出现次数
+        for tok in &tokens {
+            if tok.is_empty() {
+                continue;
+            }
+            let count = content_lower.matches(tok).count();
+            if count > 0 {
+                score += (count as f64).min(10.0);
+                if hit_pos.is_none() {
+                    hit_pos = content_lower.find(tok);
+                }
+            }
+        }
+        if hit_pos.is_some() && !matched_in.contains(&"body".to_string()) {
+            matched_in.push("body".into());
+        }
+        if score <= 0.0 {
             continue;
         }
-        let entries = fs::read_dir(&dir)
-            .map_err(|e| format!("read_dir {dir:?} 失败: {e}"))?;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) != Some("md") {
-                continue;
-            }
-            let info = match build_file_info(&home, &path) {
-                Some(i) => i,
-                None => continue,
-            };
-            let content = match fs::read_to_string(&path) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-            let content_lower = content.to_lowercase();
-            let title_lower = info.title.to_lowercase();
-            let tags_lower: Vec<String> = info.tags.iter().map(|t| t.to_lowercase()).collect();
 
-            let mut score = 0.0f64;
-            let mut matched_in: Vec<String> = Vec::new();
-            let mut hit_pos: Option<usize> = None;
+        // snippet: 含 hit_pos 真**`±60 chars`**, 没 hit_pos 用 body 前 120
+        let snippet = if let Some(pos) = hit_pos {
+            let start = pos.saturating_sub(60);
+            let end = (pos + 60).min(content.len());
+            // 安全 slice (按 char boundary)
+            let safe_slice = content
+                .char_indices()
+                .filter(|(i, _)| *i >= start && *i < end)
+                .map(|(_, c)| c)
+                .collect::<String>();
+            format!("…{}…", safe_slice.replace('\n', " "))
+        } else {
+            content
+                .chars()
+                .take(120)
+                .collect::<String>()
+                .replace('\n', " ")
+        };
 
-            // title match
-            if title_lower == q {
-                score += 20.0;
-                matched_in.push("title".into());
-            } else if title_lower.contains(&q) {
-                score += 10.0;
-                matched_in.push("title".into());
-            }
-            // tag match (任一 tag 含 query)
-            if tags_lower.iter().any(|t| t.contains(&q)) {
-                score += 5.0;
-                matched_in.push("tags".into());
-            }
-            // body: 每 token 出现次数
-            for tok in &tokens {
-                if tok.is_empty() {
-                    continue;
-                }
-                let count = content_lower.matches(tok).count();
-                if count > 0 {
-                    score += (count as f64).min(10.0);
-                    if hit_pos.is_none() {
-                        hit_pos = content_lower.find(tok);
-                    }
-                }
-            }
-            if hit_pos.is_some() && !matched_in.contains(&"body".to_string()) {
-                matched_in.push("body".into());
-            }
-            if score <= 0.0 {
-                continue;
-            }
-
-            // snippet: 含 hit_pos 真**`±60 chars`**, 没 hit_pos 用 body 前 120
-            let snippet = if let Some(pos) = hit_pos {
-                let start = pos.saturating_sub(60);
-                let end = (pos + 60).min(content.len());
-                // 安全 slice (按 char boundary)
-                let safe_slice = content
-                    .char_indices()
-                    .filter(|(i, _)| *i >= start && *i < end)
-                    .map(|(_, c)| c)
-                    .collect::<String>();
-                format!("…{}…", safe_slice.replace('\n', " "))
-            } else {
-                content
-                    .chars()
-                    .take(120)
-                    .collect::<String>()
-                    .replace('\n', " ")
-            };
-
-            hits.push(WikiSearchHit {
-                rel_path: info.rel_path.clone(),
-                title: info.title.clone(),
-                kind: info.kind.clone(),
-                score,
-                snippet,
-                matched_in,
-            });
-        }
+        hits.push(WikiSearchHit {
+            rel_path: info.rel_path.clone(),
+            title: info.title.clone(),
+            kind: info.kind.clone(),
+            score,
+            snippet,
+            matched_in,
+        });
     }
     // 高 score 优先
     hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));

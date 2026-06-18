@@ -2403,6 +2403,50 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ── P3.5.35 (6/18 鸿波 catch 'chat 是不是已经接了 wiki_search? + 装到本机后部门 wiki 不就是自家了吗') ──
+    {
+        "name": "catfish_wiki_search",
+        "description": (
+            "★★ 搜员工本机 wiki — 含自家 (~/.catfish/wiki/{entities,concepts,queries}) + "
+            "装机部门 wiki (~/.catfish/wiki-shared/dept/<部门>/). BM25 char-level, 100% 离线.\n\n"
+            "✅ 调用场景:\n"
+            "  - 员工问 '我 wiki 里关于 X 写过啥?' / '之前记的 Y 在哪?'\n"
+            "  - 员工问 '我们公司关于 Z 的流程' (本部门 / 跨部门规定)\n"
+            "  - 员工问 '客户 W 在 wiki 里是不是有 entity?' \n"
+            "  - 员工问 '部门 wiki 关于资质评估写了啥' (装机部门 wiki)\n\n"
+            "❌ 不调用:\n"
+            "  - 找 catfish 内部 (manifesto/patent/moat) — 用 catfish_search_docs\n"
+            "  - 找 hermes skill — 用 catfish_search_skills\n"
+            "  - 找邮件 / 会话 / 附件 — 走对应 catfish_email_search / catfish_session_messages_search / catfish_attachments_search\n\n"
+            "返参:\n"
+            "  - matches: top-K [{name, title, kind (entity/concept/query), source (own/dept/<部门>), head 1500字, rel_path, score}]\n"
+            "  - count, total_indexed, summary, latency_ms\n"
+            "  - 想看全文: 让员工 Wiki tab 打开 rel_path (LLM 没 wiki_read tool, 客户端 UI 操作)\n\n"
+            "🔒 隐私: 直读 ~/.catfish/, 不走 gateway, 不上行中央. 跟 manifesto 公理 2 一致.\n"
+            "  装机部门 wiki 物理上已在员工本机, 跟自家边界相同 (6/18 鸿波 audit catch).\n\n"
+            "💡 思路 (跟 catfish_search_docs 同 Progressive Disclosure):\n"
+            "  Tier 1 - 员工 Wiki tab 自己浏览\n"
+            "  Tier 2 (本 tool) - LLM BM25 搜 + 拿 head 1500 字 + 路径\n"
+            "  Tier 3 - 员工根据 rel_path 在 Wiki tab 打开看全文"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "搜的关键字 / 自然语言 ('openai 价格' / '资质评估流程' / '客户机房 IP' / '入职手续' 等)",
+                },
+                "top_k": {
+                    "type": "integer",
+                    "description": "返多少份 (默认 5, 上限 15)",
+                },
+            },
+            "required": ["query"],
+        },
+        "emoji": "📚",
+        "toolset": "catfish_native",
+        "available": True,
+    },
     # ── BL-FED2.3 (5/12 鸿波拍板) 跨员工路由 ──
     {
         "name": "catfish_expert_consult",
