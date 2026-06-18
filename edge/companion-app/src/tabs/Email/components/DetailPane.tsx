@@ -192,6 +192,38 @@ function DetailPane({
     setSendConfirmPending(false);
   }, [msg.id]);
 
+  // P3.5.38.1 (6/18 鸿波 catch '邮件链接还是无效'):
+  //   audit (markdown.tsx:211 BL-ARCH2 fix1 5/10): Tauri webview 默认吞 <a target="_blank">,
+  //   必须程序化调 shell.open 才能真在系统浏览器开. P3.5.38 改 sandbox + base target 没用
+  //   因为 popup 本身就被 Tauri webview 吞.
+  //   修: iframe srcDoc 注入 click 拦截脚本 → postMessage URL 给 parent → parent
+  //   调 @tauri-apps/plugin-shell.open. iframe sandbox 加 allow-scripts (脚本能跑),
+  //   不加 allow-same-origin (邮件 script 是 opaque origin, 拿不到 cookies/parent).
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      const data = e.data;
+      if (
+        data &&
+        typeof data === "object" &&
+        data.type === "catfish-email-link-click" &&
+        typeof data.url === "string" &&
+        // 防注入: 只接受 http/https/mailto, 砍 javascript: / data: 等
+        /^(https?|mailto):/i.test(data.url)
+      ) {
+        void (async () => {
+          try {
+            const { open } = await import("@tauri-apps/plugin-shell");
+            await open(data.url);
+          } catch (err) {
+            console.warn("[EmailDetail] shell.open 失败:", err);
+          }
+        })();
+      }
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
+
   /** 5/18 BL-EMAIL-COMPOSE-SEND: 点 "起草回复" 不再立即建 draft, 而是开
    *  compose panel 让员工编辑. 这样:
    *    - 取消不留 orphan draft
@@ -792,21 +824,22 @@ function DetailPane({
           </div>
         </div>
       ) : msg.body_html ? (
-        /* P3.5.31 (6/17 鸿波 catch): HTML 邮件 iframe srcdoc render 跟 Apple Mail 一致.
-           P3.5.38 (6/18 鸿波 catch '邮件内容的链接单击无效'): P3.5.31 sandbox="" 全禁
-           popup + top navigation, <a href> click silent ignored. 修:
-           - sandbox 加 allow-popups + allow-popups-to-escape-sandbox: 让 target=_blank
-             开新窗口, 弹出的新窗口不继承 sandbox 限制 (escape 到系统浏览器).
-           - srcDoc prefix <base target="_blank">: 邮件 HTML 可能没显式 target, base 标签
-             强制所有 a tag 默认新窗口. 防 click 在 iframe 内 navigate 把邮件替换掉.
-           - 不加 allow-scripts (邮件 JS 仍禁 XSS 防御) / allow-same-origin (邮件不能
-             访问 Companion cookies) / allow-forms (钓鱼 form 仍禁) / allow-top-navigation
-             (邮件不能替换 Companion 主页面). 跟 Gmail / Apple Mail / Outlook 同 setup.
-           bg 白: 邮件默认 white, override Companion dark theme 避免字看不清. */
+        /* P3.5.31 (6/17): HTML 邮件 iframe srcdoc render 跟 Apple Mail 一致.
+           P3.5.38 (6/18, revert): 单加 sandbox allow-popups + base target 无效,
+             因为 Tauri webview 默认吞 <a target="_blank"> (markdown.tsx:211 BL-ARCH2
+             fix1 5/10 鸿波反馈实证).
+           P3.5.38.1 (6/18 鸿波 catch '还是无效'): 正解 — iframe 内注入 click 拦截
+             脚本, 拦 a tag click → postMessage URL → parent useEffect 收 → 调
+             @tauri-apps/plugin-shell.open 跳系统浏览器.
+           sandbox 加 allow-scripts (注入脚本能跑) — 不加 allow-same-origin (邮件 script
+             opaque origin, 拿不到 cookies / parent), 不加 allow-forms / allow-top-navigation.
+             邮件原 script 也能跑, 但 opaque origin 风险可控 (跟 Gmail / Outlook 同 setup).
+           parent useEffect (上面 P3.5.38.1) 白名单 http/https/mailto, 砍 javascript:/data: 防注入.
+           bg 白: 邮件默认 white, override Companion dark theme. */
         <iframe
           title="邮件正文"
-          srcDoc={`<base target="_blank">${msg.body_html}`}
-          sandbox="allow-popups allow-popups-to-escape-sandbox"
+          srcDoc={buildEmailSrcDoc(msg.body_html)}
+          sandbox="allow-scripts"
           style={{
             flex: 1,
             width: "100%",
@@ -837,6 +870,44 @@ function DetailPane({
 }
 
 /** ─── 工具函数 ───────────────────────────────────────── */
+
+/** P3.5.38.1 (6/18 鸿波 catch '邮件链接还是无效'): 构造邮件 iframe srcDoc.
+ *
+ * 注入 click 拦截脚本 — 拦 a tag click + preventDefault + postMessage URL 给 parent.
+ * parent 在 DetailPane useEffect 收到后调 @tauri-apps/plugin-shell.open 跳系统浏览器.
+ *
+ * 跟 markdown.tsx:213 a renderer 同模式 (BL-ARCH2 fix1 5/10 鸿波反馈 — Tauri webview
+ * 默认吞 target=_blank, 必须 shell.open). 这里 iframe sandbox 内不能直接 import,
+ * 走 postMessage 桥.
+ *
+ * <base target="_blank"> 保留 (邮件 HTML 没显式 target 时也能在 popup 试一次,
+ * 跟 sandbox allow-scripts 注入脚本组合冗余兜底).
+ *
+ * script 用 capture phase 拦截 (true 第三参), 因为 e.target 可能是 a 内部 <span>/<img>,
+ * 需向上找到 a 元素拿 href.
+ */
+function buildEmailSrcDoc(bodyHtml: string): string {
+  const interceptScript = `
+<script>
+(function() {
+  document.addEventListener('click', function(e) {
+    var t = e.target;
+    while (t && t.tagName !== 'A') t = t.parentElement;
+    if (t && t.href) {
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        window.parent.postMessage({
+          type: 'catfish-email-link-click',
+          url: t.href
+        }, '*');
+      } catch (err) { /* silent */ }
+    }
+  }, true);
+})();
+</script>`;
+  return `<base target="_blank">${bodyHtml}${interceptScript}`;
+}
 
 export default DetailPane;
 export type { FullMessage };
