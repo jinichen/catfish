@@ -137,7 +137,13 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
         const p = await ensureRecomputed(model, isManualRefresh);
         if (cancelled) return;
 
-        if (!p || p.confidence < 0.3) {
+        // P3.5.32.3 (6/18 鸿波 catch '55% 不能用'):
+        //   老阈值 0.3 — confidence 0.3-0.5 区间也跑 advisor, 但画像质量低,
+        //   LLM 推理基础不牢. 鸿波视角: 低置信度画像 + LLM 推理 = 不可靠输出.
+        //   改 0.5: confidence < 0.5 不调 advisor LLM, 显 no_profile placeholder
+        //   '画像还在学, 多用几天后再看 advisor'. 省 token + 防低质量输出.
+        //   confidence 来源 profile.ts:173 — LLM 自评质量信号 (数据稀疏 → 0.3-0.5).
+        if (!p || p.confidence < 0.5) {
           setProfile(p);
           setPhase("no_profile");
           return;
@@ -343,8 +349,12 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
 
   return (
     <div style={{ marginTop: "var(--space-4)" }}>
-      {/* 5/21 cold start 3: confidence 分层 UI 提示 */}
-      {profile && <ConfidenceHint profile={profile} />}
+      {/* P3.5.32.3 (6/18 鸿波 catch): ConfidenceHint banner 砍.
+       *  真因 1: '已识别: mid / 合规优先 / 8 关键人 / 5 项目' — 数据自夸, 0 actionable.
+       *  真因 2: '置信度 55%, 继续用会更准' — hedge disclaimer 摆烂感.
+       *  鸿波视角: banner 没意义, 不见就行.
+       *  保留 ConfidenceHint 函数定义 (历史 git log 用), 这里不再调.
+       *  低置信度 < 0.5 走 no_profile placeholder (上面 line 142), 不显 advisor 内容. */}
 
       {/* 5/22 上游拥堵 fallback: 显示 stale cache 时顶上挂提示
        *  P3.4.E.9 (6/15 鸿波): 跟 ConfidenceHint 同源 hardcode hex 问题, 用 hint-amber var.
@@ -470,7 +480,13 @@ function RefreshInfo({
  *   - < 0.3: "🪴 刚认识你, 默认按通用版渲染. 多用几天会更准."
  *   - 0.3-0.7: "📊 画像中. 已识别: tier / style / N 关键人 / N 项目."
  *   - > 0.7: 无提示, 全功能 (顶上"鲶鱼参谋 · tier=..." 一行就够)
+ *
+ * P3.5.32.3 (6/18 鸿波 catch): 此 component 真**不再调**. 鸿波 catch '画像 banner
+ * 没意义 + 55% 不能用'. 现在阈值改 0.5 (line 142), <0.5 走 no_profile placeholder,
+ * >=0.5 直接显 advisor 内容, 真**不显 ConfidenceHint banner**.
+ * 函数定义保留 (git log 历史 / 万一未来要回炉再用).
  */
+// @ts-expect-error 真**P3.5.32.3 砍调用, 留函数定义**.
 function ConfidenceHint({ profile }: { profile: Profile }) {
   const c = profile.confidence;
   if (c >= 0.7) return null;  // 高置信度无提示
