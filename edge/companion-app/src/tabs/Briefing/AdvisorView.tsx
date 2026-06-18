@@ -292,7 +292,8 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
   // ─── 渲染 ────────────────────────────────────────────────────
 
   if (phase === "booting" || phase === "profile_loading") {
-    return <Placeholder text="正在识别员工画像..." />;
+    // P3.5.32.4 (6/18 鸿波 catch '整个画像不要显示'): 去 '画像' 字眼.
+    return <Placeholder text="准备中..." />;
   }
 
   if (phase === "no_profile") {
@@ -547,7 +548,9 @@ function Placeholder({ text, error = false }: { text: string; error?: boolean })
   );
 }
 
-function NoProfileNotice({ hasProfileButZero }: { hasProfileButZero: boolean }) {
+// P3.5.32.4 (6/18 鸿波 catch '整个画像不要显示'): hasProfileButZero prop 不再用
+// (新文案 0 分支 — 'Phase 7 第 1 步占位' 这种技术细节砍掉).
+function NoProfileNotice(_: { hasProfileButZero: boolean }) {
   return (
     <div
       style={{
@@ -561,16 +564,18 @@ function NoProfileNotice({ hasProfileButZero }: { hasProfileButZero: boolean }) 
         color: "var(--catfish-text-muted)",
       }}
     >
+      {/* P3.5.32.4 (6/18 鸿波 catch '整个画像不要显示, 误导'): 去 '画像' 字眼.
+          鸿波视角: '画像识别' / '画像占位' 都是后台技术细节, 暴露给员工没意义, 反而像
+          AI 在炫耀. 改成中性描述, 只说 "数据还不够 / 多用几天" 让员工知道下一步. */}
       <div style={{ fontSize: 14, color: "var(--catfish-text)", marginBottom: 8 }}>
-        员工画像识别中
+        多用几天再看
       </div>
       <div>
-        {hasProfileButZero
-          ? "已生成画像占位 (Phase 7 第 1 步), 真 LLM 推断待第 4 步集成后启用."
-          : "首次启动, catfish 后台正在分析员工历史数据生成画像."}
+        catfish 还在熟悉你的工作节奏, 历史数据不够多, 暂时给不出靠谱的早安建议.
+        正常用 catfish 写邮件 / 跟我聊几次, 1-2 周后早安会自动开.
       </div>
       <div style={{ marginTop: 8, fontSize: 12, opacity: 0.85 }}>
-        识别完后才会出现主菜 + 选项 + 草稿. 请稍候或刷新.
+        其他 tab (工作台 / 邮件 / 知识体系) 都能正常用.
       </div>
     </div>
   );
