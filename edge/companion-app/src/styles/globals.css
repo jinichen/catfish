@@ -1684,9 +1684,17 @@ button {
   grid-template-columns: 220px 1fr;
   gap: 16px;
   margin-top: 12px;
-  /* 关键: 固定高度让两栏内部能 overflow-y. 减去 TabBar (~52) + AuthBanner
-   * (~36) + BriefingCard header (~80) + padding (~32) ≈ 200px 顶部固定. */
-  height: calc(100vh - 200px);
+  /* P3.5.32.9 (6/18 鸿波 catch '内容区高度可不可以高一些, 提高利用率'):
+   *   老 calc(100vh - 200px) 真过悲观, audit 实际开销:
+   *   - TabBar ~52px
+   *   - AuthBanner 平时 0 (只在没 token 显)
+   *   - BriefingTab padding (top+bottom) ~16px
+   *   - BriefingCard padding (top+bottom) ~16px
+   *   - BriefingCard header 一行 ~24px + marginBottom 12px = ~36px
+   *   - briefing-2col margin-top: 12px
+   *   合计 ~132px, 调成 130px. P3.5.32.8 砍卡片外框 + P3.5.32.9 砍 RefreshInfo
+   *   独立一行 (挪到 header 跟刷新按钮并行) 一共省下 ~70px 给内容. */
+  height: calc(100vh - 130px);
   min-height: 400px;
   overflow: hidden;
 }

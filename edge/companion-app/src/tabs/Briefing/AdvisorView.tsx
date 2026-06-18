@@ -20,11 +20,10 @@ import {
   cacheAgeMinutes,
   didCrossRefreshTime,
   isCacheFresh,
-  nextRefreshAfter,
   type AdvisorCache,
   type AdvisorConfig,
   type TaskStateFetch,
-} from "../../lib/advisor_cache";
+} from "../../lib/advisor_cache";  // P3.5.32.9 (6/18): nextRefreshAfter 不再 import — 老 RefreshInfo 函数砍, 用方挪去 components/RefreshInfo.tsx 自管
 import {
   ADVISOR_TIMEOUT,
   ensureTaskChatSummariesFresh,
@@ -58,7 +57,8 @@ interface AdvisorViewProps {
 export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [result, setResult] = useState<AdvisorResult | null>(null);
-  const [cacheInfo, setCacheInfo] = useState<{ computedAt: string; ageMin: number } | null>(null);
+  // P3.5.32.9 (6/18): cacheInfo state 砍 — 老 RefreshInfo 依赖它, 现在
+  // components/RefreshInfo.tsx polling 自管 advisorCacheGet, 不再需要 AdvisorView 中转.
   const [config, setConfig] = useState<AdvisorConfig | null>(null);
   const [phase, setPhase] = useState<"booting" | "profile_loading" | "data_loading" | "llm_running" | "done" | "no_profile" | "no_data" | "error" | "cache_hit" | "stale_fallback">("booting");
   const [errorMsg, setErrorMsg] = useState<string>("");
@@ -129,10 +129,6 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
             console.log("[advisor] cache 命中, 跳过 LLM 调用",
               { ageMin: cacheAgeMinutes(cached).toFixed(1) });
             setResult(cached.result);
-            setCacheInfo({
-              computedAt: cached.computedAt,
-              ageMin: cacheAgeMinutes(cached),
-            });
             setPhase("cache_hit");
             // profile 也读一下让 UI 显示 (ConfidenceHint)
             const { profileGet } = await import("../../lib/profile");
@@ -237,10 +233,6 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
           if (cancelled) return;
           if (stale) {
             setResult(stale.result);
-            setCacheInfo({
-              computedAt: stale.computedAt,
-              ageMin: cacheAgeMinutes(stale),
-            });
             setStaleNotice(
               `⚠️ 公司内网模型响应慢 (>5min), 显示上次结果. 后台仍在算, 完成会自动更新.`,
             );
@@ -267,7 +259,6 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
           await advisorCacheSave(newCache).catch((e) =>
             console.warn("[advisor] cache 写入失败 (不影响显示):", e),
           );
-          setCacheInfo({ computedAt: newCache.computedAt, ageMin: 0 });
         }
         setPhase("done");
       } catch (e) {
@@ -325,10 +316,6 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
         model={model}
         onCancel={staleCache ? () => {
           setResult(staleCache.result);
-          setCacheInfo({
-            computedAt: staleCache.computedAt,
-            ageMin: cacheAgeMinutes(staleCache),
-          });
           setStaleNotice("已切到上次结果. 后台仍在算, 完成会自动更新.");
           setPhase("stale_fallback");
         } : undefined}
@@ -353,10 +340,6 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
         counts={dataCounts ?? undefined}
         onCancel={staleCache ? () => {
           setResult(staleCache.result);
-          setCacheInfo({
-            computedAt: staleCache.computedAt,
-            ageMin: cacheAgeMinutes(staleCache),
-          });
           setStaleNotice("已切到上次结果. 后台仍在算, 完成会自动更新.");
           setPhase("stale_fallback");
         } : undefined}
@@ -424,29 +407,9 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
         </div>
       )}
 
-      {/* P3.5.17.c.3 (6/17 鸿波): "鲶鱼参谋 · tier=..." inline 砍 — tier 是
-          profile 内部分级 (frontline/mid/senior 影响 advisor 语气), UI 显是
-          debug 痕迹无意义. "缓存中" / "显示历史结果" 也砍 — stale_fallback
-          有独立 staleNotice warning channel (line 358-366), 不依赖 inline.
-          只留 RefreshInfo (上次刷新时间 + 下次自动刷新), 真有用. */}
-      {cacheInfo && config && (
-        <div
-          style={{
-            fontSize: 11,
-            color: "var(--catfish-text-muted)",
-            marginBottom: 10,
-            paddingLeft: 4,
-            display: "flex",
-            justifyContent: "flex-end",
-            alignItems: "baseline",
-          }}
-        >
-          <RefreshInfo
-            cacheInfo={cacheInfo}
-            refreshTimes={config.refreshTimes}
-          />
-        </div>
-      )}
+      {/* P3.5.32.9 (6/18 鸿波 catch '时间和刷新放一行'):
+          RefreshInfo 独立 div 已挪到 BriefingCard header. 这里砍掉省一行垂直空间.
+          AdvisorView 还保留 cacheInfo state 给 LoadingProgress / stale_fallback 用. */}
 
       {(() => {
         // P3.3.6 (6/10): 平铺 ActionCard → 左右两栏 layout
@@ -486,43 +449,8 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
   );
 }
 
-/** 5/22 cold start v3: 显示缓存时间 + 下次自动刷新时间 (yaml 配置). */
-function RefreshInfo({
-  cacheInfo,
-  refreshTimes,
-}: {
-  cacheInfo: { computedAt: string; ageMin: number };
-  refreshTimes: string[];
-}) {
-  const computedDate = new Date(cacheInfo.computedAt);
-  const computedHHMM = computedDate.toLocaleTimeString("zh-CN", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-  const next = nextRefreshAfter(new Date(), refreshTimes);
-  const nextHHMM = next
-    ? next.toLocaleTimeString("zh-CN", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-      })
-    : "明天 " + (refreshTimes[0] ?? "08:30");
-
-  const ageMin = Math.round(cacheInfo.ageMin);
-  const ageLabel =
-    ageMin < 1
-      ? "刚刚"
-      : ageMin < 60
-      ? `${ageMin} 分钟前`
-      : `${(ageMin / 60).toFixed(1)} 小时前`;
-
-  return (
-    <span style={{ fontSize: 10, opacity: 0.75 }}>
-      上次 {computedHHMM} ({ageLabel}) · 下次自动 {nextHHMM}
-    </span>
-  );
-}
+/** P3.5.32.9 (6/18 鸿波 catch): 老 RefreshInfo 抽到 components/RefreshInfo.tsx
+ *  (BriefingCard header 调). 这里函数定义砍, import 也砍 nextRefreshAfter. */
 
 /** 5/21 cold start 3: confidence 分层 UI 提示.
  *

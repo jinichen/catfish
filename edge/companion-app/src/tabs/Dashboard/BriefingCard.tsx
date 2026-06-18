@@ -10,6 +10,7 @@
 import { useEffect, useState } from "react";
 
 import AdvisorView from "../Briefing/AdvisorView";
+import RefreshInfo from "../Briefing/components/RefreshInfo";  // P3.5.32.9 (6/18): 时间挪 header
 import { getGreeting } from "../Briefing/components/helpers";
 import { weatherGet, type WeatherCache } from "../../lib/weather";  // P3.3.8 (6/10): 早安天气
 
@@ -90,24 +91,35 @@ export default function BriefingCard() {
             🌐 天气不可用
           </span>
         )}
-        <button
-          type="button"
-          onClick={() => setRefreshKey((k) => k + 1)}
-          title="重新综合判断"
+        {/* P3.5.32.9 (6/18 鸿波 catch '时间和刷新放一行'): RefreshInfo 挪到 header,
+            放在刷新按钮左边. flex-end 自动右对齐. */}
+        <div
           style={{
             marginLeft: "auto",
-            background: "transparent",
-            border: "1px solid var(--catfish-border)",
-            borderRadius: "var(--radius-sm)",
-            color: "var(--catfish-text-muted)",
-            cursor: "pointer",
-            fontSize: 12,
-            padding: "3px 10px",
-            fontFamily: "inherit",
+            display: "flex",
+            alignItems: "center",
+            gap: "var(--space-3)",
           }}
         >
-          刷新
-        </button>
+          <RefreshInfo />
+          <button
+            type="button"
+            onClick={() => setRefreshKey((k) => k + 1)}
+            title="重新综合判断"
+            style={{
+              background: "transparent",
+              border: "1px solid var(--catfish-border)",
+              borderRadius: "var(--radius-sm)",
+              color: "var(--catfish-text-muted)",
+              cursor: "pointer",
+              fontSize: 12,
+              padding: "3px 10px",
+              fontFamily: "inherit",
+            }}
+          >
+            刷新
+          </button>
+        </div>
       </header>
 
       <AdvisorView refreshKey={refreshKey} />
