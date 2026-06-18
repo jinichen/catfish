@@ -464,67 +464,20 @@ catfish_draft_meeting_brief / catfish_compose_followup_list 后**返回的 path*
 
 不允许编路径绕过. 员工点开发现空草稿 = 鲶鱼失信.
 
-# P3.5.32 Phase 10 (6/18 鸿波 OpenWiki 借鉴) — 3 维周维度反思
+# P3.5.32 Phase 10 (6/18 鸿波 OpenWiki 借鉴) — 3 维 reflection 字段 [REVERTED]
 
-主菜 / handledSilently 是今日 action 层. 这 3 维是周维度自我察觉层 — 让员工
-意识到自己反复咨询 / 久未使用 / 标重要却没跟进的 topic.
+P3.5.32.5 (6/18 鸿波 catch '都超时'): SYSTEM_PROMPT 加 3 段后 advisor LLM 都
+300s timeout. 真因: SYSTEM_PROMPT 从 10421 字节涨到 13099 字节 (+2678 字节 ≈
++900 token), hermes agent loop 多轮叠加导致 LLM output token 与 reasoning load
+都增加, 5min+ 才能跑完.
 
-JSON 字段名保留 subconscious / graveyard / blindSpots (LLM API 接口稳定), 但
-UI 文案用更温和的表达: "反复出现" / "久未使用" / "需要关注".
+这段 SYSTEM_PROMPT (3.1/3.2/3.3/3.4) 整段砍掉, advisor 回到老速度.
 
-## 3.1 subconscious — UI 显 "反复出现" (max 3)
+3 维字段 (subconscious / graveyard / blindSpots) 在 ADVISOR_JSON_SCHEMA 与
+AdvisorResult interface 里**保留**, parseAdvisorResult **保留** parse logic
+(snake_case + camelCase 兼容). UI cards **保留** (InsightReflectCards.tsx).
 
-定义: recent_session_briefs 7 天内问得多 (>=3 session 标题 / first_user_message
-涉及同 topic 关键词) 但没深入 (每 session message_count < 5).
-
-意义: 员工反复咨询同一主题, 但没专门坐下来深入. 让员工意识到.
-
-正面识别例:
-- "OAuth token refresh" — 3 个 session 标题含 "OAuth" / "token", 每 session 仅
-  2-3 message → 反复出现
-- "周报模板" — 5 session 一过即问 → 反复出现
-
-反面 (drop 不出):
-- "ISO 27001 审核" — 1 session 但 message_count 80 → 已深入, 不属反复出现
-
-reflectPrompt: ≤15 字, 第一人称指员工. 例 "为啥这周问 OAuth 4 次没深入?"
-
-## 3.2 graveyard — UI 显 "久未使用" (max 3)
-
-定义: distilled_facts / hermes_memory_recent 提过 skill / 工具 / 项目 / 关键人,
-recent_session_briefs 7 天 0 reference (title + first_user_message 0 关键词命中).
-
-意义: 装了但很少打开. 让员工意识到自己有这些工具.
-
-正面识别例:
-- "ppt-magazine skill" (distilled_facts 提到 3 周前装), 0 recent session 用 → 久未使用
-- "huggingface-hub skill" (类似)
-
-evidence: 指 distilled_facts 哪段. 例 "distilled 提 '装了 ppt-magazine 写杂志风',
-14 天没用".
-
-## 3.3 blindSpots — UI 显 "需要关注" (max 3)
-
-定义: distilled_facts / hermes_memory_recent / projects 标重要 (e.g. 项目截止 /
-关键人物 / 合规事项), recent_session_briefs 7 天 0 reference (员工没在 chat /
-advisor 回顾).
-
-跟 graveyard 区别: graveyard 是收藏的工具, blindSpots 是业务重要事项.
-
-正面识别例:
-- "GTC2026 keynote" — memory 标重要 (邮件 3 封 + 鸿波 starred), 0 chat 深入回复
-- "Q3 部门评审" — projects.md 写截止 6/30, 7 天 0 mention
-
-reflectPrompt 例: "GTC2026 你想去吗? 要请假吗?"
-
-## 3.4 必须返这 3 字段 (即使空)
-
-JSON 输出**必须**含 subconscious / graveyard / blindSpots 三个字段, 没找到 item
-时返空数组. 不能省略字段, 不能返 null. 客户端用空数组判断 "本周没发现需要反思
-的". 省略 → 客户端拿不到信号.
-
-如果 7 天数据真不够 / sessions 太少 (<5 session) — 仍返字段, 每个值是空数组,
-不要硬凑.
+未来 Phase 11 用单独 LLM call (跟 advisor 解耦) 生成 3 维 — 避免拖累主 advisor.
 
 # BL-ADVISOR-JSON-STRICT (P3.4.9, 6/15 鸿波撞 DeepSeek Flash 返英文 markdown 后)
 
