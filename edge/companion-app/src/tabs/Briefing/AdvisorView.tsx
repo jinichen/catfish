@@ -47,6 +47,7 @@ import { useEmailStore } from "../../store/email";
 
 import BriefingTwoColumnView from "./components/BriefingTwoColumnView";  // P3.3.6 (6/10): 左右两栏 layout
 import { DataDiagnosisCard } from "./components/DataDiagnosisCard";  // P3.4.4 (6/15): 三件套全空诊断卡, 替换老 "LLM 返空" 红字
+import LoadingProgress from "./components/LoadingProgress";  // P3.5.32.7 (6/18): 细化进度展现
 import type { SourceStatus } from "./diagnosis_types";
 
 interface AdvisorViewProps {
@@ -70,6 +71,15 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
   } | null>(null);
   /** 5/22 上游拥堵 fallback: TIMEOUT 时显的灰条提示 */
   const [staleNotice, setStaleNotice] = useState<string>("");
+  // P3.5.32.7 (6/18 鸿波 catch '焦虑'): phase 切换时 reset 计时, 让 LoadingProgress
+  // 显 elapsed. 三态 (profile_loading / data_loading / llm_running) 各自计时,
+  // 切换时 reset 让员工看到当前阶段已等了多久, 不是从一开始累加.
+  const [phaseStartedAt, setPhaseStartedAt] = useState<number>(Date.now());
+  // data_loading 完后存 counts 给 llm_running 阶段展示, 让员工知道 advisor 在
+  // 处理什么数据量.
+  const [dataCounts, setDataCounts] = useState<{ emails: number; events: number; todos: number } | null>(null);
+  // cancel 按钮 — 有 stale cache 时显, 点了走 stale fallback (跳 LLM 等待).
+  const [staleCache, setStaleCache] = useState<AdvisorCache | null>(null);
   /** 5/22 鸿波: 任务状态 (key = task.title → status). 启动时从后端拉. */
   const [taskState, setTaskState] = useState<TaskStateFetch>({
     today: {},
@@ -134,6 +144,7 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
 
         // ─── 2. profile — 同步等 recompute (in-flight 锁防 StrictMode 双调) ───
         setPhase("profile_loading");
+        setPhaseStartedAt(Date.now());
         const p = await ensureRecomputed(model, isManualRefresh);
         if (cancelled) return;
 
@@ -152,6 +163,7 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
 
         // ─── 3. 并发拉数据 ───
         setPhase("data_loading");
+        setPhaseStartedAt(Date.now());
         const [emailRes, eventsRes, todosRes, ctx] = await Promise.allSettled([
           emailDigestFetch(50),
           calendarTodayFetch(false),
@@ -194,6 +206,15 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
 
         // ─── 4. 调 LLM (advisor) — 60s 客户端超时, 超时走 stale cache fallback ───
         setPhase("llm_running");
+        setPhaseStartedAt(Date.now());
+        // P3.5.32.7 (6/18 鸿波): 拿到 data_loading counts, 给 LoadingProgress 显.
+        setDataCounts({
+          emails: emails.length,
+          events: events.length,
+          todos: todos.length,
+        });
+        // 拉 stale cache 让 cancel button 有内容可显 (有 cache 才显按钮).
+        void advisorCacheGet().then((c) => !cancelled && setStaleCache(c));
         const r = await fetchBriefingAdvisor({
           profile: p,
           emails,
@@ -291,9 +312,28 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
 
   // ─── 渲染 ────────────────────────────────────────────────────
 
-  if (phase === "booting" || phase === "profile_loading") {
-    // P3.5.32.4 (6/18 鸿波 catch '整个画像不要显示'): 去 '画像' 字眼.
+  if (phase === "booting") {
     return <Placeholder text="准备中..." />;
+  }
+
+  // P3.5.32.7 (6/18 鸿波 catch '焦虑'): 三态用 LoadingProgress 细化展现.
+  if (phase === "profile_loading") {
+    return (
+      <LoadingProgress
+        phase="profile_loading"
+        startedAt={phaseStartedAt}
+        model={model}
+        onCancel={staleCache ? () => {
+          setResult(staleCache.result);
+          setCacheInfo({
+            computedAt: staleCache.computedAt,
+            ageMin: cacheAgeMinutes(staleCache),
+          });
+          setStaleNotice("已切到上次结果. 后台仍在算, 完成会自动更新.");
+          setPhase("stale_fallback");
+        } : undefined}
+      />
+    );
   }
 
   if (phase === "no_profile") {
@@ -306,12 +346,20 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
 
   if (phase === "data_loading" || phase === "llm_running") {
     return (
-      <Placeholder
-        text={
-          phase === "data_loading"
-            ? "正在拉取邮件 / 日历 / TODO / 历史..."
-            : "鲶鱼正在综合判断 (LLM 调用 + 起草草稿)..."
-        }
+      <LoadingProgress
+        phase={phase}
+        startedAt={phaseStartedAt}
+        model={model}
+        counts={dataCounts ?? undefined}
+        onCancel={staleCache ? () => {
+          setResult(staleCache.result);
+          setCacheInfo({
+            computedAt: staleCache.computedAt,
+            ageMin: cacheAgeMinutes(staleCache),
+          });
+          setStaleNotice("已切到上次结果. 后台仍在算, 完成会自动更新.");
+          setPhase("stale_fallback");
+        } : undefined}
       />
     );
   }
