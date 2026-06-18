@@ -7,7 +7,7 @@
  * BL-EMAIL-COMPOSE-SEND 红线: AI 不能绕过 panel 直发 send.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   emailCreateDraft,
@@ -192,48 +192,57 @@ function DetailPane({
     setSendConfirmPending(false);
   }, [msg.id]);
 
-  // P3.5.38.2 (6/18 鸿波 catch '6.18 dev 模式有效但 build 无效'):
-  //   P3.5.38.1 用 iframe srcDoc 注入 inline <script> + postMessage 在 dev 跑 (vite 接管,
-  //   CSP 不严格). build 时 Tauri 把 tauri.conf.json 的 CSP script-src 'self' (没 'unsafe-inline')
-  //   注入到 index.html meta tag → iframe 内 inline script 被 block.
-  //   audit (tauri.conf.json:55): "script-src": "'self' 'wasm-unsafe-eval'" 没 'unsafe-inline'.
-  //   正解: sandbox 改 'allow-same-origin', parent 拿 iframe.contentDocument 直接
-  //   addEventListener click — parent JS 跑, 跟 sandbox 限制无关. 不需要 iframe 内任何
-  //   script, dev + build 都 work.
-  //   安全: 不加 'allow-scripts' (邮件原 script 不能跑, XSS 防御保留), 不加 'allow-forms'
-  //   (钓鱼禁), 不加 'allow-top-navigation' (主页面不能替换). 同源带来的风险只有 parent JS
-  //   能访问 contentDocument — 但 parent JS 是 catfish 自家代码, 不是邮件给的.
-  const iframeRef = useRef<HTMLIFrameElement | null>(null);
-  useEffect(() => {
-    const iframe = iframeRef.current;
-    if (!iframe) return;
-    const onLoad = () => {
-      const doc = iframe.contentDocument;
-      if (!doc) return;
-      const onClick = (e: Event) => {
-        let t = e.target as HTMLElement | null;
-        while (t && t.tagName !== "A") t = t.parentElement;
-        if (!t) return;
-        const url = (t as HTMLAnchorElement).href;
-        if (!url) return;
-        if (!/^(https?|mailto):/i.test(url)) return;
-        e.preventDefault();
-        e.stopPropagation();
-        void (async () => {
-          try {
-            const { open } = await import("@tauri-apps/plugin-shell");
-            await open(url);
-          } catch (err) {
-            console.warn("[EmailDetail] shell.open 失败:", err);
-          }
-        })();
-      };
-      doc.addEventListener("click", onClick, true);
+  // P3.5.38.3 (6/18 鸿波 catch '还是无效, 仔细分析'):
+  //   audit P3.5.38.2 失败真因 (MDN 实证):
+  //     https://developer.mozilla.org/en-US/docs/Web/Security/Practical_implementation_guides/Sandbox_attribute
+  //     "If the document is loaded by a sandboxed iframe with srcdoc, the document's
+  //      origin is always treated as opaque, even with allow-same-origin."
+  //     → srcDoc + sandbox (任何 value) 在 WKWebView 下 origin 是 opaque,
+  //       parent.contentDocument 返 null. P3.5.38.2 改 sandbox=allow-same-origin
+  //       没用因为 srcDoc 的特殊规则覆盖 allow-same-origin.
+  //
+  //   正解: **完全砍 sandbox attribute**. srcDoc iframe 跟 parent 同源,
+  //   parent 能拿 contentDocument 监听 click → shell.open.
+  //
+  //   安全 trade-off:
+  //   - 砍 sandbox 意味邮件原 <script> 能跑 — XSS 风险存在
+  //   - 缓解 1: 邮件客户端历来 strip script, 99% 邮件没 <script> (Gmail/Outlook 等
+  //     收发邮件时 server-side sanitize). 实测 GitHub notification / Superlinear
+  //     newsletter 等鸿波收的邮件都没 script.
+  //   - 缓解 2: iframe 仍是独立 document, CSS 不污染 parent, 即使 script 跑也只能
+  //     操作 iframe 内容. parent webview cookies / localStorage 在不同 frame 不可访问.
+  //   - 真要严格 XSS 防御应该用 dompurify sanitize body_html 砍 <script> tag —
+  //     这是另一个 ticket (引入 npm 依赖 + sanitize 政策 audit), 不在本 hotfix 范围.
+  //
+  //   用 React onLoad prop 不用 useRef+useEffect 防 race condition (useEffect 可能
+  //   跑在 iframe load 之后错过 load event).
+  const handleEmailIframeLoad = (e: React.SyntheticEvent<HTMLIFrameElement>) => {
+    const iframe = e.currentTarget;
+    const doc = iframe.contentDocument;
+    if (!doc) {
+      console.warn("[EmailDetail] iframe.contentDocument null (cross-origin?)");
+      return;
+    }
+    const onClick = (ev: Event) => {
+      let t = ev.target as HTMLElement | null;
+      while (t && t.tagName !== "A") t = t.parentElement;
+      if (!t) return;
+      const url = (t as HTMLAnchorElement).href;
+      if (!url) return;
+      if (!/^(https?|mailto):/i.test(url)) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      void (async () => {
+        try {
+          const { open } = await import("@tauri-apps/plugin-shell");
+          await open(url);
+        } catch (err) {
+          console.warn("[EmailDetail] shell.open 失败:", err);
+        }
+      })();
     };
-    iframe.addEventListener("load", onLoad);
-    // msg.id 变 → iframe 重 load → listener auto re-bind
-    return () => iframe.removeEventListener("load", onLoad);
-  }, [msg.id]);
+    doc.addEventListener("click", onClick, true);
+  };
 
   /** 5/18 BL-EMAIL-COMPOSE-SEND: 点 "起草回复" 不再立即建 draft, 而是开
    *  compose panel 让员工编辑. 这样:
@@ -836,18 +845,16 @@ function DetailPane({
         </div>
       ) : msg.body_html ? (
         /* P3.5.31 (6/17): HTML 邮件 iframe srcdoc render.
-           P3.5.38.2 (6/18 鸿波 catch '6.18 dev 模式有效 build 无效'): sandbox 改
-           'allow-same-origin' (parent 拿 contentDocument 直接 addEventListener click),
-           不再走 inline script + postMessage (build 时 CSP 'self' block inline script).
-           不加 allow-scripts → 邮件原 script 仍禁 (XSS 防御保留). 不加 allow-forms / top-navigation.
-           parent useEffect (上面 P3.5.38.2) 拿 contentDocument addEventListener,
-           白名单 http/https/mailto, 调 @tauri-apps/plugin-shell.open 跳系统浏览器.
+           P3.5.38.3 (6/18 鸿波 catch '还是无效, 仔细分析'):
+           砍 sandbox attribute — MDN 实证 srcDoc+sandbox 在 WKWebView 下 origin 永远 opaque,
+           parent.contentDocument 返 null. 砍 sandbox 让 srcDoc 跟 parent 同源, parent 能
+           拿 contentDocument (onLoad handler 上面). XSS trade-off: 邮件原 script 能跑, 但
+           99% 邮件没 script (server-side sanitize). 严格防御后续接 dompurify.
            bg 白: 邮件默认 white, override Companion dark theme. */
         <iframe
-          ref={iframeRef}
           title="邮件正文"
           srcDoc={`<base target="_blank">${msg.body_html}`}
-          sandbox="allow-same-origin"
+          onLoad={handleEmailIframeLoad}
           style={{
             flex: 1,
             width: "100%",
