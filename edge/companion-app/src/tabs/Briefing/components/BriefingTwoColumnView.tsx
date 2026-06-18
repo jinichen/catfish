@@ -23,9 +23,17 @@ import {
   type TaskStatus,
 } from "../../../lib/advisor_cache";
 import type {
+  BlindSpotItem,
+  GraveyardItem,
   HandledSilentlyItem,
   MainTask,
+  SubconsciousItem,
 } from "../../../lib/briefing_advisor";
+import {
+  BlindSpotsCard,
+  GraveyardCard,
+  SubconsciousCard,
+} from "./InsightReflectCards";
 // P3.3.43 (6/12 鸿波): revert P3.3.41 — 砍 options/合规/历史 渲染 import
 import { taskChatClear, taskChatGet } from "../../../lib/task_chat";
 import {
@@ -50,6 +58,7 @@ import {
 import FileChip from "../../Chat/components/FileChip";
 import ThumbCard from "../../Chat/components/ThumbCard";
 import { useChatStore } from "../../../store/chat";
+import { useUIStore } from "../../../store/ui";
 import { useTaskChat } from "../../../hooks/useTaskChat";
 import ChatToolCall from "../../Chat/ChatToolCall";
 import { Markdown } from "../../../lib/markdown";  // P3.3.10 fix (6/10): 复用工作台 markdown render (粗体/列表/代码块)
@@ -65,6 +74,11 @@ interface PendingApproval {
 interface BriefingTwoColumnViewProps {
   tasks: MainTask[];                                  // 已 filter ignored
   handledItems: HandledSilentlyItem[];
+  // P3.5.32 Phase 10 (6/18 鸿波 OpenWiki 借鉴) — 3 维 self-aware reflection.
+  // 真**optional 默认空 array** — 真**LLM 没返时 cards 0 渲染** (length 0 早返).
+  subconscious: SubconsciousItem[];
+  graveyard: GraveyardItem[];
+  blindSpots: BlindSpotItem[];
   taskState: TaskStateFetch;
   wasSnoozedYesterday: (title: string) => boolean;
   onStatusChange: (taskTitle: string, status: TaskStatus | null) => void;
@@ -81,6 +95,9 @@ const URGENCY_META: Record<UrgencyGroup, { label: string; color: string; bg: str
 export default function BriefingTwoColumnView({
   tasks,
   handledItems,
+  subconscious,
+  graveyard,
+  blindSpots,
   taskState,
   wasSnoozedYesterday,
   onStatusChange,
@@ -94,6 +111,24 @@ export default function BriefingTwoColumnView({
     }
     return g;
   }, [tasks]);
+
+  // P3.5.32 Phase 10 (6/18 鸿波 OpenWiki 借鉴) — reflect button → 切 Chat tab + 复制 prompt.
+  // 真**MVP**: setActiveTab('chat') + clipboard 复制 prompt + alert toast.
+  // 真**未来 Phase 10.1**: 直接进 Chat tab 真**自动 send** (queueMessage / setMessages).
+  // 真**现在最简**: 切 tab + 提示员工 Cmd+V send.
+  const setActiveTab = useUIStore((s) => s.setActiveTab);
+  const handleReflect = (prompt: string) => {
+    if (!prompt) return;
+    void navigator.clipboard.writeText(prompt).catch(() => {});
+    setActiveTab("chat");
+    // 真**MVP alert**. 真**未来 Phase 10.1 inline toast**.
+    window.setTimeout(() => {
+      // eslint-disable-next-line no-alert
+      alert(
+        `已切到 Chat tab + 复制 reflect prompt:\n\n  ${prompt}\n\n💡 Cmd+V 粘贴到输入框 send`,
+      );
+    }, 50);
+  };
 
   // 默认选中第一个 high; 没 high 就第一个; 都没就 null
   const defaultId = tasks.length > 0
@@ -180,6 +215,12 @@ export default function BriefingTwoColumnView({
             ))}
           </div>
         )}
+
+        {/* P3.5.32 Phase 10 (6/18 鸿波 OpenWiki 借鉴) — 3 维 self-aware reflection.
+            真**0 item 时 card return null** (无视觉噪音). 真**LLM 没返 / 返空 → 0 渲染**. */}
+        <SubconsciousCard items={subconscious} onReflect={handleReflect} />
+        <GraveyardCard items={graveyard} />
+        <BlindSpotsCard items={blindSpots} onReflect={handleReflect} />
       </aside>
 
       <main className="briefing-2col__detail">

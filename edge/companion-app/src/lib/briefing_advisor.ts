@@ -131,8 +131,55 @@ const ADVISOR_JSON_SCHEMA = {
         required: ["type", "count", "category"],
       },
     },
+    // P3.5.32 Phase 10 (6/18 鸿波 OpenWiki 借鉴) — 3 维 self-aware reflection.
+    // 真**OpenWiki Insight Reports 7 dim** 真**catfish 已有 4 (At a Glance + Action Items +
+    // Hot Topics + Events Heatmap), 真**剩 3 维 新加**.
+    // 真**0 改 backend** — 真**复用 BriefingContext 数据 (recent_session_briefs +
+    // distilled_facts + hermes_memory_recent + email summary)** + LLM prompt 段.
+    subconscious: {
+      type: "array",
+      description: "无意识高频 — 问真多 (>=3 session 涉及) 但 0 deep-dive (<5 message). max 3 item.",
+      items: {
+        type: "object",
+        properties: {
+          topic: { type: "string", description: "无意识 topic, e.g. 'OAuth token refresh'" },
+          count: { type: "integer", description: "session 涉及次数" },
+          evidence: { type: "string", description: "一句话证据 (sessions 真**title 关键词)" },
+          reflectPrompt: { type: "string", description: "≤15 字 一句话, 点 → chat 触发 deep-dive" },
+        },
+        required: ["topic", "count", "evidence", "reflectPrompt"],
+      },
+    },
+    graveyard: {
+      type: "array",
+      description: "墓地 — distilled_facts/memory 提过 真**skill/工具/项目**, recent_session_briefs 0 reference. max 3 item.",
+      items: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "skill/工具/项目名" },
+          lastSeen: { type: "string", description: "最近 reference 真**距今**, e.g. '14 天前'" },
+          evidence: { type: "string", description: "一句话 (distilled_facts 真**提到 哪段)" },
+        },
+        required: ["name", "lastSeen", "evidence"],
+      },
+    },
+    blindSpots: {
+      type: "array",
+      description: "盲点 — hermes memory 或 distilled_facts 标重要, 真**最近 7 天 0 action / 0 follow-up**. max 3 item.",
+      items: {
+        type: "object",
+        properties: {
+          topic: { type: "string" },
+          signal: { type: "string", description: "重要信号 (e.g. '邮件标星 / memory 真**重要 / project 真**汇报截止)" },
+          evidence: { type: "string", description: "一句话 (具体 邮件/memory/project 引用)" },
+          reflectPrompt: { type: "string", description: "≤15 字, 点 → chat 触发" },
+        },
+        required: ["topic", "signal", "evidence", "reflectPrompt"],
+      },
+    },
   },
   required: ["tier", "mainTasks", "handledSilently"],
+  // 真**subconscious / graveyard / blindSpots 真**optional** — 真**LLM 真**没找到 真**0 item OK**.
 } as const;
 
 // ─── 输出 schema (UI ActionCard 渲染输入) ───────────────────────
@@ -212,6 +259,39 @@ export interface HandledSilentlyItem {
   category: string;
 }
 
+/** P3.5.32 Phase 10 (6/18 鸿波 OpenWiki 借鉴) — 3 维 self-aware reflection items.
+ *
+ * 真**reflectPrompt 真**≤15 字 真**点 → useChat send(prompt) 真**触发 deep-dive**.
+ */
+export interface SubconsciousItem {
+  /** 无意识 topic, e.g. "OAuth token refresh" */
+  topic: string;
+  /** session 涉及次数 */
+  count: number;
+  /** 一句话证据 — 真**LLM 指 哪些 sessions title 真**关键词** */
+  evidence: string;
+  /** ≤15 字 reflectPrompt, 点击 → chat 触发 deep-dive */
+  reflectPrompt: string;
+}
+export interface GraveyardItem {
+  /** skill/工具/项目名 */
+  name: string;
+  /** 最近 reference 真**距今** (e.g. "14 天前") */
+  lastSeen: string;
+  /** 一句话证据 (distilled_facts 真**提到 哪段) */
+  evidence: string;
+}
+export interface BlindSpotItem {
+  /** topic */
+  topic: string;
+  /** 重要信号 (e.g. "邮件标星 / memory 重要 / project 汇报截止") */
+  signal: string;
+  /** 一句话证据 */
+  evidence: string;
+  /** ≤15 字 reflectPrompt */
+  reflectPrompt: string;
+}
+
 export interface AdvisorResult {
   /** 跟 profile.tier 一致 — LLM 输出时回显, 让 UI 知道是按哪个 tier 渲染的 */
   tier: "frontline" | "mid" | "senior";
@@ -219,6 +299,12 @@ export interface AdvisorResult {
   mainTasks: MainTask[];
   /** 已默认处理的事 (UI 折叠区) */
   handledSilently: HandledSilentlyItem[];
+  /** P3.5.32 Phase 10 (6/18 鸿波 OpenWiki 借鉴) — 无意识高频 topic, max 3 */
+  subconscious?: SubconsciousItem[];
+  /** P3.5.32 Phase 10 — 装但 0 回顾 skill/工具/项目, max 3 */
+  graveyard?: GraveyardItem[];
+  /** P3.5.32 Phase 10 — 标重要但 0 action / 0 follow-up topic, max 3 */
+  blindSpots?: BlindSpotItem[];
 }
 
 // ─── SYSTEM_PROMPT (设计稿 §5) ────────────────────────────────────
@@ -377,6 +463,53 @@ catfish_draft_meeting_brief / catfish_compose_followup_list 后**返回的 path*
 3. 不调 tool 就不写 draftPath, 让 UI 显"自己写"
 
 不允许编路径绕过. 员工点开发现空草稿 = 鲶鱼失信.
+
+# P3.5.32 Phase 10 (6/18 鸿波 OpenWiki 借鉴) — 3 维 self-aware reflection
+
+主菜 / handledSilently 真**今日 action 层**. 真**这 3 维 真**周维度 self-awareness 层** —
+真**让员工 真**意识到 自己 真**没意识 真**真**关注 / 收藏 / 重要 真**topic**.
+
+## 3.1 subconscious (无意识高频, max 3)
+
+定义: recent_session_briefs 7 天内 真**问真 多** (>=3 session 标题 / first_user_message
+涉及同 topic 关键词) 但 真**0 deep-dive** (每 session message_count < 5).
+
+意义: 员工潜意识真**关注真 这块**, 但**真**没专门**坐下来 deep-dive**. 让员工**真**意识到**.
+
+正面识别例:
+- "OAuth token refresh" — 3 个 session 标题含 "OAuth" / "token" 真**每 session 仅 2-3 message** → subconscious
+- "周报模板" — 5 session 一过即问 → subconscious
+
+反面 (drop 不出):
+- "ISO 27001 审核" — 1 session 但 message_count 80 → 真**已 deep-dive**, 不 subconscious
+
+reflectPrompt 真**≤15 字 真**第一人称指员工** — "为啥这周问 OAuth 4 次没深入?"
+
+## 3.2 graveyard (墓地, max 3)
+
+定义: distilled_facts / hermes_memory_recent 真**提过 真**skill / 工具 / 项目 / 关键人**,
+真**recent_session_briefs 7 天 0 reference** (title + first_user_message 0 关键词命中).
+
+意义: 装但 真**0 使用** — 真**让员工 真**意识到** 真**收藏品 真**真**积灰**.
+
+正面识别例:
+- "ppt-magazine skill" (distilled_facts 提到 真**3 周前装**) 真**0 recent session 用** → graveyard
+- "huggingface-hub skill" (类似)
+
+evidence 真**指真 distilled_facts 哪段**: "distilled 提 '装了 ppt-magazine 真**写杂志风**', 14 天 0 用".
+
+## 3.3 blindSpots (盲点, max 3)
+
+定义: distilled_facts / hermes_memory_recent / projects 真**标重要** (e.g. 项目截止 / 关键人物 /
+合规事项), 真**recent_session_briefs 真 7 天 0 reference** (员工**没在 chat / advisor**真**回顾**).
+
+跟 graveyard 真**区别**: graveyard 真**收藏 工具**, blindSpots 真**业务 重要事项**.
+
+正面识别例:
+- "GTC2026 keynote" — memory 标重要 (邮件 3 封 + 鸿波 starred), 真**0 chat 真**深入 reply
+- "P3.5.32 Q3 部门评审" — projects.md 写 真**截止 6/30**, 7 天 0 mention
+
+reflectPrompt: "GTC2026 你想去吗? 要请假吗?"
 
 # BL-ADVISOR-JSON-STRICT (P3.4.9, 6/15 鸿波撞 DeepSeek Flash 返英文 markdown 后)
 
@@ -1445,7 +1578,81 @@ function parseAdvisorResult(raw: unknown, mode: "strict" | "lenient" = "strict")
     }
   }
 
-  return { tier, mainTasks, handledSilently };
+  // P3.5.32 Phase 10 (6/18 鸿波 OpenWiki 借鉴) — 3 维 self-aware reflection parse.
+  // 真**optional** — LLM 没返 / 返空 / parse 错 → 0 item, UI 自动不渲染 (length 0 早返).
+  // 真**snake_case + camelCase 双兼容** (LLM 易 drift, parseMainTask 同款).
+  const subconscious: SubconsciousItem[] = [];
+  const subRaw =
+    (obj as Record<string, unknown>).subconscious
+    ?? (obj as Record<string, unknown>).sub_conscious;
+  if (Array.isArray(subRaw)) {
+    for (const item of subRaw.slice(0, 3)) {
+      if (!item || typeof item !== "object") continue;
+      const o = item as Record<string, unknown>;
+      const topic = typeof o.topic === "string" ? o.topic.trim() : "";
+      const count =
+        typeof o.count === "number" ? o.count : Number(o.count) || 0;
+      const evidence = typeof o.evidence === "string" ? o.evidence.trim() : "";
+      const reflectPrompt =
+        typeof o.reflectPrompt === "string"
+          ? o.reflectPrompt.trim()
+          : typeof o.reflect_prompt === "string"
+            ? o.reflect_prompt.trim()
+            : "";
+      if (!topic || count < 1 || !evidence) continue;
+      subconscious.push({ topic, count, evidence, reflectPrompt });
+    }
+  }
+
+  const graveyard: GraveyardItem[] = [];
+  const graveRaw = (obj as Record<string, unknown>).graveyard;
+  if (Array.isArray(graveRaw)) {
+    for (const item of graveRaw.slice(0, 3)) {
+      if (!item || typeof item !== "object") continue;
+      const o = item as Record<string, unknown>;
+      const name = typeof o.name === "string" ? o.name.trim() : "";
+      const lastSeen =
+        typeof o.lastSeen === "string"
+          ? o.lastSeen.trim()
+          : typeof o.last_seen === "string"
+            ? o.last_seen.trim()
+            : "";
+      const evidence = typeof o.evidence === "string" ? o.evidence.trim() : "";
+      if (!name || !lastSeen) continue;
+      graveyard.push({ name, lastSeen, evidence });
+    }
+  }
+
+  const blindSpots: BlindSpotItem[] = [];
+  const blindRaw =
+    (obj as Record<string, unknown>).blindSpots
+    ?? (obj as Record<string, unknown>).blind_spots;
+  if (Array.isArray(blindRaw)) {
+    for (const item of blindRaw.slice(0, 3)) {
+      if (!item || typeof item !== "object") continue;
+      const o = item as Record<string, unknown>;
+      const topic = typeof o.topic === "string" ? o.topic.trim() : "";
+      const signal = typeof o.signal === "string" ? o.signal.trim() : "";
+      const evidence = typeof o.evidence === "string" ? o.evidence.trim() : "";
+      const reflectPrompt =
+        typeof o.reflectPrompt === "string"
+          ? o.reflectPrompt.trim()
+          : typeof o.reflect_prompt === "string"
+            ? o.reflect_prompt.trim()
+            : "";
+      if (!topic || !signal || !evidence) continue;
+      blindSpots.push({ topic, signal, evidence, reflectPrompt });
+    }
+  }
+
+  return {
+    tier,
+    mainTasks,
+    handledSilently,
+    ...(subconscious.length > 0 ? { subconscious } : {}),
+    ...(graveyard.length > 0 ? { graveyard } : {}),
+    ...(blindSpots.length > 0 ? { blindSpots } : {}),
+  };
 }
 
 /** P3.3.9 (6/10): 生成 6 字符 [a-z0-9] uid. LLM 没返 task_uid 时 fallback 用. */

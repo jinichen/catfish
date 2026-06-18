@@ -400,6 +400,9 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
           <BriefingTwoColumnView
             tasks={visibleTasks}
             handledItems={result.handledSilently}
+            subconscious={result.subconscious ?? []}
+            graveyard={result.graveyard ?? []}
+            blindSpots={result.blindSpots ?? []}
             taskState={taskState}
             wasSnoozedYesterday={(title) => taskState.yesterdaySnoozed.includes(title)}
             onStatusChange={(title, newStatus) => {
