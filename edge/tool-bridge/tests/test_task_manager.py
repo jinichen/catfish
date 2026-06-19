@@ -912,5 +912,119 @@ class AutoRetryStartupTests(unittest.TestCase):
         self.assertEqual(latest["last_error_type"], "transient")
 
 
+class LatestOutputStreamingTests(unittest.TestCase):
+    """P3.5.39 (6/18 鸿波 audit daytona 后催 'PTY streaming') — task.latest_output 滚动."""
+
+    def setUp(self):
+        task_manager._manager = task_manager.TaskManager()
+
+    def tearDown(self):
+        task_manager._manager = None
+
+    def test_task_default_latest_output_empty(self):
+        """Task 默认 latest_output 空字符串."""
+        t = task_manager.Task(task_id="t1", kind="execute_code", label="x")
+        self.assertEqual(t.latest_output, "")
+
+    def test_status_dict_includes_latest_output(self):
+        """status_dict 返新字段 latest_output."""
+        async def _t():
+            mgr = task_manager.manager()
+
+            async def runner():
+                return {"stdout": "done"}
+
+            task = mgr.submit("test_kind", "测试", runner)
+            await task._async_task
+            d = mgr.status_dict(task.task_id)
+            self.assertIn("latest_output", d)
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(_t())
+        finally:
+            loop.close()
+
+    def _wait_for_completion(self, task, timeout: float = 3.0) -> None:
+        """sync caller 走 thread, task._async_task=None. polling 等完."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if task.status in ("completed", "failed"):
+                return
+            time.sleep(0.02)
+        raise AssertionError(f"task 超时未完成: status={task.status}")
+
+    def test_progress_cb_appends_to_latest_output(self):
+        """submit_typed_task 走 _bound_runner, runner_factory progress_cb 滚动 latest_output."""
+        captured_cb = []
+
+        async def fake_runner(payload, progress_cb=None):
+            if progress_cb is not None:
+                progress_cb("stdout", "line 1\n")
+                progress_cb("stdout", "line 2\n")
+                progress_cb("stderr", "warn\n")
+                captured_cb.append(progress_cb)
+            return {"stdout": "all done", "ok": True}
+
+        task_manager._KIND_RUNNERS["test_streaming"] = fake_runner
+        try:
+            result = task_manager.submit_typed_task(
+                kind="test_streaming", payload={}, label="测试 streaming",
+            )
+            self.assertTrue(result["ok"])
+            task = task_manager.manager().get(result["task_id"])
+            self.assertIsNotNone(task)
+            self._wait_for_completion(task)
+
+            self.assertIn("line 1", task.latest_output)
+            self.assertIn("line 2", task.latest_output)
+            self.assertIn("warn", task.latest_output)
+            self.assertEqual(len(captured_cb), 1)
+        finally:
+            task_manager._KIND_RUNNERS.pop("test_streaming", None)
+
+    def test_latest_output_tail_truncation(self):
+        """超 _LATEST_OUTPUT_TAIL 后保留 tail."""
+        async def fake_runner(payload, progress_cb=None):
+            if progress_cb is not None:
+                big = "x" * 1000
+                for _ in range(10):
+                    progress_cb("stdout", big)
+            return {"ok": True}
+
+        task_manager._KIND_RUNNERS["test_truncate"] = fake_runner
+        try:
+            result = task_manager.submit_typed_task(
+                kind="test_truncate", payload={}, label="t",
+            )
+            task = task_manager.manager().get(result["task_id"])
+            self._wait_for_completion(task)
+
+            self.assertLessEqual(len(task.latest_output), task_manager._LATEST_OUTPUT_TAIL)
+            self.assertTrue(task.latest_output.endswith("x" * 100))
+        finally:
+            task_manager._KIND_RUNNERS.pop("test_truncate", None)
+
+    def test_legacy_runner_without_progress_cb_still_works(self):
+        """老 runner factory 不接 progress_cb, fallback TypeError → runner_factory(payload)."""
+        async def legacy_runner(payload):
+            return {"ok": True, "result": "legacy"}
+
+        task_manager._KIND_RUNNERS["test_legacy"] = legacy_runner
+        try:
+            result = task_manager.submit_typed_task(
+                kind="test_legacy", payload={}, label="t",
+            )
+            self.assertTrue(result["ok"])
+            task = task_manager.manager().get(result["task_id"])
+            self._wait_for_completion(task)
+
+            self.assertEqual(task.status, "completed")
+            # 老 runner 不写 latest_output, 仍为空
+            self.assertEqual(task.latest_output, "")
+        finally:
+            task_manager._KIND_RUNNERS.pop("test_legacy", None)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -986,8 +986,11 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "name": "catfish_task_status",
         "description": (
             "★ 查后台任务状态. 员工问 '那个修订办法做到哪了?' 时调.\n\n"
-            "返字段: status (pending/running/completed/failed/not_found), "
-            "elapsed_s, label, error.\n\n"
+            "返字段: status (pending/running/completed/failed/interrupted/not_found), "
+            "elapsed_s, label, error, latest_output.\n\n"
+            "P3.5.39 (6/18) latest_output: 长 task 跑一半也能拿到中间 stdout/stderr "
+            "tail (~4KB), 不再 black box. 跑 print() 看进度 / 看 traceback 部分 / "
+            "判断 task 是不是在合理推进都用这个. running 状态下 latest_output 实时更新.\n\n"
             "✅ 别每秒 poll — 员工问的时候才查. 任务完成后桌宠会自动通知 "
             "(BL-A2.3), 你不需要主动 poll."
         ),

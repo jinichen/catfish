@@ -447,6 +447,214 @@ def run_in_sandbox(
             logger.warning("清理沙箱 TASK_DIR 失败: %s", task_dir, exc_info=True)
 
 
+def run_in_sandbox_streaming(
+    code: str,
+    *,
+    lang: str = "python",
+    timeout_s: int = 30,
+    max_output_bytes: int = 200_000,
+    on_chunk: "Callable[[str, str], None] | None" = None,
+) -> Dict[str, Any]:
+    """P3.5.39 (6/18 鸿波 audit daytona 后催): run_in_sandbox 流式版本.
+
+    跟 run_in_sandbox 同 sandbox 隔离逻辑 + 同返回结构, 区别:
+      - subprocess.Popen 替 subprocess.run (非阻塞 spawn)
+      - 两个 daemon thread 分别读 stdout/stderr 行式
+      - 每收到一行调 on_chunk(stream, text), 让 caller 流式拿到进度
+      - 全量累积仍走 stdout/stderr 字符串, 跟现有路径兼容
+
+    Args:
+        on_chunk(stream, text): stream ∈ {"stdout", "stderr"}, text = 新读到的一行
+            (含 \\n). caller 用它实时更新 task.latest_output / Tauri event / etc.
+            None = 不流式, 等价 run_in_sandbox (但仍 Popen 内部走).
+
+    Returns: 跟 run_in_sandbox 同结构.
+
+    audit (鸿波 6/18 daytona PTY 借鉴, 不抄 cloud stack, 只抄 streaming 体感):
+      catfish_run_task long task LLM 调 catfish_task_status 现状只见 elapsed_s,
+      看不到 stdout 中间. 这条路径让 task.latest_output 实时滚动 ~4KB tail buffer.
+    """
+    import threading
+    from typing import Callable  # noqa: F401, PLC0415 — type-only at top would force module-level
+
+    sandbox_kind = detect_sandbox_kind()
+    if sandbox_kind is None:
+        return {
+            "ok": False,
+            "sandbox_used": False,
+            "sandbox_kind": None,
+            "stdout": "",
+            "stderr": (
+                "沙箱不可用: macOS 需要 sandbox-exec / Linux 需要 nsjail. "
+                "5/19 BL-S29.5 后会加 Docker fallback."
+            ),
+            "rc": -1,
+            "elapsed_ms": 0.0,
+            "timed_out": False,
+        }
+
+    if sandbox_kind != "docker":
+        profile = _resolve_profile_path(kind=sandbox_kind)
+    else:
+        profile = None
+
+    py_path = _resolve_python_executable()
+    interpreter_map = {
+        "python": py_path,
+        "py": py_path,
+        "bash": "/bin/bash",
+        "sh": "/bin/sh",
+    }
+    interpreter = interpreter_map.get(lang.lower())
+    if interpreter is None:
+        return {
+            "ok": False,
+            "sandbox_used": False,
+            "sandbox_kind": None,
+            "stdout": "",
+            "stderr": f"不支持的 lang: {lang!r} (支持: python/bash/sh)",
+            "rc": -1,
+            "elapsed_ms": 0.0,
+            "timed_out": False,
+        }
+
+    task_dir = Path(tempfile.mkdtemp(prefix="catfish-sandbox-"))
+
+    try:
+        if sandbox_kind == "sandbox-exec":
+            sandbox_argv = _build_macos_sandbox_args(profile, task_dir)
+            argv = sandbox_argv + [interpreter, "-c", code]
+        elif sandbox_kind == "nsjail":
+            sandbox_argv = _build_nsjail_args(profile, task_dir)
+            argv = sandbox_argv + ["--", interpreter, "-c", code]
+        elif sandbox_kind == "docker":
+            container_interpreter = {
+                "python": "python3",
+                "py": "python3",
+                "bash": "bash",
+                "sh": "sh",
+            }.get(lang.lower(), "python3")
+            sandbox_argv = _build_docker_args(task_dir, timeout_s)
+            argv = sandbox_argv + [container_interpreter, "-c", code]
+        else:
+            raise RuntimeError(f"未知 sandbox kind: {sandbox_kind!r}")
+
+        preexec_fn = None
+        if sandbox_kind == "sandbox-exec":
+            preexec_fn = _apply_macos_rlimits
+
+        start = time.time()
+        timed_out = False
+
+        proc = subprocess.Popen(  # noqa: S603
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=str(task_dir),
+            preexec_fn=preexec_fn,  # noqa: PLW1509
+            env={
+                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+                "HOME": str(task_dir),
+                "TMPDIR": "/tmp",
+                "LANG": os.environ.get("LANG", "en_US.UTF-8"),
+            },
+            text=True,                # 行式读, 默认 locale 编码 (errors=strict)
+            encoding="utf-8",
+            errors="replace",         # 防 LLM 跑非 utf-8 输出炸 decode
+            bufsize=1,                # line-buffered, 行到位就给 reader
+        )
+
+        # 两个 thread 分别读 stdout/stderr 累积 + 触发 on_chunk
+        stdout_lines: list[str] = []
+        stderr_lines: list[str] = []
+        stdout_bytes_seen = 0
+        stderr_bytes_seen = 0
+        truncate_lock = threading.Lock()
+
+        def _reader(stream, kind: str, bucket: list[str]) -> None:
+            nonlocal stdout_bytes_seen, stderr_bytes_seen
+            try:
+                for line in iter(stream.readline, ""):
+                    if not line:
+                        break
+                    with truncate_lock:
+                        bucket.append(line)
+                        if kind == "stdout":
+                            stdout_bytes_seen += len(line)
+                            over = stdout_bytes_seen > max_output_bytes
+                        else:
+                            stderr_bytes_seen += len(line)
+                            over = stderr_bytes_seen > max_output_bytes
+                    # 超截断阈值后不再 on_chunk (累积仍继续, 最终统一截断)
+                    if on_chunk is not None and not over:
+                        try:
+                            on_chunk(kind, line)
+                        except Exception:  # noqa: BLE001
+                            logger.debug("on_chunk 抛错 (吞掉, 不影响 sandbox)", exc_info=True)
+            finally:
+                try:
+                    stream.close()
+                except Exception:  # noqa: BLE001
+                    pass
+
+        t_out = threading.Thread(
+            target=_reader, args=(proc.stdout, "stdout", stdout_lines),
+            name=f"sandbox-stdout-{proc.pid}", daemon=True,
+        )
+        t_err = threading.Thread(
+            target=_reader, args=(proc.stderr, "stderr", stderr_lines),
+            name=f"sandbox-stderr-{proc.pid}", daemon=True,
+        )
+        t_out.start()
+        t_err.start()
+
+        try:
+            rc = proc.wait(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            try:
+                proc.kill()
+            except Exception:  # noqa: BLE001
+                logger.warning("kill 超时 sandbox 进程失败", exc_info=True)
+            try:
+                rc = proc.wait(timeout=5)  # 给 kill 5s 收尸
+            except subprocess.TimeoutExpired:
+                rc = -signal.SIGKILL.value
+
+        # 等 reader thread drain 剩余 buffer (kill 之后 OS 仍可能 flush 几行)
+        t_out.join(timeout=2)
+        t_err.join(timeout=2)
+
+        elapsed_ms = (time.time() - start) * 1000.0
+
+        stdout = "".join(stdout_lines)
+        stderr = "".join(stderr_lines)
+        if timed_out:
+            stderr += f"\n[catfish-sandbox] 超时 {timeout_s}s, 进程被 SIGKILL"
+
+        # 截断防 LLM 拿到天量
+        if len(stdout) > max_output_bytes:
+            stdout = stdout[:max_output_bytes] + f"\n... [truncated {len(stdout) - max_output_bytes} bytes]"
+        if len(stderr) > max_output_bytes:
+            stderr = stderr[:max_output_bytes] + f"\n... [truncated {len(stderr) - max_output_bytes} bytes]"
+
+        return {
+            "ok": rc == 0 and not timed_out,
+            "sandbox_used": True,
+            "sandbox_kind": sandbox_kind,
+            "stdout": stdout,
+            "stderr": stderr,
+            "rc": rc,
+            "elapsed_ms": round(elapsed_ms, 2),
+            "timed_out": timed_out,
+        }
+    finally:
+        try:
+            shutil.rmtree(task_dir, ignore_errors=True)
+        except Exception:
+            logger.warning("清理沙箱 TASK_DIR 失败: %s", task_dir, exc_info=True)
+
+
 def detect_lang_from_tool_name(tool_name: str) -> str | None:
     """根据工具名推断 lang. 不认识返回 None (caller 不应调沙箱)."""
     n = tool_name.lower()

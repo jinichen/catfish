@@ -74,6 +74,12 @@ _MAX_RESULT_CHARS = 100_000
 # 老任务自动清理时间 (秒). 完成 24h 后从 store 移除.
 _TASK_TTL_SECONDS = 24 * 3600
 
+# P3.5.39 (6/18): latest_output tail buffer 上限 (字符). LLM 调 catfish_task_status
+# 时返这一段, 让长 task 看得到中间进度. 4KB 够覆盖 print() 跑 1-2 个 page tail,
+# 短于 _MAX_RESULT_CHARS (那是 final result 的). 不能太大 — runner 每行都更新,
+# 每次 substring 拷贝过大会拖累.
+_LATEST_OUTPUT_TAIL = 4096
+
 
 @dataclass
 class Task:
@@ -96,6 +102,12 @@ class Task:
     max_retries: int = 3  # 重试次数上限, 达此值后 auto/manual retry 都拒
     last_error_type: str = "unknown"  # transient / permanent / unknown (_classify_error_type 填)
     parent_task_id: str | None = None  # 上一次失败的 task_id, retry 链路追溯
+    # P3.5.39 (6/18 鸿波 audit daytona 后催 'PTY streaming'): 长 task 实时进度.
+    # tail buffer (~_LATEST_OUTPUT_TAIL 字符), runner 用 progress_cb 滚动写入.
+    # LLM 调 catfish_task_status / catfish_task_result 时看 latest_output 拿中间进度.
+    latest_output: str = ""
+    # 写 latest_output 的锁 (reader thread 跟 LLM 查询 thread 防 race)
+    _output_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     # 内部 asyncio task 引用, 不序列化给 LLM
     _async_task: asyncio.Task | None = field(default=None, repr=False)
 
@@ -163,10 +175,22 @@ class TaskManager:
                 task_id, exc_info=True,
             )
 
+        # P3.5.39 (6/18): runner 可以是 0 参 (老 caller) 也可以接 task (新 caller 用
+        # task.latest_output 流式进度). inspect.signature 判断, 兼容现有 tests.
+        import inspect  # noqa: PLC0415 — hot path 但 inspect 是 stdlib, ~30µs/call 不贵
+        try:
+            _runner_argc = len(inspect.signature(runner).parameters)
+        except (TypeError, ValueError):
+            _runner_argc = 0
+        _runner_wants_task = _runner_argc >= 1
+
         async def _run_wrapper():
             task.status = "running"
             try:
-                result = await runner()
+                if _runner_wants_task:
+                    result = await runner(task)  # type: ignore[arg-type, call-arg]
+                else:
+                    result = await runner()
                 # 截断超大输出
                 task.result = self._truncate_result(result)
                 task.status = "completed"
@@ -243,10 +267,17 @@ class TaskManager:
         return self._tasks.get(task_id)
 
     def status_dict(self, task_id: str) -> dict:
-        """返给 LLM 看的 status (剥掉 _async_task)."""
+        """返给 LLM 看的 status (剥掉 _async_task).
+
+        P3.5.39 (6/18 鸿波 audit daytona 后催): 加 latest_output 字段 (tail ~4KB)
+        让 LLM 长 task 跑一半也能拿到中间 stdout 进度, 不再 black box.
+        """
         task = self.get(task_id)
         if task is None:
             return {"task_id": task_id, "status": "not_found"}
+        # 拿 latest_output snapshot, race-free
+        with task._output_lock:
+            latest_output = task.latest_output
         return {
             "task_id": task.task_id,
             "kind": task.kind,
@@ -258,6 +289,8 @@ class TaskManager:
                 (task.finished_at or time.time()) - task.started_at
             ),
             "error": task.error,
+            # P3.5.39: tail buffer (≤ _LATEST_OUTPUT_TAIL chars), 跑完仍可看
+            "latest_output": latest_output,
         }
 
     def result_dict(self, task_id: str) -> dict:
@@ -340,16 +373,26 @@ def manager() -> TaskManager:
 # 任务 kind 注册表 — 5/8 先 ship execute_code 一个
 # ============================================================
 
-async def _runner_execute_code(payload: dict) -> dict:
-    """跑 execute_code 任务 (走 sandbox)."""
+async def _runner_execute_code(payload: dict, progress_cb=None) -> dict:
+    """跑 execute_code 任务 (走 sandbox).
+
+    P3.5.39 (6/18 鸿波 audit daytona 后催 PTY streaming): progress_cb 接 sandbox
+    流式输出. None = 不流式 (兼容老 caller / 测试). 有 cb 时走
+    run_in_sandbox_streaming, 每行调 cb(stream, text).
+    """
     from . import sandbox  # noqa: PLC0415  lazy
     code = payload.get("code") or ""
     lang = payload.get("lang") or "python"
     timeout_s = int(payload.get("timeout_s") or 60)
+    if progress_cb is not None:
+        return sandbox.run_in_sandbox_streaming(
+            code, lang=lang, timeout_s=timeout_s, on_chunk=progress_cb,
+        )
     return sandbox.run_in_sandbox(code, lang=lang, timeout_s=timeout_s)
 
 
-_KIND_RUNNERS: dict[str, Callable[[dict], Awaitable[dict]]] = {
+# P3.5.39: runner 签名加 optional progress_cb. 老 caller 不传 cb 仍 work.
+_KIND_RUNNERS: dict[str, Callable[..., Awaitable[dict]]] = {
     "execute_code": _runner_execute_code,
 }
 
@@ -960,8 +1003,23 @@ def submit_typed_task(
             "error": f"未知任务 kind: {kind!r}, 支持: {list(_KIND_RUNNERS.keys())}",
         }
 
-    async def _bound_runner():
-        return await runner_factory(payload)
+    async def _bound_runner(task):
+        # P3.5.39 (6/18): 构造 progress_cb 让 sandbox 流式输出实时滚动到
+        # task.latest_output. LLM 调 catfish_task_status 时拿这一段, 长 task 不再 black box.
+        # _output_lock 防 reader thread (stdout/stderr 两条) 跟 status_dict 查询 race.
+        def progress_cb(stream: str, text: str) -> None:
+            with task._output_lock:
+                merged = task.latest_output + text
+                if len(merged) > _LATEST_OUTPUT_TAIL:
+                    task.latest_output = merged[-_LATEST_OUTPUT_TAIL:]
+                else:
+                    task.latest_output = merged
+        # runner_factory 可能接 (payload, progress_cb=None) 也可能 (payload) — 老 kind 兼容
+        try:
+            return await runner_factory(payload, progress_cb=progress_cb)
+        except TypeError:
+            # 老 runner 不接 progress_cb, fallback
+            return await runner_factory(payload)
 
     task = manager().submit(
         kind=kind,
