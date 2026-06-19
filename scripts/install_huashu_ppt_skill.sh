@@ -98,6 +98,35 @@ if not m:
 fm = m.group(1)
 body = text[m.end():]
 
+# P3.5.41.1 (6/18 鸿波 audit-skills 后催): 花叔上游 description 541 desc tokens,
+# 装一次吃掉 system prompt 大部分 budget. 强制替换成 catfish 压缩版 (158 tokens, 省 383):
+# 留: 一句话定位 + 12 个代表性触发词 + 反 AI slop + Junior Designer 提示 + body 链接.
+# 砍: Starter Components / Brand Asset Protocol / 哲学库枚举 / TTS pipeline 等详细描述 →
+# 这些放在 body 里 (LLM 装载 skill 后看), description 只管 trigger.
+CATFISH_COMPRESSED_DESC = (
+    "花叔 Design — HTML 原生设计 skill. 高保真原型 / 交互 Demo / 演讲 HTML deck → "
+    "可编辑 PPTX / 时间轴动画 (导出 MP4/GIF, 60fps 插帧) / 设计变体 + 5 流派×20 种"
+    "设计方向顾问 + 5 维专家评审 + 带解说长动画 pipeline. 触发词: 做原型 / 做交互 Demo / "
+    "hi-fi 设计 / 设计风格 / 推荐风格 / iOS 原型 / app mockup / 导出 MP4 / 导出 GIF / "
+    "设计评审 / 解说动画 / TTS+动画 / 5 分钟讲清 XX. 反 AI slop + Junior Designer 工作流 "
+    "(先 assumptions/placeholder 再迭代). 详细 Starter Components / Brand Asset Protocol / "
+    "哲学库 / Playwright 验证见 body."
+)
+# 替换 description 行 (单行 YAML). 老 description 可能跨行 (花叔上游写多段一行带 \\n), 直接
+# 整段从 `description:` 替换到下一个 top-level YAML key 之前.
+new_fm = re.sub(
+    r"^description:\s*.+?(?=\n[a-zA-Z_]+:|\Z)",
+    "description: " + CATFISH_COMPRESSED_DESC,
+    fm,
+    count=1,
+    flags=re.DOTALL | re.MULTILINE,
+)
+if new_fm != fm:
+    fm = new_fm
+    print(f"✅ description 替换为 catfish 压缩版 (省 ~383 desc tokens)")
+else:
+    print("⚠️ description 行未匹配, 跳过压缩 (上游格式变了?)")
+
 extra = []
 if "kind:" not in fm:
     extra.append("kind: instructional")
@@ -130,12 +159,14 @@ if "triggers:" not in fm:
   - showcase""")
 
 if extra:
-    new_fm = fm + "\n" + "\n".join(extra)
-    new_text = "---\n" + new_fm + "\n---\n" + body
-    skill_md.write_text(new_text, encoding="utf-8")
+    fm = fm + "\n" + "\n".join(extra)
     print(f"✅ 已加 {len(extra)} 个 catfish 字段")
 else:
     print("✅ frontmatter 已含 catfish 字段, 不动")
+
+# 写回 (含 description 压缩 + catfish 字段)
+new_text = "---\n" + fm + "\n---\n" + body
+skill_md.write_text(new_text, encoding="utf-8")
 PYEOF
 
 # ─── Step 5: 加 catfish script.py wrapper ────────────────
