@@ -1,6 +1,6 @@
 ---
 name: catfish-browser-compliance
-description: 帮员工在公司内网合规平台 / 风控平台 / 用户管理后台做合规相关工作 —— 查看用户列表、按条件筛选、查看具体用户详情、触发合规分析、读取合规报告。当用户说"在合规平台上看…"、"内网管理系统里…"、"风险分析…"、"合规报告…"、"查谁是管理员"、"今天有多少新建用户"、"XX 项目的合规检查状态"等时必选此 skill。它包装了登录态复用、DOM @ref 定位、失败降级、"填表不自提交"等专门规约。基于 catfish-browser-task 的通用模板, 针对内网合规平台特化。
+description: 公司内网合规平台 / 风控 / 用户管理后台合规工作. 触发: 合规平台看 / 内网系统里 / 风险分析 / 合规报告 / 查管理员 / 新建用户数 / 项目合规状态. 基于 catfish-browser-task 模板, 内网特化 (登录态复用 / DOM @ref 定位 / 失败降级 / 填表不自提交).
 version: 0.1.0
 author: 鲶鱼 Catfish Platform Team
 license: MIT

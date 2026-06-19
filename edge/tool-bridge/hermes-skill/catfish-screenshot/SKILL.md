@@ -1,6 +1,6 @@
 ---
 name: catfish-screenshot
-description: 给视觉模型看员工屏幕用的截图工具. 当员工说「这个报错是什么意思」「我屏幕上 X 是什么」「截屏看下」「你看一下我这边」「这个按钮怎么用」之类涉及 GUI 的问题时, 调 catfish_screenshot 工具. 默认 mode=active_window (osascript 拿前台窗口 ID + screencapture -l 自动拍, 零打扰, 隐私友好). **浏览器场景永远用 browser_vision 不要绕到 catfish_screenshot**. 不要主动截图. 不要 fullscreen 默认调用 (会把员工聊天/银行/密码管理器一起拍到). 当前支持 macOS 全功能 + Windows 退到 fullscreen. 配合 Qwen3-VL / Qwen-Flash 多模态 / Gemini vision 看图.
+description: 给视觉模型看员工屏幕的截图工具. 触发: 这个报错是什么 / 我屏幕上 X 是什么 / 截屏看下 / 你看一下我这边 / 这按钮怎么用. 默认 mode=active_window (前台窗口, 隐私友好). **浏览器永远用 browser_vision 不绕过来**. 不主动截图, 不 fullscreen 默认 (防拍到聊天/银行/密码). macOS 全功能, Windows 退 fullscreen.
 version: 0.1.0
 author: 鲶鱼 Catfish Platform Team
 license: MIT

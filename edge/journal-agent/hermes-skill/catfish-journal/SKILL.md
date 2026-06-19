@@ -1,6 +1,6 @@
 ---
 name: catfish-journal
-description: 改员工 ~/.catfish/employee_journal.md 里的 TODO 必选此 skill. **任何**改 journal TODO 的请求都用这个 — 标完成 / 删任务 / 新加 TODO. 触发词包括但不限于"标完成" / "已完成" / "搞定了" / "做完了 X" / "X 不做了" / "取消 X" / "删掉那个 X" / "把 X 加到今天 TODO" / "记一下 Y" / "新加任务 Z" / "把 P0 bug 标完成" / "周报写完了" / "那个 X 任务不用做了" / **跨 source: "把 X 那封邮件改成待办" / "今天的会都加进 TODO" / "这周要回的邮件全加上"** (5/20 v0.2.0). 直接读写员工本机 ~/.catfish/employee_journal.md 文件 (catfish 隐私设计: 员工 journal 是员工本机数据). 双重定位 line + hint 防误伤. 不自动加任何东西 — 员工 explicit 说改才改.
+description: 改员工 ~/.catfish/employee_journal.md TODO 必选此 skill. 触发: 标完成 / 已完成 / 搞定了 / 删任务 / 取消 X / 新加 TODO / 记一下 Y / 把 X 邮件改成待办 / 今天的会都加进 TODO / 这周要回的邮件全加上. 直接读写员工本机 journal 文件 (catfish 隐私设计). 双重定位 line + hint 防误伤. 不自动加 — 员工 explicit 说改才改.
 version: 0.2.0
 author: 鲶鱼 Catfish Platform Team
 license: MIT
