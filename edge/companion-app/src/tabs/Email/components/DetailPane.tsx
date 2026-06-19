@@ -845,15 +845,17 @@ function DetailPane({
         </div>
       ) : msg.body_html ? (
         /* P3.5.31 (6/17): HTML 邮件 iframe srcdoc render.
-           P3.5.38.3 (6/18 鸿波 catch '还是无效, 仔细分析'):
-           砍 sandbox attribute — MDN 实证 srcDoc+sandbox 在 WKWebView 下 origin 永远 opaque,
-           parent.contentDocument 返 null. 砍 sandbox 让 srcDoc 跟 parent 同源, parent 能
-           拿 contentDocument (onLoad handler 上面). XSS trade-off: 邮件原 script 能跑, 但
-           99% 邮件没 script (server-side sanitize). 严格防御后续接 dompurify.
+           P3.5.38.3 (6/18): 砍 sandbox attribute - parent 能拿 contentDocument 监听 click.
+           P3.5.38.4 (6/18 鸿波 catch '内容太靠左, 部分内容超出左边界'):
+           audit: iframe 默认 body margin 8px, 但邮件 HTML 常用 margin:0 reset + 自定 layout,
+           内容紧贴 iframe edge. 部分 newsletter (例 Superlinear) 用大 fixed-width container
+           + negative margin, 在窄 iframe 内会被裁掉左侧.
+           修: srcDoc 注入 reset CSS — body padding/margin + img/table max-width 100% +
+           long-word break-word, 防超出 iframe 视口. 邮件原 CSS 后置覆盖, 这是 default-only.
            bg 白: 邮件默认 white, override Companion dark theme. */
         <iframe
           title="邮件正文"
-          srcDoc={`<base target="_blank">${msg.body_html}`}
+          srcDoc={buildEmailSrcDoc(msg.body_html)}
           onLoad={handleEmailIframeLoad}
           style={{
             flex: 1,
@@ -886,7 +888,26 @@ function DetailPane({
 
 /** ─── 工具函数 ───────────────────────────────────────── */
 
-/** P3.5.38.1 → 砍. P3.5.38.2 不需要注入 script, parent 直接拿 contentDocument 监听 click. */
+/** P3.5.38.4 (6/18 鸿波 catch '内容太靠左, 部分内容超出左边界'): 构造邮件 srcDoc.
+ *
+ * 注入 default CSS:
+ * - body padding 16px / margin 0 / box-sizing border-box → 内容跟 iframe edge 留 buffer
+ * - img/table max-width 100% → 防大图把 iframe 推宽
+ * - word-wrap / overflow-wrap break-word → 长 URL 折行不溢出
+ * - 邮件原 <style> 后置, 覆盖这些 default 是预期 — 这只是邮件没 padding 时的 fallback
+ *
+ * <base target="_blank">: 兜底 (没 sandbox 时 noop, parent contentDocument click handler 真实生效)
+ */
+function buildEmailSrcDoc(bodyHtml: string): string {
+  const defaultCss = `<style>
+html,body{margin:0;padding:0;background:#fff;color:#000;word-wrap:break-word;overflow-wrap:break-word;}
+body{padding:16px;box-sizing:border-box;}
+img,table,video,iframe{max-width:100% !important;height:auto;}
+pre,code{white-space:pre-wrap;word-break:break-word;}
+a{word-break:break-all;}
+</style>`;
+  return `<base target="_blank">${defaultCss}${bodyHtml}`;
+}
 
 export default DetailPane;
 export type { FullMessage };
