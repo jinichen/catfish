@@ -585,6 +585,16 @@ ${
 ${ctx.hermesMemoryRecent.trim()}`);
   }
 
+  // P3.5.40 (6/18 鸿波 audit huashu-design '不凭空创造, 查已有 spec'):
+  //   wiki/entities/* 跟 wiki-shared/dept/* 里跟今日邮件/任务语义相关的 head 注入.
+  //   防 LLM 凭记忆造客户名 / 项目名 / 资质名 / 部门规定 (员工 wiki 里有具体记录的话).
+  //   填充时机: fetchBriefingAdvisor 内 applyRelevanceFilter 后调 wikiSearchSemantic.
+  //   空字符串 = wiki 没装 / BGE-M3 没装 / 没匹配命中, advisor 仍然能跑 (跟现有 fallback 一致).
+  if (input.wikiRelevant && input.wikiRelevant.trim()) {
+    parts.push(`# 员工 wiki 相关条目 (查到的具体事实, 不要凭印象编造)
+${input.wikiRelevant.trim()}`);
+  }
+
   // 周报历史 (文件名 + 时间, 不读内容)
   if (ctx.weeklyReports.length > 0) {
     const lines = ctx.weeklyReports
@@ -703,6 +713,12 @@ export interface AdvisorInput {
     /** P3.3.12: 跟 AI 已聊到哪 (100-150 字). 空字符串 = 没聊过 / summary 失败. */
     chatSummary?: string;
   }>;
+  /** P3.5.40 (6/18 鸿波 audit huashu-design '不凭空创造, 查已有 spec'):
+   *  跟今日邮件/任务相关的 wiki 条目 (entity/concept) head 拼接, 防 LLM 凭记忆造客户名/项目名/资质名.
+   *  内部填充: advisor 跑前调 wikiSearchSemantic(query, top_k=3), 复用现有 BGE-M3 SQLite cache,
+   *  不重 embed. 空字符串 = wiki 没数据 / 模型未装 / 没匹配, advisor 仍然能跑.
+   *  Caller 不应该手动传, fetchBriefingAdvisor 内部填. optional 防 break 其他 caller 路径. */
+  wikiRelevant?: string;
 }
 
 /** 5/22 cold start 修锁: 同时只允许一个 advisor LLM call 跑.
@@ -800,6 +816,59 @@ export async function fetchBriefingAdvisor(input: AdvisorInput): Promise<Advisor
       });
   }
 }
+
+// ─── P3.5.40 (6/18 鸿波 audit huashu-design '不凭空创造, 查已有 spec') ────────
+/** advisor 跑前拉跟今日邮件/任务相关的 wiki 条目 head, 注入 prompt 防 LLM 凭印象造.
+ *
+ *  query 构造: 今日 emails subject + todos text + events summary 同 applyRelevanceFilter
+ *    (一样的相关性 query, 但 wiki 走 wikiSearchSemantic 不走 advisor_relevance.rankRelevance —
+ *    wiki 已经有 P3.5.35 / P38 的 SQLite vector cache, 直接 top-K cosine, 不重 embed).
+ *
+ *  返字符串: top-K wiki entries 拼成 "## <title> (kind)\n<snippet>" 段, 总长上限 ~1500 字.
+ *  空字符串 = wiki 没装 / BGE-M3 没装 / 没匹配, 不影响 advisor 跑.
+ */
+async function fetchWikiRelevant(input: AdvisorInput): Promise<string> {
+  // 构造 query (跟 applyRelevanceFilter 同构, 但允许独立调整未来)
+  const parts: string[] = [];
+  if (input.todos.length > 0) {
+    parts.push(input.todos.map((t) => t.text).join(" "));
+  }
+  if (input.emails.length > 0) {
+    parts.push(input.emails.map((m) => `${m.sender}: ${m.subject}`).join(" "));
+  }
+  if (input.events.length > 0) {
+    parts.push(input.events.map((e) => e.summary).join(" "));
+  }
+  const query = parts.join("\n").trim();
+  if (!query) {
+    return "";  // 今天啥也没, 无 query, 跳过 wiki search
+  }
+
+  try {
+    const { wikiSearchSemantic } = await import("./tauri");
+    const res = await wikiSearchSemantic(query, 3);
+    if (!res.model_loaded || res.hits.length === 0) {
+      return "";  // model 未装 / 没匹配 — 静默 fallback
+    }
+    // 拼 top-3 head 段, 总长上限 1500 字
+    const segs: string[] = [];
+    let totalChars = 0;
+    const MAX_CHARS = 1500;
+    for (const hit of res.hits) {
+      const seg = `## ${hit.title} (${hit.kind})\n${hit.snippet}`;
+      if (totalChars + seg.length > MAX_CHARS) {
+        break;
+      }
+      segs.push(seg);
+      totalChars += seg.length;
+    }
+    return segs.join("\n\n");
+  } catch (e) {
+    console.warn("[advisor] P3.5.40 fetchWikiRelevant 失败, fallback 空:", e);
+    return "";
+  }
+}
+
 
 // ─── P3.5.4 (6/16 鸿波): BGE-M3 相关性筛选 ────────────────────────────
 //
@@ -1035,6 +1104,13 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
   //   按今天输入语义相关性, 不是粗暴 slice. 失败 silent fallback 返原 input.
   //   model 缺 (~/.catfish/models/bge-m3.onnx 没下载) 时也 fallback.
   const filteredInput = await applyRelevanceFilter(inputWithPrev);
+
+  // P3.5.40 (6/18 鸿波 audit huashu-design '不凭空创造, 查已有 spec'):
+  //   advisor 跑前调 wikiSearchSemantic 拿跟今日邮件/任务相关的 wiki 条目 head, 注入 prompt.
+  //   防 LLM 凭印象造客户名/项目细节/资质规定 (员工 wiki 里有具体记录的话).
+  //   复用 P3.5.35 P38 的 BGE-M3 SQLite cache, 不重 embed.
+  //   失败 silent fallback (空字符串), 不阻塞 advisor.
+  filteredInput.wikiRelevant = await fetchWikiRelevant(filteredInput);
 
   const userPrompt = buildUserPrompt(filteredInput);
   const url = `${config.backendUrl}/v1/chat/completions${SERVICE_LLM_QUERY}`;

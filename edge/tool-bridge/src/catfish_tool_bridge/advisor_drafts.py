@@ -26,31 +26,96 @@ logger = logging.getLogger("catfish.tool_bridge.advisor_drafts")
 def draft_email_reply(args: dict[str, Any]) -> dict[str, Any]:
     """起草邮件回信 (调用方 LLM 一次只起一个口径, 多个口径调多次).
 
+    P3.5.40 (6/18 鸿波 audit huashu-design 后催 'Junior Designer 早 show'):
+    加 phase 字段, "assumptions" 阶段先让员工 catch 不确定项, "final" 再写实际内容.
+    防 LLM 凭空造"上次电话提的预算 800 万" 这种员工实际没说的细节.
+    默认 phase="final" 兼容老 caller, 现有行为不变.
+
     Args:
       args.tone: str — "strict" / "balanced" / "friendly" / "formal" / "urgent" / "hold"
       args.thread_id: str — 邮件 thread (元数据, 写入草稿头部, 给员工对照)
       args.recipient: str — 收件人 (元数据)
       args.subject: str — 邮件主题
-      args.content: str — LLM 已 generate 好的回信正文
+      args.phase: "assumptions" | "final" (默认 "final") — Junior Designer 早 show 模式
+      args.content: str — phase=final 时必填, phase=assumptions 时可空
+      args.questions: list[str] (phase=assumptions 必填) — LLM 需要员工答的不确定项
+      args.assumptions: list[str] (phase=assumptions 可选) — LLM 已经假设的内容
+      args.outline: list[str] (phase=assumptions 可选) — LLM 计划的回信结构
       args.compliance_notes: list[str] (optional) — LLM 自己跑过 check_compliance 的结果
 
     Returns:
-      {"path": "...", "filename": "...", "tone": "...", "bytes": int}
+      phase=assumptions: {"path", "filename", "tone", "phase", "questions_count", "bytes"}
+      phase=final:       {"path", "filename", "tone", "phase", "bytes"}
     """
     tone = str(args.get("tone", "balanced"))
     thread_id = str(args.get("thread_id", "unknown"))
     recipient = str(args.get("recipient", "unknown"))
     subject = str(args.get("subject", "(无主题)"))
+    phase = str(args.get("phase", "final")).lower()
+    if phase not in ("assumptions", "final"):
+        return {"error": f"phase 只能是 'assumptions' 或 'final', 拿到: {phase!r}"}
     body = str(args.get("content", ""))
     compliance_notes = args.get("compliance_notes") or []
 
-    if not body.strip():
-        return {"error": "content 为空, 拒存草稿"}
-
-    # 文件名: reply-<recipient_short>-<tone>.md
     rec_short = "".join(c for c in recipient if c.isalnum())[:20] or "unknown"
-    filename = f"reply-{rec_short}-{tone}.md"
 
+    if phase == "assumptions":
+        # P3.5.40: Junior Designer 早 show — LLM 先列不确定项, 不闷头写 final
+        questions = args.get("questions") or []
+        assumptions = args.get("assumptions") or []
+        outline = args.get("outline") or []
+        if not questions:
+            return {
+                "error": (
+                    "phase=assumptions 时 questions 必填 (LLM 列出需要员工答的不确定项, "
+                    "例 '上次电话提的预算具体数 / 项目名是否用全称'). 空 questions 等于直接写 final, "
+                    "改成 phase=final."
+                )
+            }
+        filename = f"reply-{rec_short}-{tone}-questions.md"
+        header = (
+            f"# 邮件回信草稿 — 起草前问员工 ({tone})\n\n"
+            f"- 收件人: {recipient}\n"
+            f"- 主题: {subject}\n"
+            f"- thread_id: {thread_id}\n"
+            f"- phase: assumptions (等员工答完再走 final)\n"
+            f"- catfish 起草时间: {_now_iso()}\n\n"
+            "## ⚠️ 需要员工先答 (防 LLM 凭空造)\n\n"
+        )
+        for q in questions:
+            header += f"- [ ] {q}\n"
+        if assumptions:
+            header += "\n## 已假设 (员工 catch 这些是不是对的)\n\n"
+            for a in assumptions:
+                header += f"- {a}\n"
+        if outline:
+            header += "\n## 计划回信 outline\n\n"
+            for o in outline:
+                header += f"- {o}\n"
+        if body.strip():
+            header += "\n## (LLM 给的草稿初步, 答完上面再 refine 走 phase=final)\n\n"
+            full = f"{header}\n---\n\n{body}\n"
+        else:
+            full = header + "\n---\n\n_等员工答完上面 questions, LLM 再调 phase=final 写实际正文_\n"
+
+        try:
+            path = save_draft(filename, full)
+        except (ValueError, OSError) as e:
+            return {"error": f"save_draft 失败: {e}"}
+        return {
+            "path": path,
+            "filename": filename,
+            "tone": tone,
+            "phase": "assumptions",
+            "questions_count": len(questions),
+            "bytes": len(full.encode("utf-8")),
+        }
+
+    # phase == "final" (现有路径)
+    if not body.strip():
+        return {"error": "phase=final 时 content 不能为空, 拒存草稿"}
+
+    filename = f"reply-{rec_short}-{tone}.md"
     header = (
         f"# 邮件回信草稿 ({tone})\n\n"
         f"- 收件人: {recipient}\n"
@@ -72,6 +137,7 @@ def draft_email_reply(args: dict[str, Any]) -> dict[str, Any]:
         "path": path,
         "filename": filename,
         "tone": tone,
+        "phase": "final",
         "bytes": len(full.encode("utf-8")),
     }
 

@@ -2627,9 +2627,16 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_draft_email_reply",
         "description": (
-            "起草邮件回信草稿到 ~/.catfish/outputs/<today>/reply-*.md, 不替员工发. "
-            "LLM 已 generate 好正文传 content 字段. 想给 2-3 个口径就调 2-3 次, "
-            "每次不同 tone."
+            "起草邮件回信草稿到 ~/.catfish/outputs/<today>/reply-*.md, 不替员工发.\n\n"
+            "P3.5.40 (6/18 鸿波 audit huashu-design 后催 'Junior Designer 早 show'):\n"
+            "  支持两阶段 phase 字段, 防 LLM 凭空造员工没说的细节 (例 '上次电话提的预算 800 万').\n\n"
+            "✅ phase='assumptions' (推荐先调): LLM 列出**不确定项 questions** 给员工答,\n"
+            "  + assumptions (已假设的) + outline (计划结构) + 可选 content (草稿初稿).\n"
+            "  存 reply-{rec}-{tone}-questions.md, 员工 catch 早期错误后, 再 phase='final' 调一次.\n"
+            "  调用场景: 涉及具体数字 / 关系人 / 历史决定时. 涉及董事长 / 客户名 / 项目细节时.\n\n"
+            "✅ phase='final' (默认, 老 caller 兼容): content 必填, 直接存 reply-{rec}-{tone}.md.\n"
+            "  调用场景: 内容简单确定 (例 '感谢您的反馈, 我们会跟进') / 员工已经答完 questions.\n\n"
+            "多口径 = 不同 tone 各调一次. 每个 tone 可以 assumptions → final 两次."
         ),
         "input_schema": {
             "type": "object",
@@ -2642,14 +2649,52 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
                 "thread_id": {"type": "string", "description": "邮件 thread id (元数据)"},
                 "recipient": {"type": "string", "description": "收件人"},
                 "subject": {"type": "string", "description": "邮件主题"},
-                "content": {"type": "string", "description": "LLM 已 generate 好的回信正文"},
+                "phase": {
+                    "type": "string",
+                    "enum": ["assumptions", "final"],
+                    "description": (
+                        "P3.5.40 起 — 'assumptions': 先列 questions 给员工答; "
+                        "'final' (默认): 直接写正文存盘"
+                    ),
+                },
+                "content": {
+                    "type": "string",
+                    "description": (
+                        "LLM generate 的回信正文. phase=final 必填. "
+                        "phase=assumptions 时可空 / 可放草稿初稿 (员工 catch 后 refine)"
+                    ),
+                },
+                "questions": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "phase=assumptions 必填. LLM 列需要员工答的不确定项. "
+                        "例 '上次电话提的预算具体数字' / '是否要 cc 张主任' / '客户公司全称'"
+                    ),
+                },
+                "assumptions": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "phase=assumptions 可选. LLM 已假设的内容 (员工 catch 这些对不对). "
+                        "例 '默认假设员工要 hold 这单' / '默认假设项目时间表是 9 月底'"
+                    ),
+                },
+                "outline": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "phase=assumptions 可选. LLM 计划的回信结构. "
+                        "例 '1. 致谢 2. 确认 3 点 3. 提下次会议'"
+                    ),
+                },
                 "compliance_notes": {
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "(可选) check_compliance 跑出的合规提示",
                 },
             },
-            "required": ["tone", "thread_id", "recipient", "subject", "content"],
+            "required": ["tone", "thread_id", "recipient", "subject"],
         },
         "emoji": "✉️",
         "toolset": "catfish_native",
