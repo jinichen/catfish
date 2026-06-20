@@ -246,6 +246,85 @@ def test_classify_all_early_abort_after_3_consecutive_skip(audit_mod, capsys):
     assert "早 abort" in captured.err
 
 
+def test_classify_all_override_model_used_when_passed(audit_mod, capsys):
+    """P3.5.42.4: 传 override_model → 直接用, 不调 enforce.get_verifier_model()."""
+    seen = {}
+
+    class _Capture:
+        @staticmethod
+        def get_verifier_model():
+            seen["got_called"] = True
+            return "should-not-use"
+
+        @staticmethod
+        def _classify_memory_route(content, model):
+            seen["model"] = model
+            return {"route": "memory", "reason": "ok", "confidence": 0.9}
+
+    audit_mod._classify_all("MEMORY", ["e1"], _Capture(),
+                            override_model="catfish-public-deepseek-flash")
+    assert seen["model"] == "catfish-public-deepseek-flash"
+    assert "got_called" not in seen  # 不调 picker chain
+    err = capsys.readouterr().err
+    assert "--model 覆盖" in err  # stderr 报源
+
+
+def test_classify_all_no_override_falls_to_picker(audit_mod, capsys):
+    """P3.5.42.4: 不传 override → 走 enforce.get_verifier_model() (picker chain)."""
+    class _Picker:
+        @staticmethod
+        def get_verifier_model():
+            return "catfish-private-main"
+
+        @staticmethod
+        def _classify_memory_route(content, model):
+            return {"route": "memory", "reason": "ok", "confidence": 0.9}
+
+    audit_mod._classify_all("MEMORY", ["e1"], _Picker())
+    err = capsys.readouterr().err
+    assert "picker chain" in err
+    assert "catfish-private-main" in err
+
+
+def test_classify_all_early_abort_hint_recommends_model_flag_for_private(audit_mod, capsys):
+    """P3.5.42.4: 走 picker + 选了 private model + 全挂 → 早 abort 提示加 --model."""
+    class _DeadPrivate:
+        @staticmethod
+        def get_verifier_model():
+            return "catfish-private-main"
+
+        @staticmethod
+        def _classify_memory_route(content, model):
+            return None  # 全挂
+
+        @staticmethod
+        def _resolve_role_via_gateway(role):
+            return ""
+
+    audit_mod._classify_all("MEMORY", [f"e{i}" for i in range(5)], _DeadPrivate())
+    err = capsys.readouterr().err
+    assert "--model catfish-public-deepseek-flash" in err
+    assert "数据已在本机 MEMORY.md" in err
+
+
+def test_classify_all_early_abort_hint_no_private_recommend_for_override(audit_mod, capsys):
+    """P3.5.42.4: 用户已经用 --model 还全挂 → 别再建议 --model, 报 gateway/catalog."""
+    class _AllFail:
+        @staticmethod
+        def get_verifier_model():
+            return "should-not-use"
+
+        @staticmethod
+        def _classify_memory_route(content, model):
+            return None
+
+    audit_mod._classify_all("MEMORY", [f"e{i}" for i in range(5)], _AllFail(),
+                            override_model="catfish-public-deepseek-flash")
+    err = capsys.readouterr().err
+    assert "--model catfish-public-deepseek-flash" not in err  # 不重复建议
+    assert "gateway 8999" in err
+
+
 def test_classify_all_no_abort_when_skip_breaks(audit_mod):
     """P3.5.42.3: 连续 skip 计数被成功 classify 重置, 不会误 abort."""
     class _Flaky:

@@ -104,6 +104,15 @@ def parse_args() -> argparse.Namespace:
         "--json", dest="as_json", action="store_true",
         help="JSON 输出 (机器可读)",
     )
+    p.add_argument(
+        "--model", default="",
+        help=(
+            "临时覆盖 picker chain 选的 verifier model (e.g. catfish-public-deepseek-flash). "
+            "鸿波 6/20 catch: 离单位时 picker 选的 catfish-private-main 上游 timeout, "
+            "走公网 model 跑 audit 不破红线 (data 已在本机 MEMORY.md, 只走公网做 router 判断, "
+            "不新增数据出端). 不传则严格走 memory_enforce picker chain."
+        ),
+    )
     return p.parse_args()
 
 
@@ -134,14 +143,18 @@ def _read_entries(target: str) -> list[str]:
 # ── 跑 LLM classify ──────────────────────────────────────────────
 
 
-def _classify_all(target: str, entries: list[str], enforce: Any) -> list[dict]:
+def _classify_all(target: str, entries: list[str], enforce: Any,
+                  override_model: str = "") -> list[dict]:
     """每条 entry 调 memory_enforce._classify_memory_route.
 
     target: "USER" → hermes memory target = "user"; "MEMORY" → "memory"
+    override_model: 鸿波 6/20 加 — CLI --model 临时覆盖 picker chain
+                    (离单位时内网 model 不通时用).
     """
     actual_target = "user" if target == "USER" else "memory"
-    model = enforce.get_verifier_model()
-    print(f"# audit {target}.md ({len(entries)} entries, model={model})",
+    model = override_model.strip() or enforce.get_verifier_model()
+    src = "--model 覆盖" if override_model.strip() else "picker chain"
+    print(f"# audit {target}.md ({len(entries)} entries, model={model} [{src}])",
           file=sys.stderr)
 
     # 连续 N 条 classify 全挂 → 早 abort. 鸿波 6/20 catch '没用的都删掉, 留着没意义':
@@ -173,13 +186,24 @@ def _classify_all(target: str, entries: list[str], enforce: Any) -> list[dict]:
             consecutive_skip += 1
             if consecutive_skip >= EARLY_ABORT_THRESHOLD:
                 sys.stderr.write("\n")
-                print(
+                hint = (
                     f"  ⚠ 连续 {EARLY_ABORT_THRESHOLD} 条 classify 全挂, 早 abort.\n"
-                    f"  建议先查: (1) catfish gateway 起没起 (curl http://127.0.0.1:8999/v1/roles)\n"
-                    f"           (2) verifier model `{model}` 在 catalog 里有没有\n"
-                    f"           (3) 离开内网时 catfish-private-* model 连不上 — 临时切公网 picker",
-                    file=sys.stderr,
+                    f"  verifier model: `{model}` ({src})\n"
                 )
+                # 如果走的是 picker chain + 选了内网 model → 大概率离单位
+                if not override_model.strip() and "private" in model:
+                    hint += (
+                        f"  原因可能: 这是内网 model, 离单位时 upstream 连不上.\n"
+                        f"  临时方案 (不动 picker, 不破红线):\n"
+                        f"    python3 scripts/audit-old-memory.py --model catfish-public-deepseek-flash\n"
+                        f"  数据已在本机 MEMORY.md, 公网 model 只做 router 判断, 不新增数据出端."
+                    )
+                else:
+                    hint += (
+                        f"  先查: gateway 8999 起没起 (curl http://127.0.0.1:8999/v1/catalog)\n"
+                        f"        model `{model}` 在 catalog 里有没有"
+                    )
+                print(hint, file=sys.stderr)
                 return results  # 早 abort, 剩下 entry 不跑
             continue
         # 这条 classify 成功 → reset 连续 skip 计数
@@ -333,7 +357,7 @@ def main() -> int:
         if not entries:
             print(f"# {target}.md 空 / 不存在, skip", file=sys.stderr)
             continue
-        results = _classify_all(target, entries, enforce)
+        results = _classify_all(target, entries, enforce, override_model=args.model)
         all_results.extend(results)
 
     if not all_results:
@@ -341,18 +365,17 @@ def main() -> int:
         return 1
 
     # 鸿波 6/20 catch '没用的都删掉, 留着没意义':
-    # 如果 classify 全挂 (zero 有效判定) → 不写没意义的报告, 直接 exit 1 让鸿波先修环境.
+    # 如果 classify 全挂 (zero 有效判定) → 不写没意义的报告, 直接 exit 1.
+    # 早 abort 时 _classify_all 已经 stderr 报过原因, 这只是兜底.
     valid_count = sum(1 for r in all_results if r["decision"] != "skip")
     if valid_count == 0:
         skipped = len(all_results)
-        sample_model = next((r.get("content") for r in all_results), "")  # noqa: F841
+        used_model = args.model.strip() or "(picker chain)"
         print(
             f"\n❌ {skipped}/{skipped} entry classify 全挂, 不写报告 (没意义).\n"
-            f"   先查这三条:\n"
-            f"     1. catfish gateway 起没起 — curl http://127.0.0.1:8999/v1/roles\n"
-            f"     2. picker model 在 catalog 里有没有 — 看 ~/.catfish/picker_state.json 选的 model\n"
-            f"     3. 离开内网时 catfish-private-* 连不上 — 临时切公网 picker 再跑\n"
-            f"   修完重跑: python3 scripts/audit-old-memory.py",
+            f"   model={used_model}\n"
+            f"   离单位 + picker 选内网 model 时, 加 --model 走公网:\n"
+            f"     python3 scripts/audit-old-memory.py --model catfish-public-deepseek-flash",
             file=sys.stderr,
         )
         return 1
