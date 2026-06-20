@@ -282,6 +282,20 @@ async function fetchWithHermes(
   return fetch(input, { ...init, headers });
 }
 
+/** P3.5.42.11 (鸿波 6/20 catch '反复弹认证'): auth_login 全局节流.
+ *
+ * 老 bug: 多个 fetchWithOAuth 并发撞 401, 各自 invoke('auth_login') 弹 N 次浏览器;
+ * 离单位 IdP 不可达时 invoke 立即失败, 下次再撞 401 又弹, 反复.
+ *
+ * 节流策略:
+ *   - inflight: auth_login 在跑时, 后续 401 等同一 promise, 不再启第二个
+ *   - cooldown: 上次 auth_login 失败 30s 内, 不再 invoke (let 401 透传 silent)
+ *     成功的话 cooldown 不生效 (新 token 已写盘, 下次 fetch 该过)
+ */
+let _authLoginInFlight: Promise<void> | null = null;
+let _authLoginLastFailMs = 0;
+const _AUTH_LOGIN_FAIL_COOLDOWN_MS = 30_000;
+
 /** BL-AUTH-DECOUPLE-A5 (5/19): 老 catfish-gateway 直调路径 (灰度回退). 保留旧 reauth 行为. */
 async function fetchWithOAuth(
   input: RequestInfo | URL,
@@ -301,23 +315,47 @@ async function fetchWithOAuth(
     // BL-FIX-STALE-TOKEN-CACHE (5/24): 撞 401 第一时间 invalidate user email cache.
     // 老 bug: 启动早期 _cachedUserEmail 可能存了错 email (whoami 半成功 / 刚登录中),
     // 之后 401 reauth 流程拿不到正确 email 路 hermes 头, 同样 401 死循环.
-    // 现在 401 时无脑清 cache, 下次 getCurrentUserEmail 重新 whoami.
     _cachedUserEmail = null;
-    // 401 → 触发 OAuth re-auth (弹浏览器)
-    try {
-      await invoke("auth_login");
-      // 5/18 BL-COMPANION-AUTO-RELOGIN: 通知 useAuth 刷新 — 不然 LoginGate /
-      // AuthBanner / DevUserSwitcher 的 state 还停在过期那一刻, 显错信息.
-      // 用 window event 而不是直接调 useAuth refresh 是因为 me.ts 是普通 module,
-      // 不在 React tree 里, 拿不到 hook. useAuth 自己挂 listener (下次改).
-      try {
-        window.dispatchEvent(new CustomEvent("catfish:auth-refreshed"));
-      } catch {
-        // 不支持 CustomEvent 的极老环境 (不太可能在 Tauri webview), silent
-      }
-    } catch {
-      // auth_login 失败 (用户关浏览器 / IdP 不可达) → 原 401 透传给 caller
+
+    // P3.5.42.11: cooldown — 上次 auth_login 失败 30s 内, 不再 invoke
+    const now = Date.now();
+    if (_authLoginLastFailMs > 0 && now - _authLoginLastFailMs < _AUTH_LOGIN_FAIL_COOLDOWN_MS) {
+      // 离单位 IdP 不可达时反复 invoke 没意义, silent 透传 401
       return resp;
+    }
+
+    // P3.5.42.11: inflight — 已经在弹了, 等同一 promise 不再启第二个浏览器
+    if (_authLoginInFlight) {
+      try {
+        await _authLoginInFlight;
+      } catch {
+        return resp;
+      }
+    } else {
+      _authLoginInFlight = (async () => {
+        try {
+          await invoke("auth_login");
+          // 5/18 BL-COMPANION-AUTO-RELOGIN: 通知 useAuth 刷新 — 不然 LoginGate /
+          // AuthBanner / DevUserSwitcher 的 state 还停在过期那一刻, 显错信息.
+          try {
+            window.dispatchEvent(new CustomEvent("catfish:auth-refreshed"));
+          } catch {
+            // 不支持 CustomEvent 的极老环境 (不太可能在 Tauri webview), silent
+          }
+          _authLoginLastFailMs = 0;  // 成功 → 清 cooldown
+        } catch (e) {
+          _authLoginLastFailMs = Date.now();  // 失败 → 开 cooldown
+          throw e;
+        } finally {
+          _authLoginInFlight = null;
+        }
+      })();
+      try {
+        await _authLoginInFlight;
+      } catch {
+        // auth_login 失败 (用户关浏览器 / IdP 不可达) → 原 401 透传给 caller
+        return resp;
+      }
     }
     // 拿新 token 重发一次, 不再 retry (防死循环)
     token = await getToken();

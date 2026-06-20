@@ -44,7 +44,10 @@ export async function fetchAdvisoryFeed(): Promise<AdvisoryFeedResponse | null> 
     headers["If-None-Match"] = cachedEtag;
   }
   try {
-    const resp = await fetchWithAuth(url, { headers });
+    // P3.5.42.11 (鸿波 6/20 catch '切到工作台弹认证'): skipReauth=true.
+    // AdvisoryBanner mount 时拉这条, 401 不该触发 invoke('auth_login') 弹浏览器.
+    // advisory 是 banner 信息 (非关键路径), 拿不到就拿不到, 别打扰员工切 tab.
+    const resp = await fetchWithAuth(url, { headers }, { skipReauth: true });
     if (resp.status === 304) {
       // 沿用缓存 payload
       const cached = localStorage.getItem(FEED_LS_KEY);
