@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sys
 from pathlib import Path
@@ -77,57 +78,76 @@ def test_read_entries_missing_file_returns_empty(audit_mod, tmp_hermes):
 
 
 def _mock_enforce(route_map):
-    """造 fake memory_enforce module — _classify_memory_route 按 content 关键字返预设 route."""
+    """造 fake memory_enforce module. P3.5.42.6 后 audit 不直接调 enforce 的 LLM
+    函数, 走 stdlib; enforce 只用来拿 prompt 常量 + get_verifier_model. classify
+    行为靠 monkeypatch audit_mod._classify_via_stdlib."""
     class _Fake:
+        _CLASSIFY_SYSTEM_PROMPT = "test classify prompt"  # P3.5.42.6 需要这常量
+
         @staticmethod
         def get_verifier_model():
             return "test-model"
 
+        # _classify_memory_route 留个旧接口测兜底
         @staticmethod
         def _classify_memory_route(content, model):
-            for key, route in route_map.items():
-                if key in content:
-                    return {"route": route, "reason": f"matched {key}", "confidence": 0.9}
-            return None  # 没 match 模拟 classify 挂
+            return None
+    _Fake._route_map = route_map  # type: ignore[attr-defined]
     return _Fake()
 
 
-def test_classify_all_keep_decision(audit_mod, capsys):
+def _mock_classify_via_stdlib(route_map):
+    """造一个 _classify_via_stdlib 的 mock, 按 content 关键字返预设."""
+    def _impl(content, model, prompt, gateway_url, timeout=30.0):
+        for key, route in route_map.items():
+            if key in content:
+                return {"route": route, "reason": f"matched {key}",
+                        "confidence": 0.9}, ""
+        return None, ""  # 没 match → fail-silent (空 error)
+    return _impl
+
+
+def test_classify_all_keep_decision(audit_mod, capsys, monkeypatch):
     """route == target → decision=keep."""
-    enforce = _mock_enforce({"ISO 流程": "memory"})
-    results = audit_mod._classify_all("MEMORY", ["ISO 流程 详细步骤"], enforce)
+    monkeypatch.setattr(audit_mod, "_classify_via_stdlib",
+                        _mock_classify_via_stdlib({"ISO 流程": "memory"}))
+    results = audit_mod._classify_all("MEMORY", ["ISO 流程 详细步骤"], _mock_enforce({}))
     assert len(results) == 1
     assert results[0]["decision"] == "keep"
     assert results[0]["llm_route"] == "memory"
 
 
-def test_classify_all_suggest_retarget(audit_mod, capsys):
+def test_classify_all_suggest_retarget(audit_mod, capsys, monkeypatch):
     """target=MEMORY → actual_target='memory' 但 route='user' → suggest_retarget."""
-    enforce = _mock_enforce({"鸿波偏好": "user"})
-    results = audit_mod._classify_all("MEMORY", ["鸿波偏好 直接输出"], enforce)
+    monkeypatch.setattr(audit_mod, "_classify_via_stdlib",
+                        _mock_classify_via_stdlib({"鸿波偏好": "user"}))
+    results = audit_mod._classify_all("MEMORY", ["鸿波偏好 直接输出"], _mock_enforce({}))
     assert results[0]["decision"] == "suggest_retarget"
     assert results[0]["llm_route"] == "user"
 
 
-def test_classify_all_suggest_delete_journal(audit_mod, capsys):
+def test_classify_all_suggest_delete_journal(audit_mod, capsys, monkeypatch):
     """route=journal → suggest_delete."""
-    enforce = _mock_enforce({"飞抵福州": "journal"})
-    results = audit_mod._classify_all("MEMORY", ["陈某 6/19 飞抵福州 MF878"], enforce)
+    monkeypatch.setattr(audit_mod, "_classify_via_stdlib",
+                        _mock_classify_via_stdlib({"飞抵福州": "journal"}))
+    results = audit_mod._classify_all("MEMORY", ["陈某 6/19 飞抵福州 MF878"], _mock_enforce({}))
     assert results[0]["decision"] == "suggest_delete"
     assert results[0]["llm_route"] == "journal"
 
 
-def test_classify_all_suggest_delete_todo(audit_mod, capsys):
-    enforce = _mock_enforce({"9 月底": "todo"})
-    results = audit_mod._classify_all("MEMORY", ["9 月底前提交资质报告"], enforce)
+def test_classify_all_suggest_delete_todo(audit_mod, capsys, monkeypatch):
+    monkeypatch.setattr(audit_mod, "_classify_via_stdlib",
+                        _mock_classify_via_stdlib({"9 月底": "todo"}))
+    results = audit_mod._classify_all("MEMORY", ["9 月底前提交资质报告"], _mock_enforce({}))
     assert results[0]["decision"] == "suggest_delete"
     assert results[0]["llm_route"] == "todo"
 
 
-def test_classify_all_skip_when_llm_fails(audit_mod, capsys):
-    """_classify_memory_route 返 None → decision=skip."""
-    enforce = _mock_enforce({})  # 全不 match → None
-    results = audit_mod._classify_all("MEMORY", ["xxx"], enforce)
+def test_classify_all_skip_when_llm_fails(audit_mod, capsys, monkeypatch):
+    """classify 返 None → decision=skip."""
+    monkeypatch.setattr(audit_mod, "_classify_via_stdlib",
+                        _mock_classify_via_stdlib({}))
+    results = audit_mod._classify_all("MEMORY", ["xxx"], _mock_enforce({}))
     assert results[0]["decision"] == "skip"
     assert results[0]["llm_route"] is None
 
@@ -225,60 +245,63 @@ def test_render_markdown_no_skip_section_when_all_skip(audit_mod):
     assert "e1" not in md  # entry 内容不漏
 
 
-def test_classify_all_early_abort_after_3_consecutive_skip(audit_mod, capsys):
+def test_classify_all_early_abort_after_3_consecutive_skip(audit_mod, capsys, monkeypatch):
     """P3.5.42.3: 连续 3 条 classify 挂 → 早 abort, 不跑完后面."""
-    # mock_enforce 全返 None (LLM 全挂)
-    class _AllFail:
+    monkeypatch.setattr(audit_mod, "_classify_via_stdlib",
+                        lambda *a, **kw: (None, "test error"))
+
+    class _Enforce:
+        _CLASSIFY_SYSTEM_PROMPT = "p"
+
         @staticmethod
         def get_verifier_model():
             return "broken-model"
 
-        @staticmethod
-        def _classify_memory_route(content, model):
-            return None
-
-    # 给 10 条 entry, 应该在第 3 条后早 abort, 只跑 3 条
     entries = [f"entry {i}" for i in range(1, 11)]
-    results = audit_mod._classify_all("MEMORY", entries, _AllFail())
+    results = audit_mod._classify_all("MEMORY", entries, _Enforce())
     assert len(results) == 3, f"早 abort 应只跑 3 条, 实际 {len(results)}"
     assert all(r["decision"] == "skip" for r in results)
     captured = capsys.readouterr()
     assert "早 abort" in captured.err
 
 
-def test_classify_all_override_model_used_when_passed(audit_mod, capsys):
+def test_classify_all_override_model_used_when_passed(audit_mod, capsys, monkeypatch):
     """P3.5.42.4: 传 override_model → 直接用, 不调 enforce.get_verifier_model()."""
     seen = {}
 
+    def _spy(content, model, prompt, gateway_url, timeout=30.0):
+        seen["model"] = model
+        return {"route": "memory", "reason": "ok", "confidence": 0.9}, ""
+    monkeypatch.setattr(audit_mod, "_classify_via_stdlib", _spy)
+
     class _Capture:
-        @staticmethod
-        def get_verifier_model():
-            seen["got_called"] = True
-            return "should-not-use"
+        _CLASSIFY_SYSTEM_PROMPT = "p"
 
         @staticmethod
-        def _classify_memory_route(content, model):
-            seen["model"] = model
-            return {"route": "memory", "reason": "ok", "confidence": 0.9}
+        def get_verifier_model():
+            seen["picker_called"] = True
+            return "should-not-use"
 
     audit_mod._classify_all("MEMORY", ["e1"], _Capture(),
                             override_model="catfish-public-deepseek-flash")
     assert seen["model"] == "catfish-public-deepseek-flash"
-    assert "got_called" not in seen  # 不调 picker chain
+    assert "picker_called" not in seen  # 不调 picker chain
     err = capsys.readouterr().err
     assert "--model 覆盖" in err  # stderr 报源
 
 
-def test_classify_all_no_override_falls_to_picker(audit_mod, capsys):
+def test_classify_all_no_override_falls_to_picker(audit_mod, capsys, monkeypatch):
     """P3.5.42.4: 不传 override → 走 enforce.get_verifier_model() (picker chain)."""
+    monkeypatch.setattr(audit_mod, "_classify_via_stdlib",
+                        lambda *a, **kw: ({"route": "memory", "reason": "ok",
+                                           "confidence": 0.9}, ""))
+
     class _Picker:
+        _CLASSIFY_SYSTEM_PROMPT = "p"
+
         @staticmethod
         def get_verifier_model():
             return "catfish-private-main"
-
-        @staticmethod
-        def _classify_memory_route(content, model):
-            return {"route": "memory", "reason": "ok", "confidence": 0.9}
 
     audit_mod._classify_all("MEMORY", ["e1"], _Picker())
     err = capsys.readouterr().err
@@ -286,20 +309,18 @@ def test_classify_all_no_override_falls_to_picker(audit_mod, capsys):
     assert "catfish-private-main" in err
 
 
-def test_classify_all_early_abort_hint_recommends_model_flag_for_private(audit_mod, capsys):
+def test_classify_all_early_abort_hint_recommends_model_flag_for_private(
+        audit_mod, capsys, monkeypatch):
     """P3.5.42.4: 走 picker + 选了 private model + 全挂 → 早 abort 提示加 --model."""
+    monkeypatch.setattr(audit_mod, "_classify_via_stdlib",
+                        lambda *a, **kw: (None, "TimeoutError: upstream unreachable"))
+
     class _DeadPrivate:
+        _CLASSIFY_SYSTEM_PROMPT = "p"
+
         @staticmethod
         def get_verifier_model():
             return "catfish-private-main"
-
-        @staticmethod
-        def _classify_memory_route(content, model):
-            return None  # 全挂
-
-        @staticmethod
-        def _resolve_role_via_gateway(role):
-            return ""
 
     audit_mod._classify_all("MEMORY", [f"e{i}" for i in range(5)], _DeadPrivate())
     err = capsys.readouterr().err
@@ -307,78 +328,143 @@ def test_classify_all_early_abort_hint_recommends_model_flag_for_private(audit_m
     assert "数据已在本机 MEMORY.md" in err
 
 
-def test_classify_all_early_abort_hint_no_private_recommend_for_override(audit_mod, capsys):
-    """P3.5.42.4: 用户已经用 --model 还全挂 → 别再建议 --model, 报 gateway/catalog."""
+def test_classify_all_early_abort_hint_no_private_recommend_for_override(
+        audit_mod, capsys, monkeypatch):
+    """P3.5.42.4: 用户已经用 --model 还全挂 → 别再建议 --model, 报 gateway 配."""
+    monkeypatch.setattr(audit_mod, "_classify_via_stdlib",
+                        lambda *a, **kw: (None, "gateway HTTP 401: Bearer required"))
+
     class _AllFail:
+        _CLASSIFY_SYSTEM_PROMPT = "p"
+
         @staticmethod
         def get_verifier_model():
             return "should-not-use"
 
-        @staticmethod
-        def _classify_memory_route(content, model):
-            return None
-
     audit_mod._classify_all("MEMORY", [f"e{i}" for i in range(5)], _AllFail(),
                             override_model="catfish-public-deepseek-flash")
     err = capsys.readouterr().err
-    assert "--model catfish-public-deepseek-flash" not in err  # 不重复建议
-    assert "gateway 8999" in err
+    # 不再 hardcode 重复建议同一个 model
+    assert "原因可能: 这是内网 model" not in err
+    assert "HTTP 401" in err  # 真错被报
 
 
-def test_classify_all_uses_diag_when_available(audit_mod, capsys):
-    """P3.5.42.5: enforce 有 _classify_memory_route_diag → 用它拿真错."""
-    class _Diag:
+def test_classify_all_reports_real_error_from_stdlib(audit_mod, capsys, monkeypatch):
+    """P3.5.42.5/6: classify 第一条挂时直接报真错 (stdlib path)."""
+    monkeypatch.setattr(audit_mod, "_classify_via_stdlib",
+                        lambda *a, **kw: (None, "gateway HTTP 401: Bearer required"))
+
+    class _E:
+        _CLASSIFY_SYSTEM_PROMPT = "p"
+
         @staticmethod
         def get_verifier_model():
             return "test-model"
 
-        @staticmethod
-        def _classify_memory_route_diag(content, model):
-            return None, "gateway HTTP 401: Bearer required"
-
-    audit_mod._classify_all("MEMORY", ["e1", "e2", "e3"], _Diag())
+    audit_mod._classify_all("MEMORY", ["e1", "e2", "e3"], _E())
     err = capsys.readouterr().err
-    # 第一条真错被报出来
     assert "真错: gateway HTTP 401: Bearer required" in err
-    # 早 abort 时再报一次
     assert "真错 (第一条 entry): gateway HTTP 401" in err
 
 
-def test_classify_all_falls_back_to_silent_when_no_diag(audit_mod, capsys):
-    """P3.5.42.5: 旧版 memory_enforce 没 diag → fallback fail-silent + 提醒升级."""
+def test_classify_all_fails_when_no_prompt_constant(audit_mod, capsys):
+    """P3.5.42.6: enforce 没 _CLASSIFY_SYSTEM_PROMPT (老版本) → 提醒升级 + 返空."""
     class _Old:
         @staticmethod
         def get_verifier_model():
             return "test-model"
+        # 故意没 _CLASSIFY_SYSTEM_PROMPT
+
+    results = audit_mod._classify_all("MEMORY", ["e1", "e2", "e3"], _Old())
+    assert results == []
+    err = capsys.readouterr().err
+    assert "版本太老没 _CLASSIFY_SYSTEM_PROMPT" in err
+
+
+def test_classify_all_no_abort_when_skip_breaks(audit_mod, monkeypatch):
+    """P3.5.42.3: 连续 skip 计数被成功 classify 重置, 不会误 abort."""
+    calls = iter([
+        (None, "fail"),
+        (None, "fail"),
+        ({"route": "memory", "reason": "ok", "confidence": 0.9}, ""),
+        (None, "fail"),
+        (None, "fail"),
+        ({"route": "memory", "reason": "ok", "confidence": 0.9}, ""),
+    ])
+    monkeypatch.setattr(audit_mod, "_classify_via_stdlib",
+                        lambda *a, **kw: next(calls))
+
+    class _Flaky:
+        _CLASSIFY_SYSTEM_PROMPT = "p"
 
         @staticmethod
-        def _classify_memory_route(content, model):
-            return None  # 旧 fail-silent 接口
-        # 注意: 没 _classify_memory_route_diag
-
-    audit_mod._classify_all("MEMORY", ["e1", "e2", "e3"], _Old())
-    err = capsys.readouterr().err
-    assert "版本太老" in err
-
-
-def test_classify_all_no_abort_when_skip_breaks(audit_mod):
-    """P3.5.42.3: 连续 skip 计数被成功 classify 重置, 不会误 abort."""
-    class _Flaky:
-        calls = [None, None, {"route": "memory", "reason": "ok", "confidence": 0.9},
-                 None, None, {"route": "memory", "reason": "ok", "confidence": 0.9}]
-        idx = 0
-
-        @classmethod
-        def get_verifier_model(cls):
+        def get_verifier_model():
             return "flaky-model"
-
-        @classmethod
-        def _classify_memory_route(cls, content, model):
-            r = cls.calls[cls.idx]
-            cls.idx += 1
-            return r
 
     entries = [f"e{i}" for i in range(6)]
     results = audit_mod._classify_all("MEMORY", entries, _Flaky())
     # 6 条全跑完, 不 abort (连续 skip 中间有 keep 打断)
     assert len(results) == 6
+
+
+def test_classify_via_stdlib_handles_http_error(audit_mod, monkeypatch):
+    """P3.5.42.6: stdlib HTTP 401 错码被解析报出来."""
+    import io
+    import urllib.error as _ue
+
+    def _fake_urlopen(req, timeout=30.0):
+        raise _ue.HTTPError(
+            req.full_url, 401, "Unauthorized",
+            {}, io.BytesIO(b'{"error":"Bearer required"}'),
+        )
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+    cls, err = audit_mod._classify_via_stdlib(
+        "x", "test-model", "test prompt", "http://127.0.0.1:8999",
+    )
+    assert cls is None
+    assert "HTTP 401" in err
+    assert "Bearer required" in err
+
+
+def test_classify_via_stdlib_handles_url_error(audit_mod, monkeypatch):
+    """P3.5.42.6: gateway 没起 (ConnectionRefused) → URLError 报清楚."""
+    import urllib.error as _ue
+
+    def _fake_urlopen(req, timeout=30.0):
+        raise _ue.URLError(ConnectionRefusedError("connection refused"))
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+    cls, err = audit_mod._classify_via_stdlib(
+        "x", "test-model", "p", "http://127.0.0.1:8999",
+    )
+    assert cls is None
+    assert "HTTP 异常" in err
+    assert "connection refused" in err.lower()
+
+
+def test_classify_via_stdlib_parses_success(audit_mod, monkeypatch):
+    """P3.5.42.6: 200 成功 + JSON content 解析对."""
+    # hardcoded JSON body 不依赖测里 json.dumps
+    _content_json = '{"route":"journal","reason":"单次事件","confidence":0.95}'
+    _outer = '{"choices":[{"message":{"content":' + json.dumps(_content_json) + '}}]}'
+    _outer_bytes = _outer.encode("utf-8")
+
+    class _FakeResp:
+        def read(self):
+            return _outer_bytes
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def _fake_urlopen(req, timeout=30.0):
+        return _FakeResp()
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+    cls, err = audit_mod._classify_via_stdlib(
+        "陈某飞抵福州", "test-model", "p", "http://127.0.0.1:8999",
+    )
+    assert err == ""
+    assert cls["route"] == "journal"
+    assert cls["confidence"] == 0.95

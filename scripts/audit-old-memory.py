@@ -48,6 +48,8 @@ import importlib.util
 import json
 import re
 import sys
+import urllib.error
+import urllib.request
 import time
 from datetime import datetime
 from pathlib import Path
@@ -143,6 +145,77 @@ def _read_entries(target: str) -> list[str]:
 # ── 跑 LLM classify ──────────────────────────────────────────────
 
 
+# P3.5.42.6 (鸿波 6/20 catch 'httpx 没装'): audit 用 stdlib urllib 不依赖
+# 第三方包. system python3 没装 httpx 是常态, audit 该 standalone.
+# memory_enforce 内部仍走 httpx (hook 跑在 hermes venv 里, 有 httpx).
+def _classify_via_stdlib(
+    content: str, model: str, prompt: str, gateway_url: str,
+    timeout: float = 30.0,
+) -> tuple[Optional[dict], str]:
+    """用 stdlib urllib 调 gateway, 跟 enforce._classify_memory_route_diag 同
+    JSON schema 但不依赖 httpx. 返 (result, error)."""
+    payload = json.dumps({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": content},
+        ],
+        "temperature": 0.0,
+        "max_tokens": 200,
+        "stream": False,
+        "response_format": {"type": "json_object"},
+    }, ensure_ascii=False).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "X-Catfish-Memory-Enforce": "1",
+        "X-Catfish-Skip-Identity": "true",
+        "X-Catfish-Internal": "true",
+    }
+    import os  # noqa: PLC0415
+    token = os.environ.get("CATFISH_INTERNAL_DEV_TOKEN", "")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    req = urllib.request.Request(
+        f"{gateway_url}/v1/chat/completions",
+        data=payload, headers=headers, method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw_body = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="replace")[:300]
+        except Exception:  # noqa: BLE001
+            pass
+        return None, f"gateway HTTP {e.code}: {body or e.reason}"
+    except urllib.error.URLError as e:
+        return None, f"HTTP 异常: {type(e.reason).__name__ if hasattr(e.reason, '__class__') else 'URLError'}: {e.reason}"
+    except Exception as e:  # noqa: BLE001
+        return None, f"HTTP 异常: {type(e).__name__}: {str(e)[:200]}"
+
+    try:
+        data = json.loads(raw_body)
+    except (ValueError, json.JSONDecodeError) as e:
+        return None, f"gateway 返非 JSON: {type(e).__name__}: {raw_body[:200]}"
+    raw = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+    if not isinstance(raw, str) or not raw.strip():
+        return None, f"LLM 返空 content. response={str(data)[:200]}"
+    try:
+        parsed = json.loads(raw.strip())
+    except (ValueError, json.JSONDecodeError):
+        return None, f"LLM 返非 JSON (response_format 没生效?): {raw[:150]}"
+    route = parsed.get("route", "").strip().lower()
+    if route not in ("memory", "user", "journal", "todo", "skill"):
+        return None, f"route 字段无效: {parsed.get('route')!r} (该是 memory/user/journal/todo/skill)"
+    return {
+        "route": route,
+        "reason": str(parsed.get("reason", ""))[:200],
+        "confidence": float(parsed.get("confidence", 0.5)),
+    }, ""
+
+
 def _classify_all(target: str, entries: list[str], enforce: Any,
                   override_model: str = "") -> list[dict]:
     """每条 entry 调 memory_enforce._classify_memory_route.
@@ -162,12 +235,14 @@ def _classify_all(target: str, entries: list[str], enforce: Any,
     EARLY_ABORT_THRESHOLD = 3
     consecutive_skip = 0
 
-    # P3.5.42.5: 用 diag 版看真错. 没 diag 版的旧 memory_enforce 兜底走 fail-silent.
-    use_diag = hasattr(enforce, "_classify_memory_route_diag")
-    if not use_diag:
-        print("  ⚠ memory_enforce 版本太老没 _classify_memory_route_diag, "
-              "看不到真错. 升级 catfish-xcatfish-user plugin 后重跑.",
-              file=sys.stderr)
+    # P3.5.42.6: 用 stdlib urllib, 不依赖 httpx. enforce 只用来拿 prompt 常量.
+    prompt = getattr(enforce, "_CLASSIFY_SYSTEM_PROMPT", "")
+    if not prompt:
+        print("  ⚠ memory_enforce 版本太老没 _CLASSIFY_SYSTEM_PROMPT 常量, "
+              "升级 catfish-xcatfish-user plugin 后重跑.", file=sys.stderr)
+        return []
+    import os  # noqa: PLC0415
+    gateway_url = os.environ.get("CATFISH_GATEWAY_URL", "http://127.0.0.1:8999")
 
     results = []
     first_error_msg = ""  # 记第一条错给早 abort 时报
@@ -176,10 +251,7 @@ def _classify_all(target: str, entries: list[str], enforce: Any,
         sys.stderr.flush()
         error_msg = ""
         try:
-            if use_diag:
-                cls, error_msg = enforce._classify_memory_route_diag(content, model)
-            else:
-                cls = enforce._classify_memory_route(content, model)
+            cls, error_msg = _classify_via_stdlib(content, model, prompt, gateway_url)
         except Exception as e:  # noqa: BLE001
             cls = None
             error_msg = f"audit 调用异常: {type(e).__name__}: {e}"
