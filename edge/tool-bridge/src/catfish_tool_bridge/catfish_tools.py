@@ -436,6 +436,8 @@ from .catfish_tools_skill_ops import (  # noqa: E402, F401
     propose_skill_revision,
     run_skill,
 )
+# P3.5.43: install_proposal — 从 jsonl proposal 一键装 hermes-兼容 SKILL.
+from .catfish_tools_propose import install_proposal  # noqa: E402
 
 # ============================================================
 # a2a_ask / skill_install / memory_dedupe / memory_compress / skill_delete
@@ -518,6 +520,9 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
         return propose_skill(args)
     if name == "catfish_propose_skill_revision":
         return propose_skill_revision(args)
+    if name == "catfish_install_proposal":
+        # P3.5.43: 一键从 proposal 装 hermes-兼容 SKILL (跟 propose_skill 配套).
+        return install_proposal(args)
     if name == "catfish_today_summary":
         return collect_today_summary()
     if name == "catfish_screenshot":

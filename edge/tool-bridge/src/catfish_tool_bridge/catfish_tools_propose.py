@@ -250,7 +250,172 @@ def propose_skill(args: Dict[str, Any]) -> Dict[str, Any]:
             f"已记下提案 '{name}' (基于 {evidence_count} 次员工行为). "
             f"现在跟员工说: '我注意到你最近 {evidence_count} 次 {reason[:50]}, "
             f"要不我把这个流程存成 skill, 下次你说一句就触发? 你说装我就装.' "
-            f"等员工说 yes 再调 catfish_skill_install. 员工 reject 时再调本工具传 status='rejected' 关单."
+            f"P3.5.43: 员工说 yes → 调 catfish_install_proposal(proposal_id='{proposal_id}') "
+            f"一键装 (内部用本提案字段生成 SKILL.md + script.py + sync 到 hermes). "
+            f"员工 reject → 调本工具传 status='rejected' 关单."
+        ),
+    }
+
+
+# ============================================================
+# P3.5.43 (鸿波 6/20 拍 'SKILL 三路径统一') — install_proposal
+# 一键从 proposal 转 hermes 兼容 SKILL, 不需要 LLM 重新拼 SKILL.md.
+# ============================================================
+
+
+def install_proposal(args: Dict[str, Any]) -> Dict[str, Any]:
+    """tool: 从 proposal jsonl 直接装 hermes-兼容 SKILL.
+
+    入参:
+      proposal_id: 必填, 跟 propose_skill 返回的对应
+      skills_root: 选填, 落档根目录 (默认 ~/.catfish/skills)
+      sync_to_hermes: 选填, 默认 True, 直接 sync 到 ~/.hermes/skills/
+
+    流程:
+      1. 读 ~/.catfish/skill_proposals.jsonl 找 proposal_id 的 'proposed' event
+      2. 转 SkillManifest (skill_name / namespace / kind / description / triggers /
+         intent_summary 等字段都从 jsonl 读)
+      3. skill_format.render_skill_md / render_script_py 生成文件
+      4. 写 ~/.catfish/skills/<namespace>/<skill_name>/
+      5. sync_to_hermes → ~/.hermes/skills/<skill_name>/ (自动可用)
+      6. append 一条 'installed' event 到 jsonl (audit trail)
+
+    返:
+      {ok: bool, skill_dir, hermes_dir, skill_name, namespace, summary, error?}
+    """
+    proposal_id = (args.get("proposal_id") or "").strip()
+    if not proposal_id:
+        return {"ok": False, "error": "proposal_id 必填"}
+
+    # 1. 查 proposal
+    history = _read_proposals_history()
+    proposal = None
+    for e in history:
+        if (e.get("proposal_id") == proposal_id
+                and e.get("event_type") == "proposed"):
+            proposal = e
+            break
+    if proposal is None:
+        return {
+            "ok": False,
+            "error": (
+                f"找不到 proposal {proposal_id!r}. "
+                f"现有 proposed events: "
+                f"{[e.get('proposal_id') for e in history if e.get('event_type') == 'proposed'][-5:]}"
+            ),
+        }
+
+    # 2. 转 SkillManifest
+    from .recmode.skill_format import (  # noqa: PLC0415
+        SkillManifest, render_skill_md, render_script_py, validate_manifest,
+    )
+    skill_name = proposal.get("skill_name") or proposal.get("name") or ""
+    namespace = proposal.get("skill_namespace") or "personal"
+    triggers = proposal.get("triggers") or []
+    kind = proposal.get("kind") or "procedural"
+    description = proposal.get("description") or proposal.get("reason") or ""
+    action_steps = proposal.get("action_steps") or ""
+
+    manifest = SkillManifest(
+        name=skill_name,
+        namespace=namespace,
+        kind=kind,
+        description=description,
+        triggers=triggers,
+        intent_summary=action_steps,  # action_steps 当 intent_summary 放 body
+        author="鲶鱼 propose_skill",
+    )
+
+    # 3. validate (不阻塞)
+    errors = validate_manifest(manifest)
+    if errors:
+        logger.warning(
+            "install_proposal %s validate 不合规, 仍装 (员工 accept 了, validate 是事后审计): %s",
+            proposal_id, "; ".join(errors),
+        )
+
+    # 4. 渲染 + 写
+    import shutil  # noqa: PLC0415
+    skills_root_str = args.get("skills_root") or ""
+    skills_root = Path(skills_root_str) if skills_root_str else (
+        Path.home() / ".catfish" / "skills"
+    )
+    skill_dir = skills_root / namespace / skill_name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        (skill_dir / "SKILL.md").write_text(
+            render_skill_md(manifest), encoding="utf-8",
+        )
+        (skill_dir / "script.py").write_text(
+            render_script_py(manifest), encoding="utf-8",
+        )
+    except OSError as e:
+        return {"ok": False, "error": f"写 SKILL.md / script.py 失败: {e}"}
+
+    # 写 proposal_meta.json 留 audit 链路
+    try:
+        (skill_dir / "proposal_meta.json").write_text(
+            json.dumps(
+                {"proposal_id": proposal_id, "source_proposal": proposal,
+                 "validate_errors": errors},
+                indent=2, ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass  # audit meta 失败不阻塞
+
+    # 5. sync 到 hermes
+    hermes_dir = None
+    sync = bool(args.get("sync_to_hermes", True))
+    if sync:
+        try:
+            from .recmode import skill_sync  # noqa: PLC0415
+            hermes_dir = str(skill_sync.sync_to_hermes(skill_dir, slug=skill_name))
+        except Exception as e:  # noqa: BLE001
+            # fail-silent: 同步挂不阻塞装机, 员工本机 ~/.catfish/skills/ 仍有
+            logger.warning(
+                "install_proposal sync_to_hermes 失败 (跳过): %s", e,
+            )
+            return {
+                "ok": True,
+                "skill_dir": str(skill_dir),
+                "hermes_dir": None,
+                "skill_name": skill_name,
+                "namespace": namespace,
+                "sync_error": str(e),
+                "summary": (
+                    f"SKILL.md + script.py 已落 {skill_dir}, "
+                    f"但 sync 到 ~/.hermes/skills/ 失败 ({e}). "
+                    f"hermes 看不到这个 skill, 需要手动 cp 或修 sync 后重跑."
+                ),
+            }
+
+    # 6. append 'installed' event 到 jsonl
+    try:
+        _append_proposal_event({
+            "event_type": "installed",
+            "proposal_id": proposal_id,
+            "skill_name": skill_name,
+            "skill_namespace": namespace,
+            "skill_dir": str(skill_dir),
+            "hermes_dir": hermes_dir,
+            "ts": time.time(),
+            "ts_iso": _unix_to_iso(time.time()),
+        })
+    except OSError:
+        pass
+
+    return {
+        "ok": True,
+        "skill_dir": str(skill_dir),
+        "hermes_dir": hermes_dir,
+        "skill_name": skill_name,
+        "namespace": namespace,
+        "summary": (
+            f"✅ skill '{skill_name}' ({namespace}) 已装. "
+            f"hermes 重启 / 下次 load skill 时会看到. "
+            f"员工说触发词 ({', '.join(triggers[:5]) if triggers else '(无 triggers, 触发可能漏)'}) 就调."
         ),
     }
 

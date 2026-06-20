@@ -1182,6 +1182,41 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ── P3.5.43 (鸿波 6/20) — install_proposal 一键装 hermes-兼容 SKILL ──
+    {
+        "name": "catfish_install_proposal",
+        "description": (
+            "把 propose_skill 提案过的 skill **真装**到 hermes (员工 accept 后调). "
+            "内部用 proposal jsonl 的 triggers/kind/description/action_steps 字段, "
+            "走 skill_format 模板生成 hermes-兼容 SKILL.md + script.py + sync 到 "
+            "~/.hermes/skills/<slug>/. 比 catfish_skill_install 自动化 — 不用 LLM "
+            "重新拼 SKILL.md.\n\n"
+            "✅ 调用场景: 员工说 'yes / 装吧 / 行 / 同意 / 安装' 等 accept 信号后, "
+            "立即调本工具传 propose_skill 返回的 proposal_id.\n\n"
+            "❌ 不该调:\n"
+            "  - 员工没明确 accept (静默 / reject 都不装)\n"
+            "  - proposal_id 不存在 (本工具会报错)\n\n"
+            "**返**: {ok, skill_dir, hermes_dir, skill_name, namespace, summary}."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "proposal_id": {
+                    "type": "string",
+                    "description": "propose_skill 返回的 proposal_id (例: prop_1781923456_my-skill)",
+                },
+                "sync_to_hermes": {
+                    "type": "boolean",
+                    "description": "默认 True. 设 False 仅落 ~/.catfish/skills/ 不同步到 hermes (测试用)",
+                    "default": True,
+                },
+            },
+            "required": ["proposal_id"],
+        },
+        "emoji": "📦",
+        "toolset": "catfish_native",
+        "available": True,
+    },
     # ── BL-MM13 (5/8) — 老 skill 自进化: propose 改进版本 ──
     {
         "name": "catfish_propose_skill_revision",
