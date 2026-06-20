@@ -111,6 +111,43 @@ fn parse_related(fm: &str) -> Vec<String> {
         .collect()
 }
 
+/// P3.5.42.13 (鸿波 6/20 catch '概念和实体没有关联连接'): 扫 body 抽 `[[name]]`
+/// wikilink. LLM 写 entity wiki 时常把 concept 关联写在 body 里 (e.g.
+/// "类型: [[信息安全与安防类]]"), 但 frontmatter `related:` 字段经常漏列那条,
+/// 老逻辑只读 frontmatter → WikiGraph 拿到 related=[] → 图谱散.
+///
+/// 修法: 扫 body 抽所有 wikilink, 合并进 related 返前端, WikiGraph 自动建 edge.
+/// 支持 alias 形态 `[[name|display]]` (取 name 部分跟 frontmatter 同语义).
+fn extract_body_wikilinks(body: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = body;
+    while let Some(start) = rest.find("[[") {
+        let after = &rest[start + 2..];
+        let Some(end) = after.find("]]") else { break };
+        let inner = &after[..end];
+        // alias: [[name|display]] → name
+        let name = inner.split('|').next().unwrap_or(inner).trim();
+        // 跨行 / 太长大概率是 markdown table / code fence 误抓, 过滤
+        if !name.is_empty() && !name.contains('\n') && name.chars().count() <= 100 {
+            out.push(name.to_string());
+        }
+        rest = &after[end + 2..];
+    }
+    out
+}
+
+/// 合并 frontmatter related + body wikilinks, 去重保序 (frontmatter 在前).
+fn merge_related_with_body(frontmatter_related: Vec<String>, body: &str) -> Vec<String> {
+    let mut out = frontmatter_related;
+    let body_links = extract_body_wikilinks(body);
+    for link in body_links {
+        if !out.iter().any(|r| r == &link) {
+            out.push(link);
+        }
+    }
+    out
+}
+
 /// P3.3.3 (6/9 鸿波): tombstone 识别 — 防同 entity 多文件 (空格 vs 无空格 slug
 /// 等情况) 在 list / graph 里都显示. tombstone 标准:
 ///   - 文件 <= 256 字节 (足够装 frontmatter `deprecated: true` + 一行注释)
@@ -195,7 +232,9 @@ fn build_file_info_inner(
     let subtype = parse_frontmatter_field(&fm, "entity_type")
         .or_else(|| parse_frontmatter_field(&fm, "concept_type"));
     let tags = parse_list_field(&fm, "tags");
-    let related = parse_related(&fm);
+    // P3.5.42.13: frontmatter `related:` 字段经常漏 + LLM 把关联写在 body 里
+    // `[[name]]`. 合并两边给前端 WikiGraph 当 edge 源.
+    let related = merge_related_with_body(parse_related(&fm), &body);
     let sources = parse_list_field(&fm, "sources");
     let mtime = meta
         .modified()
@@ -576,4 +615,59 @@ pub async fn wiki_read_file(rel_path: String) -> Result<WikiFileFull, String> {
         frontmatter,
         body,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// P3.5.42.13: 鸿波 entity 实景 body 形态.
+    #[test]
+    fn extract_body_wikilinks_finds_inline_links() {
+        let body = "## 通信网络安全服务能力风险评估一级\n\n\
+                    类型: [[信息安全与安防类]]\n\n\
+                    发证中心: 中国通信企业协会\n\
+                    关联体系: [[企业资质知识体系]]\n";
+        let out = extract_body_wikilinks(body);
+        assert_eq!(out, vec!["信息安全与安防类", "企业资质知识体系"]);
+    }
+
+    #[test]
+    fn extract_body_wikilinks_handles_alias() {
+        // Obsidian alias 形态 [[name|display]] → 取 name
+        let body = "看 [[信息安全与安防类|安防类]] 跟 [[陈鸿波]]";
+        let out = extract_body_wikilinks(body);
+        assert_eq!(out, vec!["信息安全与安防类", "陈鸿波"]);
+    }
+
+    #[test]
+    fn extract_body_wikilinks_skips_too_long_or_newline() {
+        // 长 wikilink 大概率是 markdown table 误抓, 跳
+        let long = "a".repeat(120);
+        let body = format!("[[{long}]] [[normal]] [[multi\nline]]");
+        let out = extract_body_wikilinks(&body);
+        assert_eq!(out, vec!["normal"]);
+    }
+
+    #[test]
+    fn extract_body_wikilinks_empty_body() {
+        assert_eq!(extract_body_wikilinks(""), Vec::<String>::new());
+        assert_eq!(extract_body_wikilinks("no wikilinks here"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn merge_related_dedupes_body_against_frontmatter() {
+        // frontmatter 已经有 "陈鸿波", body 又 [[陈鸿波]] 不重复加
+        let body = "看 [[陈鸿波]] 跟 [[信息安全与安防类]]";
+        let out = merge_related_with_body(vec!["陈鸿波".to_string()], body);
+        assert_eq!(out, vec!["陈鸿波", "信息安全与安防类"]);
+    }
+
+    #[test]
+    fn merge_related_preserves_frontmatter_first() {
+        // frontmatter 在前 (员工显式标的优先级)
+        let body = "[[A]] [[B]]";
+        let out = merge_related_with_body(vec!["X".to_string(), "Y".to_string()], body);
+        assert_eq!(out, vec!["X", "Y", "A", "B"]);
+    }
 }

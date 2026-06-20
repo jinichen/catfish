@@ -86,33 +86,12 @@ export default function WikiGraph() {
       }
     }
 
-    // P3.5.42.12 (鸿波 6/20 catch '概念和实体是没有关联关系吗'):
-    // 老逻辑只用 frontmatter.related (员工手填的 wikilink) 当 edge 源, 但 entity
-    // 的 `entity_type` / `concept_type` 字段 (parse 成 subtype) 是它的分类, 大概率
-    // 对应一个同名 concept 节点 (e.g. entity '通信网络安全服务能力风险评估一级'
-    // subtype='信息安全与安防类' → 跟 concept '信息安全与安防类' 该连).
-    // wiki_read.rs:195-196 已经 parse 出 subtype; 这里**前端合成 implicit edge**
-    // 不动 schema 不动 related (后者仍是员工手填的"自由关联").
-    // 边 style 走半透明虚色区分 (subtype edge 是 type-of 隐式关系, 比 related
-    // 弱一点, 颜色更淡).
-    for (const f of files) {
-      if (!f.subtype) continue;
-      const target = findTarget(f.subtype);
-      if (!target) continue;
-      if (target.rel_path === f.rel_path) continue;
-      // 严格点: subtype 是 "type-of" 语义, target 该是 concept (不是另一个 entity)
-      if (target.kind !== "concept") continue;
-      const edgeKey = `${f.rel_path}→${target.rel_path}`;
-      if (g.hasEdge(edgeKey)) continue;
-      try {
-        g.addEdgeWithKey(edgeKey, f.rel_path, target.rel_path, {
-          size: 1,
-          color: "rgba(244, 123, 61, 0.35)",  // catfish-orange 半透 (concept 同色)
-        });
-      } catch {
-        /* duplicate skip */
-      }
-    }
+    // P3.5.42.12 砍 (基于错假设): 我以为 subtype = concept name, 实际 LLM prompt
+    // 写的是 enum (person/org/system/cert/project), findTarget('cert') 永远找不
+    // 到同名 concept (concepts 是中文具体名), 那段 implicit edge 路径根本没生效.
+    // 真因在 wiki_read.rs: parse_related 只读 frontmatter, 不扫 body 的 wikilink.
+    // LLM 实际把"信息安全与安防类"这种 concept name 写在 entity body 里成
+    // `[[...]]` 形态. P3.5.42.13 修后端扫 body 合并进 related, 这边自动有 edge.
 
     // 3. size by degree — hub 略大但保紧凑 (4-8 范围, Obsidian 风格)
     g.forEachNode((node) => {
