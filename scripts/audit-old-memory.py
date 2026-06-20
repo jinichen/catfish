@@ -144,6 +144,11 @@ def _classify_all(target: str, entries: list[str], enforce: Any) -> list[dict]:
     print(f"# audit {target}.md ({len(entries)} entries, model={model})",
           file=sys.stderr)
 
+    # 连续 N 条 classify 全挂 → 早 abort. 鸿波 6/20 catch '没用的都删掉, 留着没意义':
+    # 25/25 全 skip 凑数没价值, gateway/model 不通就直接报修, 别傻跑完.
+    EARLY_ABORT_THRESHOLD = 3
+    consecutive_skip = 0
+
     results = []
     for i, content in enumerate(entries, 1):
         sys.stderr.write(f"\r  跑 entry {i}/{len(entries)}...")
@@ -165,7 +170,20 @@ def _classify_all(target: str, entries: list[str], enforce: Any) -> list[dict]:
                 "decision": "skip",  # 跳过, 不建议
                 "content": content,
             })
+            consecutive_skip += 1
+            if consecutive_skip >= EARLY_ABORT_THRESHOLD:
+                sys.stderr.write("\n")
+                print(
+                    f"  ⚠ 连续 {EARLY_ABORT_THRESHOLD} 条 classify 全挂, 早 abort.\n"
+                    f"  建议先查: (1) catfish gateway 起没起 (curl http://127.0.0.1:8999/v1/roles)\n"
+                    f"           (2) verifier model `{model}` 在 catalog 里有没有\n"
+                    f"           (3) 离开内网时 catfish-private-* model 连不上 — 临时切公网 picker",
+                    file=sys.stderr,
+                )
+                return results  # 早 abort, 剩下 entry 不跑
             continue
+        # 这条 classify 成功 → reset 连续 skip 计数
+        consecutive_skip = 0
 
         route = cls["route"]
         # 决策:
@@ -263,15 +281,15 @@ def render_markdown(rep: dict) -> str:
             lines.append(f"- 内容预览: `{e['content_preview']}`")
             lines.append("")
 
-    # 跳过的
-    skip = [e for e in rep["entries"] if e["decision"] == "skip"]
-    if skip:
-        lines.append(f"## ⏭ 跳过 — classify 挂 ({len(skip)})")
+    # 跳过的: 不罗列内容预览 (鸿波 6/20 catch '没用的都删掉, 留着没意义').
+    # 只在 LLM 没全挂时给一句计数提示; 全挂时 main 已 exit 1, 这报告不会写出来.
+    skip_count = sum(1 for e in rep["entries"] if e["decision"] == "skip")
+    if skip_count and skip_count < rep["total"]:
+        lines.append(f"## ⏭ 跳过 ({skip_count})")
         lines.append("")
-        lines.append("LLM 调挂的 entry, 重跑脚本可能恢复.")
-        lines.append("")
-        for e in skip:
-            lines.append(f"- Entry {e['index']} ({e['target']}.md): `{e['content_preview']}`")
+        lines.append(
+            f"{skip_count} 条 entry classify 挂 (LLM 偶发抖). 重跑脚本可恢复, 没全挂的报告内容不受影响."
+        )
         lines.append("")
 
     # 留的 (简略)
@@ -320,6 +338,23 @@ def main() -> int:
 
     if not all_results:
         print("⚠ 没扫到任何 entry, 退出", file=sys.stderr)
+        return 1
+
+    # 鸿波 6/20 catch '没用的都删掉, 留着没意义':
+    # 如果 classify 全挂 (zero 有效判定) → 不写没意义的报告, 直接 exit 1 让鸿波先修环境.
+    valid_count = sum(1 for r in all_results if r["decision"] != "skip")
+    if valid_count == 0:
+        skipped = len(all_results)
+        sample_model = next((r.get("content") for r in all_results), "")  # noqa: F841
+        print(
+            f"\n❌ {skipped}/{skipped} entry classify 全挂, 不写报告 (没意义).\n"
+            f"   先查这三条:\n"
+            f"     1. catfish gateway 起没起 — curl http://127.0.0.1:8999/v1/roles\n"
+            f"     2. picker model 在 catalog 里有没有 — 看 ~/.catfish/picker_state.json 选的 model\n"
+            f"     3. 离开内网时 catfish-private-* 连不上 — 临时切公网 picker 再跑\n"
+            f"   修完重跑: python3 scripts/audit-old-memory.py",
+            file=sys.stderr,
+        )
         return 1
 
     rep = build_report(all_results)

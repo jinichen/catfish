@@ -156,7 +156,10 @@ def test_build_report_counts(audit_mod):
 
 
 def test_render_markdown_covers_all_sections(audit_mod):
-    """每种 decision 至少一个, render_markdown 不挂 + 输出含 sections."""
+    """每种 decision 至少一个, render_markdown 不挂 + 输出含 sections.
+
+    P3.5.42.3 改: skip section 只显计数, 不罗列内容预览 (鸿波 6/20 catch).
+    """
     results = [
         {"index": 1, "target": "MEMORY", "actual_target": "memory",
          "content_preview": "ISO 流程", "content_len": 10,
@@ -181,9 +184,86 @@ def test_render_markdown_covers_all_sections(audit_mod):
     assert "# Hermes Memory 旧数据 LLM 审查报告" in md
     assert "❌ 建议删" in md
     assert "⚠️ 建议改 target" in md
-    assert "⏭ 跳过" in md
+    assert "## ⏭ 跳过 (1)" in md  # section 标题只显计数
+    assert "xxx" not in md  # skip entry 内容预览不在 markdown 里
     assert "✅ 留" in md
     # cleanup 命令清单存在
     assert "hermes-memory-cleanup.py delete MEMORY 3" in md
     # JSON-safe — confidence float 格式化对
     assert "0.95" in md
+
+
+def test_render_markdown_no_skip_section_when_zero_skip(audit_mod):
+    """P3.5.42.3: 0 skip 时连 header 计数都不出 skip 行."""
+    results = [
+        {"index": 1, "target": "MEMORY", "actual_target": "memory",
+         "content_preview": "x", "content_len": 1,
+         "llm_route": "memory", "llm_reason": "y", "confidence": 0.9,
+         "decision": "keep", "content": "x"},
+    ]
+    rep = audit_mod.build_report(results)
+    md = audit_mod.render_markdown(rep)
+    # 没有 skip section 标题 (## ⏭ 跳过 ...)
+    assert "## ⏭ 跳过" not in md
+
+
+def test_render_markdown_no_skip_section_when_all_skip(audit_mod):
+    """P3.5.42.3: skip 占 100% 时 render 也不列 skip section 详情.
+
+    (实际 main() 会 exit 1 早 abort, 这测兜底 render_markdown 自己也 robust.)
+    """
+    results = [
+        {"index": i, "target": "MEMORY", "actual_target": "memory",
+         "content_preview": f"e{i}", "content_len": 2,
+         "llm_route": None, "llm_reason": "fail", "confidence": 0.0,
+         "decision": "skip", "content": "x"}
+        for i in range(1, 5)
+    ]
+    rep = audit_mod.build_report(results)
+    md = audit_mod.render_markdown(rep)
+    assert "## ⏭ 跳过" not in md  # 全挂时不列 skip section 详情
+    assert "e1" not in md  # entry 内容不漏
+
+
+def test_classify_all_early_abort_after_3_consecutive_skip(audit_mod, capsys):
+    """P3.5.42.3: 连续 3 条 classify 挂 → 早 abort, 不跑完后面."""
+    # mock_enforce 全返 None (LLM 全挂)
+    class _AllFail:
+        @staticmethod
+        def get_verifier_model():
+            return "broken-model"
+
+        @staticmethod
+        def _classify_memory_route(content, model):
+            return None
+
+    # 给 10 条 entry, 应该在第 3 条后早 abort, 只跑 3 条
+    entries = [f"entry {i}" for i in range(1, 11)]
+    results = audit_mod._classify_all("MEMORY", entries, _AllFail())
+    assert len(results) == 3, f"早 abort 应只跑 3 条, 实际 {len(results)}"
+    assert all(r["decision"] == "skip" for r in results)
+    captured = capsys.readouterr()
+    assert "早 abort" in captured.err
+
+
+def test_classify_all_no_abort_when_skip_breaks(audit_mod):
+    """P3.5.42.3: 连续 skip 计数被成功 classify 重置, 不会误 abort."""
+    class _Flaky:
+        calls = [None, None, {"route": "memory", "reason": "ok", "confidence": 0.9},
+                 None, None, {"route": "memory", "reason": "ok", "confidence": 0.9}]
+        idx = 0
+
+        @classmethod
+        def get_verifier_model(cls):
+            return "flaky-model"
+
+        @classmethod
+        def _classify_memory_route(cls, content, model):
+            r = cls.calls[cls.idx]
+            cls.idx += 1
+            return r
+
+    entries = [f"e{i}" for i in range(6)]
+    results = audit_mod._classify_all("MEMORY", entries, _Flaky())
+    # 6 条全跑完, 不 abort (连续 skip 中间有 keep 打断)
+    assert len(results) == 6
