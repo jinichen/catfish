@@ -318,6 +318,14 @@ def locate(args: dict[str, Any]) -> dict[str, Any]:
     if image_w is None:
         user_prompt = f"找: {query}"
 
+    # P3.5.42.1 (6/18 鸿波拍 '所有遵循 picker, 不乱改'): vision model 走 role_resolver
+    # chain. 兜底仍 'catfish-private-vision' (gateway 挂时用). 跟 recognize_captcha 同模式.
+    try:
+        from . import role_resolver  # noqa: PLC0415
+        _vision_model = role_resolver.resolve("vision") or "catfish-private-vision"
+    except Exception:  # noqa: BLE001
+        _vision_model = "catfish-private-vision"
+
     last_error = None
     last_raw = None
     for attempt in range(max_retry):
@@ -330,7 +338,8 @@ def locate(args: dict[str, Any]) -> dict[str, Any]:
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": "catfish-private-vision",
+                        # P3.5.42.1: role_resolver("vision") chain, 不再 hardcode.
+                        "model": _vision_model,
                         "messages": [
                             {"role": "system", "content": _LOCATE_SYSTEM_PROMPT},
                             {
@@ -379,7 +388,7 @@ def locate(args: dict[str, Any]) -> dict[str, Any]:
 
         # 成功 (包括 found=False 也算成功一次返)
         out = {
-            "model": "catfish-private-vision",
+            "model": _vision_model,  # P3.5.42.1: 返实际用的 model
             "attempts": attempt + 1,
             "image_size": {"w": image_w, "h": image_h} if image_w else None,
             "query": query,

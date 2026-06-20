@@ -219,6 +219,16 @@ def recognize_captcha(args: dict[str, Any]) -> dict[str, Any]:
 
     user_prompt = f"识别这个验证码{f' (提示: {hint})' if hint else ''}:"
 
+    # P3.5.42.1 (6/18 鸿波拍 '所有遵循 picker, 不乱改'): vision model 走 role_resolver
+    # chain, 不再 hardcode 'catfish-private-vision'. 兜底仍是 'catfish-private-vision'
+    # (gateway 挂时用). 这是注释 line 234-236 留的 TODO: '后续 catalog 加 captcha_ocr tag
+    # 走 pick_internal_model 选'.
+    try:
+        from . import role_resolver  # noqa: PLC0415
+        _vision_model = role_resolver.resolve("vision") or "catfish-private-vision"
+    except Exception:  # noqa: BLE001
+        _vision_model = "catfish-private-vision"
+
     last_error = None
     last_raw = None
     for attempt in range(max_retry):
@@ -231,10 +241,8 @@ def recognize_captcha(args: dict[str, Any]) -> dict[str, Any]:
                         "Content-Type": "application/json",
                     },
                     json={
-                        # 直接传 use case 名, gateway 根据 catalog 选 vision 模型.
-                        # 暂用 catfish-private-vision 作默认 (catalog 里这个是 vision tier),
-                        # 后续 catalog 加 captcha_ocr tag 走 pick_internal_model 选.
-                        "model": "catfish-private-vision",
+                        # P3.5.42.1: role_resolver("vision") chain, 不再 hardcode.
+                        "model": _vision_model,
                         "messages": [
                             {"role": "system", "content": _OCR_SYSTEM_PROMPT},
                             {
@@ -293,7 +301,7 @@ def recognize_captcha(args: dict[str, Any]) -> dict[str, Any]:
             "ok": True,
             "text": text,
             "confidence": confidence,
-            "model": "catfish-private-vision",
+            "model": _vision_model,  # P3.5.42.1: 返实际用的 model, 不 hardcode
             "attempts": attempt + 1,
             "raw_response": raw,
         }
