@@ -98,7 +98,7 @@ def _mock_enforce(route_map):
 
 def _mock_classify_via_stdlib(route_map):
     """造一个 _classify_via_stdlib 的 mock, 按 content 关键字返预设."""
-    def _impl(content, model, prompt, gateway_url, timeout=30.0):
+    def _impl(content, model, prompt, gateway_url, token="", timeout=30.0):
         for key, route in route_map.items():
             if key in content:
                 return {"route": route, "reason": f"matched {key}",
@@ -269,7 +269,7 @@ def test_classify_all_override_model_used_when_passed(audit_mod, capsys, monkeyp
     """P3.5.42.4: 传 override_model → 直接用, 不调 enforce.get_verifier_model()."""
     seen = {}
 
-    def _spy(content, model, prompt, gateway_url, timeout=30.0):
+    def _spy(content, model, prompt, gateway_url, token="", timeout=30.0):
         seen["model"] = model
         return {"route": "memory", "reason": "ok", "confidence": 0.9}, ""
     monkeypatch.setattr(audit_mod, "_classify_via_stdlib", _spy)
@@ -405,6 +405,68 @@ def test_classify_all_no_abort_when_skip_breaks(audit_mod, monkeypatch):
     results = audit_mod._classify_all("MEMORY", entries, _Flaky())
     # 6 条全跑完, 不 abort (连续 skip 中间有 keep 打断)
     assert len(results) == 6
+
+
+def test_load_audit_token_prefers_oauth_file(audit_mod, tmp_path, monkeypatch):
+    """P3.5.42.7: ~/.catfish/oauth/id_token 存在 → 走它."""
+    oauth_dir = tmp_path / ".catfish" / "oauth"
+    oauth_dir.mkdir(parents=True)
+    (oauth_dir / "id_token").write_text("oauth-token-xyz", encoding="utf-8")
+    monkeypatch.setattr(audit_mod, "_OAUTH_ID_TOKEN_PATH",
+                        oauth_dir / "id_token")
+    monkeypatch.delenv("CATFISH_INTERNAL_DEV_TOKEN", raising=False)
+    token, src = audit_mod._load_audit_token()
+    assert token == "oauth-token-xyz"
+    assert "id_token" in src
+
+
+def test_load_audit_token_falls_to_env(audit_mod, tmp_path, monkeypatch):
+    """P3.5.42.7: id_token 不存在 → 读 env."""
+    fake_path = tmp_path / "no-such-file"
+    monkeypatch.setattr(audit_mod, "_OAUTH_ID_TOKEN_PATH", fake_path)
+    monkeypatch.setenv("CATFISH_INTERNAL_DEV_TOKEN", "env-token-abc")
+    token, src = audit_mod._load_audit_token()
+    assert token == "env-token-abc"
+    assert "CATFISH_INTERNAL_DEV_TOKEN" in src
+
+
+def test_load_audit_token_returns_empty_when_none(audit_mod, tmp_path, monkeypatch):
+    """P3.5.42.7: 都没有 → ('', '')."""
+    fake_path = tmp_path / "no-such-file"
+    monkeypatch.setattr(audit_mod, "_OAUTH_ID_TOKEN_PATH", fake_path)
+    monkeypatch.delenv("CATFISH_INTERNAL_DEV_TOKEN", raising=False)
+    token, src = audit_mod._load_audit_token()
+    assert token == ""
+    assert src == ""
+
+
+def test_classify_via_stdlib_passes_token_in_header(audit_mod, monkeypatch):
+    """P3.5.42.7: token 真传到 Authorization header."""
+    captured = {}
+
+    class _FakeResp:
+        def read(self):
+            return (b'{"choices":[{"message":{"content":'
+                    b'"{\\"route\\":\\"memory\\",\\"reason\\":\\"x\\",\\"confidence\\":0.9}"}}]}')
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def _fake_urlopen(req, timeout=30.0):
+        captured["auth"] = req.headers.get("Authorization", "")
+        captured["x_internal"] = req.headers.get("X-catfish-internal", "")
+        return _FakeResp()
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+    cls, err = audit_mod._classify_via_stdlib(
+        "x", "test-model", "p", "http://127.0.0.1:8999",
+        token="test-token-123",
+    )
+    assert err == ""
+    assert captured["auth"] == "Bearer test-token-123"
+    assert captured["x_internal"] == "true"
 
 
 def test_classify_via_stdlib_handles_http_error(audit_mod, monkeypatch):

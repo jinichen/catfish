@@ -145,15 +145,44 @@ def _read_entries(target: str) -> list[str]:
 # ── 跑 LLM classify ──────────────────────────────────────────────
 
 
+# P3.5.42.7 (鸿波 6/20 catch 'gateway HTTP 401 missing Authorization header'):
+# gateway X-Catfish-Internal header 只跳 quota check 不跳 auth. audit 必须传
+# Authorization Bearer token. 优先级:
+#   1. ~/.catfish/oauth/id_token (catfish app 登录后写的, 跟 recognize_captcha.py 同模式)
+#   2. env CATFISH_INTERNAL_DEV_TOKEN (鸿波本机 .env 配的 dev token)
+_OAUTH_ID_TOKEN_PATH = Path.home() / ".catfish" / "oauth" / "id_token"
+
+
+def _load_audit_token() -> tuple[str, str]:
+    """返 (token, source). source 给 stderr 报具体哪来的 token."""
+    import os  # noqa: PLC0415
+    # P1: OAuth id_token (catfish app 已登录则有)
+    if _OAUTH_ID_TOKEN_PATH.is_file():
+        try:
+            token = _OAUTH_ID_TOKEN_PATH.read_text(encoding="utf-8").strip()
+            if token:
+                return token, "~/.catfish/oauth/id_token"
+        except OSError:
+            pass
+    # P2: env
+    token = os.environ.get("CATFISH_INTERNAL_DEV_TOKEN", "").strip()
+    if token:
+        return token, "$CATFISH_INTERNAL_DEV_TOKEN"
+    return "", ""
+
+
 # P3.5.42.6 (鸿波 6/20 catch 'httpx 没装'): audit 用 stdlib urllib 不依赖
 # 第三方包. system python3 没装 httpx 是常态, audit 该 standalone.
 # memory_enforce 内部仍走 httpx (hook 跑在 hermes venv 里, 有 httpx).
 def _classify_via_stdlib(
     content: str, model: str, prompt: str, gateway_url: str,
-    timeout: float = 30.0,
+    token: str = "", timeout: float = 30.0,
 ) -> tuple[Optional[dict], str]:
     """用 stdlib urllib 调 gateway, 跟 enforce._classify_memory_route_diag 同
-    JSON schema 但不依赖 httpx. 返 (result, error)."""
+    JSON schema 但不依赖 httpx. 返 (result, error).
+
+    token: P3.5.42.7 — caller 传进来, _classify_all 里 load 一次重用.
+    """
     payload = json.dumps({
         "model": model,
         "messages": [
@@ -171,8 +200,6 @@ def _classify_via_stdlib(
         "X-Catfish-Skip-Identity": "true",
         "X-Catfish-Internal": "true",
     }
-    import os  # noqa: PLC0415
-    token = os.environ.get("CATFISH_INTERNAL_DEV_TOKEN", "")
     if token:
         headers["Authorization"] = f"Bearer {token}"
 
@@ -244,6 +271,18 @@ def _classify_all(target: str, entries: list[str], enforce: Any,
     import os  # noqa: PLC0415
     gateway_url = os.environ.get("CATFISH_GATEWAY_URL", "http://127.0.0.1:8999")
 
+    # P3.5.42.7: 加载 OAuth id_token 跳 401
+    token, token_src = _load_audit_token()
+    if not token:
+        print(
+            "  ⚠ 没找到 token (~/.catfish/oauth/id_token 不存在 + "
+            "CATFISH_INTERNAL_DEV_TOKEN env 没配). gateway 大概率 401 拒.\n"
+            "    修法: 先在 catfish app 里登录 (Companion 完成 OIDC), 然后重跑.",
+            file=sys.stderr,
+        )
+    else:
+        print(f"  ✓ token loaded from {token_src}", file=sys.stderr)
+
     results = []
     first_error_msg = ""  # 记第一条错给早 abort 时报
     for i, content in enumerate(entries, 1):
@@ -251,7 +290,9 @@ def _classify_all(target: str, entries: list[str], enforce: Any,
         sys.stderr.flush()
         error_msg = ""
         try:
-            cls, error_msg = _classify_via_stdlib(content, model, prompt, gateway_url)
+            cls, error_msg = _classify_via_stdlib(
+                content, model, prompt, gateway_url, token=token,
+            )
         except Exception as e:  # noqa: BLE001
             cls = None
             error_msg = f"audit 调用异常: {type(e).__name__}: {e}"
@@ -291,7 +332,9 @@ def _classify_all(target: str, entries: list[str], enforce: Any,
                 else:
                     hint += (
                         f"  上面真错信息是定位关键. 常见情况:\n"
-                        f"    - HTTP 401/403 → audit 脚本没 OAuth token, gateway auth 拒了 (本应 X-Catfish-Internal 放行, 看 gateway 配)\n"
+                        f"    - HTTP 401/403 → token 过期 / 没登录 catfish app\n"
+                        f"        修: 在 catfish app 完成登录, ~/.catfish/oauth/id_token 重写\n"
+                        f"        或 export CATFISH_INTERNAL_DEV_TOKEN=<dev token> (鸿波本机 .env 有)\n"
                         f"    - HTTP 400/422 → model 不接受 response_format=json_object (公网 deepseek/gemini 偶发)\n"
                         f"    - HTTP 502/503 → 上游 model 挂\n"
                         f"    - HTTP 异常 → gateway 8999 没起 (curl http://127.0.0.1:8999/v1/catalog)"
