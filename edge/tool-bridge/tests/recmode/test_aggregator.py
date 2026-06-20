@@ -107,9 +107,11 @@ def test_parse_llm_output_with_markdown_fence():
 
 ```json
 {
-  "skill_name": "eis_qual_check",
+  "skill_name": "eis-qual-check",
   "namespace": "department",
+  "kind": "procedural",
   "description": "EIS 企业资质过期检查",
+  "triggers": ["资质过期", "资质检查", "EIS 扫描"],
   "intent_summary": "扫所有页找快过期",
   "params_schema": [{"name": "days", "type": "integer", "default": 90, "description": "阈值"}],
   "steps": [{"step_no": 1, "intent": "登录", "tool": "catfish_browser_navigate", "args_template": {"url": "http://eis.ffcs.cn/"}}],
@@ -122,15 +124,34 @@ def test_parse_llm_output_with_markdown_fence():
 
 收尾..."""
     skill = aggregator.parse_llm_output(raw)
-    assert skill.skill_name == "eis_qual_check"
+    # P3.5.43: kebab-case 标准化
+    assert skill.skill_name == "eis-qual-check"
     assert skill.namespace == "department"
+    assert skill.kind == "procedural"
+    assert skill.triggers == ["资质过期", "资质检查", "EIS 扫描"]
     assert skill.confidence == 0.85
     assert len(skill.steps) == 1
 
 
+def test_parse_llm_output_normalizes_snake_to_kebab():
+    """P3.5.43: LLM 偶尔输出 snake_case, 自动转 kebab."""
+    raw = '{"skill_name": "weekly_report", "namespace": "personal", "kind": "procedural", "description": "y", "triggers": ["a", "b", "c"], "params_schema": [], "steps": [], "execute_code_segment": "", "output_schema": {}, "confidence": 0.5, "questions_for_user": []}'
+    skill = aggregator.parse_llm_output(raw)
+    assert skill.skill_name == "weekly-report"
+
+
+def test_parse_llm_output_fills_defaults_for_missing_triggers_kind():
+    """P3.5.43: LLM 漏给 triggers/kind 不挂 — 走 default 让 validate 后续 warn."""
+    raw = '{"skill_name": "x", "namespace": "personal", "description": "y", "params_schema": [], "steps": [], "execute_code_segment": "", "output_schema": {}, "confidence": 0.5, "questions_for_user": []}'
+    skill = aggregator.parse_llm_output(raw)
+    assert skill.skill_name == "x"
+    assert skill.triggers == []  # fallback
+    assert skill.kind == "procedural"  # default
+
+
 def test_parse_llm_output_no_fence():
     """LLM 直接吐 JSON 不带围栏也能 parse."""
-    raw = '{"skill_name": "x", "namespace": "personal", "description": "y", "params_schema": [], "steps": [], "execute_code_segment": "", "output_schema": {}, "confidence": 0.5, "questions_for_user": []}'
+    raw = '{"skill_name": "x", "namespace": "personal", "kind": "procedural", "description": "y", "triggers": ["a","b","c"], "params_schema": [], "steps": [], "execute_code_segment": "", "output_schema": {}, "confidence": 0.5, "questions_for_user": []}'
     skill = aggregator.parse_llm_output(raw)
     assert skill.skill_name == "x"
 
@@ -150,10 +171,13 @@ def test_parse_llm_output_bad_json_raises():
 
 
 def _mock_skill():
+    # P3.5.43: skill_name kebab-case; 新增 kind + triggers 必填
     return aggregator.SkillOutput(
-        skill_name="eis_qual_check",
+        skill_name="eis-qual-check",
         namespace="department",
+        kind="procedural",
         description="EIS 企业资质过期检查",
+        triggers=["资质过期", "资质检查", "EIS 扫描"],
         intent_summary="扫所有页找证书有效期 < N 天的",
         params_schema=[
             {"name": "days_threshold", "type": "integer", "default": 90, "description": "阈值天数"},
@@ -178,11 +202,15 @@ def _mock_skill():
 
 def test_render_skill_md():
     md = aggregator.render_skill_md(_mock_skill())
-    assert "# eis_qual_check" in md
+    # P3.5.43: 开头必须是 frontmatter, 不能直接 # title
+    assert md.startswith("---\n")
+    assert "name: eis-qual-check" in md
+    assert "kind: procedural" in md
+    assert "triggers:" in md
+    assert "  - 资质过期" in md
+    assert "# eis-qual-check" in md  # 标题在 frontmatter 后
     assert "EIS 企业资质过期检查" in md
-    assert "department" in md
     assert "**days_threshold**" in md
-    assert "应用" in md
     assert "selector_hint" in md
     assert "是否需要按部门筛选" in md  # questions_for_user
 
@@ -197,13 +225,27 @@ def test_render_skill_md_with_meta():
     assert "25" in md
 
 
-def test_render_main_py():
-    py = aggregator.render_main_py(_mock_skill())
-    assert 'SKILL_NAME = "eis_qual_check"' in py
-    assert "def main(params)" in py
+def test_render_script_py():
+    """P3.5.43: render_main_py 改名 render_script_py, 生成 def render_<name>()."""
+    py = aggregator.render_script_py(_mock_skill())
+    assert 'SKILL_NAME = "eis-qual-check"' in py
+    # P3.5.43 BLOCKER 2: 函数名 render_ 前缀, 不是 main
+    assert "def render_eis_qual_check(params)" in py
+    assert "def main(" not in py  # 不再有 main
     assert "Step 1: 进资质管理" in py
-    assert "BeautifulSoup 解析" in py or "parse_page" in py
-    assert 'return {"ok": True}' in py
+    assert "parse_page" in py
+    assert '"ok": True' in py
+
+
+def test_render_main_py_deprecated_alias_still_works():
+    """老 caller 调 render_main_py — deprecation warn 但仍 work."""
+    import warnings
+    with warnings.catch_warnings(record=True) as ws:
+        warnings.simplefilter("always")
+        py = aggregator.render_main_py(_mock_skill())
+        assert any("deprecated" in str(w.message).lower() for w in ws)
+    # 内容跟 render_script_py 一样
+    assert "def render_eis_qual_check(params)" in py
 
 
 # ─── write_skill_files ─────────────────────────────────────
@@ -216,12 +258,16 @@ def test_write_skill_files(tmp_path):
         skills_root=tmp_path,
         recording_meta={"session_id": "rec_1", "duration_s": 100, "events_count": 5, "keyframes_count": 2},
     )
-    assert out_dir == tmp_path / "department" / "eis_qual_check"
+    assert out_dir == tmp_path / "department" / "eis-qual-check"
     assert (out_dir / "SKILL.md").exists()
-    assert (out_dir / "main.py").exists()
+    # P3.5.43: 文件名 script.py 不是 main.py
+    assert (out_dir / "script.py").exists()
+    assert not (out_dir / "main.py").exists()
     assert (out_dir / "recmode_meta.json").exists()
     meta = json.loads((out_dir / "recmode_meta.json").read_text())
     assert meta["session_id"] == "rec_1"
+    # P3.5.43: meta 含 validate_errors 字段
+    assert "validate_errors" in meta
 
 
 # ─── aggregate_session 端到端 (LLM 占位) ─────────────────
@@ -235,20 +281,25 @@ async def test_aggregate_session_e2e_with_mock_llm(tmp_path, monkeypatch):
     (sd / "events.jsonl").write_text('{"ts": 0, "kind": "click"}\n', encoding="utf-8")
     (sd / "meta.json").write_text('{"session_id": "rec_e2e", "duration_s": 10}', encoding="utf-8")
 
-    fake_response = '{"skill_name": "test_skill", "namespace": "personal", "description": "测", "params_schema": [], "steps": [], "execute_code_segment": "print(1)", "output_schema": {}, "confidence": 0.5, "questions_for_user": []}'
+    fake_response = '{"skill_name": "test-skill", "namespace": "personal", "kind": "procedural", "description": "测", "triggers": ["a","b","c"], "params_schema": [], "steps": [], "execute_code_segment": "print(1)", "output_schema": {}, "confidence": 0.5, "questions_for_user": []}'
 
     async def fake_call_llm(messages, **kw):
         return fake_response
 
     monkeypatch.setattr(aggregator, "call_llm", fake_call_llm)
+    # P3.5.43: 阻止真 sync 到 ~/.hermes/skills/ (test 隔离). monkeypatch skill_sync.
+    from catfish_tool_bridge.recmode import skill_sync
+    monkeypatch.setattr(skill_sync, "HERMES_SKILLS_ROOT", tmp_path / "fake-hermes")
     # 测 draft_only=False 老行为 (直接落正式 skills)
     out = await aggregator.aggregate_session(
         sd, skills_root=tmp_path / "skills", draft_only=False,
     )
-    assert out["skill_name"] == "test_skill"
+    assert out["skill_name"] == "test-skill"
     assert out["namespace"] == "personal"
     assert out["is_draft"] is False
-    assert (tmp_path / "skills" / "personal" / "test_skill" / "SKILL.md").exists()
+    assert (tmp_path / "skills" / "personal" / "test-skill" / "SKILL.md").exists()
+    # P3.5.43: draft_only=False 自动 sync 到 hermes
+    assert (tmp_path / "fake-hermes" / "test-skill" / "SKILL.md").exists()
 
 
 @pytest.mark.asyncio
@@ -258,16 +309,21 @@ async def test_aggregate_session_draft_default(tmp_path, monkeypatch):
     sd.mkdir()
     (sd / "events.jsonl").write_text('{"ts": 0, "kind": "click"}\n', encoding="utf-8")
     (sd / "meta.json").write_text('{"session_id": "rec_draft"}', encoding="utf-8")
-    fake_response = '{"skill_name": "draft_x", "namespace": "personal", "description": "d", "params_schema": [], "steps": [], "execute_code_segment": "", "output_schema": {}, "confidence": 0.5, "questions_for_user": []}'
+    fake_response = '{"skill_name": "draft-x", "namespace": "personal", "kind": "procedural", "description": "d", "triggers": ["a","b","c"], "params_schema": [], "steps": [], "execute_code_segment": "", "output_schema": {}, "confidence": 0.5, "questions_for_user": []}'
 
     async def fake_call_llm(messages, **kw):
         return fake_response
 
     monkeypatch.setattr(aggregator, "call_llm", fake_call_llm)
+    from catfish_tool_bridge.recmode import skill_sync
+    fake_hermes = tmp_path / "fake-hermes"
+    monkeypatch.setattr(skill_sync, "HERMES_SKILLS_ROOT", fake_hermes)
     out = await aggregator.aggregate_session(sd)  # 默认 draft_only=True
     assert out["is_draft"] is True
-    # 落到 session_dir/skill_draft/personal/draft_x/
-    assert (sd / "skill_draft" / "personal" / "draft_x" / "SKILL.md").exists()
+    # 落到 session_dir/skill_draft/personal/draft-x/
+    assert (sd / "skill_draft" / "personal" / "draft-x" / "SKILL.md").exists()
+    # P3.5.43: draft 不 sync 到 hermes
+    assert not fake_hermes.exists() or not (fake_hermes / "draft-x").exists()
 
 
 @pytest.mark.asyncio

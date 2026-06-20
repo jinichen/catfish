@@ -47,15 +47,17 @@ logger = logging.getLogger("catfish.recmode.aggregator")
 
 SYSTEM_PROMPT = """你是 catfish-skill-author. 用户刚录了一段教学过程
 (events + 语音 + 截图). 你的任务: 综合理解用户在教什么流程,
-输出可重现的 SKILL.md + main.py 代码.
+输出 hermes 兼容的 SKILL.md + script.py 代码.
 
 # 输出 schema (严格 JSON, 不要任何前后文 prose)
 
 {
-  "skill_name": "<snake_case 名字>",
-  "namespace": "<department / personal / public 选一>",
-  "description": "<一句话, 给 LLM skill_catalog 用>",
-  "intent_summary": "<3-5 句话用户意图描述>",
+  "skill_name": "<kebab-case 名字, e.g. weekly-report / catfish-email-digest>",
+  "namespace": "<department / personal / public / creative 选一>",
+  "kind": "<procedural / instructional 选一; 多步操作流程选 procedural, 解释/教学/参考选 instructional>",
+  "description": "<一句话定位 + 触发场景, ≤158 tokens (utf8 bytes/4). 给 LLM 系统 prompt 注入用>",
+  "triggers": ["<触发关键词 1>", "<触发关键词 2>", "<…>"],
+  "intent_summary": "<3-5 句话用户意图描述, 放 SKILL.md body>",
   "params_schema": [
     {"name": "...", "type": "string|integer|number|boolean", "default": ..., "description": "..."}
   ],
@@ -90,7 +92,23 @@ SYSTEM_PROMPT = """你是 catfish-skill-author. 用户刚录了一段教学过�
 5. **steps 必含至少一步 LLM-only "返结果"** — 不绑死下游动作 (e.g. 不在 skill 里
    循环创建日历事件, 留给 LLM 看结果决定 dedup).
 6. **看不全就直接写 questions_for_user** — 别瞎猜, 不确定列出来给用户 confirm.
-7. **🇨🇳 所有自然语言字符串必须用中文** (BL-RECMODE-ZH-OUTPUT, 5/27 鸿波):
+
+7. **skill_name kebab-case** (P3.5.43 新): `weekly-report` 对, `weekly_report` /
+   `WeeklyReport` 错. 跟 hermes 现有 SKILL 仓库一致 (e.g. weekly-report,
+   guizang-ppt-magazine, huashu-design).
+
+8. **triggers 3-20 个** (P3.5.43 新): hermes 加载 SKILL 时把 triggers 注入 system
+   prompt, LLM 看到员工说这些词就调 skill. 真实场景例:
+   - 周报类 → ["周报", "本周工作", "本周总结", "一周工作", "写周报", "weekly report"]
+   - 邮件类 → ["邮件", "回复邮件", "邮件总结", "email"]
+   太少 (<3) 漏触发, 太多 (>20) 占预算 — 严守 3-20.
+
+9. **description ≤158 tokens** (P3.5.43 新, P3.5.41.1 实测安全线):
+   utf8_bytes/4 ≤158. 中文约 200 字, 英文约 600 字符. 超 budget 会撞 system
+   prompt 总预算 (P3.5.32.5 advisor 超时实证). description 只放"何时调 + 一句话
+   定位", 详细 spec / 例子放 intent_summary / steps body 段.
+
+10. **🇨🇳 所有自然语言字符串必须用中文** (BL-RECMODE-ZH-OUTPUT, 5/27 鸿波):
    - `description` / `intent_summary` / `steps[].intent` / `steps[].expected_after` /
      `questions_for_user` 一律用简体中文写
    - **不要英文**, 也**不要中英混杂** ("用户 demonstrate ..." / "Browse the homepage to ..."
@@ -118,10 +136,16 @@ class RecordingInputs:
 
 @dataclass
 class SkillOutput:
-    """LLM 综合后落档的 skill (parse 自 LLM JSON)."""
-    skill_name: str
+    """LLM 综合后落档的 skill (parse 自 LLM JSON).
+
+    P3.5.43 加 triggers + kind — hermes 加载 SKILL 时 frontmatter 必填.
+    skill_name 改 kebab-case (跟 hermes 现有 SKILL 仓库一致).
+    """
+    skill_name: str  # P3.5.43: kebab-case (旧 snake_case, 装机时 hermes 仓库 kebab)
     namespace: str
-    description: str
+    kind: str  # P3.5.43 新: procedural / instructional
+    description: str  # P3.5.43: ≤158 tokens budget (LLM prompt 已约束)
+    triggers: list[str]  # P3.5.43 新: 3-20 个触发关键词
     intent_summary: str
     params_schema: list[dict]
     steps: list[dict]
@@ -130,6 +154,25 @@ class SkillOutput:
     confidence: float
     questions_for_user: list[str]
     raw_json: dict  # 原始 LLM 输出 JSON, 供调试
+
+    def to_manifest(self) -> "SkillManifest":
+        """转 SkillManifest (skill_format 模块) — render_skill_md / render_script_py
+        都吃 manifest."""
+        from .skill_format import SkillManifest  # noqa: PLC0415 (循环依赖防护)
+        return SkillManifest(
+            name=self.skill_name,
+            namespace=self.namespace,
+            kind=self.kind,
+            description=self.description,
+            triggers=self.triggers,
+            intent_summary=self.intent_summary,
+            params_schema=self.params_schema,
+            steps=self.steps,
+            execute_code_segment=self.execute_code_segment,
+            output_schema=self.output_schema,
+            questions_for_user=self.questions_for_user,
+            author="鲶鱼 RecMode",
+        )
 
 
 # ─── 读输入 ────────────────────────────────────────────────
@@ -405,10 +448,29 @@ def parse_llm_output(raw: str) -> SkillOutput:
     except json.JSONDecodeError as e:
         raise ValueError(f"LLM JSON parse 失败 ({e}): {json_str[:200]!r}") from e
 
+    # P3.5.43: skill_name 兼容 snake_case 输入 → 自动转 kebab-case
+    # (hermes 仓库现有 SKILL 都 kebab, LLM 偶尔输出 snake 兼容下).
+    raw_name = data["skill_name"].strip().lower()
+    skill_name = raw_name.replace("_", "-")
+
+    # P3.5.43: triggers 必填. LLM 漏给的话 fallback 用 description 前几个词
+    # (safe degrade, 不让 SkillOutput 构造失败).
+    triggers = data.get("triggers") or []
+    if not isinstance(triggers, list):
+        triggers = []
+    triggers = [t.strip() for t in triggers if isinstance(t, str) and t.strip()]
+
+    # P3.5.43: kind 必填. LLM 漏给默认 procedural (录屏 99% 是流程类).
+    kind = (data.get("kind") or "procedural").strip().lower()
+    if kind not in ("procedural", "instructional"):
+        kind = "procedural"
+
     return SkillOutput(
-        skill_name=data["skill_name"],
+        skill_name=skill_name,
         namespace=data["namespace"],
+        kind=kind,
         description=data["description"],
+        triggers=triggers,
         intent_summary=data.get("intent_summary", ""),
         params_schema=data.get("params_schema", []),
         steps=data.get("steps", []),
@@ -420,106 +482,41 @@ def parse_llm_output(raw: str) -> SkillOutput:
     )
 
 
-# ─── 渲染 SKILL.md + main.py ────────────────────────────────
+# ─── 渲染 SKILL.md + script.py (P3.5.43 走 skill_format 公用模块) ──
 
 
 def render_skill_md(skill: SkillOutput, recording_meta: dict | None = None) -> str:
-    """输出人话 SKILL.md, 含触发关键词 + params 文档 + 步骤说明."""
-    lines = [
-        f"# {skill.skill_name}",
-        "",
-        f"> {skill.description}",
-        "",
-        f"**namespace**: `{skill.namespace}`",
-        f"**confidence (RecMode 自评)**: {skill.confidence:.2f}",
-        "",
-        "## 用户意图",
-        "",
-        skill.intent_summary,
-        "",
-        "## 参数",
-        "",
-    ]
-    for p in skill.params_schema:
-        default = p.get("default")
-        default_str = f" (默认 `{default}`)" if default is not None else ""
-        lines.append(f"- **{p['name']}** (`{p['type']}`){default_str} — {p.get('description', '')}")
-    lines.extend([
-        "",
-        "## 步骤",
-        "",
-    ])
-    for s in skill.steps:
-        lines.append(f"### {s['step_no']}. {s['intent']}")
-        lines.append("")
-        lines.append(f"- tool: `{s['tool']}`")
-        if s.get("selector_hint"):
-            lines.append(f"- selector_hint: `{json.dumps(s['selector_hint'], ensure_ascii=False)}`")
-        if s.get("expected_after"):
-            lines.append(f"- 预期: {s['expected_after']}")
-        lines.append("")
-    if skill.questions_for_user:
-        lines.extend(["## ⚠ 待 confirm", ""])
-        for q in skill.questions_for_user:
-            lines.append(f"- {q}")
-        lines.append("")
-    if recording_meta:
-        lines.extend([
-            "---",
-            "## RecMode 元数据 (生成自动落, 不要手改)",
-            "",
-            f"- session_id: `{recording_meta.get('session_id', '?')}`",
-            f"- 录制时长: {recording_meta.get('duration_s', '?')}s",
-            f"- events: {recording_meta.get('events_count', '?')}",
-            f"- keyframes: {recording_meta.get('keyframes_count', '?')}",
-        ])
-    return "\n".join(lines)
+    """渲染 hermes 兼容 SKILL.md.
 
-
-def render_main_py(skill: SkillOutput) -> str:
-    """渲染 main.py — catfish_run_skill 跑这个文件.
-
-    结构:
-    1. import + skill metadata
-    2. step 函数 (每个 step 一个 def)
-    3. main(params) 串联 step 1 → 2 → ... → execute_code_segment
+    P3.5.43: 委托 skill_format.render_skill_md, 加 YAML frontmatter (老版直接 # 标题
+    导致 hermes 加载失败, 跟 P3.5.43 audit 4 个 BLOCKER 之一对齐).
     """
-    parts = [
-        '"""BL-LEARN-RECMODE 自动生成. 不要手改 — 重录 / 用 catfish_freeze_skill 重生成."""',
-        "",
-        f'SKILL_NAME = "{skill.skill_name}"',
-        f'NAMESPACE = "{skill.namespace}"',
-        f'DESCRIPTION = """{skill.description}"""',
-        "",
-        "def main(params):",
-        '    """skill 入口. params 跟 SKILL.md params_schema 对齐."""',
-    ]
-    for s in skill.steps:
-        # v0 简化: 每步 emit 一行注释 + tool 调用模板. 真跑接 catfish runtime
-        # 下发到 catfish_browser_*. 5/26 真做时 tool 调用走 SDK 不是字面 print.
-        parts.append(f"    # Step {s['step_no']}: {s['intent']}")
-        parts.append(f"    # tool: {s['tool']}")
-        parts.append(f"    # args: {json.dumps(s.get('args_template', {}), ensure_ascii=False)}")
-        parts.append("")
-    if skill.execute_code_segment:
-        parts.extend([
-            "    # ── 数据提取段 (RecMode 综合自动生成) ──",
-            *(f"    {line}" for line in skill.execute_code_segment.splitlines()),
-            "",
-        ])
-    parts.extend([
-        '    return {"ok": True}',
-        "",
-        "",
-        'if __name__ == "__main__":',
-        '    # 直接 python main.py {} 跑 — 给 RecMode "跑一次试" 用',
-        '    import json, sys',
-        '    params = json.loads(sys.argv[1]) if len(sys.argv) > 1 else {}',
-        '    result = main(params)',
-        '    print(json.dumps(result, ensure_ascii=False, indent=2))',
-        "",
-    ])
-    return "\n".join(parts)
+    from .skill_format import render_skill_md as _render  # noqa: PLC0415
+    return _render(skill.to_manifest(), recording_meta=recording_meta)
+
+
+def render_script_py(skill: SkillOutput) -> str:
+    """渲染 script.py (函数 def render_<name>(params)).
+
+    P3.5.43: 文件名 script.py (不是 main.py), 函数名 render_<slug> 前缀 —
+    跟 catfish_tools_skill_ops._find_render_function:180-185 对齐, 老版生成
+    main.py + def main() catfish_run_skill 永远报错.
+    """
+    from .skill_format import render_script_py as _render  # noqa: PLC0415
+    return _render(skill.to_manifest())
+
+
+# 老 API 兼容 alias — 老调用者还有用 render_main_py 的, 加一个 deprecation wrapper
+def render_main_py(skill: SkillOutput) -> str:
+    """DEPRECATED (P3.5.43): 用 render_script_py 代替. 文件名也该改 script.py."""
+    import warnings  # noqa: PLC0415
+    warnings.warn(
+        "render_main_py 已 deprecated (P3.5.43): 改用 render_script_py, "
+        "文件名落 script.py 不是 main.py",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return render_script_py(skill)
 
 
 # ─── 落档 ──────────────────────────────────────────────────
@@ -529,29 +526,70 @@ def write_skill_files(
     skill: SkillOutput,
     skills_root: Path | None = None,
     recording_meta: dict | None = None,
+    sync_to_hermes: bool = False,
 ) -> Path:
-    """写 SKILL.md + main.py + recmode_meta.json 到 skills_root/<namespace>/<name>/.
+    """写 SKILL.md + script.py + recmode_meta.json 到 skills_root/<namespace>/<name>/.
+
+    P3.5.43:
+      - 文件名 script.py (不再是 main.py), 跟 catfish_tools_skill_ops:297 对齐
+      - sync_to_hermes=True 落档后自动 rsync 到 ~/.hermes/skills/<name>/ (装机即用).
+        默认 False 给 draft / 自动化 / 测试场景 (caller 决定何时装).
+      - 落档前先 validate manifest, 不合规 warn 但不阻塞 (LLM 输出质量逐步收敛)
 
     返写出的目录路径.
     """
+    from .skill_format import validate_manifest  # noqa: PLC0415
+
     if skills_root is None:
         skills_root = Path.home() / ".catfish" / "skills"
+
     skill_dir = skills_root / skill.namespace / skill.skill_name
     skill_dir.mkdir(parents=True, exist_ok=True)
 
-    (skill_dir / "SKILL.md").write_text(render_skill_md(skill, recording_meta), encoding="utf-8")
-    (skill_dir / "main.py").write_text(render_main_py(skill), encoding="utf-8")
+    # P3.5.43: 写前 validate, 不合规 warn (e.g. description 超 budget / triggers 太少)
+    manifest = skill.to_manifest()
+    errors = validate_manifest(manifest)
+    if errors:
+        logger.warning(
+            "RecMode skill %s validate 不合规, 仍落档 (LLM 输出质量逐步收敛): %s",
+            skill.skill_name, "; ".join(errors),
+        )
+
+    (skill_dir / "SKILL.md").write_text(
+        render_skill_md(skill, recording_meta), encoding="utf-8",
+    )
+    (skill_dir / "script.py").write_text(
+        render_script_py(skill), encoding="utf-8",
+    )
 
     if recording_meta:
         (skill_dir / "recmode_meta.json").write_text(
-            json.dumps({**recording_meta, "raw_llm_json": skill.raw_json}, indent=2, ensure_ascii=False),
+            json.dumps(
+                {**recording_meta, "raw_llm_json": skill.raw_json,
+                 "validate_errors": errors},
+                indent=2, ensure_ascii=False,
+            ),
             encoding="utf-8",
         )
 
     logger.info(
-        "RecMode skill 落档: %s (steps=%d, confidence=%.2f)",
-        skill_dir, len(skill.steps), skill.confidence,
+        "RecMode skill 落档: %s (steps=%d, confidence=%.2f, validate_errors=%d)",
+        skill_dir, len(skill.steps), skill.confidence, len(errors),
     )
+
+    # P3.5.43: sync_to_hermes=True → 自动同步到 ~/.hermes/skills/<name>/
+    # caller (aggregate_session draft_only=False / save_skill endpoint) 控.
+    if sync_to_hermes:
+        try:
+            from . import skill_sync  # noqa: PLC0415
+            synced = skill_sync.sync_to_hermes(skill_dir, slug=skill.skill_name)
+            logger.info("RecMode skill 同步到 hermes: %s", synced)
+        except Exception as e:  # noqa: BLE001
+            # fail-silent: 同步挂不阻塞落档 (员工本机仍有, 手动 install 也行)
+            logger.warning(
+                "RecMode skill sync_to_hermes 失败 (跳过, 不阻塞落档): %s", e,
+            )
+
     return skill_dir
 
 
@@ -593,10 +631,18 @@ async def aggregate_session(
 
     if draft_only:
         # 落 session_dir/skill_draft/ — 重录时覆盖. 用户点保存才 mv.
+        # P3.5.43: draft 不 sync 到 hermes (review 期不暴露).
         draft_root = session_dir / "skill_draft"
-        skill_dir = write_skill_files(skill, skills_root=draft_root, recording_meta=recording_meta)
+        skill_dir = write_skill_files(
+            skill, skills_root=draft_root, recording_meta=recording_meta,
+            sync_to_hermes=False,
+        )
     else:
-        skill_dir = write_skill_files(skill, skills_root=skills_root, recording_meta=recording_meta)
+        # P3.5.43: 正式落 + 自动 sync 到 ~/.hermes/skills/ (装机即用).
+        skill_dir = write_skill_files(
+            skill, skills_root=skills_root, recording_meta=recording_meta,
+            sync_to_hermes=True,
+        )
 
     return {
         "skill_name": skill.skill_name,
