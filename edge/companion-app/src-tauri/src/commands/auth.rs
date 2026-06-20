@@ -48,14 +48,28 @@ impl AuthState {
     }
 }
 
-/// `whoami` — Companion 启动时调, 看现在登录了没.
+/// `whoami` — Companion 启动 + useAuth 60s poll 调, 看现在登录了没.
 ///
 /// 优先级:
 ///   1. CATFISH_DEV_TOKEN env 设了 → 返 dev_token 身份 (auth_method='dev_token')
 ///   2. Keychain 有未过期 token → 返 已登录
 ///   3. 都没 → 返 anonymous (前端弹登录)
+///
+/// P3.5.42.10 (鸿波 6/20 catch '反复出现登录'): 调用前先跑一次 silent refresh.
+///
+/// 老逻辑只 try_load_session 读盘 — access_token 过期就返 None → anonymous.
+/// useAuth.ts 60s poll 调这函数, 每次过期都给前端 setState(authenticated:false)
+/// → LoginGate 立刻显登录, 哪怕 refresh_token 完全有效能续 (30 天 TTL).
+///
+/// 修: 先调 ensure_fresh_access_token (内部带 mutex 防并发), 它会用 refresh_token
+/// 跟 IdP 换新 access + refresh, 写新 user_info 到盘. 再 try_load_session 读盘看到
+/// 新 expires_at, 返 authenticated. refresh 也挂 (refresh_token 也过期 / IdP 不可达
+/// / 网络挂) 才走老路 → anonymous → 弹登录, 这是真过期场景, 合理.
 #[tauri::command]
 pub async fn auth_whoami() -> Result<AuthState, String> {
+    // silent refresh 副作用: 写新 expires_at 到 ~/.catfish/oauth/user_info.
+    // 这里不用返回值, 只要它写完盘.
+    let _ = oauth::ensure_fresh_access_token().await;
     Ok(oauth::try_load_session()
         .map(AuthState::from)
         .unwrap_or_else(AuthState::anonymous))

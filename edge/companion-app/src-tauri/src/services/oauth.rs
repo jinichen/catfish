@@ -536,23 +536,31 @@ pub async fn try_refresh_session(cfg: &OidcConfig) -> Result<AuthSession> {
 /// `current_access_token()`, 那里仍是"返磁盘上的 token, 可能过期" 的旧行为, 留给
 /// 后续 sweep — 优先级低, 因为 chat 路径 (用户实际敲字的入口) 已经覆盖了.
 pub async fn ensure_fresh_access_token() -> Option<String> {
-    // 1. 没真登录态 (dev_token / 未登录) → 老 sync 路径
-    let session = match try_load_session() {
-        Some(s) => s,
-        None => return current_access_token(),
-    };
+    // P3.5.42.10 (鸿波 6/20 catch '反复出现登录'): 老逻辑 try_load_session 返 None
+    // 时直接 fallback 不试 refresh — 但 access_token 1h 过期跟 refresh_token 30 天 TTL
+    // 是两个时间线. user_info 过期不代表 refresh_token 也过期, 应该试.
+    //
+    // 新逻辑: session None 时也走 refresh 路径 (try_refresh_session 内部读 refresh_token
+    // 文件, 文件不存在 / 真过期都会立即返 Err, 自然 fallback 不死循环).
+    let session = try_load_session();
+
     // dev_token 永不过期 (expires_at = now + 365d), 短路
-    if session.auth_method == "dev_token" {
-        return current_access_token();
+    if let Some(ref s) = session {
+        if s.auth_method == "dev_token" {
+            return current_access_token();
+        }
     }
 
-    // 2. 还很新 → 直接返
+    // 还很新 → 直接返
     let now = chrono::Utc::now().timestamp();
-    if session.expires_at - now > REFRESH_WHEN_REMAINING_SECS {
-        return current_access_token();
+    if let Some(ref s) = session {
+        if s.expires_at - now > REFRESH_WHEN_REMAINING_SECS {
+            return current_access_token();
+        }
     }
 
-    // 3. 快过期 / 已过期 → 尝试 refresh (mutex 防并发同时打 IdP)
+    // 走到这: session 是 None (access_token 过期 + 无 dev_token) 或 session 还在
+    // 但快/已过期. 都尝试 refresh (mutex 防并发同时打 IdP).
     let _guard = REFRESH_MUTEX.lock().await;
 
     // 拿到锁后再读一次盘 — 可能另一个 task 已经 refresh 完了
