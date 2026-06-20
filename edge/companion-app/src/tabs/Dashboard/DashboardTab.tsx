@@ -234,7 +234,7 @@ export default function DashboardTab() {
           defaultKey="impression"
           tabs={[
             { key: "impression", label: "📈 小鲶对你的印象", render: () => <RelationCard /> },
-            { key: "memory", label: "🧠 我的 hermes memory", render: () => <HermesMemoryCard /> },
+            { key: "memory", label: "🧠 我的记忆", render: () => <HermesMemoryCard /> },
             { key: "profile", label: "👤 小鲶对你的画像", render: () => <UserProfileCard /> },
             { key: "style", label: "✍️ 你的文书风格", render: () => <StyleFingerprintCard /> },
             { key: "drafts", label: "🤖 今日 AI 草稿", render: () => <TodayDraftsCard /> },

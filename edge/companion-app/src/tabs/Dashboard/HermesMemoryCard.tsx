@@ -239,7 +239,7 @@ export default function HermesMemoryCard() {
       >
         <div>
           <h3 style={{ margin: 0, display: "inline-flex", alignItems: "center", gap: 8 }}>
-            🧠 我的 hermes memory
+            🧠 我的记忆
           </h3>
           {/* 6/1 鸿波 ABBB: 改成员工能懂的语言, 删 dev 术语 (target=user, memory). */}
           <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 2 }}>
@@ -288,8 +288,8 @@ export default function HermesMemoryCard() {
         >
           🚫 删除失败: {deleteError}
           <div style={{ fontSize: 10, marginTop: 4, opacity: 0.8 }}>
-            常见原因: hermes memory 文件 entry 内容跟 UI 显示有细微差 (空格/换行/编码),
-            atomic_replace 找不到完全匹配. 检查 ~/.hermes/memories/ 真文件.
+            常见原因: 记忆文件 entry 内容跟 UI 显示有细微差 (空格/换行/编码), 找不到完全匹配.
+            检查 ~/.hermes/memories/ 真文件.
           </div>
         </div>
       )}

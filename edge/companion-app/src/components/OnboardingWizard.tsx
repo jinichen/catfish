@@ -700,7 +700,7 @@ function StepTryChat({
         ))}
       </div>
       <p style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: "var(--space-3)" }}>
-        发完后仪表盘"鲶鱼对你的认识 → 我的 hermes memory"卡能看到刚记的, 也能随时删.
+        发完后仪表盘"鲶鱼对你的认识 → 我的记忆"卡能看到刚记的, 也能随时删.
       </p>
       <Buttons
         onNext={() => onFinish(picked)}
