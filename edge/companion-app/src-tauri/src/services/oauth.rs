@@ -544,19 +544,10 @@ pub async fn ensure_fresh_access_token() -> Option<String> {
     // 文件, 文件不存在 / 真过期都会立即返 Err, 自然 fallback 不死循环).
     let session = try_load_session();
 
-    // dev_token 永不过期 (expires_at = now + 365d), 短路.
-    // P3.5.43.1 (鸿波 6/20 catch '录屏 401'): try_load_session 在 OAuth 过期时
-    // fallback 到 dev_token (oauth.rs:398-407) — auth_method=='dev_token' 表示
-    // 当前生效身份是 dev_token. 但**老 short-circuit 调 current_access_token,
-    // 后者优先读 KEYRING_USERNAME_ID (OAuth id_token 文件) — 文件可能还在但过期**.
-    // 鸿波本机离单位场景: OAuth 过期但文件没删 + dev_token env 在 → dev_token 路径
-    // 返过期 OAuth token → gateway 401. 修: dev_token 路径**直接返 dev_token**,
-    // 不读 OAuth 文件. dev_token_from_env() 在这条路径必有值 (try_load_session
-    // 走到 dev_token fallback 的前提就是 env 有, oauth.rs:398).
+    // dev_token 永不过期 (expires_at = now + 365d), 短路
     if let Some(ref s) = session {
         if s.auth_method == "dev_token" {
-            // OAuth 文件可能不存在 / 过期, 不读, 直接返 dev_token env.
-            return dev_token_from_env();
+            return current_access_token();
         }
     }
 
