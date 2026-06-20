@@ -1144,6 +1144,37 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
                     ),
                     "default": "auto",
                 },
+                "triggers": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "P3.5.43 (6/20): 触发关键词 list, 3-20 个. hermes 加载 skill 后注入到 "
+                        "system prompt, LLM 看到员工说这些词就调 skill. 例: "
+                        "['周报', '本周工作', '本周总结', '一周工作', 'weekly report']. "
+                        "太少 (<3) 漏触发, 太多 (>20) 占预算 — 严守 3-20."
+                    ),
+                    "minItems": 3,
+                    "maxItems": 20,
+                },
+                "kind": {
+                    "type": "string",
+                    "enum": ["procedural", "instructional"],
+                    "description": (
+                        "P3.5.43 (6/20): skill 类型. 多步操作流程 (录屏类) 选 procedural, "
+                        "解释/教学/参考类选 instructional. hermes frontmatter 必填."
+                    ),
+                    "default": "procedural",
+                },
+                "skill_namespace": {
+                    "type": "string",
+                    "enum": ["personal", "department", "public", "creative"],
+                    "description": (
+                        "P3.5.43 (6/20): skill 装机 namespace. 老 hardcode personal, "
+                        "现在让 LLM 按 skill 性质选: 员工本人偏好/工具 → personal, "
+                        "整个部门共用 → department, 全公司公开 → public, 设计/文创 → creative."
+                    ),
+                    "default": "personal",
+                },
             },
             "required": ["name", "reason", "action_steps", "evidence_count"],
         },

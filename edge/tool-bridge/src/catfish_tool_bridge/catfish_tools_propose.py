@@ -119,6 +119,20 @@ def propose_skill(args: Dict[str, Any]) -> Dict[str, Any]:
     except (TypeError, ValueError):
         evidence_count = 0
 
+    # P3.5.43 (鸿波 6/20 拍 'SKILL 三路径统一'): 字段对齐 RecMode SkillOutput,
+    # accept 后 catfish_skill_install 拿到现成的 triggers/kind/namespace 不用 LLM
+    # 重新猜. 跟 skill_format.SkillManifest 同 schema, 跟 hermes frontmatter 直接装.
+    triggers_raw = args.get("triggers") or []
+    if not isinstance(triggers_raw, list):
+        triggers_raw = []
+    triggers = [t.strip() for t in triggers_raw if isinstance(t, str) and t.strip()]
+    kind = (args.get("kind") or "procedural").strip().lower()
+    if kind not in ("procedural", "instructional"):
+        kind = "procedural"
+    skill_namespace = (args.get("skill_namespace") or "personal").strip().lower()
+    if skill_namespace not in ("personal", "department", "public", "creative"):
+        skill_namespace = "personal"  # 不识别兜底
+
     # validation
     if not name:
         return {"type": "error", "error": "name 必填"}
@@ -134,6 +148,11 @@ def propose_skill(args: Dict[str, Any]) -> Dict[str, Any]:
         return {"type": "error", "error": "reason 必填且 ≥ 10 字 (含具体观察证据)"}
     if not action_steps or len(action_steps) < 20:
         return {"type": "error", "error": "action_steps 必填且 ≥ 20 字 (3-5 步说明 skill 干啥)"}
+    # P3.5.43: triggers 校验 (跟 skill_format.TRIGGERS_MIN/MAX 对齐).
+    # 老 caller 没传 triggers → warn 但不阻塞 (proposal 期可空, install 时由 LLM 补).
+    # 上限严格 (防 prompt 预算超).
+    if len(triggers) > 20:
+        return {"type": "error", "error": f"triggers 至多 20 个 (现 {len(triggers)} 个), 占 system prompt 预算"}
     # 阈值校验 — 两套, 看 triggered_by
     min_evidence = 3 if triggered_by == "auto" else 1
     if evidence_count < min_evidence:
@@ -196,15 +215,18 @@ def propose_skill(args: Dict[str, Any]) -> Dict[str, Any]:
     # 写 jsonl
     proposal_id = f"prop_{int(now_ts)}_{name}"
     # BL-MM9-fix (5/9): 字段对齐 learning.rs 期待的 schema (namespace/name 拆开)
-    # + 加 description 字段给 Dashboard 渲染 + triggered_by 留 audit. 'name' 字段
-    # 留旧值兼容老 propose_skill caller (但 learning.rs 现在认 skill_name).
+    # P3.5.43 (6/20): 加 triggers/kind 跟 RecMode SkillOutput / skill_format
+    # SkillManifest 同 schema. accept 后 catfish_skill_install 直接拿这些字段
+    # 生成 hermes 兼容 SKILL.md 不用 LLM 重新猜.
     event = {
         "event_type": "proposed",  # learning.rs 看 'propose' 也兼容下
         "proposal_id": proposal_id,
-        "skill_namespace": "personal",   # propose_skill 默认放 personal/, accept 后落 ~/.hermes/skills/personal/
+        "skill_namespace": skill_namespace,  # P3.5.43: 不再 hardcode 'personal'
         "skill_name": name,
         "name": name,                     # 旧字段兼容
-        "description": reason,            # learning.rs Dashboard 显示用
+        "kind": kind,                     # P3.5.43 新: procedural / instructional
+        "triggers": triggers,             # P3.5.43 新: 触发关键词 list
+        "description": reason,            # learning.rs Dashboard 显示用 + 同时是 skill description
         "reason": reason,
         "action_steps": action_steps,
         "evidence_count": evidence_count,

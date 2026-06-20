@@ -93,6 +93,11 @@ def discover_roots(extra: list[str]) -> list[tuple[str, Path]]:
         # catfish 仓库内部 (装机前的源)
         ("catfish-managed", home / "person_task" / "catfish" / "skills"),
         ("catfish-edge", home / "person_task" / "catfish" / "edge"),
+        # P3.5.43 (鸿波 6/20): RecMode + propose_skill 落到这里. 之前 audit 不扫
+        # 这条路径, 录的 skill 不算 token 预算 — audit 报告漏掉这部分.
+        # skill_sync 会同步到 ~/.hermes/skills (上面 'hermes' root), 但**未同步前**
+        # 跟未保存的 draft 都还在这, audit 也该看到.
+        ("catfish-runtime", home / ".catfish" / "skills"),
     ]
     out: list[tuple[str, Path]] = []
     seen_real: set[Path] = set()
