@@ -159,7 +159,17 @@ pub fn relation_summary() -> Result<RelationView, String> {
         if let Ok(raw) = fs::read_to_string(&mp) {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) {
                 view.today_count = json.get("today_count").and_then(|v| v.as_u64()).map(|n| n as u32);
-                if let Some(last) = json.get("last_chat_at").and_then(|v| v.as_str()) {
+                // P3.5.42.8 (鸿波 6/20 catch '距上次找我 24 天 12 小时前 + 今天第 2 次找我' 矛盾):
+                // 5/26 BL-SESSION-META-PLUGIN-TAKEOVER plugin 接管时字段重命名
+                //   last_chat_at → last_chat_iso
+                // _render_session_meta (Python, 给 LLM prompt 注入的) + plugin write 都用
+                // last_chat_iso. Rust 端这里没跟着改, 仍读老字段 last_chat_at → 永远停在
+                // 5/26 gateway 最后一次写的旧值 (~24 天前). today_count 字段名两边一致正常.
+                // 优先新字段, 兜底老字段 (兼容老 session_meta.json).
+                let last_field = json.get("last_chat_iso")
+                    .or_else(|| json.get("last_chat_at"))
+                    .and_then(|v| v.as_str());
+                if let Some(last) = last_field {
                     view.last_chat_human = humanize_since(last);
                 }
             }
@@ -381,5 +391,40 @@ mod tests {
     fn parse_iso_returns_none_on_garbage() {
         assert!(parse_iso_to_unix("not a date").is_none());
         assert!(parse_iso_to_unix("").is_none());
+    }
+
+    /// P3.5.42.8 (鸿波 6/20 catch): 字段 fallback 逻辑 lock.
+    /// session_meta.json 优先 last_chat_iso (5/26 plugin 接管后新字段),
+    /// 兜底 last_chat_at (老 gateway 写的字段, 兼容老 file).
+    fn extract_last_chat(json: &serde_json::Value) -> Option<&str> {
+        json.get("last_chat_iso")
+            .or_else(|| json.get("last_chat_at"))
+            .and_then(|v| v.as_str())
+    }
+
+    #[test]
+    fn session_meta_prefers_iso_field_over_at() {
+        // 鸿波本机现状: plugin 接管后两个字段都有, iso 新 at 旧, 该读 iso
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{"last_chat_iso":"2026-06-20T10:00:00+08:00","last_chat_at":"2026-05-26T18:00:00+08:00","today_count":2,"today_date":"2026-06-20"}"#
+        ).unwrap();
+        assert_eq!(extract_last_chat(&json), Some("2026-06-20T10:00:00+08:00"));
+    }
+
+    #[test]
+    fn session_meta_falls_back_to_at_when_iso_missing() {
+        // 兼容老 session_meta.json (5/26 前 gateway 写的, 只有 last_chat_at)
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{"last_chat_at":"2026-05-20T18:00:00+08:00","today_count":1,"today_date":"2026-05-20"}"#
+        ).unwrap();
+        assert_eq!(extract_last_chat(&json), Some("2026-05-20T18:00:00+08:00"));
+    }
+
+    #[test]
+    fn session_meta_returns_none_when_both_missing() {
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{"today_count":0}"#
+        ).unwrap();
+        assert_eq!(extract_last_chat(&json), None);
     }
 }
