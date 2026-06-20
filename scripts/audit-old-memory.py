@@ -162,23 +162,39 @@ def _classify_all(target: str, entries: list[str], enforce: Any,
     EARLY_ABORT_THRESHOLD = 3
     consecutive_skip = 0
 
+    # P3.5.42.5: 用 diag 版看真错. 没 diag 版的旧 memory_enforce 兜底走 fail-silent.
+    use_diag = hasattr(enforce, "_classify_memory_route_diag")
+    if not use_diag:
+        print("  ⚠ memory_enforce 版本太老没 _classify_memory_route_diag, "
+              "看不到真错. 升级 catfish-xcatfish-user plugin 后重跑.",
+              file=sys.stderr)
+
     results = []
+    first_error_msg = ""  # 记第一条错给早 abort 时报
     for i, content in enumerate(entries, 1):
         sys.stderr.write(f"\r  跑 entry {i}/{len(entries)}...")
         sys.stderr.flush()
+        error_msg = ""
         try:
-            cls = enforce._classify_memory_route(content, model)
+            if use_diag:
+                cls, error_msg = enforce._classify_memory_route_diag(content, model)
+            else:
+                cls = enforce._classify_memory_route(content, model)
         except Exception as e:  # noqa: BLE001
             cls = None
-            print(f"\n  ⚠ entry {i} classify 异常 (跳): {e}", file=sys.stderr)
+            error_msg = f"audit 调用异常: {type(e).__name__}: {e}"
 
         if cls is None:
+            if error_msg and not first_error_msg:
+                first_error_msg = error_msg
+                sys.stderr.write("\n")
+                print(f"  ⚠ entry {i} classify 失败, 真错: {error_msg}", file=sys.stderr)
             results.append({
                 "index": i, "target": target, "actual_target": actual_target,
                 "content_preview": content[:100],
                 "content_len": len(content),
                 "llm_route": None,
-                "llm_reason": "classify 失败 (LLM 调挂 / parse 错)",
+                "llm_reason": error_msg or "classify 失败 (LLM 调挂 / parse 错)",
                 "confidence": 0.0,
                 "decision": "skip",  # 跳过, 不建议
                 "content": content,
@@ -190,6 +206,8 @@ def _classify_all(target: str, entries: list[str], enforce: Any,
                     f"  ⚠ 连续 {EARLY_ABORT_THRESHOLD} 条 classify 全挂, 早 abort.\n"
                     f"  verifier model: `{model}` ({src})\n"
                 )
+                if first_error_msg:
+                    hint += f"  真错 (第一条 entry): {first_error_msg}\n"
                 # 如果走的是 picker chain + 选了内网 model → 大概率离单位
                 if not override_model.strip() and "private" in model:
                     hint += (
@@ -200,8 +218,11 @@ def _classify_all(target: str, entries: list[str], enforce: Any,
                     )
                 else:
                     hint += (
-                        f"  先查: gateway 8999 起没起 (curl http://127.0.0.1:8999/v1/catalog)\n"
-                        f"        model `{model}` 在 catalog 里有没有"
+                        f"  上面真错信息是定位关键. 常见情况:\n"
+                        f"    - HTTP 401/403 → audit 脚本没 OAuth token, gateway auth 拒了 (本应 X-Catfish-Internal 放行, 看 gateway 配)\n"
+                        f"    - HTTP 400/422 → model 不接受 response_format=json_object (公网 deepseek/gemini 偶发)\n"
+                        f"    - HTTP 502/503 → 上游 model 挂\n"
+                        f"    - HTTP 异常 → gateway 8999 没起 (curl http://127.0.0.1:8999/v1/catalog)"
                     )
                 print(hint, file=sys.stderr)
                 return results  # 早 abort, 剩下 entry 不跑

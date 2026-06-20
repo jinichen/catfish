@@ -170,15 +170,22 @@ _CLASSIFY_SYSTEM_PROMPT = (
 )
 
 
-def _classify_memory_route(content: str, model: str) -> Optional[dict]:
-    """调 gateway /v1/chat/completions 让 LLM 判定 route. 返 dict 或 None (fail-silent).
+def _classify_memory_route_diag(content: str, model: str) -> tuple[Optional[dict], str]:
+    """调 gateway /v1/chat/completions 让 LLM 判定 route. 返 (result, error_str).
+
+    P3.5.42.5 (鸿波 6/20 catch '是不是代码有问题'): 拆出 diag 版本让 audit 脚本
+    能拿到真错. hook 路径仍调 _classify_memory_route 包 fail-silent (不阻 LLM).
+
+    返 ((dict | None), error_str):
+      - 成功: (dict, "")
+      - 失败: (None, "<具体错因>")
 
     response_format: json_object 强制 JSON. temperature 0 减少 LLM 自由发挥.
     """
     try:
         import httpx  # noqa: PLC0415
     except ImportError:
-        return None
+        return None, "httpx 没装 (catfish-tool-bridge 应自带)"
 
     gateway_url = os.environ.get("CATFISH_GATEWAY_URL", "http://127.0.0.1:8999")
     token = os.environ.get("CATFISH_INTERNAL_DEV_TOKEN", "")
@@ -208,28 +215,40 @@ def _classify_memory_route(content: str, model: str) -> Optional[dict]:
             resp = client.post(f"{gateway_url}/v1/chat/completions",
                                json=payload, headers=headers)
             if resp.status_code != 200:
-                logger.debug("memory_enforce: classify HTTP %d, fallback allow",
-                             resp.status_code)
-                return None
-            data = resp.json()
+                body_preview = resp.text[:300] if resp.text else "<empty>"
+                return None, f"gateway HTTP {resp.status_code}: {body_preview}"
+            try:
+                data = resp.json()
+            except (ValueError, json.JSONDecodeError) as e:
+                return None, f"gateway 返非 JSON: {type(e).__name__}: {str(e)[:100]}"
             raw = data.get("choices", [{}])[0].get("message", {}).get("content", "")
             if not isinstance(raw, str) or not raw.strip():
-                return None
-            parsed = json.loads(raw.strip())
+                return None, f"LLM 返空 content. response={str(data)[:200]}"
+            try:
+                parsed = json.loads(raw.strip())
+            except (ValueError, json.JSONDecodeError) as e:
+                return None, f"LLM 返非 JSON (response_format 没生效?): {raw[:150]}"
             route = parsed.get("route", "").strip().lower()
             if route not in ("memory", "user", "journal", "todo", "skill"):
-                return None
+                return None, f"route 字段无效: {parsed.get('route')!r} (该是 memory/user/journal/todo/skill)"
             return {
                 "route": route,
                 "reason": str(parsed.get("reason", ""))[:200],
                 "confidence": float(parsed.get("confidence", 0.5)),
-            }
-    except (json.JSONDecodeError, ValueError, KeyError) as e:
-        logger.debug("memory_enforce: classify JSON parse 失败 (fallback allow): %s", e)
-        return None
+            }, ""
     except Exception as e:  # noqa: BLE001
-        logger.debug("memory_enforce: classify 异常 (fallback allow): %s", e)
-        return None
+        return None, f"HTTP 异常: {type(e).__name__}: {str(e)[:200]}"
+
+
+def _classify_memory_route(content: str, model: str) -> Optional[dict]:
+    """fail-silent 包装 — hook 路径用. 真错全吞返 None.
+
+    audit 脚本应调 _classify_memory_route_diag 看具体错.
+    """
+    result, error = _classify_memory_route_diag(content, model)
+    if error:
+        logger.debug("memory_enforce: classify 失败 (fallback allow): %s", error)
+    return result
 
 
 # ── audit log ────────────────────────────────────────────────────

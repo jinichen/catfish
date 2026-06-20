@@ -325,6 +325,42 @@ def test_classify_all_early_abort_hint_no_private_recommend_for_override(audit_m
     assert "gateway 8999" in err
 
 
+def test_classify_all_uses_diag_when_available(audit_mod, capsys):
+    """P3.5.42.5: enforce 有 _classify_memory_route_diag → 用它拿真错."""
+    class _Diag:
+        @staticmethod
+        def get_verifier_model():
+            return "test-model"
+
+        @staticmethod
+        def _classify_memory_route_diag(content, model):
+            return None, "gateway HTTP 401: Bearer required"
+
+    audit_mod._classify_all("MEMORY", ["e1", "e2", "e3"], _Diag())
+    err = capsys.readouterr().err
+    # 第一条真错被报出来
+    assert "真错: gateway HTTP 401: Bearer required" in err
+    # 早 abort 时再报一次
+    assert "真错 (第一条 entry): gateway HTTP 401" in err
+
+
+def test_classify_all_falls_back_to_silent_when_no_diag(audit_mod, capsys):
+    """P3.5.42.5: 旧版 memory_enforce 没 diag → fallback fail-silent + 提醒升级."""
+    class _Old:
+        @staticmethod
+        def get_verifier_model():
+            return "test-model"
+
+        @staticmethod
+        def _classify_memory_route(content, model):
+            return None  # 旧 fail-silent 接口
+        # 注意: 没 _classify_memory_route_diag
+
+    audit_mod._classify_all("MEMORY", ["e1", "e2", "e3"], _Old())
+    err = capsys.readouterr().err
+    assert "版本太老" in err
+
+
 def test_classify_all_no_abort_when_skip_breaks(audit_mod):
     """P3.5.42.3: 连续 skip 计数被成功 classify 重置, 不会误 abort."""
     class _Flaky:
