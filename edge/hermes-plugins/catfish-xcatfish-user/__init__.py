@@ -105,6 +105,32 @@ def register(ctx) -> None:
                 "catfish-xcatfish-user register_hook fail: %s (fail-loud 降级)", e
             )
 
+        # P3.5.42 (6/18 鸿波 catch '怎么彻底解决 memory 误写' + '所有遵循 picker'):
+        # 加 memory_enforce_hook — pre_tool_call 拦 memory(target=memory|user) 误写.
+        # 走 LLM 二次校验 (复用 catfish-memory 5 kind router schema), 0 硬编码词表.
+        # model 严格走 picker chain (picker_state.json > role_resolver chat_default >
+        # 兜底 catfish-private-main 内网, 不走 rate_fast/summarize 因为 yaml 默认公网).
+        # 跟 pre_tool_call_safety_check 并行注册 — hermes pre_tool_call 多 callback,
+        # 第一个返 {"action": "block"} 的胜出.
+        try:
+            from pathlib import Path as _Path2
+            import importlib.util as _iu2
+            _enforce_py = _Path2(__file__).parent / "memory_enforce.py"
+            _spec2 = _iu2.spec_from_file_location(
+                "_catfish_xcatfish_user_memory_enforce", _enforce_py,
+            )
+            _enforce = _iu2.module_from_spec(_spec2)
+            _spec2.loader.exec_module(_enforce)
+            ctx.register_hook("pre_tool_call", _enforce.memory_enforce_hook)
+            logger.info(
+                "catfish-xcatfish-user: memory_enforce pre_tool_call hook registered ✓"
+            )
+        except Exception as e:
+            logger.warning(
+                "catfish-xcatfish-user memory_enforce register fail: %s (fail-silent 降级, "
+                "memory 写入回落 prompt 自查模式)", e,
+            )
+
     # Step 2.5: BL-MEMORY-ROUTER-A2-V3 (6/2 凌晨鸿波拍): 替换 hermes builtin memory tool.
     # browser_navigate 5/6 同 pattern. catfish-memory plugin (5/19 ship) 在 gateway
     # mode 不 load, 真 enforce 位置在这里 (catfish-xcatfish-user plugin 真装载).
