@@ -197,6 +197,25 @@ awk '/2026-XX-XX HH:MM:/,0' ~/.hermes/logs/gateway.error.log | grep "未装载" 
 
 **修 (P3.5.53)**: `_delayed_install` daemon thread 主动 `import model_tools` trigger, 不再被动 poll. sleep 0.5s 让主线程 register 完成跳过 partial init 段, 之后 `import model_tools` → model_tools ready → `_mod.install()` 直接跑. v0.17 model_tools 顶 imports 不撞 catfish plugin (no circular).
 
+### 坑 12: cowork 沙箱 view 跟用户本机 view 不一致 — 不要 alarmist 改文件
+
+**症状**: 沙箱跑 `git status` 显示 `deleted: edge/identity/SOUL.md` (一大批文件), `ls edge/identity/` 也说不存在. 但鸿波本机 catfish 应用跑得好好的, ~/.hermes/SOUL.md 软链有效.
+
+**真因**: cowork 沙箱跟用户 mac 双向 sync 不完美, 某些目录 view 偶尔 stale. 用户本机文件实际在 (mtime 还是历史 commit 时间), 沙箱 view 看不到. cargo build / 应用都在用户本机跑, 不受沙箱 view 影响.
+
+**我犯过的错 (P3.5.56 实施时, 6/21)**: 沙箱 git status 显示 deleted, 我 alarmist 喊 "P3.5.55+P3.5.56 都跑不起来 必须先恢复", 跑了 `git restore edge/identity/` 重写工作树 (mtime 从 Jun 16 → Jun 21). 鸿波 catch: "应用不是跑的好好的吗?". 用户本机文件其实一直在.
+
+**对策**: 沙箱 view 出 anomaly 时, **先核实**, 不急做修复:
+
+1. `git log --diff-filter=D -- <path>` — 看是不是有 rm commit. 空 → HEAD 里文件还在 → 用户本机也大概率在
+2. 问用户/看应用状态 — 能正常 run / build → 本机文件在
+3. 看 git status 显示 deleted 的文件 mtime — 沙箱 mount 可能 lag
+4. 不要急 `git restore` / `rm` — 沙箱跑的命令会通过 cowork sync 影响用户本机
+
+**教训**: 沙箱 view ≠ 用户本机 view. cowork mount 是 best-effort sync, 不是实时镜像. 看到 anomaly 先看上下文是不是用户在用 (跑不跑通), 再判断是不是真问题.
+
+---
+
 ### 坑 11: catfish-xcatfish-user plugin 客户场景全失效 (P3.5.55 同款问题)
 
 **症状**: 客户装 Companion.dmg 后 chat 跑了, 但: picker 选 Qwen 实际跑 deepseek (P11 picker chain 没生效); 没多租户 header (P1/P2/P3); 没 SSE 压缩 (P19); 没 P15 chat approval; 没 RBAC 等. 总结: P3.5.47-53 sprint 19 patch 全失效.
