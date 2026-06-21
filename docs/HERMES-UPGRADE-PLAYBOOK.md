@@ -197,6 +197,28 @@ awk '/2026-XX-XX HH:MM:/,0' ~/.hermes/logs/gateway.error.log | grep "未装载" 
 
 **修 (P3.5.53)**: `_delayed_install` daemon thread 主动 `import model_tools` trigger, 不再被动 poll. sleep 0.5s 让主线程 register 完成跳过 partial init 段, 之后 `import model_tools` → model_tools ready → `_mod.install()` 直接跑. v0.17 model_tools 顶 imports 不撞 catfish plugin (no circular).
 
+### 坑 10: SOUL.md 软链客户场景 dangling → 鲶鱼身份退化
+
+**症状**: 客户装 Companion.dmg 后跑 chat, "你是谁?" 回复出现 "Nous Research" / "AI 助手" 字样, 不是"我是小鲶". 开发者本机 OK, 只有客户场景出.
+
+**真因 (代码直查不猜)**:
+1. `edge/identity/install.sh:64` `ln -s catfish/edge/identity/SOUL.md ~/.hermes/SOUL.md` — 软链不 copy
+2. 客户场景没 catfish git clone → 软链 target 不存在 → dangling
+3. `identity_inject.py:67` `Path.exists()` 跟 symlink, dangling = false → 返 ""
+4. `inject_identity_if_needed:289` content 空 → 静默跳过 system inject → LLM 无人格
+
+历史影响: 任何不通过 catfish git clone 装机的员工 (客户场景, SaaS Q3, 删过 catfish 目录的开发者) 鲶鱼身份全失效, 静默退化无人格.
+
+**修 (P3.5.55)**:
+- `identity_bundle.rs`: `include_str!()` 编译时内嵌 4 个 SOUL 文件 (SOUL + SOUL_FFCS + SOUL_BROWSER + SOUL_EXECUTE_CODE, ~25KB)
+- `read_file_or_baked`: fs 读非空用 fs (开发者改即生效), 空/缺失用 baked (客户场景兜底)
+- `bootstrap_soul_files()`: lib.rs setup hook 自检 ~/.hermes/SOUL*.md, 不存在/dangling/空 时 dump baked. 让 hermes 自己路径 (catfish gateway 外的 chat 路径) 也能读到
+- 别家客户 (BYD/MEITUAN) 仍 fs-only — 他们自维护 SOUL_<X>.md
+
+**教训**: "软链 + 改即生效"是开发者便利, 不是分发策略. 任何依赖 catfish 源在固定路径的设计, 客户场景必挂. 治本: fs source-of-truth + binary baked default 双轨, fs 优先 fallback baked.
+
+---
+
 ### 坑 9: user msg 三路 SQLite 写, dedup 互相覆不到 → UI 双 user bubble
 
 **症状**: Companion chat 输入 "hi", UI 显两个一模一样的 "hi" 用户气泡 (右边 cyan). polling 5s 后 reload session 才出 (新输入瞬间只 1 个).

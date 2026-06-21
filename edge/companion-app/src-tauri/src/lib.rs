@@ -223,6 +223,13 @@ pub fn run() {
                 Err(e) => log::warn!("BL-CR: ensure_curator_default 失败 (不阻塞启动): {e}"),
             }
 
+            // P3.5.55 (6/21 鸿波 catch "客户没 catfish 源 → SOUL 软链 dangling → 鲶鱼退化"):
+            // 自检 ~/.hermes/SOUL*.md, 不存在 / dangling / 空 → 写 baked-in default
+            // (Companion binary include_str!() 编译时嵌入). 让 hermes 自己路径
+            // (不经 catfish gateway 的 chat 路径, 例如私有 model) 也有 SOUL 注入.
+            // 已存在的真实文件 → 不动 (尊重员工自定义或 install.sh 软链).
+            commands::identity_bundle::bootstrap_soul_files();
+
             // 注册全局快捷键 Cmd+Shift+Space (浮窗召唤) + Cmd+Shift+F (BL-E15 专注模式)
             #[cfg(desktop)]
             {

@@ -5,6 +5,92 @@
 
 ---
 
+## 2026-06-21 · P3.5.55 — SOUL.md 客户场景兜底 (baked-in default + boot 自检)
+
+### 鸿波 catch (6/21 21:30)
+"在 catfish 不能修改, 那就会出现 SOUL.md 是空的".
+
+### 真因审计链 (代码直查, 不猜)
+
+1. `edge/identity/install.sh:64` `ln -s catfish/edge/identity/SOUL.md ~/.hermes/SOUL.md` — 软链不 copy
+2. **客户场景**: Companion.dmg 装机, 没 catfish git clone → 软链 target 不存在 → dangling
+3. `identity_inject.py:66` `Path.exists()` 跟 symlink, dangling → False → `_cache.read` 返 ""
+4. `identity_bundle.rs:64` Companion 端同款 `read_file_silent` 也返 "" → bundle 6 字段全空
+5. `identity_inject.py:288` `build_identity_content(bundle)` → "" → `inject_identity_if_needed` 看 content 空, **静默跳过 system inject**
+6. 上游 LLM 收到无 system message → **鲶鱼退化成 ChatGPT/Hermes 默认人格** ("Nous Research" / "AI 助手" 字样)
+
+历史影响: 任何不通过 catfish git clone 装机的员工 (客户场景, SaaS Q3, 删过 catfish 目录的开发者) 鲶鱼身份都失效, 静默退化无人格.
+
+### 修法 (鸿波 6/21 拍 "Companion baked-in default SOUL")
+
+**1. Rust include_str!() 编译时内嵌 4 个 SOUL 文件**
+
+`identity_bundle.rs` 顶加:
+```rust
+const BAKED_SOUL: &str = include_str!("../../../../identity/SOUL.md");
+const BAKED_SOUL_FFCS: &str = include_str!("../../../../identity/SOUL_FFCS.md");
+const BAKED_SOUL_BROWSER: &str = include_str!("../../../../identity/SOUL_BROWSER.md");
+const BAKED_SOUL_EXECUTE_CODE: &str = include_str!("../../../../identity/SOUL_EXECUTE_CODE.md");
+```
+
+总 ~25KB 进 Companion binary (Companion 本身几十 MB, 可接受). 编译时若 source 缺 → cargo build 报错早发现.
+
+**2. `read_file_or_baked` fs-或-baked fallback**
+
+```rust
+fn read_file_or_baked(path: &Path, baked: &'static str) -> String {
+    let fs_content = read_file_silent(path);
+    if !fs_content.trim().is_empty() { return fs_content; }
+    baked.to_string()
+}
+```
+
+`identity_bundle()` 命令 SOUL 4 件全走 fallback. USER.md / memories/ 仍 fs-only (员工个人数据不该 bake).
+
+**3. `bootstrap_soul_files()` 启动自检 + dump**
+
+`lib.rs` setup hook 调一次. 行为:
+- fs 文件健康 (存在 + 非空 + 不是 dangling) → 不动 (尊重员工自定义 / install.sh 软链)
+- fs 不存在 / dangling 软链 / 0 字节 → 删旧 + 写 baked 内容
+
+为啥单独这个步骤而不只靠 fallback: identity_bundle 走的是 catfish gateway 路径 (Companion → gateway), 但 hermes 自己也读 ~/.hermes/SOUL.md (例如私有 model 时 hermes 内部 identity inject 走 hermes 不经 catfish gateway), 这条路 baked fallback 帮不上忙 — 必须 fs 真有内容.
+
+**FFCS 是默认客户**, baked_customer 只 bake SOUL_FFCS. 别家客户 (BYD / MEITUAN) 自己装 catfish 源, 走软链不需要 bake.
+
+### verify (鸿波本机)
+
+```bash
+cd ~/person_task/catfish
+git pull
+cd edge/companion-app
+cargo tauri build --no-bundle 2>&1 | grep -E "warning|error" | head -10
+# 期望 0 error (有 warning 是老的, 不阻塞)
+
+# 模拟客户场景测 bootstrap:
+mv ~/.hermes/SOUL.md ~/.hermes/SOUL.md.bak.test
+mv ~/person_task/catfish/edge/identity ~/person_task/catfish/edge/identity.bak.test
+# 启动 Companion
+open -a "鲶鱼 Companion"
+# 看日志:
+grep "P3.5.55" ~/Library/Logs/com.catfish.companion/*.log | tail -5
+# 期望: "[P3.5.55] dump baked /Users/.../SOUL.md (15675 bytes, 客户场景兜底身份)"
+ls -la ~/.hermes/SOUL*.md   # 应该是 regular file 不是软链
+# chat 跑 "你是谁?" → 应该以"我是小鲶"开头
+# 还原:
+mv ~/person_task/catfish/edge/identity.bak.test ~/person_task/catfish/edge/identity
+mv ~/.hermes/SOUL.md.bak.test ~/.hermes/SOUL.md   # 注意会覆盖刚写的 baked
+```
+
+### 教训 (第 7 次)
+
+**"软链 + 改即生效"是开发者便利, 不是分发策略.** 任何依赖 catfish git clone 在固定路径的设计, 客户场景必挂. 治本两条:
+1. fs 是 source of truth (开发者改即生效) — 软链路径不动
+2. binary 内嵌 default (客户场景兜底) — include_str! 编译时静态嵌入
+
+两条并存, fs 优先 fallback baked, 兼顾开发 + 分发.
+
+---
+
 ## 2026-06-21 · P3.5.54 — Companion user msg UI 双显 治本
 
 ### 鸿波 catch (6/21 19:00)
