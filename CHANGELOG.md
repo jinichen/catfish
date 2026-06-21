@@ -5,6 +5,127 @@
 
 ---
 
+## 2026-06-21 · P3.5.56 — Companion boot 自动装 catfish-xcatfish-user plugin (同款 SOUL 治本)
+
+### 鸿波 catch
+"有坑就要立刻填平, 不要等, 不过要先分析代码, 不要瞎猜".
+
+(承接 P3.5.55 SOUL 那个 audit — 发现 catfish-xcatfish-user hermes plugin 跟 SOUL 同款问题: 软链路径客户场景挂.)
+
+### Audit 真现状 (Agent 深审 + grep 验证, 不猜)
+
+| 问题 | 现状 |
+|---|---|
+| Plugin 怎么装? | `bash edge/hermes-plugins/catfish-xcatfish-user/deploy.sh` 手动跑, `~/.hermes/plugins/catfish-xcatfish-user/` 软链到 catfish 源 |
+| 装机谁触发? | **没人** — `setup-catfish-edge.sh` 不调 `deploy.sh`, Companion boot 也不装 |
+| 客户场景咋样? | 装 Companion.dmg 没跑 deploy.sh → plugin 不存在 → hermes daemon plugin discover (`hermes_cli/plugins.py:1192`) 找不到 → P3.5.47-53 sprint 19 个 P-patch **全失效** |
+| Plugin 多少文件? | **9 个文件** (`__init__.py` + `plugin.py` 主代码 + `plugin.yaml` manifest + 6 个兄弟模块: resolver / session_registry / session_search_router / memory_router / memory_enforce / hermes_token_renewal) 总 ~189KB |
+| Config.yaml? | hermes 要 `plugins.enabled` 含 `catfish-xcatfish-user` 才加载, 没在白名单即使软链了也不加载 (`hermes_cli/plugins.py:198 _get_enabled_plugins`) |
+| Plugin hot reload? | 否, plugin 装好 / 升级要重启 hermes daemon |
+| Companion 管 hermes daemon? | 否, launchctl 管 hermes (`lib.rs:283 autostart` 只起 tool-bridge / local-search / chrome) |
+
+**结论**: 装 Companion.dmg 客户场景, catfish-on-hermes 集成完全裸 — 比 SOUL 退化严重多了 (SOUL 缺只是身份退化, plugin 缺是 19 patch 全挂).
+
+### 修法 (跟 SOUL P3.5.55 同款思路)
+
+**1. `commands/hermes_plugin.rs` 新文件** — include_str!() 编译时内嵌 plugin 9 文件 (~189KB 进 binary, 跟 SOUL ~25KB 加起来 <250KB):
+```rust
+const BAKED_INIT: &str = include_str!("../../../../hermes-plugins/catfish-xcatfish-user/__init__.py");
+const BAKED_PLUGIN: &str = include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin.py");
+const BAKED_PLUGIN_YAML: &str = include_str!("../../../../hermes-plugins/catfish-xcatfish-user/plugin.yaml");
+const BAKED_RESOLVER: &str = include_str!("../../../../hermes-plugins/catfish-xcatfish-user/resolver.py");
+const BAKED_SESSION_REGISTRY: &str = ...;
+const BAKED_SESSION_SEARCH_ROUTER: &str = ...;
+const BAKED_MEMORY_ROUTER: &str = ...;
+const BAKED_MEMORY_ENFORCE: &str = ...;
+const BAKED_HERMES_TOKEN_RENEWAL: &str = ...;
+```
+
+**2. `bootstrap_hermes_plugin()` Companion setup hook 调用** — 4 状态枚举跟 SOUL 同款:
+
+| 状态 | 行为 |
+|---|---|
+| HealthySymlink (开发者 deploy.sh 软链 + target 是目录) | 不动 (改即生效) |
+| DanglingSymlink (客户场景) | 删软链, 创实目录, 写 9 baked 文件 |
+| RegularDir (老 Companion 写的) | **9 文件逐个 overwrite** (保证跟 catfish 一致) |
+| Missing | 创目录写 baked |
+| Other (实文件等) | 删, 创目录, 写 baked |
+
+写入用 tmp + rename atomic 模式 (防 hermes daemon 半读半写).
+
+**3. `ensure_plugin_enabled_in_config()` 顺带改 config.yaml** — 跟 `curator_config::ensure_default` 同款 serde_yaml::Value pattern:
+- config.yaml 不存在 → 创最小 yaml
+- plugins.enabled 不含 catfish-xcatfish-user → append
+- plugins.disabled 显式含 catfish-xcatfish-user → **不强 enable** (尊重员工配置, log warn)
+- 已含 → 不动 (idempotent)
+
+**4. 不重启 hermes daemon** — Companion 写完 plugin 文件, 等 hermes 下次自然重启 / 员工手动 kickstart 生效. 不抢 hermes 控制权 (TODO P3.5.56.1 可选: 检测新装时主动 launchctl kickstart).
+
+**5. Escape hatch**: `CATFISH_HERMES_PLUGIN_NO_BOOTSTRAP=1` env 跳全部 (开发者调试用).
+
+### 设计要点
+
+- **跟 SOUL P3.5.55 严格同款**: ExistingKind 4 状态枚举 / 健康软链不动 / 其他 overwrite / env escape hatch / atomic tmp+rename. 鸿波"立刻填平"用熟手法 minimize 风险.
+- **写文件不动进程**: Companion 不动 hermes daemon, 不抢 launchctl 管理权. 下次 hermes 重启自动加载新 plugin.
+- **disabled 列表防御**: 员工显式 disable 这 plugin 就尊重 — 极少场景但不该强覆盖.
+- **9 文件 atomic 写**: tmp + rename 每个文件独立 atomic, 防 hermes 半路 import 到半写文件 raise ImportError.
+- **测试用 `_at(path)` pattern**: 跟 curator_config 一致, 不污染 env var 全局, parallel-safe.
+
+### 文件改动
+
+- `commands/hermes_plugin.rs` (新, 360 行) — baked 9 文件 + bootstrap + ensure config + 6 单测
+- `commands/mod.rs` — 注册新 module
+- `lib.rs:setup` — 调 `bootstrap_hermes_plugin()` 在 `bootstrap_soul_files()` 之后
+
+### verify (鸿波本机)
+
+```bash
+cd ~/person_task/catfish && git pull
+cd edge/companion-app && cargo tauri build --no-bundle 2>&1 | grep -E "warning|error" | head -10
+# 期望 0 error
+
+# 场景 1: 开发者本机 (deploy.sh 软链健康) — 应该不动
+ls -la ~/.hermes/plugins/catfish-xcatfish-user
+# → 软链 → /Users/.../catfish/edge/hermes-plugins/catfish-xcatfish-user
+open -a "鲶鱼 Companion"
+grep "P3.5.56" ~/Library/Logs/com.catfish.companion/*.log | tail -3
+# 期望: "...是健康软链 (开发者 deploy.sh 路径), 不动"
+
+# 场景 2: 客户场景 (dangling) — 删后写 baked
+mv ~/person_task/catfish/edge/hermes-plugins ~/person_task/catfish/edge/hermes-plugins.bak
+open -a "鲶鱼 Companion"
+# 期望: "删 dangling 软链" + "sync baked → ... (9 文件, 193500 bytes, catfish source-of-truth)"
+ls ~/.hermes/plugins/catfish-xcatfish-user/
+# 应该是 9 个 .py + .yaml 实文件
+
+# 场景 3: 老 regular dir (Companion 升级) — overwrite
+echo "OLD V1" > ~/.hermes/plugins/catfish-xcatfish-user/__init__.py
+open -a "鲶鱼 Companion"
+head -3 ~/.hermes/plugins/catfish-xcatfish-user/__init__.py
+# 应该是当前 catfish baked, 不是 OLD V1
+
+# 场景 4: config.yaml 自动 ensure
+cat ~/.hermes/config.yaml | grep -A 5 plugins:
+# 应有 enabled: 列表含 catfish-xcatfish-user
+
+# 场景 5: escape hatch
+CATFISH_HERMES_PLUGIN_NO_BOOTSTRAP=1 open -a "鲶鱼 Companion"
+grep "P3.5.56" ~/Library/Logs/com.catfish.companion/*.log | tail -1
+# 期望: "CATFISH_HERMES_PLUGIN_NO_BOOTSTRAP 设, 跳 plugin bootstrap"
+
+# 还原
+mv ~/person_task/catfish/edge/hermes-plugins.bak ~/person_task/catfish/edge/hermes-plugins
+rm -rf ~/.hermes/plugins/catfish-xcatfish-user
+bash edge/hermes-plugins/catfish-xcatfish-user/deploy.sh
+launchctl kickstart -k gui/$(id -u)/ai.hermes.gateway
+```
+
+### 教训 (第 9 次)
+
+"有坑就要立刻填平" — 但每次填平前必须先 audit. 这次 audit 揭示 **plugin 文件不是 2 个是 9 个** (Agent 第一轮 audit 只看 `__init__.py + plugin.py`, ls 看到 ~一堆兄弟模块). 不审清楚就 baked, 漏 6 个模块, plugin run 时 import error 全完蛋. **Audit 必到 ls 实际文件数, 不只看主文件名**.
+
+---
+
 ## 2026-06-21 · P3.5.55 — catfish 主动同步 SOUL.md → ~/.hermes/ (catfish 是 source of truth)
 
 ### 鸿波 2 次 catch

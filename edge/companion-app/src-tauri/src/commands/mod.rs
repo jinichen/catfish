@@ -39,6 +39,7 @@ pub mod logs;
 pub mod memory_history;
 pub mod hermes_memory;  // BL-DASHBOARD-HERMES-MEMORY-CARD (5/16)
 pub mod identity_bundle;  // BL-IDENTITY-INJECT-DECOUPLE (5/26): SOUL/USER/memories prefetch 给 /v1/chat/completions body
+pub mod hermes_plugin;    // P3.5.56 (6/21 鸿波): Companion boot 自动装 catfish-xcatfish-user plugin (baked + ensure config.yaml enabled)
 pub mod advisor_cache;   // BL-ADVISOR-CACHE (5/22 Phase 7): 缓存 advisor 结果
 pub mod advisor_config;  // BL-ADVISOR-CONFIG (5/22 Phase 7): 读 yaml advisor section
 pub mod advisor_task_state;  // BL-ADVISOR-TASK-STATE (5/22): done/snoozed/ignored 状态

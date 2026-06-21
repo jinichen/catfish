@@ -237,6 +237,22 @@ pub fn run() {
             // Escape hatch: CATFISH_SOUL_NO_BOOTSTRAP=1 跳全部 (调试用).
             commands::identity_bundle::bootstrap_soul_files();
 
+            // P3.5.56 (6/21 鸿波 "有坑就要立刻填平"): Companion boot 自动装
+            // catfish-xcatfish-user hermes plugin (跟 SOUL P3.5.55 同款机制, 治本"客户
+            // 装 Companion 但没装 plugin → 19 个 P-patch 全失效 → 鲶鱼集成裸 hermes").
+            //
+            // 同步 9 个 plugin 文件 (~189KB include_str! baked) 到 ~/.hermes/plugins/
+            // catfish-xcatfish-user/. 同款 4 状态分支: 健康软链不动, 别的全 overwrite.
+            //
+            // 顺带 ensure ~/.hermes/config.yaml plugins.enabled 含 catfish-xcatfish-user
+            // (hermes plugin loader 白名单, 没在里面即使文件就位也不加载).
+            //
+            // **不重启 hermes daemon** — Companion 不管 hermes 进程 (launchctl 管),
+            // 等 hermes 下次自然重启 / 员工手动 kickstart 自动生效.
+            //
+            // Escape hatch: CATFISH_HERMES_PLUGIN_NO_BOOTSTRAP=1 跳全部 (调试用).
+            commands::hermes_plugin::bootstrap_hermes_plugin();
+
             // 注册全局快捷键 Cmd+Shift+Space (浮窗召唤) + Cmd+Shift+F (BL-E15 专注模式)
             #[cfg(desktop)]
             {

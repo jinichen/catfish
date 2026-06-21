@@ -197,6 +197,30 @@ awk '/2026-XX-XX HH:MM:/,0' ~/.hermes/logs/gateway.error.log | grep "未装载" 
 
 **修 (P3.5.53)**: `_delayed_install` daemon thread 主动 `import model_tools` trigger, 不再被动 poll. sleep 0.5s 让主线程 register 完成跳过 partial init 段, 之后 `import model_tools` → model_tools ready → `_mod.install()` 直接跑. v0.17 model_tools 顶 imports 不撞 catfish plugin (no circular).
 
+### 坑 11: catfish-xcatfish-user plugin 客户场景全失效 (P3.5.55 同款问题)
+
+**症状**: 客户装 Companion.dmg 后 chat 跑了, 但: picker 选 Qwen 实际跑 deepseek (P11 picker chain 没生效); 没多租户 header (P1/P2/P3); 没 SSE 压缩 (P19); 没 P15 chat approval; 没 RBAC 等. 总结: P3.5.47-53 sprint 19 patch 全失效.
+
+**真因**:
+1. plugin 装机靠 `bash deploy.sh` 手动跑, `~/.hermes/plugins/catfish-xcatfish-user/` 软链到 catfish 源
+2. 客户没 catfish git clone, 没人跑 deploy.sh → plugin 目录不存在
+3. `hermes_cli/plugins.py:1192 discover_plugins` 扫 `~/.hermes/plugins/` → 找不到 catfish plugin
+4. 即使有目录, `hermes_cli/plugins.py:198 _get_enabled_plugins` 还要 config.yaml plugins.enabled 含 catfish-xcatfish-user
+5. 客户机两条件都不满足 → 19 patch 全失效
+
+**修 (P3.5.56)** — 跟 SOUL P3.5.55 严格同款:
+- `commands/hermes_plugin.rs` include_str!() 内嵌 9 plugin 文件 (~189KB)
+- `bootstrap_hermes_plugin()` Companion setup hook 主动同步, 4 状态枚举 (HealthySymlink 不动 / DanglingSymlink / RegularDir / Missing / Other 全 overwrite)
+- `ensure_plugin_enabled_in_config()` config.yaml plugins.enabled 自动 ensure 含 catfish-xcatfish-user
+- 不重启 hermes daemon (等下次自然重启 / kickstart 生效)
+- env escape hatch: `CATFISH_HERMES_PLUGIN_NO_BOOTSTRAP=1`
+
+**为啥 9 文件不是 2**: plugin 是多模块 Python 包. `__init__.py` 入口 + `plugin.py` 主代码 + `plugin.yaml` manifest + 6 个兄弟模块 (resolver / session_registry / session_search_router / memory_router / memory_enforce / hermes_token_renewal). 任一缺失 plugin import 时 raise ImportError, hermes 不加载.
+
+**教训**: Audit plugin 装机的真实文件数, 必到 `ls -la` 实际目录. Agent 第一轮只说 `__init__.py + plugin.py`, 漏了 6 个兄弟模块. 不审清楚就 baked, 漏文件 plugin import error 全完蛋.
+
+---
+
 ### 坑 10: SOUL.md catfish 该是 source of truth (鸿波 2 次 catch 后真理解)
 
 **症状**: 客户装 Companion.dmg 后跑 chat, "你是谁?" 回复出现 "Nous Research" / "AI 助手" 字样. 开发者本机 OK, 只客户场景出. 或者 catfish 升级 SOUL.md 后, 员工本机停在老版本.
