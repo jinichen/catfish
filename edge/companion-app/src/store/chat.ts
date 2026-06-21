@@ -139,6 +139,11 @@ interface ChatState {
 // 抽到 lib/sessionMessages.ts (单独 file 避 cyclic — lib/chat.ts 已 import
 // store/chat.ts, 反向 import 会 cyclic). useTaskChat 共用同一 helper.
 
+// P3.5.54 (6/21 鸿波 catch UI 双显) — expose 到 window 给 devtools 直接验
+// store.messages 真值. 修完后留着方便后续 debug, dev / build 都 expose 无害
+// (Tauri webview 没 cross-origin script 注入风险).
+declare global { interface Window { __chatStore?: unknown } }
+
 export const useChatStore = create<ChatState>((set) => ({
   messages: [],
   isStreaming: false,
@@ -327,3 +332,11 @@ export const useChatStore = create<ChatState>((set) => ({
       lifecycleStatus: null,
     }),
 }));
+
+// P3.5.54: 完成 window expose. dev console 跑:
+//   JSON.stringify(window.__chatStore.getState().messages
+//     .map(m => ({id:m.id, role:m.role, c:m.content?.slice(0,30)})))
+// 看 user "hi" 是 2 条不同 id (send 双发) 还是 1 条 React 双 render.
+if (typeof window !== "undefined") {
+  (window as unknown as { __chatStore?: typeof useChatStore }).__chatStore = useChatStore;
+}

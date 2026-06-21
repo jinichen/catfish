@@ -197,6 +197,33 @@ awk '/2026-XX-XX HH:MM:/,0' ~/.hermes/logs/gateway.error.log | grep "未装载" 
 
 **修 (P3.5.53)**: `_delayed_install` daemon thread 主动 `import model_tools` trigger, 不再被动 poll. sleep 0.5s 让主线程 register 完成跳过 partial init 段, 之后 `import model_tools` → model_tools ready → `_mod.install()` 直接跑. v0.17 model_tools 顶 imports 不撞 catfish plugin (no circular).
 
+### 坑 9: user msg 三路 SQLite 写, dedup 互相覆不到 → UI 双 user bubble
+
+**症状**: Companion chat 输入 "hi", UI 显两个一模一样的 "hi" 用户气泡 (右边 cyan). polling 5s 后 reload session 才出 (新输入瞬间只 1 个).
+
+**真因 (sqlite3 直查 ground truth)**:
+```
+session 20260621_185745_5e9945:
+  12387 user 'hi' @ 1782039465.224   ← Companion 写
+  12388 user 'hi' @ 1782039465.573   ← hermes 350ms 后写
+  12389 assistant 'hi，有啥事？'
+```
+3 路 SQLite 写, dedup 互相看不见:
+1. Companion: `useChat.ts:619` IIFE `persistMessage(userMsg)` → Rust `session_message_append`
+2. hermes: `gateway/run.py:9786` `append_to_transcript(_user_entry, skip_db=agent_persisted)`; agent 自己用 `_flush_messages_to_session_db()` 写 (#860 注释证实)
+3. Rust idempotent guard `session_write.rs:278` 写死 `if input.role == "assistant"`, user 完全不查; hermes 跟 Companion 各用各的 connection, Rust guard 也覆不到 hermes
+
+ChatTab.tsx polling 5s 后 `getSession()` reload → store.messages 多 1 行 user → UI 多 1 个 bubble.
+
+历史 32+ 对 dup 最早 2026-05-24, 一直都有, v0.17 升级 + polling 路径让 UI 才看见.
+
+**修 (P3.5.54)**:
+- `useChat.ts`: 砍 `persistMessage(userMsg)` IIFE. hermes 是 user msg 唯一 writer
+- 附件场景: `attachment_record` 改 fire-and-forget poll `getSession()` 找 hermes 写的 user row rowid (25 × 200ms = 5s), 拿到再 `attachment_record(messageId=hermesRowid)`. timeout 兜底用 client uuid (image base64 resume 失效但 chip 仍显)
+- `scripts/cleanup-user-dup-rows.py`: 一次性清洗历史 dup, 自动 backup state.db, 留 Companion 写的早行删 hermes 写的晚行 (attachments.db messageId 挂在早行上)
+
+**教训**: 不要从 UI 现象猜后端. **优先级: sqlite3 直查 > log grep > 代码静态审计 > UI 观察**.
+
 ---
 
 ## 四、catfish plugin install 真实结构 (这次 audit 才搞清楚)

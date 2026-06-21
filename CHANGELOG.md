@@ -5,6 +5,64 @@
 
 ---
 
+## 2026-06-21 · P3.5.54 — Companion user msg UI 双显 治本
+
+### 鸿波 catch (6/21 19:00)
+"又出现新 BUG, 你看现实的, 输入会显示两次." 截图: chat 框里同一条 "hi" 在自己气泡里出现 2 次. 接着: "现在就要彻底解决 UI 双显, 一定要去看代码, 不要乱猜".
+
+### Ground truth 锁定 (不靠猜, sqlite3 直查)
+```
+python3 -c "import sqlite3; ..."  
+session 20260621_185745_5e9945 — message_count=3:
+  12387 user 'hi'                    @ 1782039465.224  ← Companion 写
+  12388 user 'hi'                    @ 1782039465.573  ← hermes 350ms 后写
+  12389 assistant 'hi，有啥事？'
+```
+单 session 2 行 user 'hi', 内容完全相同, timestamp 差 349ms. ChatTab.tsx polling 5s 后 reload session → store.messages = [user, user, assistant] → 2 个 UserBubble.
+
+历史扫: `state.db` 共 **32 对相邻 user msg 双行** (3s 内 trim 后内容相同), 最早 2026-05-24, 一直未发现. v0.17 升级 + polling 路径让 UI 才看见.
+
+### 真因 (3 路 SQLite 写, dedup 互相覆不到)
+1. **Companion 路**: `useChat.ts:619` IIFE 调 `persistMessage(userMsg)` → Rust `session_message_append` → state.db write (line 12387).
+2. **hermes 路**: hermes v0.17 `gateway/run.py:9786` `self.session_store.append_to_transcript(_user_entry, skip_db=agent_persisted)`; `agent_persisted = self._session_db is not None`. 若 True, AIAgent `_flush_messages_to_session_db()` 自己写 user msg. 任一路径都把 user msg 写进 state.db (line 12388).
+3. **dedup 缺口**: Rust `session_write.rs:278` idempotent guard 是 `if input.role == "assistant"` 写死 — user 完全不查. hermes 跟 Companion 各用各的 SQLite connection, Rust guard 也只能看到 Companion 自己的 INSERT, 看不到 hermes 那条.
+
+hermes 自己也踩过 dup write — `gateway/session.py:1358` 注释明写: "Used when the agent already persisted messages to SQLite via its own `_flush_messages_to_session_db()`, preventing the duplicate-write bug (#860)." hermes 加 `skip_db` 防的是 transcript layer 跟 agent layer 自己内部双写, 但 Companion 是第三方写入, hermes 不知道也防不了.
+
+### 修法 P3.5.54 (撤回 Companion 端 user msg 写入)
+- `useChat.ts`: 砍 `persistMessage(userMsg)` IIFE. hermes 是 user msg 唯一 writer. 新 session 不再出双行.
+- 附件场景: `attachment_record` 需要 messageId 关联 attachments.db. 改成 fire-and-forget poll `getSession(sessionIdForStream)` (25 次 × 200ms = 5s) 找 hermes 写的 user row rowid, 拿到后 `attachment_record(messageId=hermesRowid)`. poll timeout 兜底用 `userMsg.id` (uuid), image base64 resume 会失效但 chip 仍显 (SessionAttachmentsBar 走 `attachment_list_by_session` 不靠 join).
+- `store/chat.ts`: 加 `window.__chatStore` expose 给 devtools 后续 debug 用 (P3.5.54 audit 时建的, 留着不撤).
+
+### 一次性清洗历史 dup
+新写脚本 `scripts/cleanup-user-dup-rows.py`:
+- Dry-run (默认) 列将删的 rowid
+- `--apply` 真删 (留较早的 Companion 写的行, 删较晚的 hermes 写的 — 因为 attachments.db messageId 挂在 Companion 那行)
+- 自动 backup state.db → `.bak.{ts}`, 出问题 cp 回去
+- 同时 `session.message_count -= dup_count` 让计数对齐
+
+鸿波本机用法:
+```bash
+cd ~/person_task/catfish
+python3 scripts/cleanup-user-dup-rows.py             # dry-run 看
+python3 scripts/cleanup-user-dup-rows.py --apply     # 真删
+```
+
+### verify (鸿波本机)
+1. git pull, cargo tauri dev 重启 Companion
+2. devtools console 跑 `JSON.stringify(window.__chatStore.getState().messages.map(m => ({id:m.id,role:m.role,c:m.content?.slice(0,30)})))` → 发 "test" 应看 1 个 user msg 1 个 assistant
+3. ChatTab 切走 5s+ 再回, 不再 2 个 user bubble
+4. sqlite3 query: `SELECT id, role, content FROM messages WHERE session_id='新 session id' ORDER BY id` → 只 1 行 user msg
+5. 跑 cleanup 脚本清历史, 老 session 切回来也不双显
+
+### 教训 (第 6 次反省)
+**不要从 UI 现象猜后端 — 直接查 ground truth.**
+- 老审计路径: 看 React 代码猜 useEffect 双触发 → 猜 React StrictMode → 猜 React key 冲突 → 全错
+- 真路径: 看 DOM 看到 2 个 user div → user 验证 `[...divs].filter(d => d.style.justifyContent==='flex-end')` 真是 2 → 猜还是没猜到根因 → **直接 sqlite3 query state.db 看到 2 行真实存在** → 反查到 hermes v0.17 `append_to_transcript skip_db` 路径 → 锁定 3 路并发写
+- 工具优先级: **shell + sqlite3 直查 > log grep > 代码静态审计 > UI 观察**. 越靠近原始数据越能避免猜.
+
+---
+
 ## 2026-06-21 · P3.5.53 — hermes daemon plugin install 死锁真因 + 真修
 
 ### 7 步真因 audit (鸿波 N 次 catch 我瞎猜后)

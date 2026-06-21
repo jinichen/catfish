@@ -587,51 +587,64 @@ export function useChat(_initialModel: string) {
       };
       const requestMessages = [...useChatStore.getState().messages, userMsg];
       addMessage(userMsg);
-      // 持久化到 state.db: 附件内容不落 messages 表 (base64 / text 太大), 只存文字 + 占位.
-      // BL-FILE-SESSION-INDEX-V1 Phase 1 (5/30): 附件 metadata 单独写
-      // ~/.catfish/attachments.db 让切会话后能恢复 chip + 跨会话工具能搜.
-      // 内容仍只在物理文件 (kept_path / parsed_text_path), db 只存路径.
-      const imgN = attachments.filter((a) => a.kind === "image").length;
-      const fileN = attachments.filter((a) => a.kind === "file").length;
-      const placeholderParts: string[] = [];
-      if (imgN > 0) placeholderParts.push(`📎 ${imgN} 张图`);
-      if (fileN > 0) {
-        const fileNames = attachments
-          .filter((a) => a.kind === "file")
-          .map((a) => a.name)
-          .join(", ");
-        placeholderParts.push(`📄 ${fileN} 份文档 (${fileNames})`);
-      }
-      // BL-FILE-SESSION-INDEX-V1: 占位文字保留 (向后兼容老 state.db reader),
-      // 但去掉 "切会话不保留" 这句 — 现在 metadata 保留了, chip 切回还在.
-      const persistContent =
-        placeholderParts.length > 0
-          ? `${trimmed}${trimmed ? "\n" : ""}[${placeholderParts.join(" + ")}]`
-          : trimmed;
-      // 5/24 BL-MULTI-SESSION-STREAM: 用 sessionIdForStream 锁定持久化, 不读 store.
-      if (sessionIdForStream) {
-        // P3.5.8 BL-FILE-SESSION-INDEX-V1 Phase 2 (6/16): 改 fire-and-forget →
-        // async chain — 先 await persistMessage 拿 state.db rowid, 再用 rowid 调
-        // attachment_record. 旧路径用 userMsg.id (uuid) 当 messageId, resume 时
-        // SessionMessage.id 是 rowid (number), uuid ≠ rowid, join 不上, 历史图
-        // 在 wire 里失踪 (gateway user_multipart=0). 整段仍 fire-and-forget 不阻塞
-        // chat send — 同步链放到 IIFE 里跑, send 主流程不等.
+      // P3.5.54 (6/21 鸿波 catch "UI 双显"): 真因——hermes v0.17 自己写 user msg.
+      //
+      // 验证 (state.db dump):
+      //   session 20260621_185745_5e9945:
+      //     12387 user 'hi' @ 1782039465.224  ← Companion persistMessage
+      //     12388 user 'hi' @ 1782039465.573  ← hermes 350ms 后写
+      //     12389 assistant 'hi，有啥事？'
+      //   多个 session 全有同款 user msg 双行.
+      //
+      // hermes v0.17 路径: gateway/run.py:9786 `self.session_store.append_to_transcript(
+      //   ..., skip_db=agent_persisted)`, 见 gateway/session.py:1358 "Used when the
+      //   agent already persisted messages to SQLite via its own
+      //   _flush_messages_to_session_db(), preventing the duplicate-write bug
+      //   (#860)." — hermes 自己也踩过 dup write, 加了 skip_db 防自己内部双写;
+      //   但 Companion 走 Rust session_message_append 是第三路, hermes 看不见, dedup
+      //   也覆不到 (Rust idempotent guard session_write.rs:278 是 assistant-only).
+      //
+      // 修法: Companion 撤回 user msg 写入. hermes 是 user msg 唯一 writer.
+      // ChatTab.tsx polling 5s 后 reload 也只读到 1 行, 不再 2 user bubble.
+      //
+      // 附件 case: attachment_record 走 fire-and-forget poll hermes rowid (见下).
+      // 拿不到 rowid 用 userMsg.id (uuid) 兜底 — image base64 resume 失败但
+      // SessionAttachmentsBar chip 仍显 (走 attachment_list_by_session 不靠 join).
+      if (sessionIdForStream && enrichedAttachments.length > 0) {
         void (async () => {
-          const rowid = await persistMessage(
-            { ...userMsg, content: persistContent, attachments: undefined },
-            sessionIdForStream,
-          );
-
-          // BL-FILE-SESSION-INDEX-V1 Phase 1: 写 attachments metadata.
-          // Phase 2: 用 rowid 当 messageId (而非 client uuid), 让 resume 时
-          // sessionMessages.indexAttachmentsByMessageId 能 join 上.
-          if (enrichedAttachments.length === 0) return;
-          if (rowid == null) {
+          // poll getSession 等 hermes 写完 user row (一般 < 1s, 留 5s 容差).
+          // hermes 写的 content 就是 trimmed (没 Companion 的 "[📎...]" placeholder).
+          let hermesRowid: string | null = null;
+          try {
+            const { getSession } = await import("../lib/tauri");
+            for (let attempt = 0; attempt < 25; attempt++) {
+              await new Promise((r) => setTimeout(r, 200));
+              try {
+                const detail = await getSession(sessionIdForStream);
+                for (let i = detail.messages.length - 1; i >= 0; i--) {
+                  const m = detail.messages[i];
+                  if (
+                    m.role === "user" &&
+                    (m.content ?? "").trim() === trimmed
+                  ) {
+                    hermesRowid = String(m.id);
+                    break;
+                  }
+                }
+              } catch {
+                // db lock / network jitter — 下轮再试
+              }
+              if (hermesRowid) break;
+            }
+          } catch (e) {
+            console.warn("[P3.5.54] getSession 异常:", e);
+          }
+          if (!hermesRowid) {
             console.warn(
-              "[BL-FILE-SESSION-INDEX-V1 Phase 2] persistMessage 没返 rowid, " +
-                "attachment 无法 join, image 在 resume 后将失踪",
+              "[P3.5.54] hermes 5s 内没写 user row, attachment_record 用 client uuid 兜底; " +
+                "image base64 resume 会失效 (chip 仍显)",
             );
-            return;
+            hermesRowid = userMsg.id;
           }
 
           let userId = "anonymous";
@@ -648,7 +661,7 @@ export function useChat(_initialModel: string) {
                 input: {
                   userId,
                   sessionId: sessionIdForStream,
-                  messageId: String(rowid), // rowid → string (db schema TEXT)
+                  messageId: hermesRowid,
                   kind: a.kind,
                   fileKind:
                     a.kind === "file"
