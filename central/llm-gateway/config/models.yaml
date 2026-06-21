@@ -152,7 +152,7 @@ models:
       #   curl https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions \
       #     -H "Authorization: Bearer $DASHSCOPE_API_KEY" \
       #     -d '{"model":"qwen3.6-max-preview","messages":[{"role":"user","content":"hi"}]}'
-      model: openai/glm-5.2
+      model: openai/qwen3.7-max-2026-06-08
       api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
       api_key_env: DASHSCOPE_API_KEY
       timeout: 90  # 多模态请求图像/视频处理偏慢, 给宽裕
