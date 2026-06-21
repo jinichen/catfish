@@ -534,6 +534,8 @@ pub fn run() {
             commands::journal::current_todos_weekly_reset,
             // BL-PROACTIVE-DECOUPLE (5/26): journal_tail + last_model 一次拿, 给 /api/proactive/* header 透传
             commands::proactive::proactive_context,
+            // P3.5.45 (6/20 鸿波): 录屏 RPC 直调 tool-bridge sock, 砍 gateway HTTP path
+            commands::recmode::recmode_rpc,
             // BL-WECHAT-CATFISH-BIND v1 + v2 (5/26): WeChat openid ↔ catfish 员工 email 绑定
             // v1 read-only 状态; v2 写命令给 Dashboard UI 一键审批/改绑/解绑/拒绝.
             commands::wechat_binding::wechat_binding_status,
