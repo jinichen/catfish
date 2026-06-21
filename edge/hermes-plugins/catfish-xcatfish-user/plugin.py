@@ -1022,7 +1022,14 @@ def _patch_p7_companion_proxy_route() -> None:
         headers = {k: v for k, v in request.headers.items() if k.lower() != "host"}
 
         # BL-PLUGIN-P7-PROXY-TOKEN-SWAP: 关键 swap.
-        svc_token = os.environ.get("HERMES_SERVICE_TOKEN")
+        # P3.5.44 (鸿波 6/20 catch '不一次性解决留尾巴'): 老逻辑 os.environ.get 直接读,
+        # token 30 天过期员工没设 cron 续 → 所有 /api/* cascade 401 (录屏/advisory/
+        # proactive/fetchMe). 现在走 hermes_token_renewal.get_fresh_service_token,
+        # 转发前自动检测剩余 < 5 天就调 catfish-identity mint 新, 写盘 + os.environ.
+        # mint 失败 (没配 CLIENT_SECRET / IdP 挂) 仍 fallback 返当前 token, 跟老
+        # 行为持平 (gateway 401 让员工看到错误信息, 不静默退化).
+        from . import hermes_token_renewal  # noqa: PLC0415
+        svc_token = await hermes_token_renewal.get_fresh_service_token()
         if svc_token:
             headers["Authorization"] = f"Bearer {svc_token}"
         else:
