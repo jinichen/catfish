@@ -430,9 +430,12 @@ export default function ChatInput({
             跨 session 隔离, 不重启 gateway. */}
         <TeachingToggleButton isStreaming={isStreaming} />
 
-        {/* 🔄 自动续跑 toggle (BL-AUTO-CONTINUE 5/13 鸿波"长程任务咋办").
-            取代 gateway 删掉的 BL-FIX23 mid-task retry. 开启 → LLM 跑过 tool
-            后又 stop 没调下个 tool, Companion 自动发"继续" 续跑 (上限 3 轮).
+        {/* ⏭ 自动接力 toggle (BL-AUTO-CONTINUE 5/13 鸿波"长程任务咋办").
+            P3.5.46 (6/20 鸿波 catch '🔄 跟长程啥关系'): emoji 🔄 → ⏭ 跟系统自带 retry
+            区分. 系统 retry (chat.ts P3.5.34 修-A/D, 默认开透明) 管"流挂了" 技术
+            故障 (上游 idle / finish_reason 缺失); 本 toggle 管 "LLM finish_reason=
+            stop 正常结束但任务没完" semantic 场景 — 自动发"继续" 续上下文
+            (上限 3 轮防失控). 取代 gateway 删的 BL-FIX23 mid-task retry.
             适合长任务 (合并多个 Excel / 资质材料整理 / 长流程 skill 串联).
             关闭回常态: LLM stop 就 stop, 自己打"继续". 跨 session 隔离. */}
         <AutoContinueToggleButton isStreaming={isStreaming} />
