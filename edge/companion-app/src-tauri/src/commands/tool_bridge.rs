@@ -9,19 +9,13 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-// BL-WIN8 (5/8): IPC 跨平台 — Unix 走 unix domain socket, Windows 走 TCP
-// localhost (随机端口). Python tool-bridge 端启动时, Windows 会把端口号写到
-// socket_path 里, Rust 这边读出来 connect TCP. 跟 named pipe 比 TCP 多一跳
-// 但实现简单, 测试容易. 不影响安全 (loopback 出不了本机).
-#[cfg(unix)]
-use tokio::net::UnixStream;
-#[cfg(not(unix))]
-use tokio::net::TcpStream;
 
 use crate::commands::types::ServiceStatus;
-use crate::services::{catfish_paths, process};
+use crate::services::{catfish_paths, process, tool_bridge_rpc};
 
+/// 老 callers (list_tools / call_tool / chat_approval) 沿用 30s timeout 保持行为.
+/// P3.5.45: call_rpc 私有 fn 砍, 改 thin-wrap 调 services::tool_bridge_rpc 公共
+/// helper (跟 commands/recmode.rs 复用同一条 unix sock RPC 实现).
 const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 跟 Python tool-bridge 协议对齐 —— 字段都是 snake_case,
@@ -204,7 +198,7 @@ pub async fn tool_bridge_status() -> Result<ServiceStatus, String> {
 
 #[tauri::command]
 pub async fn tool_bridge_list_tools() -> Result<Vec<ToolInfo>, String> {
-    let val = call_rpc("tools/list", json!(null)).await?;
+    let val = tool_bridge_rpc::call_with_timeout("tools/list", json!(null), RPC_TIMEOUT).await?;
     serde_json::from_value::<Vec<ToolInfo>>(val)
         .map_err(|e| format!("解析 tools/list 失败: {e}"))
 }
@@ -221,7 +215,7 @@ pub async fn tool_bridge_call_tool(
     if let Some(sid) = session_id {
         params["session_id"] = Value::String(sid);
     }
-    let val = call_rpc("tools/dispatch", params).await?;
+    let val = tool_bridge_rpc::call_with_timeout("tools/dispatch", params, RPC_TIMEOUT).await?;
     serde_json::from_value::<ToolCallResult>(val)
         .map_err(|e| format!("解析 tools/dispatch 失败: {e}"))
 }
@@ -237,7 +231,7 @@ pub async fn tool_bridge_chat_approval(
     choice: String,
 ) -> Result<Value, String> {
     let params = json!({ "session_key": session_key, "choice": choice });
-    call_rpc("tools/chat_approval", params).await
+    tool_bridge_rpc::call_with_timeout("tools/chat_approval", params, RPC_TIMEOUT).await
 }
 
 // ============================================================

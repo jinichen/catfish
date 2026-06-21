@@ -23,7 +23,7 @@
 use serde_json::{json, Value};
 use std::time::Duration;
 
-use crate::services::tool_bridge_rpc;
+use crate::services::{oauth, tool_bridge_rpc};
 
 /// 走 LLM 综合的 analyze 给 10 分钟超时 (vision model 多张截图慢).
 const ANALYZE_TIMEOUT_SECS: u64 = 600;
@@ -51,7 +51,7 @@ pub async fn recmode_rpc(
         ));
     }
 
-    // 默认空 dict, 给注入 catfish_home 用
+    // 默认空 dict, 给注入 catfish_home / auth_token 用
     let mut params = params.unwrap_or_else(|| json!({}));
 
     // 自动注入 catfish_home env (gateway 老端 app.py 每个 endpoint 都做的)
@@ -59,6 +59,22 @@ pub async fn recmode_rpc(
         if !map.contains_key("catfish_home") {
             let catfish_home = std::env::var("CATFISH_HOME").unwrap_or_default();
             map.insert("catfish_home".to_string(), json!(catfish_home));
+        }
+
+        // P3.5.45 follow-up (鸿波 6/20 实跑出 'aggregate_session 没 auth token'):
+        // 老 gateway HTTP path 自动把 client Authorization header 抽出来塞
+        // auth_token 字段转发给 tool-bridge (server.py _handle_recmode_analyze
+        // 接收 auth_token); 现在 Companion 直调 sock 跳过 HTTP 那段 → 需要 Rust
+        // 端自己注入. tool-bridge aggregator.call_llm 用 auth_token 调 gateway
+        // loopback /v1/chat/completions 跑 vision LLM.
+        //
+        // 走 oauth::ensure_fresh_access_token 拿真 token (P3.5.42.10 silent refresh
+        // 路径). 拿不到不强塞 (caller 可能用不到 LLM 的 endpoint, e.g.
+        // start_recording / stop_recording 纯本机, 不需要 token).
+        if !map.contains_key("auth_token") {
+            if let Some(tok) = oauth::ensure_fresh_access_token().await {
+                map.insert("auth_token".to_string(), json!(tok));
+            }
         }
     }
 
