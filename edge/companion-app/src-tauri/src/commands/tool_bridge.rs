@@ -148,7 +148,7 @@ pub async fn tool_bridge_status() -> Result<ServiceStatus, String> {
         if let Some(sock) = catfish_paths::tool_bridge_socket() {
             if sock.exists() {
                 let healthy = matches!(
-                    call_rpc("health", json!(null)).await,
+                    tool_bridge_rpc::call_with_timeout("health", json!(null), RPC_TIMEOUT).await,
                     Ok(v) if v.get("ok").and_then(|b| b.as_bool()).unwrap_or(false)
                 );
                 if healthy {
@@ -171,7 +171,7 @@ pub async fn tool_bridge_status() -> Result<ServiceStatus, String> {
     }
 
     // 进程在 → 试 RPC 探活
-    let healthy = match call_rpc("health", json!(null)).await {
+    let healthy = match tool_bridge_rpc::call_with_timeout("health", json!(null), RPC_TIMEOUT).await {
         Ok(v) => v
             .get("ok")
             .and_then(|b| b.as_bool())
@@ -234,6 +234,10 @@ pub async fn tool_bridge_chat_approval(
     tool_bridge_rpc::call_with_timeout("tools/chat_approval", params, RPC_TIMEOUT).await
 }
 
-// P3.5.45 follow-up: 老私有 call_rpc fn 砍 — 3 个 callers (list_tools / call_tool /
-// chat_approval) 全改调 services::tool_bridge_rpc::call_with_timeout. 公共 helper
-// 跟 commands/recmode.rs 复用同一份 unix sock NDJSON RPC 实现.
+// P3.5.45 follow-up: 老私有 call_rpc fn 砍 — 5 个 callers 全改调
+// services::tool_bridge_rpc::call_with_timeout:
+//   - tool_bridge_status (2 处 health 探活)
+//   - tool_bridge_list_tools (tools/list)
+//   - tool_bridge_call_tool (tools/dispatch)
+//   - tool_bridge_chat_approval (tools/chat_approval)
+// 公共 helper 跟 commands/recmode.rs 复用同一份 unix sock NDJSON RPC 实现.
