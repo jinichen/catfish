@@ -197,25 +197,43 @@ awk '/2026-XX-XX HH:MM:/,0' ~/.hermes/logs/gateway.error.log | grep "未装载" 
 
 **修 (P3.5.53)**: `_delayed_install` daemon thread 主动 `import model_tools` trigger, 不再被动 poll. sleep 0.5s 让主线程 register 完成跳过 partial init 段, 之后 `import model_tools` → model_tools ready → `_mod.install()` 直接跑. v0.17 model_tools 顶 imports 不撞 catfish plugin (no circular).
 
-### 坑 10: SOUL.md 软链客户场景 dangling → 鲶鱼身份退化
+### 坑 10: SOUL.md catfish 该是 source of truth (鸿波 2 次 catch 后真理解)
 
-**症状**: 客户装 Companion.dmg 后跑 chat, "你是谁?" 回复出现 "Nous Research" / "AI 助手" 字样, 不是"我是小鲶". 开发者本机 OK, 只有客户场景出.
+**症状**: 客户装 Companion.dmg 后跑 chat, "你是谁?" 回复出现 "Nous Research" / "AI 助手" 字样. 开发者本机 OK, 只客户场景出. 或者 catfish 升级 SOUL.md 后, 员工本机停在老版本.
 
-**真因 (代码直查不猜)**:
-1. `edge/identity/install.sh:64` `ln -s catfish/edge/identity/SOUL.md ~/.hermes/SOUL.md` — 软链不 copy
-2. 客户场景没 catfish git clone → 软链 target 不存在 → dangling
-3. `identity_inject.py:67` `Path.exists()` 跟 symlink, dangling = false → 返 ""
-4. `inject_identity_if_needed:289` content 空 → 静默跳过 system inject → LLM 无人格
+**真因 (代码直查)**:
+1. `edge/identity/install.sh:64` `ln -s catfish/edge/identity/SOUL.md ~/.hermes/SOUL.md` — 软链反向耦合, hermes 读 catfish 源
+2. 客户场景没 catfish git clone → 软链 target 不存在 → dangling → `Path.exists() = false`
+3. `hermes-agent/agent/prompt_builder.py:1623 load_soul_md()` 返 None → `system_prompt.py:154` 注不上
+4. catfish gateway `identity_inject.py` 同款逻辑 — bundle 全空 → 不注 system
+5. LLM 无 system → 退化默认人格
 
-历史影响: 任何不通过 catfish git clone 装机的员工 (客户场景, SaaS Q3, 删过 catfish 目录的开发者) 鲶鱼身份全失效, 静默退化无人格.
+**真正诉求 (鸿波 2nd catch)**:
+> "**catfish 应该能修改 hermes soul.md 才对, 保证一致**"
 
-**修 (P3.5.55)**:
-- `identity_bundle.rs`: `include_str!()` 编译时内嵌 4 个 SOUL 文件 (SOUL + SOUL_FFCS + SOUL_BROWSER + SOUL_EXECUTE_CODE, ~25KB)
-- `read_file_or_baked`: fs 读非空用 fs (开发者改即生效), 空/缺失用 baked (客户场景兜底)
-- `bootstrap_soul_files()`: lib.rs setup hook 自检 ~/.hermes/SOUL*.md, 不存在/dangling/空 时 dump baked. 让 hermes 自己路径 (catfish gateway 外的 chat 路径) 也能读到
-- 别家客户 (BYD/MEITUAN) 仍 fs-only — 他们自维护 SOUL_<X>.md
+catfish 是 source of truth. 应该 catfish 主动写 ~/.hermes/SOUL.md, **强制跟当前 catfish 版本一致** (overwrite), 不是反向让 hermes 引用 catfish 源, 也不是被动兜底.
 
-**教训**: "软链 + 改即生效"是开发者便利, 不是分发策略. 任何依赖 catfish 源在固定路径的设计, 客户场景必挂. 治本: fs source-of-truth + binary baked default 双轨, fs 优先 fallback baked.
+**修 (P3.5.55 2nd 版)**:
+- `identity_bundle.rs`: `include_str!()` 编译时内嵌 4 个 SOUL (~25KB 进 binary)
+- `read_file_or_baked`: fs 非空用 fs / 空缺失用 baked (给 identity_bundle 命令走)
+- `bootstrap_soul_files()`: Companion setup hook 主动同步, 4 状态枚举决定行为
+  - **HealthySymlink** (开发者软链 OK): 不动
+  - **DanglingSymlink** (客户): 删后写 baked
+  - **RegularFile** (老 Companion 写的): **overwrite 写当前 baked** ← 关键
+  - **Missing**: 写 baked
+- `CATFISH_SOUL_NO_BOOTSTRAP=1` env escape hatch (调试)
+
+**为啥 regular file 也 overwrite** (1st 版不做, 鸿波 catch 错):
+- catfish V1 → V2 升级, 员工新 Companion 启动应该自动同步 V2 SOUL
+- 不 overwrite 永远停 V1, 跟 catfish 脱节
+- 员工自定义身份走 Dashboard preamble (X-Catfish-Agent-Name/Personality), 不动 SOUL.md
+- SOUL 是品牌字段, catfish 垄断控制
+
+**教训 (1st 版被 catch 的)**:
+- "软链 + 改即生效" 是开发者便利, 不是分发策略
+- 但**只补"被动兜底"还不够** — 一致性诉求要求 catfish **主动同步**
+- "保证一致" = catfish 控制写权, 不是"有就 OK"
+- 改之前先听清诉求, 别急着补局部
 
 ---
 

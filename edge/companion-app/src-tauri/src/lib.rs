@@ -223,11 +223,18 @@ pub fn run() {
                 Err(e) => log::warn!("BL-CR: ensure_curator_default 失败 (不阻塞启动): {e}"),
             }
 
-            // P3.5.55 (6/21 鸿波 catch "客户没 catfish 源 → SOUL 软链 dangling → 鲶鱼退化"):
-            // 自检 ~/.hermes/SOUL*.md, 不存在 / dangling / 空 → 写 baked-in default
-            // (Companion binary include_str!() 编译时嵌入). 让 hermes 自己路径
-            // (不经 catfish gateway 的 chat 路径, 例如私有 model) 也有 SOUL 注入.
-            // 已存在的真实文件 → 不动 (尊重员工自定义或 install.sh 软链).
+            // P3.5.55 (6/21 鸿波 2 次 catch):
+            //   1st: "客户没 catfish 源 → SOUL 软链 dangling → 鲶鱼退化"
+            //   2nd: "思路是错的, catfish 应该能修改 hermes soul.md 才对, 保证一致"
+            //
+            // catfish 是 SOUL **唯一 source of truth**. Companion 启动主动写
+            // ~/.hermes/SOUL*.md, 强制跟 catfish 当前版本一致 (overwrite regular file).
+            //
+            // 唯一不 overwrite 的情况: ~/.hermes/SOUL.md 是**健康软链** (开发者
+            // catfish git clone + install.sh 路径) — 那条线让 catfish/edge/identity/
+            // SOUL.md 改即生效, 不能被覆盖. dangling 软链 / regular file / 不存在 → 写 baked.
+            //
+            // Escape hatch: CATFISH_SOUL_NO_BOOTSTRAP=1 跳全部 (调试用).
             commands::identity_bundle::bootstrap_soul_files();
 
             // 注册全局快捷键 Cmd+Shift+Space (浮窗召唤) + Cmd+Shift+F (BL-E15 专注模式)

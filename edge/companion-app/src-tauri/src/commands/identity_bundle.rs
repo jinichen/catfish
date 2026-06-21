@@ -200,28 +200,43 @@ pub async fn identity_bundle() -> Result<IdentityBundle, String> {
 }
 
 // ─────────────────────────────────────────────
-// P3.5.55: 启动时自检 + dump baked SOUL 到 ~/.hermes/
+// P3.5.55: catfish 主动同步 SOUL files 到 ~/.hermes/ (鸿波 6/21 拍 source-of-truth)
 // ─────────────────────────────────────────────
 
-/// 把 baked SOUL files 写到 ~/.hermes/<name>.md, 当文件不存在或软链 dangling 时.
+/// 把 catfish 内嵌的 baked SOUL files 同步写到 ~/.hermes/<name>.md.
 ///
-/// 调用时机: Companion 启动 setup hook (lib.rs).
+/// **核心设计 (鸿波 6/21 第 2 次 catch "思路是错的, catfish 应该能修改 hermes soul.md")**:
 ///
-/// 为啥这个独立步骤 (除了 identity_bundle 的 fs-or-baked fallback):
-///   - identity_bundle 走 catfish gateway 路径 (Companion → gateway → 上游 LLM)
-///   - 但 hermes 自己也读 ~/.hermes/SOUL.md (路径 1: Companion → hermes private model
-///     → hermes 调上游 LLM, identity inject 走 hermes 内部, 不经 catfish gateway)
-///   - 这条路 baked fallback 帮不上忙 — hermes 直接看 fs 是空 → 退化 Nous 身份
-///   - 必须 fs 真有 SOUL.md 内容 hermes 才能注入
+/// catfish 是 SOUL **唯一 source of truth**. Companion 启动时主动写
+/// ~/.hermes/SOUL*.md, 强制跟 catfish 当前版本一致 (overwrite). 不再依赖软链
+/// 反向引用 catfish 源 — 那是耦合反了 (hermes 不该知道 catfish 源在哪).
 ///
-/// 行为:
-///   - fs 文件存在 + 非空 + 不是 dangling 软链 → 不动 (尊重员工/install.sh 已装的)
-///   - fs 文件不存在 (无任何条目) → 写 baked
-///   - fs 是 dangling 软链 (lstat 软链存在但 stat target 不存在) → 删软链, 写 baked
-///   - fs 是空文件 (0 字节) → 覆盖写 baked
+/// 行为表 (按发现顺序):
+///   - 软链 + target 健康  → **不动** (开发者 catfish git clone, install.sh 软链
+///                                   路径, 让 catfish/edge/identity/SOUL.md 改即生效)
+///   - 软链 + dangling     → 删软链, 写 baked (客户场景, 强制兜底)
+///   - regular file 任何状态 → **overwrite** 写 baked (强制跟 catfish 一致, **关键**)
+///   - 不存在              → 写 baked
+///
+/// 为啥 regular file 也强制 overwrite (跟我 6/21 第 1 版 "已存在就不动" 不同):
+///   - catfish 升级 SOUL.md V1 → V2, 重新分发 Companion (V2 baked) → 员工启动
+///     Companion → 老 ~/.hermes/SOUL.md (V1 regular file) **必须** 被覆盖成 V2
+///   - 不 overwrite 的话, 员工本机 SOUL 永远停 V1, "保证一致" 失败
+///   - 员工想自定义身份走 Dashboard "小鲶设置 → 名字 + 风格" (X-Catfish-Agent-Name /
+///     X-Catfish-Agent-Personality headers, preamble 优先级高于 SOUL), 不动 SOUL.md
+///
+/// Escape hatch: `CATFISH_SOUL_NO_BOOTSTRAP=1` env 跳过全部 (开发者临时直接编辑
+/// ~/.hermes/SOUL.md 测试, 不被覆盖).
+///
+/// 调用时机: Companion 启动 setup hook (lib.rs), 每次启动跑一次.
 ///
 /// 失败 (~/.hermes/ 创不出 / 权限) → log::warn 不挂启动.
 pub fn bootstrap_soul_files() {
+    if std::env::var("CATFISH_SOUL_NO_BOOTSTRAP").is_ok() {
+        log::info!("[P3.5.55] CATFISH_SOUL_NO_BOOTSTRAP 设, 跳 SOUL bootstrap (调试用)");
+        return;
+    }
+
     let home = match hermes_home() {
         Some(h) => h,
         None => {
@@ -241,7 +256,8 @@ pub fn bootstrap_soul_files() {
         ("SOUL_BROWSER.md".into(), BAKED_SOUL_BROWSER),
         ("SOUL_EXECUTE_CODE.md".into(), BAKED_SOUL_EXECUTE_CODE),
         // FFCS 客户 SOUL — 别家客户 (BYD/MEITUAN) 没 baked, 跳过
-        // (员工那边自己维护 catfish/edge/identity/SOUL_<X>.md 走软链)
+        // (那些客户 catfish 仓库里加 SOUL_BYD.md 后, baked_files 列表也要加,
+        //  或者用 fs-only 路径让那家 install.sh 自己软链)
         (
             format!("SOUL_{cust}.md"),
             if cust == "FFCS" { BAKED_SOUL_FFCS } else { "" },
@@ -253,27 +269,36 @@ pub fn bootstrap_soul_files() {
             continue;
         }
         let dst = home.join(name);
-        if soul_file_is_healthy(&dst) {
-            continue;
-        }
-        // dangling 软链或空文件 — 先清掉再写
-        // (fs::remove_file 对软链是 unlink 软链本身, 不动 target)
-        match fs::symlink_metadata(&dst) {
-            Ok(_) => {
+        match classify_existing(&dst) {
+            ExistingKind::HealthySymlink => {
+                log::debug!(
+                    "[P3.5.55] {} 是健康软链 (开发者 catfish 源路径), 不动",
+                    dst.display()
+                );
+                continue;
+            }
+            ExistingKind::DanglingSymlink => {
                 if let Err(e) = fs::remove_file(&dst) {
                     log::warn!(
-                        "[P3.5.55] 删旧 {} 失败 ({}), 跳此文件",
+                        "[P3.5.55] 删 dangling 软链 {} 失败 ({}), 跳此文件",
                         dst.display(),
                         e
                     );
                     continue;
                 }
+                log::info!("[P3.5.55] 删 dangling 软链 {}", dst.display());
             }
-            Err(_) => {} // 不存在, 直接写
+            ExistingKind::RegularFile => {
+                // 老版本 catfish 写的 baked, 或 install.sh 历史 copy 路径.
+                // overwrite 强制跟当前 catfish baked 同步 (这就是鸿波诉求).
+            }
+            ExistingKind::Missing => {
+                // 直接写
+            }
         }
         match fs::write(&dst, baked) {
             Ok(()) => log::info!(
-                "[P3.5.55] dump baked {} ({} bytes, 客户场景兜底身份)",
+                "[P3.5.55] sync baked → {} ({} bytes, catfish source-of-truth)",
                 dst.display(),
                 baked.len()
             ),
@@ -282,16 +307,31 @@ pub fn bootstrap_soul_files() {
     }
 }
 
-/// 文件是否"健康": 存在 + 非空 + 不是 dangling 软链.
-///
-/// `Path::exists()` 跟 symlink, dangling 返 false (这就是我们要识别的状态).
-/// 实文件 + 0 bytes 不算健康 (得 dump baked).
-fn soul_file_is_healthy(path: &Path) -> bool {
-    if !path.exists() {
-        return false;
-    }
-    match fs::metadata(path) {
-        Ok(m) => m.is_file() && m.len() > 0,
-        Err(_) => false,
+/// 目标路径现状分类, 决定 bootstrap 怎么处理.
+enum ExistingKind {
+    /// 不存在 (lstat 返 Err)
+    Missing,
+    /// 软链 + target 存在 — 开发者本机 install.sh 软链, 不动
+    HealthySymlink,
+    /// 软链 + target 不存在 — 客户场景 dangling, 删后写 baked
+    DanglingSymlink,
+    /// 普通文件 (不是软链) — overwrite 写 baked (保证跟 catfish 一致)
+    RegularFile,
+}
+
+fn classify_existing(path: &Path) -> ExistingKind {
+    let meta = match fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(_) => return ExistingKind::Missing,
+    };
+    if meta.file_type().is_symlink() {
+        // path.exists() 跟 symlink, target 在 → true, dangling → false
+        if path.exists() {
+            ExistingKind::HealthySymlink
+        } else {
+            ExistingKind::DanglingSymlink
+        }
+    } else {
+        ExistingKind::RegularFile
     }
 }

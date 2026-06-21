@@ -5,89 +5,124 @@
 
 ---
 
-## 2026-06-21 · P3.5.55 — SOUL.md 客户场景兜底 (baked-in default + boot 自检)
+## 2026-06-21 · P3.5.55 — catfish 主动同步 SOUL.md → ~/.hermes/ (catfish 是 source of truth)
 
-### 鸿波 catch (6/21 21:30)
-"在 catfish 不能修改, 那就会出现 SOUL.md 是空的".
+### 鸿波 2 次 catch
+- **1st (21:30)**: "在 catfish 不能修改, 那就会出现 SOUL.md 是空的"
+- **2nd (22:15)**: "**我觉得思路是错的**, 就是应该是 catfish 能够修改 hermes soul.md 才对, 这样才能保证一致, **要仔细去分析代码, 不要乱猜**"
 
-### 真因审计链 (代码直查, 不猜)
+### 我第 1 版思路错在哪
+1st 版 `bootstrap_soul_files`: 只在 ~/.hermes/SOUL.md **不存在 / dangling / 空** 时写 baked, **已存在的 regular file 不动**. 鸿波 catch:
+- catfish 升级 SOUL V1 → V2, 重新分发 Companion → 员工本机 ~/.hermes/SOUL.md 仍是 V1 (老 baked 写的 regular file) → **永远不更新**
+- 这违背"保证一致" — catfish 是 source of truth, 员工本机应该跟 catfish 当前一致, 不是停在某个老快照
 
-1. `edge/identity/install.sh:64` `ln -s catfish/edge/identity/SOUL.md ~/.hermes/SOUL.md` — 软链不 copy
-2. **客户场景**: Companion.dmg 装机, 没 catfish git clone → 软链 target 不存在 → dangling
-3. `identity_inject.py:66` `Path.exists()` 跟 symlink, dangling → False → `_cache.read` 返 ""
-4. `identity_bundle.rs:64` Companion 端同款 `read_file_silent` 也返 "" → bundle 6 字段全空
-5. `identity_inject.py:288` `build_identity_content(bundle)` → "" → `inject_identity_if_needed` 看 content 空, **静默跳过 system inject**
-6. 上游 LLM 收到无 system message → **鲶鱼退化成 ChatGPT/Hermes 默认人格** ("Nous Research" / "AI 助手" 字样)
+### Audit 真现状 (代码直查)
+- `hermes-agent/agent/prompt_builder.py:1623 load_soul_md()` 读 `$HERMES_HOME/SOUL.md` 注入 system_prompt 第一段 — hermes 自带功能
+- `agent/system_prompt.py:154` `stable_parts.append(_soul_content)` 注 system 第一段
+- catfish-xcatfish-user plugin 19 个 patch **没一个改 SOUL 读取路径** — hermes SOUL 注入是默认行为
+- catfish gateway `identity_inject.py` 是**第二条独立路径** — 检测 messages 已有 system 就 skip, 不会双注. hermes 自己注完 catfish gateway 就跳
+- **catfish 现状没有任何主动同步 SOUL → ~/.hermes/ 的代码** — 全靠 `install.sh` 一次性软链 + 我 1st 版 baked 兜底
 
-历史影响: 任何不通过 catfish git clone 装机的员工 (客户场景, SaaS Q3, 删过 catfish 目录的开发者) 鲶鱼身份都失效, 静默退化无人格.
+### 2nd 版修法 (鸿波诉求)
+catfish 是 SOUL **唯一 source of truth**. Companion 启动主动写 ~/.hermes/SOUL*.md, 强制跟 catfish 当前版本一致:
 
-### 修法 (鸿波 6/21 拍 "Companion baked-in default SOUL")
+| 现状 | 行为 |
+|---|---|
+| 软链 + target 健康 | **不动** (开发者 catfish git clone + install.sh, 改即生效路径) |
+| 软链 + dangling | 删软链, 写 baked (客户场景兜底) |
+| Regular file (任何状态) | **overwrite 写 baked** ← **关键改动**, 保证跟 catfish 一致 |
+| 不存在 | 写 baked |
 
-**1. Rust include_str!() 编译时内嵌 4 个 SOUL 文件**
+Escape hatch: `CATFISH_SOUL_NO_BOOTSTRAP=1` env 跳全部 (开发者临时编辑 ~/.hermes/SOUL.md 测试).
 
-`identity_bundle.rs` 顶加:
+为啥 regular file 也强制 overwrite:
+- 员工想自定义身份走 Dashboard "小鲶设置 → 名字 + 风格" (X-Catfish-Agent-Name / X-Catfish-Agent-Personality headers, preamble 优先级高于 SOUL)
+- SOUL.md 是品牌身份不是个性化字段, catfish 应该垄断控制
+- 不 overwrite 会让员工本机停在老版本 SOUL, 跟 catfish 升级脱节
+
+### Audit 路径全景 (这次先看代码后写)
+
+| 步 | 文件:行 | 行为 |
+|---|---|---|
+| 读 SOUL | `hermes-agent/agent/prompt_builder.py:1623` | 固定 `$HERMES_HOME/SOUL.md`, env 可覆 |
+| Hermes 注入 | `hermes-agent/agent/system_prompt.py:154` | stable_parts 第一段 |
+| 装机 | `catfish/edge/identity/install.sh:64` | `ln -s` 软链 |
+| catfish 写 (新) | `companion-app/.../identity_bundle.rs:bootstrap_soul_files()` | Companion 启动主动同步, regular file 也 overwrite |
+| Gateway 读 | `identity_inject.py:207-241` | bundle 优先 fs 兜底 |
+| Gateway 注 | `identity_inject.py:254-298` | `has_system_message` 已有就跳, 不双注 |
+
+### 修法 (实施)
+
+**1. Rust include_str!() 编译时内嵌 4 个 SOUL 文件** (跟 1st 版同)
 ```rust
 const BAKED_SOUL: &str = include_str!("../../../../identity/SOUL.md");
 const BAKED_SOUL_FFCS: &str = include_str!("../../../../identity/SOUL_FFCS.md");
 const BAKED_SOUL_BROWSER: &str = include_str!("../../../../identity/SOUL_BROWSER.md");
 const BAKED_SOUL_EXECUTE_CODE: &str = include_str!("../../../../identity/SOUL_EXECUTE_CODE.md");
 ```
+~25KB 进 binary, 编译时 source 缺 cargo build 报错.
 
-总 ~25KB 进 Companion binary (Companion 本身几十 MB, 可接受). 编译时若 source 缺 → cargo build 报错早发现.
+**2. `read_file_or_baked` fs-或-baked fallback** (跟 1st 版同, 给 identity_bundle() 走)
 
-**2. `read_file_or_baked` fs-或-baked fallback**
-
-```rust
-fn read_file_or_baked(path: &Path, baked: &'static str) -> String {
-    let fs_content = read_file_silent(path);
-    if !fs_content.trim().is_empty() { return fs_content; }
-    baked.to_string()
-}
-```
-
-`identity_bundle()` 命令 SOUL 4 件全走 fallback. USER.md / memories/ 仍 fs-only (员工个人数据不该 bake).
-
-**3. `bootstrap_soul_files()` 启动自检 + dump**
-
-`lib.rs` setup hook 调一次. 行为:
-- fs 文件健康 (存在 + 非空 + 不是 dangling) → 不动 (尊重员工自定义 / install.sh 软链)
-- fs 不存在 / dangling 软链 / 0 字节 → 删旧 + 写 baked 内容
-
-为啥单独这个步骤而不只靠 fallback: identity_bundle 走的是 catfish gateway 路径 (Companion → gateway), 但 hermes 自己也读 ~/.hermes/SOUL.md (例如私有 model 时 hermes 内部 identity inject 走 hermes 不经 catfish gateway), 这条路 baked fallback 帮不上忙 — 必须 fs 真有内容.
-
-**FFCS 是默认客户**, baked_customer 只 bake SOUL_FFCS. 别家客户 (BYD / MEITUAN) 自己装 catfish 源, 走软链不需要 bake.
+**3. `bootstrap_soul_files()` 改 always-sync** (核心改动)
+- 用 `ExistingKind` 4 状态枚举 (Missing / HealthySymlink / DanglingSymlink / RegularFile) 分发
+- 只 HealthySymlink 不动, 其他全 overwrite
+- `CATFISH_SOUL_NO_BOOTSTRAP` env escape hatch
 
 ### verify (鸿波本机)
 
 ```bash
-cd ~/person_task/catfish
-git pull
-cd edge/companion-app
-cargo tauri build --no-bundle 2>&1 | grep -E "warning|error" | head -10
-# 期望 0 error (有 warning 是老的, 不阻塞)
+git pull && cd edge/companion-app
+cargo tauri build --no-bundle 2>&1 | grep -E "warning|error" | head -10  # 期望 0 error
 
-# 模拟客户场景测 bootstrap:
-mv ~/.hermes/SOUL.md ~/.hermes/SOUL.md.bak.test
-mv ~/person_task/catfish/edge/identity ~/person_task/catfish/edge/identity.bak.test
-# 启动 Companion
+# 场景 1: 开发者本机 (软链健康) — 应该不动
+ls -la ~/.hermes/SOUL.md   # -> .../catfish/edge/identity/SOUL.md (软链)
 open -a "鲶鱼 Companion"
-# 看日志:
-grep "P3.5.55" ~/Library/Logs/com.catfish.companion/*.log | tail -5
-# 期望: "[P3.5.55] dump baked /Users/.../SOUL.md (15675 bytes, 客户场景兜底身份)"
-ls -la ~/.hermes/SOUL*.md   # 应该是 regular file 不是软链
-# chat 跑 "你是谁?" → 应该以"我是小鲶"开头
-# 还原:
-mv ~/person_task/catfish/edge/identity.bak.test ~/person_task/catfish/edge/identity
-mv ~/.hermes/SOUL.md.bak.test ~/.hermes/SOUL.md   # 注意会覆盖刚写的 baked
+grep "P3.5.55" ~/Library/Logs/com.catfish.companion/*.log | tail -3
+# 期望: "[P3.5.55] /Users/.../SOUL.md 是健康软链 (开发者 catfish 源路径), 不动"
+ls -la ~/.hermes/SOUL.md   # 仍是软链
+
+# 场景 2: 客户场景 (dangling) — 应该删软链写 baked
+mv ~/person_task/catfish/edge/identity ~/person_task/catfish/edge/identity.bak
+open -a "鲶鱼 Companion"
+grep "P3.5.55" ~/Library/Logs/com.catfish.companion/*.log | tail -3
+# 期望: "[P3.5.55] 删 dangling 软链" + "[P3.5.55] sync baked → /Users/.../SOUL.md (... bytes)"
+ls -la ~/.hermes/SOUL.md   # regular file 不是软链
+
+# 场景 3: 老 regular file (Companion 升级) — 应该 overwrite
+echo "OLD CONTENT V1" > ~/.hermes/SOUL.md  # 模拟老版本
+open -a "鲶鱼 Companion"
+cat ~/.hermes/SOUL.md   # 应该是当前 catfish SOUL 内容, 不是 OLD CONTENT V1
+
+# 场景 4: 开发者临时调试 (escape hatch)
+echo "TEST V3" > ~/.hermes/SOUL.md
+CATFISH_SOUL_NO_BOOTSTRAP=1 open -a "鲶鱼 Companion"
+grep "P3.5.55" ~/Library/Logs/com.catfish.companion/*.log | tail -1
+# 期望: "CATFISH_SOUL_NO_BOOTSTRAP 设, 跳 SOUL bootstrap"
+cat ~/.hermes/SOUL.md   # 仍是 TEST V3, 没被覆盖
+
+# 还原
+mv ~/person_task/catfish/edge/identity.bak ~/person_task/catfish/edge/identity
+rm ~/.hermes/SOUL.md && bash edge/identity/install.sh
 ```
 
-### 教训 (第 7 次)
+### 教训 (第 8 次)
 
-**"软链 + 改即生效"是开发者便利, 不是分发策略.** 任何依赖 catfish git clone 在固定路径的设计, 客户场景必挂. 治本两条:
-1. fs 是 source of truth (开发者改即生效) — 软链路径不动
-2. binary 内嵌 default (客户场景兜底) — include_str! 编译时静态嵌入
+**1st 版的真错: 我没分析鸿波说的"一致"是啥意思**. 看到"客户场景空" 就想到 "不存在时填上", 没想到"已存在但跟 catfish 不一致" 才是更深的问题. 鸿波"保证一致" 字面理解就是 catfish 应该垄断写权 — 我设计成"被动兜底" 不是"主动同步", 思路反了.
 
-两条并存, fs 优先 fallback baked, 兼顾开发 + 分发.
+**对话方法纠正**: 鸿波说"思路错"时不要急着改局部, 先 audit 真现状 + 真理解诉求. 这次 audit 看到 hermes 自带 SOUL 注入 + catfish 现状没主动同步, 才明白 catfish 应该补"主动同步"这层. 1st 版只补了"被动兜底" 没补"主动同步", 治表不治本.
+
+---
+
+## (旧 P3.5.55 1st 版 — 已 supersede, 见上 2nd 版)
+
+1st 版只在 ~/.hermes/SOUL.md **不存在 / dangling / 空** 时写 baked, **已存在 regular file 不动**.
+
+鸿波 22:15 catch: "**我觉得思路是错的, 就是应该是 catfish 能够修改 hermes soul.md 才对, 这样才能保证一致**".
+
+真错: 我设计成"被动兜底" 不是"主动同步" — catfish 升级 SOUL.md V1 → V2 后, 员工本机停在 V1 regular file 永远不更新, "保证一致" 失败.
+
+2nd 版改 always-sync (regular file 也 overwrite, 只健康软链不动 + env escape hatch).
 
 ---
 
