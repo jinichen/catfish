@@ -48,7 +48,7 @@ models:
     # 上游管理员确认实际支持 250K tokens。
     # 我们对员工承诺 128K（官方主流 Qwen 3.5 心智 + 一倍以上安全余量）。
     # 长上下文（>128K）场景推荐员工切 catfish-public-gemini-pro（2M）。
-    context_window: 128000
+    context_window: 256000
     supports_tool_use: true
     supports_streaming: true
     # Qwen3.5 122B MoE 实测**支持视觉** (5/8 鸿波真上传 EIS 截图验证, 识别准确).
@@ -92,7 +92,7 @@ models:
 
     # 多模态模型相比主力模型 context 略窄些，留 64K 员工承诺。
     # 真实支持大概率也是 128K+ 量级，视后续压测调整。
-    context_window: 64000
+    context_window: 128000
     supports_tool_use: true
     supports_streaming: true
     supports_vision: true
@@ -152,7 +152,7 @@ models:
       #   curl https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions \
       #     -H "Authorization: Bearer $DASHSCOPE_API_KEY" \
       #     -d '{"model":"qwen3.6-max-preview","messages":[{"role":"user","content":"hi"}]}'
-      model: openai/qwen3.7-plus-2026-05-26
+      model: openai/glm-5.2
       api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
       api_key_env: DASHSCOPE_API_KEY
       timeout: 90  # 多模态请求图像/视频处理偏慢, 给宽裕

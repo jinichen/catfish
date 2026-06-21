@@ -153,6 +153,7 @@ def reset_env(monkeypatch):
     """每个测重置 env + token state."""
     monkeypatch.delenv("HERMES_SERVICE_TOKEN", raising=False)
     monkeypatch.delenv("CATFISH_HERMES_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("CLIENT_SECRET", raising=False)  # P3.5.48 fallback env
     monkeypatch.delenv("HERMES_ENV_PATH", raising=False)
     # 重置 lock (每个测全新)
     renewal._RENEW_LOCK = None
@@ -286,3 +287,32 @@ def test_get_fresh_concurrent_mints_only_once(reset_env, monkeypatch, tmp_path):
     results = _run(_run_three())
     assert all(r == new_token for r in results)
     assert mint_count["n"] == 1  # 只 mint 一次
+
+
+# ── P3.5.48: _client_secret 双 env fallback (跟 mint script 老 env name 兼容) ──
+
+def test_client_secret_empty_returns_none(reset_env):
+    """两个 env 都没设 → None."""
+    assert renewal._client_secret() is None
+
+
+def test_client_secret_fallback_to_old_mint_env(reset_env, monkeypatch):
+    """只设 CLIENT_SECRET (mint script 老 env) → fallback 拿到, 兼容老 cron."""
+    monkeypatch.setenv("CLIENT_SECRET", "old-mint-style-secret")
+    assert renewal._client_secret() == "old-mint-style-secret"
+
+
+def test_client_secret_new_env_takes_priority(reset_env, monkeypatch):
+    """两个都设 → CATFISH_HERMES_CLIENT_SECRET 优先 (新 P3.5.44 设计)."""
+    monkeypatch.setenv("CLIENT_SECRET", "old")
+    monkeypatch.setenv("CATFISH_HERMES_CLIENT_SECRET", "new")
+    assert renewal._client_secret() == "new"
+
+
+def test_client_secret_whitespace_treated_as_empty(reset_env, monkeypatch):
+    """纯空白也算空, 防员工误写 `CLIENT_SECRET=   ` 让 plugin 以为有 secret 然后
+    调 mint 给 IdP 空 secret → 拿 400.
+    """
+    monkeypatch.setenv("CATFISH_HERMES_CLIENT_SECRET", "   ")
+    monkeypatch.setenv("CLIENT_SECRET", "\t\n  ")
+    assert renewal._client_secret() is None

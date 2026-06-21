@@ -179,6 +179,13 @@ def is_always_on(name: str) -> bool:
 #: 维护策略: hermes major 升级时 (e.g. 0.14 → 0.15) 跟 release notes 同步, 漏
 #: 一个工具只是误报多一条 audit 行, 不影响功能.
 KNOWN_BUILTIN_TOOLS: frozenset[str] = frozenset({
+    # ── hermes v0.17 Progressive Tool Disclosure 3 bridge (P3.5.49 6/21 鸿波 catch) ──
+    # v0.17 新加 tools/tool_search.py:43-45 BRIDGE_TOOL_NAMES. MCP + 非 core plugin
+    # tools 超 model context 10% (default threshold) 时, hermes 自动用这 3 bridge
+    # tool 替换暴露给 LLM (lazy disclosure): LLM emit tool_call(name="execute_code"),
+    # hermes 内部 dispatch 真 tool. default enabled="auto" (tools/tool_search.py:83).
+    # 没补这 3 → audit warn 误报"hermes 0.14 tool_override 嫌疑", 真因不是攻击.
+    "tool_search", "tool_describe", "tool_call",
     # ── catfish 原生 (catfish_tool_bridge/catfish_tools.py CATFISH_NATIVE_TOOLS) ──
     # 5/17 客户机实测 log 漏报 37 个, grep edge/tool-bridge/src 拉真实 47 个全名:
     # catfish 用户身份 / skill / a2a / memory / browser_* / freeze / expert /

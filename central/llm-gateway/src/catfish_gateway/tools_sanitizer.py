@@ -106,9 +106,14 @@ def _audit_unknown_tools(
     if unknown:
         sub = getattr(user, "sub", "?") if user else "?"
         dept = getattr(user, "department", "?") if user else "?"
+        # P3.5.49 (6/21): 文案改 — 老说"hermes 0.14 tool_override 嫌疑" 误导, hermes
+        # 新版本自带 feature (e.g. v0.17 tool_search bridge 3 兄弟) 也会撞这个 audit,
+        # 真因不是攻击. 修法: hermes 升级时同步加进 KNOWN_BUILTIN_TOOLS, 这条 warn
+        # 真触发时多半是 hermes 又出新 builtin / 客户 plugin 加新 tool, 不是攻击.
         logger.warning(
             "BL-RBAC-DAY4-HARDENING: %d unknown tool name(s) seen "
-            "(hermes 0.14 tool_override 嫌疑, audit only 不 drop): "
+            "(hermes 升级新 builtin / plugin 新 tool 嫌疑, audit only 不 drop, "
+            "看 sanitizer_constants.KNOWN_BUILTIN_TOOLS 该不该补): "
             "user=%s dept=%s unknown=%s",
             len(unknown), sub, dept, ", ".join(sorted(unknown)[:8]),
         )

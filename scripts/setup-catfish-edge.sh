@@ -79,7 +79,7 @@ gen_key() {
     "$PY" -c "import secrets; print(secrets.token_hex(32))"
 }
 
-TOTAL=6
+TOTAL=7  # P3.5.48: 加 step 3 token + secret 持久化
 [ "$ROTATE_ONLY" = "1" ] && TOTAL=4 && echo -e "${BOLD}🔄 rotate-only 模式 — 只换 key${RESET}\n"
 
 # ===========================================================================
@@ -143,9 +143,66 @@ chmod 600 "$HERMES_ENV"
 ok "写 $HERMES_ENV (chmod 600)"
 
 # ===========================================================================
-# Step 3. 写 ~/.catfish/companion.yaml hermes_api 段
+# Step 3 (P3.5.48). HERMES_SERVICE_TOKEN + CATFISH_HERMES_CLIENT_SECRET
+#                   ── 一次性配 + 让 plugin 永续 auto-renew
 # ===========================================================================
-step 3 "写 ~/.catfish/companion.yaml hermes_api"
+# 真因 (鸿波 6/21 catch '为啥自动续期没起来'):
+#   老路径: 装机只写 API_SERVER_KEY, HERMES_SERVICE_TOKEN 让员工"用 mint script
+#   拿". 鸿波装机后手动 mint 过一次, 30 天后过期没人续 → 所有走 P7 转发
+#   gateway 的 /api/* 全 401. P3.5.44 加了 plugin auto-renew, 但 secret env
+#   name 不一致 (CATFISH_HERMES_CLIENT_SECRET vs CLIENT_SECRET) silent fail.
+#
+# 治本: setup 时检测 .env 缺 HERMES_SERVICE_TOKEN / 缺 secret 就交互式收 +
+# 调 mint --persist-secret 一次. 写盘后 plugin auto-renew 永远 work, 不再
+# 依赖手动 cron.
+# ===========================================================================
+step 3 "HERMES_SERVICE_TOKEN + 自动续期 secret (BL-TOKEN-AUTO-RENEW)"
+
+# 检测 .env 现状
+HAVE_TOKEN=0
+HAVE_SECRET=0
+if grep -qE "^(export\s+)?HERMES_SERVICE_TOKEN=" "$HERMES_ENV" 2>/dev/null; then HAVE_TOKEN=1; fi
+if grep -qE "^(export\s+)?(CATFISH_HERMES_CLIENT_SECRET|CLIENT_SECRET)=" "$HERMES_ENV" 2>/dev/null; then HAVE_SECRET=1; fi
+
+if [ "$HAVE_TOKEN" = "1" ] && [ "$HAVE_SECRET" = "1" ]; then
+    ok "HERMES_SERVICE_TOKEN + auto-renew secret 都已配, 跳过"
+else
+    [ "$HAVE_TOKEN" = "0" ] && warn "~/.hermes/.env 缺 HERMES_SERVICE_TOKEN"
+    [ "$HAVE_SECRET" = "0" ] && warn "~/.hermes/.env 缺 CATFISH_HERMES_CLIENT_SECRET (plugin auto-renew 用)"
+    MINT_SH="$SCRIPT_DIR/mint-hermes-service-token.sh"
+    if [ ! -x "$MINT_SH" ]; then
+        warn "找不到 $MINT_SH, 跳过 (老员工自己手动 mint)"
+    elif ! confirm "立刻调 mint-hermes-service-token.sh --persist-secret 配上 (一次性, 之后 plugin 永续自动续期)?"; then
+        warn "跳过 token 配置 — 30 天周期手动续, 或重跑本 script"
+    else
+        # client_secret 通过 CLIENT_SECRET env 或 mint script 交互 prompt 收
+        # P3.5.50: 鸿波直接 Enter 时给 demo secret 兜底 (dev / 单机部署常用,
+        # 生产部署 IT 会改 clients.yaml hash). 真生产装机请把 CLIENT_SECRET
+        # 通过 env 传 (避免 demo secret 进 .env).
+        DEMO_SECRET="hermes-dev-secret-2026-please-change"
+        if [ -z "${CLIENT_SECRET:-}" ]; then
+            echo "    catfish-identity clients.yaml hermes-cli secret"
+            echo "    (直接 Enter 用 demo: $DEMO_SECRET — 生产请先 export CLIENT_SECRET=<真secret> 再跑本脚本)"
+            read -r -s -p "    CLIENT_SECRET (不回显, Enter=demo): " CLIENT_SECRET
+            echo
+            [ -z "$CLIENT_SECRET" ] && CLIENT_SECRET="$DEMO_SECRET" && warn "用 demo secret (dev/单机 OK, 生产需换)"
+            export CLIENT_SECRET
+        fi
+        if [ -z "$CLIENT_SECRET" ]; then
+            err "CLIENT_SECRET 空, 跳过"
+        elif bash "$MINT_SH" --persist-secret; then
+            ok "token + secret 都写 ~/.hermes/.env, plugin auto-renew 接管"
+        else
+            err "mint 失败 — 看上面 log (identity-server 没跑? secret 错?)"
+        fi
+        unset CLIENT_SECRET  # 不留到后续 step
+    fi
+fi
+
+# ===========================================================================
+# Step 4. 写 ~/.catfish/companion.yaml hermes_api 段
+# ===========================================================================
+step 4 "写 ~/.catfish/companion.yaml hermes_api"
 "$PY" - "$COMPANION_YAML" "$HERMES_API_URL" "$KEY" <<'PYEOF'
 import sys
 from pathlib import Path
@@ -195,6 +252,7 @@ chmod 600 "$COMPANION_YAML"
 ok "写 $COMPANION_YAML (chmod 600, hermes_api 段已 enabled)"
 
 [ "$ROTATE_ONLY" = "1" ] && {
+    # rotate-only 跳过 step 3 token (没换 client_secret 跟 token 周期)
     step 4 "重启 hermes gateway"
     if confirm "重启 hermes gateway 让新 key 生效?"; then
         if command -v hermes >/dev/null 2>&1; then
@@ -210,9 +268,9 @@ ok "写 $COMPANION_YAML (chmod 600, hermes_api 段已 enabled)"
 }
 
 # ===========================================================================
-# Step 4. 装 catfish-memory plugin (调子脚本)
+# Step 5. 装 catfish-memory plugin (调子脚本)
 # ===========================================================================
-step 4 "装 catfish-memory hermes plugin"
+step 5 "装 catfish-memory hermes plugin"
 PLUGIN_INSTALL_SH="$CATFISH_REPO/edge/hermes-plugins/install-catfish-memory.sh"
 if [ -x "$PLUGIN_INSTALL_SH" ]; then
     if confirm "调 install-catfish-memory.sh 装 plugin + 激活?"; then
@@ -225,9 +283,9 @@ else
 fi
 
 # ===========================================================================
-# Step 5. (可选) 装 catfish-autocompress plugin
+# Step 6. (可选) 装 catfish-autocompress plugin
 # ===========================================================================
-step 5 "(可选) 装 catfish-autocompress hermes plugin"
+step 6 "(可选) 装 catfish-autocompress hermes plugin"
 AC_INSTALL_SH="$CATFISH_REPO/edge/hermes-plugins/install.sh"
 if [ -x "$AC_INSTALL_SH" ]; then
     if confirm "调 install.sh 装 catfish-autocompress?"; then
@@ -240,17 +298,30 @@ else
 fi
 
 # ===========================================================================
-# Step 6. 重启 hermes gateway
+# Step 7. 重启 hermes gateway
 # ===========================================================================
-step 6 "重启 hermes gateway"
+step 7 "重启 hermes gateway"
 if confirm "重启 hermes gateway 让所有配置生效?"; then
     if command -v hermes >/dev/null 2>&1; then
         hermes gateway restart 2>&1 | tail -5 || warn "hermes gateway restart 失败"
-        sleep 3
-        if lsof -i :8642 >/dev/null 2>&1; then
-            ok "hermes API server 监听 :8642 ✓"
-        else
-            warn "8642 没监听, 看 ~/.hermes/logs/gateway.error.log"
+        # P3.5.50: v0.17 启动慢 (god-file refactor + 多 mixin import + plugin
+        # discover scan), 老 sleep 3 经常没等到 bind. 改循环 poll 最多 30s,
+        # bind 上立刻返, 真没起来就给详细诊断.
+        echo "    等 hermes bind 8642 (最多 30s)..."
+        bound=0
+        for i in $(seq 1 30); do
+            if lsof -i :8642 >/dev/null 2>&1; then
+                ok "hermes API server 监听 :8642 ✓ (${i}s)"
+                bound=1
+                break
+            fi
+            sleep 1
+        done
+        if [ "$bound" = "0" ]; then
+            warn "30s 内 8642 没监听 — hermes 可能起来失败 / plugin import error 卡死"
+            echo "    诊断:"
+            echo "      tail -50 ~/.hermes/logs/gateway.error.log | grep -iE 'error|traceback|circular'"
+            echo "      pgrep -fl hermes-agent  # 看进程在不在"
         fi
     else
         warn "找不到 hermes 命令"
@@ -260,7 +331,12 @@ fi
 echo
 echo -e "${BOLD}${GREEN}✓ catfish-edge 安装完成${RESET}"
 echo
-echo "验证:"
+echo -e "${BOLD}${YELLOW}⚠️  下一步必须做 (key 真 rotate 了, Companion 不重启会用老 key 401):${RESET}"
+echo "  1. 完全退出 Companion: Dock 右键鲶鱼 Companion → 退出 (或 Cmd+Q **必须**确认对话框点退出, 关窗口 ✗ 没用)"
+echo "  2. 重新打开 Companion"
+echo "  3. 验真: 跟小鲶聊 '执行 ls' 看 execute_code 真返结果"
+echo
+echo "其他验证:"
 echo "  hermes memory status              # 应显 'catfish-memory ← active'"
 echo "  curl -H 'Authorization: Bearer \$KEY' http://localhost:8642/v1/models"
 echo

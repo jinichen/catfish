@@ -21,7 +21,9 @@ mint-hermes-service-token.sh 写 ~/.hermes/.env HERMES_SERVICE_TOKEN=<jwt>.
 
 新需要的 env (没设就不自动续, 不破老行为):
   - CATFISH_HERMES_CLIENT_ID (默认 'hermes-cli')
-  - CATFISH_HERMES_CLIENT_SECRET (无默认, **必须**设才能 auto-renew)
+  - CATFISH_HERMES_CLIENT_SECRET (优先) / CLIENT_SECRET (fallback, mint script
+    老 env name). 任一设了才能 auto-renew. P3.5.48: 双 env 兼容兜底装机
+    setup 跟手动 cron 用不同 name 的两套场景.
   - CATFISH_IDENTITY_URL (默认 'http://localhost:8998')
   - HERMES_ENV_PATH (默认 '~/.hermes/.env')
 
@@ -75,7 +77,18 @@ def _client_id() -> str:
 
 
 def _client_secret() -> Optional[str]:
-    s = os.environ.get("CATFISH_HERMES_CLIENT_SECRET", "").strip()
+    """读 client_secret. 优先 CATFISH_HERMES_CLIENT_SECRET (P3.5.44 新 env),
+    fallback CLIENT_SECRET (mint-hermes-service-token.sh 老 env name).
+
+    P3.5.48 (6/21 鸿波 catch '为啥自动续期没起来'): 老 design 只读
+    CATFISH_HERMES_CLIENT_SECRET, 但鸿波装机时是按 mint script docs 设
+    CLIENT_SECRET=xxx, 两个 env name 不一致 → plugin silent fail. 一致后
+    setup 写一次 .env, mint 跟 plugin 自动续期都 work.
+    """
+    s = (
+        os.environ.get("CATFISH_HERMES_CLIENT_SECRET", "").strip()
+        or os.environ.get("CLIENT_SECRET", "").strip()
+    )
     return s or None
 
 
@@ -258,10 +271,12 @@ async def get_fresh_service_token() -> Optional[str]:
             exp = decode_jwt_exp(current)
             remain = (exp - int(time.time())) if exp else "?"
             logger.warning(
-                "P3.5.44 HERMES_SERVICE_TOKEN 剩 %s 秒该续但 CATFISH_HERMES_"
-                "CLIENT_SECRET 没配, 不能自动 mint. 设这条 env (跟 catfish-"
-                "identity clients.yaml hermes-cli secret 一致) 即可永续. "
-                "或者手动跑 scripts/mint-hermes-service-token.sh.",
+                "P3.5.44/.48 HERMES_SERVICE_TOKEN 剩 %s 秒该续但 secret 没配. "
+                "设 CATFISH_HERMES_CLIENT_SECRET 或 CLIENT_SECRET 到 ~/.hermes/.env "
+                "(跟 catfish-identity clients.yaml hermes-cli secret 一致), 重启 "
+                "hermes 即可永续. 一次性补法: 跑 scripts/setup-catfish-edge.sh "
+                "(会检测+交互式填补) 或 scripts/mint-hermes-service-token.sh "
+                "--persist-secret 一次.",
                 remain,
             )
             return current

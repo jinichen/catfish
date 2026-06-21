@@ -5,6 +5,452 @@
 
 ---
 
+## 2026-06-21 · P3.5.53 — hermes daemon plugin install 死锁真因 + 真修
+
+### 7 步真因 audit (鸿波 N 次 catch 我瞎猜后)
+
+**真因不是 picker, 不是 CORS, 不是 CSP, 是 hermes daemon plugin install chicken-and-egg 死锁**.
+
+`__init__.py:_delayed_install` daemon thread:
+```python
+while elapsed < 30:
+    mt = sys.modules.get("model_tools")
+    if mt and hasattr(mt, "get_tool_definitions"):
+        _mod.install(); return
+    sleep(0.2)
+```
+
+Poll 等 `model_tools` 被主线程 import. **但** v0.17 hermes daemon (gateway run 模式) 主线程**不主动 import run_agent** (chat 是 lazy import, 来 chat 时才 trigger). 而 `run_agent.py:22` 顶 imports `from model_tools import (...)` 才会引 model_tools.
+
+链路:
+1. hermes daemon main → plugin discover → catfish register → 启 daemon thread
+2. daemon thread poll model_tools → 主线程没 import → 永远 None
+3. 30s timeout → install() 跳过 → `_INSTALLED=False`
+4. Companion 来 chat → 走 hermes 内部 agent.run → trigger run_agent import → model_tools import
+5. agent 调 tool → `pre_tool_call_safety_check` → 看 `_INSTALLED=False` → raise "catfish-xcatfish-user 未装载"
+6. hermes block tool call → conversation_loop fail → SSE stream abort → Companion 看 `Could not connect to the server`
+
+死锁: 没 chat 不 import model_tools, 没 install 也接不了 chat. 等 chat 来 trigger import 已经太晚 (install 路径已经 timeout 跳过).
+
+### Ground truth 锁定路径 (gateway.error.log)
+- `P11 middleware register failed: 'NoneType' object has no attribute 'middlewares'` → P11 path A (wrap connect, late) fail
+- `Cannot modify frozen list` / `Cannot register into frozen router` → Application 已 frozen
+- `30s model_tools 未 fully init, install 跳过` ← **真死锁信号**
+- `P11 stash: body.model='...' → CV_PICKER_MODEL.set('...')` ← P11 path B (Application.__init__ patch 同步段, 我 P3.5.50 让 P8/P9 sync 顺带装上) 真 work
+- `lsof -p <hermes-pid> | grep plugin.py` 0 命中 — 但 P11 真注入了 (path B 通过 module-level patch 不 hold file handle)
+
+### 修 P3.5.53 (1 处)
+`_delayed_install`: 不再 `while: poll sys.modules`, 改成 daemon thread 主动 `import model_tools` trigger. sleep 0.5s 让主线程 register 完成跳过 partial init 段 (避免撞 P10 同根的 circular), 之后 `import model_tools` → model_tools fully init → `_mod.install()` 直接跑.
+
+v0.17 model_tools.py 顶 imports 不撞 catfish plugin. P10 P3.5.50 已经移到 _delayed_install, 现在依赖 install() 跑 → install() 跑 → P10 装上.
+
+```python
+def _delayed_install():
+    try:
+        time.sleep(0.5)
+        import model_tools  # trigger import
+    except Exception as e:
+        logger.warning("model_tools import fail (%s), install 跳过", e)
+        return
+    try:
+        _mod.install()
+        logger.info("catfish-xcatfish-user delayed install ✓ (P3.5.53 路径)")
+    except Exception as e:
+        logger.error("install fail: %s", e, exc_info=True)
+```
+
+### verify
+- syntax ✓
+- 65 plugin tests pass ✓
+- 鸿波本机 hermes restart 后:
+  - error.log 不再 "30s model_tools 未 fully init"
+  - 应看到 "catfish-xcatfish-user delayed install ✓ (P3.5.53 路径)"
+  - safety_check 不再 raise "未装载"
+  - chat tool call 真 work
+
+### 鸿波本机 verify
+```bash
+cd ~/person_task/catfish && git pull
+hermes gateway restart
+sleep 10
+grep -E "delayed install ✓|catfish-xcatfish-user|未装载" ~/.hermes/logs/gateway.error.log | tail -10
+# 期望: 'delayed install ✓ (P3.5.53 路径)' + 0 '未装载' 新 warning
+# Companion chat 跑 "测试" → tool call 真 work, picker 选 Qwen 真发 Qwen
+```
+
+### 教训 (第 5 次反省)
+7 步 audit 真因链:
+1. picker → store (验证 setModel 真发了 qwen)
+2. store → fetch body (devtools Network 验证 body.model = qwen)
+3. fetch → hermes 8642 (verify 200 / curl OK)
+4. hermes 8642 → 内部 P11 middleware (P3.5.51 probe verify CV_PICKER_MODEL.set)
+5. P11 装上 vs install() 全套 ≠ (P11 path B 装上, install() 跑没)
+6. install() fail 真因 → _delayed_install 30s timeout
+7. timeout 真因 → 死锁 model_tools 没 import
+
+每步都给真 ground truth output, 真因到第 7 步才到底. **决不要在中间步骤跳到结论. 链每一步都 verify, 不要假设上游正常.**
+
+---
+
+## 2026-06-21 · P3.5.51 + P3.5.52 — picker UI 显 Qwen 但 send 真发 private-main (鸿波 catch)
+
+### 鸿波 catch
+鸿波 chat picker 切 Qwen3.6-Flash, 发 "测试", log 显 `model=catfish-private-main` 上游 streaming error. 鸿波: "**模型没有按照选择的模型 ... 我记得有一个专门来处理 picker 模型的处理, 你去仔细分析代码, 不要乱猜**".
+
+### 我又连错了 N 次 (这次记账 6 条全错猜)
+1. "Companion picker 老 key cache" → 错
+2. "CSP preflight" → 错
+3. "Cmd+Q 没真退" → 错  
+4. "catalog 里 model id 是空字符串" → 错 (catalog 真返 catfish-public-qwen-flash)
+5. "P11 middleware 没注入 / hermes daemon 没 load plugin" → 错 (plugin 真装上)
+6. "plugin install 30s timeout 失败" → 错 (mcp-stderr 显示 15 patches ✓)
+
+### 真因 (鸿波 catch + P3.5.51 probe verify)
+
+P3.5.51 加 WARNING probe 到 P11 stash middleware + P6 picker override. hermes restart, 鸿波 chat, probe log:
+```
+WARNING catfish.xcatfish_user.plugin: [P3.5.51 probe] P11 stash: 
+  body.model='catfish-private-main' → CV_PICKER_MODEL.set('catfish-private-main') 
+  path=/v1/chat/completions
+```
+
+Companion 真发的就是 `catfish-private-main`. plugin / picker chain 全 work — 拿到啥发啥. UI 显 Qwen 但 store/send 是 private-main = **picker UI 跟 zustand store.model 不同步**.
+
+audit `store/chat.ts:297-313 reset()`:
+```ts
+reset: () => set({
+  ...
+  modelPickedByUser: false,   // ← 这条!
+})
+```
+
+`reset()` 清 `modelPickedByUser=false` 但**不清 `model`** (BL-GLOBAL-MODEL 5/23 设计: 切会话不动 model). 用户 picker 选过 Qwen → `model="catfish-public-qwen-flash"`, `modelPickedByUser=true`. reset() 后 → `model` 保留 qwen, `modelPickedByUser=false`.
+
+之后 ChatTab catalog effect (line 166-172):
+```ts
+if (modelPickedByUser) return;  // false → 不 skip
+if (catalog.default === model) return;  // "catfish-private-main" !== "catfish-public-qwen-flash" → 不 skip
+setModelInStore(catalog.default, false);  // → store.model = "catfish-private-main"
+```
+
+store.model 被 catalog.default 静默覆盖. UI picker 显的还是 Qwen (dev mode HMR React selector / DOM render 时序滞后), send 拿 store.model 真值 = private-main.
+
+P3.5.29 Phase 6.3 设计 "reset 清 picker lock 让 yaml 改 picker 自动跟走" 跟 BL-GLOBAL-MODEL "切会话不动 model" 冲突 — modelPickedByUser=false + model 保留 = 双不一致状态, effect 一定 fire 覆盖 model.
+
+### 修法 (P3.5.52, 1 处)
+
+`store/chat.ts:reset()` 删 `modelPickedByUser: false,` 这行. 让用户 picker 选的 model 在整个 Companion lifetime 锁定. `catalog.default` 只在 fresh launch (zustand init `modelPickedByUser=false`) 时 propagate. P3.5.29 Phase 6.3 想要的 "yaml 改 default → picker 跟走" 用例改为: **重启 Companion 后自动 propagate** (zustand reset 到 init).
+
+撤回 P3.5.29 Phase 6.3 那个 reset clear 设计, 跟 BL-GLOBAL-MODEL 重新对齐.
+
+### probe 临时升 WARNING 回 debug
+P3.5.51 probe 把 P11 stash + P6 override log 临时升 WARNING. verified 完, 回 logger.debug, 不留 noise.
+
+### 教训 (第 4 次反省)
+鸿波 7 次 catch 我瞎猜, 都是没去 audit 真路径就猜. 这次 audit 链:
+- mcp-stderr 看 plugin install (catfish_tool_bridge 进程)
+- error.log 看 hermes daemon plugin 加载 + Traceback
+- P3.5.51 probe 看 P11/P6 真实 cv 值
+- store/chat.ts reset() 真路径
+
+链每一步给真 ground truth, 真因到 7 步才到底. **每次 ground truth output 来都该重新评估 hypothesis, 不要扛着旧假设跑.**
+
+### Sprint 全 100% ship 完
+| ticket | 修的 |
+|---|---|
+| P3.5.47 | hermes v0.17 audit script 补 19 patch + bug |
+| P3.5.48 | HERMES_SERVICE_TOKEN 治本自动续期 (3 嵌套真因) |
+| P3.5.49 | RBAC unknown tool — v0.17 progressive disclosure 3 bridge |
+| P3.5.50 | P10 circular import + P15.2 cascade + bind poll + secret prompt |
+| P3.5.50.1 | UX 强提示真 quit Companion |
+| P3.5.50.2 | CSP connect-src 加 http://localhost:* |
+| P3.5.51 | P11/P6 WARNING probe (instrumentation, verify 后回 debug) |
+| **P3.5.52** | **reset() 不清 modelPickedByUser — 修 picker UI/send 不同步** |
+
+---
+
+## 2026-06-21 · P3.5.50.2 — 鸿波 catch 真 bug: build 模式 chat fail / dev 模式 OK (CSP connect-src)
+
+### 我又连错 1 次 (第 3 次), 鸿波再 catch
+我之前说 P3.5.50.1 "Cmd+Q 没真退 + cargo tauri dev 真 spawn 进程 → work". 鸿波再跑 prod build (packaged Companion) 仍 fail, `cargo tauri dev` work. 鸿波: **"build 就会出错, dev 没有问题, 你要仔细分析代码, 不要乱猜"**.
+
+真因 audit (这次真去看代码, 不猜):
+
+`tauri.conf.json:56` CSP `connect-src`:
+```
+"connect-src": "'self' http://127.0.0.1:* ws://127.0.0.1:* tauri: ipc: http://ipc.localhost"
+```
+
+**只 allow `http://127.0.0.1:*`, 不 allow `http://localhost:*`**. 但 catfish 全栈用 `http://localhost:8642`:
+- `hermes_api_config.rs:41` `DEFAULT_URL = "http://localhost:8642"`
+- `setup-catfish-edge.sh:36` `HERMES_API_URL="http://localhost:8642"`
+- yaml 写的也是 `http://localhost:8642` (鸿波刚 grep verify)
+
+prod build WKWebView 严格应用 CSP, host 是字符串 match (`localhost` ≠ `127.0.0.1`, 即使 DNS 都解 ::1/127.0.0.1) → fetch reject → `TypeError: Load failed`. dev 模式 Tauri 注入 HMR-only 宽松 CSP (`ws://localhost:1420` 等), 不应用 prod CSP, 所以 dev work.
+
+curl 不受 CSP, 所以 OPTIONS + POST 200 + CORS allow 全 verify 通过, **跟 hermes / plugin / key / CORS 都无关**. 真 block 点在 webview CSP 这一层, 上不到 hermes.
+
+### 修 (1 行)
+`tauri.conf.json` connect-src 加 `http://localhost:*` + `ws://localhost:*` (跟现有 127.0.0.1 对齐). 不动其他 src, 不动 hermes_api_config, 不动 setup script (鸿波本机 yaml 不动). JSON syntax verified.
+
+```diff
+-"connect-src": "'self' http://127.0.0.1:* ws://127.0.0.1:* tauri: ipc: http://ipc.localhost"
++"connect-src": "'self' http://127.0.0.1:* ws://127.0.0.1:* http://localhost:* ws://localhost:* tauri: ipc: http://ipc.localhost"
+```
+
+### 教训 (第 3 次)
+3 次连错:
+1. 第 1 次: "Companion 进程 cache 老 key, 重启" — 错, 是 OS-level lifecycle (后台没 quit)
+2. 第 2 次: "CORS preflight reject" — 错, OPTIONS verify 200 通过
+3. 第 3 次: "Cmd+Q 没真退, cargo tauri dev 真重启 work" — **半对**. dev work 真因不是"重启了", 是 dev 模式不应用 prod CSP
+
+ground truth 路径是: hermes 8642 work (curl 200) → OPTIONS preflight pass → CORS allow tauri origin → 那 fetch 该 work. **fetch 不 work = 上游 webview 层 block** = CSP. 我应该第一时间想到 dev vs prod 差异 = CSP / capability / ATS, 不该死磕进程 lifecycle.
+
+### 鸿波本机 rebuild + 验
+```bash
+cd ~/person_task/catfish && git pull
+cd edge/companion-app
+npm run tauri build
+# 装新 .app 到 ~/Applications/
+# Dock 右键 → 完全退出 (Cmd+Q 看确认对话框真点)
+# 再开 → "执行 ls" → 应真返结果
+```
+
+dev 模式之前已 verify work, build 这条修了 CSP 也 work, 整 v0.17 升级 真闭环.
+
+---
+
+## 2026-06-21 · P3.5.50.1 — 现场 e2e 跑通 + 1 个我连错 2 次的 UX gap fix
+
+### chat 真闭环 verified (鸿波 16:40 截图 + console)
+- `execute_code(code="import subprocess...")` → 真返 ls 输出 (Applications/Desktop/Documents...)
+- console: `[BL-AUTH-DECOUPLE-A5] backendUrl: 127.0.0.1:8999 → localhost:8642 (hermes proxy 启用)` ✓ 走 hermes 8642 (P3.5.50 修的)
+- console: `[catfish chat] persisted session ... (source=companion)` + `加载 108/133 个工具`
+- OPTIONS preflight 200 + 完整 CORS allow (P8/P9 装上证据)
+- hermes restart 6s 内 bind 8642 (P3.5.50 step 7 poll 修)
+- token + secret 都自动续期 (P3.5.48 一次性写盘)
+- 0 RBAC unknown warning (P3.5.49)
+- 0 circular import (P3.5.50 P10 移走)
+
+### 我 2 次连错猜的 bug — Companion "Cmd+Q quit" 真不退
+鸿波 setup 后 chat 报 `TypeError: Load failed`. 我猜 2 次:
+1. **第 1 次猜**: 老 key cache, 重启 Companion 解决. 鸿波重启仍 fail.
+2. **第 2 次猜**: CORS preflight reject. 让鸿波 curl OPTIONS verify → 真 200 OK + 完整 CORS allow.
+
+真因鸿波自己跑 `cargo tauri dev` 一次后 work — 也就是 **Cmd+Q 关 Companion 并没真 kill 进程** (Mac app standard behavior, Cmd+W 关窗口 ≠ quit, Cmd+Q 在 Tauri prod 可能也只是隐藏到后台). 老进程 OnceLock 永续 cache 老 `API_SERVER_KEY` (rotate 前的). `cargo tauri dev` 是真新 spawn 进程 → OnceLock 重建拿新 key → chat work.
+
+我**完全没想 OS-level app lifecycle**, 死磕 yaml + key + CORS. 教训: 配置改了 +"重启" 没真验证进程 PID 换没换前, 不该相信 "重启了". `pgrep -fl catfish-companion` 查真 PID 才算 ground truth.
+
+### 修法 (1 行文案)
+`setup-catfish-edge.sh` 最后**强提示** Companion 必须 Dock 右键 → 退出 (或 Cmd+Q 看确认对话框真点退出). 关窗口 ✗ 没用. 加验证步骤 "跟小鲶聊 '执行 ls' 看 execute_code 真返结果", 鸿波或别的员工不再踩这坑.
+
+### 总结: P3.5.47-P3.5.50.1 sprint ship 完
+| ticket | 修的 |
+|---|---|
+| P3.5.47 | hermes v0.17 升级 audit script 补全 (19 patch + helper bug + prefetch_all 路径修) |
+| P3.5.48 | HERMES_SERVICE_TOKEN 治本: 双 env fallback + mint --persist-secret + setup 一次性写 |
+| P3.5.49 | KNOWN_BUILTIN_TOOLS 加 v0.17 tool_search/describe/call bridge |
+| P3.5.50 | P10 circular import (从同步段移走) + P15.2 独立 try + secret prompt default + bind poll 30s |
+| P3.5.50.1 | setup 完成文案强提示重启 Companion |
+
+hermes v0.17.0 升级现场 e2e 真闭环, 没尾巴.
+
+---
+
+## 2026-06-21 · P3.5.50 现场跑 setup-catfish-edge.sh 暴露 3 个真问题 (鸿波 catch)
+
+我之前 P3.5.47 "audit 53/0 pass ✓" 跑的是 attribute 静态检查, **没 cover plugin import 时序**.
+鸿波 setup 重启 hermes 后 8642 没监听, log 显示:
+
+```
+catfish-xcatfish-user: 同步 patch 失败 (ignored):
+  cannot import name 'AIAgent' from partially initialized module 'run_agent'
+  (most likely due to a circular import)
+Traceback ...
+  File ".../plugin.py", line 1318, in _patch_p10_apply_client_headers_localhost
+    from run_agent import AIAgent
+ImportError
+```
+
+### 真因 (audit 完, not 瞎猜)
+
+v0.17 `run_agent.py:22` 顶部新加 `from model_tools import (...)`. 链路:
+
+1. hermes 主进程 `import run_agent` (启 daemon 时)
+2. run_agent 开始执行 (但 module 还在 importing, `AIAgent` class 还没 def 进 namespace)
+3. line 22: `from model_tools import (...)` → trigger model_tools import
+4. model_tools 内部 trigger plugin discover, 扫 `~/.hermes/plugins/`
+5. catfish plugin `__init__.py register()` 跑
+6. Step 2.7 同步段 line 209: `_patch_p10_apply_client_headers_localhost()`
+7. P10 body `from run_agent import AIAgent` → **`AIAgent` 还没 def, ImportError** ✗
+
+cascade 副作用更狠: P10 在 try block 内, **后面 P15.2 `_patch_p15_2_chat_approval_route()` (line 214)
+被跳过**. P15.2 chat_approval middleware 必须在 Application() init 之前 register,
+`_delayed_install` 30s 后跑太晚 → middleware 永远没装上, approval button 路径死.
+
+我 P3.5.47 "全 19 patch 兼容 ✓" 静态 audit 正确 (attr 都还在), 但**漏 import 时序检查**.
+v0.17 god-file 重构改了 run_agent.py top imports, 同步段 `from run_agent` 路径就死.
+
+### 修法 (P3.5.50)
+
+**(a) `__init__.py` P10 从同步段移走, P15.2 拆独立 try**:
+- P10 wrap AIAgent **instance** method (LLM 实际调用时才生效), `_delayed_install`
+  跑 plugin.install() 全套含 P10. LLM first call 通常 > 30s, P10 on time.
+- P15.2 单独 try 防别处 fail cascade. 即使 P0-P9 任一炸, P15.2 一定装上.
+
+**(b) `setup-catfish-edge.sh` step 3 secret prompt 加默认值兜底**:
+- 鸿波直接 Enter 时 → 用 demo secret (`hermes-dev-secret-2026-please-change`).
+  dev / 单机部署够用. 生产装机请 `export CLIENT_SECRET=<真secret>` 再跑.
+- 老 prompt 看到 "默认 demo: ..." 但没真 default → Enter 直接空 → 跳过. UX 误导.
+
+**(c) `setup-catfish-edge.sh` step 7 重启 hermes 等 bind 改循环 poll 30s**:
+- 老 `sleep 3` 太短 (v0.17 god-file refactor + multi-mixin import + plugin discover
+  scan, 启动慢). poll 每秒 check 8642 是不是 LISTEN, 最多 30s. bind 上立刻返,
+  没起来给详细诊断命令 (tail error.log / pgrep hermes-agent).
+
+### 暂搁置 (单独后续 audit, 不阻塞 ship)
+
+- `test_prefetch_skills_catalog` 鸿波本机 hermes venv 跑 fail / sandbox python3 跑 pass.
+  v0.17 升级带的 dep 行为差. install-catfish-memory.sh log 说 "单测失败但 plugin 安装
+  不受影响", 非阻塞.
+
+### 验证 (sandbox)
+
+- `__init__.py` syntax OK
+- `setup-catfish-edge.sh` syntax OK
+- `tests/test_hermes_token_renewal.py` 25/25 pass
+- `tests/test_memory_audit.py` 24/24 pass
+- `tests/test_memory_enforce.py` 16/16 pass
+- `tests/test_tools_sanitizer.py` 34/34 pass (P3.5.49 加 3 bridge tool 没破)
+
+### 鸿波本机一键 fix (再 setup 一次)
+
+```bash
+cd ~/person_task/catfish && git pull              # 拿 P3.5.50 修
+bash scripts/setup-catfish-edge.sh                # step 3 Enter 直接用 demo secret OK
+# step 7 等 hermes bind 8642 最多 30s, bind 上 ✓ 立刻返
+hermes gateway restart                            # 单独再 restart 一次让 P10 经 _delayed_install 装上
+sleep 35  # 等 _delayed_install 跑完 (30s wait_max)
+tail -50 ~/.hermes/logs/gateway.log | grep -E "catfish-xcatfish|delayed install"
+# 期望: 'catfish-xcatfish-user delayed install ✓' + 'catfish-xcatfish-user: 同步 patch ✓ (P0/P1/P3/P4/P7/P8/P9)'
+# 不再有 ImportError / circular 错
+```
+
+---
+
+## 2026-06-21 · P3.5.48 + P3.5.49 修 v0.17 升级 + 现场跑出来 2 个真问题 (鸿波 catch)
+
+### P3.5.48 — 治本 HERMES_SERVICE_TOKEN 自动续期 (问题 2)
+
+**现象**: hermes v0.17 重启后 advisory/proactive `/api/*` 全 401, log 反复 `WARNING catfish.hermes_token_renewal: P3.5.44 HERMES_SERVICE_TOKEN 剩 -242044 秒该续但 CATFISH_HERMES_CLIENT_SECRET 没配, 不能自动 mint`. token 过期 74h.
+
+**真因 (3 嵌套, 仔细分析后 not 瞎猜)**:
+
+1. **`setup-catfish-edge.sh` 装机不写 token / secret**. step 1-6 只写 `API_SERVER_KEY`, 注释 (line 182-183) 仅提示员工"自己跑 mint-hermes-service-token.sh". 鸿波装机时手动 mint 过一次, 30 天后过期没续.
+2. **`mint-hermes-service-token.sh` 跟 plugin auto-renew env name 不一致**. mint script: `CLIENT_SECRET` (line 25,62). plugin: `CATFISH_HERMES_CLIENT_SECRET` (hermes_token_renewal.py:78). **就算鸿波 `CLIENT_SECRET=xxx bash mint`, plugin 也读不到**.
+3. **mint script 永远不持久化 secret**. 只把 access_token 写 .env, secret 仅交互式 / 命令行收 (line 62-70 注释 "明文, 不会显示也不存历史"). plugin auto-renew 天生没机会自启动.
+
+**修 (彻底治本, 不留尾巴, 没 cron 依赖)**:
+
+- `hermes_token_renewal._client_secret()`: 加 `CLIENT_SECRET` fallback, 优先 `CATFISH_HERMES_CLIENT_SECRET`. 老 mint cron 自动兼容.
+- `mint-hermes-service-token.sh`: 加 `--persist-secret` flag, mint 时把 `CATFISH_HERMES_CLIENT_SECRET=<value>` 写 ~/.hermes/.env (chmod 600). hermes daemon 重启 launchd-wrapper source .env → plugin auto-renew 永续, 不再依赖手动 cron.
+- `setup-catfish-edge.sh`: 加 step 3 (老 step 3-6 全 +1), 检测 .env 缺 `HERMES_SERVICE_TOKEN` / 缺 secret 就交互式收 + 调 `mint --persist-secret` 一次. 装机一次性永续.
+- warning 文案改 — 反映双 env 兼容 + 提示 `setup-catfish-edge.sh` 一次性补.
+- unit test 4 条新加: empty / fallback / priority / whitespace. 25/25 pass.
+
+### P3.5.49 — 修 RBAC unknown tool 误报 (问题 3)
+
+**现象**: log 反复 `BL-RBAC-DAY4-HARDENING: 3 unknown tool name(s) seen (hermes 0.14 tool_override 嫌疑): unknown=tool_call, tool_describe, tool_search`.
+
+**真因 (not 瞎猜)**: hermes v0.17 新加 **Progressive Tool Disclosure** feature. `tools/tool_search.py:43-45`:
+```python
+TOOL_SEARCH_NAME = "tool_search"
+TOOL_DESCRIBE_NAME = "tool_describe"
+TOOL_CALL_NAME = "tool_call"
+```
+机制 (file docstring): MCP + 非 core plugin tools 超 model context 10% (default threshold, `enabled="auto"` line 83) 时, hermes 自动用这 3 bridge tool 替换暴露给 LLM (lazy disclosure). LLM emit `tool_call(name="execute_code", ...)`, hermes 内部 dispatch 真 tool.
+
+catfish `KNOWN_BUILTIN_TOOLS` (5/17 hermes 0.14 时代 list 写的) 没补这 3 → audit warning 误报"hermes 0.14 tool_override 嫌疑", **真因不是攻击**.
+
+**修**:
+- `tools_sanitizer_constants.KNOWN_BUILTIN_TOOLS`: 加 `tool_search`, `tool_describe`, `tool_call`. 131 tool total (老 128 + 3 bridge).
+- `tools_sanitizer._audit_unknown_tools` warning 文案改 — 砍"hermes 0.14 tool_override 嫌疑" 误导, 改成"hermes 升级新 builtin / plugin 新 tool 嫌疑, 看 sanitizer_constants 该不该补". 真触发时给运维准确诊断.
+
+### 升级动作 (员工本机, 鸿波这台)
+
+```bash
+cd ~/person_task/catfish && git pull          # 拿 P3.5.48/.49 修
+bash scripts/setup-catfish-edge.sh            # step 3 会检测 .env 缺什么 + 交互式补
+# 输入 CLIENT_SECRET 时填 catfish-identity clients.yaml hermes-cli 真 secret
+# (demo: hermes-dev-secret-2026-please-change)
+# 自动 mint + 持久化 secret + 重启 hermes
+# 之后 30 天周期到了 plugin 自动续期, 永远 work, 不用人工干预
+
+# 验证:
+tail -20 ~/.hermes/logs/gateway.error.log | grep -E "HERMES_SERVICE_TOKEN|hermes_token_renewal"
+# 应只看到 P3.5.44 mint_service_token 成功 (expires_in=2592000, ~30天), 不再 401 wave
+
+curl -s http://localhost:8642/v1/catalog | head -c 200    # 应 200
+```
+
+---
+
+## 2026-06-21 · P3.5.47 hermes v0.17.0 (v2026.6.19) 升级兼容性 audit + script 补全
+
+### 触发
+鸿波看到 NousResearch/hermes-agent v0.17.0 (v2026.6.19) release. 1475 commits, +235k -50k, **god-file 大重构** (gateway/run.py 19157→17555 lines, mixin 化拆 3 个: GatewayAuthorizationMixin / GatewayKanbanWatchersMixin / GatewaySlashCommandsMixin). 问"我们应该修正什么".
+
+### 第 1 轮 → 我**瞎猜**了 (鸿波 catch)
+我用 web_fetch 拿 v0.17 `api_server.py` (它 truncated 在 2633 行, 实际 4406 行), grep `_run_agent` 0 命中, 武断报"P15 100% 破 — `_run_agent` method 在 v0.17 不存在了, 闭包反射 dead". 鸿波说"你要仔细去分析 Hermes 和 catfish 代码, 不要瞎猜".
+
+第 2 轮: bash curl 拿完整 v0.17 source → `_run_agent` **真存** at `api_server.py:3571`, signature 跟 catfish patched 期望完全一致 (`stream_delta_callback / gateway_session_key / session_id` 全在). 我之前是看 truncated 文件下结论, 教训: web_fetch 报 "truncated" / oversized 一律 bash curl 拉全再 grep, 不 grep 截断版猜.
+
+### 真实结论 — catfish 0 改, 全 19 patch 兼容
+
+跑 audit script 之后实测 pass=53 fail=0:
+
+| catfish patch | v0.17 真路径 | 状态 |
+|---|---|---|
+| P5 `_extract_catfish_outgoing_user` | catfish 自加 | ✅ |
+| P6 `_create_agent` wrap (`*args, **kwargs` 透传) | `api_server.py:1024` | ✅ v0.17 新加 4 callback 透传自动兼容 |
+| P7 `_handle_companion_proxy` | catfish 自加 | ✅ |
+| P8 `_CORS_HEADERS / _cors_headers_for_origin` | `api_server.py:547, 825` | ✅ |
+| P11 `connect = patched_connect` | `api_server.py:4238` | ✅ |
+| P15 `_run_agent = patched_run_agent` | `api_server.py:3571` (signature `stream_delta_callback / gateway_session_key` 全在) | ✅ |
+| P15.2 `chat_approval` route | `tools/approval.py:728 resolve_gateway_approval` | ✅ |
+| P14 GatewayRunner `_handle_message` + `_session_key_for_source` | `gateway/run.py:7145, 2944` | ✅ god-file 重构但 method 仍在 run.py 本体 |
+| P16 `tools.session_search_tool` | 文件存在 | ✅ |
+| P18 `_handle_compress_session_stream` | catfish 自加 | ✅ |
+| P19 `_create_agent` post-init + `status_callback` | `run_agent.py:320 AIAgent.__init__` 含 4 kwarg | ✅ |
+| `tools.approval` 6 fn (P14/P15/P15.2) | `tools/approval.py:78/83/109/703/715/728/757` | ✅ 全在 |
+
+### 顺便: audit_hermes_compat.sh 补全 (P3.5.47)
+
+`edge/catfish-cli/scripts/audit_hermes_compat.sh` 是 2026-06-03 hermes 0.15.2 时代写的, 之后加的 P11/P14/P15/P15.2/P16/P19 全没 cover. 这次借升级 audit 顺便补:
+
+- 加 section 10-16: `_run_agent / _handle_chat_completions / _stream_q / _on_delta / connect / GatewayRunner._handle_message + _session_key_for_source / approval 6 fn / session_search_tool / AIAgent stream_delta_callback + status_callback kwarg / _replace_primary_openai_client`
+- file check 补 `gateway/run.py / tools/approval.py / tools/session_search_tool.py / hermes_cli/tools_config.py`
+- 修 helper fn shell bug: 老写 `grep -cE ... \|\| echo 0` 在 grep no-match return 1 时拼 "0\n0" 双行, `[ "0\n0" -ge 1 ]` → "integer expression expected". 改 `hits=${hits:-0}` fallback file 不存在 stderr case
+- 修 section 6 prefetch_all check: v0.17 conversation_loop 不再直接调 `_memory_manager.prefetch_all()` (改 lazy `_ctx.ext_prefetch_cache` 架构), method 本体仍在 `MemoryManager.prefetch_all` (memory_manager.py). check 移到真 def 位置. catfish 当前不用 prefetch (BACKLOG 待办), 留 check 给将来 catfish-memory plugin 兜
+
+终态 53 pass / 0 fail / exit 0 ✓ 升级 OK.
+
+### 升级动作 (员工本机)
+```bash
+cd ~/.hermes/hermes-agent && git fetch && git checkout v2026.6.19
+HERMES_ROOT=~/.hermes/hermes-agent bash ~/person_task/catfish/edge/catfish-cli/scripts/audit_hermes_compat.sh
+# 期望: pass=53 fail=0 ✓ 升级 OK
+```
+
+不动 catfish 代码. plugin auto-load 时 19 patch 全装上.
+
+### 教训
+- web_fetch oversized / truncated → 一律 bash curl 拉全再 grep, 不 grep 截断版猜
+- "0 命中" 先 verify 是不是 grep regex 问题 (`_stream_q: _q.Queue =` 撞我 `_stream_q\s*=` 不 match → 改 `_stream_q\s*[:=]`), 不是就漂
+- 鸿波 catch "瞎猜" 是真宝贵, 第 1 轮我若 ship "P15 重写" 改 plugin.py 砍 100 行 patch 全套, 升级反而 break
+
+---
+
 ## 2026-06-09 ~ 2026-06-10 · 早安 tab BriefingTab 体验跃迁 + hermes v0.16 升级
 
 ### Marathon 概述

@@ -966,6 +966,9 @@ def _patch_p5_p6_p11_api_server_create_agent_and_picker() -> None:
             # (2) CV_PICKER_MODEL (middleware 从 body.model 提取)
             # (3) 不动
             model_override = kwargs.get("model_override") or CV_PICKER_MODEL.get() or ""
+            # P3.5.51 probe verified P11/P6 真生效 — 真因不在 plugin 这条路径, 在
+            # Companion store reset() 清 modelPickedByUser 让 catalog effect 覆盖
+            # user picker (P3.5.52 修). probe 回 debug 不留 WARNING 噪音.
             if model_override and agent.model != model_override:
                 logger.debug(
                     "P11 picker: overriding agent.model %s → %s",

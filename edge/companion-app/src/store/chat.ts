@@ -303,11 +303,26 @@ export const useChatStore = create<ChatState>((set) => ({
       prevSentModel: null,     // BL-GATEWAY-SOFT-HANDOFF: 新 session 没"上次"
       queue: [],  // BL-HERMES013-RED-1A: 切会话清队列
       sessionAttachments: [],  // BL-FILE-SESSION-INDEX-V1 Phase 1
-      // P3.5.29 Phase 6.3 (6/17 鸿波): 新对话真**清 picker lock** 真**让 catalog.default
-      // 真**重新接管** — 真**最常见用例**: 客户改 yaml 后, 员工开新对话真**应看到新默认**.
-      // 真**老 session 真**load**: loadSession 真**不动 model** (line 205 BL-GLOBAL-MODEL
-      // 5/23 注释), 真**不动 modelPickedByUser** 真**保留切会话前的 lock 状态**.
-      modelPickedByUser: false,
+      // P3.5.52 (6/21 鸿波 catch 'picker UI 显 Qwen 但 send 真发 private-main'):
+      //
+      // 撤回 P3.5.29 Phase 6.3 reset 时清 modelPickedByUser=false 的设计. 真因:
+      // reset() 清 modelPickedByUser=false 但 model 不变 → ChatTab catalog effect
+      // (catalog.default !== model 且 !modelPickedByUser) 触发 setModel(catalog.default,
+      // false) → store.model 被 catalog.default 静默覆盖 → 用户 picker 锁失效. dev
+      // mode HMR 时 React selector 跟 getState 可能不同步, UI 显老 picker 但 send
+      // 拿 store.model 新值 = catalog.default. 鸿波 17:56 chat 真撞这条:
+      //   P3.5.51 probe: body.model='catfish-private-main' ← UI 截图显 Qwen3.6-Flash
+      //
+      // 修法 (BL-GLOBAL-MODEL 5/23 原则一致): 用户 picker 选过的 model 在整个
+      // Companion session lifetime 内保持锁定. 新对话 / 删 session / loadSession 全
+      // 不动 modelPickedByUser. catalog.default propagate 只在 fresh launch (zustand
+      // init modelPickedByUser=false) 时生效一次, 用户 picker 第一次操作后永远 lock.
+      //
+      // 'yaml 改默认 picker 也跟走' 的用例 (P3.5.29 Phase 6.3 描述): 让用户重启
+      // Companion 后 (zustand reset 到 init false), catalog.default 重新 propagate.
+      // 不再用 reset() 路径联动 — 太隐式, 跟用户主动操作冲突.
+      //
+      // 老行为: `modelPickedByUser: false,` — 撤回.
       // P3.5.18 Phase 2 (6/17 鸿波): 新对话清 lifecycleStatus.
       lifecycleStatus: null,
     }),

@@ -199,6 +199,22 @@ def register(ctx) -> None:
     # 真扩 Step 2.7: 同步跑所有不依赖 model_tools 的 patch (P0/P1/P3/P4/P7/P8/P9/P10).
     # P5/P6/P11 (依赖 _create_agent → agent_init → model_tools) 仍走 install 后台
     # (那些是 chat agent 路径, gateway 进程不需要).
+    # P3.5.50 (6/21 鸿波 catch hermes v0.17 升级后 plugin import error):
+    # v0.17 run_agent.py:22 顶 `from model_tools import (...)`, model_tools init
+    # 触发 plugin discover → catfish register → 这里. 此刻 run_agent module 还
+    # 在 partial init (AIAgent class 还没 def 进 namespace). P10 同步段 `from
+    # run_agent import AIAgent` → ImportError → try block raise → 后面 P15.2 跳过.
+    # P15.2 chat_approval middleware 必须在 Application() init 之前, _delayed_install
+    # 30s 后太晚 → 同步 fail 时 P15.2 永远没装上, chat_approval 路径死.
+    #
+    # 修: P10 移出同步段. P10 wrap AIAgent **instance** method
+    # _apply_client_headers_for_base_url, 真生效时机是 AIAgent 实例创建后 (LLM
+    # 调用时). LLM first call 通常 > 30s 在 plugin load 后, _delayed_install (跑
+    # plugin.install() 全套含 P10) 已完成 → P10 wrap on time. 跟 v0.17 plugin
+    # 加载新时序兼容.
+    #
+    # 顺手把同步段拆 2 个 try (P0-P9 一块 + P15.2 单独) — 即使别处 patch fail
+    # 也保证 P15.2 装上, 不再 cascade.
     try:
         _mod._patch_asyncio_executor_for_contextvars()  # P0
         _mod._patch_p1_agent_init()                      # P1
@@ -206,15 +222,10 @@ def register(ctx) -> None:
         _mod._patch_p4_auto_title_session()              # P4
         _mod._patch_p7_companion_proxy_route()           # P7 ← X-Catfish-User 透传真关键
         _mod._patch_p8_p9_cors()                         # P8/P9
-        _mod._patch_p10_apply_client_headers_localhost()  # P10
-        # P15.2 (6/6 鸿波 marathon): chat_approval middleware 必须在 Application()
-        # init **之前**注册 _chat_approval_middleware 给 _patched_app_init 看. 走
-        # delayed install (Step 3) 太晚 — Application() init 在 connect() trigger,
-        # 早于 delayed install 完成. 同步跑这条让 module global 立即设上.
-        _mod._patch_p15_2_chat_approval_route()
         logger.info(
-            "catfish-xcatfish-user: 同步 patch ✓ (P0/P1/P3/P4/P7/P8/P9/P10/P15.2) — "
-            "X-Catfish-User 透传 + CORS allowlist + chat_approval 真生效"
+            "catfish-xcatfish-user: 同步 patch ✓ (P0/P1/P3/P4/P7/P8/P9) — "
+            "X-Catfish-User 透传 + CORS allowlist 真生效. "
+            "P10 移到 delayed install (v0.17 circular import 修)."
         )
     except Exception as e:  # noqa: BLE001
         logger.error(
@@ -224,6 +235,20 @@ def register(ctx) -> None:
             exc_info=True,
         )
 
+    # P15.2 (6/6 鸿波 marathon): chat_approval middleware 必须在 Application()
+    # init **之前**注册 _chat_approval_middleware 给 _patched_app_init 看. 走
+    # delayed install (Step 3) 太晚 — Application() init 在 connect() trigger,
+    # 早于 delayed install 完成. 同步跑这条让 module global 立即设上.
+    # P3.5.50: 独立 try 防上面 P0-P9 任一 fail 时把 P15.2 也跳过 (cascade).
+    try:
+        _mod._patch_p15_2_chat_approval_route()
+        logger.info("catfish-xcatfish-user: P15.2 chat_approval middleware ✓")
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "catfish-xcatfish-user: P15.2 chat_approval middleware fail (ignored): %s. "
+            "approval button 路径可能死, 但 chat 主流程不挂", e, exc_info=True,
+        )
+
     # Step 3: 后台线程等主流程 ready 再 install
     # 6/1 修: ready 判定只看 model_tools fully init (主线程过了 partial init 段).
     # run_agent / agent.agent_init 是 lazy import (LLM call 时才 import), 不应作
@@ -231,32 +256,47 @@ def register(ctx) -> None:
     # 6/2 晚: P8/P9 同步跑了, install 仍跑全套 (会重复跑 P8/P9 但幂等 — dict update
     # 是 set-based merge, 重跑等于 no-op).
     def _delayed_install():
-        max_wait_s = 30.0
-        interval = 0.2
-        elapsed = 0.0
-        while elapsed < max_wait_s:
-            mt = sys.modules.get("model_tools")
-            # model_tools fully init = 主线程过了 partial init = install 内部 import
-            # run_agent 不会再撞 circular
-            if mt and hasattr(mt, "get_tool_definitions"):
-                try:
-                    _mod.install()
-                    logger.info(
-                        "catfish-xcatfish-user delayed install ✓ (waited %.1fs)",
-                        elapsed,
-                    )
-                except Exception as e:
-                    logger.error(
-                        "catfish-xcatfish-user delayed install fail: %s",
-                        e, exc_info=True,
-                    )
-                return
-            time.sleep(interval)
-            elapsed += interval
-        logger.error(
-            "catfish-xcatfish-user: 30s model_tools 未 fully init, install 跳过. "
-            "pre_tool_call hook 真 LLM call 时会 raise (P0 兜底)."
-        )
+        # P3.5.53 (6/21 鸿波 catch hermes daemon 7 步 audit 后真因):
+        #
+        # 老逻辑 `while: sys.modules.get("model_tools") + hasattr get_tool_definitions`
+        # poll 等 model_tools 被 hermes 主线程 import. **但** hermes v0.17 daemon
+        # 进程 (gateway run 模式) 不主动 import run_agent (chat 是 lazy import,
+        # 来 chat 时才 trigger). 而 run_agent 顶 imports 才会引 model_tools. 没
+        # chat 来 → run_agent 不 import → model_tools 不在 sys.modules → poll
+        # 永远超时 → install 跳过 → _INSTALLED=False → safety_check raise → chat
+        # tool call block → conversation_loop fail → SSE abort → Companion 看
+        # "Could not connect to the server".
+        #
+        # Chicken-and-egg: 没 chat 不 import model_tools, 但没 install 也接不了
+        # chat (safety_check block). 死锁.
+        #
+        # 修: daemon thread 主动 `import model_tools` trigger import. 不再被动
+        # poll. v0.17 model_tools.py 顶 imports 不撞 catfish plugin (没 circular).
+        # import 成功后 model_tools fully init, install() 内 P2/P10/P17 拿
+        # AIAgent 时也不 partial.
+        #
+        # 短 wait (0.5s) 让主线程 register 完成跳过 partial init 段. v0.16 时代
+        # poll 是怕 partial init 内 import 撞 circular, v0.17 我们 P3.5.50 修过
+        # P10 同根问题 — 主线程过了 register 阶段就安全 import.
+        try:
+            time.sleep(0.5)
+            import model_tools  # noqa: F401, PLC0415 — trigger import
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "catfish-xcatfish-user: model_tools import fail (%s), install 跳过. "
+                "pre_tool_call hook LLM call 时会 raise. 看 hermes 启动 log + "
+                "verify hermes-agent venv 完整.", e,
+            )
+            return
+        try:
+            _mod.install()
+            logger.info("catfish-xcatfish-user delayed install ✓ (P3.5.53 路径)")
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "catfish-xcatfish-user delayed install fail: %s. _INSTALLED 仍 False, "
+                "pre_tool_call hook 会 raise. 排查: 看 traceback 哪条 patch fail.",
+                e, exc_info=True,
+            )
 
     t = threading.Thread(
         target=_delayed_install, daemon=True, name="catfish-xcatfish-installer"

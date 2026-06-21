@@ -53,7 +53,7 @@
       "csp": {
         "default-src": "'self'",
         "script-src": "'self' 'wasm-unsafe-eval'",
-        "connect-src": "'self' http://127.0.0.1:* ws://127.0.0.1:* tauri: ipc: http://ipc.localhost",
+        "connect-src": "'self' http://127.0.0.1:* ws://127.0.0.1:* http://localhost:* ws://localhost:* tauri: ipc: http://ipc.localhost",
         "img-src": "'self' data: blob: asset: http://asset.localhost https:",
         "style-src": "'self' 'unsafe-inline'",
         "font-src": "'self' data:",

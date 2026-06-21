@@ -16,6 +16,10 @@
 # 用法:
 #   scripts/mint-hermes-service-token.sh                 # 默认 localhost:8998
 #   scripts/mint-hermes-service-token.sh --dry-run       # 拉 token 但不改文件
+#   scripts/mint-hermes-service-token.sh --persist-secret # P3.5.48: secret 也写
+#                                                          ~/.hermes/.env 让 plugin
+#                                                          auto-renew 接管, 不再
+#                                                          需要手动 cron
 #   IDENTITY_URL=http://10.10.40.50:8998 \
 #     CLIENT_SECRET=xxx scripts/mint-hermes-service-token.sh
 #
@@ -25,6 +29,14 @@
 #   CLIENT_SECRET   — OAuth client_secret 明文 (无默认, 必填)
 #   HERMES_CONFIG   — hermes config.yaml 路径 (默认 ~/.hermes/config.yaml)
 #   HERMES_ENV      — hermes .env 路径 (默认 ~/.hermes/.env)
+#
+# P3.5.48 (6/21 鸿波 catch 'token 又过期 74h 真因 audit'):
+#   老路径: 装机一次手动 mint → 30 天 → 过期 → 手动重 mint 或加 cron. 鸿波装机后
+#   没设 cron, 67h 前过期了没人续, 所有走 P7 转发的 /api/* 全 401.
+#   P3.5.44 已加 plugin 自动续期, 但要 CATFISH_HERMES_CLIENT_SECRET env, mint
+#   script 老 env name 是 CLIENT_SECRET, 两边不一致 silent fail.
+#   修法: --persist-secret 把 CATFISH_HERMES_CLIENT_SECRET=<value> 也写 .env,
+#   hermes daemon 重启加载 → plugin 永续, 不再依赖 cron.
 #
 # 前置:
 #   - catfish-identity 跑着, /token 可达
@@ -44,12 +56,14 @@ CLIENT_ID="${CLIENT_ID:-hermes-cli}"
 HERMES_CONFIG="${HERMES_CONFIG:-$HOME/.hermes/config.yaml}"
 HERMES_ENV="${HERMES_ENV:-$HOME/.hermes/.env}"
 DRY_RUN=0
+PERSIST_SECRET=0
 
 for arg in "$@"; do
     case "$arg" in
         --dry-run) DRY_RUN=1 ;;
+        --persist-secret) PERSIST_SECRET=1 ;;  # P3.5.48
         -h|--help)
-            sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *)
@@ -175,6 +189,52 @@ if not found:
 env_path.write_text("\n".join(out) + "\n", encoding="utf-8")
 print(f"  ✓ {'更新' if found else '追加'} {key} in {env_path}")
 PY
+
+# ─── Step 1b (P3.5.48): --persist-secret 时把 CLIENT_SECRET 也写 .env ─────
+# 让 plugin auto-renew (P3.5.44 hermes_token_renewal.get_fresh_service_token)
+# 自动接管, 不再依赖 30 天周期手动 mint / cron. plugin 读 CATFISH_HERMES_
+# CLIENT_SECRET (优先) 或 CLIENT_SECRET (fallback), 这里写新 name 防跟 mint
+# script 自己 CLIENT_SECRET 跟其它命令行 secret 撞.
+if [[ "$PERSIST_SECRET" -eq 1 ]]; then
+    echo "  → --persist-secret: 写 CATFISH_HERMES_CLIENT_SECRET 给 plugin auto-renew"
+    python3 - "$HERMES_ENV" "$CLIENT_SECRET" <<'PY'
+import sys, pathlib
+
+env_path = pathlib.Path(sys.argv[1])
+secret = sys.argv[2]
+key = "CATFISH_HERMES_CLIENT_SECRET"
+
+lines = env_path.read_text(encoding="utf-8").splitlines(keepends=False)
+found = False
+out = []
+for line in lines:
+    stripped = line.lstrip()
+    if stripped.startswith("#"):
+        out.append(line)
+        continue
+    if "=" in stripped:
+        k = stripped.split("=", 1)[0].strip()
+        if k.startswith("export "):
+            k = k[len("export "):].strip()
+        if k == key:
+            out.append(f"{key}={secret}")
+            found = True
+            continue
+    out.append(line)
+
+if not found:
+    if out and out[-1] != "":
+        out.append("")
+    out.append("# P3.5.48 hermes-cli OAuth client_secret (plugin auto-renew).")
+    out.append("# plugin hermes_token_renewal.get_fresh_service_token() 用这条续 token.")
+    out.append(f"{key}={secret}")
+
+env_path.write_text("\n".join(out) + "\n", encoding="utf-8")
+import os as _os
+_os.chmod(env_path, 0o600)  # 兜底 secret 文件权限
+print(f"  ✓ {'更新' if found else '追加'} {key} in {env_path} (chmod 600)")
+PY
+fi
 
 # ─── Step 2: 确保 config.yaml.model.api_key + custom_providers[*].api_key
 #             是 ${HERMES_SERVICE_TOKEN} 模板 ──────────────────────────────
