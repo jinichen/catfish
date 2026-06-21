@@ -30,9 +30,6 @@ use tokio::net::UnixStream;
 
 use crate::services::catfish_paths;
 
-/// 单次 RPC 默认超时. recmode/analyze 可能 LLM 调用较长, caller 自己加大.
-pub const DEFAULT_RPC_TIMEOUT_SECS: u64 = 60;
-
 /// 连 tool-bridge sock 的超时. 连不上 = sock 文件不在 / tool-bridge 没起.
 const CONNECT_TIMEOUT_SECS: u64 = 2;
 
@@ -41,7 +38,8 @@ fn sock_path() -> Result<PathBuf, String> {
         .ok_or_else(|| "找不到 tool-bridge endpoint 路径".to_string())
 }
 
-/// 调 tool-bridge JSON-RPC 一次. method 跟 params 透传, 不做 schema 验.
+/// 调 tool-bridge JSON-RPC 一次, caller 显式指定超时 (e.g. analyze 走 LLM 要 10min,
+/// 普通 tool 30s 够). method 跟 params 透传, 不做 schema 验.
 ///
 /// 错误:
 ///   - tool-bridge 没起 → "tool-bridge endpoint 不存在 — 还没启动？"
@@ -49,12 +47,7 @@ fn sock_path() -> Result<PathBuf, String> {
 ///   - 写入失败
 ///   - RPC 超时
 ///   - 响应非合法 JSON
-///   - JSON-RPC error 字段 → "tool-bridge 错误: <message>"
-pub async fn call(method: &str, params: Value) -> Result<Value, String> {
-    call_with_timeout(method, params, Duration::from_secs(DEFAULT_RPC_TIMEOUT_SECS)).await
-}
-
-/// 跟 `call` 一样但可指定单次超时 (e.g. analyze 走 LLM 调用要 5min+).
+///   - JSON-RPC error 字段 → "tool-bridge 错误 [code]: <message>"
 pub async fn call_with_timeout(
     method: &str,
     params: Value,
