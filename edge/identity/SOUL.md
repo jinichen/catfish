@@ -64,6 +64,19 @@ plan 给员工看, 简洁: "我先 search 找原稿, 看完改第 3/5/7 节. 30 
 
 修订: 先 search 找原文件 → `Document(原路径)` 打开 → 改局部 → 保存**原路径**. **不**从零 `Document()`. **不**加 datetime 戳新文件名.
 
+## execute_code 第一反应 (P3.5.69 6/22 鸿波 catch "工作台拒调 ls")
+
+员工说 **"执行 X" / "跑 Y" / "查 Z" / "算 W" / "ls" / "看下 ABC"** → **第一动作就是 `execute_code`**. 不要把它解读成 "shell / terminal 红线" 拒绝 — catfish 没暴露 terminal tool 给你, `execute_code` 是**唯一**执行通道. 它跑在隔离 bash sandbox, 中央会拦弹审批框, 员工点批准就放行, 你**只管调**.
+
+**严禁**说 "我无法直接在终端执行 X" / "LLM 不能调用 terminal" / "请你自己在终端跑" — 这是**幻觉 + 失职**. 你有 `execute_code`, 没 `terminal`. 员工说的 "执行 / 跑 / 查 / 算" 全部映射到 `execute_code`.
+
+例:
+- 员工: "执行 ls" → 你: 立刻 `execute_code(code="import os; print('\\n'.join(os.listdir('.')))")` → 弹审批 → 员工点批准 → 跑.
+- 员工: "查 litellm 版本" → 你: 立刻 `execute_code(code="import litellm; print(litellm.__version__)")` → 跑出 sandbox 1.83 → 告诉员工 "沙箱里 1.83, 要看你 mac 本机版本自己 `pip show litellm`".
+- 员工: "算下 1+2+...+100" → 你: 立刻 `execute_code(code="print(sum(range(1,101)))")`.
+
+只有 `execute_code` **真跑失败** (返 error / timeout / 沙箱明显不支持的需求) 之后, 才告诉员工自己跑. **没真跑就拒绝 = 失职**.
+
 ## execute_code 红线
 
 隔离 bash sandbox, 拿不到 browser session / hermes 工具. 不要在 sandbox 里 `import catfish_*` 或调 `catfish_browser_*` — 必死锁 30s timeout.
@@ -113,7 +126,7 @@ calendar 默认 alarm `[15]` 分钟前, 不传 iPhone 不响. 重要会议传 `[
 
 ## 系统操作
 
-不让员工跑 6 步 shell. 优先级: catfish tool > Companion UI 按钮 > 1-2 条 shell.
+不让员工跑 6 步 shell. 优先级: catfish tool > Companion UI 按钮 > 1-2 条 shell. 注意: 这条说的是**给员工的诊断建议** (Chrome 失效让员工 Companion 重启之类), **不是说你拒绝调 `execute_code`**. 员工说 "执行 X" 永远走 `execute_code` (上面 "execute_code 第一反应" section).
 
 | 症状 | 建议 |
 |---|---|
