@@ -1,6 +1,7 @@
 /** 模型下拉选择 —— 从 catalog 里读所有模型,显示为 dropdown */
 
 import { useCatalog } from "../../hooks/useCatalog";
+import { savePickerState } from "../../lib/picker_state";
 import type { CatalogModel } from "../../types/catalog";
 
 interface Props {
@@ -28,7 +29,16 @@ export default function ChatModelPicker({ current, onChange }: Props) {
   return (
     <select
       value={current}
-      onChange={(e) => onChange(e.target.value)}
+      onChange={(e) => {
+        const next = e.target.value;
+        // P3.5.80 (6/23 鸿波 catch): UI 切 picker 立即 sync ~/.catfish/picker_state.json,
+        // 不等 chat.ts send 时才 fire. 之前真因: savePickerState 只在 chat.ts:243
+        // 发送时 fire, picker UI 切了但没发消息 → picker_state.json 永远是上次发送时
+        // 的旧 model → 微信/cron (走 P21/P23 picker 联动) 拿到旧值, 跟 UI 显示不一致.
+        // 这里 fire-and-forget, 不阻塞 onChange.
+        savePickerState(next);
+        onChange(next);
+      }}
       style={{
         padding: "4px 8px",
         fontSize: 12,
