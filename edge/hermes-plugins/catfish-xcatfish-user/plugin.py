@@ -167,6 +167,11 @@ _PATCH_TARGETS = [
     # P22 (P3.5.76) revert 在 P3.5.78 (6/22 鸿波): bookkeep 从独立 plugin 重构到
     # catfish-memory kind=expense 后, 不再需要 pin 到 _HERMES_CORE_TOOLS — memory
     # tool 本来就在 hermes core, expense 走 memory tool 自然 visible.
+    # P23 (P3.5.79, 6/23): hermes gateway.run._resolve_gateway_model — inbound
+    # message 路径 model 真决定函数, 微信/Discord/Slack 都走它. hermes 重构 →
+    # plugin install fail-loud, 不让微信 silent 走 config.yaml.model.default 老路径
+    # (跟 picker 脱钩).
+    ("gateway.run", "_resolve_gateway_model", "func"),
 ]
 
 _AIAGENT_METHOD_TARGETS = [
@@ -436,6 +441,16 @@ def _apply_patches() -> None:
         )
     # P22 reverted in P3.5.78 (6/22 鸿波): bookkeep 重构进 catfish-memory.expense,
     # 不再需要 pin _HERMES_CORE_TOOLS — memory tool 本来就 core, kind=expense 自然命中.
+
+    # P23 (P3.5.79 6/23 鸿波): inbound message 路径 (微信/Discord/Slack/Telegram)
+    # picker 联动 — 修 catfish picker 联动 sprint 漏 cover 的最后一个 platform.
+    try:
+        _patch_p23_inbound_picker_integration()
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "P23: _patch_p23_inbound_picker_integration 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
+            e, exc_info=True,
+        )
 
 
 # ── P16 (P3.4.C 6/15 鸿波: session_search 76s → 340ms) ──────────────────
@@ -2451,6 +2466,89 @@ def _patch_p21_cron_picker_integration() -> None:
     logger.info(
         "P21 cron picker integration patched — cron job model 跟 picker_state.json "
         "联动 (优先级: picker > job.model > yaml.default > env) ✓"
+    )
+
+
+# ── P23 (P3.5.79, 6/23 鸿波): inbound message 路径 picker 联动 ─────────
+#
+# 真因 audit (P3.5.77 audit-完整 + 6/22 23:50 微信 ClawBot 真聊 fail):
+#
+#   ① 微信 inbound message 走 gateway.run.handle_inbound → AIAgent(model=...)
+#   ② model 来自 turn_route["model"], 由 _resolve_session_agent_runtime 算
+#   ③ _resolve_session_agent_runtime 第一行调 _resolve_gateway_model(config)
+#   ④ _resolve_gateway_model 直接读 cfg["model"]["default"] 返
+#      = config.yaml.model.default = catfish-public-deepseek-flash
+#   ⑤ 微信 path 完全不读 ~/.catfish/picker_state.json, 跟桌面 chat 行为不一致
+#      (桌面 chat 走 P5/P6/P11 _RUNTIME_MAIN_MODEL override, 真桥到 picker)
+#   ⑥ 实证: 23:46:57 inbound msg='19号花了300块钱，加油' platform=weixin
+#           model=catfish-public-deepseek-flash    ← deepseek 而不是 picker 选的 qwen
+#
+# 修法 (跟 P21 cron picker 同款 monkey-patch pattern): wrap _resolve_gateway_model,
+# 在原结果之前优先读 picker_state.json. 一处 hook 覆盖**所有 platform** (微信 /
+# Discord / Slack / Telegram / CLI inbound), 跟 P3.5.74 cron 同一架构.
+#
+# 优先级 (新): picker_state.json > config.yaml.model.default
+#  (跟 cron P21 优先级一致, 让员工 picker 一切真"主权" — 选啥所有 platform 用啥)
+#
+# fail-safe: picker 读失败 / hermes gateway.run 模块没导 / patch attach 失败 →
+# silent fallback 老路径 (config.yaml.model.default). _PATCH_TARGETS 加
+# ("gateway.run", "_resolve_gateway_model", "func") fail-loud verify.
+
+def _patch_p23_inbound_picker_integration() -> None:
+    """patch gateway.run._resolve_gateway_model — inbound message model 跟 picker 联动.
+
+    hermes _resolve_gateway_model 代码 (gateway/run.py:2070):
+        def _resolve_gateway_model(config=None) -> str:
+            cfg = config if config is not None else _load_gateway_config()
+            model_cfg = cfg.get("model", {})
+            if isinstance(model_cfg, str): return model_cfg
+            elif isinstance(model_cfg, dict):
+                return model_cfg.get("default") or model_cfg.get("model") or ""
+            return ""
+
+    patch 思路: wrap, 在 _orig 调用前先读 picker_state.json. 若 picker 有值, 跳过
+    _orig 直接返 picker model. picker 空 → fallback 老路径 (config.yaml).
+
+    fail-safe: picker 读失败 → 走老路径 (silent, 不抛). hermes gateway.run 模块没导
+    → silent skip patch (旧 hermes 版本不支持).
+    """
+    try:
+        from gateway import run as _gateway_run  # noqa: PLC0415
+    except ImportError as e:
+        logger.warning("P23: hermes gateway.run module 没导, skip patch (%s)", e)
+        return
+
+    _orig_resolve = getattr(_gateway_run, "_resolve_gateway_model", None)
+    if _orig_resolve is None:
+        logger.warning(
+            "P23: gateway.run._resolve_gateway_model 不存在 (hermes 重构?), skip patch."
+        )
+        return
+
+    def _patched_resolve_gateway_model(config=None):
+        # picker override (优先级最高). picker 读失败 → fallback 老路径.
+        try:
+            picker_model = _read_catfish_picker_model()
+            if picker_model:
+                logger.info(
+                    "P23 inbound picker integration: gateway model → %r "
+                    "(picker_state.json override, was config.yaml fallback)",
+                    picker_model,
+                )
+                return picker_model
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "P23 inbound: picker_state 读失败 (%s), fallback config.yaml",
+                e,
+            )
+
+        # picker 空 / 读失败 → 走 hermes 老路径 (config.yaml.model.default)
+        return _orig_resolve(config)
+
+    _gateway_run._resolve_gateway_model = _patched_resolve_gateway_model
+    logger.info(
+        "P23 inbound picker integration patched — inbound message (微信/Discord/Slack/"
+        "Telegram/CLI) model 跟 picker_state.json 联动 (优先级: picker > yaml.default) ✓"
     )
 
 
