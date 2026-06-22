@@ -1791,14 +1791,46 @@ def _patch_p15_chat_completions_approval() -> None:
                 notify_cb_for_cur = _approval_mod._gateway_notify_cbs.get(cur_session_key)
                 registered_keys = list(_approval_mod._gateway_notify_cbs.keys())
 
+            # P15.4 (6/22): result keys ['approved','message'] 4 个早返排除后只
+            # 剩 line 1708 yolo 或别的我漏看的. 加 yolo / mode / env 真实状态 log
+            # 一次性确认真因.
+            yolo_frozen = getattr(_approval_mod, "_YOLO_MODE_FROZEN", "missing")
+            try:
+                yolo_session = _approval_mod.is_current_session_yolo_enabled()
+            except Exception as _e:
+                yolo_session = f"err:{_e}"
+            try:
+                approval_mode = _approval_mod._get_approval_mode()
+            except Exception as _e:
+                approval_mode = f"err:{_e}"
+            try:
+                is_gateway_ctx = _approval_mod._is_gateway_approval_context()
+            except Exception as _e:
+                is_gateway_ctx = f"err:{_e}"
+            try:
+                is_pattern_approved = _approval_mod.is_approved(cur_session_key, "execute_code")
+            except Exception as _e:
+                is_pattern_approved = f"err:{_e}"
+            import os as _os
+            hermes_yolo_env = _os.environ.get("HERMES_YOLO_MODE", "<unset>")
+            hermes_gateway_env = _os.environ.get("HERMES_GATEWAY_SESSION", "<unset>")
+            hermes_cron_env = _os.environ.get("HERMES_CRON_SESSION", "<unset>")
+            hermes_exec_ask = _os.environ.get("HERMES_EXEC_ASK", "<unset>")
+            perm_approved = sorted(list(_approval_mod._permanent_approved))
+
             code_preview = (code[:80] + "...") if len(code) > 80 else code
             logger.info(
                 "P15.3 guard: env_type=%r platform_seen=%r approval_session_key=%r "
                 "session_key_seen=%r cur_session_key=%r notify_cb_found=%s "
-                "registered_keys=%r code_preview=%r",
+                "registered_keys=%r yolo_frozen=%s yolo_session=%s approval_mode=%r "
+                "is_gateway_ctx=%s is_execute_code_approved=%s permanent_approved=%r "
+                "env(YOLO=%r GATEWAY=%r CRON=%r EXEC_ASK=%r) code_preview=%r",
                 env_type, platform_seen, approval_sk, session_key_seen,
                 cur_session_key, notify_cb_for_cur is not None,
-                registered_keys, code_preview,
+                registered_keys, yolo_frozen, yolo_session, approval_mode,
+                is_gateway_ctx, is_pattern_approved, perm_approved,
+                hermes_yolo_env, hermes_gateway_env, hermes_cron_env, hermes_exec_ask,
+                code_preview,
             )
             result = _orig_guard(code, env_type)
             logger.info(
