@@ -258,22 +258,23 @@ def sanitize_tools(
     """
     tools = body.get("tools")
 
-    # P3.5.70 diag (6/22): 入口 log 看真实 body["tools"] 形态. dropped log 0 输出
-    # 说明 sanitize 没生效, 这层 log 暴露根因 (tools 不是 list / 是空 / 没含 terminal).
+    # P3.5.70 diag (6/22): 入口 log 看真实 body["tools"] 完整内容. 上次 first10
+    # 全是 browser_*, 看不到 11-31 有没 execute_code. 改 dump 全 list.
     if isinstance(tools, list):
-        sample_names = []
-        terminal_present = False
-        for t in tools[:30]:
+        all_names = []
+        for t in tools:
             if isinstance(t, dict):
                 fn = t.get("function") or {}
                 if isinstance(fn, dict):
-                    nm = fn.get("name", "?")
-                    sample_names.append(nm)
-                    if "terminal" in str(nm):
-                        terminal_present = True
+                    all_names.append(fn.get("name", "?"))
         logger.info(
-            "P3.5.70 sanitize entry: source=%s tools_count=%d terminal_present=%s first10=%s",
-            source_hint, len(tools), terminal_present, sample_names[:10],
+            "P3.5.70 sanitize entry: source=%s tools_count=%d "
+            "execute_code_present=%s terminal_present=%s "
+            "ALL=%s",
+            source_hint, len(tools),
+            "execute_code" in all_names,
+            "terminal" in all_names,
+            all_names,
         )
     else:
         logger.info(
