@@ -396,6 +396,21 @@ def _apply_patches() -> None:
             "P19: _patch_p19_status_callback_bridge 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
             e, exc_info=True,
         )
+    # P3.5.65 P20 (6/22 鸿波 catch "审批按钮一直不弹"): wrap approve_permanent /
+    # load_permanent, 拦截 execute_code 进 _permanent_approved.
+    # 真因 (read-only diagnostic 实证): 用户某次 audit UI 点 "always", 把
+    # "execute_code" 字面字符串加进 _permanent_approved + config.yaml
+    # command_allowlist. 之后每次 execute_code 调走 check_execute_code_guard:1749
+    # is_approved("execute_code") → True → silent auto-approve 永远不弹按钮.
+    # execute_code 是给 LLM **任意 Python 沙箱权限**的危险 pattern, 一旦 always-
+    # approved = 给 LLM 完全 shell 权限. 红线: 永远不允许永久 approve.
+    try:
+        _patch_p20_block_execute_code_permanent()
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "P20: _patch_p20_block_execute_code_permanent 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
+            e, exc_info=True,
+        )
 
 
 # ── P16 (P3.4.C 6/15 鸿波: session_search 76s → 340ms) ──────────────────
@@ -2213,6 +2228,98 @@ def _patch_p19_status_callback_bridge() -> None:
     logger.info(
         "P19 APIServerAdapter._create_agent post-init wraps status_callback "
         "→ SSE catfish-lifecycle ✓"
+    )
+
+
+# ── P20 (P3.5.65, 6/22 鸿波 catch "审批按钮一直不弹") ──────────────────
+#
+# 真因 (read-only diagnostic 实证 14:58):
+#   user mac _permanent_approved set 含 "execute_code" 字面字符串 →
+#   check_execute_code_guard:1749 is_approved("execute_code") → True →
+#   line 1750 silent auto-approve → 按钮永远不弹.
+#
+# 由来: 用户某次 chat 收到 execute_code approval 弹窗, 点了 "always".
+#   approve_permanent("execute_code") 把字符串加进 _permanent_approved +
+#   save_permanent_allowlist 写进 ~/.hermes/config.yaml command_allowlist.
+#   永久生效 (跨 hermes 重启).
+#
+# 治本红线: execute_code = 给 LLM 任意 Python 沙箱权限. 一旦 always-approved
+#   = 给 LLM 完全 shell 权限. **永远不允许永久 approve**, 每次必须员工
+#   explicit 选 once / session (session 也只是当前对话). 是 catfish 安全
+#   红线, 不该向员工开放这个选项.
+#
+# 修法:
+#   1. wrap approve_permanent(pattern_key) — 如果 pattern_key == "execute_code",
+#      丢弃 + warning log, **不**加进 _permanent_approved
+#   2. wrap load_permanent(patterns: set) — 从 config 加载时也过滤掉
+#      "execute_code" (用户老 config 自动洗白)
+#   3. 启动时一次性 sweep: 如果 _permanent_approved 已含 "execute_code",
+#      remove + save_permanent_allowlist (auto-fix 用户老安装)
+#
+# 不 wrap check_execute_code_guard 本身 (上次 P15.3 wrap 不稳教训), 改
+# wrap **加入点** (approve_permanent / load_permanent) — 入口阻断比 wrap
+# 关键 guard 函数安全得多.
+
+_EXEC_CODE_PATTERN_KEYS_BLOCKED = {"execute_code"}
+
+
+def _patch_p20_block_execute_code_permanent() -> None:
+    """禁止 execute_code 进 _permanent_approved set / config command_allowlist."""
+    try:
+        from tools import approval as _approval_mod
+    except ImportError as e:
+        logger.warning("P20: tools.approval import 失败 (%s), skip patch", e)
+        return
+
+    _orig_approve_permanent = _approval_mod.approve_permanent
+    _orig_load_permanent = _approval_mod.load_permanent
+
+    def _wrapped_approve_permanent(pattern_key: str):
+        if pattern_key in _EXEC_CODE_PATTERN_KEYS_BLOCKED:
+            logger.warning(
+                "P20 红线: 拒绝 approve_permanent(%r) — execute_code 永久 approve "
+                "等于给 LLM 完全 shell 权限, 每次必须员工 explicit 确认.",
+                pattern_key,
+            )
+            return  # 静默丢弃, 不抛 (Hermes UI 仍正常 close)
+        return _orig_approve_permanent(pattern_key)
+
+    def _wrapped_load_permanent(patterns: set):
+        # 从 config 加载时过滤掉禁止条目 (洗白用户老 config)
+        cleaned = {p for p in patterns if p not in _EXEC_CODE_PATTERN_KEYS_BLOCKED}
+        dropped = patterns - cleaned
+        if dropped:
+            logger.warning(
+                "P20 红线: load_permanent 过滤掉 %d 条危险 pattern: %r",
+                len(dropped), sorted(dropped),
+            )
+        return _orig_load_permanent(cleaned)
+
+    _approval_mod.approve_permanent = _wrapped_approve_permanent
+    _approval_mod.load_permanent = _wrapped_load_permanent
+
+    # 一次性 sweep: 老 install _permanent_approved 已含 execute_code → 移除 + 持久化
+    try:
+        with _approval_mod._lock:
+            to_drop = _approval_mod._permanent_approved & _EXEC_CODE_PATTERN_KEYS_BLOCKED
+            if to_drop:
+                _approval_mod._permanent_approved -= to_drop
+        if to_drop:
+            try:
+                _approval_mod.save_permanent_allowlist(_approval_mod._permanent_approved)
+                logger.warning(
+                    "P20 一次性 sweep: 从 _permanent_approved 移除 %r, 写回 config.yaml. "
+                    "审批按钮恢复正常.",
+                    sorted(to_drop),
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("P20 sweep: save_permanent_allowlist 失败 (%s)", e)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("P20 sweep: 读 _permanent_approved 失败 (%s)", e)
+
+    logger.info(
+        "P20 approve_permanent / load_permanent wrapped — execute_code 永久 "
+        "approve 已封死, 每次审批必须员工 explicit 确认 ✓"
     )
 
 
