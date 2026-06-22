@@ -400,9 +400,11 @@ def test_sanitize_rewrites_execute_code_description():
     }
     result = sanitize_tools(body)
     descs = [t["function"]["description"] for t in result["tools"]]
-    # description 被改写 — 必含 catfish 平台合同关键字
-    assert any("catfish 平台唯一合法的代码 / shell 执行通道" in d for d in descs), \
+    # description 被改写 — 必含 catfish 平台合同关键字 (P3.5.72.1: 改简洁版,
+    # 砍审批/安全字眼避免 LLM 联想保守)
+    assert any("Execute a Python script" in d for d in descs), \
         f"P3.5.72: execute_code description 没被改写, 实际: {descs}"
+    assert any("Don't ask the user to run it themselves" in d for d in descs)
     # hermes 上游原 description 被覆盖
     assert not any("use normal tool calls instead" in d for d in descs)
 
@@ -423,7 +425,7 @@ def test_sanitize_rewrites_execute_code_mcp_prefix():
     }
     result = sanitize_tools(body)
     descs = [t["function"]["description"] for t in result["tools"]]
-    assert any("catfish 平台唯一合法" in d for d in descs)
+    assert any("Execute a Python script" in d for d in descs)
 
 
 def test_sanitize_other_tool_descriptions_untouched():
@@ -450,5 +452,5 @@ def test_sanitize_other_tool_descriptions_untouched():
     }
     result = sanitize_tools(body)
     by_name = {t["function"]["name"]: t["function"]["description"] for t in result["tools"]}
-    assert "catfish 平台唯一合法" in by_name["execute_code"]
+    assert "Execute a Python script" in by_name["execute_code"]
     assert by_name["web_search"] == "Search the web for query"  # 不动

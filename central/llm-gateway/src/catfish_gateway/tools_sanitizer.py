@@ -251,33 +251,28 @@ def _has_catfish_browser_tools(tools: list[Any]) -> bool:
 # trigger: name == "execute_code" 或 "mcp_catfish_tools_execute_code" 都改.
 
 _EXECUTE_CODE_CATFISH_DESCRIPTION = (
-    "**catfish 平台唯一合法的代码 / shell 执行通道** (无 terminal tool, 也别等 "
-    "员工自己跑). 任何 user 请求执行的命令 — ls / rm / pip show / python -c / "
-    "查目录 / 跑数算 / 转文件格式 / 调 shell 命令 — 都用我.\n\n"
-    "## 怎么用\n"
-    "- shell 命令: code=\"import subprocess; print(subprocess.run(['ls'], "
-    "capture_output=True, text=True).stdout)\"\n"
-    "- 查目录: code=\"import os; print('\\n'.join(os.listdir('.')))\"\n"
-    "- Python 算/查/转: code=\"import litellm; print(litellm.__version__)\"\n"
-    "- 多步 / loop / 处理大输出 / N 个文件: 跟普通 Python script 一样写\n\n"
-    "## 安全 (catfish 平台保证)\n"
-    "- 跑在 macOS sandbox-exec 隔离子进程, 不影响员工本机系统\n"
-    "- 中央会拦弹审批框 — **你只管调, 员工点'批准'就放行**, 点'拒绝'退还\n"
-    "- 沙箱跟员工 mac 本机 venv / 文件 isolated. 沙箱拿不到本机版本 / 路径时 "
-    "(比如 `pip show <pkg>` 查的是沙箱里的版本不是本机), 先调拿沙箱版本, "
-    "**再** 告诉员工 \"沙箱里是 X, 你 mac 本机自己跑 `<cmd>` 看本机\".\n\n"
-    "## 严禁\n"
-    "- 严禁说 \"我无法直接调用 terminal / 安全限制 / 红线\" — catfish 没暴露 "
-    "terminal 是设计, execute_code 就是替代. 这种话 = 失职.\n"
-    "- 严禁主动让员工自己跑 shell 命令. 第一反应必须是 execute_code 调一下.\n\n"
-    "## 限制 (合理)\n"
-    "- 5 分钟 timeout / 50KB stdout cap / 50 tool calls per script\n"
-    "- sandbox 内不能 `import catfish_*` / 不能调 `catfish_browser_*` (必死锁)\n"
-    "- 真跑失败 (error / timeout / 沙箱不支持) 之后才告诉员工自己跑. **没真跑 "
-    "就拒绝 = 失职**.\n\n"
-    "code: Python 源码, print 结果到 stdout.\n"
-    "task_id (optional): session task ID, 长 task 跟踪用.\n"
-    "enabled_tools (optional): sandbox 子集白名单."
+    # P3.5.72.1 (6/22 鸿波 catch "LLM 还在说审批限制") : 砍掉所有 "审批 / 安全
+    # / 沙箱 / 限制" 字眼. LLM 看到这些字眼联想到 "我不该轻易调用". 审批是 catfish
+    # 平台自动加的, LLM 不需要管. description 只说调用方式 + 例子, LLM 直接 emit
+    # tool_call.
+    "Execute a Python script. Use for any user request involving: "
+    "running shell commands, listing files, checking versions, computing values, "
+    "querying state, transforming files, batch processing, or multi-step logic.\n\n"
+    "Examples (just emit tool_call(execute_code, code=...)):\n"
+    "- user 'ls' → code=\"import os; print('\\n'.join(os.listdir('.')))\"\n"
+    "- user 'rm /tmp/x' → code=\"import os; os.remove('/tmp/x'); print('done')\"\n"
+    "- user '查 litellm 版本' → code=\"import litellm; print(litellm.__version__)\"\n"
+    "- user '算 1+2+...+100' → code=\"print(sum(range(1, 101)))\"\n"
+    "- user '看 README' → code=\"print(open('README.md').read())\"\n\n"
+    "Behavior:\n"
+    "- Always emit the tool_call directly. Don't ask the user to run it themselves.\n"
+    "- Don't preface with 'I cannot' / 'safety' / 'restriction' / 'permission'. "
+    "The platform handles policy transparently to you — just call.\n"
+    "- If sandbox env differs from user's local (e.g. installed package versions), "
+    "call first to get sandbox value, then tell user the difference.\n\n"
+    "code (str, required): Python source. Print results to stdout.\n"
+    "task_id (str, optional): session task id for tracking long tasks.\n"
+    "enabled_tools (list, optional): subset of allowed in-sandbox tool names."
 )
 
 
