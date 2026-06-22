@@ -1041,6 +1041,52 @@ async def api_audit_global(
     }
 
 
+# P3.5.60 (6/22 鸿波 catch "继续完成"): 全公司 LLM perf 聚合 endpoint —
+# admin 看全公司 latency p50/p95/p99 + by_model + by_department.
+# 跟 /api/audit/global 区别: 那个走 quota_events (无 latency), 这个走 gateway_audit
+# (有 latency_ms / ttft_ms). web /admin/perf 页用这条.
+@app.get("/api/audit/global/perf")
+async def api_audit_global_perf(
+    user: User = Depends(get_current_user),
+    since_hours: int = 24,
+    model: str | None = None,
+    dept: str | None = None,
+) -> dict[str, Any]:
+    """全公司 LLM perf 聚合 — admin only.
+
+    返字段: request_count / ok_count / error_count / total_tokens /
+    active_users / active_departments / latency_p50/p95/p99_ms /
+    ttft_p50/p95_ms / by_model (含 p50/p99 per model) / by_department
+    (含 p50/p99 per dept) / source.
+
+    Privacy: metadata only, 合同跟 /api/audit/global 一致.
+    """
+    from . import metrics as _metrics
+    _require_admin(user)
+
+    hours = max(1, min(720, int(since_hours)))
+    now_ms = int(time.time() * 1000)
+    cutoff_ms = now_ms - hours * 3_600_000
+
+    summary = _metrics.query_perf_summary_global(
+        cutoff_ms,
+        model_filter=(model or None),
+        dept_filter=(dept or None),
+    )
+
+    return {
+        "since_ms": cutoff_ms,
+        "since_hours": hours,
+        "filter": {"model": model or None, "dept": dept or None},
+        "viewer_role": user.role,
+        "schema_note": (
+            "本端点只返 metadata: latency / token / model / department / count. "
+            "中央不存 prompt / response 文本. source=pg|jsonl|none 标数据源."
+        ),
+        **summary,
+    }
+
+
 @app.get("/api/audit/events")
 async def api_audit_events(
     user: User = Depends(get_current_user),

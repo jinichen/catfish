@@ -27,6 +27,8 @@ import { FactsPage } from "./admin/FactsPage";
 import { AccessPage } from "./admin/AccessPage";
 // 6/7 BL-MANIFESTO-ADVISORY-PHASE2: Advisory 管理 (sysadmin only)
 import { AdvisoryPage } from "./admin/AdvisoryPage";
+// P3.5.60 (6/22 鸿波 catch "继续完成"): 全公司 LLM 性能仪表
+import { PerfPage } from "./admin/PerfPage";
 
 export function AdminPage() {
   // BL-ARCH1 P1 (5/10): admin 默认能进, sysadmin 看 system. /admin/users 内部不再
@@ -43,6 +45,8 @@ export function AdminPage() {
         <Route path="quota" element={<AdminQuota />} />
         {/* BL-ADMIN-AUDIT (5/12 鸿波): 逐条 audit 历史 */}
         <Route path="quota/events" element={<AdminQuotaEvents />} />
+        {/* P3.5.60 (6/22 鸿波): 全公司 LLM 性能仪表 (latency p50/p95/p99) */}
+        <Route path="perf" element={<PerfPage />} />
         <Route path="billing" element={<AdminBilling />} />
       </Routes>
     </RoleGate>
@@ -100,6 +104,8 @@ function AdminHome() {
         <NavTile to="/admin/quota" icon="🎯" title="配额规则" desc="defaults / per_model / per_dept" />
         {/* BL-ADMIN-AUDIT (5/12 鸿波): 逐条 quota / audit 历史日志 */}
         <NavTile to="/admin/quota/events" icon="📊" title="Quota 历史日志" desc="逐条 + 4 维筛选 + 分页 + CSV" />
+        {/* P3.5.60 (6/22 鸿波): 全公司 LLM 性能仪表 */}
+        <NavTile to="/admin/perf" icon="📈" title="LLM 性能仪表" desc="latency p50/p95/p99 · by model · by dept" />
         <NavTile to="/admin/billing" icon="💰" title="Billing" desc="月报 / 按部门成本分摊" />
         <NavTile to="/audit" icon="📜" title="审计大查询" desc="跨员工 / 跨部门" />
         {/* sysadmin only — 用 RoleGate 包还是放这里都行, 这里直接靠 NavBar tab 区分 */}

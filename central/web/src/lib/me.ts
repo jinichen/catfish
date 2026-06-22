@@ -126,6 +126,70 @@ export async function fetchGlobalAudit(
   }
 }
 
+// ── P3.5.60 (6/22 鸿波 catch "继续完成"): 全公司 LLM perf 聚合 ─
+// 跟 GlobalAudit 区别: 那个走 quota_events (无 latency 字段), 这个走
+// gateway_audit (有 latency_ms / ttft_ms). web /admin/perf 页用这条.
+export interface GlobalPerfByModel {
+  model: string;
+  count: number;
+  error_count: number;
+  total_tokens: number;
+  p50_ms: number | null;
+  p99_ms: number | null;
+}
+
+export interface GlobalPerfByDept {
+  department: string;
+  count: number;
+  error_count: number;
+  total_tokens: number;
+  active_users: number;
+  p50_ms: number | null;
+  p99_ms: number | null;
+}
+
+export interface GlobalPerf {
+  since_ms: number;
+  since_hours: number;
+  request_count: number;
+  ok_count: number;
+  error_count: number;
+  total_tokens: number;
+  active_users: number;
+  active_departments: number;
+  latency_p50_ms: number | null;
+  latency_p95_ms: number | null;
+  latency_p99_ms: number | null;
+  ttft_p50_ms: number | null;
+  ttft_p95_ms: number | null;
+  by_model: GlobalPerfByModel[];
+  by_department: GlobalPerfByDept[];
+  source: "pg" | "jsonl" | "none";
+  filter?: { model?: string | null; dept?: string | null };
+  viewer_role?: Role;
+  schema_note?: string;
+}
+
+export interface GlobalPerfFilter {
+  model?: string | null;
+  dept?: string | null;
+}
+
+export async function fetchGlobalPerf(
+  sinceHours: number = 24,
+  filter: GlobalPerfFilter = {},
+): Promise<GlobalPerf | null> {
+  try {
+    const q = new URLSearchParams();
+    q.set("since_hours", String(sinceHours));
+    if (filter.model) q.set("model", filter.model);
+    if (filter.dept) q.set("dept", filter.dept);
+    return await api.get<GlobalPerf>(`/api/audit/global/perf?${q.toString()}`);
+  } catch {
+    return null;
+  }
+}
+
 // ── BL-ADMIN-AUDIT (5/12 鸿波): 逐条 audit 历史 + 4 维筛选 + 分页 ─
 
 export interface AuditEvent {

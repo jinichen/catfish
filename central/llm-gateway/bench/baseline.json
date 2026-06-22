@@ -1,0 +1,56 @@
+{
+  "_comment": "P3.5.61 (6/22 鸿波) — nightly bench baseline. 跑 bench/run.sh 1000 10m 后 parse_results.py 比这文件. 想 reset baseline: 跑成功后 cp bench/result_summary.json bench/baseline.json (人工 review 不是脚本自动).",
+  "captured_at": "2026-06-22",
+  "captured_from": "csv-1000-20260609-052027_stats.csv (1000 users, 10min, mock upstream, 1 uvicorn worker)",
+  "config": {
+    "users": 1000,
+    "run_time": "10m",
+    "spawn_rate": 50,
+    "uvicorn_workers": 1,
+    "mock_fail_rate": 0
+  },
+  "endpoints": {
+    "GET GET /api/advisory/feed.json": {
+      "p50_ms": 13000,
+      "p95_ms": 18000,
+      "p99_ms": 19000,
+      "rps": 2.30,
+      "fail_rate": 0.0116
+    },
+    "GET GET /api/audit/me": {
+      "p50_ms": 14000,
+      "p95_ms": 18000,
+      "p99_ms": 19000,
+      "rps": 4.46,
+      "fail_rate": 0.0082
+    },
+    "GET GET /api/quota/me": {
+      "p50_ms": 13000,
+      "p95_ms": 18000,
+      "p99_ms": 19000,
+      "rps": 8.90,
+      "fail_rate": 0.0071
+    },
+    "GET GET /v1/catalog": {
+      "p50_ms": 13000,
+      "p95_ms": 18000,
+      "p99_ms": 19000,
+      "rps": 2.36,
+      "fail_rate": 0.0099
+    },
+    "POST POST /v1/chat/completions [stream]": {
+      "p50_ms": 13000,
+      "p95_ms": 18000,
+      "p99_ms": 19000,
+      "rps": 26.86,
+      "fail_rate": 0.0088
+    }
+  },
+  "aggregated": {
+    "p50_ms": 13000,
+    "p95_ms": 18000,
+    "p99_ms": 19000,
+    "rps": 44.88,
+    "fail_rate": 0.0086
+  }
+}

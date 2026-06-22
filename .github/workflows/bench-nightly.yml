@@ -1,0 +1,139 @@
+name: Bench Nightly (P3.5.61)
+
+# P3.5.61 (6/22 鸿波 catch "继续完成") — nightly bench gateway 跑 locust mock 流量,
+# parse_results.py 比 bench/baseline.json, regression > 10% 卡 + PR comment.
+#
+# 设计:
+#   - 不跑真 LLM (mock_upstream 替代), 0 token 成本
+#   - PG + gateway + mock_upstream 全 docker compose 起
+#   - 短跑 (300 users / 3min), 比 manual 1000/10m 快, 给 nightly 节奏
+#   - workflow_dispatch 支持手动调参
+#   - 产 artifact (CSV / HTML / summary.json) 给后续 trend
+#
+# 跟 P3.5.60 /admin/perf 关系: /admin/perf 是生产员工真流量, 走 PG audit;
+# nightly 是 CI 合成基准, 走 mock. 一个看真实健康, 一个防 regression.
+
+on:
+  schedule:
+    # 每天 UTC 17:00 = 北京 01:00 (低峰)
+    - cron: '0 17 * * *'
+  workflow_dispatch:
+    inputs:
+      users:
+        description: '并发员工数'
+        required: false
+        default: '300'
+      run_time:
+        description: '跑多久 (locust syntax: 3m / 600s)'
+        required: false
+        default: '3m'
+      threshold:
+        description: 'regression 阈值 (0.10 = 10%)'
+        required: false
+        default: '0.10'
+
+concurrency:
+  group: bench-nightly-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    name: Locust bench + regression check
+    runs-on: ubuntu-latest
+    # locust + docker stack 完整跑 + parse, 给 25min buffer
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: central/llm-gateway
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install locust
+        run: |
+          python -m pip install --upgrade pip
+          pip install 'locust>=2.31,<3.0'
+          locust --version
+
+      - name: Bring up bench stack (gateway + mock + PG)
+        run: |
+          docker compose -f bench/docker-compose-bench.yml up -d --build pg mock_upstream gateway
+          echo "==> 等 gateway healthy..."
+          for i in $(seq 1 90); do
+            if curl -fs http://localhost:8999/healthz >/dev/null 2>&1; then
+              echo "    gateway up after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          curl -fs http://localhost:8999/healthz || (echo "::error::gateway 没起" && exit 1)
+
+      - name: Run locust
+        env:
+          USERS: ${{ github.event.inputs.users || '300' }}
+          RUN_TIME: ${{ github.event.inputs.run_time || '3m' }}
+        run: |
+          TS="$(date +%Y%m%d-%H%M%S)"
+          echo "TS=$TS" >> $GITHUB_ENV
+          mkdir -p bench/nightly-${TS}
+          locust -f bench/locustfile.py \
+            --host http://localhost:8999 \
+            --headless \
+            --users "$USERS" \
+            --spawn-rate 50 \
+            --run-time "$RUN_TIME" \
+            --html "bench/nightly-${TS}/report.html" \
+            --csv "bench/nightly-${TS}/run" \
+            --only-summary
+
+      - name: Parse + regression check
+        env:
+          THRESHOLD: ${{ github.event.inputs.threshold || '0.10' }}
+        run: |
+          python bench/parse_results.py \
+            --stats "bench/nightly-${TS}/run_stats.csv" \
+            --baseline bench/baseline.json \
+            --threshold "$THRESHOLD" \
+            --out "bench/nightly-${TS}/summary.json" \
+            --md "bench/nightly-${TS}/summary.md"
+        # exit code 1 = regression, 让 step 红, job 失败. 0 = OK.
+        continue-on-error: false
+
+      - name: Upload bench artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-nightly-${{ env.TS || 'unknown' }}
+          path: |
+            central/llm-gateway/bench/nightly-*/
+          retention-days: 30
+
+      - name: Post summary to PR (if dispatched from PR)
+        # workflow_dispatch on PR refs 时, 把 summary.md 贴上去. cron 跑没 PR 上下文, 跳.
+        if: github.event_name == 'workflow_dispatch' && github.event.pull_request
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const ts = process.env.TS;
+            const md = fs.readFileSync(
+              path.join('central/llm-gateway/bench/nightly-' + ts, 'summary.md'),
+              'utf8',
+            );
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: md,
+            });
+
+      - name: Tear down bench stack
+        if: always()
+        run: |
+          docker compose -f bench/docker-compose-bench.yml down -v || true
