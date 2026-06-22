@@ -1648,6 +1648,14 @@ def _patch_p15_chat_completions_approval() -> None:
             or kwargs.get("session_id")
         )
 
+        # P15.2 (6/22 鸿波 catch "按钮还没弹"): 用户报 P15.1 ship 后按钮仍没弹.
+        # patched_run_agent 真跑没跑 / sid 拿到没 / stream_q 反射成功没 — 加
+        # INFO log 让 hermes daemon 日志说话. 一次性确定真因, 不瞎猜.
+        logger.info(
+            "P15 patched_run_agent: 入口 sid=%r has_cb=%s kwargs_keys=%s",
+            sid, cb is not None, sorted(list(kwargs.keys())),
+        )
+
         # 反射拿 _stream_q (api_server.py:1896 _on_delta 闭包持有这个 local 变量)
         stream_q = None
         if cb is not None and getattr(cb, "__closure__", None) is not None:
@@ -1659,6 +1667,11 @@ def _patch_p15_chat_completions_approval() -> None:
                         break
             except Exception as e:  # noqa: BLE001
                 logger.debug("P15: closure 反射失败 (%s), 跳过 approval 注入", e)
+        logger.info(
+            "P15 patched_run_agent: stream_q 反射结果 = %s (cb.freevars=%s)",
+            "GOT" if stream_q is not None else "NONE",
+            (cb.__code__.co_freevars if cb is not None and hasattr(cb, "__code__") else None),
+        )
 
         notify_cb = None
         if stream_q is not None and sid:
@@ -1687,9 +1700,16 @@ def _patch_p15_chat_completions_approval() -> None:
             notify_cb = _approval_notify
             try:
                 register_gateway_notify(sid, notify_cb)
+                logger.info("P15 patched_run_agent: register_gateway_notify(%r) ✓", sid)
             except Exception as e:  # noqa: BLE001
-                logger.debug("P15: register_gateway_notify 失败 (%s)", e)
+                logger.warning("P15: register_gateway_notify 失败 (%s)", e)
                 notify_cb = None
+        else:
+            logger.info(
+                "P15 patched_run_agent: 不注册 notify_cb (stream_q=%s sid=%r) — "
+                "按钮不会弹, approval 走 hermes fallback (auto-approve 或 pending)",
+                stream_q is not None, sid,
+            )
 
         # P15 真根因 fix (00:30 audit): approval.py:1521 `session_key =
         # get_current_session_key()` 拿 _approval_session_key contextvar. chat
@@ -1724,8 +1744,9 @@ def _patch_p15_chat_completions_approval() -> None:
                     platform="api_server",
                     session_key=sid,
                 )
+                logger.info("P15.1 patched_run_agent: set_session_vars(platform=api_server, session_key=%r) ✓", sid)
             except Exception as e:  # noqa: BLE001
-                logger.debug("P15.1: set_session_vars 失败 (%s)", e)
+                logger.warning("P15.1: set_session_vars 失败 (%s)", e)
 
         try:
             return await _orig(self, *args, **kwargs)
