@@ -231,12 +231,25 @@ end tell
 
 # send_message: 5/18 BL-EMAIL-COMPOSE-SEND. AS `send <msg>` 真把草稿发出去.
 # 红线: 上层 UI 必须人工 confirm 之后才调到这, adapter 不做"是不是人发的" 校验.
+#
+# P3.5.57 Phase 4 (6/22 鸿波 catch retry 3 次仍失败): 找 send 真因 — 不是 race,
+# 是 AppleScript class 不匹配!
+#   - create_draft 用 `make new outgoing message` 创 **outgoing message** class
+#   - 老 send 在 `mailboxes of acc` 找 **message** class
+#   - 这俩是 Mail.app AS 里两个不同 class:
+#       * outgoing message — 撰写状态, 顶级在 Mail app 下, 不在 mailbox 里
+#       * message — mailbox (INBOX/Drafts/Sent) 里已落档的邮件
+#   - `make new outgoing message` 即使 visible:true 仍是 outgoing message,
+#     永远不在 mailboxes of acc → `whose id is` 必失败, retry 救不了
+#
+# 真修法: 先在 outgoing messages 找 (这是 create_draft 真正放的地方),
+# 找不到再 fallback mailboxes (兼容老路径或员工已手动从 Drafts 重发的场景).
+# Phase 3 的 sleep + retry 保留作二次防御, 但根本性不再依赖它.
 _AS_SEND_MESSAGE = """
 tell application "Mail"
     set accName to "{ACCOUNT}"
     set targetIdStr to "{MSG_ID}"
 
-    set acc to first account whose name of it is accName
     try
         set targetIdNum to (targetIdStr as integer)
     on error
@@ -244,25 +257,58 @@ tell application "Mail"
     end try
 
     set foundMsg to missing value
-    repeat with mb in mailboxes of acc
+
+    -- P3.5.57 Phase 4: 优先找 outgoing messages (create_draft `make new outgoing
+    -- message` 真正放的地方; outgoing message 不在 mailbox 里)
+    try
         if targetIdNum is not missing value then
-            try
-                set m to (first message of mb whose id is targetIdNum)
-                set foundMsg to m
-                exit repeat
-            end try
-        else
-            try
-                repeat with m in messages of mb
-                    if (id of m as string) is targetIdStr then
-                        set foundMsg to m
+            repeat with om in outgoing messages
+                try
+                    if (id of om) is targetIdNum then
+                        set foundMsg to om
                         exit repeat
                     end if
-                end repeat
-                if foundMsg is not missing value then exit repeat
-            end try
+                end try
+            end repeat
+        else
+            repeat with om in outgoing messages
+                try
+                    if ((id of om) as string) is targetIdStr then
+                        set foundMsg to om
+                        exit repeat
+                    end if
+                end try
+            end repeat
         end if
-    end repeat
+    end try
+
+    -- fallback: mailboxes 里找 (员工可能从 Drafts 自己关掉撰写窗口让它落档,
+    -- 这时 outgoing message 没了, draft 进了 Drafts mailbox)
+    if foundMsg is missing value then
+        try
+            set acc to first account whose name of it is accName
+            repeat with mb in mailboxes of acc
+                if targetIdNum is not missing value then
+                    try
+                        set m to (first message of mb whose id is targetIdNum)
+                        set foundMsg to m
+                        exit repeat
+                    end try
+                else
+                    try
+                        repeat with m in messages of mb
+                            if (id of m as string) is targetIdStr then
+                                set foundMsg to m
+                                exit repeat
+                            end if
+                        end repeat
+                        if foundMsg is not missing value then exit repeat
+                    end try
+                end if
+            end repeat
+        end try
+    end if
+
     if foundMsg is missing value then
         error "MESSAGE_NOT_FOUND" number 8001
     end if
