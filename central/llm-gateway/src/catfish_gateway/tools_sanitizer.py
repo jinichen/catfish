@@ -257,6 +257,30 @@ def sanitize_tools(
     profile 砍 catfish_* tool. unknown / 未知 source → 不过滤 (现有行为).
     """
     tools = body.get("tools")
+
+    # P3.5.70 diag (6/22): 入口 log 看真实 body["tools"] 形态. dropped log 0 输出
+    # 说明 sanitize 没生效, 这层 log 暴露根因 (tools 不是 list / 是空 / 没含 terminal).
+    if isinstance(tools, list):
+        sample_names = []
+        terminal_present = False
+        for t in tools[:30]:
+            if isinstance(t, dict):
+                fn = t.get("function") or {}
+                if isinstance(fn, dict):
+                    nm = fn.get("name", "?")
+                    sample_names.append(nm)
+                    if "terminal" in str(nm):
+                        terminal_present = True
+        logger.info(
+            "P3.5.70 sanitize entry: source=%s tools_count=%d terminal_present=%s first10=%s",
+            source_hint, len(tools), terminal_present, sample_names[:10],
+        )
+    else:
+        logger.info(
+            "P3.5.70 sanitize entry: source=%s body['tools']=%r (not list, early return)",
+            source_hint, type(tools).__name__ if tools is not None else None,
+        )
+
     if not isinstance(tools, list):
         return body
 
