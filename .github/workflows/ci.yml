@@ -80,8 +80,11 @@ jobs:
           python -m pip install --upgrade pip
           # BL-CI-MISSING-DEPS (6/3): catfish_gateway.auth.oidc 真 import jwt + cryptography.
           # pyyaml: test_allowed_models / 其他 test 可能 import yaml 的配置.
-          pip install pytest pytest-asyncio python-dotenv litellm fastapi httpx 'pydantic>=2' \
-            pyjwt cryptography pyyaml
+          # P3.5.62 (6/22 鸿波 catch CVE-2026-49468): litellm pin >=1.84.0 跟
+          # pyproject.toml 一致, 修 Proxy Host header injection 绕过. <2.0 防
+          # 2.x breaking. (catfish 用 SDK 模式不跑 proxy, 但 SBOM 扫描会标 CVE.)
+          pip install pytest pytest-asyncio python-dotenv 'litellm>=1.84.0,<2.0.0' \
+            fastapi httpx 'pydantic>=2' pyjwt cryptography pyyaml
 
       - name: Run gateway tests
         working-directory: central/llm-gateway

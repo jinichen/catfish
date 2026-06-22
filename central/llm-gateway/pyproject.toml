@@ -14,7 +14,12 @@ dependencies = [
     # 实际 POST /api/facts/upload 路径会 500. 6/9 BL-F10 1000 user bench 撞.
     "python-multipart>=0.0.9",
     "uvicorn[standard]>=0.32.0",
-    "litellm>=1.50.0",
+    # P3.5.62 (6/22 鸿波 catch CVE-2026-49468): bump >=1.84.0 修 LiteLLM Proxy
+    # Host header injection 鉴权绕过. catfish 用 SDK 模式不跑 litellm.proxy, 漏洞
+    # 代码路径 (litellm/proxy/auth/auth_utils.py::get_request_route) 实际跑不到,
+    # 但纵深防御 + 清 SBOM 警告 + 防 future 误引 litellm.proxy 仍升级. 加 <2.0
+    # upper bound 防 2.x breaking 时 CI 静默炸. docs/SECURITY-CVE-LOG.md 有详评.
+    "litellm>=1.84.0,<2.0.0",
     "pyyaml>=6.0.2",
     "pydantic>=2.9.0",
     "PyJWT[crypto]>=2.9.0",
