@@ -486,3 +486,103 @@ HV="v2026.X.Y" && \
 ```
 
 出错时, 按本文 "Audit 真因链 — 8 步顺序" 走, 每步 ground truth verify, 不要跳.
+
+---
+
+## 十、6/22 鸿波 catch "审批按钮一直不弹" — 别再绕圈圈了
+
+**症状**: Companion execute_code 调用 (含 `rm` 等 destructive) **全部 silent
+auto-approve**, 审批按钮永远不弹.
+
+### 8 次错猜 (绕圈圈实录)
+
+| # | 错猜 | 浪费时间在哪 | 真相 |
+|---|---|---|---|
+| 1 | P15 patch 失效, hermes v0.17 _stream_q 变量名变了 | grep hermes v0.17 _stream_q | 还在 line 1865 ✓ |
+| 2 | hermes v0.17 加了 _is_gateway_approval_context() gate, P15 漏 set platform contextvar | 加 P15.1 set_session_vars(platform=api_server) | hermes _run_agent 内部已自己 set, 不需要 |
+| 3 | P15.1 加 _PATCH_TARGETS 让 plugin 装不上 → 全 19 patch 失效 → Companion 断 | 静态 verify 模式 | _check_attr_in_source 模式正确, plugin 装上了 |
+| 4 | 闭包反射 _stream_q 拿不到 | 加 INFO log 验 cb.freevars | GOT, freevars=('_stream_q',) ✓ |
+| 5 | register_gateway_notify(sid) sid 不对 | 加 INFO log | sid 一致, notify_cb_found=True ✓ |
+| 6 | P15.3 wrap check_execute_code_guard 用诊断 | wrap 不稳, 重启时 race crash | revert |
+| 7 | 用 yolo 路径绕过 (line 1708) | 加 yolo / mode log | _YOLO_MODE_FROZEN=False, mode=manual ✗ |
+| 8 | Companion 多次 "无法连接 hermes API" 误判为 P15.3 wrap crash | 紧急 revert P15.3 | 真因是 launchctl kickstart 后 hermes startup chain 要 100+ 秒, lsof 太早查 0 |
+
+### 真因 (read-only 一发命中)
+
+**用 read-only Python script 一次性查清 `_permanent_approved` set 内容**:
+
+```bash
+cd ~/.hermes/hermes-agent && venv/bin/python << 'EOF'
+import sys, os
+sys.path.insert(0, '.')
+from tools import approval
+approval.load_permanent_allowlist()
+print('_permanent_approved:', sorted(approval._permanent_approved))
+print('is_approved(*, "execute_code"):', approval.is_approved('any', 'execute_code'))
+EOF
+```
+
+**结果暴露真因**:
+
+```
+_permanent_approved: ['execute_code',  ← ★★★ 红线!
+                      'script execution via -e/-c flag',
+                      'script execution via heredoc',
+                      'shell command via -c/-lc flag']
+is_approved("any", "execute_code"): True
+```
+
+**真因链** (4 步, 5 秒钟看完): execute_code 调用 →
+`check_execute_code_guard:1749 if is_approved(session_key, "execute_code"):` →
+立刻 True → `line 1750 return {"approved": True, "message": None}` → silent
+auto-approve, **永远不弹按钮**.
+
+由来: 用户某次审批 UI 点 "always" → `approve_permanent("execute_code")` →
+写进 `~/.hermes/config.yaml` 的 `command_allowlist`. 跨重启永久.
+
+### 治本 (P20 patch)
+
+`catfish-xcatfish-user/plugin.py` `_patch_p20_block_execute_code_permanent`:
+1. wrap `approve_permanent(pattern_key)` — 拒绝 `pattern_key == "execute_code"`
+2. wrap `load_permanent(patterns)` — config 加载时过滤掉 execute_code
+3. 装机时一次性 sweep — 把 `_permanent_approved` 已含 execute_code 移除 + 持久化
+
+### 教训 (下次审 hermes approval 不再绕)
+
+1. **审 approval 真因第一步: read-only 看 `_permanent_approved` set 内容**.
+   一行 Python, 5 秒, 直接看真实 process state, 不用 wrap 也不用重启.
+   *别先调试 wrap chain — wrap 不稳风险高 + 装机 timing 撞 launchd 退避*.
+
+2. **5 个 auto-approve 早返点都返 `{"approved": True, "message": None}` 同
+   shape**, 不能靠 result keys 区分. 必须看 hermes 自带状态变量:
+   - line 1702 docker: env_type
+   - line 1707 yolo: `_YOLO_MODE_FROZEN` + `_session_yolo` + approval_mode
+   - line 1731 cron: HERMES_CRON_SESSION env
+   - line 1738 not gateway: `_get_session_platform()` contextvar
+   - **line 1749 is_approved: `_permanent_approved` set 内容** ← 最容易忽略
+
+3. **`approve_permanent` / `load_permanent` 是入口阻断点, 比 wrap
+   check_execute_code_guard 关键函数稳得多**. wrap hermes 内部关键 guard
+   函数 = 高风险 (P15.3 教训), 走加入点的 wrap 安全.
+
+4. **Companion "无法连接 hermes API" 误判**: launchctl kickstart 后 hermes
+   完整启动到 listen 8642 要 100+ 秒 (MCP 133 tools 注册占大头). lsof
+   sleep 10 后查到 0 不代表 hermes crash, sleep 60+ 再查或者 grep
+   "API server listening" log.
+
+5. **永远不要给 `execute_code` "always" 选项**. execute_code = LLM 任意
+   Python 沙箱权限. always-approved = LLM 完全 shell 权限. P20 wrap 已封死.
+   *后续考虑改 hermes-side 审批 UI 文案: execute_code 弹窗不显示 "always"
+   按钮, 只显示 "once" / "session" / "deny"*.
+
+### 1 行 quick diagnostic (审批按钮异常时跑)
+
+```bash
+cd ~/.hermes/hermes-agent && venv/bin/python -c "
+from tools import approval
+approval.load_permanent_allowlist()
+print('execute_code 在 permanent_approved?', 'execute_code' in approval._permanent_approved)
+print('is_approved True?', approval.is_approved('test', 'execute_code'))
+"
+# True True = 真因; False False = 走 P15 chain 真因诊断 (本文 8 步)
+```
