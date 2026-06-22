@@ -150,6 +150,144 @@ raw 数据 (append-only)
 
 ---
 
+## 4.4 完整分类体系 (P3.5.82.1 鸿波 catch 补)
+
+现 6 kind 是历史 ad-hoc 长出来的, 没有 coherent taxonomy. 未来加 kind 不能继续
+ad-hoc, 要按一个**完整分类体系**填空, 不然 5-15 kind 全是平行无章, LLM 决策困惑.
+
+### 4.4.1 3 维分类 (主体 × 主题域 × 时间)
+
+每个 memory.kind 实际是 3 维空间一个 cell. 设计 kind 时按 3 维找它的位置, 防重叠
++ 防 gap.
+
+**维 1: 主体 (subject)** — 数据描述谁
+
+| 值 | 含义 | 例 |
+|---|---|---|
+| `SELF` | 关于员工本人 | 我的偏好/我加油花了多少 |
+| `PROJECT` | 关于某个具体项目/事 | 客户 A 的 API 字段 |
+| `WORLD` | 关于外部世界 (知识/人/地点) | wiki 概念 / 餐厅信息 |
+
+**维 2: 主题域 (domain)** — 数据属于人生哪个 area
+
+| 值 | 含义 | 例 |
+|---|---|---|
+| `PERSONAL` | 个人/身份/偏好/关系 | 名字/性格/家人 |
+| `HEALTH` | 健康/医疗/锻炼/饮食 | 体检结果/跑步记录 |
+| `FINANCE` | 财务/记账/资产 | 收支/股票/房产 |
+| `WORK` | 工作/项目/技术 | 客户/代码/会议 |
+| `SOCIAL` | 社交/沟通/人脉 | 朋友/联系人/活动 |
+| `LEARNING` | 学习/阅读/技能 | 书摘/skill/笔记 |
+
+**维 3: 时间 (temporal)** — 数据时间属性
+
+| 值 | 含义 | 例 |
+|---|---|---|
+| `STATE` | 当前状态, 持续有效 | 偏好/身份/资产 |
+| `EVENT` | 一次性事件, 已发生 | 加油/会议/体检 |
+| `GOAL` | 未来计划/待办 | 待办任务/目标 |
+| `PROCEDURE` | 重复流程/技能 | workflow/recipe |
+
+### 4.4.2 现 6 kind 在 3 维 cell 的位置
+
+| kind | 主体 | 主题域 | 时间 |
+|---|---|---|---|
+| `identity` | SELF | PERSONAL | STATE |
+| `project_fact` | PROJECT | WORK | STATE |
+| `workflow` | * | * | PROCEDURE |
+| `journal` | SELF | * | EVENT (catchall 跨主题) |
+| `todo` | SELF | * | GOAL |
+| `expense` (P3.5.78) | SELF | FINANCE | EVENT |
+
+**观察**:
+- `SELF × HEALTH × EVENT`, `SELF × HEALTH × STATE` 没人填 → 加 medical/fitness 时填这
+- `WORLD × *` 没人填 → 加 contact/place/recipe 时填这
+- `PROJECT × WORK × EVENT` 没人填 → 加 meeting/decision 时填这
+
+### 4.4.3 完整候选 kind 列表 (按 3 维填空, 18 个)
+
+| 候选 kind | 主体 | 主题域 | 时间 | 状态 | 何时 ship 触发 |
+|---|---|---|---|---|---|
+| **`identity`** | SELF | PERSONAL | STATE | ✓ 现 | - |
+| `preference` | SELF | PERSONAL | STATE | 待 | 员工抱怨"老问我同一件事" |
+| `relationship` | SELF | SOCIAL | STATE | 待 | 员工要"记下我跟 X 的关系" |
+| **`expense`** | SELF | FINANCE | EVENT | ✓ 现 (P3.5.78) | - |
+| `asset` | SELF | FINANCE | STATE | 待 | 员工管股票/房产记录 |
+| `medical` | SELF | HEALTH | EVENT | 待 | 员工查体检报告 |
+| `fitness` | SELF | HEALTH | EVENT | 待 | 员工记跑步/锻炼 |
+| `meal` | SELF | HEALTH | EVENT | 待 | 员工记饮食 |
+| `habit` | SELF | * | PROCEDURE | 待 | 员工有重复 daily routine |
+| **`journal`** | SELF | * | EVENT (catchall) | ✓ 现 | - |
+| **`todo`** | SELF | * | GOAL | ✓ 现 (Apple Reminders) | - |
+| `goal` | SELF | * | GOAL (长期) | 待 | 跟 todo 区分: todo<7天, goal>30天 |
+| `reading_note` | SELF | LEARNING | EVENT | 待 | 员工读书做笔记 |
+| **`project_fact`** | PROJECT | WORK | STATE | ✓ 现 | - |
+| `meeting_log` | PROJECT | WORK | EVENT | 待 | 会议总结自动入 |
+| `decision_log` | PROJECT | WORK | EVENT | 待 | 关键决策追溯 |
+| **`workflow`** | * | * | PROCEDURE | ✓ 现 (catfish_propose_skill) | - |
+| `contact` | WORLD | SOCIAL | STATE | 待 | 员工人脉 (vs `relationship` 私人) |
+| `place` | WORLD | * | STATE | 待 | 餐厅/医院/景点信息 |
+| `recipe` | WORLD | HEALTH | PROCEDURE | 待 | 食谱/教程/外部 procedure |
+
+**统计**: 现 6 ✓, 候选 12 待. 18 全 ship 后 prefetch 估算 ~30K chars (按 P3.5.82 budget 阈值 = 警告区).
+
+### 4.4.4 加 kind 的 design 规则 (基于 taxonomy)
+
+1. **新需求来了, 先在 3 维 cell 找位置** (主体 × 主题域 × 时间)
+2. **cell 已有 kind?** → 看是否能扩 (e.g. expense 已 cover SELF×FINANCE×EVENT, 餐饮记账走 expense 不新加 meal_expense)
+3. **cell 空?** → 走 P3.5.82 §2 5 yes 决策 tree, 通过加 kind
+4. **跨多个 cell (catchall)?** → 不该是 kind, 该是已有 catchall (e.g. journal 是 SELF × * × EVENT 跨主题)
+5. **3 维之外** (e.g. 跨员工 / 实时 / 大量) → 独立 plugin
+
+### 4.4.5 SELF 主体 6 维度 cell 覆盖 (员工核心场景)
+
+员工 SELF 主体跨 6 主题域 × 4 时间, 共 24 cell. 但不是每 cell 都需要 kind, 只 ship
+LLM 真常用的:
+
+```
+            STATE        EVENT          GOAL         PROCEDURE
+PERSONAL    identity ✓   journal(*)     todo(*)      -
+                         preference 待
+HEALTH      -            medical 待     -            habit 待
+                         fitness 待
+                         meal 待
+FINANCE     asset 待     expense ✓      -            -
+WORK        -            project_fact(*) -           workflow(*) ✓
+                         meeting 待
+                         decision 待
+SOCIAL      relationship 待 -            -            -
+LEARNING    -            reading 待     -            -
+```
+
+(\* 标的 catchall 已 cover 多 cell, 不需要细分到每 cell 都加 kind)
+
+### 4.4.6 分级 schema future (kind > 12 触发)
+
+到 12-15 kind 时启动 **2 级 dispatch**:
+
+```python
+schema = {
+    "domain": ["personal", "health", "finance", "work", "social", "learning"],
+    "kind": "..."  # 按 domain 限制可选 kind
+}
+
+# LLM 调:
+memory(domain="finance", kind="expense", amount=300, ...)
+memory(domain="health", kind="medical", ...)
+memory(domain="work", kind="meeting_log", ...)
+```
+
+LLM 决策从 12+ flat enum 改 6 主类 × 3-5 sub-kind 二级. 决策空间小, 命中率高.
+
+迁移路径: 现 6 kind flat → 加到 ~12 kind 仍 flat → 到 12+ 时**plugin 内部 mapping**:
+- `expense` → `domain=finance, kind=expense`
+- `journal` → `domain=*, kind=journal` (catchall 保留)
+- ...
+
+LLM 暂时仍能用旧 flat kind (兼容). 新 LLM 用 2 级. 6 个月过渡期.
+
+---
+
 ## 5. future 12+ kind 时的分级 schema 重构
 
 到 12-15 kind 触发**分级 schema**, 类似 SQL table normalization:
