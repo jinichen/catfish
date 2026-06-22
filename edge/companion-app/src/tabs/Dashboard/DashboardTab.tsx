@@ -37,6 +37,8 @@
 // import IdentityCard from "./IdentityCard";
 import ServicesCard from "./ServicesCard";
 import QuotaCard from "./QuotaCard";
+// P3.5.59 (6/22 鸿波 catch "无法知道性能状态"): 综合 LLM + tool perf 一站式
+import PerfCard from "./components/PerfCard";
 // BL-SESSION-CLEANUP-KILL (5/16 鸿波 '没意义砍了吧'): SessionCleanupCard 砍.
 // 治标不治本 (删 13 个还有 291 个) + 客户 demo 负面信号 + 跟 Curator 重叠.
 // .tsx 文件保留 (跟 ARCH2 砍 7 张卡同模式), 真要回滚改 1 行 import 就回.
@@ -284,7 +286,7 @@ export default function DashboardTab() {
         id="services"
         title="⚙️ 服务 / 配额"
         defaultCollapsed
-        count={3}
+        count={4}
       >
         <SectionTabs
           storageKey="services"
@@ -293,6 +295,10 @@ export default function DashboardTab() {
             { key: "status", label: "🌐 服务状态", render: () => <ServicesCard /> },
             { key: "quota", label: "📊 我的配额", render: () => <QuotaCard /> },
             { key: "catalog", label: "🧩 可用模型", render: () => <CatalogCard /> },
+            // P3.5.59 (6/22 鸿波 catch "无法知道性能状态"): 综合 LLM perf
+            // (gateway audit) + tool dispatch perf (tool-bridge audit) 一站式.
+            // 数据 100% 本机 fs 直读, 不走网络.
+            { key: "perf", label: "📈 性能统计", render: () => <PerfCard /> },
           ]}
         />
         {/* <CuratorCard /> — 5/16 砍 (BL-CURATOR-CARD-KILL) */}

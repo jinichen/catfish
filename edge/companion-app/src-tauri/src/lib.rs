@@ -474,6 +474,8 @@ pub fn run() {
             commands::learning::skill_proposal_accept,
             commands::learning::skill_proposal_reject,
             commands::audit::audit_summary,
+            // P3.5.59 (6/22 鸿波): tool-bridge audit jsonl 聚合 per-tool perf
+            commands::tool_perf::tool_perf_summary,
             // P3.3.51 (6/12 鸿波): audit hash chain — decisions / political_scan jsonl 防篡改
             commands::audit_chain::audit_chain_append,
             commands::audit_chain::audit_chain_verify,
