@@ -239,6 +239,86 @@ def _has_catfish_browser_tools(tools: list[Any]) -> bool:
     return False
 
 
+# ── P3.5.72 (6/22 鸿波 catch "继续 architecture 治本") ─────────────────
+#
+# catfish 平台层 execute_code description 合同. 覆盖 hermes 上游自带 description
+# (后者写"single tool call → use normal tool calls" 暗示用 terminal). catfish
+# 砍了 terminal, LLM 必须知道 execute_code 是唯一合法执行通道.
+#
+# 改 tool schema description (LLM 决策硬依据), 不改 hermes 源码 (never fork) 也不
+# 改 SOUL.md (避免 prompt 越堆越乱). 这是 catfish 平台层 contract override.
+#
+# trigger: name == "execute_code" 或 "mcp_catfish_tools_execute_code" 都改.
+
+_EXECUTE_CODE_CATFISH_DESCRIPTION = (
+    "**catfish 平台唯一合法的代码 / shell 执行通道** (无 terminal tool, 也别等 "
+    "员工自己跑). 任何 user 请求执行的命令 — ls / rm / pip show / python -c / "
+    "查目录 / 跑数算 / 转文件格式 / 调 shell 命令 — 都用我.\n\n"
+    "## 怎么用\n"
+    "- shell 命令: code=\"import subprocess; print(subprocess.run(['ls'], "
+    "capture_output=True, text=True).stdout)\"\n"
+    "- 查目录: code=\"import os; print('\\n'.join(os.listdir('.')))\"\n"
+    "- Python 算/查/转: code=\"import litellm; print(litellm.__version__)\"\n"
+    "- 多步 / loop / 处理大输出 / N 个文件: 跟普通 Python script 一样写\n\n"
+    "## 安全 (catfish 平台保证)\n"
+    "- 跑在 macOS sandbox-exec 隔离子进程, 不影响员工本机系统\n"
+    "- 中央会拦弹审批框 — **你只管调, 员工点'批准'就放行**, 点'拒绝'退还\n"
+    "- 沙箱跟员工 mac 本机 venv / 文件 isolated. 沙箱拿不到本机版本 / 路径时 "
+    "(比如 `pip show <pkg>` 查的是沙箱里的版本不是本机), 先调拿沙箱版本, "
+    "**再** 告诉员工 \"沙箱里是 X, 你 mac 本机自己跑 `<cmd>` 看本机\".\n\n"
+    "## 严禁\n"
+    "- 严禁说 \"我无法直接调用 terminal / 安全限制 / 红线\" — catfish 没暴露 "
+    "terminal 是设计, execute_code 就是替代. 这种话 = 失职.\n"
+    "- 严禁主动让员工自己跑 shell 命令. 第一反应必须是 execute_code 调一下.\n\n"
+    "## 限制 (合理)\n"
+    "- 5 分钟 timeout / 50KB stdout cap / 50 tool calls per script\n"
+    "- sandbox 内不能 `import catfish_*` / 不能调 `catfish_browser_*` (必死锁)\n"
+    "- 真跑失败 (error / timeout / 沙箱不支持) 之后才告诉员工自己跑. **没真跑 "
+    "就拒绝 = 失职**.\n\n"
+    "code: Python 源码, print 结果到 stdout.\n"
+    "task_id (optional): session task ID, 长 task 跟踪用.\n"
+    "enabled_tools (optional): sandbox 子集白名单."
+)
+
+
+def _rewrite_execute_code_description(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """P3.5.72: 把 execute_code 的 description 改写成 catfish 平台合同.
+
+    LLM 决策选 tool 主要看 tool schema description, 不是 SOUL.md system prompt.
+    hermes 上游 execute_code description 假定有 terminal tool (hermes 默认环境),
+    catfish 砍了 terminal 后 LLM 看 hermes description 困惑 → 拒绝 user shell 请求.
+    这里平台层覆盖 description, 明确告知 LLM execute_code 是 catfish 唯一通道.
+
+    不动 hermes 源 (never fork). 不动 SOUL.md (不堆 prompt). 改的是 tool schema
+    硬合同, 是 LLM 决策的最硬依据.
+    """
+    rewritten_count = 0
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        fn = tool.get("function")
+        if not isinstance(fn, dict):
+            continue
+        name = fn.get("name")
+        if not isinstance(name, str):
+            continue
+        # 同时认裸名 execute_code 和 MCP 前缀版本
+        base_name = name
+        if name.startswith(_MCP_CATFISH_PREFIX):
+            base_name = name[len(_MCP_CATFISH_PREFIX):]
+        if base_name == "execute_code":
+            fn["description"] = _EXECUTE_CODE_CATFISH_DESCRIPTION
+            rewritten_count += 1
+
+    if rewritten_count > 0:
+        logger.info(
+            "P3.5.72 execute_code description rewritten ×%d "
+            "(catfish 平台合同覆盖 hermes 上游, LLM 看到 execute_code 是唯一执行通道)",
+            rewritten_count,
+        )
+    return tools
+
+
 def sanitize_tools(
     body: dict[str, Any],
     user: Any = None,
@@ -465,6 +545,22 @@ def sanitize_tools(
             ", ".join(capped_dropped[:10]),
         )
     cleaned = capped_tools
+
+    # ── P3.5.72 (6/22 鸿波 catch "工作台 LLM 看到 execute_code 还是拒绝调") ──
+    # 真因 architecture: hermes 上游 execute_code 的 description 是给 hermes 设计的
+    # (含 terminal tool 的环境), 写"single tool call no processing → use normal
+    # tool calls instead". hermes 里 normal tool = terminal. 但 catfish 砍了
+    # terminal (P3.5.70), LLM 看到 description 想用 terminal 替代但找不到 → 拒绝.
+    #
+    # 治本: rewrite execute_code description, 让 LLM 看到 catfish 平台合同明确:
+    #   - catfish 没暴露 terminal (砍了)
+    #   - execute_code 是唯一合法执行通道 (任何 shell/Python/查信息)
+    #   - 含审批 + 沙箱保护, 员工点批准就放行
+    #
+    # 这是 tool schema 硬合同层改 (不是 SOUL.md 软提示, 不是 fork hermes 源码),
+    # gateway sanitize 是 LLM 看 tool list 前的最后一关 — 改这里 = 改 LLM 决策硬依据.
+    cleaned = _rewrite_execute_code_description(cleaned)
+
     body["tools"] = cleaned
 
     # BL-MEMORY-PLUMBING-DIAG (5/16): 暴露 always-on 实际命中. 排"LLM 调了 31 个

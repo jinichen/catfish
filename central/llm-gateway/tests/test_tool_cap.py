@@ -379,3 +379,76 @@ def test_sanitize_keeps_terminal_when_env_override(monkeypatch):
     # env override 后两个 variants 都保留
     assert "terminal" in names
     assert "mcp_catfish_tools_terminal" in names
+
+
+# ── P3.5.72 (6/22 鸿波 catch "工作台 LLM 看到 execute_code 还是拒绝") ──
+# 锁 execute_code description 被 catfish 平台合同覆盖.
+
+def test_sanitize_rewrites_execute_code_description():
+    """P3.5.72: execute_code 的 description 被改写成 catfish 合同."""
+    body = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "execute_code",
+                    "description": "hermes 上游 description (Run a Python script... use normal tool calls instead)",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+        ],
+    }
+    result = sanitize_tools(body)
+    descs = [t["function"]["description"] for t in result["tools"]]
+    # description 被改写 — 必含 catfish 平台合同关键字
+    assert any("catfish 平台唯一合法的代码 / shell 执行通道" in d for d in descs), \
+        f"P3.5.72: execute_code description 没被改写, 实际: {descs}"
+    # hermes 上游原 description 被覆盖
+    assert not any("use normal tool calls instead" in d for d in descs)
+
+
+def test_sanitize_rewrites_execute_code_mcp_prefix():
+    """P3.5.72: mcp_catfish_tools_execute_code 同名前缀版本也被改写."""
+    body = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "mcp_catfish_tools_execute_code",
+                    "description": "hermes 原",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+        ],
+    }
+    result = sanitize_tools(body)
+    descs = [t["function"]["description"] for t in result["tools"]]
+    assert any("catfish 平台唯一合法" in d for d in descs)
+
+
+def test_sanitize_other_tool_descriptions_untouched():
+    """P3.5.72: 改 execute_code 只改 execute_code, 别的 tool description 不动."""
+    body = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "execute_code",
+                    "description": "original",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "web_search",
+                    "description": "Search the web for query",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+        ],
+    }
+    result = sanitize_tools(body)
+    by_name = {t["function"]["name"]: t["function"]["description"] for t in result["tools"]}
+    assert "catfish 平台唯一合法" in by_name["execute_code"]
+    assert by_name["web_search"] == "Search the web for query"  # 不动
