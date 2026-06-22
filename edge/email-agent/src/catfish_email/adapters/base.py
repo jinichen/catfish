@@ -115,10 +115,25 @@ class Message:
     """仅 read 场景填; list 场景空字符串 (节省 IPC)。"""
 
     in_reply_to: str | None = None
-    """如果这是别人邮件的回复, 这里指向原邮件 ID (用于 thread 视图)。"""
+    """如果这是别人邮件的回复, 这里指向原邮件 ID (用于 thread 视图).
+
+    P3.5.58 注: 这是 RFC 822 标准的 In-Reply-To header (上一封 Message-ID),
+    不是 adapter 内部 id. 跟 message_id / references 对得起来才能算 thread."""
 
     thread_id: str | None = None
     """同一个对话线程的统一 ID, adapter 自己实现稳定生成规则。"""
+
+    # ─── P3.5.58 (6/22 鸿波 catch "有回复了为啥还让小鲶处理, 是不是重复了"):
+    # 补齐 RFC 822/5322 thread headers 三件套. 前端 isReplied() 算法需要这俩
+    # 才能精准判断"M 被回复" = ∃ R: R.in_reply_to == M.message_id OR
+    # M.message_id ∈ R.references.split(). subject "Re:" fuzzy 不可靠会撞坑.
+    message_id: str | None = None
+    """RFC 822 Message-ID header (本邮件全局唯一标识, 形如 <abc@domain>).
+    跟 .id (adapter 内部 ID) 是两回事. P3.5.58 治本 thread 视图必须有."""
+
+    references: str | None = None
+    """RFC 822 References header — 完整祖先链, 空格分隔的多个 Message-ID.
+    长 thread 用 References 算 isReplied, 不依赖直接父级 in_reply_to."""
 
 
 @dataclass(frozen=True)

@@ -171,6 +171,57 @@ def _is_mail_running() -> bool:
         return False
 
 
+def _parse_thread_headers(raw_headers: str) -> tuple[str | None, str | None, str | None]:
+    """从 RFC 822 raw headers 字符串 parse 出 (Message-ID, In-Reply-To, References).
+
+    P3.5.58 (6/22 鸿波 catch "有回复了为啥还让小鲶处理, 是不是重复了"):
+    thread 检测三件套, 让前端 isReplied() 算
+        ∃ R: R.in_reply_to == M.message_id OR M.message_id ∈ R.references.split()
+
+    headers 形如:
+        Message-ID: <abc123@domain.com>
+        In-Reply-To: <parent456@domain.com>
+        References: <root789@domain.com> <middle@x.com> <parent456@domain.com>
+
+    缺/坏 返 None. 不抛 — 老邮件可能没 References / 内部转发可能没 Message-ID.
+    """
+    if not raw_headers:
+        return (None, None, None)
+    try:
+        # stdlib, 不引外部依赖. compat32 policy 行为最稳跟 5322 一致.
+        from email.parser import Parser  # noqa: PLC0415
+        from email.policy import compat32  # noqa: PLC0415
+        parsed = Parser(policy=compat32).parsestr(raw_headers, headersonly=True)
+        msg_id = (parsed.get("Message-ID") or parsed.get("Message-Id") or "").strip() or None
+        in_reply = (parsed.get("In-Reply-To") or "").strip() or None
+        refs = (parsed.get("References") or "").strip() or None
+        return (msg_id, in_reply, refs)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("_parse_thread_headers fail: %s", e)
+        return (None, None, None)
+
+
+def _read_thread_headers_from_source_file(source_path: str) -> tuple[str | None, str | None, str | None]:
+    """从 read_message AS dump 出的 RFC822 source 文件 parse 三件套.
+
+    P3.5.58 helper for read_message_as. 文件首段是 headers + 空行 + body, 用
+    email.parser headersonly=True 只 parse 头. 文件不存在/读失败返全 None.
+    """
+    try:
+        with open(source_path, encoding="utf-8", errors="replace") as f:
+            # 只读到第一个空行 = header 边界. 不全读省内存 (附件大的可能 MB 级).
+            header_lines: list[str] = []
+            for line in f:
+                if line.strip() == "":
+                    break
+                header_lines.append(line)
+            raw = "".join(header_lines)
+        return _parse_thread_headers(raw)
+    except OSError as e:
+        logger.debug("read thread headers fail: %s", e)
+        return (None, None, None)
+
+
 def _parse_records(text: str, n_fields: int) -> list[list[str]]:
     """osascript stdout split 成 records of fields. 末尾空记录 / 短记录跳过."""
     records: list[list[str]] = []
@@ -288,12 +339,15 @@ class AppleMailAdapter(EmailAdapter):
             .replace("{UNREAD_ONLY}", "true" if filt.unread_only else "false")
         )
         out = _run_osascript(script)
-        records = _parse_records(out, n_fields=6)
+        # P3.5.58: AS list 升 6→8 字段 (加 rfcMsgId + rawHeaders) 给 thread 检测.
+        # 老 Mail.app 版本不暴露 `all headers` 时 rawHdrs 为空, _parse_thread_headers
+        # 返 None, 算法 fallback 用 rfcMsgId-only (能算 reply chain 但不能算 References).
+        records = _parse_records(out, n_fields=8)
         # since/until/sender_contains/subject_contains 用 Python 后过滤
         # (AS 里塞复杂 where 太脆 — `messages whose ... and ... and ...` 性能差 + locale 坑多)
         result: list[Message] = []
         for r in records:
-            msg_id, subj, sndr, dt_str, read_st, folder = r
+            msg_id, subj, sndr, dt_str, read_st, folder, rfc_msg_id, raw_hdrs = r
             date_iso = _parse_applescript_date(dt_str)
             if filt.since and date_iso and date_iso < filt.since:
                 continue
@@ -309,6 +363,10 @@ class AppleMailAdapter(EmailAdapter):
                 and filt.subject_contains.lower() not in subj.lower()
             ):
                 continue
+            # P3.5.58: parse thread 三件套. 优先 raw headers (含 Message-ID/
+            # In-Reply-To/References), 缺时 fallback rfcMsgId-only.
+            parsed_mid, parsed_in_reply, parsed_refs = _parse_thread_headers(raw_hdrs)
+            final_msg_id = parsed_mid or (rfc_msg_id.strip() if rfc_msg_id else None)
             result.append(
                 Message(
                     id=self._pack_id(account_name, msg_id),
@@ -319,6 +377,9 @@ class AppleMailAdapter(EmailAdapter):
                     date=date_iso,
                     is_read=(read_st == "1"),
                     body_text="",  # list 场景不带 body
+                    message_id=final_msg_id,
+                    in_reply_to=parsed_in_reply,
+                    references=parsed_refs,
                 ),
             )
         return result
@@ -380,6 +441,11 @@ class AppleMailAdapter(EmailAdapter):
                     "apple_mail read_message: body_text 空, 从 body_html strip 出 %d 字 fallback",
                     len(body_text),
                 )
+            # P3.5.58 (6/22 鸿波 catch): 从 source RFC822 parse thread 三件套
+            # (Message-ID / In-Reply-To / References) 给前端 isReplied 算法用
+            rfc_msg_id, in_reply_to, references = (
+                _read_thread_headers_from_source_file(source_path)
+            )
             return Message(
                 id=message_id,
                 account=account_name,
@@ -393,6 +459,9 @@ class AppleMailAdapter(EmailAdapter):
                 date=_parse_applescript_date(dt_str),
                 body_text=body_text,
                 body_html=body_html,
+                message_id=rfc_msg_id,
+                in_reply_to=in_reply_to,
+                references=references,
             )
         finally:
             for p in (body_path, source_path):

@@ -39,7 +39,11 @@ tell application "Mail"
 end tell
 """
 
-# list_messages: messageId | subject | sender | date | isRead | folder
+# list_messages: messageId | subject | sender | date | isRead | folder | rfcMsgId | rawHeaders
+# P3.5.58 (6/22 鸿波 catch): 加 rfcMsgId (RFC 822 Message-ID) + rawHeaders 让
+# Python 端 parse In-Reply-To / References, 供前端 isReplied() thread 算法用.
+# 老 6 字段输出现升 8. try 兜底 — 某些 Mail.app 版本可能不暴露 headers / 老邮件
+# header 段坏掉, 取不到返空串, Python 端 _parse_thread_headers 返 None 静默.
 # BL-EMAIL-APPLEMAIL-INBOX-NAMES (5/18 鸿波实盘):
 #   Mail.app 在不同 IMAP provider 下 inbox 物理名不一样:
 #     - iCloud:   "INBOX" / "Inbox"
@@ -82,7 +86,20 @@ tell application "Mail"
         set dt to my isoDate(date received of m)
         set readSt to "1"
         if (read status of m) is false then set readSt to "0"
-        set out to out & msgId & FS & subj & FS & sndr & FS & dt & FS & readSt & FS & folderName & RS
+        -- P3.5.58: 拿 RFC 822 Message-ID + raw headers 给 Python 端 parse
+        -- thread (In-Reply-To / References). try 兜底某些 Mail.app 版本
+        -- 不暴露 headers 字段. 老邮件 / 内部转发 message id 可能为空.
+        set rfcMsgId to ""
+        try
+            set rfcMsgId to (message id of m) as string
+        end try
+        set rawHdrs to ""
+        try
+            -- Mail.app 5.x+ all headers 字段返完整 RFC 822 header section.
+            -- 不慢 (只读 cached header, 不取 body).
+            set rawHdrs to (all headers of m) as string
+        end try
+        set out to out & msgId & FS & subj & FS & sndr & FS & dt & FS & readSt & FS & folderName & FS & rfcMsgId & FS & rawHdrs & RS
         set i to i + 1
     end repeat
     return out
