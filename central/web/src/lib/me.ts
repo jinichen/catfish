@@ -175,18 +175,35 @@ export interface GlobalPerfFilter {
   dept?: string | null;
 }
 
+/** P3.5.60.1 (6/22 鸿波 catch "是太慢还是没有数据"): 不再 silent catch null —
+ *  返 {data, error} 让 caller 区分 loading / API 错 / 0 数据. 同 pattern 修整个
+ *  perf 链, fetchGlobalAudit 老接口不动 (向后兼容). */
+export interface FetchResult<T> {
+  data: T | null;
+  error: { status?: number; message: string } | null;
+}
+
 export async function fetchGlobalPerf(
   sinceHours: number = 24,
   filter: GlobalPerfFilter = {},
-): Promise<GlobalPerf | null> {
+): Promise<FetchResult<GlobalPerf>> {
   try {
     const q = new URLSearchParams();
     q.set("since_hours", String(sinceHours));
     if (filter.model) q.set("model", filter.model);
     if (filter.dept) q.set("dept", filter.dept);
-    return await api.get<GlobalPerf>(`/api/audit/global/perf?${q.toString()}`);
-  } catch {
-    return null;
+    const data = await api.get<GlobalPerf>(`/api/audit/global/perf?${q.toString()}`);
+    return { data, error: null };
+  } catch (e) {
+    const err = e as { status?: number; message?: string };
+    // 把 HttpError 透传 (404 = endpoint 没注册 / 没重启 gateway, 401 = 鉴权, 5xx = 真挂)
+    return {
+      data: null,
+      error: {
+        status: err.status,
+        message: err.message || String(e),
+      },
+    };
   }
 }
 

@@ -106,18 +106,25 @@ export function PerfPage() {
   const [deptFilter, setDeptFilter] = useState<string>("");
   const [perf, setPerf] = useState<GlobalPerf | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
+  // P3.5.60.1 (6/22 鸿波 catch "是太慢还是没有数据"): 不静默吞 error,
+  // loading / error / empty 三态各自展示, 用户能立刻区分.
+  const [error, setError] = useState<{ status?: number; message: string } | null>(null);
+  const [fetchedAt, setFetchedAt] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setError(null);
+    const startMs = Date.now();
     fetchGlobalPerf(hours, {
       model: modelFilter || null,
       dept: deptFilter || null,
     }).then((r) => {
-      if (!cancelled) {
-        setPerf(r);
-        setLoading(false);
-      }
+      if (cancelled) return;
+      setPerf(r.data);
+      setError(r.error);
+      setLoading(false);
+      setFetchedAt(Date.now() - startMs);
     });
     return () => {
       cancelled = true;
@@ -203,11 +210,60 @@ export function PerfPage() {
           {loading && (
             <span style={{ fontSize: 12, color: "var(--text-muted)" }}>加载中…</span>
           )}
+          {!loading && fetchedAt != null && perf && !error && (
+            <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+              · {fetchedAt}ms
+            </span>
+          )}
         </div>
       </Card>
 
+      {/* P3.5.60.1 (6/22 鸿波 catch "是太慢还是没有数据"): 3 态明确展示, 不再静默. */}
+      {loading && !perf && !error && (
+        <Card title="">
+          <div style={{ color: "var(--text-muted)", textAlign: "center", padding: 24 }}>
+            🔄 正在拉中央 audit, 长窗口 (7d/30d) PG PERCENTILE_CONT 几秒…
+          </div>
+        </Card>
+      )}
+
+      {error && (
+        <Card title="❌ 请求失败">
+          <div style={{ padding: 12 }}>
+            <div style={{ fontSize: 13, color: "var(--status-bad, #b91c1c)", marginBottom: 8 }}>
+              {error.status === 404
+                ? "endpoint /api/audit/global/perf 没注册 (404) — gateway 进程没重启? 这是 P3.5.60 新加 endpoint, 老 gateway 没这路由. 重启 8999 进程加载新 endpoint."
+                : error.status === 401
+                  ? "401 未认证 — 需要 admin/sysadmin role 才能看 /admin/perf."
+                  : error.status === 403
+                    ? "403 权限不够 — RBAC 卡了, 看 _require_admin 通过没."
+                    : error.status
+                      ? `HTTP ${error.status} — 中央 gateway 报错, 看 /var/log/catfish-gateway/ 或 docker logs catfish-gateway`
+                      : `网络 / fetch 失败: ${error.message.slice(0, 200)}`}
+            </div>
+            <details style={{ fontSize: 11, color: "var(--text-muted)" }}>
+              <summary style={{ cursor: "pointer" }}>真实错误 (devtool 用)</summary>
+              <pre
+                style={{
+                  background: "var(--bg-elev)",
+                  padding: 8,
+                  borderRadius: 4,
+                  marginTop: 6,
+                  overflowX: "auto",
+                  whiteSpace: "pre-wrap",
+                }}
+              >
+                status: {error.status ?? "(none)"}
+                {"\n"}
+                message: {error.message}
+              </pre>
+            </details>
+          </div>
+        </Card>
+      )}
+
       {/* KPI grid */}
-      {perf && (
+      {perf && !error && (
         <Card title="核心指标">
           <div
             style={{
@@ -353,11 +409,18 @@ export function PerfPage() {
         </Card>
       )}
 
-      {/* 空状态 */}
-      {perf && perf.request_count === 0 && !loading && (
-        <Card title="">
-          <div style={{ color: "var(--text-muted)", textAlign: "center", padding: 24 }}>
-            选定时间窗内没数据. 试试拉长窗口或砍 filter.
+      {/* 空状态 — perf 是真 0, 不是 fetch 失败 (失败上面 error Card 接管了) */}
+      {perf && !error && perf.request_count === 0 && !loading && (
+        <Card title="📭 这窗口内没数据">
+          <div style={{ color: "var(--text-muted)", padding: 16 }}>
+            <p style={{ margin: "0 0 8px 0" }}>
+              {perf.source === "none"
+                ? "中央 gateway_audit 表 + JSONL 都空 (新部署 / 还没员工跑过 LLM)."
+                : `${perf.source === "pg" ? "PG gateway_audit" : "JSONL audit"} 这窗口内没记录.`}
+            </p>
+            <p style={{ margin: 0, fontSize: 12 }}>
+              试: 拉长窗口 (7d/30d), 砍 filter, 或先去 Companion 跟小鲶聊几句让 audit 累点数据.
+            </p>
           </div>
         </Card>
       )}
