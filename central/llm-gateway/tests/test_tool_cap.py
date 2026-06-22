@@ -297,3 +297,85 @@ def test_is_always_on_helper_directly():
     assert is_always_on(None) is False  # type: ignore[arg-type]
     # 别的 MCP 前缀不识别 (只认 mcp_catfish_tools_)
     assert is_always_on("mcp_someother_server_web_search") is False
+
+
+# ── P3.5.70 (6/22 鸿波 catch "工作台拒调 execute_code") ──
+# 锁住 terminal/read_terminal 不暴露给 LLM 的架构. catfish 安全设计:
+# LLM 直调 shell 唯一通道 = execute_code (沙箱+审批). terminal 给 skill
+# 内部 dispatch 用, 不给 LLM tool list. 老 5/17 BL-HERMES-014-UPGRADE
+# 加 terminal 到 ALWAYS_ON 是失误, 本测锁回归.
+
+def test_terminal_not_in_always_on():
+    """P3.5.70: terminal/read_terminal 不在 ALWAYS_ON_TOOLS — 它们 hidden."""
+    from catfish_gateway.tools_sanitizer_constants import ALWAYS_ON_TOOLS
+    assert "terminal" not in ALWAYS_ON_TOOLS, "P3.5.70 红线: terminal 不该在 ALWAYS_ON"
+    assert "read_terminal" not in ALWAYS_ON_TOOLS
+
+
+def test_terminal_in_hidden_from_llm():
+    """P3.5.70: terminal/read_terminal 在 HIDDEN_FROM_LLM, sanitize 必砍."""
+    from catfish_gateway.tools_sanitizer_constants import HIDDEN_FROM_LLM
+    assert "terminal" in HIDDEN_FROM_LLM
+    assert "read_terminal" in HIDDEN_FROM_LLM
+
+
+def test_is_hidden_from_llm_helper():
+    """P3.5.70: is_hidden_from_llm() 同时认裸名 + MCP 前缀 (跟 is_always_on 对称)."""
+    from catfish_gateway.tools_sanitizer_constants import is_hidden_from_llm
+
+    # 裸名匹配
+    assert is_hidden_from_llm("terminal") is True
+    assert is_hidden_from_llm("read_terminal") is True
+    assert is_hidden_from_llm("catfish_remember") is True
+    # MCP 包装名 strip 后匹配 (老 bug: 没这层就 mcp_catfish_tools_terminal 漏砍)
+    assert is_hidden_from_llm("mcp_catfish_tools_terminal") is True
+    assert is_hidden_from_llm("mcp_catfish_tools_read_terminal") is True
+    assert is_hidden_from_llm("mcp_catfish_tools_catfish_remember") is True
+    # 不在 hidden
+    assert is_hidden_from_llm("execute_code") is False
+    assert is_hidden_from_llm("mcp_catfish_tools_execute_code") is False
+    # 边界
+    assert is_hidden_from_llm("") is False
+    assert is_hidden_from_llm(None) is False  # type: ignore[arg-type]
+
+
+def test_sanitize_drops_terminal(monkeypatch):
+    """P3.5.70: sanitize_tools 真砍 terminal 跟 mcp 前缀版本, LLM tool list 不含."""
+    monkeypatch.delenv("CATFISH_EXPOSE_TERMINAL", raising=False)
+    monkeypatch.delenv("CATFISH_EXPOSE_REMEMBER", raising=False)
+    body = {
+        "tools": [
+            _tool("terminal"),
+            _tool("mcp_catfish_tools_terminal"),
+            _tool("read_terminal"),
+            _tool("mcp_catfish_tools_read_terminal"),
+            _tool("execute_code"),  # 控制组: 不该砍
+            _tool("web_search"),    # 控制组: 不该砍
+        ],
+    }
+    result = sanitize_tools(body)
+    names = [t["function"]["name"] for t in result["tools"]]
+    # terminal / read_terminal 4 个变种全砍
+    assert "terminal" not in names
+    assert "read_terminal" not in names
+    assert "mcp_catfish_tools_terminal" not in names
+    assert "mcp_catfish_tools_read_terminal" not in names
+    # 控制组保留
+    assert "execute_code" in names
+    assert "web_search" in names
+
+
+def test_sanitize_keeps_terminal_when_env_override(monkeypatch):
+    """P3.5.70: CATFISH_EXPOSE_TERMINAL=1 时 terminal 恢复 expose (dept 信任高场景)."""
+    monkeypatch.setenv("CATFISH_EXPOSE_TERMINAL", "1")
+    body = {
+        "tools": [
+            _tool("terminal"),
+            _tool("mcp_catfish_tools_terminal"),
+        ],
+    }
+    result = sanitize_tools(body)
+    names = [t["function"]["name"] for t in result["tools"]]
+    # env override 后两个 variants 都保留
+    assert "terminal" in names
+    assert "mcp_catfish_tools_terminal" in names

@@ -56,6 +56,7 @@ from .tools_sanitizer_constants import (  # noqa: F401  re-export 保 caller 不
     MCP_CATFISH_PREFIX as _MCP_CATFISH_PREFIX,
     SOURCE_TOOL_PROFILES as _SOURCE_TOOL_PROFILES,
     is_always_on as _is_always_on,
+    is_hidden_from_llm as _is_hidden_from_llm,
 )
 
 logger = logging.getLogger("catfish.gateway.tools_sanitizer")
@@ -286,16 +287,32 @@ def sanitize_tools(
             dropped.append(f"#{idx}(function.name 非法: {name!r})")
             continue
 
-        # BL-MEMORY-CATFISH-REMEMBER-BLACKLIST (5/16 鸿波 A): 永不暴露 catfish_remember
-        # 给 LLM. 模型层硬不听 SOUL nudge, 这是釜底抽薪 — 没选择只能用 hermes memory.
-        # env CATFISH_EXPOSE_REMEMBER=1 操作员可一键还原 (调试用).
+        # BL-MEMORY-CATFISH-REMEMBER-BLACKLIST (5/16 鸿波 A) + P3.5.70 (6/22 鸿波 catch):
+        # 永不暴露 catfish_remember / catfish_memory_dedupe / catfish_memory_compress /
+        # terminal / read_terminal 给 LLM. 釜底抽薪 — 没选择只能走替代通道
+        # (memory → hermes builtin memory; terminal → execute_code 沙箱+审批).
+        #
+        # P3.5.70 修了老 bug: 老 `name in _HIDDEN_FROM_LLM` 只看裸名, 不处理 MCP 前缀,
+        # `mcp_catfish_tools_terminal` 这种带前缀的不被 filter 仍暴露给 LLM. 改用
+        # is_hidden_from_llm() helper (跟 is_always_on() 对称 prefix 剥).
+        #
+        # env override (调试 / dept 信任高需 LLM 直调):
+        #   CATFISH_EXPOSE_REMEMBER=1 → 恢复 catfish_remember + memory_dedupe + memory_compress
+        #   CATFISH_EXPOSE_TERMINAL=1 → 恢复 terminal + read_terminal
         import os  # noqa: PLC0415
-        if (
-            name in _HIDDEN_FROM_LLM
-            and os.environ.get("CATFISH_EXPOSE_REMEMBER", "0") != "1"
-        ):
-            dropped.append(f"#{idx}(name={name}: BL-MEMORY-CATFISH-REMEMBER-BLACKLIST, 强制走 hermes memory)")
-            continue
+        if _is_hidden_from_llm(name):
+            # 两个独立 env override — memory / terminal 各自决策
+            base_name = name[len(_MCP_CATFISH_PREFIX):] if name.startswith(_MCP_CATFISH_PREFIX) else name
+            is_memory_hidden = base_name in {"catfish_remember", "catfish_memory_dedupe", "catfish_memory_compress"}
+            is_terminal_hidden = base_name in {"terminal", "read_terminal"}
+            if is_memory_hidden and os.environ.get("CATFISH_EXPOSE_REMEMBER", "0") == "1":
+                pass  # env override → 继续 expose, 不丢
+            elif is_terminal_hidden and os.environ.get("CATFISH_EXPOSE_TERMINAL", "0") == "1":
+                pass  # env override → 继续 expose, 不丢
+            else:
+                tag = "P3.5.70-LLM-NO-DIRECT-SHELL" if is_terminal_hidden else "BL-MEMORY-CATFISH-REMEMBER-BLACKLIST"
+                dropped.append(f"#{idx}(name={name}: {tag}, 强制走替代通道)")
+                continue
 
         # BL-FIX4: 撞 hermes builtin browser_* — 跟 catfish_browser_* 同时存在时丢
         # ("browser_" 开头 + 不带 "catfish_" 前缀)

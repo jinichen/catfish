@@ -87,6 +87,17 @@ HIDDEN_FROM_LLM: frozenset[str] = frozenset({
     # 改 sanitizer if 加 env check).
     "catfish_memory_dedupe",
     "catfish_memory_compress",
+    # ── P3.5.70 (6/22 鸿波 catch "工作台拒调 execute_code 真因") ──
+    # terminal/read_terminal = hermes 自带直接跑 shell / 读 shell 历史. catfish
+    # 安全设计 = LLM 直调 shell 唯一通道 execute_code (强制沙箱 + 弹审批). 暴露
+    # terminal 给 LLM 撞红线设计: LLM 看到 tool list 含 terminal, SOUL.md 教 shell
+    # 红线 → LLM 困惑拒绝 → 给员工说 "你自己跑". 历史 5/17 hermes 0.14 升级时把
+    # terminal 加 ALWAYS_ON 是失误 (那时 execute_code 沙箱审批架构未落地).
+    # skill 内部 dispatch terminal 不经过 gateway sanitize_tools (走 tool-bridge 直
+    # dispatch), 不受影响 — 治本不误伤合法 skill 路径.
+    # 想恢复 (某 dept 信任高需 LLM 直调): env CATFISH_EXPOSE_TERMINAL=1.
+    "terminal",
+    "read_terminal",
 })
 
 
@@ -130,7 +141,11 @@ ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
     "write_file",        # 写文件
     "patch",             # hermes 0.14 取代 edit_file (统一 patch-style 编辑)
     "search_files",      # hermes 0.14 取代 search/grep/list_dir (统一搜索)
-    "terminal",          # hermes 0.14 取代 shell/bash
+    # P3.5.70 (6/22 鸿波 catch): "terminal" 移到 HIDDEN_FROM_LLM. catfish 安全
+    # 设计 LLM 直调 shell 唯一通道 = execute_code (沙箱+审批). terminal 暴露
+    # 给 LLM 撞红线设计, 历史 5/17 加进 ALWAYS_ON 是 hermes 0.14 升级时失误
+    # (那时 execute_code 沙箱+审批架构未落地). skill 内部仍可用 terminal (走
+    # tool-bridge dispatch, 不经过 gateway sanitize_tools 这关).
     "process",           # hermes 0.14 新加 (process 管理)
     "clarify",           # 跨问 / 求澄清
     "delegate_task",     # 派任务
@@ -162,6 +177,26 @@ def is_always_on(name: str) -> bool:
         return True
     if name.startswith(MCP_CATFISH_PREFIX):
         return name[len(MCP_CATFISH_PREFIX):] in ALWAYS_ON_TOOLS
+    return False
+
+
+def is_hidden_from_llm(name: str) -> bool:
+    """Hidden-from-LLM 判定 — 同时认裸名和 MCP 包装名 (P3.5.70 6/22 鸿波 catch).
+
+    跟 is_always_on() 对称. 历史 bug: tools_sanitizer.py 老 `name in
+    _HIDDEN_FROM_LLM` 检查只看裸名, 不处理 MCP 前缀 — `mcp_catfish_tools_terminal`
+    不会被 filter, 仍暴露给 LLM. 这个 helper 修了.
+
+    例: `terminal` 和 `mcp_catfish_tools_terminal` 都返 True.
+
+    用法: tools_sanitizer.py 老 `name in _HIDDEN_FROM_LLM` 检查改用 is_hidden_from_llm().
+    """
+    if not isinstance(name, str):
+        return False
+    if name in HIDDEN_FROM_LLM:
+        return True
+    if name.startswith(MCP_CATFISH_PREFIX):
+        return name[len(MCP_CATFISH_PREFIX):] in HIDDEN_FROM_LLM
     return False
 
 
