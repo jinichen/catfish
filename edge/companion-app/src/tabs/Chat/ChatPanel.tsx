@@ -193,7 +193,10 @@ export default function ChatPanel({
       {pending && (
         <div className="approval-banner">
           <div className="approval-banner__header">
-            <span>hermes 等批准</span>
+            {/* P3.5.73 (6/22 鸿波 catch): "hermes 等批准" → "等批准". SOUL.md
+                L5 品牌红线 "对外永不说: 我是 Hermes". 后面 pattern chip 自带
+                tool 名, 不需要 "hermes" 前缀做归属说明. */}
+            <span>等批准</span>
             <code className="pattern">{pending.pattern_key}</code>
             <span className="countdown" aria-live="polite">
               {secondsLeft}s
