@@ -7,7 +7,7 @@
  * BL-EMAIL-COMPOSE-SEND 红线: AI 不能绕过 panel 直发 send.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   emailCreateDraft,
@@ -24,6 +24,9 @@ import { _extractSenderName, _replyAddress } from "./helpers";
 import { draftEmailReply } from "../../../lib/emailDraft";
 import { useAgentStore } from "../../../store/agent";
 import { getPickerState } from "../../../lib/picker_state";
+// P3.5.58 (6/22 鸿波 catch "有回复了为啥还要让小鲶处理 是不是重复了"):
+// RFC 822 thread chain 算法 + 已回复 badge
+import { isReplied, formatReplyTime } from "../../../lib/emailThread";
 
 interface FullMessage extends EmailDigestItem {
   recipients?: string[];
@@ -74,13 +77,19 @@ function CollapsibleAddresses({ addrs, previewN = 3 }: { addrs: string[]; previe
 
 function DetailPane({
   msg,
+  list,
   onAskCatfish,
   onDeleted,
 }: {
   msg: FullMessage;
+  // P3.5.58 (6/22 鸿波): 全 list 传进来给 isReplied 算法用. 算"当前邮件
+  // 是否已被回复"必须扫整 list 找 in_reply_to/references 命中.
+  list: EmailDigestItem[];
   onAskCatfish: (m: FullMessage) => void;
   onDeleted: () => void;  // 5/18 BL-EMAIL-DELETE: 删除成功 → 父组件移除 item
 }) {
+  // P3.5.58: 算已回复状态. msg / list 任一变即重算 (useMemo 兜 O(N) 性能).
+  const replyStatus = useMemo(() => isReplied(msg, list), [msg, list]);
   const [drafting, setDrafting] = useState(false);
   const [draftResult, setDraftResult] = useState<string | null>(null);
   const [draftError, setDraftError] = useState<string | null>(null);
@@ -561,15 +570,50 @@ function DetailPane({
             </>
           )}
         </div>
+        {/* P3.5.58 (6/22 鸿波 catch): 已回复 badge — RFC 822 thread chain 算法.
+            ∃ R: R.in_reply_to == msg.message_id OR msg.message_id ∈ R.references.
+            老邮件 / 老 Mail.app 没 message_id 时 isReplied 返 false 静默不显. */}
+        {replyStatus.replied && (
+          <div
+            style={{
+              marginTop: 12,
+              padding: "6px 10px",
+              background: "rgba(34, 197, 94, 0.1)",
+              border: "1px solid rgba(34, 197, 94, 0.3)",
+              borderRadius: 4,
+              fontSize: 12,
+              color: "rgb(21, 128, 61)",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              flexWrap: "wrap",
+            }}
+            title="基于 RFC 822 thread headers 算的, 不是 fuzzy subject 比对"
+          >
+            <span>✓ 这封你已回复过 {replyStatus.replies.length} 次</span>
+            <span style={{ opacity: 0.7 }}>
+              最新 {formatReplyTime(replyStatus.replies[0]?.date || "")}
+              {replyStatus.replies[0]?.sender
+                ? ` 由 ${replyStatus.replies[0].sender.replace(/<[^>]+>/g, "").trim() || replyStatus.replies[0].sender}`
+                : ""}
+            </span>
+          </div>
+        )}
         {/* 行动按钮 */}
         <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap", alignItems: "center" }}>
           <button
             type="button"
             onClick={() => onAskCatfish(msg)}
             style={{
-              background: "var(--catfish-cyan)",
-              color: "#fff",
-              border: "none",
+              // P3.5.58: 已回复时按钮降级为次要色 (淡灰底+绿字), 让 user 视觉感知"这封
+              // 不是主要待办了". 不强禁 — user 可能想问后续是否要再回 (例如对方又问问题).
+              background: replyStatus.replied
+                ? "var(--catfish-bg)"
+                : "var(--catfish-cyan)",
+              color: replyStatus.replied ? "rgb(21, 128, 61)" : "#fff",
+              border: replyStatus.replied
+                ? "1px solid rgba(34, 197, 94, 0.4)"
+                : "none",
               borderRadius: 4,
               padding: "8px 16px",
               fontSize: 13,
@@ -577,8 +621,15 @@ function DetailPane({
               cursor: "pointer",
               fontFamily: "inherit",
             }}
+            title={
+              replyStatus.replied
+                ? `这封你已回复过 ${replyStatus.replies.length} 次. 仍想让小鲶看是不是要再回, 点这里.`
+                : "让小鲶在工作台 chat 里多轮聊这封怎么回"
+            }
           >
-            💬 让小鲶处理这封
+            {replyStatus.replied
+              ? `💬 已回复, 再看一下?`
+              : "💬 让小鲶处理这封"}
           </button>
           <button
             type="button"

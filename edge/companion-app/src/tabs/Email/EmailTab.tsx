@@ -470,6 +470,9 @@ export default function EmailTab() {
         {selectedId && detail && !detailLoading && (
           <DetailPane
             msg={detail}
+            // P3.5.58 (6/22 鸿波): 全 list 传给 DetailPane 让 isReplied 算法可见
+            // 所有邮件的 in_reply_to / references, 算"这封是不是已回复过".
+            list={items}
             onAskCatfish={handleAskCatfish}
             onDeleted={() => {
               // 5/18 BL-EMAIL-DELETE: 删除成功后从列表移除 + 清详情. 不重新拉

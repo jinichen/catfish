@@ -1064,6 +1064,13 @@ export interface EmailDigestItem {
   is_read: boolean;
   has_attachments: boolean;
   body_text: string;     // list 场景为 snippet
+  // P3.5.58 (6/22 鸿波 catch "有回复了为啥还让小鲶处理"): RFC 822 thread chain
+  // 三件套, 让 isReplied(msg, list) 算法可靠判定 — ∃ R: R.in_reply_to ==
+  // M.message_id OR M.message_id ∈ R.references.split().
+  // 老邮件 / 老 Mail.app 版本可能为 undefined, 算法兜空.
+  message_id?: string;   // RFC 822 Message-ID, 形如 <abc@x.com>
+  in_reply_to?: string;  // RFC 822 In-Reply-To, 直接父级 Message-ID
+  references?: string;   // RFC 822 References, 空格分隔的完整祖先链
 }
 /** catfish-email accounts --json 单条 schema.
  * BL-EMAIL-MULTI-CLIENT (5/18): 多客户端时每个 account 多了 client 字段标识来源.
