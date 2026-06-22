@@ -153,6 +153,13 @@ _PATCH_TARGETS = [
     ("agent.auxiliary_client", "_normalize_main_runtime", "func"),
     ("agent.title_generator", "auto_title_session", "func"),
     ("gateway.platforms.api_server", "APIServerAdapter", "attr"),
+    # P15.1 (6/22): hermes v0.17 _is_gateway_approval_context() 检查
+    # HERMES_SESSION_PLATFORM contextvar. P15 patch 必须调 set_session_vars()
+    # set platform="api_server" 让 check_execute_code_guard 走 gateway approval
+    # 路径弹按钮. 列入 _PATCH_TARGETS fail-loud: hermes 重构掉这俩函数 →
+    # plugin install 时 ImportError 立刻报, 而不是 silent skip 让按钮不弹.
+    ("gateway.session_context", "set_session_vars", "func"),
+    ("gateway.session_context", "clear_session_vars", "func"),
 ]
 
 _AIAGENT_METHOD_TARGETS = [
@@ -1618,6 +1625,10 @@ def _patch_p15_chat_completions_approval() -> None:
     """patch APIServerAdapter._run_agent — chat/completions 注入 _approval_notify."""
     try:
         from gateway.platforms.api_server import APIServerAdapter
+        from gateway.session_context import (
+            clear_session_vars,
+            set_session_vars,
+        )
         from tools.approval import (
             register_gateway_notify,
             reset_current_session_key,
@@ -1695,9 +1706,35 @@ def _patch_p15_chat_completions_approval() -> None:
             except Exception as e:  # noqa: BLE001
                 logger.debug("P15: set_current_session_key 失败 (%s)", e)
 
+        # P15.1 (6/22 鸿波 catch "审批按钮没了"): hermes v0.17 升级新加
+        # _is_gateway_approval_context() gate (approval.py:134-152) 检查
+        # HERMES_SESSION_PLATFORM contextvar. check_execute_code_guard:1710
+        # 拿 is_gateway, line 1738 `if not is_gateway: return {"approved": True}`
+        # — 没 set platform → silent auto-approve, **按钮永远不弹**.
+        #
+        # hermes /v1/runs path (api_server.py:3870) 走 set_session_vars(
+        #   platform="api_server", session_key=...). 这步是把 _SESSION_PLATFORM
+        # contextvar set 成 "api_server" → _is_gateway_approval_context() 返 True.
+        #
+        # P15 当初写时 hermes 没这检查, v0.17 升级 silent break. 跟 /v1/runs 对齐.
+        session_tokens: list = []
+        if sid:
+            try:
+                session_tokens = set_session_vars(
+                    platform="api_server",
+                    session_key=sid,
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.debug("P15.1: set_session_vars 失败 (%s)", e)
+
         try:
             return await _orig(self, *args, **kwargs)
         finally:
+            if session_tokens:
+                try:
+                    clear_session_vars(session_tokens)
+                except Exception:  # noqa: BLE001
+                    pass
             if approval_token is not None:
                 try:
                     reset_current_session_key(approval_token)
