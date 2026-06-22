@@ -164,6 +164,11 @@ _PATCH_TARGETS = [
     # 的 target. hermes 重构掉这函数 → plugin install 时 fail-loud 报, 不让 cron
     # silent 走老路径.
     ("cron.scheduler", "run_job", "func"),
+    # P22 (P3.5.76, 6/22): hermes toolsets._HERMES_CORE_TOOLS — bookkeep_* pin
+    # to core 的 target. hermes 把它换成 frozenset / 重命名 → plugin install
+    # fail-loud, 不让 bookkeep silent 被 tool_search defer (导致 LLM 看不见,
+    # 退化用 execute_code 探查 ~/.catfish/).
+    ("toolsets", "_HERMES_CORE_TOOLS", "attr"),
 ]
 
 _AIAGENT_METHOD_TARGETS = [
@@ -429,6 +434,18 @@ def _apply_patches() -> None:
     except Exception as e:  # noqa: BLE001
         logger.error(
             "P21: _patch_p21_cron_picker_integration 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
+            e, exc_info=True,
+        )
+
+    # P22 (P3.5.76 6/22 鸿波): pin bookkeep_* 到 _HERMES_CORE_TOOLS — LLM 永不
+    # 看不见 (修 P3.5.75 ship 后真聊 "今天午饭 13块" LLM 调 execute_code 探查
+    # ~/.catfish/ 而不是 bookkeep_add 的真因 — tool_search progressive disclosure
+    # defer 了 plugin-registered tool, 28 core/visible 里没 bookkeep_*).
+    try:
+        _patch_p22_pin_bookkeep_to_core_tools()
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "P22: _patch_p22_pin_bookkeep_to_core_tools 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
             e, exc_info=True,
         )
 
@@ -2447,6 +2464,96 @@ def _patch_p21_cron_picker_integration() -> None:
         "P21 cron picker integration patched — cron job model 跟 picker_state.json "
         "联动 (优先级: picker > job.model > yaml.default > env) ✓"
     )
+
+
+# ── P22 (P3.5.76, 6/22 鸿波): pin bookkeep_* to _HERMES_CORE_TOOLS ─────────
+
+
+# 6/22 BL-BOOKKEEP-CORE-PIN (P3.5.76): 真因 audit ① + ② + ③ + ⑭ 完整链:
+#
+#   ① catfish-bookkeep plugin 注册 3 tool: bookkeep_add / query / summarize
+#      (P3.5.75 ship, agent.log "catfish-bookkeep plugin registered ✓ 3/3 tools")
+#   ② 鸿波真聊 "今天午饭 13块" → LLM 完全不调 bookkeep_add, 反而调 execute_code
+#      探查 ~/.catfish/ (列出 catfish_memory_state.json / picker_state.json /
+#      employee_journal.md 等 10+ 状态文件), 完全跑偏
+#   ③ agent.log "tool_search activated: 28 core/visible tools kept, 139 deferred"
+#      = hermes tool_search progressive disclosure 把 bookkeep_* 真**defer 了**
+#      (LLM 看不见, 167 总 tools 里只 surface 28 core)
+#   ⑭ 真因 = tool_search.is_deferrable_tool_name() 对 plugin-registered tool
+#      (non-MCP, non-core) 一律标 deferrable. 而 _core_tool_names() 是 lazy
+#      读 toolsets._HERMES_CORE_TOOLS, 这个 list 是 hermes builtin 28 个 (web /
+#      terminal / read_file / execute_code / memory / todo / cronjob / ...).
+#      bookkeep 不在里面.
+#
+# 修法 (跟 P15/P20/P21 同款 monkey-patch, 不 fork hermes): append bookkeep_*
+# 三个 name 到 toolsets._HERMES_CORE_TOOLS list (in-place 修改). _core_tool_names()
+# lazy 读自动 pick up, is_deferrable_tool_name(bookkeep_add) 返 False.
+#
+# 副作用: bookkeep_* 始终 visible (永不 defer), 跟 execute_code / memory / todo
+# 同档. 鸿波想跟 "用 execute_code 做账" 的歧义博弈 = 把 bookkeep 升 core, LLM
+# 必看见. tool description (P3.5.72 风格) 接力做 trigger 词命中.
+#
+# fail-safe: hermes toolsets module 没导 → silent fallback (bookkeep 仍 defer,
+# LLM 走 execute_code, 退化但不崩). _PATCH_TARGETS 加
+# ("toolsets", "_HERMES_CORE_TOOLS", "attr") fail-loud verify.
+
+_BOOKKEEP_CORE_TOOLS = ("bookkeep_add", "bookkeep_query", "bookkeep_summarize")
+
+
+def _patch_p22_pin_bookkeep_to_core_tools() -> None:
+    """pin bookkeep_* 到 hermes _HERMES_CORE_TOOLS — LLM 永远看得见, 不被 defer.
+
+    hermes tool_search.is_deferrable_tool_name 决策:
+        if name in _core_tool_names():  # frozenset(toolsets._HERMES_CORE_TOOLS)
+            return False  # never defer
+
+    _core_tool_names() 是 lazy 读 (tool_search.py 每次调函数都重新 frozenset),
+    没 cache. 所以 in-place append 到 _HERMES_CORE_TOOLS list 立刻生效.
+
+    note: _HERMES_CORE_TOOLS list 在 toolsets.py 还被 platform toolset 定义引用
+    (line 425/436/442/448/457/463/469/475/481), 改 list 这些 toolset 跟着拿到
+    bookkeep_*. 这是 catfish 主动想要的副作用 — 所有 hermes 平台 (Discord /
+    Slack / Telegram / Teams / CLI) 都能看见 bookkeep tool.
+    """
+    try:
+        import toolsets as _toolsets  # noqa: PLC0415
+    except ImportError as e:
+        logger.warning("P22: hermes toolsets module 没导, skip patch (%s)", e)
+        return
+
+    core = getattr(_toolsets, "_HERMES_CORE_TOOLS", None)
+    if core is None:
+        logger.warning(
+            "P22: toolsets._HERMES_CORE_TOOLS 不存在 (hermes 重构?), skip patch. "
+            "bookkeep_* 会被 tool_search defer, LLM 退化用 execute_code 探查."
+        )
+        return
+
+    if not isinstance(core, list):
+        logger.warning(
+            "P22: toolsets._HERMES_CORE_TOOLS 不是 list (got %s, hermes 换成 frozenset?), "
+            "无法 in-place append, skip patch. bookkeep_* 会被 defer.",
+            type(core).__name__,
+        )
+        return
+
+    added = []
+    for name in _BOOKKEEP_CORE_TOOLS:
+        if name not in core:
+            core.append(name)
+            added.append(name)
+
+    if added:
+        logger.info(
+            "P22 pin bookkeep_* to core: 加 %d tool 到 _HERMES_CORE_TOOLS (%s) ✓ "
+            "(tool_search 永不 defer, LLM 看 '今天午饭 13块' 直接 dispatch bookkeep_add)",
+            len(added), ", ".join(added),
+        )
+    else:
+        logger.info(
+            "P22 pin bookkeep_* to core: 已在 _HERMES_CORE_TOOLS (idempotent skip, %d total)",
+            len(core),
+        )
 
 
 # hermes 0.14+ plugin discovery 自动调 __init__.py 里的 install() 或类似 hook.
