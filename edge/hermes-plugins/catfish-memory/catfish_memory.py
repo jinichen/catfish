@@ -157,6 +157,99 @@ def _jaccard_similarity(a: set, b: set) -> float:
     return inter / union if union > 0 else 0.0
 
 
+# ── P3.5.78 (6/22 鸿波): expense kind helpers — 收支记账 ──
+#
+# 从 catfish-bookkeep plugin (P3.5.75 已 revert) 搬过来, 内嵌作 module-level
+# helpers, 跟 _query_token_set / _jaccard_similarity 同款位置. _route_to_expense
+# 用. jsonl schema 跟 P3.5.75 完全兼容 (你昨晚那条 bk_20260622_224824_9868 保留).
+
+def _expense_gen_id() -> str:
+    """生成 bk_<YYYYMMDD_HHMMSS>_<4 hex> id (本地时间 + 4hex 随机后缀防 race).
+
+    跟 P3.5.75 bookkeep.py _gen_id 同款格式.
+    """
+    import secrets
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    suf = secrets.token_hex(2)
+    return f"bk_{ts}_{suf}"
+
+
+def _expense_parse_date_to_iso(date_str: Optional[str]) -> str:
+    """ISO8601 解析 — '2026-06-21' 或 '2026-06-21T12:00:00' 都接.
+
+    空 / 解析失败 → fallback now (本地 tz). 不抛 (LLM 给坏 date 不让记账失败).
+    """
+    if not date_str:
+        return datetime.now().astimezone().isoformat(timespec="seconds")
+    try:
+        if "T" in date_str:
+            dt = datetime.fromisoformat(date_str)
+        else:
+            dt = datetime.fromisoformat(f"{date_str}T12:00:00")
+        if dt.tzinfo is None:
+            dt = dt.astimezone()
+        return dt.isoformat(timespec="seconds")
+    except (ValueError, TypeError):
+        logger.warning("expense date 解析失败 (%r), fallback now", date_str)
+        return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _expense_append_record(catfish_home: Path, record: Dict[str, Any]) -> None:
+    """append 一条 bookkeep.jsonl. 父目录不存在自动建."""
+    path = catfish_home / "bookkeep.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+    with path.open("a", encoding="utf-8") as f:
+        f.write(line + "\n")
+
+
+def _expense_read_all(catfish_home: Path) -> List[Dict[str, Any]]:
+    """读全 bookkeep.jsonl 记录. 不存在 / 解析失败行 → 跳过."""
+    path = catfish_home / "bookkeep.jsonl"
+    if not path.exists():
+        return []
+    out: List[Dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+            if isinstance(obj, dict):
+                out.append(obj)
+        except (json.JSONDecodeError, ValueError):
+            continue
+    return out
+
+
+def _expense_summarize_window(
+    records: List[Dict[str, Any]], since_epoch: float
+) -> Tuple[float, float, int]:
+    """聚合 since_epoch 之后的: (total_in, total_out, count)."""
+    total_in = 0.0
+    total_out = 0.0
+    n = 0
+    for r in records:
+        ts = r.get("ts", "")
+        try:
+            if "T" not in ts:
+                continue
+            dt = datetime.fromisoformat(ts)
+            if dt.tzinfo is None:
+                dt = dt.astimezone()
+            if dt.timestamp() < since_epoch:
+                continue
+        except (ValueError, TypeError):
+            continue
+        n += 1
+        amount = float(r.get("amount") or 0)
+        if r.get("kind") == "收入":
+            total_in += amount
+        elif r.get("kind") == "支出":
+            total_out += amount
+    return round(total_in, 2), round(total_out, 2), n
+
+
 # 5/21 拆: 50+ helpers 抽到 catfish_memory_helpers.py (~523 行)
 # 5/28 鸿波修: 原注释里说"不能 relative import" 是错的 — hermes plugin loader
 # (~/.hermes/hermes-agent/plugins/memory/__init__.py line 240-255) 用
@@ -417,6 +510,13 @@ class CatfishMemoryProvider(MemoryProvider):
         if meta:
             sections.append(meta)
 
+        # 1b. P3.5.78 (6/22 鸿波): expense summary — 注入最近收支 (今日/本月/累计).
+        # 跟 session_meta 同款轻量化, 让 LLM 看 prefetch 知道 expense 数据存在,
+        # 员工问 "今天花了多少" 直接基于 prefetch 答, 不需要 query tool.
+        expense_summary = self._render_expense_summary(catfish_home)
+        if expense_summary:
+            sections.append(expense_summary)
+
         # P3.5.5 sparse: 下面 7 段是 advisor 不需要的 (employee_journal / wiki /
         #   skills_catalog / strategic_docs / feedback / skill_guard / schema 已上面跳过).
         #   advisor 自己 user prompt 已注入 distilled + memory + todos + emails 完整上下文.
@@ -542,34 +642,42 @@ class CatfishMemoryProvider(MemoryProvider):
         (AUTHORITATIVE)" 标记. schema 教 LLM 写到哪里去 (路由规则),
         memory_discipline 教写什么不该写 (内容纪律). 互补.
 
-        当前 schema 显式列 5 kind router + 4 个长期存储位置的分工.
+        P3.5.78 (6/22 鸿波 catch): 5 → 6 kind, 加 expense (收支记账). 真因 audit:
+        6 月 22 日 P3.5.75 ship 独立 bookkeep plugin 后 LLM 看"19号加油300" 跑偏到
+        journal — 因为 schema 决策树没收 expense, catch-all 第 6 条 "80% journal"
+        把 LLM 锁死. 治本: expense 进 schema 第 6 kind, 跟 todo/journal 同款分流.
         """
         return (
             "## 📐 catfish memory schema (AUTHORITATIVE)\n\n"
-            "**5 kind memory router** (调 `memory` tool 时 `kind` 必填):\n\n"
+            "**6 kind memory router** (调 `memory` tool 时 `kind` 必填):\n\n"
             "| kind | 路由到哪 | 用来存什么 |\n"
             "|---|---|---|\n"
             "| `identity` | `~/.hermes/memories/USER.md` (cap 3500 chars) | 员工本人 — 身份/偏好/习惯/昵称/关系 |\n"
             "| `project_fact` | `~/.hermes/memories/MEMORY.md` (cap 5000 chars) | 项目/技术常量 — 资质评估流程/工具配置/平台特征 |\n"
             "| `workflow` | hint → 调 `catfish_propose_skill` | 多步流程 — 有 step 序列的全部 |\n"
             "| `journal` | `~/.catfish/employee_journal.md` (append) | 本次会话总结 / 已发生事件 / pending TODO |\n"
-            "| `todo` | hint → 调 `catfish_reminder_create` | 带 deadline 的任务 (会写 Reminders.app) |\n\n"
+            "| `todo` | hint → 调 `catfish_reminder_create` | 带 deadline 的任务 (会写 Reminders.app) |\n"
+            "| `expense` | `~/.catfish/bookkeep.jsonl` (append) | 收支记账 — 员工说花/付/买/收/卖/加油/吃饭 + 金额 |\n\n"
             "**4 个长期存储分工**:\n\n"
             "- **USER.md (identity)** — 员工本人, 一年后还成立. 例: 偏好直接输出不要确认.\n"
             "- **MEMORY.md (project_fact)** — 项目/技术常量, 跨 session 稳定. 例: 资质评估流程.\n"
             "- **employee_journal.md (chronological)** — 时间线日志, append-only. 格式严格:\n"
             "  `## [YYYY-MM-DD HH:MM] kind | title` 一行 (parseable by `grep '^## \\['`).\n"
             "- **distilled_facts.md (LLM 蒸馏)** — 自动从 journal 蒸馏的长期记忆,\n"
-            "  每 24h 由 catfish-memory plugin 跑. 员工只读不写.\n\n"
+            "  每 24h 由 catfish-memory plugin 跑. 员工只读不写.\n"
+            "- **bookkeep.jsonl (expense)** — 收支流水, append-only. 每行 1 笔, schema:\n"
+            "  `{id, ts, kind(支出/收入), amount, category, note}`. expense kind 调时填\n"
+            "  `direction (支出/收入) + amount + category + note + date`.\n\n"
             "**SKILL.md (~/.hermes/skills/<name>/SKILL.md)** — 真正的 workflow / spec\n"
             "/ 触发词住这里, **不要**写进 MEMORY.md.\n\n"
             "**路由决策树** (调 memory 前自查):\n"
             "1. 员工本人的事? → identity → USER.md\n"
             "2. 项目/技术常量? → project_fact → MEMORY.md\n"
             "3. 多步流程? → workflow → 改调 catfish_propose_skill\n"
-            "4. 这次会话的事 / 已发生事件? → journal → employee_journal.md\n"
-            "5. 带 deadline 的任务? → todo → 改调 catfish_reminder_create\n"
-            "6. 拿不准 → 80% 概率属于 journal, 不属于 identity/project_fact\n"
+            "4. **金额数字 + 消费/收入动词** (花/付/买/收/卖/加油/吃饭/打车/工资)? → **expense → bookkeep.jsonl**\n"
+            "5. 这次会话的事 / 已发生事件? → journal → employee_journal.md\n"
+            "6. 带 deadline 的任务? → todo → 改调 catfish_reminder_create\n"
+            "7. 拿不准 → 先看是不是 expense (金额数字+动词), 再 fallback journal\n"
         )
 
     def _render_safety_redline(self) -> str:
@@ -670,6 +778,61 @@ class CatfishMemoryProvider(MemoryProvider):
             return f"## 🕒 时间感\n\n上次聊天: {last} (catfish session_meta)"
         except (OSError, json.JSONDecodeError) as e:
             logger.debug("session_meta render 失败 %s", e)
+            return ""
+
+    def _render_expense_summary(self, catfish_home: Path) -> str:
+        """P3.5.78 (6/22 鸿波): 注入 expense 最近收支 summary.
+
+        跟 _render_session_meta 同款轻量化 — 不全量列 jsonl, 只算 (今日/本周/本月)
+        × (支出/收入/笔数). LLM 看 prefetch 自然知道 expense 数据存在, 员工问
+        "今天花了多少" 直接基于 prefetch 答, 不需要 bookkeep_query tool.
+
+        jsonl 不存在 / 解析失败 → 返空 (不影响其它 section).
+        """
+        try:
+            records = _expense_read_all(catfish_home)
+            if not records:
+                return ""
+
+            now = datetime.now().astimezone()
+            now_epoch = now.timestamp()
+
+            # 今日: 00:00 起
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            today_in, today_out, today_n = _expense_summarize_window(
+                records, today_start.timestamp()
+            )
+
+            # 本月: 当月 1 日 00:00 起
+            month_start = today_start.replace(day=1)
+            month_in, month_out, month_n = _expense_summarize_window(
+                records, month_start.timestamp()
+            )
+
+            # 全部
+            all_in, all_out, all_n = _expense_summarize_window(records, 0)
+
+            lines = ["## 💸 收支 (catfish bookkeep)"]
+            if today_n > 0:
+                lines.append(
+                    f"- 今日: 支出 ¥{today_out:.2f} / 收入 ¥{today_in:.2f} "
+                    f"/ 净 {today_in - today_out:+.2f} ({today_n} 笔)"
+                )
+            if month_n > 0:
+                lines.append(
+                    f"- 本月: 支出 ¥{month_out:.2f} / 收入 ¥{month_in:.2f} "
+                    f"/ 净 {month_in - month_out:+.2f} ({month_n} 笔)"
+                )
+            if all_n > 0:
+                lines.append(
+                    f"- 累计: 支出 ¥{all_out:.2f} / 收入 ¥{all_in:.2f} "
+                    f"/ 净 {all_in - all_out:+.2f} ({all_n} 笔)"
+                )
+            if len(lines) == 1:
+                return ""  # 只有标题没数据, 跳过
+            return "\n".join(lines)
+        except (OSError, ValueError) as e:
+            logger.debug("expense_summary render 失败 %s", e)
             return ""
 
     def _tick_session_meta(self) -> None:
@@ -1065,7 +1228,13 @@ class CatfishMemoryProvider(MemoryProvider):
     # 5 选 1 + schema 清晰 description → 命中率 95%+ (从原 30% 降到 5% 跑偏).
 
     def get_catfish_memory_schema(self) -> Dict[str, Any]:
-        """LLM 看到的 memory tool schema. 替换 hermes 原 2 选 1 target 为 5 选 1 kind."""
+        """LLM 看到的 memory tool schema. 替换 hermes 原 2 选 1 target 为 6 选 1 kind.
+
+        P3.5.78 (6/22 鸿波 catch): 加第 6 kind = expense (记账). 真因 audit ⑦+⑩:
+        P3.5.75 把 bookkeep 做成独立 plugin → LLM 跟 catfish-memory schema 5 kind
+        决策树冲突, LLM 看 "19号加油300" → 走 journal/skill 路径. 治本: bookkeep
+        融进 memory 第 6 kind, 决策树自然命中, 不需要硬编码 SOUL.md / 改 description.
+        """
         return {
             "type": "object",
             "properties": {
@@ -1076,7 +1245,7 @@ class CatfishMemoryProvider(MemoryProvider):
                 },
                 "kind": {
                     "type": "string",
-                    "enum": ["identity", "project_fact", "workflow", "journal", "todo"],
+                    "enum": ["identity", "project_fact", "workflow", "journal", "todo", "expense"],
                     "description": (
                         "内容性质 (必填, 决定存哪):\n"
                         "- identity: 关于员工**这个人**的稳定事实 (姓名/部门/偏好/沟通风格) → USER.md\n"
@@ -1084,16 +1253,48 @@ class CatfishMemoryProvider(MemoryProvider):
                         "- workflow: 工作**流程** (有 input/output/step 序列) → 自动提议存成 skill\n"
                         "- journal: 已发生**事件**/session 总结/会议记录 → 写 catfish 员工日志 (不是 memory)\n"
                         "- todo: 带 deadline 的**待办任务** → 自动转 macOS Reminders (不是 memory)\n"
-                        "拿不准 → 80% 概率是 journal 不是 identity/project_fact."
+                        "- expense: **收支记账** (员工说 花/付/买/收/卖/加油/吃饭 + 金额数字, "
+                        "e.g. '今天午饭13', '加油300', '工资25000到账') → ~/.catfish/bookkeep.jsonl\n"
+                        "拿不准 → 先看是不是 expense (金额数字+消费/收入动词), 再 fallback journal."
                     ),
                 },
                 "content": {
                     "type": "string",
-                    "description": "要存的内容 (action=add/replace 必填)",
+                    "description": "要存的内容 (action=add/replace 必填; kind=expense 时可空, 用下面 amount/direction 等)",
                 },
                 "old_text": {
                     "type": "string",
                     "description": "要替换/删除的旧文本 (action=replace/remove 必填, 唯一短 substring)",
+                },
+                # ── kind=expense 专用字段 (其他 kind 忽略) ──
+                # P3.5.78: 6/22 鸿波拍 — 强 schema 比弱 content string parse 更稳,
+                # LLM 调用清晰. 这 5 字段仅在 kind=expense 时生效.
+                "direction": {
+                    "type": "string",
+                    "enum": ["支出", "收入"],
+                    "description": "(kind=expense 必填) 支出 (花钱) 或 收入 (收钱)",
+                },
+                "amount": {
+                    "type": "number",
+                    "description": "(kind=expense 必填) CNY 金额, 数字 > 0. 例: 13, 320.5",
+                },
+                "category": {
+                    "type": "string",
+                    "description": (
+                        "(kind=expense 推荐) 分类. 鼓励 8 默认: "
+                        "餐饮/交通/购物/工资/医疗/转账/房租/其他. 不填默认 '其他'."
+                    ),
+                },
+                "note": {
+                    "type": "string",
+                    "description": "(kind=expense 可选) 备注. 例: '中午外卖', '加油', '工资到账'",
+                },
+                "date": {
+                    "type": "string",
+                    "description": (
+                        "(kind=expense 可选) 日期 ISO8601 ('2026-06-21' 或 '2026-06-21T12:00:00'). "
+                        "不填默认现在. 员工说'昨天/上周/19号' 你自己算绝对日期填."
+                    ),
                 },
             },
             "required": ["action", "kind"],
@@ -1113,7 +1314,7 @@ class CatfishMemoryProvider(MemoryProvider):
         if not kind:
             return _json.dumps({
                 "success": False,
-                "error": "kind 必填 (identity/project_fact/workflow/journal/todo).",
+                "error": "kind 必填 (identity/project_fact/workflow/journal/todo/expense).",
             }, ensure_ascii=False)
 
         # action=replace / remove 仍走 hermes 原生 (改 USER.md / MEMORY.md 入口)
@@ -1128,6 +1329,10 @@ class CatfishMemoryProvider(MemoryProvider):
                 return self._route_to_journal(content)
             elif kind == "workflow":
                 return self._route_to_propose_skill(content)
+            elif kind == "expense":
+                # P3.5.78 (6/22 鸿波): 第 6 kind. 走 _route_to_expense, append
+                # ~/.catfish/bookkeep.jsonl. 跟 P3.5.75 jsonl schema 完全兼容.
+                return self._route_to_expense(args)
             elif kind == "identity":
                 return self._call_hermes_original_memory_tool(
                     {**args, "target": "user"}, **kw
@@ -1139,7 +1344,7 @@ class CatfishMemoryProvider(MemoryProvider):
             else:
                 return _json.dumps({
                     "success": False,
-                    "error": f"unknown kind '{kind}'. 看 schema 选 5 个之一.",
+                    "error": f"unknown kind '{kind}'. 看 schema 选 6 个之一.",
                 }, ensure_ascii=False)
         except Exception as e:  # noqa: BLE001
             logger.exception("catfish memory router 异常: %s", e)
@@ -1236,6 +1441,98 @@ class CatfishMemoryProvider(MemoryProvider):
             ),
             "content_recap": content[:200],
         }, ensure_ascii=False)
+
+    # ── P3.5.78 (6/22 鸿波): kind=expense 路由 — 收支记账 ──────────────
+    #
+    # 真因 audit (鸿波 6/22 catch P3.5.75 后真聊 "19号加油300" 跑偏):
+    #   P3.5.75 把 bookkeep 做成独立 plugin (bookkeep_add/query/summarize tool).
+    #   但 catfish-memory `_render_schema` 5 kind 决策树是 AUTHORITATIVE 注入 LLM,
+    #   LLM 看 "19号加油300" → 命中第 4 条 (会话事件) → journal, **看不见 bookkeep
+    #   范式存在**. P22 patch 把 bookkeep_* pin 到 _HERMES_CORE_TOOLS 仍解决不了 —
+    #   schema prime 比 tool list 强势.
+    #
+    # 治本: bookkeep 整进 memory 第 6 kind, 跟 todo/journal 同款"分流到专用文件".
+    # 决策树自然命中 expense, 不再硬编码 SOUL.md / bookkeep description.
+    #
+    # jsonl schema 跟 P3.5.75 完全兼容 (你昨晚 bk_20260622_224824_9868 那条保留):
+    #   {"id": "bk_<YYYYMMDD>_<HHMMSS>_<4hex>",
+    #    "ts": "<ISO8601 local>",
+    #    "kind": "支出"|"收入",    ← LLM schema 用 direction, jsonl 仍叫 kind
+    #    "amount": <float CNY>,
+    #    "category": "<8 默认或自填>",
+    #    "note": "<可空>"}
+
+    #: 默认 8 类 — LLM 可自填新的, 不强校验
+    _EXPENSE_DEFAULT_CATEGORIES = [
+        "餐饮", "交通", "购物", "工资", "医疗", "转账", "房租", "其他",
+    ]
+
+    def _route_to_expense(self, args: Dict[str, Any]) -> str:
+        """kind=expense → append ~/.catfish/bookkeep.jsonl.
+
+        schema 字段:
+          - direction: "支出" | "收入"  (必填)
+          - amount: float (必填, > 0)
+          - category: str (可选, 默认 '其他')
+          - note: str (可选)
+          - date: ISO8601 str (可选, 默认 now)
+        """
+        import json as _json
+
+        direction = args.get("direction")
+        amount_raw = args.get("amount")
+        if direction not in ("支出", "收入"):
+            return _json.dumps({
+                "success": False,
+                "error": "kind=expense: direction 必填且必须 '支出' 或 '收入'",
+            }, ensure_ascii=False)
+        try:
+            amount = float(amount_raw)
+        except (TypeError, ValueError):
+            return _json.dumps({
+                "success": False,
+                "error": f"kind=expense: amount 必须是数字, got {amount_raw!r}",
+            }, ensure_ascii=False)
+        if amount <= 0:
+            return _json.dumps({
+                "success": False,
+                "error": "kind=expense: amount 必须 > 0",
+            }, ensure_ascii=False)
+
+        category = args.get("category") or "其他"
+        note = args.get("note") or ""
+        date_str = args.get("date")
+        ts = _expense_parse_date_to_iso(date_str)
+
+        catfish_home = self._catfish_home_cached or _catfish_home()
+        record = {
+            "id": _expense_gen_id(),
+            "ts": ts,
+            "kind": str(direction),  # P3.5.75 兼容: jsonl row 字段名仍叫 "kind"
+            "amount": round(amount, 2),
+            "category": str(category),
+            "note": str(note),
+        }
+
+        try:
+            _expense_append_record(catfish_home, record)
+            logger.info(
+                "_route_to_expense: id=%s direction=%s amount=%.2f category=%s",
+                record["id"], direction, amount, category,
+            )
+            return _json.dumps({
+                "success": True,
+                "routed_to": "bookkeep.jsonl",
+                "id": record["id"],
+                "recorded": record,
+                "message": f"记一笔 {direction} {amount:.2f} ({category})",
+            }, ensure_ascii=False)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("_route_to_expense 异常")
+            return _json.dumps({
+                "success": False,
+                "error": f"expense 写失败: {e}",
+            }, ensure_ascii=False)
 
     # ── 写路径: sync_turn + 节流 (BL-MEMORY-SYNC-TURN-REFACTOR, 5/20) ───
     #

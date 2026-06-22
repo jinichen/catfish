@@ -1,8 +1,0 @@
-name: catfish-bookkeep
-version: 0.1.0
-# 显式声明 kind=standalone — 阻止 hermes_cli/plugins.py auto-detect 误归类:
-# 我们 __init__.py docstring 提了 "register_tool" 等关键字, 关键词撞 auto-detect
-# 会被误归 exclusive plugin family, 跳过 general loader → register() 永不被调.
-# 跟 catfish-xcatfish-user 同款显式声明.
-kind: standalone
-description: "Catfish 本地记账 — 注册 3 tool (bookkeep_add / bookkeep_query / bookkeep_summarize), 数据落 ~/.catfish/bookkeep.jsonl, 0 数据出端 (数据零出端红线), LLM 听员工语音/文字说收支自动调 add. P3.5.75 (6/22 鸿波): 本地 STT (Whisper.cpp) + picker 联动 + 0 approval (append-only jsonl 本地无风险) = 鸿波个人语音记账 MVP."
