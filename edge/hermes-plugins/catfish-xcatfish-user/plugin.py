@@ -1773,54 +1773,6 @@ def _patch_p15_chat_completions_approval() -> None:
         "approval flows through hermes.tool.progress SSE event)"
     )
 
-    # P15.3 (6/22 鸿波 catch "rm 都没弹按钮"): wrap check_execute_code_guard
-    # 看每次调用走哪条 auto-approve 路径 (5 条之一). 找出 P15 装了为啥还 silent
-    # auto-approve 的真因. 一次性 ship, 用户重启 hermes 后 grep "P15.3 guard" log.
-    try:
-        from tools import approval as _approval_mod
-        _orig_guard = _approval_mod.check_execute_code_guard
-
-        def _wrapped_guard(code, env_type):
-            from gateway.session_context import get_session_env
-            # 拿 worker thread 真实状态 — get_session_env 走 contextvar (work thread 看到啥)
-            platform_seen = get_session_env("HERMES_SESSION_PLATFORM", "")
-            session_key_seen = get_session_env("HERMES_SESSION_KEY", "")
-            approval_sk = _approval_mod._approval_session_key.get()
-            cur_session_key = _approval_mod.get_current_session_key()
-            with _approval_mod._lock:
-                notify_cb_for_cur = _approval_mod._gateway_notify_cbs.get(cur_session_key)
-                registered_keys = list(_approval_mod._gateway_notify_cbs.keys())
-
-            code_preview = (code[:80] + "...") if len(code) > 80 else code
-            logger.info(
-                "P15.3 guard: env_type=%r platform_seen=%r approval_session_key=%r "
-                "session_key_seen=%r cur_session_key=%r notify_cb_found=%s "
-                "registered_keys=%r code_preview=%r",
-                env_type, platform_seen, approval_sk, session_key_seen,
-                cur_session_key, notify_cb_for_cur is not None,
-                registered_keys, code_preview,
-            )
-            result = _orig_guard(code, env_type)
-            logger.info(
-                "P15.3 guard: result approved=%s outcome=%s (走的 path 看 result keys: %s)",
-                result.get("approved"),
-                result.get("outcome", "no-outcome"),
-                sorted(result.keys()),
-            )
-            return result
-
-        _approval_mod.check_execute_code_guard = _wrapped_guard
-        # Also patch the imported binding in code_execution_tool
-        try:
-            from tools import code_execution_tool as _cet
-            if hasattr(_cet, "check_execute_code_guard"):
-                _cet.check_execute_code_guard = _wrapped_guard
-        except ImportError:
-            pass
-        logger.info("P15.3 check_execute_code_guard wrapped with diag log ✓")
-    except Exception as e:  # noqa: BLE001
-        logger.warning("P15.3: check_execute_code_guard wrap 失败 (%s)", e)
-
 
 # ── P15.2 ──────────────────────────────────────────────────────────────
 #
