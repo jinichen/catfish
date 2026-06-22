@@ -461,6 +461,40 @@ export async function fetchMyAudit(): Promise<MyAuditSummary> {
   return (await resp.json()) as MyAuditSummary;
 }
 
+// ── P3.5.59 Phase 2 (6/22 鸿波 catch "把中央端完成"): 单员工 LLM perf 聚合
+// 走 gateway_audit 表 (含 latency_ms / ttft_ms), 跟 /api/audit/me 互补.
+
+export interface RemoteLlmPerfSummary {
+  user_email: string;
+  since_ms: number;
+  window_hours: number;
+  schema_note: string;
+  request_count: number;
+  ok_count: number;
+  error_count: number;
+  total_tokens: number;
+  latency_p50_ms: number | null;
+  latency_p95_ms: number | null;
+  latency_p99_ms: number | null;
+  ttft_p50_ms: number | null;
+  ttft_p95_ms: number | null;
+  by_model: Array<{
+    model: string;
+    count: number;
+    total_tokens: number;
+    p50_ms: number | null;
+  }>;
+  /** 'pg' (生产 PG) | 'jsonl' (dev / 私有部署 fallback) | 'none' (没数据) */
+  source: "pg" | "jsonl" | "none";
+}
+
+export async function fetchMyLlmPerf(hours: number = 24): Promise<RemoteLlmPerfSummary> {
+  const url = `${config.gatewayUrl}/api/audit/me/perf?hours=${hours}`;
+  const resp = await fetchWithAuth(url);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return (await resp.json()) as RemoteLlmPerfSummary;
+}
+
 // ── 多账号切换器 (dev only) ──────────────────────────────────
 
 export interface DevUser {

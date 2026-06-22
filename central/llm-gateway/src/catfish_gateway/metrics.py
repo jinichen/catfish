@@ -489,3 +489,205 @@ def count_events(
     except OSError as e:
         logger.warning("metrics: count jsonl 失败: %s", e)
         return 0
+
+
+# ─────────────────────────────────────────────
+# P3.5.59 Phase 2 (6/22 鸿波 catch "是不是应该把中央端完成"):
+# 单员工 LLM perf 聚合 — 走 gateway_audit 表 (有 latency_ms / ttft_ms).
+#
+# 跟 quota.audit_summary_user_since 区别:
+#   - quota_events 是配额表, 不含 latency
+#   - gateway_audit (本模块写的) 是 audit 表, 含 latency_ms / ttft_ms / status
+#
+# 用例: Companion PerfCard LLM section 调 /api/audit/me/perf 拿这数据.
+# ─────────────────────────────────────────────
+
+
+def _percentile_sorted(arr: list[float], p: float) -> float | None:
+    """对已排序 arr 取 p 分位. 空返 None."""
+    if not arr:
+        return None
+    idx = round((len(arr) - 1) * p)
+    return arr[min(idx, len(arr) - 1)]
+
+
+def query_perf_summary_user(user_email: str, cutoff_ms: int) -> dict:
+    """单员工 LLM perf 聚合 — 走 gateway_audit 表 (PG 优先, JSONL fallback).
+
+    返字段:
+      - request_count / ok_count / error_count
+      - total_tokens
+      - latency_p50_ms / latency_p95_ms / latency_p99_ms
+      - ttft_p50_ms / ttft_p95_ms (streaming 才有, NULL 跳)
+      - by_model: [{model, count, total_tokens, p50_ms}]
+      - source: 'pg' | 'jsonl' | 'none' (数据源诊断用)
+
+    Privacy: 全 metadata, 跟 audit_summary_user_since 同合同 — 不返 prompt/response.
+
+    缺数据返 None percentile + 空 list — caller UI 显 "—" 友好.
+    """
+    empty = {
+        "request_count": 0,
+        "ok_count": 0,
+        "error_count": 0,
+        "total_tokens": 0,
+        "latency_p50_ms": None,
+        "latency_p95_ms": None,
+        "latency_p99_ms": None,
+        "ttft_p50_ms": None,
+        "ttft_p95_ms": None,
+        "by_model": [],
+        "source": "none",
+    }
+
+    # ─── PG 主路径 (生产 SaaS 走这条) ───
+    if _use_pg():
+        try:
+            with _pg_conn() as conn:
+                with conn.cursor() as cur:
+                    # 总览 + 6 分位 (latency + ttft) 一次 query
+                    cur.execute(
+                        """SELECT
+                            COUNT(*),
+                            COUNT(*) FILTER (WHERE status = 'ok'),
+                            COUNT(*) FILTER (WHERE status != 'ok'),
+                            COALESCE(SUM(tokens_total), 0),
+                            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY latency_ms),
+                            PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms),
+                            PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY latency_ms),
+                            PERCENTILE_CONT(0.5) WITHIN GROUP (
+                                ORDER BY ttft_ms
+                            ) FILTER (WHERE ttft_ms IS NOT NULL),
+                            PERCENTILE_CONT(0.95) WITHIN GROUP (
+                                ORDER BY ttft_ms
+                            ) FILTER (WHERE ttft_ms IS NOT NULL)
+                           FROM gateway_audit
+                           WHERE user_email = %s AND ts_ms >= %s""",
+                        (user_email, cutoff_ms),
+                    )
+                    row = cur.fetchone() or (0, 0, 0, 0, None, None, None, None, None)
+
+                    # by_model 分组
+                    cur.execute(
+                        """SELECT
+                            model,
+                            COUNT(*),
+                            COALESCE(SUM(tokens_total), 0),
+                            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY latency_ms)
+                           FROM gateway_audit
+                           WHERE user_email = %s AND ts_ms >= %s
+                           GROUP BY model
+                           ORDER BY COUNT(*) DESC
+                           LIMIT 20""",
+                        (user_email, cutoff_ms),
+                    )
+                    by_model = [
+                        {
+                            "model": r[0] or "",
+                            "count": int(r[1] or 0),
+                            "total_tokens": int(r[2] or 0),
+                            "p50_ms": float(r[3]) if r[3] is not None else None,
+                        }
+                        for r in cur.fetchall()
+                    ]
+
+            return {
+                "request_count": int(row[0] or 0),
+                "ok_count": int(row[1] or 0),
+                "error_count": int(row[2] or 0),
+                "total_tokens": int(row[3] or 0),
+                "latency_p50_ms": float(row[4]) if row[4] is not None else None,
+                "latency_p95_ms": float(row[5]) if row[5] is not None else None,
+                "latency_p99_ms": float(row[6]) if row[6] is not None else None,
+                "ttft_p50_ms": float(row[7]) if row[7] is not None else None,
+                "ttft_p95_ms": float(row[8]) if row[8] is not None else None,
+                "by_model": by_model,
+                "source": "pg",
+            }
+        except Exception as e:
+            logger.warning("query_perf_summary_user PG 失败 (fallback jsonl): %s", e)
+
+    # ─── JSONL fallback (dev / 私有部署没 PG 时走) ───
+    try:
+        path = audit_path()
+        if not path.exists():
+            return empty
+        cutoff_s = cutoff_ms / 1000.0
+        latencies: list[float] = []
+        ttfts: list[float] = []
+        ok = err = total_toks = 0
+        by_model_agg: dict[str, dict] = {}
+
+        with path.open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if r.get("user") != user_email:
+                    continue
+                ts = r.get("ts", 0)
+                if isinstance(ts, str):
+                    try:
+                        ts = float(ts)
+                    except ValueError:
+                        continue
+                if ts < cutoff_s:
+                    continue
+
+                if r.get("status") == "ok":
+                    ok += 1
+                else:
+                    err += 1
+                total_toks += int(r.get("total_tokens", 0))
+                lat = r.get("latency_ms")
+                if lat is not None and lat > 0:
+                    latencies.append(float(lat))
+                ttft = r.get("ttft_ms")
+                if ttft is not None and ttft > 0:
+                    ttfts.append(float(ttft))
+                m = r.get("model", "")
+                if m:
+                    entry = by_model_agg.setdefault(
+                        m, {"count": 0, "total_tokens": 0, "latencies": []}
+                    )
+                    entry["count"] += 1
+                    entry["total_tokens"] += int(r.get("total_tokens", 0))
+                    if lat is not None and lat > 0:
+                        entry["latencies"].append(float(lat))
+
+        latencies.sort()
+        ttfts.sort()
+
+        by_model = sorted(
+            [
+                {
+                    "model": k,
+                    "count": v["count"],
+                    "total_tokens": v["total_tokens"],
+                    "p50_ms": _percentile_sorted(sorted(v["latencies"]), 0.5),
+                }
+                for k, v in by_model_agg.items()
+            ],
+            key=lambda x: -x["count"],
+        )[:20]
+
+        return {
+            "request_count": ok + err,
+            "ok_count": ok,
+            "error_count": err,
+            "total_tokens": total_toks,
+            "latency_p50_ms": _percentile_sorted(latencies, 0.5),
+            "latency_p95_ms": _percentile_sorted(latencies, 0.95),
+            "latency_p99_ms": _percentile_sorted(latencies, 0.99),
+            "ttft_p50_ms": _percentile_sorted(ttfts, 0.5),
+            "ttft_p95_ms": _percentile_sorted(ttfts, 0.95),
+            "by_model": by_model,
+            "source": "jsonl",
+        }
+    except OSError as e:
+        logger.warning("query_perf_summary_user JSONL 失败: %s", e)
+        return empty

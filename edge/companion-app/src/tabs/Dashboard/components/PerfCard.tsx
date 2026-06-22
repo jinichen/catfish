@@ -13,6 +13,9 @@ import { useEffect, useState } from "react";
 
 import { useAudit } from "../../../hooks/useAudit";
 import { fetchToolPerfSummary, type ToolPerfSummary } from "../../../lib/tool_perf";
+// P3.5.59 Phase 2 (6/22 鸿波 catch "把中央端完成"): 中央 gateway 拿 LLM perf
+// (走 gateway_audit 表 latency 分位). dev 模式 gateway 在本机也工作 (JSONL fallback).
+import { fetchMyLlmPerf, type RemoteLlmPerfSummary } from "../../../lib/me";
 
 const POLL_MS = 30_000;
 const DEFAULT_WINDOW_HOURS = 24;
@@ -38,11 +41,17 @@ function formatPct(pct: number): string {
 }
 
 export default function PerfCard() {
-  const { summary: gatewaySummary, error: gatewayError } = useAudit();
+  // P3.5.59 Phase 1: 本机 audit.rs 兜底 (gateway 在本机 dev 时有数据).
+  const { summary: localSummary } = useAudit();
+  // P3.5.59 Phase 2: 中央 gateway /api/audit/me/perf — 生产 SaaS 走这条.
+  // 拿到就用 remote (有 latency 分位); 拿不到 (无网/未登录/endpoint 不存在) fallback 用 local.
+  const [llmPerf, setLlmPerf] = useState<RemoteLlmPerfSummary | null>(null);
+  const [llmError, setLlmError] = useState<string | null>(null);
   const [toolPerf, setToolPerf] = useState<ToolPerfSummary | null>(null);
   const [toolError, setToolError] = useState<string | null>(null);
   const [windowHours, setWindowHours] = useState<number>(DEFAULT_WINDOW_HOURS);
 
+  // tool perf (本机 jsonl) — 跟时间窗联动
   useEffect(() => {
     let cancelled = false;
     const tick = async () => {
@@ -54,6 +63,33 @@ export default function PerfCard() {
         }
       } catch (e) {
         if (!cancelled) setToolError(String(e));
+      }
+    };
+    void tick();
+    const t = setInterval(tick, POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [windowHours]);
+
+  // P3.5.59 Phase 2: LLM perf (中央 gateway) — 跟时间窗联动
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        // window_hours=0 不切窗 — endpoint 上限 720, 0 视作"很久" 用 720
+        const hours = windowHours === 0 ? 720 : windowHours;
+        const s = await fetchMyLlmPerf(hours);
+        if (!cancelled) {
+          setLlmPerf(s);
+          setLlmError(null);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setLlmError(String(e));
+          // 不清 llmPerf — 让上次成功值留着, 切回时网恢复继续显
+        }
       }
     };
     void tick();
@@ -102,7 +138,13 @@ export default function PerfCard() {
         </span>
       </div>
 
-      {/* ─── Section 1: LLM call (gateway audit) ───────────────────── */}
+      {/* ─── Section 1: LLM call ─────────────────────────────────────
+          P3.5.59 双源:
+          - remote (中央 /api/audit/me/perf 走 gateway_audit 表): 真生产数据 +
+            完整 latency 分位 (p50/p95/p99). 优先用.
+          - local (本机 audit.rs 读 ~/.catfish/gateway_audit.jsonl): dev 模式
+            gateway 在本机时兜底.
+          - 双源都拿不到 (鸿波本机 dev gateway 在中央 + 没登录): 显友好提示. */}
       <div style={{ marginBottom: 16 }}>
         <div
           style={{
@@ -110,16 +152,148 @@ export default function PerfCard() {
             marginBottom: 8,
             color: "var(--catfish-text)",
             fontSize: 13,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
           }}
         >
-          🤖 LLM 调用性能 (gateway audit · 今天)
+          🤖 LLM 调用性能
+          {llmPerf && (
+            <span
+              style={{
+                fontSize: 10,
+                padding: "1px 6px",
+                borderRadius: 3,
+                background: llmPerf.source === "pg"
+                  ? "rgba(59, 130, 246, 0.1)"
+                  : "rgba(168, 162, 158, 0.15)",
+                color: llmPerf.source === "pg"
+                  ? "rgb(30, 64, 175)"
+                  : "var(--catfish-text-muted)",
+              }}
+              title={
+                llmPerf.source === "pg"
+                  ? "中央 PG (生产 SaaS 数据)"
+                  : llmPerf.source === "jsonl"
+                    ? "中央 JSONL fallback (dev / 私有部署没 PG 时)"
+                    : "无数据 (gateway 还没记录或时间窗内空)"
+              }
+            >
+              {llmPerf.source === "pg" ? "🏢 中央 PG" : llmPerf.source === "jsonl" ? "📄 中央 JSONL" : "无数据"}
+            </span>
+          )}
+          {!llmPerf && localSummary && (
+            <span
+              style={{
+                fontSize: 10,
+                padding: "1px 6px",
+                borderRadius: 3,
+                background: "rgba(168, 162, 158, 0.15)",
+                color: "var(--catfish-text-muted)",
+              }}
+              title="本机 audit.rs 读 ~/.catfish/gateway_audit.jsonl (gateway 在本机 dev 时)"
+            >
+              💻 本机 fallback
+            </span>
+          )}
         </div>
-        {gatewayError && (
-          <div style={{ color: "var(--status-err)", fontSize: 11 }}>
-            ✗ gateway audit 读失败: {gatewayError}
+
+        {llmError && !llmPerf && (
+          <div style={{ color: "var(--status-err)", fontSize: 11, marginBottom: 6 }}>
+            ✗ 中央 /api/audit/me/perf 调用失败: {llmError}
+            <br />
+            <span style={{ opacity: 0.7 }}>
+              (未登录 / gateway 不可达 / endpoint 不存在; 下方显本机 jsonl
+              fallback 数据如果有)
+            </span>
           </div>
         )}
-        {gatewaySummary && (
+
+        {/* 优先 remote llmPerf */}
+        {llmPerf && llmPerf.request_count > 0 && (
+          <>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))",
+                gap: 8,
+              }}
+            >
+              <StatBox label="总请求" value={String(llmPerf.request_count)} />
+              <StatBox
+                label="成功率"
+                value={
+                  llmPerf.request_count > 0
+                    ? formatPct(llmPerf.ok_count / llmPerf.request_count)
+                    : "—"
+                }
+                accent={
+                  llmPerf.request_count > 0 &&
+                  llmPerf.error_count / llmPerf.request_count > 0.1
+                    ? "warn"
+                    : undefined
+                }
+              />
+              <StatBox
+                label="错误数"
+                value={String(llmPerf.error_count)}
+                accent={llmPerf.error_count > 0 ? "warn" : undefined}
+              />
+              <StatBox label="延迟 p50" value={formatMs(llmPerf.latency_p50_ms)} />
+              <StatBox label="延迟 p95" value={formatMs(llmPerf.latency_p95_ms)} />
+              <StatBox label="延迟 p99" value={formatMs(llmPerf.latency_p99_ms)} />
+              <StatBox label="TTFT p50" value={formatMs(llmPerf.ttft_p50_ms)} />
+              <StatBox label="TTFT p95" value={formatMs(llmPerf.ttft_p95_ms)} />
+              <StatBox
+                label="总 tokens"
+                value={llmPerf.total_tokens.toLocaleString()}
+              />
+            </div>
+            {llmPerf.by_model.length > 0 && (
+              <div
+                style={{
+                  marginTop: 8,
+                  fontSize: 11,
+                  color: "var(--catfish-text-muted)",
+                }}
+              >
+                <span style={{ marginRight: 8 }}>模型用量 (p50 latency):</span>
+                {llmPerf.by_model.slice(0, 4).map((m) => {
+                  const isPrivate = m.model.startsWith("catfish-private-");
+                  return (
+                    <span
+                      key={m.model}
+                      style={{
+                        display: "inline-block",
+                        marginRight: 8,
+                        padding: "2px 6px",
+                        background: isPrivate
+                          ? "rgba(34, 197, 94, 0.1)"
+                          : "rgba(59, 130, 246, 0.1)",
+                        color: isPrivate ? "rgb(21, 128, 61)" : "rgb(30, 64, 175)",
+                        borderRadius: 3,
+                      }}
+                      title={isPrivate ? "私有 (内网, 数据不出端)" : "公网"}
+                    >
+                      {isPrivate ? "🔒" : "🌐"} {m.model} ({m.count} ·{" "}
+                      {formatMs(m.p50_ms)})
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* remote 拿到了但 request_count=0 — 时间窗内没数据 */}
+        {llmPerf && llmPerf.request_count === 0 && (
+          <div style={{ color: "var(--catfish-text-muted)", fontSize: 12 }}>
+            🐠 此时间窗内你没有 LLM 调用记录 (中央 gateway_audit 表查到 0 条).
+          </div>
+        )}
+
+        {/* remote 完全没拿到 (网络挂 / 未登录) → fallback 本机 jsonl */}
+        {!llmPerf && localSummary && localSummary.request_count > 0 && (
           <div
             style={{
               display: "grid",
@@ -127,65 +301,27 @@ export default function PerfCard() {
               gap: 8,
             }}
           >
-            <StatBox label="总请求" value={String(gatewaySummary.request_count)} />
+            <StatBox label="总请求" value={String(localSummary.request_count)} />
             <StatBox
               label="成功率"
-              value={
-                gatewaySummary.request_count > 0
-                  ? formatPct(
-                      gatewaySummary.ok_count / gatewaySummary.request_count,
-                    )
-                  : "—"
-              }
-              accent={
-                gatewaySummary.request_count > 0 &&
-                gatewaySummary.error_count / gatewaySummary.request_count > 0.1
-                  ? "warn"
-                  : undefined
-              }
+              value={formatPct(
+                localSummary.ok_count / localSummary.request_count,
+              )}
             />
-            <StatBox
-              label="错误数"
-              value={String(gatewaySummary.error_count)}
-              accent={gatewaySummary.error_count > 0 ? "warn" : undefined}
-            />
-            <StatBox
-              label="TTFT p50"
-              value={formatMs(gatewaySummary.ttft_p50_ms)}
-            />
-            <StatBox
-              label="TTFT p95"
-              value={formatMs(gatewaySummary.ttft_p95_ms)}
-            />
+            <StatBox label="错误数" value={String(localSummary.error_count)} />
+            <StatBox label="TTFT p50" value={formatMs(localSummary.ttft_p50_ms)} />
+            <StatBox label="TTFT p95" value={formatMs(localSummary.ttft_p95_ms)} />
             <StatBox
               label="总 tokens"
-              value={gatewaySummary.total_tokens.toLocaleString()}
+              value={localSummary.total_tokens.toLocaleString()}
             />
           </div>
         )}
 
-        {/* 模型用量 */}
-        {gatewaySummary && gatewaySummary.by_model.length > 0 && (
-          <div style={{ marginTop: 8, fontSize: 11, color: "var(--catfish-text-muted)" }}>
-            <span style={{ marginRight: 8 }}>模型用量:</span>
-            {gatewaySummary.by_model.slice(0, 4).map((m) => (
-              <span
-                key={m.model}
-                style={{
-                  display: "inline-block",
-                  marginRight: 8,
-                  padding: "2px 6px",
-                  background: m.is_private
-                    ? "rgba(34, 197, 94, 0.1)"
-                    : "rgba(59, 130, 246, 0.1)",
-                  color: m.is_private ? "rgb(21, 128, 61)" : "rgb(30, 64, 175)",
-                  borderRadius: 3,
-                }}
-                title={m.is_private ? "私有 (内网, 数据不出端)" : "公网"}
-              >
-                {m.is_private ? "🔒" : "🌐"} {m.model} ({m.count})
-              </span>
-            ))}
+        {/* 双源都空 */}
+        {!llmPerf && (!localSummary || localSummary.request_count === 0) && !llmError && (
+          <div style={{ color: "var(--catfish-text-muted)", fontSize: 12 }}>
+            🐠 暂无 LLM 调用数据 (中央 + 本机都空; gateway 还没运行过或时间窗内空).
           </div>
         )}
       </div>

@@ -829,6 +829,43 @@ async def api_audit_me(
     }
 
 
+# P3.5.59 Phase 2 (6/22 鸿波 catch "是不是应该把中央端完成"):
+# 单员工 LLM perf 聚合 — 走 gateway_audit 表 (含 latency_ms / ttft_ms).
+# 跟 /api/audit/me 区别: /api/audit/me 走 quota_events 表 (没 latency),
+# 本 endpoint 走 gateway_audit 表 (有 latency / ttft / status).
+# Companion PerfCard LLM section 调这个拿真 latency 分位.
+@app.get("/api/audit/me/perf")
+async def api_audit_me_perf(
+    hours: int = 24,
+    user: User = Depends(get_current_user),
+    x_catfish_user: str | None = Header(default=None, alias="X-Catfish-User"),
+) -> dict[str, Any]:
+    """单员工 LLM perf 聚合 — Companion PerfCard 用.
+
+    返字段: request_count / ok_count / error_count / total_tokens /
+    latency_p50/p95/p99_ms / ttft_p50/p95_ms / by_model / source.
+
+    Privacy: 全 metadata, 跟 /api/audit/me 同合同, 中央不返 prompt/response.
+    """
+    from . import metrics as _metrics
+
+    effective_email = resolve_effective_user_email(user, x_catfish_user)
+    hours = max(1, min(720, hours))  # 1h - 30d
+    now_ms = int(time.time() * 1000)
+    cutoff_ms = now_ms - hours * 3_600_000
+    summary = _metrics.query_perf_summary_user(effective_email, cutoff_ms)
+    return {
+        "user_email": effective_email,
+        "since_ms": cutoff_ms,
+        "window_hours": hours,
+        "schema_note": (
+            "本端点只返 latency / token / model metadata. "
+            "中央不存 prompt / response 文本. source=pg|jsonl|none 标数据源."
+        ),
+        **summary,
+    }
+
+
 # /api/audit/department/{dept} — manager / admin 看本部门 audit 聚合
 #
 # 包含: 总请求数 / 总 token / 模型分布 / top 员工 (匿名化看部门级).
