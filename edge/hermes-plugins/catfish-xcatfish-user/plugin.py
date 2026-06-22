@@ -160,6 +160,10 @@ _PATCH_TARGETS = [
     # plugin install 时 ImportError 立刻报, 而不是 silent skip 让按钮不弹.
     ("gateway.session_context", "set_session_vars", "func"),
     ("gateway.session_context", "clear_session_vars", "func"),
+    # P21 (P3.5.74, 6/22): hermes cron.scheduler.run_job — cron picker 联动 patch
+    # 的 target. hermes 重构掉这函数 → plugin install 时 fail-loud 报, 不让 cron
+    # silent 走老路径.
+    ("cron.scheduler", "run_job", "func"),
 ]
 
 _AIAGENT_METHOD_TARGETS = [
@@ -409,6 +413,22 @@ def _apply_patches() -> None:
     except Exception as e:  # noqa: BLE001
         logger.error(
             "P20: _patch_p20_block_execute_code_permanent 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
+            e, exc_info=True,
+        )
+    # P3.5.74 P21 (6/22 鸿波 catch "cron 不是用 picker 吗"): hermes cron/scheduler.py
+    # run_job 读 config.yaml model.default 跟 picker_state.json 解耦, 员工切 picker
+    # 后 cron job 仍走老 model. P3.5.28/42/42.1 把 picker 联动到 chat / advisor /
+    # email scheduler / vision / catfish-memory summarize, 这里补 cron job — 最后
+    # 一个 sprint gap.
+    #
+    # 复用 catfish-memory plugin 已有的 _read_picker_state_model helper (同款架构),
+    # 优先级 picker_state.json > job.model > config.yaml.model.default > env (跟
+    # _get_summarize_model 优先级一致).
+    try:
+        _patch_p21_cron_picker_integration()
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "P21: _patch_p21_cron_picker_integration 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
             e, exc_info=True,
         )
 
@@ -2320,6 +2340,112 @@ def _patch_p20_block_execute_code_permanent() -> None:
     logger.info(
         "P20 approve_permanent / load_permanent wrapped — execute_code 永久 "
         "approve 已封死, 每次审批必须员工 explicit 确认 ✓"
+    )
+
+
+# ── P21 (P3.5.74, 6/22 鸿波 catch "cron 不是用 picker 吗") ──────────────
+#
+# hermes cron/scheduler.py run_job 读 config.yaml model.default → cron job
+# 用 catfish-public-deepseek-flash, 跟 chat picker 解耦. P3.5.28/42/42.1 把
+# picker 联动到 chat / advisor / email scheduler / vision / catfish-memory
+# summarize, 这里补 cron job — 最后一个 picker sprint gap.
+#
+# 实施: monkey-patch hermes cron.scheduler.run_job. wrap 老 run_job, 在调
+# 用前检查 picker_state.json — 若 picker set 了 chat_model, 把 job 字段 +
+# 环境 + config 字段都 override 让 hermes 原代码读到 picker model.
+#
+# 优先级 (跟 catfish-memory _get_summarize_model 一致):
+#   picker_state.json > job.model (user 显式指定) > config.yaml.model.default > env
+#
+# 安全: try/except 包死, picker 读失败 fallback 老路径不影响 cron 跑.
+# fail-silent fallback (跟 P16 / catfish-memory 风格一致).
+
+def _read_catfish_picker_model() -> str:
+    """读 ~/.catfish/picker_state.json 拿 chat_model. 复用 catfish-memory 同款 ABI.
+
+    catfish-memory plugin 也有 _read_picker_state_model helper (catfish_memory_helpers.py).
+    本 plugin 没依赖 catfish-memory (两个 plugin 独立装载), 不能 cross import. 抄个
+    最简版本 — 文件不存在 / parse 错 / chat_model 缺 → 空字符串.
+    """
+    import json  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    catfish_home = Path.home() / ".catfish"
+    path = catfish_home / "picker_state.json"
+    if not path.exists():
+        return ""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            model = data.get("chat_model", "")
+            if isinstance(model, str) and model.strip():
+                return model.strip()
+    except (json.JSONDecodeError, OSError, ValueError):
+        pass
+    return ""
+
+
+def _patch_p21_cron_picker_integration() -> None:
+    """patch cron.scheduler.run_job — cron job model 跟 picker 联动.
+
+    hermes run_job 代码片段 (cron/scheduler.py:1641):
+        model = job.get("model") or os.getenv("HERMES_MODEL") or ""
+        ...
+        if not job.get("model"):
+            ...
+            model = _model_cfg.get("default", model)
+
+    patch 思路: wrap run_job, 在调用前若 picker_state set 了 chat_model, 把
+    它**inject 到 job dict** (替换 `job["model"]`). 这样 hermes 内部读
+    job.get("model") 时拿到 picker, 走 picker 路径 (优先级最高).
+
+    job 是 dict 不是 copy, 直接改 in-place 影响 hermes 后续逻辑. 但 cron
+    job 来自 scheduler 的 in-memory state, 不持久化, 改 in-place 不影响其他
+    job. (即使持久化, picker 是 user state 跟 job 状态分开, override 一次
+    不污染.)
+
+    fail-safe: picker 读失败 / hermes 没 cron 模块 / patch attach 失败 →
+    silent fallback 老路径.
+    """
+    try:
+        from cron import scheduler as _cron_scheduler  # noqa: PLC0415
+    except ImportError as e:
+        logger.warning("P21: hermes cron module 没导, skip patch (%s)", e)
+        return
+
+    _orig_run_job = _cron_scheduler.run_job
+
+    def _patched_run_job(job: dict, *args, **kwargs):
+        # picker override (优先级最高). job["model"] 若已设, 看 picker 是否覆盖.
+        try:
+            picker_model = _read_catfish_picker_model()
+            if picker_model:
+                original_model = job.get("model")
+                if original_model != picker_model:
+                    job["model"] = picker_model
+                    logger.info(
+                        "P21 cron picker integration: job '%s' model %r → %r "
+                        "(picker_state.json override)",
+                        job.get("id", "?"), original_model, picker_model,
+                    )
+                else:
+                    logger.debug(
+                        "P21 cron: job '%s' 已是 picker model %r, skip override",
+                        job.get("id", "?"), picker_model,
+                    )
+            # picker 空 → 走 hermes 老路径 (job.model > config.yaml.model.default > env)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "P21 cron: picker_state 读失败 (%s), fallback 老路径 (job.model > yaml > env)",
+                e,
+            )
+
+        return _orig_run_job(job, *args, **kwargs)
+
+    _cron_scheduler.run_job = _patched_run_job
+    logger.info(
+        "P21 cron picker integration patched — cron job model 跟 picker_state.json "
+        "联动 (优先级: picker > job.model > yaml.default > env) ✓"
     )
 
 
