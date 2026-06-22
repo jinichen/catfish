@@ -37,6 +37,11 @@ import { useUIStore } from "../../store/ui";
 import DetailPane, { type FullMessage } from "./components/DetailPane";
 import ListItem from "./components/ListItem";
 
+// P3.5.58 Phase 3 (6/22 鸿波 catch "邮件数量没有 100, 为什么一直显示 100, 是不是
+// 硬编码了"): list 拉取上限. Rust 端 email_list_fetch clamp(1, 500), 这里取最大
+// 不再硬编码 100. items.length >= 此值时 header 加 "+" 提示被 cap 截.
+const MAX_EMAIL_LIST_LIMIT = 500;
+
 export default function EmailTab() {
   const [items, setItems] = useState<EmailDigestItem[]>([]);
   const [accounts, setAccounts] = useState<EmailAccountItem[]>([]);
@@ -69,7 +74,13 @@ export default function EmailTab() {
     setError(null);
     try {
       const [listJson, accountsJson, _urgency] = await Promise.all([
-        emailListFetch(unreadOnly, 100),
+        // P3.5.58 Phase 3 (6/22 鸿波 catch "邮件数量没有 100, 为什么一直显示
+        // 100, 是不是硬编码了"): 真因 — 之前硬编码 limit=100, INBOX ≥100 封时
+        // items.length 永远 100, header 显"100 封"实是被 cap 截了不告诉 user.
+        // 改成 Rust 端 clamp 上限 500 (clamp(1, 500) 见 email.rs:89), 比 100 大
+        // 5x. 一般员工 INBOX < 500 封, 真能看见全量. ≥500 时 header 显"500+"
+        // 提示 user 真值被截 (见 headerSummary).
+        emailListFetch(unreadOnly, MAX_EMAIL_LIST_LIMIT),
         emailAccountsFetch().catch(() => "[]"),
         // BL-COMPANION-EMAIL-DIGEST-STEP5: 走 store.reconcileFromRust 后台拉,
         // setUrgencyMap 不再这里调 — store 内部自己 merge + 持久化
@@ -240,9 +251,12 @@ export default function EmailTab() {
     if (error) return "拉取失败";
     if (loading && items.length === 0) return "加载中…";
     const unreadCnt = items.filter((i) => !i.is_read).length;
+    // P3.5.58 Phase 3 (6/22 鸿波): items.length === MAX 时给 "+" 后缀提示是不是
+    // 被 limit cap 截了, 让 user 知道实际更多 (而不是误以为正好等于 cap).
+    const cap = items.length >= MAX_EMAIL_LIST_LIMIT ? "+" : "";
     return unreadOnly
-      ? `${items.length} 封未读 · ${accounts.length} 个账号`
-      : `${items.length} 封 · ${unreadCnt} 未读 · ${accounts.length} 个账号`;
+      ? `${items.length}${cap} 封未读 · ${accounts.length} 个账号`
+      : `${items.length}${cap} 封 · ${unreadCnt} 未读 · ${accounts.length} 个账号`;
   }, [items, accounts, loading, error, unreadOnly]);
 
   return (
