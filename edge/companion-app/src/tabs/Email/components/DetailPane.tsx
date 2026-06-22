@@ -543,12 +543,16 @@ function DetailPane({
               borderRadius: 4,
               padding: "8px 16px",
               fontSize: 13,
-              cursor: composing ? "default" : "pointer",
+              // P3.5.57 (6/22 鸿波 catch UX 误导): composing 时按钮 disabled, opacity 加深
+              // 让视觉明确表达"不可点", 不再用 "📝 编辑中…" 文案切换
+              // (老文案让 user 以为这个按钮还能点 / 正在做某动作, 实际是 disabled).
+              cursor: composing || drafting ? "default" : "pointer",
+              opacity: composing || drafting ? 0.4 : 1,
               fontFamily: "inherit",
             }}
             title="打开 compose 面板, 编辑回复内容 + 选择保存草稿或发送 (人工 confirm 才发)"
           >
-            {composing ? "📝 编辑中…" : "✏️ 回复"}
+            ✏️ 回复
           </button>
           {/* 5/18 BL-EMAIL-DELETE: 两步点击确认 (window.confirm 在 Tauri 不可靠).
               第一次点 → "🗑 再次点击确认" (3s 内有效), 第二次才真删. */}
@@ -638,22 +642,10 @@ function DetailPane({
             gap: 10,
           }}
         >
-          {/* 红线提示横幅 */}
-          <div
-            style={{
-              padding: "8px 12px",
-              background: "rgba(34, 197, 94, 0.1)",
-              border: "1px solid rgba(34, 197, 94, 0.3)",
-              borderRadius: 4,
-              fontSize: 11,
-              color: "rgb(21, 128, 61)",
-              lineHeight: 1.5,
-            }}
-          >
-            ✏️ <strong>Compose 模式</strong> — 编辑下面内容, "💾 仅保存草稿"
-            落 Mail.app Drafts; "✉ 发送" 真发出去 (两步 confirm).
-            红线: AI 永远不能绕过这步直接 send, 必须你人工点按钮.
-          </div>
+          {/* P3.5.57 (6/22 鸿波 catch "都是误导"): 砍绿色红线提示横幅.
+              原文案让 user 误以为 Companion 只能落 Drafts 真发要去 Mail.app, 实际上
+              ✉ 发送 (两步 confirm) 直接发出去不停 Drafts. "红线 AI 不能绕过" 那段
+              是设计意图, 通过两步 confirm 按钮自身已表达, 不需要重复说. */}
 
           {/* to */}
           <label style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
