@@ -170,3 +170,7 @@ edge/companion-app/work/
 # P3.5.x sprint dev artifacts
 *.before-prune-*
 *_archive_*
+
+# P3.5.56 cargo test 副作用防御 — sync_plugin_files_* 测试如果有 bug 用了
+# 真实路径而非 TempDir, 会在源目录下创嵌套 catfish-xcatfish-user/, ignore 防 commit.
+edge/hermes-plugins/catfish-xcatfish-user/catfish-xcatfish-user/

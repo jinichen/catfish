@@ -20,6 +20,10 @@ import {
   type PoliticalScanResult,         // P3.3.53.2
 } from "../../../lib/tauri";
 import { _extractSenderName, _replyAddress } from "./helpers";
+// P3.5.57 Phase 2 (6/22 鸿波): Compose 内"让小鲶帮我拟稿"按钮
+import { draftEmailReply } from "../../../lib/emailDraft";
+import { useAgentStore } from "../../../store/agent";
+import { getPickerState } from "../../../lib/picker_state";
 
 interface FullMessage extends EmailDigestItem {
   recipients?: string[];
@@ -82,6 +86,13 @@ function DetailPane({
   const [draftError, setDraftError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // P3.5.57 Phase 2 (6/22 鸿波): Compose 内"让小鲶帮我拟稿" 状态
+  const [draftingLlm, setDraftingLlm] = useState(false);
+  const [draftLlmError, setDraftLlmError] = useState<string | null>(null);
+  const [draftLlmDone, setDraftLlmDone] = useState(false);  // 拟过一次 → 按钮变"🔄 重拟"
+  // 拿员工自定义 agent name + personality 注入 LLM prompt
+  const agentName = useAgentStore((s) => s.name);
+  const agentPersonality = useAgentStore((s) => s.personality);
   /** 5/18 BL-EMAIL-DELETE: 两步确认 — 第一次点 "🗑 删除" 切到 "再次点击确认" 状态,
    *  第二次点才真删. 3s 后自动取消恢复初态. 比 window.confirm 在 Tauri WebView
    *  下可靠 (有些场景 confirm 被吞), 也比系统 dialog 打扰. */
@@ -98,6 +109,9 @@ function DetailPane({
   useEffect(() => {
     setConfirmPending(false);
     setDeleteError(null);
+    // P3.5.57 Phase 2: 清 LLM 拟稿状态, 不然换邮件后按钮还显"🔄 重拟"误导
+    setDraftLlmError(null);
+    setDraftLlmDone(false);
   }, [msg.id]);
 
   // P3.3.58 段 2C (6/12 鸿波): 拉单封邮件的钓鱼扫描结果, 显红条
@@ -268,6 +282,40 @@ function DetailPane({
     setSendResult(null);
     setSendConfirmPending(false);
     setComposing(true);
+  };
+
+  /** P3.5.57 Phase 2 (6/22 鸿波): "让小鲶帮我拟稿" — 一次性 LLM call 填 composeBody.
+   *
+   *  跟"💬 让小鲶处理这封" (跳工作台 chat) 区别: 这里直接落 Compose body, 不跳 chat.
+   *  失败 toast, 不挂 Compose UI. 拟过后按钮变"🔄 重拟" 给 user 不满意时重生成.
+   */
+  const handleDraftWithLlm = async () => {
+    setDraftingLlm(true);
+    setDraftLlmError(null);
+    try {
+      // picker 优先, 没 picker fallback catfish-private-main (charter 数据不出 mac)
+      const picker = await getPickerState().catch(() => null);
+      const model = picker?.chat_model || "catfish-private-main";
+      const result = await draftEmailReply({
+        sender: msg.sender,
+        subject: msg.subject,
+        date: msg.date,
+        bodyText: msg.body_text || "",
+        agentName,
+        personality: agentPersonality,
+        model,
+      });
+      if (!result.ok || !result.body) {
+        setDraftLlmError(result.error || "未知错误");
+        return;
+      }
+      setComposeBody(result.body);
+      setDraftLlmDone(true);
+    } catch (e) {
+      setDraftLlmError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDraftingLlm(false);
+    }
   };
 
   /** 只保存到 Drafts, 不发. 等价于老 handleDraftReply 行为 (但用 panel 的内容). */
@@ -708,6 +756,50 @@ function DetailPane({
               }}
             />
           </label>
+
+          {/* P3.5.57 Phase 2 (6/22 鸿波): body 上方"💡 让小鲶帮我拟稿"按钮.
+              点了一次性调 LLM (catfish gateway, picker 模型, 30s timeout) 落
+              composeBody. 拟稿后按钮变"🔄 重拟". 失败下方红条显错.
+              不挂 send 红线 — LLM 只动 body 输入框, 真发还是要两步 confirm. */}
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ width: 50, color: "var(--catfish-text-muted)", flex: "0 0 auto" }}>正文</span>
+            <button
+              type="button"
+              onClick={() => void handleDraftWithLlm()}
+              disabled={draftingLlm || !msg.body_text}
+              style={{
+                background: draftLlmDone ? "var(--catfish-bg)" : "rgba(34, 197, 94, 0.1)",
+                color: draftLlmDone ? "var(--catfish-text)" : "rgb(21, 128, 61)",
+                border: draftLlmDone
+                  ? "1px solid var(--catfish-border)"
+                  : "1px solid rgba(34, 197, 94, 0.4)",
+                borderRadius: 4,
+                padding: "4px 10px",
+                fontSize: 12,
+                cursor: draftingLlm ? "wait" : msg.body_text ? "pointer" : "not-allowed",
+                fontFamily: "inherit",
+                opacity: msg.body_text ? 1 : 0.4,
+              }}
+              title={
+                msg.body_text
+                  ? draftLlmDone
+                    ? "不满意?  重新生成一份草稿 (会覆盖正文区现有内容)"
+                    : `让${agentName}根据原邮件起一段回复草稿, 落到下面正文区. 你可改可不发.`
+                  : "原邮件正文为空, 没法拟稿"
+              }
+            >
+              {draftingLlm
+                ? `⏳ ${agentName}拟稿中…`
+                : draftLlmDone
+                  ? "🔄 重拟"
+                  : `💡 让${agentName}帮我拟稿`}
+            </button>
+            {draftLlmError && (
+              <span style={{ fontSize: 11, color: "rgb(220, 80, 60)" }}>
+                ✗ 拟稿失败: {draftLlmError}
+              </span>
+            )}
+          </div>
 
           {/* body */}
           <textarea
