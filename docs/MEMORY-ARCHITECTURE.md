@@ -374,16 +374,26 @@ LLM 看 schema: 先选主类 (5 选 1), 再选 sub-kind (3-5 选 1). 决策空�
 - 6 kind 健康, prefetch 15K (4K tokens), 在 budget 内
 - distill 只 journal 有, expense 欠债
 
-### 7.2 半年内 (P3.5.83-85, 技术债)
+### 7.2 周末 sprint (鸿波 6/23 拍 — P3.5.83-86 + 87 stretch)
+
+**5 个 sprint 一气 ship 跨 1 周末**:
 
 - **P3.5.83**: bookkeep.jsonl 年度 rotation
+  (每年 archive `bookkeep.YYYY.jsonl`, 主文件留近 90 天)
 - **P3.5.84**: expense daily distill (24h cron LLM 蒸馏消费模式)
-- **P3.5.85**: feedback.jsonl rotation
+  (复用 P3.5.74 cron picker 联动, 跟 journal distill 同款架构)
+- **P3.5.85**: feedback.jsonl rotation (复用 P3.5.83 helper)
 - **P3.5.86**: prefetch 总 budget cap (统一 20K 上限, 按 priority 截断)
+  (现 sparse mode 已 demo, 统一规则到所有路径)
+- **P3.5.87 (stretch)**: 第一个 future kind 候选 ship 跑通 taxonomy 流程
+  (鸿波拍选: preference / habit / asset / 别的; 配套 5 件套验证 design 规则)
 
-### 7.3 1 年内 (P3.5.90 候选)
+各 sprint 估计 2-4h, 一周末 (12-20h) 全 ship.
 
-- 加 1-2 新 kind (e.g. medical / fitness), 每个配套 5 件 (route + summary + budget + distill + archive)
+### 7.3 1 年内 (P3.5.90+ 候选, 周末 sprint 完成后)
+
+- 加 1-2 新 kind (按 §4.4 taxonomy 选, e.g. medical / fitness / asset)
+- 每个配套 5 件 (route + summary + budget + distill + archive)
 - 仍走 flat 6-8 kind, 不分级
 
 ### 7.4 2 年内或 prefetch 触阈值时 (P3.6.X 大重构)
