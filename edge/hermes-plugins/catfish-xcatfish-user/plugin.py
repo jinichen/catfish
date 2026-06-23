@@ -780,8 +780,12 @@ def _patch_p3_auxiliary_client() -> None:
     # P3b
     _orig_resolve = aux._resolve_auto
 
-    def patched_resolve_auto(main_runtime=None):
-        client, model = _orig_resolve(main_runtime=main_runtime)
+    def patched_resolve_auto(main_runtime=None, task=None):
+        # P3.5.88 (6/23 鸿波 catch context_compressor TypeError): hermes upstream
+        # _resolve_auto 升级签名加 task=None 参数 (用于 task-specific aux routing).
+        # P3 老 signature 单 main_runtime 撞 TypeError → context compression fail →
+        # Companion 报 Load failed. 补 task=None + forward 给 _orig.
+        client, model = _orig_resolve(main_runtime=main_runtime, task=task)
         try:
             if client is None:
                 return client, model
