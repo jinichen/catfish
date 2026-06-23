@@ -46,6 +46,8 @@ import {
 import { loadSessionMessagesAsChat } from "../../../lib/sessionMessages";
 // P3.3.19 C Phase 3 (6/11): buildTaskSystemPrompt 抽到 lib 共享 (ChatTab 也用)
 import { buildTaskSystemPrompt } from "../../../lib/taskSystemPrompt";
+// P3.5.91 (6/23 鸿波): 早安丢消息治本 — task title → canonical taskUid client cache
+import { resolveCanonicalTaskUid } from "../../../lib/task_uid_cache";
 import type { Attachment, ChatMessage } from "../../../types/chat";
 // P3.3.20 (6/11): 复用工作台 chat input 附件三件套 — helpers / chip / thumb
 //   都独立于 useChat / useChatStore, 不耦合 ChatInput.tsx ~600 行那套.
@@ -260,6 +262,12 @@ function DetailPane({
     task.urgency === "high" ? "#c2410c" :
     task.urgency === "medium" ? "#a16207" : "#6b7280";
 
+  // P3.5.91 (6/23 鸿波): canonical taskUid — 跟 LLM 给的可能不同.
+  //   client 端按 normalized title 做 first-seen cache (~/.catfish/task_uid_cache.json),
+  //   advisor refresh 给同 title 新 uid 时, 用 cache 中 canonical uid 找 session,
+  //   不被 LLM 给的新 uid 误导. 解 P3.5.90 audit "刷新丢消息" 真因.
+  //   sessionIdRef / ensureSessionId / mount fetch 全用 canonical uid.
+  const canonicalTaskUidRef = useRef<string>(task.taskUid);
   // P3.3.9 (6/10): chat key 用 task.taskUid (LLM 给的稳定 6 字符 uid),
   //   fallback title (老数据 / 极端情况 taskUid 为空). 这样 LLM 每天重写
   //   title 也不会让 chat 历史丢, 因为 uid 在 advisor_cache 里复用了.
@@ -307,10 +315,37 @@ function DetailPane({
       });
       sessionIdRef.current = created.id;
       setSessionId(created.id);
-      // 关联 task uid, 下次 mount sessionGetByTaskUid 能找回这条
-      await sessionSetTaskUid(created.id, taskNow.taskUid).catch((e) => {
-        console.warn("[BriefingTwoColumn lazy] sessionSetTaskUid 失败:", e);
-      });
+      // P3.5.91 (6/23 鸿波) D 路径: 关联 canonical task uid (cache 中或 LLM 给的).
+      // 加 retry 1 次 + UI warning. 不再静默 fail (P3.5.90 audit 真因 ③).
+      // 关联失败 → 下次 mount sessionGetByTaskUid 找不到 → 显空白 = "消息丢失" 直接症状.
+      const canonical = canonicalTaskUidRef.current || taskNow.taskUid;
+      let lastErr: unknown = null;
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          await sessionSetTaskUid(created.id, canonical);
+          lastErr = null;
+          break;
+        } catch (e) {
+          lastErr = e;
+          console.warn(
+            `[BriefingTwoColumn] sessionSetTaskUid attempt ${attempt}/2 失败:`,
+            e,
+          );
+          if (attempt === 1) {
+            await new Promise((r) => setTimeout(r, 200));
+          }
+        }
+      }
+      if (lastErr) {
+        // 真 fail-loud — 不再静默. UI 提示员工: 本会话历史下次可能找不回.
+        console.error(
+          "[BriefingTwoColumn] sessionSetTaskUid 2 次都失败 — 历史关联未建, 下次 advisor refresh 可能找不到本会话:",
+          lastErr,
+        );
+        setAttachError(
+          "⚠️ 会话关联未建成功, 下次刷新此 task 可能找不到当前对话历史. 详细看 console.",
+        );
+      }
       return created.id;
     } catch (e) {
       console.warn("[BriefingTwoColumn lazy] sessionCreate 失败, persist 跳过:", e);
@@ -369,7 +404,15 @@ function DetailPane({
     setSessionId(null);
     void (async () => {
       try {
-        const sid = await sessionGetByTaskUid(task.taskUid);
+        // P3.5.91 (6/23 鸿波) C 路径: 解析 canonical taskUid.
+        //   同 normalized title 第一次见 → cache LLM 给的, 返同样;
+        //   再见 (advisor refresh 给新 uid) → ignore LLM 的, 用 cache 中 canonical;
+        //   写入 ref, ensureSessionId / setTaskUid 都用 canonical.
+        const canonical = await resolveCanonicalTaskUid(task.title, task.taskUid);
+        if (cancelled) return;
+        canonicalTaskUidRef.current = canonical;
+        // 老 query 用 canonical (跟 cache 一致, advisor refresh 给新 uid 不影响)
+        const sid = await sessionGetByTaskUid(canonical);
         let dbMessagesCount = 0;
         if (sid) {
           // 已有 session — 拉历史
@@ -444,9 +487,16 @@ function DetailPane({
     return () => {
       cancelled = true;
     };
-    // 切 task 重跑. loadHistory 稳定 ref.
+    // P3.5.91 (6/23 鸿波) A 路径: 砍 task.title 依赖 — title 每次 advisor refresh
+    // LLM 重写 (briefing_advisor.ts 注释), 但 title 变 ≠ 这是新 task. 之前 deps
+    // 含 title → advisor 自动 refresh 30 min → title 改 → useEffect 重跑 → 重 fetch
+    // session → 如果 taskUid 也变 (C 路径 cache 解 normalized title 一致) → 丢消息.
+    // 现 deps 只看 chatKey + canonical taskUid 变化, title 跳变不再 trigger reload.
+    //
+    // chatKey 仍依赖 task.taskUid (P3.3.9 chatKey 公式), 但 canonical 由 C 路径
+    // 兜底, normalize 后稳定. 真实"切到别的 task" 才会触发重 mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatKey, task.taskUid, task.title]);
+  }, [chatKey, task.taskUid]);
 
   // 新消息进来自动滚到底
   useEffect(() => {

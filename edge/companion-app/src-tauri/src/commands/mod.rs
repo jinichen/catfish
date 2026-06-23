@@ -24,6 +24,7 @@ pub mod chrome;
 pub mod curator;
 pub mod dream;  // P3.5.1 (6/15 鸿波): Dream Engine — 员工主动触发 long-term 蒸馏, picker model
 pub mod picker_state;  // P3.5.2 (6/16 鸿波): chat picker 持久化 ~/.catfish/picker_state.json — plugin sync_turn 跟随
+pub mod task_uid_cache;  // P3.5.91 (6/23 鸿波): 早安 task → canonical taskUid 客户端 cache — 治 LLM 给新 uid 时 session 关联失联
 pub mod email;  // BL-COMPANION-EMAIL-DIGEST (5/18): 邮件简报卡的后端 shell-out
 pub mod endpoints;
 pub mod feedback;

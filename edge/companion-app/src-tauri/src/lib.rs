@@ -590,6 +590,11 @@ pub fn run() {
             // P3.5.2 (6/16 鸿波): chat picker 持久化 → plugin sync_turn 跟随 picker (绕过 hermes API 没透传 picker 限制)
             commands::picker_state::picker_state_save,
             commands::picker_state::picker_state_get,
+            // P3.5.91 (6/23 鸿波): 早安 task → canonical taskUid client cache —
+            // 治 LLM advisor refresh 给同 title 新 uid 导致 session 关联失联问题
+            commands::task_uid_cache::task_uid_cache_get,
+            commands::task_uid_cache::task_uid_cache_put,
+            commands::task_uid_cache::task_uid_cache_dump,
             // P3.5.4 (6/16 鸿波): BGE-M3 advisor 注入相关性筛选 — 砍 prompt + 砍 LLM 输出, advisor 不再 truncated
             commands::advisor_relevance::advisor_rank_relevance,
             commands::advisor_relevance::advisor_relevance_cache_stats,
