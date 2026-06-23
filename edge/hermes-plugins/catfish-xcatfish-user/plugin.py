@@ -172,6 +172,11 @@ _PATCH_TARGETS = [
     # plugin install fail-loud, 不让微信 silent 走 config.yaml.model.default 老路径
     # (跟 picker 脱钩).
     ("gateway.run", "_resolve_gateway_model", "func"),
+    # P24 (P3.5.89, 6/23): hermes api_server._CORS_HEADERS — 浏览器 preflight
+    # allowlist. hermes 默认只 3 header (Authorization/Content-Type/Idempotency-Key).
+    # 重构 / 改名 → plugin install fail-loud, 不让 catfish X-Catfish-* header
+    # silent 撞 preflight block (TypeError: Load failed).
+    ("gateway.platforms.api_server", "_CORS_HEADERS", "attr"),
 ]
 
 _AIAGENT_METHOD_TARGETS = [
@@ -449,6 +454,16 @@ def _apply_patches() -> None:
     except Exception as e:  # noqa: BLE001
         logger.error(
             "P23: _patch_p23_inbound_picker_integration 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
+            e, exc_info=True,
+        )
+
+    # P24 (P3.5.89 6/23 鸿波): CORS allowlist 扩 X-Catfish-* — 修教学按钮 / 任何
+    # 自定义 header 浏览器 preflight block 触发 TypeError: Load failed 真因.
+    try:
+        _patch_p24_cors_allowlist()
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "P24: _patch_p24_cors_allowlist 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
             e, exc_info=True,
         )
 
@@ -2470,6 +2485,90 @@ def _patch_p21_cron_picker_integration() -> None:
     logger.info(
         "P21 cron picker integration patched — cron job model 跟 picker_state.json "
         "联动 (优先级: picker > job.model > yaml.default > env) ✓"
+    )
+
+
+# ── P24 (P3.5.89, 6/23 鸿波): hermes API server CORS allowlist 扩 catfish header ─
+#
+# 真因 audit (今天 8 次瞎猜后真审 me.ts:630 + chat.ts:71 + api_server.py:545):
+#
+#   ① 用户点 🎓 教学按钮 → chat.ts:307-309 加 header X-Catfish-Teaching-Mode: 1
+#   ② Companion (WKWebView) 发请求前自动 OPTIONS preflight, 把这 header 列入
+#      Access-Control-Request-Headers
+#   ③ hermes api_server.py:543 _CORS_HEADERS["Access-Control-Allow-Headers"] 写死:
+#        "Authorization, Content-Type, Idempotency-Key"   ← 只 3 个 header
+#   ④ X-Catfish-Teaching-Mode 不在 allowlist → preflight 非 200 → 浏览器抛
+#      TypeError: Load failed → Companion 弹 "无法连接 hermes API"
+#
+# 实证 (今天):
+#   - curl 直打 8642 用 hermes_key 返 200 ✓ (curl 不走 preflight, 直接 POST)
+#   - Companion 走 preflight 触发 CORS block → Load failed
+#   - me.ts:630 早注释过 "hermes proxy CORS allowlist 不含" (5/26 BL-PROACTIVE-DECOUPLE
+#     当时把 X-Catfish-Journal-Tail-B64 等移到 body 绕过, 但 X-Catfish-Teaching-Mode 仍 header)
+#
+# Companion 发的全部 X-Catfish-* header (grep 实证 6/23):
+#   X-Catfish-Agent-Name, X-Catfish-Agent-Personality,
+#   X-Catfish-Journal-Tail-B64, X-Catfish-Last-Model,
+#   X-Catfish-Prev-Model, X-Catfish-Source,
+#   X-Catfish-Teaching-Mode, X-Catfish-User, X-Catfish-User-Dept
+#
+# 修法: in-place mutate _CORS_HEADERS["Access-Control-Allow-Headers"], append
+# 所有 X-Catfish-* header. 跟 P22 同款 in-place 修 hermes module-level constant.
+#
+# fail-safe: api_server module 没导 / _CORS_HEADERS 不存在 / 非 dict → silent skip.
+
+_CATFISH_CORS_HEADERS = [
+    "X-Catfish-Agent-Name",
+    "X-Catfish-Agent-Personality",
+    "X-Catfish-Journal-Tail-B64",
+    "X-Catfish-Last-Model",
+    "X-Catfish-Prev-Model",
+    "X-Catfish-Source",
+    "X-Catfish-Teaching-Mode",
+    "X-Catfish-User",
+    "X-Catfish-User-Dept",
+]
+
+
+def _patch_p24_cors_allowlist() -> None:
+    """扩 hermes api_server._CORS_HEADERS Access-Control-Allow-Headers 含 X-Catfish-*.
+
+    hermes 默认只 allow 3 header (Authorization / Content-Type / Idempotency-Key).
+    catfish 加 9 个 X-Catfish-* header 没同步进 allowlist, 浏览器 preflight block,
+    Companion fetch throw TypeError: Load failed.
+
+    修法: in-place append 所有 X-Catfish-* 到 allowlist string.
+    """
+    try:
+        from gateway.platforms import api_server as _api  # noqa: PLC0415
+    except ImportError as e:
+        logger.warning("P24: hermes api_server module 没导, skip patch (%s)", e)
+        return
+
+    cors = getattr(_api, "_CORS_HEADERS", None)
+    if cors is None or not isinstance(cors, dict):
+        logger.warning(
+            "P24: api_server._CORS_HEADERS 不存在 / 非 dict (got %s), skip. "
+            "Companion 浏览器 preflight 会 block 教学按钮 + 其它 X-Catfish-* header.",
+            type(cors).__name__,
+        )
+        return
+
+    current = cors.get("Access-Control-Allow-Headers", "")
+    existing = {h.strip() for h in current.split(",") if h.strip()}
+    to_add = [h for h in _CATFISH_CORS_HEADERS if h not in existing]
+
+    if not to_add:
+        logger.info("P24 CORS allowlist: 已含全部 %d X-Catfish-* header (idempotent skip)",
+                    len(_CATFISH_CORS_HEADERS))
+        return
+
+    merged = current + ", " + ", ".join(to_add) if current else ", ".join(to_add)
+    cors["Access-Control-Allow-Headers"] = merged
+    logger.info(
+        "P24 CORS allowlist patched — 加 %d X-Catfish-* header 到 Access-Control-Allow-Headers ✓ "
+        "(修浏览器 preflight block 教学按钮 + 自定义 header 导致 TypeError: Load failed)",
+        len(to_add),
     )
 
 
