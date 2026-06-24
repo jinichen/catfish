@@ -223,10 +223,27 @@ def _read_thread_headers_from_source_file(source_path: str) -> tuple[str | None,
 
 
 def _parse_records(text: str, n_fields: int) -> list[list[str]]:
-    """osascript stdout split 成 records of fields. 末尾空记录 / 短记录跳过."""
+    """osascript stdout split 成 records of fields. 末尾空记录 / 短记录跳过.
+
+    P3.5.101 (6/24 鸿波 catch '彻底治 pre-existing fail'): strip 显式列要去的
+    字符, 不用 .strip() 默认行为.
+
+    # 真因 (找了 P3.5.58 ship 时漏的 bug)
+
+    Python str.strip() 默认 strip 全部 isspace()=True 的字符, 包括 ASCII
+    控制字符 \\x1c-\\x1f (File/Group/Record/Unit Separator). 这跟
+    string.whitespace 6 个 (space/tab/cr/lf/vt/ff) **不一致**.
+
+    P3.5.58 (6/22) 升 AS list 6→8 字段时, 老 Mail.app 不暴露 all headers,
+    rawHdrs 字段返空字符串. AS 输出末尾形如 `...{FS}<rfcId>{FS}{RS}`. strip()
+    默认行为吃掉末尾 `\\x1f` (FS = chr(31) isspace=True), split 出 7 字段
+    而非 8, _parse_records 全部跳过, list_messages 返 []. test fail 因此暴露.
+
+    修法: 显式只 strip 4 个常见 whitespace (space/tab/cr/lf), 不动 \\x1c-\\x1f.
+    """
     records: list[list[str]] = []
     for rec in text.split(RS):
-        rec = rec.strip("\n").strip()
+        rec = rec.strip(" \t\n\r")
         if not rec:
             continue
         fields = rec.split(FS)

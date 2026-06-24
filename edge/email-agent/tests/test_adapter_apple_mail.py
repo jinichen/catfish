@@ -248,12 +248,18 @@ def test_list_accounts_empty_raises_data_not_found():
 
 
 def test_list_messages_returns_snippets():
-    """list 场景: 6 个 message, 验证字段映射 + body_text 留空."""
+    """list 场景: 2 个 message, 验证字段映射 + body_text 留空.
+
+    P3.5.58 (6/22) 升 AS list 6→8 字段 (加 rfcMsgId + rawHdrs 给 thread parse),
+    fixture 跟着补这 2 个字段. P3.5.101 (6/24) 测试与代码补齐.
+    """
     list_stdout = (
         f"12345{FS}周报草稿{FS}张总 <zhang@x.com>{FS}"
-        f"Saturday, May 17, 2026 at 10:30:00 AM{FS}1{FS}INBOX{RS}"
+        f"Saturday, May 17, 2026 at 10:30:00 AM{FS}1{FS}INBOX{FS}"
+        f"<msg1@example.com>{FS}{RS}"
         f"12346{FS}EIS 资质方案{FS}周园 <zhou@x.com>{FS}"
-        f"Saturday, May 17, 2026 at 11:00:00 AM{FS}0{FS}INBOX{RS}"
+        f"Saturday, May 17, 2026 at 11:00:00 AM{FS}0{FS}INBOX{FS}"
+        f"<msg2@example.com>{FS}{RS}"
     )
     accounts_stdout = f"工作{FS}work@x.com{FS}1{RS}"
     with (
@@ -274,17 +280,25 @@ def test_list_messages_returns_snippets():
     # 5/18 BL-EMAIL-READ-ROUTING-BY-PREFIX: 3 段格式 'apple_mail|account|msg_id'
     assert m0.id.startswith("apple_mail|工作|")
     assert m0.date.startswith("2026-05-17")
+    # P3.5.58: rfcMsgId 真透传到 Message.message_id (raw_hdrs 给空, in_reply_to/references 为 None)
+    assert m0.message_id == "<msg1@example.com>"
+    assert m0.in_reply_to is None
+    assert m0.references is None
 
     m1 = msgs[1]
     assert m1.is_read is False  # 第 2 个未读
+    assert m1.message_id == "<msg2@example.com>"
 
 
 def test_list_messages_subject_contains_filter():
-    """Python 端的 sender/subject_contains 后过滤."""
+    """Python 端的 sender/subject_contains 后过滤.
+
+    P3.5.101 (6/24): fixture 跟 P3.5.58 8 字段格式 (rfcMsgId + rawHdrs 末尾).
+    """
     list_stdout = (
-        f"1{FS}周报草稿{FS}a@x.com{FS}date1{FS}1{FS}INBOX{RS}"
-        f"2{FS}EIS 方案{FS}b@x.com{FS}date2{FS}1{FS}INBOX{RS}"
-        f"3{FS}周报二稿{FS}c@x.com{FS}date3{FS}1{FS}INBOX{RS}"
+        f"1{FS}周报草稿{FS}a@x.com{FS}date1{FS}1{FS}INBOX{FS}{FS}{RS}"
+        f"2{FS}EIS 方案{FS}b@x.com{FS}date2{FS}1{FS}INBOX{FS}{FS}{RS}"
+        f"3{FS}周报二稿{FS}c@x.com{FS}date3{FS}1{FS}INBOX{FS}{FS}{RS}"
     )
     accounts_stdout = f"工作{FS}work@x.com{FS}1{RS}"
     with (
