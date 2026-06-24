@@ -263,6 +263,7 @@ def _escape_as_string(s: str) -> str:
 from .apple_mail_emlx import (  # noqa: F401
     _detect_mail_data_dir,
     _emlx_is_read,
+    _extract_attachments_from_source_file,  # P3.5.100 (6/24): 治附件看不到
     _extract_html_from_source_file,
     _find_emlx_files,
     _parse_applescript_date,
@@ -446,6 +447,11 @@ class AppleMailAdapter(EmailAdapter):
             rfc_msg_id, in_reply_to, references = (
                 _read_thread_headers_from_source_file(source_path)
             )
+            # P3.5.100 (6/24 鸿波 catch '附件看不到'): 跟 thread headers 同套路,
+            # 从 source RFC822 抽附件元 (filename / size / content_type).
+            # 老 AS 路径 / EMLX 路径都不填这字段 → 前端永远 has_attachments=False
+            # → DetailPane.tsx:560 渲染条件不满足 → UI 永远不显附件 row.
+            attachments = _extract_attachments_from_source_file(source_path)
             return Message(
                 id=message_id,
                 account=account_name,
@@ -457,6 +463,8 @@ class AppleMailAdapter(EmailAdapter):
                 ),
                 cc=tuple(a.strip() for a in cc_str.split(",") if a.strip()),
                 date=_parse_applescript_date(dt_str),
+                has_attachments=len(attachments) > 0,
+                attachments=tuple(attachments),
                 body_text=body_text,
                 body_html=body_html,
                 message_id=rfc_msg_id,

@@ -21,7 +21,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Optional
 
-from .base import Message
+from .base import Attachment, Message
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,60 @@ def _parse_applescript_date(s: str) -> str:
         except ValueError:
             continue
     return s
+
+def _walk_attachments(msg) -> list[Attachment]:
+    """从 parse 完的 RFC822 邮件 MIME 树 walk 出 Content-Disposition: attachment 的 part.
+
+    P3.5.100 (6/24 鸿波 catch '附件看不到') — Apple Mail 全家 adapter 之前
+    构造 Message(...) 时没传 attachments, 永远空, 前端 DetailPane.tsx:560
+    渲染条件 has_attachments && attachments.length > 0 永远 False, UI 永远
+    不显附件 row. 真因不在前端, 在 backend adapter.
+
+    本 helper 收集真附件元数据 (filename / size_bytes / content_type):
+      - 只收 Content-Disposition 以 'attachment' 开头的 part
+      - inline 图片 (e.g. signature / 邮件正文渲染的图) 不算附件, 跳过
+      - filename RFC2231 自动解 (Python email.utils 内置), 中文名能解
+      - size_bytes 取 decoded payload 字节数, 不是 raw base64 长度
+    """
+    out: list[Attachment] = []
+    if not msg.is_multipart():
+        return out
+    for part in msg.walk():
+        disposition = (part.get("Content-Disposition") or "").lower().strip()
+        if not disposition.startswith("attachment"):
+            continue
+        filename = part.get_filename() or "untitled"
+        try:
+            payload = part.get_payload(decode=True) or b""
+        except Exception:  # noqa: BLE001
+            payload = b""
+        size_bytes = len(payload)
+        content_type = part.get_content_type() or "application/octet-stream"
+        out.append(Attachment(
+            filename=filename,
+            size_bytes=size_bytes,
+            content_type=content_type,
+        ))
+    return out
+
+
+def _extract_attachments_from_source_file(source_path: str) -> list[Attachment]:
+    """从 AS dump 出的 RFC822 source 文件抽出附件元.
+
+    P3.5.100 (6/24). 跟 _extract_html_from_source_file 同 pattern.
+    source 拿不到 (老版 / 网络 fetch 失败 / AS 没写) 时返空 list.
+    """
+    try:
+        with open(source_path, "rb") as f:
+            raw = f.read()
+        if not raw:
+            return []
+        msg = email.message_from_bytes(raw, policy=email.policy.default)
+        return _walk_attachments(msg)
+    except (OSError, ValueError) as e:
+        logger.debug("_extract_attachments_from_source_file 解析失败 %s: %s", source_path, e)
+        return []
+
 
 def _extract_html_from_source_file(source_path: str) -> str:
     """从 AS 写的 RFC822 源码文件抽出 text/html 部分.
@@ -201,6 +255,9 @@ def _parse_emlx_full(emlx_path: Path, account_name: str) -> Message:
             body_html = content
         else:
             body_text = content
+    # P3.5.100 (6/24 鸿波 catch): 附件元数据 — 复用 _walk_attachments helper.
+    # 跟 AS 路径 (_extract_attachments_from_source_file) 走同一函数, 行为一致.
+    attachments = _walk_attachments(msg)
     return Message(
         id=f"{account_name}|emlx:{emlx_path}",
         account=account_name,
@@ -213,6 +270,8 @@ def _parse_emlx_full(emlx_path: Path, account_name: str) -> Message:
         cc=tuple(a.strip() for a in cc_str.split(",") if a.strip()),
         date=date_iso,
         is_read=_emlx_is_read(plist),
+        has_attachments=len(attachments) > 0,
+        attachments=tuple(attachments),
         body_text=body_text,
         body_html=body_html,
     )
