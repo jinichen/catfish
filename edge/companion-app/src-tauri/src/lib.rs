@@ -616,6 +616,8 @@ pub fn run() {
             // P3.3.53 (6/13): 政治敏感扫描 — 给前端 detail pane 调
             commands::email::email_political_scan_now,
             commands::email::email_political_get,
+            // P3.5.103 (6/24 鸿波 catch "附件不能点"): 导出附件到本地 tmp, 配合 open_file 系统打开
+            commands::email::email_export_attachment,
             // BL-COMPANION-EMAIL-TAB-STEP2 (5/18): 评级 badge 取数
             services::email_scheduler::email_urgency_map,
             // BL-COMPANION-PREFS-TOGGLES (5/20): 暴露 email config 给前端 AgentPrefsCard 展示

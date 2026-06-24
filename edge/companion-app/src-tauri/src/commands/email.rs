@@ -365,3 +365,37 @@ pub async fn email_political_get(
     }
     Ok(out)
 }
+
+/// P3.5.103 (6/24 鸿波 catch "附件不能点"): 导出邮件附件到本地 tmp 文件, 返 path.
+///
+/// CLI `catfish-email attachment --id X --filename Y --json` 输出 {"path": "..."}.
+/// 前端拿到 path 调 open_file Tauri command (file.rs:101) 系统默认 app 打开.
+///
+/// 错误兜底跟其他 email_* command 同款: stderr 不空时透出, 否则用退出码.
+#[tauri::command]
+pub async fn email_export_attachment(id: String, filename: String) -> Result<String, String> {
+    let bin = find_catfish_email().ok_or_else(|| {
+        "catfish-email CLI 没装".to_string()
+    })?;
+    let out = Command::new(&bin)
+        .args(["attachment", "--id", &id, "--filename", &filename, "--json"])
+        .output()
+        .map_err(|e| format!("catfish-email 调用失败: {e}"))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("catfish-email attachment 退出码 {:?}", out.status.code())
+        } else {
+            stderr
+        });
+    }
+    // parse JSON {"path": "..."}
+    let stdout_str = String::from_utf8_lossy(&out.stdout).to_string();
+    let val: serde_json::Value = serde_json::from_str(stdout_str.trim())
+        .map_err(|e| format!("catfish-email JSON 解析失败: {e}: {stdout_str}"))?;
+    let path = val
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| format!("catfish-email 返没 path 字段: {stdout_str}"))?;
+    Ok(path.to_string())
+}

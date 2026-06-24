@@ -289,6 +289,7 @@ from .apple_mail_emlx import (  # noqa: F401
     _parse_emlx_summary,
     _read_emlx_raw,
     _safe_header,
+    _save_attachment_payload_from_source,  # P3.5.103 (6/24): 治附件不能点
 )
 
 class AppleMailAdapter(EmailAdapter):
@@ -494,6 +495,82 @@ class AppleMailAdapter(EmailAdapter):
                     os.unlink(p)
                 except OSError:
                     pass
+
+    # ── P3.5.103 (6/24 鸿波): 附件导出能点 ──
+    #
+    # AS 主路径: 重新 dump RFC822 source (临时), walk MIME 找匹配 filename
+    # 的 attachment part, decode payload 写 tmp 文件返 Path. 跟
+    # _read_message_as 同模式 (AS 必须 dump 一次, 因为 source_path 是临时
+    # 不能 cache — Companion 不写邮件内容到长期路径, BL-CENTRAL-EDGE-BOUNDARY).
+    # EMLX fallback: 直接读 .emlx 文件本身就是 RFC822, 不需要 AS.
+
+    def export_attachment(self, message_id: str, filename: str) -> Path:
+        if message_id.startswith("emlx:") or "|emlx:" in message_id:
+            return self._export_attachment_emlx(message_id, filename)
+        if self._use_emlx_fallback:
+            return self._export_attachment_emlx(message_id, filename)
+        try:
+            return self._export_attachment_as(message_id, filename)
+        except ClientNotRunningError:
+            if self._enable_emlx_fallback_if_available():
+                return self._export_attachment_emlx(message_id, filename)
+            raise
+
+    def _export_attachment_as(self, message_id: str, filename: str) -> Path:
+        """AS 路径: 重 dump source RFC822, walk 找附件 part 写 tmp."""
+        account_name, msg_id = self._unpack_id(message_id)
+        # AS 强制要 body_path + source_path 两个文件 (脚本里都写). 我们只用 source.
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tf:
+            body_path = tf.name
+        with tempfile.NamedTemporaryFile(suffix=".eml", delete=False) as tf:
+            source_path = tf.name
+        try:
+            script = (
+                _AS_GET_MESSAGE
+                .replace("{ACCOUNT}", _escape_as_string(account_name))
+                .replace("{MSG_ID}", _escape_as_string(msg_id))
+                .replace("{BODY_PATH}", body_path)
+                .replace("{SOURCE_PATH}", source_path)
+            )
+            _run_osascript(script)
+            out_path = _save_attachment_payload_from_source(source_path, filename)
+            if out_path is None:
+                raise DataNotFoundError(
+                    f"附件 {filename!r} 在邮件 {message_id!r} 里找不到 "
+                    f"(MIME walk 0 命中 Content-Disposition: attachment)"
+                )
+            return out_path
+        finally:
+            for p in (body_path, source_path):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+
+    def _export_attachment_emlx(self, message_id: str, filename: str) -> Path:
+        """EMLX 路径: 直接拿 .emlx 文件 (本身就是 RFC822 + plist trailer) 解析."""
+        # 复用 _read_message_emlx 的 id → emlx_path 解析逻辑
+        _, msg_id = self._unpack_id(message_id)
+        emlx_path = Path(msg_id.removeprefix("emlx:"))
+        if not emlx_path.exists():
+            raise DataNotFoundError(f"emlx 文件不存在: {emlx_path}")
+        raw, _plist = _read_emlx_raw(emlx_path)
+        # 写 raw 到临时 RFC822 文件, 复用 _save_attachment_payload_from_source
+        with tempfile.NamedTemporaryFile(suffix=".eml", delete=False) as tf:
+            tf.write(raw)
+            source_path = tf.name
+        try:
+            out_path = _save_attachment_payload_from_source(source_path, filename)
+            if out_path is None:
+                raise DataNotFoundError(
+                    f"附件 {filename!r} 在邮件 {message_id!r} (emlx) 里找不到"
+                )
+            return out_path
+        finally:
+            try:
+                os.unlink(source_path)
+            except OSError:
+                pass
 
     def send_message(self, message_id: str) -> None:
         """5/18 BL-EMAIL-COMPOSE-SEND: AS `send <msg>` 真发草稿.

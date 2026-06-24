@@ -98,6 +98,55 @@ def _walk_attachments(msg) -> list[Attachment]:
     return out
 
 
+def _save_attachment_payload_from_source(
+    source_path: str, target_filename: str,
+) -> Path | None:
+    """从 RFC822 source 文件 walk MIME 找匹配 filename 的 attachment part,
+    decode payload 写本地 tmp 文件, 返新 Path. 找不到返 None.
+
+    P3.5.103 (6/24 鸿波 catch '附件不能点'): 给 export_attachment 用.
+
+    设计:
+    - tmp 用 mkdtemp + 原 filename — 系统 open 时显示原中文名
+      (单文件 mkdtemp 用 prefix 防 collision)
+    - 不修原 filename (用户期待看到原名)
+    - 失败返 None, 上层 raise DataNotFoundError
+    """
+    import tempfile
+
+    try:
+        with open(source_path, "rb") as f:
+            raw = f.read()
+        msg = email.message_from_bytes(raw, policy=email.policy.default)
+    except (OSError, ValueError) as e:
+        logger.debug("export source 读失败 %s: %s", source_path, e)
+        return None
+    if not msg.is_multipart():
+        return None
+    for part in msg.walk():
+        disposition = (part.get("Content-Disposition") or "").lower().strip()
+        if not disposition.startswith("attachment"):
+            continue
+        part_filename = part.get_filename() or ""
+        if part_filename != target_filename:
+            continue
+        try:
+            payload = part.get_payload(decode=True) or b""
+        except Exception:  # noqa: BLE001
+            return None
+        if not payload:
+            return None
+        tmpdir = Path(tempfile.mkdtemp(prefix="catfish-email-att-"))
+        out_path = tmpdir / target_filename
+        try:
+            out_path.write_bytes(payload)
+            return out_path
+        except OSError as e:
+            logger.warning("写 attachment payload 失败 %s: %s", out_path, e)
+            return None
+    return None
+
+
 def _extract_attachments_from_source_file(source_path: str) -> list[Attachment]:
     """从 AS dump 出的 RFC822 source 文件抽出附件元.
 

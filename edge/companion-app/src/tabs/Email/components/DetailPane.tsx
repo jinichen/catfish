@@ -15,6 +15,8 @@ import {
   emailSendMessage,
   emailPhishingGet,                 // P3.3.58 段 2C (6/12 鸿波)
   emailPoliticalScanNow,            // P3.3.53.2 (6/13 鸿波)
+  emailExportAttachment,            // P3.5.103 (6/24 鸿波): 附件能点
+  openFile,                         // P3.5.103: 系统默认 app 打开
   type EmailDigestItem,
   type PhishingScanResult,          // P3.3.58 段 2C
   type PoliticalScanResult,         // P3.3.53.2
@@ -562,9 +564,33 @@ function DetailPane({
               <div>附件</div>
               <div>
                 {msg.attachments.map((a, i) => (
-                  <span key={i} style={{ marginRight: 8 }}>
+                  <button
+                    key={i}
+                    onClick={async () => {
+                      // P3.5.103 (6/24 鸿波): 点附件 → CLI 导出到本地 tmp → 系统默认 app 打开.
+                      // CLI 退出码 4 = adapter 不支持 (foxmail / outlook 暂未 implement export_attachment).
+                      try {
+                        const path = await emailExportAttachment(msg.id, a.filename);
+                        await openFile(path);
+                      } catch (e) {
+                        console.warn("[EmailDetail] 打开附件失败:", e);
+                        alert(`打开附件失败: ${e instanceof Error ? e.message : String(e)}`);
+                      }
+                    }}
+                    title={`点击下载并用系统默认 app 打开: ${a.filename}`}
+                    style={{
+                      marginRight: 8,
+                      padding: "3px 10px",
+                      border: "1px solid var(--catfish-accent, #0d9488)",
+                      borderRadius: 4,
+                      background: "transparent",
+                      color: "var(--catfish-accent, #0d9488)",
+                      cursor: "pointer",
+                      fontSize: 12,
+                    }}
+                  >
                     📎 {a.filename} ({Math.round(a.size_bytes / 1024)} KB)
-                  </span>
+                  </button>
                 ))}
               </div>
             </>

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from pathlib import Path  # P3.5.103 (6/24): export_attachment 返 Path
 from typing import Sequence
 
 
@@ -229,6 +230,25 @@ class EmailAdapter(ABC):
             - Outlook: 用 Restrict() 或 AdvancedSearch
             - Foxmail: 全 box 扫一遍 subject/sender/body 简单 substring
         """
+
+    def export_attachment(self, message_id: str, filename: str) -> "Path":
+        """导出邮件附件到本地 tmp 文件, 返 Path. 给"附件能点"前端用.
+
+        P3.5.103 (6/24 鸿波 catch "附件不能点"): adapter walk MIME 找匹配
+        filename 的 part, decode payload 写 tmp 文件, 返本地 Path. 前端拿到
+        后调 Tauri open_file 用系统默认 app 打开 (Preview / Acrobat 等).
+
+        默认实现 raise NotSupportedError —— 子类不支持就不必 override.
+        Apple Mail / EMLX 优先实现, foxmail / outlook 后期补.
+
+        Raises:
+            DataNotFoundError: 附件 filename 在邮件里找不到 / 邮件 id 不存在
+            NotSupportedError: adapter 不支持导出附件
+        """
+        raise NotSupportedError(
+            f"{self.name} 不支持 export_attachment. "
+            "建议 SKILL 让员工自己去客户端里下载附件."
+        )
 
     def create_draft(
         self,

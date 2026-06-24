@@ -1002,6 +1002,11 @@ export const emailDeleteMessage = (id: string) =>
 export const emailSendMessage = (id: string) =>
   rawInvoke<string>("email_send_message", { id });
 
+/** P3.5.103 (6/24 鸿波 catch '附件不能点'): 导出邮件附件到本地 tmp 文件, 返 path.
+ *  前端拿到 path 调 openFile() 系统默认 app 打开 (Preview / Acrobat 等). */
+export const emailExportAttachment = (id: string, filename: string) =>
+  rawInvoke<string>("email_export_attachment", { id, filename });
+
 // BL-COMPANION-HERMES-API-CONFIG (5/19 Phase 2-2A): 暴露 hermes API server 配置
 // 给 chat.ts. 不返 key (key 在 Rust 端拼 header, 不发 JS, 防 XSS / 误 log).
 // Phase 2-2B 实施 chat.ts 切换时读这个判断走 gateway 还是 hermes.

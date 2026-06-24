@@ -77,6 +77,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_delete(adapters, args)
     if args.cmd == "send":
         return _cmd_send(adapters, args)
+    if args.cmd == "attachment":
+        return _cmd_attachment(adapters, args)
 
     parser.print_help()
     return 2
@@ -530,6 +532,70 @@ def _cmd_send(adapters: list[EmailAdapter], args) -> int:
     return 3
 
 
+def _cmd_attachment(adapters: list[EmailAdapter], args) -> int:
+    """P3.5.103 (6/24 鸿波 catch '附件不能点'): 导出附件到本地 tmp 文件.
+
+    跟 _cmd_read 同 id 路由 + 友好兜底. JSON 输出 {"path": "/tmp/.../报告.pdf"}.
+    Companion 拿到 path 调 open_file Tauri command 系统默认 app 打开.
+    """
+    from .adapters.base import NotSupportedError  # noqa: PLC0415
+
+    msg_id = args.id
+
+    if not msg_id or msg_id.lower() in {"null", "undefined", "none"}:
+        _err(f"邮件 id 不能为空 (收到 {msg_id!r})")
+        return 2
+
+    target_adapter: EmailAdapter | None = None
+    if "|" in msg_id:
+        prefix = msg_id.split("|", 1)[0]
+        for a in adapters:
+            if a.name == prefix or a.name.replace("_", "-") == prefix:
+                target_adapter = a
+                break
+
+    candidates = [target_adapter] if target_adapter is not None else list(adapters)
+    last_err: Exception | None = None
+    last_value_err: ValueError | None = None
+    last_not_supported: NotSupportedError | None = None
+    for a in candidates:
+        try:
+            path = a.export_attachment(msg_id, args.filename)
+            print(json.dumps(
+                {"adapter": a.name, "id": msg_id, "filename": args.filename,
+                 "path": str(path), "ok": True},
+                ensure_ascii=False,
+            ))
+            return 0
+        except DataNotFoundError as e:
+            last_err = e
+            continue
+        except ValueError as e:
+            last_value_err = e
+            continue
+        except NotSupportedError as e:
+            last_not_supported = e
+            continue
+        except EmailAdapterError as e:
+            _err(f"[{a.name}] 导出附件失败: {e}")
+            return 1
+
+    if last_value_err is not None and last_err is None and last_not_supported is None:
+        _err(f"邮件 id 格式不对: {last_value_err}")
+        return 2
+    if last_not_supported is not None and last_err is None:
+        _err(
+            f"邮件所在的客户端不支持导出附件: {last_not_supported}. "
+            "请去客户端 (Foxmail / Outlook / 等) 自己下载."
+        )
+        return 4
+    if target_adapter is not None:
+        _err(f"[{target_adapter.name}] 邮件 / 附件不存在: {last_err}")
+    else:
+        _err(f"邮件 / 附件不存在 (跨 {len(candidates)} 客户端都没找到): {last_err}")
+    return 3
+
+
 def _cmd_search(adapters: list[EmailAdapter], args) -> int:
     """5/18 BL-EMAIL-MULTI-CLIENT: 跨所有 adapter 搜, 合并 + 按 date 排."""
     hits: list[tuple[str, Any]] = []  # 5/18 BL-EMAIL-LIST-ADAPTER-FIELD: 同 _cmd_list
@@ -651,6 +717,16 @@ def _build_parser() -> argparse.ArgumentParser:
     psend.add_argument("--id", required=True, help="草稿的 message id")
     psend.add_argument("--json", action="store_true", default=True)
     psend.add_argument("--human", dest="json", action="store_false")
+
+    # attachment (P3.5.103 6/24 鸿波 catch "附件不能点"): 导出附件到本地 tmp,
+    # 返 path. 前端 Companion 拿到 path 调 open_file 系统默认 app 打开.
+    patt = sub.add_parser(
+        "attachment",
+        help="导出邮件附件到本地 tmp 文件, JSON 返 {path}",
+    )
+    patt.add_argument("--id", required=True, help="邮件 id (含 client 前缀)")
+    patt.add_argument("--filename", required=True, help="附件 filename (从 read 返的 attachments 里挑)")
+    patt.add_argument("--json", action="store_true", default=True)
 
     # search
     ps = sub.add_parser("search", help="全文搜索")
