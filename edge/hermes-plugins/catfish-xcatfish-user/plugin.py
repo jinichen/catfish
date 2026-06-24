@@ -37,12 +37,22 @@ import 阶段就跑 _verify_patch_targets() — 看每个 patch 引用的 attrib
 """
 from __future__ import annotations
 
+import functools
 import logging
 import os
+import threading
 from typing import Any, Optional
 from urllib.parse import urlparse
 
 logger = logging.getLogger("catfish.xcatfish_user.plugin")
+
+# P3.5.104 P25 (6/24 鸿波 catch "execute_code 一直被拦"): cron 真线程隔离.
+# hermes cron/scheduler.py:1558 真把 HERMES_CRON_SESSION env set 后不清, 整
+# daemon 进程被污染 (env 是进程级跨线程). 后续任何 chat / api 调 execute_code
+# 走 approval.check_execute_code_guard:1714, 看 env=1 + cron_mode=deny → BLOCKED.
+# threadlocal 标记本线程是否真在 cron run_job 内, P25 patched check_execute_code_guard
+# 用它精准判定, 不依赖被污染的全进程 env.
+_CATFISH_CRON_THREAD_LOCAL = threading.local()
 
 
 # ── P29 (6/5 鸿波) — gateway URL detection helper ─────────────────────────
@@ -172,6 +182,13 @@ _PATCH_TARGETS = [
     # plugin install fail-loud, 不让微信 silent 走 config.yaml.model.default 老路径
     # (跟 picker 脱钩).
     ("gateway.run", "_resolve_gateway_model", "func"),
+    # P25 (P3.5.104, 6/24): hermes tools/approval.py check_execute_code_guard —
+    # cron env 污染防御. hermes cron/scheduler.py:1558 在 run_job 内 set
+    # HERMES_CRON_SESSION env 但永不清, 整 daemon 进程污染, 后续 chat 调
+    # execute_code 全被当 cron 拒. P25 wrap check_execute_code_guard 用 threadlocal
+    # 精准判定 cron 范围. _PATCH_TARGETS 列 fail-loud — hermes 改名 → plugin
+    # install 立刻报, 不让 chat silent 走污染路径被拒.
+    ("tools.approval", "check_execute_code_guard", "func"),
     # P24 (P3.5.89, 6/23): hermes api_server._CORS_HEADERS — 浏览器 preflight
     # allowlist. hermes 默认只 3 header (Authorization/Content-Type/Idempotency-Key).
     # 重构 / 改名 → plugin install fail-loud, 不让 catfish X-Catfish-* header
@@ -464,6 +481,19 @@ def _apply_patches() -> None:
     except Exception as e:  # noqa: BLE001
         logger.error(
             "P24: _patch_p24_cors_allowlist 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
+            e, exc_info=True,
+        )
+
+    # P25 (P3.5.104 6/24 鸿波 catch "execute_code 不弹审批一直被拦"): cron env
+    # 隔离, 治 hermes cron/scheduler.py:1558 设 HERMES_CRON_SESSION 后不清污染
+    # 全 daemon 进程的 bug. P25 用 threadlocal 精准判定 cron 线程, 不依赖被污染
+    # 的全进程 env. 必须在 P21 (wrap run_job) 之后调用 — P25 内部也 wrap run_job
+    # set threadlocal, 顺序保证 P25 包 P21 包 orig, finally pop env 在最外层.
+    try:
+        _patch_p25_cron_env_isolation()
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "P25: _patch_p25_cron_env_isolation 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
             e, exc_info=True,
         )
 
@@ -2665,6 +2695,146 @@ def _patch_p23_inbound_picker_integration() -> None:
 # P3.5.78 治本: bookkeep 不当独立 plugin, 整进 catfish-memory 第 6 kind=expense.
 # memory tool 本来就是 _HERMES_CORE_TOOLS, expense 走 memory tool 自然 visible,
 # 不需要 P22 patch. catfish-bookkeep plugin 整砍.
+
+
+# ── P25 (P3.5.104, 6/24 鸿波 catch "execute_code 不弹审批一直被拦") ────────
+#
+# # 真因 (6/24 hermes 源码完整 audit)
+#
+# hermes cron/scheduler.py:1558 run_job 内执行:
+#     os.environ["HERMES_CRON_SESSION"] = "1"
+# 注释明说: "process-wide and persists for the lifetime of the scheduler
+# process — every job this process runs is a cron job."
+#
+# hermes 上游假设: cron scheduler 在独立进程跑. 但 catfish 部署是 hermes daemon
+# 单进程, scheduler + chat + api 全同一 Python 进程. env 是进程级跨线程, 第一
+# 个 cron job 跑过后**整 daemon 都被污染**.
+#
+# 后续任何 chat / api 调 execute_code →
+#   approval.py:1714 check_execute_code_guard:
+#     if env_var_enabled("HERMES_CRON_SESSION"):
+#         if _get_cron_approval_mode() == "deny":
+#             return BLOCKED
+# → 鸿波看到 "execute_code 持续被安全策略拦截" (实际是 LLM 看到 BLOCKED 错
+#   后自己幻觉式解读, "安全策略 / sandbox 时序问题" 是 LLM 编的, 不是真消息).
+#
+# 并发 race: cron job A 跑过程中 env=1, 同时 chat 进来调 execute_code 也被拒.
+# 仅 finally pop env 不够 — 必须用 threadlocal 真按线程隔离.
+#
+# # 治本 (P25 patch)
+#
+# 1. wrap cron.scheduler.run_job — 入口 set threadlocal in_cron=True, finally
+#    清 threadlocal + pop env. (P21 已经 wrap run_job 改 model, P25 包 P21 包 orig,
+#    顺序保 P25 在最外层 finally pop env.)
+# 2. wrap tools.approval.check_execute_code_guard — 看 threadlocal 不看 env.
+#    在 cron 线程内 → 透传 orig (env=1 cron deny 行为不变, 保 cron 真安全).
+#    非 cron 线程 → 临时 pop env 调 orig (假装没污染), 不恢复 (帮 hermes 清理).
+# 3. 装载时急救 pop 一次 — 重启 hermes daemon 前如果已被污染, 装载瞬间清掉.
+#
+# # 为什么必须 wrap check_execute_code_guard 而不只 wrap run_job
+#
+# 仅 wrap run_job + finally pop env 治不了**concurrent race**:
+# cron job 跑过程中 (env=1, finally 还没触发), 同时 chat 线程进来调 execute_code,
+# chat 看到 env=1 被拒. patched check_execute_code_guard 用 threadlocal 判定真
+# cron 线程, 隔离全进程 env 污染.
+#
+# # 为什么必须 wrap run_job 而不只 wrap check_execute_code_guard
+#
+# 仅 wrap check_execute_code_guard 治不了**残留污染**: cron job 跑完后 env=1 仍
+# 残留, 后续 chat 调 check_execute_code_guard 仍能透过 (因为 threadlocal 默认
+# False), 但**其他用 env_var_enabled("HERMES_CRON_SESSION") 判定的路径** (e.g.
+# _is_gateway_approval_context:148 短路) 还会撞污染. finally pop env 兜底.
+
+
+def _patch_p25_cron_env_isolation() -> None:
+    """治 hermes cron HERMES_CRON_SESSION env 污染全 daemon 进程的 bug.
+
+    见上方真因 audit. 两 patch (wrap run_job + wrap check_execute_code_guard) +
+    装载急救 pop, 真治本 + 防 race.
+
+    fail-safe: import 失败 / wrap 失败 → silent skip 老路径 (鸿波会看到现有 bug,
+    但 hermes 不会因 patch 异常起不来).
+    """
+    # ── 急救清现有污染 ──
+    if os.environ.pop("HERMES_CRON_SESSION", None):
+        logger.warning(
+            "P25 装载时清掉 HERMES_CRON_SESSION 污染 — hermes daemon 已被某个 "
+            "cron job 留下的 env 污染过, 装载瞬间清."
+        )
+
+    # ── wrap cron.scheduler.run_job (在 P21 之后, P25 包 P21 包 orig) ──
+    try:
+        from cron import scheduler as _cron_scheduler  # noqa: PLC0415
+    except ImportError as e:
+        logger.warning("P25: hermes cron.scheduler 没导, skip run_job wrap (%s)", e)
+        _cron_scheduler = None
+
+    if _cron_scheduler is not None:
+        _current_run_job = _cron_scheduler.run_job  # 可能是 P21 patched, 也可能是 orig
+        if getattr(_current_run_job, "_p25_patched", False):
+            logger.info("P25 run_job 已 wrap 过, 跳过 (避免双重 wrap, dev hot-reload)")
+        else:
+            @functools.wraps(_current_run_job)
+            def _patched_run_job(job, *args, **kwargs):
+                _CATFISH_CRON_THREAD_LOCAL.in_cron = True
+                try:
+                    return _current_run_job(job, *args, **kwargs)
+                finally:
+                    _CATFISH_CRON_THREAD_LOCAL.in_cron = False
+                    # 兜底 pop env (即使 hermes run_job 内部 set 了)
+                    os.environ.pop("HERMES_CRON_SESSION", None)
+
+            _patched_run_job._p25_patched = True  # type: ignore[attr-defined]
+            _cron_scheduler.run_job = _patched_run_job
+            logger.info(
+                "P25 wrap cron.scheduler.run_job 完成 — threadlocal in_cron 标识 + "
+                "finally pop HERMES_CRON_SESSION env"
+            )
+
+    # ── wrap tools.approval.check_execute_code_guard ──
+    try:
+        from tools import approval as _approval  # noqa: PLC0415
+    except ImportError as e:
+        logger.warning(
+            "P25: hermes tools.approval 没导, skip check_execute_code_guard wrap (%s)",
+            e,
+        )
+        return
+
+    _orig_check = getattr(_approval, "check_execute_code_guard", None)
+    if _orig_check is None:
+        logger.warning(
+            "P25: tools.approval 没 check_execute_code_guard 属性 "
+            "(hermes 升级改名?), skip"
+        )
+        return
+    if getattr(_orig_check, "_p25_patched", False):
+        logger.info("P25 check_execute_code_guard 已 wrap 过, 跳过")
+        return
+
+    @functools.wraps(_orig_check)
+    def _patched_check_execute_code_guard(code, env_type):
+        if getattr(_CATFISH_CRON_THREAD_LOCAL, "in_cron", False):
+            # 真在 cron 线程 — 走原始 cron deny 路径 (env=1 真意图)
+            return _orig_check(code, env_type)
+        # 非 cron 线程 — 临时 pop 假装 env 没 set (即使被污染, chat 不该被当 cron)
+        _prev_env = os.environ.pop("HERMES_CRON_SESSION", None)
+        try:
+            return _orig_check(code, env_type)
+        finally:
+            # 不恢复 — caller 是 chat / api, 帮 hermes 清污染 (上游 bug 兜底)
+            if _prev_env is not None:
+                logger.debug(
+                    "P25 check_execute_code_guard 检测到污染 env 真清掉 "
+                    "(caller 非 cron 线程, env 是 hermes cron scheduler 残留)"
+                )
+
+    _patched_check_execute_code_guard._p25_patched = True  # type: ignore[attr-defined]
+    _approval.check_execute_code_guard = _patched_check_execute_code_guard
+    logger.info(
+        "P25 wrap tools.approval.check_execute_code_guard 完成 — "
+        "threadlocal 隔离 cron 真线程, 非 cron 线程透传 (env 临时 pop)"
+    )
 
 
 # hermes 0.14+ plugin discovery 自动调 __init__.py 里的 install() 或类似 hook.
