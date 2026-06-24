@@ -37,7 +37,22 @@ from typing import Any
 
 import yaml
 
+# P3.5.93 (6/23 鸿波): yaml 写回保 comments.
+#
+# 老逻辑 update_department_quota 用 yaml.safe_dump → 5/2 ship 起 6 周来吹掉了
+# yaml 顶部 6 行 BL-FIX38 / BL-CHENHONGBO-DEV-QUOTA 历史注释 (鸿波每次走
+# manager UI 改部门 quota 都丢一些, 直到一行不剩).
+#
+# ruamel.yaml round_trip 模式可保 comments + 字段顺序. 仅 _quotas_yaml_*
+# helper 用, 其他 yaml 仍走 pyyaml (不必要改动).
+from ruamel.yaml import YAML
+
 logger = logging.getLogger("catfish.gateway.quota")
+
+# P3.5.93: 单实例 round_trip parser, 模块级即可 (无状态)
+_YAML_RT = YAML(typ="rt")
+_YAML_RT.preserve_quotes = True
+_YAML_RT.indent(mapping=2, sequence=4, offset=2)
 
 
 # ── Backend 选择 (生产 PG-only; 单测可 sqlite override) ───────
@@ -170,62 +185,279 @@ class QuotaConfig:
         return self.department_quotas.get(dept, DepartmentQuota(tokens_per_day=0))
 
 
-def update_department_quota(department: str, tokens_per_day: int) -> bool:
-    """改部门 quota → 写 quotas.yaml (overrides.departments). 五一 sprint 5/2 RBAC manager 用.
+# P3.5.93 (6/23 鸿波): 全 quotas.yaml CRUD helpers.
+#
+# 设计:
+#   - 公共: _load_yaml_rt() 读 + _write_yaml_rt(data) 写, 保 comments + key 序
+#   - update_default_per_user / put_per_model / put_per_department / put_user_override /
+#     put_dept_override + 对应 delete + get_full_config_dict
+#   - 共用 _ensure_dict(parent, key) 处理 yaml `key:` 后只有 comment 时 None 的坑
+#     (老 update_department_quota 5/2 注释里踩过)
+#   - 失败一律返 (False, "原因"), 调用方决定 raise / log
+#
+# 老接口: update_department_quota(name, tokens_per_day) 保留, 内部转 put_dept_override.
+# 跟之前 BL-RBAC-DAY7 时代 manager UI 行为一致 (manager 改 dept = 写 override 不是
+# default). 老 endpoint /api/quota/department/{dept} 仍走这个.
 
-    行为:
-    - 文件不存在 → 创建默认骨架
-    - 已有 overrides.departments.<dept> → 更新
-    - 没有 → 加进去
-    - tokens_per_day=0 表示不限
 
-    返 True 成功, False 失败 (yaml 写错 / 权限问题).
+def _load_yaml_rt() -> Any:
+    """读 quotas.yaml 走 ruamel round_trip. 文件不存在返空 CommentedMap.
 
-    线程安全: 简单文件锁 (不并发 manager 多人同时改 dev 单机够用),
-    Phase 2 上 PG 后改成 PG 表 + UPSERT 更稳.
+    返 ruamel CommentedMap (dict 子类) — 直接当 dict 用, 修改后 _write_yaml_rt
+    会保 comments. 不要拿这个返值跑 yaml.safe_dump, 会丢 comments.
     """
     p = _quota_config_path()
+    if not p.exists():
+        return _YAML_RT.load("{}\n") or {}
+    try:
+        with p.open(encoding="utf-8") as f:
+            data = _YAML_RT.load(f)
+        return data if data is not None else _YAML_RT.load("{}\n")
+    except Exception as e:
+        logger.warning("_load_yaml_rt: 解析 %s 失败 (返空): %s", p, e)
+        return _YAML_RT.load("{}\n")
+
+
+def _write_yaml_rt(data: Any) -> tuple[bool, str]:
+    """写回 quotas.yaml. 保 comments + 顺序 (ruamel round_trip)."""
+    p = _quota_config_path()
     p.parent.mkdir(parents=True, exist_ok=True)
-
-    # 读现有
-    data: dict
-    if p.exists():
-        try:
-            with p.open(encoding="utf-8") as f:
-                data = yaml.safe_load(f) or {}
-        except Exception as e:
-            logger.warning("update_department_quota: yaml 解析失败 %s: %s", p, e)
-            return False
-    else:
-        data = {}
-
-    # 改 overrides.departments.<dept>
-    # 注意: yaml 里 'overrides:' / 'departments:' 后只有注释时 safe_load 返 None,
-    # setdefault 不会替换 None, 必须显式判断 (踩过坑).
-    overrides = data.get("overrides")
-    if not isinstance(overrides, dict):
-        overrides = {}
-        data["overrides"] = overrides
-
-    depts = overrides.get("departments")
-    if not isinstance(depts, dict):
-        depts = {}
-        overrides["departments"] = depts
-
-    depts[department] = {"tokens_per_day": int(tokens_per_day)}
-
-    # 写回 (utf-8, allow_unicode 保留中文部门名)
     try:
         with p.open("w", encoding="utf-8") as f:
-            yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
-        logger.info(
-            "update_department_quota: %s tokens_per_day=%d (写 %s)",
-            department, tokens_per_day, p,
-        )
-        return True
+            _YAML_RT.dump(data, f)
+        return True, ""
     except Exception as e:
-        logger.warning("update_department_quota 写入失败 %s: %s", p, e)
-        return False
+        msg = f"写 quotas.yaml 失败: {e}"
+        logger.warning("_write_yaml_rt: %s (%s)", msg, p)
+        return False, msg
+
+
+def _ensure_dict(parent: Any, key: str) -> Any:
+    """parent[key] 如不是 dict (含 None / 缺失), 创建空 dict 写回 parent.
+
+    yaml 里 `key:` 后只有 comment 或空时 safe_load/round_trip_load 返 None,
+    setdefault 不会替换 None. 老 update_department_quota 5/2 注释里踩过坑.
+    """
+    existing = parent.get(key)
+    if not isinstance(existing, dict):
+        # ruamel CommentedMap 也是 dict 子类
+        from ruamel.yaml.comments import CommentedMap
+        new_map = CommentedMap()
+        parent[key] = new_map
+        return new_map
+    return existing
+
+
+def get_full_config_dict() -> dict[str, Any]:
+    """返当前 quotas.yaml 完整 dict (defaults + overrides), 给 admin UI 读.
+
+    返普通 dict (不是 CommentedMap, 避免 JSON 序列化奇怪), 失了 comments 但
+    UI 不需要. 内部值仍是 ruamel 类型, FastAPI/pydantic 会 serialize.
+    """
+    data = _load_yaml_rt()
+    # 转纯 dict 给 JSON
+    return _deep_to_plain(data)
+
+
+def _deep_to_plain(obj: Any) -> Any:
+    """递归把 ruamel CommentedMap / CommentedSeq 转纯 dict / list (JSON 友好)."""
+    if isinstance(obj, dict):
+        return {k: _deep_to_plain(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_deep_to_plain(v) for v in obj]
+    return obj
+
+
+def update_default_per_user(
+    tokens_per_minute: int, tokens_per_day: int,
+) -> tuple[bool, str]:
+    """改全员默认 per_user quota (defaults.per_user)."""
+    if tokens_per_minute < 0 or tokens_per_day < 0:
+        return False, "tokens_per_minute / tokens_per_day 不能负"
+    data = _load_yaml_rt()
+    defaults = _ensure_dict(data, "defaults")
+    per_user = _ensure_dict(defaults, "per_user")
+    per_user["tokens_per_minute"] = int(tokens_per_minute)
+    per_user["tokens_per_day"] = int(tokens_per_day)
+    ok, msg = _write_yaml_rt(data)
+    if ok:
+        logger.info(
+            "update_default_per_user: tokens_per_minute=%d tokens_per_day=%d",
+            tokens_per_minute, tokens_per_day,
+        )
+    return ok, msg
+
+
+def put_per_model(name: str, tokens_per_day: int) -> tuple[bool, str]:
+    """加/改单 model quota (defaults.per_model.<name>)."""
+    if not name.strip():
+        return False, "model name 不能空"
+    if tokens_per_day < 0:
+        return False, "tokens_per_day 不能负"
+    data = _load_yaml_rt()
+    defaults = _ensure_dict(data, "defaults")
+    per_model = _ensure_dict(defaults, "per_model")
+    from ruamel.yaml.comments import CommentedMap
+    entry = CommentedMap()
+    entry["tokens_per_day"] = int(tokens_per_day)
+    per_model[name] = entry
+    ok, msg = _write_yaml_rt(data)
+    if ok:
+        logger.info("put_per_model: %s tokens_per_day=%d", name, tokens_per_day)
+    return ok, msg
+
+
+def delete_per_model(name: str) -> tuple[bool, str]:
+    """删 model quota (defaults.per_model.<name>). 不存在算成功 (idempotent)."""
+    if not name.strip():
+        return False, "model name 不能空"
+    data = _load_yaml_rt()
+    defaults = data.get("defaults")
+    if isinstance(defaults, dict):
+        per_model = defaults.get("per_model")
+        if isinstance(per_model, dict) and name in per_model:
+            del per_model[name]
+            ok, msg = _write_yaml_rt(data)
+            if ok:
+                logger.info("delete_per_model: %s 删了", name)
+            return ok, msg
+    return True, ""  # 不存在 = idempotent OK
+
+
+def put_per_department(name: str, tokens_per_day: int) -> tuple[bool, str]:
+    """加/改单部门默认 quota (defaults.per_department.<name>).
+
+    跟 put_dept_override 区别: 这是 defaults 节, override 是 overrides 节.
+    overrides 优先级高 (load_quota_config 后写覆盖 default).
+    """
+    if not name.strip():
+        return False, "department 不能空"
+    if tokens_per_day < 0:
+        return False, "tokens_per_day 不能负"
+    data = _load_yaml_rt()
+    defaults = _ensure_dict(data, "defaults")
+    per_dept = _ensure_dict(defaults, "per_department")
+    from ruamel.yaml.comments import CommentedMap
+    entry = CommentedMap()
+    entry["tokens_per_day"] = int(tokens_per_day)
+    per_dept[name] = entry
+    ok, msg = _write_yaml_rt(data)
+    if ok:
+        logger.info("put_per_department: %s tokens_per_day=%d", name, tokens_per_day)
+    return ok, msg
+
+
+def delete_per_department(name: str) -> tuple[bool, str]:
+    """删部门默认 quota (defaults.per_department.<name>). Idempotent."""
+    if not name.strip():
+        return False, "department 不能空"
+    data = _load_yaml_rt()
+    defaults = data.get("defaults")
+    if isinstance(defaults, dict):
+        per_dept = defaults.get("per_department")
+        if isinstance(per_dept, dict) and name in per_dept:
+            del per_dept[name]
+            ok, msg = _write_yaml_rt(data)
+            if ok:
+                logger.info("delete_per_department: %s 删了", name)
+            return ok, msg
+    return True, ""
+
+
+def put_user_override(
+    email: str, tokens_per_minute: int, tokens_per_day: int,
+) -> tuple[bool, str]:
+    """加/改用户 override (overrides.users.<email>)."""
+    if not email.strip() or "@" not in email:
+        return False, "email 格式不对"
+    if tokens_per_minute < 0 or tokens_per_day < 0:
+        return False, "tokens 不能负"
+    data = _load_yaml_rt()
+    overrides = _ensure_dict(data, "overrides")
+    users = _ensure_dict(overrides, "users")
+    from ruamel.yaml.comments import CommentedMap
+    entry = CommentedMap()
+    entry["tokens_per_minute"] = int(tokens_per_minute)
+    entry["tokens_per_day"] = int(tokens_per_day)
+    users[email] = entry
+    ok, msg = _write_yaml_rt(data)
+    if ok:
+        logger.info(
+            "put_user_override: %s tokens_per_minute=%d tokens_per_day=%d",
+            email, tokens_per_minute, tokens_per_day,
+        )
+    return ok, msg
+
+
+def delete_user_override(email: str) -> tuple[bool, str]:
+    """删用户 override (overrides.users.<email>). Idempotent."""
+    if not email.strip():
+        return False, "email 不能空"
+    data = _load_yaml_rt()
+    overrides = data.get("overrides")
+    if isinstance(overrides, dict):
+        users = overrides.get("users")
+        if isinstance(users, dict) and email in users:
+            del users[email]
+            ok, msg = _write_yaml_rt(data)
+            if ok:
+                logger.info("delete_user_override: %s 删了", email)
+            return ok, msg
+    return True, ""
+
+
+def put_dept_override(name: str, tokens_per_day: int) -> tuple[bool, str]:
+    """加/改部门 override (overrides.departments.<name>). 优先级高于 defaults."""
+    if not name.strip():
+        return False, "department 不能空"
+    if tokens_per_day < 0:
+        return False, "tokens_per_day 不能负"
+    data = _load_yaml_rt()
+    overrides = _ensure_dict(data, "overrides")
+    depts = _ensure_dict(overrides, "departments")
+    from ruamel.yaml.comments import CommentedMap
+    entry = CommentedMap()
+    entry["tokens_per_day"] = int(tokens_per_day)
+    depts[name] = entry
+    ok, msg = _write_yaml_rt(data)
+    if ok:
+        logger.info("put_dept_override: %s tokens_per_day=%d", name, tokens_per_day)
+    return ok, msg
+
+
+def delete_dept_override(name: str) -> tuple[bool, str]:
+    """删部门 override (overrides.departments.<name>). Idempotent."""
+    if not name.strip():
+        return False, "department 不能空"
+    data = _load_yaml_rt()
+    overrides = data.get("overrides")
+    if isinstance(overrides, dict):
+        depts = overrides.get("departments")
+        if isinstance(depts, dict) and name in depts:
+            del depts[name]
+            ok, msg = _write_yaml_rt(data)
+            if ok:
+                logger.info("delete_dept_override: %s 删了", name)
+            return ok, msg
+    return True, ""
+
+
+# ── 老接口 (5/2 BL-D9, /api/quota/department/{dept} PUT 用) ────
+#
+# 保留以兼容现有 endpoint. 内部转 put_dept_override (写 overrides.departments).
+# 行为不变 — manager UI 改部门 = 写 override.
+
+
+def update_department_quota(department: str, tokens_per_day: int) -> bool:
+    """改部门 quota → overrides.departments.<dept>. 真路径走 put_dept_override.
+
+    跟 5/2 老 BL-D9 实现行为一致 (写 override 节). 返 bool 而不是 (ok, msg)
+    保 API 兼容 — /api/quota/department/{dept} PUT endpoint 现在仍这签名.
+    """
+    ok, msg = put_dept_override(department, tokens_per_day)
+    if not ok:
+        logger.warning("update_department_quota 失败: %s", msg)
+    return ok
 
 
 def load_quota_config(path: Path | None = None) -> QuotaConfig:

@@ -21,6 +21,11 @@ dependencies = [
     # upper bound 防 2.x breaking 时 CI 静默炸. docs/SECURITY-CVE-LOG.md 有详评.
     "litellm>=1.84.0,<2.0.0",
     "pyyaml>=6.0.2",
+    # P3.5.93 (6/23 鸿波): quota.yaml 编辑 UI 写回需保留 yaml comments.
+    # pyyaml.safe_dump 会吹掉所有 comments (BL-FIX38 / BL-CHENHONGBO-DEV-QUOTA 等
+    # 历史注释 6 周来每改一次部门 quota 就消失一些). ruamel.yaml round_trip
+    # 模式保 comments. 仅 quota.py 用, 其他配置仍走 pyyaml (不必要改动).
+    "ruamel.yaml>=0.18.6",
     "pydantic>=2.9.0",
     "PyJWT[crypto]>=2.9.0",
     "httpx>=0.27.0",

@@ -423,8 +423,11 @@ def make_admin_router(registry: UserRegistry) -> APIRouter:
 
     # ── BL-RBAC-DAY7 (5/17): departments endpoints ─────────────────
     # admin / sysadmin 看 + 改 dept 配置 (allowed_models / allowed_tools /
-    # allowed_skills / quota_models_day / description). manager 只读自己管
-    # 的 dept (managed_departments). employee 没权限.
+    # allowed_skills / description). manager 只读自己管的 dept
+    # (managed_departments). employee 没权限.
+    #
+    # P3.5.93 (6/23): quota_models_day 字段砍, 部门 quota 改在 /admin/quota
+    # (gateway 走 quotas.yaml, 是真生效路径).
 
     @router.get("/departments")
     async def list_departments(
@@ -465,7 +468,6 @@ def make_admin_router(registry: UserRegistry) -> APIRouter:
             allowed_models=req.allowed_models,
             allowed_tools=req.allowed_tools,
             allowed_skills=req.allowed_skills,
-            quota_models_day=req.quota_models_day if req.quota_models_day is not None else -1,
             description=req.description,
         )
         if not ok:
@@ -480,10 +482,13 @@ class UpdateDeptReq(BaseModel):
     """BL-RBAC-DAY7 (5/17): admin /admin/departments/{name} PUT body.
 
     所有字段 optional, None 跳过. allowed_* 是 list[str] (空 = 全允许).
-    quota_models_day 0 = 不限, -1 sentinel 跳过 (但 client 应该不传 -1, 直接不传).
+
+    P3.5.93 (6/23): quota_models_day 字段砍 — 6 周 dead UI (gateway check_quota
+    走 quotas.yaml, 这字段从没生效). 部门 quota 现在在 /admin/quota 改.
+    老 client 传这字段 = pydantic 'extra=ignore' 默认行为 (字段不再 validated,
+    传了也无害, 直接忽略). 加 'extra=forbid' 会 break 老 client. 留默认.
     """
     allowed_models: list[str] | None = None
     allowed_tools: list[str] | None = None
     allowed_skills: list[str] | None = None
-    quota_models_day: int | None = None
     description: str | None = None

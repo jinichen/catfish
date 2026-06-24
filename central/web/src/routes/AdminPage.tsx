@@ -29,6 +29,9 @@ import { AccessPage } from "./admin/AccessPage";
 import { AdvisoryPage } from "./admin/AdvisoryPage";
 // P3.5.60 (6/22 鸿波 catch "继续完成"): 全公司 LLM 性能仪表
 import { PerfPage } from "./admin/PerfPage";
+// P3.5.93 (6/23 鸿波): /admin/quota 真编辑 UI, 替原 AdminQuota P0 placeholder.
+// 一并治 AccessPage 部门 quota 6 周 dead UI (gateway 不读 identity-server).
+import { QuotaConfigPage } from "./admin/QuotaConfigPage";
 
 export function AdminPage() {
   // BL-ARCH1 P1 (5/10): admin 默认能进, sysadmin 看 system. /admin/users 内部不再
@@ -42,7 +45,10 @@ export function AdminPage() {
         <Route path="advisory" element={<AdvisoryPage />} />
         <Route path="system/*" element={<SystemPage />} />
         <Route path="facts/*" element={<FactsPage />} />
-        <Route path="quota" element={<AdminQuota />} />
+        {/* P3.5.93 (6/23 鸿波): /admin/quota 改用 QuotaConfigPage (sysadmin 真编辑).
+            老 AdminQuota static placeholder 函数已无路径引用, 可以砍但保 dead code
+            等下个 sprint 清, 不在 P3.5.93 scope. */}
+        <Route path="quota" element={<QuotaConfigPage />} />
         {/* BL-ADMIN-AUDIT (5/12 鸿波): 逐条 audit 历史 */}
         <Route path="quota/events" element={<AdminQuotaEvents />} />
         {/* P3.5.60 (6/22 鸿波): 全公司 LLM 性能仪表 (latency p50/p95/p99) */}
@@ -195,33 +201,8 @@ function NavTile({
 
 // AdminUsers 旧 inline 版本删了 (BL-ARCH1 P1, 被 routes/admin/UsersPage.tsx 完整 CRUD 替代).
 
-function AdminQuota() {
-  return (
-    <Card title="配额规则 (P0 read-only)">
-      <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
-        <p>
-          配额规则在 <code>central/llm-gateway/config/quotas.yaml</code>.
-          P1 加 web 编辑 UI (defaults / per_model / per_dept / per_user override).
-        </p>
-        <p>当前默认:</p>
-        <ul style={{ paddingLeft: 20 }}>
-          <li><b>admin / sysadmin: 跳所有 quota 检查</b> (BL-FIX39, 5/11) — 系统管理员演示 / 应急 / debug 不被限速</li>
-          <li>per_user: 1M tok/min, 10M tok/day (BL-FIX38, 5/10)</li>
-          <li>ceo override: 同上</li>
-          <li>engineering / 研发部: tokens_per_day=0 (不限)</li>
-        </ul>
-        <p style={{ fontSize: 12, marginTop: 8 }}>
-          注: admin / sysadmin 跳检查但仍写 quota_events 表 (审计能看到 token 用量, 只是不拒请求).
-        </p>
-        <p style={{ fontSize: 13, marginTop: 12 }}>
-          想看**逐条历史日志** (按部门 / 员工 / 模型 / 状态筛选 + 分页 + CSV 导出)?
-          <br />
-          → <Link to="/admin/quota/events" style={{ color: "var(--accent)" }}>跳到 Quota 历史日志</Link>
-        </p>
-      </div>
-    </Card>
-  );
-}
+// P3.5.93 (6/23 鸿波): 老 AdminQuota P0 placeholder 函数砍 — /admin/quota
+// 已切到 QuotaConfigPage 真编辑. 文本里写的 "P1 加 web 编辑 UI" 6 周后真做了.
 
 function AdminBilling() {
   return (

@@ -154,3 +154,29 @@ async def users_audit(request: Request, user: User = Depends(get_current_user)) 
 @router.get("/me-as-admin")
 async def me_as_admin(request: Request, user: User = Depends(get_current_user)) -> Response:
     return await _proxy(request, "/admin/me-as-admin", user)
+
+
+# ── P3.5.95 (6/23 鸿波): /departments 透传 — 治 5/17 BL-RBAC-DAY7 漏的 dead UI
+#
+# identity-server admin_router 真有 3 个 endpoint, 但 gateway admin_proxy 没透传.
+# 6 周来 AccessPage 列表 → 404 静默吃 → "0 个部门". 修法只在 gateway 这层补:
+#   GET    /departments        → 列所有
+#   GET    /departments/{name}  → 单个详情
+#   PUT    /departments/{name}  → 改 allowed_models / allowed_tools / allowed_skills
+# 没 POST / DELETE — 部门是 alembic 20260517_004 seed 进去的 4 个 RBAC dept,
+# 不允许 CRUD (跟现实匹配: 部门是 HR 流程产物, 不是中央门户 self-service).
+
+
+@router.get("/departments")
+async def list_departments(request: Request, user: User = Depends(get_current_user)) -> Response:
+    return await _proxy(request, "/admin/departments", user)
+
+
+@router.get("/departments/{name}")
+async def get_department(name: str, request: Request, user: User = Depends(get_current_user)) -> Response:
+    return await _proxy(request, f"/admin/departments/{name}", user)
+
+
+@router.put("/departments/{name}")
+async def update_department(name: str, request: Request, user: User = Depends(get_current_user)) -> Response:
+    return await _proxy(request, f"/admin/departments/{name}", user)

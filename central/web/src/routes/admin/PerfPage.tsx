@@ -16,7 +16,15 @@
 import { useEffect, useState } from "react";
 
 import { Card } from "../../components/Card";
-import { fetchGlobalPerf, type GlobalPerf } from "../../lib/me";
+import {
+  fetchGlobalPerf,
+  fetchModelCatalog,
+  type CatalogModel,
+  type GlobalPerf,
+} from "../../lib/me";
+// P3.5.94 (6/23 鸿波): model/dept filter 改 select 下拉. 复用 AccessPage 已
+// 用的 listDepartments + 新加的 fetchModelCatalog (调 /v1/catalog).
+import { adminApi, type Department } from "../../lib/admin";
 
 const TIME_WINDOWS = [
   { hours: 24, label: "24h" },
@@ -111,6 +119,22 @@ export function PerfPage() {
   const [error, setError] = useState<{ status?: number; message: string } | null>(null);
   const [fetchedAt, setFetchedAt] = useState<number | null>(null);
 
+  // P3.5.94 (6/23 鸿波): model/dept 下拉数据源, 独立 fetch 不受 filter 影响.
+  // 不用 perf.by_model — filter 选后只剩 1 项会锁死 dropdown.
+  const [allModels, setAllModels] = useState<CatalogModel[]>([]);
+  const [allDepts, setAllDepts] = useState<Department[]>([]);
+
+  useEffect(() => {
+    // 拉一次 model catalog + dept list (mount 后)
+    void fetchModelCatalog().then(setAllModels);
+    void adminApi
+      .listDepartments()
+      .then((r) => setAllDepts(r.departments ?? []))
+      .catch(() => {
+        /* admin 可能拿不到 dept (manager 路径), 忽略, 下拉退化为空 */
+      });
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -173,39 +197,65 @@ export function PerfPage() {
               </button>
             ))}
           </div>
+          {/* P3.5.94 (6/23 鸿波): model/dept 改下拉. 数据 catalog + dept list,
+              不受 filter 影响 (要不切回别的 model 就锁死).
+              当前 modelFilter 值如果不在 allModels 里 (e.g. 老 audit 行点的
+              已过期 model), option 兜底加一行让 UI 不显示 "全部". */}
           <div>
             <span style={{ fontSize: 12, color: "var(--text-muted)", marginRight: 6 }}>
-              model:
+              模型:
             </span>
-            <input
+            <select
               value={modelFilter}
               onChange={(e) => setModelFilter(e.target.value)}
-              placeholder="全部"
               style={{
                 padding: "3px 8px",
                 border: "1px solid var(--border)",
                 borderRadius: 4,
                 fontSize: 12,
-                width: 180,
+                minWidth: 180,
+                background: "var(--bg-elev)",
+                color: "var(--text)",
               }}
-            />
+            >
+              <option value="">全部 ({allModels.length})</option>
+              {modelFilter && !allModels.some((m) => m.id === modelFilter) && (
+                <option value={modelFilter}>{modelFilter} (已过期)</option>
+              )}
+              {allModels.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.display_name || m.id}
+                </option>
+              ))}
+            </select>
           </div>
           <div>
             <span style={{ fontSize: 12, color: "var(--text-muted)", marginRight: 6 }}>
-              department:
+              部门:
             </span>
-            <input
+            <select
               value={deptFilter}
               onChange={(e) => setDeptFilter(e.target.value)}
-              placeholder="全部"
               style={{
                 padding: "3px 8px",
                 border: "1px solid var(--border)",
                 borderRadius: 4,
                 fontSize: 12,
-                width: 140,
+                minWidth: 140,
+                background: "var(--bg-elev)",
+                color: "var(--text)",
               }}
-            />
+            >
+              <option value="">全部 ({allDepts.length})</option>
+              {deptFilter && !allDepts.some((d) => d.name === deptFilter) && (
+                <option value={deptFilter}>{deptFilter} (历史)</option>
+              )}
+              {allDepts.map((d) => (
+                <option key={d.name} value={d.name}>
+                  {d.name}
+                </option>
+              ))}
+            </select>
           </div>
           {loading && (
             <span style={{ fontSize: 12, color: "var(--text-muted)" }}>加载中…</span>

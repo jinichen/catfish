@@ -68,12 +68,13 @@ export interface UpdateUserReq {
 }
 
 // BL-RBAC-DAY7 (5/17): Department CRUD
+// P3.5.93 (6/23 鸿波): quota_models_day 字段砍 — 6 周 dead UI.
+// 部门 token quota 改在 /admin/quota (走 quotas.yaml, gateway 真生效路径).
 export interface Department {
   name: string;
   allowed_models: string[];
   allowed_tools: string[];
   allowed_skills: string[];
-  quota_models_day: number;
   description: string;
   created_at: string | null;
   updated_at: string | null;
@@ -83,7 +84,6 @@ export interface UpdateDeptReq {
   allowed_models?: string[];
   allowed_tools?: string[];
   allowed_skills?: string[];
-  quota_models_day?: number;
   description?: string;
 }
 

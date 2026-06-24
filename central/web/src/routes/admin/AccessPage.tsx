@@ -60,8 +60,12 @@ function DeptList() {
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
       <Card title={`部门 RBAC 管理 · ${depts.length} 个部门`}>
         <p style={{ color: "var(--text-muted)", margin: "0 0 var(--space-3) 0", fontSize: 13 }}>
-          配置每个部门可见的模型 / 工具 / 技能 / 房间. 空 list = 全允许 (开放默认).
+          配置每个部门可见的模型 / 工具 / 技能. 空 list = 全允许 (开放默认).
           员工级 override 走 <Link to="/admin/users">用户管理</Link> 页面.
+          {/* P3.5.93 (6/23 鸿波): 部门 token quota 编辑搬到 /admin/quota.
+              原"每日 token" 列 6 周来 dead UI (gateway 不读 identity-server, 真生效在 quotas.yaml). */}
+          <br />
+          部门 token quota 改在 <Link to="/admin/quota">配额规则</Link> 页面 (走 quotas.yaml).
         </p>
 
         {loading && <p style={{ color: "var(--text-muted)" }}>加载中…</p>}
@@ -78,7 +82,6 @@ function DeptList() {
                 <th style={th}>Models</th>
                 <th style={th}>Tools</th>
                 <th style={th}>Skills</th>
-                <th style={th}>每日 token</th>
                 <th style={th}></th>
               </tr>
             </thead>
@@ -99,9 +102,6 @@ function DeptList() {
                   <td style={td}>{summarize(d.allowed_models)}</td>
                   <td style={td}>{summarize(d.allowed_tools)}</td>
                   <td style={td}>{summarize(d.allowed_skills)}</td>
-                  <td style={td}>
-                    {d.quota_models_day === 0 ? "∞" : fmtNum(d.quota_models_day)}
-                  </td>
                   <td style={td}>
                     <Link
                       to={`/admin/access/${encodeURIComponent(d.name)}`}
@@ -127,11 +127,8 @@ function summarize(list: string[] | null | undefined): string {
   return `${list.length} 项`;
 }
 
-function fmtNum(n: number): string {
-  if (n < 1000) return String(n);
-  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}K`;
-  return `${(n / 1_000_000).toFixed(2)}M`;
-}
+// P3.5.93 (6/23 鸿波): fmtNum 唯一调用是部门列表 quota 列, 那列砍了, 函数也砍.
+// QuotaConfigPage 自己有 fmtNum (略不同 UX).
 
 
 // ── Detail ───────────────────────────────────────────────────────
@@ -146,11 +143,11 @@ function DeptDetail() {
   const [saving, setSaving] = useState(false);
 
   // 4 个 textarea 的本地状态 (一行一条)
+  // P3.5.93 (6/23 鸿波): quotaText 砍 — 部门 quota 改在 /admin/quota (走 yaml).
   const [modelsText, setModelsText] = useState("");
   const [toolsText, setToolsText] = useState("");
   const [skillsText, setSkillsText] = useState("");
   const [description, setDescription] = useState("");
-  const [quotaText, setQuotaText] = useState("0");
 
   useEffect(() => {
     (async () => {
@@ -161,7 +158,6 @@ function DeptDetail() {
         setToolsText((r.department.allowed_tools || []).join("\n"));
         setSkillsText((r.department.allowed_skills || []).join("\n"));
         setDescription(r.department.description || "");
-        setQuotaText(String(r.department.quota_models_day || 0));
         setError(null);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -175,12 +171,10 @@ function DeptDetail() {
       const allowed_models = parseLines(modelsText);
       const allowed_tools = parseLines(toolsText);
       const allowed_skills = parseLines(skillsText);
-      const quota_models_day = parseInt(quotaText, 10) || 0;
       const r = await adminApi.updateDepartment(name, {
         allowed_models,
         allowed_tools,
         allowed_skills,
-        quota_models_day,
         description,
       });
       setDept(r.department);
@@ -250,25 +244,18 @@ ALWAYS_ON 工具 (memory / execute_code / ...) 永远保留, 不被砍.`}
           mono
         />
 
-        <div>
-          <label style={labelStyle}>
-            每日 token 上限 (quota_models_day)
-            <br />
-            <span style={hintStyle}>0 = 不限</span>
-          </label>
-          <input
-            type="number"
-            value={quotaText}
-            onChange={(e) => setQuotaText(e.target.value)}
-            min={0}
-            style={{
-              width: 200,
-              padding: "var(--space-1) var(--space-2)",
-              border: "1px solid var(--border)",
-              borderRadius: 4,
-              fontFamily: "monospace",
-            }}
-          />
+        {/* P3.5.93 (6/23 鸿波): 部门 token quota 编辑搬到 /admin/quota.
+            6 周来这 input 写 identity-server PG, 但 gateway check_quota 走 quotas.yaml,
+            一直没生效. 一处编辑收口到 quotas.yaml (real source of truth). */}
+        <div style={{
+          padding: "var(--space-2)",
+          background: "var(--bg-muted)",
+          borderRadius: 4,
+          fontSize: 12,
+          color: "var(--text-muted)",
+        }}>
+          部门 token quota 改在 <Link to="/admin/quota">配额规则</Link> 页面.
+          (P3.5.93 6 周来 dead UI 治本: 真生效路径走 quotas.yaml 而不是这里.)
         </div>
 
         {error && (

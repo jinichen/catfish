@@ -36,7 +36,10 @@ class Department:
 
     name: str
     allowed_models: list[str] = field(default_factory=list)
-    quota_models_day: int = 0  # 0 = 不限 (BL-F14 兼容)
+    # P3.5.93 (6/23 鸿波): 砍 quota_models_day 字段 — 6 周来 dead UI.
+    # gateway check_quota 真路径走 quotas.yaml (overrides.departments), 完全
+    # 不读这字段. 部门 quota 编辑收口到 /admin/quota (走 yaml).
+    # alembic 20260623_009 drop column.
     description: str = ""
     created_at: str | None = None
     updated_at: str | None = None
@@ -59,7 +62,6 @@ class Department:
         return {
             "name": self.name,
             "allowed_models": self.allowed_models,
-            "quota_models_day": self.quota_models_day,
             "description": self.description,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -89,11 +91,12 @@ class DepartmentRegistry:
         try:
             async with pool.acquire() as conn:
                 rows = await conn.fetch(
-                    "SELECT name, allowed_models, quota_models_day, description, "
+                    "SELECT name, allowed_models, description, "
                     "created_at, updated_at, "
                     # BL-RBAC-DAY4 (5/17): allowed_tools 加入
                     "allowed_tools, "
                     # BL-RBAC-DAY5 (5/17): allowed_skills 加入
+                    # P3.5.93 (6/23): quota_models_day 砍, alembic 009 drop
                     "allowed_skills "
                     "FROM departments"
                 )
@@ -132,7 +135,6 @@ class DepartmentRegistry:
             loaded[row["name"]] = Department(
                 name=row["name"],
                 allowed_models=[str(m) for m in am],
-                quota_models_day=int(row["quota_models_day"] or 0),
                 description=row["description"] or "",
                 created_at=row["created_at"].isoformat() if row.get("created_at") else None,
                 updated_at=row["updated_at"].isoformat() if row.get("updated_at") else None,
@@ -163,13 +165,14 @@ class DepartmentRegistry:
         allowed_models: list[str] | None = None,
         allowed_tools: list[str] | None = None,
         allowed_skills: list[str] | None = None,
-        quota_models_day: int | None = None,
         description: str | None = None,
     ) -> tuple[bool, str]:
         """BL-RBAC-DAY7 (5/17): admin 改 dept 配置. PG UPDATE + 内存 cache 失效.
 
-        None 跳过, list (含空 []) 写入. quota = -1 跳过 (sentinel, 0 是合法 "不限").
-        admin_router /departments/{name} PUT 用.
+        None 跳过, list (含空 []) 写入. admin_router /departments/{name} PUT 用.
+
+        P3.5.93 (6/23): quota_models_day param 砍, 部门 quota 改在 /admin/quota
+        (走 quotas.yaml), 这字段已 6 周 dead UI.
         """
         from .db import get_pool  # noqa: PLC0415
 
@@ -189,9 +192,6 @@ class DepartmentRegistry:
         if allowed_skills is not None:
             sets.append(f"allowed_skills = ${len(params) + 1}::jsonb")
             params.append(json.dumps([str(s) for s in allowed_skills]))
-        if quota_models_day is not None and quota_models_day >= 0:
-            sets.append(f"quota_models_day = ${len(params) + 1}")
-            params.append(int(quota_models_day))
         if description is not None:
             sets.append(f"description = ${len(params) + 1}")
             params.append(description)

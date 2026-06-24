@@ -961,6 +961,191 @@ def _require_admin(user: User) -> None:
         )
 
 
+# ── P3.5.93 (6/23 鸿波): /admin/quota web 编辑 UI 后端 ────
+#
+# 10 个 endpoint, sysadmin only. 改的全是 quotas.yaml, gateway hot reload
+# (load_quota_config 无 cache, 每请求重读). RBAC: sysadmin, 比 advisory 一致 —
+# 改全员 quota 比改部门 RBAC 影响更大, 只有 sysadmin 能动.
+#
+# 跟老 /api/quota/department/{dept} (BL-D9 5/2) 关系:
+#   - 老 endpoint 仍保留 (内部 update_department_quota → put_dept_override 等价)
+#   - 新 endpoint 命名空间 /api/admin/quota/* 跟其他 admin 一致 (/api/admin/advisory)
+#   - AccessPage 的部门 quota 编辑已 6 周来不生效 (写 identity-server 但 gateway
+#     不读), P3.5.93 一并砍掉 — 部门 quota 收口到 /admin/quota 走 yaml.
+
+
+def _require_sysadmin(user: User) -> None:
+    """quota 全局编辑只 sysadmin 能用 (改 default 影响全员)."""
+    if user.role != "sysadmin":
+        raise HTTPException(
+            status_code=403,
+            detail=f"role={user.role} 不能编辑 quota 配置 (sysadmin only)",
+        )
+
+
+class _PerUserDefaults(_BaseModel):
+    tokens_per_minute: int
+    tokens_per_day: int
+
+
+class _ModelQuotaBody(_BaseModel):
+    tokens_per_day: int
+
+
+class _DeptQuotaBody(_BaseModel):
+    tokens_per_day: int
+
+
+class _UserOverrideBody(_BaseModel):
+    tokens_per_minute: int
+    tokens_per_day: int
+
+
+@app.get("/api/admin/quota/config")
+async def api_admin_quota_config(
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """返完整 quotas.yaml dict (defaults + overrides). sysadmin only."""
+    from . import quota
+    _require_sysadmin(user)
+    return {
+        "config": quota.get_full_config_dict(),
+        "viewer_role": user.role,
+    }
+
+
+@app.put("/api/admin/quota/defaults/per_user")
+async def api_admin_quota_default_per_user(
+    body: _PerUserDefaults,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """改全员默认 per_user (defaults.per_user). sysadmin only."""
+    from . import quota
+    _require_sysadmin(user)
+    ok, msg = quota.update_default_per_user(body.tokens_per_minute, body.tokens_per_day)
+    if not ok:
+        raise HTTPException(500, detail=msg or "写 quotas.yaml 失败")
+    return {"ok": True, "updated_by": user.sub, **body.model_dump()}
+
+
+@app.put("/api/admin/quota/per_model/{name}")
+async def api_admin_quota_put_per_model(
+    name: str,
+    body: _ModelQuotaBody,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """加/改单 model quota (defaults.per_model.<name>). sysadmin only."""
+    from . import quota
+    _require_sysadmin(user)
+    ok, msg = quota.put_per_model(name, body.tokens_per_day)
+    if not ok:
+        raise HTTPException(500, detail=msg or "写 quotas.yaml 失败")
+    return {"ok": True, "name": name, "tokens_per_day": body.tokens_per_day}
+
+
+@app.delete("/api/admin/quota/per_model/{name}")
+async def api_admin_quota_delete_per_model(
+    name: str,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """删 model quota. Idempotent. sysadmin only."""
+    from . import quota
+    _require_sysadmin(user)
+    ok, msg = quota.delete_per_model(name)
+    if not ok:
+        raise HTTPException(500, detail=msg or "写失败")
+    return {"ok": True, "name": name}
+
+
+@app.put("/api/admin/quota/per_department/{name}")
+async def api_admin_quota_put_per_department(
+    name: str,
+    body: _DeptQuotaBody,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """加/改部门默认 quota (defaults.per_department.<name>). sysadmin only."""
+    from . import quota
+    _require_sysadmin(user)
+    ok, msg = quota.put_per_department(name, body.tokens_per_day)
+    if not ok:
+        raise HTTPException(500, detail=msg or "写 quotas.yaml 失败")
+    return {"ok": True, "name": name, "tokens_per_day": body.tokens_per_day}
+
+
+@app.delete("/api/admin/quota/per_department/{name}")
+async def api_admin_quota_delete_per_department(
+    name: str,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """删部门默认 quota. Idempotent. sysadmin only."""
+    from . import quota
+    _require_sysadmin(user)
+    ok, msg = quota.delete_per_department(name)
+    if not ok:
+        raise HTTPException(500, detail=msg or "写失败")
+    return {"ok": True, "name": name}
+
+
+@app.put("/api/admin/quota/overrides/users/{email}")
+async def api_admin_quota_put_user_override(
+    email: str,
+    body: _UserOverrideBody,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """加/改用户 override (overrides.users.<email>). sysadmin only."""
+    from . import quota
+    _require_sysadmin(user)
+    ok, msg = quota.put_user_override(
+        email, body.tokens_per_minute, body.tokens_per_day,
+    )
+    if not ok:
+        raise HTTPException(400 if "email" in msg or "格式" in msg else 500, detail=msg)
+    return {"ok": True, "email": email, **body.model_dump()}
+
+
+@app.delete("/api/admin/quota/overrides/users/{email}")
+async def api_admin_quota_delete_user_override(
+    email: str,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """删用户 override. Idempotent. sysadmin only."""
+    from . import quota
+    _require_sysadmin(user)
+    ok, msg = quota.delete_user_override(email)
+    if not ok:
+        raise HTTPException(500, detail=msg or "写失败")
+    return {"ok": True, "email": email}
+
+
+@app.put("/api/admin/quota/overrides/departments/{name}")
+async def api_admin_quota_put_dept_override(
+    name: str,
+    body: _DeptQuotaBody,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """加/改部门 override (overrides.departments.<name>). 优先级高于 defaults."""
+    from . import quota
+    _require_sysadmin(user)
+    ok, msg = quota.put_dept_override(name, body.tokens_per_day)
+    if not ok:
+        raise HTTPException(500, detail=msg or "写 quotas.yaml 失败")
+    return {"ok": True, "name": name, "tokens_per_day": body.tokens_per_day}
+
+
+@app.delete("/api/admin/quota/overrides/departments/{name}")
+async def api_admin_quota_delete_dept_override(
+    name: str,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """删部门 override. Idempotent. sysadmin only."""
+    from . import quota
+    _require_sysadmin(user)
+    ok, msg = quota.delete_dept_override(name)
+    if not ok:
+        raise HTTPException(500, detail=msg or "写失败")
+    return {"ok": True, "name": name}
+
+
 @app.get("/api/quota/global")
 async def api_quota_global(
     user: User = Depends(get_current_user),

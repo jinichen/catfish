@@ -578,3 +578,131 @@ def test_audit_period_totals_filter_applies(tmp_path: Path) -> None:
     )
     assert s["request_count"] == 1
     assert s["total_tokens"] == 1000
+
+
+# ── P3.5.93 (6/23 鸿波): web 编辑 UI 后端 CRUD + ruamel comment preserve ─
+
+
+_YAML_WITH_COMMENTS = """defaults:
+  per_user:
+    # BL-FIX38 (5/10): demo/调试 100K/min 太低
+    # 5/9 前所有 chat 挂 dev-user 不限速
+    tokens_per_minute: 3000000
+    tokens_per_day: 300000000
+  per_model:
+    Qwen3.6-Flash:
+      tokens_per_day: 5000000
+overrides:
+  users:
+    # 5/24 BL-CHENHONGBO-DEV-QUOTA: 鸿波 sysadmin 主开发 临时 100M
+    chenhongbo@ffcs.cn:
+      tokens_per_minute: 30000000
+      tokens_per_day: 300000000
+"""
+
+
+def test_p3_5_93_ruamel_preserves_comments_on_write(tmp_path: Path) -> None:
+    """治本 6 周 bug: pyyaml safe_dump 吹掉 yaml comments.
+
+    ruamel round_trip 写后 yaml 注释还在. 真因 audit-5 (6/23 鸿波 catch).
+    """
+    _write_quotas_yaml(tmp_path, _YAML_WITH_COMMENTS)
+    ok, msg = quota.put_dept_override("研发部", 100_000_000)
+    assert ok, msg
+
+    result = (tmp_path / "quotas.yaml").read_text(encoding="utf-8")
+    # 4 行历史 BL-* 注释全保留
+    assert "BL-FIX38 (5/10)" in result
+    assert "5/9 前所有 chat" in result
+    assert "BL-CHENHONGBO-DEV-QUOTA" in result
+    # 新写的部门 override 也在
+    assert "研发部" in result
+    assert "100000000" in result
+
+
+def test_p3_5_93_get_full_config_dict(tmp_path: Path) -> None:
+    """读完整 config 给 admin UI."""
+    _write_quotas_yaml(tmp_path, _YAML_WITH_COMMENTS)
+    cfg = quota.get_full_config_dict()
+    # 是纯 dict (不是 CommentedMap), 给 FastAPI JSON 序列化
+    assert isinstance(cfg, dict)
+    assert cfg["defaults"]["per_user"]["tokens_per_minute"] == 3000000
+    assert cfg["overrides"]["users"]["chenhongbo@ffcs.cn"]["tokens_per_day"] == 300000000
+
+
+def test_p3_5_93_update_default_per_user(tmp_path: Path) -> None:
+    _write_quotas_yaml(tmp_path, _YAML_WITH_COMMENTS)
+    ok, msg = quota.update_default_per_user(5_000_000, 500_000_000)
+    assert ok, msg
+
+    cfg = quota.load_quota_config()
+    assert cfg.default_user.tokens_per_minute == 5_000_000
+    assert cfg.default_user.tokens_per_day == 500_000_000
+
+
+def test_p3_5_93_put_and_delete_per_model(tmp_path: Path) -> None:
+    ok, _ = quota.put_per_model("MyModel-X", 10_000_000)
+    assert ok
+    cfg = quota.load_quota_config()
+    assert cfg.model_quotas["MyModel-X"].tokens_per_day == 10_000_000
+
+    ok, _ = quota.delete_per_model("MyModel-X")
+    assert ok
+    cfg = quota.load_quota_config()
+    assert "MyModel-X" not in cfg.model_quotas
+
+
+def test_p3_5_93_delete_per_model_idempotent(tmp_path: Path) -> None:
+    ok, _ = quota.delete_per_model("不存在")
+    assert ok  # idempotent — 不抛, 返 success
+
+
+def test_p3_5_93_put_and_delete_user_override(tmp_path: Path) -> None:
+    ok, _ = quota.put_user_override("alice@x.com", 2_000_000, 200_000_000)
+    assert ok
+    cfg = quota.load_quota_config()
+    assert cfg.user_overrides["alice@x.com"].tokens_per_minute == 2_000_000
+    assert cfg.user_overrides["alice@x.com"].tokens_per_day == 200_000_000
+
+    ok, _ = quota.delete_user_override("alice@x.com")
+    assert ok
+    cfg = quota.load_quota_config()
+    assert "alice@x.com" not in cfg.user_overrides
+
+
+def test_p3_5_93_put_user_override_rejects_bad_email(tmp_path: Path) -> None:
+    ok, msg = quota.put_user_override("not-an-email", 1000, 1000)
+    assert not ok
+    assert "email" in msg.lower() or "格式" in msg
+
+
+def test_p3_5_93_put_user_override_rejects_negative(tmp_path: Path) -> None:
+    ok, msg = quota.put_user_override("a@x.com", -1, 1000)
+    assert not ok
+    assert "负" in msg
+
+
+def test_p3_5_93_put_and_delete_dept_override(tmp_path: Path) -> None:
+    ok, _ = quota.put_dept_override("市场部", 50_000_000)
+    assert ok
+    cfg = quota.load_quota_config()
+    # overrides.departments 写入 department_quotas (load_quota_config 把 defaults
+    # 和 overrides 合并, override 后写覆盖 default)
+    assert cfg.department_quotas["市场部"].tokens_per_day == 50_000_000
+
+    ok, _ = quota.delete_dept_override("市场部")
+    assert ok
+
+
+def test_p3_5_93_put_per_department_default(tmp_path: Path) -> None:
+    ok, _ = quota.put_per_department("人力资源部", 5_000_000)
+    assert ok
+    cfg = quota.load_quota_config()
+    assert cfg.department_quotas["人力资源部"].tokens_per_day == 5_000_000
+
+
+def test_p3_5_93_old_update_department_quota_still_works(tmp_path: Path) -> None:
+    """老接口 BL-D9 5/2 兼容 — manager UI /api/quota/department/{dept} 仍调."""
+    assert quota.update_department_quota("研发部", 100_000_000) is True
+    cfg = quota.load_quota_config()
+    assert cfg.department_quotas["研发部"].tokens_per_day == 100_000_000

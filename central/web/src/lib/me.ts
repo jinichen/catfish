@@ -295,3 +295,36 @@ export async function updateDepartmentQuota(
     return { ok: false, detail: String(e) };
   }
 }
+
+// ── P3.5.94 (6/23 鸿波): /v1/catalog 模型清单 — 给 PerfPage / 其他页面下拉用 ─
+//
+// catalog 是 anon endpoint (build_catalog 真返 — 不暴露 api_base / key),
+// 安全可用. 用 id 做 filter value, display_name 做下拉文案.
+
+export interface CatalogModel {
+  id: string;
+  display_name: string;
+  tier?: string;
+  recommended_for?: string[];
+  context_window?: number;
+  cost_tier?: string;
+  supports_tool_use?: boolean;
+  supports_vision?: boolean;
+  api_key_configured?: boolean;
+  is_reachable?: boolean | null;
+}
+
+export interface CatalogResponse {
+  models: CatalogModel[];
+  default?: string | null;
+  authenticated?: boolean;
+}
+
+export async function fetchModelCatalog(): Promise<CatalogModel[]> {
+  try {
+    const r = await api.get<CatalogResponse>("/v1/catalog");
+    return r.models ?? [];
+  } catch {
+    return [];
+  }
+}
