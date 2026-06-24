@@ -182,6 +182,29 @@ export default function WikiTree() {
     return g;
   }, [filtered]);
 
+  // P3.5.99 (6/24 鸿波 catch "62 实体看不过来, 200 真要爆"): 实体内部按
+  // related[0] (第一个关联的 concept) 自动二级分组. 数据天然形成 — 鲶鱼
+  // distill 时把 entity 的 body 写了 `[[XXX 类]]` wikilink (P3.5.42.13 后
+  // 端 merge 进 related). 7 个 concept hub 已经是天然类目.
+  //
+  // 无 related 的 entity → "未分类" 组. 默认推到最后.
+  // count desc 排, 大类在前 (UX: 先看主流, 末尾扫边角).
+  const entityCategories = useMemo(() => {
+    const map = new Map<string, WikiFileInfo[]>();
+    for (const e of grouped.entity) {
+      const category = e.related[0]?.trim() || "未分类";
+      if (!map.has(category)) map.set(category, []);
+      map.get(category)!.push(e);
+    }
+    return Array.from(map.entries()).sort((a, b) => {
+      // 未分类推最后
+      if (a[0] === "未分类") return 1;
+      if (b[0] === "未分类") return -1;
+      // 其他按 count desc
+      return b[1].length - a[1].length;
+    });
+  }, [grouped.entity]);
+
   // E4 (6/6 taste-skill 改造): 走 globals.css `.wiki-*` class.
   // 主要改: hardcoded `#0d9488` `#4a9eff` 非 brand 色统一到 brand 墨青;
   // mode + kind toggle 改 pill segmented control; 去 emoji; 加 hover/focus.
@@ -334,7 +357,14 @@ export default function WikiTree() {
 
       {!(searchMode !== "title" && search.trim()) && (
         <>
-          <Group label="实体 (entities)" emoji="🧑" color="#4a9eff" files={grouped.entity} selectedPath={selectedPath} onSelect={selectFile} />
+          {/* P3.5.99 (6/24 鸿波): 实体改 EntityGroup 走二级分组 (related[0]),
+              避免 62/200 全平铺. 概念 / 查询 数量小, 仍走平铺 Group. */}
+          <EntityGroup
+            total={grouped.entity.length}
+            categories={entityCategories}
+            selectedPath={selectedPath}
+            onSelect={selectFile}
+          />
           <Group label="概念 (concepts)" emoji="📐" color="#ff9933" files={grouped.concept} selectedPath={selectedPath} onSelect={selectFile} />
           <Group label="查询 (queries)" emoji="💬" color="#5fc878" files={grouped.query} selectedPath={selectedPath} onSelect={selectFile} />
           {/* P3.3.18 Phase 4 (6/10): 已装部门 wiki — read-only, 跟个人 wiki 视觉分离 */}
@@ -465,6 +495,207 @@ function Group({
           );
         })}
       </ul>
+      )}
+    </div>
+  );
+}
+
+/** P3.5.99 (6/24 鸿波) — 实体二级分组 group: 顶层 "实体 (62)" + 内嵌 N 个
+ *  CategorySubgroup ("信息安全与安防类 (15)" 等), 跟图谱里 concept hub 一致.
+ *
+ *  数据驱动: entity.related[0] (P3.5.42.13 后端 merge body wikilink), 0 人工干预.
+ *  localStorage key 跟原 Group "实体 (entities)" 保持兼容 (用户原折叠状态不丢).
+ */
+function EntityGroup({
+  total,
+  categories,
+  selectedPath,
+  onSelect,
+}: {
+  total: number;
+  categories: Array<[string, WikiFileInfo[]]>;
+  selectedPath: string | null;
+  onSelect: (relPath: string) => void;
+}) {
+  const lsKey = "wiki_group_collapsed_实体 (entities)"; // 跟原 Group 一致, 不丢用户折叠
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem(lsKey);
+      if (v === null) return true; // 默认折 (62 行太长)
+      return v === "1";
+    } catch {
+      return true;
+    }
+  });
+  const toggle = () => {
+    setCollapsed((c) => {
+      const next = !c;
+      try {
+        localStorage.setItem(lsKey, next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  };
+  if (total === 0) return null;
+  return (
+    <div className={"wiki-group " + (collapsed ? "" : "wiki-group--open")}>
+      <div
+        className="wiki-group__header"
+        onClick={toggle}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            toggle();
+          }
+        }}
+        role="button"
+        tabIndex={0}
+        aria-expanded={!collapsed}
+        style={{ color: "#4a9eff" }}
+      >
+        <span className="wiki-group__caret">▶</span>
+        <span>🧑 实体 (entities)</span>
+        <span style={{ fontWeight: 400, color: "var(--catfish-text-muted)", marginLeft: "auto" }}>
+          {total}
+        </span>
+      </div>
+      {!collapsed && (
+        <div style={{ paddingLeft: 8 }}>
+          {categories.map(([category, list]) => (
+            <CategorySubgroup
+              key={category}
+              category={category}
+              files={list}
+              selectedPath={selectedPath}
+              onSelect={onSelect}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** P3.5.99 — 实体的二级 category 子组. 跟 Group 同款 collapsible + localStorage,
+ *  但视觉更紧 (字号 / padding 缩小, 加缩进区分). 默认折叠 (二级太多, 全开会爆).
+ */
+function CategorySubgroup({
+  category,
+  files,
+  selectedPath,
+  onSelect,
+}: {
+  category: string;
+  files: WikiFileInfo[];
+  selectedPath: string | null;
+  onSelect: (relPath: string) => void;
+}) {
+  const lsKey = `wiki_subgroup_collapsed_${category}`;
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem(lsKey);
+      if (v === null) return true; // 默认折
+      return v === "1";
+    } catch {
+      return true;
+    }
+  });
+  const toggle = () => {
+    setCollapsed((c) => {
+      const next = !c;
+      try {
+        localStorage.setItem(lsKey, next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  };
+  if (files.length === 0) return null;
+  return (
+    <div
+      style={{
+        margin: "2px 0",
+        borderLeft: "2px solid var(--catfish-border)",
+        paddingLeft: 6,
+      }}
+    >
+      <div
+        onClick={toggle}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            toggle();
+          }
+        }}
+        role="button"
+        tabIndex={0}
+        aria-expanded={!collapsed}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 4,
+          padding: "3px 6px",
+          fontSize: 11,
+          color: category === "未分类" ? "var(--catfish-text-muted)" : "var(--catfish-text)",
+          cursor: "pointer",
+          userSelect: "none",
+          fontWeight: 500,
+        }}
+      >
+        <span
+          style={{
+            display: "inline-block",
+            transition: "transform 0.15s",
+            transform: collapsed ? "rotate(0deg)" : "rotate(90deg)",
+            fontSize: 9,
+          }}
+        >
+          ▶
+        </span>
+        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {category}
+        </span>
+        <span style={{ fontSize: 10, color: "var(--catfish-text-muted)", fontWeight: 400 }}>
+          {files.length}
+        </span>
+      </div>
+      {!collapsed && (
+        <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+          {files.map((f) => {
+            const active = selectedPath === f.rel_path;
+            return (
+              <li key={f.rel_path}>
+                <button
+                  onClick={() => onSelect(f.rel_path)}
+                  title={f.rel_path}
+                  style={{
+                    display: "block",
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "3px 8px 3px 14px",
+                    fontSize: 11,
+                    border: "none",
+                    background: active ? "var(--catfish-bg-hover, #e8f0ff)" : "transparent",
+                    color: active ? "#4a9eff" : "var(--catfish-text)",
+                    cursor: "pointer",
+                    borderRadius: 4,
+                    fontWeight: active ? 600 : 400,
+                  }}
+                >
+                  {f.title}
+                  {f.subtype && (
+                    <span style={{ fontSize: 9, color: "var(--catfish-text-muted)", marginLeft: 6 }}>
+                      {f.subtype}
+                    </span>
+                  )}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
       )}
     </div>
   );
