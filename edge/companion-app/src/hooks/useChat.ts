@@ -202,6 +202,21 @@ export function useChat(_initialModel: string) {
       // 每条 stream 自己一套, 跨 session 并发不会串 delta.
       let pendingDelta = "";
       let rafId: number | null = null;
+      // P3.5.97 (6/24 鸿波): 闭包累 assistant content, 不再读 store.
+      //
+      // # 真因 (P3.5.96 audit 完整)
+      //
+      // 老 P3.5.30 mirror 直接 useChatStore.getState().messages —— 切走会话后
+      // store.messages 已是新 session 的, 这把新 session messages 错误镜像到老
+      // session 的 registry. 切回老 session 时 ChatTab restore effect 用 registry.messages
+      // 覆盖 UI, 鸿波看到 "切会话就断" (实际是 UI 显错 messages).
+      //
+      // # 修法
+      //
+      // round 内独立维护 assistantContent — appendToMessage(store) 切走变 no-op 但
+      // 闭包累不变. mirror 用 ctx.currentMessages (round 入口锁定) + 闭包 assistant
+      // snapshot, 完全不读 store. session 安全.
+      let assistantContent = "";
       const flushThisRound = () => {
         const delta = pendingDelta;
         pendingDelta = "";
@@ -210,12 +225,15 @@ export function useChat(_initialModel: string) {
         // appendToMessage 按 id 找, 老 id 不在 store 时 (用户切走了) 自动 no-op.
         // 数据没丢: 最终 persistMessage 写完整 final assistant content 到 db.
         appendToMessage(assistantId, delta);
-        // P3.5.30 (6/17 鸿波): 5/24 BL-MULTI-SESSION-STREAM 真**补齐 registry mirror**.
-        // 镜像 store messages 到 registry, 真**ChatTab unmount 后 stream 继续累**, 真**切回时 mount restore**
-        // 真**看到 stream 中 / final 状态**. 真**stream 中切走 → 切回 0 延迟**真**关键**.
+        assistantContent += delta;  // 闭包累, 跨 store 不变
+        // P3.5.30 (6/17) + P3.5.97 (6/24): 镜像到 registry. 用 closure local 不读 store —
+        // 切走后 store 是新 session 的, 老读会污染老 registry (P3.5.96 真 bug).
         if (ctx.sessionId) {
           streamRegistry.update(ctx.sessionId, (s) => {
-            s.messages = useChatStore.getState().messages;
+            s.messages = [
+              ...ctx.currentMessages,
+              { ...assistantMsg, content: assistantContent, status: "streaming" },
+            ];
             s.streamingId = assistantId;
           });
         }
@@ -272,9 +290,9 @@ export function useChat(_initialModel: string) {
           // assistant message._promise_check, UI 渲染 ⚠ badge + 催继续按钮.
           // 5/24: 用 assistantId (闭包内) 替代老 currentStreamIdRef, 不串.
           if (info?.task_assessment) {
-            const assistantContent =
-              useChatStore.getState().messages.find((m) => m.id === assistantId)
-                ?.content || "";
+            // P3.5.97 (6/24): 用闭包 assistantContent, 不读 store (切走污染防御).
+            // 老逻辑读 store 在切走后会拿到新 session 的 messages → find by id 返空 →
+            // checkPromiseOnly 拿空字符串误判嘴炮. 闭包累的内容永远是本 round 真实输出.
             const check = checkPromiseOnly(assistantContent, info.task_assessment);
             if (check.is_promise_only) {
               updateMessage(assistantId, {
@@ -325,12 +343,11 @@ export function useChat(_initialModel: string) {
         .messages.find((m) => m.id === assistantId)?.status;
       const isError = currentStatus === "error";
 
-      // 把 tool_calls 挂到当前 assistant 消息上
+      // P3.5.97 (6/24): finalAssistant.content 用闭包 assistantContent 不读 store.
+      // 切走后 store 是新 session 的, find by id 返空, 把 final 写空 db (data loss).
       const finalAssistant: ChatMessage = {
         ...assistantMsg,
-        content:
-          useChatStore.getState().messages.find((m) => m.id === assistantId)
-            ?.content || "",
+        content: assistantContent,
         tool_calls:
           collectedToolCalls.length > 0 ? collectedToolCalls : undefined,
         status: isError ? "error" : "done",
@@ -348,9 +365,12 @@ export function useChat(_initialModel: string) {
       // P3.5.30 (6/17 鸿波): 真**round 结束 镜像 final messages 到 registry**.
       // ChatTab 切回时 mount restore (60 秒 TTL 内) 真**0 延迟看 final**.
       // 多轮 tool_call 真**每轮都 sync**, 真**最后一轮 finally streamRegistry.finish() 真**标 not running**.
+      //
+      // P3.5.97 (6/24): 同 flushThisRound 修法 — 用 closure local 拼 mirror,
+      // 不读 store. round 结束时 store 可能已切走, 读 store 会污染老 registry.
       if (ctx.sessionId) {
         streamRegistry.update(ctx.sessionId, (s) => {
-          s.messages = useChatStore.getState().messages;
+          s.messages = [...ctx.currentMessages, finalAssistant];
           s.streamingId = null;
         });
       }
@@ -383,15 +403,14 @@ export function useChat(_initialModel: string) {
       }
 
       // 重新拼当前 messages snapshot(给下一轮用)
+      // P3.5.97 (6/24): content 用闭包 assistantContent, 不读 store.
+      // (上面 finalAssistant 用同款修法, 这里直接复用避免重复 spread)
       const updatedMessages: ChatMessage[] = [
         ...ctx.currentMessages,
         {
-          ...assistantMsg,
-          content:
-            useChatStore.getState().messages.find((m) => m.id === assistantId)
-              ?.content || "",
-          tool_calls:
-            collectedToolCalls.length > 0 ? collectedToolCalls : undefined,
+          ...finalAssistant,
+          // 给下一轮 LLM 用的 snapshot status 永远 "done" (上面 finalAssistant 在
+          // isError 时是 "error", 但发给下一轮 LLM 看的 history 都该是 done 状态).
           status: "done" as const,
         },
       ];
@@ -465,6 +484,15 @@ export function useChat(_initialModel: string) {
         };
         addMessage(toolMsg);
         updatedMessages.push(toolMsg);
+        // P3.5.97 (6/24): tool 循环每次 push toolMsg 后也 mirror.
+        // 老 P3.5.30 mirror 只在 round-end, tool 循环里 push 完不 sync, 用户切走
+        // 切回时 registry 里没 tool result, ChatTab restore 覆盖回 partial UI.
+        // 用闭包 updatedMessages (含 tool messages) 不读 store.
+        if (ctx.sessionId) {
+          streamRegistry.update(ctx.sessionId, (s) => {
+            s.messages = [...updatedMessages];
+          });
+        }
         // 持久化 tool 角色消息. 5/24 BL-MULTI-SESSION-STREAM: 同 final assistant
         // 一样, 用 ctx.sessionId 锁定, 防切走会话后 tool 消息飘到错的 session.
         if (ctx.sessionId) {
