@@ -146,12 +146,6 @@ export default function CronJobsCard() {
         background: "var(--catfish-bg-elevated, rgba(0,0,0,0.02))",
         border: "1px solid var(--catfish-border)",
         borderRadius: 8,
-<<<<<<< HEAD
-        padding: 12,
-      }}
-    >
-      {/* 标题 + 统计 + 刷新 */}
-=======
         // P3.5.105.1 (6/25 鸿波 catch "定时任务框太长"): 固定高度 + 列表内滚动.
         // 不让 cron job 数量爆炸把整 Dashboard 撑死.
         maxHeight: 380,
@@ -161,20 +155,15 @@ export default function CronJobsCard() {
       }}
     >
       {/* 标题 + 统计 + 刷新 — sticky 顶部不跟着滚 */}
->>>>>>> c8c6e94 (P3.5.105 ship: cron 监控 UI 全链贯通 — Dashboard CronJobsCard + P26 RESTful patch)
       <div
         style={{
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-<<<<<<< HEAD
-          marginBottom: 8,
-=======
           padding: "12px 12px 8px 12px",
           borderBottom: "1px solid var(--catfish-border-soft, rgba(0,0,0,0.05))",
           background: "var(--catfish-bg-elevated, rgba(0,0,0,0.02))",
           flexShrink: 0,
->>>>>>> c8c6e94 (P3.5.105 ship: cron 监控 UI 全链贯通 — Dashboard CronJobsCard + P26 RESTful patch)
         }}
       >
         <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
@@ -237,57 +226,6 @@ export default function CronJobsCard() {
         </button>
       </div>
 
-<<<<<<< HEAD
-      {/* 错误 */}
-      {error && (
-        <div
-          style={{
-            fontSize: 11,
-            color: "#d9534f",
-            background: "rgba(217, 83, 79, 0.1)",
-            padding: "4px 8px",
-            borderRadius: 4,
-            marginBottom: 6,
-          }}
-        >
-          ✗ {error}
-        </div>
-      )}
-
-      {/* loading / empty */}
-      {loading && jobs.length === 0 && (
-        <div style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
-          加载中…
-        </div>
-      )}
-      {!loading && !error && jobs.length === 0 && (
-        <div
-          style={{
-            fontSize: 11,
-            color: "var(--catfish-text-muted)",
-            padding: "8px 0",
-            textAlign: "center",
-          }}
-        >
-          还没有定时任务. 跟鲶鱼说"每天 9 点提醒我…"即可注册.
-        </div>
-      )}
-
-      {/* jobs 列表 */}
-      <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
-        {jobs.map((job) => (
-          <CronJobRow
-            key={job.id}
-            job={job}
-            expanded={expandedId === job.id}
-            onToggle={() =>
-              setExpandedId((cur) => (cur === job.id ? null : job.id))
-            }
-            onChanged={refresh}
-          />
-        ))}
-      </ul>
-=======
       {/* 滚动区: 错误 / loading / empty / jobs 列表全在这, 真超长时只这块滚 */}
       <div
         style={{
@@ -346,7 +284,6 @@ export default function CronJobsCard() {
           ))}
         </ul>
       </div>
->>>>>>> c8c6e94 (P3.5.105 ship: cron 监控 UI 全链贯通 — Dashboard CronJobsCard + P26 RESTful patch)
     </div>
   );
 }
