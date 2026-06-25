@@ -138,20 +138,25 @@ export default function DashboardTab() {
   const auditViewEnabled = useUIStore((s) => s.auditViewEnabled);
 
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "1fr",
-        // BL-FIX20 (5/8): 0 gap, 各 section 自带 marginTop, 跟新标题样式更协调
-        gap: 0,
-        // 全宽控制, 防过宽屏看着空 (1400px 内容居中, 留两侧空气)
-        maxWidth: 1600,
-        margin: "0 auto",
-        width: "100%",
-      }}
-    >
-      {/* BL-ARCH2 (5/10): 顶部 banner — "去中央门户 →" 按 role 显示锚点 */}
+    <>
+      {/* P3.5.120 (6/25 鸿波 catch "中央门户应固定 + B 路径重做架构"):
+          WebPortalLink 真**移出 grid**, 真**.app-main 直接子全宽 sticky toolbar**.
+          真**全宽 sticky 真**视觉**: 真**贴 tab 栏底 + 全 .app-main 内宽 covered**,
+          真**0 漏出** (P3.5.118 真因: 它在 grid 1600 居中, 两侧空白透下方内容).
+          真**inner content 真 maxWidth 1600 居中** 跟下方 7 个 section 节奏一致. */}
       <WebPortalLink />
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr",
+          // BL-FIX20 (5/8): 0 gap, 各 section 自带 marginTop, 跟新标题样式更协调
+          gap: 0,
+          // 全宽控制, 防过宽屏看着空 (1400px 内容居中, 留两侧空气)
+          maxWidth: 1600,
+          margin: "0 auto",
+          width: "100%",
+        }}
+      >
 
       {/* 第一组: 今日 — 主动闲聊 (高频, 默认开, 顶部).
           5/18 BL-COMPANION-EMAIL-DIGEST-REMOVE-FROM-DASHBOARD: 邮件简报挪 📧 邮件 tab.
@@ -311,6 +316,7 @@ export default function DashboardTab() {
       {/* 第五组 "📚 学习/改进" 5/16 整组砍 (BL-LEARN-SECTION-KILL):
           LearningCard 数字 3/4 是开发者维度 (tool_calls / ship_skill / token=0 bug),
           SkillRevisionCard 99% 无待处理. backend 仍跑, 真要看走控制台 tab. */}
-    </div>
+      </div>
+    </>
   );
 }
