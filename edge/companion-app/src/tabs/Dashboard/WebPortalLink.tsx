@@ -155,25 +155,32 @@ export default function WebPortalLink() {
   return (
     <section
       style={{
-        // P3.5.120 (6/25 鸿波 catch "B 路径重做架构"): 全宽 sticky toolbar 风.
-        // 真**.app-main 直接子** (DashboardTab return fragment), 真**outer 全 .app-main
-        // 内宽** (扣 padding 24*2). 真**滚动**时**贴 .app-main padding-box top** (= tab 栏底).
-        // 真**inner content maxWidth 1600 居中** — 真**布局节奏跟下方 grid 一致** (鸿波
-        // P3.5.119 真因: outer 在 grid 1600 内居中, 两侧空白透下方; 现 outer 全宽 → 0 漏).
+        // P3.5.120 + P3.5.121 (6/25): 全宽 sticky toolbar 风.
+        // P3.5.121 真因 (鸿波 catch "内容滚动后还是露出来"): .app-main padding 24
+        // 让 sticky 真**outer width = 100% .app-main 内宽 (扣 padding 48), 两侧 24
+        // 空白透下方滚动内容**, 真**sticky top:0 贴 padding-box top, 上方 24 padding-top
+        // 空白也透**. 真**修复**: 真**margin 真**抵消 .app-main padding 三向** →
+        // outer 真**全 Companion 宽 + 贴 tab 栏底**, 真**内 padding 补回**让 inner
+        // content 跟 .app-main padding 节奏一致.
         position: "sticky",
         top: 0,
         zIndex: 10,
+        marginTop: "calc(-1 * var(--space-6))",
+        marginLeft: "calc(-1 * var(--space-6))",
+        marginRight: "calc(-1 * var(--space-6))",
+        marginBottom: "var(--space-3)",
         background: isOffline
           ? "rgba(239, 68, 68, 0.08)"  // 淡红色, 区分 offline 状态
           : "var(--catfish-bg-elevated)",
         // toolbar 风 — 只 borderBottom (砍 borderRadius + 四向 border)
         borderBottom: `1px solid ${isOffline ? "rgba(239, 68, 68, 0.4)" : "var(--catfish-border)"}`,
-        padding: "var(--space-3) 0",
-        marginBottom: "var(--space-3)",
+        // 真**水平 padding 补回 24** — 真**inner content 不贴 toolbar 边**, 真**vertical 真 12 toolbar 风**
+        padding: "var(--space-3) var(--space-6)",
       }}
     >
-      {/* P3.5.120: inner content 真**maxWidth 1600 居中** — 跟下方 grid 节奏一致 */}
-      <div style={{ maxWidth: 1600, margin: "0 auto", padding: "0 var(--space-3)" }}>
+      {/* P3.5.120/121: inner content 真**maxWidth 1600 居中** — 跟下方 grid 节奏一致.
+          真**0 padding** 因为 outer 真水平 padding 24 已补 .app-main padding 抵消. */}
+      <div style={{ maxWidth: 1600, margin: "0 auto" }}>
       <div
         style={{
           display: "flex",
