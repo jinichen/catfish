@@ -1031,6 +1031,9 @@ export interface CronJob {
   last_error?: string | null;
   last_delivery_error?: string | null;
   deliver?: string | null;
+  // P3.5.106 P27 (6/25): 自动重试 5/10/15 三档状态
+  catfish_retry_attempt?: number | null; // 0/1/2/3
+  catfish_retry_exhausted?: boolean | null; // 3 次都失败后 true
 }
 
 export interface CronOutputMeta {

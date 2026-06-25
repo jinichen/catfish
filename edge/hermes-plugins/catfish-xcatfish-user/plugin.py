@@ -196,6 +196,12 @@ _PATCH_TARGETS = [
     ("cron.jobs", "pause_job", "func"),
     ("cron.jobs", "resume_job", "func"),
     ("cron.jobs", "remove_job", "func"),
+    # P27 (P3.5.106, 6/25 鸿波 catch "失败不重试"): hermes cron.jobs.mark_job_run +
+    # update_job — 自动重试 5/10/15 三档 patch 的 target. wrap mark_job_run 真单点
+    # (scheduler.py:2089/2094 都收敛这里, 不动 run_job 避开 P21/P25 第 3 层 wrap).
+    # 改名 → plugin install fail-loud, 不让定时任务 silent 走 0 retry 老路径.
+    ("cron.jobs", "mark_job_run", "func"),
+    ("cron.jobs", "update_job", "func"),
     # P24 (P3.5.89, 6/23): hermes api_server._CORS_HEADERS — 浏览器 preflight
     # allowlist. hermes 默认只 3 header (Authorization/Content-Type/Idempotency-Key).
     # 重构 / 改名 → plugin install fail-loud, 不让 catfish X-Catfish-* header
@@ -513,6 +519,19 @@ def _apply_patches() -> None:
     except Exception as e:  # noqa: BLE001
         logger.error(
             "P26: _patch_p26_cron_rest_endpoints 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
+            e, exc_info=True,
+        )
+
+    # P27 (P3.5.106 6/25 鸿波 catch "失败不重试"): cron 任务失败 5/10/15 分钟 三档
+    # 自动重试. wrap cron.jobs.mark_job_run, success=False 时改 next_run_at = now +
+    # backoff, 累计 3 次后让 hermes 真按 schedule 跑下次 (退出 retry). delivery_error
+    # 不触发 retry (agent 跑出来了, 发不出去是渠道问题). 跟 P21/P25 真独立 — 它们
+    # wrap run_job, P27 wrap mark_job_run, 0 嵌套冲突.
+    try:
+        _patch_p27_cron_auto_retry()
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "P27: _patch_p27_cron_auto_retry 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
             e, exc_info=True,
         )
 
@@ -3052,6 +3071,189 @@ def _patch_p25_cron_env_isolation() -> None:
     logger.info(
         "P25 wrap tools.approval.check_execute_code_guard 完成 — "
         "threadlocal 隔离 cron 真线程, 非 cron 线程透传 (env 临时 pop)"
+    )
+
+
+# ── P27 (P3.5.106 6/25 鸿波 catch "失败不重试"): cron 任务失败 5/10/15 三档自动重试 ──
+#
+# 真因 (6/24 鸿波 daily-morning-brief streaming error → 等 24h 才再跑):
+#
+#   hermes cron/jobs.py:mark_job_run(success=False) 真行为:
+#     1. last_status = "error"
+#     2. last_error = error
+#     3. next_run_at = compute_next_run(schedule, now)   ← 按 cron 算下次
+#     4. 0 retry / 0 backoff / 0 通知用户
+#
+#   "0 9 * * *" 失败一次 → 6/25 9:00 才再跑. 当天早安日报真没了.
+#
+# 真修法 (鸿波拍 5/10/15 分钟三档):
+#
+#   wrap cron.jobs.mark_job_run, success=False 时:
+#     attempt = (job.get("catfish_retry_attempt") or 0) + 1
+#     if attempt <= 3:
+#       BACKOFF = [5, 10, 15]  # 分钟
+#       next_run_at = now + timedelta(minutes=BACKOFF[attempt-1])
+#       update_job(id, {catfish_retry_attempt=attempt, next_run_at=...})
+#     else:
+#       update_job(id, {catfish_retry_attempt=0, catfish_retry_exhausted=True})
+#       (让 hermes 真按 schedule 跑下次, 不再 catfish 干预)
+#
+#   success=True → clear catfish_retry_attempt=0 + retry_exhausted=False
+#
+# 真不 retry 的 case (delivery_error):
+#   success=True + delivery_error 非空 (agent 出来了但 webhook/wechat 发不出去) →
+#   走原 mark_job_run 老路径. 真不浪费 token. 邮件/微信送达问题 Companion UI 真
+#   显示 last_delivery_error 让用户手动处理.
+#
+# 真不冲突路径:
+#   - P21/P25 wrap run_job (cron.scheduler 模块) — P27 wrap mark_job_run (cron.jobs
+#     模块) — 真两个独立 module, 真零嵌套
+#   - _jobs_lock() 真 reentrant (cron/jobs.py:89-95 threadlocal depth counter) —
+#     mark_job_run 内已持锁, P27 wrap 后再调 update_job 真不死锁
+#   - jobs.json 加 catfish_ 前缀字段 — hermes 真 .get() 兼容, 老 job 真不破
+#
+# fail-safe: import 失败 / wrap 失败 → silent skip 老路径 (hermes 还是 0 retry 真现状).
+
+def _patch_p27_cron_auto_retry() -> None:
+    """wrap cron.jobs.mark_job_run — cron 失败 5/10/15 分钟三档自动重试.
+
+    真行为见上方文档. fail-safe: 真挂时退老路径不阻塞 hermes 启动.
+    """
+    try:
+        from cron import jobs as _cron_jobs  # noqa: PLC0415
+    except ImportError as e:
+        logger.warning("P27: hermes cron.jobs 没导, skip auto-retry wrap (%s)", e)
+        return
+
+    _orig_mark = getattr(_cron_jobs, "mark_job_run", None)
+    if _orig_mark is None:
+        logger.warning(
+            "P27: cron.jobs 没 mark_job_run 属性 (hermes 改名?), skip"
+        )
+        return
+    if getattr(_orig_mark, "_p27_patched", False):
+        logger.info("P27 mark_job_run 已 wrap 过, 跳过 (避免双重 wrap, dev hot-reload)")
+        return
+
+    # 真 backoff 表 (鸿波 6/25 拍): 5 → 10 → 15 分钟, 3 次后退出.
+    _BACKOFF_MINUTES = [5, 10, 15]
+    _MAX_ATTEMPTS = len(_BACKOFF_MINUTES)
+
+    @functools.wraps(_orig_mark)
+    def _patched_mark_job_run(job_id, success, error=None, delivery_error=None):
+        # 1. 先跑原 mark_job_run — 让 hermes 真按 schedule 更 last_status / last_error /
+        #    next_run_at. 我们后面真改 next_run_at + 加 catfish_retry_attempt 字段.
+        result = _orig_mark(job_id, success, error, delivery_error=delivery_error)
+
+        # 2. 真不需要 retry 的 case 真早走:
+        #    - success=True (agent 真跑成功) → clear retry_attempt + exhausted
+        #    - success=True + delivery_error (送达失败) → 不动 retry (发不出去不是 cron 问题)
+        #    所以 success=False 才进 retry 决策.
+        try:
+            if success:
+                # 真清 retry state (上次失败重试链真走到成功, 计数器归零)
+                try:
+                    job = _cron_jobs.get_job(job_id)
+                except Exception:  # noqa: BLE001
+                    job = None
+                if job and (job.get("catfish_retry_attempt") or job.get("catfish_retry_exhausted")):
+                    try:
+                        _cron_jobs.update_job(job_id, {
+                            "catfish_retry_attempt": 0,
+                            "catfish_retry_exhausted": False,
+                        })
+                        logger.info(
+                            "P27 cron retry: job '%s' 真跑成功, 清 retry 计数 ✓",
+                            job_id,
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning(
+                            "P27 cron retry: job '%s' clear retry state 失败: %s",
+                            job_id, e,
+                        )
+                return result
+
+            # success=False — 真进 retry 决策
+            try:
+                job = _cron_jobs.get_job(job_id)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "P27 cron retry: job '%s' get_job 失败, skip retry: %s",
+                    job_id, e,
+                )
+                return result
+
+            if not job:
+                logger.warning(
+                    "P27 cron retry: job '%s' 真不存在 (mark_job_run 内自动删了? 真无视), skip",
+                    job_id,
+                )
+                return result
+
+            # 真兜底: paused / disabled 任务真不该 retry (用户主动停的)
+            if not job.get("enabled") or job.get("state") == "paused":
+                return result
+
+            # 真只对 cron / interval 重试. once 任务真失败次数算 1 次 (hermes 会 ONESHOT_GRACE 重试),
+            # 不动 next_run_at 让 hermes 真原行为. (once schedule 真不在我们 backoff 范畴)
+            kind = (job.get("schedule") or {}).get("kind")
+            if kind not in {"cron", "interval"}:
+                return result
+
+            attempt = int(job.get("catfish_retry_attempt") or 0) + 1
+
+            if attempt <= _MAX_ATTEMPTS:
+                # 真重试 — 改 next_run_at = now + backoff
+                from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+                backoff_min = _BACKOFF_MINUTES[attempt - 1]
+                next_run = (datetime.now(timezone.utc) + timedelta(minutes=backoff_min)).isoformat()
+                try:
+                    _cron_jobs.update_job(job_id, {
+                        "catfish_retry_attempt": attempt,
+                        "catfish_retry_exhausted": False,
+                        "next_run_at": next_run,
+                    })
+                    logger.info(
+                        "P27 cron retry: job '%s' 失败 attempt %d/%d, %d 分钟后真重试 (next=%s)",
+                        job_id, attempt, _MAX_ATTEMPTS, backoff_min, next_run,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "P27 cron retry: job '%s' update_job 真失败, 退回 hermes 老路径: %s",
+                        job_id, e,
+                    )
+            else:
+                # 真用尽 3 次重试 — 退出 retry, 让 hermes 真按 schedule 跑下次
+                try:
+                    _cron_jobs.update_job(job_id, {
+                        "catfish_retry_attempt": 0,
+                        "catfish_retry_exhausted": True,
+                    })
+                    logger.warning(
+                        "P27 cron retry: job '%s' 真重试 %d 次仍失败, 退出真 retry, "
+                        "按 schedule 等下次跑 (next=%s)",
+                        job_id, _MAX_ATTEMPTS, job.get("next_run_at"),
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "P27 cron retry: job '%s' mark exhausted 失败: %s",
+                        job_id, e,
+                    )
+
+        except Exception as e:  # noqa: BLE001
+            # 真兜底: retry 决策本身挂了, 真不阻塞 mark_job_run 原 result
+            logger.error(
+                "P27 cron retry: job '%s' retry 决策顶层异常 (退回 hermes 老路径): %s",
+                job_id, e, exc_info=True,
+            )
+
+        return result
+
+    _patched_mark_job_run._p27_patched = True  # type: ignore[attr-defined]
+    _cron_jobs.mark_job_run = _patched_mark_job_run
+    logger.info(
+        "P27 wrap cron.jobs.mark_job_run 完成 — 失败 5/10/15 分钟三档自动重试, "
+        "成功后清 retry 计数 ✓"
     )
 
 

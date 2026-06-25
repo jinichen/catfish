@@ -73,6 +73,13 @@ pub struct CronJob {
     pub last_delivery_error: Option<String>,
     #[serde(default)]
     pub deliver: Option<String>,
+    // P3.5.106 P27 (6/25 鸿波 catch "失败不重试"): cron 失败 5/10/15 三档自动重试
+    // 真状态字段. catfish-xcatfish-user plugin.py:_patch_p27_cron_auto_retry 真写.
+    // 老 jobs.json (P27 ship 前) 真无这俩字段, serde(default) None 真兼容.
+    #[serde(default)]
+    pub catfish_retry_attempt: Option<u32>, // 0/1/2/3 — 真当前重试次数
+    #[serde(default)]
+    pub catfish_retry_exhausted: Option<bool>, // true = 3 次都失败, 按 schedule 等下次
 }
 
 #[derive(Debug, Clone, Serialize)]

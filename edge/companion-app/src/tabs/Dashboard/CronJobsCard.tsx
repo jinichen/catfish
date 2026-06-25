@@ -54,6 +54,14 @@ function fmtRelative(iso: string | null | undefined): string {
 
 function statusIcon(job: CronJob): string {
   if (!job.enabled) return "⏸";
+  // P27 (6/25): 真重试中 (attempt 1-3, exhausted=false) → 黄色 ↻
+  if (
+    job.last_status === "error" &&
+    (job.catfish_retry_attempt ?? 0) > 0 &&
+    !job.catfish_retry_exhausted
+  ) {
+    return "↻";
+  }
   if (job.last_status === "error") return "❌";
   if (job.last_status === "ok") return "✓";
   return "○"; // 还没跑过
@@ -61,6 +69,14 @@ function statusIcon(job: CronJob): string {
 
 function statusColor(job: CronJob): string {
   if (!job.enabled) return "var(--catfish-text-muted)";
+  // P27 重试中 → 黄
+  if (
+    job.last_status === "error" &&
+    (job.catfish_retry_attempt ?? 0) > 0 &&
+    !job.catfish_retry_exhausted
+  ) {
+    return "#d97706"; // amber-600
+  }
   if (job.last_status === "error") return "#d9534f";
   if (job.last_status === "ok") return "#16a34a";
   return "var(--catfish-text-muted)";
@@ -94,8 +110,29 @@ export default function CronJobsCard() {
     return () => clearInterval(t);
   }, []);
 
+  // P27 (6/25): failCount 真分 2 类 — retrying (5/10/15 重试中, 黄) vs hardFail (用尽/无重试, 红)
+  const retryingCount = useMemo(
+    () =>
+      jobs.filter(
+        (j) =>
+          j.enabled &&
+          j.last_status === "error" &&
+          (j.catfish_retry_attempt ?? 0) > 0 &&
+          !j.catfish_retry_exhausted,
+      ).length,
+    [jobs],
+  );
   const failCount = useMemo(
-    () => jobs.filter((j) => j.enabled && j.last_status === "error").length,
+    () =>
+      jobs.filter(
+        (j) =>
+          j.enabled &&
+          j.last_status === "error" &&
+          // 真重试中真不算硬失败 (黄色 retry badge 独立显)
+          !(
+            (j.catfish_retry_attempt ?? 0) > 0 && !j.catfish_retry_exhausted
+          ),
+      ).length,
     [jobs],
   );
   const pausedCount = useMemo(
@@ -152,9 +189,25 @@ export default function CronJobsCard() {
                 borderRadius: 10,
                 fontWeight: 600,
               }}
-              title="有任务上次跑失败了"
+              title="有任务上次跑失败了 (重试已用尽 / 无重试)"
             >
               {failCount} 失败
+            </span>
+          )}
+          {/* P27 (6/25): 真重试中 — 5/10/15 分钟自动重试链未走完 */}
+          {retryingCount > 0 && (
+            <span
+              style={{
+                fontSize: 11,
+                color: "#fff",
+                background: "#d97706",
+                padding: "1px 6px",
+                borderRadius: 10,
+                fontWeight: 600,
+              }}
+              title="有任务正在 5/10/15 分钟自动重试中"
+            >
+              {retryingCount} 重试中
             </span>
           )}
           {pausedCount > 0 && (
@@ -358,6 +411,10 @@ function CronJobRow({ job, expanded, onToggle, onChanged }: RowProps) {
   const schedule = job.schedule_display || job.schedule?.display || "—";
   const completed = job.repeat?.completed ?? 0;
   const isError = job.enabled && job.last_status === "error";
+  // P27 (6/25): 真重试中 = 失败 + attempt > 0 + 未 exhausted
+  const retryAttempt = job.catfish_retry_attempt ?? 0;
+  const isRetrying = isError && retryAttempt > 0 && !job.catfish_retry_exhausted;
+  const isRetryExhausted = isError && (job.catfish_retry_exhausted ?? false);
 
   return (
     <li
@@ -372,10 +429,21 @@ function CronJobRow({ job, expanded, onToggle, onChanged }: RowProps) {
           alignItems: "center",
           padding: "6px 4px",
           cursor: "pointer",
-          background: isError ? "rgba(217, 83, 79, 0.05)" : "transparent",
+          // P27: 重试中黄色, 失败/已用尽红色
+          background: isRetrying
+            ? "rgba(217, 119, 6, 0.06)"
+            : isError
+            ? "rgba(217, 83, 79, 0.05)"
+            : "transparent",
           gap: 8,
         }}
-        title={job.last_error || `${schedule} · 已跑 ${completed} 次`}
+        title={
+          isRetrying
+            ? `重试中 ${retryAttempt}/3 · ${job.last_error || "上次跑失败"}`
+            : isRetryExhausted
+            ? `重试 3 次都失败 · ${job.last_error || ""}`
+            : job.last_error || `${schedule} · 已跑 ${completed} 次`
+        }
       >
         <span
           style={{
@@ -410,9 +478,28 @@ function CronJobRow({ job, expanded, onToggle, onChanged }: RowProps) {
           >
             {schedule} · 上次 {fmtRelative(job.last_run_at)}
             {isError && (
-              <span style={{ color: "#d9534f", marginLeft: 6 }}>
+              <span
+                style={{
+                  color: isRetrying ? "#d97706" : "#d9534f",
+                  marginLeft: 6,
+                }}
+              >
                 · {(job.last_error || "").slice(0, 40)}
                 {(job.last_error || "").length > 40 ? "…" : ""}
+              </span>
+            )}
+            {/* P27 真重试中 — 黄色显当前 attempt + 下次 5/10/15 分钟 */}
+            {isRetrying && (
+              <span
+                style={{ color: "#d97706", marginLeft: 6, fontWeight: 500 }}
+              >
+                · 重试 {retryAttempt}/3, {fmtRelative(job.next_run_at)}
+              </span>
+            )}
+            {/* P27 真用尽 3 次 — 灰色提示等下次 schedule */}
+            {isRetryExhausted && (
+              <span style={{ color: "var(--catfish-text-muted)", marginLeft: 6 }}>
+                · 重试 3 次都失败, 等下次 {fmtRelative(job.next_run_at)}
               </span>
             )}
             {job.last_status === "ok" && (
