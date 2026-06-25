@@ -1,0 +1,519 @@
+/** P3.5.105 (6/25 鸿波 catch "定时任务跑没跑结果如何都看不到") — Dashboard cron 监控卡.
+ *
+ * 数据来源:
+ *   - jobs list: 直读 ~/.hermes/cron/jobs.json (cron_jobs_list)
+ *   - 历史输出: 直读 ~/.hermes/cron/output/<id>/*.md (cron_job_outputs/output_read)
+ *   - 操作 (pause/resume/delete): P26 RESTful endpoint (cron_job_pause/resume/delete)
+ *
+ * 30 秒自动刷新 (cron 状态变化慢, 不像 chat task 5s).
+ *
+ * 失败 row 显红 + tooltip 真错信息. 点击 row 展开看历史输出列表.
+ */
+
+import { useEffect, useMemo, useRef, useState } from "react";
+
+import {
+  cronJobsList,
+  cronJobOutputs,
+  cronJobOutputRead,
+  cronJobPause,
+  cronJobResume,
+  cronJobDelete,
+  type CronJob,
+  type CronOutputMeta,
+} from "../../lib/tauri";
+
+const REFRESH_MS = 30_000;
+const OUTPUT_PREVIEW_LIMIT = 5;
+
+function fmtRelative(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  try {
+    const ts = new Date(iso).getTime();
+    const now = Date.now();
+    const diff = now - ts;
+    if (diff < 0) {
+      // 未来
+      const futureMs = -diff;
+      if (futureMs < 60_000) return "马上";
+      if (futureMs < 3_600_000) return `${Math.round(futureMs / 60_000)} 分钟后`;
+      if (futureMs < 86_400_000) return `${Math.round(futureMs / 3_600_000)} 小时后`;
+      return `${Math.round(futureMs / 86_400_000)} 天后`;
+    }
+    if (diff < 60_000) return "刚刚";
+    if (diff < 3_600_000) return `${Math.round(diff / 60_000)} 分钟前`;
+    if (diff < 86_400_000) return `${Math.round(diff / 3_600_000)} 小时前`;
+    if (diff < 7 * 86_400_000) return `${Math.round(diff / 86_400_000)} 天前`;
+    return new Date(iso).toLocaleString("zh-CN", {
+      month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+    });
+  } catch {
+    return "—";
+  }
+}
+
+function statusIcon(job: CronJob): string {
+  if (!job.enabled) return "⏸";
+  if (job.last_status === "error") return "❌";
+  if (job.last_status === "ok") return "✓";
+  return "○"; // 还没跑过
+}
+
+function statusColor(job: CronJob): string {
+  if (!job.enabled) return "var(--catfish-text-muted)";
+  if (job.last_status === "error") return "#d9534f";
+  if (job.last_status === "ok") return "#16a34a";
+  return "var(--catfish-text-muted)";
+}
+
+export default function CronJobsCard() {
+  const [jobs, setJobs] = useState<CronJob[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const refreshing = useRef(false);
+
+  const refresh = async () => {
+    if (refreshing.current) return;
+    refreshing.current = true;
+    try {
+      const data = await cronJobsList();
+      setJobs(data);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+      refreshing.current = false;
+    }
+  };
+
+  useEffect(() => {
+    void refresh();
+    const t = setInterval(() => void refresh(), REFRESH_MS);
+    return () => clearInterval(t);
+  }, []);
+
+  const failCount = useMemo(
+    () => jobs.filter((j) => j.enabled && j.last_status === "error").length,
+    [jobs],
+  );
+  const pausedCount = useMemo(
+    () => jobs.filter((j) => !j.enabled).length,
+    [jobs],
+  );
+
+  return (
+    <div
+      style={{
+        background: "var(--catfish-bg-elevated, rgba(0,0,0,0.02))",
+        border: "1px solid var(--catfish-border)",
+        borderRadius: 8,
+        padding: 12,
+      }}
+    >
+      {/* 标题 + 统计 + 刷新 */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 8,
+        }}
+      >
+        <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+          <strong style={{ fontSize: 14 }}>⏰ 定时任务 ({jobs.length})</strong>
+          {failCount > 0 && (
+            <span
+              style={{
+                fontSize: 11,
+                color: "#fff",
+                background: "#d9534f",
+                padding: "1px 6px",
+                borderRadius: 10,
+                fontWeight: 600,
+              }}
+              title="有任务上次跑失败了"
+            >
+              {failCount} 失败
+            </span>
+          )}
+          {pausedCount > 0 && (
+            <span
+              style={{
+                fontSize: 11,
+                color: "var(--catfish-text-muted)",
+              }}
+            >
+              {pausedCount} 已暂停
+            </span>
+          )}
+        </div>
+        <button
+          onClick={() => void refresh()}
+          title="刷新"
+          style={{
+            background: "transparent",
+            border: "1px solid var(--catfish-border)",
+            borderRadius: 4,
+            padding: "2px 8px",
+            cursor: "pointer",
+            fontSize: 11,
+          }}
+        >
+          ↻
+        </button>
+      </div>
+
+      {/* 错误 */}
+      {error && (
+        <div
+          style={{
+            fontSize: 11,
+            color: "#d9534f",
+            background: "rgba(217, 83, 79, 0.1)",
+            padding: "4px 8px",
+            borderRadius: 4,
+            marginBottom: 6,
+          }}
+        >
+          ✗ {error}
+        </div>
+      )}
+
+      {/* loading / empty */}
+      {loading && jobs.length === 0 && (
+        <div style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
+          加载中…
+        </div>
+      )}
+      {!loading && !error && jobs.length === 0 && (
+        <div
+          style={{
+            fontSize: 11,
+            color: "var(--catfish-text-muted)",
+            padding: "8px 0",
+            textAlign: "center",
+          }}
+        >
+          还没有定时任务. 跟鲶鱼说"每天 9 点提醒我…"即可注册.
+        </div>
+      )}
+
+      {/* jobs 列表 */}
+      <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+        {jobs.map((job) => (
+          <CronJobRow
+            key={job.id}
+            job={job}
+            expanded={expandedId === job.id}
+            onToggle={() =>
+              setExpandedId((cur) => (cur === job.id ? null : job.id))
+            }
+            onChanged={refresh}
+          />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+interface RowProps {
+  job: CronJob;
+  expanded: boolean;
+  onToggle: () => void;
+  onChanged: () => void;
+}
+
+function CronJobRow({ job, expanded, onToggle, onChanged }: RowProps) {
+  const [busy, setBusy] = useState(false);
+  const [opError, setOpError] = useState<string | null>(null);
+
+  const handlePause = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (busy) return;
+    setBusy(true);
+    setOpError(null);
+    try {
+      await cronJobPause(job.id, "用户从 Dashboard 暂停");
+      onChanged();
+    } catch (err) {
+      setOpError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleResume = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (busy) return;
+    setBusy(true);
+    setOpError(null);
+    try {
+      await cronJobResume(job.id);
+      onChanged();
+    } catch (err) {
+      setOpError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDelete = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (busy) return;
+    if (!confirm(`真要删定时任务 "${job.name}"? 历史输出也清.`)) return;
+    setBusy(true);
+    setOpError(null);
+    try {
+      await cronJobDelete(job.id);
+      onChanged();
+    } catch (err) {
+      setOpError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const schedule = job.schedule_display || job.schedule?.display || "—";
+  const completed = job.repeat?.completed ?? 0;
+  const isError = job.enabled && job.last_status === "error";
+
+  return (
+    <li
+      style={{
+        borderBottom: "1px solid var(--catfish-border-soft, rgba(0,0,0,0.05))",
+      }}
+    >
+      <div
+        onClick={onToggle}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          padding: "6px 4px",
+          cursor: "pointer",
+          background: isError ? "rgba(217, 83, 79, 0.05)" : "transparent",
+          gap: 8,
+        }}
+        title={job.last_error || `${schedule} · 已跑 ${completed} 次`}
+      >
+        <span
+          style={{
+            fontSize: 14,
+            color: statusColor(job),
+            flexShrink: 0,
+            width: 16,
+            textAlign: "center",
+          }}
+        >
+          {statusIcon(job)}
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div
+            style={{
+              fontSize: 12,
+              fontWeight: 500,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              color: !job.enabled ? "var(--catfish-text-muted)" : undefined,
+            }}
+          >
+            {job.name}
+          </div>
+          <div
+            style={{
+              fontSize: 10,
+              color: "var(--catfish-text-muted)",
+              marginTop: 2,
+            }}
+          >
+            {schedule} · 上次 {fmtRelative(job.last_run_at)}
+            {isError && (
+              <span style={{ color: "#d9534f", marginLeft: 6 }}>
+                · {(job.last_error || "").slice(0, 40)}
+                {(job.last_error || "").length > 40 ? "…" : ""}
+              </span>
+            )}
+            {job.last_status === "ok" && (
+              <span style={{ marginLeft: 6 }}>
+                · 下次 {fmtRelative(job.next_run_at)}
+              </span>
+            )}
+            {completed > 0 && (
+              <span style={{ marginLeft: 6 }}>· {completed} 次</span>
+            )}
+          </div>
+        </div>
+        {/* 操作按钮 */}
+        <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+          {job.enabled ? (
+            <button
+              onClick={handlePause}
+              disabled={busy}
+              title="暂停"
+              style={btnStyle}
+            >
+              ⏸
+            </button>
+          ) : (
+            <button
+              onClick={handleResume}
+              disabled={busy}
+              title="恢复"
+              style={btnStyle}
+            >
+              ▶
+            </button>
+          )}
+          <button
+            onClick={handleDelete}
+            disabled={busy}
+            title="删除"
+            style={{ ...btnStyle, color: "#d9534f" }}
+          >
+            🗑
+          </button>
+        </div>
+      </div>
+      {opError && (
+        <div
+          style={{
+            fontSize: 10,
+            color: "#d9534f",
+            padding: "0 8px 4px 28px",
+          }}
+        >
+          ✗ {opError}
+        </div>
+      )}
+      {expanded && <OutputsExpansion jobId={job.id} />}
+    </li>
+  );
+}
+
+const btnStyle: React.CSSProperties = {
+  background: "transparent",
+  border: "1px solid var(--catfish-border)",
+  borderRadius: 3,
+  padding: "1px 6px",
+  fontSize: 11,
+  cursor: "pointer",
+  minWidth: 22,
+};
+
+function OutputsExpansion({ jobId }: { jobId: string }) {
+  const [outputs, setOutputs] = useState<CronOutputMeta[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [openTs, setOpenTs] = useState<string | null>(null);
+  const [openContent, setOpenContent] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    cronJobOutputs(jobId, OUTPUT_PREVIEW_LIMIT)
+      .then((data) => {
+        if (!cancelled) {
+          setOutputs(data);
+          setErr(null);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [jobId]);
+
+  const openFull = async (ts: string) => {
+    if (openTs === ts) {
+      setOpenTs(null);
+      setOpenContent(null);
+      return;
+    }
+    setOpenTs(ts);
+    setOpenContent(null);
+    try {
+      const content = await cronJobOutputRead(jobId, ts);
+      setOpenContent(content);
+    } catch (e) {
+      setOpenContent(`✗ 读失败: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  return (
+    <div
+      style={{
+        background: "rgba(0,0,0,0.02)",
+        padding: "6px 12px 8px 28px",
+        fontSize: 11,
+      }}
+    >
+      {loading && <div style={{ color: "var(--catfish-text-muted)" }}>加载历史…</div>}
+      {err && <div style={{ color: "#d9534f" }}>✗ {err}</div>}
+      {outputs && outputs.length === 0 && (
+        <div style={{ color: "var(--catfish-text-muted)" }}>
+          没历史输出 (没跑过 / 已清)
+        </div>
+      )}
+      {outputs && outputs.length > 0 && (
+        <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+          {outputs.map((o) => (
+            <li key={o.timestamp} style={{ marginBottom: 4 }}>
+              <button
+                onClick={() => void openFull(o.timestamp)}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  cursor: "pointer",
+                  padding: "2px 0",
+                  fontSize: 11,
+                  color: "var(--catfish-accent, #0d9488)",
+                  textDecoration: openTs === o.timestamp ? "underline" : "none",
+                }}
+              >
+                {openTs === o.timestamp ? "▼" : "▶"} {o.timestamp}{" "}
+                ({Math.round(o.size_bytes / 1024)} KB)
+              </button>
+              <div
+                style={{
+                  color: "var(--catfish-text-muted)",
+                  paddingLeft: 14,
+                  fontSize: 10,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {o.snippet}
+              </div>
+              {openTs === o.timestamp && openContent !== null && (
+                <pre
+                  style={{
+                    background: "var(--catfish-bg, #fff)",
+                    border: "1px solid var(--catfish-border)",
+                    borderRadius: 4,
+                    padding: 8,
+                    fontSize: 10,
+                    margin: "4px 0 4px 14px",
+                    maxHeight: 300,
+                    overflow: "auto",
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                  }}
+                >
+                  {openContent}
+                </pre>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}

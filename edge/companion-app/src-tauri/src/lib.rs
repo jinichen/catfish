@@ -618,6 +618,13 @@ pub fn run() {
             commands::email::email_political_get,
             // P3.5.103 (6/24 鸿波 catch "附件不能点"): 导出附件到本地 tmp, 配合 open_file 系统打开
             commands::email::email_export_attachment,
+            // P3.5.105 (6/25 鸿波 catch "定时任务跑没跑结果如何都看不到"): cron 监控 + 操作
+            commands::cron::cron_jobs_list,
+            commands::cron::cron_job_outputs,
+            commands::cron::cron_job_output_read,
+            commands::cron::cron_job_pause,
+            commands::cron::cron_job_resume,
+            commands::cron::cron_job_delete,
             // BL-COMPANION-EMAIL-TAB-STEP2 (5/18): 评级 badge 取数
             services::email_scheduler::email_urgency_map,
             // BL-COMPANION-PREFS-TOGGLES (5/20): 暴露 email config 给前端 AgentPrefsCard 展示

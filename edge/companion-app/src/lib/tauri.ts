@@ -1007,6 +1007,61 @@ export const emailSendMessage = (id: string) =>
 export const emailExportAttachment = (id: string, filename: string) =>
   rawInvoke<string>("email_export_attachment", { id, filename });
 
+// ── P3.5.105 (6/25 鸿波 catch '定时任务跑没跑结果如何都看不到'): cron 监控 ──
+
+/** ~/.hermes/cron/jobs.json 真 schema (25 字段, nullable 严格按真数据). */
+export interface CronJob {
+  id: string;
+  name: string;
+  prompt?: string | null;
+  skills: string[];
+  skill?: string | null;
+  model?: string | null;
+  schedule?: { kind?: string; expr?: string; display?: string } | null;
+  schedule_display?: string | null;
+  repeat?: { times?: number | null; completed?: number } | null;
+  enabled: boolean;
+  state: string;
+  paused_at?: string | null;
+  paused_reason?: string | null;
+  created_at?: string | null;
+  next_run_at?: string | null;
+  last_run_at?: string | null;
+  last_status?: "ok" | "error" | string | null;
+  last_error?: string | null;
+  last_delivery_error?: string | null;
+  deliver?: string | null;
+}
+
+export interface CronOutputMeta {
+  timestamp: string;
+  size_bytes: number;
+  snippet: string;
+}
+
+/** 读 ~/.hermes/cron/jobs.json 返 jobs[]. 0 hermes 不影响, 返空 list. */
+export const cronJobsList = () => rawInvoke<CronJob[]>("cron_jobs_list");
+
+/** 列单 job 历史 outputs (按 mtime 倒序, limit 默认 10). */
+export const cronJobOutputs = (jobId: string, limit?: number) =>
+  rawInvoke<CronOutputMeta[]>("cron_job_outputs", { jobId, limit });
+
+/** 读单个 output .md 完整内容. */
+export const cronJobOutputRead = (jobId: string, timestamp: string) =>
+  rawInvoke<string>("cron_job_output_read", { jobId, timestamp });
+
+/** POST /api/cron/jobs/{id}/pause 走 P26 endpoint (走 hermes Python public function). */
+export const cronJobPause = (jobId: string, reason?: string) =>
+  rawInvoke<void>("cron_job_pause", { jobId, reason });
+
+/** POST /api/cron/jobs/{id}/resume */
+export const cronJobResume = (jobId: string) =>
+  rawInvoke<void>("cron_job_resume", { jobId });
+
+/** DELETE /api/cron/jobs/{id} — 真删 jobs.json 条目 + 清 output. */
+export const cronJobDelete = (jobId: string) =>
+  rawInvoke<void>("cron_job_delete", { jobId });
+
 // BL-COMPANION-HERMES-API-CONFIG (5/19 Phase 2-2A): 暴露 hermes API server 配置
 // 给 chat.ts. 不返 key (key 在 Rust 端拼 header, 不发 JS, 防 XSS / 误 log).
 // Phase 2-2B 实施 chat.ts 切换时读这个判断走 gateway 还是 hermes.

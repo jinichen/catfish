@@ -189,6 +189,13 @@ _PATCH_TARGETS = [
     # 精准判定 cron 范围. _PATCH_TARGETS 列 fail-loud — hermes 改名 → plugin
     # install 立刻报, 不让 chat silent 走污染路径被拒.
     ("tools.approval", "check_execute_code_guard", "func"),
+    # P26 (P3.5.105, 6/25): hermes cron.jobs pause/resume/remove — cron 监控
+    # RESTful endpoint (POST /api/cron/jobs/{id}/pause+resume / DELETE) 用. hermes
+    # 改名 → plugin install fail-loud, 不让 Companion silent 拿到 500 误以为是
+    # 网络问题.
+    ("cron.jobs", "pause_job", "func"),
+    ("cron.jobs", "resume_job", "func"),
+    ("cron.jobs", "remove_job", "func"),
     # P24 (P3.5.89, 6/23): hermes api_server._CORS_HEADERS — 浏览器 preflight
     # allowlist. hermes 默认只 3 header (Authorization/Content-Type/Idempotency-Key).
     # 重构 / 改名 → plugin install fail-loud, 不让 catfish X-Catfish-* header
@@ -494,6 +501,18 @@ def _apply_patches() -> None:
     except Exception as e:  # noqa: BLE001
         logger.error(
             "P25: _patch_p25_cron_env_isolation 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
+            e, exc_info=True,
+        )
+
+    # P26 (P3.5.105 6/25 鸿波 catch "定时任务跑没跑结果如何都看不到"): cron 监控
+    # 操作 RESTful endpoint. attach handler 给 APIServerAdapter class; 真 route
+    # 注册在 _patched_app_init 块 (Application 创建时, router 未 freeze), 跟 P18
+    # add_post 同时机.
+    try:
+        _patch_p26_cron_rest_endpoints()
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "P26: _patch_p26_cron_rest_endpoints 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
             e, exc_info=True,
         )
 
@@ -1400,6 +1419,56 @@ def _patch_p8_p9_cors() -> None:
                     logger.warning(
                         "P18 add_post 失败 (via Application.__init__): %s", e,
                     )
+                # ── P26 (P3.5.105 6/25 鸿波): cron RESTful endpoints ──
+                #
+                # 跟 P18 同时机注册 (router 未 freeze), handler 走 P7 stashed adapter.
+                # 3 个 endpoint: pause / resume / delete.
+                try:
+                    async def _p26_cron_pause_handler(request):
+                        adapter = request.app.get("_catfish_apiserver_adapter")
+                        if adapter is None:
+                            return _aw.json_response(
+                                {"error": "P26 adapter not ready (P7 stash missing)"},
+                                status=503,
+                            )
+                        return await adapter._handle_cron_pause(request)
+
+                    async def _p26_cron_resume_handler(request):
+                        adapter = request.app.get("_catfish_apiserver_adapter")
+                        if adapter is None:
+                            return _aw.json_response(
+                                {"error": "P26 adapter not ready (P7 stash missing)"},
+                                status=503,
+                            )
+                        return await adapter._handle_cron_resume(request)
+
+                    async def _p26_cron_delete_handler(request):
+                        adapter = request.app.get("_catfish_apiserver_adapter")
+                        if adapter is None:
+                            return _aw.json_response(
+                                {"error": "P26 adapter not ready (P7 stash missing)"},
+                                status=503,
+                            )
+                        return await adapter._handle_cron_delete(request)
+
+                    self.router.add_post(
+                        "/api/cron/jobs/{job_id}/pause", _p26_cron_pause_handler,
+                    )
+                    self.router.add_post(
+                        "/api/cron/jobs/{job_id}/resume", _p26_cron_resume_handler,
+                    )
+                    self.router.add_delete(
+                        "/api/cron/jobs/{job_id}", _p26_cron_delete_handler,
+                    )
+                    logger.info(
+                        "P26 cron routes registered: POST /api/cron/jobs/{id}/pause"
+                        " + /resume + DELETE /api/cron/jobs/{id} ✓"
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "P26 cron add_post/delete 失败 (via Application.__init__): %s",
+                        e,
+                    )
             return None
 
         _patched_app_init._catfish_patched = True  # type: ignore[attr-defined]
@@ -2197,6 +2266,155 @@ async def _handle_compress_session_stream(self, request):
     except Exception:  # noqa: BLE001
         pass
     return resp
+
+
+# ── P26 (P3.5.105, 6/25 鸿波 catch "定时任务跑没跑结果如何都看不到") ─
+#
+# # 真因 (P3.5.105 audit-1/2/3 完整)
+#
+# hermes 真有完整 cron 监控数据:
+#   ~/.hermes/cron/jobs.json (last_run_at / last_status / last_error / repeat.completed)
+#   ~/.hermes/cron/output/<job_id>/<ts>.md (每次跑真完整输出)
+# 但 Companion UI 真 0 处展示. 鸿波 daily-morning-brief 6/24 9:00 streaming error,
+# 失败 1 次完全看不见. F1 / 股票日报 / 邮件 scheduler 全瞎跑.
+#
+# hermes cron 真 0 RESTful endpoint, public function 真在 cron.jobs:
+#   pause_job(id, reason) → Optional[Dict]
+#   resume_job(id) → Optional[Dict]
+#   remove_job(id) → bool
+#
+# # 修法 (跟 P18 同模式, monkey-patch 不 fork)
+#
+# 1. 3 个 handler (_handle_cron_pause/resume/delete) attach 到 APIServerAdapter
+# 2. _patched_app_init 块 P18 add_post 后追加 add_post/add_delete (router 未 freeze)
+# 3. handler 鉴权: self._check_auth(request) 跟 P18 同款
+# 4. 内部调 hermes cron.jobs public function
+#
+# Companion 真路径:
+#   - 读 list / output: 直读 ~/.hermes/cron/jobs.json + output/<id>/*.md (jobs.lock 只写时锁)
+#   - 写 pause/resume/delete: HTTP POST/DELETE → P26 endpoint → hermes Python public function
+#     (自动触发 scheduler 重新 load, 加锁安全)
+# 鉴权: ~/.catfish/companion.yaml hermes_api.key + Authorization: Bearer <key>
+
+
+async def _handle_cron_pause(self, request):
+    """POST /api/cron/jobs/{job_id}/pause
+
+    Body (optional): {"reason": "用户暂停"}
+    Response: {"ok": true, "job": {...}} | {"ok": false, "error": "..."}  404/500
+    """
+    from aiohttp import web
+    auth_err = self._check_auth(request)
+    if auth_err:
+        return auth_err
+    job_id = request.match_info["job_id"]
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    reason = body.get("reason") if isinstance(body, dict) else None
+    try:
+        from cron.jobs import pause_job  # noqa: PLC0415
+    except ImportError as e:
+        return web.json_response(
+            {"ok": False, "error": f"hermes cron.jobs 没导: {e}"}, status=500,
+        )
+    try:
+        result = pause_job(job_id, reason)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("P26 pause_job 异常")
+        return web.json_response(
+            {"ok": False, "error": f"pause_job 异常: {e}"}, status=500,
+        )
+    if result is None:
+        return web.json_response(
+            {"ok": False, "error": f"job {job_id!r} 不存在"}, status=404,
+        )
+    return web.json_response({"ok": True, "job": result})
+
+
+async def _handle_cron_resume(self, request):
+    """POST /api/cron/jobs/{job_id}/resume
+
+    Response: {"ok": true, "job": {...}} | 404/500
+    """
+    from aiohttp import web
+    auth_err = self._check_auth(request)
+    if auth_err:
+        return auth_err
+    job_id = request.match_info["job_id"]
+    try:
+        from cron.jobs import resume_job  # noqa: PLC0415
+    except ImportError as e:
+        return web.json_response(
+            {"ok": False, "error": f"hermes cron.jobs 没导: {e}"}, status=500,
+        )
+    try:
+        result = resume_job(job_id)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("P26 resume_job 异常")
+        return web.json_response(
+            {"ok": False, "error": f"resume_job 异常: {e}"}, status=500,
+        )
+    if result is None:
+        return web.json_response(
+            {"ok": False, "error": f"job {job_id!r} 不存在"}, status=404,
+        )
+    return web.json_response({"ok": True, "job": result})
+
+
+async def _handle_cron_delete(self, request):
+    """DELETE /api/cron/jobs/{job_id}
+
+    Response: {"ok": true} | 404/500
+    真删 jobs.json 条目 + 清理 output 目录 (hermes remove_job 内部处理).
+    """
+    from aiohttp import web
+    auth_err = self._check_auth(request)
+    if auth_err:
+        return auth_err
+    job_id = request.match_info["job_id"]
+    try:
+        from cron.jobs import remove_job  # noqa: PLC0415
+    except ImportError as e:
+        return web.json_response(
+            {"ok": False, "error": f"hermes cron.jobs 没导: {e}"}, status=500,
+        )
+    try:
+        ok = remove_job(job_id)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("P26 remove_job 异常")
+        return web.json_response(
+            {"ok": False, "error": f"remove_job 异常: {e}"}, status=500,
+        )
+    if not ok:
+        return web.json_response(
+            {"ok": False, "error": f"job {job_id!r} 不存在"}, status=404,
+        )
+    return web.json_response({"ok": True})
+
+
+def _patch_p26_cron_rest_endpoints() -> None:
+    """P26 (P3.5.105 6/25 鸿波): cron 监控 + 操作 RESTful endpoint.
+
+    跟 P18 同模式: attach handler 到 class, route 在 Application.__init__ 真注册
+    (_patched_app_init 块里, 跟 P18 add_post 同时机, router 未 freeze).
+
+    fail-safe: import 失败 / attach 失败 → silent skip 不阻塞 hermes 启动.
+    """
+    try:
+        from gateway.platforms.api_server import APIServerAdapter  # noqa: PLC0415
+    except ImportError as e:
+        logger.warning("P26: api_server 没导, skip cron RESTful endpoint patch (%s)", e)
+        return
+    APIServerAdapter._handle_cron_pause = _handle_cron_pause
+    APIServerAdapter._handle_cron_resume = _handle_cron_resume
+    APIServerAdapter._handle_cron_delete = _handle_cron_delete
+    logger.info(
+        "P26 APIServerAdapter._handle_cron_pause/resume/delete 已挂 ✓ "
+        "(route 由 Application.__init__ patch 真注册, 跟 P18 同时机)"
+    )
 
 
 def _patch_p18_compress_endpoint() -> None:

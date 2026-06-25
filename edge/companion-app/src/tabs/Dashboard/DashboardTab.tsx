@@ -75,6 +75,7 @@ import SkillsHubCard from "./SkillsHubCard";
 // BriefingCard.tsx 仍保留作可复用 component, 当前只 BriefingTab 引用.
 // import BriefingCard from "./BriefingCard";
 import ProactiveCard from "./ProactiveCard";
+import CronJobsCard from "./CronJobsCard";  // P3.5.105 (6/25 鸿波 catch "定时任务跑没跑结果如何都看不到")
 import AgentPrefsCard from "./AgentPrefsCard";
 import ServerConfigCard from "./ServerConfigCard"; // P28 (6/5 鸿波): UI 改 gateway URL/token
 import RelationCard from "./RelationCard";
@@ -160,9 +161,11 @@ export default function DashboardTab() {
       <CollapsibleSection
         id="today"
         title="🔥 今日"
-        count={1}
+        count={2}
       >
         <ProactiveCard />
+        {/* P3.5.105 (6/25 鸿波): 定时任务监控 — 跑没跑 / 失败信息 / 历史输出 */}
+        <CronJobsCard />
       </CollapsibleSection>
 
       {/* 第二组: 小鲶设置 — 鲶鱼名 / 人设 / 桌宠. 5/16 砍 IdentityCard (BL-IDENTITY-CARD-KILL)

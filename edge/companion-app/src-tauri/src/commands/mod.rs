@@ -21,6 +21,7 @@ pub mod auth;
 pub mod briefing_context;  // BL-BRIEFING-DECISION (5/21 Phase 5): distilled_facts + recent sessions
 pub mod calendar;  // BL-CALENDAR-INTEGRATION (5/20): macOS Calendar.app via osascript JXA
 pub mod chrome;
+pub mod cron;       // P3.5.105 (6/25 鸿波 catch "定时任务跑没跑结果如何都看不到"): cron 监控 + 操作 (读 ~/.hermes/cron + 写 P26 endpoint)
 pub mod curator;
 pub mod dream;  // P3.5.1 (6/15 鸿波): Dream Engine — 员工主动触发 long-term 蒸馏, picker model
 pub mod picker_state;  // P3.5.2 (6/16 鸿波): chat picker 持久化 ~/.catfish/picker_state.json — plugin sync_turn 跟随
