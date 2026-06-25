@@ -156,6 +156,13 @@ export default function WebPortalLink() {
     <section
       style={{
         gridColumn: "1 / -1",
+        // P3.5.118 (6/25 鸿波 catch "中央门户卡应固定, 内容区才滚动"):
+        // sticky 顶部 — 相对 .app-main 滚动容器, 真**滚到顶部时贴 tab 栏底, 下方 7
+        // 个 collapsible section 滚过**. background 真**不透明**保 (catfish-bg-elevated
+        // 是实色, 滚过真**0 穿透**); zIndex 10 防被 CollapsibleSection header 遮.
+        position: "sticky",
+        top: 0,
+        zIndex: 10,
         background: isOffline
           ? "rgba(239, 68, 68, 0.08)"  // 淡红色, 区分 offline 状态
           : "var(--catfish-bg-elevated)",
