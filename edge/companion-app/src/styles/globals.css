@@ -647,6 +647,12 @@ body,
 #root {
   height: 100%;
   width: 100%;
+  /* P3.5.117 (6/25 鸿波 catch "Web 外壳 rubber-band 不像原生"):
+     根禁 chain bounce — 真**整页内容不溢出真 0 滚动反应** (= native macOS NSScrollView 行为).
+     真**子滚动区** (.app-main / .wikitab__pane-tree / CronJobsCard / WikiCreateModal /
+     ChatPanel / ChatSidebar / WikiPreview / StyleFingerprintCard 等 17 处) 保 default
+     (auto), 真**内部溢出时滚到边仍 native bounce** — 真**最接近原生 macOS 体感**. */
+  overscroll-behavior: none;
 }
 
 body {
@@ -670,7 +676,16 @@ body {
      左右移动才能看完整'. 长路径 / 长 URL 自动 wrap 不撑出去. y 仍 auto. */
   overflow-x: hidden;
   overflow-y: auto;
-  padding: var(--space-6);
+  /* P3.5.122 (6/25 鸿波 catch + 简洁建议 "导航栏和内容 0 间隔"):
+     padding-top 砍 0 — 真**tab 栏底 = .app-main top edge** → 真**Dashboard
+     sticky WebPortalLink 真**贴 tab 栏底 0 gap, 上方 0 漏出空间**.
+     真**真因**: P3.5.121 真 marginTop -24 仍漏 24px 真**spec**: sticky element
+     真**最终 stick 位置仍贴 padding-box top**, margin 抵消不动 sticky 行为.
+     真**砍 padding-top 0 真**: 真**padding-box top = .app-main top** → 真**sticky
+     贴 tab 栏底**, 真**0 漏**.
+     其他 3 向 24 保 — Dashboard 7 个 section / Wiki tab / Email tab 真**水平 +
+     底部留气**. */
+  padding: 0 var(--space-6) var(--space-6) var(--space-6);
   /* 长内容自动断行兜底 (子组件没设 min-width: 0 的也能收着) */
   min-width: 0;
 }

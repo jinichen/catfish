@@ -155,17 +155,13 @@ export default function WebPortalLink() {
   return (
     <section
       style={{
-        // P3.5.120 + P3.5.121 (6/25): 全宽 sticky toolbar 风.
-        // P3.5.121 真因 (鸿波 catch "内容滚动后还是露出来"): .app-main padding 24
-        // 让 sticky 真**outer width = 100% .app-main 内宽 (扣 padding 48), 两侧 24
-        // 空白透下方滚动内容**, 真**sticky top:0 贴 padding-box top, 上方 24 padding-top
-        // 空白也透**. 真**修复**: 真**margin 真**抵消 .app-main padding 三向** →
-        // outer 真**全 Companion 宽 + 贴 tab 栏底**, 真**内 padding 补回**让 inner
-        // content 跟 .app-main padding 节奏一致.
+        // P3.5.120 + P3.5.122 (6/25): 全宽 sticky toolbar 风.
+        // P3.5.122 真因 + 修复 (鸿波 catch + 建议): .app-main padding-top 已砍 0
+        // (globals.css), 真**marginTop 抵消 -24 不再需要**. 真**marginLeft / marginRight
+        // -24 真**仍保**抵消 padding-left/right 让 outer 全 Companion 宽.
         position: "sticky",
         top: 0,
         zIndex: 10,
-        marginTop: "calc(-1 * var(--space-6))",
         marginLeft: "calc(-1 * var(--space-6))",
         marginRight: "calc(-1 * var(--space-6))",
         marginBottom: "var(--space-3)",
