@@ -155,23 +155,25 @@ export default function WebPortalLink() {
   return (
     <section
       style={{
-        gridColumn: "1 / -1",
-        // P3.5.118 (6/25 鸿波 catch "中央门户卡应固定, 内容区才滚动"):
-        // sticky 顶部 — 相对 .app-main 滚动容器, 真**滚到顶部时贴 tab 栏底, 下方 7
-        // 个 collapsible section 滚过**. background 真**不透明**保 (catfish-bg-elevated
-        // 是实色, 滚过真**0 穿透**); zIndex 10 防被 CollapsibleSection header 遮.
+        // P3.5.120 (6/25 鸿波 catch "B 路径重做架构"): 全宽 sticky toolbar 风.
+        // 真**.app-main 直接子** (DashboardTab return fragment), 真**outer 全 .app-main
+        // 内宽** (扣 padding 24*2). 真**滚动**时**贴 .app-main padding-box top** (= tab 栏底).
+        // 真**inner content maxWidth 1600 居中** — 真**布局节奏跟下方 grid 一致** (鸿波
+        // P3.5.119 真因: outer 在 grid 1600 内居中, 两侧空白透下方; 现 outer 全宽 → 0 漏).
         position: "sticky",
         top: 0,
         zIndex: 10,
         background: isOffline
           ? "rgba(239, 68, 68, 0.08)"  // 淡红色, 区分 offline 状态
           : "var(--catfish-bg-elevated)",
-        border: `1px solid ${isOffline ? "rgba(239, 68, 68, 0.4)" : "var(--catfish-border)"}`,
-        borderRadius: "var(--radius-md)",
-        padding: "var(--space-3)",
+        // toolbar 风 — 只 borderBottom (砍 borderRadius + 四向 border)
+        borderBottom: `1px solid ${isOffline ? "rgba(239, 68, 68, 0.4)" : "var(--catfish-border)"}`,
+        padding: "var(--space-3) 0",
         marginBottom: "var(--space-3)",
       }}
     >
+      {/* P3.5.120: inner content 真**maxWidth 1600 居中** — 跟下方 grid 节奏一致 */}
+      <div style={{ maxWidth: 1600, margin: "0 auto", padding: "0 var(--space-3)" }}>
       <div
         style={{
           display: "flex",
@@ -252,6 +254,7 @@ export default function WebPortalLink() {
             </a>
           );
         })}
+      </div>
       </div>
     </section>
   );
