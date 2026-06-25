@@ -43,12 +43,36 @@ interface WikiState {
     | "dangling"; // file 含真 dangling wikilink
   selectedTag: string | null;
 
+  // P3.5.110 (6/25 鸿波 catch "体系名称不能选择"): create modal 真**跨组件触发** state.
+  // 真**鸿波点 dangling wikilink / 组 header 真**→**自动**弹 +新建 modal**, prefill title +
+  // kind, 真**0 学习成本** 真**自动建** dangling 真**虚拟体系**.
+  createModalState: {
+    open: boolean;
+    prefillTitle?: string;
+    prefillKind?: "entity" | "concept" | "system";
+  };
+
+  // P3.5.111 (6/25 鸿波 catch "点体系名应显整片图不该弹窗"): 真**虚拟体系**
+  // 状态 — 鸿波点 dangling 体系名 → 真**WikiGraph 虚拟显该体系子树** (不弹建).
+  // selectFile 真**清掉** virtualSystemName 避免双重 selected 状态错乱.
+  virtualSystemName: string | null;
+
   loadFiles: () => Promise<void>;
   selectFile: (relPath: string | null) => Promise<void>;
   setSearch: (s: string) => void;
   setKindFilter: (k: "all" | "entity" | "concept" | "query") => void;
   setQuery: (q: WikiState["query"]) => void;
   setSelectedTag: (tag: string | null) => void;
+
+  // P3.5.110: modal trigger actions
+  openCreateModal: (prefill?: {
+    title?: string;
+    kind?: "entity" | "concept" | "system";
+  }) => void;
+  closeCreateModal: () => void;
+
+  // P3.5.111: 虚拟体系真**真**setter — null 真**清**虚拟态
+  setVirtualSystem: (name: string | null) => void;
 }
 
 export const useWikiStore = create<WikiState>((set) => ({
@@ -67,6 +91,23 @@ export const useWikiStore = create<WikiState>((set) => ({
   kindFilter: "all",
   query: "none",
   selectedTag: null,
+
+  // P3.5.110: 真**默认 closed**
+  createModalState: { open: false },
+
+  openCreateModal: (prefill) =>
+    set({
+      createModalState: {
+        open: true,
+        prefillTitle: prefill?.title,
+        prefillKind: prefill?.kind,
+      },
+    }),
+  closeCreateModal: () => set({ createModalState: { open: false } }),
+
+  // P3.5.111: 虚拟体系真**初始 null**
+  virtualSystemName: null,
+  setVirtualSystem: (name) => set({ virtualSystemName: name }),
 
   loadFiles: async () => {
     set({ filesLoading: true, filesError: null });
@@ -101,6 +142,12 @@ export const useWikiStore = create<WikiState>((set) => ({
 
   selectFile: async (relPath: string | null) => {
     // P3.3.4 (6/9): 删 entity 后传 null 清 selection, list 回退到默认无选中
+    //
+    // P3.5.112 (6/25 鸿波 catch "点一次就不能点了") 修正 P3.5.111:
+    // selectFile 真**不再 auto-clear virtualSystemName** — 真**鸿波点虚拟体系后, 再
+    // 点子项 (selectFile), 子图应该保留真**该体系子树**, 真**子项只用于**高亮 + preview**.
+    // 真**清虚拟态**真**靠**: setVirtualSystem(null) 显式 / 点别的体系 header (覆盖) /
+    // 强制全图 mode (隐含).
     if (relPath === null) {
       set({
         selectedPath: null,
@@ -110,7 +157,11 @@ export const useWikiStore = create<WikiState>((set) => ({
       });
       return;
     }
-    set({ selectedPath: relPath, selectedLoading: true, selectedError: null });
+    set({
+      selectedPath: relPath,
+      selectedLoading: true,
+      selectedError: null,
+    });
     try {
       const full = await wikiReadFile(relPath);
       set({ selectedFile: full, selectedLoading: false });

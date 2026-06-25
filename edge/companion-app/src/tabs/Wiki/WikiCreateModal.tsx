@@ -1,12 +1,17 @@
 /** BL-CATFISH-WIKI-MODE P3.3.8 (6/4) — + 新建 entity/concept form modal.
  *
  * 字段:
- *   - kind: entity | concept (radio)
+ *   - kind: entity | concept | system (radio)
  *   - title: 必填
- *   - subtype: entity 真**person/org/system/cert/project**, concept 真**process/rule/principle/standard**
+ *   - subtype: entity 真**person/org/system/cert/project**, concept 真**process/rule/principle/standard**,
+ *              system 真**强制 "system"** (concept_type, 真**P3.5.109 isSystemConcept 真判定字段**)
  *   - tags: comma-separated
  *   - related: comma-separated (name only, 真**真**真**不**真**`[[]]` 真**真**rendered 时加**)
  *   - body: textarea (2-5 段, 真**Markdown** 真**支持**真)
+ *
+ * P3.5.109 (6/25 鸿波 catch "+ 新建少了体系"): 加第 3 选项"体系 (system)" —
+ * 后端**0 改动** (wiki_write.rs concept_type 无 enum 校验), UI 真**仍调 kind:"concept"**
+ * 但 concept_type="system", 真**自动归"🌟 顶级体系"组** + 真**WikiGraph 子树**显示.
  *
  * Submit → wikiCreateEntityOrConcept → reload files + close modal + jump select 真**新 file**.
  */
@@ -17,15 +22,35 @@ import { useWikiStore } from "../../store/wiki";
 
 interface Props {
   onClose: () => void;
+  // P3.5.110 (6/25): 鸿波点 dangling wikilink → 弹 modal 真**prefill title + 默认 kind=system**.
+  prefillTitle?: string;
+  prefillKind?: "entity" | "concept" | "system";
 }
 
 const ENTITY_SUBTYPES = ["person", "org", "system", "cert", "project"];
 const CONCEPT_SUBTYPES = ["process", "rule", "principle", "standard"];
+// P3.5.109: "体系" 真**UI-only kind**, 真**底层仍 concept**, 真**concept_type 强制 "system"**.
+const SYSTEM_SUBTYPE = "system";
 
-export default function WikiCreateModal({ onClose }: Props) {
-  const [kind, setKind] = useState<"entity" | "concept">("entity");
-  const [title, setTitle] = useState("");
-  const [subtype, setSubtype] = useState(ENTITY_SUBTYPES[0]);
+// UI kind 真**3 选项**, 真但 wikiCreateEntityOrConcept 真**只接受 entity/concept**.
+// system 真**映射到 concept** 真**真后端层 0 改动**.
+type UiKind = "entity" | "concept" | "system";
+
+function uiKindToBackend(uk: UiKind): "entity" | "concept" {
+  return uk === "entity" ? "entity" : "concept"; // system → concept (subtype=system)
+}
+
+function defaultSubtype(uk: UiKind): string {
+  if (uk === "entity") return ENTITY_SUBTYPES[0];
+  if (uk === "concept") return CONCEPT_SUBTYPES[0];
+  return SYSTEM_SUBTYPE; // system → 强制 "system"
+}
+
+export default function WikiCreateModal({ onClose, prefillTitle, prefillKind }: Props) {
+  // P3.5.110: prefill 真**初始化** — 鸿波点 dangling 真**带 title + kind 跳进来**.
+  const [kind, setKind] = useState<UiKind>(prefillKind ?? "entity");
+  const [title, setTitle] = useState(prefillTitle ?? "");
+  const [subtype, setSubtype] = useState(defaultSubtype(prefillKind ?? "entity"));
   const [tagsStr, setTagsStr] = useState("");
   const [relatedStr, setRelatedStr] = useState("");
   const [body, setBody] = useState("");
@@ -35,11 +60,13 @@ export default function WikiCreateModal({ onClose }: Props) {
   const loadFiles = useWikiStore((s) => s.loadFiles);
   const selectFile = useWikiStore((s) => s.selectFile);
 
-  const subtypes = kind === "entity" ? ENTITY_SUBTYPES : CONCEPT_SUBTYPES;
+  // P3.5.109: subtype 真**3 路径** — entity / concept / system (system 真**单选 system**)
+  const subtypes =
+    kind === "entity" ? ENTITY_SUBTYPES : kind === "concept" ? CONCEPT_SUBTYPES : [SYSTEM_SUBTYPE];
 
-  function handleKindChange(k: "entity" | "concept") {
+  function handleKindChange(k: UiKind) {
     setKind(k);
-    setSubtype(k === "entity" ? ENTITY_SUBTYPES[0] : CONCEPT_SUBTYPES[0]);
+    setSubtype(defaultSubtype(k));
   }
 
   async function handleSubmit() {
@@ -58,13 +85,20 @@ export default function WikiCreateModal({ onClose }: Props) {
         .split(/[,，]/)
         .map((r) => r.trim().replace(/^\[\[|\]\]$/g, ""))
         .filter((r) => r.length > 0);
+      // P3.5.109: UI kind "system" → backend "concept" 真**0 后端改动**, concept_type=system
+      // 真**WikiTree P3.5.107 A 真自动归"🌟 顶级体系"组** (related 真**空** → 顶级).
+      // P3.5.108 WikiGraph isSystemConcept 真升级看 subtype === "system" 优先于 title heuristic.
       const result = await wikiCreateEntityOrConcept({
-        kind,
+        kind: uiKindToBackend(kind),
         title: title.trim(),
         subtype,
         tags,
         related,
-        body: body.trim() || `# ${title.trim()}\n\n(待补充)`,
+        body:
+          body.trim() ||
+          (kind === "system"
+            ? `# ${title.trim()}\n\n(顶级体系真定义范围 + 列子级类目 + 适用场景)`
+            : `# ${title.trim()}\n\n(待补充)`),
       });
       await loadFiles();
       await selectFile(result.rel_path);
@@ -104,12 +138,12 @@ export default function WikiCreateModal({ onClose }: Props) {
         }}
       >
         <h3 style={{ margin: "0 0 var(--space-3) 0", fontSize: 16 }}>
-          新建 {kind === "entity" ? "实体" : "概念"}
+          新建 {kind === "entity" ? "实体" : kind === "concept" ? "概念" : "体系"}
         </h3>
 
         <Field label="类型">
           <div style={{ display: "flex", gap: 8 }}>
-            {(["entity", "concept"] as const).map((k) => (
+            {(["entity", "concept", "system"] as const).map((k) => (
               <button
                 key={k}
                 onClick={() => handleKindChange(k)}
@@ -118,13 +152,22 @@ export default function WikiCreateModal({ onClose }: Props) {
                   padding: "6px 12px",
                   border: "1px solid var(--catfish-border)",
                   borderRadius: 4,
-                  background: kind === k ? "var(--catfish-accent, #4a9eff)" : "transparent",
+                  background:
+                    kind === k
+                      ? k === "system"
+                        ? "var(--catfish-orange, #F47B3D)" // P3.5.109: 体系真**橙色**, 跟 WikiTree "🌟 顶级体系"组真视觉一致
+                        : "var(--catfish-accent, #4a9eff)"
+                      : "transparent",
                   color: kind === k ? "#fff" : "var(--catfish-text)",
                   cursor: "pointer",
                   fontSize: 12,
                 }}
               >
-                {k === "entity" ? "实体 (entity)" : "概念 (concept)"}
+                {k === "entity"
+                  ? "实体 (entity)"
+                  : k === "concept"
+                  ? "概念 (concept)"
+                  : "🌟 体系 (system)"}
               </button>
             ))}
           </div>
@@ -135,10 +178,33 @@ export default function WikiCreateModal({ onClose }: Props) {
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            placeholder={kind === "entity" ? "例: 陈鸿波 / 中电福富 / ISO 27001" : "例: 资质评估流程 / 月度通报模板"}
+            placeholder={
+              kind === "entity"
+                ? "例: 陈鸿波 / 中电福富 / ISO 27001"
+                : kind === "concept"
+                ? "例: 资质评估流程 / 月度通报模板"
+                : "例: 政企客户体系 / 信通院评估体系 / 渠道合作体系"
+            }
             style={inputStyle}
           />
         </Field>
+        {kind === "system" && (
+          <div
+            style={{
+              marginTop: -8,
+              marginBottom: "var(--space-3)",
+              padding: "6px 10px",
+              fontSize: 11,
+              color: "var(--catfish-text-muted)",
+              background: "rgba(244, 123, 61, 0.06)",
+              borderRadius: 4,
+              borderLeft: "2px solid var(--catfish-orange, #F47B3D)",
+            }}
+          >
+            💡 真**顶级体系** — 进 WikiTree "🌟 顶级体系"组 + 选它真 WikiGraph 显**整体系子树**.
+            真**相关** 字段建议**留空** (顶级体系真**没有上位**), 下属概念真 body 写 [[本体系名]] 真**自动挂下来**.
+          </div>
+        )}
 
         <Field label="子类型">
           <select

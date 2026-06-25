@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useWikiStore } from "../../store/wiki";
 import type { WikiFileInfo } from "../../lib/tauri";
+import { wikiCreateEntityOrConcept } from "../../lib/tauri"; // P3.5.114: dangling click → 真自动建真文件
 import WikiCreateModal from "./WikiCreateModal";
 
 export default function WikiTree() {
@@ -27,7 +28,11 @@ export default function WikiTree() {
   const setKindFilter = useWikiStore((s) => s.setKindFilter);
   const setQuery = useWikiStore((s) => s.setQuery);
   const setSelectedTag = useWikiStore((s) => s.setSelectedTag);
-  const [showCreate, setShowCreate] = useState(false);
+  // P3.5.110: modal trigger 真**改用 store** 真**支持跨组件 trigger** (鸿波点 dangling
+  // wikilink / 组 header → WikiPreview / CategorySubgroup 也能弹).
+  const createModalState = useWikiStore((s) => s.createModalState);
+  const openCreateModal = useWikiStore((s) => s.openCreateModal);
+  const closeCreateModal = useWikiStore((s) => s.closeCreateModal);
 
   // P37 (BM25) + P38 (语义) — mode tristate: "title" | "body" | "semantic"
   const [searchMode, setSearchMode] = useState<"title" | "body" | "semantic">("title");
@@ -205,6 +210,59 @@ export default function WikiTree() {
     });
   }, [grouped.entity]);
 
+  // P3.5.107 A (6/25 鸿波 catch "只有 1 个体系, 加另一个体系能不能"):
+  // concept 真**也走 P3.5.99 同套路真二级分组** — 按 concept.related[0] 真**上位体系**.
+  //
+  // 数据真因 (审鸿波截图无人机类 concept 真 body): LLM distill 真在 concept body
+  // 第一行写 `[[企业资质知识体系]]` 标上位 hub. wiki_read.rs 真 merge_related_with_body
+  // 真把它合到 related[]. 所以 concept "无人机类" 真 related[0] = "企业资质知识体系".
+  //
+  // 真**0 schema 改 0 数据 backfill**: 鸿波想加"政企客户体系" 真路径:
+  //   1. 新建 concept "政企客户体系" (顶级体系, 自己 related[0] 空 → 进 "🌟 顶级体系" 组)
+  //   2. 新建 concept "央国企" 真 body 写 `[[政企客户体系]]` → 进 "政企客户体系" 组下
+  //   3. entity "中移动" body 写 `[[央国企]]` → 进 entity 二级 "央国企" 组
+  //   真**真自然 3 级层级**, 0 代码改.
+  //
+  // 真**特殊**: concept 真 related[0] 空 → "🌟 顶级体系" (顶级 hub, 排第一不排最后)
+  // — 跟 entity 真"未分类"语义不同 (未分类是数据残缺, 顶级体系是结构性 root).
+  // P3.5.115 (6/25 鸿波 catch "UI 别扭"): 真**砍顶级体系组真重复**.
+  // 真**老逻辑**: "🌟 顶级体系 (1) — 企业资质知识体系" + "企业资质知识体系 (10) — 子级"
+  // 真**两组都跟父名相关, 视觉重复**.
+  //
+  // 真**新逻辑**: 顶级体系真**父 file**真**有子级 → 直接作为该组 header** (不重复进"顶级"组).
+  // 孤儿 system (无子级) → 兜底进"🌟 顶级体系"组真显示.
+  // 真**header 点击**: P3.5.113 match 路径 → 真**lookup file → selectFile 跳父 preview** ✓
+  const conceptCategories = useMemo(() => {
+    const map = new Map<string, WikiFileInfo[]>();
+    // 第 1 轮: 真**有 related[0] 真 concept 进各自父组**
+    for (const c of grouped.concept) {
+      const category = c.related[0]?.trim();
+      if (category) {
+        if (!map.has(category)) map.set(category, []);
+        map.get(category)!.push(c);
+      }
+    }
+    // 第 2 轮: 孤儿 concept (related[0] 空) — 看它是否已是某组 header (子级真组真 key)
+    // 真**已有子级**真**0 额外处理** (header click 真**走 P3.5.113 match 路径**跳父 preview);
+    // 真**无子级 (真孤儿)**真**进"🌟 顶级体系"组兜底**.
+    for (const c of grouped.concept) {
+      if (c.related[0]?.trim()) continue; // 已在第 1 轮处理
+      const hasChildren = map.has(c.title); // 真**自己**是否为某组真 key
+      if (hasChildren) continue; // header 已经隐含真**就是它**, 0 重复
+      // 真**孤儿**真**兜底**
+      const topKey = "🌟 顶级体系";
+      if (!map.has(topKey)) map.set(topKey, []);
+      map.get(topKey)!.push(c);
+    }
+    return Array.from(map.entries()).sort((a, b) => {
+      // 顶级体系 (孤儿兜底组) 推最前 — 真**根节点先看**
+      if (a[0] === "🌟 顶级体系") return -1;
+      if (b[0] === "🌟 顶级体系") return 1;
+      // 其他按 count desc
+      return b[1].length - a[1].length;
+    });
+  }, [grouped.concept]);
+
   // E4 (6/6 taste-skill 改造): 走 globals.css `.wiki-*` class.
   // 主要改: hardcoded `#0d9488` `#4a9eff` 非 brand 色统一到 brand 墨青;
   // mode + kind toggle 改 pill segmented control; 去 emoji; 加 hover/focus.
@@ -214,7 +272,7 @@ export default function WikiTree() {
         <h3>知识体系</h3>
         <div style={{ display: "flex", gap: 6 }}>
           <button
-            onClick={() => setShowCreate(true)}
+            onClick={() => openCreateModal()}
             title="新建 entity / concept"
             className="approval-banner__btn-primary"
             style={{ padding: "4px 12px", fontSize: 12 }}
@@ -232,7 +290,13 @@ export default function WikiTree() {
         </div>
       </div>
 
-      {showCreate && <WikiCreateModal onClose={() => setShowCreate(false)} />}
+      {createModalState.open && (
+        <WikiCreateModal
+          onClose={closeCreateModal}
+          prefillTitle={createModalState.prefillTitle}
+          prefillKind={createModalState.prefillKind}
+        />
+      )}
 
       <input
         type="text"
@@ -342,7 +406,7 @@ export default function WikiTree() {
       )}
 
       {!filesLoading && files.length === 0 && !filesError && (
-        <EmptyOnboarding onCreateClick={() => setShowCreate(true)} />
+        <EmptyOnboarding onCreateClick={() => openCreateModal()} />
       )}
 
       {/* P37+P38 (6/5 鸿波): body/semantic 模式 → hits 列表替 group tree */}
@@ -358,14 +422,20 @@ export default function WikiTree() {
       {!(searchMode !== "title" && search.trim()) && (
         <>
           {/* P3.5.99 (6/24 鸿波): 实体改 EntityGroup 走二级分组 (related[0]),
-              避免 62/200 全平铺. 概念 / 查询 数量小, 仍走平铺 Group. */}
+              避免 62/200 全平铺. */}
           <EntityGroup
             total={grouped.entity.length}
             categories={entityCategories}
             selectedPath={selectedPath}
             onSelect={selectFile}
           />
-          <Group label="概念 (concepts)" emoji="📐" color="#ff9933" files={grouped.concept} selectedPath={selectedPath} onSelect={selectFile} />
+          {/* P3.5.107 A (6/25 鸿波): 概念也走二级分组 (related[0]) — 体系 → 类目 真 3 级层级 */}
+          <ConceptGroup
+            total={grouped.concept.length}
+            categories={conceptCategories}
+            selectedPath={selectedPath}
+            onSelect={selectFile}
+          />
           <Group label="查询 (queries)" emoji="💬" color="#5fc878" files={grouped.query} selectedPath={selectedPath} onSelect={selectFile} />
           {/* P3.3.18 Phase 4 (6/10): 已装部门 wiki — read-only, 跟个人 wiki 视觉分离 */}
           {sharedFiles.length > 0 && (
@@ -580,6 +650,11 @@ function EntityGroup({
 
 /** P3.5.99 — 实体的二级 category 子组. 跟 Group 同款 collapsible + localStorage,
  *  但视觉更紧 (字号 / padding 缩小, 加缩进区分). 默认折叠 (二级太多, 全开会爆).
+ *
+ *  P3.5.110 (6/25 鸿波 catch "体系名称不能选择") 升级:
+ *  - 点 caret (▶) → 折叠 (跟原行为一致, stopPropagation)
+ *  - 点 category name → 优先 selectFile(找到的 concept file), 真**dangling 真**弹 +新建 modal**
+ *    (prefill title=category, 默认 kind=system) — 真**治体系 dangling 不能点的核心痛点**
  */
 function CategorySubgroup({
   category,
@@ -592,6 +667,14 @@ function CategorySubgroup({
   selectedPath: string | null;
   onSelect: (relPath: string) => void;
 }) {
+  // P3.5.110: 从 store 拿 files (全 wiki) 真**lookup**, 跟 onSelect 同源
+  const allFiles = useWikiStore((s) => s.files);
+  // P3.5.111: dangling 体系名 click → setVirtualSystem (而不是 openCreateModal — 鸿波 catch)
+  const setVirtualSystem = useWikiStore((s) => s.setVirtualSystem);
+  // P3.5.113: dangling click 真**也 clear selectedPath** → 触发 useMemo rebuild
+  const selectFile = useWikiStore((s) => s.selectFile);
+  // P3.5.114 (6/25 鸿波 catch "应该形成真文件才合理"): dangling click → 真**自动建真文件**
+  const loadFiles = useWikiStore((s) => s.loadFiles);
   const lsKey = `wiki_subgroup_collapsed_${category}`;
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try {
@@ -613,6 +696,58 @@ function CategorySubgroup({
       return next;
     });
   };
+  // P3.5.110-114: 点 category name 真行为 (鸿波 6/25 P3.5.114 catch "应该形成真文件才合理"):
+  //   - 特殊组 ("🌟 顶级体系" / "未分类") → 只 toggle
+  //   - 真实文件 (match): setVirtualSystem(null) + selectFile(rel_path) → 切到该 system 子树
+  //     (清旧虚拟态, 避免被它优先级压住)
+  //   - dangling (虚拟体系): 真**自动建真文件 (concept + subtype=system)** → selectFile(新 path)
+  //     → 走 P3.5.108 isSystemConcept 真 subtree 路径 → 真**显该体系子树** (跟虚拟态视觉一致)
+  //     真**0 弹窗 / 0 橙色提示** — 鸿波 P3.5.111-112 真 catch 都尊重
+  //     fail-safe: 网络/IO 失败 → fallback setVirtualSystem (走 P3.5.113 虚拟态)
+  const handleCategoryClick = async (e: React.MouseEvent | React.KeyboardEvent) => {
+    e.stopPropagation();
+    const isSpecialGroup =
+      category === "🌟 顶级体系" || category === "未分类";
+    if (isSpecialGroup) {
+      toggle();
+      return;
+    }
+    // 真**找 wiki/concepts/<category>.md** 真**file** — 跟 WikiPreview handleWikilinkClick 同 lookup
+    const lower = category.toLowerCase().trim();
+    const match = allFiles.find(
+      (f) =>
+        f.title.toLowerCase() === lower ||
+        f.slug.toLowerCase() === lower ||
+        f.title.toLowerCase().includes(lower),
+    );
+    if (match) {
+      // P3.5.113: 真**清旧虚拟态** — 真**真实**system file 真**走 effectiveRoot 真**真实 path** +
+      // isSystemConcept → subtree (真实). 真**不清虚拟会被它优先级压住, 显错位的旧虚拟体系**.
+      setVirtualSystem(null);
+      onSelect(match.rel_path);
+      return;
+    }
+    // P3.5.114: dangling → 真**自动建真文件** (鸿波 catch "形成真文件才合理")
+    try {
+      const result = await wikiCreateEntityOrConcept({
+        kind: "concept",
+        title: category,
+        subtype: "system", // P3.5.109 顶级体系标记 → P3.5.108 isSystemConcept 自动判定 subtree
+        tags: [],
+        related: [], // 顶级体系真**无上位**, 默认空 (用户后续可改)
+        body: `# ${category}\n\n(由 catfish 自动建立 — 点 group header 触发)\n\n下属概念真**自动反推**: WikiGraph 真**走 children**真 related[0] 真**指向本体系**.`,
+      });
+      // 真**真**建成功**: 刷新 files + 切到新 file → P3.5.108 isSystemConcept → subtree ✓
+      setVirtualSystem(null);
+      await loadFiles();
+      await selectFile(result.rel_path);
+    } catch (err) {
+      // P3.5.114 fail-safe: 已存在 / 网络失败 → fallback P3.5.113 虚拟态显
+      console.warn(`[wiki] auto-create system "${category}" failed: ${err} → fallback virtual`);
+      setVirtualSystem(category);
+      void selectFile(null);
+    }
+  };
   if (files.length === 0) return null;
   return (
     <div
@@ -623,16 +758,6 @@ function CategorySubgroup({
       }}
     >
       <div
-        onClick={toggle}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            toggle();
-          }
-        }}
-        role="button"
-        tabIndex={0}
-        aria-expanded={!collapsed}
         style={{
           display: "flex",
           alignItems: "center",
@@ -640,22 +765,62 @@ function CategorySubgroup({
           padding: "3px 6px",
           fontSize: 11,
           color: category === "未分类" ? "var(--catfish-text-muted)" : "var(--catfish-text)",
-          cursor: "pointer",
           userSelect: "none",
           fontWeight: 500,
         }}
       >
+        {/* P3.5.110: caret 单独 button — 真**stopPropagation** 后 toggle, 真**不影响 name 点击** */}
         <span
+          role="button"
+          tabIndex={0}
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? "展开" : "折叠"}
+          onClick={(e) => {
+            e.stopPropagation();
+            toggle();
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              toggle();
+            }
+          }}
           style={{
             display: "inline-block",
             transition: "transform 0.15s",
             transform: collapsed ? "rotate(0deg)" : "rotate(90deg)",
             fontSize: 9,
+            cursor: "pointer",
+            padding: "0 2px",
           }}
         >
           ▶
         </span>
-        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {/* P3.5.110: name 真**独立 click target** — selectFile / 弹建 modal */}
+        <span
+          role="button"
+          tabIndex={0}
+          onClick={handleCategoryClick}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              handleCategoryClick(e);
+            }
+          }}
+          title={
+            category === "🌟 顶级体系" || category === "未分类"
+              ? `点击折叠/展开 (特殊组)`
+              : `点击跳到"${category}" 真 preview (dangling 真**弹 +新建**)`
+          }
+          style={{
+            flex: 1,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            cursor: "pointer",
+            padding: "0 2px",
+          }}
+        >
           {category}
         </span>
         <span style={{ fontSize: 10, color: "var(--catfish-text-muted)", fontWeight: 400 }}>
@@ -696,6 +861,84 @@ function CategorySubgroup({
             );
           })}
         </ul>
+      )}
+    </div>
+  );
+}
+
+/** P3.5.107 A (6/25 鸿波) — concept 二级分组 group: 顶层 "概念 (11)" + 内嵌
+ *  按 concept.related[0] 真**上位体系** 真子组 (e.g. "企业资质知识体系 (8) / 🌟 顶级体系 (3)"),
+ *  跟 EntityGroup 同款架构, 真支持加任意多新体系 (concept body 写 `[[新体系]]` 自动归类).
+ *
+ *  localStorage key 跟原 Group "概念 (concepts)" 真兼容 — 用户原折叠态不丢.
+ */
+function ConceptGroup({
+  total,
+  categories,
+  selectedPath,
+  onSelect,
+}: {
+  total: number;
+  categories: Array<[string, WikiFileInfo[]]>;
+  selectedPath: string | null;
+  onSelect: (relPath: string) => void;
+}) {
+  const lsKey = "wiki_group_collapsed_概念 (concepts)"; // 跟原 Group 一致, 不丢用户折叠
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem(lsKey);
+      if (v === null) return false; // 默认开 (concept 数量小)
+      return v === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggle = () => {
+    setCollapsed((c) => {
+      const next = !c;
+      try {
+        localStorage.setItem(lsKey, next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  };
+  if (total === 0) return null;
+  return (
+    <div className={"wiki-group " + (collapsed ? "" : "wiki-group--open")}>
+      <div
+        className="wiki-group__header"
+        onClick={toggle}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            toggle();
+          }
+        }}
+        role="button"
+        tabIndex={0}
+        aria-expanded={!collapsed}
+        style={{ color: "#ff9933" }}
+      >
+        <span className="wiki-group__caret">▶</span>
+        <span>📐 概念 (concepts)</span>
+        <span style={{ fontWeight: 400, color: "var(--catfish-text-muted)", marginLeft: "auto" }}>
+          {total}
+        </span>
+      </div>
+      {!collapsed && (
+        <div style={{ paddingLeft: 8 }}>
+          {categories.map(([category, list]) => (
+            <CategorySubgroup
+              key={category}
+              category={category}
+              files={list}
+              selectedPath={selectedPath}
+              onSelect={onSelect}
+            />
+          ))}
+        </div>
       )}
     </div>
   );

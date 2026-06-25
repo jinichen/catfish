@@ -16,6 +16,7 @@ import { topKRelated } from "../../lib/wikiRelevance";
 import {
   wikiDeleteFile,
   wikiUpdateFile,
+  wikiCreateEntityOrConcept, // P3.5.114: dangling click → 真自动建真文件
   toolBridgeCallTool,
   wikiUninstallShared,
   wikiSensitiveTermsEnsure,
@@ -37,6 +38,9 @@ export default function WikiPreview() {
   const files = useWikiStore((s) => s.files);
   const selectFile = useWikiStore((s) => s.selectFile);
   const loadFiles = useWikiStore((s) => s.loadFiles);
+  // P3.5.111/114 (6/25 鸿波 catch "应该形成真文件才合理"): dangling wikilink click →
+  // 真**自动建真文件**, 失败 fallback setVirtualSystem 虚拟态.
+  const setVirtualSystem = useWikiStore((s) => s.setVirtualSystem);
 
   // P35 (6/5 鸿波): inline 编辑器 state. editing=true 时 body 渲染 textarea.
   const [editing, setEditing] = useState(false);
@@ -318,7 +322,7 @@ export default function WikiPreview() {
 
   const [showHistory, setShowHistory] = useState(false);
 
-  function handleWikilinkClick(name: string) {
+  async function handleWikilinkClick(name: string) {
     // 找 title / slug match file
     const lower = name.toLowerCase().trim();
     const match = files.find(
@@ -329,10 +333,26 @@ export default function WikiPreview() {
     );
     if (match) {
       void selectFile(match.rel_path);
-    } else {
-      // dangling wikilink — 红色 alert
-      // P3.3.10 broken link 检测 正式 ship 后这里 toast
-      console.warn(`[wiki] dangling wikilink: [[${name}]] (没找到匹配 file)`);
+      return;
+    }
+    // P3.5.114 (6/25 鸿波 catch "应该形成真文件才合理"): dangling → 真**自动建真文件**.
+    // 默认 concept + subtype=system (顶级体系视觉一致, 后续可手动编辑改子类型).
+    try {
+      const result = await wikiCreateEntityOrConcept({
+        kind: "concept",
+        title: name,
+        subtype: "system",
+        tags: [],
+        related: [],
+        body: `# ${name}\n\n(由 catfish 自动建立 — 点 dangling wikilink 触发)\n\n本体系下属概念真**自动反推**: WikiGraph 真**走 children**真 related[0] 真**指向本体系**.`,
+      });
+      setVirtualSystem(null);
+      await loadFiles();
+      await selectFile(result.rel_path);
+    } catch (err) {
+      // fail-safe: 已存在 / 网络失败 → fallback 虚拟态显
+      console.warn(`[wiki] auto-create dangling "${name}" failed: ${err} → fallback virtual`);
+      setVirtualSystem(name);
     }
   }
 
