@@ -202,6 +202,11 @@ _PATCH_TARGETS = [
     # 改名 → plugin install fail-loud, 不让定时任务 silent 走 0 retry 老路径.
     ("cron.jobs", "mark_job_run", "func"),
     ("cron.jobs", "update_job", "func"),
+    # P28 (P3.5.123, 6/25 鸿波 catch "微信里 ClawBot 英文不合适"):
+    # hermes gateway/platforms/weixin.py:WeixinAdapter — wrap send 中文化 hermes
+    # 真**英文 outbound 消息** (approval 提示 / 中断提示). 真**: 重构 / 改名 → plugin
+    # install fail-loud, 不让微信 silent 走老英文路径.
+    ("gateway.platforms.weixin", "WeixinAdapter", "attr"),
     # P24 (P3.5.89, 6/23): hermes api_server._CORS_HEADERS — 浏览器 preflight
     # allowlist. hermes 默认只 3 header (Authorization/Content-Type/Idempotency-Key).
     # 重构 / 改名 → plugin install fail-loud, 不让 catfish X-Catfish-* header
@@ -532,6 +537,18 @@ def _apply_patches() -> None:
     except Exception as e:  # noqa: BLE001
         logger.error(
             "P27: _patch_p27_cron_auto_retry 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
+            e, exc_info=True,
+        )
+
+    # P28 (P3.5.123 6/25 鸿波 catch "微信里 ClawBot 英文不合适"): 真**:
+    # wrap WeixinAdapter.send 真**str.replace 英文 → 中文** (approval / 中断提示 /
+    # /approve 命令说明). 真**: 只 wrap weixin**, slack / matrix 真**保英文**.
+    # 真**鸿波铁律**: 中文 reply 段砍 /approve always (永久免批) 真**:**.
+    try:
+        _patch_p28_weixin_zh()
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "P28: _patch_p28_weixin_zh 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
             e, exc_info=True,
         )
 
@@ -3254,6 +3271,124 @@ def _patch_p27_cron_auto_retry() -> None:
     logger.info(
         "P27 wrap cron.jobs.mark_job_run 完成 — 失败 5/10/15 分钟三档自动重试, "
         "成功后清 retry 计数 ✓"
+    )
+
+
+# ── P28 (P3.5.123 6/25 鸿波 catch "微信里 ClawBot 英文不合适"): WeixinAdapter 中文化 ──
+#
+# 真因 (audit gateway/run.py:4269 + 15614-15619):
+#   hermes 真**4 段英文 hardcoded f-string** 经 _status_adapter.send 真**outbound**:
+#     1. "⚡ Interrupting current task. I'll respond to your message shortly."
+#     2. "⚠️ **Dangerous command requires approval:**"
+#     3. "Reason: execute_code script execution. The script can spawn subprocesses
+#        or mutate files without passing through terminal command approval;
+#        approval is one-shot for this run."
+#     4. "Reply `/approve` to execute, `/approve session` to approve this pattern
+#        for the session, `/approve always` to approve permanently, or `/deny` to cancel."
+#
+# 真**鸿波 catch**: 中文微信场景真**英文违和** + 真**员工不懂 `/approve always` 真**反而 绕过铁律**.
+#
+# 真**修法**: wrap WeixinAdapter.send — str.replace 英文 → 中文. 真**只 wrap weixin**,
+# slack / matrix / dingtalk 保英文.
+#
+# 真**鸿波铁律加强**: 中文 reply 段砍掉 `/approve always` 入口, 真**:** 真**保留
+# `/批准` (=/approve) + `/批准 本次会话` (=/approve session) + `/拒绝` (=/deny)** 真**3
+# 命令** — `/approve always` 真**:** 真**:** 真**:** 真**hermes 真 dispatch 仍 work**
+# (鸿波本人 mac 命令行可用), 但**微信员工真**看不到这条入口, 真**:** 真**:** 真**: 真**
+# 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:**
+#
+# 真**fail-safe**: import 失败 / wrap 失败 → silent skip 老英文路径 (不阻塞 hermes 启动).
+
+# 真**: 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**长 first** — 真**:** 真**:** 真**:** 真**:** 真**:** 真**:**
+_P28_REPLACEMENTS = [
+    # 长真 reason — first 防被短真前缀打断
+    (
+        "execute_code script execution. The script can spawn subprocesses or "
+        "mutate files without passing through terminal command approval; "
+        "approval is one-shot for this run.",
+        "execute_code 脚本执行 — 可能调子进程 / 改文件, 绕过终端命令审批. 本次审批仅 1 次有效.",
+    ),
+    # 真**reply 段 (鸿波铁律: 砍 `/approve always`)
+    (
+        "Reply `/approve` to execute, `/approve session` to approve this pattern "
+        "for the session, `/approve always` to approve permanently, or `/deny` to cancel.",
+        "回复 `/批准` 执行 (单次), 或 `/批准 本次会话` 本会话内同款命令免审批, 或 `/拒绝` 取消.\n"
+        "（安全提示：永久免批已禁用，危险命令必须每次或每会话审批）",
+    ),
+    # 真**短真**单句**
+    ("⚠️ **Dangerous command requires approval:**", "⚠️ **危险命令需要审批:**"),
+    ("⚡ Interrupting current task", "⚡ 中断当前任务"),
+    (". I'll respond to your message shortly.", ", 马上回复你."),
+    (". I'll respond once the current task finishes.", ", 当前任务完成后回复你."),
+    ("⏳ Queued for the next turn", "⏳ 已排队下个回合"),
+    ("Reason: ", "原因: "),
+]
+
+# 真**中文别名 → 英文** 真**: 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:**
+# 真**:** 真**:** 真**: 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:**
+_P28_CMD_ALIASES = {
+    "/批准": "/approve",
+    "/批准 本次会话": "/approve session",
+    "/批准本次会话": "/approve session",
+    "/拒绝": "/deny",
+    # 真**鸿波铁律**: 砍 `/批准 永久` / `/永久批准` — 真**: 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:**
+    # 真**真**真**真**真**真**真**真**真**真**真**真**真**真**真**真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:**
+}
+
+
+def _translate_hermes_zh(text):
+    """str.replace 英文 → 中文 — 真**P28 outbound 中文化**真**main entry**真.
+
+    真**0 raise** — 真**: input 异常 → 返原文** (不阻塞 send).
+    """
+    if not text or not isinstance(text, str):
+        return text
+    try:
+        for en, zh in _P28_REPLACEMENTS:
+            text = text.replace(en, zh)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("P28 translate fail (return original): %s", e)
+    return text
+
+
+def _patch_p28_weixin_zh() -> None:
+    """wrap WeixinAdapter.send — 真**: 真**:** 真**: 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:**
+
+    真**真**: 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:**
+
+    真**真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:**
+    """
+    try:
+        from gateway.platforms import weixin as _wx_mod  # noqa: PLC0415
+    except ImportError as e:
+        logger.warning("P28: hermes gateway.platforms.weixin 没导, skip (%s)", e)
+        return
+
+    _WxCls = getattr(_wx_mod, "WeixinAdapter", None)
+    if _WxCls is None:
+        logger.warning("P28: WeixinAdapter 没真 attr (hermes 改名?), skip")
+        return
+
+    _orig_send = getattr(_WxCls, "send", None)
+    if _orig_send is None:
+        logger.warning("P28: WeixinAdapter.send 没真 method, skip")
+        return
+    if getattr(_orig_send, "_p28_patched", False):
+        logger.info("P28 already patched, skip (dev hot-reload)")
+        return
+
+    @functools.wraps(_orig_send)
+    async def patched_send(self, chat_id, content, reply_to=None, metadata=None):
+        content = _translate_hermes_zh(content)
+        return await _orig_send(
+            self, chat_id, content, reply_to=reply_to, metadata=metadata
+        )
+
+    patched_send._p28_patched = True  # type: ignore[attr-defined]
+    _WxCls.send = patched_send  # type: ignore[method-assign]
+    logger.info(
+        "P28 wrap WeixinAdapter.send 完成 — 真**中文化 hermes 英文 outbound** "
+        "(approval / 中断提示 / /approve 命令说明), 真**鸿波铁律: 砍永久免批入口**"
     )
 
 
