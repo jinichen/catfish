@@ -81,48 +81,68 @@ export default function LocalSearchScopeCard() {
         background: "var(--catfish-bg-elevated)",
         border: "1px solid var(--catfish-border)",
         borderRadius: "var(--radius-md)",
-        padding: "var(--space-4)",
+        // P3.5.126.1 (6/26 鸿波 catch "空间利用率太低"): 限高 + 内部滚动, 仿
+        // CronJobsCard maxHeight 380 套路. 顶部标题/说明 flexShrink:0, 中间
+        // 滚动区 flex:1 + overflowY:auto.
+        maxHeight: 380,
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
         boxSizing: "border-box",
       }}
     >
+      {/* 顶部固定区: 标题 + 说明 + 错误 */}
       <div
         style={{
-          display: "flex",
-          alignItems: "baseline",
-          gap: "var(--space-2)",
-          marginBottom: "var(--space-2)",
+          padding: "var(--space-4) var(--space-4) var(--space-2) var(--space-4)",
+          flexShrink: 0,
+          borderBottom: "1px solid var(--catfish-border-soft, rgba(0,0,0,0.05))",
         }}
       >
-        <h3 style={{ margin: 0 }}>📂 Local Search 索引目录</h3>
-        <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
-          鲶鱼能搜哪些目录的文件
-        </span>
-      </div>
-
-      <div
-        style={{
-          fontSize: 11,
-          color: "var(--catfish-text-muted)",
-          marginBottom: "var(--space-2)",
-          lineHeight: 1.5,
-        }}
-      >
-        加目录后, 跑一下 <code>catfish-search index</code> 或者重启 Local Search 服务
-        让索引生效. 默认扫 ~/Documents / ~/Desktop / ~/Downloads / ~/.catfish/uploads.
-      </div>
-
-      {err && (
         <div
           style={{
-            fontSize: 12,
-            color: "var(--status-err, #dc2626)",
-            marginBottom: "var(--space-2)",
+            display: "flex",
+            alignItems: "baseline",
+            gap: "var(--space-2)",
+            marginBottom: 4,
           }}
         >
-          ⚠️ {err}
+          <h3 style={{ margin: 0 }}>📂 Local Search 索引目录</h3>
+          <span style={{ fontSize: 11, color: "var(--catfish-text-muted)" }}>
+            鲶鱼能搜哪些目录的文件
+          </span>
         </div>
-      )}
+        <div
+          style={{
+            fontSize: 11,
+            color: "var(--catfish-text-muted)",
+            lineHeight: 1.5,
+          }}
+        >
+          加目录后, 跑一下 <code>catfish-search index</code> 或者重启 Local Search 服务
+          让索引生效. 默认扫 ~/Documents / ~/Desktop / ~/Downloads / ~/.catfish/uploads.
+        </div>
+        {err && (
+          <div
+            style={{
+              fontSize: 12,
+              color: "var(--status-err, #dc2626)",
+              marginTop: 4,
+            }}
+          >
+            ⚠️ {err}
+          </div>
+        )}
+      </div>
 
+      {/* 中间滚动区 — 卡满时只这块滚 */}
+      <div
+        style={{
+          flex: 1,
+          overflowY: "auto",
+          padding: "var(--space-2) var(--space-4) var(--space-4) var(--space-4)",
+        }}
+      >
       {data && (
         <>
           {/* include 列表 — 可加可删 */}
@@ -292,6 +312,7 @@ export default function LocalSearchScopeCard() {
           </div>
         </>
       )}
+      </div>{/* /滚动区 */}
     </div>
   );
 }
