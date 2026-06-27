@@ -36,6 +36,7 @@
 // 诊断信息员工真需要时去"控制台"tab 看, 不污染 Dashboard.
 // import IdentityCard from "./IdentityCard";
 import ServicesCard from "./ServicesCard";
+import LocalSearchScopeCard from "./LocalSearchScopeCard"; // P3.5.126 (6/26 鸿波 catch): local_search 索引目录 UI
 import QuotaCard from "./QuotaCard";
 // P3.5.59 (6/22 鸿波 catch "无法知道性能状态"): 综合 LLM + tool perf 一站式
 import PerfCard from "./components/PerfCard";
@@ -294,7 +295,7 @@ export default function DashboardTab() {
         id="services"
         title="⚙️ 服务 / 配额"
         defaultCollapsed
-        count={4}
+        count={5}
       >
         <SectionTabs
           storageKey="services"
@@ -307,6 +308,9 @@ export default function DashboardTab() {
             // (gateway audit) + tool dispatch perf (tool-bridge audit) 一站式.
             // 数据 100% 本机 fs 直读, 不走网络.
             { key: "perf", label: "📈 性能统计", render: () => <PerfCard /> },
+            // P3.5.126 (6/26 鸿波 catch "local_search 目录设置 UI 找不到"):
+            // 直接 UI 加/删索引目录, 不用 vim ~/.catfish/search-scope.yaml.
+            { key: "search-scope", label: "📂 搜索范围", render: () => <LocalSearchScopeCard /> },
           ]}
         />
         {/* <CuratorCard /> — 5/16 砍 (BL-CURATOR-CARD-KILL) */}

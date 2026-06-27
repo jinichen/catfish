@@ -406,6 +406,11 @@ pub fn run() {
             commands::local_search::local_search_start,
             commands::local_search::local_search_stop,
             commands::local_search::local_search_status,
+            // P3.5.126 (6/26 鸿波 catch "local_search 目录设置 UI 找不到"):
+            // 索引目录 UI 管理 (search-scope.yaml include 段读写)
+            commands::local_search_scope::local_search_scope_get,
+            commands::local_search_scope::local_search_scope_add,
+            commands::local_search_scope::local_search_scope_remove,
             // tool_bridge
             commands::tool_bridge::tool_bridge_start,
             commands::tool_bridge::tool_bridge_stop,
