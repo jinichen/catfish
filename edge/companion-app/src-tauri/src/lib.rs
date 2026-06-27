@@ -411,6 +411,9 @@ pub fn run() {
             commands::local_search_scope::local_search_scope_get,
             commands::local_search_scope::local_search_scope_add,
             commands::local_search_scope::local_search_scope_remove,
+            // P3.5.127 (6/26 鸿波 catch "怎么知道文件是不是有被索引?"):
+            // 索引状态查询 — 直接读 ~/.catfish/search.db, 复用 Python stats_summary 逻辑
+            commands::local_search_stats::local_search_stats,
             // tool_bridge
             commands::tool_bridge::tool_bridge_start,
             commands::tool_bridge::tool_bridge_stop,

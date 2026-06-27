@@ -19,23 +19,61 @@ interface ScopeResult {
   yamlPath: string;
 }
 
+// P3.5.127 (6/26 鸿波 catch "怎么知道文件被没被索引?"): 索引状态查询.
+// 对应后端 commands/local_search_stats.rs, 复用 Python stats_summary 同款 3 SQL.
+interface TypeCount {
+  fileType: string;
+  count: number;
+}
+interface LocalSearchStats {
+  dbExists: boolean;
+  totalFiles: number;
+  byType: TypeCount[];
+  totalSizeBytes: number;
+  lastIndexedAt: number | null;
+  dbPath: string;
+}
+
 const scopeGet = () => invoke<ScopeResult>("local_search_scope_get");
 const scopeAdd = (path: string) =>
   invoke<ScopeResult>("local_search_scope_add", { path });
 const scopeRemove = (path: string) =>
   invoke<ScopeResult>("local_search_scope_remove", { path });
+const statsGet = () => invoke<LocalSearchStats>("local_search_stats");
+
+function formatBytes(bytes: number): string {
+  if (bytes <= 0) return "0";
+  const mb = bytes / (1024 * 1024);
+  if (mb >= 1) return `${mb.toFixed(1)} MB`;
+  const kb = bytes / 1024;
+  return `${kb.toFixed(0)} KB`;
+}
+
+function formatIndexedAt(epoch: number | null): string {
+  if (epoch === null) return "—";
+  const now = Date.now() / 1000;
+  const diff = now - epoch;
+  if (diff < 60) return "刚刚";
+  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
+  if (diff < 86400 * 7) return `${Math.floor(diff / 86400)} 天前`;
+  return new Date(epoch * 1000).toLocaleDateString();
+}
 
 export default function LocalSearchScopeCard() {
   const [data, setData] = useState<ScopeResult | null>(null);
+  const [stats, setStats] = useState<LocalSearchStats | null>(null);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [excludeExpanded, setExcludeExpanded] = useState(false);
+  const [typesExpanded, setTypesExpanded] = useState(false);
 
   const reload = useCallback(async () => {
     try {
-      const r = await scopeGet();
+      const [r, s] = await Promise.all([scopeGet(), statsGet()]);
       setData(r);
+      setStats(s);
       setErr(null);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -44,6 +82,12 @@ export default function LocalSearchScopeCard() {
 
   useEffect(() => {
     void reload();
+    // P3.5.127: 30s 轮一次 — watcher 增量入库后, 卡里数字自己变. 不密 (查 sqlite
+    // 便宜但加倒不必要), 跟 cron 卡同款 30s 节奏.
+    const id = setInterval(() => {
+      void reload();
+    }, 30000);
+    return () => clearInterval(id);
   }, [reload]);
 
   const onAdd = async () => {
@@ -122,6 +166,88 @@ export default function LocalSearchScopeCard() {
           加目录后, 跑一下 <code>catfish-search index</code> 或者重启 Local Search 服务
           让索引生效. 默认扫 ~/Documents / ~/Desktop / ~/Downloads / ~/.catfish/uploads.
         </div>
+        {/* P3.5.127: 索引状态栏 — 一眼看到有没建索引 + 多少文件 */}
+        {stats && (
+          <div
+            style={{
+              marginTop: 6,
+              padding: "6px 8px",
+              background: "var(--catfish-bg, rgba(0,0,0,0.03))",
+              borderRadius: 4,
+              fontSize: 11,
+            }}
+          >
+            {!stats.dbExists ? (
+              <span style={{ color: "var(--catfish-text-muted)" }}>
+                ⚠️ <strong>还没建索引</strong> — 跑 <code>catfish-search index</code> 或
+                启 Local Search watcher 后会自动落库到 <code>{stats.dbPath}</code>
+              </span>
+            ) : stats.totalFiles === 0 ? (
+              <span style={{ color: "var(--catfish-text-muted)" }}>
+                📊 索引库存在但 <strong>0 文件</strong> — 可能是 include 目录都被
+                exclude 命中, 或文件类型 / 大小不达标
+              </span>
+            ) : (
+              <>
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                  <span>
+                    📊 <strong>{stats.totalFiles.toLocaleString()}</strong> 个文件
+                  </span>
+                  <span style={{ color: "var(--catfish-text-muted)" }}>
+                    {formatBytes(stats.totalSizeBytes)}
+                  </span>
+                  <span style={{ color: "var(--catfish-text-muted)" }}>
+                    最近入库 {formatIndexedAt(stats.lastIndexedAt)}
+                  </span>
+                  {stats.byType.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setTypesExpanded((t) => !t)}
+                      style={{
+                        fontSize: 11,
+                        background: "transparent",
+                        border: "none",
+                        cursor: "pointer",
+                        color: "var(--catfish-cyan, #0E5F66)",
+                        padding: 0,
+                        marginLeft: "auto",
+                      }}
+                    >
+                      {typesExpanded ? "▼" : "▶"} 按类型 ({stats.byType.length})
+                    </button>
+                  )}
+                </div>
+                {typesExpanded && stats.byType.length > 0 && (
+                  <div
+                    style={{
+                      marginTop: 4,
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: 6,
+                      paddingLeft: 4,
+                    }}
+                  >
+                    {stats.byType.map((t) => (
+                      <span
+                        key={`bt-${t.fileType}`}
+                        style={{
+                          fontSize: 10,
+                          padding: "1px 6px",
+                          background: "var(--catfish-bg-elevated, white)",
+                          border: "1px solid var(--catfish-border)",
+                          borderRadius: 3,
+                          color: "var(--catfish-text-muted)",
+                        }}
+                      >
+                        <code>{t.fileType}</code> × {t.count}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
         {err && (
           <div
             style={{

@@ -39,6 +39,7 @@ pub mod journal;  // BL-JOURNAL-TODO-EXTRACT (5/20): ~/.catfish/employee_journal
 pub mod learning;
 pub mod local_search;
 pub mod local_search_scope; // P3.5.126 (6/26 鸿波 catch): local_search 索引目录 UI 管理
+pub mod local_search_stats; // P3.5.127 (6/26 鸿波 catch): local_search 索引状态查询 (文件数/类型/大小/时间)
 pub mod logs;
 pub mod memory_history;
 pub mod hermes_memory;  // BL-DASHBOARD-HERMES-MEMORY-CARD (5/16)
