@@ -33,6 +33,7 @@ pub mod file;
 pub mod file_parse;
 pub mod gateway;
 pub mod health;
+pub mod hermes; // P3.5.125 (6/26 鸿波 catch): hermes hang 监控 + 自动重启
 pub mod identity;
 pub mod journal;  // BL-JOURNAL-TODO-EXTRACT (5/20): ~/.catfish/employee_journal.md TODO 抽取
 pub mod learning;

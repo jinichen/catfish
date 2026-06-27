@@ -24,6 +24,12 @@ export const gatewayStatus = () => rawInvoke<ServiceStatus>("gateway_status");
 export const gatewayGetDevToken = () =>
   rawInvoke<string>("gateway_get_dev_token");
 
+// ── hermes (P3.5.125 6/26 鸿波 catch "hermes hang 不监控") ──
+// hermes 默认 launchd 拉, 但 hang (GIL/IO block) launchd 不知道.
+// hermesKill 真**:** kill -9 后等 launchd 自动重启.
+export const hermesStatus = () => rawInvoke<ServiceStatus>("hermes_status");
+export const hermesKill = () => rawInvoke<void>("hermes_kill");
+
 // ── chrome ───────────────────────────────────────────────
 export const chromeLaunch = () => rawInvoke<void>("chrome_launch");
 export const chromeKill = () => rawInvoke<void>("chrome_kill");

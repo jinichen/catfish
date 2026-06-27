@@ -394,6 +394,10 @@ pub fn run() {
             commands::gateway::gateway_stop,
             commands::gateway::gateway_status,
             commands::gateway::gateway_get_dev_token,
+            // P3.5.125 (6/26 鸿波 catch "catfish 对 hermes/chrome hang 无监控"):
+            // hermes hang detection + auto restart (kill -9 触发 launchd 拉)
+            commands::hermes::hermes_status,
+            commands::hermes::hermes_kill,
             // chrome
             commands::chrome::chrome_launch,
             commands::chrome::chrome_kill,

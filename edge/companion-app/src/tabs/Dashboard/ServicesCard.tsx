@@ -31,8 +31,9 @@ import {
 
 // BL-COMPANION-SERVICES-DEMOTE (5/17): gateway 不在 SERVICE_ACTIONS 里了 —
 // 边缘 Companion 无权启停中央服务. 表里只剩 3 个真本地服务.
+// P3.5.125 (6/26): hermes 也排除 — 由 launchd 管, Companion 只 hermes_kill 触发拉.
 // 类型 Pick 防新增 ServiceId 时漏改这个表.
-type LocalServiceId = Exclude<ServiceId, "gateway">;
+type LocalServiceId = Exclude<ServiceId, "gateway" | "hermes">;
 const SERVICE_ACTIONS: Record<
   LocalServiceId,
   { start: () => Promise<unknown>; stop: () => Promise<unknown> }
@@ -44,8 +45,8 @@ const SERVICE_ACTIONS: Record<
 
 async function restartService(id: ServiceId): Promise<void> {
   // BL-COMPANION-SERVICES-DEMOTE (5/17): gateway 不可重启, 这里直接 return.
-  // (UI 上 gateway 行已经没 ↻ 按钮, 这是个 defensive check)
-  if (id === "gateway") return;
+  // P3.5.125 (6/26): hermes 也跳过 — 由 watchdog 自动 kill (走 hermesKill 触发 launchd)
+  if (id === "gateway" || id === "hermes") return;
   const a = SERVICE_ACTIONS[id as LocalServiceId];
   if (!a) return;
   try {
@@ -74,6 +75,14 @@ function buildServices(agentName: string): ServiceRow[] {
       // 员工挂了找 IT/ops, 不要自己尝试重启 (按钮也没了).
       why: "中央服务 (你 mac 上是过渡, 未来云端). 挂了联系 IT, 没起来 = 聊天用不了",
     },
+    // P3.5.125 (6/26 鸿波 catch "hermes 没监控"): hermes API server (8642),
+    // 真**: 真**:** chat / 早安 / cron / wechat 真**都依赖**. hang 时连续 3 次
+    // /healthz 失败 → 自动 kill -9 触发 launchd 拉.
+    {
+      id: "hermes",
+      name: "Hermes Agent",
+      why: `${agentName}核心 runtime (chat / 早安 / cron / 微信). hang 自动重启, 不用管`,
+    },
     {
       id: "tool_bridge",
       name: "Tool Bridge",
@@ -82,7 +91,7 @@ function buildServices(agentName: string): ServiceRow[] {
     {
       id: "chrome",
       name: "Catfish Chrome",
-      why: "浏览器自动化 (browser_navigate 等), 不需要可不起",
+      why: "浏览器自动化 (browser_navigate 等), 不需要可不起. page-level hang 自动重启",
     },
     {
       id: "local_search",

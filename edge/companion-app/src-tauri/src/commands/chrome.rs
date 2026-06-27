@@ -255,19 +255,36 @@ pub async fn chrome_status() -> Result<ServiceStatus, String> {
         ));
     }
 
-    // 9222 通了再 GET /json/version 确认是 DevTools 协议
+    // P3.5.125 (6/26 鸿波 catch "chrome page-level hang 不检测"): 升级 health check.
+    // 老逻辑: GET /json/version → 真**只测 DevTools 协议在不在**, 不测真 DOM/page
+    // 是不是卡住. 真**真因**: chrome 9222 端口活, 但 page 卡死 (JS infinite loop /
+    // OOM 边缘 / NetworkIdle 永不返). 新逻辑:
+    //   1. /json/version → 协议 alive
+    //   2. /json/list → 拿到 page tabs (TCP 通但 page 真**hang 时**这步会卡住或空)
     let chrome_base = ep.chrome_base();
-    let healthy = match reqwest::Client::builder()
+    let client = reqwest::Client::builder()
         .timeout(HTTP_TIMEOUT)
         .no_proxy()
-        .build()
-    {
-        Ok(c) => c
-            .get(format!("{chrome_base}/json/version"))
-            .send()
-            .await
-            .map(|r| r.status().is_success())
-            .unwrap_or(false),
+        .build();
+    let healthy = match client {
+        Ok(c) => {
+            let version_ok = c
+                .get(format!("{chrome_base}/json/version"))
+                .send()
+                .await
+                .map(|r| r.status().is_success())
+                .unwrap_or(false);
+            if !version_ok {
+                false
+            } else {
+                // page-level: /json/list 真**返**真**page tabs JSON array**, 真**hang 时**timeout
+                c.get(format!("{chrome_base}/json/list"))
+                    .send()
+                    .await
+                    .map(|r| r.status().is_success())
+                    .unwrap_or(false)
+            }
+        }
         Err(_) => false,
     };
 
@@ -282,7 +299,7 @@ pub async fn chrome_status() -> Result<ServiceStatus, String> {
         message: Some(if healthy {
             format!("DevTools 已就绪 :{port}")
         } else {
-            "TCP 通但非 Chrome DevTools — 端口被别的进程占了？".into()
+            "⚠ TCP 通但 page-level 失败 — Chrome 可能 hang, 连续 3 次将自动重启".into()
         }),
     })
 }

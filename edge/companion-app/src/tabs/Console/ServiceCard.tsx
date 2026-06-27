@@ -20,14 +20,25 @@ interface Props {
   name: string;
 }
 
+// P3.5.125 (6/26 鸿波 catch "hermes hang 无监控"): hermes 不在 catfish 端 spawn
+// (员工 brew install + launchd 起的), 真**:** 真**start/stop 真**:** 真**:** noop**
+// (Companion 真**只通过 hermes_kill 触发 launchd 重启**, 不 spawn).
 const STARTERS: Record<ServiceId, () => Promise<void>> = {
   gateway: gatewayStart,
+  hermes: async () => {
+    throw new Error("hermes 由 launchd 管, 不在 Companion 启动. 检查 brew services list");
+  },
   chrome: chromeLaunch,
   local_search: localSearchStart,
   tool_bridge: toolBridgeStart,
 };
 const STOPPERS: Record<ServiceId, () => Promise<void>> = {
   gateway: gatewayStop,
+  hermes: async () => {
+    // hermes_kill 真**:** kill -9 → launchd 拉. 真**:** 真**真**真**真**stop**: 真**:**
+    const { hermesKill } = await import("../../lib/tauri");
+    await hermesKill();
+  },
   chrome: chromeKill,
   local_search: localSearchStop,
   tool_bridge: toolBridgeStop,
