@@ -147,6 +147,9 @@ from .skill_freeze_template import (  # noqa: F401
     _slugify,
 )
 
+# P3.5.128 E1 (6/26 鸿波拍板, 借鉴 Skill-DisCo arxiv 2606.26669 Compilation gate)
+from .skill_verify import verify_frozen_script
+
 def freeze_skill(args: dict[str, Any]) -> dict[str, Any]:
     """tool entry: catfish_freeze_skill.
 
@@ -299,6 +302,21 @@ def freeze_skill(args: dict[str, Any]) -> dict[str, Any]:
         }
     skill_dir.mkdir(parents=True, exist_ok=True)
 
+    # P3.5.128 E1: overwrite=true 时, 写入前备份旧 script.py / SKILL.md 到
+    # .bak-<ts>/. 治"凝固失败把好 skill 覆盖丢" 的 silent 回归.
+    backup_info: dict[str, Any] = {"backed_up": False}
+    if overwrite:
+        old_script = skill_dir / "script.py"
+        old_md = skill_dir / "SKILL.md"
+        if old_script.exists() or old_md.exists():
+            bak_dir = skill_dir / f".bak-{time.strftime('%Y%m%d_%H%M%S')}"
+            bak_dir.mkdir(parents=True, exist_ok=True)
+            if old_script.exists():
+                old_script.rename(bak_dir / "script.py")
+            if old_md.exists():
+                old_md.rename(bak_dir / "SKILL.md")
+            backup_info = {"backed_up": True, "bak_dir": str(bak_dir)}
+
     script_py = _SCRIPT_HEADER.format(
         frozen_at=time.strftime("%Y-%m-%d %H:%M:%S"),
         namespace=namespace,
@@ -312,6 +330,34 @@ def freeze_skill(args: dict[str, Any]) -> dict[str, Any]:
     ) + "\n".join(body_lines) + _SCRIPT_FOOTER
 
     (skill_dir / "script.py").write_text(script_py, encoding="utf-8")
+
+    # P3.5.128 E1 verify gate β — script.py 写完先 AST + 白名单 verify, 通过
+    # 才让 SKILL.md ship. fail → script.py 重命名为 .unverified-<ts>, SKILL.md
+    # 不写 (这样 catfish_run_skill 看不到坏 skill).
+    # 注: trace_recorder 已在 module level 第 68 行 import (`from . import trace_recorder`),
+    # 这里不要 inline import — Python 会把 trace_recorder 当 local 名字, 之前
+    # 第 198 行 trace_recorder.get_active_session() 会 UnboundLocalError.
+    verify_result = verify_frozen_script(
+        script_py_text=script_py,
+        allowed_tools=trace_recorder.RECORDED_TOOLS,
+        expected_fn_name=fn_name,
+    )
+    if not verify_result.ok:
+        unverified = skill_dir / f"script.py.unverified-{time.strftime('%Y%m%d_%H%M%S')}"
+        (skill_dir / "script.py").rename(unverified)
+        return {
+            "ok": False,
+            "error": (
+                "凝固出来的 script.py 没通过 verify gate (P3.5.128 E1, AST + tool "
+                "白名单). SKILL.md 不写, 坏 script 已重命名保留供 debug."
+            ),
+            "verify_errors": verify_result.errors,
+            "verify_call_count": verify_result.call_count,
+            "unverified_path": str(unverified),
+            "skill_dir": str(skill_dir),
+            "trace_steps_used": len(trace),
+            "backup": backup_info,
+        }
 
     skill_md = _build_skill_md(
         name=name,
@@ -392,6 +438,13 @@ def freeze_skill(args: dict[str, Any]) -> dict[str, Any]:
         "params": [{"name": n, "type": t, "default": d} for n, t, d in params],
         "register_external_dir": register_result,
         "install": install_result,
+        # P3.5.128 E1 — verify gate β 通过 + 备份信息 (overwrite=true 时)
+        "verify": {
+            "ok": True,
+            "call_count": verify_result.call_count,
+            "gate": "AST + RECORDED_TOOLS whitelist",
+        },
+        "backup": backup_info,
         "summary": summary,
     }
 

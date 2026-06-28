@@ -34,11 +34,16 @@ pub struct SkillAuditSummary {
 
 /// BL-MM12 综合质量分数 — 0-100 整数, 越高越好.
 ///
-/// 公式 (合计 100 分):
+/// 公式 (合计 100 分, 再乘 Compactness 乘数):
 ///   - 50 × success_rate            (调用成功率, 来自 skill_audit.jsonl ok 字段)
 ///   - 30 × normalized_freq         (调用频率归一化, log 缓增防"用 100 次 = 用 5 次×20 倍")
 ///   - 20 × explicit_feedback_ratio (员工显式 thumbs_up / (up+down), 来自 BL-MM11
 ///                                    skill_quality.jsonl. 没 feedback 时给 50 分位中性)
+///   - **× Compactness 乘数 (P3.5.128, 借鉴 Skill-DisCo 2606.26669 Compactness 性质)**:
+///     - <3 calls → 0.7 (特化, Coverage 不足)
+///     - >50 calls 且 success<0.5 → 0.8 (泛而弱, scope creep)
+///     - 其它 → 1.0
+///     Compactness 用乘数而非加权重, 不破坏老分数对比性 (健康 skill 数字稳, 异常才扣).
 ///
 /// 边界:
 ///   - 0 调用 → 不返 (不在 quality_scores 里)
@@ -53,6 +58,8 @@ pub struct SkillQualityScore {
     pub thumbs_up: u32,
     pub thumbs_down: u32,
     pub edits: u32,
+    /// P3.5.128: Compactness 乘数 (1.0=健康 / 0.7=特化 / 0.8=泛而弱). 0-1 float.
+    pub compactness: f64,
     /// 给员工看 "为啥这分"
     pub breakdown: String,
 }
@@ -337,11 +344,24 @@ fn compute_quality_scores(run_events: &[&AuditEvent]) -> Vec<SkillQualityScore> 
             let part_freq = 30.0 * normalized_freq;
             let part_feedback = 20.0 * explicit_ratio;
             let raw = part_success + part_freq + part_feedback;
-            let score = raw.round().clamp(0.0, 100.0) as u32;
+
+            // P3.5.128 (借鉴 Skill-DisCo arxiv 2606.26669 Compactness 性质):
+            // 特化 (call 太少 → Coverage 不足) 或 泛而弱 (call 多但成功率薄 →
+            // scope creep) 都扣分. 用乘数不动权重, 老对比性稳.
+            let (compactness, compact_reason): (f64, &str) =
+                if a.call_count < 3 {
+                    (0.7, "特化(<3次)")
+                } else if a.call_count > 50 && success_rate < 0.5 {
+                    (0.8, "泛而弱(>50次但<50%成功)")
+                } else {
+                    (1.0, "健康")
+                };
+
+            let score = (raw * compactness).round().clamp(0.0, 100.0) as u32;
 
             let breakdown = format!(
-                "成功率 {:.0}/50 + 频次 {:.0}/30 + 显式反馈 {:.0}/20 = {} 分",
-                part_success, part_freq, part_feedback, score,
+                "成功率 {:.0}/50 + 频次 {:.0}/30 + 显式反馈 {:.0}/20 × Compactness {:.1} ({}) = {} 分",
+                part_success, part_freq, part_feedback, compactness, compact_reason, score,
             );
 
             SkillQualityScore {
@@ -352,6 +372,7 @@ fn compute_quality_scores(run_events: &[&AuditEvent]) -> Vec<SkillQualityScore> 
                 thumbs_up: up,
                 thumbs_down: down,
                 edits,
+                compactness,
                 breakdown,
             }
         })
@@ -406,8 +427,47 @@ mod tests {
         let events = vec![ev("bad", false), ev("bad", false)];
         let refs: Vec<&AuditEvent> = events.iter().collect();
         let scores = compute_quality_scores(&refs);
-        // success_rate=0 → 0/50, freq=1.0 → 30, feedback=0.5 中性 → 10. 合计 40
-        assert_eq!(scores[0].score, 40);
+        // P3.5.128 更新: success_rate=0 → 0/50, freq=1.0 → 30, feedback=0.5 中性 → 10
+        // raw=40, 但 call_count=2 (<3) → Compactness 0.7 → 40 × 0.7 = 28
+        assert_eq!(scores[0].score, 28);
+        assert!((scores[0].compactness - 0.7).abs() < 1e-6);
+        assert!(scores[0].breakdown.contains("特化"));
+    }
+
+    #[test]
+    fn p3_5_128_specialized_low_calls_get_0_7_multiplier() {
+        // 2 calls (<3) 即使全成功也扣到 0.7
+        let events = vec![ev("rare", true), ev("rare", true)];
+        let refs: Vec<&AuditEvent> = events.iter().collect();
+        let scores = compute_quality_scores(&refs);
+        // raw = 50 + 30 + 10 = 90, × 0.7 = 63
+        assert_eq!(scores[0].score, 63);
+        assert!((scores[0].compactness - 0.7).abs() < 1e-6);
+    }
+
+    #[test]
+    fn p3_5_128_generalized_weak_gets_0_8_multiplier() {
+        // >50 calls 但 success<0.5 触发 0.8 (泛而弱)
+        // 51 calls, 25 成功 / 26 失败 → success ≈ 0.49
+        let mut events: Vec<AuditEvent> = (0..25).map(|_| ev("creep", true)).collect();
+        events.extend((0..26).map(|_| ev("creep", false)));
+        let refs: Vec<&AuditEvent> = events.iter().collect();
+        let scores = compute_quality_scores(&refs);
+        // call_count=51 (>50) && success_rate=0.490 (<0.5) → compactness 0.8
+        assert!((scores[0].compactness - 0.8).abs() < 1e-6);
+        assert!(scores[0].breakdown.contains("泛而弱"));
+    }
+
+    #[test]
+    fn p3_5_128_healthy_stays_at_1_0_multiplier() {
+        // 5 calls 全成功 → 健康, compactness 1.0, score 不被乘数扣
+        let events: Vec<AuditEvent> = (0..5).map(|_| ev("healthy", true)).collect();
+        let refs: Vec<&AuditEvent> = events.iter().collect();
+        let scores = compute_quality_scores(&refs);
+        assert!((scores[0].compactness - 1.0).abs() < 1e-6);
+        assert!(scores[0].breakdown.contains("健康"));
+        // raw 0~90, × 1.0 = raw — 不被扣
+        assert!(scores[0].score >= 89);
     }
 
     #[test]
