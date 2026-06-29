@@ -107,6 +107,39 @@ models:
       chain: [catfish-private-main, catfish-public-qwen-flash, catfish-public-gemini-flash]
       max_hops: 2
 
+# ---------- 内部 · GLM5.2 ----------
+  - name: catfish-private-glm
+    tier: private
+    display_name: "GLM 5.2"
+    mode: chat
+
+    upstream:
+      model: openai/glm-52
+      api_base: http://10.10.40.102:32730/openapi/550e8400-e29b-41d4-a716-446655440000/v1
+      api_key_env: INTERNAL_LLM_KEY
+      timeout: 180
+
+    # P3.5.124 (6/29 鸿波 audit): 平台方反馈 GLM 上下文 200K (老配 512K 是猜的, 撞 GLM
+    # vLLM 后端真容量). 不修这条 dyn 算 prompt 时高估剩余 output 空间.
+    context_window: 200000
+    # P3.5.124 (6/29 鸿波 audit): GLM vLLM 后端 max_tokens 真实上限远小于 65536. 实测
+    # T4: max_tokens=65536 撞 400, 4096 通. 配 8192 兜稳妥, hermes-cli 客户端默认
+    # max_tokens=65536 会被 _apply_max_tokens clip 到 min(cw=200K, max_out=8192)=8192.
+    # 跟 dashscope-qwen / gemini-pro / deepseek-v4 同款字段, 不影响其它 model.
+    # 后续真测 GLM 单次 output 上限可调高 (16384 / 32768 任意值, 这里 8192 是 T4 验证
+    # 4096 通的稳妥外推).
+    max_output_tokens: 8192
+    supports_tool_use: true
+    supports_streaming: true
+    supports_vision: false
+    recommended_for: [general, chat, tool_use, summarizer]
+    cost_tier: free
+
+    fallback:
+      on_errors: [429, 502, 503, 504, "timeout", "connection error", "connection refused", "rate limit", "free tier", "upstream error"]
+      chain: [catfish-private-main, catfish-public-qwen-flash]
+      max_hops: 2
+
   # ---------- 内部 · Embedding ----------
   # ⚠️ TODO: 替换为 bge-m3 在平台上的实际部署 UUID
   - name: catfish-private-embed
