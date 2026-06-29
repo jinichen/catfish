@@ -39,7 +39,7 @@ export default function WikiPreview() {
   const selectFile = useWikiStore((s) => s.selectFile);
   const loadFiles = useWikiStore((s) => s.loadFiles);
   // P3.5.111/114 (6/25 鸿波 catch "应该形成真文件才合理"): dangling wikilink click →
-  // 真**自动建真文件**, 失败 fallback setVirtualSystem 虚拟态.
+  // 自动建真文件, 失败 fallback setVirtualSystem 虚拟态.
   const setVirtualSystem = useWikiStore((s) => s.setVirtualSystem);
 
   // P35 (6/5 鸿波): inline 编辑器 state. editing=true 时 body 渲染 textarea.
@@ -354,7 +354,7 @@ export default function WikiPreview() {
       void selectFile(match.rel_path);
       return;
     }
-    // P3.5.114 (6/25 鸿波 catch "应该形成真文件才合理"): dangling → 真**自动建真文件**.
+    // P3.5.114 (6/25 鸿波 catch "应该形成真文件才合理"): dangling → 自动建真文件.
     // 默认 concept + subtype=system (顶级体系视觉一致, 后续可手动编辑改子类型).
     try {
       const result = await wikiCreateEntityOrConcept({

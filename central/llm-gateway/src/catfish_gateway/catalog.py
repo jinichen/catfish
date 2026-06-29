@@ -80,18 +80,18 @@ def build_catalog(
         if m.default and api_key_configured and default is None:
             default = m.name
 
-    # P3.5.29 Phase 6 (6/17 鸿波) — 真**role_resolver("chat_default") 真优先 override**.
-    # 真**客户改 roles.yaml chat_default → 全代码跟着走** (含 Companion picker default,
-    # chat.ts store init, 前端 useCatalog hook). 真**前端 0 改动**, 真**catalog
-    # default 已经被 chat.ts:27 / store init 真兜底**.
+    # P3.5.29 Phase 6 (6/17 鸿波) — role_resolver("chat_default") 真优先 override.
+    # 客户改 roles.yaml chat_default → 全代码跟着走 (含 Companion picker default,
+    # chat.ts store init, 前端 useCatalog hook). 前端 0 改动, catalog
+    # default 已经被 chat.ts:27 / store init 真兜底.
     #
-    # 真**fallback chain**:
-    #   1. role_resolver("chat_default") 真**存在 catalog 真 api_key_configured** → 用
+    # fallback chain:
+    #   1. role_resolver("chat_default") 存在 catalog 真 api_key_configured → 用
     #   2. m.default (models.yaml `default: true`) 老路径 → 用
     #   3. 第一个 api_key_configured → 用
     #   4. models[0] 兜底
     #
-    # 真**roles 没 load**: roles_module.resolve_or_none 真**返 None**, 真**走 2-4 老路径**.
+    # roles 没 load: roles_module.resolve_or_none 返 None, 走 2-4 老路径.
     role_default: str | None = None
     try:
         from . import roles as roles_module

@@ -61,10 +61,10 @@ export default function ChatToolCall({ call }: Props) {
     call.status === "done" ? extractFilePaths(resultStr) : [];
 
   // P27 (6/5 鸿波): hermes approval pending 检测.
-  // hermes check_execute_code_guard / check_dangerous_command 真**`pending`** 时返
+  // hermes check_execute_code_guard / check_dangerous_command `pending` 时返
   // tool message 含 status:"pending_approval" + approval_pending:true + message
   // text "Asking the user for approval. Code: ...". P27.1 (6/5 鸿波实测 manual mode
-  // tool ✓ done 但 button 不显) — 放宽 regex 涵盖 hermes 真**`几种 JSON shape**`** 真:
+  // tool ✓ done 但 button 不显) — 放宽 regex 涵盖 hermes `几种 JSON shape`** 真:
   //   - "status": "pending_approval"          ← JSON field, 最可靠
   //   - "approval_pending": true              ← JSON bool field
   //   - "Asking the user for approval"        ← message text
@@ -141,8 +141,8 @@ export default function ChatToolCall({ call }: Props) {
           )}
         </div>
       )}
-      {/* P27.2 (6/5 鸿波): approval button 真**`折叠状态也要显**真.
-       * 之前 button 真**`在 `{open && ...}` block 内**真 → 员工不展开 toolcall
+      {/* P27.2 (6/5 鸿波): approval button `折叠状态也要显真.
+       * 之前 button `在 `{open && ...}` block 内真 → 员工不展开 toolcall
        * 看不到 button → 卡死. 现在搬出去, ✓ done + approval pending 时
        * 总是显, 跟 file pill 一致 (filePaths 也是折叠也显). */}
       {isApprovalPending && (

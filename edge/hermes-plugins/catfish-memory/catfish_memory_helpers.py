@@ -128,7 +128,7 @@ _DEFAULT_GATEWAY_URL = "http://127.0.0.1:8999/v1/chat/completions"
 _LLM_HTTP_TIMEOUT = 60.0
 
 #: P1.1.1 wiki Step 2 Generation 单独超时 — 生 ~4000 tokens 长 response,
-#: 60s 真**不够** (6/4 12:55 实测 ReadTimeout). 180s 给 LLM 慢慢生.
+#: 60s 不够 (6/4 12:55 实测 ReadTimeout). 180s 给 LLM 慢慢生.
 _GENERATION_HTTP_TIMEOUT = 180.0
 
 #: 每个 session 取最多 N 条消息进 prompt (防长 session 撑爆 LLM context).
@@ -162,22 +162,22 @@ _DISTILL_PROMPT = (
 # CATFISH_WIKI_ENABLE env toggle 默认 off (LLM 调用贵, 24h 1 次).
 
 #: Step 1 Analysis prompt — 结构化抽 4 类. 中文优先 (员工日志中文为主).
-#: P1.1.1 polish (6/4): 加员工偏好 skip rule 真**catfish/鲶鱼 个人开源项目 不抽** —
-#: 之前 catfish.md 真**hallucinate 成"工作 system + CI/Security audit"** 违 USER PROFILE.
+#: P1.1.1 polish (6/4): 加员工偏好 skip rule catfish/鲶鱼 个人开源项目 不抽 —
+#: 之前 catfish.md hallucinate 成"工作 system + CI/Security audit" 违 USER PROFILE.
 _ANALYSIS_PROMPT = (
     "你是企业知识体系分析师. 下面是员工工作日志, 抽以下 4 类结构化信息.\n\n"
     "**重要 skip rule (优先级最高)**:\n"
     "- `catfish` / `鲶鱼` / `小鲶` / `胖胖` 这些名字 = 员工的 AI 副手 / 个人开源项目, "
     "**不是企业项目**, **不要抽成 entity**.\n"
     "- 员工的 chat 工具 / AI 助手相关 = 跨工具元话题, **不抽** (这些不构成业务知识).\n"
-    "- 同样**不抽**: claude / hermes / openai / deepseek / qwen 等 AI 模型 / 真**工具名**.\n\n"
+    "- 同样**不抽**: claude / hermes / openai / deepseek / qwen 等 AI 模型 / 工具名.\n\n"
     "**输出格式严格**:\n\n"
     "## Entities\n"
     "- <name> | <type: person/org/system/cert/project> | <一句话, ≤50字>\n"
-    "- ... (≤6 条 entities, 按重要性排, 真**企业业务相关**)\n\n"
+    "- ... (≤6 条 entities, 按重要性排, 企业业务相关)\n\n"
     "## Concepts\n"
     "- <name> | <type: process/rule/principle/standard> | <一句话, ≤50字>\n"
-    "- ... (≤6 条 concepts, **必须真**真**至少 3 个** — 真**抽流程/规则/原则/标准**)\n"
+    "- ... (≤6 条 concepts, **必须真至少 3 个** — 抽流程/规则/原则/标准)\n"
     "- 例: 资质评估流程 / 月度通报模板 / 文体规范 / 资质统筹原则 / 申报材料归档规范\n\n"
     "## Decisions\n"
     "- <YYYY-MM-DD> | <who> | <decided what> | <why>\n"
@@ -197,16 +197,16 @@ _ANALYSIS_PROMPT = (
 #: Step 2 Generation prompt — 借 llm_wiki ---FILE: sentinel pattern.
 #: 输入 = Analysis 输出, 输出 = 多 file markdown 拼接, 按 ---FILE: <path>--- 切分.
 #: P1.1.1 polish (6/4): 1) **concepts 先 entities 后** 保 concepts 不被 token cap 吃;
-#: 2) related YAML list 真 `["[[name1]]", "[[name2]]"]` 真**双引号 string list 兼容
-#:    Obsidian + YAML 严格** (之前真 `[[[name]]]` 三括号双不兼容).
+#: 2) related YAML list 真 `["[[name1]]", "[[name2]]"]` 双引号 string list 兼容
+#:    Obsidian + YAML 严格 (之前真 `[[[name]]]` 三括号双不兼容).
 _GENERATION_PROMPT_TEMPLATE = (
     "你是企业知识体系作者. 下面是结构化分析结果 (Entities + Concepts + Decisions + "
     "Contradictions). 为**每个 entity 和 concept** 各生成 1 个 markdown 页, "
     "用 sentinel 切分.\n\n"
-    "**生成顺序 (重要, 真**严守**)**:\n"
+    "**生成顺序 (重要, 严守)**:\n"
     "- **先生 concepts** (流程/规则/原则/标准 — 复用率最高, 不可丢)\n"
     "- 再生 entities (人/机构/系统/资质 — 替换率较高, 后生)\n"
-    "- token 紧张时**先丢 entities 尾部**, 真**concepts 必须全生**\n\n"
+    "- token 紧张时**先丢 entities 尾部**, concepts 必须全生\n\n"
     "**输出格式严格**:\n\n"
     "```\n"
     "---FILE: wiki/concepts/<slug>.md---\n"
@@ -249,12 +249,12 @@ _GENERATION_PROMPT_TEMPLATE = (
     "- slug = name 小写 + 中文转拼音首字母 + 连字符 (e.g. ISO 27001 → iso-27001, "
     "陈鸿波 → chenhongbo, 中电福富 → zdff). entity slug 跟 concept slug 不冲突\n"
     "- frontmatter YAML 严格合法 (Obsidian 解析)\n"
-    "- `related:` 真**必须真**真**双引号 string list** — 真**正确**: "
+    "- `related:` 必须真双引号 string list — 正确: "
     "`related: [\"[[陈鸿波]]\", \"[[FFCS]]\"]`. "
     "**错**: `related: [[[陈鸿波]]]` (3 个 `[` YAML 真 inline list of list, "
-    "Obsidian 真**不能 parse**)\n"
-    "- 每 file 真**title 不重复**\n"
-    "- related wikilinks 真 `[[name]]` 必须真**指**真 Analysis 里出现真 name\n"
+    "Obsidian 不能 parse)\n"
+    "- 每 file title 不重复\n"
+    "- related wikilinks 真 `[[name]]` 必须指真 Analysis 里出现真 name\n"
     "- 同 slug 真 entity vs concept 真不允许 (按 type 分)\n"
     "- 全部输出 ≤6000 字\n"
 )
@@ -444,7 +444,7 @@ def _list_pending_queries(catfish_home: Path) -> List[Path]:
 def _read_queries_concat(query_files: List[Path], max_chars: int = 12000) -> str:
     """读所有 queries file 拼一段 text 给 Analysis. 总 cap max_chars 防爆.
 
-    格式: 每 file 加 `### query: <filename>` 头. content 真**整 file** (含
+    格式: 每 file 加 `### query: <filename>` 头. content 整 file (含
     frontmatter — Analysis LLM 能看 metadata).
     """
     if not query_files:
@@ -466,7 +466,7 @@ def _read_queries_concat(query_files: List[Path], max_chars: int = 12000) -> str
 
 # ── P16 (6/5 鸿波) — wiki/raw/sources/ 触发 partial ingest ─────────────────
 # 对话上传文件 → ~/.catfish/wiki/raw/sources/<ts>-<slug>.md (含 frontmatter
-# + 全文 body, Companion wiki_ingest_source 真**`Tauri command 写**真). 这
+# + 全文 body, Companion wiki_ingest_source `Tauri command 写真). 这
 # 一组 helper 跟 P1.2.3 queries hook 同结构, 复用 wiki_ingested_state.json
 # (key 加 `source:` 前缀防与 queries 冲突).
 # sync_turn 3b 会把 sources + queries 一起 merge 进 Analysis input → LLM
@@ -500,7 +500,7 @@ def _read_sources_concat(source_files: List[Path], max_chars: int = 24000) -> st
     Sources 全文体积比 queries 大 (PDF/Word 转出来), max_chars 默认 24K
     (queries 12K 真 2 倍). 还是会被 cap, 单文件超 24K 会 break.
 
-    格式: 每 file 加 `### source: <filename>` 头. content 真**整 file** 含
+    格式: 每 file 加 `### source: <filename>` 头. content 整 file 含
     frontmatter (Analysis LLM 能看 filename / kind / uploaded date).
     """
     if not source_files:
@@ -1059,8 +1059,8 @@ async def _call_generation_llm(
     except ImportError:
         return None
     try:
-        # P1.1.1 fix (6/4): generation 单独 180s timeout — 4096 tokens 真**生 LLM**
-        # 60s 真**不够** (12:55 ReadTimeout 实测).
+        # P1.1.1 fix (6/4): generation 单独 180s timeout — 4096 tokens 生 LLM
+        # 60s 不够 (12:55 ReadTimeout 实测).
         async with httpx.AsyncClient(timeout=_GENERATION_HTTP_TIMEOUT) as client:
             resp = await client.post(
                 _gateway_url(),
@@ -1101,8 +1101,8 @@ async def _call_generation_llm(
                 pass
             return text.strip() or None
     except Exception as e:  # noqa: BLE001
-        # P1.1.1 fix (6/4): str(e) 真**空时 type(e).__name__ + repr** 真 hint —
-        # 之前 'generation 异常: ' 空 message 真**直接看不出真什么 error**.
+        # P1.1.1 fix (6/4): str(e) 空时 type(e).__name__ + repr 真 hint —
+        # 之前 'generation 异常: ' 空 message 直接看不出真什么 error.
         logger.warning(
             "catfish-memory generation 异常 [%s]: %r",
             type(e).__name__, e,
@@ -1112,15 +1112,15 @@ async def _call_generation_llm(
 
 # ============================================================
 # P19 (6/5 鸿波) — LLM merge mode: 同名 entity/concept 让 LLM 真合并叙述,
-# 不是 P18 真**`body 替换 + 旧 body 注释留底`** 真**`(留底法)`**.
+# 不是 P18 `body 替换 + 旧 body 注释留底` `(留底法)`.
 #
 # 触发时机: _write_wiki_files 检测重名 → 上层 sync_turn 3b 在 await
-# _call_generation_llm 后, 调 _call_merge_llm 替换 file dict 真**`重名 entry`**.
+# _call_generation_llm 后, 调 _call_merge_llm 替换 file dict `重名 entry`.
 # LLM 失败 → fallback 走 _merge_wiki_file (P18 regex merge 当安全网).
 #
-# Prompt 设计: 给 LLM 两版 (OLD + NEW) 真**`整 markdown`** 真, 让它生 merged
+# Prompt 设计: 给 LLM 两版 (OLD + NEW) `整 markdown` 真, 让它生 merged
 # 完整 markdown (frontmatter + body). frontmatter 规则 LLM 自己读 prompt,
-# body 真**`不直接拼接, 而是合一个连贯叙述, 矛盾的标 OLD/NEW 两段**.
+# body `不直接拼接, 而是合一个连贯叙述, 矛盾的标 OLD/NEW 两段.
 # ============================================================
 
 _MERGE_PROMPT_TEMPLATE = (
@@ -1138,12 +1138,12 @@ _MERGE_PROMPT_TEMPLATE = (
     "- **不直接拼接** 两版段落; 合一个连贯叙述\n"
     "- 重复信息只说一次\n"
     "- 矛盾的标 'OLD: 之前 X' 跟 'NEW: 现在 Y' 两个 paragraph, 注明日期\n"
-    "- 保留 NEW 真**所有新事实, OLD 真**`只丢与 NEW 矛盾或过期`** 部分\n"
+    "- 保留 NEW 所有新事实, OLD 真`只丢与 NEW 矛盾或过期`** 部分\n"
     "- 总字数: entity ≤500 / concept ≤700\n"
     "- 文末加 `## 变更历史` section, 1 行 bullet:\n"
     "  `- {today}: 基于 <source> 更新, 主要变化: <一句话>`\n\n"
     "**输出**: ONLY 最终 markdown (含 frontmatter + body), 无其他说明 / 解释 / 引号.\n"
-    "frontmatter `related:` 字段必须 `[\"[[name]]\", ...]` 真**双引号 string list**.\n\n"
+    "frontmatter `related:` 字段必须 `[\"[[name]]\", ...]` 双引号 string list.\n\n"
     "=== OLD (已存 wiki) ===\n"
     "{old_text}\n"
     "=== END OLD ===\n\n"
@@ -1235,7 +1235,7 @@ async def merge_files_with_llm(
     返 (final_files, ok_paths_set, n_failed).
     - ok_paths_set: 真 LLM merge 成功的 rel_path 集合 — 传给 _write_wiki_files
       真 skip_merge_paths, 跳过 P18 regex merge (因 LLM 已合).
-    - 失败的 entry 真**`保持原 LLM 生成 content (新版)`**, 落到 P18 regex 安全网.
+    - 失败的 entry `保持原 LLM 生成 content (新版)`, 落到 P18 regex 安全网.
     """
     out = dict(files)
     ok_paths: set = set()
@@ -1269,9 +1269,9 @@ async def merge_files_with_llm(
     return out, ok_paths, n_failed
 
 
-# 路径白名单 — 防 LLM 输出真 ---FILE: 真**逃逸 wiki/ 根**.
+# 路径白名单 — 防 LLM 输出真 ---FILE: 逃逸 wiki/ 根.
 # P1.1.1 fix (6/4): \w + re.UNICODE 让 slug 接受中文 (LLM 不遵守拼音, 直接用中文 name —
-# Obsidian 真**也支持 unicode slug**, 没必要强制 ASCII).
+# Obsidian 也支持 unicode slug, 没必要强制 ASCII).
 _WIKI_PATH_PATTERN = __import__("re").compile(
     r"^wiki/(entities|concepts)/[\w][\w_-]*\.md$",
     __import__("re").UNICODE,
@@ -1333,9 +1333,9 @@ def _split_frontmatter_body(text: str) -> Tuple[str, str]:
 
 def _parse_frontmatter_lists(fm: str) -> Dict[str, List[str]]:
     """从 YAML frontmatter 抠 list 字段 ([\"[[a]]\", \"b\"]). 简单 regex,
-    不全 YAML, 但对 prompt 真**`生成`** 真 format 够用.
+    不全 YAML, 但对 prompt `生成` 真 format 够用.
 
-    fix (6/5 测): 之前 regex `([^,]+)` 把 `, ` 真**`分隔符`** 真**也 match`** 当 item
+    fix (6/5 测): 之前 regex `([^,]+)` 把 `, ` `分隔符` 也 match` 当 item
     → tags 重复. 改用先 split 再清, 简单稳.
     """
     out: Dict[str, List[str]] = {}
@@ -1376,11 +1376,11 @@ def _merge_wiki_file(old_text: str, new_text: str) -> str:
     策略:
       frontmatter list 字段 (tags/related/sources/aliases): 旧 ∪ 新 (去重保序)
       frontmatter scalar:
-        created: 保留旧 (entity 真**`真**`身份历史不丢`**)
+        created: 保留旧 (entity `真`身份历史不丢`**)
         updated: 用新 (今天日期)
         title / *_type: 用新 (允许 reclassify)
       body: 用新, 旧 body 转 HTML 注释 `<!-- legacy body (created=<旧updated>) -->`
-            放文末, 便于人工对照. 多次 update 真**`只保留最近一份 legacy`**.
+            放文末, 便于人工对照. 多次 update `只保留最近一份 legacy`.
     """
     old_fm, old_body = _split_frontmatter_body(old_text)
     new_fm, new_body = _split_frontmatter_body(new_text)
@@ -1402,7 +1402,7 @@ def _merge_wiki_file(old_text: str, new_text: str) -> str:
         # 双引号包每个 item (跟 Generation prompt 规范一致)
         quoted = ", ".join(f'"{v}"' if not v.startswith('"') else v for v in union)
         new_line = f"{field}: [{quoted}]"
-        # 替已存的 list 字段; 没的话不动 (let new_fm 真**自然的没**)
+        # 替已存的 list 字段; 没的话不动 (let new_fm 自然的没)
         merged_fm = re.sub(
             rf"^{field}:\s*\[.*?\]\s*$",
             new_line,
@@ -1454,7 +1454,7 @@ def _write_wiki_files(
     P18 (6/5 鸿波): 同 slug 触发 _merge_wiki_file (frontmatter list 并集 +
     保留 created + body 新+ 旧 legacy 注释留底), 不再无脑 overwrite.
     P19 (6/5 鸿波): skip_merge_paths 真 path set 已被 _call_merge_llm 处理过
-    (LLM merge), 直接 overwrite. 没 merge 真**`走 P18 regex merge 安全网`**.
+    (LLM merge), 直接 overwrite. 没 merge `走 P18 regex merge 安全网`.
     新建 file (不重名) 沿用 overwrite.
     """
     if not files:

@@ -132,10 +132,10 @@ const ADVISOR_JSON_SCHEMA = {
       },
     },
     // P3.5.32 Phase 10 (6/18 鸿波 OpenWiki 借鉴) — 3 维 self-aware reflection.
-    // 真**OpenWiki Insight Reports 7 dim** 真**catfish 已有 4 (At a Glance + Action Items +
-    // Hot Topics + Events Heatmap), 真**剩 3 维 新加**.
-    // 真**0 改 backend** — 真**复用 BriefingContext 数据 (recent_session_briefs +
-    // distilled_facts + hermes_memory_recent + email summary)** + LLM prompt 段.
+    // OpenWiki Insight Reports 7 dim catfish 已有 4 (At a Glance + Action Items +
+    // Hot Topics + Events Heatmap), 真剩 3 维 新加**.
+    // 0 改 backend — 复用 BriefingContext 数据 (recent_session_briefs +
+    // distilled_facts + hermes_memory_recent + email summary) + LLM prompt 段.
     subconscious: {
       type: "array",
       description: "无意识高频 — 问真多 (>=3 session 涉及) 但 0 deep-dive (<5 message). max 3 item.",
@@ -144,7 +144,7 @@ const ADVISOR_JSON_SCHEMA = {
         properties: {
           topic: { type: "string", description: "无意识 topic, e.g. 'OAuth token refresh'" },
           count: { type: "integer", description: "session 涉及次数" },
-          evidence: { type: "string", description: "一句话证据 (sessions 真**title 关键词)" },
+          evidence: { type: "string", description: "一句话证据 (sessions title 关键词)" },
           reflectPrompt: { type: "string", description: "≤15 字 一句话, 点 → chat 触发 deep-dive" },
         },
         required: ["topic", "count", "evidence", "reflectPrompt"],
@@ -152,25 +152,25 @@ const ADVISOR_JSON_SCHEMA = {
     },
     graveyard: {
       type: "array",
-      description: "墓地 — distilled_facts/memory 提过 真**skill/工具/项目**, recent_session_briefs 0 reference. max 3 item.",
+      description: "墓地 — distilled_facts/memory 提过 真skill/工具/项目**, recent_session_briefs 0 reference. max 3 item.",
       items: {
         type: "object",
         properties: {
           name: { type: "string", description: "skill/工具/项目名" },
-          lastSeen: { type: "string", description: "最近 reference 真**距今**, e.g. '14 天前'" },
-          evidence: { type: "string", description: "一句话 (distilled_facts 真**提到 哪段)" },
+          lastSeen: { type: "string", description: "最近 reference 距今, e.g. '14 天前'" },
+          evidence: { type: "string", description: "一句话 (distilled_facts 提到 哪段)" },
         },
         required: ["name", "lastSeen", "evidence"],
       },
     },
     blindSpots: {
       type: "array",
-      description: "盲点 — hermes memory 或 distilled_facts 标重要, 真**最近 7 天 0 action / 0 follow-up**. max 3 item.",
+      description: "盲点 — hermes memory 或 distilled_facts 标重要, 真最近 7 天 0 action / 0 follow-up**. max 3 item.",
       items: {
         type: "object",
         properties: {
           topic: { type: "string" },
-          signal: { type: "string", description: "重要信号 (e.g. '邮件标星 / memory 真**重要 / project 真**汇报截止)" },
+          signal: { type: "string", description: "重要信号 (e.g. '邮件标星 / memory 重要 / project 真汇报截止)" },
           evidence: { type: "string", description: "一句话 (具体 邮件/memory/project 引用)" },
           reflectPrompt: { type: "string", description: "≤15 字, 点 → chat 触发" },
         },
@@ -179,7 +179,7 @@ const ADVISOR_JSON_SCHEMA = {
     },
   },
   required: ["tier", "mainTasks", "handledSilently"],
-  // 真**subconscious / graveyard / blindSpots 真**optional** — 真**LLM 真**没找到 真**0 item OK**.
+  // subconscious / graveyard / blindSpots 真optional** — LLM 真没找到 0 item OK.
 } as const;
 
 // ─── 输出 schema (UI ActionCard 渲染输入) ───────────────────────
@@ -261,14 +261,14 @@ export interface HandledSilentlyItem {
 
 /** P3.5.32 Phase 10 (6/18 鸿波 OpenWiki 借鉴) — 3 维 self-aware reflection items.
  *
- * 真**reflectPrompt 真**≤15 字 真**点 → useChat send(prompt) 真**触发 deep-dive**.
+ * reflectPrompt 真≤15 字 点 → useChat send(prompt) 真触发 deep-dive**.
  */
 export interface SubconsciousItem {
   /** 无意识 topic, e.g. "OAuth token refresh" */
   topic: string;
   /** session 涉及次数 */
   count: number;
-  /** 一句话证据 — 真**LLM 指 哪些 sessions title 真**关键词** */
+  /** 一句话证据 — LLM 指 哪些 sessions title 真关键词** */
   evidence: string;
   /** ≤15 字 reflectPrompt, 点击 → chat 触发 deep-dive */
   reflectPrompt: string;
@@ -276,9 +276,9 @@ export interface SubconsciousItem {
 export interface GraveyardItem {
   /** skill/工具/项目名 */
   name: string;
-  /** 最近 reference 真**距今** (e.g. "14 天前") */
+  /** 最近 reference 距今 (e.g. "14 天前") */
   lastSeen: string;
-  /** 一句话证据 (distilled_facts 真**提到 哪段) */
+  /** 一句话证据 (distilled_facts 提到 哪段) */
   evidence: string;
 }
 export interface BlindSpotItem {
@@ -1629,8 +1629,8 @@ function parseAdvisorResult(raw: unknown, mode: "strict" | "lenient" = "strict")
   }
 
   // P3.5.32 Phase 10 (6/18 鸿波 OpenWiki 借鉴) — 3 维 self-aware reflection parse.
-  // 真**optional** — LLM 没返 / 返空 / parse 错 → 0 item, UI 自动不渲染 (length 0 早返).
-  // 真**snake_case + camelCase 双兼容** (LLM 易 drift, parseMainTask 同款).
+  // optional — LLM 没返 / 返空 / parse 错 → 0 item, UI 自动不渲染 (length 0 早返).
+  // snake_case + camelCase 双兼容 (LLM 易 drift, parseMainTask 同款).
   const subconscious: SubconsciousItem[] = [];
   const subRaw =
     (obj as Record<string, unknown>).subconscious

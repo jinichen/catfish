@@ -458,12 +458,12 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
  *   - 0.3-0.7: "📊 画像中. 已识别: tier / style / N 关键人 / N 项目."
  *   - > 0.7: 无提示, 全功能 (顶上"鲶鱼参谋 · tier=..." 一行就够)
  *
- * P3.5.32.3 (6/18 鸿波 catch): 此 component 真**不再调**. 鸿波 catch '画像 banner
+ * P3.5.32.3 (6/18 鸿波 catch): 此 component 不再调. 鸿波 catch '画像 banner
  * 没意义 + 55% 不能用'. 现在阈值改 0.5 (line 142), <0.5 走 no_profile placeholder,
- * >=0.5 直接显 advisor 内容, 真**不显 ConfidenceHint banner**.
+ * >=0.5 直接显 advisor 内容, 不显 ConfidenceHint banner.
  * 函数定义保留 (git log 历史 / 万一未来要回炉再用).
  */
-// @ts-expect-error 真**P3.5.32.3 砍调用, 留函数定义**.
+// @ts-expect-error P3.5.32.3 砍调用, 留函数定义.
 function ConfidenceHint({ profile }: { profile: Profile }) {
   const c = profile.confidence;
   if (c >= 0.7) return null;  // 高置信度无提示

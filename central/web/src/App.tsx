@@ -162,11 +162,11 @@ export function App() {
 
   return (
     // P3.5.26.3 (6/17 鸿波"页面固定一屏高度, 滚动条仅仅只能是内容区域"):
-    // flex column + height 100vh, NavBar flex: 0 真**永远 top** (自然高度),
-    // main flex: 1 + overflowY auto 真**独立 scroll**. 整页不 scroll, 浏览器
-    // window 真**没 scrollbar**.
+    // flex column + height 100vh, NavBar flex: 0 永远 top (自然高度),
+    // main flex: 1 + overflowY auto 独立 scroll. 整页不 scroll, 浏览器
+    // window 没 scrollbar.
     //
-    // 6/17 history (3 次撞坑后真**最简方案**):
+    // 6/17 history (3 次撞坑后最简方案):
     // - 6ebdce7 P3.5.26: height 100vh + main overflow (✓ layout 对) + AuditPage
     //   sticky 头部 negative margin (✗ 撞 Webkit sticky bug + KPI 卡层叠).
     // - 654c978 P3.5.26.1: 去 negative coord 修抖动, 仍 KPI 卡透 sticky.
@@ -174,7 +174,7 @@ export function App() {
     //   NavBar 真贴 top 但**整页超 viewport scroll 时晃动** (sticky + window scroll
     //   交互).
     // - 这次 P3.5.26.3: 恢复 height: 100vh + main overflow (P3.5.26 layout), 但
-    //   **不**加 sticky 头部. AuditPage PageHeader 真**普通**, 在 main scroll
+    //   **不**加 sticky 头部. AuditPage PageHeader 普通, 在 main scroll
     //   内自然 scroll. NavBar 真 flex: 0 永远 top, 不需要 sticky (它本来就在
     //   flex column 顶, 不会随 main scroll 移动).
     <div

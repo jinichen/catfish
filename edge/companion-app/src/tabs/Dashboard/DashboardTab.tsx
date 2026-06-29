@@ -141,10 +141,10 @@ export default function DashboardTab() {
   return (
     <>
       {/* P3.5.120 (6/25 鸿波 catch "中央门户应固定 + B 路径重做架构"):
-          WebPortalLink 真**移出 grid**, 真**.app-main 直接子全宽 sticky toolbar**.
-          真**全宽 sticky 真**视觉**: 真**贴 tab 栏底 + 全 .app-main 内宽 covered**,
-          真**0 漏出** (P3.5.118 真因: 它在 grid 1600 居中, 两侧空白透下方内容).
-          真**inner content 真 maxWidth 1600 居中** 跟下方 7 个 section 节奏一致. */}
+          WebPortalLink 移出 grid, .app-main 直接子全宽 sticky toolbar.
+          全宽 sticky 真视觉**: 贴 tab 栏底 + 全 .app-main 内宽 covered,
+          0 漏出 (P3.5.118 真因: 它在 grid 1600 居中, 两侧空白透下方内容).
+          inner content 真 maxWidth 1600 居中 跟下方 7 个 section 节奏一致. */}
       <WebPortalLink />
       <div
         style={{

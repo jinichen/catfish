@@ -38,9 +38,9 @@ export default function WikiGraph() {
   const files = useWikiStore((s) => s.files);
   const selectedPath = useWikiStore((s) => s.selectedPath);
   const selectFile = useWikiStore((s) => s.selectFile);
-  // P3.5.111/112 (6/25 鸿波): 虚拟体系真**name**.
-  // 鸿波点 dangling 体系 → 真**setVirtualSystem(name)** → WikiGraph 真**虚拟显**子树.
-  // P3.5.112 真**优先级反**: virtualSystemName > selectedPath — 真**点子项保留虚拟态**.
+  // P3.5.111/112 (6/25 鸿波): 虚拟体系name.
+  // 鸿波点 dangling 体系 → setVirtualSystem(name) → WikiGraph 虚拟显子树.
+  // P3.5.112 优先级反: virtualSystemName > selectedPath — 点子项保留虚拟态.
   const virtualSystemName = useWikiStore((s) => s.virtualSystemName);
 
   // P3.5.107 B (6/25): ego-graph filter — 子图过滤
@@ -73,34 +73,34 @@ export default function WikiGraph() {
     });
   };
 
-  // P3.5.108: 真**顶级体系判定** — kind=concept + (subtype="system" 优先, 或 title 含"体系"二字 fallback).
+  // P3.5.108: 顶级体系判定 — kind=concept + (subtype="system" 优先, 或 title 含"体系"二字 fallback).
   //
   // P3.5.109 (6/25 鸿波 catch "+新建少了体系"): UI 加 "🌟 体系 (system)" 选项 →
-  // 真**concept_type 写 "system"** (WikiCreateModal 真路径), 真**优先看 subtype === "system"**.
-  // 真**老数据 fallback**: 鸿波之前手动加的"企业资质知识体系" 真**subtype 不是 system** —
-  // 仍走 title 含"体系" heuristic 真**兼容**.
+  // concept_type 写 "system" (WikiCreateModal 真路径), 优先看 subtype === "system".
+  // 老数据 fallback: 鸿波之前手动加的"企业资质知识体系" subtype 不是 system —
+  // 仍走 title 含"体系" heuristic 兼容.
   //
-  // 真**0 schema 改, 0 数据 backfill, 鸿波加新体系真无侵入**.
+  // 0 schema 改, 0 数据 backfill, 鸿波加新体系真无侵入.
   const isSystemConcept = (f: WikiFileInfo | undefined): boolean => {
     if (!f || f.kind !== "concept") return false;
-    if (f.subtype === "system") return true; // P3.5.109 真**显式**优先
-    return f.title.includes("体系"); // 真**老数据 fallback**
+    if (f.subtype === "system") return true; // P3.5.109 显式优先
+    return f.title.includes("体系"); // 老数据 fallback
   };
 
-  // P3.5.108: effectiveMode 真算 — auto 模式真**自动**跟选中类型决定子图样式
+  // P3.5.108: effectiveMode 真算 — auto 模式自动跟选中类型决定子图样式
   const selectedFile = useMemo(
     () => files.find((f) => f.rel_path === selectedPath),
     [files, selectedPath],
   );
 
-  // P3.5.111/112: effectiveRoot 真**抽象**真实 file root vs 虚拟体系 root.
-  // 真**rel_path === null 真**虚拟** (dangling 体系名, 无真实文件) — subtree 算法
-  // 真**只 BFS children**, 真**不 add root 自己**.
+  // P3.5.111/112: effectiveRoot 抽象真实 file root vs 虚拟体系 root.
+  // rel_path === null 真虚拟** (dangling 体系名, 无真实文件) — subtree 算法
+  // 只 BFS children, 不 add root 自己.
   //
   // P3.5.112 (6/25 鸿波 catch "点一次就不能点了") 优先级**反转**:
   //   virtualSystemName 优先 > selectedPath
-  // 真**鸿波点虚拟体系 → 显该体系子树, 然后**点子项**真**保留体系视图** (selectedPath 真
-  // 只用于高亮 + preview, 不切子图). 真**清虚拟态**走 setVirtualSystem(null) / 切别的
+  // 鸿波点虚拟体系 → 显该体系子树, 然后点子项**保留体系视图 (selectedPath 真
+  // 只用于高亮 + preview, 不切子图). 清虚拟态走 setVirtualSystem(null) / 切别的
   // 体系 header / 强制全图.
   const effectiveRoot: { title: string; rel_path: string | null } | null = useMemo(() => {
     if (virtualSystemName) {
@@ -113,13 +113,13 @@ export default function WikiGraph() {
     return null;
   }, [virtualSystemName, selectedPath, files]);
 
-  // effectiveMode 真**真实生效**真 mode: "full" / "ego" / "subtree" (B 方案体系子树)
+  // effectiveMode 真实生效真 mode: "full" / "ego" / "subtree" (B 方案体系子树)
   const effectiveMode: "full" | "ego" | "subtree" = useMemo(() => {
     if (viewMode === "full") return "full";
     if (viewMode === "ego") return effectiveRoot ? "ego" : "full"; // ego 真无选中 fallback full
     // viewMode === "auto"
     if (!effectiveRoot) return "full";
-    // P3.5.111: 虚拟体系 (无 rel_path) 真**强制 subtree** — 鸿波想看整片体系图
+    // P3.5.111: 虚拟体系 (无 rel_path) 强制 subtree — 鸿波想看整片体系图
     if (effectiveRoot.rel_path === null) return "subtree";
     if (isSystemConcept(selectedFile)) return "subtree";
     return "ego";
@@ -127,7 +127,7 @@ export default function WikiGraph() {
   }, [viewMode, effectiveRoot, selectedFile]);
 
   // P3.5.108/111: deps key 真精准 — full mode 真不依赖 selected (避免 sigma rebuild).
-  // P3.5.111: 虚拟体系真 egoKey 含 virtualSystemName 真**虚拟切换也 rebuild**.
+  // P3.5.111: 虚拟体系真 egoKey 含 virtualSystemName 虚拟切换也 rebuild.
   const egoKey =
     effectiveMode === "full" ? "" : selectedPath || virtualSystemName || "";
 
@@ -135,7 +135,7 @@ export default function WikiGraph() {
   const graph = useMemo(() => {
     const g = new Graph({ multi: false, type: "directed" });
 
-    // P3.5.107 B: 真**ego mode 真子集** — 先算 1-hop neighborhood set, 真**只 add 这些 node**.
+    // P3.5.107 B: ego mode 真子集 — 先算 1-hop neighborhood set, 只 add 这些 node.
     // helper: name → file lookup (复用下面的逻辑顺序)
     const findTargetForFilter = (name: string): WikiFileInfo | null => {
       const lower = name.toLowerCase().trim();
@@ -148,7 +148,7 @@ export default function WikiGraph() {
     };
 
     let nodeFilter: Set<string> | null = null;
-    // P3.5.111: ego 真**仅真实 selectedPath 才走** (虚拟体系真**走 subtree**, 不走 ego)
+    // P3.5.111: ego 仅真实 selectedPath 才走 (虚拟体系走 subtree, 不走 ego)
     if (effectiveMode === "ego" && selectedPath) {
       // 1-hop ego: selected + 直接邻居 (out related + in 反向 related)
       const ego = new Set<string>([selectedPath]);
@@ -175,14 +175,14 @@ export default function WikiGraph() {
       nodeFilter = ego;
     } else if (effectiveMode === "subtree" && effectiveRoot) {
       // P3.5.108 B 方案 + P3.5.111 虚拟体系支持: 体系子树严格 2 层 BFS 下挖
-      // (体系 → 子 concept → entity). 真**不 follow** 其他 edge — 避免跨体系泄漏.
+      // (体系 → 子 concept → entity). 不 follow 其他 edge — 避免跨体系泄漏.
       //
-      // P3.5.111: 真**虚拟体系 (effectiveRoot.rel_path === null)** — root 真**没真实文件**
-      // 不 add 进 set, 真**只 add children**. 真**鸿波看到的"虚拟体系子树"就是这逻辑**.
+      // P3.5.111: 虚拟体系 (effectiveRoot.rel_path === null) — root 没真实文件
+      // 不 add 进 set, 只 add children. 鸿波看到的"虚拟体系子树"就是这逻辑.
       const subtree = new Set<string>();
       if (effectiveRoot.rel_path) subtree.add(effectiveRoot.rel_path);
       const rootTitle = effectiveRoot.title.trim().toLowerCase();
-      // 第 1 层: 找所有 concept 真 related[0] 真**指向 root** (上位体系是 root)
+      // 第 1 层: 找所有 concept 真 related[0] 指向 root (上位体系是 root)
       const layer1ConceptTitles = new Set<string>();
       for (const f of files) {
         if (f.kind !== "concept") continue;
@@ -228,8 +228,8 @@ export default function WikiGraph() {
       });
     }
 
-    // 2. edge — frontmatter.related 真**`[[name]]`** 抽 → 找 target 真 rel_path
-    //    helper: 真**name → file** 真 lookup (title / slug 模糊 match)
+    // 2. edge — frontmatter.related `[[name]]` 抽 → 找 target 真 rel_path
+    //    helper: name → file 真 lookup (title / slug 模糊 match)
     function findTarget(name: string): WikiFileInfo | null {
       const lower = name.toLowerCase().trim();
       return (
@@ -298,11 +298,11 @@ export default function WikiGraph() {
     }
 
     return g;
-    // P3.5.108: deps 真**effectiveMode + egoKey** — full mode 切 selectedPath 真不 rebuild
+    // P3.5.108: deps effectiveMode + egoKey — full mode 切 selectedPath 真不 rebuild
     // (egoKey 真在 full 时空字串, 不变), ego/subtree mode 切 selectedPath 真 rebuild
   }, [files, effectiveMode, egoKey]);
 
-  // sigma 初始化 + 真**update**真
+  // sigma 初始化 + update真
   useEffect(() => {
     if (!containerRef.current) return;
 
@@ -314,7 +314,7 @@ export default function WikiGraph() {
 
     if (graph.order === 0) return;
 
-    // P41 (6/5 鸿波): 暗色 mode 真**`label color **真**`runtime detect**, 不再硬编码
+    // P41 (6/5 鸿波): 暗色 mode `label color `runtime detect, 不再硬编码
     // #444 (暗背景下不可读).
     const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
     const labelColor = isDark ? "#e0e0e0" : "#444";
@@ -378,7 +378,7 @@ export default function WikiGraph() {
     };
   }, [graph, selectFile]);
 
-  // highlight selected node — 真**sigma.refresh 后**真 update color**真
+  // highlight selected node — sigma.refresh 后真 update color**真
   useEffect(() => {
     if (!sigmaRef.current || !selectedPath) return;
     const sigma = sigmaRef.current;
@@ -399,13 +399,13 @@ export default function WikiGraph() {
     );
   }
 
-  // P3.5.108: 真显当前节点数 + 真生效 mode 提示 (auto 真**显推断真子标签**)
+  // P3.5.108: 真显当前节点数 + 真生效 mode 提示 (auto 显推断真子标签)
   // P3.5.112 (6/25 鸿波 catch "不要橙色提示混乱"): modeLabel 不再区分虚拟/真实 — 视觉一致
   const visibleNodeCount = graph.order;
   const modeLabel = (() => {
     if (viewMode === "full") return { icon: "🌐", text: "全图", tip: "强制全图: 显示全部 wiki 节点 (点切到 🔍 子图)" };
     if (viewMode === "ego") return { icon: "🔍", text: "子图", tip: "强制子图: 1-hop 邻居 (点切回 ✨ 自动)" };
-    // auto 真**显**子标签 — P3.5.112: 虚拟态跟真实态视觉一致, 不区分
+    // auto 显子标签 — P3.5.112: 虚拟态跟真实态视觉一致, 不区分
     if (effectiveMode === "subtree") return { icon: "✨", text: "自动·体系", tip: "自动: 选中体系真显子树 (点切到 🌐 强制全图)" };
     if (effectiveMode === "ego") return { icon: "✨", text: "自动·子图", tip: "自动: 选中概念/实体真显 1-hop (点切到 🌐 强制全图)" };
     return { icon: "✨", text: "自动·全图", tip: "自动: 未选中真显全图 (点切到 🌐 强制全图)" };
@@ -481,7 +481,7 @@ export default function WikiGraph() {
         </div>
       )}
       {/* P3.5.112 (6/25 鸿波 catch "不要橙色提示混乱"): 砍掉 P3.5.111 真橙色虚拟体系提示条.
-          鸿波**真想建立**体系真**走左上 "+新建" 按钮** 真**已经够了**, header 不需要重复入口. */}
+          鸿波**真想建立**体系走左上 "+新建" 按钮 已经够了, header 不需要重复入口. */}
       <div ref={containerRef} style={{ flex: 1, background: "var(--catfish-bg)" }} />
     </div>
   );

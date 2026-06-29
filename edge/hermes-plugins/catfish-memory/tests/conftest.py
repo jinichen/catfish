@@ -67,38 +67,38 @@ if "catfish_memory" not in sys.modules:
         _mem_spec.loader.exec_module(_mem_mod)
 
 
-# P3.5.29 Phase 7.1 (6/17 鸿波): hermes-memory _get_summarize_model 真**加 role_resolver
-# 真**second tier** 真**改后**, 真**老 yaml/env 测 真**break** — 真**真**测真 LIVE gateway 真
-# 真**fetch 真**roles.yaml summarize: catfish-public-gemini-pro** → 真**winning over yaml/env**.
+# P3.5.29 Phase 7.1 (6/17 鸿波): hermes-memory _get_summarize_model 加 role_resolver
+# 真second tier** 改后, 老 yaml/env 测 真break** — 真测真 LIVE gateway 真
+# fetch 真roles.yaml summarize: catfish-public-gemini-pro** → winning over yaml/env.
 #
-# 真**fix path D**: autouse fixture 真**reset role_resolver cache + monkeypatch fetch 返 None**.
-# 真**所有 test 真**默认 mock 真**role_resolver 0 干扰**, 真**测**真**真**yaml/env 真**path
-# 真**保留**. 真**真**单独测 role_resolver path 真**需要 真**显式 monkeypatch.undo 或 测真直**.
+# fix path D: autouse fixture reset role_resolver cache + monkeypatch fetch 返 None.
+# 所有 test 真默认 mock role_resolver 0 干扰, 测真yaml/env path
+# 真保留**. 真单独测 role_resolver path 需要 真显式 monkeypatch.undo 或 测真直**.
 #
-# 真**为啥 autouse**: 真**6 个 sync_turn / on_session_end 测真 hit _get_summarize_model**,
-# 真**真**单测真**漏 mock 真**LIVE gateway 真 break**. autouse 真**0 漏**.
+# 为啥 autouse: 6 个 sync_turn / on_session_end 测真 hit _get_summarize_model,
+# 真单测漏 mock 真LIVE gateway 真 break**. autouse 0 漏.
 import pytest  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
 def _mock_role_resolver(monkeypatch):
-    """真**默认 mock 真`role_resolver.resolve` 真 None** → 真**fallback yaml/env path**.
+    """默认 mock 真`role_resolver.resolve` 真 None → fallback yaml/env path.
 
-    真**测真 role_resolver 真**真**positive path 真**测真**显式 monkeypatch.setattr(
-    role_resolver_mod, 'resolve', lambda role: ...)** 真**override** autouse default.
+    测真 role_resolver 真positive path 真测显式 monkeypatch.setattr(
+    role_resolver_mod, 'resolve', lambda role: ...) override autouse default.
     """
     try:
         import importlib
         _role_resolver_mod = importlib.import_module(f"{_PKG_NAME}.role_resolver")
-        # 真**reset cache** 真**防 test 间 stale state**
+        # reset cache 防 test 间 stale state
         _role_resolver_mod._reset_cache_for_tests()
-        # 真**默认 mock 真**resolve 返 None** → fallback yaml/env
+        # 默认 mock 真resolve 返 None** → fallback yaml/env
         monkeypatch.setattr(
             _role_resolver_mod,
             "resolve",
             lambda role: None,
         )
     except Exception:
-        # 真**role_resolver.py 真**没装 / load 失败** — 老测 path, 不需 mock.
+        # role_resolver.py 真没装 / load 失败** — 老测 path, 不需 mock.
         pass
     yield

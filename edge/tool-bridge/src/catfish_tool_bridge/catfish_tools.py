@@ -775,10 +775,10 @@ def _expertise_llm_call(prompt: str) -> str:
     复用 browser_locate 同一套 GATEWAY_URL + id_token 模式. 不抛异常 — 失败返
     空串, 让 expertise.extract_from_journal 走"返非 JSON"分支自然降级.
 
-    P3.5.29 Phase 5 (6/17 鸿波): model 真**role-resolved** —
+    P3.5.29 Phase 5 (6/17 鸿波): model role-resolved —
     ``role_resolver.resolve("chat_default")`` 优先, 失败 fallback hardcoded
-    ``catfish-private-main`` (客户改 roles.yaml 真**全代码跟着走**, 这里**0**
-    硬编码改 sed 真**Companion / hermes / tool-bridge 同步**).
+    ``catfish-private-main`` (客户改 roles.yaml 全代码跟着走, 这里**0**
+    硬编码改 sed Companion / hermes / tool-bridge 同步).
     """
     try:
         import httpx  # noqa: PLC0415
@@ -791,9 +791,9 @@ def _expertise_llm_call(prompt: str) -> str:
     token = _read_id_token()
     if not token:
         return ""
-    # P3.5.29 Phase 8 (6/17 鸿波): model 真**chain** picker > role > 兜底.
-    # picker_state.json 真**Companion chat.ts setModel 写**, 真**员工临时切影响这 LLM 调**.
-    # 真**roles.yaml chat_default 真**中央默认 真**客户控制**.
+    # P3.5.29 Phase 8 (6/17 鸿波): model chain picker > role > 兜底.
+    # picker_state.json Companion chat.ts setModel 写, 员工临时切影响这 LLM 调.
+    # roles.yaml chat_default 真中央默认 客户控制.
     from . import picker_state, role_resolver  # noqa: PLC0415
     model_name = (
         picker_state.read_picker_model()

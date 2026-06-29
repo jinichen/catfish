@@ -150,7 +150,7 @@ STOPWORDS_CN = set(
 #
 # 真生产 bug: 真鸿波 Dashboard 真 Top 高频词 'https/the/com/to/github/catfish/of/and/is/hermes'
 # — 真扫到 catfish 项目 docs (BACKLOG/PITFALLS/SKILL.md) 真 URL + code blocks + 英文标识符.
-# 真**真不该** 作为员工公文 sample. 真 LLM 真按这 fingerprint 真模仿员工写周报 → 真公文味丢.
+# 真不该 作为员工公文 sample. 真 LLM 真按这 fingerprint 真模仿员工写周报 → 真公文味丢.
 #
 # 真过滤策略 (保留结构 markers 给 _structure_pref 用, 只清 noise source):
 # 1. ``` code blocks ``` → 真整段去 (Python/bash 真英文 alpha 真大量)
@@ -188,8 +188,8 @@ def _filter_noise(text: str) -> str:
 def _read_doc(path: Path) -> Optional[str]:
     """读一个文档. 不支持的类型 / 太大 / 读失败 → None.
 
-    BL-STYLE-FP-NOISE-FILTER (2026-06-03): markdown / 文本类真**自动过滤 noise**
-    (URL / code blocks / inline code). docx 真**已经是纯文本** 不需要过滤.
+    BL-STYLE-FP-NOISE-FILTER (2026-06-03): markdown / 文本类自动过滤 noise
+    (URL / code blocks / inline code). docx 已经是纯文本 不需要过滤.
     """
     try:
         size = path.stat().st_size
@@ -260,8 +260,8 @@ def _word_freq(text: str) -> Dict[str, int]:
     返 {word: count}, 已过滤 stopword + 短于 2 字 + 纯标点.
 
     BL-STYLE-FP-NOISE-FILTER (2026-06-03): **只**留含中文 word.
-    真生产员工写公文真**中文为主**, 真英文术语 (catfish/hermes/skill) 真**只 noise**
-    充 Top 高频词 (https/the/com/to/and/of/is). 真**禁英文** 真**双保险**配
+    真生产员工写公文中文为主, 真英文术语 (catfish/hermes/skill) 只 noise
+    充 Top 高频词 (https/the/com/to/and/of/is). 禁英文 双保险配
     _filter_noise (清 URL/code).
     """
     freq: Dict[str, int] = {}

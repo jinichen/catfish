@@ -1,13 +1,13 @@
-//! P3.5.28 (6/17 鸿波"picker 联动现在就应该做") — picker model 真**source of truth**.
+//! P3.5.28 (6/17 鸿波"picker 联动现在就应该做") — picker model source of truth.
 //!
 //! # 真目的
 //!
 //! 之前 background task (email_scheduler / phishing_scan / political_scan / etc)
-//! 真**硬编码默认** model — yaml/env 可配但员工不会改. P3.5.27 改 default 为
+//! 硬编码默认 model — yaml/env 可配但员工不会改. P3.5.27 改 default 为
 //! catfish-private-main 修了数据零出端红线, 但员工 chat picker 切别的 model 真
 //! 不影响 background task → 员工以为切了, 实际后台还跑旧 model.
 //!
-//! 鸿波诉求: 员工在 chat picker 选什么, 后台 background task 真**跟着**用什么.
+//! 鸿波诉求: 员工在 chat picker 选什么, 后台 background task 跟着用什么.
 //!
 //! # 真路径
 //!
@@ -22,11 +22,11 @@
 //!      override (想强制公网 flash 省钱 / 强制 private-main 保密)
 //!   3. service 真 DEFAULT (e.g. email_config DEFAULT_RATE_MODEL)
 //!
-//! # 真**不持久** OnceLock
+//! # 不持久 OnceLock
 //!
-//! 跟 email_config OnceLock 不同 — picker_model 真**每次访问都重读**文件, 因为
+//! 跟 email_config OnceLock 不同 — picker_model 每次访问都重读文件, 因为
 //! 员工 chat picker 切换是动态的, OnceLock 真 cache 第一次值后续不重读 → 切了
-//! 没用. 文件 IO 真每 N 分钟一次 (background task tick interval) 真**便宜**.
+//! 没用. 文件 IO 真每 N 分钟一次 (background task tick interval) 便宜.
 
 use std::path::PathBuf;
 
@@ -64,7 +64,7 @@ pub fn get_picker_model() -> Option<String> {
     current_model()
 }
 
-/// 真给 React 调的 Tauri command — `setModel` 钩子真**写文件**.
+/// 真给 React 调的 Tauri command — `setModel` 钩子写文件.
 ///
 /// React store/chat.ts setModel 触发: invoke('set_picker_model', { name }).
 /// 失败仅 log, 不 throw (React 端 fire-and-forget 不阻塞 picker UI).

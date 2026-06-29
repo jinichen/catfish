@@ -28,7 +28,7 @@ export default function WikiTree() {
   const setKindFilter = useWikiStore((s) => s.setKindFilter);
   const setQuery = useWikiStore((s) => s.setQuery);
   const setSelectedTag = useWikiStore((s) => s.setSelectedTag);
-  // P3.5.110: modal trigger 真**改用 store** 真**支持跨组件 trigger** (鸿波点 dangling
+  // P3.5.110: modal trigger 改用 store 支持跨组件 trigger (鸿波点 dangling
   // wikilink / 组 header → WikiPreview / CategorySubgroup 也能弹).
   const createModalState = useWikiStore((s) => s.createModalState);
   const openCreateModal = useWikiStore((s) => s.openCreateModal);
@@ -83,7 +83,7 @@ export default function WikiTree() {
       } finally {
         setSearching(false);
       }
-    }, searchMode === "semantic" ? 500 : 300);   // semantic 真**`后台 indexer 慢, 500ms debounce**真
+    }, searchMode === "semantic" ? 500 : 300);   // semantic `后台 indexer 慢, 500ms debounce真
     return () => clearTimeout(handle);
   }, [search, searchMode]);
 
@@ -212,30 +212,30 @@ export default function WikiTree() {
   }, [grouped.entity]);
 
   // P3.5.107 A (6/25 鸿波 catch "只有 1 个体系, 加另一个体系能不能"):
-  // concept 真**也走 P3.5.99 同套路真二级分组** — 按 concept.related[0] 真**上位体系**.
+  // concept 也走 P3.5.99 同套路真二级分组 — 按 concept.related[0] 上位体系.
   //
   // 数据真因 (审鸿波截图无人机类 concept 真 body): LLM distill 真在 concept body
   // 第一行写 `[[企业资质知识体系]]` 标上位 hub. wiki_read.rs 真 merge_related_with_body
   // 真把它合到 related[]. 所以 concept "无人机类" 真 related[0] = "企业资质知识体系".
   //
-  // 真**0 schema 改 0 数据 backfill**: 鸿波想加"政企客户体系" 真路径:
+  // 0 schema 改 0 数据 backfill: 鸿波想加"政企客户体系" 真路径:
   //   1. 新建 concept "政企客户体系" (顶级体系, 自己 related[0] 空 → 进 "🌟 顶级体系" 组)
   //   2. 新建 concept "央国企" 真 body 写 `[[政企客户体系]]` → 进 "政企客户体系" 组下
   //   3. entity "中移动" body 写 `[[央国企]]` → 进 entity 二级 "央国企" 组
-  //   真**真自然 3 级层级**, 0 代码改.
+  //   真自然 3 级层级, 0 代码改.
   //
-  // 真**特殊**: concept 真 related[0] 空 → "🌟 顶级体系" (顶级 hub, 排第一不排最后)
+  // 特殊: concept 真 related[0] 空 → "🌟 顶级体系" (顶级 hub, 排第一不排最后)
   // — 跟 entity 真"未分类"语义不同 (未分类是数据残缺, 顶级体系是结构性 root).
-  // P3.5.115 (6/25 鸿波 catch "UI 别扭"): 真**砍顶级体系组真重复**.
-  // 真**老逻辑**: "🌟 顶级体系 (1) — 企业资质知识体系" + "企业资质知识体系 (10) — 子级"
-  // 真**两组都跟父名相关, 视觉重复**.
+  // P3.5.115 (6/25 鸿波 catch "UI 别扭"): 砍顶级体系组真重复.
+  // 老逻辑: "🌟 顶级体系 (1) — 企业资质知识体系" + "企业资质知识体系 (10) — 子级"
+  // 两组都跟父名相关, 视觉重复.
   //
-  // 真**新逻辑**: 顶级体系真**父 file**真**有子级 → 直接作为该组 header** (不重复进"顶级"组).
+  // 新逻辑: 顶级体系父 file有子级 → 直接作为该组 header (不重复进"顶级"组).
   // 孤儿 system (无子级) → 兜底进"🌟 顶级体系"组真显示.
-  // 真**header 点击**: P3.5.113 match 路径 → 真**lookup file → selectFile 跳父 preview** ✓
+  // header 点击: P3.5.113 match 路径 → lookup file → selectFile 跳父 preview ✓
   const conceptCategories = useMemo(() => {
     const map = new Map<string, WikiFileInfo[]>();
-    // 第 1 轮: 真**有 related[0] 真 concept 进各自父组**
+    // 第 1 轮: 有 related[0] 真 concept 进各自父组
     for (const c of grouped.concept) {
       const category = c.related[0]?.name?.trim(); // P3.5.132 #5
       if (category) {
@@ -244,19 +244,19 @@ export default function WikiTree() {
       }
     }
     // 第 2 轮: 孤儿 concept (related[0] 空) — 看它是否已是某组 header (子级真组真 key)
-    // 真**已有子级**真**0 额外处理** (header click 真**走 P3.5.113 match 路径**跳父 preview);
-    // 真**无子级 (真孤儿)**真**进"🌟 顶级体系"组兜底**.
+    // 已有子级0 额外处理 (header click 走 P3.5.113 match 路径跳父 preview);
+    // 无子级 (真孤儿)进"🌟 顶级体系"组兜底.
     for (const c of grouped.concept) {
       if (c.related[0]?.name?.trim()) continue; // P3.5.132 #5: 已在第 1 轮处理
-      const hasChildren = map.has(c.title); // 真**自己**是否为某组真 key
-      if (hasChildren) continue; // header 已经隐含真**就是它**, 0 重复
-      // 真**孤儿**真**兜底**
+      const hasChildren = map.has(c.title); // 自己是否为某组真 key
+      if (hasChildren) continue; // header 已经隐含就是它, 0 重复
+      // 孤儿兜底
       const topKey = "🌟 顶级体系";
       if (!map.has(topKey)) map.set(topKey, []);
       map.get(topKey)!.push(c);
     }
     return Array.from(map.entries()).sort((a, b) => {
-      // 顶级体系 (孤儿兜底组) 推最前 — 真**根节点先看**
+      // 顶级体系 (孤儿兜底组) 推最前 — 根节点先看
       if (a[0] === "🌟 顶级体系") return -1;
       if (b[0] === "🌟 顶级体系") return 1;
       // 其他按 count desc
@@ -654,8 +654,8 @@ function EntityGroup({
  *
  *  P3.5.110 (6/25 鸿波 catch "体系名称不能选择") 升级:
  *  - 点 caret (▶) → 折叠 (跟原行为一致, stopPropagation)
- *  - 点 category name → 优先 selectFile(找到的 concept file), 真**dangling 真**弹 +新建 modal**
- *    (prefill title=category, 默认 kind=system) — 真**治体系 dangling 不能点的核心痛点**
+ *  - 点 category name → 优先 selectFile(找到的 concept file), dangling 弹 +新建 modal
+ *    (prefill title=category, 默认 kind=system) — 治体系 dangling 不能点的核心痛点
  */
 function CategorySubgroup({
   category,
@@ -668,13 +668,13 @@ function CategorySubgroup({
   selectedPath: string | null;
   onSelect: (relPath: string) => void;
 }) {
-  // P3.5.110: 从 store 拿 files (全 wiki) 真**lookup**, 跟 onSelect 同源
+  // P3.5.110: 从 store 拿 files (全 wiki) lookup, 跟 onSelect 同源
   const allFiles = useWikiStore((s) => s.files);
   // P3.5.111: dangling 体系名 click → setVirtualSystem (而不是 openCreateModal — 鸿波 catch)
   const setVirtualSystem = useWikiStore((s) => s.setVirtualSystem);
-  // P3.5.113: dangling click 真**也 clear selectedPath** → 触发 useMemo rebuild
+  // P3.5.113: dangling click 也 clear selectedPath → 触发 useMemo rebuild
   const selectFile = useWikiStore((s) => s.selectFile);
-  // P3.5.114 (6/25 鸿波 catch "应该形成真文件才合理"): dangling click → 真**自动建真文件**
+  // P3.5.114 (6/25 鸿波 catch "应该形成真文件才合理"): dangling click → 自动建真文件
   const loadFiles = useWikiStore((s) => s.loadFiles);
   const lsKey = `wiki_subgroup_collapsed_${category}`;
   const [collapsed, setCollapsed] = useState<boolean>(() => {
@@ -701,9 +701,9 @@ function CategorySubgroup({
   //   - 特殊组 ("🌟 顶级体系" / "未分类") → 只 toggle
   //   - 真实文件 (match): setVirtualSystem(null) + selectFile(rel_path) → 切到该 system 子树
   //     (清旧虚拟态, 避免被它优先级压住)
-  //   - dangling (虚拟体系): 真**自动建真文件 (concept + subtype=system)** → selectFile(新 path)
-  //     → 走 P3.5.108 isSystemConcept 真 subtree 路径 → 真**显该体系子树** (跟虚拟态视觉一致)
-  //     真**0 弹窗 / 0 橙色提示** — 鸿波 P3.5.111-112 真 catch 都尊重
+  //   - dangling (虚拟体系): 自动建真文件 (concept + subtype=system) → selectFile(新 path)
+  //     → 走 P3.5.108 isSystemConcept 真 subtree 路径 → 显该体系子树 (跟虚拟态视觉一致)
+  //     0 弹窗 / 0 橙色提示 — 鸿波 P3.5.111-112 真 catch 都尊重
   //     fail-safe: 网络/IO 失败 → fallback setVirtualSystem (走 P3.5.113 虚拟态)
   const handleCategoryClick = async (e: React.MouseEvent | React.KeyboardEvent) => {
     e.stopPropagation();
@@ -713,7 +713,7 @@ function CategorySubgroup({
       toggle();
       return;
     }
-    // 真**找 wiki/concepts/<category>.md** 真**file** — 跟 WikiPreview handleWikilinkClick 同 lookup
+    // 找 wiki/concepts/<category>.md file — 跟 WikiPreview handleWikilinkClick 同 lookup
     const lower = category.toLowerCase().trim();
     const match = allFiles.find(
       (f) =>
@@ -722,13 +722,13 @@ function CategorySubgroup({
         f.title.toLowerCase().includes(lower),
     );
     if (match) {
-      // P3.5.113: 真**清旧虚拟态** — 真**真实**system file 真**走 effectiveRoot 真**真实 path** +
-      // isSystemConcept → subtree (真实). 真**不清虚拟会被它优先级压住, 显错位的旧虚拟体系**.
+      // P3.5.113: 清旧虚拟态 — 真实system file 走 effectiveRoot 真真实 path** +
+      // isSystemConcept → subtree (真实). 不清虚拟会被它优先级压住, 显错位的旧虚拟体系.
       setVirtualSystem(null);
       onSelect(match.rel_path);
       return;
     }
-    // P3.5.114: dangling → 真**自动建真文件** (鸿波 catch "形成真文件才合理")
+    // P3.5.114: dangling → 自动建真文件 (鸿波 catch "形成真文件才合理")
     try {
       const result = await wikiCreateEntityOrConcept({
         kind: "concept",
@@ -738,7 +738,7 @@ function CategorySubgroup({
         related: [], // 顶级体系无上位, 默认空 (用户后续可改)
         body: `# ${category}\n\n(由 catfish 自动建立 — 点 group header 触发)\n\n下属概念自动反推: WikiGraph 走 children related[0] 指向本体系.`,
       });
-      // 真**真**建成功**: 刷新 files + 切到新 file → P3.5.108 isSystemConcept → subtree ✓
+      // 真建成功**: 刷新 files + 切到新 file → P3.5.108 isSystemConcept → subtree ✓
       setVirtualSystem(null);
       await loadFiles();
       await selectFile(result.rel_path);
@@ -770,7 +770,7 @@ function CategorySubgroup({
           fontWeight: 500,
         }}
       >
-        {/* P3.5.110: caret 单独 button — 真**stopPropagation** 后 toggle, 真**不影响 name 点击** */}
+        {/* P3.5.110: caret 单独 button — stopPropagation 后 toggle, 不影响 name 点击 */}
         <span
           role="button"
           tabIndex={0}
@@ -797,7 +797,7 @@ function CategorySubgroup({
         >
           ▶
         </span>
-        {/* P3.5.110: name 真**独立 click target** — selectFile / 弹建 modal */}
+        {/* P3.5.110: name 独立 click target — selectFile / 弹建 modal */}
         <span
           role="button"
           tabIndex={0}
@@ -811,7 +811,7 @@ function CategorySubgroup({
           title={
             category === "🌟 顶级体系" || category === "未分类"
               ? `点击折叠/展开 (特殊组)`
-              : `点击跳到"${category}" 真 preview (dangling 真**弹 +新建**)`
+              : `点击跳到"${category}" 真 preview (dangling 弹 +新建)`
           }
           style={{
             flex: 1,
@@ -868,7 +868,7 @@ function CategorySubgroup({
 }
 
 /** P3.5.107 A (6/25 鸿波) — concept 二级分组 group: 顶层 "概念 (11)" + 内嵌
- *  按 concept.related[0] 真**上位体系** 真子组 (e.g. "企业资质知识体系 (8) / 🌟 顶级体系 (3)"),
+ *  按 concept.related[0] 上位体系 真子组 (e.g. "企业资质知识体系 (8) / 🌟 顶级体系 (3)"),
  *  跟 EntityGroup 同款架构, 真支持加任意多新体系 (concept body 写 `[[新体系]]` 自动归类).
  *
  *  localStorage key 跟原 Group "概念 (concepts)" 真兼容 — 用户原折叠态不丢.
@@ -1026,7 +1026,7 @@ function kindEmoji(k: string): string {
 
 /** P36 (6/5 鸿波) — 知识体系 tab 空状态 onboarding.
  *
- *  第一次开 Companion 真**`员工`** 真**`wiki/ 空`** 真**`不知道怎么生**`真. 列 3 路:
+ *  第一次开 Companion `员工` `wiki/ 空` `不知道怎么生`真. 列 3 路:
  *   1. chat 拖文件 → auto ingest → 24h 后 distill 生 entity/concept (P16)
  *   2. chat 聊天 → bg distill → 自动生 (P0/P1.1)
  *   3. + 新建 entity/concept → 手建 (P3.3.8, button 已在顶部)

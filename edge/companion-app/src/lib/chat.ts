@@ -45,11 +45,11 @@ interface SendChatParams {
   onDone: (info?: ChatStreamDoneInfo) => void;
   /** 任何错误 */
   onError: (msg: string) => void;
-  /** P3.5.18 Phase 2 (6/17 鸿波): hermes preflight 自动压缩 真**进度推 SSE**.
-   *  plugin.py P19 真**桥** agent.status_callback → tool_progress_callback(
+  /** P3.5.18 Phase 2 (6/17 鸿波): hermes preflight 自动压缩 进度推 SSE.
+   *  plugin.py P19 桥 agent.status_callback → tool_progress_callback(
    *    event_type="catfish.lifecycle.lifecycle|warn", tool_name="catfish-lifecycle", preview=msg).
-   *  hermes 真**SSE emit `hermes.tool.progress`** 真`{tool: "catfish-lifecycle", label, status}`.
-   *  Companion handle 真**dispatch onLifecycle**. text 真**preview 字段** ("📦 Preflight compression...").
+   *  hermes SSE emit `hermes.tool.progress` 真`{tool: "catfish-lifecycle", label, status}`.
+   *  Companion handle dispatch onLifecycle. text preview 字段 ("📦 Preflight compression...").
    *  status: "running" (push) or "completed" (清 inline).
    */
   onLifecycle?: (status: "running" | "completed", text: string) => void;
@@ -733,7 +733,7 @@ export async function streamChat(params: SendChatParams): Promise<void> {
         //
         // P3.5.18 Phase 2 (6/17 鸿波): tool === "catfish-lifecycle" 是 plugin P19
         // 桥 agent.status_callback → tool_progress_callback 的 marker. 这是 preflight
-        // 压缩 / context warning 等 lifecycle event, 不是真**真**tool call**. 走 onLifecycle
+        // 压缩 / context warning 等 lifecycle event, 不是真tool call**. 走 onLifecycle
         // 让 useChat 设 inline status, 不进 tool_calls 列表 (avoid pollution).
         if (sseEventType === "hermes.tool.progress") {
           try {

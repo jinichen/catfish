@@ -26,7 +26,7 @@ export const gatewayGetDevToken = () =>
 
 // ── hermes (P3.5.125 6/26 鸿波 catch "hermes hang 不监控") ──
 // hermes 默认 launchd 拉, 但 hang (GIL/IO block) launchd 不知道.
-// hermesKill 真**:** kill -9 后等 launchd 自动重启.
+// hermesKill : kill -9 后等 launchd 自动重启.
 export const hermesStatus = () => rawInvoke<ServiceStatus>("hermes_status");
 export const hermesKill = () => rawInvoke<void>("hermes_kill");
 
@@ -533,7 +533,7 @@ export const wikiUpdateFile = (relPath: string, content: string) =>
   rawInvoke<WikiWriteResult>("wiki_update_file", { relPath, content });
 
 /** P3.3.4 (6/9 鸿波): 软删 entity/concept/query → mv 到 wiki/.trash/<ts>-原名.md.
- * P3.5.132 #3 (6/29 鸿波): 加 dryRun + affectedFiles 真**先报谁会变 dangling**. */
+ * P3.5.132 #3 (6/29 鸿波): 加 dryRun + affectedFiles 先报谁会变 dangling. */
 export interface AffectedFile {
   rel_path: string;
   title: string;

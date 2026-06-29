@@ -22,8 +22,8 @@
 //!   ## 答 (小鲶)
 //!   <assistant_response 真 full text>
 //!
-//! 写完待 P1.2.3 plugin watch ~/.catfish/wiki/queries/ 真 mtime 真**变化** 真自动触发
-//! Analysis + Generation pipeline 真**抽 entity/concept**.
+//! 写完待 P1.2.3 plugin watch ~/.catfish/wiki/queries/ 真 mtime 变化 真自动触发
+//! Analysis + Generation pipeline 抽 entity/concept.
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -47,7 +47,7 @@ fn queries_dir() -> Result<PathBuf, String> {
 }
 
 /// slugify — 替换 path-unsafe char 真 `-`, 真接受 unicode (含中文).
-/// `max_chars` 真**chars 计算** (not bytes — 真避中文 byte slice 真 panic).
+/// `max_chars` chars 计算 (not bytes — 真避中文 byte slice 真 panic).
 fn slugify(s: &str, max_chars: usize) -> String {
     let bad: &[char] = &[
         '/', '\\', ':', '*', '?', '"', '<', '>', '|', '\n', '\r', '\t', ' ', '\u{3000}',
@@ -79,7 +79,7 @@ pub async fn wiki_save_chat_message(
         return Err(format!("date format 不合法 (期望 YYYY-MM-DD): {date}"));
     }
 
-    // 2. topic-slug 真 user_message 真**前 30 字**
+    // 2. topic-slug 真 user_message 前 30 字
     let topic_slug = slugify(&user_message, 30);
 
     // 3. file path: ~/.catfish/wiki/queries/<date>-<slug>.md

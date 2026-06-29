@@ -1,12 +1,12 @@
 /** P3.5.126 (6/26 鸿波 catch "local_search 目录设置 UI 找不到"):
  * Local Search 索引目录 UI — 让员工不用 vim ~/.catfish/search-scope.yaml.
  *
- * 仿 StyleFingerprintCard 真**ScanDirsManager** 套路, 但目标 yaml 不同:
+ * 仿 StyleFingerprintCard ScanDirsManager 套路, 但目标 yaml 不同:
  *   - StyleFingerprintCard → ~/.catfish/companion.yaml (style_fingerprint.scan_dirs)
  *   - 本卡 → ~/.catfish/search-scope.yaml (include 顶层段)
  *
  * 修改完后员工需手动跑 `catfish-search index` 或点 Local Search 重启按钮
- * (watcher 真**:** 重启时 reload config).
+ * (watcher : 重启时 reload config).
  */
 
 import { useEffect, useState, useCallback } from "react";
@@ -299,7 +299,7 @@ export default function LocalSearchScopeCard() {
                   padding: "4px 0",
                 }}
               >
-                yaml 真**include 段空** — Python load_config 会 fallback 到默认目录
+                yaml include 段空 — Python load_config 会 fallback 到默认目录
               </div>
             )}
             {data.include.map((d) => (

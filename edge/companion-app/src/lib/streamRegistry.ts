@@ -126,16 +126,16 @@ export function update(
 
 /** stream 自然结束 (done / error). 标 isStreaming=false, 留 messages 60 秒等切回恢复.
  *
- * P3.5.30 (6/17 鸿波): 5/24 老 finish() 真**立即 delete** 是 BL-MULTI-SESSION-STREAM
- * 只 ship 一半 真**遗症 — 用户 stream 中切走 tab, stream 完成后 finish() 删 registry,
- * 用户切回 Chat tab 真**stale store 真**等 ChatTab polling 5 秒 sync 才看 final.
- * 5/24 自留注释"未来加 keepAfterFinish 选项"真**这次补齐**.
+ * P3.5.30 (6/17 鸿波): 5/24 老 finish() 立即 delete 是 BL-MULTI-SESSION-STREAM
+ * 只 ship 一半遗症 — 用户 stream 中切走 tab, stream 完成后 finish() 删 registry,
+ * 用户切回 Chat tab stale store 真等 ChatTab polling 5 秒 sync 才看 final.
+ * 5/24 自留注释"未来加 keepAfterFinish 选项"这次补齐.
  *
- * 真**新行为**:
- *   - 标 isStreaming = false, streamingId = null, 真**emit 通知** (sidebar ⏳ 消失)
- *   - 真**保留 messages** 在 map, 真**ChatTab mount restore** 时 get() 真能拿 final
- *   - 真**60 秒兜底 TTL** auto-delete (防 ChatTab 永远不 mount 真**内存 leak**)
- *   - 真**ChatTab restore 后主动调** dismiss(sessionId) 真**立即清**
+ * 新行为:
+ *   - 标 isStreaming = false, streamingId = null, emit 通知 (sidebar ⏳ 消失)
+ *   - 保留 messages 在 map, ChatTab mount restore 时 get() 真能拿 final
+ *   - 60 秒兜底 TTL auto-delete (防 ChatTab 永远不 mount 内存 leak)
+ *   - ChatTab restore 后主动调 dismiss(sessionId) 立即清
  */
 const POST_FINISH_KEEP_MS = 60_000;
 const _finishTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -147,7 +147,7 @@ export function finish(sessionId: string): void {
   s.streamingId = null;
   _emit(sessionId);  // sidebar ⏳ 消失
 
-  // 真**60 秒兜底**: ChatTab 永远不 mount 真**真**自动清**, 防 memory leak
+  // 60 秒兜底: ChatTab 永远不 mount 真自动清**, 防 memory leak
   const old = _finishTimers.get(sessionId);
   if (old) clearTimeout(old);
   _finishTimers.set(
@@ -160,10 +160,10 @@ export function finish(sessionId: string): void {
   );
 }
 
-/** ChatTab restore 后调, 真**立即清** stream state (替 60 秒 TTL).
+/** ChatTab restore 后调, 立即清 stream state (替 60 秒 TTL).
  *
- * P3.5.30 (6/17 鸿波): ChatTab mount 真**消费** 完 registry messages 后调.
- * 真**未消费 (用户没切回)** 真**60 秒 TTL 自动清**.
+ * P3.5.30 (6/17 鸿波): ChatTab mount 消费 完 registry messages 后调.
+ * 未消费 (用户没切回) 60 秒 TTL 自动清.
  */
 export function dismiss(sessionId: string): void {
   const t = _finishTimers.get(sessionId);

@@ -767,7 +767,7 @@ async fn call_rate_llm(items: &[EmailItem]) -> Result<Vec<Urgency>, String> {
     // P3.5.140 (6/29 鸿波"数据流应该是 companion → hermes → gateway(8999), 不是双路径,
     // 更不是 gateway(8999) 作为 hermes 的 fallback"):
     // 单路径: Companion → hermes 8642 → gateway 8999 → LLM. 没有 fallback.
-    //   - body.model 真 chain 真值真 → hermes plugin P11 真**截** → P6 wrap _create_agent
+    //   - body.model 真 chain 真值真 → hermes plugin P11 截 → P6 wrap _create_agent
     //     → agent.model = chain 真值 → auxiliary_client 自动 sync (跟 TS 前端**统一**)
     //   - 数据零出端 X-Catfish-User header 跨员工保护**统一**走 plugin
     //   - 客户**单点配置**真 hermes (P11/P21 picker) 自动覆盖 background task

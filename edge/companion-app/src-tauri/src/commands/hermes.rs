@@ -19,7 +19,7 @@ use crate::services::hermes_api_config;
 const TCP_TIMEOUT: Duration = Duration::from_millis(800);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// 真**解析 hermes URL 真 host + port** (从 hermes_api_config 真 url 提取).
+/// 解析 hermes URL 真 host + port (从 hermes_api_config 真 url 提取).
 /// 默认 http://localhost:8642 → ("localhost", 8642).
 fn parse_hermes_endpoint() -> (String, u16) {
     let cfg = hermes_api_config::hermes_api_config();
@@ -80,7 +80,7 @@ pub async fn hermes_status() -> Result<ServiceStatus, String> {
         ));
     }
 
-    // 2. TCP 通 → 探 /healthz (真**hang detection — TCP 通但 /healthz 超时 = GIL/IO block**)
+    // 2. TCP 通 → 探 /healthz (hang detection — TCP 通但 /healthz 超时 = GIL/IO block)
     let cfg = hermes_api_config::hermes_api_config();
     let healthy = probe_healthz(&cfg.url).await;
 
@@ -98,12 +98,12 @@ pub async fn hermes_status() -> Result<ServiceStatus, String> {
     })
 }
 
-/// 真**hang 自动恢复**: kill -9 hermes 进程, 触发 launchd KeepAlive 拉新进程.
-/// 真**:** 真**由 useServiceStatus 真**连续 3 次 unhealthy 时调**.
+/// hang 自动恢复: kill -9 hermes 进程, 触发 launchd KeepAlive 拉新进程.
+/// : 由 useServiceStatus 真连续 3 次 unhealthy 时调**.
 #[tauri::command]
 pub async fn hermes_kill() -> Result<(), String> {
-    // 真**: 真**:** 真**真**找 hermes 进程 — 真**: ps -ef | grep hermes** 真**: 真**:** 真**:** 真**:**
-    // 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:**
+    // : 真:** 真找 hermes 进程 — : ps -ef | grep hermes : 真:** : :
+    // : : : : : : : : : : : : : : : : : : : : : : : :
     let output = std::process::Command::new("pgrep")
         .args(["-f", "hermes_cli.gateway run"])
         .output()

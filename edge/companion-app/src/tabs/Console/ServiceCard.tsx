@@ -21,8 +21,8 @@ interface Props {
 }
 
 // P3.5.125 (6/26 鸿波 catch "hermes hang 无监控"): hermes 不在 catfish 端 spawn
-// (员工 brew install + launchd 起的), 真**:** 真**start/stop 真**:** 真**:** noop**
-// (Companion 真**只通过 hermes_kill 触发 launchd 重启**, 不 spawn).
+// (员工 brew install + launchd 起的): start/stop 都 noop
+// (Companion 只通过 hermes_kill 触发 launchd 重启, 不 spawn).
 const STARTERS: Record<ServiceId, () => Promise<void>> = {
   gateway: gatewayStart,
   hermes: async () => {
@@ -35,7 +35,7 @@ const STARTERS: Record<ServiceId, () => Promise<void>> = {
 const STOPPERS: Record<ServiceId, () => Promise<void>> = {
   gateway: gatewayStop,
   hermes: async () => {
-    // hermes_kill 真**:** kill -9 → launchd 拉. 真**:** 真**真**真**真**stop**: 真**:**
+    // hermes_kill : kill -9 → launchd 拉. : 真真stop**: :
     const { hermesKill } = await import("../../lib/tauri");
     await hermesKill();
   },

@@ -139,23 +139,23 @@ async def lifespan(app: FastAPI):
     else:
         logger.info(".env not found -- using process env vars only")
 
-    # P3.5.29 (6/17 鸿波) — model role 抽象层 load. config/roles.yaml 真**业务
-    # 意图 → 物理 model name** 映射, 客户改这一文件全代码跟着走.
+    # P3.5.29 (6/17 鸿波) — model role 抽象层 load. config/roles.yaml 业务
+    # 意图 → 物理 model name 映射, 客户改这一文件全代码跟着走.
     #
-    # P3.5.29 Phase 6 (6/17 鸿波) — 真**hard fail 改 raise**: Phase 1-5 全 ship 完,
+    # P3.5.29 Phase 6 (6/17 鸿波) — hard fail 改 raise: Phase 1-5 全 ship 完,
     # 全代码 (gateway / Companion / tool-bridge) 都依赖 /v1/roles. roles.yaml load
-    # 失败真**raise 真 production 立刻挂**, 真**好过 silent gateway 跑但 caller
-    # 拿不到 role mapping** (Companion email scheduler / tool-bridge 真**fallback
-    # hardcoded 也跑, 但客户改 roles.yaml 改错 真**无人察觉**, 真**production
-    # 红线**).
+    # 失败raise 真 production 立刻挂, 好过 silent gateway 跑但 caller
+    # 拿不到 role mapping (Companion email scheduler / tool-bridge fallback
+    # hardcoded 也跑, 但客户改 roles.yaml 改错 真无人察觉**, production
+    # 红线).
     try:
         from . import roles as roles_module
         roles_module.load_roles()
     except Exception as e:
         logger.error(
-            "roles.yaml 真**加载失败** — 真**production hard fail** "
-            "(P3.5.29 Phase 6). 真**客户改 yaml 真错 / 文件不存在 / 循环 ref**, "
-            "检查 central/llm-gateway/config/roles.yaml. 真**原因**: %s", e,
+            "roles.yaml 加载失败 — production hard fail "
+            "(P3.5.29 Phase 6). 客户改 yaml 真错 / 文件不存在 / 循环 ref, "
+            "检查 central/llm-gateway/config/roles.yaml. 原因: %s", e,
         )
         raise
 
@@ -1493,16 +1493,16 @@ def _model_info_payload(m) -> dict[str, Any]:
 
 @app.get("/v1/roles")
 async def list_roles() -> dict[str, Any]:
-    """P3.5.29 (6/17 鸿波) — model role 抽象 真**机器可读 mapping**.
+    """P3.5.29 (6/17 鸿波) — model role 抽象 机器可读 mapping.
 
-    返 roles.yaml 真**resolve 后**全 payload: roles dict + fallback_chain
+    返 roles.yaml resolve 后全 payload: roles dict + fallback_chain
     (flat model names, 已递归 resolve) + rbac_default_allowed (RBAC role
     → model list).
 
-    真**anonymous endpoint** (不要求 auth) — Companion / hermes 启动时拉真**预 auth**.
-    内容真**不敏感** (业务意图 → model name, 没 token / 没员工数据).
+    anonymous endpoint (不要求 auth) — Companion / hermes 启动时拉预 auth.
+    内容不敏感 (业务意图 → model name, 没 token / 没员工数据).
 
-    真**failure mode**:
+    failure mode:
         - roles.yaml 没 load (startup 失败 / 文件不存在) → 503
         - load 成功 → 200 + 完整 payload
     """
@@ -1512,7 +1512,7 @@ async def list_roles() -> dict[str, Any]:
     except roles_module.RolesNotLoadedError as e:
         raise HTTPException(
             status_code=503,
-            detail=f"roles.yaml 真**没加载** — gateway startup 失败 / 文件不存在: {e}",
+            detail=f"roles.yaml 没加载 — gateway startup 失败 / 文件不存在: {e}",
         )
 
 

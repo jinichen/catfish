@@ -256,11 +256,11 @@ pub async fn chrome_status() -> Result<ServiceStatus, String> {
     }
 
     // P3.5.125 (6/26 鸿波 catch "chrome page-level hang 不检测"): 升级 health check.
-    // 老逻辑: GET /json/version → 真**只测 DevTools 协议在不在**, 不测真 DOM/page
-    // 是不是卡住. 真**真因**: chrome 9222 端口活, 但 page 卡死 (JS infinite loop /
+    // 老逻辑: GET /json/version → 只测 DevTools 协议在不在, 不测真 DOM/page
+    // 是不是卡住. 真因: chrome 9222 端口活, 但 page 卡死 (JS infinite loop /
     // OOM 边缘 / NetworkIdle 永不返). 新逻辑:
     //   1. /json/version → 协议 alive
-    //   2. /json/list → 拿到 page tabs (TCP 通但 page 真**hang 时**这步会卡住或空)
+    //   2. /json/list → 拿到 page tabs (TCP 通但 page hang 时这步会卡住或空)
     let chrome_base = ep.chrome_base();
     let client = reqwest::Client::builder()
         .timeout(HTTP_TIMEOUT)
@@ -277,7 +277,7 @@ pub async fn chrome_status() -> Result<ServiceStatus, String> {
             if !version_ok {
                 false
             } else {
-                // page-level: /json/list 真**返**真**page tabs JSON array**, 真**hang 时**timeout
+                // page-level: /json/list 返page tabs JSON array, hang 时timeout
                 c.get(format!("{chrome_base}/json/list"))
                     .send()
                     .await

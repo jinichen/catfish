@@ -66,7 +66,7 @@ _CATFISH_CRON_THREAD_LOCAL = threading.local()
 # host + port 都 match 才算同一 gateway (防别人也起 8999 端口被误判).
 
 def _get_catfish_gateway_host_port() -> set[tuple[str, int]]:
-    """返当前 catfish-gateway 真**`(host, port)`** 真集合 (兼容多默认).
+    """返当前 catfish-gateway `(host, port)` 真集合 (兼容多默认).
 
     包括: env CATFISH_GATEWAY_URL 解析出 + 老硬编码默认 (localhost:8999 +
     127.0.0.1:8999). 多 default 防员工只设 host 不设 port 时漏配.
@@ -87,7 +87,7 @@ def _get_catfish_gateway_host_port() -> set[tuple[str, int]]:
 
 
 def _is_catfish_gateway_base_url(base_url: str) -> bool:
-    """base_url 真是不是 catfish-gateway (P3 / P10 真**`X-Catfish-User`** header 注入判断).
+    """base_url 真是不是 catfish-gateway (P3 / P10 `X-Catfish-User` header 注入判断).
 
     走 _get_catfish_gateway_host_port() 真 set, 比 host + port. 失败 fallback
     走老 "localhost:8999 / 127.0.0.1:8999" 字符串匹配 (兼容性).
@@ -204,7 +204,7 @@ _PATCH_TARGETS = [
     ("cron.jobs", "update_job", "func"),
     # P28 (P3.5.123, 6/25 鸿波 catch "微信里 ClawBot 英文不合适"):
     # hermes gateway/platforms/weixin.py:WeixinAdapter — wrap send 中文化 hermes
-    # 真**英文 outbound 消息** (approval 提示 / 中断提示). 真**: 重构 / 改名 → plugin
+    # 英文 outbound 消息 (approval 提示 / 中断提示). 重构 / 改名 → plugin
     # install fail-loud, 不让微信 silent 走老英文路径.
     ("gateway.platforms.weixin", "WeixinAdapter", "attr"),
     # P24 (P3.5.89, 6/23): hermes api_server._CORS_HEADERS — 浏览器 preflight
@@ -427,7 +427,7 @@ def _apply_patches() -> None:
             e, exc_info=True,
         )
     # P3.5.18 (6/17 鸿波"直接压缩, 弹窗显示压缩进度"): 加 POST /api/sessions/{id}/compress/stream
-    # SSE endpoint, Companion 主动 trigger hermes compress + 真**进度推 UI**.
+    # SSE endpoint, Companion 主动 trigger hermes compress + 进度推 UI.
     # 抄 hermes Slack /compress + _handle_session_chat_stream SSE 模板.
     try:
         _patch_p18_compress_endpoint()
@@ -439,8 +439,8 @@ def _apply_patches() -> None:
     # P3.5.18 Phase 2 (6/17 鸿波"自动进行压缩, 提示这个不是觉得奇怪"): hermes preflight
     # 自动压缩时**Companion 0 反馈** — chat 卡 30 秒不知道发生啥. 修法:
     # _create_agent post-init 注入 status_callback 桥 tool_progress_callback,
-    # preflight `_emit_status('📦 Preflight compression...')` 真**经 catfish-lifecycle
-    # tool name 走 SSE hermes.tool.progress channel** → Companion 接 + 显 inline.
+    # preflight `_emit_status('📦 Preflight compression...')` 经 catfish-lifecycle
+    # tool name 走 SSE hermes.tool.progress channel → Companion 接 + 显 inline.
     try:
         _patch_p19_status_callback_bridge()
     except Exception as e:  # noqa: BLE001
@@ -540,10 +540,10 @@ def _apply_patches() -> None:
             e, exc_info=True,
         )
 
-    # P28 (P3.5.123 6/25 鸿波 catch "微信里 ClawBot 英文不合适"): 真**:
-    # wrap WeixinAdapter.send 真**str.replace 英文 → 中文** (approval / 中断提示 /
-    # /approve 命令说明). 真**: 只 wrap weixin**, slack / matrix 真**保英文**.
-    # 真**鸿波铁律**: 中文 reply 段砍 /approve always (永久免批) 真**:**.
+    # P28 (P3.5.123 6/25 鸿波 catch "微信里 ClawBot 英文不合适"): :
+    # wrap WeixinAdapter.send 真str.replace 英文 → 中文** (approval / 中断提示 /
+    # /approve 命令说明). : 只 wrap weixin, slack / matrix 保英文.
+    # 鸿波铁律: 中文 reply 段砍 /approve always (永久免批) :.
     try:
         _patch_p28_weixin_zh()
     except Exception as e:  # noqa: BLE001
@@ -1425,13 +1425,13 @@ def _patch_p8_p9_cors() -> None:
             except Exception as _e:
                 logger.debug("middleware inject fence check failed: %s", _e)
             _orig_app_init(self, *args, middlewares=tuple(mws_list), **kwargs)
-            # P18 (P3.5.18 6/17 鸿波) — post-init add_post 真**router 未 freeze 前**.
+            # P18 (P3.5.18 6/17 鸿波) — post-init add_post router 未 freeze 前.
             #
-            # 真**问题 (6/17 22:16 鸿波本机 catch)**: 之前 P18 真**wrap connect post**
-            # _orig_connect 真**runner.setup() → app.freeze()** 已跑, add_post 真**too late**
-            # 撞 'Cannot register a resource into frozen router'. 真**真**fix**: 真**Application
-            # 真创建时** add_post (此刻 router 真**未 freeze**, hermes 自己 connect 真**add_post
-            # 真**同时机**). handler 真**runtime call** `adapter._handle_compress_session_stream`
+            # 问题 (6/17 22:16 鸿波本机 catch): 之前 P18 wrap connect post
+            # _orig_connect runner.setup() → app.freeze() 已跑, add_post too late
+            # 撞 'Cannot register a resource into frozen router'. 真fix**: Application
+            # 真创建时 add_post (此刻 router 未 freeze, hermes 自己 connect add_post
+            # 真同时机**). handler runtime call `adapter._handle_compress_session_stream`
             # via P7 stashed `request.app["_catfish_apiserver_adapter"]` (line 1241).
             if is_hermes_app_local:
                 try:
@@ -1557,23 +1557,23 @@ def _patch_p10_apply_client_headers_localhost() -> None:
 
 def _patch_p12_update_system_prompt_safe() -> None:
     """BL-HERMES-SYSTEM-PROMPT-PERSIST-BROKEN (6/4): hermes_state.update_system_prompt
-    silent fail bug 真**`monkey-patch fix`**.
+    silent fail bug `monkey-patch fix`.
 
     Bug: hermes_state.HermesState.update_system_prompt 真 SQL 直接 `UPDATE sessions
-    SET system_prompt = ? WHERE id = ?`, 真**`没 _insert_session_row 保护`**真. 真
+    SET system_prompt = ? WHERE id = ?`, `没 _insert_session_row 保护`真. 真
     concurrent load (cron + kanban + delegate_task) 时, create_session() race condition
-    真**`session row 没真 insert 上`**真 → UPDATE silent affect 0 rows → 下次 read
-    system_prompt 真**`null`** → conversation_loop 真**`'Stored system prompt is null'`**
-    warning + 真**`每 turn rebuild + prefix cache miss (~29K tokens)`**.
+    `session row 没真 insert 上`真 → UPDATE silent affect 0 rows → 下次 read
+    system_prompt `null` → conversation_loop `'Stored system prompt is null'`
+    warning + `每 turn rebuild + prefix cache miss (~29K tokens)`.
 
-    对比同 file `update_token_counts` (line 967-971) 真**已加** INSERT OR IGNORE pre-call
-    保护 — 真**`update_system_prompt 漏改了`**.
+    对比同 file `update_token_counts` (line 967-971) 已加 INSERT OR IGNORE pre-call
+    保护 — `update_system_prompt 漏改了`.
 
-    Fix: wrap 真**`call 前 _insert_session_row(session_id, "unknown")`** 真**`保证 row 存`**真.
-    幂等 — INSERT OR IGNORE 真**`真**`真**`真**`已 在 row 真**`noop`**真.
+    Fix: wrap `call 前 _insert_session_row(session_id, "unknown")` `保证 row 存`真.
+    幂等 — INSERT OR IGNORE `真``真`已 在 row `noop`真.
     """
     try:
-        # 真**`真**`真**`真**`实际 class name 是 SessionDB (audit hermes_state.py:354), 不是 HermesState`**真
+        # `真``真`实际 class name 是 SessionDB (audit hermes_state.py:354), 不是 HermesState`**真
         from hermes_state import SessionDB
     except ImportError as e:
         logger.warning("P12: hermes_state.SessionDB import 失败 (%s), skip patch", e)
@@ -1582,7 +1582,7 @@ def _patch_p12_update_system_prompt_safe() -> None:
     _orig = SessionDB.update_system_prompt
 
     def patched(self, session_id: str, system_prompt: str) -> None:
-        # 真**`保证 session row 存`** — 真**`INSERT OR IGNORE 幂等`**真.
+        # `保证 session row 存` — `INSERT OR IGNORE 幂等`真.
         try:
             self._insert_session_row(session_id, "unknown")
         except Exception as e:  # noqa: BLE001
@@ -1598,13 +1598,13 @@ def _patch_p12_update_system_prompt_safe() -> None:
 def _patch_p13_dump_naming_type_tag() -> None:
     """BL-DUMP-FILE-NAMING-INCONSISTENT (6/4): dump filename 加 caller type tag.
 
-    Bug: agent_runtime_helpers.dump_api_request_debug @ line 1123 真**`生`**
-    `request_dump_{session_id}_{timestamp}.json` — 真**`无 type prefix`**真.
-    audit 时 chat / background-review (curator) / cron 真**`真`** 真**`dump 都`**
-    真**`一起 排序混杂`**, 真**`grep 找员工真 chat dump 真`** 真**`真**`6 小时 audit slow`**真
+    Bug: agent_runtime_helpers.dump_api_request_debug @ line 1123 `生`
+    `request_dump_{session_id}_{timestamp}.json` — `无 type prefix`真.
+    audit 时 chat / background-review (curator) / cron `真` `dump 都`
+    `一起 排序混杂`, `grep 找员工真 chat dump 真` `真`6 小时 audit slow`**真
     (6/4 凌晨 catfish-memory P0 验证 真踩坑).
 
-    Fix: dump filename 真前缀加 type tag, 真**从 threading.current_thread().name 真**`检`**:
+    Fix: dump filename 真前缀加 type tag, 从 threading.current_thread().name 真`检`**:
     - `bg-review` thread → `bg`
     - 默认 (main thread, chat session) → `chat`
 
@@ -1612,7 +1612,7 @@ def _patch_p13_dump_naming_type_tag() -> None:
     e.g. `request_dump_chat_20260604_125823_d77073_20260604_130043.json`
          `request_dump_bg_20260604_125823_d77073_20260604_130100.json`
 
-    audit 时**`ls request_dump_chat_*` 真**`真**`只`** 真**`真**`员工 chat dump`** — 真**`真**`不混真 curator`**真.
+    audit 时**`ls request_dump_chat_*` `真`只`** `真`员工 chat dump`** — `真`不混真 curator`**真.
     """
     try:
         from agent import agent_runtime_helpers
@@ -1635,12 +1635,12 @@ def _patch_p13_dump_naming_type_tag() -> None:
         else:
             type_tag = "chat"  # safe default
 
-        # Call orig — 真**`真**`真**`真**`原 logic 写`** `request_dump_<sid>_<ts>.json`**真
+        # Call orig — `真``真`原 logic 写`** `request_dump_<sid>_<ts>.json`**真
         result = _orig(agent, api_kwargs, reason=reason, error=error)
         if result is None or not isinstance(result, Path):
             return result
 
-        # Rename 真**加 type tag**真**: `request_dump_<sid>_<ts>.json` → `request_dump_<type>_<sid>_<ts>.json`
+        # Rename 加 type tag: `request_dump_<sid>_<ts>.json` → `request_dump_<type>_<sid>_<ts>.json`
         try:
             old_name = result.name
             if old_name.startswith("request_dump_") and f"_{type_tag}_" not in old_name:
@@ -1718,12 +1718,12 @@ def pre_tool_call_safety_check(*args, **kwargs):
 #
 # 背景: hermes execute_code guard (approval.py:1455) 在 gateway/ask context 走
 # notify_cb 等用户决定. Companion 没注册 notify_cb (P22 BL), fallback 走 message
-# field "Asking the user for approval" + 等 user 真**`/approve` 文字命令解除. LLM
+# field "Asking the user for approval" + 等 user `/approve` 文字命令解除. LLM
 # 看到 message 翻译成中文 "请批准", 鸿波打 "批准" — hermes 不识别中文 alias →
 # 不 dispatch 到 _handle_approve_command → 死循环.
 #
-# 本 patch: GatewayRunner._handle_message 真**入口前**预处理 event.text, 中文
-# alias → 改成 /approve / /deny 真 slash command 真**`字面**, 走原 hermes
+# 本 patch: GatewayRunner._handle_message 真入口前**预处理 event.text, 中文
+# alias → 改成 /approve / /deny 真 slash command `字面, 走原 hermes
 # dispatch flow. 不动 hermes approval 逻辑 (松耦合).
 #
 # 别名设计 (鸿波语义习惯, 6/5 拍):
@@ -1755,7 +1755,7 @@ _APPROVE_ALIASES = {
 
 
 def _patch_p14_approve_chinese_alias() -> None:
-    """GatewayRunner._handle_message 真**入口前**预处理 event.text 中文 → slash.
+    """GatewayRunner._handle_message 入口前预处理 event.text 中文 → slash.
 
     只在 session 有 blocking approval 时触发别名 (has_blocking_approval),
     避免误改正常 chat (员工说 "可以" / "好的" 当聊天话不该被吞)真.
@@ -1773,7 +1773,7 @@ def _patch_p14_approve_chinese_alias() -> None:
         try:
             raw = (event.text or "").strip()
             if raw and not raw.startswith("/"):
-                # 拿 session_key — 借用 GatewayRunner 真**`_session_key_for_source`**
+                # 拿 session_key — 借用 GatewayRunner `_session_key_for_source`
                 try:
                     session_key = self._session_key_for_source(event.source)
                 except Exception:
@@ -2069,13 +2069,13 @@ _chat_approval_middleware = None  # noqa: PLW0603
 #
 # > "为什么还是提示, 直接压缩, 压缩过程可以弹窗显示压缩进度"
 #
-# P3.5.17.c banner 真**信息流** (下次发消息时 hermes 自动压缩), 鸿波要的是
+# P3.5.17.c banner 信息流 (下次发消息时 hermes 自动压缩), 鸿波要的是
 # Companion 检测 80%+ ctx 时**主动 trigger hermes 压缩** + **弹窗显进度**
 # (类似 mac 系统更新).
 #
-# # 真**抄什么**
+# # 抄什么
 #
-# hermes 真**全 工具 现成**:
+# hermes 全 工具 现成:
 #   - compress_context(agent, messages, system_message, *, approx_tokens, focus_topic, force)
 #     → ~/.hermes/hermes-agent/agent/conversation_compression.py:271
 #   - SessionDB.{get_session, get_messages, replace_messages}
@@ -2086,11 +2086,11 @@ _chat_approval_middleware = None  # noqa: PLW0603
 #     → ~/.hermes/hermes-agent/agent/model_metadata.py:1887
 #   - AIAgent(model=, ephemeral_system_prompt=, session_id=, status_callback=, session_db=)
 #     → ~/.hermes/hermes-agent/run_agent.py:336 (init)
-#     注意: 真**model= (不是 model_name=)**, 真**ephemeral_system_prompt= (不是
-#     system_prompt=)** — design doc 真**bug**, 6/17 audit catch.
+#     注意: model= (不是 model_name=), ephemeral_system_prompt= (不是
+#     system_prompt=) — design doc bug, 6/17 audit catch.
 #   - status_callback(kind: str, message: str)
 #     → ~/.hermes/hermes-agent/run_agent.py:761 (_emit_status / _emit_warning)
-#     kind 真**"lifecycle" / "warn"**.
+#     kind "lifecycle" / "warn".
 #   - SSE 模板 _handle_session_chat_stream
 #     → ~/.hermes/hermes-agent/gateway/platforms/api_server.py:1679
 
@@ -2105,8 +2105,8 @@ async def _handle_compress_session_stream(self, request):
       - event: compress.completed    data: {before_count, after_count, headline, token_line, note, noop}
       - event: compress.failed       data: {error}
 
-    真**fail-silent on disconnect** — 用户切走 / 弹窗关 真**抛 ConnectionResetError**,
-    真**try/except 兜底** 不阻塞 compress_future. compress_future 真**继续跑完写 db**.
+    fail-silent on disconnect — 用户切走 / 弹窗关 抛 ConnectionResetError,
+    try/except 兜底 不阻塞 compress_future. compress_future 继续跑完写 db.
     """
     import asyncio
     import json
@@ -2133,8 +2133,8 @@ async def _handle_compress_session_stream(self, request):
     await resp.prepare(request)
 
     async def send_event(event: str, data: dict) -> bool:
-        """写 SSE 帧. 真**ConnectionResetError 兜底**返 False (client 断), 调用方真**别再写**.
-        compress_future 真**继续跑** (执行器线程), 写 db 真**完整**.
+        """写 SSE 帧. ConnectionResetError 兜底返 False (client 断), 调用方别再写.
+        compress_future 继续跑 (执行器线程), 写 db 完整.
         """
         try:
             line = f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
@@ -2168,9 +2168,9 @@ async def _handle_compress_session_stream(self, request):
 
         # 2. 估 token + emit started
         from agent.model_metadata import estimate_request_tokens_rough
-        # session_row 真 dict 真**有 model / ephemeral_system_prompt / system_prompt 字段**
-        # 真**老 session 真**model 字段** 真**可能 None** — 真**fallback role_default**
-        # 真**或** "catfish-private-main" (compress 不实际 inference, 只 aux LLM).
+        # session_row 真 dict 有 model / ephemeral_system_prompt / system_prompt 字段
+        # 老 session 真model 字段** 可能 None — fallback role_default
+        # 或 "catfish-private-main" (compress 不实际 inference, 只 aux LLM).
         model_name = (
             session_row.get("model")
             or session_row.get("model_name")
@@ -2190,7 +2190,7 @@ async def _handle_compress_session_stream(self, request):
             "approx_tokens": approx_tokens,
             "model": model_name,
         }):
-            # client 真**已断**: 跑 compress 但不再 emit SSE (写 db 仍 useful).
+            # client 已断: 跑 compress 但不再 emit SSE (写 db 仍 useful).
             pass
 
         # 3. body 解析 (optional focus_topic / force)
@@ -2201,8 +2201,8 @@ async def _handle_compress_session_stream(self, request):
         focus_topic = str(body.get("focus_topic", "") or "").strip() or None
         force = bool(body.get("force", False))
 
-        # 4. 真**临时 AIAgent** 跟 Slack /compress 同款 tmp_agent pattern.
-        # status_callback 真**桥** AIAgent._emit_status / _emit_warning → SSE queue.
+        # 4. 临时 AIAgent 跟 Slack /compress 同款 tmp_agent pattern.
+        # status_callback 桥 AIAgent._emit_status / _emit_warning → SSE queue.
         from run_agent import AIAgent
         from agent.conversation_compression import compress_context
         from agent.manual_compression_feedback import summarize_manual_compression
@@ -2211,21 +2211,21 @@ async def _handle_compress_session_stream(self, request):
         loop = asyncio.get_running_loop()
 
         def status_callback(kind: str, message: str = "") -> None:
-            # 真**executor 线程**调 — run_coroutine_threadsafe 把 event 推 main loop 真 queue.
+            # executor 线程调 — run_coroutine_threadsafe 把 event 推 main loop 真 queue.
             try:
                 asyncio.run_coroutine_threadsafe(
                     status_queue.put((kind, message)), loop,
                 )
             except RuntimeError:
-                # main loop 真**已关** (client 断 + cleanup) — 忽略, compress_future 真**自跑完**.
+                # main loop 已关 (client 断 + cleanup) — 忽略, compress_future 自跑完.
                 pass
 
         tmp_agent = AIAgent(
             session_id=session_id,
-            model=model_name,                          # 真**hermes API 真 model=, 不是 model_name=**
-            ephemeral_system_prompt=system_prompt,     # 真**hermes API 真 ephemeral_system_prompt=**
+            model=model_name,                          # hermes API 真 model=, 不是 model_name=
+            ephemeral_system_prompt=system_prompt,     # hermes API 真 ephemeral_system_prompt=
             status_callback=status_callback,
-            session_db=db,                             # 真**复用 同 SessionDB, compress_context 写回**
+            session_db=db,                             # 复用 同 SessionDB, compress_context 写回
         )
 
         # 5. compress in executor + 并发 drain status_queue 推 SSE
@@ -2240,7 +2240,7 @@ async def _handle_compress_session_stream(self, request):
         )
 
         async def drain_status() -> None:
-            """真**轮询 status_queue 真**0.5 秒**, compress_future 完了真**退出**."""
+            """轮询 status_queue 真0.5 秒**, compress_future 完了退出."""
             while True:
                 try:
                     kind, text = await asyncio.wait_for(
@@ -2265,9 +2265,9 @@ async def _handle_compress_session_stream(self, request):
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
 
-        # 6. compress_context 真**已经写回 SessionDB** (line 271 真**split the session in SQLite**).
-        # 真**无需 再调 db.replace_messages** — 老 /fork pattern 真**create child + replace**,
-        # 但 compress_context 真**直接 in-place rotate** 真 session.
+        # 6. compress_context 已经写回 SessionDB (line 271 split the session in SQLite).
+        # 无需 再调 db.replace_messages — 老 /fork pattern create child + replace,
+        # 但 compress_context 直接 in-place rotate 真 session.
 
         # 7. summary + emit completed
         after_count = len(compressed_messages)
@@ -2279,7 +2279,7 @@ async def _handle_compress_session_stream(self, request):
             after_messages=compressed_messages,
             before_tokens=approx_tokens,
             after_tokens=after_tokens,
-            # 真**注意**: hermes summarize_manual_compression 真**不接 focus_topic 参数**
+            # 注意: hermes summarize_manual_compression 不接 focus_topic 参数
             # (design doc bug 6/17 audit catch).
         )
         await send_event("compress.completed", {
@@ -2454,81 +2454,81 @@ def _patch_p26_cron_rest_endpoints() -> None:
 
 
 def _patch_p18_compress_endpoint() -> None:
-    """P18: 真**注册 POST /api/sessions/{session_id}/compress/stream SSE handler**.
+    """P18: 注册 POST /api/sessions/{session_id}/compress/stream SSE handler.
 
-    真**6/17 22:16 鸿波本机 bug fix**: 之前 P18 wrap connect → _orig_connect 真**runner.setup()
-    后 router 已 freeze** → add_post 撞 'Cannot register a resource into frozen router'.
+    6/17 22:16 鸿波本机 bug fix: 之前 P18 wrap connect → _orig_connect runner.setup()
+    后 router 已 freeze → add_post 撞 'Cannot register a resource into frozen router'.
 
-    真**真**新 path**: route 真**Application.__init__ patch (line 1200+)** 真**post _orig_app_init
-    add_post** (router 真**未 freeze**, 跟 hermes 自己 connect add_post 同时机). 这里只 attach
-    handler method 给 APIServerAdapter class — handler 真**实例 method**, 真**Application.__init__
-    时 已经 attached** (plugin import 时 _apply_patches 真先跑 _patch_p18 真**attach class
-    attribute**, 之后 hermes 真**create APIServerAdapter 实例 + Application 真**触发
-    _patched_app_init** 真**add_post 真 closure handler 真 runtime call adapter method**).
+    真新 path**: route Application.__init__ patch (line 1200+) post _orig_app_init
+    add_post (router 未 freeze, 跟 hermes 自己 connect add_post 同时机). 这里只 attach
+    handler method 给 APIServerAdapter class — handler 实例 method, Application.__init__
+    时 已经 attached (plugin import 时 _apply_patches 真先跑 _patch_p18 attach class
+    attribute, 之后 hermes create APIServerAdapter 实例 + Application 真触发
+    _patched_app_init** add_post 真 closure handler 真 runtime call adapter method).
     """
     from gateway.platforms.api_server import APIServerAdapter
 
     APIServerAdapter._handle_compress_session_stream = _handle_compress_session_stream
     logger.info(
         "P18 APIServerAdapter._handle_compress_session_stream 已挂 ✓ "
-        "(route 由 Application.__init__ patch 真**未 freeze 时**注册)"
+        "(route 由 Application.__init__ patch 未 freeze 时注册)"
     )
 
 
-# ── P19 (P3.5.18 Phase 2, 6/17 鸿波 audit miss revert 后 真**正确路径**) ─
+# ── P19 (P3.5.18 Phase 2, 6/17 鸿波 audit miss revert 后 正确路径) ─
 #
-# # 真**鸿波诉求 verbatim 链** (P3.5.17.c.1 commit + P3.5.18 design doc)
+# # 鸿波诉求 verbatim 链 (P3.5.17.c.1 commit + P3.5.18 design doc)
 #
 # > "自动进行压缩, 提示这个不是觉得奇怪" (P3.5.17.c.1 commit verbatim)
 # > "为什么还是提示, 直接压缩, 压缩过程可以弹窗显示压缩进度" (P3.5.18 design)
 #
-# 真**P3.5.17.b 已修** hermes 自带 ContextCompressor (catfish-gateway auth fallback
-# 让 hermes-cli auxiliary 缺 X-Catfish-User 不再 400 paused). 真**hermes preflight
-# 真**自动 trigger compress_context**, 真**但 真**Companion 0 反馈** — chat 卡 30s
-# 不知道发生啥, 真**鸿波感知 "怎么还没回?"**.
+# P3.5.17.b 已修 hermes 自带 ContextCompressor (catfish-gateway auth fallback
+# 让 hermes-cli auxiliary 缺 X-Catfish-User 不再 400 paused). hermes preflight
+# 真自动 trigger compress_context**, 但 真Companion 0 反馈** — chat 卡 30s
+# 不知道发生啥, 鸿波感知 "怎么还没回?".
 #
-# # 真**真**audit 真因** (6/17 22:50)
+# # 真audit 真因** (6/17 22:50)
 #
-# hermes 真**`_create_agent` (api_server.py:1068) 真**0 status_callback 参数**:
+# hermes `_create_agent` (api_server.py:1068) 真0 status_callback 参数**:
 #   def _create_agent(self, ..., stream_delta_callback, tool_progress_callback,
 #                     tool_start_callback, tool_complete_callback, ...):
 #
-# 真**`_run_agent` (line 3584) 真**call _create_agent 真**也没传 status_callback**.
-# 真**`AIAgent(model=, ..., status_callback=status_callback)` 真**永 None**.
+# `_run_agent` (line 3584) 真call _create_agent 也没传 status_callback.
+# `AIAgent(model=, ..., status_callback=status_callback)` 真永 None**.
 #
-# 真**preflight `agent._emit_status("📦 Preflight compression: ...")` (run_agent.py:761)**
-# → 真**`self._vprint(...)` 真 CLI 显** + 真**`self.status_callback(...)` 真 None skip**.
-# → 真**API server (Companion) 0 收**, telegram/discord/slack 真 wire callback 真 收.
+# preflight `agent._emit_status("📦 Preflight compression: ...")` (run_agent.py:761)
+# → `self._vprint(...)` 真 CLI 显 + `self.status_callback(...)` 真 None skip.
+# → API server (Companion) 0 收, telegram/discord/slack 真 wire callback 真 收.
 #
-# # 真**修法**
+# # 修法
 #
 # P19 wrap `APIServerAdapter._create_agent` post-init:
-#   1. 真**捕获 kwargs.tool_progress_callback** (hermes `_run_agent` 真传)
-#   2. 真**create `catfish_status_callback(kind, message)`** 真**桥 tool_progress_callback**:
+#   1. 捕获 kwargs.tool_progress_callback (hermes `_run_agent` 真传)
+#   2. create `catfish_status_callback(kind, message)` 桥 tool_progress_callback:
 #      tool_progress_callback(
 #          event_type=f"catfish.lifecycle.{kind}",
 #          tool_name="catfish-lifecycle",
 #          preview=message,
 #      )
-#   3. 真**`agent.status_callback = catfish_status_callback`** (instance attr set)
+#   3. `agent.status_callback = catfish_status_callback` (instance attr set)
 #
-# 真**`tool_progress_callback` 真**stream_q.put(("__tool_progress__", payload))**
-# → SSE 真`event: hermes.tool.progress` (api_server.py:2207) 真**Companion 接** 真**显**.
+# `tool_progress_callback` 真stream_q.put(("__tool_progress__", payload))**
+# → SSE 真`event: hermes.tool.progress` (api_server.py:2207) Companion 接 显.
 #
-# 真**Companion 真**配套改 lib/chat.ts**: 真**handle `tool === "catfish-lifecycle"`**
-# → 真**onLifecycle callback** → useChat → ChatPanel inline 显 "📦 Compacting...".
+# Companion 真配套改 lib/chat.ts**: handle `tool === "catfish-lifecycle"`
+# → onLifecycle callback → useChat → ChatPanel inline 显 "📦 Compacting...".
 #
-# # 真**和 P11 model_override 真**叠加 wrap**
+# # 和 P11 model_override 真叠加 wrap**
 #
-# P5/P6/P11 已 wrap `_create_agent` (line 930). P19 真**叠加同样 pattern** —
-# `_orig_create_agent = APIServerAdapter._create_agent` 真**这时拿到 真**P5/P6/P11-wrapped
-# 版本**, 真**call 完后 真**post-init inject status_callback**. 真**不破 P5/P6/P11**.
+# P5/P6/P11 已 wrap `_create_agent` (line 930). P19 叠加同样 pattern —
+# `_orig_create_agent = APIServerAdapter._create_agent` 这时拿到 真P5/P6/P11-wrapped
+# 版本**, call 完后 真post-init inject status_callback**. 不破 P5/P6/P11.
 
 def _patch_p19_status_callback_bridge() -> None:
     """P19: post-init 注入 agent.status_callback 桥 tool_progress_callback.
 
-    真**让 hermes preflight 自动压缩 真**SSE 推 progress 给 Companion**, 真**用户
-    看 chat 真**不再卡 30s 不知道发生啥**.
+    让 hermes preflight 自动压缩 真SSE 推 progress 给 Companion**, 用户
+    看 chat 真不再卡 30s 不知道发生啥**.
     """
     from gateway.platforms.api_server import APIServerAdapter
 
@@ -2536,18 +2536,18 @@ def _patch_p19_status_callback_bridge() -> None:
 
     def patched_create_agent_p19(self, *args, **kwargs):
         agent = _orig_create_agent_p19(self, *args, **kwargs)
-        # 真**捕获 tool_progress_callback** (hermes _run_agent line 3617 真传)
+        # 捕获 tool_progress_callback (hermes _run_agent line 3617 真传)
         tpc = kwargs.get("tool_progress_callback")
         if tpc is None or not callable(tpc):
-            # 真**caller 真**没传 callback** (e.g. non-stream path) — skip wire.
+            # caller 真没传 callback** (e.g. non-stream path) — skip wire.
             return agent
 
         def catfish_status_callback(kind, message=""):  # noqa: ANN001
-            """真**桥** `agent._emit_status(msg)` → SSE hermes.tool.progress.
+            """桥 `agent._emit_status(msg)` → SSE hermes.tool.progress.
 
-            真**kind 真**hermes 真**'lifecycle' / 'warn'** (run_agent.py:777/794).
-            真**Companion 真**tool="catfish-lifecycle" 真**marker** 真**分发 inline
-            进度 UI 真**不污染 tool_calls list**.
+            kind 真hermes 'lifecycle' / 'warn' (run_agent.py:777/794).
+            Companion 真tool="catfish-lifecycle" marker 分发 inline
+            进度 UI 真不污染 tool_calls list**.
             """
             try:
                 tpc(
@@ -3277,7 +3277,7 @@ def _patch_p27_cron_auto_retry() -> None:
 # ── P28 (P3.5.123 6/25 鸿波 catch "微信里 ClawBot 英文不合适"): WeixinAdapter 中文化 ──
 #
 # 真因 (audit gateway/run.py:4269 + 15614-15619):
-#   hermes 真**4 段英文 hardcoded f-string** 经 _status_adapter.send 真**outbound**:
+#   hermes 4 段英文 hardcoded f-string 经 _status_adapter.send outbound:
 #     1. "⚡ Interrupting current task. I'll respond to your message shortly."
 #     2. "⚠️ **Dangerous command requires approval:**"
 #     3. "Reason: execute_code script execution. The script can spawn subprocesses
@@ -3286,20 +3286,20 @@ def _patch_p27_cron_auto_retry() -> None:
 #     4. "Reply `/approve` to execute, `/approve session` to approve this pattern
 #        for the session, `/approve always` to approve permanently, or `/deny` to cancel."
 #
-# 真**鸿波 catch**: 中文微信场景真**英文违和** + 真**员工不懂 `/approve always` 真**反而 绕过铁律**.
+# 鸿波 catch: 中文微信场景英文违和 + 员工不懂 `/approve always` 真反而 绕过铁律**.
 #
-# 真**修法**: wrap WeixinAdapter.send — str.replace 英文 → 中文. 真**只 wrap weixin**,
+# 修法: wrap WeixinAdapter.send — str.replace 英文 → 中文. 只 wrap weixin,
 # slack / matrix / dingtalk 保英文.
 #
-# 真**鸿波铁律加强**: 中文 reply 段砍掉 `/approve always` 入口, 真**:** 真**保留
-# `/批准` (=/approve) + `/批准 本次会话` (=/approve session) + `/拒绝` (=/deny)** 真**3
-# 命令** — `/approve always` 真**:** 真**:** 真**:** 真**hermes 真 dispatch 仍 work**
-# (鸿波本人 mac 命令行可用), 但**微信员工真**看不到这条入口, 真**:** 真**:** 真**: 真**
-# 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:**
+# 鸿波铁律加强: 中文 reply 段砍掉 `/approve always` 入口, : 保留
+# `/批准` (=/approve) + `/批准 本次会话` (=/approve session) + `/拒绝` (=/deny) 3
+# 命令 — `/approve always` : : : hermes 真 dispatch 仍 work
+# (鸿波本人 mac 命令行可用), 但**微信员工看不到这条入口, 真:** : : 真
+# : : : : : : : : : : : : : : :
 #
-# 真**fail-safe**: import 失败 / wrap 失败 → silent skip 老英文路径 (不阻塞 hermes 启动).
+# fail-safe: import 失败 / wrap 失败 → silent skip 老英文路径 (不阻塞 hermes 启动).
 
-# 真**: 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**长 first** — 真**:** 真**:** 真**:** 真**:** 真**:** 真**:**
+# : 真:** : : : : : : 长 first — : : : : : :
 _P28_REPLACEMENTS = [
     # 长真 reason — first 防被短真前缀打断
     (
@@ -3308,14 +3308,14 @@ _P28_REPLACEMENTS = [
         "approval is one-shot for this run.",
         "execute_code 脚本执行 — 可能调子进程 / 改文件, 绕过终端命令审批. 本次审批仅 1 次有效.",
     ),
-    # 真**reply 段 (鸿波铁律: 砍 `/approve always`)
+    # reply 段 (鸿波铁律: 砍 `/approve always`)
     (
         "Reply `/approve` to execute, `/approve session` to approve this pattern "
         "for the session, `/approve always` to approve permanently, or `/deny` to cancel.",
         "回复 `/批准` 执行 (单次), 或 `/批准 本次会话` 本会话内同款命令免审批, 或 `/拒绝` 取消.\n"
         "（安全提示：永久免批已禁用，危险命令必须每次或每会话审批）",
     ),
-    # 真**短真**单句**
+    # 真短单句
     ("⚠️ **Dangerous command requires approval:**", "⚠️ **危险命令需要审批:**"),
     ("⚡ Interrupting current task", "⚡ 中断当前任务"),
     (". I'll respond to your message shortly.", ", 马上回复你."),
@@ -3324,22 +3324,22 @@ _P28_REPLACEMENTS = [
     ("Reason: ", "原因: "),
 ]
 
-# 真**中文别名 → 英文** 真**: 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:**
-# 真**:** 真**:** 真**: 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:**
+# 中文别名 → 英文 : 真:** : : : : : : : : : : : : : : : : : : : : : : : : : : : : : : : : :
+# : : : 真:** : : : : : : : : : : : : : : : : : : : : : : : : : : : :
 _P28_CMD_ALIASES = {
     "/批准": "/approve",
     "/批准 本次会话": "/approve session",
     "/批准本次会话": "/approve session",
     "/拒绝": "/deny",
-    # 真**鸿波铁律**: 砍 `/批准 永久` / `/永久批准` — 真**: 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:**
-    # 真**真**真**真**真**真**真**真**真**真**真**真**真**真**真**真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:**
+    # 鸿波铁律: 砍 `/批准 永久` / `/永久批准` — : 真:** : : : : : : : : : : : : : : : : : :
+    # 真真真真真真真真:** : : : : : : :
 }
 
 
 def _translate_hermes_zh(text):
-    """str.replace 英文 → 中文 — 真**P28 outbound 中文化**真**main entry**真.
+    """str.replace 英文 → 中文 — P28 outbound 中文化main entry真.
 
-    真**0 raise** — 真**: input 异常 → 返原文** (不阻塞 send).
+    0 raise — : input 异常 → 返原文 (不阻塞 send).
     """
     if not text or not isinstance(text, str):
         return text
@@ -3352,11 +3352,11 @@ def _translate_hermes_zh(text):
 
 
 def _patch_p28_weixin_zh() -> None:
-    """wrap WeixinAdapter.send — 真**: 真**:** 真**: 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:**
+    """wrap WeixinAdapter.send — : 真:** : 真:** : : : : : : : : : : :
 
-    真**真**: 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:**
+    真: : : : : : : : : : : : : : : : : : : : : : : : : : : : :
 
-    真**真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:** 真**:**
+    真:** : : : : : : : : : : : : : : : : : : : : : : :
     """
     try:
         from gateway.platforms import weixin as _wx_mod  # noqa: PLC0415
@@ -3387,8 +3387,8 @@ def _patch_p28_weixin_zh() -> None:
     patched_send._p28_patched = True  # type: ignore[attr-defined]
     _WxCls.send = patched_send  # type: ignore[method-assign]
     logger.info(
-        "P28 wrap WeixinAdapter.send 完成 — 真**中文化 hermes 英文 outbound** "
-        "(approval / 中断提示 / /approve 命令说明), 真**鸿波铁律: 砍永久免批入口**"
+        "P28 wrap WeixinAdapter.send 完成 — 中文化 hermes 英文 outbound "
+        "(approval / 中断提示 / /approve 命令说明), 鸿波铁律: 砍永久免批入口"
     )
 
 

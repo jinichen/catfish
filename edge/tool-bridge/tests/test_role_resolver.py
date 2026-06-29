@@ -1,12 +1,12 @@
 """P3.5.29 Phase 5 (6/17 鸿波) — role_resolver 真单测.
 
-真**mock httpx**, 测:
+mock httpx, 测:
 - gateway 返 valid roles → resolve 真 hit cache + 返新值
 - gateway 返 503 → fail-silent 返 None
 - gateway timeout → fail-silent 返 None
 - gateway 返 garbage JSON → 返 None
-- 5 分钟 cache TTL 内 真**0 次 HTTP 调用**
-- cache stale (gateway 后挂) → 真**用 stale cache**, 不返 None
+- 5 分钟 cache TTL 内 0 次 HTTP 调用
+- cache stale (gateway 后挂) → 用 stale cache, 不返 None
 - chat_default 没在 yaml → resolve 返 None
 """
 from __future__ import annotations
@@ -50,7 +50,7 @@ def _mk_client(resp_or_exception):
 
 
 def test_resolve_returns_model_from_gateway():
-    """gateway 返 valid roles → resolve 真**真值**."""
+    """gateway 返 valid roles → resolve 真值."""
     from catfish_tool_bridge import role_resolver
 
     cm, _ = _mk_client(_mk_resp(200, {
@@ -67,7 +67,7 @@ def test_resolve_returns_model_from_gateway():
 def test_resolve_unknown_role_returns_none():
     """gateway 真返 roles, 但 caller 真问 unknown role → None.
 
-    (catfish-gateway roles.yaml 真**没 fictional_role**, resolve 真返 None.)
+    (catfish-gateway roles.yaml 没 fictional_role, resolve 真返 None.)
     """
     from catfish_tool_bridge import role_resolver
 
@@ -123,7 +123,7 @@ def test_resolve_non_dict_roles_returns_none():
 
 
 def test_cache_hit_no_second_http_call():
-    """5 分钟 TTL 内 真**只 1 次** HTTP call."""
+    """5 分钟 TTL 内 只 1 次 HTTP call."""
     from catfish_tool_bridge import role_resolver
 
     cm, client_instance = _mk_client(_mk_resp(200, {
@@ -133,38 +133,38 @@ def test_cache_hit_no_second_http_call():
         role_resolver.resolve("chat_default")
         role_resolver.resolve("chat_default")
         role_resolver.resolve("rate_fast")
-        # 真**3 次 resolve, 真**1 次 HTTP**
+        # 3 次 resolve, 真1 次 HTTP**
         assert client_instance.get.call_count == 1
 
 
 def test_stale_cache_fallback_when_gateway_dies():
-    """真**首次 fetch 成功** → cache. 然后 gateway 挂, TTL 过, 真**返 stale**.
+    """首次 fetch 成功 → cache. 然后 gateway 挂, TTL 过, 返 stale.
 
-    真**保护 background task** 真**gateway 短暂挂时不死**.
+    保护 background task gateway 短暂挂时不死.
     """
     import httpx
 
     from catfish_tool_bridge import role_resolver
 
-    # 真**首次** — gateway 返 valid
+    # 首次 — gateway 返 valid
     cm_ok, _ = _mk_client(_mk_resp(200, {
         "roles": {"chat_default": "catfish-private-main"}
     }))
     with patch("httpx.Client", return_value=cm_ok):
         assert role_resolver.resolve("chat_default") == "catfish-private-main"
 
-    # 真**手动**老化 cache 真**强制过 TTL**
+    # 手动老化 cache 强制过 TTL
     role_resolver._cache_fetched_at = 0.0
 
-    # 真**gateway 挂** — fetch 真返 None, 但 cache 还有
+    # gateway 挂 — fetch 真返 None, 但 cache 还有
     cm_dead, _ = _mk_client(httpx.ConnectError("gateway 挂"))
     with patch("httpx.Client", return_value=cm_dead):
-        # 真**stale fallback** — 返**老 cache 值**
+        # stale fallback — 返**老 cache 值**
         assert role_resolver.resolve("chat_default") == "catfish-private-main"
 
 
 def test_resolve_returns_none_when_no_cache_and_gateway_dead():
-    """真**首次** gateway 就挂 + cache 真**空** → 返 None (caller 走 hardcoded fallback)."""
+    """首次 gateway 就挂 + cache 空 → 返 None (caller 走 hardcoded fallback)."""
     import httpx
 
     from catfish_tool_bridge import role_resolver
@@ -174,13 +174,13 @@ def test_resolve_returns_none_when_no_cache_and_gateway_dead():
         assert role_resolver.resolve("chat_default") is None
 
 
-# ─── 真**端到端 fallback** chain caller 用法 ───────────
+# ─── 端到端 fallback chain caller 用法 ───────────
 
 
 def test_caller_chain_pattern():
-    """真**caller 标准 pattern**: ``resolve(role) or "hardcoded_default"``.
+    """caller 标准 pattern: ``resolve(role) or "hardcoded_default"``.
 
-    真**catfish_tools.py / install_and_ops.py 真用法** 真 verify.
+    catfish_tools.py / install_and_ops.py 真用法 真 verify.
     """
     from catfish_tool_bridge import role_resolver
 

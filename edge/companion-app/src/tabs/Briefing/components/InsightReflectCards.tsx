@@ -1,6 +1,6 @@
 /** P3.5.32 Phase 10 (6/18 鸿波 OpenWiki 借鉴) — 3 维 self-aware reflection cards.
  *
- * # 真**鸿波诉求 + audit reasoning**
+ * # 鸿波诉求 + audit reasoning
  *
  * OpenWiki Insight Reports 7 dim: At a Glance + Subconscious + Graveyard + Blind Spots
  * + Hot Topics + Heatmap + Action Items.
@@ -11,19 +11,19 @@
  *   - Hot Topics (recent_session_briefs)
  *   - Events Heatmap (EventsDetail 7 天日历)
  *
- * 缺 3 维 真**self-aware reflection 真**周维度** — 真**本文件 ship**.
+ * 缺 3 维 self-aware reflection 真周维度** — 本文件 ship.
  *
- * # 真**3 个 cards**
+ * # 3 个 cards
  *
- *   - **SubconsciousCard** (无意识高频): 问真**多** 但 没 deep-dive. 点 reflectPrompt → chat
- *   - **GraveyardCard** (墓地): 装但 0 回顾. 真**纯诊断**, 0 reflectPrompt (让员工主动决定)
+ *   - **SubconsciousCard** (无意识高频): 问多 但 没 deep-dive. 点 reflectPrompt → chat
+ *   - **GraveyardCard** (墓地): 装但 0 回顾. 纯诊断, 0 reflectPrompt (让员工主动决定)
  *   - **BlindSpotsCard** (盲点): 标重要但 0 action. 点 reflectPrompt → chat
  *
- * # 真**UI 模式**
+ * # UI 模式
  *
- * 跟 HandledSilently 同款 `<details>` 折叠. 真**0 item 时 早返**.
+ * 跟 HandledSilently 同款 `<details>` 折叠. 0 item 时 早返.
  *
- * Card 0 item 时 component 返 null → BriefingTwoColumnView 真**0 渲染空 card**.
+ * Card 0 item 时 component 返 null → BriefingTwoColumnView 0 渲染空 card.
  */
 
 import type {
@@ -57,7 +57,7 @@ export function SubconsciousCard({ items, onReflect }: SubconsciousProps) {
           color: "var(--catfish-text)",
         }}
       >
-        🌊 反复出现 ({items.length}) — 多次咨询但没深入**
+        🌊 反复出现 ({items.length}) — 多次咨询但没深入
       </summary>
       <div style={{ padding: "4px 12px 12px", paddingLeft: 16 }}>
         {items.map((item, i) => (

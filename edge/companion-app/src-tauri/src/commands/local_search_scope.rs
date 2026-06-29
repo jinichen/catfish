@@ -2,8 +2,8 @@
 //! local_search 索引目录管理 — 仿 style_fingerprint_dirs.rs 套路.
 //!
 //! 写到 ~/.catfish/search-scope.yaml (跟 catfish-local-search/src/catfish_search/config.py
-//! line 10 的 CONFIG_FILE 路径对齐). 真**不同 yaml file 跟 companion.yaml**, 因为:
-//!   - search-scope.yaml 真**python 端 load_config 真**读真**唯一来源**
+//! line 10 的 CONFIG_FILE 路径对齐). 不同 yaml file 跟 companion.yaml, 因为:
+//!   - search-scope.yaml python 端 load_config 真读唯一来源
 //!   - companion.yaml 是 Companion 自己用的 (style_fingerprint.scan_dirs 等)
 //!
 //! 命令:

@@ -1,13 +1,13 @@
-"""P3.5.29 (6/17 鸿波) — roles 抽象层真**单元测试**.
+"""P3.5.29 (6/17 鸿波) — roles 抽象层单元测试.
 
 测试覆盖:
-1. load + resolve 真**正常路径**
-2. fallback_chain 真**递归 resolve role refs**
-3. fallback_chain 真**循环 ref** raise CircularRoleError
-4. UnknownRoleError 真**未定义 role**
-5. rbac_default_allowed 真**展开 + 去重**
-6. to_public_dict 真**完整 payload**
-7. reload 真**重新加载**
+1. load + resolve 正常路径
+2. fallback_chain 递归 resolve role refs
+3. fallback_chain 循环 ref raise CircularRoleError
+4. UnknownRoleError 未定义 role
+5. rbac_default_allowed 展开 + 去重
+6. to_public_dict 完整 payload
+7. reload 重新加载
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from catfish_gateway import roles as roles_module
 
 @pytest.fixture(autouse=True)
 def reset_module_state():
-    """每个 test 前真**重置**模块状态."""
+    """每个 test 前重置模块状态."""
     roles_module._roles = None
     roles_module._fallback_chain = None
     roles_module._rbac_default_allowed = None
@@ -78,7 +78,7 @@ def test_resolve_without_load_raises():
         roles_module.resolve("chat_default")
 
 
-# ─── fallback_chain 真**递归 + 循环检测** ──────────────────────
+# ─── fallback_chain 递归 + 循环检测 ──────────────────────
 
 
 def test_fallback_chain_resolves_role_refs():
@@ -98,7 +98,7 @@ fallback_chain:
 
 
 def test_fallback_chain_allows_direct_model_name():
-    """fallback_chain 真**直接写 model name** (不是 role ref) 兼容."""
+    """fallback_chain 直接写 model name (不是 role ref) 兼容."""
     path = _write_yaml(
         """
 roles:
@@ -114,7 +114,7 @@ fallback_chain:
 
 
 def test_fallback_chain_circular_raises():
-    """A → A 真**自循环** raise."""
+    """A → A 自循环 raise."""
     path = _write_yaml(
         """
 roles:
@@ -128,7 +128,7 @@ fallback_chain:
         roles_module.resolve_fallback_chain()
 
 
-# ─── RBAC 真**展开 + 去重** ─────────────────────────────────────
+# ─── RBAC 展开 + 去重 ─────────────────────────────────────
 
 
 def test_rbac_default_allowed():
@@ -172,7 +172,7 @@ rbac_default_allowed:
 
 
 def test_rbac_dedup_keeps_order():
-    """RBAC 真**list 含重复 role ref** → 去重保序."""
+    """RBAC list 含重复 role ref → 去重保序."""
     path = _write_yaml(
         """
 roles:
@@ -186,7 +186,7 @@ rbac_default_allowed:
 """
     )
     roles_module.load_roles(path)
-    # 真**去重保序** — 第一次出现保留
+    # 去重保序 — 第一次出现保留
     assert roles_module.list_models_for_rbac("employee") == ["catfish-private-main"]
 
 
@@ -219,7 +219,7 @@ rbac_default_allowed:
     assert payload["loaded_from"] == str(path)
 
 
-# ─── schema 真**错** 真**raise** ────────────────────────────────
+# ─── schema 错 raise ────────────────────────────────
 
 
 def test_load_missing_roles_section_raises():
@@ -239,7 +239,7 @@ def test_load_roles_not_dict_raises():
         roles_module.load_roles(path)
 
 
-# ─── reload 真**重新加载** ──────────────────────────────────────
+# ─── reload 重新加载 ──────────────────────────────────────
 
 
 def test_reload_swaps_mapping():
@@ -247,25 +247,25 @@ def test_reload_swaps_mapping():
     roles_module.load_roles(path)
     assert roles_module.resolve("chat_default") == "model_v1"
 
-    # 真**改 yaml + reload**
+    # 改 yaml + reload
     path.write_text("roles:\n  chat_default: model_v2\n", encoding="utf-8")
     roles_module.reload_roles(path)
     assert roles_module.resolve("chat_default") == "model_v2"
 
 
-# ─── 真**production roles.yaml 加载** smoke 测试 ────────────────
+# ─── production roles.yaml 加载 smoke 测试 ────────────────
 
 
 def test_production_roles_yaml_loads():
-    """真**仓库** config/roles.yaml 真**能加载** + 真**resolve 真**预期 role."""
+    """仓库 config/roles.yaml 能加载 + resolve 真预期 role."""
     # 默认 path
     roles_module.load_roles()
-    # 真**核心 role 都应该存在**
+    # 核心 role 都应该存在
     assert roles_module.resolve(roles_module.Role.CHAT_DEFAULT)
     assert roles_module.resolve(roles_module.Role.RATE_FAST)
     assert roles_module.resolve(roles_module.Role.VISION)
     assert roles_module.resolve(roles_module.Role.EMBEDDING)
-    # fallback_chain 真**resolve 不 raise** (没循环)
+    # fallback_chain resolve 不 raise (没循环)
     chain = roles_module.resolve_fallback_chain()
     assert len(chain) > 0
     # rbac employee 真有
@@ -276,14 +276,14 @@ def test_production_roles_yaml_loads():
 
 
 def test_rbac_stale_role_ref_raises_at_load():
-    """真**rbac_default_allowed** 真**引用 yaml 真**未定义 role** → load_roles raise.
+    """rbac_default_allowed 引用 yaml 真未定义 role** → load_roles raise.
 
-    真**production 红线**: 客户改 roles.yaml `chat_default: customer-x-main`
-    真**忘改** rbac `manager: [OLD_RENAMED_ROLE, vision]` 真**OLD_RENAMED_ROLE
-    真**stale** → 真**alembic migration 真**展开** 真**stale name 真**写 db**, RBAC
-    真**永远 stale**.
+    production 红线: 客户改 roles.yaml `chat_default: customer-x-main`
+    忘改 rbac `manager: [OLD_RENAMED_ROLE, vision]` OLD_RENAMED_ROLE
+    真stale** → alembic migration 真展开** stale name 真写 db**, RBAC
+    永远 stale.
 
-    真**load 时 hard fail** 真**好过 silent 部署 bug**.
+    load 时 hard fail 好过 silent 部署 bug.
     """
     path = _write_yaml(
         """
@@ -304,7 +304,7 @@ rbac_default_allowed:
 
 
 def test_rbac_multiple_stale_roles_listed_all():
-    """真**多 stale** 真**一次 raise 真**列全**, 真**真**客户 真**一次改完**."""
+    """多 stale 一次 raise 真列全**, 真客户 一次改完."""
     path = _write_yaml(
         """
 roles:
@@ -325,7 +325,7 @@ rbac_default_allowed:
 
 
 def test_rbac_all_valid_no_raise():
-    """真**rbac 真**全 valid** 真**load 真 OK** (真**P3.5.29 Phase 7 真**真**不破老 happy path**)."""
+    """rbac 真全 valid** load 真 OK (P3.5.29 Phase 7 真不破老 happy path)."""
     path = _write_yaml(
         """
 roles:
@@ -347,7 +347,7 @@ rbac_default_allowed:
 
 
 def test_no_rbac_section_loads_ok():
-    """真**rbac_default_allowed 真**完全缺** 真**OK** — 真**rbac 段可选** (P3.5.29 Phase 1)."""
+    """rbac_default_allowed 真完全缺** OK — rbac 段可选 (P3.5.29 Phase 1)."""
     path = _write_yaml(
         """
 roles:
@@ -355,5 +355,5 @@ roles:
 """
     )
     roles_module.load_roles(path)
-    # 真**有 role 但 0 rbac**
+    # 有 role 但 0 rbac
     assert roles_module.resolve("chat_default") == "main"

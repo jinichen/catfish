@@ -66,8 +66,8 @@ export function AuditPage() {
         {loading && !audit && <div>加载中…</div>}
         {audit && (
           <>
-            {/* P3.5.26.2 (6/17): revert sticky 头部. NavBar 真**单独 sticky** (新),
-                audit 内容真**正常 scroll**. KPI / tables / PageHeader 都跟整页一起
+            {/* P3.5.26.2 (6/17): revert sticky 头部. NavBar 单独 sticky (新),
+                audit 内容正常 scroll. KPI / tables / PageHeader 都跟整页一起
                 滚, NavBar 永远 top. 简单, 无 sticky 头部跟 KPI 卡层叠/抖动问题. */}
 
             {/* ── 标题区 + 工具栏 (BL-AUDIT-UX-P1: 时间窗切换 + CSV 导出) ── */}

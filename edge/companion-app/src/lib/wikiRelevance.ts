@@ -2,19 +2,19 @@
  *
  * 借鉴 llm_wiki + 学术 community-detection 算法:
  *   - direct link (×3): A.related 含 [[B]] (1-hop 直接引用)
- *   - source overlap (×4): Jaccard(A.sources, B.sources) — 真**共 source 真信号强**
- *   - Adamic-Adar (×1.5): 共同邻居 weighted (1/log(degree)) — 真**低度共邻 真**信号更强**
+ *   - source overlap (×4): Jaccard(A.sources, B.sources) — 共 source 信号强
+ *   - Adamic-Adar (×1.5): 共同邻居 weighted (1/log(degree)) — 低度共邻信号更强
  *   - type affinity (×1): 同 kind / subtype bonus
  *
  * 用真 WikiPreview 底部 📊 相关推荐 section — 类 Obsidian backlinks panel,
- * 但 weighted ranking 真**top-K 排序**, 比 frontmatter related 真**更智能**.
+ * 但 weighted ranking top-K 排序, 比 frontmatter related 更智能.
  *
  * Pure JS — 不依赖 graphology metrics (它 没**真 built-in Adamic-Adar**).
  */
 
 import type { WikiFileInfo } from "./tauri";
 
-/** 真**build name → file** lookup. name 真**真 title / slug / lowercase 匹配**. */
+/** build name → file lookup. name 真 title / slug / lowercase 匹配. */
 function findFileByName(name: string, files: WikiFileInfo[]): WikiFileInfo | null {
   const lower = name.toLowerCase().trim();
   return (
@@ -25,7 +25,7 @@ function findFileByName(name: string, files: WikiFileInfo[]): WikiFileInfo | nul
   );
 }
 
-/** 真**build neighbor map**: rel_path → Set<neighbor rel_path>. undirected. */
+/** build neighbor map: rel_path → Set<neighbor rel_path>. undirected. */
 export function buildNeighborMap(files: WikiFileInfo[]): Map<string, Set<string>> {
   const m = new Map<string, Set<string>>();
   for (const f of files) {
@@ -43,7 +43,7 @@ export function buildNeighborMap(files: WikiFileInfo[]): Map<string, Set<string>
   return m;
 }
 
-/** 真**Jaccard |a ∩ b| / |a ∪ b|. 真**空返 0**. */
+/** Jaccard |a ∩ b| / |a ∪ b|. 真空返 0**. */
 function jaccard(a: Set<string>, b: Set<string>): number {
   if (a.size === 0 || b.size === 0) return 0;
   let inter = 0;
@@ -60,7 +60,7 @@ export interface RelevanceBreakdown {
   typeAffinity: number;
 }
 
-/** 真**4 信号 weighted relevance score** A → B (undirected). */
+/** 4 信号 weighted relevance score A → B (undirected). */
 export function computeRelevance(
   a: WikiFileInfo,
   b: WikiFileInfo,
@@ -87,7 +87,7 @@ export function computeRelevance(
   const bSrc = new Set(b.sources);
   const sourceOverlap = jaccard(aSrc, bSrc) * 4.0;
 
-  // 3. Adamic-Adar (×1.5): Σ 1/log(degree(common_neighbor)) over 真**真**共邻
+  // 3. Adamic-Adar (×1.5): Σ 1/log(degree(common_neighbor)) over 真共邻
   let adamicAdar = 0;
   const nbMap = neighborMap || buildNeighborMap(files);
   const aNeighbors = nbMap.get(a.rel_path) || new Set();
@@ -99,7 +99,7 @@ export function computeRelevance(
       if (deg >= 2) {
         adamicAdar += 1 / Math.log(deg);
       } else {
-        adamicAdar += 1; // degree 1 真**真**罕见**真**`hub-like`** count as 1
+        adamicAdar += 1; // degree 1 真罕见**`hub-like` count as 1
       }
     }
   }
@@ -115,7 +115,7 @@ export function computeRelevance(
   return { total, direct, sourceOverlap, adamicAdar, typeAffinity };
 }
 
-/** 真**取 top-K 相关 真 file**. exclude self. */
+/** 取 top-K 相关 真 file. exclude self. */
 export function topKRelated(
   target: WikiFileInfo,
   files: WikiFileInfo[],

@@ -1,12 +1,12 @@
-/** BL-CATFISH-WIKI-MODE P3.3 (6/4) — Wiki tab 真**3 列 layout 架子**.
+/** BL-CATFISH-WIKI-MODE P3.3 (6/4) — Wiki tab 3 列 layout 架子.
  *
  * 左 (320px): tree (entities / concepts / queries 3 group + 搜索 + filter)
  * 中 (flex 1): preview (Markdown render, wikilink clickable)
- * 右 (480px): graph (sigma + graphology, 真**Obsidian graph view 类**)
+ * 右 (480px): graph (sigma + graphology, Obsidian graph view 类)
  *
- * P3.3.1 ship 架子, P3.3.2-11 真**填**真**真**真**3 列真**真**真**.
+ * P3.3.1 ship 架子, P3.3.2-11 填 3 列.
  *
- * 数据流: WikiStore (zustand) — selectedFile / files (从 wiki_list_files 真**load) /
+ * 数据流: WikiStore (zustand) — selectedFile / files (从 wiki_list_files load) /
  *         filter (搜索 / tag / type) / graph (build from wikilink edges)
  */
 

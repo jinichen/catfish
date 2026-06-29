@@ -35,10 +35,10 @@ interface FullMessage extends EmailDigestItem {
   recipients?: string[];
   cc?: string[];
   attachments?: Array<{ filename: string; size_bytes: number; content_type: string }>;
-  /** P3.5.31 (6/17 鸿波 catch): rust email_read_message 返 JSON 真**已含 body_html**
-   *  (catfish-email Python adapter 真**MIME extract HTML part 填**, base.py:114).
-   *  老 type 真**0 declare** → DetailPane 真**只 access body_text** (strip 后 plain) →
-   *  和 Apple Mail rendered HTML 真**不一致**. 加 field 让 DetailPane 走 iframe render.
+  /** P3.5.31 (6/17 鸿波 catch): rust email_read_message 返 JSON 已含 body_html
+   *  (catfish-email Python adapter MIME extract HTML part 填, base.py:114).
+   *  老 type 0 declare → DetailPane 只 access body_text (strip 后 plain) →
+   *  和 Apple Mail rendered HTML 不一致. 加 field 让 DetailPane 走 iframe render.
    *  read 场景填; list 场景空字符串 (节省 IPC, base.py:115 注释).
    */
   body_html?: string;
@@ -1039,7 +1039,7 @@ function DetailPane({
           }}
         />
       ) : (
-        /* 正文 (非 compose 时, body_html 空 真**fallback plain text**)
+        /* 正文 (非 compose 时, body_html 空 fallback plain text)
            触发场景: 纯文本邮件 (CTFF 通知 / 系统通知) — body_html 空, body_text 唯一来源 */
         <div
           style={{

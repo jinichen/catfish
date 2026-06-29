@@ -47,28 +47,28 @@ interface ChatState {
   /** 选中的模型 id */
   model: string;
   /** P3.5.18 Phase 2 (6/17 鸿波"自动进行压缩, 提示这个不是觉得奇怪"): hermes preflight
-   * 自动压缩时 真**inline status text** 真**streaming 期间显**, stream done 后清 null.
-   * plugin P19 真**桥** agent.status_callback → SSE `hermes.tool.progress` (tool="catfish-lifecycle").
-   * lib/chat.ts 真**handle** → onLifecycle("running" | "completed", text). useChat 真**setLifecycleStatus**.
-   * null = 真**当前没**lifecycle 真**inline 不显**. 字符串 = 真**显** (e.g. "📦 Preflight compression: ...").
+   * 自动压缩时 inline status text streaming 期间显, stream done 后清 null.
+   * plugin P19 桥 agent.status_callback → SSE `hermes.tool.progress` (tool="catfish-lifecycle").
+   * lib/chat.ts handle → onLifecycle("running" | "completed", text). useChat setLifecycleStatus.
+   * null = 当前没lifecycle inline 不显. 字符串 = 显 (e.g. "📦 Preflight compression: ...").
    */
   lifecycleStatus: string | null;
 
-  /** P3.5.29 Phase 6.3 (6/17 鸿波): 真**modelPickedByUser flag** 真**修 picker 不
-   * 联动 yaml chat_default bug**.
+  /** P3.5.29 Phase 6.3 (6/17 鸿波): modelPickedByUser flag 修 picker 不
+   * 联动 yaml chat_default bug.
    *
-   * 真**问题**: 5/28 disable 真**render-time setModel(initialModel) 副作用** (修
-   * picker UI 反 bug) 后, 真**catalog.default 改了 picker 不跟走**. 鸿波诉求
-   * "改 yaml 全代码跟着走" → picker 真**也该联动**, 真**但**只在用户没主动选
-   * 时**联动 (保留 5/28 fix 真**核心**: 用户 picker 选啥**永不被覆盖**).
+   * 问题: 5/28 disable render-time setModel(initialModel) 副作用 (修
+   * picker UI 反 bug) 后, catalog.default 改了 picker 不跟走. 鸿波诉求
+   * "改 yaml 全代码跟着走" → picker 也该联动, 但只在用户没主动选
+   * 时**联动 (保留 5/28 fix 核心: 用户 picker 选啥**永不被覆盖**).
    *
-   * 真**生命周期**:
-   *   - 启动: false (zustand init). chat.ts:115 model hardcode 真**fallback 兜底**.
-   *   - ChatTab mount useEffect 真**catalog.default 真**fetch** 后**: 真**触发**
-   *     setModelStoreInternal(catalog.default, **false**) → 真**继续 false**.
-   *   - 用户主动 picker: ChatModelPicker onChange → setModel(m, **true**, 真**默认**).
-   *     → 真**modelPickedByUser = true**, 真**effect 真**`!modelPickedByUser` 跳过**.
-   *   - reset() (+新对话): 真**清 false**, 真**下个 effect tick 真**catalog 真接管**.
+   * 生命周期:
+   *   - 启动: false (zustand init). chat.ts:115 model hardcode fallback 兜底.
+   *   - ChatTab mount useEffect catalog.default 真fetch** 后**: 触发
+   *     setModelStoreInternal(catalog.default, **false**) → 继续 false.
+   *   - 用户主动 picker: ChatModelPicker onChange → setModel(m, **true**, 默认).
+   *     → modelPickedByUser = true, effect 真`!modelPickedByUser` 跳过**.
+   *   - reset() (+新对话): 清 false, 下个 effect tick 真catalog 真接管**.
    */
   modelPickedByUser: boolean;
   /** 写入 ~/.hermes/state.db 的 session id (Plan C Week 2 持久化)
@@ -101,9 +101,9 @@ interface ChatState {
   setStreamingId: (id: string | null) => void;
   /** P3.5.18 Phase 2 (6/17 鸿波): inline lifecycle status (压缩进度). */
   setLifecycleStatus: (s: string | null) => void;
-  /** P3.5.29 Phase 6.3 (6/17 鸿波): pickedByUser **默认 true** — 老 caller 真**全
-   * 用户 picker path 真**0 改**. 真**internal** call (ChatTab catalog effect) 显式
-   * 传 false 真**signal "yaml 自动 propagate, 不是用户选"**.
+  /** P3.5.29 Phase 6.3 (6/17 鸿波): pickedByUser **默认 true** — 老 caller 全
+   * 用户 picker path 0 改. internal call (ChatTab catalog effect) 显式
+   * 传 false signal "yaml 自动 propagate, 不是用户选".
    */
   setModel: (m: string, pickedByUser?: boolean) => void;
   setPersistedSessionId: (id: string | null) => void;
@@ -153,10 +153,10 @@ export const useChatStore = create<ChatState>((set) => ({
   // 或 App.tsx 启动 useEffect (Phase 4) 拿 picker_config::current_model() 注入.
   // 渲染期间 model="" 的窗口 ChatTab 展示 loading skeleton, 不进 useChat 发消息.
   model: "",
-  // P3.5.18 Phase 2 (6/17 鸿波): hermes preflight 自动压缩 真**inline 状态文本**.
+  // P3.5.18 Phase 2 (6/17 鸿波): hermes preflight 自动压缩 inline 状态文本.
   lifecycleStatus: null,
-  // P3.5.29 Phase 6.3 (6/17 鸿波): 真**modelPickedByUser flag** 真**修联动 bug**.
-  // 初始 false — ChatTab mount useEffect 真**catalog.default 真**catfish 真**propagate**.
+  // P3.5.29 Phase 6.3 (6/17 鸿波): modelPickedByUser flag 修联动 bug.
+  // 初始 false — ChatTab mount useEffect catalog.default 真catfish propagate.
   modelPickedByUser: false,
   persistedSessionId: null,
   prevSentModel: null,
@@ -195,14 +195,14 @@ export const useChatStore = create<ChatState>((set) => ({
   setLifecycleStatus: (s) => set({ lifecycleStatus: s }),
   setModel: (model, pickedByUser = true) => {
     // P3.5.29 Phase 6.3 (6/17 鸿波): pickedByUser **默认 true** — 老 caller (chat
-    // picker onChange / visionSwitch) 真**全用户主动 path 真**0 改**, 真**signal
-    // "用户主动 select → 锁定 picker, 不被 catalog.default 覆盖"**.
-    // internal call (ChatTab catalog effect) 真**显式传 false** 真**signal "yaml
-    // 自动 propagate"**, 真**允许后续 yaml 改时 picker 真**继续跟走**.
+    // picker onChange / visionSwitch) 全用户主动 path 真0 改**, signal
+    // "用户主动 select → 锁定 picker, 不被 catalog.default 覆盖".
+    // internal call (ChatTab catalog effect) 显式传 false signal "yaml
+    // 自动 propagate", 允许后续 yaml 改时 picker 真继续跟走**.
     set({ model, modelPickedByUser: pickedByUser });
-    // P3.5.28 (6/17 鸿波"picker 联动现在就应该做"): 真**桥**给 Rust background task
+    // P3.5.28 (6/17 鸿波"picker 联动现在就应该做"): 桥给 Rust background task
     // (email_scheduler / phishing_scan). 写文件 ~/.catfish/picker_model 让 background
-    // task 真 tick 时读. 员工 chat picker 切换真**下次 tick 生效**.
+    // task 真 tick 时读. 员工 chat picker 切换下次 tick 生效.
     //
     // Fire-and-forget — 不 throw, 不阻塞 picker UI. 失败仅 console.warn.
     invoke("set_picker_model", { name: model }).catch((e: unknown) => {

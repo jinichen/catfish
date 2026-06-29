@@ -76,7 +76,7 @@ function buildServices(agentName: string): ServiceRow[] {
       why: "中央服务 (你 mac 上是过渡, 未来云端). 挂了联系 IT, 没起来 = 聊天用不了",
     },
     // P3.5.125 (6/26 鸿波 catch "hermes 没监控"): hermes API server (8642),
-    // 真**: 真**:** chat / 早安 / cron / wechat 真**都依赖**. hang 时连续 3 次
+    // : 真:** chat / 早安 / cron / wechat 都依赖. hang 时连续 3 次
     // /healthz 失败 → 自动 kill -9 触发 launchd 拉.
     {
       id: "hermes",

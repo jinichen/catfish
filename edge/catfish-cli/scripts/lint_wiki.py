@@ -2,18 +2,18 @@
 """BL-CATFISH-WIKI-MODE P2.2 — Structural lint for ~/.catfish/wiki/.
 
 Scan all *.md, 报 3 类问题:
-- broken-link: frontmatter related 或 body 真**[[wikilink]] target file 不存在**
+- broken-link: frontmatter related 或 body [[wikilink]] target file 不存在
 - orphan: concept 无 inbound link (没 entity/concept reference 它)
-- no-outlinks: file 无 outbound link (dead-end, entity 真**OK 但**真**`WARN`)
+- no-outlinks: file 无 outbound link (dead-end, entity OK 但`WARN`)
 
 0 LLM 调用. 纯 Python regex + file scan. 每周跑 (catfish-cli `catfish lint`):
 
-  catfish lint              # 真**`扫 + 报`** (read-only)
-  catfish lint --json       # JSON output 真**`pipe 到 dashboard / ci`**
+  catfish lint              # 真`扫 + 报`** (read-only)
+  catfish lint --json       # JSON output `pipe 到 dashboard / ci`
 
 exit code:
-  0 = 真**`真**`broken + orphan = 0`** (干净)
-  1 = 真**`真**`broken 或 orphan > 0`** (需修)
+  0 = `真`broken + orphan = 0`** (干净)
+  1 = `真`broken 或 orphan > 0`** (需修)
 """
 
 import argparse
@@ -66,7 +66,7 @@ def scan_files() -> dict[str, dict]:
             files[rel_path] = {
                 "title": title,
                 "slug": f.stem,
-                "kind": _KIND_MAP[sub],  # entities→entity (rstrip('s') 真**真 char-strip 真 bug**)
+                "kind": _KIND_MAP[sub],  # entities→entity (rstrip('s') 真 char-strip 真 bug)
                 "related": related,
                 "body_links": body_links,
                 "all_outbound": list(set(related + body_links)),
@@ -154,7 +154,7 @@ def print_report(report: dict, files: dict) -> int:
         fail += len(report["orphans"])
     print()
 
-    # 3. dead-end (no outlinks) — 真**WARN 不 fail**
+    # 3. dead-end (no outlinks) — WARN 不 fail
     print("[no-outlinks] file 无 outbound link (dead-end, WARN)")
     if not report["dead_ends"]:
         print("  ✓ 全 connected")
@@ -167,10 +167,10 @@ def print_report(report: dict, files: dict) -> int:
         print("✓ wiki structure 干净")
         return 0
     print(
-        f"⚠ {fail} issue 真**修法**:\n"
+        f"⚠ {fail} issue 修法:\n"
         "  - broken-link: 编辑 file 真 frontmatter 真 `related:` 删 或 创建 target file\n"
-        "  - orphan concept: 真**真**真**`真**真**`没人 reference 它`** → 加 reference 真**`其它 file`** 真**`真**`或 真**`删 真`** concept (低价值)\n"
-        "  - 全自动 fix 真**`留 future P2.2.1`** (`catfish lint --fix`)"
+        "  - orphan concept: 真`真`没人 reference 它` → 加 reference `其它 file` `真`或 `删 真` concept (低价值)\n"
+        "  - 全自动 fix `留 future P2.2.1` (`catfish lint --fix`)"
     )
     return 1
 
@@ -186,14 +186,14 @@ def main() -> int:
 
     files = scan_files()
     if not files:
-        print(f"✓ wiki 真**空** ({WIKI_ROOT})")
+        print(f"✓ wiki 空 ({WIKI_ROOT})")
         return 0
 
     report = lint(files)
 
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
-        # exit code 真**`broken / orphan > 0`** 非 0
+        # exit code `broken / orphan > 0` 非 0
         return 0 if not report["broken_links"] and not report["orphans"] else 1
 
     return print_report(report, files)

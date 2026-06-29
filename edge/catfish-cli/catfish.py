@@ -1437,7 +1437,7 @@ def cmd_doctor(args) -> int:
 
 
 def cmd_lint(args) -> int:
-    """扫 ~/.catfish/wiki/ 真**broken-link / orphan concept / dead-end**.
+    """扫 ~/.catfish/wiki/ broken-link / orphan concept / dead-end.
     透传到 bash catfish lint (跑 scripts/lint_wiki.py).
     """
     return _delegate_to_bash_catfish("lint", getattr(args, "passthrough", []) or [])
@@ -1858,8 +1858,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser = build_parser()
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
-    # P33 (6/5 鸿波): doctor/lint/brand-* 真**`bash CLI 透传`** 真 — args 可能带
-    # --json 之类真**`不在 Python parser 注册`** 真**`flag`**, 用 parse_known_args
+    # P33 (6/5 鸿波): doctor/lint/brand-* `bash CLI 透传` 真 — args 可能带
+    # --json 之类`不在 Python parser 注册` `flag`, 用 parse_known_args
     # 收 unknown args 全塞 passthrough.
     if raw_argv and raw_argv[0] in _PASSTHROUGH_COMMANDS:
         args, extra = parser.parse_known_args(raw_argv)

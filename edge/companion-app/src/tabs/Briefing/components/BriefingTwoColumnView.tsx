@@ -77,7 +77,7 @@ interface BriefingTwoColumnViewProps {
   tasks: MainTask[];                                  // 已 filter ignored
   handledItems: HandledSilentlyItem[];
   // P3.5.32 Phase 10 (6/18 鸿波 OpenWiki 借鉴) — 3 维 self-aware reflection.
-  // 真**optional 默认空 array** — 真**LLM 没返时 cards 0 渲染** (length 0 早返).
+  // optional 默认空 array — LLM 没返时 cards 0 渲染 (length 0 早返).
   subconscious: SubconsciousItem[];
   graveyard: GraveyardItem[];
   blindSpots: BlindSpotItem[];
@@ -115,15 +115,15 @@ export default function BriefingTwoColumnView({
   }, [tasks]);
 
   // P3.5.32 Phase 10 (6/18 鸿波 OpenWiki 借鉴) — reflect button → 切 Chat tab + 复制 prompt.
-  // 真**MVP**: setActiveTab('chat') + clipboard 复制 prompt + alert toast.
-  // 真**未来 Phase 10.1**: 直接进 Chat tab 真**自动 send** (queueMessage / setMessages).
-  // 真**现在最简**: 切 tab + 提示员工 Cmd+V send.
+  // MVP: setActiveTab('chat') + clipboard 复制 prompt + alert toast.
+  // 未来 Phase 10.1: 直接进 Chat tab 自动 send (queueMessage / setMessages).
+  // 现在最简: 切 tab + 提示员工 Cmd+V send.
   const setActiveTab = useUIStore((s) => s.setActiveTab);
   const handleReflect = (prompt: string) => {
     if (!prompt) return;
     void navigator.clipboard.writeText(prompt).catch(() => {});
     setActiveTab("chat");
-    // 真**MVP alert**. 真**未来 Phase 10.1 inline toast**.
+    // MVP alert. 未来 Phase 10.1 inline toast.
     window.setTimeout(() => {
       // eslint-disable-next-line no-alert
       alert(
@@ -219,7 +219,7 @@ export default function BriefingTwoColumnView({
         )}
 
         {/* P3.5.32 Phase 10 (6/18 鸿波 OpenWiki 借鉴) — 3 维 self-aware reflection.
-            真**0 item 时 card return null** (无视觉噪音). 真**LLM 没返 / 返空 → 0 渲染**. */}
+            0 item 时 card return null (无视觉噪音). LLM 没返 / 返空 → 0 渲染. */}
         <SubconsciousCard items={subconscious} onReflect={handleReflect} />
         <GraveyardCard items={graveyard} />
         <BlindSpotsCard items={blindSpots} onReflect={handleReflect} />

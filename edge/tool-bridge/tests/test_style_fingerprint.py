@@ -198,7 +198,7 @@ def test_filter_noise_removes_html_tags(sf):
 
 
 def test_filter_noise_preserves_structure_markers(sf):
-    """真**保留** # / - / 数字. 真 _structure_pref 真识别 list/heading."""
+    """保留 # / - / 数字. 真 _structure_pref 真识别 list/heading."""
     text = "## 标题\n\n- 列表项 1\n- 列表项 2\n\n1. 编号项"
     out = sf._filter_noise(text)
     # markers 真保留 (_structure_pref 真识别需要)
@@ -208,7 +208,7 @@ def test_filter_noise_preserves_structure_markers(sf):
 
 
 def test_word_freq_excludes_pure_english(sf):
-    """BL-STYLE-FP-NOISE-FILTER: 真**只**留含中文 word, 禁纯英文 (the/com/of/and 等).
+    """BL-STYLE-FP-NOISE-FILTER: 只留含中文 word, 禁纯英文 (the/com/of/and 等).
 
     真兼容两种 mode: 有 jieba (生产) → 留中文 word 真有数据;
     无 jieba (sandbox) → fallback char n-gram 真也**不**含英文 (空也满足条件).

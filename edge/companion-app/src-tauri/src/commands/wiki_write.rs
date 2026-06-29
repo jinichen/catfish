@@ -115,16 +115,16 @@ fn slugify(title: &str, max_chars: usize) -> String {
 
 /// P3.5.132 #5 (6/29 鸿波): typed relations 真 input shape.
 ///
-/// `#[serde(untagged)]` 让前端真**dual-shape 调用兼容**:
+/// `#[serde(untagged)]` 让前端dual-shape 调用兼容:
 ///   - 旧 string: `related: ["陈鸿波", "FFCS"]` (老 caller / WikiCreateModal 简单输入)
 ///   - 新对象: `related: [{name: "陈鸿波", rel: "同事"}, ...]` (typed 真路径)
-/// 都会真**自动 deserialize 到 RelatedInput → 渲染成 frontmatter 时 dual-shape**.
+/// 都会自动 deserialize 到 RelatedInput → 渲染成 frontmatter 时 dual-shape.
 #[derive(Debug, serde::Deserialize)]
 #[serde(untagged)]
 pub enum RelatedInput {
-    /// 旧 caller / 没 rel 时, 真**bare string** (兼容)
+    /// 旧 caller / 没 rel 时, bare string (兼容)
     Bare(String),
-    /// 新真 typed: `{name, rel?}` (rel 真**选填**)
+    /// 新真 typed: `{name, rel?}` (rel 选填)
     Typed { name: String, #[serde(default)] rel: Option<String> },
 }
 

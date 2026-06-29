@@ -20,8 +20,8 @@ pub mod political_config; // P3.3.53 (6/13 鸿波): 政治敏感规则配置 —
 pub mod hermes_api_config; // BL-COMPANION-HERMES-API-CONFIG (5/19, Phase 2-2A)
 pub mod oauth;
 pub mod pet_hover;
-pub mod picker_config;    // P3.5.28 (6/17 鸿波): chat picker 选的 model 真**桥**给 background task
-pub mod role_config;      // P3.5.29 Phase 4 (6/17 鸿波): GET /v1/roles 真**fetch + 5min cache** 给 background task
+pub mod picker_config;    // P3.5.28 (6/17 鸿波): chat picker 选的 model 桥给 background task
+pub mod role_config;      // P3.5.29 Phase 4 (6/17 鸿波): GET /v1/roles fetch + 5min cache 给 background task
 pub mod pet_status;
 pub mod process;
 pub mod tool_bridge_rpc;  // P3.5.45 (6/20 鸿波): tool-bridge sock NDJSON RPC 公共 helper, recmode + 后续 callers 复用

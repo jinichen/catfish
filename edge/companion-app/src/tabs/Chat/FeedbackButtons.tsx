@@ -204,7 +204,7 @@ export default function FeedbackButtons({ messageId, preview, hidden }: Props) {
         <FeedbackBtn
           title="把这轮 Q&A 存进 wiki/queries/, 自动抽 entity/concept (BL-CATFISH-WIKI-MODE P1.2)"
           onClick={async () => {
-            // P1.2.2 ship (6/4): 真**调** tauri command wiki_save_chat_message,
+            // P1.2.2 ship (6/4): 调 tauri command wiki_save_chat_message,
             // 写 ~/.catfish/wiki/queries/<date>-<slug>.md (frontmatter + Q&A).
             // P1.2.3 plugin watch 触发 Analysis/Generation ingest.
             // P1.2.4 (6/4): inline state — Tauri webview 禁 native alert,

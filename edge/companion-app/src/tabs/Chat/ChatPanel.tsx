@@ -166,9 +166,9 @@ export default function ChatPanel({
             onNudge={() => onSend("继续", [])}
           />
         ))}
-        {/* P3.5.18 Phase 2 (6/17 鸿波): hermes preflight 自动压缩 真**inline 状态**.
-            stream done 后 useChat 真**清 lifecycleStatus = null** → 自动消失.
-            只 streaming 中 + 真**lifecycleStatus 非 null** 才显. 不打扰 message 流. */}
+        {/* P3.5.18 Phase 2 (6/17 鸿波): hermes preflight 自动压缩 inline 状态.
+            stream done 后 useChat 清 lifecycleStatus = null → 自动消失.
+            只 streaming 中 + lifecycleStatus 非 null 才显. 不打扰 message 流. */}
         {isStreaming && lifecycleStatus && (
           <div
             style={{

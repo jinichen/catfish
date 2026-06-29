@@ -322,7 +322,7 @@ export function useChat(_initialModel: string) {
         },
         // P3.5.18 Phase 2 (6/17 鸿波): plugin P19 桥 hermes preflight `_emit_status`
         // → SSE `hermes.tool.progress` (tool="catfish-lifecycle") → 这里 set inline 状态.
-        // status "running" → 显; "completed" → 清 (但 hermes 真**目前不发 completed** —
+        // status "running" → 显; "completed" → 清 (但 hermes 目前不发 completed —
         // preflight emit 一次后 compress 跑完 stream 自然 done, finally block 清).
         onLifecycle: (status, text) => {
           if (status === "completed" || !text) {
@@ -362,9 +362,9 @@ export function useChat(_initialModel: string) {
       } else {
         updateMessage(assistantId, { status: "done" });
       }
-      // P3.5.30 (6/17 鸿波): 真**round 结束 镜像 final messages 到 registry**.
-      // ChatTab 切回时 mount restore (60 秒 TTL 内) 真**0 延迟看 final**.
-      // 多轮 tool_call 真**每轮都 sync**, 真**最后一轮 finally streamRegistry.finish() 真**标 not running**.
+      // P3.5.30 (6/17 鸿波): round 结束 镜像 final messages 到 registry.
+      // ChatTab 切回时 mount restore (60 秒 TTL 内) 0 延迟看 final.
+      // 多轮 tool_call 每轮都 sync, 最后一轮 finally streamRegistry.finish() 真标 not running**.
       //
       // P3.5.97 (6/24): 同 flushThisRound 修法 — 用 closure local 拼 mirror,
       // 不读 store. round 结束时 store 可能已切走, 读 store 会污染老 registry.
@@ -870,7 +870,7 @@ export function useChat(_initialModel: string) {
         if (currentStoreSession === sessionIdForStream) {
           setStreamingId(null);
           setIsStreaming(false);
-          // P3.5.18 Phase 2: stream 结束 真**清 inline lifecycle status**.
+          // P3.5.18 Phase 2: stream 结束 清 inline lifecycle status.
           setLifecycleStatus(null);
         }
         abortRef.current = null;

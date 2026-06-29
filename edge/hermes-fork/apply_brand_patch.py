@@ -663,7 +663,7 @@ def apply_patches(action: str) -> int:
     fails = 0
     for p in patches:
         # 1. 检查是否已 apply: reverse dry-run 能过 = patch 已在文件里
-        # 真**`stdin=DEVNULL`** 防 patch 真**`Reversed prompt 真`** 真**`等 tty hang`** (6/4 实测)
+        # `stdin=DEVNULL` 防 patch `Reversed prompt 真` `等 tty hang` (6/4 实测)
         already_applied = subprocess.run(
             ["patch", "-p1", "-R", "--dry-run", "--batch", "--force", "-i", str(p)],
             cwd=HERMES_ROOT, capture_output=True, text=True,

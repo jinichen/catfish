@@ -157,8 +157,8 @@ export default function WebPortalLink() {
       style={{
         // P3.5.120 + P3.5.122 (6/25): 全宽 sticky toolbar 风.
         // P3.5.122 真因 + 修复 (鸿波 catch + 建议): .app-main padding-top 已砍 0
-        // (globals.css), 真**marginTop 抵消 -24 不再需要**. 真**marginLeft / marginRight
-        // -24 真**仍保**抵消 padding-left/right 让 outer 全 Companion 宽.
+        // (globals.css), marginTop 抵消 -24 不再需要. marginLeft / marginRight
+        // -24 真仍保**抵消 padding-left/right 让 outer 全 Companion 宽.
         position: "sticky",
         top: 0,
         zIndex: 10,
@@ -170,12 +170,12 @@ export default function WebPortalLink() {
           : "var(--catfish-bg-elevated)",
         // toolbar 风 — 只 borderBottom (砍 borderRadius + 四向 border)
         borderBottom: `1px solid ${isOffline ? "rgba(239, 68, 68, 0.4)" : "var(--catfish-border)"}`,
-        // 真**水平 padding 补回 24** — 真**inner content 不贴 toolbar 边**, 真**vertical 真 12 toolbar 风**
+        // 水平 padding 补回 24 — inner content 不贴 toolbar 边, vertical 真 12 toolbar 风
         padding: "var(--space-3) var(--space-6)",
       }}
     >
-      {/* P3.5.120/121: inner content 真**maxWidth 1600 居中** — 跟下方 grid 节奏一致.
-          真**0 padding** 因为 outer 真水平 padding 24 已补 .app-main padding 抵消. */}
+      {/* P3.5.120/121: inner content maxWidth 1600 居中 — 跟下方 grid 节奏一致.
+          0 padding 因为 outer 真水平 padding 24 已补 .app-main padding 抵消. */}
       <div style={{ maxWidth: 1600, margin: "0 auto" }}>
       <div
         style={{

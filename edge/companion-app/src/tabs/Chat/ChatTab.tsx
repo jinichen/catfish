@@ -30,7 +30,7 @@ export default function ChatTab() {
   //   1. Phase 4 App.tsx 启动 useEffect 拿 picker_config::current_model() 注入
   //   2. ChatTab useEffect line 166-172 catalog.default fetch 后注入
   //   3. 用户 picker 手选
-  // 都没拿到 → store.model="" → ChatPanel send 时 gateway 真**显式报错**
+  // 都没拿到 → store.model="" → ChatPanel send 时 gateway 显式报错
   // ("model 为空" 比静默兜底 catfish-private-main 更清晰, 客户改 catalog
   // 后不会出现"看着正常但其实走老 model"的鬼影 bug).
   const defaultModel = catalog?.default || catalog?.models?.[0]?.id || "";
@@ -52,10 +52,10 @@ export default function ChatTab() {
   const persistedSessionId = useChatStore((s) => s.persistedSessionId);
   const loadSession = useChatStore((s) => s.loadSession);
   const loadSessionAttachments = useChatStore((s) => s.loadSessionAttachments);
-  // P3.5.30 (6/17 鸿波): registry restore 真**消费 stream 中 / 完后真 messages 镜像**.
+  // P3.5.30 (6/17 鸿波): registry restore 消费 stream 中 / 完后真 messages 镜像.
   const setMessages = useChatStore((s) => s.setMessages);
-  // P3.5.29 Phase 6.3 (6/17 鸿波): catalog.default → picker 真**联动**, 真**用户
-  // picker 选过的 真**不被覆盖** (modelPickedByUser flag).
+  // P3.5.29 Phase 6.3 (6/17 鸿波): catalog.default → picker 联动, 用户
+  // picker 选过的 真不被覆盖** (modelPickedByUser flag).
   const modelPickedByUser = useChatStore((s) => s.modelPickedByUser);
   const setModelInStore = useChatStore((s) => s.setModel);
   // P3.5.8 BL-FILE-SESSION-INDEX-V1 Phase 2 (6/16 鸿波): resume 时还原历史 image
@@ -156,45 +156,45 @@ export default function ChatTab() {
     [cancelAndSend],
   );
 
-  /** P3.5.29 Phase 6.3 (6/17 鸿波) — catalog.default → picker 真**联动**.
+  /** P3.5.29 Phase 6.3 (6/17 鸿波) — catalog.default → picker 联动.
    *
-   * 真**鸿波诉求 (P3.5.29 verbatim)**: "改 yaml 全代码跟着走" → picker 也该联动.
-   * 真**5/28 disable render-time setModel 副作用 真**保留** (修 picker 反 bug 真**核心**).
-   * 真**真**这 effect**: 真**只在用户没主动 picker 选过** (`!modelPickedByUser`) 时**
-   * 真**接 catalog.default → store.model**. 用户 picker 选过 → 真**永不被覆盖**.
+   * 鸿波诉求 (P3.5.29 verbatim): "改 yaml 全代码跟着走" → picker 也该联动.
+   * 5/28 disable render-time setModel 副作用 保留 (修 picker 反 bug 核心).
+   * 这 effect: 只在用户没主动 picker 选过 (`!modelPickedByUser`) 时
+   * 接 catalog.default → store.model. 用户 picker 选过 → 永不被覆盖.
    *
-   * 真**生命周期**:
-   *   - 首次启动: modelPickedByUser=false, catalog.default 真**fetch 后**触发 effect
+   * 生命周期:
+   *   - 首次启动: modelPickedByUser=false, catalog.default fetch 后触发 effect
    *     → setModelInStore(default, **false**) → modelPickedByUser 仍 false.
-   *   - 用户 picker 改: setModel(m, true) → modelPickedByUser=true → effect 真**跳过**.
-   *   - reset() (+新对话): modelPickedByUser=false → effect 真**重新接管**.
-   *   - catalog 15s polling 改 default: effect deps catalog?.default 真**触发** →
-   *     **如果 !modelPickedByUser** 真**propagate**, 否则**跳过**.
+   *   - 用户 picker 改: setModel(m, true) → modelPickedByUser=true → effect 跳过.
+   *   - reset() (+新对话): modelPickedByUser=false → effect 重新接管.
+   *   - catalog 15s polling 改 default: effect deps catalog?.default 触发 →
+   *     **如果 !modelPickedByUser** propagate, 否则**跳过**.
    */
   useEffect(() => {
     if (modelPickedByUser) return;
     if (!catalog?.default) return;
     if (catalog.default === model) return;
-    // 真**pickedByUser = false** — signal catalog 自动 propagate, 不锁 picker
+    // pickedByUser = false — signal catalog 自动 propagate, 不锁 picker
     setModelInStore(catalog.default, false);
   }, [catalog?.default, modelPickedByUser, model, setModelInStore]);
 
   /** P3.5.30 (6/17 鸿波) — registry restore + 实时 sync.
    *
-   * 真**修 P3.5.21 原 bug** "切走 chat 再回来不见消息": 5/24 BL-MULTI-SESSION-STREAM
-   * 真**只 ship 半边** — controller 跨生命周期跑, 真**镜像 messages + restore 没 wire**.
+   * 修 P3.5.21 原 bug "切走 chat 再回来不见消息": 5/24 BL-MULTI-SESSION-STREAM
+   * 只 ship 半边 — controller 跨生命周期跑, 镜像 messages + restore 没 wire.
    * 用户 stream 中切 tab → stream 完成 → 老 finish() 立即 delete registry → 切回
-   * Chat tab 真**store 真 stream 之前 snapshot** → 真**等 polling 5 秒**才 sync db.
+   * Chat tab store 真 stream 之前 snapshot → 等 polling 5 秒才 sync db.
    *
-   * 真**这 effect**:
-   *   1. mount 时 get(persistedSessionId) → 真**有 stream 中 / 完后镜像** → setMessages
-   *      恢复. stream 完成态真**dismiss(清 registry)**.
-   *   2. subscribe 真**stream 中 切回 真**实时 sync** (onDelta 真 ms 级更新 UI).
-   *      stream 结束 → 真**dismiss**.
+   * 这 effect:
+   *   1. mount 时 get(persistedSessionId) → 有 stream 中 / 完后镜像 → setMessages
+   *      恢复. stream 完成态dismiss(清 registry).
+   *   2. subscribe stream 中 切回 真实时 sync** (onDelta 真 ms 级更新 UI).
+   *      stream 结束 → dismiss.
    *
-   * 真**前提**: useChat.flushThisRound / onDone 真**镜像 store messages → registry.update**
-   * (P3.5.30 配套改动). 真**老路径 (没镜像)**: registry 真**只 messages = []** 真**restore 不到**,
-   * setMessages 真**清空 store 真**bug**. 真**guard**: state.messages.length > 0 才 restore.
+   * 前提: useChat.flushThisRound / onDone 镜像 store messages → registry.update
+   * (P3.5.30 配套改动). 老路径 (没镜像): registry 只 messages = [] restore 不到,
+   * setMessages 清空 store 真bug**. guard: state.messages.length > 0 才 restore.
    */
   useEffect(() => {
     if (!persistedSessionId) return;
@@ -202,7 +202,7 @@ export default function ChatTab() {
     const tryRestore = (): boolean => {
       const state = streamRegistry.get(persistedSessionId);
       if (!state) return false;
-      // 真**guard**: registry messages 真**空** 真**stale 老 useChat path 真**没镜像**, 别覆盖 store.
+      // guard: registry messages 空 stale 老 useChat path 真没镜像**, 别覆盖 store.
       if (state.messages.length === 0) return false;
       setMessages(state.messages);
       if (!state.isStreaming) {
@@ -211,10 +211,10 @@ export default function ChatTab() {
       return true;
     };
 
-    // mount 时立即 restore (用户切回真**0 延迟看 final**)
+    // mount 时立即 restore (用户切回0 延迟看 final)
     tryRestore();
 
-    // stream 中 切回 真**实时 sync** (subscribe 真**onDelta raf 触发**)
+    // stream 中 切回 实时 sync (subscribe onDelta raf 触发)
     const unsub = streamRegistry.subscribe(persistedSessionId, () => {
       tryRestore();
     });
@@ -403,7 +403,7 @@ export default function ChatTab() {
             // store.model 空 = picker_model 文件没拿到 (App.tsx 启动 useEffect 没注入) +
             // catalog.default 也还没 fetch 到 (ChatTab catalog useEffect 没触发).
             // 一律 ChatPanel 不渲染 — 没输入框/send button = 自动 disable.
-            // hooks 顺序不变 (conditional 真**只**在 JSX, 不在 hooks).
+            // hooks 顺序不变 (conditional 只在 JSX, 不在 hooks).
             <div
               style={{
                 display: "flex",

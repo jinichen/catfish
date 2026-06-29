@@ -1,7 +1,7 @@
 /** P28 (6/5 鸿波) — Dashboard 卡 — 改 gateway URL.
  *
  * 商用部署员工不会 vim ~/.catfish/*.yaml. 这卡读 ~/.catfish/companion.yaml +
- * memory_plugin.yaml 真**gateway.url 字段**, UI 改完写回去 + 提示 reload.
+ * memory_plugin.yaml gateway.url 字段, UI 改完写回去 + 提示 reload.
  *
  * 砍 Internal Token UI (6/5 audit fix): token 是 server admin 工具 (catfish gateway
  * 内部 dev token), 员工填了客户端也没用 — gateway validator 不认这值. 员工真正

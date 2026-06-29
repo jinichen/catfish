@@ -130,8 +130,8 @@ def _query_token_set(text: str) -> set:
     """字符级 + bigram set (去停用字), 真返用作 Jaccard 输入.
 
     BL-CATFISH-WIKI-MODE P3.1 (6/4): char-only → char + bigram.
-    Phrase 完整匹配 (e.g. "月度通报" 完整 hit "月度通报模板") 真**Jaccard**真**升**,
-    partial match (e.g. "月度发布" 只 hit "月度") 真**降**. 跟 BACKLOG P3.1 BL 一致.
+    Phrase 完整匹配 (e.g. "月度通报" 完整 hit "月度通报模板") Jaccard升,
+    partial match (e.g. "月度发布" 只 hit "月度") 降. 跟 BACKLOG P3.1 BL 一致.
     不依赖 jieba (plugin light, jieba 启动 100ms+).
     """
     if not text:
@@ -376,13 +376,13 @@ class CatfishMemoryProvider(MemoryProvider):
         )
 
     def system_prompt_block(self) -> str:
-        """BL-CATFISH-WIKI-MODE P3.3.13 (6/4): system prompt 真**禁编造 rule** 强 instruction.
+        """BL-CATFISH-WIKI-MODE P3.3.13 (6/4): system prompt 禁编造 rule 强 instruction.
 
         6/4 17:39 chat qwen_v3_5_122b 严重 hallucinate (陈淡孜儿子 / Demo User /
-        公司资质管理办法修订版). prefetch 真**user msg 末尾真 rule LLM 真**真**ignore**真.
-        改用 system_prompt_block 真**真 static system prompt** — 真**LLM 严守 rule**真.
+        公司资质管理办法修订版). prefetch user msg 末尾真 rule LLM 真ignore真.
+        改用 system_prompt_block 真 static system prompt — LLM 严守 rule真.
 
-        放 wiki title list 在 system prompt 真**真**真**LLM 真**真**真**每轮**真**看**真**精确**真
+        放 wiki title list 在 system prompt 真LLM 真真每轮**看精确真
         reference target.
         """
         if not self._initialized:
@@ -410,25 +410,25 @@ class CatfishMemoryProvider(MemoryProvider):
             return ""
 
         lines = [
-            "## 🚨 catfish 真**信息源 + 禁编造 铁律** (catfish-memory plugin P3.3.13)",
+            "## 🚨 catfish 信息源 + 禁编造 铁律 (catfish-memory plugin P3.3.13)",
             "",
             "回答员工有关 **业务 / 人物 / 项目 / 决策 / 事件** 真问题时, **必须**真"
-            "依据下面这些**真实信息源**真**:",
+            "依据下面这些**真实信息源**:",
             "",
-            "1. **USER PROFILE** (~/.hermes/memories/USER.md) — 员工身份/偏好/昵称",
-            "2. **MEMORY.md** (~/.hermes/memories/MEMORY.md) — 项目真**真**真**真**真**真**fact**真",
+            "1. USER PROFILE** (~/.hermes/memories/USER.md) — 员工身份/偏好/昵称",
+            "2. **MEMORY.md** (~/.hermes/memories/MEMORY.md) — 项目真真真fact**真",
             "3. **employee_journal.md** (~/.catfish/employee_journal.md) — 时间线日志",
             "4. **distilled_facts.md** (~/.catfish/distilled_facts.md) — 24h 蒸馏长期",
-            "5. **catfish wiki** (~/.catfish/wiki/) — 见下面 title list, 用 [[标题]] 真**reference**",
+            "5. **catfish wiki** (~/.catfish/wiki/) — 见下面 title list, 用 [[标题]] reference",
             "",
-            "### ❌ 禁止 行为 (严守, 违反真**直接**真**真**真**真扣信任分**):",
+            "### ❌ 禁止 行为 (严守, 违反直接真真扣信任分):",
             "",
-            "- 不允许编造**没在上面 5 个源里出现**真**人物 / 项目代号 / 决策 / 事件**.",
-            "- 没记录就**真**真**直接说 \"我没在 catfish 记忆里找到这条\"**, 不要靠 training prior 编.",
-            "- 真**catfish / 鲶鱼 / 小鲶 / 胖胖** 是 **AI 副手 + 员工个人开源项目**, 真**不**真"
-            "真**真**真**真**真**业务 entity** (跟周报 / 汇报 / 待办 / 工作总结 不沾边).",
+            "- 不允许编造**没在上面 5 个源里出现**人物 / 项目代号 / 决策 / 事件.",
+            "- 没记录就**真直接说 \"我没在 catfish 记忆里找到这条\"**, 不要靠 training prior 编.",
+            "- catfish / 鲶鱼 / 小鲶 / 胖胖 是 **AI 副手 + 员工个人开源项目**, 不真"
+            "真真业务 entity (跟周报 / 汇报 / 待办 / 工作总结 不沾边).",
             "",
-            "### ✅ wiki 真**已有 title** (chat 真**reference**真**真**用 `[[标题]]`):",
+            "### ✅ wiki 已有 title (chat reference真用 `[[标题]]`):",
             "",
         ]
         if entities:
@@ -436,7 +436,7 @@ class CatfishMemoryProvider(MemoryProvider):
         if concepts:
             lines.append(f"\n**概念 ({len(concepts)})**: " + " · ".join(f"`[[{n}]]`" for n in concepts[:50]))
         lines.append("")
-        lines.append("员工 chat 提到上述 title 真**直接**真**reference**真, 真**不要**真**重复抽**真.")
+        lines.append("员工 chat 提到上述 title 直接reference真, 不要重复抽真.")
 
         return "\n".join(lines)
 
@@ -527,8 +527,8 @@ class CatfishMemoryProvider(MemoryProvider):
                 sections.append(journal)
 
             # 2b. BL-CATFISH-WIKI-MODE P3.3.11 (6/4): wiki summary —
-            # 列 wiki/entities + concepts 真**top hub** 真**真**让 LLM chat 时**真**真**知道**
-            # 员工 wiki 真**真**已有真 entity / concept 真**真**避免重复抽** + 真**reference 真精确**真
+            # 列 wiki/entities + concepts top hub 让 LLM chat 时知道
+            # 员工 wiki 已有 entity / concept 避免重复抽 + reference 精确
             wiki = self._render_wiki_summary(catfish_home)
             if wiki:
                 sections.append(wiki)
@@ -626,13 +626,13 @@ class CatfishMemoryProvider(MemoryProvider):
             "- 不要绕 execute_code 审批走 terminal (见安全红线)\n"
             "- 不要乱写 MEMORY.md 当 skill spec 用 (见 memory 写入纪律)\n\n"
             "**禁止幻觉 (重要)**:\n"
-            "- 引用员工历史 / 项目 / 决策 时, **必须**真**来自下面注入真 wiki / journal / "
-            "USER PROFILE / MEMORY.md / SOUL.md**. 不允许编造**没在注入数据里出现**的人 / "
+            "- 引用员工历史 / 项目 / 决策 时, **必须**来自下面注入真 wiki / journal / "
+            "USER PROFILE / MEMORY.md / SOUL.md. 不允许编造**没在注入数据里出现**的人 / "
             "项目 / 事件.\n"
             "- 没记录就**直接说 \"我没在你 catfish 记忆里找到这条\"**, "
             "不要靠 training prior 编 confabulation.\n"
-            "- 真**真**reference 真员工业务真 entity / concept 时**真**用真 `[[wiki title]]` "
-            "精确链接** (见下面 P3.3 wiki summary 注入真 title list).\n"
+            "- 真reference 真员工业务真 entity / concept 时**用真 `[[wiki title]]` "
+            "精确链接 (见下面 P3.3 wiki summary 注入真 title list).\n"
         )
 
     def _render_schema(self) -> str:
@@ -687,14 +687,14 @@ class CatfishMemoryProvider(MemoryProvider):
         6/3 下午员工 chat 真生产: LLM 真自己说 "execute_code 卡住, 我换个方案:
         直接用 terminal 调 pdftotext / python -c, 不经过 execute_code 审批流程."
 
-        真**LLM 真自主越权信号** — 真 catfish 真所有代码执行 (Python / bash) 真该走
+        LLM 真自主越权信号 — 真 catfish 真所有代码执行 (Python / bash) 真该走
         execute_code → sandbox-exec / nsjail + 员工审批. terminal 真 hermes builtin
-        默认 local 真直接 host 跑, 真**绕**真审批 + sandbox.
+        默认 local 真直接 host 跑, 绕真审批 + sandbox.
 
         # 真为啥不 hook block (v1 撤回)
-        hermes pre_tool_call hook 真**无** parent_tool 真字段, 真无法区分 LLM 直调
-        vs catfish_run_skill / skill 内部真用 terminal. 真一刀切 block 真**误伤**
-        员工真合法 skill 路径. 改成注入红线 prompt 让 LLM 真**自查**.
+        hermes pre_tool_call hook 无 parent_tool 真字段, 真无法区分 LLM 直调
+        vs catfish_run_skill / skill 内部真用 terminal. 真一刀切 block 误伤
+        员工真合法 skill 路径. 改成注入红线 prompt 让 LLM 自查.
 
         # 真根治在别处
         - BL-TOOLS-SANITIZER-DROP-DEPRECATED (6/3 BACKLOG): 修 execute_code 真
@@ -704,19 +704,19 @@ class CatfishMemoryProvider(MemoryProvider):
         return (
             "## 🚨 安全红线 (catfish 强约束)\n\n"
             "你**永远不要**用 `terminal` 工具跑代码 (Python / bash / shell).\n\n"
-            "**理由**: terminal 真 hermes builtin 默认 local 真**直接** host 上跑命令, "
+            "**理由**: terminal 真 hermes builtin 默认 local 直接 host 上跑命令, "
             "绕过 catfish 真 sandbox-exec / nsjail + 员工审批. catfish 真红线 — "
-            "LLM 真所有代码执行真**必须**走 sandbox + 员工 review.\n\n"
+            "LLM 真所有代码执行必须走 sandbox + 员工 review.\n\n"
             "**正路**:\n"
             "- 跑代码: `execute_code(lang='python'|'bash', code='...')` → catfish sandbox\n"
             "- 读 PDF / Excel / docx: `execute_code` 真里调 pypdf / openpyxl / python-docx\n"
             "- 查文件: `read_file` / `glob` / `grep`\n"
             "- 浏览器自动化: `catfish_browser_*` 四件套 (goto/click/fill/snapshot)\n\n"
             "**禁用 terminal 真场景**:\n"
-            "- ❌ 'execute_code 卡住, 改 terminal 绕过审批' — 真**主动越权**, 拒\n"
-            "- ❌ 'terminal 调 pdftotext 直接读' — 真**绕 sandbox**, 拒\n"
+            "- ❌ 'execute_code 卡住, 改 terminal 绕过审批' — 主动越权, 拒\n"
+            "- ❌ 'terminal 调 pdftotext 直接读' — 绕 sandbox, 拒\n"
             "- ❌ 'terminal 调 curl 拉数据' — 改 `execute_code(bash)` 或 `web_fetch`\n\n"
-            "**唯一合法场景**: 员工真**自己**真本机 shell 跑命令 (员工自己输, 不是你调).\n"
+            "**唯一合法场景**: 员工自己真本机 shell 跑命令 (员工自己输, 不是你调).\n"
         )
 
     def _render_memory_discipline(self) -> str:
@@ -1109,14 +1109,14 @@ class CatfishMemoryProvider(MemoryProvider):
     def _render_wiki_summary(self, catfish_home: Path) -> str:
         """BL-CATFISH-WIKI-MODE P3.3.11 (6/4): wiki summary 注入 prefetch.
 
-        列 wiki/entities + wiki/concepts 真**所有 file title**, 真**让 LLM 知道**:
-          - 员工 wiki 真**真**已有什么 entity / concept** (避免 chat 重复抽)
-          - reference 时真**真**精确 用 wiki 真 title** (e.g. `[[ISO 27001]]`)
-          - 真**真**真**真**人工新建真 file 真**真**真**自动**真**真**进**真 prefetch (file system → read 实时)
+        列 wiki/entities + wiki/concepts 所有 file title, 让 LLM 知道:
+          - 员工 wiki 真已有什么 entity / concept** (避免 chat 重复抽)
+          - reference 时真精确 用 wiki 真 title** (e.g. `[[ISO 27001]]`)
+          - 真真人工新建真 file 真自动真进**真 prefetch (file system → read 实时)
 
-        cap 50 entries 真**避免 prompt 撑爆**. P3.3.11 真**真**re-ingest hook 简化 真**:
-        plugin 不需"真**watch + trigger ingest"** — 真**read on prefetch** 就够了,
-        因 chat LLM 真**每轮 都看新 wiki**.
+        cap 50 entries 避免 prompt 撑爆. P3.3.11 真re-ingest hook 简化 :
+        plugin 不需"真watch + trigger ingest"** — read on prefetch 就够了,
+        因 chat LLM 每轮 都看新 wiki.
         """
         wiki_dir = catfish_home / "wiki"
         if not wiki_dir.is_dir():
@@ -1151,7 +1151,7 @@ class CatfishMemoryProvider(MemoryProvider):
             lines.append(f"\n**概念 ({len(concepts)})**: " + " · ".join(f"[[{n}]]" for n in concepts[:50]))
             if len(concepts) > 50:
                 lines.append(f"_(还有 {len(concepts) - 50} 个未列)_")
-        lines.append("\n_chat 时引用员工 wiki 真**真**用真 `[[标题]]` 真**精确链接**真._")
+        lines.append("\n_chat 时引用员工 wiki 真用真 `[[标题]]` 精确链接真._")
         return "\n".join(lines)
 
     def _render_feedback(self, catfish_home: Path) -> str:
@@ -1658,7 +1658,7 @@ class CatfishMemoryProvider(MemoryProvider):
         )
 
         # P16 (6/5 鸿波): 上传文件后立即触发 — wiki/raw/sources/ 或 wiki/queries/
-        # 真**`pending`** → 不等 5 pair 不等 30 分钟, 当前轮就 trigger bg distill.
+        # `pending` → 不等 5 pair 不等 30 分钟, 当前轮就 trigger bg distill.
         # 体感: 拖个 PDF 进 chat + 一句"记一下" → 几十秒后就能在知识体系看到新 entity.
         # 触发 LLM 调用一次 (Analysis+Generation), 走 fallback chain.
         triggered_by_pending_ingest = False
@@ -1795,10 +1795,10 @@ class CatfishMemoryProvider(MemoryProvider):
         sync_turn 自动跟随 picker, 解决方案 D 的 split 问题 (员工切 picker 后 summary 模型
         立即同步, 不再 yaml 静态).
 
-        P3.5.29 Phase 7 (6/17 鸿波): 加 role_resolver("summarize") 真**second tier** —
-        真**客户改 roles.yaml `summarize: customer-x-long-ctx`** → 真**plugin sync_turn
-        真**自动跟着走**, 真**不需 改 catfish-memory yaml**. 真**picker 真**优先**
-        (员工临时切), 真**role 真**默认** (客户部署值), 真**yaml/env 真**老兜底**.
+        P3.5.29 Phase 7 (6/17 鸿波): 加 role_resolver("summarize") second tier —
+        客户改 roles.yaml `summarize: customer-x-long-ctx` → plugin sync_turn
+        自动跟着走, 不需改 catfish-memory yaml. picker 优先
+        (员工临时切), role 默认 (客户部署值), yaml/env 老兜底.
 
         真因 audit: hermes MemoryProvider.sync_turn 签名是
         `(user_content, assistant_content, session_id)`, 没 client request header 入参.
@@ -1814,15 +1814,15 @@ class CatfishMemoryProvider(MemoryProvider):
         if picker_model:
             return picker_model
 
-        # P3.5.29 Phase 7: role_resolver("summarize") 真**second tier**.
-        # 真**fail-silent**: gateway 挂 / httpx 没装 / 网络抖 → 返 None → 走 yaml.
+        # P3.5.29 Phase 7: role_resolver("summarize") second tier.
+        # fail-silent: gateway 挂 / httpx 没装 / 网络抖 → 返 None → 走 yaml.
         try:
             from . import role_resolver  # noqa: PLC0415
             role_model = role_resolver.resolve("summarize")
             if role_model:
                 return role_model
         except Exception:  # noqa: BLE001
-            # 真**import 失败** (旧 plugin tree, role_resolver.py 没装) — silent fallback.
+            # import 失败 (旧 plugin tree, role_resolver.py 没装) — silent fallback.
             pass
 
         # Fallback: yaml > env (老逻辑保留, 兼容客户已有 catfish-memory yaml override)

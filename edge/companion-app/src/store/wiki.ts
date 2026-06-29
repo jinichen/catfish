@@ -1,7 +1,7 @@
 /** BL-CATFISH-WIKI-MODE P3.3.3 (6/4) — wiki state store.
  *
  * 负责:
- *   - 真**load** wiki/*.md 全 list (wikiListFiles)
+ *   - load wiki/*.md 全 list (wikiListFiles)
  *   - selected file (rel_path) + 缓存 read content
  *   - filter (search / kind / tag)
  */
@@ -30,7 +30,7 @@ interface WikiState {
   selectedError: string | null;
 
   // P17 (6/5 鸿波): 上次 loadFiles 成功的时间 (debug 用, 当前 WikiTree
-  // 真**`mount 时无脑 reload`**真**`不依赖**它**). 真**`留字段 future 算 cache 用`**.
+  // `mount 时无脑 reload``不依赖它**). `留字段 future 算 cache 用`.
   lastLoadTs: number;
 
   search: string;
@@ -38,23 +38,23 @@ interface WikiState {
   query:
     | "none"
     | "recent-week" // 真 7 天 mtime
-    | "orphan-concept" // 概念 真**真**真**0 inbound link**真**
-    | "top-tag" // top tag 真**filter (后续选 tag)
+    | "orphan-concept" // 概念 真0 inbound link
+    | "top-tag" // top tag 真filter (后续选 tag)
     | "dangling"; // file 含真 dangling wikilink
   selectedTag: string | null;
 
-  // P3.5.110 (6/25 鸿波 catch "体系名称不能选择"): create modal 真**跨组件触发** state.
-  // 真**鸿波点 dangling wikilink / 组 header 真**→**自动**弹 +新建 modal**, prefill title +
-  // kind, 真**0 学习成本** 真**自动建** dangling 真**虚拟体系**.
+  // P3.5.110 (6/25 鸿波 catch "体系名称不能选择"): create modal 跨组件触发 state.
+  // 鸿波点 dangling wikilink / 组 header 真→**自动**弹 +新建 modal**, prefill title +
+  // kind, 0 学习成本 自动建 dangling 虚拟体系.
   createModalState: {
     open: boolean;
     prefillTitle?: string;
     prefillKind?: "entity" | "concept" | "system";
   };
 
-  // P3.5.111 (6/25 鸿波 catch "点体系名应显整片图不该弹窗"): 真**虚拟体系**
-  // 状态 — 鸿波点 dangling 体系名 → 真**WikiGraph 虚拟显该体系子树** (不弹建).
-  // selectFile 真**清掉** virtualSystemName 避免双重 selected 状态错乱.
+  // P3.5.111 (6/25 鸿波 catch "点体系名应显整片图不该弹窗"): 虚拟体系
+  // 状态 — 鸿波点 dangling 体系名 → WikiGraph 虚拟显该体系子树 (不弹建).
+  // selectFile 清掉 virtualSystemName 避免双重 selected 状态错乱.
   virtualSystemName: string | null;
 
   loadFiles: () => Promise<void>;
@@ -71,7 +71,7 @@ interface WikiState {
   }) => void;
   closeCreateModal: () => void;
 
-  // P3.5.111: 虚拟体系真**真**setter — null 真**清**虚拟态
+  // P3.5.111: 虚拟体系真setter — null 清虚拟态
   setVirtualSystem: (name: string | null) => void;
 }
 
@@ -92,7 +92,7 @@ export const useWikiStore = create<WikiState>((set) => ({
   query: "none",
   selectedTag: null,
 
-  // P3.5.110: 真**默认 closed**
+  // P3.5.110: 默认 closed
   createModalState: { open: false },
 
   openCreateModal: (prefill) =>
@@ -105,7 +105,7 @@ export const useWikiStore = create<WikiState>((set) => ({
     }),
   closeCreateModal: () => set({ createModalState: { open: false } }),
 
-  // P3.5.111: 虚拟体系真**初始 null**
+  // P3.5.111: 虚拟体系初始 null
   virtualSystemName: null,
   setVirtualSystem: (name) => set({ virtualSystemName: name }),
 
@@ -144,9 +144,9 @@ export const useWikiStore = create<WikiState>((set) => ({
     // P3.3.4 (6/9): 删 entity 后传 null 清 selection, list 回退到默认无选中
     //
     // P3.5.112 (6/25 鸿波 catch "点一次就不能点了") 修正 P3.5.111:
-    // selectFile 真**不再 auto-clear virtualSystemName** — 真**鸿波点虚拟体系后, 再
-    // 点子项 (selectFile), 子图应该保留真**该体系子树**, 真**子项只用于**高亮 + preview**.
-    // 真**清虚拟态**真**靠**: setVirtualSystem(null) 显式 / 点别的体系 header (覆盖) /
+    // selectFile 不再 auto-clear virtualSystemName — 鸿波点虚拟体系后, 再
+    // 点子项 (selectFile), 子图应该保留真该体系子树**, 子项只用于高亮 + preview**.
+    // 清虚拟态靠: setVirtualSystem(null) 显式 / 点别的体系 header (覆盖) /
     // 强制全图 mode (隐含).
     if (relPath === null) {
       set({

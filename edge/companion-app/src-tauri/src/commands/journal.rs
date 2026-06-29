@@ -401,18 +401,18 @@ fn todo_already_exists(trimmed_text: &str, paths: &[&PathBuf]) -> bool {
 ///
 /// P3.5.137 (6/29 鸿波 catch "archive 后早安仍 23"): **砍 journal 源**.
 ///
-/// 真因: P3.4.7a (6/15 鸿波 design intent) 真**写真清楚** — `employee_journal.md`
-/// "退到向后兼容位置, 主 TODO 源换 current_todos.md". 但 journal_todos_fetch 真**仍在**
+/// 真因: P3.4.7a (6/15 鸿波 design intent) 写真清楚 — `employee_journal.md`
+/// "退到向后兼容位置, 主 TODO 源换 current_todos.md". 但 journal_todos_fetch 仍在
 /// 双源扫 + 合并, 跟 6/15 design 矛盾, 早安累积 23 条 (current 7 + journal 16).
 ///
-/// P3.5.133 (6/29 鸿波 ship) archive cron 真**只清** current_todos.md 完成行, 真**不动**
+/// P3.5.133 (6/29 鸿波 ship) archive cron 只清 current_todos.md 完成行, 不动
 /// journal — archive 后早安仍 23, 真因就在这.
 ///
-/// 修法: 砍 journal 源, 真**只扫** current_todos.md (P3.5.133 cron 真每周日 reset).
+/// 修法: 砍 journal 源, 只扫 current_todos.md (P3.5.133 cron 真每周日 reset).
 ///   - journal 文件**仍正常 read/write** (journal_read_recent / journal_mark_todo_done /
-///     journal_delete_todo / dispatch_todo_op 真**仍接受** origin="journal" 真**向后兼容**)
-///   - advisor 真 surface TODO 真**source** 改成 current_todos.md 真**唯一**
-///   - 真**砍**真**`merge_todos_weekly_first` 函数 + 6 个单测** (鸿波 6/29 拍 "彻底删除死代码")
+///     journal_delete_todo / dispatch_todo_op 仍接受 origin="journal" 向后兼容)
+///   - advisor 真 surface TODO source 改成 current_todos.md 唯一
+///   - 砍`merge_todos_weekly_first` 函数 + 6 个单测 (鸿波 6/29 拍 "彻底删除死代码")
 ///
 /// 性能: 50KB regex 扫一遍 < 5ms.
 #[tauri::command]
@@ -441,11 +441,11 @@ fn read_and_tag(path: Option<PathBuf>, origin: &str) -> Result<Vec<JournalTodo>,
 }
 
 // P3.5.137 (6/29 鸿波拍 "彻底删除死代码"): merge_todos_weekly_first 函数 + 6 个单测
-// 真**完全砍**. 真因:
+// 完全砍. 真因:
 //   1. P3.4.7a (6/15) design intent 写清楚 "journal 退到向后兼容位置" — 永久退役 advisor 路径
 //   2. journal_todos_fetch 砍 journal 源后, fn 唯一 prod caller 消失 → 永久 dead
 //   3. git history 保留 design 演进轨迹, source code 不需保留 dead code 做考古
-//   4. 未来业务变了真**重新 audit 重新实现** 比解封 dead fn 更合理
+//   4. 未来业务变了重新 audit 重新实现 比解封 dead fn 更合理
 // 回滚: git show HEAD~1 -- src/commands/journal.rs
 
 /// 抽 TODO 主逻辑 — pub(crate) 方便单测.

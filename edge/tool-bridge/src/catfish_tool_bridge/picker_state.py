@@ -1,16 +1,16 @@
 """P3.5.29 Phase 8 (6/17 鸿波) — tool-bridge 真 picker_state 读 helper.
 
-真**为啥**: 3 个 tool-bridge LLM 调 (catfish_tools._expertise_llm_call,
-install_and_ops._llm_dedupe_judge, recmode/aggregator.call_llm) 真**也是 为员工
-服务 真 LLM 调**, 真**应跟 chat picker**. 真**模型默认 真 中央 roles.yaml 真
-chat_default 控制 (P3.5.29 框架)**, picker 员工临时切覆盖, 真**合理 chain**:
+为啥: 3 个 tool-bridge LLM 调 (catfish_tools._expertise_llm_call,
+install_and_ops._llm_dedupe_judge, recmode/aggregator.call_llm) 也是 为员工
+服务 真 LLM 调, 应跟 chat picker. 模型默认 真 中央 roles.yaml 真
+chat_default 控制 (P3.5.29 框架), picker 员工临时切覆盖, 合理 chain:
 
   picker_state.json > role_resolver("chat_default") > "catfish-private-main" 兜底
 
-# 真**真 picker_state.json 真**写**
+# 真 picker_state.json 真写**
 
-Companion `src/store/chat.ts` setModel 真**每次员工切 picker 时**真**fire-and-forget
-写 ~/.catfish/picker_state.json (P3.5.2 6/16 鸿波 ship)**:
+Companion `src/store/chat.ts` setModel 每次员工切 picker 时fire-and-forget
+写 ~/.catfish/picker_state.json (P3.5.2 6/16 鸿波 ship):
 
 ```json
 {
@@ -18,16 +18,16 @@ Companion `src/store/chat.ts` setModel 真**每次员工切 picker 时**真**fir
 }
 ```
 
-# 真**真**复用 hermes-memory 同 logic**
+# 真复用 hermes-memory 同 logic**
 
-hermes-memory `catfish_memory_helpers._read_picker_state_model(catfish_home)` 真**已
-ship P3.5.2**. 真**tool-bridge 真**单独 process 不能 import hermes plugin**, 真**抄
-逻辑 进 独立 module**.
+hermes-memory `catfish_memory_helpers._read_picker_state_model(catfish_home)` 已
+ship P3.5.2. tool-bridge 真单独 process 不能 import hermes plugin**, 抄
+逻辑 进 独立 module.
 
-# 真**fail-silent**
+# fail-silent
 
-文件不存在 / parse 错 / chat_model 字段缺 → 返 None. caller 真**走 fallback**
-(role_resolver / 兜底). 真**不阻塞 LLM 调**.
+文件不存在 / parse 错 / chat_model 字段缺 → 返 None. caller 走 fallback
+(role_resolver / 兜底). 不阻塞 LLM 调.
 """
 
 from __future__ import annotations
@@ -42,21 +42,21 @@ logger = logging.getLogger(__name__)
 
 
 def _catfish_home() -> Path:
-    """真**`~/.catfish/` 或 env CATFISH_HOME 指定**.
+    """`~/.catfish/` 或 env CATFISH_HOME 指定.
 
-    真**对齐 hermes-memory `_catfish_home()` 真**默认 path** + env var.
+    对齐 hermes-memory `_catfish_home()` 真默认 path** + env var.
     """
     env = os.environ.get("CATFISH_HOME")
     return Path(env).expanduser() if env else Path.home() / ".catfish"
 
 
 def read_picker_model() -> Optional[str]:
-    """读 ~/.catfish/picker_state.json 真**chat_model**.
+    """读 ~/.catfish/picker_state.json chat_model.
 
     Returns:
-        真**picker model 字符串** 或 None (文件不存在 / parse 错 / 字段缺 / 空字符串).
+        picker model 字符串 或 None (文件不存在 / parse 错 / 字段缺 / 空字符串).
 
-    真**caller chain (推荐)**:
+    caller chain (推荐):
 
     ```python
     from . import picker_state, role_resolver
