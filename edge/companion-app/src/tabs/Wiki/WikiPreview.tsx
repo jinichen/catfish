@@ -167,22 +167,41 @@ export default function WikiPreview() {
   };
 
   // P3.3.4 (6/9): 软删流程 — 第一次点变 confirm, 第二次点真删 (5 秒 timeout reset)
+  // P3.5.132 #3: 第 1 次 click 真 dryRun 看 affected, UI 显「N 文件引用」,
+  // 第 2 次 click 真删. confirmDelete=true 期间不再 dryRun, 直接删.
+  const [affectedFiles, setAffectedFiles] = useState<
+    { rel_path: string; title: string }[]
+  >([]);
   const handleDeleteClick = async () => {
     if (!selectedFile) return;
     if (!confirmDelete) {
-      setConfirmDelete(true);
+      // 第 1 次: dry_run 真扫 affected
+      setDeleting(true);
+      setDeleteErr(null);
+      try {
+        const r = await wikiDeleteFile(selectedFile.info.rel_path, true);
+        setAffectedFiles(r.affected_files);
+        setConfirmDelete(true);
+      } catch (e) {
+        setDeleteErr(String(e));
+      } finally {
+        setDeleting(false);
+      }
       return;
     }
+    // 第 2 次: 真删
     setDeleting(true);
     setDeleteErr(null);
     try {
-      await wikiDeleteFile(selectedFile.info.rel_path);
+      await wikiDeleteFile(selectedFile.info.rel_path, false);
       // 删完清 selection, 刷新 list
+      setAffectedFiles([]);
       await selectFile(null);
       await loadFiles();
     } catch (e) {
       setDeleteErr(String(e));
       setConfirmDelete(false);
+      setAffectedFiles([]);
     } finally {
       setDeleting(false);
     }
@@ -344,7 +363,7 @@ export default function WikiPreview() {
         subtype: "system",
         tags: [],
         related: [],
-        body: `# ${name}\n\n(由 catfish 自动建立 — 点 dangling wikilink 触发)\n\n本体系下属概念真**自动反推**: WikiGraph 真**走 children**真 related[0] 真**指向本体系**.`,
+        body: `# ${name}\n\n(由 catfish 自动建立 — 点 dangling wikilink 触发)\n\n本体系下属概念自动反推: WikiGraph 走 children related[0] 指向本体系.`,
       });
       setVirtualSystem(null);
       await loadFiles();
@@ -421,7 +440,11 @@ export default function WikiPreview() {
               相关 ({info.related.length})
             </span>
             {info.related.map((r, i) => {
-              const dangling = isDangling(r);
+              // P3.5.132 #5: r 真 RelatedRef, 显 name + rel label
+              const dangling = isDangling(r.name);
+              const title = r.rel
+                ? `${dangling ? "找不到 file (dangling link)" : "跳转到 " + r.name} · 关系: ${r.rel}`
+                : (dangling ? "找不到 file (dangling link)" : "跳转到 " + r.name);
               return (
                 <button
                   key={i}
@@ -429,10 +452,22 @@ export default function WikiPreview() {
                     "wiki-preview__wikilink" +
                     (dangling ? " wiki-preview__wikilink--dangling" : "")
                   }
-                  onClick={() => handleWikilinkClick(r)}
-                  title={dangling ? "找不到 file (dangling link)" : "跳转到 " + r}
+                  onClick={() => handleWikilinkClick(r.name)}
+                  title={title}
                 >
-                  [[{r}]]
+                  [[{r.name}]]
+                  {r.rel && (
+                    <span
+                      style={{
+                        marginLeft: 4,
+                        fontSize: 10,
+                        opacity: 0.7,
+                        color: "var(--catfish-text-muted)",
+                      }}
+                    >
+                      ({r.rel})
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -555,14 +590,18 @@ export default function WikiPreview() {
               disabled={deleting}
               title={
                 confirmDelete
-                  ? "再点一次确认删除 (mv 到 wiki/.trash/)"
-                  : "删除这个 entity/concept/query — 软删, 5 秒内再点确认"
+                  ? affectedFiles.length > 0
+                    ? `再点确认: 删了会让 ${affectedFiles.length} 处变 dangling`
+                    : "再点一次确认删除 (mv 到 wiki/.trash/)"
+                  : "删除这个 entity/concept/query — 软删, 先扫谁引用我"
               }
             >
               {deleting
-                ? "删除中…"
+                ? "扫描中…"
                 : confirmDelete
-                  ? "确认删除"
+                  ? affectedFiles.length > 0
+                    ? `确认删 (留 ${affectedFiles.length} 处 dangling)`
+                    : "确认删除"
                   : "删除"}
             </button>
           </>

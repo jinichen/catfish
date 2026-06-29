@@ -33,7 +33,8 @@ export function buildNeighborMap(files: WikiFileInfo[]): Map<string, Set<string>
   }
   for (const f of files) {
     for (const r of f.related) {
-      const target = findFileByName(r, files);
+      // P3.5.132 #5: r 真 RelatedRef
+      const target = findFileByName(r.name, files);
       if (!target || target.rel_path === f.rel_path) continue;
       m.get(f.rel_path)?.add(target.rel_path);
       m.get(target.rel_path)?.add(f.rel_path); // undirected
@@ -71,8 +72,9 @@ export function computeRelevance(
   }
 
   // 1. direct link (×3): A.related 含 B 真 title/slug 或 反向
-  const aRelatedNames = new Set(a.related.map((r) => r.toLowerCase().trim()));
-  const bRelatedNames = new Set(b.related.map((r) => r.toLowerCase().trim()));
+  // P3.5.132 #5: r 真 RelatedRef
+  const aRelatedNames = new Set(a.related.map((r) => r.name.toLowerCase().trim()));
+  const bRelatedNames = new Set(b.related.map((r) => r.name.toLowerCase().trim()));
   const bIdentifiers = [b.title.toLowerCase(), b.slug.toLowerCase()];
   const aIdentifiers = [a.title.toLowerCase(), a.slug.toLowerCase()];
   let direct = 0;

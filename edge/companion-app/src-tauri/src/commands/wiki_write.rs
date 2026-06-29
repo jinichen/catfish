@@ -2,7 +2,7 @@
 //!
 //! 2 个 tauri command:
 //!   - wiki_create_entity_or_concept: 创建新 entity/concept file 含 frontmatter + body
-//!   - wiki_update_file: 真**真**更新已有真 file body** (frontmatter 简单替, 复杂场景 future)
+//!   - wiki_update_file: 更新已有 file body (frontmatter 简单替, 复杂场景 future)
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -95,7 +95,7 @@ fn find_normalized_collision(
     None
 }
 
-/// title slugify — 真**真**真**简单**真**replace 非 word char 真 `-`** (跟 P1.2.2 wiki_save 真 slugify 一致).
+/// title slugify — 简单 replace 非 word char 为 `-` (跟 P1.2.2 wiki_save slugify 一致).
 fn slugify(title: &str, max_chars: usize) -> String {
     let bad: &[char] = &[
         '/', '\\', ':', '*', '?', '"', '<', '>', '|', '\n', '\r', '\t', ' ', '\u{3000}', '.',
@@ -113,13 +113,28 @@ fn slugify(title: &str, max_chars: usize) -> String {
     }
 }
 
+/// P3.5.132 #5 (6/29 鸿波): typed relations 真 input shape.
+///
+/// `#[serde(untagged)]` 让前端真**dual-shape 调用兼容**:
+///   - 旧 string: `related: ["陈鸿波", "FFCS"]` (老 caller / WikiCreateModal 简单输入)
+///   - 新对象: `related: [{name: "陈鸿波", rel: "同事"}, ...]` (typed 真路径)
+/// 都会真**自动 deserialize 到 RelatedInput → 渲染成 frontmatter 时 dual-shape**.
+#[derive(Debug, serde::Deserialize)]
+#[serde(untagged)]
+pub enum RelatedInput {
+    /// 旧 caller / 没 rel 时, 真**bare string** (兼容)
+    Bare(String),
+    /// 新真 typed: `{name, rel?}` (rel 真**选填**)
+    Typed { name: String, #[serde(default)] rel: Option<String> },
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub async fn wiki_create_entity_or_concept(
     kind: String, // "entity" | "concept"
     title: String,
     subtype: String, // entity_type or concept_type
     tags: Vec<String>,
-    related: Vec<String>, // 真**LLM 输出真 `[[name]]` 真**真**rendered**真**真**, 这里**真**name only**真
+    related: Vec<RelatedInput>, // P3.5.132 #5: dual-shape, 兼容旧 string caller + 新 typed
     body: String,
 ) -> Result<WikiWriteResult, String> {
     if kind != "entity" && kind != "concept" {
@@ -159,9 +174,26 @@ pub async fn wiki_create_entity_or_concept(
         .map(|t| t.replace('\"', ""))
         .collect::<Vec<_>>()
         .join(", ");
+    // P3.5.132 #5: dual-shape render —
+    //   - rel=None → 旧 `"[[name]]"` 形态 (兼容现有 62 entities 真 frontmatter)
+    //   - rel=Some → 新 `{name: ..., rel: ...}` 形态
     let related_yaml = related
         .iter()
-        .map(|r| format!("\"[[{}]]\"", r.trim_matches('"').replace('\"', "")))
+        .map(|r| match r {
+            RelatedInput::Bare(name) => {
+                let cleaned = name.trim_matches('"').replace('\"', "");
+                format!("\"[[{cleaned}]]\"")
+            }
+            RelatedInput::Typed { name, rel: None } => {
+                let cleaned = name.trim_matches('"').replace('\"', "");
+                format!("\"[[{cleaned}]]\"")
+            }
+            RelatedInput::Typed { name, rel: Some(rel_val) } => {
+                let n = name.trim_matches('"').replace('\"', "");
+                let r = rel_val.trim_matches('"').replace('\"', "");
+                format!("{{name: \"{n}\", rel: \"{r}\"}}")
+            }
+        })
         .collect::<Vec<_>>()
         .join(", ");
 
@@ -224,8 +256,34 @@ pub async fn wiki_update_file(
 //   - 30+ 天后员工自己清 .trash, 不加 cron (catfish 没 cron 设施)
 // ============================================================
 
+/// P3.5.132 #3 (6/29 鸿波): 删除前先报"谁引用我"防 silent dangling.
+#[derive(Debug, serde::Serialize)]
+pub struct AffectedFile {
+    pub rel_path: String,
+    pub title: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct WikiDeleteResult {
+    /// dry_run=true 时返 affected_files, dry_run=false 时返删除结果
+    pub dry_run: bool,
+    /// 哪些文件 frontmatter related 真指向被删 target (dangling 会变多 N 处)
+    pub affected_files: Vec<AffectedFile>,
+    /// 真删时填, dry_run 时空
+    pub trash_path: Option<String>,
+    pub bytes: u64,
+}
+
+/// P3.5.132 #3 (6/29 鸿波): wiki_delete_file 加 dryRun 路径.
+/// `dry_run`: true 时只算 affected_files 不删, false / 老 caller 真传 null 都当 false (真删).
+/// Option<bool> 兼容老 caller — tauri 真 deserialize 接受 missing field 当 None.
 #[tauri::command(rename_all = "camelCase")]
-pub async fn wiki_delete_file(rel_path: String) -> Result<WikiWriteResult, String> {
+pub async fn wiki_delete_file(
+    rel_path: String,
+    dry_run: Option<bool>,
+) -> Result<WikiDeleteResult, String> {
+    let dry_run = dry_run.unwrap_or(false);
+
     // 路径白名单 — 同 wiki_read_file / wiki_update_file
     if rel_path.contains("..") || !rel_path.starts_with("wiki/") {
         return Err(format!("rel_path 白名单不通过: {rel_path}"));
@@ -253,6 +311,19 @@ pub async fn wiki_delete_file(rel_path: String) -> Result<WikiWriteResult, Strin
         return Err(format!("file 不存在: {rel_path}"));
     }
 
+    // P3.5.132 #3: 计算 affected_files — 扫所有 wiki, 谁 frontmatter related 真指向 target
+    // (target match by title 或 slug, 跟 WikiTree.danglingMap 同款规则)
+    let affected_files = compute_affected_files(&home, &rel_path)?;
+
+    if dry_run {
+        return Ok(WikiDeleteResult {
+            dry_run: true,
+            affected_files,
+            trash_path: None,
+            bytes: fs::metadata(&abs).map(|m| m.len()).unwrap_or(0),
+        });
+    }
+
     // mv 到 .trash/<ts>-<原文件名>.md, 不覆盖 (ts 保证唯一)
     let trash_dir = home.join("wiki").join(".trash");
     fs::create_dir_all(&trash_dir)
@@ -271,11 +342,80 @@ pub async fn wiki_delete_file(rel_path: String) -> Result<WikiWriteResult, Strin
     let bytes = fs::metadata(&abs).map(|m| m.len()).unwrap_or(0);
     fs::rename(&abs, &dst).map_err(|e| format!("mv {abs:?} → {dst:?} 失败: {e}"))?;
 
-    Ok(WikiWriteResult {
-        rel_path: format!("wiki/.trash/{trashed_name}"),
+    Ok(WikiDeleteResult {
+        dry_run: false,
+        affected_files,
+        trash_path: Some(format!("wiki/.trash/{trashed_name}")),
         bytes,
-        created: false,
     })
+}
+
+/// P3.5.132 #3: 扫所有 wiki, 找 frontmatter related 真指向 target 真文件.
+/// target match: target_title (frontmatter) / target_slug (filename) — 跟 WikiTree
+/// danglingMap 真 match 规则一致 (case-insensitive title / slug).
+fn compute_affected_files(
+    catfish_home: &std::path::Path,
+    target_rel_path: &str,
+) -> Result<Vec<AffectedFile>, String> {
+    use crate::commands::wiki_read::collect_all_wiki_md;
+    let target_abs = catfish_home.join(target_rel_path);
+    let target_title = read_title_from_md(&target_abs).unwrap_or_default();
+    let target_slug = target_abs
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
+    let target_title_lower = target_title.trim().to_lowercase();
+    let target_slug_lower = target_slug.trim().to_lowercase();
+
+    let mut out = Vec::new();
+    for path in collect_all_wiki_md(catfish_home) {
+        if path == target_abs {
+            continue; // 跳自己
+        }
+        let content = match fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        // 简单匹配: frontmatter 真 related 段含 target_title / target_slug
+        // body 真 [[name]] 也匹配 (跟 WikiTree danglingMap 一致)
+        let lower = content.to_lowercase();
+        let matched = !target_title_lower.is_empty()
+            && (lower.contains(&format!("[[{target_title_lower}]]"))
+                || lower.contains(&format!("\"{target_title_lower}\""))
+                || lower.contains(&format!(", {target_title_lower}")))
+            || (!target_slug_lower.is_empty()
+                && lower.contains(&format!("[[{target_slug_lower}]]")));
+        if !matched {
+            continue;
+        }
+        let title = read_title_from_md(&path).unwrap_or_else(|| {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string()
+        });
+        let rel = path
+            .strip_prefix(catfish_home)
+            .ok()
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_default();
+        out.push(AffectedFile { rel_path: rel, title });
+    }
+    Ok(out)
+}
+
+fn read_title_from_md(path: &std::path::Path) -> Option<String> {
+    let content = fs::read_to_string(path).ok()?;
+    let after_first = content.strip_prefix("---")?.strip_prefix('\n')?;
+    let end = after_first.find("\n---")?;
+    let fm = &after_first[..end];
+    for line in fm.lines() {
+        if let Some(rest) = line.strip_prefix("title:") {
+            return Some(rest.trim().trim_matches('"').to_string());
+        }
+    }
+    None
 }
 
 // ============================================================
@@ -408,7 +548,7 @@ pub async fn wiki_sensitive_terms_ensure() -> Result<SensitiveTermsCheck, String
     })
 }
 
-/// 真**简单 today 真 YYYY-MM-DD format** — 不引 chrono dep (太重), 用 std time + hand calc.
+/// 简单 today YYYY-MM-DD format — 不引 chrono dep (太重), 用 std time + hand calc.
 fn chrono_today() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -420,7 +560,7 @@ fn chrono_today() -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-/// 真**真 days since epoch → (year, month, day)**, civil_from_days (Howard Hinnant algorithm).
+/// days since epoch → (year, month, day), civil_from_days (Howard Hinnant algorithm).
 fn days_to_ymd(z: i64) -> (i64, u32, u32) {
     let z = z + 719468;
     let era = if z >= 0 { z } else { z - 146096 } / 146097;

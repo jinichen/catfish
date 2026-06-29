@@ -58,7 +58,7 @@ pub struct WikiSemanticResult {
 }
 
 /// wiki_search_semantic — embed query, cosine vs cached entity/concept embeddings, top-K.
-/// 首次 call 自动同步 index 全 wiki/. 后续真**`增量逻辑**`** 真**`留 P38.3**真.
+/// 首次 call 自动同步 index 全 wiki/. 后续增量逻辑留 P38.3.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn wiki_search_semantic(
     query: String,
@@ -173,12 +173,17 @@ async fn ensure_index() -> Result<usize, String> {
     // 路径根一致. rel_path 改成相对 ~/.catfish/ (strip_prefix 算), 兼容 wiki/ 跟 wiki-shared/dept/<部门>/.
     let catfish_root = home.join(".catfish");
     let mut count = 0usize;
+    // P3.5.132 #1 (6/29 鸿波 catch "wiki 删了搜出 404"): 收集真实存在真 rel_path,
+    // 末尾扫一遍 SQLite 删孤儿 row (软删 wiki 后 cache 留着造成 wiki_search_semantic
+    // 命中已删文件, 员工点开 404). 用 Set 兼顾 O(1) lookup.
+    let mut existing_rels: std::collections::HashSet<String> = std::collections::HashSet::new();
     for path in crate::commands::wiki_read::collect_all_wiki_md(&catfish_root) {
         // rel_path 改用 strip_prefix, 兼容 wiki-shared/dept/<部门>/file_id.md 嵌套.
         let rel_path = match path.strip_prefix(&catfish_root) {
             Ok(p) => p.to_string_lossy().replace('\\', "/"),
             Err(_) => continue,
         };
+        existing_rels.insert(rel_path.clone());
         let content = match fs::read_to_string(&path) {
             Ok(c) => c,
             Err(_) => continue,
@@ -191,7 +196,7 @@ async fn ensure_index() -> Result<usize, String> {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
 
-        // skip 真**`如果 mtime 没**变`** 真**`SQLite cache 真**`** 真**`hit`**
+        // skip if mtime unchanged → SQLite cache hit
         let cached_mtime: Option<i64> = conn
             .query_row(
                 "SELECT mtime FROM wiki_embed WHERE rel_path = ?1",
@@ -204,7 +209,7 @@ async fn ensure_index() -> Result<usize, String> {
             continue;
         }
 
-        // parse 真**`title + kind`** 真**`frontmatter`** + snippet
+        // parse title + kind from frontmatter + snippet
         let (title, kind, snippet) = parse_for_embed(&content);
         // embed full content (frontmatter + body)
         let vec = match embed_text(&content).await {
@@ -220,7 +225,46 @@ async fn ensure_index() -> Result<usize, String> {
         .map_err(|e| format!("insert: {e}"))?;
         count += 1;
     }
+
+    // P3.5.132 #1: 扫 SQLite 所有 rel_path, 不在 existing_rels 真删.
+    let purged = purge_orphans(&conn, &existing_rels)?;
+    if purged > 0 {
+        log::info!("[wiki_embed] purged {purged} orphan row(s)");
+    }
+
     Ok(count)
+}
+
+/// P3.5.132 #1: 删 wiki_embed 真不在 existing rel_path set 真孤儿 row.
+/// 抽纯函数让单测能用 in-memory SQLite 验.
+fn purge_orphans(
+    conn: &rusqlite::Connection,
+    existing: &std::collections::HashSet<String>,
+) -> Result<usize, String> {
+    let cached_rels: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT rel_path FROM wiki_embed")
+            .map_err(|e| format!("prep cached_rels: {e}"))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("query cached_rels: {e}"))?;
+        let mut v = Vec::new();
+        for r in rows {
+            if let Ok(s) = r {
+                v.push(s);
+            }
+        }
+        v
+    };
+    let mut purged = 0usize;
+    for cached in cached_rels {
+        if !existing.contains(&cached) {
+            conn.execute("DELETE FROM wiki_embed WHERE rel_path = ?1", [&cached])
+                .map_err(|e| format!("delete orphan {cached}: {e}"))?;
+            purged += 1;
+        }
+    }
+    Ok(purged)
 }
 
 fn parse_for_embed(content: &str) -> (String, String, String) {
@@ -248,4 +292,92 @@ fn parse_for_embed(content: &str) -> (String, String, String) {
     let body = &content[body_start..];
     let snippet: String = body.chars().take(120).collect::<String>().replace('\n', " ");
     (title, kind, snippet)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn setup_test_db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute(
+            "CREATE TABLE wiki_embed (
+                rel_path TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                snippet TEXT NOT NULL,
+                vector BLOB NOT NULL,
+                mtime INTEGER NOT NULL
+            )",
+            [],
+        )
+        .unwrap();
+        conn
+    }
+
+    fn insert_row(conn: &rusqlite::Connection, rel_path: &str) {
+        conn.execute(
+            "INSERT INTO wiki_embed (rel_path, title, kind, snippet, vector, mtime)
+             VALUES (?1, 't', 'entity', 's', X'00', 1)",
+            [rel_path],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn purge_orphans_removes_missing_files() {
+        let conn = setup_test_db();
+        insert_row(&conn, "wiki/entities/alive.md");
+        insert_row(&conn, "wiki/entities/deleted.md");
+
+        let mut existing = HashSet::new();
+        existing.insert("wiki/entities/alive.md".to_string());
+
+        let purged = purge_orphans(&conn, &existing).unwrap();
+        assert_eq!(purged, 1, "应删除 1 个孤儿 (deleted.md)");
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM wiki_embed", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1, "alive.md 仍在");
+
+        let remaining: String = conn
+            .query_row(
+                "SELECT rel_path FROM wiki_embed LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, "wiki/entities/alive.md");
+    }
+
+    #[test]
+    fn purge_orphans_empty_existing_clears_all() {
+        let conn = setup_test_db();
+        insert_row(&conn, "wiki/entities/x.md");
+        insert_row(&conn, "wiki/entities/y.md");
+
+        let purged = purge_orphans(&conn, &HashSet::new()).unwrap();
+        assert_eq!(purged, 2);
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM wiki_embed", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn purge_orphans_all_existing_purges_none() {
+        let conn = setup_test_db();
+        insert_row(&conn, "wiki/entities/a.md");
+        insert_row(&conn, "wiki/entities/b.md");
+
+        let mut existing = HashSet::new();
+        existing.insert("wiki/entities/a.md".to_string());
+        existing.insert("wiki/entities/b.md".to_string());
+
+        let purged = purge_orphans(&conn, &existing).unwrap();
+        assert_eq!(purged, 0);
+    }
 }

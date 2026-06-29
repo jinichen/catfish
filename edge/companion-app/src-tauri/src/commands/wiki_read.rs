@@ -5,29 +5,47 @@
 //!     返 Vec<WikiFileInfo> — frontmatter parse (type/title/tags/related/sources)
 //!   - wiki_read_file: 读单 file 真 content + frontmatter
 //!
-//! Frontmatter parse: 真**简单 YAML scan**, 不引 serde_yaml dep —
-//! 真**catfish wiki 真 frontmatter format 真**真**真**fixed (P1.1.1 Generation prompt 真**), 真**几个**真**已知字段** 抽即可.
+//! Frontmatter parse: 简单 YAML scan, 不引 serde_yaml dep —
+//! catfish wiki frontmatter format 在 P1.1.1 Generation prompt 已固定, 抽几个已知字段即可.
 
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// P3.5.132 #5 (6/29 鸿波): typed relations.
+///
+/// related 真原是 `Vec<String>`, 现升级 `Vec<RelatedRef>` 支持给关系标真 rel 字段
+/// (e.g. "管理" / "隶属" / "合作"). dual-shape parser 真兼容旧 frontmatter:
+///   - 旧: `related: [陈鸿波, FFCS]` → `[{name: "陈鸿波", rel: None}, ...]`
+///   - 新: `related: [{name: 陈鸿波, rel: 同事}, FFCS]` → mixed list 都接受
+///   - 全新: `related: [{name: 陈鸿波, rel: 同事}, {name: FFCS, rel: 部门}]`
+///
+/// rel 真自由 string (跟 tags 同款软约定, 鸿波 audit 拍 — 加 rel 0 代码改动).
+/// UI 真 datalist 全 wiki rel union 真 autocomplete 治 typo.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct RelatedRef {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub rel: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WikiFileInfo {
     /// rel path from ~/.catfish/, e.g. "wiki/entities/openai.md"
     pub rel_path: String,
-    /// kind: "entity" | "concept" | "query" (从 path 真**抽**)
+    /// kind: "entity" | "concept" | "query" (从 path 抽)
     pub kind: String,
-    /// slug (filename 真**真**去 .md)
+    /// slug (filename 去 .md)
     pub slug: String,
     /// title (frontmatter 真 `title:` field, 或 fallback slug)
     pub title: String,
     /// type tag: entity_type / concept_type (e.g. "person", "process")
     pub subtype: Option<String>,
-    /// tags 真**list (frontmatter `tags: [...]`)
+    /// tags list (frontmatter `tags: [...]`)
     pub tags: Vec<String>,
-    /// related wikilinks (frontmatter `related: [...]`) — 真**`[[name]]`** 真**抽** name
-    pub related: Vec<String>,
+    /// related wikilinks (frontmatter `related: [...]`) — `[[name]]` 抽 name.
+    /// P3.5.132 #5: 升级为 typed RelatedRef, 旧 frontmatter 兼容 (rel=None).
+    pub related: Vec<RelatedRef>,
     /// sources (frontmatter `sources: [...]`)
     pub sources: Vec<String>,
     /// 文件 byte size
@@ -43,7 +61,7 @@ pub struct WikiFileFull {
     pub content: String,
     /// frontmatter block (---...--- 之间)
     pub frontmatter: String,
-    /// body (frontmatter 后真**Markdown**)
+    /// body (frontmatter 后真 Markdown)
     pub body: String,
 }
 
@@ -58,14 +76,14 @@ fn catfish_home() -> Result<PathBuf, String> {
     Ok(home_dir()?.join(".catfish"))
 }
 
-/// 切 `---` 标记真**frontmatter** + body
+/// 切 `---` 标记真 frontmatter + body
 fn split_frontmatter(text: &str) -> (String, String) {
     let trimmed = text.trim_start();
     if !trimmed.starts_with("---") {
         return (String::new(), text.to_string());
     }
     let after_first = &trimmed[3..];
-    // 找下一个 `---` 真**line start**
+    // 找下一个 `---` 真 line start
     if let Some(end_idx) = after_first.find("\n---") {
         let fm = after_first[..end_idx].trim().to_string();
         let body = after_first[end_idx + 4..].trim_start_matches('\n').to_string();
@@ -74,7 +92,7 @@ fn split_frontmatter(text: &str) -> (String, String) {
     (String::new(), text.to_string())
 }
 
-/// 真**简单 YAML 字段抽** — 真**只抽 `key: value` 真**`key: [v1, v2]`**, 不真**真**多层 nested**.
+/// 简单 YAML 字段抽 — 只抽 `key: value` 跟 `key: [v1, v2]`, 不支持多层 nested.
 fn parse_frontmatter_field(fm: &str, key: &str) -> Option<String> {
     for line in fm.lines() {
         let line = line.trim();
@@ -85,7 +103,7 @@ fn parse_frontmatter_field(fm: &str, key: &str) -> Option<String> {
     None
 }
 
-/// 真**`tags: [a, b, c]`** 或 `tags: ["a", "b"]` 都接受 → Vec<String>.
+/// `tags: [a, b, c]` 或 `tags: ["a", "b"]` 都接受 → Vec<String>.
 fn parse_list_field(fm: &str, key: &str) -> Vec<String> {
     let Some(raw) = parse_frontmatter_field(fm, key) else {
         return Vec::new();
@@ -98,17 +116,96 @@ fn parse_list_field(fm: &str, key: &str) -> Vec<String> {
         .collect()
 }
 
-/// 真**`related: ["[[陈鸿波]]", "[[FFCS]]"]`** → 真**`["陈鸿波", "FFCS"]`** (去 `[[` `]]`).
-fn parse_related(fm: &str) -> Vec<String> {
-    parse_list_field(fm, "related")
+/// P3.5.132 #5: dual-shape `related:` parser.
+///
+/// 接受:
+///   - 旧 bare string: `related: [陈鸿波, FFCS]` → `[{name, rel: None}, ...]`
+///   - 旧 wikilink: `related: ["[[陈鸿波]]", "[[FFCS]]"]` → 去 `[[]]` 后 name
+///   - 新 inline map: `related: [{name: 陈鸿波, rel: 同事}, FFCS]` → mixed
+///
+/// brace-aware splitter — 不能简单按 `,` split, 否则 `{a, b}` 会被切坏.
+fn parse_related(fm: &str) -> Vec<RelatedRef> {
+    let Some(raw) = parse_frontmatter_field(fm, "related") else {
+        return Vec::new();
+    };
+    let inner = raw.trim().trim_start_matches('[').trim_end_matches(']');
+    split_top_level(inner)
         .into_iter()
-        .map(|s| {
-            s.trim_start_matches("[[")
-                .trim_end_matches("]]")
-                .to_string()
-        })
-        .filter(|s| !s.is_empty())
+        .filter_map(|entry| parse_related_entry(entry.trim()))
         .collect()
+}
+
+/// 单 entry parse: 真 inline map `{name: x, rel: y}` 或 bare string `name` / `"[[name]]"`.
+fn parse_related_entry(entry: &str) -> Option<RelatedRef> {
+    if entry.is_empty() {
+        return None;
+    }
+    if entry.starts_with('{') && entry.ends_with('}') {
+        // inline map — 切 `,` (内部 brace 暂时不嵌套, 鲶鱼场景不会有)
+        let body = &entry[1..entry.len() - 1];
+        let mut name: Option<String> = None;
+        let mut rel: Option<String> = None;
+        for kv in body.split(',') {
+            let kv = kv.trim();
+            if let Some((k, v)) = kv.split_once(':') {
+                let key = k.trim();
+                let val = v.trim().trim_matches('"').trim_matches('\'').to_string();
+                if val.is_empty() {
+                    continue;
+                }
+                match key {
+                    "name" => name = Some(val),
+                    "rel" => rel = Some(val),
+                    _ => {} // 未知 key 静默忽略, 保未来兼容
+                }
+            }
+        }
+        name.filter(|n| !n.is_empty()).map(|name| RelatedRef { name, rel })
+    } else {
+        // bare string / wikilink
+        let cleaned = entry
+            .trim_matches('"')
+            .trim_matches('\'')
+            .trim_start_matches("[[")
+            .trim_end_matches("]]")
+            .trim()
+            .to_string();
+        if cleaned.is_empty() {
+            None
+        } else {
+            Some(RelatedRef { name: cleaned, rel: None })
+        }
+    }
+}
+
+/// 顶层 split — brace `{...}` 内真 `,` 不切.
+fn split_top_level(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut depth = 0;
+    let mut buf = String::new();
+    for c in s.chars() {
+        match c {
+            '{' | '[' => {
+                depth += 1;
+                buf.push(c);
+            }
+            '}' | ']' => {
+                depth -= 1;
+                buf.push(c);
+            }
+            ',' if depth == 0 => {
+                if !buf.trim().is_empty() {
+                    out.push(buf.clone());
+                }
+                buf.clear();
+            }
+            _ => buf.push(c),
+        }
+    }
+    if !buf.trim().is_empty() {
+        out.push(buf);
+    }
+    out
 }
 
 /// P3.5.42.13 (鸿波 6/20 catch '概念和实体没有关联连接'): 扫 body 抽 `[[name]]`
@@ -118,7 +215,8 @@ fn parse_related(fm: &str) -> Vec<String> {
 ///
 /// 修法: 扫 body 抽所有 wikilink, 合并进 related 返前端, WikiGraph 自动建 edge.
 /// 支持 alias 形态 `[[name|display]]` (取 name 部分跟 frontmatter 同语义).
-fn extract_body_wikilinks(body: &str) -> Vec<String> {
+/// P3.5.132 #5: body wikilink 真无 rel 信息, 全部返 rel=None.
+fn extract_body_wikilinks(body: &str) -> Vec<RelatedRef> {
     let mut out = Vec::new();
     let mut rest = body;
     while let Some(start) = rest.find("[[") {
@@ -129,7 +227,7 @@ fn extract_body_wikilinks(body: &str) -> Vec<String> {
         let name = inner.split('|').next().unwrap_or(inner).trim();
         // 跨行 / 太长大概率是 markdown table / code fence 误抓, 过滤
         if !name.is_empty() && !name.contains('\n') && name.chars().count() <= 100 {
-            out.push(name.to_string());
+            out.push(RelatedRef { name: name.to_string(), rel: None });
         }
         rest = &after[end + 2..];
     }
@@ -137,11 +235,12 @@ fn extract_body_wikilinks(body: &str) -> Vec<String> {
 }
 
 /// 合并 frontmatter related + body wikilinks, 去重保序 (frontmatter 在前).
-fn merge_related_with_body(frontmatter_related: Vec<String>, body: &str) -> Vec<String> {
+/// P3.5.132 #5: dedupe by name (rel 字段不参与 dedupe, frontmatter 真 rel 优先保留).
+fn merge_related_with_body(frontmatter_related: Vec<RelatedRef>, body: &str) -> Vec<RelatedRef> {
     let mut out = frontmatter_related;
     let body_links = extract_body_wikilinks(body);
     for link in body_links {
-        if !out.iter().any(|r| r == &link) {
+        if !out.iter().any(|r| r.name == link.name) {
             out.push(link);
         }
     }
@@ -327,7 +426,7 @@ pub async fn wiki_list_files() -> Result<Vec<WikiFileInfo>, String> {
             }
         }
     }
-    // 按 mtime 真**最近真**优先
+    // 按 mtime 最近优先
     out.sort_by(|a, b| b.mtime.partial_cmp(&a.mtime).unwrap_or(std::cmp::Ordering::Equal));
     Ok(out)
 }
@@ -553,7 +652,7 @@ pub async fn wiki_search_text(query: String) -> Result<Vec<WikiSearchHit>, Strin
             continue;
         }
 
-        // snippet: 含 hit_pos 真**`±60 chars`**, 没 hit_pos 用 body 前 120
+        // snippet: 含 hit_pos 时 ±60 chars, 没 hit_pos 用 body 前 120
         let snippet = if let Some(pos) = hit_pos {
             let start = pos.saturating_sub(60);
             let end = (pos + 60).min(content.len());
@@ -589,14 +688,14 @@ pub async fn wiki_search_text(query: String) -> Result<Vec<WikiSearchHit>, Strin
 
 #[tauri::command(rename_all = "camelCase")]
 pub async fn wiki_read_file(rel_path: String) -> Result<WikiFileFull, String> {
-    // 真**安全**: rel_path 必须 `wiki/{entities|concepts|queries}/<slug>.md`
+    // 安全: rel_path 必须 `wiki/{entities|concepts|queries}/<slug>.md`
     // 或 P3.3.18 Phase 4: `wiki-shared/dept/<部门>/<file_id>.md` (已装部门 wiki).
-    // 不允许真**`..`** 真**path traversal**.
+    // 不允许 `..` 防 path traversal.
     let allowed = (rel_path.starts_with("wiki/")
         || rel_path.starts_with("wiki-shared/dept/"))
         && !rel_path.contains("..");
     if !allowed {
-        return Err(format!("rel_path 真**白名单不通过: {rel_path}"));
+        return Err(format!("rel_path 白名单不通过: {rel_path}"));
     }
     let home = catfish_home()?;
     let abs_path = home.join(&rel_path);
@@ -621,7 +720,14 @@ pub async fn wiki_read_file(rel_path: String) -> Result<WikiFileFull, String> {
 mod tests {
     use super::*;
 
-    /// P3.5.42.13: 鸿波 entity 实景 body 形态.
+    fn rr(name: &str) -> RelatedRef {
+        RelatedRef { name: name.to_string(), rel: None }
+    }
+    fn rr_with(name: &str, rel: &str) -> RelatedRef {
+        RelatedRef { name: name.to_string(), rel: Some(rel.to_string()) }
+    }
+
+    /// P3.5.42.13: 鸿波 entity 实景 body 形态. P3.5.132 #5: 升级返 Vec<RelatedRef>.
     #[test]
     fn extract_body_wikilinks_finds_inline_links() {
         let body = "## 通信网络安全服务能力风险评估一级\n\n\
@@ -629,45 +735,109 @@ mod tests {
                     发证中心: 中国通信企业协会\n\
                     关联体系: [[企业资质知识体系]]\n";
         let out = extract_body_wikilinks(body);
-        assert_eq!(out, vec!["信息安全与安防类", "企业资质知识体系"]);
+        assert_eq!(out, vec![rr("信息安全与安防类"), rr("企业资质知识体系")]);
     }
 
     #[test]
     fn extract_body_wikilinks_handles_alias() {
-        // Obsidian alias 形态 [[name|display]] → 取 name
         let body = "看 [[信息安全与安防类|安防类]] 跟 [[陈鸿波]]";
         let out = extract_body_wikilinks(body);
-        assert_eq!(out, vec!["信息安全与安防类", "陈鸿波"]);
+        assert_eq!(out, vec![rr("信息安全与安防类"), rr("陈鸿波")]);
     }
 
     #[test]
     fn extract_body_wikilinks_skips_too_long_or_newline() {
-        // 长 wikilink 大概率是 markdown table 误抓, 跳
         let long = "a".repeat(120);
         let body = format!("[[{long}]] [[normal]] [[multi\nline]]");
         let out = extract_body_wikilinks(&body);
-        assert_eq!(out, vec!["normal"]);
+        assert_eq!(out, vec![rr("normal")]);
     }
 
     #[test]
     fn extract_body_wikilinks_empty_body() {
-        assert_eq!(extract_body_wikilinks(""), Vec::<String>::new());
-        assert_eq!(extract_body_wikilinks("no wikilinks here"), Vec::<String>::new());
+        assert_eq!(extract_body_wikilinks(""), Vec::<RelatedRef>::new());
+        assert_eq!(
+            extract_body_wikilinks("no wikilinks here"),
+            Vec::<RelatedRef>::new()
+        );
     }
 
     #[test]
     fn merge_related_dedupes_body_against_frontmatter() {
-        // frontmatter 已经有 "陈鸿波", body 又 [[陈鸿波]] 不重复加
         let body = "看 [[陈鸿波]] 跟 [[信息安全与安防类]]";
-        let out = merge_related_with_body(vec!["陈鸿波".to_string()], body);
-        assert_eq!(out, vec!["陈鸿波", "信息安全与安防类"]);
+        let out = merge_related_with_body(vec![rr("陈鸿波")], body);
+        assert_eq!(out, vec![rr("陈鸿波"), rr("信息安全与安防类")]);
     }
 
     #[test]
     fn merge_related_preserves_frontmatter_first() {
-        // frontmatter 在前 (员工显式标的优先级)
         let body = "[[A]] [[B]]";
-        let out = merge_related_with_body(vec!["X".to_string(), "Y".to_string()], body);
-        assert_eq!(out, vec!["X", "Y", "A", "B"]);
+        let out = merge_related_with_body(vec![rr("X"), rr("Y")], body);
+        assert_eq!(out, vec![rr("X"), rr("Y"), rr("A"), rr("B")]);
+    }
+
+    /// P3.5.132 #5: dedupe by name 真 — frontmatter 真 typed rel 优先, body wikilink
+    /// 同名跳, rel 不被 body None 覆盖.
+    #[test]
+    fn merge_related_keeps_typed_rel_when_body_has_same_name() {
+        let body = "[[陈鸿波]] [[新人]]";
+        let out = merge_related_with_body(vec![rr_with("陈鸿波", "同事")], body);
+        assert_eq!(out, vec![rr_with("陈鸿波", "同事"), rr("新人")]);
+    }
+
+    // ─── P3.5.132 #5 dual-shape parser tests ──────────────────────────
+
+    #[test]
+    fn parse_related_old_bare_strings() {
+        let fm = "related: [陈鸿波, FFCS]";
+        let out = parse_related(fm);
+        assert_eq!(out, vec![rr("陈鸿波"), rr("FFCS")]);
+    }
+
+    #[test]
+    fn parse_related_old_wikilink_form() {
+        let fm = "related: [\"[[陈鸿波]]\", \"[[FFCS]]\"]";
+        let out = parse_related(fm);
+        assert_eq!(out, vec![rr("陈鸿波"), rr("FFCS")]);
+    }
+
+    #[test]
+    fn parse_related_new_inline_map() {
+        let fm = "related: [{name: 陈鸿波, rel: 同事}, {name: FFCS, rel: 部门}]";
+        let out = parse_related(fm);
+        assert_eq!(out, vec![rr_with("陈鸿波", "同事"), rr_with("FFCS", "部门")]);
+    }
+
+    #[test]
+    fn parse_related_mixed_old_and_new() {
+        let fm = "related: [{name: 陈鸿波, rel: 同事}, FFCS, 项目X]";
+        let out = parse_related(fm);
+        assert_eq!(
+            out,
+            vec![rr_with("陈鸿波", "同事"), rr("FFCS"), rr("项目X")]
+        );
+    }
+
+    #[test]
+    fn parse_related_inline_map_with_quoted_values() {
+        let fm = "related: [{name: \"陈鸿波\", rel: \"同事\"}]";
+        let out = parse_related(fm);
+        assert_eq!(out, vec![rr_with("陈鸿波", "同事")]);
+    }
+
+    #[test]
+    fn parse_related_empty_or_missing() {
+        assert_eq!(parse_related(""), Vec::<RelatedRef>::new());
+        assert_eq!(parse_related("title: x\ntags: []"), Vec::<RelatedRef>::new());
+        assert_eq!(parse_related("related: []"), Vec::<RelatedRef>::new());
+    }
+
+    #[test]
+    fn split_top_level_respects_braces() {
+        // 验证 brace-aware splitter — 内部 `,` 不切
+        assert_eq!(
+            split_top_level("a, {b, c}, d"),
+            vec!["a".to_string(), " {b, c}".to_string(), " d".to_string()]
+        );
     }
 }

@@ -102,8 +102,8 @@ export default function WikiTree() {
     const m = new Map<string, number>();
     for (const f of files) {
       for (const r of f.related) {
-        // 真**真**真**name match 真**真**真**target file 真 title / slug**真
-        const lower = r.toLowerCase();
+        // P3.5.132 #5: r 真 RelatedRef, name match target file 真 title / slug.
+        const lower = r.name.toLowerCase();
         const target = files.find(
           (x) =>
             x.title.toLowerCase() === lower ||
@@ -118,20 +118,21 @@ export default function WikiTree() {
     return m;
   }, [files]);
 
-  // dangling wikilinks (file 真**真**related 含真 target 找不到)
+  // dangling wikilinks (file 真 related 含真 target 找不到)
   const danglingMap = useMemo(() => {
     const m = new Map<string, string[]>();
     for (const f of files) {
       const dangling: string[] = [];
       for (const r of f.related) {
-        const lower = r.toLowerCase();
+        // P3.5.132 #5: 用 r.name match
+        const lower = r.name.toLowerCase();
         const found = files.some(
           (x) =>
             x.title.toLowerCase() === lower ||
             x.slug.toLowerCase() === lower ||
             x.title.toLowerCase().includes(lower)
         );
-        if (!found) dangling.push(r);
+        if (!found) dangling.push(r.name); // P3.5.132 #5: 存 name 字符串方便 UI 展示
       }
       if (dangling.length > 0) m.set(f.rel_path, dangling);
     }
@@ -197,7 +198,7 @@ export default function WikiTree() {
   const entityCategories = useMemo(() => {
     const map = new Map<string, WikiFileInfo[]>();
     for (const e of grouped.entity) {
-      const category = e.related[0]?.trim() || "未分类";
+      const category = e.related[0]?.name?.trim() || "未分类"; // P3.5.132 #5
       if (!map.has(category)) map.set(category, []);
       map.get(category)!.push(e);
     }
@@ -236,7 +237,7 @@ export default function WikiTree() {
     const map = new Map<string, WikiFileInfo[]>();
     // 第 1 轮: 真**有 related[0] 真 concept 进各自父组**
     for (const c of grouped.concept) {
-      const category = c.related[0]?.trim();
+      const category = c.related[0]?.name?.trim(); // P3.5.132 #5
       if (category) {
         if (!map.has(category)) map.set(category, []);
         map.get(category)!.push(c);
@@ -246,7 +247,7 @@ export default function WikiTree() {
     // 真**已有子级**真**0 额外处理** (header click 真**走 P3.5.113 match 路径**跳父 preview);
     // 真**无子级 (真孤儿)**真**进"🌟 顶级体系"组兜底**.
     for (const c of grouped.concept) {
-      if (c.related[0]?.trim()) continue; // 已在第 1 轮处理
+      if (c.related[0]?.name?.trim()) continue; // P3.5.132 #5: 已在第 1 轮处理
       const hasChildren = map.has(c.title); // 真**自己**是否为某组真 key
       if (hasChildren) continue; // header 已经隐含真**就是它**, 0 重复
       // 真**孤儿**真**兜底**
@@ -734,8 +735,8 @@ function CategorySubgroup({
         title: category,
         subtype: "system", // P3.5.109 顶级体系标记 → P3.5.108 isSystemConcept 自动判定 subtree
         tags: [],
-        related: [], // 顶级体系真**无上位**, 默认空 (用户后续可改)
-        body: `# ${category}\n\n(由 catfish 自动建立 — 点 group header 触发)\n\n下属概念真**自动反推**: WikiGraph 真**走 children**真 related[0] 真**指向本体系**.`,
+        related: [], // 顶级体系无上位, 默认空 (用户后续可改)
+        body: `# ${category}\n\n(由 catfish 自动建立 — 点 group header 触发)\n\n下属概念自动反推: WikiGraph 走 children related[0] 指向本体系.`,
       });
       // 真**真**建成功**: 刷新 files + 切到新 file → P3.5.108 isSystemConcept → subtree ✓
       setVirtualSystem(null);

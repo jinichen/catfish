@@ -382,6 +382,14 @@ export const wikiSaveChatMessage = (args: {
   });
 
 // ── BL-CATFISH-WIKI-MODE P3.3.2: wiki read API ──
+/** P3.5.132 #5 (6/29 鸿波): typed relations.
+ *  rel 字段 free-text (跟 catfish 现有 tags/kind 同款软约定),
+ *  UI 真 datalist autocomplete 治 typo. 旧 frontmatter `related: [name]` 也兼容, rel=null. */
+export interface RelatedRef {
+  name: string;
+  rel?: string | null;
+}
+
 export interface WikiFileInfo {
   rel_path: string;
   kind: "entity" | "concept" | "query";
@@ -389,7 +397,8 @@ export interface WikiFileInfo {
   title: string;
   subtype: string | null;
   tags: string[];
-  related: string[];
+  /** P3.5.132 #5: 升级 typed RelatedRef 数组, 旧 frontmatter 自动 rel=null. */
+  related: RelatedRef[];
   sources: string[];
   size_bytes: number;
   mtime: number;
@@ -477,7 +486,9 @@ export const wikiCreateEntityOrConcept = (args: {
   title: string;
   subtype: string;
   tags: string[];
-  related: string[];
+  /** P3.5.132 #5: dual-shape — 老 caller 真 string[] 仍可,
+   *  新 caller 用 RelatedRef[] 真带 rel 字段. Rust 真 #[serde(untagged)] 自动 deserialize. */
+  related: Array<string | RelatedRef>;
   body: string;
 }) => rawInvoke<WikiWriteResult>("wiki_create_entity_or_concept", args);
 
@@ -485,9 +496,21 @@ export const wikiUpdateFile = (relPath: string, content: string) =>
   rawInvoke<WikiWriteResult>("wiki_update_file", { relPath, content });
 
 /** P3.3.4 (6/9 鸿波): 软删 entity/concept/query → mv 到 wiki/.trash/<ts>-原名.md.
- * list/graph 立即看不到, 想 restore 自己 Finder 把文件 mv 回 entities/. */
-export const wikiDeleteFile = (relPath: string) =>
-  rawInvoke<WikiWriteResult>("wiki_delete_file", { relPath });
+ * P3.5.132 #3 (6/29 鸿波): 加 dryRun + affectedFiles 真**先报谁会变 dangling**. */
+export interface AffectedFile {
+  rel_path: string;
+  title: string;
+}
+
+export interface WikiDeleteResult {
+  dry_run: boolean;
+  affected_files: AffectedFile[];
+  trash_path: string | null;
+  bytes: number;
+}
+
+export const wikiDeleteFile = (relPath: string, dryRun = false) =>
+  rawInvoke<WikiDeleteResult>("wiki_delete_file", { relPath, dryRun });
 
 // P28 / P29 (6/5 鸿波): Companion Dashboard 改 gateway/identity URL
 // P3.4.1 (6/13 hb): 砍 secret_broker_url — 中央 secret-broker 服务删, OAuth

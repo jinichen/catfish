@@ -156,7 +156,8 @@ export default function WikiGraph() {
       // out-edges: selected 自己的 related
       if (selFile) {
         for (const r of selFile.related) {
-          const target = findTargetForFilter(r);
+          // P3.5.132 #5: r 真 RelatedRef
+          const target = findTargetForFilter(r.name);
           if (target) ego.add(target.rel_path);
         }
       }
@@ -164,7 +165,7 @@ export default function WikiGraph() {
       for (const f of files) {
         if (f.rel_path === selectedPath) continue;
         for (const r of f.related) {
-          const target = findTargetForFilter(r);
+          const target = findTargetForFilter(r.name);
           if (target && target.rel_path === selectedPath) {
             ego.add(f.rel_path);
             break;
@@ -186,25 +187,26 @@ export default function WikiGraph() {
       for (const f of files) {
         if (f.kind !== "concept") continue;
         if (effectiveRoot.rel_path && f.rel_path === effectiveRoot.rel_path) continue;
-        const parent = (f.related[0] || "").trim().toLowerCase();
+        // P3.5.132 #5: related[0] 真 RelatedRef, 取 .name
+        const parent = (f.related[0]?.name || "").trim().toLowerCase();
         if (parent === rootTitle) {
           subtree.add(f.rel_path);
           layer1ConceptTitles.add(f.title.trim().toLowerCase());
         }
       }
-      // 第 2 层: 找所有 entity 真 related[0] 真**指向第 1 层任意 concept**
+      // 第 2 层: 找所有 entity 真 related[0] 指向第 1 层任意 concept
       for (const f of files) {
         if (f.kind !== "entity") continue;
-        const parent = (f.related[0] || "").trim().toLowerCase();
+        const parent = (f.related[0]?.name || "").trim().toLowerCase();
         if (layer1ConceptTitles.has(parent)) {
           subtree.add(f.rel_path);
         }
       }
-      // 真**也兜底**: 真有 entity 真**直接**指向 root 体系 (跨级关联), 也算
+      // 兜底: 有 entity 直接指向 root 体系 (跨级关联), 也算
       for (const f of files) {
         if (f.kind !== "entity") continue;
         if (subtree.has(f.rel_path)) continue;
-        const parent = (f.related[0] || "").trim().toLowerCase();
+        const parent = (f.related[0]?.name || "").trim().toLowerCase();
         if (parent === rootTitle) {
           subtree.add(f.rel_path);
         }
@@ -241,20 +243,23 @@ export default function WikiGraph() {
     for (const f of files) {
       if (nodeFilter && !nodeFilter.has(f.rel_path)) continue;
       for (const r of f.related) {
-        const target = findTarget(r);
+        // P3.5.132 #5: r 真 RelatedRef
+        const target = findTarget(r.name);
         if (!target) continue; // dangling, skip
         if (target.rel_path === f.rel_path) continue; // self-link
-        if (nodeFilter && !nodeFilter.has(target.rel_path)) continue; // ego 真**只内部 edge**
-        // edge key 真**`<src>→<dst>`** 防重复
+        if (nodeFilter && !nodeFilter.has(target.rel_path)) continue; // ego 只内部 edge
+        // edge key `<src>→<dst>` 防重复
         const edgeKey = `${f.rel_path}→${target.rel_path}`;
         if (g.hasEdge(edgeKey)) continue;
         try {
+          // P3.5.132 #5: edge attribute 真带 rel, hover tooltip 显示
           g.addEdgeWithKey(edgeKey, f.rel_path, target.rel_path, {
             size: 1,
             color: "rgba(120, 120, 120, 0.6)",
+            rel: r.rel ?? null,
           });
         } catch {
-          /* duplicate / 真**真**真**真 silent skip */
+          /* duplicate / silent skip */
         }
       }
     }

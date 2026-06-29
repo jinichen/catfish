@@ -861,16 +861,27 @@ mod tests {
         vec!["chinatelecom.cn".into(), "ffcs.cn".into()]
     }
 
+    /// P3.5.132 收尾 (6/29 鸿波 catch warning): msg 真返加 sender/body, caller
+    /// 真不再真重复传 string literal 给 make. dead param 清掉.
     fn msg(
         subject: &str,
         sender: &str,
         body: &str,
         recipients: &[&str],
         attachments: Vec<AttachmentInfo>,
-    ) -> (String, Vec<String>, Vec<AttachmentInfo>, Vec<String>) {
+    ) -> (
+        String,
+        String,
+        String,
+        Vec<String>,
+        Vec<AttachmentInfo>,
+        Vec<String>,
+    ) {
         let recv: Vec<String> = recipients.iter().map(|s| s.to_string()).collect();
         (
             subject.to_string(),
+            sender.to_string(),
+            body.to_string(),
             recv,
             attachments,
             our_domains(),
@@ -890,14 +901,14 @@ mod tests {
 
     #[test]
     fn safe_email_no_flags() {
-        let (sub, recv, att, dom) = msg(
+        let (sub, send, body, recv, att, dom) = msg(
             "项目周报",
             "张三 <zhangsan@chinatelecom.cn>",
             "本周项目进展...",
             &["lisi@chinatelecom.cn"],
             vec![],
         );
-        let m = make("id1", &sub, "张三 <zhangsan@chinatelecom.cn>", "本周项目进展...", &recv, &att, &dom);
+        let m = make("id1", &sub, &send, &body, &recv, &att, &dom);
         let r = scan_rules(&m);
         assert!(r.flags.is_empty(), "{:?}", r.flags);
         assert_eq!(r.highest_severity, Severity::None);
@@ -905,14 +916,14 @@ mod tests {
 
     #[test]
     fn sender_display_name_mismatch_detected() {
-        let (sub, recv, att, dom) = msg(
+        let (sub, send, body, recv, att, dom) = msg(
             "信安通告",
             "信安部 <attacker@gmail.com>",
             "请点此验证",
             &["target@chinatelecom.cn"],
             vec![],
         );
-        let m = make("id2", &sub, "信安部 <attacker@gmail.com>", "请点此验证", &recv, &att, &dom);
+        let m = make("id2", &sub, &send, &body, &recv, &att, &dom);
         let r = scan_rules(&m);
         assert!(r.flags.iter().any(|f| f.rule_id == "PHISH-001-display-name-mismatch"));
         assert_eq!(r.highest_severity, Severity::High);
@@ -920,28 +931,28 @@ mod tests {
 
     #[test]
     fn similar_domain_homograph() {
-        let (sub, recv, att, dom) = msg(
+        let (sub, send, body, recv, att, dom) = msg(
             "账户验证",
             "system <admin@ch1natelecom.cn>",
             "请验证账户",
             &["target@chinatelecom.cn"],
             vec![],
         );
-        let m = make("id3", &sub, "system <admin@ch1natelecom.cn>", "请验证账户", &recv, &att, &dom);
+        let m = make("id3", &sub, &send, &body, &recv, &att, &dom);
         let r = scan_rules(&m);
         assert!(r.flags.iter().any(|f| f.rule_id == "PHISH-002-similar-domain"));
     }
 
     #[test]
     fn urgent_keywords_detected() {
-        let (sub, recv, att, dom) = msg(
+        let (sub, send, body, recv, att, dom) = msg(
             "紧急: 账户冻结",
             "noreply@example.com",
             "您的账户异常, 请立即验证密码, 24小时内重置密码",
             &["target@chinatelecom.cn"],
             vec![],
         );
-        let m = make("id4", &sub, "noreply@example.com", "您的账户异常, 请立即验证密码, 24小时内重置密码", &recv, &att, &dom);
+        let m = make("id4", &sub, &send, &body, &recv, &att, &dom);
         let r = scan_rules(&m);
         assert!(r.flags.iter().any(|f| f.rule_id == "PHISH-011-urgent-keywords"));
         // 命中 4+ 个紧迫词 + subject 含"紧急" → 应该是 high
@@ -951,78 +962,78 @@ mod tests {
 
     #[test]
     fn personal_info_request_high() {
-        let (sub, recv, att, dom) = msg(
+        let (sub, send, body, recv, att, dom) = msg(
             "账户问题",
             "support@bank.com",
             "请回信告知您的身份证号和短信验证码以恢复账户",
             &["target@chinatelecom.cn"],
             vec![],
         );
-        let m = make("id5", &sub, "support@bank.com", "请回信告知您的身份证号和短信验证码以恢复账户", &recv, &att, &dom);
+        let m = make("id5", &sub, &send, &body, &recv, &att, &dom);
         let r = scan_rules(&m);
         assert!(r.flags.iter().any(|f| f.rule_id == "PHISH-013-personal-info-request"));
     }
 
     #[test]
     fn shortlink_detected() {
-        let (sub, recv, att, dom) = msg(
+        let (sub, send, body, recv, att, dom) = msg(
             "新政策",
             "info@example.com",
             "请查看 https://t.cn/abc123 了解新政策",
             &[],
             vec![],
         );
-        let m = make("id6", &sub, "info@example.com", "请查看 https://t.cn/abc123 了解新政策", &recv, &att, &dom);
+        let m = make("id6", &sub, &send, &body, &recv, &att, &dom);
         let r = scan_rules(&m);
         assert!(r.flags.iter().any(|f| f.rule_id == "PHISH-021-shortlink"));
     }
 
     #[test]
     fn ip_url_detected() {
-        let (sub, recv, att, dom) = msg(
+        let (sub, send, body, recv, att, dom) = msg(
             "登录",
             "info@example.com",
             "登录 http://1.2.3.4/login.html",
             &[],
             vec![],
         );
-        let m = make("id7", &sub, "info@example.com", "登录 http://1.2.3.4/login.html", &recv, &att, &dom);
+        let m = make("id7", &sub, &send, &body, &recv, &att, &dom);
         let r = scan_rules(&m);
         assert!(r.flags.iter().any(|f| f.rule_id == "PHISH-022-ip-url"));
     }
 
     #[test]
     fn exec_attachment_detected() {
-        let (sub, recv, _, dom) = msg("发票", "vendor@chinatelecom.cn", "请查收附件", &[], vec![]);
+        let (sub, send, body, recv, _, dom) = msg("发票", "vendor@chinatelecom.cn", "请查收附件", &[], vec![]);
         let att = vec![AttachmentInfo {
             filename: "invoice.exe".into(),
             content_type: "application/x-msdownload".into(),
         }];
-        let m = make("id8", &sub, "vendor@chinatelecom.cn", "请查收附件", &recv, &att, &dom);
+        let m = make("id8", &sub, &send, &body, &recv, &att, &dom);
         let r = scan_rules(&m);
         assert!(r.flags.iter().any(|f| f.rule_id == "PHISH-031-exec-attachment"));
     }
 
     #[test]
     fn macro_doc_detected() {
-        let (sub, recv, _, dom) = msg("报表", "hr@chinatelecom.cn", "见附件", &[], vec![]);
+        let (sub, send, body, recv, _, dom) = msg("报表", "hr@chinatelecom.cn", "见附件", &[], vec![]);
         let att = vec![AttachmentInfo {
             filename: "report.docm".into(),
             content_type: "application/vnd.ms-word.document.macroEnabled.12".into(),
         }];
-        let m = make("id9", &sub, "hr@chinatelecom.cn", "见附件", &recv, &att, &dom);
+        let m = make("id9", &sub, &send, &body, &recv, &att, &dom);
         let r = scan_rules(&m);
         assert!(r.flags.iter().any(|f| f.rule_id == "PHISH-033-macro-doc"));
     }
 
     #[test]
     fn double_extension_detected() {
-        let (sub, recv, _, dom) = msg("发票", "x@y.com", "see file", &[], vec![]);
+        let (sub, send, body, recv, _, dom) = msg("发票", "x@y.com", "see file", &[], vec![]);
         let att = vec![AttachmentInfo {
             filename: "invoice.pdf.exe".into(),
             content_type: "application/octet-stream".into(),
         }];
-        let m = make("id10", &sub, "x@y.com", "see file", &recv, &att, &dom);
+        let m = make("id10", &sub, &send, &body, &recv, &att, &dom);
         let r = scan_rules(&m);
         assert!(r.flags.iter().any(|f| f.rule_id == "PHISH-035-double-extension"));
     }
@@ -1098,7 +1109,7 @@ mod tests {
 
     #[test]
     fn highest_severity_picks_max() {
-        let (sub, recv, _, dom) = msg(
+        let (sub, send, body, recv, _, dom) = msg(
             "紧急: 账户冻结请验证",
             "信安部 <attacker@gmail.com>",
             "请立即验证密码, 重置密码, 账户冻结",
@@ -1109,8 +1120,7 @@ mod tests {
             filename: "verify.exe".into(),
             content_type: "application/x-msdownload".into(),
         }];
-        let m = make("id11", &sub, "信安部 <attacker@gmail.com>",
-            "请立即验证密码, 重置密码, 账户冻结", &recv, &attachments, &dom);
+        let m = make("id11", &sub, &send, &body, &recv, &attachments, &dom);
         let r = scan_rules(&m);
         assert_eq!(r.highest_severity, Severity::High);
         assert!(r.flags.len() >= 3, "多个 high 应触发: {:?}", r.flags);

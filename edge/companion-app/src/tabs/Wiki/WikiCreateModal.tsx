@@ -201,8 +201,8 @@ export default function WikiCreateModal({ onClose, prefillTitle, prefillKind }: 
               borderLeft: "2px solid var(--catfish-orange, #F47B3D)",
             }}
           >
-            💡 真**顶级体系** — 进 WikiTree "🌟 顶级体系"组 + 选它真 WikiGraph 显**整体系子树**.
-            真**相关** 字段建议**留空** (顶级体系真**没有上位**), 下属概念真 body 写 [[本体系名]] 真**自动挂下来**.
+            💡 <strong>顶级体系</strong> — 进 WikiTree "🌟 顶级体系"组 + 选它后 WikiGraph 显整体系子树.
+            "相关" 字段建议留空 (顶级体系没有上位), 下属概念在 body 写 [[本体系名]] 即自动挂下来.
           </div>
         )}
 
