@@ -507,7 +507,6 @@ pub fn run() {
             commands::auth::auth_logout,
             commands::auth::auth_get_access_token,
             // system
-            commands::system::open_terminal,
             commands::system::notify,
             // BL-REMINDER (5/13): macOS Reminders.app 集成
             commands::system::create_reminder,

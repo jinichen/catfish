@@ -865,8 +865,6 @@ export const authGetAccessToken = () =>
   rawInvoke<string | null>("auth_get_access_token");
 
 // ── system ───────────────────────────────────────────────
-export const openTerminal = (cwd?: string) =>
-  rawInvoke<void>("open_terminal", { cwd });
 export const sendNotification = (title: string, body: string) =>
   rawInvoke<void>("notify", { title, body });
 

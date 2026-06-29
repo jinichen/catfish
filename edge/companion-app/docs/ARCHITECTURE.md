@@ -43,7 +43,7 @@ Companion App 是个**控制器**，不是路由器。它起停子进程、读�
 - `health.rs` —— `healthz` / `catalog` (调 gateway HTTP)
 - `logs.rs` —— `tail` (订阅日志事件流)
 - `sessions.rs` —— `sessions_list` / `sessions_get` (读 ~/.hermes/sessions/)
-- `system.rs` —— `open_terminal` / `notify`
+- `system.rs` —— `notify` / `create_reminder` / `list_reminder_lists` / `create_calendar_event` / `list_calendars` / `get_hermes_version` (P3.5.141 6/29: 砍 `open_terminal` — Sessions tab 已并入工作台 sidebar, 终端入口下架)
 
 ## 状态管理
 

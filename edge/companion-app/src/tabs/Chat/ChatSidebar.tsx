@@ -19,7 +19,7 @@
  */
 
 import { useEffect, useState, useCallback } from "react";
-import { listSessions, countSessions, openTerminal, sessionSoftDelete } from "../../lib/tauri";
+import { listSessions, countSessions, sessionSoftDelete } from "../../lib/tauri";
 import { groupSessionsByTitle, type SessionGroupEntry } from "../../lib/sessionGroup";
 import * as streamRegistry from "../../lib/streamRegistry";
 import type { SessionMeta } from "../../types/session";
@@ -366,22 +366,6 @@ export default function ChatSidebar({
           title="开新对话 (老对话继续在后台跑)"
         >
           + 新对话
-        </button>
-        <button
-          onClick={() => void openTerminal().catch(() => {})}
-          title="在终端打开鲶鱼 CLI (跟 Companion 共享同一对话历史)"
-          style={{
-            width: "100%",
-            padding: "6px 12px",
-            border: "1px dashed var(--catfish-border)",
-            borderRadius: "var(--radius-sm)",
-            background: "transparent",
-            color: "var(--catfish-text-muted)",
-            cursor: "pointer",
-            fontSize: 11,
-          }}
-        >
-          ⌘ 在终端开鲶鱼
         </button>
       </footer>
     </aside>
