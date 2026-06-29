@@ -93,6 +93,11 @@ fn is_valid_hhmm(s: &str) -> bool {
     if parts.len() != 2 {
         return false;
     }
+    // P3.5.145 (6/30 鸿波): 严格 HH/MM 两位 — test 期望 "8:30" 不接受.
+    // len() 对 ASCII 数字 = 字符数, 中文 / 非数字 byte 数 > 2 也会被拒 (符合预期).
+    if parts[0].len() != 2 || parts[1].len() != 2 {
+        return false;
+    }
     let h: u32 = match parts[0].parse() {
         Ok(n) => n,
         Err(_) => return false,

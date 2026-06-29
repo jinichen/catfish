@@ -1033,6 +1033,9 @@ fn truncate(s: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // P3.5.143 (6/30 鸿波): dedup_* 4 个测试共享 static push_history OnceLock,
+    // cargo test 默认并行触发 race. #[serial(push_history)] 强制串行.
+    use serial_test::serial;
 
     #[test]
     fn urgency_from_label_chinese() {
@@ -1116,6 +1119,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(push_history)]
     fn dedup_first_push_all_allowed() {
         // 清空 history (其他测试可能污染 OnceLock)
         if let Ok(mut h) = push_history().lock() { h.clear(); }
@@ -1127,6 +1131,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(push_history)]
     fn dedup_repeat_push_blocked() {
         // 清空起步
         if let Ok(mut h) = push_history().lock() { h.clear(); }
@@ -1140,6 +1145,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(push_history)]
     fn dedup_old_entry_expired_after_24h() {
         // 清空 + 注入一个 25h 前的 entry
         if let Ok(mut h) = push_history().lock() {
@@ -1155,6 +1161,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(push_history)]
     fn dedup_mixed_some_blocked_some_allowed() {
         if let Ok(mut h) = push_history().lock() {
             h.clear();

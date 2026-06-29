@@ -68,6 +68,10 @@ rust_xlsxwriter = "0.79"
 [dev-dependencies]
 # tempfile: 给单测建临时 ~/.hermes 目录用 (session_write / learning / endpoints)
 tempfile = "3"
+# P3.5.143 (6/30 鸿波): cargo test 默认并行, dedup_* 4 个测试共享 static
+#   push_history 触发 race. #[serial(push_history)] 串行 4 个测试.
+# P3.5.144: hermes_api_config 4 个测试共享 env vars + yaml 文件, 同款 #[serial(env)].
+serial_test = "3"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

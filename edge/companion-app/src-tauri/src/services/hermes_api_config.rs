@@ -70,18 +70,23 @@ fn yaml_path() -> Option<std::path::PathBuf> {
     Some(std::path::PathBuf::from(home).join(".catfish").join("companion.yaml"))
 }
 
-fn read_yaml() -> Option<HermesApiYaml> {
-    let path = yaml_path()?;
+fn read_yaml_from(path: &std::path::Path) -> Option<HermesApiYaml> {
     if !path.exists() {
         return None;
     }
-    let content = std::fs::read_to_string(&path).ok()?;
+    let content = std::fs::read_to_string(path).ok()?;
     let parsed: YamlFile = serde_yaml::from_str(&content).ok()?;
     parsed.hermes_api
 }
 
-fn build() -> HermesApiConfig {
-    let yaml = read_yaml();
+/// P3.5.144 (6/30 鸿波): 测试可注入 yaml_path 路径绕开员工本机 yaml 污染.
+/// 生产 `hermes_api_config()` 调 `build_with_yaml(None)` 走默认 `~/.catfish/companion.yaml`.
+/// 测试调 `build_with_yaml(Some(&tempdir/不存在.yaml))` 让 yaml 永远 None, 走 env 测试.
+fn build_with_yaml(yaml_path_override: Option<&std::path::Path>) -> HermesApiConfig {
+    let yaml = match yaml_path_override {
+        Some(p) => read_yaml_from(p),
+        None => yaml_path().and_then(|p| read_yaml_from(&p)),
+    };
 
     let url = yaml.as_ref()
         .and_then(|y| y.url.clone())
@@ -123,7 +128,7 @@ static CONFIG: OnceLock<HermesApiConfig> = OnceLock::new();
 
 /// 读 hermes API server 配置. 启动时算一次, 后续复用 (yaml 改了要重启 Companion).
 pub fn hermes_api_config() -> &'static HermesApiConfig {
-    CONFIG.get_or_init(build)
+    CONFIG.get_or_init(|| build_with_yaml(None))
 }
 
 /// Tauri command — 暴露给 React 让 chat.ts 知道走哪个 endpoint.
@@ -167,6 +172,11 @@ pub struct HermesApiConfigPublic {
 mod tests {
     use super::*;
     use std::env;
+    // P3.5.144 (6/30 鸿波): #[serial(env)] 强制 4 个测试串行 — env::set_var
+    // 并发 race 跨测试, 串行避. tempfile + build_with_yaml(Some) 让测试绕开员工本机
+    // ~/.catfish/companion.yaml 污染.
+    use serial_test::serial;
+    use tempfile::TempDir;
 
     fn clear_env() {
         env::remove_var("CATFISH_HERMES_API_URL");
@@ -174,40 +184,57 @@ mod tests {
         env::remove_var("CATFISH_HERMES_API_ENABLED");
     }
 
+    /// 测试用 helper: 返一个不存在的 yaml 路径 (在 tempdir 内, 文件没 create).
+    /// read_yaml_from 真**`!path.exists() → None`**, 所以 build_with_yaml 不读 yaml.
+    fn fake_yaml_path(tmp: &TempDir) -> std::path::PathBuf {
+        tmp.path().join("companion.yaml")
+    }
+
     #[test]
+    #[serial(env)]
     fn default_url_when_no_yaml_no_env() {
         clear_env();
-        // build() 读不到 yaml + 没 env → 走 DEFAULT_URL
-        // (实际跑时如果 ~/.catfish/companion.yaml 存在且没 hermes_api 段, 也 fallback default)
-        let cfg = build();
+        let tmp = TempDir::new().unwrap();
+        let yaml = fake_yaml_path(&tmp);
+        let cfg = build_with_yaml(Some(&yaml));
         assert_eq!(cfg.url, DEFAULT_URL);
     }
 
     #[test]
+    #[serial(env)]
     fn enabled_force_false_when_no_key() {
         clear_env();
         env::set_var("CATFISH_HERMES_API_ENABLED", "true");
         // 没 key → enabled 强制 false
-        let cfg = build();
+        let tmp = TempDir::new().unwrap();
+        let yaml = fake_yaml_path(&tmp);
+        let cfg = build_with_yaml(Some(&yaml));
         assert!(!cfg.enabled, "no key should force enabled=false");
+        clear_env();
     }
 
     #[test]
+    #[serial(env)]
     fn enabled_true_when_both_set() {
         clear_env();
         env::set_var("CATFISH_HERMES_API_ENABLED", "true");
         env::set_var("CATFISH_HERMES_API_KEY", "test-key-abc");
-        let cfg = build();
+        let tmp = TempDir::new().unwrap();
+        let yaml = fake_yaml_path(&tmp);
+        let cfg = build_with_yaml(Some(&yaml));
         assert!(cfg.enabled);
         assert_eq!(cfg.key.as_deref(), Some("test-key-abc"));
         clear_env();
     }
 
     #[test]
+    #[serial(env)]
     fn env_url_override() {
         clear_env();
         env::set_var("CATFISH_HERMES_API_URL", "http://example.test:9999");
-        let cfg = build();
+        let tmp = TempDir::new().unwrap();
+        let yaml = fake_yaml_path(&tmp);
+        let cfg = build_with_yaml(Some(&yaml));
         assert_eq!(cfg.url, "http://example.test:9999");
         clear_env();
     }

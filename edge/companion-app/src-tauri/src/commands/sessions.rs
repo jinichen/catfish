@@ -85,11 +85,6 @@ pub struct SessionDetail {
     pub meta: SessionMeta,
     /// 全部消息 —— 给 resume / 完整查看用; 按 timestamp asc
     pub messages: Vec<SessionMessage>,
-    /// 老接口字段, 保留兼容现有 SessionsTab 的 SessionDetail UI
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_user_message: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_assistant_message: Option<String>,
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -209,14 +204,7 @@ fn detail_blocking(id: String) -> Result<SessionDetail, String> {
     let conn = open_db()?;
     let meta = meta_by_id(&conn, &id)?;
     let messages = messages_blocking(&conn, &id)?;
-    let last_user = last_message(&conn, &id, "user")?;
-    let last_assistant = last_message(&conn, &id, "assistant")?;
-    Ok(SessionDetail {
-        meta,
-        messages,
-        last_user_message: last_user,
-        last_assistant_message: last_assistant,
-    })
+    Ok(SessionDetail { meta, messages })
 }
 
 fn meta_by_id(conn: &Connection, id: &str) -> Result<SessionMeta, String> {
@@ -257,32 +245,10 @@ fn meta_by_id(conn: &Connection, id: &str) -> Result<SessionMeta, String> {
     })
 }
 
-/// 取该会话最后一条指定 role 的消息 content（过滤 NULL / 空）
-///
-/// 例：assistant 在仅做 tool_call 时 content 可能为空，
-/// 我们要的是真有文字回复的那条。
-fn last_message(conn: &Connection, id: &str, role: &str) -> Result<Option<String>, String> {
-    let mut stmt = conn
-        .prepare(
-            r#"
-            SELECT content
-            FROM messages
-            WHERE session_id = ?1
-              AND role = ?2
-              AND content IS NOT NULL
-              AND content != ''
-            ORDER BY timestamp DESC
-            LIMIT 1
-        "#,
-        )
-        .map_err(|e| format!("SQL 准备失败: {e}"))?;
-
-    match stmt.query_row(params![id, role], |row| row.get::<_, String>(0)) {
-        Ok(content) => Ok(Some(truncate(content))),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(format!("查询消息失败: {e}")),
-    }
-}
+// P3.5.146 (6/30 鸿波"sessions.rs:88 兼容字段 dead 删"):
+// 老 `last_message` fn + `last_user_message` / `last_assistant_message` 字段砍 —
+// 给 dead SessionsTab UI 用的, 那条 dead 树在 P3.5.141 砍完后, 这两字段
+// 也是 dead. truncate fn 保留 (messages_blocking 还在用).
 
 /// SQL row → SessionMeta 的共享转换器
 /// 列序: id, title, model, started_at, ended_at, end_reason, message_count,

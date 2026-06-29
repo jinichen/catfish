@@ -46,7 +46,4 @@ export interface SessionDetail {
   meta: SessionMeta;
   /** 全部消息 (timestamp asc) —— Plan C Week 3 resume 用 */
   messages: SessionMessage[];
-  /** 老接口字段, 兼容 SessionDetail UI */
-  lastUserMessage?: string;
-  lastAssistantMessage?: string;
 }
