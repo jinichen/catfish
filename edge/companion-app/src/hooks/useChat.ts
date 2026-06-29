@@ -52,7 +52,7 @@ function nowIso(): string {
 // 5/20 拆 907 → ~700: tools cache + vision switch 抽到 chat/
 export { _clearToolsCache } from "./chat/toolsCache";
 import { ensureTools } from "./chat/toolsCache";
-import { maybeSwitchToVision } from "./chat/visionSwitch";
+import { checkVisionSupport } from "./chat/visionSwitch";
 
 // ─── 主 hook ───────────────────────────────────
 
@@ -540,29 +540,22 @@ export function useChat(_initialModel: string) {
       // 切到 vision 后, 下面 sendModel 也要同步 update. 这里改 store 不影响 sendModel
       // 直到下面赋值. 注: hello 不带图不进这分支, 不影响今晚的 picker 锁问题.
       if (attachments.some((a) => a.kind === "image")) {
-        const sw = await maybeSwitchToVision(model);
-        if (sw.switched) {
-          setModelInStore(sw.newModel);
-        }
-        if (sw.notice) {
-          // 用 assistant 角色 + status='done' 显示提示 (UI ChatMessage 不渲染 system)
+        // P3.5.140 (6/29 鸿波"不要再主动切 visionSwitch, 如果需要视觉选择的模型不支持,
+        // 直接报错"): 老 maybeSwitchToVision 自动切被砍 — 严格 picker 军规一致.
+        // 当前 picker 不支持视觉 → 显错 block send, 让员工自己 picker 切到视觉 model.
+        const check = await checkVisionSupport(model);
+        if (!check.ok) {
           const noticeMsg: ChatMessage = {
             id: uuid(),
             role: "assistant",
-            content: sw.notice,
+            content: check.error || "vision 检查失败",
             ts: nowIso(),
-            status: sw.switched ? "done" : "error",
-            // status=error 给红色错误 styling, 让员工立刻注意到
-            error: sw.switched ? undefined : sw.notice,
+            status: "error",
+            error: check.error || "vision 检查失败",
           };
           addMessage(noticeMsg);
-          // 不 persistMessage —— UI 提示性质, 不进 state.db
-        }
-        // 没切成 + 有 notice = 当前模型不支持视觉但视觉模型也找不到/拉不到。
-        // 短路返回, 不去硬发让上游 400 浪费一轮 + 误导员工. notice 已经写进
-        // 错误消息显示给员工了.
-        // (notice=null + switched=false = 当前模型本来就支持视觉, 继续往下发)
-        if (!sw.switched && sw.notice) {
+          // 不 persistMessage — UI 提示性质, 不进 state.db
+          // 短路返回, block send (老逻辑会硬发让上游 400 浪费一轮)
           return;
         }
       }

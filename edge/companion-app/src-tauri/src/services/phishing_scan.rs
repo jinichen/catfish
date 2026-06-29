@@ -723,9 +723,13 @@ struct ChatResponse { choices: Vec<ChatChoice> }
 /// LLM batch 复审 — 跟 email_scheduler::call_rate_llm 同款 reqwest pattern.
 /// 一次喂 N 封邮件 (轻量 metadata + 规则结果), 让 LLM 返 N 个 verdict+reason.
 /// 鸿波 6/12 拍板"所有邮件都调", 这就是 batch all.
+///
+/// P3.5.140 (6/29 鸿波"Rust 和 TS 统一走 hermes"): 参数 `base_url` 接 hermes 8642
+/// 或 gateway 8999 (caller 灰度选), `token` 接 hermes raw key 或 OAuth token (对应
+/// base_url 选). callee 不区分, 一律 `Authorization: Bearer {token}`.
 pub async fn batch_llm_review(
     items: &[LlmReviewInput],
-    gateway: &str,
+    base_url: &str,
     token: &str,
     model: &str,
 ) -> Result<Vec<LlmPhishingVerdict>, String> {
@@ -774,17 +778,17 @@ pub async fn batch_llm_review(
         .map_err(|e| format!("reqwest build 失败: {e}"))?;
 
     let resp = client
-        .post(format!("{gateway}/v1/chat/completions"))
+        .post(format!("{base_url}/v1/chat/completions"))
         .header("Authorization", format!("Bearer {token}"))
         .header("X-Catfish-Source", "companion-phishing-scan")
         .header("X-Catfish-Skip-Identity", "true")
         .json(&req)
         .send()
         .await
-        .map_err(|e| format!("gateway 调用失败: {e}"))?;
+        .map_err(|e| format!("LLM 调用失败 ({base_url}): {e}"))?;
 
     if !resp.status().is_success() {
-        return Err(format!("gateway 返 {}", resp.status()));
+        return Err(format!("LLM 返 {} (via {})", resp.status(), base_url));
     }
 
     let body: ChatResponse = resp

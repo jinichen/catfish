@@ -1,79 +1,86 @@
-/** Vision model 自动选择 — 抽自 useChat.ts (5/20 拆分).
+/** Vision model 检查 — 抽自 useChat.ts (5/20 拆分).
  *
- * 员工带图发送时, 如果当前模型不支持视觉, 透明切到支持的 model:
- *   1. 拉 catalog 找 supports_vision=true 的模型
- *   2. P3.5.139 (6/29 鸿波"都要去除硬编码"): 优先按 role `vision` 拉 roles.yaml,
- *      命中且 api_key_configured 真**直接用**. 没拉到 / 不可用 → visionPool 第一个.
- *   3. 改当前 store 的 model, 聊天里追加一条 system 消息 "已切到 X"
+ * P3.5.140 (6/29 鸿波"不要再主动切 visionSwitch, 如果需要视觉选择的模型不支持, 直接报错"):
+ * 之前自动切换被砍. 现在严格执行: 当前 picker 选的 model 不支持视觉 → 直接抛错,
+ * 让员工自己 picker 切到视觉 model. 严格 picker 军规一致 — 系统不再"替员工做决定".
  *
- * 失败兜底: catalog 拉不到 / 没视觉模型 → 用原模型硬发, 上游报错员工自己决策.
+ * 行为:
+ *   1. 拉 catalog 查 current model 真**supports_vision**
+ *   2. 支持: 真**OK 继续 send** (无 notice)
+ *   3. 不支持 (或 catalog 没拉到 / current model 不在 catalog): 真**抛错 notice**
+ *      让 caller 真**block send + 显错** 提示员工手动切 picker
+ *
+ * 调用方 (useChat.ts:543) 真**改造**: switched=false + notice!=null → 显错 block send,
+ * 不再透明 setModelInStore.
  */
 
-import { fetchCatalog, fetchRole } from "../../lib/tauri";
+import { fetchCatalog } from "../../lib/tauri";
 import type { CatalogModel } from "../../types/catalog";
 
-export interface VisionSwitchResult {
-  switched: boolean;
-  /** 改后的 model id (没切就是原值) */
-  newModel: string;
-  /** 给员工看的提示 (没切就是 null) */
-  notice: string | null;
+export interface VisionCheckResult {
+  /** picker 当前 model 真**支持视觉** → 继续 send */
+  ok: boolean;
+  /** 错误提示 (ok=true 时 null). 让 caller toast/banner 显, block send. */
+  error: string | null;
 }
 
-export async function maybeSwitchToVision(
+export async function checkVisionSupport(
   currentModel: string,
-): Promise<VisionSwitchResult> {
+): Promise<VisionCheckResult> {
   let models: CatalogModel[];
   try {
     const cat = await fetchCatalog();
     models = cat.models ?? [];
   } catch (e) {
-    console.warn("[catfish chat] 拉 catalog 失败, 不切视觉模型:", e);
-    return { switched: false, newModel: currentModel, notice: null };
+    console.warn("[catfish chat] 拉 catalog 失败, vision 检查不通过:", e);
+    return {
+      ok: false,
+      error: "⚠ 无法拉 catalog (gateway 可能没起). 检查 gateway 状态后重试.",
+    };
   }
 
   const cur = models.find((m) => m.id === currentModel);
   if (cur && cur.supports_vision) {
-    return { switched: false, newModel: currentModel, notice: null };
+    return { ok: true, error: null };
   }
 
+  if (!cur) {
+    return {
+      ok: false,
+      error: `⚠ 当前 model 「${currentModel}」不在 catalog (可能 api_key 没配 / yaml 拼写错). 请 picker 切到可用 model.`,
+    };
+  }
+
+  // 当前 model 不支持视觉 — 列出 catalog 真**视觉可用 model** 让员工自己挑.
   const visionPool = models.filter(
     (m) => m.supports_vision && m.api_key_configured,
   );
   if (visionPool.length === 0) {
     return {
-      switched: false,
-      newModel: currentModel,
-      notice:
-        "⚠ 没有可用的视觉模型 (supports_vision=true 且配了 API key 的为空)。" +
-        "检查内网 vision 模型配置, 或在 .env 配 GEMINI_API_KEY / DASHSCOPE_API_KEY 启用公共视觉模型。",
+      ok: false,
+      error:
+        `⚠ 当前 model 「${cur.display_name || currentModel}」不支持视觉, ` +
+        "catalog 也没可用的视觉模型 (supports_vision=true 且配了 api_key 的为空). " +
+        "检查内网 vision 模型配置, 或在 .env 配 GEMINI_API_KEY / DASHSCOPE_API_KEY 启用公共视觉模型.",
     };
   }
-
-  // P3.5.139 (6/29 鸿波"都要去除硬编码"): 优先按 roles.yaml `vision` role 选,
-  // 不再写死 ["catfish-private-vision", "catfish-public-vision"] 数组.
-  // 客户改 roles.yaml `vision: customer-vision-model` 这里跟着走.
-  const visionRole = await fetchRole("vision");
-  if (visionRole) {
-    const m = visionPool.find((x) => x.id === visionRole);
-    if (m) {
-      return {
-        switched: true,
-        newModel: m.id,
-        notice: `🔁 检测到图片附件, 已切到「${m.display_name.split(" · ")[0] || m.id}」(原 ${cur?.display_name || currentModel} 不支持视觉)`,
-      };
-    }
-    // role 配的 model 不在 catalog (没起 / 没 api key) — log + fallback visionPool 第一个
-    console.warn(
-      `[catfish chat] roles.yaml vision=${visionRole} 但 catalog 找不到 / api_key 没配, fallback visionPool 第一个`,
-    );
-  }
-
-  // roles.yaml vision 没拉到 / role 配的 model 不可用 → visionPool 第一个
-  const first = visionPool[0];
+  const visionNames = visionPool
+    .map((m) => m.display_name.split(" · ")[0] || m.id)
+    .join(" / ");
   return {
-    switched: true,
-    newModel: first.id,
-    notice: `🔁 检测到图片附件, 已切到「${first.display_name}」(原模型不支持视觉)`,
+    ok: false,
+    error:
+      `⚠ 当前 model 「${cur.display_name || currentModel}」不支持视觉. ` +
+      `picker 切到视觉模型再发 (可用: ${visionNames}).`,
   };
+}
+
+/** @deprecated P3.5.140 (6/29 鸿波"不要再主动切 visionSwitch, 直接报错") —
+ *  老自动切真**砍**了. caller 改调 checkVisionSupport 真**仅检查不切**. 留 stub
+ *  防 git revert 真**容易**, 下个 sprint 砍.
+ */
+export interface VisionSwitchResult {
+  switched: boolean;
+  newModel: string;
+  notice: string | null;
 }

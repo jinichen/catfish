@@ -43,7 +43,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tokio::time;
 
-use crate::services::{email_config, endpoints, oauth, picker_config, role_config};
+use crate::services::{email_config, hermes_api_config, picker_config, role_config};
 // P3.3.58 (6/12 鸿波): 段 2A 集成 phishing_scan
 use crate::services::phishing_scan::{
     self, LlmReviewInput, PhishingScanResult, Severity,
@@ -612,16 +612,21 @@ async fn scan_phishing_for_new(new_items: &[EmailItem]) {
         })
         .collect();
 
-    // gateway + token + model (复用 email scheduler 同款)
-    let token = match oauth::current_access_token() {
-        Some(t) => t,
+    // P3.5.140 (6/29 鸿波"数据流应该是 companion → hermes → gateway(8999), 不是双路径"):
+    // 单路径: Companion → hermes 8642 → gateway 8999 → LLM. 没有 fallback.
+    // hermes_api.key 没配 → 跳 LLM 复审 (仅规则结果存盘), 不再 fallback gateway OAuth.
+    let hermes_cfg = hermes_api_config::hermes_api_config();
+    let (base_url, token) = match hermes_cfg.key.as_deref() {
+        Some(k) => (hermes_cfg.url.clone(), k.to_string()),
         None => {
-            log::debug!("[phishing] 没 access_token, 跳过 LLM 复审 (仅规则结果存盘)");
+            log::debug!(
+                "[phishing] hermes_api.key 没配, 跳 LLM 复审 (~/.catfish/companion.yaml \
+                 hermes_api.key 必填). 仅规则结果存盘."
+            );
             store_and_audit(new_items, scans).await;
             return;
         }
     };
-    let gateway = endpoints::endpoints().gateway_base();
     // P3.5.29 Phase 4 (6/17 鸿波): 钓鱼复审跟评级共享 chain picker > role > yaml > Err.
     // 员工 chat picker 切 private, phishing scan 跟着走.
     // 数据零出端红线一致 + 客户改 roles.yaml 跟着走.
@@ -629,6 +634,9 @@ async fn scan_phishing_for_new(new_items: &[EmailItem]) {
     // P3.5.139 (6/29 鸿波"都要去除硬编码"): chain 最后一段从 unwrap_or_else
     // 兜底 hardcode 改成 Err. 没拿到 model 说明 picker 没选 + roles.yaml 没 load
     // + yaml 没 override — 这种情况评级本来就该挂, 别静默走 hardcode 字面值.
+    //
+    // P3.5.140 (6/29 鸿波"TS和Rust 后端 都用硬chain"): 硬 chain 保留, 跟 TS 端
+    // DetailPane / Chat 同款. 没 model 不 silent 兜底, 不走 LLM.
     let model = match picker_config::current_model()
         .or_else(|| role_config::resolve("rate_fast"))
         .or_else(|| email_config::email_config().rate_model.clone())
@@ -643,7 +651,7 @@ async fn scan_phishing_for_new(new_items: &[EmailItem]) {
         }
     };
 
-    match phishing_scan::batch_llm_review(&llm_inputs, &gateway, &token, &model).await {
+    match phishing_scan::batch_llm_review(&llm_inputs, &base_url, &token, &model).await {
         Ok(verdicts) if verdicts.len() == scans.len() => {
             for (s, v) in scans.iter_mut().zip(verdicts.iter()) {
                 s.llm_verdict = Some(v.verdict.clone());
@@ -756,17 +764,32 @@ struct ChatResponse {
 }
 
 async fn call_rate_llm(items: &[EmailItem]) -> Result<Vec<Urgency>, String> {
-    let token = oauth::current_access_token()
-        .ok_or_else(|| "没拿到 access_token (员工没登录)".to_string())?;
-    let gateway = endpoints::endpoints().gateway_base();
+    // P3.5.140 (6/29 鸿波"数据流应该是 companion → hermes → gateway(8999), 不是双路径,
+    // 更不是 gateway(8999) 作为 hermes 的 fallback"):
+    // 单路径: Companion → hermes 8642 → gateway 8999 → LLM. 没有 fallback.
+    //   - body.model 真 chain 真值真 → hermes plugin P11 真**截** → P6 wrap _create_agent
+    //     → agent.model = chain 真值 → auxiliary_client 自动 sync (跟 TS 前端**统一**)
+    //   - 数据零出端 X-Catfish-User header 跨员工保护**统一**走 plugin
+    //   - 客户**单点配置**真 hermes (P11/P21 picker) 自动覆盖 background task
+    //   - hermes_api 没配 / 没起 → Err (不再静默 fallback gateway 老路径)
+    let hermes_cfg = hermes_api_config::hermes_api_config();
+    let hermes_key = hermes_cfg.key.as_deref().ok_or_else(|| {
+        "hermes_api.key 没配 (~/.catfish/companion.yaml hermes_api.key 或 \
+         env CATFISH_HERMES_API_KEY 必填)".to_string()
+    })?;
+    let base_url = hermes_cfg.url.clone();
+    let auth_header = format!("Bearer {hermes_key}");
     // P3.5.29 Phase 4 (6/17 鸿波"啥意思不干活") + P3.5.139 (6/29 鸿波"都要去除硬编码"):
-    // chain picker > role > yaml > Err.
+    // chain picker > role > yaml > Err (硬 chain).
     //   1. picker_config::current_model() — 员工 chat picker (P3.5.28)
     //   2. role_config::resolve("rate_fast") — gateway /v1/roles roles.yaml
     //      (P3.5.29 Phase 4 HTTP fetch + 5min cache)
     //   3. email_config().rate_model — yaml/env override (Option<String>)
     //   4. None → Err — 全空说明 picker 没选 + roles 没起 + yaml 没显式 override,
     //      评级本来就该挂, 别静默兜底硬编码 (P3.5.139 删 DEFAULT_RATE_MODEL).
+    //
+    // P3.5.140 (6/29 鸿波"TS和Rust 后端 都用硬chain"): 保留硬 chain Err, 跟 TS DetailPane
+    // 同款 — 严格 picker, 没 model 不 silent 走 hermes 默认.
     //
     // 客户改 roles.yaml `rate_fast` 5 分钟后邮件评级跟着走, 不需要改 Companion yaml.
     let model = picker_config::current_model()
@@ -817,17 +840,17 @@ async fn call_rate_llm(items: &[EmailItem]) -> Result<Vec<Urgency>, String> {
         .map_err(|e| format!("reqwest build 失败: {e}"))?;
 
     let resp = client
-        .post(format!("{gateway}/v1/chat/completions"))
-        .header("Authorization", format!("Bearer {token}"))
+        .post(format!("{base_url}/v1/chat/completions"))
+        .header("Authorization", &auth_header)
         .header("X-Catfish-Source", "companion-email-scheduler")
         .header("X-Catfish-Skip-Identity", "true")  // 不需要 SOUL inject, 服务式调用
         .json(&req)
         .send()
         .await
-        .map_err(|e| format!("gateway 调用失败: {e}"))?;
+        .map_err(|e| format!("LLM 调用失败 ({base_url}): {e}"))?;
 
     if !resp.status().is_success() {
-        return Err(format!("gateway 返 {}", resp.status()));
+        return Err(format!("LLM 返 {} (via {})", resp.status(), base_url));
     }
 
     let body: ChatResponse = resp

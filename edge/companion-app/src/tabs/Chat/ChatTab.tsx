@@ -398,6 +398,25 @@ export default function ChatTab() {
         <SessionAttachmentsBar />
 
         <div style={{ flex: 1, minHeight: 0 }}>
+          {!model ? (
+            // P3.5.140 (6/29 鸿波"ChatTab loading skeleton 纯文本 正在加载模型 + disable send button"):
+            // store.model 空 = picker_model 文件没拿到 (App.tsx 启动 useEffect 没注入) +
+            // catalog.default 也还没 fetch 到 (ChatTab catalog useEffect 没触发).
+            // 一律 ChatPanel 不渲染 — 没输入框/send button = 自动 disable.
+            // hooks 顺序不变 (conditional 真**只**在 JSX, 不在 hooks).
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                height: "100%",
+                color: "var(--catfish-text-muted)",
+                fontSize: 14,
+              }}
+            >
+              正在加载模型...
+            </div>
+          ) : (
           <ChatPanel
             messages={messages}
             isStreaming={isStreaming}
@@ -408,6 +427,7 @@ export default function ChatTab() {
             onEnqueue={enqueue}
             onReset={reset}
           />
+          )}
         </div>
       </div>
     </div>
