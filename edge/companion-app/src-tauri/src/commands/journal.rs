@@ -397,24 +397,28 @@ fn todo_already_exists(trimmed_text: &str, paths: &[&PathBuf]) -> bool {
     false
 }
 
-/// 抽今天 / 最近的未完成 TODO. 返 JSON array. 没文件返 [].
+/// 抽本周未完成 TODO. 返 JSON array. 没文件返 [].
 ///
-/// P3.4.7a (6/15 鸿波): 双源合并 — 落地 hermes MEMORY 里写的 "current_todos.md
-/// 本周待办" 设计 (代码里之前 0 引用):
+/// P3.5.137 (6/29 鸿波 catch "archive 后早安仍 23"): **砍 journal 源**.
 ///
-///   1. 先扫 ~/.catfish/current_todos.md (主源, 本周待办), origin="weekly"
-///   2. 再扫 ~/.catfish/employee_journal.md (向后兼容, 老流水帐), origin="journal"
-///   3. 合并: weekly 在前, journal 里 text 不在 weekly 集合的追加
-///   4. 去重: text 完全相同 (trim 后) 算同一条 — 同时 journal/weekly 都写的, weekly 优先
+/// 真因: P3.4.7a (6/15 鸿波 design intent) 真**写真清楚** — `employee_journal.md`
+/// "退到向后兼容位置, 主 TODO 源换 current_todos.md". 但 journal_todos_fetch 真**仍在**
+/// 双源扫 + 合并, 跟 6/15 design 矛盾, 早安累积 23 条 (current 7 + journal 16).
 ///
-/// 性能: 50KB ×2 regex 扫一遍 < 10ms, 不用 spawn_blocking.
+/// P3.5.133 (6/29 鸿波 ship) archive cron 真**只清** current_todos.md 完成行, 真**不动**
+/// journal — archive 后早安仍 23, 真因就在这.
+///
+/// 修法: 砍 journal 源, 真**只扫** current_todos.md (P3.5.133 cron 真每周日 reset).
+///   - journal 文件**仍正常 read/write** (journal_read_recent / journal_mark_todo_done /
+///     journal_delete_todo / dispatch_todo_op 真**仍接受** origin="journal" 真**向后兼容**)
+///   - advisor 真 surface TODO 真**source** 改成 current_todos.md 真**唯一**
+///   - 真**砍**真**`merge_todos_weekly_first` 函数 + 6 个单测** (鸿波 6/29 拍 "彻底删除死代码")
+///
+/// 性能: 50KB regex 扫一遍 < 5ms.
 #[tauri::command]
 pub async fn journal_todos_fetch() -> Result<String, String> {
     let weekly_todos = read_and_tag(current_todos_path(), "weekly")?;
-    let journal_todos = read_and_tag(journal_path(), "journal")?;
-
-    let merged = merge_todos_weekly_first(weekly_todos, journal_todos);
-    serde_json::to_string(&merged).map_err(|e| format!("序列化 TODO 失败: {e}"))
+    serde_json::to_string(&weekly_todos).map_err(|e| format!("序列化 TODO 失败: {e}"))
 }
 
 /// P3.4.7a (6/15 鸿波): 读单文件 + 抽 todos + 打 origin tag. 文件不存在 → 空 vec
@@ -436,32 +440,13 @@ fn read_and_tag(path: Option<PathBuf>, origin: &str) -> Result<Vec<JournalTodo>,
     Ok(todos)
 }
 
-/// P3.4.7a (6/15 鸿波): 合并双源, weekly 优先去重 — 纯函数, 单测 cover.
-///
-/// 算法:
-///   - weekly 全部进 merged
-///   - journal 里 text (trim 后) 不在 weekly_texts 集合的追加进 merged
-///   - 同 text 的, weekly 优先 (journal 那条跳过, 不重复显示)
-///
-/// 边界:
-///   - weekly 空 → 全是 journal
-///   - journal 空 → 全是 weekly
-///   - 都空 → 空 vec
-pub(crate) fn merge_todos_weekly_first(
-    mut weekly: Vec<JournalTodo>,
-    journal: Vec<JournalTodo>,
-) -> Vec<JournalTodo> {
-    let weekly_texts: std::collections::HashSet<String> = weekly
-        .iter()
-        .map(|t| t.text.trim().to_string())
-        .collect();
-    for j in journal {
-        if !weekly_texts.contains(j.text.trim()) {
-            weekly.push(j);
-        }
-    }
-    weekly
-}
+// P3.5.137 (6/29 鸿波拍 "彻底删除死代码"): merge_todos_weekly_first 函数 + 6 个单测
+// 真**完全砍**. 真因:
+//   1. P3.4.7a (6/15) design intent 写清楚 "journal 退到向后兼容位置" — 永久退役 advisor 路径
+//   2. journal_todos_fetch 砍 journal 源后, fn 唯一 prod caller 消失 → 永久 dead
+//   3. git history 保留 design 演进轨迹, source code 不需保留 dead code 做考古
+//   4. 未来业务变了真**重新 audit 重新实现** 比解封 dead fn 更合理
+// 回滚: git show HEAD~1 -- src/commands/journal.rs
 
 /// 抽 TODO 主逻辑 — pub(crate) 方便单测.
 pub(crate) fn extract_todos(text: &str) -> Vec<JournalTodo> {
@@ -791,85 +776,6 @@ mod tests {
         let out = extract_todos("- [ ] 普通任务");
         assert_eq!(out.len(), 1);
         assert!(!out[0].is_priority);
-    }
-
-    // ── P3.4.7a (6/15 鸿波): merge_todos_weekly_first 双源合并去重 ──
-
-    fn make_todo(text: &str, origin: &str) -> JournalTodo {
-        JournalTodo {
-            text: text.to_string(),
-            line: 1,
-            source: "checkbox".to_string(),
-            section: String::new(),
-            is_priority: false,
-            origin: origin.to_string(),
-        }
-    }
-
-    #[test]
-    fn test_merge_both_empty() {
-        let out = merge_todos_weekly_first(vec![], vec![]);
-        assert!(out.is_empty());
-    }
-
-    #[test]
-    fn test_merge_weekly_only() {
-        let weekly = vec![make_todo("任务 A", "weekly"), make_todo("任务 B", "weekly")];
-        let out = merge_todos_weekly_first(weekly, vec![]);
-        assert_eq!(out.len(), 2);
-        assert!(out.iter().all(|t| t.origin == "weekly"));
-    }
-
-    #[test]
-    fn test_merge_journal_only() {
-        // weekly 空 (current_todos.md 不存在) → 全部来自 journal (向后兼容老用户)
-        let journal = vec![make_todo("老任务 X", "journal"), make_todo("老任务 Y", "journal")];
-        let out = merge_todos_weekly_first(vec![], journal);
-        assert_eq!(out.len(), 2);
-        assert!(out.iter().all(|t| t.origin == "journal"));
-    }
-
-    #[test]
-    fn test_merge_dedup_weekly_priority() {
-        // 鸿波 case: weekly + journal 都写了"任务 B" → 只保留 weekly 那条, journal 跳过
-        let weekly = vec![make_todo("任务 A", "weekly"), make_todo("任务 B", "weekly")];
-        let journal = vec![
-            make_todo("任务 B", "journal"),  // 重复, weekly 优先
-            make_todo("任务 C", "journal"),  // 流水帐独有, 追加
-        ];
-        let out = merge_todos_weekly_first(weekly, journal);
-        assert_eq!(out.len(), 3, "应只去掉重复的 B, 留 A/B/C 三条");
-        assert_eq!(out[0].text, "任务 A");
-        assert_eq!(out[0].origin, "weekly");
-        assert_eq!(out[1].text, "任务 B");
-        assert_eq!(out[1].origin, "weekly", "去重时 weekly 优先");
-        assert_eq!(out[2].text, "任务 C");
-        assert_eq!(out[2].origin, "journal");
-    }
-
-    #[test]
-    fn test_merge_dedup_trim_match() {
-        // 同 text 不同前后空格 → 应该认作同一条 (trim 后比较)
-        let weekly = vec![make_todo("跑完整周报", "weekly")];
-        let journal = vec![
-            make_todo("  跑完整周报  ", "journal"),  // 有前后空格, trim 后跟 weekly 一样
-            make_todo("发邮件", "journal"),
-        ];
-        let out = merge_todos_weekly_first(weekly, journal);
-        assert_eq!(out.len(), 2, "trim 后同文本应去重");
-        assert_eq!(out[0].origin, "weekly");
-        assert_eq!(out[1].text, "发邮件");
-        assert_eq!(out[1].origin, "journal");
-    }
-
-    #[test]
-    fn test_merge_order_weekly_first_journal_second() {
-        // 保证顺序: weekly 在前 (本周待办优先显示), journal 在后 (流水帐补充)
-        let weekly = vec![make_todo("本周任务", "weekly")];
-        let journal = vec![make_todo("流水帐任务", "journal")];
-        let out = merge_todos_weekly_first(weekly, journal);
-        assert_eq!(out[0].text, "本周任务");
-        assert_eq!(out[1].text, "流水帐任务");
     }
 
     // ── P3.4.7c (6/15 鸿波): reset_current_todos_text 算法 ──
