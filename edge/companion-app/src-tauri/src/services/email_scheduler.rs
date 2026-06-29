@@ -21,9 +21,11 @@
 //! ## 配置
 //!
 //! - env `CATFISH_EMAIL_POLL_SECS`: 轮询间隔秒数, 默认 600 (10 min). 设 0 关.
-//! - env `CATFISH_EMAIL_RATE_MODEL`: 评级用 model, 默认 catfish-private-main.
-//!   P3.5.27 (6/17 鸿波"数据零出端"): 之前默认 catfish-public-deepseek-flash
-//!   (公网 DeepSeek) 违数据零出端红线 — 邮件主题 + 发件人飞公网 LLM. 改 private.
+//! - env `CATFISH_EMAIL_RATE_MODEL`: 评级用 model 显式 override (可选).
+//!   不设走 chain: picker_config > role_config("rate_fast") > yaml 段 > Err.
+//!   P3.5.27 数据零出端红线: roles.yaml `rate_fast` 默认是内网 model, 公网
+//!   override 走 .env / yaml 显式启用 (要承担飞公网 LLM 的合规风险).
+//!   P3.5.139 (6/29 鸿波"都要去除硬编码"): 删 DEFAULT_RATE_MODEL 常量.
 //! - env `CATFISH_EMAIL_RATE`: 1=开 (默认) / 0=关 (回 step2 任何新邮件都通知).
 //!
 //! ## 红线
@@ -366,11 +368,17 @@ pub fn schedule_email_scheduler(app: AppHandle) {
         return;
     }
 
+    // P3.5.139 (6/29 鸿波"都要去除硬编码"): rate_model 现在 Option, None 表示
+    // "跟随 chain (picker > role > Err)". log 显示 Some 用具体值, None 用语义文案.
+    let rate_model_display = cfg
+        .rate_model
+        .as_deref()
+        .unwrap_or("跟随 picker / roles.yaml rate_fast");
     log::info!(
         "email_scheduler: 启动, 每 {}s 扫一次未读邮件 (评级 {}, model {})",
         poll_secs,
         if cfg.rate_enabled { "开" } else { "关 - 任何新邮件都通知" },
-        cfg.rate_model,
+        rate_model_display,
     );
 
     tauri::async_runtime::spawn(async move {
@@ -614,12 +622,26 @@ async fn scan_phishing_for_new(new_items: &[EmailItem]) {
         }
     };
     let gateway = endpoints::endpoints().gateway_base();
-    // P3.5.29 Phase 4 (6/17 鸿波): 钓鱼复审跟评级真**共享** chain picker > role >
-    // yaml > default. 员工 chat picker 切 private, phishing scan 真**跟着**走.
-    // 数据零出端红线一致 + 客户改 roles.yaml 真**跟着**走.
-    let model = picker_config::current_model()
+    // P3.5.29 Phase 4 (6/17 鸿波): 钓鱼复审跟评级共享 chain picker > role > yaml > Err.
+    // 员工 chat picker 切 private, phishing scan 跟着走.
+    // 数据零出端红线一致 + 客户改 roles.yaml 跟着走.
+    //
+    // P3.5.139 (6/29 鸿波"都要去除硬编码"): chain 最后一段从 unwrap_or_else
+    // 兜底 hardcode 改成 Err. 没拿到 model 说明 picker 没选 + roles.yaml 没 load
+    // + yaml 没 override — 这种情况评级本来就该挂, 别静默走 hardcode 字面值.
+    let model = match picker_config::current_model()
         .or_else(|| role_config::resolve("rate_fast"))
-        .unwrap_or_else(|| email_config::email_config().rate_model.clone());
+        .or_else(|| email_config::email_config().rate_model.clone())
+    {
+        Some(m) => m,
+        None => {
+            log::debug!(
+                "[phishing] 无法 resolve model (picker/roles/yaml 都空), 跳 LLM 复审"
+            );
+            store_and_audit(new_items, scans).await;
+            return;
+        }
+    };
 
     match phishing_scan::batch_llm_review(&llm_inputs, &gateway, &token, &model).await {
         Ok(verdicts) if verdicts.len() == scans.len() => {
@@ -737,18 +759,22 @@ async fn call_rate_llm(items: &[EmailItem]) -> Result<Vec<Urgency>, String> {
     let token = oauth::current_access_token()
         .ok_or_else(|| "没拿到 access_token (员工没登录)".to_string())?;
     let gateway = endpoints::endpoints().gateway_base();
-    // P3.5.29 Phase 4 (6/17 鸿波"啥意思不干活"): 真**chain** picker > role > yaml > default.
-    //   1. picker_config::current_model() — 员工 chat picker 真选 (P3.5.28)
-    //   2. role_config::resolve("rate_fast") — gateway /v1/roles 真**roles.yaml**
-    //      (P3.5.29 Phase 4 真**HTTP fetch + 5min cache**)
-    //   3. email_config().rate_model — yaml/env override
-    //   4. DEFAULT_RATE_MODEL — 兜底 (P3.5.27 改 private-main)
+    // P3.5.29 Phase 4 (6/17 鸿波"啥意思不干活") + P3.5.139 (6/29 鸿波"都要去除硬编码"):
+    // chain picker > role > yaml > Err.
+    //   1. picker_config::current_model() — 员工 chat picker (P3.5.28)
+    //   2. role_config::resolve("rate_fast") — gateway /v1/roles roles.yaml
+    //      (P3.5.29 Phase 4 HTTP fetch + 5min cache)
+    //   3. email_config().rate_model — yaml/env override (Option<String>)
+    //   4. None → Err — 全空说明 picker 没选 + roles 没起 + yaml 没显式 override,
+    //      评级本来就该挂, 别静默兜底硬编码 (P3.5.139 删 DEFAULT_RATE_MODEL).
     //
-    // 客户改 roles.yaml `rate_fast` 真**5 分钟后** 邮件评级真**跟着走**, 真**不需要**
-    // 改 Companion yaml.
+    // 客户改 roles.yaml `rate_fast` 5 分钟后邮件评级跟着走, 不需要改 Companion yaml.
     let model = picker_config::current_model()
         .or_else(|| role_config::resolve("rate_fast"))
-        .unwrap_or_else(|| email_config::email_config().rate_model.clone());
+        .or_else(|| email_config::email_config().rate_model.clone())
+        .ok_or_else(|| {
+            "无法 resolve 评级 model (picker/roles.yaml/email.rate_model 全空)".to_string()
+        })?;
 
     let list = items
         .iter()

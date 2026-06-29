@@ -148,7 +148,11 @@ export const useChatStore = create<ChatState>((set) => ({
   messages: [],
   isStreaming: false,
   streamingId: null,
-  model: "catfish-private-main",
+  // P3.5.139 (6/29 鸿波"都要去除硬编码"): 删 "catfish-private-main" 字面值.
+  // 空字符串 = 未初始化. ChatTab mount useEffect 拿到 catalog.default 注入,
+  // 或 App.tsx 启动 useEffect (Phase 4) 拿 picker_config::current_model() 注入.
+  // 渲染期间 model="" 的窗口 ChatTab 展示 loading skeleton, 不进 useChat 发消息.
+  model: "",
   // P3.5.18 Phase 2 (6/17 鸿波): hermes preflight 自动压缩 真**inline 状态文本**.
   lifecycleStatus: null,
   // P3.5.29 Phase 6.3 (6/17 鸿波): 真**modelPickedByUser flag** 真**修联动 bug**.

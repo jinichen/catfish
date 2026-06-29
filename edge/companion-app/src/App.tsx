@@ -20,10 +20,12 @@ import EmailTab from "./tabs/Email/EmailTab";  // 5/18 BL-COMPANION-EMAIL-TAB
 import WikiTab from "./tabs/Wiki/WikiTab";  // BL-CATFISH-WIKI-MODE P3.3 (6/4)
 import { useUIStore } from "./store/ui";
 import { useAgentStore } from "./store/agent";
+import { useChatStore } from "./store/chat";  // P3.5.139 Phase 4: 启动同步 picker_model → store
 import { useFocusStore } from "./store/focus";
 import { useProactiveScheduler } from "./hooks/useProactiveScheduler";
 import { useProactiveTriggers } from "./hooks/useProactiveTriggers";
 import { usePetStatusBroadcast } from "./hooks/usePetStatusBroadcast";
+import { getPickerModel } from "./lib/tauri";  // P3.5.139 Phase 4
 
 export default function App() {
   const activeTab = useUIStore((s) => s.activeTab);
@@ -40,6 +42,27 @@ export default function App() {
   useEffect(() => {
     void loadAgentPrefs();
   }, [loadAgentPrefs]);
+
+  // P3.5.139 Phase 4 (6/29 鸿波"重启 Companion picker 应该记得这次选择"):
+  // 启动读 ~/.catfish/picker_model (P3.5.28 写的单文件) 注入 zustand store.model.
+  // file > store 优先级 — 重启 Companion 上次选过的 model 立刻生效, 不被
+  // catalog.default useEffect (ChatTab) 覆盖 (pickedByUser=true 锁 picker).
+  //
+  // 失败 (file 不在 / 空 / 权限) → 不动 store, model="" 走 ChatTab catalog.default
+  // useEffect 兜底注入 catalog.default. 客户第一次启动没 picker_model 文件就是这个路径.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const m = await getPickerModel();
+        if (m && m.trim()) {
+          // pickedByUser=true 锁 picker, 不被 catalog.default 覆盖
+          useChatStore.getState().setModel(m.trim(), true);
+        }
+      } catch (e) {
+        console.warn("[P3.5.139 Phase 4] getPickerModel 失败 (静默, 走 catalog 兜底):", e);
+      }
+    })();
+  }, []);
 
   // BL-E13 主动闲聊 (死时间兜底): 9:30 / 14:00 / 17:30
   useProactiveScheduler();

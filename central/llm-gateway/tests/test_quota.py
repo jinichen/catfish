@@ -256,20 +256,90 @@ def test_estimate_tokens_long_text() -> None:
     assert quota.estimate_tokens(text) == 2000
 
 
-def test_friendly_message_per_user_minute() -> None:
-    qc = quota.QuotaCheck(
-        allowed=False,
-        dimension="per_user_minute",
-        current=105000,
-        limit=100000,
-        reset_at=int(time.time()) + 30,
+# ─── friendly_quota_message (P3.5.29 + P3.5.139) ─────────────────
+#
+# friendly_message 里"建议换的 model 名" 由 _resolve_friendly_model 拿,
+# chain (P3.5.139 鸿波"都要去除硬编码"):
+#   1. roles.yaml load 成功 → roles_module.resolve_or_none(role)
+#   2. .env CATFISH_FALLBACK_{ROLE.upper()} → env var
+#   3. 空字符串 (文案降级)
+#
+# 测试三种情况都验证, 不再写死 "catfish-private-main" 字面值.
+
+
+def _load_test_roles_yaml(tmp_path: Path) -> None:
+    """测试用 fixture: 写一份 roles.yaml + load 进 roles 模块."""
+    from catfish_gateway import roles as roles_module
+
+    yaml_path = tmp_path / "roles.yaml"
+    yaml_path.write_text(
+        """
+roles:
+  chat_default: test-main-model
+  public_flash: test-flash-model
+""",
+        encoding="utf-8",
     )
-    msg = quota.friendly_quota_message(qc, "alice@x.com", "qwen-flash")
-    assert "分钟" in msg
-    assert "catfish-private-main" in msg
+    roles_module.load_roles(yaml_path)
 
 
-def test_friendly_message_per_model_day() -> None:
+def _reset_roles_module() -> None:
+    """测试间 reset roles 模块状态, 防 test pollution."""
+    from catfish_gateway import roles as roles_module
+
+    roles_module._roles = None  # type: ignore[attr-defined]
+    roles_module._fallback_chain = None  # type: ignore[attr-defined]
+
+
+def test_friendly_message_per_user_minute(tmp_path: Path) -> None:
+    """roles.yaml load 成功 → 文案带 resolve 后真 model 名 (chat_default)."""
+    _load_test_roles_yaml(tmp_path)
+    try:
+        qc = quota.QuotaCheck(
+            allowed=False,
+            dimension="per_user_minute",
+            current=105000,
+            limit=100000,
+            reset_at=int(time.time()) + 30,
+        )
+        msg = quota.friendly_quota_message(qc, "alice@x.com", "qwen-flash")
+        assert "分钟" in msg
+        # P3.5.139: roles.yaml `chat_default: test-main-model` → 文案应有这个名
+        assert "test-main-model" in msg
+    finally:
+        _reset_roles_module()
+
+
+def test_friendly_message_per_model_day(tmp_path: Path) -> None:
+    """roles.yaml load 成功 → per_model_day 文案带 chat_default + public_flash."""
+    _load_test_roles_yaml(tmp_path)
+    try:
+        qc = quota.QuotaCheck(
+            allowed=False,
+            dimension="per_model_day",
+            current=5000000,
+            limit=5000000,
+            reset_at=int(time.time()) + 86400,
+        )
+        msg = quota.friendly_quota_message(qc, "alice@x.com", "gemini-pro")
+        assert "gemini-pro" in msg
+        assert "test-main-model" in msg
+        assert "test-flash-model" in msg
+    finally:
+        _reset_roles_module()
+
+
+def test_friendly_message_roles_unloaded_env_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P3.5.139: roles 没 load → 走 .env CATFISH_FALLBACK_{ROLE.upper()}.
+
+    模拟 roles.yaml load 失败 (没调 load_roles) + 客户配了 .env 兜底.
+    """
+    _reset_roles_module()
+    monkeypatch.setenv("CATFISH_FALLBACK_CHAT_DEFAULT", "env-fallback-main")
+    monkeypatch.setenv("CATFISH_FALLBACK_PUBLIC_FLASH", "env-fallback-flash")
+
     qc = quota.QuotaCheck(
         allowed=False,
         dimension="per_model_day",
@@ -278,8 +348,34 @@ def test_friendly_message_per_model_day() -> None:
         reset_at=int(time.time()) + 86400,
     )
     msg = quota.friendly_quota_message(qc, "alice@x.com", "gemini-pro")
-    assert "gemini-pro" in msg
-    assert "qwen-flash" in msg or "private-main" in msg
+    assert "env-fallback-main" in msg
+    assert "env-fallback-flash" in msg
+
+
+def test_friendly_message_roles_unloaded_no_env_returns_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P3.5.139: roles 没 load + .env 没配 → 文案降级渲染空字符串.
+
+    略丑 ("换 (内网不限)"), 但比静默走硬编码字面值清晰. dev 启动 gateway
+    没 .env 时可见, 不该出现在正常 production.
+    """
+    _reset_roles_module()
+    monkeypatch.delenv("CATFISH_FALLBACK_CHAT_DEFAULT", raising=False)
+    monkeypatch.delenv("CATFISH_FALLBACK_PUBLIC_FLASH", raising=False)
+
+    qc = quota.QuotaCheck(
+        allowed=False,
+        dimension="per_user_minute",
+        current=105000,
+        limit=100000,
+        reset_at=int(time.time()) + 30,
+    )
+    msg = quota.friendly_quota_message(qc, "alice@x.com", "qwen-flash")
+    # 文案降级: chat_default 空字符串 → "换  (内网不限)"
+    assert "catfish-private-main" not in msg
+    assert "catfish-public-qwen-flash" not in msg
+    assert "换  (内网不限)" in msg or "换 (内网不限)" in msg
 
 
 # ── 部门级聚合 (5/2 RBAC manager Dashboard 用) ────────────────

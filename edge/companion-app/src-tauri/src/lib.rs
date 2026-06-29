@@ -642,8 +642,14 @@ pub fn run() {
             // BL-COMPANION-PREFS-TOGGLES (5/20): 暴露 email config 给前端 AgentPrefsCard 展示
             services::email_config::email_config_get,
             // P3.5.28 (6/17 鸿波"picker 联动现在就应该做"): chat picker 选的 model 写文件,
-            // background task (email_scheduler / phishing_scan) 真**跟着**用员工选的 model.
+            // background task (email_scheduler / phishing_scan) 跟着用员工选的 model.
             services::picker_config::set_picker_model,
+            // P3.5.139 Phase 4 (6/29 鸿波"重启 Companion picker 应该记得这次选择"):
+            // 启动时读 ~/.catfish/picker_model 注入 zustand store.model.
+            services::picker_config::get_picker_model,
+            // P3.5.139 (6/29 鸿波"都要去除硬编码"): 前端 caller (visionSwitch /
+            // DetailPane / Chat fallback) 拉 /v1/roles 拿全 mapping, 5min cache.
+            services::role_config::roles_get_all,
             // P3.3.65 (6/13): 钓鱼规则可配置 — 仪表盘显当前 effective 配置
             services::phishing_config::phishing_config_get,
             // P3.3.53 (6/13): 政治敏感规则可配置 — 仪表盘显当前 effective 配置

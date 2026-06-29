@@ -1445,25 +1445,46 @@ def check_quota(
     return QuotaCheck(allowed=True)
 
 
-def _resolve_friendly_model(role_str: str, fallback: str) -> str:
-    """P3.5.29 Phase 2 (6/17 鸿波): error message 真**用 role 动态 resolve**,
-    不 hardcode model name. 客户部署改 roles.yaml → error message 真**跟着走**.
-    roles 没 load (gateway startup 失败) → fallback 字符串 (老 hardcode 兼容).
+def _resolve_friendly_model(role_str: str) -> str:
+    """超额错误文案里"建议换的 model 名" — 文案降级 chain (不是路由!).
+
+    P3.5.29 Phase 2 (6/17 鸿波): error message 用 role 动态 resolve, 不 hardcode.
+    客户改 roles.yaml → error message 跟着走.
+
+    P3.5.139 (6/29 鸿波"都要去除硬编码"): chain 升级:
+      1. roles.yaml (gateway startup load 成功 — 正常情况, 99% 走这)
+      2. .env CATFISH_FALLBACK_{ROLE.upper()} — roles 没 load 时兜底
+         (e.g. roles.yaml 语法错 / 文件不在). 客户改 .env 跟着走.
+      3. 空字符串 — env 也没配 → 文案渲染成 "换 (内网不限)" 略丑,
+         dev 启动 gateway 没 .env 时可见. 不应该出现在正常 production.
+
+    注意: 这是文案降级, 不影响路由. 路由 chain (picker/role/yaml) 在 Companion,
+    gateway 自己只有 roles.yaml 一个 truth source. 文案兜底字面值全删.
     """
+    # 1. roles.yaml
     try:
         from . import roles as roles_module
-        return roles_module.resolve(role_str)
+        m = roles_module.resolve_or_none(role_str)
+        if m:
+            return m
     except Exception:
-        return fallback
+        pass
+    # 2. .env CATFISH_FALLBACK_{ROLE.upper()} (e.g. CATFISH_FALLBACK_CHAT_DEFAULT)
+    env_key = f"CATFISH_FALLBACK_{role_str.upper()}"
+    val = os.environ.get(env_key, "").strip()
+    if val:
+        return val
+    # 3. 空字符串 — 文案降级, 不该出现在正常 production
+    return ""
 
 
 def friendly_quota_message(qc: QuotaCheck, user_email: str, model: str) -> str:
     """超额时给员工友好的提示. 不是 stack trace."""
     if qc.dimension == "per_user_minute":
         secs = max(qc.reset_at - int(time.time()), 1)
-        # P3.5.29 Phase 2: chat_default 真**主力内网** (默认 catfish-private-main,
-        # 客户改 yaml 真**跟着改**), 不 hardcode.
-        chat_default = _resolve_friendly_model("chat_default", "catfish-private-main")
+        # P3.5.29 Phase 2: chat_default 主力内网, 客户改 yaml 跟着改, 不 hardcode.
+        # P3.5.139 (6/29 鸿波): roles 没 load 走 .env, .env 没配走空字符串文案降级.
+        chat_default = _resolve_friendly_model("chat_default")
         return (
             f"你这分钟 token 用得太多 ({qc.current:,}/{qc.limit:,}). "
             f"等 {secs} 秒后再试, 或换 {chat_default} (内网不限)."
@@ -1474,9 +1495,10 @@ def friendly_quota_message(qc: QuotaCheck, user_email: str, model: str) -> str:
             "明天重置. 急用找 manager 临时升 quota."
         )
     if qc.dimension == "per_model_day":
-        # P3.5.29 Phase 2: chat_default + public_flash 真**dynamic resolve**.
-        chat_default = _resolve_friendly_model("chat_default", "catfish-private-main")
-        public_flash = _resolve_friendly_model("public_flash", "catfish-public-qwen-flash")
+        # P3.5.29 Phase 2: chat_default + public_flash dynamic resolve.
+        # P3.5.139 (6/29 鸿波): 同上 chain roles.yaml → .env → 空字符串.
+        chat_default = _resolve_friendly_model("chat_default")
+        public_flash = _resolve_friendly_model("public_flash")
         return (
             f"模型 {model} 今天全员 quota 满了 ({qc.current:,}/{qc.limit:,}). "
             f"换 {chat_default} 或 {public_flash}."

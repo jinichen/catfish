@@ -8,15 +8,16 @@
 //!
 //! # 配置优先级 (高 → 低)
 //!
-//! 1. `~/.catfish/companion.yaml` 的 `email:` 段 — 客户调这个 (双击 .app 也读)
-//! 2. env var `CATFISH_EMAIL_*` — dev / 测试 / 临时 override
-//! 3. 代码默认值 — 600 秒 / 评级开 / catfish-private-main
+//! poll_secs / rate_enabled:
+//!   1. `~/.catfish/companion.yaml` 的 `email:` 段 — 客户调这个 (双击 .app 也读)
+//!   2. env var `CATFISH_EMAIL_*` — dev / 测试 / 临时 override
+//!   3. 代码默认值 — 600 秒 / 评级开
 //!
-//! P3.5.27 (6/17 鸿波"数据零出端"红线): 默认 catfish-public-deepseek-flash →
-//!   catfish-private-main. 鸿波 6/17 audit 发现 email scheduler 默认走公网
-//!   deepseek-flash, 真**邮件主题 + 发件人**经过公网 LLM, 真违反数据零出端
-//!   红线 (DashScope / DeepSeek 都是 China public cloud). 改 private-main
-//!   内网 model, 数据不出端. yaml/env rate_model 仍可覆盖 (想用便宜 flash 还能改).
+//! rate_model (P3.5.139 鸿波"都要去除硬编码"军规):
+//!   rate_model 不再有代码默认值. Option<String> 表示"yaml/env 显式 override".
+//!   None → caller (email_scheduler::call_rate_llm / phishing_scan)
+//!   走 chain: picker_config > role_config("rate_fast") > yaml override (这里) > Err.
+//!   也就是 yaml 没配 rate_model + roles.yaml 没 load + picker 没选 → 评级 fallback Medium.
 //!
 //! # yaml 例子
 //!
@@ -27,7 +28,7 @@
 //! email:
 //!   poll_secs: 30           # 邮件扫描间隔, 默认 600 (10 分钟). 0=关.
 //!   rate_enabled: true      # LLM 评级: true=只急通知 / false=任何新邮件都通知
-//!   rate_model: catfish-private-main  # 评级用的 model (默认内网主力, 数据不出端)
+//!   rate_model: catfish-private-main  # 评级 model 显式 override (可选, 不配走 chain)
 //! ```
 
 use std::sync::OnceLock;
@@ -35,16 +36,14 @@ use std::sync::OnceLock;
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_POLL_SECS: u64 = 600;
-// P3.5.27 (6/17 鸿波"数据零出端"): catfish-public-deepseek-flash → catfish-private-main.
-// 公网 deepseek-flash 真让邮件主题 + 发件人飞出公司 LLM API, 违数据零出端红线.
-// 内网 main 真**主力数据不出端**, 即使慢一点 (10s vs 1s) 也比红线安全.
-const DEFAULT_RATE_MODEL: &str = "catfish-private-main";
 
 #[derive(Debug, Clone)]
 pub struct EmailConfig {
     pub poll_secs: u64,
     pub rate_enabled: bool,
-    pub rate_model: String,
+    /// P3.5.139 (6/29 鸿波"都要去除硬编码"): None = yaml/env 没显式 override,
+    /// caller 走 chain picker > role > Err. yaml/env 设了非空字符串才 Some.
+    pub rate_model: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,11 +92,13 @@ fn build() -> EmailConfig {
         })
         .unwrap_or(true);
 
+    // P3.5.139 (6/29 鸿波"都要去除硬编码"): 删 DEFAULT_RATE_MODEL 常量.
+    // yaml/env 没显式 override → None, caller 走 chain (picker > role > Err).
+    // 客户改 model 名只改 roles.yaml 一处, 不再 sed 代码默认值.
     let rate_model = yaml.as_ref()
         .and_then(|y| y.rate_model.clone())
         .or_else(|| std::env::var("CATFISH_EMAIL_RATE_MODEL").ok())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| DEFAULT_RATE_MODEL.to_string());
+        .filter(|s| !s.is_empty());
 
     EmailConfig { poll_secs, rate_enabled, rate_model }
 }
@@ -114,11 +115,14 @@ pub fn email_config() -> &'static EmailConfig {
 ///
 /// truth source 是 ~/.catfish/companion.yaml, 改要打开文件 + 重启 Companion.
 /// 这个 command 只读, 用来在 AgentPrefsCard 显当前状态 ✅/❌.
+///
+/// P3.5.139 (6/29): rate_model 改 Option<String>. None = "跟随 chain", UI 现在
+/// 不展示这字段 (只展示 rate_enabled), 改 Option 无前端 break.
 #[derive(Debug, Clone, Serialize)]
 pub struct EmailConfigPublic {
     pub poll_secs: u64,
     pub rate_enabled: bool,
-    pub rate_model: String,
+    pub rate_model: Option<String>,
     /// yaml 文件绝对路径 (前端 shell.open 用)
     pub yaml_path: String,
 }
@@ -148,6 +152,8 @@ mod tests {
         let cfg = build();
         // poll_secs 可能被 env CATFISH_EMAIL_POLL_SECS override, 测试时不假设具体值
         assert!(cfg.poll_secs > 0 || cfg.poll_secs == 0); // 简单存在
-        assert!(!cfg.rate_model.is_empty());
+        // P3.5.139: rate_model 现在 Option, 沙箱里 yaml/env 都不设 → None.
+        // env var 可能被 dev 设, 不强 assert None, 只 assert 类型存在不 panic.
+        let _ = cfg.rate_model;
     }
 }

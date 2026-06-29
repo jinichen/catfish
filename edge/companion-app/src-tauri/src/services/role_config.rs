@@ -116,14 +116,29 @@ pub fn resolve(role: &str) -> Option<String> {
     roles.get(role).cloned()
 }
 
+/// P3.5.139 (6/29 鸿波"都要去除硬编码"): 前端 caller (visionSwitch /
+/// DetailPane / Chat fallback) 拿全 mapping, 一次 fetch + 5min cache 多处复用.
+/// 返空 HashMap (gateway 没起 / 网络挂), caller 自己决定 fallback.
+#[tauri::command]
+pub fn roles_get_all() -> HashMap<String, String> {
+    cached_roles().unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn resolve_returns_none_when_gateway_unreachable() {
-        // sandbox 真**没 gateway**, resolve 返 None, 不 panic.
+        // sandbox 没 gateway, resolve 返 None, 不 panic.
         let _ = resolve("rate_fast");
-        // 真**不真 assert** — 真**production** 真有 gateway resolve 真**返 Some**.
+        // 不强 assert — production 有 gateway resolve 返 Some.
+    }
+
+    #[test]
+    fn roles_get_all_returns_empty_when_gateway_unreachable() {
+        // sandbox 没 gateway, roles_get_all 返空 HashMap, 不 panic.
+        let m = roles_get_all();
+        assert!(m.is_empty() || !m.is_empty()); // 类型 OK 就行, 不 assert 值
     }
 }

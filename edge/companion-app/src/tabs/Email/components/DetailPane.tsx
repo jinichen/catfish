@@ -17,6 +17,7 @@ import {
   emailPoliticalScanNow,            // P3.3.53.2 (6/13 鸿波)
   emailExportAttachment,            // P3.5.103 (6/24 鸿波): 附件能点
   openFile,                         // P3.5.103: 系统默认 app 打开
+  fetchRole,                        // P3.5.139 (6/29 鸿波): 拟稿 fallback role chat_default
   type EmailDigestItem,
   type PhishingScanResult,          // P3.3.58 段 2C
   type PoliticalScanResult,         // P3.3.53.2
@@ -304,9 +305,21 @@ function DetailPane({
     setDraftingLlm(true);
     setDraftLlmError(null);
     try {
-      // picker 优先, 没 picker fallback catfish-private-main (charter 数据不出 mac)
+      // P3.5.139 (6/29 鸿波"都要去除硬编码"): 删 "catfish-private-main" 字面值.
+      // chain: picker > role chat_default > Err.
+      //   picker 优先 — 跟员工当前对话 model 一致, 不发散 (鸿波 ack)
+      //   role chat_default 兜底 — roles.yaml truth source, 客户改 yaml 跟着走
+      //   都没拿到抛错 — 比静默兜底硬编码清晰, 数据红线由 roles.yaml 配置
       const picker = await getPickerState().catch(() => null);
-      const model = picker?.chat_model || "catfish-private-main";
+      let model = picker?.chat_model || "";
+      if (!model) {
+        const roleModel = await fetchRole("chat_default");
+        if (!roleModel) {
+          setDraftLlmError("无法 resolve model (picker 没选 + roles.yaml chat_default 拉不到, gateway 可能没起)");
+          return;
+        }
+        model = roleModel;
+      }
       const result = await draftEmailReply({
         sender: msg.sender,
         subject: msg.subject,

@@ -53,6 +53,17 @@ pub fn current_model() -> Option<String> {
         })
 }
 
+/// P3.5.139 Phase 4 (6/29 鸿波"重启 Companion picker 应该记得这次选择"):
+/// React 启动时调一次, 把 file 已有 picker model 注入 zustand store.model.
+/// file > store 优先级 — 重启 Companion 上次选过的 model 立刻生效.
+///
+/// 没拿到 (file 不在 / 空字符串 / 权限错) → 返 null, React useEffect 不动 store,
+/// 后续走 ChatTab catalog.default 注入兜底.
+#[tauri::command]
+pub fn get_picker_model() -> Option<String> {
+    current_model()
+}
+
 /// 真给 React 调的 Tauri command — `setModel` 钩子真**写文件**.
 ///
 /// React store/chat.ts setModel 触发: invoke('set_picker_model', { name }).

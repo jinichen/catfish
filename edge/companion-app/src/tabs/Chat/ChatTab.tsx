@@ -24,8 +24,16 @@ import TaskPicker from "./TaskPicker";
 
 export default function ChatTab() {
   const { catalog } = useCatalog();
-  const defaultModel =
-    catalog?.default || catalog?.models?.[0]?.id || "catfish-private-main";
+  // P3.5.139 (6/29 鸿波"都要去除硬编码"): 删 "catfish-private-main" 字面值兜底.
+  // 5/28 起 useChat._initialModel 已禁用 (注释在 useChat.ts:60), 这个 defaultModel
+  // 真正只是兼容入参形态. 实际 store.model 来源:
+  //   1. Phase 4 App.tsx 启动 useEffect 拿 picker_config::current_model() 注入
+  //   2. ChatTab useEffect line 166-172 catalog.default fetch 后注入
+  //   3. 用户 picker 手选
+  // 都没拿到 → store.model="" → ChatPanel send 时 gateway 真**显式报错**
+  // ("model 为空" 比静默兜底 catfish-private-main 更清晰, 客户改 catalog
+  // 后不会出现"看着正常但其实走老 model"的鬼影 bug).
+  const defaultModel = catalog?.default || catalog?.models?.[0]?.id || "";
 
   const {
     messages,
