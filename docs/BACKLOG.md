@@ -1128,9 +1128,9 @@ catfish 领先 llm_wiki:
 - 借鉴 llm_wiki 3 列布局
 - 员工真看到自己资质管理领域真完整知识图
 
-### P3.3 三级拆分 (6/4 鸿波拍 — 商用必须真**open 即用 不装 Obsidian**)
+### P3.3 三级拆分 (6/4 鸿波拍 — 商用必须open 即用 不装 Obsidian)
 
-6/4 实测 Obsidian 打开 ~/.catfish/ vault 真**graph view 完美渲染**, 真**真**file explorer noise 真**真**Obsidian 设计**真**没原生 hide**. 商用真**不能让员工装 Obsidian + 配置 File Hider plugin**, 必须 catfish Dashboard 自己 ship.
+6/4 实测 Obsidian 打开 ~/.catfish/ vault graph view 完美渲染, 真file explorer noise 真Obsidian 设计**没原生 hide. 商用不能让员工装 Obsidian + 配置 File Hider plugin, 必须 catfish Dashboard 自己 ship.
 
 **P3.3a Level 1 — Dashboard summary card (1 天)**
 - "仪表盘" tab 内加 `🧠 知识体系` card
@@ -1143,9 +1143,9 @@ catfish 领先 llm_wiki:
 - 3 列布局:
   - 左: tree (entities / concepts / queries 3 group + 搜索 box)
   - 中: 选中 file 真 Markdown render (含 `[[wikilink]]` clickable 跳转)
-  - 右: sigma.js + graphology 真**graph view** (跟 Obsidian 同 capability)
+  - 右: sigma.js + graphology graph view (跟 Obsidian 同 capability)
 - 数据: 前端 Tauri fs API 直接 read `~/.catfish/wiki/*.md` + gray-matter parse frontmatter + regex 抽 wikilink edge
-- 依赖已就绪: package.json 真**Tauri 2.11 + React 19 + sigma + graphology 全 install** (5/29 audit llm_wiki 时确认)
+- 依赖已就绪: package.json Tauri 2.11 + React 19 + sigma + graphology 全 install (5/29 audit llm_wiki 时确认)
 
 **P3.3c Level 3 — 商业 polish (1-2 周)**
 - filter + 搜索 (tag / entity_type / concept_type / 最近 N 天)
@@ -1194,8 +1194,8 @@ P0 commit 8075d2e ship 6/3 晚 + hermes 重启, 但 6/4 凌晨验真 4 marker �
 
 1. `~/.hermes/plugins/` 真只有 catfish-policy + catfish-xcatfish-user, **没 catfish-memory symlink**
 2. `~/.hermes/config.yaml` 真 `memory:` 块 **没 `provider: catfish-memory` 字段**
-3. 真 hermes `~/.hermes/hermes-agent/plugins/memory/__init__.py:308 _get_active_memory_provider` 读 `cfg_get(config, "memory", "provider")` — 没真返 None, 真**不装外部 provider**
-4. 所以 6/3 整天写真 _render_purpose / _render_schema / journal 格式严格化代码全**没生效** — 真**有改没装**
+3. 真 hermes `~/.hermes/hermes-agent/plugins/memory/__init__.py:308 _get_active_memory_provider` 读 `cfg_get(config, "memory", "provider")` — 没真返 None, 不装外部 provider
+4. 所以 6/3 整天写真 _render_purpose / _render_schema / journal 格式严格化代码全**没生效** — 有改没装
 
 修法 (6/4 08:30~08:40, 2 步):
 ```bash
@@ -1205,48 +1205,48 @@ ln -s ~/person_task/catfish/edge/hermes-plugins/catfish-memory ~/.hermes/plugins
 # 2. config.yaml memory 块加
 #   provider: catfish-memory
 ```
-重启 hermes + Companion 新 chat → log 真 5 条 register/activate/initialize/sync_turn 真**全出现** + LLM 真自我介绍真**"我是小鲶, 你的副手"** (跟之前 "鸿波, 在." generic 真不同) — P0 真**真**真**真**真**生效**.
+重启 hermes + Companion 新 chat → log 真 5 条 register/activate/initialize/sync_turn 全出现 + LLM 真自我介绍"我是小鲶, 你的副手" (跟之前 "鸿波, 在." generic 真不同) — P0 真真生效.
 
-教训: hermes 升级要带 **plugin install 真 audit step** — `ls ~/.hermes/plugins/` + `grep provider ~/.hermes/config.yaml`. 真**版本升级 reset 真配置真 silent**.
+教训: hermes 升级要带 **plugin install 真 audit step** — `ls ~/.hermes/plugins/` + `grep provider ~/.hermes/config.yaml`. 版本升级 reset 真配置真 silent.
 
 ---
 
 ## BL-HERMES-UPGRADE-PLUGIN-AUDIT (6/4 凌晨发现, P1)
 
-hermes 真版本升级 (5/29 真 0.15.2) 真**reset / wipe** 真:
+hermes 真版本升级 (5/29 真 0.15.2) reset / wipe 真:
 1. `~/.hermes/plugins/` 真 user-installed symlink (catfish-memory 真没了)
-2. `~/.hermes/config.yaml` 真 memory.provider 真字段 (真**5/19 真加** → 5/29 升级真**没**)
+2. `~/.hermes/config.yaml` 真 memory.provider 真字段 (5/19 真加 → 5/29 升级没)
 
-后果: 真 plugin 真**silent 真**不装载, 真 6/3 整天**改代码没生效**, 真**6/4 凌晨**真才查出.
+后果: 真 plugin silent 真不装载, 真 6/3 整天**改代码没生效**, 6/4 凌晨真才查出.
 
 **修法**:
 - catfish 真 hermes 升级 script (`scripts/upgrade-hermes.sh` 或类似) 加 **pre-upgrade snapshot** + **post-upgrade restore**:
   - 保存 `~/.hermes/plugins/` 真所有 symlink 真 target
   - 保存 `~/.hermes/config.yaml` 真 `memory.provider / plugins.enabled / mcp_servers` 字段
-  - 升级完真**自动 restore + 真**`hermes plugin verify` 真验
-- 加 `catfish doctor` CLI 命令 — 真**每周一**真**自动跑**, 真扫 `~/.hermes/plugins/` 真 vs catfish 真**真期望** 真**plugin 列表** (catfish-memory / catfish-xcatfish-user / catfish-policy), 不齐**红色提醒**
+  - 升级完自动 restore + 真`hermes plugin verify` 真验
+- 加 `catfish doctor` CLI 命令 — 每周一自动跑, 真扫 `~/.hermes/plugins/` 真 vs catfish 真期望 plugin 列表 (catfish-memory / catfish-xcatfish-user / catfish-policy), 不齐**红色提醒**
 
-risk: catfish-policy 也在 `disabled` 列表里, 真**6/4 凌晨没动** — 真要追真**这个 plugin 真什么时候 真**真**为什么真 disabled**.
+risk: catfish-policy 也在 `disabled` 列表里, 6/4 凌晨没动 — 真要追这个 plugin 真什么时候 真为什么真 disabled.
 
 ---
 
 ## BL-CATFISH-MEMORY-SUMMARIZE-UPSTREAM-502 (6/4 凌晨发现, P2)
 
-log 真**第 1 次** chat (session=20260604_084022_0f4973, 真 "你好" pairs=10 触发 sync_turn) 真:
+log 第 1 次 chat (session=20260604_084022_0f4973, 真 "你好" pairs=10 触发 sync_turn) 真:
 ```
 WARNING catfish.memory: catfish-memory summarize: HTTP 502
   litellm.InternalServerError: OpenAIException - Connection error
 INFO catfish.memory.plugin: catfish-memory bg session=...: LLM 总结返空, 跳过 (不写 journal)
 ```
 
-bg session 真总结调真**catfish gateway 8999 真上游** (litellm 真 OpenAI provider) 真**connection error**. 真**真**真**直接后果**: 真**这次 chat 真**真**没进 journal**.
+bg session 真总结调catfish gateway 8999 真上游 (litellm 真 OpenAI provider) connection error. 真直接后果: 这次 chat 真没进 journal.
 
 **修法**:
-- catfish-memory plugin sync_turn 真**重试 retry-with-backoff** 真 (2 次 retry, 真**指数 backoff** 2s / 8s)
-- 重试都失败 — 真**真 buffer 真**真**留**真**到下次 sync_turn**, 真**不**真**silent drop**.
-- 真**buffer 真有 cap** (e.g. 50 pairs), 防内存涨
+- catfish-memory plugin sync_turn 重试 retry-with-backoff 真 (2 次 retry, 指数 backoff 2s / 8s)
+- 重试都失败 — 真 buffer 真留到下次 sync_turn, 不silent drop.
+- buffer 真有 cap (e.g. 50 pairs), 防内存涨
 
-真**根因**真**catfish gateway 上游 instability** (litellm 接 OpenAI 失败 / rate limit) — 真**长期看** catfish-public-deepseek-flash 真 catfish gateway 真**failover 真补救** (BL-CATFISH-GATEWAY-FAILOVER, 真**别真 BL 真已经有**).
+根因catfish gateway 上游 instability (litellm 接 OpenAI 失败 / rate limit) — 长期看 catfish-public-deepseek-flash 真 catfish gateway failover 真补救 (BL-CATFISH-GATEWAY-FAILOVER, 别真 BL 真已经有).
 
 ---
 
@@ -1259,39 +1259,39 @@ WARNING agent.conversation_loop: Stored system prompt for session 20260604_08402
   Investigate the previous turn's update_system_prompt write path.
 ```
 
-每 chat session 真**第一 turn** 真**system_prompt persist** 真**没写** → **下一 turn rebuild from scratch** → **prefix cache miss** → 真**每 turn 真重新 prefix encode 29K+ tokens**.
+每 chat session 第一 turn system_prompt persist 没写 → **下一 turn rebuild from scratch** → **prefix cache miss** → 每 turn 真重新 prefix encode 29K+ tokens.
 
 后果:
-- prompt caching 真**99% → 0%** 真**第一 turn miss**
-- 真**真长期看** 真 token cost 大涨, latency 慢
-- 真 hermes 0.15.2 升级真新引入 bug 真**或**真**catfish-xcatfish-user 真 monkey-patch** 真**踩到 update_system_prompt 真**真**写路径**
+- prompt caching 99% → 0% 第一 turn miss
+- 真长期看 真 token cost 大涨, latency 慢
+- 真 hermes 0.15.2 升级真新引入 bug 或catfish-xcatfish-user 真 monkey-patch 踩到 update_system_prompt 真写路径
 
 **audit**:
 - 真 hermes `agent.conversation_loop._update_system_prompt` (路径自己找) 真写 path
-- 真 catfish-xcatfish-user 真 11 个 patch 里真**有没**真 patch 真 system_prompt 真**写真**
-- 真**reproduce** — 真新开 session 真**第 2 turn** 真**log grep** "Stored system prompt is null"
+- 真 catfish-xcatfish-user 真 11 个 patch 里有没真 patch 真 system_prompt 写真
+- reproduce — 真新开 session 第 2 turn log grep "Stored system prompt is null"
 
-阻塞依赖: 真**5/29 升级真 11 patch 真完整 audit** (BL-HERMES-0152-PATCH-AUDIT 真**有的话**已有).
+阻塞依赖: 5/29 升级真 11 patch 真完整 audit (BL-HERMES-0152-PATCH-AUDIT 有的话已有).
 
 ---
 
 ## BL-DUMP-FILE-NAMING-INCONSISTENT (6/4 凌晨发现, P3)
 
-真 hermes session dump 真两种文件名 pattern, 真**鸿波 6/4 凌晨 grep** 真**找错文件**真**误判** P0 真**没生效**:
+真 hermes session dump 真两种文件名 pattern, 鸿波 6/4 凌晨 grep 找错文件误判 P0 没生效:
 
-1. `request_dump_<session_id>_<ts>.json` (e.g. `request_dump_20260604_071823_...json`) — 真**skill_curator 后台 LLM call** 真 dump, **5940 chars 固定** (curator prompt), **不含** catfish-memory marker
-2. `request_dump_api-<hash>_<ts>.json` (e.g. `request_dump_api-3832a9e072a2f450_...json`) — 真**员工 chat 真 dump**, **12K+ chars 真**含真 timeline / employee profile / marker
+1. `request_dump_<session_id>_<ts>.json` (e.g. `request_dump_20260604_071823_...json`) — skill_curator 后台 LLM call 真 dump, **5940 chars 固定** (curator prompt), **不含** catfish-memory marker
+2. `request_dump_api-<hash>_<ts>.json` (e.g. `request_dump_api-3832a9e072a2f450_...json`) — 员工 chat 真 dump, **12K+ chars 含真 timeline / employee profile / marker
 
-真**问题**:
-- 真**naming 真不区分** 真 caller (curator vs employee chat vs background task), 真**grep 验证 真踩坑**
-- 真 6/4 08:40 chat session `20260604_084022_0f4973` 真 **api- dump 真没生成** — 真**dump 真 sample / conditional 真**真**写真**, 真**不每次写**
+真问题**:
+- naming 真不区分 真 caller (curator vs employee chat vs background task), grep 验证 真踩坑
+- 真 6/4 08:40 chat session `20260604_084022_0f4973` 真 **api- dump 真没生成** — dump 真 sample / conditional 真写真, 不每次写
 
 **改法**:
 - dump filename 真加 source tag: `request_dump_<source>_<session>_<ts>.json` (source = `chat` / `curator` / `bg`)
-- 真**或者**真**目录分** `~/.hermes/sessions/dumps/chat/` / `dumps/curator/` / `dumps/bg/`
-- 真 verification 真**专用 CLI** 真 `hermes session dump latest --type chat` 真**直接拉**真**最新员工 chat dump**
+- 或者目录分 `~/.hermes/sessions/dumps/chat/` / `dumps/curator/` / `dumps/bg/`
+- 真 verification 专用 CLI 真 `hermes session dump latest --type chat` 直接拉最新员工 chat dump
 
-risk 真**低** — 真**hermes 真 upstream**, catfish monkey-patch 真**要慎重**. 真**优先**真**catfish 自己**真**写真验证 CLI**, 真**真**真**绕过 dump 文件命名**问题.
+risk 低 — hermes 真 upstream, catfish monkey-patch 要慎重. 优先catfish 自己写真验证 CLI, 真绕过 dump 文件命名问题.
 
 ---
 
@@ -1308,7 +1308,7 @@ P1.1.1 = 6 fix prompt + max_tokens + timeout + unicode slug
 | fe45ae0 | P1.1.1 prompt 3 fix: catfish skip rule / concepts 先 entities 后 / related YAML 双引号 |
 | 12785f9 | debug: 加 raw LLM 输出 dump (last_wiki_analysis.txt + last_wiki_generation.txt) |
 | cf19df8 | max_tokens 7000 → 4096 (catfish-private-main output cap) + 异常 log 加 `[Type]: repr` hint |
-| b8c5b89 | _GENERATION_HTTP_TIMEOUT = 180s (60s 真**ReadTimeout 实测**, LLM 生 4096 tokens 真长) |
+| b8c5b89 | _GENERATION_HTTP_TIMEOUT = 180s (60s ReadTimeout 实测, LLM 生 4096 tokens 真长) |
 | 27b9639 | _WIKI_PATH_PATTERN 加 re.UNICODE — slug 接受中文 (`资质申报流程.md` / `中电.md`) |
 
 ### 实测 13:12 输出
@@ -1318,33 +1318,33 @@ P1.1.1 = 6 fix prompt + max_tokens + timeout + unicode slug
 journal: ## [2026-06-04 13:12] distill | 5 entities, 5 concepts
 ```
 
-- entities (5, 真**全工作业务**, catfish skip ✓): FFCS数字鲶鱼 / ISO22301 / 北京福富高新 / 鸿波 / 中电
+- entities (5, 全工作业务, catfish skip ✓): FFCS数字鲶鱼 / ISO22301 / 北京福富高新 / 鸿波 / 中电
 - concepts (5, P1.1.1 强化生效): 文档交付标准 / 周报生成规范 / 资质申报流程 / 资质通报模板 / 资质优先级管理
-- related YAML: `["[[资质申报流程]]", "[[资质优先级管理]]", ...]` 真**双引号 string list 兼容 Obsidian + YAML**
+- related YAML: `["[[资质申报流程]]", "[[资质优先级管理]]", ...]` 双引号 string list 兼容 Obsidian + YAML
 - unicode slug 写盘 OK (中文文件名)
 
 ### 教训 (P1.1.1 6 个 fix 顺序)
 
-1. **prompt example 真 LLM 跟得太死** — `<slug>` placeholder 第一次跑 LLM 真**填真**, 但 polish 后真**LLM 真**保留 example literal** 真**parse 0 file**. → 真**加 raw dump 真 debug 真**真**最快定位**.
-2. **`str(e)` 真空** 真**catch 异常时 type hint 真必加** — `[%s]: %r` 直接显示 `ReadTimeout / RemoteProtocolError / etc` 真**根因 直接知**.
-3. **max_tokens 真**真**模型 真 cap 真 model-specific** — catfish-private-main 真**4096 真cap**, 7000 真**直接抛 `httpx.ReadTimeout`** (gateway 真**等 generate 真超时**). 真**未来 plugin 真**真**真**真**真**真 model metadata 真 cap detection** 真**自动 cap_max_tokens** 真 helpful.
-4. **timeout 60s 真**真**LLM 生 4096 tokens 真**真**不够** (~90s+). 真**generation 真单独 180s 真 robust**.
-5. **path 白名单 ASCII-only 真**真**踩坑** — LLM 真**中文 slug 真**自然真**用**, 真**白名单**真**真**真**要 Unicode**. 真**`re.UNICODE` 真 `\w` 真**简单**真.
-6. **catfish/AI 工具 skip rule 真**真**入 Analysis prompt 真**最早一段** — 优先级最高, 真**LLM 真**真**严守**真.
+1. **prompt example 真 LLM 跟得太死** — `<slug>` placeholder 第一次跑 LLM 填真, 但 polish 后LLM 真保留 example literal** parse 0 file. → 加 raw dump 真 debug 真最快定位.
+2. **`str(e)` 真空** catch 异常时 type hint 真必加 — `[%s]: %r` 直接显示 `ReadTimeout / RemoteProtocolError / etc` 根因 直接知.
+3. **max_tokens 真模型 真 cap 真 model-specific** — catfish-private-main 4096 真cap, 7000 直接抛 `httpx.ReadTimeout` (gateway 等 generate 真超时). 未来 plugin 真真真真 model metadata 真 cap detection** 自动 cap_max_tokens 真 helpful.
+4. **timeout 60s 真LLM 生 4096 tokens 真不够** (~90s+). generation 真单独 180s 真 robust.
+5. **path 白名单 ASCII-only 真踩坑** — LLM 中文 slug 真自然用, 白名单真要 Unicode. `re.UNICODE` 真 `\w` 真简单**真.
+6. **catfish/AI 工具 skip rule 真入 Analysis prompt 最早一段 — 优先级最高, LLM 真严守真.
 
 ### 24h 观察期 + cleanup
 
-明天 8:40+ (P0 ship 真**24h 满**):
+明天 8:40+ (P0 ship 24h 满):
 - 删 plugin prefetch 末尾 diag log (line 328-345 真 `logger.info("catfish-memory prefetch: returning...")`)
 - 删 `_call_analysis_llm` / `_call_generation_llm` 真 `last_wiki_*.txt` raw dump
-- catfish-doctor.sh 真**追加 wiki health check** — 真**`ls wiki/concepts/ | wc -l` >= 3** 真**`ls wiki/entities/ | wc -l` >= 3** 真验
+- catfish-doctor.sh 追加 wiki health check — `ls wiki/concepts/ | wc -l` >= 3 `ls wiki/entities/ | wc -l` >= 3 真验
 
 ### 下一步 P1.2 Query-as-Source
 
 - Companion chat UI 加按钮 "💾 存进 wiki"
 - 点了, 真 LLM 把这轮 Q&A 写 `~/.catfish/wiki/queries/<日期>-<主题>.md`
 - frontmatter: `sources: [chat]`, `related: [<auto-抽 entity/concept>]`
-- 自动走 P1.1 真 Analysis + Generation pipeline 真**抽 entity/concept**
+- 自动走 P1.1 真 Analysis + Generation pipeline 抽 entity/concept
 - 估 3-5 天 (前端 button + 后端 plugin pipeline)
 
 ---
@@ -1404,6 +1404,6 @@ journal: ## [2026-06-04 13:12] distill | 5 entities, 5 concepts
 
 - BriefingTwoColumnView 改 `__msg` css 让 `.markdown-body` 跟气泡背景协调 (assistant 气泡可能 over-padding)
 - task_chat jsonl 没 prune 机制 — 一年后单 file 几 MB. 加 archive 老条目 / 截断 N 轮前
-- approval banner pattern_key / command 字段 chat completions path 真**没填**, banner 显空白. 跟工作台一样的体验缺漏, 不阻塞
+- approval banner pattern_key / command 字段 chat completions path 没填, banner 显空白. 跟工作台一样的体验缺漏, 不阻塞
 - task chat tool 调用历史不进 advisor cache, advisor 下次 refresh 看不到 "员工跟 AI 在这条 task 上聊过什么" — context drift 风险
 - 多 task 并发 chat (员工开 task A chat 中, 切到 task B 再 chat) — 当前 useTaskChat 实例随 DetailPane unmount, A 的 stream 会被打断. 需 stream registry 化 (跟 useChat BL-MULTI-SESSION-STREAM 5/24 同款)

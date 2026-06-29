@@ -30,7 +30,7 @@ if [ ! -d "$GATEWAY_SRC" ]; then
 fi
 
 # 模式: 出现这些 = 红线违规 (要 noqa 才允许).
-# 只匹配真**函数调用** (Path.home() / os.path.expanduser('~/...')), 不匹配
+# 只匹配函数调用 (Path.home() / os.path.expanduser('~/...')), 不匹配
 # 注释里的文档引用. 这样减误报, 保留有意义信号.
 PATTERNS=(
     'Path\.home\(\)'

@@ -25,7 +25,9 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-EXTENSIONS = {".rs", ".ts", ".tsx", ".py"}
+# P3.5.147 (6/30 鸿波): 扩展到 .toml/.yaml/.yml/.md/.sh — P3.5.142 漏了这些类型,
+# Cargo.toml / roles.yaml / docs/*.md / scripts/*.sh 都有伪强调残留.
+EXTENSIONS = {".rs", ".ts", ".tsx", ".py", ".toml", ".yaml", ".yml", ".md", ".sh"}
 EXCLUDE_DIRS = {
     "venv",
     "node_modules",
@@ -34,7 +36,10 @@ EXCLUDE_DIRS = {
     "dist",
     "__pycache__",
     "build",
+    "_archive",  # P3.5.147: hermes-fork/patches/_archive 历史归档不动
 }
+# P3.5.147: 单文件名排除 — CHANGELOG.md 是历史 log, 不清.
+EXCLUDE_FILENAMES = {"CHANGELOG.md"}
 
 # 非贪婪 + 非星号字符. 单次 sub 不处理嵌套, 外层 loop 迭代.
 PATTERN = re.compile(r"真\*\*([^*]+?)\*\*")
@@ -53,13 +58,15 @@ def clean_text(content: str) -> tuple[str, int]:
 
 
 def iter_files(root: Path):
-    """递归遍历, 跳排除目录."""
+    """递归遍历, 跳排除目录 + 排除文件名."""
     for path in root.rglob("*"):
         if not path.is_file():
             continue
         if path.suffix not in EXTENSIONS:
             continue
         if any(d in path.parts for d in EXCLUDE_DIRS):
+            continue
+        if path.name in EXCLUDE_FILENAMES:
             continue
         yield path
 

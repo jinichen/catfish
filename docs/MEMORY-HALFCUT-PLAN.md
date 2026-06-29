@@ -311,7 +311,7 @@ KPI 任一不达标 → V2 也有问题, 重新评估.
 
 **待鸿波回答**: 跟销售 + 客户 IT 对齐故事
 
-### Q5: 砍 `conversation_compressor` 的真**收益**?
+### Q5: 砍 `conversation_compressor` 的收益?
 
 - 我们今天 5/15 还在修 BL-COMPRESS-BOUNDARY (Qwen 400 边界), 跟 hermes 同样的问题
 - 砍它换 hermes compressor, 是不是也要踩一遍同样的坑?

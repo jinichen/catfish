@@ -185,7 +185,7 @@ mod tests {
     }
 
     /// 测试用 helper: 返一个不存在的 yaml 路径 (在 tempdir 内, 文件没 create).
-    /// read_yaml_from 真**`!path.exists() → None`**, 所以 build_with_yaml 不读 yaml.
+    /// read_yaml_from `!path.exists() → None`, 所以 build_with_yaml 不读 yaml.
     fn fake_yaml_path(tmp: &TempDir) -> std::path::PathBuf {
         tmp.path().join("companion.yaml")
     }
