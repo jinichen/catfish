@@ -237,17 +237,33 @@ models:
 
     upstream:
       model: deepseek/deepseek-v4-flash
-      # P3.4.E (6/15 鸿波): /v1 → /beta 启 chat prefix completion + 严格 tool_choice 透传.
-      #   真因: advisor "reasoning out loud" 顽疾 (P3.4.9/.10/.C 累积都治标), 真根治路径 =
-      #   advisor.ts Call 2 single-shot + tool_choice={type:function,function:submit_advisor_result}
-      #   强制 LLM 返结构化 tool_calls (100% JSON). 但 /v1 production endpoint 对 specific-function
-      #   tool_choice 支持弱, /beta 完整支持 (LiteLLM deepseek/chat/transformation.py:100 默认 beta).
-      #   profile.ts 同款修. catfish-gateway 这里改 endpoint 让 LiteLLM 透传整个 OpenAI 协议给 beta.
+      # P3.5.148 (6/30 鸿波 audit 切回 /v1): /beta → /v1
       #
-      #   风险: 5/5 BL-D11+ thinking mode reasoning_content 透传 bug. 当时迫使关 thinking + 改 v1
-      #   双保险. 但 thinking 仍 disabled (下面 param_overrides), 即使切 beta 也不触发 thinking 路径,
-      #   reasoning_content bug 不复现. /v1 → /beta 改动隔离, 不再退路.
-      api_base: https://api.deepseek.com/beta
+      #   背景: P3.4.E (6/15) 把 endpoint 从 /v1 切到 /beta, 论据是当时实测 /v1 对
+      #   specific-function tool_choice 支持弱, /beta 完整支持. 但 6/29 ttft 异常
+      #   实盘 (631 秒 stuck) 暴露 /beta 真 SLA 不稳.
+      #
+      #   6/30 鸿波实跑 curl 实测两条:
+      #   1. POST /v1 + thinking 不带 (默认开) + tool_choice={type:function,function:submit}
+      #      → 报错 "Thinking mode does not support this tool_choice"
+      #   2. POST /v1 + thinking={type:disabled} + 同款 tool_choice
+      #      → 返 choices[0].message.tool_calls 含 submit 调用, finish_reason=tool_calls,
+      #        content 空 (严格 tool_choice 完整工作)
+      #
+      #   也就是说 /v1 不是不支持 strict tool_choice, 而是跟 thinking 互斥. catfish
+      #   一直在下面 param_overrides 关 thinking, /v1 + thinking_disabled 完美工作.
+      #   P3.4.E 当时实测可能漏传 thinking_disabled, 解读成 "/v1 不支持" 切了 /beta.
+      #
+      #   收益: /v1 是 deepseek production stable channel, SLA 优于 /beta. 6/29 那条
+      #   10.5 分钟 stuck 不能保证消失 (网络抖动也会), 但概率应该降低.
+      #
+      #   advisor.ts Call 2 single-shot + tool_choice={type:function,function:submit_advisor_result}
+      #   strict tool_calls 路径不变, /v1 完整支持.
+      #
+      #   风险: 5/5 BL-D11+ thinking mode reasoning_content 透传 bug 仍未根治, 但下面
+      #   param_overrides 显式 thinking.type=disabled, 即使 /v1 也不触发 thinking 路径,
+      #   reasoning_content bug 不复现. 跟切 /beta 同款.
+      api_base: https://api.deepseek.com/v1
       api_key_env: DEEPSEEK_API_KEY
       timeout: 90
       # 5/5 BL-D11+ 鸿波报: deepseek thinking mode 多轮对话 (含 tool call) 时
