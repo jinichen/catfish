@@ -71,10 +71,35 @@ logger = logging.getLogger("catfish.identity.refresh_tokens")
 _DEFAULT_TTL_DAYS = 30
 
 
+# P3.5.150 (6/30 鸿波 catch "用一阵就弹"): rotation race grace period.
+# 场景: silent refresh 已 200 OK, 服务端 commit (revoke parent + 写 child),
+# response 在 wire 中网络瞬断 / TCP RST / App Nap → Companion 没收到 child →
+# 本地仍是 parent token. 下次 silent refresh 用 parent → 老逻辑 400 invalid_grant
+# → Companion 删本地 refresh → 弹浏览器.
+#
+# Grace period 修法 (跟 GitHub / Google 同套路): parent revoked 后 60 秒内, 如果
+# Companion retry 用 parent, 服务端查 parent → 找 child → 复用 child (幂等).
+# 60 秒覆盖 99% 网络抖动场景. replay attack 风险: 攻击者得在 60 秒内拿到 parent
+# + 抢在 Companion retry 前 race, 极小.
+#
+# env CATFISH_REFRESH_TOKEN_GRACE_SECS 覆盖. 0 = 关 (回 strict rotation).
+_DEFAULT_GRACE_PERIOD_SECS = 60
+
+
 def _ttl_seconds() -> int:
     """从 env 读 TTL 天数, 默认 30 天."""
     days = int(os.environ.get("CATFISH_REFRESH_TOKEN_TTL_DAYS", _DEFAULT_TTL_DAYS))
     return max(1, days) * 86400
+
+
+def _grace_period_secs() -> int:
+    """P3.5.150: rotation race grace period 秒数, 默认 60s. env 覆盖.
+
+    0 = 关 grace, 回 strict rotation (老行为).
+    """
+    return max(0, int(os.environ.get(
+        "CATFISH_REFRESH_TOKEN_GRACE_SECS", _DEFAULT_GRACE_PERIOD_SECS
+    )))
 
 
 def _default_db_path() -> Path:
@@ -118,6 +143,19 @@ class RefreshTokenRecord:
 
     def is_revoked(self) -> bool:
         return self.revoked_at is not None
+
+    def is_in_grace_period(self) -> bool:
+        """P3.5.150: revoked 后 grace period 秒内仍可被 retry 复用 child.
+
+        老 token 的 revoke 时刻 + grace_period > now 才返 True.
+        grace = 0 时永远 False (关 grace).
+        """
+        if self.revoked_at is None:
+            return False
+        grace = _grace_period_secs()
+        if grace <= 0:
+            return False
+        return (self.revoked_at + grace) > int(time.time())
 
 
 class RefreshTokenStore:
@@ -193,6 +231,41 @@ class RefreshTokenStore:
                 "SELECT token, sub, client_id, scope, issued_at, expires_at, "
                 "revoked_at, parent_token FROM refresh_tokens WHERE token = ?",
                 (token,),
+            ).fetchone()
+        if not row:
+            return None
+        return RefreshTokenRecord(
+            token=row["token"],
+            sub=row["sub"],
+            client_id=row["client_id"],
+            scope=row["scope"],
+            issued_at=row["issued_at"],
+            expires_at=row["expires_at"],
+            revoked_at=row["revoked_at"],
+            parent_token=row["parent_token"],
+        )
+
+    def find_child(self, parent_token: str) -> Optional[RefreshTokenRecord]:
+        """P3.5.150: 查给定 parent_token 通过 rotation 签出的 child token.
+
+        正常 rotation 后一个 parent 对应唯一一条 child (parent 一旦 revoked 就不能
+        再 rotation 出第二条). 这条 helper 给 grace period replay 用 — Companion
+        网络瞬断 retry 旧 token 时, 服务端拿出 child 重新返给 Companion, 让本地链
+        状态跟服务端最终对齐.
+
+        返 None 的两种情况:
+        - parent 还没有 rotation 过 (没有任何 token 把它当 parent — 当前 parent
+          仍然活着, 不该走 grace 路径)
+        - chain 已经断 (child 也被 cleanup_expired 删了, 此时 grace 救不回)
+        """
+        if not parent_token:
+            return None
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT token, sub, client_id, scope, issued_at, expires_at, "
+                "revoked_at, parent_token FROM refresh_tokens "
+                "WHERE parent_token = ? LIMIT 1",
+                (parent_token,),
             ).fetchone()
         if not row:
             return None

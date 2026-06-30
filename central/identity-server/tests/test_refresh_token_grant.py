@@ -171,8 +171,43 @@ def test_refresh_token_returns_new_tokens(client: TestClient):
     assert new["scope"] == "openid email chat.completions"
 
 
-def test_old_refresh_token_revoked_after_rotation(client: TestClient, app: FastAPI):
-    """旧 refresh_token rotation 后立即 revoked, 再用 → 拒"""
+def test_old_refresh_token_grace_replay_within_window(client: TestClient, app: FastAPI):
+    """P3.5.150: rotation race mitigation —
+    旧 parent rotation 后 grace period (默认 60s) 内重用, replay 出已签出的 child token,
+    不删 parent. 这是 GitHub/Google 风格的 race window — 让客户端在网络抖动时不丢链.
+    """
+    body = _do_login(client)
+    old_rt = body["refresh_token"]
+
+    # 第一次 rotation
+    r = client.post("/token", data={
+        "grant_type": "refresh_token",
+        "refresh_token": old_rt,
+        "client_id": "hermes-cli",
+    })
+    assert r.status_code == 200
+    first_child = r.json()["refresh_token"]
+
+    # 模拟客户端没收到响应 → retry 用同样的 old parent (60s 内)
+    r2 = client.post("/token", data={
+        "grant_type": "refresh_token",
+        "refresh_token": old_rt,
+        "client_id": "hermes-cli",
+    })
+    # grace replay: 返 200 + 同一个 child (idempotent)
+    assert r2.status_code == 200, f"expected grace replay, got {r2.status_code}: {r2.json()}"
+    assert r2.json()["refresh_token"] == first_child, \
+        "grace replay 必须返同一个 child token, 不能再 rotation"
+    assert r2.json()["scope"] == "openid email chat.completions"
+
+
+def test_old_refresh_token_rejected_after_grace_expires(
+    client: TestClient, app: FastAPI, monkeypatch
+):
+    """P3.5.150: grace period 过后, 旧 parent 仍然拒掉 — 一次性语义保留"""
+    # grace=0 关 grace 让 race mitigation 失效, 直接走老路径
+    monkeypatch.setenv("CATFISH_REFRESH_TOKEN_GRACE_SECS", "0")
+
     body = _do_login(client)
     old_rt = body["refresh_token"]
 
@@ -184,7 +219,7 @@ def test_old_refresh_token_revoked_after_rotation(client: TestClient, app: FastA
     })
     assert r.status_code == 200
 
-    # 再用 → 拒 (一次性)
+    # 再用 → 拒 (grace 关了, 一次性)
     r2 = client.post("/token", data={
         "grant_type": "refresh_token",
         "refresh_token": old_rt,

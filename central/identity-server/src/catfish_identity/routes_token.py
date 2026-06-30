@@ -221,6 +221,73 @@ async def _handle_refresh_token(
             detail={"error": "invalid_grant", "error_description": "refresh_token 无效"},
         )
     if record.is_revoked():
+        # P3.5.150 (6/30 鸿波 catch "用一阵就弹"): rotation race grace period replay.
+        # 场景: 上次 rotation 已 200 响应, 但在 wire 中网络瞬断 / TCP RST / App Nap,
+        # Companion 没收到 child token → 本地仍是 parent. 下次 silent refresh 用
+        # parent → 老逻辑直接 400 invalid_grant → Companion 删本地 refresh → 弹浏览器.
+        #
+        # Grace 修法: parent 的 revoke 时刻 + GRACE_PERIOD_SECS > now + 已有 child
+        # → 复用 child (返同款 token 对, 幂等). 老 token revoke 状态不变, 只是认 retry.
+        # 60 秒覆盖 99% 网络抖动. replay attack 风险: 攻击者得在 60 秒内拿到 parent
+        # + 抢在 Companion retry 前 race, 极小.
+        if record.is_in_grace_period():
+            child = refresh_token_store.find_child(record.token)
+            if child is not None and not child.is_revoked() and not child.is_expired():
+                logger.info(
+                    "refresh: grace replay (sub=%s, parent revoked %ds ago, child 仍有效, "
+                    "复用 child 应对网络瞬断 retry)",
+                    record.sub, int(time.time()) - (record.revoked_at or 0),
+                )
+                # 复用 child — Companion 拿 child token 跟服务端 chain 状态对齐.
+                # access_token 重新签 (JWT 短 TTL 1h, 服务端没存原 access, 用 child
+                # 的 claims 重签).
+                user = registry.find(child.sub)
+                if user is None:
+                    logger.warning(
+                        "refresh grace replay: child sub=%s 已不在 registry, 拒",
+                        child.sub,
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": "invalid_grant",
+                            "error_description": "user 不存在或已删除",
+                        },
+                    )
+                if user.locked or user.deleted_at:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": "invalid_grant",
+                            "error_description": "user 已锁定或删除",
+                        },
+                    )
+                user_claims = await user.to_oidc_claims_async()
+                access_token_claims = dict(user_claims)
+                access_token_claims["scope"] = child.scope
+                access_token_claims["token_use"] = "access"
+                access_token = signer.sign_id_token(
+                    issuer=issuer,
+                    subject=user.email,
+                    audience=_SERVICE_TOKEN_AUDIENCE,
+                    claims=access_token_claims,
+                    ttl_seconds=_TOKEN_TTL_SECS,
+                )
+                return JSONResponse({
+                    "access_token": access_token,
+                    "refresh_token": child.token,
+                    "refresh_expires_in": int(child.expires_at - time.time()),
+                    "token_type": "Bearer",
+                    "expires_in": _TOKEN_TTL_SECS,
+                    "scope": child.scope,
+                })
+            # grace 内但 child 不可用 (没 rotation 过 / child 也 revoked / 过期) —
+            # chain 断了, grace 救不回, 走老 invalid_grant
+            logger.warning(
+                "refresh: token 在 grace period 内但 child 不可用 "
+                "(child=%s, 走 invalid_grant)",
+                "exists" if child else "none",
+            )
         # 一次性使用 — 拿过的 token 再来 = 可能被回放. 触发 chain 全 revoke (Phase 2).
         logger.warning(
             "refresh_token grant 失败: token 已 revoked (sub=%s client=%s, 可能被回放)",

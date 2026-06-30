@@ -176,3 +176,83 @@ def test_ttl_env_override(tmp_path, monkeypatch):
     diff = rt.expires_at - rt.issued_at
     # 应该 = 1 天 = 86400 秒
     assert 86395 <= diff <= 86405
+
+
+# ─── P3.5.150 grace period ───────────────────────────────
+
+
+def test_is_in_grace_period_false_when_not_revoked(store):
+    """活的 token 不在 grace period 内 (没 revoke 没 grace 概念)"""
+    rt = store.issue(sub="x", client_id="c", scope="s")
+    assert rt.is_in_grace_period() is False
+
+
+def test_is_in_grace_period_true_within_window(store):
+    """刚 revoke 的 token 仍在 grace period 内"""
+    rt = store.issue(sub="x", client_id="c", scope="s")
+    store.revoke(rt.token)
+    refreshed = store.find(rt.token)
+    assert refreshed.is_revoked() is True
+    assert refreshed.is_in_grace_period() is True
+
+
+def test_is_in_grace_period_false_after_window(store):
+    """revoke 超过 grace period 的 token 不再在 grace 内"""
+    rt = store.issue(sub="x", client_id="c", scope="s")
+    # 手动改 revoked_at 到 grace + 10 秒前
+    grace_secs = 60  # 默认 GRACE_PERIOD_SECS
+    past = int(time.time()) - grace_secs - 10
+    with store._conn() as conn:
+        conn.execute(
+            "UPDATE refresh_tokens SET revoked_at = ? WHERE token = ?",
+            (past, rt.token),
+        )
+    refreshed = store.find(rt.token)
+    assert refreshed.is_revoked() is True
+    assert refreshed.is_in_grace_period() is False
+
+
+def test_is_in_grace_period_false_when_grace_zero(store, monkeypatch):
+    """env CATFISH_REFRESH_TOKEN_GRACE_SECS=0 关 grace, 回 strict rotation"""
+    monkeypatch.setenv("CATFISH_REFRESH_TOKEN_GRACE_SECS", "0")
+    rt = store.issue(sub="x", client_id="c", scope="s")
+    store.revoke(rt.token)
+    refreshed = store.find(rt.token)
+    assert refreshed.is_revoked() is True
+    # grace = 0, 即使刚 revoked 也不在 grace 内
+    assert refreshed.is_in_grace_period() is False
+
+
+def test_grace_env_override(store, monkeypatch):
+    """CATFISH_REFRESH_TOKEN_GRACE_SECS env 覆盖默认 60s"""
+    monkeypatch.setenv("CATFISH_REFRESH_TOKEN_GRACE_SECS", "5")
+    rt = store.issue(sub="x", client_id="c", scope="s")
+    # 手动改 revoked_at 到 6 秒前 (env grace = 5, 已超)
+    with store._conn() as conn:
+        conn.execute(
+            "UPDATE refresh_tokens SET revoked_at = ? WHERE token = ?",
+            (int(time.time()) - 6, rt.token),
+        )
+    refreshed = store.find(rt.token)
+    assert refreshed.is_in_grace_period() is False
+
+
+def test_find_child_returns_child(store):
+    """find_child 拿到 rotation 后的 child token"""
+    parent = store.issue(sub="x", client_id="c", scope="s")
+    child = store.issue(sub="x", client_id="c", scope="s", parent_token=parent.token)
+    found = store.find_child(parent.token)
+    assert found is not None
+    assert found.token == child.token
+    assert found.parent_token == parent.token
+
+
+def test_find_child_returns_none_when_no_child(store):
+    """rotation 没发生过, find_child 返 None"""
+    parent = store.issue(sub="x", client_id="c", scope="s")
+    # parent 没被 rotation 出 child
+    assert store.find_child(parent.token) is None
+
+
+def test_find_child_empty_parent_returns_none(store):
+    assert store.find_child("") is None
