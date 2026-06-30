@@ -379,6 +379,41 @@ def test_search_returns_results():
     assert msgs[0].subject == "找资质方案"
 
 
+def test_search_wildcard_folder_routes_to_mailboxes_branch():
+    """P3.5.152: folder='*' 跨所有 mailbox — 生成的 AS 走 mailboxes of acc 路径,
+    不走老 `mailbox '*'` wildcard (Mail.app 返 -1728).
+
+    拦 osascript script 实际内容, 断言:
+      1. 含 `if folderName is "*"` 分支
+      2. 含 `repeat with mb in mailboxes of acc`
+      3. 每条返记录写 mailbox 的 name (mbName) 而不是 "*" 字面
+    """
+    accounts_stdout = f"工作{FS}work@x.com{FS}1{RS}"
+    # 模拟跨 2 mailbox 命中 2 封 — 每条第 6 列是 mailbox name 不是 "*"
+    search_stdout = (
+        f"100{FS}列表如下{FS}fflijl@x.com{FS}date1{FS}1{FS}INBOX{RS}"
+        f"101{FS}回复{FS}ffhongyd@x.com{FS}date2{FS}0{FS}Sent{RS}"
+    )
+    captured = {}
+    def capture_call(script: str) -> str:
+        if "accounts" in script and "FS" in script and "name" in script:
+            return accounts_stdout
+        captured["script"] = script
+        return search_stdout
+    with (
+        patch.object(am, "_is_mail_running", return_value=True),
+        patch.object(am, "_run_osascript", side_effect=capture_call),
+    ):
+        msgs = AppleMailAdapter().search("智能体", folder="*")
+    assert len(msgs) == 2
+    assert msgs[0].folder == "INBOX"
+    assert msgs[1].folder == "Sent"
+    # 断言生成 真 AS script 含跨 mailbox 分支 (P3.5.152 fix 真核心)
+    script = captured.get("script", "")
+    assert 'if folderName is "*"' in script, "AS 缺 wildcard 分支"
+    assert "mailboxes of acc" in script, "AS 缺 跨 mailbox 遍历"
+
+
 # ── AppleMailAdapter._resolve_account_name ──────────────
 
 

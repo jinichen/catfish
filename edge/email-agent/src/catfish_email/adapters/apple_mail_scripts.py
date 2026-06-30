@@ -434,21 +434,46 @@ tell application "Mail"
     set q to "{QUERY}"
     set limitN to {LIMIT}
     set acc to first account whose name of it is accName
-    set mb to my resolveInbox(acc, folderName)
-    set msgs to (messages of mb whose subject contains q or sender contains q)
     set out to ""
     set i to 0
-    repeat with m in msgs
-        if i >= limitN then exit repeat
-        set msgId to (id of m) as string
-        set subj to (subject of m) as string
-        set sndr to (sender of m) as string
-        set dt to my isoDate(date received of m)
-        set readSt to "1"
-        if (read status of m) is false then set readSt to "0"
-        set out to out & msgId & FS & subj & FS & sndr & FS & dt & FS & readSt & FS & folderName & RS
-        set i to i + 1
-    end repeat
+    -- P3.5.152 (6/30 鸿波 catch "邮件搜不到"): folder="*" 跨所有 mailbox.
+    -- AppleScript 不支持 `mailbox "*" of acc` (返 error -1728), 必须遍历
+    -- `mailboxes of acc`. 老逻辑 fall 进 resolveInbox 走 wantName 字面值,
+    -- "*" 时直接挂 → 三个公司账号邮件全搜不到. 这里分两条路径.
+    if folderName is "*" then
+        repeat with mb in mailboxes of acc
+            if i >= limitN then exit repeat
+            try
+                set msgs to (messages of mb whose subject contains q or sender contains q)
+                repeat with m in msgs
+                    if i >= limitN then exit repeat
+                    set msgId to (id of m) as string
+                    set subj to (subject of m) as string
+                    set sndr to (sender of m) as string
+                    set dt to my isoDate(date received of m)
+                    set readSt to "1"
+                    if (read status of m) is false then set readSt to "0"
+                    set mbName to (name of mb) as string
+                    set out to out & msgId & FS & subj & FS & sndr & FS & dt & FS & readSt & FS & mbName & RS
+                    set i to i + 1
+                end repeat
+            end try
+        end repeat
+    else
+        set mb to my resolveInbox(acc, folderName)
+        set msgs to (messages of mb whose subject contains q or sender contains q)
+        repeat with m in msgs
+            if i >= limitN then exit repeat
+            set msgId to (id of m) as string
+            set subj to (subject of m) as string
+            set sndr to (sender of m) as string
+            set dt to my isoDate(date received of m)
+            set readSt to "1"
+            if (read status of m) is false then set readSt to "0"
+            set out to out & msgId & FS & subj & FS & sndr & FS & dt & FS & readSt & FS & folderName & RS
+            set i to i + 1
+        end repeat
+    end if
     return out
 end tell
 
