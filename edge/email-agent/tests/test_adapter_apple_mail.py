@@ -367,48 +367,121 @@ def test_search_empty_query_returns_empty_list():
     assert msgs == []
 
 
+def _make_search_osa(accounts_stdout: str, search_stdout: str | list[str],
+                     captured: dict | None = None):
+    """构造一个 script-aware fake osascript:
+        - script 含 `every account` → 返 accounts_stdout (_AS_LIST_ACCOUNTS)
+        - 其他 (即 _AS_SEARCH) → 返 search_stdout, 顺手 capture
+    search_stdout 可传 str (每次同样返) 或 list (按顺序消耗, 跨账号场景).
+    """
+    state = {"i": 0}
+    def fn(script: str) -> str:
+        if "every account" in script:
+            return accounts_stdout
+        if captured is not None:
+            captured["script"] = script
+        if isinstance(search_stdout, list):
+            i = state["i"]
+            state["i"] += 1
+            return search_stdout[i] if i < len(search_stdout) else ""
+        return search_stdout
+    return fn
+
+
 def test_search_returns_results():
     accounts_stdout = f"工作{FS}work@x.com{FS}1{RS}"
     search_stdout = f"99{FS}找资质方案{FS}a@x.com{FS}date1{FS}1{FS}INBOX{RS}"
     with (
         patch.object(am, "_is_mail_running", return_value=True),
-        patch.object(am, "_run_osascript", side_effect=[accounts_stdout, search_stdout]),
+        patch.object(
+            am, "_run_osascript",
+            side_effect=_make_search_osa(accounts_stdout, search_stdout),
+        ),
     ):
         msgs = AppleMailAdapter().search("资质")
     assert len(msgs) == 1
     assert msgs[0].subject == "找资质方案"
 
 
+def test_search_default_account_none_iterates_all_accounts():
+    """P3.5.153: account=None 跨所有 Apple Mail 账号搜, 合并 + date 倒序 + 截 limit.
+
+    场景: 鸿波本机有 3 个 apple_mail 账号 (iCloud / Google / Chinatelecom),
+    fflijl/ffhongyd 邮件在 Chinatelecom 账号. 老逻辑只搜 iCloud (first
+    account) 永远漏. 新逻辑应遍历 3 个 account 都搜.
+    """
+    accounts_stdout = (
+        f"iCloud{FS}a@icloud.com{FS}0{RS}"
+        f"Google{FS}b@gmail.com{FS}0{RS}"
+        f"Chinatelecom{FS}c@chinatelecom.cn{FS}0{RS}"
+    )
+    # iCloud 0 命中, Google 0 命中, Chinatelecom 2 命中
+    search_outputs = [
+        "",   # iCloud
+        "",   # Google
+        f"100{FS}智能体列表{FS}fflijl@x.com{FS}2026-06-30T04:05:00{FS}1{FS}INBOX{RS}"
+        f"101{FS}回复智能体{FS}ffhongyd@x.com{FS}2026-06-30T00:46:00{FS}0{FS}INBOX{RS}",
+    ]
+    with (
+        patch.object(am, "_is_mail_running", return_value=True),
+        patch.object(
+            am, "_run_osascript",
+            side_effect=_make_search_osa(accounts_stdout, search_outputs),
+        ),
+    ):
+        msgs = AppleMailAdapter().search("智能体", account=None, limit=10)
+    # 跨 3 账号, 第 3 账号 Chinatelecom 命中 2 封
+    assert len(msgs) == 2
+    assert {m.account for m in msgs} == {"Chinatelecom"}
+    # date 倒序: 04:05 在 00:46 前
+    assert msgs[0].subject == "智能体列表"
+    assert msgs[1].subject == "回复智能体"
+
+
+def test_search_explicit_account_unchanged_behaviour():
+    """P3.5.153: account=str 路径不变 — 单账号 search 走 _search_as 一次."""
+    accounts_stdout = f"Chinatelecom{FS}c@chinatelecom.cn{FS}0{RS}"
+    search_stdout = f"99{FS}智能体{FS}x@x.com{FS}date1{FS}1{FS}INBOX{RS}"
+    with (
+        patch.object(am, "_is_mail_running", return_value=True),
+        patch.object(
+            am, "_run_osascript",
+            side_effect=_make_search_osa(accounts_stdout, search_stdout),
+        ),
+    ):
+        msgs = AppleMailAdapter().search("智能体", account="c@chinatelecom.cn")
+    assert len(msgs) == 1
+
+
 def test_search_wildcard_folder_routes_to_mailboxes_branch():
     """P3.5.152: folder='*' 跨所有 mailbox — 生成的 AS 走 mailboxes of acc 路径,
     不走老 `mailbox '*'` wildcard (Mail.app 返 -1728).
 
-    拦 osascript script 实际内容, 断言:
-      1. 含 `if folderName is "*"` 分支
-      2. 含 `repeat with mb in mailboxes of acc`
-      3. 每条返记录写 mailbox 的 name (mbName) 而不是 "*" 字面
+    注: account=None 走 _search_all_accounts 会按 date 倒序 sort, 测试不
+    依赖 records 顺序, 只校验 folder set 包含 INBOX/Sent 都在 (P3.5.152
+    fix 核心 — wildcard 真 mailbox name per-row, 不是 "*" 字面).
     """
     accounts_stdout = f"工作{FS}work@x.com{FS}1{RS}"
     # 模拟跨 2 mailbox 命中 2 封 — 每条第 6 列是 mailbox name 不是 "*"
+    # date 用真 ISO 让 sort 行为稳定 (P3.5.153 sort by date desc)
     search_stdout = (
-        f"100{FS}列表如下{FS}fflijl@x.com{FS}date1{FS}1{FS}INBOX{RS}"
-        f"101{FS}回复{FS}ffhongyd@x.com{FS}date2{FS}0{FS}Sent{RS}"
+        f"100{FS}列表如下{FS}fflijl@x.com{FS}2026-06-30T04:05:00{FS}1{FS}INBOX{RS}"
+        f"101{FS}回复{FS}ffhongyd@x.com{FS}2026-06-30T00:46:00{FS}0{FS}Sent{RS}"
     )
-    captured = {}
-    def capture_call(script: str) -> str:
-        if "accounts" in script and "FS" in script and "name" in script:
-            return accounts_stdout
-        captured["script"] = script
-        return search_stdout
+    captured: dict = {}
     with (
         patch.object(am, "_is_mail_running", return_value=True),
-        patch.object(am, "_run_osascript", side_effect=capture_call),
+        patch.object(
+            am, "_run_osascript",
+            side_effect=_make_search_osa(accounts_stdout, search_stdout, captured),
+        ),
     ):
         msgs = AppleMailAdapter().search("智能体", folder="*")
     assert len(msgs) == 2
-    assert msgs[0].folder == "INBOX"
-    assert msgs[1].folder == "Sent"
-    # 断言生成 真 AS script 含跨 mailbox 分支 (P3.5.152 fix 真核心)
+    # folder 集合校 (不依赖 sort 顺序) — 核心: 每行 folder 反映真 mailbox name
+    folders = {m.folder for m in msgs}
+    assert folders == {"INBOX", "Sent"}
+    # 断言生成的 AS script 含跨 mailbox 分支 (P3.5.152 fix 核心)
     script = captured.get("script", "")
     assert 'if folderName is "*"' in script, "AS 缺 wildcard 分支"
     assert "mailboxes of acc" in script, "AS 缺 跨 mailbox 遍历"

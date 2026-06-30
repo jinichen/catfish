@@ -693,10 +693,22 @@ class AppleMailAdapter(EmailAdapter):
         folder: str = "Inbox",
         limit: int = 30,
     ) -> list[Message]:
+        """全文 / 字段搜索.
+
+        P3.5.153 (6/30 鸿波 catch "为什么搜不到 chinatelecom.cn 邮件"):
+        account=None 时**跨所有账号搜** (不是 fallback 到 _resolve_account_name 真
+        first 一个 — 这老语义让 Apple Mail 多账号场景下永远只搜第一个 account,
+        公司账号常排第 2/3 直接漏). 跟 folder="*" 对称 (跨所有 folder), 让
+        LLM 在 chat 里调 catfish_email_search 不传 account 时能命中所有账号.
+
+        account=str 路径不变 (单账号, 老调用方语义兼容).
+        """
         if not query.strip():
             return []
         if self._use_emlx_fallback:
             return self._search_emlx(query, account=account, folder=folder, limit=limit)
+        if account is None:
+            return self._search_all_accounts(query, folder=folder, limit=limit)
         try:
             return self._search_as(query, account=account, folder=folder, limit=limit)
         except ClientNotRunningError:
@@ -705,6 +717,47 @@ class AppleMailAdapter(EmailAdapter):
                     query, account=account, folder=folder, limit=limit,
                 )
             raise
+
+    def _search_all_accounts(
+        self,
+        query: str,
+        *,
+        folder: str,
+        limit: int,
+    ) -> list[Message]:
+        """P3.5.153: 跨所有 Apple Mail 账号搜, 合并 + date 倒序 + 截 limit.
+
+        单账号 osascript 失败 → log warning skip, 不挂全 search (跟 _cmd_search
+        跨 adapter 容错思路一致 — 一个账号挂不该让其他账号的命中丢).
+
+        优化: 直接复用 list_accounts() 拉到的 name (acc.name), 调 _do_as_search
+        跳过 _search_as 内 _resolve_account_name 重复拉 accounts. 一次 search
+        实际 osascript 调用 = 1 (list_accounts) + N (每账号 _AS_SEARCH).
+        """
+        try:
+            all_accs = self.list_accounts()
+        except (ClientNotRunningError, EmailAdapterError) as e:
+            logger.warning("search 拉账号列表失败 (回退单账号 fallback): %s", e)
+            return self._search_as(query, account=None, folder=folder, limit=limit)
+
+        all_hits: list[Message] = []
+        for acc in all_accs:
+            if len(all_hits) >= limit:
+                break
+            remaining = limit - len(all_hits)
+            try:
+                hits = self._do_as_search(
+                    query, account_name=acc.name, folder=folder, limit=remaining,
+                )
+                all_hits.extend(hits)
+            except (ClientNotRunningError, EmailAdapterError) as e:
+                logger.warning(
+                    "search 跨账号 %s 失败 (skip): %s", acc.address, e,
+                )
+                continue
+        # 按 date 倒序 (各账号 osascript 返序无保证)
+        all_hits.sort(key=lambda m: m.date or "", reverse=True)
+        return all_hits[:limit]
 
     def _search_as(
         self,
@@ -715,6 +768,22 @@ class AppleMailAdapter(EmailAdapter):
         limit: int,
     ) -> list[Message]:
         account_name = self._resolve_account_name(account)
+        return self._do_as_search(
+            query, account_name=account_name, folder=folder, limit=limit,
+        )
+
+    def _do_as_search(
+        self,
+        query: str,
+        *,
+        account_name: str,
+        folder: str,
+        limit: int,
+    ) -> list[Message]:
+        """P3.5.153: 真正调 osascript 真核心. account_name 已是 Mail 真显示名,
+        跳过 _resolve_account_name 重复 osascript. _search_all_accounts 复用
+        list_accounts() 拿到的 acc.name 直调这里, 避免每个账号又拉一次 accounts.
+        """
         script = (
             _AS_SEARCH
             .replace("{ACCOUNT}", _escape_as_string(account_name))
