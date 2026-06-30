@@ -111,13 +111,27 @@ def _setup_file_logging() -> None:
         log_file = os.path.join(home, "Library", "Logs", "catfish", "gateway.log")
     try:
         from logging.handlers import RotatingFileHandler  # noqa: PLC0415
+        # P3.5.149 (6/30 鸿波 catch "log 每条写两遍"): 双 import 导致 addHandler 累加.
+        # 启动序列: `python -m catfish_gateway.app` 把模块当 __main__ 执行触发顶层
+        # _setup_file_logging() 第一次, 然后 uvicorn.run("catfish_gateway.app:app", ...)
+        # 用 import string 再 import 模块 (Python 把 __main__ 和 catfish_gateway.app
+        # 视为两个不同 module 对象), 触发顶层 _setup_file_logging() 第二次, 两个
+        # RotatingFileHandler 都被 addHandler 到 root logger → 每条 log 写两遍.
+        # 修法: idempotent guard, 检查 root logger handlers 已经有同款 file path
+        # 真 RotatingFileHandler 就 skip.
+        root_logger = logging.getLogger()
+        for existing in root_logger.handlers:
+            if isinstance(existing, RotatingFileHandler) and \
+                    os.path.abspath(existing.baseFilename) == os.path.abspath(log_file):
+                # 已经装过, 跳过 — 防双 import 累加
+                return
         os.makedirs(os.path.dirname(log_file), exist_ok=True)
         h = RotatingFileHandler(log_file, maxBytes=10 * 1024 * 1024, backupCount=5)
         h.setFormatter(logging.Formatter(
             "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
         ))
         # 加到 root logger, 所有 catfish.* / uvicorn / litellm 日志都进文件
-        logging.getLogger().addHandler(h)
+        root_logger.addHandler(h)
         logger.info("file logging → %s (10MB × 5 rotation)", log_file)
     except Exception as e:
         logger.warning("file logging 启用失败 (继续仅 stdout): %s", e)
