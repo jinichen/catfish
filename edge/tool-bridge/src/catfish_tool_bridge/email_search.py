@@ -37,6 +37,42 @@ _DEFAULT_LIMIT = 20
 _MAX_LIMIT = 50
 _SUBPROCESS_TIMEOUT = 10.0
 
+# P3.5.151 (6/30 鸿波"和查找 session 一样的方式"): snippet 围绕 query 命中位置
+# 取 ±N 字符上下文, 不是从头截. 跟 sessions_search.py:108-114 同 pattern.
+#
+# 邮件比 chat message 长 (列表 / 表格 / 附件描述常出现在正文中后段), 给 600
+# (sessions 是 200) — 前 _PREVIEW_CHARS // 2 = 300, 后 _PREVIEW_CHARS = 600,
+# 加 query 共 ~900 字 (中文 ~450 汉字), 列表场景充分够用.
+_PREVIEW_CHARS = 600
+
+
+def _build_snippet(body: str, query: str) -> str:
+    """围绕 query 在 body 内命中位置取上下文片段.
+
+    算法跟 sessions_search.search_messages 一致:
+      - find query 位置 (大小写不敏感)
+      - 命中: 前 _PREVIEW_CHARS // 2 字符, 后 _PREVIEW_CHARS 字符, 前后被截加 "…"
+      - query 没命中 body (可能命中 subject) → 从头截 _PREVIEW_CHARS * 2 字
+        + 末尾被截加 "…", 给 LLM 兜底信息
+
+    body 空 → 返 "" (不抛). query 空理论不会到这 (上层已 validate).
+    """
+    if not body:
+        return ""
+    body_lower = body.lower()
+    q_lower = query.lower()
+    idx = body_lower.find(q_lower)
+    if idx < 0:
+        # query 没在 body 命中 → 从头截兜底
+        if len(body) <= _PREVIEW_CHARS * 2:
+            return body
+        return body[: _PREVIEW_CHARS * 2] + "…"
+    start = max(0, idx - _PREVIEW_CHARS // 2)
+    end = min(len(body), idx + len(query) + _PREVIEW_CHARS)
+    prefix = "…" if start > 0 else ""
+    suffix = "…" if end < len(body) else ""
+    return prefix + body[start:end] + suffix
+
 
 def _find_catfish_email() -> str | None:
     """优先 PATH, 再 ~/.local/bin (跟 hermes plugin install 路径对齐)."""
@@ -167,7 +203,10 @@ def tool_email_search(args: dict[str, Any]) -> dict[str, Any]:
             "summary": f"没找到含 '{query}' 的邮件 (跨所有客户端 + 账号)",
         }
 
-    # LLM 看的 matches — 不返 body (隐私 + token 省), 只 subject/sender/date/adapter/account
+    # LLM 看的 matches — 不返完整 body (隐私 + token 省), 只 subject/sender/date/adapter/account
+    # P3.5.151 (6/30 鸿波"和查找 session 一样的方式"): snippet 围绕 query 命中位置取
+    # ±N 上下文 (跟 sessions_search 一致), 不是从头截 200. 让员工问"智能体列表"时
+    # snippet 包含列表段, LLM 一次拿全, 不需要二次拉 body.
     matches = [
         {
             "id": it.get("id"),
@@ -177,8 +216,7 @@ def tool_email_search(args: dict[str, Any]) -> dict[str, Any]:
             "sender": it.get("sender") or "",
             "date": it.get("date") or "",
             "is_read": bool(it.get("is_read", False)),
-            # snippet 是 body_text 前 ~200 字 (catfish-email list snippet 模式)
-            "snippet": (it.get("body_text") or "")[:200],
+            "snippet": _build_snippet(it.get("body_text") or "", query),
         }
         for it in items
     ]

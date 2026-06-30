@@ -72,8 +72,11 @@ class TestEmailSearchTool(unittest.TestCase):
         self.assertTrue(out["ok"])
         self.assertEqual(out["count"], 2)
         self.assertEqual(len(out["matches"]), 2)
-        # snippet 截到 200 字
-        self.assertLessEqual(len(out["matches"][0]["snippet"]), 200)
+        # P3.5.151: snippet 围绕 query 上下文, 上限 ≈ 2 * _PREVIEW_CHARS + len(query) + 2
+        max_snippet = 2 * email_search._PREVIEW_CHARS + len("工资条") + 2
+        self.assertLessEqual(len(out["matches"][0]["snippet"]), max_snippet)
+        # snippet 应该含 query 关键词 (因 fake body 含"工资条")
+        self.assertIn("工资条", out["matches"][0]["snippet"])
         # summary 按 adapter 分组
         self.assertIn("apple_mail", out["summary"])
         self.assertIn("foxmail_mac", out["summary"])
@@ -160,6 +163,68 @@ class TestEmailSearchTool(unittest.TestCase):
         cmd = m.call_args[0][0]
         idx = cmd.index("--folder")
         self.assertEqual(cmd[idx + 1], "*")
+
+
+class TestBuildSnippet(unittest.TestCase):
+    """P3.5.151: _build_snippet 围绕 query 上下文算法 (跟 sessions_search 一致)."""
+
+    def test_short_body_returned_as_is_when_query_not_in_body(self):
+        """body 短于 2 * _PREVIEW_CHARS 且 query 没命中 → 原文返回, 不加省略号"""
+        out = email_search._build_snippet("短邮件正文", "找不到")
+        self.assertEqual(out, "短邮件正文")
+
+    def test_empty_body_returns_empty(self):
+        self.assertEqual(email_search._build_snippet("", "x"), "")
+
+    def test_query_in_middle_returns_window_around_hit(self):
+        """query 在 body 中段 → snippet 围绕命中位置取 ±N 上下文, 前后带 …"""
+        # 造一段超长 body, "智能体" 在正中间. 用不同字符让前后段 distinguishable.
+        # body 总长 1000 + 14 + 1000 = 2014, "智能体" idx = 1003.
+        # _PREVIEW_CHARS = 600 → snippet 窗口 [703, 1606], 长度 903 + 2 省略号 = 905.
+        prefix = "前缀" * 500  # 1000 字
+        suffix = "后缀" * 500  # 1000 字
+        body = prefix + "评测的智能体列表如下: A B C" + suffix
+        out = email_search._build_snippet(body, "智能体")
+        # snippet 含 query
+        self.assertIn("智能体", out)
+        # snippet 含 query 后面的列表内容 (核心修法目标)
+        self.assertIn("列表如下", out)
+        # snippet 前后被截 → 带省略号
+        self.assertTrue(out.startswith("…"))
+        self.assertTrue(out.endswith("…"))
+        # snippet 长度受 _PREVIEW_CHARS 限制, 远小于完整 body (2014 字)
+        # 上限: 前 _PREVIEW_CHARS//2 (300) + len("智能体") (3) + _PREVIEW_CHARS (600) + 2 省略号
+        max_len = email_search._PREVIEW_CHARS // 2 + len("智能体") + email_search._PREVIEW_CHARS + 2
+        self.assertLessEqual(len(out), max_len)
+        # 确认被截了 (snippet 不应回完整 body)
+        self.assertLess(len(out), len(body))
+
+    def test_query_not_in_body_falls_back_to_head_truncation(self):
+        """query 没命中 body (可能命中 subject) → 从头截 2 * _PREVIEW_CHARS + …"""
+        body = "x" * (email_search._PREVIEW_CHARS * 3)  # 超长 body
+        out = email_search._build_snippet(body, "找不到的关键词")
+        self.assertEqual(len(out), email_search._PREVIEW_CHARS * 2 + 1)  # +1 for …
+        self.assertTrue(out.endswith("…"))
+
+    def test_query_at_start_no_leading_ellipsis(self):
+        """query 在 body 开头 → snippet 不加前置 …"""
+        body = "智能体列表如下: A, B, C" + "x" * 1000
+        out = email_search._build_snippet(body, "智能体")
+        self.assertFalse(out.startswith("…"))
+        self.assertIn("智能体", out)
+
+    def test_query_at_end_no_trailing_ellipsis(self):
+        """query 在 body 末尾 → snippet 不加后置 …"""
+        body = "x" * 1000 + "智能体"
+        out = email_search._build_snippet(body, "智能体")
+        self.assertTrue(out.startswith("…"))
+        self.assertFalse(out.endswith("…"))
+        self.assertTrue(out.endswith("智能体"))
+
+    def test_case_insensitive_match(self):
+        body = "Subject AI agent 列表"
+        out = email_search._build_snippet(body, "AI")
+        self.assertIn("AI", out)
 
 
 if __name__ == "__main__":
