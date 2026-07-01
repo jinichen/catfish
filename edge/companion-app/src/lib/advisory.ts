@@ -153,7 +153,7 @@ export async function getInstalledSkills(): Promise<SkillEntry[]> {
  * 时降级 "0.0.0" (永不命中 < 任何 pattern, 安全默认). */
 export function getCatfishVersion(): string {
   const env = (import.meta as ImportMeta & { env?: { VITE_CATFISH_VERSION?: string } }).env;
-  return env?.VITE_CATFISH_VERSION ?? "0.15.2";
+  return env?.VITE_CATFISH_VERSION ?? "0.17.0";
 }
 
 /** 单条 advisory 是否命中本机. target 空 → 全员相关 (e.g. policy_recommendation). */

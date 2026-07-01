@@ -5,6 +5,63 @@
 
 ---
 
+## 2026-07-01 · P3.5.157 — Companion 版本 bump 0.15.2 → 0.17.0 跟 hermes 对齐 + CI 强制 lint
+
+### 鸿波 catch
+
+看 Companion 仪表盘右上角 "鲶鱼 v0.15.2" 徽章问 "鲶鱼的版本现在怎么又没有同步 hermes 版本号? 要仔细分析代码, 不要乱猜, 要严格遵守军规".
+
+### Audit 真现状 (grep 全仓 + 代码事实)
+
+| 层 | 现状 |
+|---|---|
+| Companion UI 徽章 | `WebPortalLink.tsx:271-312 AboutChip` 调 Tauri `getVersion()` 读 `tauri.conf.json` 的 version |
+| Companion 3 处 version | `src-tauri/Cargo.toml:6` + `src-tauri/tauri.conf.json:4` + `package.json:3` 全是 `"0.15.2"` |
+| advisory 默认 fallback | `src/lib/advisory.ts:156` `?? "0.15.2"` — env 没 set 时兜底 |
+| advisory 广告 | `central/llm-gateway/config/advisories.yaml:48-62` "Catfish 0.15.2 推荐升级" (target `<=0.15.2`, 现在过期) |
+| hermes 实际版本 | v0.17.0 (v2026.6.19, 6/19 发布, blueprint_catalog.py 已在 `~/.hermes/hermes-agent/cron/`) |
+| CI check | `.github/workflows/ci.yml:139-141` + `scripts/check_version_sync.sh` (BL-COMPANION-VERSION-SYNC 5/18) |
+| CI catch 到漂移? | 没. script 只 lint 3 处一致 (0.15.2 都一致 → PASS), 本机 dev 跑才 warn hermes 漂移, CI runner 上没 hermes 直接跳过 |
+| P3.5.47 (6/21) hermes v0.17 audit | 补了 19 patch 兼容代码, **但 companion 3 处 version 没跟着 bump, 一直漂到今天** |
+
+**根因**: BL-CATFISH-HERMES-VERSION-SYNC-B (6/1) 只 warn 不 fail, CI 上 hermes 缺席直接跳过. 每次 hermes upgrade audit 完靠人肉 runbook §3b bump, 没有强制拦截. P3.5.47 那次漏了, 一路漂 40 天.
+
+### 修法
+
+**Phase A: bump 4 处 → 0.17.0**
+- `src-tauri/Cargo.toml:6`
+- `src-tauri/tauri.conf.json:4`
+- `package.json:3`
+- `src/lib/advisory.ts:156` (fallback default)
+- `Cargo.lock` / `package-lock.json` 后续 `cargo update` + `npm install` 自动跟
+
+**Phase B: 归档过期 advisory**
+- `central/llm-gateway/config/advisories.yaml:48-62` "推荐升级 0.15.2" 已过时, `expires` 改到过去让 gateway 自动 filter, 保留内容做 audit 追溯, 加 `archived` tag
+
+**Phase C: 加 `.hermes-target-version` + 增强 CI lint**
+- 新建 `edge/companion-app/.hermes-target-version` = `0.17.0` (仓库内维护, 不依赖本机装 hermes)
+- 改 `scripts/check_version_sync.sh`: 有这文件就**强校** companion 3 处 == target-version, 不一致 exit 1 拦 CI
+- 保留原 BL-CATFISH-HERMES-VERSION-SYNC-B 本机 hermes sanity warn 逻辑作为额外提醒
+- 未来 hermes upgrade audit runbook 加一步: 顺手 update `.hermes-target-version`, CI 强制拦不同步
+
+### 顺手修 pre-existing bug: script macOS BSD 兼容
+
+本机跑 `check_version_sync.sh` 报"版本号解析失败" — 5/18 script 用 `\s` GNU 元字符, macOS BSD awk/sed 不支持. CI (Ubuntu GNU) 一直 PASS 掩盖真 bug, 本机开发者要 debug 才发现. 改成 POSIX `[[:space:]]`, GNU + BSD 都通用. 跑一次修一次, 不留坑.
+
+### 验证
+
+```
+$ bash edge/companion-app/scripts/check_version_sync.sh
+✓ Companion 版本一致: 0.17.0
+✓ 跟 hermes target 一致: 0.17.0 (.hermes-target-version)
+```
+
+### 遗留
+
+Companion UI 目前只显示单一版本号. 未来考虑加"内嵌 hermes v0.17.0" 副标, 让员工看清 catfish 版本跟 hermes 版本 (会持续同步) — 但这是另一个 sprint, 不在本次范围.
+
+---
+
 ## 2026-06-21 · P3.5.56 — Companion boot 自动装 catfish-xcatfish-user plugin (同款 SOUL 治本)
 
 ### 鸿波 catch

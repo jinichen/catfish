@@ -34,12 +34,14 @@ for f in "$PACKAGE_JSON" "$CARGO_TOML" "$TAURI_CONF"; do
     fi
 done
 
+# P3.5.157 (7/1): 老 \s 元字符 GNU 支持 macOS BSD 不支持 → 本机跑挂, CI 上一直
+# PASS 是因为 Linux GNU 支持. 改用 POSIX [[:space:]] 跨平台通用.
 # 抓 package.json "version": "x.y.z"
-PKG_VER="$(grep -E '^\s*"version"\s*:' "$PACKAGE_JSON" | head -1 | sed -E 's/.*"version"\s*:\s*"([^"]+)".*/\1/')"
+PKG_VER="$(grep -E '^[[:space:]]*"version"[[:space:]]*:' "$PACKAGE_JSON" | head -1 | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
 # 抓 Cargo.toml 顶部 [package] 段的 version = "x.y.z" (注意不要抓到 dependencies 段的)
-CARGO_VER="$(awk '/^\[package\]/{f=1} f && /^version\s*=/{gsub(/.*version\s*=\s*"/, ""); gsub(/".*/, ""); print; exit}' "$CARGO_TOML")"
+CARGO_VER="$(awk '/^\[package\]/{f=1} f && /^version[[:space:]]*=/{gsub(/.*version[[:space:]]*=[[:space:]]*"/, ""); gsub(/".*/, ""); print; exit}' "$CARGO_TOML")"
 # 抓 tauri.conf.json "version": "x.y.z"
-TAURI_VER="$(grep -E '^\s*"version"\s*:' "$TAURI_CONF" | head -1 | sed -E 's/.*"version"\s*:\s*"([^"]+)".*/\1/')"
+TAURI_VER="$(grep -E '^[[:space:]]*"version"[[:space:]]*:' "$TAURI_CONF" | head -1 | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
 
 if [ -z "$PKG_VER" ] || [ -z "$CARGO_VER" ] || [ -z "$TAURI_VER" ]; then
     echo "❌ 版本号解析失败" >&2
@@ -52,26 +54,48 @@ fi
 if [ "$PKG_VER" = "$CARGO_VER" ] && [ "$CARGO_VER" = "$TAURI_VER" ]; then
     echo "✓ Companion 版本一致: $PKG_VER"
 
-    # BL-CATFISH-HERMES-VERSION-SYNC-B (6/1 鸿波): 本机有 hermes 时也检 hermes
-    # 版本, 不一致 warn 但不 fail (CI runner 上没 hermes 跳过, 本机 dev 看到 warn
-    # 立刻 bump catfish 跟上).
-    # 设计意图: 5/18 BL-COMPANION-VERSION-SYNC 时同步靠 runbook §3b 人手, 5/18→6/1
-    # 间 hermes 0.14→0.15.1 但 catfish 没跟. 人手 runbook 必漂, 改成 lint 见效.
-    HERMES_PYPROJECT="${HOME}/.hermes/hermes-agent/pyproject.toml"
-    if [ -f "$HERMES_PYPROJECT" ]; then
-        HERMES_VER="$(awk -F'"' '/^version[[:space:]]*=/ {print $2; exit}' "$HERMES_PYPROJECT" 2>/dev/null)"
-        if [ -n "$HERMES_VER" ]; then
-            if [ "$HERMES_VER" = "$PKG_VER" ]; then
-                echo "✓ hermes 版本同步: $HERMES_VER"
+    # P3.5.157 (7/1 鸿波 catch "版本一直没跟 hermes 同步"): 加 .hermes-target-version
+    # 强 check. 5/18 → 6/21 P3.5.47 (hermes v0.17 audit) → 7/1 都漂着 0.15.2 没人
+    # 发现 — 原因是 BL-CATFISH-HERMES-VERSION-SYNC-B 只 warn 不 fail + CI runner 上没
+    # hermes 直接跳过. 改成: 仓库里维护一份 .hermes-target-version, CI 上也强制校.
+    #
+    # 每次 hermes upgrade audit (docs/HERMES-*-UPGRADE-RUNBOOK.md) 完成后, 顺手
+    # update .hermes-target-version + bump 3 处 companion. CI 强制拦不同步.
+    TARGET_VER_FILE="$COMPANION_DIR/.hermes-target-version"
+    if [ -f "$TARGET_VER_FILE" ]; then
+        TARGET_VER="$(head -1 "$TARGET_VER_FILE" | tr -d '[:space:]')"
+        if [ -n "$TARGET_VER" ]; then
+            if [ "$TARGET_VER" = "$PKG_VER" ]; then
+                echo "✓ 跟 hermes target 一致: $TARGET_VER (.hermes-target-version)"
             else
-                echo "⚠ hermes 版本漂移 (不 fail, 仅提醒):"
-                echo "  catfish: $PKG_VER"
-                echo "  hermes : $HERMES_VER  ($HERMES_PYPROJECT)"
-                echo "  按 docs/HERMES-014-UPGRADE-RUNBOOK.md §3b 跑 sed bump."
+                echo "❌ Companion 版本 $PKG_VER != hermes target $TARGET_VER"
+                echo "   ($TARGET_VER_FILE)"
+                echo ""
+                echo "   两种修法:"
+                echo "   A. bump 3 处 companion 版本 → $TARGET_VER (推荐)"
+                echo "      sed -i '' 's/\"$PKG_VER\"/\"$TARGET_VER\"/' package.json"
+                echo "      sed -i '' 's/\"$PKG_VER\"/\"$TARGET_VER\"/' src-tauri/tauri.conf.json"
+                echo "      sed -i '' 's/\"$PKG_VER\"/\"$TARGET_VER\"/' src-tauri/Cargo.toml"
+                echo "   B. update .hermes-target-version → $PKG_VER (如果 hermes 还没升)"
+                exit 1
             fi
         fi
     fi
-    # 没 hermes (CI runner) → 静默跳过, 不 fail.
+
+    # BL-CATFISH-HERMES-VERSION-SYNC-B (6/1 鸿波): 本机有 hermes 时额外 sanity
+    # check — 本机装的 hermes 跟 target 是不是也一致. 不 fail (dev 本地可能刻意
+    # 装老 hermes 做兼容 test), 只 warn.
+    HERMES_PYPROJECT="${HOME}/.hermes/hermes-agent/pyproject.toml"
+    if [ -f "$HERMES_PYPROJECT" ]; then
+        HERMES_VER="$(awk -F'"' '/^version[[:space:]]*=/ {print $2; exit}' "$HERMES_PYPROJECT" 2>/dev/null)"
+        if [ -n "$HERMES_VER" ] && [ "$HERMES_VER" != "$PKG_VER" ]; then
+            echo "⚠ 本机装的 hermes 跟 companion 不一致 (不 fail, 仅提醒):"
+            echo "  catfish: $PKG_VER"
+            echo "  hermes : $HERMES_VER  ($HERMES_PYPROJECT)"
+            echo "  如果是新 hermes → update .hermes-target-version 触发 CI red 提醒 bump."
+        fi
+    fi
+
     exit 0
 fi
 
