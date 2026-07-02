@@ -32,6 +32,9 @@ import {
 } from "../../lib/tauri";
 import { useEmailStore } from "../../store/email";
 import { useUIStore } from "../../store/ui";
+// P3.5.158 Phase 4 (7/2 鸿波): 新建邮件入口
+import { useAgentStore } from "../../store/agent";
+import ComposeCore from "./components/ComposeCore";
 
 // 5/20: ListItem / DetailPane / helpers 抽到 components/ (拆 1204 → <500)
 import DetailPane, { type FullMessage } from "./components/DetailPane";
@@ -246,6 +249,28 @@ export default function EmailTab() {
   // BL-COMPANION-EMAIL-TAB-MAILAPP-BUTTON-REMOVE (5/18 鸿波):
   // 老 `📬 Mail.app` 按钮删 — catfish 自己读两边客户端都正常, 这按钮只跑 mailto:
   // 起空白 compose, 跟员工预期"打开收件箱"不一致 + 现在没用例.
+  //
+  // P3.5.158 Phase 4 (7/2 鸿波 catch "少了新建邮件功能"): 5/18 删的是跳系统
+  // Mail.app 按钮 (mailto: 离开 catfish 到 Mail.app 手动写). catfish 内部
+  // 一直没做纯粹的新建邮件入口. 现在补: 顶部 ✏️ 新建 按钮 → 右侧 render
+  // ComposeCore (originalMessage=null 拟稿禁用, in_reply_to=null 走新建路径),
+  // 取代空白态 "👈 左边选一封邮件看详情". backend email_create_draft 早已
+  // 支持 in_reply_to Option=None 走新建, 只差 UI 入口, 这里补.
+
+  const [newComposing, setNewComposing] = useState(false);
+  const agentName = useAgentStore((s) => s.name);
+  const agentPersonality = useAgentStore((s) => s.personality);
+  // 新建邮件默认账号: is_default=true 那个, 兜底第一个
+  const defaultAccount = useMemo(() => {
+    const def = accounts.find((a) => a.is_default);
+    return def?.address || accounts[0]?.address || undefined;
+  }, [accounts]);
+
+  const handleOpenNewCompose = () => {
+    // 打开新建 panel — 清选中真邮件 (员工在新建, 不看任何 selected msg)
+    setSelectedId(null);
+    setNewComposing(true);
+  };
 
   const headerSummary = useMemo(() => {
     if (error) return "拉取失败";
@@ -301,11 +326,30 @@ export default function EmailTab() {
             </span>
             <button
               type="button"
+              onClick={handleOpenNewCompose}
+              disabled={newComposing}
+              title="新建邮件 (给谁 / 主题 / 正文自己写, 保存草稿或直接发送)"
+              style={{
+                marginLeft: "auto",
+                background: newComposing ? "var(--catfish-bg)" : "transparent",
+                border: "1px solid var(--catfish-border)",
+                borderRadius: 4,
+                color: "var(--catfish-text-muted)",
+                cursor: newComposing ? "default" : "pointer",
+                opacity: newComposing ? 0.4 : 1,
+                fontSize: 11,
+                padding: "2px 8px",
+                fontFamily: "inherit",
+              }}
+            >
+              ✏️ 新建
+            </button>
+            <button
+              type="button"
               onClick={() => void loadList()}
               disabled={loading}
               title="重新同步"
               style={{
-                marginLeft: "auto",
                 background: "transparent",
                 border: "1px solid var(--catfish-border)",
                 borderRadius: 4,
@@ -424,7 +468,26 @@ export default function EmailTab() {
           overflow: "hidden",
         }}
       >
-        {!selectedId && (
+        {/* P3.5.158 Phase 4: 新建 compose panel (取代空白态). newComposing=true 时
+            显 ComposeCore, originalMessage=null → 拟稿禁用. */}
+        {!selectedId && newComposing && (
+          <ComposeCore
+            isOpen={newComposing}
+            onClose={() => setNewComposing(false)}
+            initialTo=""
+            initialCc=""
+            initialSubject=""
+            initialBody=""
+            inReplyToMsgId={null}
+            account={defaultAccount}
+            originalMessage={null}
+            agentName={agentName}
+            agentPersonality={agentPersonality}
+            resetKey="new-compose"
+          />
+        )}
+
+        {!selectedId && !newComposing && (
           <div
             style={{
               flex: 1,
@@ -433,9 +496,12 @@ export default function EmailTab() {
               justifyContent: "center",
               color: "var(--catfish-text-muted)",
               fontSize: 13,
+              flexDirection: "column",
+              gap: 10,
             }}
           >
-            👈 左边选一封邮件看详情
+            <div>👈 左边选一封邮件看详情</div>
+            <div style={{ fontSize: 11 }}>或 点顶部 ✏️ 新建 写一封新邮件</div>
           </div>
         )}
 

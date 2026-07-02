@@ -10,26 +10,22 @@
 import { useEffect, useMemo, useState } from "react";
 
 import {
-  emailCreateDraft,
   emailDeleteMessage,
-  emailSendMessage,
   emailPhishingGet,                 // P3.3.58 段 2C (6/12 鸿波)
   emailPoliticalScanNow,            // P3.3.53.2 (6/13 鸿波)
   emailExportAttachment,            // P3.5.103 (6/24 鸿波): 附件能点
   openFile,                         // P3.5.103: 系统默认 app 打开
-  fetchRole,                        // P3.5.139 (6/29 鸿波): 拟稿 fallback role chat_default
   type EmailDigestItem,
   type PhishingScanResult,          // P3.3.58 段 2C
   type PoliticalScanResult,         // P3.3.53.2
 } from "../../../lib/tauri";
-import { _extractSenderName, _replyAddress } from "./helpers";
-// P3.5.57 Phase 2 (6/22 鸿波): Compose 内"让小鲶帮我拟稿"按钮
-import { draftEmailReply } from "../../../lib/emailDraft";
+import { _extractSenderName, _replyAddress, _buildReplySubject, _buildQuotedBody } from "./helpers";
 import { useAgentStore } from "../../../store/agent";
-import { getPickerState } from "../../../lib/picker_state";
 // P3.5.58 (6/22 鸿波 catch "有回复了为啥还要让小鲶处理 是不是重复了"):
 // RFC 822 thread chain 算法 + 已回复 badge
 import { isReplied, formatReplyTime } from "../../../lib/emailThread";
+// P3.5.158 Phase 3 (7/2 鸿波): Compose panel 抽到 ComposeCore 共享组件
+import ComposeCore from "./ComposeCore";
 
 interface FullMessage extends EmailDigestItem {
   recipients?: string[];
@@ -93,16 +89,13 @@ function DetailPane({
 }) {
   // P3.5.58: 算已回复状态. msg / list 任一变即重算 (useMemo 兜 O(N) 性能).
   const replyStatus = useMemo(() => isReplied(msg, list), [msg, list]);
-  const [drafting, setDrafting] = useState(false);
+  // P3.5.158 (7/2): 保留 draftResult/draftError 显 header 附近保存草稿成功/失败提示,
+  // ComposeCore 走 onSaveDraftSuccess callback 通知这个 state.
   const [draftResult, setDraftResult] = useState<string | null>(null);
   const [draftError, setDraftError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  // P3.5.57 Phase 2 (6/22 鸿波): Compose 内"让小鲶帮我拟稿" 状态
-  const [draftingLlm, setDraftingLlm] = useState(false);
-  const [draftLlmError, setDraftLlmError] = useState<string | null>(null);
-  const [draftLlmDone, setDraftLlmDone] = useState(false);  // 拟过一次 → 按钮变"🔄 重拟"
-  // 拿员工自定义 agent name + personality 注入 LLM prompt
+  // 拿员工自定义 agent name + personality 注入 ComposeCore 拟稿 prompt
   const agentName = useAgentStore((s) => s.name);
   const agentPersonality = useAgentStore((s) => s.personality);
   /** 5/18 BL-EMAIL-DELETE: 两步确认 — 第一次点 "🗑 删除" 切到 "再次点击确认" 状态,
@@ -118,12 +111,10 @@ function DetailPane({
   }, [confirmPending]);
 
   // 选不同邮件时清 state, 防上封邮件的 error / confirm 残留
+  // P3.5.158 (7/2): 拟稿相关 state 搬 ComposeCore, 走 resetKey={msg.id} 自动清.
   useEffect(() => {
     setConfirmPending(false);
     setDeleteError(null);
-    // P3.5.57 Phase 2: 清 LLM 拟稿状态, 不然换邮件后按钮还显"🔄 重拟"误导
-    setDraftLlmError(null);
-    setDraftLlmDone(false);
   }, [msg.id]);
 
   // P3.3.58 段 2C (6/12 鸿波): 拉单封邮件的钓鱼扫描结果, 显红条
@@ -191,31 +182,15 @@ function DetailPane({
   };
 
   // 5/18 BL-EMAIL-COMPOSE-SEND: compose panel state — 点 "起草回复" 后展开,
-  // 显示可编辑 to/cc/subject/body, 员工 review/编辑 → 点 "✉ 发送" 真发.
-  // 红线: AI 不能绕过这个 panel 直接 send, 必须人工在 panel 里点按钮.
+  // 显示 ComposeCore. 红线: AI 不能绕过这个 panel 直接 send, 必须人工在 panel
+  // 里点按钮 (ComposeCore 内部两步 confirm 保留红线).
+  // P3.5.158 Phase 3 (7/2): Compose 相关 state 全部搬 ComposeCore. DetailPane 只
+  // 留 composing 控 open, ComposeCore 通过 resetKey={msg.id} 触发 state 清.
   const [composing, setComposing] = useState(false);
-  const [composeTo, setComposeTo] = useState("");
-  const [composeCc, setComposeCc] = useState("");
-  const [composeSubject, setComposeSubject] = useState("");
-  const [composeBody, setComposeBody] = useState("");
-  const [sending, setSending] = useState(false);
-  const [sendError, setSendError] = useState<string | null>(null);
-  const [sendResult, setSendResult] = useState<string | null>(null);
-  const [sendConfirmPending, setSendConfirmPending] = useState(false);
 
-  // 3s 自动取消 send confirm
-  useEffect(() => {
-    if (!sendConfirmPending) return;
-    const t = window.setTimeout(() => setSendConfirmPending(false), 3000);
-    return () => window.clearTimeout(t);
-  }, [sendConfirmPending]);
-
-  // 选别的邮件时清 compose 状态
+  // 选别的邮件时关 compose
   useEffect(() => {
     setComposing(false);
-    setSendError(null);
-    setSendResult(null);
-    setSendConfirmPending(false);
   }, [msg.id]);
 
   // P3.5.38.3 (6/18 鸿波 catch '还是无效, 仔细分析'):
@@ -275,141 +250,25 @@ function DetailPane({
    *    - 取消不留 orphan draft
    *    - 编辑后再 send 不会跟 Mail.app 那侧的草稿不一致 */
   const handleOpenCompose = () => {
-    const replyTo = _replyAddress(msg.sender);
-    const subj = msg.subject?.startsWith("Re:") ? msg.subject : `Re: ${msg.subject || ""}`;
-    const quoted = (msg.body_text || "")
-      .split("\n")
-      .map((l) => `> ${l}`)
-      .join("\n");
-    const body = `\n\n\n${"-".repeat(20)} 原邮件 ${"-".repeat(20)}\n` +
-      `发件人: ${msg.sender}\n` +
-      `时间: ${msg.date}\n` +
-      `主题: ${msg.subject}\n\n` +
-      quoted;
-    setComposeTo(replyTo);
-    setComposeCc("");
-    setComposeSubject(subj);
-    setComposeBody(body);
-    setSendError(null);
-    setSendResult(null);
-    setSendConfirmPending(false);
+    // P3.5.158 Phase 3 (7/2 鸿波): Compose 逻辑抽到 ComposeCore. handleOpenCompose
+    // 只负责 open panel, 初始值通过 ComposeCore initial* props 直接从 msg 派生
+    // (每次 render 都算, ComposeCore resetKey={msg.id} 触发 state 清).
+    setDraftResult(null);
+    setDraftError(null);
     setComposing(true);
   };
 
-  /** P3.5.57 Phase 2 (6/22 鸿波): "让小鲶帮我拟稿" — 一次性 LLM call 填 composeBody.
-   *
-   *  跟"💬 让小鲶处理这封" (跳工作台 chat) 区别: 这里直接落 Compose body, 不跳 chat.
-   *  失败 toast, 不挂 Compose UI. 拟过后按钮变"🔄 重拟" 给 user 不满意时重生成.
-   */
-  const handleDraftWithLlm = async () => {
-    setDraftingLlm(true);
-    setDraftLlmError(null);
-    try {
-      // P3.5.139 (6/29 鸿波"都要去除硬编码"): 删 "catfish-private-main" 字面值.
-      // chain: picker > role chat_default > Err.
-      //   picker 优先 — 跟员工当前对话 model 一致, 不发散 (鸿波 ack)
-      //   role chat_default 兜底 — roles.yaml truth source, 客户改 yaml 跟着走
-      //   都没拿到抛错 — 比静默兜底硬编码清晰, 数据红线由 roles.yaml 配置
-      const picker = await getPickerState().catch(() => null);
-      let model = picker?.chat_model || "";
-      if (!model) {
-        const roleModel = await fetchRole("chat_default");
-        if (!roleModel) {
-          setDraftLlmError("无法 resolve model (picker 没选 + roles.yaml chat_default 拉不到, gateway 可能没起)");
-          return;
-        }
-        model = roleModel;
-      }
-      const result = await draftEmailReply({
-        sender: msg.sender,
-        subject: msg.subject,
-        date: msg.date,
-        bodyText: msg.body_text || "",
-        agentName,
-        personality: agentPersonality,
-        model,
-      });
-      if (!result.ok || !result.body) {
-        setDraftLlmError(result.error || "未知错误");
-        return;
-      }
-      setComposeBody(result.body);
-      setDraftLlmDone(true);
-    } catch (e) {
-      setDraftLlmError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setDraftingLlm(false);
-    }
+  const handleComposeSaveSuccess = (draftId: string) => {
+    setDraftResult(draftId);
+    // ComposeCore 内部会 onClose(), DetailPane 无需再 setComposing(false)
   };
 
-  /** 只保存到 Drafts, 不发. 等价于老 handleDraftReply 行为 (但用 panel 的内容). */
-  const handleSaveDraft = async () => {
-    setDrafting(true);
-    setDraftResult(null);
-    setDraftError(null);
-    try {
-      const resultJson = await emailCreateDraft({
-        to: composeTo,
-        cc: composeCc || undefined,
-        subject: composeSubject,
-        body: composeBody,
-        inReplyTo: msg.id,
-        account: msg.account,
-      });
-      const parsed = JSON.parse(resultJson);
-      setDraftResult(parsed?.draft_id ?? "ok");
-      setComposing(false);  // 保存成功关 panel
-    } catch (e) {
-      setDraftError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setDrafting(false);
-    }
+  // 5/18 BL-EMAIL-COMPOSE-SEND 保留 hook: 发送成功 ComposeCore 内部 2s auto close.
+  // 未来可加 refresh list / toast 逻辑, 目前 no-op (DetailPane 内不需要额外反应).
+  const handleComposeSendSuccess = (_draftId: string) => {
+    // no-op for now — ComposeCore auto close + Mail.app 那边处理已足够
   };
 
-  /** 真发送: 两步 confirm, 第一次切 "再次点击确认", 第二次真发.
-   *  实现: 先 emailCreateDraft 拿 id, 再 emailSendMessage(id). */
-  const handleSendNow = async () => {
-    if (!sendConfirmPending) {
-      setSendConfirmPending(true);
-      setSendError(null);
-      return;
-    }
-    setSendConfirmPending(false);
-    setSending(true);
-    setSendError(null);
-    setSendResult(null);
-    console.log("[BL-EMAIL-COMPOSE-SEND] 起草+发送", { to: composeTo, subject: composeSubject });
-    try {
-      const draftJson = await emailCreateDraft({
-        to: composeTo,
-        cc: composeCc || undefined,
-        subject: composeSubject,
-        body: composeBody,
-        inReplyTo: msg.id,
-        account: msg.account,
-      });
-      const draftParsed = JSON.parse(draftJson);
-      const draftId = draftParsed?.draft_id;
-      if (!draftId) {
-        throw new Error("起草返回没 draft_id, 无法发送");
-      }
-      console.log("[BL-EMAIL-COMPOSE-SEND] draft 已建, 现在 send", draftId);
-      const sendJson = await emailSendMessage(draftId);
-      console.log("[BL-EMAIL-COMPOSE-SEND] 发送成功", sendJson);
-      setSendResult("✓ 已发送");
-      // 2s 后关 panel
-      setTimeout(() => {
-        setComposing(false);
-        setSendResult(null);
-      }, 2000);
-    } catch (e) {
-      const errMsg = e instanceof Error ? e.message : String(e);
-      console.error("[BL-EMAIL-COMPOSE-SEND] 发送失败:", errMsg);
-      setSendError(errMsg);
-    } finally {
-      setSending(false);
-    }
-  };
   return (
     <>
       {/* 详情 header */}
@@ -673,7 +532,7 @@ function DetailPane({
           <button
             type="button"
             onClick={handleOpenCompose}
-            disabled={drafting || composing}
+            disabled={composing}
             style={{
               background: "var(--catfish-bg)",
               color: "var(--catfish-text)",
@@ -684,8 +543,9 @@ function DetailPane({
               // P3.5.57 (6/22 鸿波 catch UX 误导): composing 时按钮 disabled, opacity 加深
               // 让视觉明确表达"不可点", 不再用 "📝 编辑中…" 文案切换
               // (老文案让 user 以为这个按钮还能点 / 正在做某动作, 实际是 disabled).
-              cursor: composing || drafting ? "default" : "pointer",
-              opacity: composing || drafting ? 0.4 : 1,
+              // P3.5.158 (7/2): drafting/setDrafting 搬 ComposeCore, 这里只判 composing
+              cursor: composing ? "default" : "pointer",
+              opacity: composing ? 0.4 : 1,
               fontFamily: "inherit",
             }}
             title="打开 compose 面板, 编辑回复内容 + 选择保存草稿或发送 (人工 confirm 才发)"
@@ -766,257 +626,35 @@ function DetailPane({
         </div>
       </div>
 
-      {/* 5/18 BL-EMAIL-COMPOSE-SEND: compose panel - composing=true 时取代正文区显. */}
+      {/* P3.5.158 Phase 3 (7/2 鸿波): Compose panel 抽 ComposeCore 共享组件.
+          回复场景 originalMessage=msg + resetKey=msg.id. 保存/发送成功走 callback. */}
       {composing ? (
-        <div
-          style={{
-            flex: 1,
-            overflowY: "auto",
-            padding: "var(--space-4)",
-            fontSize: 13,
-            background: "var(--catfish-bg)",
-            display: "flex",
-            flexDirection: "column",
-            gap: 10,
+        <ComposeCore
+          isOpen={composing}
+          onClose={() => setComposing(false)}
+          onSaveDraftSuccess={handleComposeSaveSuccess}
+          onSendSuccess={handleComposeSendSuccess}
+          initialTo={_replyAddress(msg.sender)}
+          initialCc=""
+          initialSubject={_buildReplySubject(msg.subject)}
+          initialBody={_buildQuotedBody({
+            sender: msg.sender,
+            date: msg.date,
+            subject: msg.subject || "",
+            body_text: msg.body_text,
+          })}
+          inReplyToMsgId={msg.id}
+          account={msg.account}
+          originalMessage={{
+            sender: msg.sender,
+            subject: msg.subject || "",
+            date: msg.date,
+            bodyText: msg.body_text || "",
           }}
-        >
-          {/* P3.5.57 (6/22 鸿波 catch "都是误导"): 砍绿色红线提示横幅.
-              原文案让 user 误以为 Companion 只能落 Drafts 真发要去 Mail.app, 实际上
-              ✉ 发送 (两步 confirm) 直接发出去不停 Drafts. "红线 AI 不能绕过" 那段
-              是设计意图, 通过两步 confirm 按钮自身已表达, 不需要重复说. */}
-
-          {/* to */}
-          <label style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
-            <span style={{ width: 50, color: "var(--catfish-text-muted)", flex: "0 0 auto" }}>收件人</span>
-            <input
-              type="text"
-              value={composeTo}
-              onChange={(e) => setComposeTo(e.target.value)}
-              placeholder="alice@x.com, bob@y.com"
-              style={{
-                flex: 1,
-                background: "var(--catfish-bg-elevated)",
-                color: "var(--catfish-text)",
-                border: "1px solid var(--catfish-border)",
-                borderRadius: 4,
-                padding: "6px 10px",
-                fontSize: 13,
-                fontFamily: "inherit",
-              }}
-            />
-          </label>
-
-          {/* cc */}
-          <label style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
-            <span style={{ width: 50, color: "var(--catfish-text-muted)", flex: "0 0 auto" }}>抄送</span>
-            <input
-              type="text"
-              value={composeCc}
-              onChange={(e) => setComposeCc(e.target.value)}
-              placeholder="可选, 多人逗号分隔"
-              style={{
-                flex: 1,
-                background: "var(--catfish-bg-elevated)",
-                color: "var(--catfish-text)",
-                border: "1px solid var(--catfish-border)",
-                borderRadius: 4,
-                padding: "6px 10px",
-                fontSize: 13,
-                fontFamily: "inherit",
-              }}
-            />
-          </label>
-
-          {/* subject */}
-          <label style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
-            <span style={{ width: 50, color: "var(--catfish-text-muted)", flex: "0 0 auto" }}>主题</span>
-            <input
-              type="text"
-              value={composeSubject}
-              onChange={(e) => setComposeSubject(e.target.value)}
-              style={{
-                flex: 1,
-                background: "var(--catfish-bg-elevated)",
-                color: "var(--catfish-text)",
-                border: "1px solid var(--catfish-border)",
-                borderRadius: 4,
-                padding: "6px 10px",
-                fontSize: 13,
-                fontFamily: "inherit",
-              }}
-            />
-          </label>
-
-          {/* P3.5.57 Phase 2 (6/22 鸿波): body 上方"💡 让小鲶帮我拟稿"按钮.
-              点了一次性调 LLM (catfish gateway, picker 模型, 30s timeout) 落
-              composeBody. 拟稿后按钮变"🔄 重拟". 失败下方红条显错.
-              不挂 send 红线 — LLM 只动 body 输入框, 真发还是要两步 confirm. */}
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <span style={{ width: 50, color: "var(--catfish-text-muted)", flex: "0 0 auto" }}>正文</span>
-            <button
-              type="button"
-              onClick={() => void handleDraftWithLlm()}
-              disabled={draftingLlm || !msg.body_text}
-              style={{
-                background: draftLlmDone ? "var(--catfish-bg)" : "rgba(34, 197, 94, 0.1)",
-                color: draftLlmDone ? "var(--catfish-text)" : "rgb(21, 128, 61)",
-                border: draftLlmDone
-                  ? "1px solid var(--catfish-border)"
-                  : "1px solid rgba(34, 197, 94, 0.4)",
-                borderRadius: 4,
-                padding: "4px 10px",
-                fontSize: 12,
-                cursor: draftingLlm ? "wait" : msg.body_text ? "pointer" : "not-allowed",
-                fontFamily: "inherit",
-                opacity: msg.body_text ? 1 : 0.4,
-              }}
-              title={
-                msg.body_text
-                  ? draftLlmDone
-                    ? "不满意?  重新生成一份草稿 (会覆盖正文区现有内容)"
-                    : `让${agentName}根据原邮件起一段回复草稿, 落到下面正文区. 你可改可不发.`
-                  : "原邮件正文为空, 没法拟稿"
-              }
-            >
-              {draftingLlm
-                ? `⏳ ${agentName}拟稿中…`
-                : draftLlmDone
-                  ? "🔄 重拟"
-                  : `💡 让${agentName}帮我拟稿`}
-            </button>
-            {draftLlmError && (
-              <span style={{ fontSize: 11, color: "rgb(220, 80, 60)" }}>
-                ✗ 拟稿失败: {draftLlmError}
-              </span>
-            )}
-          </div>
-
-          {/* body */}
-          <textarea
-            value={composeBody}
-            onChange={(e) => setComposeBody(e.target.value)}
-            placeholder="正文..."
-            style={{
-              flex: 1,
-              minHeight: 200,
-              background: "var(--catfish-bg-elevated)",
-              color: "var(--catfish-text)",
-              border: "1px solid var(--catfish-border)",
-              borderRadius: 4,
-              padding: "8px 12px",
-              fontSize: 13,
-              lineHeight: 1.6,
-              fontFamily: "inherit",
-              resize: "vertical",
-            }}
-          />
-
-          {/* 错误 / 成功提示 */}
-          {sendError && (
-            <div
-              style={{
-                padding: "8px 12px",
-                background: "rgba(220, 80, 60, 0.1)",
-                border: "1px solid rgba(220, 80, 60, 0.3)",
-                borderRadius: 4,
-                fontSize: 12,
-                color: "rgb(220, 80, 60)",
-                lineHeight: 1.5,
-              }}
-            >
-              <strong>✗ 发送失败</strong>
-              <br />
-              {sendError}
-            </div>
-          )}
-          {sendResult && (
-            <div
-              style={{
-                padding: "8px 12px",
-                background: "rgba(34, 197, 94, 0.1)",
-                border: "1px solid rgba(34, 197, 94, 0.3)",
-                borderRadius: 4,
-                fontSize: 12,
-                color: "rgb(21, 128, 61)",
-              }}
-            >
-              {sendResult} (2 秒后关闭)
-            </div>
-          )}
-
-          {/* 行动按钮区 */}
-          <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
-            <button
-              type="button"
-              onClick={() => {
-                setComposing(false);
-                setSendConfirmPending(false);
-                setSendError(null);
-              }}
-              disabled={sending}
-              style={{
-                background: "transparent",
-                color: "var(--catfish-text-muted)",
-                border: "1px solid var(--catfish-border)",
-                borderRadius: 4,
-                padding: "8px 14px",
-                fontSize: 13,
-                cursor: sending ? "wait" : "pointer",
-                fontFamily: "inherit",
-              }}
-            >
-              × 取消
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleSaveDraft()}
-              disabled={sending || drafting}
-              style={{
-                background: "var(--catfish-bg)",
-                color: "var(--catfish-text)",
-                border: "1px solid var(--catfish-border)",
-                borderRadius: 4,
-                padding: "8px 14px",
-                fontSize: 13,
-                cursor: drafting ? "wait" : "pointer",
-                fontFamily: "inherit",
-              }}
-              title="保存到 Mail.app Drafts, 不发送. 等会儿去 Mail.app 改完自己发."
-            >
-              {drafting ? "保存中…" : "💾 仅保存草稿"}
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleSendNow()}
-              disabled={sending || !composeTo.trim()}
-              style={{
-                background: sendConfirmPending ? "rgba(34, 197, 94, 0.15)" : "var(--catfish-cyan)",
-                color: sendConfirmPending ? "rgb(21, 128, 61)" : "#fff",
-                border: sendConfirmPending
-                  ? "1px solid rgb(21, 128, 61)"
-                  : "1px solid var(--catfish-cyan)",
-                borderRadius: 4,
-                padding: "8px 14px",
-                fontSize: 13,
-                fontWeight: sendConfirmPending ? 600 : 500,
-                cursor: sending ? "wait" : (!composeTo.trim() ? "not-allowed" : "pointer"),
-                fontFamily: "inherit",
-                marginLeft: "auto",
-              }}
-              title={
-                sendConfirmPending
-                  ? "再次点击确认发送 (3s 内有效)"
-                  : "起草 + 发送邮件. 红线: 必须人工点这个按钮."
-              }
-            >
-              {sending
-                ? "发送中…"
-                : sendConfirmPending
-                  ? "✉ 再次点击确认 (3s)"
-                  : "✉ 发送"}
-            </button>
-          </div>
-        </div>
+          agentName={agentName}
+          agentPersonality={agentPersonality}
+          resetKey={msg.id}
+        />
       ) : msg.body_html ? (
         /* P3.5.31 (6/17): HTML 邮件 iframe srcdoc render.
            P3.5.38.3 (6/18): 砍 sandbox attribute - parent 能拿 contentDocument 监听 click.

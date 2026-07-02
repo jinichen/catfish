@@ -19,6 +19,36 @@ export function _replyAddress(sender: string): string {
   return sender.trim();
 }
 
+/** P3.5.158 Phase 1 (7/2 鸿波): 生"Re: X" 主题 — 空 subject 兜"Re: ", 已有 Re:
+ *  前缀不重复加. 抽自 DetailPane.handleOpenCompose. 给 ComposeCore 共用.
+ */
+export function _buildReplySubject(subject: string | undefined | null): string {
+  const s = subject || "";
+  return s.startsWith("Re:") ? s : `Re: ${s}`;
+}
+
+/** P3.5.158 Phase 1 (7/2 鸿波): 生回复引用段. 抽自 DetailPane.handleOpenCompose.
+ *  body_text 空时引用段仍生 (只留 header + 空 quoted), 让员工看到"这是回复给谁的".
+ */
+export function _buildQuotedBody(msg: {
+  sender: string;
+  date: string;
+  subject: string;
+  body_text?: string;
+}): string {
+  const quoted = (msg.body_text || "")
+    .split("\n")
+    .map((l) => `> ${l}`)
+    .join("\n");
+  return (
+    `\n\n\n${"-".repeat(20)} 原邮件 ${"-".repeat(20)}\n` +
+    `发件人: ${msg.sender}\n` +
+    `时间: ${msg.date}\n` +
+    `主题: ${msg.subject}\n\n` +
+    quoted
+  );
+}
+
 export function _formatShortDate(iso: string): string {
   if (!iso) return "";
   try {

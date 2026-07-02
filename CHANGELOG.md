@@ -5,6 +5,105 @@
 
 ---
 
+## 2026-07-02 · P3.5.158 — 邮件 tab 补新建入口 (抽 ComposeCore 共享组件)
+
+### 鸿波 catch
+
+看 Companion 邮件 tab 说 "少了新建邮件功能". 严格审后确认: 5/18 你删的是跳系统
+Mail.app 的 `📬 Mail.app` 按钮 (mailto: 起 compose, 员工离开 catfish). catfish
+内部一直没做过纯新建入口 — Compose panel 从 5/18 开始就嵌在 DetailPane 里, 只
+支持"回复既有邮件"场景 (依赖 selected msg 派生 to/subject/quoted body).
+
+### Audit 严格边界 (代码事实)
+
+| 层 | 现状 | 缺 |
+|---|---|---|
+| 后端 `email_create_draft` (email.rs:232) | ✓ `in_reply_to: Option<String>` 空=新建, 有值=回复 | 无 |
+| DetailPane Compose panel | ✓ 250 行 JSX + 11 useState + 3 handler 深耦合 msg | 无 |
+| EmailTab 顶部 | ✗ 无新建入口 | 缺 |
+
+深耦合 msg 点 4 处: (1) handleOpenCompose 派生 initial* (2) handleDraftWithLlm 拟稿
+prompt (3) handleSaveDraft/handleSendNow 用 msg.id/account (4) 拟稿按钮 disable
+判 msg.body_text.
+
+### 3 方案权衡 (audit 后)
+
+- **A** 复活 mailto: 按钮 (0.5h) → 员工离开 catfish, 不用拟稿, 你 5/18 删就是嫌这
+- **B** EmailTab 独立 NewComposePanel (4-6h) → 代码重复 ~300 行
+- **C** 抽 ComposeCore 共享组件 (14-15h) → DRY, 未来加转发/模板/草稿箱管理时复用
+
+选 C.
+
+### 修法 5 Phase
+
+**Phase 1**: `helpers.ts` 加 `_buildReplySubject(subject)` + `_buildQuotedBody(msg)`.
+DetailPane.handleOpenCompose 内 inline (15 行) 换 helper (3 调用).
+
+**Phase 2**: 新建 `ComposeCore.tsx` (~430 行含注释). Props 接口:
+- `isOpen/onClose/onSendSuccess/onSaveDraftSuccess` — parent 控真状态 + 回调
+- `initialTo/Cc/Subject/Body` — 初始值
+- `inReplyToMsgId` — 回复传 msg.id, 新建传 null (透传 email_create_draft)
+- `account` — 走真账号
+- `originalMessage` — 拟稿 context, null = 新建场景 → 拟稿按钮禁用 + title 变文案
+- `agentName/agentPersonality` — 拟稿真 prompt
+- `resetKey` — state 清触发 (msg.id / "new-compose")
+
+11 useState + 3 handler + 250 JSX 全从 DetailPane 抽真, 逻辑 100% 保留.
+
+**Phase 3**: DetailPane 用 ComposeCore 替代 inline. 净删 251 行 JSX + 相关 state.
+保留 draftResult/draftError 显 header 附近保存草稿成功/失败提示, 走 onSaveDraftSuccess
+callback 触发. handleOpenCompose 只 setComposing(true), initial* 通过 render 时
+每次算. 老"drafting" 引用 (3 处 button style) 清掉, 只判 composing.
+
+**Phase 4**: EmailTab 顶部 toolbar 加 `✏️ 新建` 按钮 (marginLeft: auto group).
+点了 setSelectedId(null) + setNewComposing(true). 右侧 render 增强:
+- selectedId 有 → DetailPane (原逻辑)
+- !selectedId && newComposing → `<ComposeCore originalMessage={null} resetKey="new-compose" ... />`
+- 都无 → 空白态 "👈 左边选一封邮件看详情 / 或 点顶部 ✏️ 新建 写一封新邮件"
+
+defaultAccount 从 accounts 找 is_default=true 兜底 accounts[0]. 传 ComposeCore
+account prop.
+
+**Phase 5**: tsc verify + regression 测试 + commit + push.
+
+### 严格 tsc 修 4 类 error
+
+1. ComposeCore agentPersonality 类型: `string` → `Personality | undefined` (import from `lib/agent`)
+2. DetailPane useEffect 里遗留 `setDraftLlmError/setDraftLlmDone` — state 已删, 清 useEffect body
+3. DetailPane "✏️ 回复" 按钮 style 引用 `drafting` (state 已删) — 换 `composing` 单判
+4. `Personality` 从 `lib/agent` import (not `store/agent`, 那里没 re-export)
+
+### 验证
+
+```
+$ npx tsc --noEmit
+(0 error)
+```
+
+### 净改动
+
+- helpers.ts: +34 行 (2 helper)
+- ComposeCore.tsx: +430 行 (新组件)
+- DetailPane.tsx: 净 -370 行 (delete Compose state/handler/JSX 402 行, add ComposeCore render + callback 32 行)
+- EmailTab.tsx: +60 行 (新建按钮 + newComposing state + ComposeCore render)
+
+**合计净增 ~154 行, 但换来"catfish 内闭环新建邮件"新能力 + 未来加转发/模板/草稿箱管理时复用 ComposeCore.**
+
+### 红线保留 (BL-EMAIL-COMPOSE-SEND 5/18)
+
+AI 不能绕过 panel 直发 send. ComposeCore 内部两步 confirm state machine + 只暴露
+onSendSuccess callback (parent 不能自己触发发送). 红线**完全保留**.
+
+### 遗留 (backlog)
+
+- 草稿箱管理 (Drafts folder 独立 tab, 每条能重新打开 ComposeCore)
+- 邮件转发 (Forward, initial* 换 Fwd: 前缀 + to 空)
+- 邮件模板 (常用邮件套模板起草)
+
+3 个都能复用 ComposeCore, 走 C 方案时留的口子.
+
+---
+
 ## 2026-07-01 · P3.5.157 — Companion 版本 bump 0.15.2 → 0.17.0 跟 hermes 对齐 + CI 强制 lint
 
 ### 鸿波 catch
