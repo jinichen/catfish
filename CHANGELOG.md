@@ -5,6 +5,107 @@
 
 ---
 
+## 2026-07-03 · P3.5.168 — P29 patch: /learn slash command 前置翻译 (Companion 支持 /learn)
+
+### 鸿波 push (P3.5.164 audit 后 fix)
+
+P3.5.164 audit 结论: Companion Chat /learn 架构上不可用 (chat/completions 不过
+slash command dispatcher). B 方案: catfish-gateway 前置翻译. 严格再审后**改定
+位到 hermes 8642 侧 wrap _run_agent** — 8999 拦已晚 (hermes agent turn 已启动).
+
+### Audit 严格代码事实 (P29 wrap 定位)
+
+**Companion → hermes 8642 → APIServerAdapter._run_agent** (chat.ts:189-222):
+- BL-COMPANION-CHAT-SWITCH-TO-HERMES Phase 2-2B (5/19): 员工 Chat 走 hermes 8642
+- hermes 当 agent runtime, 内部 memory inject + tool calling + 调下游 gateway 8999
+- Companion 退化成纯 UI client
+
+**8999 拦已晚**: hermes 8642 已进 agent turn, 8999 收到时 body.messages 是
+hermes agent-augmented (含 system prompt / memory inject / etc), 修改会破坏
+agent turn 逻辑.
+
+**正确挂点**: `APIServerAdapter._run_agent` (跟 P15 approval 闭包同挂点).
+
+### wrap 顺序 (代码事实驱动)
+
+- 注册顺序: P1 (line 397) → ... → P15 (line 408) → P28 (line 548) → **P29 (line 563)**
+- Runtime call chain: **patched_p29** (最外, 先翻译) → **patched_p15** (approval 闭包)
+  → **_orig hermes** (agent turn)
+- P29 前置 `/learn` 翻译不影响 P15 approval + hermes agent turn
+
+### fix
+
+**新 P29 patch** (plugin.py:3441-3541, 100 行):
+
+```python
+def _patch_p29_learn_slash_translate() -> None:
+    from gateway.platforms.api_server import APIServerAdapter
+    from agent.learn_prompt import build_learn_prompt
+    _orig = APIServerAdapter._run_agent
+
+    async def patched_learn_translate(self, *args, **kwargs):
+        # 严格拿 message (args[0] or kwargs['message'])
+        message = args[0] if args else kwargs.get("message")
+        if isinstance(message, str):
+            stripped = message.strip()
+            if stripped.startswith("/learn"):
+                _learn_arg = stripped[len("/learn"):].strip()
+                try:
+                    translated = build_learn_prompt(_learn_arg)
+                    # 替换 message
+                    if args: args = (translated,) + args[1:]
+                    else: kwargs["message"] = translated
+                    logger.info("P29 /learn translate: arg=%r → build_learn_prompt (len=%d)",
+                                _learn_arg[:60], len(translated))
+                except Exception as e:
+                    logger.warning("P29 /learn translate 失败, fall through", exc_info=True)
+        return await _orig(self, *args, **kwargs)
+
+    APIServerAdapter._run_agent = patched_learn_translate
+```
+
+### 风险评估
+
+- hermes v0.18 `_run_agent(self, message, context_prompt, history, source, session_id, ...)`
+  第 1 位置参 = message (P3.5.159 Phase A audit confirm). P29 拿 args[0] 兼容
+- `build_learn_prompt` 抛异常 → fall through as normal message (原行为), warn log
+- hermes v0.19 若改路径 → P29 import 失败 skip patch (fail-safe, 不阻塞 hermes 启动)
+- 只处理 /learn, 其他 slash 未来员工反馈驱动加 P30+
+
+### verify
+
+- ✅ `python3 -c "ast.parse(open('plugin.py').read())"` 语法 passed
+- ✅ P29 def at line 3441, register at line 563 (P28 后)
+- ✅ Any / Optional 已 line 44 import (P29 用到)
+
+### 员工侧使用
+
+装机后 hermes 重启, 员工在 Companion Chat 输:
+
+```
+/learn 读一下 ~/code/my-project 目录, 学一个 skill 出来
+```
+
+P29 catch → build_learn_prompt 翻译 → LLM 走完整 agent turn (读文件 + 抽 skill +
+调 `skill_manage` 写到 `~/.hermes/skills/`).
+
+### 军规自查
+
+- 严格 P3.5.164 audit "8999 前置翻译" 结论是**错的**, 严格再审后定 hermes 8642
+  侧 wrap _run_agent. 承认判断不严.
+- 严格 audit hermes v0.18 _run_agent signature + P15 wrap 结构 + Companion 走
+  hermes 8642 路径, 3 层代码事实驱动 fix 定位.
+- 不 fork hermes, 不改 Companion 前端, monkey-patch 22 → 23 P patch.
+
+### 遗留
+
+- **P29 hermes 重启后生效** — 需 `hermes gateway stop && hermes gateway start`
+  或员工重启 Companion (hermes daemon 自动重启)
+- **/goal /journey /steer 等其他 slash 未处理** — 员工反馈驱动决定加 P30+
+- P3.5.167 3 按钮 UI 保持 pending (底层 /learn 已通, UI 可选)
+
+---
+
 ## 2026-07-03 · P3.5.164 audit-only — Companion Chat /learn 现在架构上不可用
 
 ### 鸿波 push (v0.18 upgrade backlog Tier 1)

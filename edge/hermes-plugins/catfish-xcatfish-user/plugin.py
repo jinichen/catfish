@@ -552,6 +552,21 @@ def _apply_patches() -> None:
             e, exc_info=True,
         )
 
+    # P29 (P3.5.168 7/3 鸿波 catch v0.18 upgrade backlog):
+    # Companion 走 hermes 8642 /v1/chat/completions 时 /learn slash command 前置翻译.
+    # 真因 (P3.5.164 严格 audit): hermes v0.18 /learn 只在 GatewayRunner._handle_message
+    # 处理 (gateway/run.py:9263-9289), /v1/chat/completions (APIServerAdapter) 严格
+    # 不过 slash command dispatcher. Companion 员工输 "/learn xxx" → LLM 只当 prompt
+    # 释义. P29 wrap _run_agent 前置检测 → 调 hermes agent.learn_prompt.build_learn_prompt
+    # 翻译 → 替换 message → P15 approval 闭包 → hermes original _run_agent.
+    try:
+        _patch_p29_learn_slash_translate()
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "P29: _patch_p29_learn_slash_translate 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
+            e, exc_info=True,
+        )
+
 
 # ── P16 (P3.4.C 6/15 鸿波: session_search 76s → 340ms) ──────────────────
 
@@ -3389,6 +3404,107 @@ def _patch_p28_weixin_zh() -> None:
     logger.info(
         "P28 wrap WeixinAdapter.send 完成 — 中文化 hermes 英文 outbound "
         "(approval / 中断提示 / /approve 命令说明), 鸿波铁律: 砍永久免批入口"
+    )
+
+
+# ── P29 (P3.5.168, 7/3 鸿波): /learn slash command 前置翻译 ────────────────
+#
+# 真因 (P3.5.164 严格 audit):
+#   hermes v0.18 /learn 只在 GatewayRunner._handle_message 处理
+#   (gateway/run.py:9263-9289): 检测 canonical == "learn" → 调
+#   agent.learn_prompt.build_learn_prompt → 替换 event.text → fall through.
+#   /v1/chat/completions (APIServerAdapter._handle_chat_completions api_server.py:1833+)
+#   严格不过 slash command dispatcher — 提取 messages → 直接 _run_agent, 无 canonical
+#   command 检测. Companion 员工输 "/learn xxx" → LLM 只当 prompt 释义.
+#   catfish P15 patch comment 明确 confirm (plugin.py:1807-1808):
+#     "chat completions 没 slash command hook → LLM 直接看 '/approve' 编释义"
+#
+# 修法 (不 fork hermes, 不改 Companion 前端):
+#   wrap APIServerAdapter._run_agent (跟 P15 同挂点, 但 P29 wrap 是外层).
+#   前置检测 message.startswith("/learn") → 调 hermes agent/learn_prompt.
+#   build_learn_prompt(arg) 翻译 → 替换 args[0] 或 kwargs["message"] →
+#   继续 P15 approval 闭包 → hermes original _run_agent.
+#
+# wrap 顺序: 注册顺序 P1..P15..P28..P29, runtime call chain: P29 (外, 先跑翻译)
+# → P15 (中, approval 闭包) → hermes original. P29 前置翻译不影响 P15 approval.
+#
+# 风险评估:
+#   - hermes v0.18 _run_agent signature 第 1 位置参 = message (P3.5.159 Phase A audit
+#     confirm): _run_agent(self, message, context_prompt, history, source, session_id, ...).
+#     P29 拿 args[0] 或 kwargs["message"], 兼容 caller.
+#   - build_learn_prompt 抛异常 → fall through as normal message (原行为), warn log.
+#   - hermes v0.19 若改 _run_agent 参数顺序或 build_learn_prompt module 位置 →
+#     P29 fail-safe: import 失败 skip patch, runtime 反射失败 warn + fall through.
+#   - 只处理 /learn, 其他 slash (/goal /journey /steer /fast /verbose /memory /skills)
+#     未来员工反馈驱动再加 P30+.
+#
+def _patch_p29_learn_slash_translate() -> None:
+    """wrap APIServerAdapter._run_agent — /learn 前置翻译到 build_learn_prompt."""
+    try:
+        from gateway.platforms.api_server import APIServerAdapter
+    except ImportError as e:
+        logger.warning(
+            "P29: gateway.platforms.api_server import 失败 (%s), skip patch. "
+            "员工 Companion 输 /learn 将不会被翻译, LLM 会当纯文本 prompt.", e,
+        )
+        return
+
+    try:
+        from agent.learn_prompt import build_learn_prompt
+    except ImportError as e:
+        logger.warning(
+            "P29: hermes agent.learn_prompt import 失败 (%s), skip patch. "
+            "hermes v0.19+ 可能改路径, verify 后调整 import. 员工 Companion 输 "
+            "/learn 将不会被翻译.", e,
+        )
+        return
+
+    _orig = APIServerAdapter._run_agent
+
+    async def patched_learn_translate(self, *args, **kwargs):
+        # 严格拿 message (第 1 位置参 or kwargs["message"])
+        message: Any = None
+        message_source: Optional[str] = None
+        if args:
+            message = args[0]
+            message_source = "args"
+        elif "message" in kwargs:
+            message = kwargs["message"]
+            message_source = "kwargs"
+
+        # 前置检测 /learn slash command (仅 str, 空白 tolerant)
+        if isinstance(message, str):
+            stripped = message.strip()
+            if stripped.startswith("/learn"):
+                # 严格拿 arg: "/learn xxx" → "xxx", 光 "/learn" (无 arg) → ""
+                # build_learn_prompt 内部对空 arg 有 fallback: "the workflow we just
+                # went through in this conversation" (learn_prompt.py:112-115).
+                _learn_arg = stripped[len("/learn"):].strip()
+                try:
+                    translated = build_learn_prompt(_learn_arg)
+                    logger.info(
+                        "P29 /learn translate: arg=%r (len=%d) → build_learn_prompt (len=%d)",
+                        _learn_arg[:60], len(_learn_arg), len(translated),
+                    )
+                    # 替换 message
+                    if message_source == "args":
+                        args = (translated,) + args[1:]
+                    else:
+                        kwargs["message"] = translated
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "P29 /learn translate 失败 (%s), fall through as normal message. "
+                        "LLM 会当 '/learn %s' 纯文本 prompt (原行为, 无副作用).",
+                        e, _learn_arg[:40], exc_info=True,
+                    )
+
+        return await _orig(self, *args, **kwargs)
+
+    APIServerAdapter._run_agent = patched_learn_translate
+    logger.info(
+        "P29 patch applied: APIServerAdapter._run_agent /learn slash translate. "
+        "Companion 员工输 /learn <描述> 会翻译成 hermes build_learn_prompt 走完整 "
+        "agent turn 拉 skill (通过 skill_manage tool 存 ~/.hermes/skills/)."
     )
 
 
