@@ -5,6 +5,151 @@
 
 ---
 
+## 2026-07-03 · P3.5.162 audit-only — /goal pre_verify hook 不该挂 catfish skill_verify (语义不匹配)
+
+### 鸿波拍板
+
+P3.5.159 CHANGELOG backlog 里列的 v0.18 新 feature 之一 "`/goal` completion contracts
++ `pre_verify` hook 可挂 catfish skill_verify.py". 鸿波定 audit-only sprint 先审
+再决, 不动手.
+
+### Audit 严格代码事实
+
+**hermes v0.18 `pre_verify` hook** (hermes_cli/plugins.py:2099-2117):
+
+```python
+get_pre_verify_continue_message(
+    session_id: str, platform: str, model: str,
+    coding: bool,          # 只在 coding turn 触发
+    attempt: int,
+    final_response: str,
+    changed_paths: List[str],
+) -> Optional[str]:
+```
+
+触发时机 (agent/conversation_loop.py:5019-5066): **每 turn 结束前**, agent 编辑
+了 code 要 verify/finish 时. Plugin 返 `{"action": "continue", "message": "..."}`
+让 agent 继续跑 (跑 tests / linter / tidy diff), None 让 turn 收.
+
+**catfish `skill_verify.py`** (P3.5.128 E1, edge/tool-bridge/):
+
+```python
+verify_frozen_script(
+    script_py_text: str,        # 已凝好的 script.py 文本
+    allowed_tools: frozenset,   # 允许的 tool 白名单
+    expected_fn_name: str,      # 期望 render_ 函数名
+) -> VerifyResult
+```
+
+触发时机: `catfish_freeze_skill` 凝完时 (**skill 编译期**, freeze 一次性事件).
+AST 静态检查 4 项: 语法 / render_fn / _call tool 白名单 / 不 exec.
+
+### 严格判 — **不同层次的 verify 概念, 不该挂**
+
+| 维度 | catfish skill_verify | hermes pre_verify hook |
+|---|---|---|
+| 触发时机 | freeze 一次性事件 (skill 编译期) | 每 turn 收尾 (turn 运行期) |
+| 输入 | 已凝的 script.py 文本 | turn context (无 script.py) |
+| 输出 | VerifyResult (决 script.py 入库) | 决 turn 继续 or 收 |
+| 语义 | Skill AST 静态白名单校验 | Turn dynamic gate (跑 lint/test) |
+
+**pre_verify 触发时无 script.py 可 verify**, **skill_verify 触发时无 turn context**.
+硬挂 = 强行 wire 无关代码, 制造混乱.
+
+### 决策: **不做**
+
+无 use case. catfish 员工场景是"办公室员工用邮件/对话", 不是"程序员 pause turn
+让 hermes 跑 lint". 未来若出现员工 coding turn 场景, 写**新** hook (跑 catfish
+policy/lint), 不复用 skill_verify.
+
+### 军规自查
+
+严格 audit hermes v0.18 代码 (hermes_cli/plugins.py:2099-2117, agent/conversation_loop.py:5019-5066)
++ catfish skill_verify.py 签名对比. 不瞎猜, 不硬 wire.
+
+---
+
+## 2026-07-03 · P3.5.163 audit-only — /learn vs catfish 2 条自研管道存续策略
+
+### 鸿波拍板
+
+P3.5.159 CHANGELOG backlog 里列的 v0.18 新 feature "`/learn` 一等公民 — catfish
+BL-MM9-FREEZE-v2 走上游 or 保自研 3 层". 鸿波定 audit-only sprint 先审再决.
+
+### Audit 严格代码事实
+
+**hermes v0.18 `/learn`** (agent/learn_prompt.py:100+):
+
+```python
+def build_learn_prompt(user_request: str) -> str:
+    # 生 prompt 让 agent 用已有 tools (read_file / search_files / web_extract)
+    # gather 员工描述的 sources → 通过 skill_manage 写 SKILL.md
+```
+
+架构: **"no separate distillation engine and no model-tool footprint"** (docstring
+line 15). 走 agent turn, 不是独立 distillation engine. 输出 → `~/.hermes/skills/`.
+
+**catfish BL-MM9-FREEZE-v2** (edge/tool-bridge/src/catfish_tool_bridge/skill_freeze.py):
+
+```
+教学: 员工"我教你" → LLM agent 调 catfish_browser_* / recognize_captcha 一步步
+      操作 → trace_recorder 自动写 jsonl
+凝固: 员工"凝固成 skill" → catfish_freeze_skill(name='eis-login', target='local')
+      → 读 trace → 模板化 script.py + SKILL.md → ~/.catfish/skills/<ns>/<name>/
+可选: install_to_hermes.sh 同步到 ~/.hermes/skills/productivity/catfish-<name>/
+```
+
+**catfish BL-LEARN-RECMODE** (edge/tool-bridge/src/catfish_tool_bridge/recmode/aggregator.py):
+
+- CDP browser recording → screenshots + events
+- 员工先自己录屏演示 → aggregator 抽 SKILL.md
+- 零 LLM 参与录制, 员工不用跟 LLM 对话
+- 输出 → `~/.catfish/skills/`
+
+### 严格 3 层对比
+
+| 维度 | BL-MM9-FREEZE-v2 | BL-LEARN-RECMODE | hermes /learn |
+|---|---|---|---|
+| 信号源 | LLM tool trace (jsonl) | CDP 录屏 (png+events) | 员工自然语言描述 |
+| 触发 | 员工"我教你" | 员工 CDP 录制 | 员工 chat `/learn <描述>` |
+| 交互 | 强 (LLM 边跑边教) | 弱 (员工独立录, 零 LLM) | 中 (agent 自主 gather) |
+| 场景 | 边教边跑 | 录屏演示 | 批量描述 workflow |
+| 输出 | script.py + SKILL.md → ~/.catfish/skills/ | SKILL.md → ~/.catfish/skills/ | SKILL.md → ~/.hermes/skills/ |
+| 数据主权 | 本机 | 本机 | 本机 (skill 本机, prompt 走 catfish-gateway LLM) |
+
+### 严格判 — **3 条管道互补, 不重叠**
+
+**信号源不同** (LLM tool trace / CDP 录屏 / 员工自然语言), **触发场景不同**
+(边教边跑 / 录屏 / 批量描述), **员工交互形态不同**. 3 条管道解决**员工在不同时刻
+用不同学习方式**的需求.
+
+**数据主权 3 层全符合军规**: 3 个信号都本机存, 都走 catfish-gateway → LLM (员工
+可选私有 / 公网). 无云 API 强依赖 — hermes /learn 走 agent turn 用已有 tool, 不
+独立 hosted service.
+
+### 决策: **保 catfish 2 条自研 + /learn 共存 (第 3 入口)**
+
+- 场景 A "跟着我做" → `catfish_teach_start` + freeze
+- 场景 B "看我录屏" → RecMode CDP
+- 场景 C "读这个 dir 学个 skill" → hermes `/learn`
+
+**catfish 3 层 skill 架构不用退化**, 只加第 3 入口.
+
+**工作量 minimal**:
+- hermes `/learn` 已通过 22 P patch 里 P15 patched_run_agent 走 gateway (员工在
+  Companion Chat 输 `/learn ...` 就能用)
+- 需 verify Companion Chat slash command 输入是否已支持 (P3.5.164 backlog)
+- 可选 UI: Companion Chat 加"教学入口" 3 按钮分清 3 场景 (backlog, 不阻塞)
+
+### 军规自查
+
+- 严格 audit hermes v0.18 /learn 实现 (agent/learn_prompt.py:1-150) + catfish
+  BL-MM9-FREEZE-v2 (skill_freeze.py:1-50) + BL-LEARN-RECMODE (recmode/aggregator.py:1-50)
+- 严格判**数据主权** (3 条都本机存, 都走 catfish-gateway) — 走 /learn 不违反军规
+- 严格判**信号源 / 场景不重叠** — 共存决策代码事实驱动, 不主观
+
+---
+
 ## 2026-07-03 · P3.5.161 — 删 _audit_unknown_tools + KNOWN_BUILTIN_TOOLS (hermes v0.18 上游已防)
 
 ### 鸿波 catch
