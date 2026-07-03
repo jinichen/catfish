@@ -172,56 +172,9 @@ def test_sanitize_tools_empty_allowed_tools_full_pass():
     assert "foo_bar" in names
 
 
-def test_unknown_tool_audit_logs_unknown(caplog):
-    """BL-RBAC-DAY4-HARDENING (5/17, hermes 0.14 #26759 tool_override 防御):
-    陌生 tool 名 (不在 _KNOWN_BUILTIN_TOOLS + 不是 mcp__ + 不在 dept allowed_tools)
-    → log WARN 但不 drop (避免误杀客户自家 plugin).
-    """
-    import logging
-    user = User(
-        sub="alice@x",
-        department="engineering",
-        effective_allowed_tools=[],  # 开放默认
-    )
-    body = {
-        "tools": [
-            _make_tool("memory"),                     # 已知 hermes builtin
-            _make_tool("mcp__weather__forecast"),     # 已知 mcp__ 前缀
-            _make_tool("plugin_renamed_browser"),     # 陌生 (plugin tool_override 嫌疑)
-            _make_tool("execute_code"),               # 已知 hermes builtin
-        ]
-    }
-    with caplog.at_level(logging.WARNING, logger="catfish.gateway.tools_sanitizer"):
-        out = sanitize_tools(body, user=user)
-    names = [t["function"]["name"] for t in out["tools"]]
-    # 陌生 tool 不 drop, 仍在 tools 列表
-    assert "plugin_renamed_browser" in names
-    # 但有 WARN log
-    warns = [r for r in caplog.records if "BL-RBAC-DAY4-HARDENING" in r.getMessage()]
-    assert len(warns) >= 1
-    assert "plugin_renamed_browser" in warns[0].getMessage()
-
-
-def test_unknown_tool_audit_skips_explicit_allowed():
-    """dept 显式批的 tool 即使不在 _KNOWN_BUILTIN_TOOLS 也不报 — admin 明知"""
-    import logging
-    user = User(
-        sub="alice@x",
-        department="customsuper",
-        effective_allowed_tools=["custom_corp_tool", "memory"],
-    )
-    body = {
-        "tools": [
-            _make_tool("memory"),
-            _make_tool("custom_corp_tool"),  # 不在 builtin, 但 dept 显式批
-        ]
-    }
-    import pytest as _pytest  # noqa: PLC0415
-    # 用 caplog fixture 风格手动取 logger handler — 这里只验功能, 不依赖 caplog
-    out = sanitize_tools(body, user=user)
-    names = [t["function"]["name"] for t in out["tools"]]
-    assert "custom_corp_tool" in names
-    assert "memory" in names
+# P3.5.161 (7/3 鸿波): 删 test_unknown_tool_audit_logs_unknown +
+# test_unknown_tool_audit_skips_explicit_allowed — _audit_unknown_tools
+# 函数已删 (hermes v0.18 registry override 默认 REJECT, catfish 侧冗余).
 
 
 def test_sanitize_tools_rbac_scrubs_history():

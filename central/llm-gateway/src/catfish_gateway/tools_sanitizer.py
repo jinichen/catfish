@@ -52,7 +52,6 @@ from .tools_sanitizer_constants import (  # noqa: F401  re-export 保 caller 不
     ENV_MAX_TOOLS as _ENV_MAX_TOOLS,
     HERMES_BROWSER_PREFIX as _HERMES_BROWSER_PREFIX,
     HIDDEN_FROM_LLM as _HIDDEN_FROM_LLM,
-    KNOWN_BUILTIN_TOOLS as _KNOWN_BUILTIN_TOOLS,
     MCP_CATFISH_PREFIX as _MCP_CATFISH_PREFIX,
     SOURCE_TOOL_PROFILES as _SOURCE_TOOL_PROFILES,
     is_always_on as _is_always_on,
@@ -61,64 +60,6 @@ from .tools_sanitizer_constants import (  # noqa: F401  re-export 保 caller 不
 
 logger = logging.getLogger("catfish.gateway.tools_sanitizer")
 
-
-
-def _audit_unknown_tools(
-    body: dict[str, Any],
-    user: Any,
-    tools: list[dict[str, Any]],
-) -> list[str]:
-    """BL-RBAC-DAY4-HARDENING: 扫 tool 列表里"陌生"工具, 返 unknown names (audit only).
-
-    陌生定义: 不在 _KNOWN_BUILTIN_TOOLS + 不在 mcp__* / _mcp_ / mcp_ 前缀
-    + 不在 user.effective_allowed_tools (dept 显式批的). 落 audit log,
-    不 drop — 让 dept admin 在 /admin/access 决定是否加 allowlist.
-
-    防的威胁: hermes 0.14 #26759 tool_override 把 builtin 重命名成 dept-allowed
-    名 (e.g. catfish_browser_open → catfish_run_skill). 我们看 name 没法识别原始
-    来源, 但 unknown 名出现的频率突然飙高 = 部署里有 plugin tool_override.
-    """
-    if not tools:
-        return []
-    allowed_explicit: set[str] = set()
-    if user is not None:
-        eat = getattr(user, "effective_allowed_tools", None) or []
-        allowed_explicit = {str(t) for t in eat}
-
-    unknown: list[str] = []
-    for t in tools:
-        if not isinstance(t, dict):
-            continue
-        fn = t.get("function")
-        name = fn.get("name") if isinstance(fn, dict) else None
-        if not isinstance(name, str) or not name:
-            continue
-        # 已知 builtin → OK
-        if name in _KNOWN_BUILTIN_TOOLS:
-            continue
-        # MCP server tool (hermes 标准约定 mcp__server__tool) → OK
-        if name.startswith("mcp__") or name.startswith("mcp_"):
-            continue
-        # dept 显式批了 → OK (admin 明知, 故意, 不报)
-        if name in allowed_explicit:
-            continue
-        unknown.append(name)
-
-    if unknown:
-        sub = getattr(user, "sub", "?") if user else "?"
-        dept = getattr(user, "department", "?") if user else "?"
-        # P3.5.49 (6/21): 文案改 — 老说"hermes 0.14 tool_override 嫌疑" 误导, hermes
-        # 新版本自带 feature (e.g. v0.17 tool_search bridge 3 兄弟) 也会撞这个 audit,
-        # 真因不是攻击. 修法: hermes 升级时同步加进 KNOWN_BUILTIN_TOOLS, 这条 warn
-        # 真触发时多半是 hermes 又出新 builtin / 客户 plugin 加新 tool, 不是攻击.
-        logger.warning(
-            "BL-RBAC-DAY4-HARDENING: %d unknown tool name(s) seen "
-            "(hermes 升级新 builtin / plugin 新 tool 嫌疑, audit only 不 drop, "
-            "看 sanitizer_constants.KNOWN_BUILTIN_TOOLS 该不该补): "
-            "user=%s dept=%s unknown=%s",
-            len(unknown), sub, dept, ", ".join(sorted(unknown)[:8]),
-        )
-    return unknown
 
 
 def _cap_tools_by_priority(tools: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
@@ -508,9 +449,11 @@ def sanitize_tools(
             )
         cleaned = rbac_kept
 
-    # BL-RBAC-DAY4-HARDENING (5/17, hermes 0.14 #26759 tool_override 防御):
-    # 扫"陌生"tool 名 audit, 不 drop. 防 plugin 把 builtin rename 成 dept-allowed.
-    _audit_unknown_tools(body, user, cleaned)
+    # P3.5.161 (7/3 鸿波): 老 _audit_unknown_tools 已删 — hermes v0.18
+    # tools/registry.py:395-408 override 默认 REJECT + PermissionError
+    # (需 operator 显式 plugins.entries.<pid>.allow_tool_override: true opt-in),
+    # 上游本身防住 #26759 tool_override CVE, catfish 侧第二道防线彻底冗余.
+    # 详见 CHANGELOG P3.5.161.
 
     # 5/22 BL-TOOL-PROFILE 鸿波: 按 source_hint 砍 catfish_* 到 profile 白名单.
     # 在 RBAC + cap 之前砍 — 优先级是: 畸形 > RBAC > profile > cap. profile 砍掉

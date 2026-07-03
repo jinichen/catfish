@@ -5,6 +5,104 @@
 
 ---
 
+## 2026-07-03 · P3.5.161 — 删 _audit_unknown_tools + KNOWN_BUILTIN_TOOLS (hermes v0.18 上游已防)
+
+### 鸿波 catch
+
+P3.5.160 加 submit_profile 到 KNOWN_BUILTIN_TOOLS 消 warn noise 后, 鸿波追问:
+"hermes 都升级到 v0.18 了, 为什么还需要 BL-RBAC-DAY4-HARDENING 代码? 没用
+就直接删, 留着容易产生混乱".
+
+### Audit 严格边界 (代码事实)
+
+严格 clone hermes v0.18 grep tool_override, 拿到:
+
+**hermes v0.18 tools/registry.py:395-408 已本身防御**:
+
+```python
+elif override:
+    _owner = self._plugin_owner_of(handler)
+    if _owner is not None and not self._plugin_override_policy.get(_owner, False):
+        logger.error("Tool registration REJECTED: plugin %r attempted to override...")
+        raise PermissionError(
+            f"Plugin module {_owner!r} cannot override built-in tool {name!r} "
+            f"without operator opt-in (allow_tool_override)."
+        )
+```
+
+- Plugin 试图 override built-in → **默认 REJECT + raise PermissionError**
+- Operator 必须显式 `plugins.entries.<pid>.allow_tool_override: true` 才允许
+- Auditable INFO log 记录 override 事件
+
+对比 hermes 0.14 (5/17 catfish 加防线时):
+- Plugin 可能悄悄 override 无阻拦 (原始 #26759 CVE 场景)
+- catfish 侧加 `_audit_unknown_tools` 作**第二道防线**
+
+**结论**: hermes v0.18 上游本身防住 #26759, catfish 侧第二道防线**彻底冗余**.
+
+### 严格 8 层依赖 audit (删除前)
+
+| # | 依赖点 | 结果 |
+|---|---|---|
+| 1 | `_audit_unknown_tools` 引用 | 唯一 caller tools_sanitizer.py:513, 返值 discard |
+| 2 | `KNOWN_BUILTIN_TOOLS` consumer | 全在 `_audit_unknown_tools` 里, 无别 consumer |
+| 3 | Test 影响 | test_allowed_tools.py:175-224 2 个 test 直接测这个函数 |
+| 4 | Log 消费者 (dashboard/metric) | grep `"BL-RBAC-DAY4-HARDENING"` 无 parser 消费, 纯 log |
+| 5 | `X-Catfish-Source` header 追踪 (族 B) | 独立防 hermes 0.14 #23194 ctx.llm bypass, **保留不删** |
+| 6 | 文档 (5 个 docs 提及) | 加 archived 注释 (backlog, 不阻塞) |
+| 7 | `sanitize_tools` 主流程 | `_audit_unknown_tools` 只 log, 不改 tool list, 删无副作用 |
+| 8 | hermes v0.18 侧防御 | registry.py:395-408 REJECT + PermissionError, catfish 侧真冗余 |
+
+### 删除清单
+
+| 文件 | 改动 |
+|---|---|
+| tools_sanitizer.py | 删 line 55 import + line 66-121 `_audit_unknown_tools` (56 行) + line 511-513 caller |
+| tools_sanitizer_constants.py | 删 line 203-311 `KNOWN_BUILTIN_TOOLS` frozenset (~110 行, 含 P3.5.160 加的 submit_profile) |
+| tests/test_allowed_tools.py | 删 line 175-224 2 个 test (~50 行) |
+| CHANGELOG.md | 加本 entry |
+
+**删除**净 -170 行代码 + -60 行常量维护负担 (每次 hermes 升级都要追新 tool).
+
+### 保留 (BL-RBAC-DAY4-HARDENING 族 B, 独立防线)
+
+**`X-Catfish-Source` header 追踪 (metrics.py / app.py / output_transforms.py)**:
+
+- 防的是 hermes 0.14 #23194 `ctx.llm` bypass — plugin 侧直调 LLM 绕 gateway
+- Companion 标 `X-Catfish-Source: companion-*`, plugin ctx.llm 默认 unknown
+- audit jsonl 看 unknown 占比 = bypass 嫌疑
+- **跟 tool_override CVE 无关**, hermes v0.18 registry 防不了这个, 保留.
+
+### verify
+
+- `35/35 pytest` 全绿 (test_tool_cap + test_allowed_tools)
+- `ALWAYS_ON_TOOLS` 24 / `HIDDEN_FROM_LLM` 5 / `SOURCE_TOOL_PROFILES` 4 未破坏
+- `grep KNOWN_BUILTIN_TOOLS src/` 只在 comment 里提及, 无 code 引用
+- `sanitize_tools` 主流程链条不变: 畸形 → RBAC allowed_tools → profile → cap
+
+### 军规违反自查
+
+- P3.5.160 加 submit_profile 到白名单是**局部治标**, 没 audit 整个 audit 函数是不是
+  已过时. 鸿波追问才发现"hermes v0.18 已上游防, catfish 侧冗余".
+- 严格判: **审 audit 面时不能只看眼前 issue, 要 audit 整个防线现在的价值**.
+- 承认 P3.5.160 追求速度没 audit 到 hermes v0.18 registry 现状.
+
+### 顺手修
+
+无. 本次纯删除.
+
+### 遗留
+
+- 5 个 docs 引用 (`HERMES-UPGRADE-PLAYBOOK.md`, `RBAC-PLUGIN-THREAT-MODEL.md`,
+  `HERMES-014-AUDIT.md`, `HERMES-014-P0-MIRROR.md`, `HERMES-014-UPGRADE-RUNBOOK.md`)
+  应加 "P3.5.161 archived — hermes v0.18 上游已防" 注释. 独立 sprint 处理,
+  不阻塞代码 ship.
+- `BL-MEMORY-PLUMBING-DIAG: always-on 缺 memory` warn noise 也是老问题 —
+  catfish-memory plugin 故意替换 hermes builtin memory (5 kind 路由), 严格上应
+  改 diag log 加 skip 条件. 独立小 sprint.
+
+---
+
 ## 2026-07-03 · P3.5.159 — hermes v0.17.0 → v0.18.0 升级 (追 The Judgment Release)
 
 ### 鸿波 push

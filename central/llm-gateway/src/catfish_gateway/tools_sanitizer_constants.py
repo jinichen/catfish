@@ -200,111 +200,21 @@ def is_hidden_from_llm(name: str) -> bool:
     return False
 
 
-#: BL-RBAC-DAY4-HARDENING (5/17, hermes 0.14 #26759 tool_override 威胁模型):
-#:
-#: 已知 hermes / catfish builtin tool 白名单. 用于 detect "陌生" tool 名
-#: (plugin tool_override rename builtin 成 dept-allowed 名的攻击)。
-#: 不在此白名单 + 不在 mcp__* 前缀 + 不在 dept allowed_tools → audit WARN.
-#:
-#: 不 drop, 因为:
-#:   1. 客户自家 plugin 命名千差万别, drop 会误杀
-#:   2. RBAC allowed_tools 已经在 sanitize 里实施了, 这层只看异常模式
-#:   3. drop 决策留给 dept admin 在 catfish-web /admin/access 配 allowed_tools
-#:
-#: 维护策略: hermes major 升级时 (e.g. 0.14 → 0.15) 跟 release notes 同步, 漏
-#: 一个工具只是误报多一条 audit 行, 不影响功能.
-KNOWN_BUILTIN_TOOLS: frozenset[str] = frozenset({
-    # ── hermes v0.17 Progressive Tool Disclosure 3 bridge (P3.5.49 6/21 鸿波 catch) ──
-    # v0.17 新加 tools/tool_search.py:43-45 BRIDGE_TOOL_NAMES. MCP + 非 core plugin
-    # tools 超 model context 10% (default threshold) 时, hermes 自动用这 3 bridge
-    # tool 替换暴露给 LLM (lazy disclosure): LLM emit tool_call(name="execute_code"),
-    # hermes 内部 dispatch 真 tool. default enabled="auto" (tools/tool_search.py:83).
-    # 没补这 3 → audit warn 误报"hermes 0.14 tool_override 嫌疑", 真因不是攻击.
-    "tool_search", "tool_describe", "tool_call",
-    # ── catfish 原生 (catfish_tool_bridge/catfish_tools.py CATFISH_NATIVE_TOOLS) ──
-    # 5/17 客户机实测 log 漏报 37 个, grep edge/tool-bridge/src 拉真实 47 个全名:
-    # catfish 用户身份 / skill / a2a / memory / browser_* / freeze / expert /
-    # reminder / calendar / task / style_fingerprint / today_summary / teach
-    "catfish_a2a_ask", "catfish_list_a2a_help",
-    "catfish_browser_click", "catfish_browser_fill", "catfish_browser_find_by_text",
-    "catfish_browser_goto", "catfish_browser_locate", "catfish_browser_screenshot",
-    "catfish_browser_snapshot",
-    "catfish_confirm_expertise", "catfish_expert_consult", "catfish_extract_expertise",
-    "catfish_list_expertise",
-    "catfish_create_calendar_event", "catfish_list_calendars",
-    "catfish_create_reminder", "catfish_list_reminder_lists",
-    "catfish_freeze_inspect", "catfish_freeze_rotate", "catfish_freeze_skill",
-    "catfish_list_my_outputs", "catfish_memory_compress", "catfish_memory_dedupe",
-    "catfish_propose_skill", "catfish_propose_skill_revision",
-    "catfish_read_tool_archive", "catfish_recognize_captcha", "catfish_remember",
-    "catfish_run_skill", "catfish_run_task", "catfish_screenshot",
-    "catfish_search_sessions", "catfish_skill_backup", "catfish_skill_delete",
-    "catfish_skill_install", "catfish_skill_publish",
-    "catfish_style_fingerprint_clear", "catfish_style_fingerprint_get",
-    "catfish_style_fingerprint_refresh",
-    "catfish_task_list", "catfish_task_result", "catfish_task_status",
-    "catfish_teach_end", "catfish_teach_start", "catfish_today_summary",
-    "catfish_user_profile_clear", "catfish_user_profile_confirm",
-    "catfish_user_profile_get", "catfish_user_profile_propose",
-    # 5/21 Phase 7 advisor (鸿波): 7 个新 tool, 补 audit 白名单免每次 warn
-    "catfish_draft_email_reply", "catfish_draft_meeting_brief",
-    "catfish_compose_followup_list",
-    "catfish_check_compliance", "catfish_political_sensitivity_scan",
-    "catfish_recall_decision_history",
-    # 5/22 鸿波: catfish_forget_about 跨源记忆清理
-    "catfish_forget_about",
-    # 顺手放进 search_skills (catfish ALWAYS_ON 不在 catfish_native, 但用)
-    "search_skills",
-    # ── hermes 0.14 真实 71 tool name (5/17 客户机实测拉的, hermes-agent
-    # registry.get_all_tool_names() 真实输出, 不是 release notes 推测) ──
-    # browser (12)
-    "browser_back", "browser_cdp", "browser_click", "browser_console",
-    "browser_dialog", "browser_get_images", "browser_navigate", "browser_press",
-    "browser_scroll", "browser_snapshot", "browser_type", "browser_vision",
-    # core agent (10)
-    "clarify", "delegate_task", "execute_code",
-    "patch",         # 0.14 取代 edit_file
-    "process",       # 0.14 新加
-    "read_file", "write_file",
-    "search_files",  # 0.14 取代 search/grep/list_dir
-    "terminal",      # 0.14 取代 shell/bash
-    "memory",
-    # task / cron / kanban (11)
-    "todo", "cronjob",
-    "kanban_block", "kanban_comment", "kanban_complete", "kanban_create",
-    "kanban_heartbeat", "kanban_link", "kanban_list", "kanban_show", "kanban_unblock",
-    # skills (3)
-    "skill_manage", "skill_view", "skills_list",
-    # vision / video / image (4)
-    "image_generate", "video_analyze", "video_generate", "vision_analyze",
-    # web / search (4)
-    "session_search", "web_extract", "web_search", "x_search",
-    # messaging (3)
-    "send_message", "discord", "discord_admin",
-    # feishu (5)
-    "feishu_doc_read", "feishu_drive_add_comment", "feishu_drive_list_comment_replies",
-    "feishu_drive_list_comments", "feishu_drive_reply_comment",
-    # home assistant (4)
-    "ha_call_service", "ha_get_state", "ha_list_entities", "ha_list_services",
-    # spotify (8)
-    "spotify_albums", "spotify_devices", "spotify_library", "spotify_playback",
-    "spotify_playlists", "spotify_queue", "spotify_search",
-    # yuanbao (5)
-    "yb_query_group_info", "yb_query_group_members",
-    "yb_search_sticker", "yb_send_dm", "yb_send_sticker",
-    # misc (3)
-    "computer_use",   # 0.14 cua-driver, 非 Anthropic
-    "text_to_speech",
-    "mixture_of_agents",
-    # ── Companion-app 前端 ephemeral tools (P3.5.160 7/3 鸿波 catch) ──
-    # Companion 走 8999 直连 LiteLLM 时前端 request body 显式 inject tool + tool_choice
-    # 强制 LLM 必返结构化 tool_call (不允许 free-text content, DeepSeek Flash reasoning
-    # 倾向 fallback 时会把 reasoning 当 content 返). 这类 tool 是 Companion 前端
-    # ephemeral 定义, 不落 catfish-tool-bridge / 不进 hermes registry, 走 8999 直连
-    # (P3.4.E 6/15 鸿波 audit — hermes 8642 agent loop 不读 client tools).
-    #
-    # 加进 KNOWN_BUILTIN_TOOLS 只为消 BL-RBAC-DAY4-HARDENING audit warn noise —
-    # 声明"这是我们已知合法 tool, 不是 hermes tool_override 攻击嫌疑". 不影响
-    # sanitizer 其他分支 (cap / hidden_from_llm / always_on / SOURCE_TOOL_PROFILES).
-    "submit_profile",   # profile.ts 画像识别 (P3.4.E 6/15) — 前端强制 LLM 返 Profile
-})
+# P3.5.161 (7/3 鸿波): KNOWN_BUILTIN_TOOLS + _audit_unknown_tools 全删.
+#
+# 老角色 (5/17 加): 防 hermes 0.14 #26759 tool_override CVE — plugin 悄悄
+# rename built-in tool 成 dept-allowed 名绕 RBAC. catfish 侧加第二道防线
+# audit-only warn (不 drop) 追踪嫌疑.
+#
+# 现在过时: hermes v0.18 tools/registry.py:395-408 已本身防御 override —
+# plugin 试图 override → 默认 raise PermissionError REJECT, 需 operator
+# 显式 plugins.entries.<pid>.allow_tool_override: true opt-in 才允许.
+# catfish 侧第二道防线冗余, warn 已从"防攻击"蜕变成"hermes 升级 tool 追踪"
+# 维护负担 (每次 hermes 升级都要补白名单).
+#
+# 严格 audit 完 8 层依赖后删: 唯一 consumer 是 _audit_unknown_tools 本身,
+# _audit_unknown_tools 返值 discard, 无 downstream metric / dashboard.
+# X-Catfish-Source header 追踪 (BL-RBAC-DAY4-HARDENING 族 B) 独立防 #23194
+# ctx.llm bypass, **保留不删** (metrics.py / app.py / output_transforms.py).
+#
+# 详见 CHANGELOG P3.5.161.
