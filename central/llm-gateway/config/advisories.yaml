@@ -70,3 +70,38 @@ advisories:
         kind: open_settings
         params:
           section: about
+
+  # demo advisory 3: catfish_update (推 v0.17.0 → v0.18.0)
+  # P3.5.159 (7/3 鸿波) 归档: companion bump 到 0.18.0, 这条广告推 "升级到 0.17.0"
+  # 已过时. hermes v0.18.0 (2026.7.1) 落地: /learn 一等公民, /journey 时间线,
+  # /goal completion contracts + pre_verify hook, MoA first-class, gateway
+  # scale-to-zero, background fan-out delegate_task. 详见 CHANGELOG P3.5.159.
+  - id: CATFISH-ADV-2026-003
+    severity: medium
+    category: catfish_update
+    title: Catfish 0.17.0 推荐升级
+    target:
+      catfish_version_pattern: "<=0.17.0"
+    description: |
+      Catfish 0.17.0 追 hermes v0.17.0 (2026.6.19). hermes v0.18.0 (7/1)
+      已落地, catfish 应升级到 0.18.0 拿新 feature:
+
+      - /learn — 一等公民, 从 directory / URL / 上次 workflow distill skill
+      - /journey — memory + skill 学习时间线, 可编辑/删除
+      - /goal completion contracts + pre_verify hook
+      - MoA (Mixture-of-Agents) first-class
+      - Gateway scale-to-zero + drain coordination
+      - Background fan-out delegate_task
+      - P0/P1 全清 0 (v0.17 里 692 个 高优 issue/PR 全修)
+
+      0.17.0 之前功能可用, 但建议升级跟 hermes v0.18 主线.
+    recommendation: 在"设置 → 关于"点检查更新升级到 0.18.0
+    published: "2026-07-03T15:00:00Z"
+    # P3.5.159: 归档过期 — 改到过去让 gateway 不再推 (companion 已经 bump 0.18)
+    expires: "2026-07-03T00:00:00Z"
+    tags: [update, hermes-v0.18, archived]
+    remediation_actions:
+      - label: 检查更新
+        kind: open_settings
+        params:
+          section: about

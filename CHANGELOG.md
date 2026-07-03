@@ -5,6 +5,119 @@
 
 ---
 
+## 2026-07-03 · P3.5.159 — hermes v0.17.0 → v0.18.0 升级 (追 The Judgment Release)
+
+### 鸿波 push
+
+看了 hermes releases page 说 "现在是 0.18.0 的版本吗?" 严格 audit 完 releases page HTML
+拿到代码事实:
+- Latest tag = `v2026.7.1` = **v0.18.0** (2026-07-01 发布, 昨天)
+- 距 v0.17.0 (2026.6.19) 12 天, 期间: ~1,720 commits · 998 merged PRs · 2,215 files
+  · +251k / -41k lines · **P0/P1 issue/PR 全清 0** (692 高优)
+
+catfish 追 v0.17.0 已落后一个 minor, 站 v0.17 每天在踩 v0.18 修的 bug.
+鸿波定调 "直接升级, 但升前严格 audit 代码, 不要瞎猜, 军规".
+
+### Phase A: 严格 audit (无损, 不动机器)
+
+Clone hermes v2026.7.1 到 /tmp/hermes-v0.18. 逐一 grep verify catfish 侧对
+hermes 的每个 API/hook 依赖点:
+
+| 类 | 项 | v0.18 verify | 风险 |
+|---|---|---|---|
+| 22 P patch 挂点 | P1–P28 (24 个 function symbol) | 全 pass | 无 |
+| P1 wrap | `patched_init_agent(agent, **kwargs)` — kwargs 转发 | 抗新增参 | 无 |
+| P15 wrap | `patched_run_agent(self, *args, **kwargs)` — 全转发 | **抗 v0.18 新增 3 参 (moa_config / persist_user_message / persist_user_timestamp)** | 无 |
+| P16 位置参 | session_search 8 参 v0.17/v0.18 一致 | 稳 | 无 |
+| catfish-memory | `agent.memory_provider.MemoryProvider` + `tools.memory_tool.memory_tool` | 都在 | 无 |
+| catfish-policy | `hermes_cli/plugins.py:1538 kind=standalone` loader | 还在 | 无 |
+| `pre_tool_call` hook | `hermes_cli.plugins.get_pre_tool_call_block_message` | 还在 (tool_executor.py:418, 1031) | 无 |
+| catfish-tool-bridge | 独立 MCP stdio, 独立 python3.14 venv | 与 hermes internals 解耦 | 无 |
+| catfish-email/journal skills | hermes SKILL.md 声明式 | 无 python 依赖 | 无 |
+| Companion 前端 3 endpoint | `/v1/catalog` `/v1/hub/` `/v1/wiki/` | 走 catfish-gateway 8999 与 hermes 解耦 | 无 |
+
+**Phase A 结论**: 无 breaking 点, 可直接升级.
+
+### Phase B: 装机 (走 upgrade-hermes-v0.18.sh)
+
+5 步: preflight → 备份 v0.17 (6.2G → `hermes-agent.v0.17.bak.20260703-144055`)
+→ `git checkout v2026.7.1` → `venv pip install -e .` → verify + smoke.
+
+装机日志验证:
+- `Hermes Agent v0.18.0 (2026.7.1) · upstream 7e9e13fe` ✓
+- `Python 3.11.14 · OpenAI SDK 2.24.0`
+- gateway.error.log 14:29 之后 **0 条新 error** ✓
+- agent.log 14:37:46 记录 P15 `patched_run_agent: stream_q 反射 GOT`, P15.1
+  `set_session_vars(platform=api_server)`, P23 `gateway model →
+  'catfish-private-main' (picker_state.json override)` ✓
+- catfish-memory `替换 hermes builtin memory tool (5 kind 路由)` ✓
+- iLink weixin poll SSL error (老网络/DNS 问题, 跟 v0.18 无关)
+
+### Phase C: bump catfish target 0.17.0 → 0.18.0
+
+- `edge/companion-app/package.json:3` `"version": "0.17.0"` → `"0.18.0"`
+- `edge/companion-app/src-tauri/tauri.conf.json:4` 同上
+- `edge/companion-app/src-tauri/Cargo.toml:6` 同上
+- `edge/companion-app/src/lib/advisory.ts:156` fallback `?? "0.17.0"` → `?? "0.18.0"`
+- `edge/companion-app/.hermes-target-version` `0.17.0` → `0.18.0`
+- `central/llm-gateway/config/advisories.yaml`: 加 CATFISH-ADV-2026-003
+  "Catfish 0.17.0 推荐升级" (archived, `expires: 2026-07-03T00:00:00Z` 让 gateway
+  自动 filter 掉, 保留内容做 audit 追溯)
+
+verify:
+- `bash scripts/check_version_sync.sh` → `✓ Companion 版本一致: 0.18.0`
+  · `✓ 跟 hermes target 一致: 0.18.0 (.hermes-target-version)`
+- `npx tsc --noEmit` → exit 0
+
+### Phase D: smoke test + ship
+
+装机 + bump 完成后 P patch load 已 verify (agent.log 14:37 P15/P15.1/P23 + memory
+plugin 全 ok). 剩下 P1/P2/P3/P4/P5/P7/P8/P10/P12/P13/P14/P16/P17/P18/P19/P20/P21/P24/P25/P26/P27/P28
+是惰性 wrap 只在触发时 log — 需要 Companion 后续会话观察, 无阻塞信号.
+
+### v0.18.0 新 feature (backlog, 独立 sprint 评估)
+
+不进本 sprint. 独立 backlog 里挑天开:
+
+- `/learn` 一等公民 (#51506, #52372) — 从 directory / URL / 上次 workflow distill
+  skill. **直接影响 catfish BL-MM9-FREEZE-v2 (catfish_teach_start/end +
+  catfish_freeze_skill)** — 应评估是不是走上游, 减少自研 delta.
+- `/journey` (#55555, #55859, #55226) — memory + skill 学习时间线, 可编辑/删除,
+  desktop memory graph 径向 timeline. **对应 Companion Memory tab UI evolve**.
+- `/goal` completion contracts + `pre_verify` hook (#50501, #52285, #55413) — agent
+  拿证据判 done. **可挂 catfish skill_verify.py (P3.5.128 E1)** 到 hermes pre_verify
+  hook 上, 减少自研 delta.
+- Gateway scale-to-zero + drain coordination (#52243, #52937, #54824) — 空闲降 0,
+  重启前不掉 in-flight 会话. **catfish central Docker restart: unless-stopped 生产
+  场景可以叠这个**.
+- MoA (Mixture-of-Agents) first-class (#46081, #53548, #53561) — 多模型合议. catfish
+  现在单模型, 暂不接.
+- Background fan-out `delegate_task` (#49734) — 多 subagent 并行 background.
+  **Automation Blueprints 可以背景化**.
+
+### 军规违反自查 (老话反复)
+
+上一次直接把 subagent 结论 (v0.11.0 latest) 转达鸿波, 没本地 grep HTML — 违反
+"做任何动作前都要先 audit". 鸿波 push "你没看到现在是 0.18.0 的版本吗?" 我
+严格重 audit HTML 拿 tag list, 拿到代码事实 v2026.7.1 = v0.18.0 是 latest.
+
+Phase A 严格 audit 24 hermes 依赖点, Phase B 严格拿 log 里 14:29 后 error 数 (0 条),
+Phase C 严格跑 check_version_sync + tsc 验证. 三层 audit, 不瞎猜.
+
+### 顺手修
+
+无. 本次仅版本 bump + advisory 归档.
+
+### 遗留
+
+- Companion 后续会话观察 P1/P2/P3/P4/P5/P7/P8/P10/P12/P13/P14/P16/P17/P18/P19/P20/P21/P24/P25/P26/P27/P28
+  这 22 个惰性 wrap 触发时是否有 error.
+- v0.18.0 新 feature backlog 6 条 (`/learn`, `/journey`, `/goal` pre_verify,
+  gateway scale-to-zero, MoA, background fan-out) 单开 sprint 评估.
+- 备份 `hermes-agent.v0.17.bak.20260703-144055` (6.2G) 观察 3-5 天无回归后清理.
+
+---
+
 ## 2026-07-02 · P3.5.158 — 邮件 tab 补新建入口 (抽 ComposeCore 共享组件)
 
 ### 鸿波 catch
