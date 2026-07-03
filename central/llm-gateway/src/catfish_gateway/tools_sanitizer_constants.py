@@ -296,4 +296,15 @@ KNOWN_BUILTIN_TOOLS: frozenset[str] = frozenset({
     "computer_use",   # 0.14 cua-driver, 非 Anthropic
     "text_to_speech",
     "mixture_of_agents",
+    # ── Companion-app 前端 ephemeral tools (P3.5.160 7/3 鸿波 catch) ──
+    # Companion 走 8999 直连 LiteLLM 时前端 request body 显式 inject tool + tool_choice
+    # 强制 LLM 必返结构化 tool_call (不允许 free-text content, DeepSeek Flash reasoning
+    # 倾向 fallback 时会把 reasoning 当 content 返). 这类 tool 是 Companion 前端
+    # ephemeral 定义, 不落 catfish-tool-bridge / 不进 hermes registry, 走 8999 直连
+    # (P3.4.E 6/15 鸿波 audit — hermes 8642 agent loop 不读 client tools).
+    #
+    # 加进 KNOWN_BUILTIN_TOOLS 只为消 BL-RBAC-DAY4-HARDENING audit warn noise —
+    # 声明"这是我们已知合法 tool, 不是 hermes tool_override 攻击嫌疑". 不影响
+    # sanitizer 其他分支 (cap / hidden_from_llm / always_on / SOURCE_TOOL_PROFILES).
+    "submit_profile",   # profile.ts 画像识别 (P3.4.E 6/15) — 前端强制 LLM 返 Profile
 })
