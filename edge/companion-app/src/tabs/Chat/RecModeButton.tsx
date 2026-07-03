@@ -30,14 +30,24 @@ import PreviewBanner from "./RecMode/PreviewBanner";
 interface Props {
   /** 跟 ChatInput 其他 toggle 同 disabled 条件 (chat streaming 时禁用) */
   disabled?: boolean;
+  /** P3.5.167 (7/3 鸿波): 隐藏 🎬 toolbar button. ChatInput 用 📚 EduPopover
+   *  替代 button, 但 4 modals (setup/recording/error/preview) 仍需 state-driven
+   *  render, 所以 <RecModeButton hideToolbarButton /> 保留 modal 层不动. 老
+   *  caller (若有) 不传就默认 false, 老行为 (button + modals 一起 render).
+   *  DEPRECATED path: 老场景没有 caller, 但保 default false 免误破坏 (未来 grep
+   *  确认无 caller 后再删 prop 简化). */
+  hideToolbarButton?: boolean;
 }
 
-export default function RecModeButton({ disabled }: Props) {
+export default function RecModeButton({
+  disabled,
+  hideToolbarButton = false,
+}: Props) {
   const state = useRecModeStore((s) => s.state);
 
   return (
     <>
-      <RecModeToolbarButton disabled={disabled} />
+      {!hideToolbarButton && <RecModeToolbarButton disabled={disabled} />}
       {state === "setup" && <SetupModal />}
       {(state === "recording" || state === "analyzing") && <RecordingOverlay />}
       {state === "error" && <ErrorBanner />}

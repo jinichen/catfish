@@ -5,6 +5,110 @@
 
 ---
 
+## 2026-07-03 · P3.5.167 — Companion Chat 📚 EduPopover (3 教学场景叠成 1 入口)
+
+### 鸿波拍板
+
+P3.5.168 P29 patch 让 /learn 底层通了后, 员工需要 UI 入口. 鸿波问 "3 教学按钮
+是不是叠起来省空间", 严格 4 方案 audit 后拍板 **B (popover)**:
+
+- Pro: 空间省 (5 button → 4 button), 未来加更多教学场景 (kanban 学/chat 学/
+  email 学) 不再挤 button 栏, 长期扩展好
+- Con: 破坏老员工 🎓 (5/13 加) + 🎬 (5/14 加) muscle memory (1 click → 2 click),
+  鸿波接受此代价换语义 unified
+
+### Phase A audit — 严格代码事实
+
+**ChatInput 现有 5 button** (line 403-451):
+- 📎 附件 → 保
+- 🎓 TeachingToggle → 移入 popover
+- ⏭️ AutoContinue → 保 (不属教学)
+- 🎬 RecModeToolbarButton → 移入 popover (**RecMode 4 modals 保留**)
+- 🎤 语音 → 保
+
+**RecModeButton 分层** (RecModeButton.tsx:35-46):
+- 主组件 render `<RecModeToolbarButton>` (button) + 4 state-driven modals
+  (SetupModal / RecordingOverlay / ErrorBanner / PreviewBanner)
+- 严格 refactor 时**保 4 modals 顶层 render**, 加 `hideToolbarButton` prop 隐藏
+  button, 只 render modals (state-driven, EduPopover 里点 🎬 触发
+  `openRecSetup()` → state="setup" → SetupModal 弹)
+
+**catfish 前端无 UI lib** (TaskPicker 5/22 comment): "dropdown 用 native <select>,
+不引 UI lib". 严格自造 Popover (button + useState + absolute positioned div +
+click-outside close via mousedown listener).
+
+### Phase B — 新 EduPopover.tsx (~250 行)
+
+**Layout**:
+```
+📚 (button) → click → popover panel
+   ├─ 🎓 教学模式 (toggle useTeachingStore)
+   ├─ 🎬 录屏演示 (openSetup useRecModeStore)
+   ├─ 💡 让 AI 学 (回调 onPrefillLearn → ChatInput prefill "/learn " textarea)
+   └─ 💡 例子 (Onboarding hint 3 用法示例)
+```
+
+**Props**:
+- `isStreaming: boolean` (disable)
+- `onPrefillLearn: () => void` (ChatInput 侧 prefill "/learn " + focus + 光标)
+
+**内部 state**:
+- `open: boolean` (popover 开关)
+- 复用 `useTeachingStore` + `useRecModeStore` 老 state 逻辑, 不 duplicate
+
+**Click-outside close**:
+- `useEffect + mousedown` listener (containerRef 外 click → close)
+- `Esc key` 关闭 (键盘友好)
+
+**Style**:
+- 复用 CSS var (--catfish-cyan / --catfish-cyan-dim / --catfish-border /
+  --radius-sm / --catfish-text-muted / --catfish-bg)
+- 内部 EduOption sub-component 3 选项统一 render (emoji + label + hint)
+- Popover panel: absolute positioned, bottom 44px, minWidth 280, boxShadow
+
+**Active state 提示**:
+- 若 teachingOn 或 recModeActive → 📚 button 变 cyan (提示员工"教学入口 ON")
+- Popover panel 里对应 option 也高亮 cyan
+
+### Phase C — ChatInput refactor
+
+- Line 21: 加 `import EduPopover from "./components/EduPopover"`
+- Line 47: 注释掉 `import TeachingToggleButton` (老组件文件保留复用 store, 未来
+  grep 无 caller 后可删)
+- 加 `handlePrefillLearn()` handler (setText "/learn " + focus + 光标放最后,
+  兜底: 员工已在输 → prepend "/learn " 保输一半的内容不丢)
+- 删 line 431 `<TeachingToggleButton />`, 删 line 447 `<RecModeButton disabled>`
+- 加 `<EduPopover isStreaming={isStreaming} onPrefillLearn={handlePrefillLearn} />`
+  (在 📎 附件后, ⏭️ AutoContinue 前)
+- 加 `<RecModeButton disabled={isStreaming} hideToolbarButton />` (在 ⏭ 后, 🎤 前
+  — modals 层保留 state-driven render)
+
+### Phase D verify
+
+- ✅ `npx tsc --noEmit` exit 0 (无 TS 错)
+- ✅ 加 RecModeButton `hideToolbarButton?: boolean` 老 caller 默认 false 不破坏
+- ✅ 3 教学 store (useTeachingStore + useRecModeStore) 内部逻辑不动
+
+### 军规自查
+
+- ✅ Phase A 严格 audit 现有 ChatInput button JSX 顺序 + RecModeButton 分层 + 无
+  UI lib 原则 (自造 Popover)
+- ✅ Phase B 严格设计 popover state / click-outside / Esc / CSS var 复用 / active
+  提示 5 层
+- ✅ Phase C refactor 保 RecMode 4 modals 顶层 render, 加 hideToolbarButton
+  prop 老 caller 无破坏
+- ✅ Phase D tsc verify 全绿
+- ✅ **无 fork hermes / 无引 UI lib / 无 duplicate state** (复用老 store)
+
+### 遗留
+
+- **TeachingToggleButton.tsx 老组件文件保留** — EduPopover 直接用 useTeachingStore,
+  但组件文件本身 unused. 未来 grep 全 catfish 无 caller 后可删 (backlog, 不阻塞)
+- **RecModeButton `hideToolbarButton` prop 默认 false** — 老行为兼容. 未来若确认
+  无 caller 用 default false, 可移除 prop 简化 (backlog)
+
+---
+
 ## 2026-07-03 · P3.5.168 — P29 patch: /learn slash command 前置翻译 (Companion 支持 /learn)
 
 ### 鸿波 push (P3.5.164 audit 后 fix)

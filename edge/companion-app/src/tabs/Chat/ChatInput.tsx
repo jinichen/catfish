@@ -19,6 +19,10 @@ import { useUIStore } from "../../store/ui";  // BL-E13 主动闲聊 prefill
 import { useAgentStore } from "../../store/agent";  // BL-E11 后续: 员工自定义名
 // 5/20 拆: useTeachingStore / useAutoContinueStore / useChatStore 移到子组件
 import RecModeButton from "./RecModeButton";  // BL-LEARN-RECMODE Day 2 (5/14 #64)
+// P3.5.167 (7/3 鸿波拍板 B): 3 教学 icon (🎓 教学 / 🎬 录屏 / 💡 让 AI 学) 叠成
+// 📚 EduPopover 省空间. RecMode 4 modals 仍在 RecModeButton 里 render (state-driven).
+// EduPopover 只用 RecModeToolbarButton 的 openSetup handler.
+import EduPopover from "./components/EduPopover";
 
 interface Props {
   isStreaming: boolean;
@@ -44,7 +48,10 @@ import {
 import AutoContinueToggleButton from "./components/AutoContinueToggleButton";
 import FileChip from "./components/FileChip";
 import QueuedMessagesStrip from "./components/QueuedMessagesStrip";
-import TeachingToggleButton from "./components/TeachingToggleButton";
+// P3.5.167 (7/3 鸿波): TeachingToggleButton 移入 EduPopover, ChatInput 不再直接
+// 引用. 老组件文件保留 (EduPopover 复用 useTeachingStore 内部 state 逻辑), 只是
+// 不再作独立 button render. 未来若需彻底删可 grep 无 caller 后再动.
+// import TeachingToggleButton from "./components/TeachingToggleButton";
 import ThumbCard from "./components/ThumbCard";
 
 export default function ChatInput({
@@ -199,6 +206,31 @@ export default function ChatInput({
     setText("");
     setAttachments([]);
     setAttachError(null);
+  }
+
+  /** P3.5.167 (7/3 鸿波): EduPopover 💡 让 AI 学 选项回调.
+   *  Prefill textarea 成 "/learn " → focus → 光标放最后, 员工继续输描述.
+   *  空 text 场景: 直接 setText("/learn ") + focus. 已有 text 场景 (员工正打
+   *  一半就点 💡): prepend "/learn " 不覆盖员工输一半 (兜底防丢失).
+   */
+  function handlePrefillLearn() {
+    setText((cur) => {
+      const trimmed = cur.trim();
+      if (!trimmed) return "/learn ";
+      // 已经以 /learn 开头 — 不重复加
+      if (trimmed.startsWith("/learn")) return cur;
+      // 否则 prepend (员工可能正打相关描述, 保住输一半的内容)
+      return "/learn " + cur;
+    });
+    // 严格 setTimeout(0) 让 setText 生效后再 focus + 光标放最后
+    setTimeout(() => {
+      const el = taRef.current;
+      if (el) {
+        el.focus();
+        const len = el.value.length;
+        el.setSelectionRange(len, len);
+      }
+    }, 0);
   }
 
   /** BL-HERMES013-RED-1A (5/13): streaming 中"排队下一条". 不打断当前 stream,
@@ -423,12 +455,20 @@ export default function ChatInput({
           📎
         </button>
 
-        {/* 🎓 教学模式 toggle (BL-LEAN-SESSION 5/13 鸿波拍板).
-            开启时这个 session 走 LEAN: 关 9 个干扰 inject (session_facts /
-            stats_guard / skill_guard / journal / feedback / 等), prompt 干净
-            适合教 catfish 新 skill (catfish_teach_start 流程). 关闭回常态.
-            跨 session 隔离, 不重启 gateway. */}
-        <TeachingToggleButton isStreaming={isStreaming} />
+        {/* 📚 教学入口 popover (P3.5.167, 7/3 鸿波拍板 B 方案 "叠起来省空间"):
+            3 教学场景语义 unified 叠成 1 popover:
+              🎓 教学模式  (老 TeachingToggle, BL-LEAN-SESSION 5/13)
+              🎬 录屏演示  (老 RecModeToolbarButton, BL-LEARN-RECMODE 5/14 #64)
+              💡 让 AI 学  (hermes v0.18 /learn, P29 patch P3.5.168 7/3)
+
+            RecMode 4 modals (SetupModal / RecordingOverlay / ErrorBanner /
+            PreviewBanner) 保留在 <RecModeButton> 里, state-driven 触发, popover
+            close 后 modal 仍能 render (老架构未破坏). EduPopover 只用 openSetup
+            handler 触发 setup state. */}
+        <EduPopover
+          isStreaming={isStreaming}
+          onPrefillLearn={handlePrefillLearn}
+        />
 
         {/* ⏭ 自动接力 toggle (BL-AUTO-CONTINUE 5/13 鸿波"长程任务咋办").
             P3.5.46 (6/20 鸿波 catch '🔄 跟长程啥关系'): emoji 🔄 → ⏭ 跟系统自带 retry
@@ -440,11 +480,12 @@ export default function ChatInput({
             关闭回常态: LLM stop 就 stop, 自己打"继续". 跨 session 隔离. */}
         <AutoContinueToggleButton isStreaming={isStreaming} />
 
-        {/* 🎙 RecMode 录屏教学 (BL-LEARN-RECMODE Day 2 5/14 #64).
-            点开演示流程 + 顺嘴说意图 → 鲶鱼后端综合自动生成 skill,
-            之后说短句"做 X" 就能调. 跟 chat 流分离 — 录中 chat 仍可用,
-            只是 RecMode 浮层显示状态. */}
-        <RecModeButton disabled={isStreaming} />
+        {/* 🎬 RecMode modals 层 (state-driven from useRecModeStore). Setup/
+            Recording/Error/Preview 4 modals 保留在这里, click "🎬 录屏演示" (在
+            📚 EduPopover 里) → openSetup() → state="setup" → SetupModal 弹.
+            按钮部分被 EduPopover 替代 (hideToolbarButton), 但 modal render 仍
+            走 RecModeButton (state-driven 分层不动, P3.5.167 refactor 无破坏). */}
+        <RecModeButton disabled={isStreaming} hideToolbarButton />
 
         {/* 🎤 语音输入按钮 — 方案 C 五一 sprint Day 1: Whisper.cpp 本地
            按一下开始录音, 再按一下停止 → 自动转文字填到 textarea. 数据 100% 本地. */}
