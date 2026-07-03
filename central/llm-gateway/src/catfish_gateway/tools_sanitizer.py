@@ -505,22 +505,31 @@ def sanitize_tools(
     # tool 但 ~/.hermes/memories/ 没动" 真因 — 假设上游 list_tools() 没送  # noqa: BOUNDARY (doc reference)
     # memory_save (hermes registry 没注册), sanitizer 看不到也变不出来.
     # 一次聊天 log 出 always-on 实际命中名字, 三秒看清是模型层还是 plumbing 层.
-    seen_always_on: list[str] = []
-    for t in cleaned:
-        if not isinstance(t, dict):
-            continue
-        fn = t.get("function")
-        nm = fn.get("name") if isinstance(fn, dict) else None
-        if isinstance(nm, str) and _is_always_on(nm):
-            seen_always_on.append(nm)
-    # hermes 0.13 只一个 `memory` 工具, 见到就 OK.
-    if "memory" not in seen_always_on:
-        logger.warning(
-            "BL-MEMORY-PLUMBING-DIAG: always-on 缺 `memory` "
-            "(hermes registry 没注册 → LLM 看不到 → 永远写不了 hermes memories). "
-            "实际命中 always-on (%d): %s",
-            len(seen_always_on), sorted(set(seen_always_on)),
-        )
+    #
+    # P3.5.166 (7/3 鸿波) skip 条件: cleaned 空 = client 没发 tools list, 走 hermes
+    # 内部 tool calling (Companion 5/19 起走 hermes 路径不发 tools, chat.ts:255-260
+    # "hermes 内部管 tool calling, 拼好结果返"). 这种场景下 memory tool 在 hermes 侧
+    # (catfish-memory plugin ctx.register_tool(name='memory', override=True) 5 kind
+    # 路由, catfish_memory.py:1209 已 confirm), sanitizer 无 tools list 可扫,
+    # 此 diag 不适用. 触发只是老 gateway 路径 (Companion 走 8999 直连 LiteLLM
+    # 前端注入 tools) 的 diag 用途.
+    if cleaned:
+        seen_always_on: list[str] = []
+        for t in cleaned:
+            if not isinstance(t, dict):
+                continue
+            fn = t.get("function")
+            nm = fn.get("name") if isinstance(fn, dict) else None
+            if isinstance(nm, str) and _is_always_on(nm):
+                seen_always_on.append(nm)
+        # hermes 0.13 只一个 `memory` 工具, 见到就 OK.
+        if "memory" not in seen_always_on:
+            logger.warning(
+                "BL-MEMORY-PLUMBING-DIAG: always-on 缺 `memory` "
+                "(hermes registry 没注册 → LLM 看不到 → 永远写不了 hermes memories). "
+                "实际命中 always-on (%d): %s",
+                len(seen_always_on), sorted(set(seen_always_on)),
+            )
 
     # BL-FIX5 (5/8): 同步扫消息历史 — assistant.tool_calls 里 name 在 deduped 集
     # 合的剔掉, 对应 tool message 一起丢. 防 BL-FIX4 部署前的旧轮次撞 Qwen Go gRPC

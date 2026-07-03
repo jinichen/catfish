@@ -15,7 +15,7 @@ hermes 0.14 (v2026.5.16, "The Foundation Release") release notes 自述"closed 5
 
 | # | hermes 项 | hermes issue | catfish 状态 | 备注 |
 |---|---|---|---|---|
-| 1 | `tool_override` + `ctx.llm` RBAC bypass | [#26759](https://github.com/NousResearch/hermes-agent/pull/26759), [#23194](https://github.com/NousResearch/hermes-agent/pull/23194) | ✅ covered | BL-RBAC-DAY4-HARDENING (#75), `tools_sanitizer._audit_unknown_tools` + `X-Catfish-Source` header tracking. doc: `RBAC-PLUGIN-THREAT-MODEL.md` |
+| 1 | `tool_override` + `ctx.llm` RBAC bypass | [#26759](https://github.com/NousResearch/hermes-agent/pull/26759), [#23194](https://github.com/NousResearch/hermes-agent/pull/23194) | ✅ covered (族 A archived P3.5.161) | 族 A `tool_override` 防线 `_audit_unknown_tools` 已 P3.5.161 删 — hermes v0.18 `registry.py:395-408` 上游 REJECT + PermissionError, catfish 侧冗余. 族 B `ctx.llm` bypass 防线 `X-Catfish-Source` header tracking 保留 (独立 CVE #23194 hermes 未防). doc: `RBAC-PLUGIN-THREAT-MODEL.md` |
 | 2 | OS-level isolation as boundary | [#20317](https://github.com/NousResearch/hermes-agent/pull/20317) | ✅ covered (5/17 doc 补) | `docs/CATFISH-HERMES-BOUNDARY.md` 附录 "威胁模型 — OS 隔离才是边界" 新增 |
 | 3 | Plugin API routes require dashboard auth | [#23220](https://github.com/NousResearch/hermes-agent/pull/23220) | ✅ covered | `central/identity-server/.../admin_router.py` 全 endpoint 走 `require_caller` + `require_admin_or_above`. 外部 Bearer 直接拒 |
 | 4 | `HERMES_SESSION_*` contextvar leak from cron | [#22382](https://github.com/NousResearch/hermes-agent/pull/22382) | ✅ covered | catfish 后台任务 (`trigger_background_summary` / `maybe_run_llm_distillation` / `generate_starter` / a2a / facts_pipeline) 全部走显式 `user_email` 参数, 没用 contextvars (`grep -r contextvars central/` zero hits) |

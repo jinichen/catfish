@@ -5,6 +5,163 @@
 
 ---
 
+## 2026-07-03 · P3.5.164 audit-only — Companion Chat /learn 现在架构上不可用
+
+### 鸿波 push (v0.18 upgrade backlog Tier 1)
+
+P3.5.163 audit 完结论 "/learn 走 P15 patched_run_agent, 员工 Chat 输 /learn 就能用".
+鸿波定 P3.5.164 verify 是不是真能用. 严格 audit 后**发现结论有误 — 架构上不可用**.
+
+### Audit 严格代码事实 (4 层)
+
+**1. hermes v0.18 /learn 只在 `GatewayRunner._handle_message` 处理**
+(gateway/run.py:9263-9289):
+
+```python
+if canonical == "learn":
+    from agent.learn_prompt import build_learn_prompt
+    event.text = build_learn_prompt(_learn_req)
+    # fall through to agent processing
+```
+
+**2. `/v1/chat/completions` (APIServerAdapter._handle_chat_completions) 严格不过
+slash command dispatcher** (api_server.py:1833+):
+提取 messages → system_prompt / user_message / history → 直接调 `_run_agent`.
+**无 canonical command dispatch**.
+
+**3. catfish P15 patch code comment 明确 confirm** (plugin.py:1807-1808):
+```
+# 3. 用户点 button 发 "/approve" user message → chat completions 没 slash command
+#    hook → LLM 直接看 "/approve" 编释义. 永远不解 block.
+```
+
+**4. Companion 前端未做 slash command 拦截**:
+grep `startsWith("/")` / `slash` / `/learn` in `companion-app/src` — Chat 前端
+**只有 RecMode 走 `/api/learn/start_recording` 后端 API**, 无 slash command 翻译.
+
+### 严格判 — 架构分层限制
+
+Companion → catfish-gateway `/v1/chat/completions` → hermes APIServerAdapter →
+`_run_agent`, 严格不过 `GatewayRunner._handle_message` slash command dispatcher.
+
+**员工输 `/learn xxx`** → LLM 收到 `"/learn xxx"` 纯文本, 只当 prompt **释义**,
+不执行 `/learn` 逻辑.
+
+### 3 层 fix 方案对比
+
+| 方案 | 军规 | 工作量 |
+|---|---|---|
+| A. Companion 前端拦截 + 翻译 | 违反 (hermes 升级 prompt 漂移) | 中 |
+| **B. catfish-gateway 前置翻译** (推荐) | ✅ 不 fork hermes, 不改前端, 只加 gateway middleware. catfish-gateway 已 import hermes 多个模块 (catfish-memory), 符合现有 pattern | 中 (20-30min) |
+| C. hermes upstream 改 chat/completions | 违反 ("永远 monkey-patch, 不 fork") + 破坏 OpenAI compat 语义 | 无法做 |
+
+### 决策: 走 B 方案 (独立 sprint P3.5.168)
+
+- P3.5.168: catfish-gateway 加 `/learn` 前置翻译 middleware
+- P3.5.167 (原可选) 变**延后**, 底层 slash command 支持先做
+
+### 军规自查
+
+上一次 P3.5.163 说 "/learn 走 P15 patched_run_agent 直接可用" 是**推理错误** —
+没 verify chat/completions 是否真过 slash command dispatcher. 严格 audit 后
+confirm chat/completions 严格不过 GatewayRunner._handle_message. 承认判断不严.
+
+---
+
+## 2026-07-03 · P3.5.165 — 5 docs 加 P3.5.161 archived 注释
+
+### 内容
+
+给 5 个 hermes 0.14 时代 doc 加 P3.5.161 archived 说明 (族 A `_audit_unknown_tools`
++ `KNOWN_BUILTIN_TOOLS` 已删, 保留族 B `X-Catfish-Source`):
+
+- `docs/RBAC-PLUGIN-THREAT-MODEL.md` — top-level archived banner
+- `docs/HERMES-UPGRADE-PLAYBOOK.md` — 坑 4 + 架构图 2 处
+- `docs/HERMES-014-AUDIT.md` — top-level archived banner
+- `docs/HERMES-014-P0-MIRROR.md` — 表格 #1 条目
+- `docs/HERMES-014-UPGRADE-RUNBOOK.md` — top + 中央部署 checklist
+
+### 军规自查
+
+严格 grep 每 doc 里的族 A / 族 B 拆分位置, 只归档族 A (tool_override 防线, hermes
+v0.18 上游已防), 保留族 B (ctx.llm bypass, 独立 CVE #23194 hermes 未防). 严格
+不误伤.
+
+---
+
+## 2026-07-03 · P3.5.166 — 消 BL-MEMORY-PLUMBING-DIAG warn noise (Companion hermes 路径)
+
+### 鸿波 catch (v0.18 upgrade backlog Tier 3)
+
+catfish-gateway log 反复报 `BL-MEMORY-PLUMBING-DIAG: always-on 缺 memory`.
+严格 audit 后发现是**误报** — Companion 走 hermes 路径不发 tools list, 此
+diag 场景不适用.
+
+### Audit 严格代码事实
+
+**warn 触发代码** (tools_sanitizer.py:504-523):
+
+```python
+seen_always_on = []
+for t in cleaned:
+    ... if _is_always_on(nm): seen_always_on.append(nm)
+if "memory" not in seen_always_on:
+    logger.warning("BL-MEMORY-PLUMBING-DIAG: always-on 缺 `memory` ...")
+```
+
+**Companion 5/19 起走 hermes 路径不发 tools** (chat.ts:255-260):
+
+```typescript
+// 5/19 切 hermes 后**不再传 tools** — hermes 内部管 tool calling, 拼好结果返.
+if (!useHermes && tools && tools.length > 0) {
+    body.tools = tools;  // 老 gateway 路径才传
+}
+```
+
+**catfish-memory plugin 在 hermes 侧 override memory tool** (catfish_memory.py:1209):
+
+```python
+# __init__.py register(ctx) 调 ctx.register_tool(name="memory", override=True)
+# 5 kind 路由到对应仓库 (identity / catfish_edge / catfish_recall / ...)
+```
+
+### 严格判 — warn 是误报
+
+- Companion 走 hermes 路径 body.tools 空 → sanitizer cleaned 空 → seen_always_on
+  空 → memory 不在 → warn 触发
+- 但 catfish-memory 是 hermes plugin, 在 hermes 侧 register memory tool with
+  override=True, hermes agent turn 时 registry 会拿 memory tool 给 LLM
+- 严格: memory tool **在 hermes 侧 work**, sanitizer 视野无 tools list 可扫, 此
+  diag 不适用
+
+### fix
+
+加 `if cleaned:` skip 条件. cleaned 空 = client 没发 tools list (Companion hermes
+路径), 此 diag 不适用. cleaned 非空 = 老 gateway 路径 (Companion 8999 直连
+LiteLLM 前端注入 tools), 保 diag 用途:
+
+```python
+if cleaned:  # 老 gateway 路径 diag 保留, Companion hermes 路径 skip
+    seen_always_on = [...]
+    if "memory" not in seen_always_on:
+        logger.warning("BL-MEMORY-PLUMBING-DIAG: ...")
+```
+
+### verify
+
+- ✅ empty tools 场景 (Companion hermes 路径): warn 严格 skip
+- ✅ non-empty tools 缺 memory (老 gateway 路径): warn 严格仍触发, diag 用途保留
+- ✅ 35/35 test 全绿
+
+### 军规自查
+
+严格 audit 完 3 层代码 (sanitizer 触发条件 / Companion chat.ts:255-260 / catfish-memory
+plugin override memory tool 位置), confirm memory tool 在 hermes 侧 work, sanitizer
+警告是误报. 严格 skip 条件只 skip 误报场景 (empty tools), 保 diag 用途 (老 gateway
+非空 tools 场景).
+
+---
+
 ## 2026-07-03 · P3.5.162 audit-only — /goal pre_verify hook 不该挂 catfish skill_verify (语义不匹配)
 
 ### 鸿波拍板

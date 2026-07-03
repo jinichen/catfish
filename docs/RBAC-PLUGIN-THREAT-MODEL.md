@@ -2,6 +2,19 @@
 
 5/17 ship 配 BL-RBAC-DAY4-HARDENING (#75).
 
+> ⚠️ **P3.5.161 archived (7/3 鸿波)** — 本 doc 讲的 **族 A `tool_override` 防御**
+> (`_audit_unknown_tools` + `_KNOWN_BUILTIN_TOOLS`) 已在 P3.5.161 全删.
+>
+> **原因**: hermes v0.18 `tools/registry.py:395-408` 上游本身 REJECT plugin
+> override built-in (`raise PermissionError`, 需 operator 显式 `allow_tool_override`
+> opt-in), catfish 侧第二道防线彻底冗余.
+>
+> **保留**: **族 B `ctx.llm` bypass 防御** (`X-Catfish-Source` header 追踪 in
+> `metrics.py` / `app.py` / `output_transforms.py`) — 独立 CVE (#23194), hermes
+> v0.18 registry 防不了这个, 保留.
+>
+> 详见 CHANGELOG P3.5.161. 下述内容作为**历史归档 / 威胁建模参考**保留.
+
 ## 背景
 
 hermes 0.14 (2026.5.16 The Foundation Release) 引入两个能力, 直接对应 catfish

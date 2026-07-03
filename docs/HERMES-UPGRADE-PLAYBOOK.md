@@ -159,11 +159,17 @@ awk '/2026-XX-XX HH:MM:/,0' ~/.hermes/logs/gateway.error.log | grep "未装载" 
 
 ### 坑 4: RBAC unknown tool warning (v0.17 Progressive Tool Disclosure)
 
+> ⚠️ **P3.5.161 archived (7/3 鸿波)** — 本坑对应的 `_audit_unknown_tools` +
+> `KNOWN_BUILTIN_TOOLS` 已全删. hermes v0.18 `tools/registry.py:395-408` 上游
+> 已本身防 override, catfish 侧防线冗余. 详见 CHANGELOG P3.5.161.
+>
+> 保留下述历史记录作为**升级追踪参考** (hermes 升级新 tool 时该 warn 曾出现).
+
 **症状**: log 反复 `BL-RBAC-DAY4-HARDENING: 3 unknown tool name(s): tool_call, tool_describe, tool_search`.
 
 **真因**: v0.17 新加 `tools/tool_search.py` Progressive Tool Disclosure feature. MCP + 非 core plugin tools 超 context 10% 时 hermes 自动用 3 bridge tool 替换暴露给 LLM. catfish `KNOWN_BUILTIN_TOOLS` 是 hermes 0.14 时代清单.
 
-**修 (P3.5.49)**: `tools_sanitizer_constants.KNOWN_BUILTIN_TOOLS` 加 `tool_search/tool_describe/tool_call`. warning 文案改成 "hermes 升级新 builtin / plugin 新 tool 嫌疑" (不再说 tool_override).
+**修 (P3.5.49, 已归档)**: `tools_sanitizer_constants.KNOWN_BUILTIN_TOOLS` 加 `tool_search/tool_describe/tool_call`. warning 文案改成 "hermes 升级新 builtin / plugin 新 tool 嫌疑" (不再说 tool_override).
 
 ### 坑 5: build 模式 chat "Could not connect" / dev 模式 OK
 
@@ -458,8 +464,8 @@ edge/companion-app/
 └── src-tauri/src/commands/picker_state.rs — 写 ~/.catfish/picker_state.json
 
 central/llm-gateway/src/catfish_gateway/
-├── tools_sanitizer.py — _audit_unknown_tools (P3.5.49)
-├── tools_sanitizer_constants.py — KNOWN_BUILTIN_TOOLS (含 v0.17 3 bridge tool)
+├── tools_sanitizer.py — _audit_unknown_tools (P3.5.49, ARCHIVED P3.5.161)
+├── tools_sanitizer_constants.py — KNOWN_BUILTIN_TOOLS (ARCHIVED P3.5.161)
 └── app.py — chat completions handler
 
 scripts/

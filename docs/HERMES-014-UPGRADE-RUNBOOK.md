@@ -1,5 +1,10 @@
 # Hermes 0.14 升级 Runbook (客户 IT 操作清单)
 
+> ⚠️ **P3.5.161 archived (7/3 鸿波)** — 本 runbook 里提到的
+> `_audit_unknown_tools` (族 A) 已在 P3.5.161 删. hermes v0.18 `registry.py:395-408`
+> 上游本身防 override, catfish 侧冗余. 保留族 B `X-Catfish-Source` 追踪.
+> 详见 CHANGELOG P3.5.161.
+
 发布 2026-05-17. 适用 hermes 从 0.13.x 升级到 v0.14.0 (`v2026.5.16`,
 "The Foundation Release", 808 commit / 633 PR / 12 P0 + 50 P1 closures).
 
@@ -33,7 +38,8 @@ tar czf ~/catfish-edge-backup-$(date +%Y%m%d).tgz \
 catfish-gateway / catfish-identity 不依赖 hermes 安装, 但**确认已部署以下加固**:
 
 - ✅ **BL-RBAC-DAY4-HARDENING** (5/17): tools_sanitizer `_audit_unknown_tools`
-  + `X-Catfish-Source` header audit
+  (**族 A archived P3.5.161** — hermes v0.18 上游已防) + `X-Catfish-Source`
+  header audit (**族 B 保留**, 独立防 #23194 ctx.llm bypass)
 - ✅ **BL-CACHE-AUDIT** (5/17): 5 维 inject 排序 + `cache_control` marker
 - ✅ **BL-RBAC-DAY4** (5/17): allowed_tools per-dept enforce
 

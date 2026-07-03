@@ -1,5 +1,10 @@
 # Hermes 0.14 影响面审计 (catfish 视角)
 
+> ⚠️ **P3.5.161 archived (7/3 鸿波)** — 本 doc 里 **族 A `_audit_unknown_tools` +
+> `_KNOWN_BUILTIN_TOOLS` 部分**已在 P3.5.161 全删. hermes v0.18 registry:395-408
+> 上游本身防 override, catfish 侧冗余. 保留**族 B `X-Catfish-Source` 追踪**
+> (ctx.llm bypass 独立 CVE, 未删). 详见 CHANGELOG P3.5.161.
+
 **Release**: `v0.14.0` (tag `v2026.5.16`) — "The Foundation Release"
 **发布**: 2026-05-16
 **catfish 升级**: 2026-05-17 上午 (鸿波客户机 pilot)
