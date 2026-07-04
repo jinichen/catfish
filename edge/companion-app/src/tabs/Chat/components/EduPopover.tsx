@@ -161,6 +161,11 @@ export default function EduPopover({ isStreaming, onStartLearn }: Props) {
             gap: 2,
           }}
         >
+          {/* P3.5.171 (7/3 鸿波 catch): 3 hint 员工语义化, 去技术抽象.
+              老 hint 泄露 "inject / catfish_teach_start / CDP 录屏 / /learn 语法"
+              — 员工不懂内部术语, 违反员工主权军规. 新 hint 只说"员工做什么"
+              + "鲶鱼做什么", 一句话讲清 3 场景差异. */}
+
           {/* 🎓 教学模式 (toggle) */}
           <EduOption
             emoji="🎓"
@@ -168,7 +173,7 @@ export default function EduPopover({ isStreaming, onStartLearn }: Props) {
             hint={
               teachingOn
                 ? "已开启 · 点关闭"
-                : "关掉 9 个干扰 inject, 说'我教你' 触发 catfish_teach_start"
+                : "跟着我做 — 我一步步教鲶鱼跑新流程"
             }
             active={teachingOn}
             onClick={handleTeaching}
@@ -181,18 +186,18 @@ export default function EduPopover({ isStreaming, onStartLearn }: Props) {
             hint={
               recModeActive
                 ? "录制中 · 看右下角浮层"
-                : "你演一遍 catfish 学 (CDP 录屏 + 语音)"
+                : "你演一遍 — 鲶鱼看你怎么操作, 事后自学"
             }
             active={recModeActive}
             onClick={handleRecMode}
             disabled={recModeActive}
           />
 
-          {/* 💡 让 AI 学 (prefill /learn) */}
+          {/* 💡 让 AI 学 (弹 LearnModal) */}
           <EduOption
             emoji="💡"
             label="让 AI 学"
-            hint={"输 '/learn <描述>' — AI 读代码/URL/上次操作抽 skill"}
+            hint={"告诉鲶鱼学什么 — 读代码 / 网页 / 或刚才做的事"}
             active={false}
             onClick={handleLearn}
           />

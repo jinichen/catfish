@@ -5,6 +5,58 @@
 
 ---
 
+## 2026-07-03 · P3.5.171 — EduPopover 3 hint 员工语义化 (P3.5.170 漏改修)
+
+### 鸿波 catch
+
+看到 P3.5.170 LearnModal ship 后 EduPopover 3 option hint 仍暴露技术抽象:
+
+> "三个教学的说明写清楚就可以了, 为什么冗余的话那么多, 造成混乱"
+
+### 军规再次违反自查
+
+P3.5.170 花力气 LearnModal 隐藏 `/learn` slash 语法, 但**漏改** popover 里 3
+option hint. 严格审:
+
+| Option | 老 hint | 泄露 |
+|---|---|---|
+| 🎓 教学模式 | "关掉 9 个干扰 inject, 说'我教你' 触发 catfish_teach_start" | inject / catfish_teach_start 员工不懂 |
+| 🎬 录屏演示 | "你演一遍 catfish 学 (CDP 录屏 + 语音)" | CDP = Chrome DevTools Protocol 员工不懂 |
+| 💡 让 AI 学 | "输 '/learn <描述>' — AI 读代码/URL/上次操作抽 skill" | **/learn 语法又出现!** 严格违反 P3.5.170 fix |
+
+**严格严重违反员工主权军规** — 员工点开 popover 就看到 4 处技术抽象术语,
+认知负担泄露. 承认 P3.5.170 判断不严 (只改 modal 忘 popover).
+
+### fix — 3 hint 员工语义化
+
+| Option | 新 hint | 员工只需理解 |
+|---|---|---|
+| 🎓 教学模式 | "跟着我做 — 我一步步教鲶鱼跑新流程" | 跟着我做 / 一步步教 |
+| 🎬 录屏演示 | "你演一遍 — 鲶鱼看你怎么操作, 事后自学" | 演一遍 / 事后自学 |
+| 💡 让 AI 学 | "告诉鲶鱼学什么 — 读代码 / 网页 / 或刚才做的事" | 告诉 / 3 场景 |
+
+**严格原则**:
+- 一句话讲清 3 场景差异 (跟着做 vs 你演 vs 告诉学什么)
+- 无技术抽象 (无 inject / catfish_teach_start / CDP / /learn)
+- 无冗余 (老 hint 都 30 字+, 新 hint 20 字内)
+
+### verify
+
+- ✅ `npx tsc --noEmit` exit 0
+- ✅ 3 hint 员工语义化 grep verify 无技术术语泄露
+
+### 军规自查
+
+- ✅ 承认 P3.5.170 只改 modal 漏改 popover hint 判断不严
+- ✅ 承认 hint 冗余 + 泄露技术抽象违反员工主权 3 次 (P3.5.167 / P3.5.170 / P3.5.171)
+- ✅ 严格 grep verify 无 "/learn / inject / catfish_teach_start / CDP" 泄露
+
+### 遗留
+
+- **📚 button title** 保原样 (已简洁, 3 场景列表 emoji + 名字 无技术抽象)
+
+---
+
 ## 2026-07-03 · P3.5.170 — LearnModal 替代 /learn prefill (P3.5.167 UX 错修)
 
 ### 鸿波 catch
