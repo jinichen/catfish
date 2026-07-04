@@ -28,17 +28,27 @@
 import { useEffect, useRef, useState } from "react";
 import { useTeachingStore } from "../../../store/teaching";
 import { useRecModeStore } from "../../../store/recmode";
+import LearnModal from "./LearnModal";
 
 interface Props {
   isStreaming: boolean;
-  /** ChatInput 回调 — popover 里点 💡 让 AI 学时, 由 ChatInput 侧 prefill
-   *  "/learn " 到 textarea + focus + 光标放最后. EduPopover 拿不到 textarea
-   *  ref (在 ChatInput 里), 走 callback 桥接. */
-  onPrefillLearn: () => void;
+  /** P3.5.170 (7/3 鸿波 catch UX 错): 员工点 💡 让 AI 学时不 prefill textarea
+   *  显示 /learn 前缀 (违反员工主权军规, 暴露 slash 语法). 改弹 LearnModal, 员工
+   *  输**纯描述** → modal 内部拼 "/learn <描述>" → 走此 callback → ChatInput
+   *  onSend → hermes P29 patch translate.
+   *
+   *  参数 = 完整消息 (含 "/learn " 前缀), ChatInput 侧直接 onSend(text, []). */
+  onStartLearn: (fullText: string) => void;
 }
 
-export default function EduPopover({ isStreaming, onPrefillLearn }: Props) {
+export default function EduPopover({ isStreaming, onStartLearn }: Props) {
   const [open, setOpen] = useState(false);
+  // P3.5.170: LearnModal 独立 state, popover close 后 modal 独立管理生命周期.
+  // 内嵌 useState (无独立 zustand store) — modal 只从 popover 触发, 无跨组件
+  // 状态需求, 参 SetupModal 从 useRecModeStore 拿 setup state 的原因是跨
+  // SetupModal / RecordingOverlay / PreviewBanner / ErrorBanner 4 modal 共享
+  // 生命周期, LearnModal 无此需求, 内嵌 state 简化.
+  const [learnOpen, setLearnOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // 老 store 复用 — 不 duplicate state
@@ -88,7 +98,10 @@ export default function EduPopover({ isStreaming, onPrefillLearn }: Props) {
   };
 
   const handleLearn = () => {
-    onPrefillLearn();
+    // P3.5.170 (7/3 鸿波 catch): 弹 LearnModal 不 prefill textarea. 员工看不到
+    // /learn slash 语法, 只看"想让 AI 学什么" 输入框. modal 内部拼
+    // "/learn <描述>" → onStartLearn callback → ChatInput onSend.
+    setLearnOpen(true);
     setOpen(false);
   };
 
@@ -184,23 +197,25 @@ export default function EduPopover({ isStreaming, onPrefillLearn }: Props) {
             onClick={handleLearn}
           />
 
-          {/* 例子提示 (Onboarding UX) */}
-          <div
-            style={{
-              marginTop: 4,
-              padding: "6px 8px",
-              fontSize: 11,
-              color: "var(--catfish-text-muted)",
-              lineHeight: 1.5,
-              borderTop: "1px solid var(--catfish-border)",
-            }}
-          >
-            <div style={{ marginBottom: 2, fontWeight: 500 }}>💡 例子:</div>
-            <div>• /learn 读一下 ~/code/xxx 目录学 skill</div>
-            <div>• /learn 抓 https://docs.xxx 学 skill</div>
-            <div>• /learn 把我们刚才做的过程学成 skill</div>
-          </div>
+          {/* P3.5.170 (7/3 鸿波 catch): 删掉 popover 里 3 例子 (含 /learn 前缀,
+              暴露 slash 语法违反员工主权). 3 例子改在 LearnModal 里显示 (纯描述
+              无 /learn 前缀). popover 保持简洁, 只 3 option label + hint. */}
         </div>
+      )}
+
+      {/* P3.5.170: LearnModal 独立 render, popover close 后 modal 生命周期独立.
+          onStart(description) → 内部拼 "/learn " → onStartLearn callback →
+          ChatInput onSend → hermes 8642 → P29 patch translate. 员工全程看不到
+          /learn slash 语法. */}
+      {learnOpen && (
+        <LearnModal
+          onClose={() => setLearnOpen(false)}
+          onStart={(description) => {
+            const fullText = `/learn ${description}`;
+            onStartLearn(fullText);
+            setLearnOpen(false);
+          }}
+        />
       )}
     </div>
   );

@@ -5,6 +5,122 @@
 
 ---
 
+## 2026-07-03 · P3.5.170 — LearnModal 替代 /learn prefill (P3.5.167 UX 错修)
+
+### 鸿波 catch
+
+看到 P3.5.167 EduPopover 弹出后员工点 💡 让 AI 学时 textarea 被 prefill 成
+`"/learn "` 前缀, 员工继续输描述. 鸿波质问:
+> "专门做了一个按钮出来, 为什么还要用 /learn 这么复杂, 用户只要写 /learn
+> 后面的指令就完成 /learn 的功能, 是不是更符合人性?"
+
+### 军规违反自查 (P3.5.167 老 UX)
+
+- **暴露 hermes slash 语法给员工** — /learn 是 hermes gateway/run.py:9263
+  内部约定 (P3.5.164 audit 到), 非员工语义. 员工点按钮 = 表意图, 却仍看到
+  技术抽象.
+- 违反 **员工主权军规** (CATFISH-CENTRAL-MANIFESTO 4 公理): 员工看 UI 不该
+  被迫理解技术实现细节.
+- 员工可能疑惑 "为什么要写 /learn?" — 认知负担泄露.
+
+### Phase A audit (代码事实)
+
+严格 audit 3 层拿参考模板:
+- **RecMode SetupModal** (5/20 拆分, SetupModal.tsx 完整 366 行): ModalShell +
+  T theme tokens + macOS Sonoma 风. Layout: 关闭按钮 + 视觉锚 badge + 主输入 +
+  例子 inline 链接 + 按钮 bar (取消 + 主 CTA)
+- **shared.tsx**: `T` 20 theme tokens (cyan/text/border/systemFont/errorRed/
+  shadow/closeBg 等), `ModalShell` (fixed overlay + stopPropagation panel,
+  maxWidth 600, boxShadow), `btnStyle(kind, disabled)` (primary/secondary)
+- **ChatInput onSend signature**: `onSend(text: string, attachments: Attachment[])`
+  直接调 (无 attachments in learn 场景). isStreaming 时走 `onCancelAndSend`.
+
+### Phase B fix
+
+**新 LearnModal.tsx** (~290 行, 复用 RecMode ModalShell + T theme):
+- Props: `onStart(description: string)` + `onClose()`
+- 内部 state: `description` (纯描述, 无 /learn) + `submitting` + `shake` +
+  `closeHover` + `submitHover`
+- 视觉锚: cyan 圆 + 白灯泡 SVG (类 SetupModal mic badge)
+- 主输入 textarea (4 rows, minHeight 90, resize vertical, Cmd/Ctrl+Enter 提交)
+- 3 例子 inline 链接 (对齐 hermes agent/learn_prompt.py:5-10 3 场景):
+  - "读代码目录" → "读一下 ~/code/xxx 目录, 学一个 skill 出来"
+  - "抓 URL 学" → "抓 https://docs.xxx.com/api, 学一个 skill"
+  - "学刚做的过程" → "把我们刚才做的过程学成一个 skill"
+- 按钮 bar: 取消 (transparent) + 开始学 (cyan gradient, disabled 到 valid=false)
+- 空描述抖动 + focus (类 SetupModal shake 400ms)
+- macOS 快捷键 hint 极淡右下: `⌘ + Enter 提交 · Esc 关闭`
+
+**EduPopover refactor**:
+- Prop rename: `onPrefillLearn` → `onStartLearn: (fullText: string) => void`
+- 加 `learnOpen: useState(false)` (内嵌 modal state, 无独立 zustand store —
+  modal 只从 popover 触发, 无跨组件状态需求)
+- `handleLearn` 改: 弹 LearnModal + close popover (不 prefill textarea)
+- 删掉 popover 底部 3 例子 (含 /learn 前缀, 暴露 slash 语法), 3 例子移入
+  LearnModal (纯描述)
+- LearnModal render 独立于 popover panel, popover close 后 modal 独立生命周期
+- Modal `onStart(desc)` → 内部拼 `"/learn " + description` → 调 `onStartLearn(fullText)`
+  → EduPopover 关 modal
+
+**ChatInput refactor**:
+- 老 `handlePrefillLearn` 完全删 (setText("/learn ") + focus 逻辑作废)
+- 新 `handleStartLearn(fullText)`: 类 `submit()` 逻辑 (line 191-206) 但简化:
+  learn 场景无 attachments, isStreaming 时 `onCancelAndSend(fullText, [])`,
+  否则 `onSend(fullText, [])`. textarea 保空 (员工继续用 chat 不污染).
+- `<EduPopover onPrefillLearn={handlePrefillLearn}>` → `<EduPopover
+  onStartLearn={handleStartLearn}>`
+
+### 员工体验对比
+
+**老 (P3.5.167)**:
+1. 点 📚 → popover 弹
+2. 点 💡 让 AI 学
+3. 看到 textarea 有 `"/learn "` 前缀 ← 泄露技术抽象
+4. 员工困惑 "为什么要写 /learn?"
+5. 员工继续输描述后 Enter
+
+**新 (P3.5.170)**:
+1. 点 📚 → popover 弹
+2. 点 💡 让 AI 学 → LearnModal 弹
+3. 只看 "描述你想让 AI 学什么" 输入框 + 3 例子 click 填充
+4. 员工输纯描述, 完全**看不到 /learn 语法** ✓
+5. 点 "开始学 →" 触发, modal 关
+
+### 数据主权 & 军规
+
+- **员工主权**: 员工完全看不到 hermes slash 语法, UI 语义化 ✓
+- **UX 一致性**: LearnModal 跟 RecMode SetupModal 同 modal 模式 (macOS Sonoma
+  风, ModalShell + T tokens 复用) ✓
+- **架构**: modal 内部拼 `/learn` 前缀, 走 P29 patch (P3.5.168) hermes 8642 端
+  `APIServerAdapter._run_agent` translate → agent turn. **前端不知 /learn 是
+  slash**, 只知"这是让 AI 学的通信协议". 未来 hermes 换其他 API (如 REST
+  endpoint), 只改 modal 内部拼法, 员工无感.
+
+### verify
+
+- ✅ `npx tsc --noEmit` exit 0
+- ✅ 复用 RecMode ModalShell + T theme (UX 一致)
+- ✅ P29 patch (P3.5.168) 底层不动, LearnModal 只改前端 UX
+- ✅ 老 `handlePrefillLearn` 完全删 (无 dead code 遗留)
+
+### 军规自查
+
+- ✅ 严格承认 P3.5.167 UX 设计错 (思维懒惰想省 modal 组件工作量, 让员工看到
+  slash 语法作 workaround, 违反员工主权军规). 承认判断不严.
+- ✅ Phase A 严格 audit 3 层 (SetupModal / shared.tsx / onSend signature) 拿
+  参考模板, 不瞎设计
+- ✅ Phase B 严格复用 ModalShell + T theme 保 UX 一致 (跟 SetupModal 同 macOS
+  Sonoma 风), 员工 muscle memory 不破坏
+- ✅ Phase C tsc 全绿, 无 dead code
+
+### 遗留
+
+- **P3.5.167 老组件 TeachingToggleButton.tsx** 仍未删 (backlog 未来 grep 无
+  caller 后可删)
+- **RecMode `hideToolbarButton` prop** 默认 false 老兼容 (backlog 未来简化)
+
+---
+
 ## 2026-07-03 · P3.5.167 — Companion Chat 📚 EduPopover (3 教学场景叠成 1 入口)
 
 ### 鸿波拍板

@@ -208,29 +208,27 @@ export default function ChatInput({
     setAttachError(null);
   }
 
-  /** P3.5.167 (7/3 鸿波): EduPopover 💡 让 AI 学 选项回调.
-   *  Prefill textarea 成 "/learn " → focus → 光标放最后, 员工继续输描述.
-   *  空 text 场景: 直接 setText("/learn ") + focus. 已有 text 场景 (员工正打
-   *  一半就点 💡): prepend "/learn " 不覆盖员工输一半 (兜底防丢失).
+  /** P3.5.170 (7/3 鸿波 catch P3.5.167 UX 错): 老 handlePrefillLearn 已删.
+   *
+   *  老实现: 点 💡 → setText("/learn ") + focus, 员工继续输. 违反员工主权军规:
+   *  暴露 hermes slash 语法, 员工可能疑惑"为什么要写 /learn?".
+   *
+   *  新实现: 点 💡 弹 LearnModal → 员工输**纯描述** → modal 内部拼
+   *  "/learn <描述>" → 走此 callback → 直接调 onSend (类 submit) → hermes 8642
+   *  → P29 patch translate → agent turn.
+   *
+   *  参数是完整 fullText (已含 "/learn " 前缀, 由 LearnModal 拼好). ChatInput
+   *  只负责透传给 onSend, 不改.
    */
-  function handlePrefillLearn() {
-    setText((cur) => {
-      const trimmed = cur.trim();
-      if (!trimmed) return "/learn ";
-      // 已经以 /learn 开头 — 不重复加
-      if (trimmed.startsWith("/learn")) return cur;
-      // 否则 prepend (员工可能正打相关描述, 保住输一半的内容)
-      return "/learn " + cur;
-    });
-    // 严格 setTimeout(0) 让 setText 生效后再 focus + 光标放最后
-    setTimeout(() => {
-      const el = taRef.current;
-      if (el) {
-        el.focus();
-        const len = el.value.length;
-        el.setSelectionRange(len, len);
-      }
-    }, 0);
+  function handleStartLearn(fullText: string) {
+    // 类 submit() 逻辑 (line 191-206) 但简化: learn 场景无 attachments,
+    // 无排队 (isStreaming 时也直接 abort 当前 send)
+    if (isStreaming) {
+      onCancelAndSend(fullText, []);
+    } else {
+      onSend(fullText, []);
+    }
+    // 学 skill 场景员工不希望 textarea 被污染 — 保空, 员工继续用 chat.
   }
 
   /** BL-HERMES013-RED-1A (5/13): streaming 中"排队下一条". 不打断当前 stream,
@@ -467,7 +465,7 @@ export default function ChatInput({
             handler 触发 setup state. */}
         <EduPopover
           isStreaming={isStreaming}
-          onPrefillLearn={handlePrefillLearn}
+          onStartLearn={handleStartLearn}
         />
 
         {/* ⏭ 自动接力 toggle (BL-AUTO-CONTINUE 5/13 鸿波"长程任务咋办").
