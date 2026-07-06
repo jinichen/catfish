@@ -10,8 +10,6 @@ import { useWikiStore } from "../../store/wiki";
 import type { WikiFileInfo } from "../../lib/tauri";
 import { wikiCreateEntityOrConcept } from "../../lib/tauri"; // P3.5.114: dangling click → 真自动建真文件
 import WikiCreateModal from "./WikiCreateModal";
-// P3.5.173 (7/3 鸿波): 📊 从 xlsx 导入 modal, 严格批量抽体系 concept + 部门 entity 树.
-import XlsxImportModal from "./XlsxImportModal";
 
 export default function WikiTree() {
   const files = useWikiStore((s) => s.files);
@@ -35,9 +33,6 @@ export default function WikiTree() {
   const createModalState = useWikiStore((s) => s.createModalState);
   const openCreateModal = useWikiStore((s) => s.openCreateModal);
   const closeCreateModal = useWikiStore((s) => s.closeCreateModal);
-  // P3.5.173 (7/3 鸿波): 📊 从 xlsx 导入 modal 状态 (内嵌 useState, 无独立 store,
-  // 严格 modal 只从 WikiTree 触发, 无跨组件状态需求).
-  const [xlsxImportOpen, setXlsxImportOpen] = useState(false);
 
   // P37 (BM25) + P38 (语义) — mode tristate: "title" | "body" | "semantic"
   const [searchMode, setSearchMode] = useState<"title" | "body" | "semantic">("title");
@@ -285,17 +280,6 @@ export default function WikiTree() {
           >
             + 新建
           </button>
-          {/* P3.5.173 (7/3 鸿波): 📊 从 xlsx 批量导入组织架构 (体系 concept + 部
-              门 entity 树). 严格 SheetJS 前端 parse + batch wikiCreateEntityOrConcept
-              + progress. 员工 mac 需 `npm i xlsx` 装依赖. */}
-          <button
-            onClick={() => setXlsxImportOpen(true)}
-            title="从 xlsx 批量导入组织架构 (体系 + 部门 + 关联树)"
-            className="approval-banner__btn-link"
-            style={{ padding: "4px 10px", fontSize: 12 }}
-          >
-            📊
-          </button>
           <button
             onClick={() => void loadFiles()}
             title="刷新"
@@ -312,17 +296,6 @@ export default function WikiTree() {
           onClose={closeCreateModal}
           prefillTitle={createModalState.prefillTitle}
           prefillKind={createModalState.prefillKind}
-        />
-      )}
-
-      {/* P3.5.173 (7/3 鸿波): 📊 xlsx 批量导入 modal. 员工点 📊 button → 弹.
-          导入完 loadFiles + close 严格无侵. 员工 mac 需 `npm i xlsx`. */}
-      {xlsxImportOpen && (
-        <XlsxImportModal
-          onClose={() => setXlsxImportOpen(false)}
-          onImported={() => {
-            void loadFiles();
-          }}
         />
       )}
 
