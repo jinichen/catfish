@@ -209,12 +209,19 @@ _GENERATION_PROMPT_TEMPLATE = (
     # diverse (e.g. "组织架构", "市场经营体系") 严格 LLM 严格找不到匹配 enum
     # → 严格 kind 判错 (e.g. "市场部" 误 kind=concept subtype=system). 严格违反
     # AI-first 军规. 改语义原则驱动, LLM 自主判 kind + 自主填 subtype 短词.
+    # P3.5.180 (7/6 鸿波军规审判): 删掉 P3.5.176 严格误导 example
+    # "'市场部' 是具体部门 → entity" — 严格员工 mental model 严格 部门是
+    # 组织架构 body 的层级单元, 严格不是独立 entity md. 严格 P3.5.176
+    # example 严格 hardcode 引导 LLM 生 100+ 部门 entity, 严格违反 AI-first.
+    # 严格 fix: 减 hardcode 严格不加 hardcode, 保 3 其他 example (组织架构 /
+    # 数据分级规则 / 张三) 严格 LLM 自主判 部门 kind. 严格员工 diverse 场景
+    # 严格 LLM 严格看 body 结构自主判 (若 body 严格层级树 严格作 concept body
+    # 层级; 若独立个体 严格作 entity md).
     "**严格判 kind (语义驱动, 不列 enum 死板)**:\n"
     "- **concept** = 抽象类别 / 体系 / 规则 / 流程 (员工头脑里的**分类**, 复用率高)\n"
     "- **entity** = 具体存在物 (员工日常打交道的**具体对象**, 替换率高)\n"
     "- 员工场景 diverse 你自主判. 例: '组织架构' 是员工分类 → concept. "
-    "'市场部' 是具体部门 → entity. '数据分级规则' 是抽象规则 → concept. "
-    "'张三' 是具体人 → entity.\n\n"
+    "'数据分级规则' 是抽象规则 → concept. '张三' 是具体人 → entity.\n\n"
     "**生成顺序**:\n"
     "- 先生 concepts (复用率高, token 紧张时不可丢)\n"
     "- 再生 entities (替换率高, token 紧张时可丢尾部)\n\n"
