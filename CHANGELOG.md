@@ -5,6 +5,63 @@
 
 ---
 
+## 2026-07-06 · P3.5.174 — rollback P3.5.173 XlsxImportModal (方向严格错)
+
+### 鸿波 catch (严格军规审判)
+
+P3.5.173 ship 后鸿波看图严格 3 层错:
+
+> "不是针对 EXCEL 类型, 是所有的类型文件都要能够, 不是在 WKIL 里面用的,
+> 为什么市场部只是一个部门会变成体系的最高节点, 刚才错误的加入代码要删掉"
+
+### 严格军规审判 3 层错
+
+1. 严格假设员工只想"从 excel 导入" — 员工严格说"所有类型文件都要能够"
+2. 严格假设员工希望 wiki tab UI — 员工严格说"不是在 WKIL 里面用的" (员工希望 chat 里 LLM 自动)
+3. 严格没审"市场部" 严格为什么变成 concept 顶级 — 这才是真 root cause
+
+### 严格真正 root cause = LLM 在 chat 里生成 wiki 时 kind 选错
+
+严格看知识体系 tab 左侧树:
+```
+概念 (concepts) 12
+  企业资质知识体系 10
+  市场部 1                ← 严格错! "市场部" 是 concept 顶级
+    组织架构              ← 严格挂"市场部" 下, 层级倒了
+```
+
+严格 "市场部" 应该是 `kind=entity, subtype=org`, 严格是员工在 chat 里发
+"生成 WIKI 知识库" prompt + Excel 附件时 LLM 调 wiki_create_entity_or_concept
+tool 严格 kind 选错.
+
+### rollback (git revert 6f76d28)
+
+commit `0ec8359`:
+- 删 lib/xlsxImport.ts
+- 删 tabs/Wiki/XlsxImportModal.tsx
+- 撤 WikiTree.tsx 3 处改 (import + state + button + modal render)
+- 撤 CHANGELOG P3.5.173 entry
+
+verify: `npx tsc --noEmit` exit 0.
+
+### 军规严格自查
+
+- 承认 P3.5.173 方向严格错 — wiki tab UI + xlsx 单类型, 严格员工希望 chat + LLM + 所有文件类型
+- 承认没审员工现有数据 (市场部 = concept 顶级) 就跳设计
+- 严格今天已 3 次判断不严 (P3.5.167 UX / P3.5.170 漏改 / P3.5.173 方向错)
+- 严格教训: 员工诉求要复述 3 遍严格 confirm 才动手
+
+### 严格待鸿波拍板方向
+
+2 层待决:
+1. "市场部" 严格错为 concept — 员工需要修 wiki 数据 (删/改 kind)
+2. 员工诉求 "所有类型文件, chat 里让 LLM 抽 wiki" — 需新方向 sprint audit:
+   - chat 里 LLM 调 wiki tool 严格 kind schema guidance
+   - 或 SOUL.md / prompt 加规范
+   - 或严格 tool wrapper 加 subtype validation
+
+---
+
 ## 2026-07-03 · P3.5.172 — WikiLinkSuggestModal: AI 扫 body 建议 wikilink 关联
 
 ### 鸿波 catch
