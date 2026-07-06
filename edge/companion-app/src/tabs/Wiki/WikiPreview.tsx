@@ -21,6 +21,12 @@ import {
   wikiUninstallShared,
   wikiSensitiveTermsEnsure,
 } from "../../lib/tauri";
+// P3.5.172 Phase C (7/3 鸿波): 🔗 扫描关联 AI 建议 modal.
+// 严格 audit "组织架构" orphan root cause = 员工上传 md 无 [[wikilink]] → 系统扫
+// 不出关系. 加 button + LLM 扫 body + 现有 title list → 建议 → 员工确认 → body
+// 末尾加"## 关联概念"段落 (员工主权, 不动老 body).
+import WikiLinkSuggestModal from "./WikiLinkSuggestModal";
+import { getPickerState } from "../../lib/picker_state";
 // P3.3.18 Phase 4 P2 (6/10): 检 hub 是否 stale
 import { config } from "../../lib/env";
 import { fetchWithAuth } from "../../lib/me";
@@ -68,6 +74,27 @@ export default function WikiPreview() {
   const [confirmUninstall, setConfirmUninstall] = useState(false);
   const [uninstalling, setUninstalling] = useState(false);
   const [uninstallErr, setUninstallErr] = useState<string | null>(null);
+
+  // P3.5.172 Phase C (7/3 鸿波): 🔗 扫描关联 AI modal state + LLM model resolve.
+  // 复用 picker_state chat_model (员工现在选真 model, 一致), 无 fallback 兜底
+  // 是 catfish-public-deepseek-flash (跟 chat 默认对齐).
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  const [suggestModel, setSuggestModel] = useState<string>(
+    "catfish-public-deepseek-flash",
+  );
+
+  async function openLinkSuggest() {
+    // 严格拿 picker_state chat_model (跟 chat 一致), 拿不到 fallback deepseek-flash
+    try {
+      const state = await getPickerState();
+      if (state?.chat_model) {
+        setSuggestModel(state.chat_model);
+      }
+    } catch {
+      /* silent fallback */
+    }
+    setSuggestOpen(true);
+  }
 
   // P3.3.18 Phase 4 P2 (6/10): hub stale check for 部门 wiki. 选了 wiki-shared/
   // 文件时, 后台拉 /v1/wiki/documents/<ns>/<file_id>, 看 stale_after_unpublish.
@@ -571,6 +598,19 @@ export default function WikiPreview() {
             >
               编辑
             </button>
+            {/* P3.5.172 Phase C (7/3 鸿波): 🔗 扫描关联 — LLM 扫 body 找现有节点
+                建议加 wikilink. 只对 entity/concept 显 (query 不适合关联). */}
+            {(selectedFile?.info.kind === "concept" ||
+              selectedFile?.info.kind === "entity") && (
+              <button
+                className="approval-banner__btn-link"
+                onClick={openLinkSuggest}
+                title="AI 扫描 body 找可能对应现有 wiki 节点的名字, 建议加关联 (你确认后加入)"
+                disabled={deleting}
+              >
+                🔗 扫描关联
+              </button>
+            )}
             {/* P3.3.18 (6/10): 分享到部门 — 强警告 dialog 跟 manifesto 公理 4 提醒 */}
             <button
               className="approval-banner__btn-link"
@@ -952,6 +992,25 @@ export default function WikiPreview() {
             </div>
           )}
         </div>
+      )}
+
+      {/* P3.5.172 Phase C (7/3 鸿波): 🔗 扫描关联 modal. Portal-style render, 独
+          立于 preview 内容, ModalShell 已包 fixed overlay. 员工确认后 onApplied
+          → loadFiles + selectFile 重刷 body (拿到新 "## 关联概念" 段落). */}
+      {suggestOpen && selectedFile && (
+        <WikiLinkSuggestModal
+          currentTitle={selectedFile.info.title}
+          currentRelPath={selectedFile.info.rel_path}
+          currentBody={selectedFile.body}
+          model={suggestModel}
+          onClose={() => setSuggestOpen(false)}
+          onApplied={() => {
+            // 严格 reload files 拿新 related edges → WikiGraph 自动更新图
+            void loadFiles();
+            // 严格 reselect 拿新 body (含 "## 关联概念" 段落)
+            if (selectedFile) selectFile(selectedFile.info.rel_path);
+          }}
+        />
       )}
     </div>
   );

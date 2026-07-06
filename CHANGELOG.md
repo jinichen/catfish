@@ -5,6 +5,132 @@
 
 ---
 
+## 2026-07-03 · P3.5.172 — WikiLinkSuggestModal: AI 扫 body 建议 wikilink 关联
+
+### 鸿波 catch
+
+上传"福富组织架构 (2026年4月版)" 到知识体系, 期望自动生成新体系图, 但严格
+WikiGraph 只显 1 节点 (orphan). 鸿波质问 "为什么新的体系加入没有生成新体系的图".
+
+### Phase A/B audit (代码事实)
+
+严格 audit 3 层拿 root cause:
+
+**代码逻辑严格正确** (P3.5.107-112 6/25 已实现 3 档 viewMode + subtree BFS +
+ego 1-hop):
+- `viewMode="auto"` 默认: 选体系 → subtree, 选普通概念 → ego, 无选 → 全图
+- subtree BFS 2 层从 `related[0]` 判 parent-child
+
+**数据事实 = orphan** (从员工 mac verify):
+- `组织架构.md` 无 frontmatter, 无 subtype, 无 related field
+- body 是"福富组织架构 2026年4月版" 表格, 用 `**市场部**` 明文写部门名, 无
+  `[[wikilink]]`
+- `grep -l "组织架构" ~/.catfish/wiki/**/*.md` 只 hit 自己
+- **严格 orphan** — 0 out-edge + 0 in-edge = 1 节点
+
+**对比"其他-综合类"** (正确姿势):
+- body 用 `[[企业资质知识体系]]` wikilink → P3.5.42.13 后端扫 body 合并进 related
+- 拉 related edges
+
+**严格 root cause**: 员工 mental model = "上传 md 就有图", 系统 mental model =
+"`[[wikilink]]` 才建关系". 严格**不是代码 bug, 是员工没用 wikilink**.
+
+### Phase C 决策 — AI 增强 (鸿波拍 C)
+
+3 方案:
+- A. 员工手动改 body 加 `[[wikilink]]` (10-15 min)
+- B. 系统 UX empty state 提示 (15-20 min)
+- **C. AI 增强 — LLM 扫 body 找现有节点建议 wikilink** (~2h) ← 拍板
+
+### Phase C.1 audit (6 层复用模板)
+
+严格 audit 拿 6 层现有代码事实:
+- **WikiCreateModal** (P3.5.109) 3 UI kind (entity/concept/system)
+- **`wikiCreateEntityOrConcept`** command (新建)
+- **`wikiUpdateFile(relPath, content)`** command 更新 body 全文
+- **profile.ts P3.4.E** (6/15) 严格 8999 直连 LLM 模板 (`tool_choice="required"`
+  + `tools[]` + `response_format=json_object` + parse `tool_calls[0].function.arguments`)
+  — **完美复用**
+- **`useWikiStore.files`** `WikiFileInfo[]` 拿 title list
+- **WikiPreview.tsx** 已 import `wikiUpdateFile`
+
+### Phase C.2 实现 (3 新文件 + 1 refactor, ~700 行)
+
+**`lib/wikiLinkSuggest.ts`** (~280 行) — 复用 profile.ts P3.4.E 模板:
+- `suggestWikilinks(currentTitle, body, allFiles, model)` — LLM 调用, 8999 直连
+- 严格 tool schema `suggest_wikilinks` — 强制 LLM 返 JSON
+  `{suggestions: [{title, confidence, snippet, reason}]}`
+- 严格 sanitize — title 必须在 candidateTitles 里 (LLM 编造防御), confidence
+  >= 0.4 filter, 降序排
+- Primary: `tool_calls[0].function.arguments`, Fallback: content robustJsonParse
+- `applyWikilinkSuggestions(body, titles)` — 严格员工主权: **body 末尾加 "##
+  关联概念" 段落** (不动老 body). 若段落已有则合并去重
+
+**`tabs/Wiki/WikiLinkSuggestModal.tsx`** (~360 行) — 复用 RecMode ModalShell + T
+theme (macOS Sonoma 风):
+- 状态机: idle → loading → loaded → applying → error / done
+- Auto-load 一次 (open 时立即调 LLM)
+- 建议列表 checkbox 每条 (title + confidence badge + snippet + reason)
+- 默认全选 confidence >= 0.7 (强匹配)
+- confidence 视觉分级: 强 (cyan) / 中 (橙) / 弱 (灰)
+- 空匹配 empty state (员工引导手动加 [[名字]])
+- Retry / cancel / apply 3 button
+
+**`tabs/Wiki/WikiPreview.tsx`** refactor (+30 行):
+- Import WikiLinkSuggestModal + getPickerState
+- 加 `suggestOpen` + `suggestModel` state
+- `openLinkSuggest()` handler: getPickerState 拿 chat_model → 打开 modal
+- 加 "🔗 扫描关联" button 在"编辑"button 旁 (只对 concept/entity 显)
+- Modal render 在末尾, `onApplied` → `loadFiles()` + `selectFile(rel_path)`
+  刷 body 拿新"关联概念"段落 → WikiGraph 自动更新图
+
+### 员工体验
+
+**老 (orphan, 员工困惑)**:
+1. 上传"组织架构.md" 到 wiki
+2. 选中 → WikiGraph 显 "关系图谱 · 1 节点" (孤立)
+3. 员工不知为什么, 质问"为什么没生成图"
+
+**新 (P3.5.172)**:
+1. 上传 or 选中 concept
+2. 点 "🔗 扫描关联" button
+3. Modal 弹, 3-8s 后显匹配列表:
+   - `[[市场部]]` · 强 90% · "body 中出现: **市场部**"
+   - `[[科创研发部]]` · 强 85% · "body 中出现: **科创研发部**"
+   - ...
+4. 员工 checkbox 确认 (默认全选强匹配)
+5. 点 "应用 N 个 →"
+6. body 末尾加"## 关联概念\n\n- [[市场部]]\n- [[科创研发部]]\n..."
+7. Modal 自动关, WikiGraph 图**自动更新**拉 N 个节点进来 ✓
+
+### 军规
+
+- ✅ **员工主权**: body 末尾加新段落, 不动老 body 内容, 员工可看/删/整理
+- ✅ **AI 编造防御**: 严格 sanitize LLM 返 title 必须在传入 candidateTitles 里,
+  过滤 confidence < 0.4
+- ✅ **UX 一致**: 复用 RecMode ModalShell + T theme (跟 SetupModal / LearnModal
+  同 macOS Sonoma 风), 员工 muscle memory 不破坏
+- ✅ **数据零出端**: body + title list 走 catfish-gateway 8999 → LiteLLM (员工
+  选真 model, 一致跟 chat)
+- ✅ **复用模板**: profile.ts P3.4.E 8999 直连 + tool_choice 模式完美复用, 无
+  重造轮子
+
+### verify
+
+- ✅ `npx tsc --noEmit` exit 0
+- ✅ 军规 grep 无 "真\*\*xxx" 模式泄露
+
+### 遗留
+
+- **Onboarding UX**: 员工上传新 concept 后可能不知道有"🔗 扫描关联" button. 未来
+  可加**首次上传后自动弹提示** or **empty state 显 CTA button** (backlog)
+- **批量扫描**: 现在只对当前选中 concept, 未来可加"批量扫全部 orphan concept"
+  一次性处理 (backlog)
+- **智能 subtype 建议**: LLM 除了建议 wikilink, 还可以建议 subtype 分类
+  (e.g. "看起来是个 org 组织架构, 要不要设 subtype=system?") — backlog
+
+---
+
 ## 2026-07-03 · P3.5.171 — EduPopover 3 hint 员工语义化 (P3.5.170 漏改修)
 
 ### 鸿波 catch
