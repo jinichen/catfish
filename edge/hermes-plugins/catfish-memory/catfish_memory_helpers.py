@@ -203,17 +203,33 @@ _GENERATION_PROMPT_TEMPLATE = (
     "你是企业知识体系作者. 下面是结构化分析结果 (Entities + Concepts + Decisions + "
     "Contradictions). 为**每个 entity 和 concept** 各生成 1 个 markdown 页, "
     "用 sentinel 切分.\n\n"
-    "**生成顺序 (重要, 严守)**:\n"
-    "- **先生 concepts** (流程/规则/原则/标准 — 复用率最高, 不可丢)\n"
-    "- 再生 entities (人/机构/系统/资质 — 替换率较高, 后生)\n"
-    "- token 紧张时**先丢 entities 尾部**, concepts 必须全生\n\n"
+    # P3.5.176 (7/6 鸿波军规审判): 严格判 kind 用**语义原则**, 不 enum 死板.
+    # 老 prompt 严格 concept_type=<process/rule/principle/standard> +
+    # entity_type=<person/org/system/cert/project> 硬编码 enum → 员工场景
+    # diverse (e.g. "组织架构", "市场经营体系") 严格 LLM 严格找不到匹配 enum
+    # → 严格 kind 判错 (e.g. "市场部" 误 kind=concept subtype=system). 严格违反
+    # AI-first 军规. 改语义原则驱动, LLM 自主判 kind + 自主填 subtype 短词.
+    "**严格判 kind (语义驱动, 不列 enum 死板)**:\n"
+    "- **concept** = 抽象类别 / 体系 / 规则 / 流程 (员工头脑里的**分类**, 复用率高)\n"
+    "- **entity** = 具体存在物 (员工日常打交道的**具体对象**, 替换率高)\n"
+    "- 员工场景 diverse 你自主判. 例: '组织架构' 是员工分类 → concept. "
+    "'市场部' 是具体部门 → entity. '数据分级规则' 是抽象规则 → concept. "
+    "'张三' 是具体人 → entity.\n\n"
+    "**生成顺序**:\n"
+    "- 先生 concepts (复用率高, token 紧张时不可丢)\n"
+    "- 再生 entities (替换率高, token 紧张时可丢尾部)\n\n"
     "**输出格式严格**:\n\n"
     "```\n"
     "---FILE: wiki/concepts/<slug>.md---\n"
     "---\n"
     "type: concept\n"
     "title: <name>\n"
-    "concept_type: <process/rule/principle/standard>\n"
+    # P3.5.176: concept_type 严格删 enum. LLM 自主填**贴切语义短词** (中文/英文
+    # 员工可读). 顶级体系 (员工分类最高层) 严格约定 concept_type=system —
+    # WikiTree isSystemConcept 严格识别显 '🌟 顶级体系' 分组, subtree BFS
+    # 触发条件 (P3.5.108 6/25). 其他 concept_type 严格 LLM 自主 (e.g.
+    # 'org-structure' / '资质分类' / 'process' 等 — 员工场景 diverse).
+    "concept_type: <一个贴切语义的短词, 员工可读. 顶级分类体系约定填 'system'>\n"
     "created: {today}\n"
     "updated: {today}\n"
     "tags: [<tag1>, <tag2>]\n"
@@ -231,7 +247,9 @@ _GENERATION_PROMPT_TEMPLATE = (
     "---\n"
     "type: entity\n"
     "title: <name>\n"
-    "entity_type: <person/org/system/cert/project>\n"
+    # P3.5.176: entity_type 严格删 enum. LLM 自主填**贴切语义短词**. 员工场景
+    # diverse (e.g. 'org' / 'person' / 'project' / '部门' / '证书' 等), 不 enum.
+    "entity_type: <一个贴切语义的短词, 员工可读>\n"
     "created: {today}\n"
     "updated: {today}\n"
     "tags: [<tag1>, <tag2>]\n"

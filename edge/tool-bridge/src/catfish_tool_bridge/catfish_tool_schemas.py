@@ -2937,4 +2937,83 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ── P3.5.177 (7/6 鸿波军规审判): 员工显式入库 wiki (kill P16 auto-ingest) ──
+    #
+    # 老 P16 (6/5) fire-and-forget: 员工上传文件 → ChatInput 严格自动写
+    # ~/.catfish/wiki/raw/sources/ → sync_turn 3b 严格自动抽 entity/concept.
+    # 员工 7/6 反馈"不是所有文档都要进知识库, 严格员工显式说才入库".
+    #
+    # P3.5.177 fix:
+    # 1. 严格删 ChatInput.tsx:200-205 fire-and-forget for-loop (员工 send 时
+    #    不自动 ingest — 上传只是 chat context, 不污染 wiki).
+    # 2. 严格加本 tool: LLM 严格识别员工"入库/存 wiki/记住这个文档" 语义 → 调
+    #    本 tool → 写 sources/ → sync_turn 3b 严格自动扫 → Analysis + Generation
+    #    LLM 严格抽 entity/concept → wiki/entities/ + wiki/concepts/.
+    # 3. 严格加 SOUL guidance: 员工明说"入库" 严格 LLM 才调 (不是默认自动).
+    #
+    # 严格 LLM 判定原则 (AI-first, 不 hardcode 关键词):
+    # - 员工**明说**要存到知识库/wiki/记住这个 → 调本 tool
+    # - 员工只是**分享文件供你参考** → 不调 (只走 chat context)
+    # - 员工**问题里带附件** (e.g. "看看这份合同能不能签") → 不调 (聊天场景, 不入库)
+    # - 员工犹豫 → **不调, 问员工"这个要存到知识库吗?"** (员工主权军规)
+    {
+        "name": "catfish_wiki_ingest",
+        "description": (
+            "**员工显式** 要求把 chat 附件存到个人 wiki 知识库时才调. LLM 严格判 "
+            "员工语义, 不 hardcode 关键词.\n\n"
+            "**触发场景 (员工明说要存)**:\n"
+            "  - '把这份组织架构存到知识库'\n"
+            "  - '这份合同存 wiki'\n"
+            "  - '记住这个文档, 以后可能会问'\n"
+            "  - '这个入库'\n"
+            "  - '把这份材料加进我的知识体系'\n\n"
+            "**不触发场景 (员工只是分享给你参考)**:\n"
+            "  - '看看这份合同能不能签' — 只是问, 不要入库\n"
+            "  - '这是今天开会的记录, 帮我总结' — 只是分析, 不要入库\n"
+            "  - 员工不确定 → **问员工 '这个要存到知识库吗?'**, 不擅自调 (员工主权军规)\n\n"
+            "**调用后**: 严格文件复制到 ~/.catfish/wiki/raw/sources/, sync_turn 3b 严格\n"
+            "后台扫 → LLM 严格抽 entity/concept 到 wiki/entities/ + concepts/ (24h 内).\n\n"
+            "**注意**: 员工 chat 上传的附件, kept_path 严格从 message context 里拿 "
+            "(前端 attachment.keptPath). parsed_text_path 严格是 preview 大文件的 sidecar\n"
+            "(前端 attachment.parsedTextPath), 优先用它 (binary xlsx/pdf 严格拿不到\n"
+            "原文, sidecar 已 parse 出文本)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "kept_path": {
+                    "type": "string",
+                    "description": (
+                        "原文件 path (chat attachment.keptPath). 员工 chat 上传后 "
+                        "parse_file_from_b64 严格 ship 到 ~/.catfish/uploads/. 严格员工上传 "
+                        "严格 attachment.keptPath 直接传."
+                    ),
+                },
+                "parsed_text_path": {
+                    "type": "string",
+                    "description": (
+                        "严格 sidecar 严格 parsed 文本 path (chat attachment.parsedTextPath). "
+                        "严格 binary file (xlsx/pdf/word) 严格 parse 出的纯文本 sidecar. "
+                        "严格优先用它读全文, 若空 fallback 读 kept_path (小 text file)."
+                    ),
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "员工原文件名 (chat attachment.name), 用于 wiki source 严格 filename 字段展示.",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": (
+                        "员工要求入库的具体理由 (员工原话或你严格转述, 30-100 字). "
+                        "写到 wiki source frontmatter reason 字段, 供后续员工查. "
+                        "例: '福富组织架构 2026 年 4 月版, 员工要建立知识体系'."
+                    ),
+                },
+            },
+            "required": ["kept_path", "filename"],
+        },
+        "emoji": "📥",
+        "toolset": "catfish_native",
+        "available": True,
+    },
 ]

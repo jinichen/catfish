@@ -39,9 +39,10 @@ interface Props {
 
 
 // 5/20 拆 1107 → ~600: helpers + 5 子组件抽到 components/
+// P3.5.177 (7/6): ingestAttachmentSourceFireForget 严格 kill (员工 send 时不自动
+// 入库). helper 严格保留在 attachmentHelpers.ts 备用 (若 future 需 fallback).
 import {
   fileToAttachment,
-  ingestAttachmentSourceFireForget,
   MAX_ATTACHMENTS,
   SUPPORTED_AUDIO_EXTS,
 } from "./components/attachmentHelpers";
@@ -197,12 +198,21 @@ export default function ChatInput({
     } else {
       onSend(t, attachments);
     }
-    // P16 (6/5 鸿波): 对话上传文件 → 全文入 ~/.catfish/wiki/raw/sources/.
-    // fire-and-forget, 不 block UI 不 throw. catfish-memory plugin 后台
-    // sync_turn 3b 会扫这 dir merge 进 Analysis input 抽 entity/concept.
-    for (const att of attachments) {
-      ingestAttachmentSourceFireForget(att);
-    }
+    // P3.5.177 (7/6 鸿波军规审判): 老 P16 fire-and-forget auto-ingest 严格删.
+    //
+    // 老行为: 员工每次 send 严格自动写 attachment 全文到 wiki/raw/sources/ →
+    // sync_turn 3b 严格自动抽 entity/concept 到 wiki/entities + concepts.
+    // 员工 7/6 反馈: "不是所有文档都要进知识库, 是员工显式的方式要求".
+    //
+    // 新行为: 上传只是 chat context (不污染 wiki), 员工明说"入库/存 wiki/
+    // 记住这个文档" 严格 LLM 严格调 catfish_wiki_ingest tool 严格触发. AI-first,
+    // 不 hardcode 关键词. 详见 catfish_tool_schemas.py `catfish_wiki_ingest`.
+    //
+    // ingestAttachmentSourceFireForget helper 严格保留 (以防 future 需 fallback),
+    // 但严格不再自动调.
+    // for (const att of attachments) {
+    //   ingestAttachmentSourceFireForget(att);
+    // }
     setText("");
     setAttachments([]);
     setAttachError(null);

@@ -5,6 +5,165 @@
 
 ---
 
+## 2026-07-06 · P3.5.177 — kill P16 auto-ingest + catfish_wiki_ingest tool (员工显式触发)
+
+### 鸿波军规审判 (8 次判断不严累计)
+
+> "不是所有的文档都要进知识库, 是员工用显式的方式要求, 比如在对话框显示要求
+> 入库, 你要仔细看代码, 理解实现, 不要瞎猜, 要严格遵守军规"
+
+### Phase A audit — 5 层代码事实
+
+严格 audit catfish 严格现有:
+- **P16 (6/5) fire-and-forget auto-ingest**: `ChatInput.tsx:200-205` 员工每次 send
+  严格自动调 `ingestAttachmentSourceFireForget` → 写 `wiki/raw/sources/*.md`
+- **sync_turn 3b** (catfish_memory.py:1975+): 后台扫 `_list_pending_sources` →
+  合并 journal + queries + sources 到 Analysis input → Analysis LLM → Generation
+  LLM → 严格抽 entity/concept 到 `wiki/entities/` + `wiki/concepts/`
+- **catfish 47 native tool 无 wiki_ingest** (grep confirm): 严格员工无 tool 显式
+  触发, 全靠 auto-ingest 严格污染 wiki
+- **`wiki_ingest_source` Rust command** (wiki_write.rs:602): 完整实现, 严格镜像
+  作参考
+- **SOUL.md** (`~/.hermes/SOUL.md`): 严格员工 main SOUL, 加 wiki_ingest guidance
+
+### fix 严格 3 处 code
+
+**1. 加 `catfish_wiki_ingest` tool schema** (`catfish_tool_schemas.py` 尾部, ~60 行):
+- `input_schema`: `kept_path` (required) / `parsed_text_path` / `filename` (required) / `reason`
+- 严格 description 严格 LLM 语义原则 (触发场景 vs 不触发场景 vs 犹豫问员工) —
+  **AI-first, 不 hardcode 关键词**
+
+**2. 加 `wiki_ingest` handler** (`catfish_tools.py` 前, ~100 行) + dispatch
+(`_dispatch_native_inner`:517 后, 3 行):
+- sidecar 优先 (binary xlsx/pdf 严格拿不到原文)
+- fallback kept_path (小 text file)
+- slug + ts 命名, frontmatter 镜像 wiki_write.rs Rust 逻辑
+- 严格写到 `~/.catfish/wiki/raw/sources/<ts>-<slug>.md`
+- 返 success 严格说明 "sync_turn 3b 严格后台抽 entity/concept (24h 内)"
+
+**3. 删 ChatInput.tsx fire-and-forget** (line 200-205 → comment out):
+- 严格删 for-loop 员工每次 send 严格不自动 ingest
+- 严格 `ingestAttachmentSourceFireForget` helper 保留 (备 future fallback)
+- 严格删 import (tsc unused 严格 fix)
+
+### fix 严格 SOUL.md guidance
+
+`~/.hermes/SOUL.md` 严格加 "Wiki 附件入库" section (Memory section 前):
+
+```
+员工上传附件到 chat, 默认只当 chat context, 不自动进 wiki 知识库.
+
+员工显式要求入库才调 catfish_wiki_ingest:
+- "把这份存到知识库" / "这个入库" / "存 wiki" / "记住这个文档" — 调
+- 员工问问题带附件 ("看看这份合同能不能签") — 不调
+- 员工犹豫 → 问员工"这个要存到知识库吗?", 不擅自调 (员工主权)
+```
+
+严格 AI-first — 严格 LLM 语义判断, 不 hardcode 关键词.
+
+### 员工体验对比
+
+**老 (P16, 6/5-7/6)**:
+1. 员工上传"福富组织架构.xlsx" → auto-ingest 严格自动写 sources/
+2. sync_turn 3b 严格自动抽 entity/concept → wiki 严格 100+ entity 涌进
+3. 员工无控制权 严格污染
+
+**新 (P3.5.177, 7/6)**:
+1. 员工上传"福富组织架构.xlsx" → 只当 chat context, 不写 sources/
+2. 员工看完聊完 → 若无需入库, wiki 严格干净
+3. 员工说"把这份组织架构存知识库" → LLM 严格调 catfish_wiki_ingest → 写
+   sources/ → sync_turn 3b 抽 → wiki 严格员工主导
+
+### verify
+
+- ✅ `python3 -c "ast.parse ..."` 严格 catfish_tools.py + catfish_tool_schemas.py 语法 passed
+- ✅ tool schema `catfish_wiki_ingest` 严格加, dispatch 严格 wire, handler 严格 impl
+- ✅ `npx tsc --noEmit` exit 0 (ChatInput unused import 严格 fix)
+- ✅ SOUL.md 严格加 guidance section
+
+### 军规自查
+
+- ✅ 严格 audit catfish 现有 pipeline (P16 auto-ingest + sync_turn 3b + Analysis/
+  Generation LLM), 严格 confirm 已实现, 严格 kill 严格 auto part 严格加显式 tool
+- ✅ 严格 AI-first: tool description 语义原则, 严格不 hardcode 关键词 (员工说
+  什么 LLM 严格自主判)
+- ✅ 严格员工主权: 员工犹豫时 LLM 严格问, 不擅自入库
+- ✅ 严格镜像 wiki_ingest_source Rust 逻辑严格 Python 实现 (sidecar 优先 +
+  slug/ts + frontmatter)
+- ✅ 承认今天 8 次判断不严 (P3.5.167/170/172/173/174/175/176/177 系列), 严格
+  教训: **audit 现有 code 优先**, 严格 catfish 严格已有能力先审, 严格不
+  hardcode 造轮子
+
+### 遗留
+
+- **员工需重启 catfish-tool-bridge** 严格 pick up 新 tool: `pkill -f
+  catfish_tool_bridge` (autostart 严格拉起)
+- **hermes gateway 严格重启** pick up SOUL.md 严格改动: `hermes gateway stop
+  && hermes gateway start`
+- **员工 verify**: 上传附件 + chat 说"把这个存知识库" → grep `~/.hermes/logs/
+  agent.log | grep catfish_wiki_ingest` 严格 confirm 调用
+
+---
+
+## 2026-07-06 · P3.5.176 — _GENERATION_PROMPT_TEMPLATE 删 enum 加语义原则 (P3.5.175 root cause fix)
+
+### 鸿波军规审判
+
+> "明确 kind guidance 是不是和硬编码就是一个东西, 会造成很混乱的局面"
+
+### Phase A audit — 严格 3 处 hardcode 位置
+
+`catfish_memory_helpers.py:_GENERATION_PROMPT_TEMPLATE`:
+- **Line 207-208**: "先生 concepts (流程/规则/原则/标准)... 再生 entities
+  (人/机构/系统/资质)" — enum 硬编码
+- **Line 214**: `concept_type: <process/rule/principle/standard>` — enum 硬编码
+- **Line 234**: `entity_type: <person/org/system/cert/project>` — enum 硬编码
+
+严格 subtype downstream 用途 audit:
+- `WikiGraph.tsx:84-88` `isSystemConcept` 严格用 `subtype === "system"` 判顶级
+  体系 — **functional 保留**
+- 其他 subtype 严格 legacy artifact, 严格不影响 render — 可删 enum
+
+### fix
+
+**Change 1** (line 207-208 → 新加 "严格判 kind" section):
+```
+严格判 kind (语义驱动, 不列 enum 死板):
+- concept = 抽象类别 / 体系 / 规则 / 流程 (员工头脑里的分类, 复用率高)
+- entity = 具体存在物 (员工日常打交道的具体对象, 替换率高)
+- 员工场景 diverse 你自主判. 例: '组织架构' 是员工分类 → concept.
+  '市场部' 是具体部门 → entity. '数据分级规则' 是抽象规则 → concept.
+  '张三' 是具体人 → entity.
+```
+
+**Change 2** (line 214): `concept_type: <一个贴切语义的短词, 员工可读. 顶级
+分类体系约定填 'system'>` — LLM 自主填, 顶级体系约定俗成
+
+**Change 3** (line 234): `entity_type: <一个贴切语义的短词, 员工可读>` — LLM
+自主填
+
+### verify
+
+- ✅ Python 语法 passed
+- ✅ grep 老 enum 严格删干净 (`process/rule/principle/standard` + `person/org/
+  system/cert/project`)
+- ✅ 新语义原则 + system 约定 严格保留
+
+### 军规
+
+- ✅ **AI-first**: 语义驱动, LLM 自主判 kind + subtype, 严格不列 enum 死板
+- ✅ **数据主权**: LLM 严格自主 subtype 员工可自定义分类 (例: "org-structure"
+  / "资质分类" / "process" 等, 不限 catfish 预设 5 种)
+- ✅ **system 约定兼容**: WikiGraph isSystemConcept 严格 subtype === "system"
+  严格 fallback title.includes("体系") 严格 legacy 数据 handle
+
+### 遗留
+
+- **hermes gateway 重启** pick up prompt 严格改动: `hermes gateway stop &&
+  hermes gateway start`
+
+---
+
 ## 2026-07-06 · P3.5.174 — rollback P3.5.173 XlsxImportModal (方向严格错)
 
 ### 鸿波 catch (严格军规审判)
