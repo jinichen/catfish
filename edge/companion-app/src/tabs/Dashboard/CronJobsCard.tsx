@@ -298,6 +298,11 @@ interface RowProps {
 function CronJobRow({ job, expanded, onToggle, onChanged }: RowProps) {
   const [busy, setBusy] = useState(false);
   const [opError, setOpError] = useState<string | null>(null);
+  // P3.5.184 (7/6 鸿波军规审判): Tauri WebView 严格 window.confirm() 静默 null
+  // 严格 → 严格永不 pass → 严格 delete API 严格永不 call. 严格历史多处 comment
+  // verify: ChatSidebar.tsx:526 / DetailPane.tsx:102,555 / HermesMemoryCard.tsx:100 /
+  // PrivacyCard.tsx:228 / SessionCleanupCard.tsx:114. 严格 fix: 两步点击 pattern.
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const handlePause = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -332,7 +337,17 @@ function CronJobRow({ job, expanded, onToggle, onChanged }: RowProps) {
   const handleDelete = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (busy) return;
-    if (!confirm(`真要删定时任务 "${job.name}"? 历史输出也清.`)) return;
+    // P3.5.184 (7/6 鸿波军规审判): 严格 window.confirm() Tauri WebView 静默 null
+    // 严格 (Apple 安全策略 + WebView 默认禁), 严格 老逻辑 `if (!confirm(...)) return`
+    // 严格永不 pass → 严格 delete API 严格从未调过. 严格 fix 走 两步点击 (Notion/
+    // Linear 模式, ChatSidebar.tsx:526 已验证 pattern): 首点 → confirmingDelete=true
+    // 严格 按钮变 "确定?", 2 秒内再点 → 真删, 2 秒超时 severity 自动 reset.
+    if (!confirmingDelete) {
+      setConfirmingDelete(true);
+      setTimeout(() => setConfirmingDelete(false), 2000);
+      return;
+    }
+    setConfirmingDelete(false);
     setBusy(true);
     setOpError(null);
     try {
@@ -473,10 +488,17 @@ function CronJobRow({ job, expanded, onToggle, onChanged }: RowProps) {
           <button
             onClick={handleDelete}
             disabled={busy}
-            title="删除"
-            style={{ ...btnStyle, color: "#d9534f" }}
+            title={confirmingDelete ? "再点一次真删" : "删除 (点两次确认)"}
+            style={{
+              ...btnStyle,
+              color: confirmingDelete ? "white" : "#d9534f",
+              background: confirmingDelete ? "#d9534f" : btnStyle.background,
+              fontSize: confirmingDelete ? 10 : btnStyle.fontSize,
+              fontWeight: confirmingDelete ? 600 : undefined,
+              minWidth: confirmingDelete ? 40 : btnStyle.minWidth,
+            }}
           >
-            🗑
+            {confirmingDelete ? "确定?" : "🗑"}
           </button>
         </div>
       </div>
