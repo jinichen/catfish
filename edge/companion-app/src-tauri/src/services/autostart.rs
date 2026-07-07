@@ -53,10 +53,29 @@ pub fn schedule_autostart() {
 // ============================================================
 
 pub async fn ensure_tool_bridge_running() {
-    if pid_alive(catfish_paths::tool_bridge_pid_file().as_deref(), "catfish_tool_bridge") {
-        log::info!("autostart: tool-bridge already running");
-        return;
-    }
+    // P3.5.196 (7/7 鸿波军规审判): 每次都 pkill+spawn, 保证 tool-bridge 加载最新代码.
+    //
+    // # 老逻辑的问题
+    // 老 ensure: pid_file 那个 PID 活着就 early return. 副作用跟 local-search 一样 (见
+    // ensure_local_search_running P3.4.2 comment):
+    //   - 老 tool-bridge 不知道 catfish plugin.py / tool schema 更新了
+    //   - 老 tool-bridge 不知道 hermes API 变了 (P25 monkey-patch 签名对不上)
+    //   - PID alive ≠ 服务健康 (进程 alive 但 tool 调用 TypeError, watchdog 检测不到)
+    //
+    // 鸿波 7/7 实测撞过: 早上改了 catfish plugin.py (P3.5.192 has_host_access fix)
+    // + 加了 email_read/attachment tool (P3.5.194), 但 tool-bridge 从 12:04 就没重启,
+    // 加载的是改动前 code. 员工反馈"chat 未知错误", 原因是 monkey-patch 用老签名调
+    // 新 hermes API. 手动 pkill + hermes restart 才好. 军规: 让 Companion 冷启动就
+    // 自动重启 tool-bridge, 不依赖员工记忆.
+    //
+    // # 新逻辑
+    // 每次 Companion 启动 pkill -f 'catfish_tool_bridge --socket' 清孤儿, 再 spawn 新的.
+    // 启动慢 3-5s (初始 import hermes), 可预测.
+    //
+    // caller:
+    //   - autostart (schedule_autostart): app 冷启动时调, pkill 上次残留 + fresh spawn
+    //   - watchdog: 5s tick 时 !is_alive 才调 (进程真死了), pkill 无匹配静默无害
+    pkill_tool_bridge();
 
     let dir = match catfish_paths::tool_bridge_dir() {
         Some(d) => d,
@@ -305,6 +324,49 @@ pub fn pkill_local_search_watchers() {
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         log::debug!("autostart: pkill_local_search_watchers 跳过 (非 unix)");
+    }
+}
+
+/// P3.5.196 (7/7 鸿波军规审判): pkill 所有 catfish_tool_bridge --socket 进程 (含孤儿).
+///
+/// 跟 pid_alive 配套使用: 跟 pkill_local_search_watchers 同 pattern (P3.4.2).
+/// 用途:
+///   - autostart 冷启动前 pkill 上次残留进程, 保证新 spawn 加载最新 code
+///   - 未来可用于 UI restart 按钮 (commands 里 wrap 一下即可)
+///
+/// 用 pkill -f 模糊匹配 cmdline. 'catfish_tool_bridge --socket' 这串够特异 (跟
+/// hermes 里 mcp_server 子进程 'catfish_tool_bridge.mcp_server' 区分开), 不误杀.
+/// 失败静默 (没 pkill 命令 / 无匹配都不算错).
+///
+/// macOS / Linux only. Windows 暂不处理 (Companion 当前只 macOS).
+///
+/// pub: 让 commands/ 也能调 (未来 UI restart 按钮).
+pub fn pkill_tool_bridge() {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let out = std::process::Command::new("pkill")
+            .args(["-f", "catfish_tool_bridge --socket"])
+            .output();
+        match out {
+            Ok(o) if o.status.success() => {
+                log::info!(
+                    "autostart: pkill 清掉旧 tool-bridge (确保新进程用最新 catfish code + hermes 版本)"
+                );
+                // pkill 完后 unix socket 释放需要一小段, 给 0.5s 缓冲
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            Ok(_) => {
+                // pkill 返非 0 通常是"无匹配进程" (exit 1), 首次启动或已清干净都正常
+                log::debug!("autostart: pkill tool-bridge 无匹配进程 (首次启动 / 已清干净)");
+            }
+            Err(e) => {
+                log::warn!("autostart: pkill tool-bridge 失败 (不阻塞 spawn): {e}");
+            }
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        log::debug!("autostart: pkill_tool_bridge 跳过 (非 unix)");
     }
 }
 

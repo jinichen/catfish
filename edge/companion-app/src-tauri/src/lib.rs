@@ -417,6 +417,10 @@ pub fn run() {
             // tool_bridge
             commands::tool_bridge::tool_bridge_start,
             commands::tool_bridge::tool_bridge_stop,
+            // P3.5.196 (7/7 鸿波): 手动强制重启 tool-bridge (pkill + fresh spawn),
+            // 无需重启 Companion. 用于 code 变更后 pick up 新逻辑, 或 hermes 升级
+            // 后 monkey-patch 签名对齐修复.
+            commands::tool_bridge::tool_bridge_restart,
             commands::tool_bridge::tool_bridge_status,
             commands::tool_bridge::tool_bridge_list_tools,
             commands::tool_bridge::tool_bridge_call_tool,

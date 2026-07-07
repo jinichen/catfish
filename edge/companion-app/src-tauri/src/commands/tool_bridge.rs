@@ -130,6 +130,32 @@ pub async fn tool_bridge_stop() -> Result<(), String> {
     Ok(())
 }
 
+/// P3.5.196 (7/7 鸿波军规审判): tool-bridge 手动强制重启 (无需重启 Companion).
+///
+/// 用途:
+///   - 开发/员工改了 catfish plugin.py / tool schema, 需要 tool-bridge pick up 新 code
+///   - hermes 升级后 (breaking API change), 老 tool-bridge 加载的 monkey-patch 跟新 hermes API 断裂
+///   - PID alive 但服务 stale, 手动 nuke
+///
+/// 逻辑: 调用 autostart::pkill_tool_bridge() 强杀所有匹配进程 + 走标准 spawn 路径.
+/// 跟 tool_bridge_start 不同: 后者遇到 alive 会拒绝, 这里不管死活直接 pkill+spawn.
+#[tauri::command]
+pub async fn tool_bridge_restart() -> Result<(), String> {
+    // 1. pkill 老进程 (跟 autostart 同 pattern)
+    crate::services::autostart::pkill_tool_bridge();
+
+    // 2. 清 PID 文件 + socket 文件残留 (跟 tool_bridge_stop 一致)
+    if let Some(pid_file) = catfish_paths::tool_bridge_pid_file() {
+        let _ = std::fs::remove_file(pid_file);
+    }
+    if let Some(sock) = catfish_paths::tool_bridge_socket() {
+        let _ = std::fs::remove_file(sock);
+    }
+
+    // 3. 走标准 spawn 路径 (tool_bridge_start), 现在 pid_alive check 会返 false, 顺利起来
+    tool_bridge_start().await
+}
+
 #[tauri::command]
 pub async fn tool_bridge_status() -> Result<ServiceStatus, String> {
     let pid = catfish_paths::tool_bridge_pid_file()
