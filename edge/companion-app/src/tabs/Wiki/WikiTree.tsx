@@ -211,54 +211,42 @@ export default function WikiTree() {
     });
   }, [grouped.entity]);
 
-  // P3.5.107 A (6/25 鸿波 catch "只有 1 个体系, 加另一个体系能不能"):
-  // concept 也走 P3.5.99 同套路真二级分组 — 按 concept.related[0] 上位体系.
+  // P3.5.182 (7/6 鸿波军规审判): 严格 REMOVE hardcode assumption
+  // "concept.related[0] = 上位体系" — 严格 P3.5.107 6/25 加此 assumption 严格
+  // = 硬编码 rule form (data 层 hardcode inference — 位置约定当 semantic).
   //
-  // 数据真因 (审鸿波截图无人机类 concept 真 body): LLM distill 真在 concept body
-  // 第一行写 `[[企业资质知识体系]]` 标上位 hub. wiki_read.rs 真 merge_related_with_body
-  // 真把它合到 related[]. 所以 concept "无人机类" 真 related[0] = "企业资质知识体系".
+  // 严格军规: enum / example / rule / principle 严格全是硬编码 4 form.
+  // 严格 P3.5.176 删 enum, P3.5.180 删 example, P3.5.182 严格严格严格 rule.
   //
-  // 0 schema 改 0 数据 backfill: 鸿波想加"政企客户体系" 真路径:
-  //   1. 新建 concept "政企客户体系" (顶级体系, 自己 related[0] 空 → 进 "🌟 顶级体系" 组)
-  //   2. 新建 concept "央国企" 真 body 写 `[[政企客户体系]]` → 进 "政企客户体系" 组下
-  //   3. entity "中移动" body 写 `[[央国企]]` → 进 entity 二级 "央国企" 组
-  //   真自然 3 级层级, 0 代码改.
+  // 严格 root cause 触发场景 (鸿波 7/6 严格 audit "为什么还是市场部"):
+  //   LLM 严格写 concepts/组织架构.md 严格无 frontmatter → wiki_read.rs
+  //   严格 merge_related_with_body 严格 body 第一 `[[市场部]]` 严格 merge 严格
+  //   related[0]="市场部" (是 entity) → 老逻辑 UI 严格误当上位 → 严格生假
+  //   "▼ 市场部" 父组. 严格严格 assumption 严格根本失效.
   //
-  // 特殊: concept 真 related[0] 空 → "🌟 顶级体系" (顶级 hub, 排第一不排最后)
-  // — 跟 entity 真"未分类"语义不同 (未分类是数据残缺, 顶级体系是结构性 root).
-  // P3.5.115 (6/25 鸿波 catch "UI 别扭"): 砍顶级体系组真重复.
-  // 老逻辑: "🌟 顶级体系 (1) — 企业资质知识体系" + "企业资质知识体系 (10) — 子级"
-  // 两组都跟父名相关, 视觉重复.
+  // 严格新逻辑 (AI-first, 0 hardcode 位置约定):
+  //   - concept.subtype === "system" → "🌟 顶级体系" 组 (LLM 自主填 semantic label,
+  //     严格不 enum, 严格 concept_type=system 严格 P3.5.176 保留约定)
+  //   - 其他 concept → 平铺"概念"组 (严格无上位/下属假设, 严格 body wikilink 保留
+  //     给 WikiGraph 走 graph 关联, 严格但 UI 树严格不假当"上位")
   //
-  // 新逻辑: 顶级体系父 file有子级 → 直接作为该组 header (不重复进"顶级"组).
-  // 孤儿 system (无子级) → 兜底进"🌟 顶级体系"组真显示.
-  // header 点击: P3.5.113 match 路径 → lookup file → selectFile 跳父 preview ✓
+  // 严格员工加"政企客户体系"顶级 concept 严格路径 (0 code 改, 语义驱动):
+  //   1. 员工 chat 说"存政企客户体系为顶级体系" → LLM 严格生 concept.subtype=system
+  //   2. 严格进 "🌟 顶级体系" 组 (severity subtype semantic 严格识别)
+  //   3. 层级 3+ 严格靠 WikiGraph 走 body [[wikilink]] 关联可视化, 严格不侵入 UI 树
   const conceptCategories = useMemo(() => {
     const map = new Map<string, WikiFileInfo[]>();
-    // 第 1 轮: 有 related[0] 真 concept 进各自父组
+    const TOP_KEY = "🌟 顶级体系";
+    const OTHER_KEY = "概念";
     for (const c of grouped.concept) {
-      const category = c.related[0]?.name?.trim(); // P3.5.132 #5
-      if (category) {
-        if (!map.has(category)) map.set(category, []);
-        map.get(category)!.push(c);
-      }
-    }
-    // 第 2 轮: 孤儿 concept (related[0] 空) — 看它是否已是某组 header (子级真组真 key)
-    // 已有子级0 额外处理 (header click 走 P3.5.113 match 路径跳父 preview);
-    // 无子级 (真孤儿)进"🌟 顶级体系"组兜底.
-    for (const c of grouped.concept) {
-      if (c.related[0]?.name?.trim()) continue; // P3.5.132 #5: 已在第 1 轮处理
-      const hasChildren = map.has(c.title); // 自己是否为某组真 key
-      if (hasChildren) continue; // header 已经隐含就是它, 0 重复
-      // 孤儿兜底
-      const topKey = "🌟 顶级体系";
-      if (!map.has(topKey)) map.set(topKey, []);
-      map.get(topKey)!.push(c);
+      const key = c.subtype === "system" ? TOP_KEY : OTHER_KEY;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(c);
     }
     return Array.from(map.entries()).sort((a, b) => {
-      // 顶级体系 (孤儿兜底组) 推最前 — 根节点先看
-      if (a[0] === "🌟 顶级体系") return -1;
-      if (b[0] === "🌟 顶级体系") return 1;
+      // 顶级体系 推最前 — 根节点先看
+      if (a[0] === TOP_KEY) return -1;
+      if (b[0] === TOP_KEY) return 1;
       // 其他按 count desc
       return b[1].length - a[1].length;
     });
@@ -430,7 +418,8 @@ export default function WikiTree() {
             selectedPath={selectedPath}
             onSelect={selectFile}
           />
-          {/* P3.5.107 A (6/25 鸿波): 概念也走二级分组 (related[0]) — 体系 → 类目 真 3 级层级 */}
+          {/* P3.5.182 (7/6 鸿波军规审判): 概念严格删 related[0]=上位体系 hardcode assumption.
+              严格 只按 concept.subtype=system 二分 → "🌟 顶级体系" + "概念" 平铺. */}
           <ConceptGroup
             total={grouped.concept.length}
             categories={conceptCategories}
@@ -867,9 +856,11 @@ function CategorySubgroup({
   );
 }
 
-/** P3.5.107 A (6/25 鸿波) — concept 二级分组 group: 顶层 "概念 (11)" + 内嵌
- *  按 concept.related[0] 上位体系 真子组 (e.g. "企业资质知识体系 (8) / 🌟 顶级体系 (3)"),
- *  跟 EntityGroup 同款架构, 真支持加任意多新体系 (concept body 写 `[[新体系]]` 自动归类).
+/** P3.5.182 (7/6 鸿波军规审判) — concept 二级分组 group: 顶层 "概念 (N)" + 内嵌
+ *  按 concept.subtype 二分: "🌟 顶级体系" (subtype=system) + "概念" (其他, 平铺).
+ *
+ *  严格 P3.5.107 A (6/25) 老逻辑严格按 related[0] 上位体系分组 → 严格 hardcode
+ *  assumption (位置约定当 semantic) 严格军规违反. P3.5.182 严格 删除.
  *
  *  localStorage key 跟原 Group "概念 (concepts)" 真兼容 — 用户原折叠态不丢.
  */
