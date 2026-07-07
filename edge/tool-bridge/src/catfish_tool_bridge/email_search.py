@@ -203,10 +203,16 @@ def tool_email_search(args: dict[str, Any]) -> dict[str, Any]:
             "summary": f"没找到含 '{query}' 的邮件 (跨所有客户端 + 账号)",
         }
 
-    # LLM 看的 matches — 不返完整 body (隐私 + token 省), 只 subject/sender/date/adapter/account
+    # LLM 看的 matches — 不返完整 body (blast-radius 控制 + token 省), 只 subject/sender/date/adapter/account
     # P3.5.151 (6/30 鸿波"和查找 session 一样的方式"): snippet 围绕 query 命中位置取
     # ±N 上下文 (跟 sessions_search 一致), 不是从头截 200. 让员工问"智能体列表"时
     # snippet 包含列表段, LLM 一次拿全, 不需要二次拉 body.
+    #
+    # P3.5.194 (7/7 鸿波军规审判): 加 attachments 元数据字段 (filename + size, 无内容).
+    # 用户 catch "邮件都在本地, 隐私说法不成立" — 老逻辑连附件文件名都不给 LLM,
+    # 员工场景 (对比微信版 vs 邮件版哪份是最新) 无法做决策. 附件文件名/size 是
+    # 邮件元数据不是正文, 不违反 "邮件正文永不缓存" 红线. CLI 已经返, tool
+    # bridge 挑出来即可.
     matches = [
         {
             "id": it.get("id"),
@@ -217,6 +223,13 @@ def tool_email_search(args: dict[str, Any]) -> dict[str, Any]:
             "date": it.get("date") or "",
             "is_read": bool(it.get("is_read", False)),
             "snippet": _build_snippet(it.get("body_text") or "", query),
+            # P3.5.194: 附件元数据 (只 filename + size, 无 content_type 省 token).
+            # 空 list 保持字段一致, 便于 LLM 判断"这封有附件吗".
+            "attachments": [
+                {"filename": a.get("filename") or "", "size_bytes": int(a.get("size_bytes") or 0)}
+                for a in (it.get("attachments") or [])
+                if isinstance(a, dict) and a.get("filename")
+            ],
         }
         for it in items
     ]

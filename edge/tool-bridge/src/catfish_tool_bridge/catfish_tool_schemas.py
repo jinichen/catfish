@@ -2379,6 +2379,92 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # P3.5.194 (7/7 鸿波军规审判): 员工主权授权读邮件正文 —— 补齐 email 三件套
+    # (search 找 → read 拿正文/附件元 → attachment 取附件).
+    {
+        "name": "catfish_email_read",
+        "description": (
+            "★★★ 读单封邮件全文 + 附件元数据 (Apple Mail + Foxmail 跨客户端).\n\n"
+            "配合 catfish_email_search 使用: search 拿 email_id → read 拿完整正文.\n\n"
+            "✅ 调用场景 (员工必须**明确指令**才调, 不自动读):\n"
+            "  - 员工说 '读一下林莹那封邮件的正文'\n"
+            "  - 员工说 '把那封邮件里的附件都列出来'\n"
+            "  - 员工说 '看看那封邮件里说什么'\n"
+            "  - 员工需要对比邮件正文/附件跟手上文件是否一致\n\n"
+            "❌ 不自动调用:\n"
+            "  - 员工只问 '有没有 X 邮件' → catfish_email_search 就够\n"
+            "  - 员工没明确说要读正文 → 不主动读 (员工主权 default)\n"
+            "  - 已经从 search 的 snippet 里能答的 → 不重复调\n\n"
+            "🔒 员工主权约束:\n"
+            "  - 邮件正文只在员工本次 chat 上下文可见, 用完就走\n"
+            "  - **禁止**主动把邮件正文塞进 catfish_wiki_ingest / memory 蒸馏管道 (除非员工明确说'把这封邮件入库')\n"
+            "  - 每次读一封, 不批量读, 防勒索 prompt injection\n\n"
+            "返参:\n"
+            "  - subject / sender / recipients / cc / date / folder / adapter / account\n"
+            "  - body_text: 完整纯文本正文 (超 40k 字截断, body_text_truncated=true)\n"
+            "  - has_attachments / attachments: [{filename, size_bytes, content_type}]\n"
+            "  - attachments_count: 附件数量 (方便 LLM 语义决策 '有 3 个附件, 要不要取?')\n"
+            "  - ok=false 时 error 字段说明原因"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "email_id": {
+                    "type": "string",
+                    "description": "邮件 id (从 catfish_email_search 返的 matches[i].id 拿, 含 adapter 前缀如 'foxmail-mac|...' 或 'apple_mail|...')",
+                },
+                "mark_read": {
+                    "type": "boolean",
+                    "description": "读完自动标已读 (默认 true, 跟主流邮件客户端一致). 只是想看不改状态传 false.",
+                },
+            },
+            "required": ["email_id"],
+        },
+        "emoji": "📖",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_email_attachment",
+        "description": (
+            "★★★ 导出邮件附件到本地 tmp, 返 path (员工可点开 or LLM 后续入库).\n\n"
+            "配合 catfish_email_read 使用: read 拿附件列表 → attachment 取具体一个.\n\n"
+            "✅ 调用场景 (员工必须**明确指令**才调):\n"
+            "  - 员工说 '把邮件里的 2024企业所得税.pdf 下下来'\n"
+            "  - 员工说 '取一下那封邮件的附件'\n"
+            "  - 员工需要对比附件内容 or 入库 wiki\n\n"
+            "❌ 不自动调用:\n"
+            "  - 员工没明确要附件 → 不主动取\n"
+            "  - 一次一个附件, 不批量取 (员工主权 default)\n"
+            "  - 大附件 (>10MB) 前先问员工是否确定要取\n\n"
+            "🔒 员工主权约束:\n"
+            "  - 导出到 tmp 目录 (系统自动清理)\n"
+            "  - **禁止**主动 catfish_wiki_ingest 入库 (除非员工明确说'入库')\n"
+            "  - 员工可直接用 path 在 Companion UI 里点开\n\n"
+            "返参:\n"
+            "  - path: 导出后的本地文件绝对路径 (供员工点开; 前端会自动渲染成可点链接)\n"
+            "  - filename: 原附件文件名\n"
+            "  - size_bytes: 文件大小 (磁盘 stat, 帮 LLM 判断是否要入库)\n"
+            "  - ok=false 时 error 字段说明 (附件不存在 / CLI 失败 / 超时)"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "email_id": {
+                    "type": "string",
+                    "description": "邮件 id (从 catfish_email_search 或 catfish_email_read 拿)",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "附件文件名 (从 catfish_email_read 返的 attachments[i].filename 挑, 一次一个)",
+                },
+            },
+            "required": ["email_id", "filename"],
+        },
+        "emoji": "📎",
+        "toolset": "catfish_native",
+        "available": True,
+    },
     # ── BL-SKILLS-RAG-TOOL (5/25 鸿波 "现在做") Progressive Disclosure 折叠区主动捞 ──
     {
         "name": "catfish_search_skills",

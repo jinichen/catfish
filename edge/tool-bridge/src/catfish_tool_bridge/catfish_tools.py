@@ -827,6 +827,15 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_email_search":
         from . import email_search  # noqa: PLC0415
         return email_search.tool_email_search(args)
+    # P3.5.194 (7/7 鸿波军规审判) — 员工主权授权读邮件正文 + 导出附件.
+    # 补齐 email 三件套 (search / read / attachment), 让 LLM 在员工明确指令下能
+    # 拿到邮件正文和附件, 不再"你自己去 Mail 里看". 见 email_read.py 军规审判背景.
+    if name == "catfish_email_read":
+        from . import email_read  # noqa: PLC0415
+        return email_read.tool_email_read(args)
+    if name == "catfish_email_attachment":
+        from . import email_read  # noqa: PLC0415
+        return email_read.tool_email_attachment(args)
     # BL-SKILLS-RAG-TOOL (5/25 鸿波 "现在做") — Progressive Disclosure 折叠区主动捞
     if name == "catfish_search_skills":
         from . import search_skills  # noqa: PLC0415
