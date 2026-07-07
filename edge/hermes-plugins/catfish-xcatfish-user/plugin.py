@@ -3081,15 +3081,20 @@ def _patch_p25_cron_env_isolation() -> None:
         logger.info("P25 check_execute_code_guard 已 wrap 过, 跳过")
         return
 
+    # P3.5.192 (7/7 鸿波军规审判): hermes v0.18 (P3.5.159, 7/3 升级) 严格
+    # `check_execute_code_guard(code, env_type, has_host_access=False)` 加了第 3 参数,
+    # code_execution_tool.py:1156 会传 `has_host_access=...`. 本 wrapper 老签名
+    # 只 2 参数 → 每次 execute_code 调用 TypeError. Fix: 用 *args, **kwargs
+    # 透传所有位置/关键字参数给 _orig_check, 未来 hermes 再加参数也不用改.
     @functools.wraps(_orig_check)
-    def _patched_check_execute_code_guard(code, env_type):
+    def _patched_check_execute_code_guard(code, env_type, *args, **kwargs):
         if getattr(_CATFISH_CRON_THREAD_LOCAL, "in_cron", False):
             # 真在 cron 线程 — 走原始 cron deny 路径 (env=1 真意图)
-            return _orig_check(code, env_type)
+            return _orig_check(code, env_type, *args, **kwargs)
         # 非 cron 线程 — 临时 pop 假装 env 没 set (即使被污染, chat 不该被当 cron)
         _prev_env = os.environ.pop("HERMES_CRON_SESSION", None)
         try:
-            return _orig_check(code, env_type)
+            return _orig_check(code, env_type, *args, **kwargs)
         finally:
             # 不恢复 — caller 是 chat / api, 帮 hermes 清污染 (上游 bug 兜底)
             if _prev_env is not None:
