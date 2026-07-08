@@ -451,9 +451,9 @@ export default function WeChatQrLoginModal({ onClose, onConfirmed }: Props) {
                 color: "var(--catfish-text, #e6e8eb)",
               }}
             >
-              {phase.restart.kind === "idle" && (
-                <span>准备通知 hermes 切换到新账号…</span>
-              )}
+              {/* P3.5.201 撤 idle UI 分支: idle 只闪现几毫秒, useEffect 立即
+                  切 waiting. 显 idle 造成 flash of unstyled content — 员工反正
+                  看不到, 删了让 UI 直接 waiting. */}
               {phase.restart.kind === "waiting" && (
                 <span>
                   ⏳ hermes 后台切换账号中 (通常 10-30 秒)…

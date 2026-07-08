@@ -113,98 +113,73 @@ pub async fn hermes_status() -> Result<ServiceStatus, String> {
     })
 }
 
-/// hang 自动恢复: kill -9 hermes 进程 + 主动 `hermes gateway start` 拉起.
+/// hang 自动恢复: kill -9 hermes 进程, launchd KeepAlive 自动拉起.
 ///
-/// # P3.5.198.j (7/8 鸿波军规审判 — hermes_kill 只 kill 不拉的历史坑)
+/// # 设计意图 (P3.5.125 6/26 鸿波)
 ///
-/// 原设计假设 launchd KeepAlive 自动拉起, 但员工 mac 上多次撞
-/// `Could not find service "ai.hermes.gateway" in domain for user gui: 501` —
-/// launchd job 状态出问题, KeepAlive 不生效. hermes_kill 只 kill 结果 hermes
-/// 死了没人管, useServiceStatus / P32 auto-restart 一直 unhealthy 到 timeout.
+/// hermes hang 场景 (GIL deadlock / IO block): 进程 alive 但 /health 20s
+/// 超时 → useServiceStatus 连续 3 次 unhealthy → 调 hermes_kill → kill -9
+/// → launchd KeepAlive (plist `<KeepAlive>true</>`) 自动拉起新进程.
 ///
-/// 改成: pgrep + kill -9 后跑 `hermes gateway start` shell 命令强制拉起.
-/// hermes CLI 自己内部会处理 launchd job unload + reload + start 那套
-/// (从员工命令行验证过是可靠的).
-///
-/// PATH 兜底: Tauri 进程的 PATH 是 LaunchServices 给的系统 PATH (`/usr/bin:
-/// /bin`), 不含 brew 装的 hermes. 用 login shell (`sh -lc`) 加载员工 profile
-/// 让 hermes CLI 找得到.
+/// hang 状态下 SIGUSR1 (graceful drain) 可能 handler 没响应 (event loop 卡),
+/// 只有 kill -9 强杀可靠. 场景跟 P38 wechat 扫码后主动切 credential 完全
+/// 不同 (那里用 SIGUSR1 drain), 不共用.
 ///
 /// # P3.5.198.k (7/8 鸿波军规审判 — pgrep pattern bug)
 ///
-/// 老 pattern `"hermes_cli.gateway run"` 期望 match 类似 `hermes_cli gateway run`
-/// 的命令行, 但**实际 hermes launchd 起的 argv 是**:
-///   python -m hermes_cli.main gateway run --replace
-/// 中间是 `hermes_cli.main gateway run` — `.main` 挡住老 pattern (`.` 在 regex
-/// 里虽是任意字符, 但要求 `hermes_cli.` 之后紧跟 `gateway`, 而实际是 `.main `).
-/// pgrep NO MATCH → kill 一次没执行 → hermes 老 process 不死 → sh -lc start
-/// no-op (hermes 已在跑) → 老 credential 一直不换.
+/// 老 pattern `"hermes_cli.gateway run"` 3 天 latent 不 match, 因 hermes
+/// launchd 起的 argv 是 `python -m hermes_cli.main gateway run --replace`,
+/// 中间 `.main` 挡住老 pattern. 改成 `"hermes_cli.*gateway.*run"` 通配.
 ///
-/// 改成 `"hermes_cli.*gateway.*run"` 通配 python -m hermes_cli.<any> gateway run.
-/// 从员工机上 pgrep 验证过 match 上唯一 hermes 主进程 (PID 34109 场景).
+/// # P3.5.201 撤 P34 sh -lc start (7/8 鸿波)
+///
+/// P34 曾加 `sh -lc 'hermes gateway start'` 兜底假设 launchd KeepAlive 不可
+/// 靠. 但员工机 plutil verify plist `<KeepAlive>true</>` + SIGUSR1 test 3s
+/// 拉起 verify KeepAlive 正常. 之前误诊 launchd 501 是 hermes CLI 内部 unload
+/// +reload+start 处理, 不是 KeepAlive 挂. 撤回主动 start, 回归 P3.5.125 简
+/// 洁设计 (kill 完 return, launchd 自己拉起).
 #[tauri::command]
 pub async fn hermes_kill() -> Result<(), String> {
-    // step 1: pgrep + kill -9 老进程
+    // pgrep + kill -9. hermes 死后 launchd KeepAlive 自动拉起.
     let output = std::process::Command::new("pgrep")
         .args(["-f", "hermes_cli.*gateway.*run"])
         .output()
         .map_err(|e| format!("pgrep 失败: {e}"))?;
 
+    if !output.status.success() || output.stdout.is_empty() {
+        return Err("pgrep 找不到 hermes 进程 (它可能已经死了, launchd 应正在拉)".to_string());
+    }
+
+    let pids: Vec<i32> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|l| l.trim().parse().ok())
+        .collect();
+
+    if pids.is_empty() {
+        return Err("pgrep 输出无有效 PID".to_string());
+    }
+
     let mut killed = 0;
     let mut errs = Vec::new();
-    if output.status.success() && !output.stdout.is_empty() {
-        let pids: Vec<i32> = String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .filter_map(|l| l.trim().parse().ok())
-            .collect();
-        for pid in &pids {
-            let status = std::process::Command::new("kill")
-                .args(["-9", &pid.to_string()])
-                .status();
-            match status {
-                Ok(s) if s.success() => killed += 1,
-                Ok(s) => errs.push(format!("kill -9 {pid} exit={s}")),
-                Err(e) => errs.push(format!("kill -9 {pid} err={e}")),
-            }
-        }
-    } else {
-        // 没找到 hermes 进程 — 可能已经死了, 仍继续跑 start 拉起
-        log::info!("hermes_kill: pgrep 没找到 hermes 进程 (pattern=hermes_cli.*gateway.*run), 直接跳到 start 拉起");
-    }
-
-    // step 2: 主动跑 `hermes gateway start` 强制拉起, 不靠 launchd KeepAlive
-    // (它在员工 mac 上不可靠, 见函数顶部注释). 用 login shell 让 hermes 在
-    // PATH 里 (员工 zshenv / bash_profile 里有 brew shellenv).
-    let start_output = std::process::Command::new("sh")
-        .args(["-lc", "hermes gateway start"])
-        .output();
-
-    match start_output {
-        Ok(o) if o.status.success() => {
-            log::info!(
-                "P3.5.198.j hermes_kill: killed {} PIDs + hermes gateway start OK. \
-                 stdout={} errs={:?}",
-                killed,
-                String::from_utf8_lossy(&o.stdout).trim(),
-                errs,
-            );
-            Ok(())
-        }
-        Ok(o) => {
-            let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
-            let stdout = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            log::warn!(
-                "hermes_kill: killed {} PIDs 但 hermes gateway start 退出码 {}: \
-                 stdout={stdout} stderr={stderr}",
-                killed, o.status,
-            );
-            // hermes gateway start 可能已经在跑 (idempotent), 或者第一次撞 501 domain
-            // 但 CLI 内部会 unload+reload+start 修好. 只要退出码非 0 就明确报错.
-            Err(format!("hermes gateway start 失败: exit={}, stderr={stderr}", o.status))
-        }
-        Err(e) => {
-            log::warn!("hermes_kill: 无法 exec sh -lc 'hermes gateway start': {e}");
-            Err(format!("exec hermes gateway start 失败: {e}"))
+    for pid in &pids {
+        let status = std::process::Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .status();
+        match status {
+            Ok(s) if s.success() => killed += 1,
+            Ok(s) => errs.push(format!("kill -9 {pid} exit={s}")),
+            Err(e) => errs.push(format!("kill -9 {pid} err={e}")),
         }
     }
+
+    log::warn!(
+        "hermes hang 自动重启: killed {} hermes PIDs ({:?}). \
+         launchd KeepAlive 应在 2-5s 后自动拉新进程. errs={:?}",
+        killed, pids, errs,
+    );
+
+    if killed == 0 {
+        return Err(format!("0 PID killed: {errs:?}"));
+    }
+    Ok(())
 }
