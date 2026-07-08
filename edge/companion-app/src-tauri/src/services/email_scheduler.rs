@@ -656,22 +656,28 @@ async fn scan_phishing_for_new(new_items: &[EmailItem]) {
             for (s, v) in scans.iter_mut().zip(verdicts.iter()) {
                 s.llm_verdict = Some(v.verdict.clone());
                 s.llm_reason = Some(v.reason.clone());
-                // 如果 LLM 标 phishing 但规则没触发, 也算 medium severity 让 UI 显
-                if (v.verdict == "phishing" || v.verdict == "suspicious")
-                    && s.highest_severity == Severity::None
-                {
-                    s.highest_severity = if v.verdict == "phishing" {
-                        Severity::High
-                    } else {
-                        Severity::Medium
+                // P3.5.197 (7/7 鸿波军规审判): verdict → severity 分档映射.
+                // phishing → High (红 banner "钓鱼嫌疑")
+                // suspicious → Medium (橙 banner "可疑")
+                // marketing → Low (灰 badge "营销", 不显 banner 避免警报麻木)
+                // safe → None (无 banner 无 badge)
+                //
+                // 只在规则没触发时才用 LLM 判决覆盖 (规则优先, LLM 补漏).
+                if s.highest_severity == Severity::None {
+                    s.highest_severity = match v.verdict.as_str() {
+                        "phishing" => Severity::High,
+                        "suspicious" => Severity::Medium,
+                        "marketing" => Severity::Low,
+                        _ => Severity::None, // safe / 未知 verdict
                     };
                 }
             }
             log::info!(
-                "[phishing] LLM 复审 {} 封: {} phishing / {} suspicious",
+                "[phishing] LLM 复审 {} 封: {} phishing / {} suspicious / {} marketing",
                 scans.len(),
                 scans.iter().filter(|s| s.llm_verdict.as_deref() == Some("phishing")).count(),
                 scans.iter().filter(|s| s.llm_verdict.as_deref() == Some("suspicious")).count(),
+                scans.iter().filter(|s| s.llm_verdict.as_deref() == Some("marketing")).count(),
             );
         }
         Ok(verdicts) => {

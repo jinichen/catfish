@@ -152,6 +152,25 @@ function ListItem({
             ⚠ 可疑
           </span>
         )}
+        {/* P3.5.197 (7/7 鸿波军规审判): marketing badge — low=灰. 营销/推广/订阅
+            群发邮件, 非威胁但员工可能不想看. 用灰色 badge 提示, 不上升到橙色警告
+            避免"狼来了"警报麻木. */}
+        {phishing && phishing.highestSeverity === "low" && (
+          <span
+            style={{
+              flex: "0 0 auto",
+              fontSize: 9,
+              padding: "1px 5px",
+              background: "rgba(107,114,128,0.15)",
+              color: "rgb(75,85,99)",
+              borderRadius: 3,
+              fontWeight: 500,
+            }}
+            title={`LLM 判为营销/推广邮件${phishing.llmReason ? ` — ${phishing.llmReason}` : ""}`}
+          >
+            📢 营销
+          </span>
+        )}
         {/* P3.3.53.2: 政治敏感 badge (仅 detail 打开过的, 引擎开 + 命中). */}
         {political && political.engineEnabled && political.highestSeverity === "high" && (
           <span

@@ -78,7 +78,7 @@ pub struct PhishingScanResult {
     pub scanned_at: String,
     pub flags: Vec<PhishingFlag>,
     pub highest_severity: Severity,
-    pub llm_verdict: Option<String>,    // "phishing" / "suspicious" / "safe" / None
+    pub llm_verdict: Option<String>,    // "phishing" / "suspicious" / "marketing" (P3.5.197) / "safe" / None
     pub llm_reason: Option<String>,
 }
 
@@ -752,8 +752,15 @@ pub async fn batch_llm_review(
         .collect::<Vec<_>>()
         .join("\n");
 
+    // P3.5.197 (7/7 鸿波军规审判): 加 marketing 档, 让营销/推广邮件不再被误报为
+    // suspicious 触发橙色警告 banner. 员工反馈"营销当可疑, 警报太多容易麻木".
+    // 分档语义清晰化: phishing/suspicious 是威胁, marketing 是打扰但非威胁, safe 是正常.
     let system = "你是邮件钓鱼识别助手. 看主题/发件人/规则触发结果, 评每封邮件: \
-                  phishing (确定钓鱼) / suspicious (可疑待查) / safe (常规邮件). \
+                  phishing (确定钓鱼/欺诈) / suspicious (可疑待查, 疑似钓鱼但不确定) / \
+                  marketing (营销推广/订阅通知/群发广告, 非威胁但员工可能不想看) / \
+                  safe (常规工作邮件). \
+                  区分要点: 营销邮件从合法域名/知名品牌发来, 内容是产品推广/newsletter/促销, \
+                  不诱导密码/汇款/紧急操作 — 归 marketing 不归 suspicious. \
                   返 JSON 数组, 每元素 {\"verdict\":\"...\",\"reason\":\"一句话理由\"}. \
                   不要 markdown, 不要解释, 只返 JSON 数组.";
     let user = format!(
