@@ -26,6 +26,8 @@ import type {
   EmailDigestItem,
   JournalTodo,
 } from "./tauri";
+// P3.5.202 (C 方案): TaskChatStatus 从 advisor_cache colocated with TaskChatSummary.
+import type { TaskChatStatus } from "./advisor_cache";
 
 // 跟 briefing_workplan / briefing 同款 — 不带 X-Catfish-* header, 走 query param (5/21 CORS 修)
 const SERVICE_LLM_HEADERS = { "Content-Type": "application/json" };
@@ -641,22 +643,39 @@ ${input.wikiRelevant.trim()}`);
 
   // P3.3.9 (6/10): 上次 advisor 输出 — 让 LLM 复用 task_uid (跨 refresh 稳定)
   // P3.3.12 (6/10): 加 chatSummary, 让 LLM 看到员工跟每条 task 已聊到哪
+  // P3.5.202 (7/9 C 方案): 加 chatStatus (LLM 判定 resolved/paused/pending),
+  //   传给主 LLM 让它语义驱动跳过已完结/暂搁置 task, 而非依赖 keyword regex.
   if (previousTasks && previousTasks.length > 0) {
     const lines = previousTasks.map((t) => {
       const head = `- ${t.taskUid} | ${t.urgency} | ${t.title}`;
+      const bits: string[] = [];
       if (t.chatSummary && t.chatSummary.trim().length > 0) {
-        return `${head}\n  └ 员工已跟 AI 聊过: ${t.chatSummary.trim()}`;
+        bits.push(`员工已跟 AI 聊过: ${t.chatSummary.trim()}`);
       }
-      return head;
+      // P3.5.202: chatStatus 明确标注该 task 语义状态
+      if (t.chatStatus) {
+        const statusLabel =
+          t.chatStatus === "resolved"
+            ? "resolved (员工说事已办完/已交付/已确认误报 — 不能再放 main_tasks)"
+            : t.chatStatus === "paused"
+              ? "paused (员工说暂时关闭/暂缓/先放放/等通知 — 员工主动搁置, 不能再放 main_tasks, 员工会主动来找)"
+              : "pending (球还在员工手里)";
+        bits.push(`status: ${statusLabel}`);
+      }
+      return bits.length > 0 ? `${head}\n  └ ${bits.join("\n  └ ")}` : head;
     });
     parts.push(`# 上次 advisor 输出 (12 小时内)
 **同业务必须复用 task_uid, 不要新生成**. 判定标准 = 同项目/同人/同截止/同业务环节.
 title 表述差异不算新 task. 详见 SYSTEM_PROMPT § "task_uid 跨 refresh 复用".
 **已聊过的 task (含 chat summary), 你这次应该 follow-up 进度 / 帮员工往前推, 不要重推同样建议**.
 
-**P3.3.39 强约束**: chat summary 含 "已确认/是误报/不存在/已结项/已完成/已发起申请等审批"
-等**已结案信号**时, 这条 task 必须挪去 handled_silently 或不出现, **绝不能再放 main_tasks**.
-详细规则见 SYSTEM_PROMPT § 4.2 BL-ADVISOR-RESOLVED-DROP. 这是 6/12 鸿波明确反馈的 bug.
+**P3.5.202 强约束 (语义驱动, 尊重员工最近表态)**:
+- chatStatus="resolved" 或 "paused" 的 task **绝不能放 main_tasks**.
+  resolved = 员工说事已办完/已交付/已确认误报/已撤销 — 事已完结.
+  paused = 员工说暂时关闭/暂缓/先放放/等通知再说 — 员工主动搁置, 会主动来找.
+  这两类都挪去 handled_silently, 让员工在折叠区能看到但不打扰.
+- 只有 chatStatus="pending" (球在员工手里) 才可以出 main_tasks 提醒员工.
+- 员工没聊过的新 task 依据紧急度/影响度自己判断.
 
 ${lines.join("\n")}`);
   }
@@ -712,6 +731,10 @@ export interface AdvisorInput {
     urgency: string;
     /** P3.3.12: 跟 AI 已聊到哪 (100-150 字). 空字符串 = 没聊过 / summary 失败. */
     chatSummary?: string;
+    /** P3.5.202 (C 方案 7/9): LLM 判 员工在这条 task 上的最新状态.
+     *  用于 filterResolvedTasks 语义判 drop 而非 regex 关键字.
+     *  老 cache 没这字段 → undefined → filter 兜底走 regex (backward compat). */
+    chatStatus?: TaskChatStatus;
   }>;
   /** P3.5.40 (6/18 鸿波 audit huashu-design '不凭空创造, 查已有 spec'):
    *  跟今日邮件/任务相关的 wiki 条目 (entity/concept) head 拼接, 防 LLM 凭记忆造客户名/项目名/资质名.
@@ -1085,6 +1108,9 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
             title: t.title,
             urgency: t.urgency,
             chatSummary: summaries[t.taskUid]?.summary ?? "",
+            // P3.5.202 (C 方案): 透传 LLM 判定的 status 到 filterResolvedTasks.
+            // 老 cache summaries[uid] 没 status 字段 → undefined → filter 回退 regex 兜底.
+            chatStatus: summaries[t.taskUid]?.status,
           }));
         if (enriched.length > 0) {
           inputWithPrev = { ...input, previousTasks: enriched };
@@ -1297,11 +1323,18 @@ function filterResolvedTasks(
   result: AdvisorResult,
   previousTasks: NonNullable<AdvisorInput["previousTasks"]>,
 ): AdvisorResult {
-  // build uid → summary map
-  const summaryByUid = new Map<string, string>();
+  // build uid → {summary, status} map. status 是 P3.5.202 (C 方案) 新加语义
+  // 字段, 老 cache 没这字段 → undefined → 回退 regex 兜底.
+  const byUid = new Map<
+    string,
+    { summary: string; status: TaskChatStatus | undefined }
+  >();
   for (const pt of previousTasks) {
-    if (pt.taskUid && pt.chatSummary) {
-      summaryByUid.set(pt.taskUid, pt.chatSummary);
+    if (pt.taskUid) {
+      byUid.set(pt.taskUid, {
+        summary: pt.chatSummary ?? "",
+        status: pt.chatStatus,
+      });
     }
   }
 
@@ -1309,19 +1342,29 @@ function filterResolvedTasks(
   const droppedTitles: string[] = [];
 
   for (const mt of result.mainTasks) {
-    const prevSummary = summaryByUid.get(mt.taskUid) ?? "";
-    const summaryResolved = chatSummaryLooksResolved(prevSummary);
-    const titleResolved = titleLooksResolved(mt.title);
+    const prev = byUid.get(mt.taskUid);
+    const prevSummary = prev?.summary ?? "";
+    const prevStatus = prev?.status;
 
-    if (summaryResolved || titleResolved) {
-      const reason = summaryResolved && titleResolved
-        ? "summary+title"
-        : summaryResolved
-          ? "summary"
-          : "title";
+    // P3.5.202 主判定: LLM 语义 status. resolved / paused 都算 drop
+    // (resolved=办完, paused=员工主动搁置). pending=球在员工手里, keep.
+    const statusResolved = prevStatus === "resolved" || prevStatus === "paused";
+
+    // 兜底 (老 cache 没 status, 或 LLM 出错 fallback pending 时): regex 关键字.
+    // 军规: 硬编码 regex 长期不 sustainable, 但 backward compat 需要留.
+    const summaryResolved = !statusResolved && chatSummaryLooksResolved(prevSummary);
+    const titleResolved = !statusResolved && titleLooksResolved(mt.title);
+
+    if (statusResolved || summaryResolved || titleResolved) {
+      const reason = statusResolved
+        ? `LLM status='${prevStatus}'`
+        : summaryResolved && titleResolved
+          ? "summary+title regex 兜底"
+          : summaryResolved
+            ? "summary regex 兜底"
+            : "title regex 兜底";
       console.log(
-        `[advisor BL-ADVISOR-RESOLVED-HARDFILTER] drop ${mt.taskUid} "${mt.title}" ` +
-          `(${reason} 命中 resolved 关键字)`,
+        `[advisor BL-ADVISOR-RESOLVED-HARDFILTER] drop ${mt.taskUid} "${mt.title}" (${reason})`,
       );
       droppedTitles.push(mt.title);
       continue;
@@ -1778,7 +1821,14 @@ async function _ensureTaskChatSummariesFreshImpl(model: string): Promise<void> {
 
     const cachedSummaries = (cached.taskChatSummaries ?? {}) as Record<
       string,
-      { summary: string; jsonlSize: number; messageCount?: number; computedAt: string }
+      {
+        summary: string;
+        /** P3.5.202 (C 方案): LLM 判定的 status, 老 cache 没这字段. */
+        status?: TaskChatStatus;
+        jsonlSize: number;
+        messageCount?: number;
+        computedAt: string;
+      }
     >;
     const newSummaries = { ...cachedSummaries };
     let llmCalls = 0;
@@ -1855,10 +1905,12 @@ async function _ensureTaskChatSummariesFreshImpl(model: string): Promise<void> {
           }
 
           llmCalls++;
-          const summary = await summarizeTaskChat(t.title, t.taskUid, messages, model);
-          if (summary) {
+          const { summary, status } = await summarizeTaskChat(t.title, t.taskUid, messages, model);
+          if (summary || status !== "pending") {
+            // P3.5.202: 存 status 到 cache. 老 cache 结构不带 status, 新加不影响读老 cache.
             newSummaries[t.taskUid] = {
               summary,
+              status,
               jsonlSize: currentCount,  // backward compat 留同字段, value 取 messageCount/size
               messageCount: currentCount,
               computedAt: new Date().toISOString(),
@@ -1888,19 +1940,33 @@ async function _ensureTaskChatSummariesFreshImpl(model: string): Promise<void> {
   }
 }
 
-/** P3.3.12 (6/10): 调 LLM 出 task chat summary. 100-150 字, 客观描述员工
- *  已经决定/已经做/已经说要做什么, 不含 AI 建议内容.
+/** P3.5.202 (C 方案 7/9 鸿波军规审判 — 去 RESOLVED regex 硬编码):
+ *  LLM summarize 输出 JSON {summary, status} 而非纯文本.
+ *
+ *  status: "resolved" | "paused" | "pending"
+ *    - resolved: 员工说的已结/已办完/已交付/已确认误报/已撤销
+ *    - paused: 员工说的暂时关闭/暂缓/先放放/等通知再说 (临时搁置)
+ *    - pending: 球还在员工手里, 需要继续跟进
+ *
+ *  以前是纯文本 summary, `filterResolvedTasks` 用 5 条硬编码 regex 匹配关键字
+ *  兜底 — 员工用新说法 (今天"暂时关闭", 明天"这事推了") regex 就漏, 员工每
+ *  天都要撞. 硬编码就是你点名的军规违反. LLM 语义判决替 regex.
  *
  *  截最后 30 条 + 每条限 300 字 → 控制 prompt 长度防 OOM.
- *  max_tokens 300 (~150 中文字), temperature 0.3 (准确为主).
- *  失败 (网络/LLM 非 2xx/parse 错) 返 "" (不阻塞 advisor 主流程). */
+ *  max_tokens 400 (~200 字, 留 JSON 结构 overhead), temperature 0.3 (准确为主).
+ *  失败 (网络/LLM 非 2xx/parse 错) 返 {"", "pending"} — 不阻塞 advisor 主
+ *  流程, pending 让 filter 保守放行 (不误 drop 员工真需要办的). */
+
+// TaskChatStatus 定义在 advisor_cache.ts (colocated with TaskChatSummary cache
+// schema). 这里从顶部 import 类型即可 — 不重复 export.
+
 async function summarizeTaskChat(
   taskTitle: string,
   taskUid: string,
   messages: Array<{ role: string; content: string; ts: string }>,
   model: string,
-): Promise<string> {
-  if (messages.length === 0) return "";
+): Promise<{ summary: string; status: TaskChatStatus }> {
+  if (messages.length === 0) return { summary: "", status: "pending" };
 
   const lastN = messages.slice(-30);
   const dump = lastN
@@ -1913,13 +1979,23 @@ async function summarizeTaskChat(
 
   const prompt = `以下是员工跟 catfish AI 在某条待办 "${taskTitle}" 上的最近对话.
 
-用 100-150 字总结员工**已经决定/已经做/已经说要做什么**, 客观描述员工当前进度/状态/卡点/决策.
-**不要**包括 AI 的建议或猜测, 只总结员工本人说过/做过/确认过的事.
-输出纯文本一段, 不带 markdown.
+请输出严格 JSON, 两个字段:
+
+{
+  "summary": "100-150 字客观描述员工**已经决定/已经做/已经说要做什么**. 不含 AI 建议或猜测, 只讲员工本人说过/做过/确认过的事.",
+  "status": "resolved" | "paused" | "pending"
+}
+
+status 判定 (根据员工最近一次表态):
+- "resolved" = 员工说事已办完/已结/已交付/已签字/已发出申请/已确认为误报/已作废/已撤销 等 — 事情已经完结, 不需要 catfish 再推
+- "paused" = 员工说暂时关闭/暂缓/暂停/先放放/先不管/等通知再说/等回复 等 — 临时搁置, 不需要 catfish 主动推, 员工会主动来找
+- "pending" = 球还在员工手里, 需要继续跟进 — 员工没说过完结/搁置的话
+
+只输出 JSON, 不带 markdown 代码块 fence, 不带解释文本.
 
 ${dump}
 
-总结:`;
+JSON:`;
 
   try {
     const url = `${config.backendUrl}/v1/chat/completions${SERVICE_LLM_QUERY}`;
@@ -1929,23 +2005,42 @@ ${dump}
       body: JSON.stringify({
         model,
         messages: [{ role: "user", content: prompt }],
-        max_tokens: 300,
+        max_tokens: 400,
         temperature: 0.3,
         stream: false,
+        response_format: { type: "json_object" },
       }),
     });
     if (!resp.ok) {
       console.warn(`[advisor summary] ${taskUid} 非 2xx:`, resp.status);
-      return "";
+      return { summary: "", status: "pending" };
     }
     const data = await resp.json();
     const content = data?.choices?.[0]?.message?.content;
-    if (typeof content !== "string") return "";
-    // 截 400 字防 LLM 不守 100-150 字约束
-    return content.trim().slice(0, 400);
+    if (typeof content !== "string") return { summary: "", status: "pending" };
+
+    // 兼容 LLM 偶尔用 markdown fence 包 JSON
+    const raw = content.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```\s*$/i, "");
+    let parsed: { summary?: unknown; status?: unknown };
+    try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      // JSON parse fail → 尝试当作纯文本 summary, status pending
+      console.warn(`[advisor summary] ${taskUid} JSON parse 失败 (LLM 输出可能非 JSON), fallback pending:`, e);
+      return { summary: raw.slice(0, 400), status: "pending" };
+    }
+
+    const summary = typeof parsed.summary === "string" ? parsed.summary.trim().slice(0, 400) : "";
+    const rawStatus = typeof parsed.status === "string" ? parsed.status.toLowerCase() : "";
+    const status: TaskChatStatus =
+      rawStatus === "resolved" || rawStatus === "paused" || rawStatus === "pending"
+        ? (rawStatus as TaskChatStatus)
+        : "pending"; // 兜底 pending — 不敢 drop 真需要办的事
+
+    return { summary, status };
   } catch (e) {
     console.warn(`[advisor summary] ${taskUid} 异常:`, e);
-    return "";
+    return { summary: "", status: "pending" };
   }
 }
 

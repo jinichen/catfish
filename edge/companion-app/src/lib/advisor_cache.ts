@@ -19,10 +19,21 @@ export interface AdvisorCache {
   taskChatSummaries?: Record<string, TaskChatSummary>;
 }
 
+/** P3.5.202 (C 方案 7/9 鸿波): LLM 判定员工在这条 task 的最新状态.
+ *  用于 filterResolvedTasks 语义判 drop 而非 hardcode regex 关键字.
+ *   - resolved: 员工说已办完 / 已交付 / 已确认误报 / 已撤销
+ *   - paused: 员工说暂时关闭 / 暂缓 / 先放放 / 等通知
+ *   - pending: 球在员工手里, 继续跟进
+ */
+export type TaskChatStatus = "resolved" | "paused" | "pending";
+
 /** P3.3.12: 单条 task chat 的 LLM summary cache 项. */
 export interface TaskChatSummary {
   /** LLM 给的 100-150 字 summary, 说明员工跟这条 task 聊到哪. */
   summary: string;
+  /** P3.5.202 (C 方案): LLM 输出的语义 status. 老 cache 无此字段 → undefined,
+   *  filter 回退 regex 兜底 (backward compat). 新 summary 都会有. */
+  status?: TaskChatStatus;
   /** P3.3.12 老字段 — jsonl file size (byte). 跟当前 jsonlSize 对比一致复用.
    *  P3.3.19 C Phase 5: 改 state.db 后 jsonlSize 不再用. messageCount 是新 source of truth.
    *  保留字段名做 backward compat — 老 cache 没破坏. */
