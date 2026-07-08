@@ -178,8 +178,17 @@ export async function fetchWithAuth(
   //   纯 passthrough, OpenAI 协议透传 DeepSeek).
   //   设计点: 不动 hermes 路由 (那是 hermes 核心), 用 query flag 让客户端能按 endpoint
   //   选择是否走 hermes — caller 显式标 catfish_direct=1 才直走 8999.
+  // P3.5.198.b (7/8 鸿波 catch modal "Invalid API key 401"): /api/platforms/*
+  // 是 hermes 独占 namespace (hermes gateway/platforms/*.py 平台协议 endpoint,
+  // P30 wechat qr_login start/poll 就落这里, 未来 telegram/discord 等如果也走
+  // hermes 一样落这个前缀). exclude 掉让它走 fetchWithHermes 用 API_SERVER_KEY,
+  // 别错拿 OAuth JWT 撞 hermes _check_auth 死 401. gateway 8999 侧代码 grep 无
+  // /api/platforms/ 冲突, exclude 安全.
+  //
+  // 同时修 UX: 老逻辑 → OAuth 401 → 触发 invoke("auth_login") 弹浏览器登录页,
+  // 员工每次点 "微信扫码绑定" 都被踢去 IdP, 那个"要求网页再登录"就是这里.
   const isGatewayDirectPath =
-    url.includes("/api/") ||
+    (url.includes("/api/") && !url.includes("/api/platforms/")) ||
     url.includes("/v1/catalog") ||
     url.includes("/v1/hub/") ||
     url.includes("/v1/wiki/") ||
