@@ -3836,6 +3836,58 @@ async def _handle_wechat_qr_poll(self, request):
             "P30 wechat qr confirmed: account_id=%s user_id=%s → 已 save_weixin_account",
             account_id, user_id,
         )
+        # P38 (P3.5.201 7/8 鸿波军规审判 — 撤 P32-P37 中间层):
+        #
+        # audit 出 hermes 里原生已有 SIGUSR1 graceful restart:
+        #   - gateway/run.py:19362-19364 gateway 注册 SIGUSR1 handler
+        #   - gateway/run.py:5973 request_restart(via_service=True) drain in-flight
+        #   - launchd `<KeepAlive>true</>` (plutil verify) 自动拉起新 process
+        #   - hermes_cli/gateway.py:239 _graceful_restart_via_sigusr1 官方 recipe
+        #
+        # 实测 (7/8 21:xx 鸿波本机): kill -USR1 hermes → 3 秒 launchd 起新 PID.
+        #
+        # 老路径 (P32-P37) 是我们在 Companion 侧搭 "kill -9 + sh -lc start + poll
+        # /health 45s" 中间层 — 复杂 + 无 drain 断 in-flight chat/SSE + 装机依
+        # 赖 sh -lc PATH / launchd 501 recovery / hermes_kill Tauri command
+        # 权限. 全部推翻用 hermes 原生 SIGUSR1 收敛到一行 plugin 代码.
+        #
+        # # 边界
+        #
+        # 1. asyncio.get_event_loop().call_later(3s, ...) 延迟 3 秒 — 给当前
+        #    response (return web.json_response 下面那句) 时间 flush 到网络,
+        #    Modal 收到 confirmed 后再 hermes 才 drain+exit.
+        # 2. 用 signal.SIGUSR1 (POSIX 通用, mac+linux 都有). Windows 走
+        #    hasattr(signal, "SIGUSR1") = False 分支跳过 — 员工用 Companion
+        #    在 mac/linux, 忽略 Windows.
+        # 3. 失败不阻塞主流程 — credential 已 save 到 accounts/, env 已 sync,
+        #    员工手动 hermes gateway restart 也能起来 (fallback 路径).
+        try:
+            import signal as _signal, asyncio as _asyncio
+            if hasattr(_signal, "SIGUSR1"):
+                _loop = _asyncio.get_event_loop()
+                _hermes_pid = os.getpid()
+                def _fire_sigusr1() -> None:
+                    try:
+                        _signal.raise_signal(_signal.SIGUSR1)  # type: ignore[attr-defined]
+                    except AttributeError:
+                        # Python < 3.8 or Windows fallback (should not fire here)
+                        os.kill(_hermes_pid, _signal.SIGUSR1)
+                    except Exception as _e:  # noqa: BLE001
+                        logger.warning("P38 SIGUSR1 raise 失败: %s", _e)
+                _loop.call_later(3.0, _fire_sigusr1)
+                logger.info(
+                    "P38 已排 SIGUSR1 3s 后自 restart (pid=%s) — hermes 原生 "
+                    "graceful drain + launchd KeepAlive 拉起, WeixinAdapter "
+                    "读新 .env credential. Modal 侧看 /health 通就 auto-close.",
+                    _hermes_pid,
+                )
+            else:
+                logger.info(
+                    "P38: signal.SIGUSR1 不存在 (Windows?), 员工需手动 "
+                    "'hermes gateway restart' 让新 credential 生效.",
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("P38 SIGUSR1 排程失败 (不阻塞, 员工需手动 restart): %s", e)
         return web.json_response({
             "status": "confirmed",
             "account_id": account_id,

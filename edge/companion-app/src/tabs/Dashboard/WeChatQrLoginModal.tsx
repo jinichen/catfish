@@ -19,22 +19,34 @@ import * as React from "react";
 import QRCode from "qrcode";
 
 import { wechatQrStart, wechatQrPoll, type QrPollStatus } from "../../lib/wechat_qr";
-import { hermesKill, hermesStatus } from "../../lib/tauri";
+import { config } from "../../lib/env";
 
-// P3.5.198.h 一并根治 (7/8 鸿波军规审判):
-//   hermes.rs probe_healthz 里 URL 走 `/healthz`, 但 hermes v0.18 (api_server.py:
-//   4519-4521) 只有 `/health` + `/v1/health`, 没有 `/healthz`. 已改 hermes.rs
-//   commands/hermes.rs:probe_healthz → /health, 一处修完, 全局 hermes_status
-//   Tauri command 都正确了 (Dashboard 服务状态栏 + P32 auto-restart 都受益).
+// P3.5.201 (P38): Modal 侧不再 invoke Rust hermes_kill. plugin.py P38 已排
+// asyncio 3s 后 SIGUSR1 → hermes drain + exit → launchd 拉起. Modal 只做
+// 显进度: 3.5s 后 poll /health 直到通 (最多 45s), 通了显 healthy auto-close.
+//
+// /health 直接 fetch, bypass Rust hermes_status. api_server.py:1157 handler
+// 无 _check_auth 保护, 匿名 GET 即可. hermes 断线期 catch swallow, poll 继续
+// 到看到 200 为止.
+async function probeHermesHealth(): Promise<boolean> {
+  try {
+    const base = config.backendUrl.replace(/\/+$/, "");
+    const r = await fetch(`${base}/health`, { method: "GET" });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
 
 interface Props {
   onClose: () => void;
   onConfirmed: (info: { account_id: string; user_id: string }) => void;
 }
 
+// P3.5.201: 砍了 killing 状态 (hermes plugin.py P38 自己 SIGUSR1, Modal 不
+// 主动 kill). 只保留 idle → waiting → healthy/timeout.
 type RestartPhase =
   | { kind: "idle" }
-  | { kind: "killing" }
   | { kind: "waiting" }
   | { kind: "healthy" }
   | { kind: "timeout" };
@@ -53,7 +65,13 @@ type Phase =
 
 const POLL_INTERVAL_MS = 2000;
 const HERMES_HEALTHZ_POLL_MS = 1000;
-const HERMES_HEALTHZ_TIMEOUT_MS = 20_000;
+// P3.5.200 (P37 7/8 鸿波 从时间实测锁): hermes 冷启动 (被 kill 后 launchd
+// 501 recovery + Python 大量 import + gateway 绑 8642) 员工 mac 上实测
+// 20+ 秒. warm 环境 (fs cache 热) 只需 3 秒, 但 P32 场景就是冷启动. 20s
+// deadline 卡在临界 (hermes P36 log fire 时 TCP 端口还没绑起来 curl /health
+// 返 000). 45s 足够 hermes 冷启动 + 8642 绑 + /health 200 全流程 +
+// 留 buffer. UX 上员工看 loading 45s 也可接受 (比出错重来快).
+const HERMES_HEALTHZ_TIMEOUT_MS = 45_000;
 
 export default function WeChatQrLoginModal({ onClose, onConfirmed }: Props) {
   const [phase, setPhase] = React.useState<Phase>({ kind: "loading" });
@@ -133,46 +151,41 @@ export default function WeChatQrLoginModal({ onClose, onConfirmed }: Props) {
     return () => window.clearInterval(handle);
   }, [phase, onConfirmed]);
 
-  // P3.5.198.g (7/8 鸿波军规审判 — P32): confirmed 后立即自动 kill hermes 让
-  // launchd 拉起新进程用 P31 同步过的 .env 里最新 credential.
+  // P3.5.201 (P38 7/8 鸿波军规审判 — 撤 P32-P37 中间层):
   //
-  // # 真因 (7/8 06:xx audit 5 credentials 全部 Session expired 后严格审出)
+  // # 老路径的错
   //
-  // ilink 侧 bot_token 有短期 idle timeout (估计 5-10 min). P30 落盘 + P31
-  // sync .env 之后, 如果员工不立刻 restart hermes, credential 在盘上悬挂 15 min+
-  // 就被 ilink 侧作废. 5/7 和 5/23 老 credential 都是 hermes qr_login CLI 生成
-  // 时立即 WeixinAdapter 就用 (`.context-tokens.json` 15-22 min 内出现证据链),
-  // 但今天 5 个新 credential 全都没 `.context-tokens.json` — 都被员工手动
-  // restart 之前的窗口耗死.
+  // P32-P37 让 Companion 在 Modal 侧 invoke Rust `hermes_kill` → pgrep + kill -9
+  // + `sh -lc 'hermes gateway start'` + poll `/health` 20s→45s. 8 段代码, 3 层
+  // 依赖 (Rust command / shell PATH / launchd 501 recovery). 员工反馈"是不是把
+  // 问题搞复杂了".
   //
-  // # P32 强制立刻切换 credential
+  // # hermes 原生就有 SIGUSR1 graceful restart (audit 结果)
   //
-  // 老 UX: 显 "🎉" + 1.8s auto-close (员工要自己开 terminal 敲 restart)
-  // 新 UX: 显 "🎉" → 立刻 invoke("hermes_kill") → launchd 拉起新 hermes 起来
-  //        (2-5s) → 前端 poll hermes_status.healthy 直到 true → 显示成功
-  //        → 1s 后 close.
+  // - gateway/run.py:19362-19364 gateway 注册 SIGUSR1 handler
+  // - gateway/run.py:5973 request_restart(via_service=True) drain in-flight
+  // - launchd `<KeepAlive>true</>` (员工机 plutil 验) 自动拉起
+  // - 员工机实测 kill -USR1 → 3s launchd 起新 PID
   //
-  // # 副作用
+  // # P38 新路径
   //
-  // hermes 被 kill 期间 (~3-8s), 员工正在跑的其他 chat/SSE/poll 会短暂断线.
-  // 这是必要副作用 — 员工扫码的目的就是切账号, 不切等于没扫. UI 明确提示.
+  // 1. plugin.py P30 confirmed → P31 sync .env → schedule asyncio 3s 后 SIGUSR1
+  // 2. hermes drain + exit → launchd 自动拉起 → 新 hermes 读新 .env
+  // 3. Modal 只做**显进度**: 收 confirmed → 显 "hermes 后台切换中" → poll
+  //    /health (直接 fetch, 不走 Rust) → 通了显 "✓ 切换完成" → auto-close
+  //
+  // Companion 从 hermes 生命周期主导者退回**观察者**. 装机零手动.
   //
   // # 边界
   //
-  // - hermes_kill 失败 (pgrep 找不到进程) → 显示错误, 不自动关 modal, 让员工
-  //   手动重启 (fallback 到荒唐路径, 但至少可用)
-  // - poll healthz 超时 (20s 内 hermes 起不来) → 显示"重启超时", 让员工检查
-  //   hermes log 手动处理
-  // - aliveRef: modal 提前关掉就中断 poll, 不 setState (防 unmount warning)
-  // P32 加固 (P3.5.198.i 7/8 鸿波 catch log 铁证 useEffect 没 fire):
-  //   老 useEffect deps 用 `phase.kind === "confirmed" ? phase.account_id : null`
-  //   三元表达式, eslint-disable 掉 exhaustive-deps 后 React 判等有微妙问题.
-  //   `setPhase({ ...phase, ... })` 里 phase 是 useEffect closure stale 值,
-  //   连续多次 setPhase 用同一份 stale phase 展开. 现在改双保险:
-  //     1. restartStartedRef 保证整个 modal 生命周期内 P32 flow 只跑一次
-  //     2. setPhase 全部用 functional updater (prev => ...) 拿 React 最新 state
-  //     3. deps 简化为 [phase.kind], 只在 loading/ready/confirmed/expired/error
-  //        之间切换时 fire
+  // 1. restartStartedRef 保证 Modal 生命周期内只跑一次
+  // 2. setPhase 用 functional updater 避 stale closure
+  // 3. hermes SIGUSR1 → drain in-flight (包括当前 confirmed 那个 request 的
+  //    response flush) → exit. 前端等 3-5s 就 poll 开始.
+  // 4. poll /health 直接 fetch (bypass Rust hermes_status /healthz bug, 反正
+  //    /health 无 auth 保护), catch 忽略 (hermes 断线期间连不上, 正常)
+  // 5. 45s 内 healthy → 显成功 auto-close. 否则显 "hermes 可能还在起, 检查
+  //    Dashboard 状态卡片" 不算失败, 员工可自己关.
   const restartStartedRef = React.useRef(false);
   React.useEffect(() => {
     if (phase.kind !== "confirmed") return;
@@ -180,47 +193,33 @@ export default function WeChatQrLoginModal({ onClose, onConfirmed }: Props) {
     restartStartedRef.current = true;
 
     (async () => {
-      // step 1: kill hermes → launchd 2-5s 自动拉起
       if (!aliveRef.current) return;
-      setPhase((prev) =>
-        prev.kind === "confirmed"
-          ? { ...prev, restart: { kind: "killing" } }
-          : prev,
-      );
-      try {
-        await hermesKill();
-      } catch (e) {
-        console.warn("[P32] hermes_kill 失败:", e);
-        if (!aliveRef.current) return;
-        setPhase((prev) =>
-          prev.kind === "confirmed"
-            ? { ...prev, restart: { kind: "timeout" } }
-            : prev,
-        );
-        return;
-      }
-      if (!aliveRef.current) return;
+      // 立即切 waiting — plugin.py P38 已排 3s SIGUSR1, hermes 后台开始 restart
       setPhase((prev) =>
         prev.kind === "confirmed"
           ? { ...prev, restart: { kind: "waiting" } }
           : prev,
       );
 
-      // step 2: poll hermes_status.healthy 直到通 (最多 20s). hermes.rs 里
-      // P3.5.198.h 已修 URL 从 /healthz → /health.
+      // 从收到 confirmed 到 hermes drain + exit + launchd 拉起 + 8642 绑好
+      // 通常 5-15 秒 (kill -USR1 → 3s launchd 拉起 → 5-10s python import).
+      // 前几秒 hermes 还没 exit /health 依然 200, 之后断线期 000, 再之后新 hermes
+      // 起来 200. poll 一直到看到 /health 200 为止 (不 track 中间断线).
+      //
+      // 但有个坑: hermes 没 exit 前 /health 一直 200, poll 立刻通然后 close
+      // — 员工其实还没切好账号. 加个 minWait 3.5s (>P38 排的 3s) 让 hermes
+      // 先 exit, 再开始 poll 才有意义.
+      await new Promise((r) => setTimeout(r, 3500));
+      if (!aliveRef.current) return;
+
       const deadline = Date.now() + HERMES_HEALTHZ_TIMEOUT_MS;
       let healthy = false;
       while (Date.now() < deadline) {
         if (!aliveRef.current) return;
         await new Promise((r) => setTimeout(r, HERMES_HEALTHZ_POLL_MS));
-        try {
-          const s = await hermesStatus();
-          if (s.healthy) {
-            healthy = true;
-            break;
-          }
-        } catch {
-          // hermes 还在起, 忽略 tick 继续 poll
+        if (await probeHermesHealth()) {
+          healthy = true;
+          break;
         }
       }
       if (!aliveRef.current) return;
@@ -230,10 +229,9 @@ export default function WeChatQrLoginModal({ onClose, onConfirmed }: Props) {
             ? { ...prev, restart: { kind: "healthy" } }
             : prev,
         );
-        // step 3: 给员工看 1s "已启用" 提示, 再 close
         window.setTimeout(() => {
           if (aliveRef.current) onClose();
-        }, 1000);
+        }, 1200);
       } else {
         setPhase((prev) =>
           prev.kind === "confirmed"
@@ -454,17 +452,15 @@ export default function WeChatQrLoginModal({ onClose, onConfirmed }: Props) {
               }}
             >
               {phase.restart.kind === "idle" && (
-                <span>准备重启 hermes 让 ClawBot 用新账号…</span>
-              )}
-              {phase.restart.kind === "killing" && (
-                <span>⏳ 正在停 hermes…</span>
+                <span>准备通知 hermes 切换到新账号…</span>
               )}
               {phase.restart.kind === "waiting" && (
                 <span>
-                  ⏳ hermes 正在起来 (通常 3–8 秒)…
+                  ⏳ hermes 后台切换账号中 (通常 10-30 秒)…
                   <br />
                   <span style={{ opacity: 0.7, fontSize: 11 }}>
-                    此期间 chat / 邮件 会短暂断线, 起来后自动恢复
+                    hermes 优雅 drain in-flight 请求 + launchd 自动拉起. chat
+                    可能短暂延迟, 起来后自动恢复.
                   </span>
                 </span>
               )}
@@ -474,12 +470,12 @@ export default function WeChatQrLoginModal({ onClose, onConfirmed }: Props) {
                 </span>
               )}
               {phase.restart.kind === "timeout" && (
-                <span style={{ color: "var(--status-err, #c93a3a)" }}>
-                  ⚠ 自动重启失败 / 超时 (20s).
+                <span style={{ color: "var(--status-warn, #c98b00)" }}>
+                  hermes 45s 内没探到健康, 可能还在起.
                   <br />
                   <span style={{ opacity: 0.85, fontSize: 11 }}>
-                    请手动敲 <code>hermes gateway stop && hermes gateway start</code>{" "}
-                    完成切换, 或查看 hermes log.
+                    Dashboard → 服务/配额 卡片看 hermes 状态. 极少数需要手动
+                    <code> hermes gateway restart</code> 强制重启.
                   </span>
                 </span>
               )}
