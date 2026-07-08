@@ -1277,64 +1277,29 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
   }
 }
 
-// ─── P3.3.40 BL-ADVISOR-RESOLVED-HARDFILTER ───────────────────────────
+// ─── P3.5.202 BL-ADVISOR-RESOLVED-HARDFILTER (LLM status 语义驱动) ─────
 //
-// 客户端 deterministic 后处理 — LLM 漏 §4.2 (BL-ADVISOR-RESOLVED-DROP) 时兜底.
-// LLM 不听话, 这里硬把 resolved task 移出 mainTasks → handledSilently.
+// 客户端 deterministic 后处理 — LLM 主 briefing 漏 §4.2 (BL-ADVISOR-RESOLVED-
+// DROP) 时兜底. 严格军规: 撤 P3.3.40 时代硬编码 regex keyword (5 条 summary +
+// 3 条 title regex), 换 LLM summarizeTaskChat 输出的 chatStatus 语义判定.
 //
-// 触发条件 (任一即可):
-//   1. prev task chatSummary 含 RESOLVED_KEYWORDS_RE 任一
-//   2. 当前 mainTask.title 含 RESOLVED_TITLE_RE 任一
+// 触发条件:
+//   chatStatus === "resolved" 或 "paused" → drop 挪去 handled_silently
 //
-// "已发邮件催了" / "等回复" 不算 resolved — 球还在员工手里, 仍放 main_tasks.
-
-/** chat summary 命中即视 task 已结案 — 员工已说"是误报"/"已签字"/"已发起审批" 等. */
-const RESOLVED_SUMMARY_PATTERNS: RegExp[] = [
-  // "已确认 ... 是误报 / 不存在 / 没有 / 不是 / 已撤销"
-  /已确认.*?(误报|不存在|没有|不是|已撤|无风险|已撤销|已结项)/,
-  // 误报 直接命中
-  /(是误报|属误报|误报修正|查证不存在|不存在.*待办|待办.*?不存在|不存在.*?预警)/,
-  // 显式 resolved 语
-  /(已结项|已 ?done|已处理完|已交付|已发出|已签字|已完成).*?(交付|审批|签字|发出|结项)?/,
-  // 已发起申请 + 审批中 (球已踢出去) — 中间 30 字内可含业务名 (e.g. "已发起加计扣除申请流程")
-  /已(发起|提交|递交)[\s\S]{0,30}?(申请|审批|流程|请示|报批|批复)/,
-  // 显式作废
-  /(不再有效|已作废|已撤回|确认无风险|已撤销)/,
-];
-
-/** title 命中关键字也强 — LLM 把"误报修正"写进 title 仍放 main_tasks, hard drop. */
-const RESOLVED_TITLE_PATTERNS: RegExp[] = [
-  /误报修正/,
-  /(是|属|为)误报/,
-  /已结项|已作废|已撤销|已撤回/,
-];
-
-function chatSummaryLooksResolved(summary: string): boolean {
-  if (!summary || summary.length < 4) return false;
-  return RESOLVED_SUMMARY_PATTERNS.some((re) => re.test(summary));
-}
-
-function titleLooksResolved(title: string): boolean {
-  if (!title) return false;
-  return RESOLVED_TITLE_PATTERNS.some((re) => re.test(title));
-}
+// 老 cache 迁移: cacheValid 判定加了 status 存在检查 (见 _ensureTaskChatSummaries
+// FreshImpl), 无 status 的老 hit 会强制重跑 LLM 生成新 status. 一次代价, 之后
+// 全干净. 不留 regex 兜底 — LLM JSON 出错 fallback pending 时保守放行, 员工
+// 顶多看一次已办完的事再说一遍, 下次 briefing 就有 status.
 
 function filterResolvedTasks(
   result: AdvisorResult,
   previousTasks: NonNullable<AdvisorInput["previousTasks"]>,
 ): AdvisorResult {
-  // build uid → {summary, status} map. status 是 P3.5.202 (C 方案) 新加语义
-  // 字段, 老 cache 没这字段 → undefined → 回退 regex 兜底.
-  const byUid = new Map<
-    string,
-    { summary: string; status: TaskChatStatus | undefined }
-  >();
+  // build uid → chatStatus map
+  const statusByUid = new Map<string, TaskChatStatus>();
   for (const pt of previousTasks) {
-    if (pt.taskUid) {
-      byUid.set(pt.taskUid, {
-        summary: pt.chatSummary ?? "",
-        status: pt.chatStatus,
-      });
+    if (pt.taskUid && pt.chatStatus) {
+      statusByUid.set(pt.taskUid, pt.chatStatus);
     }
   }
 
@@ -1342,29 +1307,12 @@ function filterResolvedTasks(
   const droppedTitles: string[] = [];
 
   for (const mt of result.mainTasks) {
-    const prev = byUid.get(mt.taskUid);
-    const prevSummary = prev?.summary ?? "";
-    const prevStatus = prev?.status;
-
-    // P3.5.202 主判定: LLM 语义 status. resolved / paused 都算 drop
-    // (resolved=办完, paused=员工主动搁置). pending=球在员工手里, keep.
-    const statusResolved = prevStatus === "resolved" || prevStatus === "paused";
-
-    // 兜底 (老 cache 没 status, 或 LLM 出错 fallback pending 时): regex 关键字.
-    // 军规: 硬编码 regex 长期不 sustainable, 但 backward compat 需要留.
-    const summaryResolved = !statusResolved && chatSummaryLooksResolved(prevSummary);
-    const titleResolved = !statusResolved && titleLooksResolved(mt.title);
-
-    if (statusResolved || summaryResolved || titleResolved) {
-      const reason = statusResolved
-        ? `LLM status='${prevStatus}'`
-        : summaryResolved && titleResolved
-          ? "summary+title regex 兜底"
-          : summaryResolved
-            ? "summary regex 兜底"
-            : "title regex 兜底";
+    const prevStatus = statusByUid.get(mt.taskUid);
+    // resolved = 员工说事已办完/交付/误报. paused = 员工主动搁置.
+    // 无 status (老 cache 未迁移 / 员工没聊过 / LLM 出错) = pending, 保守 keep.
+    if (prevStatus === "resolved" || prevStatus === "paused") {
       console.log(
-        `[advisor BL-ADVISOR-RESOLVED-HARDFILTER] drop ${mt.taskUid} "${mt.title}" (${reason})`,
+        `[advisor BL-ADVISOR-RESOLVED-HARDFILTER] drop ${mt.taskUid} "${mt.title}" (LLM status='${prevStatus}')`,
       );
       droppedTitles.push(mt.title);
       continue;
@@ -1894,8 +1842,13 @@ async function _ensureTaskChatSummariesFreshImpl(model: string): Promise<void> {
           }
 
           // cache 失效判断: 优先 messageCount 对比 (state.db), 没 messageCount 则 jsonlSize
+          // P3.5.202.b (7/9): 加 hit.status 存在检查 — 老 cache 无 status → 强制
+          // 重跑一次 LLM 生成 status, 一次代价, 之后 filter 全走语义驱动路径.
+          // 撤 regex 兜底后, 迁移完成前老 task 会被误保留在 mainTasks (无 status
+          // 走 pending 分支 keep), 但只影响一次 briefing 的显示, 员工可选择再
+          // 说一句 status 生成后不再推.
           const hit = cachedSummaries[t.taskUid];
-          const cacheValid = hit && hit.summary && (
+          const cacheValid = hit && hit.summary && hit.status !== undefined && (
             (typeof hit.messageCount === "number" && hit.messageCount === currentCount) ||
             (typeof hit.messageCount !== "number" && hit.jsonlSize === currentCount)
           );
@@ -2213,10 +2166,9 @@ function parseMainTask(t: Record<string, unknown>): MainTask | null {
 // ─── 测试 export — P3.3.40 ────────────────────────────────────────
 //
 // 单测拿这套出来跑, 生产代码不用.
+// P3.5.202.b (7/9): 撤 chatSummaryLooksResolved / titleLooksResolved /
+// RESOLVED_SUMMARY_PATTERNS / RESOLVED_TITLE_PATTERNS 4 个 regex 符号 —
+// C 方案 status 语义驱动后成 dead code. filterResolvedTasks 只用 status.
 export const __test__ = {
   filterResolvedTasks,
-  chatSummaryLooksResolved,
-  titleLooksResolved,
-  RESOLVED_SUMMARY_PATTERNS,
-  RESOLVED_TITLE_PATTERNS,
 };

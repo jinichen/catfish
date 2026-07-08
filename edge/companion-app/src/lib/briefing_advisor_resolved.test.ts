@@ -1,17 +1,18 @@
 /**
- * BL-ADVISOR-RESOLVED-HARDFILTER (P3.3.40) 单测.
+ * BL-ADVISOR-RESOLVED-HARDFILTER (P3.5.202 C 方案 7/9) 单测.
  *
  * 跑法: cd edge/companion-app && pnpm test briefing_advisor_resolved
  *
- * 这是 deterministic 客户端兜底 — 不依赖 LLM 听话. 红线:
- *   - chat summary 含"已确认是误报" / "不存在" → drop
- *   - chat summary 含"已签字" / "已结项" → drop
- *   - title 含 "误报修正" 即使 summary 没明说 → drop  (6/12 实际撞的 case)
- *   - chat summary 含"已发起申请等审批" → drop (球已踢给对方)
- *   - chat summary 含"已发邮件催" 没下文 → 仍保留 main_tasks
- *   - chat summary 空 + title 普通 → 仍保留
- *   - 多个 task 部分 drop, id 重排, handledSilently 追加
- *   - 模糊不命中时保守保留 — 错放 cost 小, 错 drop cost 大
+ * 撤 P3.3.40 时代 regex keyword hardcode 单测 (30+ 个 it 都是测硬编码关键字)
+ * — C 方案后 chatSummaryLooksResolved / titleLooksResolved / RESOLVED_*_PATTERNS
+ * 已从 briefing_advisor.ts 撤除.
+ *
+ * 现在的 filter 只看 chatStatus:
+ *   - resolved / paused → drop 挪去 handled_silently
+ *   - pending / undefined → 保守 keep 在 main_tasks (让 LLM 主判)
+ *
+ * 语义驱动, LLM 语言理解替 keyword regex. 边界 case 靠 summarizeTaskChat 的
+ * LLM prompt + JSON schema 强约束保证.
  */
 
 import { describe, expect, it } from "vitest";
@@ -22,135 +23,21 @@ import type {
   HandledSilentlyItem,
 } from "./briefing_advisor";
 
-const { chatSummaryLooksResolved, titleLooksResolved, filterResolvedTasks } =
-  __test__;
+const { filterResolvedTasks } = __test__;
 
-// ─── chatSummaryLooksResolved 单元 ────────────────────────────────
-
-describe("chatSummaryLooksResolved", () => {
-  it("空 summary → false", () => {
-    expect(chatSummaryLooksResolved("")).toBe(false);
-    expect(chatSummaryLooksResolved("   ")).toBe(false);
-  });
-
-  it("已确认是误报 → true", () => {
-    expect(
-      chatSummaryLooksResolved(
-        "员工已确认 5 封安全预警邮件不存在, 待办为误报",
-      ),
-    ).toBe(true);
-  });
-
-  it("已确认不存在 → true", () => {
-    expect(
-      chatSummaryLooksResolved("员工已确认该流程不存在, 不需要跟进"),
-    ).toBe(true);
-  });
-
-  it("是误报 直接命中 → true", () => {
-    expect(chatSummaryLooksResolved("查证后发现是误报, 不再跟进")).toBe(true);
-  });
-
-  it("属误报 → true", () => {
-    expect(chatSummaryLooksResolved("该预警属误报")).toBe(true);
-  });
-
-  it("已结项 → true", () => {
-    expect(chatSummaryLooksResolved("该项目已结项")).toBe(true);
-  });
-
-  it("已签字交付 → true", () => {
-    expect(
-      chatSummaryLooksResolved("黄捷已签字, 资质方案已交付给办公室"),
-    ).toBe(true);
-  });
-
-  it("已发起申请等审批 → true (球已踢给对方)", () => {
-    expect(
-      chatSummaryLooksResolved(
-        "员工已发起加计扣除申请流程, 当前等财务总监审批",
-      ),
-    ).toBe(true);
-  });
-
-  it("已提交流程等批复 → true", () => {
-    expect(
-      chatSummaryLooksResolved("已提交审批流程, 等待主管批复"),
-    ).toBe(true);
-  });
-
-  it("已发邮件催了等回复 → false (球还在员工手里, 不算 resolved)", () => {
-    expect(
-      chatSummaryLooksResolved("已发邮件催了对方, 还没收到回复"),
-    ).toBe(false);
-  });
-
-  it("讨论了一下还在拿不定主意 → false", () => {
-    expect(
-      chatSummaryLooksResolved("跟 AI 讨论了三个口径, 员工还在权衡"),
-    ).toBe(false);
-  });
-
-  it("不再有效 → true", () => {
-    expect(chatSummaryLooksResolved("该批文不再有效")).toBe(true);
-  });
-
-  it("已作废 → true", () => {
-    expect(chatSummaryLooksResolved("文件已作废, 不需要再处理")).toBe(true);
-  });
-
-  it("确认无风险 → true", () => {
-    expect(
-      chatSummaryLooksResolved("经过员工跟 AI 核查后确认无风险"),
-    ).toBe(true);
-  });
-});
-
-// ─── titleLooksResolved 单元 ──────────────────────────────────────
-
-describe("titleLooksResolved", () => {
-  it("空 title → false", () => {
-    expect(titleLooksResolved("")).toBe(false);
-  });
-
-  it("误报修正 (6/12 实际撞的 case) → true", () => {
-    expect(titleLooksResolved("6 月安全预警邮件督办 — 误报修正")).toBe(true);
-  });
-
-  it("是误报 → true", () => {
-    expect(titleLooksResolved("CSMM-4 评估事项 - 是误报")).toBe(true);
-  });
-
-  it("已结项 → true", () => {
-    expect(titleLooksResolved("中电福富立项 已结项")).toBe(true);
-  });
-
-  it("已作废 → true", () => {
-    expect(titleLooksResolved("资质方案 - 已作废")).toBe(true);
-  });
-
-  it("普通待办 → false", () => {
-    expect(titleLooksResolved("老李催资质方案范围")).toBe(false);
-  });
-
-  it("报告标题里有"报告"二字不算误报 → false", () => {
-    expect(titleLooksResolved("Q2 项目复盘报告撰写")).toBe(false);
-  });
-});
-
-// ─── filterResolvedTasks 整段 ─────────────────────────────────────
-
-function makeTask(
-  taskUid: string,
-  title: string,
-  overrides: Partial<MainTask> = {},
-): MainTask {
+// helper
+function mkResult(mainTasks: MainTask[]): AdvisorResult {
   return {
-    id: 1,
-    taskUid,
-    title,
+    tier: "mid",
+    mainTasks,
+    handledSilently: [],
+  };
+}
+
+function mkTask(overrides: Partial<MainTask> & { id: number; taskUid: string; title: string }): MainTask {
+  return {
     urgency: "medium",
-    reason: undefined,
+    reason: "",
     options: [],
     complianceFlags: [],
     politicalFlags: [],
@@ -159,179 +46,108 @@ function makeTask(
   };
 }
 
-function makeResult(
-  mainTasks: MainTask[],
-  handledSilently: HandledSilentlyItem[] = [],
-): AdvisorResult {
-  return { tier: "mid", mainTasks, handledSilently };
-}
+// ─── filterResolvedTasks 主逻辑 ────────────────────────────────────────
 
-describe("filterResolvedTasks", () => {
-  it("无 prev task → 原 result", () => {
-    const r = makeResult([
-      makeTask("aaa111", "正常任务"),
-      makeTask("bbb222", "另一任务"),
+describe("filterResolvedTasks — status 语义驱动 (P3.5.202 C 方案)", () => {
+  it("chatStatus='resolved' → drop, id 重排", () => {
+    const result = mkResult([
+      mkTask({ id: 1, taskUid: "aaa", title: "预警邮件处理" }),
+      mkTask({ id: 2, taskUid: "bbb", title: "季度汇报" }),
     ]);
-    const out = filterResolvedTasks(r, []);
-    expect(out.mainTasks).toHaveLength(2);
-    expect(out.handledSilently).toHaveLength(0);
-  });
-
-  it("6/12 实际撞 case — title 含'误报修正' → drop + 挪 handledSilently", () => {
-    const r = makeResult(
-      [
-        makeTask("a1b2c3", "6 月安全预警邮件督办 — 误报修正", {
-          id: 1,
-          urgency: "medium",
-        }),
-        makeTask("d4e5f6", "老李催资质方案", { id: 2, urgency: "high" }),
-      ],
-      [{ type: "email_archive", count: 5, category: "低优先归档" }],
-    );
     const prev = [
-      {
-        taskUid: "a1b2c3",
-        title: "6 月安全预警邮件督办",
-        urgency: "medium" as const,
-        chatSummary: "员工已确认 5 封安全预警邮件不存在, 待办为误报",
-      },
+      { taskUid: "aaa", title: "预警邮件处理", urgency: "medium", chatSummary: "员工说是误报", chatStatus: "resolved" as const },
+      { taskUid: "bbb", title: "季度汇报", urgency: "medium", chatSummary: "还在写", chatStatus: "pending" as const },
     ];
-    const out = filterResolvedTasks(r, prev);
-
-    // 误报 task 已 drop
+    const out = filterResolvedTasks(result, prev);
     expect(out.mainTasks).toHaveLength(1);
-    expect(out.mainTasks[0].taskUid).toBe("d4e5f6");
-    // id 重排成 1 (原 2)
-    expect(out.mainTasks[0].id).toBe(1);
-
-    // handledSilently 多了一条 task_resolved
-    expect(out.handledSilently).toHaveLength(2);
-    const resolved = out.handledSilently.find(
-      (h) => h.type === "task_resolved",
-    );
-    expect(resolved).toBeDefined();
-    expect(resolved!.count).toBe(1);
-    expect(resolved!.category).toContain("误报修正");
+    expect(out.mainTasks[0].taskUid).toBe("bbb");
+    expect(out.mainTasks[0].id).toBe(1);  // 重排
+    const dropped = out.handledSilently.find((h) => h.type === "task_resolved");
+    expect(dropped).toBeDefined();
+    expect(dropped!.category).toContain("预警邮件处理");
   });
 
-  it("summary 含'已签字' → drop", () => {
-    const r = makeResult([
-      makeTask("uid001", "资质方案签字推进", { id: 1 }),
-      makeTask("uid002", "其他任务", { id: 2 }),
+  it("chatStatus='paused' → drop (员工主动搁置)", () => {
+    const result = mkResult([
+      mkTask({ id: 1, taskUid: "ccc", title: "福建智能体企业征集" }),
     ]);
     const prev = [
-      {
-        taskUid: "uid001",
-        title: "资质方案签字推进",
-        urgency: "high" as const,
-        chatSummary: "黄捷已签字, 方案已交付给办公室",
-      },
+      { taskUid: "ccc", title: "福建智能体企业征集", urgency: "high", chatSummary: "员工说暂时关闭, 等通知", chatStatus: "paused" as const },
     ];
-    const out = filterResolvedTasks(r, prev);
-    expect(out.mainTasks).toHaveLength(1);
-    expect(out.mainTasks[0].taskUid).toBe("uid002");
-  });
-
-  it("summary 含'已发起申请等审批' → drop (球已踢出去)", () => {
-    const r = makeResult([
-      makeTask("uid003", "加计扣除申报", { id: 1 }),
-    ]);
-    const prev = [
-      {
-        taskUid: "uid003",
-        title: "加计扣除申报",
-        urgency: "medium" as const,
-        chatSummary: "员工已发起加计扣除申请流程, 当前等财务总监审批",
-      },
-    ];
-    const out = filterResolvedTasks(r, prev);
+    const out = filterResolvedTasks(result, prev);
     expect(out.mainTasks).toHaveLength(0);
-    expect(out.handledSilently).toHaveLength(1);
+    expect(out.handledSilently.some((h) => h.type === "task_resolved")).toBe(true);
   });
 
-  it("summary 含'已发邮件催了等回复' → 仍保留 (球还在员工手里)", () => {
-    const r = makeResult([
-      makeTask("uid004", "催老李回复", { id: 1 }),
+  it("chatStatus='pending' → keep (球在员工手里)", () => {
+    const result = mkResult([
+      mkTask({ id: 1, taskUid: "ddd", title: "催老李回复" }),
     ]);
     const prev = [
-      {
-        taskUid: "uid004",
-        title: "催老李回复",
-        urgency: "medium" as const,
-        chatSummary: "员工已发邮件催了老李, 还没收到回复",
-      },
+      { taskUid: "ddd", title: "催老李回复", urgency: "medium", chatSummary: "已发邮件催, 等回复", chatStatus: "pending" as const },
     ];
-    const out = filterResolvedTasks(r, prev);
+    const out = filterResolvedTasks(result, prev);
+    expect(out.mainTasks).toHaveLength(1);
+    expect(out.mainTasks[0].taskUid).toBe("ddd");
+  });
+
+  it("chatStatus undefined (老 cache 未迁移) → 保守 keep", () => {
+    // C 方案后 filter 不再有 regex 兜底, 无 status 一律保守 keep.
+    // 老 cache 会被 _ensureTaskChatSummariesFreshImpl 里 cacheValid 检查 status
+    // 强制重跑, 一次后就有 status 了.
+    const result = mkResult([
+      mkTask({ id: 1, taskUid: "eee", title: "误报修正 (LLM 老 hint)" }),
+    ]);
+    const prev = [
+      { taskUid: "eee", title: "误报修正 (LLM 老 hint)", urgency: "low", chatSummary: "已确认是误报", chatStatus: undefined },
+    ];
+    const out = filterResolvedTasks(result, prev);
+    // 无 status → keep (让 LLM 主判 or 员工再说一句触发新 summarize)
+    expect(out.mainTasks).toHaveLength(1);
+  });
+
+  it("多个 task 部分 drop, id 重排 1..N, handledSilently 追加", () => {
+    const result = mkResult([
+      mkTask({ id: 1, taskUid: "t1", title: "A 项目" }),
+      mkTask({ id: 2, taskUid: "t2", title: "B 项目 已办完" }),
+      mkTask({ id: 3, taskUid: "t3", title: "C 项目" }),
+      mkTask({ id: 4, taskUid: "t4", title: "D 项目 员工暂缓" }),
+    ]);
+    const prev = [
+      { taskUid: "t1", title: "A 项目", urgency: "high", chatSummary: "在做", chatStatus: "pending" as const },
+      { taskUid: "t2", title: "B 项目 已办完", urgency: "high", chatSummary: "已交付", chatStatus: "resolved" as const },
+      { taskUid: "t3", title: "C 项目", urgency: "medium", chatSummary: "还没聊", chatStatus: "pending" as const },
+      { taskUid: "t4", title: "D 项目 员工暂缓", urgency: "medium", chatSummary: "员工说先放放", chatStatus: "paused" as const },
+    ];
+    const out = filterResolvedTasks(result, prev);
+    expect(out.mainTasks).toHaveLength(2);
+    expect(out.mainTasks.map((t) => t.taskUid)).toEqual(["t1", "t3"]);
+    expect(out.mainTasks.map((t) => t.id)).toEqual([1, 2]);  // 1..N 重排
+    expect(out.handledSilently.filter((h) => h.type === "task_resolved")).toHaveLength(2);
+  });
+
+  it("空 previousTasks → 全部 keep", () => {
+    const result = mkResult([
+      mkTask({ id: 1, taskUid: "t1", title: "全新 task" }),
+    ]);
+    const out = filterResolvedTasks(result, []);
     expect(out.mainTasks).toHaveLength(1);
     expect(out.handledSilently).toHaveLength(0);
   });
 
-  it("正常 task summary 不命中 → 保留", () => {
-    const r = makeResult([
-      makeTask("uid005", "老李催资质方案", { id: 1 }),
+  it("匹配 taskUid 缺失 → 保守 keep (不误 drop)", () => {
+    const result = mkResult([
+      mkTask({ id: 1, taskUid: "unknown", title: "新 task" }),
     ]);
     const prev = [
-      {
-        taskUid: "uid005",
-        title: "老李催资质方案",
-        urgency: "high" as const,
-        chatSummary: "跟 AI 讨论了三个口径, 员工还在权衡 B 和 C",
-      },
+      { taskUid: "different", title: "另一个", urgency: "high", chatStatus: "resolved" as const },
     ];
-    const out = filterResolvedTasks(r, prev);
-    expect(out.mainTasks).toHaveLength(1);
-  });
-
-  it("多 task 部分 drop, id 重排连续", () => {
-    const r = makeResult([
-      makeTask("uid006", "task 1", { id: 1, urgency: "high" }),
-      makeTask("uid007", "task 2 - 误报修正", { id: 2, urgency: "medium" }), // title drop
-      makeTask("uid008", "task 3", { id: 3, urgency: "medium" }), // summary drop
-      makeTask("uid009", "task 4", { id: 4, urgency: "low" }),
-    ]);
-    const prev = [
-      {
-        taskUid: "uid008",
-        title: "task 3",
-        urgency: "medium" as const,
-        chatSummary: "已确认该流程不存在, 是误报",
-      },
-    ];
-    const out = filterResolvedTasks(r, prev);
-    expect(out.mainTasks).toHaveLength(2);
-    expect(out.mainTasks.map((t) => t.taskUid)).toEqual([
-      "uid006",
-      "uid009",
-    ]);
-    // id 重排成 1, 2
-    expect(out.mainTasks.map((t) => t.id)).toEqual([1, 2]);
-    // handledSilently 多了 2 条 (uid007 + uid008)
-    expect(
-      out.handledSilently.filter((h) => h.type === "task_resolved"),
-    ).toHaveLength(2);
-  });
-
-  it("没 prev summary 但 title 命中 → drop", () => {
-    // 此 case: LLM 自己生成的 title 就含"误报", 即使我们没 prev summary 也 drop
-    const r = makeResult([
-      makeTask("uid010", "Q1 安全审计 — 误报修正", { id: 1 }),
-    ]);
-    const out = filterResolvedTasks(r, []);
-    // 走的是 title 路径, prev 即使空也 drop
-    expect(out.mainTasks).toHaveLength(0);
-  });
-
-  it("保守原则 — 含'催'但没 resolved 信号 → 仍保留", () => {
-    const r = makeResult([makeTask("uid011", "继续催财务出报表")]);
-    const prev = [
-      {
-        taskUid: "uid011",
-        title: "继续催财务出报表",
-        urgency: "high" as const,
-        chatSummary: "员工准备明天再催一次",
-      },
-    ];
-    const out = filterResolvedTasks(r, prev);
+    const out = filterResolvedTasks(result, prev);
     expect(out.mainTasks).toHaveLength(1);
   });
 });
+
+// P3.3.40 时代那 30+ 个 regex 边界 case 单测已撤 — C 方案后 chatSummaryLooksResolved
+// / titleLooksResolved 从 __test__ export 撤出, 硬编码 keyword regex 全部
+// 从 briefing_advisor.ts 撤除. 语义边界由 summarizeTaskChat 的 LLM prompt
+// (P3.5.202 强 JSON schema) 保证, 不是客户端 regex 的活.
