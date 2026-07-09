@@ -517,6 +517,16 @@ class CatfishMemoryProvider(MemoryProvider):
         if expense_summary:
             sections.append(expense_summary)
 
+        # 1c. P3.5.203 (β 7/9 鸿波 5 层记忆 audit): task status 从 advisor_cache
+        # (P3.5.202 C 方案 taskChatSummaries.chatStatus) 拉过来, 让 chat /
+        # proactive / briefing 三处主 LLM 都拿到员工对具体事的最近表态.
+        # sparse mode (advisor) 也带 — advisor 自己走 filterResolvedTasks 用同款
+        # 数据, 但这里注入让主 LLM 在写 mainTasks 时就有语义信号, 不是 LLM 出完
+        # 再 client-side hard filter (双保险).
+        task_status = self._render_task_status(catfish_home)
+        if task_status:
+            sections.append(task_status)
+
         # P3.5.5 sparse: 下面 7 段是 advisor 不需要的 (employee_journal / wiki /
         #   skills_catalog / strategic_docs / feedback / skill_guard / schema 已上面跳过).
         #   advisor 自己 user prompt 已注入 distilled + memory + todos + emails 完整上下文.
@@ -899,6 +909,84 @@ class CatfishMemoryProvider(MemoryProvider):
         if raw.strip():
             return f"## 📝 员工长期日记 (catfish)\n\n{raw}"
         return ""
+
+    def _render_task_status(self, catfish_home: Path) -> str:
+        """P3.5.203 (β 7/9 鸿波): 从 ~/.catfish/advisor_cache.json 抽最近员工对
+        task 的 chatStatus (P3.5.202 C 方案 LLM 判定的 resolved / paused), 拼成
+        markdown 注入 system prompt.
+
+        5 层记忆 audit 后发现: briefing filter (advisor_cache.taskChatSummaries
+        + chatStatus) 已经 status 语义驱动, 但 chat / proactive starter 走 memory
+        provider prefetch (读 distilled_facts / journal), 拿不到 chatStatus. 员工
+        在早安不撞坑, 但平常聊天照样被 LLM 主动问已关闭的事. β 把 advisor_cache
+        里 status 桥到 prefetch, 让 chat 主入口也拿到.
+
+        跟 α (Dream 蒸馏加"任务状态"段) 双保险:
+          - α: 长期 (每 24h Dream 跑) 存 distilled_facts.md 里
+          - β: 短期 (员工聊完立即通过 advisor_cache refresh 时更新)
+          - chat / proactive / briefing 三处都拿得到 status, 无死角
+
+        输出格式对 LLM 友好, 明确 "尊重员工立场":
+
+          ## 🎯 员工最近对具体事的表态 (尊重不主动推)
+
+          - <title> (uid=xxx): resolved — 员工说事已办完/交付/确认误报
+          - <title> (uid=xxx): paused — 员工说暂时关闭/暂缓/先放放/等通知
+
+          请**不要**主动问这些事的进展, 员工已明确表态. pending 事不列 (默认可
+          问). 无数据 (advisor_cache 不存在 / 无 taskChatSummaries) 返空段.
+
+        性能: 每 turn read + parse JSON (~24 KB 大小, <2ms). 跟 employee_journal
+        同款 async prefetch 时机, 无额外 IO 开销. fail-silent 挂了返空.
+        """
+        cache_path = catfish_home / "advisor_cache.json"
+        if not cache_path.exists() or not cache_path.is_file():
+            return ""
+        try:
+            data = json.loads(cache_path.read_text(encoding="utf-8"))
+        except Exception as e:  # noqa: BLE001
+            logger.debug("catfish-memory: 读 advisor_cache.json 失败 (%s), skip task_status 段", e)
+            return ""
+
+        summaries = data.get("taskChatSummaries") or {}
+        if not isinstance(summaries, dict) or not summaries:
+            return ""
+
+        # main tasks title map: uid → title (advisor_cache 里 result.mainTasks 存)
+        result = data.get("result") or {}
+        main_tasks = result.get("mainTasks") if isinstance(result, dict) else None
+        title_by_uid: Dict[str, str] = {}
+        if isinstance(main_tasks, list):
+            for t in main_tasks:
+                if isinstance(t, dict):
+                    uid = t.get("taskUid")
+                    title = t.get("title")
+                    if isinstance(uid, str) and isinstance(title, str):
+                        title_by_uid[uid] = title
+
+        lines: List[str] = []
+        for uid, s in summaries.items():
+            if not isinstance(s, dict):
+                continue
+            status = s.get("status")
+            if status not in ("resolved", "paused"):
+                # pending / undefined 不列 — 默认可以问
+                continue
+            title = title_by_uid.get(uid) or s.get("title") or f"(uid={uid})"
+            hint = "员工说已办完/交付/确认误报" if status == "resolved" else "员工说暂时关闭/暂缓/先放放/等通知"
+            lines.append(f"- {title} (uid={uid}): {status} — {hint}")
+
+        if not lines:
+            return ""
+
+        return (
+            "## 🎯 员工最近对具体事的表态 (P3.5.203 尊重员工立场, 不主动推)\n\n"
+            + "\n".join(lines)
+            + "\n\n"
+            + "请**不要**主动问这些事的进展或催员工. 员工已明确表态: resolved = "
+            + "事已完结, paused = 员工主动搁置会自己回来找. pending 状态的事不在此段, "
+            + "默认可以聊."
+        )
 
     def _render_skills_catalog(
         self, catfish_home: Path, query: str = "",
