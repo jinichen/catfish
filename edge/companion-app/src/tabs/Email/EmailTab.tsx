@@ -395,9 +395,13 @@ export default function EmailTab() {
                 fontSize: 11,
                 padding: "2px 8px",
                 fontFamily: "inherit",
+                // P3.5.204.e (7/9 鸿波 catch "按钮上的图标不要了, 太浪费空间"):
+                // 左栏窄 (grid 1fr 主区拿大头), padding + emoji + 中文塞不下, 触发
+                // 换行 "新" ↵ "建". 删 emoji + nowrap 兜底, 未来 layout 变也不再换.
+                whiteSpace: "nowrap",
               }}
             >
-              ✏️ 新建
+              新建
             </button>
             {/* P3.5.204.c (7/9 鸿波 catch "客户端还没同步的邮件在鲶鱼里无法激活客户端去同步"):
                 "收信" 按钮触发 Apple Mail 立即 IMAP/POP fetch, 完了自动 refetch 列表.
@@ -422,9 +426,10 @@ export default function EmailTab() {
                 fontSize: 11,
                 padding: "2px 8px",
                 fontFamily: "inherit",
+                whiteSpace: "nowrap",  // P3.5.204.e: 同"新建", 防窄栏换行
               }}
             >
-              {syncing || loading ? "收信中…" : "📥 收信"}
+              {syncing || loading ? "收信中…" : "收信"}
             </button>
           </div>
           {/* toolbar: 只剩 仅未读 toggle. Mail.app 按钮 5/18 已删 (catfish 自己读完整, 不需要 bounce 出去) */}
@@ -566,7 +571,7 @@ export default function EmailTab() {
             }}
           >
             <div>👈 左边选一封邮件看详情</div>
-            <div style={{ fontSize: 11 }}>或 点顶部 ✏️ 新建 写一封新邮件</div>
+            <div style={{ fontSize: 11 }}>或 点顶部"新建"写一封新邮件</div>
           </div>
         )}
 
