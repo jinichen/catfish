@@ -14,6 +14,28 @@ tell application "System Events"
 end tell
 """
 
+# P3.5.204.c (7/9 鸿波 catch "邮件客户端还没同步的邮件, 在鲶鱼里面无法激活客户端去同步"):
+# tell Mail 主动 fetch new mail. Apple Mail 支持 `check for new mail` — 让 Mail
+# 立即去邮箱服务器拉一次新邮件, 不等定时同步 (通常 5-15 min 一次). 员工在 Companion
+# 里看不到新邮件时点"同步", 立即触发. 支持指定 account: 传 accountName 就只同步那个,
+# 空字符串同步全部账号.
+_AS_CHECK_NEW_MAIL = """
+tell application "Mail"
+    set accName to "{ACCOUNT}"
+    if accName is "" then
+        check for new mail
+    else
+        try
+            set acc to first account whose name of it is accName
+            check for new mail for acc
+        on error
+            check for new mail
+        end try
+    end if
+end tell
+return "ok"
+"""
+
 # BL-EMAIL-APPLEMAIL-AS-CTRLCHAR (5/18):
 #   - 老 f-string interpolate FS="\x1f"/RS="\x1e" 进 AS string literal → osascript -2741.
 #   - AS 里用 `character id 31` (modern, Mac 10.5+ ASCII character 替代品) 重建分隔符.
@@ -109,8 +131,49 @@ end tell
 -- iCloud/Gmail/Exchange/Outlook all name their inbox differently; try the common
 -- candidates one by one, fall back to literal name if not "Inbox".
 on resolveInbox(acc, wantName)
+    -- P3.5.204.c (7/9 鸿波 catch "回复过的邮件还是没有已回复标志"): 补 Sent/Drafts/
+    -- Trash/Junk alias. 老 handler 只处理 Inbox alias, 中文账号 Sent 名字是 "已发送"
+    -- 或 "Sent Messages", "Sent" 直接 mailbox 查找失败 → AppleScript error → CLI 返
+    -- 空 → sentItems 空 → repliedMap 空 → replied badge 不显. Foxmail adapter 侧已
+    -- 有 SENT_TITLES alias (foxmail_db.py:68), Apple Mail 侧漏了.
     if wantName is "Inbox" then
         set candidates to {"INBOX", "Inbox", "收件箱", "受信箱"}
+        repeat with cand in candidates
+            tell application "Mail"
+                try
+                    return mailbox (cand as string) of acc
+                end try
+            end tell
+        end repeat
+    else if wantName is "Sent" then
+        set candidates to {"Sent", "Sent Messages", "已发送", "已发送邮件", "已发送信件", "送信済み"}
+        repeat with cand in candidates
+            tell application "Mail"
+                try
+                    return mailbox (cand as string) of acc
+                end try
+            end tell
+        end repeat
+    else if wantName is "Drafts" then
+        set candidates to {"Drafts", "草稿", "草稿箱", "下書き"}
+        repeat with cand in candidates
+            tell application "Mail"
+                try
+                    return mailbox (cand as string) of acc
+                end try
+            end tell
+        end repeat
+    else if wantName is "Trash" then
+        set candidates to {"Trash", "Deleted Messages", "已删除", "已删除邮件", "废纸篓", "ゴミ箱"}
+        repeat with cand in candidates
+            tell application "Mail"
+                try
+                    return mailbox (cand as string) of acc
+                end try
+            end tell
+        end repeat
+    else if wantName is "Junk" then
+        set candidates to {"Junk", "Junk Mail", "Spam", "垃圾邮件", "迷惑メール"}
         repeat with cand in candidates
             tell application "Mail"
                 try
@@ -480,8 +543,49 @@ end tell
 -- BL-EMAIL-APPLEMAIL-INBOX-NAMES (5/18): same handler as _AS_LIST_MESSAGES; AS doesn't
 -- share handlers across osascript invocations so we repeat it.
 on resolveInbox(acc, wantName)
+    -- P3.5.204.c (7/9 鸿波 catch "回复过的邮件还是没有已回复标志"): 补 Sent/Drafts/
+    -- Trash/Junk alias. 老 handler 只处理 Inbox alias, 中文账号 Sent 名字是 "已发送"
+    -- 或 "Sent Messages", "Sent" 直接 mailbox 查找失败 → AppleScript error → CLI 返
+    -- 空 → sentItems 空 → repliedMap 空 → replied badge 不显. Foxmail adapter 侧已
+    -- 有 SENT_TITLES alias (foxmail_db.py:68), Apple Mail 侧漏了.
     if wantName is "Inbox" then
         set candidates to {"INBOX", "Inbox", "收件箱", "受信箱"}
+        repeat with cand in candidates
+            tell application "Mail"
+                try
+                    return mailbox (cand as string) of acc
+                end try
+            end tell
+        end repeat
+    else if wantName is "Sent" then
+        set candidates to {"Sent", "Sent Messages", "已发送", "已发送邮件", "已发送信件", "送信済み"}
+        repeat with cand in candidates
+            tell application "Mail"
+                try
+                    return mailbox (cand as string) of acc
+                end try
+            end tell
+        end repeat
+    else if wantName is "Drafts" then
+        set candidates to {"Drafts", "草稿", "草稿箱", "下書き"}
+        repeat with cand in candidates
+            tell application "Mail"
+                try
+                    return mailbox (cand as string) of acc
+                end try
+            end tell
+        end repeat
+    else if wantName is "Trash" then
+        set candidates to {"Trash", "Deleted Messages", "已删除", "已删除邮件", "废纸篓", "ゴミ箱"}
+        repeat with cand in candidates
+            tell application "Mail"
+                try
+                    return mailbox (cand as string) of acc
+                end try
+            end tell
+        end repeat
+    else if wantName is "Junk" then
+        set candidates to {"Junk", "Junk Mail", "Spam", "垃圾邮件", "迷惑メール"}
         repeat with cand in candidates
             tell application "Mail"
                 try

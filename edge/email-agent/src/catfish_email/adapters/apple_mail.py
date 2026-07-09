@@ -99,6 +99,7 @@ from .apple_mail_scripts import (
     _AS_LIST_MESSAGES,
     _AS_MARK_READ,
     _AS_PING,
+    _AS_CHECK_NEW_MAIL,
     _AS_SEARCH,
     _AS_SEND_MESSAGE,
 )
@@ -402,6 +403,26 @@ class AppleMailAdapter(EmailAdapter):
                 ),
             )
         return result
+
+    def check_new_mail(self, *, account: str | None = None) -> None:
+        """P3.5.204.c (7/9 鸿波): Apple Mail 触发立即从服务器 fetch new mail.
+
+        AppleScript `check for new mail` 让 Mail 立即去 IMAP/POP 服务器拉一次.
+        比等 Mail 定时同步 (5-15 min) 快. account 空 = 全账号同步; 指定就单账号.
+        """
+        if not _is_mail_running():
+            raise ClientNotRunningError(
+                "Apple Mail 没跑; 无法触发 check for new mail. "
+                "员工需要先启动 Mail 或让 Companion 里的 Mail 存在."
+            )
+        acct = self._resolve_account_name(account) if account else ""
+        script = _AS_CHECK_NEW_MAIL.replace("{ACCOUNT}", _escape_as_string(acct))
+        try:
+            _run_osascript(script, timeout=15)
+        except EmailAdapterError as e:
+            raise EmailAdapterError(
+                f"Apple Mail check for new mail 失败: {e}"
+            ) from e
 
     def read_message(self, message_id: str) -> Message:
         # BL-EMAIL-APPLEMAIL-FULL (5/18): EMLX id 优先走文件解析路径

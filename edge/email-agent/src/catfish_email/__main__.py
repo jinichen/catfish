@@ -79,6 +79,9 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_send(adapters, args)
     if args.cmd == "attachment":
         return _cmd_attachment(adapters, args)
+    # P3.5.204.c (7/9 鸿波): 触发客户端立即从服务器 fetch new mail
+    if args.cmd == "check":
+        return _cmd_check(adapters, args)
 
     parser.print_help()
     return 2
@@ -383,6 +386,52 @@ def _cmd_mark_read(adapters: list[EmailAdapter], args) -> int:
     return 3
 
 
+def _cmd_check(adapters: list[EmailAdapter], args) -> int:
+    """P3.5.204.c (7/9 鸿波 catch "客户端还没同步的邮件, 在鲶鱼里无法激活客户端去同步"):
+    触发客户端立即从服务器 fetch 新邮件.
+
+    account=None → 全部账号一起同步; 指定 → 只同步该账号.
+    每个 adapter try, 支持的执行, 不支持的 NotSupportedError 收集. 只要有一个成功
+    就返 0 (员工能理解: 至少一个客户端拉了一遍); 全失败返非 0.
+    """
+    from .adapters.base import NotSupportedError, ClientNotRunningError  # noqa: PLC0415
+
+    ok_names: list[str] = []
+    unsupported_names: list[str] = []
+    errs: list[tuple[str, str]] = []
+    for a in adapters:
+        try:
+            a.check_new_mail(account=args.account)
+            ok_names.append(a.name)
+        except NotSupportedError:
+            unsupported_names.append(a.name)
+        except ClientNotRunningError as e:
+            errs.append((a.name, f"客户端没在跑: {e}"))
+        except Exception as e:  # noqa: BLE001
+            errs.append((a.name, str(e)))
+
+    if args.json:
+        print(json.dumps(
+            {
+                "ok": len(ok_names) > 0,
+                "triggered": ok_names,
+                "unsupported": unsupported_names,
+                "errors": [{"adapter": n, "msg": m} for n, m in errs],
+                "account": args.account or "(all)",
+            },
+            ensure_ascii=False,
+        ))
+    else:
+        if ok_names:
+            print(f"✓ 已触发同步 ({', '.join(ok_names)}). 等 3-10 秒等客户端拉完.")
+        if unsupported_names:
+            print(f"⚠ {', '.join(unsupported_names)} 不支持触发同步 (需手动 refresh)")
+        for name, msg in errs:
+            print(f"✗ [{name}] {msg}")
+
+    return 0 if ok_names else 4
+
+
 def _cmd_delete(adapters: list[EmailAdapter], args) -> int:
     """5/18 BL-EMAIL-DELETE: 移邮件到客户端 Trash 文件夹 (软删).
 
@@ -656,6 +705,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("-v", "--verbose", action="store_true", help="打开 INFO 日志")
 
     sub = p.add_subparsers(dest="cmd", required=False)
+
+    # P3.5.204.c (7/9): check — 触发客户端立即从服务器 fetch new mail
+    pc = sub.add_parser("check", help="触发客户端立即从邮箱服务器 fetch 新邮件 (不等定时同步)")
+    pc.add_argument("--account", help="账号地址 (默认全部账号一起同步)")
+    pc.add_argument("--json", action="store_true", default=True)
+    pc.add_argument("--human", dest="json", action="store_false")
 
     # accounts
     pa = sub.add_parser("accounts", help="列所有邮箱账号")

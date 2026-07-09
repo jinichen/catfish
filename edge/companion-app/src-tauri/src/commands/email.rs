@@ -77,6 +77,42 @@ pub async fn email_digest_fetch(limit: Option<u32>) -> Result<String, String> {
     Ok(stdout)
 }
 
+/// P3.5.204.c (7/9 鸿波 catch "客户端还没同步的邮件, 在鲶鱼里无法激活客户端去同步"):
+/// 触发客户端立即从邮箱服务器 fetch 新邮件. 员工在 Companion 看不到新邮件时点
+/// 刷新按钮, 立即触发 catfish-email check 让 Apple Mail 去 IMAP/POP 拉一次.
+/// account 空 = 全账号同步; 指定 = 只同步该账号.
+#[tauri::command]
+pub async fn email_check_new(account: Option<String>) -> Result<String, String> {
+    let bin = find_catfish_email().ok_or_else(|| {
+        "catfish-email CLI 没装".to_string()
+    })?;
+
+    let mut args = vec!["check".to_string(), "--json".to_string()];
+    if let Some(a) = account.as_ref() {
+        if !a.trim().is_empty() {
+            args.push("--account".to_string());
+            args.push(a.trim().to_string());
+        }
+    }
+
+    let out = Command::new(&bin)
+        .args(&args)
+        .output()
+        .map_err(|e| format!("catfish-email check 调用失败: {e}"))?;
+
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    // check 返 0 表示至少一个 adapter 触发成功; 非 0 表示全失败 (stderr 有信息).
+    if !out.status.success() && stdout.trim().is_empty() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("email check 退出码 {:?}", out.status.code())
+        } else {
+            stderr
+        });
+    }
+    Ok(stdout)
+}
+
 /// 拉邮件列表 (all, 不只 unread). EmailTab 邮件 tab 完整 inbox 浏览用.
 /// unread_only=true → 只未读 (跟 step1 简报卡同行为); =false → 全部 (已读 + 未读混)
 ///

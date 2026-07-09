@@ -22,6 +22,7 @@ import {
   emailListFetch,
   emailReadMessage,
   emailAccountsFetch,
+  emailCheckNew,                  // P3.5.204.c (7/9 鸿波): 触发客户端 IMAP/POP fetch
   emailClassifyNow,
   emailPhishingScanNow,           // P3.3.58 段 2B (6/12 鸿波)
   emailPoliticalGet,              // P3.3.53.2 (6/13 鸿波): list 仅查已扫
@@ -116,6 +117,26 @@ export default function EmailTab() {
 
   useEffect(() => {
     void loadList();
+  }, [loadList]);
+
+  // P3.5.204.c (7/9 鸿波 catch "客户端还没同步的邮件在鲶鱼里无法激活客户端去同步"):
+  // "收信" 按钮 — 先触发客户端 IMAP/POP fetch (catfish-email check), 拉完再 loadList.
+  // check 出错 best-effort (Foxmail 不支持 / 网络不通) → 不阻断 loadList, 让员工至少
+  // 能看到当前 DB 里的邮件.
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const handleCheckNew = useCallback(async () => {
+    setSyncing(true);
+    setSyncError(null);
+    try {
+      await emailCheckNew();
+    } catch (e) {
+      setSyncError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSyncing(false);
+      // check 完 (无论成败) 立即 refetch, 让新拉到的邮件立即入列表.
+      void loadList();
+    }
   }, [loadList]);
 
   // 5/18 BL-EMAIL-URGENCY-BADGE: 列表加载完后主动评级所有未评 id.
@@ -378,11 +399,35 @@ export default function EmailTab() {
             >
               ✏️ 新建
             </button>
+            {/* P3.5.204.c (7/9 鸿波 catch "客户端还没同步的邮件在鲶鱼里无法激活客户端去同步"):
+                "收信" 按钮触发 Apple Mail 立即 IMAP/POP fetch. ⟳ 只重刷 DB, 收信才拉服务器. */}
+            <button
+              type="button"
+              onClick={() => void handleCheckNew()}
+              disabled={syncing || loading}
+              title={
+                syncError
+                  ? `上次收信失败: ${syncError} (点再试一次)`
+                  : "让邮件客户端立即从邮箱服务器收取新邮件, 再刷新列表"
+              }
+              style={{
+                background: syncError ? "rgba(200, 80, 80, 0.10)" : "transparent",
+                border: `1px solid ${syncError ? "rgba(200, 80, 80, 0.35)" : "var(--catfish-border)"}`,
+                borderRadius: 4,
+                color: syncError ? "rgb(200, 80, 80)" : "var(--catfish-text-muted)",
+                cursor: syncing || loading ? "wait" : "pointer",
+                fontSize: 11,
+                padding: "2px 8px",
+                fontFamily: "inherit",
+              }}
+            >
+              {syncing ? "收信中…" : "📥 收信"}
+            </button>
             <button
               type="button"
               onClick={() => void loadList()}
               disabled={loading}
-              title="重新同步"
+              title="重新读一遍本地邮件 DB (不触发客户端从邮箱服务器拉新邮件, 需要拉新邮件请点 📥 收信)"
               style={{
                 background: "transparent",
                 border: "1px solid var(--catfish-border)",

@@ -231,6 +231,25 @@ class EmailAdapter(ABC):
             - Foxmail: 全 box 扫一遍 subject/sender/body 简单 substring
         """
 
+    def check_new_mail(self, *, account: str | None = None) -> None:
+        """P3.5.204.c (7/9 鸿波 catch "客户端还没同步的邮件, 在鲶鱼里无法激活客户端去同步"):
+        触发客户端立即去邮箱服务器拉一次新邮件, 不等定时同步 (通常 5-15 min 一次).
+
+        - account=None → 全部账号一起同步 (Apple Mail: 'check for new mail' 无参)
+        - account='xxx' → 只同步指定账号 (Apple Mail: 'check for new mail for acc')
+
+        默认实现 raise NotSupportedError. Apple Mail 实现 (AppleScript
+        `check for new mail`); Foxmail 用 activate + 期待员工手动按 F5
+        (原生 CLI 无 fetch trigger). Outlook 后期补.
+
+        Raises:
+            NotSupportedError: adapter 不支持
+            ClientNotRunningError: 客户端没在跑
+        """
+        raise NotSupportedError(
+            f"{self.name} 不支持 check_new_mail. 员工需要手动在客户端里 refresh."
+        )
+
     def export_attachment(self, message_id: str, filename: str) -> "Path":
         """导出邮件附件到本地 tmp 文件, 返 Path. 给"附件能点"前端用.
 

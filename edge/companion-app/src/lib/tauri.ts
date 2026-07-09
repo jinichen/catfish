@@ -1064,6 +1064,11 @@ export const emailListFetch = (unreadOnly: boolean, limit?: number, folder?: str
   });
 export const emailReadMessage = (id: string) =>
   rawInvoke<string>("email_read_message", { id });
+// P3.5.204.c (7/9 鸿波 catch "客户端还没同步的邮件在鲶鱼里无法激活客户端去同步"):
+// 触发 catfish-email check → Apple Mail 立即 IMAP/POP fetch. EmailTab 刷新按钮
+// 先 check 再 refetch. account 空 = 全账号.
+export const emailCheckNew = (account?: string) =>
+  rawInvoke<string>("email_check_new", { account: account ?? null });
 // BL-EMAIL-MARK-READ (5/18): 单独标已读 / 反向标未读. CLI read 默认已自动标,
 // 这个 wrapper 是给右键 "标已读" / 批量场景用 (不读正文).
 export const emailMarkRead = (id: string, read: boolean = true) =>
