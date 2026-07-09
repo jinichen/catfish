@@ -1110,18 +1110,12 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
       await ensureTaskChatSummariesFresh(input.model).catch((e) => {
         console.warn("[advisor] P3.3.46 await ensureSummary 失败 (降级用 stale):", e);
       });
-      const { advisorCacheGet, advisorTaskStateGet } = await import("./advisor_cache");
+      const { advisorCacheGet } = await import("./advisor_cache");
       const cached = await advisorCacheGet();
-      // P3.5.207 (7/9 鸿波): 拿 taskState 并入 previousTasks, 供 filterResolvedTasks
-      // merged 判定. 失败 fallback 空 map (不阻断整个 briefing).
-      let taskStateToday: Record<string, { status: TaskStatus }> = {};
-      try {
-        const ts = await advisorTaskStateGet();
-        taskStateToday = ts?.today ?? {};
-      } catch (e) {
-        console.warn("[advisor] P3.5.207 拉 taskState 失败 (降级不看卡片按钮):", e);
-      }
       if (cached && cached.result?.mainTasks?.length > 0) {
+        // P3.5.208-A (7/9 鸿波): SSOT 单源. manualStatus 跟 chatStatus 已合到
+        // 同一份 taskChatSummaries[uid], 不再单独拉 advisorTaskStateGet.
+        // 老 taskState.json 已被 AdvisorView 启动时 migrate 到 taskChatSummaries.
         const summaries = cached.taskChatSummaries ?? {};
         const enriched = cached.result.mainTasks
           .filter((t) => typeof t.taskUid === "string" && t.taskUid.length > 0)
@@ -1130,13 +1124,12 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
             title: t.title,
             urgency: t.urgency,
             chatSummary: summaries[t.taskUid]?.summary ?? "",
-            // P3.5.202 (C 方案): 透传 LLM 判定的 status 到 filterResolvedTasks.
-            // 老 cache summaries[uid] 没 status 字段 → undefined → filter 回退 regex 兜底.
+            // P3.5.202 (C 方案): LLM 判定的 chat 语义 status.
             chatStatus: summaries[t.taskUid]?.status,
-            // P3.5.207 (7/9 鸿波): 塞员工卡片按钮的 taskState. taskState 用 title
-            // 作 key (backend 现设计), chatStatus 用 taskUid — 两条来源 key 不同,
-            // 这里合成同一条 previousTask entry 给 filter.
-            taskState: taskStateToday[t.title]?.status,
+            // P3.5.208-A (7/9 鸿波): 员工卡片按钮点的 manualStatus, 跟 chatStatus
+            // 存同一份 (SSOT). 老代码字段名叫 taskState 保持不变 (对下游 filter
+            // 侧接口无 breaking change, 只是 backend 存储 source 换了).
+            taskState: summaries[t.taskUid]?.manualStatus,
           }));
         if (enriched.length > 0) {
           inputWithPrev = { ...input, previousTasks: enriched };

@@ -43,6 +43,14 @@ export interface TaskChatSummary {
   messageCount?: number;
   /** ISO-8601, summary 算出来的时刻. */
   computedAt: string;
+  /** P3.5.208-A (7/9 鸿波 catch 'view-side merge 不是真 SSOT'): 员工卡片按钮
+   *  显式点的状态 (done/snoozed/ignored). 之前存独立 taskState.json (key=title),
+   *  跟 chatStatus 各存各的, 违 SSOT. 合到这里 (key=taskUid) 作**同一份存储**,
+   *  跟 status (LLM 推断) 各占一字段, 读取时 mergeTaskStatus 判 effective.
+   *  老 taskState.json 保留作 legacy fallback + migration source, 双写过渡期. */
+  manualStatus?: TaskStatus;
+  /** ISO-8601, manualStatus 设置的时刻. */
+  manualStatusTs?: string;
 }
 
 export interface AdvisorConfig {
@@ -109,6 +117,78 @@ export function mergeTaskStatus(
   if (chatStatus === "resolved") return "resolved";
   if (chatStatus === "paused") return "paused";
   return "pending";
+}
+
+// ── P3.5.208-A (7/9 鸿波): 存储层 SSOT 合并到 taskChatSummaries ──
+// 之前 (P3.5.207) 只做 view-side merge, 存储仍双源. 现在 taskState 迁到
+// taskChatSummaries[uid].manualStatus, 跟 chatStatus (LLM 推断) 同一存储.
+// 老 taskState.json 双写保留过渡期, 后续 (P3.5.209) 删.
+
+/** P3.5.208-A: 存储读取的**唯一**入口. 遍历 taskChatSummaries 返 uid →
+ *  effective 的 map. 所有 UI / filter 都该走这个 selector, 不许 raw 读
+ *  cache.taskChatSummaries[uid].manualStatus 或 chatStatusByUid.get(uid).
+ *  这个 helper 保证读取语义单调. */
+export function getEffectiveStatusByUid(
+  cache: AdvisorCache | null,
+): Map<string, EffectiveTaskStatus> {
+  const m = new Map<string, EffectiveTaskStatus>();
+  const sums = cache?.taskChatSummaries;
+  if (!sums) return m;
+  for (const [uid, s] of Object.entries(sums)) {
+    const eff = mergeTaskStatus(s?.manualStatus, s?.status);
+    if (eff !== "pending") m.set(uid, eff);
+  }
+  return m;
+}
+
+/** P3.5.208-A: 员工卡片按钮点 → 写 manualStatus 到 taskChatSummaries.
+ *  内部 load-modify-save, race 概率极低 (员工点按钮频率 < 1/s + P3.4.C
+ *  atomic write). null = 清除 manualStatus (撤销).
+ *
+ *  P3.5.208-A 过渡期兼容: 同时 call advisorTaskStateSet/Clear 双写老
+ *  taskState.json, 让所有老 code path 仍能读到. P3.5.209 (后续) 彻底切换
+ *  时删双写 + 迁移最后一批老数据. */
+export async function setTaskManualStatus(
+  taskUid: string,
+  taskTitle: string,
+  status: TaskStatus | null,
+): Promise<void> {
+  // 1) 双写老 taskState.json (兼容期). 失败不阻断新写.
+  try {
+    if (status === null) await advisorTaskStateClear(taskTitle);
+    else await advisorTaskStateSet(taskTitle, status);
+  } catch (e) {
+    console.warn(
+      "[P3.5.208-A setTaskManualStatus] 双写老 taskState 失败 (不阻断新写):",
+      e,
+    );
+  }
+
+  // 2) 主写新 taskChatSummaries[uid].manualStatus
+  const cache = await advisorCacheGet();
+  if (!cache) {
+    console.warn(
+      "[P3.5.208-A setTaskManualStatus] 无 advisorCache, manualStatus 只存到 " +
+        "老 taskState. 下次 advisor refresh 后 cache 会补上.",
+    );
+    return;
+  }
+  const sums: Record<string, TaskChatSummary> = cache.taskChatSummaries ?? {};
+  const entry = sums[taskUid] ?? {
+    summary: "",
+    jsonlSize: 0,
+    computedAt: new Date().toISOString(),
+  };
+  if (status === null) {
+    delete entry.manualStatus;
+    delete entry.manualStatusTs;
+  } else {
+    entry.manualStatus = status;
+    entry.manualStatusTs = new Date().toISOString();
+  }
+  sums[taskUid] = entry;
+  cache.taskChatSummaries = sums;
+  await advisorCacheSave(cache);
 }
 
 export const advisorTaskStatePruneOld = () =>

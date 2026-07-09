@@ -19,10 +19,11 @@ import {
   advisorTaskStatePruneOld,
   cacheAgeMinutes,
   didCrossRefreshTime,
+  getEffectiveStatusByUid,          // P3.5.208-A: SSOT selector
   isCacheFresh,
   type AdvisorCache,
   type AdvisorConfig,
-  type TaskChatStatus,
+  type EffectiveTaskStatus,          // P3.5.208-A
   type TaskStateFetch,
 } from "../../lib/advisor_cache";  // P3.5.32.9 (6/18): nextRefreshAfter 不再 import — 老 RefreshInfo 函数砍, 用方挪去 components/RefreshInfo.tsx 自管
 import {
@@ -86,12 +87,12 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
     today: {},
     yesterdaySnoozed: [],
   });
-  /** P3.5.207 (7/9 鸿波 catch "早安卡片跟 chat 讨论修改的待办无法同步"):
-   *  chat 语义 status (LLM 从 task_chat/<uid>.jsonl 判 resolved/paused/pending),
-   *  key = taskUid. 派生自 advisorCache.taskChatSummaries[uid].status.
-   *  BriefingTwoColumnView 用 mergeTaskStatus(taskState, chatStatus) 合并出
-   *  effective, sidebar 徽章 + action 按钮判定统一走 effective. */
-  const [chatStatusByUid, setChatStatusByUid] = useState<Map<string, TaskChatStatus>>(new Map());
+  /** P3.5.208-A (7/9 鸿波 catch 'view-side merge 不是真 SSOT'):
+   *  effectiveStatusByUid 是 selector 派生的**唯一**读取入口. UI 不再直接读
+   *  taskState.today[title] 或 taskChatSummaries[uid].status raw 值.
+   *  存储侧 SSOT: taskChatSummaries[uid] 同时含 manualStatus (员工点按钮)
+   *  + status (LLM chat 语义), selector 合并出 effective 传给子组件. */
+  const [effectiveStatusByUid, setEffectiveStatusByUid] = useState<Map<string, EffectiveTaskStatus>>(new Map());
 
   // 5/22 鸿波: 启动时拉今日任务状态 + 清旧 (>7d)
   useEffect(() => {
@@ -101,31 +102,62 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
     void advisorTaskStatePruneOld().catch(() => {});  // 7d 前的旧记录清掉, 失败无所谓
   }, [refreshKey]);
 
-  // P3.5.207 (7/9 鸿波): result 变化后, 从 advisorCache.taskChatSummaries 派生
-  // chatStatusByUid, 传给 BriefingTwoColumnView 合并 taskState → effective.
-  // result 更新链: setResult (5 处) → useEffect 触发 → advisorCacheGet 重读.
-  // 不侵入 setResult 调用点, 只监听 result. ensureTaskChatSummariesFresh 后台
-  // 完成写入 cache 后也不会自动 trigger 这里 — 但没关系, refreshKey 或下次
-  // setResult 会带上. 视觉 lag 15s 内可接受.
+  // P3.5.208-A (7/9 鸿波): SSOT selector. result 变化后从 advisorCache 派生
+  // effectiveStatusByUid, 传给 BriefingTwoColumnView. cache.taskChatSummaries
+  // 里 status (LLM 判) + manualStatus (员工点按钮) 已合并到同一存储, selector
+  // 只是暴露一个只读 view.
+  //
+  // Migration (P3.5.208-A 过渡期): 若老 taskState.json 有数据但 taskChatSummaries
+  // 里 manualStatus 空, 用 result.mainTasks 反查 title→uid 补写 manualStatus,
+  // 一次性 save. 老 taskState 保留作 legacy fallback.
   useEffect(() => {
     let cancelled = false;
     if (!result) {
-      setChatStatusByUid(new Map());
+      setEffectiveStatusByUid(new Map());
       return;
     }
-    void advisorCacheGet().then((c) => {
-      if (cancelled) return;
-      const m = new Map<string, TaskChatStatus>();
-      const sums = c?.taskChatSummaries ?? {};
-      for (const [uid, s] of Object.entries(sums)) {
-        if (s?.status) m.set(uid, s.status);
+    void (async () => {
+      try {
+        const cache = await advisorCacheGet();
+        if (cancelled) return;
+        // 一次性 migration: 老 taskState → taskChatSummaries[uid].manualStatus
+        let migrated = false;
+        if (cache && result.mainTasks?.length > 0 && taskState.today) {
+          const sums = cache.taskChatSummaries ?? {};
+          for (const t of result.mainTasks) {
+            const legacyStatus = taskState.today[t.title]?.status;
+            const existing = sums[t.taskUid];
+            // 老 taskState 有 + 新 manualStatus 空 → 补写 (不覆盖已有 manualStatus,
+            // 若员工在 P3.5.208-A 之后又点过按钮, manualStatus 已由 setTaskManualStatus
+            // 写入, 不重复覆盖)
+            if (legacyStatus && (!existing || existing.manualStatus == null)) {
+              sums[t.taskUid] = existing ?? {
+                summary: "",
+                jsonlSize: 0,
+                computedAt: new Date().toISOString(),
+              };
+              sums[t.taskUid].manualStatus = legacyStatus;
+              sums[t.taskUid].manualStatusTs = taskState.today[t.title].ts;
+              migrated = true;
+            }
+          }
+          if (migrated) {
+            cache.taskChatSummaries = sums;
+            await advisorCacheSave(cache);
+            console.log(
+              "[P3.5.208-A migration] 老 taskState → taskChatSummaries.manualStatus 补写完",
+            );
+          }
+        }
+        // 派生 effective map (走 SSOT selector, 迁移后 cache 已是最新)
+        setEffectiveStatusByUid(getEffectiveStatusByUid(cache));
+      } catch (e) {
+        console.warn("[P3.5.208-A] 派生 effectiveStatus 挂:", e);
+        setEffectiveStatusByUid(new Map());
       }
-      setChatStatusByUid(m);
-    }).catch(() => {
-      // 失败降级空 map (BriefingTwoColumnView chatStatusByUid=undefined → merged 只看 taskState)
-    });
+    })();
     return () => { cancelled = true; };
-  }, [result, refreshKey]);
+  }, [result, refreshKey, taskState]);
 
   const urgencyMap = useEmailStore((s) => s.urgencyMap);
   const model = useChatStore((s) => s.model);
@@ -459,7 +491,7 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
             graveyard={result.graveyard ?? []}
             blindSpots={result.blindSpots ?? []}
             taskState={taskState}
-            chatStatusByUid={chatStatusByUid}
+            effectiveStatusByUid={effectiveStatusByUid}
             wasSnoozedYesterday={(title) => taskState.yesterdaySnoozed.includes(title)}
             onStatusChange={(title, newStatus) => {
               // 切状态后本地立刻反映 (不等下次 refresh)

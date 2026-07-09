@@ -17,11 +17,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  advisorTaskStateClear,
-  advisorTaskStateSet,
-  mergeTaskStatus,
+  setTaskManualStatus,               // P3.5.208-A: SSOT write helper
   type EffectiveTaskStatus,
-  type TaskChatStatus,
   type TaskStateFetch,
   type TaskStatus,
 } from "../../../lib/advisor_cache";
@@ -84,11 +81,13 @@ interface BriefingTwoColumnViewProps {
   subconscious: SubconsciousItem[];
   graveyard: GraveyardItem[];
   blindSpots: BlindSpotItem[];
+  /** P3.5.208-A 过渡期保留 taskState prop (老 taskState.json 双写兼容 + 兜底 yesterdaySnoozed). */
   taskState: TaskStateFetch;
-  /** P3.5.207 (7/9 鸿波 catch "早安卡片跟 chat 讨论修改的待办无法同步"):
-   *  chat 语义 status (LLM 判 resolved/paused/pending), key = taskUid.
-   *  跟 taskState.today[title] 合并成 effective 判定. optional 兼容老 caller. */
-  chatStatusByUid?: Map<string, TaskChatStatus>;
+  /** P3.5.208-A (7/9 鸿波 catch 'view-side merge 不是真 SSOT'):
+   *  effectiveStatusByUid 是 SSOT selector 派生的**只读** map (key=taskUid).
+   *  UI 判徽章 + action 按钮 disabled 全走这个, 不再直接读 taskState.today[title]
+   *  或 chatStatusByUid raw 值 — 保证读取语义单调, 单一 source. */
+  effectiveStatusByUid?: Map<string, EffectiveTaskStatus>;
   wasSnoozedYesterday: (title: string) => boolean;
   onStatusChange: (taskTitle: string, status: TaskStatus | null) => void;
 }
@@ -108,7 +107,7 @@ export default function BriefingTwoColumnView({
   graveyard,
   blindSpots,
   taskState,
-  chatStatusByUid,
+  effectiveStatusByUid,
   wasSnoozedYesterday,
   onStatusChange,
 }: BriefingTwoColumnViewProps) {
@@ -181,11 +180,10 @@ export default function BriefingTwoColumnView({
                 {meta.label} · {items.length}
               </div>
               {items.map((t) => {
-                // P3.5.207 (7/9 鸿波): sidebar 徽章用 merged 判定 (卡片按钮 ∨ chat 语义).
-                // 之前只看 taskState → 员工在 chat 里说"关了", sidebar 卡还亮着.
-                const taskStateStatus = taskState.today[t.title]?.status as TaskStatus | undefined;
-                const chatStatus = chatStatusByUid?.get(t.taskUid);
-                const effective: EffectiveTaskStatus = mergeTaskStatus(taskStateStatus, chatStatus);
+                // P3.5.208-A (7/9 鸿波): SSOT 读取. effectiveStatusByUid 是唯一
+                // 读取入口, 不再自己 merge. 空 map → 视为 pending (默认无徽章).
+                const effective: EffectiveTaskStatus =
+                  effectiveStatusByUid?.get(t.taskUid) ?? "pending";
                 const isSelected = t.id === selectedId;
                 return (
                   <button
@@ -242,9 +240,13 @@ export default function BriefingTwoColumnView({
           <DetailPane
             key={selected.id}
             task={selected}
-            /* P3.5.207: 传原始 taskState + chatStatus 让 DetailPane 内部 merged 判定. */
-            taskStateStatus={(taskState.today[selected.title]?.status ?? null) as TaskStatus | null}
-            chatStatus={chatStatusByUid?.get(selected.taskUid)}
+            /* P3.5.208-A: 直接传 effective, DetailPane 不再自 merge (SSOT selector 已算过).
+                statusFromChat 用 taskState.today 反推 (老 taskState 有 = 卡片按钮点的; 无 = chat 里 LLM 判的). */
+            effective={effectiveStatusByUid?.get(selected.taskUid) ?? "pending"}
+            statusFromChat={
+              (effectiveStatusByUid?.get(selected.taskUid) ?? "pending") !== "pending"
+                && taskState.today[selected.title]?.status == null
+            }
             wasSnoozedYesterday={wasSnoozedYesterday(selected.title)}
             onStatusChange={(s) => onStatusChange(selected.title, s)}
           />
@@ -263,27 +265,20 @@ export default function BriefingTwoColumnView({
 
 function DetailPane({
   task,
-  taskStateStatus,
-  chatStatus,
+  effective,
+  statusFromChat,
   wasSnoozedYesterday,
   onStatusChange,
 }: {
   task: MainTask;
-  // P3.5.207: 拆成两路 (老 prop `status` 已废): taskStateStatus (卡片按钮点的)
-  // + chatStatus (LLM 判 chat 语义). 内部用 mergeTaskStatus 合并出 effective
-  // 给徽章 + action 按钮判定. 但 handleStatusChange 仍只写 taskState (chatStatus
-  // 由 LLM 每次 briefing refresh 重算, 不能手动写).
-  taskStateStatus: TaskStatus | null;
-  chatStatus?: TaskChatStatus;
+  // P3.5.208-A: props 从 SSOT selector 传下来的 effective + statusFromChat 视觉标.
+  // DetailPane 不再 merge (parent 已算), 也不再关心 raw taskState/chatStatus.
+  effective: EffectiveTaskStatus;
+  statusFromChat: boolean;
   wasSnoozedYesterday: boolean;
   onStatusChange: (s: TaskStatus | null) => void;
 }) {
-  // P3.5.207: effective 判定
-  const status: EffectiveTaskStatus = mergeTaskStatus(
-    taskStateStatus ?? undefined,
-    chatStatus,
-  );
-  const statusFromChat = status !== "pending" && taskStateStatus == null;  // 视觉提示: 是 chat 里说完的, 不是员工点按钮点完的
+  const status = effective;
   const accent =
     task.urgency === "high" ? "#c2410c" :
     task.urgency === "medium" ? "#a16207" : "#6b7280";
@@ -682,9 +677,12 @@ function DetailPane({
 
   const handleStatusChange = async (s: TaskStatus | null) => {
     setBackendError(null);
+    // P3.5.208-A: 走 setTaskManualStatus SSOT write helper. 内部同时写
+    // taskChatSummaries[uid].manualStatus (新 SSOT) + 老 taskState (过渡期
+    // 兼容, 直到 P3.5.209 删双写). 员工看不出差异, 但 briefing filter
+    // 下次跑时读的是 taskChatSummaries.manualStatus (单源).
     try {
-      if (s === null) await advisorTaskStateClear(task.title);
-      else await advisorTaskStateSet(task.title, s);
+      await setTaskManualStatus(task.taskUid, task.title, s);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setBackendError(`状态没存 (Rust 后端没 build?): ${msg.slice(0, 100)}`);
