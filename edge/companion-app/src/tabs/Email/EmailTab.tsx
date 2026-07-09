@@ -49,6 +49,12 @@ const MAX_EMAIL_LIST_LIMIT = 500;
 
 export default function EmailTab() {
   const [items, setItems] = useState<EmailDigestItem[]>([]);
+  // P3.5.204.b (7/9): Sent (已发送) 邮件独立存. 只用于 isReplied 判定 (员工回
+  // 复过的邮件 in_reply_to 指向 Inbox 里被回复邮件的 message_id, R.in_reply_to
+  // 检索需要 R 在 list 里, 但 R 存 Sent 不在 Inbox items → repliedMap 永远返
+  // false → replied badge 显示不出来). 不合并进 items (列表还是显 Inbox), 只
+  // 拿来算 repliedMap.
+  const [sentItems, setSentItems] = useState<EmailDigestItem[]>([]);
   const [accounts, setAccounts] = useState<EmailAccountItem[]>([]);
   // BL-COMPANION-EMAIL-DIGEST-STEP5 (5/20): urgencyMap 走 useEmailStore
   // (localStorage hydrate + Rust reconcile + 跨 tab 共享, 不再 local useState).
@@ -78,7 +84,7 @@ export default function EmailTab() {
     setLoading(true);
     setError(null);
     try {
-      const [listJson, accountsJson, _urgency] = await Promise.all([
+      const [listJson, sentJson, accountsJson, _urgency] = await Promise.all([
         // P3.5.58 Phase 3 (6/22 鸿波 catch "邮件数量没有 100, 为什么一直显示
         // 100, 是不是硬编码了"): 真因 — 之前硬编码 limit=100, INBOX ≥100 封时
         // items.length 永远 100, header 显"100 封"实是被 cap 截了不告诉 user.
@@ -86,6 +92,9 @@ export default function EmailTab() {
         // 5x. 一般员工 INBOX < 500 封, 真能看见全量. ≥500 时 header 显"500+"
         // 提示 user 真值被截 (见 headerSummary).
         emailListFetch(unreadOnly, MAX_EMAIL_LIST_LIMIT),
+        // P3.5.204.b (7/9): 并行拉 Sent (最近 200 封), 只用于 isReplied 数据源.
+        // 出错不阻塞 (Sent 拉不到只影响 replied badge, 不影响主流程) → catch 空数组.
+        emailListFetch(false, 200, "Sent").catch(() => "[]"),
         emailAccountsFetch().catch(() => "[]"),
         // BL-COMPANION-EMAIL-DIGEST-STEP5: 走 store.reconcileFromRust 后台拉,
         // setUrgencyMap 不再这里调 — store 内部自己 merge + 持久化
@@ -93,8 +102,10 @@ export default function EmailTab() {
       ]);
       void _urgency;
       const list = JSON.parse(listJson);
+      const sent = JSON.parse(sentJson);
       const accs = JSON.parse(accountsJson);
       if (Array.isArray(list)) setItems(list as EmailDigestItem[]);
+      if (Array.isArray(sent)) setSentItems(sent as EmailDigestItem[]);
       if (Array.isArray(accs)) setAccounts(accs as EmailAccountItem[]);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -205,17 +216,23 @@ export default function EmailTab() {
   // P3.5.204 (7/9 鸿波 catch "回复过的邮件怎么没有标志"):
   // isReplied 算法 (P3.5.58 6/22) 已经存在, DetailPane 也在用, 但 ListItem
   // 没读 → 员工在左侧列表看不到"已回复"提示, 必须点开邮件看右侧详情才知道.
-  // 一次 O(N²) 算全表 repliedMap 传给每 ListItem O(1) 读. 用 items (不是
-  // filteredItems) 算, 保证搜索/筛选后仍能看到 replied 状态 (回复邮件可能在
-  // 搜索结果外).
+  //
+  // P3.5.204.b (7/9): 用 items.concat(sentItems) 算. Sent 邮件是员工回信的
+  // R (in_reply_to 指向 Inbox 里被回复邮件的 message_id), 只有 Sent 也在 list
+  // 里 isReplied 才能匹配到. items 仅 Inbox → replied badge 从来显不出来 —
+  // 之前 P3.5.204 半吊子的原因. 用 sentItems 补数据源.
+  //
+  // 一次 O((N+S)²) 算全表 repliedMap 传给每 ListItem O(1) 读. Sent 只用于算
+  // 法, 不显在列表.
   const repliedMap = useMemo(() => {
+    const combined = items.concat(sentItems);
     const m = new Map<string, boolean>();
     for (const it of items) {
-      const r = isReplied(it, items);
+      const r = isReplied(it, combined);
       if (r.replied) m.set(it.id, true);
     }
     return m;
-  }, [items]);
+  }, [items, sentItems]);
 
   // 选邮件 → 拉全文
   useEffect(() => {

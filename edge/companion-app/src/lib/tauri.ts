@@ -1054,8 +1054,14 @@ export const emailDigestFetch = (limit?: number) =>
 export const emailAccountsFetch = () =>
   rawInvoke<string>("email_accounts_fetch");
 // BL-COMPANION-EMAIL-TAB (5/18): 邮件 tab 用的全列表 + 读单封 + 起草 + 评级 map.
-export const emailListFetch = (unreadOnly: boolean, limit?: number) =>
-  rawInvoke<string>("email_list_fetch", { unreadOnly, limit: limit ?? null });
+// P3.5.204.b (7/9): folder 参数支持 (默认 Inbox, EmailTab 传 "Sent" 拉发件箱
+// 补 isReplied 数据源, 让 replied badge 能对回复过的收件邮件正确显示).
+export const emailListFetch = (unreadOnly: boolean, limit?: number, folder?: string) =>
+  rawInvoke<string>("email_list_fetch", {
+    unreadOnly,
+    limit: limit ?? null,
+    folder: folder ?? null,
+  });
 export const emailReadMessage = (id: string) =>
   rawInvoke<string>("email_read_message", { id });
 // BL-EMAIL-MARK-READ (5/18): 单独标已读 / 反向标未读. CLI read 默认已自动标,

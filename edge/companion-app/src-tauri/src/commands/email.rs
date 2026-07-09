@@ -79,8 +79,17 @@ pub async fn email_digest_fetch(limit: Option<u32>) -> Result<String, String> {
 
 /// 拉邮件列表 (all, 不只 unread). EmailTab 邮件 tab 完整 inbox 浏览用.
 /// unread_only=true → 只未读 (跟 step1 简报卡同行为); =false → 全部 (已读 + 未读混)
+///
+/// P3.5.204.b (7/9 鸿波 catch "回复过的邮件还是看不到已回复标志"): 加 folder
+/// 参数支持. 老默认 "Inbox" — EmailTab 拉 items 只有收件箱, isReplied 算法找
+/// R.in_reply_to 时 R (回复邮件, 存 Sent 已发送) 不在 list 里, 判定永远 false.
+/// 员工传 folder=Sent 单独拉 Sent 邮件, 合并 items+sentItems 算 repliedMap.
 #[tauri::command]
-pub async fn email_list_fetch(unread_only: bool, limit: Option<u32>) -> Result<String, String> {
+pub async fn email_list_fetch(
+    unread_only: bool,
+    limit: Option<u32>,
+    folder: Option<String>,
+) -> Result<String, String> {
     let bin = find_catfish_email().ok_or_else(|| {
         "catfish-email CLI 没装. 装: cd ~/person_task/catfish/edge/email-agent && bash install.sh"
             .to_string()
@@ -90,6 +99,12 @@ pub async fn email_list_fetch(unread_only: bool, limit: Option<u32>) -> Result<S
     let mut args = vec!["list".to_string(), "--json".to_string()];
     if unread_only {
         args.push("--unread".to_string());
+    }
+    if let Some(f) = folder.as_ref() {
+        if !f.trim().is_empty() {
+            args.push("--folder".to_string());
+            args.push(f.trim().to_string());
+        }
     }
     args.push("--limit".to_string());
     args.push(n.to_string());
