@@ -400,7 +400,10 @@ export default function EmailTab() {
               ✏️ 新建
             </button>
             {/* P3.5.204.c (7/9 鸿波 catch "客户端还没同步的邮件在鲶鱼里无法激活客户端去同步"):
-                "收信" 按钮触发 Apple Mail 立即 IMAP/POP fetch. ⟳ 只重刷 DB, 收信才拉服务器. */}
+                "收信" 按钮触发 Apple Mail 立即 IMAP/POP fetch, 完了自动 refetch 列表.
+                P3.5.204.d (7/9 鸿波 catch "有了收信按钮, 为什么还刷新, 不是冗余吗"):
+                之前留的 ⟳ 只重刷 DB, 是"收信"的严格子集 (收信 = check + refetch).
+                两个按钮让员工二选一制造决策疲劳, 违背军规极简原则. 删 ⟳, 只留收信. */}
             <button
               type="button"
               onClick={() => void handleCheckNew()}
@@ -421,25 +424,7 @@ export default function EmailTab() {
                 fontFamily: "inherit",
               }}
             >
-              {syncing ? "收信中…" : "📥 收信"}
-            </button>
-            <button
-              type="button"
-              onClick={() => void loadList()}
-              disabled={loading}
-              title="重新读一遍本地邮件 DB (不触发客户端从邮箱服务器拉新邮件, 需要拉新邮件请点 📥 收信)"
-              style={{
-                background: "transparent",
-                border: "1px solid var(--catfish-border)",
-                borderRadius: 4,
-                color: "var(--catfish-text-muted)",
-                cursor: loading ? "wait" : "pointer",
-                fontSize: 11,
-                padding: "2px 8px",
-                fontFamily: "inherit",
-              }}
-            >
-              {loading ? "…" : "⟳"}
+              {syncing || loading ? "收信中…" : "📥 收信"}
             </button>
           </div>
           {/* toolbar: 只剩 仅未读 toggle. Mail.app 按钮 5/18 已删 (catfish 自己读完整, 不需要 bounce 出去) */}
