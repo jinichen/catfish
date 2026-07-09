@@ -22,6 +22,7 @@ import {
   isCacheFresh,
   type AdvisorCache,
   type AdvisorConfig,
+  type TaskChatStatus,
   type TaskStateFetch,
 } from "../../lib/advisor_cache";  // P3.5.32.9 (6/18): nextRefreshAfter 不再 import — 老 RefreshInfo 函数砍, 用方挪去 components/RefreshInfo.tsx 自管
 import {
@@ -85,6 +86,12 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
     today: {},
     yesterdaySnoozed: [],
   });
+  /** P3.5.207 (7/9 鸿波 catch "早安卡片跟 chat 讨论修改的待办无法同步"):
+   *  chat 语义 status (LLM 从 task_chat/<uid>.jsonl 判 resolved/paused/pending),
+   *  key = taskUid. 派生自 advisorCache.taskChatSummaries[uid].status.
+   *  BriefingTwoColumnView 用 mergeTaskStatus(taskState, chatStatus) 合并出
+   *  effective, sidebar 徽章 + action 按钮判定统一走 effective. */
+  const [chatStatusByUid, setChatStatusByUid] = useState<Map<string, TaskChatStatus>>(new Map());
 
   // 5/22 鸿波: 启动时拉今日任务状态 + 清旧 (>7d)
   useEffect(() => {
@@ -93,6 +100,32 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
     });
     void advisorTaskStatePruneOld().catch(() => {});  // 7d 前的旧记录清掉, 失败无所谓
   }, [refreshKey]);
+
+  // P3.5.207 (7/9 鸿波): result 变化后, 从 advisorCache.taskChatSummaries 派生
+  // chatStatusByUid, 传给 BriefingTwoColumnView 合并 taskState → effective.
+  // result 更新链: setResult (5 处) → useEffect 触发 → advisorCacheGet 重读.
+  // 不侵入 setResult 调用点, 只监听 result. ensureTaskChatSummariesFresh 后台
+  // 完成写入 cache 后也不会自动 trigger 这里 — 但没关系, refreshKey 或下次
+  // setResult 会带上. 视觉 lag 15s 内可接受.
+  useEffect(() => {
+    let cancelled = false;
+    if (!result) {
+      setChatStatusByUid(new Map());
+      return;
+    }
+    void advisorCacheGet().then((c) => {
+      if (cancelled) return;
+      const m = new Map<string, TaskChatStatus>();
+      const sums = c?.taskChatSummaries ?? {};
+      for (const [uid, s] of Object.entries(sums)) {
+        if (s?.status) m.set(uid, s.status);
+      }
+      setChatStatusByUid(m);
+    }).catch(() => {
+      // 失败降级空 map (BriefingTwoColumnView chatStatusByUid=undefined → merged 只看 taskState)
+    });
+    return () => { cancelled = true; };
+  }, [result, refreshKey]);
 
   const urgencyMap = useEmailStore((s) => s.urgencyMap);
   const model = useChatStore((s) => s.model);
@@ -426,6 +459,7 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
             graveyard={result.graveyard ?? []}
             blindSpots={result.blindSpots ?? []}
             taskState={taskState}
+            chatStatusByUid={chatStatusByUid}
             wasSnoozedYesterday={(title) => taskState.yesterdaySnoozed.includes(title)}
             onStatusChange={(title, newStatus) => {
               // 切状态后本地立刻反映 (不等下次 refresh)

@@ -19,6 +19,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   advisorTaskStateClear,
   advisorTaskStateSet,
+  mergeTaskStatus,
+  type EffectiveTaskStatus,
+  type TaskChatStatus,
   type TaskStateFetch,
   type TaskStatus,
 } from "../../../lib/advisor_cache";
@@ -82,6 +85,10 @@ interface BriefingTwoColumnViewProps {
   graveyard: GraveyardItem[];
   blindSpots: BlindSpotItem[];
   taskState: TaskStateFetch;
+  /** P3.5.207 (7/9 鸿波 catch "早安卡片跟 chat 讨论修改的待办无法同步"):
+   *  chat 语义 status (LLM 判 resolved/paused/pending), key = taskUid.
+   *  跟 taskState.today[title] 合并成 effective 判定. optional 兼容老 caller. */
+  chatStatusByUid?: Map<string, TaskChatStatus>;
   wasSnoozedYesterday: (title: string) => boolean;
   onStatusChange: (taskTitle: string, status: TaskStatus | null) => void;
 }
@@ -101,6 +108,7 @@ export default function BriefingTwoColumnView({
   graveyard,
   blindSpots,
   taskState,
+  chatStatusByUid,
   wasSnoozedYesterday,
   onStatusChange,
 }: BriefingTwoColumnViewProps) {
@@ -173,7 +181,11 @@ export default function BriefingTwoColumnView({
                 {meta.label} · {items.length}
               </div>
               {items.map((t) => {
-                const status = taskState.today[t.title]?.status as TaskStatus | undefined;
+                // P3.5.207 (7/9 鸿波): sidebar 徽章用 merged 判定 (卡片按钮 ∨ chat 语义).
+                // 之前只看 taskState → 员工在 chat 里说"关了", sidebar 卡还亮着.
+                const taskStateStatus = taskState.today[t.title]?.status as TaskStatus | undefined;
+                const chatStatus = chatStatusByUid?.get(t.taskUid);
+                const effective: EffectiveTaskStatus = mergeTaskStatus(taskStateStatus, chatStatus);
                 const isSelected = t.id === selectedId;
                 return (
                   <button
@@ -182,15 +194,15 @@ export default function BriefingTwoColumnView({
                     className={
                       "briefing-2col__task-row" +
                       (isSelected ? " briefing-2col__task-row--selected" : "") +
-                      (status === "done" ? " briefing-2col__task-row--done" : "") +
-                      (status === "snoozed" ? " briefing-2col__task-row--snoozed" : "")
+                      (effective === "resolved" ? " briefing-2col__task-row--done" : "") +
+                      (effective === "paused" ? " briefing-2col__task-row--snoozed" : "")
                     }
                     style={isSelected ? { background: meta.bg, borderLeftColor: meta.color } : undefined}
                     onClick={() => setSelectedId(t.id)}
                   >
                     <div className="briefing-2col__task-title">
-                      {status === "done" && "✓ "}
-                      {status === "snoozed" && "⏰ "}
+                      {effective === "resolved" && "✓ "}
+                      {effective === "paused" && "⏰ "}
                       {t.title}
                     </div>
                     {t.reason && (
@@ -230,7 +242,9 @@ export default function BriefingTwoColumnView({
           <DetailPane
             key={selected.id}
             task={selected}
-            status={(taskState.today[selected.title]?.status ?? null) as TaskStatus | null}
+            /* P3.5.207: 传原始 taskState + chatStatus 让 DetailPane 内部 merged 判定. */
+            taskStateStatus={(taskState.today[selected.title]?.status ?? null) as TaskStatus | null}
+            chatStatus={chatStatusByUid?.get(selected.taskUid)}
             wasSnoozedYesterday={wasSnoozedYesterday(selected.title)}
             onStatusChange={(s) => onStatusChange(selected.title, s)}
           />
@@ -249,15 +263,27 @@ export default function BriefingTwoColumnView({
 
 function DetailPane({
   task,
-  status,
+  taskStateStatus,
+  chatStatus,
   wasSnoozedYesterday,
   onStatusChange,
 }: {
   task: MainTask;
-  status: TaskStatus | null;
+  // P3.5.207: 拆成两路 (老 prop `status` 已废): taskStateStatus (卡片按钮点的)
+  // + chatStatus (LLM 判 chat 语义). 内部用 mergeTaskStatus 合并出 effective
+  // 给徽章 + action 按钮判定. 但 handleStatusChange 仍只写 taskState (chatStatus
+  // 由 LLM 每次 briefing refresh 重算, 不能手动写).
+  taskStateStatus: TaskStatus | null;
+  chatStatus?: TaskChatStatus;
   wasSnoozedYesterday: boolean;
   onStatusChange: (s: TaskStatus | null) => void;
 }) {
+  // P3.5.207: effective 判定
+  const status: EffectiveTaskStatus = mergeTaskStatus(
+    taskStateStatus ?? undefined,
+    chatStatus,
+  );
+  const statusFromChat = status !== "pending" && taskStateStatus == null;  // 视觉提示: 是 chat 里说完的, 不是员工点按钮点完的
   const accent =
     task.urgency === "high" ? "#c2410c" :
     task.urgency === "medium" ? "#a16207" : "#6b7280";
@@ -692,8 +718,18 @@ function DetailPane({
           {wasSnoozedYesterday && (
             <span className="briefing-2col__badge-warn">⏰ 昨天推过</span>
           )}
-          {status === "done" && <span className="briefing-2col__badge-done">已完成</span>}
-          {status === "snoozed" && <span className="briefing-2col__badge-warn">已推迟</span>}
+          {/* P3.5.207: effective status. statusFromChat=true 时是 chat 语义推断的
+              (员工没点按钮), 加"(chat)" 后缀让员工能区分, 想撤要回 chat 里说. */}
+          {status === "resolved" && (
+            <span className="briefing-2col__badge-done">
+              已完成{statusFromChat ? " (chat)" : ""}
+            </span>
+          )}
+          {status === "paused" && (
+            <span className="briefing-2col__badge-warn">
+              已推迟{statusFromChat ? " (chat)" : ""}
+            </span>
+          )}
         </div>
         <h3 className="briefing-2col__detail-title">{task.title}</h3>
       </div>
@@ -865,13 +901,33 @@ function DetailPane({
       </div>
 
       <div className="briefing-2col__actions">
-        {status === "done" ? (
-          <button type="button" className="briefing-2col__action-btn" onClick={() => void handleStatusChange(null)}>
-            撤销完成
+        {/* P3.5.207: 用 effective status. statusFromChat=true 时"撤销"其实清不掉
+            chat 语义, 员工要撤要回 chat 里说. 按钮 title 显示提示. */}
+        {status === "resolved" ? (
+          <button
+            type="button"
+            className="briefing-2col__action-btn"
+            onClick={() => void handleStatusChange(null)}
+            title={
+              statusFromChat
+                ? "chat 里说过'办完了' → 撤销这里只是清卡片 marker; 想让 briefing 明天再推, 回 chat 里说 '再看看'"
+                : "撤销标记完成"
+            }
+          >
+            撤销完成{statusFromChat ? " (仅撤按钮标记)" : ""}
           </button>
-        ) : status === "snoozed" ? (
-          <button type="button" className="briefing-2col__action-btn" onClick={() => void handleStatusChange(null)}>
-            撤销推迟
+        ) : status === "paused" ? (
+          <button
+            type="button"
+            className="briefing-2col__action-btn"
+            onClick={() => void handleStatusChange(null)}
+            title={
+              statusFromChat
+                ? "chat 里说过'先放放' → 撤销这里只是清卡片 marker; 想让 briefing 明天再推, 回 chat 里说 '继续跟'"
+                : "撤销推迟"
+            }
+          >
+            撤销推迟{statusFromChat ? " (仅撤按钮标记)" : ""}
           </button>
         ) : (
           <>

@@ -87,6 +87,30 @@ export const advisorTaskStateSet = (taskTitle: string, status: TaskStatus) =>
 export const advisorTaskStateClear = (taskTitle: string) =>
   rawInvoke<void>("advisor_task_state_clear", { taskTitle });
 
+// ── P3.5.207 (7/9 鸿波 catch "早安卡片修改跟 chat 对话框修改的待办无法同步") ─
+// 两套 state 各存各的 (taskState 从 Rust backend, chatStatus 从 summarizeTaskChat
+// LLM 判定), 员工两边任一改都要影响另一边. 这个 helper 把两个信号合并成一个
+// **有效状态**, 供 briefing filter + sidebar 徽章统一用. 规则:
+//   taskState=done|ignored  → resolved (员工显式说"办完/不做")
+//   taskState=snoozed        → paused   (员工显式说"推迟")
+//   chatStatus=resolved/paused (LLM 从 chat 里读出的语义)
+//   都无 → pending
+// 冲突时 taskState 优先 (员工显式 action 比 LLM 推断强).
+export type EffectiveTaskStatus = "resolved" | "paused" | "pending";
+
+export function mergeTaskStatus(
+  taskState: TaskStatus | undefined,
+  chatStatus: TaskChatStatus | undefined,
+): EffectiveTaskStatus {
+  // taskState 显式优先
+  if (taskState === "done" || taskState === "ignored") return "resolved";
+  if (taskState === "snoozed") return "paused";
+  // 再看 chatStatus
+  if (chatStatus === "resolved") return "resolved";
+  if (chatStatus === "paused") return "paused";
+  return "pending";
+}
+
 export const advisorTaskStatePruneOld = () =>
   rawInvoke<number>("advisor_task_state_prune_old");
 
