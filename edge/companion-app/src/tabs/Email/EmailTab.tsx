@@ -374,7 +374,10 @@ export default function EmailTab() {
               marginBottom: "var(--space-2)",
             }}
           >
-            <span style={{ fontSize: 18 }}>📧</span>
+            {/* P3.5.204.f (7/9 鸿波 catch "收信中的时候又出现太宽的问题, 你把邮件的那个图标去掉"):
+                左栏 340px 硬编码, header flex 塞 📧 + 邮件 + summary + 新建 + 收信中…,
+                收信中… 4 字比 收信 2 字宽, 触发全行溢出 → title 竖排"邮"↵"件". 删 📧
+                省 icon(20) + gap(8) = 28px, 边界够. */}
             <strong style={{ fontSize: 14 }}>邮件</strong>
             <span style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginLeft: 4 }}>
               {headerSummary}
