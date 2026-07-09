@@ -270,10 +270,25 @@ _GENERATION_PROMPT_TEMPLATE = (
     "updated: {today}\n"
     "tags: [<tag1>, <tag2>]\n"
     "related: [\"[[<other concept>]]\", \"[[<other entity>]]\"]\n"
-    "sources: [employee_journal]\n"
+    # P3.5.205 (7/9 鸿波 catch): sources 从常量 `[employee_journal]` 改**日志日期列表**,
+    # 让员工能反查每 wiki 页来自哪几天日志. 格式: `[journal:YYYY-MM-DD, ...]` (取自
+    # Analysis Decisions 段的 YYYY-MM-DD 字段, 或员工日志里 heading `## [ts] journal`
+    # 的日期部分). 只列涉及该 entity/concept 的日期, 去重升序. 老 wiki 遇 `[employee_journal]`
+    # 单值 → merge 时 LLM 按新格式升级.
+    "sources: [\"journal:<YYYY-MM-DD>\", ...]\n"
     "---\n\n"
     "# <name>\n\n"
     "<3-5 段正文, 总 ≤600 字. 定义 / 适用场景 / 跟其它 concept 真区别 / 案例.>\n"
+    "\n"
+    # P3.5.205 (7/9 鸿波 catch KB '中电福富' 描述有生动化+因果推断偏差):
+    # concept body 允许"衔接词" (同时/然后/目前/另外), 禁"结论词"
+    # (决定/因此/意味着/影响/视为红线). 只 rephrase 日志字面事实, 不做
+    # 二次因果推断 / 价值判断 / 生动化修饰. 员工看得像日志摘要, 不像
+    # AI 生动作文.
+    "**body 写作约束 (P3.5.205)**:\n"
+    "- 只用日志字面出现的事实 rephrase, 不做因果推断 / 价值判断 / 生动化修饰\n"
+    "- 允许衔接词: 同时 / 然后 / 目前 / 另外\n"
+    "- 禁结论词: 决定 / 因此 / 意味着 / 影响 / 视为红线 / 直接影响\n"
     "\n"
     "## Related\n"
     "- [[<other entity/concept>]] — <为什么相关, ≤30字>\n"
@@ -290,10 +305,21 @@ _GENERATION_PROMPT_TEMPLATE = (
     "updated: {today}\n"
     "tags: [<tag1>, <tag2>]\n"
     "related: [\"[[<other entity>]]\", \"[[<other concept>]]\"]\n"
-    "sources: [employee_journal]\n"
+    # P3.5.205 (7/9 鸿波 catch): sources 从常量 `[employee_journal]` 改**日志日期列表**,
+    # 让员工能反查每 wiki 页来自哪几天日志. 格式: `[journal:YYYY-MM-DD, ...]` (取自
+    # Analysis Decisions 段的 YYYY-MM-DD 字段, 或员工日志里 heading `## [ts] journal`
+    # 的日期部分). 只列涉及该 entity/concept 的日期, 去重升序. 老 wiki 遇 `[employee_journal]`
+    # 单值 → merge 时 LLM 按新格式升级.
+    "sources: [\"journal:<YYYY-MM-DD>\", ...]\n"
     "---\n\n"
     "# <name>\n\n"
     "<2-4 段正文, 总 ≤400 字. 1 段概述, 1 段关键关系/决策, 1 段贡献/角色.>\n"
+    "\n"
+    # P3.5.205 (7/9 鸿波): 同 concept body 约束, entity body 也走.
+    "**body 写作约束 (P3.5.205)**:\n"
+    "- 只用日志字面出现的事实 rephrase, 不做因果推断 / 价值判断 / 生动化修饰\n"
+    "- 允许衔接词: 同时 / 然后 / 目前 / 另外\n"
+    "- 禁结论词: 决定 / 因此 / 意味着 / 影响 / 视为红线 / 直接影响\n"
     "\n"
     "## Related\n"
     "- [[<other entity>]] — <为什么相关, ≤30字>\n"
@@ -1191,8 +1217,24 @@ _MERGE_PROMPT_TEMPLATE = (
     "body:\n"
     "- **不直接拼接** 两版段落; 合一个连贯叙述\n"
     "- 重复信息只说一次\n"
-    "- 矛盾的标 'OLD: 之前 X' 跟 'NEW: 现在 Y' 两个 paragraph, 注明日期\n"
-    "- 保留 NEW 所有新事实, OLD 真`只丢与 NEW 矛盾或过期`** 部分\n"
+    # P3.5.205 (7/9 鸿波 catch KB 中电福富 时间线误判): 老规则只有 OLD/NEW 二态,
+    # LLM 把'并行事件'(07-08 高企申报进入盖章 + 07-09 同时启动 ITSS)误判成
+    # '替换关系'. 改三态:
+    #   1) 明确替换 → OLD/NEW (岗位变更, 事实纠错, 战略切换)
+    #   2) 并行 (两版都对, 各说一件) → "另外 / 同时" 平铺
+    #   3) 澄清 (新版更细化) → 直接换掉旧模糊表述, 不留 OLD 标注
+    # 默认走并行/澄清 (不写 OLD/NEW), 只有肯定是替换关系才写 OLD/NEW.
+    "- **三态判断 (P3.5.205)**:\n"
+    "  1. 明确替换 (岗位变更, 事实纠错, 战略切换): 标 'OLD: 之前 X' / 'NEW: 现在 Y', 注日期\n"
+    "  2. 并行 (两版都对, 各说一件): '另外' / '同时' 平铺, 不写 OLD/NEW\n"
+    "  3. 澄清 (新版更细化): 直接换掉旧模糊表述, 不留 OLD 标注\n"
+    "  - **默认走 2 或 3**, 只有肯定是替换关系才用 1\n"
+    # P3.5.205: body 收紧同 generation prompt
+    "- **不做因果推断 / 价值判断 / 生动化修饰**: 只用日志字面事实 rephrase\n"
+    "- 允许衔接词 (同时/然后/目前/另外), 禁结论词 (决定/因此/意味着/影响/视为红线/直接影响)\n"
+    "- 保留 NEW 所有新事实, OLD 只丢与 NEW 矛盾或过期部分\n"
+    # P3.5.205: sources 升级 — 若 OLD 是常量 [employee_journal], 用 NEW 的日期列表升级
+    "- **sources 升级**: 若 OLD `sources: [employee_journal]` (老格式), 用 NEW `[journal:YYYY-MM-DD, ...]` 替换. 若两版都新格式 → 并集去重升序.\n"
     "- 总字数: entity ≤500 / concept ≤700\n"
     "- 文末加 `## 变更历史` section, 1 行 bullet:\n"
     "  `- {today}: 基于 <source> 更新, 主要变化: <一句话>`\n\n"
