@@ -13,6 +13,7 @@ function ListItem({
   urgency,
   phishing,
   political,
+  replied,
   onClick,
 }: {
   item: EmailDigestItem;
@@ -20,6 +21,7 @@ function ListItem({
   urgency?: string;  // '急' / '中' / '低', undef = scheduler 还没评级
   phishing?: PhishingScanResult;  // P3.3.58 段 2B: 钓鱼扫描结果
   political?: PoliticalScanResult; // P3.3.53.2: 政治敏感扫描 (仅 detail 打开过的有)
+  replied?: boolean;  // P3.5.204 (7/9): 已回复标志, 由 EmailTab 一次算 O(N²) map 传下来
   onClick: () => void;
 }) {
   return (
@@ -169,6 +171,27 @@ function ListItem({
             title={`LLM 判为营销/推广邮件${phishing.llmReason ? ` — ${phishing.llmReason}` : ""}`}
           >
             📢 营销
+          </span>
+        )}
+        {/* P3.5.204 (7/9 鸿波 catch "回复过的邮件怎么没有标志"): 已回复 badge —
+            复用 P3.5.58 isReplied 算法 (EmailTab 一次算 map 传下来).
+            灰绿色低调 badge, 让员工列表里一眼看到"这封已回过", 不用点开详情才发现.
+            静默行为: 老邮件 / 老 Mail.app 无 message_id → EmailTab 侧 isReplied
+            返 false, 这里就不显 badge. */}
+        {replied && (
+          <span
+            style={{
+              flex: "0 0 auto",
+              fontSize: 9,
+              padding: "1px 5px",
+              background: "rgba(42, 139, 63, 0.15)",
+              color: "rgb(42, 139, 63)",
+              borderRadius: 3,
+              fontWeight: 500,
+            }}
+            title="已回复 (P3.5.58 RFC 822 thread chain 算法命中)"
+          >
+            ↩ 已回复
           </span>
         )}
         {/* P3.3.53.2: 政治敏感 badge (仅 detail 打开过的, 引擎开 + 命中). */}

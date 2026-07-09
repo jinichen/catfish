@@ -39,6 +39,8 @@ import ComposeCore from "./components/ComposeCore";
 // 5/20: ListItem / DetailPane / helpers 抽到 components/ (拆 1204 → <500)
 import DetailPane, { type FullMessage } from "./components/DetailPane";
 import ListItem from "./components/ListItem";
+// P3.5.204 (7/9): 复用 P3.5.58 isReplied 算法给 ListItem 显 "↩ 已回复" badge.
+import { isReplied } from "../../lib/emailThread";
 
 // P3.5.58 Phase 3 (6/22 鸿波 catch "邮件数量没有 100, 为什么一直显示 100, 是不是
 // 硬编码了"): list 拉取上限. Rust 端 email_list_fetch clamp(1, 500), 这里取最大
@@ -199,6 +201,21 @@ export default function EmailTab() {
       (m.account || "").toLowerCase().includes(q),
     );
   }, [items, search]);
+
+  // P3.5.204 (7/9 鸿波 catch "回复过的邮件怎么没有标志"):
+  // isReplied 算法 (P3.5.58 6/22) 已经存在, DetailPane 也在用, 但 ListItem
+  // 没读 → 员工在左侧列表看不到"已回复"提示, 必须点开邮件看右侧详情才知道.
+  // 一次 O(N²) 算全表 repliedMap 传给每 ListItem O(1) 读. 用 items (不是
+  // filteredItems) 算, 保证搜索/筛选后仍能看到 replied 状态 (回复邮件可能在
+  // 搜索结果外).
+  const repliedMap = useMemo(() => {
+    const m = new Map<string, boolean>();
+    for (const it of items) {
+      const r = isReplied(it, items);
+      if (r.replied) m.set(it.id, true);
+    }
+    return m;
+  }, [items]);
 
   // 选邮件 → 拉全文
   useEffect(() => {
@@ -452,6 +469,7 @@ export default function EmailTab() {
               urgency={urgencyMap[m.id]}
               phishing={phishingMap[m.id]}  // P3.3.58 段 2B
               political={politicalMap[m.id]}  // P3.3.53.2
+              replied={repliedMap.get(m.id)}  // P3.5.204 (7/9)
               onClick={() => setSelectedId(m.id)}
             />
           ))}
