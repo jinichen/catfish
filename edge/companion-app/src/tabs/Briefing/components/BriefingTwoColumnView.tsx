@@ -661,6 +661,12 @@ function DetailPane({
   };
 
   // P3.3.9: clear uid + 也 try clear 老 title file (兼容老 jsonl)
+  // P3.5.218 (7/10 鸿波 catch '清空对话没反应'): 老 handleClearChat 只清了
+  // Companion 侧 jsonl + UI React 状态, hermes 端 session 里的 messages 还在.
+  // chat.ts:384-387 每次 send 传 X-Hermes-Session-Id 让 hermes 复用同一 session
+  // → 拉出老 history 拼给 LLM → AI 继续沿用老套路 ('还是那 3 个选项').
+  // 修: clear 后 reset sessionIdRef, 下次 send 走 ensureSessionId lazy 创建
+  // **新 session**, 老 session 数据保留可 debug 但被丢弃, 新 chat 干净 fresh.
   const handleClearChat = async () => {
     if (!window.confirm("清掉这条待办的所有对话历史? 不可撤销.")) return;
     try {
@@ -670,6 +676,9 @@ function DetailPane({
         await taskChatClear(task.title).catch(() => undefined);
       }
       loadHistory([]);
+      // P3.5.218: reset sessionId 让下次 send 起新 hermes session
+      sessionIdRef.current = null;
+      setSessionId(null);
     } catch (e) {
       console.warn("[BriefingTwoColumn] clear task chat 失败:", e);
     }
