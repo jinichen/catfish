@@ -505,6 +505,14 @@ class CatfishMemoryProvider(MemoryProvider):
         # 自查 — 禁绕 sandbox.
         sections.append(self._render_safety_redline())
 
+        # P3.5.211 (7/10 鸿波 catch, 通过 hermes request dump 铁证):
+        # Companion 塞的 buildTaskSystemPrompt (含 P3.5.209/210 事实为准段) 100%
+        # 被 hermes API server 丢弃, LLM 从没看到. 军规必须放在 hermes 内部
+        # SystemPromptProvider hook 走 prefetch 才能真正生效. 这段影响所有走
+        # hermes 的 chat (task chat / 工作台 chat), advisor 走 gateway 不受影响
+        # (它有 P3.5.206 SYSTEM_PROMPT 里的同款约束).
+        sections.append(self._render_fact_first_discipline())
+
         # 1. session_meta — 时间感 (距上次 N 天)
         meta = self._render_session_meta(catfish_home)
         if meta:
@@ -727,6 +735,45 @@ class CatfishMemoryProvider(MemoryProvider):
             "- ❌ 'terminal 调 pdftotext 直接读' — 绕 sandbox, 拒\n"
             "- ❌ 'terminal 调 curl 拉数据' — 改 `execute_code(bash)` 或 `web_fetch`\n\n"
             "**唯一合法场景**: 员工自己真本机 shell 跑命令 (员工自己输, 不是你调).\n"
+        )
+
+    def _render_fact_first_discipline(self) -> str:
+        """P3.5.211 (7/10 鸿波): 事实为准军规下沉到 hermes prefetch.
+
+        # 触发场景
+        7/10 鸿波审 CSMM-4 task chat: 员工原话只说 '准备迎接专家复审会资料, 预计
+        7 月内会进行专家复审', AI 编:
+          - '自评报告、运行记录、访谈提纲等' (员工没提材料清单)
+          - '若组长还没给确切日期' (员工没说组长给没给, LLM 假设前提)
+          - '建议本周内先拉内部团队过一遍材料, 模拟专家提问' (员工没提预演)
+
+        # 为什么之前修的没生效
+        改 Companion buildTaskSystemPrompt (P3.5.209/210) 100% 被 hermes 丢弃
+        (hermes request dump 铁证). 军规必须放 hermes 内部 SystemPromptProvider
+        走 prefetch 才能到 LLM.
+
+        # 覆盖面
+        影响所有走 hermes 的 chat: task chat / 工作台 chat / 主动闲聊 (proactive
+        走 gateway 不受这里影响, 但 gateway proactive.py P3.5.206 已加同款).
+        Advisor 走 gateway 也有 P3.5.206 SYSTEM_PROMPT 同款约束.
+        """
+        return (
+            "## 📌 事实为准 (P3.5.211 军规, 所有生成内容硬约束)\n\n"
+            "**核心**: 员工在 chat 里说过 / 早晨 briefing 上下文里字面出现 = 事实源. "
+            "其它都是**参考**, 不是事实.\n\n"
+            "**你必须**:\n"
+            "- 只用信息源里**字面出现**的事实. 举建议 / 清单 / 步骤时, 只能用员工原话说过或行业术语中无争议内容.\n"
+            "- 不做因果推断 / 价值判断 / 生动化修饰.\n"
+            "- 允许衔接词: 同时 / 然后 / 目前 / 另外.\n"
+            "- 禁结论词: 决定 / 因此 / 意味着 / 影响 / 视为红线 / 直接影响.\n"
+            "- 不确定 → 直接问员工. 宁可少说, 不要多说.\n\n"
+            "**你不能**:\n"
+            "- ❌ 假设员工没说过的前提 ('若组长还没给日期' / '若资料齐全' / '可能...') — 有前提就问员工.\n"
+            "- ❌ 编具体清单 ('自评报告 / 运行记录 / 访谈提纲' 这类具体材料名) 除非员工已经说过或明确询问.\n"
+            "- ❌ 主动'建议' 员工没说过的动作 ('建议内部预演' / '建议催问日期'). 想推进用**授权问句**: '要不要我起草催问消息?' / '要不要我列个内部预演清单?', 不写 '建议...'.\n"
+            "- ❌ 把 memory / prefetch 注入的上下文当员工原话. **前面注入的 wiki / journal / distilled_facts 里可能有老 LLM 蒸馏的加工语气** (P3.5.206 之前的老数据), 遇模糊 / 结论词 → 忽略, 只用员工 chat 消息里的原话作事实源.\n\n"
+            "**遇到冲突时**: 员工 chat 原话 > 早晨 briefing 元数据 > memory prefetch 注入内容.\n\n"
+            "**核心哲学**: 你是**参谋**不是**作文**. 员工要事实 + 授权动作, 不要 AI 生动化 + 假设推理.\n"
         )
 
     def _render_memory_discipline(self) -> str:
