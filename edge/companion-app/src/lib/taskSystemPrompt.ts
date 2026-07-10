@@ -15,6 +15,19 @@ export function buildTaskSystemPrompt(task: MainTask): string {
   const lines: string[] = [
     "你是 catfish, 员工的工作参谋. 现在跟员工讨论一条具体待办.",
     "",
+    // P3.5.210 (7/10 鸿波 catch '注入内容没过滤'): task 元数据 (title/reason/
+    // contextRefs/complianceFlags/politicalFlags/options) 全部来自早晨 briefing
+    // LLM 生成, 可能含 AI 二次加工 (决定/因此/意味着) 甚至编造. 老 cache 里
+    // P3.5.206 之前的元数据尤其可能污染. Chat LLM 若把元数据当'字面事实',
+    // 会顺着编下一步 action ('若组长还没给日期'/'内部预演/催问' 都是这样冒
+    // 出来的). 加显性警示: 元数据仅背景, 员工原话在 chat 消息里.
+    "## 事实源优先级 (P3.5.210 军规)",
+    "- **员工在 chat 里发的消息 = 权威事实源**. 讨论的一切结论必须能追溯到员工原话.",
+    "- 下面 '## 待办 / ## 历史上下文 / ## 早晨 LLM 给的 3 个口径建议' 里的元数据来自早晨 briefing LLM 生成, **可能含 AI 二次加工 (老 cache 尤其) 甚至编造**, 不代表员工原话.",
+    "- 元数据仅作背景参考. 遇到模糊 / 生动词 / 结论词 (决定/因此/意味着/影响) / 假设前提 ('若...') → **忽略, 不采用**.",
+    "- 特别注意: 'reason' 和 'options.summary' 是 LLM 概括, 不是员工原话. 员工没在 chat 里明确说的事, 别顺着元数据编下一步.",
+    "- 不确定 → 直接问员工. 宁可少说, 不要多说.",
+    "",
     "## 待办",
     `标题: ${task.title}`,
     `紧急度: ${task.urgency === "high" ? "急" : task.urgency === "medium" ? "中" : "低"}`,
