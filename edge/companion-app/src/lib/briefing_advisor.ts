@@ -669,6 +669,19 @@ ${input.wikiRelevant.trim()}`);
               : "pending (球还在员工手里)";
         bits.push(`status: ${statusLabel}`);
       }
+      // P3.5.208-B (7/10 鸿波 catch '关了几次今天又出来'): 员工按钮点的
+      // manualStatus 也告诉 LLM. 之前只放 chatStatus, LLM 看不到员工按钮
+      // action → 员工不说话 chatStatus=pending → LLM 照出 task. 加 manualStatus
+      // 层强约束.
+      if (t.taskState) {
+        const manualLabel =
+          t.taskState === "done"
+            ? "manualStatus: done (员工在早安卡片点了'标记完成'按钮 — **绝不能再放 main_tasks**)"
+            : t.taskState === "ignored"
+              ? "manualStatus: ignored (员工在早安卡片点了'不做'按钮 — **绝不能再放 main_tasks**)"
+              : "manualStatus: snoozed (员工在早安卡片点了'推迟到明天'按钮 — 今天不能再放, 明天可以)";
+        bits.push(manualLabel);
+      }
       return bits.length > 0 ? `${head}\n  └ ${bits.join("\n  └ ")}` : head;
     });
     parts.push(`# 上次 advisor 输出 (12 小时内)
@@ -676,12 +689,15 @@ ${input.wikiRelevant.trim()}`);
 title 表述差异不算新 task. 详见 SYSTEM_PROMPT § "task_uid 跨 refresh 复用".
 **已聊过的 task (含 chat summary), 你这次应该 follow-up 进度 / 帮员工往前推, 不要重推同样建议**.
 
-**P3.5.202 强约束 (语义驱动, 尊重员工最近表态)**:
-- chatStatus="resolved" 或 "paused" 的 task **绝不能放 main_tasks**.
+**P3.5.202 + P3.5.208-B 强约束 (chat 语义 + 卡片按钮 双硬门)**:
+- **chatStatus="resolved" 或 "paused" 的 task 绝不能放 main_tasks**.
   resolved = 员工说事已办完/已交付/已确认误报/已撤销 — 事已完结.
   paused = 员工说暂时关闭/暂缓/先放放/等通知再说 — 员工主动搁置, 会主动来找.
-  这两类都挪去 handled_silently, 让员工在折叠区能看到但不打扰.
-- 只有 chatStatus="pending" (球在员工手里) 才可以出 main_tasks 提醒员工.
+- **manualStatus="done" 或 "ignored" 的 task 绝不能放 main_tasks** (P3.5.208-B):
+  员工在早安卡片显式点了'标记完成'/'不做', 员工意愿已明确, 再推是骚扰.
+- **manualStatus="snoozed" 的 task 今天绝不能放 main_tasks** (员工点了'推迟到明天').
+- 上述任一命中都挪去 handled_silently, 让员工在折叠区看得到但不打扰.
+- 只有 chatStatus=pending 且 无 manualStatus 才可以出 main_tasks.
 - 员工没聊过的新 task 依据紧急度/影响度自己判断.
 
 ${lines.join("\n")}`);
@@ -1110,12 +1126,23 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
       await ensureTaskChatSummariesFresh(input.model).catch((e) => {
         console.warn("[advisor] P3.3.46 await ensureSummary 失败 (降级用 stale):", e);
       });
-      const { advisorCacheGet } = await import("./advisor_cache");
+      const { advisorCacheGet, advisorTaskStateGet } = await import("./advisor_cache");
       const cached = await advisorCacheGet();
+      // P3.5.208-B (7/10 鸿波 catch '关了几次今天又出来'): P3.5.208-A migration
+      // 时序 race — AdvisorView migration useEffect 依赖 [result], 必须先 setResult
+      // 才 trigger, 但 fetchBriefingAdvisor 里 filter 在 setResult **之前**跑完,
+      // 读的 summaries[uid].manualStatus 是 P3.5.208-A 上线前的**空值**. 结果:
+      // 员工前几天点的按钮全被无视, task 又出来.
+      // 修: 拉一次老 taskState.json 兜底. manualStatus 优先, 若空 fallback
+      // taskState.today[title].status. 只在 filter 用, 不 save cache.
+      let legacyTaskStateToday: Record<string, { status: TaskStatus }> = {};
+      try {
+        const ts = await advisorTaskStateGet();
+        legacyTaskStateToday = ts?.today ?? {};
+      } catch (e) {
+        console.warn("[advisor P3.5.208-B] 老 taskState 兜底拉取失败 (降级):", e);
+      }
       if (cached && cached.result?.mainTasks?.length > 0) {
-        // P3.5.208-A (7/9 鸿波): SSOT 单源. manualStatus 跟 chatStatus 已合到
-        // 同一份 taskChatSummaries[uid], 不再单独拉 advisorTaskStateGet.
-        // 老 taskState.json 已被 AdvisorView 启动时 migrate 到 taskChatSummaries.
         const summaries = cached.taskChatSummaries ?? {};
         const enriched = cached.result.mainTasks
           .filter((t) => typeof t.taskUid === "string" && t.taskUid.length > 0)
@@ -1126,10 +1153,12 @@ async function _fetchBriefingAdvisorImpl(input: AdvisorInput): Promise<AdvisorRe
             chatSummary: summaries[t.taskUid]?.summary ?? "",
             // P3.5.202 (C 方案): LLM 判定的 chat 语义 status.
             chatStatus: summaries[t.taskUid]?.status,
-            // P3.5.208-A (7/9 鸿波): 员工卡片按钮点的 manualStatus, 跟 chatStatus
-            // 存同一份 (SSOT). 老代码字段名叫 taskState 保持不变 (对下游 filter
-            // 侧接口无 breaking change, 只是 backend 存储 source 换了).
-            taskState: summaries[t.taskUid]?.manualStatus,
+            // P3.5.208-A: 员工按钮点的 manualStatus (SSOT 主源).
+            // P3.5.208-B: 若 manualStatus 空 (migration race), fallback 老
+            // taskState.today[title] — 保证 filter 判定不误放已关 task.
+            taskState:
+              summaries[t.taskUid]?.manualStatus
+              ?? legacyTaskStateToday[t.title]?.status,
           }));
         if (enriched.length > 0) {
           inputWithPrev = { ...input, previousTasks: enriched };
@@ -1314,34 +1343,37 @@ function filterResolvedTasks(
   result: AdvisorResult,
   previousTasks: NonNullable<AdvisorInput["previousTasks"]>,
 ): AdvisorResult {
-  // P3.5.207 (7/9 鸿波): 老代码只看 chatStatus, taskState (卡片按钮点的
-  // done/snoozed/ignored) 不参与, 造成员工点了"标记完成" briefing 还推同
-  // task. 改用 mergeTaskStatus 合并两路信号 (员工显式 action 优先, LLM
-  // chat 语义次之), 员工在 chat 说话 or 点按钮任一路都影响 filter.
-  // build uid → { chatStatus, taskState } 双源 map
-  const bothByUid = new Map<string, { chatStatus?: TaskChatStatus; taskState?: TaskStatus }>();
+  // P3.5.207 (7/9 鸿波): 合并 chatStatus + taskState 两路信号.
+  // P3.5.208-B (7/10 鸿波 catch '关了几次今天又出来'): filter 之前**只按 uid
+  // 匹配**, LLM 每次生成新 uid 时 previousTasks 里查不到 → 不 drop. 加 title
+  // fallback: 员工遇到 uid 漂移也能被过滤 (title 精确匹配, trim 后小写化对齐).
+  type Entry = { chatStatus?: TaskChatStatus; taskState?: TaskStatus };
+  const bothByUid = new Map<string, Entry>();
+  const bothByTitle = new Map<string, Entry>();
   for (const pt of previousTasks) {
-    if (pt.taskUid) {
-      bothByUid.set(pt.taskUid, {
-        chatStatus: pt.chatStatus,
-        taskState: pt.taskState,
-      });
-    }
+    const entry: Entry = {
+      chatStatus: pt.chatStatus,
+      taskState: pt.taskState,
+    };
+    if (pt.taskUid) bothByUid.set(pt.taskUid, entry);
+    if (pt.title) bothByTitle.set(pt.title.trim().toLowerCase(), entry);
   }
 
   const keptTasks: MainTask[] = [];
   const droppedTitles: string[] = [];
 
   for (const mt of result.mainTasks) {
-    const both = bothByUid.get(mt.taskUid);
-    // P3.5.207: mergeTaskStatus 合并两路. taskState=done/ignored → resolved,
-    // taskState=snoozed → paused, 都无 → 看 chatStatus, 都无 → pending 保守 keep.
+    // uid 优先, title fallback (LLM 漂移救底 - P3.5.208-B)
+    const bothU = bothByUid.get(mt.taskUid);
+    const bothT = bothByTitle.get(mt.title.trim().toLowerCase());
+    const both = bothU ?? bothT;
+    const matchedBy = bothU ? "uid" : bothT ? "title" : "none";
     const effective = mergeTaskStatus(both?.taskState, both?.chatStatus);
     if (effective === "resolved" || effective === "paused") {
       console.log(
-        `[advisor P3.5.207 merged filter] drop ${mt.taskUid} "${mt.title}" ` +
+        `[advisor P3.5.208-B filter] drop ${mt.taskUid} "${mt.title}" ` +
           `(effective='${effective}', taskState='${both?.taskState ?? "-"}', ` +
-          `chatStatus='${both?.chatStatus ?? "-"}')`,
+          `chatStatus='${both?.chatStatus ?? "-"}', matchedBy=${matchedBy})`,
       );
       droppedTitles.push(mt.title);
       continue;
