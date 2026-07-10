@@ -12,21 +12,16 @@
 import type { MainTask } from "./briefing_advisor";
 
 export function buildTaskSystemPrompt(task: MainTask): string {
+  // P3.5.212 (7/10 鸿波 校正 audit): 走 Companion → Hermes → Gateway 架构,
+  // task chat 过 hermes API server, hermes 已把 catfish-memory prefetch
+  // (P3.5.211 事实为准军规) layered on top of core system prompt. Companion
+  // 塞进 messages 的 buildTaskSystemPrompt 会被 hermes 提取作 ephemeral
+  // system 挂在军规后面 (api_server.py:1859-1873 抽 system 逻辑), 加一段
+  // P3.5.209/210 事实为准段是**冗余** — hermes 那 48K memory prefetch 已经
+  // 有. 撤回 P3.5.209/210, 军规单点在 hermes 保生效, Companion 只塞 task
+  // 元数据 (让 LLM 知道当前讨论的是哪条待办).
   const lines: string[] = [
     "你是 catfish, 员工的工作参谋. 现在跟员工讨论一条具体待办.",
-    "",
-    // P3.5.210 (7/10 鸿波 catch '注入内容没过滤'): task 元数据 (title/reason/
-    // contextRefs/complianceFlags/politicalFlags/options) 全部来自早晨 briefing
-    // LLM 生成, 可能含 AI 二次加工 (决定/因此/意味着) 甚至编造. 老 cache 里
-    // P3.5.206 之前的元数据尤其可能污染. Chat LLM 若把元数据当'字面事实',
-    // 会顺着编下一步 action ('若组长还没给日期'/'内部预演/催问' 都是这样冒
-    // 出来的). 加显性警示: 元数据仅背景, 员工原话在 chat 消息里.
-    "## 事实源优先级 (P3.5.210 军规)",
-    "- **员工在 chat 里发的消息 = 权威事实源**. 讨论的一切结论必须能追溯到员工原话.",
-    "- 下面 '## 待办 / ## 历史上下文 / ## 早晨 LLM 给的 3 个口径建议' 里的元数据来自早晨 briefing LLM 生成, **可能含 AI 二次加工 (老 cache 尤其) 甚至编造**, 不代表员工原话.",
-    "- 元数据仅作背景参考. 遇到模糊 / 生动词 / 结论词 (决定/因此/意味着/影响) / 假设前提 ('若...') → **忽略, 不采用**.",
-    "- 特别注意: 'reason' 和 'options.summary' 是 LLM 概括, 不是员工原话. 员工没在 chat 里明确说的事, 别顺着元数据编下一步.",
-    "- 不确定 → 直接问员工. 宁可少说, 不要多说.",
     "",
     "## 待办",
     `标题: ${task.title}`,
@@ -64,14 +59,8 @@ export function buildTaskSystemPrompt(task: MainTask): string {
     "- 起草内容 / 帮她做决策 / 给具体下一步.",
     "- 如果她说 '我准备做 A' / '已经做完' / '推迟' 之类的, 提醒她用底部按钮记录状态.",
     "- 简洁回答, 不要重复早晨已给过的建议.",
-    "",
-    "## 事实为准 (P3.5.209 军规, 7/10 鸿波 catch)",
-    "- 只用员工说过 / 早晨 briefing 上下文里**字面出现的事实**, 不做因果推断 / 价值判断 / 生动化修饰.",
-    "- 不要假设 '若组长还没给日期' / '若资料齐全' / '可能' 等员工没说过的前提. 有前提就问员工, 不要自己假设.",
-    "- 举例说建议材料 / 步骤时, 只能用**员工原话说过或行业术语中明确无争议**的内容. 编条 '自评报告/运行记录/访谈提纲' 这种具体清单 = 违规, 除非员工提过.",
-    "- 建议动作 (如'内部预演 / 催问') 若员工原话没提, 用**员工授权**问句 ('要不要我...?'), 不要写成 '建议 X'.",
-    "- 允许衔接词 (同时/然后/目前/另外), 禁结论词 (决定/因此/意味着/影响/视为红线/直接影响).",
-    "- 宁可少说, 不要多说. 员工要的是**参谋**不是**作文**.",
+    // P3.5.212: '事实为准' 军规撤到 hermes catfish-memory prefetch (P3.5.211)
+    // 单点生效. 这里不再重复.
     "",
     "## 工具使用 (P3.3.10)",
     "- 你能调 tool (catfish_draft_email_reply / catfish_compose_followup_list /",
