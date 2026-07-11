@@ -29,6 +29,20 @@ bash src-tauri/scripts/build-windows-resources.sh
 - hermes-agent 版本由 `edge/companion-app/.hermes-target-version` pin. build script 读这个决定 tar 哪个 tag.
 - uv / Python 版本由 build script 顶部常量 pin.
 
-## 不进 git
+## Placeholder + git (W2.6 fix 7/11)
 
-见 `.gitignore` (只 track README.md).
+**4 个 artifact 名称的 empty placeholder 必须进 git**, 否则 tauri build 跨平台
+validate 挂 (`resource path ... doesn't exist`). Tauri v2 `WindowsConfig` 无
+platform-specific `resources` 字段 (config.rs:1042-1085), `bundle.resources`
+top-level 声明**所有 build target 都 validate**.
+
+流程:
+- **macOS build (今天)**: 用 empty placeholder, 打进 dmg 的是 4 个 <1KB 空文件,
+  实际 macOS app 不用这些 Windows-only 资源, 无功能影响
+- **Windows build (Week 3 集成阶段)**:
+  1. `bash src-tauri/scripts/build-windows-resources.sh` 覆盖 placeholder 成真文件
+  2. `npx tauri build --target x86_64-pc-windows-msvc --bundles msi` 出 msi
+  3. `git checkout resources/windows/*.{exe,ps1,zip,gz}` 恢复空 placeholder,
+     working tree clean
+
+见 `.gitignore` (log/temp 排除, 4 个 placeholder 空文件 track).

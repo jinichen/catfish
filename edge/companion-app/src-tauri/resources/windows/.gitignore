@@ -1,5 +1,22 @@
-# Windows msi resources 在 build 时产出, 不进 git.
-# msi 大 artifact 300-400MB, 每 release 用 build-windows-resources.sh 现拉现打.
-*
-!.gitignore
-!README.md
+# Windows msi resources (W1 BL-CATFISH-OFFLINE-INSTALL 7/11).
+#
+# 4 个真实 artifact 由 build-windows-resources.sh 在 build 前打包生成,
+# 大小 ~300-400MB, 不进 git.
+#
+# 但**空 placeholder** (git 里 track, size=0 或 stub 内容) 必须留, 因为
+# tauri.conf.json bundle.resources 跨平台 validate source 存在 (config.rs:1633
+# top-level, WindowsConfig 无 resources 字段). macOS/Linux build 也走 validate,
+# 挂在 uv.exe 不存在 → 无法 build macOS .app.
+#
+# Windows build 流程:
+#   1. bash src-tauri/scripts/build-windows-resources.sh
+#      → 覆盖 4 个 placeholder 成真 300-400MB artifact
+#   2. npx tauri build --target x86_64-pc-windows-msvc --bundles msi
+#      → 出 msi (~350MB)
+#   3. git checkout resources/windows/*.{exe,ps1,zip,gz}
+#      → 恢复空 placeholder, working tree clean
+#
+# macOS build 流程 (今天):
+#   直接 npx tauri build, 打进 dmg 的是 4 个 <1KB 空文件, 无实际影响.
+
+*.log
