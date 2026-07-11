@@ -229,9 +229,18 @@ def test_list_accounts_parses_records():
 
 
 def test_list_accounts_mail_not_running_raises():
-    with patch.object(am, "_is_mail_running", return_value=False):
+    # W2 BL-APPLEMAIL-TEST-EMLX-MOCK (7/11): 5/18 加 EMLX fallback 后, 若开发机
+    # 本地有 ~/Library/Mail/V10/, _enable_emlx_fallback_if_available 会返 True,
+    # list_accounts 走 _list_accounts_emlx() 抢先返, 就不 raise 了.
+    # 沙箱 CI runner 上没 V10 目录 test 会过, 但开发机上 test DID NOT RAISE.
+    # 补 mock 让 test 语义严格: "AS + EMLX 都不可用" → 才 raise ClientNotRunningError.
+    adapter = AppleMailAdapter()
+    with (
+        patch.object(am, "_is_mail_running", return_value=False),
+        patch.object(adapter, "_enable_emlx_fallback_if_available", return_value=False),
+    ):
         with pytest.raises(ClientNotRunningError, match="Mail.app 没在跑"):
-            AppleMailAdapter().list_accounts()
+            adapter.list_accounts()
 
 
 def test_list_accounts_empty_raises_data_not_found():
