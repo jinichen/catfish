@@ -1,0 +1,5 @@
+# Windows msi resources 在 build 时产出, 不进 git.
+# msi 大 artifact 300-400MB, 每 release 用 build-windows-resources.sh 现拉现打.
+*
+!.gitignore
+!README.md
