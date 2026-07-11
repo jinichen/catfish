@@ -40,13 +40,9 @@ pub fn schedule_autostart() {
     });
 }
 
-// 5/22 BL-COMPANION-DECOUPLE-GATEWAY (鸿波): ensure_gateway_running 函数删 —
-// schedule_autostart 不再调它, watchdog 也不再调它. 员工想手动启停 gateway
-// 走 commands/gateway.rs:gateway_start (前端 UI 按钮). 真生产部署用 launchctl
-// plist 或客户 IT 流程, Companion 不操心.
-//
-// 删的是 ~70 行 spawn 逻辑, 跟 commands/gateway.rs:gateway_start 重复. 真要恢复
-// git blame.
+// 5/22 gateway 解耦: ensure_gateway_running 删 (~70 行 spawn 逻辑), gateway 由
+// launchctl/客户 IT 管. P39 收尾: gateway_start/stop/get_dev_token 3 command 也
+// 删, 只留 gateway_status 探活. 见 git blame.
 
 // ============================================================
 // tool-bridge

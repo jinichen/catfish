@@ -193,7 +193,6 @@ pub fn run() {
                                 );
                             }
                         }
-                        return;
                     }
                 })
                 .build(),
@@ -389,11 +388,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            // gateway
-            commands::gateway::gateway_start,
-            commands::gateway::gateway_stop,
+            // gateway (P39 5/22 解耦收尾: start/stop/get_dev_token 删, 只留 status 探活.
+            // 生产员工机 gateway 由 launchctl/客户 IT 管, Companion 不 spawn.)
             commands::gateway::gateway_status,
-            commands::gateway::gateway_get_dev_token,
             // P3.5.125 (6/26 鸿波 catch "catfish 对 hermes/chrome hang 无监控"):
             // hermes hang detection + auto restart (kill -9 触发 launchd 拉)
             commands::hermes::hermes_status,

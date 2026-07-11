@@ -17,12 +17,9 @@ import type { ServiceStatus } from "../types/service";
 import type { SessionMeta, SessionDetail } from "../types/session";
 import type { CatalogResponse } from "../types/catalog";
 
-// ── gateway ──────────────────────────────────────────────
-export const gatewayStart = () => rawInvoke<void>("gateway_start");
-export const gatewayStop = () => rawInvoke<void>("gateway_stop");
+// ── gateway (P39 5/22 解耦收尾: start/stop/get_dev_token 3 wrapper 删,
+//    只留 status 探活 — 生产员工机 gateway 由 launchctl/客户 IT 管) ──
 export const gatewayStatus = () => rawInvoke<ServiceStatus>("gateway_status");
-export const gatewayGetDevToken = () =>
-  rawInvoke<string>("gateway_get_dev_token");
 
 // ── hermes (P3.5.125 6/26 鸿波 catch "hermes hang 不监控") ──
 // hermes 默认 launchd 拉, 但 hang (GIL/IO block) launchd 不知道.

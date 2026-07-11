@@ -20,10 +20,11 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
-// ── mock ./tauri (gatewayGetDevToken etc) ──────────────────────
-vi.mock("./tauri", () => ({
-  gatewayGetDevToken: vi.fn(async () => "dev-token-xyz"),
-}));
+// ── mock ./tauri ──────────────────────
+// P39 (5/22 gateway 解耦收尾): gatewayGetDevToken 已删, mock 保空对象兼容
+// (me.ts 现只 import hermesApiConfigGet / hermesApiAuthHeader / fetchProactiveContext,
+//  但 test 里 fetchWithAuth 走的 OAuth path 不用它们, 空 mock 即可).
+vi.mock("./tauri", () => ({}));
 
 // ── 假 localStorage ──
 const _store = new Map<string, string>();

@@ -15,7 +15,6 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import {
-  gatewayGetDevToken,
   hermesApiConfigGet,
   hermesApiAuthHeader,
   fetchProactiveContext,
@@ -63,8 +62,11 @@ export function setOverrideToken(token: string | null): void {
 // null (catfish-identity 没起好 / OAuth 还没完成), getToken() 落到 env 兜底链拿
 // dev-token-local 并**永久缓存**. 之后即便 silent refresh 把 OAuth 续好, 只要某
 // 次 invoke 返 null 就立即回到这个老 cache → gateway 持续 401 → 必须 killall
-// Companion 才能恢复. 真没必要 cache — gatewayGetDevToken 是 Tauri IPC ~1ms,
-// 每次拉一下不疼.
+// Companion 才能恢复.
+//
+// P39 (5/22 gateway 解耦收尾): 删 gatewayGetDevToken 兜底层. 生产员工机由
+// launchctl 起 gateway, 不再暴露 dev token. OAuth 未完成时直接兜到
+// "dev-token-local" 让 gateway 401 → fetchWithAuth 触发 auth_login 重登.
 
 /** BL-D3 Phase 3.1 (5/9): export 给 McpRegistryCard 等其他卡复用.
  *
@@ -75,11 +77,14 @@ export function setOverrideToken(token: string | null): void {
  * Dashboard 永远 0. PG 真证: users 表 [chenhongbo, demo], quota_events
  * 501 行全是 dev-user.
  *
- * 优先级 (5/9 改):
+ * 优先级 (P39 5/22 gateway 解耦收尾 改):
  *   0. OAuth keychain access_token (登录员工的真 token, 最优先)
  *   1. localStorage 切换器 override (dev 调试用)
- *   2. .env CATFISH_DEV_TOKEN (开发兜底, 没登录时, **每次现拉**, 不缓存)
- *   3. fallback 'dev-token-local' (一切都失败时)
+ *   2. fallback 'dev-token-local' (让 gateway 401 → fetchWithAuth 触发 auth_login)
+ *
+ * 老 gatewayGetDevToken 层 (读 gateway .env dev_token) 已删 — 生产员工机
+ * 不该有 gateway 源码目录, 该 command 生产返错, 只让 OAuth 失败时静默污染
+ * token cache. 直接兜到 fallback 值, 走 auth_login 正确路径.
  */
 export async function getToken(): Promise<string> {
   // 0. OAuth 登录的真 access_token (BL-FIX26 5/9)
@@ -92,13 +97,8 @@ export async function getToken(): Promise<string> {
   // 1. 切换器选的覆盖
   const override = getOverrideToken();
   if (override) return override;
-  // 2. .env 兜底 — BL-FIX-STALE-TOKEN-CACHE (5/24): 不缓存, 每次现拉. 防 Companion
-  //    启动早期偶发把 dev-token-local 缓死, 之后 OAuth 续上了 JS 还在用老 cache.
-  try {
-    return await gatewayGetDevToken();
-  } catch {
-    return "dev-token-local";
-  }
+  // 2. fallback (让 gateway 401 → fetchWithAuth 触发 auth_login 重登)
+  return "dev-token-local";
 }
 
 /**
