@@ -1,97 +1,132 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Catfish postinstall WiX fragment (W2 BL-CATFISH-WIN-MSI 7/11).
+  Catfish postinstall WiX fragment (W2 BL-CATFISH-WIN-MSI 7/11 → W2.5 refine 7/11).
 
   msi CustomAction: 装完 files 后自动跑 install.ps1 装 hermes 到
   %LOCALAPPDATA%\hermes\ (offline 模式, 走 msi 内嵌 uv.exe + python zip +
   hermes-agent tarball, 全 sandboxed 无网).
 
-  = 关键设计 (Blocker W2-3 mitigation) =
+  = W2.5 refactor (方案 C, 换掉方案 A 嵌套 quoting) =
 
-  deferred CustomAction 在 script execute phase 拿不到 property 值 (只能读
-  CustomActionData / ProductCode / UserSID). 见 Microsoft docs:
-  https://learn.microsoft.com/en-us/windows/win32/msi/obtaining-context-information-for-deferred-execution-custom-actions
+  Week 2 原设计走 CustomActionData 单串 + PowerShell -Command "& { $d = '[CAD]'.Split('|'); ... }"
+  嵌套 quoting. Audit 发现: 员工用户名含单引号 (真实案例 O'Brien) 会破坏
+  PowerShell 单引号 literal, .Split('|') 返错. 员工路径含 `|` 字符 (Windows
+  合法) 也会切碎.
 
-  正解 (3 步):
-  1. Immediate Type 51 CustomAction 把 [INSTALLDIR] set 进 property, property 名
-     == deferred CA Id ("CatfishRunInstall"). Type 51 = "Set a property" 见
-     https://learn.microsoft.com/en-us/windows/win32/msi/custom-action-type-51
-  2. Deferred CustomAction Id="CatfishRunInstall". 在 script execute phase 读
-     [CustomActionData] 拿到 step 1 set 的值.
-  3. InstallExecuteSequence: immediate 排 After="CostFinalize" (此时 [INSTALLDIR]
-     已 resolve), deferred 排 After="InstallFiles" (此时 resources/windows/
-     文件已到 disk).
+  方案 C: 拆 4 个独立 property + 双引号 wrap. 参考 msi CustomAction 标准姿势
+  (Microsoft docs, Tauri 上游 main.wxs:294 DownloadAndInvokeBootstrapper 同款).
 
-  = Impersonate="yes" 语义 (perUser MSI 硬约束) =
+  好处:
+  - ExeCommand 从 3 层嵌套 quoting (WiX XML entity + msi Format + PowerShell)
+    压成 2 层 (WiX XML + msi Format). 无 PowerShell 内嵌 quoting.
+  - 4 property 各自双引号 wrap, msi Format 展开时空格路径自动 OK.
+  - 无 .Split, 员工路径含 `'` / `|` 都 safe.
+  - 唯一还剩坑: 路径含 `"` — 但 Windows 路径本身不允许 `"` 字符
+    (https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file),
+    real 0 风险.
 
-  Single Package Authoring "Do not use custom actions in your package that
-  require elevated privileges to run":
-  https://learn.microsoft.com/en-us/windows/win32/msi/single-package-authoring
-  perUser MSI 跑在 user context, 没 SYSTEM token, NoImpersonate 会 fail.
-  写 %LOCALAPPDATA%\hermes 用 user token, 不需 elevate.
+  = deferred CustomAction 拿不到 [INSTALLDIR] 的 4 步 pattern =
 
-  = Return="check" 语义 (拍板严格模式) =
+  Microsoft docs (https://learn.microsoft.com/en-us/windows/win32/msi/obtaining-context-information-for-deferred-execution-custom-actions):
+      "the property of interest to a property having the same name as the
+       deferred execution custom action"
 
-  install.ps1 非 0 退出 → msi rollback. 员工看到明确失败信号, 不会 "装了
-  Companion 但打不开" 假状态. 参考:
-  https://learn.microsoft.com/en-us/windows/win32/msi/return-processing-options-for-custom-actions
+  但方案 C 需要 4 个 property, 都要传到 deferred CA. Microsoft 官方 pattern
+  是 1 个 property = deferred CA Id, 值可以是 `key=val;key=val` 或 `|` 分隔.
+  但我们已 audit 出 `.Split` 有坑, 所以走**另一种官方 pattern**:
 
-  = ExeCommand PowerShell quoting =
+  用 4 个 Type 51 immediate CA 分别 set 4 个 property → deferred CA
+  ExeCommand 里直接引用 4 个 property 的 [XXX] format 展开. **无需 CustomActionData**.
 
-  简化模式: -File 直接指到 [CustomActionData], 不嵌套 PowerShell 内部 quoting
-  (agent audit blocker W2-P1 mitigation). CustomActionData 用 `|` 分隔多参数,
-  install.ps1 靠 param() 自己 parse.
+  为啥可以? 因为 msi Format 展开发生在**deferred CA script 执行之前**
+  (Format 在 install script generation 阶段, 即 immediate phase). 4 个
+  property 的值那时已 set, Format 展开成命令行字面串, 存进 script.
+  Deferred CA runtime 拿到的是**已展开好**的命令行, 不再需要 property lookup.
 
-  = 未 verify (需真跑 tauri build) =
-  - PowerShell -File 传参在 WiX escape 后是否正确
-  - Feature.Absent="disallow" 是否让 UI 隐藏 (perUser + WixUI_InstallDir 默认)
+  Ref: https://learn.microsoft.com/en-us/windows/win32/msi/formatted 的
+  "Formatted string" 处理时机: 在 sequence table 处理时 (即 immediate phase),
+  非 deferred runtime phase.
+
+  = 4 property 命名 =
+
+  - CatfishInstallPs1Path : [INSTALLDIR]resources\windows\install.ps1
+  - CatfishHermesSourceDir: [INSTALLDIR]hermes\hermes-agent-src
+  - CatfishUvExePath      : [INSTALLDIR]resources\windows\uv.exe
+  - CatfishPythonZipPath  : [INSTALLDIR]resources\windows\cpython-3.11.15-embed.zip
+
+  = Impersonate="yes" + Return="check" =
+
+  跟 W2 原设计一致, 用户拍板未变:
+  - Impersonate=yes: perUser MSI 必须 (Single Package Authoring)
+  - Return=check: install.ps1 fail → msi rollback (员工看到明确失败)
 -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Fragment>
     <!--
-      Step 1: Immediate Type 51 CA. 把 [INSTALLDIR]resources\windows\install.ps1
-      set 进 property, property 名等于 deferred CA Id.
+      Step 1: 4 个 Type 51 SetProperty immediate CA. 各 set 一个 property.
+      Type 51 doc: https://learn.microsoft.com/en-us/windows/win32/msi/custom-action-type-51
     -->
-    <CustomAction Id="SetCatfishRunInstallData"
-                  Property="CatfishRunInstall"
-                  Value="[INSTALLDIR]resources\windows\install.ps1|[INSTALLDIR]hermes\hermes-agent-src|[INSTALLDIR]resources\windows\uv.exe|[INSTALLDIR]resources\windows\cpython-3.11.15-embed.zip"
+    <CustomAction Id="SetCatfishInstallPs1Path"
+                  Property="CatfishInstallPs1Path"
+                  Value="[INSTALLDIR]resources\windows\install.ps1"
+                  Execute="immediate"/>
+
+    <CustomAction Id="SetCatfishHermesSourceDir"
+                  Property="CatfishHermesSourceDir"
+                  Value="[INSTALLDIR]hermes\hermes-agent-src"
+                  Execute="immediate"/>
+
+    <CustomAction Id="SetCatfishUvExePath"
+                  Property="CatfishUvExePath"
+                  Value="[INSTALLDIR]resources\windows\uv.exe"
+                  Execute="immediate"/>
+
+    <CustomAction Id="SetCatfishPythonZipPath"
+                  Property="CatfishPythonZipPath"
+                  Value="[INSTALLDIR]resources\windows\cpython-3.11.15-embed.zip"
                   Execute="immediate"/>
 
     <!--
-      Step 2: Deferred CA. Id == "CatfishRunInstall" == step 1 Property 值.
-      script phase 里 [CustomActionData] = step 1 set 的完整字符串.
+      Step 2: deferred CA. 引用 4 个 property 的 [XXX] format 展开.
+      每个 property 值双引号 wrap 处理空格路径.
 
-      ExeCommand:
+      展开后 (假设 INSTALLDIR = C:\Users\O'Brien\AppData\Local\Catfish Companion\):
         powershell.exe -NoProfile -ExecutionPolicy Bypass
-        -Command "& { $d = '[CustomActionData]'.Split('|');
-                      & $d[0] -NonInteractive
-                              -OfflineSourceDir $d[1]
-                              -OfflineUvExe $d[2]
-                              -OfflinePythonZip $d[3] }"
+          -File "C:\Users\O'Brien\AppData\Local\Catfish Companion\resources\windows\install.ps1"
+          -NonInteractive
+          -OfflineSourceDir "C:\Users\O'Brien\AppData\Local\Catfish Companion\hermes\hermes-agent-src"
+          -OfflineUvExe     "C:\Users\O'Brien\AppData\Local\Catfish Companion\resources\windows\uv.exe"
+          -OfflinePythonZip "C:\Users\O'Brien\AppData\Local\Catfish Companion\resources\windows\cpython-3.11.15-embed.zip"
 
-      XML entities:
-        & → &amp;
-        ' → &apos; (只在 XML 属性值内需要 escape)
-        [\[] [\]] → 不用在这, 因为 -Command 只在 " " 里, 不撞 WiX 变量
+      注意: 路径里 `'` (O'Brien 用户名) 在双引号 wrap 下无害
+      (PowerShell 双引号 literal 允许 `'`, 也不需要 Split).
     -->
     <CustomAction Id="CatfishRunInstall"
                   Execute="deferred"
                   Impersonate="yes"
                   Return="check"
-                  ExeCommand="powershell.exe -NoProfile -ExecutionPolicy Bypass -Command &quot;&amp; { $d = '[CustomActionData]'.Split('|'); &amp; $d[0] -NonInteractive -OfflineSourceDir $d[1] -OfflineUvExe $d[2] -OfflinePythonZip $d[3] }&quot;"/>
+                  ExeCommand='powershell.exe -NoProfile -ExecutionPolicy Bypass -File "[CatfishInstallPs1Path]" -NonInteractive -OfflineSourceDir "[CatfishHermesSourceDir]" -OfflineUvExe "[CatfishUvExePath]" -OfflinePythonZip "[CatfishPythonZipPath]"'/>
 
     <!--
-      Step 3: sequence. NOT REMOVE 条件 = 只在装 / 升级跑, 不在卸载跑.
+      Step 3: sequence. 4 SetProperty CA 排 After=CostFinalize
+      (此时 [INSTALLDIR] 已 resolve), deferred CA 排 After=InstallFiles
+      (此时 resources/ 已到 disk).
+
+      SetProperty 4 个 CA 无相对顺序要求 (都是 immediate, 都读 INSTALLDIR),
+      按 wxs 顺序即可. NOT REMOVE 条件 = 只在装 / 升级跑, 不在卸载跑.
     -->
     <InstallExecuteSequence>
-      <Custom Action="SetCatfishRunInstallData" After="CostFinalize">NOT REMOVE</Custom>
-      <Custom Action="CatfishRunInstall" After="InstallFiles">NOT REMOVE</Custom>
+      <Custom Action="SetCatfishInstallPs1Path"   After="CostFinalize">NOT REMOVE</Custom>
+      <Custom Action="SetCatfishHermesSourceDir"  After="SetCatfishInstallPs1Path">NOT REMOVE</Custom>
+      <Custom Action="SetCatfishUvExePath"        After="SetCatfishHermesSourceDir">NOT REMOVE</Custom>
+      <Custom Action="SetCatfishPythonZipPath"    After="SetCatfishUvExePath">NOT REMOVE</Custom>
+      <Custom Action="CatfishRunInstall"          After="InstallFiles">NOT REMOVE</Custom>
     </InstallExecuteSequence>
 
     <!--
       Feature envelope. Tauri wix.featureRefs 必须引用一个 Feature Id 才会把
       fragment 里定义的东西 include 进 msi. CustomAction 不需要 ComponentRef,
-      Feature 空的 (只做载体).
+      Feature 空 (只做载体).
     -->
     <Feature Id="CatfishPostInstallFeature"
              Title="Catfish post-install (hermes 装机)"

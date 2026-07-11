@@ -54,15 +54,42 @@
             Manufacturer="{{manufacturer}}"
             Version="{{version}}">
 
-        <!-- Catfish diff #1 + #2: InstallerVersion 450→500 (W10+ has), InstallScope
-             perMachine → perUser (无 UAC 弹窗, 装 %LOCALAPPDATA%\Catfish). -->
+        <!-- Catfish diff #1 + #2 (W2.5 dual-purpose refinement 7/11):
+             InstallerVersion 450→500 (Windows Installer 5.0+, W10+ 都有),
+             删 InstallScope, 走 MSI dual-purpose authoring.
+
+             = 为啥不用 InstallScope="perUser"? =
+             Audit 结论 (Week 2.5): InstallScope="perUser" 在 WiX 3.14.1 语法合法
+             (wix.xsd:3075-3098 白名单值), Compiler.cs:11977-11983 只 set Word Count
+             bit 8 无 ALLUSERS row. 编译产物 100% 正确. 但用户拍板 dual-purpose 更稳,
+             理由:
+             - 提供 msiexec 命令行 ALLUSERS=1 切 per-machine 的紧急后门
+             - Property 显式声明比 attribute 隐式 side-effect 语义更直白
+             - 不依赖 candle 编译时把 attribute 转换成正确的 Property row
+
+             = MSI dual-purpose 规则 (Microsoft docs 直引) =
+             https://learn.microsoft.com/en-us/windows/win32/msi/msiinstallperuser:
+                 "To use the MSIINSTALLPERUSER property, the value of the ALLUSERS
+                  property must be 2 [...] If the value of the ALLUSERS property does
+                  not equal 2, the value of the MSIINSTALLPERUSER property is ignored"
+             https://learn.microsoft.com/en-us/windows/win32/msi/single-package-authoring:
+                 "Use ALLUSERS value of 2 and a MSIINSTALLPERUSER value of 1 as the
+                  initial values. This specifies per-user installation as the default"
+
+             = 效果 =
+             默认 per-user (装 %LOCALAPPDATA%\Catfish Companion, 无 UAC 弹窗),
+             员工可通过 `msiexec /i Catfish.msi ALLUSERS=1` 切 per-machine 装.
+             Windows Installer 5.0+ (W10+) 必备, 跟我们的 W10+ 只承诺一致. -->
         <Package Id="*"
                  Keywords="Installer"
                  InstallerVersion="500"
                  Languages="0"
                  Compressed="yes"
-                 InstallScope="perUser"
                  SummaryCodepage="!(loc.TauriCodepage)"/>
+
+        <!-- dual-purpose 3 件套 -->
+        <Property Id="ALLUSERS" Value="2" />
+        <Property Id="MSIINSTALLPERUSER" Value="1" />
 
         <!-- https://docs.microsoft.com/en-us/windows/win32/msi/reinstallmode -->
         <Property Id="REINSTALLMODE" Value="amus" />
@@ -107,6 +134,19 @@
           <RegistrySearch Id="PrevInstallDirNoName" Root="HKCU" Key="Software\{{manufacturer}}\{{product_name}}" Type="raw" />
           <RegistrySearch Id="PrevInstallDirWithName" Root="HKCU" Key="Software\{{manufacturer}}\{{product_name}}" Name="InstallDir" Type="raw" />
         </Property>
+
+        <!-- W2.5 债 3: 修 UI PathEdit 初始显示为空的 corner case.
+             Directory Table docs (https://learn.microsoft.com/en-us/windows/win32/msi/directory-table):
+                 "If the property is defined, the destination directory is resolved to
+                  the property's value. If the property is not defined, [走 parent + DefaultDir]"
+             AppSearch (400) < CostFinalize (1000). SetProperty 在 AppSearch 后立即给
+             INSTALLDIR 一个合成默认值, 使 UI 打开 PathEdit 时有值显示 (装机路径逻辑
+             不变: Directory tree fallback 会算出同样路径, 装到 [LocalAppDataFolder][ProductName]).
+             Condition NOT INSTALLDIR: 只在 RegistrySearch 未命中 (首次装) 时 set. -->
+        <SetProperty Id="INSTALLDIR"
+                     After="AppSearch"
+                     Value="[LocalAppDataFolder]{{product_name}}"
+                     Sequence="both"><![CDATA[NOT INSTALLDIR]]></SetProperty>
 
         <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="!(loc.LaunchApp)" />
         <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1"/>
