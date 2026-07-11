@@ -141,30 +141,44 @@ export function getEffectiveStatusByUid(
   return m;
 }
 
+/** P39 (5/22 P3.5.208-A 精细化 selector): 返 uid → raw manualStatus (TaskStatus)
+ *  精确到 "done" vs "ignored" vs "snoozed", 不合并 chatStatus.
+ *
+ *  用于 AdvisorView filter — 只想藏 ignored, 保留 done/snoozed 让 sidebar 打
+ *  勾/⏰. getEffectiveStatusByUid 因为把 done + ignored 都返 "resolved" 无法
+ *  区分, 所以引入这个精细 selector.
+ *
+ *  不带 chatStatus 合并 (chat 里判"resolved" 不等同于员工"不做" ignored). */
+export function getManualStatusByUid(
+  cache: AdvisorCache | null,
+): Map<string, TaskStatus> {
+  const m = new Map<string, TaskStatus>();
+  const sums = cache?.taskChatSummaries;
+  if (!sums) return m;
+  for (const [uid, s] of Object.entries(sums)) {
+    if (s?.manualStatus) m.set(uid, s.manualStatus);
+  }
+  return m;
+}
+
 /** P3.5.208-A: 员工卡片按钮点 → 写 manualStatus 到 taskChatSummaries.
  *  内部 load-modify-save, race 概率极低 (员工点按钮频率 < 1/s + P3.4.C
  *  atomic write). null = 清除 manualStatus (撤销).
  *
- *  P3.5.208-A 过渡期兼容: 同时 call advisorTaskStateSet/Clear 双写老
- *  taskState.json, 让所有老 code path 仍能读到. P3.5.209 (后续) 彻底切换
- *  时删双写 + 迁移最后一批老数据. */
+ *  P39 (5/22 SSOT 收敛): 删双写老 taskState.json 兼容. 老 taskState 后端
+ *    仍在, AdvisorView migration useEffect 一次性搬运到 taskChatSummaries,
+ *    7d 自然 prune 老文件. taskTitle 参数保签名兼容, 内部不再用.
+ */
 export async function setTaskManualStatus(
   taskUid: string,
   taskTitle: string,
   status: TaskStatus | null,
 ): Promise<void> {
-  // 1) 双写老 taskState.json (兼容期). 失败不阻断新写.
-  try {
-    if (status === null) await advisorTaskStateClear(taskTitle);
-    else await advisorTaskStateSet(taskTitle, status);
-  } catch (e) {
-    console.warn(
-      "[P3.5.208-A setTaskManualStatus] 双写老 taskState 失败 (不阻断新写):",
-      e,
-    );
-  }
+  // P39: 双写老 taskState.json 层删. taskTitle 保签名兼容 (老 caller 不改).
+  // TS unused-vars 用 void 表达式吸掉 lint 警告.
+  void taskTitle;
 
-  // 2) 主写新 taskChatSummaries[uid].manualStatus
+  // 主写 taskChatSummaries[uid].manualStatus (SSOT)
   const cache = await advisorCacheGet();
   if (!cache) {
     console.warn(

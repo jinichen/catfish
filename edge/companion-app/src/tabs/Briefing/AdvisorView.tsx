@@ -20,11 +20,13 @@ import {
   cacheAgeMinutes,
   didCrossRefreshTime,
   getEffectiveStatusByUid,          // P3.5.208-A: SSOT selector
+  getManualStatusByUid,             // P39: raw manualStatus selector (区分 ignored vs done)
   isCacheFresh,
   type AdvisorCache,
   type AdvisorConfig,
   type EffectiveTaskStatus,          // P3.5.208-A
   type TaskStateFetch,
+  type TaskStatus,                   // P39: filter 精细判 ignored
 } from "../../lib/advisor_cache";  // P3.5.32.9 (6/18): nextRefreshAfter 不再 import — 老 RefreshInfo 函数砍, 用方挪去 components/RefreshInfo.tsx 自管
 import {
   ADVISOR_TIMEOUT,
@@ -93,6 +95,10 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
    *  存储侧 SSOT: taskChatSummaries[uid] 同时含 manualStatus (员工点按钮)
    *  + status (LLM chat 语义), selector 合并出 effective 传给子组件. */
   const [effectiveStatusByUid, setEffectiveStatusByUid] = useState<Map<string, EffectiveTaskStatus>>(new Map());
+  /** P39 (5/22 filter 精细化): raw manualStatus map, 用于精准判"ignored".
+   *  effectiveStatusByUid 把 done + ignored 都合并 "resolved", 无法在 filter
+   *  层区分 "藏 ignored" vs "保留 done 让 sidebar 打勾". 加这个 selector 精准判. */
+  const [manualStatusByUid, setManualStatusByUid] = useState<Map<string, TaskStatus>>(new Map());
 
   // 5/22 鸿波: 启动时拉今日任务状态 + 清旧 (>7d)
   useEffect(() => {
@@ -114,6 +120,7 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
     let cancelled = false;
     if (!result) {
       setEffectiveStatusByUid(new Map());
+      setManualStatusByUid(new Map());
       return;
     }
     void (async () => {
@@ -151,9 +158,12 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
         }
         // 派生 effective map (走 SSOT selector, 迁移后 cache 已是最新)
         setEffectiveStatusByUid(getEffectiveStatusByUid(cache));
+        // P39: 派生 raw manualStatus map (filter 精细区分 ignored)
+        setManualStatusByUid(getManualStatusByUid(cache));
       } catch (e) {
         console.warn("[P3.5.208-A] 派生 effectiveStatus 挂:", e);
         setEffectiveStatusByUid(new Map());
+        setManualStatusByUid(new Map());
       }
     })();
     return () => { cancelled = true; };
@@ -479,9 +489,12 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
       {(() => {
         // P3.3.6 (6/10): 平铺 ActionCard → 左右两栏 layout
         // 过滤 ignored 的 (今天不再出); done/snoozed 仍在 sidebar 显示 (变灰)
+        // P39 (5/22 SSOT 收敛): 从 taskState.today[title] (老双源, title 会随 LLM
+        //   改动而不稳) 换成按 uid 查 manualStatus. getManualStatusByUid 精确到
+        //   "done" / "snoozed" / "ignored", 只藏 ignored, done/snoozed 仍进
+        //   sidebar 让 BriefingTwoColumnView 打 ✓ / ⏰.
         const visibleTasks = result.mainTasks.filter((t) => {
-          const s = taskState.today[t.title]?.status;
-          return s !== "ignored";
+          return manualStatusByUid.get(t.taskUid) !== "ignored";
         });
         return (
           <BriefingTwoColumnView
