@@ -14,6 +14,7 @@
 //!   - 日志文件可能很大, 只 tail 最近 N 行 (10000), 而不是全文件 parse
 //!   - 这是 read-only 操作, 不锁文件, 让 gateway 继续写
 
+use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -179,7 +180,7 @@ fn aggregate(records: Vec<AuditRecord>) -> AuditSummary {
             total_tokens,
         })
         .collect();
-    model_list.sort_by(|a, b| b.count.cmp(&a.count));
+    model_list.sort_by_key(|m| Reverse(m.count));
     summary.by_model = model_list;
 
     // TTFT p50 / p95
@@ -194,7 +195,7 @@ fn aggregate(records: Vec<AuditRecord>) -> AuditSummary {
         .into_iter()
         .map(|(kind, count)| SecurityConcern { kind, count })
         .collect();
-    concern_list.sort_by(|a, b| b.count.cmp(&a.count));
+    concern_list.sort_by_key(|c| Reverse(c.count));
     summary.security_concerns = concern_list;
 
     summary.data_freshness_secs = if latest_ts > 0 {

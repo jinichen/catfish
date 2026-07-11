@@ -81,14 +81,13 @@ pub async fn wiki_search_semantic(
             hits: vec![],
             model_loaded: false,
             indexed_count: 0,
-            message: format!(
-                "embedding provider 未就绪.\n\
+            message: "embedding provider 未就绪.\n\
                  走本机 ONNX 时手动下载:\n\
                   mkdir -p ~/.catfish/models && \n\
                   curl -L -o ~/.catfish/models/bge-m3.onnx https://huggingface.co/Xenova/bge-m3/resolve/main/onnx/model_quantized.onnx && \n\
                   curl -L -o ~/.catfish/models/tokenizer.json https://huggingface.co/Xenova/bge-m3/resolve/main/tokenizer.json\n\
                  走 catfish-gateway 远程时: 检查 ~/.hermes/.env 里 CATFISH_INTERNAL_DEV_TOKEN 是否配置."
-            ),
+                .to_string(),
         });
     }
 
@@ -249,10 +248,8 @@ fn purge_orphans(
             .query_map([], |row| row.get::<_, String>(0))
             .map_err(|e| format!("query cached_rels: {e}"))?;
         let mut v = Vec::new();
-        for r in rows {
-            if let Ok(s) = r {
-                v.push(s);
-            }
+        for s in rows.flatten() {
+            v.push(s);
         }
         v
     };

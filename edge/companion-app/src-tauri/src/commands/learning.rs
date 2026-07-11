@@ -14,7 +14,7 @@
 //!
 //! 数据全部从现有 ~/.hermes 读, 没引入任何新存储。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use rusqlite::Connection;
@@ -163,7 +163,7 @@ fn is_today(mtime_unix: f64) -> bool {
 // 数据收集
 // ============================================================
 
-fn collect_memories(home: &PathBuf) -> Vec<MemoryFile> {
+fn collect_memories(home: &Path) -> Vec<MemoryFile> {
     let mut out = Vec::new();
     // ~/.hermes/USER.md
     let user_md = home.join(".hermes").join("USER.md");
@@ -215,7 +215,7 @@ fn collect_memories(home: &PathBuf) -> Vec<MemoryFile> {
     out
 }
 
-fn collect_new_skills(home: &PathBuf) -> Vec<NewSkill> {
+fn collect_new_skills(home: &Path) -> Vec<NewSkill> {
     let mut out = Vec::new();
     let skills_dir = home.join(".hermes").join("skills");
     let Ok(ns_entries) = std::fs::read_dir(&skills_dir) else {
@@ -286,7 +286,7 @@ fn collect_new_skills(home: &PathBuf) -> Vec<NewSkill> {
 ///   new_skills > 0           → 真 ship
 ///   proposed_skills_today > 0 → LLM 真调 propose 写了 jsonl, 等员工 accept
 ///   两者都 0 但 LLM 说 '已保存' → plan-only, BL-FIX23 L5 该兜
-fn collect_proposed_skills_today(home: &PathBuf) -> Vec<ProposedSkill> {
+fn collect_proposed_skills_today(home: &Path) -> Vec<ProposedSkill> {
     let path = home.join(".catfish").join("skill_proposals.jsonl");
     let Ok(content) = std::fs::read_to_string(&path) else {
         return Vec::new();
@@ -393,7 +393,7 @@ fn extract_description(text: &str) -> Option<String> {
     None
 }
 
-fn collect_db_stats(home: &PathBuf) -> (u32, u32, u64) {
+fn collect_db_stats(home: &Path) -> (u32, u32, u64) {
     let db_path = home.join(".hermes").join("state.db");
     if !db_path.exists() {
         return (0, 0, 0);
@@ -465,7 +465,7 @@ struct SoftSkillStats {
     methodologies_this_week: Vec<String>,
 }
 
-fn collect_soft_skill_stats(home: &PathBuf) -> SoftSkillStats {
+fn collect_soft_skill_stats(home: &Path) -> SoftSkillStats {
     let db_path = home.join(".hermes").join("state.db");
     if !db_path.exists() {
         return SoftSkillStats::default();

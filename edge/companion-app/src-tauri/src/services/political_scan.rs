@@ -27,12 +27,13 @@ use super::super::commands::audit_chain::chain_append_impl;
 
 // ─── 数据类型 ────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
     High,
     Medium,
     Low,
+    #[default]
     None,
 }
 
@@ -91,12 +92,6 @@ pub struct PoliticalScanResult {
     pub llm_reason: Option<String>,
     /// 配置当前是否开启 — 关时 flags 必空, UI 不挂 badge
     pub engine_enabled: bool,
-}
-
-impl Default for Severity {
-    fn default() -> Self {
-        Severity::None
-    }
 }
 
 /// 输入: 单封邮件元数据. scan 当前只看 subject + body_text — sender 由 caller
@@ -234,8 +229,7 @@ fn extract_around(raw: &str, start: usize, end: usize, around: usize) -> String 
     s.chars()
         .take(around * 2 + 80)
         .collect::<String>()
-        .replace('\n', " ")
-        .replace('\r', " ")
+        .replace(['\n', '\r'], " ")
         .trim()
         .to_string()
 }

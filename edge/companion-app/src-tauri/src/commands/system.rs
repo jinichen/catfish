@@ -28,7 +28,7 @@ pub async fn notify(title: String, body: String) -> Result<(), String> {
         if !status.success() {
             return Err(format!("osascript 退出非 0: {status}"));
         }
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -130,7 +130,7 @@ end tell"#,
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        return Ok(stdout);
+        Ok(stdout)
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -174,7 +174,7 @@ end tell"#;
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
-        return Ok(lists);
+        Ok(lists)
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -340,7 +340,7 @@ end tell"#,
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        return Ok(stdout);
+        Ok(stdout)
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -383,7 +383,7 @@ end tell"#;
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
-        return Ok(cals);
+        Ok(cals)
     }
 
     #[cfg(not(target_os = "macos"))]

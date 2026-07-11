@@ -30,6 +30,7 @@
 //! 鸿波本机文件实测 ~3.7MB / 23k 行, 1 年估 145MB (轻量). tail 10k 行覆盖
 //! ~2-3 天 (Phase 1 不切窗, 算全 tail). 真 1y 大量后续切窗 / archive.
 
+use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -251,7 +252,7 @@ fn aggregate(records: Vec<ToolAuditRecord>, window_hours: i64) -> ToolPerfSummar
             }
         })
         .collect();
-    tool_stats.sort_by(|a, b| b.count.cmp(&a.count));
+    tool_stats.sort_by_key(|t| Reverse(t.count));
     summary.by_tool = tool_stats;
 
     summary.data_freshness_secs = if latest_ts > 0 {

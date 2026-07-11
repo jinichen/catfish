@@ -30,7 +30,7 @@
 // OnceLock 都被 RecordingState + recording_slot 用), Windows stub 不用. cfg gate
 // 防 cross-build unused_imports warning.
 #[cfg(target_os = "macos")]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 #[cfg(target_os = "macos")]
 use std::process::Child;
 #[cfg(target_os = "macos")]
@@ -211,9 +211,9 @@ pub fn speech_cancel_recording(_window: Window) -> Result<(), String> {
 /// 中文准确率取决于模型: small (差) / medium (中) / large-v3 (较好).
 #[cfg(target_os = "macos")]
 fn run_whisper_cpp(
-    wav_path: &PathBuf,
-    txt_out: &PathBuf,
-    model_path: &PathBuf,
+    wav_path: &Path,
+    txt_out: &Path,
+    model_path: &Path,
 ) -> Result<String, String> {
     let whisper_bin = find_executable("whisper-cli")
         .or_else(|| find_executable("main"))

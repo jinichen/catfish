@@ -41,8 +41,8 @@ pub struct SkillEntry {
     /// camelCase serde 让 TS 看到 `path` (单字段不变).
     pub path: String,
     /// E7.P1 (6/6): 团队审定 / 内置 标记. true = 不能让员工删 (catfish_root/skills/
-    /// 下的工程审定模板, e.g. leadership-briefing). false = 用户装的 (~/.hermes/skills/
-    /// + ~/.claude/skills/), 或员工自己录的 (~/.catfish/skills/), 可删可改.
+    /// 下的工程审定模板, e.g. leadership-briefing). false = 用户装的 (`~/.hermes/skills/`
+    /// 加 `~/.claude/skills/`), 或员工自己录的 (~/.catfish/skills/), 可删可改.
     /// 由 scan_skills_root_filtered 按 root 路径决定, 后端逻辑唯一来源 (前端只读).
     pub is_protected: bool,
 }

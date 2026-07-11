@@ -521,13 +521,16 @@ pub async fn try_refresh_session(cfg: &OidcConfig) -> Result<AuthSession> {
 /// BL-COMPANION-SILENT-REFRESH (5/23): 给前端调 gateway 用的 token, **保证够新**.
 ///
 /// 行为决策树:
+///
+/// ```text
 ///   1. 当前 session 还剩 > 5 分钟 → 返当前 id_token (sync 路径, 不打 IdP)
 ///   2. session 不存在 / 已过期 / 还剩 < 5 分钟:
-///        a. 尝试 refresh (mutex 防并发):
-///             - mutex 拿到后再 try_load_session 一次 (可能已经被别人 refresh 完了)
-///             - 还需要续 → 调 try_refresh_session → 写盘 → 返新 id_token
-///        b. refresh 失败 → log warn → 返当前 (可能过期) id_token / dev_token
-///           gateway 验签 401 → me.ts fetchWithAuth 收到 401 → 弹浏览器走完整 OAuth
+///      a. 尝试 refresh (mutex 防并发):
+///         - mutex 拿到后再 try_load_session 一次 (可能已经被别人 refresh 完了)
+///         - 还需要续 → 调 try_refresh_session → 写盘 → 返新 id_token
+///      b. refresh 失败 → log warn → 返当前 (可能过期) id_token / dev_token
+///         gateway 验签 401 → me.ts fetchWithAuth 收到 401 → 弹浏览器走完整 OAuth
+/// ```
 ///
 /// 这个函数是 async 的, 因为 refresh 涉及 HTTP. 调用方 (auth_get_access_token Tauri
 /// 命令) 也是 async, 顺路改.

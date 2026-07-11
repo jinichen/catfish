@@ -14,7 +14,7 @@
 //! 不在这里:
 //!   - 邮件 / 日历 / TODO — 前端有现成 commands 拉. 复用.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -89,7 +89,7 @@ pub struct SessionBrief {
     pub message_count: u32,
 }
 
-fn read_file_safe(path: &PathBuf, max_bytes: usize) -> String {
+fn read_file_safe(path: &Path, max_bytes: usize) -> String {
     if !path.exists() {
         return String::new();
     }
@@ -292,7 +292,7 @@ mod tests {
 
 /// 5/21 Phase 6: 扫 ~/.catfish/outputs/ 下文件名含 'weekly' 的, 列文件名 + mtime.
 /// 不读内容 (.docx/.xlsx 二进制, LLM 看不了), 只让 LLM 知道员工有/没周报历史 + 哪个时段.
-fn scan_weekly_reports(dir: &PathBuf) -> Result<Vec<WeeklyReportRef>, String> {
+fn scan_weekly_reports(dir: &Path) -> Result<Vec<WeeklyReportRef>, String> {
     if !dir.exists() || !dir.is_dir() {
         return Ok(Vec::new());
     }

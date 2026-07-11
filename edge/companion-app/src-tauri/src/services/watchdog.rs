@@ -38,6 +38,7 @@
 //!
 //! - `schedule_autostart()`: app 启动时跑一次, 拉起 gateway + tool-bridge
 //! - `schedule_watchdog()`: app 启动时跑一次, 之后每 5s 监控
+//!
 //! 两者并存: autostart 负责"冷启动", watchdog 负责"运行期 self-heal".
 
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -101,10 +102,7 @@ impl ServiceHealth {
     /// 是否在 backoff 期间. backoff 到期会自动解除 (下次检查放行).
     fn is_in_backoff(&self) -> bool {
         let guard = self.backoff_until.lock().unwrap();
-        match *guard {
-            Some(until) if Instant::now() < until => true,
-            _ => false,
-        }
+        matches!(*guard, Some(until) if Instant::now() < until)
     }
 }
 

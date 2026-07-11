@@ -20,22 +20,13 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(8);
 
 // ── 数据结构 ─────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WeatherConfig {
     /// 常驻城市. 空字符串 = 走 wttr.in IP 自动. 用户填了就用填的.
     pub home_city: String,
     /// 临时城市列表 (出差).
     pub temp_cities: Vec<String>,
-}
-
-impl Default for WeatherConfig {
-    fn default() -> Self {
-        Self {
-            home_city: String::new(),  // 走 IP 自动
-            temp_cities: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

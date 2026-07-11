@@ -229,13 +229,13 @@ pub fn find_chrome() -> Option<PathBuf> {
     }
 
     // 2. 平台候选清单
-    let mut candidates: Vec<PathBuf> = Vec::new();
-
-    // macOS
-    candidates.push("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome".into());
-    candidates.push("/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta".into());
-    candidates.push("/Applications/Google Chrome Dev.app/Contents/MacOS/Google Chrome Dev".into());
-    candidates.push("/Applications/Chromium.app/Contents/MacOS/Chromium".into());
+    let mut candidates: Vec<PathBuf> = vec![
+        // macOS
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome".into(),
+        "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta".into(),
+        "/Applications/Google Chrome Dev.app/Contents/MacOS/Google Chrome Dev".into(),
+        "/Applications/Chromium.app/Contents/MacOS/Chromium".into(),
+    ];
     if let Some(home) = home_dir() {
         // mac per-user: ~/Applications/Google Chrome.app/...
         candidates.push(home.join("Applications/Google Chrome.app/Contents/MacOS/Google Chrome"));

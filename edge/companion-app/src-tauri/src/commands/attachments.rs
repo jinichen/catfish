@@ -399,13 +399,9 @@ pub async fn attachment_delete(
 
         let mut files_removed = 0u32;
         if input.delete_files.unwrap_or(true) {
-            for path_opt in [kept, sidecar] {
-                if let Some(p) = path_opt {
-                    if std::path::Path::new(&p).exists() {
-                        if std::fs::remove_file(&p).is_ok() {
-                            files_removed += 1;
-                        }
-                    }
+            for p in [kept, sidecar].into_iter().flatten() {
+                if std::path::Path::new(&p).exists() && std::fs::remove_file(&p).is_ok() {
+                    files_removed += 1;
                 }
             }
         }

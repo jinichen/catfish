@@ -263,14 +263,14 @@ pub async fn audit_export_xlsx(
                     .unwrap_or("")
                     .to_string()
             };
-            ws.write_string_with_format(r, 0, &get_str("ts"), &cell_fmt).map_err(stringify)?;
-            ws.write_string_with_format(r, 1, &get_str("recordKind"), &cell_fmt).map_err(stringify)?;
-            ws.write_string_with_format(r, 2, &get_str("taskTitle"), &cell_fmt).map_err(stringify)?;
-            ws.write_string_with_format(r, 3, &get_str("taskUid"), &cell_fmt).map_err(stringify)?;
-            ws.write_string_with_format(r, 4, &get_str("newStatus"), &cell_fmt).map_err(stringify)?;
-            ws.write_string_with_format(r, 5, &get_str("userChoice"), &cell_fmt).map_err(stringify)?;
-            ws.write_string_with_format(r, 6, &get_str("aiLean"), &cell_fmt).map_err(stringify)?;
-            ws.write_string_with_format(r, 7, &get_str("draftPathChosen"), &cell_fmt).map_err(stringify)?;
+            ws.write_string_with_format(r, 0, get_str("ts"), &cell_fmt).map_err(stringify)?;
+            ws.write_string_with_format(r, 1, get_str("recordKind"), &cell_fmt).map_err(stringify)?;
+            ws.write_string_with_format(r, 2, get_str("taskTitle"), &cell_fmt).map_err(stringify)?;
+            ws.write_string_with_format(r, 3, get_str("taskUid"), &cell_fmt).map_err(stringify)?;
+            ws.write_string_with_format(r, 4, get_str("newStatus"), &cell_fmt).map_err(stringify)?;
+            ws.write_string_with_format(r, 5, get_str("userChoice"), &cell_fmt).map_err(stringify)?;
+            ws.write_string_with_format(r, 6, get_str("aiLean"), &cell_fmt).map_err(stringify)?;
+            ws.write_string_with_format(r, 7, get_str("draftPathChosen"), &cell_fmt).map_err(stringify)?;
             // P3.3.54 polish: 显示 sha256 前 20 字符 (审计员对比够, 全 64 字符占太宽)
             let sha = get_str("sha256");
             let short_sha = if sha.len() > 20 {

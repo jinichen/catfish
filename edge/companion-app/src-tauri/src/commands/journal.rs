@@ -5,6 +5,7 @@
 //! step1 (本提交) regex 抽取, 两种 pattern:
 //!   - `- [ ] 任务描述`   markdown checkbox 未完成
 //!   - `TODO: 任务描述`   / `待办: 任务描述`  行内标记
+//!
 //! 已完成 `- [x] ...` 自动跳过.
 //!
 //! step2 (后续): LLM 调 catfish-private-vision 从自然语言句子里抽 ("明天要给老李
@@ -15,7 +16,7 @@
 //!   - 不缓存到本地新文件 — journal 本来就是员工写的 md, 直接现读
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use regex::Regex;
 use serde::Serialize;
@@ -180,7 +181,7 @@ where
 }
 
 /// P3.4.7b (6/15 鸿波): 单文件标完成 — 原 journal_mark_todo_done body 抽出来.
-fn try_mark_done_on_file(path: &PathBuf, line: u32, text_hint: &str) -> Result<String, String> {
+fn try_mark_done_on_file(path: &Path, line: u32, text_hint: &str) -> Result<String, String> {
     if !path.exists() {
         return Err(format!("{} 不存在", path.display()));
     }
@@ -226,7 +227,7 @@ fn try_mark_done_on_file(path: &PathBuf, line: u32, text_hint: &str) -> Result<S
 }
 
 /// P3.4.7b (6/15 鸿波): 单文件删 — 原 journal_delete_todo body 抽出来.
-fn try_delete_on_file(path: &PathBuf, line: u32, text_hint: &str) -> Result<String, String> {
+fn try_delete_on_file(path: &Path, line: u32, text_hint: &str) -> Result<String, String> {
     if !path.exists() {
         return Err(format!("{} 不存在", path.display()));
     }
@@ -305,7 +306,7 @@ pub async fn journal_add_todo(
     // 跨双文件查重 (P3.4.7b): 任一文件已有同 text checkbox 跳过
     let cur = current_todos_path().ok_or_else(|| "HOME 没设".to_string())?;
     let jrn = journal_path().ok_or_else(|| "HOME 没设".to_string())?;
-    if todo_already_exists(&trimmed_text, &[&cur, &jrn]) {
+    if todo_already_exists(&trimmed_text, &[cur.as_path(), jrn.as_path()]) {
         return Ok(format!(
             "⏭ 已存在跳过 (跨 current_todos.md + employee_journal.md): \"{}\"",
             trimmed_text.chars().take(60).collect::<String>()
@@ -378,7 +379,7 @@ fn resolve_target_path(origin: Option<&str>, section: Option<&str>) -> Result<Pa
 
 /// P3.4.7b (6/15 鸿波): 跨多文件检查同 text 的 checkbox 已存在.
 /// 跟老 add_todo 单文件查重算法相同, 但接受 path slice 扫多个文件.
-fn todo_already_exists(trimmed_text: &str, paths: &[&PathBuf]) -> bool {
+fn todo_already_exists(trimmed_text: &str, paths: &[&Path]) -> bool {
     let pattern = format!(
         r"(?m)^\s*[-*+]\s*\[[ xX]\]\s+{}\s*$",
         regex::escape(trimmed_text)

@@ -24,6 +24,7 @@
 //!   cron_job_resume(id)                  → ()                (D HTTP POST)
 //!   cron_job_delete(id)                  → ()                (D HTTP DELETE)
 
+use std::cmp::Reverse;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -179,7 +180,7 @@ pub async fn cron_job_outputs(
             .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
         entries.push((path, mtime));
     }
-    entries.sort_by(|a, b| b.1.cmp(&a.1));
+    entries.sort_by_key(|e| Reverse(e.1));
     entries.truncate(limit);
 
     let mut out = Vec::with_capacity(entries.len());

@@ -38,7 +38,7 @@ pub async fn chrome_launch() -> Result<(), String> {
     let working_dir = user_data_dir
         .parent()
         .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| std::env::temp_dir());
+        .unwrap_or_else(std::env::temp_dir);
 
     let chrome_port = endpoints::endpoints().chrome_port;
     let cfg = process::SpawnConfig {

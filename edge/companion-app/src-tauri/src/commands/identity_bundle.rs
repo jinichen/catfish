@@ -213,7 +213,7 @@ pub async fn identity_bundle() -> Result<IdentityBundle, String> {
 ///
 /// 行为表 (按发现顺序):
 ///   - 软链 + target 健康  → **不动** (开发者 catfish git clone, install.sh 软链
-///                                   路径, 让 catfish/edge/identity/SOUL.md 改即生效)
+///     路径, 让 catfish/edge/identity/SOUL.md 改即生效)
 ///   - 软链 + dangling     → 删软链, 写 baked (客户场景, 强制兜底)
 ///   - regular file 任何状态 → **overwrite** 写 baked (强制跟 catfish 一致, **关键**)
 ///   - 不存在              → 写 baked

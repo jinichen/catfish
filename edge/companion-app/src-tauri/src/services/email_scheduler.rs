@@ -562,7 +562,7 @@ fn our_domains_from_items(items: &[EmailItem]) -> Vec<String> {
     for it in items {
         // EmailItem 没 account 字段, 走 sender 抽不太准. 暂时用 hardcoded 央企域 +
         // sender domain 都加. 段 2B 改成读 ~/.hermes/auth.json 拿员工真正账号.
-        if let Some(domain) = it.sender.rfind('@').and_then(|i| Some(it.sender[i + 1..].trim_end_matches('>').to_lowercase())) {
+        if let Some(domain) = it.sender.rfind('@').map(|i| it.sender[i + 1..].trim_end_matches('>').to_lowercase()) {
             if !domain.is_empty() && domain != "<unknown>" {
                 set.insert(domain);
             }

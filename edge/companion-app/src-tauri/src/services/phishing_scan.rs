@@ -31,12 +31,13 @@ use super::super::commands::audit_chain::chain_append_impl;
 
 // ─── 数据类型 ────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
     High,
     Medium,
     Low,
+    #[default]
     None,
 }
 
@@ -80,12 +81,6 @@ pub struct PhishingScanResult {
     pub highest_severity: Severity,
     pub llm_verdict: Option<String>,    // "phishing" / "suspicious" / "marketing" (P3.5.197) / "safe" / None
     pub llm_reason: Option<String>,
-}
-
-impl Default for Severity {
-    fn default() -> Self {
-        Severity::None
-    }
 }
 
 /// 输入: 单封邮件元数据.
@@ -291,22 +286,24 @@ fn scan_sender(msg: &MessageData, cfg: &PhishingConfig, flags: &mut Vec<Phishing
 
     // PHISH-008: 显示名**真像邮箱地址** (含 @ + 含 .) 但跟 from 地址不同.
     // P3.3.59 fix: display 后半要含 . + ≥4 字符 + 无空格 才算真"显示名是邮箱".
-    if cfg.is_rule_enabled("PHISH-008") {
-        if display.contains('@') && !addr.is_empty() && display != addr {
-            let display_looks_like_email = display
-                .split('@')
-                .nth(1)
-                .map(|d| d.contains('.') && d.len() >= 4 && !d.contains(' '))
-                .unwrap_or(false);
-            if display_looks_like_email {
-                flags.push(PhishingFlag {
-                    rule_id: "PHISH-008-display-no-domain".into(),
-                    severity: Severity::High,
-                    category: Category::SenderSpoofing,
-                    reason: format!("显示名 '{}' 是邮箱地址, 跟实际 from '{}' 不同 (隐藏真实发件人)", display, addr),
-                    matched_text: Some(msg.sender.to_string()),
-                });
-            }
+    if cfg.is_rule_enabled("PHISH-008")
+        && display.contains('@')
+        && !addr.is_empty()
+        && display != addr
+    {
+        let display_looks_like_email = display
+            .split('@')
+            .nth(1)
+            .map(|d| d.contains('.') && d.len() >= 4 && !d.contains(' '))
+            .unwrap_or(false);
+        if display_looks_like_email {
+            flags.push(PhishingFlag {
+                rule_id: "PHISH-008-display-no-domain".into(),
+                severity: Severity::High,
+                category: Category::SenderSpoofing,
+                reason: format!("显示名 '{}' 是邮箱地址, 跟实际 from '{}' 不同 (隐藏真实发件人)", display, addr),
+                matched_text: Some(msg.sender.to_string()),
+            });
         }
     }
 }

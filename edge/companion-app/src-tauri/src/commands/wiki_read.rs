@@ -252,7 +252,7 @@ fn merge_related_with_body(frontmatter_related: Vec<RelatedRef>, body: &str) -> 
 ///   - 文件 <= 256 字节 (足够装 frontmatter `deprecated: true` + 一行注释)
 ///   - **且** (没 frontmatter, **或** frontmatter 含 `deprecated: true`)
 ///   - **且** body 命中废弃 marker (HTML 注释含"废弃"/"deprecated"/"请参见"/"tombstone",
-///         或纯空 body)
+///     或纯空 body)
 ///
 /// list/graph 跳过 tombstone, 但 `wiki_read_file` 仍能读 (允许员工手动打开看 marker).
 fn is_tombstone(size_bytes: u64, fm: &str, body: &str) -> bool {

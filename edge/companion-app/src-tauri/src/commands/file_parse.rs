@@ -101,7 +101,7 @@ fn find_python() -> Option<PathBuf> {
 /// 检测 Python 候选是否装了 parse_file.py 三大依赖 (pypdfium2 / openpyxl / docx).
 ///
 /// 一次 subprocess 调用, ~100ms, 只在启动找 Python 时跑一次. 不影响每次 parse 性能.
-fn _has_parse_deps(py: &PathBuf) -> bool {
+fn _has_parse_deps(py: &Path) -> bool {
     let out = std::process::Command::new(py)
         .arg("-c")
         .arg("import pypdfium2, openpyxl, docx")

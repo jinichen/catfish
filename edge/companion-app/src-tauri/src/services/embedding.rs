@@ -52,8 +52,12 @@ use crate::services::embedding_config::{
 static ACTIVE_PROVIDER: OnceLock<Provider> = OnceLock::new();
 
 /// Provider enum — 不用 trait + dyn 避 async_trait 依赖, 直接 match 路由.
+///
+/// P39 (clippy large_enum_variant): LocalProvider 装 ONNX Session (1000+ bytes),
+/// RemoteProvider 只 72 bytes — 差 16x. Box LocalProvider 让 enum 变紧, 内存
+/// 只在 Local 场景多一次堆分配 (整个 process 只 init 一次, 无损).
 enum Provider {
-    Local(LocalProvider),
+    Local(Box<LocalProvider>),
     Remote(RemoteProvider),
 }
 
@@ -91,7 +95,7 @@ fn init_active_provider() -> Provider {
     match cfg.backend {
         Backend::Local => {
             log::info!("[embedding] backend=local (yaml 显式)");
-            Provider::Local(LocalProvider::new(cfg.local))
+            Provider::Local(Box::new(LocalProvider::new(cfg.local)))
         }
         Backend::Remote => {
             log::info!(
@@ -109,7 +113,7 @@ fn init_active_provider() -> Provider {
                 Provider::Remote(remote)
             } else {
                 log::info!("[embedding] auto → local (remote 不通, fallback ONNX)");
-                Provider::Local(LocalProvider::new(cfg.local))
+                Provider::Local(Box::new(LocalProvider::new(cfg.local)))
             }
         }
     }

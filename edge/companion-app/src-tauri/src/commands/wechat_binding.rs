@@ -40,7 +40,7 @@
 
 use serde::Serialize;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// 一条 (platform, openid) → 员工 email 的绑定记录.
 #[derive(Debug, Serialize)]
@@ -80,7 +80,7 @@ fn pairing_dir() -> Option<PathBuf> {
 
 /// 列出 pairing_dir 下所有 `<platform>-approved.json` 的 platform 名.
 /// 跳过 `_rate_limits.json` 等下划线开头的内部文件.
-fn list_platforms(dir: &PathBuf) -> Vec<String> {
+fn list_platforms(dir: &Path) -> Vec<String> {
     let mut out = Vec::new();
     let Ok(rd) = fs::read_dir(dir) else {
         return out;
@@ -104,7 +104,7 @@ fn list_platforms(dir: &PathBuf) -> Vec<String> {
 }
 
 /// 解析单个平台的 approved.json 为 entries.
-fn read_platform_approved(dir: &PathBuf, platform: &str) -> Vec<WeChatBindingEntry> {
+fn read_platform_approved(dir: &Path, platform: &str) -> Vec<WeChatBindingEntry> {
     let mut out = Vec::new();
     let path = dir.join(format!("{}-approved.json", platform));
     let Ok(text) = fs::read_to_string(&path) else {
@@ -278,7 +278,7 @@ fn now_secs() -> f64 {
 }
 
 /// 原子写: tmp + rename, chmod 0600. 跟 Python PairingStore._secure_write 对齐.
-fn secure_write_json(path: &PathBuf, value: &serde_json::Value) -> Result<(), String> {
+fn secure_write_json(path: &Path, value: &serde_json::Value) -> Result<(), String> {
     let parent = path.parent().ok_or_else(|| "no parent dir".to_string())?;
     fs::create_dir_all(parent).map_err(|e| format!("mkdir failed: {e}"))?;
     let pretty =
@@ -306,7 +306,7 @@ fn secure_write_json(path: &PathBuf, value: &serde_json::Value) -> Result<(), St
     Ok(())
 }
 
-fn read_json_object(path: &PathBuf) -> serde_json::Map<String, serde_json::Value> {
+fn read_json_object(path: &Path) -> serde_json::Map<String, serde_json::Value> {
     fs::read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())

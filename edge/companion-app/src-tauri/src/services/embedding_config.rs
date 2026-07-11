@@ -40,21 +40,16 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 /// embedding provider 选择. auto = 启动检测.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Backend {
     /// 启动时 ping remote, 通用 remote, 否则 local. 一旦选定不动态切换 (重启 Companion 再检测).
+    #[default]
     Auto,
     /// 本机 ONNX BGE-M3.
     Local,
     /// catfish-gateway /v1/embeddings 远程 API.
     Remote,
-}
-
-impl Default for Backend {
-    fn default() -> Self {
-        Backend::Auto
-    }
 }
 
 /// 本机 ONNX 配置.

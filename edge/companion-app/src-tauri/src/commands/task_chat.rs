@@ -13,7 +13,8 @@
 //!   - tool_calls?: Vec<serde_json::Value> — assistant 消息附带的 tool 调用列表
 //!     (id / name / args / status / result / error 字段, 跟 TS ToolCall 同款)
 //!   - tool_call_id?: String — tool 角色消息关联到 assistant 的 tool_calls[i].id
-//!   老 jsonl 没这俩字段 — serde 默认 None, 向后兼容.
+//!
+//! 老 jsonl 没这俩字段 — serde 默认 None, 向后兼容.
 //!
 //! Tauri commands:
 //!   - task_chat_get(taskKey) → Vec<TaskChatMsg>

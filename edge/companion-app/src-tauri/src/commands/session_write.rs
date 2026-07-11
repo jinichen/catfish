@@ -32,9 +32,9 @@ fn state_db_path() -> Result<PathBuf, String> {
     let home = home_dir().ok_or_else(|| "找不到 home 目录".to_string())?;
     let path = home.join(".hermes").join("state.db");
     if !path.exists() {
-        return Err(format!(
-            "state.db 不存在 — Hermes 至少要跑过一次, 才有这个 db 文件"
-        ));
+        return Err(
+            "state.db 不存在 — Hermes 至少要跑过一次, 才有这个 db 文件".to_string()
+        );
     }
     Ok(path)
 }

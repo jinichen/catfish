@@ -118,6 +118,7 @@ fn slugify(title: &str, max_chars: usize) -> String {
 /// `#[serde(untagged)]` 让前端dual-shape 调用兼容:
 ///   - 旧 string: `related: ["陈鸿波", "FFCS"]` (老 caller / WikiCreateModal 简单输入)
 ///   - 新对象: `related: [{name: "陈鸿波", rel: "同事"}, ...]` (typed 真路径)
+///
 /// 都会自动 deserialize 到 RelatedInput → 渲染成 frontmatter 时 dual-shape.
 #[derive(Debug, serde::Deserialize)]
 #[serde(untagged)]
@@ -642,8 +643,8 @@ pub async fn wiki_ingest_source(
     // 3. frontmatter + body. 全文直接塞 body (后台 Analysis LLM 拿 full text 抽 entity/concept).
     let today = chrono_today();
     let bytes_n = full_text.len();
-    let safe_kept = kept_path.replace('\n', " ").replace('\r', " ");
-    let safe_filename = filename.replace('\n', " ").replace('\r', " ");
+    let safe_kept = kept_path.replace(['\n', '\r'], " ");
+    let safe_filename = filename.replace(['\n', '\r'], " ");
 
     let content = format!(
         "---\n\

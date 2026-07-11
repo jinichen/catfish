@@ -151,7 +151,7 @@ pub async fn task_uid_cache_put(
 /// 调试用 — dump 全 cache.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn task_uid_cache_dump() -> Result<HashMap<String, TaskUidCacheEntry>, String> {
-    tokio::task::spawn_blocking(|| read_cache())
+    tokio::task::spawn_blocking(read_cache)
         .await
         .map_err(|e| format!("dump join 失败: {e}"))?
 }

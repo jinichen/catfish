@@ -75,7 +75,7 @@ pub async fn wiki_save_chat_message(
     assistant_response: String,
 ) -> Result<WikiQueryWriteResult, String> {
     // 1. 校验 date 真 YYYY-MM-DD format (简单 check)
-    if date.len() != 10 || !date.chars().nth(4).map_or(false, |c| c == '-') {
+    if date.len() != 10 || !date.chars().nth(4).is_some_and(|c| c == '-') {
         return Err(format!("date format 不合法 (期望 YYYY-MM-DD): {date}"));
     }
 

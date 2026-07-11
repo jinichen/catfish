@@ -8,8 +8,9 @@
 //!
 //! event_type 缺省 = "run", 也可以是 "delete" (catfish_skill_delete 写的).
 
+use std::cmp::Reverse;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -38,11 +39,12 @@ pub struct SkillAuditSummary {
 ///   - 50 × success_rate            (调用成功率, 来自 skill_audit.jsonl ok 字段)
 ///   - 30 × normalized_freq         (调用频率归一化, log 缓增防"用 100 次 = 用 5 次×20 倍")
 ///   - 20 × explicit_feedback_ratio (员工显式 thumbs_up / (up+down), 来自 BL-MM11
-///                                    skill_quality.jsonl. 没 feedback 时给 50 分位中性)
+///     skill_quality.jsonl. 没 feedback 时给 50 分位中性)
 ///   - **× Compactness 乘数 (P3.5.128, 借鉴 Skill-DisCo 2606.26669 Compactness 性质)**:
 ///     - <3 calls → 0.7 (特化, Coverage 不足)
 ///     - >50 calls 且 success<0.5 → 0.8 (泛而弱, scope creep)
 ///     - 其它 → 1.0
+///
 ///     Compactness 用乘数而非加权重, 不破坏老分数对比性 (健康 skill 数字稳, 异常才扣).
 ///
 /// 边界:
@@ -188,7 +190,7 @@ pub async fn skill_audit_summary() -> Result<SkillAuditSummary, String> {
             count: *v,
         })
         .collect();
-    top_skills.sort_by(|a, b| b.count.cmp(&a.count));
+    top_skills.sort_by_key(|t| Reverse(t.count));
     top_skills.truncate(5);
 
     // 最近失败 (近 24h)
@@ -527,11 +529,11 @@ fn skills_known_with_age() -> Result<Vec<(String, String)>, String> {
     Ok(vec![])
 }
 
-fn scan_skills_with_age(root: &PathBuf) -> Result<Vec<(String, String)>, String> {
+fn scan_skills_with_age(root: &Path) -> Result<Vec<(String, String)>, String> {
     let mut paths_with_age: Vec<(String, String)> = vec![];
     fn walk(
-        dir: &PathBuf,
-        root: &PathBuf,
+        dir: &Path,
+        root: &Path,
         out: &mut Vec<(String, String)>,
     ) -> std::io::Result<()> {
         for entry in std::fs::read_dir(dir)? {
