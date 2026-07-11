@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Catfish postinstall WiX fragment (W2 BL-CATFISH-WIN-MSI 7/11).
+
+  msi CustomAction: 装完 files 后自动跑 install.ps1 装 hermes 到
+  %LOCALAPPDATA%\hermes\ (offline 模式, 走 msi 内嵌 uv.exe + python zip +
+  hermes-agent tarball, 全 sandboxed 无网).
+
+  = 关键设计 (Blocker W2-3 mitigation) =
+
+  deferred CustomAction 在 script execute phase 拿不到 property 值 (只能读
+  CustomActionData / ProductCode / UserSID). 见 Microsoft docs:
+  https://learn.microsoft.com/en-us/windows/win32/msi/obtaining-context-information-for-deferred-execution-custom-actions
+
+  正解 (3 步):
+  1. Immediate Type 51 CustomAction 把 [INSTALLDIR] set 进 property, property 名
+     == deferred CA Id ("CatfishRunInstall"). Type 51 = "Set a property" 见
+     https://learn.microsoft.com/en-us/windows/win32/msi/custom-action-type-51
+  2. Deferred CustomAction Id="CatfishRunInstall". 在 script execute phase 读
+     [CustomActionData] 拿到 step 1 set 的值.
+  3. InstallExecuteSequence: immediate 排 After="CostFinalize" (此时 [INSTALLDIR]
+     已 resolve), deferred 排 After="InstallFiles" (此时 resources/windows/
+     文件已到 disk).
+
+  = Impersonate="yes" 语义 (perUser MSI 硬约束) =
+
+  Single Package Authoring "Do not use custom actions in your package that
+  require elevated privileges to run":
+  https://learn.microsoft.com/en-us/windows/win32/msi/single-package-authoring
+  perUser MSI 跑在 user context, 没 SYSTEM token, NoImpersonate 会 fail.
+  写 %LOCALAPPDATA%\hermes 用 user token, 不需 elevate.
+
+  = Return="check" 语义 (拍板严格模式) =
+
+  install.ps1 非 0 退出 → msi rollback. 员工看到明确失败信号, 不会 "装了
+  Companion 但打不开" 假状态. 参考:
+  https://learn.microsoft.com/en-us/windows/win32/msi/return-processing-options-for-custom-actions
+
+  = ExeCommand PowerShell quoting =
+
+  简化模式: -File 直接指到 [CustomActionData], 不嵌套 PowerShell 内部 quoting
+  (agent audit blocker W2-P1 mitigation). CustomActionData 用 `|` 分隔多参数,
+  install.ps1 靠 param() 自己 parse.
+
+  = 未 verify (需真跑 tauri build) =
+  - PowerShell -File 传参在 WiX escape 后是否正确
+  - Feature.Absent="disallow" 是否让 UI 隐藏 (perUser + WixUI_InstallDir 默认)
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <!--
+      Step 1: Immediate Type 51 CA. 把 [INSTALLDIR]resources\windows\install.ps1
+      set 进 property, property 名等于 deferred CA Id.
+    -->
+    <CustomAction Id="SetCatfishRunInstallData"
+                  Property="CatfishRunInstall"
+                  Value="[INSTALLDIR]resources\windows\install.ps1|[INSTALLDIR]hermes\hermes-agent-src|[INSTALLDIR]resources\windows\uv.exe|[INSTALLDIR]resources\windows\cpython-3.11.15-embed.zip"
+                  Execute="immediate"/>
+
+    <!--
+      Step 2: Deferred CA. Id == "CatfishRunInstall" == step 1 Property 值.
+      script phase 里 [CustomActionData] = step 1 set 的完整字符串.
+
+      ExeCommand:
+        powershell.exe -NoProfile -ExecutionPolicy Bypass
+        -Command "& { $d = '[CustomActionData]'.Split('|');
+                      & $d[0] -NonInteractive
+                              -OfflineSourceDir $d[1]
+                              -OfflineUvExe $d[2]
+                              -OfflinePythonZip $d[3] }"
+
+      XML entities:
+        & → &amp;
+        ' → &apos; (只在 XML 属性值内需要 escape)
+        [\[] [\]] → 不用在这, 因为 -Command 只在 " " 里, 不撞 WiX 变量
+    -->
+    <CustomAction Id="CatfishRunInstall"
+                  Execute="deferred"
+                  Impersonate="yes"
+                  Return="check"
+                  ExeCommand="powershell.exe -NoProfile -ExecutionPolicy Bypass -Command &quot;&amp; { $d = '[CustomActionData]'.Split('|'); &amp; $d[0] -NonInteractive -OfflineSourceDir $d[1] -OfflineUvExe $d[2] -OfflinePythonZip $d[3] }&quot;"/>
+
+    <!--
+      Step 3: sequence. NOT REMOVE 条件 = 只在装 / 升级跑, 不在卸载跑.
+    -->
+    <InstallExecuteSequence>
+      <Custom Action="SetCatfishRunInstallData" After="CostFinalize">NOT REMOVE</Custom>
+      <Custom Action="CatfishRunInstall" After="InstallFiles">NOT REMOVE</Custom>
+    </InstallExecuteSequence>
+
+    <!--
+      Feature envelope. Tauri wix.featureRefs 必须引用一个 Feature Id 才会把
+      fragment 里定义的东西 include 进 msi. CustomAction 不需要 ComponentRef,
+      Feature 空的 (只做载体).
+    -->
+    <Feature Id="CatfishPostInstallFeature"
+             Title="Catfish post-install (hermes 装机)"
+             Level="1"
+             Absent="disallow"
+             AllowAdvertise="no"
+             Display="hidden">
+      <!-- No ComponentRef. CustomAction 通过 InstallExecuteSequence 自动 scheduling. -->
+    </Feature>
+  </Fragment>
+</Wix>

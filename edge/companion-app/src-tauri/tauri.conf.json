@@ -85,12 +85,27 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-      "swift/catfish-calendar"
-    ],
+    "resources": {
+      "swift/catfish-calendar": "./",
+      "resources/windows/install.ps1": "./resources/windows/install.ps1",
+      "resources/windows/uv.exe": "./resources/windows/uv.exe",
+      "resources/windows/cpython-3.11.15-embed.zip": "./resources/windows/cpython-3.11.15-embed.zip",
+      "resources/windows/hermes-agent-bundle.tar.gz": "./resources/windows/hermes-agent-bundle.tar.gz"
+    },
     "macOS": {
       "minimumSystemVersion": "10.15",
       "infoPlist": "Info.plist"
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "embedBootstrapper"
+      },
+      "wix": {
+        "language": "en-US",
+        "template": "wix/main.wxs",
+        "fragmentPaths": ["wix/catfish-postinstall.wxs"],
+        "featureRefs": ["CatfishPostInstallFeature"]
+      }
     }
   }
 }
