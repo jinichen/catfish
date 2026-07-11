@@ -18,7 +18,17 @@ set -euo pipefail
 # ─── pin ─────────────────────────────────────────────────
 UV_VERSION="0.4.30"               # astral-sh/uv release tag (Oct 2024)
 PYTHON_VERSION="3.11.15"          # cpython version (must match hermes upstream requires)
-PYTHON_BUILD_TAG="20241016"       # python-build-standalone release date tag
+PYTHON_BUILD_TAG="20260623"       # python-build-standalone release date tag
+                                  # 每 release 只带一个 3.11.x minor 版本;
+                                  # 20241016 只到 3.11.10; 3.11.15 需要 20260623+
+                                  # 找 URL: https://api.github.com/repos/astral-sh/python-build-standalone/releases/tags/<TAG>
+                                  # W2.7 (7/12) fix: 原 pin 20241016 错, cpython 3.11.15 不存在于该 release
+
+# ─── GitHub 镜像支持 (国内网络) ──────────────────────
+# GH_PROXY 环境变量前缀所有 github.com URL. 国内建议:
+#   export GH_PROXY=https://ghfast.top/
+#   或 https://mirror.ghproxy.com/  https://gh-proxy.com/
+: "${GH_PROXY:=}"
 
 # ─── path 解析 (脚本无论从哪儿跑都定位到 companion-app) ─
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -62,7 +72,7 @@ echo ""
 # Step 2: uv.exe (Windows x86_64)
 # ═════════════════════════════════════════════════════════
 echo "[2/4] Downloading uv ${UV_VERSION} (Windows x86_64) ..."
-UV_URL="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-pc-windows-msvc.zip"
+UV_URL="${GH_PROXY}https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-pc-windows-msvc.zip"
 UV_ZIP="${STAGING_DIR}/uv.zip"
 UV_EXTRACT_DIR="${STAGING_DIR}/uv-extract"
 mkdir -p "${UV_EXTRACT_DIR}"
@@ -91,7 +101,7 @@ echo "[3/4] Downloading cpython ${PYTHON_VERSION} (Windows x86_64) ..."
 #   cpython-<version>+<date>-x86_64-pc-windows-msvc-install_only.tar.gz
 # uv 认识 install_only 布局.
 PY_TAG="cpython-${PYTHON_VERSION}+${PYTHON_BUILD_TAG}-x86_64-pc-windows-msvc-install_only.tar.gz"
-PY_URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PYTHON_BUILD_TAG}/${PY_TAG}"
+PY_URL="${GH_PROXY}https://github.com/astral-sh/python-build-standalone/releases/download/${PYTHON_BUILD_TAG}/${PY_TAG}"
 PY_TAR="${STAGING_DIR}/cpython-src.tar.gz"
 PY_EXTRACT="${STAGING_DIR}/cpython-extract"
 PY_DEST="${RESOURCES_DIR}/cpython-${PYTHON_VERSION}-embed.zip"
@@ -128,16 +138,36 @@ elif [[ "${CURRENT_VER}" != "${HERMES_VERSION}" ]]; then
 fi
 
 TAR_DEST="${RESOURCES_DIR}/hermes-agent-bundle.tar.gz"
-# 排除大二进制 / 缓存, 只 tar 源码 + scripts + 配置
+# 排除大二进制 / 缓存, 只 tar 源码 + scripts + 配置.
+# W2.7 (7/12) fix: 原 exclude 漏 venv / venv.bak* / **/__pycache__ 等,
+# 打出 1.2GB tar (含 3.3G venv.bak.v0.15.2 + 1.7G venv). 加齐 exclude 后
+# 降到 ~200MB (纯源码 + docs + skills).
+HERMES_BASE="$(basename "${UPSTREAM_HERMES}")"
 tar czf "${TAR_DEST}" \
     -C "$(dirname "${UPSTREAM_HERMES}")" \
-    --exclude='.git' \
-    --exclude='__pycache__' \
-    --exclude='.venv' \
-    --exclude='node_modules' \
-    --exclude='target' \
-    --exclude='*.pyc' \
-    "$(basename "${UPSTREAM_HERMES}")"
+    --exclude="${HERMES_BASE}/.git" \
+    --exclude="${HERMES_BASE}/__pycache__" \
+    --exclude="${HERMES_BASE}/**/__pycache__" \
+    --exclude="${HERMES_BASE}/venv" \
+    --exclude="${HERMES_BASE}/venv.bak*" \
+    --exclude="${HERMES_BASE}/.venv" \
+    --exclude="${HERMES_BASE}/**/.venv" \
+    --exclude="${HERMES_BASE}/node_modules" \
+    --exclude="${HERMES_BASE}/**/node_modules" \
+    --exclude="${HERMES_BASE}/target" \
+    --exclude="${HERMES_BASE}/**/target" \
+    --exclude="${HERMES_BASE}/.pytest_cache" \
+    --exclude="${HERMES_BASE}/**/.pytest_cache" \
+    --exclude="${HERMES_BASE}/.mypy_cache" \
+    --exclude="${HERMES_BASE}/**/.mypy_cache" \
+    --exclude="${HERMES_BASE}/.ruff_cache" \
+    --exclude="${HERMES_BASE}/dist" \
+    --exclude="${HERMES_BASE}/**/dist" \
+    --exclude="${HERMES_BASE}/*.pyc" \
+    --exclude="${HERMES_BASE}/**/*.pyc" \
+    --exclude="${HERMES_BASE}/logs" \
+    --exclude="${HERMES_BASE}/*.log" \
+    "${HERMES_BASE}"
 TAR_SIZE="$(du -h "${TAR_DEST}" | cut -f1)"
 echo "  ✓ hermes-agent → ${TAR_DEST} (${TAR_SIZE})"
 echo ""
