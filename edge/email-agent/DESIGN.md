@@ -276,6 +276,30 @@ mail.Save()  # 落到草稿箱; .Send() 不调!
 
 **坑**: Outlook 必须在跑 (COM 启动它); 必须配过账号; 大邮箱 .Items 遍历慢, 用 .Restrict() 过滤。
 
+**W2 骨架实现细节 (7/11 BL-EMAIL-OUTLOOK-WIN)**:
+
+- **Folder enum 稳定跨 locale** — 用 `GetDefaultFolder(N)` 走 Microsoft `OlDefaultFolders` 整数 (Inbox=6 / Sent=5 / Drafts=16 / Deleted=3). **不用** `ns.Folders["Sent"]`, 中文 Outlook 是 `"已发送邮件"`, 英文是 `"Sent Items"`, 按 name 挂概率极高.
+
+- **DASL Restrict 走 urn:schemas 语法, 不用 [ReceivedTime] locale 表达式**:
+    ```
+    @SQL="urn:schemas:httpmail:datereceived" > '2026-07-01T00:00:00Z'
+    ```
+    走 xsd:dateTime UTC, locale-independent. 若走 `[ReceivedTime] > '07/01/2026'` 中文 Outlook 期望 `'2026/7/1 上午 12:00'`, 一挂就是全线 hang.
+
+- **RFC 822 Message-ID** — `PropertyAccessor.GetProperty("http://schemas.microsoft.com/mapi/proptag/0x1035001F")`. Exchange / Office 365 账户一定有; IMAP 账户可能返空或抛 com_error, 骨架 try/except 兜底返 None. P3.5.204.b isReplied 算法在 Message-ID 缺失时退化 subject "Re:" fuzzy.
+
+- **COM 线程 threading.local**: pywin32 COM 每线程都要 `pythoncom.CoInitialize()`. Companion 后台走 asyncio worker thread, adapter 用 `threading.local()` 保 `_ol`, `_ns` 状态, 每个线程独立 Dispatch. 主线程和 worker 不共享 `Outlook.Application` 实例, 避免 STA 死锁.
+
+- **ID 序列化** 3 段格式 `outlook_win|<smtp>|<entry_id>` 对齐 `apple_mail|<name>|<id>` 前缀风格. Outlook adapter 全新, `_unpack_id` **不接** 老 2 段格式 (apple_mail 才有历史包袱).
+
+- **W3 集成阶段补** (Windows 机器上手测):
+    - `attachments` meta (iterate `item.Attachments`, decode filename + size)
+    - `recipients / cc / bcc` (iterate `item.Recipients` + Type filter: 1=To, 2=Cc, 3=Bcc)
+    - `references` header (PropertyAccessor `PR_INTERNET_REFERENCES` = `0x1039001F`)
+    - 6 个 optional method (create_draft / send_message / delete_message / mark_read / check_new_mail / export_attachment)
+
+- **平台 fallback**: 非 Windows 平台 `OutlookWinAdapter.__init__` 立即抛 `NotSupportedError`. `NotSupportedError` 继承 `NotImplementedError`, `inbox.get_adapter` line 52 `except (DataNotFoundError, ImportError, NotImplementedError)` 自动 fallback 候选 `foxmail-win`. macOS 开发机跑 `_get_adapter_explicit("outlook-win")` 不会挂 Python interpreter, 只会抛可捕获异常.
+
 ### 4.3 Foxmail Windows (`foxmail_win.py`)
 
 **机制 (读)**: 解析 `~/AppData/Local/Tencent/Foxmail7/Storage/<email>/Mail/<folder>/*.box`

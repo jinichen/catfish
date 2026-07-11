@@ -109,8 +109,11 @@ def _get_adapter_explicit(client: str) -> EmailAdapter:
         )
         return AppleMailAdapter()
     if client == "outlook-win":
-        # TODO: 等 outlook_win.py 实现 (pywin32 COM)
-        raise NotImplementedError("outlook-win adapter 还没实现")
+        # W2 BL-EMAIL-OUTLOOK-WIN (7/11): outlook_win.py 骨架完成. 非 Win 平台
+        # __init__ 里 _import_pywin32 抛 NotSupportedError (继承 NotImplementedError),
+        # inbox.py:52 会自动 fallback 到 foxmail-win 候选.
+        from .adapters.outlook_win import OutlookWinAdapter
+        return OutlookWinAdapter()
     if client == "foxmail-win":
         # TODO: Foxmail Windows 7+ 的 .box / SQLite 路径还没探
         raise NotImplementedError("foxmail-win adapter 还没实现")
