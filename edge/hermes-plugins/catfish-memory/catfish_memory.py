@@ -837,20 +837,68 @@ class CatfishMemoryProvider(MemoryProvider):
         )
 
     def _render_session_meta(self, catfish_home: Path) -> str:
+        """时间感 — 今天日期锚点 (无条件) + 距上次聊天 (若有 session_meta).
+
+        P3.5.219 (7/13 鸿波 catch): 老 raw last_chat_iso, LLM 无当天日期锚点 →
+        小鲶把 7/13 周日算成"下周一". 治本: prefetch 时用 datetime.now() 拿今天
+        date+weekday 无条件注入; last_chat_iso 若存在附一行"距上次 N 天前" humanize.
+
+        # 不用 session_meta['today_date'] 的理由 (agent audit 铁证)
+        hermes memory_manager.py:495 prefetch_all 是同步, line 557 sync_all 是
+        background thread → tick 只在 turn 结尾更新. 跨天首轮 prefetch 看到的
+        today_date **是昨天** (stale 一轮). datetime.now() 是唯一 fresh 手段.
+        跟 _render_expense_summary line 869 同款 pattern.
+
+        # 保留 _tick_session_meta 3 字段写入 (无 dead code)
+        - today_count: Rust commands/relation.rs:161 Dashboard RelationCard 消费
+        - today_date: _tick_session_meta 内部跨天判断 (reset today_count)
+        - last_chat_iso: 本 render + Rust relation.rs:169 humanize_since
+
+        # 军规避坑
+        P3.5.213 negation blindness: 只给正例 (今天 fresh 事实), 无禁词, 无红线.
+        P3.5.217 军规精简: 无军规文本, 只事实锚点. Diff +50 chars ≈ +30 tokens.
+        """
+        now = datetime.now().astimezone()
+        weekday_cn = "一二三四五六日"[now.weekday()]
+        lines = [
+            "## 🕒 时间感",
+            "",
+            f"今天: {now.strftime('%Y-%m-%d')} 星期{weekday_cn}",
+        ]
+
         path = catfish_home / "session_meta.json"
         try:
-            if not path.exists():
-                return ""
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(data, dict):
-                return ""
-            last = data.get("last_chat_iso")
-            if not last:
-                return ""
-            return f"## 🕒 时间感\n\n上次聊天: {last} (catfish session_meta)"
+            if path.exists():
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    last = data.get("last_chat_iso")
+                    if last:
+                        try:
+                            last_dt = datetime.fromisoformat(last)
+                            if last_dt.tzinfo is None:
+                                last_dt = last_dt.replace(tzinfo=now.tzinfo)
+                            secs = int((now - last_dt).total_seconds())
+                            # 对齐 Rust relation.rs humanize_seconds (line 277-299)
+                            # 5 档: 刚刚 / N 分钟 / N 小时 [M 分] / N 天 [M 小时]
+                            if secs < 60:
+                                human = "刚刚"
+                            elif secs < 3600:
+                                human = f"{secs // 60} 分钟前"
+                            elif secs < 86_400:
+                                h = secs // 3600
+                                m = (secs % 3600) // 60
+                                human = f"{h} 小时前" if m == 0 else f"{h} 小时 {m} 分前"
+                            else:
+                                d = secs // 86_400
+                                h = (secs % 86_400) // 3600
+                                human = f"{d} 天前" if h == 0 else f"{d} 天 {h} 小时前"
+                            lines.append(f"上次聊天: {last} ({human})")
+                        except (ValueError, TypeError):
+                            lines.append(f"上次聊天: {last}")
         except (OSError, json.JSONDecodeError) as e:
             logger.debug("session_meta render 失败 %s", e)
-            return ""
+
+        return "\n".join(lines)
 
     def _render_expense_summary(self, catfish_home: Path) -> str:
         """P3.5.78 (6/22 鸿波): 注入 expense 最近收支 summary.

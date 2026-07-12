@@ -20,4 +20,4 @@
 #   直接 npx tauri build, 打进 dmg 的是 4 个 <1KB 空文件, 无实际影响.
 
 *.log
-_phase1_*.sh
+_phase1_*
