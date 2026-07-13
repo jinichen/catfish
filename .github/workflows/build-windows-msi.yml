@@ -1,0 +1,177 @@
+name: Build Windows msi
+
+# 何时跑:
+#   - main push (companion-app 或 install.ps1 patch 改动时自动)
+#   - 手动触发 (Actions 页面 Run workflow 按钮 — 任何时候强制 rebuild)
+#   - 打 tag 时 build release msi (上传 GitHub Release asset)
+on:
+  push:
+    branches: [main]
+    tags: ['v*', 'p39-*']
+    paths:
+      - 'edge/companion-app/**'
+      - 'edge/hermes-fork/patch_install_ps1_offline.py'
+      - '.github/workflows/build-windows-msi.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: build-msi-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-msi:
+    name: Build Catfish Companion msi
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout catfish
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Rust stable-msvc
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: edge/companion-app/src-tauri
+
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ hashFiles('edge/companion-app/package-lock.json') }}
+          restore-keys: npm-
+
+      # ─── Windows resources: install.ps1 patched + uv.exe + cpython zip + hermes tar ───
+
+      - name: Clone hermes-agent 上游 pinned to .hermes-target-version
+        shell: bash
+        run: |
+          set -euo pipefail
+          HERMES_VER=$(cat edge/companion-app/.hermes-target-version | tr -d '[:space:]')
+          echo "Cloning hermes-agent v${HERMES_VER}..."
+          # public repo, no auth needed
+          git clone --depth 1 --branch "v${HERMES_VER}" \
+              https://github.com/NousResearch/hermes-agent.git \
+              /tmp/hermes-agent-src || \
+          git clone --depth 1 \
+              https://github.com/NousResearch/hermes-agent.git \
+              /tmp/hermes-agent-src
+          # verify
+          ls /tmp/hermes-agent-src | head
+
+      - name: Patch install.ps1 offline mode
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 edge/hermes-fork/patch_install_ps1_offline.py \
+              --input /tmp/hermes-agent-src/scripts/install.ps1 \
+              --output edge/companion-app/src-tauri/resources/windows/install.ps1
+          # verify marker
+          grep -q 'CATFISH-OFFLINE-PATCH-v1' \
+              edge/companion-app/src-tauri/resources/windows/install.ps1
+
+      - name: Download uv Windows x86_64
+        shell: bash
+        run: |
+          set -euo pipefail
+          UV_VERSION=0.4.30
+          curl -fSL -o /tmp/uv.zip \
+              "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-pc-windows-msvc.zip"
+          unzip -o /tmp/uv.zip -d /tmp/uv-extract
+          cp /tmp/uv-extract/uv.exe edge/companion-app/src-tauri/resources/windows/uv.exe
+          ls -lh edge/companion-app/src-tauri/resources/windows/uv.exe
+
+      - name: Download + repack cpython 3.11.15 Windows x86_64
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHON_VER=3.11.15
+          BUILD_TAG=20260623
+          FNAME="cpython-${PYTHON_VER}+${BUILD_TAG}-x86_64-pc-windows-msvc-install_only.tar.gz"
+          curl -fSL -o /tmp/cpython.tar.gz \
+              "https://github.com/astral-sh/python-build-standalone/releases/download/${BUILD_TAG}/${FNAME}"
+          # 展开 tar → rename python/ 顶层成 uv 期望目录名 (Windows msvc none)
+          # audit uv 0.4.30 installation.rs fmt::Display 铁证:
+          #   {impl}-{maj}.{min}.{patch}-{os}-{arch}-{libc}
+          #   = cpython-3.11.15-windows-x86_64-none
+          rm -rf /tmp/cpython-extract && mkdir /tmp/cpython-extract
+          tar -xzf /tmp/cpython.tar.gz -C /tmp/cpython-extract
+          # rename 顶层 python/ → cpython-3.11.15-windows-x86_64-none/
+          mv /tmp/cpython-extract/python /tmp/cpython-extract/cpython-${PYTHON_VER}-windows-x86_64-none
+          # 重打 zip (install.ps1 用 Expand-Archive)
+          cd /tmp/cpython-extract
+          zip -qr /tmp/cpython-${PYTHON_VER}-embed.zip cpython-${PYTHON_VER}-windows-x86_64-none
+          mv /tmp/cpython-${PYTHON_VER}-embed.zip $GITHUB_WORKSPACE/edge/companion-app/src-tauri/resources/windows/cpython-${PYTHON_VER}-embed.zip
+          ls -lh $GITHUB_WORKSPACE/edge/companion-app/src-tauri/resources/windows/
+
+      - name: Pack hermes-agent bundle (follow symlink, exclude venv/cache)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # -h dereference symlinks: catfish repo 里 hermes-fork 的 plugin 软链展开
+          tar czhf edge/companion-app/src-tauri/resources/windows/hermes-agent-bundle.tar.gz \
+              -C /tmp \
+              --exclude='hermes-agent/.git' \
+              --exclude='hermes-agent/**/__pycache__' \
+              --exclude='hermes-agent/venv' \
+              --exclude='hermes-agent/venv.bak*' \
+              --exclude='hermes-agent/.venv' \
+              --exclude='hermes-agent/**/.venv' \
+              --exclude='hermes-agent/node_modules' \
+              --exclude='hermes-agent/**/node_modules' \
+              --exclude='hermes-agent/target' \
+              --exclude='hermes-agent/**/target' \
+              --exclude='hermes-agent/**/*.pyc' \
+              hermes-agent-src
+          # rename 顶层目录 hermes-agent-src → hermes-agent (install.ps1 offline 预期)
+          # tar 里已经用 hermes-agent-src 作根, install.ps1 -OfflineSourceDir 传目录名
+          ls -lh edge/companion-app/src-tauri/resources/windows/
+
+      # ─── Companion frontend build ───
+
+      - name: npm install
+        working-directory: edge/companion-app
+        run: npm ci --no-audit --no-fund
+
+      # ─── Tauri msi build (Windows MSVC, no cross-compile) ───
+
+      - name: Tauri build msi
+        working-directory: edge/companion-app
+        run: npx tauri build --target x86_64-pc-windows-msvc --bundles msi
+        env:
+          # 若 sign 步骤将来加, 这里放 cert / password secrets
+          # TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          RUST_LOG: 'info'
+
+      - name: List msi output
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -lh edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/ || true
+
+      - name: Upload msi artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: catfish-companion-msi-${{ github.sha }}
+          path: edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+          if-no-files-found: error
+          retention-days: 30
+
+      # ─── 打 tag 时, 作 release asset (可选) ───
+      - name: Release msi on tag push
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
+          fail_on_unmatched_files: false
