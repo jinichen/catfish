@@ -125,29 +125,46 @@ jobs:
           ls -lh edge/companion-app/src-tauri/resources/windows/uv.exe
 
       - name: Download + repack cpython 3.11.15 Windows x86_64
-        shell: bash
+        # W2.12 (7/13 CI run #7): 用 pwsh 全 native Windows 环境.
+        # 之前 shell:bash + /tmp path 挂: PowerShell 是 native Windows 不认
+        # unix /tmp (Git Bash 内部映射), 也无 unix zip. 换 pwsh 后 $env:RUNNER_TEMP
+        # 走 Windows path, tar / Compress-Archive 都 native.
+        shell: pwsh
         run: |
-          set -euo pipefail
-          PYTHON_VER=3.11.15
-          BUILD_TAG=20260623
-          FNAME="cpython-${PYTHON_VER}+${BUILD_TAG}-x86_64-pc-windows-msvc-install_only.tar.gz"
-          curl -fSL -o /tmp/cpython.tar.gz \
-              "https://github.com/astral-sh/python-build-standalone/releases/download/${BUILD_TAG}/${FNAME}"
-          # 展开 tar → rename python/ 顶层成 uv 期望目录名 (Windows msvc none)
-          # audit uv 0.4.30 installation.rs fmt::Display 铁证:
-          #   {impl}-{maj}.{min}.{patch}-{os}-{arch}-{libc}
-          #   = cpython-3.11.15-windows-x86_64-none
-          rm -rf /tmp/cpython-extract && mkdir /tmp/cpython-extract
-          tar -xzf /tmp/cpython.tar.gz -C /tmp/cpython-extract
-          # rename 顶层 python/ → cpython-3.11.15-windows-x86_64-none/
-          mv /tmp/cpython-extract/python /tmp/cpython-extract/cpython-${PYTHON_VER}-windows-x86_64-none
-          # 重打 zip. W2.11 (7/13 CI run #6): Windows runner Git Bash 无 unix zip.
-          # 用 PowerShell Compress-Archive (native Windows 内置, 无外部 dep).
-          # Compress-Archive -Path <src_dir> -DestinationPath <output.zip> 会打包
-          # 顶层目录本身进 zip (保留 cpython-3.11.15-windows-x86_64-none/ 作根).
-          powershell.exe -Command "Compress-Archive -Path '/tmp/cpython-extract/cpython-${PYTHON_VER}-windows-x86_64-none' -DestinationPath '/tmp/cpython-${PYTHON_VER}-embed.zip' -Force"
-          mv /tmp/cpython-${PYTHON_VER}-embed.zip $GITHUB_WORKSPACE/edge/companion-app/src-tauri/resources/windows/cpython-${PYTHON_VER}-embed.zip
-          ls -lh $GITHUB_WORKSPACE/edge/companion-app/src-tauri/resources/windows/
+          $ErrorActionPreference = 'Stop'
+          $PYTHON_VER = '3.11.15'
+          $BUILD_TAG = '20260623'
+          $FNAME = "cpython-${PYTHON_VER}+${BUILD_TAG}-x86_64-pc-windows-msvc-install_only.tar.gz"
+          $URL = "https://github.com/astral-sh/python-build-standalone/releases/download/${BUILD_TAG}/${FNAME}"
+
+          $TMP = $env:RUNNER_TEMP
+          $tarPath = "$TMP\cpython.tar.gz"
+          $extractDir = "$TMP\cpython-extract"
+
+          # 下 tar.gz
+          Write-Host "Downloading cpython 3.11.15 Windows x86_64 ..."
+          Invoke-WebRequest -Uri $URL -OutFile $tarPath
+
+          # 展开 tar (Windows 10 build 17063+ 内置 bsd tar)
+          if (Test-Path $extractDir) { Remove-Item -Recurse -Force $extractDir }
+          New-Item -ItemType Directory -Path $extractDir | Out-Null
+          tar -xzf $tarPath -C $extractDir
+          if ($LASTEXITCODE -ne 0) { throw "tar extract failed: $LASTEXITCODE" }
+
+          # rename 顶层 python\ → cpython-3.11.15-windows-x86_64-none\
+          # audit uv 0.4.30 installation.rs fmt::Display InstallationKey format:
+          #   {impl}-{maj}.{min}.{patch}-{os}-{arch}-{libc} = cpython-3.11.15-windows-x86_64-none
+          $expectedName = "cpython-${PYTHON_VER}-windows-x86_64-none"
+          Rename-Item -Path "$extractDir\python" -NewName $expectedName
+
+          # 重打 zip (Windows native Compress-Archive)
+          $outZip = "$env:GITHUB_WORKSPACE\edge\companion-app\src-tauri\resources\windows\cpython-${PYTHON_VER}-embed.zip"
+          if (Test-Path $outZip) { Remove-Item -Force $outZip }
+          Compress-Archive -Path "$extractDir\$expectedName" -DestinationPath $outZip -Force
+
+          # verify
+          Get-ChildItem "$env:GITHUB_WORKSPACE\edge\companion-app\src-tauri\resources\windows\" |
+              Format-Table Name, Length
 
       - name: Pack hermes-agent bundle (follow symlink, exclude venv/cache)
         shell: bash
