@@ -153,8 +153,26 @@
       fragment 里定义的东西 include 进 msi. CustomAction 不需要 ComponentRef,
       Feature 空 (只做载体).
     -->
+    <!--
+      W2.17 (7/13 CI run #12 铁证): Feature Title 含 `装机` 中文, light 写
+      msi Feature table 时 database codepage=1252 (Western European) 挂
+      LGHT0311. msi table 值受 codepage 限制, wxs 里 attribute value (会进
+      msi table 的) 必须纯 ASCII 或 Latin-1 subset. 换成纯英文.
+
+      注: comment 里中文 OK, candle 会剥. 只 attribute value (Title / Value /
+      ExeCommand / Description / RegistryValue etc.) 受限.
+
+      副选方案 (未采): 改 msi codepage 到 65001 UTF-8 (加 Product/@Codepage=
+      65001 或 WixLocalization/@Codepage=65001). msi UTF-8 Windows 兼容性
+      老装机器有坑, 且此 fragment 走 Tauri 上游 main.wxs 生成的 Product
+      element, override codepage 需改 tauri.conf.json language config, 侵入
+      性大. 改 ASCII 一处最省事.
+
+      沙箱 lint 检查 non-ASCII 在 wxs attribute (comment 剥掉):
+        python3 -c '拿 test_no_non_ascii_in_attr' (可加到 CI 未来防复发)
+    -->
     <Feature Id="CatfishPostInstallFeature"
-             Title="Catfish post-install (hermes 装机)"
+             Title="Catfish post-install (hermes bootstrap)"
              Level="1"
              Absent="disallow"
              AllowAdvertise="no"
