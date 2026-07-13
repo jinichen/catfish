@@ -54,20 +54,28 @@ jobs:
 
       # ─── Windows resources: install.ps1 patched + uv.exe + cpython zip + hermes tar ───
 
-      - name: Clone hermes-agent 上游 pinned to .hermes-target-version
+      - name: Clone hermes-agent 上游 pinned to .hermes-git-tag
         shell: bash
         run: |
           set -euo pipefail
+          # 版本映射 audit 铁证 (7/13):
+          # .hermes-target-version = 0.18.0 (pyproject 内部版本)
+          # GitHub tag = v2026.7.1 (date 格式, 独立 numbering)
+          # 独立记 GitHub tag 到 .hermes-git-tag, 避免混淆.
+          HERMES_TAG=$(cat edge/companion-app/.hermes-git-tag | tr -d '[:space:]')
           HERMES_VER=$(cat edge/companion-app/.hermes-target-version | tr -d '[:space:]')
-          echo "Cloning hermes-agent v${HERMES_VER}..."
-          # public repo, no auth needed
-          git clone --depth 1 --branch "v${HERMES_VER}" \
-              https://github.com/NousResearch/hermes-agent.git \
-              /tmp/hermes-agent-src || \
-          git clone --depth 1 \
+          echo "Cloning hermes-agent GitHub tag=${HERMES_TAG} (pyproject version=${HERMES_VER})"
+          git clone --depth 1 --branch "${HERMES_TAG}" \
               https://github.com/NousResearch/hermes-agent.git \
               /tmp/hermes-agent-src
-          # verify
+          # verify pyproject version 匹配 (defense in depth)
+          ACTUAL_VER=$(grep -E '^version' /tmp/hermes-agent-src/pyproject.toml | head -1 | sed -E 's/version *= *"([^"]+)"/\1/' | tr -d '[:space:]')
+          if [[ "${ACTUAL_VER}" != "${HERMES_VER}" ]]; then
+            echo "ERROR: cloned hermes-agent pyproject version=${ACTUAL_VER}, expected ${HERMES_VER}"
+            echo "  .hermes-git-tag (${HERMES_TAG}) 跟 .hermes-target-version (${HERMES_VER}) 映射错. audit + update."
+            exit 1
+          fi
+          echo "OK version match: ${HERMES_VER}"
           ls /tmp/hermes-agent-src | head
 
       - name: Patch install.ps1 offline mode
