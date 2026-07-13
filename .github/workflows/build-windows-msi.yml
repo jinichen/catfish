@@ -99,6 +99,11 @@ jobs:
 
       - name: Patch install.ps1 offline mode
         shell: bash
+        env:
+          # W2.10 Windows Python 3.12 cp1252 stdout 挂 unicode. 双保险:
+          # env var + script 内 sys.stdout.reconfigure.
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: '1'
         run: |
           set -euo pipefail
           python3 edge/hermes-fork/patch_install_ps1_offline.py \

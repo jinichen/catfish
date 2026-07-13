@@ -61,6 +61,17 @@ import re
 import sys
 from pathlib import Path
 
+# W2.10 (7/13 CI run #5 修): Windows Python 3.12 stdout 默认 cp1252 codec,
+# script 里 print 含 `→` (U+2192) 或中文时挂 UnicodeEncodeError. 强制
+# reconfigure stdout/stderr 走 UTF-8, macOS/Linux 已默认 UTF-8 无影响.
+# 参考: https://docs.python.org/3/library/sys.html#sys.stdout.reconfigure (3.7+)
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass  # 不 fatal, 兼容 Python <3.7 或非标准 stdout
+
 # ─── 上游 pin ─────────────────────────────────────────────────
 
 #: 当前测试通过的 install.ps1 SHA256. Bump 时必须重新 audit 4 处锚点是否稳定.
