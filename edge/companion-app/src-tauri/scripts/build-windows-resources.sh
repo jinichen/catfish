@@ -142,8 +142,13 @@ TAR_DEST="${RESOURCES_DIR}/hermes-agent-bundle.tar.gz"
 # W2.7 (7/12) fix: 原 exclude 漏 venv / venv.bak* / **/__pycache__ 等,
 # 打出 1.2GB tar (含 3.3G venv.bak.v0.15.2 + 1.7G venv). 加齐 exclude 后
 # 降到 ~200MB (纯源码 + docs + skills).
+# W2.9 (7/13) fix: 加 -h dereference symlinks. 根因: hermes-agent/plugins/memory/
+#   catfish-memory + catfish-todo-sync 是 dev 机软链指向 catfish repo 里的 plugin
+#   源码 (edge/hermes-plugins/*). 不加 -h → Windows tar 展开时 Can't create symlink
+#   (Invalid argument). 加 -h → tar 打包时把软链展开成真目录内容, Windows tar 拿
+#   到真目录不用创建软链. 副作用: tar 变大 ~10-20MB (2 个 plugin 源码字节), 无痛.
 HERMES_BASE="$(basename "${UPSTREAM_HERMES}")"
-tar czf "${TAR_DEST}" \
+tar czhf "${TAR_DEST}" \
     -C "$(dirname "${UPSTREAM_HERMES}")" \
     --exclude="${HERMES_BASE}/.git" \
     --exclude="${HERMES_BASE}/__pycache__" \
