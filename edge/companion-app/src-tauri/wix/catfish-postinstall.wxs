@@ -63,9 +63,27 @@
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Fragment>
     <!--
-      Step 1: 4 个 Type 51 SetProperty immediate CA. 各 set 一个 property.
-      Type 51 doc: https://learn.microsoft.com/en-us/windows/win32/msi/custom-action-type-51
+      W2.16 (7/13 CI run #11 铁证): candle CNDL0037 挂 line 104 CatfishRunInstall
+      缺 anchor attr. <CustomAction ExeCommand=...> 必须搭配 BinaryKey|Directory|
+      FileKey|Property 之一让 msi 知道 CA type. 我们跑系统预装 powershell.exe
+      (msi 未安装的外部 exe) → Type 50 (Property = exe 全路径).
+
+      POWERSHELLEXE (UPPERCASE 因为公开 property, msi Format 展开 [SystemFolder]
+      为 C:\Windows\System32 全路径). msi Type 50 语义: property 值 = 全 exe 路径,
+      ExeCommand = 参数, msi 拼 `<Property值> <ExeCommand>` 起 process.
     -->
+    <Property Id="POWERSHELLEXE" Value="powershell.exe"/>
+
+    <!--
+      Step 1: 5 个 Type 51 SetProperty immediate CA. 4 个 catfish 路径 + 1 个
+      POWERSHELLEXE 全路径 (拼 [SystemFolder]). Type 51 doc:
+      https://learn.microsoft.com/en-us/windows/win32/msi/custom-action-type-51
+    -->
+    <CustomAction Id="SetPowerShellExePath"
+                  Property="POWERSHELLEXE"
+                  Value="[SystemFolder]WindowsPowerShell\v1.0\powershell.exe"
+                  Execute="immediate"/>
+
     <CustomAction Id="SetCatfishInstallPs1Path"
                   Property="CatfishInstallPs1Path"
                   Value="[INSTALLDIR]resources\windows\install.ps1"
@@ -101,11 +119,17 @@
       注意: 路径里 `'` (O'Brien 用户名) 在双引号 wrap 下无害
       (PowerShell 双引号 literal 允许 `'`, 也不需要 Split).
     -->
+    <!--
+      W2.16 修 CNDL0037: 加 Property="POWERSHELLEXE" 让 candle 认成 Type 50.
+      Type 50 语义: msi Format 展开时拼 `<POWERSHELLEXE值> <ExeCommand>` 起 process,
+      所以 ExeCommand 去掉开头 powershell.exe (会由 Property 值 prepend).
+    -->
     <CustomAction Id="CatfishRunInstall"
+                  Property="POWERSHELLEXE"
                   Execute="deferred"
                   Impersonate="yes"
                   Return="check"
-                  ExeCommand='powershell.exe -NoProfile -ExecutionPolicy Bypass -File "[CatfishInstallPs1Path]" -NonInteractive -OfflineSourceDir "[CatfishHermesSourceDir]" -OfflineUvExe "[CatfishUvExePath]" -OfflinePythonZip "[CatfishPythonZipPath]"'/>
+                  ExeCommand='-NoProfile -ExecutionPolicy Bypass -File "[CatfishInstallPs1Path]" -NonInteractive -OfflineSourceDir "[CatfishHermesSourceDir]" -OfflineUvExe "[CatfishUvExePath]" -OfflinePythonZip "[CatfishPythonZipPath]"'/>
 
     <!--
       Step 3: sequence. 4 SetProperty CA 排 After=CostFinalize
@@ -116,7 +140,8 @@
       按 wxs 顺序即可. NOT REMOVE 条件 = 只在装 / 升级跑, 不在卸载跑.
     -->
     <InstallExecuteSequence>
-      <Custom Action="SetCatfishInstallPs1Path"   After="CostFinalize">NOT REMOVE</Custom>
+      <Custom Action="SetPowerShellExePath"       After="CostFinalize">NOT REMOVE</Custom>
+      <Custom Action="SetCatfishInstallPs1Path"   After="SetPowerShellExePath">NOT REMOVE</Custom>
       <Custom Action="SetCatfishHermesSourceDir"  After="SetCatfishInstallPs1Path">NOT REMOVE</Custom>
       <Custom Action="SetCatfishUvExePath"        After="SetCatfishHermesSourceDir">NOT REMOVE</Custom>
       <Custom Action="SetCatfishPythonZipPath"    After="SetCatfishUvExePath">NOT REMOVE</Custom>
