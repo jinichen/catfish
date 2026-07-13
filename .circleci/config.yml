@@ -1,0 +1,273 @@
+# CircleCI Windows msi build (W2.20 7/13, GH Actions billing 爆 + AppVeyor
+# private 收费, 切 CircleCI free tier: 30k credits/月, private OK).
+#
+# 复用 .github/workflows/build-windows-msi.yml 全部逻辑 (W2.10-W2.18 fix)
+# 翻译到 CircleCI 2.1 语法.
+#
+# Free tier 用量:
+#   Windows VM Medium (4 CPU / 16 GB) = 40 credits/min
+#   一次 build ~40 min = 1600 credits
+#   30000 / 1600 ≈ 18 次 build/月 (够 iter 出 msi + 后续偶尔重编)
+#
+# 装法:
+#   1. https://app.circleci.com/signup → GitHub 账号登录 (private repo 授权)
+#   2. Projects → jinichen/catfish → Set Up Project → 选 "Fastest" (fast setup)
+#   3. push main 触发 build, 或页面 Trigger Pipeline
+#   4. 完成后 Job 页面 Artifacts tab 下 msi
+
+version: 2.1
+
+orbs:
+  win: circleci/windows@5.1.0
+
+jobs:
+  build-msi:
+    executor:
+      name: win/default          # Windows Server 2022 image
+      size: medium                # 4 CPU / 16 GB RAM, 40 credits/min
+      shell: powershell.exe -ExecutionPolicy Bypass -NoProfile
+
+    environment:
+      RUST_LOG: info
+      # W2.10 patch_install_ps1_offline.py Windows Python cp1252 stdout 挂
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
+      # W2.14 esaxx-rs (tokenizers C++) cc-rs 默认 /MT static CRT 跟 ort-sys
+      # /MD dynamic CRT 撞 LNK2038. force /MD 全局对齐.
+      CFLAGS_x86_64_pc_windows_msvc: /MD
+      CXXFLAGS_x86_64_pc_windows_msvc: /MD
+
+    steps:
+      - checkout
+
+      # ─── 装 toolchain (Windows Server 2022 image 有 git/pwsh/choco/node/python,
+      #      需自装 Rust MSVC target) ───
+
+      - run:
+          name: Verify preinstalled tools
+          command: |
+            node --version
+            npm --version
+            python --version
+            git --version
+
+      - restore_cache:
+          keys:
+            - rust-cargo-v1-{{ checksum "edge/companion-app/src-tauri/Cargo.lock" }}
+            - rust-cargo-v1-
+
+      - run:
+          name: Install Rust MSVC (若无缓存)
+          command: |
+            $rustcExists = Get-Command rustc -ErrorAction SilentlyContinue
+            if (-not $rustcExists) {
+              Write-Host "Installing rustup..."
+              Invoke-WebRequest -Uri "https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe" -OutFile "$env:TEMP\rustup-init.exe"
+              & "$env:TEMP\rustup-init.exe" --default-toolchain stable -y --profile minimal
+            }
+            $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+            rustup target add x86_64-pc-windows-msvc
+            rustc --version
+            cargo --version
+            # 持久化 PATH 到后续 step
+            echo "PATH=$env:PATH" | Out-File -Append -FilePath $env:GITHUB_ENV -ErrorAction SilentlyContinue
+            [System.Environment]::SetEnvironmentVariable("PATH", $env:PATH, "Process")
+
+      - restore_cache:
+          keys:
+            - npm-v1-{{ checksum "edge/companion-app/package-lock.json" }}
+            - npm-v1-
+
+      # ─── Prepare Windows resources (patched install.ps1 + uv + cpython + hermes tar) ───
+
+      - run:
+          name: Clone hermes-agent pinned tag
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $HERMES_TAG = (Get-Content edge\companion-app\.hermes-git-tag -Raw).Trim()
+            $HERMES_VER = (Get-Content edge\companion-app\.hermes-target-version -Raw).Trim()
+            Write-Host "Cloning hermes-agent GitHub tag=$HERMES_TAG (pyproject version=$HERMES_VER)"
+            $hermesDir = "$env:TEMP\hermes-agent-src"
+            if (Test-Path $hermesDir) { Remove-Item -Recurse -Force $hermesDir }
+            git clone --depth 1 --branch $HERMES_TAG `
+              https://github.com/NousResearch/hermes-agent.git $hermesDir
+            # verify pyproject version 匹配
+            $verLine = Select-String -Path "$hermesDir\pyproject.toml" -Pattern '^version'
+            $actualVer = ($verLine.Line -replace '^version\s*=\s*"([^"]+)".*', '$1').Trim()
+            if ($actualVer -ne $HERMES_VER) {
+              throw ".hermes-git-tag ($HERMES_TAG) => pyproject $actualVer, expected $HERMES_VER"
+            }
+            Write-Host "OK version match: $HERMES_VER"
+
+      - run:
+          name: Copy catfish plugins into hermes-agent-src
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $hermesDir = "$env:TEMP\hermes-agent-src"
+            New-Item -ItemType Directory -Force -Path "$hermesDir\plugins\memory" | Out-Null
+            foreach ($plugin in @('catfish-memory', 'catfish-todo-sync')) {
+              $src = "edge\hermes-plugins\$plugin"
+              if (Test-Path $src) {
+                Copy-Item -Recurse -Force $src "$hermesDir\plugins\memory\$plugin"
+                Write-Host "OK copied $plugin"
+              } else {
+                Write-Host "WARN: $src missing"
+              }
+            }
+
+      - run:
+          name: Patch install.ps1 offline mode
+          command: |
+            $ErrorActionPreference = 'Stop'
+            python edge\hermes-fork\patch_install_ps1_offline.py `
+              --input "$env:TEMP\hermes-agent-src\scripts\install.ps1" `
+              --output edge\companion-app\src-tauri\resources\windows\install.ps1
+            if ($LASTEXITCODE -ne 0) { throw "patch failed" }
+            $marker = Select-String -Path edge\companion-app\src-tauri\resources\windows\install.ps1 -Pattern 'CATFISH-OFFLINE-PATCH-v1'
+            if (-not $marker) { throw "patch marker missing" }
+            Write-Host "install.ps1 patched OK"
+
+      - run:
+          name: Download uv Windows x86_64
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $UV_VERSION = '0.4.30'
+            $url = "https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-x86_64-pc-windows-msvc.zip"
+            $zip = "$env:TEMP\uv.zip"
+            Invoke-WebRequest -Uri $url -OutFile $zip
+            $extractDir = "$env:TEMP\uv-extract"
+            if (Test-Path $extractDir) { Remove-Item -Recurse -Force $extractDir }
+            Expand-Archive -Path $zip -DestinationPath $extractDir -Force
+            Copy-Item "$extractDir\uv.exe" edge\companion-app\src-tauri\resources\windows\uv.exe -Force
+
+      - run:
+          name: Download + repack cpython 3.11.15 Windows x86_64
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $PYTHON_VER = '3.11.15'
+            $BUILD_TAG = '20260623'
+            $FNAME = "cpython-${PYTHON_VER}+${BUILD_TAG}-x86_64-pc-windows-msvc-install_only.tar.gz"
+            $URL = "https://github.com/astral-sh/python-build-standalone/releases/download/${BUILD_TAG}/${FNAME}"
+            $tarPath = "$env:TEMP\cpython.tar.gz"
+            $extractDir = "$env:TEMP\cpython-extract"
+            Invoke-WebRequest -Uri $URL -OutFile $tarPath
+            if (Test-Path $extractDir) { Remove-Item -Recurse -Force $extractDir }
+            New-Item -ItemType Directory -Path $extractDir | Out-Null
+            tar -xzf $tarPath -C $extractDir
+            if ($LASTEXITCODE -ne 0) { throw "tar extract failed" }
+            $expectedName = "cpython-${PYTHON_VER}-windows-x86_64-none"
+            Rename-Item -Path "$extractDir\python" -NewName $expectedName
+            $outZip = "$PWD\edge\companion-app\src-tauri\resources\windows\cpython-${PYTHON_VER}-embed.zip"
+            if (Test-Path $outZip) { Remove-Item -Force $outZip }
+            Compress-Archive -Path "$extractDir\$expectedName" -DestinationPath $outZip -Force
+
+      - run:
+          name: Pack hermes-agent bundle (dereference symlink)
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $outTar = "$PWD\edge\companion-app\src-tauri\resources\windows\hermes-agent-bundle.tar.gz"
+            Push-Location $env:TEMP
+            try {
+              tar czhf $outTar `
+                --exclude=hermes-agent-src/.git `
+                --exclude=hermes-agent-src/venv `
+                --exclude=hermes-agent-src/venv.bak `
+                --exclude=hermes-agent-src/.venv `
+                --exclude=hermes-agent-src/node_modules `
+                --exclude=hermes-agent-src/target `
+                hermes-agent-src
+              if ($LASTEXITCODE -ne 0) { throw "tar pack failed" }
+            } finally { Pop-Location }
+
+      # ─── frontend build ───
+
+      - run:
+          name: npm install
+          command: |
+            Push-Location edge\companion-app
+            try {
+              npm ci --no-audit --no-fund
+              if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
+            } finally { Pop-Location }
+
+      # ─── W2.18 Pre-download WiX + wrap light.exe (ICE38/ICE64 suppression) ───
+
+      - run:
+          name: Pre-download WiX + wrap light.exe
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+            $wixDir = "$env:LOCALAPPDATA\tauri\WixTools314"
+            New-Item -ItemType Directory -Force -Path $wixDir | Out-Null
+            $wixZip = "$env:TEMP\wix314-binaries.zip"
+            Invoke-WebRequest -Uri "https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip" -OutFile $wixZip
+            Expand-Archive -Path $wixZip -DestinationPath $wixDir -Force
+            if (-not (Test-Path "$wixDir\light.exe")) { throw "light.exe 缺失" }
+            Move-Item "$wixDir\light.exe" "$wixDir\light-real.exe" -Force
+            $wrapSrc = "$PWD\edge\companion-app\scripts\light_wrapper.rs"
+            if (-not (Test-Path $wrapSrc)) { throw "wrapper source missing" }
+            rustc $wrapSrc -o "$wixDir\light.exe" --edition 2021 -C opt-level=0
+            if ($LASTEXITCODE -ne 0) { throw "rustc failed" }
+            Write-Host "wrapped light.exe OK"
+
+      # ─── Tauri build msi ───
+
+      - run:
+          name: Tauri build msi
+          no_output_timeout: 45m
+          command: |
+            $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+            Push-Location edge\companion-app
+            try {
+              npx tauri build --target x86_64-pc-windows-msvc --bundles msi --verbose
+              if ($LASTEXITCODE -ne 0) { throw "tauri build failed with $LASTEXITCODE" }
+            } finally { Pop-Location }
+
+      - run:
+          name: Dump wix on failure
+          when: on_fail
+          command: |
+            $wixDir = "edge\companion-app\src-tauri\target\x86_64-pc-windows-msvc\release\wix"
+            if (Test-Path $wixDir) {
+              Get-ChildItem $wixDir -Recurse | Format-Table FullName, Length
+              $mainExpanded = "$wixDir\x64\main.wxs"
+              if (Test-Path $mainExpanded) {
+                Write-Host "===== main.wxs expanded ====="
+                Get-Content $mainExpanded
+              }
+            }
+
+      - run:
+          name: List msi output
+          command: |
+            $bundleDir = "edge\companion-app\src-tauri\target\x86_64-pc-windows-msvc\release\bundle\msi"
+            if (Test-Path $bundleDir) {
+              Get-ChildItem $bundleDir | Format-Table Name, Length
+            }
+
+      # ─── save cache + upload artifact ───
+
+      - save_cache:
+          key: rust-cargo-v1-{{ checksum "edge/companion-app/src-tauri/Cargo.lock" }}
+          paths:
+            - C:\Users\circleci\.cargo\registry
+            - C:\Users\circleci\.cargo\git
+
+      - save_cache:
+          key: npm-v1-{{ checksum "edge/companion-app/package-lock.json" }}
+          paths:
+            - edge\companion-app\node_modules
+
+      - store_artifacts:
+          path: edge\companion-app\src-tauri\target\x86_64-pc-windows-msvc\release\bundle\msi
+          destination: msi
+
+workflows:
+  version: 2
+  build:
+    jobs:
+      - build-msi:
+          filters:
+            branches:
+              only:
+                - main
