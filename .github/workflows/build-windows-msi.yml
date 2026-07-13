@@ -78,6 +78,25 @@ jobs:
           echo "OK version match: ${HERMES_VER}"
           ls /tmp/hermes-agent-src | head
 
+      - name: Copy catfish plugins into hermes-agent-src
+        shell: bash
+        run: |
+          set -euo pipefail
+          # catfish repo edge/hermes-plugins/{catfish-memory,catfish-todo-sync}
+          # 需要拷进 hermes-agent-src/plugins/memory/, hermes 启动时加载.
+          # (dev 机是软链, CI clean clone 是空; 拷源码 = 展开等价)
+          mkdir -p /tmp/hermes-agent-src/plugins/memory
+          for plugin in catfish-memory catfish-todo-sync; do
+            if [[ -d "edge/hermes-plugins/${plugin}" ]]; then
+              cp -R "edge/hermes-plugins/${plugin}" \
+                    "/tmp/hermes-agent-src/plugins/memory/${plugin}"
+              echo "OK copied ${plugin}"
+            else
+              echo "WARN: edge/hermes-plugins/${plugin} 不存在, hermes 启动会缺 plugin"
+            fi
+          done
+          ls /tmp/hermes-agent-src/plugins/memory/
+
       - name: Patch install.ps1 offline mode
         shell: bash
         run: |
