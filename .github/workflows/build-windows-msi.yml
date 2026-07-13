@@ -197,6 +197,58 @@ jobs:
 
       # ─── Tauri msi build (Windows MSVC, no cross-compile) ───
 
+      # W2.18 (7/13 CI run #13 铁证): light.exe 报 8 处 ICE38 + 2 处 ICE64
+      # error 挂. 根因: Tauri v2 上游 main.wxs Handlebars 生成的 Component 每
+      # 个 File 加 KeyPath="yes" (per-machine 标准), 但我们走 per-user 装
+      # %LOCALAPPDATA%. ICE38 严格要求 user profile Component 用 HKCU
+      # RegistryValue 做 KeyPath (让 msi per-user 追踪), 不能用 File.
+      #
+      # Tauri auto-gen Component 改不了 (Handlebars 硬编 KeyPath=yes on File).
+      # Tauri v2 wix config 不暴露 additionalLightArgs 传 ICE 抑制参数.
+      #
+      # 方案 A: pre-download WiX + wrap light.exe (rustc 编 shim) 拼
+      # -sice:ICE38 -sice:ICE64 -sice:ICE91 参数. Tauri 检测 WixTools314
+      # 已存在跳下载, 直接 call 我们的 wrapper light.exe.
+      #
+      # ICE 抑制的语义边界:
+      # - install/uninstall 照常工作 (msi 引擎不看 ICE)
+      # - ICE38 抑制: msi Feature table 用 File KeyPath 追踪 Component, 不
+      #   HKCU 独立 per-user 状态. 影响: 若一台机器多用户各自装, msi 引擎
+      #   会认为已装 (共享 File 状态), 第二用户装无效. 我们场景 corp 单
+      #   用户机, 无冲击.
+      # - ICE64 抑制: uninstall 可能残留 %LOCALAPPDATA%\Catfish Companion\
+      #   子目录 (hermes 装的 python, models 等). 用户手动清即可.
+      # - ICE91 抑制: warning-only, 已经不 fail.
+      - name: Pre-download WiX + wrap light.exe with ICE suppression
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $wixDir = "$env:LOCALAPPDATA\tauri\WixTools314"
+          New-Item -ItemType Directory -Force -Path $wixDir | Out-Null
+
+          Write-Host "Downloading WiX 3.14.1 binaries..."
+          $wixZip = "$env:RUNNER_TEMP\wix314-binaries.zip"
+          Invoke-WebRequest -Uri "https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip" -OutFile $wixZip
+
+          Write-Host "Extracting to $wixDir..."
+          Expand-Archive -Path $wixZip -DestinationPath $wixDir -Force
+
+          if (-not (Test-Path "$wixDir\light.exe")) { throw "light.exe 缺失, WiX zip 结构变了?" }
+          if (-not (Test-Path "$wixDir\candle.exe")) { throw "candle.exe 缺失" }
+
+          Write-Host "Renaming light.exe -> light-real.exe..."
+          Move-Item "$wixDir\light.exe" "$wixDir\light-real.exe" -Force
+
+          Write-Host "Compiling light_wrapper.rs -> light.exe (rustc single file, no deps)..."
+          $wrapSrc = "$env:GITHUB_WORKSPACE\edge\companion-app\scripts\light_wrapper.rs"
+          if (-not (Test-Path $wrapSrc)) { throw "wrapper source not found: $wrapSrc" }
+          rustc $wrapSrc -o "$wixDir\light.exe" --edition 2021 -C opt-level=0
+          if ($LASTEXITCODE -ne 0) { throw "rustc failed: $LASTEXITCODE" }
+
+          Write-Host "WixTools314 dir now:"
+          Get-ChildItem $wixDir | Where-Object { $_.Name -match '\.(exe|dll)$' } |
+              Select-Object Name, Length | Format-Table
+
       - name: Tauri build msi
         working-directory: edge/companion-app
         run: npx tauri build --target x86_64-pc-windows-msvc --bundles msi --verbose
