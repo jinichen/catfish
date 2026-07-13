@@ -20,4 +20,9 @@
 #   直接 npx tauri build, 打进 dmg 的是 4 个 <1KB 空文件, 无实际影响.
 
 *.log
-_phase1_*
+# W2.8 (7/13) 修 encoding 根治: _phase1_win_* kit (3 files, ~20KB 总) 进 git,
+# 让员工 Windows 侧走 Invoke-WebRequest 拉 GitHub raw 覆盖本地 (从此稳定).
+# 只排除临时 log / 展开的 hermes-agent-src\ (从 tar 展开的~200MB tree)
+_phase1_*.log
+hermes-agent-src/
+hermes-agent/
