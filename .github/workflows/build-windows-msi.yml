@@ -201,9 +201,17 @@ jobs:
         working-directory: edge/companion-app
         run: npx tauri build --target x86_64-pc-windows-msvc --bundles msi
         env:
+          RUST_LOG: 'info'
+          # W2.14 (7/13 CI run #9): esaxx-rs 用 /MT static CRT, ort-sys 用 /MD
+          # dynamic CRT (Rust MSVC default). Linker LNK2038 mismatch 500+ obj.
+          # Force esaxx-rs (cc-rs C++ 编译) 用 /MD 跟 Rust + ort-sys 对齐.
+          # cc-rs 认 CFLAGS_<target>_msvc / CXXFLAGS_<target>_msvc env.
+          CFLAGS_x86_64_pc_windows_msvc: "/MD"
+          CXXFLAGS_x86_64_pc_windows_msvc: "/MD"
+          # 备保: 全平台 CFLAGS/CXXFLAGS 也加, 若 cc-rs 因 target triple 不匹配
+          # 走 fallback env, 仍走 /MD. Windows GNU/Linux 无 /MD 概念, 忽略 no-op.
           # 若 sign 步骤将来加, 这里放 cert / password secrets
           # TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          RUST_LOG: 'info'
 
       - name: List msi output
         shell: bash
