@@ -141,9 +141,11 @@ jobs:
           tar -xzf /tmp/cpython.tar.gz -C /tmp/cpython-extract
           # rename 顶层 python/ → cpython-3.11.15-windows-x86_64-none/
           mv /tmp/cpython-extract/python /tmp/cpython-extract/cpython-${PYTHON_VER}-windows-x86_64-none
-          # 重打 zip (install.ps1 用 Expand-Archive)
-          cd /tmp/cpython-extract
-          zip -qr /tmp/cpython-${PYTHON_VER}-embed.zip cpython-${PYTHON_VER}-windows-x86_64-none
+          # 重打 zip. W2.11 (7/13 CI run #6): Windows runner Git Bash 无 unix zip.
+          # 用 PowerShell Compress-Archive (native Windows 内置, 无外部 dep).
+          # Compress-Archive -Path <src_dir> -DestinationPath <output.zip> 会打包
+          # 顶层目录本身进 zip (保留 cpython-3.11.15-windows-x86_64-none/ 作根).
+          powershell.exe -Command "Compress-Archive -Path '/tmp/cpython-extract/cpython-${PYTHON_VER}-windows-x86_64-none' -DestinationPath '/tmp/cpython-${PYTHON_VER}-embed.zip' -Force"
           mv /tmp/cpython-${PYTHON_VER}-embed.zip $GITHUB_WORKSPACE/edge/companion-app/src-tauri/resources/windows/cpython-${PYTHON_VER}-embed.zip
           ls -lh $GITHUB_WORKSPACE/edge/companion-app/src-tauri/resources/windows/
 
