@@ -199,19 +199,38 @@ jobs:
 
       - name: Tauri build msi
         working-directory: edge/companion-app
-        run: npx tauri build --target x86_64-pc-windows-msvc --bundles msi
+        run: npx tauri build --target x86_64-pc-windows-msvc --bundles msi --verbose
         env:
           RUST_LOG: 'info'
-          # W2.14 (7/13 CI run #9): esaxx-rs 用 /MT static CRT, ort-sys 用 /MD
-          # dynamic CRT (Rust MSVC default). Linker LNK2038 mismatch 500+ obj.
-          # Force esaxx-rs (cc-rs C++ 编译) 用 /MD 跟 Rust + ort-sys 对齐.
-          # cc-rs 认 CFLAGS_<target>_msvc / CXXFLAGS_<target>_msvc env.
+          # W2.14: force /MD dynamic CRT (Rust MSVC default). esaxx-rs C++ 编译
+          # 用 cc-rs, 默认 /MT static CRT 跟 ort-sys /MD 撞 LNK2038.
           CFLAGS_x86_64_pc_windows_msvc: "/MD"
           CXXFLAGS_x86_64_pc_windows_msvc: "/MD"
-          # 备保: 全平台 CFLAGS/CXXFLAGS 也加, 若 cc-rs 因 target triple 不匹配
-          # 走 fallback env, 仍走 /MD. Windows GNU/Linux 无 /MD 概念, 忽略 no-op.
-          # 若 sign 步骤将来加, 这里放 cert / password secrets
-          # TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+
+      # W2.15 (7/13 CI run #10): candle.exe 挂但 Tauri 只报上层"failed to run".
+      # failure 时 dump Handlebars 展开后的 wxs + candle stderr 让 audit.
+      - name: Dump wix on failure (audit candle error)
+        if: failure()
+        shell: pwsh
+        run: |
+          Write-Host "===== target/wix/x64/ 目录 ====="
+          $wixDir = "edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/wix"
+          if (Test-Path $wixDir) {
+              Get-ChildItem $wixDir -Recurse | Format-Table FullName, Length
+              Write-Host ""
+              Write-Host "===== main.wxs (Handlebars 展开后) ====="
+              Get-ChildItem "$wixDir\x64\main.wxs" -ErrorAction SilentlyContinue | ForEach-Object {
+                  Get-Content $_.FullName
+              }
+              Write-Host ""
+              Write-Host "===== *.wixobj 大小 (若有生成) ====="
+              Get-ChildItem "$wixDir\x64\*.wixobj" -ErrorAction SilentlyContinue | Format-Table FullName, Length
+          } else {
+              Write-Host "$wixDir 不存在"
+          }
+          Write-Host ""
+          Write-Host "===== catfish-postinstall.wxs (源码, 不 handlebars) ====="
+          Get-Content "edge/companion-app/src-tauri/wix/catfish-postinstall.wxs"
 
       - name: List msi output
         shell: bash
