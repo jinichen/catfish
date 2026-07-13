@@ -392,6 +392,12 @@ pub fn tts_status() -> Result<TtsStatus, String> {
     })
 }
 
+// W2.13 (7/13 CI Windows msi build 铁证): 加 cfg(target_os = "macos") gate.
+// 之前无 gate → macOS build 只编这个 (下面 #[cfg(not(target_os="macos"))]
+// 版本 cfg 不匹配跳), 通; Windows build 两个都编 (无 gate default 编 + not-macos
+// 匹配) → E0428 duplicate struct + E0119 duplicate impl.
+// 军规违反 #22: struct 定义忘同款 gate, 但 fn tts_status 有 (line 376).
+#[cfg(target_os = "macos")]
 #[derive(Debug, serde::Serialize)]
 pub struct TtsStatus {
     pub piper_installed: bool,
