@@ -322,7 +322,53 @@ jobs:
             Push-Location edge\companion-app
             try {
               npx tauri build --target x86_64-pc-windows-msvc --bundles msi --verbose
-              if ($LASTEXITCODE -ne 0) { throw "tauri build failed with $LASTEXITCODE" }
+              if ($LASTEXITCODE -ne 0) {
+                # W2.25: build 失败时 print 诊断 (放 error 附近, 用户 copy error 时自动带上)
+                Write-Host ""
+                Write-Host "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+                Write-Host "!!! TAURI BUILD FAILED - POST DIAGNOSTIC !!!"
+                Write-Host "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+                Write-Host "RUSTUP_TOOLCHAIN env: '$env:RUSTUP_TOOLCHAIN'"
+                Write-Host "CARGO env: '$env:CARGO'"
+                Write-Host "RUSTC env: '$env:RUSTC'"
+                Write-Host "PATH first 3:"
+                $env:PATH -split ';' | Select-Object -First 3
+                Write-Host ""
+                Write-Host "=== rustup show ==="
+                & "$env:USERPROFILE\.cargo\bin\rustup.exe" show 2>&1
+                Write-Host ""
+                Write-Host "=== rustc --version -v ==="
+                & "$env:USERPROFILE\.cargo\bin\rustc.exe" --version --verbose 2>&1
+                Write-Host ""
+                Write-Host "=== rustc --print sysroot ==="
+                $sr = & "$env:USERPROFILE\.cargo\bin\rustc.exe" --print sysroot 2>&1
+                Write-Host $sr
+                Write-Host ""
+                Write-Host "=== target list --installed ==="
+                & "$env:USERPROFILE\.cargo\bin\rustup.exe" target list --installed 2>&1
+                Write-Host ""
+                Write-Host "=== ls sysroot/lib/rustlib/ ==="
+                $rustlibDir = Join-Path $sr "lib\rustlib"
+                if (Test-Path $rustlibDir) {
+                  Get-ChildItem $rustlibDir | Format-Table Name
+                } else {
+                  Write-Host "!!! $rustlibDir 不存在"
+                }
+                Write-Host ""
+                Write-Host "=== ls sysroot/lib/rustlib/x86_64-pc-windows-msvc/lib/ ==="
+                $msvcLibDir = Join-Path $sr "lib\rustlib\x86_64-pc-windows-msvc\lib"
+                if (Test-Path $msvcLibDir) {
+                  Get-ChildItem $msvcLibDir -Filter 'libcore*' | Format-Table Name, Length
+                } else {
+                  Write-Host "!!! $msvcLibDir 不存在 -- MSVC target std 没装!"
+                }
+                Write-Host ""
+                Write-Host "=== which cargo/rustc (Tauri 内部实际用的) ==="
+                & "$env:USERPROFILE\.cargo\bin\rustup.exe" which cargo 2>&1
+                & "$env:USERPROFILE\.cargo\bin\rustup.exe" which rustc 2>&1
+                Write-Host ""
+                throw "tauri build failed with $LASTEXITCODE"
+              }
             } finally { Pop-Location }
 
       - run:
