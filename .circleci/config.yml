@@ -36,6 +36,12 @@ jobs:
       # /MD dynamic CRT 撞 LNK2038. force /MD 全局对齐.
       CFLAGS_x86_64_pc_windows_msvc: /MD
       CXXFLAGS_x86_64_pc_windows_msvc: /MD
+      # W2.23 (CircleCI run #2 铁证): W2.21 rustup default 没生效, 因为
+      # rustup 支持 RUSTUP_TOOLCHAIN env var override, 无论 default 设啥,
+      # 强制 rustup shim (rustc/cargo) 走这个 toolchain. 全局设定所有 step
+      # 都用 MSVC host, 避免 CircleCI image preinstalled GNU host 或
+      # rustup default 未生效等边界.
+      RUSTUP_TOOLCHAIN: stable-x86_64-pc-windows-msvc
 
     steps:
       - checkout
@@ -57,48 +63,57 @@ jobs:
             - rust-cargo-v1-
 
       - run:
-          name: Install Rust MSVC toolchain + target
+          name: Install Rust MSVC toolchain + target (W2.21+W2.23 加大诊断)
           command: |
             $ErrorActionPreference = 'Stop'
-            # W2.21 (7/13 CircleCI run #1 铁证): CircleCI Win2022 image 预装的
-            # Rust 可能是 GNU host (mingw), Tauri build --target x86_64-pc-
-            # windows-msvc 挂 E0463 "can't find crate for core, target may
-            # not be installed". 修: 显式装 stable-x86_64-pc-windows-msvc
-            # toolchain + 设为 default. 无论预装什么 host 都覆盖.
             $cargoBin = "$env:USERPROFILE\.cargo\bin"
             $rustupExe = "$cargoBin\rustup.exe"
 
+            Write-Host "===== CircleCI preinstalled Rust state ====="
+            Write-Host "USERPROFILE = $env:USERPROFILE"
+            Write-Host "cargo bin exists: $(Test-Path $cargoBin)"
+            Write-Host "rustup.exe exists: $(Test-Path $rustupExe)"
+            Get-Command rustup -ErrorAction SilentlyContinue | Format-List
+            Get-Command rustc -ErrorAction SilentlyContinue | Format-List
+            Get-Command cargo -ErrorAction SilentlyContinue | Format-List
+
             if (-not (Test-Path $rustupExe)) {
-              Write-Host "Installing rustup..."
+              Write-Host "===== Installing rustup fresh ====="
               $init = "$env:TEMP\rustup-init.exe"
               Invoke-WebRequest -Uri "https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe" -OutFile $init
               & $init --default-toolchain none -y --profile minimal
               if ($LASTEXITCODE -ne 0) { throw "rustup-init failed: $LASTEXITCODE" }
-            } else {
-              Write-Host "rustup already installed at $rustupExe"
             }
 
-            # 显式装 MSVC toolchain + set default (覆盖预装可能的 GNU)
-            Write-Host "Installing stable-x86_64-pc-windows-msvc toolchain..."
-            & $rustupExe toolchain install stable-x86_64-pc-windows-msvc --profile minimal
+            Write-Host "===== Installing stable-x86_64-pc-windows-msvc ====="
+            & $rustupExe toolchain install stable-x86_64-pc-windows-msvc --profile minimal --force
             if ($LASTEXITCODE -ne 0) { throw "toolchain install failed: $LASTEXITCODE" }
 
-            Write-Host "Setting stable-x86_64-pc-windows-msvc as default..."
+            Write-Host "===== rustup default stable-x86_64-pc-windows-msvc ====="
             & $rustupExe default stable-x86_64-pc-windows-msvc
             if ($LASTEXITCODE -ne 0) { throw "rustup default failed: $LASTEXITCODE" }
 
-            # 幂等 target add (MSVC toolchain 装完 target 已 self-included, add 是 no-op)
+            # 幂等 target add
             & $rustupExe target add x86_64-pc-windows-msvc
 
-            # Verify
+            # W2.23 关键诊断: 确认 rustup shim 会 dispatch 到 MSVC
+            # RUSTUP_TOOLCHAIN env 也设了 (job env), 双保险.
             Write-Host "===== rustup show ====="
             & $rustupExe show
+            Write-Host "===== rustup which cargo ====="
+            & $rustupExe which cargo
+            Write-Host "===== rustup which rustc ====="
+            & $rustupExe which rustc
             Write-Host "===== rustc --version -v ====="
             & "$cargoBin\rustc.exe" --version --verbose
             Write-Host "===== rustc --print sysroot ====="
             & "$cargoBin\rustc.exe" --print sysroot
             Write-Host "===== target list --installed ====="
             & $rustupExe target list --installed
+            Write-Host "===== ~/.rustup/settings.toml ====="
+            Get-Content "$env:USERPROFILE\.rustup\settings.toml" -ErrorAction SilentlyContinue
+            Write-Host "===== RUSTUP_TOOLCHAIN env ====="
+            Write-Host "RUSTUP_TOOLCHAIN = '$env:RUSTUP_TOOLCHAIN'"
 
       - restore_cache:
           keys:
@@ -244,6 +259,17 @@ jobs:
           no_output_timeout: 45m
           command: |
             $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+
+            # W2.23 pre-build 诊断: 确认 rustup toolchain 生效
+            Write-Host "===== pre-build cargo/rustc audit ====="
+            Write-Host "RUSTUP_TOOLCHAIN = '$env:RUSTUP_TOOLCHAIN'"
+            Write-Host "PATH first: $($env:PATH -split ';' | Select-Object -First 3)"
+            Get-Command cargo | Format-List Name, Source
+            Get-Command rustc | Format-List Name, Source
+            & "$env:USERPROFILE\.cargo\bin\rustc.exe" --version --verbose
+            & "$env:USERPROFILE\.cargo\bin\rustc.exe" --print sysroot
+            & "$env:USERPROFILE\.cargo\bin\rustup.exe" show active-toolchain
+
             Push-Location edge\companion-app
             try {
               npx tauri build --target x86_64-pc-windows-msvc --bundles msi --verbose
