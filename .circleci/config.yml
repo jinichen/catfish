@@ -255,21 +255,70 @@ jobs:
       # ─── Tauri build msi ───
 
       - run:
-          name: Tauri build msi
+          name: Tauri build msi (W2.24 全内联 toolchain 装+切+验)
           no_output_timeout: 45m
           command: |
-            $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+            $ErrorActionPreference = 'Stop'
+            Write-Host "############################################"
+            Write-Host "### W2.24 INLINE TOOLCHAIN SETUP ###"
+            Write-Host "### 若看不到这段, CircleCI 用了旧 config ###"
+            Write-Host "############################################"
 
-            # W2.23 pre-build 诊断: 确认 rustup toolchain 生效
-            Write-Host "===== pre-build cargo/rustc audit ====="
-            Write-Host "RUSTUP_TOOLCHAIN = '$env:RUSTUP_TOOLCHAIN'"
-            Write-Host "PATH first: $($env:PATH -split ';' | Select-Object -First 3)"
-            Get-Command cargo | Format-List Name, Source
-            Get-Command rustc | Format-List Name, Source
-            & "$env:USERPROFILE\.cargo\bin\rustc.exe" --version --verbose
-            & "$env:USERPROFILE\.cargo\bin\rustc.exe" --print sysroot
-            & "$env:USERPROFILE\.cargo\bin\rustup.exe" show active-toolchain
+            # W2.24: 把 rustup toolchain 装+切+验证全塞进 Tauri build 同一 shell.
+            # 不依赖 Install Rust step 是否真跑成功, 或跨 step state 是否持久化.
+            # rustup toolchain install 已装是 no-op 极快, 幂等 safe.
+            $cargoBin = "$env:USERPROFILE\.cargo\bin"
+            $env:PATH = "$cargoBin;$env:PATH"
 
+            # 1. 装 rustup 若缺
+            if (-not (Test-Path "$cargoBin\rustup.exe")) {
+              Write-Host "===== 装 rustup fresh ====="
+              $init = "$env:TEMP\rustup-init.exe"
+              Invoke-WebRequest -Uri "https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe" -OutFile $init
+              & $init --default-toolchain none -y --profile minimal
+              if ($LASTEXITCODE -ne 0) { throw "rustup-init failed" }
+            }
+
+            # 2. 装 MSVC toolchain (幂等, 已装秒过)
+            Write-Host "===== rustup toolchain install stable-x86_64-pc-windows-msvc ====="
+            & "$cargoBin\rustup.exe" toolchain install stable-x86_64-pc-windows-msvc --profile minimal --force
+            if ($LASTEXITCODE -ne 0) { throw "toolchain install failed: $LASTEXITCODE" }
+
+            # 3. 切 default (幂等)
+            Write-Host "===== rustup default stable-x86_64-pc-windows-msvc ====="
+            & "$cargoBin\rustup.exe" default stable-x86_64-pc-windows-msvc
+            if ($LASTEXITCODE -ne 0) { throw "default failed: $LASTEXITCODE" }
+
+            # 4. 加 target (幂等, MSVC host toolchain 已 self-included)
+            & "$cargoBin\rustup.exe" target add x86_64-pc-windows-msvc
+
+            # 5. Verify (全面打印)
+            Write-Host "===== VERIFY ====="
+            Write-Host "RUSTUP_TOOLCHAIN env: '$env:RUSTUP_TOOLCHAIN'"
+            Get-Command cargo | Format-List Name, Source, Version
+            Get-Command rustc | Format-List Name, Source, Version
+            & "$cargoBin\rustup.exe" show
+            & "$cargoBin\rustc.exe" --version --verbose
+            & "$cargoBin\rustc.exe" --print sysroot
+            & "$cargoBin\rustup.exe" target list --installed
+            Write-Host "===== target sysroot 检查 (msvc core 是否存在) ====="
+            $sysroot = & "$cargoBin\rustc.exe" --print sysroot
+            $msvcCoreDir = Join-Path $sysroot "lib\rustlib\x86_64-pc-windows-msvc\lib"
+            Write-Host "expected core.rlib dir: $msvcCoreDir"
+            if (Test-Path $msvcCoreDir) {
+              Write-Host "OK dir exists"
+              Get-ChildItem $msvcCoreDir -Filter 'libcore*' | Format-Table Name
+            } else {
+              Write-Host "!!! MSVC target sysroot dir 不存在: $msvcCoreDir"
+              Write-Host "!!! 说明 target add 没真装 std"
+            }
+
+            # 6. 强制 env: cargo / rustc 全指向 rustup shim
+            $env:CARGO = "$cargoBin\cargo.exe"
+            $env:RUSTC = "$cargoBin\rustc.exe"
+
+            # 7. Now build
+            Write-Host "===== Tauri build msi ====="
             Push-Location edge\companion-app
             try {
               npx tauri build --target x86_64-pc-windows-msvc --bundles msi --verbose
