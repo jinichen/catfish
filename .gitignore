@@ -174,3 +174,9 @@ edge/companion-app/work/
 # P3.5.56 cargo test 副作用防御 — sync_plugin_files_* 测试如果有 bug 用了
 # 真实路径而非 TempDir, 会在源目录下创嵌套 catfish-xcatfish-user/, ignore 防 commit.
 edge/hermes-plugins/catfish-xcatfish-user/catfish-xcatfish-user/
+
+# W2.16: Windows dev-side artifacts (CI 每次 workflow 自 pack, 不 commit)
+edge/companion-app/src-tauri/resources/windows/cpython-*.zip
+edge/companion-app/src-tauri/resources/windows/hermes-agent-bundle.tar.gz
+edge/companion-app/src-tauri/resources/windows/uv.exe
+edge/companion-app/src-tauri/resources/windows/install.ps1
