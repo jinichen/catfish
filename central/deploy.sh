@@ -114,8 +114,9 @@ if ! docker compose version >/dev/null 2>&1; then
 fi
 ok "docker compose: $(docker compose version --short)"
 
-# 1.2 端口冲突? 6/9 BL-WEB+MCP+BROKER-DEPLOY 加 8996 mcp-registry.
-# 注: secret-broker 8995 跟 web :80 (容器内) 都不绑宿主机, 不检查.
+# 1.2 端口冲突? 6/9 BL-WEB+MCP-DEPLOY 加 8996 mcp-registry.
+# 注: web :80 (容器内) 不绑宿主机, 不检查.
+# P3.4.1-cleanup2 (7/14): secret-broker 8995 已砍 (P3.4.1 6/13), 端口清单也一起清.
 check_port() {
     local port=$1
     local svc=$2
@@ -165,27 +166,9 @@ if [ ! -f "$ENV_FILE" ]; then
 fi
 ok ".env 存在"
 
-# 6/9 BL-BROKER-DEPLOY: CATFISH_SECRET_MASTER_KEY 自动生成 (首次部署)
-# 检测占位 → openssl rand -base64 32 生成 → sed 写回 .env. 避免客户 IT 漏步.
-MK_VAL=$(grep -E "^CATFISH_SECRET_MASTER_KEY=" "$ENV_FILE" | head -1 | sed 's/^CATFISH_SECRET_MASTER_KEY=//' || echo "")
-if [ -z "$MK_VAL" ] || [ "$MK_VAL" = "CHANGE_ME_RUN_DEPLOY_SH" ] || [ "$MK_VAL" = "CHANGE_ME" ]; then
-    info "首次部署: 自动生成 CATFISH_SECRET_MASTER_KEY (AES-256 主密钥)..."
-    if ! command -v openssl >/dev/null 2>&1; then
-        err "openssl 没装, 无法生成 master key. 手工: openssl rand -base64 32 改 .env"
-        exit 1
-    fi
-    NEW_KEY=$(openssl rand -base64 32)
-    # 跨平台 sed (GNU sed vs BSD sed). 用临时文件最稳.
-    TMP_ENV=$(mktemp)
-    awk -v new_key="CATFISH_SECRET_MASTER_KEY=$NEW_KEY" '
-        /^CATFISH_SECRET_MASTER_KEY=/ { print new_key; next }
-        { print }
-    ' "$ENV_FILE" > "$TMP_ENV"
-    mv "$TMP_ENV" "$ENV_FILE"
-    chmod 600 "$ENV_FILE"   # .env 含密码 / master key, 严控权限
-    ok "CATFISH_SECRET_MASTER_KEY 已生成并写回 .env (chmod 600)"
-    warn "**备份 .env 文件**: master key 丢了所有员工 OAuth 凭据不可解密"
-fi
+# P3.4.1-cleanup2 (7/14): 砍 CATFISH_SECRET_MASTER_KEY 自动生成段.
+# P3.4.1 (6/13) 已砍 secret-broker 服务, master_key 不再需要
+# (OAuth token 改 Companion 本机存, 无需中央 AES 加密).
 
 # 必填 + 不能是占位
 declare -A REQUIRED=(
@@ -193,7 +176,6 @@ declare -A REQUIRED=(
     [CATFISH_OIDC_ISSUER]="https://catfish.yourcompany.com/sso"
     [SKILLS_HUB_TOKEN]="CHANGE_ME_RANDOM_32_CHARS"
     [INTERNAL_LLM_KEY]="CHANGE_ME"
-    # CATFISH_SECRET_MASTER_KEY 上面已自动生成 + 兜底检查, 不进 REQUIRED
 )
 PLACEHOLDER_FOUND=()
 for key in "${!REQUIRED[@]}"; do
@@ -210,7 +192,7 @@ if [ ${#PLACEHOLDER_FOUND[@]} -gt 0 ]; then
     done
     exit 1
 fi
-ok ".env 必填字段全填了 (密码/OIDC/SKILLS_HUB_TOKEN/INTERNAL_LLM_KEY/SECRET_MASTER_KEY)"
+ok ".env 必填字段全填了 (密码/OIDC/SKILLS_HUB_TOKEN/INTERNAL_LLM_KEY)"
 
 # PG_PASSWORD 强度 (≥ 16 位)
 PG_PASS=$(grep -E "^PG_PASSWORD=" "$ENV_FILE" | head -1 | sed 's/^PG_PASSWORD=//')
@@ -225,7 +207,7 @@ step "3/6  build + up -d"
 info "build (首次 ~3min, 之后 layer cache 命中 < 30s)..."
 docker compose -f "$COMPOSE_FILE" build --pull
 
-info "up -d (起 pg → identity → secret-broker → gateway → mcp-registry → skills-hub → web → nginx)..."
+info "up -d (起 pg → identity → gateway → mcp-registry → skills-hub → web → nginx)..."
 docker compose -f "$COMPOSE_FILE" up -d
 ok "stack 已起, 进入健康检查"
 
@@ -298,15 +280,9 @@ SMOKE_OK=true
 smoke_curl "http://127.0.0.1:8999/healthz" "gateway /healthz" || SMOKE_OK=false
 smoke_curl "http://127.0.0.1:8998/.well-known/openid-configuration" "identity OIDC discovery" || SMOKE_OK=false
 smoke_curl "http://127.0.0.1:8997/healthz" "skills-hub /healthz" || SMOKE_OK=false
-# 6/9 BL-WEB+MCP+BROKER-DEPLOY 加: 3 个新服务 smoke
+# 6/9 BL-WEB+MCP-DEPLOY 加: 2 个新服务 smoke
+# P3.4.1-cleanup2 (7/14): 砍 secret-broker smoke (服务已删 P3.4.1 6/13)
 smoke_curl "http://127.0.0.1:8996/health" "mcp-registry /health" || SMOKE_OK=false
-# secret-broker 不绑宿主机, 走 docker exec curl 容器内
-if docker compose -f "$COMPOSE_FILE" exec -T secret-broker curl -fsS "http://localhost:8995/health" >/dev/null 2>&1; then
-    ok "secret-broker /health (容器内): 200"
-else
-    err "secret-broker /health (容器内): 失败. master_key 没生成 / PG 连不上"
-    SMOKE_OK=false
-fi
 # web 不绑宿主机, 走中央 nginx (HTTP 80 / 80 → 301 → 443) 看 / 返 200
 # 跳过 SSL 验证 (deploy 时可能还没 cert)
 if curl -fskS -o /dev/null -w "%{http_code}" -L "http://127.0.0.1/" 2>/dev/null | grep -qE "200|301"; then

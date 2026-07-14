@@ -170,8 +170,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      secret-broker:
-        condition: service_started
     environment:
       CATFISH_DB_URL: postgresql://${PG_USER:-catfish}:${PG_PASSWORD}@postgres:5432/${PG_DB:-catfish}
       CATFISH_ENV: prod
@@ -180,8 +178,9 @@ services:
       PORT: 8996
       # OIDC: 验员工 JWT (跟 gateway 共享 issuer)
       CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://identity:8998}
-      # 调 secret-broker 写 OAuth refresh token (内网名解析)
-      CATFISH_SECRET_BROKER_URL: http://secret-broker:8995
+      # P3.4.1 (6/13) 砍 secret-broker: OAuth token 改 Companion 本机存,
+      # mcp-registry oauth_callback 直接返 access_token, 不再中央存.
+      # (manifesto 数据本地化红线 — 中央存员工 token 政企不合规.)
     ports:
       - "127.0.0.1:8996:8996"   # 只内网, 走 nginx /mcp/ 暴露
     healthcheck:
@@ -190,33 +189,11 @@ services:
       timeout: 3s
       retries: 3
 
-  # 6/9 BL-BROKER-DEPLOY: secret-broker 凭据集中存储, PG 加密后端.
-  # !! 不暴露 ports 给员工 — 内网 service 名调 (mcp-registry / gateway 走 docker network).
-  # PG 加密: master key 从 env (deploy.sh 自动生成), AES-256-GCM 每条 secret 独立 nonce.
-  secret-broker:
-    build:
-      context: ./secret-broker
-      dockerfile: Dockerfile
-    image: catfish-secret-broker:0.1.0
-    container_name: catfish-secret-broker
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      CATFISH_DB_URL: postgresql://${PG_USER:-catfish}:${PG_PASSWORD}@postgres:5432/${PG_DB:-catfish}
-      CATFISH_SECRET_BROKER_BACKEND: pg
-      # 加密 master key (deploy.sh 自动 openssl rand -base64 32 生成首次)
-      CATFISH_SECRET_MASTER_KEY: ${CATFISH_SECRET_MASTER_KEY}
-      # 6/9 BL-DOCKER-HOST: 必须 0.0.0.0 否则 mcp-registry 进不去
-      HOST: 0.0.0.0
-      PORT: 8995
-    # 不挂 ports — 只 docker network 内访问
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8995/health"]
-      interval: 30s
-      timeout: 3s
-      retries: 3
+  # P3.4.1-cleanup2 (7/14): secret-broker service 段删.
+  # P3.4.1 (56403d0, 6/13 hb) 已砍 secret-broker 中央存储, 目录+代码+docstring
+  # 都清干净了, 但当时忘删 docker-compose.yml + deploy.sh + .env 里的定义.
+  # 6 服务栈现在是: postgres / identity / gateway / skills-hub / web /
+  # mcp-registry / nginx (7 个, 少 broker 一个).
 
   # nginx 反代: SSL 卸载 + 路由
   #   / → web (SPA)
