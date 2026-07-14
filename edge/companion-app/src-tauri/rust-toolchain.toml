@@ -1,0 +1,30 @@
+# W2.26 (7/13): Rust toolchain 项目级绑定, 强制 cargo 用 stable + MSVC target.
+#
+# 前 4 次 iter (W2.21/W2.23/W2.24/W2.25) 都在 CircleCI 层修 rustup default /
+# RUSTUP_TOOLCHAIN env / 内联 install, 用户 log 一直 E0463 msvc target 缺失.
+# 深层原因: CircleCI Windows image 预装 Rust 可能是 GNU host, 或 rustup
+# preinstalled 但 default 没被 W2.21 修改切走.
+#
+# 项目级 rust-toolchain.toml 是 rustup 层最强 override:
+# 1. cargo build 时先看这个文件, 自动切换到指定 channel
+# 2. 若 targets 未装, rustup 自动装 std for that target
+# 3. 无论 rustup default 是什么 / RUSTUP_TOOLCHAIN env 设啥, 优先此文件
+#
+# 语义:
+# - channel = "stable" : host 由当前平台决定 (macOS=darwin, Win=msvc/gnu)
+# - targets 列表 : 保证这些 target 的 std 一定被装 (rustup 自动 target add)
+# - components : 基础组件 (rustc + cargo)
+#
+# 对不同平台影响:
+# - CircleCI Windows: 无论 host 是 gnu 或 msvc, msvc target 一定装,
+#   cargo build --target x86_64-pc-windows-msvc 就能 work.
+# - macOS local dev: 装 msvc target 供 cross-compile 备用 (~50MB 磁盘),
+#   dev 无感 (仍用 stable-darwin host).
+#
+# ref: https://rust-lang.github.io/rustup/overrides.html#the-toolchain-file
+
+[toolchain]
+channel = "stable"
+targets = ["x86_64-pc-windows-msvc"]
+components = ["rustc", "cargo"]
+profile = "minimal"
