@@ -252,6 +252,29 @@ pub fn run() {
             // Escape hatch: CATFISH_HERMES_PLUGIN_NO_BOOTSTRAP=1 跳全部 (调试用).
             commands::hermes_plugin::bootstrap_hermes_plugin();
 
+            // 7/15 BL-CATFISH-MAC-OFFLINE-INSTALL: macOS/Linux dmg 首启装 hermes-agent 本体.
+            // Windows msi CustomAction (wix/catfish-postinstall.wxs) 已在 msi 装机时装 hermes,
+            // 跳过. Escape: CATFISH_HERMES_INSTALL_NO_BOOTSTRAP=1 (dev 已装本地 hermes).
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            {
+                if std::env::var("CATFISH_HERMES_INSTALL_NO_BOOTSTRAP").is_err() {
+                    use tauri::Manager;
+                    match app.path().resource_dir() {
+                        Ok(res_dir) => {
+                            if let Err(e) = commands::hermes_install::ensure_hermes_installed(&res_dir) {
+                                log::warn!(
+                                    "hermes-agent 首启 offline install 挂: {e:#} \
+                                     (员工可 Dashboard → 手动重装, 或 Terminal 跑 install.sh)"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("拿不到 resource_dir, 跳过 hermes install: {e}");
+                        }
+                    }
+                }
+            }
+
             // 注册全局快捷键 Cmd+Shift+Space (浮窗召唤) + Cmd+Shift+F (BL-E15 专注模式)
             #[cfg(desktop)]
             {
@@ -782,6 +805,8 @@ pub fn run() {
             // P28 (6/5): Companion Dashboard 改 gateway URL/token
             commands::server_config::read_server_config,
             commands::server_config::write_server_config,
+            // 7/15 BL-CATFISH-MAC-OFFLINE-INSTALL: 员工 Dashboard 手工重装 hermes (若首启 auto install 挂)
+            commands::hermes_install::reinstall_hermes_agent,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

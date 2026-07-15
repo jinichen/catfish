@@ -45,6 +45,7 @@ pub mod memory_history;
 pub mod hermes_memory;  // BL-DASHBOARD-HERMES-MEMORY-CARD (5/16)
 pub mod identity_bundle;  // BL-IDENTITY-INJECT-DECOUPLE (5/26): SOUL/USER/memories prefetch 给 /v1/chat/completions body
 pub mod hermes_plugin;    // P3.5.56 (6/21 鸿波): Companion boot 自动装 catfish-xcatfish-user plugin (baked + ensure config.yaml enabled)
+pub mod hermes_install;   // 7/15 BL-CATFISH-MAC-OFFLINE-INSTALL: mac dmg 首启装 hermes-agent 本体 (offline install.sh + 4 artifacts)
 pub mod tool_perf;        // P3.5.59 (6/22 鸿波): tool-bridge audit jsonl 聚合 per-tool perf (count / success_rate / p50/p95/p99)
 pub mod advisor_cache;   // BL-ADVISOR-CACHE (5/22 Phase 7): 缓存 advisor 结果
 pub mod advisor_config;  // BL-ADVISOR-CONFIG (5/22 Phase 7): 读 yaml advisor section

@@ -90,7 +90,11 @@
       "resources/windows/install.ps1": "./resources/windows/install.ps1",
       "resources/windows/uv.exe": "./resources/windows/uv.exe",
       "resources/windows/cpython-3.11.15-embed.zip": "./resources/windows/cpython-3.11.15-embed.zip",
-      "resources/windows/hermes-agent-bundle.tar.gz": "./resources/windows/hermes-agent-bundle.tar.gz"
+      "resources/windows/hermes-agent-bundle.tar.gz": "./resources/windows/hermes-agent-bundle.tar.gz",
+      "resources/mac/install.sh": "./resources/mac/install.sh",
+      "resources/mac/uv": "./resources/mac/uv",
+      "resources/mac/cpython-3.11.15-embed.tar.gz": "./resources/mac/cpython-3.11.15-embed.tar.gz",
+      "resources/mac/hermes-agent-bundle.tar.gz": "./resources/mac/hermes-agent-bundle.tar.gz"
     },
     "macOS": {
       "minimumSystemVersion": "10.15",

@@ -1,0 +1,17 @@
+# macOS dmg resources (BL-CATFISH-MAC-OFFLINE-INSTALL 7/15).
+#
+# 4 个真实 artifact 由 build-macos-resources.sh 在 build 前打包生成,
+# 大小 ~250MB, 不进 git.
+#
+# 但**空 placeholder** (git 里 track, size=0) 必须留, 因为 tauri.conf.json
+# bundle.resources 跨平台 validate source 存在.
+#
+# macOS build 流程:
+#   1. bash src-tauri/scripts/build-macos-resources.sh
+#      → 覆盖 4 个 placeholder 成真 250MB artifact
+#   2. npm run tauri:build
+#      → 出 dmg (~250MB)
+#   3. git checkout resources/mac/{install.sh,uv,cpython-*.tar.gz,hermes-*.tar.gz}
+#      → 恢复空 placeholder, working tree clean
+
+*.log
