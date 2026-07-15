@@ -6,13 +6,14 @@
 
 ---
 
-## 前言 · 你收到 3 个文件
+## 前言 · 你收到 4 个文件
 
 | 文件 | 大小 | 用途 |
 |------|------|------|
 | `catfish-central-images-mac.tar` | ~2.5 GB | 8 个服务的 Docker 镜像 (mac / Windows / Ubuntu 通用) |
 | `catfish-central-config-mac.tar.gz` | ~50 KB | 部署配置 + 本手册 |
-| `Catfish Companion_0.18.0_aarch64.dmg` 或 `.msi` | ~15 MB | 员工桌面客户端 (mac dmg / Windows msi) |
+| `Catfish Companion_0.18.0_aarch64.dmg` | ~15 MB | **员工 mac 桌面客户端** (Apple Silicon M1/M2/M3/M4) |
+| `Catfish Companion_0.18.0_x64_zh-CN.msi` | ~15 MB | **员工 Windows 桌面客户端** (x64 中文 UI) |
 
 **关键**: **服务端 Docker 镜像已在鲶鱼团队 mac 上编译打包**, 达华无需在本地编译.
 直接 `docker load` 加载即可运行, 支持 mac / Windows / Ubuntu 任意环境.
