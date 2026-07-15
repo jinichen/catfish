@@ -58,10 +58,19 @@ services:
       # factory). 默认 2 worker, 重负载机房 4. 单 worker bcrypt 12 round 极限
       # 5-7 verify/s, 1000 employee 早高峰 SSO 一般够; 5000+ employee 客户改 4.
       UVICORN_WORKERS: ${IDENTITY_WORKERS:-2}
-      # OIDC 配置 (跟 gateway 共享)
-      CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://identity:8998}
+      # 7/15 BL-OIDC-ISSUER fix: identity 用 CATFISH_IDENTITY_ISSUER 构造
+      # openid-configuration 返回的 issuer/authorize_endpoint. 不设 fallback
+      # 到 CATFISH_IDENTITY_HOST (=0.0.0.0) → 浏览器 ERR_ADDRESS_INVALID.
+      # 值必须是浏览器 + gateway container 都能访问的 URL.
+      # host.docker.internal: Docker Desktop 特殊 DNS, host 侧 127.0.0.1,
+      # container 侧指向 Docker host, 双向可达.
+      CATFISH_IDENTITY_ISSUER: ${CATFISH_IDENTITY_ISSUER:-http://host.docker.internal:8998}
+      # OIDC 配置 (跟 gateway 共享, 必须跟 CATFISH_IDENTITY_ISSUER 一致 - JWT iss claim)
+      CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://host.docker.internal:8998}
     ports:
-      - "127.0.0.1:8998:8998"
+      # 7/15 BL-OIDC-ISSUER: 员工浏览器需 access identity /authorize.
+      # 生产走 nginx 反代 /sso/, 内部部署改回 "127.0.0.1:8998:8998".
+      - "8998:8998"
     volumes:
       - ./identity-server/config:/app/config:ro
     healthcheck:
@@ -93,14 +102,20 @@ services:
       # (2.2× 吞吐, 56% latency 降). 默认 4, 4 vCPU 客户机房刚好用满. 8 vCPU 改 8.
       UVICORN_WORKERS: ${GATEWAY_WORKERS:-4}
       # OIDC: 验真 SSO token, 不走 dev_token
-      CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://identity:8998}
+      # 7/15 BL-OIDC-ISSUER fix: 跟 identity CATFISH_IDENTITY_ISSUER 一致.
+      # 用 host.docker.internal 让浏览器 + gateway container 双向可达.
+      CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://host.docker.internal:8998}
       CATFISH_OIDC_AUDIENCE: ${CATFISH_OIDC_AUDIENCE:-catfish-gateway}
       # facts_router 文件落地 (BL-Q3-FACT-PG-MIGRATE 之前的临时方案)
       CATFISH_FACTS_DIR: ${CATFISH_FACTS_DIR:-/home/catfish/.catfish/facts}
-      # API keys (公网 LLM, 私网 LLM 用 base_url)
+      # API keys (公网 LLM)
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # 私网 LLM (客户内网部署的 Qwen / embedding, base_url + key)
       INTERNAL_LLM_KEY: ${INTERNAL_LLM_KEY:-}
+      INTERNAL_LLM_BASE_QWEN_MAIN: ${INTERNAL_LLM_BASE_QWEN_MAIN:-http://127.0.0.1:9998/v1}
+      INTERNAL_LLM_BASE_QWEN_VISION: ${INTERNAL_LLM_BASE_QWEN_VISION:-http://127.0.0.1:9998/v1}
+      INTERNAL_LLM_BASE_BGE_M3: ${INTERNAL_LLM_BASE_BGE_M3:-http://127.0.0.1:9998/v1}
     ports:
       - "8999:8999"  # gateway 对员工 Companion 暴露, 反代 nginx 处理 SSL
     volumes:
@@ -177,7 +192,8 @@ services:
       HOST: 0.0.0.0
       PORT: 8996
       # OIDC: 验员工 JWT (跟 gateway 共享 issuer)
-      CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://identity:8998}
+      # 7/15 BL-OIDC-ISSUER fix: 跟 identity/gateway 一致
+      CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://host.docker.internal:8998}
       # P3.4.1 (6/13) 砍 secret-broker: OAuth token 改 Companion 本机存,
       # mcp-registry oauth_callback 直接返 access_token, 不再中央存.
       # (manifesto 数据本地化红线 — 中央存员工 token 政企不合规.)
@@ -189,11 +205,44 @@ services:
       timeout: 3s
       retries: 3
 
+  # P3.3.18-cleanup (7/14): wiki-hub 补上, ship 时 (6ab02a6 6/10) 加了服务本身
+  # + gateway 反代 /v1/wiki/*, 但忘加中央 stack 部署段. 员工用 wiki publish 会挂.
+  # port 8994, 跟 skills-hub 同模式.
+  wiki-hub:
+    build:
+      context: ./wiki-hub
+      dockerfile: Dockerfile
+    image: catfish-wiki-hub:0.1.0
+    container_name: catfish-wiki-hub
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      CATFISH_DB_URL: postgresql://${PG_USER:-catfish}:${PG_PASSWORD}@postgres:5432/${PG_DB:-catfish}
+      CATFISH_ENV: prod
+      # 6/9 BL-DOCKER-HOST: gateway 内网名解析 wiki-hub:8994, 必须 0.0.0.0
+      HOST: 0.0.0.0
+      PORT: 8994
+      CATFISH_WIKI_ROOT: /data/wiki
+      # OIDC: 验员工 JWT (跟 gateway / skills-hub 共享 issuer)
+      # 7/15 BL-OIDC-ISSUER fix: 跟 identity/gateway 一致
+      CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://host.docker.internal:8998}
+    ports:
+      - "127.0.0.1:8994:8994"   # 只内网, 走 gateway 反代 /v1/wiki/*
+    volumes:
+      - wikidata:/data/wiki
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8994/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
   # P3.4.1-cleanup2 (7/14): secret-broker service 段删.
   # P3.4.1 (56403d0, 6/13 hb) 已砍 secret-broker 中央存储, 目录+代码+docstring
   # 都清干净了, 但当时忘删 docker-compose.yml + deploy.sh + .env 里的定义.
-  # 6 服务栈现在是: postgres / identity / gateway / skills-hub / web /
-  # mcp-registry / nginx (7 个, 少 broker 一个).
+  # 7 服务栈现在是: postgres / identity / gateway / skills-hub / wiki-hub /
+  # web / mcp-registry / nginx (8 个, 加 wiki-hub 补 P3.3.18 漏, 减 broker 一个).
 
   # nginx 反代: SSL 卸载 + 路由
   #   / → web (SPA)
@@ -210,6 +259,7 @@ services:
       - gateway
       - identity
       - skills-hub
+      - wiki-hub       # P3.3.18-cleanup (7/14) 补
       - web
       - mcp-registry
     ports:
@@ -223,3 +273,4 @@ volumes:
   pgdata:
   gateway_data:
   hubdata:
+  wikidata:          # P3.3.18-cleanup (7/14) 补 wiki-hub FS fallback

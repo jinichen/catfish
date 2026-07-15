@@ -1,22 +1,32 @@
 /** Onboarding 引导 — 员工首次启动 Companion 走这个 (五一 sprint 5/2 收尾 BL-F3 MVP).
  *
- * 5 步 (5/3 晚 BL-E11 加"起名"在第 2 步):
+ * 8 步 (7/15 BL-ONBOARDING-SERVER-STEP 加"服务器地址"在第 2 步, IP/域名任意填):
  *   1. Welcome (鲶鱼是啥, 一句话)
- *   2. ★ 命名权 + 选人设 (员工给鲶鱼起名 + 3 档人设, BL-E11)
- *   3. 鉴权 (SSO 登录 / dev_token 兜底)
- *   4. 选默认模型
- *   5. 试聊一句 + 完成
+ *   2. ★ 服务器地址 (Gateway + Identity URL, 支持 IP/域名, BL-ONBOARDING-SERVER-STEP)
+ *   3. ★ 命名权 + 选人设 (员工给鲶鱼起名 + 3 档人设, BL-E11)
+ *   4. 鉴权 (SSO 登录 / dev_token 兜底)
+ *   5. 选默认模型
+ *   6. Curator consent toggle
+ *   7. 文书目录 (BL-ONBOARDING-DOC-DIRS-STEP)
+ *   8. 试聊一句 + 完成
  *
  * 触发: localStorage["catfish:onboarded"] !== "true" → 首次显示
  * 跳过: 任何步骤都能 "稍后" 跳过, 写 onboarded=true 不再显
  *
- * 完整 BL-F3 (动画 / 多语言 / 真试聊 / 跟 SSO flow 集成) 留下次, 这是 MVP.
+ * BL-ONBOARDING-SERVER-STEP (7/15) 加 Step 2 服务器地址:
+ *   - 原因: 客户端首次启动前默认 URL=http://127.0.0.1:8999, 达华等中央部署到远程
+ *     服务器 (IP 或域名) 时员工登录挂. 加此步让员工先设 URL 再登录, 无需 IT
+ *     预配 ~/.catfish/companion.yaml.
+ *   - URL 校验: 只要求 http:// 或 https:// 开头, IP/域名/带端口都支持 (跟
+ *     Dashboard ServerConfigCard 逻辑一致).
+ *   - 写入: 调 writeServerConfig() Tauri command → ~/.catfish/companion.yaml
+ *     的 endpoints.gateway_url + oidc.issuer.
  */
 
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
-import { fetchCatalog } from "../lib/tauri";
+import { fetchCatalog, readServerConfig, writeServerConfig } from "../lib/tauri";
 import { useUIStore } from "../store/ui";
 import { useAgentStore } from "../store/agent";
 import { PERSONALITY_LABELS, type Personality } from "../lib/agent";
@@ -104,7 +114,8 @@ export default function OnboardingWizard() {
           color: "var(--catfish-text)",
         }}
       >
-        {/* 步骤指示 (5/3 晚 BL-E11: 4 → 5 步, 6/1 BL-ONBOARDING-DOC-DIRS-STEP: 6 → 7 步加文书目录) */}
+        {/* 步骤指示 (5/3 晚 BL-E11: 4→5, 6/1 BL-ONBOARDING-DOC-DIRS-STEP: 6→7,
+            7/15 BL-ONBOARDING-SERVER-STEP: 7→8 加服务器地址) */}
         <div
           style={{
             display: "flex",
@@ -113,7 +124,7 @@ export default function OnboardingWizard() {
             justifyContent: "center",
           }}
         >
-          {[0, 1, 2, 3, 4, 5, 6].map((i) => (
+          {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
             <div
               key={i}
               style={{
@@ -130,18 +141,21 @@ export default function OnboardingWizard() {
         </div>
 
         {step === 0 && <StepWelcome onNext={next} onSkip={close} />}
-        {step === 1 && <StepName onNext={next} onBack={back} onSkip={close} />}
-        {step === 2 && <StepAuth onNext={next} onBack={back} onSkip={close} />}
-        {step === 3 && (
+        {/* 7/15 BL-ONBOARDING-SERVER-STEP: 加服务器地址 step, 员工首次启动就设
+            gateway + identity URL, 无需 IT 预配 companion.yaml. 支持 IP/域名. */}
+        {step === 1 && <StepServerConfig onNext={next} onBack={back} onSkip={close} />}
+        {step === 2 && <StepName onNext={next} onBack={back} onSkip={close} />}
+        {step === 3 && <StepAuth onNext={next} onBack={back} onSkip={close} />}
+        {step === 4 && (
           <StepModel models={models} onNext={next} onBack={back} onSkip={close} />
         )}
-        {/* 5/7 BL-CR: Curator consent toggle (步骤 3 of 集成方案) */}
-        {step === 4 && <StepCurator onNext={next} onBack={back} onSkip={close} />}
-        {/* 6/1 BL-ONBOARDING-DOC-DIRS-STEP (鸿波拍 C1): 加文书目录, 解决默认 ~/Documents/work
+        {/* 5/7 BL-CR: Curator consent toggle */}
+        {step === 5 && <StepCurator onNext={next} onBack={back} onSkip={close} />}
+        {/* 6/1 BL-ONBOARDING-DOC-DIRS-STEP: 加文书目录, 解决默认 ~/Documents/work
             命中率低问题 — 50 员工 mac 上各种自定义目录 (~/项目/ / ~/文稿/ / ~/work/),
             不让员工指目录则文书风格永远 0 文档. */}
-        {step === 5 && <StepDocDirs onNext={next} onBack={back} onSkip={close} />}
-        {step === 6 && (
+        {step === 6 && <StepDocDirs onNext={next} onBack={back} onSkip={close} />}
+        {step === 7 && (
           <StepTryChat
             onFinish={(seedMessage) => {
               // BL-MEMORY-ONBOARDING-SEED (5/16): seedMessage 来自 StepTryChat 4 选 1
@@ -189,9 +203,174 @@ function StepWelcome({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
         <li>✨ 越用越懂你, journal 自动总结你的工作</li>
       </ul>
       <p style={{ fontSize: 12, color: "var(--catfish-text-muted)", marginTop: "var(--space-3)" }}>
-        5 步设置, 大概 1 分钟.
+        几步简单设置, 大概 2 分钟.
       </p>
       <Buttons onNext={onNext} nextLabel="开始 →" onSkip={onSkip} />
+    </>
+  );
+}
+
+// 7/15 BL-ONBOARDING-SERVER-STEP — 服务器地址 (员工首次启动填, IP/域名任意)
+//
+// 沙箱铁证依赖:
+//   - readServerConfig() / writeServerConfig() Tauri commands 已就绪
+//   - 写入 ~/.catfish/companion.yaml 的 endpoints.gateway_url + oidc.issuer
+//   - URL 校验只要求 http/https 开头 (跟 ServerConfigCard 一致)
+function StepServerConfig({
+  onNext,
+  onBack,
+  onSkip,
+}: {
+  onNext: () => void;
+  onBack: () => void;
+  onSkip: () => void;
+}) {
+  const [gatewayUrl, setGatewayUrl] = useState("http://127.0.0.1:8999");
+  const [identityUrl, setIdentityUrl] = useState("http://127.0.0.1:8998");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // 首次加载, 读当前配置作 default (若员工重开 onboarding 或已有 yaml)
+  useEffect(() => {
+    let alive = true;
+    readServerConfig()
+      .then((cfg) => {
+        if (!alive) return;
+        if (cfg.gateway_url) setGatewayUrl(cfg.gateway_url);
+        if (cfg.identity_url) setIdentityUrl(cfg.identity_url);
+      })
+      .catch(() => {
+        /* 首次启动无 yaml, 用 default 127.0.0.1 */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const handleSaveAndNext = async () => {
+    setSaving(true);
+    setErr(null);
+    try {
+      const gw = gatewayUrl.trim().replace(/\/+$/, "");
+      const id = identityUrl.trim().replace(/\/+$/, "");
+      if (!/^https?:\/\//.test(gw)) {
+        throw new Error("Gateway URL 必须 http:// 或 https:// 开头");
+      }
+      if (id && !/^https?:\/\//.test(id)) {
+        throw new Error("Identity URL 必须 http:// 或 https:// 开头");
+      }
+      // gateway_token 保持空 ("") — 走 SSO 后自动填, 不需要员工手输
+      await writeServerConfig(gw, "", id || undefined);
+      onNext();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const inputStyle = {
+    width: "100%",
+    padding: "10px 12px",
+    fontSize: 14,
+    border: "1px solid var(--catfish-border)",
+    borderRadius: "var(--radius-md)",
+    background: "var(--catfish-bg)",
+    color: "var(--catfish-text)",
+    boxSizing: "border-box" as const,
+    marginBottom: "var(--space-3)",
+    fontFamily: "monospace",
+  };
+
+  const labelStyle = {
+    display: "block",
+    fontSize: 12,
+    color: "var(--catfish-text-muted)",
+    marginBottom: 4,
+  };
+
+  return (
+    <>
+      <h2 style={{ textAlign: "center", margin: "0 0 var(--space-3) 0" }}>
+        连接你公司的服务器
+      </h2>
+      <p
+        style={{
+          fontSize: 13,
+          lineHeight: 1.6,
+          color: "var(--catfish-text-muted)",
+          marginBottom: "var(--space-4)",
+        }}
+      >
+        鲶鱼需要连接你公司部署的中央服务. 请找 IT 拿服务器地址填在下面.
+        <br />
+        <strong>本机试用</strong>可保持默认 <code>127.0.0.1</code>. <strong>远程部署</strong>
+        填 IP (例: <code>http://192.168.10.20:8999</code>) 或域名
+        (例: <code>https://catfish.company.com</code>).
+      </p>
+
+      <label style={labelStyle}>
+        Gateway URL <span style={{ color: "var(--catfish-text-muted)" }}>(员工聊天走这, 通常端口 8999)</span>
+      </label>
+      <input
+        type="text"
+        value={gatewayUrl}
+        onChange={(e) => setGatewayUrl(e.target.value)}
+        placeholder="http://192.168.10.20:8999 或 https://catfish.company.com"
+        style={inputStyle}
+        spellCheck={false}
+        autoCapitalize="off"
+      />
+
+      <label style={labelStyle}>
+        Identity URL <span style={{ color: "var(--catfish-text-muted)" }}>(SSO 登录走这, 通常端口 8998)</span>
+      </label>
+      <input
+        type="text"
+        value={identityUrl}
+        onChange={(e) => setIdentityUrl(e.target.value)}
+        placeholder="http://192.168.10.20:8998 或 https://catfish.company.com"
+        style={inputStyle}
+        spellCheck={false}
+        autoCapitalize="off"
+      />
+
+      {err && (
+        <div
+          style={{
+            color: "var(--catfish-danger, #ef4444)",
+            fontSize: 12,
+            marginBottom: "var(--space-3)",
+            padding: "8px 10px",
+            background: "rgba(239, 68, 68, 0.08)",
+            borderRadius: 6,
+          }}
+        >
+          {err}
+        </div>
+      )}
+
+      <div
+        style={{
+          background: "var(--catfish-bg)",
+          border: "1px solid var(--catfish-border)",
+          borderRadius: 6,
+          padding: "var(--space-3)",
+          fontSize: 12,
+          color: "var(--catfish-text-muted)",
+          marginBottom: "var(--space-3)",
+        }}
+      >
+        ℹ️ 之后可在 <strong>Dashboard → 服务器配置</strong> 卡片里修改. 测试期先用 IP, 正式上线可切域名.
+      </div>
+
+      <Buttons
+        onBack={onBack}
+        onNext={handleSaveAndNext}
+        nextLabel={saving ? "保存中..." : "保存并继续"}
+        nextDisabled={saving}
+        onSkip={onSkip}
+      />
     </>
   );
 }
@@ -719,6 +898,7 @@ function Buttons({
   onSkip,
   nextLabel = "下一步 →",
   skipLabel = "稍后再说",
+  nextDisabled = false,
 }: {
   onNext: () => void;
   onBack?: () => void;
@@ -727,6 +907,9 @@ function Buttons({
   /** BL-ONBOARDING-DOC-DIRS-STEP (6/1): 默认"稍后再说", 加 skipLabel 让 StepDocDirs
    *  显"跳过 (用默认)" 更准确表达员工选择. */
   skipLabel?: string;
+  /** 7/15 BL-ONBOARDING-SERVER-STEP: 加 nextDisabled 让 StepServerConfig 保存中
+   *  时禁用 "下一步" 按钮, 防重复点击. */
+  nextDisabled?: boolean;
 }) {
   return (
     <div
@@ -770,15 +953,17 @@ function Buttons({
         )}
         <button
           onClick={onNext}
+          disabled={nextDisabled}
           style={{
             padding: "8px 20px",
-            background: "var(--catfish-cyan)",
+            background: nextDisabled ? "var(--catfish-border)" : "var(--catfish-cyan)",
             color: "white",
             border: "none",
             borderRadius: 4,
-            cursor: "pointer",
+            cursor: nextDisabled ? "not-allowed" : "pointer",
             fontSize: 13,
             fontWeight: 500,
+            opacity: nextDisabled ? 0.6 : 1,
           }}
         >
           {nextLabel}

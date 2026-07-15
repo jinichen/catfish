@@ -127,10 +127,12 @@ check_port() {
     return 0
 }
 PORT_OK=true
-for p in 80 443 8996 8997 8998 8999; do
+# P3.3.18-cleanup (7/14) 加 8994 wiki-hub
+for p in 80 443 8994 8996 8997 8998 8999; do
     case $p in
         80)   svc="nginx http" ;;
         443)  svc="nginx https" ;;
+        8994) svc="wiki-hub" ;;
         8996) svc="mcp-registry" ;;
         8997) svc="skills-hub" ;;
         8998) svc="identity" ;;
@@ -249,7 +251,8 @@ wait_healthy() {
 }
 
 ALL_HEALTHY=true
-for svc in postgres identity gateway skills-hub; do
+# P3.3.18-cleanup (7/14) 加 wiki-hub 到 healthy 循环
+for svc in postgres identity gateway skills-hub wiki-hub; do
     wait_healthy "$svc" 120 || ALL_HEALTHY=false
 done
 
@@ -283,6 +286,8 @@ smoke_curl "http://127.0.0.1:8997/healthz" "skills-hub /healthz" || SMOKE_OK=fal
 # 6/9 BL-WEB+MCP-DEPLOY 加: 2 个新服务 smoke
 # P3.4.1-cleanup2 (7/14): 砍 secret-broker smoke (服务已删 P3.4.1 6/13)
 smoke_curl "http://127.0.0.1:8996/health" "mcp-registry /health" || SMOKE_OK=false
+# P3.3.18-cleanup (7/14) 加 wiki-hub smoke
+smoke_curl "http://127.0.0.1:8994/healthz" "wiki-hub /healthz" || SMOKE_OK=false
 # web 不绑宿主机, 走中央 nginx (HTTP 80 / 80 → 301 → 443) 看 / 返 200
 # 跳过 SSL 验证 (deploy 时可能还没 cert)
 if curl -fskS -o /dev/null -w "%{http_code}" -L "http://127.0.0.1/" 2>/dev/null | grep -qE "200|301"; then
