@@ -221,6 +221,28 @@ jobs:
               if ($LASTEXITCODE -ne 0) { throw "tar pack failed" }
             } finally { Pop-Location }
 
+      # ─── W2.26 (7/15 BL-CATFISH-MAC-OFFLINE-INSTALL): tauri.conf.json bundle.resources
+      #      加了 4 个 resources/mac/* path (mac dmg 用), Tauri v2 build 时**跨平台**
+      #      validate 每个 resource path 存在. Windows CI 只跑 build-windows-resources.sh
+      #      生成 windows/*, mac/* 不存在 → tauri build 挂 (CircleCI #13/#14/#15 全红).
+      #      Fix: 建 4 空 placeholder, Windows msi 会带上 (总 < 1KB 无害), macOS 端不用.
+      - run:
+          name: Create mac resources placeholders (W2.26 fix CircleCI #13/#14/#15 挂)
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $macDir = "edge\companion-app\src-tauri\resources\mac"
+            New-Item -ItemType Directory -Force -Path $macDir | Out-Null
+            foreach ($f in @('install.sh', 'uv', 'cpython-3.11.15-embed.tar.gz', 'hermes-agent-bundle.tar.gz')) {
+              $p = "$macDir\$f"
+              if (-not (Test-Path $p)) {
+                Set-Content -Path $p -Value ''
+                Write-Host "  create $p (0 byte placeholder)"
+              } else {
+                Write-Host "  skip $p (already exists)"
+              }
+            }
+            Write-Host "OK 4 mac placeholders ready (Windows msi 用不到, 只为满足 tauri validate)"
+
       # ─── frontend build ───
 
       - run:
