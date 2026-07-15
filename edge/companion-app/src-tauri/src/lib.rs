@@ -12,7 +12,11 @@ mod tray;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    env_logger::init();
+    // 7/15 BL-COMPANION-LOG-FILE: tauri-plugin-log 替代 env_logger.
+    // - env_logger 只写 stdout/stderr, GUI app (从 Applications launch) 拿不到, log::info! 全丢
+    // - tauri-plugin-log 在 setup() 里注册, 写 ~/Library/Logs/com.catfish.companion/*.log
+    //   同时保留 stderr 输出 (companion.err.log 里也能看到)
+    // 具体 plugin 注册在下面 builder.plugin(...) 里, 这里不 env_logger::init().
 
     // 五一 sprint 5/5: Cmd+Shift+Space 召唤主窗口浮窗.
     // 设计:
@@ -70,7 +74,28 @@ pub fn run() {
 
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init());
+        .plugin(tauri_plugin_shell::init())
+        // 7/15 BL-COMPANION-LOG-FILE: log::info!/warn!/error! → 文件 + stderr
+        // 文件路径: macOS = ~/Library/Logs/com.catfish.companion/Catfish Companion.log
+        //           Windows = %APPDATA%/com.catfish.companion/logs/Catfish Companion.log
+        // rotate: 10MB 单文件, 保 5 份历史 (下游 debug 够用, 磁盘可控)
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(log::LevelFilter::Info)
+                .max_file_size(10 * 1024 * 1024u128) // 10MB per file
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepAll)
+                .targets([
+                    // macOS: ~/Library/Logs/com.catfish.companion/<bundle-id>.log
+                    // Windows: %LOCALAPPDATA%\com.catfish.companion\logs\
+                    // 用 identifier 不是 productName, 跟 stdio 重定向 log (Catfish Companion/) 区分
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: None,
+                    }),
+                    // stderr 保留 · GUI app 无 stdout, 但 launchd 会把 stderr 转到 companion.err.log
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stderr),
+                ])
+                .build(),
+        );
 
     #[cfg(desktop)]
     {

@@ -21,6 +21,9 @@ tauri = { version = "2.0", features = ["protocol-asset", "macos-private-api", "t
 tauri-plugin-shell = "2.0"
 # 五一 sprint 5/5: 全局快捷键 (Cmd+Shift+Space 召唤浮窗)
 tauri-plugin-global-shortcut = "2.0"
+# 7/15 BL-COMPANION-LOG-FILE: log::info!/warn!/error! → ~/Library/Logs/com.catfish.companion/*.log
+# 替代裸 env_logger (GUI app 无 stdout, warn 级默认吞掉 info)
+tauri-plugin-log = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1", features = ["full"] }
@@ -34,7 +37,7 @@ serde_yaml = "0.9"
 anyhow = "1.0"
 thiserror = "1.0"
 log = "0.4"
-env_logger = "0.11"
+# env_logger 5/x 起被 tauri-plugin-log 替代 (7/15 BL-COMPANION-LOG-FILE)
 # Phase 1C SSO: keyring (macOS Keychain / Win Credential Manager / Linux Secret Service)
 keyring = "3"
 # OAuth flow: 生成 state / code_challenge (Phase 2 PKCE 用)
