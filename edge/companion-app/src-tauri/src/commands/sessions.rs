@@ -133,6 +133,28 @@ fn truncate(s: String) -> String {
 // Queries
 // ============================================================
 
+/// 7/17 BL-SESSIONS-INDEX: 后台建 state.db 索引 (startup 就跑, 员工点侧栏不卡).
+///
+/// 4 个 idempotent CREATE INDEX IF NOT EXISTS:
+/// - idx_messages_session_role_ts: first_user_message subquery 走这 (O(log N))
+/// - idx_messages_session_ts:      MAX(timestamp) subquery 走这 (O(log N))
+/// - idx_sessions_source_deleted_started: 主查 WHERE+ORDER BY 走这 (O(log N))
+/// - idx_sessions_started_desc:    fallback ORDER BY (O(log N))
+///
+/// 幂等 · 已存在秒过. 首次 build 1-3 秒 (2761 sessions × 5 万 msg 规模), 之后 no-op.
+pub fn ensure_indexes_background() -> Result<(), String> {
+    let conn = open_db()?;
+    for sql in [
+        "CREATE INDEX IF NOT EXISTS idx_messages_session_role_ts ON messages(session_id, role, timestamp)",
+        "CREATE INDEX IF NOT EXISTS idx_messages_session_ts ON messages(session_id, timestamp)",
+        "CREATE INDEX IF NOT EXISTS idx_sessions_source_deleted_started ON sessions(source, deleted_at, started_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_sessions_started_desc ON sessions(started_at DESC)",
+    ] {
+        conn.execute(sql, []).map_err(|e| format!("CREATE INDEX 失败 [{sql}]: {e}"))?;
+    }
+    Ok(())
+}
+
 fn list_blocking() -> Result<Vec<SessionMeta>, String> {
     let conn = open_db()?;
     // BL-SESSION-MGMT C (5/15): ALTER TABLE 加 deleted_at (幂等 — 已存在 SQLite 报
@@ -142,36 +164,10 @@ fn list_blocking() -> Result<Vec<SessionMeta>, String> {
         [],
     );
 
-    // 7/17 BL-SESSIONS-INDEX 鸿波 catch (2761 sessions 时 sidebar 慢): sessions_list
-    // 大 SQL 用 2 个 subquery (first_user_message + MAX(timestamp)) 找每 session 的
-    // 首消息和最新消息. 无 index 时每子查询 O(N messages), 总 O(sessions × messages).
-    // 5 万 msg 时已经 ~30 秒, 20 万 msg 时 5-10 分钟, 完全卡死.
-    //
-    // Fix: 4 个 idempotent CREATE INDEX (`IF NOT EXISTS`, 已存在 no-op).
-    // 首次 Companion 启动跑一次 (~ 秒级 build), 之后 O(log N) 查询.
-    //
-    // Hermes 上游 state.db 默认可能没建这些 index (Companion 侧的读 pattern 是我们独有).
-    // 幂等 CREATE, 若 hermes 已建同样 index 也 no-op, 不冲突.
-    let _ = conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_messages_session_role_ts \
-         ON messages(session_id, role, timestamp)",
-        [],
-    );
-    let _ = conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_messages_session_ts \
-         ON messages(session_id, timestamp)",
-        [],
-    );
-    let _ = conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_sessions_source_deleted_started \
-         ON sessions(source, deleted_at, started_at DESC)",
-        [],
-    );
-    let _ = conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_sessions_started_desc \
-         ON sessions(started_at DESC)",
-        [],
-    );
+    // 7/17 BL-SESSIONS-INDEX 兜底: 主链路是 lib.rs setup 后台 thread 建索引, 但若
+    // 那个线程失败 / 员工首次 sessions_list 在 index 建好前触发 → 这里 lazy 补.
+    // ensure_indexes_background 幂等, 二次 call 秒过. 别删这层, 是防线.
+    let _ = ensure_indexes_background();
     // BL-SESSION-MGMT A (5/15): JOIN 子查询拉每个 session 的首条 user message,
     // sidebar 在 title 还没生成时用这条 fallback (避免显裸 timestamp).
     // BL-SESSION-MGMT C: WHERE deleted_at IS NULL 默认过滤已软删的.

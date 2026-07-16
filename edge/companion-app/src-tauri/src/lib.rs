@@ -247,6 +247,18 @@ pub fn run() {
                 Err(e) => log::warn!("BL-CR: ensure_curator_default 失败 (不阻塞启动): {e}"),
             }
 
+            // 7/17 BL-SESSIONS-INDEX: 后台 build state.db 索引, 员工点侧栏"对话"不卡.
+            // 鸿波 2761 sessions 时 catch: 无 index 时 sessions_list 子查询 O(N×M)
+            // 首启就要 1-3 秒卡. 挪到 startup 后台线程建, 员工首次点侧栏时索引就绪.
+            // 幂等 IF NOT EXISTS · 已存在秒过 · 首次 build 1-3 秒不阻塞 UI.
+            std::thread::spawn(|| {
+                if let Err(e) = commands::sessions::ensure_indexes_background() {
+                    log::warn!("BL-SESSIONS-INDEX: 后台建索引失败 (list_blocking 会 lazy 建兜底): {e}");
+                } else {
+                    log::info!("BL-SESSIONS-INDEX: state.db 索引就绪 (sessions_list < 100ms)");
+                }
+            });
+
             // P3.5.55 (6/21 鸿波 2 次 catch):
             //   1st: "客户没 catfish 源 → SOUL 软链 dangling → 鲶鱼退化"
             //   2nd: "思路是错的, catfish 应该能修改 hermes soul.md 才对, 保证一致"
