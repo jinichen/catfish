@@ -52,9 +52,15 @@ regex = "1"
 # ort 2.0 用 onnxruntime native runtime, Apple Silicon CPU backend 默认.
 # CoreML provider 留 P38.3 (要 feature flag + extra link). CPU INT8 已 ~300ms / query.
 # default features `含 download-binaries + tls-rustls, 不要 default-features=false.
-ort = "2.0.0-rc.12"
-# tokenizer: BGE-M3 用 XLM-R BPE, tokenizers crate 直接 load tokenizer.json
-tokenizers = "0.20"
+#
+# 7/16 BL-INTEL-DMG: ort 官方**不发** x86_64-apple-darwin prebuilt binary
+# (build 时报 "does not provide prebuilt binaries for the target x86_64-apple-darwin").
+# Intel Mac dmg 走 Remote embedding (gateway /v1/embeddings → 内网 BGE-M3),
+# 不 depend ort/tokenizers. Cargo.toml target.aarch64 只让 arm64 编时下 ort.
+# 见 services/embedding.rs 的 #[cfg(target_arch = "aarch64")] guard.
+# tokenizers 是 pure Rust 支持 x86_64, 但只 Local provider 用, 跟 ort 一起 guard 保持 clean.
+# ort = "2.0.0-rc.12"           # 移到下面 target-specific
+# tokenizers = "0.20"           # 同上
 # 不显式依赖 ndarray — ort 内部用 0.17, 我们走 tuple syntax (shape, Vec<T>) 避免 version 冲突
 # P3.3.23 (6/11): 装外部 skill zip 解压. 默认 features 含 deflate / bzip2 不需要,
 #   bzip2 需要 C 依赖 — 关 default-features 只留 deflate. 50MB 上限防 bomb.
@@ -78,3 +84,22 @@ serial_test = "3"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
+
+# 7/16 BL-INTEL-DMG: ort 官方不发 x86_64-apple-darwin prebuilt binary → Intel
+# Mac dmg build 时挂. Fix: ort + tokenizers 只在 aarch64 (Apple Silicon + Linux
+# arm) 依赖. x86_64-apple-darwin 走 embedding Remote provider (纯 reqwest, gateway
+# /v1/embeddings → 内网 BGE-M3 GPU). Windows msi 也是 x86_64 但 target_arch 检查用
+# 同样 cfg, msi 也不 depend ort → 之前 Windows Companion 里 wiki 语义搜索一直挂,
+# 现在也 fallback Remote → 顺带修好.
+#
+# 影响面:
+#   - x86_64-apple-darwin (Intel Mac dmg) — 用 Remote embedding, chat 全功能
+#   - x86_64-pc-windows-msvc (Windows msi) — 同上, wiki 搜索走 gateway
+#   - aarch64-apple-darwin (Apple Silicon dmg) — Local ONNX 完全保留
+#   - aarch64-unknown-linux-* (若未来支持 Linux mac client) — Local ONNX 保留
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+# ONNX Runtime Rust binding. 只 aarch64 有 prebuilt.
+ort = "2.0.0-rc.12"
+# tokenizers: BGE-M3 XLM-R BPE. 纯 Rust 也支持 x86_64, 但只 Local provider 用,
+# 跟 ort 一起 guard 免 x86_64 dmg 额外无用依赖.
+tokenizers = "0.20"

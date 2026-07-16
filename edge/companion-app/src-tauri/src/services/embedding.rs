@@ -35,17 +35,28 @@
 //! - `is_provider_ready() -> bool` 替代 P3.5.4 `init_session().is_some() && init_tokenizer().is_some()`
 //! - `embed_dim() -> usize` 替代 const EMBED_DIM, 运行时取真值 (跟 active provider 绑死)
 
+// 7/16 BL-INTEL-DMG: ort + tokenizers 只 aarch64 依赖 (Intel Mac / Windows msi
+// 走 Remote provider). LocalProvider 相关 code 也全部 cfg-guard.
+#[cfg(target_arch = "aarch64")]
 use ort::session::{Session, builder::GraphOptimizationLevel};
+#[cfg(target_arch = "aarch64")]
 use ort::value::Value;
 use serde::Deserialize;
+#[cfg(target_arch = "aarch64")]
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
+#[cfg(target_arch = "aarch64")]
+use std::sync::Mutex;
 use std::time::Duration;
+#[cfg(target_arch = "aarch64")]
 use tokenizers::Tokenizer;
 
 use crate::services::embedding_config::{
-    Backend, EmbeddingConfig, LocalConfig, RemoteConfig, expand_home, load_config,
+    Backend, EmbeddingConfig, RemoteConfig, load_config,
 };
+// expand_home 只 Local provider (init_session/tokenizer) 用, cfg-guard 免 x86_64 unused warn
+#[cfg(target_arch = "aarch64")]
+use crate::services::embedding_config::{LocalConfig, expand_home};
 
 // ─── ACTIVE_PROVIDER — 全 process 唯一, 启动 lazy init ────────────
 
@@ -57,6 +68,7 @@ static ACTIVE_PROVIDER: OnceLock<Provider> = OnceLock::new();
 /// RemoteProvider 只 72 bytes — 差 16x. Box LocalProvider 让 enum 变紧, 内存
 /// 只在 Local 场景多一次堆分配 (整个 process 只 init 一次, 无损).
 enum Provider {
+    #[cfg(target_arch = "aarch64")]
     Local(Box<LocalProvider>),
     Remote(RemoteProvider),
 }
@@ -64,6 +76,7 @@ enum Provider {
 impl Provider {
     fn embed_dim(&self) -> usize {
         match self {
+            #[cfg(target_arch = "aarch64")]
             Provider::Local(p) => p.config.embed_dim,
             Provider::Remote(p) => p.config.embed_dim,
         }
@@ -71,6 +84,7 @@ impl Provider {
 
     fn is_ready(&self) -> bool {
         match self {
+            #[cfg(target_arch = "aarch64")]
             Provider::Local(p) => p.is_ready(),
             Provider::Remote(p) => p.is_ready(),
         }
@@ -78,6 +92,7 @@ impl Provider {
 
     async fn embed_text(&self, text: &str) -> Option<Vec<f32>> {
         match self {
+            #[cfg(target_arch = "aarch64")]
             Provider::Local(p) => p.embed_text(text).await,
             Provider::Remote(p) => p.embed_text(text).await,
         }
@@ -94,8 +109,20 @@ fn init_active_provider() -> Provider {
     let cfg: EmbeddingConfig = load_config();
     match cfg.backend {
         Backend::Local => {
-            log::info!("[embedding] backend=local (yaml 显式)");
-            Provider::Local(Box::new(LocalProvider::new(cfg.local)))
+            #[cfg(target_arch = "aarch64")]
+            {
+                log::info!("[embedding] backend=local (yaml 显式)");
+                Provider::Local(Box::new(LocalProvider::new(cfg.local)))
+            }
+            // 7/16 BL-INTEL-DMG: x86_64 (Intel Mac dmg / Windows msi) 无 ort → 强制 fallback Remote
+            #[cfg(not(target_arch = "aarch64"))]
+            {
+                log::warn!(
+                    "[embedding] backend=local 配置但当前架构无 ONNX ort → fallback remote {}",
+                    cfg.remote.gateway_url
+                );
+                Provider::Remote(RemoteProvider::new(cfg.remote))
+            }
         }
         Backend::Remote => {
             log::info!(
@@ -112,8 +139,18 @@ fn init_active_provider() -> Provider {
                 log::info!("[embedding] auto → remote OK (gateway 通)");
                 Provider::Remote(remote)
             } else {
-                log::info!("[embedding] auto → local (remote 不通, fallback ONNX)");
-                Provider::Local(Box::new(LocalProvider::new(cfg.local)))
+                #[cfg(target_arch = "aarch64")]
+                {
+                    log::info!("[embedding] auto → local (remote 不通, fallback ONNX)");
+                    Provider::Local(Box::new(LocalProvider::new(cfg.local)))
+                }
+                // 7/16 BL-INTEL-DMG: x86_64 无 ort · remote 也不通 → 只能 Remote 兜底,
+                // is_ready() 会返 false, caller 走 no-op fallback (不筛全量注入).
+                #[cfg(not(target_arch = "aarch64"))]
+                {
+                    log::warn!("[embedding] auto → remote 不通且当前架构无本地 ONNX, embed 会返 None");
+                    Provider::Remote(remote)
+                }
             }
         }
     }
@@ -212,13 +249,18 @@ pub fn vector_from_blob(blob: &[u8]) -> Option<Vec<f32>> {
 }
 
 // ─── Local ONNX provider — 老 P3.5.4 路径重构进来 ────────────
+// 7/16 BL-INTEL-DMG: LocalProvider 用 ort::Session + tokenizers::Tokenizer, 只 aarch64
+// 编. Intel Mac dmg / Windows msi 上整个 struct + impl 不存在, 前面 Provider enum 里
+// Local variant 也 cfg-guard, 保证 x86_64 build 通.
 
+#[cfg(target_arch = "aarch64")]
 struct LocalProvider {
     config: LocalConfig,
     session: OnceLock<Option<Mutex<Session>>>,
     tokenizer: OnceLock<Option<Tokenizer>>,
 }
 
+#[cfg(target_arch = "aarch64")]
 impl LocalProvider {
     fn new(config: LocalConfig) -> Self {
         Self {
