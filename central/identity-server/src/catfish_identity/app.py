@@ -150,21 +150,32 @@ def create_app(
     # BL-ARCH1 (5/10): CORS — 给 catfish-web (浏览器 PKCE flow) 调
     # /.well-known/openid-configuration / /jwks 用. dev 默认 localhost:5173 (vite)
     # + 127.0.0.1:5173 + 任意 origin (regex). 生产应改成具体 origin 列表.
+    #
+    # 7/17 BL-TAURI-CORS: Tauri v2 desktop app 的 WebView origin 是:
+    #   - macOS/iOS/Linux: `tauri://localhost`
+    #   - Windows:         `https://tauri.localhost`
+    # Companion 里 useServerReachable hook 用 fetch API 走 browser CORS check.
+    # 老 regex `https?://(localhost|127\.0\.0\.1)` 不匹配 tauri:// scheme, 员工首启
+    # Companion 检测 identity 时 CORS 拦截 → 显示"认证服务不通 (Load failed)".
+    # allow_origin_regex 扩展支持 tauri scheme + `tauri.localhost` host.
     cors_origins_env = os.environ.get("CATFISH_IDENTITY_CORS_ORIGINS", "").strip()
     if cors_origins_env:
         cors_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
     else:
-        # dev 默认: vite 5173 + nginx 80/443 + 任何 localhost
+        # dev 默认: vite 5173 + nginx 80/443 + 任何 localhost + Tauri desktop
         cors_origins = [
             "http://localhost:5173",
             "http://127.0.0.1:5173",
             "http://localhost",
             "http://127.0.0.1",
+            "tauri://localhost",            # Tauri v2 mac/Linux WebView origin
+            "https://tauri.localhost",      # Tauri v2 Windows WebView origin
         ]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
-        allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:[0-9]+)?",
+        # 三种 scheme 都接: http(s) + tauri. Host 允许 localhost / 127.0.0.1 / tauri.localhost
+        allow_origin_regex=r"(https?|tauri)://(localhost|127\.0\.0\.1|tauri\.localhost)(:[0-9]+)?",
         allow_credentials=True,
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
