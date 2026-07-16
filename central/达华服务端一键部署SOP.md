@@ -58,11 +58,28 @@ cd E:\catfish
 
 ### Step 2 · 装 image tar (2-5 分钟, 视磁盘速度)
 
-```bash
-docker load -i /path/to/catfish-central-images.tar
+**⚠️ 装之前必查你服务器 CPU 架构** (Docker image 是**特定架构** · 装错架构直接跑不起来):
 
-# verify 8 个 image 都在
+```bash
+uname -m
+```
+
+**返回**:
+- `x86_64` → **amd64** (99% 政企 Ubuntu/CentOS 是这个) · 用 `catfish-central-images-amd64.tar`
+- `aarch64` → **arm64** (国产鲲鹏 / 部委服务器) · 用 `catfish-central-images-arm64.tar`
+- `x86_64` 但 macOS/Windows Docker Desktop · 也用 amd64 tar
+
+**若鲶鱼团队发给你的 tar 跟你架构不匹配** · 立即联系 catfish-support · 我们换正确架构的 tar 发你.
+
+```bash
+docker load -i /path/to/catfish-central-images-<你的架构>.tar
+
+# verify 8 个 image 都在 (架构对)
 docker images | grep -E "catfish-|postgres:16-alpine|nginx:1.27-alpine"
+
+# 关键 verify 架构 (必须跟 uname -m 一致 or Docker 说"platform doesn't match" 警告)
+docker inspect catfish-gateway:0.1.0 --format '{{.Architecture}}/{{.Os}}'
+# 期望: amd64/linux 或 arm64/linux (跟 uname -m 一致)
 ```
 
 **期望 8 行**:
