@@ -141,6 +141,37 @@ fn list_blocking() -> Result<Vec<SessionMeta>, String> {
         "ALTER TABLE sessions ADD COLUMN deleted_at INTEGER",
         [],
     );
+
+    // 7/17 BL-SESSIONS-INDEX 鸿波 catch (2761 sessions 时 sidebar 慢): sessions_list
+    // 大 SQL 用 2 个 subquery (first_user_message + MAX(timestamp)) 找每 session 的
+    // 首消息和最新消息. 无 index 时每子查询 O(N messages), 总 O(sessions × messages).
+    // 5 万 msg 时已经 ~30 秒, 20 万 msg 时 5-10 分钟, 完全卡死.
+    //
+    // Fix: 4 个 idempotent CREATE INDEX (`IF NOT EXISTS`, 已存在 no-op).
+    // 首次 Companion 启动跑一次 (~ 秒级 build), 之后 O(log N) 查询.
+    //
+    // Hermes 上游 state.db 默认可能没建这些 index (Companion 侧的读 pattern 是我们独有).
+    // 幂等 CREATE, 若 hermes 已建同样 index 也 no-op, 不冲突.
+    let _ = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_messages_session_role_ts \
+         ON messages(session_id, role, timestamp)",
+        [],
+    );
+    let _ = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_messages_session_ts \
+         ON messages(session_id, timestamp)",
+        [],
+    );
+    let _ = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sessions_source_deleted_started \
+         ON sessions(source, deleted_at, started_at DESC)",
+        [],
+    );
+    let _ = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sessions_started_desc \
+         ON sessions(started_at DESC)",
+        [],
+    );
     // BL-SESSION-MGMT A (5/15): JOIN 子查询拉每个 session 的首条 user message,
     // sidebar 在 title 还没生成时用这条 fallback (避免显裸 timestamp).
     // BL-SESSION-MGMT C: WHERE deleted_at IS NULL 默认过滤已软删的.
