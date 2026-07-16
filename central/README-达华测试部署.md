@@ -142,6 +142,108 @@ GEMINI_API_KEY=                 # Google Gemini, 可选
 
 ---
 
+## 3.5. 建 users.yaml seed 员工账号 (5 分钟, 首次必做)
+
+**目的** · Identity 首次启动时若 PG.users 表空, 会读 `users.yaml` seed 灌进 PG. 之后 PG 是权威, yaml 忽略. **不做这步 → 员工登录 401**.
+
+### Step 1 · 建 users.yaml (从模板)
+
+```bash
+# mac / Ubuntu
+cp identity-server/config/users.yaml.example identity-server/config/users.yaml
+open -e identity-server/config/users.yaml     # 或 nano/vim
+
+# Windows PowerShell
+Copy-Item identity-server\config\users.yaml.example identity-server\config\users.yaml
+notepad identity-server\config\users.yaml
+```
+
+### Step 2 · 生成 admin 密码 hash
+
+**先启动 identity** (postgres 也要一起):
+
+```bash
+docker compose up -d postgres identity
+sleep 20
+
+# 生成 hash (换成你的强密码)
+docker compose exec identity python -c \
+  "from catfish_identity.users import hash_password; print(hash_password('DahuaAdmin2026!'))"
+```
+
+**输出**类似 · **完整 copy 那一整串** (从 `$2b$12$` 开始):
+```
+$2b$12$abcXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+```
+
+### Step 3 · 编辑 users.yaml 填 hash
+
+```yaml
+users:
+  - email: admin@dahua.com
+    password_hash: $2b$12$你刚生成的完整hash     # ← 粘贴这里
+    name: 达华管理员
+    department: IT
+    role: sysadmin
+
+  # 后续员工可以 vim 加 · 或用 admin API
+```
+
+保存关闭.
+
+### Step 4 · 让 seed 触发 (TRUNCATE users + restart identity)
+
+```bash
+# 若之前 up 过, PG.users 可能已有 (空) 记录 · 清空让 seed 再跑
+docker compose exec postgres psql -U catfish -d catfish -c "TRUNCATE users CASCADE;"
+
+# restart identity · 自动 seed
+docker compose restart identity
+sleep 15
+
+# verify seed 成功
+docker compose logs identity --tail 20 | grep -E "seed|users 加载"
+```
+
+**期望 log**:
+```
+PG users 首次 seed: 从 yaml 灌 1 条
+PG users 加载: 1 个用户 (覆盖 yaml)
+```
+
+### Step 5 · verify PG 里真有 user
+
+```bash
+docker compose exec postgres psql -U catfish -d catfish -c "SELECT email, name, role FROM users;"
+```
+
+**期望** · 显示 admin@dahua.com 条目.
+
+### 后续加员工 3 种方式 (v0.18 Phase 1)
+
+**方式 A · psql 直接 INSERT** (最快):
+```bash
+# 生成新员工 hash
+docker compose exec identity python -c "from catfish_identity.users import hash_password; print(hash_password('EmployeePasswd'))"
+
+# psql insert
+docker compose exec postgres psql -U catfish -d catfish -c \
+  "INSERT INTO users (email, password_hash, name, department, tier, role, managed_departments) VALUES ('zhang.san@dahua.com', '刚生成的hash', '张三', '研发', 'employee', 'employee', '[]'::jsonb);"
+```
+
+**方式 B · vim yaml + wipe + restart** (适合首次批量 seed):
+```bash
+vim identity-server/config/users.yaml         # 追加员工
+docker compose exec postgres psql -U catfish -d catfish -c "TRUNCATE users CASCADE;"
+docker compose restart identity
+```
+
+**方式 C · Companion Admin API** (Phase 2 加, 现在没 UI):
+- Companion 里 admin 用户看到 "员工管理" 面板, 点鼠标建
+- Phase 2 未实现
+
+---
+
 ## 4. 启动全栈 + 验证 (5 分钟)
 
 ### 4.1 一键启
