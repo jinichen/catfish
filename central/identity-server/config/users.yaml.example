@@ -1,0 +1,80 @@
+# ============================================================
+# 鲶鱼 · Identity 用户 seed 模板 (7/16 补 · 军规: 真 hash 不进 tar)
+# ============================================================
+#
+# 用法 (客户 IT 部署时首次跑一次):
+#   1. cp users.yaml.example users.yaml
+#   2. 生成 admin 密码 hash:
+#        docker compose exec identity python -c \
+#          "from catfish_identity.users import hash_password; print(hash_password('YourAdminPassword'))"
+#   3. 把输出的 $2b$12$... 粘贴替换下面的 CHANGE_ME hash
+#   4. docker compose up -d (若 PG.users 表空, 会自动 seed 灌 users.yaml 进 PG)
+#      验证 seed: docker compose logs identity | grep seed
+#      期望: "PG users 首次 seed: 从 yaml 灌 N 条"
+#
+# 后续加员工:
+#   - Phase 1 (v0.18): psql 直接 INSERT users 表 · 或 vim yaml + TRUNCATE users + restart identity
+#   - Phase 2 (未来): Companion 里 admin 用户看到员工管理面板, 点点鼠标建
+#
+# 权威源:
+#   - 首次启动 · PG.users 空 → 用 users.yaml seed
+#   - 之后每次 · PG.users 表 · yaml 忽略
+#   - 改密码 · psql UPDATE users SET password_hash=... 或用 admin API
+#
+# 军规:
+#   - 生成的 users.yaml (含真 hash) 一定 chmod 600
+#   - users.yaml 不进 git (.gitignore 已排除)
+#   - hash 是 bcrypt cost=12, 单次生成 ~100ms · 破解成本极高
+#
+# role 白名单 (只接受这 4 个, 其他值 fallback 到 employee):
+#   sysadmin  · 系统超管 · 系统至少 1 个 · 不能被锁 / 删
+#   admin     · 部门 admin · 管理 managed_departments 下的员工
+#   manager   · 部门经理 · 只读部门员工数据
+#   employee  · 普通员工 · 默认
+
+users:
+  # ── 必填 · 系统超管 (至少 1 个) ──
+  # sysadmin 能: 管所有员工 / 改所有配置 / 看 audit log
+  - email: admin@yourcompany.com
+    password_hash: CHANGE_ME_TO_BCRYPT_HASH_STARTING_WITH_2b_12
+    name: 系统管理员
+    department: IT
+    role: sysadmin
+
+  # ── 建议 · 部门 admin (给业务部门 IT 支持人员) ──
+  # admin 能: 管 managed_departments 下员工 · 不能改 sysadmin / 系统配置
+  # - email: it-manager@yourcompany.com
+  #   password_hash: CHANGE_ME_TO_BCRYPT_HASH
+  #   name: IT 经理
+  #   department: IT
+  #   role: admin
+  #   managed_departments: [IT, 研发, 财务]
+
+  # ── 试点员工 (先给几个 seed, 后续 admin 面板加) ──
+  # employee 是默认 role, 可省略 role 字段
+  # - email: zhang.san@yourcompany.com
+  #   password_hash: CHANGE_ME_TO_BCRYPT_HASH
+  #   name: 张三
+  #   department: 研发
+  #   # role: employee    # 默认
+
+  # ── 批量员工 seed (可选) ──
+  # 若要一次性 seed 100+ 员工 · 建议:
+  #   1. 准备 Excel · 3 列: email, name, department
+  #   2. 每人一个初始密码 (员工首次登录强制改), 也可以统一 · e.g. "Catfish2026!"
+  #   3. python 脚本 · 批量生成 hash + 拼成 yaml
+  #      cat gen_users.py:
+  #      import bcrypt, csv, yaml
+  #      users = []
+  #      for row in csv.DictReader(open('employees.csv')):
+  #          hash = bcrypt.hashpw(b'Catfish2026!', bcrypt.gensalt()).decode()
+  #          users.append({
+  #              'email': row['email'],
+  #              'password_hash': hash,
+  #              'name': row['name'],
+  #              'department': row['dept'],
+  #              'role': 'employee',
+  #          })
+  #      yaml.safe_dump({'users': users}, open('users.yaml','w'), allow_unicode=True)
+  #   4. 员工首次登录 must_change_password=True (在 users.yaml 里不能直接设,
+  #      需要在 seed 后 psql: UPDATE users SET must_change_password=TRUE;)
