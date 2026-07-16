@@ -1,16 +1,22 @@
 /** 登录闸 — 没登录时挡住整个 app, 让员工先点登录.
  *
- * 行为:
- *   - 加载中 (whoami 还没返) → 显示空白 (跟 startup 体验一致)
- *   - 已登录 → render children
- *   - 未登录 → 显示登录卡片 + dev_token warning (如果 env 有)
+ * 行为 (7/16 BL-SERVER-REACHABILITY-CHECK 加分支):
+ *   0. 服务器连通检测中 → 显示"加载中"
+ *   1. 服务器不通 (identity or gateway 挂) → 显示 ServerSetupCard 让员工配 URL
+ *   2. 服务器通 + 未登录 → 显示登录卡片
+ *   3. 服务器通 + 已登录 → render children (App + Onboarding)
  *
  * 设计: 不替代整个 App, 包在 App 外面. App 内部各 tab 不需要 auth-aware,
- *       直接假设已登录, gate 由这层控制.
+ *       直接假设已登录 + 服务器通, gate 由这层控制.
+ *
+ * 用户 pushback (7/16 早晨): 之前员工首启 Companion 若默认 URL 不通就死循环
+ * (点登录浏览器打开挂的页面, 又没地方改 URL). 现在检测优先, 不通就配, 通了才登.
  */
 
 import { useState } from "react";
 import { useAuth } from "../hooks/useAuth";
+import { useServerReachable } from "../hooks/useServerReachable";
+import ServerSetupCard from "./ServerSetupCard";
 
 interface LoginGateProps {
   children: React.ReactNode;
@@ -19,6 +25,39 @@ interface LoginGateProps {
 export default function LoginGate({ children }: LoginGateProps) {
   const { state, loading, error, login } = useAuth();
   const [logging, setLogging] = useState(false);
+  const server = useServerReachable();
+
+  // 0. 首次检测中 (lastCheckedAt === null) → 加载中
+  if (server.checking && server.lastCheckedAt === null) {
+    return (
+      <div
+        style={{
+          height: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: "var(--catfish-text-muted)",
+        }}
+      >
+        正在检测服务器连通性…
+      </div>
+    );
+  }
+
+  // 1. 服务器不通 → 让员工配 URL (ServerSetupCard 会自己重测)
+  if (!server.reachable) {
+    return (
+      <ServerSetupCard
+        state={server}
+        onRetest={server.retest}
+        onSaved={() => {
+          // 保存成功后立即重测. checkNow 触发 setState + fetch → 若通了 LoginGate
+          // 下次 render 走 authenticated 或未登录分支, 员工看到"登录"卡
+          void server.checkNow();
+        }}
+      />
+    );
+  }
 
   if (loading) {
     return (

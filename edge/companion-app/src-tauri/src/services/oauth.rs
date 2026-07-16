@@ -792,8 +792,19 @@ fn open_in_browser(url: &str) -> Result<()> {
     }
     #[cfg(target_os = "windows")]
     {
+        // 7/16 BL-WIN-OAUTH-URL-TRUNCATE 真根因铁证:
+        //   之前用 cmd /C start URL, Windows CMD 遇到 & 会当命令分隔符截断 URL.
+        //   OAuth URL 含 &client_id / &redirect_uri / &scope / &state 多个 &,
+        //   CMD 只把第一个 & 前的 URL 段传给浏览器, 后面当新命令 (静默失败).
+        //   → 员工浏览器只看到 URL 的一小段 → identity 返 422 "Field required".
+        //
+        //   Fix 方式 1 (选): cmd /C start "" "URL"
+        //     - 第一个 "" 是 start 语法要求的 title (空)
+        //     - 第二个 "URL" 用双引号包住, CMD 就不解释里面的 &
+        //   Fix 方式 2 (弃): powershell.exe Start-Process URL (启动慢 · Ps 冷启 500ms+)
+        //   Fix 方式 3 (弃): tauri::api::shell::open (依赖 shell plugin)
         std::process::Command::new("cmd")
-            .args(["/C", "start", url])
+            .args(["/C", "start", "", url])
             .status()?;
     }
     Ok(())
