@@ -326,10 +326,14 @@ pub async fn run_login_flow(cfg: &OidcConfig) -> Result<AuthSession> {
     log::info!("打开浏览器走 OAuth: {auth_url}");
     open_in_browser(&auth_url)?;
 
-    // 4. 等 callback (60 秒超时)
-    let cb_result = tokio::time::timeout(Duration::from_secs(60), rx)
+    // 4. 等 callback (5 分钟超时)
+    // 7/16: 60s → 300s.
+    //   - 员工首次登录慢 (打字慢/双因子/密码找不到), 60s 常 timeout
+    //   - Windows 上 workaround 走 PowerShell 抓 log URL 手动打开, 也需要几十秒
+    //   - 5 分钟够长, 员工放弃就直接关 Companion, 不会挂太久
+    let cb_result = tokio::time::timeout(Duration::from_secs(300), rx)
         .await
-        .map_err(|_| anyhow!("OAuth callback 60 秒超时, 员工没完成登录"))?
+        .map_err(|_| anyhow!("OAuth callback 5 分钟超时, 员工没完成登录"))?
         .map_err(|_| anyhow!("OAuth callback channel 关闭, 内部错误"))?;
     let code = cb_result.code;
 
@@ -795,16 +799,17 @@ fn open_in_browser(url: &str) -> Result<()> {
         // 7/16 BL-WIN-OAUTH-URL-TRUNCATE 真根因铁证:
         //   之前用 cmd /C start URL, Windows CMD 遇到 & 会当命令分隔符截断 URL.
         //   OAuth URL 含 &client_id / &redirect_uri / &scope / &state 多个 &,
-        //   CMD 只把第一个 & 前的 URL 段传给浏览器, 后面当新命令 (静默失败).
-        //   → 员工浏览器只看到 URL 的一小段 → identity 返 422 "Field required".
+        //   HashMap iteration 无序 → 每次浏览器看到不同 param (只 client_id 或 只 state).
         //
-        //   Fix 方式 1 (选): cmd /C start "" "URL"
-        //     - 第一个 "" 是 start 语法要求的 title (空)
-        //     - 第二个 "URL" 用双引号包住, CMD 就不解释里面的 &
-        //   Fix 方式 2 (弃): powershell.exe Start-Process URL (启动慢 · Ps 冷启 500ms+)
-        //   Fix 方式 3 (弃): tauri::api::shell::open (依赖 shell plugin)
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", url])
+        //   Fix v1 (试过): cmd /C start "" "URL" — 加双引号包 URL. 实测**还是挂**.
+        //     Windows start 对 & 有特殊处理, 即使 quote 也可能失败.
+        //   Fix v2 (采用): rundll32 url.dll,FileProtocolHandler URL
+        //     - Windows 原生打开 URL 方式 (Explorer / IE / 系统 API 内部用的就是这个)
+        //     - **不走 shell**, & 不会被解释
+        //     - 单参 URL, 无 quote 问题
+        //     - 兼容 Win7+
+        std::process::Command::new("rundll32.exe")
+            .args(["url.dll,FileProtocolHandler", url])
             .status()?;
     }
     Ok(())
