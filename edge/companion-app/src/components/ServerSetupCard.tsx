@@ -11,7 +11,7 @@
  */
 
 import { useState, useEffect } from "react";
-import { invoke } from "../lib/tauri";
+import { invoke } from "@tauri-apps/api/core";
 import type { ServerReachableState } from "../hooks/useServerReachable";
 
 interface ServerSetupCardProps {

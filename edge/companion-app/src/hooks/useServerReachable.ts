@@ -16,7 +16,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "../lib/tauri";
+import { invoke } from "@tauri-apps/api/core";
 
 export interface ServerReachableState {
   checking: boolean;
