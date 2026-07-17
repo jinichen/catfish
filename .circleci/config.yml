@@ -306,10 +306,18 @@ jobs:
             Write-Host "OK Playwright chromium 装到: $($chromiumDirs.FullName -join ', ')"
             # 打包 %LOCALAPPDATA%\ms-playwright\ 里的**全部 chromium 目录**成 tar.gz
             # (通常只有 chromium-<build>\, 但 headless_shell 之类也一起打)
+            # 修 (build #36 挂根因): tar 是 native command, -ErrorAction 是 PS cmdlet 参数不认;
+            # chromium* PowerShell glob 需要先展开成 array 再 splat 给 tar.
             $outTar = "$PWD\edge\companion-app\src-tauri\resources\windows\chromium-embed.tar.gz"
             Push-Location $pwCacheDir
             try {
-              tar czf $outTar chromium* -ErrorAction SilentlyContinue
+              $chromiumNames = @(Get-ChildItem -Directory -Filter "chromium*" | ForEach-Object { $_.Name })
+              if ($chromiumNames.Count -eq 0) {
+                throw "无 chromium* 目录 (Playwright install chromium 装到别处?): $pwCacheDir"
+              }
+              Write-Host "  打包目录: $($chromiumNames -join ', ')"
+              # splat array 传给 native command
+              tar czf $outTar @chromiumNames
               if ($LASTEXITCODE -ne 0) { throw "tar pack chromium exit=$LASTEXITCODE" }
             } finally {
               Pop-Location
