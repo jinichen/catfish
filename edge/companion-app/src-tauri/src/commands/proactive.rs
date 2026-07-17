@@ -42,12 +42,12 @@ pub struct ProactiveContext {
 const TAIL_BYTES: usize = 8000;
 
 fn journal_path() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
+    let home = crate::util::paths::home_env().ok()?;
     Some(PathBuf::from(home).join(".catfish/employee_journal.md"))
 }
 
 fn hermes_state_db() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
+    let home = crate::util::paths::home_env().ok()?;
     Some(PathBuf::from(home).join(".hermes/state.db"))
 }
 

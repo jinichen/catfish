@@ -840,7 +840,8 @@ pub async fn persist_audit(result: &PhishingScanResult, subject: &str, sender: &
         // 安全邮件不记
         return;
     }
-    let path = match std::env::var("HOME") {
+    // BL-WIN-HOME (7/17): Windows 用 USERPROFILE
+    let path = match crate::util::paths::home_env().or_else(|_| std::env::var("USERPROFILE")) {
         Ok(h) => format!("{h}/.catfish/audit/phishing_scan.jsonl"),
         Err(_) => return,
     };

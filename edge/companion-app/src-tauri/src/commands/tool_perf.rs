@@ -99,7 +99,7 @@ pub struct ToolStat {
 
 /// audit 文件路径 — 跟 tool-bridge/audit.py:68-73 _audit_path() 对齐
 fn audit_path() -> PathBuf {
-    let home = std::env::var("HOME")
+    let home = crate::util::paths::home_env()
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| ".".into());
     PathBuf::from(home).join(".hermes").join(".catfish_audit.jsonl")

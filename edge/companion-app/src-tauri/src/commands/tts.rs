@@ -71,7 +71,7 @@ fn find_piper_executable() -> Option<PathBuf> {
 
     // 2. 常见路径 (按优先级 — catfish 约定路径放最前, 跟 whisper-models 同目录)
     let mut candidates: Vec<PathBuf> = vec![];
-    if let Ok(home) = std::env::var("HOME") {
+    if let Ok(home) = crate::util::paths::home_env() {
         // ★ BL-VOICE2 fix2 (5/10): 推荐路径 ~/.catfish/piper-venv/bin/piper
         // 解决 PEP 668 (Python 3.12+ + homebrew 拦 pip 直装) + 代理问题 (走
         // venv 不需要 brew install 任何东西). 鸿波 mac py3.14 + 7890 代理没起来
@@ -128,7 +128,7 @@ fn find_piper_executable() -> Option<PathBuf> {
 
 #[cfg(target_os = "macos")]
 fn voice_dir() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME env 未设".to_string())?;
+    let home = crate::util::paths::home_env().map_err(|_| "HOME env 未设".to_string())?;
     Ok(PathBuf::from(home).join(".catfish").join("piper-voices"))
 }
 
@@ -155,7 +155,7 @@ fn read_yaml_voice() -> Option<String> {
         voice: Option<String>,
     }
 
-    let home = std::env::var("HOME").ok()?;
+    let home = crate::util::paths::home_env().ok()?;
     let path = PathBuf::from(home).join(".catfish").join("companion.yaml");
     if !path.exists() {
         return None;

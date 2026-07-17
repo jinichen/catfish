@@ -274,7 +274,9 @@ pub async fn persist_audit(result: &PoliticalScanResult, subject: &str, sender: 
     if result.flags.is_empty() && result.llm_verdict.is_none() {
         return;
     }
-    let path = match std::env::var("HOME") {
+    // BL-WIN-HOME (7/17): Windows 用 USERPROFILE, 老代码只查 HOME 会让
+        // 全 Windows 员工的 political audit 直接跳过 · 军规违反.
+    let path = match crate::util::paths::home_env().or_else(|_| std::env::var("USERPROFILE")) {
         Ok(h) => format!("{h}/.catfish/audit/political_scan.jsonl"),
         Err(_) => return,
     };

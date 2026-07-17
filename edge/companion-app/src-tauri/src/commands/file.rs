@@ -16,12 +16,12 @@ use std::process::Command;
 /// 失败 → 原样返回, 让上层 `is_absolute()` 检查继续走错误分支.
 fn expand_tilde(path: &str) -> PathBuf {
     if let Some(rest) = path.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
+        if let Ok(home) = crate::util::paths::home_env() {
             return PathBuf::from(home).join(rest);
         }
     }
     if path == "~" {
-        if let Ok(home) = std::env::var("HOME") {
+        if let Ok(home) = crate::util::paths::home_env() {
             return PathBuf::from(home);
         }
     }

@@ -285,9 +285,8 @@ fn scan_skills_root(root: &Path, ns_prefix: &str) -> Vec<SkillNamespace> {
 //   <catfish_root>/skills/          → "已装的" - 团队审定 (catfish 仓库公文/合规模板)
 //   ~/.hermes/skills/               → "已装的" - 内置 + marketplaces + LLM 自学
 //
-// 老 list_skills_blocking 现 = list_installed_skills_blocking (合并扫 catfish 仓库 + hermes),
-// list_skills() Tauri 命令保留作 backward compat 返同一份 (实际无外部 caller, 但保
-// 一刻 safety net).
+// 7/17 BL-DEADCODE-SWEEP: 老 list_skills_blocking / list_skills tauri 命令死链已删.
+// 现只保留 list_my_skills_blocking 和 list_installed_skills_blocking.
 
 /// 扫 ~/.catfish/skills/ + <catfish_root>/skills/ 里 frozen 教学产物 — 员工自己生成的.
 ///
@@ -404,11 +403,8 @@ fn list_installed_skills_blocking() -> Result<Vec<SkillNamespace>, String> {
     Ok(result)
 }
 
-/// @deprecated 6/2 BL-SKILLS-CARD-SPLIT: 老 caller 兼容, 内部转 installed. 没真 caller
-/// (Companion 已经走拆分后的 2 命令), 留作 safety net 防意外耦合.
-fn list_skills_blocking() -> Result<Vec<SkillNamespace>, String> {
-    list_installed_skills_blocking()
-}
+// 7/17 BL-DEADCODE-SWEEP: list_skills_blocking 死链已删
+// (前端 useSkillsAndMcp hook / fetchSkills / list_skills tauri command 全删).
 
 fn list_mcp_servers_blocking() -> Result<Vec<McpServerEntry>, String> {
     let Some(home) = home_dir() else {
@@ -475,14 +471,7 @@ pub async fn list_installed_skills() -> Result<Vec<SkillNamespace>, String> {
         .map_err(|e| format!("内部错误: {e}"))?
 }
 
-/// @deprecated 6/2 BL-SKILLS-CARD-SPLIT: 内部转 list_installed_skills 兼容老 caller.
-/// 没真 caller (Companion 已拆 2 命令), 保留作 safety net.
-#[tauri::command]
-pub async fn list_skills() -> Result<Vec<SkillNamespace>, String> {
-    tokio::task::spawn_blocking(list_skills_blocking)
-        .await
-        .map_err(|e| format!("内部错误: {e}"))?
-}
+// 7/17 BL-DEADCODE-SWEEP: list_skills tauri command 死链已删.
 
 #[tauri::command]
 pub async fn list_mcp_servers() -> Result<Vec<McpServerEntry>, String> {

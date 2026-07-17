@@ -32,7 +32,7 @@ use std::process::Command;
 
 /// hermes 是否已装 (检测 ~/.hermes/hermes-agent/pyproject.toml 存在).
 pub fn hermes_agent_installed() -> bool {
-    let Ok(home) = std::env::var("HOME") else {
+    let Ok(home) = crate::util::paths::home_env() else {
         return false;
     };
     Path::new(&home)

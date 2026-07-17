@@ -653,8 +653,7 @@ export const fetchIdentity = () => rawInvoke<IdentityInfo>("identity_info");
 // 6/2 BL-SKILLS-CARD-SPLIT (鸿波): 拆 2 个 fetcher.
 //   fetchMySkills        → 扫 ~/.catfish/skills/ (员工自己 RecMode + propose_skill 生成的)
 //   fetchInstalledSkills → 扫 catfish 仓库 skills/ + ~/.hermes/skills/ (内置 + 装的)
-//   fetchSkills          → 保留作 backward compat (内部转 installed)
-export const fetchSkills = () => rawInvoke<SkillNamespace[]>("list_skills");
+//   (7/17 BL-DEADCODE-SWEEP: 老 fetchSkills / list_skills 死链已删)
 export const fetchMySkills = () => rawInvoke<SkillNamespace[]>("list_my_skills");
 export const fetchInstalledSkills = () => rawInvoke<SkillNamespace[]>("list_installed_skills");
 export const fetchMcpServers = () =>

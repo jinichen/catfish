@@ -33,7 +33,7 @@ pub struct DraftRef {
 // ── 路径 helpers ─────────────────────────────────────────────────────
 
 fn outputs_root() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|e| format!("HOME 未设: {e}"))?;
+    let home = crate::util::paths::home_env().map_err(|e| format!("HOME 未设: {e}"))?;
     Ok(PathBuf::from(home).join(".catfish").join("outputs"))
 }
 

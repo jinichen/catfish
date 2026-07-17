@@ -9,6 +9,7 @@ mod app_menu;
 mod commands;
 mod services;
 mod tray;
+mod util;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -401,7 +402,7 @@ pub fn run() {
             // 鸿波 6/12 拍板 A 方案: 历史数据不参与 hash chain, 整体 rename .pre-chain.bak.
             // 判定条件: ~/.catfish/decisions.jsonl 存在 + decisions.jsonl.chain.json 不存在.
             std::thread::spawn(|| {
-                let Ok(home) = std::env::var("HOME") else {
+                let Ok(home) = crate::util::paths::home_env() else {
                     log::warn!("[decisions migration] HOME 未设, 跳过");
                     return;
                 };
@@ -512,8 +513,7 @@ pub fn run() {
             // skills + mcp
             // 6/2 BL-SKILLS-CARD-SPLIT (鸿波): 拆 2 命令 — list_my_skills (扫 ~/.catfish/skills/,
             // 员工真生成) + list_installed_skills (扫 catfish 仓库 + ~/.hermes/skills/, 内置/装的).
-            // list_skills 保留 (内部转 installed) — backward compat 兜底.
-            commands::skills::list_skills,
+            // 7/17 BL-DEADCODE-SWEEP: 老 list_skills 兜底命令死链已删.
             commands::skills::list_my_skills,
             commands::skills::list_installed_skills,
             commands::skills::list_mcp_servers,

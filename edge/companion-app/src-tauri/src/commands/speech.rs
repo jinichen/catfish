@@ -262,7 +262,7 @@ fn whisper_model_path() -> Result<PathBuf, String> {
     if let Ok(custom) = std::env::var("CATFISH_WHISPER_MODEL") {
         return Ok(PathBuf::from(custom));
     }
-    let home = std::env::var("HOME").map_err(|_| "HOME env 未设")?;
+    let home = crate::util::paths::home_env().map_err(|_| "HOME env 未设")?;
     let dir = PathBuf::from(home).join(".catfish").join("whisper-models");
 
     // 按质量优先序: large-v3 > medium > small.

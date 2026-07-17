@@ -110,7 +110,7 @@ pub struct RevisionSummary {
 }
 
 fn home_dir() -> Result<PathBuf, String> {
-    if let Ok(h) = std::env::var("HOME") {
+    if let Ok(h) = crate::util::paths::home_env() {
         return Ok(PathBuf::from(h));
     }
     if let Ok(h) = std::env::var("USERPROFILE") {

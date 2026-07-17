@@ -74,7 +74,7 @@ pub struct WeChatBindingStatus {
 }
 
 fn pairing_dir() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
+    let home = crate::util::paths::home_env().ok()?;
     Some(PathBuf::from(home).join(".hermes/platforms/pairing"))
 }
 

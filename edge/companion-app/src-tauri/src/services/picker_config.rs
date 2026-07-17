@@ -31,7 +31,7 @@
 use std::path::PathBuf;
 
 fn picker_file_path() -> Option<PathBuf> {
-    let home = std::env::var("HOME")
+    let home = crate::util::paths::home_env()
         .or_else(|_| std::env::var("USERPROFILE"))
         .ok()?;
     Some(PathBuf::from(home).join(".catfish").join("picker_model"))

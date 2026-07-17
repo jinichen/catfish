@@ -118,7 +118,7 @@ fn read_file_safe(path: &Path, max_bytes: usize) -> String {
 ///   - session_goal 最多 500 字 (员工写的就一两句话)
 #[tauri::command]
 pub async fn briefing_context_fetch() -> Result<BriefingContext, String> {
-    let home = std::env::var("HOME").map_err(|e| format!("HOME 没设: {e}"))?;
+    let home = crate::util::paths::home_env().map_err(|e| format!("HOME 没设: {e}"))?;
     let catfish_dir = PathBuf::from(&home).join(".catfish");
 
     let distilled_facts = read_file_safe(&catfish_dir.join("distilled_facts.md"), 3000);
@@ -166,7 +166,7 @@ pub async fn briefing_context_fetch() -> Result<BriefingContext, String> {
 ///
 /// 文件不存在 / 读失败 → 空字符串 (跟 read_file_safe 同模式).
 fn read_hermes_memory_recent(max_bytes: usize) -> String {
-    let home = match std::env::var("HOME") {
+    let home = match crate::util::paths::home_env() {
         Ok(h) => h,
         Err(_) => return String::new(),
     };
@@ -332,7 +332,7 @@ fn scan_weekly_reports(dir: &Path) -> Result<Vec<WeeklyReportRef>, String> {
 fn fetch_recent_sessions(limit: usize, hours: i64) -> Result<Vec<SessionBrief>, String> {
     use rusqlite::Connection;
 
-    let home = std::env::var("HOME").map_err(|e| format!("HOME 没设: {e}"))?;
+    let home = crate::util::paths::home_env().map_err(|e| format!("HOME 没设: {e}"))?;
     let db_path = PathBuf::from(home).join(".hermes").join("state.db");
     if !db_path.exists() {
         return Ok(Vec::new());  // hermes 没装 / state.db 不存在

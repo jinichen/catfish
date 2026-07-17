@@ -159,7 +159,7 @@ pub struct KeyProject {
 // ── 文件路径 helpers ──────────────────────────────────────────────
 
 fn catfish_dir() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|e| format!("HOME 未设: {e}"))?;
+    let home = crate::util::paths::home_env().map_err(|e| format!("HOME 未设: {e}"))?;
     Ok(PathBuf::from(home).join(".catfish"))
 }
 

@@ -43,7 +43,7 @@ pub struct TaskChatMsg {
 // ── 路径 + sanitize ──────────────────────────────────────────────────
 
 fn task_chat_dir() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|e| format!("HOME 未设: {e}"))?;
+    let home = crate::util::paths::home_env().map_err(|e| format!("HOME 未设: {e}"))?;
     let dir = PathBuf::from(home).join(".catfish").join("task_chat");
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("创建 ~/.catfish/task_chat/ 失败: {e}"))?;

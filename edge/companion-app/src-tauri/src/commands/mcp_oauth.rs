@@ -27,7 +27,7 @@ pub struct TokenSaveResult {
 }
 
 fn oauth_tokens_dir() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME")
+    let home = crate::util::paths::home_env()
         .or_else(|_| std::env::var("USERPROFILE"))
         .map_err(|e| format!("HOME 未设: {e}"))?;
     Ok(PathBuf::from(home)

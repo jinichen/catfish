@@ -5,7 +5,8 @@
  *   - useMySkills: 扫 ~/.catfish/skills/ — 员工自己生成 (RecMode / propose_skill)
  *   - useInstalledSkillsAndMcp: 扫 catfish 仓库 skills/ + ~/.hermes/skills/ — 内置 + 装的
  *
- * 老 useSkillsAndMcp 保留 backward compat (内部走 installed), 没真 caller 但留 safety net.
+ * 7/17 BL-DEADCODE-SWEEP: 老 useSkillsAndMcp 死链 (前端无 caller · fetchSkills 死 ·
+ * list_skills tauri command 死 · list_skills_blocking 死) 整条删除.
  */
 
 import { useEffect, useState } from "react";
@@ -14,7 +15,6 @@ import {
   fetchInstalledSkills,
   fetchMcpServers,
   fetchMySkills,
-  fetchSkills,
 } from "../lib/tauri";
 import type {
   IdentityInfo,
@@ -97,26 +97,3 @@ export function useInstalledSkillsAndMcp() {
   return { skills, mcps, error, reload };
 }
 
-/** @deprecated 6/2 BL-SKILLS-CARD-SPLIT: 老 hook, 拆分后没真 caller. 留 backward compat
- * (Companion 走 useMySkills + useInstalledSkillsAndMcp), 周一可 rm. */
-export function useSkillsAndMcp() {
-  const [skills, setSkills] = useState<SkillNamespace[] | null>(null);
-  const [mcps, setMcps] = useState<McpServerEntry[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([fetchSkills(), fetchMcpServers()])
-      .then(([s, m]) => {
-        if (cancelled) return;
-        setSkills(s);
-        setMcps(m);
-      })
-      .catch((e) => !cancelled && setError(String(e)));
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  return { skills, mcps, error };
-}

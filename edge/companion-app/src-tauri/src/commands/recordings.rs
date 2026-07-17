@@ -51,7 +51,7 @@ fn recordings_root() -> PathBuf {
             return PathBuf::from(env).join("recordings");
         }
     }
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    let home = crate::util::paths::home_env().unwrap_or_else(|_| ".".into());
     PathBuf::from(home).join(".catfish").join("recordings")
 }
 

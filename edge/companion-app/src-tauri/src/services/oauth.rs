@@ -165,7 +165,7 @@ impl OidcConfig {
     }
 
     fn yaml_path() -> Result<std::path::PathBuf> {
-        let home = std::env::var("HOME")
+        let home = crate::util::paths::home_env()
             .or_else(|_| std::env::var("USERPROFILE"))
             .map_err(|_| anyhow!("找不到 HOME 环境变量"))?;
         Ok(std::path::PathBuf::from(home)
@@ -835,7 +835,13 @@ fn open_in_browser(url: &str) -> Result<()> {
 // 函数名仍叫 _to_keyring/from_keyring/_keyring 不改, callers 全不动.
 
 fn _oauth_storage_dir() -> Result<std::path::PathBuf> {
-    let home = std::env::var("HOME").context("$HOME 未设置")?;
+    // BL-WIN-HOME (7/17 · 达华): Windows 没有 $HOME (只有 %USERPROFILE%).
+    // 老代码只查 HOME · SSO 回来 token 换成功但存文件时挂在 "登录失败: $HOME 未设置".
+    // 全项目其他 service (email_config/agent_prefs/curator_config/pet_status/hermes_api_config)
+    // 都写了 USERPROFILE fallback, 就这里漏了.
+    let home = crate::util::paths::home_env()
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .context("$HOME / %USERPROFILE% 均未设置")?;
     let dir = std::path::PathBuf::from(home).join(".catfish").join("oauth");
     std::fs::create_dir_all(&dir).context("建 ~/.catfish/oauth 目录失败")?;
     // 目录权限 0700, 防别的用户读

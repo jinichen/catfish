@@ -64,7 +64,7 @@ fn find_python() -> Option<PathBuf> {
             return Some(p);
         }
     }
-    let home = std::env::var("HOME").ok()?;
+    let home = crate::util::paths::home_env().ok()?;
     let candidates = [
         // catfish gateway venv (Python 3.12) - parse_file.py 依赖文档里明确装这里
         format!("{home}/person_task/catfish/central/llm-gateway/venv/bin/python"),
@@ -128,7 +128,7 @@ fn find_script(name: &str) -> Option<PathBuf> {
             return Some(p);
         }
     }
-    if let Ok(home) = std::env::var("HOME") {
+    if let Ok(home) = crate::util::paths::home_env() {
         let p = PathBuf::from(home)
             .join("person_task/catfish/edge/companion-app/src-tauri/scripts")
             .join(name);
@@ -263,7 +263,7 @@ pub async fn parse_file_from_b64(
     // 5/5 重构: 永远把原文件 mv 到 ~/.catfish/uploads/. 不再有"截断"概念,
     // LLM 100% 调 execute_code 用 pandas/openpyxl/pypdfium2 读完整数据.
     // 文件命名: <unix-ts>-<原 filename>, 多次同名上传不冲突.
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = crate::util::paths::home_env().unwrap_or_default();
     let uploads_dir = std::path::PathBuf::from(&home).join(".catfish").join("uploads");
     std::fs::create_dir_all(&uploads_dir)
         .map_err(|e| format!("uploads dir 建失败: {e}"))?;

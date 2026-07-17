@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_yaml::Value as YamlValue;
 
 fn search_scope_yaml_path() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|e| format!("HOME 未设: {e}"))?;
+    let home = crate::util::paths::home_env().map_err(|e| format!("HOME 未设: {e}"))?;
     Ok(PathBuf::from(home).join(".catfish").join("search-scope.yaml"))
 }
 
@@ -57,10 +57,10 @@ fn expand_home(s: &str) -> Result<PathBuf, String> {
         return Err("路径不能空".into());
     }
     if let Some(rest) = s.strip_prefix("~/") {
-        let home = std::env::var("HOME").map_err(|e| format!("HOME 未设: {e}"))?;
+        let home = crate::util::paths::home_env().map_err(|e| format!("HOME 未设: {e}"))?;
         Ok(PathBuf::from(home).join(rest))
     } else if s == "~" {
-        let home = std::env::var("HOME").map_err(|e| format!("HOME 未设: {e}"))?;
+        let home = crate::util::paths::home_env().map_err(|e| format!("HOME 未设: {e}"))?;
         Ok(PathBuf::from(home))
     } else {
         Ok(PathBuf::from(s))

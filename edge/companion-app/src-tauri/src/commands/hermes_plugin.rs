@@ -104,7 +104,7 @@ fn hermes_home() -> Option<PathBuf> {
     if let Ok(env) = std::env::var("HERMES_HOME") {
         return Some(PathBuf::from(env));
     }
-    let home = std::env::var("HOME").ok()?;
+    let home = crate::util::paths::home_env().ok()?;
     Some(PathBuf::from(home).join(".hermes"))
 }
 

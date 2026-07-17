@@ -889,7 +889,7 @@ fn parse_urgencies(s: &str) -> Result<Vec<Urgency>, String> {
 
 /// 跟 commands/email.rs find_catfish_email 同模式, 这里 inline 避循环 import.
 fn find_catfish_email() -> Option<PathBuf> {
-    if let Ok(home) = std::env::var("HOME") {
+    if let Ok(home) = crate::util::paths::home_env() {
         let candidate = PathBuf::from(home).join(".local/bin/catfish-email");
         if candidate.exists() {
             return Some(candidate);

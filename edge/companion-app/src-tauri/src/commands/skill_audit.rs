@@ -97,7 +97,7 @@ struct AuditEvent {
 }
 
 fn audit_path() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
+    let home = crate::util::paths::home_env().ok()?;
     Some(PathBuf::from(home).join(".catfish").join("skill_audit.jsonl"))
 }
 
@@ -515,7 +515,7 @@ fn skills_known_with_age() -> Result<Vec<(String, String)>, String> {
     if let Ok(custom) = std::env::var("CATFISH_SKILLS_DIR") {
         return scan_skills_with_age(&PathBuf::from(custom));
     }
-    let home = std::env::var("HOME").map_err(|_| "HOME env 未设".to_string())?;
+    let home = crate::util::paths::home_env().map_err(|_| "HOME env 未设".to_string())?;
     let candidates = [
         format!("{home}/person_task/catfish/skills"),
         format!("{home}/catfish/skills"),

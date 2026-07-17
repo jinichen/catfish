@@ -23,7 +23,7 @@ use crate::services::phishing_scan::PhishingScanResult;
 /// 找 catfish-email 二进制. 优先用 ~/.local/bin (catfish-email install.sh 软链到此),
 /// 兜底 PATH 查找.
 fn find_catfish_email() -> Option<PathBuf> {
-    if let Ok(home) = std::env::var("HOME") {
+    if let Ok(home) = crate::util::paths::home_env() {
         let candidate = PathBuf::from(home).join(".local/bin/catfish-email");
         if candidate.exists() {
             return Some(candidate);

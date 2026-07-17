@@ -62,7 +62,7 @@ fn catfish_dir() -> Result<PathBuf> {
     if let Ok(home) = std::env::var("CATFISH_HOME") {
         return Ok(PathBuf::from(home));
     }
-    let home = std::env::var("HOME")
+    let home = crate::util::paths::home_env()
         .or_else(|_| std::env::var("USERPROFILE"))
         .map_err(|_| anyhow!("找不到 HOME 环境变量"))?;
     Ok(PathBuf::from(home).join(".catfish"))

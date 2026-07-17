@@ -16,7 +16,7 @@ pub struct WikiWriteResult {
 }
 
 fn home_dir() -> Result<PathBuf, String> {
-    std::env::var("HOME")
+    crate::util::paths::home_env()
         .or_else(|_| std::env::var("USERPROFILE"))
         .map(PathBuf::from)
         .map_err(|_| "找不到 HOME".to_string())

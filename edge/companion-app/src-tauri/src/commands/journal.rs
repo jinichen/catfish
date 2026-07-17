@@ -50,7 +50,7 @@ pub struct JournalTodo {
 /// employee_journal.md — 流水帐, 早期 BL-JOURNAL-TODO-EXTRACT (5/20) 用作 TODO 源.
 /// P3.4.7a (6/15): 退到向后兼容位置, 主 TODO 源换 current_todos.md.
 fn journal_path() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
+    let home = crate::util::paths::home_env().ok()?;
     Some(PathBuf::from(home).join(".catfish/employee_journal.md"))
 }
 
@@ -59,7 +59,7 @@ fn journal_path() -> Option<PathBuf> {
 /// 鸿波 hermes MEMORY 里写过的设计: "每周日 reset, 过周未完成的 TODO 自动带入新一周,
 /// 已完成的清掉". reset 逻辑在 P3.4.7c 做, 这里只给路径.
 fn current_todos_path() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
+    let home = crate::util::paths::home_env().ok()?;
     Some(PathBuf::from(home).join(".catfish/current_todos.md"))
 }
 
@@ -638,7 +638,7 @@ pub async fn current_todos_weekly_reset() -> Result<WeeklyResetReport, String> {
     }
 
     // audit chain append (跟 P3.3.51 / political_scan persist_audit 同模式)
-    if let Ok(home) = std::env::var("HOME") {
+    if let Ok(home) = crate::util::paths::home_env() {
         let audit_path = format!("{home}/.catfish/audit/weekly_reset.jsonl");
         let payload = serde_json::json!({
             "event_type": "weekly_reset",
@@ -658,7 +658,7 @@ pub async fn current_todos_weekly_reset() -> Result<WeeklyResetReport, String> {
 /// P3.4.7c (6/15): marker 文件 path — 记上次 reset 的 YYYY-MM-DD.
 /// autostart 钩子读它判断是否需要新一轮 reset.
 pub(crate) fn weekly_reset_marker_path() -> Option<PathBuf> {
-    let home = std::env::var("HOME").ok()?;
+    let home = crate::util::paths::home_env().ok()?;
     Some(PathBuf::from(home).join(".catfish/.weekly_reset_last"))
 }
 

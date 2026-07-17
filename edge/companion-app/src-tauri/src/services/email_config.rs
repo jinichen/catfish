@@ -59,7 +59,7 @@ struct EmailYaml {
 }
 
 fn yaml_path() -> Option<std::path::PathBuf> {
-    let home = std::env::var("HOME")
+    let home = crate::util::paths::home_env()
         .or_else(|_| std::env::var("USERPROFILE"))
         .ok()?;
     Some(std::path::PathBuf::from(home).join(".catfish").join("companion.yaml"))

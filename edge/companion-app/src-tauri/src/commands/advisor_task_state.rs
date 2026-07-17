@@ -44,7 +44,7 @@ pub struct TaskStateEntry {
 type TaskStateMap = HashMap<String, HashMap<String, TaskStateEntry>>;
 
 fn task_state_path() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|e| format!("HOME 未设: {e}"))?;
+    let home = crate::util::paths::home_env().map_err(|e| format!("HOME 未设: {e}"))?;
     Ok(PathBuf::from(home)
         .join(".catfish")
         .join("advisor_task_state.json"))

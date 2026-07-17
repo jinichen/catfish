@@ -35,7 +35,7 @@ pub struct AdvisorCache {
 }
 
 fn cache_path() -> Result<PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|e| format!("HOME 未设: {e}"))?;
+    let home = crate::util::paths::home_env().map_err(|e| format!("HOME 未设: {e}"))?;
     let dir = PathBuf::from(home).join(".catfish");
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建 ~/.catfish/ 失败: {e}"))?;
     Ok(dir.join("advisor_cache.json"))

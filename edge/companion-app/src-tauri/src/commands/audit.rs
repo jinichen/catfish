@@ -98,7 +98,7 @@ fn audit_path() -> PathBuf {
     if let Ok(env) = std::env::var("CATFISH_AUDIT_PATH") {
         return PathBuf::from(env);
     }
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    let home = crate::util::paths::home_env().unwrap_or_else(|_| ".".into());
     PathBuf::from(home).join(".catfish").join("gateway_audit.jsonl")
 }
 
