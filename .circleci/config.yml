@@ -275,6 +275,48 @@ jobs:
             if (Test-Path $outZip) { Remove-Item -Force $outZip }
             Compress-Archive -Path "$extractDir\$expectedName" -DestinationPath $outZip -Force
 
+      # BL-WIN-INSTALL-CHROMIUM-BUNDLE (7/17): 用户拍板 · 打 Playwright chromium 进 msi.
+      # 员工装完 100% offline, browser_* tools 立即可用. msi 从 754MB → ~1.1GB.
+      # 版本 pin: playwright 每个版本对应特定 chromium build number, 走 `npx playwright install chromium`
+      # 让 npm 决定实际 chromium 版本 (跟 hermes-agent 装的 playwright 版本匹配).
+      - run:
+          name: Install Playwright Chromium for offline bundle (BL-WIN-INSTALL-CHROMIUM-BUNDLE)
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $hermesDir = "$env:TEMP\hermes-agent-src"
+            # npx 在 hermes-agent-src 里 (node_modules pre-install 后已经就位)
+            Push-Location $hermesDir
+            try {
+              # 让 playwright 装到默认位置 %LOCALAPPDATA%\ms-playwright\, install.ps1 patched 会 tar 打包.
+              # --with-deps 不加 · 员工机装 msi 时 impersonate 用户, 装依赖需 admin.
+              Write-Host "===== npx playwright install chromium (下载 ~170MB compressed / 解压 ~350MB) ====="
+              npx --yes playwright install chromium --loglevel=error 2>&1
+              if ($LASTEXITCODE -ne 0) {
+                throw "npx playwright install chromium failed (exit=$LASTEXITCODE)"
+              }
+            } finally {
+              Pop-Location
+            }
+            # 找装到哪 (通常 %LOCALAPPDATA%\ms-playwright\chromium-<num>\)
+            $pwCacheDir = "$env:LOCALAPPDATA\ms-playwright"
+            if (-not (Test-Path $pwCacheDir)) {
+              throw "Playwright cache 目录不存在: $pwCacheDir"
+            }
+            $chromiumDirs = Get-ChildItem $pwCacheDir -Directory -Filter "chromium*"
+            Write-Host "OK Playwright chromium 装到: $($chromiumDirs.FullName -join ', ')"
+            # 打包 %LOCALAPPDATA%\ms-playwright\ 里的**全部 chromium 目录**成 tar.gz
+            # (通常只有 chromium-<build>\, 但 headless_shell 之类也一起打)
+            $outTar = "$PWD\edge\companion-app\src-tauri\resources\windows\chromium-embed.tar.gz"
+            Push-Location $pwCacheDir
+            try {
+              tar czf $outTar chromium* -ErrorAction SilentlyContinue
+              if ($LASTEXITCODE -ne 0) { throw "tar pack chromium exit=$LASTEXITCODE" }
+            } finally {
+              Pop-Location
+            }
+            $tarSize = (Get-Item $outTar).Length
+            Write-Host "OK chromium-embed.tar.gz: $([math]::Round($tarSize/1MB,1)) MB"
+
       - run:
           name: Pack hermes-agent bundle (dereference symlink)
           command: |

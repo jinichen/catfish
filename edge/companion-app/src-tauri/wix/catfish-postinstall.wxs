@@ -103,6 +103,17 @@
                   Value="[INSTALLDIR]resources\windows\hermes-agent-bundle.tar.gz"
                   Execute="immediate"/>
 
+    <!--
+      BL-WIN-INSTALL-CHROMIUM-BUNDLE (7/17 用户拍板打 chromium 进 msi):
+      Playwright chromium binary 350MB · CircleCI npx playwright install chromium 后
+      打包到 chromium-embed.tar.gz. 员工装完 install.ps1 patched 解压到 %LOCALAPPDATA%\ms-playwright\
+      让 Playwright 自动 detect. browser_* tools 立即可用, 完全 offline.
+    -->
+    <CustomAction Id="SetCatfishChromiumTarPath"
+                  Property="CatfishChromiumTarPath"
+                  Value="[INSTALLDIR]resources\windows\chromium-embed.tar.gz"
+                  Execute="immediate"/>
+
     <CustomAction Id="SetCatfishUvExePath"
                   Property="CatfishUvExePath"
                   Value="[INSTALLDIR]resources\windows\uv.exe"
@@ -138,7 +149,7 @@
                   Execute="deferred"
                   Impersonate="yes"
                   Return="check"
-                  ExeCommand='-NoProfile -ExecutionPolicy Bypass -File "[CatfishInstallPs1Path]" -NonInteractive -OfflineSourceTar "[CatfishHermesTarPath]" -OfflineUvExe "[CatfishUvExePath]" -OfflinePythonZip "[CatfishPythonZipPath]"'/>
+                  ExeCommand='-NoProfile -ExecutionPolicy Bypass -File "[CatfishInstallPs1Path]" -NonInteractive -OfflineSourceTar "[CatfishHermesTarPath]" -OfflineUvExe "[CatfishUvExePath]" -OfflinePythonZip "[CatfishPythonZipPath]" -OfflineChromiumTar "[CatfishChromiumTarPath]"'/>
 
     <!--
       Step 3: sequence. 4 SetProperty CA 排 After=CostFinalize
@@ -154,6 +165,7 @@
       <Custom Action="SetCatfishHermesTarPath"    After="SetCatfishInstallPs1Path">NOT REMOVE</Custom>
       <Custom Action="SetCatfishUvExePath"        After="SetCatfishHermesTarPath">NOT REMOVE</Custom>
       <Custom Action="SetCatfishPythonZipPath"    After="SetCatfishUvExePath">NOT REMOVE</Custom>
+      <Custom Action="SetCatfishChromiumTarPath"  After="SetCatfishPythonZipPath">NOT REMOVE</Custom>
       <Custom Action="CatfishRunInstall"          After="InstallFiles">NOT REMOVE</Custom>
     </InstallExecuteSequence>
 

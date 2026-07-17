@@ -98,10 +98,14 @@ PATCH_1_PARAM = f"""    [switch]$IncludeDesktop,
     #                        msi 里只能塞 tar.gz. 若同时提供 SourceDir 优先 SourceDir (向后兼容).
     #   -OfflineUvExe      : 预下载的 uv.exe 绝对路径 (跳 astral.sh 拉)
     #   -OfflinePythonZip  : 预打包的 python-3.11 embed zip 绝对路径 (跳 uv python install)
+    #   -OfflineChromiumTar: Playwright chromium **tar.gz** 压缩包 (BL-WIN-INSTALL-CHROMIUM-BUNDLE 7/17)
+    #                        解压到 %LOCALAPPDATA%\\ms-playwright\\ 让 Playwright 自动 detect.
+    #                        非空 → skip `npx playwright install chromium`, 员工完全 offline.
     [string]$OfflineSourceDir = "",
     [string]$OfflineSourceTar = "",
     [string]$OfflineUvExe = "",
-    [string]$OfflinePythonZip = ""
+    [string]$OfflinePythonZip = "",
+    [string]$OfflineChromiumTar = ""
 )"""
 
 
@@ -250,6 +254,45 @@ PATCH_6_NPM_LOCAL = f"""    function _Run-NpmInstall([string]$label, [string]$in
         Push-Location $installDir"""
 
 
+# 处 7 · Playwright Chromium 装 (line ~2395): npx playwright install chromium 下载 350MB.
+# 员工无公网必挂. 用户拍板打进 msi (BL-WIN-INSTALL-CHROMIUM-BUNDLE 7/17).
+#
+# 策略:
+#   若 -OfflineChromiumTar 传 → tar 解压到 %LOCALAPPDATA%\ms-playwright\ 让 Playwright 自动 detect · skip npx playwright install
+#   若 只 -OfflineSourceTar/Dir 无 ChromiumTar → 短路 skip (fallback · 员工需手动装 chromium)
+#   若 无 offline 参数 → 原上游行为
+#
+# 避免嵌套括号 · 老代码整个 block (包括 if/else/finally) 100% 保留原样, 只在前面加解压 + 短路变量.
+PATCH_7_PLAYWRIGHT_CHROMIUM = f"""        $browserNpmOk = _Run-NpmInstall "Browser tools" $InstallDir $browserLog $npmExe
+
+        {MARKER}: Catfish offline — 若 -OfflineChromiumTar 传, tar 解压到 %LOCALAPPDATA%\\ms-playwright\\ (Playwright 默认路径, 自动 detect)
+        $catfishSkipChromium = $false
+        if ($OfflineChromiumTar -and (Test-Path $OfflineChromiumTar)) {{
+            $chromiumDest = Join-Path $env:LOCALAPPDATA "ms-playwright"
+            Write-Info "Catfish offline: 解压 Playwright Chromium bundle 到 $chromiumDest"
+            New-Item -ItemType Directory -Force -Path $chromiumDest -ErrorAction SilentlyContinue | Out-Null
+            try {{
+                tar -xzf $OfflineChromiumTar -C $chromiumDest
+                if ($LASTEXITCODE -ne 0) {{ throw "tar chromium exit=$LASTEXITCODE" }}
+                Write-Success "Playwright Chromium installed from offline bundle"
+                $catfishSkipChromium = $true
+            }} catch {{
+                Write-Warn "Catfish offline: chromium tar 解压挂: $_ - fallback npx playwright install (员工无公网必挂)"
+            }}
+        }} elseif ($OfflineSourceTar -or $OfflineSourceDir) {{
+            Write-Info "Catfish offline: 无 -OfflineChromiumTar, skip Playwright Chromium 装 (browser_* tools 手动装 chromium 后可用)"
+            $catfishSkipChromium = $true
+        }}
+
+        # Install Playwright Chromium (mirrors scripts/install.sh behaviour for
+        # Linux).  Without this, tools/browser_tool.py::check_browser_requirements
+        # returns False (no Chromium under %LOCALAPPDATA%\\ms-playwright), and the
+        # browser_* tools are silently filtered out of the agent's tool schema.
+        # System Chrome at "C:\\Program Files\\Google\\Chrome\\..." is NOT used by
+        # agent-browser -- it expects a Playwright-managed Chromium.
+        if ($browserNpmOk -and -not $catfishSkipChromium) {{"""
+
+
 # ─── 6 处 anchor (完全精确的 unique string) ────────────────
 
 
@@ -278,6 +321,18 @@ ANCHORS = {
     "npm_local_helper": (
         '    function _Run-NpmInstall([string]$label, [string]$installDir, [string]$logPath, [string]$npmPath) {\n        Push-Location $installDir',
         PATCH_6_NPM_LOCAL,
+    ),
+    "playwright_chromium": (
+        '        $browserNpmOk = _Run-NpmInstall "Browser tools" $InstallDir $browserLog $npmExe\n'
+        '\n'
+        '        # Install Playwright Chromium (mirrors scripts/install.sh behaviour for\n'
+        '        # Linux).  Without this, tools/browser_tool.py::check_browser_requirements\n'
+        '        # returns False (no Chromium under %LOCALAPPDATA%\\ms-playwright), and the\n'
+        '        # browser_* tools are silently filtered out of the agent\'s tool schema.\n'
+        '        # System Chrome at "C:\\Program Files\\Google\\Chrome\\..." is NOT used by\n'
+        '        # agent-browser -- it expects a Playwright-managed Chromium.\n'
+        '        if ($browserNpmOk) {',
+        PATCH_7_PLAYWRIGHT_CHROMIUM,
     ),
 }
 
@@ -344,9 +399,10 @@ def verify_patched(patched_text: str) -> None:
     """patched 输出 sanity check — 3 个 -Offline* 参数 + 4 处 marker 都在."""
     required_symbols = [
         "$OfflineSourceDir",
-        "$OfflineSourceTar",   # BL-WIN-INSTALL-TAR (7/17): Windows msi 新增 tar 输入
+        "$OfflineSourceTar",       # BL-WIN-INSTALL-TAR (7/17): Windows msi 新增 tar 输入
         "$OfflineUvExe",
         "$OfflinePythonZip",
+        "$OfflineChromiumTar",     # BL-WIN-INSTALL-CHROMIUM-BUNDLE (7/17): Playwright chromium tar 输入
         MARKER,
     ]
     for sym in required_symbols:
@@ -357,9 +413,9 @@ def verify_patched(patched_text: str) -> None:
             )
             raise SystemExit(3)
     marker_count = patched_text.count(MARKER)
-    if marker_count != 6:
+    if marker_count != 7:
         print(
-            f"[ERROR] MARKER 期望 6 处 (每 patch 1 处 · BL-WIN-INSTALL-TAR/NPM-OFFLINE), 实际 {marker_count}.",
+            f"[ERROR] MARKER 期望 7 处 (每 patch 1 处 · BL-WIN-INSTALL-TAR/NPM-OFFLINE/CHROMIUM-SKIP), 实际 {marker_count}.",
             file=sys.stderr,
         )
         raise SystemExit(3)
@@ -423,7 +479,7 @@ def main() -> int:
     verify_patched(patched)
 
     if args.check:
-        print("[OK] --check dry-run 全绿. patched 会加 6 处 marker + 4 处 -Offline* 参数 (BL-WIN-INSTALL-TAR/NPM-OFFLINE).")
+        print("[OK] --check dry-run 全绿. patched 会加 7 处 marker + 5 处 -Offline* 参数 (BL-WIN-INSTALL-TAR/NPM-OFFLINE/CHROMIUM-BUNDLE).")
         return 0
 
     out_path = args.output or args.input.with_suffix(".ps1.patched")
@@ -432,10 +488,11 @@ def main() -> int:
     print(f"[OK] patched install.ps1 → {out_path}")
     print(
         f"     Marker: {MARKER}\n"
-        f"     Patches: 6 处 (param + Install-Uv + Test-Python + Install-Repository + npm-global + npm-local-helper)\n"
-        f"     msi CustomAction 传 -OfflineSourceTar / -OfflineUvExe / -OfflinePythonZip (+ -OfflineSourceDir 保留 mac 兼容)\n"
+        f"     Patches: 7 处 (param + Install-Uv + Test-Python + Install-Repository + npm-global + npm-local-helper + playwright-chromium-bundle)\n"
+        f"     msi CustomAction 传 -OfflineSourceTar / -OfflineUvExe / -OfflinePythonZip / -OfflineChromiumTar (+ -OfflineSourceDir 保留 mac 兼容)\n"
         f"     npm global .tgz 从 $HermesHome\\hermes-agent\\node-globals\\ 自动拾取\n"
-        f"     npm local 若 node_modules\\ 已在自动 skip"
+        f"     npm local 若 node_modules\\ 已在自动 skip\n"
+        f"     Playwright chromium 若 -OfflineChromiumTar 传 · tar 解压到 %LOCALAPPDATA%\\ms-playwright\\ (100% offline)"
     )
     return 0
 
