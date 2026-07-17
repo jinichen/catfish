@@ -91,11 +91,15 @@ MARKER = "# CATFISH-OFFLINE-PATCH-v1"
 PATCH_1_PARAM = f"""    [switch]$IncludeDesktop,
 
     {MARKER}: Catfish offline mode (msi CustomAction 传参, 上游默认调用不传)
-    # 三者独立, 任意空即走原网络路径. 默认空 = 上游 canonical 行为, 零副作用.
-    #   -OfflineSourceDir  : hermes-agent 源码解压目录 (跳 git clone/ZIP)
+    # 全部独立, 任意空即走原网络路径. 默认空 = 上游 canonical 行为, 零副作用.
+    #   -OfflineSourceDir  : hermes-agent 源码**解压后**目录 (跳 git clone/ZIP · mac install.sh 用)
+    #   -OfflineSourceTar  : hermes-agent 源码 **tar.gz** 压缩包 (Windows msi 用, install.ps1 先 tar xzf 再 copy)
+    #                        BL-WIN-INSTALL-TAR (7/17): tauri.conf.json resources 只支持文件 (不支持目录),
+    #                        msi 里只能塞 tar.gz. 若同时提供 SourceDir 优先 SourceDir (向后兼容).
     #   -OfflineUvExe      : 预下载的 uv.exe 绝对路径 (跳 astral.sh 拉)
     #   -OfflinePythonZip  : 预打包的 python-3.11 embed zip 绝对路径 (跳 uv python install)
     [string]$OfflineSourceDir = "",
+    [string]$OfflineSourceTar = "",
     [string]$OfflineUvExe = "",
     [string]$OfflinePythonZip = ""
 )"""
@@ -148,15 +152,47 @@ PATCH_3_TEST_PYTHON = f"""    {MARKER}: Catfish offline — expand embedded pyth
 
 PATCH_4_INSTALL_REPO = f"""    $didUpdate = $false
 
-    {MARKER}: Catfish offline — copy pre-extracted hermes-agent source
+    {MARKER}: Catfish offline — copy pre-extracted hermes-agent source (mac install.sh 用) 或 tar.gz (Windows msi 用)
+    # BL-WIN-INSTALL-TAR (7/17 抓 Windows Error 1722 根因): 老代码只支持 -OfflineSourceDir 指
+    # 向已解压目录. 但 msi 里只能塞 tar.gz (tauri.conf.json resources 只支持单文件, 不支持
+    # 目录级 include), 所以 Windows install.ps1 收 -OfflineSourceTar tar.gz 后先解压再 Copy.
+    # 优先级: SourceDir (mac) > SourceTar (Windows).
+    $effectiveSourceDir = $null
+    $tempExtractRoot = $null
     if ($OfflineSourceDir -and (Test-Path $OfflineSourceDir)) {{
-        Write-Info "Catfish offline: copying hermes-agent from $OfflineSourceDir"
+        Write-Info "Catfish offline: using pre-extracted source $OfflineSourceDir"
+        $effectiveSourceDir = $OfflineSourceDir
+    }} elseif ($OfflineSourceTar -and (Test-Path $OfflineSourceTar)) {{
+        Write-Info "Catfish offline: extracting hermes-agent from tar $OfflineSourceTar"
+        $tempExtractRoot = Join-Path $env:TEMP ("catfish-hermes-extract-" + [Guid]::NewGuid().ToString("N"))
+        New-Item -ItemType Directory -Force -Path $tempExtractRoot | Out-Null
+        try {{
+            tar -xzf $OfflineSourceTar -C $tempExtractRoot
+            if ($LASTEXITCODE -ne 0) {{ throw "tar 解压 exit=$LASTEXITCODE" }}
+        }} catch {{
+            Write-Warn "Catfish offline: tar 解压挂: $_"
+            Remove-Item -Recurse -Force $tempExtractRoot -ErrorAction SilentlyContinue
+            throw
+        }}
+        # tar.gz 结构 CircleCI 打包时是 hermes-agent-src/ 顶级目录 (config.yml Pack step)
+        $extractedSrc = Join-Path $tempExtractRoot "hermes-agent-src"
+        if (Test-Path $extractedSrc) {{
+            $effectiveSourceDir = $extractedSrc
+        }} else {{
+            # fallback: tar 里不是 hermes-agent-src/ 顶级, 用 extract root 自身
+            Write-Warn "Catfish offline: tar 里无 hermes-agent-src/ 顶层, 用 $tempExtractRoot"
+            $effectiveSourceDir = $tempExtractRoot
+        }}
+    }}
+
+    if ($effectiveSourceDir) {{
+        Write-Info "Catfish offline: copying hermes-agent from $effectiveSourceDir to $InstallDir"
         if (Test-Path $InstallDir) {{
             $backupDir = "$InstallDir.replaced-" + (Get-Date -Format "yyyyMMdd-HHmmss")
             Move-Item -LiteralPath $InstallDir -Destination $backupDir -ErrorAction SilentlyContinue
         }}
         New-Item -ItemType Directory -Force -Path (Split-Path $InstallDir) -ErrorAction SilentlyContinue | Out-Null
-        Copy-Item -LiteralPath $OfflineSourceDir -Destination $InstallDir -Recurse -Force
+        Copy-Item -LiteralPath $effectiveSourceDir -Destination $InstallDir -Recurse -Force
         # git init 让上游 update 路径能工作 (未来员工有网时 hermes update)
         Push-Location $InstallDir
         $env:GIT_CONFIG_COUNT = "1"
@@ -166,6 +202,10 @@ PATCH_4_INSTALL_REPO = f"""    $didUpdate = $false
         git -c windows.appendAtomically=false config core.autocrlf false 2>$null
         git remote add origin $RepoUrlHttps 2>$null
         Pop-Location
+        # 清理 tar 临时解压目录
+        if ($tempExtractRoot -and (Test-Path $tempExtractRoot)) {{
+            Remove-Item -Recurse -Force $tempExtractRoot -ErrorAction SilentlyContinue
+        }}
         Write-Success "hermes-agent installed from offline bundle"
         # 跳过下面的 update / clone 3-tier fallback
         return
@@ -260,6 +300,7 @@ def verify_patched(patched_text: str) -> None:
     """patched 输出 sanity check — 3 个 -Offline* 参数 + 4 处 marker 都在."""
     required_symbols = [
         "$OfflineSourceDir",
+        "$OfflineSourceTar",   # BL-WIN-INSTALL-TAR (7/17): Windows msi 新增 tar 输入
         "$OfflineUvExe",
         "$OfflinePythonZip",
         MARKER,

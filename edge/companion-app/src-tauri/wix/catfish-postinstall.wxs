@@ -50,7 +50,11 @@
   = 4 property 命名 =
 
   - CatfishInstallPs1Path : [INSTALLDIR]resources\windows\install.ps1
-  - CatfishHermesSourceDir: [INSTALLDIR]hermes\hermes-agent-src
+  - CatfishHermesTarPath  : [INSTALLDIR]resources\windows\hermes-agent-bundle.tar.gz
+                              BL-WIN-INSTALL-TAR (7/17): 老代码用 [INSTALLDIR]hermes\hermes-agent-src
+                              指向已解压目录 · 但 msi 只塞 tar.gz (tauri.conf.json resources 不支持
+                              目录级 include), install.ps1 Copy-Item 找不到源目录挂 Error 1722.
+                              现改传 tar.gz, install.ps1 里先 tar xzf 再 copy.
   - CatfishUvExePath      : [INSTALLDIR]resources\windows\uv.exe
   - CatfishPythonZipPath  : [INSTALLDIR]resources\windows\cpython-3.11.15-embed.zip
 
@@ -89,9 +93,14 @@
                   Value="[INSTALLDIR]resources\windows\install.ps1"
                   Execute="immediate"/>
 
-    <CustomAction Id="SetCatfishHermesSourceDir"
-                  Property="CatfishHermesSourceDir"
-                  Value="[INSTALLDIR]hermes\hermes-agent-src"
+    <!--
+      BL-WIN-INSTALL-TAR (7/17 铁证 Error 1722): 老 CatfishHermesSourceDir 指向
+      [INSTALLDIR]hermes\hermes-agent-src 但 msi 里没这个目录 · install.ps1 挂.
+      现改 CatfishHermesTarPath 指向 msi 打了的 tar.gz, install.ps1 里 tar xzf 再 copy.
+    -->
+    <CustomAction Id="SetCatfishHermesTarPath"
+                  Property="CatfishHermesTarPath"
+                  Value="[INSTALLDIR]resources\windows\hermes-agent-bundle.tar.gz"
                   Execute="immediate"/>
 
     <CustomAction Id="SetCatfishUvExePath"
@@ -112,7 +121,7 @@
         powershell.exe -NoProfile -ExecutionPolicy Bypass
           -File "C:\Users\O'Brien\AppData\Local\Catfish Companion\resources\windows\install.ps1"
           -NonInteractive
-          -OfflineSourceDir "C:\Users\O'Brien\AppData\Local\Catfish Companion\hermes\hermes-agent-src"
+          -OfflineSourceTar "C:\Users\O'Brien\AppData\Local\Catfish Companion\resources\windows\hermes-agent-bundle.tar.gz"
           -OfflineUvExe     "C:\Users\O'Brien\AppData\Local\Catfish Companion\resources\windows\uv.exe"
           -OfflinePythonZip "C:\Users\O'Brien\AppData\Local\Catfish Companion\resources\windows\cpython-3.11.15-embed.zip"
 
@@ -129,7 +138,7 @@
                   Execute="deferred"
                   Impersonate="yes"
                   Return="check"
-                  ExeCommand='-NoProfile -ExecutionPolicy Bypass -File "[CatfishInstallPs1Path]" -NonInteractive -OfflineSourceDir "[CatfishHermesSourceDir]" -OfflineUvExe "[CatfishUvExePath]" -OfflinePythonZip "[CatfishPythonZipPath]"'/>
+                  ExeCommand='-NoProfile -ExecutionPolicy Bypass -File "[CatfishInstallPs1Path]" -NonInteractive -OfflineSourceTar "[CatfishHermesTarPath]" -OfflineUvExe "[CatfishUvExePath]" -OfflinePythonZip "[CatfishPythonZipPath]"'/>
 
     <!--
       Step 3: sequence. 4 SetProperty CA 排 After=CostFinalize
@@ -142,8 +151,8 @@
     <InstallExecuteSequence>
       <Custom Action="SetPowerShellExePath"       After="CostFinalize">NOT REMOVE</Custom>
       <Custom Action="SetCatfishInstallPs1Path"   After="SetPowerShellExePath">NOT REMOVE</Custom>
-      <Custom Action="SetCatfishHermesSourceDir"  After="SetCatfishInstallPs1Path">NOT REMOVE</Custom>
-      <Custom Action="SetCatfishUvExePath"        After="SetCatfishHermesSourceDir">NOT REMOVE</Custom>
+      <Custom Action="SetCatfishHermesTarPath"    After="SetCatfishInstallPs1Path">NOT REMOVE</Custom>
+      <Custom Action="SetCatfishUvExePath"        After="SetCatfishHermesTarPath">NOT REMOVE</Custom>
       <Custom Action="SetCatfishPythonZipPath"    After="SetCatfishUvExePath">NOT REMOVE</Custom>
       <Custom Action="CatfishRunInstall"          After="InstallFiles">NOT REMOVE</Custom>
     </InstallExecuteSequence>
