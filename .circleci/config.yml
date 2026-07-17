@@ -157,6 +157,78 @@ jobs:
               }
             }
 
+      # BL-WIN-INSTALL-NPM-OFFLINE (7/17): 达华员工机完全无公网, install.ps1 里的
+      # npm install 步骤会挂. CircleCI Windows executor 有公网, 我们在这里先跑
+      # npm install 生成 node_modules/, 打进 tar.gz. 员工装完 msi 就有完整
+      # node_modules, install.ps1 里 npm install 步骤命中 lockfile + node_modules
+      # 已存在 → 秒过 (不用网络).
+      #
+      # 覆盖范围: hermes-agent-src/ 下**所有** package.json (Depth 4 内, 排 node_modules 内嵌).
+      # 常见位置: hermes-agent-src/gateway/browser/, hermes-agent-src/tools/*/, 顶级/scripts/.
+      #
+      # Playwright chromium 不装 (它会另下 ~350MB 到 %LOCALAPPDATA%\ms-playwright\).
+      # 员工用浏览器工具时若真需要 chromium, 那次会挂, 之后再补 (阶段 2 增强).
+      - run:
+          name: Pre-install Node.js deps + pack global .tgz (BL-WIN-INSTALL-NPM-OFFLINE)
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $hermesDir = "$env:TEMP\hermes-agent-src"
+            # 跳过 Playwright browser download (装完 npm 就 350MB 再 chromium 就爆 msi).
+            # 员工用 Playwright 时若真需要 chromium, 那次会挂 → 后续阶段单独打包.
+            $env:PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = '1'
+            $env:PLAYWRIGHT_BROWSERS_PATH = '0'
+
+            # ==== A. 本地 npm install (处理 _Run-NpmInstall Browser tools + TUI) ====
+            # Depth 4 内找 package.json, 排 node_modules 内嵌 (避免递归重复装)
+            $pkgFiles = Get-ChildItem -Path $hermesDir -Recurse -Filter "package.json" -Depth 4 -ErrorAction SilentlyContinue |
+                        Where-Object { $_.FullName -notmatch '\\node_modules\\' }
+            if ($pkgFiles.Count -eq 0) {
+              Write-Host "OK 无 package.json (hermes-agent 该版本无 npm 依赖), skip"
+            } else {
+              foreach ($pkg in $pkgFiles) {
+                $pkgDir = $pkg.DirectoryName
+                Write-Host "===== npm install in $pkgDir ====="
+                Push-Location $pkgDir
+                try {
+                  # 优先 npm ci (严格 lockfile), fallback npm install (无 lockfile 的场景)
+                  if (Test-Path "$pkgDir\package-lock.json") {
+                    npm ci --no-audit --no-fund --loglevel=error 2>&1
+                  } else {
+                    npm install --no-audit --no-fund --loglevel=error 2>&1
+                  }
+                  if ($LASTEXITCODE -ne 0) {
+                    throw "npm install failed in $pkgDir (exit=$LASTEXITCODE)"
+                  }
+                } finally {
+                  Pop-Location
+                }
+              }
+              Write-Host "OK all npm deps pre-installed ($($pkgFiles.Count) package.json 处)"
+            }
+
+            # ==== B. npm pack 全局包 .tgz (处理 Install-AgentBrowser line ~371) ====
+            # install.ps1 里全局装 agent-browser + @askjo/camofox-browser · 员工无公网必挂.
+            # 这里 npm pack 生成 .tgz 到 hermes-agent-src/node-globals/, 打进 tar.gz,
+            # 员工 install.ps1 patch 5 会从本地 .tgz 装 (跳 registry).
+            $globalsDir = "$hermesDir\node-globals"
+            New-Item -ItemType Directory -Force -Path $globalsDir | Out-Null
+            Push-Location $globalsDir
+            try {
+              # npm pack 会下载 tarball 到当前目录, 不需要真装
+              npm pack "agent-browser@^0.26.0" "@askjo/camofox-browser@^1.5.2" --loglevel=error 2>&1
+              if ($LASTEXITCODE -ne 0) {
+                throw "npm pack global 挂 (exit=$LASTEXITCODE)"
+              }
+              $tgzList = Get-ChildItem -Filter "*.tgz"
+              Write-Host "OK npm pack global .tgz ready: $($tgzList.Count) 个"
+              $tgzList | ForEach-Object { Write-Host "  - $($_.Name) ($([math]::Round($_.Length/1KB,1)) KB)" }
+              if ($tgzList.Count -lt 2) {
+                throw "expected >=2 .tgz (agent-browser + camofox-browser), got $($tgzList.Count)"
+              }
+            } finally {
+              Pop-Location
+            }
+
       - run:
           name: Patch install.ps1 offline mode
           command: |
@@ -215,7 +287,6 @@ jobs:
                 --exclude=hermes-agent-src/venv `
                 --exclude=hermes-agent-src/venv.bak `
                 --exclude=hermes-agent-src/.venv `
-                --exclude=hermes-agent-src/node_modules `
                 --exclude=hermes-agent-src/target `
                 hermes-agent-src
               if ($LASTEXITCODE -ne 0) { throw "tar pack failed" }

@@ -214,7 +214,43 @@ PATCH_4_INSTALL_REPO = f"""    $didUpdate = $false
 """
 
 
-# ─── 4 处 anchor (完全精确的 unique string) ────────────────
+# BL-WIN-INSTALL-NPM-OFFLINE (7/17): 员工机完全无公网, npm install 挂. 加 2 处 patch.
+#
+# 处 5 · Install-AgentBrowser (line ~371): 全局 npm 装 agent-browser + camofox-browser.
+# CircleCI 上 `npm pack` 生成 .tgz 打进 hermes-agent-src\node-globals\, 装到 msi 里.
+# install.ps1 改成先查 $HermesHome\hermes-agent\node-globals\, 有 .tgz 就装本地, 无 fallback registry.
+PATCH_5_NPM_GLOBAL = f"""    {MARKER}: Catfish offline — 装本地 .tgz (agent-browser + camofox-browser)
+    $offlineTgzDir = Join-Path $HermesHome "hermes-agent\\node-globals"
+    if (Test-Path $offlineTgzDir) {{
+        $tgzFiles = @(Get-ChildItem -Path $offlineTgzDir -Filter "*.tgz" -ErrorAction SilentlyContinue)
+        if ($tgzFiles.Count -ge 1) {{
+            Write-Info "Catfish offline: npm globals from local .tgz ($($tgzFiles.Count) 个)"
+            $tgzPaths = $tgzFiles | ForEach-Object {{ $_.FullName }}
+            & $npm install -g --prefix $prefixDir --silent --ignore-scripts @tgzPaths 2>&1 | Tee-Object -FilePath $npmLog | Out-Null
+        }} else {{
+            Write-Warn "Catfish offline: $offlineTgzDir 无 .tgz - fallback registry (员工无公网必挂)"
+            & $npm install -g --prefix $prefixDir --silent --ignore-scripts "agent-browser@^0.26.0" "@askjo/camofox-browser@^1.5.2" 2>&1 | Tee-Object -FilePath $npmLog | Out-Null
+        }}
+    }} else {{
+        & $npm install -g --prefix $prefixDir --silent --ignore-scripts "agent-browser@^0.26.0" "@askjo/camofox-browser@^1.5.2" 2>&1 | Tee-Object -FilePath $npmLog | Out-Null
+    }}
+"""
+
+
+# 处 6 · _Run-NpmInstall (line ~2196): 逐目录本地 npm install (Browser tools + TUI).
+# CircleCI 上 pre-install 生成 node_modules 打进 hermes-agent-src, 装到 msi 里.
+# install.ps1 函数开头查 $installDir\node_modules\ 已存在直接 return $true, 跳过 npm install.
+PATCH_6_NPM_LOCAL = f"""    function _Run-NpmInstall([string]$label, [string]$installDir, [string]$logPath, [string]$npmPath) {{
+        {MARKER}: Catfish offline — node_modules 已在 (msi 打了 CircleCI pre-install), skip
+        if (Test-Path (Join-Path $installDir "node_modules")) {{
+            Write-Info "$label: node_modules already present (Catfish offline bundle), skip npm install"
+            Write-Success "$label dependencies already installed (offline)"
+            return $true
+        }}
+        Push-Location $installDir"""
+
+
+# ─── 6 处 anchor (完全精确的 unique string) ────────────────
 
 
 ANCHORS = {
@@ -234,6 +270,14 @@ ANCHORS = {
     "install_repository": (
         "    $didUpdate = $false\n\n",
         PATCH_4_INSTALL_REPO,
+    ),
+    "npm_global": (
+        '    & $npm install -g --prefix $prefixDir --silent --ignore-scripts "agent-browser@^0.26.0" "@askjo/camofox-browser@^1.5.2" 2>&1 | Tee-Object -FilePath $npmLog | Out-Null\n',
+        PATCH_5_NPM_GLOBAL,
+    ),
+    "npm_local_helper": (
+        '    function _Run-NpmInstall([string]$label, [string]$installDir, [string]$logPath, [string]$npmPath) {\n        Push-Location $installDir',
+        PATCH_6_NPM_LOCAL,
     ),
 }
 
@@ -313,9 +357,9 @@ def verify_patched(patched_text: str) -> None:
             )
             raise SystemExit(3)
     marker_count = patched_text.count(MARKER)
-    if marker_count != 4:
+    if marker_count != 6:
         print(
-            f"[ERROR] MARKER 期望 4 处 (每 patch 1 处), 实际 {marker_count}.",
+            f"[ERROR] MARKER 期望 6 处 (每 patch 1 处 · BL-WIN-INSTALL-TAR/NPM-OFFLINE), 实际 {marker_count}.",
             file=sys.stderr,
         )
         raise SystemExit(3)
@@ -379,7 +423,7 @@ def main() -> int:
     verify_patched(patched)
 
     if args.check:
-        print("[OK] --check dry-run 全绿. patched 会加 4 处 marker + 3 处 -Offline* 参数.")
+        print("[OK] --check dry-run 全绿. patched 会加 6 处 marker + 4 处 -Offline* 参数 (BL-WIN-INSTALL-TAR/NPM-OFFLINE).")
         return 0
 
     out_path = args.output or args.input.with_suffix(".ps1.patched")
@@ -388,8 +432,10 @@ def main() -> int:
     print(f"[OK] patched install.ps1 → {out_path}")
     print(
         f"     Marker: {MARKER}\n"
-        f"     Patches: 4 处 (param + Install-Uv + Test-Python + Install-Repository)\n"
-        f"     msi CustomAction 传 -OfflineSourceDir / -OfflineUvExe / -OfflinePythonZip"
+        f"     Patches: 6 处 (param + Install-Uv + Test-Python + Install-Repository + npm-global + npm-local-helper)\n"
+        f"     msi CustomAction 传 -OfflineSourceTar / -OfflineUvExe / -OfflinePythonZip (+ -OfflineSourceDir 保留 mac 兼容)\n"
+        f"     npm global .tgz 从 $HermesHome\\hermes-agent\\node-globals\\ 自动拾取\n"
+        f"     npm local 若 node_modules\\ 已在自动 skip"
     )
     return 0
 
