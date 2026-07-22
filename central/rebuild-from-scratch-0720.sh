@@ -96,7 +96,10 @@ for svc in $BUILT_SERVICES postgres nginx; do
     case $svc in
         postgres) tag="postgres:16-alpine" ;;
         nginx)    tag="nginx:1.27-alpine" ;;
-        *)        tag="catfish-${svc}:$(grep -A 4 "^  ${svc}:$" docker-compose.yml | grep 'image:' | head -1 | awk -F: '{print $NF}')" ;;
+        *)        # P3.5.79+ (7/23): -A 4 抓不到 · gateway 段中间加了 2 行注释 · image 挤到
+                  # 第 7 行 · tag 变空 · docker inspect 挂 set -e. 改 -A 20 (够任何 image 位置)
+                  # + 精准 '^    image:' (顶格 4 空格 · 避免 image_name 出现在别的字段里被误抓).
+                  tag="catfish-${svc}:$(grep -A 20 "^  ${svc}:$" docker-compose.yml | grep '^    image:' | head -1 | awk -F: '{print $NF}')" ;;
     esac
     arch=$(docker inspect "$tag" --format '{{.Architecture}}/{{.Os}}' 2>/dev/null || echo "MISSING")
     echo "  $tag: $arch"
@@ -139,7 +142,10 @@ for svc in $BUILT_SERVICES postgres nginx; do
     case $svc in
         postgres) tag="postgres:16-alpine" ;;
         nginx)    tag="nginx:1.27-alpine" ;;
-        *)        tag="catfish-${svc}:$(grep -A 4 "^  ${svc}:$" docker-compose.yml | grep 'image:' | head -1 | awk -F: '{print $NF}')" ;;
+        *)        # P3.5.79+ (7/23): -A 4 抓不到 · gateway 段中间加了 2 行注释 · image 挤到
+                  # 第 7 行 · tag 变空 · docker inspect 挂 set -e. 改 -A 20 (够任何 image 位置)
+                  # + 精准 '^    image:' (顶格 4 空格 · 避免 image_name 出现在别的字段里被误抓).
+                  tag="catfish-${svc}:$(grep -A 20 "^  ${svc}:$" docker-compose.yml | grep '^    image:' | head -1 | awk -F: '{print $NF}')" ;;
     esac
     arch=$(docker inspect "$tag" --format '{{.Architecture}}/{{.Os}}' 2>/dev/null || echo "MISSING")
     echo "  $tag: $arch"
