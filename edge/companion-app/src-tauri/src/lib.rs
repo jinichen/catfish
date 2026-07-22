@@ -456,6 +456,11 @@ pub fn run() {
             // hermes hang detection + auto restart (kill -9 触发 launchd 拉)
             commands::hermes::hermes_status,
             commands::hermes::hermes_kill,
+            // BL-CSP-PROXY (7/18 鸿波): Rust reqwest HTTP 代理, 让前端 fetch 走 Rust,
+            // CSP connect-src 保持严格 (无外网白名单). 达华 POC 员工输达华 IP 才能通 chat.
+            commands::http_proxy::http_proxy,
+            commands::http_proxy::http_proxy_stream,
+            commands::http_proxy::http_proxy_abort,
             // chrome
             commands::chrome::chrome_launch,
             commands::chrome::chrome_kill,

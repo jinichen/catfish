@@ -34,6 +34,7 @@ pub mod file_parse;
 pub mod gateway;
 pub mod health;
 pub mod hermes; // P3.5.125 (6/26 鸿波 catch): hermes hang 监控 + 自动重启
+pub mod http_proxy; // BL-CSP-PROXY (7/18 鸿波): Rust reqwest HTTP 代理, CSP connect-src 保持严格
 pub mod identity;
 pub mod journal;  // BL-JOURNAL-TODO-EXTRACT (5/20): ~/.catfish/employee_journal.md TODO 抽取
 pub mod learning;

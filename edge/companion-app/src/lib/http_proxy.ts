@@ -1,0 +1,235 @@
+/** BL-CSP-PROXY (7/18 鸿波): Rust reqwest HTTP 代理 · 让前端 fetch 走 Rust · CSP connect-src 保持严格.
+ *
+ * 背景: Tauri CSP connect-src 白名单只有 http://127.0.0.1:* + localhost:*. 面板改远端 IP
+ * 时 WebView fetch 拦 (TypeError: Load failed, outbound_log.db 4085 records 铁证).
+ * 走 Rust reqwest 中转 · CSP 保持严格 · 无外网白名单.
+ *
+ * 两个 helper:
+ *   httpProxy(url, init)        — 一次性 request/response (JSON 类, 非流)
+ *   httpProxyStream(url, init)  — SSE streaming (chat completions 用)
+ *
+ * 返 Web `Response`, 完全兼容 fetch() API (`.status` `.headers` `.body` `.json()` `.text()`).
+ * chat.ts:592 `resp.body.getReader()` 无感继续工作.
+ */
+
+import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+
+interface HttpProxyRequest {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  body?: string;
+  bodyBase64?: boolean;
+  timeoutMs?: number;
+}
+
+interface HttpProxyResponse {
+  status: number;
+  headers: Record<string, string>;
+  body: string;
+  bodyBase64: boolean;
+}
+
+interface HttpProxyStreamStart {
+  status: number;
+  headers: Record<string, string>;
+}
+
+/** RequestInit → HttpProxyRequest (Rust command payload). */
+function buildRequest(url: string, init?: RequestInit, timeoutMs?: number): HttpProxyRequest {
+  const method = (init?.method || "GET").toUpperCase();
+
+  const headers: Record<string, string> = {};
+  if (init?.headers) {
+    if (init.headers instanceof Headers) {
+      init.headers.forEach((v, k) => {
+        headers[k] = v;
+      });
+    } else if (Array.isArray(init.headers)) {
+      init.headers.forEach(([k, v]) => {
+        headers[k] = v;
+      });
+    } else {
+      Object.assign(headers, init.headers);
+    }
+  }
+
+  let body: string | undefined;
+  let bodyBase64 = false;
+  if (init?.body != null) {
+    const b: unknown = init.body;
+    if (typeof b === "string") {
+      body = b;
+    } else if (b instanceof Uint8Array) {
+      // spread 大数组会 stack overflow (超 ~64k 参数) — loop 拼安全.
+      let bin = "";
+      for (let i = 0; i < b.length; i++) bin += String.fromCharCode(b[i]);
+      body = btoa(bin);
+      bodyBase64 = true;
+    } else if (b instanceof ArrayBuffer) {
+      const bytes = new Uint8Array(b);
+      let bin = "";
+      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      body = btoa(bin);
+      bodyBase64 = true;
+    } else {
+      // Blob / FormData / URLSearchParams / ReadableStream 目前未支持. 用到再加.
+      throw new Error(`httpProxy: body 类型未支持 (${Object.prototype.toString.call(b)})`);
+    }
+  }
+
+  return { url, method, headers, body, bodyBase64, timeoutMs };
+}
+
+function toResponseHeaders(headers: Record<string, string>): Headers {
+  const h = new Headers();
+  for (const [k, v] of Object.entries(headers)) {
+    try {
+      h.set(k, v);
+    } catch {
+      // 无效 header key (罕见 · e.g. non-ASCII) 跳过 · 不阻塞主流程
+    }
+  }
+  return h;
+}
+
+/** 非 stream · 一次性 fetch. 用于 JSON API / metadata 类调用. */
+export async function httpProxy(url: string, init?: RequestInit): Promise<Response> {
+  const req = buildRequest(url, init, 30_000);
+  const resp = await invoke<HttpProxyResponse>("http_proxy", { req });
+
+  // 分路让 TS 能 narrow bodyBytes 类型 (union 里混了 URLSearchParams 会报 TS2345).
+  if (resp.bodyBase64) {
+    const bin = atob(resp.body);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Response(bytes, {
+      status: resp.status,
+      headers: toResponseHeaders(resp.headers),
+    });
+  }
+  return new Response(resp.body, {
+    status: resp.status,
+    headers: toResponseHeaders(resp.headers),
+  });
+}
+
+/** SSE 流式 fetch. 用于 /v1/chat/completions. 返 Response, body 是 ReadableStream. */
+export async function httpProxyStream(url: string, init?: RequestInit): Promise<Response> {
+  const requestId = crypto.randomUUID();
+  const encoder = new TextEncoder();
+
+  let unlistenChunk: UnlistenFn | undefined;
+  let unlistenDone: UnlistenFn | undefined;
+  let unlistenError: UnlistenFn | undefined;
+
+  const cleanup = () => {
+    unlistenChunk?.();
+    unlistenDone?.();
+    unlistenError?.();
+  };
+
+  // 先 setup listener, 后 invoke — 防漏 chunk.
+  // ReadableStream start() 是同步的, 但 listen() 是 async. 用 promise 保证 3 个都注册再 invoke.
+  const listenersReady = Promise.all([
+    listen<string>(`http_proxy_chunk_${requestId}`, () => {}), // 占位, 真 handler 在 stream start
+    listen(`http_proxy_done_${requestId}`, () => {}),
+    listen<string>(`http_proxy_error_${requestId}`, () => {}),
+  ]);
+  // 立即 unregister 占位 — 真 handler 在 ReadableStream start 里 register.
+  listenersReady.then((fns) => fns.forEach((f) => f()));
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      try {
+        unlistenChunk = await listen<string>(`http_proxy_chunk_${requestId}`, (event) => {
+          try {
+            controller.enqueue(encoder.encode(event.payload));
+          } catch {
+            // controller 已 closed (被 done event 先关了) — 忽略
+          }
+        });
+        unlistenDone = await listen(`http_proxy_done_${requestId}`, () => {
+          try {
+            controller.close();
+          } catch {
+            /* 已 closed */
+          }
+          cleanup();
+        });
+        unlistenError = await listen<string>(`http_proxy_error_${requestId}`, (event) => {
+          try {
+            controller.error(new Error(event.payload || "http_proxy stream 错"));
+          } catch {
+            /* 已 closed */
+          }
+          cleanup();
+        });
+      } catch (e) {
+        controller.error(e instanceof Error ? e : new Error(String(e)));
+        cleanup();
+      }
+    },
+    cancel() {
+      // 前端 abort (chat.ts internalCtrl.abort()) → 通知 Rust 停 stream
+      invoke("http_proxy_abort", { requestId }).catch(() => {});
+      cleanup();
+    },
+  });
+
+  // Abort signal 桥 (fetch(init) 的 signal 会经 init 传下来, chat.ts internalCtrl.signal)
+  if (init?.signal) {
+    if (init.signal.aborted) {
+      // 已 abort — 立即取消, 返空 stream
+      invoke("http_proxy_abort", { requestId }).catch(() => {});
+    } else {
+      init.signal.addEventListener(
+        "abort",
+        () => {
+          invoke("http_proxy_abort", { requestId }).catch(() => {});
+        },
+        { once: true },
+      );
+    }
+  }
+
+  const req = buildRequest(url, init, 600_000); // SSE 10min timeout, chat.ts 里再套 idle timer
+  let start: HttpProxyStreamStart;
+  try {
+    start = await invoke<HttpProxyStreamStart>("http_proxy_stream", { req, requestId });
+  } catch (e) {
+    cleanup();
+    throw e;
+  }
+
+  return new Response(stream, {
+    status: start.status,
+    headers: toResponseHeaders(start.headers),
+  });
+}
+
+/** Auto-detect: URL 或 body 是否 stream 请求 (chat completions / SSE). */
+export function isStreamRequest(url: string, init?: RequestInit): boolean {
+  // /v1/chat/completions + /v1/responses stream 都常见
+  if (url.includes("/v1/chat/completions") || url.includes("/v1/responses")) {
+    return true;
+  }
+  // OpenAI 风格 body 里的 stream: true
+  if (typeof init?.body === "string" && /"stream"\s*:\s*true/.test(init.body)) {
+    return true;
+  }
+  // gateway/hermes SSE endpoints
+  if (url.includes("/api/sessions/") && url.includes("/chat/stream")) {
+    return true;
+  }
+  return false;
+}
+
+/** 统一入口: fetch-like API, auto stream/非 stream. me.ts fetch* 内部替换 `fetch(url, init)` 用. */
+export async function fetchViaProxy(url: string, init?: RequestInit): Promise<Response> {
+  if (isStreamRequest(url, init)) {
+    return httpProxyStream(url, init);
+  }
+  return httpProxy(url, init);
+}
