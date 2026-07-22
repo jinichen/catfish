@@ -67,6 +67,10 @@ services:
       CATFISH_IDENTITY_ISSUER: ${CATFISH_IDENTITY_ISSUER:-http://host.docker.internal:8998}
       # OIDC 配置 (跟 gateway 共享, 必须跟 CATFISH_IDENTITY_ISSUER 一致 - JWT iss claim)
       CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://host.docker.internal:8998}
+      # P3.5.79+ (7/22 达华 POC 血案): web 前端跨域调 identity discovery/token 必设.
+      # 默认 CORS 只 allow localhost/127.0.0.1/tauri:// · 客户内网 IP 需显式加.
+      # 多 origin 逗号分隔: http://<server-ip>:5173,https://catfish.company.com
+      CATFISH_IDENTITY_CORS_ORIGINS: ${CATFISH_IDENTITY_CORS_ORIGINS:-}
     ports:
       # 7/15 BL-OIDC-ISSUER: 员工浏览器需 access identity /authorize.
       # 生产走 nginx 反代 /sso/, 内部部署改回 "127.0.0.1:8998:8998".
