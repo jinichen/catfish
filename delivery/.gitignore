@@ -1,0 +1,7 @@
+# BL-DELIVERY-NO-BIN (7/21 军规): delivery/ 大二进制不入库.
+# image tar 从 docker save 重生成 · dmg 从 tauri build 重生成.
+# 免 git 仓库爆膨胀 (曾入 4.8GB · push 到 GitHub 必挂 100MB 单文件上限).
+dahua-poc/images/*.tar
+dahua-poc/images/*.tar.gz
+dahua-poc/companion/*.dmg
+dahua-poc/companion/*.msi

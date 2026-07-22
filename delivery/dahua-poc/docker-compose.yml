@@ -1,0 +1,281 @@
+# 鲶鱼中央服务全栈 docker-compose (五一 sprint 5/2 收尾 BL-F7).
+#
+# 一句话起 全套中央 server: postgres + identity + gateway + skills-hub.
+#
+# 用法 (客户 IT 部署):
+#   1. cp .env.production.example .env
+#   2. 改 .env 里的密码 / OIDC issuer / API key
+#   3. docker compose up -d
+#   4. tail -f logs:  docker compose logs -f gateway
+#
+# 健康检查:
+#   curl http://localhost:8999/healthz       # gateway
+#   curl http://localhost:8998/.well-known/openid-configuration  # identity
+#   curl http://localhost:8997/healthz       # skills-hub
+#
+# 升级:
+#   docker compose pull && docker compose up -d
+#   alembic 自动跑 migration (Dockerfile CMD 已串)
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: catfish-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${PG_USER:-catfish}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_DB: ${PG_DB:-catfish}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"   # 只本机暴露, 防外网直接连 PG
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-catfish} -d ${PG_DB:-catfish}"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  identity:
+    build:
+      context: ./identity-server
+      dockerfile: Dockerfile
+    image: catfish-identity:0.1.0
+    container_name: catfish-identity
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      CATFISH_DB_URL: postgresql://${PG_USER:-catfish}:${PG_PASSWORD}@postgres:5432/${PG_DB:-catfish}
+      CATFISH_ENV: prod
+      CATFISH_IDENTITY_PORT: 8998
+      # 6/9 BL-DOCKER-HOST 真坑 fix: app.py 默认 host=127.0.0.1, 容器内 lo only.
+      # docker network 其他 service / port mapping 都进不去. 必须 0.0.0.0.
+      CATFISH_IDENTITY_HOST: 0.0.0.0
+      # 6/9 BL-F11.P2 ship: identity 真支持 multi-worker (code_store 从 in-memory
+      # 移到 sqlite + module-level lazy app 单例, uvicorn 走 import string 不走
+      # factory). 默认 2 worker, 重负载机房 4. 单 worker bcrypt 12 round 极限
+      # 5-7 verify/s, 1000 employee 早高峰 SSO 一般够; 5000+ employee 客户改 4.
+      UVICORN_WORKERS: ${IDENTITY_WORKERS:-2}
+      # 7/15 BL-OIDC-ISSUER fix: identity 用 CATFISH_IDENTITY_ISSUER 构造
+      # openid-configuration 返回的 issuer/authorize_endpoint. 不设 fallback
+      # 到 CATFISH_IDENTITY_HOST (=0.0.0.0) → 浏览器 ERR_ADDRESS_INVALID.
+      # 值必须是浏览器 + gateway container 都能访问的 URL.
+      # host.docker.internal: Docker Desktop 特殊 DNS, host 侧 127.0.0.1,
+      # container 侧指向 Docker host, 双向可达.
+      CATFISH_IDENTITY_ISSUER: ${CATFISH_IDENTITY_ISSUER:-http://host.docker.internal:8998}
+      # OIDC 配置 (跟 gateway 共享, 必须跟 CATFISH_IDENTITY_ISSUER 一致 - JWT iss claim)
+      CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://host.docker.internal:8998}
+    ports:
+      # 7/15 BL-OIDC-ISSUER: 员工浏览器需 access identity /authorize.
+      # 生产走 nginx 反代 /sso/, 内部部署改回 "127.0.0.1:8998:8998".
+      - "8998:8998"
+    volumes:
+      - ./identity-server/config:/app/config:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8998/.well-known/openid-configuration"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  gateway:
+    build:
+      context: ./llm-gateway
+      dockerfile: Dockerfile
+    # BL-DAHUA-POC-IMAGE (7/18): 0.1.1 加 orjson (Task #68) · Companion audience 双值兼容 (Task #66) ·
+    # 及 pyproject.toml orjson>=3.10 依赖. rebuild + docker save 分发达华 IT.
+    image: catfish-gateway:0.1.1
+    container_name: catfish-gateway
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      identity:
+        condition: service_started
+    environment:
+      CATFISH_DB_URL: postgresql://${PG_USER:-catfish}:${PG_PASSWORD}@postgres:5432/${PG_DB:-catfish}
+      CATFISH_ENV: prod
+      # 6/9 BL-DOCKER-HOST: app.py 默认 127.0.0.1 (安全 P0 G1 dev 兜底), prod docker 必须 0.0.0.0
+      HOST: 0.0.0.0
+      PORT: 8999
+      CATFISH_CONFIG: /app/config/models.yaml
+      # 6/9 BL-F10 真实测: 单 worker GIL 卡死, 1000 user P99=34s; 4 worker P99=15s
+      # (2.2× 吞吐, 56% latency 降). 默认 4, 4 vCPU 客户机房刚好用满. 8 vCPU 改 8.
+      UVICORN_WORKERS: ${GATEWAY_WORKERS:-4}
+      # OIDC: 验真 SSO token, 不走 dev_token
+      # 7/15 BL-OIDC-ISSUER fix: 跟 identity CATFISH_IDENTITY_ISSUER 一致.
+      # 用 host.docker.internal 让浏览器 + gateway container 双向可达.
+      CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://host.docker.internal:8998}
+      # BL-COMPANION-AUTH (7/18 鸿波 catch Task #66): Companion Rust auth_get_access_token
+      # 实际返 id_token (aud=catfish-companion, OIDC 惯例), 不是 access_token. gateway 需
+      # 双 audience 才接. 默认单值 catfish-gateway 会拒 Companion id_token · 员工 chat 401.
+      CATFISH_OIDC_AUDIENCE: ${CATFISH_OIDC_AUDIENCE:-catfish-companion,catfish-gateway}
+      # facts_router 文件落地 (BL-Q3-FACT-PG-MIGRATE 之前的临时方案)
+      CATFISH_FACTS_DIR: ${CATFISH_FACTS_DIR:-/home/catfish/.catfish/facts}
+      # API keys (公网 LLM)
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # 私网 LLM (客户内网部署的 Qwen / embedding, base_url + key)
+      INTERNAL_LLM_KEY: ${INTERNAL_LLM_KEY:-}
+      INTERNAL_LLM_BASE_QWEN_MAIN: ${INTERNAL_LLM_BASE_QWEN_MAIN:-http://127.0.0.1:9998/v1}
+      INTERNAL_LLM_BASE_QWEN_VISION: ${INTERNAL_LLM_BASE_QWEN_VISION:-http://127.0.0.1:9998/v1}
+      INTERNAL_LLM_BASE_BGE_M3: ${INTERNAL_LLM_BASE_BGE_M3:-http://127.0.0.1:9998/v1}
+    ports:
+      - "8999:8999"  # gateway 对员工 Companion 暴露, 反代 nginx 处理 SSL
+    volumes:
+      - ./llm-gateway/config:/app/config:ro
+      - gateway_data:/home/catfish/.catfish  # quota.db (sqlite fallback) / audit jsonl / facts
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8999/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    # 6/9 BL-F10: 4 worker × Python = 内存 4×. 1024MB 实测够 (峰值 1014). 客户
+    # 机房按 4 vCPU / 2-4GB 规划. 超过 1000 user 横向扩多机, 不是单机加 worker.
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 4G
+
+  skills-hub:
+    build:
+      context: ./skills-hub
+      dockerfile: Dockerfile
+    image: catfish-skills-hub:0.1.0
+    container_name: catfish-skills-hub
+    restart: unless-stopped
+    environment:
+      CATFISH_HUB_DEV_TOKEN: ${SKILLS_HUB_TOKEN:-}
+      CATFISH_HUB_ROOT: /data/hub
+      # 6/9 BL-DOCKER-HOST: 跟 gateway/identity 同坑, 必须 0.0.0.0
+      HOST: 0.0.0.0
+      PORT: 8997
+    ports:
+      - "127.0.0.1:8997:8997"   # 只内网, 走 nginx 暴露
+    volumes:
+      - hubdata:/data/hub
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8997/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  # 6/9 BL-WEB-DEPLOY: web SPA (vite + nginx) 集成进 prod stack.
+  # 只服静态 dist/, 不直接暴露 ports — 中央 nginx 反代 / → web:80.
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    image: catfish-web:0.1.0
+    container_name: catfish-web
+    restart: unless-stopped
+    # 内部 service, 不需要 ports — 中央 nginx 走 docker network 名解析 (web:80)
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  # 6/9 BL-MCP-DEPLOY: mcp-registry 企业 MCP 连接器仓库.
+  # 员工通过 web UI 订阅 Jira/GitLab/filesystem 等 MCP, OAuth flow 走这.
+  mcp-registry:
+    build:
+      context: ./mcp-registry
+      dockerfile: Dockerfile
+    image: catfish-mcp-registry:0.1.0
+    container_name: catfish-mcp-registry
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      CATFISH_DB_URL: postgresql://${PG_USER:-catfish}:${PG_PASSWORD}@postgres:5432/${PG_DB:-catfish}
+      CATFISH_ENV: prod
+      # 6/9 BL-DOCKER-HOST: 必须 0.0.0.0 否则 nginx 反代 /mcp/ 进不去
+      HOST: 0.0.0.0
+      PORT: 8996
+      # OIDC: 验员工 JWT (跟 gateway 共享 issuer)
+      # 7/15 BL-OIDC-ISSUER fix: 跟 identity/gateway 一致
+      CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://host.docker.internal:8998}
+      # P3.4.1 (6/13) 砍 secret-broker: OAuth token 改 Companion 本机存,
+      # mcp-registry oauth_callback 直接返 access_token, 不再中央存.
+      # (manifesto 数据本地化红线 — 中央存员工 token 政企不合规.)
+    ports:
+      - "127.0.0.1:8996:8996"   # 只内网, 走 nginx /mcp/ 暴露
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8996/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  # P3.3.18-cleanup (7/14): wiki-hub 补上, ship 时 (6ab02a6 6/10) 加了服务本身
+  # + gateway 反代 /v1/wiki/*, 但忘加中央 stack 部署段. 员工用 wiki publish 会挂.
+  # port 8994, 跟 skills-hub 同模式.
+  wiki-hub:
+    build:
+      context: ./wiki-hub
+      dockerfile: Dockerfile
+    image: catfish-wiki-hub:0.1.0
+    container_name: catfish-wiki-hub
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      CATFISH_DB_URL: postgresql://${PG_USER:-catfish}:${PG_PASSWORD}@postgres:5432/${PG_DB:-catfish}
+      CATFISH_ENV: prod
+      # 6/9 BL-DOCKER-HOST: gateway 内网名解析 wiki-hub:8994, 必须 0.0.0.0
+      HOST: 0.0.0.0
+      PORT: 8994
+      CATFISH_WIKI_ROOT: /data/wiki
+      # OIDC: 验员工 JWT (跟 gateway / skills-hub 共享 issuer)
+      # 7/15 BL-OIDC-ISSUER fix: 跟 identity/gateway 一致
+      CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://host.docker.internal:8998}
+    ports:
+      - "127.0.0.1:8994:8994"   # 只内网, 走 gateway 反代 /v1/wiki/*
+    volumes:
+      - wikidata:/data/wiki
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8994/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  # P3.4.1-cleanup2 (7/14): secret-broker service 段删.
+  # P3.4.1 (56403d0, 6/13 hb) 已砍 secret-broker 中央存储, 目录+代码+docstring
+  # 都清干净了, 但当时忘删 docker-compose.yml + deploy.sh + .env 里的定义.
+  # 7 服务栈现在是: postgres / identity / gateway / skills-hub / wiki-hub /
+  # web / mcp-registry / nginx (8 个, 加 wiki-hub 补 P3.3.18 漏, 减 broker 一个).
+
+  # nginx 反代: SSL 卸载 + 路由
+  #   / → web (SPA)
+  #   /v1/ /api/ /healthz → gateway
+  #   /sso/ → identity
+  #   /hub/ → skills-hub
+  #   /mcp/ → mcp-registry  (6/9 BL-MCP-DEPLOY 新加)
+  # 客户改 nginx.conf.example → nginx.conf 配域名 + Let's Encrypt cert
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: catfish-nginx
+    restart: unless-stopped
+    depends_on:
+      - gateway
+      - identity
+      - skills-hub
+      - wiki-hub       # P3.3.18-cleanup (7/14) 补
+      - web
+      - mcp-registry
+    ports:
+      - "443:443"
+      - "80:80"  # http → 301 https
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs:ro  # cert.pem + key.pem (Let's Encrypt 或自签)
+
+volumes:
+  pgdata:
+  gateway_data:
+  hubdata:
+  wikidata:          # P3.3.18-cleanup (7/14) 补 wiki-hub FS fallback
