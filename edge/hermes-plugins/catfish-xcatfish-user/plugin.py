@@ -3481,6 +3481,19 @@ _P28_REPLACEMENTS = [
         "execute_code 脚本执行 — 可能调子进程 / 改文件, 绕过终端命令审批. 本次审批仅 1 次有效.",
     ),
     # reply 段 (鸿波铁律: 砍 `/approve always`)
+    # ⚠ 7/22 鸿波 catch (P3.5.79+): hermes v0.19 Quicksilver (7/20) 改了原文
+    # `to execute,` → `to execute this one operation,` (gateway/run.py:370).
+    # 老 v0.18 pattern silent miss → 英文全条泄漏到微信. 加 v0.19 pattern first
+    # (长 first 匹配), 保留 v0.18 pattern 兜底 (客户装老版 hermes 时用).
+    #
+    # v0.19 pattern
+    (
+        "Reply `/approve` to execute this one operation, `/approve session` to approve this pattern "
+        "for the session, `/approve always` to approve permanently, or `/deny` to cancel.",
+        "回复 `/批准` 执行 (单次), 或 `/批准 本次会话` 本会话内同款命令免审批, 或 `/拒绝` 取消.\n"
+        "（安全提示：永久免批已禁用，危险命令必须每次或每会话审批）",
+    ),
+    # v0.18 及之前 pattern (兜底 · 客户老 hermes 装)
     (
         "Reply `/approve` to execute, `/approve session` to approve this pattern "
         "for the session, `/approve always` to approve permanently, or `/deny` to cancel.",
@@ -3512,6 +3525,11 @@ def _translate_hermes_zh(text):
     """str.replace 英文 → 中文 — P28 outbound 中文化main entry真.
 
     0 raise — : input 异常 → 返原文 (不阻塞 send).
+
+    ⚠ 7/22 军规 fail-loud (P3.5.79+): 翻译完仍含英文 slash prompt (`/approve`,
+    `/deny`) → warn log. hermes 升级会改原文 (v0.18→v0.19 就改过), 老 pattern
+    silent miss = 员工看到英文丑. warn 让下次一发现就修 _P28_REPLACEMENTS, 别
+    等员工投诉.
     """
     if not text or not isinstance(text, str):
         return text
@@ -3520,6 +3538,16 @@ def _translate_hermes_zh(text):
             text = text.replace(en, zh)
     except Exception as e:  # noqa: BLE001
         logger.warning("P28 translate fail (return original): %s", e)
+        return text
+
+    # fail-loud 检测: 只在明显 approval prompt (含 `/approve`) 场景下检查 · 且
+    # 中文替换未生效 (没 "回复" / "批准" 关键字). 防误报 (员工正常聊到 /approve).
+    if isinstance(text, str) and "/approve" in text and "批准" not in text and "回复" not in text:
+        logger.warning(
+            "P28 miss: outbound 含未翻译 `/approve` — hermes 上游可能改了原文, "
+            "需 update _P28_REPLACEMENTS. text preview: %r",
+            text[:200],
+        )
     return text
 
 
