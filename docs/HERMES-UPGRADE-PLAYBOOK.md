@@ -51,7 +51,46 @@ HERMES_ROOT="$HERMES_AUDIT_DIR" bash ~/person_task/catfish/edge/catfish-cli/scri
 # 任何 fail → 看下面 "已知坑分类" 排查
 ```
 
-### Step 2: 升级时机 (实际操作)
+### Step 2: P28 outbound string audit (hermes → 微信/IM 中文化保护)
+
+> ⚠ **P3.5.79+ 7/22 补** — 血案: v0.18 → v0.19 Quicksilver (7/20)
+> `gateway/run.py:370` 加 `to execute this one operation` 后缀, catfish P28
+> `_P28_REPLACEMENTS` str.replace 精确匹配失配, 微信员工看到 approval reply
+> 段全英文. audit 时**必须** diff outbound f-string.
+
+**为什么**: catfish P28 patch 靠 `str.replace` 精确匹配 hermes 4 段英文
+outbound f-string (approval prompt / 中断提示 / 排队提示 / /approve 命令说明),
+每次 hermes 升级都可能改这些字串. 一改, P28 silent miss, 英文泄漏到微信员工端.
+
+**Audit 命令** (diff outbound f-string · Step 0 后跑):
+
+```bash
+# 拉 gateway/run.py 新老版对比 outbound f-string (P28 挂点)
+cd "$HERMES_AUDIT_DIR"
+OLD_HV="v<catfish 上次跟的 hermes 版本>"   # e.g. v2026.7.10
+NEW_HV="$HERMES_VERSION"                    # e.g. v2026.7.20
+
+for v in "$OLD_HV" "$NEW_HV"; do
+  curl -sL --max-time 10 \
+    "https://raw.githubusercontent.com/NousResearch/hermes-agent/${v}/gateway/run.py" \
+    -o "run.py.${v}"
+done
+
+# P28 关注的 4 段 outbound (更多见 plugin.py:_P28_REPLACEMENTS)
+P28_PATTERNS='Dangerous command|Interrupting current task|approve this pattern|Queued for the next turn|Reason:|to execute|to cancel|approve permanently'
+
+diff <(grep -nE "$P28_PATTERNS" "run.py.${OLD_HV}") \
+     <(grep -nE "$P28_PATTERNS" "run.py.${NEW_HV}")
+# 期望: 空 diff. 有 diff → 立刻 update _P28_REPLACEMENTS.
+```
+
+**修 pattern** (若 diff 有输出):
+
+编辑 `edge/hermes-plugins/catfish-xcatfish-user/plugin.py` `_P28_REPLACEMENTS`
+list, 加新版 pattern (**长 first 排前** — str.replace 短前缀会先命中打断),
+**保留老版 pattern 兜底** (客户装老 hermes 时不破).
+
+### Step 3: 升级时机 (实际操作)
 
 ```bash
 # 装机版本 pin (员工本机)
@@ -76,6 +115,16 @@ awk '/2026-XX-XX HH:MM:/,0' ~/.hermes/logs/gateway.error.log | grep "未装载" 
 
 # verify chat e2e
 # Companion 跑一条 "测试" — 看上游 LLM 真返结果, picker 真生效
+
+# verify P28 中文化 e2e (v0.19+ 必跑)
+# 微信/WeCom/Slack 中文 IM 发 1 条会触发危险命令的 msg (e.g. "帮我 ls ~/Documents"),
+# LLM 会调 execute_code → 触发 approval outbound. 应看到:
+#   "⚠️ 危险命令需要审批:" (中文)
+#   "回复 `/批准` 执行 (单次), 或 `/批准 本次会话` ..." (中文, 无英文 /approve)
+#
+# 若仍看到英文 → 查 P28 fail-loud warn:
+grep "P28 miss" ~/.hermes/logs/gateway.log | tail -5
+# 期望: 空 (无 miss). 若有 → 按 warn 里 text preview 补 _P28_REPLACEMENTS.
 ```
 
 ---
@@ -202,6 +251,45 @@ awk '/2026-XX-XX HH:MM:/,0' ~/.hermes/logs/gateway.error.log | grep "未装载" 
 **真因**: `_delayed_install` daemon thread `while sys.modules.get("model_tools") + hasattr get_tool_definitions`. **但** v0.17 hermes daemon (gateway run 模式) 不主动 import `run_agent` (chat lazy import). run_agent 顶 imports 才会引 model_tools. 没 chat 来 → model_tools 永远不在 sys.modules → 30s timeout → install 跳过 → `_INSTALLED=False` → safety_check raise → 任何 chat 都被 block.
 
 **修 (P3.5.53)**: `_delayed_install` daemon thread 主动 `import model_tools` trigger, 不再被动 poll. sleep 0.5s 让主线程 register 完成跳过 partial init 段, 之后 `import model_tools` → model_tools ready → `_mod.install()` 直接跑. v0.17 model_tools 顶 imports 不撞 catfish plugin (no circular).
+
+### 坑 13: hermes 升级改 outbound f-string → P28 中文化 silent 挂 (P3.5.79+ 7/22)
+
+**症状**: v0.19 Quicksilver 升级 (7/20) 后, 微信 ClawBot 危险命令审批 reply
+段全英文 ("Reply /approve to execute this one operation, /approve session ..."),
+员工看不懂 + 铁律砍 `always` 提示丢失.
+
+**真因** (5 分钟一发命中):
+
+对比 `gateway/run.py:370` 新老版:
+
+- v0.18: `f"Reply \`{command_prefix}approve\` to execute"`
+- v0.19: `f"Reply \`{command_prefix}approve\` to execute this one operation"`
+                                                      ^^^^^^^^^^^^^^^^^^^^^^^^^ 新增
+
+P28 `_P28_REPLACEMENTS` 里的 str.replace 老 pattern 是 v0.18 原文, v0.19 原文
+找不到 → silent miss → 全条不翻译 → 英文泄漏微信.
+
+**为啥其他 3 段没挂**: `"⚠️ **Dangerous command requires approval:**"`, `"Reason: "`,
+`"⚡ Interrupting current task"` v0.19 没改, str.replace 仍命中. 只 reply 段
+被改.
+
+**修 (P3.5.79+ 7/22)**:
+1. `_P28_REPLACEMENTS` 加 v0.19 pattern (长 first 排前), 保留 v0.18 pattern
+   兜底 (客户装老版 hermes 时用).
+2. `_translate_hermes_zh` 加 **fail-loud 检测**: 翻译完 text 仍含 `/approve`
+   英文 (且无中文 "回复"/"批准") → `logger.warning('P28 miss: hermes 上游可能
+   改了原文, 需 update _P28_REPLACEMENTS. text preview: %r')` → 下次一改
+   立刻知道, 别等员工投诉.
+
+**教训**:
+1. **Fork 上游硬编 str.replace = 极其脆弱**. 上游改任何 whitespace / 措辞 →
+   silent miss. 无别路: **每次 hermes 升级 diff outbound f-string**.
+2. hermes v0.19 audit 21 条我漏了这个, 只看 breaking API 没跑 outbound
+   string diff. 加进 Section 一 Step 2 (P28 outbound string audit).
+3. **fail-loud > fail-silent**. 无 warn 的 silent fallback = 无声的 bug, 员工
+   投诉才发现. 每处 str.replace / regex 匹配后加"是否命中"检测, miss 打 warn.
+
+**预防 (下次升级必跑)**: 见 Section 一 Step 2 "P28 outbound string audit".
 
 ### 坑 12: cowork 沙箱 view 跟用户本机 view 不一致 — 不要 alarmist 改文件
 
@@ -488,8 +576,15 @@ HV="v2026.X.Y" && \
   HERMES_ROOT=~/.hermes/hermes-agent bash ~/person_task/catfish/edge/catfish-cli/scripts/audit_hermes_compat.sh && \
   hermes gateway restart && sleep 12 && \
   grep -c "delayed install ✓" ~/.hermes/logs/gateway.log && \
-  echo "✓ 升级成功. Companion 跑一条 chat verify chat e2e."
+  echo "✓ install 成功. 下一步 verify (2 条 e2e):" && \
+  echo "  ① Companion 跑一条 chat — 上游 LLM 真返 + picker 真生效" && \
+  echo "  ② 微信/IM 发'帮我 ls'触发 approval — 应全中文 (P28)" && \
+  echo "     若英文 → grep 'P28 miss' ~/.hermes/logs/gateway.log 拿 miss text preview"
 ```
+
+**⚠ 别跳 Section 一 Step 2** (P28 outbound string audit) — 升级前必 diff
+hermes `gateway/run.py` outbound f-string. v0.18→v0.19 就因跳这步踩了微信英文
+泄漏坑 (见 Section 三 坑 13).
 
 出错时, 按本文 "Audit 真因链 — 8 步顺序" 走, 每步 ground truth verify, 不要跳.
 
