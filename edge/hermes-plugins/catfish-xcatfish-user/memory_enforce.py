@@ -57,8 +57,13 @@ _LLM_HTTP_TIMEOUT_SECS = 30.0
 _FALLBACK_MODEL = "catfish-private-main"  # 兜底强红线: 内网, 不出端
 # 鸿波拍 (6/18 '所有遵循 picker, 不乱改'): model 选 chain 严格走 picker, 不读 role_resolver
 # 的 rate_fast / summarize (yaml 默认配公网 catfish-public-qwen-flash / catfish-public-
-# gemini-pro, 走公网 = 员工真实数据出端 = 破 P3.5.27 红线). 用 chat_default 是因为它
-# yaml 默认是 catfish-private-main (内网).
+# gemini-pro, 走公网 = 员工真实数据出端 = 破 P3.5.27 红线). 用 chat_default 是**员工桌面
+# chat 默认对齐** — 员工日常主力选啥这里就用啥.
+#
+# ⚠ 7/22 鸿波校正 (P3.5.79+): roles.yaml chat_default 现值 = catfish-public-deepseek-flash
+# (公网), **老注释 "yaml 默认是 catfish-private-main (内网)" 已不成立**. 意味着 P2 兜底
+# 现在也会破红线; 想真守红线要么改 roles.yaml chat_default 回内网, 要么下面 P3 硬兜底
+# _FALLBACK_MODEL='catfish-private-main' 才是最后防线.
 _FALLBACK_ROLE = "chat_default"
 
 
@@ -122,11 +127,15 @@ def get_verifier_model() -> str:
 
     优先级:
       1. ~/.catfish/picker_state.json (员工 chat picker 选定, 最高优先)
-      2. role_resolver(chat_default) (yaml 默认 catfish-private-main, 内网, 跟红线一致)
+      2. role_resolver(chat_default) (员工桌面 chat 默认对齐)
       3. 兜底 catfish-private-main (强红线 — 内网, 防 yaml 被改成公网破红线)
 
     不走 rate_fast / summarize 因为它们 yaml 默认配公网 model (catfish-public-qwen-flash /
     catfish-public-gemini-pro), 内容是员工真实数据走公网破 P3.5.27 数据零出端红线.
+
+    ⚠ 7/22 鸿波校正 (P3.5.79+): roles.yaml chat_default 现值 = catfish-public-deepseek-flash
+    (公网), 老注释"P2 跟红线一致"已不成立. 只有 P3 硬兜底 catfish-private-main 还守红线.
+    想让 P2 也守就改 roles.yaml chat_default 回内网 model.
     """
     home = _catfish_home()
     # P1: picker_state.json

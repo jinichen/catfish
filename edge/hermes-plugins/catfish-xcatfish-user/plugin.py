@@ -3020,7 +3020,9 @@ def _patch_p24_cors_allowlist() -> None:
 #   ② model 来自 turn_route["model"], 由 _resolve_session_agent_runtime 算
 #   ③ _resolve_session_agent_runtime 第一行调 _resolve_gateway_model(config)
 #   ④ _resolve_gateway_model 直接读 cfg["model"]["default"] 返
-#      = config.yaml.model.default = catfish-public-deepseek-flash
+#      = config.yaml.model.default (当时 = catfish-public-deepseek-flash,
+#        7/22 校: **现值 = catfish-auto** — 会走 gateway roles.yaml chat_default resolve.
+#        老注释这行只作历史 bug 复现现场读)
 #   ⑤ 微信 path 完全不读 ~/.catfish/picker_state.json, 跟桌面 chat 行为不一致
 #      (桌面 chat 走 P5/P6/P11 _RUNTIME_MAIN_MODEL override, 真桥到 picker)
 #   ⑥ 实证: 23:46:57 inbound msg='19号花了300块钱，加油' platform=weixin
