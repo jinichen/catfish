@@ -20,6 +20,10 @@ dependencies = [
     # 但纵深防御 + 清 SBOM 警告 + 防 future 误引 litellm.proxy 仍升级. 加 <2.0
     # upper bound 防 2.x breaking 时 CI 静默炸. docs/SECURITY-CVE-LOG.md 有详评.
     "litellm>=1.84.0,<2.0.0",
+    # P3.6.X (7/18 鸿波 catch Task #68): litellm.responses.mcp.chat_completions_handler
+    # lazy import orjson (litellm 未显式 declare · 缺就 502 APIConnectionError).
+    # 强制显式 pull · 达华 POC image force-recreate 后 chat 走 mcp code path 也稳.
+    "orjson>=3.10",
     "pyyaml>=6.0.2",
     # P3.5.93 (6/23 鸿波): quota.yaml 编辑 UI 写回需保留 yaml comments.
     # pyyaml.safe_dump 会吹掉所有 comments (BL-FIX38 / BL-CHENHONGBO-DEV-QUOTA 等
