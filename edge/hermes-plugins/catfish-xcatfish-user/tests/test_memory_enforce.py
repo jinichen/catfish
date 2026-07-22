@@ -3,8 +3,9 @@
 跑法: cd edge/hermes-plugins/catfish-xcatfish-user && python3 -m pytest tests/test_memory_enforce.py -q
 
 覆盖:
-- picker chain — picker_state.json > role_resolver chat_default > 兜底 catfish-private-main
+- picker chain — picker_state.json > role_resolver chat_default (P3.5.79+: 都空 → None, 不兜底)
 - hook 早 return (非 memory tool / 非 add/replace / target 非 memory/user / content 空)
+- **军规 fail-closed**: get_verifier_model 返 None → hook block memory write + 明确 error
 - classify LLM 返不同 route 的 expected 行为 (route == target 放行 / 不匹配 block)
 - classify fail-silent (LLM 调挂 → 放行)
 - audit log 写入正确
@@ -47,26 +48,59 @@ def test_picker_state_highest_priority(tmp_catfish):
     assert memory_enforce.get_verifier_model() == "catfish-private-main"
 
 
-def test_picker_state_empty_falls_through(tmp_catfish, monkeypatch):
-    """picker_state.json 没 chat_model 字段 → fallback role_resolver, 再兜底 catfish-private-main."""
+def test_picker_state_empty_falls_through_p2_hit(tmp_catfish, monkeypatch):
+    """picker_state.json 没 chat_model 字段 → fallback P2 role_resolver (有值 → 走)."""
     (tmp_catfish / "picker_state.json").write_text("{}", encoding="utf-8")
-    # mock role_resolver 返空
-    monkeypatch.setattr(memory_enforce, "_resolve_role_via_gateway", lambda role: "")
-    assert memory_enforce.get_verifier_model() == "catfish-private-main"
-
-
-def test_picker_state_missing_falls_through(tmp_catfish, monkeypatch):
-    """picker_state.json 不存在 → role_resolver → 兜底."""
     monkeypatch.setattr(memory_enforce, "_resolve_role_via_gateway",
-                        lambda role: "catfish-private-main-from-role")
-    assert memory_enforce.get_verifier_model() == "catfish-private-main-from-role"
+                        lambda role: "catfish-role-model")
+    assert memory_enforce.get_verifier_model() == "catfish-role-model"
 
 
-def test_picker_state_corrupted_falls_through(tmp_catfish, monkeypatch):
-    """picker_state.json 损坏 → fallback."""
+def test_picker_state_missing_falls_through_p2_hit(tmp_catfish, monkeypatch):
+    """picker_state.json 不存在 → P2 role_resolver 命中."""
+    monkeypatch.setattr(memory_enforce, "_resolve_role_via_gateway",
+                        lambda role: "catfish-role-model")
+    assert memory_enforce.get_verifier_model() == "catfish-role-model"
+
+
+# 军规 P3.5.79+ (7/22 鸿波): P1 + P2 都空 → **fail-loud 返 None**, 不再硬编
+# catfish-private-main 兜底. 硬编让员工无感, 掩盖真错.
+
+
+def test_picker_and_role_both_empty_returns_none(tmp_catfish, monkeypatch):
+    """P1 空 + P2 空 → 返 None (军规 fail-loud, 不硬编兜底)."""
+    (tmp_catfish / "picker_state.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(memory_enforce, "_resolve_role_via_gateway", lambda role: "")
+    assert memory_enforce.get_verifier_model() is None
+
+
+def test_picker_missing_and_role_empty_returns_none(tmp_catfish, monkeypatch):
+    """P1 文件不存在 + P2 空 → 返 None."""
+    monkeypatch.setattr(memory_enforce, "_resolve_role_via_gateway", lambda role: "")
+    assert memory_enforce.get_verifier_model() is None
+
+
+def test_picker_corrupted_and_role_empty_returns_none(tmp_catfish, monkeypatch):
+    """P1 损坏 + P2 空 → 返 None."""
     (tmp_catfish / "picker_state.json").write_text("not json", encoding="utf-8")
     monkeypatch.setattr(memory_enforce, "_resolve_role_via_gateway", lambda role: "")
-    assert memory_enforce.get_verifier_model() == "catfish-private-main"
+    assert memory_enforce.get_verifier_model() is None
+
+
+def test_hook_blocks_when_no_model(tmp_catfish, monkeypatch):
+    """model 未解出 → hook 返 block action + 明确 error msg (fail-closed 军规)."""
+    monkeypatch.setattr(memory_enforce, "get_verifier_model", lambda: None)
+    result = memory_enforce.memory_enforce_hook(
+        tool_name="memory",
+        args={"action": "add", "target": "memory", "content": "some memory content"},
+        task_id="t-nomodel",
+    )
+    assert result is not None
+    assert result.get("action") == "block"
+    msg = result.get("message", "")
+    assert "verify model 未设" in msg
+    assert "picker" in msg
+    assert "chat_default" in msg
 
 
 # ── hook 早 return 测试 (非 memory 调) ────────────────────────────

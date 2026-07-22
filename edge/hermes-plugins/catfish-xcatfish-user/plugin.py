@@ -2324,14 +2324,23 @@ async def _handle_compress_session_stream(self, request):
 
         # 2. 估 token + emit started
         from agent.model_metadata import estimate_request_tokens_rough
-        # session_row 真 dict 有 model / ephemeral_system_prompt / system_prompt 字段
-        # 老 session 真model 字段** 可能 None — fallback role_default
-        # 或 "catfish-private-main" (compress 不实际 inference, 只 aux LLM).
+        # session_row 真 dict 有 model / ephemeral_system_prompt / system_prompt 字段.
+        # 军规 (P3.5.79+ 7/22 鸿波): 老 session 无 model 字段 → **fail-loud**, 不再硬编
+        # catfish-private-main 兜底. 硬编让老 session compress 静默走内网 model, 员工无感
+        # 且掩盖数据源问题. 明报 error 逼员工手动删老 session 或重开.
         model_name = (
             session_row.get("model")
             or session_row.get("model_name")
-            or "catfish-private-main"
         )
+        if not model_name:
+            await send_event("compress.failed", {
+                "error": (
+                    "老 session 无 model 字段 · 无法 compress · "
+                    "军规不硬编 model 兜底 · 请手动删/重开此 session"
+                ),
+            })
+            await resp.write_eof()
+            return resp
         system_prompt = (
             session_row.get("ephemeral_system_prompt")
             or session_row.get("system_prompt")

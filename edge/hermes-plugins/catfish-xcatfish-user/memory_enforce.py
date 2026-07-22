@@ -54,16 +54,16 @@ logger = logging.getLogger(__name__)
 
 _AUDIT_LOG_FILENAME = "memory_audit.jsonl"
 _LLM_HTTP_TIMEOUT_SECS = 30.0
-_FALLBACK_MODEL = "catfish-private-main"  # 兜底强红线: 内网, 不出端
 # 鸿波拍 (6/18 '所有遵循 picker, 不乱改'): model 选 chain 严格走 picker, 不读 role_resolver
 # 的 rate_fast / summarize (yaml 默认配公网 catfish-public-qwen-flash / catfish-public-
 # gemini-pro, 走公网 = 员工真实数据出端 = 破 P3.5.27 红线). 用 chat_default 是**员工桌面
 # chat 默认对齐** — 员工日常主力选啥这里就用啥.
 #
-# ⚠ 7/22 鸿波校正 (P3.5.79+): roles.yaml chat_default 现值 = catfish-public-deepseek-flash
-# (公网), **老注释 "yaml 默认是 catfish-private-main (内网)" 已不成立**. 意味着 P2 兜底
-# 现在也会破红线; 想真守红线要么改 roles.yaml chat_default 回内网, 要么下面 P3 硬兜底
-# _FALLBACK_MODEL='catfish-private-main' 才是最后防线.
+# ⚠ 7/22 鸿波 (P3.5.79+ 军规): **杀了 P3 硬编 _FALLBACK_MODEL = "catfish-private-main"**.
+# 老逻辑 picker 空 + roles.yaml chat_default 空 → 默默回 catfish-private-main, 员工无感
+# (且 roles.yaml chat_default 现值已改公网 deepseek, 老兜底"红线一致"自欺). fail-loud
+# 才是正解: 没设 picker + 没配 yaml → get_verifier_model 返 None, memory write 直接 block,
+# 员工看到明确 error 逼他去设 picker / IT 去配 chat_default. **不硬编就不混乱**.
 _FALLBACK_ROLE = "chat_default"
 
 
@@ -122,20 +122,22 @@ def _resolve_role_via_gateway(role: str) -> str:
     return ""
 
 
-def get_verifier_model() -> str:
+def get_verifier_model() -> Optional[str]:
     """picker chain — 严格遵循 picker (鸿波 6/18 原则 '所有遵循 picker, 不乱改').
 
     优先级:
       1. ~/.catfish/picker_state.json (员工 chat picker 选定, 最高优先)
       2. role_resolver(chat_default) (员工桌面 chat 默认对齐)
-      3. 兜底 catfish-private-main (强红线 — 内网, 防 yaml 被改成公网破红线)
+      → 都空返 None. **军规: 不硬编 model 兜底**. caller 负责 fail-closed
+        (block memory write + 明确 error msg 逼员工去设 picker).
 
     不走 rate_fast / summarize 因为它们 yaml 默认配公网 model (catfish-public-qwen-flash /
     catfish-public-gemini-pro), 内容是员工真实数据走公网破 P3.5.27 数据零出端红线.
 
-    ⚠ 7/22 鸿波校正 (P3.5.79+): roles.yaml chat_default 现值 = catfish-public-deepseek-flash
-    (公网), 老注释"P2 跟红线一致"已不成立. 只有 P3 硬兜底 catfish-private-main 还守红线.
-    想让 P2 也守就改 roles.yaml chat_default 回内网 model.
+    ⚠ 7/22 鸿波 (P3.5.79+ 军规): 杀了老 P3 兜底 "return catfish-private-main". 老逻辑
+    picker 空 + roles.yaml chat_default 空 → 静默回 catfish-private-main, 员工无感 + 掩盖
+    真错. 现在 fail-loud: 返 None, caller block memory write, 员工必须去设 picker 或
+    IT 去配 chat_default. 不硬编就不混乱.
     """
     home = _catfish_home()
     # P1: picker_state.json
@@ -146,8 +148,8 @@ def get_verifier_model() -> str:
     role_model = _resolve_role_via_gateway(_FALLBACK_ROLE)
     if role_model:
         return role_model
-    # P3: 兜底
-    return _FALLBACK_MODEL
+    # P3: 军规 fail-loud — 不硬编兜底
+    return None
 
 
 # ── classify prompt (复用 catfish-memory 5 kind router 决策树) ────────
@@ -305,8 +307,33 @@ def memory_enforce_hook(tool_name: str = "", args: Optional[dict] = None,
 
         # 调 LLM 二次校验
         model = get_verifier_model()
-        classification = _classify_memory_route(content, model)
         now_iso = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+
+        # 军规 (P3.5.79+ 7/22 鸿波): model 未解出 → fail-closed block, 不再硬编
+        # catfish-private-main 兜底. 员工必须去 Companion 里选 chat_model, 或让 IT
+        # 配 roles.yaml chat_default. 硬编兜底掩盖真错, 让人查半天.
+        if not model:
+            _audit_log({
+                "ts": now_iso,
+                "tool": tool_name,
+                "target": target,
+                "action": action,
+                "content_preview": content[:100],
+                "model": None,
+                "decision": "block_no_model",
+                "reason": "picker_state.json 空 + roles.yaml chat_default 空",
+            })
+            return {
+                "action": "block",
+                "message": (
+                    "memory write 挂 · verify model 未设:\n"
+                    "  ① ~/.catfish/picker_state.json 空 — 请在 Companion 里选 chat_model\n"
+                    "  ② gateway roles.yaml chat_default 空 — 请让 IT 补配\n"
+                    "军规: 不硬编 model 兜底. 二选一设完再试."
+                ),
+            }
+
+        classification = _classify_memory_route(content, model)
 
         if classification is None:
             # fail-silent: classify 挂 → 放行 + audit log error
