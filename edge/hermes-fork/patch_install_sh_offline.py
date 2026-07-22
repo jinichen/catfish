@@ -84,6 +84,18 @@ PATCH_1_PARAM = f"""        --offline-source-dir)
             OFFLINE_PYTHON_TAR="$2"
             shift 2
             ;;
+        --offline-node-tar)
+            # {MARKER}: 预下载 Node.js tar.gz 路径 (BL-MAC-INSTALL-NODE-BUNDLE 7/17)
+            # 跳过在线下 nodejs.org · 员工机无公网必挂
+            OFFLINE_NODE_TAR="$2"
+            shift 2
+            ;;
+        --offline-chromium-tar)
+            # {MARKER}: 预下载 Playwright chromium tar.gz 路径 (BL-MAC-INSTALL-CHROMIUM-BUNDLE 7/17)
+            # 解压到 ~/Library/Caches/ms-playwright/ 让 Playwright 自动 detect
+            OFFLINE_CHROMIUM_TAR="$2"
+            shift 2
+            ;;
         -h|--help)"""
 
 
@@ -161,6 +173,80 @@ PATCH_5_INSTALL_REPO_CLOSE = f"""            fi
     cd "$INSTALL_DIR\""""
 
 
+# 处 6 · install_node (line ~830): 员工机无 Node · install_node 会下 nodejs.org tar 装.
+# 员工无公网必挂 · BL-MAC-INSTALL-NODE-BUNDLE (7/17): 若 --offline-node-tar 传, 解压到
+# ~/.hermes/node/ · export PATH · HAS_NODE=true, return 0.
+PATCH_6_INSTALL_NODE = f"""install_node() {{
+    {MARKER}: Catfish offline — 解压内嵌 Node.js tar (员工无公网必挂 nodejs.org 下载)
+    if [ -n "${{OFFLINE_NODE_TAR:-}}" ] && [ -f "$OFFLINE_NODE_TAR" ]; then
+        log_info "Catfish offline: 解压 Node.js from $OFFLINE_NODE_TAR"
+        mkdir -p "$HERMES_HOME/node"
+        # tar 里通常是 node-v22.x.x-darwin-arm64/ 顶级目录, 我们 --strip-components=1 直接解到 $HERMES_HOME/node/
+        if tar -xzf "$OFFLINE_NODE_TAR" -C "$HERMES_HOME/node" --strip-components=1 2>/dev/null; then
+            export PATH="$HERMES_HOME/node/bin:$PATH"
+            if command -v node &> /dev/null; then
+                local installed_ver
+                installed_ver=$(node --version 2>/dev/null)
+                log_success "Node.js $installed_ver installed from Catfish offline bundle"
+                HAS_NODE=true
+                return 0
+            else
+                log_warn "Catfish offline: Node.js 解压后仍 command -v node 挂"
+            fi
+        else
+            log_warn "Catfish offline: Node.js tar 解压挂 - fallback nodejs.org (员工无公网必挂)"
+        fi
+    fi
+
+    if [ "$DISTRO" = "termux" ]; then"""
+
+
+# 处 7 · install_node_deps (line ~2114): offline mode 短路整个 npm install + Playwright chromium 装.
+# BL-MAC-INSTALL-NPM-OFFLINE + CHROMIUM-BUNDLE (7/17):
+#   - node_modules 已在 dmg (build 时 npm ci 打的) · skip npm install
+#   - 若 --offline-chromium-tar 传 · tar 解压到 ~/Library/Caches/ms-playwright/ · Playwright auto-detect
+#   - 完全跳过原代码里的 npm install + case DISTRO ... npx playwright install ... esac
+# 单一 anchor 短路 · 无嵌套括号闭合地雷.
+PATCH_7_NPM_AND_CHROMIUM = f"""install_node_deps() {{
+    {MARKER}: Catfish offline — 短路整个 npm + Playwright chromium 装 (dmg 已打 node_modules + chromium)
+    if [ -n "${{OFFLINE_SOURCE_DIR:-}}" ] || [ -n "${{OFFLINE_SOURCE_TAR:-}}" ]; then
+        if [ "$HAS_NODE" = false ]; then
+            log_info "Catfish offline: Node 未装 (unlikely with offline Node bundle), skip Node deps"
+            return 0
+        fi
+
+        # A. npm install skip if node_modules 已在
+        if [ -d "$INSTALL_DIR/node_modules" ]; then
+            log_info "Catfish offline: node_modules already present, skip npm install"
+            log_success "Node.js dependencies already installed (Catfish offline bundle)"
+        else
+            log_warn "Catfish offline: node_modules 缺 · fallback 原 npm install (需公网)"
+        fi
+
+        # B. Playwright chromium 解压 to ~/Library/Caches/ms-playwright/
+        if [ -n "${{OFFLINE_CHROMIUM_TAR:-}}" ] && [ -f "$OFFLINE_CHROMIUM_TAR" ]; then
+            _chromium_dest="$HOME/Library/Caches/ms-playwright"
+            log_info "Catfish offline: 解压 Playwright Chromium bundle 到 $_chromium_dest"
+            mkdir -p "$_chromium_dest"
+            if tar -xzf "$OFFLINE_CHROMIUM_TAR" -C "$_chromium_dest" 2>/dev/null; then
+                log_success "Playwright Chromium installed from Catfish offline bundle"
+            else
+                log_warn "Catfish offline: chromium tar 解压挂 (browser_* tools 首次用时会挂)"
+            fi
+        else
+            log_info "Catfish offline: 无 -offline-chromium-tar, skip Playwright Chromium 装 (browser_* tools 用不了)"
+        fi
+
+        return 0
+    fi
+
+    if [ "$HAS_NODE" = false ]; then
+        log_info "Skipping Node.js dependencies (Node not installed)"
+        return 0
+    fi
+"""
+
+
 # ─── 5 处 anchor (完全精确的 unique string) ────────────────
 
 
@@ -168,7 +254,7 @@ ANCHORS = {
     "param_help": (
         # BEFORE: -h|--help) case 行
         "        -h|--help)",
-        # AFTER: 前面加 3 个 --offline-* case
+        # AFTER: 前面加 5 个 --offline-* case (3 原 + 2 新 · node + chromium)
         PATCH_1_PARAM,
     ),
     "install_uv": (
@@ -201,6 +287,23 @@ ANCHORS = {
         '    cd "$INSTALL_DIR"',
         # AFTER: 多加一个 fi (关闭 offline if)
         PATCH_5_INSTALL_REPO_CLOSE,
+    ),
+    "install_node": (
+        # BEFORE: install_node 函数开头 + termux 检查
+        'install_node() {\n'
+        '    if [ "$DISTRO" = "termux" ]; then',
+        # AFTER: 前面加 offline Node tar 解压
+        PATCH_6_INSTALL_NODE,
+    ),
+    "install_node_deps": (
+        # BEFORE: install_node_deps 函数开头 + HAS_NODE=false skip
+        'install_node_deps() {\n'
+        '    if [ "$HAS_NODE" = false ]; then\n'
+        '        log_info "Skipping Node.js dependencies (Node not installed)"\n'
+        '        return 0\n'
+        '    fi\n',
+        # AFTER: 前面加 offline mode 短路整个 (npm + chromium)
+        PATCH_7_NPM_AND_CHROMIUM,
     ),
 }
 
@@ -266,11 +369,13 @@ def apply_patches(text: str) -> str:
 
 
 def verify_patched(patched_text: str) -> None:
-    """patched 输出 sanity check — 3 个 --offline-* 参数 + 5 处 marker 都在."""
+    """patched 输出 sanity check — 5 个 --offline-* 参数 + 7 处 marker 都在."""
     required_symbols = [
         "OFFLINE_SOURCE_DIR",
         "OFFLINE_UV",
         "OFFLINE_PYTHON_TAR",
+        "OFFLINE_NODE_TAR",       # BL-MAC-INSTALL-NODE-BUNDLE (7/17)
+        "OFFLINE_CHROMIUM_TAR",   # BL-MAC-INSTALL-CHROMIUM-BUNDLE (7/17)
         MARKER,
     ]
     for sym in required_symbols:
@@ -281,10 +386,10 @@ def verify_patched(patched_text: str) -> None:
             )
             raise SystemExit(3)
     marker_count = patched_text.count(MARKER)
-    # 5 处 anchor, 每处 1 marker
-    if marker_count < 5:
+    # PATCH_1 里 5 个 marker (每 offline 参数 case 各 1) + PATCH_2/3/4 各 1 + PATCH_5 (只 fi 关闭 · 0) + PATCH_6/7 各 1 = 10.
+    if marker_count < 10:
         print(
-            f"[ERROR] MARKER 期望 ≥5 处 (每 patch ≥1 处), 实际 {marker_count}.",
+            f"[ERROR] MARKER 期望 ≥10 处 (PATCH_1 5 个 · PATCH_2/3/4/6/7 各 1 · PATCH_5 关闭 fi 0 · BL-MAC-INSTALL-NODE/CHROMIUM-BUNDLE), 实际 {marker_count}.",
             file=sys.stderr,
         )
         raise SystemExit(3)
@@ -374,7 +479,7 @@ def main() -> int:
     verify_patched(patched)
 
     if args.check:
-        print("[OK] --check dry-run 全绿. patched 会加 5 处 marker + 3 处 --offline-* 参数.")
+        print("[OK] --check dry-run 全绿. patched 会加 ≥10 处 marker + 5 处 --offline-* 参数 (含 --offline-node-tar + --offline-chromium-tar · BL-MAC-INSTALL-NODE/CHROMIUM-BUNDLE).")
         return 0
 
     out_path = args.output or args.input.with_suffix(".sh.patched")
@@ -389,8 +494,10 @@ def main() -> int:
 
     print(
         f"     Marker: {MARKER}\n"
-        f"     Patches: 5 处 (param + install_uv + check_python + install_repo_open + install_repo_close)\n"
-        f"     dmg install handler 传 --offline-source-dir / --offline-uv / --offline-python-tar"
+        f"     Patches: 7 处 (param + install_uv + check_python + install_repo_open + install_repo_close + install_node + install_node_deps)\n"
+        f"     dmg install handler 传 --offline-source-dir / --offline-uv / --offline-python-tar / --offline-node-tar / --offline-chromium-tar\n"
+        f"     Node.js darwin binary tar 解压到 $HERMES_HOME/node/\n"
+        f"     npm install skip if node_modules 已在 · Playwright chromium 解压到 ~/Library/Caches/ms-playwright/"
     )
     return 0
 

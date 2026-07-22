@@ -1831,6 +1831,7 @@ def pre_tool_call_safety_check(*args, **kwargs):
 #   "拒绝"/"驳回"/"不同意"/"取消"   → /deny
 
 _APPROVE_ALIASES = {
+    # ── 无 / 版本 (员工口语) ─────────────────────────
     "批准": "/approve",
     "同意": "/approve",
     "通过": "/approve",
@@ -1844,11 +1845,22 @@ _APPROVE_ALIASES = {
     "总是允许": "/approve always",
     "本会话批准": "/approve session",
     "会话批准": "/approve session",
+    "本次会话": "/approve session",
+    "本次会话批准": "/approve session",
     "拒绝": "/deny",
     "驳回": "/deny",
     "不同意": "/deny",
     "取消": "/deny",
     "no": "/deny",
+    # ── 带 / 版本 (Bot 提示词里出现的 · 员工按提示复制) ─────────
+    # BL-P14-SLASH-ALIAS (7/19 鸿波 catch): Bot 提示 `/批准 本次会话` · 但老 P14 patch
+    # `if not raw.startswith("/")` 直接跳过 · 员工按提示发 · plugin 认不出 · 又弹审批.
+    # 且 · 老死代码 _P28_CMD_ALIASES 定义未使用 · 应 dedupe 到这里.
+    "/批准": "/approve",
+    "/批准 本次会话": "/approve session",
+    "/批准本次会话": "/approve session",
+    "/批准 执行": "/approve",  # Bot 提示词里"回复 /批准 执行 (单次)"
+    "/拒绝": "/deny",
 }
 
 
@@ -1870,21 +1882,67 @@ def _patch_p14_approve_chinese_alias() -> None:
     async def patched(self, event):
         try:
             raw = (event.text or "").strip()
-            if raw and not raw.startswith("/"):
-                # 拿 session_key — 借用 GatewayRunner `_session_key_for_source`
-                try:
-                    session_key = self._session_key_for_source(event.source)
-                except Exception:
-                    session_key = ""
-                # 只在有 pending approval 时触发 alias — 避免误吞正常 chat
-                if session_key and has_blocking_approval(session_key):
-                    alias = _APPROVE_ALIASES.get(raw.lower())
-                    if alias:
+            # BL-P14-SLASH-ALIAS (7/19 鸿波 catch WeChat "/批准 本次会话" 又弹审批):
+            # 老逻辑 `if raw and not raw.startswith("/")` 让**带 / 前缀直接跳过** ·
+            # 但 Bot outbound 提示词 (P28 line 3418) 就是 `/批准 本次会话` · 员工按
+            # 提示复制发 · 全被跳过 · hermes 不认 `/批准` slash · 当新 msg 触发 LLM ·
+            # LLM 想帮员工又调 execute_code · 又弹审批. 死循环.
+            #
+            # BL-P14-SLASH-UNCONDITIONAL (7/19 二次 catch): 更细分 · 带 / 是员工
+            # **明确意图** · 无论 pending 有没都翻译 (hermes 收 /approve 无 pending 会
+            # silent no-op · 不会像 /批准 那样 Unknown command). 不带 / 是中文口语 ·
+            # 需 has_blocking_approval gate 避免误吞正常聊天 ("好的"/"可以").
+            if raw:
+                alias = _APPROVE_ALIASES.get(raw.lower())
+                if alias:
+                    if raw.startswith("/"):
+                        # 明确 slash · 无条件翻译 · pending timeout 也能续命
                         logger.info(
-                            "P14 approve alias: '%s' → '%s' (session=%s)",
-                            raw, alias, session_key[:12],
+                            "P14 slash alias (unconditional): '%s' → '%s'", raw, alias
                         )
                         event.text = alias
+
+                        # BL-P25-SESSION-SCOPE-SUPPLEMENT (7/19 Task #25 深追):
+                        # `/approve session` hermes 内部 _handle_approve_command 只
+                        # resolve 当前 pending · **可能**没调 approve_session(session_key,
+                        # pattern_key). 补 · WeChat 场景 /批准 本次会话 · 我们**主动**
+                        # 调 approve_session · 把 "execute_code" pattern_key 加进
+                        # _session_approved · 后续同 pattern execute_code auto-approve ·
+                        # 不再弹.
+                        if alias == "/approve session":
+                            try:
+                                from tools.approval import approve_session
+                                sess = self._session_key_for_source(event.source)
+                                if sess:
+                                    approve_session(sess, "execute_code")
+                                    logger.info(
+                                        "P25 supplement: approve_session(%s, 'execute_code') "
+                                        "手工加进 _session_approved · 后续同 pattern 免批",
+                                        sess[:12],
+                                    )
+                            except Exception as e:  # noqa: BLE001
+                                logger.warning(
+                                    "P25 supplement: approve_session 手工调挂 (%s) · "
+                                    "hermes 内部 _handle_approve_command 应仍生效", e
+                                )
+                    else:
+                        # 不带 / 中文口语 · 走原 pending gate 避免误吞 chat
+                        try:
+                            session_key = self._session_key_for_source(event.source)
+                        except Exception:
+                            session_key = ""
+                        if session_key and has_blocking_approval(session_key):
+                            logger.info(
+                                "P14 casual alias (gated): '%s' → '%s' (session=%s)",
+                                raw, alias, session_key[:12],
+                            )
+                            event.text = alias
+                elif raw.startswith("/") and raw.lower().startswith(("/批准", "/拒绝")):
+                    # 带 / 中文 · 但字典没这 key · 打 log 找漏 · Bot 提示词与字典必须对齐
+                    logger.warning(
+                        "P14 unknown chinese slash: '%s' — 加进 _APPROVE_ALIASES 字典",
+                        raw[:60],
+                    )
         except Exception as e:  # noqa: BLE001
             logger.debug("P14 alias preprocess 异常 (ignored): %s", e)
         return await _orig_handle(self, event)
@@ -3427,16 +3485,16 @@ _P28_REPLACEMENTS = [
     ("Reason: ", "原因: "),
 ]
 
-# 中文别名 → 英文 : 真:** : : : : : : : : : : : : : : : : : : : : : : : : : : : : : : : : :
-# : : : 真:** : : : : : : : : : : : : : : : : : : : : : : : : : : : :
-_P28_CMD_ALIASES = {
-    "/批准": "/approve",
-    "/批准 本次会话": "/approve session",
-    "/批准本次会话": "/approve session",
-    "/拒绝": "/deny",
-    # 鸿波铁律: 砍 `/批准 永久` / `/永久批准` — : 真:** : : : : : : : : : : : : : : : : : :
-    # 真真真真真真真真:** : : : : : : :
-}
+# BL-P14-P28-DEDUPE (7/19 鸿波 catch): _P28_CMD_ALIASES 老死代码 — **定义但从未使用**.
+# grep 全项目 zero use. 老 P28 只做 outbound (WeixinAdapter.send 英文→中文), inbound
+# 命令翻译 (`/批准`→`/approve`) 事实上没接. 员工按 Bot 提示 `/批准 本次会话` 发, 走
+# hermes 原 slash dispatcher, 不认 `/批准` → 当 message 触发 LLM → LLM 又调
+# execute_code → 又弹审批. 死循环.
+#
+# 修法 · 死代码删 + 中文 slash alias dedupe 到 **_APPROVE_ALIASES** (line 1833) ·
+# 由 P14 patch 统一处理 (P14 wrap GatewayRunner._handle_message · 覆盖所有平台
+# inbound · 不只 WeChat). P14 patched 逻辑放宽 · 支持带 / 前缀. 见 line 1870+ 修.
+# _P28_CMD_ALIASES = {} — 死代码删净.
 
 
 def _translate_hermes_zh(text):
