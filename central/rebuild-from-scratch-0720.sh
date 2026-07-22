@@ -212,6 +212,9 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
 
             echo ""
             echo "--- 3.$arch · 打完整 tar → $(basename "$OUT_TAR") ---"
+            # P3.5.79+ (7/23 catch): 每循环前清 images/ · 别累加 · 否则第 2 arch
+            # 循环开始时 images/ 里还有第 1 arch 的 tar · 一起打进 FULL · 大 400M+.
+            rm -f "$TEMP_IMAGES"/*.tar.gz
             cp "$SRC_TAR" "$TEMP_IMAGES/"
 
             # 打 tar (从 repo 根 · tar 里路径 delivery/dahua-poc/...)
