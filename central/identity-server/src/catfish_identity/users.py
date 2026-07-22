@@ -726,6 +726,67 @@ class UserRegistry:
         user.must_change_password = force_change
         return True, ""
 
+    async def change_password(
+        self,
+        email: str,
+        *,
+        old_password: str,
+        new_password: str,
+    ) -> tuple[bool, str]:
+        """BL-SELF-CHANGE-PASSWORD (7/20 鸿波 catch 达华 POC 员工无自主改密):
+        员工自己改密码. 需验 old_password + hash new_password + 设
+        must_change_password=False (首次登录改完不再强制).
+
+        跟 reset_password (admin 干) 区别: 需 old_password verify. audit
+        标 action='self_change_password' 便区分 (admin reset vs 员工自主).
+        """
+        from .db import get_pool  # noqa: PLC0415
+        import json as _json  # noqa: PLC0415
+
+        email = email.strip().lower()
+        user = self._users.get(email)
+        if user is None or user.deleted_at:
+            return False, f"用户 {email} 不存在"
+
+        # 1. verify old_password
+        verified = self.verify_password(email, old_password)
+        if verified is None:
+            return False, "旧密码错"
+
+        # 2. 校验 new_password 强度
+        if not new_password or len(new_password) < 8:
+            return False, "新密码至少 8 位"
+        if new_password == old_password:
+            return False, "新密码不能与旧密码相同"
+
+        # 3. hash + 写 db
+        new_hash = bcrypt.hashpw(
+            new_password.encode("utf-8"), bcrypt.gensalt(rounds=12)
+        ).decode("utf-8")
+
+        pool = await get_pool()
+        if pool is not None:
+            try:
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE users SET password_hash = $1, password_changed_at = NOW(), "
+                        "must_change_password = FALSE WHERE email = $2",
+                        new_hash, email,
+                    )
+                    await conn.execute(
+                        "INSERT INTO users_audit (ts_ms, action, target_email, by_email, meta) "
+                        "VALUES ((EXTRACT(EPOCH FROM NOW()) * 1000)::BIGINT, "
+                        "'self_change_password', $1, $2, $3::jsonb)",
+                        email, email, _json.dumps({"self_service": True}),
+                    )
+            except Exception as e:
+                return False, f"PG 写失败: {e}"
+
+        # 4. 更新内存
+        user.password_hash = new_hash
+        user.must_change_password = False
+        return True, ""
+
     async def list_audit(self, limit: int = 100) -> list[dict]:
         """查 users_audit 表 (admin 看历史). PG only."""
         from .db import get_pool  # noqa: PLC0415

@@ -340,6 +340,100 @@ def make_router(
 
         return {"sub": sub, **user.to_oidc_claims()}
 
+    # ============================================================
+    # BL-SELF-CHANGE-PASSWORD (7/20 鸿波 catch): 员工自主改密码
+    # ============================================================
+    # POST /me/password
+    # Authorization: Bearer <access_token>
+    # body: {"old_password": "...", "new_password": "..."}
+    #
+    # 员工首次登录用 admin 给的临时密码 · 需自主改.
+    # must_change_password=true 触发前端弹强制改密 modal.
+    # ============================================================
+
+    @router.post("/me/password")
+    async def change_own_password(request: Request) -> dict:
+        """员工自主改密码 · 需验旧密码 + 强度 8 位."""
+        # 1. verify access_token · 拿 sub (员工 email)
+        auth = request.headers.get("authorization", "")
+        if not auth.lower().startswith("bearer "):
+            raise HTTPException(
+                status_code=401, detail="missing or malformed Authorization header"
+            )
+        token_str = auth[7:].strip()
+        try:
+            payload = jwt.decode(
+                token_str,
+                signer._public_key,  # noqa: SLF001
+                algorithms=["RS256"],
+                audience=None,
+                options={"verify_aud": False},
+            )
+        except jwt.InvalidTokenError as e:
+            raise HTTPException(status_code=401, detail=f"invalid token: {e}") from e
+
+        sub = payload.get("sub", "")
+        if not sub or ":" in sub:
+            # service token (sub=client:hermes-cli) 不能改密 · 拒
+            raise HTTPException(
+                status_code=403, detail="仅员工可改密码 · service token 不支持"
+            )
+
+        # 2. parse body
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="JSON body required")
+
+        old_password = str(body.get("old_password", "")).strip()
+        new_password = str(body.get("new_password", "")).strip()
+
+        if not old_password or not new_password:
+            raise HTTPException(
+                status_code=400,
+                detail="old_password 和 new_password 都必填"
+            )
+
+        # 3. 调 UserRegistry.change_password
+        # 严守军规 7/20: registry 就是 UserRegistry 实例 · 不是 wrapper ·
+        # 无 registry._users_store 层级 (verify_password / reset_password /
+        # find / list_users 都直接挂 registry 上, users.py:68 class UserRegistry).
+        # 之前 getattr _users_store 是瞎猜的抽象.
+        ok, msg = await registry.change_password(
+            email=sub,
+            old_password=old_password,
+            new_password=new_password,
+        )
+        if not ok:
+            # 400 for validation errors (weak password, wrong old) · 500 for db
+            code = 400 if "至少" in msg or "错" in msg or "相同" in msg else 500
+            raise HTTPException(status_code=code, detail=msg)
+
+        # 4. 军规 7/20 鸿波 catch "改完密码不重新登录" — revoke user 所有活
+        # refresh_token. 用法与 admin lock_user 完全对齐 (refresh_tokens.py:293
+        # revoke_all_for_sub). 语义:
+        #   - refresh_token 已 revoke · 员工端 access_token 过期后 refresh 拿新
+        #     token 就 401 · Companion 走 auth_login 弹 SSO 输新密码
+        #   - 未过期的 access_token (JWT stateless · TTL 1h) 剩余时间内还有效 ·
+        #     但下次 refresh 时挂 · 攻击者持泄露密码 + 已抓到 refresh_token 场
+        #     景下能续 30 天 (refresh_token TTL) 的问题被堵住
+        # 前端应在改密成功响应后立即调 auth_logout · 主动清 Keychain · 不用等
+        # access_token 自然过期
+        revoked_count = 0
+        if refresh_token_store is not None:
+            revoked_count = refresh_token_store.revoke_all_for_sub(sub)
+
+        logger.info(
+            "self_change_password OK: user=%s (must_change_password 清 · "
+            "revoked %d refresh_tokens)",
+            sub, revoked_count,
+        )
+        return {
+            "success": True,
+            "message": "密码已修改 · 请用新密码重新登录",
+            "revoked_sessions": revoked_count,
+        }
+
     return router
 
 
