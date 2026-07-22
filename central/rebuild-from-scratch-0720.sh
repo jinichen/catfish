@@ -244,10 +244,17 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
             cp "$SRC_TAR" "$TEMP_IMAGES/"
 
             # 打 tar (从 repo 根 · tar 里路径 delivery/dahua-poc/...)
+            # P3.5.79+ (7/23 鸿波 catch '最简 · 多余不要 · 缺的必带'):
+            # 排 · docs (客户自己写 SOP) · README (太长 · setup.sh 里已注释)
+            # 保 · companion (员工 dmg 分发) · identity-server/config (users.yaml.example
+            #     必带 · setup.sh cp 到 users.yaml) · llm-gateway/config (models.yaml
+            #     + roles.yaml 必带 · gateway mount 用)
             cd "$REPO_ROOT"
             tar czf "$OUT_TAR" \
                 --exclude='delivery/dahua-poc/certs' \
                 --exclude='delivery/dahua-poc/.env' \
+                --exclude='delivery/dahua-poc/docs' \
+                --exclude='delivery/dahua-poc/README.md' \
                 delivery/dahua-poc/
             cd "$CENTRAL"
 
