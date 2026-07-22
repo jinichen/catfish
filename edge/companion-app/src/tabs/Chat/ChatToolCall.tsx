@@ -69,10 +69,19 @@ export default function ChatToolCall({ call }: Props) {
   //   - "approval_pending": true              ← JSON bool field
   //   - "Asking the user for approval"        ← message text
   //   - LLM 翻译"授权批准" / "请批准"            ← 中文兜底
+  //
+  // BL-P27-STATUS-PENDING-FIX (7/19 12:52 鸿波 catch "切走切回按钮才出"):
+  //   老逻辑要求 `call.status === "done" || "error"` · 但 hermes 返 approval
+  //   pending 时 · tool call status 常是 "pending" / "running" (sandclock 图标) ·
+  //   老 gate 直接跳过 · 按钮不弹. 员工切走切回 · React remount · call.status 已
+  //   变 (timeout→error) 才触发判定. 修 · 移除 status gate · 只要 resultStr 含
+  //   pattern 就显 · 因为 pending_approval pattern 只在 hermes approval 阶段返 ·
+  //   done/error 时 result 是执行结果不含此 pattern.
+  // BL-P27-CN-PATTERN (7/19 鸿波 catch WeChat 微信 outbound 中文): 加中文 pattern
+  //   `等审批` / `等待.*批准` / `等待你批准` · P28 中文化后 Bot 用这些词.
   const isApprovalPending =
-    (call.status === "done" || call.status === "error") &&
     typeof resultStr === "string" &&
-    /pending_approval|approval_pending|Asking the user for approval|授权批准|请.{0,4}批准/i.test(
+    /pending_approval|approval_pending|Asking the user for approval|授权批准|请.{0,4}批准|等审批|等待.{0,4}批准|正在等待.{0,4}批准/i.test(
       resultStr,
     );
 
