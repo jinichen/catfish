@@ -276,5 +276,118 @@ pub fn write_server_config(
         let _ = fs::set_permissions(&memplugin, perms);
     }
 
+    // 3. ~/.hermes/.env: CATFISH_GATEWAY_URL
+    //
+    // BL-HERMES-ENV-SYNC (7/18 鸿波 catch): catfish-xcatfish-user plugin (跑在 hermes 内)
+    // 从 env `CATFISH_GATEWAY_URL` 读 gateway URL (plugin.py:78, memory_enforce.py:104).
+    // 面板之前只写 companion.yaml + memory_plugin.yaml (comment 里说 "plugin 读
+    // memory_plugin.yaml" 是 stale — plugin 早已 refactor 用 env), 员工改面板改 IP
+    // 后 hermes plugin 仍用**老 env** 或 **default 127.0.0.1:8999**, memory/role 相关
+    // 调错 gateway.
+    //
+    // 加写 hermes .env 保 line-level replace, 不影响别的 env vars (API_SERVER_KEY /
+    // OPENAI_API_KEY 等). hermes 重启后 load_hermes_dotenv 读新值.
+    let hermes_env_path = home
+        .parent()
+        .ok_or_else(|| "home 目录无 parent (不该发生)".to_string())?
+        .join(".hermes")
+        .join(".env");
+    if hermes_env_path.exists() {
+        // 已有 .env: line-level replace 或追加
+        let old = fs::read_to_string(&hermes_env_path)
+            .map_err(|e| format!("读 {hermes_env_path:?} 失败: {e}"))?;
+        let new_text = replace_or_append_env_line(&old, "CATFISH_GATEWAY_URL", url_clean);
+        fs::write(&hermes_env_path, new_text)
+            .map_err(|e| format!("写 {hermes_env_path:?} 失败: {e}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&hermes_env_path, fs::Permissions::from_mode(0o600));
+        }
+    } else {
+        // ~/.hermes/.env 不存在 (hermes 未装或非标 layout) — silent skip.
+        // 员工装 dmg 会走 hermes install, .env 自动生成; 此时 write_server_config
+        // 若在 install 前跑, 跳过合理. hermes install 后员工再点"保存"就会写入.
+        log::debug!(
+            "[server_config] {hermes_env_path:?} 不存在, 跳过 CATFISH_GATEWAY_URL 写入"
+        );
+    }
+
+    // BL-HERMES-JWT-SYNC (7/19 Task #15 鸿波): 面板改 IP 时 · 顺手 sync JWT 3 处
+    // (~/.hermes/.env OPENAI_API_KEY + config.yaml model.api_key + auth.json reset).
+    // hermes daemon 用老 JWT 调新 IP gateway → 401 → WeChat 显英文. 军规大坑.
+    // 7/19 前只写 CATFISH_GATEWAY_URL (1 处) · JWT 3 处漏 · 员工 1 天后 100% 撞英文.
+    if let Some(jwt) = crate::services::oauth::current_access_token() {
+        if let Err(e) = crate::services::hermes_jwt_sync::sync_all(&jwt) {
+            log::warn!(
+                "[server_config] hermes_jwt_sync 挂 (不阻塞面板保存): {e:#}"
+            );
+        }
+    } else {
+        log::debug!(
+            "[server_config] current_access_token 空 (未 SSO 登录) · 跳过 hermes JWT sync"
+        );
+    }
+
     Ok(())
+}
+
+/// 保 line-level replace / 追加一个 KEY=VALUE 到 dotenv 文本. 保留 comments + 别的 vars.
+///
+/// - 若原文有 `^KEY=...` 行, 整行替换 (KEY=new_value)
+/// - 若原文无, 追加到末尾 (前面确保有换行)
+///
+/// 不 escape value (VALUE 是 URL, 内部无引号 / 换行, safe).
+fn replace_or_append_env_line(text: &str, key: &str, value: &str) -> String {
+    let mut lines: Vec<String> = text.lines().map(|s| s.to_string()).collect();
+    let mut replaced = false;
+    let prefix = format!("{key}=");
+    for line in lines.iter_mut() {
+        if line.starts_with(&prefix) {
+            *line = format!("{key}={value}");
+            replaced = true;
+            break;
+        }
+    }
+    if !replaced {
+        // 追加 · 保底 · trailing newline 存在
+        if !text.is_empty() && !text.ends_with('\n') {
+            lines.push(String::new());
+        }
+        lines.push(format!("{key}={value}"));
+    }
+    let mut out = lines.join("\n");
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests_env_line {
+    use super::replace_or_append_env_line;
+
+    #[test]
+    fn replace_existing_key() {
+        let input = "OTHER=1\nCATFISH_GATEWAY_URL=http://old\nMORE=2\n";
+        let out = replace_or_append_env_line(input, "CATFISH_GATEWAY_URL", "http://new");
+        assert!(out.contains("CATFISH_GATEWAY_URL=http://new"));
+        assert!(!out.contains("http://old"));
+        assert!(out.contains("OTHER=1"));
+        assert!(out.contains("MORE=2"));
+    }
+
+    #[test]
+    fn append_when_absent() {
+        let input = "OTHER=1\n";
+        let out = replace_or_append_env_line(input, "CATFISH_GATEWAY_URL", "http://new");
+        assert!(out.contains("OTHER=1"));
+        assert!(out.ends_with("CATFISH_GATEWAY_URL=http://new\n"));
+    }
+
+    #[test]
+    fn append_when_empty() {
+        let out = replace_or_append_env_line("", "CATFISH_GATEWAY_URL", "http://new");
+        assert_eq!(out, "CATFISH_GATEWAY_URL=http://new\n");
+    }
 }

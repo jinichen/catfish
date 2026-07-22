@@ -10,9 +10,13 @@
  *   - dev token: server admin 配置 + .env 自动生成
  *   - provider keys: server 端配 (OpenAI/DeepSeek/...)
  *
- * 不 hot-reload: yaml 文件 plugin/Companion 启动时读一次. 改完要:
- *   - 重启 Companion (前端读 companion.yaml)
- *   - 重启 hermes gateway (plugin 读 memory_plugin.yaml)
+ * 不 hot-reload: yaml/.env 文件 plugin/Companion 启动时读一次. 改完要:
+ *   - 重启 Companion (前端读 companion.yaml endpoints.gateway_url + oidc.issuer)
+ *   - 重启 hermes gateway (catfish-xcatfish-user plugin 读 ~/.hermes/.env CATFISH_GATEWAY_URL)
+ *
+ * BL-HERMES-ENV-SYNC (7/18): write_server_config 已加写 ~/.hermes/.env CATFISH_GATEWAY_URL.
+ * 之前 comment 说 "plugin 读 memory_plugin.yaml" 是 stale (plugin 早已 refactor 用 env),
+ * 面板改 IP 后 hermes plugin 用老 env / default 127 · memory/role 走错服务器.
  */
 
 import { useEffect, useState } from "react";
@@ -122,7 +126,10 @@ export default function ServerConfigCard() {
           marginBottom: 12,
         }}
       >
-        客户端直连的 3 个 server. 改完重启 hermes-gateway + Companion 生效.
+        客户端直连的 2 个 server (gateway + identity · P3.4.1 6/13 secret-broker 已删).
+        改完必须重启 hermes gateway + Companion 生效 (BL-HERMES-ENV-SYNC 7/18):
+        <br />· hermes gateway 让 catfish plugin 读 ~/.hermes/.env 新 CATFISH_GATEWAY_URL;
+        <br />· Companion 让前端读 companion.yaml 新 endpoints (进程内 OnceLock 只读一次).
       </div>
 
       {/* gateway URL */}
@@ -193,12 +200,15 @@ export default function ServerConfigCard() {
             color: "var(--catfish-text)",
           }}
         >
-          ✓ 已保存到 ~/.catfish/companion.yaml + memory_plugin.yaml.
+          ✓ 已保存到 ~/.catfish/companion.yaml + memory_plugin.yaml + ~/.hermes/.env.
           <br />
-          重启生效:
+          重启生效 (BL-HERMES-ENV-SYNC 7/18):
           <ol style={{ margin: "6px 0 0 18px", padding: 0 }}>
             <li>
-              终端跑: <code style={inlineCode}>hermes gateway stop && hermes gateway start</code>
+              终端跑 <code style={inlineCode}>hermes gateway stop && hermes gateway start</code>
+              <span style={{ color: "var(--catfish-text-muted)", marginLeft: 4 }}>
+                (catfish plugin 读 ~/.hermes/.env CATFISH_GATEWAY_URL)
+              </span>
             </li>
             <li>关掉 Companion 重新打开 (前端 yaml 进程内只读一次)</li>
           </ol>
