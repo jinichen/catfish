@@ -1,0 +1,36 @@
+# Catfish · 达华 POC · roles.yaml · 阿里云百炼 · 单 model · 7/20
+#
+# ═══════════════════════════════════════════════
+#  只有 1 个 model · qwen3.7-plus (本身支持视觉多模态)
+# ═══════════════════════════════════════════════
+#
+# 达华 POC LLM: 阿里云百炼 qwen3.7-plus
+#   - 文本对话 ✓
+#   - 视觉多模态 ✓ (员工发图/截图/OCR 直接同一 model 处理)
+#   - 工具调用 ✓
+#   - 128K 上下文 ✓
+#
+# multimodal_guard 指向同一 model — gateway 内部 vision 切换机制不再切 ·
+# 因为 chat_default 本身 supports_vision=true. models.yaml 配 vision 支持.
+#
+# 数据合规: 阿里云百炼是国内 · 达华客户 IT 已签 DPA.
+
+roles:
+  # 全场景 · 文本 + 视觉 · picker (Companion 桌面) 和 auto (WeChat 手机) 都走此
+  chat_default: catfish-public-qwen-plus
+
+  # 多模态守护 · 指向同 model · 员工发图 gateway 不切模型 (chat_default 已支持视觉)
+  multimodal_guard: catfish-public-qwen-plus
+
+# fallback_chain 删 · 无兜底
+
+# RBAC 默认允许 · 员工只此一选
+default_allowed_models_per_role:
+  employee:
+    - chat_default
+  manager:
+    - chat_default
+  admin:
+    - chat_default
+  sysadmin:
+    - chat_default
