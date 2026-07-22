@@ -83,7 +83,9 @@ services:
     build:
       context: ./llm-gateway
       dockerfile: Dockerfile
-    image: catfish-gateway:0.1.0
+    # BL-DAHUA-POC-IMAGE (7/18): 0.1.1 加 orjson (Task #68) · Companion audience 双值兼容 (Task #66) ·
+    # 及 pyproject.toml orjson>=3.10 依赖. rebuild + docker save 分发达华 IT.
+    image: catfish-gateway:0.1.1
     container_name: catfish-gateway
     restart: unless-stopped
     depends_on:
@@ -105,7 +107,10 @@ services:
       # 7/15 BL-OIDC-ISSUER fix: 跟 identity CATFISH_IDENTITY_ISSUER 一致.
       # 用 host.docker.internal 让浏览器 + gateway container 双向可达.
       CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://host.docker.internal:8998}
-      CATFISH_OIDC_AUDIENCE: ${CATFISH_OIDC_AUDIENCE:-catfish-gateway}
+      # BL-COMPANION-AUTH (7/18 鸿波 catch Task #66): Companion Rust auth_get_access_token
+      # 实际返 id_token (aud=catfish-companion, OIDC 惯例), 不是 access_token. gateway 需
+      # 双 audience 才接. 默认单值 catfish-gateway 会拒 Companion id_token · 员工 chat 401.
+      CATFISH_OIDC_AUDIENCE: ${CATFISH_OIDC_AUDIENCE:-catfish-companion,catfish-gateway}
       # facts_router 文件落地 (BL-Q3-FACT-PG-MIGRATE 之前的临时方案)
       CATFISH_FACTS_DIR: ${CATFISH_FACTS_DIR:-/home/catfish/.catfish/facts}
       # API keys (公网 LLM)
