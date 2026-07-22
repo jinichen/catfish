@@ -21,6 +21,7 @@ import {
 } from "../store/auto_continue";  // 5/13 鸿波"长程任务咋办" — gateway 删 BL-FIX23 后客户端补
 import { streamChat, type OpenAITool } from "../lib/chat";
 import { checkPromiseOnly } from "../lib/promiseCheck";
+import { config } from "../lib/env";
 import * as streamRegistry from "../lib/streamRegistry";
 import {
   toolBridgeCallTool,
@@ -608,6 +609,20 @@ export function useChat(_initialModel: string) {
       };
       const requestMessages = [...useChatStore.getState().messages, userMsg];
       addMessage(userMsg);
+      // BL-CHAT-USER-PERSIST (7/18 鸿波 catch "切走再切回 user 气泡消失"): 6/21
+      // P3.5.54 撤销 Companion 写 user msg · 假设 chat 走 hermes 8642 · hermes 独 write.
+      // 但员工场景 hermes_api.enabled=false (Task #60) · chat 走 gateway 直连 (chat.ts:222) ·
+      // hermes 8642 完全没参与 · user 消息**无人 write** · state.db 只 assistant.
+      //
+      // 铁证 (7/18): SELECT role FROM messages WHERE session_id LIKE '20260718_105516_%'
+      //   → 5 条全 assistant · 用户发的 hi/hello/test 全丢.
+      //
+      // 修法: 分支 · 若 useHermes=false, Companion 补 persist user msg (回到 P3.5.54 前
+      // 的行为但只在 gateway 直连场景). useHermes=true 时保持 skip (让 hermes 独 write,
+      // 避免 dup). sessionIdForStream 在 send 开头 ensureSessionId 已 lock.
+      if (!config.useHermes && sessionIdForStream) {
+        void persistMessage(userMsg, sessionIdForStream);
+      }
       // P3.5.54 (6/21 鸿波 catch "UI 双显"): 真因——hermes v0.17 自己写 user msg.
       //
       // 验证 (state.db dump):
