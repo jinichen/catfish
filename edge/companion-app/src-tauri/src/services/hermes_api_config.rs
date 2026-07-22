@@ -161,6 +161,25 @@ pub fn hermes_api_auth_header() -> Option<String> {
     cfg.key.as_ref().map(|k| format!("Bearer {}", k))
 }
 
+/// BL-WECHAT-QR-HERMES-STANDALONE (7/18 鸿波 catch Task #1 后 WeChat 404):
+/// hermes 独占功能 (WeChat QR 绑定 / catfish plugin memory) 走 /api/platforms/* namespace
+/// 是 hermes 8642 独占 route · Task #60 后 hermes_api.enabled=false 走 gateway 直连时
+/// caller 找 gateway 挂 404 (gateway 无 platforms 路由). 需要**无视 enabled**返 auth ·
+/// 只要 key 有就返 Bearer · caller 自己配 URL 强 localhost:8642.
+///
+/// 语义: hermes 独占 endpoint 用. chat 主链路仍走 hermes_api_auth_header (受 enabled 管).
+#[tauri::command]
+pub fn hermes_api_auth_header_forced() -> Option<String> {
+    let cfg = hermes_api_config();
+    cfg.key.as_ref().map(|k| format!("Bearer {}", k))
+}
+
+/// 配套: 无视 enabled 返 hermes URL. hermes 独占 endpoint (WeChat QR 等) 强用.
+#[tauri::command]
+pub fn hermes_api_url_forced() -> String {
+    hermes_api_config().url.clone()
+}
+
 #[derive(Debug, serde::Serialize)]
 pub struct HermesApiConfigPublic {
     pub enabled: bool,

@@ -32,8 +32,8 @@
  * - poll 200 + _warning 字段 → 临时网络抖动, UI 不动让它下次再 poll (等到 wait/expired)
  */
 
-import { config } from "./env";
-import { fetchWithAuth } from "./me";
+import { invoke } from "@tauri-apps/api/core";
+import { fetchViaProxy } from "./http_proxy";
 
 export interface QrStartResponse {
   qrcode: string;
@@ -51,17 +51,40 @@ export interface QrPollResponse {
   _warning?: string;
 }
 
-function hermesBase(): string {
-  // BL-AUTH-DECOUPLE-A5 (5/19): hermes 模式下 backendUrl 已经是 hermes:8642.
-  // 没启 hermes 模式 → 这俩端点没法用 (走 gateway 不存在). 调用方自己判断.
-  return config.backendUrl.replace(/\/+$/, "");
+/** BL-WECHAT-QR-HERMES-STANDALONE (7/18 鸿波 catch Task #1 后 WeChat 404):
+ *
+ * /api/platforms/* 是 hermes 8642 独占 route (gateway 无这段路由). Task #60 关
+ * hermes_api.enabled 让 chat 走 gateway 直连后, config.backendUrl 切 gateway,
+ * WeChat URL 拼成 gateway/api/platforms/... → 404.
+ *
+ * 修: WeChat QR **无视 useHermes** 强走 hermes 8642. 从 Rust 端 hermes_api_url_forced
+ * 拿 hermes URL, hermes_api_auth_header_forced 拿 Bearer key. 这俩 command 无视
+ * enabled 只看 key 有没. 若 key 缺 (hermes 未配置) → 显式报错让 UI 提示员工.
+ *
+ * chat 主链路仍走 chat.ts:222 useHermes 分叉, 不影响.
+ */
+async function hermesForcedBase(): Promise<string> {
+  const url = await invoke<string>("hermes_api_url_forced");
+  return url.replace(/\/+$/, "");
+}
+
+async function hermesForcedAuthHeader(): Promise<string> {
+  const h = await invoke<string | null>("hermes_api_auth_header_forced");
+  if (!h) {
+    throw new Error(
+      "hermes API key 缺 (~/.catfish/companion.yaml hermes_api.key). " +
+        "WeChat 绑定需要 hermes 8642 · 让 IT 配 companion.yaml + ~/.hermes/.env 里的 API_SERVER_KEY.",
+    );
+  }
+  return h;
 }
 
 export async function wechatQrStart(): Promise<QrStartResponse> {
-  const resp = await fetchWithAuth(
-    `${hermesBase()}/api/platforms/wechat/qr_login/start`,
-    { method: "POST" },
-  );
+  const [base, auth] = await Promise.all([hermesForcedBase(), hermesForcedAuthHeader()]);
+  const resp = await fetchViaProxy(`${base}/api/platforms/wechat/qr_login/start`, {
+    method: "POST",
+    headers: { Authorization: auth },
+  });
   if (!resp.ok) {
     const body = await resp.text().catch(() => "");
     throw new Error(`start 失败 ${resp.status}: ${body.slice(0, 200)}`);
@@ -70,10 +93,9 @@ export async function wechatQrStart(): Promise<QrStartResponse> {
 }
 
 export async function wechatQrPoll(qrcode: string): Promise<QrPollResponse> {
-  const url = `${hermesBase()}/api/platforms/wechat/qr_login/poll?qrcode=${encodeURIComponent(
-    qrcode,
-  )}`;
-  const resp = await fetchWithAuth(url);
+  const [base, auth] = await Promise.all([hermesForcedBase(), hermesForcedAuthHeader()]);
+  const url = `${base}/api/platforms/wechat/qr_login/poll?qrcode=${encodeURIComponent(qrcode)}`;
+  const resp = await fetchViaProxy(url, { headers: { Authorization: auth } });
   if (!resp.ok) {
     const body = await resp.text().catch(() => "");
     throw new Error(`poll 失败 ${resp.status}: ${body.slice(0, 200)}`);

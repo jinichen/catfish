@@ -827,6 +827,9 @@ pub fn run() {
             services::hermes_api_config::hermes_api_config_get,
             // BL-COMPANION-CHAT-SWITCH-TO-HERMES (5/19 Phase 2-2B): chat.ts 走 hermes 时拿 auth header
             services::hermes_api_config::hermes_api_auth_header,
+            // BL-WECHAT-QR-HERMES-STANDALONE (7/18): hermes 独占 endpoint 强用 (无视 enabled)
+            services::hermes_api_config::hermes_api_auth_header_forced,
+            services::hermes_api_config::hermes_api_url_forced,
             // BL-E16 关系建立 (五一 sprint 5/3 晚): "鲶鱼对你的印象" 透明 + 清空
             commands::relation::relation_summary,
             commands::relation::relation_forget,
