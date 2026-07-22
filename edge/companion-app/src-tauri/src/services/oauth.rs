@@ -538,6 +538,16 @@ pub async fn try_refresh_session(cfg: &OidcConfig) -> Result<AuthSession> {
         "OAuth refresh OK: user={} new exp={} (远端 catfish-identity rotation)",
         session.email, expires_at,
     );
+
+    // BL-HERMES-JWT-SYNC (7/19 Task #15 鸿波): silent refresh 完 · 同步 hermes 3 处.
+    // 不 sync = hermes daemon 继续用老 JWT · 老 JWT 30 min 后过期 · 员工撞英文.
+    // 3 处: ~/.hermes/.env OPENAI_API_KEY / config.yaml model.api_key / auth.json reset.
+    if let Err(e) = crate::services::hermes_jwt_sync::sync_all(&token_resp.access_token) {
+        log::warn!(
+            "[oauth-refresh] hermes_jwt_sync 挂 (不阻塞 refresh 成功): {e:#}"
+        );
+    }
+
     Ok(session)
 }
 
