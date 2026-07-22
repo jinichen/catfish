@@ -313,6 +313,101 @@ pub fn run() {
                 }
             }
 
+            // BL-HERMES-JWT-STARTUP-SYNC (7/19 Task #15 鸿波): 启动时同步 hermes JWT 3 处.
+            //
+            // 为啥必要: 达华员工 · 装完 Companion · 关机 · 第二天开机 · Companion 起 ·
+            // hermes daemon 也起 (launchd auto-start) · **但 hermes daemon 用的
+            // ~/.hermes/.env OPENAI_API_KEY 是老 JWT** (可能过期). WeChat 立刻显英文.
+            // 修 · 启动 30 秒后 · 走 ensure_fresh_access_token → 若 exp<5min 自动 refresh ·
+            // 然后 sync 3 处. 员工完全无感.
+            //
+            // 等 30 秒是给 · hermes install 完 (首启 offline install ~10min · 不首启秒过) +
+            // OAuth session 从 keyring load 完. 保守 · 免 race.
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            {
+                tauri::async_runtime::spawn(async {
+                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                    if let Some(jwt) = services::oauth::ensure_fresh_access_token().await {
+                        if let Err(e) = services::hermes_jwt_sync::sync_all(&jwt) {
+                            log::warn!("[startup-jwt-sync] hermes_jwt_sync 挂: {e:#}");
+                        } else {
+                            log::info!("[startup-jwt-sync] ✓ hermes config.yaml + auth.json 同步完 (启动 +30s)");
+                        }
+                    } else {
+                        log::debug!("[startup-jwt-sync] 未 SSO 登 (access_token 空) · skip");
+                    }
+
+                    // BL-P26-SERVICE-TOKEN-STARTUP (7/19 Task #26): 启动时 · 拿 30 天
+                    // service token 塞 ~/.hermes/.env OPENAI_API_KEY. 老 sync_all 用
+                    // access_token 覆盖 env (TTL 1h) · Companion 关闭无 refresh 就
+                    // 过期 · hermes 401. 现在 env 独立 · 30 天 service token · 稳.
+                    let identity_url = match services::oauth::OidcConfig::load() {
+                        Ok(cfg) => cfg.issuer,
+                        Err(e) => {
+                            log::debug!(
+                                "[startup-service-token-sync] OidcConfig::load 挂 · skip: {e:#}"
+                            );
+                            return;
+                        }
+                    };
+                    if let Err(e) = services::hermes_jwt_sync::sync_service_token_to_env(
+                        &identity_url,
+                    ).await {
+                        log::warn!(
+                            "[startup-service-token-sync] service token 塞 env 挂: {e:#}"
+                        );
+                    } else {
+                        log::info!(
+                            "[startup-service-token-sync] ✓ hermes/.env OPENAI_API_KEY = 30 天 service token"
+                        );
+                    }
+                });
+
+                // BL-HERMES-JWT-PERIODIC-SYNC (7/19 Task #15 鸿波): 每 25 min 定时同步.
+                //
+                // 为啥 25 min: id_token/access_token TTL 1h. 25 min < 1h · 保证在 access
+                // 快过期前 · ensure_fresh_access_token 内部会 refresh (< 5 min 剩量触发) ·
+                // 然后 sync config.yaml. Companion 关 · env 30 天 service token 兜底.
+                tauri::async_runtime::spawn(async {
+                    let period = std::time::Duration::from_secs(25 * 60);
+                    loop {
+                        tokio::time::sleep(period).await;
+                        if let Some(jwt) = services::oauth::ensure_fresh_access_token().await {
+                            if let Err(e) = services::hermes_jwt_sync::sync_all(&jwt) {
+                                log::warn!("[periodic-jwt-sync] hermes_jwt_sync 挂: {e:#}");
+                            } else {
+                                log::debug!("[periodic-jwt-sync] ✓ hermes config.yaml 同步 (25min tick)");
+                            }
+                        }
+                    }
+                });
+
+                // BL-P26-SERVICE-TOKEN-PERIODIC (7/19 Task #26): 每 25 天定时 refresh
+                // service token · 提前 5 天覆盖 · 免 30 天 exp 撞. 达华员工连用 3 月
+                // 也不撞 401.
+                tauri::async_runtime::spawn(async {
+                    let period = std::time::Duration::from_secs(25 * 24 * 60 * 60);
+                    loop {
+                        tokio::time::sleep(period).await;
+                        let identity_url = match services::oauth::OidcConfig::load() {
+                            Ok(cfg) => cfg.issuer,
+                            Err(_) => continue,
+                        };
+                        if let Err(e) = services::hermes_jwt_sync::sync_service_token_to_env(
+                            &identity_url,
+                        ).await {
+                            log::warn!(
+                                "[periodic-service-token-sync] 挂 (env 里旧 token 还有效): {e:#}"
+                            );
+                        } else {
+                            log::info!(
+                                "[periodic-service-token-sync] ✓ hermes/.env service token 续 30 天"
+                            );
+                        }
+                    }
+                });
+            }
+
             // 注册全局快捷键 Cmd+Shift+Space (浮窗召唤) + Cmd+Shift+F (BL-E15 专注模式)
             #[cfg(desktop)]
             {
