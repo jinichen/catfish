@@ -70,6 +70,39 @@ fn yaml_path() -> Option<std::path::PathBuf> {
     Some(std::path::PathBuf::from(home).join(".catfish").join("companion.yaml"))
 }
 
+/// BL-HERMES-KEY-FROM-DOTENV (7/19 Task #21): 读 ~/.hermes/.env API_SERVER_KEY.
+///
+/// hermes install 时会往 ~/.hermes/.env 写 API_SERVER_KEY=<random> · 但 Companion
+/// process 不加载 .env · 之前拿不到 key · enabled 被 force false · Chat 走 gateway
+/// 直连绕过 hermes P15 approval SSE · 按钮永远不弹.
+///
+/// 此函数 line-based 读 dotenv · 找 `API_SERVER_KEY=<value>` 返 value. 找不到返 None.
+fn read_hermes_env_api_key() -> Option<String> {
+    let home = crate::util::paths::home_env()
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()?;
+    let env_path = std::path::PathBuf::from(home).join(".hermes").join(".env");
+    let content = std::fs::read_to_string(&env_path).ok()?;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("API_SERVER_KEY=") {
+            let value = rest.trim().trim_matches('"').trim_matches('\'');
+            if !value.is_empty() {
+                log::info!(
+                    "[hermes_api_config] key 从 {} 拿到 (len={})",
+                    env_path.display(), value.len()
+                );
+                return Some(value.to_string());
+            }
+        }
+    }
+    log::debug!(
+        "[hermes_api_config] {} 无 API_SERVER_KEY 行 (hermes 未装 · 或未生成 key)",
+        env_path.display()
+    );
+    None
+}
+
 fn read_yaml_from(path: &std::path::Path) -> Option<HermesApiYaml> {
     if !path.exists() {
         return None;
@@ -93,12 +126,21 @@ fn build_with_yaml(yaml_path_override: Option<&std::path::Path>) -> HermesApiCon
         .or_else(|| std::env::var("CATFISH_HERMES_API_URL").ok())
         .unwrap_or_else(|| DEFAULT_URL.to_string());
 
+    // BL-HERMES-KEY-FROM-DOTENV (7/19 Task #21 修 · Companion Chat approval 按钮
+    // 不弹根因): Companion 之前只从 yaml + env CATFISH_HERMES_API_KEY 读 key ·
+    // 达华员工装 dmg 后 hermes install 生成 API_SERVER_KEY 写 ~/.hermes/.env ·
+    // 但 Companion process env 不加载 .env · 拿不到 key · enabled force false ·
+    // Chat 走 gateway 直连 · P15 SSE approval event 不到 · 按钮永远不弹.
+    // 修 · fallback 从 ~/.hermes/.env 读 API_SERVER_KEY.
     let key = yaml.as_ref()
         .and_then(|y| y.key.clone())
-        .or_else(|| std::env::var("CATFISH_HERMES_API_KEY").ok());
+        .or_else(|| std::env::var("CATFISH_HERMES_API_KEY").ok())
+        .or_else(|| read_hermes_env_api_key());
 
-    // enabled 默认 false (Phase 2-2A 灰度阶段, 不动当前 gateway 流). Phase 2-2B
-    // chat.ts 切完后默认 true. key 缺时 force false.
+    // BL-HERMES-DEFAULT-ENABLED (7/19 Task #21 根因修): 默认 enabled=false 让
+    // Chat 走 gateway 直连 · P15 approval SSE 只在 hermes daemon 装 · gateway
+    // 直连不触发 · Companion Chat approval 按钮永远不弹. 达华 POC blocker.
+    // 修 · 默认 true · key 缺时 fallback disable (跟老逻辑一致 · 不破坏未装 hermes 场景).
     let enabled_raw = yaml.as_ref()
         .and_then(|y| y.enabled)
         .or_else(|| {
@@ -110,7 +152,7 @@ fn build_with_yaml(yaml_path_override: Option<&std::path::Path>) -> HermesApiCon
                     _ => None,
                 })
         })
-        .unwrap_or(false);
+        .unwrap_or(true);
 
     let enabled = enabled_raw && key.is_some();
     if enabled_raw && key.is_none() {
