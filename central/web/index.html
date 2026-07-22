@@ -43,6 +43,11 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- P3.5.79+ (7/22 达华 POC 血案): runtime config 注入 · docker entrypoint 生成.
+         必须在 main bundle 前加载 · lib/env.ts 优先读 window.__CATFISH_CONFIG__.
+         dev 模式 (vite dev server) 若无 config.js · 前端 fallback 走 VITE_* build-time env.
+         用 onerror="void 0" · 让 dev/preview 无 config.js 时不报 console 错. -->
+    <script src="/config.js" onerror="void 0"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

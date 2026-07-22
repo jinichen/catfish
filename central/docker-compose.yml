@@ -171,6 +171,15 @@ services:
     image: catfish-web:0.1.0
     container_name: catfish-web
     restart: unless-stopped
+    # P3.5.79+ (7/22 达华 POC 血案 · runtime config 重构):
+    # 一份 image 到处部署 · docker-entrypoint-catfish-config.sh 从容器 env 生成
+    # /config.js · 前端 lib/env.ts 优先读 window.__CATFISH_CONFIG__. 客户换 IP
+    # 只改 .env + `docker compose restart web` · 不重编 image.
+    environment:
+      # OIDC issuer · 复用 identity 段同名 env · 保持一致 (跨 identity+gateway+web)
+      CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://127.0.0.1:8998}
+      CATFISH_OIDC_CLIENT_ID: ${CATFISH_OIDC_CLIENT_ID:-catfish-companion}
+      CATFISH_OIDC_SCOPE: ${CATFISH_OIDC_SCOPE:-openid email profile}
     # 内部 service, 不需要 ports — 中央 nginx 走 docker network 名解析 (web:80)
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost/healthz"]

@@ -28,6 +28,19 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 # nginx.conf.example.
 COPY nginx.docker.conf /etc/nginx/conf.d/default.conf
 
+# ── P3.5.79+ (7/22 达华 POC 血案) runtime config 注入 ──
+# 老 build-arg VITE_OIDC_ISSUER 路子行不通 · 客户每台 server IP 不同 · 每客户重编
+# image = 不 scale · image tar 也不可能"一份到处装". 改成 SPA 标准 runtime config:
+#   1. 容器启动时 · docker-entrypoint.d 里 script 从容器 env 生成 /config.js
+#   2. index.html <script src="/config.js"> 在 main bundle 前加载 · 挂 window.__CATFISH_CONFIG__
+#   3. 前端 lib/env.ts 优先读 window.__CATFISH_CONFIG__ · fallback vite env (dev 兼容)
+# 客户改 CATFISH_OIDC_ISSUER env + `docker compose restart web` = 秒生效 · 不重编.
+#
+# nginx image 有自带的 /docker-entrypoint.d/ hook (会按数字排序执行 *.sh · 完后启 nginx).
+# 我们塞 40-catfish-config.sh 生成 /usr/share/nginx/html/config.js.
+COPY docker-entrypoint-catfish-config.sh /docker-entrypoint.d/40-catfish-config.sh
+RUN chmod +x /docker-entrypoint.d/40-catfish-config.sh
+
 EXPOSE 80
 HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://localhost/healthz || exit 1
 CMD ["nginx", "-g", "daemon off;"]
