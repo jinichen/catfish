@@ -129,6 +129,7 @@ fi
 IDENTITY_CFG="$SCRIPT_DIR/identity-server/config"
 mkdir -p "$IDENTITY_CFG"
 ADMIN_PW="${ADMIN_PASSWORD:-catfish_2026}"
+ADMIN_HASH=""   # P3.5.79+ (7/23): 显式初始化 · 防 set -u 未定义变量挂
 
 if [ ! -f "$IDENTITY_CFG/users.yaml" ]; then
     # 用 identity image 里的 python + bcrypt 生成 hash (host 不需 pip install bcrypt)
