@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Catfish Companion",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "identifier": "com.catfish.companion",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -95,7 +95,9 @@
       "resources/mac/install.sh": "./resources/mac/install.sh",
       "resources/mac/uv": "./resources/mac/uv",
       "resources/mac/cpython-3.11.15-embed.tar.gz": "./resources/mac/cpython-3.11.15-embed.tar.gz",
-      "resources/mac/hermes-agent-bundle.tar.gz": "./resources/mac/hermes-agent-bundle.tar.gz"
+      "resources/mac/hermes-agent-bundle.tar.gz": "./resources/mac/hermes-agent-bundle.tar.gz",
+      "resources/mac/node-embed.tar.gz": "./resources/mac/node-embed.tar.gz",
+      "resources/mac/chromium-embed.tar.gz": "./resources/mac/chromium-embed.tar.gz"
     },
     "macOS": {
       "minimumSystemVersion": "10.15",
