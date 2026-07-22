@@ -32,7 +32,11 @@ export function HomePage() {
               style={{ display: "block" }}
             />
             <span style={{ fontSize: 18 }}>
-              欢迎, {me.email.split("@")[0]}
+              {/* P3.5.79+ (7/23 达华 POC catch): 加防御 · gateway /api/me 若返
+                  email=undefined (identity 元数据缺 · A1-API-ME-FIX fallback 走
+                  service token 且 sub 非 email 格式) 会 .split 崩全页. 优雅
+                  degrade 到用 role / "用户" 兜底 · 别让员工看白屏. */}
+              欢迎, {me.email?.split("@")[0] ?? me.email ?? me.role ?? "用户"}
             </span>
           </span>
         }
