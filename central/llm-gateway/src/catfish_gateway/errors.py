@@ -42,6 +42,19 @@ def friendly_upstream_error(raw: str) -> str:
         return "调用频率超限 (429) — 等几秒再试 / 换个模型"
     if " 401" in f" {low} " or "unauthorized" in low or "invalid api key" in low or "incorrect api key" in low:
         return "API Key 无效 (401) — 检查 .env 的 key 是否过期 / 写错"
+    # BL-PROVIDER-AUTH-CN (7/18 鸿波 catch WeChat 显英文): litellm 新版返
+    # "Provider authentication failed. Check the configured credentials; raw provider
+    # details are in the gateway logs." 兜底路径直接返英文, 员工看不懂. 加中文匹配.
+    if "provider authentication failed" in low or "check the configured credentials" in low:
+        return "上游 LLM Provider 鉴权挂了 — 检查 .env 里 DEEPSEEK_API_KEY / DASHSCOPE_API_KEY / GEMINI_API_KEY 是否配 / 过期. 查 gateway log 详情."
+    # BL-PROVIDER-RETRIES-CN (7/19 鸿波 catch WeChat 显英文 · LiteLLM 兜底串):
+    # "The model provider failed after retries. I kept raw provider details out of chat;
+    # check gateway logs for diagnostics." 触发场景 · gateway 用 LiteLLM 调上游 · 连
+    # 续 retry 全挂 · gateway 回这兜底串. 员工看不懂 · 加中文匹配.
+    if ("model provider failed after retries" in low
+        or "kept raw provider details out of chat" in low
+        or "check gateway logs for diagnostics" in low):
+        return "上游 LLM 连续重试仍挂 — 大概率 API Key 失效 / 上游过载 / 网络挂. 查 gateway log: tail -50 ~/catfish-gateway-$(date +%Y%m%d).log"
     if " 403" in f" {low} " or "forbidden" in low or "permission denied" in low:
         return "没权限调这个模型 (403) — 公司账号未开通 / 区域受限"
     if " 404" in f" {low} " or ("model" in low and "not found" in low) or "找不到服务" in raw:
