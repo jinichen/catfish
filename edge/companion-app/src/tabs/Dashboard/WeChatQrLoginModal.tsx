@@ -30,8 +30,10 @@ import { config } from "../../lib/env";
 // 到看到 200 为止.
 async function probeHermesHealth(): Promise<boolean> {
   try {
+    // BL-CSP-PROXY (7/18 鸿波): 走 Rust reqwest 代理, CSP 严格.
+    const { fetchViaProxy } = await import("../../lib/http_proxy");
     const base = config.backendUrl.replace(/\/+$/, "");
-    const r = await fetch(`${base}/health`, { method: "GET" });
+    const r = await fetchViaProxy(`${base}/health`, { method: "GET" });
     return r.ok;
   } catch {
     return false;
