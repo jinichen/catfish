@@ -82,8 +82,18 @@ echo "=== Phase 1 · arm64 · 从头打 ==="
 export DOCKER_DEFAULT_PLATFORM=linux/arm64
 
 echo "--- 1.1 · pull upstream postgres + nginx (arm64) ---"
-docker pull postgres:16-alpine
-docker pull nginx:1.27-alpine
+# P3.5.79+ (7/23): docker pull 失败 fallback 到本地 image · 别 set -e 死.
+# Mac 网络抖 / clash 拦 / docker.io EOF 时若本地已有可用 · 继续跑 · 不阻塞.
+for img in postgres:16-alpine nginx:1.27-alpine; do
+    if docker pull "$img"; then
+        echo "  ✓ pull $img"
+    elif docker image inspect "$img" >/dev/null 2>&1; then
+        echo "  ⚠ pull $img 挂 · 但本地已有 · skip pull · 继续"
+    else
+        echo "  ❌ pull $img 挂 且本地无 · 需连外网 · 或先 docker load 老 tar"
+        exit 1
+    fi
+done
 
 echo ""
 echo "--- 1.2 · build 6 自造 image (arm64) · no-cache 完全干净 ---"
@@ -128,8 +138,17 @@ echo "=== Phase 2 · amd64 · 从头打 (QEMU 慢) ==="
 export DOCKER_DEFAULT_PLATFORM=linux/amd64
 
 echo "--- 2.1 · pull upstream postgres + nginx (amd64) ---"
-docker pull postgres:16-alpine
-docker pull nginx:1.27-alpine
+# P3.5.79+ (7/23): 同 Phase 1 · pull 挂 fallback 本地
+for img in postgres:16-alpine nginx:1.27-alpine; do
+    if docker pull "$img"; then
+        echo "  ✓ pull $img"
+    elif docker image inspect "$img" >/dev/null 2>&1; then
+        echo "  ⚠ pull $img 挂 · 但本地已有 · skip pull · 继续"
+    else
+        echo "  ❌ pull $img 挂 且本地无 · 需连外网 · 或先 docker load 老 tar"
+        exit 1
+    fi
+done
 
 echo ""
 echo "--- 2.2 · build 6 自造 image (amd64) · no-cache ---"
