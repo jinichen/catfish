@@ -198,6 +198,32 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
         TEMP_IMAGES="$DELIVERY_DIR/images"
         mkdir -p "$TEMP_IMAGES"
 
+        # ── P3.5.79+ (7/23 达华 199 blood catch) · 补 config 目录 ──
+        # 老 bug: delivery/dahua-poc/ 里没 identity-server/ 和 llm-gateway/ 目录 ·
+        # docker-compose.yml mount ./identity-server/config:/app/config · host 端
+        # 空目录 · 容器 /app/config 空 · users.yaml 不存在 · identity seed 0 用户 ·
+        # admin@catfish.com 完全无法创建 · 客户装完根本登不进.
+        # 修: tar czf 前 · 把 central/{identity-server,llm-gateway}/config 拷进
+        # delivery/dahua-poc/ 对应位置 · 打进 tar. 客户装机就有 seed 源.
+        echo ""
+        echo "--- 3.pre · sync central config → delivery (identity users.yaml + gateway roles/models) ---"
+        for svc in identity-server llm-gateway; do
+            SRC_CFG="$CENTRAL/$svc/config"
+            DST_CFG="$DELIVERY_DIR/$svc/config"
+            if [ -d "$SRC_CFG" ]; then
+                mkdir -p "$DST_CFG"
+                # 拷全部 · 排除敏感 (users.yaml 若含真 hash 不该进 delivery · 只保 .example)
+                # 客户装机后 · setup.sh cp users.yaml.example → users.yaml
+                rsync -a --exclude='.env' --exclude='.DS_Store' \
+                      --exclude='users.yaml' --exclude='clients.yaml' \
+                      "$SRC_CFG/" "$DST_CFG/" 2>/dev/null || \
+                cp -R "$SRC_CFG/"* "$DST_CFG/" 2>/dev/null
+                echo "  ✓ $svc/config → delivery ($(ls "$DST_CFG" | wc -l | tr -d ' ') files)"
+            else
+                echo "  ⚠ $SRC_CFG 不存在 · skip"
+            fi
+        done
+
         for arch in arm64 amd64; do
             SRC_TAR=""
             OUT_TAR=""

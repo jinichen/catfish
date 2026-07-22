@@ -121,6 +121,46 @@ if [ "$REGEN_ENV_ONLY" = "1" ]; then
     exit 0
 fi
 
+# ── 2.5 · 生成 users.yaml 含 admin (P3.5.79+ 7/23 199 blood catch) ──────
+# delivery tar 里只带 users.yaml.example (真 hash 不进 tar · 安全 · 军规).
+# 装机时用 docker load 好的 identity image 里的 bcrypt 生成真 hash · 写 users.yaml.
+# 首次 identity 启动 · seed_pg_from_yaml_if_empty() 读 yaml · 灌 admin 进 PG.
+# 后续 identity 从 PG 读 · yaml 忽略. 员工首次登进后立即改密.
+IDENTITY_CFG="$SCRIPT_DIR/identity-server/config"
+mkdir -p "$IDENTITY_CFG"
+ADMIN_PW="${ADMIN_PASSWORD:-catfish_2026}"
+
+if [ ! -f "$IDENTITY_CFG/users.yaml" ]; then
+    # 用 identity image 里的 python + bcrypt 生成 hash (host 不需 pip install bcrypt)
+    if docker image inspect catfish-identity:0.1.0 >/dev/null 2>&1; then
+        ADMIN_HASH=$(docker run --rm catfish-identity:0.1.0 python3 -c \
+            "from catfish_identity.users import hash_password; print(hash_password('$ADMIN_PW'))" 2>/dev/null)
+    fi
+    if [ -z "$ADMIN_HASH" ]; then
+        # fallback · catfish_2026 硬编 bcrypt hash (若 image 未 load · 兜底)
+        ADMIN_HASH='$2b$12$vN9eb7i7voFcdwzM8W5SOuVmjV3ETViwyA9DDAVQXz1JXhUBFzV2m'
+        [ "$ADMIN_PW" != "catfish_2026" ] && \
+            echo "  ⚠ image 未 load · 用兜底 hash · 密码强制为 catfish_2026"
+        ADMIN_PW="catfish_2026"
+    fi
+
+    cat > "$IDENTITY_CFG/users.yaml" <<EOF
+# 装机时 setup.sh 自动生成 · $(date '+%Y-%m-%d %H:%M')
+# admin 首次登进后立即改密 (Companion 内建改密 UI · 或 sysadmin 面板)
+users:
+  - email: admin@catfish.com
+    password_hash: $ADMIN_HASH
+    name: 系统管理员
+    department: IT
+    role: sysadmin
+EOF
+    chmod 600 "$IDENTITY_CFG/users.yaml"
+    echo "→ users.yaml 生成 · sysadmin: admin@catfish.com / $ADMIN_PW"
+    echo "  ⚠ 首次登进立即改密 (delivery/docs 里 SOP 有指引)"
+else
+    echo "→ users.yaml 已存在 · skip (跨装机保留)"
+fi
+
 # ── 3. HTTPS 自签 cert (若 ENABLE_HTTPS=1) ────────────────
 if [ "$ENABLE_HTTPS" = "1" ]; then
     mkdir -p certs
