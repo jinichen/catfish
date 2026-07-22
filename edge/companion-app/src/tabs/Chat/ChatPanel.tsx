@@ -48,7 +48,9 @@ export default function ChatPanel({
   // 次到底. 跟下面 messages 智能滚 effect 分工:
   //   - session 首次渲染 (切进) → 强制到底 (无论用户上一 session 在哪个位置)
   //   - 同 session 后续 messages (streaming / 新发送) → 走智能 logic (near bottom 才跟随)
-  const sessionId = useChatStore((s) => s.sessionId);
+  // 注: ChatState 里字段叫 persistedSessionId (老 session=真 uid / 新 session=null),
+  //     不是 sessionId (那是 SessionAttachment 上的). 军规: 拿字段前先 read 全 interface.
+  const persistedSessionId = useChatStore((s) => s.persistedSessionId);
   const scrolledSessionRef = useRef<string | null>(null);
 
   // 新消息或 streaming token 来 · 自动滚到底 (2 分支)
@@ -60,10 +62,10 @@ export default function ChatPanel({
     // 老 bug: 只有 [messages] deps · 切 session 时 scrollTop 保留上一 session 的位置 ·
     // scrollHeight 是新 session 内容 · atBottom 十有八九 false · 且新 session 最后条通常
     // 是 assistant 不是 user · 两条件都不满足 → 不 scroll → 用户看到会话中间/顶部.
-    // 修法: 追 scrolledSessionRef · 只在 sessionId 变 + messages 已 populate 时 force
-    // 一次. empty session 不设 ref · 等 messages 加载完后再 force.
-    if (scrolledSessionRef.current !== sessionId && messages.length > 0) {
-      scrolledSessionRef.current = sessionId;
+    // 修法: 追 scrolledSessionRef · 只在 persistedSessionId 变 + messages 已 populate
+    // 时 force 一次. empty session 不设 ref · 等 messages 加载完后再 force.
+    if (scrolledSessionRef.current !== persistedSessionId && messages.length > 0) {
+      scrolledSessionRef.current = persistedSessionId;
       el.scrollTop = el.scrollHeight;
       return;
     }
@@ -76,7 +78,7 @@ export default function ChatPanel({
     if (atBottom || messages[messages.length - 1]?.role === "user") {
       el.scrollTop = el.scrollHeight;
     }
-  }, [sessionId, messages]);
+  }, [persistedSessionId, messages]);
 
   // P44.3 (6/6 鸿波 marathon): floating approval banner — 在 LLM stream 期间立即弹.
   // 背景: hermes _gateway_approval 阻塞等 decision 时, chat completions stream
