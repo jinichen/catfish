@@ -1,18 +1,22 @@
 # 鲶鱼 Catfish · 达华服务端一键部署 SOP
 
-**版本**: v0.18.0 (2026-07-16)
+**版本**: v0.18.1 (2026-07-18 · 7/18 code fix 全 mirror)
 **目标读者**: 达华 IT 部署人员 (Linux / macOS / Windows Docker Desktop 均可)
 **预计时长**: 首次 20-40 分钟 (含 image load + 配置 + 首次启动 warm up)
-**你会拿到 4 个文件**:
 
-| 文件 | 大小 | 用途 |
-|------|------|------|
-| `Catfish Companion_0.18.0_aarch64.dmg` | 129 MB | mac 员工桌面客户端 (Apple Silicon) |
-| `Catfish Companion_0.18.0_x64_zh-CN.msi` | 147 MB | Windows 员工桌面客户端 |
-| `catfish-central-images.tar` | 1.3 GB | 8 个 Docker image (含 postgres/nginx + 6 catfish 服务) |
-| `catfish-central-config.tar.gz` | 50 KB | docker-compose.yml + 全部 config yaml + 3 份指南 |
+**你会拿到 2 个 tar.gz** (根据服务器 CPU 架构选一个):
 
-**本文档只讲服务端部署** (最后 2 个文件). 员工端装 dmg/msi 见 README-达华测试部署.md 第 5 节.
+| 文件 | 大小 | 架构 | 内容 |
+|------|------|------|------|
+| `dahua-poc-central-amd64-<date>.tar.gz` | ~601 MB | x86_64 (99% 政企/云服务器) | 7 image + docker-compose.yml + .env.example + README.md |
+| `dahua-poc-central-arm64-<date>.tar.gz` | ~604 MB | aarch64 (鲲鹏/ARM) | 同上 · arm64 image |
+
+**员工 Companion dmg/msi 分开分发** (见 `达华POC-3台mac-分发SOP.md` · 员工机独立分发到 3 台 mac).
+
+**7/18 关键 fix 已 mirror 到本 bundle**:
+- ✅ Task #61: `CATFISH_ENV=prod` (docker-compose.yml default 已 prod)
+- ✅ Task #66: `CATFISH_OIDC_AUDIENCE=catfish-companion,catfish-gateway` 双值 (default 已双值 · 员工 Companion id_token 通)
+- ✅ Task #68: `catfish-gateway:0.1.1` 含 orjson (litellm mcp code path 不再 502)
 
 ---
 
@@ -22,7 +26,7 @@
 |---|---------|-------|------|------|
 | 1 | postgres | `postgres:16-alpine` | 5432 (127.0.0.1 only) | 主数据库 (users / quota / audit / facts) |
 | 2 | identity | `catfish-identity:0.1.0` | **8998 (0.0.0.0)** | OIDC 认证服务 · 员工 SSO 登录 |
-| 3 | gateway | `catfish-gateway:0.1.0` | **8999 (0.0.0.0)** | LLM 网关 · 员工 chat 走这 · fallback 链路由 |
+| 3 | gateway | `catfish-gateway:0.1.1` | **8999 (0.0.0.0)** | LLM 网关 · 员工 chat 走这 · fallback 链路由 (7/18 Task #68: 加 orjson 解 litellm 502) |
 | 4 | skills-hub | `catfish-skills-hub:0.1.0` | 8997 (127.0.0.1) | 技能包托管 · manager 发布 skill |
 | 5 | mcp-registry | `catfish-mcp-registry:0.1.0` | 8996 (127.0.0.1) | MCP 连接器仓库 · 员工订阅 Jira/GitLab |
 | 6 | wiki-hub | `catfish-wiki-hub:0.1.0` | 8994 (127.0.0.1) | Wiki 中央 · 员工发布知识 |
