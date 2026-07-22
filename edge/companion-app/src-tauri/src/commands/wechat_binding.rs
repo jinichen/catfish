@@ -437,8 +437,15 @@ pub fn wechat_binding_approve(
     let approved_path = dir.join(format!("{}-approved.json", platform));
 
     let mut pending = read_json_object(&pending_path);
-    let entry = pending
-        .remove(&code)
+    // BL-WECHAT-APPROVE-CASE (7/18 鸿波 catch "code 找不到"): Rust line 422
+    // code.to_uppercase(), 但 hermes Python 侧 pending 表 key 可能保原始 case (混合 /
+    // 小写). 直接 remove(&code_upper) 会 miss. 修: case-insensitive 找 key.
+    let matched_key = pending
+        .keys()
+        .find(|k| k.eq_ignore_ascii_case(&code))
+        .cloned();
+    let entry = matched_key
+        .and_then(|k| pending.remove(&k))
         .ok_or_else(|| format!("code '{}' 在 {} 的 pending 表里找不到 (可能过期了)", code, platform))?;
 
     // 写回 pending (少了一项)
