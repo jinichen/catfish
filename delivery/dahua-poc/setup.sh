@@ -162,6 +162,27 @@ else
     echo "→ users.yaml 已存在 · skip (跨装机保留)"
 fi
 
+# ── 2.6 · gateway config 存在性 check (P3.5.79+ 7/23 199 blood catch v2) ─
+# gateway 启动读 /app/config/models.yaml + roles.yaml. 若 delivery tar 里没打进
+# llm-gateway/config · docker mount 空目录 · gateway worker startup 挂反复 die.
+# 检 · 若空 · 明报 error 让 IT 从 delivery tar / rsync 补齐.
+GATEWAY_CFG="$SCRIPT_DIR/llm-gateway/config"
+mkdir -p "$GATEWAY_CFG"
+if [ ! -f "$GATEWAY_CFG/models.yaml" ] || [ ! -f "$GATEWAY_CFG/roles.yaml" ]; then
+    echo "❌ llm-gateway/config 缺 models.yaml 或 roles.yaml · gateway 启动会挂"
+    echo "   fix (2 选 1):"
+    echo "     A) 重解压 delivery tar (最新版含 config)"
+    echo "     B) 从 catfish 源码 rsync:"
+    echo "        rsync -av <mac>:person_task/catfish/central/llm-gateway/config/ $GATEWAY_CFG/"
+    echo ""
+    read -rp "  确认已补齐后回车继续? (Ctrl+C 中止): "
+    if [ ! -f "$GATEWAY_CFG/models.yaml" ]; then
+        echo "❌ 仍缺 models.yaml · 中止"
+        exit 1
+    fi
+fi
+echo "→ gateway config OK ($(ls "$GATEWAY_CFG" | wc -l | tr -d ' ') files)"
+
 # ── 3. HTTPS 自签 cert (若 ENABLE_HTTPS=1) ────────────────
 if [ "$ENABLE_HTTPS" = "1" ]; then
     mkdir -p certs
