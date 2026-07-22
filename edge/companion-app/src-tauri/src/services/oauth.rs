@@ -479,10 +479,29 @@ pub async fn try_refresh_session(cfg: &OidcConfig) -> Result<AuthSession> {
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        // 把 refresh_token 干掉, 下次 ensure_fresh_access_token 不再尝试 (它已失效).
-        // caller 看 Err 会 fallback 走 OAuth, 完成后会重新 save 一份新的.
-        let _ = delete_from_keyring(KEYRING_USERNAME_REFRESH);
-        bail!("/token refresh 返 {status}: {body} (已删本地 refresh_token, 下次走完整 OAuth)");
+        // BL-REFRESH-DONT-DELETE-ON-5XX (7/21 鸿波 catch "每天登了跑一阵子浏览器
+        // 自弹重登 · 时间不固定"): 老逻辑一律 delete 本地 refresh_token · 网络抖
+        // / identity 5xx / 429 rate-limit 也删 · 员工一次 glitch 就得撞 401 走
+        // 完整 OAuth · 每天遇好几次.
+        //
+        // 修: 只在 identity 明确说 refresh_token 已失效时才删本地 (400/401/403 ·
+        // 语义是 invalid_grant / invalid_client). 5xx / 429 / gateway 抖 · 保留
+        // refresh_token · caller 拿 Err · ensure_fresh_access_token 返旧 access
+        // (可能还没到期) 或 gateway 撞 401 后 me.ts 弹重登 · 但**下一次 60s poll
+        // 会再试** silent refresh · 抖动过了就自动无感恢复.
+        //
+        // 参考 OAuth 2.0 RFC 6749 §5.2: invalid_grant/invalid_client 都是 400 ·
+        // 401 一般是缺 client auth · 都算 client-side 错. 5xx 是 server 错 · 不
+        // 表明 grant 失效.
+        let identity_says_grant_dead = status == reqwest::StatusCode::BAD_REQUEST
+            || status == reqwest::StatusCode::UNAUTHORIZED
+            || status == reqwest::StatusCode::FORBIDDEN;
+        if identity_says_grant_dead {
+            let _ = delete_from_keyring(KEYRING_USERNAME_REFRESH);
+            bail!("/token refresh 返 {status}: {body} (identity 明确拒 · 已删本地 refresh_token · 下次走完整 OAuth)");
+        }
+        // 其他 (5xx / 429 / 302 之类) — 保留 refresh_token, 下次 poll 自动重试
+        bail!("/token refresh 返 {status}: {body} (临时故障 · 保留 refresh_token · 下次 poll 会重试)");
     }
     let token_resp: TokenResponse = resp.json().await.context("解析 refresh /token 响应失败")?;
 
