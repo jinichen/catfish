@@ -181,7 +181,12 @@ services:
       CATFISH_OIDC_ISSUER: ${CATFISH_OIDC_ISSUER:-http://127.0.0.1:8998}
       CATFISH_OIDC_CLIENT_ID: ${CATFISH_OIDC_CLIENT_ID:-catfish-companion}
       CATFISH_OIDC_SCOPE: ${CATFISH_OIDC_SCOPE:-openid email profile}
-    # 内部 service, 不需要 ports — 中央 nginx 走 docker network 名解析 (web:80)
+    # P3.5.79+ (7/23 达华 POC catch): 直接暴露 5173 · 员工浏览器不需走中央 nginx
+    # 也能访 http://<server-ip>:5173. 达华 M mac 单机场景 127.0.0.1:5173 是 secure
+    # context · crypto.subtle 天然 OK · 无需 chrome flag / HTTPS. 若客户上生产
+    # 需 HTTPS · 起 nginx (443) 反代 · 5173 走内网访问不暴露.
+    ports:
+      - "5173:80"
     healthcheck:
       # P3.5.79+ (7/22): 127.0.0.1 强制 IPv4 · alpine wget 里 'localhost' 优先解
       # 到 ::1 (IPv6) · nginx.docker.conf 只 listen 80 (v4) · IPv6 refused.
