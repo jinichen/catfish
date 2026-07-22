@@ -112,6 +112,9 @@ import WebPortalLink from "./WebPortalLink";
 // 跟 #76 (CLI privacy-audit) / #79 (gateway /api/audit/me) / #78 (员工 doc) 配套.
 // 单独 section 让员工一眼看到"我能自验"信号 — 透明性 = 信任卖点.
 import PrivacyCard from "./PrivacyCard";
+// BL-SELF-CHANGE-PASSWORD (7/20 鸿波 catch 达华 POC 员工无自主改密入口):
+// 员工首次登录用 admin 临时密码 · 需自主改. 加卡到隐私 section.
+import AccountSecurityCard from "./AccountSecurityCard";
 // 6/2 BL-DASHBOARD-DROP-RECORDINGS-CARD (鸿波 6/2 凌晨): RecordingsCard 整卡删.
 // 前提是 #17 BL-RECMODE-AUTO-CLEAN-RAW 默认 skill 生成完自动清原料 → 录屏目录
 // 99% 时间空 / 只剩 KB 级 meta + skill_draft, 卡 99% 空着 = UI noise. PrivacyCard
@@ -223,6 +226,8 @@ export default function DashboardTab() {
               ? [{ key: "audit-view", label: "🔍 审计视图", render: () => <AuditViewCard /> }]
               : []),
             { key: "wechat", label: "💬 微信接入", render: () => <WeChatBindingCard /> },
+            // BL-SELF-CHANGE-PASSWORD (7/20): 员工自主改密码
+            { key: "account", label: "🔐 账号安全", render: () => <AccountSecurityCard /> },
           ]}
         />
       </CollapsibleSection>
