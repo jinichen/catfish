@@ -445,11 +445,13 @@ export default function AdvisorView({ refreshKey = 0 }: AdvisorViewProps) {
   // phase === "done" / "cache_hit" / "stale_fallback"
   // 这里 !result 是 LLM 真返 null (LLM 调用失败 / 解析失败), 不是数据全空 —
   // 数据全空已经在 phase === "no_data" 分支接掉了 (P3.4.4).
+  // BL-P11-ADVISOR-FALLBACK (7/19 Task #11): advisor LLM 4 层 parse 全 null · 老
+  // 显红色 error 挡数据统计. 改 · 用中性提示 · 不 error 样式 · 员工可看下方
+  // 数据统计 (邮件/日历/TODO) · advisor 内容缺失也不影响用早安页.
   if (!result) {
     return (
       <Placeholder
-        text="advisor LLM 调用失败 (网络挂 / 模型解析返非预期结构). 点刷新重试."
-        error
+        text="advisor 综合判断暂不可用 (LLM 返结构非预期 · 通常网络慢). 点右上刷新重试 · 或看下方邮件/日历/TODO 统计."
       />
     );
   }
