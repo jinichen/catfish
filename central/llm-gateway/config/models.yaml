@@ -49,6 +49,12 @@ models:
     # 我们对员工承诺 128K（官方主流 Qwen 3.5 心智 + 一倍以上安全余量）。
     # 长上下文（>128K）场景推荐员工切 catfish-public-gemini-pro（2M）。
     context_window: 256000
+    # ⚠ 7/22 鸿波 catch (P3.5.79+): 上游 vLLM --max-model-len=250000 硬 cap.
+    # gateway _compute_max_allowed_output_tokens 若 max_output_tokens 未配 → 走 cw
+    # 计算 dyn=253945 (256000 - prompt*1.3 - 2048) → 超 cap → 上游返空 error 400.
+    # 实证 (curl 二分): 245760 ✓ / 253945 ✗. 显式配 245760 (留 ~4K prompt 余量).
+    # aux LLM 短请求 (title/summary/proactive) 无 max_tokens → clip 到 245760 · 秒通.
+    max_output_tokens: 245760
     supports_tool_use: true
     supports_streaming: true
     # Qwen3.5 122B MoE 实测**支持视觉** (5/8 鸿波真上传 EIS 截图验证, 识别准确).
@@ -93,6 +99,9 @@ models:
     # 多模态模型相比主力模型 context 略窄些，留 64K 员工承诺。
     # 真实支持大概率也是 128K+ 量级，视后续压测调整。
     context_window: 128000
+    # ⚠ 7/22 (P3.5.79+): 同 catfish-private-main 血案 · 上游 vLLM 部署 max-model-len
+    # 未 audit 前保守配 · 留 4K prompt 余量. IT 确认 max-model-len 后可调.
+    max_output_tokens: 122880
     supports_tool_use: true
     supports_streaming: true
     supports_vision: true

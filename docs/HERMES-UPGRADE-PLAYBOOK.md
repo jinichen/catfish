@@ -252,6 +252,71 @@ grep "P28 miss" ~/.hermes/logs/gateway.log | tail -5
 
 **修 (P3.5.53)**: `_delayed_install` daemon thread 主动 `import model_tools` trigger, 不再被动 poll. sleep 0.5s 让主线程 register 完成跳过 partial init 段, 之后 `import model_tools` → model_tools ready → `_mod.install()` 直接跑. v0.17 model_tools 顶 imports 不撞 catfish plugin (no circular).
 
+### 坑 14: vLLM 上游 model 未配 max_output_tokens → dyn 超 cap 空 error 400 (P3.5.79+ 7/22)
+
+**症状**: hermes 内部 aux LLM 调 (title / summary / proactive) 全 502 · gateway
+返 `BadRequestError: OpenAIException - error: code = 400 reason = message =
+metadata = map[] cause = <nil>` · **空 reason 空 message** · 极难查. 员工正常
+chat (Companion / 完整 hermes chat 带 tools) 200 OK, 但 aux 短请求全挂.
+
+**真因** (5 分钟 curl 二分):
+
+1. `models.yaml` `catfish-private-main`: `context_window: 256000` (虚报 · 上游
+   admin 实际 vLLM --max-model-len=250000) · **无 `max_output_tokens`** 配置.
+2. `app.py:_compute_max_allowed_output_tokens`: 无 max_out → `upper = cw =
+   256000` · 短 prompt dyn = `256000 - 5*1.3 - 2048 ≈ 253945`.
+3. gateway 把 max_tokens=253945 发给上游 · 超 vLLM 硬 cap 250000 · **上游返空
+   error 400** (它没告诉具体原因).
+4. 完整 chat (Companion / hermes chat 带 tools) 因为 body 里带 max_tokens 值
+   或 prompt 大 dyn 算出更小 · 侥幸 <250K · 蒙过. **短 aux (prompt<10 token)
+   dyn 一定 ≈253945 · 一定挂**.
+
+实证 (curl 二分):
+```
+max_tokens=245760  → 200 ✓
+max_tokens=253945  → 502 (dyn 默认值)
+```
+
+**修 (P3.5.79+ 7/22)**:
+
+`models.yaml catfish-private-main` 加 `max_output_tokens: 245760` (留 ~4K prompt
+余量). dyn 之后 `upper = min(cw=256000, max_out=245760) = 245760` · 自动 clip.
+
+同款给 `catfish-private-vision` 补 `max_output_tokens: 122880` (对应 cw=128000).
+
+**教训**:
+1. **`context_window` 是 (prompt+output) 总上限 · `max_output_tokens` 是单次输出上限**.
+   两个字段 · vLLM 硬 cap 只管后者 · 前者 gateway 用来算 dyn.
+2. **虚报 `context_window` 是有毒的甜蜜** — 员工看着大 · 但短请求 dyn 算出的
+   max_tokens 会超上游 cap · silent 挂. 若一定要虚报 cw, 必配 `max_output_tokens`
+   卡真 cap.
+3. **上游 vLLM 返空 error 400 是最恶心的 debug 场景** · 建议 catfish gateway
+   400 时 log raw request body (redact api_key) · 未来查底立即拿 payload · 不
+   用二分 curl.
+
+**预防 (下次装机 / 加 model 必查)**:
+
+```bash
+# audit_hermes_compat.sh 或独立 script · 校 models.yaml 每个 upstream openai/* 的
+# model 都配了 max_output_tokens
+python3 -c "
+import yaml, sys
+cfg = yaml.safe_load(open('central/llm-gateway/config/models.yaml'))
+missing = []
+for m in cfg.get('models', []):
+    upstream = m.get('upstream', {})
+    if upstream.get('model', '').startswith(('openai/', 'nim/', 'vllm/')):
+        if not m.get('max_output_tokens'):
+            missing.append(m['name'])
+if missing:
+    print('❌ 无 max_output_tokens (上游 vLLM 可能空 error 400):', missing)
+    sys.exit(1)
+print('✓ 所有 vLLM 上游 model 已配 max_output_tokens')
+"
+```
+
+若 IT 换上游 vLLM `--max-model-len` · **必须**同步 `models.yaml.max_output_tokens`.
+
 ### 坑 13: hermes 升级改 outbound f-string → P28 中文化 silent 挂 (P3.5.79+ 7/22)
 
 **症状**: v0.19 Quicksilver 升级 (7/20) 后, 微信 ClawBot 危险命令审批 reply
