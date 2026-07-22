@@ -20,3 +20,8 @@ hermes-agent-bundle.tar.gz
 
 # build 副产 log
 *.log
+
+# BL-MAC-INSTALL-NODE+CHROMIUM-BUNDLE (7/17): build-mac-resources.sh
+# 新加 · node-embed + chromium-embed · 也不入库.
+chromium-embed.tar.gz
+node-embed.tar.gz
