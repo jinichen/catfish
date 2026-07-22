@@ -2645,6 +2645,34 @@ async def chat_completions(
     if not model_name:
         raise HTTPException(status_code=400, detail="model parameter required")
 
+    # BL-CATFISH-AUTO-ROUTE (7/18 鸿波 catch WeChat model 硬编码 · Task #16):
+    # 加 catfish-auto 特殊 model 支持 · hermes config.yaml model.name=catfish-auto
+    # 永久静态. WeChat 走 hermes → gateway · hermes 不感知 Companion picker · 若
+    # 硬编码 catfish-public-deepseek-flash · 员工 role 换 gateway 用错 model 挂.
+    # Fix: gateway 收 catfish-auto · 从 roles.yaml chat_default 动态 resolve 真
+    # model. 员工 role 换 gateway auto 换. hermes 无需 restart.
+    #
+    # 注: Companion picker 只影响 Companion chat.ts (传真 model 名). WeChat 通过
+    # hermes 用 auto · gateway 用员工 role chat_default. 两路 clean 分.
+    if model_name.lower() == "catfish-auto":
+        from . import roles as roles_module
+        resolved = roles_module.resolve_or_none("chat_default")
+        if not resolved:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "catfish-auto: roles.yaml chat_default 未配 · "
+                    "IT 请填 roles.yaml 里 chat_default: <真 model 名>"
+                ),
+            )
+        logger.info(
+            "BL-CATFISH-AUTO-ROUTE: model=catfish-auto user=%s role=%s → resolved=%s",
+            user.sub, getattr(user, "role", "?"), resolved,
+        )
+        model_name = resolved
+        # 让下游 metrics/audit/logs 拿到真 model 名 · 不是 auto
+        body["model"] = resolved
+
     config: Config = app.state.config
     model = _resolve_model(config, model_name)
 
