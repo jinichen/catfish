@@ -10,8 +10,15 @@
 # v0.17 实测 verified pass 全过 (gateway/run.py 17555 lines, api_server.py
 # 4406 lines, 全 19 patch target 跟 6 个 approval fn 都仍存原 path).
 #
+# P3.5.79+ (2026-07-22 鸿波 v0.19 Quicksilver 血案 · aux LLM 全 502): 加 section 17
+# 校 catfish gateway `central/llm-gateway/config/models.yaml` — 每个 chat mode
+# model 必配 max_output_tokens. 未配 → gateway dyn 算出 max_tokens ≈ context_window,
+# 超上游 vLLM --max-model-len 硬 cap · 上游返 code=400 空 message (最恶心 debug 场景).
+# 完整血案见 docs/HERMES-UPGRADE-PLAYBOOK.md 坑 14. 加 model / 换上游 vLLM 必跑本 audit.
+#
 # 用法: bash audit_hermes_compat.sh
-# 输出: 16 个 section, 每个 ✓/✗ + 计数. 任何 ✗ 都要查 hermes 该次升级改了啥.
+# 输出: 17 个 section, 每个 ✓/✗ + 计数. 任何 ✗ 都要查 hermes 该次升级改了啥
+#       (section 1-16) 或 catfish gateway config 是否遗漏字段 (section 17).
 
 set -u
 HERMES_ROOT="${HERMES_ROOT:-$HOME/.hermes/hermes-agent}"
@@ -191,13 +198,67 @@ echo "── 16. P10 AIAgent._replace_primary_openai_client (catfish P6 调) ─
 check_grep "run_agent.py" "def _replace_primary_openai_client\b" "AIAgent._replace_primary_openai_client (P6 重建 client)"
 echo ""
 
+echo "── 17. models.yaml max_output_tokens 校 (P3.5.79+ 7/22 catfish-private-main 血案) ──"
+# 背景 · gateway app.py:_compute_max_allowed_output_tokens 用 context_window 算 dyn:
+#   dyn = cw - prompt_est*1.3 - safety;  upper = min(cw, max_out) if max_out>0 else cw
+# 若 model 无 max_output_tokens · upper=cw · 短 prompt dyn ≈ cw · 超上游 vLLM
+# --max-model-len 硬 cap · 上游 (OpenWebUI 代理 Qwen) 返 code=400 reason=空 message=空.
+# 症状: 员工完整 chat 正常, hermes aux 短请求 (title/summary/proactive) 全 502. 极难查.
+# 7/22 血案: catfish-private-main context_window=256000, max_output_tokens 未配 → dyn=253945
+# → 超上游 250K cap → 全 aux 挂. 二分 curl 定位, 修法配 max_output_tokens: 245760.
+# 军规: chat mode model **必**配 max_output_tokens. 升级/加 model 必跑本 audit.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MODELS_YAML="$(cd "$SCRIPT_DIR/../../.." && pwd)/central/llm-gateway/config/models.yaml"
+if [ ! -f "$MODELS_YAML" ]; then
+    echo "  ✗ models.yaml 找不到 (期望路径 $MODELS_YAML) — script 位置不对?"
+    ((fail++))
+elif ! command -v python3 >/dev/null 2>&1; then
+    echo "  ✗ python3 不在 PATH — 无法解析 yaml"
+    ((fail++))
+else
+    result=$(python3 - "$MODELS_YAML" <<'PY' 2>&1
+import sys, yaml
+cfg = yaml.safe_load(open(sys.argv[1]))
+missing = []
+checked = []
+for m in cfg.get("models", []) or []:
+    # 非 chat mode (embedding / reranker / etc) 无 max_output_tokens 概念, 跳过
+    if m.get("mode", "chat") != "chat":
+        continue
+    checked.append(m.get("name", "?"))
+    if not m.get("max_output_tokens"):
+        missing.append(m.get("name", "?"))
+if missing:
+    print(f"MISSING max_output_tokens: {', '.join(missing)}")
+    print(f"  已校 {len(checked)} chat model, {len(missing)} 缺: {missing}")
+    sys.exit(1)
+print(f"OK {len(checked)} chat model 全配 max_output_tokens")
+PY
+)
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
+        echo "  ✓ $result"
+        ((pass++))
+    else
+        echo "  ✗ $result"
+        echo "     修法: models.yaml 里对每个 chat mode model 加"
+        echo "       max_output_tokens: <上游 vLLM --max-model-len 减 4K prompt 缓冲>"
+        echo "     若不知 IT 部署 --max-model-len, curl 二分探:"
+        echo "       for m in 4096 8192 16384 32768 65536 131072 245760; do curl ...max_tokens=\$m ...; done"
+        echo "     真因 audit 见 docs/HERMES-UPGRADE-PLAYBOOK.md 坑 14."
+        ((fail++))
+    fi
+fi
+echo ""
+
 echo "========================================"
 echo "结果: pass=$pass  fail=$fail"
 if [ "$fail" -eq 0 ]; then
-    echo "✓ 19 patch + memory + prefetch + approval/run_agent/connect 全适配, 升级 OK"
+    echo "✓ 19 patch + memory + prefetch + approval/run_agent/connect 全适配 (sec 1-16)"
+    echo "  + models.yaml chat model 全配 max_output_tokens (sec 17), 升级/加 model OK"
     exit 0
 else
-    echo "✗ $fail 处漂移 — 升级前需要修 catfish-xcatfish-user/plugin.py 真 patch target"
-    echo "  或者回滚 hermes 版本"
+    echo "✗ $fail 处漂移 — sec 1-16 修 catfish-xcatfish-user/plugin.py 真 patch target"
+    echo "  或回滚 hermes 版本. sec 17 fail → models.yaml 补 max_output_tokens (见 playbook 坑 14)."
     exit 1
 fi
