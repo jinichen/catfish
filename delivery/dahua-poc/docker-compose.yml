@@ -179,7 +179,9 @@ services:
       CATFISH_OIDC_SCOPE: ${CATFISH_OIDC_SCOPE:-openid email profile}
     # 内部 service, 不需要 ports — 中央 nginx 走 docker network 名解析 (web:80)
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost/healthz"]
+      # P3.5.79+ (7/22): 127.0.0.1 强制 IPv4 · alpine wget 里 'localhost' 优先解
+      # 到 ::1 (IPv6) · nginx.docker.conf 只 listen 80 (v4) · IPv6 refused.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
       interval: 30s
       timeout: 3s
       retries: 3
