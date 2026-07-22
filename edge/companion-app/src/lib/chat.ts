@@ -24,6 +24,8 @@ import { useTeachingStore } from "../store/teaching";
 // P3.5.20.1 (6/17): applySteerPrefix 注释痕迹砍 — steer 整链退役.
 // 5/19 BL-COMPANION-CHAT-SWITCH-TO-HERMES Phase 2-2B: hermes API server 路径配置
 import { hermesApiConfigGet, hermesApiAuthHeader, authWhoami } from "./tauri";
+// BL-CSP-PROXY (7/18 鸿波): hermes 8642 直连也走 Rust reqwest 代理, CSP 严格.
+import { fetchViaProxy } from "./http_proxy";
 
 interface SendChatParams {
   model: string;
@@ -386,7 +388,9 @@ export async function streamChat(params: SendChatParams): Promise<void> {
       if (sessionId) {
         hermesHeaders["X-Hermes-Session-Id"] = sessionId;
       }
-      resp = await fetch(url, {
+      // BL-CSP-PROXY (7/18): fetch → fetchViaProxy (Rust reqwest), CSP 严格. auto-detect
+      // stream (URL /v1/chat/completions 走 event bridge).
+      resp = await fetchViaProxy(url, {
         method: "POST",
         headers: hermesHeaders,
         body: JSON.stringify(body),

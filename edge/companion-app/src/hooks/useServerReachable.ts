@@ -43,12 +43,17 @@ const initial: ServerReachableState = {
 const PING_TIMEOUT_MS = 3000;   // 每个 endpoint 3s 超时, 不然启动久等
 const PING_DEBOUNCE_MS = 500;    // 员工连续改 URL 时 debounce 500ms 再 retest
 
-/** 手工 fetch with timeout · AbortController Web API */
+/** 手工 fetch with timeout · AbortController Web API.
+ *
+ * BL-CSP-PROXY (7/18 鸿波): 走 fetchViaProxy (Rust reqwest), 不直接 fetch — 员工输
+ * 远端 IP 时 build 版被 CSP connect-src 拦 (dev 用 vite HMR self origin 不拦 · 有陷阱).
+ */
 async function fetchWithTimeout(url: string, ms: number): Promise<Response> {
+  const { fetchViaProxy } = await import("../lib/http_proxy");
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ms);
   try {
-    return await fetch(url, {
+    return await fetchViaProxy(url, {
       signal: controller.signal,
       // 关: 不允许 credentials · 简单 CORS · 只查 status
       credentials: "omit",

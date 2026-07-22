@@ -66,13 +66,13 @@ type WebStatus = "checking" | "online" | "offline";
 
 async function pingWeb(webBase: string, timeoutMs = 2000): Promise<boolean> {
   try {
+    const { fetchViaProxy } = await import("../../lib/http_proxy");
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), timeoutMs);
-    // GET / 而不是 HEAD — vite dev server / nginx 都答 200 主页. mode no-cors
-    // 避开 CORS preflight (我们不读 body).
-    await fetch(`${webBase}/`, {
+    // BL-CSP-PROXY (7/18 鸿波): 走 Rust reqwest 代理, CSP 严格. GET / 而不是 HEAD —
+    // vite dev server / nginx 都答 200 主页. Rust 端不做 CORS preflight, 直接返.
+    await fetchViaProxy(`${webBase}/`, {
       method: "GET",
-      mode: "no-cors",
       cache: "no-store",
       signal: ctrl.signal,
     });

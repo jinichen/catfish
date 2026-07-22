@@ -9,6 +9,8 @@
  */
 
 import { config } from "./env";
+// BL-CSP-PROXY (7/18 鸿波): 走 Rust reqwest 代理, CSP connect-src 严格.
+import { fetchViaProxy } from "./http_proxy";
 
 export class GatewayHttp {
   // BL-AUTH-DECOUPLE-A5 (5/19): 改读 backendUrl (hermes proxy 启用时 = hermes URL).
@@ -16,7 +18,7 @@ export class GatewayHttp {
   constructor(private baseUrl: string = config.backendUrl) {}
 
   async get<T>(path: string): Promise<T> {
-    const res = await fetch(this.baseUrl + path);
+    const res = await fetchViaProxy(this.baseUrl + path);
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}: ${path}`);
     }
@@ -24,7 +26,7 @@ export class GatewayHttp {
   }
 
   async post<T>(path: string, body: unknown): Promise<T> {
-    const res = await fetch(this.baseUrl + path, {
+    const res = await fetchViaProxy(this.baseUrl + path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

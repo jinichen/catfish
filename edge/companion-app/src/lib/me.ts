@@ -20,6 +20,9 @@ import {
   fetchProactiveContext,
 } from "./tauri";
 import { config } from "./env";
+// BL-CSP-PROXY (7/18 鸿波): Rust reqwest HTTP 代理 · CSP connect-src 保持严格.
+// 前端所有 fetch (fetchWithHermes / fetchWithOAuth doRequest) 走这个, 不直接 fetch().
+import { fetchViaProxy } from "./http_proxy";
 
 // BL-ARCH1 P1 (5/10): 加 sysadmin (catfish-identity 超级管理员).
 //   sysadmin > admin > manager > employee, RoleGate 在 web 侧做继承.
@@ -288,7 +291,10 @@ async function fetchWithHermes(
   } catch {
     /* keychain 没 token → 不带 header, hermes 401, caller 触发登录 */
   }
-  return fetch(input, { ...init, headers });
+  // BL-CSP-PROXY (7/18): 走 Rust reqwest 代理, CSP 严格. fetchViaProxy auto-detect
+  // stream (chat completions 走 event bridge, 其他一次拿完 body).
+  const urlStr = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  return fetchViaProxy(urlStr, { ...init, headers });
 }
 
 /** P3.5.42.11 (鸿波 6/20 catch '反复弹认证'): auth_login 全局节流.
@@ -314,7 +320,9 @@ async function fetchWithOAuth(
   const doRequest = async (token: string): Promise<Response> => {
     const headers = new Headers(init?.headers || {});
     headers.set("Authorization", `Bearer ${token}`);
-    return fetch(input, { ...init, headers });
+    // BL-CSP-PROXY (7/18): 走 Rust reqwest 代理, CSP 严格.
+    const urlStr = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    return fetchViaProxy(urlStr, { ...init, headers });
   };
 
   let token = await getToken();
@@ -536,7 +544,8 @@ export async function fetchDevUsers(): Promise<DevUser[] | null> {
     const url = `${config.gatewayUrl}/api/dev/users`;
     const headers: Record<string, string> = {};
     if (hermesAuth) headers["Authorization"] = hermesAuth;
-    const resp = await fetch(url, { headers });
+    // BL-CSP-PROXY (7/18): 走 Rust reqwest 代理, CSP 严格.
+    const resp = await fetchViaProxy(url, { headers });
     if (!resp.ok) return null; // 404 / prod / 仍 401 (走老 gateway 路径无 hermes auth)
     const data = (await resp.json()) as { users: DevUser[] };
     return data.users || [];

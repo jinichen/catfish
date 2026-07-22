@@ -94,7 +94,9 @@ export const toolBridgeChatApproval = async (
   if (config.useHermes && config.hermesAuthHeader) {
     headers["Authorization"] = config.hermesAuthHeader;
   }
-  const resp = await fetch(url, {
+  // BL-CSP-PROXY (7/18 鸿波): 走 Rust reqwest 代理, CSP 严格.
+  const { fetchViaProxy } = await import("./http_proxy");
+  const resp = await fetchViaProxy(url, {
     method: "POST",
     headers,
     body: JSON.stringify({ choice }),
