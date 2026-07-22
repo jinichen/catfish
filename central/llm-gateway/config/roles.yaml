@@ -48,7 +48,7 @@ version: 1
 roles:
   # ─── 主力 chat ───────────────────────────────────────
   # Companion picker 真默认值. 员工日常 chat / advisor / briefing 都走这.
-  chat_default: catfish-private-main
+  chat_default: catfish-public-deepseek-flash
   #chat_default: catfish-public-qwen-flash
 
   # ─── 快速评级 / 后台扫描 ────────────────────────────
