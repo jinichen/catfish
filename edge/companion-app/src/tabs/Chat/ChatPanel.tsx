@@ -44,19 +44,39 @@ export default function ChatPanel({
   // P3.5.18 Phase 2 (6/17 鸿波): hermes preflight 自动压缩 inline status. plugin P19 桥
   // status_callback → SSE. lib/chat.ts onLifecycle → useChat setLifecycleStatus.
   const lifecycleStatus = useChatStore((s) => s.lifecycleStatus);
+  // P3.5.79+ (7/22 鸿波 catch "切会话滚位置错"): 追踪 session 首次渲染, 只 force-scroll 1
+  // 次到底. 跟下面 messages 智能滚 effect 分工:
+  //   - session 首次渲染 (切进) → 强制到底 (无论用户上一 session 在哪个位置)
+  //   - 同 session 后续 messages (streaming / 新发送) → 走智能 logic (near bottom 才跟随)
+  const sessionId = useChatStore((s) => s.sessionId);
+  const scrolledSessionRef = useRef<string | null>(null);
 
-  // 新消息或 streaming token 来,自动滚到底
+  // 新消息或 streaming token 来 · 自动滚到底 (2 分支)
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    // 用户手动往上滚后,不强制拉回(给阅读历史的体验);只在底部附近时跟随
+
+    // 分支 1 · session 切换 · 首次消息 render 后强制滚到底 (P3.5.79+ 7/22)
+    // 老 bug: 只有 [messages] deps · 切 session 时 scrollTop 保留上一 session 的位置 ·
+    // scrollHeight 是新 session 内容 · atBottom 十有八九 false · 且新 session 最后条通常
+    // 是 assistant 不是 user · 两条件都不满足 → 不 scroll → 用户看到会话中间/顶部.
+    // 修法: 追 scrolledSessionRef · 只在 sessionId 变 + messages 已 populate 时 force
+    // 一次. empty session 不设 ref · 等 messages 加载完后再 force.
+    if (scrolledSessionRef.current !== sessionId && messages.length > 0) {
+      scrolledSessionRef.current = sessionId;
+      el.scrollTop = el.scrollHeight;
+      return;
+    }
+
+    // 分支 2 · 同 session 内新消息/streaming · 智能滚 (原逻辑, 保阅读历史体验)
+    // 用户手动往上滚后不强制拉回, 只在底部附近时跟随
     const threshold = 60;
     const atBottom =
       el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
     if (atBottom || messages[messages.length - 1]?.role === "user") {
       el.scrollTop = el.scrollHeight;
     }
-  }, [messages]);
+  }, [sessionId, messages]);
 
   // P44.3 (6/6 鸿波 marathon): floating approval banner — 在 LLM stream 期间立即弹.
   // 背景: hermes _gateway_approval 阻塞等 decision 时, chat completions stream
