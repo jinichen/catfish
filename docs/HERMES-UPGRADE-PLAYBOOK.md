@@ -252,6 +252,136 @@ grep "P28 miss" ~/.hermes/logs/gateway.log | tail -5
 
 **修 (P3.5.53)**: `_delayed_install` daemon thread 主动 `import model_tools` trigger, 不再被动 poll. sleep 0.5s 让主线程 register 完成跳过 partial init 段, 之后 `import model_tools` → model_tools ready → `_mod.install()` 直接跑. v0.17 model_tools 顶 imports 不撞 catfish plugin (no circular).
 
+### 坑 16: gateway abort 传导 · 4 层契约缺一不可 · 客户 abort 时 token 白烧 (BL-ABORT-PROPAGATE 7/23 达华 POC)
+
+**症状**: Companion 里员工点"停止"按钮后 · 前端 abort 生效 (spinner 停 · 输入框恢复) ·
+但**上游 vLLM/DashScope 计费依然烧到本轮 finish** · 员工看 dashboard 发现"我停了怎么还在扣 token".
+若上游按 output token 计费 (阿里云百炼 · deepseek) · **员工每次点停止都白扔 500-2000 token**.
+
+**真因** (7/23 阅读代码复现):
+
+老 `_stream_chat_completion` (gateway app.py:2148):
+```python
+async for chunk in _stream_with_keepalive(iterator):
+    yield f"data: {chunk}\n\n"
+# 无 disconnect check · 无 CancelledError catch · 无 finally aclose
+```
+
+客户端 abort 后 · 前端 TCP 断 · gateway 上游 `iterator` (litellm async gen) **仍在拉 chunk** ·
+直到本轮 finish 才自然结束. Yield 出的 SSE chunk 到 starlette 层写 socket · **broken pipe**
+被 starlette 吞 · gateway 层无感 · 继续 async for 拉下一 chunk · 上游继续烧.
+
+**修 · 4 层契约缺一不可**:
+
+1. **`_stream_chat_completion` 签名加 `request: Request` 参数** ·
+   老 caller 传 None 兼容 · 新调用 site (StreamingResponse) 传 request.
+2. **循环里每 chunk 前 `await request.is_disconnected()` check**:
+   ```python
+   async for chunk in _stream_with_keepalive(iterator):
+       if request and await request.is_disconnected():
+           logger.info("[abort] client disconnected ...")
+           inflight_streams.mark_aborted(request_id, reason="client_disconnect")
+           return  # generator return · 触发 finally
+       # ... 处理 chunk ...
+   ```
+3. **`except asyncio.CancelledError` re-raise**:
+   ```python
+   except asyncio.CancelledError:
+       logger.info("[abort] CancelledError ...")
+       inflight_streams.mark_aborted(request_id, reason="cancelled")
+       raise  # 军规 · 不吞 · fastapi/starlette 靠这个清理
+   ```
+   fastapi 检测到 client 断连时会 cancel task · 直接 raise CancelledError 到生成器里 ·
+   不走 disconnect check 分支 (那是循环 check · check 时点未到). 是**兜底**.
+4. **finally 显式 `await iterator.aclose()`**:
+   ```python
+   finally:
+       if iterator is not None and hasattr(iterator, "aclose"):
+           try:
+               await iterator.aclose()
+           except Exception as _e:
+               logger.debug("upstream aclose 失败 (可忽略): %s", _e)
+   ```
+   litellm iterator aclose 时 · 底层 httpx stream close · 传导到 vLLM/DashScope · **上游停生成**.
+   这一步是**真正省 token 的关键** · 前 3 步只是让 gateway 知道断了 · aclose 才发信号给上游.
+
+**为什么不能只保留其中几层**:
+
+| 只有第几层 | 症状 |
+|---|---|
+| 只 1+2 (disconnect check + return) | 循环退出但 iterator 未 close · 上游继续烧 |
+| 只 3 (CancelledError catch) | disconnect check 覆盖不到的边缘 case (starlette cancel task 前) 上游烧 |
+| 只 4 (finally aclose) | 循环还在 async for 拉 chunk · aclose 触发不到 (生成器还在跑) |
+| 缺 3 | 未来 fastapi 版本变了 cancel 行为 · 静默烧 token 且没 log |
+| 缺 4 | 前 3 层都到位但 iterator 不真关 · 上游烧到本轮 finish |
+
+**inflight_streams 加 `mark_aborted(reason)`**: 跟 `mark_finished` 语义一致 (从 dict 移除) ·
+差异只在**打 warn log** 含 request_id/user/model/duration/reason. ops 靠这个统计 abort 频率.
+若某模型 abort 率 > 10% · 说明 TTFT 太慢或员工看回复不满意 · 有信号价值.
+
+**测试** (test_inflight_streams.py 5 test):
+- `test_mark_aborted_removes_from_dict` · 基本行为
+- `test_mark_aborted_missing_id_idempotent` · 幂等
+- `test_mark_aborted_empty_request_id` · 空 id 返 False
+- `test_mark_aborted_logs_warning` · 有 record 时 log 断言含 request_id + reason
+- `test_mark_aborted_no_log_when_missing` · 无 record silent · 别噪 log
+
+**教训**:
+1. **async generator 里 client abort 传导是 4 层协作** · 少任一层都会 silent 烧 token.
+2. **fail-loud principle** · CancelledError 绝对不 catch 后吞掉 · 军规硬性. 只 log + re-raise.
+3. **finally aclose 兜底** · 是 iterator lifecycle 的正确 close · 别信 async gen GC 自动清 (不同 python / event loop 行为不一).
+4. **加 mark_aborted 而不是复用 mark_finished** · 让 audit 侧能区分"正常完成" vs "客户 abort" · 未来 ops 图表分类.
+
+**未来 refactor 者注意**: 上面 4 层是 tight coupling · 任何一层被移除 · 必须 QA 验证 abort 后
+token 消耗 (用 gateway `chunk stats` log 里的 completion_tokens · abort 后应该远小于正常完成).
+若你想删任何一层 · 请先跑 abort 场景测试 · 别相信"看起来没用".
+
+### 坑 15: crypto.subtle secure context · Companion 在 HTTP LAN IP 时崩 (P3.5.79+ 7/22 达华 POC)
+
+**症状**: 达华 POC 装完后 · 员工 mac 打开 Companion 显示登录页 · 页面 stuck loading ·
+浏览器 console 一行 `Uncaught (in promise): Error: Crypto.subtle is available only in
+secure contexts (HTTPS or loopback)`. 所有 OIDC PKCE flow 挂 · 员工登不进.
+
+**真因**:
+
+浏览器规范 · `window.crypto.subtle` (SubtleCrypto API · OIDC PKCE `S256` 挑战哈希用)
+**只在 secure context 里可用**:
+- ✓ https://any-host
+- ✓ http://localhost / http://127.0.0.1 / http://[::1]  (loopback 特权)
+- ✗ http://192.168.x.x  (LAN IP · 非 loopback 非 HTTPS · **不算 secure**)
+
+达华 POC 装机 · 员工 mac 通过 `http://192.168.31.199:5173` 访问中央 web · 命中第 3 条 ·
+`crypto.subtle` undefined · OIDC PKCE `oidc-client-ts` 库在 `generateCodeChallenge`
+里 crash.
+
+**修 · 4 方案 (按推荐度)**:
+
+1. **loopback 单机**: 达华 M mac 单机部署 · web 起在同机 · 用 http://127.0.0.1:5173 ·
+   不走 LAN IP · secure context OK. 达华 POC 首选此方案. (改 SERVER_IP=127.0.0.1)
+
+2. **HTTPS + 自签 cert** (生产推荐): nginx 反代 5173 → 443 · openssl 生成自签 ·
+   浏览器点"高级 → 继续访问". `setup.sh ENABLE_HTTPS=1` 支持. 缺点 · 员工首次看到红锁头
+   会吓.
+
+3. **Chrome flag**: 员工每台机 `chrome://flags/#unsafely-treat-insecure-origin-as-secure`
+   加白名单 `http://192.168.x.x:5173`. Safari / Edge 无此 flag. 达华 IT 不愿逐台配.
+
+4. **SSH tunnel** (dev-only): 员工本地 ssh -L 5173:localhost:5173 catfish-server ·
+   浏览器打 http://localhost:5173. 生产不用 (员工不会 ssh).
+
+**教训**:
+1. **secure context 是浏览器硬规则** · 服务端无法绕. web 相关部署必确认员工访问 URL
+   是 https / loopback · **LAN IP + HTTP 100% 崩**.
+2. **达华 POC 血案后果**: 从"装完就崩"到"追查 2 小时" · 因为初期我们没 check console
+   error · 光看 gateway log 没崩 · 以为服务端问题. **前端 crash 必看 browser console**
+   而不是 server log · 这是入门 debug 常识但反复忘.
+3. **setup.sh 默认应引导 loopback**: 若探测到多网卡且探测 IP 是 LAN · 应 warn "此 IP
+   在员工浏览器可能触发 crypto.subtle 崩 · 建议 SERVER_IP=127.0.0.1 单机模式 · 或
+   ENABLE_HTTPS=1".
+
+**未来避免**: 任何 web + OIDC 部署 · 装完必访问登录页 · 打开 browser console · 确认
+无 "secure context" error. 记入 setup.sh 尾部 verify 段.
+
 ### 坑 14: vLLM 上游 model 未配 max_output_tokens → dyn 超 cap 空 error 400 (P3.5.79+ 7/22)
 
 **症状**: hermes 内部 aux LLM 调 (title / summary / proactive) 全 502 · gateway
