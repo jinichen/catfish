@@ -147,17 +147,29 @@ echo "--- 1.1 · pull upstream postgres + nginx (arm64) ---"
 # P3.5.79+ (7/23): docker pull 失败 fallback 到本地 image · 别 set -e 死.
 # Mac 网络抖 / clash 拦 / docker.io EOF 时若本地已有可用 · 继续跑 · 不阻塞.
 # ONLY_SERVICES 模式跳 pull (增量更新 · 上游 image 假设已在)
+# 7/23 v2 · 加 verify 本地 image 架构 · 若跟当前 phase 架构不 match (可能上一 phase
+# 拉了别架构) · fallback 前 fail-loud · 别混. 老逻辑 fallback 本地不检架构 · 打出的
+# tar 里 postgres/nginx 架构可能不对 · verify 段才发现 · 白 build 一轮.
 if [ "$SKIP_UPSTREAM_PULL" = "1" ]; then
     echo "  ⏭  ONLY_SERVICES 模式 · skip upstream pull (postgres/nginx 假设本地已有)"
 else
 for img in postgres:16-alpine nginx:1.27-alpine; do
-    if docker pull "$img"; then
-        echo "  ✓ pull $img"
-    elif docker image inspect "$img" >/dev/null 2>&1; then
-        echo "  ⚠ pull $img 挂 · 但本地已有 · skip pull · 继续"
+    # 显式 --platform 强指定 · 别赌 DOCKER_DEFAULT_PLATFORM
+    if docker pull --platform linux/arm64 "$img"; then
+        echo "  ✓ pull $img (arm64)"
     else
-        echo "  ❌ pull $img 挂 且本地无 · 需连外网 · 或先 docker load 老 tar"
-        exit 1
+        # 网络挂 · 检本地是否已是**arm64** (若是别的 arch · 不能用 · verify 会挂)
+        local_arch=$(docker inspect "$img" --format '{{.Architecture}}' 2>/dev/null || echo "")
+        if [ "$local_arch" = "arm64" ]; then
+            echo "  ⚠ pull $img 挂 · 但本地已有 arm64 版 · skip pull · 继续"
+        elif [ -n "$local_arch" ]; then
+            echo "  ❌ pull $img 挂 · 本地是 $local_arch 版 (不匹配 arm64) · 手动重拉:"
+            echo "     docker pull --platform linux/arm64 $img"
+            exit 1
+        else
+            echo "  ❌ pull $img 挂 且本地无 · 需连外网 · 或先 docker load 老 tar"
+            exit 1
+        fi
     fi
 done
 fi
@@ -211,15 +223,24 @@ echo "=== Phase 2 · amd64 · 从头打 (QEMU 慢) ==="
 export DOCKER_DEFAULT_PLATFORM=linux/amd64
 
 echo "--- 2.1 · pull upstream postgres + nginx (amd64) ---"
-# P3.5.79+ (7/23): 同 Phase 1 · pull 挂 fallback 本地
+# P3.5.79+ (7/23 v2): 同 Phase 1 · pull 挂 fallback 本地. 显式 --platform + 架构 verify.
+# 老 bug · Phase 1 拉了 arm64 后 · Phase 2 pull amd64 挂 · fallback 用了本地 arm64 ·
+# 打出的 tar amd64 里 nginx 是 arm64 · verify 挂. 7/23 血案.
 for img in postgres:16-alpine nginx:1.27-alpine; do
-    if docker pull "$img"; then
-        echo "  ✓ pull $img"
-    elif docker image inspect "$img" >/dev/null 2>&1; then
-        echo "  ⚠ pull $img 挂 · 但本地已有 · skip pull · 继续"
+    if docker pull --platform linux/amd64 "$img"; then
+        echo "  ✓ pull $img (amd64)"
     else
-        echo "  ❌ pull $img 挂 且本地无 · 需连外网 · 或先 docker load 老 tar"
-        exit 1
+        local_arch=$(docker inspect "$img" --format '{{.Architecture}}' 2>/dev/null || echo "")
+        if [ "$local_arch" = "amd64" ]; then
+            echo "  ⚠ pull $img 挂 · 但本地已有 amd64 版 · skip pull · 继续"
+        elif [ -n "$local_arch" ]; then
+            echo "  ❌ pull $img 挂 · 本地是 $local_arch 版 (不匹配 amd64) · 手动重拉:"
+            echo "     docker pull --platform linux/amd64 $img"
+            exit 1
+        else
+            echo "  ❌ pull $img 挂 且本地无 · 需连外网 · 或先 docker load 老 tar"
+            exit 1
+        fi
     fi
 done
 
