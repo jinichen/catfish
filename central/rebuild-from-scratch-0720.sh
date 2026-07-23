@@ -109,6 +109,23 @@ if [ -n "$ONLY_SERVICES" ]; then
     echo "$IMAGES" | tr ' ' '\n'
     # 跳过 postgres/nginx pull (它们不在 ONLY_SERVICES 里 · 且假设本地已有)
     SKIP_UPSTREAM_PULL=1
+
+    # ── 7/23 达华 POC 血案 fix · ONLY_SERVICES 场景防呆 ──────
+    # 1. tar 名加 -only-<services> 后缀 · 别覆盖全套 image tar (全套是"新客户装机" ·
+    #    only 是"已装客户增量更新" · 两码事 · 不能混).
+    _svcs_suffix=$(echo "$ONLY_SERVICES" | tr ' ' '_')
+    ARM_OUT="$DELIVERY/dahua-poc-central-arm64-${DATE}-only-${_svcs_suffix}.tar.gz"
+    AMD_OUT="$DELIVERY/dahua-poc-central-amd64-${DATE}-only-${_svcs_suffix}.tar.gz"
+    echo "  tar 名带 -only-${_svcs_suffix} 后缀 · 防跟全套 tar 混 (image-only tar)"
+
+    # 2. 自动关 BUILD_FULL_DELIVERY · FULL tar 场景是"新客户装机 · 需全 image" ·
+    #    ONLY_SERVICES 只出部分 image · 打 FULL 会给客户"缺 image 的假 FULL" · 装不起.
+    if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
+        echo "  ⚠ ONLY_SERVICES 模式 · 自动关 BUILD_FULL_DELIVERY"
+        echo "     只出 image-only tar (增量更新) · 不打 FULL (FULL 需全 image)"
+        echo "     若真要给新客户 FULL 装机包 · unset ONLY_SERVICES 全打"
+        BUILD_FULL_DELIVERY=0
+    fi
 else
     SKIP_UPSTREAM_PULL=0
     echo "=== 目标 image list (从 docker-compose.yml 抽) ==="
