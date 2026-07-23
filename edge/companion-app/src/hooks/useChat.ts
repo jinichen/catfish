@@ -976,6 +976,87 @@ export function useChat(_initialModel: string) {
     [],
   );
 
+  /** BL-COMPANION-RESEND (7/23 达华 POC 催): 从指定 user msg 重发.
+   *
+   * 用户场景 · 员工发出一句话看到 AI 开始回 · 意识到自己那句问错了 · 想改主意.
+   * 老 cancelAndSend 是"停当前 stream + 发**新一句**" · 但历史里错的那句还在 · 后
+   * 续 LLM 又看着错句子上下文答 · 效果差. resend 是把错句**从历史里删** · 再发同款.
+   *
+   * 流程:
+   *   1. 校验 · msg 存在 · role=user · 否则 fail-loud
+   *   2. 拿 content + attachments 快照 (下一步 truncate 后 msg 就没了)
+   *   3. cancel 当前 stream (若在 stream · abortRef abort) · wait 200ms 让 finally cleanup
+   *   4. truncate 该 msg 及之后 (store.truncateFromMessage · 军规 id 不存在会 throw)
+   *   5. send(content, attachments) 走完整发送路径 (新 uuid / 持久化 / vision 检 全走)
+   *
+   * ⚠ 不能"编辑内容后重发" · 那是 P1. 本 P0 只支持原样重发 (typo 场景员工自己删了输入
+   * 框重打就是了 · 我们不做 UI 编辑).
+   */
+  const resendFromUserMsg = useCallback(
+    async (id: string) => {
+      const store = useChatStore.getState();
+      const msg = store.messages.find((m) => m.id === id);
+      if (!msg) {
+        // 军规 fail-loud · UI stale id 应该崩
+        throw new Error(`[resendFromUserMsg] msg id=${id} 不存在`);
+      }
+      if (msg.role !== "user") {
+        throw new Error(`[resendFromUserMsg] 只能重发 role=user · 拿到 role=${msg.role}`);
+      }
+      const content = msg.content;
+      const attachments = msg.attachments || [];
+
+      // cancel 当前 stream (跟 cancelAndSend 同款 · 200ms 等 finally 清 isStreaming)
+      if (abortRef.current) abortRef.current.abort();
+      await new Promise((r) => setTimeout(r, 200));
+
+      // truncate 该 msg 及之后 · send 会重新 append 新 uuid 的 user msg
+      store.truncateFromMessage(id);
+
+      await send(content, attachments);
+    },
+    [send],
+  );
+
+  /** BL-COMPANION-EDIT (7/23 达华 POC 催 · P1 续 P0 RESEND):
+   *  编辑 user msg 内容后重发. P0 是原样重发 (typo 场景员工重打输入框),
+   *  P1 是员工点 ✏️ 编辑 · 直接改 msg content · 确认后走跟 P0 同款流程 · 差异 · 用新 content.
+   *
+   * 流程 (跟 resendFromUserMsg 对称 · 只 content 换 newContent):
+   *   1. 校验 · msg 存在 · role=user · 否则 fail-loud
+   *   2. 校验 · newContent trimmed 非空 或 attachments 非空 · 否则 fail-loud
+   *      (跟 send() 早退语义一致 · UI 层已 gate · 到这里说明 gate 漏了)
+   *   3. attachments 从旧 msg 拿 (不动附件 · YAGNI. 员工要换图 · 删这句重发新的更清晰)
+   *   4. cancel + 200ms + truncate + send(trimmed, attachments)
+   *
+   * ⚠ 不加 edited_at / 版本号. state.db 持久化天然记了每次 send · 需要审计从 DB 追.
+   */
+  const editAndResendUserMsg = useCallback(
+    async (id: string, newContent: string) => {
+      const store = useChatStore.getState();
+      const msg = store.messages.find((m) => m.id === id);
+      if (!msg) {
+        throw new Error(`[editAndResendUserMsg] msg id=${id} 不存在`);
+      }
+      if (msg.role !== "user") {
+        throw new Error(`[editAndResendUserMsg] 只能编辑 role=user · 拿到 role=${msg.role}`);
+      }
+      const trimmed = newContent.trim();
+      const attachments = msg.attachments || [];
+      if (!trimmed && attachments.length === 0) {
+        // 军规 fail-loud · UI 应在 confirm 前 disable · 到这说明 gate 漏 · 别 silent
+        throw new Error(`[editAndResendUserMsg] newContent 空且无附件 · 无内容可发`);
+      }
+
+      if (abortRef.current) abortRef.current.abort();
+      await new Promise((r) => setTimeout(r, 200));
+
+      store.truncateFromMessage(id);
+      await send(trimmed, attachments);
+    },
+    [send],
+  );
+
   // P3.5.20.1 (6/17 鸿波): steer callback 砍 — BL-HERMES013-RED-1B (5/13)
   // 设计意图 (LLM 看 partial 接力) 未实现, 200 字 tail 跟 cancelAndSend 实测同效.
   // ACP /steer 等价路径退役.
@@ -1010,8 +1091,10 @@ export function useChat(_initialModel: string) {
     setModel: setModelInStore,
     send,
     cancel,
-    cancelAndSend,  // BL-COMPANION-UX1 (5/12): 一键停止+发新消息, 解锁死感
-    enqueue,        // BL-HERMES013-RED-1A (5/13): ACP /queue 等价, 排队下一条
+    cancelAndSend,          // BL-COMPANION-UX1 (5/12): 一键停止+发新消息, 解锁死感
+    enqueue,                // BL-HERMES013-RED-1A (5/13): ACP /queue 等价, 排队下一条
+    resendFromUserMsg,      // BL-COMPANION-RESEND (7/23): 从错的 user msg 起重发
+    editAndResendUserMsg,   // BL-COMPANION-EDIT (7/23 P1): 编辑 user msg 后重发
     // P3.5.20.1 (6/17): steer 砍 — BL-HERMES013-RED-1B 实测同效 cancelAndSend.
     reset,
   };

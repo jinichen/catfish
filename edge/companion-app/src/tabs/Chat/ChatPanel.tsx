@@ -26,6 +26,10 @@ interface Props {
   onCancelAndSend: (text: string, attachments: Attachment[]) => void;
   /** BL-HERMES013-RED-1A (5/13 ACP /queue): streaming 中排队下一条 */
   onEnqueue: (text: string) => void;
+  /** BL-COMPANION-RESEND (7/23 达华 POC 催): user msg hover → 🔄 重发 · 触发这个 */
+  onResendFromUserMsg: (id: string) => void;
+  /** BL-COMPANION-EDIT (7/23 P1): user msg hover → ✏️ 编辑 · confirm 后带 newContent 触发 */
+  onEditAndResendUserMsg: (id: string, newContent: string) => void;
   // P3.5.20.1 (6/17): onSteer prop 砍 — steer 整链退役.
   onReset: () => void;
 }
@@ -38,6 +42,8 @@ export default function ChatPanel({
   onCancel,
   onCancelAndSend,
   onEnqueue,
+  onResendFromUserMsg,
+  onEditAndResendUserMsg,
   onReset,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -186,6 +192,11 @@ export default function ChatPanel({
             // BL-TASK-ASSESS-3-UI (5/15): 嘴炮断言 [⏩ 催它继续] 按钮 → 发"继续",
             // 走跟用户手动发完全一样的 onSend 路径, 不走 gateway 重试.
             onNudge={() => onSend("继续", [])}
+            // BL-COMPANION-RESEND (7/23): user msg hover → 🔄 重发 · 从该 msg 截断后重发
+            onResend={onResendFromUserMsg}
+            // BL-COMPANION-EDIT (7/23 P1): user msg hover → ✏️ 编辑 · confirm 后新内容发
+            onEditAndResend={onEditAndResendUserMsg}
+            isStreaming={isStreaming}
           />
         ))}
         {/* P3.5.18 Phase 2 (6/17 鸿波): hermes preflight 自动压缩 inline 状态.

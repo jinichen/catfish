@@ -1,5 +1,6 @@
 /** 单条消息渲染 —— user / assistant / 错误状态 */
 
+import { useState } from "react";
 import { Markdown } from "../../lib/markdown";
 import type { ChatMessage as Msg } from "../../types/chat";
 import ChatToolCall from "./ChatToolCall";
@@ -21,11 +22,33 @@ interface Props {
   /** BL-TASK-ASSESS-3-UI (5/15): 点 [⏩ 催它继续] 按钮时发"继续". 由父组件
    *  ChatPanel 传下来, 走跟用户手动发"继续"完全一样的路径. 不走 gateway 重试. */
   onNudge?: () => void;
+  /** BL-COMPANION-RESEND (7/23): user msg hover 时显示 🔄 按钮 · 点重发这句.
+   *  useChat.resendFromUserMsg 触发. streaming 中隐藏 (避免误触当前 stream). */
+  onResend?: (id: string) => void;
+  /** BL-COMPANION-EDIT (7/23 P1): user msg hover 时显示 ✏️ 按钮 · 点后气泡变
+   *  textarea · Enter 确认发送新内容 · Esc 取消. useChat.editAndResendUserMsg 触发. */
+  onEditAndResend?: (id: string, newContent: string) => void;
+  /** streaming 中不显 resend/edit 按钮 · caller 传 isStreaming */
+  isStreaming?: boolean;
 }
 
-export default function ChatMessage({ msg, showCaret = false, onNudge }: Props) {
+export default function ChatMessage({
+  msg,
+  showCaret = false,
+  onNudge,
+  onResend,
+  onEditAndResend,
+  isStreaming = false,
+}: Props) {
   if (msg.role === "user") {
-    return <UserBubble msg={msg} />;
+    return (
+      <UserBubble
+        msg={msg}
+        onResend={onResend}
+        onEditAndResend={onEditAndResend}
+        isStreaming={isStreaming}
+      />
+    );
   }
   if (msg.role === "assistant") {
     return <AssistantBubble msg={msg} showCaret={showCaret} onNudge={onNudge} />;
@@ -36,20 +59,131 @@ export default function ChatMessage({ msg, showCaret = false, onNudge }: Props) 
   return null;
 }
 
-function UserBubble({ msg }: { msg: Msg }) {
+function UserBubble({
+  msg,
+  onResend,
+  onEditAndResend,
+  isStreaming,
+}: {
+  msg: Msg;
+  onResend?: (id: string) => void;
+  onEditAndResend?: (id: string, newContent: string) => void;
+  isStreaming?: boolean;
+}) {
   const hasAttachments = msg.attachments && msg.attachments.length > 0;
   // BL-AUTO-CONTINUE (5/13): Companion 自动续跑发的 user msg, UI 标记淡色 +
   // 角标 "🔄 自动续 N/M", 让员工看见这是机器发的不是他自己发的.
   const isAutoContinue = msg._autoContinue !== undefined;
   // P3.5.20.1 (6/17 鸿波): isSteered / _steered render 砍 — steer 整链退役.
+
+  // BL-COMPANION-RESEND (7/23): hover state · 显 🔄 按钮.
+  // 自动续跑消息不显 (不是员工发的 · 重发无意义).
+  const [hovered, setHovered] = useState(false);
+  // BL-COMPANION-EDIT (7/23 P1): 编辑态 · click ✏️ → editing=true · 气泡变 textarea.
+  // draft = 编辑中的草稿 · 确认前老 msg.content 保留 · 取消 (Esc) 时 draft 丢弃.
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(msg.content);
+  const canResend = !!onResend && !isAutoContinue && !isStreaming;
+  const canEdit = !!onEditAndResend && !isAutoContinue && !isStreaming;
+
+  function startEdit() {
+    // 每次进入编辑态 · 从当前 msg.content 初始化 draft (防上次取消后残留)
+    setDraft(msg.content);
+    setEditing(true);
+  }
+  function cancelEdit() {
+    // 军规 · draft 丢弃 · 老 msg.content 完好. 无 side effect.
+    setEditing(false);
+  }
+  function confirmEdit() {
+    const trimmed = draft.trim();
+    // UI 层 gate · 跟 send() 早退语义一致: trimmed 空 + 无附件不发.
+    // useChat.editAndResendUserMsg 也有 fail-loud 兜底 (throw) · 双层保护.
+    if (!trimmed && !hasAttachments) return;
+    onEditAndResend!(msg.id, trimmed);
+    setEditing(false);
+  }
+  function onEditorKey(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    // 复用 ChatInput.tsx:270-275 键盘模式: Shift+Enter 换行 · Enter 发送
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      confirmEdit();
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      cancelEdit();
+    }
+  }
+
   return (
     <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       style={{
         display: "flex",
         justifyContent: "flex-end",
+        alignItems: "center",
+        gap: "var(--space-2)",
         marginBottom: "var(--space-4)",
       }}
     >
+      {/* ✏️ 编辑按钮 · hover 显 · editing 中隐 (气泡本身变编辑区) · 放 🔄 左边 */}
+      {canEdit && hovered && !editing && (
+        <button
+          type="button"
+          onClick={startEdit}
+          title="编辑这句 · 改完 Enter 发送 · Esc 取消"
+          style={{
+            background: "transparent",
+            border: "1px solid var(--catfish-border)",
+            borderRadius: "var(--radius-sm)",
+            padding: "var(--space-1) var(--space-2)",
+            fontSize: 12,
+            color: "var(--catfish-text-muted)",
+            cursor: "pointer",
+            lineHeight: 1,
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = "var(--catfish-bg-elevated)";
+            e.currentTarget.style.color = "var(--catfish-cyan)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "transparent";
+            e.currentTarget.style.color = "var(--catfish-text-muted)";
+          }}
+        >
+          ✏️ 编辑
+        </button>
+      )}
+      {/* 🔄 重发按钮 · hover 显 · editing 中隐 · 放气泡左侧 */}
+      {canResend && hovered && !editing && (
+        <button
+          type="button"
+          onClick={() => onResend!(msg.id)}
+          title="重发这句 · 删除此消息后的所有回复 · 再发同款给 AI"
+          style={{
+            background: "transparent",
+            border: "1px solid var(--catfish-border)",
+            borderRadius: "var(--radius-sm)",
+            padding: "var(--space-1) var(--space-2)",
+            fontSize: 12,
+            color: "var(--catfish-text-muted)",
+            cursor: "pointer",
+            lineHeight: 1,
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = "var(--catfish-bg-elevated)";
+            e.currentTarget.style.color = "var(--catfish-cyan)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = "transparent";
+            e.currentTarget.style.color = "var(--catfish-text-muted)";
+          }}
+        >
+          🔄 重发
+        </button>
+      )}
       <div
         style={{
           background: isAutoContinue
@@ -60,16 +194,21 @@ function UserBubble({ msg }: { msg: Msg }) {
             : "white",
           padding: "var(--space-3) var(--space-4)",
           borderRadius: "var(--radius-md)",
+          // BL-COMPANION-EDIT (7/23 P1): editing 时 minWidth 60% 撑起 textarea ·
+          // 避免气泡太窄. 非编辑态保持 maxWidth 75% 短句居右紧凑.
           maxWidth: "75%",
+          minWidth: editing ? "60%" : "auto",
           fontSize: 14,
           lineHeight: 1.5,
           whiteSpace: "pre-wrap",
           wordBreak: "break-word",
           display: "flex",
           flexDirection: "column",
-          gap: hasAttachments && msg.content ? "var(--space-2)" : 0,
+          gap: hasAttachments && (msg.content || editing) ? "var(--space-2)" : 0,
           border: isAutoContinue
             ? "1px dashed var(--catfish-cyan)"
+            : editing
+            ? "2px solid var(--catfish-cyan-hover, #58c1c9)"  // 编辑态 · 边框加粗提示
             : "none",
           opacity: isAutoContinue ? 0.92 : 1,
         }}
@@ -116,7 +255,49 @@ function UserBubble({ msg }: { msg: Msg }) {
             )}
           </div>
         )}
-        {msg.content && <span>{msg.content}</span>}
+        {/* BL-COMPANION-EDIT (7/23 P1): 编辑态 · content 变 textarea + 键盘 tip
+            非编辑态 · 老 span 显示 (行为不变). */}
+        {editing ? (
+          <>
+            <textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={onEditorKey}
+              autoFocus
+              rows={Math.max(2, Math.min(8, draft.split("\n").length + 1))}
+              style={{
+                width: "100%",
+                background: "transparent",
+                border: "none",
+                color: "inherit",
+                fontSize: 14,
+                lineHeight: 1.5,
+                fontFamily: "inherit",
+                outline: "none",
+                resize: "vertical",
+                padding: 0,
+                margin: 0,
+              }}
+            />
+            <div
+              style={{
+                fontSize: 11,
+                opacity: 0.75,
+                marginTop: "var(--space-1)",
+                display: "flex",
+                justifyContent: "space-between",
+                gap: "var(--space-2)",
+              }}
+            >
+              <span>Enter 发送 · Shift+Enter 换行 · Esc 取消</span>
+              {!draft.trim() && !hasAttachments && (
+                <span style={{ opacity: 0.9 }}>· 内容不能为空</span>
+              )}
+            </div>
+          </>
+        ) : (
+          msg.content && <span>{msg.content}</span>
+        )}
       </div>
     </div>
   );

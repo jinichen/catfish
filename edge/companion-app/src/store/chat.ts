@@ -95,6 +95,11 @@ interface ChatState {
   addMessage: (msg: ChatMessage) => void;
   updateMessage: (id: string, update: Partial<ChatMessage>) => void;
   appendToMessage: (id: string, delta: string) => void;
+  /** BL-COMPANION-RESEND (7/23 达华 POC 催): 从指定 msg 起截断 (**不含**该 msg ·
+   * 该 msg 本身也一起删 · 交给 send() 重新 append). 用于 "用户发出后发现错 · 重发".
+   * useChat.resendFromUserMsg 里调 · 截完后拿 msg.content + attachments 走 send().
+   * 军规 · fail-loud · id 不存在直接 throw (调用端拿了 stale id 应该崩 · 不 silent). */
+  truncateFromMessage: (id: string) => void;
   /** BL-TASK-ASSESS-3-UI (5/15): 点"催它继续"按钮时计数器++. 3 次用完后按钮变灰. */
   incrementPromiseNudge: (id: string) => void;
   setIsStreaming: (v: boolean) => void;
@@ -177,6 +182,18 @@ export const useChatStore = create<ChatState>((set) => ({
         m.id === id ? { ...m, content: m.content + delta } : m,
       ),
     })),
+  truncateFromMessage: (id) =>
+    set((s) => {
+      const idx = s.messages.findIndex((m) => m.id === id);
+      if (idx === -1) {
+        // 军规 · fail-loud. UI 可能拿了个 stale id · 崩比 silent 好排查.
+        throw new Error(`[truncateFromMessage] msg id=${id} 不存在 · UI state 跟 store 脱节`);
+      }
+      // 截 · 该 msg 本身也删 (含 idx 及之后). caller 必须**先**从旧 msg 取 content /
+      // attachments · 再 truncate · 再 send() · 让 send 走完整路径 (新 uuid / 持久化 /
+      // sessionAttachments 索引 / vision check 全走一遍 · 不 shortcut).
+      return { messages: s.messages.slice(0, idx) };
+    }),
   incrementPromiseNudge: (id) =>
     set((s) => ({
       messages: s.messages.map((m) => {

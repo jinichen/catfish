@@ -43,8 +43,10 @@ export default function ChatTab() {
     setModel,
     send,
     cancel,
-    cancelAndSend,  // BL-COMPANION-UX1 (5/12): 一键停止+发新消息
-    enqueue,        // BL-HERMES013-RED-1A (5/13 ACP /queue): 排队下一条
+    cancelAndSend,          // BL-COMPANION-UX1 (5/12): 一键停止+发新消息
+    enqueue,                // BL-HERMES013-RED-1A (5/13 ACP /queue): 排队下一条
+    resendFromUserMsg,      // BL-COMPANION-RESEND (7/23 达华 POC 催): user msg 🔄 重发
+    editAndResendUserMsg,   // BL-COMPANION-EDIT (7/23 P1): user msg ✏️ 编辑后重发
     // P3.5.20.1 (6/17): steer 砍 — 整链退役.
     reset,
   } = useChat(defaultModel);
@@ -425,6 +427,8 @@ export default function ChatTab() {
             onCancel={cancel}
             onCancelAndSend={handleCancelAndSend}
             onEnqueue={enqueue}
+            onResendFromUserMsg={resendFromUserMsg}
+            onEditAndResendUserMsg={editAndResendUserMsg}
             onReset={reset}
           />
           )}
