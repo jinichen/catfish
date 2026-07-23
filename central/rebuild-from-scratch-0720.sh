@@ -35,10 +35,21 @@ set -euo pipefail
 # SKIP_AMD64    默认 0 · 只需 mac 本地 arm64 测试 SKIP_AMD64=1
 # BUILD_FULL_DELIVERY  默认 1 · Phase 3 打完整交付 tar (image+setup+docker-compose+companion+docs)
 #                 客户 IT 拿到一个 tar 解压 · `bash setup.sh` 秒装
+#
+# ONLY_SERVICES (7/23 P2 abort 传导做完后加): 空 = 打全 6 image (默认).
+#                指定则**只 build 这几个**服务 · save 时 image list 也只含这几个.
+#                场景 · gateway 单改一处热修 · 别陪打 identity/web/skills-hub 等 5 个.
+#                例: ONLY_SERVICES="gateway" bash rebuild-from-scratch-0720.sh
+#                    ONLY_SERVICES="gateway identity" ...
+#                空格分隔 · 名字对应 docker-compose.yml 里 service key (不带 catfish- 前缀).
+#                验证 · 名字必须在 BUILT_SERVICES 列表里 · 否则 fail-loud.
+#                注 · postgres / nginx 是 upstream image · 只在全打时 pull · ONLY_SERVICES
+#                模式不 pull (假设已在本地 · 增量更新场景默认满足).
 DATE="${DATE:-$(date +%Y%m%d)}"
 SKIP_ARM64="${SKIP_ARM64:-0}"
 SKIP_AMD64="${SKIP_AMD64:-0}"
 BUILD_FULL_DELIVERY="${BUILD_FULL_DELIVERY:-1}"
+ONLY_SERVICES="${ONLY_SERVICES:-}"
 
 CENTRAL="$HOME/person_task/catfish/central"
 REPO_ROOT="$HOME/person_task/catfish"
@@ -67,8 +78,33 @@ fi
 # 6 个自造 image · 需 build (从 IMAGES 里过滤 catfish- 开头)
 BUILT_SERVICES="identity gateway skills-hub web mcp-registry wiki-hub"
 
-echo "=== 目标 image list (从 docker-compose.yml 抽) ==="
-echo "$IMAGES" | tr ' ' '\n'
+# ── ONLY_SERVICES 生效 · 缩小 build 集合 (7/23 P2 后加 · 单 service 增量更新场景) ──
+if [ -n "$ONLY_SERVICES" ]; then
+    # verify · 每个都在 BUILT_SERVICES 列表 (fail-loud typo)
+    for svc in $ONLY_SERVICES; do
+        if ! echo " $BUILT_SERVICES " | grep -q " $svc "; then
+            echo "❌ ONLY_SERVICES=$ONLY_SERVICES · '$svc' 不在合法列表: $BUILT_SERVICES"
+            exit 1
+        fi
+    done
+    BUILT_SERVICES="$ONLY_SERVICES"
+    # IMAGES 也 filter · 只保留这几个 service 的 image (从 docker-compose.yml 抽 tag)
+    FILTERED_IMAGES=""
+    for svc in $ONLY_SERVICES; do
+        tag="catfish-${svc}:$(grep -A 20 "^  ${svc}:$" docker-compose.yml | grep '^    image:' | head -1 | awk -F: '{print $NF}')"
+        FILTERED_IMAGES="$FILTERED_IMAGES $tag"
+    done
+    IMAGES=$(echo "$FILTERED_IMAGES" | xargs)
+    echo "=== ONLY_SERVICES 模式 · 只 build/save: $BUILT_SERVICES ==="
+    echo "=== filtered image list ==="
+    echo "$IMAGES" | tr ' ' '\n'
+    # 跳过 postgres/nginx pull (它们不在 ONLY_SERVICES 里 · 且假设本地已有)
+    SKIP_UPSTREAM_PULL=1
+else
+    SKIP_UPSTREAM_PULL=0
+    echo "=== 目标 image list (从 docker-compose.yml 抽) ==="
+    echo "$IMAGES" | tr ' ' '\n'
+fi
 echo ""
 
 # ================================================================
@@ -84,6 +120,10 @@ export DOCKER_DEFAULT_PLATFORM=linux/arm64
 echo "--- 1.1 · pull upstream postgres + nginx (arm64) ---"
 # P3.5.79+ (7/23): docker pull 失败 fallback 到本地 image · 别 set -e 死.
 # Mac 网络抖 / clash 拦 / docker.io EOF 时若本地已有可用 · 继续跑 · 不阻塞.
+# ONLY_SERVICES 模式跳 pull (增量更新 · 上游 image 假设已在)
+if [ "$SKIP_UPSTREAM_PULL" = "1" ]; then
+    echo "  ⏭  ONLY_SERVICES 模式 · skip upstream pull (postgres/nginx 假设本地已有)"
+else
 for img in postgres:16-alpine nginx:1.27-alpine; do
     if docker pull "$img"; then
         echo "  ✓ pull $img"
@@ -94,6 +134,7 @@ for img in postgres:16-alpine nginx:1.27-alpine; do
         exit 1
     fi
 done
+fi
 
 echo ""
 echo "--- 1.2 · build 6 自造 image (arm64) · no-cache 完全干净 ---"
