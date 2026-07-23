@@ -205,34 +205,62 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
         # admin@catfish.com 完全无法创建 · 客户装完根本登不进.
         # 修: tar czf 前 · 把 central/{identity-server,llm-gateway}/config 拷进
         # delivery/dahua-poc/ 对应位置 · 打进 tar. 客户装机就有 seed 源.
+        #
+        # ── P3.5.79+ (7/23 达华 POC · overlay 机制) ─────────────────────
+        # 两步 rsync 实现 · 通用 baseline + 客户定制 override:
+        #   1. central/$svc/config             → delivery/$svc/config      (baseline)
+        #   2. delivery/$svc/config-overlay/*  → delivery/$svc/config/*    (覆盖)
+        # overlay 目录里只放**跟通用不同**的文件 · git track 差异 · 打 tar
+        # 时 exclude · 客户看不到 overlay · 只见 merge 后 config/.
+        # 现有 overlay · delivery/dahua-poc/llm-gateway/config-overlay/roles.yaml
+        # (达华单 model qwen3.7-plus · 覆盖通用 7-role 版)
         echo ""
-        echo "--- 3.pre · sync central config → delivery (identity users.yaml + gateway roles/models) ---"
+        echo "--- 3.pre · sync central config → delivery + apply overlay ---"
         for svc in identity-server llm-gateway; do
             SRC_CFG="$CENTRAL/$svc/config"
             DST_CFG="$DELIVERY_DIR/$svc/config"
+            OVERLAY="$DELIVERY_DIR/$svc/config-overlay"
             if [ -d "$SRC_CFG" ]; then
                 mkdir -p "$DST_CFG"
-                # 拷全部 · 排除敏感 (users.yaml 若含真 hash 不该进 delivery · 只保 .example)
-                # 客户装机后 · setup.sh cp users.yaml.example → users.yaml
+                # a. 通用 baseline · 排敏感 + 排 .dahua 后缀 (老 · 已挪 overlay)
+                # 7/23 加 database.yaml exclude · 军规血泪 · central/*/config/database.yaml
+                # 含开发环境 PG 密码 (URL-encoded 明文) · rsync 不排会拷进 delivery ·
+                # 若 tar 也不排会打进客户包. 客户不该看到我们本地 dev DB 密码. 加 exclude
+                # + 客户装机时 setup.sh 从 database.yaml.example 生成新的 (走 env 注入).
                 rsync -a --exclude='.env' --exclude='.DS_Store' \
                       --exclude='users.yaml' --exclude='clients.yaml' \
+                      --exclude='database.yaml' \
+                      --exclude='*.dahua' \
                       "$SRC_CFG/" "$DST_CFG/" 2>/dev/null || \
                 cp -R "$SRC_CFG/"* "$DST_CFG/" 2>/dev/null
-                echo "  ✓ $svc/config → delivery ($(ls "$DST_CFG" | wc -l | tr -d ' ') files)"
+                echo "  ✓ $svc/config baseline ($(ls "$DST_CFG" | wc -l | tr -d ' ') files)"
             else
-                echo "  ⚠ $SRC_CFG 不存在 · skip"
+                echo "  ⚠ $SRC_CFG 不存在 · skip baseline"
+            fi
+            # b. overlay 覆盖 · 排 README (说明文档 · 客户不需要)
+            if [ -d "$OVERLAY" ]; then
+                OVERLAY_COUNT=$(find "$OVERLAY" -type f ! -name 'README.md' | wc -l | tr -d ' ')
+                if [ "$OVERLAY_COUNT" -gt 0 ]; then
+                    rsync -a --exclude='README.md' "$OVERLAY/" "$DST_CFG/" 2>/dev/null
+                    echo "  ✓ $svc overlay applied ($OVERLAY_COUNT files · 达华定制)"
+                fi
             fi
         done
 
         for arch in arm64 amd64; do
             SRC_TAR=""
             OUT_TAR=""
-            if [ "$arch" = "arm64" ] && [ "$SKIP_ARM64" != "1" ]; then
+            if [ "$arch" = "arm64" ]; then
                 SRC_TAR="$ARM_OUT"; OUT_TAR="$FULL_ARM_OUT"
-            elif [ "$arch" = "amd64" ] && [ "$SKIP_AMD64" != "1" ]; then
+            elif [ "$arch" = "amd64" ]; then
                 SRC_TAR="$AMD_OUT"; OUT_TAR="$FULL_AMD_OUT"
             fi
-            if [ -z "$SRC_TAR" ]; then
+            # P3.5.79+ (7/23): Phase 3 独立于 Phase 1/2 · 只要 image tar 存在就重打 FULL.
+            # 场景 · 改了 setup.sh / .env.example / config 但 image 未变 · 跑:
+            #   SKIP_ARM64=1 SKIP_AMD64=1 bash rebuild-from-scratch-0720.sh
+            # 会跳 Phase 1/2 build · 直接 Phase 3 用已有 image tar 重打 FULL.
+            if [ ! -f "$SRC_TAR" ]; then
+                echo "  ⚠ $SRC_TAR 不存在 · skip $arch (跑 Phase 1/2 先出 image tar · 或指定其他 DATE)"
                 continue
             fi
 
@@ -245,16 +273,21 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
 
             # 打 tar (从 repo 根 · tar 里路径 delivery/dahua-poc/...)
             # P3.5.79+ (7/23 鸿波 catch '最简 · 多余不要 · 缺的必带'):
-            # 排 · docs (客户自己写 SOP) · README (太长 · setup.sh 里已注释)
-            # 保 · companion (员工 dmg 分发) · identity-server/config (users.yaml.example
-            #     必带 · setup.sh cp 到 users.yaml) · llm-gateway/config (models.yaml
-            #     + roles.yaml 必带 · gateway mount 用)
+            # 排 · docs      (客户自己写 SOP)
+            #    · README    (太长 · setup.sh 里已注释)
+            #    · companion (员工装 Companion 客户端用 · 员工侧单独分发 · 服务端 IT 不需要)
+            #    · certs     (自签 cert setup.sh --ENABLE_HTTPS=1 现生成)
+            #    · .env      (敏感 · 客户自填)
+            # 保 · identity-server/config (users.yaml.example 必带 · setup.sh cp 到 users.yaml)
+            #    · llm-gateway/config     (models.yaml + roles.yaml 必带 · gateway mount 用)
             cd "$REPO_ROOT"
             tar czf "$OUT_TAR" \
                 --exclude='delivery/dahua-poc/certs' \
                 --exclude='delivery/dahua-poc/.env' \
                 --exclude='delivery/dahua-poc/docs' \
                 --exclude='delivery/dahua-poc/README.md' \
+                --exclude='delivery/dahua-poc/companion' \
+                --exclude='delivery/dahua-poc/*/config-overlay' \
                 delivery/dahua-poc/
             cd "$CENTRAL"
 

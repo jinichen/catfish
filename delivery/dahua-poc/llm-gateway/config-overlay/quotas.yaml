@@ -1,0 +1,26 @@
+defaults:
+  per_user:
+    tokens_per_minute: 2000000
+    tokens_per_day: 300000000
+  per_model:
+    qwen3.7-plus:
+      tokens_per_day: 5000000
+  per_department:
+    研发部:
+      tokens_per_day: 30000000
+    财务部:
+      tokens_per_day: 5000000
+    市场部:
+      tokens_per_day: 10000000
+    人力资源部:
+      tokens_per_day: 5000000
+overrides:
+  users:
+    admin@catfish.com:
+      tokens_per_minute: 300000000
+      tokens_per_day: 30000000000
+  departments:
+    engineering:
+      tokens_per_day: 0
+    研发部:
+      tokens_per_day: 0

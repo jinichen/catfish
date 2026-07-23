@@ -1,0 +1,44 @@
+# ============================================================
+# 达华 POC · llm-gateway models overlay · 单 model
+# ============================================================
+# 只放达华专属 model · 覆盖通用 models.yaml.
+# roles.yaml 里 chat_default 指向 catfish-public-qwen-plus · 这里必须有同名 model.
+#
+# 阿里云百炼 qwen-plus:
+#   - api_base:   https://dashscope.aliyuncs.com/compatible-mode/v1 (OpenAI 兼容模式)
+#   - LiteLLM:    openai/qwen-plus (走 OpenAI-compatible)
+#   - api_key:    从 .env DASHSCOPE_API_KEY 读 · 客户 IT 自填
+#   - context:    128K (qwen-plus 官方)
+#   - max_output: 8K (qwen-plus 官方 8192 单次上限)
+# ============================================================
+
+version: 1
+
+models:
+
+  - name: catfish-public-qwen-plus
+    tier: public
+    display_name: "通义千问 Plus (阿里云百炼)"
+    mode: chat
+    default: true
+
+    upstream:
+      model: openai/qwen-plus
+      api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api_key_env: DASHSCOPE_API_KEY
+      timeout: 180
+
+    context_window: 128000
+    # 阿里云 qwen-plus 单次 max_output 8192 · 官方文档明确 (超返 400)
+    max_output_tokens: 8192
+    supports_tool_use: true
+    supports_streaming: true
+    # qwen-plus 3.7+ 支持视觉 · 若上游返 400 vision-not-supported 改 false
+    supports_vision: true
+    recommended_for: [general, chat, tool_use, code, vision,
+                      summarizer, proactive_starter, a2a_aux]
+    cost_tier: paid
+
+    # 达华 POC 单 model · 无 fallback 备份.
+    # 若上游 qwen-plus 挂 · 员工直接看到 error · IT 到阿里云 console 排查.
+    # 生产扩容再加 fallback chain (加 catfish-public-qwen-vl-max 或 catfish-public-deepseek).

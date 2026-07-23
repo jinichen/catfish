@@ -1,0 +1,25 @@
+# delivery/dahua-poc/.gitignore  (7/23 达华 POC · 军规血泪)
+#
+# rebuild-from-scratch-0720.sh Phase 3.pre 会 rsync central/*/config → delivery/*/config
+# 作 baseline · 客户装机时 overlay 层再覆盖. baseline 是**生成产物** · 每次 rebuild
+# 覆盖 · 且可能含开发环境敏感 (central/*/config/database.yaml 有本地 PG 密码 ·
+# rebuild 已加 exclude · 但历史现场可能残留) · **一律不进 git**.
+#
+# overlay 才是 source of truth · 必须 track (强制 include).
+
+# 生成产物 · 不 commit
+llm-gateway/config/
+identity-server/config/
+
+# overlay 是达华专属真配置 · 手动写 · 必 track (rebuild 只覆盖 config/ · 不动 overlay)
+!llm-gateway/config-overlay/
+!identity-server/config-overlay/
+
+# 装机时才生成 · 敏感
+.env
+*.bak.*
+certs/
+
+# image tar · 分发件 · 太大不进 git
+images/*.tar.gz
+images/*.tar

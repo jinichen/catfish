@@ -1,0 +1,9 @@
+# roles.yaml.dahua · 单 model 版
+roles:
+  chat_default: catfish-public-qwen-plus   # 阿里云百炼 QWEN3.7 plus
+
+default_allowed_models_per_role:
+  employee: [chat_default]
+  manager:  [chat_default]
+  admin:    [chat_default]
+  sysadmin: [chat_default]
