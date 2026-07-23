@@ -200,29 +200,68 @@ if [ "$ENABLE_HTTPS" = "1" ]; then
     fi
 fi
 
-# ── 4. 装 image tar (若指定) ──────────────────────────
+# ── 4. 装 image tar (若指定 / 若 images/ 里有) ──────────
+# P3.5.79+ (7/23 199 blood catch v2): IMAGE_TAR 未传 · 自动探 images/*.tar.gz.
+# 用户命令 `\ ` 续行错时 · IMAGE_TAR 没进 env · 老版直接 skip load · 后面 docker
+# compose up 去 docker.io pull · 内网挂. 现在自动探 · 兜底更稳.
+if [ -z "$IMAGE_TAR" ]; then
+    AUTO_TAR=$(ls "$SCRIPT_DIR/images/"*.tar.gz 2>/dev/null | head -1)
+    if [ -n "$AUTO_TAR" ]; then
+        echo "→ 自动发现 image tar: $(basename "$AUTO_TAR") (IMAGE_TAR 未传 · 兜底)"
+        IMAGE_TAR="$AUTO_TAR"
+    fi
+fi
+
 if [ -n "$IMAGE_TAR" ]; then
     if [ ! -f "$IMAGE_TAR" ]; then
         echo "❌ IMAGE_TAR=$IMAGE_TAR 找不到"
         exit 1
     fi
-    echo "→ load image tar: $IMAGE_TAR (~5-15 min)"
-    if [[ "$IMAGE_TAR" =~ \.gz$ ]]; then
-        gunzip -c "$IMAGE_TAR" | docker load
+    # 若关键 image 本地已在 (幂等 · 二次跑不重 load) · skip
+    if docker image inspect catfish-gateway:0.1.1 >/dev/null 2>&1; then
+        echo "→ image 本地已存 · skip load (若要强 load · docker rmi 后重跑)"
     else
-        docker load < "$IMAGE_TAR"
+        echo "→ load image tar: $IMAGE_TAR (~5-15 min)"
+        if [[ "$IMAGE_TAR" =~ \.gz$ ]]; then
+            gunzip -c "$IMAGE_TAR" | docker load
+        else
+            docker load < "$IMAGE_TAR"
+        fi
+        echo "  ✓ 装完"
     fi
-    echo "  ✓ 装完 · 现有 image:"
+    echo "  现有 image:"
     docker images | grep -E "catfish|postgres:16-alpine" | sed 's/^/    /'
 fi
 
+# ── 4.5 · verify 关键 image 本地存 (fail loud · 别让 docker compose 去 pull 挂) ──
+MISSING_IMG=""
+for img in catfish-identity:0.1.0 catfish-gateway:0.1.1 catfish-web:0.1.0 \
+           catfish-skills-hub:0.1.0 catfish-mcp-registry:0.1.0 catfish-wiki-hub:0.1.0 \
+           postgres:16-alpine; do
+    if ! docker image inspect "$img" >/dev/null 2>&1; then
+        MISSING_IMG="$MISSING_IMG $img"
+    fi
+done
+if [ -n "$MISSING_IMG" ]; then
+    echo ""
+    echo "❌ 本地缺 image ·$MISSING_IMG"
+    echo "   fix · 指定 IMAGE_TAR 或放 tar 到 images/ 目录:"
+    echo "     IMAGE_TAR=./images/dahua-poc-central-<arch>-<date>.tar.gz bash setup.sh"
+    echo "   (内网机不能连 docker.io · 必须本地 load)"
+    exit 1
+fi
+
 # ── 5. docker compose up ──────────────────────────────
+# P3.5.79+ (7/23 199 blood catch): 用 --force-recreate 强重建 container · 让新 .env
+# 里的 GATEWAY_WORKERS / CATFISH_OIDC_ISSUER / CATFISH_IDENTITY_CORS_ORIGINS 立即生效.
+# `docker compose up -d` 不加 --force-recreate 时 · 若 container 已存 · 只 restart ·
+# env 是创 container 时读的 · 老值不换 · IT 反复怀疑 "为啥 workers 还是 4 / CORS 还挂".
 echo ""
-echo "→ docker compose up (不含 nginx · 若走 HTTPS 后续再加)..."
+echo "→ docker compose up --force-recreate (不含 nginx · 若走 HTTPS 后续再加)..."
 if [ "$ENABLE_HTTPS" = "1" ]; then
-    docker compose up -d
+    docker compose up -d --force-recreate
 else
-    docker compose up -d $(docker compose config --services | grep -v '^nginx$')
+    docker compose up -d --force-recreate $(docker compose config --services | grep -v '^nginx$')
 fi
 
 # ── 6. verify ─────────────────────────────────────────
