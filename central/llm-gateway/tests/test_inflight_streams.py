@@ -97,6 +97,72 @@ def test_mark_finished_empty_request_id():
     assert ifs.mark_finished("") is False
 
 
+# ── mark_aborted (BL-ABORT-PROPAGATE 7/23 达华 POC) ──────────
+
+
+def test_mark_aborted_removes_from_dict():
+    """abort 也从 dict 清 (跟 finished 语义一致) · 差异只在 log 侧."""
+    ifs.mark_started("req-x", user="a@x", model="qwen")
+    assert len(ifs.list_inflight()) == 1
+    ok = ifs.mark_aborted("req-x", reason="client_disconnect")
+    assert ok is True
+    assert len(ifs.list_inflight()) == 0
+
+
+def test_mark_aborted_missing_id_idempotent():
+    """跟 mark_finished 一致 · 不存在也不抛 · 返 True."""
+    assert ifs.mark_aborted("never-existed") is True
+
+
+def test_mark_aborted_empty_request_id():
+    assert ifs.mark_aborted("") is False
+
+
+def test_mark_aborted_logs_warning(caplog):
+    """有 record 时打 warn log · 含 request_id / user / model / reason.
+    ops 靠这个统计 abort 频率. 军规 · 无 record 时 silent (不该噪).
+    """
+    import logging
+    ifs.mark_started("req-log", user="alice@x", model="qwen-plus")
+    with caplog.at_level(logging.WARNING, logger="catfish.gateway.inflight_streams"):
+        ifs.mark_aborted("req-log", reason="cancelled")
+    # 至少一条 warn · 含 request_id + reason
+    warn_msgs = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("req-log" in m and "cancelled" in m for m in warn_msgs)
+
+
+def test_mark_aborted_no_log_when_missing():
+    """没 record 时 silent · 别噪音刷 log."""
+    import logging
+    with caplog_context() as cap:
+        ifs.mark_aborted("never-existed", reason="client_disconnect")
+    # 应该 no warn (record 不存在 · 没数据可打)
+    warns = [r for r in cap.records if r.levelno >= logging.WARNING]
+    assert warns == []
+
+
+# caplog fixture 简化包装 (pytest 内建 · 直接用避 fixture 依赖 chain)
+from contextlib import contextmanager  # noqa: E402
+
+
+@contextmanager
+def caplog_context():
+    import logging
+    logger = logging.getLogger("catfish.gateway.inflight_streams")
+    records: list = []
+
+    class _H(logging.Handler):
+        def emit(self, r):
+            records.append(r)
+
+    h = _H()
+    logger.addHandler(h)
+    try:
+        yield type("Cap", (), {"records": records})()
+    finally:
+        logger.removeHandler(h)
+
+
 # ── list_inflight ─────────────────────────────────────────
 
 

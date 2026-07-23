@@ -2155,6 +2155,11 @@ async def _stream_chat_completion(
     security_concern: str | None = None,
     is_internal: bool = False,  # BL-F17 (5/5): internal 调用跳 record_usage
     source_hint: str = "unknown",  # BL-RBAC-DAY4-HARDENING (5/17): X-Catfish-Source audit
+    # BL-ABORT-PROPAGATE (7/23 达华 POC): 传 request 进来 · 循环里定期 check
+    # request.is_disconnected() · 客户 abort 时主动 aclose upstream iterator ·
+    # 省 token / 释 vLLM slot. 老行为 · client abort 后 gateway 仍继续烧到本轮
+    # finish · 只在下次 SSE write 时 broken pipe 才感知. None = 兼容老 caller.
+    request: Request | None = None,
     # BL-LEAN-SESSION teaching_mode 参数 已 DELETED (5/13 鸿波"全部清干净"):
     # 之前给 BL-FIX23 retry 的 _lean gate 用. retry 删了它就 dead arg.
     # _lean 控制 SOUL inject pipeline 那部分仍在 chat_completions 里 (1651), 不影响.
@@ -2182,6 +2187,10 @@ async def _stream_chat_completion(
     used_model = model
     config: Config = app.state.config
     attempts_log: list[str] = []
+
+    # BL-ABORT-PROPAGATE (7/23 达华 POC): pre-declare · 若 fallback 阶段 raise ·
+    # finally 里 iterator 未 assign 会 UnboundLocalError. None 兜底.
+    iterator: Any = None
 
     # BL-HERMES013-4 (5/12): in-flight tracking — 流开始 mark, 结束 chain
     # 跑 InflightCleanupTransform unlink. gateway 真崩 (SIGKILL) 文件留下,
@@ -2294,6 +2303,18 @@ async def _stream_chat_completion(
         # 后续 chunks. _stream_with_keepalive 包装: chunk 间隔 > 30s 时插 SSE
         # comment 防客户端 / 中间代理 timeout 断开.
         async for chunk in _stream_with_keepalive(iterator):
+            # BL-ABORT-PROPAGATE (7/23 达华 POC): 每 chunk 前检 client 是否断连.
+            # 断了就 return · 触发 finally · aclose upstream · 停 token 消耗.
+            # 老行为 · client 断了 gateway 继续烧到本轮 finish · 浪费 token / vLLM slot.
+            if request is not None and await request.is_disconnected():
+                logger.info(
+                    "[abort] client disconnected mid-stream · req=%s user=%s "
+                    "model=%s chunks_forwarded=%d",
+                    request_id, user_sub, used_model.name, chunk_stats["total"],
+                )
+                status_str = "aborted"
+                inflight_streams.mark_aborted(request_id, reason="client_disconnect")
+                return  # generator return · finally 会跑 (aclose + output_transforms)
             if chunk == "__keepalive__":
                 yield ": keepalive\n\n"
                 continue
@@ -2396,6 +2417,19 @@ async def _stream_chat_completion(
             logger.debug("task_assessment 事件构造失败 (%s), 不阻塞主流程", e)
 
         yield "data: [DONE]\n\n"
+    except asyncio.CancelledError:
+        # BL-ABORT-PROPAGATE (7/23 达华 POC): fastapi/starlette 感知客户端 TCP 断连时 ·
+        # 会 cancel 当前 generator task · raise CancelledError 到这里. 军规 · 不吞 ·
+        # re-raise 让上层框架清理. finally 会跑 aclose upstream + output_transforms audit.
+        # 注 · disconnect check 已在循环里覆盖大多数情况 · 这里是 check 与断连的窗口期兜底.
+        logger.info(
+            "[abort] CancelledError · req=%s user=%s model=%s",
+            request_id, user_sub,
+            used_model.name if used_model is not None else model_name,
+        )
+        status_str = "aborted"
+        inflight_streams.mark_aborted(request_id, reason="cancelled")
+        raise
     except Exception as e:  # noqa: BLE001
         status_str = "error"
         err = str(e)
@@ -2427,6 +2461,19 @@ async def _stream_chat_completion(
             )
         yield f"data: {json.dumps({'error': friendly})}\n\n"
     finally:
+        # BL-ABORT-PROPAGATE (7/23 达华 POC): 显式关 upstream iterator · 停 token.
+        # 正常完成 · iterator 已 exhausted · aclose 是 no-op. Abort 时 (client_disconnect
+        # 走 return / CancelledError raise / Exception raise) 才实际发 close 到 litellm ·
+        # 传到 vLLM/DashScope · 上游停生成. 军规 · 无 iterator/aclose 时 silent skip (预热
+        # 阶段 iterator=None · 或某些 litellm 版本没 aclose 都 OK · 不该阻塞 audit).
+        if iterator is not None:
+            _aclose = getattr(iterator, "aclose", None)
+            if _aclose is not None:
+                try:
+                    await _aclose()
+                except Exception as _e:  # noqa: BLE001
+                    logger.debug("upstream iterator aclose 失败 (可忽略): %s", _e)
+
         # BL-HERMES013-5 (5/12): 散点 audit/quota/context inline 调用 重构成
         # output_transforms ABC plugin chain (借鉴 Hermes 0.13 transform_llm_output).
         # 默认 chain: ContextUsageTransform → AuditTransform → QuotaTransform.
@@ -3162,6 +3209,9 @@ async def chat_completions(
                 source_hint=source_hint,  # BL-RBAC-DAY4-HARDENING (5/17)
                 # BL-AUTH-DECOUPLE-A1 (5/19): user_sub 透传 effective_user_email,
                 # audit / record_usage 都按 X-Catfish-User 归账 (service token on-behalf-of).
+                # BL-ABORT-PROPAGATE (7/23 达华 POC): 传 request · 生成器里定期
+                # check is_disconnected · 客户 abort 主动关上游 · 停 token 消耗.
+                request=request,
             ),
             media_type="text/event-stream",
         )

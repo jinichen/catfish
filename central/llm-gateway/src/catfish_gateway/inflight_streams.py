@@ -85,6 +85,33 @@ def mark_finished(request_id: str) -> bool:
     return True
 
 
+def mark_aborted(request_id: str, *, reason: str = "client_disconnect") -> bool:
+    """BL-ABORT-PROPAGATE (7/23 达华 POC): client 断开触发 gateway 主动关 upstream 时调.
+
+    行为跟 mark_finished 一致 (从 dict 移除) · 但**打 warn log** 明确标记 · 便于 ops
+    统计客户端 abort 频率 (若高 · 说明客户体验差 / 客户端 timeout 太短).
+
+    reason 目前 2 种:
+      - client_disconnect  · request.is_disconnected() 返 True (TCP 断)
+      - cancelled          · asyncio.CancelledError 被 catch (fastapi 检测客户端断)
+    """
+    if not request_id:
+        return False
+    with _lock:
+        rec = _inflight.pop(request_id, None)
+    if rec:
+        duration = time.time() - rec.get("started_at", time.time())
+        logger.warning(
+            "[abort] request_id=%s user=%s model=%s duration=%.1fs reason=%s",
+            request_id,
+            rec.get("user", "?"),
+            rec.get("model", "?"),
+            duration,
+            reason,
+        )
+    return True
+
+
 def list_inflight() -> list[dict[str, Any]]:
     """列当前 in-flight stream (cancel UI / ops 调试用). 返 snapshot list."""
     with _lock:
@@ -114,6 +141,7 @@ def clear() -> None:
 __all__ = [
     "mark_started",
     "mark_finished",
+    "mark_aborted",
     "list_inflight",
     "reap_interrupted",
     "clear",
