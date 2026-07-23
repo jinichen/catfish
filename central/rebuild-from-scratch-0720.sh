@@ -45,11 +45,20 @@ set -euo pipefail
 #                验证 · 名字必须在 BUILT_SERVICES 列表里 · 否则 fail-loud.
 #                注 · postgres / nginx 是 upstream image · 只在全打时 pull · ONLY_SERVICES
 #                模式不 pull (假设已在本地 · 增量更新场景默认满足).
+#
+# REPACK_ONLY (7/23 · 补 Phase 3 语义分裂): 默认 0.
+#                = 0 (默认): SKIP_ARM64=1 严格跳该 arch (Phase 1/2 build + Phase 3 FULL 全跳).
+#                = 1: 只重打 Phase 3 FULL · 用**已有** image tar (config-only 更新场景).
+#                        忽略 SKIP · 只要 $ARM_OUT / $AMD_OUT 存在就打 FULL.
+#                动机 · 之前 Phase 3 逻辑 "tar 存在就打" 跟 SKIP 撞 · SKIP_AMD64=1
+#                但打出 FULL-amd64 (用老 image tar · 没含新 gateway) · 给客户是"假新版".
+#                fix · 严格默认 · 显式 REPACK_ONLY=1 才复用老 image tar.
 DATE="${DATE:-$(date +%Y%m%d)}"
 SKIP_ARM64="${SKIP_ARM64:-0}"
 SKIP_AMD64="${SKIP_AMD64:-0}"
 BUILD_FULL_DELIVERY="${BUILD_FULL_DELIVERY:-1}"
 ONLY_SERVICES="${ONLY_SERVICES:-}"
+REPACK_ONLY="${REPACK_ONLY:-0}"
 
 CENTRAL="$HOME/person_task/catfish/central"
 REPO_ROOT="$HOME/person_task/catfish"
@@ -303,17 +312,24 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
         for arch in arm64 amd64; do
             SRC_TAR=""
             OUT_TAR=""
+            # 7/23 fix · SKIP 严格默认 (跟 Phase 1/2 语义一致 · 用户显式说不打就不打).
+            # 仅当 REPACK_ONLY=1 时忽略 SKIP · 复用老 image tar (config-only 更新场景).
             if [ "$arch" = "arm64" ]; then
+                if [ "$SKIP_ARM64" = "1" ] && [ "$REPACK_ONLY" != "1" ]; then
+                    echo "  ⏭  SKIP_ARM64=1 · skip 3.arm64 (若要用老 image tar 重打 · REPACK_ONLY=1)"
+                    continue
+                fi
                 SRC_TAR="$ARM_OUT"; OUT_TAR="$FULL_ARM_OUT"
             elif [ "$arch" = "amd64" ]; then
+                if [ "$SKIP_AMD64" = "1" ] && [ "$REPACK_ONLY" != "1" ]; then
+                    echo "  ⏭  SKIP_AMD64=1 · skip 3.amd64 (若要用老 image tar 重打 · REPACK_ONLY=1)"
+                    continue
+                fi
                 SRC_TAR="$AMD_OUT"; OUT_TAR="$FULL_AMD_OUT"
             fi
-            # P3.5.79+ (7/23): Phase 3 独立于 Phase 1/2 · 只要 image tar 存在就重打 FULL.
-            # 场景 · 改了 setup.sh / .env.example / config 但 image 未变 · 跑:
-            #   SKIP_ARM64=1 SKIP_AMD64=1 bash rebuild-from-scratch-0720.sh
-            # 会跳 Phase 1/2 build · 直接 Phase 3 用已有 image tar 重打 FULL.
+            # image tar 不存在 (Phase 1/2 都没跑过 · 且 $DATE 不匹配老 tar) · 明报
             if [ ! -f "$SRC_TAR" ]; then
-                echo "  ⚠ $SRC_TAR 不存在 · skip $arch (跑 Phase 1/2 先出 image tar · 或指定其他 DATE)"
+                echo "  ⚠ $SRC_TAR 不存在 · skip $arch"
                 continue
             fi
 
