@@ -143,7 +143,13 @@ docker compose build --no-cache $BUILT_SERVICES 2>&1
 echo ""
 echo "--- 1.3 · verify 6 image 都是 arm64/linux ---"
 FAIL=0
-for svc in $BUILT_SERVICES postgres nginx; do
+# ONLY_SERVICES 模式跳 postgres/nginx verify · 它们没被重打 · 本地什么架构都无所谓
+if [ "$SKIP_UPSTREAM_PULL" = "1" ]; then
+    VERIFY_LIST="$BUILT_SERVICES"
+else
+    VERIFY_LIST="$BUILT_SERVICES postgres nginx"
+fi
+for svc in $VERIFY_LIST; do
     case $svc in
         postgres) tag="postgres:16-alpine" ;;
         nginx)    tag="nginx:1.27-alpine" ;;
@@ -198,7 +204,13 @@ docker compose build --no-cache $BUILT_SERVICES 2>&1
 echo ""
 echo "--- 2.3 · verify 6 image 都是 amd64/linux ---"
 FAIL=0
-for svc in $BUILT_SERVICES postgres nginx; do
+# ONLY_SERVICES 模式跳 postgres/nginx verify · 同 Phase 1.3
+if [ "$SKIP_UPSTREAM_PULL" = "1" ]; then
+    VERIFY_LIST="$BUILT_SERVICES"
+else
+    VERIFY_LIST="$BUILT_SERVICES postgres nginx"
+fi
+for svc in $VERIFY_LIST; do
     case $svc in
         postgres) tag="postgres:16-alpine" ;;
         nginx)    tag="nginx:1.27-alpine" ;;
