@@ -285,6 +285,13 @@ function UserBubble({
             zIndex: 10,
           }}
         >
+          {/* 7/24 v4: 按钮 style 对齐 assistant 侧 FeedbackBtn (FeedbackButtons.tsx:268-303):
+              - border transparent (无框感) · 老用 catfish-border 实体框 · 视觉风格分裂
+              - fontSize 11 · 老 13 · 老太大不搭 assistant 侧
+              - padding 2px 8px · 老 2px 6px · 对齐
+              - opacity 0.5 常态 → hover 1 · 老无 opacity · 太重
+              - transition 100ms · 老 150ms · 对齐
+              统一后 · user 侧 ✏️🔄 跟 assistant 侧 👍👎 改 存wiki 视觉一致. */}
           {canEdit && (
             <button
               type="button"
@@ -292,18 +299,22 @@ function UserBubble({
               title="编辑这句 · 改完 Enter 发送 · Esc 取消"
               style={{
                 background: "transparent",
-                border: "1px solid var(--catfish-border)",
-                borderRadius: "var(--radius-sm)",
-                padding: "2px 6px",
-                fontSize: 13,
+                border: "1px solid transparent",
+                borderRadius: 4,
+                padding: "2px 8px",
+                fontSize: 11,
                 color: "var(--catfish-text-muted)",
                 cursor: "pointer",
                 lineHeight: 1,
+                opacity: 0.5,
+                transition: "opacity 100ms, background 100ms",
               }}
               onMouseEnter={(e) => {
+                e.currentTarget.style.opacity = "1";
                 e.currentTarget.style.background = "var(--catfish-bg-elevated)";
               }}
               onMouseLeave={(e) => {
+                e.currentTarget.style.opacity = "0.5";
                 e.currentTarget.style.background = "transparent";
               }}
             >
@@ -317,18 +328,22 @@ function UserBubble({
               title="重发这句 · 删除此消息后的所有回复 · 再发同款给 AI"
               style={{
                 background: "transparent",
-                border: "1px solid var(--catfish-border)",
-                borderRadius: "var(--radius-sm)",
-                padding: "2px 6px",
-                fontSize: 13,
+                border: "1px solid transparent",
+                borderRadius: 4,
+                padding: "2px 8px",
+                fontSize: 11,
                 color: "var(--catfish-text-muted)",
                 cursor: "pointer",
                 lineHeight: 1,
+                opacity: 0.5,
+                transition: "opacity 100ms, background 100ms",
               }}
               onMouseEnter={(e) => {
+                e.currentTarget.style.opacity = "1";
                 e.currentTarget.style.background = "var(--catfish-bg-elevated)";
               }}
               onMouseLeave={(e) => {
+                e.currentTarget.style.opacity = "0.5";
                 e.currentTarget.style.background = "transparent";
               }}
             >
