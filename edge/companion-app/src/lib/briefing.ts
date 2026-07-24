@@ -140,8 +140,8 @@ function _buildUserPrompt(
 
 /** 调 LLM 拿建议. 失败返 null (调用方自己 fallback).
  *
- * timeout 5s — 比 fetchProactiveStarter 的隐式 timeout 严, 因为这是 dashboard
- * 顶 widget, 卡 > 3s 员工会切走.
+ * timeout 5s — 早安 tab default 展示, 卡 > 3s 员工会切走.
+ * (7/24: 原 comment 提 fetchProactiveStarter 已随 BL-PROACTIVE-STARTER-KILL 砍.)
  */
 export async function fetchBriefingSuggestion(
   unread: number,

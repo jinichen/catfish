@@ -625,58 +625,21 @@ export async function fetchGlobalAudit(): Promise<GlobalAudit | null> {
 
 
 // ── 主动闲聊 (BL-E13 C-MVP) ──────────────────────────────────
+//
+// BL-PROACTIVE-STARTER-KILL (7/24 鸿波): fetchProactiveStarter 整个函数砍了 —
+// Dashboard ProactiveCard 和 useProactiveScheduler 死时间 push 都用它, 两处都
+// 因为 3 环 bug 被砍 (gateway 只拿 journal_tail 延迟 + memory sync_turn 节流
+// 不同步 + LLM 无历史 dedupe → 员工体感 "刚说过又问"). gateway
+// /api/proactive/starter endpoint 无害保留 (后端稳定, 前端无 caller).
+//
+// ProactiveStarter interface 保留 — fetchContextualStarter (下方) 仍用它做返值
+// 类型. contextual 只在 useProactiveTriggers 事件触发 (silence/deadline/focus)
+// 时调, 场景不重复不 spam.
 
 export interface ProactiveStarter {
   starter: string;
   context_hint: string;
   source: "llm" | "fallback";
-}
-
-/** 拉一个上下文感知的 starter. gateway 用 journal + 时段 + LLM 生成.
- *
- * 5/26 BL-PROACTIVE-DECOUPLE: gateway 不再自读员工 fs / state.db. Companion (跑
- * 员工 mac, 读自己 fs 合规) 在调前准备好 journal 末尾 + 最近 session model,
- * 通过 header 传给 gateway:
- *   - X-Catfish-Journal-Tail-B64: base64(journal_tail UTF-8) — gateway 解码喂 LLM
- *   - X-Catfish-Last-Model:        员工最近用啥 model, 主动闲聊跟员工同款 (BL-INTERNAL-MODEL-FOLLOW-USER)
- *
- * 没拿到 / 文件不存在 → header 留空, gateway 自动 fallback 模板 (功能退化不致命).
- */
-export async function fetchProactiveStarter(): Promise<ProactiveStarter | null> {
-  // BL-PROACTIVE-DECOUPLE v2 (5/26 CORS 修): 用 body 字段透传, 不用 header.
-  // 老版本走 X-Catfish-Journal-Tail-B64 + X-Catfish-Last-Model header, 但 hermes
-  // proxy CORS allowlist 不含, 浏览器 preflight block (TypeError: Load failed).
-  // 改 POST + body 字段, Content-Type: application/json 在标准 CORS allowlist.
-  let journalTail = "";
-  let lastModel = "";
-  try {
-    const ctx = await fetchProactiveContext();
-    if (ctx.journal_tail) journalTail = ctx.journal_tail;
-    if (ctx.last_model) lastModel = ctx.last_model;
-  } catch (e) {
-    console.warn("[proactive] fetchProactiveContext 失败, body 留空 fallback:", e);
-  }
-
-  const url = `${config.gatewayUrl}/api/proactive/starter`;
-  const body = {
-    journal_tail: journalTail,
-    last_model: lastModel,
-  };
-  try {
-    const resp = await fetchWithAuth(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!resp.ok) {
-      console.warn(`[proactive] /api/proactive/starter 非 200: ${resp.status} ${resp.statusText}`);
-      return null;
-    }
-    return (await resp.json()) as ProactiveStarter;
-  } catch (e) {
-    console.warn("[proactive] fetchWithAuth 抛错:", e);
-    return null;
-  }
 }
 
 /** 5/6 BL-E13.5 真主动 Phase B: 信号触发的针对性 starter.
