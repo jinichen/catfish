@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build",
+    "tauri:build:clean": "bash scripts/pre-tauri-build.sh",
+    "tauri:build": "npm run tauri:build:clean && tauri build",
     "tauri:install": "bash scripts/install-mac.sh",
     "tauri:build:install": "npm run tauri:build && npm run tauri:install"
   },
