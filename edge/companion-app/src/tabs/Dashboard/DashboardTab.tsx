@@ -75,7 +75,12 @@ import SkillsHubCard from "./SkillsHubCard";
 // 解耦"系统状态" (我的画像 / 服务 / 配额 / 设置) vs "今日要事" (邮件 / 日历 / 工作计划).
 // BriefingCard.tsx 仍保留作可复用 component, 当前只 BriefingTab 引用.
 // import BriefingCard from "./BriefingCard";
-import ProactiveCard from "./ProactiveCard";
+// BL-TODAY-SECTION-DEDUP (7/24 鸿波): 今日区两张 "今日话题" 卡全砍:
+//   1. 老 ProactiveCard (LLM 出题式) — 3 环 bug 导致 "刚说过又问", 详见 git log
+//   2. 短命 TodoTopicCard (7/24 上午做) — 数据源跟早安 tab AdvisorView 100% 重复
+//      (都调 journal_todos_fetch), 违反 BriefingCard.tsx boundary "Dashboard 偏系统
+//      状态 vs 早安偏今日要事". 员工进 Companion 就是早安 default tab, 已经看到.
+// 今日区现在只剩 CronJobsCard (定时任务监控). 想恢复主动闲聊 → 早安 tab AdvisorView.
 import CronJobsCard from "./CronJobsCard";  // P3.5.105 (6/25 鸿波 catch "定时任务跑没跑结果如何都看不到")
 import AgentPrefsCard from "./AgentPrefsCard";
 import ServerConfigCard from "./ServerConfigCard"; // P28 (6/5 鸿波): UI 改 gateway URL/token
@@ -170,10 +175,11 @@ export default function DashboardTab() {
       <CollapsibleSection
         id="today"
         title="🔥 今日"
-        count={2}
+        count={1}
       >
-        <ProactiveCard />
-        {/* P3.5.105 (6/25 鸿波): 定时任务监控 — 跑没跑 / 失败信息 / 历史输出 */}
+        {/* P3.5.105 (6/25 鸿波): 定时任务监控 — 跑没跑 / 失败信息 / 历史输出
+            BL-TODAY-SECTION-DEDUP (7/24): 今日区曾有 2 张卡, 另一张 (ProactiveCard /
+            TodoTopicCard) 跟早安 tab AdvisorView 重复被砍. */}
         <CronJobsCard />
       </CollapsibleSection>
 
