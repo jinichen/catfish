@@ -125,65 +125,25 @@ function UserBubble({
         justifyContent: "flex-end",
         alignItems: "center",
         gap: "var(--space-2)",
-        marginBottom: "var(--space-4)",
+        // BL-COMPANION-EDIT-RESEND-OVERLAY (7/24 鸿波 catch "按钮太占空间"):
+        // 按钮 group 从气泡左侧同一行 · 挪到 absolute overlay 气泡右下.
+        //
+        // 7/24 v3 修 "hover 时有时看不到按钮" (缝隙 bug):
+        //   v1/v2 用 marginBottom + 按钮 top:100% marginTop:2px · wrapper 物理
+        //   高度只 = 气泡高, mouse 从气泡下缘移到按钮上缘时**离开 wrapper 边界**,
+        //   onMouseLeave fire · hovered=false · 按钮 opacity 0 · pointerEvents
+        //   none · mouse event 穿透 · 无法 re-fire onMouseEnter · 按钮卡隐.
+        //
+        //   修: 用 paddingBottom 扩 wrapper 物理 hit area · 让按钮 physical 位置
+        //   完全在 wrapper 内. 按钮 bottom:0 贴 wrapper 底 (padding 里). mouse
+        //   从气泡 slide 到按钮全程在 wrapper 边界内 · hovered 持续 true.
+        //   总消息间距 = paddingBottom 24 + marginBottom 8 = 32px (跟 space-6+space-2).
+        paddingBottom: "24px",
+        marginBottom: "var(--space-2)",
+        // 按钮 group absolute 定位需要这个作 offsetParent
+        position: "relative",
       }}
     >
-      {/* ✏️ 编辑按钮 · hover 显 · editing 中隐 (气泡本身变编辑区) · 放 🔄 左边 */}
-      {canEdit && hovered && !editing && (
-        <button
-          type="button"
-          onClick={startEdit}
-          title="编辑这句 · 改完 Enter 发送 · Esc 取消"
-          style={{
-            background: "transparent",
-            border: "1px solid var(--catfish-border)",
-            borderRadius: "var(--radius-sm)",
-            padding: "var(--space-1) var(--space-2)",
-            fontSize: 12,
-            color: "var(--catfish-text-muted)",
-            cursor: "pointer",
-            lineHeight: 1,
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = "var(--catfish-bg-elevated)";
-            e.currentTarget.style.color = "var(--catfish-cyan)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "transparent";
-            e.currentTarget.style.color = "var(--catfish-text-muted)";
-          }}
-        >
-          ✏️ 编辑
-        </button>
-      )}
-      {/* 🔄 重发按钮 · hover 显 · editing 中隐 · 放气泡左侧 */}
-      {canResend && hovered && !editing && (
-        <button
-          type="button"
-          onClick={() => onResend!(msg.id)}
-          title="重发这句 · 删除此消息后的所有回复 · 再发同款给 AI"
-          style={{
-            background: "transparent",
-            border: "1px solid var(--catfish-border)",
-            borderRadius: "var(--radius-sm)",
-            padding: "var(--space-1) var(--space-2)",
-            fontSize: 12,
-            color: "var(--catfish-text-muted)",
-            cursor: "pointer",
-            lineHeight: 1,
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = "var(--catfish-bg-elevated)";
-            e.currentTarget.style.color = "var(--catfish-cyan)";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "transparent";
-            e.currentTarget.style.color = "var(--catfish-text-muted)";
-          }}
-        >
-          🔄 重发
-        </button>
-      )}
       <div
         style={{
           background: isAutoContinue
@@ -299,6 +259,84 @@ function UserBubble({
           msg.content && <span>{msg.content}</span>
         )}
       </div>
+      {/* BL-COMPANION-EDIT-RESEND-OVERLAY (7/24 鸿波 catch "按钮太占空间"):
+          编辑/重发按钮 group 从气泡左侧同一行 · 挪到 wrapper 右下角外 absolute
+          定位. 老 flex 行内布局: hover 时按钮从 0 宽 → 130px · 挤动气泡位置 ·
+          layout 跳. 新 absolute overlay: 不占 flow · 气泡位置永远稳定 · hover
+          fade in 150ms · 不 hover pointerEvents:none 防误触.
+          位置: top:100% right:0 (贴 wrapper 右下 · 气泡也靠右, 视觉对齐右边).
+          文案: 老 "✏️ 编辑" / "🔄 重发" 简化为纯 icon · title tooltip 保留.
+          editing 中隐藏 (气泡本身变编辑区, 按钮无意义). */}
+      {(canEdit || canResend) && !editing && (
+        <div
+          style={{
+            position: "absolute",
+            // 7/24 v3: 从 top:100%+marginTop 改 bottom:0 · 按钮贴 wrapper 底部
+            // (paddingBottom 里). wrapper 物理 hit area 覆盖按钮 · mouse hover
+            // 按钮全程 wrapper hovered=true · 避免 v2 的缝隙 bug.
+            bottom: 0,
+            right: 0,
+            display: "flex",
+            gap: "var(--space-1)",
+            opacity: hovered ? 1 : 0,
+            pointerEvents: hovered ? "auto" : "none",
+            transition: "opacity 150ms ease",
+            // 7/24 v2: z-index 双保险防 stacking context 遮盖.
+            zIndex: 10,
+          }}
+        >
+          {canEdit && (
+            <button
+              type="button"
+              onClick={startEdit}
+              title="编辑这句 · 改完 Enter 发送 · Esc 取消"
+              style={{
+                background: "transparent",
+                border: "1px solid var(--catfish-border)",
+                borderRadius: "var(--radius-sm)",
+                padding: "2px 6px",
+                fontSize: 13,
+                color: "var(--catfish-text-muted)",
+                cursor: "pointer",
+                lineHeight: 1,
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "var(--catfish-bg-elevated)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "transparent";
+              }}
+            >
+              ✏️
+            </button>
+          )}
+          {canResend && (
+            <button
+              type="button"
+              onClick={() => onResend!(msg.id)}
+              title="重发这句 · 删除此消息后的所有回复 · 再发同款给 AI"
+              style={{
+                background: "transparent",
+                border: "1px solid var(--catfish-border)",
+                borderRadius: "var(--radius-sm)",
+                padding: "2px 6px",
+                fontSize: 13,
+                color: "var(--catfish-text-muted)",
+                cursor: "pointer",
+                lineHeight: 1,
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "var(--catfish-bg-elevated)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "transparent";
+              }}
+            >
+              🔄
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
