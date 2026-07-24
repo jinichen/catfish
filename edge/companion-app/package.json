@@ -11,7 +11,9 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build:clean": "bash scripts/pre-tauri-build.sh",
-    "tauri:build": "npm run tauri:build:clean && tauri build",
+    "tauri:build:app": "npm run tauri:build:clean && tauri build --bundles app",
+    "tauri:build:dmg": "bash scripts/make-dmg.sh",
+    "tauri:build": "npm run tauri:build:app && npm run tauri:build:dmg",
     "tauri:install": "bash scripts/install-mac.sh",
     "tauri:build:install": "npm run tauri:build && npm run tauri:install"
   },
