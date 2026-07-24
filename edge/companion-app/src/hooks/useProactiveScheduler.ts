@@ -1,24 +1,26 @@
-/** 主动闲聊定时调度 — BL-E13 C-MVP (五一 sprint 5/2 收尾).
+/** 主动定时调度 — BL-COMPANION-MORNING-PUSH (5/20).
  *
- * 每天多个时段自动 fetch starter + 发 macOS 通知:
- *   - 9:00   早安播报 (BL-COMPANION-MORNING-PUSH 5/20): 邮件+日历+TODO 聚合 LLM 写
- *   - 9:30   早上召唤 (闲聊 starter, 跟早安播报互补 — 一个是数据看板, 一个是话题切入)
- *   - 14:00  下午召唤
- *   - 17:30  傍晚 (鼓励攒今日进 journal)
+ * 每天 09:00 macOS 通知 push 早安播报 (邮件+日历+TODO 聚合 LLM 生成),
+ * 员工没开 Companion 也能被拉回. 通知点击 → RunEvent::Reopen (lib.rs) 拉前台.
  *
- * 通知点击 → macOS 把 Companion 拉前台, RunEvent::Reopen 处理 (lib.rs 有了).
- *
- * 防抖: localStorage 记每个时段当天发没发, 同一时段不重复.
+ * 防抖: localStorage 记当天发没发, 同一时段不重复.
  *
  * 配置 (后续加 UI, 现在硬编码):
- *   localStorage["catfish:proactive_enabled"] = "true" | "false" (默认 true)
- *   localStorage["catfish:morning_push_enabled"] = "true" | "false" (默认 true) — 单控 09:00 早安播报
+ *   localStorage["catfish:proactive_enabled"]      = "true" | "false" (默认 true)
+ *   localStorage["catfish:morning_push_enabled"]   = "true" | "false" (默认 true)
+ *
+ * BL-PROACTIVE-STARTER-KILL (7/24 鸿波): 老 09:30 / 14:00 / 17:30 三个死时间的
+ *   "proactive_starter" push (LLM 看 journal + 时段生成闲聊话题) 全砍. 原因跟
+ *   Dashboard ProactiveCard 同 3 环 bug — gateway 只拿 journal_tail 有延迟 +
+ *   memory sync_turn 5 轮/30 min 节流 vs 死时间不同步 + 无历史 dedupe. 员工
+ *   反馈 "刚说过的事又弹". 05/25 BL-PROACTIVE-RUNAWAY 里说的 "4 死时间 + 5
+ *   triggers = 9 条/天 spam" 里的 4 里, 09:00 早安留 (真信息), 另外 3 砍.
+ *   桌宠气泡 (useProactiveTriggers silence/deadline/focus 事件驱动) 保留.
  */
 
 import { useEffect } from "react";
 
 import { fetchBriefingSuggestion, fetchMergedBriefing } from "../lib/briefing";
-import { fetchProactiveStarter } from "../lib/me";
 
 import {
   calendarTodayFetch,
@@ -36,14 +38,11 @@ import { useUIStore } from "../store/ui";
 
 interface ScheduledTime {
   time: string;                 // "HH:MM"
-  source: "proactive_starter" | "morning_briefing";
+  source: "morning_briefing";
 }
 
 const TIMES_LOCAL: ScheduledTime[] = [
   { time: "09:00", source: "morning_briefing" },  // BL-COMPANION-MORNING-PUSH (5/20)
-  { time: "09:30", source: "proactive_starter" },
-  { time: "14:00", source: "proactive_starter" },
-  { time: "17:30", source: "proactive_starter" },
 ];
 const _ENABLED_KEY = "catfish:proactive_enabled";
 const _MORNING_PUSH_ENABLED_KEY = "catfish:morning_push_enabled";
@@ -156,32 +155,19 @@ async function fireOne(time: string, source: ScheduledTime["source"]): Promise<v
   try {
     console.log(`[proactive] fireOne(${time}, ${source}): 拉 starter...`);
 
-    let starter: string | null = null;
-    if (source === "morning_briefing") {
-      // BL-COMPANION-MORNING-PUSH (5/20): 09:00 早安播报路径
-      if (!isMorningPushEnabled()) {
-        console.log(`[proactive] morning_push disabled (localStorage), skip ${time}`);
-        return;
-      }
-      starter = await fetchMorningBriefingStarter();
-      if (!starter) {
-        console.log(`[proactive] fireOne(${time}, morning_briefing): 三源都空, skip`);
-        return;
-      }
-      // 加个开头让员工知道这是"早安"而不是普通闲聊
-      starter = `☀️ 早, ${starter}`;
-    } else {
-      // 老 proactive_starter 路径 (LLM 看 journal + 时段生成闲聊话题)
-      const s = await fetchProactiveStarter();
-      if (!s || !s.starter) {
-        console.warn(
-          `[proactive] fireOne(${time}, proactive_starter): fetchProactiveStarter 没返 starter, 跳过.`,
-          s,
-        );
-        return;
-      }
-      starter = s.starter;
+    // BL-PROACTIVE-STARTER-KILL (7/24): 现在只剩 morning_briefing 一支.
+    // 老 proactive_starter 分支已砍 (跟 ProactiveCard 同 3 环 bug).
+    if (!isMorningPushEnabled()) {
+      console.log(`[proactive] morning_push disabled (localStorage), skip ${time}`);
+      return;
     }
+    let starter = await fetchMorningBriefingStarter();
+    if (!starter) {
+      console.log(`[proactive] fireOne(${time}, morning_briefing): 三源都空, skip`);
+      return;
+    }
+    // 加个开头让员工知道这是"早安"而不是普通闲聊
+    starter = `☀️ 早, ${starter}`;
 
     console.log(`[proactive] fireOne(${time}, ${source}): starter="${starter.slice(0, 60)}..."`);
     // 5/18 BL-COMPANION-VITE-CHUNK-WARN: useAgentStore 顶部 static (跟 App.tsx 等保持一致).
@@ -209,10 +195,8 @@ async function fireOne(time: string, source: ScheduledTime["source"]): Promise<v
       console.warn("[proactive] pet_is_visible 失败, fallback macOS 通知:", e);
     }
     if (!usedBubble) {
-      // morning_briefing 用 "☀️ 早安播报" 标题更明确; proactive_starter 用老"想跟你聊一句"
-      const title = source === "morning_briefing"
-        ? `☀️ ${agentName}的早安播报`
-        : `${agentName}想跟你聊一句`;
+      // BL-PROACTIVE-STARTER-KILL (7/24): 只剩 morning_briefing 分支, title 直接用.
+      const title = `☀️ ${agentName}的早安播报`;
       console.log(`[proactive] 桌宠不可见, 走 macOS 通知 fallback (${title})`);
       await sendNotification(title, starter);
     }
@@ -223,9 +207,9 @@ async function fireOne(time: string, source: ScheduledTime["source"]): Promise<v
   }
 }
 
-/** 5/6 鸿波报"主动闲聊好像有问题": 老 tick 只在 cur === '09:30'/'14:00'/'17:30'
- *  那一精确分钟触发. 员工 9:31 才打开 Companion → 9:30 那条整天丢. 这 =
- *  "主动闲聊看似没工作". 修成"过点补发":
+/** 5/6 鸿波报"主动闲聊好像有问题": 老 tick 只在 cur === schedule 时刻的
+ *  那一精确分钟触发. 员工 9:01 才打开 Companion → 9:00 那条整天丢. 这 =
+ *  "早安播报看似没工作". 修成"过点补发":
  *
  *    遍历 TIMES_LOCAL, 找到 "今天还没发 + 当前时间 ≥ schedule time" 的最近一条 fire.
  *    一次只发一个 (防员工跨午夜启动一口气发 3 条).
