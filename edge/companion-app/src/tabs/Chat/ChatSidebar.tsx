@@ -19,7 +19,7 @@
  */
 
 import { useEffect, useState, useCallback } from "react";
-import { listSessions, countSessions, sessionSoftDelete } from "../../lib/tauri";
+import { listSessions, sessionSoftDelete } from "../../lib/tauri";
 import { groupSessionsByTitle, type SessionGroupEntry } from "../../lib/sessionGroup";
 import * as streamRegistry from "../../lib/streamRegistry";
 import type { SessionMeta } from "../../types/session";
@@ -71,8 +71,9 @@ export default function ChatSidebar({
   busy = false,
 }: Props) {
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
-  // 5/5 鸿波: sessions 列表受 MAX_SESSIONS=100 限制, totalCount 是 state.db 真实总数
-  const [totalCount, setTotalCount] = useState<number | null>(null);
+  // 7/24 (BL-COMPANION-SIDEBAR-SIMPLIFY): 老逻辑显 "会话 · N / 共 M" · M 是 state.db
+  // 裸 COUNT(*) 含软删+后台 session · 员工看着困惑 · tooltip 解释复杂又误导.
+  // 简化 · 只显能看见的 (visibleSessions.length) · 差额不管 · countSessions 也不调.
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // BL-SESSIONS-FILTER-PROACTIVE (5/31): 默认隐藏自动 trigger
@@ -83,16 +84,15 @@ export default function ChatSidebar({
       return false;
     }
   });
+  // BL-COMPANION-SESSION-SEARCH (7/24): 会话检索 · 按 title / firstUserMessage 子串
+  // case-insensitive · 支持中文. state.db 会话上千时 · 手动翻找不到 · 键盘 Cmd+K
+  // 常见交互 · 但先做最简 · header 下面加 input · 输入立刻过滤.
+  const [searchQuery, setSearchQuery] = useState<string>("");
 
   const refresh = useCallback(async () => {
     try {
-      // 并发拉, count 失败也不阻塞 list
-      const [list, count] = await Promise.all([
-        listSessions(),
-        countSessions().catch(() => null),
-      ]);
+      const list = await listSessions();
       setSessions(list);
-      setTotalCount(count);
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -106,6 +106,18 @@ export default function ChatSidebar({
     ? sessions
     : sessions.filter((s) => !isAutoTriggerSession(s));
   const hiddenAutoCount = sessions.length - visibleSessions.length;
+
+  // BL-COMPANION-SESSION-SEARCH (7/24): 检索层 · 在 auto-trigger 过滤之后再叠 · title
+  // + firstUserMessage 子串 · toLowerCase 兼容英文 · 中文原样 (JS 大小写不区分中文).
+  // 空 query · 直接返 visibleSessions · 无性能开销.
+  const searchedSessions = searchQuery.trim()
+    ? visibleSessions.filter((s) => {
+        const q = searchQuery.trim().toLowerCase();
+        const title = (s.title || "").toLowerCase();
+        const first = (s.firstUserMessage || "").toLowerCase();
+        return title.includes(q) || first.includes(q);
+      })
+    : visibleSessions;
 
   const toggleShowAuto = useCallback(() => {
     setShowAuto((prev) => {
@@ -186,20 +198,13 @@ export default function ChatSidebar({
       >
         <span
           title={
-            totalCount !== null && totalCount > sessions.length
-              ? `state.db 共 ${totalCount} 条, 此处展示 ${sessions.length} 条 (安全上限 10000)`
-              : `共 ${sessions.length} 条会话` +
-                (hiddenAutoCount > 0
-                  ? `, 已隐藏 ${hiddenAutoCount} 条自动触发 (时间锚点 / 日历 / IMPORTANT)`
-                  : "")
+            `共 ${visibleSessions.length} 条会话` +
+            (hiddenAutoCount > 0
+              ? ` · 已隐藏 ${hiddenAutoCount} 条自动触发`
+              : "")
           }
         >
-          会话 · {visibleSessions.length}
-          {totalCount !== null && totalCount > sessions.length && (
-            <span style={{ color: "var(--catfish-text-muted)", fontWeight: 400 }}>
-              {" "}/ 共 {totalCount}
-            </span>
-          )}
+          会话 · {searchQuery.trim() ? `${searchedSessions.length} 匹配` : visibleSessions.length}
         </span>
         <span style={{ display: "flex", gap: 4, alignItems: "center" }}>
           {/* BL-SESSIONS-FILTER-PROACTIVE (5/31): toggle 显隐自动 trigger */}
@@ -237,6 +242,62 @@ export default function ChatSidebar({
         </span>
       </header>
 
+      {/* BL-COMPANION-SESSION-SEARCH (7/24 达华 POC 会话上千 · 需检索): 搜索框 · 输入立即过滤 title + firstUserMessage */}
+      <div
+        style={{
+          padding: "var(--space-2) var(--space-3)",
+          borderBottom: "1px solid var(--catfish-border)",
+          position: "relative",
+        }}
+      >
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="🔍 搜索会话 · title / 首条消息"
+          style={{
+            width: "100%",
+            padding: "6px 28px 6px 10px",
+            fontSize: 12,
+            border: "1px solid var(--catfish-border)",
+            borderRadius: 4,
+            background: "var(--catfish-bg)",
+            color: "var(--catfish-text)",
+            outline: "none",
+            boxSizing: "border-box",
+            fontFamily: "inherit",
+          }}
+          onFocus={(e) => {
+            e.currentTarget.style.borderColor = "var(--catfish-cyan)";
+          }}
+          onBlur={(e) => {
+            e.currentTarget.style.borderColor = "var(--catfish-border)";
+          }}
+        />
+        {searchQuery && (
+          <button
+            type="button"
+            onClick={() => setSearchQuery("")}
+            title="清除搜索"
+            style={{
+              position: "absolute",
+              right: "calc(var(--space-3) + 6px)",
+              top: "50%",
+              transform: "translateY(-50%)",
+              background: "transparent",
+              border: 0,
+              color: "var(--catfish-text-muted)",
+              cursor: "pointer",
+              fontSize: 14,
+              padding: 2,
+              lineHeight: 1,
+            }}
+          >
+            ×
+          </button>
+        )}
+      </div>
+
       <div
         style={{
           flex: 1,
@@ -267,7 +328,7 @@ export default function ChatSidebar({
             读 state.db 失败: {error}
           </div>
         )}
-        {!loading && !error && visibleSessions.length === 0 && (
+        {!loading && !error && searchedSessions.length === 0 && (
           <div
             style={{
               padding: "var(--space-3)",
@@ -276,15 +337,17 @@ export default function ChatSidebar({
               lineHeight: 1.5,
             }}
           >
-            还没会话 —— 起个新对话试试。
+            {searchQuery.trim()
+              ? `无匹配 "${searchQuery.trim()}" 的会话`
+              : "还没会话 —— 起个新对话试试。"}
           </div>
         )}
         {/* BL-COMPANION-SESSION-DEDUP (5/20 鸿波): 同 title 会话堆叠为一组,
             点同名 chip 展开 sub-session 列表. session id 不变 — 鸿波点的就是
             那个 sub. LLM 生成 title 算法对相似 prompt 出同名, 没去堆叠 sidebar
             一眼看不出哪条是哪条. */}
-        {!loading && !error && (() => {
-          const groups = groupSessionsByTitle(visibleSessions);
+        {!loading && !error && searchedSessions.length > 0 && (() => {
+          const groups = groupSessionsByTitle(searchedSessions);
           // 当 activeId 在某 group 的 sibling 里, 自动展开那组
           const autoExpanded = new Set<string>();
           if (activeId) {
@@ -298,7 +361,6 @@ export default function ChatSidebar({
             try {
               await sessionSoftDelete(id);
               setSessions((prev) => prev.filter((x) => x.id !== id));
-              if (totalCount !== null) setTotalCount(totalCount - 1);
               if (id === activeId) {
                 const remaining = sessions.filter((x) => x.id !== id);
                 if (remaining.length > 0) {
