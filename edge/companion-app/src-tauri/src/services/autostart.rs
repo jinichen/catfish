@@ -135,16 +135,22 @@ pub fn ensure_catfish_tools_mcp_registered() -> bool {
 
     match std::fs::write(&cfg_path, new_text) {
         Ok(()) => {
+            // 用 concat! 而不是 `\n\` 续行: 续行只跳 ASCII 空白, 想让缩进留在
+            // 字符串里就得用全角空格顶住 —— 那会触发 rustc 的
+            // "whitespace symbol '\u{3000}' is not skipped" 警告 (7/27 实测 8 条).
+            // concat! 每行独立字面量, 缩进就是普通空格, 干净无警告.
             log::warn!(
-                "autostart: ⚠ 修补了 ~/.hermes/config.yaml (备份: {bak})\n\
-                 　 ① mcp_servers.{name} —— catfish 全部 catfish_* 工具\n\
-                 　    (catfish_browser_* / catfish_run_skill / catfish_search_* ...)\n\
-                 　    进 hermes 的唯一通道, 缺了 LLM 只剩 hermes builtin 那 30 个.\n\
-                 　    command={command}  args=[-m catfish_tool_bridge.mcp_server]\n\
-                 　 ② security.allow_private_urls=true —— fake-IP 模式代理会把外网域名\n\
-                 　    解析到 198.18.0.x, hermes SSRF 检查判成内网地址全部拦掉.\n\
-                 　    云 metadata 端点 (169.254.169.254) 仍然永远拦, 不受影响.\n\
-                 　 ★ 需要重启 hermes 才生效: hermes gateway stop && hermes gateway start",
+                concat!(
+                    "autostart: ⚠ 修补了 ~/.hermes/config.yaml (备份: {bak})\n",
+                    "  ① mcp_servers.{name} —— catfish 全部 catfish_* 工具\n",
+                    "     (catfish_browser_* / catfish_run_skill / catfish_search_* ...)\n",
+                    "     进 hermes 的唯一通道, 缺了 LLM 只剩 hermes builtin 那 30 个.\n",
+                    "     command={command}  args=[-m catfish_tool_bridge.mcp_server]\n",
+                    "  ② security.allow_private_urls=true —— fake-IP 模式代理会把外网\n",
+                    "     域名解析到 198.18.0.x, hermes SSRF 检查判成内网地址全部拦掉.\n",
+                    "     云 metadata 端点 (169.254.169.254) 仍然永远拦, 不受影响.\n",
+                    "  ★ 需要重启 hermes 才生效: hermes gateway stop && hermes gateway start",
+                ),
                 name = CATFISH_TOOLS_MCP_NAME,
                 command = command,
                 bak = backup.display(),
