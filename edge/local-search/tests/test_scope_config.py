@@ -558,8 +558,8 @@ def test_bootstrap_skips_when_another_process_holds_lock(monkeypatch):
 
         def fake_run_index(c):
             called.append(c)
-            return {"scanned": 0, "indexed": 0, "skipped": 0, "duration_sec": 0.0,
-                    "per_root": {}, "unreadable": []}
+            return {"scanned": 0, "indexed": 0, "unchanged": 0, "failed": 0,
+                    "duration_sec": 0.0, "per_root": {}, "unreadable": []}
 
         monkeypatch.setattr("catfish_search.watcher.run_index", fake_run_index)
         with indexer.full_index_lock():  # 模拟另一个进程正拿着
@@ -569,3 +569,86 @@ def test_bootstrap_skips_when_another_process_holds_lock(monkeypatch):
         # 锁释放后照样该补
         _bootstrap_missing_roots(cfg)
         assert len(called) == 1
+
+
+# ── 统计口径 (BL-SEARCH-STATS-MISLEADING) ───────────────────
+
+
+def test_per_root_counts_index_contents_not_new_writes(monkeypatch):
+    """per_root 报的是"索引库里这个根有多少条"，不是"本次新增几条"。
+
+    鸿波实盘：库已经建好后再跑一次全量，所有文件走 _needs_reindex 判"没变"，
+    新增 0 —— 六个健康目录全打 ⚠️ 0 条，还触发"一个文件都没索引到"的告警。
+    """
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        docs = root / "docs"
+        docs.mkdir()
+        for i in range(3):
+            (docs / f"报告{i}.md").write_text(f"第{i}份公文正文", encoding="utf-8")
+        monkeypatch.setattr(indexer, "DB_FILE", root / "t.db")
+        cfg = SearchConfig(
+            include=[docs], exclude=[], max_file_size_mb=10, file_types={".md"}
+        )
+
+        first = indexer.run_index(cfg)
+        assert first["indexed"] == 3
+        assert first["per_root"][str(docs)] == 3
+
+        # 第二遍：一个字节没变
+        second = indexer.run_index(cfg)
+        assert second["indexed"] == 0, "没变的文件不该重写"
+        assert second["unchanged"] == 3
+        assert second["per_root"][str(docs)] == 3, "库里还是 3 条，不能报 0"
+
+
+def test_stats_separates_unchanged_from_failed(monkeypatch):
+    """"内容没变"（正常）和"抽不出文本"（异常）不能混成一个 skipped。
+
+    老格式 "扫 6830 / 新索引 4 / 跳过 6826" 让一次健康的重跑看着像
+    99.9% 都失败了。
+    """
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        docs = root / "docs"
+        docs.mkdir()
+        (docs / "有内容.md").write_text("正文内容", encoding="utf-8")
+        (docs / "空的.md").write_text("   \n\n  ", encoding="utf-8")  # 抽不出文本
+        monkeypatch.setattr(indexer, "DB_FILE", root / "t.db")
+        cfg = SearchConfig(
+            include=[docs], exclude=[], max_file_size_mb=10, file_types={".md"}
+        )
+
+        first = indexer.run_index(cfg)
+        assert first["indexed"] == 1
+        assert first["failed"] == 1      # 空文件
+        assert first["unchanged"] == 0   # 首次跑，没有"没变"的
+
+        second = indexer.run_index(cfg)
+        assert second["indexed"] == 0
+        assert second["unchanged"] == 1  # 有内容那个没变
+        assert second["failed"] == 1     # 空的那个还是抽不出
+
+
+def test_count_under_escapes_like_wildcards(monkeypatch):
+    """路径里的 _ 和 % 是 LIKE 的通配符，不转义会数错。
+
+    中文文件名下划线极常见（周报-陈鸿波-20260618.xlsx 这种）。
+    """
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        a = root / "a_b"
+        other = root / "axb"      # 不转义时 a_b 的 LIKE 会连它一起命中
+        a.mkdir()
+        other.mkdir()
+        (a / "x.md").write_text("正文内容", encoding="utf-8")
+        (other / "y.md").write_text("正文内容", encoding="utf-8")
+        monkeypatch.setattr(indexer, "DB_FILE", root / "t.db")
+
+        stats = indexer.run_index(
+            SearchConfig(include=[a, other], exclude=[], max_file_size_mb=10,
+                         file_types={".md"})
+        )
+
+    assert stats["per_root"][str(a)] == 1
+    assert stats["per_root"][str(other)] == 1

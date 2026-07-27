@@ -170,11 +170,12 @@ def _bootstrap_missing_roots(cfg: SearchConfig) -> None:
         stats = run_index(replace(cfg, include=todo))
 
     logger.info(
-        "全量索引完成: 扫 %d / 索引 %d / 跳过 %d，耗时 %ss",
-        stats["scanned"], stats["indexed"], stats["skipped"], stats["duration_sec"],
+        "全量索引完成: 扫 %d / 新入库 %d / 内容没变 %d / 抽不出文本 %d，耗时 %ss",
+        stats["scanned"], stats["indexed"], stats["unchanged"], stats["failed"],
+        stats["duration_sec"],
     )
     for root, n in stats["per_root"].items():
-        logger.info("  %6d  %s", n, root)
+        logger.info("  索引库里 %6d 条  %s", n, root)
     for root, reason in stats["unreadable"]:
         logger.warning("  读不了（整棵没进索引，下次启动会再试）: %s — %s", root, reason)
 

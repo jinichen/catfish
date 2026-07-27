@@ -51,8 +51,8 @@ def cmd_index(args) -> int:
         if args.quiet:
             return
         sys.stdout.write(
-            f"\r  已扫 {stats['scanned']}  已索引 {stats['indexed']}  "
-            f"跳过 {stats['skipped']}"
+            f"\r  已扫 {stats['scanned']}  新入库 {stats['indexed']}  "
+            f"没变 {stats['unchanged']}  抽不出 {stats['failed']}"
         )
         sys.stdout.flush()
 
@@ -68,10 +68,16 @@ def cmd_index(args) -> int:
         stats = run_index(cfg, on_progress=on_progress)
     if not args.quiet:
         print()
-    print(
-        f"完成。扫 {stats['scanned']} / 新索引 {stats['indexed']} / "
-        f"跳过 {stats['skipped']}  耗时 {stats['duration_sec']}s"
+    # BL-SEARCH-STATS-MISLEADING (7/27): 老格式 "扫 6830 / 新索引 4 / 跳过 6826"
+    # 把"内容没变不用重建"（正常，重跑时占绝大多数）和"抽不出文本"（异常）
+    # 混成一个"跳过"，一次健康的重跑看着像 99.9% 都失败了。
+    line = (
+        f"完成。扫 {stats['scanned']} / 新入库 {stats['indexed']} / "
+        f"内容没变 {stats['unchanged']}"
     )
+    if stats["failed"]:
+        line += f" / 抽不出文本 {stats['failed']}"
+    print(f"{line}  耗时 {stats['duration_sec']}s")
 
     _report_per_root(stats)
     return 0
@@ -80,11 +86,13 @@ def cmd_index(args) -> int:
 def _report_per_root(stats: dict) -> None:
     """BL-SEARCH-TCC-SILENT-SKIP (7/27 鸿波实盘): 逐个 include 根报数。
 
-    老版本只报总数。鸿波三个最重要的目录（Documents/Desktop/Downloads）
-    因 macOS TCC 没授权各 0 条，全被 ~/person_task 的 6 万条掩盖掉了 ——
-    看总数「已索引 60332」完全发现不了。
+    老版本只报总数。目录读不了 / 配错了的时候，那个根 0 条会被别的根的
+    几万条掩盖掉，看总数完全发现不了。
+
+    报的是「索引库里这个根底下现有多少条」，不是「本次新增几条」——
+    见 indexer._count_under 的注释。
     """
-    print("\n各目录索引数：")
+    print("\n各目录在索引库里的条数：")
     empty_roots = []
     for root, n in stats.get("per_root", {}).items():
         print(f"  {'  ' if n else '⚠️'} {n:6d}  {root}")

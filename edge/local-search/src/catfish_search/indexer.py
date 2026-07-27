@@ -208,14 +208,20 @@ def _needs_reindex(conn: sqlite3.Connection, path: Path) -> bool:
     return abs(row[0] - mtime) > 1e-3  # 文件时间不同就重建
 
 
-def _index_one(conn: sqlite3.Connection, path: Path) -> bool:
-    """索引单个文件。成功 True，跳过 False。"""
+def _index_one(conn: sqlite3.Connection, path: Path) -> str:
+    """索引单个文件。返回 'indexed' / 'unchanged' / 'no_text'。
+
+    BL-SEARCH-STATS-MISLEADING (7/27 鸿波实盘): 老签名返 bool，两种完全不同的
+    False 混成一个 —— "内容没变不用重建"（正常，占绝大多数）和"抽不出文本"
+    （异常）。上层统一记进 stats["skipped"]，于是一次健康的全量重跑打出
+    "扫 6830 / 新索引 4 / 跳过 6826"，看着像 99.9% 都出错了。
+    """
     if not _needs_reindex(conn, path):
-        return False
+        return "unchanged"
 
     text = extract_text(path)
     if not text or not text.strip():
-        return False
+        return "no_text"
 
     # 标题简单取文件名（不含扩展名）
     title = path.stem
@@ -256,24 +262,43 @@ def _index_one(conn: sqlite3.Connection, path: Path) -> bool:
         """,
         (str(path), size, mtime, time.time(), content_hash),
     )
-    return True
+    return "indexed"
+
+
+def _count_under(conn: sqlite3.Connection, root: Path) -> int:
+    """索引库里这个根底下现有多少条。
+
+    BL-SEARCH-STATS-MISLEADING (7/27): per_root 原来数的是"本次新增几条"。
+    库已经建好之后再跑一次全量，所有文件都走 _needs_reindex 判定"没变"，
+    新增 0 —— 于是六个健康目录全打 ⚠️ 0 条，还触发"一个文件都没索引到"的告警。
+    员工看到会以为索引坏了。改成数索引库里实际有多少。
+    """
+    prefix = str(root).rstrip("/") + "/"
+    # LIKE 的通配符转义: 路径里可能有 % 或 _（_ 在中文路径里很常见）
+    esc = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return conn.execute(
+        "SELECT COUNT(*) FROM file_meta WHERE path LIKE ? ESCAPE '\\'", (esc + "%",)
+    ).fetchone()[0]
 
 
 def run_index(cfg: SearchConfig, on_progress=None) -> dict:
     """完整扫描 + 索引一次。返回统计。
 
-    BL-SEARCH-TCC-SILENT-SKIP (7/27): stats 多两项 ——
-      per_root:      每个 include 根各索引到几个文件（0 = 这个根白配了）
-      unreadable:    [(root, 原因)]，遍历时踩 PermissionError 的根
-    这两项是给 CLI / Dashboard 明着报的。macOS 上 ~/Documents、~/Desktop、
-    ~/Downloads 要「文件与文件夹」授权，没授权就是整棵目录 0 条，
-    以前只有一条 debug 日志，员工根本发现不了。
+    stats 各项:
+      scanned / indexed / unchanged / failed  —— 见 BL-SEARCH-STATS-MISLEADING
+      per_root:    每个 include 根**索引库里现有**多少条（0 = 这个根白配了）
+      unreadable:  [(root, 原因)]，遍历时踩 PermissionError 的根
+
+    BL-SEARCH-TCC-SILENT-SKIP (7/27): per_root / unreadable 是给 CLI / Dashboard
+    明着报的。macOS 上 ~/Documents、~/Desktop、~/Downloads 要「文件与文件夹」
+    授权，没授权就是整棵目录 0 条，以前只有一条 debug 日志，员工根本发现不了。
     """
     conn = open_db()
     stats: dict = {
         "scanned": 0,
-        "indexed": 0,
-        "skipped": 0,
+        "indexed": 0,      # 真写进库了（新文件 / 内容变了）
+        "unchanged": 0,    # mtime 没变，不用重建 —— 正常，重跑时占绝大多数
+        "failed": 0,       # 抽不出文本 / 抛异常
         "roots": len(cfg.include),
         "per_root": {},
         "unreadable": [],
@@ -283,18 +308,20 @@ def run_index(cfg: SearchConfig, on_progress=None) -> dict:
     try:
         for root in cfg.include:
             logger.info("scanning %s", root)
-            before = stats["indexed"]
             walk_errors: list[OSError] = []
             for path in _iter_files(root, cfg, errors=walk_errors):
                 stats["scanned"] += 1
                 try:
-                    if _index_one(conn, path):
-                        stats["indexed"] += 1
-                    else:
-                        stats["skipped"] += 1
+                    outcome = _index_one(conn, path)
                 except Exception as e:
                     logger.debug("index fail %s: %s", path, e)
-                    stats["skipped"] += 1
+                    outcome = "failed"
+                if outcome == "indexed":
+                    stats["indexed"] += 1
+                elif outcome == "unchanged":
+                    stats["unchanged"] += 1
+                else:  # no_text / failed
+                    stats["failed"] += 1
 
                 if on_progress and stats["scanned"] % 50 == 0:
                     on_progress(stats)
@@ -302,8 +329,8 @@ def run_index(cfg: SearchConfig, on_progress=None) -> dict:
                 if stats["scanned"] % 200 == 0:
                     conn.commit()
 
-            n = stats["indexed"] - before
-            stats["per_root"][str(root)] = n
+            conn.commit()  # 先落盘，_count_under 才数得到这一轮写的
+            stats["per_root"][str(root)] = _count_under(conn, root)
             if walk_errors:
                 # 只记第一条原因就够了 —— 权限问题整棵目录同一个错
                 first = walk_errors[0]
@@ -316,7 +343,7 @@ def run_index(cfg: SearchConfig, on_progress=None) -> dict:
                     "INSERT INTO indexed_roots(root, finished_at, file_count) "
                     "VALUES(?, ?, ?) ON CONFLICT(root) DO UPDATE SET "
                     "finished_at = excluded.finished_at, file_count = excluded.file_count",
-                    (str(root), time.time(), n),
+                    (str(root), time.time(), stats["per_root"][str(root)]),
                 )
         conn.commit()
     finally:
@@ -408,7 +435,7 @@ def index_path(path: Path) -> bool:
     """单文件增量索引（给 watcher 用）。成功入库 True，内容没变/抽不出文本 False。"""
     conn = open_db()
     try:
-        ok = _index_one(conn, path)
+        ok = _index_one(conn, path) == "indexed"
         conn.commit()
         return ok
     finally:
