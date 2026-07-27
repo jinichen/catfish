@@ -59,6 +59,8 @@ const statsGet = () => invoke<LocalSearchStats>("local_search_stats");
 /** only 给路径 = 只索引那一个根; 不给 = 整库重建 */
 const runIndex = (only?: string) =>
   invoke<IndexRunResult>("local_search_index", { only: only ?? null });
+/** BL-SEARCH-STALE-SCOPE (7/27): 清掉已删目录 / 已被 exclude 排除的索引数据 */
+const runClean = () => invoke<IndexRunResult>("local_search_clean");
 
 function formatBytes(bytes: number): string {
   if (bytes <= 0) return "0";
@@ -155,12 +157,22 @@ export default function LocalSearchScopeCard() {
   const onRemove = async (path: string) => {
     setBusy(true);
     setErr(null);
+    setIndexReport(null);
     try {
       const r = await scopeRemove(path);
       setData(r);
+      // BL-SEARCH-STALE-SCOPE (7/27): 从 yaml 删掉只是"以后不再扫"，
+      // 索引库里那个目录的数据还在 —— 搜索照样搜得到、文书风格照样拿它当语料。
+      // 员工点"删"的语义就是"别再看这里"，数据得跟着走，不能指望他记得
+      // 回头再手动清一次。
+      setIndexing(`正在清掉 ${path} 的索引数据...`);
+      const c = await runClean();
+      setIndexReport(c.output || "已清理");
+      await reload();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
+      setIndexing(null);
       setBusy(false);
     }
   };

@@ -459,21 +459,47 @@ def should_index(path: Path, cfg: SearchConfig) -> bool:
     return _should_index(path, cfg)
 
 
-def cleanup_missing(cfg: SearchConfig) -> int:
-    """清理已删除、或现在已被 exclude 排除的索引条目。返回清理数。
+def _under_any_root(path: Path, roots: list[Path]) -> bool:
+    """path 是否落在任意一个 include 根之下。"""
+    s = str(path)
+    return any(s == str(r) or s.startswith(str(r).rstrip("/") + "/") for r in roots)
 
-    BL-SEARCH-EXCLUDE-DIR-FIX (7/27): 加了 exclude 判定。原因 —— exclude 修好
-    之前索引库里已经堆了几万条 node_modules / venv 里的文件，它们**还在磁盘上**，
-    光靠 exists() 永远清不掉，会一直污染搜索结果和 style_fingerprint 的语料。
-    改成"不存在 or 现在该被排除"两条都清。
+
+def cleanup_missing(cfg: SearchConfig) -> int:
+    """清理索引里不该留的条目。返回清理数。
+
+    三条判据：
+      1. 文件已经从磁盘上删了
+      2. 现在命中 exclude（BL-SEARCH-EXCLUDE-DIR-FIX 7/27）—— exclude 修好之前
+         索引库里堆了几万条 node_modules / venv 里的文件，它们**还在磁盘上**，
+         光靠 exists() 永远清不掉，会一直污染搜索结果和 style_fingerprint 语料
+      3. 所在的根已经不在 include 里了（BL-SEARCH-STALE-SCOPE 7/27，见下）
+
+    # 第 3 条为什么是隐私问题
+
+    鸿波在面板上把 ~/person_task、~/Documents、~/Downloads 从索引范围里删掉了，
+    但索引库里那 6782 + 1 + 13 条一条没少 —— 老代码只看"文件还在不在磁盘上"，
+    根本不管"这个根还在不在范围内"。后果是他以为鲶鱼不再看这些目录了，实际
+    搜索照样搜得到、文书风格照样拿它们当语料。
+
+    员工从面板删掉一个目录，语义就是"别再看这里"，索引数据必须跟着走。
+
+    注：cfg.include 为空时**不套第 3 条** —— 那多半是配置读坏了/还没配，
+    这时候按"什么都不在范围内"处理会把整个索引清空，太危险。
     """
     conn = open_db()
     removed = 0
+    scope_check = bool(cfg.include)
     try:
         rows = conn.execute("SELECT path FROM file_meta").fetchall()
         for (path_str,) in rows:
             p = Path(path_str)
-            if p.exists() and not _should_skip(p, cfg.exclude):
+            keep = (
+                p.exists()
+                and not _should_skip(p, cfg.exclude)
+                and (not scope_check or _under_any_root(p, cfg.include))
+            )
+            if keep:
                 continue
             conn.execute("DELETE FROM documents WHERE path = ?", (path_str,))
             conn.execute("DELETE FROM file_meta WHERE path = ?", (path_str,))

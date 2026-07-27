@@ -567,6 +567,8 @@ pub fn run() {
             // BL-SEARCH-NO-BOOTSTRAP (7/27): 前台跑一次索引 (整库 / 单目录).
             // watcher 只吃变化事件, 存量文件得靠这个进索引.
             commands::local_search::local_search_index,
+            // BL-SEARCH-STALE-SCOPE (7/27): 删目录后清掉它在索引里的数据.
+            commands::local_search::local_search_clean,
             // P3.5.126 (6/26 鸿波 catch "local_search 目录设置 UI 找不到"):
             // 索引目录 UI 管理 (search-scope.yaml include 段读写)
             commands::local_search_scope::local_search_scope_get,

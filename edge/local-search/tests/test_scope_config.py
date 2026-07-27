@@ -690,3 +690,82 @@ def test_load_config_reports_missing_roots(scope):
     assert home / "Documents" in cfg.include
     assert home / "根本没有这个目录" not in cfg.include
     assert cfg.missing == [home / "根本没有这个目录"]
+
+
+# ── 删目录要连数据一起清 (BL-SEARCH-STALE-SCOPE) ─────────────
+
+
+def test_cleanup_purges_roots_no_longer_in_include(monkeypatch):
+    """员工从面板删掉一个目录 → 它在索引库里的数据也得清掉。
+
+    鸿波把 ~/person_task、~/Documents、~/Downloads 从范围里删了，索引库里
+    6782 + 1 + 13 条一条没少 —— 他以为鲶鱼不再看这些目录，实际搜索照样
+    搜得到、文书风格照样拿它们当语料。这是隐私边界，不只是脏数据。
+    """
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        keep_dir, drop_dir = root / "keep", root / "drop"
+        keep_dir.mkdir()
+        drop_dir.mkdir()
+        keep = keep_dir / "留下.md"
+        keep.write_text("要保留的正文", encoding="utf-8")
+        (drop_dir / "移出范围.md").write_text("该被清掉的正文", encoding="utf-8")
+        monkeypatch.setattr(indexer, "DB_FILE", root / "t.db")
+
+        both = SearchConfig(include=[keep_dir, drop_dir], exclude=[],
+                            max_file_size_mb=10, file_types={".md"})
+        indexer.run_index(both)
+        conn = indexer.open_db()
+        assert conn.execute("SELECT COUNT(*) FROM file_meta").fetchone()[0] == 2
+        conn.close()
+
+        # 员工把 drop_dir 从 include 里删了。文件还在磁盘上，也没命中 exclude ——
+        # 老代码这两条都不触发，数据会一直留着。
+        only_keep = SearchConfig(include=[keep_dir], exclude=[],
+                                 max_file_size_mb=10, file_types={".md"})
+        removed = indexer.cleanup_missing(only_keep)
+
+        conn = indexer.open_db()
+        left = [r[0] for r in conn.execute("SELECT path FROM file_meta")]
+        conn.close()
+
+    assert removed == 1
+    assert left == [str(keep)]
+
+
+def test_cleanup_does_not_wipe_index_when_include_empty(monkeypatch):
+    """include 为空时不套"不在范围内"这条判据。
+
+    那多半是配置读坏了 / 还没配，按"什么都不在范围内"处理会把整个索引清空。
+    """
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        docs = root / "docs"
+        docs.mkdir()
+        (docs / "正文.md").write_text("内容还在磁盘上", encoding="utf-8")
+        monkeypatch.setattr(indexer, "DB_FILE", root / "t.db")
+        indexer.run_index(
+            SearchConfig(include=[docs], exclude=[], max_file_size_mb=10,
+                         file_types={".md"})
+        )
+
+        removed = indexer.cleanup_missing(
+            SearchConfig(include=[], exclude=[], max_file_size_mb=10,
+                         file_types={".md"})
+        )
+
+        conn = indexer.open_db()
+        n = conn.execute("SELECT COUNT(*) FROM file_meta").fetchone()[0]
+        conn.close()
+
+    assert removed == 0
+    assert n == 1
+
+
+def test_under_any_root_does_not_match_sibling_prefix():
+    """/x/ab 不该被算成 /x/a 之下 —— 前缀匹配要带路径分隔符。"""
+    roots = [Path("/x/a")]
+    assert indexer._under_any_root(Path("/x/a/f.md"), roots) is True
+    assert indexer._under_any_root(Path("/x/a"), roots) is True
+    assert indexer._under_any_root(Path("/x/ab/f.md"), roots) is False
+    assert indexer._under_any_root(Path("/y/f.md"), roots) is False

@@ -108,12 +108,6 @@ pub struct IndexRunResult {
 
 #[tauri::command]
 pub async fn local_search_index(only: Option<String>) -> Result<IndexRunResult, String> {
-    let dir = catfish_paths::local_search_dir()
-        .ok_or_else(|| "找不到 local-search 目录".to_string())?;
-    let python = catfish_paths::local_search_python()
-        .ok_or_else(|| "找不到 Python 解释器".to_string())?;
-    let pythonpath = dir.join("src").to_string_lossy().to_string();
-
     let mut args: Vec<String> = vec![
         "-m".into(),
         "catfish_search.cli".into(),
@@ -128,6 +122,28 @@ pub async fn local_search_index(only: Option<String>) -> Result<IndexRunResult, 
         args.push("--only".into());
         args.push(p);
     }
+    run_search_cli(args).await
+}
+
+/// BL-SEARCH-STALE-SCOPE (7/27 鸿波实盘): 员工从面板删掉一个索引目录后，
+/// 把它在索引库里的数据也清掉。
+///
+/// 鸿波把 ~/person_task、~/Documents、~/Downloads 从范围里删了，索引库里
+/// 那 6782 + 1 + 13 条一条没少 —— 他以为鲶鱼不再看这些目录，实际搜索照样
+/// 搜得到、文书风格照样拿它们当语料。删目录的语义就是"别再看这里"，
+/// 数据必须跟着走，不能指望员工记得回来手动跑一次 clean。
+#[tauri::command]
+pub async fn local_search_clean() -> Result<IndexRunResult, String> {
+    run_search_cli(vec!["-m".into(), "catfish_search.cli".into(), "clean".into()]).await
+}
+
+/// 前台跑一次 catfish_search.cli，等它跑完把 stdout 原样带回来。
+async fn run_search_cli(args: Vec<String>) -> Result<IndexRunResult, String> {
+    let dir = catfish_paths::local_search_dir()
+        .ok_or_else(|| "找不到 local-search 目录".to_string())?;
+    let python = catfish_paths::local_search_python()
+        .ok_or_else(|| "找不到 Python 解释器".to_string())?;
+    let pythonpath = dir.join("src").to_string_lossy().to_string();
 
     // 索引是同步 subprocess 且可能跑几十秒，丢进 spawn_blocking，
     // 不占 tokio runtime 线程（跟 tts.rs:304 同款处理）。
