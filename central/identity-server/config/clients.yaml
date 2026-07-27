@@ -49,6 +49,22 @@ clients:
       - audit.write           # 写 audit event 用
       - tools.invoke          # 调 native tool / MCP
       - skills.run            # catfish_run_skill
+      # BL-PLUGIN-AUTH-FIX (7/27 鸿波): hermes 进程内 plugin 后台任务免 quota 授权.
+      #
+      # 真踩坑: catfish-memory (Dream Engine distill / sync_turn summarize) 和
+      # catfish-xcatfish-user (memory_enforce) 两个 plugin 都读
+      # CATFISH_INTERNAL_DEV_TOKEN — 那是 **gateway 进程内 loopback 专用**
+      # (auth/dev_token.py:11-15 "进程内存, 重启即变, 不写 .env"). plugin 跑在
+      # hermes 进程 (另一进程 · 生产还跨机), 永远拿不到 → 静默 return None →
+      # Dream Engine 9.7 天没跑, memory_enforce 静默降级.
+      #
+      # 正解: plugin 复用 **hermes → gateway 这一跳**的凭证 (.env OPENAI_API_KEY,
+      # aud=catfish-gateway · token_use=service · 由本 client 的 client_credentials
+      # 派发 · refresh-jwt-hermes-env.sh 30 天刷新 · 生产分离时中央派发天然跨机).
+      #
+      # 这个 scope 让 gateway 能区分 "有权免 quota 的后台任务" vs "普通员工调用
+      # 硬加 X-Catfish-Internal header 蹭免费额度" (老代码只看 header 零校验).
+      - background.tasks      # 后台任务 (distill / summarize / memory_enforce) 免 quota
     department: infra
     role: service
     enabled: true

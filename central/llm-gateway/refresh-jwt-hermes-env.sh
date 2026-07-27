@@ -3,6 +3,14 @@
 # refresh-jwt-and-restart.sh 只改了 ~/.hermes/config.yaml · 没改 ~/.hermes/.env OPENAI_API_KEY.
 # hermes credential_pool 从 env:OPENAI_API_KEY 拿 · config.yaml 只喂 model 段 · 分裂路径.
 # 这次一次修完 · 且 reset auth.json exhausted 状态.
+#
+# BL-PLUGIN-AUTH-FIX (7/27 鸿波): scope 加 background.tasks.
+#   hermes 进程内 plugin (catfish-memory distill/summarize · catfish-xcatfish-user
+#   memory_enforce) 复用本脚本写的 OPENAI_API_KEY 调 gateway. gateway 侧
+#   app.py is_internal_call 校验这个 scope 才允许免 quota (堵 header 滥用洞).
+#   没这 scope → plugin 调用照常扣员工 quota (功能不断 · 只是记账变了).
+#   ⚠ 前置: identity-server clients.yaml 的 hermes-cli 必须先有 background.tasks
+#      在 allowed_scopes 里 (不然 /token 返 invalid_scope), 且 identity 要重启.
 
 set -uo pipefail
 
@@ -18,7 +26,7 @@ NEW_JWT=$(curl -sS -X POST http://127.0.0.1:8998/token \
     --data-urlencode "grant_type=client_credentials" \
     --data-urlencode "client_id=hermes-cli" \
     --data-urlencode "client_secret=hermes-dev-secret-2026-please-change" \
-    --data-urlencode "scope=chat.completions" \
+    --data-urlencode "scope=chat.completions background.tasks" \
     2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null)
 
 if [[ -z "$NEW_JWT" ]]; then
@@ -90,13 +98,24 @@ sleep 2
 launchctl bootout gui/$(id -u)/ai.hermes.gateway 2>/dev/null || true
 hermes gateway install --force 2>&1 | tail -3
 hermes gateway start 2>&1 | tail -3
-sleep 5
 
-NEW_PID=$(lsof -ti:8642 -sTCP:LISTEN 2>/dev/null)
+# BL-REFRESH-JWT-WAIT-FIX (7/27 鸿波实测): 老代码 `sleep 5` 就查端口 → 误报
+# "❌ hermes 8642 没起". 真实冷启耗时 (7/27 11:14 日志):
+#   11:14:57.706  API server listening on 8642
+#   11:15:20.463  Press Ctrl+C to stop  ← 真就绪, 距 start 约 23s
+# 5s 时连 listening 都可能没到. 改**轮询到 45s**, 每 2s 查一次, 起来就早退.
+echo "  → 等 hermes 8642 起 (冷启约 20-30s, 最多等 45s)..."
+NEW_PID=""
+for i in $(seq 1 23); do
+    NEW_PID=$(lsof -ti:8642 -sTCP:LISTEN 2>/dev/null | head -1)
+    [[ -n "$NEW_PID" ]] && break
+    sleep 2
+done
+
 if [[ -n "$NEW_PID" ]]; then
     echo ""
     echo "════════════════════════════════════════════"
-    echo "✅ 全修完 · hermes 8642 pid=$NEW_PID"
+    echo "✅ 全修完 · hermes 8642 pid=$NEW_PID (等了 $((i * 2))s)"
     echo "════════════════════════════════════════════"
     ps -p $NEW_PID -o pid,etime,command | head -2
     echo ""
@@ -105,7 +124,11 @@ if [[ -n "$NEW_PID" ]]; then
     echo "→ 若还英文 · tail 抓 log:"
     echo "  tail -20 ~/catfish-gateway-\$(date +%Y%m%d).log | grep -E 'chat|401|200|exp|sub'"
 else
-    echo "❌ hermes 8642 没起 · 手工排查:"
+    echo "❌ hermes 8642 等 45s 还没起 · 手工排查:"
     echo "  hermes gateway status"
-    echo "  tail -30 ~/.hermes/logs/*.log 2>/dev/null"
+    echo "  tail -40 ~/.hermes/logs/gateway.log"
+    echo "  tail -20 ~/.hermes/logs/gateway.error.log"
+    echo ""
+    echo "  (注 · 先看 gateway.log 有没有 'API server listening on 8642' —"
+    echo "   有就是还在起, 再等等; 没有才是真挂)"
 fi
