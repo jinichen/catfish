@@ -141,10 +141,23 @@ pub async fn local_search_index(only: Option<String>) -> Result<IndexRunResult, 
             .map_err(|e| format!("跑索引失败: {e}"))?;
 
         let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
-        let err = String::from_utf8_lossy(&out.stderr);
-        if !err.trim().is_empty() {
-            text.push('\n');
-            text.push_str(&err);
+
+        // stderr 只在真失败时附上。
+        //
+        // BL-SEARCH-PANEL-NOISE (7/27 鸿波实盘): 面板上那块输出里混进了
+        //   .../site-packages/pydub/utils.py:170: RuntimeWarning:
+        //     Couldn't find ffmpeg or avconv - defaulting to ffmpeg
+        // 那是 markitdown 顺带 import pydub 打的无害警告（本机没装 ffmpeg，
+        // 而我们根本不抽音频）。跟索引结果混在一起，员工看着像出错了。
+        //
+        // 另外索引器的进度和日志都走 stdout/logging，真出事退出码非 0，
+        // 到那时再把 stderr 全文贴出来才有用。
+        if !out.status.success() {
+            let err = String::from_utf8_lossy(&out.stderr);
+            if !err.trim().is_empty() {
+                text.push_str("\n--- stderr ---\n");
+                text.push_str(&err);
+            }
         }
         Ok(IndexRunResult {
             output: text.trim().to_string(),

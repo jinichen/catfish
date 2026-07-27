@@ -652,3 +652,41 @@ def test_count_under_escapes_like_wildcards(monkeypatch):
 
     assert stats["per_root"][str(a)] == 1
     assert stats["per_root"][str(other)] == 1
+
+
+# ── 冒烟: 每个模块都能 import (BL-SEARCH-CLI-SYNTAX-UNCAUGHT) ─────
+
+
+@pytest.mark.parametrize(
+    "mod",
+    ["cli", "config", "extractor", "indexer", "query", "watcher", "mcp_server"],
+)
+def test_module_imports(mod):
+    """7/27: cli.py 里写进一个语法错误，44 个测试全绿 —— 因为没有一个测试
+    import 过 cli。语法错误只有员工点"重建索引"时才炸。
+
+    这条冒烟测试很便宜，堵的是"改了 CLI / daemon 这类没人直接测的模块，
+    坏了也没人知道"。
+    """
+    importlib.import_module(f"catfish_search.{mod}")
+
+
+def test_load_config_reports_missing_roots(scope):
+    """BL-SEARCH-MISSING-ROOT-SILENT: 配了但拿不到的目录要留痕，不能悄悄消失。
+
+    鸿波面板上配着 6 个目录，点"重建索引"只跑了 2 个，输出里连一句解释都没有。
+    macOS 上尤其阴 —— 没拿到「文件与文件夹」授权时 exists() 直接返 False，
+    跟"目录真的不存在"完全分不出来。
+    """
+    home, cfgmod = scope
+    cfgmod.CONFIG_FILE.write_text(
+        "include:\n  - ~/Documents\n  - ~/根本没有这个目录\n"
+        "exclude: []\nfile_types: [.md]\n",
+        encoding="utf-8",
+    )
+    cfg = cfgmod.load_config()
+
+    # include 里还会多一条迁移插进来的 ~/.catfish/output，这里只关心那两条
+    assert home / "Documents" in cfg.include
+    assert home / "根本没有这个目录" not in cfg.include
+    assert cfg.missing == [home / "根本没有这个目录"]

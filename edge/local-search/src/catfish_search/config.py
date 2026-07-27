@@ -1,10 +1,13 @@
 """加载和生成 search-scope.yaml 配置。"""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+
+logger = logging.getLogger("catfish.search.config")
 
 CATFISH_HOME = Path.home() / ".catfish"
 CONFIG_FILE = CATFISH_HOME / "search-scope.yaml"
@@ -175,6 +178,10 @@ class SearchConfig:
     exclude: list[str] = field(default_factory=list)
     max_file_size_mb: int = 10
     file_types: set[str] = field(default_factory=set)
+    #: yaml 的 include 里写了、但当前进程拿不到的目录（不存在 / 没访问授权）。
+    #: BL-SEARCH-MISSING-ROOT-SILENT (7/27)：老代码直接过滤掉不留痕，
+    #: 员工面板上配 6 个只扫 2 个还不知道为什么。见 load_config 里的注释。
+    missing: list[Path] = field(default_factory=list)
 
     @property
     def max_file_size_bytes(self) -> int:
@@ -321,7 +328,24 @@ def load_config() -> SearchConfig:
         if str(p) not in seen:
             seen.add(str(p))
             deduped.append(p)
+
+    # BL-SEARCH-MISSING-ROOT-SILENT (7/27 鸿波实盘): 拿不到的根**必须留痕**。
+    #
+    # 老代码就一句 `[p for p in deduped if p.exists()]` —— 目录不存在就悄悄
+    # 从 include 里消失。鸿波面板上配着 6 个目录，点"重建索引"只跑了 2 个
+    # （uploads / output），CLI 打"开始索引 2 个目录"，没有任何一句话解释另外
+    # 4 个去哪了。
+    #
+    # macOS 上这尤其阴 —— ~/Documents、~/Desktop、~/Downloads 没拿到「文件与
+    # 文件夹」授权时，exists() 直接返 False（不是抛异常），跟"目录真的不存在"
+    # 完全分不出来。Companion 是 GUI app，它 spawn 的索引进程继承 Companion.app
+    # 的 TCC 授权，跟员工在终端里跑很可能是两种结果。
+    #
+    # 现在: 丢掉的根记进 cfg.missing，由 CLI / Dashboard 明着报出来。
+    missing = [p for p in deduped if not p.exists()]
     include_paths = [p for p in deduped if p.exists()]
+    for p in missing:
+        logger.warning("include 里的目录拿不到，本次不扫: %s（不存在，或没有访问授权）", p)
 
     return SearchConfig(
         include=include_paths,
@@ -331,4 +355,5 @@ def load_config() -> SearchConfig:
             t.lower() if t.startswith(".") else "." + t.lower()
             for t in data.get("file_types", [])
         },
+        missing=missing,
     )

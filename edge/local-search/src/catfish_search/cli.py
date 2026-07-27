@@ -43,6 +43,8 @@ def cmd_index(args) -> int:
             return 1
         cfg = replace(cfg, include=[target])
 
+    _report_missing_roots(cfg)
+
     print(f"开始索引 {len(cfg.include)} 个目录...")
     for p in cfg.include:
         print(f"  -> {p}")
@@ -81,6 +83,26 @@ def cmd_index(args) -> int:
 
     _report_per_root(stats)
     return 0
+
+
+def _report_missing_roots(cfg) -> None:
+    """BL-SEARCH-MISSING-ROOT-SILENT (7/27): 把"配了但拿不到"的目录喊出来。
+
+    鸿波面板上配着 6 个目录，点"重建索引"只跑了 2 个，输出里连一句解释都没有 ——
+    老 load_config 一句 `[p for p in deduped if p.exists()]` 就把它们静默滤掉了。
+    """
+    if not cfg.missing:
+        return
+    print(f"\n❌ yaml 的 include 里配了 {len(cfg.missing)} 个目录，但拿不到，本次不扫：")
+    for p in cfg.missing:
+        print(f"     {p}")
+    print(
+        "   要么路径写错了 / 目录已删；要么是 macOS 没给访问授权 —— \n"
+        "   ~/Documents、~/Desktop、~/Downloads 属于受保护目录，没授权时\n"
+        "   连「目录存不存在」都读不到。去 系统设置 → 隐私与安全性 →\n"
+        "   文件与文件夹 / 完全磁盘访问权限，把跑索引的程序（鲶鱼 Companion\n"
+        "   或 终端）勾上，然后重跑。\n"
+    )
 
 
 def _report_per_root(stats: dict) -> None:
