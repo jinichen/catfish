@@ -33,11 +33,314 @@ use crate::services::{catfish_paths, endpoints, process};
 /// current_todos.md (本周待办文件: 已完成清, 未完成带入新一周).
 pub fn schedule_autostart() {
     tauri::async_runtime::spawn(async move {
+        ensure_catfish_tools_mcp_registered();
         ensure_tool_bridge_running().await;
         ensure_local_search_running().await;
         ensure_chrome_running().await;
         maybe_run_weekly_reset().await;
     });
+}
+
+// ============================================================
+// catfish-tools MCP 注册自愈 (BL-MCP-CATFISH-TOOLS-MISSING 7/27 鸿波实盘)
+// ============================================================
+
+/// hermes 通过这个名字加载 catfish 的 MCP server, 拿到全部 catfish_* tool.
+const CATFISH_TOOLS_MCP_NAME: &str = "catfish-tools";
+
+/// 保证 ~/.hermes/config.yaml 里有 mcp_servers.catfish-tools. 改动过返 true.
+///
+/// # 为什么需要这个
+///
+/// 鸿波 7/27 报"浏览器打不开", 顺着 gateway 日志挖到根因:
+///
+///     P3.5.70 sanitize entry: tools_count=30
+///     ALL=['browser_back','browser_cdp',...,'write_file']   ← 一个 catfish_* 都没有
+///
+/// 发给 LLM 的工具全是 hermes builtin. catfish 那 72 个 tool
+/// (catfish_browser_* / catfish_run_skill / catfish_search_* / ...) **全程不可见**.
+/// 翻 ~/.hermes/sessions/request_dump_*.json, 7/18 到 7/27 每一份都是 catfish_*=0,
+/// 不是突然坏的, 是一直如此.
+///
+/// 直接后果不止少工具: gateway 的 BL-FIX4 去重 (tools_sanitizer.py:360) 前提是
+/// "请求里存在 catfish_browser_*", 一个都没有 → 去重不触发 → hermes builtin
+/// browser_navigate 暴露给 LLM. 而那正是 catfish_tools_browser.py 开头记的 4/27 老坑:
+/// "✓ 调用成功但页面没真换, 模型幻觉'已打开'". 鸿波看到的就是这个 —— 模型还顺嘴
+/// 编了套"沙箱出站封锁"的说辞 (catfish 根本没有那种代码).
+///
+/// # 为什么会缺
+///
+/// 谁都不装, 谁都不能装, 而所有代码都假设它在:
+///   - local-search/hermes-skill/install.sh 装的是 catfish-local-search, 不是这个
+///   - mcp_server.py 的 docstring 只说手工跑 `hermes mcp add catfish-tools`
+///   - commands/skills.rs:946 add_mcp_server **明确拒绝** name 以 catfish- 开头
+///     ("核心 MCP 保留命名, 不允许员工自加"), 员工想自己补都补不了
+///   - autostart 管 tool-bridge / local-search / chrome, 唯独不管 MCP 注册
+///
+/// 既然它被定义成"主链路依赖、员工不能删"(skills.rs:1000), 那就该由平台自己保证
+/// 它在 —— 而不是指望某次装机脚本跑对了.
+///
+/// # 不重启 hermes
+///
+/// Companion 不管 hermes 生命周期 (launchd 管). 这里只保证配置正确, hermes
+/// 下次启动自然加载. 首次修复需要员工手动重启一次 hermes, 日志里给了命令.
+pub fn ensure_catfish_tools_mcp_registered() -> bool {
+    let Some(cfg_path) = catfish_paths::hermes_config_path() else {
+        log::warn!("autostart: 找不到 ~/.hermes/config.yaml, 跳过 catfish-tools MCP 检查");
+        return false;
+    };
+    if !cfg_path.exists() {
+        // hermes 还没初始化过 — 别替它建配置, 建了反而可能跟 hermes 首次写入打架
+        log::info!("autostart: {} 还不存在 (hermes 没初始化过), 跳过 MCP 检查", cfg_path.display());
+        return false;
+    }
+
+    let Some(dir) = catfish_paths::tool_bridge_dir() else {
+        log::warn!("autostart: 找不到 tool-bridge 目录, 没法注册 catfish-tools MCP");
+        return false;
+    };
+    let Some(python) = catfish_paths::tool_bridge_python() else {
+        log::warn!("autostart: 找不到 hermes venv python, 没法注册 catfish-tools MCP");
+        return false;
+    };
+    // mcp_server.py 需要 mcp SDK (hermes venv 自带) + 能 import catfish_tool_bridge.
+    // PYTHONPATH 指 src/ 免得要求员工跑 pip install -e (跟 spawn tool-bridge 同款).
+    let pythonpath = dir.join("src").to_string_lossy().to_string();
+    let command = python.to_string_lossy().to_string();
+
+    let text = match std::fs::read_to_string(&cfg_path) {
+        Ok(t) => t,
+        Err(e) => {
+            log::warn!("autostart: 读 {} 失败: {e}", cfg_path.display());
+            return false;
+        }
+    };
+    let new_text = match patch_catfish_tools_mcp(&text, &command, &pythonpath, |p| {
+        std::path::Path::new(p).exists()
+    }) {
+        Ok(Some(t)) => t,
+        Ok(None) => return false, // 已经注册好了, 绝大多数情况走这
+        Err(why) => {
+            // 配置形态不认识就报出来, 别自作主张覆盖员工的文件
+            log::warn!("autostart: {} 不动它 ({why})", cfg_path.display());
+            return false;
+        }
+    };
+
+    // 备份再写 —— config.yaml 里有 model.api_key 等要命的东西
+    let backup = cfg_path.with_extension("yaml.bak-mcp-autofix");
+    let _ = std::fs::write(&backup, &text);
+
+    match std::fs::write(&cfg_path, new_text) {
+        Ok(()) => {
+            log::warn!(
+                "autostart: ⚠ ~/.hermes/config.yaml 缺 mcp_servers.{name} —— 已自动补上.\n\
+                 　 这是 catfish 全部 catfish_* 工具 (catfish_browser_* / catfish_run_skill /\n\
+                 　 catfish_search_* ...) 进 hermes 的唯一通道, 缺了 LLM 只剩 hermes builtin.\n\
+                 　 command={command}  args=[-m catfish_tool_bridge.mcp_server]\n\
+                 　 原配置已备份到 {bak}\n\
+                 　 ★ 需要重启 hermes 才生效: hermes gateway stop && hermes gateway start",
+                name = CATFISH_TOOLS_MCP_NAME,
+                command = command,
+                bak = backup.display(),
+            );
+            true
+        }
+        Err(e) => {
+            log::warn!("autostart: 写 {} 失败: {e}", cfg_path.display());
+            false
+        }
+    }
+}
+
+/// 纯函数: 给定 config.yaml 文本, 返回补好 mcp_servers.catfish-tools 的新文本.
+///
+/// `Ok(None)` = 已经注册好且 command 可用, 不用改.
+/// `Err(_)`   = 配置形态不认识 (解析失败 / 顶层不是 mapping), 调用方别动文件.
+///
+/// `command_exists` 注入进来是为了可测 —— 单测不依赖真实文件系统.
+fn patch_catfish_tools_mcp(
+    text: &str,
+    command: &str,
+    pythonpath: &str,
+    command_exists: impl Fn(&str) -> bool,
+) -> Result<Option<String>, String> {
+    let mut value: serde_yaml::Value =
+        serde_yaml::from_str(text).map_err(|e| format!("解析失败: {e}"))?;
+    let root = value
+        .as_mapping_mut()
+        .ok_or_else(|| "顶层不是 mapping".to_string())?;
+
+    let servers_key = serde_yaml::Value::String("mcp_servers".into());
+    let name_key = serde_yaml::Value::String(CATFISH_TOOLS_MCP_NAME.into());
+
+    // 已注册且 command 指向的解释器还在 → 什么都不用做 (绝大多数情况)
+    if let Some(existing) = root
+        .get(&servers_key)
+        .and_then(|v| v.as_mapping())
+        .and_then(|m| m.get(&name_key))
+        .and_then(|v| v.as_mapping())
+    {
+        let cmd_ok = existing
+            .get(serde_yaml::Value::String("command".into()))
+            .and_then(|v| v.as_str())
+            .map(&command_exists)
+            .unwrap_or(false);
+        if cmd_ok {
+            return Ok(None);
+        }
+        // 注册着但解释器没了 (venv 重建过 / 路径变了) → 重写成当前正确的
+    }
+
+    let mut entry = serde_yaml::Mapping::new();
+    entry.insert(
+        serde_yaml::Value::String("command".into()),
+        serde_yaml::Value::String(command.to_string()),
+    );
+    entry.insert(
+        serde_yaml::Value::String("args".into()),
+        serde_yaml::Value::Sequence(vec![
+            serde_yaml::Value::String("-m".into()),
+            serde_yaml::Value::String("catfish_tool_bridge.mcp_server".into()),
+        ]),
+    );
+    let mut env_map = serde_yaml::Mapping::new();
+    env_map.insert(
+        serde_yaml::Value::String("PYTHONPATH".into()),
+        serde_yaml::Value::String(pythonpath.to_string()),
+    );
+    entry.insert(
+        serde_yaml::Value::String("env".into()),
+        serde_yaml::Value::Mapping(env_map),
+    );
+
+    if !root.contains_key(&servers_key) {
+        root.insert(
+            servers_key.clone(),
+            serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
+        );
+    }
+    let servers = root
+        .get_mut(&servers_key)
+        .and_then(|v| v.as_mapping_mut())
+        .ok_or_else(|| "mcp_servers 段不是 mapping".to_string())?;
+    servers.insert(name_key, serde_yaml::Value::Mapping(entry));
+
+    serde_yaml::to_string(&value)
+        .map(Some)
+        .map_err(|e| format!("序列化失败: {e}"))
+}
+
+#[cfg(test)]
+mod mcp_autofix_tests {
+    use super::*;
+
+    /// 鸿波 7/27 的真实 config.yaml 形态 (零注释, 无 mcp_servers 段)
+    const REAL_CONFIG: &str = r#"model:
+  api_key: eyJhbGciOi.FAKE.TOKEN
+  base_url: http://127.0.0.1:8999/v1
+  provider: openai-api
+  default: catfish-auto
+web:
+  backend: tavily
+plugins:
+  enabled:
+  - catfish-xcatfish-user
+session:
+  auto_reset: true
+"#;
+
+    #[test]
+    fn adds_mcp_section_when_missing() {
+        let out = patch_catfish_tools_mcp(REAL_CONFIG, "/venv/bin/python", "/tb/src", |_| true)
+            .unwrap()
+            .expect("缺 mcp_servers 时该返回新文本");
+        let v: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
+        let entry = v
+            .get("mcp_servers")
+            .and_then(|m| m.get("catfish-tools"))
+            .expect("catfish-tools 该被写进去");
+        assert_eq!(entry.get("command").unwrap().as_str().unwrap(), "/venv/bin/python");
+        let args: Vec<&str> = entry
+            .get("args")
+            .unwrap()
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_str().unwrap())
+            .collect();
+        assert_eq!(args, vec!["-m", "catfish_tool_bridge.mcp_server"]);
+        assert_eq!(
+            entry.get("env").unwrap().get("PYTHONPATH").unwrap().as_str().unwrap(),
+            "/tb/src"
+        );
+    }
+
+    #[test]
+    fn preserves_other_sections() {
+        // config.yaml 里有 model.api_key 等要命的东西, 补 MCP 不能碰它们
+        let out = patch_catfish_tools_mcp(REAL_CONFIG, "/venv/bin/python", "/tb/src", |_| true)
+            .unwrap()
+            .unwrap();
+        let v: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(
+            v.get("model").unwrap().get("api_key").unwrap().as_str().unwrap(),
+            "eyJhbGciOi.FAKE.TOKEN"
+        );
+        assert_eq!(
+            v.get("model").unwrap().get("base_url").unwrap().as_str().unwrap(),
+            "http://127.0.0.1:8999/v1"
+        );
+        assert!(v.get("plugins").is_some());
+        assert!(v.get("session").is_some());
+    }
+
+    #[test]
+    fn noop_when_already_registered_and_command_exists() {
+        let cfg = format!(
+            "{REAL_CONFIG}mcp_servers:\n  catfish-tools:\n    command: /venv/bin/python\n"
+        );
+        let out = patch_catfish_tools_mcp(&cfg, "/venv/bin/python", "/tb/src", |_| true).unwrap();
+        assert!(out.is_none(), "已注册且解释器在 → 不该改文件");
+    }
+
+    #[test]
+    fn rewrites_when_command_no_longer_exists() {
+        // venv 重建 / 路径变了 → 老 command 指向的解释器没了, 得改成当前的
+        let cfg = format!(
+            "{REAL_CONFIG}mcp_servers:\n  catfish-tools:\n    command: /gone/python\n"
+        );
+        let out = patch_catfish_tools_mcp(&cfg, "/new/python", "/tb/src", |p| p == "/new/python")
+            .unwrap()
+            .expect("解释器没了该重写");
+        let v: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(
+            v.get("mcp_servers").unwrap().get("catfish-tools").unwrap()
+                .get("command").unwrap().as_str().unwrap(),
+            "/new/python"
+        );
+    }
+
+    #[test]
+    fn keeps_other_mcp_servers() {
+        // 员工自己装的 MCP (catfish-local-search 等) 不能被挤掉
+        let cfg = format!(
+            "{REAL_CONFIG}mcp_servers:\n  catfish-local-search:\n    command: /x/py\n"
+        );
+        let out = patch_catfish_tools_mcp(&cfg, "/venv/bin/python", "/tb/src", |_| true)
+            .unwrap()
+            .unwrap();
+        let v: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
+        let servers = v.get("mcp_servers").unwrap().as_mapping().unwrap();
+        assert!(servers.contains_key(serde_yaml::Value::String("catfish-local-search".into())));
+        assert!(servers.contains_key(serde_yaml::Value::String("catfish-tools".into())));
+    }
+
+    #[test]
+    fn errors_on_unparseable_config() {
+        // 坏配置不是我们能修的 —— 返 Err 让调用方别动文件
+        assert!(patch_catfish_tools_mcp("::: not yaml :::", "/p", "/s", |_| true).is_err());
+    }
 }
 
 // 5/22 gateway 解耦: ensure_gateway_running 删 (~70 行 spawn 逻辑), gateway 由
