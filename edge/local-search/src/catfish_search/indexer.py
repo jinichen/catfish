@@ -38,6 +38,20 @@ CREATE TABLE IF NOT EXISTS file_meta (
 );
 
 CREATE INDEX IF NOT EXISTS idx_meta_mtime ON file_meta(mtime);
+
+-- BL-SEARCH-BOOTSTRAP-LEDGER (7/27 二次修): 记「哪些 include 根做过全量索引」。
+--
+-- 第一版用 "索引库里一条都没有" 当判据，鸿波实盘当场打脸：他 rm 掉 search.db 后
+-- **老 watcher 还在跑**，随手一个文件变动就 index_path → open_db() 把库重建了并
+-- 写进 1 条。等新 watcher 起来，库已经"非空"，bootstrap 直接跳过。
+--
+-- 而且"库空不空"本来也回答不了真正的问题：员工新加一个目录时，库是满的，
+-- 但那个新根一个文件都没全量扫过。按根记账两个场景一起解决。
+CREATE TABLE IF NOT EXISTS indexed_roots (
+    root        TEXT PRIMARY KEY,
+    finished_at REAL,
+    file_count  INTEGER
+);
 """
 
 
@@ -250,11 +264,22 @@ def run_index(cfg: SearchConfig, on_progress=None) -> dict:
                 if stats["scanned"] % 200 == 0:
                     conn.commit()
 
-            stats["per_root"][str(root)] = stats["indexed"] - before
+            n = stats["indexed"] - before
+            stats["per_root"][str(root)] = n
             if walk_errors:
                 # 只记第一条原因就够了 —— 权限问题整棵目录同一个错
                 first = walk_errors[0]
                 stats["unreadable"].append((str(root), f"{type(first).__name__}: {first}"))
+            else:
+                # BL-SEARCH-BOOTSTRAP-LEDGER: 走完整棵且没踩错才算"全量过了"。
+                # 踩了权限错就不记 —— 员工去系统设置授权后，下次启动会自动补建，
+                # 不用他记得回来手点一次。
+                conn.execute(
+                    "INSERT INTO indexed_roots(root, finished_at, file_count) "
+                    "VALUES(?, ?, ?) ON CONFLICT(root) DO UPDATE SET "
+                    "finished_at = excluded.finished_at, file_count = excluded.file_count",
+                    (str(root), time.time(), n),
+                )
         conn.commit()
     finally:
         conn.close()
@@ -263,8 +288,8 @@ def run_index(cfg: SearchConfig, on_progress=None) -> dict:
     return stats
 
 
-def index_is_empty() -> bool:
-    """索引库里一条都没有（含库文件不存在）。
+def roots_needing_full_index(cfg: SearchConfig) -> list[Path]:
+    """cfg.include 里还没做过全量索引的根。
 
     BL-SEARCH-NO-BOOTSTRAP (7/27 鸿波实盘): Companion 只 spawn
     `catfish_search.cli watch`，而 run_watch 只处理**文件变化事件**，全文没有
@@ -275,18 +300,31 @@ def index_is_empty() -> bool:
     全部，而 ~/Documents、~/Desktop、~/Downloads、~/.catfish/uploads 里的文件
     没人动，一条都没进。他 yaml 里明明配了这四个。
 
+    BL-SEARCH-BOOTSTRAP-LEDGER (7/27 二次修): 判据从"索引库空不空"换成
+    "这个根做过全量没有"（indexed_roots 表）。原因见 SCHEMA 里的注释 ——
+    空库判据被"老 watcher 把删掉的库重建了"当场打脸，而且也覆盖不了
+    "员工新加一个目录"这个场景（库是满的，新根却一条没扫）。
+
     (autostart.rs 老注释写着"启动慢 5-15s (初始 reconcile)" —— 代码里没有
      reconcile，那句是假的，7/27 一并改掉。)
     """
-    if not DB_FILE.exists():
-        return True
     conn = open_db()
     try:
-        return conn.execute("SELECT COUNT(*) FROM file_meta").fetchone()[0] == 0
+        done = {row[0] for row in conn.execute("SELECT root FROM indexed_roots")}
+        # 顺手忘掉已经不在 include 里的根。不然员工"删掉目录 → 又加回来"时，
+        # 记账还在，会被当成扫过的而跳过 bootstrap。
+        stale = done - {str(p) for p in cfg.include}
+        if stale:
+            conn.executemany(
+                "DELETE FROM indexed_roots WHERE root = ?", [(r,) for r in stale]
+            )
+            conn.commit()
+            done -= stale
     except sqlite3.Error:
-        return True  # 库损坏当空处理，重建一次总比不建强
+        done = set()  # 库损坏 / 老 schema：当成全都没做过，重建一次总比不建强
     finally:
         conn.close()
+    return [p for p in cfg.include if str(p) not in done]
 
 
 def index_path(path: Path) -> bool:

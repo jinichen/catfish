@@ -31,7 +31,7 @@ from catfish_search import config as scope_config
 from catfish_search import indexer
 from catfish_search.config import SearchConfig
 from catfish_search.indexer import _iter_files, _should_skip
-from catfish_search.watcher import _bootstrap_if_empty
+from catfish_search.watcher import _bootstrap_missing_roots
 
 # 鸿波 7/27 的真实 yaml 形态：有注释、有他自己加的 ~/person_task、没有 output
 LEGACY_YAML = """# 鲶鱼本地文件搜索 · 索引范围配置
@@ -293,25 +293,78 @@ def test_run_index_reports_unreadable_roots(monkeypatch):
 # ── 首次索引 (bootstrap) ────────────────────────────────────
 
 
-def test_index_is_empty_detects_missing_and_empty_db(monkeypatch):
+def test_roots_needing_full_index_tracks_per_root(monkeypatch):
+    """BL-SEARCH-BOOTSTRAP-LEDGER: 按根记账，不是看"库空不空"。"""
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
+        a, b = root / "a", root / "b"
+        a.mkdir()
+        b.mkdir()
+        (a / "x.md").write_text("正文内容", encoding="utf-8")
+        (b / "y.md").write_text("正文内容", encoding="utf-8")
         monkeypatch.setattr(indexer, "DB_FILE", root / "t.db")
-        assert indexer.index_is_empty() is True  # 库文件不存在
 
-        indexer.open_db().close()  # 建了空库
-        assert indexer.index_is_empty() is True
+        cfg_a = SearchConfig(include=[a], exclude=[], max_file_size_mb=10,
+                             file_types={".md"})
+        assert indexer.roots_needing_full_index(cfg_a) == [a]
+        indexer.run_index(cfg_a)
+        assert indexer.roots_needing_full_index(cfg_a) == []
 
-        (root / "a.md").write_text("正文内容", encoding="utf-8")
-        cfg = SearchConfig(
-            include=[root], exclude=[], max_file_size_mb=10, file_types={".md"}
-        )
+        # 新加一个根：库是**满的**，但 b 没扫过 —— 空库判据在这里会漏
+        cfg_ab = SearchConfig(include=[a, b], exclude=[], max_file_size_mb=10,
+                              file_types={".md"})
+        assert indexer.roots_needing_full_index(cfg_ab) == [b]
+
+
+def test_roots_needing_full_index_survives_db_recreation(monkeypatch):
+    """鸿波实盘打脸的那个场景：删了 search.db，老 watcher 立刻把库重建并写进
+    1 条 —— 空库判据当场失效，按根记账不受影响。
+    """
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        docs = root / "docs"
+        docs.mkdir()
+        (docs / "存量.md").write_text("从没被改动过的存量正文", encoding="utf-8")
+        monkeypatch.setattr(indexer, "DB_FILE", root / "t.db")
+        cfg = SearchConfig(include=[docs], exclude=[], max_file_size_mb=10,
+                           file_types={".md"})
         indexer.run_index(cfg)
-        assert indexer.index_is_empty() is False
+
+        # 模拟员工 rm search.db
+        (root / "t.db").unlink()
+        # 模拟老 watcher 随手一个增量写入把库重建了
+        (docs / "刚改的.md").write_text("刚被编辑器保存的正文", encoding="utf-8")
+        indexer.index_path(docs / "刚改的.md")
+
+        conn = indexer.open_db()
+        n = conn.execute("SELECT COUNT(*) FROM file_meta").fetchone()[0]
+        conn.close()
+
+        assert n == 1, "库确实非空了（空库判据会在这里跳过 bootstrap）"
+        assert indexer.roots_needing_full_index(cfg) == [docs]
+
+
+def test_roots_needing_full_index_forgets_removed_roots(monkeypatch):
+    """员工删掉一个目录又加回来 → 得重新全量，不能沿用旧记账。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        a, b = root / "a", root / "b"
+        a.mkdir()
+        b.mkdir()
+        (a / "x.md").write_text("正文内容", encoding="utf-8")
+        monkeypatch.setattr(indexer, "DB_FILE", root / "t.db")
+        def mk(inc):
+            return SearchConfig(include=inc, exclude=[], max_file_size_mb=10,
+                                file_types={".md"})
+
+        indexer.run_index(mk([a]))
+        assert indexer.roots_needing_full_index(mk([a])) == []
+        indexer.roots_needing_full_index(mk([b]))          # a 被移出 include → 忘掉
+        assert indexer.roots_needing_full_index(mk([a])) == [a]
 
 
 def test_bootstrap_indexes_preexisting_files(monkeypatch):
-    """BL-SEARCH-NO-BOOTSTRAP: watcher 只吃变化事件，存量文件得靠 bootstrap。
+    """watcher 只吃变化事件，存量文件得靠 bootstrap。
 
     鸿波实盘：yaml 里配了 ~/Documents 等四个目录，索引库里各 0 条 ——
     因为那些文件从没被改动过，watcher 收不到任何事件，而 Companion
@@ -325,11 +378,10 @@ def test_bootstrap_indexes_preexisting_files(monkeypatch):
             (docs / f"报告{i}.md").write_text(f"第{i}份存量公文正文", encoding="utf-8")
 
         monkeypatch.setattr(indexer, "DB_FILE", root / "t.db")
-        cfg = SearchConfig(
-            include=[docs], exclude=[], max_file_size_mb=10, file_types={".md"}
-        )
+        cfg = SearchConfig(include=[docs], exclude=[], max_file_size_mb=10,
+                           file_types={".md"})
 
-        _bootstrap_if_empty(cfg)
+        _bootstrap_missing_roots(cfg)
 
         conn = indexer.open_db()
         n = conn.execute("SELECT COUNT(*) FROM file_meta").fetchone()[0]
@@ -338,34 +390,54 @@ def test_bootstrap_indexes_preexisting_files(monkeypatch):
     assert n == 3
 
 
-def test_bootstrap_skips_when_index_not_empty(monkeypatch):
-    """只在空库时做，不是每次启动都 reconcile ——
-    后者每开一次 Companion 都要全目录 stat 判重，慢且绝大多数情况白跑。
+def test_bootstrap_only_touches_unindexed_roots(monkeypatch):
+    """扫过的根不重扫 —— 每开一次 Companion 都全量 stat 判重太慢且白跑。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        a, b = root / "a", root / "b"
+        a.mkdir()
+        b.mkdir()
+        (a / "x.md").write_text("正文内容", encoding="utf-8")
+        (b / "y.md").write_text("正文内容", encoding="utf-8")
+        monkeypatch.setattr(indexer, "DB_FILE", root / "t.db")
+
+        indexer.run_index(SearchConfig(include=[a], exclude=[], max_file_size_mb=10,
+                                       file_types={".md"}))
+
+        seen = []
+        real = indexer.run_index
+        monkeypatch.setattr(
+            "catfish_search.watcher.run_index",
+            lambda c: (seen.append(list(c.include)), real(c))[1],
+        )
+        _bootstrap_missing_roots(
+            SearchConfig(include=[a, b], exclude=[], max_file_size_mb=10,
+                         file_types={".md"})
+        )
+
+    assert seen == [[b]]
+
+
+def test_bootstrap_retries_root_that_hit_permission_error(monkeypatch):
+    """踩权限错的根不记账 —— 员工去系统设置授权后，下次启动自动补建，
+    不用他记得回来手点一次。
     """
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
-        docs = root / "docs"
-        docs.mkdir()
-        (docs / "已有.md").write_text("先索引进去的正文", encoding="utf-8")
-
+        denied = root / "denied"
+        denied.mkdir()
+        (denied / "x.md").write_text("secret", encoding="utf-8")
+        os.chmod(denied, 0o000)
         monkeypatch.setattr(indexer, "DB_FILE", root / "t.db")
-        cfg = SearchConfig(
-            include=[docs], exclude=[], max_file_size_mb=10, file_types={".md"}
-        )
-        indexer.run_index(cfg)
+        cfg = SearchConfig(include=[denied], exclude=[], max_file_size_mb=10,
+                           file_types={".md"})
+        try:
+            indexer.run_index(cfg)
+            still = indexer.roots_needing_full_index(cfg)
+        finally:
+            os.chmod(denied, 0o755)
 
-        # 库非空之后新增的文件，bootstrap 不该去捡（那是 watcher 的活）
-        (docs / "后加的.md").write_text("后来才出现的正文", encoding="utf-8")
-        calls = []
-        monkeypatch.setattr(
-            "catfish_search.watcher.run_index",
-            lambda c: calls.append(c) or {"scanned": 0, "indexed": 0, "skipped": 0,
-                                          "duration_sec": 0, "per_root": {},
-                                          "unreadable": []},
-        )
-        _bootstrap_if_empty(cfg)
-
-    assert calls == []
+    assert still == [denied]
 
 
 def test_cleanup_purges_now_excluded_entries(monkeypatch):

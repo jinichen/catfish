@@ -13,10 +13,17 @@ import logging
 import signal
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from .config import SearchConfig, load_config
-from .indexer import index_is_empty, index_path, remove_path, run_index, should_index
+from .indexer import (
+    index_path,
+    remove_path,
+    roots_needing_full_index,
+    run_index,
+    should_index,
+)
 
 logger = logging.getLogger("catfish.search.watcher")
 
@@ -126,21 +133,28 @@ def _flush(pending: _Pending, cfg: SearchConfig, force: bool = False) -> dict:
     return result
 
 
-def _bootstrap_if_empty(cfg: SearchConfig) -> None:
-    """索引库是空的就先跑一次全量。
+def _bootstrap_missing_roots(cfg: SearchConfig) -> None:
+    """把还没做过全量索引的 include 根补扫一遍。
 
     BL-SEARCH-NO-BOOTSTRAP (7/27 鸿波实盘): watcher 只吃**变化事件**，
     存量文件永远不会自己进索引。Companion 又只 spawn watch 从不 spawn index，
-    结果就是员工配了 ~/Documents 却一条都搜不到（详见 indexer.index_is_empty）。
+    结果就是员工配了 ~/Documents 却一条都搜不到。
 
-    只在**空库**时做，不是每次启动都 reconcile —— 后者每次开 Companion 都要
-    走一遍全部目录 stat 判重，启动变慢且绝大多数情况白跑。
-    库非空说明 bootstrap 早跑过了，增量交给 watcher。
+    BL-SEARCH-BOOTSTRAP-LEDGER (7/27 二次修): 第一版判据是"索引库空不空"，
+    鸿波实盘当场打脸 —— 他 rm 掉 search.db 后老 watcher 还在跑，随手一个文件
+    变动就把库重建了并写进 1 条，新 watcher 起来一看"非空"，直接跳过 bootstrap。
+    改成按根记账（indexer.roots_needing_full_index），顺带覆盖"员工新加目录"：
+    库是满的，但那个新根一条没扫过，照样补。
+
+    只补**没扫过的根**，不是每次启动都 reconcile 全部 —— 后者每开一次
+    Companion 都要走一遍所有目录 stat 判重，慢且绝大多数情况白跑。
+    扫过的根，增量交给 watcher。
     """
-    if not index_is_empty():
+    todo = roots_needing_full_index(cfg)
+    if not todo:
         return
-    logger.info("索引库是空的，先做一次全量索引（只在首次 / 重建后发生）...")
-    stats = run_index(cfg)
+    logger.info("这些目录还没做过全量索引，先补一次: %s", [str(p) for p in todo])
+    stats = run_index(replace(cfg, include=todo))
     logger.info(
         "全量索引完成: 扫 %d / 索引 %d / 跳过 %d，耗时 %ss",
         stats["scanned"], stats["indexed"], stats["skipped"], stats["duration_sec"],
@@ -148,13 +162,13 @@ def _bootstrap_if_empty(cfg: SearchConfig) -> None:
     for root, n in stats["per_root"].items():
         logger.info("  %6d  %s", n, root)
     for root, reason in stats["unreadable"]:
-        logger.warning("  读不了（整棵没进索引）: %s — %s", root, reason)
+        logger.warning("  读不了（整棵没进索引，下次启动会再试）: %s — %s", root, reason)
 
 
 def run_watch(cfg: SearchConfig | None = None, bootstrap: bool = True) -> int:
     """前台运行 watcher。收到 SIGTERM/SIGINT 时优雅退出。
 
-    bootstrap=True 时，库为空会先跑一次全量索引再进监听循环。
+    bootstrap=True 时，先把没做过全量索引的目录补扫一遍再进监听循环。
     """
     observer_cls, _ = _import_watchdog()
     cfg = cfg or load_config()
@@ -163,7 +177,7 @@ def run_watch(cfg: SearchConfig | None = None, bootstrap: bool = True) -> int:
         return 1
 
     if bootstrap:
-        _bootstrap_if_empty(cfg)
+        _bootstrap_missing_roots(cfg)
 
     pending = _Pending()
     handler = _make_handler(pending)
