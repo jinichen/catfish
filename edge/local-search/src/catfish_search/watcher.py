@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 from .config import SearchConfig, load_config
-from .indexer import index_path, remove_path, should_index
+from .indexer import index_is_empty, index_path, remove_path, run_index, should_index
 
 logger = logging.getLogger("catfish.search.watcher")
 
@@ -126,13 +126,44 @@ def _flush(pending: _Pending, cfg: SearchConfig, force: bool = False) -> dict:
     return result
 
 
-def run_watch(cfg: SearchConfig | None = None) -> int:
-    """前台运行 watcher。收到 SIGTERM/SIGINT 时优雅退出。"""
+def _bootstrap_if_empty(cfg: SearchConfig) -> None:
+    """索引库是空的就先跑一次全量。
+
+    BL-SEARCH-NO-BOOTSTRAP (7/27 鸿波实盘): watcher 只吃**变化事件**，
+    存量文件永远不会自己进索引。Companion 又只 spawn watch 从不 spawn index，
+    结果就是员工配了 ~/Documents 却一条都搜不到（详见 indexer.index_is_empty）。
+
+    只在**空库**时做，不是每次启动都 reconcile —— 后者每次开 Companion 都要
+    走一遍全部目录 stat 判重，启动变慢且绝大多数情况白跑。
+    库非空说明 bootstrap 早跑过了，增量交给 watcher。
+    """
+    if not index_is_empty():
+        return
+    logger.info("索引库是空的，先做一次全量索引（只在首次 / 重建后发生）...")
+    stats = run_index(cfg)
+    logger.info(
+        "全量索引完成: 扫 %d / 索引 %d / 跳过 %d，耗时 %ss",
+        stats["scanned"], stats["indexed"], stats["skipped"], stats["duration_sec"],
+    )
+    for root, n in stats["per_root"].items():
+        logger.info("  %6d  %s", n, root)
+    for root, reason in stats["unreadable"]:
+        logger.warning("  读不了（整棵没进索引）: %s — %s", root, reason)
+
+
+def run_watch(cfg: SearchConfig | None = None, bootstrap: bool = True) -> int:
+    """前台运行 watcher。收到 SIGTERM/SIGINT 时优雅退出。
+
+    bootstrap=True 时，库为空会先跑一次全量索引再进监听循环。
+    """
     observer_cls, _ = _import_watchdog()
     cfg = cfg or load_config()
     if not cfg.include:
         logger.error("没有可监听的目录，请先在 ~/.catfish/search-scope.yaml 配置 include。")
         return 1
+
+    if bootstrap:
+        _bootstrap_if_empty(cfg)
 
     pending = _Pending()
     handler = _make_handler(pending)

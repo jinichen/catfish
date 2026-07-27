@@ -10,6 +10,28 @@ CATFISH_HOME = Path.home() / ".catfish"
 CONFIG_FILE = CATFISH_HOME / "search-scope.yaml"
 DB_FILE = CATFISH_HOME / "search.db"
 
+# BL-SEARCH-SCOPE-MIGRATION (7/27 鸿波定的原则): 索引范围**只有一个真相源** ——
+# ~/.catfish/search-scope.yaml, 面板上看得见、改得动。代码里不留隐藏目录。
+#
+# 但 DEFAULT_CONFIG 只在 yaml **不存在**时写一次 (ensure_config_exists)，
+# 往里加一条对已经有 yaml 的老员工毫无作用 —— 鸿波的 ~/.catfish/output 塞满
+# 周报/汇报/对标报告，索引里一条没有，就是这么来的。
+#
+# 所以新增目录走这张迁移表：load_config() 时**追加进员工的 yaml 实体文件**
+# (行级插入，保留原注释)，之后它就是一条普通条目，面板能看能删。
+# marker 记在 yaml 的 _applied_migrations 里，员工删掉后不会被塞回来。
+#
+# 加新条目的规矩：往列表尾部加，永远不改已有条目的 id。
+MIGRATIONS: list[tuple[str, str, str]] = [
+    # (marker id, 要加的路径, 写进 yaml 的说明注释)
+    (
+        "catfish-output-2026-07",
+        "~/.catfish/output",
+        "鲶鱼替你生成的文档（周报 / 汇报 / 报告）—— 文书风格就是从这里学的",
+    ),
+]
+_MIGRATION_KEY = "_applied_migrations"
+
 
 DEFAULT_CONFIG = """# 鲶鱼本地文件搜索 · 索引范围配置
 #
@@ -27,6 +49,9 @@ include:
   # 让 "上次拖过来的 PDF 里说啥" 这种内容搜走统一 FTS5, 不再单独维护 BM25 sidecar
   # 跨会话搜. 元数据 + session 关联仍走 ~/.catfish/attachments.db.
   - ~/.catfish/uploads
+
+  # 鲶鱼替你生成的文档（周报 / 汇报 / 报告）—— 文书风格就是从这里学的
+  - ~/.catfish/output
 
   # 按需打开下面这些（取消前面的 #）：
   # - ~/work
@@ -164,16 +189,139 @@ def ensure_config_exists() -> Path:
     return CONFIG_FILE
 
 
+def _same_path(a: str, b: str) -> bool:
+    """两条 yaml 路径条目是否指向同一处（展开 ~ 后比）。"""
+    try:
+        return Path(a).expanduser().resolve() == Path(b).expanduser().resolve()
+    except (OSError, RuntimeError):
+        return a.strip() == b.strip()
+
+
+_MIGRATION_BANNER = "# 鲶鱼自动维护：已执行过的一次性配置迁移，别手工改"
+
+
+def _ensure_in_include(lines: list[str], path: str, comment: str) -> bool:
+    """保证 include 段里有 path。原地改 lines。
+
+    返回「现在 include 里有这条了」—— 已经有 / 刚插进去 都是 True；
+    只有**找不到 include 段**（配置形态不认识）才返 False，那种情况不硬塞。
+
+    故意做**行级插入**而不是 yaml.safe_load + safe_dump 重写整个文件 ——
+    DEFAULT_CONFIG 里那几十行中文注释是写给员工看的（哪些是系统目录、
+    哪些按需打开），safe_dump 会全抹掉。
+    """
+    try:
+        start = next(
+            i for i, ln in enumerate(lines) if ln.rstrip() in ("include:", "include :")
+        )
+    except StopIteration:
+        return False
+
+    # include 段的结束 = 下一个顶格且非注释非空的行（即下一个顶层 key）
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        s = lines[i]
+        if s.strip() and not s.startswith((" ", "\t", "#")):
+            end = i
+            break
+
+    # 员工可能自己手写过，别插重复的。同时记住最后一个**真实条目**的位置。
+    last_item = start
+    for i in range(start + 1, end):
+        item = lines[i].strip()
+        if not item.startswith("- "):
+            continue  # 注释掉的 `# - ~/work` 不算条目
+        if _same_path(item[2:].strip(), path):
+            return True
+        last_item = i
+
+    # 插在最后一个真实条目之后，而不是整段末尾 —— DEFAULT_CONFIG 段尾是
+    # "# 按需打开下面这些（取消前面的 #）" 那堆注释掉的候选项，插它们后面
+    # 读起来像是那组的一员，很怪。
+    lines[last_item + 1 : last_item + 1] = ["", f"  # {comment}", f"  - {path}"]
+    return True
+
+
+def _strip_migration_block(lines: list[str]) -> list[str]:
+    """摘掉文件里已有的 _applied_migrations 块（banner + key + 列表项）。
+
+    重写时先摘再加，免得每次迁移都往文件尾堆一份新的。
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        ln = lines[i]
+        if ln.rstrip() == _MIGRATION_BANNER or ln.startswith(f"{_MIGRATION_KEY}:"):
+            # 从 banner/key 起，吃掉后面所有缩进行和空行
+            i += 1
+            while i < len(lines) and (
+                not lines[i].strip() or lines[i].startswith((" ", "\t"))
+            ):
+                i += 1
+            # 顺手把上面留下的尾随空行也收掉，避免文件尾越堆越空
+            while out and not out[-1].strip():
+                out.pop()
+            continue
+        out.append(ln)
+        i += 1
+    return out
+
+
+def _apply_migrations() -> None:
+    """把 MIGRATIONS 里没跑过的条目追加进员工的 search-scope.yaml。
+
+    BL-SEARCH-SCOPE-MIGRATION (7/27): 见 MIGRATIONS 上面的说明。
+    任何一步出错都静默返回 —— 迁移失败不该让索引整个跑不起来，
+    大不了少一个目录，员工在面板上自己加。
+    """
+    try:
+        raw = CONFIG_FILE.read_text(encoding="utf-8")
+        data = yaml.safe_load(raw) or {}
+        if not isinstance(data, dict):
+            return
+        applied = data.get(_MIGRATION_KEY)
+        applied = set(applied) if isinstance(applied, list) else set()
+
+        pending = [m for m in MIGRATIONS if m[0] not in applied]
+        if not pending:
+            return
+
+        lines = raw.splitlines()
+        for marker, path, comment in pending:
+            # 只有真办成了才记 marker。找不到 include 段就留着下次再试，
+            # 不能标成"做完了"把这条永久吞掉。
+            if _ensure_in_include(lines, path, comment):
+                applied.add(marker)
+        if not applied:
+            return
+
+        lines = _strip_migration_block(lines)
+        lines += ["", _MIGRATION_BANNER, f"{_MIGRATION_KEY}:"]
+        lines += [f"  - {m}" for m in sorted(applied)]
+
+        CONFIG_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    except (OSError, yaml.YAMLError):
+        return
+
+
 def load_config() -> SearchConfig:
     """读 ~/.catfish/search-scope.yaml，首次自动创建默认配置。"""
     ensure_config_exists()
+    _apply_migrations()
     data = yaml.safe_load(CONFIG_FILE.read_text(encoding="utf-8")) or {}
 
     include_paths = [
         Path(p).expanduser().resolve()
         for p in data.get("include", [])
     ]
-    include_paths = [p for p in include_paths if p.exists()]
+    # 去重 —— 员工可能在 yaml 里写了两条指向同一处的路径（~/x 和 /Users/me/x）
+    seen: set[str] = set()
+    deduped: list[Path] = []
+    for p in include_paths:
+        if str(p) not in seen:
+            seen.add(str(p))
+            deduped.append(p)
+    include_paths = [p for p in deduped if p.exists()]
 
     return SearchConfig(
         include=include_paths,

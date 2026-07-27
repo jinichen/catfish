@@ -150,7 +150,21 @@ pub async fn ensure_local_search_running() {
     //
     // # 新逻辑
     // 每次 Companion 启动 pkill -f 'catfish_search.cli watch' 清孤儿, 再 spawn 新的.
-    // 启动慢 5-15s (初始 reconcile), 但行为可预测.
+    //
+    // BL-SEARCH-NO-BOOTSTRAP (7/27 鸿波实盘): 这里原来写着"启动慢 5-15s
+    // (初始 reconcile)" —— **那是假的**. watcher.py:run_watch 只做
+    // observer.schedule() + 处理文件变化事件, 全文没有一处调 run_index,
+    // 从来就没有 reconcile.
+    //
+    // 后果: local_search 从装上那天起没做过全量索引. 索引库里只有 watcher
+    // 运行期间碰巧被改动过的文件 —— 鸿波 yaml 里配了 ~/Documents / ~/Desktop /
+    // ~/Downloads / ~/.catfish/uploads, 四个各 0 条, 60332 条全来自
+    // ~/person_task (活跃开发目录, git checkout / npm ci 天天动文件).
+    //
+    // 修法(7/27): 不在这里加 reconcile —— 每次开 Companion 都全量 stat 判重
+    // 太慢且绝大多数情况白跑. 改成 watch 自己在**库为空**时 bootstrap 一次
+    // (watcher.py:_bootstrap_if_empty). 员工加目录 / 手动重建走
+    // commands::local_search::local_search_index.
     //
     // pkill 仅 macOS/Linux 有, Windows 暂不支持 (Companion 当前只 macOS 发布).
     pkill_local_search_watchers();

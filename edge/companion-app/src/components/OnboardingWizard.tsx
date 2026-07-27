@@ -720,13 +720,17 @@ function StepCurator({
 }
 
 // ── BL-ONBOARDING-DOC-DIRS-STEP (鸿波 6/1 拍 C1) ─────────────────
-// 默认 ~/Documents/work 命中率低 (中文用户用 ~/文稿/, 程序员 ~/projects/,
-// 国企 ~/项目/ 各种自定义). 不让员工显式指目录, 文书风格永远 0 文档抽不到风格.
-// 这步: 让员工手输 1 个目录, 调 style_fingerprint_scan_dirs_add 写 yaml.
-// 跳过 → 用默认, StyleFingerprintCard 里仍能自己加.
-interface ScanDirsResult {
-  userDirs: string[];
-  defaultDirs: string[];
+// 默认目录命中率低 (中文用户用 ~/文稿/, 程序员 ~/projects/, 国企 ~/项目/
+// 各种自定义). 不让员工显式指目录, 文书风格抽不到东西.
+// 这步: 让员工手输 1 个目录. 跳过 → 后面在仪表盘 "📂 搜索范围" 卡随时加.
+//
+// BL-STYLE-FP-USE-INDEX (7/27): 从 style_fingerprint_scan_dirs_add 改成
+// local_search_scope_add. 文书风格现在查 local_search 索引, 目录范围唯一
+// 由 search-scope.yaml 决定; 写 companion.yaml 那条路已经删了.
+// 顺带好处: 这一步同时把目录加进了本地搜索, 员工问 "上次那份合同在哪" 也能搜到.
+interface ScopeResult {
+  include: string[];
+  exclude: string[];
   yamlPath: string;
 }
 
@@ -752,7 +756,7 @@ function StepDocDirs({
     setSaving(true);
     setError(null);
     try {
-      await invoke<ScanDirsResult>("style_fingerprint_scan_dirs_add", {
+      await invoke<ScopeResult>("local_search_scope_add", {
         path: trimmed,
       });
       onNext();
@@ -769,8 +773,9 @@ function StepDocDirs({
     <>
       <h3 style={{ marginTop: 0 }}>4️⃣ 学你的文风</h3>
       <p style={{ fontSize: 13, lineHeight: 1.6, color: "var(--catfish-text-muted)" }}>
-        鲶鱼会扫你的历史文档抽统计特征 (句长 / 用词 / 标点习惯), 帮你起草汇报时
-        模仿你的风格 — 不上传, 全在你本机.
+        鲶鱼会给这个文件夹建本地索引, 一来你能直接搜"上次那份合同", 二来它会从中
+        抽你的写作特征 (句长 / 用词 / 标点习惯), 帮你起草汇报时模仿你的风格 —
+        不上传, 全在你本机.
         <br />
         <strong>你工作文档在哪个文件夹?</strong>
       </p>
@@ -805,7 +810,7 @@ function StepDocDirs({
         <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 8, lineHeight: 1.5 }}>
           常见路径: <code>~/Documents</code> · <code>~/work</code> · <code>~/项目</code> · <code>~/文稿</code>
           <br />
-          后面在仪表盘 "文书风格" 卡随时改 / 加多个.
+          后面在仪表盘 "📂 搜索范围" 卡随时改 / 加多个.
         </div>
       </div>
 

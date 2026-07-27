@@ -28,6 +28,16 @@ dependencies = [
     # 进程需要 websockets 连 Chrome ws://localhost:9222. central venv 之前装过, 这里
     # 单独建 venv 跑测试时必装. 跟 httpx 同性质 (生产部署跟 hermes 共 venv 通常已有).
     "websockets >= 12.0",
+    # BL-STYLE-FP-USE-INDEX (7/27 鸿波实盘): style_fingerprint 的中文分词.
+    # 原来是"没装就静默退回 char-level 2-gram", 实测退化后 top_words 一半是
+    # 无意义碎片 — 同一批公文语料对比:
+    #   无 jieba: 覆盖 绩材 台账 兄弟 显缺 范围 补充 占优 弃投 项施
+    #   有 jieba: 资质 完成 服务 对标 施工 工作 调用 情况 公司 其中
+    # 这个 top_words 是要注进 system prompt 让 LLM 模仿员工用词的, 喂碎片
+    # 等于喂噪音. 纯 Python 无传递依赖, 装上.
+    # (fallback 分支保留 — 别的部署形态可能装不上, 那时 had_jieba=False
+    #  会在 Dashboard 上明示"退 char fallback", 不静默.)
+    "jieba >= 0.42",
 ]
 
 [project.scripts]

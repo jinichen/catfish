@@ -1,12 +1,12 @@
 """catfish-search 命令行入口。
 
 子命令：
-    index    扫描并建立索引
+    index    扫描并建立索引（--only DIR 只索引某一个已配置的根）
     query    全文查询
     status   索引库状态
-    clean    清理已删除文件的索引
+    clean    清理已删除 / 已被 exclude 排除的索引条目
     config   打开配置文件
-    watch    前台启动 watcher（Ctrl+C 退出）
+    watch    前台启动 watcher（Ctrl+C 退出；空库时先自动全量一次）
     daemon   把 watcher 装成 launchd 守护进程（macOS 专用）
 """
 from __future__ import annotations
@@ -17,6 +17,8 @@ import logging
 import os
 import subprocess
 import sys
+from dataclasses import replace
+from pathlib import Path
 
 from .config import CONFIG_FILE, ensure_config_exists, load_config
 from .indexer import cleanup_missing, run_index
@@ -30,6 +32,16 @@ def cmd_index(args) -> int:
     if not cfg.include:
         print("没有可索引的目录。请检查 ~/.catfish/search-scope.yaml")
         return 1
+
+    # BL-SEARCH-NO-BOOTSTRAP (7/27): --only 只索引某一个已配置的根。
+    # Companion 在员工刚加完目录时调它 —— 只补这一个，不用整库重扫。
+    only = getattr(args, "only", None)
+    if only:
+        target = Path(only).expanduser().resolve()
+        if target not in cfg.include:
+            print(f"{target} 不在 search-scope.yaml 的 include 里，先加进去再索引。")
+            return 1
+        cfg = replace(cfg, include=[target])
 
     print(f"开始索引 {len(cfg.include)} 个目录...")
     for p in cfg.include:
@@ -51,7 +63,40 @@ def cmd_index(args) -> int:
         f"完成。扫 {stats['scanned']} / 新索引 {stats['indexed']} / "
         f"跳过 {stats['skipped']}  耗时 {stats['duration_sec']}s"
     )
+
+    _report_per_root(stats)
     return 0
+
+
+def _report_per_root(stats: dict) -> None:
+    """BL-SEARCH-TCC-SILENT-SKIP (7/27 鸿波实盘): 逐个 include 根报数。
+
+    老版本只报总数。鸿波三个最重要的目录（Documents/Desktop/Downloads）
+    因 macOS TCC 没授权各 0 条，全被 ~/person_task 的 6 万条掩盖掉了 ——
+    看总数「已索引 60332」完全发现不了。
+    """
+    print("\n各目录索引数：")
+    empty_roots = []
+    for root, n in stats.get("per_root", {}).items():
+        print(f"  {'  ' if n else '⚠️'} {n:6d}  {root}")
+        if not n:
+            empty_roots.append(root)
+
+    unreadable = stats.get("unreadable") or []
+    if unreadable:
+        print("\n❌ 下面这些目录读不了（整棵没进索引）：")
+        for root, reason in unreadable:
+            print(f"     {root}\n       {reason}")
+        print(
+            "\n   macOS 上 ~/Documents、~/Desktop、~/Downloads 需要授权：\n"
+            "   系统设置 → 隐私与安全性 → 文件与文件夹 / 完全磁盘访问权限，\n"
+            "   把跑索引的这个程序（终端 或 鲶鱼 Companion）勾上，然后重跑。"
+        )
+    elif empty_roots:
+        print(
+            "\n⚠️ 上面标 ⚠️ 的目录一个文件都没索引到，但也没报权限错 —— "
+            "确认里面确实有 file_types 段列的那些扩展名。"
+        )
 
 
 def cmd_query(args) -> int:
@@ -109,11 +154,11 @@ def cmd_config(_args) -> int:
     return 0
 
 
-def cmd_watch(_args) -> int:
+def cmd_watch(args) -> int:
     from .watcher import run_watch  # noqa: PLC0415  延迟导入，没装 watchdog 时不影响别的命令
     print("启动 watcher（前台）。Ctrl+C 退出。")
     try:
-        return run_watch()
+        return run_watch(bootstrap=not args.no_bootstrap)
     except RuntimeError as e:
         print(str(e))
         return 1
@@ -145,6 +190,11 @@ def main(argv=None) -> int:
 
     p_index = sub.add_parser("index", help="扫描并建立索引")
     p_index.add_argument("--quiet", "-q", action="store_true", help="不打印进度")
+    p_index.add_argument(
+        "--only",
+        metavar="DIR",
+        help="只索引这一个已配置的根（Companion 在员工刚加完目录时用）",
+    )
     p_index.set_defaults(func=cmd_index)
 
     p_query = sub.add_parser("query", help="全文查询")
@@ -156,13 +206,18 @@ def main(argv=None) -> int:
     p_status = sub.add_parser("status", help="查看索引库状态")
     p_status.set_defaults(func=cmd_status)
 
-    p_clean = sub.add_parser("clean", help="清理已删除文件的索引")
+    p_clean = sub.add_parser("clean", help="清理已删除 / 已被 exclude 排除的索引条目")
     p_clean.set_defaults(func=cmd_clean)
 
     p_config = sub.add_parser("config", help="编辑 search-scope.yaml")
     p_config.set_defaults(func=cmd_config)
 
     p_watch = sub.add_parser("watch", help="前台启动 watcher（Ctrl+C 退出）")
+    p_watch.add_argument(
+        "--no-bootstrap",
+        action="store_true",
+        help="库为空时也不自动做全量索引（默认会做一次）",
+    )
     p_watch.set_defaults(func=cmd_watch)
 
     p_daemon = sub.add_parser(

@@ -7,9 +7,33 @@
 
 # 怎么做
 
-抽员工历史文档 (~/Documents/work/, ~/.catfish/output/) 的统计特征 → 存
+从 **local_search 索引** (`~/.catfish/search.db`) 取员工历史文档 → 抽统计特征 → 存
 `~/.catfish/style_fingerprint.json` → 写新文档时 skill 在 system prompt 里注入
 "该员工偏好: 平均句长 28 字 / 多用列表 / 高频词 ['资质', '风控', '合规']".
+
+# BL-STYLE-FP-USE-INDEX (7/27 鸿波实盘 "完全不抽了") — 为什么换数据源
+
+老实现自己 os.walk 两个写死的目录 (`~/Documents/work` + `~/.catfish/output`).
+两个都废:
+
+1. `~/Documents/work` 鸿波机器上根本不存在.
+2. `~/.catfish/output` **结构性扫不到** —— 老 `_scan_dir` 里那句
+   `any(part.startswith(".") for part in p.parts)` 用的是**绝对路径**的全部片段,
+   `.catfish` 自己就命中. 本意是跳过扫描根**里面**的 `.git/` `.venv/`,
+   写成绝对路径就把扫描根自己毙了. 于是第 66 行声明要扫它, 第 230 行保证一条
+   都出不来 —— 同一个文件里两行互相打架, 5/20 到 7/27 一直 0 文档.
+   (鸿波那目录里躺着几十份周报/汇报/通报/对标报告, 正是最该学的语料.)
+
+隔壁 local_search 早就把"扫哪些目录 + 抽文本 + 增量"这套做对了, 而且没犯这个 bug
+(`indexer.py:_iter_files` 只按 exclude 白名单排除, 不搞绝对路径隐藏判定).
+与其把 `_scan_dir` 修好, 不如整个删掉改成查它的索引:
+
+- 目录范围: 员工在 Companion "📂 搜索范围" 卡里配的 `search-scope.yaml`, **一处配置**
+  (老实现另有一份 `companion.yaml style_fingerprint.scan_dirs`, 两套割裂, 一并删)
+- 文本抽取: markitdown 已经跑过, 白送 pdf / pptx 覆盖 (老实现只有 md/txt/docx)
+- 时间衰减: `file_meta.mtime` 现成
+- 增量: local_search 有 watcher, 索引一直是新的; fingerprint 不用自己重扫磁盘
+- 零硬编码目录
 
 # 跟 BL-MM7 区分
 
@@ -34,96 +58,62 @@
 - 180 天内: 0.25
 - 更老: 0.1
 
-# 文档类型支持
+# 收哪些文档 (从索引里筛)
 
-- .md / .txt: 直接读
-- .docx: python-docx 提取段落文本
-- .csv: 跳过 (表格不算"文书风格")
-- .pdf: 跳过 (二级抽取太麻烦, 5/22 后再加)
-- 二进制 / 隐藏文件 / < 200 字: 跳过
+索引里 82% 是代码 (鸿波库 60332 条里 33206 条 .py / 10685 条 .h), 直接全用会把
+公文风格喂成技术文档味 —— 6/03 就栽过一次, Top 高频词变成 `https/the/com/github`.
+两道闸:
+
+1. **扩展名白名单** `.md/.txt/.docx/.pdf/.pptx` —— 挡掉代码 / 配置 / 日志.
+   `.xlsx/.csv` 不收: 表格不算"文书风格", 而且 markitdown 转出来满屏 `|`
+   会把 `_structure_pref` 的 table_ratio 冲爆.
+   `.pptx` 收但要留意: 幻灯片是碎句, 会拉低 avg_sentence_length. 真汇报材料
+   (鸿波那批 `*汇报*.pptx`) 用词是准的, 先收着, 数据难看再摘。
+2. **中文占比闸** `MIN_CN_RATIO` —— 去 noise 后中文字符占比不够的整篇不要.
+   挡英文 README / CHANGELOG / 技术笔记. 跟 `_word_freq` 只留中文词是同一立场,
+   只是把判断提到**文档级** —— 不然英文文档虽然贡献不了高频词, 照样污染
+   句长 / 标点 / 结构比例 / 样本句这四项.
+
+再加原有的 `< MIN_DOC_CHARS` 跳过.
 
 # 使用流程
 
-1. 启动后台脚本: `catfish_style_fingerprint_refresh` (扫文件夹 → 写 fingerprint.json)
-2. skill 调用前: `catfish_style_fingerprint_get` → 拿 fingerprint → 注入 system prompt
-3. 员工 Dashboard 看: 来源文档数 / 高频词 / 上次抽取时间
+1. 前置: local_search 得先建过索引 (Companion "📂 搜索范围" 卡 → 建索引).
+   没索引时 refresh **明确报错**, 不静默返 0 —— 老实现返 0 让鸿波以为是
+   "没文档", 实际是数据源根本没通.
+2. `catfish_style_fingerprint_refresh` (查索引 → 写 fingerprint.json)
+3. skill 调用前: `catfish_style_fingerprint_get` → 拿 fingerprint → 注入 system prompt
+4. 员工 Dashboard 看: 来源文档数 / 高频词 / 上次抽取时间
 """
 
 from __future__ import annotations
 
 import json
 import re
+import sqlite3
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 
 STYLE_FINGERPRINT_PATH = Path.home() / ".catfish" / "style_fingerprint.json"
 
-# 默认扫描目录 (员工本机, 鲶鱼自己生成的输出 + 员工 Documents/work/)
-DEFAULT_SOURCE_DIRS = [
-    Path.home() / "Documents" / "work",
-    Path.home() / ".catfish" / "output",
-]
+# BL-STYLE-FP-USE-INDEX (7/27): 数据源 = local_search 索引库.
+# 路径跟 catfish_search/config.py:DB_FILE 对齐. 这里不 import catfish_search ——
+# tool-bridge 主路径是 stdlib only (见 pyproject 注释), 而 search.db 的 schema
+# 是稳定的落盘契约 (indexer.py:SCHEMA), 直接用 stdlib sqlite3 读就够, 不为一个
+# 只读查询引进一个包依赖.
+SEARCH_DB_PATH = Path.home() / ".catfish" / "search.db"
 
-# BL-STYLE-FP-YAML-CONFIG (5/20 鸿波报"来源文档 0"): 员工真写文档的目录 (~/person_task/
-# catfish/docs/, ~/work-reports/ 等) 不在 DEFAULT. 让 ~/.catfish/companion.yaml 加
-# style_fingerprint.scan_dirs: [...] union 默认 (默认目录不存在也不挂, 见 _scan_dir).
-COMPANION_YAML_PATH = Path.home() / ".catfish" / "companion.yaml"
-
-
-def _load_scan_dirs_yaml() -> List[Path]:
-    """读 ~/.catfish/companion.yaml 的 style_fingerprint.scan_dirs.
-
-    yaml 不存在 / 解析失败 / 没 style_fingerprint 段 → 返空 list, 不抛.
-    返的路径已 expanduser(), 但不验证存在 (_scan_dir 不存在自动跳).
-    """
-    if not COMPANION_YAML_PATH.exists():
-        return []
-    try:
-        import yaml  # noqa: PLC0415
-    except ImportError:
-        return []  # 没装 yaml 静默
-    try:
-        with open(COMPANION_YAML_PATH, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-    except (OSError, Exception):  # noqa: BLE001
-        return []
-    if not isinstance(data, dict):
-        return []
-    cfg = data.get("style_fingerprint", {})
-    if not isinstance(cfg, dict):
-        return []
-    dirs = cfg.get("scan_dirs", [])
-    if not isinstance(dirs, list):
-        return []
-    return [Path(s).expanduser() for s in dirs if isinstance(s, str) and s.strip()]
-
-
-def _resolve_scan_dirs(arg_dirs: Optional[List[str]] = None) -> List[Path]:
-    """resolve 最终扫描目录列表.
-
-    优先级: explicit args.source_dirs > yaml union 默认 > 默认.
-    args 给了显式 list → 只走 args (调用方知道自己要啥).
-    没给 → DEFAULT_SOURCE_DIRS + yaml 自定义 (去重保序).
-    """
-    if arg_dirs and isinstance(arg_dirs, list):
-        return [Path(s).expanduser() for s in arg_dirs if isinstance(s, str)]
-    # union default + yaml, 去重保序 (先 default, 再 yaml 新加的)
-    seen: set = set()
-    out: List[Path] = []
-    for d in list(DEFAULT_SOURCE_DIRS) + _load_scan_dirs_yaml():
-        key = str(d)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(d)
-    return out
+# 算"文书"的扩展名 (存进索引时是带点小写的, indexer.py:139 path.suffix.lower()).
+# 为什么是这几个 / 为什么没有 .xlsx: 见模块 docstring "收哪些文档".
+DOC_FILE_TYPES = (".md", ".txt", ".docx", ".pdf", ".pptx")
 
 # 边界
 MIN_DOC_CHARS = 200  # 太短的不算, 没统计意义
-MAX_DOCS_TO_SCAN = 500  # 防文件夹太大爆内存
-MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB 上限单文件
+MAX_DOCS_TO_SCAN = 500  # 防语料太大爆内存 (取 mtime 最新的 500 篇)
+MAX_DOC_CHARS = 100_000  # 单篇截断. 风格统计用不了这么多, 防个别超大文档吃内存
+MIN_CN_RATIO = 0.30  # 去 noise 后中文字符占比下限, 低于此判定为技术文档/英文, 整篇不要
 TOP_WORDS_K = 20
 
 # 时间衰减档位 (单位: 秒)
@@ -165,6 +155,9 @@ _RE_URL = re.compile(r"https?://\S+")
 _RE_MD_IMG = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 _RE_MD_LINK = re.compile(r"\[([^\]]+)\]\([^)]*\)")
 _RE_HTML_TAG = re.compile(r"<[^>]+>")
+# 中文字符 run. 7/27 从下面"特征抽取"段挪上来 —— _cn_ratio (文档级中文占比闸)
+# 也要用, 而它跟 _filter_noise 是同一道去噪工序, 放一起看得清.
+_CN_CHAR_RE = re.compile(r"[一-鿿]+")
 
 
 def _filter_noise(text: str) -> str:
@@ -185,59 +178,98 @@ def _filter_noise(text: str) -> str:
     return text
 
 
-def _read_doc(path: Path) -> Optional[str]:
-    """读一个文档. 不支持的类型 / 太大 / 读失败 → None.
+def _cn_ratio(text: str) -> float:
+    """中文字符占比. 空串返 0.0.
 
-    BL-STYLE-FP-NOISE-FILTER (2026-06-03): markdown / 文本类自动过滤 noise
-    (URL / code blocks / inline code). docx 已经是纯文本 不需要过滤.
+    用来把员工公文跟技术文档/英文笔记分开 —— 见模块 docstring "收哪些文档".
+    分母用全长 (含标点/空白/英文), 所以中英混排的公文大概落在 0.4-0.7,
+    英文 README 落在 0.0-0.1, 阈值 MIN_CN_RATIO=0.30 分得很开.
     """
+    if not text:
+        return 0.0
+    cn = sum(len(m) for m in _CN_CHAR_RE.findall(text))
+    return cn / len(text)
+
+
+class IndexUnavailable(Exception):
+    """local_search 索引不可用 (库不存在 / 打不开 / 表缺失).
+
+    军规 fail-loud: 不能跟"索引里没有符合条件的文档"混成同一个 0 ——
+    前者是数据源没通 (员工要去建索引), 后者是语料确实不够 (员工要加目录).
+    两种情况给员工的下一步动作完全不同.
+    """
+
+
+def _load_docs_from_index() -> Tuple[List[Tuple[Path, float, str]], Dict[str, int]]:
+    """从 local_search 索引取文书语料.
+
+    返 ([(path, mtime, 去噪后正文), ...], 漏斗计数).
+    按 mtime 倒序取最新 MAX_DOCS_TO_SCAN 篇 —— 跟时间衰减同向 (老于 180 天的
+    权重只有 0.1, 挤掉近期文档不划算).
+
+    索引不可用 → raise IndexUnavailable.
+
+    # 为什么在 Python 里 join mtime 而不写 SQL JOIN
+
+    `documents` 是 FTS5 表, `path` 声明成 UNINDEXED —— 它不在 FTS 索引里, 按
+    path 等值查是线性扫. 拿 file_meta 去 JOIN documents 会退化成 O(n²)
+    (鸿波库 6 万条). 改成各扫一遍 + 在 Python 里用 dict 拼: 两次线性, 内存
+    只多一个 {path: mtime} 的 dict.
+    """
+    if not SEARCH_DB_PATH.exists():
+        raise IndexUnavailable(
+            f"local_search 索引库不存在 ({SEARCH_DB_PATH}). "
+            "去 Companion → Dashboard → 📂 搜索范围 建一次索引, 或命令行跑 catfish-search index."
+        )
+
+    # 只读打开: 不给 watcher 上锁, 也不会在库损坏时被 sqlite 悄悄重建成空库
     try:
-        size = path.stat().st_size
-    except OSError:
-        return None
-    if size > MAX_FILE_SIZE or size < 100:
-        return None
+        conn = sqlite3.connect(f"file:{SEARCH_DB_PATH}?mode=ro", uri=True)
+    except sqlite3.Error as e:
+        raise IndexUnavailable(f"打不开索引库 {SEARCH_DB_PATH}: {e}") from e
 
-    suffix = path.suffix.lower()
+    funnel = {"indexed_doc_type": 0, "too_short": 0, "not_chinese": 0, "kept": 0}
+    candidates: List[Tuple[Path, float, str]] = []
+    placeholders = ",".join("?" * len(DOC_FILE_TYPES))
     try:
-        if suffix in {".md", ".txt", ".markdown"}:
-            raw = path.read_text(encoding="utf-8", errors="replace")
-            return _filter_noise(raw)  # 真过滤 markdown noise
-        if suffix == ".docx":
-            try:
-                from docx import Document  # noqa: PLC0415
-            except ImportError:
-                return None
-            doc = Document(str(path))
-            return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-        # 其他扩展名 (csv / pdf / xlsx) 跳过
-        return None
-    except Exception:
-        return None
-
-
-def _scan_dir(d: Path, max_docs: int) -> List[Tuple[Path, float, str]]:
-    """扫一个目录, 返回 [(path, mtime, content), ...] 列表."""
-    out: List[Tuple[Path, float, str]] = []
-    if not d.exists() or not d.is_dir():
-        return out
-    for p in d.rglob("*"):
-        if len(out) >= max_docs:
-            break
-        if not p.is_file() or p.name.startswith("."):
-            continue
-        # 跳过隐藏目录
-        if any(part.startswith(".") for part in p.parts):
-            continue
-        content = _read_doc(p)
-        if content is None or len(content) < MIN_DOC_CHARS:
-            continue
         try:
-            mtime = p.stat().st_mtime
-        except OSError:
-            mtime = 0.0
-        out.append((p, mtime, content))
-    return out
+            mtimes: Dict[str, float] = {
+                row[0]: row[1]
+                for row in conn.execute("SELECT path, mtime FROM file_meta")
+            }
+            # 流式迭代 cursor, 不 fetchall() —— 命中的行可能有上千条, 每条 content
+            # 最大 MAX_DOC_CHARS, 一次性拉进内存峰值不可控. 边读边筛, 只留通过的.
+            cur = conn.execute(
+                f"""
+                SELECT path, substr(content, 1, ?)
+                FROM documents
+                WHERE file_type IN ({placeholders})
+                """,  # noqa: S608 - placeholders 由常量元组生成, 无外部输入
+                (MAX_DOC_CHARS, *DOC_FILE_TYPES),
+            )
+            for path_str, raw in cur:
+                funnel["indexed_doc_type"] += 1
+                content = _filter_noise(raw or "")
+                if len(content) < MIN_DOC_CHARS:
+                    funnel["too_short"] += 1
+                    continue
+                if _cn_ratio(content) < MIN_CN_RATIO:
+                    funnel["not_chinese"] += 1
+                    continue
+                candidates.append(
+                    (Path(path_str), float(mtimes.get(path_str, 0.0)), content)
+                )
+        except sqlite3.Error as e:
+            raise IndexUnavailable(
+                f"索引库 schema 不对或已损坏 ({e}). 删掉 {SEARCH_DB_PATH} 重建一次索引."
+            ) from e
+    finally:
+        conn.close()
+
+    candidates.sort(key=lambda t: -t[1])  # mtime 新的在前
+    kept = candidates[:MAX_DOCS_TO_SCAN]
+    funnel["kept"] = len(kept)
+    return kept, funnel
 
 
 # ============================================================
@@ -246,7 +278,6 @@ def _scan_dir(d: Path, max_docs: int) -> List[Tuple[Path, float, str]]:
 
 
 _SENT_SPLIT_RE = re.compile(r"[。！？!?\.;；\n]+")
-_CN_CHAR_RE = re.compile(r"[一-鿿]+")
 
 
 def _split_sentences(text: str) -> List[str]:
@@ -523,50 +554,57 @@ def style_fingerprint_get(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def style_fingerprint_refresh(args: Dict[str, Any]) -> Dict[str, Any]:
-    """tool: 重新扫描员工文档目录, 重建 fingerprint.
+    """tool: 从 local_search 索引重建 fingerprint. 无参数.
 
-    args:
-      source_dirs: list of str, 默认 ['~/Documents/work', '~/.catfish/output']
-                   员工想加目录就显式传
+    BL-STYLE-FP-USE-INDEX (7/27): 删了 args.source_dirs —— 目录范围现在唯一由
+    员工的 search-scope.yaml 决定 (Companion "📂 搜索范围" 卡). 留一个绕过口
+    只会让"我到底扫了哪"重新变成两个答案.
 
     返:
-      {type: result, result: {scanned_dirs, total_docs, fingerprint_path}}
+      成功 {type: result, result: {total_docs, funnel, top_3_words, ...}}
+      索引没通 {type: result, result: {error, hint, total_docs: 0}} —— 不写盘,
+      保住上一次的 fingerprint (总比覆盖成空好).
     """
-    # BL-STYLE-FP-YAML-CONFIG (5/20): args 没给 → resolve 默认 + yaml union
-    dirs = _resolve_scan_dirs(args.get("source_dirs"))
+    try:
+        docs, funnel = _load_docs_from_index()
+    except IndexUnavailable as e:
+        # 军规 fail-loud: 数据源没通 ≠ 没文档. 明说, 且**不覆盖**已有 fingerprint.
+        return {
+            "type": "result",
+            "result": {
+                "error": "index_unavailable",
+                "hint": str(e),
+                "total_docs": 0,
+                "source_db": str(SEARCH_DB_PATH),
+            },
+        }
 
-    all_docs: List[Tuple[Path, float, str]] = []
-    scanned_dirs: List[str] = []
-    skipped_dirs: List[str] = []  # 不存在 / 不是目录 / 没读出内容
-    for d in dirs:
-        scanned_dirs.append(str(d))
-        if not d.exists() or not d.is_dir():
-            skipped_dirs.append(str(d))
-            continue
-        docs = _scan_dir(d, MAX_DOCS_TO_SCAN - len(all_docs))
-        all_docs.extend(docs)
-        if len(all_docs) >= MAX_DOCS_TO_SCAN:
-            break
-
-    fp = _build_fingerprint(all_docs)
+    fp = _build_fingerprint(docs)
     _write_fingerprint(fp)
 
-    return {
-        "type": "result",
-        "result": {
-            "scanned_dirs": scanned_dirs,
-            "skipped_dirs": skipped_dirs,  # 5/20: 显式列不存在目录, 帮员工调试
-            "total_docs": len(all_docs),
-            "fingerprint_path": str(STYLE_FINGERPRINT_PATH),
-            "had_jieba": fp.get("had_jieba", False),
-            "top_3_words": [w["word"] for w in fp.get("top_words", [])[:3]],
-            # 5/20: 提示员工 yaml 配置位置, 方便加 scan_dirs
-            "yaml_config_hint": (
-                f"加扫描目录: 编辑 {COMPANION_YAML_PATH}, 加段:\n"
-                "style_fingerprint:\n  scan_dirs:\n    - ~/your-doc-dir"
-            ) if len(all_docs) == 0 else None,
-        },
+    result: Dict[str, Any] = {
+        "total_docs": len(docs),
+        "fingerprint_path": str(STYLE_FINGERPRINT_PATH),
+        "source_db": str(SEARCH_DB_PATH),
+        # 漏斗 —— 0 篇时能一眼看出卡在哪层, 不用猜
+        # (索引里的文书类 → 去噪后太短 → 中文占比不够 → 最终留下)
+        "funnel": funnel,
+        "had_jieba": fp.get("had_jieba", False),
+        "top_3_words": [w["word"] for w in fp.get("top_words", [])[:3]],
     }
+    if not docs:
+        if funnel["indexed_doc_type"] == 0:
+            result["hint"] = (
+                f"索引里一篇 {'/'.join(DOC_FILE_TYPES)} 都没有. "
+                "去 Companion → Dashboard → 📂 搜索范围 把放文档的目录加进去, 再建一次索引."
+            )
+        else:
+            result["hint"] = (
+                f"索引里有 {funnel['indexed_doc_type']} 篇文书类文档, 但全被筛掉了 "
+                f"(太短 {funnel['too_short']} 篇 / 中文占比不足 {funnel['not_chinese']} 篇). "
+                "多半是索引到的都是英文技术文档 — 把你写公文的目录加进搜索范围."
+            )
+    return {"type": "result", "result": result}
 
 
 def style_fingerprint_clear(args: Dict[str, Any]) -> Dict[str, Any]:

@@ -51,7 +51,10 @@ pub mod tool_perf;        // P3.5.59 (6/22 鸿波): tool-bridge audit jsonl 聚�
 pub mod advisor_cache;   // BL-ADVISOR-CACHE (5/22 Phase 7): 缓存 advisor 结果
 pub mod advisor_config;  // BL-ADVISOR-CONFIG (5/22 Phase 7): 读 yaml advisor section
 pub mod advisor_task_state;  // BL-ADVISOR-TASK-STATE (5/22): done/snoozed/ignored 状态
-pub mod style_fingerprint_dirs;  // BL-STYLE-FP-DIR-PICKER (5/22 鸿波): scan_dirs UI 管理
+// BL-STYLE-FP-USE-INDEX (7/27): style_fingerprint_dirs 整个删了.
+// style_fingerprint 现在直接查 local_search 索引 (~/.catfish/search.db), 目录范围
+// 唯一由 search-scope.yaml 决定 → 用 local_search_scope 那套命令, 不再有第二份
+// companion.yaml style_fingerprint.scan_dirs 配置.
 pub mod decisions;  // BL-ADVISOR-DECISIONS (5/21 Phase 7): ~/.catfish/decisions.jsonl 决策留痕
 pub mod drafts;     // BL-ADVISOR-DRAFTS (5/21 Phase 7): ~/.catfish/outputs/<date>/ 草稿存储
 pub mod task_chat;  // P3.3.7 Phase 2 (6/10): ~/.catfish/task_chat/<key>.jsonl task-scoped chat 持久化

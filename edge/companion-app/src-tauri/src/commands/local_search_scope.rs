@@ -1,17 +1,20 @@
 //! P3.5.126 (6/26 鸿波 catch "local_search 目录设置 UI 找不到"):
-//! local_search 索引目录管理 — 仿 style_fingerprint_dirs.rs 套路.
+//! local_search 索引目录管理.
 //!
 //! 写到 ~/.catfish/search-scope.yaml (跟 catfish-local-search/src/catfish_search/config.py
-//! line 10 的 CONFIG_FILE 路径对齐). 不同 yaml file 跟 companion.yaml, 因为:
-//!   - search-scope.yaml python 端 load_config 真读唯一来源
-//!   - companion.yaml 是 Companion 自己用的 (style_fingerprint.scan_dirs 等)
+//! CONFIG_FILE 路径对齐) —— python 端 load_config 唯一读的地方.
+//!
+//! BL-STYLE-FP-USE-INDEX (7/27): 这里是**唯一**的索引目录入口了.
+//! 原来还有 style_fingerprint_dirs.rs 写 companion.yaml 的 style_fingerprint.scan_dirs,
+//! 两套割裂让鸿波的文书风格抽了两个多月 0 文档, 已整个删除. Onboarding 第 4 步
+//! 和 StyleFingerprintCard 现在都走这套命令.
 //!
 //! 命令:
 //!   - local_search_scope_get → 读 yaml 返当前 include/exclude
 //!   - local_search_scope_add → 校验路径 (存在 + 是 dir) + 追加, 不重复
 //!   - local_search_scope_remove → 删一项
 //!
-//! yaml 写回策略 (跟 style_fingerprint_dirs.rs 一致):
+//! yaml 写回策略:
 //!   - 不动其它段 (exclude / file_types / max_file_size_mb), 只改 include
 //!   - 读 → 改 → 全文 dump 写回. serde_yaml 会丢 comments — 第一版能接受.
 //!     search-scope.yaml 有默认头注释, 鸿波改完后注释丢, 但 UI 加目录不靠注释.

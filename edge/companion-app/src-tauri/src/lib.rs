@@ -564,6 +564,9 @@ pub fn run() {
             commands::local_search::local_search_start,
             commands::local_search::local_search_stop,
             commands::local_search::local_search_status,
+            // BL-SEARCH-NO-BOOTSTRAP (7/27): 前台跑一次索引 (整库 / 单目录).
+            // watcher 只吃变化事件, 存量文件得靠这个进索引.
+            commands::local_search::local_search_index,
             // P3.5.126 (6/26 鸿波 catch "local_search 目录设置 UI 找不到"):
             // 索引目录 UI 管理 (search-scope.yaml include 段读写)
             commands::local_search_scope::local_search_scope_get,
@@ -877,10 +880,8 @@ pub fn run() {
             commands::advisor_task_state::advisor_task_state_set,
             commands::advisor_task_state::advisor_task_state_clear,
             commands::advisor_task_state::advisor_task_state_prune_old,
-            // BL-STYLE-FP-DIR-PICKER (5/22 鸿波): scan_dirs UI 管理
-            commands::style_fingerprint_dirs::style_fingerprint_scan_dirs_get,
-            commands::style_fingerprint_dirs::style_fingerprint_scan_dirs_add,
-            commands::style_fingerprint_dirs::style_fingerprint_scan_dirs_remove,
+            // BL-STYLE-FP-USE-INDEX (7/27): 删了 style_fingerprint_scan_dirs_*.
+            // 文书风格改查 local_search 索引, 目录范围走上面的 local_search_scope_*.
             // BL-MM4 v1 (5/5 晚): "鲶鱼记的硬事实" 版本卡 (跟 BL-MM2 配套)
             commands::memory_history::memory_history_summary,
             commands::memory_history::memory_history_clear_key,

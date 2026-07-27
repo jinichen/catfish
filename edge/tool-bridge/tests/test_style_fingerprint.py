@@ -2,25 +2,66 @@
 
 覆盖:
 - get / refresh / clear 三工具 happy path
+- 数据源 = local_search 索引 (BL-STYLE-FP-USE-INDEX 7/27): 索引缺失 fail-loud /
+  扩展名白名单 / 中文占比闸 / 太短跳过 / mtime 时间衰减 / 漏斗计数
 - 抽取: 句子切分 / 词频 (含 jieba 退 char-fallback) / 标点 / 结构
 - 时间衰减: 30/90/180 天分桶
-- 文件类型: .md/.txt/.docx 支持, csv/xlsx/pdf 跳过
-- 边界: 文档 < 200 字跳过, > 5MB 跳过, 隐藏文件跳过
 - 损坏 fingerprint.json 返空 dict
+
+7/27 删掉的测试 (对应能力已删, 留着是假绿):
+- test_refresh_scans_explicit_source_dirs 等 args.source_dirs 一族
+- test_refresh_skips_hidden_files —— 隐藏文件由 local_search 索引阶段决定,
+  不再是 fingerprint 的事. 这条老测试恰恰**掩盖**了真 bug: 它用 tmp_path 造的
+  可见目录, 永远测不到"扫描根**自己**是隐藏目录"那个致命分支 (~/.catfish/output).
+- test_yaml_scan_dirs_* 一族 —— companion.yaml scan_dirs 整套已删
 """
 
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 from pathlib import Path
 
 import pytest
 
 
+# local_search indexer.py:SCHEMA 的副本. 故意抄一份而不 import catfish_search:
+# tool-bridge 不依赖那个包 (pyproject 主路径 stdlib only), 而这份 schema 正是
+# 两边约定的落盘契约 —— 抄在这里, 契约变了测试会红, 正好是我们要的告警.
+_SEARCH_SCHEMA = """
+CREATE VIRTUAL TABLE IF NOT EXISTS documents USING fts5(
+    path UNINDEXED, title, content, file_type UNINDEXED, tokenize='trigram');
+CREATE TABLE IF NOT EXISTS file_meta (
+    path TEXT PRIMARY KEY, size_bytes INTEGER, mtime REAL,
+    indexed_at REAL, content_hash TEXT);
+"""
+
+# 一段够长 (>200 字) 的中文公文, 中文占比远高于 MIN_CN_RATIO
+GONGWEN = (
+    "关于公司资质对标情况的分析报告\n\n"
+    "一、总体情况\n"
+    "经与中电系四家兄弟单位对标，公司现有资质共计八十三项，其中工程类资质十二项，"
+    "服务类资质四十一项，认证类资质三十项。整体覆盖面处于中电系中游水平，但在施工"
+    "总承包和低空经济两个新兴方向存在明显缺口。\n"
+    "- 施工总承包资质缺口两项，影响投标范围\n"
+    "- 系统集成资质需于三季度完成年审\n"
+    "二、补强建议\n"
+    "建议企发与风控部牵头，于三季度完成两项施工类资质申报；同步启动人员与业绩材料"
+    "的归集工作，避免临期补件。"
+)
+
+# 英文技术文档 —— 该被中文占比闸整篇挡掉
+ENGLISH_README = (
+    "# Catfish Local Search\n\nA fast full text search engine built on SQLite FTS5 "
+    "with trigram tokenizer. Install with pip and run the indexer to build a local "
+    "index. Supports markdown, pdf, docx and more formats out of the box. "
+) * 3
+
+
 @pytest.fixture(autouse=True)
 def isolated_fp(tmp_path: Path, monkeypatch):
-    """每个测试用 tmp_path 隔离."""
+    """每个测试用 tmp_path 隔离 fingerprint.json."""
     fake_fp = tmp_path / "style_fingerprint.json"
     monkeypatch.setattr(
         "catfish_tool_bridge.style_fingerprint.STYLE_FINGERPRINT_PATH",
@@ -35,11 +76,29 @@ def sf():
     return style_fingerprint
 
 
-def _write_doc(d: Path, name: str, content: str) -> Path:
-    d.mkdir(parents=True, exist_ok=True)
-    p = d / name
-    p.write_text(content, encoding="utf-8")
-    return p
+@pytest.fixture
+def fake_index(tmp_path: Path, monkeypatch):
+    """造一个假的 local_search 索引库. 返回 add(path, file_type, content, age_days)."""
+    db = tmp_path / "search.db"
+    monkeypatch.setattr("catfish_tool_bridge.style_fingerprint.SEARCH_DB_PATH", db)
+    conn = sqlite3.connect(db)
+    conn.executescript(_SEARCH_SCHEMA)
+    now = time.time()
+
+    def add(path: str, file_type: str, content: str, age_days: float = 1.0):
+        conn.execute(
+            "INSERT INTO documents(path,title,content,file_type) VALUES(?,?,?,?)",
+            (path, path.rsplit("/", 1)[-1], content, file_type),
+        )
+        conn.execute(
+            "INSERT INTO file_meta(path,size_bytes,mtime,indexed_at,content_hash)"
+            " VALUES(?,?,?,?,?)",
+            (path, len(content), now - age_days * 86400, now, "hash"),
+        )
+        conn.commit()
+
+    yield add
+    conn.close()
 
 
 # ── get ─────────────────────────────────────────────────────
@@ -52,11 +111,9 @@ def test_get_when_fingerprint_not_exists(sf):
     assert "hint" in r["result"]
 
 
-def test_get_returns_summary_after_refresh(sf, tmp_path, monkeypatch):
-    src = tmp_path / "work"
-    _write_doc(src, "doc1.md", "公司资质管理办法 2025 修订. 主责部门移交企发与风控部. " * 10)
-    _write_doc(src, "doc2.md", "本周完成: 60 天未下单清单. 上会材料整理中. 戴明利反馈待收. " * 10)
-    monkeypatch.setattr(sf, "DEFAULT_SOURCE_DIRS", [src])
+def test_get_returns_summary_after_refresh(sf, fake_index):
+    fake_index("/h/out/对标报告.docx", ".docx", GONGWEN)
+    fake_index("/h/out/周报.md", ".md", GONGWEN)
 
     sf.style_fingerprint_refresh({})
     r = sf.style_fingerprint_get({})
@@ -68,57 +125,145 @@ def test_get_returns_summary_after_refresh(sf, tmp_path, monkeypatch):
     assert len(r["result"]["sample_sentences"]) <= 3
 
 
-# ── refresh ─────────────────────────────────────────────────
+def test_get_with_corrupted_file(sf, isolated_fp):
+    isolated_fp.parent.mkdir(parents=True, exist_ok=True)
+    isolated_fp.write_text("not json", encoding="utf-8")
+    r = sf.style_fingerprint_get({})
+    assert r["result"]["exists"] is False
 
 
-def test_refresh_scans_explicit_source_dirs(sf, tmp_path):
-    src1 = tmp_path / "src1"
-    src2 = tmp_path / "src2"
-    _write_doc(src1, "a.md", "测试文档一" * 100)
-    _write_doc(src2, "b.md", "测试文档二" * 100)
-    r = sf.style_fingerprint_refresh({"source_dirs": [str(src1), str(src2)]})
-    assert r["type"] == "result"
-    assert r["result"]["total_docs"] == 2
-    assert str(src1) in r["result"]["scanned_dirs"]
+# ── refresh: 数据源 = local_search 索引 (BL-STYLE-FP-USE-INDEX 7/27) ──
 
 
-def test_refresh_skips_short_docs(sf, tmp_path):
-    src = tmp_path / "work"
-    _write_doc(src, "tooshort.md", "只有几个字")  # < 200 字
-    _write_doc(src, "ok.md", "够长的文档" * 100)  # > 200 字
-    r = sf.style_fingerprint_refresh({"source_dirs": [str(src)]})
-    assert r["result"]["total_docs"] == 1
+def test_refresh_fails_loud_when_index_missing(sf, tmp_path, monkeypatch, isolated_fp):
+    """索引库不存在 → 明确报 index_unavailable, 不是静默 total_docs=0.
+
+    军规: "数据源没通" 跟 "语料确实不够" 给员工的下一步动作完全不同,
+    不能混成同一个 0 —— 5/20 到 7/27 鸿波就是被这个 0 卡住的.
+    """
+    monkeypatch.setattr(
+        "catfish_tool_bridge.style_fingerprint.SEARCH_DB_PATH", tmp_path / "nope.db"
+    )
+    r = sf.style_fingerprint_refresh({})["result"]
+    assert r["error"] == "index_unavailable"
+    assert "nope.db" in r["hint"]
+    assert r["total_docs"] == 0
+    # 关键: 没写盘 —— 上一次的指纹不能被一个失败的 refresh 覆盖成空
+    assert not isolated_fp.exists()
 
 
-def test_refresh_skips_hidden_files(sf, tmp_path):
-    src = tmp_path / "work"
-    _write_doc(src, ".hidden.md", "藏起来的文档" * 100)
-    _write_doc(src, "visible.md", "可见的文档" * 100)
-    r = sf.style_fingerprint_refresh({"source_dirs": [str(src)]})
-    assert r["result"]["total_docs"] == 1
+def test_refresh_does_not_clobber_fingerprint_on_index_error(
+    sf, fake_index, tmp_path, monkeypatch
+):
+    """先成功抽一次, 再让索引消失 → 老指纹必须还在."""
+    fake_index("/h/out/对标报告.docx", ".docx", GONGWEN)
+    sf.style_fingerprint_refresh({})
+    assert sf.style_fingerprint_get({})["result"]["stats"]["total_docs"] == 1
+
+    monkeypatch.setattr(
+        "catfish_tool_bridge.style_fingerprint.SEARCH_DB_PATH", tmp_path / "gone.db"
+    )
+    sf.style_fingerprint_refresh({})
+    assert sf.style_fingerprint_get({})["result"]["stats"]["total_docs"] == 1
 
 
-def test_refresh_skips_unsupported_types(sf, tmp_path):
-    src = tmp_path / "work"
-    _write_doc(src, "data.csv", "a,b,c\n" * 100)  # csv 跳过
-    _write_doc(src, "data.xlsx", "binary" * 100)  # xlsx 跳过 (内容也不像 docx 二进制但我们靠扩展名判)
-    _write_doc(src, "doc.md", "文档内容" * 100)  # md 走
-    r = sf.style_fingerprint_refresh({"source_dirs": [str(src)]})
-    assert r["result"]["total_docs"] == 1
+def test_refresh_skips_non_doc_file_types(sf, fake_index):
+    """扩展名白名单: 代码 / 表格不进语料.
+
+    索引里 82% 是 .py/.h/.js (鸿波库 60332 条里 33206 条 .py), 不挡住会把
+    公文风格喂成技术文档味.
+    """
+    fake_index("/h/out/报告.docx", ".docx", GONGWEN)
+    fake_index("/h/code/a.py", ".py", "导入模块并处理数据。" * 40)   # 中文也不收
+    fake_index("/h/data/表.xlsx", ".xlsx", GONGWEN)                  # 表格不算文书
+    fake_index("/h/data/清单.csv", ".csv", GONGWEN)
+
+    r = sf.style_fingerprint_refresh({})["result"]
+    assert r["total_docs"] == 1
+    assert r["funnel"]["indexed_doc_type"] == 1  # 只有 .docx 进了漏斗
 
 
-def test_refresh_handles_empty_dir(sf, tmp_path):
-    src = tmp_path / "empty"
-    src.mkdir()
-    r = sf.style_fingerprint_refresh({"source_dirs": [str(src)]})
-    assert r["type"] == "result"
-    assert r["result"]["total_docs"] == 0
+def test_refresh_skips_short_docs(sf, fake_index):
+    fake_index("/h/out/ok.md", ".md", GONGWEN)
+    fake_index("/h/out/short.md", ".md", "只有几个字")
+
+    r = sf.style_fingerprint_refresh({})["result"]
+    assert r["total_docs"] == 1
+    assert r["funnel"]["too_short"] == 1
 
 
-def test_refresh_handles_nonexistent_dir(sf, tmp_path):
-    r = sf.style_fingerprint_refresh({"source_dirs": [str(tmp_path / "nope")]})
-    assert r["type"] == "result"
-    assert r["result"]["total_docs"] == 0
+def test_refresh_skips_english_docs_by_cn_ratio(sf, fake_index):
+    """中文占比闸: 英文 README 整篇不要.
+
+    光靠 _word_freq 只留中文词不够 —— 英文文档虽然贡献不了高频词, 照样污染
+    句长 / 标点 / 结构比例 / 样本句这四项.
+    """
+    fake_index("/h/out/报告.docx", ".docx", GONGWEN)
+    fake_index("/h/code/README.md", ".md", ENGLISH_README)
+
+    r = sf.style_fingerprint_refresh({})["result"]
+    assert r["total_docs"] == 1
+    assert r["funnel"]["not_chinese"] == 1
+
+
+def test_refresh_empty_index_gives_actionable_hint(sf, fake_index):
+    """索引建了但一篇文书类都没有 → hint 指向"加目录", 不是干瘪的 0."""
+    fake_index("/h/code/a.py", ".py", "print(1)\n" * 50)
+    r = sf.style_fingerprint_refresh({})["result"]
+    assert r["total_docs"] == 0
+    assert r.get("error") is None  # 索引是通的, 只是没料
+    assert "搜索范围" in r["hint"]
+
+
+def test_refresh_all_filtered_hint_mentions_funnel(sf, fake_index):
+    """有文书类但全被筛掉 → hint 说清是"太短"还是"中文占比不足"."""
+    fake_index("/h/code/README.md", ".md", ENGLISH_README)
+    r = sf.style_fingerprint_refresh({})["result"]
+    assert r["total_docs"] == 0
+    assert "中文占比不足" in r["hint"]
+
+
+def test_refresh_uses_file_meta_mtime_for_decay(sf, fake_index):
+    """时间衰减读的是索引里的 file_meta.mtime, 不是文件系统 stat."""
+    fake_index("/h/out/新.md", ".md", GONGWEN, age_days=3)
+    fake_index("/h/out/旧.md", ".md", GONGWEN, age_days=300)
+
+    sf.style_fingerprint_refresh({})
+    fp = json.loads(sf.STYLE_FINGERPRINT_PATH.read_text(encoding="utf-8"))
+    now = time.time()
+    weights = {
+        Path(s["path"]).name: sf._decay_weight(s["mtime"], now) for s in fp["sources"]
+    }
+    assert weights["新.md"] == 1.0
+    assert weights["旧.md"] == 0.1
+
+
+def test_refresh_caps_at_max_docs_newest_first(sf, fake_index, monkeypatch):
+    """超过上限时取 mtime 最新的那批 (跟时间衰减同向)."""
+    monkeypatch.setattr("catfish_tool_bridge.style_fingerprint.MAX_DOCS_TO_SCAN", 3)
+    for i in range(6):
+        fake_index(f"/h/out/doc{i}.md", ".md", GONGWEN, age_days=i + 1)
+
+    sf.style_fingerprint_refresh({})
+    fp = json.loads(sf.STYLE_FINGERPRINT_PATH.read_text(encoding="utf-8"))
+    names = sorted(Path(s["path"]).name for s in fp["sources"])
+    assert names == ["doc0.md", "doc1.md", "doc2.md"]
+
+
+def test_refresh_ignores_legacy_source_dirs_arg(sf, fake_index):
+    """老调用方可能还传 source_dirs —— 忽略即可, 不能抛."""
+    fake_index("/h/out/报告.docx", ".docx", GONGWEN)
+    r = sf.style_fingerprint_refresh({"source_dirs": ["/tmp/whatever"]})["result"]
+    assert r["total_docs"] == 1
+
+
+# ── _cn_ratio ───────────────────────────────────────────────
+
+
+def test_cn_ratio_separates_gongwen_from_english(sf):
+    assert sf._cn_ratio(GONGWEN) >= sf.MIN_CN_RATIO
+    assert sf._cn_ratio(ENGLISH_README) < sf.MIN_CN_RATIO
+    assert sf._cn_ratio("") == 0.0
 
 
 # ── 抽取细节 ────────────────────────────────────────────────
@@ -260,14 +405,13 @@ def test_decay_weight_buckets(sf):
     assert sf._decay_weight(now - 10 * 86400, now) == 1.0
     # 60 天 = 0.5 桶
     assert sf._decay_weight(now - 60 * 86400, now) == 0.5
-    # 100 天 = 0.5 桶 (≤ 90 天的边界外其实算 0.25 桶?)
-    # 看 DECAY_BUCKETS: 30/1.0, 90/0.5, 180/0.25
+    # 100 天 → 0.25 桶 (DECAY_BUCKETS: 30/1.0, 90/0.5, 180/0.25)
     assert sf._decay_weight(now - 100 * 86400, now) == 0.25
     # 老于 180 天 = default 0.1
     assert sf._decay_weight(now - 200 * 86400, now) == 0.1
 
 
-def test_sample_sentences_picks_medium_length(sf, tmp_path):
+def test_sample_sentences_picks_medium_length(sf):
     """sample_sentences 应该挑中等长度 (15-80 字), 跳过太短/太长."""
     docs = [
         (Path("a.md"), time.time(), "短.\n这是一个中等长度的句子, 适合采样作为样本.\n" + ("超长" * 100)),
@@ -280,10 +424,9 @@ def test_sample_sentences_picks_medium_length(sf, tmp_path):
 # ── clear ───────────────────────────────────────────────────
 
 
-def test_clear_deletes_file(sf, isolated_fp, tmp_path):
-    src = tmp_path / "work"
-    _write_doc(src, "a.md", "内容" * 100)
-    sf.style_fingerprint_refresh({"source_dirs": [str(src)]})
+def test_clear_deletes_file(sf, isolated_fp, fake_index):
+    fake_index("/h/out/报告.docx", ".docx", GONGWEN)
+    sf.style_fingerprint_refresh({})
     assert isolated_fp.exists()
     r = sf.style_fingerprint_clear({})
     assert r["type"] == "result"
@@ -294,117 +437,6 @@ def test_clear_when_not_exists(sf, isolated_fp):
     assert not isolated_fp.exists()
     r = sf.style_fingerprint_clear({})
     assert r["type"] == "result"
-
-
-# ── 文件损坏 ────────────────────────────────────────────────
-
-
-def test_get_with_corrupted_file(sf, isolated_fp):
-    isolated_fp.parent.mkdir(parents=True, exist_ok=True)
-    isolated_fp.write_text("not json", encoding="utf-8")
-    r = sf.style_fingerprint_get({})
-    assert r["result"]["exists"] is False
-
-
-# ── BL-STYLE-FP-YAML-CONFIG (5/20): yaml 自定义扫描目录 ──────────
-
-
-def test_yaml_scan_dirs_added_to_default(sf, isolated_fp, tmp_path, monkeypatch):
-    """yaml style_fingerprint.scan_dirs 列的目录被 union 进默认扫描.
-
-    场景: 鸿波本机文档在 ~/person_task/catfish/docs/, 默认 DEFAULT_SOURCE_DIRS
-    扫不到. 通过 ~/.catfish/companion.yaml 加 scan_dirs 让它能扫.
-    """
-    # 假 yaml + 假 scan dir
-    fake_yaml = tmp_path / "companion.yaml"
-    fake_scan = tmp_path / "my-docs"
-    _write_doc(fake_scan, "report.md", "鸿波周报\n\n本周完成 X / Y / Z. 详见列表.\n\n" + "正文" * 100)
-    fake_yaml.write_text(
-        f"style_fingerprint:\n  scan_dirs:\n    - {fake_scan}\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        "catfish_tool_bridge.style_fingerprint.COMPANION_YAML_PATH", fake_yaml
-    )
-    # DEFAULT_SOURCE_DIRS 不存在的目录 (不挂) — _resolve_scan_dirs union
-    monkeypatch.setattr(
-        "catfish_tool_bridge.style_fingerprint.DEFAULT_SOURCE_DIRS",
-        [tmp_path / "nonexistent"],
-    )
-
-    dirs = sf._resolve_scan_dirs(None)
-    assert any(str(d) == str(fake_scan) for d in dirs)
-
-
-def test_yaml_missing_returns_only_default(sf, monkeypatch, tmp_path):
-    """yaml 不存在 → _resolve_scan_dirs 仅返默认 (不挂)."""
-    monkeypatch.setattr(
-        "catfish_tool_bridge.style_fingerprint.COMPANION_YAML_PATH",
-        tmp_path / "nope.yaml",  # 不存在
-    )
-    monkeypatch.setattr(
-        "catfish_tool_bridge.style_fingerprint.DEFAULT_SOURCE_DIRS",
-        [tmp_path / "default-dir"],
-    )
-    dirs = sf._resolve_scan_dirs(None)
-    assert len(dirs) == 1
-    assert str(dirs[0]) == str(tmp_path / "default-dir")
-
-
-def test_yaml_malformed_skipped(sf, monkeypatch, tmp_path):
-    """yaml 解析失败 → 静默 fallback 仅默认."""
-    fake_yaml = tmp_path / "companion.yaml"
-    fake_yaml.write_text("this is: not [valid yaml :::", encoding="utf-8")
-    monkeypatch.setattr(
-        "catfish_tool_bridge.style_fingerprint.COMPANION_YAML_PATH", fake_yaml
-    )
-    monkeypatch.setattr(
-        "catfish_tool_bridge.style_fingerprint.DEFAULT_SOURCE_DIRS",
-        [tmp_path / "default-only"],
-    )
-    dirs = sf._resolve_scan_dirs(None)
-    assert all("not [valid" not in str(d) for d in dirs)
-    # 至少返默认
-    assert any(str(d) == str(tmp_path / "default-only") for d in dirs)
-
-
-def test_explicit_args_override_yaml_and_default(sf, monkeypatch, tmp_path):
-    """args.source_dirs 显式给 → 不 union, 直接用. (调用方知道自己要啥)"""
-    monkeypatch.setattr(
-        "catfish_tool_bridge.style_fingerprint.DEFAULT_SOURCE_DIRS",
-        [tmp_path / "default"],
-    )
-    fake_yaml = tmp_path / "companion.yaml"
-    fake_yaml.write_text(
-        f"style_fingerprint:\n  scan_dirs:\n    - {tmp_path / 'yaml-dir'}\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        "catfish_tool_bridge.style_fingerprint.COMPANION_YAML_PATH", fake_yaml
-    )
-
-    dirs = sf._resolve_scan_dirs([str(tmp_path / "explicit")])
-    assert len(dirs) == 1
-    assert str(dirs[0]) == str(tmp_path / "explicit")
-
-
-def test_yaml_union_dedupes(sf, monkeypatch, tmp_path):
-    """default 跟 yaml 路径相同时 dedup 不重复扫."""
-    common = tmp_path / "common"
-    monkeypatch.setattr(
-        "catfish_tool_bridge.style_fingerprint.DEFAULT_SOURCE_DIRS",
-        [common],
-    )
-    fake_yaml = tmp_path / "companion.yaml"
-    fake_yaml.write_text(
-        f"style_fingerprint:\n  scan_dirs:\n    - {common}\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        "catfish_tool_bridge.style_fingerprint.COMPANION_YAML_PATH", fake_yaml
-    )
-    dirs = sf._resolve_scan_dirs(None)
-    assert len(dirs) == 1
 
 
 # ── BL-STYLE-FP-NAN-FIX (5/20): 空 docs 不返 NaN ────────────────
@@ -427,50 +459,3 @@ def test_empty_fingerprint_has_zero_ratio_not_empty_dict(sf):
     assert fp["stats"]["total_chars"] == 0
     assert fp["stats"]["avg_sentence_length"] == 0.0
     assert fp["stats"]["sentence_count"] == 0
-
-
-def test_refresh_empty_dirs_returns_yaml_hint(sf, monkeypatch, tmp_path):
-    """refresh 没扫到文档 → yaml_config_hint 提示员工去 ~/.catfish/companion.yaml 加段."""
-    monkeypatch.setattr(
-        "catfish_tool_bridge.style_fingerprint.DEFAULT_SOURCE_DIRS",
-        [tmp_path / "nonexistent"],
-    )
-    monkeypatch.setattr(
-        "catfish_tool_bridge.style_fingerprint.COMPANION_YAML_PATH",
-        tmp_path / "no-yaml.yaml",
-    )
-    r = sf.style_fingerprint_refresh({})
-    assert r["result"]["total_docs"] == 0
-    assert r["result"]["yaml_config_hint"] is not None
-    assert "scan_dirs" in r["result"]["yaml_config_hint"]
-
-
-def test_refresh_with_docs_no_hint(sf, monkeypatch, tmp_path):
-    """有扫到文档 → yaml_config_hint=None (不显提示)."""
-    src = tmp_path / "work"
-    _write_doc(src, "report.md", "正文 " * 150)
-    monkeypatch.setattr(
-        "catfish_tool_bridge.style_fingerprint.DEFAULT_SOURCE_DIRS",
-        [src],
-    )
-    monkeypatch.setattr(
-        "catfish_tool_bridge.style_fingerprint.COMPANION_YAML_PATH",
-        tmp_path / "no-yaml.yaml",
-    )
-    r = sf.style_fingerprint_refresh({})
-    assert r["result"]["total_docs"] >= 1
-    assert r["result"]["yaml_config_hint"] is None
-
-
-def test_refresh_lists_skipped_dirs(sf, monkeypatch, tmp_path):
-    """不存在的目录列在 skipped_dirs, 帮员工调试."""
-    monkeypatch.setattr(
-        "catfish_tool_bridge.style_fingerprint.DEFAULT_SOURCE_DIRS",
-        [tmp_path / "nope-1", tmp_path / "nope-2"],
-    )
-    monkeypatch.setattr(
-        "catfish_tool_bridge.style_fingerprint.COMPANION_YAML_PATH",
-        tmp_path / "no-yaml.yaml",
-    )
-    r = sf.style_fingerprint_refresh({})
-    assert len(r["result"]["skipped_dirs"]) == 2

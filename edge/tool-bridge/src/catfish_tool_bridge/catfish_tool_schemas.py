@@ -192,29 +192,23 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
     {
         "name": "catfish_style_fingerprint_refresh",
         "description": (
-            "★ 重新扫描员工历史文档目录, 重建文书风格指纹.\n\n"
-            "默认扫: ~/Documents/work/, ~/.catfish/output/.\n"
-            "支持: .md / .txt / .docx (其他类型跳过).\n"
-            "约束: 跳过 < 200 字 / > 5MB / 隐藏文件; 最多扫 500 个文件.\n"
+            "★ 从本地搜索索引重建文书风格指纹. 无参数.\n\n"
+            "数据源: local_search 索引 (~/.catfish/search.db) — 目录范围就是员工在\n"
+            "Companion '📂 搜索范围' 卡里配的那些, 不用也不能在这里另指目录.\n"
+            "收: .md/.txt/.docx/.pdf/.pptx 里中文占比够高的 (挡代码和英文技术文档).\n"
+            "约束: 跳过 < 200 字; 取 mtime 最新的 500 篇.\n"
             "时间衰减: 30 天内权重 1.0, 90 天 0.5, 180 天 0.25, 更老 0.1.\n\n"
             "✅ 调用时机:\n"
             "  - 员工说 '更新一下你对我写作风格的认识'\n"
             "  - 员工写完一份新汇报后, 主动 refresh (10-20 个文档变化时)\n"
             "  - 第一次启动 (员工 onboarding 时)\n\n"
-            "❌ 频率: 不要每次写文档前都 refresh — 文档没变前指纹一样, 浪费 IO.\n"
-            "    一周一次或员工显式要求时再调."
+            "❌ 频率: 不要每次写文档前都 refresh — 文档没变前指纹一样, 白跑一趟.\n"
+            "    一周一次或员工显式要求时再调.\n\n"
+            "返回里带 funnel (索引里的文书类 → 太短 → 中文占比不足 → 最终留下) 和\n"
+            "total_docs=0 时的 hint. error='index_unavailable' 表示员工还没建过\n"
+            "本地索引 — 这时候别说'没找到文档', 要让他先去建索引."
         ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "source_dirs": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "可选, 自定义扫描目录列表; 默认 ['~/Documents/work', '~/.catfish/output']",
-                },
-            },
-            "required": [],
-        },
+        "input_schema": {"type": "object", "properties": {}, "required": []},
         "emoji": "🔄",
         "toolset": "catfish_native",
         "available": True,

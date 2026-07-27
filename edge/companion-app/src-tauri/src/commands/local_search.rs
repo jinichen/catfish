@@ -10,6 +10,8 @@
 //!
 //! 后台 watcher 没有端口可探，状态完全靠 PID 文件 + is_alive 判断。
 
+use serde::Serialize;
+
 use crate::commands::types::ServiceStatus;
 use crate::services::{autostart, catfish_paths, process};
 
@@ -80,6 +82,77 @@ pub async fn local_search_stop() -> Result<(), String> {
 
     let _ = std::fs::remove_file(&pid_file);
     Ok(())
+}
+
+/// BL-SEARCH-NO-BOOTSTRAP (7/27 鸿波实盘): 前台跑一次索引，等它跑完再返回。
+///
+/// # 为什么需要这个命令
+///
+/// Companion 一直只 spawn `catfish_search.cli watch`，而 watcher 只吃**文件变化
+/// 事件** —— 存量文件永远不会自己进索引。鸿波 yaml 里配了 ~/Documents、
+/// ~/Desktop、~/Downloads、~/.catfish/uploads，索引库里这四个各 0 条，
+/// 60332 条全来自 ~/person_task（活跃开发目录，文件天天变，被 watcher 逐个吃进去）。
+///
+/// 现在三处补齐：
+///   1. `watch` 启动时库为空 → 自己先做一次全量（watcher.py:_bootstrap_if_empty）
+///   2. 员工在面板加完目录 → 前端调本命令带 `only`，只补新加的那一个
+///   3. 面板"重建索引"按钮 → 不带 `only`，整库重来
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexRunResult {
+    /// 索引器的完整 stdout（含各目录条数 / 读不了的目录提示），直接显给员工
+    pub output: String,
+    /// 退出码 0 才算成功
+    pub ok: bool,
+}
+
+#[tauri::command]
+pub async fn local_search_index(only: Option<String>) -> Result<IndexRunResult, String> {
+    let dir = catfish_paths::local_search_dir()
+        .ok_or_else(|| "找不到 local-search 目录".to_string())?;
+    let python = catfish_paths::local_search_python()
+        .ok_or_else(|| "找不到 Python 解释器".to_string())?;
+    let pythonpath = dir.join("src").to_string_lossy().to_string();
+
+    let mut args: Vec<String> = vec![
+        "-m".into(),
+        "catfish_search.cli".into(),
+        "index".into(),
+        "--quiet".into(),
+    ];
+    if let Some(p) = only {
+        let p = p.trim().to_string();
+        if p.is_empty() {
+            return Err("目录不能空".into());
+        }
+        args.push("--only".into());
+        args.push(p);
+    }
+
+    // 索引是同步 subprocess 且可能跑几十秒，丢进 spawn_blocking，
+    // 不占 tokio runtime 线程（跟 tts.rs:304 同款处理）。
+    tokio::task::spawn_blocking(move || -> Result<IndexRunResult, String> {
+        let out = std::process::Command::new(&python)
+            .args(&args)
+            .current_dir(&dir)
+            .env("PYTHONPATH", &pythonpath)
+            .env("PYTHONUNBUFFERED", "1")
+            .output()
+            .map_err(|e| format!("跑索引失败: {e}"))?;
+
+        let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+        let err = String::from_utf8_lossy(&out.stderr);
+        if !err.trim().is_empty() {
+            text.push('\n');
+            text.push_str(&err);
+        }
+        Ok(IndexRunResult {
+            output: text.trim().to_string(),
+            ok: out.status.success(),
+        })
+    })
+    .await
+    .map_err(|e| format!("索引任务崩了: {e}"))?
 }
 
 #[tauri::command]
