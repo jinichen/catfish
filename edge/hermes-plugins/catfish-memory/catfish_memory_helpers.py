@@ -879,27 +879,91 @@ def _load_plugin_config(home: Optional[Path] = None) -> Dict[str, Any]:
         return {}
 
 
+def _read_hermes_env_key(key: str) -> str:
+    """读 hermes 管理的 env key. 双查 os.environ + ~/.hermes/.env 文件.
+
+    BL-PLUGIN-AUTH-FIX (7/27 鸿波): 为什么必须双查 —
+      hermes `hermes_cli/config.py:load_env()` 只**返回 dict 不写 os.environ**.
+      写 os.environ 只发生在 `/reload` 命令 (reload_env():8163) 或
+      `set_env_value():8046`. 所以 plugin 光 os.environ.get() 可能拿不到.
+      hermes 自己的 `get_env_value():8186` 就是双查 (先 os.environ 后 .env 文件),
+      本函数语义跟它对齐.
+
+      不 import hermes_cli.config — plugin 不该耦合 hermes 内部模块 (跨版本易断).
+      Companion Rust 侧 `dream.rs:read_hermes_dev_env()` 也是直读 .env 文件, 同思路.
+
+    parse 规则跟 dream.rs:262-278 对齐: 跳空行/注释, strip 引号.
+    """
+    val = os.environ.get(key, "").strip()
+    if val:
+        return val
+    try:
+        env_path = Path(os.path.expanduser("~")) / ".hermes" / ".env"
+        if not env_path.exists():
+            return ""
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if not line.startswith(f"{key}="):
+                continue
+            raw = line[len(key) + 1:].strip()
+            # strip 成对引号 (跟 dream.rs strip_env_quotes 对齐)
+            if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ("'", '"'):
+                raw = raw[1:-1]
+            return raw.strip()
+    except OSError as e:
+        logger.debug("catfish-memory 读 ~/.hermes/.env 失败 (%s): %s", key, e)
+    return ""
+
+
+_TOKEN_MISSING_MSG = (
+    "catfish-memory: 拿不到 gateway 鉴权 token, %s skip. "
+    "查顺序 ① ~/.hermes/.env OPENAI_API_KEY (hermes→gateway service token, "
+    "跑 central/llm-gateway/refresh-jwt-hermes-env.sh 刷新) "
+    "② env/. env CATFISH_INTERNAL_DEV_TOKEN ③ ~/.catfish/memory_plugin.yaml gateway.token"
+)
+
+
+def _log_token_missing(what: str) -> None:
+    """BL-PLUGIN-AUTH-FIX (7/27): 统一 fail-loud. 老代码 4 处静默 return None,
+    员工永远不知道 distill/wiki 从没跑过 (Dream Engine 9.7 天没跑就是这么来的).
+    只记日志不弹 UI (后台任务失败不该打扰员工 · 鸿波 7/27 拍)."""
+    logger.warning(_TOKEN_MISSING_MSG, what)
+
+
 def _gateway_dev_token() -> str:
-    """从 env 拿 gateway internal dev token. 没设返空 (caller skip).
+    """拿调 gateway 的鉴权 token. 没拿到返空 (caller skip + fail-loud log).
 
-    设计取舍 (Week 2 Step D 部署前确认): 不依赖 gateway 那边的
-    ensure_internal_dev_token() runtime 生成 — plugin 是 in-hermes 进程, import
-    gateway code 跨进程不健康. 必须**两个进程都从同一个 env 读**, plugin (hermes
-    进程) 和 gateway 进程的 env 都设这个值.
+    BL-PLUGIN-AUTH-FIX (7/27 鸿波 catch "Dream Engine 9.7 天没跑"):
 
-    BL-FIX37 妥协 (5/19 Week 2 Step D): 老 BL-FIX37 设计是 gateway 启动自动
-    生成 random + 不落盘 (外部抓不到, 重启即变). plugin 在另一进程必须能拿
-    同一个值 → 退让成显式预设到 .env 文件. 文件 chmod 600 + .gitignore 兜底
-    安全性. 跟 HERMES_SERVICE_TOKEN 同套路.
+    ── 真因 ──
+    老实现只读 CATFISH_INTERNAL_DEV_TOKEN. 但那是 **gateway 进程内 loopback 专用**
+    (central/llm-gateway/.../auth/dev_token.py:11-15 明写 "启动时随机生成, 进程内存,
+    重启即变, 不写 .env 文件"), 真 caller 只有 gateway 自己的 proactive.py /
+    conversation_compressor.py. plugin 跑在 **hermes 进程** (另一进程 · 生产还跨机),
+    永远拿不到 → _call_distill_llm 静默 return None → Dream Engine 自动蒸馏从没跑过.
 
-    P24 (6/5 鸿波): yaml 接入 — ~/.catfish/memory_plugin.yaml 加 `gateway.token`
-    兜底 (env 优先). yaml 文件本身应 chmod 600 防 secret 泄露.
+    ── 正解 ──
+    plugin 在 hermes 进程内, 调的又是 gateway, 就该复用 **hermes → gateway 这一跳**
+    的凭证 = .env `OPENAI_API_KEY`:
+      - aud=catfish-gateway · token_use=service · scope 含 chat.completions
+      - 由 hermes-cli client_credentials 派发 (scope 经 identity 白名单校验, 可信)
+      - refresh-jwt-hermes-env.sh 30 天刷新 (已有维护机制)
+      - 生产分离时 OPENAI_BASE_URL 指中央 · 这 token 也是中央派发 · **天然跨机**
+
+    链路: Companion ─[API_SERVER_KEY]→ hermes:8642 ─[OPENAI_API_KEY]→ gateway:8999 → LLM
+                                          └── 本 plugin (in-process, 复用第 2 跳凭证)
 
     优先级:
-      1. env CATFISH_INTERNAL_DEV_TOKEN (跟 gateway auth/dev_token.py 同名)
-      2. yaml gateway.token
+      1. OPENAI_API_KEY (hermes→gateway service token · 生产正路)
+      2. CATFISH_INTERNAL_DEV_TOKEN (本机 dev · gateway 同机且手工预设过时用)
+      3. yaml gateway.token (P24 6/5 手工预设兜底)
     """
-    token = os.environ.get("CATFISH_INTERNAL_DEV_TOKEN", "").strip()
+    token = _read_hermes_env_key("OPENAI_API_KEY")
+    if token:
+        return token
+    token = _read_hermes_env_key("CATFISH_INTERNAL_DEV_TOKEN")
     if token:
         return token
     cfg = _load_plugin_config()
@@ -925,9 +989,7 @@ async def _call_summarize_llm(
         return None
     token = _gateway_dev_token()
     if not token:
-        logger.info(
-            "catfish-memory: CATFISH_GATEWAY_DEV_TOKEN 没设, summarize skip (返空)"
-        )
+        _log_token_missing("summarize (sync_turn 会话总结)")
         return None
 
     # 拼上下文
@@ -993,6 +1055,7 @@ async def _call_distill_llm(
         return None
     token = _gateway_dev_token()
     if not token:
+        _log_token_missing("distill (Dream Engine 长期记忆蒸馏)")
         return None
     try:
         import httpx
@@ -1077,6 +1140,7 @@ async def _call_analysis_llm(
         return None
     token = _gateway_dev_token()
     if not token:
+        _log_token_missing("wiki analysis (Step 1 实体抽取)")
         return None
     try:
         import httpx
@@ -1139,6 +1203,7 @@ async def _call_generation_llm(
         return None
     token = _gateway_dev_token()
     if not token:
+        _log_token_missing("wiki generation (Step 2 条目生成)")
         return None
     try:
         import httpx
@@ -1277,6 +1342,7 @@ async def _call_merge_llm(
         return None
     token = _gateway_dev_token()
     if not token:
+        _log_token_missing("wiki merge (条目合并)")
         return None
     try:
         import httpx

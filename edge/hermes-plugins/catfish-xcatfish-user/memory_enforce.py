@@ -181,6 +181,63 @@ _CLASSIFY_SYSTEM_PROMPT = (
 )
 
 
+def _read_hermes_env_key(key: str) -> str:
+    """读 hermes 管理的 env key. 双查 os.environ + ~/.hermes/.env 文件.
+
+    BL-PLUGIN-AUTH-FIX (7/27 鸿波): 为什么必须双查 —
+      hermes `hermes_cli/config.py:load_env()` 只**返回 dict 不写 os.environ**
+      (写 os.environ 只发生在 `/reload` 命令或 set_env_value). plugin 光
+      os.environ.get() 可能拿不到. hermes 自己的 `get_env_value():8186` 就是双查,
+      本函数语义跟它对齐. 不 import hermes_cli.config (跨版本易断).
+
+    parse 规则跟 Companion `dream.rs:read_hermes_dev_env()` 对齐.
+    """
+    val = os.environ.get(key, "").strip()
+    if val:
+        return val
+    try:
+        env_path = Path(os.path.expanduser("~")) / ".hermes" / ".env"
+        if not env_path.exists():
+            return ""
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if not line.startswith(f"{key}="):
+                continue
+            raw = line[len(key) + 1:].strip()
+            if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ("'", '"'):
+                raw = raw[1:-1]
+            return raw.strip()
+    except OSError as e:
+        logger.debug("memory_enforce 读 ~/.hermes/.env 失败 (%s): %s", key, e)
+    return ""
+
+
+def _gateway_auth_token() -> str:
+    """拿调 gateway 的鉴权 token.
+
+    BL-PLUGIN-AUTH-FIX (7/27 鸿波): 老实现只读 CATFISH_INTERNAL_DEV_TOKEN — 那是
+    **gateway 进程内 loopback 专用** (central/llm-gateway/.../auth/dev_token.py:11-15
+    "启动时随机生成, 进程内存, 重启即变, 不写 .env"). 本 plugin 跑 **hermes 进程**
+    (另一进程 · 生产还跨机), 永远拿不到 → 老代码 `if token:` 为假就不带
+    Authorization 发出去 → gateway 401 → enforce 静默降级.
+
+    正解 · 复用 **hermes → gateway 这一跳**的凭证 = .env OPENAI_API_KEY
+    (aud=catfish-gateway · token_use=service · hermes-cli client_credentials 派发 ·
+    refresh-jwt-hermes-env.sh 30 天刷新 · 生产分离时中央派发天然跨机).
+
+    链路: Companion ─[API_SERVER_KEY]→ hermes:8642 ─[OPENAI_API_KEY]→ gateway:8999
+                                          └── 本 plugin (in-process, 复用第 2 跳)
+
+    优先级: 1. OPENAI_API_KEY  2. CATFISH_INTERNAL_DEV_TOKEN (本机 dev 兜底)
+    """
+    return (
+        _read_hermes_env_key("OPENAI_API_KEY")
+        or _read_hermes_env_key("CATFISH_INTERNAL_DEV_TOKEN")
+    )
+
+
 def _classify_memory_route_diag(content: str, model: str) -> tuple[Optional[dict], str]:
     """调 gateway /v1/chat/completions 让 LLM 判定 route. 返 (result, error_str).
 
@@ -198,8 +255,8 @@ def _classify_memory_route_diag(content: str, model: str) -> tuple[Optional[dict
     except ImportError:
         return None, "httpx 没装 (catfish-tool-bridge 应自带)"
 
-    gateway_url = os.environ.get("CATFISH_GATEWAY_URL", "http://127.0.0.1:8999")
-    token = os.environ.get("CATFISH_INTERNAL_DEV_TOKEN", "")
+    gateway_url = _read_hermes_env_key("CATFISH_GATEWAY_URL") or "http://127.0.0.1:8999"
+    token = _gateway_auth_token()
     headers = {
         "Content-Type": "application/json",
         # 标记内部 enforce 流量 (gateway 可识别, audit 区分常规 LLM call)
@@ -207,8 +264,20 @@ def _classify_memory_route_diag(content: str, model: str) -> tuple[Optional[dict
         "X-Catfish-Skip-Identity": "true",
         "X-Catfish-Internal": "true",
     }
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
+    if not token:
+        # BL-PLUGIN-AUTH-FIX (7/27 鸿波): 老代码 `if token:` 为假时**连 Authorization
+        # 都不带**就发出去 → gateway 401 → 静默降级, 员工永远不知道 enforce 没在跑.
+        # 跟本文件 7/22 军规 ("不硬编就不混乱, fail-loud 才是正解") 一致: 报清楚.
+        # 只记日志不 block (本 enforce 设计原则 3 是 fail-silent — LLM 调挂放行).
+        logger.warning(
+            "catfish-xcatfish-user memory_enforce: 拿不到 gateway 鉴权 token, "
+            "LLM 二次校验 skip (放行 memory write). 查顺序 "
+            "① ~/.hermes/.env OPENAI_API_KEY (hermes→gateway service token, 跑 "
+            "central/llm-gateway/refresh-jwt-hermes-env.sh 刷新) "
+            "② env/.env CATFISH_INTERNAL_DEV_TOKEN"
+        )
+        return None, "拿不到 gateway 鉴权 token (见 log)"
+    headers["Authorization"] = f"Bearer {token}"
 
     payload = {
         "model": model,
