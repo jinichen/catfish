@@ -1,0 +1,47 @@
+# projects/daosheng/.gitignore
+#
+# 军规 (BL-PROJECTS-LAYER 7/27): 真业务数据不进 git · 只 track schema 和方法论.
+# 跟 delivery/dahua-poc/.gitignore 同思路 — source of truth 才 track,
+# 生成产物和敏感内容一律不进.
+
+# ── 客户机密 · 绝不 commit ──
+# 真合同 / 客户名单 / 企业名录 / 员工信息 / 财务数据
+data/
+contracts/
+customers/
+*-真实数据.*
+*-机密.*
+*-内部.*
+
+# ── 知识库真数据 (只 track schema) ──
+# 认证要求全文 / 法规原文 / 专利全文 · 版权 + 体积
+knowledge-data/
+knowledge-schema/**/samples/
+*.pdf
+
+# ── PPT 大二进制 ──
+# 源码 (build.js) 必 track · 输出可从源码重生成
+# 例外: 定稿版手动 `git add -f deck/xxx.pptx` 留档
+deck/*.pptx
+deck/*.pdf
+deck/slide-*.jpg
+deck/slide-*.png
+deck/node_modules/
+deck/*.bak.js
+deck/package-lock.json
+
+# ── deck/archive/ · 历史版本归档 (本地留档 · 不进 git) ──
+# v1-v11 迭代过程 · 每版 build.js 已被覆盖无法重生成 · 但叙事已废弃
+# (v1/v2/v3 是 VC 投资视角 · v4-v11 是 v12 的迭代过程)
+# 本地留着可回看 · 8MB 二进制不该进仓库
+deck/archive/
+
+# ── 参考材料 (客户给的原始文件 · 体积大 + 可能含机密) ──
+reference/
+*.pptx.orig
+
+# ── 临时 / 工作文件 ──
+*.tmp
+*.swp
+~$*
+.DS_Store
