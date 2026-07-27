@@ -42,13 +42,15 @@ pub fn schedule_autostart() {
 }
 
 // ============================================================
-// catfish-tools MCP 注册自愈 (BL-MCP-CATFISH-TOOLS-MISSING 7/27 鸿波实盘)
+// hermes config 自愈 (7/27 鸿波实盘挖出来的两个坑)
+//   BL-MCP-CATFISH-TOOLS-MISSING —— catfish 工具对 LLM 全程不可见
+//   BL-BROWSER-FAKEIP-BLOCKED    —— fake-IP 代理触发 hermes SSRF 误拦
 // ============================================================
 
 /// hermes 通过这个名字加载 catfish 的 MCP server, 拿到全部 catfish_* tool.
 const CATFISH_TOOLS_MCP_NAME: &str = "catfish-tools";
 
-/// 保证 ~/.hermes/config.yaml 里有 mcp_servers.catfish-tools. 改动过返 true.
+/// 保证 ~/.hermes/config.yaml 里两处关键配置正确. 改动过返 true.
 ///
 /// # 为什么需要这个
 ///
@@ -115,11 +117,11 @@ pub fn ensure_catfish_tools_mcp_registered() -> bool {
             return false;
         }
     };
-    let new_text = match patch_catfish_tools_mcp(&text, &command, &pythonpath, |p| {
+    let new_text = match patch_hermes_config(&text, &command, &pythonpath, |p| {
         std::path::Path::new(p).exists()
     }) {
         Ok(Some(t)) => t,
-        Ok(None) => return false, // 已经注册好了, 绝大多数情况走这
+        Ok(None) => return false, // 已经都对了, 绝大多数情况走这
         Err(why) => {
             // 配置形态不认识就报出来, 别自作主张覆盖员工的文件
             log::warn!("autostart: {} 不动它 ({why})", cfg_path.display());
@@ -134,11 +136,14 @@ pub fn ensure_catfish_tools_mcp_registered() -> bool {
     match std::fs::write(&cfg_path, new_text) {
         Ok(()) => {
             log::warn!(
-                "autostart: ⚠ ~/.hermes/config.yaml 缺 mcp_servers.{name} —— 已自动补上.\n\
-                 　 这是 catfish 全部 catfish_* 工具 (catfish_browser_* / catfish_run_skill /\n\
-                 　 catfish_search_* ...) 进 hermes 的唯一通道, 缺了 LLM 只剩 hermes builtin.\n\
-                 　 command={command}  args=[-m catfish_tool_bridge.mcp_server]\n\
-                 　 原配置已备份到 {bak}\n\
+                "autostart: ⚠ 修补了 ~/.hermes/config.yaml (备份: {bak})\n\
+                 　 ① mcp_servers.{name} —— catfish 全部 catfish_* 工具\n\
+                 　    (catfish_browser_* / catfish_run_skill / catfish_search_* ...)\n\
+                 　    进 hermes 的唯一通道, 缺了 LLM 只剩 hermes builtin 那 30 个.\n\
+                 　    command={command}  args=[-m catfish_tool_bridge.mcp_server]\n\
+                 　 ② security.allow_private_urls=true —— fake-IP 模式代理会把外网域名\n\
+                 　    解析到 198.18.0.x, hermes SSRF 检查判成内网地址全部拦掉.\n\
+                 　    云 metadata 端点 (169.254.169.254) 仍然永远拦, 不受影响.\n\
                  　 ★ 需要重启 hermes 才生效: hermes gateway stop && hermes gateway start",
                 name = CATFISH_TOOLS_MCP_NAME,
                 command = command,
@@ -153,13 +158,41 @@ pub fn ensure_catfish_tools_mcp_registered() -> bool {
     }
 }
 
-/// 纯函数: 给定 config.yaml 文本, 返回补好 mcp_servers.catfish-tools 的新文本.
+/// 纯函数: 给定 config.yaml 文本, 返回补好的新文本 (两处一起补).
 ///
-/// `Ok(None)` = 已经注册好且 command 可用, 不用改.
+/// 1. `mcp_servers.catfish-tools` —— catfish 全部工具进 hermes 的唯一通道
+/// 2. `security.allow_private_urls` —— 见下面的说明
+///
+/// `Ok(None)` = 两处都已经对了, 不用改.
 /// `Err(_)`   = 配置形态不认识 (解析失败 / 顶层不是 mapping), 调用方别动文件.
 ///
 /// `command_exists` 注入进来是为了可测 —— 单测不依赖真实文件系统.
-fn patch_catfish_tools_mcp(
+///
+/// # 为什么要开 security.allow_private_urls
+///
+/// BL-BROWSER-FAKEIP-BLOCKED (7/27 鸿波实盘): 他让鲶鱼开网页, 两个 tool 都返绿勾
+/// 但页面纹丝不动. 翻 ~/.hermes/logs/agent.log 才看到真实返回:
+///
+///     tools.url_safety: Blocked request to private/internal address:
+///       www.sohu.com   -> 198.18.0.78
+///       www.google.com -> 198.18.0.76
+///       raw.githubusercontent.com -> 198.18.0.15
+///
+/// 每个外网域名都解析到 198.18.0.x 且编号递增 —— 典型的 **fake-IP 模式代理**
+/// (Clash / Surge / sing-box), 给每个域名分配一个虚拟 IP 由代理转发.
+/// 198.18.0.0/15 是 RFC 2544 基准测试保留段, Python ipaddress 判 is_private=True,
+/// 于是 hermes 的 SSRF 检查全部拦掉.
+///
+/// hermes 自己的源码开头 (tools/url_safety.py:8-11) 逐字写了这个场景:
+///   "can be globally disabled via `security.allow_private_urls: true` for
+///    environments where DNS resolves external domains to private/benchmark-range
+///    IPs (OpenWrt routers, corporate proxies, VPNs that use 198.18.0.0/15 ...)"
+///
+/// 即便开了, 云 metadata 端点 (169.254.169.254 / metadata.google.internal) 仍然
+/// **永远**被拦 —— 那是 `_ALWAYS_BLOCKED_NETWORKS`, 不受这个开关影响.
+/// 这也正是 catfish 自己 `_check_ssrf_safe()` 的立场: 只拦 metadata, 不拦内网 IP
+/// (央企客户的 10.10.40.102 EIS / 192.168 / 172.16 本来就是日常正常 URL).
+fn patch_hermes_config(
     text: &str,
     command: &str,
     pythonpath: &str,
@@ -174,22 +207,49 @@ fn patch_catfish_tools_mcp(
     let servers_key = serde_yaml::Value::String("mcp_servers".into());
     let name_key = serde_yaml::Value::String(CATFISH_TOOLS_MCP_NAME.into());
 
-    // 已注册且 command 指向的解释器还在 → 什么都不用做 (绝大多数情况)
-    if let Some(existing) = root
+    let mcp_ok = root
         .get(&servers_key)
         .and_then(|v| v.as_mapping())
         .and_then(|m| m.get(&name_key))
         .and_then(|v| v.as_mapping())
-    {
-        let cmd_ok = existing
-            .get(serde_yaml::Value::String("command".into()))
-            .and_then(|v| v.as_str())
-            .map(&command_exists)
-            .unwrap_or(false);
-        if cmd_ok {
-            return Ok(None);
+        .and_then(|e| e.get(serde_yaml::Value::String("command".into())))
+        .and_then(|v| v.as_str())
+        .map(&command_exists)
+        .unwrap_or(false);
+
+    let ssrf_key = serde_yaml::Value::String("security".into());
+    let allow_key = serde_yaml::Value::String("allow_private_urls".into());
+    let ssrf_ok = root
+        .get(&ssrf_key)
+        .and_then(|v| v.as_mapping())
+        .and_then(|m| m.get(&allow_key))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if mcp_ok && ssrf_ok {
+        return Ok(None);
+    }
+
+    // ── security.allow_private_urls ──
+    if !ssrf_ok {
+        if !root.contains_key(&ssrf_key) {
+            root.insert(
+                ssrf_key.clone(),
+                serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
+            );
         }
-        // 注册着但解释器没了 (venv 重建过 / 路径变了) → 重写成当前正确的
+        let sec = root
+            .get_mut(&ssrf_key)
+            .and_then(|v| v.as_mapping_mut())
+            .ok_or_else(|| "security 段不是 mapping".to_string())?;
+        sec.insert(allow_key, serde_yaml::Value::Bool(true));
+    }
+
+    if mcp_ok {
+        // MCP 那半边已经对了, 只补了 SSRF 开关
+        return serde_yaml::to_string(&value)
+            .map(Some)
+            .map_err(|e| format!("序列化失败: {e}"));
     }
 
     let mut entry = serde_yaml::Mapping::new();
@@ -252,7 +312,7 @@ session:
 
     #[test]
     fn adds_mcp_section_when_missing() {
-        let out = patch_catfish_tools_mcp(REAL_CONFIG, "/venv/bin/python", "/tb/src", |_| true)
+        let out = patch_hermes_config(REAL_CONFIG, "/venv/bin/python", "/tb/src", |_| true)
             .unwrap()
             .expect("缺 mcp_servers 时该返回新文本");
         let v: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
@@ -279,7 +339,7 @@ session:
     #[test]
     fn preserves_other_sections() {
         // config.yaml 里有 model.api_key 等要命的东西, 补 MCP 不能碰它们
-        let out = patch_catfish_tools_mcp(REAL_CONFIG, "/venv/bin/python", "/tb/src", |_| true)
+        let out = patch_hermes_config(REAL_CONFIG, "/venv/bin/python", "/tb/src", |_| true)
             .unwrap()
             .unwrap();
         let v: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
@@ -296,12 +356,62 @@ session:
     }
 
     #[test]
-    fn noop_when_already_registered_and_command_exists() {
+    fn noop_when_everything_already_correct() {
+        let cfg = format!(
+            "{REAL_CONFIG}mcp_servers:\n  catfish-tools:\n    command: /venv/bin/python\n\
+             security:\n  allow_private_urls: true\n"
+        );
+        let out = patch_hermes_config(&cfg, "/venv/bin/python", "/tb/src", |_| true).unwrap();
+        assert!(out.is_none(), "两处都对 → 不该改文件");
+    }
+
+    #[test]
+    fn adds_ssrf_toggle_even_when_mcp_ok() {
+        // MCP 已注册但 SSRF 开关没开 —— 只补开关, 别动 MCP
+        // BL-BROWSER-FAKEIP-BLOCKED: fake-IP 代理把外网域名解析到 198.18.0.x
         let cfg = format!(
             "{REAL_CONFIG}mcp_servers:\n  catfish-tools:\n    command: /venv/bin/python\n"
         );
-        let out = patch_catfish_tools_mcp(&cfg, "/venv/bin/python", "/tb/src", |_| true).unwrap();
-        assert!(out.is_none(), "已注册且解释器在 → 不该改文件");
+        let out = patch_hermes_config(&cfg, "/venv/bin/python", "/tb/src", |_| true)
+            .unwrap()
+            .expect("缺 SSRF 开关时该返回新文本");
+        let v: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(
+            v.get("security").unwrap().get("allow_private_urls").unwrap().as_bool(),
+            Some(true)
+        );
+        // MCP 那边原样保留
+        assert_eq!(
+            v.get("mcp_servers").unwrap().get("catfish-tools").unwrap()
+                .get("command").unwrap().as_str().unwrap(),
+            "/venv/bin/python"
+        );
+    }
+
+    #[test]
+    fn adds_both_when_both_missing() {
+        let out = patch_hermes_config(REAL_CONFIG, "/venv/bin/python", "/tb/src", |_| true)
+            .unwrap()
+            .unwrap();
+        let v: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
+        assert!(v.get("mcp_servers").unwrap().get("catfish-tools").is_some());
+        assert_eq!(
+            v.get("security").unwrap().get("allow_private_urls").unwrap().as_bool(),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn keeps_existing_security_keys() {
+        // security 段下可能有别的 key, 不能被挤掉
+        let cfg = format!("{REAL_CONFIG}security:\n  some_other_flag: false\n");
+        let out = patch_hermes_config(&cfg, "/venv/bin/python", "/tb/src", |_| true)
+            .unwrap()
+            .unwrap();
+        let v: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
+        let sec = v.get("security").unwrap();
+        assert_eq!(sec.get("allow_private_urls").unwrap().as_bool(), Some(true));
+        assert_eq!(sec.get("some_other_flag").unwrap().as_bool(), Some(false));
     }
 
     #[test]
@@ -310,7 +420,7 @@ session:
         let cfg = format!(
             "{REAL_CONFIG}mcp_servers:\n  catfish-tools:\n    command: /gone/python\n"
         );
-        let out = patch_catfish_tools_mcp(&cfg, "/new/python", "/tb/src", |p| p == "/new/python")
+        let out = patch_hermes_config(&cfg, "/new/python", "/tb/src", |p| p == "/new/python")
             .unwrap()
             .expect("解释器没了该重写");
         let v: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
@@ -327,7 +437,7 @@ session:
         let cfg = format!(
             "{REAL_CONFIG}mcp_servers:\n  catfish-local-search:\n    command: /x/py\n"
         );
-        let out = patch_catfish_tools_mcp(&cfg, "/venv/bin/python", "/tb/src", |_| true)
+        let out = patch_hermes_config(&cfg, "/venv/bin/python", "/tb/src", |_| true)
             .unwrap()
             .unwrap();
         let v: serde_yaml::Value = serde_yaml::from_str(&out).unwrap();
@@ -339,7 +449,7 @@ session:
     #[test]
     fn errors_on_unparseable_config() {
         // 坏配置不是我们能修的 —— 返 Err 让调用方别动文件
-        assert!(patch_catfish_tools_mcp("::: not yaml :::", "/p", "/s", |_| true).is_err());
+        assert!(patch_hermes_config("::: not yaml :::", "/p", "/s", |_| true).is_err());
     }
 }
 

@@ -16,6 +16,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { streamChat } from "../lib/chat";
 import { ensureTools } from "./chat/toolsCache";
 import { toolBridgeCallTool, sessionMessageAppend } from "../lib/tauri";
+import { detectToolBusinessError } from "../lib/toolResult";
 import type { Attachment, ChatMessage, ToolCall } from "../types/chat";
 
 /** 跟 useChat 同款上限. 跨 skill 一次最多 20 轮 (5/13 鸿波拍). */
@@ -337,6 +338,13 @@ export function useTaskChat(opts: UseTaskChatOpts): UseTaskChatReturn {
               typeof res.result === "string"
                 ? res.result
                 : JSON.stringify(res.result);
+            // BL-TOOLCALL-FAKE-OK (7/27): 跟 useChat 同款 —— res.ok 只是"调到了
+            // tool 没抛异常", tool 可以调用成功地告诉你它失败了 (hermes
+            // browser_navigate 返 {"success":false,"error":"Blocked..."}).
+            // 不看这层, UI 就把失败渲染成 ✓, 员工和排查的人一起被带偏。
+            if (ok && detectToolBusinessError(resultStr)) {
+              ok = false;
+            }
           } catch (e) {
             ok = false;
             resultStr = String(e);

@@ -21,6 +21,7 @@ import {
 } from "../store/auto_continue";  // 5/13 鸿波"长程任务咋办" — gateway 删 BL-FIX23 后客户端补
 import { streamChat, type OpenAITool } from "../lib/chat";
 import { checkPromiseOnly } from "../lib/promiseCheck";
+import { detectToolBusinessError } from "../lib/toolResult";
 import { config } from "../lib/env";
 import * as streamRegistry from "../lib/streamRegistry";
 import {
@@ -449,6 +450,17 @@ export function useChat(_initialModel: string) {
               typeof res.result === "string"
                 ? res.result
                 : JSON.stringify(res.result);
+            // BL-TOOLCALL-FAKE-OK (7/27 鸿波实盘): res.ok 只说明"调到了 tool 且没抛
+            // 异常" —— tool 完全可以调用成功地告诉你它失败了:
+            //   browser_navigate → {"success": false, "error": "Blocked: URL targets
+            //                       a private or internal address"}
+            // 老代码到这就标 ✓ 了。鸿波截图里两个 browser tool 全是绿勾、页面纹丝不动,
+            // 我俩据此往 CDP / 页面渲染方向查了好几轮,真相一直写在返回值里被 UI 吞掉。
+            const bizErr = detectToolBusinessError(resultStr);
+            if (bizErr) {
+              ok = false;
+              errMsg = bizErr;
+            }
           } else {
             errMsg = res.error ?? "tool 调用失败";
             resultStr = JSON.stringify({ error: errMsg });
