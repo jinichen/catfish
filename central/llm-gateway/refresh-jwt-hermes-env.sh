@@ -39,28 +39,100 @@ echo "  ✓ JWT 拿到 · 长度=${#NEW_JWT}"
 echo ""
 echo "→ [2/4] sed ~/.hermes/.env OPENAI_API_KEY..."
 cp ~/.hermes/.env ~/.hermes/.env.bak-$(date +%s)
+# BL-REFRESH-JWT-YAML-FIX (7/27): 老代码 count=1 只替换第一个 OPENAI_API_KEY=,
+# 若文件里有重复 key (历史误操作 / 手工加过) 后面的残留, hermes load_env() 拿哪个
+# 取决于 parse 顺序 → 可能用到旧 token. 改: 删所有旧行 + 在原位置插新的 (保 diff 友好),
+# 完事 verify 只剩 1 个.
 python3 <<PYEOF
-import re
+import sys
 p = '/Users/chenhongbo/.hermes/.env'
-with open(p) as f: content = f.read()
-if 'OPENAI_API_KEY=' in content:
-    new = re.sub(r'^OPENAI_API_KEY=.*\$', 'OPENAI_API_KEY=$NEW_JWT', content, count=1, flags=re.M)
+with open(p) as f:
+    lines = f.read().splitlines()
+
+KEY = 'OPENAI_API_KEY='
+idxs = [i for i, l in enumerate(lines) if l.strip().startswith(KEY)]
+if len(idxs) > 1:
+    print(f"  ⚠ 检出 {len(idxs)} 个 {KEY} 行 (重复 key) → 只保留 1 个")
+
+new_line = KEY + '$NEW_JWT'
+if idxs:
+    lines[idxs[0]] = new_line
+    # 倒序删多余的 (防 index 偏移)
+    for i in reversed(idxs[1:]):
+        del lines[i]
 else:
-    new = content.rstrip() + '\nOPENAI_API_KEY=$NEW_JWT\n'
-with open(p, 'w') as f: f.write(new)
-print('  ✓ OPENAI_API_KEY 替换/追加完')
+    while lines and not lines[-1].strip():
+        lines.pop()
+    lines.append(new_line)
+
+with open(p, 'w') as f:
+    f.write('\n'.join(lines) + '\n')
+
+# verify
+with open(p) as f:
+    n = sum(1 for l in f if l.strip().startswith(KEY))
+if n != 1:
+    print(f"  ❌ verify 失败 · .env 里有 {n} 个 {KEY} (期望 1) — 手工检查 {p}")
+    sys.exit(1)
+print('  ✓ OPENAI_API_KEY 替换/追加完 (verify: 1 行)')
 PYEOF
 
 # 同步 · config.yaml api_key (保险 · 双写)
+#
+# BL-REFRESH-JWT-YAML-FIX (7/27 鸿波实测撞): 老代码用 regex 改, 写坏过 config.yaml.
+#
+# 老代码:  re.sub(r'^(  api_key:\s*).*$', ..., count=1, flags=re.M)
+#   `.*$` 只吃**一行** + count=1 只替换 1 次. 一旦 api_key 变成多行 (YAML plain
+#   scalar 续行), 就只替换第一行, 缩进的旧 JWT 残留:
+#       model:
+#         api_key: <新 JWT>
+#           <旧 JWT · 已过期>     ← 残留
+#   YAML 解析后 api_key = "新JWT 旧JWT" 两个拼一起 → hermes 拿到废 token.
+#   而且**这 bug 自我延续** — 下次刷新还是只改第一行, 永远修不回来.
+#
+# 修: 改用 yaml 库读写 (结构化, 不可能产生续行残留) + 改完 verify 只有 1 个 JWT.
+#     config.yaml 零注释纯数据 (7/27 实测), safe_dump 重写零损失.
+#     sort_keys=False 保持原 key 顺序, allow_unicode=True 防中文转义.
 echo ""
-echo "  → 同步 · config.yaml model.api_key..."
+echo "  → 同步 · config.yaml model.api_key (yaml 库结构化写)..."
 python3 <<PYEOF
-import re
+import sys
+try:
+    import yaml
+except ImportError:
+    print("  ❌ 缺 pyyaml — config.yaml 没同步 (但 .env 已更新, hermes 走 .env 也能跑)")
+    print("     补: pip3 install pyyaml 后重跑本脚本")
+    sys.exit(0)   # 不阻塞 · .env 是主路径
+
 p = '/Users/chenhongbo/.hermes/config.yaml'
-with open(p) as f: content = f.read()
-new = re.sub(r'^(  api_key:\s*).*\$', r'\1$NEW_JWT', content, count=1, flags=re.M)
-with open(p, 'w') as f: f.write(new)
-print('  ✓ config.yaml api_key 也同步')
+with open(p) as f:
+    data = yaml.safe_load(f) or {}
+if not isinstance(data, dict):
+    print("  ❌ config.yaml 不是 dict, 跳过 (手工检查)")
+    sys.exit(0)
+
+model = data.get('model')
+if not isinstance(model, dict):
+    model = {}
+    data['model'] = model
+
+old = str(model.get('api_key') or '')
+# fail-loud · 检出老多行残留 (老 regex bug 的后遗症)
+if old.count('eyJhbGci') > 1:
+    print(f"  ⚠ 检出 api_key 含 {old.count('eyJhbGci')} 个 JWT (老 regex bug 残留) → 本次一并清干净")
+
+model['api_key'] = '$NEW_JWT'
+with open(p, 'w') as f:
+    yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False, default_flow_style=False)
+
+# verify · 重读确认只有 1 个 JWT
+with open(p) as f:
+    check = yaml.safe_load(f)
+n = str(check.get('model', {}).get('api_key') or '').count('eyJhbGci')
+if n != 1:
+    print(f"  ❌ verify 失败 · api_key 里有 {n} 个 JWT (期望 1) — 手工检查 {p}")
+    sys.exit(1)
+print('  ✓ config.yaml api_key 也同步 (verify: 1 个 JWT)')
 PYEOF
 
 # ─── [3/4] reset auth.json exhausted 状态 ─────────────
