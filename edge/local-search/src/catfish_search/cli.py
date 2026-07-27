@@ -21,7 +21,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from .config import CONFIG_FILE, ensure_config_exists, load_config
-from .indexer import cleanup_missing, run_index
+from .indexer import cleanup_missing, full_index_lock, run_index
 from .query import search, stats_summary
 
 logger = logging.getLogger("catfish.search.cli")
@@ -56,7 +56,16 @@ def cmd_index(args) -> int:
         )
         sys.stdout.flush()
 
-    stats = run_index(cfg, on_progress=on_progress)
+    # BL-SEARCH-DB-LOCKED (7/27): 跟 watcher 的 bootstrap 抢同一把锁。
+    # 员工手点"重建索引"时 watcher 可能正在补建，两个一起扫除了白干还抢写锁。
+    with full_index_lock() as got:
+        if not got:
+            print(
+                "另一个进程正在做全量索引（多半是 Local Search watcher 在补建），"
+                "等它跑完再来。\n看是谁: pgrep -fl 'catfish_search'"
+            )
+            return 1
+        stats = run_index(cfg, on_progress=on_progress)
     if not args.quiet:
         print()
     print(

@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import fnmatch
 import hashlib
 import logging
@@ -55,11 +56,48 @@ CREATE TABLE IF NOT EXISTS indexed_roots (
 """
 
 
+# 撞锁时最多等这么久再放弃（秒）。
+#
+# BL-SEARCH-DB-LOCKED (7/27 鸿波实盘): 老代码 sqlite3.connect() 不带 timeout，
+# 而 sqlite 的 busy_timeout 默认是 **0** —— 一撞锁立刻抛 OperationalError，
+# 不重试。以前 watcher 只做几毫秒的增量写，撞上的概率低到没暴露；加了 bootstrap
+# 全量索引（一跑几分钟持续写）之后，任何并发访问当场炸：
+#
+#   sqlite3.OperationalError: database is locked
+#     File ".../indexer.py", line 62, in open_db
+#       conn.executescript(SCHEMA)
+#
+# 谁会并发？Companion 的 autostart 每次启动 pkill+respawn watcher，员工自己
+# 又可能在终端前台跑一个；再加上 tool-bridge 的 style_fingerprint 和
+# Companion 的 local_search_stats 都会来读这个库。
+DB_BUSY_TIMEOUT_SEC = 30.0
+
+# SCHEMA 里建的表，用来判断要不要跑 DDL
+_EXPECTED_TABLES = ("documents", "file_meta", "indexed_roots")
+
+
 def open_db() -> sqlite3.Connection:
     """打开（或初始化）索引库。"""
     DB_FILE.parent.mkdir(exist_ok=True)
-    conn = sqlite3.connect(DB_FILE)
-    conn.executescript(SCHEMA)
+    conn = sqlite3.connect(DB_FILE, timeout=DB_BUSY_TIMEOUT_SEC)
+
+    # WAL: 让读不被写阻塞。全量索引期间 Dashboard 查统计 / style_fingerprint
+    # 抽语料都还能正常读，不会卡住或报 locked。（默认 rollback journal 下，
+    # 写事务会把所有读者挡在门外。）
+    # 库在只读介质 / 网络盘上时 WAL 可能设不了，设不了就算了，busy_timeout 还在。
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    except sqlite3.DatabaseError:
+        pass
+
+    # 只在表确实缺的时候跑 DDL。executescript 会先隐式 COMMIT 再执行，
+    # 每次开库都跑等于每次都抢一下写锁 —— 上面那个 locked 崩栈就停在这行。
+    have = {
+        row[0]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    if not all(t in have for t in _EXPECTED_TABLES):
+        conn.executescript(SCHEMA)
     return conn
 
 
@@ -286,6 +324,45 @@ def run_index(cfg: SearchConfig, on_progress=None) -> dict:
 
     stats["duration_sec"] = round(time.time() - start, 1)
     return stats
+
+
+@contextlib.contextmanager
+def full_index_lock():
+    """跨进程互斥锁，保证同一时刻只有一个进程在做全量索引。
+
+    BL-SEARCH-DB-LOCKED (7/27 鸿波实盘): 他日志里 20:25:13 和 20:25:42 两个
+    watcher 各自宣布"这些目录还没做过全量索引，先补一次"，然后一起扫同一批
+    目录 —— Companion autostart 起了一个，他自己在终端又前台跑了一个。
+    重复劳动之外还互相抢写锁。
+
+    yield True = 拿到锁；yield False = 别人正在跑，调用方应该跳过（不是等，
+    等几分钟没意义，那个进程做完了活也就干了）。
+
+    用 fcntl.flock：进程崩了/被 kill 内核自动释放，不会留下需要人工清的死锁文件。
+    Windows 没有 flock —— 那边直接放行（Companion 目前只发 macOS，
+    daemon_windows.py 是给单进程 daemon 场景的，不存在这个并发）。
+    """
+    try:
+        import fcntl  # noqa: PLC0415
+    except ImportError:
+        yield True
+        return
+
+    DB_FILE.parent.mkdir(exist_ok=True)
+    lock_path = DB_FILE.with_suffix(".index.lock")
+    fh = open(lock_path, "w")  # noqa: SIM115
+    try:
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+    finally:
+        fh.close()
 
 
 def roots_needing_full_index(cfg: SearchConfig) -> list[Path]:

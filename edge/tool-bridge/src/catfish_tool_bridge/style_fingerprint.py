@@ -105,6 +105,10 @@ STYLE_FINGERPRINT_PATH = Path.home() / ".catfish" / "style_fingerprint.json"
 # 只读查询引进一个包依赖.
 SEARCH_DB_PATH = Path.home() / ".catfish" / "search.db"
 
+# 撞锁时最多等这么久 (秒). 跟 catfish_search.indexer.DB_BUSY_TIMEOUT_SEC 对齐.
+# 全量索引一跑几分钟, sqlite 默认 busy_timeout=0 会让这边当场抛 "database is locked".
+DB_BUSY_TIMEOUT_SEC = 30.0
+
 # 算"文书"的扩展名 (存进索引时是带点小写的, indexer.py:139 path.suffix.lower()).
 # 为什么是这几个 / 为什么没有 .xlsx: 见模块 docstring "收哪些文档".
 DOC_FILE_TYPES = (".md", ".txt", ".docx", ".pdf", ".pptx")
@@ -222,11 +226,22 @@ def _load_docs_from_index() -> Tuple[List[Tuple[Path, float, str]], Dict[str, in
             "去 Companion → Dashboard → 📂 搜索范围 建一次索引, 或命令行跑 catfish-search index."
         )
 
-    # 只读打开: 不给 watcher 上锁, 也不会在库损坏时被 sqlite 悄悄重建成空库
+    # 优先只读打开: 不给 watcher 上锁, 也不会在库损坏时被 sqlite 悄悄重建成空库.
+    #
+    # BL-SEARCH-DB-LOCKED (7/27): 索引库开了 WAL 之后, **只读**连接需要能访问
+    # -shm 共享内存索引文件. 没有活跃写者时 -shm 不存在, mode=ro 会直接
+    # "unable to open database file". 这时退回普通打开 —— 库文件上面已经
+    # exists() 过了, 不存在被"悄悄建成空库"的风险; 本函数只发 SELECT, 不写.
+    # timeout 跟索引器那边对齐, 全量索引跑着的时候等而不是当场抛.
     try:
-        conn = sqlite3.connect(f"file:{SEARCH_DB_PATH}?mode=ro", uri=True)
-    except sqlite3.Error as e:
-        raise IndexUnavailable(f"打不开索引库 {SEARCH_DB_PATH}: {e}") from e
+        conn = sqlite3.connect(
+            f"file:{SEARCH_DB_PATH}?mode=ro", uri=True, timeout=DB_BUSY_TIMEOUT_SEC
+        )
+    except sqlite3.Error:
+        try:
+            conn = sqlite3.connect(SEARCH_DB_PATH, timeout=DB_BUSY_TIMEOUT_SEC)
+        except sqlite3.Error as e:
+            raise IndexUnavailable(f"打不开索引库 {SEARCH_DB_PATH}: {e}") from e
 
     funnel = {"indexed_doc_type": 0, "too_short": 0, "not_chinese": 0, "kept": 0}
     candidates: List[Tuple[Path, float, str]] = []

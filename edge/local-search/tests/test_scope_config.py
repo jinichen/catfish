@@ -406,10 +406,12 @@ def test_bootstrap_only_touches_unindexed_roots(monkeypatch):
 
         seen = []
         real = indexer.run_index
-        monkeypatch.setattr(
-            "catfish_search.watcher.run_index",
-            lambda c: (seen.append(list(c.include)), real(c))[1],
-        )
+
+        def spy(c):
+            seen.append(list(c.include))
+            return real(c)
+
+        monkeypatch.setattr("catfish_search.watcher.run_index", spy)
         _bootstrap_missing_roots(
             SearchConfig(include=[a, b], exclude=[], max_file_size_mb=10,
                          file_types={".md"})
@@ -477,3 +479,93 @@ def test_cleanup_purges_now_excluded_entries(monkeypatch):
 
     assert removed == 1
     assert left == [str(keep)]
+
+
+# ── 并发 (BL-SEARCH-DB-LOCKED) ──────────────────────────────
+
+
+def test_open_db_uses_wal_and_busy_timeout(monkeypatch):
+    """老代码 sqlite3.connect() 不带 timeout，busy_timeout 默认 0，一撞锁立刻抛。
+
+    增量写只占几毫秒时没暴露；加了 bootstrap 全量索引（持续写几分钟）之后，
+    任何并发访问当场 `sqlite3.OperationalError: database is locked`。
+    """
+    with tempfile.TemporaryDirectory() as td:
+        monkeypatch.setattr(indexer, "DB_FILE", Path(td) / "t.db")
+        conn = indexer.open_db()
+        try:
+            assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+            assert conn.execute("PRAGMA busy_timeout").fetchone()[0] >= 1000
+        finally:
+            conn.close()
+
+
+def test_open_db_survives_concurrent_write(monkeypatch):
+    """一个连接开着写事务时，另一个 open_db 不该当场抛 locked。
+
+    老代码每次 open_db 都无条件 executescript(SCHEMA)，等于每次都抢一下写锁 ——
+    鸿波那个崩栈就停在 `conn.executescript(SCHEMA)` 这行。
+    """
+    with tempfile.TemporaryDirectory() as td:
+        monkeypatch.setattr(indexer, "DB_FILE", Path(td) / "t.db")
+        writer = indexer.open_db()
+        try:
+            writer.execute("BEGIN IMMEDIATE")
+            writer.execute(
+                "INSERT INTO indexed_roots(root, finished_at, file_count) "
+                "VALUES('/x', 1.0, 1)"
+            )
+            reader = indexer.open_db()  # 老代码在这里抛 locked
+            try:
+                reader.execute("SELECT COUNT(*) FROM file_meta").fetchone()
+            finally:
+                reader.close()
+        finally:
+            writer.rollback()
+            writer.close()
+
+
+def test_full_index_lock_is_exclusive(monkeypatch):
+    """同一时刻只让一个进程做全量索引。
+
+    鸿波日志里 20:25:13 和 20:25:42 两个 watcher 各自宣布"先补一次"，
+    一起扫同一批目录 —— 白干还互相抢写锁。
+    """
+    with tempfile.TemporaryDirectory() as td:
+        monkeypatch.setattr(indexer, "DB_FILE", Path(td) / "t.db")
+        with indexer.full_index_lock() as first:
+            assert first is True
+            with indexer.full_index_lock() as second:
+                assert second is False, "第二个应该拿不到锁"
+        # 释放后能重新拿到
+        with indexer.full_index_lock() as again:
+            assert again is True
+
+
+def test_bootstrap_skips_when_another_process_holds_lock(monkeypatch):
+    """抢不到锁就跳过 —— 干活的那个做完了活也就干了，这里等没意义。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        docs = root / "docs"
+        docs.mkdir()
+        (docs / "存量.md").write_text("存量正文内容", encoding="utf-8")
+        monkeypatch.setattr(indexer, "DB_FILE", root / "t.db")
+        cfg = SearchConfig(
+            include=[docs], exclude=[], max_file_size_mb=10, file_types={".md"}
+        )
+
+        called = []
+
+        def fake_run_index(c):
+            called.append(c)
+            return {"scanned": 0, "indexed": 0, "skipped": 0, "duration_sec": 0.0,
+                    "per_root": {}, "unreadable": []}
+
+        monkeypatch.setattr("catfish_search.watcher.run_index", fake_run_index)
+        with indexer.full_index_lock():  # 模拟另一个进程正拿着
+            _bootstrap_missing_roots(cfg)
+
+        assert called == []
+        # 锁释放后照样该补
+        _bootstrap_missing_roots(cfg)
+        assert len(called) == 1

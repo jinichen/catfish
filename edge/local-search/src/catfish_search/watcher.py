@@ -18,6 +18,7 @@ from pathlib import Path
 
 from .config import SearchConfig, load_config
 from .indexer import (
+    full_index_lock,
     index_path,
     remove_path,
     roots_needing_full_index,
@@ -153,8 +154,21 @@ def _bootstrap_missing_roots(cfg: SearchConfig) -> None:
     todo = roots_needing_full_index(cfg)
     if not todo:
         return
-    logger.info("这些目录还没做过全量索引，先补一次: %s", [str(p) for p in todo])
-    stats = run_index(replace(cfg, include=todo))
+
+    # BL-SEARCH-DB-LOCKED (7/27): 抢跨进程锁。鸿波实盘出现过两个 watcher
+    # （Companion autostart 一个 + 他终端前台一个）同时宣布要补建、一起扫同一批
+    # 目录，除了白干还互相抢写锁抛 "database is locked"。
+    # 抢不到就跳过 —— 干活的那个做完了活也就干了，这里没必要等。
+    with full_index_lock() as got:
+        if not got:
+            logger.info(
+                "另一个进程正在做全量索引，跳过（本进程直接进增量监听）。"
+                "如果不是你有意开了两个，检查一下: pgrep -fl 'catfish_search.cli watch'"
+            )
+            return
+        logger.info("这些目录还没做过全量索引，先补一次: %s", [str(p) for p in todo])
+        stats = run_index(replace(cfg, include=todo))
+
     logger.info(
         "全量索引完成: 扫 %d / 索引 %d / 跳过 %d，耗时 %ss",
         stats["scanned"], stats["indexed"], stats["skipped"], stats["duration_sec"],
