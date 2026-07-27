@@ -63,6 +63,21 @@ class User:
     # 跟 allowed_tools 同语义但 glob 匹配 (namespace:pattern, fnmatch). gateway
     # skills_inject 用它过滤 LLM 看到的 skill catalog.
     effective_allowed_skills: list[str] = None  # type: ignore[assignment]
+    # BL-PLUGIN-AUTH-FIX (7/27 鸿波): OAuth scope claim 拆开的 list.
+    #
+    # 为什么要: app.py `is_internal_call` 老逻辑**只看 X-Catfish-Internal header 值**
+    # 零校验 — 任何拿到员工 JWT 的人加个 header 就免 quota. 现在改成
+    # "header 想要 + 身份真有权" 双条件, 权就看这里有没有 `background.tasks`.
+    #
+    # 来源可信度分层 (重要):
+    #   - client_credentials (service token · hermes-cli): identity 侧
+    #     `routes_token.py:463-479 has_unauthorized_scope()` 白名单校验过 → **可信**
+    #   - authorization_code (员工 SSO): `routes.py:188-229 authorize_submit` 原样
+    #     接受请求里的 scope · **无白名单** → 不可信, 别拿它当授权依据
+    # 所以只有 service token 路径的 background.tasks 才有授权意义.
+    #
+    # [] = 无 scope 信息 (老 token / dev_token 路径 / id_token).
+    scopes: list[str] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         if self.managed_departments is None:
@@ -73,6 +88,18 @@ class User:
             self.effective_allowed_tools = []
         if self.effective_allowed_skills is None:
             self.effective_allowed_skills = []
+        if self.scopes is None:
+            self.scopes = []
+
+    def has_scope(self, scope: str) -> bool:
+        """BL-PLUGIN-AUTH-FIX (7/27): 查 OAuth scope.
+
+        internal_loopback (gateway 调自己) 天然全权 — 它就是 gateway 本身,
+        没走 identity 派发所以没 scope claim, 但不该被自己的校验拦住.
+        """
+        if self.auth_method == "internal_loopback":
+            return True
+        return scope in (self.scopes or [])
 
     def can_access(self, model) -> bool:
         """BL-RBAC-DAY3B (5/17): 真 RBAC. effective_allowed_models 空 = 全允许.

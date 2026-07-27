@@ -20,9 +20,24 @@ token 即使带 X-Catfish-User 也**完全忽略** — 防越权冒充. 别的 s
 2. resolve_effective_user_email:
    - user JWT (sub=email): 忽略 X-Catfish-User, 返 sub
    - hermes-cli service token + 合法 email: 返 header
-   - hermes-cli service token + 没 header: 400
+   - hermes-cli service token + 没 header: **fallback 返 sub** (P3.5.17 6/17 改, 见下)
    - hermes-cli service token + 非 email 格式: 401
    - 非白名单 service token + X-Catfish-User: 忽略 header, 返 sub
+
+# 契约变更 · P3.5.17 (6/17 鸿波)
+
+原设计"白名单 service token 缺 X-Catfish-User → 400". 但 hermes 自带
+auxiliary_client (context 压缩 summary 用) 调 gateway **不传**这个 header —
+那是 hermes 内部 system 行为, 不属于某个员工请求. 400 让 context_compressor
+报 "Error code: 400" + 60s pause, 鸿波 304K 长任务永远不压缩.
+
+改成 fallback 到 sub (跟"非白名单 service token"行为一致): quota / RBAC / audit
+归 client:hermes-cli 头上, 仍可追溯不绕审计. chat 主路径 hermes 照传 header, 行为不变.
+
+实现见 `auth/__init__.py:145-165`.
+
+⚠ 7/27 BL-PLUGIN-AUTH-FIX: 本文件 3 个测试当时没跟着改 (仍断言 raise 400),
+一直红着. 借这次 gateway scope 改动一并修 — 红测试留着会让真回归被忽略.
 """
 
 from __future__ import annotations
@@ -112,30 +127,39 @@ class TestResolveEffectiveUserEmailServiceTokenWhitelisted:
         eff = resolve_effective_user_email(u, "chenhongbo@ffcs.cn")
         assert eff == "chenhongbo@ffcs.cn"
 
-    def test_hermes_cli_no_header_raises_400(self):
-        """白名单 service token 必须配 X-Catfish-User, 缺 → 400 (caller bug)."""
-        u = User(sub="client:hermes-cli", role="service")
-        with pytest.raises(HTTPException) as exc:
-            resolve_effective_user_email(u, None)
-        assert exc.value.status_code == 400
-        assert X_CATFISH_USER_HEADER in str(exc.value.detail)
+    def test_hermes_cli_no_header_falls_back_to_sub(self):
+        """P3.5.17 (6/17): 缺 X-Catfish-User **不再 400** · fallback 到 sub.
 
-    def test_hermes_cli_empty_header_raises_400(self):
+        真因: hermes auxiliary_client (context 压缩) 不传这 header, 400 会让
+        context_compressor 报错 + 60s pause, 长任务永远不压缩. 改 fallback 后
+        quota/audit 归 client:hermes-cli 头上, 仍可追溯.
+        (老测试断言 raise 400 · 7/27 BL-PLUGIN-AUTH-FIX 一并修.)
+        """
         u = User(sub="client:hermes-cli", role="service")
-        with pytest.raises(HTTPException) as exc:
-            resolve_effective_user_email(u, "")
-        assert exc.value.status_code == 400
-        with pytest.raises(HTTPException) as exc2:
-            resolve_effective_user_email(u, "   ")
-        assert exc2.value.status_code == 400
+        eff = resolve_effective_user_email(u, None)
+        assert eff == "client:hermes-cli"
+
+    def test_hermes_cli_empty_header_falls_back_to_sub(self):
+        """空字符串 / 纯空白 跟缺 header 同款处理 (auth/__init__.py 先 .strip())."""
+        u = User(sub="client:hermes-cli", role="service")
+        assert resolve_effective_user_email(u, "") == "client:hermes-cli"
+        assert resolve_effective_user_email(u, "   ") == "client:hermes-cli"
 
     def test_hermes_cli_non_email_header_raises_401(self):
-        """X-Catfish-User 形状不对 → 401 (拒绝, 防 garbage / injection)."""
+        """X-Catfish-User 形状不对 → 401 (拒绝, 防 garbage / injection).
+
+        注 · 这是**唯一还 raise** 的分支 (P3.5.17 后缺 header 改 fallback 了).
+        缺 header = caller 没打算指定员工 (auxiliary 路径, 合法);
+        header 有值但不像 email = caller 传错了 / 注入尝试, 必须拒.
+        """
         u = User(sub="client:hermes-cli", role="service")
         for bad in ("not-an-email", "no-at-sign.com", "@no-local.com", "x@y", "x@y."):
             with pytest.raises(HTTPException) as exc:
                 resolve_effective_user_email(u, bad)
             assert exc.value.status_code == 401, f"expected 401 for {bad!r}"
+            # 7/27: error detail 含 header 名, hermes 维护者一看就知道是哪条 contract
+            # (老代码这条断言在 no_header 测试里, 那测试改 fallback 后断言挪到这)
+            assert X_CATFISH_USER_HEADER in str(exc.value.detail)
 
     def test_hermes_cli_header_trimmed(self):
         """前后空白容忍."""
@@ -195,11 +219,18 @@ class TestIntegrationFlow:
         # quota 归员工 (不是 hermes-cli), 解决跨小时 401 + quota bucket 共享问题
         assert eff == "chenhongbo@ffcs.cn"
 
-    def test_hermes_cli_flow_requires_header(self):
-        """A2 hermes 升级时如果忘了加 X-Catfish-User → 400 报错明显, 容易调试."""
+    def test_hermes_auxiliary_flow_without_header(self):
+        """P3.5.17 (6/17): hermes auxiliary 路径 (context 压缩) 不传 header.
+
+        原 A2 设计是 400 逼 hermes 传 header. 实测 hermes auxiliary_client 就是
+        不传 (系统级调用, 不属某员工), 400 直接卡死长任务压缩. 改 fallback 到 sub.
+
+        代价 · 失去"强制 hermes-cli 传 header"硬约束. 可接受: chat 主路径
+        Companion 走 sub_email 必传, 不传的一定是后台 auxiliary, 归 service
+        自己头上语义更准.
+        (老测试名 test_hermes_cli_flow_requires_header + 断言 400 · 7/27 一并修.)
+        """
         user = User(sub="client:hermes-cli", role="service")
-        with pytest.raises(HTTPException) as exc:
-            resolve_effective_user_email(user, None)
-        assert exc.value.status_code == 400
-        # 错误信息含 header 名, hermes 维护者一看就知道是这条 contract
-        assert X_CATFISH_USER_HEADER in str(exc.value.detail)
+        eff = resolve_effective_user_email(user, None)
+        # quota / audit 归 service 自己 · 仍是可追溯字符串 (不绕审计)
+        assert eff == "client:hermes-cli"

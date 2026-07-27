@@ -202,6 +202,13 @@ class OIDCProvider(AuthProvider):
             eas_list = [str(s) for s in eas_raw if s]
         else:
             eas_list = []
+        # BL-PLUGIN-AUTH-FIX (7/27 鸿波): OAuth scope claim → User.scopes.
+        # identity `routes_token.py:143/267/357` 都写 access_token_claims["scope"]
+        # (空格分隔字符串, RFC 6749 §3.3). app.py is_internal_call 用它判 background.tasks.
+        # 注 · id_token 没这个 claim (你的 config.yaml model.api_key 就是 id_token,
+        # aud=catfish-companion + 无 token_use + 无 scope) → 拿到空 list, 行为跟老代码一致.
+        scope_raw = payload.get("scope", "")
+        scope_list = scope_raw.split() if isinstance(scope_raw, str) else []
         return User(
             sub=sub,
             department=payload.get("department", ""),
@@ -213,4 +220,5 @@ class OIDCProvider(AuthProvider):
             effective_allowed_models=eam_list,
             effective_allowed_tools=eat_list,
             effective_allowed_skills=eas_list,
+            scopes=scope_list,
         )

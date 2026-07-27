@@ -227,6 +227,11 @@ class DevTokenProvider(AuthProvider):
                 role="admin",  # internal 有 admin 权限 (它是 gateway 自己)
                 managed_departments=[],
                 auth_method="internal_loopback",
+                # BL-PLUGIN-AUTH-FIX (7/27): 显式给 scope, 让 app.py is_internal_call
+                # 的 scope 校验对 gateway 自己的 loopback (proactive / compressor) 放行.
+                # 注 · User.has_scope() 对 auth_method=internal_loopback 已直接返 True,
+                # 这里显式列出是为了 audit log / debug 时能看清它有什么权.
+                scopes=["background.tasks", "chat.completions"],
             )
 
         # 1. yaml 多账号匹配 (五一 sprint 5/2)

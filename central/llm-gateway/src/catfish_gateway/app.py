@@ -2730,10 +2730,36 @@ async def chat_completions(
     #
     # 5/21 BL-CORS-DEBT-FIX: hermes proxy 8642 CORS allow-list 没配 X-Catfish-*, 撞 preflight.
     # 加 query param fallback (?catfish_internal=1) 兼容. header 仍优先, 老 caller 不破.
-    is_internal_call = (
+    #
+    # BL-PLUGIN-AUTH-FIX (7/27 鸿波): 加**授权校验** — 老逻辑只看 header/query 值,
+    # 任何拿到员工 JWT 的人加个 X-Catfish-Internal 就免 quota + 跳 prompt_security.
+    # 现在双条件: "想要" (header/query) AND "有权" (身份带 background.tasks scope).
+    #
+    # 有权的两类:
+    #   ① auth_method=internal_loopback — gateway 调自己 (proactive / conversation_compressor)
+    #   ② service token 带 background.tasks scope — hermes 进程内 plugin
+    #      (catfish-memory distill/summarize/wiki · catfish-xcatfish-user memory_enforce)
+    #      scope 由 identity client_credentials 白名单校验过 (routes_token.py:463-479) 可信
+    #
+    # 无权时: 照常扣 quota + 走 prompt_security (功能不断, 只是不给免费额度) + warning log.
+    _wants_internal = (
         request.headers.get("x-catfish-internal", "").lower() in ("true", "1", "yes")
         or request.query_params.get("catfish_internal", "").lower() in ("true", "1", "yes")
     )
+    is_internal_call = _wants_internal and user.has_scope("background.tasks")
+    if _wants_internal and not is_internal_call:
+        # 文案只提中央侧动作 — 中央端不该知道边缘 fs 布局 (BL-CENTRAL-EDGE-BOUNDARY,
+        # 5/26 起中央 6 处边缘路径引用已全清, 不往回走). 边缘怎么拿 token 是边缘的事,
+        # plugin 侧 _gateway_dev_token() 自己的 fail-loud log 会写清查哪几个来源.
+        logger.warning(
+            "X-Catfish-Internal 请求被拒 (缺 background.tasks scope): user=%s "
+            "auth_method=%s scopes=%s → 照常扣 quota. "
+            "若是 hermes 侧后台任务 (distill / summarize / memory_enforce): "
+            "该 caller 的 service token 需带 background.tasks scope — "
+            "确认 identity clients.yaml 的 hermes-cli allowed_scopes 已含它, "
+            "然后重新走 client_credentials 换 token (见 refresh-jwt-hermes-env.sh)",
+            user.sub, user.auth_method, user.scopes,
+        )
 
     # BL-RBAC-DAY4-HARDENING (5/17, hermes 0.14 #23194 ctx.llm bypass 防御):
     # Companion 显式标 X-Catfish-Source=companion. hermes plugin 内部 ctx.llm
@@ -3132,11 +3158,19 @@ async def chat_completions(
     # 不该消耗员工 quota. 员工 1M/天 预算应该给员工**主对话**用, 不是给后台总结烧.
     # 鸿波 5/5 凌晨 explicit: "summarizer 不要去限制用户的 quota 这才是合理的".
     # 注: 不跳 audit log (透明仍要记, 只标 internal=true 区分).
-    # 注: 这一行跟 line ~1012 的赋值是冗余 (留作 defensive — 防早期赋值被改回去 crash).
-    #     Python 重新绑定同名 local var 同值无害.
-    is_internal_call = (
-        request.headers.get("x-catfish-internal", "").lower() in ("true", "1", "yes")
-    )
+    #
+    # BL-PLUGIN-AUTH-FIX (7/27 鸿波): **删了这里的重复赋值**, 直接用函数早期
+    # (BL-F17 那处) 判定好的 is_internal_call.
+    #
+    # 老代码在这里重新 `is_internal_call = request.headers.get(...)`, 注释说是
+    # "defensive 冗余, 同值无害". 但**不是同值** — 它只看 header, 丢了 5/21
+    # BL-CORS-DEBT-FIX 加的 `?catfish_internal=1` query param fallback. 走 query
+    # param 的 caller 在早期判定拿到 True, 到这里被覆盖成 False → quota 照扣.
+    # 现在再加 scope 校验, 覆盖会把授权结果一起丢掉, 必须删.
+    #
+    # 安全性: 早期判定在函数入口后不远 (BL-F17 段), 中间无分支能跳过, local var
+    # 不会消失. 万一将来有人删了那处赋值, 这里 NameError 立即暴露 —— 比静默
+    # 退化成 False (员工被莫名扣 quota, 没人发现) 好得多. fail-loud.
     if is_internal_call:
         logger.info(
             "internal call: user=%s model=%s 跳 quota check (X-Catfish-Internal)",
