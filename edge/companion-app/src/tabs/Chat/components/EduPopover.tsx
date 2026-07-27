@@ -14,6 +14,14 @@
  *   🎬 是 click-to-modal (setup 弹 modal → 开录制)
  *   💡 是 click-to-textarea-prefill (弹 "/learn " 到输入框员工继续输描述)
  *
+ * 真边界 = **时机 + 输入源** (7/27 鸿波 catch "跟教学模式是不是重复"):
+ *   🎓 🎬 **事前**开 toggle / 录制, 边做边采 (行为流)
+ *   💡    **事后**补学 — 给静态资料, 或让 agent 回看**已发生**的对话
+ * hermes learn_prompt.py:5-13 列 4 种 /learn 输入源: 代码目录 / API doc URL /
+ * "workflow they just walked the agent through in this conversation" / 粘贴笔记.
+ * 第 3 种跟 🎓 内容像但**时机相反** (回溯 vs 实时), hint 文案必须标出"事后",
+ * 否则员工看不出跟教学模式的区别 (老 hint "或刚才做的事" 就没标, 7/27 改).
+ *
  * 空间优化 (P3.5.167 鸿波"叠起来省空间"): 3 icon → 1 icon (📚). 未来加
  * kanban 学 / chat 历史学 / email 学等场景不再挤 button 栏, 塞进 popover.
  *
@@ -193,11 +201,18 @@ export default function EduPopover({ isStreaming, onStartLearn }: Props) {
             disabled={recModeActive}
           />
 
-          {/* 💡 让 AI 学 (弹 LearnModal) */}
+          {/* 💡 让 AI 学 (弹 LearnModal)
+              7/27 鸿波 catch "跟教学模式是不是重复": 三者语义都是 distill skill,
+              但真差异是**时机 + 输入源**, 老 hint "或刚才做的事" 没体现出来:
+                🎓 🎬 = 事前开 toggle/录制, 边做边采
+                💡    = 事后补学 (给资料, 或让 agent 回看已发生的对话)
+              hermes learn_prompt.py:5-13 明确列 4 种输入源 (dir / URL /
+              "workflow they just walked the agent through in this conversation"
+              / pasted notes), 所以"回看对话"是真能力不能删, 只是要标清是**事后**. */}
           <EduOption
             emoji="💡"
             label="让 AI 学"
-            hint={"告诉鲶鱼学什么 — 读代码 / 网页 / 或刚才做的事"}
+            hint={"事后补学 — 给资料 (代码/网页) 或让它回看这段对话"}
             active={false}
             onClick={handleLearn}
           />
