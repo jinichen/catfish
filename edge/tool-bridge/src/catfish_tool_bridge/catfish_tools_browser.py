@@ -215,6 +215,20 @@ def _check_ssrf_safe(url: str) -> str | None:
         return None
 
 
+# BL-BROWSER-LOAD-NEVER-FIRES (7/27): Playwright 超时错误的识别.
+# page.goto 超时抛 TimeoutError, message 形如
+#   "Timeout 30000ms exceeded." / "page.goto: Timeout 30000ms exceeded."
+# 注意跟 _NET_LAYER_ERRORS 区分: 那些是"连不上服务器", 这个是"连上了但等不到
+# 完成信号" —— 两种要走完全不同的 fallback.
+_TIMEOUT_MARKERS = ("timeout", "timederror", "timed out")
+
+
+def _is_timeout_error(err: str) -> bool:
+    """错误信息是不是超时类. 大小写不敏感."""
+    low = (err or "").lower()
+    return any(m in low for m in _TIMEOUT_MARKERS)
+
+
 # Chrome 网络层 net_error 关键字 (区别于 404/500 这种 server 层 error).
 # 撞这些 = 根本连不上服务器 → 适合走 https→http fallback.
 _NET_LAYER_ERRORS = (
@@ -259,10 +273,11 @@ def _browser_goto_impl(args: Dict[str, Any]) -> Dict[str, Any]:
     except RuntimeError as e:
         return {"type": "error", "error": str(e)}
 
-    def _try_goto(page, target_url: str) -> Dict[str, Any]:
-        """单次 goto 尝试, 包装成 result dict (不抛)."""
+    def _try_goto(page, target_url: str, wait: Optional[str] = None) -> Dict[str, Any]:
+        """单次 goto 尝试, 包装成 result dict (不抛). wait 不给则用外层 wait_until."""
+        wait = wait or wait_until
         try:
-            response = page.goto(target_url, wait_until=wait_until, timeout=timeout_ms)
+            response = page.goto(target_url, wait_until=wait, timeout=timeout_ms)
             actual_title = page.title()
             actual_url = page.url
             http_status = response.status if response else None
@@ -273,6 +288,7 @@ def _browser_goto_impl(args: Dict[str, Any]) -> Dict[str, Any]:
                 "actual_title": actual_title,
                 "actual_url": actual_url,
                 "http_status": http_status,
+                "wait_until": wait,
                 "summary": (
                     f"已 navigate 到 {target_url}. 真实 title='{actual_title}', "
                     f"url='{actual_url}', http={http_status}. "
@@ -290,6 +306,47 @@ def _browser_goto_impl(args: Dict[str, Any]) -> Dict[str, Any]:
                 return {"type": "error", "error": str(e)}
 
             result = _try_goto(page, url)
+
+            # BL-BROWSER-LOAD-NEVER-FIRES (7/27 鸿波实盘): load 超时 → 自动降级
+            # domcontentloaded 重试一次.
+            #
+            # 实测数据 (鸿波 Mac, agent-browser 直接调, 绕开 LLM):
+            #   about:blank   → success   (CDP 链路没问题)
+            #   example.com   → success   (真实网络导航没问题)
+            #   sohu.com      → 25s 超时
+            #   sohu.com + AGENT_BROWSER_DEFAULT_TIMEOUT=60000 → **仍然超时**
+            #
+            # 60 秒都等不到, 说明不是"慢", 是 `load` 事件**永远不会触发**.
+            # 搜狐首页挂着一堆第三方域名 (广告 / 统计 / CDN), 员工网络环境下有些
+            # 根本连不上, 那些请求一直挂着 → load 永不完成. 而页面 DOM 早就渲染
+            # 出来了 —— 员工手动打开看着完全正常, 工具却报超时, 最难排查的那种.
+            #
+            # 为什么不干脆把默认改成 domcontentloaded: `load` 语义更强 (资源齐全,
+            # 截图 / 取全文更准), 能等到就该等. 只在等不到时降级, 两头的好处都要.
+            #
+            # 降级成功会带 degraded_wait_until 字段 + summary 前缀, 让 LLM 知道
+            # "页面能用但资源可能没齐", 后续要截图/取全文时自己判断要不要再等.
+            if (
+                result.get("type") == "error"
+                and wait_until == "load"
+                and _is_timeout_error(result.get("error", ""))
+            ):
+                fb = _try_goto(page, url, wait="domcontentloaded")
+                if fb.get("type") == "ok":
+                    fb["degraded_wait_until"] = "domcontentloaded"
+                    fb["degraded_reason"] = (
+                        f"等 'load' 超时 ({timeout_ms}ms) —— 页面有第三方资源一直加载不完 "
+                        f"(广告 / 统计 / 被墙的 CDN 都会这样). 已降级到 'domcontentloaded' "
+                        f"重试成功: DOM 已就绪, 页面可以正常操作, 但部分资源可能还没到位."
+                    )
+                    fb["summary"] = "[load 超时 → domcontentloaded 降级] " + fb["summary"]
+                    return fb
+                # 降级也失败 → 保留原始 error, 补一句说明避免 LLM 以为没试过
+                result["error"] = (
+                    f"{result['error']}\n"
+                    f"注: 已自动降级 wait_until='domcontentloaded' 重试, 仍然失败 "
+                    f"({fb.get('error', '')[:100]}). 这次多半是真连不上, 不是等 load 的问题."
+                )
 
             # https → http fallback (网络层撞墙 + url 是 https 才触发)
             if (

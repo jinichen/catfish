@@ -303,9 +303,14 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
             "❌ **不要用这个工具跑 JavaScript / DOM 查询.** 想 `document.querySelector(...)` "
             "/ 读 DOM 用 **catfish_browser_evaluate**, 不是 goto. goto 的 `expression` "
             "字段**不存在**, 传了 schema 直接拒. \n\n"
-            "✅ **浏览器导航永远用这个**, 不要用 hermes browser_navigate (那个直 CDP, 失败率高). \n\n"
-            "wait_until 选项: 'load' (默认, 等所有资源加载完) / 'domcontentloaded' (只等 DOM, "
-            "更快但 JS 可能没跑完) / 'networkidle' (等 500ms 无网络活动, 适合 SPA). \n\n"
+            "✅ **浏览器导航永远用这个**, 不要用 hermes browser_navigate (那个走 agent-browser "
+            "外部 CLI, 等 'load' 等不到就干等超时, 没有降级). \n\n"
+            "wait_until 选项: 'load' (默认, 等所有资源加载完) / 'domcontentloaded' (只等 DOM) / "
+            "'networkidle' (等 500ms 无网络活动, 适合 SPA). \n\n"
+            "**超时会自动降级**: 用默认 'load' 撞超时时, 本工具自动改 'domcontentloaded' 重试一次 "
+            "—— 门户站 (搜狐 / 新浪这类) 挂着大量第三方广告统计, 那些请求在受限网络里一直挂着, "
+            "'load' 事件永远不触发, 但 DOM 其实早就好了. 降级成功的返回带 degraded_wait_until "
+            "字段, 意思是'页面能操作, 但部分资源可能没到位' —— 后续要截图 / 取全文时留意.\n\n"
             "返回真实页面 title + url, 让你验证 navigate 真生效."
         ),
         "input_schema": {

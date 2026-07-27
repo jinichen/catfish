@@ -667,3 +667,102 @@ def test_unused_skills_29d_not_included(
 
     result = catfish_tools.collect_today_summary()
     assert result["skill_unused_30d"] == []
+
+
+# ── BL-BROWSER-LOAD-NEVER-FIRES (7/27 鸿波实盘) ────────────────
+
+
+def test_is_timeout_error_recognizes_playwright_shapes():
+    """Playwright 超时错误的各种写法都要认出来.
+
+    要跟 _NET_LAYER_ERRORS ("连不上服务器") 区分开 —— 那些走 https→http
+    fallback, 超时走 wait_until 降级, 两条路完全不同.
+    """
+    from catfish_tool_bridge.catfish_tools_browser import _is_timeout_error
+
+    assert _is_timeout_error("playwright goto 异常: TimeoutError: Timeout 30000ms exceeded.")
+    assert _is_timeout_error("page.goto: Timeout 30000ms exceeded.")
+    assert _is_timeout_error("Operation timed out")
+    assert _is_timeout_error("TIMEOUT")  # 大小写不敏感
+    # 网络层错误不该被当成超时
+    assert not _is_timeout_error("net::ERR_CONNECTION_REFUSED")
+    assert not _is_timeout_error("net::ERR_SSL_PROTOCOL_ERROR")
+    assert not _is_timeout_error("")
+    assert not _is_timeout_error(None)
+
+
+def test_browser_goto_degrades_to_domcontentloaded_on_load_timeout(monkeypatch):
+    """load 超时 → 自动降级 domcontentloaded 重试.
+
+    鸿波实盘: sohu.com 连 60 秒都等不到 load (第三方广告统计一直挂着),
+    但 DOM 早就渲染好了 —— 他手动打开看着完全正常, 工具却报超时.
+    """
+    from catfish_tool_bridge import catfish_tools_browser as B
+
+    calls = []
+
+    class _FakePage:
+        url = "https://www.sohu.com/"
+
+        def goto(self, target, wait_until=None, timeout=None):
+            calls.append(wait_until)
+            if wait_until == "load":
+                raise RuntimeError("TimeoutError: Timeout 30000ms exceeded.")
+            return type("R", (), {"status": 200})()
+
+        def title(self):
+            return "搜狐"
+
+    monkeypatch.setattr(B, "_import_playwright", lambda: _fake_sync_playwright(_FakePage()))
+    monkeypatch.setattr(
+        B, "_connect_playwright_browser", lambda p: (None, None, _FakePage())
+    )
+
+    out = B._browser_goto_impl({"url": "https://www.sohu.com"})
+
+    assert calls == ["load", "domcontentloaded"], "该先试 load 再降级"
+    assert out["type"] == "ok"
+    assert out["degraded_wait_until"] == "domcontentloaded"
+    assert "load 超时" in out["summary"]
+    assert "第三方资源" in out["degraded_reason"]
+
+
+def test_browser_goto_no_degrade_when_caller_chose_wait_until(monkeypatch):
+    """调用方显式传了 domcontentloaded → 没有 load 可降级, 不该重试两次."""
+    from catfish_tool_bridge import catfish_tools_browser as B
+
+    calls = []
+
+    class _FakePage:
+        url = "https://x.com/"
+
+        def goto(self, target, wait_until=None, timeout=None):
+            calls.append(wait_until)
+            raise RuntimeError("TimeoutError: Timeout 30000ms exceeded.")
+
+        def title(self):
+            return ""
+
+    monkeypatch.setattr(B, "_import_playwright", lambda: _fake_sync_playwright(_FakePage()))
+    monkeypatch.setattr(
+        B, "_connect_playwright_browser", lambda p: (None, None, _FakePage())
+    )
+
+    out = B._browser_goto_impl(
+        {"url": "https://x.com", "wait_until": "domcontentloaded"}
+    )
+
+    assert calls == ["domcontentloaded"], "显式指定时不该降级重试"
+    assert out["type"] == "error"
+
+
+def _fake_sync_playwright(page):
+    """造一个能进 `with sync_playwright() as p` 的假对象."""
+    class _Ctx:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, *a):
+            return False
+
+    return lambda: _Ctx()
