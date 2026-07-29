@@ -50,6 +50,17 @@ function UsersList() {
       setUsers(r.users);
       setError(null);
     } catch (e) {
+      // P3.5.80 (7/30 达华现场): 失败时**必须清空**, 不能留着上一次的结果。
+      //
+      // 老逻辑只 setError 不动 users:
+      //   - 首次加载失败 → users 还是初始 []  → 标题写"0 个 user"
+      //     而真实情况是"不知道有几个"。达华现场 identity 反代 502,
+      //     页面理直气壮地报 0 个用户 —— 管理员会以为数据没了。
+      //   - 刷新失败 → users 留着上一次的 50 条 → 标题写"50 个 user"
+      //     旧数据冒充当前状态, 比报 0 更危险。
+      //
+      // 查不到就是查不到, 别给数字。
+      setUsers([]);
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
@@ -73,7 +84,13 @@ function UsersList() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
       <Card
-        title={`用户管理 · ${users.length} 个 user (${me?.role === "sysadmin" ? "sysadmin 视角全部" : "admin 视角不含 sysadmin"})`}
+        title={
+          // 数量三态: 加载中 / 读取失败 / 真实数字。
+          // 失败时不给数字 —— 理由见 refresh() 的 catch 分支。
+          `用户管理 · ${
+            error ? "读取失败" : loading ? "加载中…" : `${users.length} 个 user`
+          } (${me?.role === "sysadmin" ? "sysadmin 视角全部" : "admin 视角不含 sysadmin"})`
+        }
         action={
           <Link
             to="/admin/users/new"
