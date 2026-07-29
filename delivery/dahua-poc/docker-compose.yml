@@ -77,6 +77,12 @@ services:
       - "8998:8998"
     volumes:
       - ./identity-server/config:/app/config:ro
+      # P3.5.80 (7/28 鸿波达华现场): identity 的 RSA 签名密钥写在
+      # /home/catfish/.catfish/identity-server/keys, 之前**没有持久卷** ——
+      # 容器一重建密钥就没, 已签发的 JWT 全部作废(员工要重登),
+      # 且两个 worker 每次都要重新抢一次生成(见 jwt_signer 竞态修复).
+      # 对齐 gateway 的 gateway_data 做法, 单独给一个卷.
+      - identity_data:/home/catfish/.catfish
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8998/.well-known/openid-configuration"]
       interval: 30s
@@ -104,6 +110,15 @@ services:
       HOST: 0.0.0.0
       PORT: 8999
       CATFISH_CONFIG: /app/config/models.yaml
+      # P3.5.84 (7/29 达华现场): /api/admin/* 反代到 identity 的上游地址。
+      #
+      # admin_proxy.py 的默认值是 http://127.0.0.1:8998 —— 开发机上四个服务
+      # 同机, 这个默认恰好对; 但容器里 127.0.0.1 是 gateway 自己, 连不上 →
+      # 「系统管理」页 Identity (admin) 显示"不可达"。
+      #
+      # 另外三个反代 (mcp / hub / wiki) 只能从 yaml 读, 见
+      # llm-gateway/config-overlay/models.yaml 末尾。
+      CATFISH_IDENTITY_URL: http://identity:8998
       # 6/9 BL-F10 真实测: 单 worker GIL 卡死, 1000 user P99=34s; 4 worker P99=15s
       # (2.2× 吞吐, 56% latency 降). 默认 4, 4 vCPU 客户机房刚好用满. 8 vCPU 改 8.
       UVICORN_WORKERS: ${GATEWAY_WORKERS:-4}
@@ -115,6 +130,12 @@ services:
       # 实际返 id_token (aud=catfish-companion, OIDC 惯例), 不是 access_token. gateway 需
       # 双 audience 才接. 默认单值 catfish-gateway 会拒 Companion id_token · 员工 chat 401.
       CATFISH_OIDC_AUDIENCE: ${CATFISH_OIDC_AUDIENCE:-catfish-companion,catfish-gateway}
+      # P3.5.80 (7/28): HTTPS 模式下 issuer=https://IP, 而 oidc.py:80 默认
+      # jwks_uri = f"{issuer}/.well-known/jwks.json" —— gateway 在**容器内**
+      # 去拉这个 https 地址会撞自签证书验证失败 (Python urllib 不认自签).
+      # 走容器内网 HTTP 直连 identity 绕开; iss claim 仍按 https://IP 字符串
+      # 比对, 不受影响. auth/__init__.py:217 已支持该 env.
+      CATFISH_OIDC_JWKS_URI: ${CATFISH_OIDC_JWKS_URI:-http://identity:8998/.well-known/jwks.json}
       # facts_router 文件落地 (BL-Q3-FACT-PG-MIGRATE 之前的临时方案)
       CATFISH_FACTS_DIR: ${CATFISH_FACTS_DIR:-/home/catfish/.catfish/facts}
       # API keys (公网 LLM)
@@ -273,26 +294,30 @@ services:
   #   /hub/ → skills-hub
   #   /mcp/ → mcp-registry  (6/9 BL-MCP-DEPLOY 新加)
   # 客户改 nginx.conf.example → nginx.conf 配域名 + Let's Encrypt cert
-  nginx:
-    image: nginx:1.27-alpine
-    container_name: catfish-nginx
-    restart: unless-stopped
-    depends_on:
-      - gateway
-      - identity
-      - skills-hub
-      - wiki-hub       # P3.3.18-cleanup (7/14) 补
-      - web
-      - mcp-registry
-    ports:
-      - "443:443"
-      - "80:80"  # http → 301 https
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./certs:/etc/nginx/certs:ro  # cert.pem + key.pem (Let's Encrypt 或自签)
+  # ── nginx 服务已删除 (P3.5.80 · 7/28 鸿波) ────────────────────────
+  #
+  # 原因:
+  #   1. 它挂载 ./nginx.conf, 但**这个文件在本目录里根本不存在** ——
+  #      central/nginx.conf.example 从没被打包脚本拷过来. 客户一旦
+  #      ENABLE_HTTPS=1 全量 up, Docker 会把 ./nginx.conf 造成空目录,
+  #      nginx 挂载后启动失败. 这条路径从未在客户环境跑通过.
+  #   2. 就算把那份 example 补进来也跑不通, 三处硬冲突:
+  #      · 证书名 fullchain.pem/privkey.pem (Let's Encrypt) vs
+  #        setup.sh 生成的 cert.pem/key.pem
+  #      · identity 挂在 /sso/ 前缀下, 但 setup.sh 的 ISSUER_URL 无前缀,
+  #        且 identity 登录表单 action="/authorize" 是硬编码根相对路径,
+  #        挂前缀后 POST 会落到 SPA → 登录必挂
+  #      · server_name 是 catfish.example.com 占位符
+  #   3. web 容器本来就在反代 /api /v1 (7/23 达华血案的修复), 现在
+  #      443 + OIDC 反代也一并收进 web (见 web/catfish-ssl.conf),
+  #      单端口单证书, 不需要再套一层.
+  #
+  # central/docker-compose.yml 保留 nginx 服务 —— 那是另一套"中央 nginx"
+  # 架构的参考部署, 与达华单端口方案不同, 不要混用.
 
 volumes:
   pgdata:
   gateway_data:
+  identity_data:     # P3.5.80 (7/28) identity RSA 签名密钥 · 换了会让全员重登
   hubdata:
   wikidata:          # P3.3.18-cleanup (7/14) 补 wiki-hub FS fallback

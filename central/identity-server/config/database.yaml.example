@@ -16,7 +16,7 @@
 
 database:
   # 完整 PostgreSQL URL. 注意密码含 ! / @ / : 等特殊字符必须 URL encode.
-  # 例: 密码 7954672aA! → 7954672aA%21
+  # 例: 密码 Pa!ss@word → Pa%21ss%40word
   url: ""  # 例: postgresql://catfish:PASSWORD%21@localhost:5432/catfish
 
   # 连接池 (asyncpg.create_pool 参数)

@@ -170,6 +170,40 @@ def test_refresh_token_returns_new_tokens(client: TestClient):
     assert new["refresh_token"] != rt  # 新 token, 不是同一个
     assert new["scope"] == "openid email chat.completions"
 
+    # P3.5.82 (7/29): refresh 响应必须带 id_token (OIDC Core §12.1).
+    #
+    # 少了它 → 客户端 (Companion) 整个响应反序列化失败 → 拿不到上面那个已经
+    # rotation 出来的新 refresh_token → 下次拿旧的重试 → 服务端判"已用过/已吊销"
+    # → 员工被弹回登录页。实测是**登录后恰好一小时**必现一次。
+    assert "id_token" in new, "refresh 响应缺 id_token — 客户端会解析失败并丢掉新 refresh_token"
+
+
+def test_refresh_grace_replay_also_returns_id_token(client: TestClient):
+    """P3.5.82: grace 分支同样要带 id_token。
+
+    grace 正是"客户端上次没收好、重试"走的路径 —— 它要是也缺 id_token,
+    重试照样解析失败, grace 这层保护等于没有。
+    """
+    body = _do_login(client)
+    old_rt = body["refresh_token"]
+
+    first = client.post("/token", data={
+        "grant_type": "refresh_token",
+        "refresh_token": old_rt,
+        "client_id": "hermes-cli",
+    })
+    assert first.status_code == 200
+
+    # 用已经 rotation 掉的旧 token 再来一次 → 走 grace, replay 出同一个 child
+    replay = client.post("/token", data={
+        "grant_type": "refresh_token",
+        "refresh_token": old_rt,
+        "client_id": "hermes-cli",
+    })
+    assert replay.status_code == 200, "grace period 内重放应该成功"
+    assert "id_token" in replay.json(), "grace 分支缺 id_token — 重试也会解析失败"
+    assert replay.json()["refresh_token"] == first.json()["refresh_token"]
+
 
 def test_old_refresh_token_grace_replay_within_window(client: TestClient, app: FastAPI):
     """P3.5.150: rotation race mitigation —

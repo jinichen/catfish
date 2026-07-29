@@ -76,6 +76,32 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8998
 
 
+def configure_logging() -> None:
+    """给当前进程配好 logging —— 必须在**每个 worker 里**调, 不能只在 main().
+
+    P3.5.80 (7/28 鸿波达华测试机): 原来只有 main() 里一句 logging.basicConfig.
+    但 uvicorn 多 worker 是 spawn 子进程重新 import 模块拿 `app` 单例, **不经过
+    main()** —— 于是 worker 进程里 catfish.* 的 logger 一个 handler 都没有,
+    应用级日志全部丢进虚空.
+
+    后果实测: docker logs 里只有 uvicorn 自己的行 (它单独配 uvicorn.* 三个
+    logger, propagate=False, 不受这里影响). 7/28 排查 identity 时看到
+    "Child process [28] died" 连续三次却没有任何堆栈, 就是因为子进程的异常日志
+    根本没有出口 —— 现场只能靠猜, 这正是军规不允许的.
+
+    放在 create_app() 开头调: 该函数在每个 worker 里都会跑一次 (module-level
+    lazy 单例 __getattr__ 触发), 且早于 JwtSigner 构造, 所以密钥初始化那条
+    kid= 日志也能被捕获.
+
+    basicConfig 在 root 已有 handler 时是 no-op, 所以重复调安全 ——
+    pytest / uvicorn 已经配过的场景不会被覆盖或产生重复输出.
+    """
+    logging.basicConfig(
+        level=os.environ.get("CATFISH_LOG_LEVEL", "INFO").upper(),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+
+
 def _issuer_url() -> str:
     """OIDC issuer URL. 必须跟 gateway 端配置完全一致."""
     if env := os.environ.get("CATFISH_IDENTITY_ISSUER"):
@@ -103,6 +129,11 @@ def create_app(
     multi-worker 部署用 module 底部的 lazy `app` 单例 (uvicorn import string
     `catfish_identity.app:app` 触发 PEP 562 __getattr__ 一次性构造).
     """
+    # P3.5.80 (7/28): 必须在这里而不是只在 main() —— spawn 出来的 worker 不走
+    # main(), 详见 configure_logging() 的说明. 也必须在 JwtSigner() 之前,
+    # 否则密钥初始化的 kid= 日志会丢.
+    configure_logging()
+
     issuer = _issuer_url()
     signer = signer if signer is not None else JwtSigner()
     registry = registry if registry is not None else UserRegistry()
@@ -271,10 +302,9 @@ def main() -> None:
     """命令行入口: python -m catfish_identity"""
     import uvicorn  # noqa: PLC0415
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    # 父进程也配一份 (alembic / uvicorn 启动前的日志要能看见).
+    # worker 子进程的那份在 create_app() 里, 不靠这里.
+    configure_logging()
 
     host = os.environ.get("CATFISH_IDENTITY_HOST", DEFAULT_HOST)
     port = int(os.environ.get("CATFISH_IDENTITY_PORT", str(DEFAULT_PORT)))

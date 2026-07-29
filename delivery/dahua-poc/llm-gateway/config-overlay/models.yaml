@@ -42,3 +42,34 @@ models:
     # 达华 POC 单 model · 无 fallback 备份.
     # 若上游 qwen-plus 挂 · 员工直接看到 error · IT 到阿里云 console 排查.
     # 生产扩容再加 fallback chain (加 catfish-public-qwen-vl-max 或 catfish-public-deepseek).
+
+# ============================================================
+# 内部服务反代上游 (P3.5.84 · 7/29 达华现场)
+# ============================================================
+#
+# gateway 把三类请求转发给同网内的其它容器:
+#     /v1/mcp/*   → mcp-registry
+#     /v1/hub/*   → skills-hub
+#     /v1/wiki/*  → wiki-hub
+#
+# 代码里的默认值是 http://127.0.0.1:<port> —— 那是**开发机**的形态
+# (四个服务都在同一台机器上跑, 127.0.0.1 恰好是对的)。
+#
+# 但在 Docker 里, gateway 容器的 127.0.0.1 是**它自己**, 那几个端口在别的
+# 容器上, 连不上 → 502 Bad Gateway。必须走 compose 服务名。
+#
+# 现场表现有迷惑性: 登录正常、聊天正常、门户能开, 只有「系统管理」页面上
+# MCP Registry / Skills Hub 显示"不可达" —— 因为 gateway 自己的接口
+# (/api/me 等) 不经这一跳。7/29 达华装机后才被发现, 而这个默认值从一开始
+# 就是错的, 只是之前没人点开过那个页面。
+mcp_registry:
+  upstream_url: http://mcp-registry:8996
+  enabled: true
+
+skills_hub:
+  upstream_url: http://skills-hub:8997
+  enabled: true
+
+wiki_hub:
+  upstream_url: http://wiki-hub:8994
+  enabled: true

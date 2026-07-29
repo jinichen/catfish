@@ -1,0 +1,59 @@
+# OAuth client 注册表 · 装机模板
+#
+# ── 这个文件是做什么的 ────────────────────────────────────────────
+#
+# 员工桌面端启动时, 会用 client_credentials 向 identity 换一个 30 天的
+# service token, 交给本机的 hermes 使用 (client_id = hermes-cli).
+# identity 从本文件认这个 client。
+#
+# **没有这个文件 = 没有任何 client 注册**, 所有 client_credentials 请求
+# 一律返回:
+#     401 invalid_client (client 认证失败: client_id / secret 错, 或已禁用)
+#
+# 装机时 setup.sh 会把本文件复制成 clients.yaml。真正的 clients.yaml 不进
+# 交付包 —— 里面可能有生产 secret 的 hash, 不该跟着包到处走。
+#
+# ── secret 说明 ───────────────────────────────────────────────────
+#
+# 下面的 hash 对应 POC 期的默认 secret: hermes-dev-secret-2026-please-change
+# 这个明文本来就随桌面端安装到每台员工机器, 所以它的 hash 放进交付包
+# 不构成额外泄露。
+#
+# POC 期直接用。生产要换的话, **两侧必须一起换**:
+#   1. 生成新 hash:
+#      python3 -c 'import bcrypt; print(bcrypt.hashpw(b"新secret", bcrypt.gensalt()).decode())'
+#   2. 替换下面的 client_secret_hash, 重启 identity
+#   3. 桌面端也要换成同一个 secret 并重新分发
+#      (secret 编译在客户端里, 只改服务端会让所有员工的 service token 同步失败)
+
+clients:
+  - client_id: hermes-cli
+    client_secret_hash: $2b$12$5LdhU49ZtK7EpYFYdTn4m.48yzoBrU0CasSHmpuY/CGjUKQsYpBcG
+
+    # service token 有效期 30 天。**这一行不能省**。
+    #
+    # identity 的默认值是 1 小时 (routes_token.py: `service_token_ttl_seconds`
+    # 缺省时 fallback 3600)。而这个 token 是给员工机器上的 hermes 常驻用的,
+    # 1 小时后过期 → 所有走网关的调用一律 401。
+    #
+    # 表现极具迷惑性: 装完机验收全绿、聊天正常, **一小时后**才开始报
+    # "invalid token ... PAST EXPIRY", 而那时现场往往已经没人了, 看起来像
+    # "用着用着突然坏了"。7/29 实测就是这样翻的车。
+    service_token_ttl_seconds: 2592000
+    name: Hermes CLI
+    description: 鲶鱼 hermes CLI — 跑 skill / 跑批 / agent loop (Companion 同步的 service token 用)
+    allowed_grant_types:
+      - authorization_code
+      - client_credentials
+    allowed_scopes:
+      - openid
+      - email
+      - profile
+      - chat.completions
+      - audit.write
+      - tools.invoke
+      - skills.run
+      - background.tasks
+    department: infra
+    role: service
+    enabled: true

@@ -1,75 +1,49 @@
-# Catfish Identity OAuth client 注册表
+# OAuth client 注册表 · 装机模板 (P3.5.80 · 7/28 鸿波达华测试机实撞后补)
 #
-# 这个文件登记**服务**身份 (机器对机器), 跟 users.yaml (人) 平级.
-# 服务 (e.g. hermes-cli) 用 OAuth 2.0 client_credentials grant 拿 access_token,
-# 替代之前的 dev_token hack. 详见 docs/RBAC-DESIGN.md §10 + §12.
+# ── 为什么必须有这个文件 ──────────────────────────────────────────
 #
-# 加 client (admin):
-#   1. 生成 secret hash:
-#      python3 -c 'import bcrypt; print(bcrypt.hashpw(b"YOUR_CLIENT_SECRET", bcrypt.gensalt()).decode())'
-#   2. 在下面加一条 dict (client_id / client_secret_hash 必填)
-#   3. 重启 catfish-identity (Phase 2 加 hot-reload)
+# Companion 启动时会用 client_credentials 向 identity 换一个 30 天 service
+# token 塞给本机 hermes (hermes_jwt_sync.rs · client_id=hermes-cli). identity
+# 从本文件认 client —— **没有这个文件 = 没有任何 client 注册**, 所有
+# client_credentials 一律返:
+#     401 invalid_client (client 认证失败 client_id / secret 错或 client 已禁用)
 #
-# 字段说明:
-#   client_id:            URL 安全的字符串, e.g. "hermes-cli", "catfish-skills-hub"
-#   client_secret_hash:   bcrypt hash, 永不存明文
-#   allowed_grant_types:  目前只支持 ["client_credentials"]. authorization_code Phase 2 加
-#   allowed_scopes:       client 能拿哪些 scope. 越权请求被 /token 直接拒
-#   department:           虚拟部门 (用来 quota 归账, 跟人 user 一样)
-#   role:                 强制 = "service" (yaml 误填别的会被覆盖回 service)
-#   enabled:              false → 立即拒登录, 不删条目方便临时禁
+# 7/28 实测就是这样翻的车: 交付包里只有 users.yaml.example, clients.yaml
+# 整个被漏了 (打包脚本 --exclude='clients.yaml' 防真 secret 进包是对的,
+# 但没有配套的 example + 生成步骤). setup.sh 现在会把本文件 cp 成 clients.yaml.
 #
-# 安全:
-#   - 这文件含 secret hash, 不能进 public git. 跟 users.yaml 一样.
-#   - 生产部署: chmod 600 + 路径 ~/.catfish/identity-server/clients.yaml
-#   - secret 给业务方时一次性给, 不留库 — 业务方自己存 .env / k8s secret
+# ── secret 说明 ───────────────────────────────────────────────────
+#
+# 下面的 hash 对应 demo secret: hermes-dev-secret-2026-please-change
+# 这个明文**硬编码在 Companion 二进制里** (hermes_jwt_sync.rs:16 ·
+# BL-P26-DEMO-SECRET), 所以它的 hash 放进交付包不构成额外泄露 ——
+# secret 本身已经随 Companion 装到每台员工机器上了.
+#
+# POC 期直接用. 生产要换的话, **两侧必须一起换**:
+#   1. 生成新 hash:
+#      python3 -c 'import bcrypt; print(bcrypt.hashpw(b"新secret", bcrypt.gensalt()).decode())'
+#   2. 替换下面的 client_secret_hash, 重启 identity
+#   3. Companion 侧改 hermes_jwt_sync.rs 里的明文并重发客户端
+#      (目前是硬编码, 只改服务端会让所有 Companion 的 service token 同步全挂)
 
 clients:
-  # ── hermes-cli (5/14 BL-RBAC P0 + B sprint Day 1+评估, 第一个真接 OAuth 的服务) ──
   - client_id: hermes-cli
-    # demo secret: hermes-dev-secret-2026-please-change
-    # 生产部署 IT 用上面 bcrypt 命令生成新 hash + 改这条 + 同步给业务方
     client_secret_hash: $2b$12$5LdhU49ZtK7EpYFYdTn4m.48yzoBrU0CasSHmpuY/CGjUKQsYpBcG
+    service_token_ttl_seconds: 2592000
     name: Hermes CLI
-    description: 鲶鱼 hermes 0.13 CLI — 跑 skill / 跑批 / agent loop
-    # 双 grant 支持:
-    #   - authorization_code: 员工 `hermes model` 时浏览器交互登录 (有 user 身份)
-    #   - client_credentials: 未来 hermes 跑批/cron/a2a 跑 service 身份 (无 user)
-    # 5/14 21:44 鸿波真测时撞 'No inference provider configured', 排查发现
-    # `hermes model` 走 authorization_code (浏览器), 我之前只配 client_credentials
-    # 是错配. 5/14 evening 修.
+    description: 鲶鱼 hermes CLI — 跑 skill / 跑批 / agent loop (Companion 同步的 service token 用)
     allowed_grant_types:
       - authorization_code
       - client_credentials
     allowed_scopes:
-      - openid                # OIDC 标准 scope (authorization_code 必需)
+      - openid
       - email
       - profile
-      - chat.completions      # POST /v1/chat/completions
-      - audit.write           # 写 audit event 用
-      - tools.invoke          # 调 native tool / MCP
-      - skills.run            # catfish_run_skill
-      # BL-PLUGIN-AUTH-FIX (7/27 鸿波): hermes 进程内 plugin 后台任务免 quota 授权.
-      #
-      # 真踩坑: catfish-memory (Dream Engine distill / sync_turn summarize) 和
-      # catfish-xcatfish-user (memory_enforce) 两个 plugin 都读
-      # CATFISH_INTERNAL_DEV_TOKEN — 那是 **gateway 进程内 loopback 专用**
-      # (auth/dev_token.py:11-15 "进程内存, 重启即变, 不写 .env"). plugin 跑在
-      # hermes 进程 (另一进程 · 生产还跨机), 永远拿不到 → 静默 return None →
-      # Dream Engine 9.7 天没跑, memory_enforce 静默降级.
-      #
-      # 正解: plugin 复用 **hermes → gateway 这一跳**的凭证 (.env OPENAI_API_KEY,
-      # aud=catfish-gateway · token_use=service · 由本 client 的 client_credentials
-      # 派发 · refresh-jwt-hermes-env.sh 30 天刷新 · 生产分离时中央派发天然跨机).
-      #
-      # 这个 scope 让 gateway 能区分 "有权免 quota 的后台任务" vs "普通员工调用
-      # 硬加 X-Catfish-Internal header 蹭免费额度" (老代码只看 header 零校验).
-      - background.tasks      # 后台任务 (distill / summarize / memory_enforce) 免 quota
+      - chat.completions
+      - audit.write
+      - tools.invoke
+      - skills.run
+      - background.tasks
     department: infra
     role: service
     enabled: true
-    # 5/18 BL-HERMES-AUTH-LONGLIVED: 这个 client 的 service token 给 30 天.
-    # 默认 1h 对 hermes daemon 太短 — 每小时要重新 mint 一次, 单机部署没人值守.
-    # 30 天足够覆盖一般运维周期, 到期前用 mint-hermes-service-token.sh 续一次.
-    # routes.py cap 365 天上限.
-    service_token_ttl_seconds: 2592000

@@ -1,0 +1,36 @@
+# HTTPS override (P3.5.80 · 7/28 鸿波达华测试机现场)
+#
+# ── 为什么单独一个文件 ────────────────────────────────────────────
+#
+# 起初把 443 端口和证书挂载直接写进 docker-compose.yml, 结果是**无条件映射** ——
+# 哪怕 HTTP 模式, Docker 也要去抢宿主机 443. 测试机上 443 已被别的服务占用,
+# web 容器直接起不来:
+#     failed to bind host port 0.0.0.0:443/tcp: address already in use
+# 而且这会连累 HTTP 模式一起挂, 等于为了没启用的功能把默认路径搞坏.
+#
+# Compose 没有条件 ports 语法, 标准做法就是 override 文件叠加:
+#     HTTP :  docker compose -f docker-compose.yml up
+#     HTTPS:  docker compose -f docker-compose.yml -f docker-compose.https.yml up
+# setup.sh 按 ENABLE_HTTPS 自动决定用不用本文件.
+#
+# ── 端口可改 ─────────────────────────────────────────────────────
+#
+# 宿主机 443 若被占且不能停 (常见: 已有 nginx / apache), 在 .env 里改:
+#     CATFISH_HTTPS_PORT=8443
+# 员工则访问 https://<server-ip>:8443
+# ⚠ 改了端口, .env 里的 CATFISH_OIDC_ISSUER / CATFISH_IDENTITY_ISSUER /
+#   CATFISH_IDENTITY_CORS_ORIGINS 三项也必须带上同一个端口, 否则 OIDC 的
+#   issuer 对不上会验签失败. setup.sh 会自动处理.
+
+services:
+  web:
+    environment:
+      # =1 时 web 容器内 entrypoint 41-catfish-ssl.sh 才启用 443 server block.
+      # 仍会检查证书是否真实存在, 缺失则打日志降级为只跑 :80, 不让容器反复重启.
+      CATFISH_ENABLE_HTTPS: "1"
+    ports:
+      - "${CATFISH_HTTPS_PORT:-443}:443"
+    volumes:
+      # 证书由 setup.sh 现场生成 (SAN 含服务器 IP) · 不预打进镜像 ——
+      # 打包时不知道客户 IP, 预生成的证书到现场是废的.
+      - ./certs:/etc/nginx/certs:ro

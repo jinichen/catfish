@@ -75,6 +75,29 @@ FULL_AMD_OUT="$DELIVERY/dahua-poc-FULL-amd64-${DATE}.tar.gz"
 
 cd "$CENTRAL"
 
+# ── 前置检查: Docker daemon 必须活着 (P3.5.80 · 7/28) ──────────────
+#
+# 7/28 撞过: Docker Desktop 没启动就跑本脚本. `docker compose config` 是纯
+# 客户端操作, 照样把 image 列表打印出来了 —— 看着一切正常; 直到几十秒后
+# 第一次 docker pull 才报 socket 连不上. 在 QEMU 跨架构构建里, 这种"跑了一段
+# 才失败"特别浪费时间.
+#
+# 提前 3 秒探一次, 立刻失败.
+if ! docker info > /dev/null 2>&1; then
+    echo "❌ 连不上 Docker daemon."
+    echo "   mac : 启动 Docker Desktop, 等鲸鱼图标不再转"
+    echo "   linux: sudo systemctl start docker"
+    echo "   确认: docker info | head -5"
+    exit 1
+fi
+
+# buildx 是跨架构构建的前提, 缺了会在 Phase 1 中途才炸.
+if ! docker buildx version > /dev/null 2>&1; then
+    echo "❌ 没有 docker buildx · 跨架构构建做不了."
+    echo "   Docker Desktop 自带; 独立 docker 需装 docker-buildx-plugin."
+    exit 1
+fi
+
 mkdir -p "$DELIVERY"
 
 # 动态从 docker-compose.yml 拿 image list · 免硬编码错. Sort -u 去重.
@@ -330,6 +353,7 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
                 rsync -a --exclude='.env' --exclude='.DS_Store' \
                       --exclude='users.yaml' --exclude='clients.yaml' \
                       --exclude='database.yaml' \
+                      --exclude='*.bak' \
                       --exclude='*.dahua' \
                       "$SRC_CFG/" "$DST_CFG/" 2>/dev/null || \
                 cp -R "$SRC_CFG/"* "$DST_CFG/" 2>/dev/null
@@ -388,6 +412,8 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
             # 保 · identity-server/config (users.yaml.example 必带 · setup.sh cp 到 users.yaml)
             #    · llm-gateway/config     (models.yaml + roles.yaml 必带 · gateway mount 用)
             cd "$REPO_ROOT"
+            # P3.5.81 (7/28) 追加 3 条敏感兜底 (rsync 已排 · tar 再挡一道:
+            # 21:01 的包实际带出过 database.yaml · 内含真实 dev PG 密码):
             tar czf "$OUT_TAR" \
                 --exclude='delivery/dahua-poc/certs' \
                 --exclude='delivery/dahua-poc/.env' \
@@ -395,10 +421,53 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
                 --exclude='delivery/dahua-poc/README.md' \
                 --exclude='delivery/dahua-poc/companion' \
                 --exclude='delivery/dahua-poc/*/config-overlay' \
+                --exclude='delivery/dahua-poc/*/config/database.yaml' \
+                --exclude='*.bak' \
+                --exclude='.env.bak.*' \
                 delivery/dahua-poc/
             cd "$CENTRAL"
 
             ls -lh "$OUT_TAR"
+
+            # ── P3.5.81 (7/28): 打完立刻验包 · fail-loud ─────────────────
+            # 7/28 两个方向都翻过车: 该带的没带 (clients.yaml.example 缺 →
+            # 客户装机全翻 401 invalid_client) + 不该带的带了 (database.yaml
+            # 真实 dev PG 密码). 打包脚本自己验 · 不过不出包 · 不靠人肉 tar tzf.
+            TLIST=$(tar tzf "$OUT_TAR")
+            VERIFY_FAIL=0
+            for must in \
+                "delivery/dahua-poc/setup.sh" \
+                "delivery/dahua-poc/verify-login.sh" \
+                "delivery/dahua-poc/docker-compose.yml" \
+                "delivery/dahua-poc/docker-compose.https.yml" \
+                "delivery/dahua-poc/.env.example" \
+                "delivery/dahua-poc/identity-server/config/users.yaml.example" \
+                "delivery/dahua-poc/identity-server/config/clients.yaml.example"; do
+                if ! echo "$TLIST" | grep -qx "$must"; then
+                    echo "  ❌ 验包: 缺 $must"; VERIFY_FAIL=1
+                fi
+            done
+            for mustnot in \
+                "delivery/dahua-poc/.env" \
+                "delivery/dahua-poc/identity-server/config/users.yaml" \
+                "delivery/dahua-poc/identity-server/config/clients.yaml" \
+                "delivery/dahua-poc/identity-server/config/database.yaml"; do
+                if echo "$TLIST" | grep -qx "$mustnot"; then
+                    echo "  ❌ 验包: 不该带 $mustnot (敏感 / 应装机时生成)"; VERIFY_FAIL=1
+                fi
+            done
+            # setup.sh 是不是**新**版本 · 抽出来查 3 个本轮修复的标记
+            SETUP_IN_TAR=$(tar xzf "$OUT_TAR" -O delivery/dahua-poc/setup.sh)
+            for marker in "clients.yaml 生成" "DASHSCOPE_API_KEY 是空的" "CERT_DAYS=397"; do
+                if ! echo "$SETUP_IN_TAR" | grep -q "$marker"; then
+                    echo "  ❌ 验包: setup.sh 缺标记「$marker」→ 打进去的是老版本"; VERIFY_FAIL=1
+                fi
+            done
+            if [ "$VERIFY_FAIL" = "1" ]; then
+                echo "  ❌ $arch 验包不过 · 这个 tar 不能发"
+                exit 1
+            fi
+            echo "  ✓ 验包过 · 必带 7 在 / 敏感 4 不在 / setup.sh 3 标记在"
             echo "  ✅ $arch 完整 tar 完成"
         done
 
@@ -418,24 +487,42 @@ fi
 echo ""
 echo "=== DONE ==="
 echo ""
-echo "→ image-only tar (给已装机客户增量更新):"
-[ "$SKIP_ARM64" != "1" ] && echo "    $ARM_OUT"
-[ "$SKIP_AMD64" != "1" ] && echo "    $AMD_OUT"
-if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
-    echo "→ FULL delivery tar (给全新客户 · setup+config+image 一坨):"
-    [ "$SKIP_ARM64" != "1" ] && [ -f "$FULL_ARM_OUT" ] && echo "    $FULL_ARM_OUT"
-    [ "$SKIP_AMD64" != "1" ] && [ -f "$FULL_AMD_OUT" ] && echo "    $FULL_AMD_OUT"
-fi
-ls -lh "$ARM_OUT" "$AMD_OUT"
+# ── 产物清单 (P3.5.80 · 7/28 重写) ────────────────────────────────
+#
+# 老逻辑用 SKIP_* 判断该不该列 —— 但 REPACK_ONLY=1 恰恰是 "SKIP=1 却确实产出了
+# FULL 包" 的组合, 于是两栏都不打印; 紧接着一句光秃秃的
+#     ls -lh "$ARM_OUT" "$AMD_OUT"
+# 把 image-only 包倒在了 "FULL delivery tar" 这个标题底下 ——
+# 谁照这个输出挑文件发给客户, 就会把 image-only 当成 FULL 发出去, 客户解开
+# 没有 setup.sh, 装不了.
+#
+# 改成按**文件在不在**列 (产物就是产物, 跟跑了哪个 phase 无关), 且每行自带
+# 类型标签, 不靠标题分组.
+_list_artifact() {   # $1=路径  $2=类型说明
+    [ -f "$1" ] || return 0
+    printf "    %-8s %-58s %s\n" \
+        "$2" "$(basename "$1")" "$(du -h "$1" | cut -f1)"
+}
+
+echo "→ 产物 (只列真实存在的文件):"
+echo "    类型     文件名                                                     大小"
+_list_artifact "$FULL_ARM_OUT" "FULL"
+_list_artifact "$FULL_AMD_OUT" "FULL"
+_list_artifact "$ARM_OUT"      "仅镜像"
+_list_artifact "$AMD_OUT"      "仅镜像"
 echo ""
-echo "达华 IT 现场:"
-echo "  gunzip -c dahua-poc-central-<ARCH>-20260720.tar.gz | docker load"
-echo "  cd /path/to/catfish/central && docker compose up -d"
+echo "    FULL   = 给新客户装机 (含 setup.sh + config + 镜像) · 解开就能 bash setup.sh"
+echo "    仅镜像 = 给已装机客户换镜像 · 里面**没有** setup.sh, 单独发过去装不了"
 echo ""
-echo "本 tar 含 (从头 rebuild 全 8 image):"
-echo "  Task #29 员工自主改密码 (identity)"
-echo "  Task #16 catfish-auto 动态路由 (gateway)"
-echo "  Task #14 中文 auth failed match (gateway)"
-echo "  Task #17 CORS Tauri origin (identity)"
-echo "  Task #7  orjson · Task #6 双 audience"
-echo "  postgres:16-alpine + nginx:1.27-alpine 官方最新"
+# P3.5.80 (7/28): 这里原来写死 "20260720" 的文件名, 还给了一套
+# "cd /path/to/catfish/central && docker compose up -d" 的指令 ——
+# 跟上面刚打印的 3 步装机流程互相矛盾, 且 central 目录根本不在交付包里.
+# 同一份输出给两套冲突指令, 客户 IT 必然照错的那套做. 删掉, 只留增量更新场景.
+echo "已装机客户做增量更新 (只换 image · 不动 .env / 数据卷):"
+echo "  1. 把 dahua-poc-central-<ARCH>-${DATE}.tar.gz 传到服务器"
+echo "  2. gunzip -c dahua-poc-central-<ARCH>-${DATE}.tar.gz | docker load"
+echo "  3. cd <装机目录>/delivery/dahua-poc/"
+echo "     docker compose up -d --force-recreate      # HTTP 模式"
+echo "     docker compose -f docker-compose.yml -f docker-compose.https.yml \\"
+echo "                    up -d --force-recreate      # HTTPS 模式"
+echo "  4. bash verify-login.sh                       # 验登录链路"

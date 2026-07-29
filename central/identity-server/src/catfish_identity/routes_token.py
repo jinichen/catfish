@@ -273,8 +273,19 @@ async def _handle_refresh_token(
                     claims=access_token_claims,
                     ttl_seconds=_TOKEN_TTL_SECS,
                 )
+                # P3.5.82 (7/29): grace 分支同样要带 id_token —— 见下面正常
+                # rotation 分支的注释。这条分支正是"客户端上次没收好"时走的
+                # 重试路径, 少了 id_token 会让重试也解析失败, 等于 grace 白设。
+                grace_id_token = signer.sign_id_token(
+                    issuer=issuer,
+                    subject=user.email,
+                    audience=client_id,
+                    claims=dict(user_claims),
+                    ttl_seconds=_TOKEN_TTL_SECS,
+                )
                 return JSONResponse({
                     "access_token": access_token,
+                    "id_token": grace_id_token,
                     "refresh_token": child.token,
                     "refresh_expires_in": int(child.expires_at - time.time()),
                     "token_type": "Bearer",
@@ -372,12 +383,31 @@ async def _handle_refresh_token(
         parent_token=record.token,
     )
 
+    # P3.5.82 (7/29): refresh 响应必须带 id_token。
+    #
+    # OIDC Core §12.1: 若原授权含 openid scope, refresh 响应 SHOULD 返新的
+    # id_token。之前这里只返 access_token, 客户端 (Companion) 把 id_token 当
+    # 必填字段解析 → 反序列化失败 → **拿不到已经 rotation 出来的新 refresh_token**
+    # → 下次拿旧的重试 → 服务端判"已用过/已吊销" → 会话直接死, 员工被弹回登录页。
+    #
+    # 现场表现极难定位: 登录后一切正常, **恰好一小时后**(access_token TTL)
+    # 突然弹登录, 且日志里第一条错是"已用过/已吊销", 看起来像 token 被人盗用,
+    # 真正的错(missing field `id_token`)在前一分钟、是另一条完全不同的文案。
+    id_token = signer.sign_id_token(
+        issuer=issuer,
+        subject=user.email,
+        audience=client_id,
+        claims=dict(user_claims),
+        ttl_seconds=_TOKEN_TTL_SECS,
+    )
+
     logger.info(
         "token OK (refresh): user=%s client=%s scope=%s",
         user.email, client_id, final_scope,
     )
     return JSONResponse({
         "access_token": access_token,
+        "id_token": id_token,
         "refresh_token": new_rt.token,
         "refresh_expires_in": int(new_rt.expires_at - time.time()),
         "token_type": "Bearer",
