@@ -77,6 +77,12 @@ services:
       - "8998:8998"
     volumes:
       - ./identity-server/config:/app/config:ro
+      # P3.5.80 (7/28 鸿波达华现场): identity 的 RSA 签名密钥写在
+      # /home/catfish/.catfish/identity-server/keys, 之前**没有持久卷** ——
+      # 容器一重建密钥就没, 已签发的 JWT 全部作废(员工要重登),
+      # 且两个 worker 每次都要重新抢一次生成(见 jwt_signer 竞态修复).
+      # 对齐 gateway 的 gateway_data 做法, 单独给一个卷.
+      - identity_data:/home/catfish/.catfish
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8998/.well-known/openid-configuration"]
       interval: 30s
@@ -115,6 +121,12 @@ services:
       # 实际返 id_token (aud=catfish-companion, OIDC 惯例), 不是 access_token. gateway 需
       # 双 audience 才接. 默认单值 catfish-gateway 会拒 Companion id_token · 员工 chat 401.
       CATFISH_OIDC_AUDIENCE: ${CATFISH_OIDC_AUDIENCE:-catfish-companion,catfish-gateway}
+      # P3.5.80 (7/28): 任何走 HTTPS 的部署里, issuer 会是 https://xxx, 而
+      # oidc.py:80 默认 jwks_uri = f"{issuer}/.well-known/jwks.json" ——
+      # gateway 在容器内拉这个地址, 自签证书场景会撞 SSL 验证失败.
+      # 走容器内网 HTTP 直连 identity 绕开; iss claim 仍按原 issuer 字符串比对.
+      # auth/__init__.py:217 已支持该 env.
+      CATFISH_OIDC_JWKS_URI: ${CATFISH_OIDC_JWKS_URI:-http://identity:8998/.well-known/jwks.json}
       # facts_router 文件落地 (BL-Q3-FACT-PG-MIGRATE 之前的临时方案)
       CATFISH_FACTS_DIR: ${CATFISH_FACTS_DIR:-/home/catfish/.catfish/facts}
       # API keys (公网 LLM)
@@ -292,5 +304,6 @@ services:
 volumes:
   pgdata:
   gateway_data:
+  identity_data:     # P3.5.80 (7/28) identity RSA 签名密钥 · 换了会让全员重登
   hubdata:
   wikidata:          # P3.3.18-cleanup (7/14) 补 wiki-hub FS fallback

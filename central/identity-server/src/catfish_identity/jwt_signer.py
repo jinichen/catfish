@@ -65,41 +65,139 @@ class JwtSigner:
             "jwt_signer 初始化: kid=%s, key_dir=%s", self._kid, self.key_dir
         )
 
+    # 输的一方等赢家写完的最长时间. RSA 2048 生成 ~0.1s, 8s 是大裕量.
+    _PEER_WAIT_SEC = 8.0
+
     def _load_or_generate(self) -> rsa.RSAPrivateKey:
-        """加载本地密钥, 没有就生成 + 持久化."""
-        if self._private_path.exists():
-            with open(self._private_path, "rb") as f:
-                pem = f.read()
-            key = serialization.load_pem_private_key(pem, password=None)
-            if not isinstance(key, rsa.RSAPrivateKey):
-                raise RuntimeError(
-                    f"{self._private_path} 不是 RSA 密钥. 删了让自动重新生成."
-                )
+        """加载本地密钥, 没有就生成 + 持久化.
+
+        # 为啥要防并发 (P3.5.80 · 7/28 鸿波达华现场血泪)
+
+        老实现是 `if exists(): load  else: generate + write`, **无锁且非原子**.
+        `UVICORN_WORKERS` 默认 2, 两个 worker 同时启动时都看到文件不存在,
+        于是**各自生成一把不同的 RSA**; 写盘时后写的覆盖先写的, 但每个
+        worker 内存里留着自己那把.
+
+        后果: kid = sha256(公钥)[:16], 两把密钥 → 两个不同 kid.
+        `/.well-known/jwks.json` 由哪个 worker 应答就返哪把 ——
+        worker A 签发的 token 拿 worker B 的 JWKS 去验必然失败,
+        表现为**登录时好时坏, 大约一半概率**. 7/28 达华现场日志实证:
+        "私钥不存在, 生成新 RSA" 连打两行 = 两个 worker 都走了生成分支.
+
+        # 修法
+
+        先写唯一临时文件, 再 `os.link()` 原子挂到最终路径 ——
+        link 的目标已存在会直接 FileExistsError, 所以:
+          · 最终文件**永远不会**出现"已创建但内容不全"的中间态
+          · 抢输的一方读到的必定是赢家写完的完整密钥
+        输的一方轮询等待 (赢家可能还在 link 的路上), 超时 fail-loud.
+        """
+        # ── 快路径: 已经有了直接读 ──
+        # strict=True: 文件非空却解析不了 = 真损坏, 立刻 raise, 不静默重生成
+        key = self._try_load(strict=True)
+        if key is not None:
             return key
 
-        logger.warning("私钥不存在, 生成新 RSA 2048 密钥对到 %s", self.key_dir)
-        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        # 持久化
-        priv_pem = key.private_bytes(
+        # ── 慢路径: 生成 → 临时文件 → 原子挂载 ──
+        new_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        priv_pem = new_key.private_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.PKCS8,
             encryption_algorithm=serialization.NoEncryption(),
         )
-        pub_pem = key.public_key().public_bytes(
+        pub_pem = new_key.public_key().public_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PublicFormat.SubjectPublicKeyInfo,
         )
-        with open(self._private_path, "wb") as f:
-            f.write(priv_pem)
-        with open(self._public_path, "wb") as f:
-            f.write(pub_pem)
-        # 私钥权限 0600 (只有 owner 可读)
+
+        tmp = self.key_dir / f".private.pem.tmp.{os.getpid()}"
         try:
-            os.chmod(self._private_path, 0o600)
-        except OSError:
-            # Windows 不支持 chmod, 忽略
-            pass
+            # 0600 落盘, 再 link. 权限在 link 前设好, 避免出现可读窗口.
+            fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                f.write(priv_pem)
+
+            try:
+                os.link(tmp, self._private_path)
+                won = True
+            except FileExistsError:
+                # 别的 worker 先挂上去了 —— 用它那把, 丢掉自己生成的
+                won = False
+            except (AttributeError, OSError):
+                # 文件系统不支持 hardlink (罕见). 退回 O_EXCL 直写,
+                # 仍是原子创建, 只是内容有极短的空窗.
+                try:
+                    fd2 = os.open(
+                        self._private_path,
+                        os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                        0o600,
+                    )
+                    with os.fdopen(fd2, "wb") as f:
+                        f.write(priv_pem)
+                    won = True
+                except FileExistsError:
+                    won = False
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+        if won:
+            logger.warning("私钥不存在, 已生成新 RSA 2048 密钥对到 %s", self.key_dir)
+            try:
+                self._public_path.write_bytes(pub_pem)
+            except OSError as e:
+                # 公钥只是方便运维查看, JWKS 是从私钥现算的, 写失败不致命
+                logger.warning("public.pem 写入失败 (不影响签发): %s", e)
+            return new_key
+
+        # 抢输了 —— 等赢家的密钥落定再读, 保证两个 worker 同一把 kid
+        logger.info("另一个 worker 已生成密钥, 加载它那把 (避免 kid 不一致)")
+        peer = self._wait_for_peer_key()
+        if peer is None:
+            raise RuntimeError(
+                f"等待另一个 worker 写入 {self._private_path} 超时 "
+                f"({self._PEER_WAIT_SEC}s). 若该文件残留为空, 删掉它重启 identity."
+            )
+        return peer
+
+    def _try_load(self, *, strict: bool) -> rsa.RSAPrivateKey | None:
+        """读现有私钥. 不存在 / 空 → None.
+
+        strict=True  (启动快路径): 文件非空却解析不了 = 真损坏 → raise.
+                     不能静默重新生成 —— 那会悄悄换掉签名密钥,
+                     已签发的 token 全部失效且无人察觉.
+        strict=False (等待另一个 worker): 解析不了当作"还没写完" → None,
+                     让调用方继续轮询.
+        """
+        try:
+            pem = self._private_path.read_bytes()
+        except (FileNotFoundError, OSError):
+            return None
+        if not pem.strip():
+            return None
+        try:
+            key = serialization.load_pem_private_key(pem, password=None)
+        except (ValueError, TypeError):
+            if strict:
+                raise
+            return None
+        if not isinstance(key, rsa.RSAPrivateKey):
+            raise RuntimeError(
+                f"{self._private_path} 不是 RSA 密钥. 删了让自动重新生成."
+            )
         return key
+
+    def _wait_for_peer_key(self) -> rsa.RSAPrivateKey | None:
+        """轮询等另一个 worker 把密钥写完. 超时返 None."""
+        deadline = time.monotonic() + self._PEER_WAIT_SEC
+        while time.monotonic() < deadline:
+            key = self._try_load(strict=False)
+            if key is not None:
+                return key
+            time.sleep(0.05)
+        return None
 
     @staticmethod
     def _compute_kid(public_key: rsa.RSAPublicKey) -> str:

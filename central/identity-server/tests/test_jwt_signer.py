@@ -67,3 +67,68 @@ def test_corrupted_private_key_raises(tmp_path) -> None:
     bad.write_text("not a real key")
     with pytest.raises((ValueError, Exception)):
         JwtSigner(key_dir=tmp_path)
+
+
+# ── P3.5.80 (7/28 鸿波达华现场) · 并发生成竞态回归 ────────────────────
+#
+# 老实现是 `if exists(): load else: generate + write`, 无锁非原子.
+# UVICORN_WORKERS 默认 2, 两 worker 同时启动各生成一把不同 RSA →
+# kid 不同 → JWKS 返哪把取决于哪个 worker 应答 → JWT 验签约 50% 失败,
+# 表现为"登录时好时坏". 现场日志实证: "私钥不存在, 生成新 RSA" 打了两行.
+#
+# 实测: 老逻辑 8 进程并发 → 8 个不同 kid; 修复后 → 1 个.
+
+def _kid_in_subprocess(key_dir: str, q) -> None:
+    """子进程里初始化 signer, 把 kid 丢回队列 (模块级函数才能被 pickle)."""
+    from pathlib import Path
+
+    from catfish_identity.jwt_signer import JwtSigner
+
+    try:
+        q.put(JwtSigner(key_dir=Path(key_dir))._kid)
+    except Exception as e:  # noqa: BLE001
+        q.put(f"ERR:{e}")
+
+
+@pytest.mark.parametrize("n_workers", [2, 8])
+def test_concurrent_init_yields_single_kid(tmp_path, n_workers) -> None:
+    """N 个进程同时初始化 → 必须只有一把密钥 (一个 kid).
+
+    n=2 对应 UVICORN_WORKERS 默认值; n=8 放大竞态窗口.
+    """
+    import multiprocessing as mp
+
+    ctx = mp.get_context("spawn")   # fork 会继承已加载的 key, 测不出竞态
+    q = ctx.Queue()
+    procs = [
+        ctx.Process(target=_kid_in_subprocess, args=(str(tmp_path), q))
+        for _ in range(n_workers)
+    ]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(60)
+
+    kids = [q.get() for _ in procs]
+    errors = [k for k in kids if str(k).startswith("ERR:")]
+    assert not errors, f"子进程报错: {errors}"
+    assert len(set(kids)) == 1, (
+        f"{n_workers} 个 worker 生成了 {len(set(kids))} 把不同密钥: {set(kids)}. "
+        "两 worker kid 不一致会导致 JWT 验签随机失败."
+    )
+
+
+def test_no_temp_files_left_behind(tmp_path) -> None:
+    """生成密钥后不留 .tmp 残file (抢输的一方也要清干净)."""
+    JwtSigner(key_dir=tmp_path)
+    leftovers = list(tmp_path.glob(".private.pem.tmp.*"))
+    assert not leftovers, f"残留临时文件: {leftovers}"
+
+
+def test_private_key_permission_0600(tmp_path) -> None:
+    """私钥落盘必须 0600 —— link 之前就设好, 不留可读窗口."""
+    import stat
+
+    JwtSigner(key_dir=tmp_path)
+    mode = (tmp_path / "private.pem").stat().st_mode
+    assert stat.S_IMODE(mode) == 0o600, f"私钥权限是 {oct(stat.S_IMODE(mode))}, 应为 0600"

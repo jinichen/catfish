@@ -37,6 +37,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 非 root 用户 (生产最佳实践, 防容器逃逸提权)
 RUN useradd --create-home --shell /bin/bash --uid 1000 catfish
 
+# P3.5.80 (7/28 鸿波达华现场): 预建数据目录并 chown.
+# docker-compose 把命名卷挂到 /home/catfish/.catfish —— 若该路径在镜像里
+# **不存在**, Docker 会新建目录且属主为 root:root, 而容器跑的是 USER catfish,
+# 写不进去. 挂载点在镜像里存在时, 空卷会继承该目录的属主与权限, 才是对的.
+RUN mkdir -p /home/catfish/.catfish \
+    && chown -R catfish:catfish /home/catfish/.catfish
+
 COPY --from=builder /opt/venv /opt/venv
 COPY --chown=catfish:catfish src /app/src
 COPY --chown=catfish:catfish alembic.ini /app/
