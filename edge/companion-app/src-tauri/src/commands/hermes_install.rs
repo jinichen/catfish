@@ -29,6 +29,48 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{OnceLock, RwLock};
+
+/// 首启装机失败的原因, 给 Dashboard 用。
+///
+/// # 为什么要存下来
+///
+/// `lib.rs` 的 setup hook 里, 装机失败原来只有一行 `log::warn!` 就算完了 ——
+/// 界面上什么都不会变。员工看到的是一个装好了的 App, 只是 hermes 不在,
+/// 聊天永远没反应; Dashboard 的服务状态显示的是
+/// "hermes 未启动 — 检查 brew services list hermes (launchd 应自动拉)",
+/// 把人往 launchd 的方向带, 而真正的原因是**它从来就没装上**。
+///
+/// 达华现场就是这么过去的: 自动装挂了没人知道, 最后靠手工装 hermes 收场。
+///
+/// 存在这里, `commands::hermes::hermes_status` 在探不到 TCP 时优先报这个。
+static BOOTSTRAP_ERROR: OnceLock<RwLock<Option<String>>> = OnceLock::new();
+
+fn bootstrap_error_cell() -> &'static RwLock<Option<String>> {
+    BOOTSTRAP_ERROR.get_or_init(|| RwLock::new(None))
+}
+
+/// 记下首启装机失败的原因 (`lib.rs` setup hook 调)。
+pub fn set_bootstrap_error(msg: impl Into<String>) {
+    if let Ok(mut w) = bootstrap_error_cell().write() {
+        *w = Some(msg.into());
+    }
+}
+
+/// 装机成功后清掉 —— 员工点了"重新安装"修好之后, 状态栏不能还挂着旧错误。
+pub fn clear_bootstrap_error() {
+    if let Ok(mut w) = bootstrap_error_cell().write() {
+        *w = None;
+    }
+}
+
+/// 取首启装机失败的原因, 没失败过返 None。
+pub fn bootstrap_error() -> Option<String> {
+    // `(*g).clone()` 而不是 `g.clone()` —— 后者读起来像在 clone 那个
+    // RwLockReadGuard (guard 没实现 Clone, 实际靠 deref 才落到 Option<String> 上),
+    // 写明确一点省得下次有人看半天。
+    bootstrap_error_cell().read().ok().and_then(|g| (*g).clone())
+}
 
 /// hermes 是否已装 (检测 ~/.hermes/hermes-agent/pyproject.toml 存在).
 pub fn hermes_agent_installed() -> bool {
@@ -137,51 +179,101 @@ const RUNTIME_ARCHIVES: [&str; 4] = [
     "chromium-embed.tar.gz",
 ];
 
-/// 找到一个"齐活"的运行时目录, 按优先级依次尝试。
+/// 一个目录能不能当运行时目录用 —— `install.sh` + `uv` 是入场券, 缺了没法装。
 ///
-/// 1. `.app` 内的 `resources/mac/` —— 老形态。仍然支持: 开发机和历史 dmg 都是
-///    这个布局, 不能因为改了打包方式就让老版本装不上。
-/// 2. `~/.catfish/runtime/` —— 新形态。由 Companion 首次启动时下载解压, 或者
-///    离线场景下由 IT 手工放进去。
+/// 1024 字节的下限是防"文件在但是空的": git-lfs 没拉下来时留的是几十字节的
+/// 指针文件, 存在性检查会过, 执行时才挂。
+fn runtime_dir_usable(dir: &Path) -> bool {
+    ["install.sh", "uv"]
+        .iter()
+        .all(|f| std::fs::metadata(dir.join(f)).map(|m| m.len() > 1024).unwrap_or(false))
+}
+
+/// 这个目录里四个运行时大包到位几个。
+fn runtime_archive_count(dir: &Path) -> usize {
+    RUNTIME_ARCHIVES
+        .iter()
+        .filter(|f| std::fs::metadata(dir.join(f)).map(|m| m.len() > 1024).unwrap_or(false))
+        .count()
+}
+
+/// 从候选目录里挑一个, 返回 `(大包数, 目录)`。都不可用返 None。
 ///
-/// 判据是 **install.sh 和 uv 在不在**, 不看那四个大包 —— 它们是可选的:
-/// install.sh 打过 offline patch, 缺哪个就 fallback 到联网装哪个。这样"公网
-/// 能通但没预下载"的机器也能装, 只是慢一点。
+/// 纯函数 (只读文件系统, 不碰 env), 方便单测直接喂临时目录。
+fn pick_runtime_dir(candidates: &[std::path::PathBuf]) -> Option<(usize, std::path::PathBuf)> {
+    let mut best: Option<(usize, &std::path::PathBuf)> = None;
+    for cand in candidates {
+        if !runtime_dir_usable(cand) {
+            continue;
+        }
+        let n = runtime_archive_count(cand);
+        log::info!("[runtime] 候选 {} · 运行时包 {n}/4", cand.display());
+        // 严格大于 —— 并列时保留先出现的那个 (调用方把 `.app` 排在前面),
+        // 这样胖 dmg 的行为跟以前完全一致。
+        //
+        // 写成 match 而不是 `is_none_or` (1.82 才稳定, 本项目 MSRV 1.77),
+        // 也不用 `map_or(true, ..)` (新版 clippy 会提示换 is_none_or, 而我们换不了)。
+        let better = match best {
+            None => true,
+            Some((best_n, _)) => n > best_n,
+        };
+        if better {
+            best = Some((n, cand));
+        }
+    }
+    best.map(|(n, p)| (n, p.clone()))
+}
+
+/// 找到一个"齐活"的运行时目录。
+///
+/// 两个候选:
+/// 1. `.app` 内的 `resources/mac/` —— 老形态。胖 dmg 四个大包都在这。
+/// 2. `~/.catfish/runtime/` —— 新形态。离线场景由 IT 手工解压进来
+///    (`scripts/make-runtime-bundle.sh` 打的那个包)。
+///
+/// # 判据为什么不能只看 install.sh + uv
+///
+/// 老逻辑是"两个候选按顺序试, 谁先满足 install.sh + uv 就用谁", `.app` 排第一。
+/// P3.5.85 把四个大包挪出 `.app` 之后, `.app` 里**恰好只剩这两个文件** ——
+/// 于是它永远第一个命中, 而且永远是 0/4。`~/.catfish/runtime/` 这个候选
+/// **再也轮不到**: IT 把 557MB 的离线包老老实实解压进去, Companion 连看都不看,
+/// 照样去联网装 hermes, 没有公网的机器直接装不上, 而且只在日志里留一行。
+///
+/// 所以现在两个候选都要评分: install.sh + uv 仍是入场券, **大包数量决定用谁**。
+/// 并列取 `.app`, 老 dmg 行为不变。
 fn resolve_runtime_dir(resource_dir: &Path) -> Result<std::path::PathBuf> {
     let in_bundle = resource_dir.join("resources").join("mac");
     let external = crate::util::paths::home_env()
         .ok()
         .map(|h| std::path::PathBuf::from(h).join(".catfish").join("runtime"));
 
-    let mut tried: Vec<String> = Vec::new();
-    for cand in [Some(in_bundle), external].into_iter().flatten() {
-        let sh = cand.join("install.sh");
-        let uv = cand.join("uv");
-        let ok = std::fs::metadata(&sh).map(|m| m.len() > 1024).unwrap_or(false)
-            && std::fs::metadata(&uv).map(|m| m.len() > 1024).unwrap_or(false);
-        if ok {
-            let n = RUNTIME_ARCHIVES
-                .iter()
-                .filter(|f| {
-                    std::fs::metadata(cand.join(f)).map(|m| m.len() > 1024).unwrap_or(false)
-                })
-                .count();
-            log::info!(
-                "[runtime] 用 {} · 四个运行时包到位 {}/4{}",
-                cand.display(),
-                n,
-                if n == 4 { "" } else { " (缺的会联网装, 慢但不挂)" }
-            );
-            return Ok(cand);
-        }
-        tried.push(cand.display().to_string());
-    }
+    let candidates: Vec<std::path::PathBuf> =
+        [Some(in_bundle), external].into_iter().flatten().collect();
 
-    anyhow::bail!(
-        "找不到运行时目录 (install.sh + uv). 已尝试:\n  {}\n\
-         解决: 让 Companion 联网自动下载, 或把运行时包解压到 ~/.catfish/runtime/",
-        tried.join("\n  ")
-    )
+    match pick_runtime_dir(&candidates) {
+        Some((n, dir)) => {
+            log::info!(
+                "[runtime] 用 {} · 运行时包 {n}/4{}",
+                dir.display(),
+                if n == 4 {
+                    " (全离线, 不需要公网)"
+                } else {
+                    " (缺的要联网装 —— 内网隔离的机器会装失败, \
+                     把 catfish-runtime-<arch>.tar.gz 解压到 ~/.catfish/runtime/)"
+                }
+            );
+            Ok(dir)
+        }
+        None => anyhow::bail!(
+            "找不到运行时目录 (install.sh + uv). 已尝试:\n  {}\n\
+             解决: 让 Companion 联网自动下载, 或把运行时包解压到 ~/.catfish/runtime/",
+            candidates
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join("\n  ")
+        ),
+    }
 }
 
 /// macOS 首启 · 装 hermes-agent 到 ~/.hermes/.
@@ -218,6 +310,7 @@ pub fn ensure_hermes_installed(resource_dir: &Path) -> Result<()> {
                     &want[..12.min(want.len())],
                     hermes_pinned_tag()
                 );
+                clear_bootstrap_error();
                 return Ok(());
             }
             Some(got) => {
@@ -394,6 +487,9 @@ pub fn ensure_hermes_installed(resource_dir: &Path) -> Result<()> {
         let _ = std::fs::remove_dir_all(dir.parent().unwrap_or(&dir));
     }
 
+    // 装成了就把上一次的失败清掉 —— 员工在 Dashboard 点"重新安装"修好之后,
+    // 状态栏不能还挂着旧错误。
+    clear_bootstrap_error();
     Ok(())
 }
 
@@ -520,5 +616,115 @@ mod tests_hermes_pin {
         // 40 位但含非十六进制
         assert!(super::parse_version_file(&"z".repeat(40)).is_none());
         assert!(super::parse_version_file("").is_none());
+    }
+}
+
+/// 运行时目录选择的回归测试。
+///
+/// ── 在防什么 ────────────────────────────────────────────────────────
+///
+/// 老逻辑"按顺序试, 先满足 install.sh + uv 的就用", 在四个大包挪出 `.app`
+/// 之后直接失效: 瘦身的 `.app` 必然第一个命中且必然 0/4, 把 `~/.catfish/runtime/`
+/// 永远挡在门外。表现是 IT 按文档把 557MB 离线包解压好, Companion 照样联网装,
+/// 内网机器装不上 —— 而且只在日志里留一行, 界面上什么都看不出来。
+///
+/// 前三个用例钉住三种真实机型 (内网离线 / 老胖 dmg / 能上公网), 后三个钉住
+/// "目录看着在、其实用不了"的几种残缺形态。少一个都可能悄悄退回老行为。
+#[cfg(test)]
+mod tests_runtime_dir_pick {
+    use super::{pick_runtime_dir, RUNTIME_ARCHIVES};
+    use std::path::{Path, PathBuf};
+    use tempfile::TempDir;
+
+    /// 写一个够大的假文件 —— 判据要求 >1024 字节。
+    fn put(dir: &Path, name: &str) {
+        std::fs::write(dir.join(name), vec![b'x'; 2048]).expect("write");
+    }
+
+    /// 造一个运行时目录: 永远有 install.sh + uv, 按需放 n 个大包。
+    fn make_dir(root: &Path, name: &str, archives: usize) -> PathBuf {
+        let d = root.join(name);
+        std::fs::create_dir_all(&d).expect("mkdir");
+        put(&d, "install.sh");
+        put(&d, "uv");
+        for f in RUNTIME_ARCHIVES.iter().take(archives) {
+            put(&d, f);
+        }
+        d
+    }
+
+    #[test]
+    fn thin_app_plus_offline_bundle_picks_the_bundle() {
+        // 这就是达华内网机器的形态: dmg 里只有 install.sh + uv,
+        // IT 把 catfish-runtime-<arch>.tar.gz 解压到了 ~/.catfish/runtime/。
+        let tmp = TempDir::new().unwrap();
+        let app = make_dir(tmp.path(), "app", 0);
+        let runtime = make_dir(tmp.path(), "runtime", 4);
+
+        let (n, picked) = pick_runtime_dir(&[app, runtime.clone()]).expect("该选出一个");
+        assert_eq!(picked, runtime, "有 4/4 的离线包却没选它 —— 内网机器会装失败");
+        assert_eq!(n, 4);
+    }
+
+    #[test]
+    fn fat_dmg_behaviour_unchanged_tie_goes_to_app() {
+        // 老的 578M dmg: 四个包都在 .app 里, ~/.catfish/runtime/ 也是全的。
+        // 并列时必须还是取 .app, 不能因为这次改动让历史 dmg 换行为。
+        let tmp = TempDir::new().unwrap();
+        let app = make_dir(tmp.path(), "app", 4);
+        let runtime = make_dir(tmp.path(), "runtime", 4);
+
+        let (n, picked) = pick_runtime_dir(&[app.clone(), runtime]).expect("该选出一个");
+        assert_eq!(picked, app, "并列时应保留先出现的 .app");
+        assert_eq!(n, 4);
+    }
+
+    #[test]
+    fn no_archives_anywhere_still_returns_app_for_network_install() {
+        // 能上公网的机器: 谁都没预下载, 用 .app 联网装, 不该报错。
+        let tmp = TempDir::new().unwrap();
+        let app = make_dir(tmp.path(), "app", 0);
+        let runtime = make_dir(tmp.path(), "runtime", 0);
+
+        let (n, picked) = pick_runtime_dir(&[app.clone(), runtime]).expect("该选出一个");
+        assert_eq!(picked, app);
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn dir_without_install_sh_and_uv_is_not_eligible() {
+        // ~/.catfish/runtime/ 里只解了大包、忘了 install.sh + uv —— 这个目录
+        // 没法用, 必须落回 .app, 而不是选中它然后在执行时才挂。
+        let tmp = TempDir::new().unwrap();
+        let app = make_dir(tmp.path(), "app", 0);
+
+        let half = tmp.path().join("half");
+        std::fs::create_dir_all(&half).unwrap();
+        for f in RUNTIME_ARCHIVES.iter() {
+            put(&half, f);
+        }
+
+        let (_, picked) = pick_runtime_dir(&[app.clone(), half]).expect("该选出一个");
+        assert_eq!(picked, app, "缺 install.sh/uv 的目录不该被选中");
+    }
+
+    #[test]
+    fn nothing_usable_returns_none() {
+        let tmp = TempDir::new().unwrap();
+        let empty = tmp.path().join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert!(pick_runtime_dir(&[empty]).is_none());
+        assert!(pick_runtime_dir(&[]).is_none());
+    }
+
+    #[test]
+    fn stub_sized_files_do_not_count() {
+        // git-lfs 没拉下来时留的是几十字节的指针文件 —— 存在但不能执行。
+        let tmp = TempDir::new().unwrap();
+        let d = tmp.path().join("lfs-stub");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("install.sh"), b"version https://git-lfs...").unwrap();
+        std::fs::write(d.join("uv"), b"version https://git-lfs...").unwrap();
+        assert!(pick_runtime_dir(&[d]).is_none(), "小文件该被判为不可用");
     }
 }

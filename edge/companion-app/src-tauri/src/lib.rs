@@ -295,19 +295,33 @@ pub fn run() {
             // 跳过. Escape: CATFISH_HERMES_INSTALL_NO_BOOTSTRAP=1 (dev 已装本地 hermes).
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             {
+                // 装机失败**必须留痕**, 不能只写日志。
+                //
+                // 原来这里是 `if let Err(e) = ... { log::warn!(...) }` 就完了 ——
+                // 界面上一点变化都没有。员工看到的是个装好了的 App, 只是聊天
+                // 永远没反应, 而 Dashboard 的服务状态还在说"检查 brew services
+                // list hermes", 把人往 launchd 的方向带。真实原因是 hermes
+                // **从来就没装上**。达华现场就是这么过去的, 最后靠手工装收场。
+                //
+                // 现在把原因存进 hermes_install::BOOTSTRAP_ERROR,
+                // `hermes_status` 探不到 TCP 时优先报它。
                 if std::env::var("CATFISH_HERMES_INSTALL_NO_BOOTSTRAP").is_err() {
                     use tauri::Manager;
                     match app.path().resource_dir() {
                         Ok(res_dir) => {
                             if let Err(e) = commands::hermes_install::ensure_hermes_installed(&res_dir) {
-                                log::warn!(
-                                    "hermes-agent 首启 offline install 挂: {e:#} \
-                                     (员工可 Dashboard → 手动重装, 或 Terminal 跑 install.sh)"
+                                let msg = format!("{e:#}");
+                                log::error!(
+                                    "hermes-agent 首启装机失败: {msg} \
+                                     (员工可 Dashboard → 重新安装, 或 Terminal 跑 install.sh)"
                                 );
+                                commands::hermes_install::set_bootstrap_error(msg);
                             }
                         }
                         Err(e) => {
-                            log::warn!("拿不到 resource_dir, 跳过 hermes install: {e}");
+                            let msg = format!("拿不到 App resource_dir: {e}");
+                            log::error!("{msg} —— 跳过 hermes 装机");
+                            commands::hermes_install::set_bootstrap_error(msg);
                         }
                     }
                 }

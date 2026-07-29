@@ -89,10 +89,23 @@ pub async fn hermes_status() -> Result<ServiceStatus, String> {
     // 1. TCP 探活
     let tcp_alive = probe_tcp(&host, port).await;
     if !tcp_alive {
-        return Ok(ServiceStatus::down(
-            Some(port),
-            "hermes 未启动 — 检查 brew services list hermes (launchd 应自动拉)",
-        ));
+        // 探不到 —— 先分清是"装了但没起来"还是"压根没装上", 这两件事的
+        // 处置方式完全不同。
+        //
+        // 原来这里一律报"检查 brew services list hermes (launchd 应自动拉)",
+        // 把人往 launchd 的方向带。但达华现场的真实情况是首启装机就失败了,
+        // 根本没有 hermes 可供 launchd 拉 —— 照这条提示查一晚上也查不出来。
+        let msg = if let Some(err) = crate::commands::hermes_install::bootstrap_error() {
+            format!("hermes 装机失败, 服务起不来 — {err}")
+        } else if !crate::commands::hermes_install::hermes_agent_installed() {
+            "hermes 没装上 (~/.hermes/hermes-agent 不存在) — \
+             Dashboard 点重新安装; 内网机器需先把 catfish-runtime-<arch>.tar.gz \
+             解压到 ~/.catfish/runtime/"
+                .to_string()
+        } else {
+            "hermes 未启动 — 检查 brew services list hermes (launchd 应自动拉)".to_string()
+        };
+        return Ok(ServiceStatus::down(Some(port), msg));
     }
 
     // 2. TCP 通 → 探 /health (hang detection — TCP 通但 /health 超时 = GIL/IO block)
