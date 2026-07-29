@@ -570,8 +570,8 @@ pub async fn list_sessions_by_task_uid(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::test_env::ENV_LOCK;
     use rusqlite::Connection;
-    use std::sync::Mutex;
     use tempfile::TempDir;
 
     /// 测试用建一个跟 hermes state.db 兼容的最小 schema
@@ -619,10 +619,6 @@ mod tests {
         )
         .expect("create_test_schema");
     }
-
-    /// HOME env 是进程级共享, 多 test 并发会互相覆盖 —— 用一个 mutex 串行化。
-    /// (这是 Rust test 跑 env-mutating code 的标准 workaround)
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// 设 HOME 指向 tmp_dir, 在那建好 .hermes/state.db, 返回 TempDir 把所有权
     /// 交给调用者 (drop 时清理目录)。

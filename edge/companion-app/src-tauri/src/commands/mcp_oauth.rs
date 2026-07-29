@@ -97,9 +97,7 @@ pub async fn mcp_oauth_token_delete(token_ref_local: String) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    use crate::util::test_env::ENV_LOCK;
 
     #[test]
     fn safe_ref_rejects_traversal() {

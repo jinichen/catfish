@@ -37,6 +37,8 @@ serde_yaml = "0.9"
 anyhow = "1.0"
 thiserror = "1.0"
 log = "0.4"
+# Hermes 首启引导跨进程 single-flight。文件锁在进程退出/崩溃时由 OS 自动释放。
+fs2 = "0.4"
 # env_logger 5/x 起被 tauri-plugin-log 替代 (7/15 BL-COMPANION-LOG-FILE)
 # Phase 1C SSO: keyring (macOS Keychain / Win Credential Manager / Linux Secret Service)
 keyring = "3"

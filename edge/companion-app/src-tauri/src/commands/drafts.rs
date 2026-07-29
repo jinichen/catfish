@@ -500,11 +500,7 @@ pub async fn draft_delete_md(abs_path: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    /// 单测里改 HOME env 是 process 全局, parallel 会 race.
-    /// 凡是用 ENV_LOCK::lock() 包的 test, cargo test 内串行跑这一组.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    use crate::util::test_env::ENV_LOCK;
 
     #[test]
     fn safe_filename_rejects_traversal() {

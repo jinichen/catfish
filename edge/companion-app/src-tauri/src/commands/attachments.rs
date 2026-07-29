@@ -610,10 +610,8 @@ pub async fn attachment_load_base64(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use crate::util::test_env::ENV_LOCK;
     use tempfile::TempDir;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn setup_test_env() -> (TempDir, std::sync::MutexGuard<'static, ()>) {
         let guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());

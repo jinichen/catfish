@@ -11,7 +11,7 @@
 
 **结论**: 语义分开 → 独立脚本 → 独立生命周期 → 独立测试.
 
-# 4 处 offline patch (跟 ps1 版对齐, 长期一致维护)
+# 8 处 offline patch (跟 ps1 版对齐, 长期一致维护)
 
 1. `case $1 in ... -h|--help)` 前 (line ~157): 加 `--offline-source-dir` /
    `--offline-uv` / `--offline-python-tar` 3 个 case 分支. 参数为空 = 走上游
@@ -23,7 +23,7 @@
 
 3. `check_python()` (line ~610): 在 `log_info "Python $PYTHON_VERSION not found,
    installing via uv..."` 之前加 offline 分支 — `$OFFLINE_PYTHON_TAR` 非空且文件
-   存 → tar 解压到 `$UV_PYTHON_INSTALL_DIR` → `uv python find` verify → 早 return.
+   存 → 原子解压到 `$HERMES_HOME/python` → 直接验证解释器 → 早 return.
 
 4. clone repo (line ~1270 `else` 段): 在 `# Try SSH first ...` 之前加 offline
    分支 — `$OFFLINE_SOURCE_DIR` 非空且目录存 → cp -R 到 `$INSTALL_DIR` → git init
@@ -57,7 +57,7 @@ from pathlib import Path
 
 #: 当前测试通过的 install.sh SHA256. Bump 时必须重新 audit 4 处 anchor 是否稳定.
 #: 计算: `shasum -a 256 ~/.hermes/hermes-agent/scripts/install.sh`
-UPSTREAM_SHA256 = "a93c65b01ea392e179cf872e182bd01a2b65c0c15f17833e9f9569033ef10e07"
+UPSTREAM_SHA256 = "c5ba7e89627577fab914514736ecfb3359b66956ca00199bfef616ca35953cb9"
 
 #: 上游预期行数 (rough sanity check, 不 fatal, 只 warn)
 UPSTREAM_LINES_EXPECTED = 3133
@@ -116,22 +116,38 @@ PATCH_2_INSTALL_UV = f"""    {MARKER}: Catfish offline — copy embedded uv, ski
 """
 
 
-# uv python cache 路径: 走 UV_PYTHON_INSTALL_DIR 环境变量 (uv 0.4+ 官方支持).
-# uv doc: https://docs.astral.sh/uv/reference/environment/#uv_python_install_dir
-# 让 uv 自己决定 cache root, 我们只 push tar 内容进去.
-PATCH_3_CHECK_PYTHON = f"""    {MARKER}: Catfish offline — expand embedded python tar
+# python-build-standalone 的顶层固定叫 python/，不能直接塞进 uv managed root；
+# uv 会把目录名当 managed Python key 解析并报 malformed key。改放 Hermes 自有目录，
+# 后续 venv patch 直接传解释器绝对路径。
+PATCH_3_CHECK_PYTHON = f"""    {MARKER}: Catfish offline — expand embedded Python into a private Hermes-managed directory
     if [ -n "${{OFFLINE_PYTHON_TAR:-}}" ] && [ -f "$OFFLINE_PYTHON_TAR" ]; then
         log_info "Catfish offline: expanding python from $OFFLINE_PYTHON_TAR"
-        _uv_py_root="${{UV_PYTHON_INSTALL_DIR:-$HOME/.local/share/uv/python}}"
-        mkdir -p "$_uv_py_root"
-        if tar -xzf "$OFFLINE_PYTHON_TAR" -C "$_uv_py_root" 2>/dev/null; then
-            if PYTHON_PATH="$("$UV_CMD" python find "$PYTHON_VERSION" 2>/dev/null)"; then
-                PYTHON_FOUND_VERSION="$("$PYTHON_PATH" --version 2>/dev/null)"
-                log_success "Python installed from offline bundle: $PYTHON_FOUND_VERSION"
-                return 0
-            fi
+        _catfish_python_root="$HERMES_HOME/python"
+        _catfish_python_bin="$_catfish_python_root/bin/python3"
+        if [ -x "$_catfish_python_bin" ] && \\
+           "$_catfish_python_bin" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 11) else 1)' 2>/dev/null; then
+            PYTHON_PATH="$_catfish_python_bin"
+            PYTHON_FOUND_VERSION="$("$PYTHON_PATH" --version 2>/dev/null)"
+            log_success "Bundled Python found: $PYTHON_FOUND_VERSION"
+            return 0
         fi
-        log_warn "Catfish offline: python tar failed — 回退网络路径"
+
+        _catfish_python_stage="$HERMES_HOME/.catfish-python-stage-$$"
+        mkdir -p "$_catfish_python_stage"
+        if tar -xzf "$OFFLINE_PYTHON_TAR" -C "$_catfish_python_stage" --strip-components=1 2>/dev/null && \\
+           [ -x "$_catfish_python_stage/bin/python3" ] && \\
+           "$_catfish_python_stage/bin/python3" -c 'import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 11) else 1)' 2>/dev/null; then
+            if [ -e "$_catfish_python_root" ]; then
+                mv "$_catfish_python_root" "${{_catfish_python_root}}.broken-$(date -u +%Y%m%d-%H%M%S)"
+            fi
+            mv "$_catfish_python_stage" "$_catfish_python_root"
+            PYTHON_PATH="$_catfish_python_bin"
+            PYTHON_FOUND_VERSION="$("$PYTHON_PATH" --version 2>/dev/null)"
+            log_success "Python installed from offline bundle: $PYTHON_FOUND_VERSION"
+            return 0
+        fi
+        rm -rf "$_catfish_python_stage" 2>/dev/null || true
+        log_warn "Catfish offline: bundled Python failed validation — falling back to network"
     fi
 
     # Python not found — use uv to install it (no sudo needed!)
@@ -211,8 +227,8 @@ PATCH_7_NPM_AND_CHROMIUM = f"""install_node_deps() {{
     {MARKER}: Catfish offline — 短路整个 npm + Playwright chromium 装 (dmg 已打 node_modules + chromium)
     if [ -n "${{OFFLINE_SOURCE_DIR:-}}" ] || [ -n "${{OFFLINE_SOURCE_TAR:-}}" ]; then
         if [ "$HAS_NODE" = false ]; then
-            log_info "Catfish offline: Node 未装 (unlikely with offline Node bundle), skip Node deps"
-            return 0
+            log_error "Catfish offline: bundled Node.js is unavailable"
+            return 1
         fi
 
         # A. npm install skip if node_modules 已在
@@ -220,7 +236,8 @@ PATCH_7_NPM_AND_CHROMIUM = f"""install_node_deps() {{
             log_info "Catfish offline: node_modules already present, skip npm install"
             log_success "Node.js dependencies already installed (Catfish offline bundle)"
         else
-            log_warn "Catfish offline: node_modules 缺 · fallback 原 npm install (需公网)"
+            log_error "Catfish offline: node_modules is missing from the Hermes bundle"
+            return 1
         fi
 
         # B. Playwright chromium 解压 to ~/Library/Caches/ms-playwright/
@@ -231,10 +248,12 @@ PATCH_7_NPM_AND_CHROMIUM = f"""install_node_deps() {{
             if tar -xzf "$OFFLINE_CHROMIUM_TAR" -C "$_chromium_dest" 2>/dev/null; then
                 log_success "Playwright Chromium installed from Catfish offline bundle"
             else
-                log_warn "Catfish offline: chromium tar 解压挂 (browser_* tools 首次用时会挂)"
+                log_error "Catfish offline: bundled Chromium failed to extract"
+                return 1
             fi
         else
-            log_info "Catfish offline: 无 -offline-chromium-tar, skip Playwright Chromium 装 (browser_* tools 用不了)"
+            log_error "Catfish offline: bundled Chromium archive is missing"
+            return 1
         fi
 
         return 0
@@ -244,6 +263,14 @@ PATCH_7_NPM_AND_CHROMIUM = f"""install_node_deps() {{
         log_info "Skipping Node.js dependencies (Node not installed)"
         return 0
     fi
+"""
+
+
+PATCH_8_VENV_PYTHON = f"""    # {MARKER}: use the exact interpreter selected by check_python.
+    # The bundled python-build-standalone runtime intentionally is not placed
+    # in uv's managed-install directory, so a version-only lookup would miss it.
+    _catfish_venv_python="${{PYTHON_PATH:-$PYTHON_VERSION}}"
+    "$UV_CMD" venv venv --python "$_catfish_venv_python"
 """
 
 
@@ -305,6 +332,12 @@ ANCHORS = {
         # AFTER: 前面加 offline mode 短路整个 (npm + chromium)
         PATCH_7_NPM_AND_CHROMIUM,
     ),
+    "venv_python": (
+        # BEFORE: setup_venv asks uv to resolve by version, which misses the
+        # private bundled interpreter selected by check_python.
+        '    $UV_CMD venv venv --python "$PYTHON_VERSION"\n',
+        PATCH_8_VENV_PYTHON,
+    ),
 }
 
 
@@ -345,7 +378,7 @@ def check_upstream_sha256(text: str, *, strict: bool = True) -> str:
 
 
 def apply_patches(text: str) -> str:
-    """5 处 anchor 逐一替换, 每处 must 命中 1 次 (不多不少)."""
+    """8 处 anchor 逐一替换, 每处 must 命中 1 次 (不多不少)."""
     result = text
     for name, (before, after) in ANCHORS.items():
         count = result.count(before)
@@ -369,7 +402,7 @@ def apply_patches(text: str) -> str:
 
 
 def verify_patched(patched_text: str) -> None:
-    """patched 输出 sanity check — 5 个 --offline-* 参数 + 7 处 marker 都在."""
+    """patched 输出 sanity check — 5 个 --offline-* 参数 + 所有 marker 都在."""
     required_symbols = [
         "OFFLINE_SOURCE_DIR",
         "OFFLINE_UV",
@@ -386,10 +419,10 @@ def verify_patched(patched_text: str) -> None:
             )
             raise SystemExit(3)
     marker_count = patched_text.count(MARKER)
-    # PATCH_1 里 5 个 marker (每 offline 参数 case 各 1) + PATCH_2/3/4 各 1 + PATCH_5 (只 fi 关闭 · 0) + PATCH_6/7 各 1 = 10.
-    if marker_count < 10:
+    # PATCH_1 里 5 个 marker + PATCH_2/3/4/6/7/8 各 1 = 11.
+    if marker_count < 11:
         print(
-            f"[ERROR] MARKER 期望 ≥10 处 (PATCH_1 5 个 · PATCH_2/3/4/6/7 各 1 · PATCH_5 关闭 fi 0 · BL-MAC-INSTALL-NODE/CHROMIUM-BUNDLE), 实际 {marker_count}.",
+            f"[ERROR] MARKER 期望 ≥11 处 (PATCH_1 5 个 · PATCH_2/3/4/6/7/8 各 1), 实际 {marker_count}.",
             file=sys.stderr,
         )
         raise SystemExit(3)
@@ -479,7 +512,7 @@ def main() -> int:
     verify_patched(patched)
 
     if args.check:
-        print("[OK] --check dry-run 全绿. patched 会加 ≥10 处 marker + 5 处 --offline-* 参数 (含 --offline-node-tar + --offline-chromium-tar · BL-MAC-INSTALL-NODE/CHROMIUM-BUNDLE).")
+        print("[OK] --check dry-run 全绿. patched 会加 ≥11 处 marker + 5 处 --offline-* 参数 (含 --offline-node-tar + --offline-chromium-tar).")
         return 0
 
     out_path = args.output or args.input.with_suffix(".sh.patched")
@@ -494,7 +527,7 @@ def main() -> int:
 
     print(
         f"     Marker: {MARKER}\n"
-        f"     Patches: 7 处 (param + install_uv + check_python + install_repo_open + install_repo_close + install_node + install_node_deps)\n"
+        f"     Patches: 8 处 (param + install_uv + check_python + install_repo_open + install_repo_close + install_node + install_node_deps + venv_python)\n"
         f"     dmg install handler 传 --offline-source-dir / --offline-uv / --offline-python-tar / --offline-node-tar / --offline-chromium-tar\n"
         f"     Node.js darwin binary tar 解压到 $HERMES_HOME/node/\n"
         f"     npm install skip if node_modules 已在 · Playwright chromium 解压到 ~/Library/Caches/ms-playwright/"

@@ -110,6 +110,7 @@ COMPANION="$(cd "$SCRIPT_DIR/.." && pwd)"
 # 指定用哪一份, 见 package.json 的 tauri:build:arm64 / tauri:build:x64。
 RESOURCES="$COMPANION/src-tauri/resources/mac-$ARCH"
 HERMES_TAG=$(cat "$COMPANION/.hermes-git-tag" | tr -d '[:space:]')
+HERMES_COMMIT=$(cat "$COMPANION/.hermes-git-commit" | tr -d '[:space:]')
 
 mkdir -p "$RESOURCES"
 cd "$COMPANION"
@@ -157,6 +158,14 @@ if [ "$ACTUAL_DESC" != "$HERMES_TAG" ]; then
     echo ""
     echo "   catfish 的 19 个 monkey-patch 是按特定 hermes 版本写的,"
     echo "   装错版本会静默失效 —— 所以这里不允许继续。"
+    exit 1
+fi
+if [ "$ACTUAL_SHA" != "$HERMES_COMMIT" ]; then
+    echo ""
+    echo "❌ Hermes commit 跟 pin 不一致:"
+    echo "     .hermes-git-commit: $HERMES_COMMIT"
+    echo "     实际 checkout:      $ACTUAL_SHA"
+    echo "   tag 名相同也不能继续；annotated tag 或远端移动都必须重新审计。"
     exit 1
 fi
 echo "  ✓ hermes 版本核对: $ACTUAL_DESC ($ACTUAL_SHA)"

@@ -232,11 +232,8 @@ pub struct HermesApiConfigPublic {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::test_env::ENV_LOCK;
     use std::env;
-    // P3.5.144 (6/30 鸿波): #[serial(env)] 强制 4 个测试串行 — env::set_var
-    // 并发 race 跨测试, 串行避. tempfile + build_with_yaml(Some) 让测试绕开员工本机
-    // ~/.catfish/companion.yaml 污染.
-    use serial_test::serial;
     use tempfile::TempDir;
 
     fn clear_env() {
@@ -252,8 +249,8 @@ mod tests {
     }
 
     #[test]
-    #[serial(env)]
     fn default_url_when_no_yaml_no_env() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         clear_env();
         let tmp = TempDir::new().unwrap();
         let yaml = fake_yaml_path(&tmp);
@@ -262,8 +259,8 @@ mod tests {
     }
 
     #[test]
-    #[serial(env)]
     fn enabled_force_false_when_no_key() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         clear_env();
         env::set_var("CATFISH_HERMES_API_ENABLED", "true");
         // 没 key → enabled 强制 false
@@ -275,8 +272,8 @@ mod tests {
     }
 
     #[test]
-    #[serial(env)]
     fn enabled_true_when_both_set() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         clear_env();
         env::set_var("CATFISH_HERMES_API_ENABLED", "true");
         env::set_var("CATFISH_HERMES_API_KEY", "test-key-abc");
@@ -289,8 +286,8 @@ mod tests {
     }
 
     #[test]
-    #[serial(env)]
     fn env_url_override() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         clear_env();
         env::set_var("CATFISH_HERMES_API_URL", "http://example.test:9999");
         let tmp = TempDir::new().unwrap();

@@ -59,6 +59,256 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ─── 首启运行环境：非阻塞浮层 ───────────────────────────────────────
+ * 安装可能持续数十秒，但主界面始终可读、可操作。浮层用较厚的半透明材质
+ * 建立层级，不使用遮罩；失败也只占一角，并保留明确的重试入口。 */
+.hermes-bootstrap {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 90;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: min(372px, calc(100vw - 36px));
+  padding: 14px;
+  color: var(--catfish-text);
+  background: var(--catfish-bg-elevated);
+  background: color-mix(in srgb, var(--catfish-bg-elevated) 88%, transparent);
+  border: 1px solid var(--catfish-border);
+  border: 1px solid color-mix(in srgb, var(--catfish-border) 82%, transparent);
+  border-radius: 14px;
+  box-shadow:
+    0 1px 1px rgba(9, 35, 38, 0.05),
+    0 12px 38px rgba(9, 35, 38, 0.18);
+  backdrop-filter: blur(22px) saturate(150%);
+  -webkit-backdrop-filter: blur(22px) saturate(150%);
+  animation: hermes-bootstrap-arrive 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.hermes-bootstrap--error {
+  border-color: var(--status-err);
+  border-color: color-mix(in srgb, var(--status-err) 38%, var(--catfish-border));
+}
+
+.hermes-bootstrap__icon {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  color: var(--catfish-cyan-bright);
+  background: rgba(26, 138, 149, 0.12);
+  background: color-mix(in srgb, var(--catfish-cyan-bright) 12%, transparent);
+  border-radius: 9px;
+}
+
+.hermes-bootstrap--success .hermes-bootstrap__icon {
+  color: var(--status-ok);
+  background: rgba(26, 138, 149, 0.13);
+  background: color-mix(in srgb, var(--status-ok) 13%, transparent);
+}
+
+.hermes-bootstrap--error .hermes-bootstrap__icon {
+  color: var(--status-err);
+  background: rgba(217, 83, 79, 0.11);
+  background: color-mix(in srgb, var(--status-err) 11%, transparent);
+}
+
+.hermes-bootstrap__icon > svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.hermes-bootstrap__spinner circle {
+  opacity: 0.28;
+  stroke-dasharray: 72 28;
+  animation: hermes-bootstrap-spin 900ms linear infinite;
+}
+
+.hermes-bootstrap__content {
+  min-width: 0;
+  flex: 1;
+}
+
+.hermes-bootstrap__heading-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 20px;
+}
+
+.hermes-bootstrap__title {
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.35;
+  letter-spacing: -0.005em;
+}
+
+.hermes-bootstrap__phase {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  color: var(--catfish-text-muted);
+  background: rgba(107, 119, 117, 0.09);
+  background: color-mix(in srgb, var(--catfish-text-muted) 9%, transparent);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 550;
+  line-height: 1.4;
+}
+
+.hermes-bootstrap__message,
+.hermes-bootstrap__hint {
+  margin: 3px 0 0;
+  color: var(--catfish-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.hermes-bootstrap__hint {
+  margin-top: 6px;
+  font-size: 11px;
+  opacity: 0.88;
+}
+
+.hermes-bootstrap__progress {
+  position: relative;
+  height: 3px;
+  margin-top: 10px;
+  overflow: hidden;
+  background: rgba(107, 119, 117, 0.14);
+  background: color-mix(in srgb, var(--catfish-text-muted) 14%, transparent);
+  border-radius: 999px;
+}
+
+.hermes-bootstrap__progress > span {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  background: var(--catfish-cyan-bright);
+  border-radius: inherit;
+  transition: width 260ms ease-out;
+}
+
+.hermes-bootstrap__progress--indeterminate > span {
+  width: 34%;
+  min-width: 34%;
+  animation: hermes-bootstrap-indeterminate 1.35s ease-in-out infinite;
+}
+
+.hermes-bootstrap__details {
+  margin-top: 8px;
+  color: var(--catfish-text-muted);
+  font-size: 11px;
+}
+
+.hermes-bootstrap__details summary {
+  width: fit-content;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.hermes-bootstrap__details summary:focus-visible,
+.hermes-bootstrap__retry:focus-visible {
+  outline: 2px solid var(--catfish-cyan-bright);
+  outline: 2px solid color-mix(in srgb, var(--catfish-cyan-bright) 68%, transparent);
+  outline-offset: 2px;
+}
+
+.hermes-bootstrap__details code {
+  display: block;
+  max-height: 7em;
+  margin-top: 6px;
+  padding: 7px 8px;
+  overflow: auto;
+  color: var(--catfish-text);
+  background: var(--catfish-bg);
+  background: color-mix(in srgb, var(--catfish-text) 5%, transparent);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.hermes-bootstrap__retry {
+  margin-top: 10px;
+  min-height: 30px;
+  padding: 5px 11px;
+  color: white;
+  background: var(--catfish-cyan);
+  border: 0;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  transition: background-color 140ms ease-out, transform 90ms ease-out;
+}
+
+.hermes-bootstrap__retry:hover:not(:disabled) {
+  background: var(--catfish-cyan-bright);
+}
+
+.hermes-bootstrap__retry:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.hermes-bootstrap__retry:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+@keyframes hermes-bootstrap-arrive {
+  from { transform: translateY(7px) scale(0.985); opacity: 0; }
+  to { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+@keyframes hermes-bootstrap-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes hermes-bootstrap-indeterminate {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(310%); }
+}
+
+@media (max-width: 560px) {
+  .hermes-bootstrap {
+    right: 12px;
+    bottom: 12px;
+    width: calc(100vw - 24px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hermes-bootstrap { animation: none; }
+  .hermes-bootstrap__spinner circle { animation-duration: 1.8s; }
+  .hermes-bootstrap__progress > span { transition: none; }
+  .hermes-bootstrap__progress--indeterminate > span { animation: none; width: 100%; opacity: 0.5; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .hermes-bootstrap {
+    background: var(--catfish-bg-elevated);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .hermes-bootstrap {
+    background: var(--catfish-bg-elevated);
+    border-width: 2px;
+  }
+}
+
 @keyframes catfish-advisory-slide {
   from { transform: translateY(-4px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
