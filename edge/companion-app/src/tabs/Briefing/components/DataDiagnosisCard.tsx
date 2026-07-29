@@ -116,7 +116,9 @@ export function DataDiagnosisCard({ statuses, onRetry }: DataDiagnosisCardProps)
             <code style={{ background: "var(--catfish-bg-2, #f1f5f9)", padding: "1px 4px", borderRadius: 3, fontSize: 12 }}>
               ~/.catfish/current_todos.md
             </code>{" "}
-            没未完成 checkbox (或不存在). P3.4.7c 完工后会每周日 00:00 自动 reset, 现在手动加:
+            {/* P3.5.80 (7/28): 原文提到内部编号 "P3.4.7c 完工后会…自动 reset" ——
+                员工不知道那是什么, 只会觉得功能没做完. 只说现在该怎么做. */}
+            里面没有未完成的待办（或者文件还不存在）。手动加几条试试：
             <pre
               style={{
                 marginTop: 6,

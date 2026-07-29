@@ -200,8 +200,9 @@ export default function SkillRevisionCard() {
         <span style={{ fontSize: 14 }}>🔧</span>
         <span>
           <strong style={{ color: "var(--catfish-text)" }}>Skill 改进提议</strong> ·
-          鲶鱼观察 BL-MM11 反馈 + audit 失败 + BL-MM12 质量分,
-          发现可改的 skill 自动提议. 暂时无待处理.
+          {/* P3.5.80 (7/28): 原文把 BL-MM11 / BL-MM12 两个内部编号摆给员工看,
+              员工既不知道那是什么, 也查不到. 换成这些编号背后的实际含义. */}
+          鲶鱼根据你的反馈、执行失败记录和质量评分，发现可改的技能会自动提议。暂时没有待处理的。
         </span>
       </div>
     );
@@ -315,7 +316,7 @@ export default function SkillRevisionCard() {
       {data.effectiveness_due.length > 0 && (
         <div style={{ marginBottom: "var(--space-3)" }}>
           <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginBottom: 4 }}>
-            待评估 (采纳 ≥14 天, BL-MM15)
+            待评估（采纳满 14 天，看看改得好不好）
           </div>
           {data.effectiveness_due.map((rev) => (
             <div

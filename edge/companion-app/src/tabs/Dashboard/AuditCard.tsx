@@ -447,7 +447,8 @@ function SecurityRow({
         ))}
       </div>
       <div style={{ fontSize: 11, color: "var(--catfish-text-muted)", marginTop: 8 }}>
-        ℹ️ 这些不是错误, 也不影响使用. 阈值 ≥{_TIP_MIN_COUNT} 才显示 (BL-FIX14).
+        {/* P3.5.80 (7/28): 去掉内部编号 BL-FIX14 */}
+        ℹ️ 这些不是错误，也不影响使用。出现 {_TIP_MIN_COUNT} 次以上才会列在这里。
       </div>
     </div>
   );

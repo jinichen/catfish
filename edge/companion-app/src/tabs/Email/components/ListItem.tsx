@@ -189,7 +189,9 @@ function ListItem({
               borderRadius: 3,
               fontWeight: 500,
             }}
-            title="已回复 (P3.5.58 RFC 822 thread chain 算法命中)"
+            /* P3.5.80 (7/28): 原文是 "已回复 (P3.5.58 RFC 822 thread chain 算法命中)" —
+               内部编号 + 协议名对员工没有任何意义, 只说结论. */
+            title="这封邮件你已经回过了"
           >
             ↩ 已回复
           </span>

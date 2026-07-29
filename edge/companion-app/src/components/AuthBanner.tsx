@@ -69,8 +69,10 @@ export default function AuthBanner() {
         color: "#fbbf24",
       }}
     >
-      ⚠ 你正在用 <strong>开发模式 token</strong>, 不是公司 SSO 登录.
-      生产环境应该 unset CATFISH_DEV_TOKEN, 走真 SSO. 当前作为 IT 救急 / 演示用.
+      {/* P3.5.80 (7/28): 原文是 "生产环境应该 unset CATFISH_DEV_TOKEN, 走真 SSO" ——
+          员工不知道 unset 是什么, 也没有权限做. 这条横幅的目的是让员工知道
+          "现在不是正式登录状态", 具体怎么切回去是 IT 的事. */}
+      ⚠ 当前是<strong>临时登录</strong>，不是公司账号登录。演示或应急时才用，正式使用请找 IT 切回公司账号。
     </div>
   );
 }

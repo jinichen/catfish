@@ -193,7 +193,8 @@ export default function SkillAuditCard() {
           {summary.quality_scores && summary.quality_scores.length > 0 && (
             <div style={{ marginTop: 8, paddingTop: 6, borderTop: "1px dashed var(--catfish-border)" }}>
               <div style={{ fontWeight: 600, marginBottom: 4 }}>
-                📊 综合质量分 (BL-MM12, top {Math.min(5, summary.quality_scores.length)})
+                {/* P3.5.80 (7/28): 去掉内部编号 BL-MM12 */}
+                📊 综合质量分（前 {Math.min(5, summary.quality_scores.length)} 名）
               </div>
               {summary.quality_scores.slice(0, 5).map((q) => (
                 <div
