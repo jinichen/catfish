@@ -232,7 +232,7 @@ pub struct HermesApiConfigPublic {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::util::test_env::ENV_LOCK;
+    use crate::util::test_env::env_lock;
     use std::env;
     use tempfile::TempDir;
 
@@ -250,7 +250,7 @@ mod tests {
 
     #[test]
     fn default_url_when_no_yaml_no_env() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = env_lock();
         clear_env();
         let tmp = TempDir::new().unwrap();
         let yaml = fake_yaml_path(&tmp);
@@ -260,7 +260,7 @@ mod tests {
 
     #[test]
     fn enabled_force_false_when_no_key() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = env_lock();
         clear_env();
         env::set_var("CATFISH_HERMES_API_ENABLED", "true");
         // 没 key → enabled 强制 false
@@ -273,7 +273,7 @@ mod tests {
 
     #[test]
     fn enabled_true_when_both_set() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = env_lock();
         clear_env();
         env::set_var("CATFISH_HERMES_API_ENABLED", "true");
         env::set_var("CATFISH_HERMES_API_KEY", "test-key-abc");
@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn env_url_override() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = env_lock();
         clear_env();
         env::set_var("CATFISH_HERMES_API_URL", "http://example.test:9999");
         let tmp = TempDir::new().unwrap();

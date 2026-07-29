@@ -325,11 +325,11 @@ mod tests_reload {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::util::test_env::ENV_LOCK;
+    use crate::util::test_env::env_lock;
 
     #[test]
     fn read_port_uses_default_when_unset() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = env_lock();
         // 假定测试 runner 没设这个奇葩 env
         std::env::remove_var("__CATFISH_TEST_PORT_NEVER_SET");
         assert_eq!(
@@ -340,7 +340,7 @@ mod tests {
 
     #[test]
     fn read_port_parses_env() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = env_lock();
         std::env::set_var("__CATFISH_TEST_PORT_OK", "9999");
         assert_eq!(read_port("__CATFISH_TEST_PORT_OK", 1), 9999);
         std::env::remove_var("__CATFISH_TEST_PORT_OK");
@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn read_port_falls_back_on_garbage() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = env_lock();
         std::env::set_var("__CATFISH_TEST_PORT_BAD", "not-a-number");
         assert_eq!(read_port("__CATFISH_TEST_PORT_BAD", 7), 7);
         std::env::remove_var("__CATFISH_TEST_PORT_BAD");
@@ -356,7 +356,7 @@ mod tests {
 
     #[test]
     fn read_host_strips_whitespace() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = env_lock();
         std::env::set_var("__CATFISH_TEST_HOST_PADDED", "  example.com  ");
         assert_eq!(
             read_host("__CATFISH_TEST_HOST_PADDED", "fallback"),
@@ -367,7 +367,7 @@ mod tests {
 
     #[test]
     fn read_host_empty_falls_back() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let _guard = env_lock();
         std::env::set_var("__CATFISH_TEST_HOST_EMPTY", "   ");
         assert_eq!(
             read_host("__CATFISH_TEST_HOST_EMPTY", "default-host"),

@@ -1196,10 +1196,12 @@ fn ensure_hermes_installed_with_reporter(
     result
 }
 
-/// 保留同步 API，供测试和非 UI 调用复用；Tauri setup 不再直接调用它。
-pub fn ensure_hermes_installed(resource_dir: &Path) -> Result<()> {
-    ensure_hermes_installed_with_reporter(resource_dir, &|_| {})
-}
+// 这里原来有个 `pub fn ensure_hermes_installed(resource_dir)`, 注释写着
+// "保留同步 API，供测试和非 UI 调用复用" —— 但全仓库没有任何一处调它,
+// 编译器 dead_code 也报了。注释描述的是一个意图, 不是事实。
+//
+// 需要同步语义的直接用 ensure_hermes_installed_with_reporter(dir, &|_| {}),
+// 一行的事; 留一个没人走的公开包装只会让人以为它还在链路上。
 
 /// Tauri setup 使用：立即返回，所有磁盘/网络工作在后台线程完成。
 pub fn spawn_hermes_bootstrap(app: tauri::AppHandle, resource_dir: PathBuf) {
