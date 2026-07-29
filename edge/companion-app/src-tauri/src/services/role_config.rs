@@ -3,7 +3,12 @@
 //! HTTP fetch http://localhost:8999/v1/roles 5 分钟 in-memory cache.
 //! 给 background task (email_scheduler / phishing_scan / etc) call:
 //!
-//! ```rust
+//! P3.5.80 (7/28): `rust` → `ignore` —— 这是说明用法的片段, 不是能独立编译的
+//! 例子 (doctest 是独立 crate, 看不到 role_config / email_config 这两个模块),
+//! 标 rust 的话 doctest 必然编译失败; 标 ignore 也不行 —— ignore 会注册成
+//! 一条【被忽略的测试】, `cargo test -- --ignored` (跑 real_request 用的
+//! 命令) 会把它真的编译执行, 照样炸. text 才是完全不当代码处理.
+//! ```text
 //! let model = role_config::resolve("rate_fast")
 //!     .unwrap_or_else(|| email_config::email_config().rate_model.clone());
 //! ```
@@ -49,10 +54,12 @@ fn fetch_roles_from_gateway() -> Option<HashMap<String, String>> {
     let gateway = endpoints::endpoints().gateway_base();
     let url = format!("{gateway}/v1/roles");
 
-    let client = reqwest::blocking::Client::builder()
-        .timeout(HTTP_TIMEOUT)
-        .build()
-        .ok()?;
+    // P3.5.80 (7/28): 中央端可能是自签 HTTPS, 挂上 ~/.catfish/server-ca.pem 的信任.
+    let client = crate::util::http_client::trust_central_blocking(
+        reqwest::blocking::Client::builder().timeout(HTTP_TIMEOUT),
+    )
+    .build()
+    .ok()?;
 
     let resp = client.get(&url).send().ok()?;
     if !resp.status().is_success() {

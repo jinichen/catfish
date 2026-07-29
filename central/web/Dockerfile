@@ -24,9 +24,18 @@ RUN npm run build
 FROM nginx:1.27-alpine
 # 拷构建产物
 COPY --from=builder /app/dist /usr/share/nginx/html
-# 6/9: 用 docker 专用 conf (只服 SPA, 中央 nginx 反代 API). standalone 部署看
-# nginx.conf.example.
-COPY nginx.docker.conf /etc/nginx/conf.d/default.conf
+# web 容器是员工浏览器唯一入口, 自己扛 SPA + 反代 (+ 可选 SSL).
+# P3.5.80 (7/28): 反代规则抽到 catfish-locations.conf, 由 :80 / :443 两个
+# server block 共用, 免得写两遍走岔.
+COPY nginx.docker.conf      /etc/nginx/conf.d/default.conf
+COPY catfish-locations.conf /etc/nginx/catfish-locations.conf
+
+# ── P3.5.80 (7/28) HTTPS 条件启用 ──
+# catfish-ssl.conf 落到 **.disabled** 后缀, 不在 conf.d/ 下, 默认不生效.
+# 41-catfish-ssl.sh 在 CATFISH_ENABLE_HTTPS=1 **且**证书真实存在时才拷进 conf.d/.
+# 若无条件写死 443 block 而证书不存在, nginx 加载证书失败会直接起不来 ——
+# 等于为了没启用的 HTTPS 把默认 HTTP 路径搞坏.
+COPY catfish-ssl.conf /etc/nginx/catfish-ssl.conf.disabled
 
 # ── P3.5.79+ (7/22 达华 POC 血案) runtime config 注入 ──
 # 老 build-arg VITE_OIDC_ISSUER 路子行不通 · 客户每台 server IP 不同 · 每客户重编
@@ -39,8 +48,13 @@ COPY nginx.docker.conf /etc/nginx/conf.d/default.conf
 # nginx image 有自带的 /docker-entrypoint.d/ hook (会按数字排序执行 *.sh · 完后启 nginx).
 # 我们塞 40-catfish-config.sh 生成 /usr/share/nginx/html/config.js.
 COPY docker-entrypoint-catfish-config.sh /docker-entrypoint.d/40-catfish-config.sh
-RUN chmod +x /docker-entrypoint.d/40-catfish-config.sh
+COPY docker-entrypoint-catfish-ssl.sh    /docker-entrypoint.d/41-catfish-ssl.sh
+RUN chmod +x /docker-entrypoint.d/40-catfish-config.sh \
+             /docker-entrypoint.d/41-catfish-ssl.sh
 
-EXPOSE 80
-HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://localhost/healthz || exit 1
+EXPOSE 80 443
+# healthcheck 走 :80 —— HTTPS 是可选的, 而且自签证书下 wget 要 --no-check-certificate,
+# 徒增噪音. :80 始终在跑 (HTTPS 模式下它只做 301 跳转以外的静态服务也照常),
+# 用它判活最稳.
+HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://127.0.0.1/healthz || exit 1
 CMD ["nginx", "-g", "daemon off;"]

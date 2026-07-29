@@ -59,10 +59,11 @@ async fn probe_tcp(host: &str, port: u16) -> bool {
 }
 
 async fn probe_healthz() -> bool {
-    let client = match reqwest::Client::builder()
-        .timeout(HTTP_TIMEOUT)
-        .no_proxy()
-        .build()
+    // P3.5.80 (7/28): 中央端可能是自签 HTTPS, 挂上 ~/.catfish/server-ca.pem 的信任.
+    let client = match crate::util::http_client::trust_central(
+        reqwest::Client::builder().timeout(HTTP_TIMEOUT).no_proxy(),
+    )
+    .build()
     {
         Ok(c) => c,
         Err(_) => return false,

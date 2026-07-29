@@ -114,12 +114,15 @@ pub async fn catalog() -> Result<Value, String> {
 }
 
 fn build_client() -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
-        .timeout(HTTP_TIMEOUT)
-        // 关键：localhost 永远不走代理，避免员工设了 HTTPS_PROXY 把 127.0.0.1 也劫了
-        .no_proxy()
-        .build()
-        .map_err(|e| format!("HTTP client 构造失败：{e}"))
+    // P3.5.80 (7/28): 中央端可能是自签 HTTPS, 挂上 ~/.catfish/server-ca.pem 的信任.
+    crate::util::http_client::trust_central(
+        reqwest::Client::builder()
+            .timeout(HTTP_TIMEOUT)
+            // 关键：localhost 永远不走代理，避免员工设了 HTTPS_PROXY 把 127.0.0.1 也劫了
+            .no_proxy(),
+    )
+    .build()
+    .map_err(|e| format!("HTTP client 构造失败：{e}"))
 }
 
 #[cfg(test)]

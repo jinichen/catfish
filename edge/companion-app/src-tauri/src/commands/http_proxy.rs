@@ -115,12 +115,50 @@ fn unregister_stream(request_id: &str) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn build_client(timeout_ms: u64) -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
-        .timeout(Duration::from_millis(timeout_ms))
-        // 5/19 BL-COMPANION-AUTH: gateway 8999 直连场景走内网, 不 verify 证书
-        // 严 (员工机常连 http://IP:port · 无 TLS). https://外网 场景 reqwest 默认已 verify.
-        .build()
-        .map_err(|e| format!("reqwest build 失败: {e}"))
+    // P3.5.80 (7/28 鸿波达华现场): 这里原来有一句注释写着
+    //     "5/19 BL-COMPANION-AUTH: ... 不 verify 证书严"
+    // 但**代码里从来没有对应的那一行** —— builder 只设了 timeout, reqwest 默认
+    // 是完整证书校验. 注释描述了一个不存在的行为, 于是中央端启用 HTTPS 后
+    // 没人怀疑到 TLS 上:
+    //   仪表盘「中央门户」显示"连不上", 同一地址浏览器打得开、curl -k 也通,
+    //   因为门户探活和服务器连通性检测都走本函数建的 client, 而中央端用的是
+    //   自签证书 —— 浏览器点一次"继续前往"就记住了, reqwest 不吃这套.
+    //
+    // 现在改成显式的信任模型: 只额外信任 IT 放到 ~/.catfish/server-ca.pem
+    // 的那张证书, 公网请求照常严格校验. 详见 util::http_client.
+    crate::util::http_client::trust_central(
+        reqwest::Client::builder().timeout(Duration::from_millis(timeout_ms)),
+    )
+    .build()
+    .map_err(|e| format!("reqwest build 失败: {e}"))
+}
+
+/// 把错误的整条 source 链拼成一行 (P3.5.80 · 7/28 鸿波达华现场).
+///
+/// 为什么需要: `reqwest::Error` 的 `Display` **只打最外层**. 一次证书失败
+/// 打出来只有
+///     error sending request for url (https://192.168.31.199/)
+/// 真正的原因 —— 证书不受信 / DNS 解不出 / 连接被拒 / 代理挡了 —— 全在
+/// `.source()` 链里. 之前 `format!("请求失败: {e}")` 把这些整个丢了.
+///
+/// 后果不只是日志难看: 面板拿到的错误里没有任何可判别的信息, 只能一律显示
+/// "连不上", 说不出为什么, 员工和 IT 都无从下手. 现场表现就是
+/// "浏览器打得开、面板说连不上", 排查方向一开始就被带偏.
+fn error_chain(e: &(dyn std::error::Error + 'static)) -> String {
+    let mut parts = vec![e.to_string()];
+    let mut src = e.source();
+    // 设上限防个别库把错误链做成环 / 超长
+    let mut depth = 0;
+    while let Some(s) = src {
+        parts.push(s.to_string());
+        src = s.source();
+        depth += 1;
+        if depth >= 8 {
+            parts.push("…(错误链过长, 已截断)".to_string());
+            break;
+        }
+    }
+    parts.join(" ← ")
 }
 
 fn parse_method(m: &str) -> Result<reqwest::Method, String> {
@@ -189,7 +227,12 @@ pub async fn http_proxy(req: HttpProxyRequest) -> Result<HttpProxyResponse, Stri
     let resp = request
         .send()
         .await
-        .map_err(|e| format!("请求失败: {e}"))?;
+        .map_err(|e| {
+            // P3.5.80 (7/28): 用 error_chain 而不是 {e} —— 见该函数说明.
+            let detail = error_chain(&e);
+            log::warn!("[http_proxy] {} {} 失败: {detail}", req.method, req.url);
+            format!("请求失败: {detail}")
+        })?;
 
     let status = resp.status().as_u16();
     let headers = collect_response_headers(&resp);
@@ -260,7 +303,12 @@ pub async fn http_proxy_stream(
     let resp = request
         .send()
         .await
-        .map_err(|e| format!("请求失败: {e}"))?;
+        .map_err(|e| {
+            // P3.5.80 (7/28): 用 error_chain 而不是 {e} —— 见该函数说明.
+            let detail = error_chain(&e);
+            log::warn!("[http_proxy] {} {} 失败: {detail}", req.method, req.url);
+            format!("请求失败: {detail}")
+        })?;
 
     let status = resp.status().as_u16();
     let headers = collect_response_headers(&resp);
