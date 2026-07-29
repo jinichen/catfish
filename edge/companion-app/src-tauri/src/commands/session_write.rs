@@ -571,7 +571,6 @@ pub async fn list_sessions_by_task_uid(
 mod tests {
     use super::*;
     use rusqlite::Connection;
-    use std::sync::Mutex;
     use tempfile::TempDir;
 
     /// 测试用建一个跟 hermes state.db 兼容的最小 schema
@@ -620,14 +619,14 @@ mod tests {
         .expect("create_test_schema");
     }
 
-    /// HOME env 是进程级共享, 多 test 并发会互相覆盖 —— 用一个 mutex 串行化。
-    /// (这是 Rust test 跑 env-mutating code 的标准 workaround)
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    // P3.5.80 (7/28): 原来这里各建一把 static ENV_LOCK —— 5 个模块 5 把锁,
+    // 只能序列化自己模块内部, 而 HOME 是进程全局的, 跨模块照旧对撞.
+    // 改用 util::test_env 里全进程唯一的那把.
 
     /// 设 HOME 指向 tmp_dir, 在那建好 .hermes/state.db, 返回 TempDir 把所有权
     /// 交给调用者 (drop 时清理目录)。
     fn setup_test_env() -> (TempDir, std::sync::MutexGuard<'static, ()>) {
-        let guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let guard = crate::util::test_env::env_lock();
         let tmp = TempDir::new().expect("tempdir");
         let hermes = tmp.path().join(".hermes");
         std::fs::create_dir_all(&hermes).unwrap();

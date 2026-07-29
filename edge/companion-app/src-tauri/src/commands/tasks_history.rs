@@ -134,13 +134,14 @@ pub async fn tasks_history_read(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
     use tempfile::TempDir;
 
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    // P3.5.80 (7/28): 原来这里各建一把 static ENV_LOCK —— 5 个模块 5 把锁,
+    // 只能序列化自己模块内部, 而 HOME 是进程全局的, 跨模块照旧对撞.
+    // 改用 util::test_env 里全进程唯一的那把.
 
     fn setup() -> (TempDir, std::sync::MutexGuard<'static, ()>) {
-        let guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let guard = crate::util::test_env::env_lock();
         let tmp = TempDir::new().expect("tempdir");
         std::env::set_var("CATFISH_HOME", tmp.path());
         (tmp, guard)

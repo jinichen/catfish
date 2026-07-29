@@ -500,11 +500,10 @@ pub async fn draft_delete_md(abs_path: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
-    /// 单测里改 HOME env 是 process 全局, parallel 会 race.
-    /// 凡是用 ENV_LOCK::lock() 包的 test, cargo test 内串行跑这一组.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    // P3.5.80 (7/28): 原来这里各建一把 static ENV_LOCK —— 5 个模块 5 把锁,
+    // 只能序列化自己模块内部, 而 HOME 是进程全局的, 跨模块照旧对撞.
+    // 改用 util::test_env 里全进程唯一的那把.
 
     #[test]
     fn safe_filename_rejects_traversal() {
@@ -619,7 +618,7 @@ mod tests {
     /// 注意: guard_outputs_path 检查 outputs_root() 是 $HOME/.catfish/outputs/,
     /// 单测不能动员工本机, 这里用 setenv HOME 改到 tempdir.
     async fn parse_md_in_tmp(filename: &str, content: &str) -> ParsedDraft {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::util::test_env::env_lock();
         let tmp = tempfile::tempdir().expect("tempdir");
         std::env::set_var("HOME", tmp.path());
         let outputs = outputs_root().expect("outputs_root");
@@ -700,7 +699,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_rejects_path_outside_outputs() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::util::test_env::env_lock();
         let tmp = tempfile::tempdir().expect("tempdir");
         std::env::set_var("HOME", tmp.path());
         // 放一个非 outputs/ 下的文件
@@ -716,7 +715,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_rejects_traversal() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::util::test_env::env_lock();
         let tmp = tempfile::tempdir().expect("tempdir");
         std::env::set_var("HOME", tmp.path());
         let outputs = outputs_root().unwrap();
@@ -739,7 +738,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_succeeds_for_valid_draft() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::util::test_env::env_lock();
         let tmp = tempfile::tempdir().expect("tempdir");
         std::env::set_var("HOME", tmp.path());
         let outputs = outputs_root().unwrap();

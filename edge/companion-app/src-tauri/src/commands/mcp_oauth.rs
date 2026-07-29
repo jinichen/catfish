@@ -97,9 +97,10 @@ pub async fn mcp_oauth_token_delete(token_ref_local: String) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    // P3.5.80 (7/28): 原来这里各建一把 static ENV_LOCK —— 5 个模块 5 把锁,
+    // 只能序列化自己模块内部, 而 HOME 是进程全局的, 跨模块照旧对撞.
+    // 改用 util::test_env 里全进程唯一的那把.
 
     #[test]
     fn safe_ref_rejects_traversal() {
@@ -113,7 +114,7 @@ mod tests {
 
     #[tokio::test]
     async fn save_writes_file_and_chmod_600() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::util::test_env::env_lock();
         let tmp = tempfile::tempdir().expect("tempdir");
         std::env::set_var("HOME", tmp.path());
 
@@ -148,7 +149,7 @@ mod tests {
 
     #[tokio::test]
     async fn save_overwrites_existing() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::util::test_env::env_lock();
         let tmp = tempfile::tempdir().expect("tempdir");
         std::env::set_var("HOME", tmp.path());
 
@@ -167,7 +168,7 @@ mod tests {
 
     #[tokio::test]
     async fn save_rejects_path_traversal() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::util::test_env::env_lock();
         let tmp = tempfile::tempdir().expect("tempdir");
         std::env::set_var("HOME", tmp.path());
 
@@ -184,7 +185,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_idempotent() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::util::test_env::env_lock();
         let tmp = tempfile::tempdir().expect("tempdir");
         std::env::set_var("HOME", tmp.path());
 
@@ -209,7 +210,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_rejects_traversal() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::util::test_env::env_lock();
         let tmp = tempfile::tempdir().expect("tempdir");
         std::env::set_var("HOME", tmp.path());
 
