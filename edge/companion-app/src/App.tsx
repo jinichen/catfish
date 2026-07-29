@@ -6,6 +6,7 @@ import AboutModal from "./components/AboutModal";
 import AdvisoryBanner from "./components/AdvisoryBanner";  // 6/7 BL-MANIFESTO-ADVISORY-PHASE1
 import AuthBanner from "./components/AuthBanner";
 import HermesReconnectBanner from "./components/HermesReconnectBanner";  // P3.3.5 (6/9): hermes 重连 banner
+import HermesBootstrapStatus from "./components/HermesBootstrapStatus";
 import DevUserSwitcher from "./components/DevUserSwitcher";
 import FocusModeView from "./components/FocusModeView";
 import LoginGate from "./components/LoginGate";
@@ -199,6 +200,7 @@ export default function App() {
       <>
         <FocusModeView />
         <AboutModal />
+        <HermesBootstrapStatus />
       </>
     );
   }
@@ -209,12 +211,17 @@ export default function App() {
   // OnboardingWizard 五一 sprint 5/2 BL-F3 加: 首次启动 4 步引导, 走完写 localStorage,
   // 不再显. 任何步骤"稍后再说" 也写 onboarded=true.
   return (
-    <LoginGate>
-      <AppShell activeTab={activeTab} />
-      <OnboardingWizard />
-      {/* 5/18 BL-COMPANION-ABOUT-HIJACK: 顶部 chip + macOS app menu 共享的关于模态 */}
+    <>
+      <LoginGate>
+        <AppShell activeTab={activeTab} />
+        <OnboardingWizard />
+      </LoginGate>
+      {/* 必须在 LoginGate 外：检测服务器、登录加载或未登录时，
+          LoginGate 都不渲染 children，否则 macOS“关于鲶鱼”会点击无反应。 */}
       <AboutModal />
-    </LoginGate>
+      {/* 首启安装与登录互不阻塞；服务器不可达时也能看见安装状态。 */}
+      <HermesBootstrapStatus />
+    </>
   );
 }
 

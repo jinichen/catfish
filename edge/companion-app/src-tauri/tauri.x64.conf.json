@@ -3,7 +3,11 @@
   "bundle": {
     "resources": {
       "resources/mac-x64/install.sh": "./resources/mac/install.sh",
-      "resources/mac-x64/uv": "./resources/mac/uv"
+      "resources/mac-x64/uv": "./resources/mac/uv",
+      "resources/mac-x64/cpython-3.11.15-embed.tar.gz": "./resources/mac/cpython-3.11.15-embed.tar.gz",
+      "resources/mac-x64/hermes-agent-bundle.tar.gz": "./resources/mac/hermes-agent-bundle.tar.gz",
+      "resources/mac-x64/node-embed.tar.gz": "./resources/mac/node-embed.tar.gz",
+      "resources/mac-x64/chromium-embed.tar.gz": "./resources/mac/chromium-embed.tar.gz"
     }
   }
 }

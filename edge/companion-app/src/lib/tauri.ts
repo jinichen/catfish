@@ -12,6 +12,7 @@
  */
 
 import { invoke as rawInvoke } from "@tauri-apps/api/core";
+import type { HermesBootstrapProgress } from "./hermesBootstrap";
 import { config } from "./env";
 import type { ServiceStatus } from "../types/service";
 import type { SessionMeta, SessionDetail } from "../types/session";
@@ -26,6 +27,10 @@ export const gatewayStatus = () => rawInvoke<ServiceStatus>("gateway_status");
 // hermesKill : kill -9 后等 launchd 自动重启.
 export const hermesStatus = () => rawInvoke<ServiceStatus>("hermes_status");
 export const hermesKill = () => rawInvoke<void>("hermes_kill");
+export const reinstallHermesAgent = () =>
+  rawInvoke<void>("reinstall_hermes_agent");
+export const getHermesBootstrapStatus = () =>
+  rawInvoke<HermesBootstrapProgress | null>("hermes_bootstrap_status");
 
 // ── chrome ───────────────────────────────────────────────
 export const chromeLaunch = () => rawInvoke<void>("chrome_launch");
@@ -556,6 +561,7 @@ export interface ServerConfig {
   gateway_token: string;
   token_source: "yaml" | "env" | "none";
   identity_url: string;
+  web_url: string;
   // secret_broker_url 字段砍, 旧 build 兼容靠 optional
   secret_broker_url?: string;  // deprecated, 永远不返
   /** P3.5.80 (7/28): catfish-web 中央门户 URL (endpoints.web_url).

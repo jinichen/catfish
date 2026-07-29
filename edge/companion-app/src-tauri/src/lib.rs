@@ -28,7 +28,10 @@ pub fn run() {
     // 全局快捷键, 任何 app 都能召唤鲶鱼.
     #[cfg(desktop)]
     let toggle_shortcut = tauri_plugin_global_shortcut::Shortcut::new(
-        Some(tauri_plugin_global_shortcut::Modifiers::SUPER | tauri_plugin_global_shortcut::Modifiers::SHIFT),
+        Some(
+            tauri_plugin_global_shortcut::Modifiers::SUPER
+                | tauri_plugin_global_shortcut::Modifiers::SHIFT,
+        ),
         tauri_plugin_global_shortcut::Code::Space,
     );
 
@@ -37,7 +40,10 @@ pub fn run() {
     // 跟召唤快捷键独立, 互不影响.
     #[cfg(desktop)]
     let focus_shortcut = tauri_plugin_global_shortcut::Shortcut::new(
-        Some(tauri_plugin_global_shortcut::Modifiers::SUPER | tauri_plugin_global_shortcut::Modifiers::SHIFT),
+        Some(
+            tauri_plugin_global_shortcut::Modifiers::SUPER
+                | tauri_plugin_global_shortcut::Modifiers::SHIFT,
+        ),
         tauri_plugin_global_shortcut::Code::KeyF,
     );
 
@@ -46,7 +52,10 @@ pub fn run() {
     // 行为: visible → hide; hidden → show.
     #[cfg(desktop)]
     let pet_shortcut = tauri_plugin_global_shortcut::Shortcut::new(
-        Some(tauri_plugin_global_shortcut::Modifiers::SUPER | tauri_plugin_global_shortcut::Modifiers::SHIFT),
+        Some(
+            tauri_plugin_global_shortcut::Modifiers::SUPER
+                | tauri_plugin_global_shortcut::Modifiers::SHIFT,
+        ),
         tauri_plugin_global_shortcut::Code::KeyP,
     );
     // BL-E27 4 屏角快捷键 (5/5 凌晨拖拽 NSPanel 不工作的妥协):
@@ -54,22 +63,34 @@ pub fn run() {
     // ⚠️ 不用 Cmd+Shift+3/4/5 — 跟 macOS 截屏快捷键冲突.
     #[cfg(desktop)]
     let pet_corner_tl = tauri_plugin_global_shortcut::Shortcut::new(
-        Some(tauri_plugin_global_shortcut::Modifiers::ALT | tauri_plugin_global_shortcut::Modifiers::SHIFT),
+        Some(
+            tauri_plugin_global_shortcut::Modifiers::ALT
+                | tauri_plugin_global_shortcut::Modifiers::SHIFT,
+        ),
         tauri_plugin_global_shortcut::Code::Digit1,
     );
     #[cfg(desktop)]
     let pet_corner_tr = tauri_plugin_global_shortcut::Shortcut::new(
-        Some(tauri_plugin_global_shortcut::Modifiers::ALT | tauri_plugin_global_shortcut::Modifiers::SHIFT),
+        Some(
+            tauri_plugin_global_shortcut::Modifiers::ALT
+                | tauri_plugin_global_shortcut::Modifiers::SHIFT,
+        ),
         tauri_plugin_global_shortcut::Code::Digit2,
     );
     #[cfg(desktop)]
     let pet_corner_bl = tauri_plugin_global_shortcut::Shortcut::new(
-        Some(tauri_plugin_global_shortcut::Modifiers::ALT | tauri_plugin_global_shortcut::Modifiers::SHIFT),
+        Some(
+            tauri_plugin_global_shortcut::Modifiers::ALT
+                | tauri_plugin_global_shortcut::Modifiers::SHIFT,
+        ),
         tauri_plugin_global_shortcut::Code::Digit3,
     );
     #[cfg(desktop)]
     let pet_corner_br = tauri_plugin_global_shortcut::Shortcut::new(
-        Some(tauri_plugin_global_shortcut::Modifiers::ALT | tauri_plugin_global_shortcut::Modifiers::SHIFT),
+        Some(
+            tauri_plugin_global_shortcut::Modifiers::ALT
+                | tauri_plugin_global_shortcut::Modifiers::SHIFT,
+        ),
         tauri_plugin_global_shortcut::Code::Digit4,
     );
 
@@ -227,6 +248,12 @@ pub fn run() {
 
     builder
         .setup(move |app| {
+            // Release QA can launch against an isolated HOME without touching
+            // the user's real launch agents, global shortcuts or background
+            // services. Hermes bootstrap still runs so first-launch timing and
+            // recovery are exercised end to end.
+            let qa_mode = std::env::var_os("CATFISH_QA_MODE").is_some();
+
             #[cfg(desktop)]
             tray::install(app.handle())?;
 
@@ -295,36 +322,30 @@ pub fn run() {
             // 跳过. Escape: CATFISH_HERMES_INSTALL_NO_BOOTSTRAP=1 (dev 已装本地 hermes).
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             {
-                // 装机失败**必须留痕**, 不能只写日志。
-                //
-                // 原来这里是 `if let Err(e) = ... { log::warn!(...) }` 就完了 ——
-                // 界面上一点变化都没有。员工看到的是个装好了的 App, 只是聊天
-                // 永远没反应, 而 Dashboard 的服务状态还在说"检查 brew services
-                // list hermes", 把人往 launchd 的方向带。真实原因是 hermes
-                // **从来就没装上**。达华现场就是这么过去的, 最后靠手工装收场。
-                //
-                // 现在把原因存进 hermes_install::BOOTSTRAP_ERROR,
-                // `hermes_status` 探不到 TCP 时优先报它。
                 if std::env::var("CATFISH_HERMES_INSTALL_NO_BOOTSTRAP").is_err() {
                     use tauri::Manager;
                     match app.path().resource_dir() {
                         Ok(res_dir) => {
-                            if let Err(e) = commands::hermes_install::ensure_hermes_installed(&res_dir) {
-                                let msg = format!("{e:#}");
-                                log::error!(
-                                    "hermes-agent 首启装机失败: {msg} \
-                                     (员工可 Dashboard → 重新安装, 或 Terminal 跑 install.sh)"
-                                );
-                                commands::hermes_install::set_bootstrap_error(msg);
-                            }
+                            // 首启可能要解压/安装 1GB+ Python、Node、Chromium 与 Hermes。
+                            // setup hook 必须立即返回，让主窗口先显示；后台通过
+                            // `hermes-bootstrap-progress` 发结构化进度。
+                            commands::hermes_install::spawn_hermes_bootstrap(
+                                app.handle().clone(),
+                                res_dir,
+                            );
                         }
                         Err(e) => {
-                            let msg = format!("拿不到 App resource_dir: {e}");
-                            log::error!("{msg} —— 跳过 hermes 装机");
-                            commands::hermes_install::set_bootstrap_error(msg);
+                            log::warn!("拿不到 resource_dir, 跳过 hermes install: {e}");
                         }
                     }
                 }
+            }
+
+            if qa_mode {
+                log::info!(
+                    "CATFISH_QA_MODE: 跳过 JWT、全局快捷键、自动服务、迁移和桌宠调度"
+                );
+                return Ok(());
             }
 
             // BL-HERMES-JWT-STARTUP-SYNC (7/19 Task #15 鸿波): 启动时同步 hermes JWT 3 处.
@@ -462,21 +483,49 @@ pub fn run() {
             // 真要调试: dev mode 下 Cmd+Option+I 手动开.
             // release mode 默认就关 (tauri 2 release feature 默认关 devtools).
 
-            // 后台静默拉起 gateway + tool-bridge —— 不让员工手动按"启动"。
-            // tool-bridge 没起来 = 聊天工具列表为空 = Gemini 退化到 native tool_code。
-            // 见 services/autostart.rs 详细说明。
-            services::autostart::schedule_autostart();
+            // tool-bridge/watchdog/email 都依赖完整 Hermes venv。首启 bootstrap
+            // 已改成后台后，若这里仍立即启动，watchdog 会在安装的几十秒内连续
+            // 失败并进入 180 秒 backoff，造成“窗口快了但工具暂时不可用”。
+            // 因此正常安装路径等待严格完成标记；开发者显式禁用 bootstrap 时仍
+            // 沿用立即启动，兼容自管 Hermes 环境。
+            let runtime_services_app = app.handle().clone();
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            if std::env::var("CATFISH_HERMES_INSTALL_NO_BOOTSTRAP").is_err() {
+                tauri::async_runtime::spawn(async move {
+                    let mut waited_secs = 0u64;
+                    loop {
+                        if commands::hermes_install::hermes_agent_installed() {
+                            log::info!(
+                                "Hermes bootstrap 就绪（等待 {waited_secs}s），启动本地服务"
+                            );
+                            services::autostart::schedule_autostart();
+                            services::watchdog::schedule_watchdog();
+                            services::email_scheduler::schedule_email_scheduler(
+                                runtime_services_app,
+                            );
+                            break;
+                        }
+                        if waited_secs == 0 {
+                            log::info!("本地服务等待 Hermes bootstrap 完成");
+                        } else if waited_secs % 30 == 0 {
+                            log::info!("本地服务仍在等待 Hermes bootstrap（{waited_secs}s）");
+                        }
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        waited_secs += 2;
+                    }
+                });
+            } else {
+                services::autostart::schedule_autostart();
+                services::watchdog::schedule_watchdog();
+                services::email_scheduler::schedule_email_scheduler(runtime_services_app);
+            }
 
-            // Watchdog: 5s 一次检查 gateway / tool-bridge 死活, 死了 respawn.
-            // skill_watcher / config_watcher 主动退进程后必须有人接锅, 否则
-            // 员工卡死. 见 services/watchdog.rs.
-            services::watchdog::schedule_watchdog();
-
-            // 5/18 BL-COMPANION-EMAIL-DIGEST-STEP2/3/4: 每 10 分钟 (yaml 可调) 扫
-            // 一次未读邮件, 新邮件 → LLM 评级 → 急的发 macOS 通知 + emit
-            // catfish:email-urgent 事件 (前端接, 调桌宠主动闲聊).
-            // 配置走 ~/.catfish/companion.yaml email 段; poll_secs=0 关.
-            services::email_scheduler::schedule_email_scheduler(app.handle().clone());
+            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+            {
+                services::autostart::schedule_autostart();
+                services::watchdog::schedule_watchdog();
+                services::email_scheduler::schedule_email_scheduler(runtime_services_app);
+            }
 
             // P3.3.19 C Phase 4 (6/11): jsonl → state.db 一次性 migration. flag
             // ~/.catfish/migration_v1_done 存在跳过. fire-and-forget 后台跑,
@@ -964,6 +1013,7 @@ pub fn run() {
             commands::server_config::write_server_config,
             // 7/15 BL-CATFISH-MAC-OFFLINE-INSTALL: 员工 Dashboard 手工重装 hermes (若首启 auto install 挂)
             commands::hermes_install::reinstall_hermes_agent,
+            commands::hermes_install::hermes_bootstrap_status,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

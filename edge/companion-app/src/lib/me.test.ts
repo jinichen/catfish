@@ -20,6 +20,13 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
+// http_proxy_stream 注册 Tauri event listeners；在单测中只需提供可注销的 listener。
+// 响应本身由下方 setProxyMock 通过 invoke("http_proxy[_stream]") 返回。
+const listenMock = vi.fn(async () => vi.fn());
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: (...args: unknown[]) => listenMock(...args),
+}));
+
 // ── mock ./tauri ──────────────────────
 // P39 (5/22 gateway 解耦收尾): gatewayGetDevToken 已删, mock 保空对象兼容
 // (me.ts 现只 import hermesApiConfigGet / hermesApiAuthHeader / fetchProactiveContext,
@@ -48,25 +55,44 @@ const _store = new Map<string, string>();
 import { config } from "./env";
 import { fetchWithAuth, _resetUserEmailCacheForTest } from "./me";
 
-// ── fetch mock helper ───────────────────────────────────────
-function setFetchMock(
-  ...responders: Array<(input: RequestInfo | URL, init?: RequestInit) => Response>
+// ── Rust HTTP proxy mock helper ─────────────────────────────
+// fetchWithAuth 现在经 Tauri 的 http_proxy / http_proxy_stream 发请求。保留原测试
+// 对 URL、headers 和 401 retry 的断言，但从 proxy command payload 取请求资料。
+function setProxyMock(
+  ...responders: Array<() => Response>
 ): { calls: Array<{ url: string; headers: Record<string, string>; method: string }> } {
   const calls: Array<{ url: string; headers: Record<string, string>; method: string }> = [];
   let i = 0;
-  globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+  const authInvoke = invokeMock.getMockImplementation();
+  invokeMock.mockImplementation(async (cmd: string, payload?: {
+    req?: { url: string; method: string; headers: Record<string, string> };
+  }) => {
+    if (cmd !== "http_proxy" && cmd !== "http_proxy_stream") {
+      return authInvoke?.(cmd, payload);
+    }
+
+    const req = payload?.req;
+    if (!req) throw new Error(`missing proxy request for ${cmd}`);
     const headers: Record<string, string> = {};
-    const h = new Headers(init?.headers || {});
-    h.forEach((v, k) => { headers[k.toLowerCase()] = v; });
-    calls.push({
-      url: typeof input === "string" ? input : input.toString(),
-      headers,
-      method: init?.method ?? "GET",
-    });
+    for (const [key, value] of Object.entries(req.headers)) {
+      headers[key.toLowerCase()] = value;
+    }
+    calls.push({ url: req.url, headers, method: req.method });
     const responder = responders[Math.min(i, responders.length - 1)];
     i += 1;
-    return responder(input, init);
-  }) as unknown as typeof fetch;
+    const response = responder();
+    const responseHeaders = Object.fromEntries(response.headers.entries());
+
+    if (cmd === "http_proxy_stream") {
+      return { status: response.status, headers: responseHeaders };
+    }
+    return {
+      status: response.status,
+      headers: responseHeaders,
+      body: await response.text(),
+      bodyBase64: false,
+    };
+  });
   return { calls };
 }
 
@@ -87,6 +113,8 @@ const _savedConfig = {
 
 beforeEach(() => {
   invokeMock.mockReset();
+  listenMock.mockReset();
+  listenMock.mockResolvedValue(vi.fn());
   _resetUserEmailCacheForTest();
 });
 
@@ -114,7 +142,7 @@ describe("fetchWithAuth — hermes 路径 (useHermes=true)", () => {
       }
       throw new Error(`unexpected invoke: ${cmd}`);
     });
-    const { calls } = setFetchMock(() => jsonResp(200, { ok: true }));
+    const { calls } = setProxyMock(() => jsonResp(200, { ok: true }));
 
     const resp = await fetchWithAuth(`${config.backendUrl}/v1/chat/completions`);
     expect(resp.status).toBe(200);
@@ -140,7 +168,7 @@ describe("fetchWithAuth — hermes 路径 (useHermes=true)", () => {
       }
       throw new Error(`unexpected invoke: ${cmd}`);
     });
-    const { calls } = setFetchMock(() => jsonResp(401));
+    const { calls } = setProxyMock(() => jsonResp(401));
 
     const resp = await fetchWithAuth(`${config.backendUrl}/v1/chat/completions`);
     // hermes 路径**不 retry** 401, 直接透传
@@ -161,7 +189,7 @@ describe("fetchWithAuth — hermes 路径 (useHermes=true)", () => {
       }
       throw new Error(`unexpected invoke: ${cmd}`);
     });
-    const { calls } = setFetchMock(() => jsonResp(401));
+    const { calls } = setProxyMock(() => jsonResp(401));
 
     const resp = await fetchWithAuth(`${config.backendUrl}/v1/chat/completions`);
     expect(resp.status).toBe(401);
@@ -180,7 +208,7 @@ describe("fetchWithAuth — 灰度回退路径 (useHermes=false)", () => {
       if (cmd === "auth_get_access_token") return "oauth-jwt-12345";
       throw new Error(`unexpected invoke: ${cmd}`);
     });
-    const { calls } = setFetchMock(() => jsonResp(200, { ok: true }));
+    const { calls } = setProxyMock(() => jsonResp(200, { ok: true }));
 
     const resp = await fetchWithAuth(`${config.gatewayUrl}/api/me`);
     expect(resp.status).toBe(200);
@@ -206,7 +234,7 @@ describe("fetchWithAuth — 灰度回退路径 (useHermes=false)", () => {
     });
 
     let fetchCount = 0;
-    const { calls } = setFetchMock(
+    const { calls } = setProxyMock(
       () => {
         fetchCount += 1;
         return fetchCount === 1 ? jsonResp(401) : jsonResp(200, { retried: true });

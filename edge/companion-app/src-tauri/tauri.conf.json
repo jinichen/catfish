@@ -95,6 +95,7 @@
       "resources/windows/chromium-embed.tar.gz": "./resources/windows/chromium-embed.tar.gz"
     },
     "macOS": {
+      "bundleName": "鲶鱼",
       "minimumSystemVersion": "10.15",
       "infoPlist": "Info.plist"
     },

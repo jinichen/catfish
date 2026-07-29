@@ -95,7 +95,7 @@ pub async fn hermes_status() -> Result<ServiceStatus, String> {
         // 原来这里一律报"检查 brew services list hermes (launchd 应自动拉)",
         // 把人往 launchd 的方向带。但达华现场的真实情况是首启装机就失败了,
         // 根本没有 hermes 可供 launchd 拉 —— 照这条提示查一晚上也查不出来。
-        let msg = if let Some(err) = crate::commands::hermes_install::bootstrap_error() {
+        let msg = if let Some(err) = crate::commands::hermes_install::last_bootstrap_error() {
             format!("hermes 装机失败, 服务起不来 — {err}")
         } else if !crate::commands::hermes_install::hermes_agent_installed() {
             "hermes 没装上 (~/.hermes/hermes-agent 不存在) — \

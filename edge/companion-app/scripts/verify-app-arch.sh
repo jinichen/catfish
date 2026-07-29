@@ -43,30 +43,28 @@ echo "   $RES"
 
 FAIL=0
 
-# 1 · P3.5.85 起, .app 里只放 install.sh + uv 两个文件。
-#
-# 四个运行时大包 (cpython / hermes / node / chromium) 已挪出 .app —— Apple
-# 公证会递归解开归档检查里面的 Mach-O, 那上千个二进制大多只有 ad-hoc 签名,
-# 一律判 Invalid。挪出去之后公证扫描范围只剩这两个裸文件。
-#
-# 它们改由 Companion 首次装机时下载到 ~/.catfish/runtime/。
-for f in install.sh uv; do
+# 1 · 首启速度优先：六件运行时都必须随架构包内嵌。归档来自固定版本资源
+# 流水线；发布阶段仍须完成 Developer ID 签名、公证与 Gatekeeper 验证。
+for f in install.sh uv cpython-3.11.15-embed.tar.gz \
+         hermes-agent-bundle.tar.gz node-embed.tar.gz chromium-embed.tar.gz; do
     if [ ! -f "$RES/$f" ]; then
         echo "  ❌ 缺 $f"
         FAIL=1
     fi
 done
 
-# 反过来也要查: 那四个包**不该**再出现在 .app 里。
-# 漏掉的话公证照样失败, 而失败信息是一长串 Apple 的归档路径, 很难一眼看出
-# "是打包配置没改干净"。
 for f in cpython-3.11.15-embed.tar.gz hermes-agent-bundle.tar.gz \
          node-embed.tar.gz chromium-embed.tar.gz; do
-    if [ -f "$RES/$f" ]; then
-        echo "  ❌ $f 不该打进 .app (公证会因它失败) —— 检查 tauri.<arch>.conf.json"
+    if [ -f "$RES/$f" ] && ! gzip -t "$RES/$f" 2>/dev/null; then
+        echo "  ❌ $f gzip 校验失败"
         FAIL=1
     fi
 done
+
+if [ -f "$RES/install.sh" ] && ! bash -n "$RES/install.sh"; then
+    echo "  ❌ install.sh 语法校验失败"
+    FAIL=1
+fi
 
 if [ "$FAIL" = "1" ]; then
     echo ""
@@ -75,14 +73,64 @@ if [ "$FAIL" = "1" ]; then
     exit 1
 fi
 
-# 2 · uv 是 Mach-O 二进制, 直接看架构
-UV_ARCH="$(file -b "$RES/uv" 2>/dev/null || true)"
-if ! echo "$UV_ARCH" | grep -q "$WANT"; then
-    echo "  ❌ uv 架构不符: 期望 $WANT, 实际 → $UV_ARCH"
+# 2 · 主程序、helper 与 uv 都必须包含目标架构。
+MAIN_BIN="$APP/Contents/MacOS/catfish-companion-app"
+CALENDAR_BIN="$APP/Contents/Resources/catfish-calendar"
+for label_path in "主程序|$MAIN_BIN" "日历 helper|$CALENDAR_BIN" "uv|$RES/uv"; do
+    label="${label_path%%|*}"
+    path="${label_path#*|}"
+    actual="$(file -b "$path" 2>/dev/null || true)"
+    if ! echo "$actual" | grep -q "$WANT"; then
+        echo "  ❌ $label 架构不符: 期望 $WANT, 实际 → $actual"
+        FAIL=1
+    else
+        echo "  ✓ $label    $WANT"
+    fi
+done
+
+# 3 · 抽取三个归档内的代表性 Mach-O 再检查，防止 arm64 包混入 x86 运行时。
+check_tar_binary() {
+    local archive="$1"
+    local entry="$2"
+    local label="$3"
+    local temp
+    temp="$(mktemp "${TMPDIR:-/tmp}/catfish-arch.XXXXXX")" || return 1
+    if ! tar -xOzf "$archive" "$entry" > "$temp" 2>/dev/null; then
+        echo "  ❌ $label 无法从归档读取: $entry"
+        rm -f "$temp"
+        FAIL=1
+        return
+    fi
+    local actual
+    actual="$(file -b "$temp" 2>/dev/null || true)"
+    rm -f "$temp"
+    if ! echo "$actual" | grep -q "$WANT"; then
+        echo "  ❌ $label 架构不符: 期望 $WANT, 实际 → $actual"
+        FAIL=1
+    else
+        echo "  ✓ $label    $WANT"
+    fi
+}
+
+PY_ENTRY="python/bin/python3.11"
+NODE_ENTRY="$(tar -tzf "$RES/node-embed.tar.gz" 2>/dev/null | awk '/\/bin\/node$/ {print; exit}')"
+CHROME_ENTRY="$(tar -tzf "$RES/chromium-embed.tar.gz" 2>/dev/null | awk '/Google Chrome for Testing\.app\/Contents\/MacOS\/Google Chrome for Testing$/ {print; exit}')"
+
+check_tar_binary "$RES/cpython-3.11.15-embed.tar.gz" "$PY_ENTRY" "Python"
+check_tar_binary "$RES/node-embed.tar.gz" "$NODE_ENTRY" "Node.js"
+check_tar_binary "$RES/chromium-embed.tar.gz" "$CHROME_ENTRY" "Chromium"
+
+# Hermes 归档是源码主包；至少确认真正的源码入口存在。
+if ! tar -tzf "$RES/hermes-agent-bundle.tar.gz" 2>/dev/null | \
+     awk '$0 == "hermes-agent-src/pyproject.toml" { found=1 } END { exit !found }'; then
+    echo "  ❌ Hermes 归档缺 pyproject.toml"
     FAIL=1
 else
-    echo "  ✓ uv       $WANT"
+    echo "  ✓ Hermes 源码归档"
 fi
+
+# 旧的 uv-only 检查保留变量名兼容下游日志解析。
+UV_ARCH="$(file -b "$RES/uv" 2>/dev/null || true)"
 
 
 echo ""

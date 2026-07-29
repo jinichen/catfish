@@ -171,9 +171,11 @@ pub async fn local_search_scope_remove(path: String) -> Result<ScopeResult, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::test_env::ENV_LOCK;
 
     #[test]
     fn expand_home_handles_tilde() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         std::env::set_var("HOME", "/tmp/fakehome");
         assert_eq!(
             expand_home("~/foo/bar").unwrap(),
