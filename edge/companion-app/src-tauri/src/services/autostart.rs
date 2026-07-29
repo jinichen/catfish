@@ -188,8 +188,13 @@ const CATFISH_TOOLS_MCP_NAME: &str = "catfish-tools";
 ///
 /// 鸿波 7/27 报"浏览器打不开", 顺着 gateway 日志挖到根因:
 ///
-///     P3.5.70 sanitize entry: tools_count=30
-///     ALL=['browser_back','browser_cdp',...,'write_file']   ← 一个 catfish_* 都没有
+/// P3.5.80 (7/28): 原来这段日志是 4 空格缩进 —— Markdown 里那等于代码块,
+/// rustdoc 会当 Rust 拿去 doctest 编译, 于是 `cargo test` 长期红一条.
+/// 换成显式 `text` fence.
+/// ```text
+/// P3.5.70 sanitize entry: tools_count=30
+/// ALL=['browser_back','browser_cdp',...,'write_file']   ← 一个 catfish_* 都没有
+/// ```
 ///
 /// 发给 LLM 的工具全是 hermes builtin. catfish 那 72 个 tool
 /// (catfish_browser_* / catfish_run_skill / catfish_search_* / ...) **全程不可见**.
@@ -311,10 +316,12 @@ pub fn ensure_catfish_tools_mcp_registered() -> bool {
 /// BL-BROWSER-FAKEIP-BLOCKED (7/27 鸿波实盘): 他让鲶鱼开网页, 两个 tool 都返绿勾
 /// 但页面纹丝不动. 翻 ~/.hermes/logs/agent.log 才看到真实返回:
 ///
-///     tools.url_safety: Blocked request to private/internal address:
-///       www.sohu.com   -> 198.18.0.78
-///       www.google.com -> 198.18.0.76
-///       raw.githubusercontent.com -> 198.18.0.15
+/// ```text
+/// tools.url_safety: Blocked request to private/internal address:
+///   www.sohu.com   -> 198.18.0.78
+///   www.google.com -> 198.18.0.76
+///   raw.githubusercontent.com -> 198.18.0.15
+/// ```
 ///
 /// 每个外网域名都解析到 198.18.0.x 且编号递增 —— 典型的 **fake-IP 模式代理**
 /// (Clash / Surge / sing-box), 给每个域名分配一个虚拟 IP 由代理转发.

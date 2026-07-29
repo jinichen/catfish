@@ -38,7 +38,10 @@ use std::env::VarError;
 /// 若两个 env 都缺 (罕见, 只见于 service 账户或裸容器), 返最后一次 `Err(VarError::NotPresent)`.
 ///
 /// # 例子
-/// ```ignore
+/// P3.5.80 (7/28): ignore → text. ignore 的 doctest 会注册成被忽略的测试,
+/// `cargo test -- --ignored` 会真的去编译它 (这段示例故意含 `...` 省略号,
+/// 编译必炸). text 完全不当代码处理, 任何 flag 下都不会被碰.
+/// ```text
 /// // 老代码:
 /// let home = std::env::var("HOME").map_err(|e| format!("HOME 未设: {e}"))?;
 /// // 新代码 (逐字 sed 就够):

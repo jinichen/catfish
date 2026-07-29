@@ -47,7 +47,10 @@ fn meta_path() -> Result<PathBuf, String> {
 /// 把 journal markdown 切成 entry 列表.
 ///
 /// journal 格式 (gateway 写的):
-/// ```
+///
+/// P3.5.80 (7/28): fence 加 `text` 标记 —— 不加的话 rustdoc 默认当 Rust 代码
+/// 拿去 doctest 编译, 这段 markdown 示例必然编译失败, `cargo test` 长期红一条.
+/// ```text
 /// ## 2026-05-04 14:30 · session `…abc123`     <- ## 是 meta 头 (日期 + session id)
 ///
 /// ### 资质周报草稿                              <- ### 是 LLM 写的真主题
