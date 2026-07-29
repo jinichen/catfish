@@ -1,0 +1,2016 @@
+// 稻生万物研产销一体化产业园 · AI Native 数字化方案 · v23 · 26 页
+//
+// ═══ v23 vs v22 (7/28 鸿波第十一轮) ═══
+//
+// 鸿波: "算力中心考虑自建，采用自有机房还是租赁机房，从安全角度考虑"
+//
+// ═══ 先厘清一个概念区分, 否则会选错 ═══
+//
+//   租赁机房 (Colocation)  设备自购、放进托管机房  → **设备仍计固定资产投资**
+//   租用云服务器 (IaaS)     按量订阅算力           → 计服务费, 冲击固投比例
+//
+// 两者常被混为一谈。托管**不影响**技改固投比例达标, 与自建的申报差别
+// 只在机房土建那一块。不说清楚, 容易为凑固投而自建机房 —— 本末倒置。
+//
+// ═══ 安全结论（可能与直觉相反）═══
+//
+// 单从安全角度: **正规 IDC 托管在物理安防与可用性上通常优于自建厂区机房**。
+//   自建的"安全"很多时候是心理上的 —— 多级门禁、生物识别、7×24 值守、
+//   气体消防、双路市电 + UPS + 柴发、精密空调, 这些是专业 IDC 的标配,
+//   制造企业自建机房极少配齐; 现实中厂区机房被当杂物间、门常年敞开
+//   是行业常见现象。
+//
+// 自建真正不可替代的优势只有两条: 数据物理上不出厂区、无第三方人员接触。
+// 所以判断依据是**数据分级** —— 有没有"绝对不能出厂区"的部分。
+//
+// 建议: 混合 —— 核心敏感（配方 / 工艺模型）放厂区小型机房物理隔离,
+//       一般业务与算力托管 IDC, 兼顾数据主权与专业保障。
+//
+// ═══ 本项目特有的两条物理风险（新增 P15 底部）═══
+//
+//   ① **粉尘** —— 稻壳除杂粉碎工序产生粉尘, 厂区自建机房若防尘等级不足,
+//      直接影响设备寿命与故障率。这是本项目区别于一般制造企业的具体风险。
+//   ② **GPU 功率密度** —— AI 推理算力的功耗与散热要求高, 普通厂区机房
+//      按办公场景设计的功率密度与制冷能力往往不足, 需专项核算。
+//
+// ═══ 新增 P15「算力中心 · 自有机房 vs 租赁托管」═══
+//   概念澄清 → 七个安全维度对比 → 建议与前置动作 → 本项目特有考量
+//
+// ═══ 军规 ═══
+//   - 不点"鲶鱼"品牌名 · 不出现"自主研发/自研"
+//   - 不写人月工期 · 配置一律 [待核定]
+//   - **不编机房参数** —— 功率密度、机柜数、PUE 等需专项核算后填入
+//   - 临港本地算力资源与支持政策**未获取**, 需向管委会核实, 不臆测
+//   - 政策数字标出处页, 不做加总
+//
+// 数据来源:
+//   政策 → 上海临港新片区政策情况.pdf p7-p12
+//   背景 → 稻壳纤维产业集群介绍0126.pptx p6 p8-p11 p18
+
+const pptxgen = require("pptxgenjs");
+
+const p = new pptxgen();
+p.layout = "LAYOUT_WIDE";
+p.title = "稻生万物研产销一体化产业园 · AI Native 数字化方案";
+p.author = "稻生万物";
+
+const C = {
+  primary: "2C5F2D", primaryDk: "1F4220",
+  secondary: "97BC62", accent: "D4A574", accentDk: "A87F51",
+  cream: "F5F1E8", white: "FFFFFF", bg: "FAFAFA", bg2: "F0EDE4",
+  dark: "1A1A1A", gray: "5C5C5C", grayLt: "999999",
+  redAccent: "B85042",
+  steel: "34495E",
+  rd: "5B6C8F", mfg: "8B6F47", sales: "6B8E5A",
+  ai: "6C4F8C",           // Agent 层专用色
+};
+const W = 13.3;
+const TOTAL = 26;
+
+let PN = 0;
+function nextP() { PN++; return PN; }
+
+function footer(s) {
+  s.addText("稻生万物研产销一体化产业园  ·  AI Native 数字化方案", {
+    x: 0.5, y: 7.15, w: 11, h: 0.3,
+    fontSize: 9, color: C.grayLt, fontFace: "Calibri", margin: 0,
+  });
+  s.addText(`${PN} / ${TOTAL}`, {
+    x: W - 1.2, y: 7.15, w: 0.7, h: 0.3,
+    fontSize: 9, color: C.grayLt, fontFace: "Calibri", align: "right", margin: 0,
+  });
+}
+
+function pageTitle(s, title, kicker, tagColor, tagText) {
+  s.addText(String(PN).padStart(2, "0"), {
+    x: 0.6, y: 0.5, w: 0.9, h: 0.7,
+    fontSize: 32, bold: true, color: C.accent, fontFace: "Cambria", margin: 0,
+  });
+  s.addText(kicker, {
+    x: 1.55, y: 0.55, w: 8, h: 0.28,
+    fontSize: 10, color: C.grayLt, fontFace: "Calibri",
+    charSpacing: 4, bold: true, margin: 0,
+  });
+  s.addText(title, {
+    x: 1.55, y: 0.82, w: 10.3, h: 0.5,
+    fontSize: 25, bold: true, color: C.primary, fontFace: "Cambria", margin: 0,
+  });
+  if (tagText) {
+    s.addShape(p.ShapeType.roundRect, {
+      x: 11.95, y: 0.55, w: 0.75, h: 0.75,
+      fill: { color: tagColor }, line: { width: 0 }, rectRadius: 0.08,
+    });
+    s.addText(tagText, {
+      x: 11.95, y: 0.72, w: 0.75, h: 0.42,
+      fontSize: 22, bold: true, color: C.white, fontFace: "Cambria",
+      align: "center", margin: 0,
+    });
+  }
+}
+
+function subTitle(s, text, color) {
+  s.addText(text, {
+    x: 1.55, y: 1.32, w: 10.2, h: 0.28,
+    fontSize: 10.5, color: color || C.gray, fontFace: "Calibri", margin: 0,
+  });
+}
+
+/** Agent 页统一版式：面向谁+输入 / 能做什么 / 人在哪里 / 前提与分期 */
+function agentPage(s, { serves, inputs, tasks, human, prereq, phase, color }) {
+  // 左上 · 面向谁 · 输入
+  s.addShape(p.ShapeType.roundRect, {
+    x: 0.6, y: 1.72, w: 4.35, h: 1.62,
+    fill: { color: C.white }, line: { color: color, width: 1.5 }, rectRadius: 0.05,
+  });
+  s.addText("面向谁", {
+    x: 0.82, y: 1.83, w: 3.9, h: 0.24,
+    fontSize: 9, bold: true, color: color, fontFace: "Calibri", charSpacing: 1, margin: 0,
+  });
+  s.addText(serves, {
+    x: 0.82, y: 2.08, w: 3.9, h: 0.3,
+    fontSize: 10.5, bold: true, color: C.primary, fontFace: "Cambria", margin: 0,
+  });
+  s.addText("接收什么输入", {
+    x: 0.82, y: 2.46, w: 3.9, h: 0.24,
+    fontSize: 9, bold: true, color: color, fontFace: "Calibri", charSpacing: 1, margin: 0,
+  });
+  s.addText(inputs, {
+    x: 0.82, y: 2.7, w: 3.9, h: 0.56,
+    fontSize: 8.5, color: C.gray, fontFace: "Calibri",
+    lineSpacing: 12, margin: 0, valign: "top",
+  });
+
+  // 左下 · 人在哪里
+  s.addShape(p.ShapeType.roundRect, {
+    x: 0.6, y: 3.48, w: 4.35, h: 1.55,
+    fill: { color: "FDF3F2" }, line: { color: C.redAccent, width: 1 }, rectRadius: 0.05,
+  });
+  s.addText("人在哪里  ·  Agent 不替代什么", {
+    x: 0.82, y: 3.6, w: 3.9, h: 0.24,
+    fontSize: 9, bold: true, color: C.redAccent, fontFace: "Calibri", margin: 0,
+  });
+  human.forEach((h, i) => {
+    s.addText("—", {
+      x: 0.82, y: 3.9 + i * 0.36, w: 0.22, h: 0.22,
+      fontSize: 9, color: C.redAccent, fontFace: "Calibri", margin: 0,
+    });
+    s.addText(h, {
+      x: 1.1, y: 3.88 + i * 0.36, w: 3.65, h: 0.34,
+      fontSize: 8.3, color: C.gray, fontFace: "Calibri",
+      lineSpacing: 11, margin: 0, valign: "top",
+    });
+  });
+
+  // 左底 · 前提
+  s.addShape(p.ShapeType.roundRect, {
+    x: 0.6, y: 5.17, w: 4.35, h: 1.28,
+    fill: { color: C.cream }, line: { color: C.bg2, width: 1 }, rectRadius: 0.05,
+  });
+  s.addText("落地前提", {
+    x: 0.82, y: 5.28, w: 3.9, h: 0.24,
+    fontSize: 9, bold: true, color: C.accentDk, fontFace: "Calibri", margin: 0,
+  });
+  prereq.forEach((q, i) => {
+    s.addText("·", {
+      x: 0.82, y: 5.56 + i * 0.29, w: 0.14, h: 0.22,
+      fontSize: 10, color: C.accent, fontFace: "Calibri", margin: 0,
+    });
+    s.addText(q, {
+      x: 1.02, y: 5.54 + i * 0.29, w: 3.75, h: 0.28,
+      fontSize: 8.2, color: C.gray, fontFace: "Calibri", margin: 0, valign: "top",
+    });
+  });
+
+  // 右 · 能做什么
+  s.addText("Agent 承担的任务", {
+    x: 5.2, y: 1.75, w: 4, h: 0.28,
+    fontSize: 11, bold: true, color: C.primary, fontFace: "Cambria", margin: 0,
+  });
+  tasks.forEach((t, i) => {
+    const y = 2.1 + i * 0.86;
+    s.addShape(p.ShapeType.rect, {
+      x: 5.2, y, w: 7.5, h: 0.76,
+      fill: { color: C.white }, line: { color: C.bg2, width: 1 },
+    });
+    s.addShape(p.ShapeType.rect, { x: 5.2, y, w: 0.05, h: 0.76, fill: { color: color } });
+    s.addText(t[0], {
+      x: 5.42, y: y + 0.09, w: 2.9, h: 0.26,
+      fontSize: 10.2, bold: true, color: C.primary, fontFace: "Cambria", margin: 0,
+    });
+    s.addText(t[1], {
+      x: 5.42, y: y + 0.36, w: 7.05, h: 0.36,
+      fontSize: 8.3, color: C.gray, fontFace: "Calibri",
+      lineSpacing: 11, margin: 0, valign: "top",
+    });
+    if (t[2]) {
+      const dc = t[2] === "低" ? C.secondary : t[2] === "高" ? C.redAccent : C.accent;
+      s.addShape(p.ShapeType.rect, { x: 12.0, y: y + 0.09, w: 0.55, h: 0.22, fill: { color: dc } });
+      s.addText(t[2], {
+        x: 12.0, y: y + 0.095, w: 0.55, h: 0.21,
+        fontSize: 7.2, bold: true, color: C.white, fontFace: "Calibri",
+        align: "center", margin: 0,
+      });
+    }
+  });
+
+  // 底 · 分期
+  s.addShape(p.ShapeType.roundRect, {
+    x: 5.2, y: 5.85, w: 7.5, h: 0.6,
+    fill: { color: C.white }, line: { color: color, width: 1.5 }, rectRadius: 0.05,
+  });
+  s.addText(phase[0], {
+    x: 5.42, y: 5.97, w: 1.9, h: 0.28,
+    fontSize: 10, bold: true, color: color, fontFace: "Cambria", margin: 0,
+  });
+  s.addText(phase[1], {
+    x: 7.4, y: 5.99, w: 5.1, h: 0.28,
+    fontSize: 8.3, color: C.gray, fontFace: "Calibri", margin: 0,
+  });
+}
+
+// ═══════════════════════════════ P1 · 封面
+{
+  nextP();
+  const s = p.addSlide();
+  s.background = { color: C.primary };
+  s.addShape(p.ShapeType.rect, { x: 0, y: 0, w: W, h: 0.12, fill: { color: C.accent } });
+
+  s.addText("A I   N A T I V E", {
+    x: 1.1, y: 1.62, w: 11, h: 0.6,
+    fontSize: 20, bold: true, color: C.accent,
+    fontFace: "Calibri", charSpacing: 8, margin: 0,
+  });
+  s.addText("数 字 化 方 案", {
+    x: 1.1, y: 2.2, w: 11, h: 1.0,
+    fontSize: 42, bold: true, color: C.white,
+    fontFace: "Cambria", charSpacing: 6, margin: 0,
+  });
+  s.addShape(p.ShapeType.rect, { x: 1.15, y: 3.3, w: 1.6, h: 0.04, fill: { color: C.accent } });
+  s.addText("稻生万物研产销一体化产业园", {
+    x: 1.1, y: 3.6, w: 11, h: 0.45,
+    fontSize: 19, color: C.cream, fontFace: "Cambria", charSpacing: 2, margin: 0,
+  });
+  s.addText("上海临港新片区", {
+    x: 1.1, y: 4.1, w: 11, h: 0.35,
+    fontSize: 13, color: C.secondary, fontFace: "Calibri", charSpacing: 1, margin: 0,
+  });
+
+  const tags = [["研发 Agent", C.rd], ["生产 Agent", C.mfg],
+                ["合规与客户 Agent", C.sales], ["园区 Agent", C.ai]];
+  tags.forEach((t, i) => {
+    const x = 1.1 + i * 2.82;
+    s.addShape(p.ShapeType.rect, { x, y: 4.85, w: 2.6, h: 0.5, fill: { color: t[1] } });
+    s.addText(t[0], {
+      x, y: 4.96, w: 2.6, h: 0.3,
+      fontSize: 10, bold: true, color: C.white, fontFace: "Calibri",
+      align: "center", margin: 0,
+    });
+  });
+
+  s.addText(
+    "人照常工作，系统从过程中提取知识  ·  下游用自然语言调用能力，不必学系统\n" +
+    "本方在现场零部署  ·  设备联网与视觉检测硬件由系统集成商交付",
+    {
+      x: 1.1, y: 5.75, w: 11, h: 0.6,
+      fontSize: 9.5, color: C.secondary, fontFace: "Calibri",
+      lineSpacing: 15, margin: 0, valign: "top",
+    }
+  );
+  s.addText("2026 年 7 月", {
+    x: 1.1, y: 6.45, w: 11, h: 0.3,
+    fontSize: 11, color: C.grayLt, fontFace: "Calibri", margin: 0,
+  });
+}
+
+// ═══════════════════════════════ P2 · 为什么是 AI Native ★ 核心论证
+{
+  nextP();
+  const s = p.addSlide();
+  s.background = { color: C.bg };
+  pageTitle(s, "为什么这个项目该是 AI Native", "WHY AI NATIVE");
+  subTitle(s, "不是技术选型偏好 —— 是这个园区的商业模式决定的", C.redAccent);
+
+  // 上 · 论证四步
+  const logic = [
+    ["1", "这家企业的核心资产是隐性知识",
+      "配方经验 · 老师傅的调参手感 · 国际认证踩过的坑 · 品牌客户的对接经验\n—— 全部在人的脑子里，不在系统里"],
+    ["2", "传统信息化管不住隐性知识",
+      "它管的是流程、单据与报表，前提是**人先把知识填成表单**。\n但人不愿填、也填不完整 —— 这是所有知识管理系统失败的共同原因"],
+    ["3", "而园区模式恰恰要求经验能规模化输出",
+      "「链主赋能上下游」如果只能靠派工程师去教，赋能就无法规模化，\n园区相对于普通工厂的价值也就不成立"],
+    ["4", "AI Native 把这件事反过来",
+      "人照常工作，系统从过程中提取知识；下游用自然语言调用能力，不必学系统。\n入驻企业多为中小企业没有 IT 团队 —— 给系统账号用不起来，给 Agent 才用得动"],
+  ];
+  logic.forEach((l, i) => {
+    const y = 1.72 + i * 1.02;
+    s.addShape(p.ShapeType.rect, {
+      x: 0.6, y, w: 12.1, h: 0.92,
+      fill: { color: i === 3 ? C.cream : C.white },
+      line: { color: i === 3 ? C.accent : C.bg2, width: i === 3 ? 1.5 : 1 },
+    });
+    s.addShape(p.ShapeType.rect, {
+      x: 0.6, y, w: 0.05, h: 0.92,
+      fill: { color: i === 3 ? C.accent : C.grayLt },
+    });
+    s.addText(l[0], {
+      x: 0.85, y: y + 0.28, w: 0.4, h: 0.34,
+      fontSize: 17, bold: true, color: i === 3 ? C.accent : C.grayLt,
+      fontFace: "Cambria", margin: 0,
+    });
+    s.addText(l[1], {
+      x: 1.4, y: y + 0.12, w: 4.3, h: 0.7,
+      fontSize: 11.5, bold: true, color: C.primary, fontFace: "Cambria",
+      margin: 0, valign: "middle",
+    });
+    s.addText(l[2], {
+      x: 6.0, y: y + 0.12, w: 6.5, h: 0.7,
+      fontSize: 8.8, color: C.gray, fontFace: "Calibri",
+      lineSpacing: 13, margin: 0, valign: "middle",
+    });
+  });
+
+  // 下 · 一句话结论
+  s.addShape(p.ShapeType.roundRect, {
+    x: 0.6, y: 5.9, w: 12.1, h: 1.02,
+    fill: { color: C.primary }, line: { width: 0 }, rectRadius: 0.06,
+  });
+  s.addText("结论", {
+    x: 0.9, y: 6.05, w: 1.2, h: 0.3,
+    fontSize: 12, bold: true, color: C.accent, fontFace: "Cambria", margin: 0,
+  });
+  s.addText(
+    "对稻生万物而言，AI Native 不是更时髦的技术路线，而是让「赋能」可规模化的唯一路径。\n" +
+    "传统信息化能把这家工厂管好，但管不出一个能对外输出能力的园区。",
+    {
+      x: 2.2, y: 6.05, w: 10.2, h: 0.72,
+      fontSize: 10, color: C.cream, fontFace: "Calibri",
+      lineSpacing: 15, margin: 0, valign: "top",
+    }
+  );
+  footer(s);
+}
+
+// ═══════════════════════════════ P3 · 目录
+{
+  nextP();
+  const s = p.addSlide();
+  s.background = { color: C.bg };
+  pageTitle(s, "目录", "CONTENTS");
+  const parts = [
+    ["PART 1", "范式  ·  AI Native 与传统信息化的差别", "P4 - P6", C.ai],
+    ["PART 2", "四个 Agent  ·  研 / 产 / 销 / 园区", "P7 - P10", null],
+    ["PART 3", "底座  ·  拓扑 · 算力 · 机房 · 安全", "P11 - P16", null],
+    ["PART 4", "边界  ·  交付分工 · 接入规范 · 治理", "P17 - P19", null],
+    ["PART 5", "建设内容 · 指标 · 申报口径", "P20 - P22", null],
+    ["PART 6", "政策 · 实施 · 风险 · 下一步", "P23 - P26", null],
+  ];
+  parts.forEach((pt, i) => {
+    const y = 1.9 + i * 0.86;
+    if (pt[3]) {
+      s.addShape(p.ShapeType.rect, { x: 0.62, y: y - 0.02, w: 0.14, h: 0.44, fill: { color: pt[3] } });
+    }
+    s.addText(pt[0], {
+      x: 1.0, y, w: 1.6, h: 0.3,
+      fontSize: 11, bold: true, color: pt[3] || C.accent,
+      fontFace: "Calibri", charSpacing: 2, margin: 0,
+    });
+    s.addText(pt[1], {
+      x: 2.8, y: y - 0.04, w: 8, h: 0.4,
+      fontSize: 15.5, color: C.primary, fontFace: "Cambria", margin: 0,
+    });
+    s.addText(pt[2], {
+      x: 11.2, y, w: 1.4, h: 0.3,
+      fontSize: 11, color: C.grayLt, fontFace: "Calibri", align: "right", margin: 0,
+    });
+    s.addShape(p.ShapeType.rect, {
+      x: 1.0, y: y + 0.54, w: 11.6, h: 0.01, fill: { color: C.bg2 },
+    });
+  });
+  footer(s);
+}
+
+// ═══════════════════════════════ P4 · AI Native 总体架构 ★
+{
+  nextP();
+  const s = p.addSlide();
+  s.background = { color: C.bg };
+  pageTitle(s, "总体架构", "PART 1 · ARCHITECTURE");
+  subTitle(s, "以 Agent 编排为中心 —— 不是「应用模块 + 数据库」，而是「意图 → 能力 → 交付」");
+
+  const layers = [
+    ["交互层", C.secondary, C.dark,
+      ["自然语言对话", "现场多模态输入\n(语音 / 拍照 / 扫码)", "主动推送与提醒", "既有系统内嵌调用"]],
+    ["Agent 编排层", C.ai, C.white,
+      ["意图理解", "任务分解与规划", "调用能力池", "人在回路确认", "结果交付与回写"]],
+    ["能力与知识层", C.rd, C.white,
+      ["工具\n(查询/计算/生成/调外部系统)", "技能\n(沉淀下来的作业流程)", "知识\n(行业 + 企业 + 案例)", "记忆\n(项目上下文与经验)"]],
+    ["数据语义层", C.mfg, C.white,
+      ["统一语义模型\n(设备/批次/配方/客户 一致定义)", "时序 · 关系 · 文档 存储", "数据服务与权限"]],
+    ["接入层", C.steel, C.white,
+      ["设备与视觉数据\n(集成商交付)", "既有业务系统\n(ERP / 财务)", "文档与外部数据\n(标准/证书/客户来函)"]],
+  ];
+
+  let y = 1.7;
+  layers.forEach((L, li) => {
+    const h = li === 1 ? 1.0 : (li === 2 ? 1.08 : 0.94);
+    const isAgent = li === 1;
+    s.addShape(p.ShapeType.roundRect, {
+      x: 0.6, y, w: 12.1, h,
+      fill: { color: C.white }, line: { color: L[1], width: isAgent ? 2.5 : 1.2 },
+      rectRadius: 0.06,
+    });
+    s.addShape(p.ShapeType.rect, { x: 0.6, y, w: 1.85, h, fill: { color: L[1] } });
+    s.addText(L[0], {
+      x: 0.6, y: y + h / 2 - 0.16, w: 1.85, h: 0.3,
+      fontSize: isAgent ? 12 : 11, bold: true, color: L[2] === C.dark ? C.dark : C.white,
+      fontFace: "Cambria", align: "center", margin: 0,
+    });
+    const n = L[3].length;
+    const cw = (10.5 - (n - 1) * 0.12) / n;
+    L[3].forEach((it, i) => {
+      const cx = 2.6 + i * (cw + 0.12);
+      s.addShape(p.ShapeType.roundRect, {
+        x: cx, y: y + 0.13, w: cw, h: h - 0.26,
+        fill: { color: isAgent ? C.cream : C.bg }, line: { color: C.bg2, width: 0.5 },
+        rectRadius: 0.04,
+      });
+      s.addText(it, {
+        x: cx + 0.06, y: y + 0.16, w: cw - 0.12, h: h - 0.32,
+        fontSize: 8, color: C.dark, fontFace: "Calibri",
+        align: "center", valign: "middle", lineSpacing: 10, margin: 0,
+      });
+    });
+    y += h + 0.11;
+  });
+
+  s.addShape(p.ShapeType.roundRect, {
+    x: 0.6, y: 6.5, w: 12.1, h: 0.5,
+    fill: { color: C.cream }, line: { color: C.accent, width: 1 }, rectRadius: 0.04,
+  });
+  s.addText(
+    "关键差别 · 传统架构里应用是「功能模块」，需求变了要开发；这里应用是「Agent + 能力组合」，新任务用配置技能实现（详见 P5）",
+    {
+      x: 0.9, y: 6.61, w: 11.5, h: 0.3,
+      fontSize: 8.8, color: C.accentDk, fontFace: "Calibri", margin: 0,
+    }
+  );
+  footer(s);
+}
+
+// ═══════════════════════════════ P5 · 与传统信息化的三个关键差别
+{
+  nextP();
+  const s = p.addSlide();
+  s.background = { color: C.bg };
+  pageTitle(s, "三个关键差别", "PART 1 · WHAT CHANGES");
+  subTitle(s, "这三条决定了它不是「传统系统 + AI 功能」，而是另一种建法");
+
+  const diffs = [
+    ["人不填表", "系统从过程中提取",
+      "传统：先设计表单 → 培训 → 要求人按格式录入 → 数据质量取决于人的配合度",
+      "本方案：人按习惯工作（语音记录 / 拍照 / 随手写），系统理解并结构化；\n人只做确认与修正，不承担录入负担"],
+    ["能力可组合", "新需求不必开发",
+      "传统：新场景 = 新功能 = 需求→开发→测试→上线，周期以月计",
+      "本方案：新任务由既有工具与技能组合完成；确有价值的作业流程沉淀为技能后可复用，\n业务人员参与定义而非全靠开发"],
+    ["知识自沉淀", "用得越久越懂这家企业",
+      "传统：系统能力出厂即固定，知识留在文档与人脑，不进系统",
+      "本方案：每次处置、每次判断、每个案例都进入知识与记忆层；\n新人与下游企业查得到「上次遇到这情况是怎么处理的」"],
+  ];
+  diffs.forEach((d, i) => {
+    const y = 1.72 + i * 1.72;
+    s.addShape(p.ShapeType.roundRect, {
+      x: 0.6, y, w: 12.1, h: 1.6,
+      fill: { color: C.white }, line: { color: C.ai, width: 1.5 }, rectRadius: 0.06,
+    });
+    s.addShape(p.ShapeType.rect, { x: 0.6, y, w: 2.9, h: 1.6, fill: { color: C.ai } });
+    s.addText(d[0], {
+      x: 0.75, y: y + 0.42, w: 2.6, h: 0.36,
+      fontSize: 16, bold: true, color: C.white, fontFace: "Cambria",
+      align: "center", margin: 0,
+    });
+    s.addText(d[1], {
+      x: 0.75, y: y + 0.82, w: 2.6, h: 0.32,
+      fontSize: 9, color: C.cream, fontFace: "Calibri",
+      align: "center", margin: 0,
+    });
+    s.addText("传统", {
+      x: 3.7, y: y + 0.2, w: 0.6, h: 0.24,
+      fontSize: 8.5, bold: true, color: C.grayLt, fontFace: "Calibri", margin: 0,
+    });
+    s.addText(d[2], {
+      x: 4.4, y: y + 0.18, w: 8.05, h: 0.42,
+      fontSize: 8.5, color: C.grayLt, fontFace: "Calibri",
+      lineSpacing: 12, margin: 0, valign: "top",
+    });
+    s.addShape(p.ShapeType.rect, {
+      x: 3.7, y: y + 0.66, w: 8.75, h: 0.01, fill: { color: C.bg2 },
+    });
+    s.addText("本方案", {
+      x: 3.7, y: y + 0.78, w: 0.8, h: 0.24,
+      fontSize: 8.5, bold: true, color: C.ai, fontFace: "Calibri", margin: 0,
+    });
+    s.addText(d[3], {
+      x: 4.6, y: y + 0.76, w: 7.85, h: 0.72,
+      fontSize: 8.8, color: C.gray, fontFace: "Calibri",
+      lineSpacing: 13, margin: 0, valign: "top",
+    });
+  });
+
+  s.addText(
+    "注 · 第一条直接化解了知识管理最大的落地阻力：不再需要说服研发与一线「配合填写」",
+    {
+      x: 0.6, y: 6.92, w: 12.1, h: 0.3,
+      fontSize: 8.8, color: C.accentDk, fontFace: "Calibri", margin: 0,
+    }
+  );
+  footer(s);
+}
+
+// ═══════════════════════════════ P6 · 上下文工程 ★ 真正的差异化
+{
+  nextP();
+  const s = p.addSlide();
+  s.background = { color: C.bg };
+  pageTitle(s, "上下文工程  ·  让通用模型变成懂这一行的助手", "PART 1 · CONTEXT ENGINEERING");
+  subTitle(s, "通用大模型不懂稻壳改性、不知道这家客户的审厂标准 —— 上下文层是把通用能力变成专用能力的关键", C.redAccent);
+
+  const ctx = [
+    ["行业上下文", C.rd, "生物基复合材料的工艺机理与常见失效模式\n国内外认证标准体系与合规要求\n禁塑政策与市场应用场景",
+      "来源：公开标准、技术文献、行业资料\n可先行构建，不依赖客户数据"],
+    ["企业上下文", C.mfg, "这家的配方体系与工艺卡\n历史批次与质量档案\n客户要求、审厂标准与认证档案\n设备台账与产线约束",
+      "来源：客户既有资料 + 运行中持续积累\n是差异化的核心，无法被通用模型替代"],
+    ["实时上下文", C.sales, "当前订单与交付节点\n设备状态与在制批次\n原料入厂检测值\n入驻企业产能与协同状态",
+      "来源：数据语义层实时供给\n决定 Agent 的建议是否切合当下情况"],
+  ];
+  ctx.forEach((c, i) => {
+    const x = 0.6 + i * 4.13;
+    s.addShape(p.ShapeType.roundRect, {
+      x, y: 1.72, w: 3.9, h: 3.4,
+      fill: { color: C.white }, line: { color: c[1], width: 1.5 }, rectRadius: 0.06,
+    });
+    s.addShape(p.ShapeType.rect, { x, y: 1.72, w: 3.9, h: 0.44, fill: { color: c[1] } });
+    s.addText(c[0], {
+      x: x + 0.2, y: 1.81, w: 3.5, h: 0.3,
+      fontSize: 13, bold: true, color: C.white, fontFace: "Cambria", margin: 0,
+    });
+    s.addText(c[2], {
+      x: x + 0.22, y: 2.28, w: 3.5, h: 1.75,
+      fontSize: 8.8, color: C.gray, fontFace: "Calibri",
+      lineSpacing: 15, margin: 0, valign: "top",
+    });
+    s.addShape(p.ShapeType.rect, {
+      x: x + 0.22, y: 4.15, w: 3.5, h: 0.01, fill: { color: C.bg2 },
+    });
+    s.addText(c[3], {
+      x: x + 0.22, y: 4.26, w: 3.5, h: 0.75,
+      fontSize: 8, color: C.accentDk, fontFace: "Calibri",
+      lineSpacing: 12, margin: 0, valign: "top",
+    });
+  });
+
+  s.addShape(p.ShapeType.roundRect, {
+    x: 0.6, y: 5.32, w: 12.1, h: 1.6,
+    fill: { color: C.cream }, line: { color: C.accent, width: 1.5 }, rectRadius: 0.06,
+  });
+  s.addText("为什么这一层是护城河而不是配置工作", {
+    x: 0.9, y: 5.46, w: 6, h: 0.3,
+    fontSize: 12, bold: true, color: C.primary, fontFace: "Cambria", margin: 0,
+  });
+  s.addText(
+    "同一个通用模型，接上这三层上下文之后回答的是「这批含水率偏高的稻壳，按上次那批的处理方式应该把混炼温度往下调，" +
+    "但注意当时出现过色差」；不接上下文只能回答教科书答案。\n\n" +
+    "企业上下文随运行持续增厚 —— 用得越久越难被替代。这是数字化投入真正沉淀为资产的部分，" +
+    "也是链主向下游输出技术时，实际交付出去的东西。",
+    {
+      x: 0.9, y: 5.78, w: 11.5, h: 1.05,
+      fontSize: 9, color: C.gray, fontFace: "Calibri",
+      lineSpacing: 14, margin: 0, valign: "top",
+    }
+  );
+  footer(s);
+}
+
+// ═══════════════════════════════ P7 · 研发 Agent
+{
+  nextP();
+  const s = p.addSlide();
+  s.background = { color: C.bg };
+  pageTitle(s, "研发 Agent", "PART 2 · R&D AGENT", C.rd, "研");
+  subTitle(s, "不要求研发改变记录习惯 —— 从他们本来就在做的事里把知识提取出来");
+
+  agentPage(s, {
+    color: C.rd,
+    serves: "研发与工艺人员 · 下游应用开发方",
+    inputs: "实验过程记录（语音 / 拍照 / 随手写）· 检测报告 PDF\n中试与试制数据 · 下游企业的应用需求来函",
+    tasks: [
+      ["实验记录自动结构化", "研发按习惯记录，Agent 抽取原料特性 / 配方 / 工艺条件 / 测试结果并入库，人只做确认", "低"],
+      ["相似案例主动提示", "录入时自动检索历史相似工况：「三年前类似配方出现过色差，原因是…」", "中低"],
+      ["配方版本与谱系维护", "自动维护版本链与变更原因，标明当前生效版本，避免用错版本试制", "低"],
+      ["新品需求受理与拆解", "理解下游来函（邮件/文档）中的性能、成本、认证要求，转为结构化需求并列出待验证点", "中低"],
+      ["候选方向建议", "按目标性能与约束，从历史配方空间给出候选方向与依据，缩小试错范围", "高"],
+    ],
+    human: [
+      "配方决策与工艺定型 —— Agent 给依据，不做决定",
+      "对下游开放的技术颗粒度由管理层定，Agent 按权限执行",
+      "试制放行与量产转移的签字确认",
+    ],
+    prereq: [
+      "既有实验记录与配方文档的归集（纸质需数字化）",
+      "配方保密分级：哪些可对下游开放、开到什么程度",
+      "检测报告可电子化获取，避免二次录入",
+    ],
+    phase: ["PHASE 1 · 可先行", "不依赖产线投产，可与产线建设并行；越早启动沉淀越厚"],
+  });
+  footer(s);
+}
+
+// ═══════════════════════════════ P8 · 生产 Agent
+{
+  nextP();
+  const s = p.addSlide();
+  s.background = { color: C.bg };
+  pageTitle(s, "生产 Agent", "PART 2 · PRODUCTION AGENT", C.mfg, "产");
+  subTitle(s, "不是让人去查报表 —— 而是持续观察、发现异常、给出归因与处置建议");
+
+  agentPage(s, {
+    color: C.mfg,
+    serves: "生产、工艺与质量人员",
+    inputs: "设备参数与状态流（集成商采集）· 视觉质检输出的缺陷数据\n批次与工单信息 · 原料入厂检测值 · 订单变化",
+    tasks: [
+      ["批次链自动串联", "工序数据自动关联成批次父子链，追溯不靠人工查表：问「这批货怎么了」直接给结论", "低"],
+      ["异常发现与归因", "持续比对参数、质检与历史基线，发现偏离后串联相关数据给出可能原因与证据", "中"],
+      ["缺陷—参数关联", "把视觉厂商输出的缺陷与该批参数、原料特性关联，找出真正相关的变量", "中"],
+      ["参数建议", "按当批原料特性给出建议参数区间并附依据（相似历史批次），工艺人员确认后执行", "高"],
+      ["排产与插单影响评估", "理解交期、模具与产能约束，插单时给出重排方案与影响说明", "中"],
+    ],
+    human: [
+      "参数调整的执行决定 —— 不做无人干预的自动调参",
+      "质检争议批次的最终判定，标准解释权在质量部门",
+      "停机、放行、报废等有成本后果的动作",
+    ],
+    prereq: [
+      "设备数据已接入（集成商交付，见 P17 / P18）",
+      "缺陷数据须含批次号与时间戳，否则无法与参数对齐",
+      "原料入厂检测标准化 —— 不测则模型没有输入变量",
+    ],
+    phase: ["PHASE 1-3 · 分步", "追溯与异常发现随产线投产即可用；参数建议需批次积累，不承诺短期见效"],
+  });
+  footer(s);
+}
+
+// ═══════════════════════════════ P9 · 合规与客户 Agent
+{
+  nextP();
+  const s = p.addSlide();
+  s.background = { color: C.bg };
+  pageTitle(s, "合规与客户 Agent", "PART 2 · COMPLIANCE & CUSTOMER AGENT", C.sales, "销");
+  subTitle(s, "认证与客户要求本质上是「读文件、比对、组材料」—— 这正是语言模型最擅长的事");
+
+  agentPage(s, {
+    color: C.sales,
+    serves: "销售、质量与合规人员 · 出海的入驻企业",
+    inputs: "客户来函与审厂清单（邮件 / PDF）· 认证标准与法规文件\n既有证书与检测报告 · 订单与批次数据 · 客诉记录",
+    tasks: [
+      ["审厂清单解析与组包", "读懂客户清单，从档案库调取对应材料生成材料包，并列出缺失项与补齐建议", "低"],
+      ["认证要求比对", "多市场标准差异比对；新市场准入或法规更新时主动提示对现有产品的影响", "低"],
+      ["证书有效期跟踪", "到期前提醒并带出换证所需材料清单，避免过期断供", "低"],
+      ["碳足迹核算与报告", "按既定方法学，用批次数据与分项能耗算到单位产品并生成可核查报告", "中"],
+      ["客诉归因", "把投诉关联到批次、工艺参数与配方版本，定位根因并回流研发", "中"],
+    ],
+    human: [
+      "对客户与监管的正式承诺与签字 —— Agent 只出草稿",
+      "碳足迹核算边界与方法学的选定属合规决策",
+      "客户资源向下游开放的范围由商务协议决定",
+    ],
+    prereq: [
+      "既有认证材料归集入库（可先行，不依赖产线）",
+      "批次链已建立，否则碳足迹无法分摊到产品",
+      "分项计量装置随产线安装（见 P18）",
+    ],
+    phase: ["PHASE 1-2", "文档类任务可立即启动；碳足迹依赖计量与批次链，随产线同步"],
+  });
+  footer(s);
+}
+
+// ═══════════════════════════════ P10 · 园区 Agent ★ 赋能规模化的载体
+{
+  nextP();
+  const s = p.addSlide();
+  s.background = { color: C.bg };
+  pageTitle(s, "园区 Agent  ·  把能力而不是账号开放给下游", "PART 2 · PARK AGENT", C.ai, "园");
+  subTitle(s, "这一页是整个方案与园区商业模式的接点 —— 「链主赋能」在这里变成可规模化的产品", C.redAccent);
+
+  // 上 · 三段能力如何对下游开放
+  const opens = [
+    ["研", C.rd, "技术咨询（受控）",
+      "入驻企业用自然语言问「我这个应用场景该用什么牌号、注意什么」，\nAgent 按授权层级答：给参数区间与应用指导，不给核心配方"],
+    ["产", C.mfg, "产能与代工协同",
+      "查询共享产能余量、发起代工需求、跟踪材料到货与批次信息；\n协同订单的拆分与进度回传"],
+    ["销", C.sales, "认证与出海支持",
+      "复用链主的认证路径与送检模板；解析目标市场准入要求；\n园区统一交付文档的自动生成"],
+  ];
+  opens.forEach((o, i) => {
+    const y = 1.72 + i * 1.12;
+    s.addShape(p.ShapeType.rect, {
+      x: 0.6, y, w: 12.1, h: 1.02,
+      fill: { color: C.white }, line: { color: C.bg2, width: 1 },
+    });
+    s.addShape(p.ShapeType.rect, { x: 0.6, y, w: 0.55, h: 1.02, fill: { color: o[1] } });
+    s.addText(o[0], {
+      x: 0.6, y: y + 0.34, w: 0.55, h: 0.34,
+      fontSize: 16, bold: true, color: C.white, fontFace: "Cambria",
+      align: "center", margin: 0,
+    });
+    s.addText(o[2], {
+      x: 1.35, y: y + 0.16, w: 2.6, h: 0.32,
+      fontSize: 11.5, bold: true, color: C.primary, fontFace: "Cambria", margin: 0,
+    });
+    s.addText(o[3], {
+      x: 4.2, y: y + 0.14, w: 8.3, h: 0.76,
+      fontSize: 8.8, color: C.gray, fontFace: "Calibri",
+      lineSpacing: 13, margin: 0, valign: "middle",
+    });
+  });
+
+  // 下 · 为什么这才叫可规模化
+  s.addShape(p.ShapeType.roundRect, {
+    x: 0.6, y: 5.15, w: 5.95, h: 1.75,
+    fill: { color: C.cream }, line: { color: C.accent, width: 1.5 }, rectRadius: 0.06,
+  });
+  s.addText("为什么这才叫可规模化", {
+    x: 0.85, y: 5.28, w: 5.4, h: 0.28,
+    fontSize: 11, bold: true, color: C.primary, fontFace: "Cambria", margin: 0,
+  });
+  s.addText(
+    "派工程师去教：一次服务一家，人手即上限。\n" +
+    "给系统账号：中小企业没有 IT 团队，给了也用不起来。\n" +
+    "给 Agent：自然语言即可用，服务量不受人手约束，\n且每次问答都沉淀进企业上下文（P6）。",
+    {
+      x: 0.85, y: 5.6, w: 5.4, h: 1.2,
+      fontSize: 8.8, color: C.gray, fontFace: "Calibri",
+      lineSpacing: 14, margin: 0, valign: "top",
+    }
+  );
+
+  s.addShape(p.ShapeType.roundRect, {
+    x: 6.75, y: 5.15, w: 5.95, h: 1.75,
+    fill: { color: "FDF3F2" }, line: { color: C.redAccent, width: 1.5 }, rectRadius: 0.06,
+  });
+  s.addText("开放边界必须先由协议约定", {
+    x: 7.0, y: 5.28, w: 5.4, h: 0.28,
+    fontSize: 11, bold: true, color: C.redAccent, fontFace: "Cambria", margin: 0,
+  });
+  s.addText(
+    "Agent 按权限执行，但权限怎么设是商务与法律决策：\n" +
+    "哪些技术资料可开放、开到什么颗粒度、客户资源如何导入、\n企业间数据如何隔离 —— 须在入驻协议中逐项约定。\n" +
+    "「赋能变成失血」的防线在协议里，不在系统里。",
+    {
+      x: 7.0, y: 5.6, w: 5.4, h: 1.2,
+      fontSize: 8.8, color: C.gray, fontFace: "Calibri",
+      lineSpacing: 14, margin: 0, valign: "top",
+    }
+  );
+  footer(s);
+}
+
+// ═══════════════════════════════ P11 · 底座 · 数据与知识
+{
+  nextP();
+  const s = p.addSlide();
+  s.background = { color: C.bg };
+  pageTitle(s, "底座  ·  数据与知识层", "PART 3 · DATA & KNOWLEDGE");
+  subTitle(s, "定位变了：不是给人查询的数据库，而是给 Agent 用的语义与知识供给");
+
+  const left = [
+    ["统一语义模型", "设备、批次、配方、客户、订单在全域一致定义 —— Agent 跨域推理的前提。传统系统各自定义即可，这里必须统一"],
+    ["多形态存储", "时序（参数与能耗）· 关系（工单/批次/订单）· 文档与对象（报告/证书/图像）—— 按数据形态选型，不强求单一库"],
+    ["数据服务与权限", "Agent 通过统一服务取数，不直连底层；跨企业数据按授权隔离，权限在服务层强制"],
+  ];
+  const right = [
+    ["知识层", "行业知识（标准/机理）+ 企业知识（配方/客户要求/案例）· 支持检索增强，回答附出处便于核对"],
+    ["记忆层", "项目与会话上下文、处置经验、人对建议的采纳与否 —— 让系统持续贴近这家企业的实际"],
+    ["技能沉淀", "被验证有效的作业流程固化为可复用技能，业务人员参与定义；这是「用得越久越好用」的机制"],
+  ];
+  [left, right].forEach((col, ci) => {
+    s.addText(ci === 0 ? "数据侧  ·  供给事实" : "知识侧  ·  供给经验", {
+      x: 0.6 + ci * 6.15, y: 1.75, w: 5.95, h: 0.3,
+      fontSize: 12, bold: true, color: ci === 0 ? C.mfg : C.rd, fontFace: "Cambria", margin: 0,
+    });
+    col.forEach((item, i) => {
+      const x = 0.6 + ci * 6.15;
+      const y = 2.15 + i * 1.5;
+      s.addShape(p.ShapeType.roundRect, {
+        x, y, w: 5.95, h: 1.35,
+        fill: { color: ci === 0 ? C.white : C.cream },
+        line: { color: ci === 0 ? C.mfg : C.rd, width: 1 }, rectRadius: 0.05,
+      });
+      s.addText(item[0], {
+        x: x + 0.24, y: y + 0.18, w: 5.5, h: 0.3,
+        fontSize: 12, bold: true, color: C.primary, fontFace: "Cambria", margin: 0,
+      });
+      s.addText(item[1], {
+        x: x + 0.24, y: y + 0.54, w: 5.5, h: 0.7,
+        fontSize: 9, color: C.gray, fontFace: "Calibri",
+        lineSpacing: 13, margin: 0, valign: "top",
+      });
+    });
+  });
+
+  s.addText(
+    "注 · 数据治理在 AI Native 下不是可选项 —— 语义不统一、出处不可溯，Agent 的回答就不可信，也无法用于对外承诺",
+    {
+      x: 0.6, y: 6.72, w: 12.1, h: 0.3,
+      fontSize: 8.8, color: C.accentDk, fontFace: "Calibri", margin: 0,
+    }
+  );
+  footer(s);
+}
+
+// ═══════════════════════════════ P12 · 传统系统在 AI Native 里的位置 ★ 消除误解
+{
+  nextP();
+  const s = p.addSlide();
+  s.background = { color: C.bg };
+  pageTitle(s, "MES 等传统系统还建不建？", "PART 3 · LEGACY SYSTEMS");
+  subTitle(s, "建 —— 但定位变了：从「人操作的系统」变成「Agent 调用的工具与数据源」", C.redAccent);
+
+  const rows = [
+    ["MES 生产执行", "工单、排产、报工、追溯记录",
+      "仍需建设：它是生产事实的记录者", "Agent 调它下发指令、取进度、写回结果；人不必天天进系统查"],
+    ["质量管理", "检验规则、判定记录、不合格处置",
+      "仍需建设：判定规则需可审计", "Agent 用它的规则做初判与拦截，争议交人工"],
+    ["ERP / 财务", "物料、订单、成本科目",
+      "沿用既有系统，不重复建", "作为数据源与写回目标接入"],
+    ["视觉质检系统", "成像与缺陷判定",
+      "由专业厂商成套交付", "输出缺陷数据供 Agent 归因（见 P17）"],
+    ["报表与看板", "各类统计报表",
+      "大幅减少：多数问题直接问即可", "保留合规报送与固定周期报表；探索性查询由对话完成"],
+  ];
+
+  const y0 = 1.78, rh = 0.86;
+  s.addShape(p.ShapeType.rect, { x: 0.6, y: y0, w: 12.1, h: 0.4, fill: { color: C.primary } });
+  ["系统", "承担什么", "还建不建", "在 AI Native 里的角色"].forEach((h, i) => {
+    const xs = [0.78, 2.9, 5.6, 8.6];
+    s.addText(h, {
+      x: xs[i], y: y0 + 0.09, w: 3, h: 0.24,
+      fontSize: 9.5, bold: true, color: C.white, fontFace: "Calibri", margin: 0,
+    });
+  });
+  rows.forEach((r, i) => {
+    const y = y0 + 0.4 + i * rh;
+    s.addShape(p.ShapeType.rect, {
+      x: 0.6, y, w: 12.1, h: rh,
+      fill: { color: i % 2 ? C.white : C.cream }, line: { color: C.bg2, width: 0.5 },
+    });
+    const xs = [0.78, 2.9, 5.6, 8.6];
+    const ws = [2.0, 2.6, 2.9, 3.9];
+    r.forEach((cell, j) => {
+      s.addText(cell, {
+        x: xs[j], y: y + 0.1, w: ws[j], h: rh - 0.2,
+        fontSize: j === 0 ? 10 : 8.5, bold: j === 0,
+        color: j === 0 ? C.primary : (j === 2 ? C.accentDk : C.gray),
+        fontFace: j === 0 ? "Cambria" : "Calibri",
+        margin: 0, valign: "middle", lineSpacing: 12,
+      });
+    });
+  });
+
+  s.addShape(p.ShapeType.roundRect, {
+    x: 0.6, y: 6.3, w: 12.1, h: 0.62,
+    fill: { color: "FDF3F2" }, line: { color: C.redAccent, width: 1 }, rectRadius: 0.04,
+  });
+  s.addText(
+    "★ AI Native 不等于「不要传统系统」—— 记录、规则、审计这些职责仍需系统承担。变的是人机界面：" +
+    "人从「操作系统」转为「审阅与决策」，系统从「面向人的界面」转为「面向 Agent 的能力」。",
+    {
+      x: 0.9, y: 6.42, w: 11.5, h: 0.42,
+      fontSize: 8.8, color: C.redAccent, fontFace: "Calibri",
+      lineSpacing: 12, margin: 0, valign: "top",
+    }
+  );
+  footer(s);
+}
+
+// ═══════════════════════════════ P13 · 部署拓扑 ★
+{
+  nextP();
+  const s = p.addSlide();
+  s.background = { color: C.bg };
+  pageTitle(s, "部署拓扑  ·  四区划分与网络边界", "PART 3 · DEPLOYMENT TOPOLOGY");
+  subTitle(s, "「车间零部署」指的是 OT 侧 —— 平台层仍需算力承载，部署在厂区机房或云，不进车间", C.redAccent);
+
+  const zones = [
+    ["OT  ·  车间现场区", C.steel,
+      ["PLC / 控制器", "传感与计量装置", "协议网关 · 边缘节点", "视觉质检成套"],
+      "集成商 / 视觉厂商交付 · 本方不部署"],
+    ["DMZ  ·  数据接入区", C.accent,
+      ["采集汇聚服务", "协议与格式转换", "数据质量校验", "断点缓冲与补传"],
+      "OT 与 IT 之间的唯一通道 · 单向或受控双向"],
+    ["IT  ·  平台承载区（厂区机房 / 私有云）", C.rd,
+      ["数据层\n时序 / 关系 / 对象存储", "AI 推理服务\n模型服务 · 向量检索", "Agent 编排与应用\nMES · 业务系统", "运维与监控\n日志 · 备份 · 告警"],
+      "本方案主要部署位置 · 算力选型见 P14"],
+    ["接入  ·  用户与外部", C.sales,
+      ["厂内办公终端", "移动端（现场/出差）", "入驻企业接入", "通用大模型 API（可选）"],
+      "按角色与企业分级授权 · 外部接入经边界防护"],
+  ];
+
+  let y = 1.72;
+  zones.forEach((z, zi) => {
+    const h = zi === 2 ? 1.42 : 1.12;
+    s.addShape(p.ShapeType.roundRect, {
+      x: 0.6, y, w: 12.1, h,
+      fill: { color: C.white }, line: { color: z[1], width: zi === 2 ? 2.5 : 1.2 },
+      rectRadius: 0.06,
+    });
+    s.addShape(p.ShapeType.rect, { x: 0.6, y, w: 2.5, h, fill: { color: z[1] } });
+    s.addText(z[0], {
+      x: 0.68, y: y + h / 2 - 0.34, w: 2.34, h: 0.5,
+      fontSize: zi === 2 ? 10 : 11, bold: true, color: C.white,
+      fontFace: "Cambria", align: "center", valign: "middle",
+      lineSpacing: 13, margin: 0,
+    });
+    s.addText(z[3], {
+      x: 0.68, y: y + h / 2 + 0.16, w: 2.34, h: 0.42,
+      fontSize: 7.2, color: C.cream, fontFace: "Calibri",
+      align: "center", lineSpacing: 9, margin: 0, valign: "top",
+    });
+    const n = z[2].length;
+    const cw = (9.85 - (n - 1) * 0.12) / n;
+    z[2].forEach((it, i) => {
+      const cx = 3.25 + i * (cw + 0.12);
+      s.addShape(p.ShapeType.roundRect, {
+        x: cx, y: y + 0.16, w: cw, h: h - 0.32,
+        fill: { color: zi === 2 ? C.cream : C.bg }, line: { color: C.bg2, width: 0.5 },
+        rectRadius: 0.04,
+      });
+      s.addText(it, {
+        x: cx + 0.06, y: y + 0.2, w: cw - 0.12, h: h - 0.4,
+        fontSize: 8.2, color: C.dark, fontFace: "Calibri",
+        align: "center", valign: "middle", lineSpacing: 11, margin: 0,
+      });
+    });
+    // 区间边界标注
+    if (zi < 3) {
+      const labels = ["工业防火墙 / 网闸  ·  OT-IT 隔离",
+                      "内网边界  ·  仅开放必要端口",
+                      "外部边界  ·  防火墙 · 认证 · 审计"];
+      s.addShape(p.ShapeType.rect, {
+        x: 4.4, y: y + h + 0.015, w: 4.5, h: 0.2,
+        fill: { color: C.redAccent },
+      });
+      s.addText(labels[zi], {
+        x: 4.4, y: y + h + 0.025, w: 4.5, h: 0.18,
+        fontSize: 7.2, bold: true, color: C.white, fontFace: "Calibri",
+        align: "center", margin: 0,
+      });
+    }
+    y += h + 0.24;
+  });
+
+  s.addText(
+    "注 · 平台承载区可选私有化 / 混合 / 公有云三种形态，选型直接影响投资结构与申报固投比例 —— 见 P14",
+    {
+      x: 0.6, y: 6.95, w: 12.1, h: 0.28,
+      fontSize: 8.5, color: C.accentDk, fontFace: "Calibri", margin: 0,
+    }
+  );
+  footer(s);
+}
+
+// ═══════════════════════════════ P14 · 部署形态与算力 ★ 含固投比例提醒
+{
+  nextP();
+  const s = p.addSlide();
+  s.background = { color: C.bg };
+  pageTitle(s, "部署形态与算力  ·  选型影响申报", "PART 3 · COMPUTE & HOSTING");
+  subTitle(s, "三种形态的差别不只在技术 —— 直接决定投资是「固定资产」还是「服务费」", C.redAccent);
+
+  // 上 · 三方案对比
+  const opts = [
+    ["全私有化", C.rd,
+      "配方等核心数据不出厂\n投资计入固定资产\n自有机房 or 托管 → 见 P15\n弹性差，需按峰值配置",
+      "固投占比高\n利好技改申报"],
+    ["混合部署", C.accent,
+      "敏感数据与核心模型本地\n通用模型能力调云 API\n按需扩展弹性算力\n架构与运维较复杂",
+      "本地部分计固投\n比例需测算"],
+    ["全公有云", C.steel,
+      "投入低、上线快、弹性好\n配方数据需出厂\n长期为持续性支出\n数据主权与合规需评估",
+      "多为服务费\n固投占比低"],
+  ];
+  opts.forEach((o, i) => {
+    const x = 0.6 + i * 4.13;
+    s.addShape(p.ShapeType.roundRect, {
+      x, y: 1.7, w: 3.9, h: 2.5,
+      fill: { color: C.white }, line: { color: o[1], width: 1.5 }, rectRadius: 0.06,
+    });
+    s.addShape(p.ShapeType.rect, { x, y: 1.7, w: 3.9, h: 0.42, fill: { color: o[1] } });
+    s.addText(o[0], {
+      x: x + 0.2, y: 1.78, w: 3.5, h: 0.3,
+      fontSize: 13, bold: true, color: C.white, fontFace: "Cambria", margin: 0,
+    });
+    s.addText(o[2], {
+      x: x + 0.22, y: 2.25, w: 3.5, h: 1.15,
+      fontSize: 8.5, color: C.gray, fontFace: "Calibri",
+      lineSpacing: 14, margin: 0, valign: "top",
+    });
+    s.addShape(p.ShapeType.rect, {
+      x: x + 0.22, y: 3.5, w: 3.5, h: 0.01, fill: { color: C.bg2 },
+    });
+    s.addText(o[3], {
+      x: x + 0.22, y: 3.6, w: 3.5, h: 0.5,
+      fontSize: 8.5, bold: true, color: C.accentDk, fontFace: "Calibri",
+      lineSpacing: 12, margin: 0, valign: "top",
+    });
+  });
+
+  // 中 · 算力分类
+  s.addText("算力与存储分类  ·  配置需核定后填入", {
+    x: 0.6, y: 4.32, w: 6, h: 0.3,
+    fontSize: 11.5, bold: true, color: C.primary, fontFace: "Cambria", margin: 0,
+  });
+  const compute = [
+    ["通用计算", "平台服务 · 数据库 · 业务应用", "按并发用户数与数据量核定", "[待核定]"],
+    ["AI 推理", "模型服务 · 向量检索 · 嵌入计算", "按调用频次与模型规模核定", "[待核定]"],
+    ["存储", "时序数据 · 图像与文档 · 备份", "按点位数×频率×保留期核定", "[待核定]"],
+    ["网络", "内网带宽 · 外网出口 · 专线", "按图像回传量与接入企业数核定", "[待核定]"],
+  ];
+  compute.forEach((c, i) => {
+    const y = 4.68 + i * 0.5;
+    s.addShape(p.ShapeType.rect, {
+      x: 0.6, y, w: 12.1, h: 0.46,
+      fill: { color: i % 2 ? C.white : C.cream }, line: { color: C.bg2, width: 0.5 },
+    });
+    s.addText(c[0], {
+      x: 0.78, y: y + 0.11, w: 1.5, h: 0.26,
+      fontSize: 9.5, bold: true, color: C.primary, fontFace: "Cambria", margin: 0,
+    });
+    s.addText(c[1], {
+      x: 2.4, y: y + 0.12, w: 4.3, h: 0.24,
+      fontSize: 8.4, color: C.gray, fontFace: "Calibri", margin: 0,
+    });
+    s.addText(c[2], {
+      x: 6.9, y: y + 0.12, w: 4.3, h: 0.24,
+      fontSize: 8.4, color: C.accentDk, fontFace: "Calibri", margin: 0,
+    });
+    s.addText(c[3], {
+      x: 11.4, y: y + 0.12, w: 1.2, h: 0.24,
+      fontSize: 8.5, bold: true, color: C.redAccent, fontFace: "Calibri", margin: 0,
+    });
+  });
+
+  // 下 · 固投比例红框
+  s.addShape(p.ShapeType.roundRect, {
+    x: 0.6, y: 6.72, w: 12.1, h: 0.55,
+    fill: { color: "FDF3F2" }, line: { color: C.redAccent, width: 1.5 }, rectRadius: 0.04,
+  });
+  s.addText(
+    "★ 申报关联 · 技改政策要求固定资产投资占比 ≥ 60%（见 P23）。若平台全部采用公有云订阅，该部分计为服务费而非固投，" +
+    "可能导致比例不达标 —— 部署形态须与申报方案一并测算后决定。",
+    {
+      x: 0.9, y: 6.84, w: 11.5, h: 0.38,
+      fontSize: 8.5, color: C.redAccent, fontFace: "Calibri",
+      lineSpacing: 11, margin: 0, valign: "top",
+    }
+  );
+  footer(s);
+}
+
+// ═══════════════════════════════ P15 · 算力中心 · 自有机房 vs 租赁托管 ★
+{
+  nextP();
+  const s = p.addSlide();
+  s.background = { color: C.bg };
+  pageTitle(s, "算力中心  ·  自有机房 vs 租赁托管", "PART 3 · DATA CENTER SITING");
+  subTitle(s, "先厘清一个常被混淆的区分 —— 它决定了这个选择会不会影响申报", C.redAccent);
+
+  // 概念澄清条
+  const clar = [
+    ["租赁机房（托管 / Colocation）", "设备自购，放进专业机房的机柜", "设备仍计固定资产投资", C.secondary],
+    ["租用云服务器（IaaS）", "按量订阅他人算力", "计服务费 · 冲击固投比例", C.redAccent],
+  ];
+  clar.forEach((c, i) => {
+    const x = 0.6 + i * 6.15;
+    s.addShape(p.ShapeType.roundRect, {
+      x, y: 1.68, w: 5.95, h: 0.72,
+      fill: { color: i ? "FDF3F2" : C.cream }, line: { color: c[3], width: 1.5 }, rectRadius: 0.05,
+    });
+    s.addText(c[0], {
+      x: x + 0.2, y: 1.76, w: 5.5, h: 0.26,
+      fontSize: 10.5, bold: true, color: C.primary, fontFace: "Cambria", margin: 0,
+    });
+    s.addText(c[1], {
+      x: x + 0.2, y: 2.02, w: 3.2, h: 0.24,
+      fontSize: 8.2, color: C.gray, fontFace: "Calibri", margin: 0,
+    });
+    s.addText(c[2], {
+      x: x + 0.2, y: 2.14, w: 5.5, h: 0.24,
+      fontSize: 8.5, bold: true, color: c[3], fontFace: "Calibri", margin: 0,
+    });
+  });
+  s.addText("★ 托管不影响固投比例达标 —— 与自建的申报差别仅在机房土建那一块，不应为凑固投而自建机房", {
+    x: 0.6, y: 2.44, w: 12.1, h: 0.24,
+    fontSize: 8.5, bold: true, color: C.accentDk, fontFace: "Calibri", margin: 0,
+  });
+
+  // 安全维度对比
+  const rows = [
+    ["物理门禁与人员管控", "自主可控，但执行度依赖内部管理", "多级门禁 · 生物识别 · 7×24 值守", "托管"],
+    ["环境保障", "UPS / 柴发 / 精密空调 / 气体消防需自建", "双路市电与上述配套为标配", "托管"],
+    ["第三方人员接触", "无外部人员可物理接触设备", "服务商运维理论可接触（笼式机柜+封条缓解）", "自建"],
+    ["数据物理位置", "不出厂区，数据主权清晰", "需专线传输，链路须加密", "自建"],
+    ["容灾能力", "单点，异地容灾须另行建设", "多机房 / 多可用区可选", "托管"],
+    ["等保合规", "机房部分需自行测评与整改", "可继承服务商机房等保资质", "托管"],
+    ["7×24 运维", "制造企业 IT 团队通常不具备轮班能力", "由服务商承担", "托管"],
+  ];
+  const y0 = 2.76, rh = 0.5;
+  s.addShape(p.ShapeType.rect, { x: 0.6, y: y0, w: 12.1, h: 0.32, fill: { color: C.primary } });
+  ["安全维度", "自有机房", "租赁托管", "占优"].forEach((h, i) => {
+    const xs = [0.78, 3.5, 7.4, 11.9];
+    s.addText(h, {
+      x: xs[i], y: y0 + 0.05, w: 3, h: 0.22,
+      fontSize: 9, bold: true, color: C.white, fontFace: "Calibri", margin: 0,
+    });
+  });
+  rows.forEach((r, i) => {
+    const y = y0 + 0.32 + i * rh;
+    s.addShape(p.ShapeType.rect, {
+      x: 0.6, y, w: 12.1, h: rh,
+      fill: { color: i % 2 ? C.white : C.cream }, line: { color: C.bg2, width: 0.5 },
+    });
+    s.addText(r[0], {
+      x: 0.78, y: y + 0.13, w: 2.6, h: 0.26,
+      fontSize: 9, bold: true, color: C.primary, fontFace: "Cambria", margin: 0,
+    });
+    s.addText(r[1], {
+      x: 3.5, y: y + 0.14, w: 3.8, h: 0.24,
+      fontSize: 8, color: C.gray, fontFace: "Calibri", margin: 0,
+    });
+    s.addText(r[2], {
+      x: 7.4, y: y + 0.14, w: 4.35, h: 0.24,
+      fontSize: 8, color: C.gray, fontFace: "Calibri", margin: 0,
+    });
+    const win = r[3] === "托管";
+    s.addShape(p.ShapeType.rect, {
+      x: 11.85, y: y + 0.13, w: 0.78, h: 0.24,
+      fill: { color: win ? C.secondary : C.rd },
+    });
+    s.addText(r[3], {
+      x: 11.85, y: y + 0.14, w: 0.78, h: 0.22,
+      fontSize: 7.5, bold: true, color: C.white, fontFace: "Calibri",
+      align: "center", margin: 0,
+    });
+  });
+
+  // 结论 + 本项目特有
+  s.addShape(p.ShapeType.roundRect, {
+    x: 0.6, y: 6.38, w: 6.5, h: 0.82,
+    fill: { color: C.cream }, line: { color: C.accent, width: 1.5 }, rectRadius: 0.05,
+  });
+  s.addText("结论与建议", {
+    x: 0.82, y: 6.46, w: 3, h: 0.24,
+    fontSize: 9.5, bold: true, color: C.primary, fontFace: "Cambria", margin: 0,
+  });
+  s.addText(
+    "纯安全角度：专业 IDC 在物理安防与可用性上通常优于自建厂区机房 —— 自建的「安全」多为心理上的。\n" +
+    "建议混合：配方与工艺模型放厂区小型机房物理隔离，一般算力托管。前置动作是**数据分级**：先定清楚哪些绝对不能出厂区。",
+    {
+      x: 0.82, y: 6.7, w: 6.1, h: 0.46,
+      fontSize: 7.6, color: C.gray, fontFace: "Calibri",
+      lineSpacing: 10, margin: 0, valign: "top",
+    }
+  );
+
+  s.addShape(p.ShapeType.roundRect, {
+    x: 7.3, y: 6.38, w: 5.4, h: 0.82,
+    fill: { color: "FDF3F2" }, line: { color: C.redAccent, width: 1.5 }, rectRadius: 0.05,
+  });
+  s.addText("本项目特有的物理风险", {
+    x: 7.52, y: 6.46, w: 4, h: 0.24,
+    fontSize: 9.5, bold: true, color: C.redAccent, fontFace: "Cambria", margin: 0,
+  });
+  s.addText(
+    "① 粉尘：稻壳除杂粉碎工序产尘，厂区自建机房防尘等级不足将影响设备寿命与故障率\n" +
+    "② GPU 功率密度：AI 推理算力功耗与散热要求高，按办公场景设计的机房往往不足，需专项核算",
+    {
+      x: 7.52, y: 6.7, w: 5.0, h: 0.46,
+      fontSize: 7.6, color: C.gray, fontFace: "Calibri",
+      lineSpacing: 10, margin: 0, valign: "top",
+    }
+  );
+
+  s.addText("注 · 临港本地算力资源与相关支持政策需向管委会核实，本方案未获取相关文件", {
+    x: 0.6, y: 7.24, w: 12.1, h: 0.22,
+    fontSize: 7.5, color: C.grayLt, fontFace: "Calibri", margin: 0,
+  });
+}
+
+// ═══════════════════════════════ P16 · 安全与合规体系 ★
+{
+  nextP();
+  const s = p.addSlide();
+  s.background = { color: C.bg };
+  pageTitle(s, "安全与合规体系", "PART 3 · SECURITY & COMPLIANCE");
+  subTitle(s, "等保对制造企业是准入门槛不是加分项 —— 且 AI Native 有传统方案没有的新风险面", C.redAccent);
+
+  const layers = [
+    ["物理与网络", C.steel,
+      "机房物理安防（自建 or 托管的选型见 P15）· OT / IT 隔离（工业防火墙或网闸）\n区域划分与最小开放 · 入侵检测 · 外部接入边界防护与审计"],
+    ["数据安全", C.rd,
+      "数据分类分级（配方与客户资料为最高级）· 传输与静态加密\n脱敏与最小授权 · 备份与恢复演练"],
+    ["应用与身份", C.mfg,
+      "统一身份认证 · 基于角色与企业的权限模型\n全量操作留痕（谁在什么依据下做了什么决定）"],
+    ["AI 特有安全", C.ai,
+      "上下文准入控制：核心配方等敏感数据不进入外部模型\n提示注入防护 · 输出可审计与出处留存 · 跨企业上下文严格隔离"],
+  ];
+  layers.forEach((l, i) => {
+    const y = 1.7 + i * 1.05;
+    const isAI = i === 3;
+    s.addShape(p.ShapeType.roundRect, {
+      x: 0.6, y, w: 12.1, h: 0.95,
+      fill: { color: isAI ? C.cream : C.white },
+      line: { color: l[1], width: isAI ? 2 : 1.2 }, rectRadius: 0.05,
+    });
+    s.addShape(p.ShapeType.rect, { x: 0.6, y, w: 2.3, h: 0.95, fill: { color: l[1] } });
+    s.addText(l[0], {
+      x: 0.6, y: y + 0.32, w: 2.3, h: 0.32,
+      fontSize: 12, bold: true, color: C.white, fontFace: "Cambria",
+      align: "center", margin: 0,
+    });
+    s.addText(l[2], {
+      x: 3.1, y: y + 0.14, w: 9.4, h: 0.68,
+      fontSize: 9, color: C.gray, fontFace: "Calibri",
+      lineSpacing: 14, margin: 0, valign: "middle",
+    });
+    if (isAI) {
+      s.addText("AI Native 新增风险面", {
+        x: 3.1, y: y - 0.005, w: 4, h: 0.2,
+        fontSize: 7, bold: true, color: C.ai, fontFace: "Calibri", margin: 0,
+      });
+    }
+  });
+
+  // 合规要求
+  s.addText("合规要求  ·  需在建设前确定", {
+    x: 0.6, y: 6.0, w: 6, h: 0.3,
+    fontSize: 11.5, bold: true, color: C.primary, fontFace: "Cambria", margin: 0,
+  });
+  const comps = [
+    ["等保定级与备案", "涉工业控制系统通常需二级或三级 · 定级结果决定安全投入规模"],
+    ["数据跨境评估", "若面向海外客户或使用境外模型服务，需评估数据出境合规路径"],
+    ["入驻企业数据边界", "多企业共用平台，隔离方案须写入入驻协议并在系统中强制"],
+  ];
+  comps.forEach((c, i) => {
+    const x = 0.6 + i * 4.13;
+    s.addShape(p.ShapeType.roundRect, {
+      x, y: 6.36, w: 3.9, h: 0.72,
+      fill: { color: "FDF3F2" }, line: { color: C.redAccent, width: 1 }, rectRadius: 0.04,
+    });
+    s.addText(c[0], {
+      x: x + 0.18, y: 6.44, w: 3.5, h: 0.24,
+      fontSize: 9.5, bold: true, color: C.redAccent, fontFace: "Cambria", margin: 0,
+    });
+    s.addText(c[1], {
+      x: x + 0.18, y: 6.68, w: 3.5, h: 0.36,
+      fontSize: 7.6, color: C.gray, fontFace: "Calibri",
+      lineSpacing: 10, margin: 0, valign: "top",
+    });
+  });
+  footer(s);
+}
+
+// ═══════════════════════════════ P17 · 交付边界与分工
+{
+  nextP();
+  const s = p.addSlide();
+  s.background = { color: C.bg };
+  pageTitle(s, "交付边界与分工  ·  谁做什么", "PART 4 · SCOPE & RESPONSIBILITY");
+  subTitle(s, "在「数据接入层」切一刀 —— 线以下由系统集成商实施，线以上为本方案范围", C.redAccent);
+
+  const bands = [
+    ["交互与 Agent 层", C.ai, "对话入口 · 意图理解 · 任务编排 · 人在回路 · 结果交付",
+      "本方案范围", true],
+    ["能力与知识层", C.rd, "工具与技能 · 行业与企业知识 · 记忆 · 上下文工程",
+      "本方案范围", true],
+    ["数据语义层", C.secondary, "统一语义模型 · 多形态存储 · 数据服务与权限",
+      "本方案范围", true],
+    ["数据接入层", C.accent, "点位表 · 数据标准 · 接口协议 · 时间同步 · 验收标准",
+      "★ 本方定规范，集成商实现", "half"],
+    ["边缘与设备层", C.steel, "PLC · 传感器与计量 · 协议网关 · 视觉质检成套 · 布线安装",
+      "设备供应商 + 系统集成商", false],
+  ];
+  bands.forEach((b, i) => {
+    const y = 1.72 + i * 0.88;
+    const ours = b[4] === true, half = b[4] === "half";
+    s.addShape(p.ShapeType.roundRect, {
+      x: 0.6, y, w: 12.1, h: 0.8,
+      fill: { color: ours ? C.white : (half ? "FDF8F0" : C.bg2) },
+      line: { color: b[1], width: ours ? 2 : (half ? 2 : 1) }, rectRadius: 0.05,
+    });
+    s.addShape(p.ShapeType.rect, { x: 0.6, y, w: 2.15, h: 0.8, fill: { color: b[1] } });
+    s.addText(b[0], {
+      x: 0.6, y: y + 0.26, w: 2.15, h: 0.3,
+      fontSize: 11, bold: true, color: C.white, fontFace: "Cambria",
+      align: "center", margin: 0,
+    });
+    s.addText(b[2], {
+      x: 2.95, y: y + 0.27, w: 6.25, h: 0.3,
+      fontSize: 8.6, color: ours ? C.gray : C.grayLt, fontFace: "Calibri", margin: 0,
+    });
+    s.addShape(p.ShapeType.rect, {
+      x: 9.35, y: y + 0.17, w: 3.15, h: 0.46,
+      fill: { color: ours ? C.primary : (half ? C.accent : C.grayLt) },
+    });
+    s.addText(b[3], {
+      x: 9.4, y: y + 0.25, w: 3.05, h: 0.3,
+      fontSize: ours ? 9.5 : 8.2, bold: true, color: C.white,
+      fontFace: "Calibri", align: "center", margin: 0,
+    });
+  });
+  s.addShape(p.ShapeType.rect, { x: 0.6, y: 5.2, w: 12.1, h: 0.03, fill: { color: C.redAccent } });
+
+  s.addShape(p.ShapeType.roundRect, {
+    x: 0.6, y: 6.2, w: 5.95, h: 0.78,
+    fill: { color: C.cream }, line: { color: C.bg2, width: 1 }, rectRadius: 0.05,
+  });
+  s.addText("为什么设备侧不由本方实施", {
+    x: 0.85, y: 6.3, w: 5.4, h: 0.26,
+    fontSize: 10, bold: true, color: C.primary, fontFace: "Cambria", margin: 0,
+  });
+  s.addText(
+    "现场施工需驻场与安全资质、须配合停线；设备协议长尾需逐个适配；产线故障责任难切割。\n" +
+    "视觉质检亦交专业厂商成套交付 —— 本方在现场零部署。",
+    {
+      x: 0.85, y: 6.55, w: 5.4, h: 0.4,
+      fontSize: 8, color: C.gray, fontFace: "Calibri",
+      lineSpacing: 11, margin: 0, valign: "top",
+    }
+  );
+
+  s.addShape(p.ShapeType.roundRect, {
+    x: 6.75, y: 6.2, w: 5.95, h: 0.78,
+    fill: { color: "FDF3F2" }, line: { color: C.redAccent, width: 1.5 }, rectRadius: 0.05,
+  });
+  s.addText("但接口规范必须由本方定义", {
+    x: 7.0, y: 6.3, w: 5.4, h: 0.26,
+    fontSize: 10, bold: true, color: C.redAccent, fontFace: "Cambria", margin: 0,
+  });
+  s.addText(
+    "规范一并交出去的后果是「数据接进来了但不能用」—— 点位缺失、频率不足、时间戳不同步，\n" +
+    "返工代价仍由上层承担。边界是「不实施」不是「不介入」。",
+    {
+      x: 7.0, y: 6.55, w: 5.4, h: 0.4,
+      fontSize: 8, color: C.gray, fontFace: "Calibri",
+      lineSpacing: 11, margin: 0, valign: "top",
+    }
+  );
+  footer(s);
+}
+
+// ═══════════════════════════════ P18 · 数据接入规范
+{
+  nextP();
+  const s = p.addSlide();
+  s.background = { color: C.bg };
+  pageTitle(s, "数据接入规范  ·  三方责任划分", "PART 4 · DATA INTERFACE SPEC");
+  subTitle(s, "本方案定义「接进来的数据要长什么样」· 实施由集成商承担 · 前提条件由建设方保障", C.redAccent);
+
+  const rows = [
+    ["点位表", "本方定模板\n集成商填报", "设备 / 参数名 / 类型 / 量程 / 精度 / 频率 / 单位", "缺一项该点位即不可用"],
+    ["语义与编码标准", "本方定义", "设备编码、参数命名、批次编码全域一致", "语义不统一 Agent 无法跨域推理"],
+    ["时间同步", "本方提要求\n集成商实施", "统一时钟源，采集时间戳误差在可接受范围", "不同步则参数与质检无法对齐"],
+    ["数据格式与协议", "本方定接口\n集成商对接", "上传格式、消息结构、断点续传与补传", "决定断网后能否恢复"],
+    ["数据质量验收", "本方定标准\n双方联调", "完整性、及时性、准确性可量化验收", "不过则不进入上层建设"],
+    ["设备接口开放", "建设方在采购合同中约定", "PLC 读取权限、协议文档、点位地址表", "★ 合同未约定则难以补救"],
+    ["视觉数据要求", "本方提要求\n视觉厂商实施", "缺陷数据须含批次号与时间戳、缺陷类型编码统一", "否则无法做缺陷—参数归因"],
+    ["既有系统与文档", "建设方推动配合", "ERP 接口；实验记录、认证证书、客户要求等资料归集", "知识层的原料，可先行"],
+  ];
+
+  const y0 = 1.72, rh = 0.6;
+  s.addShape(p.ShapeType.rect, { x: 0.6, y: y0, w: 12.1, h: 0.34, fill: { color: C.primary } });
+  ["规范项", "责任方", "内容要求", "不满足的后果"].forEach((h, i) => {
+    const xs = [0.78, 2.75, 4.9, 9.6];
+    s.addText(h, {
+      x: xs[i], y: y0 + 0.05, w: 3, h: 0.24,
+      fontSize: 9.5, bold: true, color: C.white, fontFace: "Calibri", margin: 0,
+    });
+  });
+  rows.forEach((r, i) => {
+    const y = y0 + 0.34 + i * rh;
+    const isOurs = r[1].startsWith("本方");
+    s.addShape(p.ShapeType.rect, {
+      x: 0.6, y, w: 12.1, h: rh,
+      fill: { color: i % 2 ? C.white : C.cream }, line: { color: C.bg2, width: 0.5 },
+    });
+    s.addShape(p.ShapeType.rect, {
+      x: 0.6, y, w: 0.05, h: rh, fill: { color: isOurs ? C.accent : C.grayLt },
+    });
+    s.addText(r[0], {
+      x: 0.78, y: y + 0.16, w: 1.9, h: 0.28,
+      fontSize: 9.8, bold: true, color: C.primary, fontFace: "Cambria", margin: 0,
+    });
+    s.addText(r[1], {
+      x: 2.75, y: y + 0.1, w: 2.05, h: 0.42,
+      fontSize: 8, bold: isOurs, color: isOurs ? C.accentDk : C.grayLt,
+      fontFace: "Calibri", lineSpacing: 10, margin: 0, valign: "middle",
+    });
+    s.addText(r[2], {
+      x: 4.9, y: y + 0.16, w: 4.6, h: 0.3,
+      fontSize: 8.4, color: C.gray, fontFace: "Calibri", margin: 0,
+    });
+    s.addText(r[3], {
+      x: 9.6, y: y + 0.16, w: 2.95, h: 0.3,
+      fontSize: 8.2, color: C.redAccent, fontFace: "Calibri", margin: 0,
+    });
+  });
+
+  s.addShape(p.ShapeType.roundRect, {
+    x: 0.6, y: 6.62, w: 12.1, h: 0.5,
+    fill: { color: "FDF3F2" }, line: { color: C.redAccent, width: 1 }, rectRadius: 0.04,
+  });
+  s.addText(
+    "★ 建议把本页的点位表模板、语义标准与验收标准作为附件写入设备、集成商与视觉厂商的采购合同 —— 成本最低的风险控制手段",
+    {
+      x: 0.9, y: 6.73, w: 11.5, h: 0.3,
+      fontSize: 9, color: C.redAccent, fontFace: "Calibri", margin: 0,
+    }
+  );
+  footer(s);
+}
+
+// ═══════════════════════════════ P19 · 人机协同与治理边界
+{
+  nextP();
+  const s = p.addSlide();
+  s.background = { color: C.bg };
+  pageTitle(s, "人机协同与治理边界", "PART 4 · GOVERNANCE");
+  subTitle(s, "明确不做什么，比列举能做什么更重要 —— 这是 AI Native 方案可信度的来源");
+
+  const nots = [
+    ["不做无人干预的自动调参", "生物基材料工艺窗口窄，误调的代价不对称。模型给建议区间与依据，工艺人员确认后执行，结果回写形成闭环"],
+    ["不进产线实时控制回路", "毫秒级控制与安全联锁由 PLC / DCS 承担。Agent 在决策层给建议，不参与实时控制"],
+    ["不做质检的最终裁决", "视觉判定用于拦截与分类；争议批次与边界样本由人工复核，判定标准解释权在质量部门"],
+    ["不代替人对外承诺", "报价、交期、质量条款、合规声明等对外承诺由人签字，Agent 只出草稿并标注依据"],
+    ["不做黑箱回答", "涉及工艺与合规的回答须附出处（历史批次 / 标准条款 / 检测报告），使用者能核对再决定是否采纳"],
+    ["不承诺无数据支撑的效果", "准确率与提升幅度需在现场数据上验证后才给数字；本方案阶段只给能力、前提与难度"],
+  ];
+  nots.forEach((n, i) => {
+    const x = 0.6 + (i % 2) * 6.15;
+    const y = 1.75 + Math.floor(i / 2) * 1.62;
+    s.addShape(p.ShapeType.roundRect, {
+      x, y, w: 5.95, h: 1.48,
+      fill: { color: "FDF3F2" }, line: { color: C.redAccent, width: 1 }, rectRadius: 0.05,
+    });
+    s.addShape(p.ShapeType.rect, { x, y, w: 0.05, h: 1.48, fill: { color: C.redAccent } });
+    s.addText(n[0], {
+      x: x + 0.24, y: y + 0.16, w: 5.5, h: 0.3,
+      fontSize: 11.5, bold: true, color: C.redAccent, fontFace: "Cambria", margin: 0,
+    });
+    s.addText(n[1], {
+      x: x + 0.24, y: y + 0.52, w: 5.5, h: 0.85,
+      fontSize: 8.8, color: C.gray, fontFace: "Calibri",
+      lineSpacing: 13, margin: 0, valign: "top",
+    });
+  });
+
+  s.addText(
+    "配套机制 · 操作留痕与可追溯（谁在什么依据下做了什么决定）· 权限分级（跨企业数据默认隔离）· 建议采纳率跟踪（用于评估与迭代）",
+    {
+      x: 0.6, y: 6.72, w: 12.1, h: 0.3,
+      fontSize: 8.8, color: C.accentDk, fontFace: "Calibri", margin: 0,
+    }
+  );
+  footer(s);
+}
+
+// ═══════════════════════════════ P20 · 建设内容清单
+{
+  nextP();
+  const s = p.addSlide();
+  s.background = { color: C.bg };
+  pageTitle(s, "建设内容清单", "PART 5 · SCOPE OF WORK");
+  subTitle(s, "按 AI Native 架构分层列出 · 产线设备与厂房不在此表 · 投资金额待选型询价后概算");
+
+  const rows = [
+    ["01", "边缘采集与联网", "协议网关、边缘节点、采集代理、工位终端", "集成商", "技改（智能化）"],
+    ["02", "传感与计量装置", "补充传感器、分项计量表具及远传模块", "集成商", "技改 · 绿色制造"],
+    ["03", "视觉质检成套", "相机、光源、推理硬件与基础判定", "视觉厂商", "技改 · 首台(套)"],
+    ["04", "工业网络与安全", "工业以太网、网络隔离、OT/IT 边界防护", "集成商", "技改"],
+    ["05", "计算与存储硬件", "服务器、AI 推理算力、存储、备份（配置待核定）", "选型本方", "技改（固投）"],
+    ["05b", "机房或托管", "自建：土建/供电/制冷/消防  托管：机柜与专线", "建设方", "技改（固投/费用）"],
+    ["06", "安全设备与等保建设", "边界防护、身份认证、审计、等保测评整改", "选型本方", "技改（固投）"],
+    ["07", "数据语义层", "统一语义模型、多形态存储、数据服务与权限", "本方", "技改（软件）"],
+    ["08", "知识与记忆层", "行业知识库、企业知识库、案例与记忆、检索增强", "本方", "研发总部 / 关键技术"],
+    ["09", "上下文工程", "三层上下文构建与持续维护机制", "本方", "关键技术攻关"],
+    ["10", "Agent 编排平台", "意图理解、任务规划、工具调用、人在回路、留痕审计", "本方", "关键技术攻关"],
+    ["11", "工具与技能库", "各业务工具封装、技能定义与沉淀机制", "本方", "技改（软件）"],
+    ["12", "研发 Agent", "记录结构化、案例检索、需求受理、方向建议", "本方", "研发总部 / 功能性平台"],
+    ["13", "生产 Agent", "批次串联、异常归因、参数建议、排产评估", "本方", "技改 · 关键技术"],
+    ["14", "合规与客户 Agent", "清单解析组包、标准比对、碳足迹、客诉归因", "本方", "技改（软件）"],
+    ["15", "园区 Agent", "受控技术咨询、产能协同、认证支持、企业接入", "本方", "区内协同采购（配套）"],
+    ["16", "MES 与质量系统", "工单、排产、追溯记录、检验规则与判定", "本方", "技改（软件）"],
+    ["17", "集成与实施服务", "接口开发、数据迁移、知识冷启动、培训试运行", "本方", "技改（服务）"],
+  ];
+
+  const y0 = 1.66, rh = 0.305;
+  s.addShape(p.ShapeType.rect, { x: 0.6, y: y0, w: 12.1, h: 0.3, fill: { color: C.primary } });
+  ["", "建设内容", "主要构成", "实施方", "可对应政策"].forEach((h, i) => {
+    const xs = [0.75, 1.2, 3.9, 9.1, 10.3];
+    if (!h) return;
+    s.addText(h, {
+      x: xs[i], y: y0 + 0.04, w: 3, h: 0.22,
+      fontSize: 9, bold: true, color: C.white, fontFace: "Calibri", margin: 0,
+    });
+  });
+  rows.forEach((r, i) => {
+    const y = y0 + 0.3 + i * rh;
+    s.addShape(p.ShapeType.rect, {
+      x: 0.6, y, w: 12.1, h: rh,
+      fill: { color: i % 2 ? C.white : C.cream }, line: { color: C.bg2, width: 0.5 },
+    });
+    s.addText(r[0], {
+      x: 0.75, y: y + 0.06, w: 0.4, h: 0.23,
+      fontSize: 8.2, bold: true, color: C.accent, fontFace: "Cambria", margin: 0,
+    });
+    s.addText(r[1], {
+      x: 1.2, y: y + 0.055, w: 2.6, h: 0.25,
+      fontSize: 8.8, bold: true, color: C.primary, fontFace: "Cambria", margin: 0,
+    });
+    s.addText(r[2], {
+      x: 3.9, y: y + 0.06, w: 5.1, h: 0.23,
+      fontSize: 7.6, color: C.gray, fontFace: "Calibri", margin: 0,
+    });
+    const isOurs = r[3] === "本方";
+    s.addShape(p.ShapeType.rect, {
+      x: 9.1, y: y + 0.06, w: 1.05, h: 0.22,
+      fill: { color: isOurs ? C.primary : C.grayLt },
+    });
+    s.addText(r[3], {
+      x: 9.1, y: y + 0.075, w: 1.05, h: 0.2,
+      fontSize: 7, bold: true, color: C.white, fontFace: "Calibri",
+      align: "center", margin: 0,
+    });
+    s.addText(r[4], {
+      x: 10.3, y: y + 0.06, w: 2.3, h: 0.23,
+      fontSize: 7.2, bold: true, color: C.accentDk, fontFace: "Calibri", margin: 0,
+    });
+  });
+
+  s.addText(
+    "注 · 05-06 为固定资产投资，直接关系技改申报的固投比例（见 P14）· 08-11 是 AI Native 特有内容，申报口径说明见 P22",
+    {
+      x: 0.6, y: 6.92, w: 12.1, h: 0.28,
+      fontSize: 8, color: C.grayLt, fontFace: "Calibri", margin: 0,
+    }
+  );
+  footer(s);
+}
+
+// ═══════════════════════════════ P21 · 技术指标框架
+{
+  nextP();
+  const s = p.addSlide();
+  s.background = { color: C.bg };
+  pageTitle(s, "技术指标框架", "PART 5 · KPI FRAMEWORK");
+  subTitle(s, "申报评审按指标打分、验收按指标核查 —— 所有基线必须实测，本页不填估计值", C.redAccent);
+
+  s.addText("效益类  ·  申报通用五项", {
+    x: 0.6, y: 1.7, w: 5.95, h: 0.3,
+    fontSize: 11.5, bold: true, color: C.primary, fontFace: "Cambria", margin: 0,
+  });
+  const core = [
+    ["生产效率", "人均产值 / 单位时间产出"],
+    ["运营成本", "单位产品制造成本"],
+    ["产品不良品率", "一次合格率 / 废品率"],
+    ["单位产值能耗", "综合能耗 / 产值"],
+    ["产品研制周期", "新品立项到量产时长"],
+  ];
+  s.addShape(p.ShapeType.rect, { x: 0.6, y: 2.04, w: 5.95, h: 0.3, fill: { color: C.primary } });
+  ["指标", "基线", "目标"].forEach((h, i) => {
+    s.addText(h, {
+      x: [0.75, 3.6, 5.1][i], y: 2.08, w: 1.6, h: 0.24,
+      fontSize: 8.5, bold: true, color: C.white, fontFace: "Calibri", margin: 0,
+    });
+  });
+  core.forEach((c, i) => {
+    const y = 2.34 + i * 0.62;
+    s.addShape(p.ShapeType.rect, {
+      x: 0.6, y, w: 5.95, h: 0.62,
+      fill: { color: i % 2 ? C.white : C.cream }, line: { color: C.bg2, width: 0.5 },
+    });
+    s.addText(c[0], {
+      x: 0.75, y: y + 0.07, w: 2.7, h: 0.26,
+      fontSize: 10, bold: true, color: C.primary, fontFace: "Cambria", margin: 0,
+    });
+    s.addText(c[1], {
+      x: 0.75, y: y + 0.32, w: 2.7, h: 0.24,
+      fontSize: 7.5, color: C.grayLt, fontFace: "Calibri", margin: 0,
+    });
+    s.addText("[待实测]", {
+      x: 3.6, y: y + 0.18, w: 1.4, h: 0.26,
+      fontSize: 8.5, bold: true, color: C.redAccent, fontFace: "Calibri", margin: 0,
+    });
+    s.addText("[待定]", {
+      x: 5.1, y: y + 0.18, w: 1.3, h: 0.26,
+      fontSize: 8.5, bold: true, color: C.grayLt, fontFace: "Calibri", margin: 0,
+    });
+  });
+
+  s.addText("能力类  ·  AI Native 特有", {
+    x: 6.75, y: 1.7, w: 5.95, h: 0.3,
+    fontSize: 11.5, bold: true, color: C.ai, fontFace: "Cambria", margin: 0,
+  });
+  const sup = [
+    ["知识资产化率", "已结构化沉淀 / 应沉淀的工艺与案例"],
+    ["Agent 任务覆盖率", "由 Agent 承担 / 可自动化的业务任务"],
+    ["建议采纳率", "人工采纳 / Agent 给出的建议总数"],
+    ["数据可追溯率", "可溯源到出处的回答 / 全部回答"],
+    ["下游自助解决率", "入驻企业自助完成 / 全部服务请求"],
+  ];
+  s.addShape(p.ShapeType.rect, { x: 6.75, y: 2.04, w: 5.95, h: 0.3, fill: { color: C.ai } });
+  ["指标", "基线", "目标"].forEach((h, i) => {
+    s.addText(h, {
+      x: [6.9, 10.05, 11.45][i], y: 2.08, w: 1.6, h: 0.24,
+      fontSize: 8.5, bold: true, color: C.white, fontFace: "Calibri", margin: 0,
+    });
+  });
+  sup.forEach((c, i) => {
+    const y = 2.34 + i * 0.62;
+    s.addShape(p.ShapeType.rect, {
+      x: 6.75, y, w: 5.95, h: 0.62,
+      fill: { color: i % 2 ? C.white : C.cream }, line: { color: C.bg2, width: 0.5 },
+    });
+    s.addText(c[0], {
+      x: 6.9, y: y + 0.07, w: 3.1, h: 0.26,
+      fontSize: 10, bold: true, color: C.primary, fontFace: "Cambria", margin: 0,
+    });
+    s.addText(c[1], {
+      x: 6.9, y: y + 0.32, w: 3.1, h: 0.24,
+      fontSize: 7, color: C.grayLt, fontFace: "Calibri", margin: 0,
+    });
+    s.addText("[待测]", {
+      x: 10.05, y: y + 0.18, w: 1.3, h: 0.26,
+      fontSize: 8.5, bold: true, color: C.redAccent, fontFace: "Calibri", margin: 0,
+    });
+    s.addText("[待定]", {
+      x: 11.45, y: y + 0.18, w: 1.2, h: 0.26,
+      fontSize: 8.5, bold: true, color: C.grayLt, fontFace: "Calibri", margin: 0,
+    });
+  });
+
+  s.addShape(p.ShapeType.roundRect, {
+    x: 0.6, y: 5.6, w: 12.1, h: 1.32,
+    fill: { color: "FDF3F2" }, line: { color: C.redAccent, width: 1.5 }, rectRadius: 0.05,
+  });
+  s.addText("为什么本页不填估计值", {
+    x: 0.9, y: 5.72, w: 4, h: 0.28,
+    fontSize: 11, bold: true, color: C.redAccent, fontFace: "Cambria", margin: 0,
+  });
+  s.addText(
+    "申报指标是验收依据 —— 报上去的数字将来要按它核查，兑现不了的后果是资金追回与失信记录。现状基线从未实测，任何估计值都会变成无法兑现的承诺。\n" +
+    "建立基线需采集：近 12 个月产量与工时台账 · 批次合格率与废品记录 · 分项能耗（现为整厂电表，需先装分表）· 新品开发周期记录 · 实验记录与认证档案清点。" +
+    "  右侧能力类指标为本方案特有，目标值需与建设范围一并商定。",
+    {
+      x: 0.9, y: 6.04, w: 11.5, h: 0.8,
+      fontSize: 8.8, color: C.gray, fontFace: "Calibri",
+      lineSpacing: 13, margin: 0, valign: "top",
+    }
+  );
+  footer(s);
+}
+
+// ═══════════════════════════════ P22 · 申报口径翻译 ★
+{
+  nextP();
+  const s = p.addSlide();
+  s.background = { color: C.bg };
+  pageTitle(s, "申报口径翻译  ·  AI Native → 政策语言", "PART 5 · FILING TRANSLATION");
+  subTitle(s, "申报评审不使用「Agent」「上下文工程」这类表述 —— 需转译为政策文件中的既有口径", C.redAccent);
+
+  const rows = [
+    ["Agent 编排平台", "工业软件平台 / 智能决策系统",
+      "企业技术改造和智能化升级（软件投资）", "作为智能化升级的核心软件投资列示"],
+    ["上下文工程与知识层", "工艺知识库 / 企业知识管理系统",
+      "研发总部 / 功能性平台 · 关键核心技术突破", "强调工艺知识资产化与技术积累"],
+    ["研发 Agent", "研发数据管理与协同系统",
+      "设立研发总部 / 功能性平台", "对应研发信息化与新品开发效率"],
+    ["生产 Agent", "生产过程智能优化系统",
+      "技术改造 · 关键核心技术突破", "对应工艺优化与质量提升"],
+    ["合规与客户 Agent", "质量追溯与合规管理系统",
+      "技术改造（软件）", "对应追溯体系与绿色低碳核算"],
+    ["园区 Agent", "产业协同服务平台",
+      "区内协同采购（平台为其提供数据支撑）", "对应园区公共服务能力"],
+    ["数据语义层", "工业数据中台 / 数据治理平台",
+      "技术改造（软件）", "对应数据集成与互联互通"],
+  ];
+
+  const y0 = 1.78, rh = 0.63;
+  s.addShape(p.ShapeType.rect, { x: 0.6, y: y0, w: 12.1, h: 0.4, fill: { color: C.primary } });
+  ["本方案表述", "申报材料建议表述", "对应政策", "论述要点"].forEach((h, i) => {
+    const xs = [0.78, 3.2, 6.0, 9.5];
+    s.addText(h, {
+      x: xs[i], y: y0 + 0.09, w: 3, h: 0.24,
+      fontSize: 9.5, bold: true, color: C.white, fontFace: "Calibri", margin: 0,
+    });
+  });
+  rows.forEach((r, i) => {
+    const y = y0 + 0.4 + i * rh;
+    s.addShape(p.ShapeType.rect, {
+      x: 0.6, y, w: 12.1, h: rh,
+      fill: { color: i % 2 ? C.white : C.cream }, line: { color: C.bg2, width: 0.5 },
+    });
+    const xs = [0.78, 3.2, 6.0, 9.5];
+    const ws = [2.3, 2.7, 3.4, 3.05];
+    r.forEach((cell, j) => {
+      s.addText(cell, {
+        x: xs[j], y: y + 0.1, w: ws[j], h: 0.44,
+        fontSize: j === 0 ? 9 : 8.3, bold: j === 0 || j === 1,
+        color: j === 0 ? C.ai : (j === 1 ? C.primary : (j === 2 ? C.accentDk : C.gray)),
+        fontFace: j === 0 ? "Cambria" : "Calibri",
+        margin: 0, valign: "middle", lineSpacing: 11,
+      });
+    });
+  });
+
+  s.addShape(p.ShapeType.roundRect, {
+    x: 0.6, y: 6.5, w: 12.1, h: 0.5,
+    fill: { color: "FDF3F2" }, line: { color: C.redAccent, width: 1 }, rectRadius: 0.04,
+  });
+  s.addText(
+    "⚠ 转译只改表述不改实质 —— 建设内容、投资额与指标承诺必须与实际一致；未获取临港当年申报指南，正式申报前须以管委会文件核对",
+    {
+      x: 0.9, y: 6.61, w: 11.5, h: 0.3,
+      fontSize: 8.8, color: C.redAccent, fontFace: "Calibri", margin: 0,
+    }
+  );
+  footer(s);
+}
+
+// ═══════════════════════════════ P23 · 政策对接
+{
+  nextP();
+  const s = p.addSlide();
+  s.background = { color: C.bg };
+  pageTitle(s, "临港政策对接", "PART 6 · POLICY MAP");
+  subTitle(s, "下列为政策公示上限 · 实际额度取决于投资额与认定结果 · 本页不做加总测算", C.redAccent);
+
+  const rows = [
+    ["01-04  采集 / 网络 / 视觉硬件", "企业技术改造和智能化升级", "重点 5000 万 / 一般 1000 万", "固投比例 ≥ 60%"],
+    ["03  视觉检测装备", "重大技术装备首台(套)", "国内 10%/2000 万 · 国际 20%/3000 万", "需认定"],
+    ["05 06  算力与安全硬件", "企业技术改造（固定资产投资）", "并入技改项目", "★ 支撑固投比例达标"],
+    ["07 16  数据层与 MES", "技术改造（软件投资）", "并入技改项目", "同上"],
+    ["08 09 10  知识 / 上下文 / 编排", "支持关键核心技术突破", "新增投资 10-30% · 重点 3000 万", "填补国内空白"],
+    ["08 12  知识库与研发 Agent", "设立研发总部 / 功能性平台", "项目总投资 50% · 最高 1000 万", "重点实验室等"],
+    ["15  园区 Agent", "区内协同采购（平台提供数据支撑）", "采购发票额 10% · 1000 万 / 年", "双方无股权关联"],
+    ["整体", "贷款贴息 · 企业所得税优惠", "利息 50% / 1000 万每年 · 减按 15%", "按实际支付 / 实质性经营"],
+  ];
+  const y0 = 1.76, rh = 0.56;
+  s.addShape(p.ShapeType.rect, { x: 0.6, y: y0, w: 12.1, h: 0.38, fill: { color: C.primary } });
+  ["对应建设内容（P20 编号）", "政策名称", "支持上限", "主要条件"].forEach((h, i) => {
+    const xs = [0.78, 4.4, 7.6, 10.6];
+    s.addText(h, {
+      x: xs[i], y: y0 + 0.08, w: 3.4, h: 0.24,
+      fontSize: 9.5, bold: true, color: C.white, fontFace: "Calibri", margin: 0,
+    });
+  });
+  rows.forEach((r, i) => {
+    const y = y0 + 0.38 + i * rh;
+    s.addShape(p.ShapeType.rect, {
+      x: 0.6, y, w: 12.1, h: rh,
+      fill: { color: i % 2 ? C.white : C.cream }, line: { color: C.bg2, width: 0.5 },
+    });
+    const xs = [0.78, 4.4, 7.6, 10.6];
+    const ws = [3.5, 3.1, 2.9, 2.0];
+    r.forEach((cell, j) => {
+      s.addText(cell, {
+        x: xs[j], y: y + 0.1, w: ws[j], h: 0.44,
+        fontSize: 8.4, bold: j === 0 || j === 2,
+        color: j === 2 ? C.accentDk : (j === 0 ? C.primary : (j === 3 ? C.grayLt : C.dark)),
+        fontFace: "Calibri", margin: 0, valign: "middle", lineSpacing: 11,
+      });
+    });
+  });
+
+  s.addText(
+    "逐条摘自《上海临港新片区政策情况》p7-p12 · 以临港新片区管委会发布最新版本为准 · 申报主体为稻生万物 · 申报表述见 P22",
+    {
+      x: 0.6, y: 6.9, w: 12, h: 0.28,
+      fontSize: 8, color: C.grayLt, fontFace: "Calibri", italic: true, margin: 0,
+    }
+  );
+  footer(s);
+}
+
+// ═══════════════════════════════ P24 · 实施路径
+{
+  nextP();
+  const s = p.addSlide();
+  s.background = { color: C.bg };
+  pageTitle(s, "实施路径  ·  能力逐步开放，不是模块逐个上线", "PART 6 · ROADMAP");
+  subTitle(s, "AI Native 的推进方式与传统项目不同：底座一次建好，能力持续增长");
+
+  const phases = [
+    ["PHASE 1", "底座与冷启动", [
+      ["研", "既有资料归集，知识层冷启动", C.rd],
+      ["销", "认证档案入库，合规 Agent 先用起来", C.sales],
+      ["产", "点位表与语义标准定义（集成商并行施工）", C.mfg],
+      ["跨", "Agent 编排平台与上下文层搭建", C.ai],
+    ], "研 / 销 侧不依赖产线，可与产线建设并行；此阶段先让 Agent 在文档类任务上跑起来"],
+    ["PHASE 2", "接入与见效", [
+      ["产", "设备数据接入验收，批次链贯通", C.mfg],
+      ["产", "异常发现与缺陷归因上线", C.mfg],
+      ["研", "实验记录结构化，案例检索可用", C.rd],
+      ["销", "碳足迹核算，交付文档自动生成", C.sales],
+    ], "依赖 PHASE 1 底座与设备侧交付；此阶段业务收益开始显现"],
+    ["PHASE 3", "优化与对外开放", [
+      ["产", "参数建议、排产影响评估", C.mfg],
+      ["研", "候选方向建议、技术受控输出", C.rd],
+      ["园", "园区 Agent 面向入驻企业开放", C.ai],
+    ], "依赖数据积累与首批企业入驻；赋能能力对外开放"],
+  ];
+  phases.forEach((ph, i) => {
+    const x = 0.6 + i * 4.13;
+    const isFirst = i === 0;
+    s.addShape(p.ShapeType.roundRect, {
+      x, y: 1.72, w: 3.9, h: 4.05,
+      fill: { color: isFirst ? C.primary : C.white },
+      line: { color: C.bg2, width: 1 }, rectRadius: 0.06,
+    });
+    s.addText(ph[0], {
+      x: x + 0.25, y: 1.9, w: 3.4, h: 0.28,
+      fontSize: 10, bold: true, color: isFirst ? C.accent : C.accentDk,
+      fontFace: "Calibri", charSpacing: 2, margin: 0,
+    });
+    s.addText(ph[1], {
+      x: x + 0.25, y: 2.22, w: 3.4, h: 0.35,
+      fontSize: 15, bold: true, color: isFirst ? C.white : C.primary,
+      fontFace: "Cambria", margin: 0,
+    });
+    ph[2].forEach((item, j) => {
+      const iy = 2.75 + j * 0.62;
+      s.addShape(p.ShapeType.rect, { x: x + 0.25, y: iy, w: 0.26, h: 0.22, fill: { color: item[2] } });
+      s.addText(item[0], {
+        x: x + 0.25, y: iy + 0.005, w: 0.26, h: 0.21,
+        fontSize: 7.5, bold: true, color: C.white, fontFace: "Calibri",
+        align: "center", margin: 0,
+      });
+      s.addText(item[1], {
+        x: x + 0.58, y: iy - 0.02, w: 3.1, h: 0.56,
+        fontSize: 8.2, color: isFirst ? C.cream : C.gray, fontFace: "Calibri",
+        lineSpacing: 11, margin: 0, valign: "top",
+      });
+    });
+    s.addShape(p.ShapeType.rect, {
+      x: x + 0.25, y: 5.2, w: 3.4, h: 0.01,
+      fill: { color: isFirst ? C.primaryDk : C.bg2 },
+    });
+    s.addText(ph[3], {
+      x: x + 0.25, y: 5.3, w: 3.4, h: 0.42,
+      fontSize: 7.8, color: isFirst ? C.secondary : C.accentDk,
+      fontFace: "Calibri", lineSpacing: 11, margin: 0, valign: "top",
+    });
+    if (i < 2) {
+      s.addText("▶", {
+        x: x + 3.94, y: 3.6, w: 0.28, h: 0.3,
+        fontSize: 13, color: C.accent, fontFace: "Calibri", margin: 0,
+      });
+    }
+  });
+
+  s.addShape(p.ShapeType.roundRect, {
+    x: 0.6, y: 5.92, w: 12.1, h: 0.98,
+    fill: { color: C.cream }, line: { color: C.accent, width: 1 }, rectRadius: 0.05,
+  });
+  s.addText("两条硬约束", {
+    x: 0.9, y: 6.03, w: 3, h: 0.28,
+    fontSize: 11, bold: true, color: C.primary, fontFace: "Cambria", margin: 0,
+  });
+  s.addText(
+    "① 传感器与计量装置必须在产线建设期同步安装 —— 事后加装需停线改造（见 P18 / P20-02）\n" +
+    "② 设备与视觉厂商的采购合同须写入数据开放与格式条款 —— 这一步错过，后面所有阶段都要付代价",
+    {
+      x: 0.9, y: 6.32, w: 11.5, h: 0.55,
+      fontSize: 8.5, color: C.gray, fontFace: "Calibri",
+      lineSpacing: 13, margin: 0, valign: "top",
+    }
+  );
+  s.addText("注 · 各阶段时长需结合产线建设周期确定，本页不列具体月份", {
+    x: 0.6, y: 6.95, w: 12.1, h: 0.28,
+    fontSize: 8, color: C.grayLt, fontFace: "Calibri", margin: 0,
+  });
+  footer(s);
+}
+
+// ═══════════════════════════════ P25 · 风险
+{
+  nextP();
+  const s = p.addSlide();
+  s.background = { color: C.bg };
+  pageTitle(s, "关键风险与应对", "PART 6 · RISK");
+  subTitle(s, "AI Native 有它特有的风险 —— 与传统信息化项目不完全相同");
+
+  const risks = [
+    ["知识冷启动不足", "AI", "上下文层内容太少，Agent 回答泛泛，用户第一印象差就再也不用了",
+      "PHASE 1 集中做资料归集与知识冷启动 · 先在文档类窄场景上跑通再扩面"],
+    ["回答不可信", "AI", "涉及工艺与合规的回答无出处，用户不敢采纳，系统沦为摆设",
+      "所有专业回答附出处（历史批次 / 标准条款）· 建议采纳率纳入指标跟踪"],
+    ["设备数据拿不到", "产", "采购合同未约定数据开放，厂商拒绝或另行收费；封闭系统无法接入",
+      "数据条款写入设备与视觉厂商合同 · 本方提供条款模板与验收标准，风险由供方合同承接"],
+    ["集成商交付不达标", "产", "数据接进来但缺点位、时间戳不同步，上层无法使用",
+      "P18 验收标准作为付款节点前置条件 · 联调阶段本方参与"],
+    ["期望管理失控", "AI", "「AI 什么都能干」的预期与实际能力落差，导致信任崩塌",
+      "P19 明确不做什么 · 不承诺无数据支撑的效果 · 分期兑现建立信任"],
+    ["开放边界失守", "销", "技术与客户资源开放给入驻企业后被绕开自立门户",
+      "权限分级在系统中强制执行，但边界须先在入驻协议中逐项约定"],
+    ["基线缺失无法验收", "—", "指标基线未实测就申报，验收时拿不出改造前数据",
+      "PHASE 1 首要任务即基线测评 · 采集方法见 P21"],
+    ["固投比例不达标", "—", "方案偏软件与云服务，固定资产投资占比达不到技改申报门槛",
+      "部署形态与申报方案一并测算（P14）· 必要时调整为私有化或混合部署"],
+  ];
+  risks.forEach((r, i) => {
+    const y = 1.7 + i * 0.66;
+    s.addShape(p.ShapeType.rect, {
+      x: 0.6, y, w: 12.1, h: 0.58,
+      fill: { color: C.white }, line: { color: C.bg2, width: 1 },
+    });
+    s.addShape(p.ShapeType.rect, { x: 0.6, y, w: 0.05, h: 0.58, fill: { color: C.redAccent } });
+    const col = r[1] === "AI" ? C.ai : r[1] === "产" ? C.mfg
+      : r[1] === "销" ? C.sales : C.grayLt;
+    s.addShape(p.ShapeType.rect, { x: 0.8, y: y + 0.18, w: 0.3, h: 0.21, fill: { color: col } });
+    s.addText(r[1] === "—" ? "·" : r[1], {
+      x: 0.8, y: y + 0.185, w: 0.3, h: 0.2,
+      fontSize: 7, bold: true, color: C.white, fontFace: "Calibri",
+      align: "center", margin: 0,
+    });
+    s.addText(r[0], {
+      x: 1.22, y: y + 0.04, w: 2.1, h: 0.5,
+      fontSize: 10, bold: true, color: C.primary, fontFace: "Cambria",
+      margin: 0, valign: "middle",
+    });
+    s.addText(r[2], {
+      x: 3.45, y: y + 0.02, w: 4.85, h: 0.54,
+      fontSize: 8.2, color: C.gray, fontFace: "Calibri",
+      lineSpacing: 11, margin: 0, valign: "middle",
+    });
+    s.addText(r[3], {
+      x: 8.45, y: y + 0.02, w: 4.05, h: 0.54,
+      fontSize: 8.2, color: C.accentDk, fontFace: "Calibri",
+      lineSpacing: 11, margin: 0, valign: "middle",
+    });
+  });
+
+  s.addText(
+    "前两项是 AI Native 特有的失败模式 —— 不是技术不行，是信任没建立起来。分期兑现比一次铺开更重要。",
+    {
+      x: 0.6, y: 6.95, w: 12.1, h: 0.3,
+      fontSize: 8.5, color: C.redAccent, fontFace: "Calibri", margin: 0,
+    }
+  );
+  footer(s);
+}
+
+// ═══════════════════════════════ P26 · 下一步
+{
+  nextP();
+  const s = p.addSlide();
+  s.background = { color: C.primary };
+  s.addShape(p.ShapeType.rect, { x: 0, y: 0, w: W, h: 0.12, fill: { color: C.accent } });
+
+  s.addText("下一步", {
+    x: 1.1, y: 1.15, w: 11, h: 0.7,
+    fontSize: 34, bold: true, color: C.white, fontFace: "Cambria", margin: 0,
+  });
+  s.addText("AI Native 数字化方案  ·  稻生万物研产销一体化产业园", {
+    x: 1.1, y: 1.92, w: 11, h: 0.4,
+    fontSize: 14, color: C.secondary, fontFace: "Calibri", margin: 0,
+  });
+
+  const steps = [
+    ["01", "现状调研与基线测评", "走访研产销三侧 · 采集近 12 个月产量 / 质检 / 能耗数据，清点实验记录与认证档案\n没有基线，P21 的指标填不了，申报也报不了"],
+    ["02", "知识资产盘点", "清点可用于冷启动的资料：配方文档、工艺卡、认证档案、客户要求、历史案例\n这决定了 Agent 上线时的初始能力，是 AI Native 项目特有的一步"],
+    ["03", "接口规范与合同条款", "输出点位表模板、语义标准、数据验收标准，协助写入设备 / 集成商 / 视觉厂商合同\n这一步错过后面无法补救（P24 硬约束 ②）"],
+    ["04", "窄场景试点", "选一个数据齐备、见效快的场景（建议：认证材料组包或实验记录结构化）先跑通\n用真实效果建立信任，再谈全面铺开"],
+  ];
+  steps.forEach((st, i) => {
+    const y = 2.75 + i * 1.05;
+    s.addShape(p.ShapeType.rect, {
+      x: 1.1, y, w: 11.1, h: 0.92,
+      fill: { color: C.primaryDk }, line: { width: 0 },
+    });
+    s.addText(st[0], {
+      x: 1.4, y: y + 0.24, w: 0.6, h: 0.4,
+      fontSize: 18, bold: true, color: C.accent, fontFace: "Cambria", margin: 0,
+    });
+    s.addText(st[1], {
+      x: 2.15, y: y + 0.16, w: 3.2, h: 0.32,
+      fontSize: 13, bold: true, color: C.white, fontFace: "Cambria", margin: 0,
+    });
+    s.addText(st[2], {
+      x: 5.5, y: y + 0.14, w: 6.5, h: 0.7,
+      fontSize: 9, color: C.cream, fontFace: "Calibri",
+      lineSpacing: 13, margin: 0, valign: "top",
+    });
+  });
+}
+
+p.writeFile({ fileName: "daosheng-v23-ai-native-dc.pptx" })
+  .then(() => console.log("✓ daosheng-v23-ai-native-dc.pptx  ·  26 页"));
