@@ -343,7 +343,14 @@ pub async fn run_login_flow(cfg: &OidcConfig) -> Result<AuthSession> {
     // 6. 解 id_token claims (仅提 user info, 不验签 — gateway 才验签)
     //    Companion 信任 catfish-identity 因为是同机, 真生产场景 (远程 SSO)
     //    这里也应该验签, Phase 2 加.
-    let claims = decode_id_token_claims_unverified(&token_resp.id_token)?;
+    // 登录 (authorization_code) 必须有 id_token —— OIDC 规范要求, 缺了说明
+    // 对面不是合规的 OIDC provider, 这里 fail-loud 而不是兜底: 登录是整条链的
+    // 起点, 起点就将就, 后面每一步都在错误的基础上继续。
+    let id_token = token_resp
+        .id_token
+        .as_deref()
+        .ok_or_else(|| anyhow!("authorization_code 响应缺 id_token — 对端不是合规 OIDC provider"))?;
+    let claims = decode_id_token_claims_unverified(id_token)?;
 
     let now = chrono::Utc::now().timestamp();
     let expires_at = now + token_resp.expires_in.unwrap_or(3600);
@@ -359,7 +366,7 @@ pub async fn run_login_flow(cfg: &OidcConfig) -> Result<AuthSession> {
 
     // 7. 存 token 文件 (~/.catfish/oauth/, BL-FIX32 5/9): access_token + id_token + session info
     save_to_keyring(KEYRING_USERNAME_ACCESS, &token_resp.access_token)?;
-    save_to_keyring(KEYRING_USERNAME_ID, &token_resp.id_token)?;
+    save_to_keyring(KEYRING_USERNAME_ID, id_token)?;
     save_to_keyring(
         KEYRING_USERNAME_USER_INFO,
         &serde_json::to_string(&session)?,
@@ -465,7 +472,11 @@ pub async fn try_refresh_session(cfg: &OidcConfig) -> Result<AuthSession> {
 
     // 2. POST /token 换
     let token_url = format!("{}/token", cfg.issuer);
-    let client = reqwest::Client::new();
+    // P3.5.80 (7/28): issuer 可能是自签 HTTPS (中央端开了 443).
+    // Client::new() 用 reqwest 默认严格校验, 自签证书会直接握手失败 ——
+    // 浏览器点过"继续前往"不影响这里. 走 trust_central 挂上 IT 推的证书.
+    let client = crate::util::http_client::central_client(std::time::Duration::from_secs(30))
+        .map_err(|e| anyhow!(e))?;
     let resp = client
         .post(&token_url)
         .form(&[
@@ -506,7 +517,27 @@ pub async fn try_refresh_session(cfg: &OidcConfig) -> Result<AuthSession> {
     let token_resp: TokenResponse = resp.json().await.context("解析 refresh /token 响应失败")?;
 
     // 3. 解新 id_token 拿 claims (跟 login flow 同款, 不验签)
-    let claims = decode_id_token_claims_unverified(&token_resp.id_token)?;
+    //
+    // P3.5.82 (7/29): 缺 id_token 时用 access_token 兜底, **不能整个失败**。
+    //
+    // 走到这里时服务端**已经消费掉旧 refresh_token 并 rotation 出新的**了。
+    // 这一步一失败, 新 token 就跟着丢, 本地留下的是已作废的那个 —— 下次刷新
+    // 必被判"已用过", 会话直接死。所以这里的原则是: 只要拿到了新凭证, 就必须
+    // 想办法存下来, 宁可用兜底的 claims 来源, 也不能空手而归。
+    //
+    // 兜底安全: identity 的 access_token 用同一套 user claims 签, aud 是
+    // catfish-gateway (在网关接受的 aud 列表里), 拿它当 bearer 可用。
+    let id_like = match token_resp.id_token.as_deref() {
+        Some(t) => t,
+        None => {
+            log::warn!(
+                "refresh 响应没带 id_token (老版 identity), 用 access_token 兜底 —— \
+                 新 refresh_token 照常落盘, 会话不中断"
+            );
+            &token_resp.access_token
+        }
+    };
+    let claims = decode_id_token_claims_unverified(id_like)?;
     let now = chrono::Utc::now().timestamp();
     let expires_at = now + token_resp.expires_in.unwrap_or(3600);
 
@@ -521,7 +552,7 @@ pub async fn try_refresh_session(cfg: &OidcConfig) -> Result<AuthSession> {
 
     // 4. 写盘 — access + id + user_info 全更新. refresh_token 也要更 (rotation).
     save_to_keyring(KEYRING_USERNAME_ACCESS, &token_resp.access_token)?;
-    save_to_keyring(KEYRING_USERNAME_ID, &token_resp.id_token)?;
+    save_to_keyring(KEYRING_USERNAME_ID, id_like)?;
     save_to_keyring(
         KEYRING_USERNAME_USER_INFO,
         &serde_json::to_string(&session)?,
@@ -745,7 +776,27 @@ fn urlencode(s: &str) -> String {
 #[derive(Deserialize)]
 struct TokenResponse {
     access_token: String,
-    id_token: String,
+    /// P3.5.82 (7/29): 改成 Option —— **服务端可能不返**。
+    ///
+    /// 原来是必填 `String`。identity 的 refresh_token grant 响应体里没有
+    /// 这个字段 (只有 access_token / refresh_token / expires_in / scope),
+    /// 于是整个响应反序列化失败:
+    ///     "解析 refresh /token 响应失败: missing field `id_token`"
+    ///
+    /// 而失败发生在**服务端已经消费掉旧 refresh_token 并 rotation 出新的之后** ——
+    /// 新 token 随着这次解析失败一起被丢掉, 本地留着的还是那个已作废的。
+    /// 下一次刷新拿旧的去换, 服务端判"已用过 / 已吊销", 客户端据此删掉本地
+    /// 凭证 → 员工被弹回登录页。
+    ///
+    /// 7/29 实测: 登录后**恰好一小时**必现一次, 一整天被弹了七八次。且第一现场
+    /// (missing field) 跟最终报错 (已用过/已吊销) 文案完全不同、相隔一分钟,
+    /// 只看后者会误判成"token 被盗用"。
+    ///
+    /// 服务端已同步修成返回 id_token (routes_token.py 两个 refresh 返回点)。
+    /// 这里保持 Option 是为了**对着老版本 identity 也能自愈** —— 客户端先于
+    /// 服务端升级是常态, 不能要求两边同时更新。
+    #[serde(default)]
+    id_token: Option<String>,
     expires_in: Option<i64>,
     /// BL-COMPANION-SILENT-REFRESH (5/23): catfish-identity routes_token.py:150
     /// 在 refresh_token_store 配了的情况下会带这个字段. 没配 → None, 保持原行为
@@ -761,7 +812,9 @@ async fn exchange_code_for_tokens(
     redirect_uri: &str,
 ) -> Result<TokenResponse> {
     let token_url = format!("{}/token", cfg.issuer);
-    let client = reqwest::Client::new();
+    // P3.5.80 (7/28): 同上 —— 自签 HTTPS issuer 要靠 trust_central 才连得上.
+    let client = crate::util::http_client::central_client(std::time::Duration::from_secs(30))
+        .map_err(|e| anyhow!(e))?;
     let resp = client
         .post(&token_url)
         .form(&[
@@ -921,3 +974,70 @@ fn delete_from_keyring(username: &str) -> Result<()> {
 // 时启用此 type alias.
 #[allow(dead_code)]
 pub type SharedConfig = Arc<OidcConfig>;
+
+/// P3.5.82 (7/29): refresh 响应缺 `id_token` 时不能整体失败。
+///
+/// ── 这组测试在防什么 ────────────────────────────────────────────────
+///
+/// 7/29 实测的完整因果链:
+///   1. Companion 发起 silent refresh
+///   2. identity **消费掉旧 refresh_token**, rotation 出新的, 返 200
+///   3. 但响应体没有 `id_token`, 而客户端把它当必填 → 反序列化整体失败
+///   4. 新 refresh_token 随之丢弃, 本地留着已作废的那个
+///   5. 下次刷新 → "已用过 / 已吊销" → 删本地凭证 → 员工被弹回登录页
+///
+/// 表现是**登录后恰好一小时**必弹一次, 而日志里第一眼看到的错 ("已用过")
+/// 跟真因 ("missing field `id_token`") 文案完全不同、相隔一分钟。
+#[cfg(test)]
+mod tests_token_response_id_token_optional {
+    use super::TokenResponse;
+
+    #[test]
+    fn parses_refresh_response_without_id_token() {
+        // identity 老版本 refresh 分支的真实响应体形状
+        let body = r#"{
+            "access_token": "acc.jwt.sig",
+            "refresh_token": "rt-new",
+            "refresh_expires_in": 2592000,
+            "token_type": "Bearer",
+            "expires_in": 3600,
+            "scope": "openid email profile"
+        }"#;
+        let r: TokenResponse = serde_json::from_str(body).expect("缺 id_token 不该解析失败");
+        assert!(r.id_token.is_none());
+        // 最关键的一条: 新的 refresh_token 必须能拿到 —— 拿不到就是会话之死
+        assert_eq!(r.refresh_token.as_deref(), Some("rt-new"));
+        assert_eq!(r.access_token, "acc.jwt.sig");
+    }
+
+    #[test]
+    fn parses_response_with_id_token() {
+        // 服务端修好之后的形状, 不能因为改成 Option 就读不到了
+        let body = r#"{
+            "access_token": "acc",
+            "id_token": "idt",
+            "refresh_token": "rt",
+            "token_type": "Bearer",
+            "expires_in": 3600
+        }"#;
+        let r: TokenResponse = serde_json::from_str(body).unwrap();
+        assert_eq!(r.id_token.as_deref(), Some("idt"));
+        assert_eq!(r.refresh_token.as_deref(), Some("rt"));
+    }
+
+    #[test]
+    fn access_token_still_required() {
+        // 只有 id_token 放宽, access_token 缺了仍要 fail-loud ——
+        // 那是真的拿不到凭证, 静默降级只会把问题推到更远的地方。
+        let body = r#"{"id_token":"i","token_type":"Bearer","expires_in":3600}"#;
+        assert!(serde_json::from_str::<TokenResponse>(body).is_err());
+    }
+
+    #[test]
+    fn missing_refresh_token_is_none_not_error() {
+        // 服务端没配 refresh_token_store 时的老行为, 不能退化成解析失败
+        let body = r#"{"access_token":"a","id_token":"i","token_type":"Bearer","expires_in":3600}"#;
+        let r: TokenResponse = serde_json::from_str(body).unwrap();
+        assert!(r.refresh_token.is_none());
+    }
+}

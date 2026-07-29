@@ -93,6 +93,56 @@ pub fn set_picker_model(name: String) -> Result<(), String> {
     Ok(())
 }
 
+/// P3.5.81 (7/29 达华交付前夜): 换服务器时作废模型选择.
+///
+/// ── 为什么必须作废而不是保留 ────────────────────────────────────────
+///
+/// 模型名是**绑定某台服务器的目录**的:`catfish-public-deepseek-flash` 在
+/// A 服务器上存在, 在 B 服务器上就是不存在. 换服务器后继续用旧选择, hermes
+/// 会拿它去请求 B, B 返 `404 model not found`.
+///
+/// 而这个值有**两个副本**, 只清一个没用:
+///   - `~/.catfish/picker_model`      ← 本文件. Companion **每次启动**注入 store
+///   - `~/.catfish/picker_state.json` ← hermes plugin 读它决定发哪个模型
+///
+/// 7/28 实证: 只删 picker_state.json, 下次启动 picker_model 立刻把旧值灌回,
+/// 于是"删了又出现", 反复三轮才发现是两个文件。所以这里两个一起清。
+///
+/// 清空之后走的是 `ChatTab` 里那条 `catalog.default` 注入兜底 —— 模型名由
+/// **新服务器自己的目录**决定, 不再由本机历史决定. 这才是正确的默认.
+pub fn clear_model_selection() {
+    let mut cleared: Vec<String> = Vec::new();
+
+    if let Some(p) = picker_file_path() {
+        if p.exists() {
+            match std::fs::remove_file(&p) {
+                Ok(()) => cleared.push("picker_model".into()),
+                Err(e) => log::warn!("[picker] 删 {} 失败 (不阻塞): {e}", p.display()),
+            }
+        }
+    }
+
+    // picker_state.json 跟 picker_model 同目录 (~/.catfish/)
+    if let Some(dir) = picker_file_path().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+        let state = dir.join("picker_state.json");
+        if state.exists() {
+            match std::fs::remove_file(&state) {
+                Ok(()) => cleared.push("picker_state.json".into()),
+                Err(e) => log::warn!("[picker] 删 {} 失败 (不阻塞): {e}", state.display()),
+            }
+        }
+    }
+
+    if cleared.is_empty() {
+        log::debug!("[picker] 没有需要清的模型选择残留");
+    } else {
+        log::info!(
+            "[picker] 换服务器 · 已清模型选择 ({}) · 下次由新服务器目录决定默认模型",
+            cleared.join(" + ")
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

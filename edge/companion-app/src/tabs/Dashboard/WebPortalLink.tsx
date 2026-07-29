@@ -64,22 +64,75 @@ async function openInSystemBrowser(url: string): Promise<void> {
  */
 type WebStatus = "checking" | "online" | "offline";
 
-async function pingWeb(webBase: string, timeoutMs = 2000): Promise<boolean> {
+/** 探活失败的原因分类 (P3.5.80 · 7/28).
+ *
+ * 原来这里是 `catch { return false }` —— 错误被整个吞掉, 连 console 都没有.
+ * 于是中央端开 HTTPS 后, 现象变成"浏览器打得开、curl -k 也通, 面板却说连不上",
+ * 而且完全无从查起. 真因是自签证书: 探活走 Rust reqwest, 它不认自签,
+ * 跟浏览器点一次"继续前往"就记住的行为完全不同.
+ *
+ * 现在把错误留下来并粗分一类, 让提示能说到点子上.
+ */
+/// P3.5.80 (7/28): timeout 单列一类.
+/// 若把超时也归进 other, 而 TLS 握手失败又恰好比超时慢, 真实原因就被超时盖住,
+/// 提示会说"地址填错了或服务器没开" —— 又是一次把人往错方向带.
+type PingFailKind = "cert" | "timeout" | "other";
+
+/// 探活超时. 5 秒不是随便定的: 内网 TLS 握手失败通常 < 1s 就返回, 给到 5s
+/// 是为了让证书类错误有机会真的报出来, 而不是被超时抢先.
+const PING_TIMEOUT_MS = 5000;
+
+/** 返回结构体而不是 bool + 模块级变量 —— 后者在 StrictMode 双调用 / 多实例下
+ *  会串, 拿到的可能是另一次探活的失败原因. */
+interface PingResult {
+  ok: boolean;
+  kind: PingFailKind;
+}
+
+async function pingWeb(webBase: string, timeoutMs = PING_TIMEOUT_MS): Promise<PingResult> {
   try {
     const { fetchViaProxy } = await import("../../lib/http_proxy");
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), timeoutMs);
     // BL-CSP-PROXY (7/18 鸿波): 走 Rust reqwest 代理, CSP 严格. GET / 而不是 HEAD —
     // vite dev server / nginx 都答 200 主页. Rust 端不做 CORS preflight, 直接返.
-    await fetchViaProxy(`${webBase}/`, {
-      method: "GET",
-      cache: "no-store",
-      signal: ctrl.signal,
-    });
-    clearTimeout(t);
-    return true;
-  } catch {
-    return false;
+    //
+    // P3.5.80 (7/28): 原来这里建了 AbortController + setTimeout(2s) 传 signal ——
+    // **完全是空转**. http_proxy.ts 的非流路径 `httpProxy()` 只从 init 里取
+    // method/headers/body, 压根不读 signal (signal 桥接只写在 httpProxyStream).
+    // 实际生效的是 Rust 侧 30 秒超时, 而探活每 15 秒一轮 → 请求叠着排队.
+    //
+    // 改成在 JS 侧真的赛跑. 注: 这只是让 UI 别干等, Rust 那边的请求还会跑完
+    // (代理层没有取消通道), 但 30s 后自己超时, 不会泄漏.
+    await Promise.race([
+      fetchViaProxy(`${webBase}/`, { method: "GET", cache: "no-store" }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`探活超时 (${timeoutMs}ms)`)), timeoutMs),
+      ),
+    ]);
+    return { ok: true, kind: "other" };
+  } catch (e) {
+    // reqwest 的证书错误文本形态不止一种 (native-tls / rustls / 各平台文案不同),
+    // 所以匹配几个共同关键词而不是某一条精确消息.
+    const raw = String(e);
+    const msg = raw.toLowerCase();
+    // 顺序有意义: 先判超时 (那是我们自己抛的, 最确定), 再判证书.
+    const kind: PingFailKind = msg.includes("探活超时")
+      ? "timeout"
+      : msg.includes("certificate") ||
+          msg.includes("cert") ||
+          msg.includes("tls") ||
+          msg.includes("ssl") ||
+          msg.includes("handshake") ||
+          msg.includes("self-signed") ||
+          msg.includes("self signed") ||
+          msg.includes("unknownissuer") ||
+          msg.includes("not trusted")
+        ? "cert"
+        : "other";
+    // eslint-disable-next-line no-console
+    // 打完整原文 —— Rust 侧现在会把 reqwest 的 source 链拼进来 (error_chain),
+    // 这是判断"到底为什么连不上"的唯一依据, 别再截断.
+    console.warn(`[WebPortalLink] 探活 ${webBase} 失败 [${kind}]: ${raw}`);
+    return { ok: false, kind };
   }
 }
 
@@ -136,11 +189,15 @@ export default function WebPortalLink() {
 
   // BL-ARCH2 fix4 (5/10): 心跳检测 catfish-web 是否在线.
   const [status, setStatus] = useState<WebStatus>("checking");
+  // P3.5.80 (7/28): 失败原因跟 status 一起进 state, 提示才能说到点子上.
+  const [failKind, setFailKind] = useState<PingFailKind>("other");
   useEffect(() => {
     let alive = true;
     const check = async () => {
-      const ok = await pingWeb(webBase);
-      if (alive) setStatus(ok ? "online" : "offline");
+      const r = await pingWeb(webBase);
+      if (!alive) return;
+      setStatus(r.ok ? "online" : "offline");
+      if (!r.ok) setFailKind(r.kind);
     };
     void check();
     const id = setInterval(check, 15_000);
@@ -195,9 +252,22 @@ export default function WebPortalLink() {
             color: "var(--catfish-text-muted)",
           }}
         >
-          {isOffline
-            ? <>未运行 (<code>{webBase}</code>) — 启动: <code>cd central/web && npm run dev</code></>
-            : <>管理 + 跨员工市场在 web. 桌面端管个人 (对话 / 画像 / skill 装卸 / 配额自查)</>}
+          {/* P3.5.80 (7/28 鸿波 catch): 原文案是 "启动: cd central/web && npm run dev" ——
+              那是开发机上起 vite dev server 的命令, 员工既没有代码仓库也不会开终端.
+              在客户现场门户是 IT 部署好的服务, 员工唯一能做的是核对地址或找 IT.
+              把开发指令摆给最终用户, 等于告诉他"这产品还没做完".
+
+              证书那一路单独提示: 这种情况下浏览器打得开、只有客户端连不上,
+              不点破的话现场会一直往"网络不通"方向查. */}
+          {!isOffline ? (
+            <>管理 + 跨员工市场在 web. 桌面端管个人 (对话 / 画像 / skill 装卸 / 配额自查)</>
+          ) : failKind === "cert" ? (
+            <>连不上 (<code>{webBase}</code>) — 服务器证书没被信任。请 IT 把公司的证书文件放到你电脑的 <code>~/.catfish/server-ca.pem</code>，然后重开鲶鱼。</>
+          ) : failKind === "timeout" ? (
+            <>连不上 (<code>{webBase}</code>) — 服务器 {PING_TIMEOUT_MS / 1000} 秒内没响应。可能不在公司网络里（VPN 没连？），或服务器很慢。</>
+          ) : (
+            <>连不上 (<code>{webBase}</code>) — 地址可能填错了，或公司服务器没开。到下面「服务器配置」核对门户地址，还是不行找 IT。</>
+          )}
         </span>
         {/* BL-COMPANION-ABOUT-CHIP (5/18): 右侧版本徽章, 点开"关于鲶鱼"模态.
             员工不知道自己装的是哪版 / 鲶鱼是啥 / 谁出的, 需要一个入口告诉他们.

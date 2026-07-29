@@ -10,9 +10,12 @@
  *   - dev token: server admin 配置 + .env 自动生成
  *   - provider keys: server 端配 (OpenAI/DeepSeek/...)
  *
- * 不 hot-reload: yaml/.env 文件 plugin/Companion 启动时读一次. 改完要:
- *   - 重启 Companion (前端读 companion.yaml endpoints.gateway_url + oidc.issuer)
- *   - 重启 hermes gateway (catfish-xcatfish-user plugin 读 ~/.hermes/.env CATFISH_GATEWAY_URL)
+ * 生效范围 (7/29 起):
+ *   - Companion 侧**当场生效** —— write_server_config 保存后调
+ *     services::endpoints::reload() 换掉进程内缓存. 原来是 OnceLock 冻结,
+ *     只能靠重启, 那句提示不是设计而是实现限制.
+ *   - hermes 跑在另一个进程里, 仍要重启才会读到新的 ~/.hermes/.env.
+ *     只有"聊天走本机 hermes"的机器需要关心; 员工机默认直连 gateway, 不受影响.
  *
  * BL-HERMES-ENV-SYNC (7/18): write_server_config 已加写 ~/.hermes/.env CATFISH_GATEWAY_URL.
  * 之前 comment 说 "plugin 读 memory_plugin.yaml" 是 stale (plugin 早已 refactor 用 env),
@@ -28,6 +31,8 @@ export default function ServerConfigCard() {
   const [editing, setEditing] = useState(false);
   const [draftUrl, setDraftUrl] = useState("");
   const [draftIdentity, setDraftIdentity] = useState("");
+  // P3.5.80 (7/28): 门户 URL — 见文件头说明, 这是第三个独立配置
+  const [draftWeb, setDraftWeb] = useState("");
   // P3.4.1: secret-broker 服务删, 不再让员工配 broker URL
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -42,6 +47,7 @@ export default function ServerConfigCard() {
         setCfg(c);
         setDraftUrl(c.gateway_url);
         setDraftIdentity(c.identity_url);
+        setDraftWeb(c.web_url ?? "");
       })
       .catch((e) => {
         if (!alive) return;
@@ -59,6 +65,7 @@ export default function ServerConfigCard() {
     if (!cfg) return;
     setDraftUrl(cfg.gateway_url);
     setDraftIdentity(cfg.identity_url);
+    setDraftWeb(cfg.web_url ?? "");
     setEditing(true);
     setErr(null);
     setSaved(false);
@@ -81,12 +88,19 @@ export default function ServerConfigCard() {
       if (idUrl && !/^https?:\/\//.test(idUrl)) {
         throw new Error("identity URL 必须 http:// 或 https:// 开头");
       }
+      // P3.5.80 (7/28): 门户 URL 允许留空 —— 它跟"能不能登录"无关,
+      // 不该拿它挡住员工保存 gateway/identity. 留空时下面会显式提示后果.
+      const webUrl = draftWeb.trim().replace(/\/+$/, "");
+      if (webUrl && !/^https?:\/\//.test(webUrl)) {
+        throw new Error("门户 URL 必须 http:// 或 https:// 开头");
+      }
       const keepToken = cfg?.gateway_token || "";
-      await writeServerConfig(url, keepToken, idUrl || undefined);
+      await writeServerConfig(url, keepToken, idUrl || undefined, webUrl || undefined);
       const fresh = await readServerConfig();
       setCfg(fresh);
       setDraftUrl(fresh.gateway_url);
       setDraftIdentity(fresh.identity_url);
+      setDraftWeb(fresh.web_url ?? "");
       setEditing(false);
       setSaved(true);
       setTimeout(() => setSaved(false), 6000);
@@ -126,10 +140,9 @@ export default function ServerConfigCard() {
           marginBottom: 12,
         }}
       >
-        客户端直连的 2 个 server (gateway + identity · P3.4.1 6/13 secret-broker 已删).
-        改完必须重启 hermes gateway + Companion 生效 (BL-HERMES-ENV-SYNC 7/18):
-        <br />· hermes gateway 让 catfish plugin 读 ~/.hermes/.env 新 CATFISH_GATEWAY_URL;
-        <br />· Companion 让前端读 companion.yaml 新 endpoints (进程内 OnceLock 只读一次).
+        公司服务器的 3 个地址，由 IT 提供。三项各管各的，改一项不会自动带上其它两项。
+        <br />
+        保存后<strong>立即生效</strong>，不用重开。
       </div>
 
       {/* gateway URL */}
@@ -157,6 +170,30 @@ export default function ServerConfigCard() {
           />
         ) : (
           <code style={codeStyle}>{cfg?.identity_url || "(默认)"}</code>
+        )}
+      </Row>
+
+      {/* P3.5.80 (7/28 达华现场): 中央门户 URL.
+          顶部那排门户链接 (资源市场 / 部门 / 审计 / Admin / 系统管理) 走的是
+          endpoints.web_url, 跟上面两个是**三个独立配置**. 这一栏原来根本不存在,
+          于是不管上面改成什么 IP, 门户链接都落到兜底的 http://127.0.0.1:5173,
+          点了打开员工自己的机器. */}
+      <Row label="门户 URL">
+        {editing ? (
+          <input
+            value={draftWeb}
+            onChange={(e) => setDraftWeb(e.target.value)}
+            placeholder="https://192.168.31.199 (HTTPS 部署) 或 http://IP:5173"
+            style={inputStyle}
+          />
+        ) : cfg?.web_url ? (
+          <code style={codeStyle}>{cfg.web_url}</code>
+        ) : (
+          // 不显示"(默认)" —— 这里没有默认值可言, 未配置就是链接会坏.
+          // 显示成默认值会变成又一个"看着配好了实际没配"的坑.
+          <span style={{ fontSize: 11, color: "var(--status-warn, #c97e1c)" }}>
+            未配置 · 上方门户链接会指向 http://127.0.0.1:5173（员工自己的机器，点了打不开）
+          </span>
         )}
       </Row>
 
@@ -200,18 +237,27 @@ export default function ServerConfigCard() {
             color: "var(--catfish-text)",
           }}
         >
-          ✓ 已保存到 ~/.catfish/companion.yaml + memory_plugin.yaml + ~/.hermes/.env.
+          ✓ 已保存
           <br />
-          重启生效 (BL-HERMES-ENV-SYNC 7/18):
-          <ol style={{ margin: "6px 0 0 18px", padding: 0 }}>
-            <li>
-              终端跑 <code style={inlineCode}>hermes gateway stop && hermes gateway start</code>
-              <span style={{ color: "var(--catfish-text-muted)", marginLeft: 4 }}>
-                (catfish plugin 读 ~/.hermes/.env CATFISH_GATEWAY_URL)
-              </span>
-            </li>
-            <li>关掉 Companion 重新打开 (前端 yaml 进程内只读一次)</li>
-          </ol>
+          <strong>关掉鲶鱼重新打开</strong>后新地址才生效。
+          {/* P3.5.80 (7/28 鸿波 catch "这上面的说明这么写, 给最终用户干嘛"):
+              hermes 那条确实必要 (网关地址同步进了它的配置), 但员工既看不懂
+              也没有可点的按钮 —— restartService() 对 hermes 直接 return,
+              hermesKill 也没有 UI 入口. 所以降级成给 IT 的次要提示,
+              不再摆在员工面前当第一步. */}
+          <div
+            style={{
+              marginTop: 8,
+              paddingTop: 6,
+              borderTop: "1px solid var(--catfish-border)",
+              fontSize: 11,
+              color: "var(--catfish-text-muted)",
+            }}
+          >
+            给 IT：网关地址同时写进了 hermes 的配置，需要
+            <code style={inlineCode}>hermes gateway stop &amp;&amp; hermes gateway start</code>
+            才会被用上。
+          </div>
         </div>
       )}
     </div>

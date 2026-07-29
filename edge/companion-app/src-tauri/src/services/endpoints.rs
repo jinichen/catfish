@@ -22,10 +22,20 @@
 //!     CATFISH_CHROME_DEBUG_PORT  默认 9222
 //!
 //! 实现:
-//!     std::sync::OnceLock 在第一次访问时读 yaml + env, 之后不变 (进程内不可改).
-//!     Companion 是桌面应用, 不需要 hot-reload 端口。改 yaml 后重启 Companion 生效。
+//!     进程内缓存一份, 第一次访问时读 yaml + env; 员工在面板保存服务器配置时
+//!     由 `reload()` 重新读盘替换, **当场生效, 不需要重启 Companion**.
+//!     早期实现是 OnceLock (读一次就冻结), 界面因此挂着"改完要退出重新打开
+//!     才生效" —— 那不是产品设计而是实现限制: 员工改完看不到变化, 会以为没
+//!     保存成功而反复重试. 7/29 改成可重载.
+//!     注意 hermes 跑在**另一个进程**里, 仍需重启才会读到新的 ~/.hermes/.env,
+//!     那是进程边界决定的, 跟本模块无关.
+//!
+//! 注: 本文件的 `//!` 缩进段落必须紧跟在标题行后面, 中间不能空行 ——
+//! markdown 里"空行 + 4 空格缩进"是代码块, rustdoc 会把它当 doctest 去编译,
+//! 中文写的说明自然编译不过 (7/29 踩过一次: `cargo test` 报
+//! "prefix `界面因此挂着` is unknown").
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock, RwLock};
 use serde::Deserialize;
 
 const DEFAULT_GATEWAY_HOST: &str = "127.0.0.1";
@@ -231,11 +241,85 @@ fn build() -> Endpoints {
     }
 }
 
-static ENDPOINTS: OnceLock<Endpoints> = OnceLock::new();
+static ENDPOINTS: OnceLock<RwLock<Arc<Endpoints>>> = OnceLock::new();
 
-/// 进程内单例 —— 第一次调时从 env 读, 之后冻结。
-pub fn endpoints() -> &'static Endpoints {
-    ENDPOINTS.get_or_init(build)
+fn cell() -> &'static RwLock<Arc<Endpoints>> {
+    ENDPOINTS.get_or_init(|| RwLock::new(Arc::new(build())))
+}
+
+/// 进程内当前生效的地址。第一次调用时读盘, 之后走缓存;
+/// 员工在面板改服务器时由 [`reload`] 换掉, **不需要重启 Companion**。
+///
+/// 返回 `Arc` 而不是 `&'static`: 值现在会变, 借用会把调用方钉在某个瞬间的
+/// 快照上。Arc 让每个调用点拿到一份当时的完整值, 换值时正在跑的请求也不会
+/// 读到撕裂的中间状态。
+pub fn endpoints() -> Arc<Endpoints> {
+    cell()
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+/// 重新读盘并替换进程内的地址。面板保存服务器配置后调一次。
+///
+/// ── 为什么需要它 ────────────────────────────────────────────────
+///
+/// 原来这里是 `OnceLock<Endpoints>`, 注释写着"第一次调时读, 之后冻结"。
+/// 于是员工在面板改完地址、文件也写对了, **跑着的进程仍用旧地址** —— 界面
+/// 只好挂一句"改完要退出重新打开才生效"。那句提示不是产品设计, 是在描述
+/// 一个实现限制, 而且现场很容易被漏读: 改完发现没生效, 第一反应是"配置没
+/// 保存成功", 于是反复改、反复存, 越查越乱。
+///
+/// 锁中毒直接取 `into_inner` 继续: 里面只是一份配置快照, 没有需要保护的
+/// 不变量; 因为别处 panic 就让地址读取全线挂掉, 是把小故障放大成大故障。
+pub fn reload() -> Arc<Endpoints> {
+    let fresh = Arc::new(build());
+    let mut w = cell().write().unwrap_or_else(|poisoned| poisoned.into_inner());
+    *w = Arc::clone(&fresh);
+    log::info!(
+        "[endpoints] 已重载 · gateway={} web={}",
+        fresh.gateway_base(),
+        fresh.web_url
+    );
+    fresh
+}
+
+#[cfg(test)]
+mod tests_reload {
+    //! P3.5.81 (7/29): 盯住"面板改完当场生效".
+    //!
+    //! 原实现是 OnceLock, 第一次读完就冻结 —— 文件改了进程不认。这几条测试
+    //! 一旦有人改回不可重载的写法就会红。
+
+    use super::*;
+
+    #[test]
+    fn endpoints_returns_shared_snapshot() {
+        // 两次取到的是同一份快照 (Arc 计数增加, 不是每次重新读盘)
+        let a = endpoints();
+        let b = endpoints();
+        assert!(Arc::ptr_eq(&a, &b), "没走缓存, 每次都重建了");
+    }
+
+    #[test]
+    fn reload_replaces_the_cached_value() {
+        let before = endpoints();
+        let after = reload();
+        // reload 必须换掉缓存: 之后再取, 拿到的是新那份
+        let now = endpoints();
+        assert!(Arc::ptr_eq(&after, &now), "reload 没把新值写回缓存");
+        // 旧 Arc 仍然有效 (正在跑的请求不会因为换值而读到半截状态)
+        let _ = before.gateway_base();
+    }
+
+    #[test]
+    fn old_snapshot_stays_valid_after_reload() {
+        let old = endpoints();
+        let old_gateway = old.gateway_base();
+        reload();
+        // 持有旧 Arc 的调用方读到的仍是自己那份完整值, 不会被撕裂
+        assert_eq!(old.gateway_base(), old_gateway);
+    }
 }
 
 #[cfg(test)]
