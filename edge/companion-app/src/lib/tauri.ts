@@ -558,6 +558,10 @@ export interface ServerConfig {
   identity_url: string;
   // secret_broker_url 字段砍, 旧 build 兼容靠 optional
   secret_broker_url?: string;  // deprecated, 永远不返
+  /** P3.5.80 (7/28): catfish-web 中央门户 URL (endpoints.web_url).
+   *  空串 = 未配置 → Dashboard 门户链接会落到 http://127.0.0.1:5173 全部打不开.
+   *  optional 是为了兼容旧 Rust build (没这个字段时是 undefined 而非报错). */
+  web_url?: string;
 }
 
 export const readServerConfig = () =>
@@ -567,11 +571,15 @@ export const writeServerConfig = (
   gatewayUrl: string,
   gatewayToken: string,
   identityUrl?: string,
+  /** P3.5.80 (7/28): 不传 = 保持 yaml 里已有的 web_url 不动.
+   *  登录门那张卡 (ServerSetupCard) 就是不传的, 别让它把配好的擦掉. */
+  webUrl?: string,
 ) =>
   rawInvoke<void>("write_server_config", {
     gatewayUrl,
     gatewayToken,
     identityUrl,
+    webUrl,
   });
 
 // ── BL-E27 spike: 桌宠副窗 ─────────────────────────────────
