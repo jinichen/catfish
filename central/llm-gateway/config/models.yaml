@@ -89,7 +89,7 @@ models:
     mode: chat
 
     upstream:
-      model: openai/qwen_v3_vl_moe_30b_a3b
+      model: openai/qwen_v3_6_35b_a3b
       api_base: ${INTERNAL_LLM_BASE_QWEN_VISION}
       api_key_env: INTERNAL_LLM_KEY
       # 多模态模型图像/视频处理偏慢, MoE active 3B 也比稳定模型 TTFT 长.
@@ -194,7 +194,7 @@ models:
       #   curl https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions \
       #     -H "Authorization: Bearer $DASHSCOPE_API_KEY" \
       #     -d '{"model":"qwen3.6-max-preview","messages":[{"role":"user","content":"hi"}]}'
-      model: openai/qwen3.7-max-preview
+      model: openai/qwen3.7-flash-2026-07-15
       api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
       api_key_env: DASHSCOPE_API_KEY
       timeout: 90  # 多模态请求图像/视频处理偏慢, 给宽裕
