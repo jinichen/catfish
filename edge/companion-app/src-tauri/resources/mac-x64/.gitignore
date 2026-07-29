@@ -1,0 +1,14 @@
+# 运行时 artifact 全部由 build-mac-resources.sh 生成, 不进 git (~560MB)。
+#
+# P3.5.85 (7/29): 目录按架构分开 (mac-aarch64 / mac-x64), 不再共用 resources/mac。
+# 原因见 build-mac-resources.sh 顶部注释 —— 共用一个目录时, 打完 Intel 包
+# 忘了还原, 之后十三天打出的 aarch64 包内嵌的全是 x86 运行时, 且不报任何错。
+#
+# 生成: bash scripts/build-mac-resources.sh aarch64|x64
+install.sh
+uv
+cpython-*.tar.gz
+hermes-agent-bundle.tar.gz
+node-embed.tar.gz
+chromium-embed.tar.gz
+*.log

@@ -90,7 +90,25 @@ download_with_retry() {
 # 项目根
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 COMPANION="$(cd "$SCRIPT_DIR/.." && pwd)"
-RESOURCES="$COMPANION/src-tauri/resources/mac"
+# P3.5.83 (7/29): 输出目录**按架构分开**, 不再共用 resources/mac/。
+#
+# ── 为什么改 ────────────────────────────────────────────────────────
+#
+# 老做法是两个架构都往 resources/mac/ 写, 打 Intel 包时先把 arm64 那份改名
+# 成 mac.arm64.bak 再重建。于是"当前 mac/ 里是哪个架构"完全靠人记, 脚本
+# 中途挂掉或者忘了还原, 下一次打 arm64 就会把 x86 的 Python / node / hermes
+# 装进 aarch64 的 dmg。
+#
+# 这不是假设: 7/16 那次 Intel build 之后没还原, 到 7/29 发现时
+# resources/mac/uv 是 x86_64、node 是 darwin-x64 —— **中间十三天打出的每个
+# aarch64 dmg 都是错的**。它没当场炸是因为 macOS 有 Rosetta 2 透明转译,
+# 于是"能装能跑, 只是慢", 没有任何一处会报错。企业里若禁装 Rosetta,
+# hermes 直接起不来。
+#
+# 现在两个架构各有各的目录, 同时存在、互不覆盖, 也不需要备份和还原。
+# 打包时由 tauri 配置覆盖 (tauri.aarch64.conf.json / tauri.x64.conf.json)
+# 指定用哪一份, 见 package.json 的 tauri:build:arm64 / tauri:build:x64。
+RESOURCES="$COMPANION/src-tauri/resources/mac-$ARCH"
 HERMES_TAG=$(cat "$COMPANION/.hermes-git-tag" | tr -d '[:space:]')
 
 mkdir -p "$RESOURCES"
@@ -108,6 +126,42 @@ if [ -d "$HERMES_SRC" ]; then
 fi
 git clone --depth 1 --branch "$HERMES_TAG" \
     https://github.com/NousResearch/hermes-agent.git "$HERMES_SRC"
+
+# ── 校验真的落在了要的那个版本上 (P3.5.86 · 7/29) ────────────────────
+#
+# 7/29 实录: pin 写的是 v2026.7.1, git clone 打了一行
+#     warning: refs/tags/v2026.7.1 462c8b02... is not a commit!
+#     Note: switching to '7c1a0295...'
+# 然后**自己切到了别的 commit**, 脚本毫不知情继续打包 —— 包里究竟是哪个
+# 版本没有任何记录。
+#
+# 这件事的后果不在打包时, 在运行时: catfish 的 19 个 monkey-patch 是 patch
+# hermes 内部函数的 (gateway.run._resolve_gateway_model 这类), 版本对不上
+# 就加载失败, 而失败方式是 logger.warning + silent skip —— 多租户 header、
+# picker 联动、RBAC、审批全部悄悄不工作, 界面上一切正常。
+#
+# 所以这里 fail-loud: 落点跟 pin 对不上就停, 不许打出一个"不知道装的是什么"
+# 的包。同时把实际 commit 记进 bundle, 出问题时能回溯。
+ACTUAL_DESC="$(cd "$HERMES_SRC" && git describe --tags --always 2>/dev/null || echo '<未知>')"
+ACTUAL_SHA="$(cd "$HERMES_SRC" && git rev-parse HEAD 2>/dev/null || echo '<未知>')"
+if [ "$ACTUAL_DESC" != "$HERMES_TAG" ]; then
+    echo ""
+    echo "❌ clone 落点跟 pin 对不上:"
+    echo "     .hermes-git-tag 要的 : $HERMES_TAG"
+    echo "     实际 checkout 的     : $ACTUAL_DESC  ($ACTUAL_SHA)"
+    echo ""
+    echo "   多半是这个 tag 指向的不是 commit (annotated tag 指到了 tree/blob),"
+    echo "   或者 tag 名写错了。上游可用的 tag:"
+    (cd "$HERMES_SRC" && git ls-remote --tags origin 2>/dev/null \
+        | awk -F/ '{print "     " $NF}' | grep -v '\^{}' | tail -10) || true
+    echo ""
+    echo "   catfish 的 19 个 monkey-patch 是按特定 hermes 版本写的,"
+    echo "   装错版本会静默失效 —— 所以这里不允许继续。"
+    exit 1
+fi
+echo "  ✓ hermes 版本核对: $ACTUAL_DESC ($ACTUAL_SHA)"
+# 把版本写进 bundle, 装机后可查 (~/.hermes/hermes-agent/.catfish-hermes-version)
+printf '%s\n%s\n' "$ACTUAL_DESC" "$ACTUAL_SHA" > "$HERMES_SRC/.catfish-hermes-version"
 
 # copy catfish plugins
 mkdir -p "$HERMES_SRC/plugins/memory"

@@ -11,11 +11,13 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build:clean": "bash scripts/pre-tauri-build.sh",
-    "tauri:build:app": "npm run tauri:build:clean && tauri build --bundles app",
+    "tauri:build:app": "echo '❌ 这条命令已停用 —— 它打出的包不含内嵌运行时(hermes/python/node).' && echo '   按架构选一条: npm run tauri:build:arm64  或  npm run tauri:build:x64' && exit 1",
     "tauri:build:dmg": "bash scripts/make-dmg.sh",
-    "tauri:build": "npm run tauri:build:app && npm run tauri:build:dmg",
+    "tauri:build": "echo '❌ 这条命令已停用 —— 它打出的包不含内嵌运行时(hermes/python/node).' && echo '   按架构选一条: npm run tauri:build:arm64  或  npm run tauri:build:x64' && exit 1",
+    "tauri:build:arm64": "npm run tauri:build:clean && tauri build --bundles app --config src-tauri/tauri.aarch64.conf.json && bash scripts/verify-app-arch.sh aarch64 'src-tauri/target/release/bundle/macos/Catfish Companion.app' && bash scripts/make-dmg.sh",
+    "tauri:build:x64": "npm run tauri:build:clean && tauri build --bundles app --target x86_64-apple-darwin --config src-tauri/tauri.x64.conf.json && bash scripts/verify-app-arch.sh x64 'src-tauri/target/x86_64-apple-darwin/release/bundle/macos/Catfish Companion.app' && bash scripts/make-dmg.sh x64",
     "tauri:install": "bash scripts/install-mac.sh",
-    "tauri:build:install": "npm run tauri:build && npm run tauri:install"
+    "tauri:build:install": "npm run tauri:build:arm64 && npm run tauri:install"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

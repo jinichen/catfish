@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": {
+      "resources/mac-aarch64/install.sh": "./resources/mac/install.sh",
+      "resources/mac-aarch64/uv": "./resources/mac/uv"
+    }
+  }
+}

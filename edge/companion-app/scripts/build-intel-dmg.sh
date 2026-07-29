@@ -1,4 +1,35 @@
 #!/bin/bash
+# ⚠️ 已废弃 (P3.5.83 · 7/29) —— 不要再用这个脚本。
+#
+# 它的做法是把 resources/mac/ 改名成 mac.arm64.bak, 再往同一个位置写 x86_64
+# 资源。于是"当前 resources/mac 里是哪个架构"完全靠人记, 而且 build 完必须
+# 手工还原。
+#
+# 7/16 跑过这个脚本之后没有还原, 到 7/29 才发现 —— 中间十三天打出的每一个
+# aarch64 dmg 内嵌的都是 x86 运行时。macOS 有 Rosetta 2 透明转译, 所以全程
+# 没有任何报错, 只是"慢"; 企业若禁装 Rosetta 则 hermes 直接起不来。
+#
+# 现在两个架构的资源各有各的目录, 同时存在、互不覆盖:
+#
+#   # 1. 生成对应架构的资源 (只需在资源有更新时跑)
+#   bash scripts/build-mac-resources.sh aarch64    # → resources/mac-aarch64/
+#   bash scripts/build-mac-resources.sh x64        # → resources/mac-x64/
+#
+#   # 2. 打包 (自带架构校验, 不符直接失败, 不会出错包)
+#   npm run tauri:build:arm64
+#   npm run tauri:build:x64
+#
+# 保留本文件只为记录这段历史。要看正确做法见上面两条命令。
+exit_deprecated() {
+    echo "❌ 本脚本已废弃 · 会污染 resources/mac/ 导致架构错配"
+    echo "   改用: bash scripts/build-mac-resources.sh x64 && npm run tauri:build:x64"
+    exit 1
+}
+exit_deprecated
+
+# ─────────────────────────────────────────────────────────────────
+# 以下为历史实现, 已不执行 (上面 exit_deprecated 会先返回)
+# ─────────────────────────────────────────────────────────────────
 # BL-INTEL-DMG (7/16): 给 Intel Mac 员工 build 单独 dmg (Companion 桌面 app).
 #
 # 前提: Apple Silicon dmg 已 build 好 (~/Downloads/catfish-达华交付-0715/*aarch64.dmg).

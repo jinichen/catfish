@@ -25,6 +25,13 @@ set -euo pipefail
 # 命令行常见误输 (以 : 或 - 开头 = 大概率打错命令名).
 #
 # 放最前面 · 因为参数打错是最常见错误 · 也最便宜 (不用先读 package.json / 查架构).
+#
+# P3.5.83 (7/29): 第一个参数现在也可以是架构名 (aarch64 / x64), 用来指定
+# 目标架构而不是输出路径 —— 见下面的 "目标架构" 段。这两个是**白名单里的
+# 固定词**, 跟"路径打错"分得开, 所以直接放行, 不进下面的路径校验。
+case "${1:-}" in
+    aarch64|x64) ;;   # 架构名 · 合法, 跳过路径校验
+    *)
 if [ -n "${1:-}" ]; then
     case "$1" in
         :*|-*)
@@ -45,10 +52,13 @@ if [ -n "${1:-}" ]; then
             echo "❌ output-path 必须以 .dmg 结尾 · 收到: '$1'"
             echo "   (hdiutil 会自动补 .dmg · 脚本末尾 du 会找不到无后缀路径)"
             echo "   用法: bash scripts/make-dmg.sh /path/to/out.dmg"
+            echo "   指定架构则用: bash scripts/make-dmg.sh aarch64|x64"
             exit 1
             ;;
     esac
 fi
+        ;;
+esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -56,18 +66,40 @@ APP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # 读版本 (跟 package.json 同步)
 VERSION=$(node -p "require('$APP_ROOT/package.json').version")
 
-# 检测当前 arch (arm64 = aarch64 · x86_64 = x64)
-ARCH=$(uname -m)
-if [ "$ARCH" = "arm64" ]; then
-    TAG=aarch64
-elif [ "$ARCH" = "x86_64" ]; then
-    TAG=x64
-else
-    echo "❌ 未知架构 · $ARCH (本脚本只支持 macOS arm64 / x86_64)"
-    exit 1
-fi
+# ── 目标架构 ────────────────────────────────────────────────────────
+#
+# P3.5.83 (7/29): 第一个参数可以显式指定架构 (aarch64 | x64)。
+#
+# 原来只有 `uname -m` 一条路 —— 那是**构建机**的架构, 不是产物的架构。
+# 在 Apple Silicon 上交叉编 Intel 包时, uname 说 arm64, 于是 dmg 被命名成
+# aarch64、还去 target/release/ 找 .app (交叉编译的产物在
+# target/x86_64-apple-darwin/release/), 两头都错。
+#
+# 兼容旧用法: 参数不是架构名时, 仍当作输出路径 (老调用方直接传 dmg 路径)。
+case "${1:-}" in
+    aarch64|x64)
+        TAG="$1"
+        shift
+        ;;
+    *)
+        ARCH=$(uname -m)
+        if [ "$ARCH" = "arm64" ]; then
+            TAG=aarch64
+        elif [ "$ARCH" = "x86_64" ]; then
+            TAG=x64
+        else
+            echo "❌ 未知架构 · $ARCH (本脚本只支持 macOS arm64 / x86_64)"
+            exit 1
+        fi
+        ;;
+esac
 
-APP_PATH="$APP_ROOT/src-tauri/target/release/bundle/macos/Catfish Companion.app"
+# 交叉编译的产物在 target/<rust-triple>/release/ 下, 本机架构的在 target/release/
+if [ "$TAG" = "x64" ] && [ "$(uname -m)" = "arm64" ]; then
+    APP_PATH="$APP_ROOT/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/Catfish Companion.app"
+else
+    APP_PATH="$APP_ROOT/src-tauri/target/release/bundle/macos/Catfish Companion.app"
+fi
 OUT_PATH="${1:-$HOME/Downloads/Catfish-Companion-${VERSION}-${TAG}.dmg}"
 
 if [ ! -d "$APP_PATH" ]; then
