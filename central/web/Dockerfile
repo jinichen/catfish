@@ -24,6 +24,25 @@ RUN npm run build
 FROM nginx:1.27-alpine
 # 拷构建产物
 COPY --from=builder /app/dist /usr/share/nginx/html
+
+# P3.5.80 (7/30 达华现场): 归一化权限, 否则 public/ 里的静态资源可能 403。
+#
+# 现象: 页面能开、JS/CSS 都正常, 但顶栏 logo 是个坏图标。
+#       curl -kI https://.../catfish-logo.svg → **403**, 不是 404。
+#
+# 真因: dist/ 里两类文件来路不同 ——
+#   dist/assets/*.js|css   容器内 `npm run build` 生成 → 644 → nginx 读得到
+#   dist/catfish-logo.svg  来自 public/, 经 `COPY . .` 从**宿主机**带进来,
+#                          vite 原样拷进 dist, **保留宿主机的权限位**
+# 构建机 umask 若是 077, 这些文件就是 600, 而 nginx worker 跑的是非 root 的
+# `nginx` 用户 → 读不了 → 403。
+#
+# 阴在这: git 只记录 644/755 两种 mode, 所以**全新 clone 出来的仓库是 644,
+# 这个问题复现不了**; 只有在那台 umask 特殊的构建机上才会出。CI 绿、别人
+# 机器上也绿, 唯独交付出去的镜像坏。
+#
+# a+rX 的大写 X = 只给目录加执行位, 不会把普通文件变成可执行。
+RUN chmod -R a+rX /usr/share/nginx/html
 # web 容器是员工浏览器唯一入口, 自己扛 SPA + 反代 (+ 可选 SSL).
 # P3.5.80 (7/28): 反代规则抽到 catfish-locations.conf, 由 :80 / :443 两个
 # server block 共用, 免得写两遍走岔.
