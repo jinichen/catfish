@@ -561,13 +561,21 @@ export interface ServerConfig {
   gateway_token: string;
   token_source: "yaml" | "env" | "none";
   identity_url: string;
+  /** P3.5.80 (7/28): catfish-web 中央门户 URL (endpoints.web_url).
+   *
+   *  跟 gateway_url、identity_url 是**三个独立配置**。
+   *
+   *  ⚠ **空串 = 未配置**, 不是默认值。Rust 侧刻意不返回
+   *  `http://127.0.0.1:5173` —— 返了 UI 会显示得像已经配好, 而员工点开
+   *  每个门户链接都指向自己这台机器。所以判空要用 `!cfg.web_url`,
+   *  别假设它一定是个能打开的地址。
+   *
+   *  类型是必选而非 `?:` —— Rust 侧 `pub web_url: String` 恒返, 标成
+   *  optional 会让调用方以为"可能没有这个字段", 掩盖掉"有字段但是空串"
+   *  这个真正要处理的情况。 */
   web_url: string;
   // secret_broker_url 字段砍, 旧 build 兼容靠 optional
   secret_broker_url?: string;  // deprecated, 永远不返
-  /** P3.5.80 (7/28): catfish-web 中央门户 URL (endpoints.web_url).
-   *  空串 = 未配置 → Dashboard 门户链接会落到 http://127.0.0.1:5173 全部打不开.
-   *  optional 是为了兼容旧 Rust build (没这个字段时是 undefined 而非报错). */
-  web_url?: string;
 }
 
 export const readServerConfig = () =>
