@@ -62,7 +62,8 @@ from .auth import (  # noqa: E402
     resolve_effective_user_email,
 )
 from .catalog import build_catalog  # noqa: E402
-from .config import Config, get_config, load_config  # noqa: E402
+from . import model_store  # noqa: E402
+from .config import Config, get_config, invalidate_config, load_config  # noqa: E402
 # 5/23 BL-GATEWAY-DROP-LEGACY-SUMMARIZE: inject_employee_journal 5/20 BL-GATEWAY-
 # MEMORY-REGISTRY-DELETE 时已 disable (registry.providers 永远空), 实际无 caller.
 # 函数体也从 employee_journal.py 删, 该模块剩下 read_journal / append_to_journal
@@ -154,6 +155,26 @@ async def lifespan(app: FastAPI):
     #   改完配置"一部分代码看到新值、另一部分没看到", 且走到哪条路径是随机的。
     #   现在所有读配置的地方统一走 get_config() (带 TTL, 见 config.py)。
     config = get_config()
+
+    # 7/30: 首次启动把 yaml 里的模型播种进库。
+    #
+    # 之后模型列表以库为准, yaml 不再参与 —— 否则升级包换了 yaml 会把客户
+    # 现场改过的模型冲掉。yaml 从此只是"出厂默认"。
+    #
+    # 4 个 worker 会同时跑到这里, 靠 ON CONFLICT DO NOTHING 让重复播种变成
+    # 空操作 (见 model_store.seed_from_yaml)。
+    if model_store.is_enabled():
+        try:
+            n = model_store.seed_from_yaml(
+                [m.model_dump(mode="json") for m in config.models]
+            )
+            if n:
+                logger.info("模型配置首次播种: %d 个 (来源 models.yaml)", n)
+                invalidate_config()  # 让本 worker 立刻读到库里那份
+        except Exception:
+            # 播种失败不阻塞启动 —— 此时仍能用 yaml 里的模型正常服务。
+            # 但必须留日志: 否则会表现成"界面上改了模型但列表是空的"。
+            logger.exception("模型配置播种失败, 本次将继续使用 models.yaml 里的模型")
     if _ENV_FILE_LOADED:
         logger.info("loaded .env from: %s", _ENV_FILE_LOADED)
     else:

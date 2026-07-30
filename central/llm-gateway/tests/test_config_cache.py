@@ -44,6 +44,11 @@ def cfg_file(tmp_path, monkeypatch):
     p = tmp_path / "models.yaml"
     _write_yaml(p, "model-a")
     monkeypatch.setenv("CATFISH_CONFIG", str(p))
+    # 显式关掉库存储 —— 本文件验的是纯 yaml 路径的缓存行为。
+    # 不钉的话结果会取决于跑测试的机器 .env 里有没有 CATFISH_DB_URL
+    # (tests/conftest.py 会加载它), 那种"换台机器就红"的测试没有价值。
+    monkeypatch.setattr(C.model_store, "is_enabled", lambda: False)
+    C._DB_EVER_SERVED = False
     # 模块级缓存跨测试会串, 每个用例开始前清干净
     C._CACHE = None
     C._CACHE_STAMP = None

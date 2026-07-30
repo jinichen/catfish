@@ -25,6 +25,8 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field
 
+from . import model_store
+
 logger = logging.getLogger(__name__)
 
 # ${VAR} 或 ${VAR:-default}; default 段允许空, 但不允许出现 } 字面
@@ -399,19 +401,74 @@ def config_ttl_seconds() -> float:
     return v if v >= 0 else _DEFAULT_TTL_SECONDS
 
 
-def _config_stamp() -> Any:
-    """配置源的"代次" —— 变了就说明要重新加载.
+def _file_stamp() -> Any:
+    """models.yaml 的代次 = (mtime_ns, size).
 
-    文件时代 = (mtime_ns, size)。只用 mtime 不够: 同一秒内的两次写在某些
-    文件系统上 mtime 可能相同, 加 size 能多挡一类。真要严格得算内容 hash,
-    但那要读全文, 失去了 stat 的成本优势; 配置文件不是高频改动的东西,
-    这个强度够用。
+    只用 mtime 不够: 同一秒内的两次写在某些文件系统上 mtime 可能相同,
+    加 size 能多挡一类。真要严格得算内容 hash, 但那要读全文, 失去了 stat
+    的成本优势; 配置文件不是高频改动的东西, 这个强度够用。
     """
     try:
         st = resolve_config_path().stat()
     except OSError:
         return None
     return (st.st_mtime_ns, st.st_size)
+
+
+def _config_stamp() -> Any:
+    """配置源的"代次" —— 变了就说明要重新加载.
+
+    ⚠ 必须**同时覆盖两个源**。启用库存储后:
+        模型列表  → 库 (gateway_config_meta.revision)
+        顶层字段  → 仍然只从 models.yaml 读 (auto_fallback /
+                    max_fallback_prompt_tokens / 三个 hub 的地址)
+    只盯库的话, 改了 yaml 顶层字段永远不会被重新加载; 只盯文件的话,
+    界面上改模型永远不生效。两个都要进代次。
+    """
+    file_part = _file_stamp()
+    if model_store.is_enabled():
+        return ("db", model_store.revision(), file_part)
+    return ("file", file_part)
+
+
+# 是否曾经成功从库读到过模型。决定库挂掉时是"沿用缓存"还是"降级 yaml" ——
+# 见 _assemble_config 里的分支说明。一旦为 True 就不再变回 False: 库恢复后
+# 自然会继续从库读, 而库真的坏了的期间我们要坚持用缓存而不是悄悄换配置。
+_DB_EVER_SERVED = False
+
+
+def _assemble_config() -> Config:
+    """组装最终配置: yaml 出顶层字段, 库出模型列表."""
+    cfg = load_config()  # 顶层字段 + yaml 里的模型 (未播种时就用这份)
+
+    if not model_store.is_enabled():
+        return cfg  # 没配 PG (单测 / 本机 dev) → 纯 yaml
+
+    rows = model_store.read_models()
+    if rows is None:
+        # 库不可用。这里要分两种情况, 混为一谈会出事:
+        #
+        #   曾经从库读到过 → **抛**, 让 get_config 走"沿用上一份好配置"。
+        #     不能退回 yaml: 那会让客户在界面上配的模型突然消失、换回出厂
+        #     默认, 而且没有任何报错。宁可短暂用旧缓存。
+        #
+        #   从没读到过 (冷启动时库还没起来 / 本机 dev 没跑 PG) → 降级到 yaml。
+        #     此时没有"上一份"可沿用, 抛的话 gateway 直接起不来 —— 而 yaml 里
+        #     本来就有一份完整可用的模型配置, 没有理由让整个服务挂掉。
+        if _DB_EVER_SERVED:
+            raise RuntimeError("模型库不可用, 且已有库配置在服务中 —— 拒绝退回 yaml")
+        logger.warning(
+            "模型库不可用, 本次用 models.yaml 里的模型 (冷启动降级)。"
+            "库恢复后会自动切回, 无需重启。"
+        )
+        return cfg
+
+    if not rows:
+        return cfg  # 库通但还没播种 (首次启动) → 先用 yaml, lifespan 会播种
+
+    globals()["_DB_EVER_SERVED"] = True
+    cfg.models = [ModelConfig.model_validate(r) for r in rows]
+    return cfg
 
 
 def get_config() -> Config:
@@ -439,7 +496,7 @@ def get_config() -> Config:
             return _CACHE
 
         try:
-            fresh = load_config()
+            fresh = _assemble_config()
         except Exception:
             # 重载失败 (yaml 被写坏 / 正在被写) 时**继续用上一份好的配置**,
             # 而不是让整个 gateway 502。配置写坏是运维事故, 不该演变成全站故障。
