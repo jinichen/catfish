@@ -376,7 +376,7 @@ function ModelForm({
             value={model.name}
             disabled={!isNew}
             onChange={(e) => set({ name: e.target.value })}
-            placeholder="catfish-public-qwen"
+            placeholder="catfish-public-你的模型名"
           />
         </Field>
 

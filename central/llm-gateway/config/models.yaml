@@ -175,11 +175,34 @@ models:
   #   - 内网 Qwen (catfish-private-main) 不可达时的公共备份
   #   - Gemini 免费配额耗尽时的 fallback
   #   - 出差 / 公司外网络场景
-  - name: catfish-public-qwen
-    # 历史: 一度改成 catfish-public-ds4-pro, 但 fallback chain (line 53/81/157/182)
-    # 都引用 catfish-public-qwen-flash, 改名导致 gateway 启动 warn
-    # "fallback chain refers to unknown model: catfish-public-qwen-flash" — 整个
-    # fallback 系统失效. 2026-04-28 修回, 不要再改 name (除非同步改 4 条 chain).
+  - name: catfish-public-qwen-flash
+    # ⚠ 这个 name 被**仓库里 13 处**引用, 改名前先全仓 grep。已经栽过两次:
+    #
+    #   2026-04-28  一度改成 catfish-public-ds4-pro → fallback chain 全部
+    #               指向不存在的模型, gateway 启动 warn
+    #               "fallback chain refers to unknown model" → 当天修回。
+    #
+    #   2026-06-24  又被改成 catfish-public-qwen (夹在 commit 08917b8
+    #               "中央门户配额web编辑 + perf筛选下拉 + dept proxy 透传补全"
+    #               里, 跟那个提交的主题毫无关系, 所以没人注意)。
+    #               7/30 发现并改回。
+    #
+    # 第二次那 5 周里实际发生了什么 (都是静默的):
+    #   · 5 条 fallback chain 的首选备用模型永远解析不到, 被 resolve_chain
+    #     跳过 —— 只留一行 warning 日志, 员工侧毫无感知, 请求默默落到下一跳
+    #   · 前端 modelDisplay.ts 查不到它 → 审计页显示"未知模型 ⚪"
+    #   · 计价表查不到它 → 按兜底价 0.001 算, 而真实单价是 0.00045,
+    #     **成本被高估 2.22 倍**
+    #
+    # 引用它的地方 (7/30 grep):
+    #   central/llm-gateway/config/models.yaml   5 条 fallback chain
+    #   central/web/src/lib/modelDisplay.ts      显示名 + 单价
+    #   edge/companion-app/src/lib/chat.test.ts  idle timeout
+    #   edge/tool-bridge/tests/                  role 解析
+    #   edge/hermes-plugins/                     summarize 模型
+    #
+    # tests/test_fallback_500_policy.py 现在会检查所有 chain 引用的模型是否
+    # 真实存在 —— 再改名会当场红, 不用靠人记得 grep。
     tier: public
     display_name: "Qwen3.6-Flash · 通义千问快速多模态（公共付费）"
     mode: chat

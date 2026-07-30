@@ -119,3 +119,58 @@ def test_all_named_models_exist(models_yaml):
         f"PRIVATE_MODELS_REJECTING_500 里以下模型在 models.yaml 不存在 — "
         f"模型可能改名了, 这个测保护就失效了, 请改本文件: {missing_priv}"
     )
+
+
+def test_每条_fallback_链引用的模型都存在(models_yaml):
+    """所有 fallback chain 里的名字必须真在 models.yaml 里.
+
+    ## 为什么要有这条
+
+    上面那条 test_all_named_models_exist 只守护本文件硬编码的 6 个名字。
+    这条守护**所有** chain 引用, 不管将来加多少模型。
+
+    改名踩坑已经发生过两次 (2026-04-28 / 2026-06-24), 第二次的 5 周里:
+      · 5 条 chain 的首选备用模型解析不到, 被 resolve_chain 静默跳过
+      · 前端审计页显示"未知模型", 计价按兜底价算, 成本高估 2.22 倍
+
+    两次都不是有人故意改坏, 而是改名时没意识到别处在引用。靠注释提醒
+    (models.yaml 里那段"不要再改 name") 已经证明不管用 —— 第二次改名的人
+    根本没看到那段注释, 因为改动夹在一个不相干的提交里。
+
+    所以要一条**结构性**的检查: 不针对具体名字, 只要 chain 指向不存在的
+    模型就红。这样将来任何改名都会当场暴露, 不依赖任何人记得去 grep。
+
+    ## 为什么不能只靠运行时日志
+
+    resolve_chain 遇到不存在的模型是 logger.warning + continue —— 不中断,
+    员工侧完全无感。生产日志里那行 warning 五周没人看到。
+    """
+    models = models_yaml.get("models") or []
+    names = {m.get("name") for m in models if m.get("name")}
+
+    broken: list[str] = []
+    for m in models:
+        chain = ((m.get("fallback") or {}).get("chain")) or []
+        for ref in chain:
+            if ref not in names:
+                broken.append(f"{m.get('name')} 的 chain 引用了不存在的 {ref!r}")
+
+    assert not broken, (
+        "fallback chain 指向不存在的模型 —— 这些跳会被 resolve_chain 静默跳过, "
+        "只留一行日志, 员工侧无感:\n  " + "\n  ".join(broken) +
+        f"\n\n当前存在的模型: {sorted(names)}"
+    )
+
+
+def test_不该有模型的_chain_引用自己(models_yaml):
+    """自引用会被 resolve_chain 跳过并 warn, 属于写错了.
+
+    单独列一条是因为它跟"引用不存在的模型"表现一样 (静默少一跳), 但根因
+    不同 —— 前者是改名漏改, 后者是复制粘贴时没改 chain。
+    """
+    bad = [
+        m.get("name")
+        for m in (models_yaml.get("models") or [])
+        if m.get("name") in (((m.get("fallback") or {}).get("chain")) or [])
+    ]
+    assert not bad, f"这些模型的 fallback chain 引用了自己: {bad}"
