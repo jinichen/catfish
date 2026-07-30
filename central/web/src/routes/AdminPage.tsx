@@ -31,6 +31,7 @@ import { AdvisoryPage } from "./admin/AdvisoryPage";
 import { PerfPage } from "./admin/PerfPage";
 // P3.5.93 (6/23 鸿波): /admin/quota 真编辑 UI, 替原 AdminQuota P0 placeholder.
 // 一并治 AccessPage 部门 quota 6 周 dead UI (gateway 不读 identity-server).
+import { ModelConfigPage } from "./admin/ModelConfigPage";
 import { QuotaConfigPage } from "./admin/QuotaConfigPage";
 
 export function AdminPage() {
@@ -49,6 +50,9 @@ export function AdminPage() {
             老 AdminQuota static placeholder 函数已无路径引用, 可以砍但保 dead code
             等下个 sprint 清, 不在 P3.5.93 scope. */}
         <Route path="quota" element={<QuotaConfigPage />} />
+        {/* 7/30: 模型增删改. 在这之前只能编辑 models.yaml 再重启, 而那个文件
+            在容器里是只读挂载 —— 客户现场根本没有改模型这条路. */}
+        <Route path="models" element={<ModelConfigPage />} />
         {/* BL-ADMIN-AUDIT (5/12 鸿波): 逐条 audit 历史 */}
         <Route path="quota/events" element={<AdminQuotaEvents />} />
         {/* P3.5.60 (6/22 鸿波): 全公司 LLM 性能仪表 (latency p50/p95/p99) */}
@@ -107,6 +111,7 @@ function AdminHome() {
         {/* BL-Q3-FACT P0 MVP (5/10): 事实补丁系统 — 政策变更自动同步到员工 skill */}
         <NavTile to="/admin/facts" icon="📋" title="政策同步 (FACT)" desc="政策变更 → 找受影响 skill → 生成 patch" />
         <NavTile to="/admin/advisory" icon="🛡" title="Advisory 管理 (sysadmin)" desc="publish + revoke. pull-based, 跟 fleet 强 push 反向" />
+        <NavTile to="/admin/models" icon="🧠" title="模型配置 (sysadmin)" desc="增删改模型 / 上游接入 / 能力标记" />
         <NavTile to="/admin/quota" icon="🎯" title="配额规则" desc="defaults / per_model / per_dept" />
         {/* BL-ADMIN-AUDIT (5/12 鸿波): 逐条 quota / audit 历史日志 */}
         <NavTile to="/admin/quota/events" icon="📊" title="Quota 历史日志" desc="逐条 + 4 维筛选 + 分页 + CSV" />
