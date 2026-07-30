@@ -484,9 +484,14 @@ export default function EmailTab() {
             }}
           >
             {error}
+            {/* 7/30: 原文让员工去跑 `bash edge/email-agent/install.sh` ——
+                员工手里只有一个 dmg, 根本没有那个目录, 这条提示等于没给。
+                (而且 catfish-email 长期就没被打包过, 见 hermes_install.rs
+                 的 install_catfish_email。) 改成员工真能做的两件事。 */}
             <div style={{ marginTop: 6, fontSize: 11, opacity: 0.7 }}>
-              常见: Mail.app 没开 · Automation 权限没给 · CLI 没装 (
-              <code>bash edge/email-agent/install.sh</code>)
+              常见原因：Mail.app 没打开 · 系统没给「自动化」权限（系统设置 →
+              隐私与安全性 → 自动化，勾上鲶鱼下面的「邮件」）。
+              都正常还是不行，去仪表盘点「重新安装 Hermes」；仍然不行请找 IT。
             </div>
           </div>
         )}

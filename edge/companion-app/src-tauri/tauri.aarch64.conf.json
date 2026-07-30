@@ -7,7 +7,8 @@
       "resources/mac-aarch64/cpython-3.11.15-embed.tar.gz": "./resources/mac/cpython-3.11.15-embed.tar.gz",
       "resources/mac-aarch64/hermes-agent-bundle.tar.gz": "./resources/mac/hermes-agent-bundle.tar.gz",
       "resources/mac-aarch64/node-embed.tar.gz": "./resources/mac/node-embed.tar.gz",
-      "resources/mac-aarch64/chromium-embed.tar.gz": "./resources/mac/chromium-embed.tar.gz"
+      "resources/mac-aarch64/chromium-embed.tar.gz": "./resources/mac/chromium-embed.tar.gz",
+      "resources/mac-aarch64/catfish-email-dist.tar.gz": "./resources/mac/catfish-email-dist.tar.gz"
     }
   }
 }

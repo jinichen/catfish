@@ -43,10 +43,15 @@ echo "   $RES"
 
 FAIL=0
 
-# 1 · 首启速度优先：六件运行时都必须随架构包内嵌。归档来自固定版本资源
+# 1 · 首启速度优先：七件东西都必须随架构包内嵌。归档来自固定版本资源
 # 流水线；发布阶段仍须完成 Developer ID 签名、公证与 Gatekeeper 验证。
+#
+# 7/30 加 catfish-email-dist.tar.gz —— 之前它压根没被打包, 员工装完
+# 邮件 tab 直接挂, 界面还提示去跑一个他机器上不存在的 install.sh。
+# 现在缺它就不让发包。
 for f in install.sh uv cpython-3.11.15-embed.tar.gz \
-         hermes-agent-bundle.tar.gz node-embed.tar.gz chromium-embed.tar.gz; do
+         hermes-agent-bundle.tar.gz node-embed.tar.gz chromium-embed.tar.gz \
+         catfish-email-dist.tar.gz; do
     if [ ! -f "$RES/$f" ]; then
         echo "  ❌ 缺 $f"
         FAIL=1

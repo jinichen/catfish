@@ -104,6 +104,15 @@ const RUNTIME_ARCHIVES: [&str; 4] = [
     "chromium-embed.tar.gz",
 ];
 
+/// catfish-email 分发包 (build-mac-resources.sh 产出)。
+///
+/// 里面是**构建好的 wheel** + hermes-skill, 不是源码 —— 见
+/// `install_catfish_email` 的说明。
+///
+/// 单独一个常量、**不进 RUNTIME_ARCHIVES** —— 那个数组是"离线运行时齐不齐"的
+/// 判据 (决定 hermes 走离线还是联网装), 邮件是附加功能, 不该影响那个决策。
+const CATFISH_EMAIL_ARCHIVE: &str = "catfish-email-dist.tar.gz";
+
 #[derive(Clone, Debug)]
 struct RuntimeArtifacts {
     dir: PathBuf,
@@ -113,6 +122,12 @@ struct RuntimeArtifacts {
     hermes_tar: Option<PathBuf>,
     node_tar: Option<PathBuf>,
     chromium_tar: Option<PathBuf>,
+    /// catfish-email 源码包 (7/30)。
+    ///
+    /// **不计入 archive_count / is_complete_bundle** —— 那两个判的是
+    /// "离线运行时齐不齐"(决定要不要联网装 hermes), 而邮件是 catfish 自己的
+    /// 附加功能, 缺了不该让整个 hermes 走联网路径。
+    email_tar: Option<PathBuf>,
 }
 
 impl RuntimeArtifacts {
@@ -124,6 +139,7 @@ impl RuntimeArtifacts {
             hermes_tar: usable_artifact(&dir.join(RUNTIME_ARCHIVES[1])),
             node_tar: usable_artifact(&dir.join(RUNTIME_ARCHIVES[2])),
             chromium_tar: usable_artifact(&dir.join(RUNTIME_ARCHIVES[3])),
+            email_tar: usable_artifact(&dir.join(CATFISH_EMAIL_ARCHIVE)),
             dir,
         }
     }
@@ -958,6 +974,115 @@ fn rollback_install(paths: &BootstrapPaths, backup: Option<&PreviousInstall>) ->
     Ok(())
 }
 
+/// 把 catfish-email 装进 hermes 的 venv (7/30 达华现场)。
+///
+/// # 在补什么
+///
+/// 之前员工装完 Companion, 邮件 tab 是挂的, 界面提示
+///     "CLI 没装 (bash edge/email-agent/install.sh)"
+/// —— 而员工手里只有 dmg, **没有那个目录**。查下来这东西从来没进过交付链路:
+/// bundle 里没有、打包脚本没装过, 而 `link_catfish_email_bin` 只建软链、
+/// 前提是 `venv/bin/catfish-email` 已存在, 于是它永远走 warn 分支静默跳过。
+///
+/// # 为什么装 wheel、为什么用 uv
+///
+/// hermes 的 venv 是 `uv venv` 建的, **不带 pip 也不带 setuptools**。
+///   - 用 pip 装 → email-agent 自己的 install.sh 那套 ensurepip / `curl
+///     get-pip.py` 兜底, 内网机器上是死路
+///   - 装源码目录 → 要跑构建后端, uv 会去联网拉 setuptools, 同样死在内网
+///
+/// 所以构建期就把它做成 wheel (build-mac-resources.sh), 装机时用 `.app` 里
+/// 自带的 uv 纯解包拷贝, **零构建零联网**。
+///
+/// `--no-deps` 是因为这个包零运行时依赖 (pyproject.toml `dependencies = []`,
+/// 只用标准库; pywin32 是 Windows 可选)。显式写出来, 免得 uv 去碰索引。
+///
+/// # 失败为什么不让整个装机挂
+///
+/// 邮件是附加功能, 缺了 hermes 和聊天都正常。装机在这一步失败就整体回滚,
+/// 代价远大于收益。所以这里 warn + 继续, 但**warn 里必须写清楚后果**
+/// (邮件 tab 会挂), 不能只写一句"失败了"。
+fn install_catfish_email(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths) -> Result<()> {
+    let Some(tar) = artifacts.email_tar.as_ref() else {
+        log::warn!(
+            "[catfish-email] 资源里没有 {} —— 邮件 tab 会不可用。\
+             这个包由 scripts/build-mac-resources.sh 产出, 检查打包流程。",
+            CATFISH_EMAIL_ARCHIVE
+        );
+        return Ok(());
+    };
+
+    let venv_py = paths.install_dir.join("venv/bin/python");
+    if !venv_py.exists() {
+        anyhow::bail!("hermes venv 的 python 不存在: {}", venv_py.display());
+    }
+
+    let stage = paths.unique_sibling("email-dist");
+    remove_any(&stage)?;
+    std::fs::create_dir_all(&stage).with_context(|| format!("创建 {}", stage.display()))?;
+
+    // tar 内容是平铺的: 一个 *.whl + hermes-skill/
+    let mut untar = Command::new("tar");
+    untar.arg("-xzf").arg(tar).arg("-C").arg(&stage);
+    let extract = command_status(untar, "解压 catfish-email-dist.tar.gz");
+
+    let result = extract.and_then(|()| {
+        // 找 wheel。构建脚本已经保证正好一个, 这里再确认一次 ——
+        // 有两个的话装哪个是随机的, 那种不确定性不该带到员工机上。
+        let mut wheels: Vec<PathBuf> = std::fs::read_dir(&stage)
+            .with_context(|| format!("读 {}", stage.display()))?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            // 用 to_str 比, 不靠 &OsStr 的 PartialEq —— 那个实现容易记岔
+            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("whl"))
+            .collect();
+        wheels.sort();
+        let wheel = match wheels.len() {
+            1 => wheels.remove(0),
+            0 => anyhow::bail!("catfish-email 包里没有 wheel: {}", stage.display()),
+            n => anyhow::bail!("catfish-email 包里有 {n} 个 wheel, 不确定装哪个"),
+        };
+
+        let mut pip = Command::new(&artifacts.uv);
+        pip.arg("pip")
+            .arg("install")
+            .arg("--python")
+            .arg(&venv_py)
+            .arg("--no-deps")
+            .arg(&wheel);
+        command_status(pip, "uv pip install catfish-email")?;
+
+        // entry point 必须真落地 —— 装了但没有可执行文件等于没装,
+        // 而下游 link_catfish_email_bin 只会 warn 一句, 现场查不出来。
+        let bin = paths.install_dir.join("venv/bin/catfish-email");
+        if !bin.exists() {
+            anyhow::bail!(
+                "uv 报告安装成功, 但 {} 不存在 —— entry point 没生成",
+                bin.display()
+            );
+        }
+
+        // hermes skill: 让 LLM 知道有这个工具, 不装的话 CLI 在但模型不会用
+        let skill_src = stage.join("hermes-skill/catfish-email");
+        if skill_src.is_dir() {
+            let skill_dst = paths.hermes_home.join("skills/productivity/catfish-email");
+            if let Some(parent) = skill_dst.parent() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("创建 {}", parent.display()))?;
+            }
+            remove_any(&skill_dst)?;
+            let mut cp = Command::new("cp");
+            cp.arg("-R").arg(&skill_src).arg(&skill_dst);
+            command_status(cp, "拷贝 catfish-email skill")?;
+        } else {
+            log::warn!("[catfish-email] 源码包里没有 hermes-skill/, 模型不会主动用邮件工具");
+        }
+        Ok(())
+    });
+
+    let _ = remove_any(&stage);
+    result
+}
+
 fn link_catfish_email_bin(paths: &BootstrapPaths) -> Result<()> {
     let venv_bin = paths.install_dir.join("venv/bin/catfish-email");
     if !venv_bin.exists() {
@@ -1128,6 +1253,10 @@ fn bootstrap_locked(
         let final_problems = core_health_problems(paths, true);
         if !final_problems.is_empty() {
             anyhow::bail!("完成标记写入后健康检查失败: {}", final_problems.join("; "));
+        }
+        // 邮件是附加功能 —— 装不上不回滚整个 hermes, 但要留下能查的日志。
+        if let Err(e) = install_catfish_email(&artifacts, paths) {
+            log::warn!("[catfish-email] 装失败, 邮件 tab 会不可用: {e:#}");
         }
         link_catfish_email_bin(paths)?;
         Ok(())

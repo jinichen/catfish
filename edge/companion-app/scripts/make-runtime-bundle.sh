@@ -3,20 +3,26 @@
 #
 # ── 什么时候需要它 ──────────────────────────────────────────────────
 #
-# Companion 首次启动装 hermes 时, 按这个顺序找运行时:
-#     1. .app 内的 resources/mac/      ← 现在只有 install.sh + uv
+# Companion 装 hermes 时, resolve_runtime_dir 在两个候选里挑**归档最全**的
+# (并列时取 .app):
+#     1. .app 内的 resources/mac/      ← 正常发版这里就是全的
 #     2. ~/.catfish/runtime/           ← 本脚本产出的东西解压到这里
-#     3. 都没有 → install.sh 联网装 (clone + npm ci + 下 python/node/chromium)
+#     都不全 → install.sh 联网补 (clone + npm ci + 下 python/node/chromium)
 #
-# 能上公网的机器走第 3 条就行, 不需要这个包。只有**内网隔离**的机器才要:
-# 把这个包拷过去解压到 ~/.catfish/runtime/, 装机全程零联网。
+# ── 那还要这个包干嘛 ────────────────────────────────────────────────
 #
-# ── 为什么这四个大包不放进 .app ────────────────────────────────────
+# 7/30 之后 .app 本身已经带全了七件套 (公证也验证过能过), 所以**正常发版的
+# dmg 装机就是离线的**, 这个包不是必需品。
 #
-# Apple 公证会递归解开资源里的归档检查内部 Mach-O。这四个包里上千个二进制
-# 大多只有 ad-hoc 签名 (cpython 扩展模块 / hermes venv 的 .so / node 原生
-# 模块 / 整个 Google Chrome for Testing.app), 公证一律判 Invalid。
-# 挪出来之后 .app 里只剩两个裸文件, 公证扫描范围极小。
+# 它现在的用途只剩两个:
+#   - 手上是**老版瘦 dmg** (P3.5.85~7/29 那批只带 install.sh + uv) 的机器,
+#     补一份运行时进去, 免得联网装
+#   - .app 里的归档损坏 / 被安全软件隔离, 拿它顶上
+#
+# 历史: 7/29 曾为过 Apple 公证把四个大包挪出 .app (公证会递归解开归档检查
+# 内部 Mach-O, 那上千个 ad-hoc 签名的二进制一律判 Invalid), 那时候这个包是
+# 内网机器的**唯一**出路。7/30 合入的新打包方式把它们放回去并通过了公证
+# (票据 53d2baf7-c824-458e-9efd-df9c1a06f30a), 所以那个约束已经解除。
 #
 # ── 用法 ────────────────────────────────────────────────────────────
 #
@@ -54,10 +60,11 @@ fi
 
 # ── 齐全性 ──────────────────────────────────────────────────────────
 #
-# 六个都要有。缺了的话员工机会**静默退回联网安装** —— 而这个包存在的意义
+# 七个都要有。缺了的话员工机会**静默退回联网安装** —— 而这个包存在的意义
 # 恰恰是那台机器上不了网, 于是表现成"装到一半卡住", 现场查不到原因。
 FILES=(install.sh uv cpython-3.11.15-embed.tar.gz
-       hermes-agent-bundle.tar.gz node-embed.tar.gz chromium-embed.tar.gz)
+       hermes-agent-bundle.tar.gz node-embed.tar.gz chromium-embed.tar.gz
+       catfish-email-dist.tar.gz)
 MISS=0
 for f in "${FILES[@]}"; do
     if [ ! -f "$SRC/$f" ] || [ "$(stat -f%z "$SRC/$f" 2>/dev/null || stat -c%s "$SRC/$f" 2>/dev/null || echo 0)" -lt 1024 ]; then
@@ -105,7 +112,7 @@ fi
 
 # ── 打包 ────────────────────────────────────────────────────────────
 #
-# 解开就是六个文件平铺, 直接对应 ~/.catfish/runtime/ 的布局 ——
+# 解开就是七个文件平铺, 直接对应 ~/.catfish/runtime/ 的布局 ——
 # 不带顶层目录, 免得员工解出一层 catfish-runtime-xxx/ 还要再挪一次。
 echo ""
 echo "→ 打包 → $OUT"
