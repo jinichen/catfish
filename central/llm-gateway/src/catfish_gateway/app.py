@@ -63,7 +63,13 @@ from .auth import (  # noqa: E402
 )
 from .catalog import build_catalog  # noqa: E402
 from . import model_store  # noqa: E402
-from .config import Config, get_config, invalidate_config, load_config  # noqa: E402
+from .config import (  # noqa: E402
+    Config,
+    ModelConfig,
+    get_config,
+    invalidate_config,
+    load_config,
+)
 # 5/23 BL-GATEWAY-DROP-LEGACY-SUMMARIZE: inject_employee_journal 5/20 BL-GATEWAY-
 # MEMORY-REGISTRY-DELETE 时已 disable (registry.providers 永远空), 实际无 caller.
 # 函数体也从 employee_journal.py 删, 该模块剩下 read_journal / append_to_journal
@@ -1185,6 +1191,201 @@ async def api_admin_quota_delete_dept_override(
     if not ok:
         raise HTTPException(500, detail=msg or "写失败")
     return {"ok": True, "name": name}
+
+
+# ── 模型配置管理 (7/30) ──────────────────────────────────────────────
+#
+# 在这之前模型只能改 models.yaml 再重启 gateway, 而那个文件在容器里是只读
+# 挂载, 所以"在界面上改模型"这条路根本不存在。现在模型存库 (见 model_store),
+# 这几个接口是它的读写口。
+#
+# 只给 sysadmin —— 改模型影响全员, 且 upstream 里带 api_key_env / api_base
+# 这类部署细节, 不该让普通员工看到。注意跟匿名的 /v1/catalog 区分: 那个只返
+# 展示用的字段, 这里返完整配置。
+#
+# 每个写操作末尾都 invalidate_config(), 让**本 worker** 立刻生效; 其余 3 个
+# worker 靠 TTL 收敛 (默认 3s, 见 config.py 里为什么不做跨进程失效)。
+
+
+def _require_model_admin(user: User) -> None:
+    if user.role != "sysadmin":
+        raise HTTPException(
+            status_code=403,
+            detail=f"role={user.role} 不能编辑模型配置 (sysadmin only)",
+        )
+
+
+def _require_model_store() -> None:
+    """没配库时明确拒绝, 而不是假装成功.
+
+    这条很重要: 库没启用时写操作无处可去, 如果静默返回 ok, 界面上会显示
+    "保存成功"但什么都没发生 —— 那比报错难查得多。
+    """
+    if not model_store.is_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "模型配置库未启用 (未配置 CATFISH_DB_URL), 无法修改。"
+                "此时模型来自 models.yaml, 只能改文件后重启。"
+            ),
+        )
+
+
+@app.get("/api/admin/models")
+async def api_admin_models_list(
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """完整模型配置 (含 upstream). sysadmin only."""
+    _require_model_admin(user)
+    cfg = get_config()
+    return {
+        "ok": True,
+        "editable": model_store.is_enabled(),
+        "revision": model_store.revision(),
+        "models": [m.model_dump(mode="json") for m in cfg.models],
+    }
+
+
+@app.put("/api/admin/models/{name}")
+async def api_admin_models_put(
+    name: str,
+    body: dict[str, Any],
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """新增或修改一个模型. sysadmin only."""
+    _require_model_admin(user)
+    _require_model_store()
+
+    # 路径里的 name 是权威的 —— body 里写了别的名字就是搞错了, 直接拒绝,
+    # 不要"以路径为准"地悄悄改掉。悄悄改会造成"我明明改了 A 却动了 B"。
+    body_name = body.get("name")
+    if body_name is not None and body_name != name:
+        raise HTTPException(
+            400, detail=f"路径里的模型名 {name!r} 跟 body 里的 {body_name!r} 不一致"
+        )
+    body = {**body, "name": name}
+
+    # 用跟启动时同一个 pydantic 模型校验 —— 库里存的必须是能被 gateway 正常
+    # 加载的东西。这里放过去的话, 下次重载配置时整个 gateway 都起不来。
+    try:
+        validated = ModelConfig.model_validate(body)
+    except Exception as e:
+        raise HTTPException(400, detail=f"模型配置不合法: {e}") from e
+
+    cfg = get_config()
+    existing = {m.name for m in cfg.models}
+
+    # default 是全局唯一的 —— 两个 default 时 Config.default_model 返回的是
+    # 列表里第一个, 也就是"取决于排序", 不可预测。设新 default 时清掉旧的。
+    #
+    # ⚠ 这里必须遍历**库里的**模型, 不能用 cfg.models。
+    #   cfg 是"当前生效配置", 库还空着的时候它等于 yaml 那份 —— 拿它来清
+    #   default, 会把整个 yaml 模型列表当成"旧 default"逐个写进库, 于是一次
+    #   普通的"设为默认"变成了"把出厂配置全量导入"。
+    #   7/30 被 test_删掉默认模型会自动指定新默认 逮到: 库空时 PUT 一个
+    #   default=True 的模型, 库里凭空多出 7 个 yaml 模型。
+    if validated.default:
+        for row in model_store.read_models() or []:
+            if row.get("name") != name and row.get("default"):
+                model_store.upsert_model(
+                    row["name"], {**row, "default": False}, by=user.sub
+                )
+
+    model_store.upsert_model(name, validated.model_dump(mode="json"), by=user.sub)
+    invalidate_config()
+    return {
+        "ok": True,
+        "name": name,
+        "created": name not in existing,
+        "revision": model_store.revision(),
+    }
+
+
+@app.delete("/api/admin/models/{name}")
+async def api_admin_models_delete(
+    name: str,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """删一个模型. sysadmin only.
+
+    有两道拦截, 都是为了不让一次误操作把服务打瘫:
+      · 不许删到一个不剩 —— 没有模型的 gateway 无法服务任何聊天请求
+      · 不许删掉还被别的模型 fallback.chain 引用的 —— 那条链会在运行时
+        指向一个不存在的模型, 而 fallback 只在上游出错时才走, 平时看不出来
+    """
+    _require_model_admin(user)
+    _require_model_store()
+
+    cfg = get_config()
+    if not any(m.name == name for m in cfg.models):
+        return {"ok": True, "name": name, "deleted": False}  # 幂等
+
+    if len(cfg.models) <= 1:
+        raise HTTPException(
+            400, detail="这是最后一个模型, 删了 gateway 无法服务任何请求"
+        )
+
+    referenced_by = [
+        m.name
+        for m in cfg.models
+        if m.name != name and m.fallback and name in (m.fallback.chain or [])
+    ]
+    if referenced_by:
+        raise HTTPException(
+            400,
+            detail=(
+                f"模型 {name} 还被这些模型的 fallback 链引用: {', '.join(referenced_by)}。"
+                "先把它从那些链里去掉再删 —— 否则那条链会指向不存在的模型, "
+                "而 fallback 只在上游出错时才走, 平时看不出来。"
+            ),
+        )
+
+    was_default = any(m.name == name and m.default for m in cfg.models)
+    deleted = model_store.delete_model(name, by=user.sub)
+
+    # 删掉的是默认模型 → 必须立刻指定一个新的, 否则 default_model() 会退化成
+    # "列表第一个", 也就是取决于排序, 员工下次开聊用到哪个模型不可预测。
+    promoted = None
+    if deleted and was_default:
+        rest = [m for m in cfg.models if m.name != name]
+        if rest:
+            d = rest[0].model_dump(mode="json")
+            d["default"] = True
+            model_store.upsert_model(rest[0].name, d, by=f"{user.sub} (自动接任默认)")
+            promoted = rest[0].name
+
+    invalidate_config()
+    return {
+        "ok": True,
+        "name": name,
+        "deleted": deleted,
+        "promoted_default": promoted,
+        "revision": model_store.revision(),
+    }
+
+
+@app.put("/api/admin/model-order")
+async def api_admin_models_order(
+    body: dict[str, Any],
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """重排模型展示顺序. body: {"names": [...]}. sysadmin only.
+
+    ⚠ 路径故意**不放在 /api/admin/models/ 下面**。
+      放成 /api/admin/models/_order 的话会被上面的 /api/admin/models/{name}
+      抢先匹配 (FastAPI 按注册顺序匹配路由), 变成"修改一个名叫 _order 的模型"。
+      靠"把它注册在 {name} 之前"也能绕开, 但那样这条路由的正确性就依赖于
+      代码里的先后位置 —— 哪天有人整理顺序就会静默失效。用一个不可能撞的
+      路径, 跟位置无关。
+    """
+    _require_model_admin(user)
+    _require_model_store()
+    names = body.get("names")
+    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+        raise HTTPException(400, detail="body 需要 {\"names\": [模型名, ...]}")
+    model_store.set_order(names, by=user.sub)
+    invalidate_config()
+    return {"ok": True, "revision": model_store.revision()}
 
 
 @app.get("/api/quota/global")
