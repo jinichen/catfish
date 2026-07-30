@@ -33,7 +33,10 @@ interface Props {
   currentTitle: string;
   currentRelPath: string;
   currentBody: string;
-  /** 员工选真 model — WikiPreview 从 picker_state 或 fallback 传. */
+  /** 员工在聊天页 picker 上选的 model。
+   *  7/30: 改成由 WikiPreview 直接读 useChatStore().model 传进来 ——
+   *  原来走 picker_state.json (chat 发送时才写的滞后副本) + 写死兜底,
+   *  会出现"切了模型但 wiki 还用旧的"。调用方保证非空。 */
   model: string;
   onClose: () => void;
   /** 应用成功后, WikiPreview 侧 reload files + reload body. */

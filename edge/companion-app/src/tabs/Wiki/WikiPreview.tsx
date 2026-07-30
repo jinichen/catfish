@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useChatStore } from "../../store/chat";
 import { useWikiStore } from "../../store/wiki";
 import { topKRelated } from "../../lib/wikiRelevance";
 import {
@@ -26,7 +27,6 @@ import {
 // 不出关系. 加 button + LLM 扫 body + 现有 title list → 建议 → 员工确认 → body
 // 末尾加"## 关联概念"段落 (员工主权, 不动老 body).
 import WikiLinkSuggestModal from "./WikiLinkSuggestModal";
-import { getPickerState } from "../../lib/picker_state";
 // P3.3.18 Phase 4 P2 (6/10): 检 hub 是否 stale
 import { config } from "../../lib/env";
 import { fetchWithAuth } from "../../lib/me";
@@ -75,23 +75,45 @@ export default function WikiPreview() {
   const [uninstalling, setUninstalling] = useState(false);
   const [uninstallErr, setUninstallErr] = useState<string | null>(null);
 
-  // P3.5.172 Phase C (7/3 鸿波): 🔗 扫描关联 AI modal state + LLM model resolve.
-  // 复用 picker_state chat_model (员工现在选真 model, 一致), 无 fallback 兜底
-  // 是 catfish-public-deepseek-flash (跟 chat 默认对齐).
+  // P3.5.172 Phase C (7/3 鸿波): 🔗 扫描关联 AI modal state.
+  //
+  // ## 7/30 改: 直接用员工在 picker 上选的那个 model
+  //
+  // 原本是「读 picker_state.json, 读不到就用写死的 catfish-public-deepseek-flash」。
+  // 两处都不对:
+  //
+  //   · picker_state.json 是**滞后的派生副本** —— 它由 chat.ts 在**发送消息前**
+  //     fire-and-forget 写入 (见 lib/picker_state.ts 的设计说明: 它存在的目的是
+  //     给 hermes memory plugin 读, 因为 sync_turn 的签名拿不到请求头)。
+  //     而且 getPickerState 的注释白纸黑字写着"调试用"。
+  //     后果: 员工切了 model 但还没发过聊天 → wiki 用的是**上一个** model。
+  //
+  //   · 写死兜底违反 6/29 那次清理确立的原则 (ChatTab.tsx:36):
+  //     "model 为空 比静默兜底更清晰, 客户改 catalog 后不会出现
+  //      '看着正常但其实走老 model' 的鬼影 bug"
+  //     而模型现在还能在中央门户界面上被删掉 —— 写死的那个删了就会调一个
+  //     不存在的模型。
+  //
+  // 现在直接读 useChatStore 的 model, 也就是 ChatModelPicker 的 onChange
+  // 直接写入的那个值 (ChatTab.tsx:382 → setModel)。没有中转、没有滞后,
+  // 员工选了哪个就是哪个。
   const [suggestOpen, setSuggestOpen] = useState(false);
-  const [suggestModel, setSuggestModel] = useState<string>(
-    "catfish-public-deepseek-flash",
-  );
+  const chatModel = useChatStore((s) => s.model);
 
-  async function openLinkSuggest() {
-    // 严格拿 picker_state chat_model (跟 chat 一致), 拿不到 fallback deepseek-flash
-    try {
-      const state = await getPickerState();
-      if (state?.chat_model) {
-        setSuggestModel(state.chat_model);
-      }
-    } catch {
-      /* silent fallback */
+  function openLinkSuggest() {
+    // model 为空时不要带着空名字去调 LLM —— 那会得到一个来自 gateway 的
+    // "model 为空" 报错, 出现在扫描结果的位置上, 员工得先看懂那句话才知道
+    // 该去聊天页选模型。在入口直接说清楚更省事。
+    //
+    // 空的成因: 员工从没选过 model 且 catalog 也没给出 default
+    // (ChatTab.tsx:181 会在 catalog.default 到位后注入)。
+    if (!chatModel) {
+      window.alert(
+        "还没有选定模型。\n\n" +
+          "🔗 扫描关联要调用大模型，用的是你在「聊天」页选的那个模型。\n" +
+          "请先去聊天页选一个，再回来扫描。",
+      );
+      return;
     }
     setSuggestOpen(true);
   }
@@ -1002,7 +1024,7 @@ export default function WikiPreview() {
           currentTitle={selectedFile.info.title}
           currentRelPath={selectedFile.info.rel_path}
           currentBody={selectedFile.body}
-          model={suggestModel}
+          model={chatModel}
           onClose={() => setSuggestOpen(false)}
           onApplied={() => {
             // 严格 reload files 拿新 related edges → WikiGraph 自动更新图

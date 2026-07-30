@@ -40,13 +40,14 @@
  */
 import { useEffect, useState } from "react";
 
+import { useChatStore } from "../../../store/chat";
+
 import {
   emailCreateDraft,
   emailSendMessage,
   fetchRole,
 } from "../../../lib/tauri";
 import { draftEmailReply } from "../../../lib/emailDraft";
-import { getPickerState } from "../../../lib/picker_state";
 import { type Personality } from "../../../lib/agent";
 
 export interface ComposeOriginalMessage {
@@ -106,6 +107,10 @@ export default function ComposeCore({
 }: ComposeCoreProps) {
   // 5/18 BL-EMAIL-COMPOSE-SEND: compose panel state — 员工可编辑真 4 字段 +
   // 发送/保存/拟稿 各阶段 state. 抽自 DetailPane 内嵌 Compose panel (P3.5.158 Phase 2).
+  // 7/30: 员工在聊天页 picker 上选的 model, 起草邮件时优先用它 ——
+  // 见下面 draftWithLlm 里的说明 (原来读的是滞后的 picker_state.json)。
+  const chatModel = useChatStore((s) => s.model);
+
   const [composeTo, setComposeTo] = useState(initialTo);
   const [composeCc, setComposeCc] = useState(initialCc);
   const [composeSubject, setComposeSubject] = useState(initialSubject);
@@ -165,8 +170,16 @@ export default function ComposeCore({
       //   picker 优先 — 跟员工当前对话 model 一致, 不发散 (鸿波 ack)
       //   role chat_default 兜底 — roles.yaml truth source, 客户改 yaml 跟着走
       //   都没拿到抛错 — 比静默兜底硬编码清晰, 数据红线由 roles.yaml 配置
-      const picker = await getPickerState().catch(() => null);
-      let model = picker?.chat_model || "";
+      //
+      // 7/30: "picker" 这一环从 getPickerState() 改成直接读 useChatStore().model。
+      // 链路和优先级不变, 变的是 picker 值的来源:
+      //   picker_state.json 由 chat.ts 在**发送消息前** fire-and-forget 写入
+      //   (它存在的目的是给 hermes memory plugin 读 —— sync_turn 的签名拿不到
+      //    请求头; 见 lib/picker_state.ts, getPickerState 自己注明"调试用")。
+      //   也就是说它是**滞后的派生副本**: 员工切了 model 但还没发过聊天,
+      //   读到的是上一个 model —— 写邮件就用了他没选的那个。
+      // useChatStore().model 是 ChatModelPicker 的 onChange 直接写的值, 无滞后。
+      let model = chatModel || "";
       if (!model) {
         const roleModel = await fetchRole("chat_default");
         if (!roleModel) {
