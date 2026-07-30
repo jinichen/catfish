@@ -355,19 +355,41 @@ echo "  OK 手术后 node_modules 大小: $(du -sh node_modules | cut -f1)"
 echo ""
 echo "=== [6b/6] npx playwright install chromium (arch=$NODE_ARCH) ==="
 unset PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD  # 允许下载 chromium
+#
+# ⚠ 7/30: 必须用**每架构独立的下载目录**, 不能用默认的
+#   ~/Library/Caches/ms-playwright/。
+#
+# 原因: Playwright 的目录名是 chromium-<revision>, **不带架构**。两个架构的
+# 构建共用那一个缓存, 于是:
+#     打 aarch64 → 下载 arm64 到 chromium-1234
+#     打 x64     → playwright 看到 chromium-1234 已在 → 直接跳过下载
+#                  → 6c 把 arm64 的 chromium 打进了 x64 的包
+#
+# 这个错法跟 7/16 那次 uv 装错架构是同一类, 但更隐蔽: 连"忘了还原"这种人为
+# 动作都不需要, **只要两个架构先后各打一次就必然发生**。而且方向不固定 ——
+# 谁后打谁中招, 先打的那个反而是对的。
+#
+# 7/30 打 x64 时被 verify-app-arch.sh 拦下才发现。它拦住了, 但那是在
+# cargo build 跑完之后, 白等一分多钟; 而且**同一次污染 aarch64 包时它拦不住**
+# (缓存恰好就是 arm64)。所以根因要在这里修, 不能只靠下游校验。
+#
+# 代价: 每个架构各下一次 chromium (~150MB), 不再复用缓存。换来的是
+# "打哪个架构就下哪个架构", 与本机装没装过 playwright 无关。
+PW_CACHE="/tmp/catfish-pw-$ARCH"
+echo "  下载目录: $PW_CACHE (每架构独立, 不碰 ~/Library/Caches/ms-playwright)"
+mkdir -p "$PW_CACHE"
 # arch -x86_64 是给 Apple Silicon mac 上跑 Intel 命令用. 若 build aarch64 · 直接跑.
 if [ "$ARCH" = "x64" ] && [ "$(uname -m)" = "arm64" ]; then
     echo "  Apple Silicon 上打 Intel · 用 arch -x86_64 npx"
-    arch -x86_64 npx --yes playwright install chromium
+    PLAYWRIGHT_BROWSERS_PATH="$PW_CACHE" arch -x86_64 npx --yes playwright install chromium
 else
-    npx --yes playwright install chromium
+    PLAYWRIGHT_BROWSERS_PATH="$PW_CACHE" npx --yes playwright install chromium
 fi
 
 echo ""
-echo "=== [6c/6] tar pack chromium-embed · from ~/Library/Caches/ms-playwright/ ==="
-PW_CACHE="$HOME/Library/Caches/ms-playwright"
+echo "=== [6c/6] tar pack chromium-embed · from $PW_CACHE ==="
 if [ ! -d "$PW_CACHE" ]; then
-    echo "❌ Playwright cache 目录不存在: $PW_CACHE"
+    echo "❌ Playwright 下载目录不存在: $PW_CACHE"
     exit 1
 fi
 CHROMIUM_TAR="$RESOURCES/chromium-embed.tar.gz"
@@ -391,6 +413,35 @@ if [ "$OLD_COUNT" -gt 1 ]; then
     echo "  ⚠ 检到 $OLD_COUNT 个 chromium-* 老版本 · 可手动清理:"
     echo "    ls -1d chromium-* | grep -v headless_shell | sort -V | head -n -1 | xargs rm -rf"
 fi
+
+# ── 打包前验架构 (7/30) ────────────────────────────────────────────
+#
+# verify-app-arch.sh 也验这个, 但那是在 cargo build 之后 —— 错了要白等一分多钟。
+# 更要紧的是: 下载目录一旦复用, 它**可能验不出来**(缓存恰好是对的架构),
+# 所以这里在源头再钉一次, 不合就当场停。
+case "$ARCH" in
+    aarch64) WANT_MACHO="arm64" ;;
+    x64)     WANT_MACHO="x86_64" ;;
+esac
+# 不写死 chrome-mac/ 这层 —— playwright 改过目录布局, 写死会在改版时静默失配。
+# 跟 verify-app-arch.sh 一样按主程序名找。
+CHROME_BIN="$(find "$LATEST_CHROMIUM" -type f \
+    -path "*Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing" \
+    2>/dev/null | head -1)"
+if [ -z "$CHROME_BIN" ] || [ ! -f "$CHROME_BIN" ]; then
+    echo "❌ 找不到 chromium 主程序: $CHROME_BIN"
+    echo "   playwright 的目录结构可能变了 —— 不确认架构就不能打包。"
+    exit 1
+fi
+CHROME_ARCH="$(file -b "$CHROME_BIN" 2>/dev/null || true)"
+if ! echo "$CHROME_ARCH" | grep -q "$WANT_MACHO"; then
+    echo "❌ chromium 架构不符: 期望 $WANT_MACHO, 实际 → $CHROME_ARCH"
+    echo "   下载目录: $PW_CACHE"
+    echo "   多半是这个目录里残留了别的架构 —— 删掉重跑:"
+    echo "     rm -rf $PW_CACHE && bash scripts/build-mac-resources.sh $ARCH"
+    exit 1
+fi
+echo "  ✓ chromium 架构核对: $WANT_MACHO"
 if [ -n "$LATEST_HEADLESS" ]; then
     tar czf "$CHROMIUM_TAR" "$LATEST_CHROMIUM" "$LATEST_HEADLESS"
 else
