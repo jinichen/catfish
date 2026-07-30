@@ -62,7 +62,7 @@ from .auth import (  # noqa: E402
     resolve_effective_user_email,
 )
 from .catalog import build_catalog  # noqa: E402
-from .config import Config, load_config  # noqa: E402
+from .config import Config, get_config, load_config  # noqa: E402
 # 5/23 BL-GATEWAY-DROP-LEGACY-SUMMARIZE: inject_employee_journal 5/20 BL-GATEWAY-
 # MEMORY-REGISTRY-DELETE 时已 disable (registry.providers 永远空), 实际无 caller.
 # 函数体也从 employee_journal.py 删, 该模块剩下 read_journal / append_to_journal
@@ -146,8 +146,14 @@ litellm.drop_params = True
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    config = load_config()
-    app.state.config = config
+    # 7/30: 启动时预热 + fail fast —— 配置坏了要在这里挂, 不要等第一个请求
+    # 进来才 500。
+    #
+    # ⚠ 这里**不再往 app.state.config 塞快照**。那份快照是启动那一刻的样子、
+    #   之后永不更新, 而进程里另有 6 处每次重读 yaml —— 同一个进程两套真相,
+    #   改完配置"一部分代码看到新值、另一部分没看到", 且走到哪条路径是随机的。
+    #   现在所有读配置的地方统一走 get_config() (带 TTL, 见 config.py)。
+    config = get_config()
     if _ENV_FILE_LOADED:
         logger.info("loaded .env from: %s", _ENV_FILE_LOADED)
     else:
@@ -1533,7 +1539,7 @@ async def list_roles() -> dict[str, Any]:
 @app.get("/v1/models")
 async def list_models(user: User = Depends(get_current_user)) -> dict[str, Any]:
     """OpenAI-compatible model list. Hides models whose API key is not configured."""
-    config: Config = app.state.config
+    config: Config = get_config()
     return {
         "object": "list",
         "data": [
@@ -1550,7 +1556,7 @@ async def get_model(
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     """OpenAI-compatible single-model metadata endpoint."""
-    config: Config = app.state.config
+    config: Config = get_config()
     m = config.get_model(model_id)
     if not m or not user.can_access(m) or not m.upstream.is_available:
         raise HTTPException(status_code=404, detail=f"model not found: {model_id}")
@@ -1567,7 +1573,7 @@ async def get_catalog(
     不暴露 api_base 或 UUID。响应里有 `authenticated` 标志位让客户端
     知道当前是匿名视图还是个性化视图。
     """
-    config: Config = app.state.config
+    config: Config = get_config()
     upstream_status = getattr(app.state, "upstream_status", None)
     return build_catalog(config, user, upstream_status)
 
@@ -2185,7 +2191,7 @@ async def _stream_chat_completion(
     status_str = "ok"
     err = ""
     used_model = model
-    config: Config = app.state.config
+    config: Config = get_config()
     attempts_log: list[str] = []
 
     # BL-ABORT-PROPAGATE (7/23 达华 POC): pre-declare · 若 fallback 阶段 raise ·
@@ -2529,7 +2535,7 @@ async def _invoke_chat_completion(
     from . import auto_continue  # noqa: PLC0415  lazy import 防循环
 
     start = time.time()
-    config: Config = app.state.config
+    config: Config = get_config()
 
     # 给 with_fallback 用的 inner caller — 一次 LLM 调用 (含 fallback chain)
     used_model_holder: list = [model]  # 用 list 当 mutable 容器, 让闭包能写
@@ -2720,7 +2726,7 @@ async def chat_completions(
         # 让下游 metrics/audit/logs 拿到真 model 名 · 不是 auto
         body["model"] = resolved
 
-    config: Config = app.state.config
+    config: Config = get_config()
     model = _resolve_model(config, model_name)
 
     # BL-F17 (5/5): 早早判定 internal call, 让后面所有 inject 阶段 (session_meta tick /
@@ -3271,7 +3277,7 @@ async def embeddings(
     if not model_name:
         raise HTTPException(status_code=400, detail="model parameter required")
 
-    config: Config = app.state.config
+    config: Config = get_config()
     model = _resolve_model(config, model_name)
 
     if model.mode != "embedding":

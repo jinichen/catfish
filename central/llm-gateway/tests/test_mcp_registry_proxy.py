@@ -109,12 +109,22 @@ def proxy_app(monkeypatch):
     app.include_router(router)
 
     # mock config — 只关 mcp_registry 字段
-    app.state.config = SimpleNamespace(
+    #
+    # 7/30: proxy 从 app.state.config (启动快照) 改成走 config.get_config(),
+    # 所以这里要 patch 那个函数, 不能只塞 app.state。
+    # 仍然把同一个对象挂到 app.state.config 上 —— 下面有用例靠
+    # `app.state.config.mcp_registry.enabled = False` 改开关, 挂同一个对象
+    # 就能让那种改法继续生效, 不用动那些用例。
+    fake_config = SimpleNamespace(
         mcp_registry=SimpleNamespace(
             upstream_url="http://upstream-mcp:8997",
             enabled=True,
             timeout=10,
         )
+    )
+    app.state.config = fake_config
+    monkeypatch.setattr(
+        "catfish_gateway.mcp_registry_proxy.get_config", lambda: fake_config
     )
 
     # mock httpx client (替 lifespan 的 AsyncClient)

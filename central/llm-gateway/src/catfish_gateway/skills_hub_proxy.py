@@ -29,6 +29,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from .auth import User, get_current_user
+from .config import get_config
 
 logger = logging.getLogger("catfish.gateway.skills_hub_proxy")
 
@@ -92,7 +93,7 @@ async def _proxy(
     user: User,
 ) -> Response:
     """统一代理. 透传到 hub upstream + 注入员工身份 header."""
-    config = request.app.state.config
+    config = get_config()
     cfg = config.skills_hub
 
     if not cfg.enabled:

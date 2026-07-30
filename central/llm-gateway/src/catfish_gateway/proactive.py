@@ -197,9 +197,9 @@ async def generate_starter(
             "source": "fallback",
         }
 
-    from .config import load_config  # 懒 import
+    from .config import get_config  # 懒 import
     from .user_model_resolver import resolve_model_obj
-    config = load_config()
+    config = get_config()
     origin_obj = resolve_model_obj(model_name, config)
     if origin_obj is None:
         return {
@@ -439,9 +439,9 @@ async def generate_contextual_starter(
             "source": "fallback",
         }
 
-    from .config import load_config  # noqa: PLC0415
+    from .config import get_config  # noqa: PLC0415
     from .user_model_resolver import resolve_model_obj  # noqa: PLC0415
-    config = load_config()
+    config = get_config()
     origin_obj = resolve_model_obj(model_name, config)
     if origin_obj is None:
         return {

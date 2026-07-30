@@ -14,13 +14,18 @@ Env-var 插值:
 
 from __future__ import annotations
 
+import logging
 import os
 import re
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 # ${VAR} 或 ${VAR:-default}; default 段允许空, 但不允许出现 } 字面
 # (复杂的 default 自己加引号即可避开)
@@ -283,12 +288,15 @@ class Config(BaseModel):
         return self.models[0] if self.models else None
 
 
-def load_config(path: Path | None = None) -> Config:
-    """Load models.yaml. Path 优先级 (高→低):
+def resolve_config_path(path: Path | None = None) -> Path:
+    """算出 models.yaml 的实际路径. 优先级 (高→低):
         1. caller path 参数
         2. CATFISH_CONFIG env (单文件 override)
         3. CATFISH_GATEWAY_CONFIG_PATH/models.yaml (P26: 统一目录 env)
         4. config/models.yaml (repo 内默认)
+
+    从 load_config 里抽出来 —— get_config() 要用它 stat 文件判有没有变,
+    不能各算各的, 否则"检查的文件"和"加载的文件"可能不是同一个。
     """
     if path is None:
         env_single = os.environ.get("CATFISH_CONFIG", "").strip()
@@ -307,6 +315,17 @@ def load_config(path: Path | None = None) -> Config:
             if c.exists():
                 path = c
                 break
+    return Path(path)
+
+
+def load_config(path: Path | None = None) -> Config:
+    """无条件读盘 + 解析 models.yaml.
+
+    ⚠ 业务代码不要直接调这个 —— 用 get_config()。
+      这个函数每次都重读重解析, 且不参与缓存/失效, 直接调会绕开一致性保证。
+      保留它是因为 (a) get_config 内部要用 (b) 测试要按显式 path 加载。
+    """
+    path = resolve_config_path(path)
 
     if not Path(path).exists():
         raise FileNotFoundError(
@@ -323,3 +342,127 @@ def load_config(path: Path | None = None) -> Config:
     # 也能正确工作 (例如必填字段没设默认时能立即报清楚错)
     data = _interpolate_env(data)
     return Config.model_validate(data)
+
+
+# ── 配置访问的唯一入口 (7/30) ────────────────────────────────────────
+#
+# ## 在补什么
+#
+# 在这之前, 同一个进程里有**两套真相**:
+#
+#   app.state.config     启动时 load_config() 的快照, 之后永不更新 (10 处在用,
+#                        含 /v1/models、/v1/catalog、三个 hub proxy)
+#   load_config()        每次调用重读重解析 yaml (6 处在用, 含 proactive、
+#                        facts_pipeline、conversation_compressor)
+#
+# 后果: 改完配置, 一部分代码立刻看到新值, 另一部分要重启才看到。表现是
+# "改了、页面上也变了、但实际调用还用旧的" —— 这类不一致极难查, 因为每次
+# 复现走到哪条路径是随机的。
+#
+# 顺带纠正一处错误注释: facts_pipeline.py 里写着 "走 load_config 单例缓存,
+# 不重读 yaml"。**load_config 从来没有任何缓存**, 每次都重读重解析。
+#
+# ## 为什么是 TTL 而不是进程内失效
+#
+# gateway 跑 4 个 worker (compose: GATEWAY_WORKERS:-4), 是**独立进程**。
+# 写接口只会落在其中一个 worker 上, 那种"写完 invalidate 本进程缓存"的做法
+# 只有 1/4 的请求能看到新配置, 而且哪次看到是随机的 —— 比不刷新更糟。
+#
+# 跨进程要么上 IPC (Redis pub/sub、PG LISTEN/NOTIFY), 要么各自定期回源。
+# 这里选后者: 每个 worker 独立地"最多陈旧 TTL 秒", 无需任何跨进程设施,
+# 也不会出现部分 worker 永久落后。代价是改配置后最长等 TTL 秒全员生效。
+#
+# TTL 内不碰磁盘; 过了 TTL 只做一次 stat (纳秒级), 内容没变就续期不重新解析。
+# 所以稳态开销 ≈ 每 TTL 秒一次 stat, 可以忽略。
+#
+# ## 换 DB 存储时怎么改
+#
+# 只需换 _config_stamp(): 文件时代返 (mtime_ns, size), DB 时代返版本号/
+# max(updated_at)。get_config / invalidate_config 和全部调用方都不用动。
+_CACHE: Config | None = None
+_CACHE_STAMP: Any = None
+_CACHE_CHECKED_AT: float = 0.0
+_CACHE_LOCK = threading.Lock()
+
+_DEFAULT_TTL_SECONDS = 3.0
+
+
+def config_ttl_seconds() -> float:
+    """回源间隔. env CATFISH_CONFIG_TTL 覆盖; 设 0 = 每次都查 (测试用)."""
+    raw = os.environ.get("CATFISH_CONFIG_TTL", "").strip()
+    if not raw:
+        return _DEFAULT_TTL_SECONDS
+    try:
+        v = float(raw)
+    except ValueError:
+        return _DEFAULT_TTL_SECONDS
+    return v if v >= 0 else _DEFAULT_TTL_SECONDS
+
+
+def _config_stamp() -> Any:
+    """配置源的"代次" —— 变了就说明要重新加载.
+
+    文件时代 = (mtime_ns, size)。只用 mtime 不够: 同一秒内的两次写在某些
+    文件系统上 mtime 可能相同, 加 size 能多挡一类。真要严格得算内容 hash,
+    但那要读全文, 失去了 stat 的成本优势; 配置文件不是高频改动的东西,
+    这个强度够用。
+    """
+    try:
+        st = resolve_config_path().stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
+def get_config() -> Config:
+    """**所有读配置的地方都走这里。** 不要直接调 load_config()。
+
+    最多陈旧 config_ttl_seconds() 秒。线程安全。
+    """
+    global _CACHE, _CACHE_STAMP, _CACHE_CHECKED_AT
+
+    now = time.monotonic()
+    cache = _CACHE
+    if cache is not None and (now - _CACHE_CHECKED_AT) < config_ttl_seconds():
+        return cache
+
+    with _CACHE_LOCK:
+        # 双检: 可能在等锁期间别的线程已经刷过了
+        now = time.monotonic()
+        if _CACHE is not None and (now - _CACHE_CHECKED_AT) < config_ttl_seconds():
+            return _CACHE
+
+        stamp = _config_stamp()
+        if _CACHE is not None and stamp == _CACHE_STAMP:
+            # 源没变 —— 只续期, 不重新解析
+            _CACHE_CHECKED_AT = now
+            return _CACHE
+
+        try:
+            fresh = load_config()
+        except Exception:
+            # 重载失败 (yaml 被写坏 / 正在被写) 时**继续用上一份好的配置**,
+            # 而不是让整个 gateway 502。配置写坏是运维事故, 不该演变成全站故障。
+            # 但不能静默: 抛给上层日志, 且不更新 stamp —— 下个周期还会再试。
+            if _CACHE is not None:
+                _CACHE_CHECKED_AT = now
+                logger.exception("重载 models 配置失败, 继续沿用上一份 (源: %s)", resolve_config_path())
+                return _CACHE
+            raise  # 首次加载就失败 —— 没有可沿用的, 必须让它挂
+
+        _CACHE = fresh
+        _CACHE_STAMP = stamp
+        _CACHE_CHECKED_AT = now
+        return fresh
+
+
+def invalidate_config() -> None:
+    """强制下次 get_config() 回源.
+
+    写接口改完配置后调一次 —— 让**本 worker** 立刻看到新值。其余 worker
+    靠 TTL 自己收敛 (见上面为什么不做跨进程失效)。
+    """
+    global _CACHE_CHECKED_AT, _CACHE_STAMP
+    with _CACHE_LOCK:
+        _CACHE_CHECKED_AT = 0.0
+        _CACHE_STAMP = None

@@ -469,8 +469,8 @@ async def approve_patch(
     }
     # P30 (6/5 鸿波): 走 config.skills_hub.upstream_url, 不再硬编码 127.0.0.1.
     # 让 skills-hub 能跨主机部署 (e.g. k8s 不同 pod / nginx 反代不同 host).
-    from .config import load_config  # noqa: PLC0415 避免循环依赖
-    skills_hub_base = load_config().skills_hub.upstream_url.rstrip("/")
+    from .config import get_config  # noqa: PLC0415 避免循环依赖
+    skills_hub_base = get_config().skills_hub.upstream_url.rstrip("/")
     try:
         async with _httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(

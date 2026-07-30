@@ -351,7 +351,7 @@ async def _summarize_middle(
         import httpx  # noqa: PLC0415
 
         from .auth.dev_token import ensure_internal_dev_token  # noqa: PLC0415
-        from .config import load_config  # noqa: PLC0415
+        from .config import get_config  # noqa: PLC0415
     except ImportError as e:
         logger.warning("compression: import 依赖失败 (%s), 跳过", e)
         return None
@@ -364,7 +364,7 @@ async def _summarize_middle(
         )
         return None
 
-    config = load_config()
+    config = get_config()
     origin_obj = next(
         (m for m in config.models
          if m.name == origin_model and m.mode == "chat" and m.upstream.is_available),

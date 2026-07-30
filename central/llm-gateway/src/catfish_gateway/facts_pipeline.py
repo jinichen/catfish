@@ -28,7 +28,7 @@ from pathlib import Path
 import httpx
 
 from .auth import User
-from .config import load_config
+from .config import get_config
 from .internal_models import pick_internal_model
 
 logger = logging.getLogger("catfish.gateway.facts_pipeline")
@@ -141,7 +141,7 @@ async def _llm_json(
     # admin_model 从 caller chain 通过 header 透传 (5/26: facts_router 该传, 暂未 wire)
     # 当前 caller 不传 → 返 error (产品功能短期退化, 等 facts_router 加 header 透传)
     admin_model = None
-    chosen = resolve_model_obj(admin_model, load_config())
+    chosen = resolve_model_obj(admin_model, get_config())
     if chosen is None:
         return {
             "error": "5/26 BL-PROACTIVE-DECOUPLE: facts 分析需 admin model_name 通过 "
@@ -245,15 +245,19 @@ async def run_extract(meta: dict, triggered_by: str | None = None) -> dict:
 # ── Step 2: find_impact ─────────────────────────
 
 # P30 (6/5 鸿波): 砍硬编码 127.0.0.1:8997. 改 lazy function — 第一次 call 时
-# 走 load_config().skills_hub.upstream_url, 跟 skills_hub_proxy 同 source.
+# 走 get_config().skills_hub.upstream_url, 跟 skills_hub_proxy 同 source.
 # 让 skills-hub 能跨主机部署 (大客户 k8s 不同 pod / nginx 反代).
 SKILLS_HUB_TIMEOUT = 10.0
 
 
 def _skills_hub_base() -> str:
-    """读 gateway config 真 skills_hub.upstream_url. 走 load_config 单例缓存,
-    overhead 微 (毫秒级 dict lookup, 不重读 yaml)."""
-    return load_config().skills_hub.upstream_url.rstrip("/")
+    """读 gateway config 真 skills_hub.upstream_url.
+
+    7/30 更正: 这里原本写着"走 load_config 单例缓存, 不重读 yaml" ——
+    **load_config 从来没有任何缓存**, 每次调用都重读并重新解析整个 yaml。
+    那句注释描述的是一个不存在的机制, 让人以为这条路径很便宜。
+    换成 get_config() 之后才真的有缓存 (TTL 内不碰磁盘, 见 config.py)。"""
+    return get_config().skills_hub.upstream_url.rstrip("/")
 
 
 async def _fetch_all_skills(user: User) -> list[dict]:

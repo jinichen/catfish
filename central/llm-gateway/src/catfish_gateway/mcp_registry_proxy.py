@@ -23,6 +23,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from .auth import User, get_current_user
+from .config import get_config
 
 logger = logging.getLogger("catfish.gateway.mcp_registry_proxy")
 
@@ -98,7 +99,7 @@ async def _proxy(
     user: User,
 ) -> Response:
     """统一代理函数 — 把 request 透传到 mcp-registry upstream + 注入员工身份."""
-    config = request.app.state.config
+    config = get_config()
     cfg = config.mcp_registry
 
     if not cfg.enabled:
