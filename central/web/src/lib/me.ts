@@ -312,6 +312,11 @@ export interface CatalogModel {
   supports_vision?: boolean;
   api_key_configured?: boolean;
   is_reachable?: boolean | null;
+  // 7/30: 展示与计价. 原本硬编码在 lib/modelDisplay.ts, 模型可在界面上
+  // 增删改之后必须跟着模型走 —— 见 modelDisplay.ts 里 setRuntimeModelMeta 的说明。
+  color?: string | null;
+  dot_emoji?: string | null;
+  price_per_1k_tokens?: number | null;
 }
 
 export interface CatalogResponse {

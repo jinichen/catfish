@@ -59,6 +59,12 @@ export interface ModelConfig {
   cost_tier: "free" | "paid";
   fallback?: Fallback | null;
   rate_limits?: RateLimits | null;
+  // 7/30: 展示与计价. 原本硬编码在 lib/modelDisplay.ts —— 模型能在界面上
+  // 增删改之后, 那样会让新加的模型显示"未知模型"、成本按兜底价 0.001 算,
+  // 而真实单价跨度 0.00005~0.0218 差 400 倍。
+  price_per_1k_tokens?: number | null;
+  color?: string | null;
+  dot_emoji?: string | null;
 }
 
 export interface ModelListResponse {
@@ -119,6 +125,9 @@ export function emptyModel(): ModelConfig {
     cost_tier: "paid",
     fallback: null,
     rate_limits: null,
+    price_per_1k_tokens: null,
+    color: null,
+    dot_emoji: null,
   };
 }
 
@@ -145,6 +154,8 @@ export function validateModel(m: ModelConfig): string[] {
     errs.push("上下文窗口要是正数");
   if (m.max_output_tokens != null && m.max_output_tokens <= 0)
     errs.push("单次输出上限要是正数");
+  if (m.price_per_1k_tokens != null && m.price_per_1k_tokens < 0)
+    errs.push("单价不能是负数");
   if (
     m.context_window != null &&
     m.max_output_tokens != null &&

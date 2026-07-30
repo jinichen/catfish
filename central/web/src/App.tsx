@@ -25,7 +25,8 @@ import { useEffect } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 
 import { NavBar } from "./components/NavBar";
-import { fetchMe } from "./lib/me";
+import { fetchMe, fetchModelCatalog } from "./lib/me";
+import { setRuntimeModelMeta } from "./lib/modelDisplay";
 import { getCurrentUser, handleCallback, login } from "./lib/auth";
 import { useAuthStore } from "./store/auth";
 
@@ -117,6 +118,25 @@ export function App() {
       }
     })();
   }, [me, setMe, setError]);
+
+  // 7/30: 登录后灌一次模型元信息 (显示名 / 颜色 / 单价) 给审计页用。
+  //
+  // 在这之前这些是硬编码在 lib/modelDisplay.ts 两张表里的。模型改成能在
+  // /admin/models 界面上增删改之后, 硬编码会让客户新加的模型在审计页显示
+  // "未知模型 ⚪"、成本按兜底价 0.001 算 —— 而真实单价跨度是 0.00005 到
+  // 0.0218, 差 400 倍, 那个数字不能当准确值给客户看。
+  //
+  // 放在 App 层加载一次, 而不是让每个用到的页面各自 fetch: 审计页有三个
+  // 组件用 getModelDisplay/costRMB, 各自 fetch 既浪费也容易漏掉一个。
+  //
+  // 失败不影响任何功能 —— fetchModelCatalog 内部已经吞异常返 []，
+  // setRuntimeModelMeta 灌空表就等于退回硬编码表, 也就是 7/30 之前的行为。
+  useEffect(() => {
+    if (!me) return;
+    void fetchModelCatalog().then((models) => {
+      if (models.length) setRuntimeModelMeta(models);
+    });
+  }, [me]);
 
   // 单独 callback 路由, 不需要 me
   if (window.location.pathname === "/auth/callback") {

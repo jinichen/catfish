@@ -94,8 +94,80 @@ const _FALLBACK: ModelDisplay = {
   dotEmoji: "⚪",
 };
 
+// ── 运行时覆盖层 (7/30) ──────────────────────────────────────────────
+//
+// ## 为什么加这一层
+//
+// 上面那两张硬编码表 (_MAP / _PRICE_RMB_PER_1K_TOKEN) 的注释写着
+// "添加新 model: 在 _MAP 加一行"。模型改成能在 /admin/models 界面上增删改
+// 之后, 这句话就跟产品行为矛盾了: 客户加模型是**运行时操作**, 而补显示名和
+// 单价却要改前端代码 + 重新构建 + 重新部署。
+//
+// 不补的后果不是"缺点样式", 是**数字是错的**:
+//   · 审计页显示"未知模型 ⚪"
+//   · 成本按兜底价 0.001 算 —— 而真实单价从 0.00005 到 0.0218 差 400 倍
+//
+// 这正是 7/30 排查 catfish-public-qwen-flash 改名事故时看到的表现 (那次
+// 成本被高估 2.22 倍)。区别在于: 那次要改名才触发, 而可编辑模型会让它
+// **每次新增模型都必然发生**。
+//
+// ## 硬编码表为什么不删
+//
+// 审计数据是**历史**的。模型被删掉之后, 审计页仍要展示它历史上的用量和成本,
+// 而那时配置里已经查不到它了。所以保留硬编码表, 但用途从"唯一来源"降级成
+// "配置里没有时的兜底" —— 那种情况是真的需要兜底, 不是懒。
+//
+// 优先级: 运行时配置 > 硬编码表 > 通用兜底。
+
+/** 运行时能拿到的模型元信息. 只写这一层真正会用的字段 ——
+ *  用 `[k: string]: unknown` 那种宽松签名的话, CatalogModel 这类具体接口
+ *  反而传不进来 (缺索引签名), 而且也失去了字段名写错时的检查。 */
+export interface RuntimeModelMeta {
+  id: string;
+  display_name?: string;
+  tier?: string;
+  color?: string | null;
+  dot_emoji?: string | null;
+  price_per_1k_tokens?: number | null;
+}
+
+let _runtime: Record<string, RuntimeModelMeta> = {};
+
+/** 由 catalog 加载方调用一次, 把运行时模型元信息灌进来.
+ *
+ * 没调用也不会坏 —— 只是退回硬编码表, 也就是 7/30 之前的行为。
+ */
+export function setRuntimeModelMeta(models: RuntimeModelMeta[]): void {
+  const next: Record<string, RuntimeModelMeta> = {};
+  for (const m of models) {
+    if (m.id) next[m.id] = m;
+  }
+  _runtime = next;
+}
+
 export function getModelDisplay(catalogId: string): ModelDisplay {
-  return _MAP[catalogId] ?? _FALLBACK;
+  const rt = _runtime[catalogId];
+  const base = _MAP[catalogId] ?? _FALLBACK;
+  if (!rt) return base;
+  return {
+    // display_name 是模型配置里本来就有的字段, 优先用它 —— 客户改了显示名
+    // 应该在审计页立刻体现, 而不是等我们改前端。
+    friendly: rt.display_name || base.friendly,
+    tier: rt.tier === "private" ? "私有" : rt.tier === "public" ? "公网" : base.tier,
+    color: rt.color || base.color,
+    dotEmoji: rt.dot_emoji || base.dotEmoji,
+  };
+}
+
+/** 这个模型的成本是不是估的 (配置和硬编码表里都没有单价).
+ *
+ * 给界面用: 成本栏旁边该标一下"估算", 而不是把一个兜底数字当准确值展示。
+ */
+export function isCostEstimated(catalogId: string): boolean {
+  return (
+    _runtime[catalogId]?.price_per_1k_tokens == null &&
+    _PRICE_RMB_PER_1K_TOKEN[catalogId] == null
+  );
 }
 
 // ── BL-AUDIT-UX-P1 (5/17 鸿波): 精算 RMB 成本 ───────────────────
@@ -126,9 +198,22 @@ const _PRICE_RMB_PER_1K_TOKEN: Record<string, number> = {
   "catfish-private-embed": 0.00005,
 };
 
-/** 按模型精算: 输入 model → token 数 → RMB 字符串. 未知 model 用兜底 0.001. */
+/** 兜底单价. 只在配置和硬编码表都没有时用 —— 配合 isCostEstimated() 提示。
+ *
+ * 注意它跟真实单价的差距很大 (0.00005 ~ 0.0218, 差 400 倍), 所以走到兜底
+ * 时算出来的数**不该当准确值展示**。 */
+const _FALLBACK_PRICE = 0.001;
+
+/** 按模型精算: 输入 model → token 数 → RMB.
+ *
+ * 优先级: 运行时配置 (可在 /admin/models 界面上改) > 硬编码表 (历史模型
+ * 兜底) > _FALLBACK_PRICE。见上面 setRuntimeModelMeta 的说明。
+ */
 export function costRMB(catalogId: string, tokens: number): number {
-  const price = _PRICE_RMB_PER_1K_TOKEN[catalogId] ?? 0.001;
+  const price =
+    _runtime[catalogId]?.price_per_1k_tokens ??
+    _PRICE_RMB_PER_1K_TOKEN[catalogId] ??
+    _FALLBACK_PRICE;
   return (tokens / 1000) * price;
 }
 

@@ -68,6 +68,12 @@ models:
     recommended_for: [general, chat, tool_use, code,
                       summarizer, proactive_starter, a2a_aux]
     cost_tier: free
+    # 展示与计价 (7/30 从前端 modelDisplay.ts 迁过来)。
+    # 模型可在 /admin/models 界面上增删改之后, 这些必须跟着模型走 ——
+    # 硬编码在前端的话, 客户新加的模型会显示"未知模型"、按兜底价计费。
+    price_per_1k_tokens: 0.0001   # 元 / 1000 token
+    color: "#6b7280"
+    dot_emoji: "⚫"
 
     # 内网 LLM 平台偶发 502 / endpoint 维护 / UUID 重启失效时,
     # 主力模型不能直接挂死员工 — 落到公共模型保业务。
@@ -107,6 +113,12 @@ models:
     supports_vision: true
     recommended_for: [vision, ocr, image_analysis]
     cost_tier: free
+    # 展示与计价 (7/30 从前端 modelDisplay.ts 迁过来)。
+    # 模型可在 /admin/models 界面上增删改之后, 这些必须跟着模型走 ——
+    # 硬编码在前端的话, 客户新加的模型会显示"未知模型"、按兜底价计费。
+    price_per_1k_tokens: 0.0001   # 元 / 1000 token
+    color: "#4b5563"
+    dot_emoji: "⚫"
 
     # 内网 vision endpoint 不可达时 (10.10.40.x VPN 抖动 / 平台维护) 直接落到
     # 公共多模态. qwen-flash 256K 也支持视觉, gemini-flash 是兜底。
@@ -162,6 +174,12 @@ models:
       api_key_env: INTERNAL_LLM_KEY
 
     cost_tier: free
+    # 展示与计价 (7/30 从前端 modelDisplay.ts 迁过来)。
+    # 模型可在 /admin/models 界面上增删改之后, 这些必须跟着模型走 ——
+    # 硬编码在前端的话, 客户新加的模型会显示"未知模型"、按兜底价计费。
+    price_per_1k_tokens: 0.00005   # 元 / 1000 token
+    color: "#9ca3af"
+    dot_emoji: "⚪"
 
   # ---------- 公共 · 阿里云百炼 Qwen3.6-Flash ----------
   # DashScope OpenAI 兼容端点。没配 DASHSCOPE_API_KEY 时不出现在 catalog。
@@ -239,6 +257,12 @@ models:
     recommended_for: [general, chat, tool_use, vision, code, fast, fallback,
                       summarizer, proactive_starter, a2a_aux]
     cost_tier: paid
+    # 展示与计价 (7/30 从前端 modelDisplay.ts 迁过来)。
+    # 模型可在 /admin/models 界面上增删改之后, 这些必须跟着模型走 ——
+    # 硬编码在前端的话, 客户新加的模型会显示"未知模型"、按兜底价计费。
+    price_per_1k_tokens: 0.00045   # 元 / 1000 token
+    color: "#f59e0b"
+    dot_emoji: "🟠"
 
     # 5/4 BL-F14 加: qwen-flash 自己也得有 chain.
     # 之前没配, picker 选 qwen-flash 时撞错就死. 现在: qwen 挂 → deepseek → gemini.
@@ -325,6 +349,12 @@ models:
     recommended_for: [general, chat, tool_use, code, fast, fallback,
                       summarizer, proactive_starter, a2a_aux]
     cost_tier: paid
+    # 展示与计价 (7/30 从前端 modelDisplay.ts 迁过来)。
+    # 模型可在 /admin/models 界面上增删改之后, 这些必须跟着模型走 ——
+    # 硬编码在前端的话, 客户新加的模型会显示"未知模型"、按兜底价计费。
+    price_per_1k_tokens: 0.0015   # 元 / 1000 token
+    color: "#7c3aed"
+    dot_emoji: "🟣"
 
     # 5/4 BL-F14 加: deepseek 自己也得有 chain.
     # picker 用 env override 强制选 deepseek 时, 撞错有兜底 (qwen-flash → gemini-flash).
@@ -363,6 +393,12 @@ models:
     supports_vision: true
     recommended_for: [long_context, complex_reasoning, vision, research]
     cost_tier: paid
+    # 展示与计价 (7/30 从前端 modelDisplay.ts 迁过来)。
+    # 模型可在 /admin/models 界面上增删改之后, 这些必须跟着模型走 ——
+    # 硬编码在前端的话, 客户新加的模型会显示"未知模型"、按兜底价计费。
+    price_per_1k_tokens: 0.0218   # 元 / 1000 token
+    color: "#dc2626"
+    dot_emoji: "🔴"
 
     # 撞 429 / 503 / timeout 时自动落回 Qwen3.6-Flash
     # (Qwen 没配 key 时自动跳过, 直接返回错误给客户端)
@@ -534,6 +570,12 @@ models:
       max_hops: 2
     recommended_for: [fast, cheap, general, bulk]
     cost_tier: paid
+    # 展示与计价 (7/30 从前端 modelDisplay.ts 迁过来)。
+    # 模型可在 /admin/models 界面上增删改之后, 这些必须跟着模型走 ——
+    # 硬编码在前端的话, 客户新加的模型会显示"未知模型"、按兜底价计费。
+    price_per_1k_tokens: 0.00067   # 元 / 1000 token
+    color: "#ef4444"
+    dot_emoji: "🔴"
 
   # ---------- 公共 · Groq gpt-oss-120b（推理增强 / 高速） ----------
   # BL-GROQ-GPTOSS-120B (5/23 鸿波): 加 Groq 托管的 OpenAI gpt-oss 120B 开源权重模型.

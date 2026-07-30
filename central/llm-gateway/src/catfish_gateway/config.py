@@ -175,6 +175,32 @@ class ModelConfig(BaseModel):
     recommended_for: list[str] = Field(default_factory=list)
     cost_tier: str = "free"  # free | paid
 
+    # ── 展示与计价 (7/30) ────────────────────────────────────────────
+    #
+    # 这三个字段原本硬编码在前端 central/web/src/lib/modelDisplay.ts 的两张
+    # 表里 (_MAP 和 _PRICE_RMB_PER_1K_TOKEN), 那个文件的注释还写着
+    # "添加新 model: 在 _MAP 加一行"。
+    #
+    # 模型改成可在界面上增删改之后, 那种做法直接矛盾: 客户加一个模型是运行时
+    # 操作, 而补上它的显示名和单价却要改前端代码 + 重新构建 + 重新部署。
+    # 不补的话审计页显示"未知模型 ⚪", 计费按兜底价 0.001 算 —— 这正是 7/30
+    # 查 catfish-public-qwen-flash 改名事故时暴露的表现, 区别只在于那次是
+    # 偶然触发, 而可编辑模型会让它**每次新增模型都必然发生**。
+    #
+    # 所以搬到模型配置里, 跟着模型走。前端仍保留一张兜底表, 但用途变成
+    # "历史审计数据引用了已被删除的模型" —— 那种情况配置里查不到, 是真的
+    # 需要兜底, 不是偷懒。
+
+    #: 每 1000 token 的人民币单价. 审计页成本核算用。
+    #: 不填 → 前端按兜底价算, 并且**应该**在界面上提示这个模型的成本不准。
+    price_per_1k_tokens: float | None = None
+
+    #: 图表里区分模型用的品牌色 (CSS color, 如 "#10b981")。不填 → 前端给个默认灰。
+    color: str | None = None
+
+    #: 列表行首的小圆点 emoji, 一眼分辨 provider。不填 → 前端用 ⚪。
+    dot_emoji: str | None = None
+
     # P1: 上游失败时自动切到 chain 里下一个模型。空 chain (默认) 表示不 fallback。
     fallback: FallbackConfig | None = None
 
@@ -309,6 +335,11 @@ def resolve_config_path(path: Path | None = None) -> Path:
             path = Path(env_dir) / "models.yaml"
         else:
             path = Path("config/models.yaml")
+
+    # 允许调用方传字符串 —— 类型标注写的是 Path, 但实际调用点 (含测试) 很容易
+    # 顺手传个 str, 而 str 没有 .is_absolute() 会直接 AttributeError, 报错信息
+    # 跟"配置有问题"毫无关系, 查起来绕。统一转一次, 一行的事。
+    path = Path(path)
 
     if not path.is_absolute():
         # try both cwd and the installed package dir

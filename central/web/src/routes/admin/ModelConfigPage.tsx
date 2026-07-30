@@ -514,6 +514,59 @@ function ModelForm({
           </Field>
         </div>
 
+      </div>
+
+      <div
+        style={{
+          marginTop: 10,
+          paddingTop: 8,
+          borderTop: "1px solid var(--border)",
+        }}
+      >
+        <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 6 }}>
+          展示与计价{" "}
+          <span style={{ color: "var(--text-muted)" }}>
+            （审计页用。不填单价的话成本按兜底价估算，数字不准）
+          </span>
+        </div>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            gap: 8,
+          }}
+        >
+          <Field
+            label="单价（元 / 1000 token）"
+            hint="按厂商价目表填，输入输出取平均。留空则审计页按兜底价 0.001 估算——现有模型真实单价跨度 0.00005 到 0.0218，差 400 倍，估出来的数不能当准。"
+          >
+            <input
+              style={INPUT}
+              type="number"
+              step="0.00001"
+              value={model.price_per_1k_tokens ?? ""}
+              onChange={(e) => set({ price_per_1k_tokens: num(e.target.value) })}
+              placeholder="0.0015"
+            />
+          </Field>
+          <Field label="图表颜色" hint="审计页图表里区分模型用。留空给默认灰。">
+            <input
+              style={MONO}
+              value={model.color ?? ""}
+              onChange={(e) => set({ color: e.target.value || null })}
+              placeholder="#7c3aed"
+            />
+          </Field>
+          <Field label="列表圆点" hint="一眼分辨来源。留空用 ⚪。">
+            <input
+              style={INPUT}
+              value={model.dot_emoji ?? ""}
+              onChange={(e) => set({ dot_emoji: e.target.value || null })}
+              placeholder="🟣"
+            />
+          </Field>
+        </div>
+
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 8 }}>
           {(
             [

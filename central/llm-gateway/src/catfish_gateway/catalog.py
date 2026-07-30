@@ -70,6 +70,16 @@ def build_catalog(
                 "cost_tier": m.cost_tier,
                 "supports_tool_use": m.supports_tool_use,
                 "supports_vision": m.supports_vision,
+                # 展示与计价 (7/30) —— 前端审计页原本硬编码这三样, 模型可在
+                # 界面上增删改之后那样做会让新加的模型显示"未知模型"、按兜底价
+                # 计费。跟着模型配置走才对。
+                #
+                # 注意这几个字段是**可以匿名读**的 (catalog 本身就是匿名端点):
+                # 单价和显示名不是机密, 而 upstream 那些 (api_base / api_key_env)
+                # 依然只在 sysadmin 的 /api/admin/models 里返。
+                "price_per_1k_tokens": m.price_per_1k_tokens,
+                "color": m.color,
+                "dot_emoji": m.dot_emoji,
                 # —— 状态三态 ——
                 "api_key_configured": api_key_configured,
                 "is_reachable": is_reachable,

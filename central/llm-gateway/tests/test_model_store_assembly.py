@@ -156,3 +156,76 @@ def test_代次同时覆盖库和文件(cfg, monkeypatch):
     _yaml_with(cfg, "from-yaml", "another")  # 改文件
     s3 = C._config_stamp()
     assert s3 != s2, "yaml 变了, 总代次必须跟着变"
+
+
+# ── 展示与计价字段 (7/30) ────────────────────────────────────────────
+
+
+def test_单价颜色图标能从配置读到(cfg, monkeypatch):
+    """这三个字段原本硬编码在前端 modelDisplay.ts。
+
+    模型改成能在界面上增删改之后, 硬编码会让客户新加的模型在审计页显示
+    "未知模型 ⚪"、成本按兜底价 0.001 算 —— 而真实单价跨度 0.00005~0.0218,
+    差 400 倍。所以必须跟着模型配置走。
+    """
+    row = _row("m")
+    row.update({"price_per_1k_tokens": 0.0015, "color": "#7c3aed", "dot_emoji": "🟣"})
+    monkeypatch.setattr(C.model_store, "is_enabled", lambda: True)
+    monkeypatch.setattr(C.model_store, "revision", lambda: 1)
+    monkeypatch.setattr(C.model_store, "read_models", lambda: [row])
+    m = C.get_config().models[0]
+    assert m.price_per_1k_tokens == 0.0015
+    assert m.color == "#7c3aed"
+    assert m.dot_emoji == "🟣"
+
+
+def test_不填这三个字段也能用(cfg, monkeypatch):
+    """老配置里没有这几个字段, 不能因为加了字段就让存量配置加载失败."""
+    monkeypatch.setattr(C.model_store, "is_enabled", lambda: True)
+    monkeypatch.setattr(C.model_store, "revision", lambda: 1)
+    monkeypatch.setattr(C.model_store, "read_models", lambda: [_row("m")])
+    m = C.get_config().models[0]
+    assert m.price_per_1k_tokens is None
+    assert m.color is None
+
+
+def test_catalog_把这三个字段透出去(cfg, monkeypatch):
+    """光存进配置不够 —— 前端是从 /v1/catalog 读的, 没透出去等于没做."""
+    from catfish_gateway.catalog import build_catalog
+
+    row = _row("m")
+    row.update({"price_per_1k_tokens": 0.0015, "color": "#7c3aed", "dot_emoji": "🟣"})
+    monkeypatch.setattr(C.model_store, "is_enabled", lambda: True)
+    monkeypatch.setattr(C.model_store, "revision", lambda: 1)
+    monkeypatch.setattr(C.model_store, "read_models", lambda: [row])
+
+    cat = build_catalog(C.get_config(), user=None)
+    entry = next(x for x in cat["models"] if x["id"] == "m")
+    assert entry["price_per_1k_tokens"] == 0.0015
+    assert entry["color"] == "#7c3aed"
+    assert entry["dot_emoji"] == "🟣"
+
+
+def test_真实配置里的单价都填了(cfg):
+    """守护: config/models.yaml 里每个 chat 模型都该有单价.
+
+    漏一个的话审计页对它就按兜底价算, 而且不会有任何报错 —— 只是数字悄悄
+    是错的。这正是 7/30 之前 catfish-public-qwen-flash 的表现。
+    """
+    import os
+    from pathlib import Path
+
+    for k in (
+        "INTERNAL_LLM_BASE_QWEN_MAIN",
+        "INTERNAL_LLM_BASE_QWEN_VISION",
+        "INTERNAL_LLM_BASE_BGE_M3",
+    ):
+        os.environ.setdefault(k, "http://placeholder")
+
+    real = Path(__file__).resolve().parent.parent / "config" / "models.yaml"
+    missing = [
+        m.name for m in C.load_config(real).models if m.price_per_1k_tokens is None
+    ]
+    assert not missing, (
+        f"这些模型没配 price_per_1k_tokens, 审计页会按兜底价 0.001 估算: {missing}"
+    )

@@ -38,6 +38,14 @@ def _model(
     cost_tier: str = "free",
     supports_tool_use: bool = True,
     supports_vision: bool = False,
+    # 7/30: 展示与计价三件套. build_catalog 会读它们, 所以这个 duck-type
+    # 必须跟上 —— 少一个就是 AttributeError。
+    # 有意**不**在 build_catalog 里用 getattr 兜底: 那样能让这个假对象少写
+    # 字段也不报错, 但同时也会把真正的属性拼写错误一起盖住。假对象跟真类型
+    # 保持同步, 是这个 helper 该负的责任。
+    price_per_1k_tokens: float | None = None,
+    color: str | None = None,
+    dot_emoji: str | None = None,
 ):
     """构造一个 ModelConfig duck-type, build_catalog 只读这些字段。"""
     return SimpleNamespace(
@@ -47,6 +55,9 @@ def _model(
         default=default,
         display_name=display_name or name,
         recommended_for=recommended_for or ["general"],
+        price_per_1k_tokens=price_per_1k_tokens,
+        color=color,
+        dot_emoji=dot_emoji,
         context_window=context_window,
         cost_tier=cost_tier,
         supports_tool_use=supports_tool_use,
