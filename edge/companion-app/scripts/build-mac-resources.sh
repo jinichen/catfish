@@ -386,13 +386,47 @@ unset PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD  # 允许下载 chromium
 PW_CACHE="/tmp/catfish-pw-$ARCH"
 echo "  下载目录: $PW_CACHE (每架构独立, 不碰 ~/Library/Caches/ms-playwright)"
 mkdir -p "$PW_CACHE"
-# arch -x86_64 是给 Apple Silicon mac 上跑 Intel 命令用. 若 build aarch64 · 直接跑.
-if [ "$ARCH" = "x64" ] && [ "$(uname -m)" = "arm64" ]; then
-    echo "  Apple Silicon 上打 Intel · 用 arch -x86_64 npx"
-    PLAYWRIGHT_BROWSERS_PATH="$PW_CACHE" arch -x86_64 npx --yes playwright install chromium
-else
-    PLAYWRIGHT_BROWSERS_PATH="$PW_CACHE" npx --yes playwright install chromium
-fi
+#
+# ⚠ 为什么不用 `arch -x86_64 npx` (7/30 查实, 别改回去)
+#
+# 在 Apple Silicon 上打 x64 包时, 老写法是 `arch -x86_64 npx playwright install`,
+# 指望让 node 以 Intel 身份跑、于是 playwright 下 x64 的 chromium。**这条路
+# 根本不通。** 看 playwright 判定平台的源码 (playwright-core, 1.49 到 1.60
+# 逐字未变, packages/utils/hostPlatform.ts):
+#
+#     function calculatePlatform() {
+#       if (process.env.PLAYWRIGHT_HOST_PLATFORM_OVERRIDE) { ...直接返回... }
+#       ...
+#       if (os.cpus().some((cpu) => cpu.model.includes("Apple")))
+#         macVersion += "-arm64";
+#
+# 它在 macOS 上是靠 **CPU 型号字符串** 判架构的, 不是 process.arch。
+# 即使 node 被 Rosetta 翻译成 x86_64 在跑, os.cpus() 依然报 "Apple M2" ——
+# 因为机器本身就是 Apple Silicon。所以 `-arm64` 后缀**必然**被加上,
+# 在 M 系列机器上永远下不到 x64 chromium。
+#
+# 这就是 7/30 那次的现象: 换了全新的空目录, 下下来的还是 arm64。
+#
+# 正解是 playwright 官方的覆盖开关, 也就是上面那个函数的第一条语句。
+# 取值必须是它下载表里存在的键 —— 表里 mac 只有 mac10.13/10.14/10.15、
+# mac11..mac15、mac26, **中间 mac16~mac25 不存在**, 写错会直接 404。
+# mac15 / mac15-arm64 在新老版本里都在, 且 mac15 与 mac26 指向的是同一个
+# chrome-mac-x64.zip, 所以选 mac15 最稳。
+#
+# 注意: calculatePlatform() 只在模块初始化时跑一次, 所以必须在进程启动前
+# 就把环境变量给上 (下面这种前缀写法可以)。
+#
+# 两个架构都显式指定, 不留"靠自动探测"的那一半 —— 探测对不对不该是运气。
+case "$ARCH" in
+    aarch64) PW_PLATFORM="mac15-arm64" ;;
+    x64)     PW_PLATFORM="mac15" ;;
+esac
+echo "  PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=$PW_PLATFORM"
+echo "  (playwright 会打一句 'your OS is not officially supported ... downloading"
+echo "   fallback build for $PW_PLATFORM' · 用 override 时必然出现, 正常)"
+PLAYWRIGHT_BROWSERS_PATH="$PW_CACHE" \
+PLAYWRIGHT_HOST_PLATFORM_OVERRIDE="$PW_PLATFORM" \
+    npx --yes playwright install chromium
 
 echo ""
 echo "=== [6c/6] tar pack chromium-embed · from $PW_CACHE ==="
@@ -428,9 +462,19 @@ fi
 # 更要紧的是: 下载目录一旦复用, 它**可能验不出来**(缓存恰好是对的架构),
 # 所以这里在源头再钉一次, 不合就当场停。
 case "$ARCH" in
-    aarch64) WANT_MACHO="arm64" ;;
-    x64)     WANT_MACHO="x86_64" ;;
+    aarch64) WANT_MACHO="arm64"  ; WANT_DIR="chrome-mac-arm64" ;;
+    x64)     WANT_MACHO="x86_64" ; WANT_DIR="chrome-mac-x64"   ;;
 esac
+# 第一道: 解压出来的目录名自带架构 (playwright 的 executablePath 表:
+#   'mac-x64'   → chrome-mac-x64/Google Chrome for Testing.app/...
+#   'mac-arm64' → chrome-mac-arm64/Google Chrome for Testing.app/...)
+# 这道能在 override 值写错时立刻暴露, 比只看 Mach-O 更早也更直白。
+if [ ! -d "$LATEST_CHROMIUM/$WANT_DIR" ]; then
+    echo "❌ 没有 $WANT_DIR/ —— 下的不是 $ARCH 的 chromium"
+    echo "   实际有: $(ls -1 "$LATEST_CHROMIUM" 2>/dev/null | tr '\n' ' ')"
+    echo "   删掉重跑: rm -rf $PW_CACHE && bash scripts/build-mac-resources.sh $ARCH"
+    exit 1
+fi
 # 不写死 chrome-mac/ 这层 —— playwright 改过目录布局, 写死会在改版时静默失配。
 # 跟 verify-app-arch.sh 一样按主程序名找。
 CHROME_BIN="$(find "$LATEST_CHROMIUM" -type f \
