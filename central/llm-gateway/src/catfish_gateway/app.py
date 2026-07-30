@@ -1215,6 +1215,51 @@ def _require_model_admin(user: User) -> None:
         )
 
 
+def _effective_auto_fallback(cfg: Config) -> bool:
+    """fallback 到底开没开. 跟 fallback.py:426 的判定保持一致.
+
+    两个来源, env 优先:
+        CATFISH_AUTO_FALLBACK=1/true/yes
+        models.yaml 顶层 auto_fallback: true
+
+    **默认是关的** (BL-FALLBACK-TOGGLE 2026-05-16)。这件事必须告诉界面 ——
+    否则管理员会认真配一条 fallback 链, 而它根本不会执行。配置了不生效
+    且没有任何提示, 是今晚反复出现的那类问题。
+    """
+    return (
+        os.environ.get("CATFISH_AUTO_FALLBACK", "").lower() in ("1", "true", "yes")
+        or bool(getattr(cfg, "auto_fallback", False))
+    )
+
+
+def _check_fallback_500_policy(m: ModelConfig) -> None:
+    """内网模型的 on_errors 不许含 500 —— 保密红线, 不是风格问题.
+
+    内网 500 触发 fallback → 内网 prompt 落到公网模型 = 内网内容出公司,
+    违反 SOUL_FFCS 国央企保密原则。
+
+    ## 为什么必须在接口上拦, 不能只靠测试
+
+    tests/test_fallback_500_policy.py 读的是 config/models.yaml —— 而模型
+    改成可在界面上增删改之后, **库里的模型完全不在那个测试的视野内**。
+    通过界面加一个内网模型、on_errors 填 500, 没有任何测试会红。
+
+    公网链缺 500 是另一回事 (影响体验不影响保密), 那个只警告不拦 ——
+    见 GET 返回里的 warnings。
+    """
+    if m.tier != "private" or not m.fallback:
+        return
+    if 500 in (m.fallback.on_errors or []):
+        raise HTTPException(
+            400,
+            detail=(
+                f"内网模型 {m.name} 的失败切换条件不能包含 500。\n"
+                "内网返 500 就切公网, 等于内网 prompt 出公司 —— 违反保密要求。\n"
+                "公网模型之间切换没有这个问题, 可以含 500。"
+            ),
+        )
+
+
 def _model_store_error(e: Exception) -> HTTPException:
     """把库操作的异常翻译成运维**看得懂、能动手**的错误 (7/30).
 
@@ -1274,6 +1319,9 @@ async def api_admin_models_list(
         "ok": True,
         "editable": model_store.is_enabled(),
         "revision": model_store.revision(),
+        # 失败切换全局开关。**默认是关的** —— 界面必须显示这个, 否则管理员
+        # 会认真配一条 fallback 链而它根本不执行。
+        "auto_fallback": _effective_auto_fallback(cfg),
         "models": [m.model_dump(mode="json") for m in cfg.models],
     }
 
@@ -1303,6 +1351,10 @@ async def api_admin_models_put(
         validated = ModelConfig.model_validate(body)
     except Exception as e:
         raise HTTPException(400, detail=f"模型配置不合法: {e}") from e
+
+    # 保密红线: 内网模型不许因 500 切公网。必须在这里拦 ——
+    # test_fallback_500_policy 只看 models.yaml, 库里的模型不在它视野内。
+    _check_fallback_500_policy(validated)
 
     cfg = get_config()
     existing = {m.name for m in cfg.models}
@@ -1371,9 +1423,13 @@ async def api_admin_models_delete(
         raise HTTPException(
             400,
             detail=(
-                f"模型 {name} 还被这些模型的 fallback 链引用: {', '.join(referenced_by)}。"
-                "先把它从那些链里去掉再删 —— 否则那条链会指向不存在的模型, "
-                "而 fallback 只在上游出错时才走, 平时看不出来。"
+                f"模型 {name} 还被这些模型的失败切换链引用:\n"
+                + "\n".join(f"    · {r}" for r in referenced_by)
+                + "\n\n"
+                "请先逐个编辑它们、在「失败切换」里移除这一跳, 然后再删。\n\n"
+                "为什么要拦: 链里指向不存在的模型时, gateway 只会记一行日志然后"
+                "跳过那一跳 —— 而失败切换只在上游出错时才走, 平时完全看不出来, "
+                "等真出故障那天才发现兜底少了一环。"
             ),
         )
 

@@ -142,8 +142,12 @@ def test_不许删掉还被_fallback_链引用的(client):
     )
     r = c.delete("/api/admin/models/target")
     assert r.status_code == 400
-    assert "fallback" in r.json()["detail"]
-    assert "main" in r.json()["detail"]
+    d = r.json()["detail"]
+    # 断言实质内容而不是某个词 —— 文案会改, 但"必须点名是谁在引用"和
+    # "必须给出下一步"这两件事不该因为改文案就丢掉。
+    assert "main" in d, "要点名是哪个模型在引用, 否则得自己一个个翻"
+    assert "失败切换" in d, "要说清楚是哪一块配置"
+    assert "移除" in d or "去掉" in d, "要给出可执行的下一步"
 
 
 def test_删掉默认模型会自动指定新默认(client):
@@ -227,3 +231,62 @@ def test_删除时库出错不会假装删成功(client, monkeypatch):
     r = c.delete("/api/admin/models/m1")
     assert r.status_code == 500
     assert "db down" in r.json()["detail"]
+
+
+# ── 失败切换 (fallback) 相关 (7/30) ──────────────────────────────────
+
+
+def test_内网模型不许因_500_切公网(client):
+    """保密红线, 不是风格问题。
+
+    内网返 500 触发 fallback → 内网 prompt 落到公网模型 = 内网内容出公司。
+
+    **必须在接口上拦**: tests/test_fallback_500_policy.py 读的是
+    config/models.yaml, 而模型改成可在界面上增删改之后, 库里的模型完全
+    不在那个测试的视野内 —— 通过界面加一个内网模型填 500, 没有任何测试会红。
+    """
+    c, *_ = client
+    r = c.put(
+        "/api/admin/models/priv",
+        json=_model(
+            "priv",
+            tier="private",
+            fallback={"on_errors": [429, 500, 503], "chain": ["other"]},
+        ),
+    )
+    assert r.status_code == 400
+    assert "保密" in r.json()["detail"]
+    assert "500" in r.json()["detail"]
+
+
+def test_公网模型可以含_500(client):
+    """公网之间切换不涉及跨边界, 500 是允许的 (而且体验上应该有)."""
+    c, *_ = client
+    r = c.put(
+        "/api/admin/models/pub",
+        json=_model(
+            "pub",
+            tier="public",
+            fallback={"on_errors": [429, 500, 503], "chain": ["other"]},
+        ),
+    )
+    assert r.status_code == 200
+
+
+def test_内网模型没有_fallback_不受影响(client):
+    c, *_ = client
+    r = c.put("/api/admin/models/priv2", json=_model("priv2", tier="private"))
+    assert r.status_code == 200
+
+
+def test_列表要告诉界面_fallback_全局开没开(client, monkeypatch):
+    """默认是关的。不告诉界面的话, 管理员会认真配一条永不执行的链 ——
+    配置了不生效且无任何提示, 是最难查的一类。"""
+    c, *_ = client
+    monkeypatch.delenv("CATFISH_AUTO_FALLBACK", raising=False)
+    body = c.get("/api/admin/models").json()
+    assert "auto_fallback" in body
+    assert body["auto_fallback"] is False, "models.yaml 没开且无 env → 应为 False"
+
+    monkeypatch.setenv("CATFISH_AUTO_FALLBACK", "1")
+    assert c.get("/api/admin/models").json()["auto_fallback"] is True

@@ -72,7 +72,32 @@ export interface ModelListResponse {
   /** false = 没配库, 模型来自 models.yaml, 只读 —— 界面要据此禁用编辑 */
   editable: boolean;
   revision: number | null;
+  /** 失败切换全局开关 (yaml auto_fallback 或 env CATFISH_AUTO_FALLBACK)。
+   *  **默认是关的**。关着的时候界面必须说出来 —— 否则管理员会认真配一条
+   *  fallback 链, 而它根本不执行。 */
+  auto_fallback: boolean;
   models: ModelConfig[];
+}
+
+/** 一条 fallback 链里某一跳会不会被运行时跳过.
+ *
+ * 规则抄自 gateway 的 resolve_chain (fallback.py:239) —— 那里对每种情况都是
+ * logger.warning + continue, 也就是**静默少一跳**, 员工侧完全无感。所以要在
+ * 配的时候就显示出来, 而不是等出问题去翻日志。
+ */
+export function chainHopIssue(
+  primary: ModelConfig,
+  candidateName: string,
+  all: ModelConfig[],
+): string | null {
+  if (candidateName === primary.name) return "指向自己，会被跳过";
+  const c = all.find((m) => m.name === candidateName);
+  if (!c) return "这个模型不存在，会被跳过";
+  if (c.mode !== primary.mode)
+    return `用途不同（${primary.mode} vs ${c.mode}），会被跳过`;
+  if (primary.tier === "private" && c.tier === "public")
+    return "内网切公网：大 prompt 时会被跳过（防内网内容出公司）";
+  return null;
 }
 
 export interface PutResponse {

@@ -19,6 +19,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { RoleGate } from "../../components/RoleGate";
 import {
+  chainHopIssue,
   emptyModel,
   modelConfigApi,
   validateModel,
@@ -243,6 +244,8 @@ function ModelConfigEditor() {
           model={editing}
           isNew={isNew}
           busy={busy}
+          allModels={data?.models ?? []}
+          autoFallback={data?.auto_fallback ?? false}
           onChange={setEditing}
           onCancel={() => {
             setEditing(null);
@@ -327,6 +330,8 @@ function ModelForm({
   model,
   isNew,
   busy,
+  allModels,
+  autoFallback,
   onChange,
   onCancel,
   onSave,
@@ -334,6 +339,8 @@ function ModelForm({
   model: ModelConfig;
   isNew: boolean;
   busy: boolean;
+  allModels: ModelConfig[];
+  autoFallback: boolean;
   onChange: (m: ModelConfig) => void;
   onCancel: () => void;
   onSave: () => void;
@@ -604,6 +611,214 @@ function ModelForm({
         {model.default ? (
           <div style={HINT}>
             保存后会自动取消其它模型的默认标记 —— 默认模型全局只能有一个。
+          </div>
+        ) : null}
+      </div>
+
+      <FallbackEditor
+        model={model}
+        all={allModels}
+        autoFallback={autoFallback}
+        onChange={onChange}
+      />
+    </div>
+  );
+}
+
+/** 失败切换编辑器 (7/30).
+ *
+ * ## 为什么这一块要特别啰嗦
+ *
+ * fallback 是**只在上游出错时才走**的路径 —— 配错了平时完全看不出来,
+ * 要等真的出故障那天才发现兜底没生效。而 gateway 的 resolve_chain 对每种
+ * 配置问题都是 logger.warning + continue, 也就是静默少一跳。
+ *
+ * 所以这里把运行时会跳过的情况全部提前显示出来, 而不是让人配完就走。
+ */
+function FallbackEditor({
+  model,
+  all,
+  autoFallback,
+  onChange,
+}: {
+  model: ModelConfig;
+  all: ModelConfig[];
+  autoFallback: boolean;
+  onChange: (m: ModelConfig) => void;
+}) {
+  const fb = model.fallback ?? { on_errors: [429, 503, 504, "timeout"], chain: [], max_hops: 2 };
+  const chain = fb.chain ?? [];
+  const onErrors = fb.on_errors ?? [];
+
+  const setFb = (patch: Partial<NonNullable<ModelConfig["fallback"]>>) =>
+    onChange({ ...model, fallback: { ...fb, ...patch } });
+
+  const has500 = onErrors.includes(500);
+  const isPrivate = model.tier === "private";
+  const candidates = all.filter((m) => m.name !== model.name && !chain.includes(m.name));
+
+  return (
+    <div
+      style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid var(--border)" }}
+    >
+      <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 6 }}>
+        失败切换（fallback）{" "}
+        <span style={{ color: "var(--text-muted)" }}>
+          （上游出错时自动改用别的模型。只在出错时才走，平时看不出配得对不对）
+        </span>
+      </div>
+
+      {/* 全局开关状态。关着的时候配了也不执行 —— 这是最要紧的一条提示 */}
+      {!autoFallback ? (
+        <div
+          style={{
+            ...BOX,
+            padding: 6,
+            fontSize: 11,
+            lineHeight: 1.6,
+            borderColor: "var(--warn, #d97706)",
+            marginBottom: 8,
+          }}
+        >
+          <b>失败切换目前全局关闭</b> —— 下面配的链<b>不会执行</b>。
+          <div style={{ color: "var(--text-muted)", marginTop: 2 }}>
+            上游出错时直接把错误返回给员工，不自动改用别的模型。这是默认行为
+            （改用别的模型会让"这次回答来自哪个模型"变得不可预测）。
+            要打开：models.yaml 顶层加 <code>auto_fallback: true</code>，
+            或给 gateway 设环境变量 <code>CATFISH_AUTO_FALLBACK=1</code>，然后重启。
+          </div>
+        </div>
+      ) : null}
+
+      <label style={LABEL}>切换顺序（从上到下依次尝试）</label>
+      {chain.length === 0 ? (
+        <div style={{ ...HINT, marginBottom: 4 }}>
+          没有配 —— 这个模型出错时直接报错给员工。
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 3, marginBottom: 4 }}>
+          {chain.map((n, i) => {
+            const issue = chainHopIssue(model, n, all);
+            return (
+              <div
+                key={n}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  fontSize: 12,
+                  padding: "2px 0",
+                }}
+              >
+                <span style={{ color: "var(--text-muted)", width: 16 }}>{i + 1}.</span>
+                <code>{n}</code>
+                {issue ? (
+                  <span style={{ fontSize: 10, color: "var(--warn, #d97706)" }}>
+                    ⚠ {issue}
+                  </span>
+                ) : null}
+                <div style={{ flex: 1 }} />
+                <button
+                  style={{ ...BTN, padding: "0 6px" }}
+                  disabled={i === 0}
+                  onClick={() => {
+                    const next = [...chain];
+                    [next[i - 1], next[i]] = [next[i], next[i - 1]];
+                    setFb({ chain: next });
+                  }}
+                >
+                  ↑
+                </button>
+                <button
+                  style={{ ...BTN, padding: "0 6px" }}
+                  disabled={i === chain.length - 1}
+                  onClick={() => {
+                    const next = [...chain];
+                    [next[i], next[i + 1]] = [next[i + 1], next[i]];
+                    setFb({ chain: next });
+                  }}
+                >
+                  ↓
+                </button>
+                <button
+                  style={{ ...BTN, padding: "0 6px", color: "var(--danger, #dc2626)" }}
+                  onClick={() => setFb({ chain: chain.filter((x) => x !== n) })}
+                >
+                  移除
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {candidates.length ? (
+        <select
+          style={{ ...INPUT, maxWidth: 280 }}
+          value=""
+          onChange={(e) => {
+            if (e.target.value) setFb({ chain: [...chain, e.target.value] });
+          }}
+        >
+          <option value="">+ 添加一个备用模型…</option>
+          {candidates.map((m) => {
+            const issue = chainHopIssue(model, m.name, all);
+            return (
+              <option key={m.name} value={m.name}>
+                {m.display_name}
+                {issue ? `（${issue}）` : ""}
+              </option>
+            );
+          })}
+        </select>
+      ) : null}
+
+      <div style={{ marginTop: 8 }}>
+        <label style={LABEL}>触发条件</label>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, fontSize: 12 }}>
+          {([429, 500, 502, 503, 504] as const).map((code) => (
+            <label key={code} style={{ display: "flex", gap: 3 }}>
+              <input
+                type="checkbox"
+                checked={onErrors.includes(code)}
+                // 内网模型的 500 是保密红线, 直接禁掉复选框而不是等保存报错
+                disabled={code === 500 && isPrivate}
+                onChange={(e) =>
+                  setFb({
+                    on_errors: e.target.checked
+                      ? [...onErrors, code]
+                      : onErrors.filter((x) => x !== code),
+                  })
+                }
+              />
+              {code}
+            </label>
+          ))}
+          <label style={{ display: "flex", gap: 3 }}>
+            <input
+              type="checkbox"
+              checked={onErrors.includes("timeout")}
+              onChange={(e) =>
+                setFb({
+                  on_errors: e.target.checked
+                    ? [...onErrors, "timeout"]
+                    : onErrors.filter((x) => x !== "timeout"),
+                })
+              }
+            />
+            超时
+          </label>
+        </div>
+
+        {isPrivate ? (
+          <div style={HINT}>
+            内网模型的 500 不可勾选 ——
+            内网返 500 就切公网，等于内网内容出公司，违反保密要求。
+          </div>
+        ) : !has500 ? (
+          <div style={{ ...HINT, color: "var(--warn, #d97706)" }}>
+            公网模型建议勾上 500：公网之间切换不涉及跨边界，勾上员工撞 500
+            时能自动切走而不是直接看到报错。
           </div>
         ) : null}
       </div>
