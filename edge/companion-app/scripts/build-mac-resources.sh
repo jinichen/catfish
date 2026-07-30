@@ -424,9 +424,30 @@ esac
 echo "  PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=$PW_PLATFORM"
 echo "  (playwright 会打一句 'your OS is not officially supported ... downloading"
 echo "   fallback build for $PW_PLATFORM' · 用 override 时必然出现, 正常)"
+# ⚠ playwright 版本必须钉死, 不能用 latest (7/30)
+#
+# 原本是 `npx --yes playwright install chromium` —— 不带版本号, npx 每次拉
+# latest。而**装进包的 chromium 版本是由 playwright 版本决定的**:
+#     playwright 1.60.0 → Chrome for Testing 151.0.7922.34 (chromium v1234)
+# 换个 playwright 版本就换个 chromium, 而脚本不会有任何提示。
+#
+# 后果有三层:
+#   1. 同一份代码不同时间打出的包内容不同 —— 出问题时没法复现"上个月那个包"
+#   2. 员工拿到的浏览器版本静默变化, 没人测过也没人知道换了
+#   3. 本脚本有两处依赖 playwright 的内部约定, 会跟着漂:
+#        · 下面 [6c] 的目录名校验依赖 chrome-mac-x64 / chrome-mac-arm64 布局
+#        · 上面的 mac15 依赖它下载表里有这个键
+#      查过 1.49.1 与 1.60.0 这两处一致, 但 1.60 已经把 lib 打成 bundle 了
+#      (老的 lib/utils/hostPlatform.js 路径没了), 说明它内部结构会动。
+#
+# 钉在这个版本 = 今天行为不变 (latest 现在就是 1.60.0), 变的是三个月后
+# 再打还是同一个包。要升 chromium 就改这个数字 —— 让它成为一个**有意识的
+# 动作**, 而不是每次打包随机发生。
+PW_VERSION="1.60.0"
+echo "  playwright@$PW_VERSION (钉死 · 决定 chromium 版本)"
 PLAYWRIGHT_BROWSERS_PATH="$PW_CACHE" \
 PLAYWRIGHT_HOST_PLATFORM_OVERRIDE="$PW_PLATFORM" \
-    npx --yes playwright install chromium
+    npx --yes "playwright@$PW_VERSION" install chromium
 
 echo ""
 echo "=== [6c/6] tar pack chromium-embed · from $PW_CACHE ==="
