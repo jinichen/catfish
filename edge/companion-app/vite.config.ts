@@ -60,10 +60,24 @@ export default defineConfig(async () => ({
     },
   },
 
-  // C1 (6/6 鸿波 marathon CI matrix audit): vitest 4 严格 — store/*.test.ts 是
+  // C1 (6/6 鸿波 marathon CI matrix audit): vitest 4 严格 — 下面这三个是
   // 自定义 console.log mini runner (npx tsx 单跑, 不走 vitest), 没用 describe/it,
-  // vitest collect 报 "No test suite found" 整 job 挂. 排除这 3 个走 npm run
-  // test:store 单跑. lib/ 真用 describe/it 的 vitest test 仍跑.
+  // vitest collect 报 "No test suite found" 整 job 挂, 所以排除。
+  //
+  // ⚠ 7/30 更正两处:
+  //
+  //   1. src/store/email.test.ts 曾一并排除, 标注"也是自定义 runner
+  //      (待 audit, 先排除防 CI 挂)"。**那个判断是错的** —— 它
+  //      `import { describe, it, expect } from "vitest"`, 是标准 vitest 测试,
+  //      自己的文件注释还写着跑法就是 `vitest src/store/email.test.ts`。
+  //      于是它从被排除那天起一次都没跑过, 而且没人会发现 (排除掉的测试
+  //      不会红)。现在放回来。
+  //
+  //   2. 原注释说"走 npm run test:store 单跑" —— **package.json 里没有
+  //      test:store 这个脚本**。也就是说剩下这三个自定义 runner 至今没有
+  //      任何自动化入口, 只能手动 npx tsx 跑。
+  //      它们是真的自定义 runner, 排除本身没错; 但"有别的地方在跑"这个
+  //      印象是假的。要么补脚本要么改造成 vitest, 别让注释替不存在的机制背书。
   test: {
     exclude: [
       "**/node_modules/**",
@@ -71,7 +85,6 @@ export default defineConfig(async () => ({
       "src/store/auto_continue.test.ts",
       "src/store/queue.test.ts",
       "src/store/recmode.test.ts",
-      "src/store/email.test.ts",   // 也是自定义 runner (待 audit, 先排除防 CI 挂)
     ],
   },
 
