@@ -170,9 +170,22 @@ interface ToolCallAcc {
  * 抽 export 便于单测. 改动: 调用方 chat.ts 内一处, 老 inline 公式删.
  */
 export function computeIdleTimeoutMs(model: string): number {
-  return /catfish-private-(main|vision|coder)/i.test(model)
-    ? 180_000
-    : 90_000;
+  // 7/30: 从 /catfish-private-(main|vision|coder)/ 改成认**前缀**。
+  //
+  // 原来枚举三个后缀, 而全代码库判断内外网用的都是前缀约定 catfish-private-
+  // (PerfCard.tsx:262 / types/audit.ts:7 都是 startsWith)。两套判定并存,
+  // 迟早对不上。
+  //
+  // 模型现在能在中央门户 /admin/models 界面上新增之后, 这个差别会真出事:
+  // 客户加一个 catfish-private-glm (models.yaml 里正好有个注释掉的) 会落到
+  // 90s 分支, 而上面注释自己写着内网模型单 call 要 80-150s —— 90s 会中途
+  // abort, 症状正是本函数当初要修的那个 "对话框跑一半停下来" (P3.5.34)。
+  //
+  // 顺带: 枚举里的 coder 在 models.yaml 里根本不存在, 是预留了没建的名字。
+  //
+  // 今天没有行为变化 —— 现存 catfish-private-* 里除 main/vision 外只有
+  // embed, 而 embedding 模型不走聊天流。改的是"以后加内网模型会不会踩坑"。
+  return /^catfish-private-/i.test(model) ? 180_000 : 90_000;
 }
 
 export async function streamChat(params: SendChatParams): Promise<void> {

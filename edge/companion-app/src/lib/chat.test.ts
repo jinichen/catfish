@@ -27,6 +27,20 @@ describe("P3.5.34 修-A: computeIdleTimeoutMs", () => {
     expect(computeIdleTimeoutMs("CATFISH-PRIVATE-MAIN")).toBe(180_000);
   });
 
+  // 7/30: 判定从"枚举三个后缀"改成"认 catfish-private- 前缀"。
+  // 模型能在中央门户界面上新增之后, 客户加的内网模型不会叫 main/vision/coder,
+  // 而它们同样慢 —— 落到 90s 会中途 abort, 正是本函数要修的那个症状。
+  it("客户新加的内网模型也要 180s（不能只认写死的三个后缀）", () => {
+    expect(computeIdleTimeoutMs("catfish-private-glm")).toBe(180_000);
+    expect(computeIdleTimeoutMs("catfish-private-随便什么名字")).toBe(180_000);
+  });
+
+  it("公网模型不受影响 — 名字里含 private 也不算", () => {
+    // 前缀判定要锚定开头, 不能是"包含" —— 否则公网模型叫
+    // catfish-public-private-ish 之类会被误判成内网。
+    expect(computeIdleTimeoutMs("catfish-public-private-ish")).toBe(90_000);
+  });
+
   it("deepseek 公网 → 90s (快)", () => {
     expect(computeIdleTimeoutMs("catfish-public-deepseek-flash")).toBe(90_000);
   });

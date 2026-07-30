@@ -11,4 +11,6 @@ cpython-*.tar.gz
 hermes-agent-bundle.tar.gz
 node-embed.tar.gz
 chromium-embed.tar.gz
+# 7/30 新增: catfish-email 的 wheel 包, 同样由打包脚本生成
+catfish-email-dist.tar.gz
 *.log
