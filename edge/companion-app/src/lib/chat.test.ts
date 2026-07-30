@@ -57,7 +57,38 @@ describe("P3.5.34 修-A: computeIdleTimeoutMs", () => {
     expect(computeIdleTimeoutMs("")).toBe(90_000);
   });
 
-  it("private 但不是 main/vision/coder → 90s (默认快)", () => {
-    expect(computeIdleTimeoutMs("catfish-private-random")).toBe(90_000);
+  // ── 7/30 推翻了一个 6/18 的决定, 记下原委 ──────────────────────────
+  //
+  // 这条原本是:
+  //     it("private 但不是 main/vision/coder → 90s (默认快)", ...)
+  //     expect(computeIdleTimeoutMs("catfish-private-random")).toBe(90_000);
+  //
+  // 它跟 computeIdleTimeoutMs 是同一个提交 (5b0f5e2, 6/18) 写的, 钉的是
+  // "只有枚举的三个内网模型给 180s, 其它一律 90s"。
+  //
+  // 7/30 改成认 catfish-private- 前缀, 理由:
+  //
+  //   1. 这个前缀的含义就是**内网自建平台**。函数自己的注释写着那三个是
+  //      "40K context 80-150s 单 call" —— 慢是因为跑在内网平台上, 不是因为
+  //      叫 main/vision/coder。同平台上新加的模型同样慢。
+  //
+  //   2. 模型现在能在中央门户 /admin/models 界面上新增。客户加的内网模型
+  //      不会恰好叫 main/vision/coder, 于是落到 90s。
+  //
+  //   3. 两种错的代价不对称:
+  //        慢模型给 90s → 中途 abort + 白跑一次生成, 用户看到"跑一半停下来"
+  //                       (P3.5.34 当初要修的正是这个症状)
+  //        快模型给 180s → 真卡住时多等 90 秒才重试
+  //      前者是实际发生过的 bug, 后者只是在已经出问题的场景里多等一会。
+  //
+  //   4. 全代码库其它地方判断内外网用的都是前缀 (PerfCard.tsx:262 /
+  //      types/audit.ts:7 的 startsWith)。原来这里是第二套判定。
+  //
+  // 保留下面这条替代用例, 钉住"前缀之外的不算" —— 这是原来那条真正想守的
+  // 边界 (别让 90s 分支被无限扩大), 只是边界的位置挪了。
+  it("不带 catfish-private- 前缀的一律 90s", () => {
+    expect(computeIdleTimeoutMs("catfish-private")).toBe(90_000); // 少个连字符
+    expect(computeIdleTimeoutMs("private-main")).toBe(90_000); // 缺 catfish-
+    expect(computeIdleTimeoutMs("x-catfish-private-main")).toBe(90_000); // 前面有东西
   });
 });
