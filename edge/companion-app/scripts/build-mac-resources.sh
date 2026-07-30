@@ -125,6 +125,14 @@ if [ -d "$HERMES_SRC" ]; then
     echo "  clean $HERMES_SRC"
     rm -rf "$HERMES_SRC"
 fi
+# $HERMES_TAG 若是 annotated tag, git 会打一行:
+#     warning: refs/tags/<tag> <sha> is not a commit!
+# 那个 <sha> 是 **tag 对象**自己的 sha, 不是它指向的 commit —— 浅克隆时 git
+# 就这么提示。checkout 落点是对的 (紧接着的核对会验), 这行可以忽略。
+#
+# 先说一句, 是因为它每次都出现: 一条长期存在、其实无害的 warning 会让人对
+# 真正的 warning 脱敏 —— 底下那些"版本对不上"的检查才是要看的。
+echo "  (annotated tag 会打一行 'is not a commit!' warning · 正常, 落点由下面的核对负责)"
 git clone --depth 1 --branch "$HERMES_TAG" \
     https://github.com/NousResearch/hermes-agent.git "$HERMES_SRC"
 
