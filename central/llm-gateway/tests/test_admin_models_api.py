@@ -174,3 +174,56 @@ def test_重排路径不会被当成模型名(client):
     r = c.put("/api/admin/model-order", json={"names": ["m1"]})
     assert r.status_code == 200
     assert r.json()["ok"] is True
+
+
+# ── 库出错时的报错质量 (7/30) ────────────────────────────────────────
+
+
+def test_迁移没跑时的报错要能指导下一步(client, monkeypatch):
+    """原本这种情况只返 "HTTP 500: Internal Server Error"。
+
+    管理界面上就显示那一行 —— 对着屏幕的人不知道发生了什么, 更不知道
+    下一步该做什么, 而真正的原因埋在 gateway 日志里 (点保存的人未必有
+    服务器日志权限)。
+    """
+    from catfish_gateway import model_store as MS
+
+    def _boom(*a, **kw):
+        raise RuntimeError('relation "gateway_models" does not exist')
+
+    c, *_ = client
+    monkeypatch.setattr(MS, "upsert_model", _boom)
+    r = c.put("/api/admin/models/m", json=_model("m"))
+    assert r.status_code == 500
+    d = r.json()["detail"]
+    assert "迁移" in d, "要说清楚是迁移没跑"
+    assert "alembic upgrade head" in d, "要给出具体命令"
+    assert "does not exist" in d, "原始错误也要留着, 便于排查别的成因"
+
+
+def test_其它库错误也不返空洞的_500(client, monkeypatch):
+    from catfish_gateway import model_store as MS
+
+    def _boom(*a, **kw):
+        raise RuntimeError("connection refused")
+
+    c, *_ = client
+    monkeypatch.setattr(MS, "upsert_model", _boom)
+    r = c.put("/api/admin/models/m", json=_model("m"))
+    assert r.status_code == 500
+    assert "connection refused" in r.json()["detail"]
+
+
+def test_删除时库出错不会假装删成功(client, monkeypatch):
+    """静默成功的话, 界面显示已删除但模型还在, 刷新又出现 —— 最迷惑的一种."""
+    from catfish_gateway import model_store as MS
+
+    c, *_ = client
+    c.put("/api/admin/models/m1", json=_model("m1"))
+    c.put("/api/admin/models/m2", json=_model("m2"))
+    monkeypatch.setattr(
+        MS, "delete_model", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("db down"))
+    )
+    r = c.delete("/api/admin/models/m1")
+    assert r.status_code == 500
+    assert "db down" in r.json()["detail"]

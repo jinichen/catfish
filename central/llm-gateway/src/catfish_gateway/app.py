@@ -1215,6 +1215,38 @@ def _require_model_admin(user: User) -> None:
         )
 
 
+def _model_store_error(e: Exception) -> HTTPException:
+    """把库操作的异常翻译成运维**看得懂、能动手**的错误 (7/30).
+
+    为什么要专门做这件事: 写接口原本让异常直接往外抛, FastAPI 兜成
+    "HTTP 500: Internal Server Error"。管理界面上就显示这一行 —— 对着屏幕的
+    人完全不知道发生了什么, 更不知道下一步该做什么。真正的原因埋在 gateway
+    日志里, 而点保存的人未必有服务器日志权限。
+
+    读接口 (read_models / revision) 已经是吞异常 + 记日志 + 降级, 那条路不会
+    走到这里; 写接口不能吞 —— 吞了就是"显示保存成功但什么都没写", 比报错糟。
+    所以是"抛, 但把话说清楚"。
+
+    最常见的一种单独识别: 迁移没跑, 表不存在。这在本机 dev 和刚升级的环境
+    上都很容易发生, 而错误原文 (relation "gateway_models" does not exist)
+    对不熟悉这块的人不构成行动指引。
+    """
+    msg = str(e)
+    if "gateway_models" in msg or "gateway_config_meta" in msg:
+        if "does not exist" in msg or "UndefinedTable" in type(e).__name__:
+            return HTTPException(
+                500,
+                detail=(
+                    "模型配置表不存在 —— 数据库迁移还没跑过。\n"
+                    "在 gateway 所在环境执行:\n"
+                    "    alembic upgrade head\n"
+                    "然后重启 gateway 让它播种出厂模型。\n\n"
+                    f"原始错误: {msg}"
+                ),
+            )
+    return HTTPException(500, detail=f"写模型配置失败: {msg}")
+
+
 def _require_model_store() -> None:
     """没配库时明确拒绝, 而不是假装成功.
 
@@ -1284,14 +1316,19 @@ async def api_admin_models_put(
     #   普通的"设为默认"变成了"把出厂配置全量导入"。
     #   7/30 被 test_删掉默认模型会自动指定新默认 逮到: 库空时 PUT 一个
     #   default=True 的模型, 库里凭空多出 7 个 yaml 模型。
-    if validated.default:
-        for row in model_store.read_models() or []:
-            if row.get("name") != name and row.get("default"):
-                model_store.upsert_model(
-                    row["name"], {**row, "default": False}, by=user.sub
-                )
+    try:
+        if validated.default:
+            for row in model_store.read_models() or []:
+                if row.get("name") != name and row.get("default"):
+                    model_store.upsert_model(
+                        row["name"], {**row, "default": False}, by=user.sub
+                    )
 
-    model_store.upsert_model(name, validated.model_dump(mode="json"), by=user.sub)
+        model_store.upsert_model(name, validated.model_dump(mode="json"), by=user.sub)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise _model_store_error(e) from e
     invalidate_config()
     return {
         "ok": True,
@@ -1341,7 +1378,10 @@ async def api_admin_models_delete(
         )
 
     was_default = any(m.name == name and m.default for m in cfg.models)
-    deleted = model_store.delete_model(name, by=user.sub)
+    try:
+        deleted = model_store.delete_model(name, by=user.sub)
+    except Exception as e:
+        raise _model_store_error(e) from e
 
     # 删掉的是默认模型 → 必须立刻指定一个新的, 否则 default_model() 会退化成
     # "列表第一个", 也就是取决于排序, 员工下次开聊用到哪个模型不可预测。
@@ -1351,8 +1391,15 @@ async def api_admin_models_delete(
         if rest:
             d = rest[0].model_dump(mode="json")
             d["default"] = True
-            model_store.upsert_model(rest[0].name, d, by=f"{user.sub} (自动接任默认)")
-            promoted = rest[0].name
+            try:
+                model_store.upsert_model(
+                    rest[0].name, d, by=f"{user.sub} (自动接任默认)"
+                )
+                promoted = rest[0].name
+            except Exception as e:
+                # 模型已经删了但新默认没指定成功 —— 这个状态必须说出来,
+                # 否则 default_model() 会退化成"列表第一个"而没人知道。
+                raise _model_store_error(e) from e
 
     invalidate_config()
     return {
@@ -1383,7 +1430,10 @@ async def api_admin_models_order(
     names = body.get("names")
     if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
         raise HTTPException(400, detail="body 需要 {\"names\": [模型名, ...]}")
-    model_store.set_order(names, by=user.sub)
+    try:
+        model_store.set_order(names, by=user.sub)
+    except Exception as e:
+        raise _model_store_error(e) from e
     invalidate_config()
     return {"ok": True, "revision": model_store.revision()}
 
