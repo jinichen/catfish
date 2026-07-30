@@ -117,7 +117,14 @@ services:
       # 「系统管理」页 Identity (admin) 显示"不可达"。
       #
       # 另外三个反代 (mcp / hub / wiki) 只能从 yaml 读, 见
-      # llm-gateway/config-overlay/models.yaml 末尾。
+      # llm-gateway/config/models.yaml 末尾。
+      #
+      # 7/30 更正: 这里原本写的是 config-overlay/models.yaml —— **那个目录
+      # 没有任何东西读它**。本 compose 里挂进 gateway 的是
+      #     ./llm-gateway/config:/app/config:ro
+      # 且 CATFISH_CONFIG=/app/config/models.yaml, setup.sh 也不会把 overlay
+      # 拷进 config/。照着老注释去改 overlay 的人, 会改完、重启、然后发现
+      # 502 一点没变, 而且找不到原因 —— 因为改的那份文件从头到尾没被加载。
       CATFISH_IDENTITY_URL: http://identity:8998
       # 6/9 BL-F10 真实测: 单 worker GIL 卡死, 1000 user P99=34s; 4 worker P99=15s
       # (2.2× 吞吐, 56% latency 降). 默认 4, 4 vCPU 客户机房刚好用满. 8 vCPU 改 8.
