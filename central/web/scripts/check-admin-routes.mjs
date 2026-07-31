@@ -130,7 +130,31 @@ function scanMovedLinks(root, label, skip = []) {
 
 // navConfig.ts 里的 LEGACY_REDIRECTS 就是专门写老路径的, 跳过。
 scanMovedLinks(resolve(WEB, "src"), "web", ["navConfig.ts"]);
-scanMovedLinks(resolve(COMPANION, "src"), "companion");
+
+// ⚠ Companion 是**另一个仓的目录**, 不一定在。
+//
+// 这个脚本挂在 `npm run check` 上, 而 check 挂在 `npm run build` 上,
+// build 又在 web 的 Dockerfile 里跑 —— 那里的构建上下文只有 central/web
+// (docker-compose.yml `context: ./web`), edge/companion-app 根本不存在。
+//
+// 8/1 打包时实撞: web 镜像构建挂在
+//     Error: ENOENT: no such file or directory, scandir '/edge/companion-app/src'
+// 而且是**未捕获异常**直接崩, 不是这个脚本自己的报错格式, 排查的人看不出
+// 是哪条检查在闹。
+//
+// 同一个坑 check-audit-limits.mjs 早两轮就修过 (它要读 llm-gateway 源码),
+// 当时没顺手查同目录下还有谁有跨仓依赖 —— 就是这一条。
+//
+// 跳过而不是硬失败: 真正的把关发生在完整 checkout 里 (本机 + CI), 那里
+// 两个仓都在。但**跳过这件事要说出来**, 否则哪天路径改了会静默失效。
+if (existsSync(resolve(COMPANION, "src"))) {
+  scanMovedLinks(resolve(COMPANION, "src"), "companion");
+} else {
+  console.log(
+    "· 跳过 Companion 端的链接扫描: 找不到 edge/companion-app (只有前端的" +
+      "构建上下文, 比如 web 镜像的 docker build)。完整 checkout 里会真跑。",
+  );
+}
 
 // ── 报告 ────────────────────────────────────────────────────────────────
 if (problems.length === 0) {
