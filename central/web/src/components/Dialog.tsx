@@ -29,6 +29,177 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import { BTN, BTN_DANGER, BTN_PRIMARY } from "./DataTable";
 
+
+/** 模态窗的壳 —— 遮罩 / 面板 / Esc / 焦点管理 / aria (8/1 从 ConfirmDialog 抽出).
+ *
+ * 抽出来是因为**表单不该塞进确认对话框**: ConfirmDialog 的正文是 12px 灰字
+ * (它是给"说清楚后果"用的), 底部固定"取消 / 确定"两颗按钮。用它装一个
+ * 四五个字段的编辑表单, 字号和按钮语义都不对。
+ *
+ * 壳本身的几件事两者完全一样, 而且每一件写错都不容易发现:
+ *   · Esc 关闭 (键盘用户唯一的退路)
+ *   · 打开时焦点进面板、关闭时还回原处 (不还的话焦点掉到 body,
+ *     键盘用户得从整页顶部重新 Tab)
+ *   · 遮罩点击用 onMouseDown 且判断 target —— 在面板里按下、拖到遮罩上
+ *     才松手 (选文字时很常见) 不该被当成取消
+ *   · role/aria-modal/aria-labelledby
+ */
+export function Modal({
+  title,
+  titleExtra,
+  children,
+  footer,
+  width = 440,
+  onClose,
+  onSubmit,
+  /** 关闭被禁止时的原因。传了就不响应 Esc / 遮罩点击, **并把这句话显示出来**。
+   *
+   * ⚠ 一定要给能看的文案, 不是布尔。挡掉 Esc 却不说为什么 = "点了没反应",
+   * 正是这个文件开头骂的那个反模式。 */
+  lockReason,
+  /** 内容就绪的标志。异步加载的弹窗必须传 —— 见下面 focus effect。 */
+  ready = true,
+}: {
+  title: ReactNode;
+  /** 标题右侧, 放徽章这类 */
+  titleExtra?: ReactNode;
+  children: ReactNode;
+  /** 底部按钮区。不传则没有底栏。 */
+  footer?: ReactNode;
+  width?: number;
+  onClose: () => void;
+  /** 正文里按 Enter 时调用 (textarea 除外)。不传 = Enter 什么都不做。
+   *
+   * 表单弹窗必须传: 旧的编辑页是真 <form>, 在输入框里敲 Enter 直接保存。
+   * 换成弹窗之后只能用鼠标点的话是手感退化 —— ConfirmDialog 早就处理了
+   * 这条, Modal 第一版漏了。 */
+  onSubmit?: () => void;
+  lockReason?: string;
+  ready?: boolean;
+}) {
+  const titleId = useId();
+  const panelRef = useRef<HTMLDivElement>(null);
+  const locked = !!lockReason;
+
+  // 记住打开前的焦点, 关闭时还回去。**只在挂载/卸载时做一次** ——
+  // 放进下面那个 effect 的话, 每次 ready 变化都会重新记一遍。
+  const prevFocusRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    prevFocusRef.current = document.activeElement as HTMLElement | null;
+    return () => prevFocusRef.current?.focus?.();
+  }, []);
+
+  // ⚠ 依赖 [ready], 不能是 []。
+  //
+  // 异步加载的弹窗挂载那一刻正文里还没有输入框, 只有底部按钮 —— 只跑一次
+  // 的话焦点会落在**「关闭」**上, 于是:
+  //   · 数据回来后焦点不会移到第一个输入框, 打开弹窗直接敲字是白敲
+  //   · 焦点在「关闭」上, 顺手按 Enter / 空格 = 把弹窗关掉
+  // 用户编辑弹窗第一版就是这样。
+  useEffect(() => {
+    if (!ready) return;
+    panelRef.current
+      ?.querySelector<HTMLElement>("input:not([type=hidden]), textarea, select")
+      ?.focus();
+  }, [ready]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !locked) {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose, locked]);
+
+  return (
+    <div
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget && !locked) onClose();
+      }}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0, 0, 0, 0.35)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 1000,
+        padding: 16,
+      }}
+    >
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        style={{
+          background: "var(--bg-elev)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius-md)",
+          padding: 16,
+          width: `min(${width}px, 100%)`,
+          // 字段多时面板会比屏幕高 —— 让它自己滚, 而不是把底部按钮顶出视口。
+          maxHeight: "calc(100vh - 32px)",
+          display: "flex",
+          flexDirection: "column",
+          boxShadow: "0 8px 32px rgba(0, 0, 0, 0.18)",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <h3 id={titleId} style={{ margin: 0, fontSize: 14, fontWeight: 600, minWidth: 0 }}>
+            {title}
+          </h3>
+          {titleExtra}
+        </div>
+
+        {/* 只有内容区滚, 标题和底部按钮钉住 —— 跟后台页面的一屏布局同一条原则。 */}
+        <div
+          style={{ flex: 1, minHeight: 0, overflowY: "auto", marginTop: 8 }}
+          onKeyDown={
+            onSubmit
+              ? (e) => {
+                  if (e.key !== "Enter") return;
+                  const t = e.target as HTMLElement;
+                  // 多行里 Enter 是换行; select 展开时 Enter 是选中当前项。
+                  if (t.tagName === "TEXTAREA" || t.tagName === "SELECT") return;
+                  e.preventDefault();
+                  if (!locked) onSubmit();
+                }
+              : undefined
+          }
+        >
+          {children}
+        </div>
+
+        {footer ? (
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "flex-end",
+              gap: 8,
+              marginTop: 14,
+              flexWrap: "wrap",
+            }}
+          >
+            {/* 锁住时把原因说出来 —— 挡掉 Esc 和遮罩却不解释, 就是"点了没反应"。 */}
+            {lockReason && (
+              <span
+                style={{ fontSize: 11, color: "var(--text-muted)", marginRight: "auto" }}
+              >
+                {lockReason}，请稍候…
+              </span>
+            )}
+            {footer}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export function ConfirmDialog({
   title,
   children,

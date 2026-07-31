@@ -1,7 +1,7 @@
 /** /admin/users 列表页和表单页都要的两小块 (8/1 拆文件时抽出).
  *
- * 只有这两个 —— 单开一个文件是因为 UsersPage 和 UserForms 互相 import
- * 会成环 (列表页链到表单页, 表单页的详情里又要 RoleBadge)。
+ * 单开一个文件是因为 UsersPage 和 UserForms 互相 import 会成环
+ * (列表页要渲染编辑弹窗, 而弹窗的标题栏又要 RoleBadge)。
  */
 
 import type { CSSProperties } from "react";

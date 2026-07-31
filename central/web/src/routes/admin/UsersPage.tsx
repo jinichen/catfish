@@ -20,12 +20,25 @@
  *
  * 现在是一个真对话框 (type=password + 生成按钮 + 复制), 结果就地提示。
  *
- * 三个表单页 (创建/详情/编辑) 8/1 拆到了 UserForms.tsx —— 这个文件当时
- * 743 行, 再加对话框会撞军规 §1 的 800 行红线。
+ * 创建页和编辑弹窗在 UserForms.tsx (8/1 拆的, 当时这个文件 743 行,
+ * 再加对话框会撞军规 §1 的 800 行红线)。
+ *
+ * **编辑不跳页** —— 点「编辑」是在这一页上开弹窗, URL 变成
+ * `/admin/users/:email` (语义是"选中了谁", 跟 /admin/departments/:dept
+ * 一致)。为什么从跳页改过来, 见 UserForms.tsx 里 UserEditDialog 的注释。
  */
 
 import { useEffect, useState } from "react";
-import { Link, Route, Routes } from "react-router-dom";
+import {
+  Link,
+  Navigate,
+  Route,
+  Routes,
+  useNavigate,
+  useLocation,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
 
 import {
   Badge,
@@ -41,17 +54,40 @@ import { ConfirmDialog } from "../../components/Dialog";
 import { PageShell, Stale } from "../../components/PageShell";
 import { adminApi, type Role, type UserBrief } from "../../lib/admin";
 import { useAuthStore } from "../../store/auth";
-import { UserCreate, UserDetail, UserEdit } from "./UserForms";
+import { UserCreate, UserEditDialog } from "./UserForms";
 import { RoleBadge, copyText, genTempPassword } from "./usersShared";
 
 export function UsersPage() {
   return (
     <Routes>
-      <Route index element={<UsersList />} />
+      {/* 8/1: `:email` 不再是"详情页", 而是"列表 + 选中了谁"—— 列表照常渲染,
+          上面盖一个编辑弹窗。语义跟 /admin/departments/:dept 一致。
+          详情页删了 (它只比列表多四个字段, 而且是个死路), 那几个字段现在
+          在弹窗顶部的只读区。理由详见 UserForms.tsx 文件头。 */}
+      {/* ⚠ 一条 `:email?` 而不是 index + `:email` 两条。
+          两条 Route 渲染同一个组件时, react-router 恰好会复用实例 (它建
+          RenderedRoute 时没传 key), 所以列表 state 不重置、不重新请求。
+          但那是**巧合不是保证** —— 哪天有人给其中一条包一层 wrapper,
+          实例就会重挂载, 表现是"保存成功但那句提示一闪不见 + 多打一次
+          接口", 而且不报错。可选段让它变成结构上的同一条路由。
+          ("new" 是静态段, 排序上仍然优先于 `:email?"。) */}
       <Route path="new" element={<UserCreate />} />
-      <Route path=":email" element={<UserDetail />} />
-      <Route path=":email/edit" element={<UserEdit />} />
+      <Route path=":email?" element={<UsersList />} />
+      {/* 老链接 (书签 / 别人发过来的) 不能坏。 */}
+      <Route path=":email/edit" element={<RedirectToUser />} />
     </Routes>
+  );
+}
+
+/** `/admin/users/:email/edit` → `/admin/users/:email`。
+ *  用 replace —— 这个中转 URL 不该留在浏览器历史里, 否则按返回会回到它,
+ *  然后又被重定向, 等于返回键失灵。 */
+function RedirectToUser() {
+  const { email = "" } = useParams<{ email: string }>();
+  // search 要带上 —— 不带的话从带筛选的链接点进来, 重定向一次筛选就没了。
+  const { search } = useLocation();
+  return (
+    <Navigate to={`/admin/users/${encodeURIComponent(email)}${search}`} replace />
   );
 }
 
@@ -65,12 +101,62 @@ type Pending =
 
 function UsersList() {
   const me = useAuthStore((s) => s.me);
+  const navigate = useNavigate();
+  /** URL 里选中的人。有值 = 编辑弹窗开着。 */
+  const { email: selected } = useParams<{ email: string }>();
   const [users, setUsers] = useState<UserBrief[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState("");
-  const [roleFilter, setRoleFilter] = useState<Role | "">("");
-  const [includeDeleted, setIncludeDeleted] = useState(false);
+
+  // ── 筛选放 URL, 不放组件 state (8/1) ──────────────────────────
+  //
+  // 原来三个筛选都是 useState, 于是**离开这一页就全丢**: 搜了
+  // "engineering" 点进编辑, 回来搜索框是空的, 得重新搜一遍。这正是
+  // "跳来跳去体验差"的一半。
+  //
+  // 放 URL 之后: 弹窗开关不影响它 (query 跟着 pathname 一起在), 刷新不丢,
+  // 而且筛选结果能直接把链接发给人。
+  const [sp, setSp] = useSearchParams();
+  const filter = sp.get("q") ?? "";
+  // ⚠ 必须归一化, 不能只做类型断言。`?role=garbage` 时:
+  //   · 后端不校验枚举, 参数化 SQL 直接返 200 + 空列表 (不是 400)
+  //   · <select value="garbage"> 没有对应 option → selectedIndex = -1
+  //     → **筛选框显示成空白**, 跟"全部 role"长得一样
+  // 结果是"看起来没筛选, 却一个人都查不到", 而且没有任何东西说得清。
+  const rawRole = sp.get("role") ?? "";
+  const roleFilter: Role | "" = (["sysadmin", "admin", "manager", "employee"] as const).includes(
+    rawRole as Role,
+  )
+    ? (rawRole as Role)
+    : "";
+  const includeDeleted = sp.get("deleted") === "1";
+
+  /** 改一项筛选。空值就把这个 key 从 URL 里删掉 —— 不然地址栏会挂着
+   *  `?q=&role=&deleted=` 一串空参数, 分享出去也难看。
+   *  用 replace: 每敲一个字母都往历史里塞一条的话, 返回键就废了。 */
+  const setParam = (key: string, val: string) => {
+    const next = new URLSearchParams(sp);
+    if (val) next.set(key, val);
+    else next.delete(key);
+    setSp(next, { replace: true });
+  };
+
+  /** 搜索框的即时值。URL 是慢一拍写的 —— 见下面。 */
+  const [q, setQ] = useState(filter);
+  // URL 变了 (浏览器前进后退 / 别人发来的链接) 要同步回输入框。
+  useEffect(() => setQ(filter), [filter]);
+  // ⚠ 写 URL 要防抖。每敲一个字母一次 replaceState 的话:
+  //   · Safari 对 pushState/replaceState 有 30 秒 100 次的硬限流, 超了抛
+  //     SecurityError —— 手快的人连打 100 个字符 (含退格) 够得着
+  //   · 中文输入法组合期间每个字母都会写一次, 地址栏一直在抖
+  // 输入框用本地 state 即时回显, URL 落后 250ms, 两边都不难受。
+  useEffect(() => {
+    if (q === filter) return;
+    const t = setTimeout(() => setParam("q", q), 250);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q]);
+
   const [pending, setPending] = useState<Pending>(null);
   const [busy, setBusy] = useState(false);
   /** 操作结果。原来这些全是 window.alert。 */
@@ -108,6 +194,13 @@ function UsersList() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roleFilter, includeDeleted]);
 
+  /** 关弹窗 = 回到列表 URL, **带着当前筛选**。
+   *  丢了 query 的话关一次弹窗筛选就没了, 等于白改。 */
+  const closeDialog = () => {
+    const q = sp.toString();
+    navigate(`/admin/users${q ? `?${q}` : ""}`, { replace: true });
+  };
+
   const filtered = filter
     ? users.filter(
         (u) =>
@@ -135,10 +228,14 @@ function UsersList() {
   const columns: Column<UserBrief>[] = [
     {
       header: "Email",
-      // 点进详情是**跳页**, 所以这里必须是真 <Link> —— 只挂 onRowClick 的话
-      // 中键/⌘+点击开新标签、右键"在新标签打开"、悬停看目标 URL 全都没了。
+      // 仍然是真 <Link> —— 中键/⌘+点击开新标签、右键"在新标签打开"、悬停看
+      // 目标 URL 都要保留。只是目标从"详情页"变成了"列表 + 选中这个人",
+      // 所以点它是原地开弹窗, 不跳页。
       cell: (u) => (
-        <Link to={`/admin/users/${encodeURIComponent(u.email)}`} title={u.email}>
+        <Link
+          to={`/admin/users/${encodeURIComponent(u.email)}${sp.toString() ? `?${sp}` : ""}`}
+          title={u.email}
+        >
           {u.email}
         </Link>
       ),
@@ -187,7 +284,7 @@ function UsersList() {
               重置密码
             </button>
             <Link
-              to={`/admin/users/${encodeURIComponent(u.email)}/edit`}
+              to={`/admin/users/${encodeURIComponent(u.email)}${sp.toString() ? `?${sp}` : ""}`}
               style={{ ...BTN, textDecoration: "none", color: "var(--text)" }}
             >
               编辑
@@ -216,7 +313,11 @@ function UsersList() {
         <span style={{ color: "var(--text-muted)", fontSize: 11 }}>
           {me?.role === "sysadmin" ? "sysadmin 视角，含 sysadmin" : "admin 视角，不含 sysadmin"}
         </span>
-        <Link to="/admin/users/new" style={{ ...BTN_PRIMARY, textDecoration: "none" }}>
+        <Link
+          // 带上当前筛选 —— 创建页的"取消"要能回到你原来那个视图。
+          to={`/admin/users/new${sp.toString() ? `?${sp}` : ""}`}
+          style={{ ...BTN_PRIMARY, textDecoration: "none" }}
+        >
           + 创建用户
         </Link>
       </Toolbar>
@@ -227,13 +328,13 @@ function UsersList() {
           <input
             type="search"
             placeholder="搜 email / 名字 / 部门…"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
             style={{ ...INPUT, flex: 1, minWidth: 200 }}
           />
           <select
             value={roleFilter}
-            onChange={(e) => setRoleFilter(e.target.value as Role | "")}
+            onChange={(e) => setParam("role", e.target.value)}
             style={INPUT}
           >
             <option value="">全部 role</option>
@@ -254,7 +355,7 @@ function UsersList() {
             <input
               type="checkbox"
               checked={includeDeleted}
-              onChange={(e) => setIncludeDeleted(e.target.checked)}
+              onChange={(e) => setParam("deleted", e.target.checked ? "1" : "")}
             />
             含已删
           </label>
@@ -330,6 +431,22 @@ function UsersList() {
             他的历史用量记录不受影响 —— 审计数据按 email 存，跟账号是否存在无关。
           </div>
         </ConfirmDialog>
+      )}
+
+      {/* 编辑弹窗。URL 里有 :email 就开着 —— 所以深链接 / 刷新 / 分享出去的
+          链接都能直接落到"选中某个人"的状态, 而不需要额外的路由。 */}
+      {selected && (
+        <UserEditDialog
+          // key: 换一个人时要重新挂载, 否则上一个人的表单草稿会留在里面。
+          key={selected}
+          email={selected}
+          onClose={closeDialog}
+          onSaved={(msg) => {
+            closeDialog();
+            setNote({ ok: true, text: msg });
+            void refresh();
+          }}
+        />
       )}
 
       {pending?.kind === "reset" && (
