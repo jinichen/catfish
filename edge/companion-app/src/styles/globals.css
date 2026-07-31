@@ -3964,28 +3964,28 @@ button {
 }
 
 .chat-session-row[data-active="true"] .chat-session-row__delete {
-  color: #b91c1c;
-  background: #fff;
-  border-color: #f29a9a;
-  box-shadow: 0 2px 8px rgba(185, 28, 28, 0.12);
+  color: #fff;
+  background: #dc2626;
+  border-color: #b91c1c;
+  box-shadow: 0 4px 12px rgba(185, 28, 28, 0.26);
   opacity: 1;
   pointer-events: auto;
 }
 
 .chat-session-row:hover .chat-session-row__delete,
 .chat-session-row:focus-within .chat-session-row__delete {
-  color: #b91c1c;
-  background: #fff;
-  border-color: #ef8f8f;
-  box-shadow: 0 3px 10px rgba(185, 28, 28, 0.16);
+  color: #fff;
+  background: #dc2626;
+  border-color: #b91c1c;
+  box-shadow: 0 4px 12px rgba(185, 28, 28, 0.28);
   opacity: 1;
 }
 
 .chat-session-row__delete:hover {
   color: #fff;
-  background: #dc2626;
-  border-color: #b91c1c;
-  box-shadow: 0 4px 12px rgba(185, 28, 28, 0.3);
+  background: #b91c1c;
+  border-color: #991b1b;
+  box-shadow: 0 5px 14px rgba(153, 27, 27, 0.36);
   transform: translateY(-1px);
 }
 
