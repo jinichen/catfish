@@ -12,6 +12,12 @@ import { useEffect, useState } from "react";
 import { Card } from "../../components/Card";
 import { RoleGate } from "../../components/RoleGate";
 import { adminApi, type UsersAuditEvent } from "../../lib/admin";
+// 7/30: 原来是函数体里 `await import("../../lib/auth")`。那个 dynamic import
+// **一点作用都没有** —— auth.ts 被 App.tsx / NavBar.tsx / api.ts 静态引着,
+// 本来就在主 chunk 里。vite build 每次都会警告这件事
+// ("dynamic import will not move module into another chunk"),
+// 而一条永远存在、又永远无害的警告, 结果是训练所有人忽略 build 输出。
+import { getIdToken } from "../../lib/auth";
 
 export function SystemPage() {
   return (
@@ -193,7 +199,6 @@ interface ServiceStatus {
 
 async function checkServices(): Promise<ServiceStatus[]> {
   // 通过 gateway 反代探活. dev 直连本机, prod nginx 反代.
-  const { getIdToken } = await import("../../lib/auth");
   const token = (await getIdToken()) || "";
 
   const services: Array<{ name: string; url: string }> = [
