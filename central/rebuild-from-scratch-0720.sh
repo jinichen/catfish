@@ -19,13 +19,15 @@
 #
 # 时长: amd64 走 QEMU 慢 · 单架构 30-60 min · 双架构 ~90-120 min
 #
-# 用法:
-#   nohup bash rebuild-from-scratch-0720.sh > /tmp/full-rebuild-clean-0720.log 2>&1 &
+# 用法 (8/1 起 · 一次一个平台, 见下面 ARCH 那段为什么):
+#   ARCH=arm64 nohup bash rebuild-from-scratch-0720.sh > /tmp/build-arm64.log 2>&1 &
 #   disown
+#   # 上一个跑完之后, DATE 照抄上一次的:
+#   DATE=20260731 ARCH=amd64 nohup bash rebuild-from-scratch-0720.sh > /tmp/build-amd64.log 2>&1 &
 #
 # 睡醒验:
-#   grep -E "===|✅|❌" /tmp/full-rebuild-clean-0720.log
-#   ls -lh ~/Downloads/catfish-达华POC-0715/dahua-poc-central-*-20260720.tar.gz
+#   grep -E "===|✅|❌|⚠" /tmp/build-arm64.log
+#   ls -lh ~/Downloads/catfish-达华POC-0715/dahua-poc-*.tar.gz
 
 set -euo pipefail
 
@@ -53,12 +55,71 @@ set -euo pipefail
 #                动机 · 之前 Phase 3 逻辑 "tar 存在就打" 跟 SKIP 撞 · SKIP_AMD64=1
 #                但打出 FULL-amd64 (用老 image tar · 没含新 gateway) · 给客户是"假新版".
 #                fix · 严格默认 · 显式 REPACK_ONLY=1 才复用老 image tar.
+#                8/1 · =1 现在**自动置 SKIP_ARM64/SKIP_AMD64=1** (不再 build) ·
+#                      名字终于名副其实 · 详见下面赋值处注释.
 DATE="${DATE:-$(date +%Y%m%d)}"
 SKIP_ARM64="${SKIP_ARM64:-0}"
 SKIP_AMD64="${SKIP_AMD64:-0}"
 BUILD_FULL_DELIVERY="${BUILD_FULL_DELIVERY:-1}"
 ONLY_SERVICES="${ONLY_SERVICES:-}"
 REPACK_ONLY="${REPACK_ONLY:-0}"
+
+# ── REPACK_ONLY 名副其实 (8/1) ────────────────────────────────────
+# 原来它只管 Phase 3, **不影响 Phase 1/2**。于是光写 `REPACK_ONLY=1 bash ...`
+# 会老老实实从头 build 两个架构 —— 90 分钟, 跟"only repack"这个名字正好相反。
+# 想真的只重打包, 得写全 `SKIP_ARM64=1 SKIP_AMD64=1 REPACK_ONLY=1` 三个。
+#
+# 而它的定义原文就是"用**已有** image tar" —— 那就跟 build 互斥。让名字兑现:
+# REPACK_ONLY=1 ⇒ 两个 Phase 都不 build, Phase 3 拿现成 tar 重打 FULL。
+# (显式再写 SKIP_* 的老命令行为不变 —— 本来就是 1。)
+if [ "$REPACK_ONLY" = "1" ]; then
+    SKIP_ARM64=1
+    SKIP_AMD64=1
+fi
+
+# ── ARCH (8/1 · 鸿波 "一个一个平台来生成") ──────────────────────────
+# arm64 | amd64 | both. 默认必须显式选一个, 不再默默打两个。
+#
+# ## 为什么改
+#
+# 7/31 那次: Phase 1 arm64 从头打完, image tar 也存下来了 (422M, ✅)。紧接着
+# Phase 2 第一步 `docker pull --platform linux/amd64 postgres:16-alpine` 撞上
+# Docker Hub 的 auth EOF, 本地又只有刚拉的 arm64 版 —— 脚本按设计 exit 1。
+#
+# 判断本身是对的 (混架构的 tar 更糟)。问题在**它站的位置**: Phase 3 (打 FULL
+# 交付包) 排在两个 Phase 后面, 于是 amd64 的一次网络抖动, 把 arm64 那 40 分钟
+# 已经完成的构建的**打包**一起带走了 —— 当晚只剩一个 image-only tar,
+# FULL 包一个都没出。
+#
+# 一次一个平台就没有这条传导路径: 一次运行 = 一个平台的 build + 它自己的 FULL,
+# 另一个平台挂不挂跟它无关。
+#
+# ## 代价 (下面末尾的提醒就是为它准备的)
+#
+# 分两次跑, DATE 会各算各的。第一个平台 23:00 打完是 20260731, 第二个平台
+# 跨过零点才跑完就成了 20260801 —— 两个包日期对不上, 而且 Phase 3 拿
+# $ARM_OUT 找当天的 image tar 找不到, 只印一行 "⚠ 不存在 · skip" 就接着
+# "=== DONE ===", 看输出像成功了。所以第二次务必显式传第一次的 DATE。
+ARCH="${ARCH:-}"
+case "$ARCH" in
+    arm64) SKIP_AMD64=1 ;;
+    amd64) SKIP_ARM64=1 ;;
+    both)  ;;   # 显式要求一次打两个
+    "")
+        # 不选平台又确实要 build (REPACK_ONLY / 自己写了 SKIP_* 的除外) —— 拦下。
+        # 这种情况多半是"忘了写 ARCH", 而不是"真想打两个"。
+        if [ "$REPACK_ONLY" != "1" ] && [ "$SKIP_ARM64" = "0" ] && [ "$SKIP_AMD64" = "0" ]; then
+            echo "❌ 没指定 ARCH · 一次只打一个平台:"
+            echo "     ARCH=arm64 bash $(basename "$0")"
+            echo "     ARCH=amd64 DATE=<第一个平台那次的日期> bash $(basename "$0")"
+            echo ""
+            echo "   真要一次打两个 (不推荐 · 后一个平台挂会连累前一个的打包):"
+            echo "     ARCH=both bash $(basename "$0")"
+            exit 1
+        fi
+        ;;
+    *) echo "❌ ARCH=$ARCH 不认识 · 只能是 arm64 / amd64 / both"; exit 1 ;;
+esac
 
 CENTRAL="$HOME/person_task/catfish/central"
 REPO_ROOT="$HOME/person_task/catfish"
@@ -457,8 +518,14 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
                 fi
             done
             # setup.sh 是不是**新**版本 · 抽出来查 3 个本轮修复的标记
+            #
+            # ⚠ 这份 marker 清单是**会过期的** —— 它只认得写它那天的"新版本"。
+            #   8/1 加 CATFISH_SECRET_KEY 生成时就发现: 三个 marker 全是 7/28 的,
+            #   哪怕打进去的是漏了整段密钥生成的老 setup.sh, 验包照样打勾。
+            #   以后每往 setup.sh 加一段**装不上就废**的逻辑, 这里补一条。
             SETUP_IN_TAR=$(tar xzf "$OUT_TAR" -O delivery/dahua-poc/setup.sh)
-            for marker in "clients.yaml 生成" "DASHSCOPE_API_KEY 是空的" "CERT_DAYS=397"; do
+            for marker in "clients.yaml 生成" "DASHSCOPE_API_KEY 是空的" "CERT_DAYS=397" \
+                          "CATFISH_SECRET_KEY 已生成"; do
                 if ! echo "$SETUP_IN_TAR" | grep -q "$marker"; then
                     echo "  ❌ 验包: setup.sh 缺标记「$marker」→ 打进去的是老版本"; VERIFY_FAIL=1
                 fi
@@ -513,6 +580,39 @@ _list_artifact "$AMD_OUT"      "仅镜像"
 echo ""
 echo "    FULL   = 给新客户装机 (含 setup.sh + config + 镜像) · 解开就能 bash setup.sh"
 echo "    仅镜像 = 给已装机客户换镜像 · 里面**没有** setup.sh, 单独发过去装不了"
+
+# ── 一次一个平台 · 把另一半的命令连 DATE 一起印出来 (8/1) ──────────
+#
+# 分两次跑最大的坑是 **DATE 漂移** (见文件头 ARCH 那段)。这里不指望人记得
+# 加 DATE=, 直接把下一条命令连日期一起打出来, 照抄即可。
+#
+# 顺带扫一眼另一个平台是不是有**别的日期**的包 —— 有的话说明漂移已经发生,
+# 这两个包不是同一次代码, 不能当一对发给客户。
+case "$ARCH" in
+    arm64) _other="amd64" ;;
+    amd64) _other="arm64" ;;
+    *)     _other="" ;;
+esac
+if [ -n "$_other" ]; then
+    echo ""
+    if [ -f "$DELIVERY/dahua-poc-FULL-${_other}-${DATE}.tar.gz" ]; then
+        echo "→ 两个平台都齐了 (${DATE})"
+    else
+        echo "→ 还差 ${_other} 平台。下一条命令 (DATE 照抄, 别让它跨零点变成明天):"
+        echo "    cd $CENTRAL"
+        echo "    DATE=${DATE} ARCH=${_other} nohup bash $(basename "$0") \\"
+        echo "        > /tmp/build-${_other}-${DATE}.log 2>&1 &"
+    fi
+    # ls 没匹配 / grep 全过滤掉都会返回非 0 · set -e 下必须兜住
+    _drift=$(ls "$DELIVERY"/dahua-poc-FULL-"${_other}"-*.tar.gz 2>/dev/null \
+             | grep -v -- "-${DATE}.tar.gz" || true)
+    if [ -n "$_drift" ]; then
+        echo ""
+        echo "  ⚠ ${_other} 有 FULL 包, 但日期不是 ${DATE}:"
+        echo "$_drift" | sed 's|^|      |'
+        echo "      两个平台日期对不上 = 很可能不是同一次代码, 别当一对发出去。"
+    fi
+fi
 echo ""
 # P3.5.80 (7/28): 这里原来写死 "20260720" 的文件名, 还给了一套
 # "cd /path/to/catfish/central && docker compose up -d" 的指令 ——
