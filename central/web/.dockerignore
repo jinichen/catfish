@@ -1,0 +1,51 @@
+# 构建上下文排除表 (8/1).
+#
+# ## 为什么必须有这个文件
+#
+# Dockerfile 的顺序是:
+#
+#     COPY package.json package-lock.json* ./
+#     RUN npm install          ← 在容器里装 **Linux** 版依赖
+#     COPY . .                 ← 没有 .dockerignore 的话, 宿主机的
+#                                 node_modules 会把上面装好的**整个覆盖掉**
+#     RUN npm run build
+#
+# 开发机是 macOS/arm64, 装出来的 node_modules 里有平台相关的原生二进制
+# (@rollup/rollup-darwin-arm64、esbuild 的 darwin 包)。它们被拷进 Linux
+# 容器之后加载不了, `vite build` 直接失败:
+#
+#     Error: Cannot find module @rollup/rollup-linux-arm64-musl
+#
+# 8/1 打包时实撞: web 镜像 `npm run build` exit 1。
+#
+# 这个坑之前一直没发作, 是因为**宿主机上没有 node_modules** —— 平时都在
+# 容器里构建。这次先在本机跑了一遍 `npm run build`, 75MB 的 macOS 依赖就
+# 出现在构建上下文里了。也就是说它一直是个雷, 只是没人踩到。
+#
+# 顺带: 排除之后构建上下文从 78MB 降到 ~3MB, docker build 的第一步
+# "sending build context" 快得多。
+
+# ── 必须排除: 平台相关 ──
+node_modules
+
+# ── 构建产物: 容器里会重新生成, 拷进去只会让人分不清用的是哪一份 ──
+dist
+*.tsbuildinfo
+
+# ── 本地环境 / 密钥: 绝不能进镜像 ──
+.env
+.env.*
+!.env.example
+
+# ── 版本控制 / 编辑器 / 系统垃圾 ──
+.git
+.gitignore
+.vscode
+.idea
+.DS_Store
+
+# ── 日志和缓存 ──
+*.log
+npm-debug.log*
+.npm
+.cache

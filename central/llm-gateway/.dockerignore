@@ -1,0 +1,32 @@
+# 构建上下文排除表 (8/1).
+#
+# 这几个 Python 服务的 Dockerfile 是**精确 COPY** (pyproject / src / alembic
+# / config), 不像 web 那样 `COPY . .`, 所以下面这些本来也进不了镜像。
+#
+# 但排除它们仍然有必要: docker build 会把**整个上下文**先发给 daemon,
+# 跟 Dockerfile 里 COPY 了什么无关。llm-gateway 目录 1.4G (两个测试用
+# 虚拟环境就占 173M), 每次构建都要白传一遍。
+#
+# 顺带堵一个真风险: 哪天有人把某行改成 `COPY . .` (图省事), venv 和
+# .env 就会一起进镜像 —— 那时候排除表已经在这儿了。
+# ⚠ 三种写法都要: `venv`(无点) / `.venv` / `.venv-test` 这类后缀变体。
+# llm-gateway 里最大的那个恰好叫 `venv` —— 只写 `.venv*` 的话 1.2G 照样进
+# 上下文, 而目录列表里它排在最前面, 很容易以为已经排掉了。
+venv
+.venv
+.venv-*
+env
+.env-*
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+htmlcov
+.coverage
+.env
+.env.*
+!.env.example
+.git
+.DS_Store
+*.log
