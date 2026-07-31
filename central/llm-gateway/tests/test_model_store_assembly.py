@@ -403,3 +403,50 @@ def test_只插值_upstream_api_base(cfg, monkeypatch):
     monkeypatch.setattr(C.model_store, "revision", lambda: 1)
 
     assert C.get_config().models[0].display_name == "${SECRET_KEY}", "不该被展开"
+
+
+# ── 拆文件时最容易踩的坑: 模块级全局被拆成两半 (8/1 军规 §3 第 4 条) ──────
+#
+# _MODEL_ERRORS 的**写**在 config._assemble_config, **读**在
+# config_env.model_config_errors。拆开之后如果还写成
+# `globals()["_MODEL_ERRORS"] = errs`, 那是写到 config.py 的命名空间去了,
+# 而 config_env 里那个永远是空的 —— **而且完全不报错**。
+# 表现: 模型明明坏了, 界面上"配置有误"徽章永远不出现。
+
+
+def test_组装时记下的错误能被读到(cfg, monkeypatch):
+    """跨模块的全局必须走显式 setter, 不能靠 globals()."""
+    monkeypatch.delenv("NO_SUCH_VAR_X", raising=False)
+    bad = _row("坏的")
+    bad["upstream"]["api_base"] = "${NO_SUCH_VAR_X}"
+    monkeypatch.setattr(C.model_store, "is_enabled", lambda: True)
+    monkeypatch.setattr(C.model_store, "read_models", lambda: [bad])
+    monkeypatch.setattr(C.model_store, "revision", lambda: 1)
+
+    C.get_config()
+
+    from catfish_gateway import config_env
+
+    # 两条路径都要能读到 —— config 那边是 re-export, config_env 是本体
+    assert "坏的" in C.model_config_errors()
+    assert "坏的" in config_env.model_config_errors()
+
+
+def test_组装成功后要清掉上一轮的错误(cfg, monkeypatch):
+    """否则模型修好了, 界面上的红徽章还挂着."""
+    monkeypatch.delenv("NO_SUCH_VAR_Y", raising=False)
+    bad = _row("m1")
+    bad["upstream"]["api_base"] = "${NO_SUCH_VAR_Y}"
+    rev = {"n": 1}
+    monkeypatch.setattr(C.model_store, "is_enabled", lambda: True)
+    monkeypatch.setattr(C.model_store, "revision", lambda: rev["n"])
+    monkeypatch.setattr(C.model_store, "read_models", lambda: [bad])
+    C.get_config()
+    assert C.model_config_errors()
+
+    # 修好它
+    monkeypatch.setenv("NO_SUCH_VAR_Y", "http://ok/v1")
+    rev["n"] = 2
+    C.invalidate_config()
+    C.get_config()
+    assert C.model_config_errors() == {}

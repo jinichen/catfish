@@ -384,67 +384,21 @@ def load_config(path: Path | None = None) -> Config:
 # 把密钥打印出来。而 models.yaml 里全部 3 处占位符都在 upstream.api_base
 # (7/30 实查), 没有别的字段需要这个能力。
 #
-# yaml 那条路径 (load_config) 仍是整份递归插值 —— 那份文件是我们自己出厂的,
-# 不是客户能在界面上编辑的。
-_ENV_PATHS: tuple[tuple[str, ...], ...] = (("upstream", "api_base"),)
-
-
-def _get_path(d: Any, path: tuple[str, ...]) -> Any:
-    for k in path:
-        if not isinstance(d, dict) or k not in d:
-            return None
-        d = d[k]
-    return d
-
-
-def _set_path(d: dict[str, Any], path: tuple[str, ...], value: Any) -> dict[str, Any]:
-    out = dict(d)
-    cur = out
-    for k in path[:-1]:
-        cur[k] = dict(cur.get(k) or {})
-        cur = cur[k]
-    cur[path[-1]] = value
-    return out
-
-
-def interpolate_model_row(row: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
-    """给库里读出来的一行做 env 插值. 返回 (插值后的行, 出错说明或 None).
-
-    ## 为什么要吞掉异常
-
-    _interpolate_env 在变量没设时会 raise。如果让它一路抛上去:
-
-      · 冷启动 —— lifespan 第一行就是 get_config(), 网关直接**起不来**, 全站 502
-      · 热态 —— get_config 沿用旧缓存, 于是**整份配置冻结**, 之后所有模型编辑
-        都不生效, 界面显示的还是旧值, 只有一行日志
-
-    而触发它只需要管理员在界面上把 api_base 填成 ${打错的变量名}。一个人打错
-    一个字, 代价是全站 —— 这个杠杆比例不对。
-
-    所以这里按**单个模型**兜住: 出错的那个模型保留占位符原文 (调用时会明显
-    失败, 错误信息里就带着变量名, 自解释), 其余模型照常工作, 同时把说明
-    交给上层显示在「模型」页上。
-    """
-    out = row
-    for path in _ENV_PATHS:
-        raw = _get_path(out, path)
-        if not isinstance(raw, str) or not _ENV_PATTERN.search(raw):
-            continue
-        try:
-            out = _set_path(out, path, _interpolate_env(raw))
-        except RuntimeError as e:
-            return row, f"{'.'.join(path)}: {e}"
-    return out, None
-
-
-# 上一次组装时发现的模型配置问题 (模型名 → 说明)。
-# 给 /api/admin/models 显示用 —— 否则"这个模型为什么不工作"没有任何线索。
-_MODEL_ERRORS: dict[str, str] = {}
-
-
-def model_config_errors() -> dict[str, str]:
-    """上一次组装配置时, 哪些模型的 env 占位符没解析成功."""
-    return dict(_MODEL_ERRORS)
+# ── 8/1 军规 §1 拆分 ────────────────────────────────────────────────
+# env 占位符那一族 (约 134 行) 搬去 config_env.py。config.py 712 行已在警戒区,
+# 而 provider 拆分还要往里加合并逻辑, 必然推过 800。
+#
+# 军规 §3 re-export: 老 caller `from .config import restore_placeholders` /
+# `interpolate_model_row` / `model_config_errors` 全部不受影响。
+from .config_env import (  # noqa: E402,F401
+    _ENV_PATHS,
+    _get_path,
+    _set_path,
+    interpolate_model_row,
+    model_config_errors,
+    restore_placeholders,
+    set_model_config_errors,
+)
 
 
 def load_raw_models(path: Path | None = None) -> list[dict[str, Any]]:
@@ -474,50 +428,6 @@ def load_raw_models(path: Path | None = None) -> list[dict[str, Any]]:
     models = data.get("models") or []
     return [m for m in models if isinstance(m, dict)]
 
-
-def restore_placeholders(
-    stored: dict[str, Any], raw: dict[str, Any]
-) -> tuple[dict[str, Any], str | None]:
-    """把库里已经烤死的值换回 ${VAR} 占位符. 返回 (新的行, 存疑说明或 None).
-
-    比对 _ENV_PATHS 上的每个路径: raw (yaml 原文) 是含 ${VAR} 的字符串, 而
-    stored 在同一处正好等于它插值后的结果 → 说明是播种时烤进去的, 换回占位符。
-
-    ## 对不上的时候为什么要报出来而不是静默跳过
-
-    第一版是"对不上就当客户手填的, 不动"。但**这个 bug 的发现路径恰恰是
-    「IT 改了 .env 但不生效」** —— 到打补丁的时候, 库里是旧地址、.env 里是
-    新地址, 两者必然对不上, 于是回迁在最需要它的场景里静默失效。
-
-    函数没有能力区分"人手填的"和"env 后来改过了"。所以不猜: 换不回的时候
-    把这个情况说出来, 让运维自己看一眼。静默跳过等于把问题埋回去。
-    """
-    if not isinstance(stored, dict) or not isinstance(raw, dict):
-        return stored, None
-    out = stored
-    note: str | None = None
-    for path in _ENV_PATHS:
-        raw_v = _get_path(raw, path)
-        cur = _get_path(out, path)
-        if not isinstance(raw_v, str) or not _ENV_PATTERN.search(raw_v):
-            continue
-        if not isinstance(cur, str) or _ENV_PATTERN.search(cur):
-            continue  # 库里本来就是占位符, 已经是对的
-        try:
-            expanded = _interpolate_env(raw_v)
-        except RuntimeError:
-            note = f"{'.'.join(path)}: yaml 里是 {raw_v}, 但那个环境变量现在没设, 无法判断"
-            continue
-        if cur == expanded:
-            out = _set_path(out, path, raw_v)
-        else:
-            note = (
-                f"{'.'.join(path)}: yaml 里是 {raw_v}, 库里是一个写死的值, "
-                f"且跟该变量当前的值对不上 —— 可能是 .env 后来改过 (那么库里这份是"
-                f"过期的、且改 .env 不会生效), 也可能是有人在界面上手填的。"
-                f"请人工确认一次。"
-            )
-    return out, note
 
 
 # ── 配置访问的唯一入口 (7/30) ────────────────────────────────────────
@@ -653,7 +563,7 @@ def _assemble_config() -> Config:
             errs[str(r.get("name", "?"))] = err
             logger.error("模型 %s 的 env 占位符没解析成功: %s", r.get("name"), err)
         models.append(ModelConfig.model_validate(row))
-    globals()["_MODEL_ERRORS"] = errs
+    set_model_config_errors(errs)
     cfg.models = models
     return cfg
 

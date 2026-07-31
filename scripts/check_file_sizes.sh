@@ -46,11 +46,22 @@ fi
 TMPFILE=$(mktemp)
 trap 'rm -f "$TMPFILE"' EXIT
 
+# ⚠ 7/30: 原来只 prune 了 `*/.venv`, 而仓里真实存在的是 `.venv-test` 和
+# `.venv-sandbox` —— 于是 341 个"必拆"里绝大多数是 openpyxl / alembic /
+# pydantic 这些第三方包。
+#
+# 后果不是"数字不好看"。CLAUDE.md 要求"改完代码必跑"这个脚本, 而一个 90%
+# 是噪音的报告没人会读第二遍 —— 军规里最硬的那条自检就这么变成了摆设。
+# 这跟这两天查出来的那些静默失败是同一类: 护栏存在, 但实际不起作用。
+#
+# `.venv*` 用通配覆盖所有变体; `.companion-state` / `.next` 是 CLAUDE.md
+# 例外清单里点名的构建产物目录。
 find "$REPO_ROOT" \
-  \( -path "*/venv" -o -path "*/.venv" -o -path "*/node_modules" \
+  \( -path "*/venv" -o -path "*/.venv*" -o -path "*/node_modules" \
      -o -path "*/dist" -o -path "*/build" -o -path "*/target" \
      -o -path "*/__pycache__" -o -path "*/.git" -o -path "*/.pytest_cache" \
-     -o -path "*/.ruff_cache" \) -prune -o \
+     -o -path "*/.ruff_cache" -o -path "*/.companion-state" -o -path "*/.next" \
+     -o -path "*/site-packages" \) -prune -o \
   -type f \
   \( -name "*.py" -o -name "*.ts" -o -name "*.tsx" \
      -o -name "*.js" -o -name "*.jsx" -o -name "*.rs" \
