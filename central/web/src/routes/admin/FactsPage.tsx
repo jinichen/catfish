@@ -57,7 +57,7 @@ function FactsList() {
   }, []);
 
   return (
-    <PageShell>
+    <PageShell scroll="data">
       <Section
         title="政策同步 / 事实补丁"
         action={
@@ -73,13 +73,14 @@ function FactsList() {
         <UploadForm onUploaded={() => void refresh()} />
       </Section>
 
-      <Section title={`已上传${facts ? ` · ${facts.length} 条` : ""}`}>
+      <Section fill title={`已上传${facts ? ` · ${facts.length} 条` : ""}`}>
         {err && <div style={errBox}>错误: {err}</div>}
         {!facts && !err && (
           <div style={{ color: "var(--text-muted)", fontSize: 12 }}>加载中…</div>
         )}
         {facts && (
           <DataTable
+            fill
             rows={facts}
             rowKey={(f) => f.id}
             onRowClick={(f) => navigate(`/admin/facts/${f.id}`)}

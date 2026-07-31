@@ -20,6 +20,7 @@ import { useEffect, useState } from "react";
 import { PageShell } from "../../components/PageShell";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 
+import { Badge, BTN, DataTable, Section, Toolbar } from "../../components/DataTable";
 import { Card } from "../../components/Card";
 import { adminApi, type Department } from "../../lib/admin";
 
@@ -47,6 +48,9 @@ function DeptList() {
       setDepts(r.departments);
       setError(null);
     } catch (e) {
+      // 跟用户页 P3.5.80 同一条: 失败时**必须清空**。留着上一次的 12 条,
+      // 标题就会写"12 个部门"而下面是一句加载失败 —— 旧数据冒充当前状态。
+      setDepts([]);
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
@@ -58,74 +62,130 @@ function DeptList() {
   }, []);
 
   return (
-    <PageShell gap="var(--space-4)">
-      <Card title={`部门 RBAC 管理 · ${depts.length} 个部门`}>
-        <p style={{ color: "var(--text-muted)", margin: "0 0 var(--space-3) 0", fontSize: 13 }}>
-          配置每个部门可见的模型 / 工具 / 技能. 空 list = 全允许 (开放默认).
-          员工级 override 走 <Link to="/admin/users">用户管理</Link> 页面.
-          {/* P3.5.93 (6/23 鸿波): 部门 token quota 编辑搬到 /admin/quota.
-              原"每日 token" 列 6 周来 dead UI (gateway 不读 identity-server, 真生效在 quotas.yaml). */}
-          <br />
-          部门 token quota 改在 <Link to="/admin/quota">配额规则</Link> 页面 (走 quotas.yaml).
-        </p>
+    <PageShell scroll="data">
+      <Toolbar
+        title={`部门权限 · ${
+          error ? "读取失败" : loading ? "加载中…" : `${depts.length} 个部门`
+        }`}
+      >
+        <button style={BTN} onClick={() => void refresh()} disabled={loading}>
+          {loading ? "刷新中…" : "刷新"}
+        </button>
+      </Toolbar>
 
-        {loading && <p style={{ color: "var(--text-muted)" }}>加载中…</p>}
-        {error && (
-          <p style={{ color: "var(--status-err)" }}>加载失败: {error}</p>
-        )}
+      {/* 这两句是**约定**, 不是装饰 —— "空 = 全允许"跟直觉相反 (看起来像
+          "什么都不允许"), 不写在眼前的话, 有人会以为清空是最严的设置。
+          压成一行小字, 但不能删。 */}
+      <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+        每个部门可见的模型 / 工具 / 技能。<b>留空 = 全允许</b>（开放默认）。
+        员工级 override 在 <Link to="/admin/users">用户</Link>；
+        {/* P3.5.93 (6/23 鸿波): 部门 token quota 编辑搬到 /admin/quota.
+            原"每日 token" 列 6 周来 dead UI (gateway 不读 identity-server,
+            真生效在 quotas.yaml). */}
+        部门配额在 <Link to="/admin/quota">配额</Link>（走 quotas.yaml）。
+      </div>
 
-        {!loading && !error && (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
-            <thead>
-              <tr style={{ borderBottom: "1px solid var(--border)", textAlign: "left" }}>
-                <th style={th}>部门</th>
-                <th style={th}>说明</th>
-                <th style={th}>Models</th>
-                <th style={th}>Tools</th>
-                <th style={th}>Skills</th>
-                <th style={th}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {depts.map((d) => (
-                <tr
-                  key={d.name}
-                  style={{ borderBottom: "1px solid var(--border-soft)" }}
-                >
-                  <td style={td}>
-                    <strong>{d.name}</strong>
-                  </td>
-                  <td style={td}>
-                    <span style={{ color: "var(--text-muted)" }}>
-                      {d.description || "—"}
-                    </span>
-                  </td>
-                  <td style={td}>{summarize(d.allowed_models)}</td>
-                  <td style={td}>{summarize(d.allowed_tools)}</td>
-                  <td style={td}>{summarize(d.allowed_skills)}</td>
-                  <td style={td}>
-                    <Link
-                      to={`/admin/access/${encodeURIComponent(d.name)}`}
-                      style={linkBtn}
-                    >
-                      编辑
-                    </Link>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </Card>
+      {error && (
+        <Section>
+          <div style={{ fontSize: 12, color: "var(--status-err)" }}>加载失败: {error}</div>
+        </Section>
+      )}
+
+      {!error && (
+        <Section fill>
+          <DataTable
+            fill
+            rows={depts}
+            rowKey={(d) => d.name}
+            empty={loading ? "加载中…" : "还没有部门。"}
+            columns={[
+              {
+                header: "部门",
+                // 真 <Link> 而不是只靠整行可点 —— 后者会让用户失去中键 /
+                // ⌘+点击开新标签、右键"在新标签打开"、悬停看目标 URL。
+                cell: (d) => (
+                  <Link
+                    to={`/admin/access/${encodeURIComponent(d.name)}`}
+                    style={{ fontWeight: 600, color: "var(--text)" }}
+                    title={d.name}
+                  >
+                    {d.name}
+                  </Link>
+                ),
+                truncate: true,
+                width: 160,
+              },
+              {
+                header: "说明",
+                cell: (d) => (
+                  <span style={{ color: "var(--text-muted)" }} title={d.description || undefined}>
+                    {d.description || "—"}
+                  </span>
+                ),
+                truncate: true,
+                width: 280,
+              },
+              {
+                header: "模型",
+                cell: (d) => <Scope list={d.allowed_models} />,
+                width: 130,
+                // 只有一项时 Scope 把原值渲染进徽章, 而
+                // catfish-public-deepseek-flash 这种名字会把 130px 的列
+                // 撑到 200px, 顶出整表的横向滚动条。
+                truncate: true,
+              },
+              {
+                header: "工具",
+                cell: (d) => <Scope list={d.allowed_tools} />,
+                width: 130,
+                // 只有一项时 Scope 把原值渲染进徽章, 而
+                // catfish-public-deepseek-flash 这种名字会把 130px 的列
+                // 撑到 200px, 顶出整表的横向滚动条。
+                truncate: true,
+              },
+              {
+                header: "技能",
+                cell: (d) => <Scope list={d.allowed_skills} />,
+                width: 130,
+                // 只有一项时 Scope 把原值渲染进徽章, 而
+                // catfish-public-deepseek-flash 这种名字会把 130px 的列
+                // 撑到 200px, 顶出整表的横向滚动条。
+                truncate: true,
+              },
+              {
+                header: "",
+                align: "right",
+                width: 64,
+                cell: (d) => (
+                  <Link
+                    to={`/admin/access/${encodeURIComponent(d.name)}`}
+                    style={{ ...BTN, textDecoration: "none", color: "var(--text)" }}
+                  >
+                    编辑
+                  </Link>
+                ),
+              },
+            ]}
+          />
+        </Section>
+      )}
     </PageShell>
   );
 }
 
-
-function summarize(list: string[] | null | undefined): string {
-  if (!list || list.length === 0) return "全允许";
-  if (list.length === 1) return list[0];
-  return `${list.length} 项`;
+/** 某一维的授权范围。
+ *
+ * "全允许"和"3 项"是**性质不同**的两件事, 原来都是同样的黑色文字, 一列扫下来
+ * 分不出哪些部门是收紧过的。全允许用描边徽章弱化, 收紧过的给个数字 ——
+ * 这一页的用处正是"谁被收紧了"。
+ */
+function Scope({ list }: { list: string[] | null | undefined }) {
+  if (!list || list.length === 0) return <Badge tone="neutral">全允许</Badge>;
+  return (
+    <span title={list.join("\n")}>
+      <Badge tone="accent">{list.length === 1 ? list[0] : `${list.length} 项`}</Badge>
+    </span>
+  );
 }
 
 // P3.5.93 (6/23 鸿波): fmtNum 唯一调用是部门列表 quota 列, 那列砍了, 函数也砍.
@@ -141,6 +201,18 @@ function DeptDetail() {
 
   const [dept, setDept] = useState<Department | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** 保存成功。展示一下再返回列表 —— 直接跳的话页面一闪而过, 用户不确定成没成。 */
+  const [saved, setSaved] = useState(false);
+
+  // ⚠ 必须 clearTimeout。react-router 的 navigate 在组件卸载后**不会**短路
+  // (activeRef 只在 layout effect 里设 true, 没有 cleanup 设回 false),
+  // React 18 也早就不打"卸载后 setState"的警告了 —— 所以裸 setTimeout 的
+  // 表现是: 保存成功后一秒内点侧栏去别的页, 到点被硬拽回来, 控制台干净。
+  useEffect(() => {
+    if (!saved) return;
+    const t = setTimeout(() => navigate("/admin/access"), 1200);
+    return () => clearTimeout(t);
+  }, [saved, navigate]);
   const [saving, setSaving] = useState(false);
 
   // 4 个 textarea 的本地状态 (一行一条)
@@ -180,9 +252,12 @@ function DeptDetail() {
       });
       setDept(r.department);
       setError(null);
-      // 成功提示, 暂时用 alert
-      alert("保存成功. 员工下次 chat 时生效 (token refresh 周期 ~5 分钟).");
-      navigate("/admin/access");
+      // 8/1: 原来是 `alert()`, 注释写着"暂时用 alert" —— 那个"暂时"从 5/17
+      // 留到了现在。就地提示 + 稍后返回, 跟别处一致。
+      //
+      // "下次 chat 时生效"这句必须保留: 保存完立刻去问员工, 他多半还是老权限,
+      // 不写清楚会被当成没保存成功。
+      setSaved(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -290,6 +365,11 @@ ALWAYS_ON 工具 (memory / execute_code / ...) 永远保留, 不被砍.`}
           >
             取消
           </Link>
+          {saved && (
+            <span style={{ fontSize: 12, color: "var(--status-ok)" }}>
+              ✓ 已保存 —— 员工<b>下次对话时</b>生效（token 刷新周期约 5 分钟）
+            </span>
+          )}
         </div>
       </div>
     </Card>
@@ -350,17 +430,9 @@ function Field({
 }
 
 
-const th: React.CSSProperties = {
-  padding: "var(--space-2)",
-  fontSize: 13,
-  fontWeight: 500,
-  color: "var(--text-muted)",
-};
-
-const td: React.CSSProperties = {
-  padding: "var(--space-2)",
-  verticalAlign: "middle",
-};
+// 8/1: th / td 删了 —— 列表页换成共享 DataTable 之后没人用。
+// (它俩是 DataTable 文件头说的"7 张表各写各的 th/td"里的一份, 14px 字 +
+//  8px 内边距, 是全后台最松的一套。)
 
 const labelStyle: React.CSSProperties = {
   display: "block",

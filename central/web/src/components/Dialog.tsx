@@ -35,6 +35,7 @@ export function ConfirmDialog({
   confirmLabel = "确定",
   danger = false,
   requireText,
+  confirmDisabled = false,
   busy = false,
   onConfirm,
   onCancel,
@@ -48,6 +49,12 @@ export function ConfirmDialog({
   /** 要求原样输入这段文字才能确认 (删模型这种"手滑代价很大"的操作用).
    *  不传则只需点一下。 */
   requireText?: string;
+  /** 额外的"还不能确认"条件 —— 正文里放了自己的表单时用 (比如密码没填够长度)。
+   *
+   * ⚠ 不传的话, 调用方只能在 onConfirm 里 `if (...) return`, 而那是
+   * **点了没反应** —— 正是这个文件开头骂的那个反模式。8/1 用户页的
+   * 重置密码就踩了: 空密码点「重置」什么都不发生, 连红字都不出。 */
+  confirmDisabled?: boolean;
   busy?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
@@ -55,14 +62,21 @@ export function ConfirmDialog({
   const [typed, setTyped] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
-  const ok = requireText == null || typed === requireText;
+  const ok = (requireText == null || typed === requireText) && !confirmDisabled;
 
   useEffect(() => {
     // 打开时焦点进对话框, 关闭时还回去 —— 不还的话焦点会落回 body,
     // 键盘用户得从页面顶部重新 Tab 一遍。
     const prev = document.activeElement as HTMLElement | null;
-    (inputRef.current ?? confirmRef.current)?.focus();
+    // 正文里如果有自己的输入框 (比如重置密码那个), 焦点该进它, 而不是
+    // 停在确认按钮上 —— 否则打开对话框直接敲字是敲了个寂寞, 而按 Enter
+    // 会直接触发确认。requireText 的输入框优先, 其次正文里第一个 input。
+    const bodyInput = bodyRef.current?.querySelector<HTMLElement>(
+      "input, textarea, select",
+    );
+    (inputRef.current ?? bodyInput ?? confirmRef.current)?.focus();
     return () => prev?.focus?.();
   }, []);
 
@@ -114,6 +128,7 @@ export function ConfirmDialog({
 
         {children ? (
           <div
+            ref={bodyRef}
             style={{
               fontSize: 12,
               lineHeight: 1.7,
@@ -121,7 +136,20 @@ export function ConfirmDialog({
               marginTop: 8,
             }}
           >
-            {children}
+            {/* 正文里按 Enter 也提交。原生 prompt() 是 Enter 提交的, 换成
+                对话框之后如果只能用鼠标点, 是手感退化。
+                ok 为 false 时不提交 —— 跟按钮的 disabled 同一个条件。 */}
+            <div
+              onKeyDown={(e) => {
+                if (e.key !== "Enter") return;
+                const t = e.target as HTMLElement;
+                if (t.tagName === "TEXTAREA") return; // 多行里 Enter 是换行
+                e.preventDefault();
+                if (ok && !busy) onConfirm();
+              }}
+            >
+              {children}
+            </div>
           </div>
         ) : null}
 

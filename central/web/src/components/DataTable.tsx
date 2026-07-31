@@ -95,6 +95,7 @@ export function DataTable<T>({
   onRowClick,
   rowActive,
   rowClickable,
+  rowStyle,
   fill,
   empty = "没数据",
   footer,
@@ -122,6 +123,15 @@ export function DataTable<T>({
    * 那种行看起来跟别的一样可点, 点下去没反应, 用户只会以为界面卡了。
    * 与其让它假装能点, 不如把光标和键盘焦点一起摘掉。 */
   rowClickable?: (row: T) => boolean;
+  /** 整行的额外样式 —— 表达"这一行整体处于某种状态" (已删 / 已停用)。
+   *
+   * ⚠ 必须在这一层, 不能让调用方往每个单元格里塞: 一是要在每列重复,
+   * 二是行级的东西 (opacity / 背景) 在单元格上表现不一样。
+   *
+   * 8/1 补的: 用户页原来是 `<tr style={{opacity: deleted ? 0.5 : 1}}>`,
+   * 换成 DataTable 之后没有等价物 —— 勾上"含已删"后, 已删行跟活跃行
+   * 除了多一个徽章之外长得一模一样。 */
+  rowStyle?: (row: T) => CSSProperties | undefined;
   empty?: ReactNode;
   /** 表格底部一行, 用于分页器 / 合计 */
   footer?: ReactNode;
@@ -227,6 +237,7 @@ export function DataTable<T>({
                 style={{
                   ...(clickable ? { cursor: "pointer" } : null),
                   ...(rowActive?.(r) ? { background: "var(--row-active)" } : null),
+                  ...rowStyle?.(r),
                 }}
                 onMouseEnter={
                   clickable
@@ -378,7 +389,7 @@ export function Section({
   );
 }
 
-export type BadgeTone = "neutral" | "ok" | "warn" | "err" | "accent";
+export type BadgeTone = "neutral" | "ok" | "warn" | "err" | "accent" | "accentSoft";
 
 const TONE: Record<BadgeTone, CSSProperties> = {
   // neutral 是描边不是填充 —— 一行里常有 2-3 个徽章, 全填充会盖过数据本身
@@ -387,6 +398,10 @@ const TONE: Record<BadgeTone, CSSProperties> = {
   warn: { background: "var(--status-warn)", color: "#fff" },
   err: { background: "var(--status-err)", color: "#fff" },
   accent: { background: "var(--accent)", color: "#fff" },
+  // 8/1: 跟 accent 同色但是描边。用来在同一族里再分一档 (用户页的
+  // sysadmin 实心 / admin 描边) —— 加一个新颜色的话, 一列里色相太多,
+  // 反而不如"同色深浅"扫得快。
+  accentSoft: { border: "1px solid var(--accent)", color: "var(--accent)" },
 };
 
 /** 状态徽章.
