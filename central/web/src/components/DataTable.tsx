@@ -93,6 +93,8 @@ export function DataTable<T>({
   rows,
   rowKey,
   onRowClick,
+  rowActive,
+  rowClickable,
   empty = "没数据",
   footer,
 }: {
@@ -106,6 +108,19 @@ export function DataTable<T>({
    * 那种情况在某一格里放真 <Link> (通常是标题格), onRowClick 只作为
    * "点行内空白处也能进去"的便利。 */
   onRowClick?: (row: T) => void;
+  /** 这一行是不是"当前选中"的 —— 审计页点一行下钻之后, 那一行要留着高亮,
+   *  否则筛选生效之后完全看不出是从哪一行点进来的。
+   *
+   *  ⚠ 高亮必须在这里而不是让调用方自己往单元格里塞背景色: 悬停的
+   *  onMouseLeave 会把整行背景抹回 transparent, 调用方设的高亮鼠标划过一次
+   *  就没了 —— 而且只在划过之后才没, 所以很难当成 bug 认出来。 */
+  rowActive?: (row: T) => boolean;
+  /** 这一行能不能点。不传 = 都能点。
+   *
+   * 用途是"整张表可点, 但个别行的标识是空的, 点了会筛出个空条件"这种 ——
+   * 那种行看起来跟别的一样可点, 点下去没反应, 用户只会以为界面卡了。
+   * 与其让它假装能点, 不如把光标和键盘焦点一起摘掉。 */
+  rowClickable?: (row: T) => boolean;
   empty?: ReactNode;
   /** 表格底部一行, 用于分页器 / 合计 */
   footer?: ReactNode;
@@ -137,35 +152,48 @@ export function DataTable<T>({
           </tr>
         </thead>
         <tbody>
-          {rows.map((r, ri) => (
+          {rows.map((r, ri) => {
+            const clickable = !!onRowClick && (rowClickable?.(r) ?? true);
+            return (
             <tr
               key={rowKey(r, ri)}
-              onClick={onRowClick ? () => onRowClick(r) : undefined}
+              onClick={clickable ? () => onRowClick(r) : undefined}
               // 整行可点就必须键盘也能点。<tr onClick> 本身 Tab 聚焦不到、
               // Enter/Space 也没反应 —— 那等于把这个功能对键盘用户整个关掉。
               // 导航类的行还应该在某一格里放真 <Link> (见下面 rowKey 的说明),
               // 这里的 role="button" 只覆盖"点一下触发一个动作"那类。
-              tabIndex={onRowClick ? 0 : undefined}
-              role={onRowClick ? "button" : undefined}
+              tabIndex={clickable ? 0 : undefined}
+              role={clickable ? "button" : undefined}
+              // 选中只有一个底色的话, 读屏软件那边完全不存在。
+              aria-pressed={clickable && rowActive ? rowActive(r) : undefined}
               onKeyDown={
-                onRowClick
+                clickable
                   ? (e) => {
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
-                        onRowClick(r);
+                        onRowClick!(r);
                       }
                     }
                   : undefined
               }
-              style={onRowClick ? { cursor: "pointer" } : undefined}
+              style={{
+                ...(clickable ? { cursor: "pointer" } : null),
+                ...(rowActive?.(r) ? { background: "var(--row-active)" } : null),
+              }}
               onMouseEnter={
-                onRowClick
-                  ? (e) => (e.currentTarget.style.background = "var(--bg-secondary)")
+                clickable
+                  ? (e) => {
+                      if (!rowActive?.(r))
+                        e.currentTarget.style.background = "var(--bg-secondary)";
+                    }
                   : undefined
               }
               onMouseLeave={
-                onRowClick
-                  ? (e) => (e.currentTarget.style.background = "transparent")
+                clickable
+                  ? (e) => {
+                      // 选中的行划过之后要回到高亮, 不是回到透明。
+                      if (!rowActive?.(r)) e.currentTarget.style.background = "transparent";
+                    }
                   : undefined
               }
             >
@@ -192,7 +220,8 @@ export function DataTable<T>({
                 </td>
               ))}
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
       {footer ? (
@@ -254,7 +283,8 @@ export function Section({
             minHeight: 18,
           }}
         >
-          <h4 style={{ margin: 0, fontSize: 12, fontWeight: 600 }}>{title}</h4>
+          {/* 页面主标题是 Toolbar 的 h1, 分区跟到 h2 —— h1 直接跳 h4 是断层。 */}
+          <h2 style={{ margin: 0, fontSize: 12, fontWeight: 600 }}>{title}</h2>
           <div style={{ flex: 1 }} />
           {action}
         </div>
@@ -418,8 +448,14 @@ export function Toolbar({
   title,
   children,
 }: {
-  /** 左侧标题. 用 h3 而不是加粗的 span —— Section 的标题是 h4,
-   *  页面主标题得比它高一级, 否则整页没有任何 h1/h2/h3, 读屏软件拿不到页面标题。 */
+  /** 左侧标题. 每页一个 Toolbar, 它就是页面主标题, 所以是 <h1>。
+   *
+   * 8/1 改的: 原来是 h3, 而 /admin 下**每一页**都用 Toolbar 当标题 ——
+   * 于是整个后台一个 h1 都没有 (审计页那个 24px 的 h1 也在这次一并换掉了),
+   * 读屏软件按标题跳转时拿不到"这是哪一页"。
+   *
+   * 字号仍是 13px。语义层级和视觉大小是两件事, 后台这种密集界面不需要
+   * 一个 32px 的大标题来告诉你在哪 —— 侧栏已经高亮着了。 */
   title?: ReactNode;
   /** 右侧控件 */
   children?: ReactNode;
@@ -435,9 +471,9 @@ export function Toolbar({
       }}
     >
       {title ? (
-        <h3 style={{ margin: 0, fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>
+        <h1 style={{ margin: 0, fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>
           {title}
-        </h3>
+        </h1>
       ) : (
         <span />
       )}

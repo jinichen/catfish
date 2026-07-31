@@ -173,9 +173,11 @@ jobs:
         working-directory: central/web
         run: npx tsc --noEmit -p tsconfig.json
 
-      # 类型系统管不到、失败又都静默的两类问题, 见各脚本文件头:
-      #   check-admin-routes — 路由/侧栏/跨仓硬编码路径一致性
-      #   check-css-vars     — 引用了但从没定义过的 CSS 变量 (边框会直接消失)
+      # 类型系统管不到、失败又都静默的几类问题, 见各脚本文件头:
+      #   check-admin-routes  — 路由/侧栏/跨仓硬编码路径一致性
+      #   check-css-vars      — 引用了但从没定义过的 CSS 变量 (边框会直接消失)
+      #   check-audit-limits  — 前端的截断上限常量 vs 后端 SQL 的 LIMIT
+      #                         (对不上的话"只显示前 N 名"和对账告警都会说谎)
       - name: Static consistency checks
         working-directory: central/web
         run: npm run check

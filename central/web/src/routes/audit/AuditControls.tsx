@@ -3,6 +3,7 @@
  * FilterPillBar + PageHeader + TimeWindowToggle + ExportCsvButton.
  */
 
+import { Toolbar } from "../../components/DataTable";
 import type { AuditFilter, GlobalAudit } from "../../lib/me";
 import { getModelDisplay } from "../../lib/modelDisplay";
 import { TIME_WINDOWS, auditToCsv, windowLabelOf } from "./helpers";
@@ -32,11 +33,11 @@ function FilterPillBar({
         display: "flex",
         alignItems: "center",
         gap: 8,
-        padding: "8px 12px",
+        padding: "4px 10px",
         background: "var(--bg-elev)",
         border: "1px dashed var(--accent)",
         borderRadius: "var(--radius-sm)",
-        fontSize: 13,
+        fontSize: 12,
       }}
     >
       <span style={{ color: "var(--text-muted)" }}>🔍 已筛选:</span>
@@ -80,56 +81,34 @@ function PageHeader({
     audit.viewer_role === "admin" || audit.viewer_role === "sysadmin"
       ? "全公司视角"
       : "本部门视角";
+  // ⚠ 用 audit.since_hours (**数据实际来自哪个窗口**), 不是 sinceHours
+  // (按钮上选中的那个)。刷新期间两者不同, 而这一行紧挨着时间窗按钮 ——
+  // 用选中值的话, 界面上会显示"近 7 天"配着一屏 24 小时的数字, 一个字
+  // 都看不出不对。所以刷新期间干脆不说是哪个窗口。
   const windowLabel = windowLabelOf(audit.since_hours);
+  const stale = audit.since_hours !== sinceHours;
   return (
-    <div
-      style={{
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "flex-end",
-        gap: "var(--space-3)",
-        flexWrap: "wrap",
-      }}
-    >
-      <div>
-        <h1
-          style={{
-            fontSize: 24,
-            fontWeight: 600,
-            margin: 0,
-            marginBottom: 4,
-          }}
+    // 8/1: 原来是一个 24px 的 <h1>「LLM 使用审计」+ 一行副标题, 占掉 60px。
+    // 两个问题:
+    //   1. 这一页现在挂在 /admin 下, 侧栏里已经高亮着「用量审计」——
+    //      正文再写一遍标题是重复的; 而且两处名字还不一样。
+    //   2. 概览页和性能页用的是 Toolbar (13px h3 + 右侧控件) —— 三个观测页
+    //      各写各的标题栏, 在侧栏里来回点会看到标题忽大忽小。
+    // 改用同一个 Toolbar。窗口和范围挪进右侧那行小字, 一个字没少。
+    <Toolbar title="用量审计">
+      <span style={{ color: "var(--text-muted)", fontSize: 11 }}>
+        {loading && stale ? "换窗口中…" : `近 ${windowLabel}`} · {scope}
+        <span
+          title="这一页的数字不含 gateway 自身的调用 (总结 / 主动提醒 / 5 维注入)。那部分单列在指标带下面一行。"
+          style={{ cursor: "help", marginLeft: 4 }}
         >
-          LLM 使用审计
-        </h1>
-        <div
-          style={{
-            fontSize: 13,
-            color: "var(--text-muted)",
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-          }}
-        >
-          最近 {windowLabel} · {scope}
-          <span
-            title="本表不含 gateway 内部循环消耗 (summarizer / proactive / 5 维 inject). 内部消耗见下方独立卡."
-            style={{ cursor: "help" }}
-          >
-            ⓘ
-          </span>
-          {loading && (
-            <span style={{ color: "var(--text-muted)", fontSize: 11 }}>
-              · 加载中…
-            </span>
-          )}
-        </div>
-      </div>
-      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-        <TimeWindowToggle value={sinceHours} onChange={onChangeWindow} />
-        <ExportCsvButton audit={audit} />
-      </div>
-    </div>
+          ⓘ
+        </span>
+        {loading && !stale && " · 刷新中…"}
+      </span>
+      <TimeWindowToggle value={sinceHours} onChange={onChangeWindow} />
+      <ExportCsvButton audit={audit} />
+    </Toolbar>
   );
 }
 

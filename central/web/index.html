@@ -18,6 +18,13 @@
            从没定义过。CSS 里未定义变量又没兜底值时, **整条声明失效** ——
            所以那几张表的行分隔线一直不存在, 而且不会有任何报错。 */
         --border-soft: #efefe9;
+        /* 表格里"当前选中"那一行的底色 (8/1)。
+           原来在 DataTable 里裸写 `color-mix(in srgb, var(--accent) 12%, transparent)`
+           —— color-mix 要 Chrome 111+ / Safari 16.2+, 不支持的浏览器上整条
+           声明作废, **高亮静默消失**, 而下钻之后看不出是从哪一行点进来的。
+           客户机房里的浏览器版本我们说了不算, 所以退回成一个定值。
+           #2d8a87 (--accent) 12% 叠在 #ffffff (--bg-elev) 上就是这个色。 */
+        --row-active: #eaf3f2;
         --text: #1f1f1f;
         --text-muted: #6b6b66;
         --accent: #2d8a87;

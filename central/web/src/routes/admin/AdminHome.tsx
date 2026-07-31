@@ -6,12 +6,12 @@
  * 我这两天一次都没跑。
  *
  * 拆法按军规 §3: 这一族 (AdminHome / AdminHomeBody / Delta / Stat /
- * fmtTokens / hint) 整体搬过来, 模块级常量 BREAKDOWN_LIMIT 跟着搬,
+ * fmtTokens / hint) 整体搬过来 (8/1: LIMIT 常量已挪到 lib/me 的 AUDIT_TOP_N),
  * 不拆两半。AdminPage.tsx 顶部 re-export AdminHome 保 import 兼容 ——
  * 虽然当前只有它自己在用, 但协议就是协议。
  */
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 
 import {
   DataTable,
@@ -21,6 +21,7 @@ import {
   BTN,
   BTN_PRIMARY,
 } from "../../components/DataTable";
+import { Delta, Stat, StatBand } from "../../components/StatBand";
 import {
   costRMB,
   fmtRMB,
@@ -30,7 +31,7 @@ import {
   splitDisplayName,
   totalCostRMB,
 } from "../../lib/modelDisplay";
-import { fetchGlobalAudit, type GlobalAudit } from "../../lib/me";
+import { AUDIT_TOP_N, fetchGlobalAudit, type GlobalAudit } from "../../lib/me";
 
 function fmtTokens(n: number): string {
   if (n < 1000) return String(n);
@@ -136,34 +137,9 @@ export function AdminHome() {
  * `upIsGood` 必须逐个指定, 不能统一"涨=橙色警告": 总 tokens 涨是成本上升,
  * 活跃员工涨是推广见效。同一个配色套在四个指标上, 会把"活跃员工掉了 30%"
  * 画成绿色的正常。 */
-function Delta({
-  now,
-  prev,
-  upIsGood,
-}: {
-  now: number;
-  prev?: number;
-  upIsGood: boolean;
-}) {
-  if (prev == null || prev === 0) return null;
-  const pct = ((now - prev) / prev) * 100;
-  if (Math.abs(pct) < 0.5)
-    return <span style={{ fontSize: 11, color: "var(--text-muted)" }}>持平</span>;
-  const up = pct > 0;
-  const good = up === upIsGood;
-  return (
-    <span
-      style={{ fontSize: 11, color: good ? "var(--text-muted)" : "var(--status-warn)" }}
-      title={`上期 ${prev.toLocaleString()}`}
-    >
-      {up ? "↑" : "↓"}
-      {Math.abs(pct).toFixed(0)}%
-    </span>
-  );
-}
-
-/** 后端 by_model / by_department 是 `ORDER BY tokens DESC LIMIT 20`, by_user 是 LIMIT 50。 */
-const BREAKDOWN_LIMIT = 20;
+// 8/1: Stat / Delta 挪到 components/StatBand.tsx —— 审计页有一份算法
+// 不一样的副本 (总 tokens 涨在这页是橙色警告, 在那页是绿色好消息)。
+// 理由见 StatBand.tsx 文件头。
 
 type Breakdown = "dept" | "model" | "user";
 
@@ -195,14 +171,7 @@ function AdminHomeBody({ a }: { a: GlobalAudit }) {
             原来是 `repeat(auto-fit, minmax(120px,1fr))` —— 4 个指标在 1400px
             宽屏上被平均拉开成每格 350px, 数字贴在各自格子左边缘,
             中间三大片空白, 看起来像没做完。 */}
-        <div
-          style={{
-            display: "flex",
-            flexWrap: "wrap",
-            alignItems: "stretch",
-            gap: 0,
-          }}
-        >
+        <StatBand>
           <Stat label="总请求" value={a.request_count.toLocaleString()}
                 delta={<Delta now={a.request_count} prev={a.previous_request_count} upIsGood={false} />} />
           <Stat label="总 tokens" value={fmtTokens(a.total_tokens)}
@@ -223,7 +192,7 @@ function AdminHomeBody({ a }: { a: GlobalAudit }) {
                 : undefined
             }
           />
-        </div>
+        </StatBand>
         {/* gateway 自身的循环消耗 (总结 / 主动提醒 / 注入等), 不算员工业务。
             原来这个数只在审计页有一整张 Card, 首页完全不提 —— 于是"我们自己
             烧了多少"这件事在概览层面是不可见的。一行脚注够了。 */}
@@ -259,7 +228,7 @@ function AdminHomeBody({ a }: { a: GlobalAudit }) {
             rows={a.by_department}
             rowKey={(d) => d.department}
             empty="窗口内没有部门产生调用"
-            footer={hint(a.by_department.length, BREAKDOWN_LIMIT, "个部门")}
+            footer={hint(a.by_department.length, AUDIT_TOP_N.department, "个部门")}
             columns={[
               { header: "部门", cell: (d) => d.department },
               { header: "请求", align: "right", width: 90, cell: (d) => d.count.toLocaleString() },
@@ -281,7 +250,7 @@ function AdminHomeBody({ a }: { a: GlobalAudit }) {
             rows={a.by_model}
             rowKey={(m) => m.model}
             empty="窗口内没有模型被调用"
-            footer={hint(a.by_model.length, BREAKDOWN_LIMIT, "个模型")}
+            footer={hint(a.by_model.length, AUDIT_TOP_N.model, "个模型")}
             columns={[
               {
                 header: "模型",
@@ -338,7 +307,7 @@ function AdminHomeBody({ a }: { a: GlobalAudit }) {
             rows={a.by_user}
             rowKey={(u) => `${u.user_email}|${u.department}`}
             empty="窗口内没有员工产生调用"
-            footer={hint(a.by_user.length, 50, "人")}
+            footer={hint(a.by_user.length, AUDIT_TOP_N.user, "人")}
             columns={[
               { header: "员工", cell: (u) => u.user_email },
               {
@@ -369,49 +338,6 @@ function AdminHomeBody({ a }: { a: GlobalAudit }) {
         )}
       </Section>
     </>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  delta,
-  hint,
-}: {
-  label: string;
-  value: string | number;
-  delta?: ReactNode;
-  hint?: string;
-}) {
-  return (
-    <div
-      style={{
-        // 竖线分隔而不是靠间距 —— 靠间距的话在宽屏上要么挤在一起
-        // 要么散开, 分隔线让每个指标的边界固定。
-        padding: "0 20px",
-        borderRight: "1px solid var(--border-soft)",
-        minWidth: 96,
-      }}
-    >
-      <div
-        style={{
-          fontSize: 11,
-          color: "var(--text-muted)",
-          marginBottom: 2,
-        }}
-      >
-        {label}
-      </div>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-        <span style={{ fontSize: 20, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
-          {value}
-        </span>
-        {delta}
-      </div>
-      {hint ? (
-        <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 1 }}>{hint}</div>
-      ) : null}
-    </div>
   );
 }
 

@@ -84,6 +84,26 @@ export interface AuditFilter {
   user_email?: string | null;
 }
 
+/** 用量审计各维度的截断上限 —— 对应 quota.py `audit_summary_global_since`
+ *  里 by_model / by_department 的 `LIMIT 20` 和 by_user 的 `LIMIT 50`。
+ *
+ * 8/1 提到这里: 原来这两个数在前端有四份写法 —— AdminHome 的
+ * `BREAKDOWN_LIMIT`、PerfPage 里两处裸的 `>= 20`、AuditBreakdowns 里裸的
+ * `>= 50`。它们都在回答同一个问题（这张表是不是被截断了），而答错的后果
+ * **是静默的**：截断没提示的话，占比之和加不到 100%、"对账不平"的告警会
+ * 永久挂着，两种都看不出真正的原因。
+ *
+ * 改后端的 LIMIT 时必须同步改这里，scripts/check-audit-limits.mjs 盯着。 */
+export const AUDIT_TOP_N = { model: 20, department: 20, user: 50 } as const;
+
+/** 性能页各维度的截断上限 —— 对应 metrics.py `query_perf_summary_global`。
+ *
+ * ⚠ **不要跟 AUDIT_TOP_N 合并。** 两者今天都是 20, 但它们查的是不同的表
+ * （审计走 quota_events, 性能走 gateway_audit）、不同的函数、不同的排序键
+ * （tokens vs 调用次数）。合成一个常量的话，改审计那边的 LIMIT 会连带把
+ * 性能页的判断改错 —— 而性能页什么都没动过。 */
+export const PERF_TOP_N = { model: 20, department: 20 } as const;
+
 export interface GlobalAudit {
   since_ms: number;
   /** BL-AUDIT-UX-P1 (5/17): 时间窗长度 (h). 24/168/720 = 24h/7d/30d. */

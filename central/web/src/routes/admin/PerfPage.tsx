@@ -29,6 +29,7 @@ import {
   fetchModelCatalog,
   type CatalogModel,
   type GlobalPerf,
+  PERF_TOP_N,
 } from "../../lib/me";
 // P3.5.94 (6/23 鸿波): model/dept filter 改 select 下拉. 复用 AccessPage 已
 // 用的 listDepartments + 新加的 fetchModelCatalog (调 /v1/catalog).
@@ -376,8 +377,8 @@ export function PerfPage() {
               }}
               empty="窗口内没有模型被调用"
               footer={
-                perf.by_model.length >= 20
-                  ? "只显示调用量最高的 20 个模型"
+                perf.by_model.length >= PERF_TOP_N.model
+                  ? `只显示调用量最高的 ${PERF_TOP_N.model} 个模型。点一行 = 筛选该模型`
                   : "点一行 = 筛选该模型"
               }
               columns={[
@@ -425,8 +426,8 @@ export function PerfPage() {
               }}
               empty="窗口内没有部门产生调用"
               footer={
-                perf.by_department.length >= 20
-                  ? "只显示调用量最高的 20 个部门"
+                perf.by_department.length >= PERF_TOP_N.department
+                  ? `只显示调用量最高的 ${PERF_TOP_N.department} 个部门。点一行 = 筛选该部门`
                   : "点一行 = 筛选该部门"
               }
               columns={[
