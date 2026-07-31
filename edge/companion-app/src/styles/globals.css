@@ -3954,40 +3954,43 @@ button {
 }
 
 .chat-session-row__delete {
-  top: 17px;
-  right: 9px;
-  width: 28px;
-  height: 25px;
+  top: 15px;
+  right: 8px;
+  width: 30px;
+  height: 30px;
   color: #76858a;
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: 8px;
 }
 
 .chat-session-row[data-active="true"] .chat-session-row__delete {
-  color: #b42323;
-  background: #fff1f1;
-  border-color: #efb4b4;
-  opacity: 0.86;
+  color: #b91c1c;
+  background: #fff;
+  border-color: #f29a9a;
+  box-shadow: 0 2px 8px rgba(185, 28, 28, 0.12);
+  opacity: 1;
   pointer-events: auto;
 }
 
 .chat-session-row:hover .chat-session-row__delete,
 .chat-session-row:focus-within .chat-session-row__delete {
-  color: #b42323;
-  background: #fff1f1;
-  border-color: #efb4b4;
+  color: #b91c1c;
+  background: #fff;
+  border-color: #ef8f8f;
+  box-shadow: 0 3px 10px rgba(185, 28, 28, 0.16);
   opacity: 1;
 }
 
 .chat-session-row__delete:hover {
   color: #fff;
-  background: #d32f2f;
-  border-color: #b71c1c;
-  box-shadow: 0 3px 9px rgba(183, 28, 28, 0.24);
+  background: #dc2626;
+  border-color: #b91c1c;
+  box-shadow: 0 4px 12px rgba(185, 28, 28, 0.3);
+  transform: translateY(-1px);
 }
 
 .chat-session-row__delete[data-confirming="true"] {
-  top: 16px;
+  top: 15px;
   right: 8px;
   min-width: 44px;
   height: 27px;

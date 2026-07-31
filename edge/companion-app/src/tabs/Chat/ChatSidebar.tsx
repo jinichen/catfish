@@ -567,7 +567,7 @@ function SessionRow({
             {confirmingDelete ? (
               "确认"
             ) : (
-              <Trash size={16} weight="bold" aria-hidden="true" />
+              <Trash size={18} weight="bold" aria-hidden="true" />
             )}
           </button>
         )}
