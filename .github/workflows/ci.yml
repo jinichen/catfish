@@ -97,6 +97,76 @@ jobs:
             -p no:cacheprovider
 
   # ════════════════════════════════════════════════════════════
+  # 2b. gateway — 真 PG 上跑真 SQL
+  # ════════════════════════════════════════════════════════════
+  # 上面那个 job 把 CATFISH_DB_URL 设成空, 于是所有碰库的测试都用内存字典
+  # 替身。那样能验业务判断, 但有一整类 bug 它**结构上就看不见**:
+  #
+  #   · 迁移 SQL 到底把什么写进了 JSONB
+  #   · pydantic 校验 + model_dump + JSONB round-trip 之后哪些字段还在
+  #
+  # 8/1 实际漏掉过两个, 都是零报错的:
+  #   gemini-flash 的 timeout 被拆分从 60 静默抬到 180
+  #   界面存一次模型就丢掉 upstream.provider, 而 api_key_env 落回
+  #   INTERNAL_LLM_KEY —— 内网集群的凭据会被发到公网端点
+  #
+  # 起个真 postgres 服务, 跑真 alembic, 就这一个文件。
+  gateway-real-pg:
+    name: gateway tests (真 PG)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: catfish
+          POSTGRES_PASSWORD: catfish
+          POSTGRES_DB: catfish
+        ports: ["5432:5432"]
+        # 没有 health check 的话, 后面的 alembic 会在 PG 还没起来时连失败
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-asyncio python-dotenv 'litellm>=1.84.0,<2.0.0' \
+            fastapi httpx 'pydantic>=2' pyjwt cryptography pyyaml \
+            'psycopg[binary]' alembic sqlalchemy
+
+      - name: Alembic upgrade head
+        working-directory: central/llm-gateway
+        env:
+          CATFISH_DB_URL: postgresql://catfish:catfish@localhost:5432/catfish
+        run: alembic upgrade head
+
+      - name: Run real-PG tests
+        working-directory: central/llm-gateway
+        env:
+          CATFISH_TEST_PG_URL: postgresql://catfish:catfish@localhost:5432/catfish
+        run: |
+          PYTHONPATH=src python -m pytest tests/test_provider_split_real_pg.py -v \
+            -p no:cacheprovider
+          # ⚠ 这个文件没设 CATFISH_TEST_PG_URL 时会整体 skip —— 而 skip 在
+          # pytest 里是绿的。所以这里再确认一次它**真的跑了**, 否则哪天
+          # 服务容器起不来, 这个 job 会安静地全绿。
+          PYTHONPATH=src python -m pytest tests/test_provider_split_real_pg.py \
+            -p no:cacheprovider -q 2>&1 | tee /tmp/out.txt
+          grep -qE "^[0-9]+ passed" /tmp/out.txt || {
+            echo "::error::真 PG 测试一条都没跑 (多半是 postgres 服务没起来)"; exit 1; }
+
+  # ════════════════════════════════════════════════════════════
   # 3. Companion 前端 — tsc strict + vite build
   # ════════════════════════════════════════════════════════════
   companion:
@@ -379,6 +449,7 @@ jobs:
     needs:
       - tool-bridge
       - gateway
+      - gateway-real-pg
       - companion
       - central-web
       - central-services
@@ -392,6 +463,9 @@ jobs:
           declare -A results
           results[tool-bridge]="${{ needs.tool-bridge.result }}"
           results[gateway]="${{ needs.gateway.result }}"
+          # 8/1: 真 PG 那个 job 也是 core。不挂在这里的话它红了整体还是绿的
+          # —— 而它专门盯的就是"零报错的那类 bug"。
+          results[gateway-real-pg]="${{ needs.gateway-real-pg.result }}"
           results[companion]="${{ needs.companion.result }}"
           results[central-web]="${{ needs.central-web.result }}"
           results[central-services]="${{ needs.central-services.result }}"
