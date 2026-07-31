@@ -19,12 +19,13 @@
  *
  * ## 两组常量, 不是一组
  *
- * `AUDIT_TOP_N` ← quota.py `audit_summary_global_since` (quota_events 表)
- * `PERF_TOP_N`  ← metrics.py `query_perf_summary_global` (gateway_audit 表)
+ * `AUDIT_TOP_N` ← quota.py `audit_summary_global_since`   全公司审计
+ * `DEPT_TOP_N`  ← quota.py `audit_summary_dept_since`     单个部门
+ * `PERF_TOP_N`  ← metrics.py `query_perf_summary_global`  性能页
  *
- * 今天两组都是 20, 但它们是不同的表、不同的函数、不同的排序键。合成一个
- * 常量的话, 改审计那边的 LIMIT 会连带把性能页的判断改错 —— 而性能页什么
- * 都没动过。所以这里也**分别**校验。
+ * 三组不是一组: 不同的函数、不同的表、不同的排序键, 而且**值本来就不同**
+ * (全公司 by_user 是 50, 部门 by_user 是 10)。合成一组的话, 改一处会把
+ * 另外两处的判断悄悄改错。所以这里分别校验。
  *
  * ## 后端源码不在的时候
  *
@@ -113,6 +114,7 @@ function readConst(name, keys) {
 }
 
 const AUDIT = readConst("AUDIT_TOP_N", ["model", "department", "user"]);
+const DEPT = readConst("DEPT_TOP_N", ["model", "user"]);
 const PERF = readConst("PERF_TOP_N", ["model", "department"]);
 
 // ── 后端 SQL 里的 LIMIT ──────────────────────────────────────────────
@@ -154,6 +156,11 @@ const auditFound = limitsIn(
     t === "model" ? "model" : t === "dept" ? "department" : t.startsWith("ue") ? "user" : undefined,
   "quota.py audit_summary_global_since",
 );
+const deptFound = limitsIn(
+  funcBody(readFileSync(QUOTA_PY, "utf8"), "audit_summary_dept_since", QUOTA_PY),
+  (t) => (t === "model" ? "model" : t === "user_email" ? "user" : undefined),
+  "quota.py audit_summary_dept_since",
+);
 const perfFound = limitsIn(
   funcBody(readFileSync(METRICS_PY, "utf8"), "query_perf_summary_global", METRICS_PY),
   (t) => (t === "model" ? "model" : t === "department" ? "department" : undefined),
@@ -181,6 +188,7 @@ function compare(label, front, found, source) {
 }
 
 compare("AUDIT_TOP_N", AUDIT, auditFound, "quota.py audit_summary_global_since");
+compare("DEPT_TOP_N", DEPT, deptFound, "quota.py audit_summary_dept_since");
 compare("PERF_TOP_N", PERF, perfFound, "metrics.py query_perf_summary_global");
 
 if (problems.length)
@@ -191,6 +199,6 @@ if (problems.length)
   );
 
 console.log(
-  `✓ 截断上限自查通过 (审计 ${AUDIT.model}/${AUDIT.department}/${AUDIT.user} · ` +
-    `性能 ${PERF.model}/${PERF.department}, 前后端一致)`,
+  `✓ 截断上限自查通过 (全公司 ${AUDIT.model}/${AUDIT.department}/${AUDIT.user} · ` +
+    `部门 ${DEPT.model}/${DEPT.user} · 性能 ${PERF.model}/${PERF.department}, 前后端一致)`,
 );

@@ -117,6 +117,8 @@ function Breakdown({
       // 没有 COALESCE(NULLIF(...)) (dept 和 user 那两条都有), 所以空串是
       // 真的可能出现的。
       rowClickable={(r) => r.key !== ""}
+      // 一屏布局: 表身在这一块里滚, 表头钉住, footer(截断说明/点击提示) 不跟着滚。
+      fill
       empty={empty}
       footer={footer}
     />

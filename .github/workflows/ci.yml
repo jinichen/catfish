@@ -248,6 +248,8 @@ jobs:
       #   check-css-vars      — 引用了但从没定义过的 CSS 变量 (边框会直接消失)
       #   check-audit-limits  — 前端的截断上限常量 vs 后端 SQL 的 LIMIT
       #                         (对不上的话"只显示前 N 名"和对账告警都会说谎)
+      #   check-page-scroll   — 一屏布局: 标了"只滚数据区"的页必须真有一个
+      #                         fill 的块, 否则内容被裁掉且没有滚动条
       - name: Static consistency checks
         working-directory: central/web
         run: npm run check

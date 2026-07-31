@@ -34,6 +34,7 @@ import {
   Toolbar,
 } from "../../components/DataTable";
 import { ConfirmDialog } from "../../components/Dialog";
+import { PageShell } from "../../components/PageShell";
 import { RoleGate } from "../../components/RoleGate";
 import {
   describeKey,
@@ -125,7 +126,7 @@ function ProvidersEditor() {
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <PageShell scroll="data" gap={10}>
       {confirming ? (
         <ConfirmDialog
           title={`删除供应商「${confirming.display_name}」？`}
@@ -259,8 +260,9 @@ function ProvidersEditor() {
           onSave={() => void save()}
         />
       ) : (
-        <Section>
+        <Section fill>
           <DataTable
+            fill
             rows={data?.providers ?? []}
             rowKey={(p) => p.id}
             empty={
@@ -412,7 +414,7 @@ function ProvidersEditor() {
           />
         </Section>
       )}
-    </div>
+    </PageShell>
   );
 }
 

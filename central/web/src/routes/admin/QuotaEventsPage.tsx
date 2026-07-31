@@ -2,15 +2,34 @@
  *
  * 7/30 从 AdminPage.tsx 拆出来 (CLAUDE.md 军规 §1)。见 AdminHome.tsx 文件头。
  *
- * ⚠ 这个文件里还留着一套自己的 thStyle / tdStyle / btnStyle / StatusBadge ——
- * 也就是 DataTable.tsx 文件头说的"6 份徽章 5 份按钮"里的一份。这一轮没换,
- * 因为换它要连带重排这张 10 列的表, 跟"拆文件"不是一件事, 混在一起
- * review 不清。下次动这一页时顺手换掉。
+ * ## 8/1 改了两件事
+ *
+ * **一屏布局。** 原来整个 <main> 滚: 一翻页, 页面标题、五个筛选框、
+ * "共 200 条"、分页按钮全跟着滚出屏幕 —— 而这几样恰恰是看日志时最需要
+ * 一直在手边的东西 (改个筛选条件要先滚回顶部, 翻下一页要先滚到底)。
+ * 现在只有表身滚, 表头 sticky。
+ *
+ * 表头钉住在这一页尤其要紧: 连着四个数字列 (in / out / tot / 延迟 ms),
+ * 滚到第 80 行时"342772"是哪一列只能靠数。
+ *
+ * **换掉自己那套表格和徽章。** 上一轮的文件头写着"这一轮没换, 下次动这一页
+ * 时顺手换掉" —— 这次动了, 换了。thStyle / tdStyle / btnStyle / StatusBadge
+ * 全部退役, 走共享的 DataTable / Badge / BTN。
  */
 
 import { useEffect, useState } from "react";
 
-import { Card } from "../../components/Card";
+import {
+  Badge,
+  BTN,
+  BTN_PRIMARY,
+  DataTable,
+  Section,
+  Toolbar,
+  type BadgeTone,
+  type Column,
+} from "../../components/DataTable";
+import { PageShell, Stale } from "../../components/PageShell";
 import {
   fetchAuditEvents,
   type AuditEvent,
@@ -95,17 +114,79 @@ export function AdminQuotaEvents() {
     URL.revokeObjectURL(url);
   };
 
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
-      <Card title="Quota 历史日志 (逐条)">
-        <div style={{ color: "var(--text-muted)", fontSize: 12, marginBottom: 8 }}>
-          直接读 gateway_audit 表. 跟 /admin/quota (规则) 互补 — 这里看实际数据,
-          那里看配置. RBAC 严格 admin only (sysadmin 通过).
-        </div>
+  // ⚠ 凡是 truncate 的列都配了 title。旧版整列 nowrap 不截、靠横向滚动,
+  // 全值始终可读; 换成截断之后, 没有 title 的话被省略号吃掉的部分就真没了
+  // (DataTable 的 truncate 文档也写着这条)。
+  const columns: Column<AuditEvent>[] = [
+    {
+      header: "时间",
+      cell: (e) => new Date(e.ts * 1000).toLocaleString("zh-CN"),
+      nowrap: true,
+    },
+    {
+      header: "员工",
+      cell: (e) => <span title={e.user}>{e.user}</span>,
+      truncate: true,
+      width: 200,
+    },
+    {
+      header: "部门",
+      cell: (e) => <span title={e.department}>{e.department}</span>,
+      truncate: true,
+      width: 120,
+    },
+    {
+      header: "模型",
+      cell: (e) => <span title={e.model}>{e.model}</span>,
+      truncate: true,
+      width: 200,
+    },
+    { header: "in", cell: (e) => e.prompt_tokens.toLocaleString(), align: "right", width: 76 },
+    { header: "out", cell: (e) => e.completion_tokens.toLocaleString(), align: "right", width: 68 },
+    {
+      header: "tot",
+      cell: (e) => <span style={{ fontWeight: 500 }}>{e.total_tokens.toLocaleString()}</span>,
+      align: "right",
+      width: 84,
+    },
+    {
+      header: "延迟 ms",
+      cell: (e) => Math.round(e.latency_ms).toLocaleString(),
+      align: "right",
+      width: 76,
+    },
+    { header: "状态", cell: (e) => <StatusBadge status={e.status} />, width: 96 },
+    {
+      header: "错误",
+      cell: (e) => (
+        <span style={{ color: "var(--text-muted)" }} title={e.error ?? ""}>
+          {e.error ?? ""}
+        </span>
+      ),
+      truncate: true,
+      width: 280,
+    },
+  ];
 
-        {/* 筛选条 */}
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
-          <FilterField label="时间范围 (小时)">
+  return (
+    <PageShell scroll="data">
+      <Toolbar title="配额日志（逐条）">
+        <span style={{ color: "var(--text-muted)", fontSize: 11 }}>
+          直接读 gateway_audit 表
+          <span
+            title="跟「配额」页互补 —— 那边看规则, 这里看实际发生了什么。RBAC 严格 admin only (sysadmin 通过)。"
+            style={{ cursor: "help", marginLeft: 4 }}
+          >
+            ⓘ
+          </span>
+        </span>
+      </Toolbar>
+
+      {/* 筛选条。**留在滚动区外面** —— 改筛选条件是"改主意"的动作,
+          滚到第 80 行才想起要换个部门时, 不该先滚回顶部。 */}
+      <Section>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-end" }}>
+          <FilterField label="时间范围">
             <select
               value={hoursBack}
               onChange={(e) => setHoursBack(Number(e.target.value))}
@@ -155,125 +236,90 @@ export function AdminQuotaEvents() {
               <option value="interrupted_resumed">interrupted_resumed</option>
             </select>
           </FilterField>
-          <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
-            <button
-              onClick={() => { setPage(0); load(); }}
-              style={btnStyle("primary")}
-            >
-              {loading ? "查询中…" : "查询"}
-            </button>
-            <button
-              onClick={exportCSV}
-              disabled={!data || data.events.length === 0}
-              style={btnStyle("ghost")}
-            >
-              导出 CSV
-            </button>
-          </div>
-        </div>
-
-        {/* 结果 */}
-        {loading && <div style={{ color: "var(--text-muted)" }}>加载中…</div>}
-        {!loading && error && (
-          <div
-            style={{
-              padding: 12,
-              background: "#fef2f2",
-              border: "1px solid #fecaca",
-              borderRadius: 6,
-              color: "#991b1b",
-              fontSize: 13,
-              lineHeight: 1.5,
+          <button
+            onClick={() => {
+              setPage(0);
+              load();
             }}
+            style={BTN_PRIMARY}
           >
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>请求失败</div>
-            <div style={{ fontFamily: "monospace", fontSize: 12 }}>{error}</div>
-            <div style={{ marginTop: 10, color: "#7f1d1d" }}>
-              常见原因:
-              <ul style={{ paddingLeft: 20, margin: "4px 0 0 0" }}>
-                <li><b>404 not found</b>: gateway 还没重启 — 新 endpoint <code>/api/audit/events</code> 是这次加的, 跑 <code>pkill -f catfish_gateway && sleep 3</code> 然后重启 gateway</li>
-                <li><b>403 forbidden</b>: 当前 role 不是 admin / sysadmin (理论上你 sysadmin 不会撞到)</li>
-                <li><b>401 unauthorized</b>: OIDC token 过期, 退出重登</li>
-                <li><b>network error</b>: gateway 进程没起 / 端口换了</li>
-              </ul>
-            </div>
-          </div>
-        )}
-        {!loading && !error && data && data.events.length === 0 && (
-          <div style={{ color: "var(--text-muted)", padding: 16, textAlign: "center" }}>
-            没有匹配的事件 — 试试放宽时间范围 / 清空筛选
-          </div>
-        )}
-        {!loading && !error && data && data.events.length > 0 && (
-          <>
-            <div style={{ color: "var(--text-muted)", fontSize: 12, marginBottom: 6 }}>
-              共 {data.total.toLocaleString()} 条, 当前 {page * PAGE_SIZE + 1}–
-              {page * PAGE_SIZE + data.events.length} 条
-            </div>
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                <thead>
-                  <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                    <th style={thStyle}>时间</th>
-                    <th style={thStyle}>员工</th>
-                    <th style={thStyle}>部门</th>
-                    <th style={thStyle}>模型</th>
-                    <th style={{ ...thStyle, textAlign: "right" }}>in</th>
-                    <th style={{ ...thStyle, textAlign: "right" }}>out</th>
-                    <th style={{ ...thStyle, textAlign: "right" }}>tot</th>
-                    <th style={{ ...thStyle, textAlign: "right" }}>延迟 ms</th>
-                    <th style={thStyle}>状态</th>
-                    <th style={thStyle}>错误</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.events.map((e: AuditEvent, i) => (
-                    <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
-                      <td style={tdStyle}>{new Date(e.ts * 1000).toLocaleString("zh-CN")}</td>
-                      <td style={tdStyle}>{e.user}</td>
-                      <td style={tdStyle}>{e.department}</td>
-                      <td style={tdStyle}>{e.model}</td>
-                      <td style={{ ...tdStyle, textAlign: "right" }}>{e.prompt_tokens}</td>
-                      <td style={{ ...tdStyle, textAlign: "right" }}>{e.completion_tokens}</td>
-                      <td style={{ ...tdStyle, textAlign: "right", fontWeight: 500 }}>{e.total_tokens}</td>
-                      <td style={{ ...tdStyle, textAlign: "right" }}>{Math.round(e.latency_ms)}</td>
-                      <td style={tdStyle}>
-                        <StatusBadge status={e.status} />
-                      </td>
-                      <td style={{ ...tdStyle, color: "var(--text-muted)", maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                        title={e.error}
-                      >
-                        {e.error ?? ""}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {/* 分页 */}
-            <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center" }}>
-              <button
-                onClick={() => setPage((p) => Math.max(0, p - 1))}
-                disabled={page === 0}
-                style={btnStyle("ghost")}
-              >
-                ← 上一页
-              </button>
-              <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                第 {page + 1} / {totalPages} 页
+            {loading ? "查询中…" : "查询"}
+          </button>
+          <button
+            onClick={exportCSV}
+            disabled={!data || data.events.length === 0}
+            style={BTN}
+          >
+            导出 CSV
+          </button>
+        </div>
+      </Section>
+
+      {error && <ErrorPanel error={error} />}
+
+      {!error && (
+        <Section
+          fill
+          title={
+            data ? (
+              <span style={{ fontWeight: 400, color: "var(--text-muted)" }}>
+                共 {data.total.toLocaleString()} 条 · 当前{" "}
+                {data.events.length === 0
+                  ? 0
+                  : `${page * PAGE_SIZE + 1}–${page * PAGE_SIZE + data.events.length}`}
               </span>
-              <button
-                onClick={() => setPage((p) => p + 1)}
-                disabled={page + 1 >= totalPages}
-                style={btnStyle("ghost")}
-              >
-                下一页 →
-              </button>
-            </div>
-          </>
-        )}
-      </Card>
-    </div>
+            ) : undefined
+          }
+          action={
+            data && data.events.length > 0 ? (
+              // 分页器放标题行 —— 它跟"共 N 条"是同一件事, 而且在滚动区
+              // **外面**, 翻页不用先滚到底。原来它在表格下方, 50 行一页时
+              // 每次翻页都要滚一整屏。
+              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <button
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                  disabled={page === 0}
+                  style={BTN}
+                >
+                  ← 上一页
+                </button>
+                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                  {page + 1} / {totalPages}
+                </span>
+                <button
+                  onClick={() => setPage((p) => p + 1)}
+                  disabled={page + 1 >= totalPages}
+                  style={BTN}
+                >
+                  下一页 →
+                </button>
+              </span>
+            ) : undefined
+          }
+        >
+          {/* 8/1: 加载期间压暗。原来 loading 只塞在 empty 里 —— 那只在 0 行时
+              生效, 于是改完筛选点查询, 表里显示的还是**上一次的行**, 而筛选条
+              和"共 N 条"都已经是新的, 看起来像"查完了, 结果就是这些"。
+              筛选条和分页器留在外面, 它们是改主意的出口。 */}
+          <Stale fill loading={loading}>
+            <DataTable
+              fill
+              columns={columns}
+              rows={data?.events ?? []}
+              // ts 秒级会撞 (同一秒里多条), 加上下标才唯一。
+              rowKey={(e, i) => `${e.ts}-${i}`}
+              empty={
+                // data 还没回来时不能说"没有匹配的事件" —— 首帧
+                // (data=null, loading=false) 会闪一下这句假话。
+                data === null
+                  ? "加载中…"
+                  : "没有匹配的事件 —— 试试放宽时间范围 / 清空筛选"
+              }
+            />
+          </Stale>
+        </Section>
+      )}
+    </PageShell>
   );
 }
 
@@ -294,27 +340,41 @@ function FilterField({ label, children }: { label: string; children: React.React
   );
 }
 
+/** 8/1: 原来是这个文件私有的一份实现, 硬编码 #10b981 / #f59e0b / #ef4444
+ *  —— 也就是 DataTable 文件头说的"6 份徽章"里的一份。换成共享 Badge 之后
+ *  颜色走 --status-* 变量, 跟别处的成功/警告/失败是同一套。 */
 function StatusBadge({ status }: { status: string }) {
-  const color =
-    status === "ok"
-      ? "#10b981"
-      : status === "interrupted_resumed"
-      ? "#f59e0b"
-      : "#ef4444";
+  const tone: BadgeTone =
+    status === "ok" ? "ok" : status === "interrupted_resumed" ? "warn" : "err";
+  return <Badge tone={tone}>{status}</Badge>;
+}
+
+function ErrorPanel({ error }: { error: string }) {
   return (
-    <span
-      style={{
-        display: "inline-block",
-        padding: "2px 8px",
-        borderRadius: 4,
-        background: color + "22",
-        color,
-        fontSize: 11,
-        fontWeight: 500,
-      }}
-    >
-      {status}
-    </span>
+    <Section title="请求失败">
+      <div style={{ fontSize: 12, lineHeight: 1.6 }}>
+        <div style={{ fontFamily: "var(--font-mono)", color: "var(--status-err)" }}>
+          {error}
+        </div>
+        <div style={{ marginTop: 8, color: "var(--text-muted)" }}>
+          常见原因:
+          <ul style={{ paddingLeft: 20, margin: "4px 0 0 0" }}>
+            <li>
+              <b>404</b>：gateway 还没重启 —— <code>/api/audit/events</code> 是后加的
+            </li>
+            <li>
+              <b>403</b>：当前角色不是 admin / sysadmin
+            </li>
+            <li>
+              <b>401</b>：OIDC token 过期，退出重登
+            </li>
+            <li>
+              <b>network error</b>：gateway 进程没起 / 端口换了
+            </li>
+          </ul>
+        </div>
+      </div>
+    </Section>
   );
 }
 
@@ -322,34 +382,8 @@ const inputStyle: React.CSSProperties = {
   background: "var(--bg-elev)",
   border: "1px solid var(--border)",
   borderRadius: "var(--radius-sm)",
-  padding: "4px 8px",
+  padding: "3px 8px",
   color: "var(--text)",
   fontSize: 12,
-  minWidth: 160,
+  minWidth: 150,
 };
-
-const thStyle: React.CSSProperties = {
-  padding: "6px 10px",
-  textAlign: "left",
-  fontWeight: 500,
-  color: "var(--text-muted)",
-  fontSize: 11,
-  whiteSpace: "nowrap",
-};
-
-const tdStyle: React.CSSProperties = {
-  padding: "6px 10px",
-  whiteSpace: "nowrap",
-};
-
-function btnStyle(variant: "primary" | "ghost"): React.CSSProperties {
-  return {
-    padding: "6px 14px",
-    borderRadius: "var(--radius-sm)",
-    border: "1px solid " + (variant === "primary" ? "var(--accent)" : "var(--border)"),
-    background: variant === "primary" ? "var(--accent)" : "transparent",
-    color: variant === "primary" ? "white" : "var(--text)",
-    cursor: "pointer",
-    fontSize: 12,
-  };
-}

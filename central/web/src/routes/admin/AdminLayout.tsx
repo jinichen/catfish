@@ -21,9 +21,13 @@
  *
  * ## 两个实现上的要点
  *
- * **侧栏必须 sticky。** App.tsx 的布局是 height:100vh 的 flex column, 其中
- * <main> 才是滚动容器 (overflowY:auto)。侧栏作为它的子元素, 不加 sticky 会
- * 随内容一起滚走 —— 那就退化成了"页面顶部的一段链接", 常驻导航的意义没了。
+ * **整个后台是一屏, 滚动交给数据区** (8/1 改)。这个壳自己 flex:1 + minHeight:0
+ * 占满 <main>, 右侧内容列是 flex column, 页面把该滚的那一块标成 `fill`。
+ *
+ * 原来是整个 <main> 滚: 一翻页, 页面标题、筛选条、分页器全跟着滚出屏幕 ——
+ * 而这三样恰恰是看日志时最需要一直在手边的。侧栏当时靠 `position: sticky`
+ * 单独钉住, 那只是给一个本不该滚的东西打的补丁。现在没有外层滚动了,
+ * sticky 也就不需要了。
  *
  * **权限判定复用 roleAllows。** 侧栏显不显示某一项, 跟那一项对应页面的
  * RoleGate 用的是同一个函数。各写一套的话会出现"菜单里有、点进去 403",
@@ -82,19 +86,25 @@ export function AdminLayout({ children }: { children: ReactNode }) {
         display: "grid",
         gridTemplateColumns: "168px minmax(0, 1fr)",
         gap: "var(--space-4)",
-        alignItems: "start",
+        // start → stretch: 右侧内容列要拿到整屏高度, 才轮得到它内部
+        // 决定"哪一块滚"。alignItems:start 的话它高度是 auto, 高度确定的
+        // 链条在这里就断了。
+        alignItems: "stretch",
+        flex: 1,
+        minHeight: 0,
       }}
     >
       <nav
         aria-label="后台导航"
         style={{
-          // 见文件头: <main> 才是滚动容器, 不 sticky 侧栏会随内容滚走
-          position: "sticky",
-          top: 0,
           display: "flex",
           flexDirection: "column",
           gap: 2,
           fontSize: 13,
+          // 侧栏自己也可能比屏幕高 (13 项 + 5 个分组标题, 小屏上放不下),
+          // 那时它单独滚, 不去动右边。
+          overflowY: "auto",
+          minHeight: 0,
         }}
       >
         {visible.map((g) => (
@@ -134,7 +144,19 @@ export function AdminLayout({ children }: { children: ReactNode }) {
         ))}
       </nav>
 
-      <div style={{ minWidth: 0 }}>{children}</div>
+      {/* 内容列。flex column + minHeight:0 = 给子页面一个高度确定的容器,
+          页面把该滚的那一块标 `fill` 就行 (见 DataTable 的 Section)。
+          minWidth: 0 是老的那条 —— 不写的话宽表会把整个 grid 撑破。 */}
+      <div
+        style={{
+          minWidth: 0,
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        {children}
+      </div>
     </div>
   );
 }

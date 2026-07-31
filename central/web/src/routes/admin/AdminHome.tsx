@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { PageShell } from "../../components/PageShell";
 
 import {
   DataTable,
@@ -97,7 +98,7 @@ export function AdminHome() {
   const windowLabel = hours === 24 ? "24 小时" : hours === 168 ? "7 天" : "30 天";
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+    <PageShell scroll="data">
       <Toolbar title="全公司概况">
         <span style={{ color: "var(--text-muted)", fontSize: 11 }}>近 {windowLabel}</span>
         {([
@@ -126,7 +127,7 @@ export function AdminHome() {
       ) : (
         <AdminHomeBody a={audit} />
       )}
-    </div>
+    </PageShell>
   );
 }
 
@@ -210,7 +211,7 @@ function AdminHomeBody({ a }: { a: GlobalAudit }) {
           数据错位。这比多点一下糟得多。
           这三张回答的是同一个问题的三个切面 (这些 token 花在哪), 正是分段
           切换该用的场景。真要横向交叉比对, 去「用量审计」下钻。 */}
-      <Section>
+      <Section fill>
         <div style={{ marginBottom: 6 }}>
           <Tabs
             active={tab}
@@ -225,6 +226,7 @@ function AdminHomeBody({ a }: { a: GlobalAudit }) {
 
         {tab === "dept" && (
           <DataTable
+            fill
             rows={a.by_department}
             rowKey={(d) => d.department}
             empty="窗口内没有部门产生调用"
@@ -247,6 +249,7 @@ function AdminHomeBody({ a }: { a: GlobalAudit }) {
 
         {tab === "model" && (
           <DataTable
+            fill
             rows={a.by_model}
             rowKey={(m) => m.model}
             empty="窗口内没有模型被调用"
@@ -304,6 +307,7 @@ function AdminHomeBody({ a }: { a: GlobalAudit }) {
 
         {tab === "user" && (
           <DataTable
+            fill
             rows={a.by_user}
             rowKey={(u) => `${u.user_email}|${u.department}`}
             empty="窗口内没有员工产生调用"

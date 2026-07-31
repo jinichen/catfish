@@ -9,10 +9,11 @@
     "build": "npm run check && tsc -b && vite build",
     "preview": "vite preview --port 5173",
     "lint": "npm run check && tsc --noEmit",
-    "check": "npm run check:routes && npm run check:css && npm run check:audit-limits",
+    "check": "npm run check:routes && npm run check:css && npm run check:audit-limits && npm run check:page-scroll",
     "check:routes": "node scripts/check-admin-routes.mjs",
     "check:css": "node scripts/check-css-vars.mjs",
-    "check:audit-limits": "node scripts/check-audit-limits.mjs"
+    "check:audit-limits": "node scripts/check-audit-limits.mjs",
+    "check:page-scroll": "node scripts/check-page-scroll.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

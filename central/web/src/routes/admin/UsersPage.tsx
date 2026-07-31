@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { PageShell } from "../../components/PageShell";
 import { Link, Routes, Route, useNavigate, useParams } from "react-router-dom";
 
 import { Card, Row } from "../../components/Card";
@@ -82,7 +83,7 @@ function UsersList() {
     : users;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+    <PageShell gap="var(--space-4)">
       <Card
         title={
           // 数量三态: 加载中 / 读取失败 / 真实数字。
@@ -195,7 +196,7 @@ function UsersList() {
           </div>
         </Card>
       )}
-    </div>
+    </PageShell>
   );
 }
 

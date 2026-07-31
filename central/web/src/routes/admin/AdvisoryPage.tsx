@@ -13,6 +13,7 @@
 import { useEffect, useState } from "react";
 
 import { Card, Row } from "../../components/Card";
+import { PageShell } from "../../components/PageShell";
 import { RoleGate } from "../../components/RoleGate";
 import {
   advisoryApi,
@@ -77,7 +78,7 @@ function AdvisoryList() {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+    <PageShell gap="var(--space-4)">
       <Card
         title="🛡 Advisory 管理 (sysadmin)"
         action={
@@ -196,7 +197,7 @@ function AdvisoryList() {
           </table>
         </Card>
       )}
-    </div>
+    </PageShell>
   );
 }
 

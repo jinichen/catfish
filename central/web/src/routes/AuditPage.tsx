@@ -10,9 +10,10 @@
  *        表格换共享 DataTable, 删掉永远不渲染的异常告警占位
  */
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 
 import { Section, Tabs } from "../components/DataTable";
+import { PageShell, Stale } from "../components/PageShell";
 import { RoleGate } from "../components/RoleGate";
 import {
   fetchGlobalAudit,
@@ -80,7 +81,7 @@ export function AuditPage() {
 
   return (
     <RoleGate require={["manager", "admin"]}>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <PageShell scroll="data">
         {error && (
           <Section>
             <div style={{ fontSize: 12, color: "var(--status-err)" }}>
@@ -144,7 +145,7 @@ export function AuditPage() {
 
                 这三张回答的是同一个问题的三个切面 (这些 token 花在哪),
                 正是分段该用的场景。 */}
-            <Section>
+            <Section fill>
               {/* Tabs **不包 Stale**: 切维度是纯前端的, 不发请求。跟着一起
                   压暗禁点的话, 刷新期间连"我想看部门"都执行不了, 而它本来
                   立刻就能生效。
@@ -162,7 +163,7 @@ export function AuditPage() {
                 />
               </div>
 
-              <Stale loading={loading}>
+              <Stale fill loading={loading}>
                 {tab === "model" ? (
                   <ModelBreakdownCard
                     audit={audit}
@@ -186,33 +187,8 @@ export function AuditPage() {
             </Section>
           </>
         )}
-      </div>
+      </PageShell>
     </RoleGate>
-  );
-}
-
-/** 重新拉取期间, 把还显示着**上一批**数据的那几块压暗并禁点.
- *
- * 不这么做的话会有一段时间: 表里还是筛选前的行, 而选中高亮已经按筛选后的
- * 条件画了 —— 看起来像点错了行。禁点是因为那时候点一行, 筛的是上一批数据
- * 里的那个实体。
- *
- * 只包"显示数字的块"。工具栏、筛选条、分段切换都在外面 —— 它们是改主意的
- * 出口 (换时间窗 / 清除筛选 / 换维度), 请求卡住时把出口一起禁掉的话,
- * 唯一能做的就是刷新整页。
- */
-function Stale({ loading, children }: { loading: boolean; children: ReactNode }) {
-  return (
-    <div
-      aria-busy={loading}
-      style={{
-        opacity: loading ? 0.55 : 1,
-        pointerEvents: loading ? "none" : undefined,
-        transition: "opacity 0.12s",
-      }}
-    >
-      {children}
-    </div>
   );
 }
 

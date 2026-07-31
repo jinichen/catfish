@@ -17,6 +17,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { PageShell } from "../../components/PageShell";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 
 import { Card } from "../../components/Card";
@@ -57,7 +58,7 @@ function DeptList() {
   }, []);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+    <PageShell gap="var(--space-4)">
       <Card title={`部门 RBAC 管理 · ${depts.length} 个部门`}>
         <p style={{ color: "var(--text-muted)", margin: "0 0 var(--space-3) 0", fontSize: 13 }}>
           配置每个部门可见的模型 / 工具 / 技能. 空 list = 全允许 (开放默认).
@@ -116,7 +117,7 @@ function DeptList() {
           </table>
         )}
       </Card>
-    </div>
+    </PageShell>
   );
 }
 
@@ -206,6 +207,8 @@ function DeptDetail() {
 
   return (
     <Card title={`编辑部门 RBAC: ${dept.name}`}>
+      {/* 普通 div, 不是 PageShell —— PageShell 是**页面根**容器 (要吃满
+          内容列的高度), 塞在 Card 里面它的 flex:1 无处可依。 */}
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
         <Field
           label="说明"

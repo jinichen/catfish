@@ -104,6 +104,15 @@ export const AUDIT_TOP_N = { model: 20, department: 20, user: 50 } as const;
  * 性能页的判断改错 —— 而性能页什么都没动过。 */
 export const PERF_TOP_N = { model: 20, department: 20 } as const;
 
+/** 单个部门页各维度的截断上限 —— 对应 quota.py `audit_summary_dept_since`。
+ *
+ * ⚠ **user 是 10, 不是 50。** 这跟全公司审计那份不一样, 所以又是一组独立
+ * 常量而不是复用 AUDIT_TOP_N。
+ *
+ * 8/1 差点漏掉: 部门页把 `by_user.length` 直接当"活跃员工"显示 ——
+ * 11 个人以上的部门永远显示 10, 而且没有任何地方说这是个上限。 */
+export const DEPT_TOP_N = { model: 20, user: 10 } as const;
+
 export interface GlobalAudit {
   since_ms: number;
   /** BL-AUDIT-UX-P1 (5/17): 时间窗长度 (h). 24/168/720 = 24h/7d/30d. */

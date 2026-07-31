@@ -226,6 +226,22 @@ export function App() {
           width: "100%",
           padding: "var(--space-4)",
           boxSizing: "border-box",
+          // 8/1: 加 flex column + minHeight 0。
+          //
+          // 目的是给**想要自己管滚动的页面**一个高度确定的容器。后台那些
+          // 表格页要的是"整页不动, 只有数据区滚" —— 那需要一路从这里往下
+          // 每一层都有确定高度, 中间任何一层 height:auto 都会把高度交还给
+          // 内容, 于是滚动条又跑回 main 上。
+          //
+          // 对其余页面 (首页 / 市场) 没有影响: 它们的根 div 高度是 auto,
+          // 在 flex column 里照样按内容撑开, main 照样滚。
+          //
+          // minHeight: 0 不能省 —— flex 子项的默认 min-height 是 auto,
+          // 也就是"不小于内容", 于是 overflow 永远不生效。这是整套布局里
+          // 最容易漏、而且漏了之后表现是"滚动条莫名其妙出现在外层"的一条。
+          display: "flex",
+          flexDirection: "column",
+          minHeight: 0,
         }}
       >
         <Routes>

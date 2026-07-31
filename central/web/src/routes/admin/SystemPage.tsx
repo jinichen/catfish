@@ -10,6 +10,7 @@
 import { useEffect, useState } from "react";
 
 import { Card } from "../../components/Card";
+import { PageShell } from "../../components/PageShell";
 import { RoleGate } from "../../components/RoleGate";
 import { adminApi, type UsersAuditEvent } from "../../lib/admin";
 // 7/30: 原来是函数体里 `await import("../../lib/auth")`。那个 dynamic import
@@ -38,7 +39,7 @@ function SystemDashboard() {
   }, []);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+    <PageShell gap="var(--space-4)">
       <Card title="🔐 系统管理 (sysadmin)">
         <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
           只 sysadmin 看. 你是系统超级管理员, 这里管 admin 账号 / 系统配置 / 服务状态.
@@ -156,7 +157,7 @@ function SystemDashboard() {
           后台 API 再加回这张卡, 现在空叫无意义.
           注: doc string 顶部还保留'危险操作 (重启/备份)' 项目说明作为 future
           backlog, 但不渲染卡片. */}
-    </div>
+    </PageShell>
   );
 }
 

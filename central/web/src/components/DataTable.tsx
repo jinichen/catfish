@@ -95,6 +95,7 @@ export function DataTable<T>({
   onRowClick,
   rowActive,
   rowClickable,
+  fill,
   empty = "没数据",
   footer,
 }: {
@@ -124,106 +125,154 @@ export function DataTable<T>({
   empty?: ReactNode;
   /** 表格底部一行, 用于分页器 / 合计 */
   footer?: ReactNode;
+  /** 一屏布局: 表身在自己这块里滚, **表头钉住, footer 钉住** (8/1).
+   *
+   * 表头 sticky 是这里的重点。200 行日志滚到第 80 行时, "342772" 这一格
+   * 到底是 in 还是 out 就只能靠数了 —— 而这张表有 4 个连着的数字列。 */
+  fill?: boolean;
 }) {
   if (rows.length === 0) {
+    // fill 时也要保持同一个外壳: 直接返裸 div 的话, 外面的 Section fill
+    // 占满整屏而里面是个高度 auto 的小块 —— 一大片空框顶上一行灰字。
+    // footer 照渲 —— "点一行 = 只看这个模型"这类提示在空表时也该在,
+    // 否则用户不知道有数据时能点。
     return (
-      <div style={{ fontSize: CELL_FONT, color: "var(--text-muted)", padding: "8px 0" }}>
-        {empty}
+      <div
+        style={
+          fill ? { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" } : undefined
+        }
+      >
+        <div style={{ fontSize: CELL_FONT, color: "var(--text-muted)", padding: "8px 0" }}>
+          {empty}
+        </div>
+        {footer ? (
+          <div style={{ fontSize: 11, color: "var(--text-muted)", padding: "0 8px" }}>
+            {footer}
+          </div>
+        ) : null}
       </div>
     );
   }
   return (
-    <div style={{ overflowX: "auto" }}>
-      <table style={TABLE}>
-        <thead>
-          <tr>
-            {columns.map((c, i) => (
-              <th
-                key={i}
-                style={{
-                  ...TH,
-                  textAlign: c.align === "right" ? "right" : "left",
-                  width: c.width,
-                }}
-              >
-                {c.header}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, ri) => {
-            const clickable = !!onRowClick && (rowClickable?.(r) ?? true);
-            return (
-            <tr
-              key={rowKey(r, ri)}
-              onClick={clickable ? () => onRowClick(r) : undefined}
-              // 整行可点就必须键盘也能点。<tr onClick> 本身 Tab 聚焦不到、
-              // Enter/Space 也没反应 —— 那等于把这个功能对键盘用户整个关掉。
-              // 导航类的行还应该在某一格里放真 <Link> (见下面 rowKey 的说明),
-              // 这里的 role="button" 只覆盖"点一下触发一个动作"那类。
-              tabIndex={clickable ? 0 : undefined}
-              role={clickable ? "button" : undefined}
-              // 选中只有一个底色的话, 读屏软件那边完全不存在。
-              aria-pressed={clickable && rowActive ? rowActive(r) : undefined}
-              onKeyDown={
-                clickable
-                  ? (e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        onRowClick!(r);
-                      }
-                    }
-                  : undefined
-              }
-              style={{
-                ...(clickable ? { cursor: "pointer" } : null),
-                ...(rowActive?.(r) ? { background: "var(--row-active)" } : null),
-              }}
-              onMouseEnter={
-                clickable
-                  ? (e) => {
-                      if (!rowActive?.(r))
-                        e.currentTarget.style.background = "var(--bg-secondary)";
-                    }
-                  : undefined
-              }
-              onMouseLeave={
-                clickable
-                  ? (e) => {
-                      // 选中的行划过之后要回到高亮, 不是回到透明。
-                      if (!rowActive?.(r)) e.currentTarget.style.background = "transparent";
-                    }
-                  : undefined
-              }
-            >
-              {columns.map((c, ci) => (
-                <td
-                  key={ci}
+    <div
+      style={
+        fill
+          ? { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }
+          : undefined
+      }
+    >
+      <div
+        style={
+          fill
+            ? { flex: 1, minHeight: 0, overflow: "auto" }
+            : { overflowX: "auto" }
+        }
+      >
+        <table style={TABLE}>
+          <thead>
+            <tr>
+              {columns.map((c, i) => (
+                <th
+                  key={i}
                   style={{
-                    // ⚠ 展开顺序有讲究: 这里不能再无条件写一行
-                    // `whiteSpace: c.nowrap ? "nowrap" : undefined` ——
-                    // 那会把 TD_NUM 自带的 nowrap 覆盖成 undefined,
-                    // 于是数字列的 "≈ ¥259" 会在空格处折成两行。
-                    ...(c.align === "right" ? TD_NUM : TD),
-                    ...(c.nowrap || c.truncate ? { whiteSpace: "nowrap" as const } : null),
-                    ...(c.truncate
+                    ...TH,
+                    textAlign: c.align === "right" ? "right" : "left",
+                    width: c.width,
+                    ...(fill
                       ? {
-                          maxWidth: c.width ?? 220,
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
+                          position: "sticky" as const,
+                          top: 0,
+                          // 必须给不透明背景 —— sticky 的表头只是浮在上面,
+                          // 底下的行会**从它后面透出来**, 数字叠在表头文字上。
+                          background: "var(--bg-elev)",
+                          // 边框跟着 sticky 会被滚上来的内容盖掉 (border 属于
+                          // 单元格盒子), 用 box-shadow 画那条线。
+                          boxShadow: "inset 0 -1px 0 var(--border)",
+                          borderBottom: "none",
+                          zIndex: 1,
                         }
                       : null),
                   }}
                 >
-                  {c.cell(r, ri)}
-                </td>
+                  {c.header}
+                </th>
               ))}
             </tr>
-            );
-          })}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map((r, ri) => {
+              const clickable = !!onRowClick && (rowClickable?.(r) ?? true);
+              return (
+              <tr
+                key={rowKey(r, ri)}
+                onClick={clickable ? () => onRowClick(r) : undefined}
+                // 整行可点就必须键盘也能点。<tr onClick> 本身 Tab 聚焦不到、
+                // Enter/Space 也没反应 —— 那等于把这个功能对键盘用户整个关掉。
+                // 导航类的行还应该在某一格里放真 <Link> (见下面 rowKey 的说明),
+                // 这里的 role="button" 只覆盖"点一下触发一个动作"那类。
+                tabIndex={clickable ? 0 : undefined}
+                role={clickable ? "button" : undefined}
+                // 选中只有一个底色的话, 读屏软件那边完全不存在。
+                aria-pressed={clickable && rowActive ? rowActive(r) : undefined}
+                onKeyDown={
+                  clickable
+                    ? (e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          onRowClick!(r);
+                        }
+                      }
+                    : undefined
+                }
+                style={{
+                  ...(clickable ? { cursor: "pointer" } : null),
+                  ...(rowActive?.(r) ? { background: "var(--row-active)" } : null),
+                }}
+                onMouseEnter={
+                  clickable
+                    ? (e) => {
+                        if (!rowActive?.(r))
+                          e.currentTarget.style.background = "var(--bg-secondary)";
+                      }
+                    : undefined
+                }
+                onMouseLeave={
+                  clickable
+                    ? (e) => {
+                        // 选中的行划过之后要回到高亮, 不是回到透明。
+                        if (!rowActive?.(r)) e.currentTarget.style.background = "transparent";
+                      }
+                    : undefined
+                }
+              >
+                {columns.map((c, ci) => (
+                  <td
+                    key={ci}
+                    style={{
+                      // ⚠ 展开顺序有讲究: 这里不能再无条件写一行
+                      // `whiteSpace: c.nowrap ? "nowrap" : undefined` ——
+                      // 那会把 TD_NUM 自带的 nowrap 覆盖成 undefined,
+                      // 于是数字列的 "≈ ¥259" 会在空格处折成两行。
+                      ...(c.align === "right" ? TD_NUM : TD),
+                      ...(c.nowrap || c.truncate ? { whiteSpace: "nowrap" as const } : null),
+                      ...(c.truncate
+                        ? {
+                            maxWidth: c.width ?? 220,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }
+                        : null),
+                    }}
+                  >
+                    {c.cell(r, ri)}
+                  </td>
+                ))}
+              </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
       {footer ? (
         <div
           style={{
@@ -255,12 +304,24 @@ export function Section({
   action,
   children,
   style,
+  fill,
 }: {
   title?: ReactNode;
   /** 标题右侧, 放刷新/新增这类按钮 */
   action?: ReactNode;
   children: ReactNode;
   style?: CSSProperties;
+  /** 吃掉剩余高度, 内容超出时**在这一块里面**滚 (8/1).
+   *
+   * 后台是一屏布局: 整页不滚, 页面标题、筛选条、分页器一直在手边, 只有
+   * 数据区滚。一页里最多标一个 —— 标两个的话剩余高度会被平分, 两块各滚各的,
+   * 比整页滚更难用。
+   *
+   * ⚠ 只标这个不够: 从 <main> 到这里每一层都得有确定高度
+   * (App.tsx 的 main / AdminLayout 的内容列 / 页面根 div)。中间任何一层
+   * height:auto 都会把高度交还给内容, 于是滚动条又跑回外层 —— 而且不报错,
+   * 看起来只是"这一屏没生效"。 */
+  fill?: boolean;
 }) {
   return (
     <div
@@ -270,6 +331,20 @@ export function Section({
         borderRadius: "var(--radius-md)",
         padding: 8,
         minWidth: 0,
+        ...(fill
+          ? {
+              flex: 1,
+              // 0 是"允许被压缩到多小", 120 是"再挤也得留这么多"。
+              // 兄弟块 (工具栏 / 指标带 / 对账条) 都是 min-height:auto 不收缩,
+              // 矮窗口 + 内容多时这一块会被挤成 0 高 —— 表格整块消失。
+              // 给个地板, 挤不下就让 PageShell 那层滚。
+              minHeight: 120,
+              display: "flex",
+              flexDirection: "column",
+              // 标题那一行不跟着滚, 所以外壳自己不滚
+              overflow: "hidden",
+            }
+          : null),
         ...style,
       }}
     >
@@ -289,7 +364,16 @@ export function Section({
           {action}
         </div>
       ) : null}
-      {children}
+      {fill ? (
+        // 注意这里**不加 overflow** —— 滚动交给里面的 DataTable(fill),
+        // 那样表头才能 sticky 在自己的滚动容器上。这里再套一层 overflow
+        // 的话会出现两个滚动容器, 表头钉在外面那个上、纹丝不动地飘着。
+        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          {children}
+        </div>
+      ) : (
+        children
+      )}
     </div>
   );
 }

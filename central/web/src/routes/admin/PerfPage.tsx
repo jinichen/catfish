@@ -14,6 +14,7 @@
  */
 
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { PageShell } from "../../components/PageShell";
 
 import {
   BTN,
@@ -233,7 +234,7 @@ export function PerfPage() {
   ) : null;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+    <PageShell scroll="data">
       {/* 7/30: 控制条原来套在一张 Card 里 —— 66px 外壳装 30px 内容。
           改成裸工具条。 */}
       <Toolbar title="LLM 性能">
@@ -353,7 +354,7 @@ export function PerfPage() {
           左边的列被切掉。全宽之后 7 列有 200px/列, 放得下。
           两张回答的是同一个问题的两个切面 (谁慢 / 谁错), 适合切换。 */}
       {perf && !error && (perf.by_model.length > 0 || perf.by_department.length > 0) && (
-        <Section>
+        <Section fill>
           <div style={{ marginBottom: 6 }}>
             <Tabs
               active={tab}
@@ -367,6 +368,7 @@ export function PerfPage() {
 
           {tab === "model" ? (
             <DataTable
+              fill
               rows={perf.by_model}
               rowKey={(m) => m.model}
               // ⚠ 空 model 不能拿去当筛选值。后端 metrics.py 对没记到模型名的
@@ -415,6 +417,7 @@ export function PerfPage() {
             />
           ) : (
             <DataTable
+              fill
               rows={perf.by_department}
               rowKey={(d) => d.department}
               // ⚠ (未分组) 是后端 metrics.py 为"没有部门"合成的展示名, 不是真部门。
@@ -467,7 +470,7 @@ export function PerfPage() {
           {perf.schema_note}
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }
 

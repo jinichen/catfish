@@ -13,6 +13,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 
+import { PageShell } from "../../components/PageShell";
 import { RoleGate } from "../../components/RoleGate";
 import {
   quotaConfigApi,
@@ -174,7 +175,7 @@ function QuotaConfigEditor() {
   const deptOverrides = data.config?.overrides?.departments ?? {};
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+    <PageShell>
       {/* P3.5.93.3 (6/23): 顶部全中文紧凑提示, 砍英文术语 */}
       <div
         style={{
@@ -229,7 +230,7 @@ function QuotaConfigEditor() {
           onSuccess={onSuccess}
         />
       </div>
-    </div>
+    </PageShell>
   );
 }
 

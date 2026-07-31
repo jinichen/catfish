@@ -13,6 +13,7 @@ import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 
 import { Card, Row } from "../../components/Card";
 import { Badge, BTN, DataTable, Section, type BadgeTone } from "../../components/DataTable";
+import { PageShell } from "../../components/PageShell";
 import { RoleGate } from "../../components/RoleGate";
 import {
   factsApi,
@@ -56,7 +57,7 @@ function FactsList() {
   }, []);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+    <PageShell>
       <Section
         title="政策同步 / 事实补丁"
         action={
@@ -139,7 +140,7 @@ function FactsList() {
           />
         )}
       </Section>
-    </div>
+    </PageShell>
   );
 }
 
@@ -311,7 +312,7 @@ function FactDetailPage() {
   const factPoints = detail.facts?.facts || [];
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+    <PageShell gap="var(--space-4)">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <Link to="/admin/facts" style={{ color: "var(--accent)", fontSize: 13 }}>
           ← 返回列表
@@ -454,7 +455,7 @@ function FactDetailPage() {
           </div>
         </Card>
       )}
-    </div>
+    </PageShell>
   );
 }
 

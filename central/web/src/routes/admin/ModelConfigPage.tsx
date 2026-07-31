@@ -32,6 +32,7 @@ import {
   Toolbar,
 } from "../../components/DataTable";
 import { ConfirmDialog } from "../../components/Dialog";
+import { PageShell } from "../../components/PageShell";
 import { RoleGate } from "../../components/RoleGate";
 import { splitDisplayName } from "../../lib/modelDisplay";
 import { providerApi, type Provider } from "../../lib/provider_config";
@@ -149,7 +150,7 @@ function ModelConfigEditor() {
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <PageShell scroll="data" gap={10}>
       {confirming ? (
         <ConfirmDialog
           title={`删除模型「${splitDisplayName(confirming.display_name).name}」？`}
@@ -280,8 +281,9 @@ function ModelConfigEditor() {
         // 7/30 二改: 每个模型一个大框两行 → 表格一行一个。原来 6 个模型就
         // 占满一屏, 而上游那串细节挤成一句用 · 隔开的长句, 想核对某一项
         // 得在句子里找。
-        <Section>
+        <Section fill>
           <DataTable
+            fill
             rows={data?.models ?? []}
             rowKey={(m) => m.name}
             empty={data ? "还没有任何模型。点右上角「+ 新增模型」。" : "加载中…"}
@@ -423,6 +425,6 @@ function ModelConfigEditor() {
           />
         </Section>
       )}
-    </div>
+    </PageShell>
   );
 }
