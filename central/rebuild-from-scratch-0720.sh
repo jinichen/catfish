@@ -136,6 +136,14 @@ FULL_AMD_OUT="$DELIVERY/dahua-poc-FULL-amd64-${DATE}.tar.gz"
 
 cd "$CENTRAL"
 
+# ── 版本戳 (8/1) ──────────────────────────────────────────────────
+# 现在**开始**时抓一次, 不是打包时 —— 这才对得上 docker 读构建上下文的时间点。
+# 工作区脏时必须说出来: SHA 只描述已提交的部分, 有未提交改动时它描述不了
+# 这个包, 那这个戳就是在撒谎。
+_git() { git -C "$REPO_ROOT" "$@" 2>/dev/null; }
+GIT_SHA=$(_git rev-parse --short HEAD || echo unknown)
+GIT_DIRTY=$(_git status --porcelain || true)
+
 # ── 前置检查: Docker daemon 必须活着 (P3.5.80 · 7/28) ──────────────
 #
 # 7/28 撞过: Docker Desktop 没启动就跑本脚本. `docker compose config` 是纯
@@ -458,6 +466,33 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
 
             echo ""
             echo "--- 3.$arch · 打完整 tar → $(basename "$OUT_TAR") ---"
+
+            # ── 版本戳 (8/1) ───────────────────────────────────────────
+            #
+            # 分两次打平台之后, DATE 相同**不代表代码相同**: 7/31 晚上就撞了 ——
+            # arm64 22:44 打完, 中间修了个前端 bug, amd64 再打就带上了修复,
+            # 而两个包都叫 -20260731。上一版的漂移检测只比日期, 这种情况下
+            # 它会打出"两个平台都齐了", 而且是错的。
+            #
+            # 所以把 git SHA 写进包里, 让"是不是同一次代码"可验证 —— 既给
+            # 下面的跨平台比对用, 也给半年后"客户装的到底是哪一版"用。
+            #
+            # SHA 是**脚本启动时**抓的 (见文件上方), 不是这一刻 —— 那才对得上
+            # docker 读构建上下文的时间点。
+            {
+                echo "arch=$arch"
+                echo "date=$DATE"
+                echo "git_sha=$GIT_SHA"
+                echo "git_dirty=$([ -n "$GIT_DIRTY" ] && echo yes || echo no)"
+                echo "built_at=$(date '+%Y-%m-%d %H:%M:%S %Z')"
+                echo "built_on=$(uname -sm)"
+            } > "$DELIVERY_DIR/BUILD-INFO.txt"
+            if [ -n "$GIT_DIRTY" ]; then
+                echo "  ⚠ 工作区有未提交改动 · git_sha=$GIT_SHA 描述不全这个包:"
+                echo "$GIT_DIRTY" | head -10 | sed 's|^|      |'
+            else
+                echo "  · 版本戳 git_sha=$GIT_SHA"
+            fi
             # P3.5.79+ (7/23 catch): 每循环前清 images/ · 别累加 · 否则第 2 arch
             # 循环开始时 images/ 里还有第 1 arch 的 tar · 一起打进 FULL · 大 400M+.
             rm -f "$TEMP_IMAGES"/*.tar.gz
@@ -507,6 +542,7 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
                 "delivery/dahua-poc/docker-compose.yml" \
                 "delivery/dahua-poc/docker-compose.https.yml" \
                 "delivery/dahua-poc/.env.example" \
+                "delivery/dahua-poc/BUILD-INFO.txt" \
                 "delivery/dahua-poc/identity-server/config/users.yaml.example" \
                 "delivery/dahua-poc/identity-server/config/clients.yaml.example"; do
                 MUST_N=$((MUST_N + 1))
@@ -616,8 +652,28 @@ case "$ARCH" in
 esac
 if [ -n "$_other" ]; then
     echo ""
-    if [ -f "$DELIVERY/dahua-poc-FULL-${_other}-${DATE}.tar.gz" ]; then
-        echo "→ 两个平台都齐了 (${DATE})"
+    _other_full="$DELIVERY/dahua-poc-FULL-${_other}-${DATE}.tar.gz"
+    if [ -f "$_other_full" ]; then
+        # 日期相同**不代表代码相同** —— 7/31 就是这么撞的: arm64 打完之后
+        # 修了个 bug, amd64 再打就带上了修复, 两个包却都叫 -20260731。
+        # 所以比对 BUILD-INFO.txt 里的 git_sha, 不是比日期。
+        _other_sha=$(tar xzf "$_other_full" -O delivery/dahua-poc/BUILD-INFO.txt 2>/dev/null \
+                     | sed -n 's/^git_sha=//p' || true)
+        if [ -z "$_other_sha" ]; then
+            echo "→ 两个平台的包都在 (${DATE}), 但 ${_other} 那个是**加版本戳之前**打的,"
+            echo "  没法确认两边是同一次代码。要保险就把 ${_other} 重打一遍。"
+        elif [ "$_other_sha" = "$GIT_SHA" ]; then
+            echo "→ 两个平台都齐了 (${DATE} · git ${GIT_SHA}) —— 同一次代码 ✓"
+        else
+            echo "  ❌ 两个平台**不是同一次代码**:"
+            echo "       ${ARCH}: git ${GIT_SHA}"
+            echo "       ${_other}: git ${_other_sha}"
+            echo "     日期一样但代码不一样 —— 别当一对发出去。"
+            echo "     把落后的那个平台按当前代码重打一遍。"
+        fi
+        if [ -n "$GIT_DIRTY" ]; then
+            echo "  ⚠ 而且本次构建时工作区是脏的, git ${GIT_SHA} 描述不全这个包。"
+        fi
     else
         echo "→ 还差 ${_other} 平台。下一条命令 (DATE 照抄, 别让它跨零点变成明天):"
         echo "    cd $CENTRAL"
