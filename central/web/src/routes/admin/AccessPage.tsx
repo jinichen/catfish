@@ -70,7 +70,7 @@ function DeptList() {
 
         {loading && <p style={{ color: "var(--text-muted)" }}>加载中…</p>}
         {error && (
-          <p style={{ color: "var(--accent-error)" }}>加载失败: {error}</p>
+          <p style={{ color: "var(--status-err)" }}>加载失败: {error}</p>
         )}
 
         {!loading && !error && (
@@ -192,7 +192,7 @@ function DeptDetail() {
   if (error && !dept) {
     return (
       <Card title={`部门: ${name}`}>
-        <p style={{ color: "var(--accent-error)" }}>加载失败: {error}</p>
+        <p style={{ color: "var(--status-err)" }}>加载失败: {error}</p>
         <Link to="/admin/access" style={linkBtn}>
           ← 返回部门列表
         </Link>
@@ -249,7 +249,7 @@ ALWAYS_ON 工具 (memory / execute_code / ...) 永远保留, 不被砍.`}
             一直没生效. 一处编辑收口到 quotas.yaml (real source of truth). */}
         <div style={{
           padding: "var(--space-2)",
-          background: "var(--bg-muted)",
+          background: "var(--bg-secondary)",
           borderRadius: 4,
           fontSize: 12,
           color: "var(--text-muted)",
@@ -259,7 +259,7 @@ ALWAYS_ON 工具 (memory / execute_code / ...) 永远保留, 不被砍.`}
         </div>
 
         {error && (
-          <p style={{ color: "var(--accent-error)" }}>保存失败: {error}</p>
+          <p style={{ color: "var(--status-err)" }}>保存失败: {error}</p>
         )}
 
         <div style={{ display: "flex", gap: "var(--space-2)" }}>
@@ -268,7 +268,7 @@ ALWAYS_ON 工具 (memory / execute_code / ...) 永远保留, 不被砍.`}
             disabled={saving}
             style={{
               padding: "var(--space-2) var(--space-3)",
-              backgroundColor: "var(--accent-primary)",
+              backgroundColor: "var(--accent)",
               color: "white",
               border: "none",
               borderRadius: 4,
@@ -379,6 +379,6 @@ const linkBtn: React.CSSProperties = {
   border: "1px solid var(--border)",
   borderRadius: 4,
   textDecoration: "none",
-  color: "var(--text-primary)",
+  color: "var(--text)",
   fontSize: 13,
 };

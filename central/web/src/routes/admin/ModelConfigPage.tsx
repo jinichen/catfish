@@ -202,7 +202,7 @@ function ModelConfigEditor() {
             ...BOX,
             fontSize: 12,
             lineHeight: 1.6,
-            borderColor: "var(--warn, #d97706)",
+            borderColor: "var(--status-warn)",
           }}
         >
           <b>当前为只读</b>
@@ -230,8 +230,8 @@ function ModelConfigEditor() {
           style={{
             ...BOX,
             fontSize: 12,
-            color: "var(--danger, #dc2626)",
-            borderColor: "var(--danger, #dc2626)",
+            color: "var(--status-err)",
+            borderColor: "var(--status-err)",
             whiteSpace: "pre-wrap",
           }}
         >
@@ -298,7 +298,7 @@ function ModelConfigEditor() {
                 编辑
               </button>
               <button
-                style={{ ...BTN, color: "var(--danger, #dc2626)" }}
+                style={{ ...BTN, color: "var(--status-err)" }}
                 disabled={!editable || busy}
                 onClick={() => void remove(m)}
               >
@@ -676,7 +676,7 @@ function FallbackEditor({
             padding: 6,
             fontSize: 11,
             lineHeight: 1.6,
-            borderColor: "var(--warn, #d97706)",
+            borderColor: "var(--status-warn)",
             marginBottom: 8,
           }}
         >
@@ -713,7 +713,7 @@ function FallbackEditor({
                 <span style={{ color: "var(--text-muted)", width: 16 }}>{i + 1}.</span>
                 <code>{n}</code>
                 {issue ? (
-                  <span style={{ fontSize: 10, color: "var(--warn, #d97706)" }}>
+                  <span style={{ fontSize: 10, color: "var(--status-warn)" }}>
                     ⚠ {issue}
                   </span>
                 ) : null}
@@ -741,7 +741,7 @@ function FallbackEditor({
                   ↓
                 </button>
                 <button
-                  style={{ ...BTN, padding: "0 6px", color: "var(--danger, #dc2626)" }}
+                  style={{ ...BTN, padding: "0 6px", color: "var(--status-err)" }}
                   onClick={() => setFb({ chain: chain.filter((x) => x !== n) })}
                 >
                   移除
@@ -816,7 +816,7 @@ function FallbackEditor({
             内网返 500 就切公网，等于内网内容出公司，违反保密要求。
           </div>
         ) : !has500 ? (
-          <div style={{ ...HINT, color: "var(--warn, #d97706)" }}>
+          <div style={{ ...HINT, color: "var(--status-warn)" }}>
             公网模型建议勾上 500：公网之间切换不涉及跨边界，勾上员工撞 500
             时能自动切走而不是直接看到报错。
           </div>

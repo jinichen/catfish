@@ -173,11 +173,12 @@ jobs:
         working-directory: central/web
         run: npx tsc --noEmit -p tsconfig.json
 
-      # 后台路由 / 侧栏 / 跨仓硬编码路径一致性 —— 这三样类型系统管不到,
-      # 而它们失败时是静默的 (写错的路径不 404, 跳首页)。见脚本文件头。
-      - name: Admin route consistency check
+      # 类型系统管不到、失败又都静默的两类问题, 见各脚本文件头:
+      #   check-admin-routes — 路由/侧栏/跨仓硬编码路径一致性
+      #   check-css-vars     — 引用了但从没定义过的 CSS 变量 (边框会直接消失)
+      - name: Static consistency checks
         working-directory: central/web
-        run: node scripts/check-admin-routes.mjs
+        run: npm run check
 
       - name: Vite build
         working-directory: central/web
