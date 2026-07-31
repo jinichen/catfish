@@ -115,31 +115,35 @@ cd /opt/catfish/central
 
 **docker compose 必须在这里跑** · docker-compose.yml 里的 relative path (`./llm-gateway/config`, `./identity-server/config`) 都是相对这个目录.
 
-### Step 5 · 建 .env (从 example 拷) + 改 7 项 (5-10 分钟)
+### Step 5 · 建 .env (从 example 拷) + 改 4 项 (3-5 分钟)
 
 ```bash
 cp .env.production.example .env
 vim .env       # 或 nano/notepad
 ```
 
-**必填 7 项** (下面详解, 找到对应行改掉 CHANGE_ME):
+**这三项不用管, `deploy.sh` 会自动生成** (8/1 起):
 
 ```env
-# 0. ⚠ 主密钥 —— 供应商 API key 加密存库用 (8/1 起)
-#
-#    生成 (在服务器上跑一次):
-#      python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-#
-#    ⚠⚠ **生成后立刻存进公司密码管理器。**
-#    这个值丢了的话, 所有存在数据库里的 API key 都解不开 —— 只能逐个重新
-#    去各家供应商后台申请、再在界面上重填一遍。没有别的办法, 代码兜不住。
-#
-#    它一次配好不再动。以后加供应商、换 API key 全在界面上做, 不用再改这个
-#    文件、不用重建容器、也不用重启网关。
-CATFISH_SECRET_KEY=CHANGE_ME_跑上面那条命令生成
+CATFISH_SECRET_KEY=CHANGE_ME_RUN_THE_COMMAND_ABOVE   # 主密钥, 供应商 API key 加密存库用
+PG_PASSWORD=CHANGE_ME_TO_STRONG_PASSWORD             # Postgres 密码
+SKILLS_HUB_TOKEN=CHANGE_ME_RANDOM_32_CHARS           # manager 发布 skill 用
+```
 
-# 1. Postgres 密码 (16+ 位强密码 · 大小写+数字+符号)
-PG_PASSWORD=Dahua_PG_2026_STRONG_pwd
+它们是**纯随机**的, 客户自己想一个没有任何好处 —— 只会得到"想一个弱的"、
+"照抄文档里的示例值"或者"忘了改"。原样留着 `CHANGE_ME`, 跑 `deploy.sh`
+时会生成并写回 `.env`, 然后在终端上打出来。
+
+> ⚠⚠ **`CATFISH_SECRET_KEY` 生成后立刻存进公司密码管理器。**
+> 这个值丢了的话, 所有存在数据库里的供应商 API key 都解不开 —— 只能逐个
+> 重新去各家后台申请、再在界面上重填一遍。没有别的办法, 代码兜不住。
+>
+> 重跑 `deploy.sh` **不会**覆盖已有的值 (那等于把所有 key 报废), 所以
+> 升级、改配置、排障时随便重跑。
+
+**必填 4 项** —— 这几个只有你知道, 脚本猜不出来:
+
+```env
 
 # 2. 内网 LLM API key (达华内网 qwen 平台申请)
 #
@@ -154,9 +158,10 @@ INTERNAL_LLM_BASE_QWEN_MAIN=http://10.10.40.102:32730/openapi/xxx/v1
 INTERNAL_LLM_BASE_QWEN_VISION=http://10.10.40.102:32730/openapi/yyy/v1
 INTERNAL_LLM_BASE_BGE_M3=http://10.10.40.102:32730/openapi/zzz/v1
 
-# 6. Skills Hub token (32 位随机 · manager 发布 skill 用)
-SKILLS_HUB_TOKEN=aad226ad9ad83bacbe95e554a07864b0e4d9a215117696b79a161c726d522561
 ```
+
+> ⚠ 8/1 之前这里给过一个写死的 `SKILLS_HUB_TOKEN` 示例值。照抄的话
+> **所有客户共用同一个 token** —— 已经改成自动生成。
 
 **可选 3 项** (公网 LLM · 测试期建议至少填 1 个 · fallback 用):
 
@@ -424,7 +429,7 @@ docker compose ps                # 再跑
 | 变量名 | 用途 | Default | 必填 |
 |---|---|---|---|
 | `PG_USER` | postgres 用户名 | `catfish` | ⭕ |
-| `PG_PASSWORD` | postgres 密码 | 无 | ✅ **必填** |
+| `PG_PASSWORD` | postgres 密码 | 无 | 🔑 deploy.sh 自动生成 |
 | `PG_DB` | postgres 数据库名 | `catfish` | ⭕ |
 | `GATEWAY_WORKERS` | gateway uvicorn worker 数 | `4` | ⭕ |
 | `IDENTITY_WORKERS` | identity uvicorn worker 数 | `2` | ⭕ |
@@ -432,12 +437,13 @@ docker compose ps                # 再跑
 | `INTERNAL_LLM_BASE_QWEN_MAIN` | 内网 qwen chat 端点 | `http://127.0.0.1:9998/v1` | ✅ **必填** |
 | `INTERNAL_LLM_BASE_QWEN_VISION` | 内网 qwen vision 端点 | 同上 | ✅ **必填** |
 | `INTERNAL_LLM_BASE_BGE_M3` | 内网 embedding 端点 | 同上 | ✅ **必填** |
-| `CATFISH_OIDC_ISSUER` | OIDC issuer URL | `http://host.docker.internal:8998` | ⭕ (Linux 生产要改) |
+| `CATFISH_OIDC_ISSUER` | OIDC issuer URL | `http://host.docker.internal:8998` | ⭕ (Linux 生产要改成服务器 IP/域名) |
 | `CATFISH_OIDC_AUDIENCE` | OIDC audience | `catfish-gateway` | ⭕ |
 | `DASHSCOPE_API_KEY` | 阿里 qwen-flash key | 空 (禁用) | ⭕ |
 | `DEEPSEEK_API_KEY` | Deepseek key | 空 (禁用) | ⭕ |
 | `GEMINI_API_KEY` | Google Gemini key | 空 (禁用) | ⭕ |
-| `SKILLS_HUB_TOKEN` | Skills 发布 token (32 位随机) | 无 | ✅ **必填** |
+| `SKILLS_HUB_TOKEN` | Skills 发布 token | 无 | 🔑 deploy.sh 自动生成 |
+| `CATFISH_SECRET_KEY` | 供应商 API key 的加密主密钥 | 无 | 🔑 deploy.sh 自动生成 ⚠ 存密码管理器 |
 | `DOMAIN` | nginx 域名 (生产) | `catfish.example.com` | ⭕ (nginx 时改) |
 
 ### docker compose 全命令速查

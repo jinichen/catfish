@@ -3,6 +3,8 @@
 #
 # 干啥:
 #   1. 体检 .env (必填字段全填了 + 密码不是占位)
+#   1.5 自动生成纯随机的密钥 (主密钥 / SKILLS_HUB_TOKEN / PG 密码),
+#       **已有的绝不覆盖** —— 改主密钥 = 所有存库的 API key 解不开
 #   2. 体检宿主机 (docker 装了, 端口没冲突, 资源够)
 #   3. docker compose build + up -d
 #   4. 等所有 service 健康 (有超时, 防卡死脚本)
@@ -12,7 +14,8 @@
 # 用法:
 #   cd central/
 #   cp .env.production.example .env       # 第一次
-#   nano .env                              # 填密码/OIDC/API key
+#   nano .env                              # 只填客户自己的: 内网端点 / INTERNAL_LLM_KEY / OIDC
+#                                          # (主密钥、PG 密码、HUB token 由脚本生成)
 #   bash deploy.sh                         # 部署
 #   bash deploy.sh status                  # 看现状, 不动 stack
 #   bash deploy.sh logs gateway            # tail gateway log
@@ -172,12 +175,133 @@ ok ".env 存在"
 # P3.4.1 (6/13) 已砍 secret-broker 服务, master_key 不再需要
 # (OAuth token 改 Companion 本机存, 无需中央 AES 加密).
 
+
+# ── Step 2.5: 自动生成纯随机的密钥 ──────────────────────────────
+#
+# 8/1 恢复。7/14 (P3.4.1-cleanup2) 砍掉自动生成是对的 —— 当时 secret-broker
+# 服务已经没了, 主密钥确实用不上。但 8/1 供应商拆分把 CATFISH_SECRET_KEY
+# 重新变成必需 (API key 加密存库), 而**只在 SOP 里写了一行手工命令**,
+# 自动生成没跟着回来。
+#
+# 这三项跟别的必填项性质不同:
+#
+#   PG_PASSWORD / SKILLS_HUB_TOKEN / CATFISH_SECRET_KEY   纯随机, 只要够随机
+#   INTERNAL_LLM_KEY / 三个内网端点 / 公网 API key         只有客户知道
+#
+# 前者让客户"自己想一个"没有任何好处, 只会得到三种结果: 想一个弱的、
+# 照抄文档里的示例值 (SOP 里 SKILLS_HUB_TOKEN 就给了个真值, 照抄的话
+# **所有客户共用同一个 token**)、或者干脆忘了改。
+#
+# ⚠⚠ 最重要的一条: **已经有合法值就绝对不碰**。
+#    覆盖 CATFISH_SECRET_KEY = 所有存库的供应商 API key 全部解不开, 只能
+#    逐个去各家后台重新申请。这个脚本会被重跑 (改配置、升级、排障),
+#    所以"重跑安全"不是锦上添花, 是硬要求。
+step "2.5/6  密钥自动生成 (只填空的, 已有的一个字不改)"
+
+# Fernet 密钥 = 32 字节随机的 url-safe base64。
+# 用 openssl 而不是 python -c "from cryptography..." —— 宿主机不一定装了
+# cryptography (它在容器里), 而 openssl 装 docker 的机器上都有。
+# 实测 openssl 产出的值 Fernet 直接接受。
+gen_fernet_key() { openssl rand -base64 32 | tr '+/' '-_'; }
+gen_hex_token()  { openssl rand -hex 32; }
+
+# 把 KEY=VALUE 写回 .env (原地改, 不追加重复行)。
+# 用 awk 而不是 sed -i: 生成的值里有 / 和 - 等字符, sed 的分隔符会被撞;
+# 而且 macOS 和 GNU 的 sed -i 参数不一样。
+set_env_var() {
+    local key="$1" val="$2"
+    awk -v k="$key" -v v="$val" '
+        BEGIN { done = 0 }
+        $0 ~ "^" k "=" { print k "=" v; done = 1; next }
+        { print }
+        END { if (!done) print k "=" v }
+    ' "$ENV_FILE" > "$ENV_FILE.tmp" && mv "$ENV_FILE.tmp" "$ENV_FILE"
+}
+
+# 当前值是不是"还没填"(空 / CHANGE_ME 开头)。
+env_needs_value() {
+    local key="$1"
+    local val
+    val=$(grep -E "^${key}=" "$ENV_FILE" | head -1 | sed "s/^${key}=//" || echo "")
+    [ -z "$val" ] || [[ "$val" == CHANGE_ME* ]]
+}
+
+GENERATED=()
+
+# ── 主密钥 ──
+if env_needs_value CATFISH_SECRET_KEY; then
+    set_env_var CATFISH_SECRET_KEY "$(gen_fernet_key)"
+    GENERATED+=("CATFISH_SECRET_KEY")
+    ok "已生成 CATFISH_SECRET_KEY (供应商 API key 的加密主密钥)"
+else
+    info "CATFISH_SECRET_KEY 已有值, 不动 (改了会让所有存库的 API key 解不开)"
+fi
+
+# ── Skills Hub token ──
+if env_needs_value SKILLS_HUB_TOKEN; then
+    set_env_var SKILLS_HUB_TOKEN "$(gen_hex_token)"
+    GENERATED+=("SKILLS_HUB_TOKEN")
+    ok "已生成 SKILLS_HUB_TOKEN (manager 发布 skill 用)"
+fi
+
+# ── PG 密码 ──
+#
+# ⚠ 只在**首次部署**生成。postgres 的密码是 volume 初始化那一刻写进去的,
+# 之后改 .env 不会改库里的密码, 只会导致连不上 (SOP 故障排查第 3 条就是
+# 这个)。所以 volume 已经存在时, 哪怕 .env 里还是占位符也不生成 ——
+# 那种情况得人工处理, 不能让脚本把一个能用的库搞成连不上。
+PG_VOLUME="$(basename "$(pwd)")_pgdata"
+if env_needs_value PG_PASSWORD; then
+    if docker volume inspect "$PG_VOLUME" >/dev/null 2>&1; then
+        err "PG_PASSWORD 还是占位, 但 postgres volume ($PG_VOLUME) 已经存在了。"
+        echo "    库里的密码是第一次启动时定下的, 现在生成一个新的只会连不上。"
+        echo "    要么填回原来那个密码, 要么 docker compose down -v 重来 (会删数据)。"
+        exit 1
+    fi
+    # 只用字母数字: PG 密码会出现在 CATFISH_DB_URL 这个 URL 里
+    # (postgresql://user:PASS@host/db), 带 @ : / 这些字符要转义, 不值当。
+    # 32 位字母数字 ≈ 165 bit, 比"16 位含符号"强得多。
+    set_env_var PG_PASSWORD "$(openssl rand -hex 16)$(openssl rand -base64 12 | tr -dc 'A-Za-z0-9')"
+    GENERATED+=("PG_PASSWORD")
+    ok "已生成 PG_PASSWORD (首次部署)"
+fi
+
+if [ ${#GENERATED[@]} -gt 0 ]; then
+    echo
+    echo -e "${BOLD}${YELLOW}══════════════════════════════════════════════════════════${NC}"
+    echo -e "${BOLD}  刚生成了 ${#GENERATED[@]} 个密钥, 已写进 .env${NC}"
+    echo -e "${BOLD}${YELLOW}══════════════════════════════════════════════════════════${NC}"
+    for k in "${GENERATED[@]}"; do
+        echo "    $k=$(grep -E "^${k}=" "$ENV_FILE" | head -1 | sed "s/^${k}=//")"
+    done
+    echo
+    if printf '%s\n' "${GENERATED[@]}" | grep -qx CATFISH_SECRET_KEY; then
+        echo -e "${RED}${BOLD}  ⚠ CATFISH_SECRET_KEY 现在就存进公司密码管理器。${NC}"
+        echo "    它丢了的话, 所有存在数据库里的供应商 API key 都解不开 ——"
+        echo "    只能逐个去各家后台重新申请、再在界面上重填一遍。代码兜不住。"
+        echo "    (备份 .env 本身也算, 但别只依赖服务器上那一份。)"
+        echo
+    fi
+    echo "  .env 权限已收紧到 600。"
+fi
+
+# .env 里有明文密码, 别让同机的其他用户读到。
+chmod 600 "$ENV_FILE" 2>/dev/null || true
+
 # 必填 + 不能是占位
+# ⚠ CATFISH_SECRET_KEY 也在这里 —— 8/1 之前它不在, 于是客户忘了改的话
+# deploy.sh 会**放行**, 部署"成功", 但供应商页面上永远存不了 key
+# (界面报"服务器还没有配 CATFISH_SECRET_KEY")。部署脚本说 OK 而功能是坏的,
+# 正是最难查的那种。现在上面那一步会自动生成, 这里是兜底。
 declare -A REQUIRED=(
     [PG_PASSWORD]="CHANGE_ME_TO_STRONG_PASSWORD"
-    [CATFISH_OIDC_ISSUER]="https://catfish.yourcompany.com/sso"
+    # 占位符跟 .env.production.example 里的值必须对得上。8/1 之前 example
+    # 里写的就是这个 yourcompany.com 的值, 于是"照文档 cp 一份"必然被拒 ——
+    # 而 SOP 表格里标着它可选。现在 example 给的是能直接用的默认值。
+    [CATFISH_OIDC_ISSUER]="CHANGE_ME_OIDC_ISSUER_URL"
     [SKILLS_HUB_TOKEN]="CHANGE_ME_RANDOM_32_CHARS"
     [INTERNAL_LLM_KEY]="CHANGE_ME"
+    [CATFISH_SECRET_KEY]="CHANGE_ME_RUN_THE_COMMAND_ABOVE"
 )
 PLACEHOLDER_FOUND=()
 for key in "${!REQUIRED[@]}"; do
@@ -194,7 +318,7 @@ if [ ${#PLACEHOLDER_FOUND[@]} -gt 0 ]; then
     done
     exit 1
 fi
-ok ".env 必填字段全填了 (密码/OIDC/SKILLS_HUB_TOKEN/INTERNAL_LLM_KEY)"
+ok ".env 必填字段全填了 (主密钥/PG密码/OIDC/SKILLS_HUB_TOKEN/INTERNAL_LLM_KEY)"
 
 # PG_PASSWORD 强度 (≥ 16 位)
 PG_PASS=$(grep -E "^PG_PASSWORD=" "$ENV_FILE" | head -1 | sed 's/^PG_PASSWORD=//')
