@@ -87,8 +87,8 @@ function isEnvPlaceholder(v: string | null | undefined): boolean {
   return typeof v === "string" && /\$\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\}/.test(v);
 }
 
-/** 128000 → "128K", 1000000 → "1M". 上下文窗口这类大整数用.
- *  `1,000,000` 要占 100px 而 `1M` 只要 30px, 而且一眼能比大小。精确值放 title。 */
+/** 128000 → "128K", 1000000 → "1M". 给输入框旁边的换算提示用 ——
+ *  填 context_window 时人是按"12 万还是 128 万"想的, 而输入框里是一串 0。 */
 function fmtCompact(n: number): string {
   if (n >= 1_000_000) {
     const v = n / 1_000_000;
@@ -195,24 +195,30 @@ function ModelConfigEditor() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Toolbar title="模型配置">
-        <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-          {data ? `${data.models.length} 个模型` : "加载中…"}
-          {data?.revision != null ? ` · 版本 ${data.revision}` : ""}
-        </span>
-        <button style={BTN} onClick={() => void load()} disabled={busy}>
-          刷新
-        </button>
-        <button
-          style={BTN_PRIMARY}
-          disabled={!editable || busy}
-          onClick={() => {
-            setEditing(emptyModel());
-            setIsNew(true);
-            setErr(null);
-          }}
-        >
-          + 新增模型
-        </button>
+        {/* 编辑时不显示列表操作 —— 「+ 新增模型」在编辑一半的时候点下去会
+            丢掉未保存的改动, 而「刷新」在那个上下文里也没有意义。 */}
+        {editing ? null : (
+          <>
+            <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+              {data ? `${data.models.length} 个模型` : "加载中…"}
+              {data?.revision != null ? ` · 版本 ${data.revision}` : ""}
+            </span>
+            <button style={BTN} onClick={() => void load()} disabled={busy}>
+              刷新
+            </button>
+            <button
+              style={BTN_PRIMARY}
+              disabled={!editable || busy}
+              onClick={() => {
+                setEditing(emptyModel());
+                setIsNew(true);
+                setErr(null);
+              }}
+            >
+              + 新增模型
+            </button>
+          </>
+        )}
       </Toolbar>
 
       {/* 库没启用时说清楚为什么不能改, 而不是让人改完点保存才撞 503 */}
@@ -259,6 +265,11 @@ function ModelConfigEditor() {
         </div>
       ) : null}
 
+      {/* 7/30 四改: 编辑时**整页换成详情**, 不再把表单夹在列表上方。
+          原来点列表第 6 行的「编辑」, 表单渲染在列表顶部 —— 出现在视野外,
+          看起来像点了没反应; 而表单本身 200 多行字段, 夹在中间还会把列表
+          整个推走。
+          列表现在只回答"有哪些模型 / 哪个是默认 / 有没有出问题", 别的全在这。 */}
       {editing ? (
         <ModelForm
           model={editing}
@@ -266,6 +277,7 @@ function ModelConfigEditor() {
           busy={busy}
           allModels={data?.models ?? []}
           autoFallback={data?.auto_fallback ?? false}
+          configError={data?.config_errors?.[editing.name]}
           onChange={setEditing}
           onCancel={() => {
             setEditing(null);
@@ -273,193 +285,123 @@ function ModelConfigEditor() {
           }}
           onSave={() => void save()}
         />
-      ) : null}
-
-      {/* 7/30 二改: 每个模型一个大框两行 → 表格一行一个.
-          原来 6 个模型就占满一屏, 而右边一大片空白; 上游那串细节 (地址 / key
-          变量名 / 上下文 / 输出上限 / 能力) 挤成一句用 · 隔开的长句, 想核对
-          某一项得在句子里找。而且这一页还在用它自己那套框/徽章/按钮,
-          跟刚统一完的其它页完全不一样。 */}
-      <Section>
-        <DataTable
-          rows={data?.models ?? []}
-          rowKey={(m) => m.name}
-          empty={data ? "还没有任何模型。点右上角「+ 新增模型」。" : "加载中…"}
-          columns={[
-            {
-              header: "模型",
-              // ⚠ 必须给宽度。上一版只有这一列没设 width, 而后面 7 列全设了 ——
-              // 浏览器把剩下的分给它, 只剩约 110px, 于是
-              // "Qwen3-VL 30B (A3B MoE)" 折成 4 行, 整张表的行高节奏全毁了。
-              width: "26%",
-              truncate: true,
-              cell: (m) => {
-                const { name, note } = splitDisplayName(m.display_name);
-                return (
-                  <span
-                    style={{ display: "flex", alignItems: "center", gap: 5 }}
-                    title={m.display_name}
-                  >
-                    {/* 徽章 flexShrink:0, 名字才是可压缩的那个 —— 反过来的话
-                        窄屏下会先把徽章挤没 */}
+      ) : (
+        // 7/30 二改: 每个模型一个大框两行 → 表格一行一个。原来 6 个模型就
+        // 占满一屏, 而上游那串细节挤成一句用 · 隔开的长句, 想核对某一项
+        // 得在句子里找。
+        <Section>
+          <DataTable
+            rows={data?.models ?? []}
+            rowKey={(m) => m.name}
+            empty={data ? "还没有任何模型。点右上角「+ 新增模型」。" : "加载中…"}
+            columns={[
+              {
+                // 只回答"这是哪个模型 / 什么状态"。上游、上下文、能力、
+                // 失败切换、单价全在编辑页 —— 那些是核对某一个模型时才看的,
+                // 摆在列表上只是让每一行都变宽、每一列都变窄。
+                header: "模型",
+                width: "40%",
+                truncate: true,
+                cell: (m) => {
+                  const { name, note } = splitDisplayName(m.display_name);
+                  const badErr = data?.config_errors?.[m.name];
+                  return (
                     <span
-                      style={{
-                        fontWeight: 500,
-                        // flex 子项不写 minWidth:0 是不会缩到内容尺寸以下的,
-                        // 省略号根本不会出现, 只会把整个单元格撑开
-                        minWidth: 0,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                      }}
+                      style={{ display: "flex", alignItems: "center", gap: 5 }}
+                      title={m.display_name}
                     >
-                      {name}
-                    </span>
-                    {note ? (
                       <span
                         style={{
-                          color: "var(--text-muted)",
+                          fontWeight: 500,
+                          // flex 子项不写 minWidth:0 是不会缩到内容尺寸以下的,
+                          // 省略号根本不出现, 只会把整个单元格撑开
                           minWidth: 0,
                           overflow: "hidden",
                           textOverflow: "ellipsis",
                         }}
                       >
-                        {note}
+                        {name}
                       </span>
-                    ) : null}
-                    <span style={{ display: "inline-flex", gap: 4, flexShrink: 0 }}>
-                      {/* 环境变量没解析成功 —— 这个模型在列表里、员工也选得到,
-                          但调用必然失败。不标出来的话界面上没有任何线索。 */}
-                      {data?.config_errors?.[m.name] ? (
-                        <Badge tone="err" title={data.config_errors[m.name]}>
-                          配置有误
-                        </Badge>
+                      {note ? (
+                        <span
+                          style={{
+                            color: "var(--text-muted)",
+                            minWidth: 0,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                        >
+                          {note}
+                        </span>
                       ) : null}
-                      {m.default ? <Badge tone="accent">默认</Badge> : null}
-                      {m.mode === "embedding" ? <Badge>向量</Badge> : null}
-                      {m.tier === "public" ? <Badge tone="warn">公网</Badge> : null}
+                      {/* 徽章 flexShrink:0, 名字才是可压缩的那个 ——
+                          反过来窄屏下会先把徽章挤没 */}
+                      <span style={{ display: "inline-flex", gap: 4, flexShrink: 0 }}>
+                        {/* 只标"需要留神"的: 默认 / 公网 / 出问题了。
+                            "私有"不标 —— 6 行里 6 行都有的徽章不是信息。 */}
+                        {m.default ? <Badge tone="accent">默认</Badge> : null}
+                        {m.mode === "embedding" ? <Badge>向量</Badge> : null}
+                        {m.tier === "public" ? <Badge tone="warn">公网</Badge> : null}
+                        {badErr ? (
+                          <Badge tone="err" title={badErr}>
+                            配置有误
+                          </Badge>
+                        ) : null}
+                        {m.price_per_1k_tokens == null ? (
+                          <Badge
+                            tone="warn"
+                            title="没填单价, 概览和审计页的成本会按兜底价估算, 数字不准"
+                          >
+                            缺单价
+                          </Badge>
+                        ) : null}
+                      </span>
                     </span>
-                  </span>
-                );
+                  );
+                },
               },
-            },
-            {
-              // 私有模型不再单独挂一个「私有」徽章 —— 6 个模型里 6 行都有徽章
-              // 时它就不是信息了。只标「公网」(上面那列), 因为公网才是要留神的
-              // 那一类 (走公网出口, 涉及合规)。
-              header: "ID",
-              truncate: true,
-              width: "17%",
-              cell: (m) => (
-                <code style={{ fontSize: 11, color: "var(--text-muted)" }} title={m.name}>
-                  {m.name}
-                </code>
-              ),
-            },
-            {
-              header: "上游",
-              truncate: true,
-              width: "17%",
-              // ⚠ 只显示上游模型名, **不显示 api_base**。
-              // 内网地址形如 http://10.10.40.102:32730/openapi/<uuid>/v1 ——
-              // 路径里那段 uuid 是那个自建端点的凭据。摆在列表上等于每次
-              // 截图、投屏、演示都把它带出去。要看/要改在编辑表单里。
-              cell: (m) => (
-                <code style={{ fontSize: 11 }} title={m.upstream.model}>
-                  {m.upstream.model}
-                </code>
-              ),
-            },
-            {
-              header: "上下文",
-              align: "right",
-              width: 76,
-              // 1,000,000 要占 100px 而 "1M" 只要 30px, 而且一眼就能比大小。
-              // 精确值放 title。
-              cell: (m) =>
-                m.context_window ? (
-                  <span title={m.context_window.toLocaleString()}>
-                    {fmtCompact(m.context_window)}
-                  </span>
-                ) : (
-                  <span style={{ color: "var(--text-muted)" }}>—</span>
+              {
+                header: "ID",
+                truncate: true,
+                // 留着是因为它才是唯一标识 —— 显示名可以重复, 而审计日志、
+                // 员工端的模型选择、fallback 链里用的都是这个。
+                cell: (m) => (
+                  <code style={{ fontSize: 11, color: "var(--text-muted)" }} title={m.name}>
+                    {m.name}
+                  </code>
                 ),
-            },
-            {
-              header: "单价 元/1K",
-              align: "right",
-              width: 96,
-              // 固定 5 位小数。现有单价跨度 0.00005 到 0.0218 (400 倍), 位数
-              // 不齐时右对齐也白搭 —— 补零之后配合 tabular-nums 才真的对得齐、
-              // 能一眼比大小。单位跟编辑表单保持一致 (都是 /1K), 免得两处
-              // 换算不同; 每百万的等价值放 title。
-              cell: (m) =>
-                m.price_per_1k_tokens != null ? (
-                  <span title={`≈ ¥${(m.price_per_1k_tokens * 1000).toFixed(2)} / 百万 token`}>
-                    {m.price_per_1k_tokens.toFixed(5)}
-                  </span>
-                ) : (
-                  <span
-                    style={{ color: "var(--status-warn)" }}
-                    title="没填单价, 概览和审计页的成本会按兜底价估算, 数字不准"
-                  >
-                    未填
-                  </span>
+              },
+              {
+                header: "",
+                align: "right",
+                width: 120,
+                cell: (m) => (
+                  <div style={{ display: "inline-flex", gap: 4 }}>
+                    <button
+                      style={BTN}
+                      disabled={!editable || busy}
+                      onClick={() => {
+                        setEditing(JSON.parse(JSON.stringify(m)) as ModelConfig);
+                        setIsNew(false);
+                        setErr(null);
+                      }}
+                    >
+                      编辑
+                    </button>
+                    <button
+                      style={BTN_DANGER}
+                      disabled={!editable || busy}
+                      onClick={() => void remove(m)}
+                    >
+                      删除
+                    </button>
+                  </div>
                 ),
-            },
-            {
-              header: "能力",
-              width: 78,
-              cell: (m) => (
-                <span style={{ color: "var(--text-muted)" }}>
-                  {[m.supports_tool_use && "工具", m.supports_vision && "视觉"]
-                    .filter(Boolean)
-                    .join(" · ") || "—"}
-                </span>
-              ),
-            },
-            {
-              header: "失败切换",
-              truncate: true,
-              width: 110,
-              cell: (m) =>
-                m.fallback?.chain?.length ? (
-                  <span style={{ color: "var(--text-muted)" }} title={m.fallback.chain.join(" → ")}>
-                    {m.fallback.chain.join(" → ")}
-                  </span>
-                ) : (
-                  <span style={{ color: "var(--text-muted)" }}>—</span>
-                ),
-            },
-            {
-              header: "",
-              align: "right",
-              width: 110,
-              cell: (m) => (
-                <div style={{ display: "inline-flex", gap: 4 }}>
-                  <button
-                    style={BTN}
-                    disabled={!editable || busy}
-                    onClick={() => {
-                      setEditing(JSON.parse(JSON.stringify(m)) as ModelConfig);
-                      setIsNew(false);
-                      setErr(null);
-                    }}
-                  >
-                    编辑
-                  </button>
-                  <button
-                    style={BTN_DANGER}
-                    disabled={!editable || busy}
-                    onClick={() => void remove(m)}
-                  >
-                    删除
-                  </button>
-                </div>
-              ),
-            },
-          ]}
-        />
-      </Section>
+              },
+            ]}
+          />
+        </Section>
+      )}
     </div>
   );
 }
@@ -470,6 +412,7 @@ function ModelForm({
   busy,
   allModels,
   autoFallback,
+  configError,
   onChange,
   onCancel,
   onSave,
@@ -479,6 +422,8 @@ function ModelForm({
   busy: boolean;
   allModels: ModelConfig[];
   autoFallback: boolean;
+  /** 这个模型的 ${VAR} 没解析成功时的说明 (来自 gateway)。 */
+  configError?: string;
   onChange: (m: ModelConfig) => void;
   onCancel: () => void;
   onSave: () => void;
@@ -490,16 +435,42 @@ function ModelForm({
 
   return (
     <div style={{ ...BOX, borderColor: "var(--accent)" }}>
-      <div style={{ display: "flex", alignItems: "center", marginBottom: 8 }}>
-        <b style={{ fontSize: 13 }}>{isNew ? "新增模型" : `编辑 ${model.name}`}</b>
-        <div style={{ flex: 1 }} />
+      <div style={{ display: "flex", alignItems: "center", marginBottom: 8, gap: 8 }}>
+        {/* 返回而不只是"取消" —— 现在这是一个整页的详情视图, 不是夹在列表
+            上方的一小块, 得有明确的路回去。 */}
         <button style={BTN} onClick={onCancel} disabled={busy}>
-          取消
+          ← 返回列表
         </button>
-        <button style={{ ...BTN_PRIMARY, marginLeft: 6 }} onClick={onSave} disabled={busy}>
+        <b style={{ fontSize: 13 }}>{isNew ? "新增模型" : model.display_name}</b>
+        {!isNew ? (
+          <code style={{ fontSize: 11, color: "var(--text-muted)" }}>{model.name}</code>
+        ) : null}
+        <div style={{ flex: 1 }} />
+        <button style={BTN_PRIMARY} onClick={onSave} disabled={busy}>
           {busy ? "保存中…" : "保存"}
         </button>
       </div>
+
+      {configError ? (
+        <div
+          style={{
+            fontSize: 12,
+            lineHeight: 1.6,
+            border: "1px solid var(--status-err)",
+            borderRadius: "var(--radius-md)",
+            padding: 8,
+            marginBottom: 8,
+          }}
+        >
+          <b style={{ color: "var(--status-err)" }}>这个模型现在是坏的</b>
+          <div style={{ marginTop: 2, color: "var(--text-muted)" }}>
+            {configError}
+            <br />
+            员工仍然能在列表里选到它，但每次调用都会失败。要么把下面的环境变量名
+            改对，要么让 IT 在服务器的 .env 里补上这个变量。
+          </div>
+        </div>
+      ) : null}
 
       <div
         style={{
@@ -643,7 +614,14 @@ function ModelForm({
             gap: 8,
           }}
         >
-          <Field label="上下文窗口" hint="留空 = 不限制">
+          <Field
+            label="上下文窗口"
+            hint={
+              model.context_window
+                ? `= ${fmtCompact(model.context_window)} tokens。留空 = 不限制。`
+                : "留空 = 不限制"
+            }
+          >
             <input
               style={INPUT}
               type="number"
