@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -1277,6 +1278,37 @@ def _effective_auto_fallback(cfg: Config) -> bool:
     )
 
 
+# 合法的环境变量名。POSIX 就是这个字符集, 而真 API key 基本都含 `-` 或小写
+# (sk-xxx / AIza... / 长 base64), 所以这一条同时挡住了"把真 key 粘进来"。
+_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _check_api_key_env(m: ModelConfig) -> None:
+    """api_key_env 填的必须是**变量名**, 不是 key 本身.
+
+    这一格是整个表单里最容易填错的 —— 名字里带 "API Key" 三个字, 而旁边
+    「API 地址」那格填的又确实是值本身。粘进一个真 key 的后果是它**明文写进
+    数据库**, 也就进 pg_dump、进备份、进任何一次 `SELECT payload` ——
+    而这个字段之所以存在, 就是为了让 key 永远不进配置。
+
+    前端也校验了, 但那道能被绕过 (直接 PUT)。真正兜住的是这一道。
+    """
+    v = (m.upstream.api_key_env or "").strip()
+    if _ENV_NAME_RE.match(v) and len(v) <= 64:
+        return
+    raise HTTPException(
+        400,
+        detail=(
+            "「API Key 环境变量名」这一格填的是**变量名**, 不是 key 本身。\n\n"
+            f"你填的是: {v[:12]}{'…' if len(v) > 12 else ''}\n"
+            "合法的变量名只能用字母、数字、下划线, 且不能以数字开头, "
+            "例如 DASHSCOPE_API_KEY。\n\n"
+            "key 本身请让 IT 放到服务器的 .env 里 —— 它不进数据库, 也就不会"
+            "出现在备份和数据库导出里。"
+        ),
+    )
+
+
 def _check_fallback_500_policy(m: ModelConfig) -> None:
     """内网模型的 on_errors 不许含 500 —— 保密红线, 不是风格问题.
 
@@ -1389,6 +1421,15 @@ async def api_admin_models_list(
         # 哪些模型的 env 占位符没解析成功。不显示的话, "这个模型为什么不工作"
         # 在界面上没有任何线索 —— 只有服务器日志里有一行。
         "config_errors": model_config_errors(),
+        # 每个模型引用的那个 key 变量, 在服务器上到底设没设。
+        #
+        # 这是管理员问得最多的那个问题 ——「我把变量名填进去了, 生效了吗」。
+        # 答案不在数据库里, 而在服务器的 .env 里, 界面本来完全看不到。
+        # 之前只能等员工调用失败才发现。
+        # 只返 True/False, **不返 key 的任何内容**。
+        "api_key_configured": {
+            m.name: m.upstream.is_available for m in cfg.models
+        },
         "models": rows,
     }
 
@@ -1421,6 +1462,7 @@ async def api_admin_models_put(
 
     # 保密红线: 内网模型不许因 500 切公网。必须在这里拦 ——
     # test_fallback_500_policy 只看 models.yaml, 库里的模型不在它视野内。
+    _check_api_key_env(validated)
     _check_fallback_500_policy(validated)
 
     cfg = get_config()

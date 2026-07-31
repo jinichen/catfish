@@ -10,8 +10,13 @@
  * · 库没启用时整页只读, 并说明原因 —— 而不是让人改完点保存才发现 503
  * · upstream 那几项单独成组并标注"部署配置" —— 它们填错的后果是模型直接
  *   不可用, 跟改个显示名不是一个量级
- * · api_key_env 旁边明确写"这里填变量名, 不是 key 本身" —— 这是最容易
- *   填错的一格, 填了真 key 会把密钥写进数据库
+ * · api_key_env 旁边写清楚"这里填变量名, 不是 key 本身", 而且**前后端都拦**
+ *   ("sk-…" 这类值不是合法环境变量名) —— 这是最容易填错的一格: 标签里带
+ *   "API Key" 三个字, 而旁边「API 地址」那格填的又确实是值本身。粘进真 key
+ *   的后果是它明文写进数据库, 也就进 pg_dump 和备份
+ * · api_base 和 api_key_env 的行为**不对称**, 界面必须说明: 地址填了就生效,
+ *   可以不再依赖 .env; key 永远只能在服务器的 .env 里, 这一格填的只是
+ *   "去哪个变量里取它"。旁边直接显示那个变量在服务器上设没设
  * · 删除要输入模型 ID 确认 —— 模型被删掉的话, 正在用它的员工会话会直接报错
  */
 
@@ -299,6 +304,7 @@ function ModelConfigEditor() {
           allModels={data?.models ?? []}
           autoFallback={data?.auto_fallback ?? false}
           configError={data?.config_errors?.[editing.name]}
+          keyState={data?.api_key_configured?.[editing.name]}
           onChange={setEditing}
           onCancel={() => {
             setEditing(null);
@@ -445,6 +451,7 @@ function ModelForm({
   allModels,
   autoFallback,
   configError,
+  keyState,
   onChange,
   onCancel,
   onSave,
@@ -456,6 +463,9 @@ function ModelForm({
   autoFallback: boolean;
   /** 这个模型的 ${VAR} 没解析成功时的说明 (来自 gateway)。 */
   configError?: string;
+  /** 它引用的那个 key 变量在**服务器上**设没设。undefined = 新建的模型,
+   *  服务端还不知道 (保存后才会有结论)。 */
+  keyState?: boolean;
   onChange: (m: ModelConfig) => void;
   onCancel: () => void;
   onSave: () => void;
@@ -568,7 +578,11 @@ function ModelForm({
         }}
       >
         <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 6 }}>
-          上游接入 <span style={{ color: "var(--text-muted)" }}>（部署配置，填错模型直接不可用）</span>
+          上游接入{" "}
+          <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>
+            （部署配置，填错模型直接不可用。<b>地址</b>在这里填了就生效；
+            <b>key 本身永远只能放服务器的 .env</b>，这一格填的只是去哪个变量里取它）
+          </span>
         </div>
         <div
           style={{
@@ -593,8 +607,8 @@ function ModelForm({
             label="API 地址"
             hint={
               isEnvPlaceholder(model.upstream.api_base)
-                ? "⚠ 这里现在是一个环境变量占位符，真实地址在服务器的 .env 里。改成写死的地址之后，IT 再改 .env 就不生效了 —— 除非你确实要为这个模型单独指定，否则别动。"
-                : "只有 OpenAI 兼容的自建端点才需要填，官方 API 留空。内网地址建议写成 ${变量名}，真实值放服务器的 .env —— 这样它不会进数据库、不会进备份、也不会出现在截图里。"
+                ? "现在是环境变量占位符：真实地址在服务器的 .env 里，改 .env 重启就生效。改成写死的地址之后就反过来 —— 以这里为准，IT 再改 .env 不再影响这个模型。两种都行，别的都不用动。"
+                : "填了就生效，不用再改 .env。官方 API 留空即可。内网地址也可以写成 ${变量名} 交给 .env 管 —— 那样它不进数据库、不进备份、也不会出现在截图里。"
             }
           >
             <input
@@ -607,7 +621,7 @@ function ModelForm({
 
           <Field
             label="API Key 环境变量名"
-            hint="⚠ 这里填变量名（如 DASHSCOPE_API_KEY），不是 key 本身。key 存在服务器的 .env 里，不进数据库。"
+            hint="填变量名（如 DASHSCOPE_API_KEY），不是 key 本身。跟上面的地址不同，这一格填什么都不会让 key 生效 —— 网关是在每次调用时去服务器的环境变量里取它的。"
           >
             <input
               style={MONO}
@@ -615,6 +629,20 @@ function ModelForm({
               onChange={(e) => setUp({ api_key_env: e.target.value })}
               placeholder="DASHSCOPE_API_KEY"
             />
+            {/* 「我把变量名填进去了, 生效了吗」—— 这个问题的答案既不在这份
+                配置里也不在数据库里, 而在服务器的 .env 里, 界面本来完全看不到。
+                之前只能等员工调用失败才发现。 */}
+            {keyState == null ? null : keyState ? (
+              <div style={{ ...HINT, color: "var(--status-ok)" }}>
+                ✓ 服务器上这个变量已设置，可以正常取到 key。
+              </div>
+            ) : (
+              <div style={{ ...HINT, color: "var(--status-err)" }}>
+                ✗ 服务器上<b>没有</b>这个变量 —— 这个模型现在每次调用都会失败。
+                请让 IT 在服务器的 .env 里加一行 <code>{model.upstream.api_key_env}=…</code>
+                然后重启网关，或者把这一格改成一个已经存在的变量名。
+              </div>
+            )}
           </Field>
 
           <Field label="超时（秒）" hint="慢模型（如推理模型）可能要 180 以上">

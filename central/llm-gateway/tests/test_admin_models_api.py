@@ -598,3 +598,57 @@ def test_库里已经有两个默认时清到只剩一个(monkeypatch):
     assert cleared == ["vision"], "留 sort_order 最靠前的那个 (main)"
     assert updated["vision"]["default"] is False
     assert "main" not in updated, "第一个不该被动"
+
+
+# ── api_key_env 填的必须是变量名, 不是 key 本身 (7/30 六修) ──────────────
+#
+# 这一格是整个表单里最容易填错的: 名字里带 "API Key" 三个字, 而旁边
+# 「API 地址」那格填的又确实是值本身。粘进一个真 key 的后果是它**明文写进
+# 数据库** —— 而这个字段之所以存在, 就是为了让 key 永远不进配置。
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "sk-proj-abc123def456",      # OpenAI 风格
+        "AIzaSyD-abc_123",           # Google 风格 (含 -)
+        "dashscope api key",         # 带空格
+        "1KEY",                      # 数字开头
+        "x" * 65,                    # 过长, 不像变量名
+        "",                          # 空
+    ],
+)
+def test_粘了真key进变量名格要拒绝(client, bad):
+    c, store, *_ = client
+    m = _model("m1")
+    m["upstream"]["api_key_env"] = bad
+    r = c.put("/api/admin/models/m1", json=m)
+    assert r.status_code == 400
+    assert "m1" not in store, "拦截必须发生在写库之前"
+
+
+@pytest.mark.parametrize("good", ["INTERNAL_LLM_KEY", "DASHSCOPE_API_KEY", "_k", "K1"])
+def test_合法变量名放行(client, good):
+    c, store, *_ = client
+    m = _model("m1")
+    m["upstream"]["api_key_env"] = good
+    assert c.put("/api/admin/models/m1", json=m).status_code == 200
+    assert store["m1"]["upstream"]["api_key_env"] == good
+
+
+def test_接口要报出那个key变量在服务器上设没设(client, monkeypatch):
+    """管理员问得最多的问题: "我把变量名填进去了, 生效了吗"
+
+    答案不在数据库里而在服务器的 .env 里, 界面本来完全看不到 ——
+    之前只能等员工调用失败才发现。
+    """
+    c, store, *_ = client
+    monkeypatch.setenv("HAS_IT", "sk-真的有")
+    monkeypatch.delenv("NO_SUCH_KEY", raising=False)
+    c.put("/api/admin/models/有key", json=_model("有key", upstream={"model": "openai/x", "api_key_env": "HAS_IT"}))
+    c.put("/api/admin/models/没key", json=_model("没key", upstream={"model": "openai/x", "api_key_env": "NO_SUCH_KEY"}))
+
+    got = c.get("/api/admin/models").json()
+    assert got["api_key_configured"] == {"有key": True, "没key": False}
+    # 只返 True/False, 不能把 key 的任何内容带出来
+    assert "sk-真的有" not in c.get("/api/admin/models").text

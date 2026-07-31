@@ -81,6 +81,12 @@ export interface ModelListResponse {
    * 这类模型仍在列表里、也仍会被员工选到, 但调用时必然失败。不显示的话
    * "这个模型为什么不工作"在界面上没有任何线索, 只有服务器日志里一行。 */
   config_errors?: Record<string, string>;
+  /** 每个模型引用的那个 key 环境变量, 在**服务器上**到底设没设.
+   *
+   * 这是管理员问得最多的那个问题 ——「我把变量名填进去了, 生效了吗」。
+   * 答案既不在这份配置里也不在数据库里, 而在服务器的 .env 里。
+   * 只有 true/false, 不含 key 的任何内容。 */
+  api_key_configured?: Record<string, boolean>;
   models: ModelConfig[];
 }
 
@@ -178,8 +184,19 @@ export function validateModel(m: ModelConfig): string[] {
     errs.push(
       `上游模型要带 provider 前缀，如 openai/${m.upstream.model} —— 不带的话 LiteLLM 不知道走哪家`,
     );
-  if (!m.upstream.api_key_env.trim())
-    errs.push("API Key 环境变量名不能为空（配置里只存变量名，不存 key 本身）");
+  // ⚠ 这一格填的是**变量名**, 不是 key 本身。
+  // 合法环境变量名就是 [A-Za-z_][A-Za-z0-9_]*, 而真 key 基本都含 `-` 或小写
+  // (sk-xxx / AIza… / 长 base64), 所以这一条正好挡住"把真 key 粘进来"——
+  // 粘进去的后果是它明文写进数据库, 也就进 pg_dump 和备份。
+  // 后端 _check_api_key_env 是真正兜底的那道 (前端能被绕过), 这里是即时反馈。
+  const keyEnv = m.upstream.api_key_env.trim();
+  if (!keyEnv) errs.push("API Key 环境变量名不能为空（这里填变量名，不是 key 本身）");
+  else if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyEnv) || keyEnv.length > 64)
+    errs.push(
+      "「API Key 环境变量名」填的是变量名不是 key —— 只能用字母、数字、下划线，" +
+        "不能以数字开头，例如 DASHSCOPE_API_KEY。key 本身请让 IT 放到服务器的 .env 里，" +
+        "它不进数据库，也就不会出现在备份里。",
+    );
   if (m.context_window != null && m.context_window <= 0)
     errs.push("上下文窗口要是正数");
   if (m.max_output_tokens != null && m.max_output_tokens <= 0)
