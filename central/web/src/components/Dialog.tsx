@@ -64,7 +64,12 @@ export function ConfirmDialog({
   const confirmRef = useRef<HTMLButtonElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
-  const ok = (requireText == null || typed === requireText) && !confirmDisabled;
+  // trim 再比。要输的东西通常是从界面上复制来的 (版本号 / 模型名),
+  // 而复制经常会带一个尾空格 —— 那时界面上看起来一模一样, 按钮却是灰的,
+  // 没有任何东西能提示"你多了个空格"。这一条不放松安全性: 中间的字符
+  // 仍然要完全一致。
+  const ok =
+    (requireText == null || typed.trim() === requireText) && !confirmDisabled;
 
   useEffect(() => {
     // 打开时焦点进对话框, 关闭时还回去 —— 不还的话焦点会落回 body,

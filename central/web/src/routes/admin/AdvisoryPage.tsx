@@ -14,6 +14,7 @@ import { useEffect, useState } from "react";
 
 import { Card, Row } from "../../components/Card";
 import { PageShell } from "../../components/PageShell";
+import { ConfirmDialog } from "../../components/Dialog";
 import { RoleGate } from "../../components/RoleGate";
 import {
   advisoryApi,
@@ -52,6 +53,11 @@ function AdvisoryList() {
   const [advisories, setAdvisories] = useState<Advisory[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
+  /** 正在确认撤回哪一条。null = 没有。 */
+  const [revoking, setRevoking] = useState<Advisory | null>(null);
+  const [busy, setBusy] = useState(false);
+  /** 撤回失败的原因。原来是 window.alert。 */
+  const [actionErr, setActionErr] = useState<string | null>(null);
 
   const refresh = async () => {
     setErr(null);
@@ -67,13 +73,19 @@ function AdvisoryList() {
     void refresh();
   }, []);
 
-  const onRevoke = async (id: string) => {
-    if (!confirm(`真要 revoke ${id}? 不真删, 改 revoked_at, 审计可见.`)) return;
+  const onRevoke = async (a: Advisory) => {
+    setBusy(true);
+    setActionErr(null);
     try {
-      await advisoryApi.revoke(id);
+      await advisoryApi.revoke(a.id);
+      setRevoking(null);
       await refresh();
     } catch (e) {
-      alert(`revoke 失败: ${e instanceof Error ? e.message : e}`);
+      // ⚠ 错误留在对话框里, 不往页面上抛 —— 对话框还开着的时候, 页面上的
+      // 提示正被遮罩盖着, 用户看到的会是"点了没反应"。
+      setActionErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -175,7 +187,7 @@ function AdvisoryList() {
                     <td>
                       {!isRevoked && (
                         <button
-                          onClick={() => void onRevoke(a.id)}
+                          onClick={() => setRevoking(a)}
                           style={{
                             background: "transparent",
                             border: "1px solid #d9534f",
@@ -196,6 +208,37 @@ function AdvisoryList() {
             </tbody>
           </table>
         </Card>
+      )}
+      {revoking && (
+        <ConfirmDialog
+          danger
+          title="撤回这条公告?"
+          confirmLabel="撤回"
+          busy={busy}
+          onCancel={() => {
+            setRevoking(null);
+            setActionErr(null);
+          }}
+          onConfirm={() => void onRevoke(revoking)}
+        >
+          <div style={{ fontWeight: 600, color: "var(--text)" }}>{revoking.title}</div>
+          <div style={{ marginTop: 6 }}>
+            撤回后它<b>立刻从所有员工的公告流里消失</b>（feed 只取
+            <code> revoked_at IS NULL </code>的）。
+          </div>
+          <div style={{ marginTop: 6 }}>
+            {/* 后端只有 revoke, 没有 unrevoke —— 全仓 grep 过。所以这句不是
+                客套话: 撤错了只能重新发一条, 而重发的是**新 id**,
+                已经读过老那条的员工不会再看到。 */}
+            不是真删（<code>revoked_at</code> 记下来，审计里查得到），
+            但<b>界面上没有"撤销撤回"</b> —— 撤错了只能重新发一条新的。
+          </div>
+          {actionErr && (
+            <div style={{ marginTop: 8, color: "var(--status-err)" }}>
+              撤回失败：{actionErr}
+            </div>
+          )}
+        </ConfirmDialog>
       )}
     </PageShell>
   );
