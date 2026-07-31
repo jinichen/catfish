@@ -1,9 +1,12 @@
-/** 顶部导航 (BL-ARCH1 5/10).
+/** 顶部导航 (BL-ARCH1 5/10, 7/30 收敛到 2 项).
  *
- * 按 role 显示不同链接:
- *   - 全员: 我的 / Skills Hub / MCP 市场
- *   - manager+: + 部门
- *   - admin: + Admin 后台
+ * 全员看到「市场」, manager+ 多一个「控制台」。
+ *
+ * 7/30 之前是 5 项: 市场 / 部门 / 审计 / Admin / 系统。问题不在数量, 在于
+ * 后 4 项其实是同一件事的 4 个入口 —— 都是管理动作, 而且相互嵌套
+ * (系统在 Admin 里面, /admin 是 /admin/system 的前缀, 于是两个 tab 同时高亮)。
+ * 并进 /admin 之后, 顶栏只回答"我在门户的哪一块", 具体去哪一页交给左侧栏。
+ * 顶栏和侧栏各管一层, 不再互相重复。
  */
 
 import { Link, useLocation } from "react-router-dom";
@@ -16,21 +19,10 @@ export function NavBar() {
   const location = useLocation();
   const isManagerOrAbove =
     me?.role === "manager" || me?.role === "admin" || me?.role === "sysadmin";
-  const isAdminOrAbove = me?.role === "admin" || me?.role === "sysadmin";
-  const isSysadmin = me?.role === "sysadmin";
 
-  // BL-CENTRAL-WEB-CONSOLIDATE (5/17 鸿波): 5 项 nav 按权限阶梯排列, emoji 全统一.
-  // 普通员工看到 📦 市场 (Skills + MCP 合一); manager+ 加 👥 部门 + 📜 审计;
-  // admin+ 加 ⚙️ Admin; sysadmin 加 🔐 系统.
-  //
-  // 之前删的 "我的" / "📚 会话" / "📊 看板" 都是个人数据展示, 违
-  // BL-CENTRAL-EDGE-BOUNDARY. 员工自查 → 桌面 Companion app.
   const links: Array<{ to: string; label: string; show: boolean }> = [
     { to: "/market", label: "📦 市场", show: true },
-    { to: "/manager", label: "👥 部门", show: isManagerOrAbove },
-    { to: "/audit", label: "📜 审计", show: isManagerOrAbove },
-    { to: "/admin", label: "⚙️ Admin", show: isAdminOrAbove },
-    { to: "/admin/system", label: "🔐 系统", show: isSysadmin },
+    { to: "/admin", label: "⚙️ 控制台", show: isManagerOrAbove },
   ];
 
   // 最长前缀命中 —— 见下面 map 里的说明。这里算一次, 免得每项各判一遍。

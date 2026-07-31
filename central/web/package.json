@@ -6,9 +6,10 @@
   "private": true,
   "scripts": {
     "dev": "vite --port 5173",
-    "build": "tsc -b && vite build",
+    "build": "npm run check:routes && tsc -b && vite build",
     "preview": "vite preview --port 5173",
-    "lint": "tsc --noEmit"
+    "lint": "npm run check:routes && tsc --noEmit",
+    "check:routes": "node scripts/check-admin-routes.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

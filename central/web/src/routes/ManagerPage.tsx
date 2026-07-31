@@ -1,4 +1,4 @@
-/** /manager — 部门视图 (manager + admin only) (BL-ARCH1 5/10).
+/** /admin/departments — 部门视图 (manager+) (BL-ARCH1 5/10, 7/30 从 /manager 搬来).
  *
  * 列我管的部门, 点进去看本部门 quota / audit / top 员工.
  * Manager 看自己的 managed_departments, admin 看所有部门.
@@ -16,6 +16,7 @@ import {
   type DepartmentAudit,
   type DepartmentQuota,
 } from "../lib/me";
+import { adminApi } from "../lib/admin";
 import { useAuthStore } from "../store/auth";
 
 export function ManagerPage() {
@@ -32,19 +33,63 @@ export function ManagerPage() {
 function DepartmentList() {
   const me = useAuthStore((s) => s.me);
   const navigate = useNavigate();
+  // admin+ 没设 managed_departments 时, 从服务端取真实部门列表 (见下面 useEffect).
+  const [allDepts, setAllDepts] = useState<string[] | null>(null);
+  const [listErr, setListErr] = useState<string | null>(null);
+
+  const isAdminOrAbove = me?.role === "admin" || me?.role === "sysadmin";
+  const needsAll = isAdminOrAbove && me.managed_departments.length === 0;
+
+  // 7/30: 这里原来是写死的 ["engineering", "product", "sales", "finance"] ——
+  // 那是 alembic 20260517_004 seed 的 4 个开发用部门。客户现场的部门叫什么
+  // 我们不可能猜中 (达华就不是这四个), 而猜错的表现是**列出四个不存在的部门,
+  // 点进去每个都空**, 不报错。
+  //
+  // 服务端本来就有 GET /api/admin/departments (P3.5.95 补的透传)。
+  // 注意它是 require_admin_or_above —— manager 调会 403, 所以只有 admin+ 走这条;
+  // manager 本来也只该看自己 managed_departments。
+  useEffect(() => {
+    if (!needsAll) return;
+    let alive = true;
+    adminApi
+      .listDepartments()
+      .then((r) => alive && setAllDepts(r.departments.map((d) => d.name)))
+      .catch((e) => alive && setListErr(String(e)));
+    return () => {
+      alive = false;
+    };
+  }, [needsAll]);
+
   if (!me) return null;
 
-  const depts =
-    me.role === "admin" ? me.managed_departments.length > 0
-      ? me.managed_departments
-      : ["engineering", "product", "sales", "finance"]  // admin 默认列常见部门
-    : me.managed_departments;
+  const depts = me.managed_departments.length > 0 ? me.managed_departments : (allDepts ?? []);
+
+  if (needsAll && allDepts === null && !listErr) {
+    return <Card title="部门"><div style={{ color: "var(--text-muted)" }}>加载中…</div></Card>;
+  }
 
   if (depts.length === 0) {
+    // 7/30: 老文案是"你是 {role}, 但没设 managed_departments. 找 admin 给你授权."
+    // 对 sysadmin 说这话是荒唐的 —— 他就是最高权限, 没有"更上面的 admin"可找。
+    // 而且它没说去哪儿设。授权入口是 /admin/users → 选人 → managed_departments。
     return (
       <Card title="没有可管的部门">
-        <div style={{ color: "var(--text-muted)" }}>
-          你是 {me.role}, 但没设 managed_departments. 找 admin 给你授权.
+        <div style={{ color: "var(--text-muted)", lineHeight: 1.7 }}>
+          {listErr ? (
+            <>读部门列表失败: <code>{listErr}</code></>
+          ) : isAdminOrAbove ? (
+            <>
+              系统里还没有任何部门, 或者你的账号没设 <code>managed_departments</code>。
+              <br />
+              到 <Link to="/admin/users">用户管理</Link> 选中账号, 在
+              <code> managed_departments </code>里填部门名即可。
+            </>
+          ) : (
+            <>
+              你的账号还没被授权管理任何部门。找管理员在
+              <b> 用户管理 → 你的账号 → managed_departments </b>里加上部门名。
+            </>
+          )}
         </div>
       </Card>
     );
@@ -66,7 +111,7 @@ function DepartmentList() {
           {depts.map((d) => (
             <button
               key={d}
-              onClick={() => navigate(`/manager/${encodeURIComponent(d)}`)}
+              onClick={() => navigate(`/admin/departments/${encodeURIComponent(d)}`)}
               style={{
                 background: "var(--bg-elev)",
                 border: "1px solid var(--border)",
@@ -135,7 +180,7 @@ function DepartmentDetail() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
       <div>
-        <Link to="/manager" style={{ fontSize: 13 }}>
+        <Link to="/admin/departments" style={{ fontSize: 13 }}>
           ← 选别的部门
         </Link>
       </div>

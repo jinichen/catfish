@@ -35,96 +35,23 @@ import { Link, useLocation } from "react-router-dom";
 
 import { roleAllows } from "../../components/RoleGate";
 import { useAuthStore } from "../../store/auth";
-import type { Role } from "../../lib/me";
-
-interface NavItem {
-  to: string;
-  label: string;
-  /** 看得到这一项需要的最低权限. 必须跟目标页自己的 RoleGate 一致 —— 见文件头 */
-  require: Role | Role[];
-  /** 目标不在 /admin 下, 点了会离开这个壳 */
-  external?: boolean;
-}
-
-interface NavGroup {
-  title: string;
-  items: NavItem[];
-}
-
-/** 分组按**任务**, 不按权限.
- *
- * 改之前的分法混了两个维度: 顶栏的「市场 / 部门 / 审计」是功能域, 而
- * 「Admin / 系统」是权限等级。所以「审计」在顶栏, 而同属观测的
- * 「Quota 历史日志 / 性能仪表 / Billing」却在 Admin 里 —— 只因为权限不同
- * 被拆到了两处。
- *
- * 这一步先把 /admin 下的项按任务归好组; 跨顶栏的合并留到第二步 (要动 URL)。
- * 「审计大查询」暂时以外链形式放在观测组里, 免得这一组看起来缺一块。
- *
- * 每一项的 require 都核对过对应页面的 RoleGate (7/30):
- *   AdvisoryPage / ModelConfigPage / QuotaConfigPage / SystemPage → sysadmin
- *   FactsPage → admin+sysadmin        AuditPage → manager+admin
- *   其余走 AdminPage 外层的 admin+sysadmin
- */
-const GROUPS: NavGroup[] = [
-  {
-    title: "总览",
-    items: [{ to: "/admin", label: "今日概况", require: ["admin", "sysadmin"] }],
-  },
-  {
-    title: "接入",
-    items: [
-      { to: "/admin/models", label: "模型", require: ["sysadmin"] },
-      { to: "/admin/quota", label: "配额", require: ["sysadmin"] },
-      { to: "/admin/access", label: "部门权限", require: ["admin", "sysadmin"] },
-    ],
-  },
-  {
-    title: "人员",
-    items: [{ to: "/admin/users", label: "用户", require: ["admin", "sysadmin"] }],
-  },
-  {
-    title: "观测",
-    items: [
-      { to: "/admin/perf", label: "性能", require: ["admin", "sysadmin"] },
-      { to: "/admin/billing", label: "成本", require: ["admin", "sysadmin"] },
-      {
-        to: "/admin/quota/events",
-        label: "配额日志",
-        require: ["admin", "sysadmin"],
-      },
-      {
-        to: "/audit",
-        label: "用量审计",
-        require: ["manager", "admin"],
-        external: true,
-      },
-    ],
-  },
-  {
-    title: "系统",
-    items: [
-      { to: "/admin/system", label: "服务状态", require: ["sysadmin"] },
-      { to: "/admin/facts", label: "政策同步", require: ["admin", "sysadmin"] },
-      { to: "/admin/advisory", label: "公告发布", require: ["sysadmin"] },
-    ],
-  },
-];
+import { GROUP_ORDER, ROUTES, toHref } from "./navConfig";
 
 /** 当前路径命中哪一项.
  *
- * 用最长前缀匹配而不是 startsWith 逐个试 —— /admin/quota 和
- * /admin/quota/events 是前缀关系, 逐个试的话在 events 页上两项会同时高亮。
- * /admin 本身只在完全相等时命中, 否则它会匹配所有子路径。
+ * 最长前缀匹配, 不是逐个 startsWith —— /admin/quota 和 /admin/quota/events
+ * 是前缀关系, 逐个试的话在 events 页上两项会同时高亮。
+ * "/admin" 本身只在完全相等时命中, 否则它会匹配所有子路径。
+ * (顶栏原本就栽在这上面: /admin 是 /admin/system 的前缀, 两个 tab 同时亮。)
  */
-function activeTo(pathname: string, all: NavItem[]): string | null {
+function activeHref(pathname: string, hrefs: string[]): string | null {
   let best: string | null = null;
-  for (const it of all) {
+  for (const h of hrefs) {
     const hit =
-      it.to === "/admin"
+      h === "/admin"
         ? pathname === "/admin" || pathname === "/admin/"
-        : pathname === it.to || pathname.startsWith(it.to + "/");
-    if (hit && (best === null || it.to.length > best.length)) best = it.to;
+        : pathname === h || pathname.startsWith(h + "/");
+    if (hit && (best === null || h.length > best.length)) best = h;
   }
   return best;
 }
@@ -133,14 +60,20 @@ export function AdminLayout({ children }: { children: ReactNode }) {
   const me = useAuthStore((s) => s.me);
   const { pathname } = useLocation();
 
-  const visible = GROUPS.map((g) => ({
-    ...g,
-    items: g.items.filter((it) => (me ? roleAllows(me.role, it.require) : false)),
+  // 权限过滤跟目标页的 RoleGate 同源 —— 都读 navConfig 里那条 require,
+  // 所以"菜单里有、点进去 403"在结构上不可能发生。
+  const allowed = ROUTES.filter((r) =>
+    me ? roleAllows(me.role, [...r.require]) : false,
+  );
+
+  const visible = GROUP_ORDER.map((title) => ({
+    title,
+    items: allowed.filter((r) => r.group === title),
   })).filter((g) => g.items.length > 0);
 
-  const active = activeTo(
+  const active = activeHref(
     pathname,
-    visible.flatMap((g) => g.items),
+    allowed.map((r) => toHref(r.path)),
   );
 
   return (
@@ -177,11 +110,12 @@ export function AdminLayout({ children }: { children: ReactNode }) {
               {g.title}
             </div>
             {g.items.map((it) => {
-              const isActive = active === it.to;
+              const href = toHref(it.path);
+              const isActive = active === href;
               return (
                 <Link
-                  key={it.to}
-                  to={it.to}
+                  key={href}
+                  to={href}
                   style={{
                     display: "block",
                     padding: "5px 8px",
@@ -193,14 +127,6 @@ export function AdminLayout({ children }: { children: ReactNode }) {
                   }}
                 >
                   {it.label}
-                  {it.external ? (
-                    <span
-                      style={{ marginLeft: 4, fontSize: 10, color: "var(--text-muted)" }}
-                      title="不在后台内, 点了会离开"
-                    >
-                      ↗
-                    </span>
-                  ) : null}
                 </Link>
               );
             })}

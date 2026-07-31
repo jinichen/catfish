@@ -12,8 +12,6 @@ export function HomePage() {
   // BL-ARCH1 P3 (5/10): role 检查含 sysadmin (跟 NavBar / RoleGate 一致).
   const isManagerOrAdmin =
     me.role === "manager" || me.role === "admin" || me.role === "sysadmin";
-  const isAdmin = me.role === "admin" || me.role === "sysadmin";
-  const isSysadmin = me.role === "sysadmin";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
@@ -90,36 +88,15 @@ export function HomePage() {
           title="资源市场"
           desc="Skills (技能脚本) · MCP (连接器) · 全公司共享"
         />
+        {/* 7/30: 原来这里是「部门 / 审计 / Admin / 系统」四块, 跟顶栏那 5 项
+            一字不差地重复了一遍 —— 而且后三块其实都在 /admin 底下。合成一个
+            入口, 里面去哪由左侧栏决定。 */}
         {isManagerOrAdmin && (
-          <NavTile
-            to="/manager"
-            icon="👥"
-            title="部门视图"
-            desc="本部门用量 / 员工 top / 调配额"
-          />
-        )}
-        {isManagerOrAdmin && (
-          <NavTile
-            to="/audit"
-            icon="📜"
-            title="审计查询"
-            desc="历史调用 · 按用户 / 模型 / 时间筛"
-          />
-        )}
-        {isAdmin && (
           <NavTile
             to="/admin"
             icon="⚙️"
-            title="Admin 后台"
-            desc="用户 / 配额 / billing / dev_users"
-          />
-        )}
-        {isSysadmin && (
-          <NavTile
-            to="/admin/system"
-            icon="🔐"
-            title="系统管理"
-            desc="服务状态 / 操作审计 / 危险操作"
+            title="管理控制台"
+            desc="模型 / 配额 / 用户 / 审计 / 系统状态"
           />
         )}
       </div>

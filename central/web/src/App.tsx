@@ -22,7 +22,7 @@
  */
 
 import { useEffect } from "react";
-import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { NavBar } from "./components/NavBar";
 import { fetchMe, fetchModelCatalog } from "./lib/me";
@@ -36,12 +36,23 @@ import { HomePage } from "./routes/HomePage";
 // BL-CENTRAL-WEB-CONSOLIDATE (5/17): Skills Hub + MCP 市场合到 /market 下,
 // 2 个 sub-tab. 本质同类 (LLM plugin marketplace).
 import { MarketPage } from "./routes/MarketPage";
-import { ManagerPage } from "./routes/ManagerPage";
 import { AdminPage } from "./routes/AdminPage";
-import { AuditPage } from "./routes/AuditPage";
+import { LEGACY_REDIRECTS } from "./routes/admin/navConfig";
 // BL-CENTRAL-WEB-PURGE-USERDATA (5/17 鸿波): 删 SessionsPage / KanbanPage —
 // 它们读员工本机 ~/.hermes/state.db + ~/.catfish/tasks.jsonl, 违反
 // BL-CENTRAL-EDGE-BOUNDARY 规则. 这俩功能 Companion 桌面 app 自己有.
+
+/** 老 URL 跳新 URL, 保住路径尾巴和 query.
+ *
+ * 不能直接用 <Navigate to="/admin/departments"> —— 那样 /manager/研发部 会掉到
+ * 部门列表, 用户以为自己点错了。而下面还有个 `path="*"` 兜底跳首页, 所以漏掉的
+ * 老链接不会 404, 是**静默回首页**, 更难发现。
+ */
+function LegacyRedirect({ to }: { to: string }) {
+  const tail = useParams()["*"];
+  const { search, hash } = useLocation();
+  return <Navigate to={`${to}${tail ? `/${tail}` : ""}${search}${hash}`} replace />;
+}
 
 function AuthCallback() {
   const navigate = useNavigate();
@@ -234,9 +245,17 @@ export function App() {
           <Route path="/skills/*" element={<Navigate to="/market/skills" replace />} />
           <Route path="/mcp" element={<Navigate to="/market/mcp" replace />} />
           <Route path="/mcp/*" element={<Navigate to="/market/mcp" replace />} />
-          <Route path="/manager/*" element={<ManagerPage />} />
           <Route path="/admin/*" element={<AdminPage />} />
-          <Route path="/audit" element={<AuditPage />} />
+          {/* 7/30 第二步: /manager 和 /audit 并入 /admin (见 navConfig 文件头).
+              `${from}/*` 一条同时接住 /manager 和 /manager/研发部 —— splat 为空
+              时也匹配。深链的尾巴由 LegacyRedirect 接上去。 */}
+          {LEGACY_REDIRECTS.map((r) => (
+            <Route
+              key={r.from}
+              path={`${r.from}/*`}
+              element={<LegacyRedirect to={r.to} />}
+            />
+          ))}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>

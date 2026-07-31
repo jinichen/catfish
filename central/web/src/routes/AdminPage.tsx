@@ -5,11 +5,12 @@
  * P1: dev_users 编辑 / users.yaml 编辑 / billing 月报.
  */
 
-import { useEffect, useState } from "react";
-import { Routes, Route } from "react-router-dom";
+import { useEffect, useState, type ReactNode } from "react";
+import { Navigate, Routes, Route } from "react-router-dom";
 
 import { Card, Row } from "../components/Card";
-import { RoleGate } from "../components/RoleGate";
+import { RoleGate, roleAllows } from "../components/RoleGate";
+import { useAuthStore } from "../store/auth";
 import {
   fetchAuditEvents,
   fetchGlobalAudit,
@@ -32,37 +33,78 @@ import { PerfPage } from "./admin/PerfPage";
 // P3.5.93 (6/23 鸿波): /admin/quota 真编辑 UI, 替原 AdminQuota P0 placeholder.
 // 一并治 AccessPage 部门 quota 6 周 dead UI (gateway 不读 identity-server).
 import { AdminLayout } from "./admin/AdminLayout";
+// 7/30 第二步: /audit 和 /manager 从顶层搬进 /admin, 页面本体原样复用
+import { AuditPage } from "./AuditPage";
+import { ManagerPage } from "./ManagerPage";
+import { ROUTES, routePattern, toHref, type AdminPath } from "./admin/navConfig";
 import { ModelConfigPage } from "./admin/ModelConfigPage";
 import { QuotaConfigPage } from "./admin/QuotaConfigPage";
 
+/** 每条路由对应的组件.
+ *
+ * 类型是 Record<AdminPath, ReactNode> —— navConfig 的 ROUTES 里加了一条却
+ * 忘了在这里配组件, **是编译错误**。反过来配了不存在的路径也是编译错误。
+ */
+const ELEMENTS: Record<AdminPath, ReactNode> = {
+  "": <AdminHome />,
+  models: <ModelConfigPage />,
+  quota: <QuotaConfigPage />,
+  access: <AccessPage />,
+  users: <UsersPage />,
+  departments: <ManagerPage />,
+  audit: <AuditPage />,
+  perf: <PerfPage />,
+  billing: <AdminBilling />,
+  "quota/events": <AdminQuotaEvents />,
+  system: <SystemPage />,
+  facts: <FactsPage />,
+  advisory: <AdvisoryPage />,
+};
+
+/** /admin 落地时按角色分流.
+ *
+ * 今日概况是全公司聚合, 后端 /api/quota/global 与 /api/audit/global 都是
+ * _require_admin —— manager 会拿 403。而前端那两个 fetch 吞异常返 null,
+ * 页面会**永远停在"加载中…"**, 不报错也不提示。
+ *
+ * 所以 manager 落到 /admin 时直接送去他第一个能看的页面, 而不是让他对着
+ * 一个永远转圈的首页。
+ */
+function AdminIndex() {
+  const me = useAuthStore((s) => s.me);
+  if (me && roleAllows(me.role, ["admin", "sysadmin"])) return <AdminHome />;
+  const first = ROUTES.find(
+    (r) => r.path !== "" && me && roleAllows(me.role, [...r.require]),
+  );
+  return <Navigate to={first ? toHref(first.path) : "/"} replace />;
+}
+
 export function AdminPage() {
-  // BL-ARCH1 P1 (5/10): admin 默认能进, sysadmin 看 system. /admin/users 内部不再
-  // 强制 admin (sysadmin / admin 都进, 上游 admin_router 按 role 过滤 sysadmin 行).
+  // 7/30 第二步: 外层守卫从 admin+ 降到 manager+ —— /audit 和 /manager 搬进来
+  // 之后, manager 也要能进这个壳。
+  //
+  // ⚠ 降之前有 6 个页面自己没守卫、全靠这一道拦着 (UsersPage / AccessPage /
+  //   PerfPage / AdminQuotaEvents / AdminBilling / AdminHome)。现在每条路由
+  //   各自套 RoleGate, require 来自 navConfig 那份单一事实源, 跟侧栏同源。
   return (
-    <RoleGate require={["admin", "sysadmin"]}>
-      {/* 7/30: 导航壳包在 Routes **外面** —— 这样每个子页都带侧栏, 而不用
-          逐个页面去接。子页内部一行都不用改, 这是第一步刻意压住的范围。 */}
+    <RoleGate require={["manager", "admin"]}>
       <AdminLayout>
-      <Routes>
-        <Route index element={<AdminHome />} />
-        <Route path="users/*" element={<UsersPage />} />
-        <Route path="access/*" element={<AccessPage />} />
-        <Route path="advisory" element={<AdvisoryPage />} />
-        <Route path="system/*" element={<SystemPage />} />
-        <Route path="facts/*" element={<FactsPage />} />
-        {/* P3.5.93 (6/23 鸿波): /admin/quota 改用 QuotaConfigPage (sysadmin 真编辑).
-            老 AdminQuota static placeholder 函数已无路径引用, 可以砍但保 dead code
-            等下个 sprint 清, 不在 P3.5.93 scope. */}
-        <Route path="quota" element={<QuotaConfigPage />} />
-        {/* 7/30: 模型增删改. 在这之前只能编辑 models.yaml 再重启, 而那个文件
-            在容器里是只读挂载 —— 客户现场根本没有改模型这条路. */}
-        <Route path="models" element={<ModelConfigPage />} />
-        {/* BL-ADMIN-AUDIT (5/12 鸿波): 逐条 audit 历史 */}
-        <Route path="quota/events" element={<AdminQuotaEvents />} />
-        {/* P3.5.60 (6/22 鸿波): 全公司 LLM 性能仪表 (latency p50/p95/p99) */}
-        <Route path="perf" element={<PerfPage />} />
-        <Route path="billing" element={<AdminBilling />} />
-      </Routes>
+        <Routes>
+          {ROUTES.map((r) => (
+            <Route
+              key={r.path || "index"}
+              {...(r.path === "" ? { index: true } : {})}
+              path={routePattern(r)}
+              element={
+                r.path === "" ? (
+                  <AdminIndex />
+                ) : (
+                  <RoleGate require={[...r.require]}>{ELEMENTS[r.path]}</RoleGate>
+                )
+              }
+            />
+          ))}
+        </Routes>
       </AdminLayout>
     </RoleGate>
   );

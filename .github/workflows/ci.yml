@@ -141,6 +141,49 @@ jobs:
         run: bash scripts/check_version_sync.sh
 
   # ════════════════════════════════════════════════════════════
+  # 3b. 中央门户前端 (central/web) — tsc + build + 路由自查
+  # ════════════════════════════════════════════════════════════
+  # 7/30: 这个 job 之前**根本不存在**。companion 有 tsc+build+vitest 三道,
+  # central/web 一道都没有 —— 而它是管理员每天用的那个后台。
+  # 也就是说自 5/10 建仓起, 它的 TypeScript 从没在 CI 里编译过一次。
+  central-web:
+    name: central/web tsc + build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: central/web/package-lock.json
+
+      - name: Install deps
+        working-directory: central/web
+        run: npm ci --no-audit --no-fund
+
+      # 同 companion job: npm/cli#4828, lockfile 在 macOS 生成时漏 Linux native binary
+      - name: Ensure rollup Linux x64 native binary
+        working-directory: central/web
+        run: npm install --no-save --no-audit --no-fund @rollup/rollup-linux-x64-gnu
+
+      - name: TSC strict check (no emit)
+        working-directory: central/web
+        run: npx tsc --noEmit -p tsconfig.json
+
+      # 后台路由 / 侧栏 / 跨仓硬编码路径一致性 —— 这三样类型系统管不到,
+      # 而它们失败时是静默的 (写错的路径不 404, 跳首页)。见脚本文件头。
+      - name: Admin route consistency check
+        working-directory: central/web
+        run: node scripts/check-admin-routes.mjs
+
+      - name: Vite build
+        working-directory: central/web
+        run: npx vite build
+
+  # ════════════════════════════════════════════════════════════
   # 4. 中央服务 (skills-hub / mcp-registry / secret-broker / identity-server) — Python 3.12
   # ════════════════════════════════════════════════════════════
   # B3 (6/6 鸿波 audit): 之前 CI 只跑 tool-bridge + gateway 2 个模块, 剩 10 个全
@@ -323,7 +366,8 @@ jobs:
   # ════════════════════════════════════════════════════════════
   # 9. 全套总结 — 核心 job 都过才算 CI 绿
   # ════════════════════════════════════════════════════════════
-  # 核心 (必过): tool-bridge / gateway / companion (tsc+build) / central-services /
+  # 核心 (必过): tool-bridge / gateway / companion (tsc+build) / central-web /
+  # central-services /
   # edge-agents / hermes-plugins / companion-vitest
   # 非核心 (warn 不阻塞): companion-cargo (Linux 平台限制可能 partial fail)
   ci-pass:
@@ -333,6 +377,7 @@ jobs:
       - tool-bridge
       - gateway
       - companion
+      - central-web
       - central-services
       - edge-agents
       - hermes-plugins
@@ -345,6 +390,7 @@ jobs:
           results[tool-bridge]="${{ needs.tool-bridge.result }}"
           results[gateway]="${{ needs.gateway.result }}"
           results[companion]="${{ needs.companion.result }}"
+          results[central-web]="${{ needs.central-web.result }}"
           results[central-services]="${{ needs.central-services.result }}"
           results[edge-agents]="${{ needs.edge-agents.result }}"
           results[hermes-plugins]="${{ needs.hermes-plugins.result }}"

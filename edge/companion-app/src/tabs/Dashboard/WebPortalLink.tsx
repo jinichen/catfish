@@ -4,17 +4,19 @@
  * Companion 砍了 7 张管理类卡, 这些功能挪去 catfish-web. 这张顶部 banner 给员工
  * 一条进 web 的路, 按 role 显示能进的入口.
  *
- * 路由约定 (跟 catfish-web src/routes/ 对齐, **5/17 更新**):
- *   /market       📦 资源市场 (Skills + MCP 合并, 内 sub-tab)
- *   /manager      👥 部门 (manager+)
- *   /audit        📜 审计大查询 (manager+)
- *   /admin        ⚙️ Admin 后台 (admin / sysadmin)
- *   /admin/system 🔐 系统管理 (sysadmin)
+ * 路由约定 (跟 catfish-web src/routes/ 对齐, **7/30 更新**):
+ *   /market  📦 资源市场 (Skills + MCP 合并, 内 sub-tab)
+ *   /admin   ⚙️ 管理控制台 (manager+, 进去后左侧栏分流)
  *
- * BL-COMPANION-DASHBOARD-SYNC (5/17 鸿波): 老 7 项链接对齐到 web 新 5 项.
- *   - 删 /me — web 整页废了, 员工自查走 Companion 仪表盘本身
- *   - 合 /skills + /mcp → /market — web 已经合并成单一 tab
- *   - emoji 统一 (📦 / 👥 / 📜 / ⚙️ / 🔐), 顺序按权限阶梯
+ * 7/30 (web 后台三区改造第二步): /manager 和 /audit 并进了 /admin, web 顶栏
+ * 也从 5 项收到 2 项, 这里跟着收。
+ *
+ * ⚠ **这个文件是硬编码路径, 没有任何东西保证它跟 web 的路由表一致。**
+ * 它跨仓引用 catfish-web 的 URL, 而 web 那边 App.tsx 末尾是
+ * `<Route path="*" element={<Navigate to="/" replace />} />` —— 路径写错不会
+ * 404, 是**静默跳首页**。所以 web 侧留了 LEGACY_REDIRECTS 接住老路径
+ * (装了旧版 Companion 的机器不会立刻升级), 但那只保这一次;
+ * 以后再动 web 路由, 记得回来看这张表。
  *
  * BL-ARCH2 fix4 (5/10): catfish-web 没起来时给"未运行"提示, 不让员工点链接看
  * 系统浏览器"无法连接服务器"无声失败 (鸿波: "还是一样的"). 心跳 10s 一次.
@@ -143,11 +145,8 @@ interface PortalLink {
   show: (role: string) => boolean;
 }
 
-// BL-COMPANION-DASHBOARD-SYNC (5/17 鸿波): 跟 catfish-web NavBar.tsx 5 项 nav 对齐.
-// role 继承: sysadmin > admin > manager > employee. 老 7 项 → 新 5 项:
-//   - 删 /me (整页废了, 员工自查走 Companion 仪表盘本身)
-//   - 合 /skills + /mcp → /market (web 已合并成 sub-tab)
-//   - emoji 统一, 顺序按权限阶梯升级
+// 跟 catfish-web NavBar.tsx 对齐 (7/30: 两边都是 市场 + 控制台 两项).
+// role 继承: sysadmin > admin > manager > employee.
 const PORTAL_LINKS: PortalLink[] = [
   {
     path: "/market",
@@ -156,28 +155,12 @@ const PORTAL_LINKS: PortalLink[] = [
     show: () => true,
   },
   {
-    path: "/manager",
-    label: "👥 部门",
-    desc: "本部门 quota / top 员工 / audit",
-    show: (r) => r === "manager" || r === "admin" || r === "sysadmin",
-  },
-  {
-    path: "/audit",
-    label: "📜 审计大查询",
-    desc: "跨员工 / 跨部门 / 时间段 + 趋势 + CSV 导出",
-    show: (r) => r === "manager" || r === "admin" || r === "sysadmin",
-  },
-  {
     path: "/admin",
-    label: "⚙️ Admin 后台",
-    desc: "用户 / 配额规则 / billing / 部门 RBAC",
-    show: (r) => r === "admin" || r === "sysadmin",
-  },
-  {
-    path: "/admin/system",
-    label: "🔐 系统管理",
-    desc: "服务状态 / 操作审计 / 危险操作",
-    show: (r) => r === "sysadmin",
+    label: "⚙️ 管理控制台",
+    // manager 进去落在「我管的部门」, admin+ 落在「今日概况」——
+    // web 的 /admin index 按角色分流, 这里不用分两个入口。
+    desc: "部门 / 审计 / 模型 / 配额 / 用户 / 系统状态",
+    show: (r) => r === "manager" || r === "admin" || r === "sysadmin",
   },
 ];
 
@@ -271,7 +254,7 @@ export default function WebPortalLink() {
         </span>
         {/* BL-COMPANION-ABOUT-CHIP (5/18): 右侧版本徽章, 点开"关于鲶鱼"模态.
             员工不知道自己装的是哪版 / 鲶鱼是啥 / 谁出的, 需要一个入口告诉他们.
-            放这儿不占独立行, 不影响 5 张 nav tile 紧凑. */}
+            放这儿不占独立行, 不影响下面的入口按钮紧凑. */}
         <span style={{ marginLeft: "auto" }}>
           <AboutChip />
         </span>
