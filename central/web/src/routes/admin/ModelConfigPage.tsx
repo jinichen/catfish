@@ -87,6 +87,20 @@ function isEnvPlaceholder(v: string | null | undefined): boolean {
   return typeof v === "string" && /\$\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\}/.test(v);
 }
 
+/** 128000 → "128K", 1000000 → "1M". 上下文窗口这类大整数用.
+ *  `1,000,000` 要占 100px 而 `1M` 只要 30px, 而且一眼能比大小。精确值放 title。 */
+function fmtCompact(n: number): string {
+  if (n >= 1_000_000) {
+    const v = n / 1_000_000;
+    return `${Number.isInteger(v) ? v : v.toFixed(1)}M`;
+  }
+  if (n >= 1000) {
+    const v = n / 1000;
+    return `${Number.isInteger(v) ? v : v.toFixed(0)}K`;
+  }
+  return String(n);
+}
+
 function Field({
   label,
   hint,
@@ -274,28 +288,67 @@ function ModelConfigEditor() {
           columns={[
             {
               header: "模型",
-              cell: (m) => (
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <b>{splitDisplayName(m.display_name).name}</b>
-                  {/* 环境变量没解析成功 —— 这个模型在列表里、员工也选得到,
-                      但调用必然失败。不标出来的话界面上没有任何线索。 */}
-                  {data?.config_errors?.[m.name] ? (
-                    <Badge tone="err" title={data.config_errors[m.name]}>
-                      配置有误
-                    </Badge>
-                  ) : null}
-                  {m.default ? <Badge tone="accent">默认</Badge> : null}
-                  {m.mode === "embedding" ? <Badge>向量</Badge> : null}
-                  <Badge tone={m.tier === "public" ? "warn" : "neutral"}>
-                    {m.tier === "public" ? "公网" : "私有"}
-                  </Badge>
-                </div>
-              ),
+              // ⚠ 必须给宽度。上一版只有这一列没设 width, 而后面 7 列全设了 ——
+              // 浏览器把剩下的分给它, 只剩约 110px, 于是
+              // "Qwen3-VL 30B (A3B MoE)" 折成 4 行, 整张表的行高节奏全毁了。
+              width: "26%",
+              truncate: true,
+              cell: (m) => {
+                const { name, note } = splitDisplayName(m.display_name);
+                return (
+                  <span
+                    style={{ display: "flex", alignItems: "center", gap: 5 }}
+                    title={m.display_name}
+                  >
+                    {/* 徽章 flexShrink:0, 名字才是可压缩的那个 —— 反过来的话
+                        窄屏下会先把徽章挤没 */}
+                    <span
+                      style={{
+                        fontWeight: 500,
+                        // flex 子项不写 minWidth:0 是不会缩到内容尺寸以下的,
+                        // 省略号根本不会出现, 只会把整个单元格撑开
+                        minWidth: 0,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      {name}
+                    </span>
+                    {note ? (
+                      <span
+                        style={{
+                          color: "var(--text-muted)",
+                          minWidth: 0,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                        }}
+                      >
+                        {note}
+                      </span>
+                    ) : null}
+                    <span style={{ display: "inline-flex", gap: 4, flexShrink: 0 }}>
+                      {/* 环境变量没解析成功 —— 这个模型在列表里、员工也选得到,
+                          但调用必然失败。不标出来的话界面上没有任何线索。 */}
+                      {data?.config_errors?.[m.name] ? (
+                        <Badge tone="err" title={data.config_errors[m.name]}>
+                          配置有误
+                        </Badge>
+                      ) : null}
+                      {m.default ? <Badge tone="accent">默认</Badge> : null}
+                      {m.mode === "embedding" ? <Badge>向量</Badge> : null}
+                      {m.tier === "public" ? <Badge tone="warn">公网</Badge> : null}
+                    </span>
+                  </span>
+                );
+              },
             },
             {
+              // 私有模型不再单独挂一个「私有」徽章 —— 6 个模型里 6 行都有徽章
+              // 时它就不是信息了。只标「公网」(上面那列), 因为公网才是要留神的
+              // 那一类 (走公网出口, 涉及合规)。
               header: "ID",
               truncate: true,
-              width: 200,
+              width: "17%",
               cell: (m) => (
                 <code style={{ fontSize: 11, color: "var(--text-muted)" }} title={m.name}>
                   {m.name}
@@ -305,11 +358,11 @@ function ModelConfigEditor() {
             {
               header: "上游",
               truncate: true,
-              width: 170,
+              width: "17%",
               // ⚠ 只显示上游模型名, **不显示 api_base**。
               // 内网地址形如 http://10.10.40.102:32730/openapi/<uuid>/v1 ——
               // 路径里那段 uuid 是那个自建端点的凭据。摆在列表上等于每次
-              // 截图、投屏、演示都把它带出去。要看/要改在「详情」里。
+              // 截图、投屏、演示都把它带出去。要看/要改在编辑表单里。
               cell: (m) => (
                 <code style={{ fontSize: 11 }} title={m.upstream.model}>
                   {m.upstream.model}
@@ -319,27 +372,45 @@ function ModelConfigEditor() {
             {
               header: "上下文",
               align: "right",
-              width: 100,
-              cell: (m) => (m.context_window ? m.context_window.toLocaleString() : "—"),
+              width: 76,
+              // 1,000,000 要占 100px 而 "1M" 只要 30px, 而且一眼就能比大小。
+              // 精确值放 title。
+              cell: (m) =>
+                m.context_window ? (
+                  <span title={m.context_window.toLocaleString()}>
+                    {fmtCompact(m.context_window)}
+                  </span>
+                ) : (
+                  <span style={{ color: "var(--text-muted)" }}>—</span>
+                ),
             },
             {
-              header: "单价/1K",
+              header: "单价 元/1K",
               align: "right",
-              width: 90,
+              width: 96,
+              // 固定 5 位小数。现有单价跨度 0.00005 到 0.0218 (400 倍), 位数
+              // 不齐时右对齐也白搭 —— 补零之后配合 tabular-nums 才真的对得齐、
+              // 能一眼比大小。单位跟编辑表单保持一致 (都是 /1K), 免得两处
+              // 换算不同; 每百万的等价值放 title。
               cell: (m) =>
                 m.price_per_1k_tokens != null ? (
-                  m.price_per_1k_tokens
+                  <span title={`≈ ¥${(m.price_per_1k_tokens * 1000).toFixed(2)} / 百万 token`}>
+                    {m.price_per_1k_tokens.toFixed(5)}
+                  </span>
                 ) : (
-                  <span style={{ color: "var(--status-warn)" }} title="没填单价, 审计页的成本按兜底价估算">
+                  <span
+                    style={{ color: "var(--status-warn)" }}
+                    title="没填单价, 概览和审计页的成本会按兜底价估算, 数字不准"
+                  >
                     未填
                   </span>
                 ),
             },
             {
               header: "能力",
-              width: 90,
+              width: 78,
               cell: (m) => (
-                <span style={{ color: "var(--text-muted)", fontSize: 11 }}>
+                <span style={{ color: "var(--text-muted)" }}>
                   {[m.supports_tool_use && "工具", m.supports_vision && "视觉"]
                     .filter(Boolean)
                     .join(" · ") || "—"}
@@ -349,13 +420,10 @@ function ModelConfigEditor() {
             {
               header: "失败切换",
               truncate: true,
-              width: 130,
+              width: 110,
               cell: (m) =>
                 m.fallback?.chain?.length ? (
-                  <span
-                    style={{ color: "var(--text-muted)", fontSize: 11 }}
-                    title={m.fallback.chain.join(" → ")}
-                  >
+                  <span style={{ color: "var(--text-muted)" }} title={m.fallback.chain.join(" → ")}>
                     {m.fallback.chain.join(" → ")}
                   </span>
                 ) : (

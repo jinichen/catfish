@@ -55,7 +55,10 @@ const TH: CSSProperties = {
 const TD: CSSProperties = {
   padding: "4px 8px",
   borderBottom: "1px solid var(--border-soft)",
-  verticalAlign: "top",
+  // 7/30 三改: top → middle。
+  // 列基本都截断了 (truncate), 单元格不再换行, 这时 top 会让徽章和按钮
+  // 吊在行的上边缘、跟同行的数字对不齐。真有一格换行时 middle 也比 top 好看。
+  verticalAlign: "middle",
 };
 /** 数字列。tabular-nums 让 0-9 等宽, 一列数字的个/十/百位才对得齐。
  *  PerfPage 原来的 tdRightStyle 有这条, 抽组件时漏了 —— 是个退化。 */
