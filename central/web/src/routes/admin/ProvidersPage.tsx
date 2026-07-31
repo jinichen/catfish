@@ -230,6 +230,14 @@ function ProvidersEditor() {
           }}
         >
           {err}
+          {/* 错误框也要能关 —— 上面那个 notice 有关闭按钮而这个没有,
+              于是一条已经处理完的错误会一直挂在页面顶部。 */}
+          <button
+            style={{ ...BTN, marginLeft: 8, padding: "1px 6px" }}
+            onClick={() => setErr(null)}
+          >
+            知道了
+          </button>
         </div>
       ) : null}
 
@@ -353,13 +361,32 @@ function ProvidersEditor() {
                     >
                       编辑
                     </button>
-                    <button
-                      style={BTN_DANGER}
-                      disabled={!editable || busy}
-                      onClick={() => setConfirming(p)}
+                    {/* 还有模型在用时**在点之前**就禁用, 而不是让人走完确认
+                        对话框、输入完整 ID、点了确认才被 400 拒。
+                        列表上「模型」那列已经写着数量了 —— 前端早就知道删不掉,
+                        没有理由让人白走一遍。
+                        (后端那道拦截仍然要有: 另一个标签页刚给它加了模型这种
+                         竞态, 只有服务端知道。) */}
+                    <span
+                      title={
+                        p.models.length
+                          ? `删不掉 —— 这些模型在用它:\n${p.models
+                              .map((m) => `· ${m}`)
+                              .join("\n")}\n\n先把它们改到别的供应商上, 或者删掉这些模型。`
+                          : undefined
+                      }
                     >
-                      删除
-                    </button>
+                      <button
+                        style={{
+                          ...BTN_DANGER,
+                          ...(p.models.length ? { opacity: 0.4, cursor: "not-allowed" } : null),
+                        }}
+                        disabled={!editable || busy || p.models.length > 0}
+                        onClick={() => setConfirming(p)}
+                      >
+                        删除
+                      </button>
+                    </span>
                   </div>
                 ),
               },

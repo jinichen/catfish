@@ -98,6 +98,13 @@ function ModelConfigEditor() {
 
   const editable = data?.editable ?? false;
 
+  /** 哪些模型的失败切换链指向 name. 跟后端那道拦截同一个判据 ——
+   *  前端本来就有这份数据, 没有理由让人走完删除流程才被拒。 */
+  const referencedBy = (name: string) =>
+    (data?.models ?? [])
+      .filter((x) => x.name !== name && (x.fallback?.chain ?? []).includes(name))
+      .map((x) => x.name);
+
   async function save() {
     if (!editing) return;
     const errs = validateModel(editing);
@@ -235,6 +242,14 @@ function ModelConfigEditor() {
           }}
         >
           {err}
+          {/* 错误框也要能关 —— 上面那个 notice 有关闭按钮而这个没有,
+              于是一条已经处理完的错误会一直挂在页面顶部。 */}
+          <button
+            style={{ ...BTN, marginLeft: 8, padding: "1px 6px" }}
+            onClick={() => setErr(null)}
+          >
+            知道了
+          </button>
         </div>
       ) : null}
 
@@ -375,13 +390,32 @@ function ModelConfigEditor() {
                     >
                       编辑
                     </button>
-                    <button
-                      style={BTN_DANGER}
-                      disabled={!editable || busy}
-                      onClick={() => setConfirming(m)}
+                    {/* 8/1: 跟供应商页同一条 —— 被别的模型的 fallback 链引用时
+                        **在点之前**就禁用, 而不是让人走完确认对话框、输入完整
+                        模型 ID、点了确认才被 400 拒。这份数据前端本来就有。
+                        (后端那道拦截仍然要有: 另一个标签页刚配了链这种竞态。) */}
+                    <span
+                      title={
+                        referencedBy(m.name).length
+                          ? `删不掉 —— 这些模型的失败切换链指向它:\n${referencedBy(m.name)
+                              .map((n) => `· ${n}`)
+                              .join("\n")}\n\n先逐个编辑它们、在「失败切换」里移除这一跳。`
+                          : undefined
+                      }
                     >
-                      删除
-                    </button>
+                      <button
+                        style={{
+                          ...BTN_DANGER,
+                          ...(referencedBy(m.name).length
+                            ? { opacity: 0.4, cursor: "not-allowed" }
+                            : null),
+                        }}
+                        disabled={!editable || busy || referencedBy(m.name).length > 0}
+                        onClick={() => setConfirming(m)}
+                      >
+                        删除
+                      </button>
+                    </span>
                   </div>
                 ),
               },
