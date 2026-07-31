@@ -9,6 +9,7 @@
  */
 
 import { BTN, BTN_PRIMARY } from "../../components/DataTable";
+import { describeKey, type Provider } from "../../lib/provider_config";
 import {
   chainHopIssue,
   type ModelConfig,
@@ -33,6 +34,8 @@ export function ModelForm({
   autoFallback,
   configError,
   keyState,
+  providers,
+  masterKeyEnv = "CATFISH_SECRET_KEY",
   onChange,
   onCancel,
   onSave,
@@ -47,10 +50,15 @@ export function ModelForm({
   /** 它引用的那个 key 变量在**服务器上**设没设。undefined = 新建的模型,
    *  服务端还不知道 (保存后才会有结论)。 */
   keyState?: boolean;
+  /** 供应商下拉的选项。null = 还在加载。 */
+  providers?: Provider[] | null;
+  /** 主密钥的环境变量名, 给 describeKey 用。 */
+  masterKeyEnv?: string;
   onChange: (m: ModelConfig) => void;
   onCancel: () => void;
   onSave: () => void;
 }) {
+  const selected = (providers ?? []).find((p) => p.id === model.upstream.provider) ?? null;
   const set = (patch: Partial<ModelConfig>) => onChange({ ...model, ...patch });
   const setUp = (patch: Partial<ModelConfig["upstream"]>) =>
     onChange({ ...model, upstream: { ...model.upstream, ...patch } });
@@ -161,17 +169,44 @@ export function ModelForm({
         <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 6 }}>
           上游接入{" "}
           <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>
-            （部署配置，填错模型直接不可用。<b>地址</b>在这里填了就生效；
-            <b>key 本身永远只能放服务器的 .env</b>，这一格填的只是去哪个变量里取它）
+            （端点和 API key 归<b>供应商</b>管，在这里只选用哪一家）
           </span>
         </div>
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
             gap: 8,
           }}
         >
+          {/* 8/1: 「API 地址」和「API Key 环境变量名」两格从模型页消失了 ——
+              它们现在归供应商管。这也顺带解决了 7/30 那个问题: 内网地址不再
+              出现在模型编辑页上被截图带走。 */}
+          <Field
+            label="供应商"
+            hint={
+              providers === null
+                ? "加载中…"
+                : selected
+                  ? `端点 ${selected.api_base || "SDK 默认"} · ${describeKey(selected, masterKeyEnv)}`
+                  : "选一家。端点和 API key 都跟着它走 —— 换 key 是在「供应商」页改一次，不用逐个模型改。"
+            }
+          >
+            <select
+              style={INPUT}
+              value={model.upstream.provider ?? ""}
+              onChange={(e) => setUp({ provider: e.target.value || null })}
+            >
+              <option value="">（老形态：端点直接写在这个模型上）</option>
+              {(providers ?? []).map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.display_name}
+                  {p.key_ok ? "" : "（key 不可用）"}
+                </option>
+              ))}
+            </select>
+          </Field>
+
           <Field
             label="上游模型"
             hint="必须带 provider 前缀。不带的话 LiteLLM 不知道走哪家。"
@@ -184,49 +219,54 @@ export function ModelForm({
             />
           </Field>
 
-          <Field
-            label="API 地址"
-            hint={
-              isEnvPlaceholder(model.upstream.api_base)
-                ? "现在是环境变量占位符：真实地址在服务器的 .env 里，改 .env 重启就生效。改成写死的地址之后就反过来 —— 以这里为准，IT 再改 .env 不再影响这个模型。两种都行，别的都不用动。"
-                : "填了就生效，不用再改 .env。官方 API 留空即可。内网地址也可以写成 ${变量名} 交给 .env 管 —— 那样它不进数据库、不进备份、也不会出现在截图里。"
-            }
-          >
-            <input
-              style={MONO}
-              value={model.upstream.api_base ?? ""}
-              onChange={(e) => setUp({ api_base: e.target.value || null })}
-              placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"
-            />
-          </Field>
+          {/* 老形态 (还没迁到供应商的模型) 仍要能看到并改这两格 ——
+              迁移期两种形态并存, 不给入口的话那些模型改不动。
+              选了供应商之后这两格就没意义了 (合并时会被覆盖), 收起来。 */}
+          {model.upstream.provider ? null : (
+            <>
+              <Field
+                label="API 地址"
+                hint={
+                  isEnvPlaceholder(model.upstream.api_base)
+                    ? "环境变量占位符：真实地址在服务器的 .env 里。建议改成选一个「供应商」——那样端点和 key 就归一处管了。"
+                    : "这个模型还没迁到供应商。选上面的供应商之后这一格就不用填了。"
+                }
+              >
+                <input
+                  style={MONO}
+                  value={model.upstream.api_base ?? ""}
+                  onChange={(e) => setUp({ api_base: e.target.value || null })}
+                  placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1"
+                />
+              </Field>
+
+              <Field
+                label="API Key 环境变量名"
+                hint="填变量名（如 DASHSCOPE_API_KEY），不是 key 本身。"
+              >
+                <input
+                  style={MONO}
+                  value={model.upstream.api_key_env}
+                  onChange={(e) => setUp({ api_key_env: e.target.value })}
+                  placeholder="DASHSCOPE_API_KEY"
+                />
+                {keyState == null ? null : keyState ? (
+                  <div style={{ ...HINT, color: "var(--status-ok)" }}>
+                    ✓ 服务器上这个变量已设置。
+                  </div>
+                ) : (
+                  <div style={{ ...HINT, color: "var(--status-err)" }}>
+                    ✗ 服务器上<b>没有</b>这个变量 —— 这个模型现在每次调用都会失败。
+                  </div>
+                )}
+              </Field>
+            </>
+          )}
 
           <Field
-            label="API Key 环境变量名"
-            hint="填变量名（如 DASHSCOPE_API_KEY），不是 key 本身。跟上面的地址不同，这一格填什么都不会让 key 生效 —— 网关是在每次调用时去服务器的环境变量里取它的。"
+            label="超时（秒）"
+            hint="慢模型（如推理模型）可能要 180 以上。留空用供应商的默认值。"
           >
-            <input
-              style={MONO}
-              value={model.upstream.api_key_env}
-              onChange={(e) => setUp({ api_key_env: e.target.value })}
-              placeholder="DASHSCOPE_API_KEY"
-            />
-            {/* 「我把变量名填进去了, 生效了吗」—— 这个问题的答案既不在这份
-                配置里也不在数据库里, 而在服务器的 .env 里, 界面本来完全看不到。
-                之前只能等员工调用失败才发现。 */}
-            {keyState == null ? null : keyState ? (
-              <div style={{ ...HINT, color: "var(--status-ok)" }}>
-                ✓ 服务器上这个变量已设置，可以正常取到 key。
-              </div>
-            ) : (
-              <div style={{ ...HINT, color: "var(--status-err)" }}>
-                ✗ 服务器上<b>没有</b>这个变量 —— 这个模型现在每次调用都会失败。
-                请让 IT 在服务器的 .env 里加一行 <code>{model.upstream.api_key_env}=…</code>
-                然后重启网关，或者把这一格改成一个已经存在的变量名。
-              </div>
-            )}
-          </Field>
-
-          <Field label="超时（秒）" hint="慢模型（如推理模型）可能要 180 以上">
             <input
               style={INPUT}
               type="number"

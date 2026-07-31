@@ -493,8 +493,12 @@ app = FastAPI(
 from .admin_models_router import (  # noqa: E402
     register_model_admin_routes,
 )
+from .admin_providers_router import (  # noqa: E402
+    register_provider_admin_routes,
+)
 
 register_model_admin_routes(app)
+register_provider_admin_routes(app)
 
 # CORS：Tauri webview / Companion App 跨域调 gateway 必须放过 OPTIONS preflight。
 # Dev 阶段开放所有源；P1 上线后改成白名单：tauri://localhost / companion 域名 / 公司 SaaS 域名。

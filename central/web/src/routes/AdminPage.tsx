@@ -18,6 +18,7 @@ import { AccessPage } from "./admin/AccessPage";
 import { AdvisoryPage } from "./admin/AdvisoryPage";
 import { FactsPage } from "./admin/FactsPage";
 import { ModelConfigPage } from "./admin/ModelConfigPage";
+import { ProvidersPage } from "./admin/ProvidersPage";
 import { PerfPage } from "./admin/PerfPage";
 import { QuotaConfigPage } from "./admin/QuotaConfigPage";
 import { SystemPage } from "./admin/SystemPage";
@@ -37,6 +38,7 @@ export { AdminQuotaEvents } from "./admin/QuotaEventsPage";
  */
 const ELEMENTS: Record<AdminPath, ReactNode> = {
   "": <AdminHome />,
+  providers: <ProvidersPage />,
   models: <ModelConfigPage />,
   quota: <QuotaConfigPage />,
   access: <AccessPage />,

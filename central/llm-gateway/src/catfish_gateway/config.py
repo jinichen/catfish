@@ -71,6 +71,22 @@ class UpstreamConfig(BaseModel):
     """
 
     model: str
+
+    # ── 供应商引用 (8/1) ────────────────────────────────────────────
+    #
+    # 新形态: upstream 只写 {model, provider, timeout}, api_base 和
+    # api_key_env 从供应商行合并进来 (见 config_providers.merge_provider)。
+    #
+    # ⚠ 这个字段**必须真的存在于 UpstreamConfig 上**, 不能只当成"合并前的
+    # 中间键"。模型 PUT 走的是 ModelConfig.model_validate(body), 而 pydantic
+    # 默认忽略额外字段 —— 没有这个字段的话, 界面提交
+    # {model, provider, timeout} 之后:
+    #   · provider 被**静默丢掉**, 模型跟供应商的关联没了
+    #   · api_key_env 落回默认值 "INTERNAL_LLM_KEY"
+    # 对内网模型可能碰巧还能用 (掩盖问题), 对 Gemini / DeepSeek 就是错的,
+    # 而配置上看不出少了什么。8/1 写供应商界面前实测到的。
+    provider: str | None = None
+
     api_base: str | None = None  # only set for OpenAI-compatible self-hosted endpoints
     api_key_env: str = "INTERNAL_LLM_KEY"
 

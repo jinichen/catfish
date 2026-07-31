@@ -45,6 +45,7 @@ if (routes.length < 10) {
 // 页面文件位置。null = 组件定义在 AdminPage.tsx 内部, 没有独立文件。
 const PAGE_FILES = {
   "": null,
+  providers: "src/routes/admin/ProvidersPage.tsx",
   models: "src/routes/admin/ModelConfigPage.tsx",
   quota: "src/routes/admin/QuotaConfigPage.tsx",
   access: "src/routes/admin/AccessPage.tsx",

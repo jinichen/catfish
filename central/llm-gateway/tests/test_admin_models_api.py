@@ -652,3 +652,61 @@ def test_接口要报出那个key变量在服务器上设没设(client, monkeypa
     assert got["api_key_configured"] == {"有key": True, "没key": False}
     # 只返 True/False, 不能把 key 的任何内容带出来
     assert "sk-真的有" not in c.get("/api/admin/models").text
+
+
+# ── 模型引用供应商 (8/1 第四步) ─────────────────────────────────────
+
+
+@pytest.fixture()
+def with_providers(monkeypatch):
+    from catfish_gateway import provider_store as PS
+
+    known = {"dashscope": {"id": "dashscope"}, "gemini": {"id": "gemini"}}
+    monkeypatch.setattr(PS, "read_providers", lambda: known)
+    return known
+
+
+def test_provider_不会被_pydantic_静默丢掉(client, with_providers):
+    """8/1 写供应商界面前实测到的: UpstreamConfig 上没有 provider 字段时,
+    pydantic 默认忽略额外字段, 于是界面提交 {model, provider, timeout} 之后
+
+      · provider 被**静默丢掉**, 模型跟供应商的关联没了
+      · api_key_env 落回默认值 "INTERNAL_LLM_KEY"
+
+    对内网模型可能碰巧还能用 (掩盖问题), 对 Gemini / DeepSeek 就是错的,
+    而配置上看不出少了什么。
+    """
+    c, store, *_ = client
+    body = _model("m1", upstream={"model": "gemini/x", "provider": "gemini", "timeout": 60})
+    assert c.put("/api/admin/models/m1", json=body).status_code == 200
+    assert store["m1"]["upstream"]["provider"] == "gemini"
+
+
+def test_引用不存在的供应商要拒绝并列出可选项(client, with_providers):
+    """不拦的话模型能存进去, 但端点和 key 都拿不到 —— 仍在列表里,
+    每次调用都失败。拦下来时要给出可选项, 否则管理员得自己去猜。"""
+    c, store, *_ = client
+    body = _model("m1", upstream={"model": "openai/x", "provider": "没这家"})
+    r = c.put("/api/admin/models/m1", json=body)
+    assert r.status_code == 400
+    d = r.json()["detail"]
+    assert "没这家" in d
+    assert "dashscope" in d and "gemini" in d, "要列出现有的供应商"
+    assert "m1" not in store, "拦截必须发生在写库之前"
+
+
+def test_一个供应商都没有时给出的指引不一样(client, monkeypatch):
+    from catfish_gateway import provider_store as PS
+
+    monkeypatch.setattr(PS, "read_providers", lambda: {})
+    c, store, *_ = client
+    r = c.put("/api/admin/models/m1", json=_model("m1", upstream={"model": "openai/x", "provider": "p"}))
+    assert r.status_code == 400
+    assert "先去" in r.json()["detail"], "没有可选项时要说去哪儿建"
+
+
+def test_老形态不受供应商校验影响(client, with_providers):
+    """迁移期两种形态并存 —— 没有 provider 键的模型原样通过。"""
+    c, store, *_ = client
+    assert c.put("/api/admin/models/m1", json=_model("m1")).status_code == 200
+    assert "m1" in store

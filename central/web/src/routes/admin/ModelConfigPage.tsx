@@ -34,6 +34,7 @@ import {
 import { ConfirmDialog } from "../../components/Dialog";
 import { RoleGate } from "../../components/RoleGate";
 import { splitDisplayName } from "../../lib/modelDisplay";
+import { providerApi, type Provider } from "../../lib/provider_config";
 import {
   emptyModel,
   modelConfigApi,
@@ -68,6 +69,10 @@ function ModelConfigEditor() {
   /** 正在等确认删除的那个模型。用应用内对话框而不是 window.prompt ——
    *  见 components/Dialog.tsx 文件头。 */
   const [confirming, setConfirming] = useState<ModelConfig | null>(null);
+  /** 供应商下拉的选项。单独拉一次 —— 模型列表接口不该被塞进供应商信息,
+   *  那两组配置的生命周期不一样 (改供应商不必刷新模型列表)。 */
+  const [providers, setProviders] = useState<Provider[] | null>(null);
+  const [masterKeyEnv, setMasterKeyEnv] = useState("CATFISH_SECRET_KEY");
 
   const load = useCallback(async () => {
     try {
@@ -80,6 +85,15 @@ function ModelConfigEditor() {
 
   useEffect(() => {
     void load();
+    // 供应商列表只在打开这一页时拉一次。拉失败不该拦住模型页 ——
+    // 下拉会是空的, 但老形态的模型照常能改。
+    providerApi
+      .list()
+      .then((r) => {
+        setProviders(r.providers);
+        setMasterKeyEnv(r.master_key_env);
+      })
+      .catch(() => setProviders([]));
   }, [load]);
 
   const editable = data?.editable ?? false;
@@ -238,6 +252,8 @@ function ModelConfigEditor() {
           autoFallback={data?.auto_fallback ?? false}
           configError={data?.config_errors?.[editing.name]}
           keyState={data?.api_key_configured?.[editing.name]}
+          providers={providers}
+          masterKeyEnv={masterKeyEnv}
           onChange={setEditing}
           onCancel={() => {
             setEditing(null);

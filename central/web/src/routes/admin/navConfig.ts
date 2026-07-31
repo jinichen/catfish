@@ -52,6 +52,8 @@ export const ROUTES = [
     // /admin 时得重定向走 (见 AdminPage 的 index 路由)。
     require: ADMIN,
   },
+  // 8/1: 供应商排在模型前面 —— 加模型要先有供应商, 顺序跟操作顺序一致。
+  { path: "providers", label: "供应商", group: "接入", require: SYSADMIN },
   { path: "models", label: "模型", group: "接入", require: SYSADMIN },
   { path: "quota", label: "配额", group: "接入", require: SYSADMIN },
   { path: "access", label: "部门权限", group: "接入", require: ADMIN, nested: true },

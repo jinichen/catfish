@@ -18,6 +18,11 @@ export interface Upstream {
   /** 必须带 provider 前缀, 如 openai/qwen-plus、gemini/gemini-2.5-pro */
   model: string;
   /** 只有 OpenAI 兼容的自建端点才需要填 */
+  /** 引用的供应商 id (8/1)。新形态只写它, 端点和 key 从供应商合并进来。
+   *
+   * 跟后端 UpstreamConfig.provider 一一对应 —— 那边**必须**有这个字段,
+   * 否则 pydantic 会把它当额外字段静默丢掉 (8/1 实测到的)。 */
+  provider?: string | null;
   api_base?: string | null;
   /** 读哪个环境变量拿 key —— **key 本身不进配置**, 只存变量名 */
   api_key_env: string;

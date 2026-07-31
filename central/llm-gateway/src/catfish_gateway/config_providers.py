@@ -86,7 +86,10 @@ def merge_provider(
             f"或者把这个模型改到别的供应商上。"
         )
 
-    merged = {k: v for k, v in up.items() if k != PROVIDER_KEY}
+    # provider 键**保留**, 不删 —— UpstreamConfig 上有这个字段 (8/1),
+    # 删掉的话模型存回库时关联就丢了。留着也让运行时配置知道自己来自哪家,
+    # 报错信息里能点名。
+    merged = dict(up)
     merged["api_base"] = p.get("api_base")
     # api_key_env 可能为 None (第二步之后 key 存库的供应商)。
     # UpstreamConfig.api_key_env 是 `str` 有默认值, 传 None 会被 pydantic 拒,

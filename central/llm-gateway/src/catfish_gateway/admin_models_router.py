@@ -38,7 +38,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException
 
-from . import model_store
+from . import model_store, provider_store
 from .auth import User, get_current_user
 from .config import (
     Config,
@@ -121,6 +121,36 @@ def register_model_admin_routes(app: FastAPI) -> None:
                 "例如 DASHSCOPE_API_KEY。\n\n"
                 "key 本身请让 IT 放到服务器的 .env 里 —— 它不进数据库, 也就不会"
                 "出现在备份和数据库导出里。"
+            ),
+        )
+
+
+    def _check_provider_ref(m: ModelConfig) -> None:
+        """引用的供应商必须存在. 8/1.
+
+        不拦的话模型能存进去, 但它的 api_base 和 key 都拿不到 —— 仍在列表里,
+        每次调用都失败, 而配置上只能看到一个 provider 名字。
+
+        跟 fallback 链那条一样: 拦下来时要**给出可选项**, 否则管理员得自己
+        去猜供应商叫什么。
+        """
+        pid = m.upstream.provider
+        if not pid:
+            return  # 老形态 (upstream 里直接写 api_base/api_key_env)
+        known = provider_store.read_providers() or {}
+        if pid in known:
+            return
+        raise HTTPException(
+            400,
+            detail=(
+                f"供应商 {pid!r} 不存在。\n\n"
+                + (
+                    "现有的供应商:\n" + "\n".join(f"    · {k}" for k in sorted(known))
+                    if known
+                    else "现在一个供应商都还没有 —— 先去「接入 → 供应商」新建一个。"
+                )
+                + "\n\n为什么要拦: 存进去的话这个模型的端点和 key 都拿不到, "
+                "它仍然出现在列表里但每次调用都失败。"
             ),
         )
 
@@ -276,9 +306,15 @@ def register_model_admin_routes(app: FastAPI) -> None:
         except Exception as e:
             raise HTTPException(400, detail=f"模型配置不合法: {e}") from e
 
-        # 保密红线: 内网模型不许因 500 切公网。必须在这里拦 ——
-        # test_fallback_500_policy 只看 models.yaml, 库里的模型不在它视野内。
+        # 三道拦截, 都是"存进去也能存, 但存了之后会静默出问题"那一类:
+        #   api_key_env  粘了真 key → 明文写进数据库
+        #   provider     引用不存在的供应商 → 模型在列表里但每次调用都失败
+        #   fallback 500 内网模型因 500 切公网 → 内网内容出公司 (保密红线)
+        #
+        # 保密那条必须在这里拦 —— test_fallback_500_policy 只看 models.yaml,
+        # 库里的模型不在它视野内。
         _check_api_key_env(validated)
+        _check_provider_ref(validated)
         _check_fallback_500_policy(validated)
 
         cfg = get_config()
