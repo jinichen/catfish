@@ -26,6 +26,7 @@ import {
   Section,
   Toolbar,
 } from "../../components/DataTable";
+import { ConfirmDialog } from "../../components/Dialog";
 import { RoleGate } from "../../components/RoleGate";
 import { splitDisplayName } from "../../lib/modelDisplay";
 import {
@@ -126,6 +127,9 @@ function ModelConfigEditor() {
   const [editing, setEditing] = useState<ModelConfig | null>(null);
   const [isNew, setIsNew] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  /** 正在等确认删除的那个模型。用应用内对话框而不是 window.prompt ——
+   *  见 components/Dialog.tsx 文件头。 */
+  const [confirming, setConfirming] = useState<ModelConfig | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -167,14 +171,7 @@ function ModelConfigEditor() {
   }
 
   async function remove(m: ModelConfig) {
-    // 输入模型 ID 确认 —— 删掉之后正在用它的员工会话会直接报错, 不是
-    // 一个可以手滑的操作。
-    const typed = window.prompt(
-      `删除模型「${m.display_name}」？\n\n` +
-        `正在使用它的员工会话会立刻报错。\n` +
-        `确认请输入模型 ID：${m.name}`,
-    );
-    if (typed !== m.name) return;
+    setConfirming(null);
     setBusy(true);
     try {
       setErr(null);
@@ -194,6 +191,30 @@ function ModelConfigEditor() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {confirming ? (
+        <ConfirmDialog
+          title={`删除模型「${splitDisplayName(confirming.display_name).name}」？`}
+          danger
+          confirmLabel="删除"
+          busy={busy}
+          // 要求原样输入模型 ID —— 删掉之后正在用它的员工会话会立刻报错,
+          // 不是一个可以手滑的操作。
+          requireText={confirming.name}
+          onCancel={() => setConfirming(null)}
+          onConfirm={() => void remove(confirming)}
+        >
+          正在使用它的员工会话会<b style={{ color: "var(--status-err)" }}>立刻报错</b>。
+          {confirming.default ? (
+            <>
+              <br />
+              它现在是<b>默认模型</b>，删除后会自动把另一个对话模型设为默认。
+            </>
+          ) : null}
+          <br />
+          审计里的历史记录不会受影响，但这个模型会从员工的模型列表里消失。
+        </ConfirmDialog>
+      ) : null}
+
       <Toolbar title="模型配置">
         {/* 编辑时不显示列表操作 —— 「+ 新增模型」在编辑一半的时候点下去会
             丢掉未保存的改动, 而「刷新」在那个上下文里也没有意义。 */}
@@ -402,7 +423,7 @@ function ModelConfigEditor() {
                     <button
                       style={BTN_DANGER}
                       disabled={!editable || busy}
-                      onClick={() => void remove(m)}
+                      onClick={() => setConfirming(m)}
                     >
                       删除
                     </button>
