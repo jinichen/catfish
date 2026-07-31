@@ -8,7 +8,6 @@
  */
 
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 
 import { Card } from "../../components/Card";
 import { RoleGate } from "../../components/RoleGate";
@@ -83,19 +82,9 @@ function SystemDashboard() {
         </div>
       </Card>
 
-      <Card title="快捷入口 (sysadmin only)">
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-            gap: "var(--space-3)",
-          }}
-        >
-          <NavTile to="/admin/users" icon="👥" title="用户管理" desc="创建 admin / 改 role / 锁账号" />
-          <NavTile to="/admin/quota" icon="🎯" title="配额规则" desc="quotas.yaml" />
-          <NavTile to="/audit" icon="📜" title="审计大查询" desc="跨员工 / 跨部门" />
-        </div>
-      </Card>
+      {/* 7/30: 这里原本有个「快捷入口」区, 重复了用户管理 / 配额规则 / 审计
+          大查询三个入口 —— 它们在 /admin 磁贴上也有一份。同一个入口需要放在
+          两处, 通常就是缺一个常驻导航的信号。现在左侧栏是常驻的, 这一区删掉。 */}
 
       <Card title={`用户操作审计 (最近 ${audit.length} 条)`}>
         {audit.length === 0 ? (
@@ -191,29 +180,6 @@ function ActionTag({ action }: { action: string }) {
 }
 
 
-function NavTile({ to, icon, title, desc }: { to: string; icon: string; title: string; desc: string }) {
-  return (
-    <Link
-      to={to}
-      style={{
-        background: "var(--bg-secondary)",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius-sm)",
-        padding: "var(--space-3)",
-        color: "var(--text)",
-        textDecoration: "none",
-        display: "flex",
-        gap: "var(--space-2)",
-      }}
-    >
-      <div style={{ fontSize: 22 }}>{icon}</div>
-      <div>
-        <div style={{ fontWeight: 500 }}>{title}</div>
-        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{desc}</div>
-      </div>
-    </Link>
-  );
-}
 
 
 // ── 服务状态检查 ────────────────────────────────────────────────

@@ -33,6 +33,18 @@ export function NavBar() {
     { to: "/admin/system", label: "🔐 系统", show: isSysadmin },
   ];
 
+  // 最长前缀命中 —— 见下面 map 里的说明。这里算一次, 免得每项各判一遍。
+  const activeTab = links
+    .filter((l) => l.show)
+    .filter(
+      (l) =>
+        location.pathname === l.to || location.pathname.startsWith(l.to + "/"),
+    )
+    .reduce<string | null>(
+      (best, l) => (best === null || l.to.length > best.length ? l.to : best),
+      null,
+    );
+
   return (
     <nav
       style={{
@@ -75,22 +87,24 @@ export function NavBar() {
       <div style={{ display: "flex", gap: "var(--space-3)", flex: 1 }}>
         {links
           .filter((l) => l.show)
-          .map((l) => (
-            <Link
-              key={l.to}
-              to={l.to}
-              style={{
-                color:
-                  location.pathname.startsWith(l.to)
-                    ? "var(--accent)"
-                    : "var(--text)",
-                fontWeight:
-                  location.pathname.startsWith(l.to) ? 500 : "normal",
-              }}
-            >
-              {l.label}
-            </Link>
-          ))}
+          .map((l) => {
+            // 7/30: 原来是逐个 startsWith, 于是在 /admin/system 上「Admin」和
+            // 「系统」**同时高亮** —— /admin 是 /admin/system 的前缀。
+            // 改成最长前缀命中: 只有匹配得最具体的那一项算当前位置。
+            const isActive = activeTab === l.to;
+            return (
+              <Link
+                key={l.to}
+                to={l.to}
+                style={{
+                  color: isActive ? "var(--accent)" : "var(--text)",
+                  fontWeight: isActive ? 500 : "normal",
+                }}
+              >
+                {l.label}
+              </Link>
+            );
+          })}
       </div>
       {me && (
         <div

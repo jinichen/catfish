@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { Routes, Route, Link } from "react-router-dom";
+import { Routes, Route } from "react-router-dom";
 
 import { Card, Row } from "../components/Card";
 import { RoleGate } from "../components/RoleGate";
@@ -31,6 +31,7 @@ import { AdvisoryPage } from "./admin/AdvisoryPage";
 import { PerfPage } from "./admin/PerfPage";
 // P3.5.93 (6/23 鸿波): /admin/quota 真编辑 UI, 替原 AdminQuota P0 placeholder.
 // 一并治 AccessPage 部门 quota 6 周 dead UI (gateway 不读 identity-server).
+import { AdminLayout } from "./admin/AdminLayout";
 import { ModelConfigPage } from "./admin/ModelConfigPage";
 import { QuotaConfigPage } from "./admin/QuotaConfigPage";
 
@@ -39,6 +40,9 @@ export function AdminPage() {
   // 强制 admin (sysadmin / admin 都进, 上游 admin_router 按 role 过滤 sysadmin 行).
   return (
     <RoleGate require={["admin", "sysadmin"]}>
+      {/* 7/30: 导航壳包在 Routes **外面** —— 这样每个子页都带侧栏, 而不用
+          逐个页面去接。子页内部一行都不用改, 这是第一步刻意压住的范围。 */}
+      <AdminLayout>
       <Routes>
         <Route index element={<AdminHome />} />
         <Route path="users/*" element={<UsersPage />} />
@@ -59,6 +63,7 @@ export function AdminPage() {
         <Route path="perf" element={<PerfPage />} />
         <Route path="billing" element={<AdminBilling />} />
       </Routes>
+      </AdminLayout>
     </RoleGate>
   );
 }
@@ -98,30 +103,9 @@ function AdminHome() {
         )}
       </Card>
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
-          gap: "var(--space-3)",
-        }}
-      >
-        <NavTile to="/admin/users" icon="👥" title="用户管理" desc="创建 / 改 role / 锁 / 删 / 重置密码" />
-        {/* BL-RBAC-DAY7 (5/17): 4 维 RBAC dept 配置 */}
-        <NavTile to="/admin/access" icon="🔑" title="部门 RBAC" desc="模型 / 工具 / 技能 / 配额 — 按部门配置" />
-        {/* BL-Q3-FACT P0 MVP (5/10): 事实补丁系统 — 政策变更自动同步到员工 skill */}
-        <NavTile to="/admin/facts" icon="📋" title="政策同步 (FACT)" desc="政策变更 → 找受影响 skill → 生成 patch" />
-        <NavTile to="/admin/advisory" icon="🛡" title="Advisory 管理 (sysadmin)" desc="publish + revoke. pull-based, 跟 fleet 强 push 反向" />
-        <NavTile to="/admin/models" icon="🧠" title="模型配置 (sysadmin)" desc="增删改模型 / 上游接入 / 能力标记" />
-        <NavTile to="/admin/quota" icon="🎯" title="配额规则" desc="defaults / per_model / per_dept" />
-        {/* BL-ADMIN-AUDIT (5/12 鸿波): 逐条 quota / audit 历史日志 */}
-        <NavTile to="/admin/quota/events" icon="📊" title="Quota 历史日志" desc="逐条 + 4 维筛选 + 分页 + CSV" />
-        {/* P3.5.60 (6/22 鸿波): 全公司 LLM 性能仪表 */}
-        <NavTile to="/admin/perf" icon="📈" title="LLM 性能仪表" desc="latency p50/p95/p99 · by model · by dept" />
-        <NavTile to="/admin/billing" icon="💰" title="Billing" desc="月报 / 按部门成本分摊" />
-        <NavTile to="/audit" icon="📜" title="审计大查询" desc="跨员工 / 跨部门" />
-        {/* sysadmin only — 用 RoleGate 包还是放这里都行, 这里直接靠 NavBar tab 区分 */}
-        <NavTile to="/admin/system" icon="🔐" title="系统管理 (sysadmin)" desc="服务状态 / 危险操作 / 操作审计" />
-      </div>
+      {/* 7/30: 这里原本有 11 个 NavTile —— 那本质就是一份左侧菜单, 只是被渲染
+          成了页面。抽出 AdminLayout 侧栏之后它们成了重复入口, 删掉。
+          /admin 首页从此只回答"现在什么情况", 不再兼任菜单。 */}
 
       {globalQ && globalQ.top_departments.length > 0 && (
         <Card title="部门 token 用量 top 5 (今日)">
@@ -167,42 +151,6 @@ function Stat({ label, value }: { label: string; value: string | number }) {
   );
 }
 
-function NavTile({
-  to,
-  icon,
-  title,
-  desc,
-}: {
-  to: string;
-  icon: string;
-  title: string;
-  desc: string;
-}) {
-  return (
-    <Link
-      to={to}
-      style={{
-        background: "var(--bg-elev)",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius-md)",
-        padding: "var(--space-3)",
-        color: "var(--text)",
-        textDecoration: "none",
-        display: "flex",
-        gap: "var(--space-3)",
-        alignItems: "flex-start",
-      }}
-      onMouseEnter={(e) => (e.currentTarget.style.borderColor = "var(--accent)")}
-      onMouseLeave={(e) => (e.currentTarget.style.borderColor = "var(--border)")}
-    >
-      <div style={{ fontSize: 22 }}>{icon}</div>
-      <div>
-        <div style={{ fontWeight: 500 }}>{title}</div>
-        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{desc}</div>
-      </div>
-    </Link>
-  );
-}
 
 // AdminUsers 旧 inline 版本删了 (BL-ARCH1 P1, 被 routes/admin/UsersPage.tsx 完整 CRUD 替代).
 
