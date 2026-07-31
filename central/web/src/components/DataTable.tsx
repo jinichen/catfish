@@ -170,8 +170,12 @@ export function DataTable<T>({
                 <td
                   key={ci}
                   style={{
+                    // ⚠ 展开顺序有讲究: 这里不能再无条件写一行
+                    // `whiteSpace: c.nowrap ? "nowrap" : undefined` ——
+                    // 那会把 TD_NUM 自带的 nowrap 覆盖成 undefined,
+                    // 于是数字列的 "≈ ¥259" 会在空格处折成两行。
                     ...(c.align === "right" ? TD_NUM : TD),
-                    whiteSpace: c.nowrap || c.truncate ? "nowrap" : undefined,
+                    ...(c.nowrap || c.truncate ? { whiteSpace: "nowrap" as const } : null),
                     ...(c.truncate
                       ? {
                           maxWidth: c.width ?? 220,
@@ -330,6 +334,72 @@ export const BTN_DANGER: CSSProperties = {
   borderColor: "var(--status-err)",
   color: "var(--status-err)",
 };
+
+/** 分段切换 —— 同一个问题的不同切面, 用它代替并排.
+ *
+ * ## 什么时候该用
+ *
+ * 几张表回答的是**同一个问题的不同切法**时 (例如"这些 token 花在哪":
+ * 按部门 / 按模型 / 按员工)。并排的代价在窄内容区里很快就还不起:
+ * 三张 4-5 列的表挤进 1450px, 每列摊到约 110px, 而模型显示名和邮箱都装不下,
+ * 结果是**每个框内部各自横向滚动** —— 表头和数据错位, 左边的列被切掉半个字,
+ * 那比多点一下糟得多。
+ *
+ * 代价是失去一眼横向对比。所以只在"同一问题的切面"上用; 如果两张表回答的是
+ * 不同问题 (例如"用量"和"错误率"), 该并排还是要并排。
+ *
+ * ## 键盘
+ *
+ * 按 WAI-ARIA tabs 模式: tablist 里只有当前项进 Tab 序列, 左右方向键切换。
+ * 一堆按钮各自可 Tab 的话, 键盘用户要按 N 次才能跨过这一组。
+ */
+export function Tabs<K extends string>({
+  tabs,
+  active,
+  onChange,
+}: {
+  tabs: ReadonlyArray<{ key: K; label: ReactNode }>;
+  active: K;
+  onChange: (key: K) => void;
+}) {
+  const idx = tabs.findIndex((t) => t.key === active);
+  return (
+    <div role="tablist" style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
+      {tabs.map((t) => {
+        const on = t.key === active;
+        return (
+          <button
+            key={t.key}
+            role="tab"
+            aria-selected={on}
+            tabIndex={on ? 0 : -1}
+            onClick={() => onChange(t.key)}
+            onKeyDown={(e) => {
+              if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+              e.preventDefault();
+              const next = (idx + (e.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+              onChange(tabs[next].key);
+              // 焦点跟着走, 否则方向键切了内容但焦点还留在原来那个 tab 上
+              const el = e.currentTarget.parentElement?.children[next];
+              if (el instanceof HTMLElement) el.focus();
+            }}
+            style={{
+              ...BTN,
+              padding: "3px 12px",
+              fontSize: 12,
+              borderColor: on ? "var(--accent)" : "transparent",
+              background: on ? "var(--accent)" : "transparent",
+              color: on ? "#fff" : "var(--text-muted)",
+              fontWeight: on ? 600 : 400,
+            }}
+          >
+            {t.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 /** 一行工具条 —— 筛选控件放这里, 而不是各自套一张 Card.
  *

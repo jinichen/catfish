@@ -14,6 +14,7 @@ import {
   BTN_PRIMARY,
   DataTable,
   Section,
+  Tabs,
   Toolbar,
 } from "../components/DataTable";
 import {
@@ -260,16 +261,20 @@ function Delta({
   );
 }
 
-/** 后端 by_model / by_department 是 `ORDER BY tokens DESC LIMIT 20`, by_user 是 LIMIT 50。
- *
- * 直接写 `部门用量 (20)` 会被读成"一共 20 个部门", 而实际可能有 35 个 ——
- * 下面那列占比也就永远加不到 100%。刚好 20 时标成 top, 少于 20 才是全部。 */
+/** 后端 by_model / by_department 是 `ORDER BY tokens DESC LIMIT 20`, by_user 是 LIMIT 50。 */
 const BREAKDOWN_LIMIT = 20;
-function topLabel(name: string, n: number, limit = BREAKDOWN_LIMIT): string {
-  return n >= limit ? `${name} (top ${n})` : `${name} (${n})`;
+
+type Breakdown = "dept" | "model" | "user";
+
+/** 表末尾那行说明. 后端对每张表都有 LIMIT, 但页面上看不出来 ——
+ *  20 个部门时标题写 (20), 用户没法知道是"正好 20 个"还是"被截到 20 个",
+ *  而占比列也就永远加不到 100%。 */
+function hint(n: number, limit: number, unit: string): string | undefined {
+  return n >= limit ? `只显示用量最高的 ${limit} ${unit}，占比之和会不足 100%` : undefined;
 }
 
 function AdminHomeBody({ a }: { a: GlobalAudit }) {
+  const [tab, setTab] = useState<Breakdown>("dept");
   // 分母用 a.total_tokens 而不是各行之和 —— 两者同一个 SQL 事务、同一套 WHERE,
   // 口径一致。差别只在上面那个 LIMIT 20: 超过 20 个时占比之和会不足 100%,
   // 这正是标题里 "top" 想说明的事。
@@ -329,52 +334,59 @@ function AdminHomeBody({ a }: { a: GlobalAudit }) {
         ) : null}
       </Section>
 
-      {/* 三张表并排。原来是竖排, 部门表看完要滚才看得到模型表。
-          等高对齐 (不写 alignItems:start) —— 行数不一样时底边参差看着最乱,
-          而这三张表的行数本来就不会一致。 */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-          gap: 8,
-        }}
-      >
-        <Section title={topLabel("部门用量", a.by_department.length)}>
+      {/* 7/30 二改: 三张表从并排改成分段切换.
+          并排时每张只分到约 470px, 而 4-5 列里还有模型显示名和邮箱这种长文本
+          —— 结果是**每个框内部各自横向滚动**, 左边的列被切掉半个字, 表头和
+          数据错位。这比多点一下糟得多。
+          这三张回答的是同一个问题的三个切面 (这些 token 花在哪), 正是分段
+          切换该用的场景。真要横向交叉比对, 去「用量审计」下钻。 */}
+      <Section>
+        <div style={{ marginBottom: 6 }}>
+          <Tabs
+            active={tab}
+            onChange={setTab}
+            tabs={[
+              { key: "dept", label: `按部门 ${a.by_department.length}` },
+              { key: "model", label: `按模型 ${a.by_model.length}` },
+              { key: "user", label: `按员工 ${a.by_user.length}` },
+            ]}
+          />
+        </div>
+
+        {tab === "dept" && (
           <DataTable
             rows={a.by_department}
             rowKey={(d) => d.department}
             empty="窗口内没有部门产生调用"
+            footer={hint(a.by_department.length, BREAKDOWN_LIMIT, "个部门")}
             columns={[
-              { header: "部门", truncate: true, cell: (d) => <span title={d.department}>{d.department}</span> },
-              { header: "请求", align: "right", cell: (d) => d.count.toLocaleString() },
-              { header: "tokens", align: "right", cell: (d) => fmtTokens(d.total_tokens) },
+              { header: "部门", cell: (d) => d.department },
+              { header: "请求", align: "right", width: 90, cell: (d) => d.count.toLocaleString() },
+              { header: "tokens", align: "right", width: 110, cell: (d) => fmtTokens(d.total_tokens) },
               {
                 header: "占比",
                 align: "right",
+                width: 70,
                 cell: (d) => (
                   <span style={{ color: "var(--text-muted)" }}>{pct(d.total_tokens)}</span>
                 ),
               },
             ]}
           />
-        </Section>
+        )}
 
-        <Section title={topLabel("模型用量", a.by_model.length)}>
+        {tab === "model" && (
           <DataTable
             rows={a.by_model}
             rowKey={(m) => m.model}
             empty="窗口内没有模型被调用"
+            footer={hint(a.by_model.length, BREAKDOWN_LIMIT, "个模型")}
             columns={[
               {
                 header: "模型",
-                truncate: true,
-                width: 150,
                 // 显示名走 modelDisplay —— 客户在「模型」页改了显示名, 这里
                 // 立刻跟着变, 而不是把 catalog ID 摆给老板看。
-                //
-                // 只取 "·" 前面那半截: models.yaml 里 display_name 的约定是
-                // `模型名 · 说明（档位）`, 整串塞进单元格会换 2-3 行,
-                // 一行高度变 3 倍, 表格节奏全乱。完整值在 title 里。
+                // 全宽之后放得下完整的 `模型名 · 说明`, 说明那半截压成灰色。
                 cell: (m) => {
                   // 认不出来就显示原始 ID —— 兜底 friendly 是固定的"未知模型",
                   // 几个自建模型会全塌成同一行文字。
@@ -384,7 +396,7 @@ function AdminHomeBody({ a }: { a: GlobalAudit }) {
                   const d = getModelDisplay(m.model);
                   const { name, note } = splitDisplayName(d.friendly);
                   return (
-                    <span title={`${d.friendly}\n${m.model}`}>
+                    <span title={m.model}>
                       {d.dotEmoji} {name}
                       {note ? (
                         <span style={{ color: "var(--text-muted)" }}> · {note}</span>
@@ -393,11 +405,12 @@ function AdminHomeBody({ a }: { a: GlobalAudit }) {
                   );
                 },
               },
-              { header: "请求", align: "right", cell: (m) => m.count.toLocaleString() },
-              { header: "tokens", align: "right", cell: (m) => fmtTokens(m.total_tokens) },
+              { header: "请求", align: "right", width: 90, cell: (m) => m.count.toLocaleString() },
+              { header: "tokens", align: "right", width: 110, cell: (m) => fmtTokens(m.total_tokens) },
               {
                 header: "成本",
                 align: "right",
+                width: 110,
                 cell: (m) => (
                   <span
                     style={{ color: isCostEstimated(m.model) ? "var(--text-muted)" : undefined }}
@@ -410,51 +423,50 @@ function AdminHomeBody({ a }: { a: GlobalAudit }) {
               {
                 header: "占比",
                 align: "right",
+                width: 70,
                 cell: (m) => (
                   <span style={{ color: "var(--text-muted)" }}>{pct(m.total_tokens)}</span>
                 ),
               },
             ]}
           />
-        </Section>
+        )}
 
-        {/* by_user 后端一直在返 (top 50), 首页从来没显示过。
-            "谁用得最多"是管理员最常问的问题之一, 数据本来就在手上。 */}
-        <Section title={topLabel("员工用量", a.by_user.length, 50)}>
+        {tab === "user" && (
           <DataTable
-            rows={a.by_user.slice(0, 10)}
+            rows={a.by_user}
             rowKey={(u) => `${u.user_email}|${u.department}`}
             empty="窗口内没有员工产生调用"
-            footer={
-              a.by_user.length > 10 ? `另有 ${a.by_user.length - 10} 人未显示` : undefined
-            }
+            footer={hint(a.by_user.length, 50, "人")}
             columns={[
-              {
-                header: "员工",
-                truncate: true,
-                width: 140,
-                cell: (u) => <span title={u.user_email}>{u.user_email}</span>,
-              },
+              { header: "员工", cell: (u) => u.user_email },
               {
                 // 后端是 GROUP BY (员工, 部门), 所以同一个人在两个部门会出两行。
                 // 不显示部门的话看起来就是"同一个邮箱重复了两次", 像 bug。
                 // 这也解释了为什么"活跃员工"数 (COUNT DISTINCT email) 可能
                 // 小于这张表的行数。
                 header: "部门",
-                truncate: true,
-                width: 90,
+                width: 160,
                 cell: (u) => (
-                  <span style={{ color: "var(--text-muted)" }} title={u.department}>
+                  <span style={{ color: "var(--text-muted)" }}>
                     {u.department || "(未分组)"}
                   </span>
                 ),
               },
-              { header: "请求", align: "right", cell: (u) => u.count.toLocaleString() },
-              { header: "tokens", align: "right", cell: (u) => fmtTokens(u.total_tokens) },
+              { header: "请求", align: "right", width: 90, cell: (u) => u.count.toLocaleString() },
+              { header: "tokens", align: "right", width: 110, cell: (u) => fmtTokens(u.total_tokens) },
+              {
+                header: "占比",
+                align: "right",
+                width: 70,
+                cell: (u) => (
+                  <span style={{ color: "var(--text-muted)" }}>{pct(u.total_tokens)}</span>
+                ),
+              },
             ]}
           />
-        </Section>
-      </div>
+        )}
+      </Section>
     </>
   );
 }

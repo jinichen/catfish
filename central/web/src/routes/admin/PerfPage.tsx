@@ -20,6 +20,7 @@ import {
   BTN_PRIMARY,
   DataTable,
   Section,
+  Tabs,
   Toolbar,
 } from "../../components/DataTable";
 import { getModelDisplay, isKnownModel } from "../../lib/modelDisplay";
@@ -44,13 +45,6 @@ const SELECT: CSSProperties = {
   fontFamily: "inherit",
   maxWidth: 200,
 };
-
-/** 后端 metrics.py 给 by_model / by_department 都是 `ORDER BY ... LIMIT 20`。
- *  写成 `按模型 (20)` 会被读成"一共 20 个模型"。 */
-const BREAKDOWN_LIMIT = 20;
-function topLabel(name: string, n: number): string {
-  return n >= BREAKDOWN_LIMIT ? `${name} (top ${n})` : `${name} (${n})`;
-}
 
 /** metrics.py 对空 department 的展示名 (`r[0] or "(未分组)"`), 不是真部门名。 */
 const UNGROUPED = "(未分组)";
@@ -186,6 +180,9 @@ export function PerfPage() {
 
   const successRate = perf && perf.request_count > 0 ? perf.ok_count / perf.request_count : 0;
   const rating = ratingP95(perf?.latency_p95_ms ?? null);
+
+  // 明细表按维度切换 (见下面 Section 里的说明)
+  const [tab, setTab] = useState<"model" | "dept">("model");
 
   // 三态互斥, 在这里算一次, 下面只渲染一个框
   const statusNote: ReactNode = error ? (
@@ -349,38 +346,43 @@ export function PerfPage() {
         </Section>
       )}
 
-      {/* 7/30: 这两张表原来上下摞着。各自只有 7 个窄数字列, 在 1064px 的
-          内容区里各只用掉一半宽度 —— 而按部门那张 100% 落在首屏之外,
-          管理员看完模型必须滚一屏才知道哪个部门在拖后腿。
-          并排之后两张同屏, 相互印证反而是这一页的主要用法。 */}
+      {/* 7/30 二改: 并排 → 分段切换.
+          这两张各 7 列, 并排时每张只分到约 720px, 而"catfish-public-nvidia-
+          nemotron"这类模型名和部门名都是不定长的 —— 框内部会各自横向滚动,
+          左边的列被切掉。全宽之后 7 列有 200px/列, 放得下。
+          两张回答的是同一个问题的两个切面 (谁慢 / 谁错), 适合切换。 */}
       {perf && !error && (perf.by_model.length > 0 || perf.by_department.length > 0) && (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))",
-            gap: 8,
-            alignItems: "start",
-          }}
-        >
-          <Section title={topLabel("按模型", perf.by_model.length)}>
+        <Section>
+          <div style={{ marginBottom: 6 }}>
+            <Tabs
+              active={tab}
+              onChange={setTab}
+              tabs={[
+                { key: "model", label: `按模型 ${perf.by_model.length}` },
+                { key: "dept", label: `按部门 ${perf.by_department.length}` },
+              ]}
+            />
+          </div>
+
+          {tab === "model" ? (
             <DataTable
               rows={perf.by_model}
               rowKey={(m) => m.model}
               // ⚠ 空 model 不能拿去当筛选值。后端 metrics.py 对没记到模型名的
               // 行返 `""`, 而 `""` 正好是上面下拉框"全部模型"那个 option 的值 ——
               // 点「(未知)」这一行会**静默清空筛选**, 看起来像点了没反应。
-              // (这个陷阱改造前就有, 但那时点击靶只是第一列一个下划线链接,
-              //  现在整行可点, 撞上的概率高得多。)
               onRowClick={(m) => {
                 if (m.model) setModelFilter(m.model);
               }}
               empty="窗口内没有模型被调用"
+              footer={
+                perf.by_model.length >= 20
+                  ? "只显示调用量最高的 20 个模型"
+                  : "点一行 = 筛选该模型"
+              }
               columns={[
                 {
                   header: "模型",
-                  // 两表并排时每列约 420px, 而 catfish-public-nvidia-nemotron
-                  // 这种原始 ID 会在连字符处折成 2-3 行, 把密度收益吃回去。
-                  // 认得出来就用显示名, 认不出来才退回原始 ID (见 isKnownModel)。
                   cell: (m) =>
                     m.model && isKnownModel(m.model) ? (
                       <span title={m.model}>{getModelDisplay(m.model).friendly}</span>
@@ -388,10 +390,11 @@ export function PerfPage() {
                       <code style={{ fontSize: 11 }}>{m.model || "(未知)"}</code>
                     ),
                 },
-                { header: "调用", align: "right", cell: (m) => m.count.toLocaleString() },
+                { header: "调用", align: "right", width: 90, cell: (m) => m.count.toLocaleString() },
                 {
                   header: "错误率",
                   align: "right",
+                  width: 90,
                   cell: (m) => {
                     const r = m.count > 0 ? m.error_count / m.count : 0;
                     return (
@@ -404,14 +407,12 @@ export function PerfPage() {
                     );
                   },
                 },
-                { header: "p50", align: "right", cell: (m) => fmtMs(m.p50_ms) },
-                { header: "p99", align: "right", cell: (m) => fmtMs(m.p99_ms) },
-                { header: "tokens", align: "right", cell: (m) => fmtTokens(m.total_tokens) },
+                { header: "p50", align: "right", width: 90, cell: (m) => fmtMs(m.p50_ms) },
+                { header: "p99", align: "right", width: 90, cell: (m) => fmtMs(m.p99_ms) },
+                { header: "tokens", align: "right", width: 110, cell: (m) => fmtTokens(m.total_tokens) },
               ]}
             />
-          </Section>
-
-          <Section title={topLabel("按部门", perf.by_department.length)}>
+          ) : (
             <DataTable
               rows={perf.by_department}
               rowKey={(d) => d.department}
@@ -423,26 +424,32 @@ export function PerfPage() {
                 if (d.department && d.department !== UNGROUPED) setDeptFilter(d.department);
               }}
               empty="窗口内没有部门产生调用"
+              footer={
+                perf.by_department.length >= 20
+                  ? "只显示调用量最高的 20 个部门"
+                  : "点一行 = 筛选该部门"
+              }
               columns={[
                 { header: "部门", cell: (d) => d.department },
-                { header: "员工", align: "right", cell: (d) => d.active_users },
-                { header: "调用", align: "right", cell: (d) => d.count.toLocaleString() },
+                { header: "员工", align: "right", width: 80, cell: (d) => d.active_users },
+                { header: "调用", align: "right", width: 90, cell: (d) => d.count.toLocaleString() },
                 {
                   header: "错误",
                   align: "right",
+                  width: 80,
                   cell: (d) => (
                     <span style={{ color: d.error_count > 0 ? "var(--status-err)" : undefined }}>
                       {d.error_count}
                     </span>
                   ),
                 },
-                { header: "p50", align: "right", cell: (d) => fmtMs(d.p50_ms) },
-                { header: "p99", align: "right", cell: (d) => fmtMs(d.p99_ms) },
-                { header: "tokens", align: "right", cell: (d) => fmtTokens(d.total_tokens) },
+                { header: "p50", align: "right", width: 90, cell: (d) => fmtMs(d.p50_ms) },
+                { header: "p99", align: "right", width: 90, cell: (d) => fmtMs(d.p99_ms) },
+                { header: "tokens", align: "right", width: 110, cell: (d) => fmtTokens(d.total_tokens) },
               ]}
             />
-          </Section>
-        </div>
+          )}
+        </Section>
       )}
 
       {/* schema note: 数据零出端透明声明 */}
