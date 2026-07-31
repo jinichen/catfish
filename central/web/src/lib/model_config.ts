@@ -76,6 +76,11 @@ export interface ModelListResponse {
    *  **默认是关的**。关着的时候界面必须说出来 —— 否则管理员会认真配一条
    *  fallback 链, 而它根本不执行。 */
   auto_fallback: boolean;
+  /** 哪些模型的 ${VAR} 没解析成功 (模型名 → 说明).
+   *
+   * 这类模型仍在列表里、也仍会被员工选到, 但调用时必然失败。不显示的话
+   * "这个模型为什么不工作"在界面上没有任何线索, 只有服务器日志里一行。 */
+  config_errors?: Record<string, string>;
   models: ModelConfig[];
 }
 

@@ -17,7 +17,17 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import {
+  Badge,
+  BTN,
+  BTN_DANGER,
+  BTN_PRIMARY,
+  DataTable,
+  Section,
+  Toolbar,
+} from "../../components/DataTable";
 import { RoleGate } from "../../components/RoleGate";
+import { splitDisplayName } from "../../lib/modelDisplay";
 import {
   chainHopIssue,
   emptyModel,
@@ -43,21 +53,8 @@ const INPUT: React.CSSProperties = {
   fontFamily: "inherit",
 };
 const MONO: React.CSSProperties = { ...INPUT, fontFamily: "monospace" };
-const BTN: React.CSSProperties = {
-  padding: "3px 10px",
-  border: "1px solid var(--border)",
-  borderRadius: 3,
-  background: "var(--bg)",
-  color: "var(--text)",
-  fontSize: 12,
-  cursor: "pointer",
-};
-const BTN_PRIMARY: React.CSSProperties = {
-  ...BTN,
-  background: "var(--accent)",
-  borderColor: "transparent",
-  color: "#fff",
-};
+// 7/30 二改: 本页原来的 BTN / BTN_PRIMARY 删了, 改用 components/DataTable
+// 那一套 —— 全仓 5 份按钮样式各写各的, 尺寸和配色互不相同。
 const LABEL: React.CSSProperties = {
   fontSize: 11,
   color: "var(--text-muted)",
@@ -77,6 +74,17 @@ export function ModelConfigPage() {
       <ModelConfigEditor />
     </RoleGate>
   );
+}
+
+/** 这个值是不是个 ${VAR} 占位符.
+ *
+ * models.yaml 里内网地址是故意写成 ${INTERNAL_LLM_BASE_*} 的 —— 真实地址在
+ * .env 里, 不进配置文件、不进 git、不进数据库。7/30 模型入库时一度把它插值
+ * 之后才播种, 于是真实地址被烤进了库 (改 .env 从此不生效, 而且不报错)。
+ * 已经修好并做了回迁, 但界面上得说清楚: 把占位符改成写死的地址是有代价的。
+ */
+function isEnvPlaceholder(v: string | null | undefined): boolean {
+  return typeof v === "string" && /\$\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\}/.test(v);
 }
 
 function Field({
@@ -172,13 +180,11 @@ function ModelConfigEditor() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <h3 style={{ margin: 0, fontSize: 15 }}>模型配置</h3>
+      <Toolbar title="模型配置">
         <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
           {data ? `${data.models.length} 个模型` : "加载中…"}
           {data?.revision != null ? ` · 版本 ${data.revision}` : ""}
         </span>
-        <div style={{ flex: 1 }} />
         <button style={BTN} onClick={() => void load()} disabled={busy}>
           刷新
         </button>
@@ -193,7 +199,7 @@ function ModelConfigEditor() {
         >
           + 新增模型
         </button>
-      </div>
+      </Toolbar>
 
       {/* 库没启用时说清楚为什么不能改, 而不是让人改完点保存才撞 503 */}
       {data && !editable ? (
@@ -255,73 +261,137 @@ function ModelConfigEditor() {
         />
       ) : null}
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {(data?.models ?? []).map((m) => (
-          <div key={m.name} style={BOX}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <b style={{ fontSize: 13 }}>{m.display_name}</b>
-              {m.default ? (
-                <span
-                  style={{
-                    fontSize: 10,
-                    padding: "1px 5px",
-                    borderRadius: 3,
-                    background: "var(--accent)",
-                    color: "#fff",
-                  }}
-                >
-                  默认
+      {/* 7/30 二改: 每个模型一个大框两行 → 表格一行一个.
+          原来 6 个模型就占满一屏, 而右边一大片空白; 上游那串细节 (地址 / key
+          变量名 / 上下文 / 输出上限 / 能力) 挤成一句用 · 隔开的长句, 想核对
+          某一项得在句子里找。而且这一页还在用它自己那套框/徽章/按钮,
+          跟刚统一完的其它页完全不一样。 */}
+      <Section>
+        <DataTable
+          rows={data?.models ?? []}
+          rowKey={(m) => m.name}
+          empty={data ? "还没有任何模型。点右上角「+ 新增模型」。" : "加载中…"}
+          columns={[
+            {
+              header: "模型",
+              cell: (m) => (
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <b>{splitDisplayName(m.display_name).name}</b>
+                  {/* 环境变量没解析成功 —— 这个模型在列表里、员工也选得到,
+                      但调用必然失败。不标出来的话界面上没有任何线索。 */}
+                  {data?.config_errors?.[m.name] ? (
+                    <Badge tone="err" title={data.config_errors[m.name]}>
+                      配置有误
+                    </Badge>
+                  ) : null}
+                  {m.default ? <Badge tone="accent">默认</Badge> : null}
+                  {m.mode === "embedding" ? <Badge>向量</Badge> : null}
+                  <Badge tone={m.tier === "public" ? "warn" : "neutral"}>
+                    {m.tier === "public" ? "公网" : "私有"}
+                  </Badge>
+                </div>
+              ),
+            },
+            {
+              header: "ID",
+              truncate: true,
+              width: 200,
+              cell: (m) => (
+                <code style={{ fontSize: 11, color: "var(--text-muted)" }} title={m.name}>
+                  {m.name}
+                </code>
+              ),
+            },
+            {
+              header: "上游",
+              truncate: true,
+              width: 170,
+              // ⚠ 只显示上游模型名, **不显示 api_base**。
+              // 内网地址形如 http://10.10.40.102:32730/openapi/<uuid>/v1 ——
+              // 路径里那段 uuid 是那个自建端点的凭据。摆在列表上等于每次
+              // 截图、投屏、演示都把它带出去。要看/要改在「详情」里。
+              cell: (m) => (
+                <code style={{ fontSize: 11 }} title={m.upstream.model}>
+                  {m.upstream.model}
+                </code>
+              ),
+            },
+            {
+              header: "上下文",
+              align: "right",
+              width: 100,
+              cell: (m) => (m.context_window ? m.context_window.toLocaleString() : "—"),
+            },
+            {
+              header: "单价/1K",
+              align: "right",
+              width: 90,
+              cell: (m) =>
+                m.price_per_1k_tokens != null ? (
+                  m.price_per_1k_tokens
+                ) : (
+                  <span style={{ color: "var(--status-warn)" }} title="没填单价, 审计页的成本按兜底价估算">
+                    未填
+                  </span>
+                ),
+            },
+            {
+              header: "能力",
+              width: 90,
+              cell: (m) => (
+                <span style={{ color: "var(--text-muted)", fontSize: 11 }}>
+                  {[m.supports_tool_use && "工具", m.supports_vision && "视觉"]
+                    .filter(Boolean)
+                    .join(" · ") || "—"}
                 </span>
-              ) : null}
-              <span
-                style={{
-                  fontSize: 10,
-                  padding: "1px 5px",
-                  borderRadius: 3,
-                  border: "1px solid var(--border)",
-                  color: "var(--text-muted)",
-                }}
-              >
-                {m.tier === "public" ? "公网" : "私有"}
-              </span>
-              <code style={{ fontSize: 11, color: "var(--text-muted)" }}>{m.name}</code>
-              <div style={{ flex: 1 }} />
-              <button
-                style={BTN}
-                disabled={!editable || busy}
-                onClick={() => {
-                  setEditing(JSON.parse(JSON.stringify(m)) as ModelConfig);
-                  setIsNew(false);
-                  setErr(null);
-                }}
-              >
-                编辑
-              </button>
-              <button
-                style={{ ...BTN, color: "var(--status-err)" }}
-                disabled={!editable || busy}
-                onClick={() => void remove(m)}
-              >
-                删除
-              </button>
-            </div>
-            <div style={{ ...HINT, marginTop: 4 }}>
-              上游 <code>{m.upstream.model}</code>
-              {m.upstream.api_base ? ` · ${m.upstream.api_base}` : ""} · key 取自{" "}
-              <code>{m.upstream.api_key_env}</code>
-              {m.context_window ? ` · 上下文 ${m.context_window.toLocaleString()}` : ""}
-              {m.max_output_tokens
-                ? ` · 单次输出 ${m.max_output_tokens.toLocaleString()}`
-                : ""}
-              {m.supports_tool_use ? " · 工具" : ""}
-              {m.supports_vision ? " · 视觉" : ""}
-              {m.fallback?.chain?.length
-                ? ` · 失败切 ${m.fallback.chain.join("→")}`
-                : ""}
-            </div>
-          </div>
-        ))}
-      </div>
+              ),
+            },
+            {
+              header: "失败切换",
+              truncate: true,
+              width: 130,
+              cell: (m) =>
+                m.fallback?.chain?.length ? (
+                  <span
+                    style={{ color: "var(--text-muted)", fontSize: 11 }}
+                    title={m.fallback.chain.join(" → ")}
+                  >
+                    {m.fallback.chain.join(" → ")}
+                  </span>
+                ) : (
+                  <span style={{ color: "var(--text-muted)" }}>—</span>
+                ),
+            },
+            {
+              header: "",
+              align: "right",
+              width: 110,
+              cell: (m) => (
+                <div style={{ display: "inline-flex", gap: 4 }}>
+                  <button
+                    style={BTN}
+                    disabled={!editable || busy}
+                    onClick={() => {
+                      setEditing(JSON.parse(JSON.stringify(m)) as ModelConfig);
+                      setIsNew(false);
+                      setErr(null);
+                    }}
+                  >
+                    编辑
+                  </button>
+                  <button
+                    style={BTN_DANGER}
+                    disabled={!editable || busy}
+                    onClick={() => void remove(m)}
+                  >
+                    删除
+                  </button>
+                </div>
+              ),
+            },
+          ]}
+        />
+      </Section>
     </div>
   );
 }
@@ -448,7 +518,14 @@ function ModelForm({
             />
           </Field>
 
-          <Field label="API 地址" hint="只有 OpenAI 兼容的自建端点才需要填，官方 API 留空">
+          <Field
+            label="API 地址"
+            hint={
+              isEnvPlaceholder(model.upstream.api_base)
+                ? "⚠ 这里现在是一个环境变量占位符，真实地址在服务器的 .env 里。改成写死的地址之后，IT 再改 .env 就不生效了 —— 除非你确实要为这个模型单独指定，否则别动。"
+                : "只有 OpenAI 兼容的自建端点才需要填，官方 API 留空。内网地址建议写成 ${变量名}，真实值放服务器的 .env —— 这样它不会进数据库、不会进备份、也不会出现在截图里。"
+            }
+          >
             <input
               style={MONO}
               value={model.upstream.api_base ?? ""}

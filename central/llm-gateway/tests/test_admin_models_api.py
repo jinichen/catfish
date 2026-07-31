@@ -290,3 +290,186 @@ def test_列表要告诉界面_fallback_全局开没开(client, monkeypatch):
 
     monkeypatch.setenv("CATFISH_AUTO_FALLBACK", "1")
     assert c.get("/api/admin/models").json()["auto_fallback"] is True
+
+
+# ── 默认模型接任只能挑对话模型 (7/30 二修) ──────────────────────────────
+#
+# 原来是 `rest[0]` —— 剩下列表的第一个, 不看 mode。按 models.yaml 的顺序
+# (main, vision, embed, ...), 删掉 main 之后接任的是**视觉模型**, 再删一个
+# 就轮到 **embedding 模型**。而 default_model() (config.py) 也不筛 mode,
+# 只看 default 标记。
+#
+# 结果: 全公司默认对话模型变成一个 embedding 模型, 每个员工一开口就报错,
+# 而界面上完全看不出哪里不对 —— 「模型」页只会显示 embed 那行挂着「默认」。
+# 鸿波 7/30 的库里就正好停在这个状态的前一步 (默认已经落到视觉模型上)。
+
+
+def test_接任默认时跳过向量模型(client):
+    c, store, *_ = client
+    c.put("/api/admin/models/主力", json=_model("主力", default=True))
+    # 顺序上排在前面, 但它是 embedding —— 不能让它接任
+    c.put("/api/admin/models/embed", json=_model("embed", mode="embedding"))
+    c.put("/api/admin/models/对话", json=_model("对话"))
+
+    r = c.delete("/api/admin/models/主力")
+    assert r.status_code == 200
+    assert r.json()["promoted_default"] == "对话", "接任的必须是对话模型"
+
+    defaults = [m["name"] for m in c.get("/api/admin/models").json()["models"] if m["default"]]
+    assert defaults == ["对话"]
+
+
+def test_没有别的对话模型时拒绝删(client):
+    """能删成功但删完全公司聊不了天 —— 这种操作不该让它成功."""
+    c, store, *_ = client
+    c.put("/api/admin/models/唯一对话", json=_model("唯一对话", default=True))
+    c.put("/api/admin/models/embed", json=_model("embed", mode="embedding"))
+
+    r = c.delete("/api/admin/models/唯一对话")
+    assert r.status_code == 400
+    # 关键: 拦住之后模型必须还在, 不能"删了但没指定新默认"
+    assert "唯一对话" in store, "拦截必须发生在真删之前"
+
+
+def test_删的不是默认模型也要挡住(client):
+    """守卫的判据是"删完还剩不剩对话模型", 不是"删的是不是默认".
+
+    只看 was_default 的话, 同一个洞从旁边就能走进去 ——
+    [chatA(非默认), embedB(默认)] 删掉 chatA, 剩一个 embedding 挂着「默认」,
+    全公司默认对话模型变成向量模型, 员工一开口就报错。
+    """
+    c, store, *_ = client
+    c.put("/api/admin/models/chatA", json=_model("chatA"))
+    c.put("/api/admin/models/embedB", json=_model("embedB", mode="embedding", default=True))
+
+    r = c.delete("/api/admin/models/chatA")
+    assert r.status_code == 400, "删完就没有对话模型了, 不管它是不是默认"
+    assert "chatA" in store
+
+
+def test_删到没有默认时会补一个(client):
+    """两个都没标 default 时, default_model() 退化成 models[0] —— 取决于排序."""
+    c, store, *_ = client
+    c.put("/api/admin/models/chatC", json=_model("chatC"))
+    c.put("/api/admin/models/chatD", json=_model("chatD"))
+    r = c.delete("/api/admin/models/chatC")
+    assert r.status_code == 200
+    assert r.json()["promoted_default"] == "chatD"
+    assert store["chatD"]["default"] is True
+
+
+def test_删非默认模型不受这条影响(client):
+    c, store, *_ = client
+    c.put("/api/admin/models/m1", json=_model("m1", default=True))
+    c.put("/api/admin/models/embed", json=_model("embed", mode="embedding"))
+    r = c.delete("/api/admin/models/embed")
+    assert r.status_code == 200
+    assert r.json()["promoted_default"] is None
+    assert "embed" not in store
+
+
+# ── 管理接口必须走库里的原样, 不能走 cfg.models (7/30 三修) ──────────────
+#
+# cfg.models 是**插值后**的运行时配置 (${VAR} 已换成真实地址)。界面拿到什么
+# 就会在保存时原样传回来 —— 于是:
+#   · GET 返回插值后的值 → 管理员随便编辑一次就把占位符烤成字面量,
+#     把回迁当场撤销 (而且不报错)
+#   · 删除时的"自动接任默认"同理, 把接任者的占位符也烤了
+#   · 界面上"这是环境变量占位符"那条提示永远不匹配, 是死代码
+
+
+def test_GET_返回库里的原样而不是插值后的值(client, monkeypatch):
+    monkeypatch.setenv("TEST_BASE", "http://10.0.0.1/绝密uuid/v1")
+    c, store, *_ = client
+    m = _model("m1")
+    m["upstream"]["api_base"] = "${TEST_BASE}"
+    c.put("/api/admin/models/m1", json=m)
+
+    got = c.get("/api/admin/models").json()["models"][0]
+    assert got["upstream"]["api_base"] == "${TEST_BASE}", "不能把真实地址发给界面"
+
+
+def test_界面往返一次不会把占位符烤死(client, monkeypatch):
+    """GET → 改个无关字段 → PUT, 占位符必须还在.
+
+    这正是"回迁跑完之后管理员第一次编辑就撤销了"的路径。
+    """
+    monkeypatch.setenv("TEST_BASE", "http://10.0.0.1/uuid/v1")
+    c, store, *_ = client
+    m = _model("m1")
+    m["upstream"]["api_base"] = "${TEST_BASE}"
+    c.put("/api/admin/models/m1", json=m)
+
+    got = c.get("/api/admin/models").json()["models"][0]
+    got["display_name"] = "改个名字"      # 界面上只动了一个无关字段
+    c.put("/api/admin/models/m1", json=got)
+
+    assert store["m1"]["upstream"]["api_base"] == "${TEST_BASE}"
+
+
+def test_自动接任默认不会烤死接任者的占位符(client, monkeypatch):
+    monkeypatch.setenv("TEST_BASE", "http://10.0.0.1/uuid/v1")
+    c, store, *_ = client
+    c.put("/api/admin/models/主力", json=_model("主力", default=True))
+    heir = _model("备用")
+    heir["upstream"]["api_base"] = "${TEST_BASE}"
+    c.put("/api/admin/models/备用", json=heir)
+
+    assert c.delete("/api/admin/models/主力").json()["promoted_default"] == "备用"
+    assert store["备用"]["default"] is True
+    assert store["备用"]["upstream"]["api_base"] == "${TEST_BASE}", (
+        "接任时把占位符烤死了 —— 跟界面往返是同一个错"
+    )
+
+
+def test_解析不了的_env_变量会在接口上说明(client, monkeypatch):
+    """否则"这个模型为什么不工作"在界面上没有任何线索, 只有服务器日志里一行."""
+    monkeypatch.delenv("NO_SUCH", raising=False)
+    c, store, *_ = client
+    m = _model("坏的")
+    m["upstream"]["api_base"] = "${NO_SUCH}"
+    c.put("/api/admin/models/坏的", json=m)
+
+    r = c.get("/api/admin/models").json()
+    assert "坏的" in r["config_errors"]
+    assert "NO_SUCH" in r["config_errors"]["坏的"]
+
+
+# ── 播种必须用 yaml 原文 (7/30 头号 bug 的回归防护) ─────────────────────
+#
+# 这条之前**一行防护都没有** —— fixture 用的是 TestClient(app) 而不是
+# with TestClient(app), lifespan 从来没被执行过, 把播种改回 config.models
+# 全部测试照样绿。现在把那段抽成了 _seed_and_migrate_models() 直接测。
+
+
+def test_播种进库的是_yaml_原文而不是插值后的值(tmp_path, monkeypatch):
+    from catfish_gateway import app as A
+    from catfish_gateway import config as C
+    from catfish_gateway import model_store as MS
+
+    p = tmp_path / "models.yaml"
+    p.write_text(
+        "version: 1\nmodels:\n"
+        "  - name: m1\n    tier: private\n"
+        '    display_name: "m1"\n'
+        "    upstream:\n      model: openai/x\n"
+        "      api_base: ${SEED_TEST_BASE}\n      api_key_env: K\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CATFISH_CONFIG", str(p))
+    monkeypatch.setenv("SEED_TEST_BASE", "http://10.0.0.1/绝密uuid/v1")
+    C._CACHE = None
+    C._DB_EVER_SERVED = False
+
+    seeded: list[dict] = []
+    monkeypatch.setattr(MS, "is_enabled", lambda: True)
+    monkeypatch.setattr(MS, "seed_from_yaml", lambda ms: (seeded.extend(ms), len(ms))[1])
+    monkeypatch.setattr(MS, "restore_env_placeholders", lambda ms: ([], {}))
+
+    A._seed_and_migrate_models()
+
+    assert seeded, "没播种"
+    assert seeded[0]["upstream"]["api_base"] == "${SEED_TEST_BASE}", (
+        "播种用了插值后的 config.models —— 真实地址被烤进库, "
+        "而且此后改 .env 不再生效"
+    )

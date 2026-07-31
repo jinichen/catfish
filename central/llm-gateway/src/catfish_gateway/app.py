@@ -69,6 +69,8 @@ from .config import (  # noqa: E402
     get_config,
     invalidate_config,
     load_config,
+    load_raw_models,
+    model_config_errors,
 )
 # 5/23 BL-GATEWAY-DROP-LEGACY-SUMMARIZE: inject_employee_journal 5/20 BL-GATEWAY-
 # MEMORY-REGISTRY-DELETE 时已 disable (registry.providers 永远空), 实际无 caller.
@@ -151,6 +153,47 @@ litellm.set_verbose = False
 litellm.drop_params = True
 
 
+def _seed_and_migrate_models() -> None:
+    """启动时把 models.yaml 播种进库, 并回迁被烤死的 env 占位符.
+
+    抽成函数是为了能测 —— 原来这段直接写在 lifespan 里, 而测试用的是
+    `TestClient(app)` (不带 with), **lifespan 从来没被执行过**。于是
+    "播种必须用 load_raw_models 而不是 config.models" 这条最要紧的性质
+    一行防护都没有: 改回去 40 条测试照样全绿。
+    """
+    if not model_store.is_enabled():
+        return
+    try:
+        # ⚠ 用 load_raw_models() 而不是 config.models —— 后者是 env 插值
+        # **之后**的对象, 播进去等于把 .env 里的内网地址烤成库里的字面量。
+        # 详见 config.load_raw_models 的说明 (那是 7/30 引入、当天发现的 bug)。
+        raw_models = load_raw_models()
+        n = model_store.seed_from_yaml(raw_models)
+        if n:
+            logger.info("模型配置首次播种: %d 个 (来源 models.yaml)", n)
+            invalidate_config()  # 让本 worker 立刻读到库里那份
+
+        # 一次性回迁: 把已经烤死的值换回 ${VAR}。
+        # 只对 yaml 里也有的模型、且库里的值正好等于插值结果时才动 ——
+        # 客户后来手填过别的地址就报出来让人确认 (见 restore_placeholders)。
+        fixed, suspicious = model_store.restore_env_placeholders(raw_models)
+        if fixed:
+            logger.warning(
+                "已把 %d 个模型里被烤死的 env 值换回 ${VAR} 占位符: %s。"
+                "在此之前改 .env 对这些字段是不生效的。",
+                len(fixed), ", ".join(fixed),
+            )
+            invalidate_config()
+        for mname, note in suspicious.items():
+            # 换不回来的必须说出来, 不能静默跳过 —— 这个 bug 的发现路径
+            # ("改了 .env 不生效") 恰恰会让"对不上"成为常态。
+            logger.warning("模型 %s 的 env 占位符需要人工确认: %s", mname, note)
+    except Exception:
+        # 播种失败不阻塞启动 —— 此时仍能用 yaml 里的模型正常服务。
+        # 但必须留日志: 否则会表现成"界面上改了模型但列表是空的"。
+        logger.exception("模型配置播种失败, 本次将继续使用 models.yaml 里的模型")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 7/30: 启动时预热 + fail fast —— 配置坏了要在这里挂, 不要等第一个请求
@@ -169,18 +212,8 @@ async def lifespan(app: FastAPI):
     #
     # 4 个 worker 会同时跑到这里, 靠 ON CONFLICT DO NOTHING 让重复播种变成
     # 空操作 (见 model_store.seed_from_yaml)。
-    if model_store.is_enabled():
-        try:
-            n = model_store.seed_from_yaml(
-                [m.model_dump(mode="json") for m in config.models]
-            )
-            if n:
-                logger.info("模型配置首次播种: %d 个 (来源 models.yaml)", n)
-                invalidate_config()  # 让本 worker 立刻读到库里那份
-        except Exception:
-            # 播种失败不阻塞启动 —— 此时仍能用 yaml 里的模型正常服务。
-            # 但必须留日志: 否则会表现成"界面上改了模型但列表是空的"。
-            logger.exception("模型配置播种失败, 本次将继续使用 models.yaml 里的模型")
+    _seed_and_migrate_models()
+
     if _ENV_FILE_LOADED:
         logger.info("loaded .env from: %s", _ENV_FILE_LOADED)
     else:
@@ -1312,9 +1345,28 @@ def _require_model_store() -> None:
 async def api_admin_models_list(
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """完整模型配置 (含 upstream). sysadmin only."""
+    """完整模型配置 (含 upstream). sysadmin only.
+
+    ⚠ 返回的是**库里的原样**, 不是 cfg.models。
+
+    cfg.models 是插值后的运行时配置 (${VAR} 已经换成真实地址)。而界面拿到
+    什么就会在保存时原样传回来 —— 返回插值后的值, 等于管理员随便编辑一次
+    就把占位符烤成了字面量, 把 7/30 那个 bug 当场撤销。
+
+    连带的: 只有返回原样, 界面上"这里是环境变量占位符, 改成写死的地址就
+    不跟着 .env 走了"那条提示才可能出现。返回插值后的值时它永远不匹配。
+    """
     _require_model_admin(user)
     cfg = get_config()
+    rows = model_store.read_models()
+    if rows is None:
+        # 库没启用 / 不可用 → 用 yaml 原文 (同样保留占位符)。
+        # 这条路径是只读的 (editable=False), 只用于展示。
+        try:
+            rows = load_raw_models()
+        except Exception:
+            logger.exception("读 models.yaml 原文失败, 退回运行时配置 (占位符会显示成真实值)")
+            rows = [m.model_dump(mode="json") for m in cfg.models]
     return {
         "ok": True,
         "editable": model_store.is_enabled(),
@@ -1322,7 +1374,10 @@ async def api_admin_models_list(
         # 失败切换全局开关。**默认是关的** —— 界面必须显示这个, 否则管理员
         # 会认真配一条 fallback 链而它根本不执行。
         "auto_fallback": _effective_auto_fallback(cfg),
-        "models": [m.model_dump(mode="json") for m in cfg.models],
+        # 哪些模型的 env 占位符没解析成功。不显示的话, "这个模型为什么不工作"
+        # 在界面上没有任何线索 —— 只有服务器日志里有一行。
+        "config_errors": model_config_errors(),
+        "models": rows,
     }
 
 
@@ -1433,29 +1488,61 @@ async def api_admin_models_delete(
             ),
         )
 
-    was_default = any(m.name == name and m.default for m in cfg.models)
+    # ⚠ 下面一律用**库里的原样行**, 不用 cfg.models。
+    #   cfg.models 是插值后的 (${VAR} 已经换成真实地址), 拿它 model_dump 再
+    #   写回库, 等于把占位符烤成字面量 —— 正是 7/30 修掉的那个 bug。
+    rows = model_store.read_models() or []
+    was_default = any(r.get("name") == name and r.get("default") for r in rows)
+
+    # 删完之后还有没有可用的对话模型?
+    #
+    # ⚠ 判据是"删完还剩不剩", **不是"删的是不是默认模型"**。
+    #   只在 was_default 时把关的话, 同一个洞从旁边就能走进去:
+    #     [chatA(非默认), embedB(默认)]  删 chatA → 剩一个 embedding 挂着"默认"
+    #     [chatC, embedD]  两个都没标默认 → 删 chatC 后 default_model() 退化成
+    #                      models[0] = embedD
+    #   两种终局一模一样: 全公司默认对话模型是个向量模型, 员工一开口就报错,
+    #   而界面上完全看不出哪里不对。
+    #
+    # mode 缺省是 "chat" (config.ModelConfig), 所以老数据不会被误排除。
+    chat_rest = [
+        r for r in rows if r.get("name") != name and (r.get("mode") or "chat") == "chat"
+    ]
+    is_chat = any(
+        r.get("name") == name and (r.get("mode") or "chat") == "chat" for r in rows
+    )
+    if is_chat and not chat_rest:
+        raise HTTPException(
+            400,
+            detail=(
+                f"删掉 {name} 之后就没有可用的对话模型了。\n\n"
+                "剩下的要么是向量模型 (mode=embedding), 要么一个都不剩 —— "
+                "两种情况下员工一开口都会直接报错, 而「模型」页上看不出哪里不对。\n\n"
+                "请先新增一个对话模型, 再回来删这个。"
+            ),
+        )
+
     try:
         deleted = model_store.delete_model(name, by=user.sub)
     except Exception as e:
         raise _model_store_error(e) from e
 
-    # 删掉的是默认模型 → 必须立刻指定一个新的, 否则 default_model() 会退化成
-    # "列表第一个", 也就是取决于排序, 员工下次开聊用到哪个模型不可预测。
+    # 删掉的是默认模型, 或者删完之后没有任何模型挂着"默认" → 立刻指定一个。
+    # 否则 default_model() 退化成"列表第一个", 也就是取决于排序, 员工下次
+    # 开聊用到哪个模型不可预测。
     promoted = None
-    if deleted and was_default:
-        rest = [m for m in cfg.models if m.name != name]
-        if rest:
-            d = rest[0].model_dump(mode="json")
-            d["default"] = True
-            try:
-                model_store.upsert_model(
-                    rest[0].name, d, by=f"{user.sub} (自动接任默认)"
-                )
-                promoted = rest[0].name
-            except Exception as e:
-                # 模型已经删了但新默认没指定成功 —— 这个状态必须说出来,
-                # 否则 default_model() 会退化成"列表第一个"而没人知道。
-                raise _model_store_error(e) from e
+    needs_heir = deleted and (was_default or not any(r.get("default") for r in chat_rest))
+    if needs_heir and chat_rest:
+        heir = chat_rest[0]
+        try:
+            model_store.upsert_model(
+                heir["name"], {**heir, "default": True}, by=f"{user.sub} (自动接任默认)"
+            )
+            promoted = heir["name"]
+        except Exception as e:
+            # 模型已经删了但新默认没指定成功 —— 这个状态必须说出来,
+            # 否则 default_model() 会退化成"列表第一个"而没人知道。
+            raise _model_store_error(e) from e
 
     invalidate_config()
     return {

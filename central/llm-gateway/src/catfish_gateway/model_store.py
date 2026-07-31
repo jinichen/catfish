@@ -139,6 +139,68 @@ def _bump_revision(cur) -> None:
     )
 
 
+def restore_env_placeholders(
+    raw_models: list[dict[str, Any]],
+) -> tuple[list[str], dict[str, str]]:
+    """把库里被烤死的 env 值换回 ${VAR} 占位符.
+
+    返回 (改动了的模型名, 换不回但存疑的 {模型名: 说明})。第二项必须报出来 ——
+    见 config.restore_placeholders 里的说明: 这个 bug 的发现路径恰恰会让
+    "对不上"成为常态, 静默跳过等于把问题埋回去。
+
+    ## 为什么需要这一步
+
+    7/30 把模型搬进库时, 播种用的是**插值之后**的 config.models, 于是
+    `${INTERNAL_LLM_BASE_QWEN_VISION}` 变成了库里的字面量
+    `http://10.10.40.102:32730/openapi/<uuid>/v1`。已经跑起来的部署库里
+    存的就是这份, 光改播种代码救不了它们 —— ON CONFLICT DO NOTHING
+    不会覆盖已有行。
+
+    这个函数在每次启动时跑, 幂等: 换回之后再跑就不匹配了, 不会重复动。
+
+    **只在库里的值正好等于插值结果时才改。** 客户后来在界面上手填过别的
+    地址的话对不上, 原样保留 —— 那是人的选择, 不该被"修复"掉。
+    """
+    if not is_enabled() or not raw_models:
+        return []
+    from .config import restore_placeholders  # noqa: PLC0415  (避免循环导入)
+
+    by_name = {m["name"]: m for m in raw_models if isinstance(m.get("name"), str)}
+    changed: list[str] = []
+    suspicious: dict[str, str] = {}
+    try:
+        # ORDER BY name: 4 个 worker 启动时会同时跑这段, 固定顺序取行能免掉
+        # 两个事务交叉互锁的可能 (表很小时 seq scan 顺序本就一致, 但不该靠这个)。
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute("SELECT name, payload FROM gateway_models ORDER BY name")
+            rows = cur.fetchall()
+            for name, payload in rows:
+                raw = by_name.get(name)
+                if raw is None:
+                    continue  # 客户自己新建的模型, yaml 里没有, 不碰
+                fixed, note = restore_placeholders(payload, raw)
+                if note:
+                    suspicious[name] = note
+                if fixed == payload:
+                    continue
+                cur.execute(
+                    "UPDATE gateway_models SET payload = %s::jsonb, "
+                    "updated_by = 'migrate:restore-env-placeholders', updated_at = now() "
+                    "WHERE name = %s",
+                    (json.dumps(fixed, ensure_ascii=False), name),
+                )
+                changed.append(name)
+            if changed:
+                _bump_revision(cur)
+            conn.commit()
+    except Exception:
+        # 回迁失败不该拦住启动 —— 此时服务仍能用 (只是 .env 改动不生效),
+        # 但必须留日志, 否则表现成"改了 .env 没反应"而无从查起。
+        logger.exception("回迁 env 占位符失败, 库里可能仍是烤死的值")
+        return [], {}
+    return changed, suspicious
+
+
 def upsert_model(name: str, payload: dict[str, Any], by: str) -> None:
     """新增或覆盖一个模型. payload 必须是已经过 ModelConfig 校验的 dict."""
     if not is_enabled():
