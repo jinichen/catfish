@@ -115,20 +115,38 @@ cd /opt/catfish/central
 
 **docker compose 必须在这里跑** · docker-compose.yml 里的 relative path (`./llm-gateway/config`, `./identity-server/config`) 都是相对这个目录.
 
-### Step 5 · 建 .env (从 example 拷) + 改 6 项 (5-10 分钟)
+### Step 5 · 建 .env (从 example 拷) + 改 7 项 (5-10 分钟)
 
 ```bash
 cp .env.production.example .env
 vim .env       # 或 nano/notepad
 ```
 
-**必填 6 项** (下面详解, 找到对应行改掉 CHANGE_ME):
+**必填 7 项** (下面详解, 找到对应行改掉 CHANGE_ME):
 
 ```env
+# 0. ⚠ 主密钥 —— 供应商 API key 加密存库用 (8/1 起)
+#
+#    生成 (在服务器上跑一次):
+#      python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+#
+#    ⚠⚠ **生成后立刻存进公司密码管理器。**
+#    这个值丢了的话, 所有存在数据库里的 API key 都解不开 —— 只能逐个重新
+#    去各家供应商后台申请、再在界面上重填一遍。没有别的办法, 代码兜不住。
+#
+#    它一次配好不再动。以后加供应商、换 API key 全在界面上做, 不用再改这个
+#    文件、不用重建容器、也不用重启网关。
+CATFISH_SECRET_KEY=CHANGE_ME_跑上面那条命令生成
+
 # 1. Postgres 密码 (16+ 位强密码 · 大小写+数字+符号)
 PG_PASSWORD=Dahua_PG_2026_STRONG_pwd
 
 # 2. 内网 LLM API key (达华内网 qwen 平台申请)
+#
+#    注 (8/1): 这一项以后可以不用了 —— 供应商的 key 现在能在界面上填并
+#    加密存库 (「控制台 → 接入 → 供应商」)。但**首次部署仍然填这里**:
+#    界面要能打开, 得先有一份能工作的配置。
+#    装完之后可以在界面上把 key 重填一次, 然后从 .env 里删掉这一行。
 INTERNAL_LLM_KEY=达华内网qwen平台的真key
 
 # 3-5. 内网 LLM 3 个端点 URL (换成达华内网真实 IP:port)

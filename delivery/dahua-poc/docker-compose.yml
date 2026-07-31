@@ -149,6 +149,13 @@ services:
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       # 私网 LLM (客户内网部署的 Qwen / embedding, base_url + key)
+      # 8/1: 主密钥。供应商 API key 加密存库用。
+      #
+      # ⚠ 这一行必须跟 central/docker-compose.yml 同步 —— 这一整块是
+      # **显式列名**转发 env 的, 漏了的话客户照 SOP 在 .env 里填了
+      # CATFISH_SECRET_KEY, 容器里读不到, 表现成"填了但说没配"。
+      # scripts/check_compose_env_sync.py 盯着这件事。
+      CATFISH_SECRET_KEY: ${CATFISH_SECRET_KEY:-}
       INTERNAL_LLM_KEY: ${INTERNAL_LLM_KEY:-}
       INTERNAL_LLM_BASE_QWEN_MAIN: ${INTERNAL_LLM_BASE_QWEN_MAIN:-http://127.0.0.1:9998/v1}
       INTERNAL_LLM_BASE_QWEN_VISION: ${INTERNAL_LLM_BASE_QWEN_VISION:-http://127.0.0.1:9998/v1}

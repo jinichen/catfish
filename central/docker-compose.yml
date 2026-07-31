@@ -133,6 +133,10 @@ services:
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       # 私网 LLM (客户内网部署的 Qwen / embedding, base_url + key)
+      # 8/1: 主密钥。供应商 API key 加密存库用 —— 配了之后加供应商/换 key
+      # 全在界面上做, 不用再回来改这个文件 (那正是这一整块显式列名转发
+      # 带来的问题: 新变量容器看不见)。没配则退回老办法, 见下面几行。
+      CATFISH_SECRET_KEY: ${CATFISH_SECRET_KEY:-}
       INTERNAL_LLM_KEY: ${INTERNAL_LLM_KEY:-}
       INTERNAL_LLM_BASE_QWEN_MAIN: ${INTERNAL_LLM_BASE_QWEN_MAIN:-http://127.0.0.1:9998/v1}
       INTERNAL_LLM_BASE_QWEN_VISION: ${INTERNAL_LLM_BASE_QWEN_VISION:-http://127.0.0.1:9998/v1}

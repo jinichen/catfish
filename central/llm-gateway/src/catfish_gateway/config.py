@@ -23,9 +23,9 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
-from . import model_store, provider_store
+from . import model_store, provider_store, secrets_box
 
 logger = logging.getLogger(__name__)
 
@@ -84,20 +84,39 @@ class UpstreamConfig(BaseModel):
     # be slow to cold-start; private fast models rarely need more than 60s.
     timeout: int = 60
 
+    # ── 存库的 key (8/1, DESIGN-PROVIDER-SPLIT §5) ──────────────────
+    #
+    # 用 **PrivateAttr 而不是普通字段**, 这是个刻意的安全选择:
+    # 私有属性不进 model_dump() / model_dump_json(), 所以解密后的 key
+    # **不可能**从任何一次序列化里漏出去 —— 那是结构性保证, 不靠人记得
+    # 每次都 exclude。
+    #
+    # (admin_models_router 有一条降级路径会 dump cfg.models, 而 /v1/models
+    #  和 /v1/catalog 也各自序列化模型信息。靠纪律去逐个 exclude 迟早漏一处。)
+    #
+    # 由 _assemble_config 在合并供应商之后赋值, model_validate 塞不进来。
+    _secret: str | None = PrivateAttr(default=None)
+
     @property
     def api_key(self) -> str:
-        """Read the API key from env at request time (not baked into config)."""
-        key = os.environ.get(self.api_key_env)
+        """取 API key. 两条来源: 存库的密文 (解密后) 优先, 否则读环境变量.
+
+        两条并存是迁移期的基础 —— 一半供应商走 env、一半走库, 都要能调用
+        (DESIGN §6.2)。
+        """
+        key = self._secret or os.environ.get(self.api_key_env)
         if not key:
             raise RuntimeError(
-                f"env variable {self.api_key_env} is not set -- cannot call model '{self.model}'"
+                f"没有可用的 API key -- 无法调用模型 '{self.model}'。"
+                f"这个供应商既没有配存库的 key, "
+                f"环境变量 {self.api_key_env or '(未指定)'} 也没设。"
             )
         return key
 
     @property
     def is_available(self) -> bool:
-        """True if the required API key is configured in the environment."""
-        return bool(os.environ.get(self.api_key_env))
+        """key 配好了没. 9 处代码用它决定这个模型能不能被选到。"""
+        return bool(self._secret or os.environ.get(self.api_key_env))
 
 
 class FallbackConfig(BaseModel):
@@ -582,7 +601,35 @@ def _assemble_config() -> Config:
         if err:
             errs.setdefault(name, err)
             logger.error("模型 %s 的 env 占位符没解析成功: %s", name, err)
-        models.append(ModelConfig.model_validate(row))
+
+        m = ModelConfig.model_validate(row)
+
+        # 8/1: 存库的 key 在这里解密并挂到私有属性上。
+        #
+        # 用 PrivateAttr 而不是普通字段是刻意的 —— 它不进 model_dump(),
+        # 所以解密后的 key 不可能从任何一次序列化里漏出去 (见 UpstreamConfig)。
+        #
+        # 解不开时**不抛**: 只有这一家的模型不可用 (is_available 返 False,
+        # 于是它不出现在员工的模型选择里、也不会被 fallback 链选中),
+        # 而不是整个网关起不来。原因照样进 errs, 界面上看得见。
+        pid = (r.get("upstream") or {}).get("provider")
+        prow = providers.get(pid) if pid else None
+        if prow and prow.get("api_key_enc"):
+            secret = secrets_box.decrypt(prow["api_key_enc"])
+            if secret:
+                m.upstream._secret = secret
+            else:
+                errs.setdefault(
+                    name,
+                    f"供应商 {pid!r} 的 API key 解不开 —— "
+                    + (
+                        f"{secrets_box.MASTER_KEY_ENV} 换过但没跑轮换脚本, 或者密文被改坏了。"
+                        if secrets_box.is_configured()
+                        else f"服务器没有配 {secrets_box.MASTER_KEY_ENV}。"
+                        "请让 IT 在 .env 里加上它然后重启网关。"
+                    ),
+                )
+        models.append(m)
     set_model_config_errors(errs)
     cfg.models = models
     return cfg

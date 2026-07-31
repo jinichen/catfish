@@ -298,3 +298,125 @@ def test_共用一家但_timeout_不同的两个模型_都不能被改掉(fake_d
     # 至少有一个模型必须显式带着自己的 timeout, 否则必然有一个被改掉
     assert pro.get("timeout", providers[pid]["timeout"]) == 90
     assert flash.get("timeout", providers[pid]["timeout"]) == 60
+
+
+# ── 第三步: 存库的 key 在组装时解密 (DESIGN §5.2) ────────────────────
+
+
+@pytest.fixture()
+def cfg_db(tmp_path, monkeypatch):
+    """让 get_config 走"库出模型"那条路。"""
+    import textwrap
+
+    from catfish_gateway import config as C
+
+    p = tmp_path / "models.yaml"
+    p.write_text(
+        textwrap.dedent(
+            """
+            version: 1
+            models:
+              - name: seed
+                tier: public
+                display_name: seed
+                upstream: {model: openai/x, api_key_env: K}
+            """
+        ).strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CATFISH_CONFIG", str(p))
+    monkeypatch.setenv("CATFISH_CONFIG_TTL", "0")
+    C._CACHE = None
+    C._CACHE_STAMP = None
+    C._CACHE_CHECKED_AT = 0.0
+    C._DB_EVER_SERVED = False
+    monkeypatch.setattr(C.model_store, "is_enabled", lambda: True)
+    monkeypatch.setattr(C.model_store, "revision", lambda: 1)
+    yield C
+    C._CACHE = None
+    C._DB_EVER_SERVED = False
+
+
+def _row_with_provider(pid: str) -> dict:
+    return {
+        "name": "m1",
+        "tier": "private",
+        "display_name": "m1",
+        "upstream": {"model": "openai/x", "provider": pid},
+    }
+
+
+def test_存库的_key_解密后能用(cfg_db, monkeypatch):
+    from cryptography.fernet import Fernet
+
+    from catfish_gateway import secrets_box as SB
+
+    monkeypatch.setenv(SB.MASTER_KEY_ENV, Fernet.generate_key().decode())
+    SB.reset_cache()
+    enc = SB.encrypt("sk-存库的")
+
+    monkeypatch.setattr(cfg_db.model_store, "read_models", lambda: [_row_with_provider("p")])
+    monkeypatch.setattr(
+        cfg_db.provider_store,
+        "read_providers",
+        lambda: {"p": {"id": "p", "api_base": None, "api_key_env": None,
+                       "api_key_enc": enc, "timeout": 60}},
+    )
+
+    m = cfg_db.get_config().models[0]
+    assert m.upstream.api_key == "sk-存库的"
+    assert m.upstream.is_available is True
+    assert cfg_db.model_config_errors() == {}
+    SB.reset_cache()
+
+
+def test_主密钥没配时_只有这家不可用_而不是整份配置挂掉(cfg_db, monkeypatch):
+    """DESIGN §5.2 的核心。7/30 那条 ${VAR} 教训的同款: 一个供应商的 key
+    解不开, 不该让 get_config 抛 —— 冷启动时那等于全站 502。"""
+    from catfish_gateway import secrets_box as SB
+
+    monkeypatch.delenv(SB.MASTER_KEY_ENV, raising=False)
+    SB.reset_cache()
+
+    monkeypatch.setattr(cfg_db.model_store, "read_models", lambda: [_row_with_provider("p")])
+    monkeypatch.setattr(
+        cfg_db.provider_store,
+        "read_providers",
+        lambda: {"p": {"id": "p", "api_base": None, "api_key_env": None,
+                       "api_key_enc": b"gAAAAA-not-a-real-ciphertext", "timeout": 60}},
+    )
+
+    cfg = cfg_db.get_config()  # 不抛
+    m = cfg.models[0]
+    assert m.upstream.is_available is False, "这家不可用 —— 员工选不到它"
+
+    # 但必须能在界面上看到原因, 不能只有服务器日志里一行
+    errs = cfg_db.model_config_errors()
+    assert "m1" in errs
+    assert SB.MASTER_KEY_ENV in errs["m1"]
+    assert "IT" in errs["m1"] or "重启" in errs["m1"], "要给出可执行的下一步"
+
+
+def test_主密钥配了但密文对不上_说明要跑轮换脚本(cfg_db, monkeypatch):
+    """跟"没配"要给不同的说明 —— 两种情况的下一步动作完全不同。"""
+    from cryptography.fernet import Fernet
+
+    from catfish_gateway import secrets_box as SB
+
+    monkeypatch.setenv(SB.MASTER_KEY_ENV, Fernet.generate_key().decode())
+    SB.reset_cache()
+    old_enc = Fernet(Fernet.generate_key()).encrypt(b"sk-x")
+
+    monkeypatch.setattr(cfg_db.model_store, "read_models", lambda: [_row_with_provider("p")])
+    monkeypatch.setattr(
+        cfg_db.provider_store,
+        "read_providers",
+        lambda: {"p": {"id": "p", "api_base": None, "api_key_env": None,
+                       "api_key_enc": old_enc, "timeout": 60}},
+    )
+
+    cfg_db.get_config()
+    note = cfg_db.model_config_errors()["m1"]
+    assert "轮换" in note or "改坏" in note
+    assert "没有配" not in note, "主密钥是配了的, 别把人往错方向带"
+    SB.reset_cache()
