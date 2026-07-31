@@ -1,6 +1,7 @@
 /** 单条消息渲染 —— user / assistant / 错误状态 */
 
 import { useState } from "react";
+import { ArrowClockwise, FastForward, PencilSimple } from "@phosphor-icons/react";
 import { Markdown } from "../../lib/markdown";
 import type { ChatMessage as Msg } from "../../types/chat";
 import ChatToolCall from "./ChatToolCall";
@@ -183,8 +184,12 @@ function UserBubble({
             fontSize: 11,
             opacity: 0.8,
             marginBottom: 2,
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 4,
           }}>
-            🔄 自动续跑 {msg._autoContinue!.round}/{msg._autoContinue!.max}
+            <FastForward size={13} aria-hidden="true" />
+            自动续跑 {msg._autoContinue!.round}/{msg._autoContinue!.max}
           </div>
         )}
         {/* 图片附件优先于文字, 视觉上更清楚 */}
@@ -269,21 +274,8 @@ function UserBubble({
           editing 中隐藏 (气泡本身变编辑区, 按钮无意义). */}
       {(canEdit || canResend) && !editing && (
         <div
-          style={{
-            position: "absolute",
-            // 7/24 v3: 从 top:100%+marginTop 改 bottom:0 · 按钮贴 wrapper 底部
-            // (paddingBottom 里). wrapper 物理 hit area 覆盖按钮 · mouse hover
-            // 按钮全程 wrapper hovered=true · 避免 v2 的缝隙 bug.
-            bottom: 0,
-            right: 0,
-            display: "flex",
-            gap: "var(--space-1)",
-            opacity: hovered ? 1 : 0,
-            pointerEvents: hovered ? "auto" : "none",
-            transition: "opacity 150ms ease",
-            // 7/24 v2: z-index 双保险防 stacking context 遮盖.
-            zIndex: 10,
-          }}
+          className="chat-user-actions"
+          data-visible={hovered || undefined}
         >
           {/* 7/24 v4: 按钮 style 对齐 assistant 侧 FeedbackBtn (FeedbackButtons.tsx:268-303):
               - border transparent (无框感) · 老用 catfish-border 实体框 · 视觉风格分裂
@@ -297,28 +289,9 @@ function UserBubble({
               type="button"
               onClick={startEdit}
               title="编辑这句 · 改完 Enter 发送 · Esc 取消"
-              style={{
-                background: "transparent",
-                border: "1px solid transparent",
-                borderRadius: 4,
-                padding: "2px 8px",
-                fontSize: 11,
-                color: "var(--catfish-text-muted)",
-                cursor: "pointer",
-                lineHeight: 1,
-                opacity: 0.5,
-                transition: "opacity 100ms, background 100ms",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.opacity = "1";
-                e.currentTarget.style.background = "var(--catfish-bg-elevated)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.opacity = "0.5";
-                e.currentTarget.style.background = "transparent";
-              }}
+              className="chat-user-action"
             >
-              ✏️
+              <PencilSimple size={14} aria-hidden="true" />
             </button>
           )}
           {canResend && (
@@ -326,28 +299,9 @@ function UserBubble({
               type="button"
               onClick={() => onResend!(msg.id)}
               title="重发这句 · 删除此消息后的所有回复 · 再发同款给 AI"
-              style={{
-                background: "transparent",
-                border: "1px solid transparent",
-                borderRadius: 4,
-                padding: "2px 8px",
-                fontSize: 11,
-                color: "var(--catfish-text-muted)",
-                cursor: "pointer",
-                lineHeight: 1,
-                opacity: 0.5,
-                transition: "opacity 100ms, background 100ms",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.opacity = "1";
-                e.currentTarget.style.background = "var(--catfish-bg-elevated)";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.opacity = "0.5";
-                e.currentTarget.style.background = "transparent";
-              }}
+              className="chat-user-action"
             >
-              🔄
+              <ArrowClockwise size={14} aria-hidden="true" />
             </button>
           )}
         </div>
@@ -375,6 +329,7 @@ function AssistantBubble({
 
   return (
     <div
+      className="chat-assistant-message"
       style={{
         display: "flex",
         gap: "var(--space-3)",
@@ -456,18 +411,10 @@ function AssistantBubble({
         {!showCaret && msg._promise_check?.is_promise_only && onNudge && (
           <PromiseCheckBadge msg={msg} onNudge={onNudge} />
         )}
-        {/* BL-MM6 feedback 按钮 + BL-VOICE2 TTS 喇叭: 流式中不显, 防员工误点未完成消息.
-            内容空 + 没 tool_calls + 不报错 时也不显 (点空消息无意义).
-            TTS 只在有真正文本时显示 (纯 tool_calls 不需要听). */}
-        {!showCaret && (msg.content || msg.tool_calls?.length || isError) && (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "var(--space-2)",
-              marginTop: "var(--space-2)",
-            }}
-          >
+        {/* 只给真正文本回答显示操作。纯 tool call 不再铺一排赞/踩/存档按钮，
+            避免长任务里每个内部步骤都制造相同视觉噪声。 */}
+        {!showCaret && ((msg.content?.trim().length ?? 0) > 0 || isError) && (
+          <div className="chat-message-actions">
             <FeedbackButtons
               messageId={msg.id}
               preview={msg.content || (msg.tool_calls?.[0]?.name ?? "(空)")}

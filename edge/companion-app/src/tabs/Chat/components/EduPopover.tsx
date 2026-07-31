@@ -34,6 +34,8 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import type { Icon } from "@phosphor-icons/react";
+import { BookOpenText, GraduationCap, Lightbulb, VideoCamera } from "@phosphor-icons/react";
 import { useTeachingStore } from "../../../store/teaching";
 import { useRecModeStore } from "../../../store/recmode";
 import LearnModal from "./LearnModal";
@@ -114,10 +116,15 @@ export default function EduPopover({ isStreaming, onStartLearn }: Props) {
   };
 
   return (
-    <div ref={containerRef} style={{ position: "relative" }}>
+    <div ref={containerRef} className="chat-composer__popover-anchor">
       <button
+        type="button"
         onClick={() => setOpen((v) => !v)}
         disabled={isStreaming}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className="chat-composer__tool-button chat-composer__tool-button--advanced"
+        data-active={anyEduActive || undefined}
         title={
           anyEduActive
             ? teachingOn
@@ -125,29 +132,8 @@ export default function EduPopover({ isStreaming, onStartLearn }: Props) {
               : "📚 教学入口 · 🎬 录制中"
             : "📚 教学入口 — 让鲶鱼学新流程 (🎓 教学模式 / 🎬 录屏演示 / 💡 让 AI 学)"
         }
-        style={{
-          padding: "6px 10px",
-          border:
-            "1px solid " +
-            (anyEduActive
-              ? "var(--catfish-cyan)"
-              : "var(--catfish-border)"),
-          borderRadius: "var(--radius-sm)",
-          background: anyEduActive
-            ? "var(--catfish-cyan-dim)"
-            : "transparent",
-          color: anyEduActive
-            ? "var(--catfish-cyan)"
-            : "var(--catfish-text-muted)",
-          fontSize: 14,
-          fontWeight: anyEduActive ? 600 : 400,
-          cursor: isStreaming ? "default" : "pointer",
-          lineHeight: 1,
-          minHeight: 36,
-          transition: "all 120ms ease",
-        }}
       >
-        📚
+        <BookOpenText size={18} aria-hidden="true" />
       </button>
 
       {open && (
@@ -176,7 +162,7 @@ export default function EduPopover({ isStreaming, onStartLearn }: Props) {
 
           {/* 🎓 教学模式 (toggle) */}
           <EduOption
-            emoji="🎓"
+            icon={GraduationCap}
             label="教学模式"
             hint={
               teachingOn
@@ -189,7 +175,7 @@ export default function EduPopover({ isStreaming, onStartLearn }: Props) {
 
           {/* 🎬 录屏演示 (弹 modal) */}
           <EduOption
-            emoji="🎬"
+            icon={VideoCamera}
             label="录屏演示"
             hint={
               recModeActive
@@ -210,7 +196,7 @@ export default function EduPopover({ isStreaming, onStartLearn }: Props) {
               "workflow they just walked the agent through in this conversation"
               / pasted notes), 所以"回看对话"是真能力不能删, 只是要标清是**事后**. */}
           <EduOption
-            emoji="💡"
+            icon={Lightbulb}
             label="让 AI 学"
             hint={"事后补学 — 给资料 (代码/网页) 或让它回看这段对话"}
             active={false}
@@ -244,7 +230,7 @@ export default function EduPopover({ isStreaming, onStartLearn }: Props) {
 // ─── 内部 sub-component EduOption ────────────────────────────────
 
 interface EduOptionProps {
-  emoji: string;
+  icon: Icon;
   label: string;
   hint: string;
   active: boolean;
@@ -253,7 +239,7 @@ interface EduOptionProps {
 }
 
 function EduOption({
-  emoji,
+  icon: IconComponent,
   label,
   hint,
   active,
@@ -294,7 +280,7 @@ function EduOption({
         }
       }}
     >
-      <span style={{ fontSize: 16, lineHeight: 1.2 }}>{emoji}</span>
+      <IconComponent size={18} style={{ flexShrink: 0, marginTop: 1 }} aria-hidden="true" />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div
           style={{

@@ -17,14 +17,6 @@ function modelLabel(m: CatalogModel): string {
   return base.length > 30 ? `${base.slice(0, 28)}…` : base;
 }
 
-function modelStatusEmoji(m: CatalogModel): string {
-  if (m.source === "codex") return m.selectable === false ? "○" : "✦";
-  if (!m.api_key_configured) return "○";
-  if (m.is_reachable === true) return "●";
-  if (m.is_reachable === false) return "◐";
-  return "○";
-}
-
 export default function ChatModelPicker({ current, onChange }: Props) {
   const { catalog } = useCatalog();
   const models = catalog?.models ?? [];
@@ -36,12 +28,12 @@ export default function ChatModelPicker({ current, onChange }: Props) {
   const options = (items: CatalogModel[]) =>
     items.map((m) => (
       <option key={`${m.source ?? "gateway"}:${m.id}`} value={m.id} disabled={m.selectable === false}>
-        {modelStatusEmoji(m)} {modelLabel(m)}
+        {m.selectable === false ? "不可用 · " : ""}{modelLabel(m)}
       </option>
     ));
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+    <div className="chat-model-picker">
       <select
         value={current}
         disabled={switching}
@@ -63,18 +55,9 @@ export default function ChatModelPicker({ current, onChange }: Props) {
             setSwitching(false);
           }
         }}
-        style={{
-          padding: "4px 8px",
-          fontSize: 12,
-          border: error ? "1px solid var(--status-err)" : "1px solid var(--catfish-border)",
-          borderRadius: "var(--radius-sm)",
-          background: "var(--catfish-bg-elevated)",
-          color: "var(--catfish-text)",
-          fontFamily: "var(--font-mono)",
-          cursor: switching ? "wait" : "pointer",
-          minWidth: 210,
-          opacity: switching ? 0.7 : 1,
-        }}
+        className="chat-model-picker__select"
+        data-error={!!error || undefined}
+        data-switching={switching || undefined}
       >
         {models.length === 0 && <option value={current}>{current}</option>}
         {current && !models.some((model) => model.id === current) && (
@@ -84,7 +67,7 @@ export default function ChatModelPicker({ current, onChange }: Props) {
         {codexModels.length > 0 && <optgroup label="Codex · ChatGPT">{options(codexModels)}</optgroup>}
       </select>
       {error && (
-        <span title={error} style={{ color: "var(--status-err)", fontSize: 10, maxWidth: 260 }}>
+        <span title={error} className="chat-model-picker__error">
           切换失败，请检查 Codex 登录
         </span>
       )}

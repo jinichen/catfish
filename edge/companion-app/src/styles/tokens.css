@@ -16,12 +16,20 @@
   --catfish-orange-soft: #F89866; /* 辅色淡 (hover / 浅徽章) */
 
   /* —— 配色 中性 —— */
-  --catfish-bg: #FAF7F2;          /* 暖米底, 比纯白柔和 */
+  --catfish-bg: #F6F8F8;          /* 冷白工作区，降低旧版米色雾感 */
   --catfish-bg-elevated: #FFFFFF;
-  --catfish-bg-cream: #FAF1E4;    /* 暖米卡片背景 (聊天气泡 / 浅徽章) */
-  --catfish-border: #E7E1D6;      /* 暖灰边框 */
-  --catfish-text: #1A2E33;        /* 主文字 (深青墨, 不用纯黑) */
-  --catfish-text-muted: #6B7775;  /* 弱文字 */
+  --catfish-bg-cream: #EEF4F4;    /* 选中态与轻量强调 */
+  --catfish-border: #DDE5E6;      /* 中性冷灰边框 */
+  --catfish-text: #17272C;        /* 主文字 (深青墨, 不用纯黑) */
+  --catfish-text-muted: #718085;  /* 弱文字 */
+
+  /* —— 工作台左侧主导航 —— */
+  --catfish-rail: #22313E;
+  --catfish-rail-deep: #1B2934;
+  --catfish-rail-text: #D9E3E7;
+  --catfish-rail-muted: #93A4AC;
+  --catfish-rail-active: #126B75;
+  --catfish-rail-hover: rgba(255, 255, 255, 0.07);
 
   /* —— 状态色 (跟 brand 协调, ok=主色青, 不抢镜) —— */
   --status-ok: #1A8A95;           /* 复用主色亮青, 一致感 */
@@ -73,6 +81,11 @@
     --catfish-border: #2E3F44;
     --catfish-text: #E8E4DC;        /* 暖米色文字, 不用纯白 */
     --catfish-text-muted: #8A9692;
+    --catfish-rail: #172128;
+    --catfish-rail-deep: #121B21;
+    --catfish-rail-text: #E3ECEF;
+    --catfish-rail-muted: #8FA1A8;
+    --catfish-rail-active: #197985;
 
     /* P3.4.E.9 (6/15 鸿波): 暗模式 hint 横条 text 提亮 (深蓝→亮蓝, 深棕→亮琥珀),
      * bg/border 透明度调高让暗底对比清楚. 跟 --catfish-cyan 提亮策略一致. */

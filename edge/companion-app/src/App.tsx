@@ -237,31 +237,35 @@ function AppShell({ activeTab }: { activeTab: string }) {
   if (activeTab === "chat" || activeTab === "briefing") {
     return (
       <div className="app-shell">
-        <AuthBanner />
-        <AdvisoryBanner />
-        <HermesReconnectBanner />
-        <DevUserSwitcher />
         <TabBar />
-        <main style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-          {activeTab === "chat" ? <ChatTab /> : <BriefingTab />}
-        </main>
+        <div className="app-workspace">
+          <AuthBanner />
+          <AdvisoryBanner />
+          <HermesReconnectBanner />
+          <DevUserSwitcher />
+          <main className="app-workspace__main app-workspace__main--locked">
+            {activeTab === "chat" ? <ChatTab /> : <BriefingTab />}
+          </main>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="app-shell">
-      <AuthBanner />
-      <HermesReconnectBanner />
-      <DevUserSwitcher />
       <TabBar />
-      <main className="app-main">
-        {/* BL-CONSOLE-TAB-KILL (5/16): {activeTab === "console" && <ConsoleTab />} */}
-        {activeTab === "briefing" && <BriefingTab />}
-        {activeTab === "dashboard" && <DashboardTab />}
-        {activeTab === "email" && <EmailTab />}
-        {activeTab === "wiki" && <WikiTab />}
-      </main>
+      <div className="app-workspace">
+        <AuthBanner />
+        <HermesReconnectBanner />
+        <DevUserSwitcher />
+        <main className="app-main">
+          {/* BL-CONSOLE-TAB-KILL (5/16): {activeTab === "console" && <ConsoleTab />} */}
+          {activeTab === "briefing" && <BriefingTab />}
+          {activeTab === "dashboard" && <DashboardTab />}
+          {activeTab === "email" && <EmailTab />}
+          {activeTab === "wiki" && <WikiTab />}
+        </main>
+      </div>
     </div>
   );
 }

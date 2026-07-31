@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { Target, WarningCircle } from "@phosphor-icons/react";
 import {
   sessionGetByTaskUid,
   sessionSetTaskUid,
@@ -119,41 +120,20 @@ export default function TaskPicker({
   return (
     /* P3.3.22 (6/11): flex-shrink: 0 + nowrap — 防工作台 header 一行挤撞时
        这块自己内部换行 ("🎯 task:" 跟 select 之间撕开). */
-    <div
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 6,
-        fontSize: 12,
-        flexShrink: 0,
-        whiteSpace: "nowrap",
-      }}
-    >
+    <div className="chat-task-picker">
       <span
-        style={{
-          color: "var(--catfish-text-muted)",
-          flexShrink: 0,
-          whiteSpace: "nowrap",
-        }}
+        className="chat-task-picker__label"
         title="进任一早安主菜的 task 上下文 — 跟早安 DetailPane 共享同一 session"
       >
-        🎯 task:
+        <Target size={15} aria-hidden="true" />
+        任务
       </span>
       <select
         value={currentTaskUid ?? ""}
         onChange={(e) => void handleChange(e)}
         disabled={disabled || loading}
-        style={{
-          fontSize: 12,
-          padding: "3px 6px",
-          background: currentTaskUid ? "rgba(74,158,255,0.1)" : "var(--catfish-bg)",
-          color: "var(--catfish-text)",
-          border: "1px solid var(--catfish-border)",
-          borderRadius: 4,
-          cursor: disabled || loading ? "wait" : "pointer",
-          // P3.3.22 (6/11): 240 → 180, 配合 option title 18 字截短让 dropdown 不挤
-          maxWidth: 180,
-        }}
+        className="chat-task-picker__select"
+        data-active={!!currentTaskUid || undefined}
       >
         <option value="">— 普通对话 —</option>
         {tasks.map((t) => {
@@ -168,13 +148,14 @@ export default function TaskPicker({
           );
         })}
       </select>
-      {loading && <span style={{ color: "var(--catfish-text-muted)" }}>切换中…</span>}
+      {loading && <span className="chat-task-picker__status">切换中…</span>}
       {error && (
         <span
-          style={{ color: "#dc2626", fontSize: 11 }}
+          className="chat-task-picker__error"
           title={error}
         >
-          ⚠ 错
+          <WarningCircle size={14} aria-hidden="true" />
+          错误
         </span>
       )}
     </div>

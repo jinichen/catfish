@@ -19,6 +19,19 @@
  */
 
 import { useEffect, useState, useCallback } from "react";
+import {
+  ArrowClockwise,
+  CaretDown,
+  CaretRight,
+  ChatCircleDots,
+  ClockCounterClockwise,
+  HourglassSimpleMedium,
+  MagnifyingGlass,
+  Plus,
+  SpinnerGap,
+  Trash,
+  X,
+} from "@phosphor-icons/react";
 import { listSessions, sessionSoftDelete } from "../../lib/tauri";
 import { groupSessionsByTitle, type SessionGroupEntry } from "../../lib/sessionGroup";
 import * as streamRegistry from "../../lib/streamRegistry";
@@ -62,6 +75,24 @@ function isAutoTriggerSession(s: SessionMeta): boolean {
 }
 
 const SHOW_AUTO_LS_KEY = "catfish:sessions:show_auto_trigger";
+
+type SessionSectionKey = "today" | "week" | "earlier";
+
+const SESSION_SECTIONS: Array<{ key: SessionSectionKey; label: string }> = [
+  { key: "today", label: "今天" },
+  { key: "week", label: "本周" },
+  { key: "earlier", label: "更早" },
+];
+
+function sessionSection(startedAt: string): SessionSectionKey {
+  const timestamp = Date.parse(startedAt);
+  if (!timestamp) return "earlier";
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  if (timestamp >= todayStart) return "today";
+  const weekStart = todayStart - 6 * 86_400_000;
+  return timestamp >= weekStart ? "week" : "earlier";
+}
 
 export default function ChatSidebar({
   activeId,
@@ -169,265 +200,132 @@ export default function ChatSidebar({
     return streamRegistry.subscribeInflight(update);
   }, []);
 
+  const onDeleteHandler = async (id: string) => {
+    try {
+      await sessionSoftDelete(id);
+      setSessions((prev) => prev.filter((x) => x.id !== id));
+      if (id === activeId) {
+        const remaining = sessions.filter((x) => x.id !== id);
+        if (remaining.length > 0) onSelect(remaining[0].id);
+      }
+    } catch (e) {
+      console.error("[session-delete] 失败:", e);
+      alert(`删除失败: ${e}`);
+    }
+  };
+
+  const groupedSections = (() => {
+    const groups = groupSessionsByTitle(searchedSessions);
+    const autoExpanded = new Set<string>();
+    if (activeId) {
+      for (const group of groups) {
+        if (group.sessions.length > 1 && group.sessions.some((s) => s.id === activeId)) {
+          autoExpanded.add(group.key);
+        }
+      }
+    }
+    return SESSION_SECTIONS.map((section) => ({
+      ...section,
+      groups: groups.filter((group) => sessionSection(group.sessions[0].startedAt) === section.key),
+      autoExpanded,
+    })).filter((section) => section.groups.length > 0);
+  })();
+
   return (
-    <aside
-      style={{
-        width: 240,
-        minWidth: 200,
-        maxWidth: 320,
-        height: "100%",
-        display: "flex",
-        flexDirection: "column",
-        borderRight: "1px solid var(--catfish-border)",
-        background: "var(--catfish-bg)",
-      }}
-    >
-      <header
-        style={{
-          padding: "var(--space-3) var(--space-3)",
-          borderBottom: "1px solid var(--catfish-border)",
-          fontSize: 12,
-          fontWeight: 600,
-          color: "var(--catfish-text-muted)",
-          letterSpacing: "0.04em",
-          textTransform: "uppercase",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-        }}
-      >
-        <span
-          title={
-            `共 ${visibleSessions.length} 条会话` +
-            (hiddenAutoCount > 0
-              ? ` · 已隐藏 ${hiddenAutoCount} 条自动触发`
-              : "")
-          }
-        >
-          会话 · {searchQuery.trim() ? `${searchedSessions.length} 匹配` : visibleSessions.length}
-        </span>
-        <span style={{ display: "flex", gap: 4, alignItems: "center" }}>
-          {/* BL-SESSIONS-FILTER-PROACTIVE (5/31): toggle 显隐自动 trigger */}
+    <aside className="chat-sidebar">
+      <header className="chat-sidebar__header">
+        <div className="chat-sidebar__heading">
+          <span className="chat-sidebar__title">对话</span>
+          <span className="chat-sidebar__count">
+            {searchQuery.trim() ? `${searchedSessions.length} 个结果` : `${visibleSessions.length} 个会话`}
+          </span>
+        </div>
+        <div className="chat-sidebar__header-actions">
           {hiddenAutoCount > 0 && (
             <button
+              type="button"
               onClick={toggleShowAuto}
+              className="chat-sidebar__icon-button"
+              data-active={showAuto || undefined}
               title={showAuto ? "隐藏自动触发会话" : `显示 ${hiddenAutoCount} 条自动触发会话`}
-              style={{
-                background: "transparent",
-                border: 0,
-                color: showAuto ? "var(--catfish-cyan)" : "var(--catfish-text-muted)",
-                cursor: "pointer",
-                fontSize: 11,
-                padding: "2px 4px",
-                fontFamily: "var(--font-mono)",
-              }}
+              aria-label={showAuto ? "隐藏自动触发会话" : "显示自动触发会话"}
             >
-              {showAuto ? "−自动" : `+${hiddenAutoCount}自动`}
+              <ClockCounterClockwise size={17} aria-hidden="true" />
+              {!showAuto && <span className="chat-sidebar__icon-badge">{hiddenAutoCount}</span>}
             </button>
           )}
           <button
-            onClick={() => refresh()}
-            title="刷新"
-            style={{
-              background: "transparent",
-              border: 0,
-              color: "var(--catfish-text-muted)",
-              cursor: "pointer",
-              fontSize: 12,
-              padding: 2,
-            }}
+            type="button"
+            onClick={onNew}
+            className="chat-sidebar__new-button"
+            title="开新对话（老对话继续在后台运行）"
           >
-            ↻
+            <Plus size={16} weight="bold" aria-hidden="true" />
+            <span>新对话</span>
           </button>
-        </span>
+        </div>
       </header>
 
-      {/* BL-COMPANION-SESSION-SEARCH (7/24 达华 POC 会话上千 · 需检索): 搜索框 · 输入立即过滤 title + firstUserMessage */}
-      <div
-        style={{
-          padding: "var(--space-2) var(--space-3)",
-          borderBottom: "1px solid var(--catfish-border)",
-          position: "relative",
-        }}
-      >
+      <div className="chat-sidebar__search">
+        <MagnifyingGlass size={16} aria-hidden="true" />
         <input
-          type="text"
+          type="search"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="🔍 搜索会话 · title / 首条消息"
-          style={{
-            width: "100%",
-            padding: "6px 28px 6px 10px",
-            fontSize: 12,
-            border: "1px solid var(--catfish-border)",
-            borderRadius: 4,
-            background: "var(--catfish-bg)",
-            color: "var(--catfish-text)",
-            outline: "none",
-            boxSizing: "border-box",
-            fontFamily: "inherit",
-          }}
-          onFocus={(e) => {
-            e.currentTarget.style.borderColor = "var(--catfish-cyan)";
-          }}
-          onBlur={(e) => {
-            e.currentTarget.style.borderColor = "var(--catfish-border)";
-          }}
+          placeholder="搜索标题或首条消息"
+          aria-label="搜索会话"
         />
         {searchQuery && (
-          <button
-            type="button"
-            onClick={() => setSearchQuery("")}
-            title="清除搜索"
-            style={{
-              position: "absolute",
-              right: "calc(var(--space-3) + 6px)",
-              top: "50%",
-              transform: "translateY(-50%)",
-              background: "transparent",
-              border: 0,
-              color: "var(--catfish-text-muted)",
-              cursor: "pointer",
-              fontSize: 14,
-              padding: 2,
-              lineHeight: 1,
-            }}
-          >
-            ×
+          <button type="button" onClick={() => setSearchQuery("")} title="清除搜索" aria-label="清除搜索">
+            <X size={14} weight="bold" aria-hidden="true" />
           </button>
         )}
       </div>
 
-      <div
-        style={{
-          flex: 1,
-          minHeight: 0,
-          overflowY: "auto",
-          padding: "var(--space-2) 0",
-        }}
-      >
-        {loading && (
-          <div
-            style={{
-              padding: "var(--space-3)",
-              color: "var(--catfish-text-muted)",
-              fontSize: 12,
-            }}
-          >
-            加载中…
-          </div>
-        )}
-        {error && (
-          <div
-            style={{
-              padding: "var(--space-3)",
-              color: "#dc2626",
-              fontSize: 12,
-            }}
-          >
-            读 state.db 失败: {error}
-          </div>
-        )}
+      <div className="chat-sidebar__list">
+        {loading && <div className="chat-sidebar__state">正在载入会话…</div>}
+        {error && <div className="chat-sidebar__state chat-sidebar__state--error">读取会话失败：{error}</div>}
         {!loading && !error && searchedSessions.length === 0 && (
-          <div
-            style={{
-              padding: "var(--space-3)",
-              color: "var(--catfish-text-muted)",
-              fontSize: 12,
-              lineHeight: 1.5,
-            }}
-          >
-            {searchQuery.trim()
-              ? `无匹配 "${searchQuery.trim()}" 的会话`
-              : "还没会话 —— 起个新对话试试。"}
+          <div className="chat-sidebar__empty">
+            <ChatCircleDots size={24} aria-hidden="true" />
+            <strong>{searchQuery.trim() ? "没有匹配会话" : "还没有会话"}</strong>
+            <span>{searchQuery.trim() ? "换个关键词试试" : "从一个新对话开始"}</span>
           </div>
         )}
-        {/* BL-COMPANION-SESSION-DEDUP (5/20 鸿波): 同 title 会话堆叠为一组,
-            点同名 chip 展开 sub-session 列表. session id 不变 — 鸿波点的就是
-            那个 sub. LLM 生成 title 算法对相似 prompt 出同名, 没去堆叠 sidebar
-            一眼看不出哪条是哪条. */}
-        {!loading && !error && searchedSessions.length > 0 && (() => {
-          const groups = groupSessionsByTitle(searchedSessions);
-          // 当 activeId 在某 group 的 sibling 里, 自动展开那组
-          const autoExpanded = new Set<string>();
-          if (activeId) {
-            for (const g of groups) {
-              if (g.sessions.some((s) => s.id === activeId) && g.sessions.length > 1) {
-                autoExpanded.add(g.key);
-              }
-            }
-          }
-          const onDeleteHandler = async (id: string) => {
-            try {
-              await sessionSoftDelete(id);
-              setSessions((prev) => prev.filter((x) => x.id !== id));
-              if (id === activeId) {
-                const remaining = sessions.filter((x) => x.id !== id);
-                if (remaining.length > 0) {
-                  onSelect(remaining[0].id);
-                }
-              }
-            } catch (e) {
-              console.error("[session-delete] 失败:", e);
-              alert(`删除失败: ${e}`);
-            }
-          };
-          return groups.map((g) => (
-            <SessionGroup
-              key={g.key}
-              group={g}
-              activeId={activeId}
-              autoExpanded={autoExpanded.has(g.key)}
-              onSelect={onSelect}
-              onDelete={onDeleteHandler}
-              streaming={busy}
-              inflightIds={inflightIds}
-            />
-          ));
-        })()}
+        {!loading && !error && groupedSections.map((section) => (
+          <section key={section.key} className="chat-session-section">
+            <div className="chat-session-section__label">{section.label}</div>
+            <div className="chat-session-section__rows">
+              {section.groups.map((group) => (
+                <SessionGroup
+                  key={group.key}
+                  group={group}
+                  activeId={activeId}
+                  autoExpanded={section.autoExpanded.has(group.key)}
+                  onSelect={onSelect}
+                  onDelete={onDeleteHandler}
+                  streaming={busy}
+                  inflightIds={inflightIds}
+                />
+              ))}
+            </div>
+          </section>
+        ))}
       </div>
 
-      <footer
-        style={{
-          padding: "var(--space-2)",
-          borderTop: "1px solid var(--catfish-border)",
-          background: "var(--catfish-bg-elevated)",
-          display: "flex",
-          flexDirection: "column",
-          gap: 6,
-        }}
-      >
-        {/* BL-MULTI-SESSION-STREAM (5/24): 替换老的"流式中, 切换会停止当前"
-            提示文案 — 切走不再中断了. 改成"N 个会话进行中", 准确反映同时跑几个流. */}
-        {inflightIds.size > 0 && (
-          <div
-            style={{
-              fontSize: 11,
-              color: "var(--catfish-text-muted)",
-              padding: "2px 6px",
-              textAlign: "center",
-            }}
-            title="后台正在运行的 LLM 流数量. 切走不再中断, 切回看实时状态"
-          >
-            ⏳ {inflightIds.size} 个会话进行中
-          </div>
-        )}
-        <button
-          onClick={() => onNew()}
-          style={{
-            width: "100%",
-            padding: "8px 12px",
-            border: "1px solid var(--catfish-border)",
-            borderRadius: "var(--radius-sm)",
-            background: "var(--catfish-bg)",
-            color: "var(--catfish-text)",
-            cursor: "pointer",
-            fontSize: 13,
-            fontWeight: 500,
-          }}
-          title="开新对话 (老对话继续在后台跑)"
-        >
-          + 新对话
+      <footer className="chat-sidebar__footer">
+        <div className="chat-sidebar__footer-status">
+          {inflightIds.size > 0 ? (
+            <span title="后台正在运行的会话；切走不会中断">
+              <SpinnerGap className="chat-sidebar__spinner" size={15} aria-hidden="true" />
+              {inflightIds.size} 个会话进行中
+            </span>
+          ) : (
+            <span>共 {visibleSessions.length} 个会话</span>
+          )}
+        </div>
+        <button type="button" onClick={() => refresh()} className="chat-sidebar__refresh" title="刷新会话">
+          <ArrowClockwise size={17} aria-hidden="true" />
         </button>
       </footer>
     </aside>
@@ -492,15 +390,11 @@ function SessionGroup({
 
   return (
     <div
-      style={{
-        // 整组用左边竖线连起来视觉成一组. active 时换浅高亮.
-        borderLeft: anyActive
-          ? "3px solid var(--catfish-accent, #2563eb)"
-          : "3px solid transparent",
-      }}
+      className="chat-session-group"
+      data-active={anyActive || undefined}
     >
       {/* 主条 — 复用 SessionRow 但传 onClick = 点主条切到 main session */}
-      <div style={{ position: "relative" }}>
+      <div className="chat-session-group__main">
         <SessionRow
           session={main}
           active={main.id === activeId}
@@ -509,6 +403,7 @@ function SessionGroup({
           onDelete={onDelete}
           streaming={streaming}
           isInflight={inflightIds.has(main.id)}
+          hasGroupControl
         />
         {/* 撞名 chip + 展开按钮覆盖在主条右上角 */}
         <button
@@ -522,31 +417,23 @@ function SessionGroup({
               ? `收起 ${siblings.length} 条同名会话`
               : `展开 ${siblings.length} 条同名会话 (合计 ${totalMessages} 条消息)`
           }
-          style={{
-            position: "absolute",
-            right: 30, // 留位置给 × 按钮 (SessionRow hover 时显)
-            top: 8,
-            fontSize: 10,
-            padding: "1px 6px",
-            border: "1px solid var(--catfish-border)",
-            borderRadius: 8,
-            background: "var(--catfish-bg-elevated)",
-            color: "var(--catfish-text-muted)",
-            cursor: "pointer",
-            fontFamily: "inherit",
-            lineHeight: 1.4,
-            display: "flex",
-            alignItems: "center",
-            gap: 3,
-          }}
+          aria-label={expanded
+            ? `收起 ${siblings.length} 条同名会话`
+            : `展开 ${siblings.length} 条同名会话`}
+          aria-expanded={expanded}
+          className="chat-session-group__toggle"
         >
-          <span style={{ fontSize: 9 }}>{expanded ? "▼" : "▶"}</span>
-          +{siblings.length} 同名
+          <span>+{siblings.length}</span>
+          {expanded ? (
+            <CaretDown size={11} weight="bold" aria-hidden="true" />
+          ) : (
+            <CaretRight size={11} weight="bold" aria-hidden="true" />
+          )}
         </button>
       </div>
       {/* 展开区: sub-sessions */}
       {expanded && siblings.map((s) => (
-        <div key={s.id} style={{ paddingLeft: 14, opacity: 0.92 }}>
+        <div key={s.id} className="chat-session-group__sub">
           <SessionRow
             session={s}
             active={s.id === activeId}
@@ -572,6 +459,7 @@ function SessionRow({
   streaming = false,  // BL-COMPANION-UX2 (5/12): 提示用, 不再禁用
   isSubRow = false,    // BL-COMPANION-SESSION-DEDUP (5/20): 撞名展开里的 sub-session
   isInflight = false,  // BL-MULTI-SESSION-STREAM (5/24): 这条 session 有 stream 在跑
+  hasGroupControl = false,
 }: {
   session: SessionMeta;
   active: boolean;
@@ -582,8 +470,8 @@ function SessionRow({
   streaming?: boolean;
   isSubRow?: boolean;
   isInflight?: boolean;
+  hasGroupControl?: boolean;
 }) {
-  const [hover, setHover] = useState(false);
   // BL-SESSION-MGMT C (5/15): 二次确认状态. 首次点 × → confirming=true (按钮变 "确定?"),
   // 2 秒内再点 → 真删. 超时自动 reset. 替代 confirm() 浏览器原生对话框 (Tauri WebView 不稳).
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -604,9 +492,11 @@ function SessionRow({
       role="button"
       tabIndex={disabled ? -1 : 0}
       onClick={disabled ? undefined : onClick}
-      title={titleHint}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
+      aria-label={titleHint}
+      className="chat-session-row"
+      data-active={active || undefined}
+      data-sub-row={isSubRow || undefined}
+      data-has-group-control={hasGroupControl || undefined}
       onKeyDown={(e) => {
         if (disabled) return;
         if (e.key === "Enter" || e.key === " ") {
@@ -614,69 +504,30 @@ function SessionRow({
           onClick();
         }
       }}
-      style={{
-        position: "relative",
-        // BL-COMPANION-SESSION-DEDUP (5/20): sub-row 比主条 padding 略减 + 字体小
-        padding: isSubRow ? "6px 12px 6px 10px" : "8px 12px 8px 14px",
-        cursor: disabled ? "not-allowed" : "pointer",
-        background: active
-          ? "var(--catfish-bg-elevated)"
-          : "transparent",
-        // sub-row 不画 borderLeft 避免跟父 group 的 borderLeft 撞 (双竖线)
-        borderLeft: isSubRow
-          ? "none"
-          : active
-            ? "3px solid var(--catfish-accent, #2563eb)"
-            : "3px solid transparent",
-        opacity: disabled ? 0.5 : 1,
-        userSelect: "none",
-        fontSize: isSubRow ? 12 : undefined,
-      }}
+      style={{ opacity: disabled ? 0.5 : 1 }}
     >
       <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          fontSize: 13,
-          fontWeight: active ? 600 : 500,
-          color: "var(--catfish-text)",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        }}
+        className="chat-session-row__title-line"
       >
         <SourceBadge source={session.source} />
         {/* BL-MULTI-SESSION-STREAM (5/24): 在跑的会话显 ⏳ 转圈, 让员工知道
             "我已经切走但小鲶还在那边干活". active 也显, 提示当前流不再因切走中断. */}
         {isInflight && (
-          <span
-            title="此会话有 LLM 流正在后台运行 (切走不再中断)"
-            style={{
-              fontSize: 11,
-              flexShrink: 0,
-              opacity: 0.9,
-              animation: "catfish-inflight-pulse 1.4s ease-in-out infinite",
-            }}
-          >
-            ⏳
-          </span>
+          <SpinnerGap
+            className="chat-session-row__spinner"
+            size={13}
+            aria-label="会话正在运行"
+          />
         )}
         {/* BL-LONG-RUNNING-V1-PHASE-E (6/1): 推断"可能仍在 hermes 后台跑"的标识.
             只在 isInflight=false (内存里没看到) 但 db 推断"未 end + 最近活动" 时显.
             灰色 ⌛, 不 pulse — 跟 isInflight ⏳ cyan pulse 区分. 提示员工切回看看. */}
         {!isInflight && session.isPossiblyStreaming && (
-          <span
-            title="此会话可能仍在 hermes 后台跑 (没正式结束 + 最近 5 分钟活动). 点开看看."
-            style={{
-              fontSize: 11,
-              flexShrink: 0,
-              opacity: 0.55,
-              color: "var(--catfish-text-muted)",
-            }}
-          >
-            ⌛
-          </span>
+          <HourglassSimpleMedium
+            className="chat-session-row__possible-stream"
+            size={13}
+            aria-label="会话可能仍在运行"
+          />
         )}
         <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>
           {title}
@@ -687,7 +538,7 @@ function SessionRow({
             2 秒超时自动 reset.
             用 onMouseDown 而不是 onClick: 父 div 的 role=button + tabIndex 在 Tauri WebView
             里偶发吃 click 事件, mouseDown 100% 触发. stopPropagation 防切 session. */}
-        {hover && !disabled && (
+        {!disabled && (
           <button
             type="button"
             onMouseDown={(e) => {
@@ -708,35 +559,21 @@ function SessionRow({
               e.stopPropagation();
               e.preventDefault();
             }}
-            title={confirmingDelete ? "再点一次真删" : "软删 (30 天内可 restore)"}
-            style={{
-              border: 0,
-              background: confirmingDelete
-                ? "var(--catfish-error, #dc2626)"
-                : "rgba(220, 38, 38, 0.12)",
-              color: confirmingDelete ? "white" : "var(--catfish-error, #dc2626)",
-              cursor: "pointer",
-              fontSize: confirmingDelete ? 11 : 16,
-              fontWeight: 600,
-              padding: confirmingDelete ? "3px 8px" : "2px 8px",
-              borderRadius: 4,
-              flexShrink: 0,
-              lineHeight: 1,
-              whiteSpace: "nowrap",
-            }}
+            title={confirmingDelete ? "再点一次确认删除" : "移到已删除会话（30 天内可恢复）"}
+            aria-label={confirmingDelete ? "确认删除会话" : "删除会话"}
+            data-confirming={confirmingDelete || undefined}
+            className="chat-session-row__delete"
           >
-            {confirmingDelete ? "确定?" : "×"}
+            {confirmingDelete ? (
+              "确认"
+            ) : (
+              <Trash size={16} weight="bold" aria-hidden="true" />
+            )}
           </button>
         )}
       </div>
       <div
-        style={{
-          fontSize: 11,
-          color: "var(--catfish-text-muted)",
-          marginTop: 2,
-          display: "flex",
-          gap: 8,
-        }}
+        className="chat-session-row__meta"
       >
         <span>{subtitle}</span>
         <span>·</span>
@@ -747,18 +584,18 @@ function SessionRow({
 }
 
 // 5/7 BL-D14: 多入口区分 (Companion / CLI / 飞书 / 微信 / 企微 / Telegram)
-const SOURCE_BADGE: Record<string, { color: string; label: string; emoji: string }> = {
-  companion: { color: "#2563eb", label: "Companion 桌面", emoji: "🐟" },
-  cli: { color: "#6b7280", label: "终端 CLI", emoji: "⌨" },
-  weixin: { color: "#10b981", label: "微信", emoji: "💬" },
-  feishu: { color: "#7c3aed", label: "飞书", emoji: "🪽" },
-  lark: { color: "#7c3aed", label: "Lark", emoji: "🪽" },
-  wecom: { color: "#f59e0b", label: "企业微信", emoji: "💼" },
-  dingtalk: { color: "#0ea5e9", label: "钉钉", emoji: "📌" },
-  telegram: { color: "#3b82f6", label: "Telegram", emoji: "📱" },
-  discord: { color: "#5865f2", label: "Discord", emoji: "💬" },
-  slack: { color: "#4a154b", label: "Slack", emoji: "💼" },
-  qq: { color: "#1da1f2", label: "QQ", emoji: "🐧" },
+const SOURCE_BADGE: Record<string, { color: string; label: string }> = {
+  companion: { color: "#2b8d95", label: "Companion 桌面" },
+  cli: { color: "#7b858a", label: "终端 CLI" },
+  weixin: { color: "#10b981", label: "微信" },
+  feishu: { color: "#7c3aed", label: "飞书" },
+  lark: { color: "#7c3aed", label: "Lark" },
+  wecom: { color: "#d98a16", label: "企业微信" },
+  dingtalk: { color: "#0ea5e9", label: "钉钉" },
+  telegram: { color: "#3b82f6", label: "Telegram" },
+  discord: { color: "#5865f2", label: "Discord" },
+  slack: { color: "#7a315e", label: "Slack" },
+  qq: { color: "#1da1f2", label: "QQ" },
 };
 
 function SourceBadge({ source }: { source?: string }) {
@@ -766,7 +603,6 @@ function SourceBadge({ source }: { source?: string }) {
   const meta = SOURCE_BADGE[source.toLowerCase()] || {
     color: "var(--catfish-text-muted)",
     label: source,
-    emoji: "❓",
   };
   return (
     <span
