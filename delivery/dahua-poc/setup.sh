@@ -215,6 +215,46 @@ if grep -qE "^JWT_SIGNING_KEY=$" .env; then
     echo "→ JWT_SIGNING_KEY 空 · 已生成随机 (64 字符)"
 fi
 
+# ── CATFISH_SECRET_KEY (8/1) · 供应商 API key 的加密主密钥 ──────────
+#
+# ⚠⚠ 这一项跟 PG_PASSWORD / JWT_SIGNING_KEY 的最大区别: **绝对不能重新生成**。
+#    换掉它 = 所有存在数据库里的供应商 API key 全部解不开, 只能逐个去
+#    dashscope / deepseek / gemini 后台重新申请再重填。所以下面只在"确实
+#    还没有"时生成, 已有值一个字节都不碰。
+#
+# 值的格式 = Fernet key = 32 字节随机的 url-safe base64。用 openssl 而不是
+# python cryptography: 客户服务器上不一定装了那个包 (它在容器里), 而 openssl
+# 装了 docker 的机器上都有。tr 把标准 base64 的 +/ 换成 url-safe 的 -_。
+#
+# 老 .env 里可能压根没有这一行 (8/1 之前的交付包), 所以要区分"没这行"和
+# "有这行但为空", 两种都要补。
+if ! grep -qE "^CATFISH_SECRET_KEY=" .env; then
+    echo "" >> .env
+    echo "CATFISH_SECRET_KEY=" >> .env
+fi
+if grep -qE "^CATFISH_SECRET_KEY=$|^CATFISH_SECRET_KEY= *$" .env; then
+    SECRET_KEY=$(openssl rand -base64 32 2>/dev/null | tr '+/' '-_')
+    if [ -z "$SECRET_KEY" ]; then
+        echo "❌ 生成 CATFISH_SECRET_KEY 失败 · 这台机器上没有 openssl?"
+        echo "   手工生成一个 44 字符的 url-safe base64 填进 .env:"
+        echo "     head -c 32 /dev/urandom | base64 | tr '+/' '-_'"
+        exit 1
+    fi
+    sed -i "s|^CATFISH_SECRET_KEY=.*|CATFISH_SECRET_KEY=$SECRET_KEY|" .env
+    echo ""
+    echo "════════════════════════════════════════════════════════════"
+    echo "→ CATFISH_SECRET_KEY 已生成:"
+    echo "     $SECRET_KEY"
+    echo ""
+    echo "  ★★ 现在就把它存进公司密码管理器 ★★"
+    echo "     它丢了的话, 之后在界面上填的所有供应商 API key 都解不开 ——"
+    echo "     只能逐个去各家后台重新申请。代码兜不住。"
+    echo "════════════════════════════════════════════════════════════"
+    echo ""
+else
+    echo "→ CATFISH_SECRET_KEY 已有值 · 保持不变 (改了会让存库的 API key 全解不开)"
+fi
+
 # ── 若只重生 .env · 到此为止 ───────────────────────────
 if [ "$REGEN_ENV_ONLY" = "1" ]; then
     echo ""
