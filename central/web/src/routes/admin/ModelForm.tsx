@@ -8,7 +8,10 @@
  * re-export 保 import 兼容。
  */
 
+import { useState } from "react";
+
 import { BTN, BTN_PRIMARY } from "../../components/DataTable";
+import { MODEL_PALETTE, matchPalette } from "../../lib/modelPalette";
 import { describeKey, type Provider } from "../../lib/provider_config";
 import {
   chainHopIssue,
@@ -59,6 +62,11 @@ export function ModelForm({
   onSave: () => void;
 }) {
   const selected = (providers ?? []).find((p) => p.id === model.upstream.provider) ?? null;
+
+  // 当前颜色落在调色板的哪一项。匹配不上 = 客户用的是自己的品牌色,
+  // 表单显示「自定义」并把原值原样保留, 不冲掉。
+  const matched = matchPalette(model.color);
+  const [custom, setCustom] = useState(!!model.color && !matched);
   const set = (patch: Partial<ModelConfig>) => onChange({ ...model, ...patch });
   const setUp = (patch: Partial<ModelConfig["upstream"]>) =>
     onChange({ ...model, upstream: { ...model.upstream, ...patch } });
@@ -360,21 +368,61 @@ export function ModelForm({
               placeholder="0.0015"
             />
           </Field>
-          <Field label="图表颜色" hint="审计页图表里区分模型用。留空给默认灰。">
-            <input
-              style={MONO}
-              value={model.color ?? ""}
-              onChange={(e) => set({ color: e.target.value || null })}
-              placeholder="#7c3aed"
-            />
-          </Field>
-          <Field label="列表圆点" hint="一眼分辨来源。留空用 ⚪。">
-            <input
+          {/* 8/1: 「图表颜色」和「列表圆点」原来是两个自由文本框, 各填各的。
+              它们其实是**同一个模型在两个视图里的样子** —— 颜色用在审计页
+              图表, 圆点用在模型列表和聊天页选择器。配不一致的话同一个模型
+              在图表里是紫的、在列表里是绿的, 而这两处不会同时出现在一屏,
+              所以没人会立刻发现。
+              合成一个选择: 选一个配色, 两个值一起定。不一致在结构上就不可能。
+              见 lib/modelPalette.ts。 */}
+          <Field
+            label="配色"
+            hint={
+              custom
+                ? "自定义 —— 图表用左边的颜色, 列表用右边的圆点。两者不一致的话, 同一个模型在图表和列表里看起来会是两种颜色。"
+                : "审计页图表和模型列表都用它。留空则图表给默认灰、列表给 ⚪。"
+            }
+          >
+            <select
               style={INPUT}
-              value={model.dot_emoji ?? ""}
-              onChange={(e) => set({ dot_emoji: e.target.value || null })}
-              placeholder="🟣"
-            />
+              value={custom ? "__custom__" : (matched?.color ?? "")}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === "__custom__") {
+                  setCustom(true);
+                  return;
+                }
+                setCustom(false);
+                const hit = MODEL_PALETTE.find((x) => x.color === v);
+                set({ color: hit?.color ?? null, dot_emoji: hit?.dot ?? null });
+              }}
+            >
+              <option value="">（不指定）</option>
+              {MODEL_PALETTE.map((x) => (
+                <option key={x.color} value={x.color}>
+                  {x.dot} {x.label}
+                </option>
+              ))}
+              <option value="__custom__">自定义…</option>
+            </select>
+
+            {custom ? (
+              <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                <input
+                  style={{ ...MONO, flex: 1 }}
+                  value={model.color ?? ""}
+                  onChange={(e) => set({ color: e.target.value || null })}
+                  placeholder="#7c3aed"
+                />
+                <input
+                  style={{ ...INPUT, width: 64, textAlign: "center" }}
+                  value={model.dot_emoji ?? ""}
+                  onChange={(e) => set({ dot_emoji: e.target.value || null })}
+                  placeholder="🟣"
+                  maxLength={4}
+                />
+              </div>
+            ) : null}
           </Field>
         </div>
 

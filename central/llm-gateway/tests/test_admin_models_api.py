@@ -710,3 +710,33 @@ def test_老形态不受供应商校验影响(client, with_providers):
     c, store, *_ = client
     assert c.put("/api/admin/models/m1", json=_model("m1")).status_code == 200
     assert "m1" in store
+
+
+# ── 图表颜色 / 列表圆点 (8/1) ───────────────────────────────────────
+#
+# 填错颜色的后果是**静默的**: 图表拿到非法颜色会退回浏览器默认 (通常是黑),
+# 于是这个模型在审计图表里跟别的黑色模型混在一起, 没有任何报错 ——
+# 管理员只会觉得"图表怎么看不出哪条是哪个模型"。
+
+
+@pytest.mark.parametrize("bad", ["紫色", "#7c3ae", "rgb(1,2,3)", "7c3aed", "#GGGGGG"])
+def test_非法的图表颜色要拒绝(client, bad):
+    c, store, *_ = client
+    r = c.put("/api/admin/models/m1", json=_model("m1", color=bad))
+    assert r.status_code == 400
+    assert "图表" in r.json()["detail"]
+    assert "m1" not in store
+
+
+@pytest.mark.parametrize("good", ["#7c3aed", "#FFFFFF", None])
+def test_合法颜色放行(client, good):
+    c, store, *_ = client
+    assert c.put("/api/admin/models/m1", json=_model("m1", color=good)).status_code == 200
+
+
+def test_圆点只能一个符号(client):
+    c, store, *_ = client
+    assert c.put("/api/admin/models/m1", json=_model("m1", dot_emoji="🟣")).status_code == 200
+    r = c.put("/api/admin/models/m2", json=_model("m2", dot_emoji="🟣🟣🟣"))
+    assert r.status_code == 400
+    assert "m2" not in store

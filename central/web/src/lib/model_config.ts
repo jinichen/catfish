@@ -1,3 +1,5 @@
+import { isHexColor } from "./modelPalette";
+
 /** 模型配置管理 (7/30) — /api/admin/models/* 的前端调用.
  *
  * 跟已有的两处模型相关接口区分清楚, 三者不是一回事:
@@ -208,6 +210,14 @@ export function validateModel(m: ModelConfig): string[] {
     errs.push("单次输出上限要是正数");
   if (m.price_per_1k_tokens != null && m.price_per_1k_tokens < 0)
     errs.push("单价不能是负数");
+  // 填错颜色的后果是**静默的**: 图表拿到非法颜色会退回浏览器默认 (通常是黑),
+  // 于是这个模型在图表里跟别的黑色模型混在一起, 而没有任何报错。
+  if (m.color && !isHexColor(m.color))
+    errs.push(`图表颜色要是 #RRGGBB 形式（现在是 ${m.color}）—— 填错的话图表里认不出这个模型`);
+  // 圆点是单个 emoji。emoji 可能由多个码点组成 (肤色/ZWJ), 所以按码点数判
+  // 而不是 .length —— "🟣".length 是 2。
+  if (m.dot_emoji && [...m.dot_emoji].length > 2)
+    errs.push("列表圆点只能填一个符号");
   if (
     m.context_window != null &&
     m.max_output_tokens != null &&

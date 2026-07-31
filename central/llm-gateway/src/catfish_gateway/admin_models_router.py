@@ -125,6 +125,33 @@ def register_model_admin_routes(app: FastAPI) -> None:
         )
 
 
+    def _check_display_fields(m: ModelConfig) -> None:
+        """图表颜色 / 列表圆点的格式. 8/1.
+
+        填错的后果是**静默的**: 图表拿到非法颜色会退回浏览器默认 (通常是黑),
+        于是这个模型在审计图表里跟别的黑色模型混在一起, 而没有任何报错 ——
+        管理员只会觉得"图表怎么看不出哪条是哪个模型"。
+
+        前端也校验了 (即时反馈), 但那道能被绕过 (直接 PUT)。
+        """
+        c = (m.color or "").strip()
+        if c and not re.fullmatch(r"#[0-9a-fA-F]{6}", c):
+            raise HTTPException(
+                400,
+                detail=(
+                    f"图表颜色要是 #RRGGBB 形式, 现在填的是 {c!r}。\n"
+                    "填错的话审计页图表里认不出这个模型 —— 非法颜色会退回浏览器"
+                    "默认色, 跟别的模型混在一起, 而且不报错。"
+                ),
+            )
+        # emoji 可能由多个码点组成 (肤色修饰 / ZWJ 连字), 所以按码点数判。
+        d = (m.dot_emoji or "").strip()
+        if d and len(d) > 2:
+            raise HTTPException(
+                400, detail=f"列表圆点只能填一个符号, 现在填的是 {d!r}"
+            )
+
+
     def _check_provider_ref(m: ModelConfig) -> None:
         """引用的供应商必须存在. 8/1.
 
@@ -314,6 +341,7 @@ def register_model_admin_routes(app: FastAPI) -> None:
         # 保密那条必须在这里拦 —— test_fallback_500_policy 只看 models.yaml,
         # 库里的模型不在它视野内。
         _check_api_key_env(validated)
+        _check_display_fields(validated)
         _check_provider_ref(validated)
         _check_fallback_500_policy(validated)
 
