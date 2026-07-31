@@ -87,9 +87,9 @@ function ratingP95(p95: number | null): "good" | "warn" | "bad" {
 
 function colorOfRating(r: "good" | "warn" | "bad"): string {
   return r === "good"
-    ? "var(--status-ok, #15803d)"
+    ? "var(--status-ok)"
     : r === "warn"
-      ? "var(--status-warn, #b45309)"
+      ? "var(--status-warn)"
       : "var(--status-err)";
 }
 
@@ -316,9 +316,9 @@ export function PerfPage() {
               value={fmtPct(successRate)}
               color={
                 successRate >= 0.99
-                  ? "var(--status-ok, #15803d)"
+                  ? "var(--status-ok)"
                   : successRate >= 0.9
-                    ? "var(--status-warn, #b45309)"
+                    ? "var(--status-warn)"
                     : "var(--status-err)"
               }
             />

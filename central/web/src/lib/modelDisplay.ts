@@ -159,6 +159,30 @@ export function getModelDisplay(catalogId: string): ModelDisplay {
   };
 }
 
+/** 把 display_name 拆成「模型名」和「说明」两截.
+ *
+ * models.yaml 里 6 个模型的 display_name 全是同一个约定 `模型名 · 说明`:
+ *
+ *   "qwen_v3_5_122b_a10b· 主力"
+ *   "Qwen3-VL 30B (A3B MoE) · 多模态"
+ *   "Deepseek-v4-flash · Deepseek V4 flash（公共付费）"
+ *   "Gemini 3.1 Pro Preview · 长上下文（公共付费）"
+ *
+ * 整串塞进表格单元格会换 2-3 行, 一行的高度跟着变 3 倍, 表格节奏全乱。
+ * 表里只显示前半截, 后半截进 title。
+ *
+ * 注意第一个例子 `a10b· 主力` —— 分隔符前面没有空格。所以按 "·" 切而不是
+ * 按 " · " 切, 再各自 trim。
+ */
+export function splitDisplayName(friendly: string): { name: string; note: string } {
+  const i = friendly.indexOf("·");
+  if (i < 0) return { name: friendly.trim(), note: "" };
+  return {
+    name: friendly.slice(0, i).trim(),
+    note: friendly.slice(i + 1).trim(),
+  };
+}
+
 /** 这个 catalog ID 有没有真的显示信息 (运行时配置 或 硬编码表里有).
  *
  * 没有的话 getModelDisplay 会返 _FALLBACK, friendly 是固定字符串"未知模型" ——

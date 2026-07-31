@@ -21,7 +21,12 @@
         --text: #1f1f1f;
         --text-muted: #6b6b66;
         --accent: #2d8a87;
-        --status-ok: #2d8a87;
+        /* 7/30: 原来 --status-ok 跟 --accent 是同一个色值 #2d8a87 ——
+           于是"服务正常""已订阅""已采纳"这些成功态, 跟满屏的链接和主按钮
+           同色, 根本区分不出来是状态还是可点的东西。
+           换成真正的绿, 明度/饱和度跟 --status-warn #c97e1c、
+           --status-err #c43f3f 对齐, 三个状态色是一套。 */
+        --status-ok: #4e8a3f;
         --status-warn: #c97e1c;
         --status-err: #c43f3f;
         --radius-sm: 4px;

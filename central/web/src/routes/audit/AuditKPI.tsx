@@ -19,7 +19,7 @@ function AnomalyBanner({ audit: _audit }: { audit: GlobalAudit }) {
     <Card title="⚠️ 异常告警">
       <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13 }}>
         {anomalies.map((a, i) => (
-          <li key={i} style={{ color: "var(--status-warn, #b45309)" }}>
+          <li key={i} style={{ color: "var(--status-warn)" }}>
             {a.text}
           </li>
         ))}
@@ -157,7 +157,7 @@ function Trend({
         title={hint}
         style={{
           fontSize: 11,
-          color: "var(--status-warn, #b45309)",
+          color: "var(--status-warn)",
           fontVariantNumeric: "tabular-nums",
         }}
       >

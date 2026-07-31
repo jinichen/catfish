@@ -54,7 +54,7 @@ const BTN: React.CSSProperties = {
 };
 const BTN_PRIMARY: React.CSSProperties = {
   ...BTN,
-  background: "var(--accent, #0d9488)",
+  background: "var(--accent)",
   borderColor: "transparent",
   color: "#fff",
 };
@@ -214,7 +214,7 @@ function ModelConfigEditor() {
       ) : null}
 
       {notice ? (
-        <div style={{ ...BOX, fontSize: 12, borderColor: "var(--accent, #0d9488)" }}>
+        <div style={{ ...BOX, fontSize: 12, borderColor: "var(--accent)" }}>
           {notice}
           <button
             style={{ ...BTN, marginLeft: 8, padding: "1px 6px" }}
@@ -266,7 +266,7 @@ function ModelConfigEditor() {
                     fontSize: 10,
                     padding: "1px 5px",
                     borderRadius: 3,
-                    background: "var(--accent, #0d9488)",
+                    background: "var(--accent)",
                     color: "#fff",
                   }}
                 >
@@ -351,7 +351,7 @@ function ModelForm({
   const num = (v: string) => (v.trim() === "" ? null : Number(v));
 
   return (
-    <div style={{ ...BOX, borderColor: "var(--accent, #0d9488)" }}>
+    <div style={{ ...BOX, borderColor: "var(--accent)" }}>
       <div style={{ display: "flex", alignItems: "center", marginBottom: 8 }}>
         <b style={{ fontSize: 13 }}>{isNew ? "新增模型" : `编辑 ${model.name}`}</b>
         <div style={{ flex: 1 }} />

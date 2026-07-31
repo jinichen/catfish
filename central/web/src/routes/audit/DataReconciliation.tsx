@@ -33,7 +33,7 @@ function DataReconciliation({ audit }: { audit: GlobalAudit }) {
             <li
               key={r.label}
               style={{
-                color: r.ok ? "inherit" : "var(--status-warn, #b45309)",
+                color: r.ok ? "inherit" : "var(--status-warn)",
               }}
             >
               {r.label} = <strong>{r.sum.toLocaleString()}</strong>{" "}

@@ -47,14 +47,23 @@ const TH: CSSProperties = {
   fontSize: 11,
   fontWeight: 600,
   color: "var(--text-muted)",
-  textTransform: "uppercase",
-  letterSpacing: 0.3,
+  // 不用 text-transform: uppercase —— 表头是中英混排, 大写只作用于拉丁字母,
+  // 结果是「部门 请求 TOKENS 占比」里只有一个词在吼。
+  letterSpacing: 0.2,
   whiteSpace: "nowrap",
 };
 const TD: CSSProperties = {
   padding: "4px 8px",
   borderBottom: "1px solid var(--border-soft)",
   verticalAlign: "top",
+};
+/** 数字列。tabular-nums 让 0-9 等宽, 一列数字的个/十/百位才对得齐。
+ *  PerfPage 原来的 tdRightStyle 有这条, 抽组件时漏了 —— 是个退化。 */
+const TD_NUM: CSSProperties = {
+  ...TD,
+  textAlign: "right",
+  fontVariantNumeric: "tabular-nums",
+  whiteSpace: "nowrap",
 };
 
 export interface Column<T> {
@@ -68,6 +77,12 @@ export interface Column<T> {
   width?: number | string;
   /** 不换行. 时间戳 / ID 这类断行反而更难读的内容用 */
   nowrap?: boolean;
+  /** 超长省略号截断 (默认 220px, 可用 width 调).
+   *
+   * 密集表格里最伤的是"一格换 3 行, 整行跟着变 3 倍高" —— 行高节奏一乱,
+   * 表格就退化成了列表。模型显示名这类不定长内容必须截, 完整值放 title。
+   * 用的时候记得给单元格加 title, 不然截掉的部分就真没了。 */
+  truncate?: boolean;
 }
 
 export function DataTable<T>({
@@ -155,9 +170,15 @@ export function DataTable<T>({
                 <td
                   key={ci}
                   style={{
-                    ...TD,
-                    textAlign: c.align === "right" ? "right" : "left",
-                    whiteSpace: c.nowrap ? "nowrap" : undefined,
+                    ...(c.align === "right" ? TD_NUM : TD),
+                    whiteSpace: c.nowrap || c.truncate ? "nowrap" : undefined,
+                    ...(c.truncate
+                      ? {
+                          maxWidth: c.width ?? 220,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                        }
+                      : null),
                   }}
                 >
                   {c.cell(r, ri)}

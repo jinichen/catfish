@@ -121,7 +121,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
                     padding: "5px 8px",
                     borderRadius: 6,
                     textDecoration: "none",
-                    color: isActive ? "var(--accent, #0d9488)" : "var(--text)",
+                    color: isActive ? "var(--accent)" : "var(--text)",
                     background: isActive ? "var(--bg-elev)" : "transparent",
                     fontWeight: isActive ? 600 : 400,
                   }}

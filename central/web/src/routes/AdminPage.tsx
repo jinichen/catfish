@@ -16,7 +16,15 @@ import {
   Section,
   Toolbar,
 } from "../components/DataTable";
-import { getModelDisplay, isKnownModel } from "../lib/modelDisplay";
+import {
+  costRMB,
+  fmtRMB,
+  getModelDisplay,
+  isCostEstimated,
+  isKnownModel,
+  splitDisplayName,
+  totalCostRMB,
+} from "../lib/modelDisplay";
 import { RoleGate, roleAllows } from "../components/RoleGate";
 import { useAuthStore } from "../store/auth";
 import {
@@ -252,29 +260,41 @@ function Delta({
   );
 }
 
-/** 后端 by_model / by_department 都是 `ORDER BY tokens DESC LIMIT 20`。
+/** 后端 by_model / by_department 是 `ORDER BY tokens DESC LIMIT 20`, by_user 是 LIMIT 50。
  *
  * 直接写 `部门用量 (20)` 会被读成"一共 20 个部门", 而实际可能有 35 个 ——
  * 下面那列占比也就永远加不到 100%。刚好 20 时标成 top, 少于 20 才是全部。 */
 const BREAKDOWN_LIMIT = 20;
-function topLabel(name: string, n: number): string {
-  return n >= BREAKDOWN_LIMIT ? `${name} (top ${n})` : `${name} (${n})`;
+function topLabel(name: string, n: number, limit = BREAKDOWN_LIMIT): string {
+  return n >= limit ? `${name} (top ${n})` : `${name} (${n})`;
 }
 
 function AdminHomeBody({ a }: { a: GlobalAudit }) {
   // 分母用 a.total_tokens 而不是各行之和 —— 两者同一个 SQL 事务、同一套 WHERE,
   // 口径一致。差别只在上面那个 LIMIT 20: 超过 20 个时占比之和会不足 100%,
   // 这正是标题里 "top" 想说明的事。
-  const pct = (n: number) => (a.total_tokens ? `${((n / a.total_tokens) * 100).toFixed(0)}%` : "-");
+  const pct = (n: number) => {
+    if (!a.total_tokens) return "-";
+    const p = (n / a.total_tokens) * 100;
+    // 非零但不足 1% 的显示 "<1%" 而不是 "0%" —— 旁边明明挂着 8.0K tokens,
+    // 却写 0%, 看起来像算错了。
+    if (p > 0 && p < 1) return "<1%";
+    return `${p.toFixed(0)}%`;
+  };
 
   return (
     <>
       <Section>
+        {/* 横向指标带, 靠左排, 之间用竖线分隔。
+            原来是 `repeat(auto-fit, minmax(120px,1fr))` —— 4 个指标在 1400px
+            宽屏上被平均拉开成每格 350px, 数字贴在各自格子左边缘,
+            中间三大片空白, 看起来像没做完。 */}
         <div
           style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
-            gap: 8,
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "stretch",
+            gap: 0,
           }}
         >
           <Stat label="总请求" value={a.request_count.toLocaleString()}
@@ -285,6 +305,18 @@ function AdminHomeBody({ a }: { a: GlobalAudit }) {
                 delta={<Delta now={a.active_users} prev={a.previous_active_users} upIsGood />} />
           <Stat label="活跃部门" value={a.active_departments}
                 delta={<Delta now={a.active_departments} prev={a.previous_active_departments} upIsGood />} />
+          {/* 成本 —— 管理员真正被问到的那个数, 而它一直没在概览上出现过。
+              单价 7/30 起可以在「模型」页逐个填 (price_per_1k_tokens);
+              没填的模型走兜底价, 所以下面标"含估算"。 */}
+          <Stat
+            label="成本"
+            value={fmtRMB(totalCostRMB(a.by_model))}
+            hint={
+              a.by_model.some((m) => isCostEstimated(m.model))
+                ? "含估算 · 到「模型」页填单价"
+                : undefined
+            }
+          />
         </div>
         {/* gateway 自身的循环消耗 (总结 / 主动提醒 / 注入等), 不算员工业务。
             原来这个数只在审计页有一整张 Card, 首页完全不提 —— 于是"我们自己
@@ -298,13 +330,13 @@ function AdminHomeBody({ a }: { a: GlobalAudit }) {
       </Section>
 
       {/* 三张表并排。原来是竖排, 部门表看完要滚才看得到模型表。
-          这三张都只有 3-4 个窄列, 1064px 里各占约 340px 绰绰有余。 */}
+          等高对齐 (不写 alignItems:start) —— 行数不一样时底边参差看着最乱,
+          而这三张表的行数本来就不会一致。 */}
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
+          gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
           gap: 8,
-          alignItems: "start",
         }}
       >
         <Section title={topLabel("部门用量", a.by_department.length)}>
@@ -313,7 +345,7 @@ function AdminHomeBody({ a }: { a: GlobalAudit }) {
             rowKey={(d) => d.department}
             empty="窗口内没有部门产生调用"
             columns={[
-              { header: "部门", cell: (d) => d.department },
+              { header: "部门", truncate: true, cell: (d) => <span title={d.department}>{d.department}</span> },
               { header: "请求", align: "right", cell: (d) => d.count.toLocaleString() },
               { header: "tokens", align: "right", cell: (d) => fmtTokens(d.total_tokens) },
               {
@@ -335,24 +367,46 @@ function AdminHomeBody({ a }: { a: GlobalAudit }) {
             columns={[
               {
                 header: "模型",
-                // 显示名走 modelDisplay —— 客户在 /admin/models 改了显示名,
-                // 这里应该立刻跟着变, 而不是把 catalog ID 摆给老板看。
+                truncate: true,
+                width: 150,
+                // 显示名走 modelDisplay —— 客户在「模型」页改了显示名, 这里
+                // 立刻跟着变, 而不是把 catalog ID 摆给老板看。
+                //
+                // 只取 "·" 前面那半截: models.yaml 里 display_name 的约定是
+                // `模型名 · 说明（档位）`, 整串塞进单元格会换 2-3 行,
+                // 一行高度变 3 倍, 表格节奏全乱。完整值在 title 里。
                 cell: (m) => {
-                  // 认不出来就显示原始 ID —— getModelDisplay 的兜底 friendly 是
-                  // 固定的"未知模型", 几个自建模型会全塌成同一行文字。
+                  // 认不出来就显示原始 ID —— 兜底 friendly 是固定的"未知模型",
+                  // 几个自建模型会全塌成同一行文字。
                   if (!isKnownModel(m.model)) {
                     return <code style={{ fontSize: 11 }}>{m.model || "(未知)"}</code>;
                   }
                   const d = getModelDisplay(m.model);
+                  const { name, note } = splitDisplayName(d.friendly);
                   return (
-                    <span title={m.model}>
-                      {d.dotEmoji} {d.friendly}
+                    <span title={`${d.friendly}\n${m.model}`}>
+                      {d.dotEmoji} {name}
+                      {note ? (
+                        <span style={{ color: "var(--text-muted)" }}> · {note}</span>
+                      ) : null}
                     </span>
                   );
                 },
               },
               { header: "请求", align: "right", cell: (m) => m.count.toLocaleString() },
               { header: "tokens", align: "right", cell: (m) => fmtTokens(m.total_tokens) },
+              {
+                header: "成本",
+                align: "right",
+                cell: (m) => (
+                  <span
+                    style={{ color: isCostEstimated(m.model) ? "var(--text-muted)" : undefined }}
+                    title={isCostEstimated(m.model) ? "没配单价, 按兜底价估的" : undefined}
+                  >
+                    {fmtRMB(costRMB(m.model, m.total_tokens))}
+                  </span>
+                ),
+              },
               {
                 header: "占比",
                 align: "right",
@@ -366,17 +420,32 @@ function AdminHomeBody({ a }: { a: GlobalAudit }) {
 
         {/* by_user 后端一直在返 (top 50), 首页从来没显示过。
             "谁用得最多"是管理员最常问的问题之一, 数据本来就在手上。 */}
-        <Section title={`员工用量 top ${Math.min(a.by_user.length, 10)}`}>
+        <Section title={topLabel("员工用量", a.by_user.length, 50)}>
           <DataTable
             rows={a.by_user.slice(0, 10)}
             rowKey={(u) => `${u.user_email}|${u.department}`}
             empty="窗口内没有员工产生调用"
+            footer={
+              a.by_user.length > 10 ? `另有 ${a.by_user.length - 10} 人未显示` : undefined
+            }
             columns={[
               {
                 header: "员工",
+                truncate: true,
+                width: 140,
+                cell: (u) => <span title={u.user_email}>{u.user_email}</span>,
+              },
+              {
+                // 后端是 GROUP BY (员工, 部门), 所以同一个人在两个部门会出两行。
+                // 不显示部门的话看起来就是"同一个邮箱重复了两次", 像 bug。
+                // 这也解释了为什么"活跃员工"数 (COUNT DISTINCT email) 可能
+                // 小于这张表的行数。
+                header: "部门",
+                truncate: true,
+                width: 90,
                 cell: (u) => (
-                  <span title={`${u.user_email} · ${u.department || "(未分组)"}`}>
-                    {u.user_email}
+                  <span style={{ color: "var(--text-muted)" }} title={u.department}>
+                    {u.department || "(未分组)"}
                   </span>
                 ),
               },
@@ -394,13 +463,23 @@ function Stat({
   label,
   value,
   delta,
+  hint,
 }: {
   label: string;
   value: string | number;
   delta?: ReactNode;
+  hint?: string;
 }) {
   return (
-    <div>
+    <div
+      style={{
+        // 竖线分隔而不是靠间距 —— 靠间距的话在宽屏上要么挤在一起
+        // 要么散开, 分隔线让每个指标的边界固定。
+        padding: "0 20px",
+        borderRight: "1px solid var(--border-soft)",
+        minWidth: 96,
+      }}
+    >
       <div
         style={{
           fontSize: 11,
@@ -411,9 +490,14 @@ function Stat({
         {label}
       </div>
       <div style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
-        <span style={{ fontSize: 20, fontWeight: 600 }}>{value}</span>
+        <span style={{ fontSize: 20, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
+          {value}
+        </span>
         {delta}
       </div>
+      {hint ? (
+        <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 1 }}>{hint}</div>
+      ) : null}
     </div>
   );
 }

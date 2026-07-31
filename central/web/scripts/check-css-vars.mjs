@@ -30,7 +30,10 @@ const WEB = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 // 变量定义在 index.html 的 :root 里 (这个项目没有单独的 css 文件)
 const html = readFileSync(resolve(WEB, "index.html"), "utf8");
-const defined = new Set([...html.matchAll(/^\s*(--[a-zA-Z0-9-]+)\s*:/gm)].map((m) => m[1]));
+const defRaw = new Map(
+  [...html.matchAll(/^\s*(--[a-zA-Z0-9-]+)\s*:\s*([^;]+);/gm)].map((m) => [m[1], m[2].trim()]),
+);
+const defined = new Set(defRaw.keys());
 if (defined.size === 0) {
   console.error("✗ index.html 里一个 CSS 变量都没解析到 — 正则跟文件结构脱节了");
   process.exit(1);
@@ -64,9 +67,36 @@ for (const f of sourceFiles(resolve(WEB, "src"))) {
   }
 }
 
-if (missing.size === 0) {
+// ── 已定义变量上挂着的"死兜底" ──────────────────────────────────────────
+//
+// `var(--accent, #0d9488)` —— --accent 是定义了的, 所以 #0d9488 永远不会生效。
+// 它不是 bug, 但有害: 读代码的人会以为那就是 accent 的颜色 (实际是 #2d8a87,
+// 完全不同的青色), 而且哪天变量真被改名, 这行会**静默切到一个错的颜色**
+// 而不是显眼地坏掉。
+const deadFallback = new Map();
+for (const f of sourceFiles(resolve(WEB, "src"))) {
+  const src = readFileSync(f, "utf8");
+  for (const m of src.matchAll(/var\(\s*(--[a-zA-Z0-9-]+)\s*,/g)) {
+    if (!defined.has(m[1])) continue; // 未定义的上面已经报过
+    const byFile = deadFallback.get(m[1]) ?? new Map();
+    byFile.set(f, (byFile.get(f) ?? 0) + 1);
+    deadFallback.set(m[1], byFile);
+  }
+}
+
+if (missing.size === 0 && deadFallback.size === 0) {
   console.log(`✓ CSS 变量自查通过 (index.html 定义 ${defined.size} 个, 引用全部命中)`);
   process.exit(0);
+}
+
+if (missing.size === 0) {
+  console.error(`✗ 有 ${deadFallback.size} 个变量挂着永远不会生效的兜底值:\n`);
+  for (const [name, byFile] of [...deadFallback].sort()) {
+    console.error(`  var(${name}, …) —— ${name} 已定义为 ${defRaw.get(name)}, 兜底是死的`);
+    for (const [f, n] of byFile) console.error(`      ${f.slice(WEB.length + 1)}  ×${n}`);
+  }
+  console.error(`\n修法: 删掉逗号后面那截, 直接写 var(${[...deadFallback][0][0]})。`);
+  process.exit(1);
 }
 
 console.error(`✗ 有 ${missing.size} 个 CSS 变量被引用但从没定义过:\n`);
