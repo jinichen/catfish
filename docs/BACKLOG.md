@@ -793,6 +793,7 @@ M  ★ 5/10 架构反思     3 项   (2 ⬜ + 1 ❄️)         · 5/15 起做 (
 
 | ID | 项 | 状态 | 估时 | 依赖 |
 |---|---|---|---|---|
+| BL-CENTRAL-BILLING | **成本月报** — 按月统计 token 用量 / 请求次数 / 模型分布; 按部门 / 项目分摊成本; 导出 PDF / Excel; 同期对比 (本月 vs 上月)。7/30 从 /admin/billing 挪来 —— 那一页当时把这份设计清单直接渲染给客户看, 已从侧栏摘掉 (见 central/web/src/routes/admin/navConfig.ts) | 未排期 | - | 数据源已具备: gateway_audit + 模型单价 (7/30 起模型配置里可填 price_per_1k_tokens) |
 | BL-ARCH1 | **catfish-web 中央门户 (新项目)** — Skills Hub 全广场 + publish UI / MCP 市场 + IT 配 OAuth credentials / Manager 视图 (本部门 quota/audit/team) / Admin 后台 (用户/部门/全公司 audit/billing/dev_users 编辑/identity users.yaml 编辑) / 历史 audit 大查询 | ✅ 5/10 | 3 周 → 1 天 | P0+P1 一夜 ship |
 | BL-ARCH1 P1 | **完整用户管理 + sysadmin 超级管理员** — identity-server `users` 加 8 字段 (locked / deleted_at / created_by / last_login_at / must_change_password 等) + `users_audit` 表 + 9 个 admin endpoints (CRUD / 锁 / 重置密码 / 审计) + RBAC (sysadmin > admin > manager > employee) + gateway `/api/admin/*` 反代 + catfish-web `/admin/users` & `/admin/system` 两套页面. 防自锁 / 软删除 / bcrypt 12. | ✅ 5/10 | 1 天 | BL-ARCH1 |
 | BL-ARCH2 | **Companion 瘦身** (BL-ARCH1 配套) — 砍 7 张管理类卡 (DepartmentQuota / DepartmentAudit / Audit / SkillAudit / SkillsHub 浏览 / McpRegistry 浏览 / AdminGlobal), 留 14 张 "我的" 视角卡 (Identity / AgentPrefs / Quota / Catalog / SkillsMcp(我装的) / Curator / Services / Proactive / Tasks / Relation / Memory / UserProfile / StyleFingerprint / Feedback / Learning / SkillRevision). 顶部加 WebPortalLink banner 按 role 显示 web 锚点 (/me /skills /mcp /manager /audit /admin /admin/system) | ✅ 5/10 | 2 天 → 30 分钟 | BL-ARCH1 |

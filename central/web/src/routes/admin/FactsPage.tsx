@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 
 import { Card, Row } from "../../components/Card";
+import { Badge, BTN, DataTable, Section, type BadgeTone } from "../../components/DataTable";
 import { RoleGate } from "../../components/RoleGate";
 import {
   factsApi,
@@ -36,6 +37,7 @@ export function FactsPage() {
 // ── 列表 + 上传 ─────────────────────────────────
 
 function FactsList() {
+  const navigate = useNavigate();
   const [facts, setFacts] = useState<FactMeta[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -54,100 +56,117 @@ function FactsList() {
   }, []);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
-      <Card
-        title="📋 政策同步 / 事实补丁"
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <Section
+        title="政策同步 / 事实补丁"
         action={
-          <button onClick={() => void refresh()} style={btnSecondary}>
+          <button onClick={() => void refresh()} style={BTN}>
             刷新
           </button>
         }
       >
-        <p style={{ fontSize: 13, color: "var(--text-muted)" }}>
-          上传公司政策/标准/流程变更文件, 鲶鱼自动找出受影响的 skill 并生成改进 patch,
-          走审批后落到员工 Companion. 数据 100% 本地, 不出公司.
-        </p>
+        {/* 7/30: 原来这里有一段 2 行 13px 的常驻说明("上传公司政策/标准/流程
+            变更文件, 鲶鱼自动找出受影响的 skill 并生成改进 patch…")。删了 ——
+            它对第一次用的人有价值, 对之后每一次都是 40px 纯占位, 而这一页
+            是同一批人反复用的。下面上传行的提示文字已经说明了格式和耗时。 */}
         <UploadForm onUploaded={() => void refresh()} />
-      </Card>
+      </Section>
 
-      <Card title={`已上传 fact 列表${facts ? ` · ${facts.length} 条` : ""}`}>
+      <Section title={`已上传${facts ? ` · ${facts.length} 条` : ""}`}>
         {err && <div style={errBox}>错误: {err}</div>}
-        {!facts && !err && <div style={{ color: "var(--text-muted)" }}>加载中…</div>}
-        {facts && facts.length === 0 && (
-          <div style={{ color: "var(--text-muted)", padding: "var(--space-3) 0" }}>
-            还没上传过 fact. 用上面的"上传变更文件"按钮开始.
-          </div>
+        {!facts && !err && (
+          <div style={{ color: "var(--text-muted)", fontSize: 12 }}>加载中…</div>
         )}
-        {facts && facts.length > 0 && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {facts.map((f) => (
-              <FactRow key={f.id} f={f} />
-            ))}
-          </div>
+        {facts && (
+          <DataTable
+            rows={facts}
+            rowKey={(f) => f.id}
+            onRowClick={(f) => navigate(`/admin/facts/${f.id}`)}
+            empty='还没上传过。用上面的"上传 + 分析"开始。'
+            columns={[
+              {
+                header: "标题",
+                // 真 <Link> 而不是只靠整行 onRowClick —— 后者会让用户失去
+                // 中键 / ⌘+点击开新标签、右键"在新标签页打开"、以及悬停看
+                // 目标 URL。整行可点只是"点空白处也能进去"的便利。
+                cell: (f) => (
+                  <Link
+                    to={`/admin/facts/${f.id}`}
+                    style={{ fontWeight: 600, color: "var(--text)" }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {f.title}
+                  </Link>
+                ),
+              },
+              { header: "状态", cell: (f) => <StatusBadge status={f.status} /> },
+              {
+                header: "文件",
+                cell: (f) => (
+                  <span style={{ color: "var(--text-muted)" }} title={f.original_filename}>
+                    {f.original_filename}
+                  </span>
+                ),
+              },
+              {
+                header: "大小",
+                align: "right",
+                nowrap: true,
+                cell: (f) => (
+                  <span style={{ color: "var(--text-muted)" }}>{fmtSize(f.size_bytes)}</span>
+                ),
+              },
+              {
+                header: "受影响",
+                align: "right",
+                cell: (f) => f.impacts_count ?? "-",
+              },
+              {
+                header: "patch",
+                align: "right",
+                cell: (f) => f.patches_count ?? "-",
+              },
+              {
+                header: "上传",
+                nowrap: true,
+                cell: (f) => (
+                  <span style={{ color: "var(--text-muted)" }} title={f.uploaded_by || undefined}>
+                    {fmtTime(f.uploaded_at_ms)}
+                  </span>
+                ),
+              },
+            ]}
+          />
         )}
-      </Card>
+      </Section>
     </div>
   );
 }
 
-function FactRow({ f }: { f: FactMeta }) {
-  return (
-    <Link
-      to={`/admin/facts/${f.id}`}
-      style={{
-        display: "block",
-        padding: "var(--space-3)",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius-md)",
-        background: "var(--bg-elev)",
-        color: "var(--text)",
-        textDecoration: "none",
-      }}
-      onMouseEnter={(e) => (e.currentTarget.style.borderColor = "var(--accent)")}
-      onMouseLeave={(e) => (e.currentTarget.style.borderColor = "var(--border)")}
-    >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
-        <strong style={{ fontSize: 14 }}>{f.title}</strong>
-        <StatusBadge status={f.status} />
-      </div>
-      <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>
-        {f.original_filename} · {fmtSize(f.size_bytes)} · 上传于 {fmtTime(f.uploaded_at_ms)}
-        {f.uploaded_by && ` · by ${f.uploaded_by}`}
-      </div>
-      {(f.impacts_count !== undefined || f.patches_count !== undefined) && (
-        <div style={{ fontSize: 12, marginTop: 4 }}>
-          受影响 skill: <b>{f.impacts_count ?? "-"}</b> · 生成 patch: <b>{f.patches_count ?? "-"}</b>
-        </div>
-      )}
-    </Link>
-  );
-}
+// 7/30: 原来的 FactRow 删了 —— 一条记录占 84px 装 8 个字段 (标题/状态/文件名/
+// 大小/时间/上传者/受影响数/patch 数), 表格里同样 8 个字段是一行 29px。
+// 一屏从 5 条变 15 条。上传者收进标题 tooltip, 因为它几乎总是同一个人。
 
+/** 7/30: 改用共享 Badge。
+ *
+ * 原来这里是本文件自己的实现, 而它**没写 display:inline-block** ——
+ * 之前它是 FactRow 里 flex 容器的直接子项, 会被 blockify, 所以纵向 padding
+ * 生效; 挪进 <td> 之后就是个普通 inline span, **纵向 padding 不撑行盒高度**,
+ * 有色背景会溢出到行分隔线上。密度提上来之后这种溢出很明显。
+ *
+ * 颜色映射到语义色: 待审批是要人动手的 → warn; 已采纳 → ok; 其余中性。
+ */
 function StatusBadge({ status }: { status: FactStatus }) {
-  const colorMap: Record<FactStatus, [string, string]> = {
-    uploaded: ["#888", "已上传"],
-    extracted: ["#3b82f6", "已解析"],
-    analyzed: ["#3b82f6", "已分析"],
-    patches_ready: ["#22c55e", "待审批"],
-    approved: ["#16a34a", "已采纳"],
-    dismissed: ["#888", "已撤销"],
+  const MAP: Record<FactStatus, [BadgeTone, string]> = {
+    uploaded: ["neutral", "已上传"],
+    extracted: ["neutral", "已解析"],
+    analyzed: ["accent", "已分析"],
+    patches_ready: ["warn", "待审批"],
+    approved: ["ok", "已采纳"],
+    dismissed: ["neutral", "已撤销"],
   };
-  const [color, label] = colorMap[status] || ["#888", status];
-  return (
-    <span
-      style={{
-        background: color,
-        color: "white",
-        padding: "2px 8px",
-        borderRadius: "var(--radius-sm)",
-        fontSize: 11,
-        fontWeight: 500,
-        flexShrink: 0,
-      }}
-    >
-      {label}
-    </span>
-  );
+  const [tone, label] = MAP[status] ?? (["neutral", status] as [BadgeTone, string]);
+  return <Badge tone={tone}>{label}</Badge>;
 }
 
 // ── 上传表单 ─────────────────────────────────
@@ -540,10 +559,33 @@ function PatchCard({
         <strong>理由:</strong> {patch.rationale}
       </div>
 
+      {/* 7/30: diff 原来是永远展开的。一个 3 处改动的 patch 轻松 300-500px,
+          一屏经常只看得到 1-2 个 patch —— 而这一页的核心动作是**逐个 patch
+          决定采纳还是拒绝**, 采纳按钮永远在视野外。
+
+          荒唐的是隔壁 587 行早就有个 <details> 折叠"完整改后内容", 偏偏
+          没折叠 diff 本身。默认收起后, 一屏能看到 5-6 个 patch 的标题 + 理由,
+          想细看再展开哪一个。
+
+          改动描述 (c.description) **留在折叠外面** —— 每条一行, 而它恰恰是
+          决定"这条要不要展开细看"的依据。只折叠 old/new 代码块。
+          (第一版把 description 一起收进去了, 结果收起状态下一个 patch 只剩
+           "理由"加一句"看具体改了什么(3 处)", 等于零信息, 没法判断。) */}
       <div style={{ marginTop: 8 }}>
         {patch.changes.map((c, i) => (
           <div key={i} style={{ marginTop: 8, fontSize: 12 }}>
             <div style={{ color: "var(--text-muted)" }}>▸ {c.description}</div>
+            <details>
+              <summary
+                style={{
+                  cursor: "pointer",
+                  fontSize: 11,
+                  color: "var(--accent)",
+                  marginTop: 2,
+                }}
+              >
+                看改动内容
+              </summary>
             <div
               style={{
                 background: "rgba(239, 68, 68, 0.08)",
@@ -570,6 +612,7 @@ function PatchCard({
               <span style={{ color: "#16a34a" }}>+ </span>
               {c.new_snippet}
             </div>
+            </details>
           </div>
         ))}
       </div>

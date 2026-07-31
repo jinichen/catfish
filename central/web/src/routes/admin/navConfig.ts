@@ -7,7 +7,7 @@
  * 全靠那道外层拦着 ——
  *
  *     UsersPage / AccessPage / PerfPage / AdminQuotaEvents /
- *     AdminBilling / AdminHome
+ *     AdminBilling / AdminHome        (AdminBilling 已于 7/30 第三步删除)
  *
  * 一降就全部对 manager 敞开。逐个补守卫能修, 但"守卫写在别处"这种耦合正是
  * 问题本身: 下一个加页面的人不会知道自己必须补一道。
@@ -17,7 +17,7 @@
  *   · 漏声明 require 是类型错误 → 不可能忘了加守卫
  *   · 漏给某条路由配组件也是类型错误 (见下面 AdminPath)
  *
- * 元素本身**不放这里** —— AdminHome / AdminBilling / AdminQuotaEvents 定义在
+ * 元素本身**不放这里** —— AdminHome / AdminQuotaEvents 定义在
  * AdminPage.tsx 里, ManagerPage / AuditPage 在 routes/ 下, 搬进来会绕成
  * 循环依赖。改成由 AdminPage 提供一张 Record<AdminPath, ReactNode>, TS 保证
  * 它覆盖所有路径。
@@ -72,7 +72,13 @@ export const ROUTES = [
     require: MANAGER,
   },
   { path: "perf", label: "性能", group: "观测", require: ADMIN },
-  { path: "billing", label: "成本", group: "观测", require: ADMIN },
+  // 7/30: 「成本」(billing) 从侧栏摘掉了。那一页的内容是
+  //   "P1 实现. 设计: 按月统计 token 用量 / 按部门分摊成本 / 导出 PDF / …"
+  // —— 一份我们自己的设计备忘录, 被当成活路由渲染给客户看。
+  // 客户点进去看到"这个功能还没做, 以下是我们的计划", 比压根没有这一项更糟。
+  // 组件也一并删了 —— AdminPath 是从这张表推出来的联合类型, 摘掉一行之后
+  // AdminPage 的 ELEMENTS 再留着 billing 就是编译错误 (这正是第二步想要的
+  // 效果: 表和实现不可能各走各的)。设计条目见 docs/BACKLOG.md BL-CENTRAL-BILLING。
   { path: "quota/events", label: "配额日志", group: "观测", require: ADMIN },
   { path: "system", label: "服务状态", group: "系统", require: SYSADMIN, nested: true },
   { path: "facts", label: "政策同步", group: "系统", require: ADMIN, nested: true },

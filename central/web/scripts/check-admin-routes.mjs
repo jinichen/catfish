@@ -52,7 +52,6 @@ const PAGE_FILES = {
   departments: "src/routes/ManagerPage.tsx",
   audit: "src/routes/AuditPage.tsx",
   perf: "src/routes/admin/PerfPage.tsx",
-  billing: null,
   "quota/events": null,
   system: "src/routes/admin/SystemPage.tsx",
   facts: "src/routes/admin/FactsPage.tsx",

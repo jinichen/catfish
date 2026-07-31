@@ -159,6 +159,21 @@ export function getModelDisplay(catalogId: string): ModelDisplay {
   };
 }
 
+/** 这个 catalog ID 有没有真的显示信息 (运行时配置 或 硬编码表里有).
+ *
+ * 没有的话 getModelDisplay 会返 _FALLBACK, friendly 是固定字符串"未知模型" ——
+ * **多个不认识的模型会全部塌成同一行文字**, 表格里看起来像重复项。
+ * 两种情况下会发生:
+ *   · 客户自建的模型 (不在我们的硬编码表里), 且 runtime catalog 还没 fetch 回来
+ *     —— setRuntimeModelMeta 是模块级变量, 不是 React state, 灌进来也不触发重渲染
+ *   · 30 天窗口里出现的、后来被删掉的模型 (审计数据是历史的)
+ *
+ * 调用方拿这个判断: 认不出来就直接显示原始 catalog ID, 至少是无歧义的。
+ */
+export function isKnownModel(catalogId: string): boolean {
+  return _runtime[catalogId] != null || _MAP[catalogId] != null;
+}
+
 /** 这个模型的成本是不是估的 (配置和硬编码表里都没有单价).
  *
  * 给界面用: 成本栏旁边该标一下"估算", 而不是把一个兜底数字当准确值展示。
