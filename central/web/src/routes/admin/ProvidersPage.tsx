@@ -44,6 +44,7 @@ import {
   type ProviderInput,
   type ProviderListResponse,
 } from "../../lib/provider_config";
+import { splitDisplayName } from "../../lib/modelDisplay";
 import { BOX, Field, INPUT, MONO } from "./modelConfigShared";
 
 export function ProvidersPage() {
@@ -247,6 +248,9 @@ function ProvidersEditor() {
           busy={busy}
           canStoreKey={data?.secret_key_configured ?? false}
           masterKeyEnv={masterEnv}
+          usedBy={
+            (data?.providers ?? []).find((p) => p.id === editing.id)?.models ?? []
+          }
           onChange={setEditing}
           onCancel={() => {
             setEditing(null);
@@ -327,12 +331,26 @@ function ProvidersEditor() {
                 ),
               },
               {
-                header: "模型",
-                align: "right",
-                width: 70,
-                cell: (p) => (
-                  <span title={p.models.join("\n") || "还没有模型用它"}>{p.models.length}</span>
-                ),
+                // 8/1 鸿波: "模型 1、2 代表的要用人看懂的值"。
+                // 数量本身不构成信息 —— 你想知道的是**哪几个**, 而那恰恰决定了
+                // 这家能不能删。
+                header: "用它的模型",
+                truncate: true,
+                width: "22%",
+                cell: (p) =>
+                  p.models.length ? (
+                    <span
+                      title={p.models
+                        .map((m) => `${m.display_name}  (${m.name})`)
+                        .join("\n")}
+                    >
+                      {p.models
+                        .map((m) => splitDisplayName(m.display_name).name)
+                        .join("、")}
+                    </span>
+                  ) : (
+                    <span style={{ color: "var(--text-muted)" }}>还没有模型用它</span>
+                  ),
               },
               {
                 header: "",
@@ -371,7 +389,7 @@ function ProvidersEditor() {
                       title={
                         p.models.length
                           ? `删不掉 —— 这些模型在用它:\n${p.models
-                              .map((m) => `· ${m}`)
+                              .map((m) => `· ${m.display_name} (${m.name})`)
                               .join("\n")}\n\n先把它们改到别的供应商上, 或者删掉这些模型。`
                           : undefined
                       }
@@ -403,6 +421,7 @@ function ProviderForm({
   busy,
   canStoreKey,
   masterKeyEnv,
+  usedBy,
   onChange,
   onCancel,
   onSave,
@@ -411,6 +430,8 @@ function ProviderForm({
   busy: boolean;
   canStoreKey: boolean;
   masterKeyEnv: string;
+  /** 哪些模型在用这家。只读 —— 模型指向哪家是在模型页设的。 */
+  usedBy: Provider["models"];
   onChange: (e: Editing) => void;
   onCancel: () => void;
   onSave: () => void;
@@ -486,6 +507,39 @@ function ProviderForm({
             onChange={(e) => set({ timeout: Number(e.target.value) || 60 })}
           />
         </Field>
+
+        {/* 8/1 鸿波: "编辑里面也没这个参数？"
+            它不是可编辑的参数 (模型指向哪家是在模型那边设的), 但**必须在这里
+            显示** —— 你在这一页改端点或 key, 影响的正是这几个模型, 不显示的话
+            改之前看不到影响面。顺带也解释了删除按钮为什么点不动。 */}
+        {!isNew ? (
+          <Field
+            label="用它的模型"
+            hint={
+              usedBy.length
+                ? "改这一页的端点或 key，影响的就是它们。要改某个模型用哪一家，去「模型」页那边设。"
+                : "还没有模型用这家。可以放心删。"
+            }
+          >
+            <div
+              style={{
+                fontSize: 12,
+                padding: "3px 6px",
+                minHeight: 22,
+                color: usedBy.length ? "var(--text)" : "var(--text-muted)",
+                lineHeight: 1.6,
+              }}
+            >
+              {usedBy.length
+                ? usedBy.map((m) => (
+                    <div key={m.name} title={m.name}>
+                      · {m.display_name}
+                    </div>
+                  ))
+                : "—"}
+            </div>
+          </Field>
+        ) : null}
       </div>
 
       <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid var(--border)" }}>

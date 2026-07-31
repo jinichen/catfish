@@ -25,7 +25,7 @@ def client(monkeypatch):
     from catfish_gateway.auth import User, get_current_user
 
     store: dict[str, dict] = {}
-    refs: dict[str, list[str]] = {}
+    refs: dict[str, list[dict]] = {}
 
     monkeypatch.setattr(MS, "is_enabled", lambda: True)
     monkeypatch.setattr(PS, "is_enabled", lambda: True)
@@ -204,12 +204,18 @@ def test_还有模型在用时拒绝删除并点名(client, master):
     """只说"删不掉"的话, 管理员得自己一个个翻模型去找。"""
     c, store, refs, *_ = client
     c.put("/api/admin/providers/p1", json=_body())
-    refs["p1"] = ["catfish-private-main", "catfish-private-vision"]
+    refs["p1"] = [
+        {"name": "catfish-private-main", "display_name": "主力 122B"},
+        {"name": "catfish-private-vision", "display_name": "Qwen3-VL 30B"},
+    ]
 
     r = c.delete("/api/admin/providers/p1")
     assert r.status_code == 400
     d = r.json()["detail"]
+    # name **和** display_name 都要有: name 是唯一标识 (显示名可以重复),
+    # display_name 是人认得出来的那个
     assert "catfish-private-main" in d and "catfish-private-vision" in d
+    assert "主力 122B" in d and "Qwen3-VL 30B" in d
     assert "p1" in store, "拦截必须发生在真删之前"
 
 

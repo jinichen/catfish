@@ -134,18 +134,32 @@ def delete_provider(pid: str, by: str) -> bool:
         return deleted
 
 
-def models_using(pid: str) -> list[str]:
-    """哪些模型在引用这个供应商. 给删除拦截用."""
+def models_using(pid: str) -> list[dict[str, str]]:
+    """哪些模型在引用这个供应商. 返回 [{name, display_name}].
+
+    **两个都要**, 用途不同:
+      name          唯一标识。删除拦截的报错里用它 —— 显示名可以重复,
+                    报错里给重复的名字等于没给。
+      display_name  给人看的。界面上列出"哪几个模型在用"时用它 ——
+                    列表里显示 catfish-private-vision 不如显示
+                    「Qwen3-VL 30B」直观。
+
+    8/1 鸿波: "模型 1、2 代表的要用人看懂的值" —— 原来这里只返 name,
+    而界面只显示了个数量。数量本身不构成信息: 你想知道的是**哪几个**,
+    而那恰恰决定了这家能不能删。
+    """
     if not is_enabled():
         return []
     try:
         with _conn() as conn, conn.cursor() as cur:
             cur.execute(
-                "SELECT name FROM gateway_models "
-                "WHERE payload -> 'upstream' ->> 'provider' = %s ORDER BY name",
+                "SELECT name, COALESCE(payload ->> 'display_name', name) "
+                "FROM gateway_models "
+                "WHERE payload -> 'upstream' ->> 'provider' = %s "
+                "ORDER BY sort_order, name",
                 (pid,),
             )
-            return [r[0] for r in cur.fetchall()]
+            return [{"name": r[0], "display_name": r[1]} for r in cur.fetchall()]
     except Exception:
         logger.exception("查供应商引用失败")
         return []

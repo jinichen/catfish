@@ -31,8 +31,12 @@ export interface Provider {
    * 之前只能等员工调用失败才发现。 */
   key_ok: boolean;
   timeout: number;
-  /** 哪些模型在用它。删除拦截和"删了会影响谁"都靠它。 */
-  models: string[];
+  /** 哪些模型在用它。删除拦截和"删了会影响谁"都靠它。
+   *
+   * `name` 是唯一标识（显示名可以重复），`display_name` 是人认得出来的那个。
+   * 界面上列出来时用 display_name —— 显示 `catfish-private-vision` 不如
+   * 显示「Qwen3-VL 30B」直观；而报错里要用 name。 */
+  models: Array<{ name: string; display_name: string }>;
 }
 
 export interface ProviderListResponse {

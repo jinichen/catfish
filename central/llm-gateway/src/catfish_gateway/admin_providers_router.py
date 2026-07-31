@@ -238,7 +238,11 @@ def register_provider_admin_routes(app: FastAPI) -> None:
                 400,
                 detail=(
                     f"供应商 {pid} 还被这些模型引用:\n"
-                    + "\n".join(f"    · {m}" for m in used_by)
+                    # 报错里给 name (唯一标识) 而不是显示名 —— 显示名可以重复,
+                    # 给重复的名字等于没给。
+                    + "\n".join(
+                        f"    · {m['display_name']}  ({m['name']})" for m in used_by
+                    )
                     + "\n\n请先把它们改到别的供应商上, 或者删掉这些模型。\n\n"
                     "为什么要拦: 删掉之后这些模型的 upstream 会指向一个不存在的"
                     "供应商, 于是 api_base 和 key 都拿不到 —— 它们仍在列表里, "
