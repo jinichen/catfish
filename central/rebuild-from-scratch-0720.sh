@@ -496,6 +496,11 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
             # 真实 dev PG 密码). 打包脚本自己验 · 不过不出包 · 不靠人肉 tar tzf.
             TLIST=$(tar tzf "$OUT_TAR")
             VERIFY_FAIL=0
+            # 三个计数器: 通过那行的 "必带 7 / 敏感 4 / 标记 3" 从前是写死的数字,
+            # 8/1 往 marker 里加了第 4 条, 那行还印着 "3" —— 报告的条数和真查的
+            # 条数对不上, 而且是往少了报, 看着像少查了一条. 这种小谎最烦人:
+            # 它让人开始怀疑整行输出. 改成边跑边数.
+            MUST_N=0; MUSTNOT_N=0; MARKER_N=0
             for must in \
                 "delivery/dahua-poc/setup.sh" \
                 "delivery/dahua-poc/verify-login.sh" \
@@ -504,6 +509,7 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
                 "delivery/dahua-poc/.env.example" \
                 "delivery/dahua-poc/identity-server/config/users.yaml.example" \
                 "delivery/dahua-poc/identity-server/config/clients.yaml.example"; do
+                MUST_N=$((MUST_N + 1))
                 if ! echo "$TLIST" | grep -qx "$must"; then
                     echo "  ❌ 验包: 缺 $must"; VERIFY_FAIL=1
                 fi
@@ -513,11 +519,12 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
                 "delivery/dahua-poc/identity-server/config/users.yaml" \
                 "delivery/dahua-poc/identity-server/config/clients.yaml" \
                 "delivery/dahua-poc/identity-server/config/database.yaml"; do
+                MUSTNOT_N=$((MUSTNOT_N + 1))
                 if echo "$TLIST" | grep -qx "$mustnot"; then
                     echo "  ❌ 验包: 不该带 $mustnot (敏感 / 应装机时生成)"; VERIFY_FAIL=1
                 fi
             done
-            # setup.sh 是不是**新**版本 · 抽出来查 3 个本轮修复的标记
+            # setup.sh 是不是**新**版本 · 抽出来查几个本轮修复的标记
             #
             # ⚠ 这份 marker 清单是**会过期的** —— 它只认得写它那天的"新版本"。
             #   8/1 加 CATFISH_SECRET_KEY 生成时就发现: 三个 marker 全是 7/28 的,
@@ -526,6 +533,7 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
             SETUP_IN_TAR=$(tar xzf "$OUT_TAR" -O delivery/dahua-poc/setup.sh)
             for marker in "clients.yaml 生成" "DASHSCOPE_API_KEY 是空的" "CERT_DAYS=397" \
                           "CATFISH_SECRET_KEY 已生成"; do
+                MARKER_N=$((MARKER_N + 1))
                 if ! echo "$SETUP_IN_TAR" | grep -q "$marker"; then
                     echo "  ❌ 验包: setup.sh 缺标记「$marker」→ 打进去的是老版本"; VERIFY_FAIL=1
                 fi
@@ -534,7 +542,7 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
                 echo "  ❌ $arch 验包不过 · 这个 tar 不能发"
                 exit 1
             fi
-            echo "  ✓ 验包过 · 必带 7 在 / 敏感 4 不在 / setup.sh 3 标记在"
+            echo "  ✓ 验包过 · 必带 $MUST_N 在 / 敏感 $MUSTNOT_N 不在 / setup.sh $MARKER_N 标记在"
             echo "  ✅ $arch 完整 tar 完成"
         done
 
@@ -565,14 +573,27 @@ echo ""
 #
 # 改成按**文件在不在**列 (产物就是产物, 跟跑了哪个 phase 无关), 且每行自带
 # 类型标签, 不靠标题分组.
+# 8/1 · 这个函数原来有两个毛病, 都是"看着没事其实说不清":
+#
+# 1. 大小用 du, 上面 3.$arch 那行用 ls -lh —— **同一个文件两个数**.
+#    7/31 arm64 那次: ls 打 419M, 这里打 433M. du 报的是磁盘分配块,
+#    ls 报的是字节数; 要把文件传到客户服务器上, 看的是后者. 两个数摆在
+#    同一份输出里, 谁也不知道该信哪个, 传完对不上还得回来查半天.
+#    统一走 ls, 跟上面那行天然一致.
+#
+# 2. printf 的 %-8s 是按**字节**补空格的, 中文一个字 3 字节:
+#    "仅镜像" = 9 字节 > 8 → 一个空格都不补, 而 "FULL" = 4 字节补到 8.
+#    结果两行对不齐 (7/31 的输出里就能看到"仅镜像"那行整个左移).
+#    干脆把中文标签挪到行尾 —— 前面两列都是 ASCII, %-Ns 才算得准.
 _list_artifact() {   # $1=路径  $2=类型说明
     [ -f "$1" ] || return 0
-    printf "    %-8s %-58s %s\n" \
-        "$2" "$(basename "$1")" "$(du -h "$1" | cut -f1)"
+    # ls -lh 的第 5 列是 size (perms links owner group size ...)
+    printf "    %-52s %7s   %s\n" \
+        "$(basename "$1")" "$(ls -lh "$1" | awk '{print $5}')" "$2"
 }
 
 echo "→ 产物 (只列真实存在的文件):"
-echo "    类型     文件名                                                     大小"
+echo "    文件名                                                   大小   类型"
 _list_artifact "$FULL_ARM_OUT" "FULL"
 _list_artifact "$FULL_AMD_OUT" "FULL"
 _list_artifact "$ARM_OUT"      "仅镜像"
