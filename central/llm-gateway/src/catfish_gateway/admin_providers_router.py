@@ -90,7 +90,15 @@ def register_provider_admin_routes(app: FastAPI) -> None:
         ⚠ 返回里**没有 key 的任何字节** —— 只有 key_source 和 key_ok。
         """
         _require(user)
-        rows = provider_store.read_providers() or {}
+
+        # ⚠ None 和 {} 必须分开:
+        #   None = 表不存在 (alembic 008 没跑) / 库临时不可用
+        #   {}   = 表在, 但确实一家供应商都没有
+        # 合并成 `or {}` 的话界面上两种都显示"0 家", 而管理员会去点
+        # 「+ 新增供应商」然后保存失败 —— 8/1 鸿波第一次打开这一页就撞上了。
+        raw = provider_store.read_providers()
+        table_ready = raw is not None
+        rows = raw or {}
 
         out = []
         for pid, r in sorted(rows.items()):
@@ -126,6 +134,9 @@ def register_provider_admin_routes(app: FastAPI) -> None:
             # 说清楚, 而不是让人填完点保存才撞 400。
             "secret_key_configured": secrets_box.is_configured(),
             "master_key_env": secrets_box.MASTER_KEY_ENV,
+            # False = 供应商表还没建 (多半是 alembic 008 没跑)。界面据此
+            # 显示"迁移没跑"而不是"还没有供应商" —— 两者的下一步动作完全不同。
+            "table_ready": table_ready,
             "providers": out,
         }
 

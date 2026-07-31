@@ -239,3 +239,32 @@ def test_不合法的供应商标识要拒绝(client, master, bad):
     r = c.put(f"/api/admin/providers/{bad}", json=_body())
     assert r.status_code in (400, 404, 405), f"{bad!r} 不该被接受"
     assert bad not in store
+
+
+# ── 表还没建 vs 真的一家都没有 (8/1 鸿波第一次打开这一页就撞上) ──────────
+#
+# read_providers 遇到"表不存在"返 None、遇到"表在但空"返 {}。接口层一句
+# `or {}` 就把两者合并了, 界面上都显示"0 家" —— 而管理员会去点
+# 「+ 新增供应商」, 然后保存失败。
+#
+# 两种情况的下一步动作完全不同: 跑 alembic upgrade head vs 点新增。
+
+
+def test_表不存在时要说出来而不是显示零家(client, monkeypatch):
+    from catfish_gateway import provider_store as PS
+
+    c, *_ = client
+    monkeypatch.setattr(PS, "read_providers", lambda: None)  # 表不存在
+    r = c.get("/api/admin/providers").json()
+    assert r["table_ready"] is False
+    assert r["providers"] == []
+
+
+def test_表在但确实没有供应商(client, monkeypatch):
+    from catfish_gateway import provider_store as PS
+
+    c, *_ = client
+    monkeypatch.setattr(PS, "read_providers", lambda: {})  # 表在, 空的
+    r = c.get("/api/admin/providers").json()
+    assert r["table_ready"] is True, "这才是'点新增'能解决的情况"
+    assert r["providers"] == []

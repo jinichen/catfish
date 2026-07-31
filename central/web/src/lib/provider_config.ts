@@ -42,6 +42,13 @@ export interface ProviderListResponse {
    *  而不是让人填完点保存才撞 400。 */
   secret_key_configured: boolean;
   master_key_env: string;
+  /** 供应商表建了没。
+   *
+   * `false` = alembic 008 还没跑 / 库临时不可用 —— 跟"表在但一家都没有"
+   * 完全不同, 下一步动作也完全不同（跑迁移 vs 点新增）。
+   * 不分开的话界面上两种都显示"0 家"，管理员会去点「+ 新增供应商」然后
+   * 保存失败。 */
+  table_ready: boolean;
   providers: Provider[];
 }
 

@@ -152,7 +152,7 @@ function ProvidersEditor() {
             </button>
             <button
               style={BTN_PRIMARY}
-              disabled={!editable || busy}
+              disabled={!editable || busy || !(data?.table_ready ?? false)}
               onClick={() => {
                 setEditing({ id: "", isNew: true, body: emptyProvider() });
                 setErr(null);
@@ -163,6 +163,30 @@ function ProvidersEditor() {
           </>
         )}
       </Toolbar>
+
+      {/* 表还没建 —— 跟"一家都没有"完全不是一回事, 下一步动作也不同。
+          不分开的话界面显示"0 家", 管理员会去点「+ 新增供应商」然后保存失败。 */}
+      {data && !data.table_ready ? (
+        <div style={{ ...BOX, fontSize: 12, lineHeight: 1.7, borderColor: "var(--status-err)" }}>
+          <b style={{ color: "var(--status-err)" }}>供应商表还没建</b>
+          <div style={{ marginTop: 4, color: "var(--text-muted)" }}>
+            数据库迁移还没跑过（这个版本新增了 <code>gateway_providers</code> 表）。
+            现在按老形态运行 —— 模型的端点和 key 变量名还写在各自的模型配置里，
+            一切正常，只是这一页是空的。
+            <br />
+            <code style={{ fontSize: 11 }}>
+              cd central/llm-gateway &amp;&amp; alembic upgrade head
+            </code>
+            <br />
+            然后<b>重启网关</b> —— 启动时会自动把现有模型拆成供应商（幂等，跑几次都一样）。
+            <br />
+            <span style={{ fontSize: 11 }}>
+              （Docker 部署不会出现这个提示：容器启动命令里已经带了迁移。本机
+              直跑网关时才需要自己跑一次。）
+            </span>
+          </div>
+        </div>
+      ) : null}
 
       {/* 主密钥没配时**在保存前**说清楚, 而不是让人填完 key 点保存才撞 400 */}
       {data && !data.secret_key_configured ? (
@@ -227,7 +251,13 @@ function ProvidersEditor() {
           <DataTable
             rows={data?.providers ?? []}
             rowKey={(p) => p.id}
-            empty={data ? "还没有供应商。点右上角「+ 新增供应商」。" : "加载中…"}
+            empty={
+              !data
+                ? "加载中…"
+                : !data.table_ready
+                  ? "表还没建 —— 见上面的说明。"
+                  : "还没有供应商。点右上角「+ 新增供应商」。"
+            }
             columns={[
               {
                 header: "供应商",

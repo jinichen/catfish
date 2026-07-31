@@ -24,6 +24,10 @@ from .model_store import _bump_revision, _conn, is_enabled
 
 logger = logging.getLogger(__name__)
 
+#: 表不存在的警告只打一次 —— read_providers 每 3 秒被配置重载调一次, 每次都
+#: 打的话日志会被淹掉, 而淹掉的日志等于没有日志。
+_WARNED_MISSING = False
+
 
 def read_providers() -> dict[str, dict[str, Any]] | None:
     """所有供应商, id → 行. 库不可用返 None (上层退回纯 yaml / 老形态).
@@ -51,9 +55,29 @@ def read_providers() -> dict[str, dict[str, Any]] | None:
                 for r in cur.fetchall()
             }
     except Exception:
-        # 表还没建 (没跑 008) 也走这里 —— 那是正常的中间态: 老形态的模型
-        # upstream 里自带 api_base/api_key_env, 不需要供应商表就能工作。
-        logger.debug("读供应商表失败 (还没迁移?), 按老形态处理", exc_info=True)
+        # 表还没建 (没跑 alembic 008) 也走这里。这**是**一个能工作的中间态 ——
+        # 老形态的模型 upstream 里自带 api_base/api_key_env, 不需要这张表。
+        #
+        # 但不能只在 DEBUG 级别记一行: 表现是「供应商」页显示"0 家",
+        # 跟"真的一家都没有"长得一模一样, 而管理员会去点「+ 新增供应商」,
+        # 然后保存失败。8/1 鸿波第一次打开这一页就撞上了。
+        #
+        # 所以: 首次警告一次 (不刷屏 —— 这个函数每 3 秒被配置重载调一次),
+        # 并且让 read_providers 的 None 和 {} 在**接口层**分开
+        # (见 admin_providers_router 的 table_ready)。
+        global _WARNED_MISSING
+        if not _WARNED_MISSING:
+            _WARNED_MISSING = True
+            logger.warning(
+                "读 gateway_providers 失败 —— 多半是 alembic 008 还没跑。"
+                "现在按老形态运行 (模型 upstream 里自带端点和 key 变量名), "
+                "但「供应商」页会是空的。\n"
+                "修法: cd central/llm-gateway && alembic upgrade head, 然后重启网关。\n"
+                "(Docker 部署不会走到这里 —— Dockerfile 的 CMD 就是 "
+                "`alembic upgrade head && python -m catfish_gateway.app`。"
+                "本机 dev 直跑 app 的话要自己跑一次。)",
+                exc_info=True,
+            )
         return None
 
 
