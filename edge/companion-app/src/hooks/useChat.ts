@@ -19,10 +19,13 @@ import {
   MAX_AUTO_CONTINUES,
   AUTO_CONTINUE_PROMPT,
 } from "../store/auto_continue";  // 5/13 鸿波"长程任务咋办" — gateway 删 BL-FIX23 后客户端补
-import { streamChat, type OpenAITool } from "../lib/chat";
+import { streamChat, type ChatTransport, type OpenAITool } from "../lib/chat";
+import {
+  createFirstTransportHandler,
+  shouldPersistUserLocally,
+} from "../lib/chatPersistence";
 import { checkPromiseOnly } from "../lib/promiseCheck";
 import { detectToolBusinessError } from "../lib/toolResult";
-import { config } from "../lib/env";
 import * as streamRegistry from "../lib/streamRegistry";
 import {
   toolBridgeCallTool,
@@ -183,6 +186,7 @@ export function useChat(_initialModel: string) {
         // useChatStore.getState() 实时读 (vite HMR + zustand 可能让 store 双 instance,
         // picker 拿一份 getState 拿另一份). Vision switch 改 store 时也更新这个值.
         sendModel: string;
+        onTransportResolved?: (transport: ChatTransport) => void;
       },
     ): Promise<{
       shouldContinue: boolean;
@@ -322,6 +326,7 @@ export function useChat(_initialModel: string) {
             error: err,
           });
         },
+        onTransportResolved: ctx.onTransportResolved,
         // P3.5.18 Phase 2 (6/17 鸿波): plugin P19 桥 hermes preflight `_emit_status`
         // → SSE `hermes.tool.progress` (tool="catfish-lifecycle") → 这里 set inline 状态.
         // status "running" → 显; "completed" → 清 (但 hermes 目前不发 completed —
@@ -629,12 +634,18 @@ export function useChat(_initialModel: string) {
       // 铁证 (7/18): SELECT role FROM messages WHERE session_id LIKE '20260718_105516_%'
       //   → 5 条全 assistant · 用户发的 hi/hello/test 全丢.
       //
-      // 修法: 分支 · 若 useHermes=false, Companion 补 persist user msg (回到 P3.5.54 前
-      // 的行为但只在 gateway 直连场景). useHermes=true 时保持 skip (让 hermes 独 write,
-      // 避免 dup). sessionIdForStream 在 send 开头 ensureSessionId 已 lock.
-      if (!config.useHermes && sessionIdForStream) {
-        void persistMessage(userMsg, sessionIdForStream);
-      }
+      // 修法: 不能再看 build-time config.useHermes — 实际通道由 chat.ts 在运行时
+      // 综合 companion.yaml + API key 决定。streamChat 解析完成后通过
+      // onTransportResolved 回报；Hermes 路径不写，gateway 直连才补写。
+      // createFirstTransportHandler 让自动 retry 也只能触发一次判断。
+      const onTransportResolved = createFirstTransportHandler((transport) => {
+        if (
+          shouldPersistUserLocally(transport) &&
+          sessionIdForStream
+        ) {
+          void persistMessage(userMsg, sessionIdForStream);
+        }
+      });
       // P3.5.54 (6/21 鸿波 catch "UI 双显"): 真因——hermes v0.17 自己写 user msg.
       //
       // 验证 (state.db dump):
@@ -800,6 +811,7 @@ export function useChat(_initialModel: string) {
             tools,
             sessionId: sessionIdForStream,  // 5/24 BL-MULTI-SESSION-STREAM
             sendModel,
+            onTransportResolved,
           });
           currentMessages = result.updatedMessages;
 

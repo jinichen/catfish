@@ -47,6 +47,9 @@ interface SendChatParams {
   onDone: (info?: ChatStreamDoneInfo) => void;
   /** 任何错误 */
   onError: (msg: string) => void;
+  /** 请求真正选定的传输通道。必须由 streamChat 在完成动态配置解析后回报，
+   *  caller 不得再用 build-time config 猜测，否则 App 和 Hermes 会同时写消息。 */
+  onTransportResolved?: (transport: ChatTransport) => void;
   /** P3.5.18 Phase 2 (6/17 鸿波): hermes preflight 自动压缩 进度推 SSE.
    *  plugin.py P19 桥 agent.status_callback → tool_progress_callback(
    *    event_type="catfish.lifecycle.lifecycle|warn", tool_name="catfish-lifecycle", preview=msg).
@@ -81,6 +84,8 @@ interface SendChatParams {
     finishReasonRetry?: number;
   };
 }
+
+export type ChatTransport = "hermes" | "gateway";
 
 export interface OpenAITool {
   type: "function";
@@ -185,6 +190,7 @@ export async function streamChat(params: SendChatParams): Promise<void> {
     onToolCalls,
     onDone,
     onError,
+    onTransportResolved,
     signal,
   } = params;
 
@@ -222,6 +228,7 @@ export async function streamChat(params: SendChatParams): Promise<void> {
     // Tauri 命令挂 — 走老 gateway 路径 (灰度安全降级)
   }
   const useHermes = hermesCfg !== null && hermesCfg.enabled && hermesAuth !== null;
+  onTransportResolved?.(useHermes ? "hermes" : "gateway");
 
   const url = useHermes
     ? `${hermesCfg!.url}/v1/chat/completions`

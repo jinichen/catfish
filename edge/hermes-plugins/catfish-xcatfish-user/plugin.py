@@ -38,6 +38,7 @@ import 阶段就跑 _verify_patch_targets() — 看每个 patch 引用的 attrib
 from __future__ import annotations
 
 import functools
+import json
 import logging
 import os
 import threading
@@ -700,6 +701,17 @@ def _apply_patches() -> None:
     except Exception as e:  # noqa: BLE001
         logger.error(
             "P39: Codex App Server auth bypass patch 失败: %s",
+            e, exc_info=True,
+        )
+
+    # P40 (7/31): Companion 与 Hermes/Codex 共用 state.db 时，某些 runtime 会在
+    # 请求开始和 turn 完成各写一次相同 user message。把防重放在 SessionDB 公共
+    # 写入层，覆盖 App、API server、Codex adapter 的所有组合。
+    try:
+        _patch_p40_companion_user_message_dedup()
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "P40: Companion user message dedup patch 失败: %s",
             e, exc_info=True,
         )
 
@@ -3526,6 +3538,110 @@ def _patch_p39_codex_app_server_auth_bypass() -> None:
     logger.info(
         "P39 Codex App Server auth + pooled sessions + live SSE patched — "
         "ChatGPT credentials remain owned by Codex CLI ✓"
+    )
+
+
+# ── P40 (7/31): Companion/Hermes/Codex 共享 state.db 的 user 双写防护 ─────
+
+def _patch_p40_companion_user_message_dedup() -> None:
+    """相邻相同 user message 只保留一条，且只作用于 Companion 会话。
+
+    Companion 把同一个 session id 交给 Hermes API server；Codex App Server
+    runtime 里，请求入口和 turn flush 可能各调一次 SessionDB.append_message。
+    两次之间可能隔着整个冷启动（实测 1–12 秒），所以不能靠很短的时间窗。
+
+    规则刻意保守：
+    - session.source 必须是 ``companion``；微信/Slack/CLI 完全不受影响；
+    - 当前最后一条 active message 也必须是相同内容的 user；
+    - 两条相距不超过 120 秒。正常一问一答中间有 assistant，不会误去重。
+    """
+    try:
+        from hermes_state import SessionDB  # noqa: PLC0415
+    except ImportError as e:
+        logger.warning("P40: hermes_state.SessionDB 没导, skip patch (%s)", e)
+        return
+
+    original = getattr(SessionDB, "append_message", None)
+    if original is None:
+        raise RuntimeError("hermes_state.SessionDB.append_message 不存在")
+    if getattr(original, "_catfish_p40_patched", False):
+        return
+
+    locks_guard = threading.Lock()
+    session_locks: dict[str, threading.Lock] = {}
+
+    def _content_key(value) -> str:
+        if isinstance(value, str):
+            return value.strip()
+        try:
+            return json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        except Exception:
+            return str(value).strip()
+
+    @functools.wraps(original)
+    def patched_append_message(
+        self,
+        session_id: str,
+        role: str,
+        content=None,
+        *args,
+        **kwargs,
+    ):
+        if role != "user" or not session_id:
+            return original(self, session_id, role, content, *args, **kwargs)
+
+        with locks_guard:
+            session_lock = session_locks.setdefault(session_id, threading.Lock())
+
+        with session_lock:
+            try:
+                session = self.get_session(session_id)
+                if str((session or {}).get("source") or "") == "companion":
+                    messages = self.get_messages(session_id)
+                    if messages:
+                        last = messages[-1]
+                        last_ts = float(last.get("timestamp") or 0)
+                        incoming_ts = kwargs.get("timestamp")
+                        if hasattr(incoming_ts, "timestamp"):
+                            incoming_ts = incoming_ts.timestamp()
+                        try:
+                            incoming_ts = float(incoming_ts)
+                        except (TypeError, ValueError):
+                            incoming_ts = time.time()
+
+                        if (
+                            last.get("role") == "user"
+                            and _content_key(last.get("content"))
+                            == _content_key(content)
+                            and 0 <= incoming_ts - last_ts <= 120
+                        ):
+                            existing_id = int(last["id"])
+                            logger.info(
+                                "P40 dedup skip: session=%s user rowid=%s "
+                                "content=%r",
+                                session_id,
+                                existing_id,
+                                _content_key(content)[:80],
+                            )
+                            return existing_id
+            except Exception:
+                # 防重失败不能阻断聊天；回落 Hermes 原写入并留日志。
+                logger.warning(
+                    "P40 dedup check failed; fallback original append",
+                    exc_info=True,
+                )
+
+            return original(self, session_id, role, content, *args, **kwargs)
+
+    patched_append_message._catfish_p40_patched = True  # type: ignore[attr-defined]
+    SessionDB.append_message = patched_append_message
+    logger.info(
+        "P40 Companion user-message dedup patched at SessionDB.append_message ✓"
     )
 
 
