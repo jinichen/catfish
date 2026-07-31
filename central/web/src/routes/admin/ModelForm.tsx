@@ -252,9 +252,13 @@ export function ModelForm({
                 label="API Key 环境变量名"
                 hint="填变量名（如 DASHSCOPE_API_KEY），不是 key 本身。"
               >
+                {/* ?? "" 是必须的 —— 库里这个键可能压根不存在 (见
+                    lib/model_config.ts 里 api_key_env 的注释)。给 undefined
+                    会让 React 把它当**非受控**输入框: 打字能打进去, 但
+                    state 不更新, 保存的还是老值, 而且只在控制台留一句警告。 */}
                 <input
                   style={MONO}
-                  value={model.upstream.api_key_env}
+                  value={model.upstream.api_key_env ?? ""}
                   onChange={(e) => setUp({ api_key_env: e.target.value })}
                   placeholder="DASHSCOPE_API_KEY"
                 />

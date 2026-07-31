@@ -108,7 +108,28 @@ function ModelConfigEditor() {
 
   async function save() {
     if (!editing) return;
-    const errs = validateModel(editing);
+    // ⚠ 校验也要在 try 里。
+    //
+    // 8/1 现场: 迁移到供应商的模型点「保存」**毫无反应** —— 没有报错、没有
+    // 请求、按钮也不变灰。根因是 validateModel 里 `m.upstream.api_key_env.trim()`
+    // 对着一个不存在的键抛 TypeError; 而它当时在 try 外面, save() 又是 async,
+    // 于是异常变成 rejected promise, 被调用处的 `void save()` 丢掉。
+    // React 对事件处理器里的异常不做任何提示 (错误边界只管渲染期),
+    // 结果就是一个**完全静默**的按钮。
+    //
+    // 那个具体的 bug 已经修了 (见 lib/model_config.ts), 但"校验崩了 = 按钮
+    // 变哑巴"这个结构不能留着 —— 下一次谁在 validateModel 里读一个可选字段,
+    // 症状还是一模一样, 而且照样查不出来。包进来, 崩了至少说得出话。
+    let errs: string[];
+    try {
+      errs = validateModel(editing);
+    } catch (e) {
+      setErr(
+        `校验这个模型时程序出错了：${e instanceof Error ? e.message : String(e)}\n` +
+          "这是个 bug，不是你填错了。请把这条信息发给我们。",
+      );
+      return;
+    }
     if (errs.length) {
       setErr(errs.join("；"));
       return;

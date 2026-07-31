@@ -712,6 +712,54 @@ def test_老形态不受供应商校验影响(client, with_providers):
     assert "m1" in store
 
 
+# ── "api_key_env 必须非空"这条只对老形态成立 (8/1) ──────────────────────
+#
+# 现场症状是**前端**的: 迁移过的模型点「保存」毫无反应 (validateModel 对着
+# 一个不存在的键 .trim(), 异常被 void save() 吞掉)。后端这一侧当时没炸, 是
+# 因为 UpstreamConfig.api_key_env 有默认值 "INTERNAL_LLM_KEY", 界面不传时
+# pydantic 会填上它 —— 正好像个合法变量名, 于是检查碰巧通过。
+#
+# 碰巧通过不等于规则对。显式传空串 (merge_provider 合并出来的就是空串) 时
+# 老逻辑会 400, 报的还是「填的是变量名不是 key」—— 指着一格界面上不渲染的
+# 东西。下面把两种形态各自的边界钉住。
+
+
+def test_绑了供应商就不再要求_api_key_env(client, with_providers):
+    """key 归供应商管 (它自己的 env 变量, 或者加密存库), 模型这一层没有这个键。
+
+    界面上那一格也因此不渲染 —— 再要求它非空, 等于要求填一个看不见的字段。
+    """
+    c, store, *_ = client
+    # a. 压根不带这个键 (= 迁移写进库的形状, provider_store.py:229)
+    body = _model("m1", upstream={"model": "openai/x", "provider": "dashscope"})
+    body["upstream"].pop("api_key_env", None)
+    assert c.put("/api/admin/models/m1", json=body).status_code == 200
+    # b. 显式空串 (= merge_provider 对"key 存库"的供应商合并出来的值)
+    body2 = _model("m2", upstream={"model": "openai/x", "provider": "dashscope", "api_key_env": ""})
+    assert c.put("/api/admin/models/m2", json=body2).status_code == 200
+    assert "m2" in store
+
+
+def test_没绑供应商时空的_api_key_env_照旧要拒(client, with_providers):
+    """老形态的模型 key 就在这一格, 空的等于没配 —— 这条不能跟着一起放宽。"""
+    c, store, *_ = client
+    body = _model("m1", upstream={"model": "openai/x", "api_key_env": ""})
+    assert c.put("/api/admin/models/m1", json=body).status_code == 400
+    assert "m1" not in store
+
+
+@pytest.mark.parametrize("bad", ["sk-proj-abc123", "AIzaSyD-abc_123", "有 空格"])
+def test_绑了供应商也不许把真key粘进来(client, with_providers, bad):
+    """放宽的只有"空"这一种。粘进真 key 的后果跟形态无关 —— 一样明文入库,
+    一样进 pg_dump 和备份。"""
+    c, store, *_ = client
+    body = _model("m1", upstream={"model": "openai/x", "provider": "dashscope", "api_key_env": bad})
+    r = c.put("/api/admin/models/m1", json=body)
+    assert r.status_code == 400
+    assert "dashscope" in r.json()["detail"], "要顺带指路: key 在供应商页改"
+    assert "m1" not in store
+
+
 # ── 图表颜色 / 列表圆点 (8/1) ───────────────────────────────────────
 #
 # 填错颜色的后果是**静默的**: 图表拿到非法颜色会退回浏览器默认 (通常是黑),

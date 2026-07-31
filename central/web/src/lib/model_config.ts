@@ -26,8 +26,19 @@ export interface Upstream {
    * 否则 pydantic 会把它当额外字段静默丢掉 (8/1 实测到的)。 */
   provider?: string | null;
   api_base?: string | null;
-  /** 读哪个环境变量拿 key —— **key 本身不进配置**, 只存变量名 */
-  api_key_env: string;
+  /** 读哪个环境变量拿 key —— **key 本身不进配置**, 只存变量名。
+   *
+   * ⚠ 可选。选了供应商的模型**根本没有这个键** —— 迁移时写进库的 upstream
+   *   就是 `{model, provider}` 两项 (provider_store.py:229), 而
+   *   GET /api/admin/models 返回的是**库里原样**, 不是合并后的运行时配置
+   *   (admin_models_router.py:267 有说明: 返回合并/插值后的值, 等于管理员
+   *   编辑一次就把占位符烤成字面量)。
+   *
+   *   8/1 这里原来标的是必填 `string`, 于是 TS 不会逼人做判空,
+   *   validateModel 里一句 `m.upstream.api_key_env.trim()` 对着 undefined
+   *   直接抛 TypeError —— 而它在 async save() 里, 异常变成 rejected promise
+   *   被 `void save()` 丢掉, 表现就是**点保存毫无反应**。 */
+  api_key_env?: string;
   /** 强制覆盖的请求参数, 客户端传什么都会被替换 */
   param_overrides?: Record<string, unknown>;
   timeout?: number;
@@ -174,6 +185,11 @@ export function emptyModel(): ModelConfig {
   };
 }
 
+/** 合法的 POSIX 环境变量名。跟后端 admin_models_router._ENV_NAME_RE 同一条。 */
+function isEnvName(v: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(v) && v.length <= 64;
+}
+
 /** 提交前的本地校验.
  *
  * 后端也会校验 (同一个 pydantic 模型), 这里做一遍是为了**在点保存之前**就
@@ -196,14 +212,34 @@ export function validateModel(m: ModelConfig): string[] {
   // (sk-xxx / AIza… / 长 base64), 所以这一条正好挡住"把真 key 粘进来"——
   // 粘进去的后果是它明文写进数据库, 也就进 pg_dump 和备份。
   // 后端 _check_api_key_env 是真正兜底的那道 (前端能被绕过), 这里是即时反馈。
-  const keyEnv = m.upstream.api_key_env.trim();
-  if (!keyEnv) errs.push("API Key 环境变量名不能为空（这里填变量名，不是 key 本身）");
-  else if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyEnv) || keyEnv.length > 64)
+  //
+  // ── 8/1: 这条规则只对**老形态**成立 ──────────────────────────────
+  //
+  // 选了供应商之后, 端点和 key 都归供应商管, 模型这一层没有 api_key_env,
+  // 表单里那一格也**不再渲染** (ModelForm.tsx 里 `provider ? null : (...)`)。
+  // 而这里照旧要求它非空, 于是每一个迁移过的模型点保存都被拦下,
+  // 报的还是「API Key 环境变量名不能为空」—— 指着一格页面上根本没有的东西。
+  //
+  // 更早一步的问题是它连拦都拦不出声: 老形态的键在新形态里是**缺失**而不是
+  // 空串, `.trim()` 直接抛 TypeError, 异常被 `void save()` 吞掉,
+  // 表现是点保存毫无反应。所以下面既要判空也要分形态。
+  const keyEnv = (m.upstream.api_key_env ?? "").trim();
+  if (!m.upstream.provider) {
+    if (!keyEnv) errs.push("API Key 环境变量名不能为空（这里填变量名，不是 key 本身）");
+    else if (!isEnvName(keyEnv))
+      errs.push(
+        "「API Key 环境变量名」填的是变量名不是 key —— 只能用字母、数字、下划线，" +
+          "不能以数字开头，例如 DASHSCOPE_API_KEY。key 本身请让 IT 放到服务器的 .env 里，" +
+          "它不进数据库，也就不会出现在备份里。",
+      );
+  } else if (keyEnv && !isEnvName(keyEnv)) {
+    // 新形态正常不带这个键。带了 (手工 PUT / 老数据残留) 仍然不能是真 key ——
+    // 防"把 key 粘进来"这条跟形态无关, 明文入库的后果一样。
     errs.push(
-      "「API Key 环境变量名」填的是变量名不是 key —— 只能用字母、数字、下划线，" +
-        "不能以数字开头，例如 DASHSCOPE_API_KEY。key 本身请让 IT 放到服务器的 .env 里，" +
-        "它不进数据库，也就不会出现在备份里。",
+      `这个模型已经绑定供应商「${m.upstream.provider}」，key 由供应商管；` +
+        `而它的 api_key_env 里是一个不像变量名的值 —— key 本身不能进配置。`,
     );
+  }
   if (m.context_window != null && m.context_window <= 0)
     errs.push("上下文窗口要是正数");
   if (m.max_output_tokens != null && m.max_output_tokens <= 0)

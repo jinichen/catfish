@@ -108,9 +108,23 @@ def register_model_admin_routes(app: FastAPI) -> None:
         而这个字段之所以存在, 就是为了让 key 永远不进配置。
 
         前端也校验了, 但那道能被绕过 (直接 PUT)。真正兜住的是这一道。
+
+        ## 8/1: "非空"这条只对老形态成立
+
+        绑了供应商的模型, key 归供应商管 (供应商自己的 env 变量, 或者加密存库),
+        模型这一层的 api_key_env **没有意义** —— 迁移写进库的 upstream 就只有
+        `{model, provider}` (provider_store.py:229), 读的时候由 merge_provider
+        覆盖。界面上那一格也因此不再渲染。
+
+        照旧要求它非空的话, 等于要求填一个页面上看不见的字段。
+
+        但"不能是真 key"这半条跟形态无关 —— 粘进来照样明文入库, 所以只放过
+        **空**值, 不放过"填了个不像变量名的东西"。
         """
         v = (m.upstream.api_key_env or "").strip()
         if _ENV_NAME_RE.match(v) and len(v) <= 64:
+            return
+        if m.upstream.provider and not v:
             return
         raise HTTPException(
             400,
@@ -121,6 +135,12 @@ def register_model_admin_routes(app: FastAPI) -> None:
                 "例如 DASHSCOPE_API_KEY。\n\n"
                 "key 本身请让 IT 放到服务器的 .env 里 —— 它不进数据库, 也就不会"
                 "出现在备份和数据库导出里。"
+                + (
+                    f"\n\n(这个模型绑的是供应商 {m.upstream.provider!r} —— "
+                    "它的 key 在「供应商」页改, 模型这一层留空即可。)"
+                    if m.upstream.provider
+                    else ""
+                )
             ),
         )
 
