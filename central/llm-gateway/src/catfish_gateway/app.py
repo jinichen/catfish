@@ -63,7 +63,7 @@ from .auth import (  # noqa: E402
     resolve_effective_user_email,
 )
 from .catalog import build_catalog  # noqa: E402
-from . import model_store  # noqa: E402
+from . import model_store, provider_store  # noqa: E402
 from .config import (  # noqa: E402
     Config,
     ModelConfig,
@@ -194,6 +194,21 @@ def _seed_and_migrate_models() -> None:
                 "库里有多个默认模型, 已清掉多余的 %d 个: %s。"
                 "在此之前员工用到哪个默认模型取决于排序。",
                 len(cleared), ", ".join(cleared),
+            )
+            invalidate_config()
+
+        # 8/1: 把老形态的模型拆成「供应商 + 引用」。幂等 —— 已经是新形态的
+        # 跳过, 供应商按 (api_base, api_key_env) 去重。
+        #
+        # 放在这里而不是 alembic 里: 拆分要读 JSONB、去重、生成可读 id、回写,
+        # 用 Python 写能逐条钉测试并注入故障验证 (见 provider_store 文件头)。
+        # 跟上面两个"启动时幂等迁移"同一个套路。
+        new_providers = provider_store.migrate_models_to_providers()
+        if new_providers:
+            logger.info(
+                "已把模型拆成供应商 + 引用, 新建 %d 个供应商: %s。"
+                "以后加同一家的模型不用再重敲端点和 key 变量名。",
+                len(new_providers), ", ".join(new_providers),
             )
             invalidate_config()
 

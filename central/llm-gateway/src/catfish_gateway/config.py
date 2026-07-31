@@ -25,7 +25,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field
 
-from . import model_store
+from . import model_store, provider_store
 
 logger = logging.getLogger(__name__)
 
@@ -390,6 +390,7 @@ def load_config(path: Path | None = None) -> Config:
 #
 # 军规 §3 re-export: 老 caller `from .config import restore_placeholders` /
 # `interpolate_model_row` / `model_config_errors` 全部不受影响。
+from .config_providers import merge_provider  # noqa: E402,F401
 from .config_env import (  # noqa: E402,F401
     _ENV_PATHS,
     _get_path,
@@ -551,17 +552,36 @@ def _assemble_config() -> Config:
         return cfg  # 库通但还没播种 (首次启动) → 先用 yaml, lifespan 会播种
 
     globals()["_DB_EVER_SERVED"] = True
-    # 库里存的是 ${VAR} 原样 (见 load_raw_models), 到这里才插值 —— 这样 IT 改
-    # .env 重启就生效, 而不是被库里烤死的旧值盖住。
+
+    # 8/1: 供应商合并。库里模型的 upstream 可能是
+    #   老形态 {"model", "api_base", "api_key_env", "timeout"}
+    #   新形态 {"model", "provider", "timeout"}
+    # 两种并存 (迁移期), merge_provider 把后者还原成前者。
     #
+    # **合并必须在插值之前** —— api_base 上的 ${VAR} 现在挂在供应商行上,
+    # 先合并才轮得到 interpolate_model_row 去解析它。反过来的话占位符
+    # 原样进 UpstreamConfig, 调用时拿 "${INTERNAL_LLM_BASE_X}" 当 URL 用。
+    #
+    # 供应商表读不到 (还没跑 008 / 库临时不可用) → providers 为空 dict,
+    # 老形态模型照常工作, 新形态模型会被标成"引用了不存在的供应商"并在
+    # 界面上显示原因。不抛。
+    providers = provider_store.read_providers() or {}
+
     # 逐个模型来, 且不让单个模型的失败掀翻整份配置 (见 interpolate_model_row)。
     errs: dict[str, str] = {}
     models = []
     for r in rows:
-        row, err = interpolate_model_row(r)
+        name = str(r.get("name", "?"))
+        row, perr = merge_provider(r, providers)
+        if perr:
+            errs[name] = perr
+            logger.error("模型 %s 的供应商引用有问题: %s", name, perr)
+        # 库里存的是 ${VAR} 原样 (见 load_raw_models), 到这里才插值 —— 这样
+        # IT 改 .env 重启就生效, 而不是被库里烤死的旧值盖住。
+        row, err = interpolate_model_row(row)
         if err:
-            errs[str(r.get("name", "?"))] = err
-            logger.error("模型 %s 的 env 占位符没解析成功: %s", r.get("name"), err)
+            errs.setdefault(name, err)
+            logger.error("模型 %s 的 env 占位符没解析成功: %s", name, err)
         models.append(ModelConfig.model_validate(row))
     set_model_config_errors(errs)
     cfg.models = models
