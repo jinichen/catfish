@@ -511,7 +511,10 @@ function AssistantBubble({
  * 100% 重复翻译 (那是双倍维护负担), 只 catch 最常撞的几类.
  */
 function friendlyError(err: string | undefined): string {
-  if (!err) return "未知错误";
+  if (!err) return "请求被切换或重启中断，请稍等几秒后重发";
+  if (err.includes("模型运行通道仍在切换")) {
+    return "模型正在切换，请等下拉框恢复后重发";
+  }
   // 5xx 上游异常
   if (err.includes("UNAVAILABLE") || err.includes("503") || err.includes("overloaded")) {
     return "模型服务器临时高峰 (503), 稍后重试或换个模型";

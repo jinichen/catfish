@@ -257,28 +257,6 @@ pub fn run() {
             #[cfg(desktop)]
             tray::install(app.handle())?;
 
-            // macOS 点红色关闭按钮时保留主 WebView，只把窗口隐藏。
-            // 否则窗口对象会被销毁，Dock / 状态栏后续只能拿到 None，无法再次唤起。
-            // Cmd+Q / 应用菜单“退出鲶鱼”仍走应用退出流程，不受这里影响。
-            #[cfg(target_os = "macos")]
-            {
-                use tauri::Manager;
-
-                if let Some(main_window) = app.get_webview_window("main") {
-                    let window_to_hide = main_window.clone();
-                    main_window.on_window_event(move |event| {
-                        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                            api.prevent_close();
-                            if let Err(error) = window_to_hide.hide() {
-                                log::warn!("关闭主窗口时改为隐藏失败: {error}");
-                            } else {
-                                log::info!("主窗口已隐藏，可从 Dock / 状态栏再次唤起");
-                            }
-                        }
-                    });
-                }
-            }
-
             // 5/18 BL-COMPANION-ABOUT-HIJACK: macOS app menu 自定义,
             // "关于鲶鱼" item 走我们自己的 React 模态而不是原生 panel.
             #[cfg(target_os = "macos")]
@@ -636,6 +614,11 @@ pub fn run() {
             // hermes hang detection + auto restart (kill -9 触发 launchd 拉)
             commands::hermes::hermes_status,
             commands::hermes::hermes_kill,
+            // Hermes 0.18 原生 Codex app-server runtime：检测 / 登录 / 一键切换.
+            commands::codex_backend::codex_backend_status,
+            commands::codex_backend::codex_backend_set_enabled,
+            commands::codex_backend::codex_backend_select_model,
+            commands::codex_backend::codex_backend_open_login,
             // BL-CSP-PROXY (7/18 鸿波): Rust reqwest HTTP 代理, 让前端 fetch 走 Rust,
             // CSP connect-src 保持严格 (无外网白名单). 达华 POC 员工输达华 IP 才能通 chat.
             commands::http_proxy::http_proxy,
@@ -1045,20 +1028,19 @@ pub fn run() {
             // 背景: 浮窗 UX 下 Cmd+Shift+Space 会调 window.hide(), 之后用户
             // 点 dock 上的鲶鱼图标默认不会重开 (Tauri 不暴露默认 reopen 行为).
             // macOS NSApplicationDelegate applicationShouldHandleReopen 会派发
-            // tauri::RunEvent::Reopen, 这里接住后把主窗口拽出来 + 抢焦.
-            // 不能依赖 has_visible_windows：桌宠窗口可见时它会是 true，但用户
-            // 真正想唤醒的主窗口仍可能处于隐藏状态。
+            // tauri::RunEvent::Reopen, 这里接住, has_visible_windows=false 时
+            // 把主窗口拽出来 + 抢焦.
             //
             // 注: RunEvent::Reopen 只 macOS 有, Linux/Win 没这个变体, 故 cfg = macos.
             #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen { .. } = event {
-                use tauri::Manager;
-                if let Some(window) = app_handle.get_webview_window("main") {
-                    let _ = window.unminimize();
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                } else {
-                    log::error!("收到 macOS Reopen，但主窗口对象不存在");
+            if let tauri::RunEvent::Reopen { has_visible_windows, .. } = event {
+                if !has_visible_windows {
+                    use tauri::Manager;
+                    if let Some(window) = app_handle.get_webview_window("main") {
+                        let _ = window.unminimize();
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
                 }
             }
             #[cfg(not(target_os = "macos"))]

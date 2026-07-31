@@ -110,7 +110,7 @@ interface ChatState {
    * 用户 picker path 0 改. internal call (ChatTab catalog effect) 显式
    * 传 false signal "yaml 自动 propagate, 不是用户选".
    */
-  setModel: (m: string, pickedByUser?: boolean) => void;
+  setModel: (m: string, pickedByUser?: boolean, runtimeAlreadySynced?: boolean) => void;
   setPersistedSessionId: (id: string | null) => void;
   /** BL-GATEWAY-SOFT-HANDOFF (5/18): 标记一次 send 已用过当前 model, 下次发送
    *  时如果 model 变了, X-Catfish-Prev-Model header 就带上这个旧值. */
@@ -210,13 +210,25 @@ export const useChatStore = create<ChatState>((set) => ({
   setIsStreaming: (v) => set({ isStreaming: v }),
   setStreamingId: (id) => set({ streamingId: id }),
   setLifecycleStatus: (s) => set({ lifecycleStatus: s }),
-  setModel: (model, pickedByUser = true) => {
+  setModel: (model, pickedByUser = true, runtimeAlreadySynced = false) => {
     // P3.5.29 Phase 6.3 (6/17 鸿波): pickedByUser **默认 true** — 老 caller (chat
     // picker onChange / visionSwitch) 全用户主动 path 真0 改**, signal
     // "用户主动 select → 锁定 picker, 不被 catalog.default 覆盖".
     // internal call (ChatTab catalog effect) 显式传 false signal "yaml
     // 自动 propagate", 允许后续 yaml 改时 picker 真继续跟走**.
     set({ model, modelPickedByUser: pickedByUser });
+    // Codex 模型不是另一个“后端开关”，而是 picker 的一类模型。
+    // 所有非 picker 直接路径（启动恢复 / catalog default / vision switch）
+    // 也在这里对齐 Hermes runtime，防止 UI 显示 A 但实际跑 B。
+    if (!runtimeAlreadySynced) {
+      invoke("codex_backend_select_model", { model })
+        .then(() => {
+          window.dispatchEvent(new CustomEvent("catfish:catalog-refresh"));
+        })
+        .catch((e: unknown) => {
+          console.warn("[codex model runtime] 自动对齐失败:", e);
+        });
+    }
     // P3.5.28 (6/17 鸿波"picker 联动现在就应该做"): 桥给 Rust background task
     // (email_scheduler / phishing_scan). 写文件 ~/.catfish/picker_model 让 background
     // task 真 tick 时读. 员工 chat picker 切换下次 tick 生效.

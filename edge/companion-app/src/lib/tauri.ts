@@ -32,6 +32,33 @@ export const reinstallHermesAgent = () =>
 export const getHermesBootstrapStatus = () =>
   rawInvoke<HermesBootstrapProgress | null>("hermes_bootstrap_status");
 
+// ── Codex 后端（Hermes 原生 codex_app_server runtime）──
+export interface CodexBackendStatus {
+  installed: boolean;
+  binaryPath: string | null;
+  version: string | null;
+  supported: boolean;
+  loggedIn: boolean;
+  hermesReady: boolean;
+  enabled: boolean;
+  runtime: string;
+  provider: string | null;
+  model: string | null;
+  models: string[];
+  ready: boolean;
+  requiresNewSession: boolean;
+  message: string;
+}
+
+export const codexBackendStatus = () =>
+  rawInvoke<CodexBackendStatus>("codex_backend_status");
+export const codexBackendSetEnabled = (enabled: boolean) =>
+  rawInvoke<CodexBackendStatus>("codex_backend_set_enabled", { enabled });
+export const codexBackendSelectModel = (model: string) =>
+  rawInvoke<CodexBackendStatus>("codex_backend_select_model", { model });
+export const codexBackendOpenLogin = () =>
+  rawInvoke<void>("codex_backend_open_login");
+
 // ── chrome ───────────────────────────────────────────────
 export const chromeLaunch = () => rawInvoke<void>("chrome_launch");
 export const chromeKill = () => rawInvoke<void>("chrome_kill");
@@ -561,6 +588,18 @@ export interface ServerConfig {
   gateway_token: string;
   token_source: "yaml" | "env" | "none";
   identity_url: string;
+  /** P3.5.80 (7/28): catfish-web 中央门户 URL (endpoints.web_url).
+   *
+   *  跟 gateway_url、identity_url 是**三个独立配置**。
+   *
+   *  ⚠ **空串 = 未配置**, 不是默认值。Rust 侧刻意不返回
+   *  `http://127.0.0.1:5173` —— 返了 UI 会显示得像已经配好, 而员工点开
+   *  每个门户链接都指向自己这台机器。所以判空要用 `!cfg.web_url`,
+   *  别假设它一定是个能打开的地址。
+   *
+   *  类型是必选而非 `?:` —— Rust 侧 `pub web_url: String` 恒返, 标成
+   *  optional 会让调用方以为"可能没有这个字段", 掩盖掉"有字段但是空串"
+   *  这个真正要处理的情况。 */
   web_url: string;
   // secret_broker_url 字段砍, 旧 build 兼容靠 optional
   secret_broker_url?: string;  // deprecated, 永远不返
@@ -573,6 +612,8 @@ export const writeServerConfig = (
   gatewayUrl: string,
   gatewayToken: string,
   identityUrl?: string,
+  /** P3.5.80 (7/28): 不传 = 保持 yaml 里已有的 web_url 不动.
+   *  登录门那张卡 (ServerSetupCard) 就是不传的, 别让它把配好的擦掉. */
   webUrl?: string,
 ) =>
   rawInvoke<void>("write_server_config", {
