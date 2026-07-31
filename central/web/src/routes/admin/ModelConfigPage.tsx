@@ -295,12 +295,12 @@ function ModelConfigEditor() {
             rowKey={(m) => m.name}
             empty={data ? "还没有任何模型。点右上角「+ 新增模型」。" : "加载中…"}
             columns={[
+              // 只回答"这是哪个模型 / 什么类型"。上游、上下文、单价、能力、
+              // 失败切换全在编辑页 —— 那些是核对某一个模型时才看的, 摆在
+              // 列表上的净效果只是让每一行都变宽、每一列都变窄。
               {
-                // 只回答"这是哪个模型 / 什么状态"。上游、上下文、能力、
-                // 失败切换、单价全在编辑页 —— 那些是核对某一个模型时才看的,
-                // 摆在列表上只是让每一行都变宽、每一列都变窄。
                 header: "模型",
-                width: "40%",
+                width: "42%",
                 truncate: true,
                 cell: (m) => {
                   const { name, note } = splitDisplayName(m.display_name);
@@ -308,7 +308,11 @@ function ModelConfigEditor() {
                   return (
                     <span
                       style={{ display: "flex", alignItems: "center", gap: 5 }}
-                      title={m.display_name}
+                      // ID 不再单独占一列 (7/30 五改: 鸿波"不要 ID")。
+                      // 但它仍是唯一标识 —— 显示名可以重复, 而审计日志、员工端
+                      // 的模型选择、fallback 链里用的都是它。收进 tooltip,
+                      // 要看要改在编辑页 (那里顶部就显示着)。
+                      title={`${m.display_name}\n${m.name}`}
                     >
                       <span
                         style={{
@@ -337,11 +341,7 @@ function ModelConfigEditor() {
                       {/* 徽章 flexShrink:0, 名字才是可压缩的那个 ——
                           反过来窄屏下会先把徽章挤没 */}
                       <span style={{ display: "inline-flex", gap: 4, flexShrink: 0 }}>
-                        {/* 只标"需要留神"的: 默认 / 公网 / 出问题了。
-                            "私有"不标 —— 6 行里 6 行都有的徽章不是信息。 */}
                         {m.default ? <Badge tone="accent">默认</Badge> : null}
-                        {m.mode === "embedding" ? <Badge>向量</Badge> : null}
-                        {m.tier === "public" ? <Badge tone="warn">公网</Badge> : null}
                         {badErr ? (
                           <Badge tone="err" title={badErr}>
                             配置有误
@@ -361,15 +361,26 @@ function ModelConfigEditor() {
                 },
               },
               {
-                header: "ID",
-                truncate: true,
-                // 留着是因为它才是唯一标识 —— 显示名可以重复, 而审计日志、
-                // 员工端的模型选择、fallback 链里用的都是这个。
-                cell: (m) => (
-                  <code style={{ fontSize: 11, color: "var(--text-muted)" }} title={m.name}>
-                    {m.name}
-                  </code>
-                ),
+                header: "类型",
+                width: 90,
+                cell: (m) => (m.mode === "embedding" ? "向量" : "对话"),
+              },
+              {
+                header: "归属",
+                width: 90,
+                // 公网标出来 —— 它走公网出口, 涉及合规, 是这一列里唯一需要
+                // 留神的取值。私有是常态, 保持中性。
+                cell: (m) =>
+                  m.tier === "public" ? (
+                    <span style={{ color: "var(--status-warn)" }}>公网</span>
+                  ) : (
+                    <span style={{ color: "var(--text-muted)" }}>私有</span>
+                  ),
+              },
+              {
+                header: "模态",
+                width: 90,
+                cell: (m) => (m.supports_vision ? "多模态" : "文本"),
               },
               {
                 header: "",

@@ -184,6 +184,18 @@ def _seed_and_migrate_models() -> None:
                 len(fixed), ", ".join(fixed),
             )
             invalidate_config()
+        # 库里撞出多个 default 时清到只剩一个。default 必须全局唯一 ——
+        # default_model() 返回列表里第一个 default=True 的, 两个的话就取决于
+        # 排序, 员工下次开聊用哪个模型不可预测。
+        cleared = model_store.enforce_single_default()
+        if cleared:
+            logger.warning(
+                "库里有多个默认模型, 已清掉多余的 %d 个: %s。"
+                "在此之前员工用到哪个默认模型取决于排序。",
+                len(cleared), ", ".join(cleared),
+            )
+            invalidate_config()
+
         for mname, note in suspicious.items():
             # 换不回来的必须说出来, 不能静默跳过 —— 这个 bug 的发现路径
             # ("改了 .env 不生效") 恰恰会让"对不上"成为常态。

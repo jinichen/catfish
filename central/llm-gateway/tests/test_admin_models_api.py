@@ -473,3 +473,128 @@ def test_播种进库的是_yaml_原文而不是插值后的值(tmp_path, monkey
         "播种用了插值后的 config.models —— 真实地址被烤进库, "
         "而且此后改 .env 不再生效"
     )
+
+
+# ── default 必须全局唯一 (7/30 五修) ────────────────────────────────────
+#
+# Config.default_model() 返回的是列表里**第一个** default=True 的 ——
+# 两个的话就取决于排序, 员工下次开聊用哪个模型不可预测, 而界面上看起来
+# 只是"两行都挂着「默认」徽章", 不点进去没人会意识到这意味着什么。
+#
+# 鸿波 7/30 的库里就撞出了这个状态: catfish-private-main 被删过又加回来,
+# 重启时播种按 models.yaml 插入它 (yaml 里 default: true), 而库里
+# catfish-private-vision 已经因为"删默认后自动接任"挂着默认了。
+# 播种只管 ON CONFLICT DO NOTHING, **完全不检查已经有没有默认模型**。
+
+
+def test_播种不会带进来第二个默认(monkeypatch):
+    """播种是"补齐缺失的出厂模型", 不该改变当前的默认."""
+    from catfish_gateway import model_store as MS
+
+    store = {"已有": {"name": "已有", "default": True}}
+    inserted: list[dict] = []
+
+    class _Cur:
+        def __init__(self):
+            self._r = None
+
+        def execute(self, sql, args=None):
+            if "count(*)" in sql:
+                self._r = [sum(1 for v in store.values() if v.get("default"))]
+            elif "INSERT" in sql:
+                import json as _j
+
+                m = _j.loads(args[1])
+                inserted.append(m)
+                if m["name"] not in store:
+                    store[m["name"]] = m
+                self.rowcount = 1
+            else:
+                self._r = [1]
+
+        def fetchone(self):
+            return self._r
+
+        rowcount = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    class _Conn:
+        def cursor(self):
+            return _Cur()
+
+        def commit(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(MS, "is_enabled", lambda: True)
+    monkeypatch.setattr(MS, "_conn", lambda: _Conn())
+    monkeypatch.setattr(MS, "_bump_revision", lambda cur: None)
+
+    MS.seed_from_yaml([{"name": "新来的", "default": True}])
+
+    assert inserted, "没播种"
+    assert inserted[0]["default"] is False, (
+        "库里已经有默认模型了, 播种不该再带进来一个 —— "
+        "两个 default 时 default_model() 取决于排序"
+    )
+
+
+def test_库里已经有两个默认时清到只剩一个(monkeypatch):
+    """光在播种时防住不够 —— 已经撞出来的库要能修回来."""
+    from catfish_gateway import model_store as MS
+
+    rows = [
+        ("main", {"name": "main", "default": True}),
+        ("vision", {"name": "vision", "default": True}),
+    ]
+    updated: dict[str, dict] = {}
+
+    class _Cur:
+        def execute(self, sql, args=None):
+            if sql.startswith("SELECT"):
+                self._r = rows
+            else:
+                import json as _j
+
+                updated[args[1]] = _j.loads(args[0])
+
+        def fetchall(self):
+            return self._r
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    class _Conn:
+        def cursor(self):
+            return _Cur()
+
+        def commit(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(MS, "is_enabled", lambda: True)
+    monkeypatch.setattr(MS, "_conn", lambda: _Conn())
+    monkeypatch.setattr(MS, "_bump_revision", lambda cur: None)
+
+    cleared = MS.enforce_single_default()
+    assert cleared == ["vision"], "留 sort_order 最靠前的那个 (main)"
+    assert updated["vision"]["default"] is False
+    assert "main" not in updated, "第一个不该被动"

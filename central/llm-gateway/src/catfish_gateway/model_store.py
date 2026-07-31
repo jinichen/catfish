@@ -104,12 +104,34 @@ def seed_from_yaml(models: list[dict[str, Any]]) -> int:
     幂等, 而且并发安全 —— 4 个 worker 启动时会同时跑这个, 靠
     ON CONFLICT DO NOTHING 让重复播种变成空操作。
 
+    ## 播种不能带进来第二个 default
+
+    models.yaml 里 catfish-private-main 是 `default: true`。如果库里已经有
+    别的模型挂着默认 (例如删掉 main 之后自动接任的那个), 而 main 后来又被
+    重新加回来, 播种会**照 yaml 原样插入**, 于是库里出现两个 default。
+
+    default 必须全局唯一 —— Config.default_model() 返回的是列表里第一个
+    default=True 的, 两个的话就取决于排序, 员工下次开聊用哪个模型不可预测。
+    7/30 鸿波库里就撞出了这个状态 (main 和 vision 同时挂着「默认」)。
+
+    规则: 播种是"补齐缺失的出厂模型", **不该改变当前的默认**。库里已经有
+    默认了, 就把要插入的那些的 default 去掉。
+
     返回真正插进去的条数 (0 表示已经播过了)。
     """
     if not is_enabled() or not models:
         return 0
     try:
         with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT count(*) FROM gateway_models "
+                "WHERE (payload->>'default')::boolean IS TRUE"
+            )
+            has_default = (cur.fetchone() or [0])[0] > 0
+            if has_default:
+                models = [
+                    {**m, "default": False} if m.get("default") else m for m in models
+                ]
             n = 0
             for i, m in enumerate(models):
                 cur.execute(
@@ -137,6 +159,44 @@ def _bump_revision(cur) -> None:
     cur.execute(
         "UPDATE gateway_config_meta SET revision = revision + 1 WHERE id = 1"
     )
+
+
+def enforce_single_default() -> list[str]:
+    """库里有多个 default 时, 只留 sort_order 最靠前的那个. 返回被清掉的模型名.
+
+    光在播种时防住不够 —— 已经撞出两个 default 的库需要修回来, 而这个状态
+    从界面上看是"两行都挂着「默认」徽章", 不点进去不会有人意识到它意味着
+    "员工用哪个模型取决于排序"。
+
+    幂等。每次启动跑一次。
+    """
+    if not is_enabled():
+        return []
+    cleared: list[str] = []
+    try:
+        with _conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT name, payload FROM gateway_models "
+                "WHERE (payload->>'default')::boolean IS TRUE "
+                "ORDER BY sort_order, name"
+            )
+            rows = cur.fetchall()
+            if len(rows) < 2:
+                return []
+            for name, payload in rows[1:]:  # 留第一个
+                cur.execute(
+                    "UPDATE gateway_models SET payload = %s::jsonb, "
+                    "updated_by = 'migrate:single-default', updated_at = now() "
+                    "WHERE name = %s",
+                    (json.dumps({**payload, "default": False}, ensure_ascii=False), name),
+                )
+                cleared.append(name)
+            _bump_revision(cur)
+            conn.commit()
+    except Exception:
+        logger.exception("清理多余的 default 失败, 库里可能仍有多个默认模型")
+        return []
+    return cleared
 
 
 def restore_env_placeholders(
