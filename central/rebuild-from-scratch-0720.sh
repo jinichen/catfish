@@ -138,11 +138,28 @@ cd "$CENTRAL"
 
 # ── 版本戳 (8/1) ──────────────────────────────────────────────────
 # 现在**开始**时抓一次, 不是打包时 —— 这才对得上 docker 读构建上下文的时间点。
-# 工作区脏时必须说出来: SHA 只描述已提交的部分, 有未提交改动时它描述不了
-# 这个包, 那这个戳就是在撒谎。
+#
+# ## 为什么不能拿整仓 SHA 当"是不是同一次代码"的判据 (8/1 当天就改了)
+#
+# 第一版比的是 `git rev-parse HEAD`。但这个仓里还有 edge/ (Companion 客户端、
+# hermes 插件), 那边一提交整仓 SHA 就变, 而交付包里**一个字节都不会变** ——
+# 镜像是从 central/ 构建的, 包的骨架来自 delivery/dahua-poc/。
+#
+# 后果是: 两个平台的构建之间只要有人动过 Companion, 结尾就喊一句
+# "❌ 两个平台不是同一次代码"。喊几次狼来了之后就没人看了 —— 而这个检查
+# 存在的全部意义就是那句话响的时候有人当真。同一个文件里另一处注释写着
+# "一个永远亮着的警告灯等于没有警告灯", 这里差点原样再犯一次。
+#
+# 改成比**进包的那两棵树**的 git tree id: central/ 和 delivery/。
+# edge/ 怎么改都不影响它们; central/ 真动了一个字节就一定变。
+# 整仓 SHA 仍然记进包里 —— 追溯"这个包是哪一版代码"时它更好用。
 _git() { git -C "$REPO_ROOT" "$@" 2>/dev/null; }
 GIT_SHA=$(_git rev-parse --short HEAD || echo unknown)
-GIT_DIRTY=$(_git status --porcelain || true)
+_tree_central=$(_git rev-parse "HEAD:central" || echo "-")
+_tree_delivery=$(_git rev-parse "HEAD:delivery" || echo "-")
+DELIVERY_HASH="${_tree_central:0:8}-${_tree_delivery:0:8}"
+# 未提交改动同理只看这两处 —— edge/ 有脏文件不影响这个包, 报出来只是噪音。
+GIT_DIRTY=$(_git status --porcelain -- central delivery || true)
 
 # ── 前置检查: Docker daemon 必须活着 (P3.5.80 · 7/28) ──────────────
 #
@@ -483,6 +500,8 @@ if [ "$BUILD_FULL_DELIVERY" = "1" ]; then
                 echo "arch=$arch"
                 echo "date=$DATE"
                 echo "git_sha=$GIT_SHA"
+                # 跨平台比对用的就是这一行 (不是 git_sha, 理由见文件上方)。
+                echo "delivery_hash=$DELIVERY_HASH"
                 echo "git_dirty=$([ -n "$GIT_DIRTY" ] && echo yes || echo no)"
                 echo "built_at=$(date '+%Y-%m-%d %H:%M:%S %Z')"
                 echo "built_on=$(uname -sm)"
@@ -656,19 +675,28 @@ if [ -n "$_other" ]; then
     if [ -f "$_other_full" ]; then
         # 日期相同**不代表代码相同** —— 7/31 就是这么撞的: arm64 打完之后
         # 修了个 bug, amd64 再打就带上了修复, 两个包却都叫 -20260731。
-        # 所以比对 BUILD-INFO.txt 里的 git_sha, 不是比日期。
-        _other_sha=$(tar xzf "$_other_full" -O delivery/dahua-poc/BUILD-INFO.txt 2>/dev/null \
-                     | sed -n 's/^git_sha=//p' || true)
-        if [ -z "$_other_sha" ]; then
+        # 比的是 delivery_hash (central/ + delivery/ 两棵树), 不是整仓 SHA,
+        # 更不是日期 —— 理由见文件上方那段。
+        _other_info=$(tar xzf "$_other_full" -O delivery/dahua-poc/BUILD-INFO.txt 2>/dev/null || true)
+        _other_hash=$(printf '%s\n' "$_other_info" | sed -n 's/^delivery_hash=//p')
+        _other_sha=$(printf '%s\n' "$_other_info" | sed -n 's/^git_sha=//p')
+        if [ -z "$_other_hash" ]; then
             echo "→ 两个平台的包都在 (${DATE}), 但 ${_other} 那个是**加版本戳之前**打的,"
             echo "  没法确认两边是同一次代码。要保险就把 ${_other} 重打一遍。"
-        elif [ "$_other_sha" = "$GIT_SHA" ]; then
-            echo "→ 两个平台都齐了 (${DATE} · git ${GIT_SHA}) —— 同一次代码 ✓"
+        elif [ "$_other_hash" = "$DELIVERY_HASH" ]; then
+            echo "→ 两个平台都齐了 (${DATE}) —— 交付内容同一份 ✓"
+            echo "    delivery_hash ${DELIVERY_HASH}"
+            # 整仓 SHA 不同但交付内容相同 = 中间只动过 edge/。这不是问题,
+            # 但要说一句, 否则两个包里 git_sha 不一样会让人以为出事了。
+            if [ -n "$_other_sha" ] && [ "$_other_sha" != "$GIT_SHA" ]; then
+                echo "    (两边 git_sha 不同: ${ARCH} ${GIT_SHA} / ${_other} ${_other_sha} ——"
+                echo "     中间只改过 edge/ 之类不进包的东西, 交付内容没变)"
+            fi
         else
-            echo "  ❌ 两个平台**不是同一次代码**:"
-            echo "       ${ARCH}: git ${GIT_SHA}"
-            echo "       ${_other}: git ${_other_sha}"
-            echo "     日期一样但代码不一样 —— 别当一对发出去。"
+            echo "  ❌ 两个平台**交付内容不一样**:"
+            echo "       ${ARCH}: ${DELIVERY_HASH}  (git ${GIT_SHA})"
+            echo "       ${_other}: ${_other_hash}  (git ${_other_sha:-?})"
+            echo "     central/ 或 delivery/ 在两次构建之间改过 —— 别当一对发出去。"
             echo "     把落后的那个平台按当前代码重打一遍。"
         fi
         if [ -n "$GIT_DIRTY" ]; then
