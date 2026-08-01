@@ -26,13 +26,6 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
-        # persist-credentials: false (8/1) —— 治 Post Checkout 的 git.exe exit 128。
-        # 本仓四个 workflow 都不对 catfish 做 git push/fetch/pull/submodule/tag,
-        # 没有任何一步需要 checkout 注入 .git/config 的那个临时 token。
-        # 不注入 → Post 步骤不用摘 → 那条 git.exe exit 128 的清理失败消失,
-        # 而且作业全程 .git/config 里没有凭证, 顺带是个安全改进。
-        with:
-          persist-credentials: false
 
       - name: Set up Python 3.10
         uses: actions/setup-python@v6
@@ -75,13 +68,6 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
-        # persist-credentials: false (8/1) —— 治 Post Checkout 的 git.exe exit 128。
-        # 本仓四个 workflow 都不对 catfish 做 git push/fetch/pull/submodule/tag,
-        # 没有任何一步需要 checkout 注入 .git/config 的那个临时 token。
-        # 不注入 → Post 步骤不用摘 → 那条 git.exe exit 128 的清理失败消失,
-        # 而且作业全程 .git/config 里没有凭证, 顺带是个安全改进。
-        with:
-          persist-credentials: false
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
@@ -145,13 +131,6 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v5
-        # persist-credentials: false (8/1) —— 治 Post Checkout 的 git.exe exit 128。
-        # 本仓四个 workflow 都不对 catfish 做 git push/fetch/pull/submodule/tag,
-        # 没有任何一步需要 checkout 注入 .git/config 的那个临时 token。
-        # 不注入 → Post 步骤不用摘 → 那条 git.exe exit 128 的清理失败消失,
-        # 而且作业全程 .git/config 里没有凭证, 顺带是个安全改进。
-        with:
-          persist-credentials: false
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
@@ -196,13 +175,6 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
-        # persist-credentials: false (8/1) —— 治 Post Checkout 的 git.exe exit 128。
-        # 本仓四个 workflow 都不对 catfish 做 git push/fetch/pull/submodule/tag,
-        # 没有任何一步需要 checkout 注入 .git/config 的那个临时 token。
-        # 不注入 → Post 步骤不用摘 → 那条 git.exe exit 128 的清理失败消失,
-        # 而且作业全程 .git/config 里没有凭证, 顺带是个安全改进。
-        with:
-          persist-credentials: false
 
       - name: Set up Node 20
         uses: actions/setup-node@v6
@@ -250,13 +222,6 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
-        # persist-credentials: false (8/1) —— 治 Post Checkout 的 git.exe exit 128。
-        # 本仓四个 workflow 都不对 catfish 做 git push/fetch/pull/submodule/tag,
-        # 没有任何一步需要 checkout 注入 .git/config 的那个临时 token。
-        # 不注入 → Post 步骤不用摘 → 那条 git.exe exit 128 的清理失败消失,
-        # 而且作业全程 .git/config 里没有凭证, 顺带是个安全改进。
-        with:
-          persist-credentials: false
 
       - name: Set up Node 20
         uses: actions/setup-node@v6
@@ -317,13 +282,6 @@ jobs:
             extra_deps: "fastapi 'pydantic>=2' pyyaml pyjwt bcrypt cryptography python-dotenv python-multipart httpx anyio"
     steps:
       - uses: actions/checkout@v5
-        # persist-credentials: false (8/1) —— 治 Post Checkout 的 git.exe exit 128。
-        # 本仓四个 workflow 都不对 catfish 做 git push/fetch/pull/submodule/tag,
-        # 没有任何一步需要 checkout 注入 .git/config 的那个临时 token。
-        # 不注入 → Post 步骤不用摘 → 那条 git.exe exit 128 的清理失败消失,
-        # 而且作业全程 .git/config 里没有凭证, 顺带是个安全改进。
-        with:
-          persist-credentials: false
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
@@ -364,13 +322,6 @@ jobs:
             extra_deps: "pytest-mock"
     steps:
       - uses: actions/checkout@v5
-        # persist-credentials: false (8/1) —— 治 Post Checkout 的 git.exe exit 128。
-        # 本仓四个 workflow 都不对 catfish 做 git push/fetch/pull/submodule/tag,
-        # 没有任何一步需要 checkout 注入 .git/config 的那个临时 token。
-        # 不注入 → Post 步骤不用摘 → 那条 git.exe exit 128 的清理失败消失,
-        # 而且作业全程 .git/config 里没有凭证, 顺带是个安全改进。
-        with:
-          persist-credentials: false
 
       - name: Set up Python ${{ matrix.python }}
         uses: actions/setup-python@v6
@@ -404,13 +355,6 @@ jobs:
         module: [catfish-memory, catfish-xcatfish-user]
     steps:
       - uses: actions/checkout@v5
-        # persist-credentials: false (8/1) —— 治 Post Checkout 的 git.exe exit 128。
-        # 本仓四个 workflow 都不对 catfish 做 git push/fetch/pull/submodule/tag,
-        # 没有任何一步需要 checkout 注入 .git/config 的那个临时 token。
-        # 不注入 → Post 步骤不用摘 → 那条 git.exe exit 128 的清理失败消失,
-        # 而且作业全程 .git/config 里没有凭证, 顺带是个安全改进。
-        with:
-          persist-credentials: false
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
@@ -441,13 +385,6 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
-        # persist-credentials: false (8/1) —— 治 Post Checkout 的 git.exe exit 128。
-        # 本仓四个 workflow 都不对 catfish 做 git push/fetch/pull/submodule/tag,
-        # 没有任何一步需要 checkout 注入 .git/config 的那个临时 token。
-        # 不注入 → Post 步骤不用摘 → 那条 git.exe exit 128 的清理失败消失,
-        # 而且作业全程 .git/config 里没有凭证, 顺带是个安全改进。
-        with:
-          persist-credentials: false
 
       - name: Set up Node 20
         uses: actions/setup-node@v6
@@ -476,13 +413,6 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
-        # persist-credentials: false (8/1) —— 治 Post Checkout 的 git.exe exit 128。
-        # 本仓四个 workflow 都不对 catfish 做 git push/fetch/pull/submodule/tag,
-        # 没有任何一步需要 checkout 注入 .git/config 的那个临时 token。
-        # 不注入 → Post 步骤不用摘 → 那条 git.exe exit 128 的清理失败消失,
-        # 而且作业全程 .git/config 里没有凭证, 顺带是个安全改进。
-        with:
-          persist-credentials: false
 
       - name: Set up Rust stable
         uses: dtolnay/rust-toolchain@stable
