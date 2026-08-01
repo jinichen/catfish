@@ -1,16 +1,14 @@
 # 达华 POC · 3 台 mac 分发 SOP
 
 **规模**: 2 台 Apple Silicon + 1 台 Intel
-**版本**: v0.20.0 (2026-08-01 · Codex 模型运行时 + 工作台界面重做; 服务端 HTTPS / CA 信任 / 绕系统代理那几条仍按 7-28 那版)
+**版本**: v0.19.0 (2026-08-01 · Codex 模型运行时 + 工作台界面重做; 服务端 HTTPS / CA 信任 / 绕系统代理那几条仍按 7-28 那版)
 **目的**: 让 3 台 mac 员工装 Companion + verify chat 通
 
 > ⚠ **7/28 现状 · 分发前必读**
 > 1. **x64 (Intel) dmg 当前没有** —— `target/x86_64-apple-darwin/` 目录不存在。
 >    Intel 那台要么今晚补 build (`npm run tauri build -- --target x86_64-apple-darwin`,
 >    需先 `rustup target add x86_64-apple-darwin`),要么首日只上 2 台 Apple Silicon。
-> 2. dmg 体积 ≈ 579 MB (内嵌 hermes 离线包,比 0.18 的 128 MB 大是正常的)。
->    这个数字是 **0.19.0 实测**的;0.20.0 还没量过,大头是 hermes 离线包所以应该
->    差不多,但别拿它当验收依据 —— 打完自己 `ls -lh` 看一眼。
+> 2. 0.19.0 aarch64 dmg ≈ 579 MB (内嵌 hermes 离线包,比 0.18 的 128 MB 大是正常的)。
 > 3. 服务端已启 HTTPS:员工机**多一步装 ca.pem**,见下文装机步骤 3.5。
 > 4. 聊天要通,**服务器 `.env` 必须已填 `DASHSCOPE_API_KEY`** —— 门户能登录
 >    不代表 key 已配;没配的话 chat 第一条消息报「上游 LLM Provider 鉴权挂了」。
@@ -68,16 +66,15 @@ ls -la ~/person_task/catfish/edge/companion-app/src-tauri/target/release/bundle/
 ls -la ~/person_task/catfish/edge/companion-app/src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
 ```
 
-期望:
-- `Catfish Companion_0.20.0_aarch64.dmg` ≈ 579 MB (7/28 在 0.19.0 上实测的数;
-  0.20.0 未量, 大头是内嵌 hermes 离线包, 应该接近)
+期望 (7/28 实测):
+- `Catfish Companion_0.19.0_aarch64.dmg` ≈ 579 MB (内嵌 hermes 离线包)
 - x64 dmg **当前没有** · Intel 机需先补 build (见文件头 ⚠)
 
 ### 2. Copy 到 Downloads · 上传 Nextcloud
 
 ```bash
 mkdir -p ~/Downloads/catfish-达华POC-0715/
-cp ~/person_task/catfish/edge/companion-app/src-tauri/target/release/bundle/dmg/Catfish\ Companion_0.20.0_aarch64.dmg ~/Downloads/catfish-达华POC-0715/
+cp ~/person_task/catfish/edge/companion-app/src-tauri/target/release/bundle/dmg/Catfish\ Companion_0.19.0_aarch64.dmg ~/Downloads/catfish-达华POC-0715/
 ```
 
 上传 Nextcloud `paixiao2.duckdns.org:9997/catfish-达华POC/`.
@@ -86,7 +83,7 @@ cp ~/person_task/catfish/edge/companion-app/src-tauri/target/release/bundle/dmg/
 
 ```bash
 # 装
-open ~/Downloads/catfish-达华POC-0715/Catfish\ Companion_0.20.0_aarch64.dmg
+open ~/Downloads/catfish-达华POC-0715/Catfish\ Companion_0.19.0_aarch64.dmg
 # 拖到 Applications
 
 # 打开
@@ -108,8 +105,8 @@ open -a "Catfish Companion"
 
 ### 员工 1/2/3 装机步骤
 
-**给 2 台 Apple Silicon 员工**: `Catfish Companion_0.20.0_aarch64.dmg`
-**给 1 台 Intel 员工**: `Catfish Companion_0.20.0_x64.dmg`（文件头 ⚠ 说了这个还没 build）
+**给 2 台 Apple Silicon 员工**: `Catfish Companion_0.19.0_aarch64.dmg`
+**给 1 台 Intel 员工**: `Catfish Companion_0.19.0_x64.dmg`（文件头 ⚠ 说了这个还没 build）
 
 **装机步骤** (每台员工机):
 

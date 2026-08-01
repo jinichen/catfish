@@ -9,7 +9,7 @@
 | 文件 | 给谁 | 说明 |
 |---|---|---|
 | `dahua-poc-FULL-<arch>-20260728.tar.gz` | 服务器 | 一体包,含全部镜像 + 安装脚本,不依赖外网 |
-| `Catfish Companion_0.20.0_aarch64.dmg` | 员工机器 | 桌面端,**当前仅 Apple Silicon**;Intel Mac 需另 build x64 dmg |
+| `Catfish Companion_0.19.0_aarch64.dmg` | 员工机器 | 桌面端,**当前仅 Apple Silicon**;Intel Mac 需另 build x64 dmg |
 
 架构选择:x86_64 服务器用 `amd64`,ARM 服务器(鲲鹏 / Graviton / Apple Silicon)用 `arm64`。选错装不起来。
 
