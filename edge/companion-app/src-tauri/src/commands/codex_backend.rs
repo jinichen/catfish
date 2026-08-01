@@ -891,11 +891,24 @@ fn catalog_status() -> CodexBackendStatus {
     }
 
     let probe = probe_codex();
-    let hermes = run_hermes_helper(
-        "status",
-        probe.as_ref().map(|value| value.path.as_path()),
-        None,
-    );
+    // 机器上压根没有 codex 二进制时, 不用再起一个 Python 去问 hermes 的 Codex
+    // 状态 —— 没有 codex 的机器上那个答案只有一种, 而问一次的代价是一个完整的
+    // Python 解释器 + import hermes_cli。
+    //
+    // 这不是边角情况: 国内基本用不上 Codex (要 OpenAI 账号), 也就是说
+    // **绝大多数员工机器的常态就是这一支**。原来每次 catalog 轮询都白跑一趟。
+    //
+    // 传的错误文案跟 build_status 里 `!installed` 那一支逐字相同, 所以界面上
+    // 看到的话没有变化 —— 变的只是不再为它起进程。
+    let hermes = if probe.is_some() {
+        run_hermes_helper(
+            "status",
+            probe.as_ref().map(|value| value.path.as_path()),
+            None,
+        )
+    } else {
+        Err("未找到 Codex CLI，可先安装 Codex 或 ChatGPT 桌面版".to_string())
+    };
     let status = build_status(probe, hermes, None, false);
     if let Ok(mut value) = cache.lock() {
         *value = Some((Instant::now(), status.clone()));
