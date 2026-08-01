@@ -128,9 +128,16 @@ def _p39_start_codex_janitor() -> None:
         _P39_CODEX_JANITOR_STARTED = True
 
     def _run() -> None:
+        # 循环体必须整个包住。裸的 `while True: prune()` 只要抛一次异常线程就
+        # **永久退出** —— daemon 线程没人重启也没人告警, 从那一刻起 Codex 的
+        # app-server 子进程再也不回收, 而现象要等到机器上进程堆满才看得出来,
+        # 那时早就跟这里对不上号了。
         while True:
-            time.sleep(60)
-            _p39_prune_codex_cache()
+            try:
+                time.sleep(60)
+                _p39_prune_codex_cache()
+            except Exception:
+                logger.warning("P39 Codex 会话清理这一轮失败, 下一轮继续", exc_info=True)
 
     threading.Thread(
         target=_run,
@@ -3262,7 +3269,26 @@ def _patch_p39_codex_app_server_auth_bypass() -> None:
         # Picker 状态和 gateway runtime 在切换窗口内不一致时，宁可明确拒绝
         # 这一条，也绝不能把 DeepSeek 发进 Codex（或反过来）。正常情况下 Rust
         # 会等到旧 gateway 真退出、新进程稳定后才让 UI 解锁；这是第二道保险。
+        #
+        # ⚠ 这道保险有过两条**自己关掉自己**的路, 8/1 补上:
+        #
+        #   1. `except Exception: codex_ids = set()` 一声不吭, 而下一行的
+        #      `if codex_ids and ...` 遇到空集合直接短路 —— hermes_cli 的
+        #      codex_models 导入失败或改了 API, 这道"绝不能把 DeepSeek 发进
+        #      Codex"的保险就**永远通过**, 而且没有任何痕迹。一个永远放行的
+        #      保险丝比没有保险丝更危险: 它让人以为有。
+        #   2. `_read_catfish_picker_model()` 在 json 解析失败时返回 ""，
+        #      `if picker_model:` 于是整段跳过, 同样无声。
+        #
+        # 现在两条都记日志。注意**不能**改成"取不到就拒绝请求"——
+        # picker 文件不存在是全新装机的正常状态, 那样会让新员工一条都发不出去。
+        # 能做的是: 保险失效时必须在日志里留下痕迹, 让排查的人找得到。
         picker_model = _read_catfish_picker_model()
+        if not picker_model:
+            logger.debug(
+                "P39 跨 runtime 保险跳过: 读不到 picker_model "
+                "(全新装机时正常; 若员工确实在切模型, 说明 ~/.catfish/picker_model 有问题)"
+            )
         if picker_model:
             try:
                 from hermes_cli.codex_models import get_codex_model_ids  # noqa: PLC0415
@@ -3273,7 +3299,18 @@ def _patch_p39_codex_app_server_auth_bypass() -> None:
                     if isinstance(value, str) and value.startswith("gpt-")
                 }
             except Exception:
+                logger.warning(
+                    "P39 跨 runtime 保险**已失效**: 取不到 Codex 模型清单, "
+                    "本次请求不做 picker/runtime 一致性校验",
+                    exc_info=True,
+                )
                 codex_ids = set()
+            else:
+                if not codex_ids:
+                    logger.warning(
+                        "P39 跨 runtime 保险**已失效**: Codex 模型清单为空 "
+                        "(可能 Codex 换用了非 gpt- 前缀的模型 id), 本次不做一致性校验"
+                    )
             picker_is_codex = picker_model in codex_ids
             if codex_ids and picker_is_codex != config_is_codex:
                 logger.warning(
@@ -3553,7 +3590,13 @@ def _patch_p40_companion_user_message_dedup() -> None:
     规则刻意保守：
     - session.source 必须是 ``companion``；微信/Slack/CLI 完全不受影响；
     - 当前最后一条 active message 也必须是相同内容的 user；
-    - 两条相距不超过 120 秒。正常一问一答中间有 assistant，不会误去重。
+    - 两条相距不超过 30 秒（8/1 从 120 收窄）。正常一问一答中间有 assistant，
+      不会误去重；30 秒 = 上面实测冷启动上限 12 秒的 2.5 倍留余量。
+      120 秒太宽：判据是"内容相同"不是"同一个 id"，两分钟内员工连点两次发送、
+      连发两次"继续"、auto-continue 的固定 prompt 都会被当成重复吞掉，
+      而且吞掉之后调用方以为写成功了，界面上没有任何提示。
+      彻底的解法是幂等键（Companion 带一个 client id 进来按它去重），
+      那样窗口宽窄就无所谓了。
     """
     try:
         from hermes_state import SessionDB  # noqa: PLC0415
@@ -3618,15 +3661,34 @@ def _patch_p40_companion_user_message_dedup() -> None:
                             last.get("role") == "user"
                             and _content_key(last.get("content"))
                             == _content_key(content)
-                            and 0 <= incoming_ts - last_ts <= 120
+                            # 窗口 120 秒 → 30 秒。
+                            #
+                            # 判据是**内容相同**而不是同一个 id, 所以窗口越宽,
+                            # 吞掉合法重复的机会越大: 员工觉得卡了连点两次发送、
+                            # 连发两次"继续"、ChatPanel 的 onNudge 固定发"继续"
+                            # 被点两次、auto-continue 的固定 prompt —— 这些在
+                            # 两分钟内都很常见, 而命中之后 return existing_id,
+                            # 调用方以为写成功了, 那条消息就这么没了, 界面零提示。
+                            #
+                            # 为什么不收得更狠: 上面 docstring 记着实测冷启动要
+                            # 1–12 秒, 两次写之间可能隔着它。30 秒 = 实测上限的
+                            # 2.5 倍留余量, 而 120 秒是 10 倍, 白白把一堆合法
+                            # 重复圈了进来。
+                            #
+                            # 真正的解法是幂等键 (Companion 生成一个 client id
+                            # 一起写进来, 按它去重), 那样窗口可以无限宽也不会
+                            # 误伤。这里先把窗口收到合理范围。
+                            and 0 <= incoming_ts - last_ts <= 30
                         ):
                             existing_id = int(last["id"])
+                            # ⚠ 不打聊天正文。这是全仓唯一一处会把用户消息内容
+                            # 落到 hermes 日志文件里的地方, 而护栏第 3 条是
+                            # "数据零出端"。定位问题有 session + rowid 就够了。
                             logger.info(
-                                "P40 dedup skip: session=%s user rowid=%s "
-                                "content=%r",
+                                "P40 dedup skip: session=%s user rowid=%s (len=%d)",
                                 session_id,
                                 existing_id,
-                                _content_key(content)[:80],
+                                len(_content_key(content)),
                             )
                             return existing_id
             except Exception:
