@@ -379,21 +379,51 @@ fn run_hermes_helper(
     let output = command
         .output()
         .map_err(|error| format!("启动 Hermes 配置器失败: {error}"))?;
-    let parsed: HermesState = parse_last_json_line(&output.stdout)?;
+
+    // ⚠ 顺序要紧: 先判退出码, 再解析 JSON。
+    //
+    // 原来是反的 —— `parse_last_json_line(&output.stdout)?` 写在 status 检查
+    // 之前。于是 helper 一旦崩掉:
+    //   · stdout 是空的 (traceback 全在 stderr)
+    //   · parse_last_json_line 返回 Err("无法解析 Hermes 返回结果: ") —— 冒号
+    //     后面什么都没有
+    //   · `?` 当场返回, 下面这段专门从 stderr 拼错误的代码**永远走不到**
+    // 净效果是 Hermes 侧的任何故障, 用户和排查的人拿到的都是同一句没有信息量
+    // 的空错误, 而真正的 traceback 就在手边却被丢掉了。
     if !output.status.success() {
-        let details = parsed
-            .result
-            .as_ref()
-            .map(|value| value.message.clone())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| String::from_utf8_lossy(&output.stderr).trim().to_string());
+        // 先看 helper 自己有没有结构化地说明原因 (已知失败它会打 JSON),
+        // 没有再退到 stderr —— traceback 在那儿。
+        let structured = parse_last_json_line::<HermesState>(&output.stdout)
+            .ok()
+            .and_then(|state| state.result.map(|value| value.message))
+            .filter(|value| !value.trim().is_empty());
+        let details = structured
+            .unwrap_or_else(|| tail_for_error(&String::from_utf8_lossy(&output.stderr)));
         return Err(if details.is_empty() {
-            format!("Hermes 切换失败 (exit {})", output.status)
+            format!("Hermes 配置器异常退出 ({}), 而且没有任何输出", output.status)
         } else {
-            details
+            format!("Hermes 配置器失败 ({}): {details}", output.status)
         });
     }
-    Ok(parsed)
+    parse_last_json_line(&output.stdout)
+}
+
+/// 截出错误尾部给前端看。
+///
+/// 只留末尾是因为 Python traceback 最后几行才是真正的原因。设上限有两层理由:
+/// 一是前端弹一屏日志没人看; 二是 helper 处理的 hermes 配置里含 `api_key`,
+/// 将来某个 traceback 若打出 config 的 repr, 不设限就是原样透传到界面上。
+fn tail_for_error(text: &str) -> String {
+    const MAX: usize = 1200;
+    let trimmed = text.trim();
+    if trimmed.chars().count() <= MAX {
+        return trimmed.to_string();
+    }
+    let tail: String = trimmed
+        .chars()
+        .skip(trimmed.chars().count().saturating_sub(MAX))
+        .collect();
+    format!("…(前面已截断)\n{tail}")
 }
 
 #[cfg(unix)]
@@ -533,14 +563,48 @@ fn build_status(
     }
 }
 
+/// Hermes API server 通不通。
+///
+/// ⚠ 地址必须走 `hermes_api_config()`, 不能写死 `127.0.0.1:8642`。
+///
+/// 那一层已经支持 `~/.catfish/companion.yaml` 的 `hermes_api.url` 和环境变量
+/// `CATFISH_HERMES_API_URL` 覆盖。写死的后果在改过端口的机器上是**双重**的:
+///   · 这个函数恒 false → Codex 模型在 picker 里恒灰, 而理由说的是别的
+///   · 每一次切模型 (含启动时的自动对齐) 都会走进 `restart_hermes_gateway()`
+///     —— 一个最长约 80 秒的阻塞循环, 顺手把好好的 gateway 重启一遍
+/// 而这台机器上 hermes 其实是好的, 只是不在默认端口。
 fn hermes_api_ready() -> bool {
-    let address = "127.0.0.1:8642".parse();
-    address
-        .ok()
-        .and_then(|value| {
-            std::net::TcpStream::connect_timeout(&value, Duration::from_millis(500)).ok()
-        })
-        .is_some()
+    use crate::services::hermes_api_config::hermes_api_config;
+
+    let url = &hermes_api_config().url;
+    // url 形如 http://localhost:8642。用 to_socket_addrs 而不是自己切字符串:
+    // 主机名可能不是 IP (localhost / 内网 DNS 名), 直接 parse::<SocketAddr>
+    // 对这些一律失败, 于是又变成恒 false。
+    let Some(hostport) = url
+        .split("://")
+        .nth(1)
+        .map(|rest| rest.split('/').next().unwrap_or(rest))
+    else {
+        log::warn!("hermes_api.url 不像个 URL, 无法探活: {url}");
+        return false;
+    };
+    let with_port = if hostport.contains(':') {
+        hostport.to_string()
+    } else if url.starts_with("https") {
+        format!("{hostport}:443")
+    } else {
+        format!("{hostport}:80")
+    };
+    use std::net::ToSocketAddrs;
+    match with_port.to_socket_addrs() {
+        Ok(mut addrs) => addrs.any(|value| {
+            std::net::TcpStream::connect_timeout(&value, Duration::from_millis(500)).is_ok()
+        }),
+        Err(error) => {
+            log::warn!("解析 hermes API 地址失败 ({with_port}): {error}");
+            false
+        }
+    }
 }
 
 fn parse_gateway_pids(stdout: &[u8]) -> HashSet<u32> {
@@ -752,8 +816,21 @@ pub async fn codex_backend_select_model(model: String) -> Result<CodexBackendSta
         if !hermes_api_ready() {
             restart_hermes_gateway()?;
         }
+        // ⚠ 这一位必须**如实**回传 Hermes 说的话。
+        //
+        // 原来这里读出了 hermes_requires_new_session, 打一条 log, 然后给
+        // build_status 传字面量 `false` —— 而那条 log 的文案 ("下一个 API 回合
+        // 直接生效") 恰好是它的反面。Hermes 明确要求新会话时, 前端收到的是
+        // "不需要", 员工在当前会话继续发消息、跑的还是旧 runtime。
+        //
+        // 这个 commit 要修的就是"UI 显示 A 实际跑 B"; 靠丢掉 Hermes 自己的信号
+        // 来"加速", 等于把要修的问题重新造了一遍, 而且这次连日志都在说反话。
+        //
+        // 热切换本来就是常态 (API server 每条消息新建 AIAgent), 所以这一位平时
+        // 是 false; 它为 true 的少数场景恰恰是热切换**不够**、必须开新会话的
+        // 时候 —— 那正是不能瞒着前端的时候。
         if hermes_requires_new_session {
-            log::info!("模型运行时已热切换，下一个 API 回合直接生效");
+            log::info!("Hermes 要求新建会话后才生效 —— 已如实告知前端");
         }
         let message = if selected_codex {
             Some(format!("已热切换到 Codex 模型 {requested}"))
@@ -764,7 +841,7 @@ pub async fn codex_backend_select_model(model: String) -> Result<CodexBackendSta
             probe,
             Ok(state),
             message,
-            false,
+            hermes_requires_new_session,
         ))
     })
     .await

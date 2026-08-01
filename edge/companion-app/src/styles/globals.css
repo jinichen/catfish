@@ -3488,7 +3488,7 @@ button {
 .chat-task-picker__select {
   height: 34px;
   color: var(--catfish-text);
-  background: #fff;
+  background: var(--catfish-bg-elevated);
   border: 1px solid var(--catfish-border);
   border-radius: 9px;
   outline: 0;
@@ -3532,7 +3532,27 @@ button {
   padding: 5px 8px;
   color: var(--status-err);
   background: var(--catfish-bg-elevated);
+  /* color-mix 需要 Safari 16.2+；旧机器上整条 border 声明会被丢弃且不报错,
+     所以先给一条纯色兜底, 让边框至少存在。 */
+  border: 1px solid var(--catfish-border);
   border: 1px solid color-mix(in srgb, var(--status-err) 28%, var(--catfish-border));
+  border-radius: 7px;
+  box-shadow: var(--shadow-md);
+  font-size: 9px;
+}
+
+/* 「这次切换要新建会话才生效」——不是错误, 是必须让员工知道的一条事实,
+   所以用中性色而不是红色 (见 ChatModelPicker 文件头)。 */
+.chat-model-picker__hint {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  max-width: 260px;
+  padding: 5px 8px;
+  color: var(--catfish-text);
+  background: var(--catfish-bg-elevated);
+  border: 1px solid var(--status-warn, var(--catfish-border));
   border-radius: 7px;
   box-shadow: var(--shadow-md);
   font-size: 9px;
@@ -3713,7 +3733,7 @@ button {
   margin: 0 14px 9px;
   padding: 0 10px;
   color: var(--catfish-text-muted);
-  background: #fff;
+  background: var(--catfish-bg-elevated);
   border: 1px solid var(--catfish-border);
   border-radius: 10px;
   box-shadow: 0 1px 2px rgba(12, 35, 40, 0.025);
@@ -3785,6 +3805,19 @@ button {
 .chat-sidebar__state--error {
   color: var(--status-err);
   line-height: 1.55;
+}
+
+/* 删除失败那条要能关掉 —— 它不像"读取失败"会随下一次加载自动消失, 不给
+   关闭入口就会一直挂在侧栏顶上, 下一次删除成功了它还在。 */
+.chat-sidebar__state-dismiss {
+  margin-left: 6px;
+  padding: 1px 6px;
+  color: inherit;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  font-size: 10px;
+  cursor: pointer;
 }
 
 .chat-sidebar__empty {
@@ -3878,7 +3911,7 @@ button {
 
 .chat-session-group__toggle:hover {
   color: var(--catfish-cyan);
-  background: #fff;
+  background: var(--catfish-bg-elevated);
   border-color: #cbdadc;
 }
 
@@ -3965,7 +3998,7 @@ button {
 
 .chat-session-row[data-active="true"] .chat-session-row__delete {
   color: #b91c1c;
-  background: #fff;
+  background: var(--catfish-bg-elevated);
   border-color: #f29a9a;
   box-shadow: 0 2px 8px rgba(185, 28, 28, 0.12);
   opacity: 1;
@@ -3975,7 +4008,7 @@ button {
 .chat-session-row:hover .chat-session-row__delete,
 .chat-session-row:focus-within .chat-session-row__delete {
   color: #b91c1c;
-  background: #fff;
+  background: var(--catfish-bg-elevated);
   border-color: #ef8f8f;
   box-shadow: 0 3px 10px rgba(185, 28, 28, 0.16);
   opacity: 1;
@@ -4078,7 +4111,7 @@ button {
   align-content: flex-end;
   padding: 10px 12px;
   gap: 5px;
-  background: #fff;
+  background: var(--catfish-bg-elevated);
   border: 1px solid #d8e1e3;
   border-radius: 17px;
   box-shadow: 0 8px 28px rgba(18, 45, 50, 0.055), 0 1px 2px rgba(18, 45, 50, 0.04);

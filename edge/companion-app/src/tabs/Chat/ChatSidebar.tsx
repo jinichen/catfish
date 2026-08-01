@@ -107,6 +107,10 @@ export default function ChatSidebar({
   // 简化 · 只显能看见的 (visibleSessions.length) · 差额不管 · countSessions 也不调.
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /** 删除失败。跟上面的 error 分开 —— error 那个是"列表读不出来", 渲染时会
+   *  **取代**整个列表 (下面的 `!loading && !error &&`)。把删除失败塞进它,
+   *  会因为一次删不掉就让所有会话从侧栏消失。 */
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   // BL-SESSIONS-FILTER-PROACTIVE (5/31): 默认隐藏自动 trigger
   const [showAuto, setShowAuto] = useState<boolean>(() => {
     try {
@@ -202,6 +206,7 @@ export default function ChatSidebar({
 
   const onDeleteHandler = async (id: string) => {
     try {
+      setDeleteError(null);
       await sessionSoftDelete(id);
       setSessions((prev) => prev.filter((x) => x.id !== id));
       if (id === activeId) {
@@ -210,7 +215,13 @@ export default function ChatSidebar({
       }
     } catch (e) {
       console.error("[session-delete] 失败:", e);
-      alert(`删除失败: ${e}`);
+      // ⚠ 这里原来是 `alert(...)`, 而 alert 在这个 app 里是**看不见**的。
+      // macOS WKWebView 默认禁用 window.alert/confirm/prompt, 静默返回 null
+      // (PrivacyCard.tsx 里有同一条说明; 本文件 476 行那个自定义二次确认
+      //  存在的理由也正是这个)。
+      // 所以删除失败时的实际表现是: 会话还在列表里, 什么提示都没有 ——
+      // 员工只会以为自己没点中, 再点一次, 再失败一次。
+      setDeleteError(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -285,6 +296,18 @@ export default function ChatSidebar({
       <div className="chat-sidebar__list">
         {loading && <div className="chat-sidebar__state">正在载入会话…</div>}
         {error && <div className="chat-sidebar__state chat-sidebar__state--error">读取会话失败：{error}</div>}
+        {deleteError && (
+          <div className="chat-sidebar__state chat-sidebar__state--error">
+            删除失败：{deleteError}
+            <button
+              type="button"
+              className="chat-sidebar__state-dismiss"
+              onClick={() => setDeleteError(null)}
+            >
+              知道了
+            </button>
+          </div>
+        )}
         {!loading && !error && searchedSessions.length === 0 && (
           <div className="chat-sidebar__empty">
             <ChatCircleDots size={24} aria-hidden="true" />

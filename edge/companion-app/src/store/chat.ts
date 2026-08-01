@@ -54,6 +54,20 @@ interface ChatState {
    */
   lifecycleStatus: string | null;
 
+  /** Hermes runtime 没能跟上 picker 时的说明。null = 一致。
+   *
+   * setModel 会把选中的模型同步给 Hermes runtime（Codex 和普通模型跑在不同
+   * runtime 上）。这一步失败时, store.model 已经改了、界面已经显示新模型、
+   * ~/.catfish/picker_model 也写了, **只有 runtime 没动** —— 员工看到的是
+   * A, 实际发给 B。
+   *
+   * 原来这里只有一句 console.warn。而 setModel 的调用方多数是自动路径
+   * (启动恢复 / catalog.default 联动 / vision 切换), 员工根本不会去看控制台。
+   * 那段代码的注释自己写着"防止 UI 显示 A 但实际跑 B", catch 里恰好让它发生。
+   *
+   * 存进 state 是为了让界面能说出来 —— 见 ChatModelPicker。 */
+  runtimeSyncError: string | null;
+
   /** P3.5.29 Phase 6.3 (6/17 鸿波): modelPickedByUser flag 修 picker 不
    * 联动 yaml chat_default bug.
    *
@@ -106,6 +120,7 @@ interface ChatState {
   setStreamingId: (id: string | null) => void;
   /** P3.5.18 Phase 2 (6/17 鸿波): inline lifecycle status (压缩进度). */
   setLifecycleStatus: (s: string | null) => void;
+  setRuntimeSyncError: (s: string | null) => void;
   /** P3.5.29 Phase 6.3 (6/17 鸿波): pickedByUser **默认 true** — 老 caller 全
    * 用户 picker path 0 改. internal call (ChatTab catalog effect) 显式
    * 传 false signal "yaml 自动 propagate, 不是用户选".
@@ -160,6 +175,7 @@ export const useChatStore = create<ChatState>((set) => ({
   model: "",
   // P3.5.18 Phase 2 (6/17 鸿波): hermes preflight 自动压缩 inline 状态文本.
   lifecycleStatus: null,
+  runtimeSyncError: null,
   // P3.5.29 Phase 6.3 (6/17 鸿波): modelPickedByUser flag 修联动 bug.
   // 初始 false — ChatTab mount useEffect catalog.default 真catfish propagate.
   modelPickedByUser: false,
@@ -210,6 +226,7 @@ export const useChatStore = create<ChatState>((set) => ({
   setIsStreaming: (v) => set({ isStreaming: v }),
   setStreamingId: (id) => set({ streamingId: id }),
   setLifecycleStatus: (s) => set({ lifecycleStatus: s }),
+  setRuntimeSyncError: (s) => set({ runtimeSyncError: s }),
   setModel: (model, pickedByUser = true, runtimeAlreadySynced = false) => {
     // P3.5.29 Phase 6.3 (6/17 鸿波): pickedByUser **默认 true** — 老 caller (chat
     // picker onChange / visionSwitch) 全用户主动 path 真0 改**, signal
@@ -223,10 +240,17 @@ export const useChatStore = create<ChatState>((set) => ({
     if (!runtimeAlreadySynced) {
       invoke("codex_backend_select_model", { model })
         .then(() => {
+          set({ runtimeSyncError: null });
           window.dispatchEvent(new CustomEvent("catfish:catalog-refresh"));
         })
         .catch((e: unknown) => {
           console.warn("[codex model runtime] 自动对齐失败:", e);
+          // ⚠ 不能只 console.warn 就完事 —— 走到这里意味着界面显示的模型和
+          // 真正跑的 runtime 已经对不上了, 而这几条调用路径 (启动恢复 /
+          // catalog.default 联动 / vision 切换) 全都不是员工点出来的,
+          // 他没有任何理由去开控制台。上面那句注释写着"防止 UI 显示 A 但实际
+          // 跑 B", 光 warn 恰恰是让它发生。
+          set({ runtimeSyncError: e instanceof Error ? e.message : String(e) });
         });
     }
     // P3.5.28 (6/17 鸿波"picker 联动现在就应该做"): 桥给 Rust background task

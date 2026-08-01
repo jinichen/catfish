@@ -38,6 +38,30 @@ export default function CatalogCard() {
           gateway 不可达 —— {error}
         </div>
       )}
+      {/* 8/1: gateway 连不上时后端不再返 Err, 改成"降级 catalog" —— 只留本机
+          Codex 模型, 原因塞在 catalog.gateway_error 里。但那个字段之前**全前端
+          没有一个消费者**(只有 types/catalog.ts 里一行类型声明), 于是上面那个
+          error 分支从此永远不触发, 这句「gateway 不可达」成了死代码。
+
+          净效果: 中央端证书没配好 / gateway 真挂了的时候, 员工看到的是"公司
+          模型突然少了几个", 而不是"连不上 gateway"。这跟后台那几处刚修过的
+          "显示 0 个 user / 0 家供应商, 拿假数字冒充真相"是同一个形状。 */}
+      {catalog?.gateway_error && (
+        <div
+          style={{
+            color: "var(--status-err)",
+            fontSize: 12,
+            marginBottom: "var(--space-2)",
+            lineHeight: 1.6,
+          }}
+        >
+          连不上公司 gateway —— {catalog.gateway_error}
+          <div style={{ color: "var(--catfish-text-muted)", marginTop: 2 }}>
+            下面只列出了本机可用的模型，<b>公司模型没有消失</b>，是这台机器现在
+            取不到列表。
+          </div>
+        </div>
+      )}
       {!catalog && !error && <div>加载中…</div>}
       {catalog && (
         <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
