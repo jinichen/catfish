@@ -849,7 +849,20 @@ pub async fn codex_backend_select_model(model: String) -> Result<CodexBackendSta
 }
 
 const CATALOG_READY_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
-const CATALOG_UNREADY_CACHE_TTL: Duration = Duration::from_secs(2);
+/// 不可用状态的缓存时长。**2 秒 → 30 秒 (8/1)**。
+///
+/// 原值 2 秒, 而 useCatalog 每 15 秒轮询一次 —— 每一次都过期, 于是每一次都
+/// 重新 `probe_codex()` (扫整个 PATH 做 stat) 外加起一个完整 Python 解释器
+/// import hermes_cli。而绝大多数员工机器上永远不会有 Codex, `ready` 恒 false,
+/// 这笔开销是**常驻的、且永远不会有结果**。
+///
+/// 原注释说 2 秒是为了"绝不能把灰色选项钉住 5 分钟"—— 但模型切换那条路径
+/// 自己就调了 `invalidate_catalog_cache()` (见 select_model), 切换窗口根本
+/// 不靠 TTL 兜。也就是说这个短 TTL 对它声称的目的是多余的, 留下的只有开销。
+///
+/// 30 秒仍然远短于 ready 状态的 5 分钟: 装了 Codex 但临时不健康的机器,
+/// 最多半分钟就会重新探到, 而不装 Codex 的机器少了 14/15 的无用功。
+const CATALOG_UNREADY_CACHE_TTL: Duration = Duration::from_secs(30);
 static CATALOG_CACHE: OnceLock<Mutex<Option<(Instant, CodexBackendStatus)>>> = OnceLock::new();
 
 fn invalidate_catalog_cache() {
