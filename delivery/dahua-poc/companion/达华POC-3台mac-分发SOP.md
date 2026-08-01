@@ -101,7 +101,84 @@ open -a "Catfish Companion"
 
 ---
 
-## 3 台员工分发 · 每台 15 min
+## ⚠ 先分清: 这台机器是**全新装**还是**升级**
+
+下面「3 台员工分发」整章写的是**全新装机**。机器上已经有 Companion 时,
+照着走会卡在第 4 步等一个永远不出现的 Onboarding 界面 —— 服务器地址存在
+`~/.catfish/`, 升级不会清掉, 所以那个界面不再弹。
+
+**升级走下面这一节**, 步骤完全不同。
+
+---
+
+## 从旧版升级到 0.19.0 (8/1 实测)
+
+装过 Companion 的机器用这一节。整个过程 10 分钟, 其中 3-5 分钟是等
+`install.sh` 解 hermes 归档。
+
+### 为什么不能只是"拖进去覆盖"
+
+`install.sh` 是 **Companion 启动时**跑的, 而且只在 `~/.hermes/hermes-agent`
+**不存在**时才装。所以直接覆盖 app 的结果是: 前端换成新的了, 而 hermes 运行时
+还是旧版本 —— 而且没有任何提示, `hermes version` 照样报旧号。
+
+8/1 实测撞到的具体表现: 覆盖安装后 `ls ~/.hermes/hermes-agent` 目录时间戳
+纹丝不动, bootstrap 锁文件也没被碰过, 界面却已经是新的了。
+
+### 步骤
+
+```bash
+# 1. 完全退出 Companion (⌘Q 或这条, 关窗口不算)
+osascript -e 'quit app "Catfish Companion"'
+
+# 2. 停掉旧 hermes —— 不停的话它一直占着 8642, 新的起不来
+pkill -f hermes-agent
+
+# 3. 把旧的 hermes 运行时**移开**(不是删! 出问题要靠它退回去)
+mv ~/.hermes/hermes-agent ~/.hermes/hermes-agent.bak
+```
+
+4. dmg 里把 `Catfish Companion.app` 拖进「应用程序」, 选**替换**
+5. 打开它。这一步才触发 `install.sh`, **等 3-5 分钟**别急着操作
+6. 验:
+
+```bash
+ls ~/.hermes/hermes-agent && hermes version
+curl -s localhost:8642/health
+```
+
+两处都要报 **0.19.0**。`hermes version` 还会打出
+`Install directory: /Users/<你>/.hermes/hermes-agent`, 确认它指的是这个目录。
+
+7. 聊一条 "hi" 通了, 再删备份:
+
+```bash
+rm -rf ~/.hermes/hermes-agent.bak
+```
+
+### 不通就退回去 (5 秒)
+
+```bash
+rm -rf ~/.hermes/hermes-agent
+mv ~/.hermes/hermes-agent.bak ~/.hermes/hermes-agent
+pkill -f hermes-agent          # launchd 会自动拉起, 别手动 start
+```
+
+### 几个会让人误判的点
+
+- **会话和记忆不在 `hermes-agent` 里**, 在 `~/.hermes/state.db` (可能几百 MB)。
+  上面第 3 步只动 `hermes-agent` 子目录, 聊天记录一条都不会丢。
+- **第 2 步之后 `curl :8642/health` 可能还在报旧版本号。** 不是没停干净 ——
+  Unix 上进程打开的文件被 `mv` 走之后进程照常活着, 旧 gateway 还能继续服务。
+  以第 6 步 `install.sh` 跑完之后的结果为准。
+- **升级不会重弹 Onboarding**, 服务器地址沿用旧的。要改地址走
+  仪表盘 → 服务器配置 (见文末「面板改 IP 后 · 必做 2 步」)。
+- Gatekeeper 那个「已损坏」的拦截**升级时同样会有** —— 新 dmg 是新文件,
+  经网络传过去照样带隔离属性。处理方法见下面全新装机的第 3 步。
+
+---
+
+## 3 台员工分发 · 每台 15 min（**全新装机**）
 
 ### 员工 1/2/3 装机步骤
 

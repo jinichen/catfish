@@ -26,12 +26,12 @@ jobs:
 
     steps:
       - name: Checkout catfish
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 1
 
       - name: Setup Node.js 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '20'
 
@@ -46,7 +46,7 @@ jobs:
           workspaces: edge/companion-app/src-tauri
 
       - name: Cache npm
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.npm
           key: npm-${{ hashFiles('edge/companion-app/package-lock.json') }}
@@ -291,7 +291,7 @@ jobs:
           ls -lh edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/ || true
 
       - name: Upload msi artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: catfish-companion-msi-${{ github.sha }}
           path: edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
