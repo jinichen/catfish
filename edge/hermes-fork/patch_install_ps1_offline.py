@@ -74,9 +74,24 @@ if sys.platform == "win32":
 
 # ─── 上游 pin ─────────────────────────────────────────────────
 
-#: 当前测试通过的 install.ps1 SHA256. Bump 时必须重新 audit 4 处锚点是否稳定.
-#: 计算: `shasum -a 256 ~/.hermes/hermes-agent/scripts/install.ps1`
-UPSTREAM_SHA256 = "575a15041a7c86f2674f878fab51ab9e0376f3e429b9e65bab48859c5df62bcd"
+#: 当前测试通过的 install.ps1 SHA256. Bump 时必须重新 audit 7 处锚点是否稳定.
+#: 计算: `shasum -a 256 <hermes-agent>/scripts/install.ps1`
+UPSTREAM_SHA256 = "b5bdf0e959677de0168f8cfb5f9175c7b57adf5c4319a1c2fc9bec1f46fbdb6e"
+
+#: 上面那个 SHA 是从**哪个上游 commit** 算出来的.
+#:
+#: 8/1 加。这一位存在的唯一理由是让 check_version_sync.sh 能在**本地、离线、
+#: 一秒内**发现"pin 挪了但这个脚本没跟着改"。
+#:
+#: 7/29 的 release (1c5ca28, hermes 0.18.0 → 0.19.0) 改了 .hermes-target-version、
+#: .hermes-git-tag、3 处版本号, 唯独没动这个文件。于是从那天起每一次 Windows
+#: MSI 构建都在 "Patch install.ps1 offline mode" 那步红掉 —— 而那要等 clone
+#: 完上游、跑到第 5 步才报, 一分钟起步; 没人天天盯 Actions 页, 就一直红着。
+#:
+#: 版本号那条链有 check_version_sync.sh 当场拦, 这条没有。补上之后两条一样快。
+#:
+#: 更新方式: 跟 edge/companion-app/.hermes-git-commit 保持一致。
+UPSTREAM_COMMIT = "3ef6bbd201263d354fd83ec55b3c306ded2eb72a"
 
 #: 上游预期行数 (rough sanity check, 不 fatal, 只 warn)
 UPSTREAM_LINES_EXPECTED = 3445

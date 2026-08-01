@@ -82,6 +82,52 @@ if [ "$PKG_VER" = "$CARGO_VER" ] && [ "$CARGO_VER" = "$TAURI_VER" ]; then
         fi
     fi
 
+    # ── Windows offline 补丁的上游 pin (8/1) ──────────────────────────
+    #
+    # 升级 hermes 时要一起动的东西不止版本号, 还有
+    # edge/hermes-fork/patch_install_ps1_offline.py 里钉死的上游 install.ps1
+    # SHA256 —— 上游装机脚本变了, 我们那 7 处 offline 注入的锚点就未必还贴得上。
+    #
+    # 7/29 那次 release (1c5ca28) 就漏了它: .hermes-target-version / .hermes-git-tag /
+    # 3 处版本号全改了, 唯独没改这个脚本。后果是从那天起每一次 Windows MSI 构建
+    # 都在 "Patch install.ps1 offline mode" 那步红掉, 而那要 clone 完上游、跑到
+    # 第 5 步才报 —— 一分钟起步, 且没人天天盯 Actions, 于是一直红着没人知道。
+    #
+    # 版本号那条链当场就被这个脚本拦住了, 这条却要等 40 分钟的 Windows 构建。
+    # 同样是"升级 hermes 忘了同步", 两种反馈速度差了三个数量级。
+    #
+    # 这里不去算上游文件的 SHA (CI runner 上没有上游源码, 算不了), 而是校验
+    # "那个 SHA 是从哪个 commit 算的" 跟 .hermes-git-commit 一致 —— 纯本地、
+    # 离线、一秒。pin 挪了而补丁脚本没跟着改, 立刻报。
+    GIT_COMMIT_FILE="$COMPANION_DIR/.hermes-git-commit"
+    PATCH_SCRIPT="$COMPANION_DIR/../hermes-fork/patch_install_ps1_offline.py"
+    if [ -f "$GIT_COMMIT_FILE" ] && [ -f "$PATCH_SCRIPT" ]; then
+        PINNED_COMMIT="$(head -1 "$GIT_COMMIT_FILE" | tr -d '[:space:]')"
+        PATCH_COMMIT="$(grep -E '^UPSTREAM_COMMIT[[:space:]]*=' "$PATCH_SCRIPT" \
+                        | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+        if [ -z "$PATCH_COMMIT" ]; then
+            echo "⚠ $PATCH_SCRIPT 里没有 UPSTREAM_COMMIT, 跳过上游 pin 校验"
+        elif [ "$PATCH_COMMIT" = "$PINNED_COMMIT" ]; then
+            echo "✓ Windows offline 补丁的上游 pin 一致: ${PINNED_COMMIT:0:12}"
+        else
+            echo "❌ Windows offline 补丁没跟上 hermes 的 pin:"
+            echo "   .hermes-git-commit          : $PINNED_COMMIT"
+            echo "   patch_install_ps1_offline.py: $PATCH_COMMIT"
+            echo ""
+            echo "   上游 install.ps1 换了一版, 我们那 7 处 offline 注入的锚点"
+            echo "   未必还贴得上。**不能只改 SHA 了事**, 按顺序做:"
+            echo "     1. clone 上游到 pin 的 commit, 逐处确认 7 个 anchor 各命中 1 次"
+            echo "        (0 次 = 上游改了那段; >1 次 = anchor 不再 unique, 都要重 audit)"
+            echo "     2. 更新 UPSTREAM_SHA256 = 新 install.ps1 的 sha256"
+            echo "     3. 更新 UPSTREAM_COMMIT = $PINNED_COMMIT"
+            echo "     4. 本地跑一遍 patch 脚本, 确认 7 处注入都在"
+            echo ""
+            echo "   不修的话表现是: Windows MSI 构建每次都红, 而且要等一分钟"
+            echo "   clone 完才报错。"
+            exit 1
+        fi
+    fi
+
     # BL-CATFISH-HERMES-VERSION-SYNC-B (6/1 鸿波): 本机有 hermes 时额外 sanity
     # check — 本机装的 hermes 跟 target 是不是也一致. 不 fail (dev 本地可能刻意
     # 装老 hermes 做兼容 test), 只 warn.
