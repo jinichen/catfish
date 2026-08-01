@@ -58,10 +58,7 @@ pub async fn healthz() -> Result<HealthzResp, String> {
     if let Some(auth) = backend_auth_header() {
         req = req.header("Authorization", auth);
     }
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| format!("连接失败：{e}"))?;
+    let resp = req.send().await.map_err(|e| format!("连接失败：{e}"))?;
 
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));
@@ -99,18 +96,46 @@ pub async fn catalog() -> Result<Value, String> {
     let client = build_client()?;
     let base = endpoints::endpoints().gateway_base();
     let req = client.get(format!("{base}/v1/catalog"));
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| format!("连接失败：{e}"))?;
+    // Codex 是本机模型源，不应被中央 gateway 的短暂不可达拖累。
+    // gateway 失败时仍返回一个可用 catalog，只是附上 gateway_error。
+    let mut catalog = match req.send().await {
+        Ok(resp) if resp.status().is_success() => resp
+            .json::<Value>()
+            .await
+            .unwrap_or_else(|e| empty_catalog(format!("解析失败：{e}"))),
+        Ok(resp) => empty_catalog(format!("gateway HTTP {}", resp.status())),
+        Err(e) => empty_catalog(format!("gateway 连接失败：{e}")),
+    };
 
-    if !resp.status().is_success() {
-        return Err(format!("HTTP {}", resp.status()));
+    // 中央 gateway 不知道员工本机的 Codex 登录与模型。在
+    // Companion catalog 层合并，让聊天 picker 直接把两类模型分组展示。
+    if let Some(models) = catalog.get_mut("models").and_then(Value::as_array_mut) {
+        let existing: std::collections::HashSet<String> = models
+            .iter()
+            .filter_map(|item| item.get("id").and_then(Value::as_str).map(str::to_string))
+            .collect();
+        let codex_models =
+            tokio::task::spawn_blocking(crate::commands::codex_backend::catalog_models)
+                .await
+                .map_err(|e| format!("Codex catalog 失败: {e}"))?;
+        models.extend(codex_models.into_iter().filter(|item| {
+            item.get("id")
+                .and_then(Value::as_str)
+                .map(|id| !existing.contains(id))
+                .unwrap_or(false)
+        }));
     }
+    Ok(catalog)
+}
 
-    resp.json::<Value>()
-        .await
-        .map_err(|e| format!("解析失败：{e}"))
+fn empty_catalog(error: String) -> Value {
+    serde_json::json!({
+        "authenticated": false,
+        "models": [],
+        "default": null,
+        "your_dept_default": null,
+        "gateway_error": error,
+    })
 }
 
 fn build_client() -> Result<reqwest::Client, String> {

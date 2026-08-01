@@ -14,6 +14,7 @@
 
 import { useEffect, useRef, useState, type KeyboardEvent, type ClipboardEvent, type DragEvent, type ChangeEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { ArrowBendDownLeft, Microphone, Paperclip } from "@phosphor-icons/react";
 import type { Attachment } from "../../types/chat";
 import { useUIStore } from "../../store/ui";  // BL-E13 主动闲聊 prefill
 import { useAgentStore } from "../../store/agent";  // BL-E11 后续: 员工自定义名
@@ -334,14 +335,7 @@ export default function ChatInput({
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
-      style={{
-        borderTop: "1px solid var(--catfish-border)",
-        background: isDragOver
-          ? "var(--catfish-cyan-dim)"
-          : "var(--catfish-bg-elevated)",
-        padding: "var(--space-3) var(--space-4)",
-        transition: "background 120ms ease",
-      }}
+      className={`chat-composer${isDragOver ? " chat-composer--dragover" : ""}`}
     >
       {/* 缩略图行 —— 只有 attachments 非空才渲染 */}
       {attachments.length > 0 && (
@@ -408,28 +402,13 @@ export default function ChatInput({
       {/* 5/5 文件解析进行中 (Excel / 大 PDF 几秒级, 之前 0 反馈员工以为坏了)
           BL-VOICE3 (5/10): 音频走 whisper, 几十秒级别, label 区分提示 */}
       {isParsingFile && (
-        <div
-          style={{
-            color: "var(--catfish-cyan)",
-            fontSize: 12,
-            marginBottom: "var(--space-2)",
-            background: "var(--catfish-cyan-dim)",
-            padding: "var(--space-1) var(--space-2)",
-            borderRadius: "var(--radius-sm)",
-            display: "inline-block",
-          }}
-        >
-          📎 {parseLabel}
+        <div className="chat-composer__status">
+          <Paperclip size={14} aria-hidden="true" />
+          {parseLabel}
         </div>
       )}
 
-      <div
-        style={{
-          display: "flex",
-          alignItems: "flex-end",
-          gap: "var(--space-2)",
-        }}
-      >
+      <div className="chat-composer__surface">
         {/* 隐藏的 file input — 点 📎 按钮触发 (图片 + 文档) */}
         <input
           ref={fileInputRef}
@@ -442,25 +421,14 @@ export default function ChatInput({
 
         {/* 📎 附件按钮 */}
         <button
+          type="button"
           onClick={onPickFile}
           disabled={isStreaming || attachments.length >= MAX_ATTACHMENTS}
-          title="加图片或文档 (PDF/Excel/Word/CSV/TXT) — 也可拖入或截图后 Cmd+V"
-          style={{
-            padding: "6px 10px",
-            border: "1px solid var(--catfish-border)",
-            borderRadius: "var(--radius-sm)",
-            background: "transparent",
-            color: "var(--catfish-text-muted)",
-            fontSize: 16,
-            cursor:
-              isStreaming || attachments.length >= MAX_ATTACHMENTS
-                ? "default"
-                : "pointer",
-            lineHeight: 1,
-            minHeight: 36,
-          }}
+          title="添加图片或文档，也可拖入文件或粘贴截图"
+          aria-label="添加附件"
+          className="chat-composer__tool-button"
         >
-          📎
+          <Paperclip size={18} aria-hidden="true" />
         </button>
 
         {/* 📚 教学入口 popover (P3.5.167, 7/3 鸿波拍板 B 方案 "叠起来省空间"):
@@ -498,6 +466,7 @@ export default function ChatInput({
         {/* 🎤 语音输入按钮 — 方案 C 五一 sprint Day 1: Whisper.cpp 本地
            按一下开始录音, 再按一下停止 → 自动转文字填到 textarea. 数据 100% 本地. */}
         <button
+          type="button"
           onClick={isRecording ? stopRecording : startRecording}
           disabled={isStreaming || isTranscribing}
           title={
@@ -507,22 +476,11 @@ export default function ChatInput({
               ? "识别中…"
               : "语音输入 (Whisper.cpp 本地, 不上传)"
           }
-          style={{
-            padding: "6px 10px",
-            border: "1px solid",
-            borderColor: isRecording ? "var(--status-err)" : "var(--catfish-border)",
-            borderRadius: "var(--radius-sm)",
-            background: isRecording ? "var(--status-err)" : "transparent",
-            color: isRecording ? "white" : "var(--catfish-text-muted)",
-            fontSize: 16,
-            cursor: isStreaming || isTranscribing ? "default" : "pointer",
-            lineHeight: 1,
-            minHeight: 36,
-            // 录音中: 心跳呼吸效果
-            animation: isRecording ? "catfish-pulse 1.2s ease-in-out infinite" : undefined,
-          }}
+          aria-label={isRecording ? "结束录音" : "语音输入"}
+          data-active={isRecording || undefined}
+          className="chat-composer__tool-button chat-composer__tool-button--voice"
         >
-          {isTranscribing ? "⏳" : "🎤"}
+          {isTranscribing ? <span aria-hidden="true">…</span> : <Microphone size={18} aria-hidden="true" />}
         </button>
 
         <textarea
@@ -534,23 +492,10 @@ export default function ChatInput({
           placeholder={
             attachments.length > 0
               ? "加点说明 (可空) — Enter 发送"
-              : `跟${agentName}说话…  (Enter 发送 · 拖入文件 / 截图 Cmd+V / 点 📎 加附件)`
+              : `跟${agentName}说话…`
           }
           rows={1}
-          style={{
-            flex: 1,
-            resize: "none",
-            border: "1px solid var(--catfish-border)",
-            borderRadius: "var(--radius-md)",
-            padding: "var(--space-2) var(--space-3)",
-            fontSize: 14,
-            lineHeight: 1.5,
-            fontFamily: "inherit",
-            color: "var(--catfish-text)",
-            background: "var(--catfish-bg)",
-            outline: "none",
-            minHeight: 36,
-          }}
+          className="chat-composer__textarea"
           disabled={false /* 仍允许写下一个，发送按钮在 streaming 时变停止 */}
         />
         {/* BL-COMPANION-UX1 (5/12) + BL-HERMES013-RED-1A (5/13 ACP /queue) +
@@ -565,80 +510,44 @@ export default function ChatInput({
             - streaming + 没内容          → "停止" (橙色, 单纯 abort)
             Enter 默认 ⏹ 停下接着发 (跟 BL-COMPANION-UX1 一致), 排队 / 改主意要点专门按钮 */}
         {isStreaming && hasContent ? (
-          <div style={{ display: "flex", gap: "var(--space-1)" }}>
+          <div className="chat-composer__send-group">
             <button
+              type="button"
               onClick={enqueueSubmit}
               title="排队等当前任务跑完, 自动发 (借鉴 Hermes 0.13 ACP /queue). 排队消息暂不支持附件."
-              style={{
-                padding: "var(--space-2) var(--space-3)",
-                border: "1px solid var(--catfish-cyan)",
-                borderRadius: "var(--radius-sm)",
-                background: "transparent",
-                color: "var(--catfish-cyan)",
-                fontSize: 13,
-                fontWeight: 500,
-                minWidth: 70,
-                cursor: "pointer",
-              }}
+              className="chat-composer__secondary-button"
             >
-              ⏳ 排队
+              排队
             </button>
             {/* P3.5.20 (6/17 鸿波): [🎯 改主意] 按钮砍 — 设计意图 (LLM 看 partial
                 接力) 未实现, 跟 [⏹ 停下接着发] 实测行为一样, 砍掉减歧义. */}
             <button
+              type="button"
               onClick={submit}
               title="停止当前流, 立刻发送新消息 (Enter 同效, LLM 看不到自己刚说的, 完全重新回答)"
-              style={{
-                padding: "var(--space-2) var(--space-3)",
-                border: "none",
-                borderRadius: "var(--radius-sm)",
-                background: "var(--catfish-cyan)",
-                color: "white",
-                fontSize: 13,
-                fontWeight: 500,
-                minWidth: 100,
-                cursor: "pointer",
-              }}
+              className="chat-composer__primary-button"
             >
-              ⏹ 停下接着发
+              停下并发送
             </button>
           </div>
         ) : isStreaming ? (
           <button
+            type="button"
             onClick={onCancel}
             title="停止当前流"
-            style={{
-              padding: "var(--space-2) var(--space-3)",
-              border: "1px solid var(--status-warn)",
-              borderRadius: "var(--radius-sm)",
-              background: "transparent",
-              color: "var(--status-warn)",
-              fontSize: 13,
-              fontWeight: 500,
-              minWidth: 60,
-            }}
+            className="chat-composer__stop-button"
           >
             停止
           </button>
         ) : (
           <button
+            type="button"
             onClick={submit}
             disabled={!canSend}
-            style={{
-              padding: "var(--space-2) var(--space-4)",
-              border: "none",
-              borderRadius: "var(--radius-sm)",
-              background: canSend
-                ? "var(--catfish-cyan)"
-                : "var(--catfish-border)",
-              color: "white",
-              fontSize: 13,
-              fontWeight: 500,
-              minWidth: 60,
-              cursor: canSend ? "pointer" : "default",
-            }}
+            className="chat-composer__primary-button"
           >
             发送
+            <ArrowBendDownLeft className="chat-composer__send-key" size={14} aria-hidden="true" />
           </button>
         )}
       </div>

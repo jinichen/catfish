@@ -259,14 +259,7 @@ export default function ChatTab() {
   }, [persistedSessionId, isStreaming, messages.length, loadSession, loadSessionAttachments]);
 
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "row",
-        height: "100%",
-        minHeight: 0,
-      }}
-    >
+    <div className="chat-workspace">
       <ChatSidebar
         activeId={persistedSessionId}
         onSelect={handleSelect}
@@ -275,94 +268,33 @@ export default function ChatTab() {
         busy={isStreaming}
       />
 
-      <div
-        style={{
-          flex: 1,
-          minWidth: 0,
-          display: "flex",
-          flexDirection: "column",
-          height: "100%",
-        }}
-      >
-        <header
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: "var(--space-3) var(--space-4)",
-            borderBottom: "1px solid var(--catfish-border)",
-            background: "var(--catfish-bg-elevated)",
-            gap: "var(--space-3)",
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "var(--space-2)",
-              fontSize: 13,
-              fontWeight: 600,
-              minWidth: 0,
-            }}
-          >
+      <div className="chat-workspace__main">
+        <header className="chat-workspace__header">
+          <div className="chat-workspace__context">
             {/* 五一 sprint 5/3 BL-D11: 占位 🐟 → 小尺寸正式头像 */}
             {/* P3.3.22 (6/11): flex-shrink: 0 + nowrap — 防 TaskPicker 加进来后
                 "对话" 两字被竖向压扁 (header 一行塞太多撞挤). */}
-            <span
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 6,
-                flexShrink: 0,
-                whiteSpace: "nowrap",
-              }}
-            >
+            <span className="chat-workspace__context-title">
               <img src="/catfish-avatar.svg" alt="" width={18} height={18} style={{ display: "block" }} />
               对话
             </span>
             {persistedSessionId && (
               <span
                 title={persistedSessionId}
-                style={{
-                  fontSize: 11,
-                  color: "var(--catfish-text-muted)",
-                  fontWeight: 400,
-                  fontFamily: "var(--font-mono, ui-monospace, monospace)",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  // P3.3.22 (6/11): 200 → 140, 给 TaskPicker 让位
-                  maxWidth: 140,
-                  flexShrink: 1,
-                }}
+                className="chat-workspace__session-id"
               >
                 · {persistedSessionId}
               </span>
             )}
             {messages.length > 0 && (
-              <span
-                style={{
-                  fontSize: 11,
-                  color: "var(--catfish-text-muted)",
-                  fontWeight: 400,
-                  flexShrink: 0,
-                  whiteSpace: "nowrap",
-                }}
-              >
+              <span className="chat-workspace__message-count">
                 · {messages.length} 条
               </span>
             )}
           </div>
 
           {/* P3.3.22 (6/11): 右组 flex-shrink: 0 防被左组 sessionId 撑挤. */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "var(--space-2)",
-              flexShrink: 0,
-            }}
-          >
+          <div className="chat-workspace__controls">
             {/* P3.3.19 C Phase 3 (6/11): task picker — 让员工从工作台直接进
                 早安 task 上下文聊. 选了 task 走跟 DetailPane 同 sessionId. */}
             <TaskPicker
@@ -399,7 +331,7 @@ export default function ChatTab() {
 
         <SessionAttachmentsBar />
 
-        <div style={{ flex: 1, minHeight: 0 }}>
+        <div className="chat-workspace__panel">
           {!model ? (
             // P3.5.140 (6/29 鸿波"ChatTab loading skeleton 纯文本 正在加载模型 + disable send button"):
             // store.model 空 = picker_model 文件没拿到 (App.tsx 启动 useEffect 没注入) +

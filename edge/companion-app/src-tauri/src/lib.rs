@@ -614,6 +614,11 @@ pub fn run() {
             // hermes hang detection + auto restart (kill -9 触发 launchd 拉)
             commands::hermes::hermes_status,
             commands::hermes::hermes_kill,
+            // Hermes 0.18 原生 Codex app-server runtime：检测 / 登录 / 一键切换.
+            commands::codex_backend::codex_backend_status,
+            commands::codex_backend::codex_backend_set_enabled,
+            commands::codex_backend::codex_backend_select_model,
+            commands::codex_backend::codex_backend_open_login,
             // BL-CSP-PROXY (7/18 鸿波): Rust reqwest HTTP 代理, 让前端 fetch 走 Rust,
             // CSP connect-src 保持严格 (无外网白名单). 达华 POC 员工输达华 IP 才能通 chat.
             commands::http_proxy::http_proxy,

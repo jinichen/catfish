@@ -38,9 +38,12 @@ import 阶段就跑 _verify_patch_targets() — 看每个 patch 引用的 attrib
 from __future__ import annotations
 
 import functools
+import json
 import logging
 import os
 import threading
+import time
+import atexit
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -53,6 +56,87 @@ logger = logging.getLogger("catfish.xcatfish_user.plugin")
 # threadlocal 标记本线程是否真在 cron run_job 内, P25 patched check_execute_code_guard
 # 用它精准判定, 不依赖被污染的全进程 env.
 _CATFISH_CRON_THREAD_LOCAL = threading.local()
+
+# P39 Codex App Server session pool. Hermes API server 会每条消息新建 AIAgent，
+# 所以上游把 session 挂在 agent 上等于每轮冷启动。Catfish 按聊天 session +
+# tenant + model 复用真正的 Codex session；最多保留 4 个，空闲 15 分钟自动关闭。
+_P39_CODEX_CACHE: dict[str, dict[str, Any]] = {}
+_P39_CODEX_CACHE_LOCK = threading.RLock()
+_P39_CODEX_CACHE_TTL_SECONDS = 15 * 60
+_P39_CODEX_CACHE_MAX = 4
+_P39_CODEX_JANITOR_STARTED = False
+
+
+def _p39_close_cache_entries(entries, reason: str) -> None:
+    """Close already-detached cache entries outside the global lock."""
+    for key, entry in entries:
+        entry_lock = entry.get("lock")
+        if entry_lock is None or not entry_lock.acquire(timeout=0.2):
+            # A live turn owns it. Put it back so a janitor never tears down
+            # a subprocess while Codex is producing a response.
+            with _P39_CODEX_CACHE_LOCK:
+                _P39_CODEX_CACHE.setdefault(key, entry)
+            continue
+        try:
+            session = entry.get("session")
+            if session is not None:
+                session.close()
+                logger.info("P39 Codex session closed: key=%s reason=%s", key, reason)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("P39 Codex session close failed (%s): %s", key, e)
+        finally:
+            entry_lock.release()
+
+
+def _p39_prune_codex_cache() -> None:
+    now = time.monotonic()
+    victims = []
+    with _P39_CODEX_CACHE_LOCK:
+        for key, entry in list(_P39_CODEX_CACHE.items()):
+            entry_lock = entry.get("lock")
+            idle = now - float(entry.get("last_used") or now)
+            if idle >= _P39_CODEX_CACHE_TTL_SECONDS and not entry_lock.locked():
+                victims.append((key, _P39_CODEX_CACHE.pop(key)))
+
+        overflow = max(0, len(_P39_CODEX_CACHE) - _P39_CODEX_CACHE_MAX)
+        if overflow:
+            candidates = sorted(
+                (
+                    (key, entry)
+                    for key, entry in _P39_CODEX_CACHE.items()
+                    if not entry["lock"].locked()
+                ),
+                key=lambda value: float(value[1].get("last_used") or 0),
+            )
+            for key, _entry in candidates[:overflow]:
+                victims.append((key, _P39_CODEX_CACHE.pop(key)))
+    _p39_close_cache_entries(victims, "idle_or_lru")
+
+
+def _p39_close_all_codex_sessions() -> None:
+    with _P39_CODEX_CACHE_LOCK:
+        entries = list(_P39_CODEX_CACHE.items())
+        _P39_CODEX_CACHE.clear()
+    _p39_close_cache_entries(entries, "process_exit")
+
+
+def _p39_start_codex_janitor() -> None:
+    global _P39_CODEX_JANITOR_STARTED
+    with _P39_CODEX_CACHE_LOCK:
+        if _P39_CODEX_JANITOR_STARTED:
+            return
+        _P39_CODEX_JANITOR_STARTED = True
+
+    def _run() -> None:
+        while True:
+            time.sleep(60)
+            _p39_prune_codex_cache()
+
+    threading.Thread(
+        target=_run,
+        name="catfish-codex-session-janitor",
+        daemon=True,
+    ).start()
 
 
 # ── P29 (6/5 鸿波) — gateway URL detection helper ─────────────────────────
@@ -182,6 +266,11 @@ _PATCH_TARGETS = [
     # plugin install fail-loud, 不让微信 silent 走 config.yaml.model.default 老路径
     # (跟 picker 脱钩).
     ("gateway.run", "_resolve_gateway_model", "func"),
+    # P39 (7/31): codex_app_server 自己从 Codex CLI 读取 ChatGPT 登录，
+    # 不该先要求 Hermes auth store 里另存一份 OAuth token。Hermes 0.18
+    # 的 gateway resolver 顺序相反，导致有效 Codex 登录仍报 credentials missing。
+    ("gateway.run", "_resolve_runtime_agent_kwargs", "func"),
+    ("agent.codex_runtime", "run_codex_app_server_turn", "func"),
     # P25 (P3.5.104, 6/24): hermes tools/approval.py check_execute_code_guard —
     # cron env 污染防御. hermes cron/scheduler.py:1558 在 run_job 内 set
     # HERMES_CRON_SESSION env 但永不清, 整 daemon 进程污染, 后续 chat 调
@@ -602,6 +691,27 @@ def _apply_patches() -> None:
     except Exception as e:  # noqa: BLE001
         logger.error(
             "P36: _patch_p36_terminal_cwd_home 顶层异常 (跳过, 不阻塞 hermes 启动): %s",
+            e, exc_info=True,
+        )
+
+    # P39 (7/31): Codex App Server 模式在 provider credential resolver 之前
+    # short-circuit。登录继续只由 Codex CLI 管，不复制 OAuth token 到 Hermes。
+    try:
+        _patch_p39_codex_app_server_auth_bypass()
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "P39: Codex App Server auth bypass patch 失败: %s",
+            e, exc_info=True,
+        )
+
+    # P40 (7/31): Companion 与 Hermes/Codex 共用 state.db 时，某些 runtime 会在
+    # 请求开始和 turn 完成各写一次相同 user message。把防重放在 SessionDB 公共
+    # 写入层，覆盖 App、API server、Codex adapter 的所有组合。
+    try:
+        _patch_p40_companion_user_message_dedup()
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            "P40: Companion user message dedup patch 失败: %s",
             e, exc_info=True,
         )
 
@@ -3103,6 +3213,435 @@ def _patch_p23_inbound_picker_integration() -> None:
     logger.info(
         "P23 inbound picker integration patched — inbound message (微信/Discord/Slack/"
         "Telegram/CLI) model 跟 picker_state.json 联动 (优先级: picker > yaml.default) ✓"
+    )
+
+
+# ── P39 (7/31): Codex App Server 不复制 OAuth 凭据 ─────────────────────
+#
+# Hermes 0.18 的 gateway `_resolve_runtime_agent_kwargs()` 先调用
+# `resolve_runtime_provider()`. 当 model.provider=openai-codex 时，这一步先从
+# ~/.hermes/auth.json 取 OAuth；取不到就抛错，后面的
+# `model.openai_runtime=codex_app_server` 判断根本没有机会执行。
+#
+# 但 App Server runtime 的真实客户端是 `codex app-server` 子进程，它自行读取
+# ~/.codex/auth.json，Hermes 不需要也不应该另存 OAuth token。这里仅在显式
+# `codex_app_server + openai-codex` 组合下返回无网络用途的本机 runtime 描述，
+# 让 AIAgent 进入 codex_app_server 分支。普通 provider/runtime 完全走原函数。
+
+def _patch_p39_codex_app_server_auth_bypass() -> None:
+    """让 Codex CLI 独占管理 ChatGPT 登录，跳过无关的 Hermes OAuth 预检。"""
+    try:
+        from gateway import run as _gateway_run  # noqa: PLC0415
+    except ImportError as e:
+        logger.warning("P39: hermes gateway.run module 没导, skip patch (%s)", e)
+        return
+
+    original = getattr(_gateway_run, "_resolve_runtime_agent_kwargs", None)
+    if original is None:
+        logger.warning("P39: _resolve_runtime_agent_kwargs 不存在, skip patch")
+        return
+    if getattr(original, "_catfish_p39_patched", False):
+        return
+
+    @functools.wraps(original)
+    def patched_runtime_agent_kwargs():
+        try:
+            config = _gateway_run._load_gateway_runtime_config()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("P39 读取 runtime 配置失败, fallback Hermes 原路径: %s", e)
+            return original()
+
+        model_cfg = config.get("model", {}) if isinstance(config, dict) else {}
+        if not isinstance(model_cfg, dict):
+            return original()
+
+        runtime = str(model_cfg.get("openai_runtime") or "").strip().lower()
+        provider = str(model_cfg.get("provider") or "").strip().lower()
+        config_is_codex = runtime == "codex_app_server" and provider == "openai-codex"
+
+        # Picker 状态和 gateway runtime 在切换窗口内不一致时，宁可明确拒绝
+        # 这一条，也绝不能把 DeepSeek 发进 Codex（或反过来）。正常情况下 Rust
+        # 会等到旧 gateway 真退出、新进程稳定后才让 UI 解锁；这是第二道保险。
+        picker_model = _read_catfish_picker_model()
+        if picker_model:
+            try:
+                from hermes_cli.codex_models import get_codex_model_ids  # noqa: PLC0415
+
+                codex_ids = {
+                    value
+                    for value in get_codex_model_ids()
+                    if isinstance(value, str) and value.startswith("gpt-")
+                }
+            except Exception:
+                codex_ids = set()
+            picker_is_codex = picker_model in codex_ids
+            if codex_ids and picker_is_codex != config_is_codex:
+                logger.warning(
+                    "P39 blocked cross-runtime request during model switch: "
+                    "picker=%s runtime=%s provider=%s",
+                    picker_model,
+                    runtime,
+                    provider,
+                )
+                raise RuntimeError(
+                    "模型运行通道仍在切换，请等待下拉框恢复后重试"
+                )
+
+        if config_is_codex:
+            max_tokens = model_cfg.get("max_tokens")
+            logger.info(
+                "P39 Codex App Server runtime selected — credentials stay "
+                "inside Codex CLI; skipping Hermes OAuth preflight"
+            )
+            return {
+                "api_key": "codex-app-server-local",
+                # init_agent 仍要求非空 base_url 才进入“显式 runtime”
+                # 分支；App Server turn 不会使用这个 loopback URL。
+                "base_url": "http://127.0.0.1/codex-app-server",
+                "provider": "openai-codex",
+                "api_mode": "codex_app_server",
+                "command": None,
+                "args": [],
+                "credential_pool": None,
+                "max_tokens": max_tokens if isinstance(max_tokens, int) else None,
+            }
+        return original()
+
+    patched_runtime_agent_kwargs._catfish_p39_patched = True  # type: ignore[attr-defined]
+    _gateway_run._resolve_runtime_agent_kwargs = patched_runtime_agent_kwargs
+
+    # Hermes API server 每个 HTTP 回合都会新建 AIAgent，而上游把 Codex session
+    # 挂在临时 agent 上。这会让每条消息都重启 codex app-server、重载 MCP，且
+    # 临时 agent 销毁后子进程没有被 close。这里按聊天 + 模型 + cwd 复用 session，
+    # 同时把 Codex 的 final_answer delta 接回 Hermes SSE。
+    from agent import codex_runtime as _codex_runtime  # noqa: PLC0415
+
+    original_turn = getattr(_codex_runtime, "run_codex_app_server_turn", None)
+    if original_turn is None:
+        raise RuntimeError("agent.codex_runtime.run_codex_app_server_turn 不存在")
+    if not getattr(original_turn, "_catfish_p39_stream_patched", False):
+        atexit.register(_p39_close_all_codex_sessions)
+
+        def _cache_key_for(agent, cwd: str) -> str:
+            # Tenant identity belongs in the key even though Companion session
+            # IDs are normally unique. This plugin serves multiple employees;
+            # a caller-controlled ID collision must never reuse another user's
+            # Codex conversation context.
+            try:
+                tenant = str(resolver.resolve_for_agent(agent) or "").strip()
+            except Exception:
+                tenant = str(
+                    getattr(agent, "_catfish_outgoing_user", "") or ""
+                ).strip()
+            tenant = tenant or "local"
+            session_id = str(
+                getattr(agent, "session_id", "")
+                or getattr(agent, "gateway_session_key", "")
+                or getattr(agent, "_gateway_session_key", "")
+                or ""
+            ).strip()
+            if not session_id:
+                # A request with no stable conversation identity must not share
+                # context with another anonymous request.
+                session_id = f"anonymous-{id(agent)}"
+            model = str(getattr(agent, "model", "") or "").strip()
+            return f"{tenant}\x1f{session_id}\x1f{model}\x1f{cwd}"
+
+        def _new_codex_session(agent, cwd: str):
+            from agent.transports.codex_app_server_session import (  # noqa: PLC0415
+                CodexAppServerSession,
+                _ServerRequestRouting,
+            )
+
+            try:
+                from tools.terminal_tool import _get_approval_callback  # noqa: PLC0415
+
+                approval_callback = _get_approval_callback()
+            except Exception:
+                approval_callback = None
+
+            auto_approve_requests = False
+            try:
+                from tools.approval import is_approval_bypass_active  # noqa: PLC0415
+
+                auto_approve_requests = is_approval_bypass_active()
+            except Exception:
+                logger.debug(
+                    "P39 Codex approval-bypass lookup failed; keeping fail-closed",
+                    exc_info=True,
+                )
+
+            return CodexAppServerSession(
+                cwd=cwd,
+                approval_callback=approval_callback,
+                request_routing=_ServerRequestRouting(
+                    auto_approve_exec=auto_approve_requests,
+                    auto_approve_apply_patch=auto_approve_requests,
+                ),
+                # Refreshed for every checked-out turn below. Keeping it empty
+                # here avoids retaining the first temporary AIAgent forever.
+                on_event=None,
+            )
+
+        def _checkout_cache_entry(key: str, factory):
+            """Return an entry with its per-session turn lock held."""
+            while True:
+                with _P39_CODEX_CACHE_LOCK:
+                    entry = _P39_CODEX_CACHE.get(key)
+                    cache_hit = entry is not None
+                    if entry is None:
+                        entry = {
+                            "session": factory(),
+                            "lock": threading.Lock(),
+                            "last_used": time.monotonic(),
+                        }
+                        _P39_CODEX_CACHE[key] = entry
+
+                    entry_lock = entry["lock"]
+                    acquired = entry_lock.acquire(blocking=False)
+
+                if not acquired:
+                    # Do not hold the global pool lock while another message in
+                    # this same chat is still generating.
+                    entry_lock.acquire()
+                    with _P39_CODEX_CACHE_LOCK:
+                        if _P39_CODEX_CACHE.get(key) is not entry:
+                            entry_lock.release()
+                            continue
+
+                return entry, cache_hit
+
+        @functools.wraps(original_turn)
+        def patched_codex_turn(agent, *args, **kwargs):
+            callback = getattr(agent, "stream_delta_callback", None)
+            seen_delta = False
+            final_answer_items: set[str] = set()
+
+            def tracking_callback(delta):
+                nonlocal seen_delta
+                if delta is not None and str(delta):
+                    seen_delta = True
+                if callback is not None:
+                    return callback(delta)
+                return None
+
+            def on_codex_event(note):
+                if not isinstance(note, dict):
+                    return
+                method = str(note.get("method") or "")
+                params = note.get("params") or {}
+                if not isinstance(params, dict):
+                    params = {}
+
+                if method == "item/started":
+                    item = params.get("item") or {}
+                    if isinstance(item, dict):
+                        item_id = str(item.get("id") or "")
+                        phase = str(item.get("phase") or "")
+                        if (
+                            item_id
+                            and item.get("type") == "agentMessage"
+                            and phase == "final_answer"
+                        ):
+                            final_answer_items.add(item_id)
+
+                elif method == "item/agentMessage/delta":
+                    item_id = str(params.get("itemId") or "")
+                    delta = params.get("delta")
+                    # Only surface final-answer text. Commentary/reasoning also
+                    # arrives as agentMessage deltas and must stay out of the
+                    # visible assistant bubble.
+                    if item_id in final_answer_items and delta:
+                        tracking_callback(delta)
+
+                elif method == "item/completed":
+                    item = params.get("item") or {}
+                    if isinstance(item, dict):
+                        final_answer_items.discard(str(item.get("id") or ""))
+
+                progress_callback = getattr(agent, "tool_progress_callback", None)
+                if progress_callback is not None:
+                    mapped = _codex_runtime._codex_note_to_tool_progress(note)
+                    if mapped is not None:
+                        tool_name, preview, tool_args = mapped
+                        try:
+                            progress_callback(
+                                "tool.started", tool_name, preview, tool_args
+                            )
+                        except Exception:
+                            logger.debug(
+                                "P39 Codex tool-progress callback raised",
+                                exc_info=True,
+                            )
+
+            _p39_start_codex_janitor()
+            _p39_prune_codex_cache()
+
+            from agent.runtime_cwd import resolve_agent_cwd  # noqa: PLC0415
+
+            cwd = str(getattr(agent, "session_cwd", None) or resolve_agent_cwd())
+            key = _cache_key_for(agent, cwd)
+            entry, cache_hit = _checkout_cache_entry(
+                key, lambda: _new_codex_session(agent, cwd)
+            )
+            session = entry["session"]
+            logger.info(
+                "P39 Codex session cache %s: session=%s model=%s",
+                "hit" if cache_hit else "miss",
+                getattr(agent, "session_id", "")
+                or getattr(agent, "_gateway_session_key", ""),
+                getattr(agent, "model", ""),
+            )
+
+            if callback is not None:
+                agent.stream_delta_callback = tracking_callback
+            session._on_event = on_codex_event
+            agent._codex_session = session
+            result = None
+            keep_cached = False
+            try:
+                result = original_turn(agent, *args, **kwargs)
+            finally:
+                # Upstream sets agent._codex_session=None after a crash, timeout,
+                # auth failure, or explicit retirement. Never put that dead
+                # subprocess back in the pool.
+                keep_cached = (
+                    getattr(agent, "_codex_session", None) is session
+                    and not getattr(session, "_closed", False)
+                )
+                session._on_event = None
+                agent._codex_session = None
+                if callback is not None:
+                    agent.stream_delta_callback = callback
+                entry["last_used"] = time.monotonic()
+                if not keep_cached:
+                    with _P39_CODEX_CACHE_LOCK:
+                        if _P39_CODEX_CACHE.get(key) is entry:
+                            _P39_CODEX_CACHE.pop(key, None)
+                entry["lock"].release()
+
+            final_text = result.get("final_response") if isinstance(result, dict) else None
+            if callback is not None and not seen_delta and final_text:
+                callback(final_text)
+                logger.info("P39 Codex final_response bridged to SSE delta")
+            elif callback is not None and seen_delta:
+                logger.info("P39 Codex final_answer streamed incrementally to SSE")
+
+            # Enforce LRU after a miss; the active entry was locked during the
+            # pre-turn prune and therefore could not be selected as a victim.
+            if keep_cached and not cache_hit:
+                _p39_prune_codex_cache()
+            return result
+
+        patched_codex_turn._catfish_p39_stream_patched = True  # type: ignore[attr-defined]
+        _codex_runtime.run_codex_app_server_turn = patched_codex_turn
+    logger.info(
+        "P39 Codex App Server auth + pooled sessions + live SSE patched — "
+        "ChatGPT credentials remain owned by Codex CLI ✓"
+    )
+
+
+# ── P40 (7/31): Companion/Hermes/Codex 共享 state.db 的 user 双写防护 ─────
+
+def _patch_p40_companion_user_message_dedup() -> None:
+    """相邻相同 user message 只保留一条，且只作用于 Companion 会话。
+
+    Companion 把同一个 session id 交给 Hermes API server；Codex App Server
+    runtime 里，请求入口和 turn flush 可能各调一次 SessionDB.append_message。
+    两次之间可能隔着整个冷启动（实测 1–12 秒），所以不能靠很短的时间窗。
+
+    规则刻意保守：
+    - session.source 必须是 ``companion``；微信/Slack/CLI 完全不受影响；
+    - 当前最后一条 active message 也必须是相同内容的 user；
+    - 两条相距不超过 120 秒。正常一问一答中间有 assistant，不会误去重。
+    """
+    try:
+        from hermes_state import SessionDB  # noqa: PLC0415
+    except ImportError as e:
+        logger.warning("P40: hermes_state.SessionDB 没导, skip patch (%s)", e)
+        return
+
+    original = getattr(SessionDB, "append_message", None)
+    if original is None:
+        raise RuntimeError("hermes_state.SessionDB.append_message 不存在")
+    if getattr(original, "_catfish_p40_patched", False):
+        return
+
+    locks_guard = threading.Lock()
+    session_locks: dict[str, threading.Lock] = {}
+
+    def _content_key(value) -> str:
+        if isinstance(value, str):
+            return value.strip()
+        try:
+            return json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        except Exception:
+            return str(value).strip()
+
+    @functools.wraps(original)
+    def patched_append_message(
+        self,
+        session_id: str,
+        role: str,
+        content=None,
+        *args,
+        **kwargs,
+    ):
+        if role != "user" or not session_id:
+            return original(self, session_id, role, content, *args, **kwargs)
+
+        with locks_guard:
+            session_lock = session_locks.setdefault(session_id, threading.Lock())
+
+        with session_lock:
+            try:
+                session = self.get_session(session_id)
+                if str((session or {}).get("source") or "") == "companion":
+                    messages = self.get_messages(session_id)
+                    if messages:
+                        last = messages[-1]
+                        last_ts = float(last.get("timestamp") or 0)
+                        incoming_ts = kwargs.get("timestamp")
+                        if hasattr(incoming_ts, "timestamp"):
+                            incoming_ts = incoming_ts.timestamp()
+                        try:
+                            incoming_ts = float(incoming_ts)
+                        except (TypeError, ValueError):
+                            incoming_ts = time.time()
+
+                        if (
+                            last.get("role") == "user"
+                            and _content_key(last.get("content"))
+                            == _content_key(content)
+                            and 0 <= incoming_ts - last_ts <= 120
+                        ):
+                            existing_id = int(last["id"])
+                            logger.info(
+                                "P40 dedup skip: session=%s user rowid=%s "
+                                "content=%r",
+                                session_id,
+                                existing_id,
+                                _content_key(content)[:80],
+                            )
+                            return existing_id
+            except Exception:
+                # 防重失败不能阻断聊天；回落 Hermes 原写入并留日志。
+                logger.warning(
+                    "P40 dedup check failed; fallback original append",
+                    exc_info=True,
+                )
+
+            return original(self, session_id, role, content, *args, **kwargs)
+
+    patched_append_message._catfish_p40_patched = True  # type: ignore[attr-defined]
+    SessionDB.append_message = patched_append_message
+    logger.info(
+        "P40 Companion user-message dedup patched at SessionDB.append_message ✓"
     )
 
 

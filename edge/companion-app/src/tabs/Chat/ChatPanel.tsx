@@ -164,64 +164,33 @@ export default function ChatPanel({
   const isEmpty = messages.length === 0;
 
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        height: "100%",
-        background: "var(--catfish-bg)",
-      }}
-    >
+    <div className="chat-panel">
       <div
         ref={scrollRef}
-        style={{
-          flex: 1,
-          overflowY: "auto",
-          padding: "var(--space-6) var(--space-6) var(--space-3)",
-        }}
+        className="chat-panel__thread"
       >
-        {isEmpty && <EmptyState />}
-        {messages.map((m) => (
-          <ChatMessage
-            key={m.id}
-            msg={m}
-            // 只对**当前正在流式的那条 assistant** 显示光标。
-            // 双重判断：全局 isStreaming + msg.id 跟当前流的 id 匹配。
-            // 这避免了"历史 assistant 消息也显示光标"的 bug。
-            showCaret={isStreaming && m.id === streamingId}
-            // BL-TASK-ASSESS-3-UI (5/15): 嘴炮断言 [⏩ 催它继续] 按钮 → 发"继续",
-            // 走跟用户手动发完全一样的 onSend 路径, 不走 gateway 重试.
-            onNudge={() => onSend("继续", [])}
-            // BL-COMPANION-RESEND (7/23): user msg hover → 🔄 重发 · 从该 msg 截断后重发
-            onResend={onResendFromUserMsg}
-            // BL-COMPANION-EDIT (7/23 P1): user msg hover → ✏️ 编辑 · confirm 后新内容发
-            onEditAndResend={onEditAndResendUserMsg}
-            isStreaming={isStreaming}
-          />
-        ))}
+        <div className="chat-panel__content">
+          {isEmpty && <EmptyState />}
+          {messages.map((m) => (
+            <ChatMessage
+              key={m.id}
+              msg={m}
+              showCaret={isStreaming && m.id === streamingId}
+              onNudge={() => onSend("继续", [])}
+              onResend={onResendFromUserMsg}
+              onEditAndResend={onEditAndResendUserMsg}
+              isStreaming={isStreaming}
+            />
+          ))}
         {/* P3.5.18 Phase 2 (6/17 鸿波): hermes preflight 自动压缩 inline 状态.
             stream done 后 useChat 清 lifecycleStatus = null → 自动消失.
             只 streaming 中 + lifecycleStatus 非 null 才显. 不打扰 message 流. */}
-        {isStreaming && lifecycleStatus && (
-          <div
-            style={{
-              padding: "var(--space-2) var(--space-3)",
-              margin: "var(--space-2) 0",
-              fontSize: 12,
-              color: "var(--catfish-text-muted)",
-              background: "var(--catfish-bg-elevated)",
-              border: "1px solid var(--catfish-border)",
-              borderRadius: "var(--radius-sm)",
-              fontStyle: "italic",
-              display: "flex",
-              alignItems: "center",
-              gap: "var(--space-2)",
-            }}
-            aria-live="polite"
-          >
-            <span style={{ display: "inline-block" }}>{lifecycleStatus}</span>
-          </div>
-        )}
+          {isStreaming && lifecycleStatus && (
+            <div className="chat-panel__lifecycle" aria-live="polite">
+              <span>{lifecycleStatus}</span>
+            </div>
+          )}
+        </div>
       </div>
       {pending && (
         <div className="approval-banner">
@@ -289,32 +258,16 @@ function EmptyState() {
   // BL-E11 命名权: 空状态 "我是小鲶" → 用员工自定义的名字 (默认 "小鲶")
   const agentName = useAgentStore((s) => s.name);
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        // BL-EMPTY-STATE-CENTER (5/16): 原 60% 让内容居中在前 60% 区域 = 视觉
-        // 30% 位置偏上. 改 100% 让内容真居中 (视觉 50%), 跟下方输入框形成
-        // 自然眼神动线 (居中 mascot → 向下扫到输入框).
-        height: "100%",
-        textAlign: "center",
-        color: "var(--catfish-text-muted)",
-      }}
-    >
+    <div className="chat-empty-state">
       {/* 五一 sprint 5/3 BL-D11: 占位 🐟 → 正式吉祥物 (空对话状态最显眼, 用最大的 mascot) */}
       <img
         src="/catfish-mascot.svg"
         alt={agentName}
-        width={120}
-        height={120}
-        style={{ marginBottom: "var(--space-3)" }}
+        width={132}
+        height={132}
       />
-      <div style={{ fontSize: 18, color: "var(--catfish-text)", marginBottom: 6 }}>
-        我是{agentName}
-      </div>
-      <div style={{ fontSize: 13, lineHeight: 1.6, maxWidth: 360 }}>
+      <div className="chat-empty-state__title">我是{agentName}</div>
+      <div className="chat-empty-state__copy">
         你的鲶鱼平台数字副手。
         <br />
         问我任何事 — 我会用工具帮你查、做、写。

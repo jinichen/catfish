@@ -32,6 +32,33 @@ export const reinstallHermesAgent = () =>
 export const getHermesBootstrapStatus = () =>
   rawInvoke<HermesBootstrapProgress | null>("hermes_bootstrap_status");
 
+// ── Codex 后端（Hermes 原生 codex_app_server runtime）──
+export interface CodexBackendStatus {
+  installed: boolean;
+  binaryPath: string | null;
+  version: string | null;
+  supported: boolean;
+  loggedIn: boolean;
+  hermesReady: boolean;
+  enabled: boolean;
+  runtime: string;
+  provider: string | null;
+  model: string | null;
+  models: string[];
+  ready: boolean;
+  requiresNewSession: boolean;
+  message: string;
+}
+
+export const codexBackendStatus = () =>
+  rawInvoke<CodexBackendStatus>("codex_backend_status");
+export const codexBackendSetEnabled = (enabled: boolean) =>
+  rawInvoke<CodexBackendStatus>("codex_backend_set_enabled", { enabled });
+export const codexBackendSelectModel = (model: string) =>
+  rawInvoke<CodexBackendStatus>("codex_backend_select_model", { model });
+export const codexBackendOpenLogin = () =>
+  rawInvoke<void>("codex_backend_open_login");
+
 // ── chrome ───────────────────────────────────────────────
 export const chromeLaunch = () => rawInvoke<void>("chrome_launch");
 export const chromeKill = () => rawInvoke<void>("chrome_kill");

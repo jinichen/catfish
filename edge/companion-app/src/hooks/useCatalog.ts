@@ -29,9 +29,11 @@ export function useCatalog() {
     };
     void tick(); // 立刻 fetch 一次
     const t = setInterval(tick, POLL_INTERVAL_MS);
+    window.addEventListener("catfish:catalog-refresh", tick);
     return () => {
       cancelled = true;
       clearInterval(t);
+      window.removeEventListener("catfish:catalog-refresh", tick);
     };
   }, []);
 

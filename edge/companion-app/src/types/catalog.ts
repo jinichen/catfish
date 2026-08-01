@@ -25,6 +25,10 @@ export interface CatalogModel {
   is_reachable: boolean | null;
   /** 给 UI 显示的人话 */
   status_reason: string;
+  /** Companion 本机合并的模型来源；老 gateway 条目缺省为 gateway。 */
+  source?: "gateway" | "codex";
+  /** false 表示可见但当前不可选（例如 Codex 尚未登录）。 */
+  selectable?: boolean;
 }
 
 export interface CatalogResponse {
@@ -32,4 +36,6 @@ export interface CatalogResponse {
   models: CatalogModel[];
   default: string | null;
   your_dept_default: string | null;
+  /** gateway 不可达时仍保留本机 Codex 模型，这里提示降级原因。 */
+  gateway_error?: string;
 }
