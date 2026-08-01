@@ -530,6 +530,23 @@ echo "=== [6d/6] tar pack hermes-agent bundle (含 node_modules · 排废件) ==
 # --exclude patterns 支持 shell glob, 无需 leading 路径.
 cd /tmp
 HERMES_TAR="$RESOURCES/hermes-agent-bundle.tar.gz"
+# 8/1: 补 node_modules/electron —— 排 apps/desktop 却留着它的运行时
+#
+# 上面那条 7/17 的注释说排 apps/desktop 是因为"我们用 Tauri Companion 替代它,
+# 完全不用"。但 hermes 是 npm workspaces (apps/* / ui-tui / web / tests-js),
+# apps/desktop 的依赖被**提升到根 node_modules**。所以 app 排掉了, 它那个
+# 790MB 的 Electron 运行时原封不动留在包里 —— 占整个归档解压后的 56%,
+# 而没有任何使用者。
+#
+# 能排掉的证据链 (8/1 在 0.19.0 打出来的实际归档上查的):
+#   · 根 package.json 的四个依赖段都没有 electron
+#   · 保留下来的 6 个 workspace package.json, 没有一个依赖 electron
+#   · 归档里 hermes_cli/ plugins/ apps/ 下带 electron 字样的路径: 0 条
+# 也就是说它只从 apps/desktop 来, 而 apps/desktop 已经排掉了。
+#
+# 这不是"排除失效"—— 那 5 条 exclude 全都生效, 是漏排了一项。7/17 时
+# upstream 的 apps/desktop 还小, 注释里写的 "→ ~200MB" 就是那时候量的;
+# 0.19 之后它长到 534MB 也没人回头看这条注释。
 tar czhf "$HERMES_TAR" \
     --exclude="hermes-agent-src-$ARCH/.git" \
     --exclude="hermes-agent-src-$ARCH/venv" \
@@ -537,9 +554,38 @@ tar czhf "$HERMES_TAR" \
     --exclude="hermes-agent-src-$ARCH/.venv" \
     --exclude="hermes-agent-src-$ARCH/target" \
     --exclude="hermes-agent-src-$ARCH/apps/desktop" \
+    --exclude="hermes-agent-src-$ARCH/node_modules/electron" \
     -s "|hermes-agent-src-$ARCH|hermes-agent-src|" \
     "hermes-agent-src-$ARCH"
 echo "  OK $HERMES_TAR ($(ls -lh "$HERMES_TAR" | awk '{print $5}'))"
+
+# ─── 打完就验 exclude 真的生效了 ────────────────────────────────
+#
+# 为什么要验而不是相信 --exclude: 这些 pattern 匹配的是 `-s` 改名**之前**的
+# 路径 (hermes-agent-src-$ARCH/...), 而归档里存的是改名**之后**的
+# (hermes-agent-src/...)。两者顺序反了的话 exclude 会全部静默失效 ——
+# 表现是包大了几百 MB, 而脚本照常打印 OK。
+#
+# 静默多打几百 MB 的后果不是"文件大一点": 员工在 POC 现场的网络上多下一倍,
+# 而且没人会想到去 tar tzf 一个装机包。
+# 归档解出来 12 万条, 只列**一次**存起来再反复 grep ——
+# 每个 pattern 单独 `tar tzf` 一遍就是把 500MB 的 gzip 解压 6 次。
+_HLIST="$(mktemp -t hermes-bundle-list)"
+trap 'rm -f "$_HLIST"' EXIT
+tar tzf "$HERMES_TAR" > "$_HLIST"
+_leak=0
+for _pat in "\.git/" "venv/" "target/" "apps/desktop" "node_modules/electron"; do
+    if grep -qE "^hermes-agent-src/${_pat}" "$_HLIST"; then
+        echo "  ❌ exclude 没生效: 归档里仍然有 hermes-agent-src/${_pat}" >&2
+        _leak=1
+    fi
+done
+if [ "$_leak" = "1" ]; then
+    echo "     多半是 --exclude 的 pattern 跟 -s 改名的先后顺序变了。" >&2
+    echo "     pattern 要匹配改名**前**的 hermes-agent-src-$ARCH/..." >&2
+    exit 1
+fi
+echo "  ✓ exclude 全部生效 (含 node_modules/electron) · 归档 $(wc -l < "$_HLIST" | tr -d ' ') 条"
 
 # ─── DONE ──────────────────────────────────────────────
 
