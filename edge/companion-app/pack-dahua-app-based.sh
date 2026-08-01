@@ -11,6 +11,28 @@
 #     install-mac.sh                        (员工一键装脚本 · 自动检 arch + cp .app)
 #     QUICK-START.md                        (员工装机指南)
 
+
+# ─── 已废弃 (8/1) ────────────────────────────────────────────────
+#
+# 这是 7/19 那天为一次具体分发临时写的脚本 (看上面的注释, 精确到分钟),
+# 里面写死了 `Catfish Companion_0.18.0_*.dmg` —— 那些文件今天不存在,
+# 现在是 0.19.0, 而且版本号跟 hermes 钉死 (见 check_version_sync.sh)。
+#
+# 照它跑不会报错, 只会拷不到文件然后打出误导性的提示 —— 而这类脚本恰恰是
+# 半年后有人翻出来"看着像能用"就直接跑的那种。
+#
+# 现在的正确做法:
+#   bash scripts/build-mac-resources.sh aarch64   # 或 x64
+#   npm run tauri:build:arm64                     # 或 tauri:build:x64
+#
+# 保留本文件只为记录这段历史 (跟 scripts/build-intel-dmg.sh 同一个处理)。
+exit_deprecated() {
+    echo "❌ 本脚本已废弃 (7/19 一次性分发脚本, 写死 0.18.0 的文件名)"
+    echo "   现在用: bash scripts/build-mac-resources.sh <arch> && npm run tauri:build:<arch>"
+    exit 1
+}
+exit_deprecated
+
 set -uo pipefail
 
 BUILD_DIR=~/person_task/catfish/edge/companion-app/src-tauri/target
