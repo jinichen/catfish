@@ -24,6 +24,13 @@ jobs:
           - edge/local-search
     steps:
       - uses: actions/checkout@v5
+        # persist-credentials: false (8/1) —— 治 Post Checkout 的 git.exe exit 128。
+        # 本仓四个 workflow 都不对 catfish 做 git push/fetch/pull/submodule/tag,
+        # 没有任何一步需要 checkout 注入 .git/config 的那个临时 token。
+        # 不注入 → Post 步骤不用摘 → 那条 git.exe exit 128 的清理失败消失,
+        # 而且作业全程 .git/config 里没有凭证, 顺带是个安全改进。
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v6
         with: { python-version: '3.12' }
       - name: install pip-audit
@@ -44,6 +51,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        # persist-credentials: false (8/1) —— 治 Post Checkout 的 git.exe exit 128。
+        # 本仓四个 workflow 都不对 catfish 做 git push/fetch/pull/submodule/tag,
+        # 没有任何一步需要 checkout 注入 .git/config 的那个临时 token。
+        # 不注入 → Post 步骤不用摘 → 那条 git.exe exit 128 的清理失败消失,
+        # 而且作业全程 .git/config 里没有凭证, 顺带是个安全改进。
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with: { node-version: '20' }
       - name: install
@@ -66,6 +80,13 @@ jobs:
       issues: write
     steps:
       - uses: actions/checkout@v5
+        # persist-credentials: false (8/1) —— 治 Post Checkout 的 git.exe exit 128。
+        # 本仓四个 workflow 都不对 catfish 做 git push/fetch/pull/submodule/tag,
+        # 没有任何一步需要 checkout 注入 .git/config 的那个临时 token。
+        # 不注入 → Post 步骤不用摘 → 那条 git.exe exit 128 的清理失败消失,
+        # 而且作业全程 .git/config 里没有凭证, 顺带是个安全改进。
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       # 5/8 BL-SEC-CARGO: ignore 19 个上游 Tauri 2.x GTK3 binding /
       # unmaintained crate 警告. 全是供应链 hygiene, 0 个 exploitable CVE.
@@ -81,7 +102,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-        with: { fetch-depth: 0 }
+        # persist-credentials: false (8/1) —— 治 Post Checkout 的 git.exe exit 128。
+        # 本仓四个 workflow 都不对 catfish 做 git push/fetch/pull/submodule/tag,
+        # 没有任何一步需要 checkout 注入 .git/config 的那个临时 token。
+        # 不注入 → Post 步骤不用摘 → 那条 git.exe exit 128 的清理失败消失,
+        # 而且作业全程 .git/config 里没有凭证, 顺带是个安全改进。
+        with: { fetch-depth: 0, persist-credentials: false }
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
