@@ -291,6 +291,23 @@ jobs:
           ls -lh edge/companion-app/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/ || true
 
       - name: Upload msi artifact
+      # ⚠ 这一条**还会继续报** "Node.js 20 is deprecated" (8/1 查证):
+      #
+      # actions/upload-artifact 的 v5 / v5.0.0 标签, action.yml 里写的仍然是
+      # `using: 'node20'` —— 尽管 v5.0.0 的 release notes 白纸黑字写着
+      # "this update supports Node v24.x"。发版说明和标签实际声明的不一致。
+      #
+      # 上游 main 分支已经改成 node24 了, 但还没发带这个修复的 tag。所以现在
+      # 用 @v5 或 @v5.0.0 拿到的都是 node20, 我们这边无解。
+      #
+      # 教训: 判断一个 action 跑在哪个 Node 上, 要看
+      #   https://raw.githubusercontent.com/<owner>/<repo>/<tag>/action.yml
+      # 里的 `runs.using`, **不能信 release notes**。本仓其余 5 个
+      # (checkout@v5 / cache@v5 / setup-node@v6 / setup-python@v6 /
+      #  github-script@v9) 都逐个这么查过, 确认是 node24。
+      #
+      # 该做什么: 上游发新 tag 后升上去, 这条注释一起删。
+      # 在那之前 GitHub 会强制它跑在 node24 上, 功能不受影响。
         uses: actions/upload-artifact@v5
         with:
           name: catfish-companion-msi-${{ github.sha }}
