@@ -1,0 +1,18 @@
+# 8/3 补回。这个文件之前不知何时丢了, 而 skills/creative/guizang-ppt-magazine
+# 的 gitlink (mode 160000) 一直留在树里 —— 一个没有 URL 的孤儿 submodule。
+#
+# 症状: 任何 `git submodule` 操作都报
+#   No url found for submodule path 'skills/creative/guizang-ppt-magazine' in .gitmodules
+# 而 actions/checkout 的 Post 清理步骤内部就会跑 submodule 遍历, 所以每次
+# Windows MSI 构建都带一条 "git.exe failed with exit code 128" 的警告 ——
+# 那条警告的根因就是这里, 不是"Windows 上文件锁"之类。
+#
+# 8/1 试着给 checkout 加 persist-credentials: false 时它从警告升级成硬失败:
+# 那个选项会让 checkout 在主步骤末尾走 removeAuth(), 里面同样遍历 submodule,
+# 于是整个 job 挂掉。当时回滚了 (f53073b), 根因留到现在才修。
+#
+# URL 是从本地 skills/creative/guizang-ppt-magazine/.git 的 origin 读出来的,
+# pointer (13af2549) 跟父仓记录的一致。
+[submodule "skills/creative/guizang-ppt-magazine"]
+	path = skills/creative/guizang-ppt-magazine
+	url = https://github.com/op7418/guizang-ppt-skill.git

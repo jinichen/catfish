@@ -180,3 +180,22 @@ edge/companion-app/src-tauri/resources/windows/cpython-*.zip
 edge/companion-app/src-tauri/resources/windows/hermes-agent-bundle.tar.gz
 edge/companion-app/src-tauri/resources/windows/uv.exe
 edge/companion-app/src-tauri/resources/windows/install.ps1
+
+# ── Apple 代码签名材料 (8/3) ────────────────────────────────────────
+#
+# 8/3 发现根目录躺着 Developer-ID-Application-*.cer 和同名的
+# *-PASSWORD.txt, 两个都**没被忽略** —— 原有规则只有 *.pem / *.p12,
+# 正好漏了 .cer, 而密码文件是 .txt 更没人挡。
+#
+# 后果不是"文件大": 任何人 `git add -A` 一次, 签名证书连同它的密码就一起
+# 进了仓库历史。这个仓是私有的, 但 git 历史删不干净 (要 filter-repo 重写 +
+# 强推 + 所有人重新 clone), 而证书一旦进去就只能作废重签。
+#
+# gitleaks 每次 push 都扫, 但它扫的是**已提交**的内容 —— 拦不住"还没提交
+# 但下一次 add -A 就会进来"这种。所以这里要挡在前面。
+*.cer
+*.cert
+*.crt
+*.mobileprovision
+*-PASSWORD.txt
+*_PASSWORD.txt
