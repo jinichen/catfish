@@ -81,10 +81,15 @@ export interface Department {
 }
 
 export interface UpdateDeptReq {
+  new_name?: string;
   allowed_models?: string[];
   allowed_tools?: string[];
   allowed_skills?: string[];
   description?: string;
+}
+
+export interface CreateDeptReq extends UpdateDeptReq {
+  name: string;
 }
 
 export interface UsersAuditEvent {
@@ -146,6 +151,9 @@ export const adminApi = {
   // BL-RBAC-DAY7 (5/17): department CRUD
   listDepartments: () =>
     api.get<{ departments: Department[] }>(`/api/admin/departments`),
+
+  createDepartment: (req: CreateDeptReq) =>
+    api.post<{ ok: boolean; department: Department }>("/api/admin/departments", req),
 
   getDepartment: (name: string) =>
     api.get<{ department: Department }>(

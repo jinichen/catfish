@@ -162,6 +162,7 @@ class DepartmentRegistry:
         name: str,
         *,
         by_email: str,
+        new_name: str | None = None,
         allowed_models: list[str] | None = None,
         allowed_tools: list[str] | None = None,
         allowed_skills: list[str] | None = None,
@@ -181,6 +182,12 @@ class DepartmentRegistry:
         if name not in self._cache:
             return False, f"dept {name} 不存在"
 
+        rename = (new_name or "").strip() or name
+        if not rename or len(rename) > 100 or any(c.isspace() for c in rename):
+            return False, "部门名称不能为空、不能含空白字符，且不能超过 100 个字符"
+        if rename != name and rename in self._cache:
+            return False, f"dept {rename} 已存在"
+
         sets = []
         params: list = []
         if allowed_models is not None:
@@ -196,7 +203,7 @@ class DepartmentRegistry:
             sets.append(f"description = ${len(params) + 1}")
             params.append(description)
 
-        if not sets:
+        if not sets and rename == name:
             return True, ""
 
         sets.append("updated_at = NOW()")
@@ -205,10 +212,37 @@ class DepartmentRegistry:
             return False, "PG 不可用"
         try:
             async with pool.acquire() as conn:
-                await conn.execute(
-                    f"UPDATE departments SET {', '.join(sets)} WHERE name = ${len(params) + 1}",
-                    *params, name,
-                )
+                async with conn.transaction():
+                    if rename != name:
+                        await conn.execute(
+                            "UPDATE departments SET name = $1::text, updated_at = NOW() WHERE name = $2::text",
+                            rename, name,
+                        )
+                        await conn.execute(
+                            "UPDATE users SET department = $1::text WHERE department = $2::text",
+                            rename, name,
+                        )
+                        rows = await conn.fetch(
+                            "SELECT email, managed_departments FROM users "
+                            "WHERE managed_departments IS NOT NULL",
+                        )
+                        for row in rows:
+                            managed = row["managed_departments"]
+                            if isinstance(managed, str):
+                                managed = json.loads(managed)
+                            if not isinstance(managed, list) or name not in managed:
+                                continue
+                            replaced = [rename if item == name else item for item in managed]
+                            await conn.execute(
+                                "UPDATE users SET managed_departments = $1::jsonb "
+                                "WHERE email = $2::text",
+                                json.dumps(replaced), row["email"],
+                            )
+                    if sets:
+                        await conn.execute(
+                            f"UPDATE departments SET {', '.join(sets)} WHERE name = ${len(params) + 1}",
+                            *params, rename,
+                        )
         except Exception as e:
             return False, f"PG 写失败: {e}"
 
@@ -219,6 +253,50 @@ class DepartmentRegistry:
             "BL-RBAC-DAY7: dept %s 更新 by %s (fields=%s)",
             name, by_email, [s.split("=")[0].strip() for s in sets if "updated_at" not in s],
         )
+        return True, ""
+
+    async def create(
+        self,
+        name: str,
+        *,
+        by_email: str,
+        allowed_models: list[str] | None = None,
+        allowed_tools: list[str] | None = None,
+        allowed_skills: list[str] | None = None,
+        description: str = "",
+    ) -> tuple[bool, str]:
+        """Create a department with open defaults for unspecified scopes."""
+        from .db import get_pool  # noqa: PLC0415
+
+        name = name.strip()
+        if not name or len(name) > 100 or any(c.isspace() for c in name):
+            return False, "部门名称不能为空、不能含空白字符，且不能超过 100 个字符"
+        if not self._loaded:
+            await self.load_from_pg()
+        if name in self._cache:
+            return False, f"dept {name} 已存在"
+
+        pool = await get_pool()
+        if pool is None:
+            return False, "PG 不可用"
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO departments "
+                    "(name, allowed_models, allowed_tools, allowed_skills, description) "
+                    "VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5)",
+                    name,
+                    json.dumps([str(m) for m in (allowed_models or [])]),
+                    json.dumps([str(t) for t in (allowed_tools or [])]),
+                    json.dumps([str(s) for s in (allowed_skills or [])]),
+                    description.strip(),
+                )
+        except Exception as e:
+            return False, f"PG 写失败: {e}"
+
+        self._loaded = False
+        self._cache.clear()
+        logger.info("部门 %s 创建 by %s", name, by_email)
         return True, ""
 
 

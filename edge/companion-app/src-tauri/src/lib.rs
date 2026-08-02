@@ -1019,6 +1019,7 @@ pub fn run() {
             // 7/15 BL-CATFISH-MAC-OFFLINE-INSTALL: 员工 Dashboard 手工重装 hermes (若首启 auto install 挂)
             commands::hermes_install::reinstall_hermes_agent,
             commands::hermes_install::hermes_bootstrap_status,
+            commands::teaching_credentials::teaching_credential_save,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

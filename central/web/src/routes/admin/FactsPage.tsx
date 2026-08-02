@@ -54,7 +54,7 @@ function FactsList() {
   return (
     <PageShell scroll="data">
       <Section
-        title="政策同步 / 事实补丁"
+        title="政策同步"
         action={
           <button onClick={() => void refresh()} style={BTN}>
             刷新
@@ -79,7 +79,7 @@ function FactsList() {
             rows={facts}
             rowKey={(f) => f.id}
             onRowClick={(f) => navigate(`/admin/facts/${f.id}`)}
-            empty='还没上传过。用上面的"上传 + 分析"开始。'
+            empty='还没有政策文件。选择文件后点击“上传并分析”。'
             columns={[
               {
                 header: "标题",
@@ -119,7 +119,7 @@ function FactsList() {
                 cell: (f) => f.impacts_count ?? "-",
               },
               {
-                header: "patch",
+                header: "待处理建议",
                 align: "right",
                 cell: (f) => f.patches_count ?? "-",
               },
@@ -186,44 +186,32 @@ function UploadForm({ onUploaded: _onUploaded }: { onUploaded: () => void }) {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: "var(--space-3)" }}>
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <input
-          ref={fileRef}
-          type="file"
-          accept=".pdf,.docx,.doc,.md,.markdown,.txt"
-          disabled={busy}
-          style={{ fontSize: 12 }}
-        />
-        <input
-          type="text"
-          placeholder="标题 (可选, 默认用文件名)"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          disabled={busy}
-          style={{ ...inputStyle, flex: "1 1 200px", minWidth: 0 }}
-        />
-        <input
-          type="date"
-          value={effectiveDate}
-          onChange={(e) => setEffectiveDate(e.target.value)}
-          disabled={busy}
-          style={inputStyle}
-          title="生效日期 (可选)"
-        />
-        <button
-          onClick={() => void submit()}
-          disabled={busy}
-          style={busy ? { ...btnPrimary, opacity: 0.5, cursor: "wait" } : btnPrimary}
-        >
-          {busy ? "上传中…" : "上传 + 分析"}
-        </button>
-      </div>
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1.4fr) minmax(180px, 1fr) 150px auto", gap: 10, alignItems: "end", marginTop: "var(--space-3)" }}>
+      <label style={fieldLabel}>
+        政策文件
+        <input ref={fileRef} type="file" accept=".pdf,.docx,.doc,.md,.markdown,.txt" disabled={busy} style={inputStyle} />
+      </label>
+      <label style={fieldLabel}>
+        文件标题（可选）
+        <input type="text" placeholder="默认使用文件名" value={title} onChange={(e) => setTitle(e.target.value)} disabled={busy} style={inputStyle} />
+      </label>
+      <label style={fieldLabel}>
+        生效日期（可选）
+        <input type="date" value={effectiveDate} onChange={(e) => setEffectiveDate(e.target.value)} disabled={busy} style={inputStyle} />
+      </label>
+      <button onClick={() => void submit()} disabled={busy} style={busy ? { ...btnPrimary, opacity: 0.5, cursor: "wait" } : btnPrimary}>
+        {busy ? "分析中…" : "上传并分析"}
+      </button>
       {err && <div style={errBox}>{err}</div>}
-      <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
-        支持 .pdf / .docx / .md / .txt, 单文件 ≤ 20MB. 上传完会自动进分析阶段
-        (LLM 提事实点 + 找受影响 skill + 生成 patch, 通常 30 秒 - 2 分钟).
-      </div>
+      <div style={{ gridColumn: "1 / -1", fontSize: 11, color: "var(--text-muted)" }}>支持 PDF、Word、Markdown 和文本文件，上传后会自动分析影响范围。</div>
     </div>
   );
 }
+
+const fieldLabel: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 5,
+  fontSize: 12,
+  fontWeight: 600,
+};

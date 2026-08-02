@@ -75,6 +75,7 @@ pub mod speech;
 pub mod system;
 pub mod task_chat; // P3.3.7 Phase 2 (6/10): ~/.catfish/task_chat/<key>.jsonl task-scoped chat 持久化
 pub mod task_chat_migration; // P3.3.19 C Phase 4 (6/11): jsonl → ~/.hermes/state.db 一次性 migration
+pub mod teaching_credentials;
 pub mod tasks_history; // BL-LONG-RUNNING-V1 (5/30): 读 ~/.catfish/tasks.jsonl 历史任务
 pub mod tool_bridge;
 pub mod weather; // P3.3.8 (6/10): 早安天气 (wttr.in + IP 定位 + 多城市 + 6h cache)

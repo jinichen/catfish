@@ -12,7 +12,7 @@
 
 import { useEffect, useState } from "react";
 
-import { Card, Row } from "../../components/Card";
+import { Card } from "../../components/Card";
 import { PageShell } from "../../components/PageShell";
 import { ConfirmDialog } from "../../components/Dialog";
 import { RoleGate } from "../../components/RoleGate";
@@ -39,6 +39,21 @@ const SEVERITY_COLOR: Record<AdvisorySeverity, string> = {
   medium: "#E8A33D",
   low: "#6B8589",
   info: "#0E5F66",
+};
+const SEVERITY_LABEL: Record<AdvisorySeverity, string> = {
+  critical: "紧急",
+  high: "高",
+  medium: "中",
+  low: "低",
+  info: "提示",
+};
+const CATEGORY_LABEL: Record<AdvisoryCategory, string> = {
+  skill_vulnerability: "技能安全",
+  mcp_vulnerability: "工具安全",
+  catfish_update: "版本更新",
+  policy_recommendation: "政策建议",
+  external_status: "外部服务",
+  deprecation_notice: "停用提醒",
 };
 
 export function AdvisoryPage() {
@@ -92,18 +107,14 @@ function AdvisoryList() {
   return (
     <PageShell gap="var(--space-4)">
       <Card
-        title="🛡 Advisory 管理 (sysadmin)"
+        title="公告管理"
         action={
           <button onClick={() => setShowForm((v) => !v)}>
-            {showForm ? "取消" : "+ 发布 advisory"}
+            {showForm ? "取消" : "+ 发布公告"}
           </button>
         }
       >
-        <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
-          中央 publish + 客户端 pull. 跟 fleet push 反向 — 员工有"忽略"选项,
-          中央不知道员工是否真处理. <br />
-          spec: docs/ADVISORY-FEED-SPEC.md · manifesto: docs/CATFISH-CENTRAL-MANIFESTO.md
-        </div>
+        <div style={{ fontSize: 13, color: "var(--text-muted)" }}>向员工发布重要提醒、更新和安全通知。</div>
       </Card>
 
       {showForm && (
@@ -131,21 +142,21 @@ function AdvisoryList() {
       {advisories && advisories.length === 0 && (
         <Card title="空">
           <div style={{ color: "var(--text-muted)" }}>
-            还没有任何 advisory. 点 "+ 发布 advisory" 创建第一个.
+            还没有公告。点击“发布公告”创建第一条。
           </div>
         </Card>
       )}
 
       {advisories && advisories.length > 0 && (
-        <Card title={`列表 (${advisories.length})`}>
+        <Card title={`已发布公告 · ${advisories.length}`}>
           <table style={{ width: "100%", fontSize: 12 }}>
             <thead>
               <tr style={{ textAlign: "left", color: "var(--text-muted)" }}>
                 <th style={{ padding: "6px 4px" }}>ID</th>
-                <th>Severity</th>
-                <th>Category</th>
-                <th>Title</th>
-                <th>Published</th>
+                <th>重要程度</th>
+                <th>类型</th>
+                <th>标题</th>
+                <th>发布时间</th>
                 <th>状态</th>
                 <th></th>
               </tr>
@@ -165,9 +176,9 @@ function AdvisoryList() {
                       {a.id}
                     </td>
                     <td style={{ color: SEVERITY_COLOR[a.severity], fontWeight: 600 }}>
-                      {a.severity}
+                      {SEVERITY_LABEL[a.severity]}
                     </td>
-                    <td style={{ color: "var(--text-muted)" }}>{a.category}</td>
+                    <td style={{ color: "var(--text-muted)" }}>{CATEGORY_LABEL[a.category]}</td>
                     <td>{a.title}</td>
                     <td style={{ color: "var(--text-muted)", whiteSpace: "nowrap" }}>
                       {new Date(a.published).toLocaleString()}
@@ -178,10 +189,10 @@ function AdvisoryList() {
                           title={`revoked by ${a.revoked_by} at ${a.revoked_at}`}
                           style={{ color: "var(--text-muted)" }}
                         >
-                          ✗ revoked
+                          已撤回
                         </span>
                       ) : (
-                        <span style={{ color: "#16a34a" }}>● active</span>
+                        <span style={{ color: "#16a34a" }}>● 生效中</span>
                       )}
                     </td>
                     <td>
@@ -198,7 +209,7 @@ function AdvisoryList() {
                             borderRadius: 4,
                           }}
                         >
-                          Revoke
+                          撤回
                         </button>
                       )}
                     </td>
@@ -301,48 +312,50 @@ function PublishForm({ onPublished, onCancel }: PublishFormProps) {
   };
 
   return (
-    <Card title="发布 advisory">
+    <Card title="发布公告">
       <form
         onSubmit={onSubmit}
         style={{ display: "flex", flexDirection: "column", gap: 10 }}
       >
-        <Field label="ID (CATFISH-ADV-YYYY-NNN)">
+        <Field label="公告编号">
           <input
             value={id}
             onChange={(e) => setId(e.target.value)}
             required
             pattern="^CATFISH-ADV-\d{4}-\d{3,}$"
-            style={{ fontFamily: "monospace", width: 240 }}
+            style={{ ...controlStyle, fontFamily: "monospace" }}
           />
         </Field>
 
-        <Field label="Severity">
+        <Field label="重要程度">
           <select
             value={severity}
             onChange={(e) => setSeverity(e.target.value as AdvisorySeverity)}
+            style={controlStyle}
           >
             {SEVERITIES.map((s) => (
               <option key={s} value={s}>
-                {s}
+                {SEVERITY_LABEL[s]}
               </option>
             ))}
           </select>
         </Field>
 
-        <Field label="Category">
+        <Field label="公告类型">
           <select
             value={category}
             onChange={(e) => setCategory(e.target.value as AdvisoryCategory)}
+            style={controlStyle}
           >
             {CATEGORIES.map((c) => (
               <option key={c} value={c}>
-                {c}
+                {CATEGORY_LABEL[c]}
               </option>
             ))}
           </select>
         </Field>
 
-        <Field label="Title">
+        <Field label="标题">
           <input
             value={title}
             onChange={(e) => setTitle(e.target.value)}
@@ -352,7 +365,7 @@ function PublishForm({ onPublished, onCancel }: PublishFormProps) {
           />
         </Field>
 
-        <Field label="Description (markdown)">
+        <Field label="内容">
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
@@ -361,7 +374,7 @@ function PublishForm({ onPublished, onCancel }: PublishFormProps) {
           />
         </Field>
 
-        <Field label="Recommendation">
+        <Field label="处理建议">
           <input
             value={recommendation}
             onChange={(e) => setRecommendation(e.target.value)}
@@ -370,15 +383,18 @@ function PublishForm({ onPublished, onCancel }: PublishFormProps) {
           />
         </Field>
 
-        <Field label="Target — Skill name (可选)">
+        <details style={{ marginTop: 4 }}>
+          <summary style={{ cursor: "pointer", fontSize: 13 }}>高级定位（可选）</summary>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 10 }}>
+        <Field label="适用技能">
           <input
             value={skillTarget}
             onChange={(e) => setSkillTarget(e.target.value)}
-            placeholder="e.g. eis-login"
+            placeholder="例如 eis-login"
           />
         </Field>
 
-        <Field label="Target — Skill version pattern (可选)">
+        <Field label="技能版本条件">
           <input
             value={skillVersionPattern}
             onChange={(e) => setSkillVersionPattern(e.target.value)}
@@ -386,7 +402,7 @@ function PublishForm({ onPublished, onCancel }: PublishFormProps) {
           />
         </Field>
 
-        <Field label="Target — Catfish version pattern (可选)">
+        <Field label="Catfish 版本条件">
           <input
             value={catfishVersionPattern}
             onChange={(e) => setCatfishVersionPattern(e.target.value)}
@@ -394,7 +410,10 @@ function PublishForm({ onPublished, onCancel }: PublishFormProps) {
           />
         </Field>
 
-        <Field label="Expires (ISO 8601, 可空)">
+          </div>
+        </details>
+
+        <Field label="过期时间（可选）">
           <input
             type="datetime-local"
             value={expires}
@@ -429,9 +448,20 @@ function Field({
   children: React.ReactNode;
 }) {
   return (
-    <Row
-      label={label}
-      value={<div style={{ textAlign: "left" }}>{children}</div>}
-    />
+    <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 13, color: "var(--text)" }}>
+      <span style={{ fontWeight: 600 }}>{label}</span>
+      {children}
+    </label>
   );
 }
+
+const controlStyle: React.CSSProperties = {
+  width: "100%",
+  boxSizing: "border-box",
+  padding: "8px 10px",
+  border: "1px solid var(--border)",
+  borderRadius: 5,
+  background: "var(--bg)",
+  color: "var(--text)",
+  fontSize: 13,
+};

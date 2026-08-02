@@ -441,6 +441,26 @@ def make_admin_router(registry: UserRegistry) -> APIRouter:
         # 留口子给 future role=manager 改成 manager_or_above
         return {"departments": [d.to_dict() for d in depts]}
 
+    @router.post("/departments")
+    async def create_department(
+        req: "CreateDeptReq",
+        caller: CallerContext = Depends(require_admin_or_above),
+    ) -> dict[str, Any]:
+        from .departments import get_global_registry  # noqa: PLC0415
+
+        ok, err = await get_global_registry().create(
+            req.name,
+            by_email=caller.sub,
+            allowed_models=req.allowed_models,
+            allowed_tools=req.allowed_tools,
+            allowed_skills=req.allowed_skills,
+            description=req.description,
+        )
+        if not ok:
+            raise HTTPException(status_code=400, detail=err)
+        dept = await get_global_registry().get(req.name.strip())
+        return {"ok": True, "department": dept.to_dict() if dept else None}
+
     @router.get("/departments/{name}")
     async def get_department(
         name: str,
@@ -465,6 +485,7 @@ def make_admin_router(registry: UserRegistry) -> APIRouter:
         ok, err = await reg.update(
             name,
             by_email=caller.sub,
+            new_name=req.new_name,
             allowed_models=req.allowed_models,
             allowed_tools=req.allowed_tools,
             allowed_skills=req.allowed_skills,
@@ -472,7 +493,8 @@ def make_admin_router(registry: UserRegistry) -> APIRouter:
         )
         if not ok:
             raise HTTPException(status_code=400, detail=err)
-        dept = await reg.get(name)
+        final_name = req.new_name.strip() if req.new_name and req.new_name.strip() else name
+        dept = await reg.get(final_name)
         return {"ok": True, "department": dept.to_dict() if dept else None}
 
     return router
@@ -492,3 +514,12 @@ class UpdateDeptReq(BaseModel):
     allowed_tools: list[str] | None = None
     allowed_skills: list[str] | None = None
     description: str | None = None
+    new_name: str | None = None
+
+
+class CreateDeptReq(BaseModel):
+    name: str
+    allowed_models: list[str] = Field(default_factory=list)
+    allowed_tools: list[str] = Field(default_factory=list)
+    allowed_skills: list[str] = Field(default_factory=list)
+    description: str = ""

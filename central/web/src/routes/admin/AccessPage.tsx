@@ -8,7 +8,7 @@
  *   manager 暂时只读 (后续 admin_router require_admin_or_above 收紧).
  *
  * 数据来源: GET /api/admin/departments (list) + GET /api/admin/departments/{name}
- * 写: PUT /api/admin/departments/{name} (allowed_* + quota + description).
+ * 写: POST /api/admin/departments (新增) + PUT /api/admin/departments/{name} (编辑).
  *
  * UI 设计:
  *   - 列表: 表格显示 name / dept 描述 / 各维度条目数 / quota_models_day / 编辑按钮
@@ -23,6 +23,9 @@ import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import { Badge, BTN, DataTable, Section, Toolbar } from "../../components/DataTable";
 import { Card } from "../../components/Card";
 import { adminApi, type Department } from "../../lib/admin";
+import { modelConfigApi } from "../../lib/model_config";
+import { listSkills } from "../../lib/hub";
+import { listEdgeTools } from "../../lib/edge_tools";
 
 export function AccessPage() {
   return (
@@ -38,6 +41,9 @@ export function AccessPage() {
 
 function DeptList() {
   const [depts, setDepts] = useState<Department[]>([]);
+  const [modelOptions, setModelOptions] = useState<string[] | null>(null);
+  const [toolOptions, setToolOptions] = useState<string[] | null>(null);
+  const [skillOptions, setSkillOptions] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -59,6 +65,17 @@ function DeptList() {
 
   useEffect(() => {
     void refresh();
+    void Promise.allSettled([modelConfigApi.list(), listEdgeTools(), listSkills()]).then(
+      ([models, tools, skills]) => {
+        if (models.status === "fulfilled") {
+          setModelOptions(models.value.models.filter((m) => m.mode === "chat").map((m) => m.name));
+        }
+        if (tools.status === "fulfilled") setToolOptions(tools.value.supported);
+        if (skills.status === "fulfilled") {
+          setSkillOptions(skills.value.skills.map((s) => `${s.namespace}:${s.name}`));
+        }
+      },
+    );
   }, []);
 
   return (
@@ -68,22 +85,13 @@ function DeptList() {
           error ? "读取失败" : loading ? "加载中…" : `${depts.length} 个部门`
         }`}
       >
+        <Link to="/admin/access/new" style={{ ...BTN, textDecoration: "none", color: "var(--text)" }}>
+          新增部门
+        </Link>
         <button style={BTN} onClick={() => void refresh()} disabled={loading}>
           {loading ? "刷新中…" : "刷新"}
         </button>
       </Toolbar>
-
-      {/* 这两句是**约定**, 不是装饰 —— "空 = 全允许"跟直觉相反 (看起来像
-          "什么都不允许"), 不写在眼前的话, 有人会以为清空是最严的设置。
-          压成一行小字, 但不能删。 */}
-      <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
-        每个部门可见的模型 / 工具 / 技能。<b>留空 = 全允许</b>（开放默认）。
-        员工级 override 在 <Link to="/admin/users">用户</Link>；
-        {/* P3.5.93 (6/23 鸿波): 部门 token quota 编辑搬到 /admin/quota.
-            原"每日 token" 列 6 周来 dead UI (gateway 不读 identity-server,
-            真生效在 quotas.yaml). */}
-        部门配额在 <Link to="/admin/quota">配额</Link>（走 quotas.yaml）。
-      </div>
 
       {error && (
         <Section>
@@ -109,7 +117,7 @@ function DeptList() {
                     style={{ fontWeight: 600, color: "var(--text)" }}
                     title={d.name}
                   >
-                    {d.name}
+                    {departmentLabel(d.name)}
                   </Link>
                 ),
                 truncate: true,
@@ -127,7 +135,7 @@ function DeptList() {
               },
               {
                 header: "模型",
-                cell: (d) => <Scope list={d.allowed_models} />,
+                cell: (d) => <Scope list={d.allowed_models} validOptions={modelOptions} />,
                 width: 130,
                 // 只有一项时 Scope 把原值渲染进徽章, 而
                 // catfish-public-deepseek-flash 这种名字会把 130px 的列
@@ -136,7 +144,7 @@ function DeptList() {
               },
               {
                 header: "工具",
-                cell: (d) => <Scope list={d.allowed_tools} />,
+                cell: (d) => <Scope list={d.allowed_tools} validOptions={toolOptions} />,
                 width: 130,
                 // 只有一项时 Scope 把原值渲染进徽章, 而
                 // catfish-public-deepseek-flash 这种名字会把 130px 的列
@@ -145,7 +153,7 @@ function DeptList() {
               },
               {
                 header: "技能",
-                cell: (d) => <Scope list={d.allowed_skills} />,
+                cell: (d) => <Scope list={d.allowed_skills} validOptions={skillOptions} />,
                 width: 130,
                 // 只有一项时 Scope 把原值渲染进徽章, 而
                 // catfish-public-deepseek-flash 这种名字会把 130px 的列
@@ -179,11 +187,21 @@ function DeptList() {
  * 分不出哪些部门是收紧过的。全允许用描边徽章弱化, 收紧过的给个数字 ——
  * 这一页的用处正是"谁被收紧了"。
  */
-function Scope({ list }: { list: string[] | null | undefined }) {
-  if (!list || list.length === 0) return <Badge tone="neutral">全允许</Badge>;
+function Scope({
+  list,
+  validOptions,
+}: {
+  list: string[] | null | undefined;
+  validOptions: string[] | null;
+}) {
+  // 目录加载成功后，列表数量与设置页保持一致；加载失败则回退数据库原值。
+  const effective = validOptions === null
+    ? (list || [])
+    : (list || []).filter((item) => validOptions.includes(item));
+  if (effective.length === 0) return <Badge tone="neutral">全允许</Badge>;
   return (
-    <span title={list.join("\n")}>
-      <Badge tone="accent">{list.length === 1 ? list[0] : `${list.length} 项`}</Badge>
+    <span title={effective.join("\n")}>
+      <Badge tone="accent">{effective.length === 1 ? effective[0] : `${effective.length} 项`}</Badge>
     </span>
   );
 }
@@ -198,6 +216,7 @@ function Scope({ list }: { list: string[] | null | undefined }) {
 function DeptDetail() {
   const { name = "" } = useParams<{ name: string }>();
   const navigate = useNavigate();
+  const isNew = name === "new";
 
   const [dept, setDept] = useState<Department | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -217,39 +236,106 @@ function DeptDetail() {
 
   // 4 个 textarea 的本地状态 (一行一条)
   // P3.5.93 (6/23 鸿波): quotaText 砍 — 部门 quota 改在 /admin/quota (走 yaml).
-  const [modelsText, setModelsText] = useState("");
-  const [toolsText, setToolsText] = useState("");
-  const [skillsText, setSkillsText] = useState("");
+  const [modelOptions, setModelOptions] = useState<string[]>([]);
+  const [toolOptions, setToolOptions] = useState<string[]>([]);
+  const [skillOptions, setSkillOptions] = useState<string[]>([]);
+  const [modelsLoaded, setModelsLoaded] = useState(false);
+  const [toolsLoaded, setToolsLoaded] = useState(false);
+  const [skillsLoaded, setSkillsLoaded] = useState(false);
+  const [allowedModels, setAllowedModels] = useState<string[]>([]);
+  const [allowedTools, setAllowedTools] = useState<string[]>([]);
+  const [allowedSkills, setAllowedSkills] = useState<string[]>([]);
   const [description, setDescription] = useState("");
+  const [newName, setNewName] = useState("");
+  const [departmentName, setDepartmentName] = useState("");
 
   useEffect(() => {
+    if (isNew) {
+      setDept({
+        name: "",
+        allowed_models: [],
+        allowed_tools: [],
+        allowed_skills: [],
+        description: "",
+        created_at: null,
+        updated_at: null,
+      });
+      setError(null);
+      return;
+    }
     (async () => {
       try {
         const r = await adminApi.getDepartment(name);
         setDept(r.department);
-        setModelsText((r.department.allowed_models || []).join("\n"));
-        setToolsText((r.department.allowed_tools || []).join("\n"));
-        setSkillsText((r.department.allowed_skills || []).join("\n"));
+        setDepartmentName(r.department.name);
+        setAllowedModels(r.department.allowed_models || []);
+        setAllowedTools(r.department.allowed_tools || []);
+        setAllowedSkills(r.department.allowed_skills || []);
         setDescription(r.department.description || "");
         setError(null);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
     })();
-  }, [name]);
+  }, [name, isNew]);
+
+  useEffect(() => {
+    void Promise.allSettled([modelConfigApi.list(), listEdgeTools(), listSkills()]).then(
+      ([models, tools, skills]) => {
+        if (models.status === "fulfilled") {
+          const options = models.value.models.filter((m) => m.mode === "chat").map((m) => m.name).sort();
+          setModelOptions(options);
+        }
+        setModelsLoaded(models.status === "fulfilled");
+        if (tools.status === "fulfilled") {
+          const options = tools.value.supported.slice().sort();
+          setToolOptions(options);
+        }
+        setToolsLoaded(tools.status === "fulfilled");
+        if (skills.status === "fulfilled") {
+          const options = skills.value.skills.map((s) => `${s.namespace}:${s.name}`).sort();
+          setSkillOptions(options);
+        }
+        setSkillsLoaded(skills.status === "fulfilled");
+      },
+    );
+  }, []);
+
+  // 目录是有效选项的真源。等部门详情和目录都加载完再清理，避免竞态：
+  // 目录先返回时，不能用空的部门状态覆盖刚拉到的旧配置。
+  useEffect(() => {
+    if (modelsLoaded && dept) {
+      setAllowedModels((current) => current.filter((item) => modelOptions.includes(item)));
+    }
+  }, [dept, modelOptions, modelsLoaded]);
+  useEffect(() => {
+    if (toolsLoaded && dept) {
+      setAllowedTools((current) => current.filter((item) => toolOptions.includes(item)));
+    }
+  }, [dept, toolOptions, toolsLoaded]);
+  useEffect(() => {
+    if (skillsLoaded && dept) {
+      setAllowedSkills((current) => current.filter((item) => skillOptions.includes(item)));
+    }
+  }, [dept, skillOptions, skillsLoaded]);
 
   const handleSave = async () => {
+    if (isNew && !newName.trim()) {
+      setError("请输入部门名称");
+      return;
+    }
     setSaving(true);
     try {
-      const allowed_models = parseLines(modelsText);
-      const allowed_tools = parseLines(toolsText);
-      const allowed_skills = parseLines(skillsText);
-      const r = await adminApi.updateDepartment(name, {
-        allowed_models,
-        allowed_tools,
-        allowed_skills,
+      const req = {
+        ...(isNew ? {} : { new_name: departmentName }),
+        allowed_models: allowedModels,
+        allowed_tools: allowedTools,
+        allowed_skills: allowedSkills,
         description,
-      });
+      };
+      const r = isNew
+        ? await adminApi.createDepartment({ name: newName, ...req })
+        : await adminApi.updateDepartment(name, req);
       setDept(r.department);
       setError(null);
       // 8/1: 原来是 `alert()`, 注释写着"暂时用 alert" —— 那个"暂时"从 5/17
@@ -281,59 +367,31 @@ function DeptDetail() {
   }
 
   return (
-    <Card title={`编辑部门 RBAC: ${dept.name}`}>
+    <Card title={isNew ? "新增部门" : `部门设置 · ${departmentLabel(dept.name)}`}>
       {/* 普通 div, 不是 PageShell —— PageShell 是**页面根**容器 (要吃满
           内容列的高度), 塞在 Card 里面它的 flex:1 无处可依。 */}
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+        {(isNew || dept) && (
+          <Field
+            label="部门名称"
+            hint="请输入中文部门名称"
+            value={isNew ? newName : departmentName}
+            onChange={isNew ? setNewName : setDepartmentName}
+          />
+        )}
         <Field
           label="说明"
-          hint="部门描述, 给其他 admin 看"
           value={description}
           onChange={setDescription}
           rows={2}
         />
 
-        <Field
-          label="允许的模型 (allowed_models)"
-          hint="一行一个 model name (空白 = 全允许). 例: catfish-public-deepseek-flash"
-          value={modelsText}
-          onChange={setModelsText}
-          rows={6}
-          mono
-        />
+        <MultiSelect title="模型" options={modelOptions} value={allowedModels} onChange={setAllowedModels} />
+        <MultiSelect title="工具" options={toolOptions} value={allowedTools} onChange={setAllowedTools} />
+        <MultiSelect title="技能" options={skillOptions} value={allowedSkills} onChange={setAllowedSkills} />
 
-        <Field
-          label="允许的工具 (allowed_tools)"
-          hint={`一行一个 tool name. 空白 = 全允许. 例: memory / execute_code / web_search.
-ALWAYS_ON 工具 (memory / execute_code / ...) 永远保留, 不被砍.`}
-          value={toolsText}
-          onChange={setToolsText}
-          rows={8}
-          mono
-        />
-
-        <Field
-          label="允许的技能 (allowed_skills)"
-          hint={`glob pattern, 命名空间 catfish: / hermes:bundled: / hermes:github:owner/* / hermes:hf:owner/* / hermes:local:*.
-例: catfish:* 只 catfish 自家; hermes:github:zarazhangrui/* 限 GitHub 某用户.`}
-          value={skillsText}
-          onChange={setSkillsText}
-          rows={6}
-          mono
-        />
-
-        {/* P3.5.93 (6/23 鸿波): 部门 token quota 编辑搬到 /admin/quota.
-            6 周来这 input 写 identity-server PG, 但 gateway check_quota 走 quotas.yaml,
-            一直没生效. 一处编辑收口到 quotas.yaml (real source of truth). */}
-        <div style={{
-          padding: "var(--space-2)",
-          background: "var(--bg-secondary)",
-          borderRadius: 4,
-          fontSize: 12,
-          color: "var(--text-muted)",
-        }}>
-          部门 token quota 改在 <Link to="/admin/quota">配额规则</Link> 页面.
-          (P3.5.93 6 周来 dead UI 治本: 真生效路径走 quotas.yaml 而不是这里.)
+        <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+          部门配额请前往 <Link to="/admin/quota">配额规则</Link> 设置。
         </div>
 
         {error && (
@@ -377,11 +435,45 @@ ALWAYS_ON 工具 (memory / execute_code / ...) 永远保留, 不被砍.`}
 }
 
 
-function parseLines(s: string): string[] {
-  return s
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+function MultiSelect({
+  title,
+  options,
+  value,
+  onChange,
+}: {
+  title: string;
+  options: string[];
+  value: string[];
+  onChange: (value: string[]) => void;
+}) {
+  return (
+    <section style={{ border: "1px solid var(--border)", borderRadius: 6, padding: "var(--space-3)" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "var(--space-2)" }}>
+        <strong style={{ fontSize: 14 }}>{title}</strong>
+        <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{value.length ? `已选 ${value.length} 项` : "全部允许"}</span>
+      </div>
+      <div style={{ display: "flex", gap: 6, marginBottom: "var(--space-2)" }}>
+        <button type="button" onClick={() => onChange(options.slice())} style={smallButton}>全选</button>
+        <button type="button" onClick={() => onChange([])} style={smallButton}>全部允许</button>
+      </div>
+      {options.length === 0 ? (
+        <div style={{ color: "var(--text-muted)", fontSize: 12 }}>暂无可选项</div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 6 }}>
+          {options.map((option) => (
+            <label key={option} style={{ display: "flex", gap: 6, alignItems: "center", fontFamily: "monospace", fontSize: 13 }}>
+              <input
+                type="checkbox"
+                checked={value.includes(option)}
+                onChange={(e) => onChange(e.target.checked ? [...value, option] : value.filter((v) => v !== option))}
+              />
+              {option}
+            </label>
+          ))}
+        </div>
+      )}
+    </section>
+  );
 }
 
 
@@ -447,6 +539,26 @@ const hintStyle: React.CSSProperties = {
   fontWeight: 400,
   whiteSpace: "pre-line",
 };
+
+const smallButton: React.CSSProperties = {
+  padding: "3px 8px",
+  border: "1px solid var(--border)",
+  borderRadius: 4,
+  background: "var(--bg)",
+  color: "var(--text-muted)",
+  fontSize: 12,
+  cursor: "pointer",
+};
+
+function departmentLabel(name: string): string {
+  const labels: Record<string, string> = {
+    engineering: "研发部",
+    ops: "运维部",
+    sales: "销售部",
+    legal: "法务部",
+  };
+  return labels[name] || name;
+}
 
 const linkBtn: React.CSSProperties = {
   display: "inline-block",

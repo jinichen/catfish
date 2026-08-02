@@ -34,10 +34,12 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import type { Icon } from "@phosphor-icons/react";
 import { BookOpenText, GraduationCap, Lightbulb, VideoCamera } from "@phosphor-icons/react";
 import { useTeachingStore } from "../../../store/teaching";
 import { useRecModeStore } from "../../../store/recmode";
+import { saveTeachingCredential } from "../../../lib/tauri";
 import LearnModal from "./LearnModal";
 
 interface Props {
@@ -59,6 +61,7 @@ export default function EduPopover({ isStreaming, onStartLearn }: Props) {
   // SetupModal / RecordingOverlay / PreviewBanner / ErrorBanner 4 modal 共享
   // 生命周期, LearnModal 无此需求, 内嵌 state 简化.
   const [learnOpen, setLearnOpen] = useState(false);
+  const [credentialOpen, setCredentialOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // 老 store 复用 — 不 duplicate state
@@ -203,6 +206,17 @@ export default function EduPopover({ isStreaming, onStartLearn }: Props) {
             onClick={handleLearn}
           />
 
+          <EduOption
+            icon={BookOpenText}
+            label="保存登录密码"
+            hint="保存到本机系统凭据库，教学时只使用安全引用"
+            active={false}
+            onClick={() => {
+              setCredentialOpen(true);
+              setOpen(false);
+            }}
+          />
+
           {/* P3.5.170 (7/3 鸿波 catch): 删掉 popover 里 3 例子 (含 /learn 前缀,
               暴露 slash 语法违反员工主权). 3 例子改在 LearnModal 里显示 (纯描述
               无 /learn 前缀). popover 保持简洁, 只 3 option label + hint. */}
@@ -223,9 +237,71 @@ export default function EduPopover({ isStreaming, onStartLearn }: Props) {
           }}
         />
       )}
+      {credentialOpen && (
+        <CredentialModal onClose={() => setCredentialOpen(false)} />
+      )}
     </div>
   );
 }
+
+function CredentialModal({ onClose }: { onClose: () => void }) {
+  const [label, setLabel] = useState("");
+  const [password, setPassword] = useState("");
+  const [reference, setReference] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    setError("");
+    setSaving(true);
+    try {
+      setReference(await saveTeachingCredential(label, password));
+      setPassword("");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={modalBackdropStyle} role="dialog" aria-modal="true" aria-label="保存登录密码">
+      <div style={credentialModalStyle}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <strong>保存登录密码</strong>
+          <button type="button" onClick={onClose} style={modalCloseStyle}>关闭</button>
+        </div>
+        <p style={modalHintStyle}>密码只保存在本机系统凭据库，不会写入聊天、配置文件或终端。</p>
+        <label style={fieldLabelStyle}>名称（例如：教学网站）
+          <input value={label} onChange={(e) => setLabel(e.target.value)} autoFocus style={fieldStyle} />
+        </label>
+        <label style={fieldLabelStyle}>密码
+          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} style={fieldStyle} />
+        </label>
+        {error && <div style={{ color: "var(--catfish-danger, #c0392b)", fontSize: 12 }}>{error}</div>}
+        {reference && (
+          <div style={{ padding: 8, borderRadius: 6, background: "var(--catfish-bg-hover)" }}>
+            <div style={modalHintStyle}>已保存。教学流程使用这个安全引用：</div>
+            <code style={{ wordBreak: "break-all", fontSize: 12 }}>{reference}</code>
+            <button type="button" onClick={() => navigator.clipboard?.writeText(reference)} style={{ ...modalCloseStyle, marginTop: 6 }}>复制引用</button>
+          </div>
+        )}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button type="button" onClick={onClose} style={modalCloseStyle}>取消</button>
+          <button type="button" disabled={saving || !label.trim() || !password} onClick={save} style={saveButtonStyle}>{saving ? "保存中…" : "保存到系统凭据库"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const modalBackdropStyle: CSSProperties = { position: "fixed", inset: 0, zIndex: 1000, display: "grid", placeItems: "center", background: "rgba(0,0,0,.28)" };
+const credentialModalStyle: CSSProperties = { width: "min(420px, calc(100vw - 32px))", display: "flex", flexDirection: "column", gap: 12, padding: 20, borderRadius: 12, background: "var(--catfish-bg)", boxShadow: "0 12px 40px rgba(0,0,0,.25)" };
+const modalHintStyle: CSSProperties = { margin: 0, color: "var(--catfish-text-muted)", fontSize: 12, lineHeight: 1.5 };
+const fieldLabelStyle: CSSProperties = { display: "flex", flexDirection: "column", gap: 5, fontSize: 12, fontWeight: 600 };
+const fieldStyle: CSSProperties = { padding: "8px 10px", border: "1px solid var(--catfish-border)", borderRadius: 6, background: "transparent", color: "var(--catfish-text)" };
+const modalCloseStyle: CSSProperties = { padding: "6px 10px", border: "1px solid var(--catfish-border)", borderRadius: 6, background: "transparent", color: "var(--catfish-text)", cursor: "pointer" };
+const saveButtonStyle: CSSProperties = { ...modalCloseStyle, borderColor: "var(--catfish-cyan)", background: "var(--catfish-cyan)", color: "white" };
 
 // ─── 内部 sub-component EduOption ────────────────────────────────
 

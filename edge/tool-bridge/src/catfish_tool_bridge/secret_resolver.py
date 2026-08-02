@@ -17,11 +17,16 @@ LLM 上下文里出现明文密码 = 进 SOUL middleware / gateway audit / Compa
 # 员工怎么用
 ============
 macOS:
-  # 把密码存进 keychain
-  security add-generic-password -a "$USER" -s "eis_password" -w "jiniaA1+"
+  # 推荐在 Companion 的「教学入口 → 保存登录密码」里保存，
+  # 不要把密码写进终端命令。界面会返回类似：
+  # keychain://catfish-teaching:教学登录
 
   # 模型调 browser_fill 时:
-  catfish_browser_fill(selector="input[name='password']", secret_ref="keychain://eis_password")
+  catfish_browser_fill(selector="input[name='password']", secret_ref="keychain://catfish-teaching:教学登录")
+
+Windows:
+  # 在 Companion 的同一界面保存，返回 wincred://catfish-teaching:教学登录
+  catfish_browser_fill(selector="input[name='password']", secret_ref="wincred://catfish-teaching:教学登录")
 
   # tool-bridge 自动 resolve, 拉到密码喂 page.fill, 密码不进 LLM 上下文.
 
@@ -164,8 +169,7 @@ def _resolve_wincred(name: str) -> str:
     keyring 装不上时 fallback 走 PowerShell ``Get-Secret`` (PowerShell 7
     + Microsoft.PowerShell.SecretManagement). 都失败抛 friendly error.
 
-    要求员工先存进 Credential Manager:
-      cmdkey /generic:<name> /user:%USERNAME% /pass:<password>
+    Companion 会自动写入 Credential Manager。不要把密码放进 cmdkey 命令。
     或 PowerShell:
       $cred = Get-Credential
       cmdkey /generic:<name> /user:$cred.UserName /pass:$cred.GetNetworkCredential().Password

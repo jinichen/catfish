@@ -59,6 +59,10 @@ export const codexBackendSelectModel = (model: string) =>
 export const codexBackendOpenLogin = () =>
   rawInvoke<void>("codex_backend_open_login");
 
+// 教学流程凭据：密码只经 Tauri IPC 写入操作系统凭据库，不进入 shell 或聊天。
+export const saveTeachingCredential = (label: string, password: string) =>
+  rawInvoke<string>("teaching_credential_save", { label, password });
+
 // ── chrome ───────────────────────────────────────────────
 export const chromeLaunch = () => rawInvoke<void>("chrome_launch");
 export const chromeKill = () => rawInvoke<void>("chrome_kill");

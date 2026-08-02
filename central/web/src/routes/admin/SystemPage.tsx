@@ -40,12 +40,6 @@ function SystemDashboard() {
 
   return (
     <PageShell gap="var(--space-4)">
-      <Card title="🔐 系统管理 (sysadmin)">
-        <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
-          只 sysadmin 看. 你是系统超级管理员, 这里管 admin 账号 / 系统配置 / 服务状态.
-        </div>
-      </Card>
-
       <Card title="服务状态">
         <div
           style={{
@@ -80,9 +74,6 @@ function SystemDashboard() {
                 >
                   {s.ok ? "● ok" : "● 不可达"}
                 </span>
-              </div>
-              <div style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
-                {s.url}
               </div>
             </div>
           ))}

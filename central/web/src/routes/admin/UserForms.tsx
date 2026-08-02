@@ -25,11 +25,12 @@ import { Badge, BTN, BTN_PRIMARY } from "../../components/DataTable";
 import {
   adminApi,
   type CreateUserReq,
+  type Department,
   type Role,
   type UserBrief,
 } from "../../lib/admin";
 import { useAuthStore } from "../../store/auth";
-import { RoleBadge, btnSmall, genTempPassword } from "./usersShared";
+import { RoleBadge, btnSmall, genTempPassword, roleLabel } from "./usersShared";
 
 
 export function UserCreate() {
@@ -51,6 +52,11 @@ export function UserCreate() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const [departments, setDepartments] = useState<Department[]>([]);
+
+  useEffect(() => {
+    void adminApi.listDepartments().then((r) => setDepartments(r.departments)).catch(() => undefined);
+  }, []);
 
   // ⚠ 必须 clearTimeout。react-router 的 navigate 在组件卸载后**不会**短路
   // (activeRef 只在 layout effect 里设 true, 没有 cleanup 设回 false),
@@ -146,26 +152,24 @@ export function UserCreate() {
           />
         </Field>
         <Field label="部门">
-          <input
-            type="text"
+          <DepartmentSelect
             value={form.department || ""}
-            onChange={(e) => setForm({ ...form, department: e.target.value })}
-            placeholder="engineering / 研发部 / 销售部 ..."
-            style={inputStyle}
+            departments={departments}
+            onChange={(department) => setForm({ ...form, department })}
           />
         </Field>
-        <Field label="Role">
+        <Field label="角色">
           <select
             value={form.role}
             onChange={(e) => setForm({ ...form, role: e.target.value as Role })}
             style={inputStyle}
           >
-            <option value="employee">employee — 普通员工</option>
-            <option value="manager">manager — 部门经理</option>
+            <option value="employee">{roleLabel("employee")}</option>
+            <option value="manager">{roleLabel("manager")}</option>
             {isSysadmin && (
               <>
-                <option value="admin">admin — 公司管理员 (sysadmin only)</option>
-                <option value="sysadmin">sysadmin — 系统超级管理员 (sysadmin only)</option>
+                <option value="admin">{roleLabel("admin")}</option>
+                <option value="sysadmin">{roleLabel("sysadmin")}</option>
               </>
             )}
           </select>
@@ -176,18 +180,11 @@ export function UserCreate() {
           )}
         </Field>
         {form.role === "manager" && (
-          <Field label="管的部门 (manager 才有, 多个用逗号)">
-            <input
-              type="text"
-              value={(form.managed_departments || []).join(", ")}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  managed_departments: e.target.value.split(/[,，]\s*/).filter(Boolean),
-                })
-              }
-              placeholder="研发部, 产品部"
-              style={inputStyle}
+          <Field label="负责部门">
+            <DepartmentMultiSelect
+              values={form.managed_departments || []}
+              departments={departments}
+              onChange={(managed_departments) => setForm({ ...form, managed_departments })}
             />
           </Field>
         )}
@@ -232,6 +229,69 @@ export function UserCreate() {
   );
 }
 
+
+function DepartmentSelect({
+  value,
+  departments,
+  onChange,
+  readOnly = false,
+  emptyLabel = "请选择部门",
+}: {
+  value: string;
+  departments: Department[];
+  onChange: (value: string) => void;
+  readOnly?: boolean;
+  emptyLabel?: string;
+}) {
+  return (
+    <select value={value} disabled={readOnly} onChange={(e) => onChange(e.target.value)} style={inputStyle}>
+      <option value="">{emptyLabel}</option>
+      {departments.map((department) => (
+        <option key={department.name} value={department.name}>
+          {departmentLabel(department)}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function DepartmentMultiSelect({
+  values,
+  departments,
+  onChange,
+  readOnly = false,
+}: {
+  values: string[];
+  departments: Department[];
+  onChange: (values: string[]) => void;
+  readOnly?: boolean;
+}) {
+  return (
+    <select
+      multiple
+      value={values}
+      disabled={readOnly}
+      onChange={(e) => onChange(Array.from(e.target.selectedOptions, (option) => option.value))}
+      style={{ ...inputStyle, minHeight: 72 }}
+    >
+      {departments.map((department) => (
+        <option key={department.name} value={department.name}>
+          {departmentLabel(department)}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function departmentLabel(department: Department): string {
+  const known: Record<string, string> = {
+    engineering: "研发部",
+    ops: "运维部",
+    sales: "销售部",
+    legal: "法务部",
+  };
+  return known[department.name] || department.name;
+}
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -311,6 +371,7 @@ export function UserEditDialog({
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [departments, setDepartments] = useState<Department[]>([]);
 
   const isSysadmin = me?.role === "sysadmin";
   /** 已删的账号不给编辑 —— 后端 update_user 见到 deleted_at 会返 400,
@@ -340,6 +401,10 @@ export function UserEditDialog({
       alive = false;
     };
   }, [email]);
+
+  useEffect(() => {
+    void adminApi.listDepartments().then((r) => setDepartments(r.departments)).catch(() => undefined);
+  }, []);
 
   const changed =
     !!user &&
@@ -474,45 +539,37 @@ export function UserEditDialog({
             />
           </Field>
           <Field label="部门">
-            <input
-              type="text"
+            <DepartmentSelect
               readOnly={readOnly}
               value={user.department}
-              onChange={(e) => setUser({ ...user, department: e.target.value })}
-              style={inputStyle}
+              departments={departments}
+              onChange={(department) => setUser({ ...user, department })}
             />
           </Field>
-          <Field label="Role">
+          <Field label="角色">
             <select
               disabled={readOnly}
               value={user.role}
               onChange={(e) => setUser({ ...user, role: e.target.value as Role })}
               style={inputStyle}
             >
-              <option value="employee">employee</option>
-              <option value="manager">manager</option>
+              <option value="employee">{roleLabel("employee")}</option>
+              <option value="manager">{roleLabel("manager")}</option>
               {isSysadmin && (
                 <>
-                  <option value="admin">admin</option>
-                  <option value="sysadmin">sysadmin</option>
+                  <option value="admin">{roleLabel("admin")}</option>
+                  <option value="sysadmin">{roleLabel("sysadmin")}</option>
                 </>
               )}
             </select>
           </Field>
           {user.role === "manager" && (
-            <Field label="管的部门（多个用逗号隔开）">
-              <input
-                type="text"
-                value={user.managed_departments.join(", ")}
-                onChange={(e) =>
-                  setUser({
-                    ...user,
-                    managed_departments: e.target.value
-                      .split(/[,，]\s*/)
-                      .filter(Boolean),
-                  })
-                }
-                style={inputStyle}
+            <Field label="负责部门">
+              <DepartmentMultiSelect
+                readOnly={readOnly}
+                values={user.managed_departments}
+                departments={departments}
+                onChange={(managed_departments) => setUser({ ...user, managed_departments })}
               />
             </Field>
           )}

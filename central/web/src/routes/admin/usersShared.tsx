@@ -9,6 +9,10 @@ import type { CSSProperties } from "react";
 import { Badge } from "../../components/DataTable";
 import type { Role } from "../../lib/admin";
 
+export function roleLabel(role: Role): string {
+  return { sysadmin: "系统超级管理员", admin: "管理员", manager: "部门经理", employee: "普通员工" }[role];
+}
+
 /** 角色徽章。
  *
  * 8/1: 原来是这个页面私有的一份实现 (硬编码 #7c3aed / var(--accent) /
@@ -30,7 +34,7 @@ import type { Role } from "../../lib/admin";
  */
 export function RoleBadge({ role }: { role: Role }) {
   if (role === "employee")
-    return <span style={{ color: "var(--text-muted)", fontSize: 11 }}>employee</span>;
+    return <span style={{ color: "var(--text-muted)", fontSize: 11 }}>{roleLabel(role)}</span>;
   const tone =
     role === "sysadmin" ? "accent" : role === "admin" ? "accentSoft" : "neutral";
   return (
@@ -44,7 +48,7 @@ export function RoleBadge({ role }: { role: Role }) {
             : "能进后台看本部门的用量"
       }
     >
-      {role}
+      {roleLabel(role)}
     </Badge>
   );
 }
