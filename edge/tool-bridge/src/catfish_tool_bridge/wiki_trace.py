@@ -168,6 +168,114 @@ def _messages(session_id: str, limit: int = 40) -> list[dict[str, Any]]:
     ]
 
 
+
+# ─────────────────────────────────────────────────────────────
+# 检索式回退 —— 给没有可用 sources 的条目用
+# ─────────────────────────────────────────────────────────────
+#
+# 8/4 实测鸿波机器 255 条的 sources 分布:
+#
+#     75 (29%)  employee_journal   ← 老常量格式 (P3.5.205 之前), 指不到具体日期
+#     73 (28%)  journal:YYYY-MM-DD ← 可溯源
+#     66 (25%)  wiki:raw/sources/  ← 指向原始材料
+#     39 (15%)  没写
+#
+# 我一度说这 114 条 (44%) "无法溯源, 不动 —— 改写历史 sources 等于伪造溯源"。
+# 鸿波反问"那就应该做完, 为什么做一半"。他是对的, 我把两件事混为一谈了:
+#
+#   · 给条目编一个它没有的来源            → 伪造, 不能做
+#   · 用现有证据把它的来源查出来          → 正当, 而且证据都在
+#
+# 溯源的目的是**员工看到一条可疑的断言能查证**, 不是"每条都有个 sources 字段"。
+# 实测证据充足: employee_journal.md 里搜标题有命中, state.db 的 messages_fts
+# (50794 条消息全文索引) 也能按标题定位到具体会话。
+#
+# 所以做法是: sources 指不到日期时, 按标题 + aliases 去 journal 和会话全文里
+# 检索, 结果**明确标注成 inferred (检索推断)**, 跟 recorded (记录的) 分开。
+# 检索命中不等于"这条就是从那儿来的" —— 那是员工自己判断的事, 工具只负责把
+# 证据摆出来, 并且如实说这是推断。
+
+def _fts_quote(term: str) -> str:
+    """FTS5 MATCH 的入参要转义, 否则标题里的标点会被当查询语法。
+
+    直接把整个词用双引号包成短语查询, 内部的双引号翻倍转义。带 `-` `:` `*`
+    的标题 (比如 CMMI-5 / ISO/IEC 17021-1:2015) 不转义会直接语法错。
+    """
+    return '"' + term.replace('"', '""') + '"'
+
+
+def _search_journal(catfish_home: Path, terms: list[str], limit: int = 8) -> list[dict[str, str]]:
+    """在 journal 里按词检索, 返回**命中的条目**(含日期和 session 提示)。"""
+    jp = catfish_home / "employee_journal.md"
+    if not jp.is_file() or not terms:
+        return []
+    try:
+        text = jp.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    heads = list(_JOURNAL_HEAD.finditer(text))
+    out = []
+    for i, m in enumerate(heads):
+        end = heads[i + 1].start() if i + 1 < len(heads) else len(text)
+        body = text[m.end():end]
+        hit = [t for t in terms if t and t in body]
+        if not hit:
+            continue
+        out.append({
+            "date": m.group(1),
+            "sid_hint": m.group(3),
+            "matched_terms": ", ".join(hit),
+            "summary": body.strip()[:400],
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _search_sessions_fts(terms: list[str], limit: int = 5) -> list[dict[str, Any]]:
+    """在 state.db 的 messages_fts 里按词检索, 返回提到该词最多的会话。"""
+    db = _state_db()
+    if db is None or not terms:
+        return []
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=3.0)
+    except sqlite3.Error:
+        return []
+    seen: dict[str, dict[str, Any]] = {}
+    try:
+        for t in terms:
+            if not t or len(t) < 2:
+                continue
+            try:
+                rows = con.execute(
+                    "SELECT m.session_id, COUNT(*) AS n FROM messages_fts f "
+                    "JOIN messages m ON m.id = f.rowid "
+                    "WHERE messages_fts MATCH ? "
+                    "GROUP BY m.session_id ORDER BY n DESC LIMIT ?",
+                    (_fts_quote(t), limit),
+                ).fetchall()
+            except sqlite3.Error as e:
+                logger.warning("FTS 查 %r 失败: %s", t, e)
+                continue
+            for sid, n in rows:
+                cur = seen.setdefault(
+                    sid, {"session_id": sid, "mentions": 0, "matched_terms": []}
+                )
+                cur["mentions"] += n
+                cur["matched_terms"].append(t)
+        # 补会话元信息
+        for sid, rec in seen.items():
+            r = con.execute(
+                "SELECT started_at, message_count, title, model FROM sessions WHERE id = ?",
+                (sid,),
+            ).fetchone()
+            if r:
+                rec.update(started_at=r[0], message_count=r[1], title=r[2], model=r[3])
+    finally:
+        con.close()
+    return sorted(seen.values(), key=lambda x: -x["mentions"])[:limit]
+
+
 def trace_wiki_entry(rel_path: str, with_messages: bool = False) -> dict[str, Any]:
     """给一条 wiki 条目, 顺着 sources 把原始材料翻出来。
 
@@ -201,40 +309,88 @@ def trace_wiki_entry(rel_path: str, with_messages: bool = False) -> dict[str, An
 
     sessions = _resolve_sessions([h["sid_hint"] for h in journal_hits],
                                  journal_dates[0] if journal_dates else "")
-    if with_messages:
-        for s in sessions:
-            s["messages"] = _messages(s["session_id"])
 
-    # 如实说清楚这条链断在哪 —— 这个工具的价值就在于不糊弄
-    if not sources:
-        verdict = ("这条目连 sources 都没写 (255 条里有 39 条是这样), "
-                   "无法溯源。只能靠人工判断内容对不对。")
-    elif not journal_dates:
-        verdict = (f"sources 不是 journal 来源 ({', '.join(other_sources)}), "
-                   "不走这条链 —— 直接看那个原始材料。")
-    elif not journal_hits:
-        verdict = (f"sources 指向 {journal_dates}, 但 employee_journal.md 里"
-                   "找不到那几天的条目 (journal 被清过 / 日期对不上)。")
-    elif not sessions:
-        verdict = ("journal 找到了, 但里面的 session 提示在 state.db 里匹配不到 "
-                   "(会话被删 / 归档)。只能看 journal 这层摘要。")
-    else:
-        n_multi = sum(1 for s in sessions if s["matched_by"] == "suffix")
+    # ── 记录的 sources 指不到日期 → 走检索式回退 ─────────────────
+    #
+    # 8/4: 一度把这 44% (75 条老常量 employee_journal + 39 条没写 sources) 当成
+    # "无法溯源, 不能动"。那是把两件事混了 —— 给条目编来源是伪造, 用现有证据
+    # 查出来是正当的。溯源的目的是员工能查证, 不是每条都有个 sources 字段。
+    #
+    # 检索命中**不等于**"这条就是从那儿来的", 所以 provenance 明确标 inferred,
+    # 跟 recorded 分开。判断是员工的事, 工具只负责把证据摆出来并说清它是推断。
+    # other_sources 里哪些是**真实材料指针** (raw/sources / file:), 哪些只是
+    # 老常量 employee_journal (P3.5.205 之前的写法, 指不到任何具体东西)。
+    # 8/4 第一版把两者混成一类, 于是指向 raw/sources 的条目被说成"老常量格式" ——
+    # 那是错的, 它有明确来源, 只是不走 journal 这条链。
+    material_refs = [
+        x for x in other_sources
+        if x.startswith(("wiki:raw", "raw/", "file:", "wiki:"))
+    ]
+    legacy_const = [x for x in other_sources if x == "employee_journal"]
+
+    provenance = "recorded" if journal_hits else ("recorded-material" if material_refs else None)
+    inferred_journal: list[dict[str, str]] = []
+    inferred_sessions: list[dict[str, Any]] = []
+    terms: list[str] = []
+    if not journal_hits:      # 有真实材料指针时也查, 当补充证据
+        title = W._parse_field(fm, "title") or ""
+        aliases = W._parse_list(fm, "aliases")
+        slug = rel_path.rsplit("/", 1)[-1][:-3]
+        terms = [t for t in ([title] + aliases) if t and len(t) >= 2]
+        if not terms and slug:
+            terms = [slug]
+        inferred_journal = _search_journal(home, terms)
+        inferred_sessions = _search_sessions_fts(terms)
+        if (inferred_journal or inferred_sessions) and provenance is None:
+            provenance = "inferred"
+
+    if with_messages:
+        for s_ in sessions + inferred_sessions:
+            s_["messages"] = _messages(s_["session_id"])
+
+    # 如实说清楚这条链断在哪 / 是记录的还是查出来的
+    if journal_hits and sessions:
+        n_multi = sum(1 for x in sessions if x["matched_by"] == "suffix")
         verdict = (
-            f"接通了: {len(journal_hits)} 条 journal → {len(sessions)} 个会话。"
-            + (f" 其中 {n_multi} 个是靠 session id 后缀匹配的 (存量数据 journal "
-               "只记了后 6 位), 同一天内基本唯一但不保证。"
-               if n_multi else "")
+            f"【记录的来源】{len(journal_hits)} 条 journal → {len(sessions)} 个会话。"
+            + (f" 其中 {n_multi} 个靠 session id 后缀匹配 (存量 journal 只记后 6 位), "
+               "同一天内基本唯一但不保证。" if n_multi else "")
         )
+    elif journal_hits:
+        verdict = ("【记录的来源】journal 找到了, 但里面的 session 提示在 state.db "
+                   "匹配不到 (会话被删/归档)。只能看 journal 这层摘要。")
+    elif material_refs:
+        extra = (f" 另外按标题检索到 {len(inferred_sessions)} 个会话提到它, 可作旁证。"
+                 if inferred_sessions else "")
+        verdict = (f"【记录的来源】sources 指向原始材料 ({', '.join(material_refs)}) —— "
+                   f"不走 journal 链, 直接看那份材料。{extra}")
+    elif provenance == "inferred":
+        why = ("sources 是老常量 employee_journal (P3.5.205 之前的写法), 指不到具体日期"
+               if legacy_const else "这条没写 sources")
+        verdict = (
+            f"【检索推断, 不是记录的来源】{why}。按标题/别名 ({', '.join(terms[:3])}) "
+            f"检索到 {len(inferred_journal)} 条 journal、{len(inferred_sessions)} 个会话。\n"
+            "⚠ 命中只说明这些材料提到了同一个词, **不能证明条目是从它们蒸馏来的**。"
+            "请员工自己对照判断。"
+        )
+    else:
+        verdict = ("既没有可用 sources, 按标题检索也没命中 —— 这条可能是手工建的, "
+                   "或者标题跟原文用词不一致。只能人工判断。")
 
     return {
         "ok": True,
         "rel_path": rel_path,
         "title": W._parse_field(fm, "title") or "",
+        "provenance": provenance or "none",
         "sources": sources,
         "other_sources": other_sources,
+        "material_refs": material_refs,
+        "legacy_const_sources": legacy_const,
         "journal_entries": journal_hits,
         "sessions": sessions,
+        "inferred_journal_entries": inferred_journal,
+        "inferred_sessions": inferred_sessions,
+        "searched_terms": terms,
         "verdict": verdict,
     }
 
