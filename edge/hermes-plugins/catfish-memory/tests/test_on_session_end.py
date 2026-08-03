@@ -136,7 +136,11 @@ def test_format_journal_entry_includes_date_and_short_sid():
     # C3 (6/6): product code 改 backtick → pipe, test 同步
     entry = _format_journal_entry("session-abcdef123456", "### 主题\n\n正文")
     assert entry.startswith("## ")  # 日期开头
-    assert "…123456" in entry  # session id 最后 6 字符
+    # 8/4: 改断言 —— journal 现在写**完整** session_id。
+    # 老行为截成后 6 位, 把溯源链掐断了 (wiki sources 只到日期 + journal 只有
+    # 6 位后缀 → 回溯不到原始对话)。原文一直完整躺在 ~/.hermes/state.db,
+    # 只是指针被截断。见 catfish_memory_helpers._format_journal_entry 的注释。
+    assert "session-abcdef123456" in entry  # 完整 sid, 不再截断
     assert "### 主题" in entry
     assert "正文" in entry
 
@@ -144,7 +148,11 @@ def test_format_journal_entry_includes_date_and_short_sid():
 def test_format_journal_entry_short_sid():
     """session_id 短的 (< 6 字符) 也不挂"""
     entry = _format_journal_entry("ab", "summary")
-    assert "…ab" in entry
+    # 8/4: 改断言 —— journal 现在写**完整** session_id。
+    # 老行为截成后 6 位, 把溯源链掐断了 (wiki sources 只到日期 + journal 只有
+    # 6 位后缀 → 回溯不到原始对话)。原文一直完整躺在 ~/.hermes/state.db,
+    # 只是指针被截断。见 catfish_memory_helpers._format_journal_entry 的注释。
+    assert "| ab" in entry  # 短 id 原样写入
 
 
 def test_append_journal_creates_file_and_parent(fake_home: Path):

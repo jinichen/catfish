@@ -461,7 +461,11 @@ def test_sync_turn_end_to_end_writes_correct_journal_format(
     content = (fake_home / "employee_journal.md").read_text(encoding="utf-8")
     assert "## " in content  # 日期 header
     # C3 (6/6): product code 改 backtick → pipe, test 同步
-    assert "…def456" in content  # session_id 尾 6 字符
+    # 8/4: 改断言 —— journal 现在写**完整** session_id。
+    # 老行为截成后 6 位, 把溯源链掐断了 (wiki sources 只到日期 + journal 只有
+    # 6 位后缀 → 回溯不到原始对话)。原文一直完整躺在 ~/.hermes/state.db,
+    # 只是指针被截断。见 catfish_memory_helpers._format_journal_entry 的注释。
+    assert "abc123def456" in content  # 完整 sid, 不再截断
     assert "测试主题" in content
 
 

@@ -412,8 +412,21 @@ def _format_journal_entry(session_id: str, summary: str) -> str:
     log.md 风格 `## [YYYY-MM-DD HH:MM] kind | title`, 一行可 grep 解析.
     grep '^## \\[' employee_journal.md | tail -5 拉最近 5 条."""
     date_str = time.strftime("%Y-%m-%d %H:%M")
-    sid_short = (session_id[-6:] if len(session_id) > 6 else session_id) or "unknown"
-    return f"## [{date_str}] session | …{sid_short}\n\n{summary.strip()}\n"
+    # 8/4: 写**完整** session_id, 不再截成后 6 位。
+    #
+    # 老写法 `session_id[-6:]` 把溯源链掐断了: wiki 条目的 sources 只记到日期,
+    # journal 只留 6 位后缀 —— 员工看到一条可疑的断言, 回溯不到说这句话的那次
+    # 对话。而原始对话其实完整躺在 ~/.hermes/state.db (实测 5329 会话 /
+    # 50794 条消息), 信息没丢, 只是指针被截断了。
+    #
+    # 不可验证 = 不可修正。知识库是四次 LLM 转写的产物 (summarize → analysis →
+    # generation → merge), 失真是压缩的物理必然, 消除不了; 但"看到错的能查证"
+    # 是可以做到的, 而且只差这一个字段。
+    #
+    # 存量条目靠后缀 LIKE 匹配仍能溯源 (session id 形如 20260803_195928_f39669,
+    # 后 6 位同一天内基本唯一), 见 tool-bridge/wiki_trace.py。新条目从此精确。
+    sid = session_id.strip() or "unknown"
+    return f"## [{date_str}] session | {sid}\n\n{summary.strip()}\n"
 
 
 def _append_journal(catfish_home: Path, entry: str) -> None:

@@ -2751,6 +2751,44 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    {
+        "name": "catfish_wiki_trace",
+        "description": (
+            "★★ 查一条知识库条目**是从哪来的** —— 顺着 sources → journal → 原始对话.\n\n"
+            "为什么重要: 知识库 66% 的条目是 employee_journal 蒸馏出来的, 而 journal\n"
+            "本身又是对话摘要. 从原始对话到条目一共过了四次 LLM (summarize →\n"
+            "analysis → generation → merge), 失真是压缩的物理必然.\n\n"
+            "✅ 调用场景:\n"
+            "  - 员工说「这条写得不对」/「这个数字哪来的」/「我什么时候说过这个」\n"
+            "  - 你自己引用知识库某条做判断前, 拿不准可信度\n"
+            "  - 员工问某条是人写的还是 AI 蒸馏的\n\n"
+            "⚠ **不要替员工判断对错**. 把原始对话摆出来让他自己看 —— 他才是那次\n"
+            "  对话的当事人, 你不是.\n\n"
+            "返参里的 verdict 会如实说这条链接通了没有, 断在哪一环:\n"
+            "  · 没写 sources (255 条里 39 条) → 无法溯源, 照实说\n"
+            "  · journal 找到但会话匹配不到 → 只能看摘要那层\n"
+            "  · 靠 session id 后缀匹配的 → 会标出来 (存量数据 journal 只记了后 6 位,\n"
+            "    同一天内基本唯一但不保证)\n\n"
+            "with_messages=true 才拉原始对话正文, 默认只给会话清单 (省 token)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "rel_path": {
+                    "type": "string",
+                    "description": "条目路径, 从 catfish_wiki_list / catfish_wiki_search 拿",
+                },
+                "with_messages": {
+                    "type": "boolean",
+                    "description": "是否拉原始对话正文 (默认 false, 只给会话清单)",
+                },
+            },
+            "required": ["rel_path"],
+        },
+        "emoji": "🔍",
+        "toolset": "catfish_native",
+        "available": True,
+    },
     # ── BL-FED2.3 (5/12 鸿波拍板) 跨员工路由 ──
     {
         "name": "catfish_expert_consult",
