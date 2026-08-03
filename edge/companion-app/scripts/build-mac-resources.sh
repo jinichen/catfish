@@ -574,7 +574,11 @@ _HLIST="$(mktemp -t hermes-bundle-list)"
 trap 'rm -f "$_HLIST"' EXIT
 tar tzf "$HERMES_TAR" > "$_HLIST"
 _leak=0
-for _pat in "\.git/" "venv/" "target/" "apps/desktop" "node_modules/electron"; do
+# ⚠ 每条 pattern 必须以 / 收尾 —— 前缀匹配不是目录匹配。
+# 8/3 Windows CI run #71 被这个坑拦下: "node_modules/electron" 匹配到了
+# node_modules/electron-builder/, 而 electron/ 本身已被 --exclude 正确排掉。
+# mac 这边一直没炸, 只是因为这棵树上恰好没有 electron-builder。
+for _pat in "\.git/" "venv/" "target/" "apps/desktop/" "node_modules/electron/"; do
     if grep -qE "^hermes-agent-src/${_pat}" "$_HLIST"; then
         echo "  ❌ exclude 没生效: 归档里仍然有 hermes-agent-src/${_pat}" >&2
         _leak=1

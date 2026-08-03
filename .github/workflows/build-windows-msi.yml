@@ -262,6 +262,24 @@ jobs:
           done
           echo "✓ agent-browser / node-pty 都在"
 
+          # ─── 证据采集 (不做判断, 只打印) ────────────────────────────────
+          # run #71 暴露出包里有 electron-builder。它只可能来自 apps/desktop,
+          # 而 apps/desktop 是排掉的 —— 也就是说它是死重。但"看着像死重"和
+          # "确认没人用"是两回事, 今天已经在这上面栽过一次, 不靠猜。
+          #
+          # 下面两份输出是下一轮瘦身的依据: 谁大, 以及谁真的声明了它。
+          echo "--- node_modules 最大的 25 个 ---"
+          du -sm node_modules/* 2>/dev/null | sort -rn | head -25 || true
+          echo "--- 保留下来的 workspace 里, 哪些 package.json 提到 electron ---"
+          for pj in package.json $(ls -d apps/*/ ui-tui web tests-js 2>/dev/null | sed 's|/*$|/package.json|'); do
+              [ -f "$pj" ] || continue
+              case "$pj" in apps/desktop/*) continue ;; esac   # 这个本来就排掉
+              if grep -q '"electron' "$pj" 2>/dev/null; then
+                  echo "  $pj:"; grep -n '"electron' "$pj" | sed 's/^/    /'
+              fi
+          done
+          echo "  (以上为空 = 除 apps/desktop 外没人依赖 electron*, 下一轮可以直接删)"
+
       - name: Pack hermes-agent bundle (follow symlink, exclude venv/cache)
         shell: bash
         run: |
@@ -314,7 +332,17 @@ jobs:
           leak=0
 
           # ① 不该在包里的 —— 原有检查, 保留
-          for pat in '\.git/' 'venv/' 'target/' 'apps/desktop' 'node_modules/electron'; do
+          #
+          # ⚠ 每条 pattern 必须以 / 收尾, 否则是**前缀匹配不是目录匹配**。
+          # 8/3 run #71 实测: 'node_modules/electron' 匹配上了
+          # node_modules/electron-builder/ , 构建被拦下 —— 而 electron/ 本身
+          # 其实已经被 --exclude 正确排掉了。也就是说 exclude 是对的, 报错的是
+          # 检查自己。
+          #
+          # 这条 pattern 是从 build-mac-resources.sh 577 行抄过来的, 那边同样
+          # 少了斜杠。mac 一直没炸只是因为它那棵树上恰好没有 electron-builder
+          # —— 同一个错在两条产线上, 一条炸一条不炸, 靠的是运气不是正确性。
+          for pat in '\.git/' 'venv/' 'target/' 'apps/desktop/' 'node_modules/electron/'; do
               if grep -qE "^hermes-agent-src/${pat}" "$HLIST"; then
                   echo "::error::exclude 没生效, 包里仍有 hermes-agent-src/${pat}"
                   grep -E "^hermes-agent-src/${pat}" "$HLIST" | head -3
