@@ -21,6 +21,8 @@ interface Props {
   /** 当前正在流式输出的 assistant 消息 id —— 用来决定哪条显示光标 */
   streamingId: string | null;
   onSend: (text: string, attachments: Attachment[]) => void;
+  /** 8/3: 按了停止但流还没停 (等 tool 返回) — 让按钮如实说话 */
+  isCancelling?: boolean;
   onCancel: () => void;
   /** BL-COMPANION-UX1 (5/12): streaming 中一键 abort + 发新消息 */
   onCancelAndSend: (text: string, attachments: Attachment[]) => void;
@@ -39,6 +41,7 @@ export default function ChatPanel({
   isStreaming,
   streamingId,
   onSend,
+  isCancelling,
   onCancel,
   onCancelAndSend,
   onEnqueue,
@@ -245,6 +248,7 @@ export default function ChatPanel({
       <ChatInput
         isStreaming={isStreaming}
         onSend={onSend}
+        isCancelling={isCancelling}
         onCancel={onCancel}
         onCancelAndSend={onCancelAndSend}
         onEnqueue={onEnqueue}

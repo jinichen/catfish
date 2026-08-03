@@ -67,6 +67,8 @@ export function useChat(_initialModel: string) {
   // (那段是 picker 覆盖 bug 的根因, 任何 re-render 都把 store 拉回 catalog.default).
   const messages = useChatStore((s) => s.messages);
   const isStreaming = useChatStore((s) => s.isStreaming);
+  // 8/3: 按了停止但流还没停下来的窗口 — 见 store/chat.ts 的注释
+  const isCancelling = useChatStore((s) => s.isCancelling);
   const streamingId = useChatStore((s) => s.streamingId);
   const model = useChatStore((s) => s.model);
   const addMessage = useChatStore((s) => s.addMessage);
@@ -429,6 +431,39 @@ export function useChat(_initialModel: string) {
 
       // 有 tool_calls → 串行执行每个,产生 tool 角色消息
       for (const tc of collectedToolCalls) {
+        // ★ 8/3 "停止按钮无效" 的真因就在这一句的缺失。
+        //
+        // 整个 runOneRound (180~525 行) 里 ctx.ctrl 只出现过**一次** —— 274 行
+        // 传给 streamChat 的 signal。tool 这一段一次都没查过 abort。于是:
+        //
+        //   · LLM 正在吐字   → 按停止, 立刻停 ✓ (signal 到了 streamChat)
+        //   · LLM 正在跑 tool → 按停止, 毫无反应。而且这一轮 collectedToolCalls
+        //     里剩下的每一个还会挨个发起、挨个 addMessage、挨个 persistMessage,
+        //     全跑完才轮到外层 `if (ctrl.signal.aborted) break` 生效。
+        //
+        // 员工看到的就是: 点了没用, 再点还是没用, 界面继续往外冒东西 —— 而
+        // isStreaming 一直是 true, 按钮还老老实实显示着"停止"。
+        //
+        // 为什么一直没暴露: 纯聊天场景按停止是好使的, 只有"停在 tool 上"才犯。
+        // 会话越重 (跑 skill / 生成 Excel / browser 自动化) 越容易撞上, 而那种
+        // 会话恰恰是最想中途叫停的。
+        //
+        // 已经发出去的那个 tool 停不掉 —— toolBridgeCallTool 走 Tauri rawInvoke,
+        // invoke 没有取消机制, 只能等它返回。但"已发出的停不掉"不构成"后面
+        // 没发的也照发"的理由, 这两件事被混为一谈了。
+        if (ctx.ctrl.signal.aborted) {
+          const cancelledCalls = (
+            useChatStore.getState().messages.find((m) => m.id === assistantId)
+              ?.tool_calls ?? []
+          ).map((c) =>
+            c.status === "pending" || c.status === "running"
+              ? { ...c, status: "error" as const, error: "已取消 (你按了停止)" }
+              : c,
+          );
+          updateMessage(assistantId, { tool_calls: cancelledCalls });
+          break;
+        }
+
         // UI: 标记 running
         const updatedCalls = (
           useChatStore.getState().messages.find((m) => m.id === assistantId)
@@ -518,6 +553,16 @@ export function useChat(_initialModel: string) {
         }
       }
 
+      // 8/3: 被取消就不再续下一轮。
+      //
+      // 外层 send() 那句 `if (ctrl.signal.aborted) break` 也能拦住, 但那是
+      // **下一轮开头**才判 —— 中间还会白跑一遍 setStreamingId / addMessage。
+      // 更要紧的是: 依赖调用方在正确位置补一句检查, 是这个 bug 一开始就成立的
+      // 前提。判断留在知道自己被取消的那一层。
+      if (ctx.ctrl.signal.aborted) {
+        return { shouldContinue: false, updatedMessages };
+      }
+
       // tool_calls 处理完 → 必继续下一轮 LLM 推理(让 LLM 看 tool 结果)
       return { shouldContinue: true, updatedMessages };
     },
@@ -541,6 +586,8 @@ export function useChat(_initialModel: string) {
       // 文字+图片都为空才拒. 只发图(没文字)是允许的.
       if (!trimmed && attachments.length === 0) return;
       if (isStreaming) return;
+      // 8/3: 清上一次取消的残留 (上一轮若在 finally 之外的路径退出)
+      useChatStore.getState().setIsCancelling(false);
 
       // 0. 第一次 send 时 lazy create state.db session (持久化的开端).
       // 5/24 BL-MULTI-SESSION-STREAM: 捕获 id 到 closure, 整轮 persistMessage /
@@ -909,6 +956,7 @@ export function useChat(_initialModel: string) {
         if (currentStoreSession === sessionIdForStream) {
           setStreamingId(null);
           setIsStreaming(false);
+          useChatStore.getState().setIsCancelling(false);
           // P3.5.18 Phase 2: stream 结束 清 inline lifecycle status.
           setLifecycleStatus(null);
         }
@@ -960,6 +1008,10 @@ export function useChat(_initialModel: string) {
     // 后这个 ref 还指向后台老 stream, cancel 会误杀后台. 现在精准: 拿 store
     // current sessionId → registry.cancel(sessionId), 只动当前看的这条流.
     // 如果当前 session 没在 stream → no-op, abortRef fallback (no-session 情况下用).
+    // 8/3: 先如实告诉界面"收到了"。abort() 本身是同步的, 但流真正停下来要等
+    // 当前那个 tool 返回 (Tauri invoke 不可取消)。不置这个位, 员工点完看不出
+    // 任何变化, 只能得出"按钮无效"的结论 —— 而它其实已经生效了。
+    useChatStore.getState().setIsCancelling(true);
     const curSession = useChatStore.getState().persistedSessionId;
     if (curSession && streamRegistry.isInflight(curSession)) {
       streamRegistry.cancel(curSession);
@@ -1110,6 +1162,7 @@ export function useChat(_initialModel: string) {
   return {
     messages,
     isStreaming,
+    isCancelling,
     streamingId,
     model,
     setModel: setModelInStore,

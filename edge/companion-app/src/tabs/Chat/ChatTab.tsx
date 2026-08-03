@@ -38,6 +38,7 @@ export default function ChatTab() {
   const {
     messages,
     isStreaming,
+    isCancelling,
     streamingId,
     model,
     setModel,
@@ -356,6 +357,7 @@ export default function ChatTab() {
             isStreaming={isStreaming}
             streamingId={streamingId}
             onSend={handleSend}
+            isCancelling={isCancelling}
             onCancel={cancel}
             onCancelAndSend={handleCancelAndSend}
             onEnqueue={enqueue}

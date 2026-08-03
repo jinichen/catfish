@@ -42,6 +42,16 @@ interface ChatState {
   messages: ChatMessage[];
   /** 是否在流式输出中 */
   isStreaming: boolean;
+  /** 8/3: 用户按了"停止", 但流还没真停下来的那段窗口。
+   *
+   *  为什么需要单独一个状态: 已经发出去的 tool 调用停不掉 (toolBridgeCallTool
+   *  走 Tauri rawInvoke, invoke 没有取消机制), 只能等它返回。这期间
+   *  isStreaming 仍然是 true, 按钮照旧显示"停止" —— 员工点了看不出任何变化,
+   *  于是认定"停止按钮无效"。
+   *
+   *  这个 flag 只做一件事: 让界面如实说出"已经收到, 在等当前这步收尾"。
+   *  它不加快任何事, 只是不再让人对着一个没反应的按钮猜。 */
+  isCancelling: boolean;
   /** 当前正在流式输出的 assistant 消息 id（用来判断在哪里 append delta、显示光标） */
   streamingId: string | null;
   /** 选中的模型 id */
@@ -117,6 +127,7 @@ interface ChatState {
   /** BL-TASK-ASSESS-3-UI (5/15): 点"催它继续"按钮时计数器++. 3 次用完后按钮变灰. */
   incrementPromiseNudge: (id: string) => void;
   setIsStreaming: (v: boolean) => void;
+  setIsCancelling: (v: boolean) => void;
   setStreamingId: (id: string | null) => void;
   /** P3.5.18 Phase 2 (6/17 鸿波): inline lifecycle status (压缩进度). */
   setLifecycleStatus: (s: string | null) => void;
@@ -167,6 +178,7 @@ declare global { interface Window { __chatStore?: unknown } }
 export const useChatStore = create<ChatState>((set) => ({
   messages: [],
   isStreaming: false,
+  isCancelling: false,
   streamingId: null,
   // P3.5.139 (6/29 鸿波"都要去除硬编码"): 删 "catfish-private-main" 字面值.
   // 空字符串 = 未初始化. ChatTab mount useEffect 拿到 catalog.default 注入,
@@ -224,6 +236,7 @@ export const useChatStore = create<ChatState>((set) => ({
       }),
     })),
   setIsStreaming: (v) => set({ isStreaming: v }),
+  setIsCancelling: (v) => set({ isCancelling: v }),
   setStreamingId: (id) => set({ streamingId: id }),
   setLifecycleStatus: (s) => set({ lifecycleStatus: s }),
   setRuntimeSyncError: (s) => set({ runtimeSyncError: s }),
@@ -302,6 +315,7 @@ export const useChatStore = create<ChatState>((set) => ({
       // loadSessionMessagesAsChat. useTaskChat 共用. 行为不变.
       messages: loadSessionMessagesAsChat(detail),
       isStreaming: false,
+      isCancelling: false,
       streamingId: null,
       // BL-FILE-SESSION-INDEX-V1 Phase 1: 切会话先清空附件 list, 等
       // loadSessionAttachments 异步填充. 防上个会话的附件残留显错.
@@ -360,6 +374,7 @@ export const useChatStore = create<ChatState>((set) => ({
     set({
       messages: [],
       isStreaming: false,
+      isCancelling: false,
       streamingId: null,
       persistedSessionId: null,
       prevSentModel: null,     // BL-GATEWAY-SOFT-HANDOFF: 新 session 没"上次"

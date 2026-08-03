@@ -27,6 +27,8 @@ import EduPopover from "./components/EduPopover";
 
 interface Props {
   isStreaming: boolean;
+  /** 8/3: 按了停止但流还没停下来 (在等 tool 返回) */
+  isCancelling?: boolean;
   onSend: (text: string, attachments: Attachment[]) => void;
   onCancel: () => void;
   /** BL-COMPANION-UX1 (5/12 鸿波"锁死"修): streaming 中一键 abort + 发新消息 */
@@ -58,6 +60,7 @@ import ThumbCard from "./components/ThumbCard";
 
 export default function ChatInput({
   isStreaming,
+  isCancelling,
   onSend,
   onCancel,
   onCancelAndSend,
@@ -531,13 +534,23 @@ export default function ChatInput({
             </button>
           </div>
         ) : isStreaming ? (
+          /* 8/3: 已经按过停止 → 按钮如实说"在收尾", 而不是继续显示"停止"。
+             已发出的 tool 调用取消不掉 (Tauri invoke 无取消机制), 这段等待
+             是真实存在的。老版本这里一直显示"停止", 员工点完毫无变化, 就
+             得出"停止按钮无效"的结论 —— 而 abort 其实已经发出去了。
+             按钮置灰是因为再点一次确实没有任何额外效果, 不该假装有。 */
           <button
             type="button"
             onClick={onCancel}
-            title="停止当前流"
+            disabled={isCancelling}
+            title={
+              isCancelling
+                ? "已经在停了 — 正在等当前这步工具返回, 它没法中途掐断"
+                : "停止当前流"
+            }
             className="chat-composer__stop-button"
           >
-            停止
+            {isCancelling ? "停止中…" : "停止"}
           </button>
         ) : (
           <button
