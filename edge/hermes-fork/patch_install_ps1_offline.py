@@ -213,14 +213,39 @@ PATCH_4_INSTALL_REPO = f"""    $didUpdate = $false
         New-Item -ItemType Directory -Force -Path (Split-Path $InstallDir) -ErrorAction SilentlyContinue | Out-Null
         Copy-Item -LiteralPath $effectiveSourceDir -Destination $InstallDir -Recurse -Force
         # git init 让上游 update 路径能工作 (未来员工有网时 hermes update)
-        Push-Location $InstallDir
-        $env:GIT_CONFIG_COUNT = "1"
-        $env:GIT_CONFIG_KEY_0 = "windows.appendAtomically"
-        $env:GIT_CONFIG_VALUE_0 = "false"
-        git -c windows.appendAtomically=false init 2>$null
-        git -c windows.appendAtomically=false config core.autocrlf false 2>$null
-        git remote add origin $RepoUrlHttps 2>$null
-        Pop-Location
+        #
+        # ⚠ 整段包 try/catch, 而且**失败不算安装失败**。
+        #
+        # 这几条 git 命令是**锦上添花** —— 源码已经拷到位了, hermes 本身能跑;
+        # 它们只是让员工将来有网时 `hermes update` 能走 git 升级。可 8/3 现场
+        # 实测: 目录已存在时 `git remote add origin` 报
+        #   error: remote origin already exists.
+        # 而 PowerShell 把 native 命令的 stderr 当错误抛 (2>$null 挡不住退出码),
+        # 于是被 install.ps1 外层 catch 住 → "[X] Installation failed" → msi 回滚。
+        # **一个可有可无的步骤把整个装机搞挂了。**
+        #
+        # 什么时候会"目录已存在": 上一次装到一半失败 (网络断/权限)、员工重装、
+        # msi 修复安装 —— 都是常态, 不是边角。
+        try {{
+            Push-Location $InstallDir
+            $env:GIT_CONFIG_COUNT = "1"
+            $env:GIT_CONFIG_KEY_0 = "windows.appendAtomically"
+            $env:GIT_CONFIG_VALUE_0 = "false"
+            git -c windows.appendAtomically=false init 2>$null | Out-Null
+            git -c windows.appendAtomically=false config core.autocrlf false 2>$null | Out-Null
+            # 幂等: 先看 origin 在不在, 在就改 URL, 不在才 add。
+            # `git remote` 无参数时永远成功 (没有 remote 就输出空), 不产生 stderr。
+            $catfishRemotes = @(git -c windows.appendAtomically=false remote 2>$null)
+            if ($catfishRemotes -contains "origin") {{
+                git -c windows.appendAtomically=false remote set-url origin $RepoUrlHttps 2>$null | Out-Null
+            }} else {{
+                git -c windows.appendAtomically=false remote add origin $RepoUrlHttps 2>$null | Out-Null
+            }}
+        }} catch {{
+            Write-Warn "Catfish offline: git init/remote 没配成 ($_) — 不影响本次安装, 只是将来 hermes update 可能要手工设 remote"
+        }} finally {{
+            Pop-Location -ErrorAction SilentlyContinue
+        }}
         # 清理 tar 临时解压目录
         if ($tempExtractRoot -and (Test-Path $tempExtractRoot)) {{
             Remove-Item -Recurse -Force $tempExtractRoot -ErrorAction SilentlyContinue
