@@ -2217,7 +2217,7 @@ class CatfishMemoryProvider(MemoryProvider):
                             session_id,
                         )
                     else:
-                        generation = await _call_generation_llm(analysis, model)
+                        generation = await _call_generation_llm(analysis, model, catfish_home)
                         if not generation:
                             logger.info(
                                 "catfish-memory bg session=%s: wiki Step 2 generation 返空 (skip)",

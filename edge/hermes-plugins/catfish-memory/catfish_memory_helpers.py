@@ -332,8 +332,21 @@ _GENERATION_PROMPT_TEMPLATE = (
     "- ... (≤4 条)\n"
     "```\n\n"
     "**约束**:\n"
-    "- slug = name 小写 + 中文转拼音首字母 + 连字符 (e.g. ISO 27001 → iso-27001, "
-    "陈鸿波 → chenhongbo, 中电福富 → zdff). entity slug 跟 concept slug 不冲突\n"
+    # 8/4: 老规则自相矛盾 —— 说"拼音**首字母**", 例子里 中电福富→zdff 是首字母,
+    # 陈鸿波→chenhongbo 却是全拼。同一句话两套规则, LLM 只能猜, 实测产出第三种
+    # (全拼且分词每次不同): zhongdianfufu / zhongdian-fufu / zhong-dian-fu-fu。
+    # 结果是同一实体被拆成多个文件 (实测 21 组 / 50 个文件, 占全库 20%)。
+    #
+    # 改成**直接用中文 name**: 唯一、稳定、无分词歧义, 而且 wiki_write.rs 的
+    # slugify 本来就保留中文, Companion UI 建的条目一直是中文名。1556 行的
+    # 注释也早写了 "LLM 不遵守拼音, 直接用中文 name, Obsidian 支持 unicode slug"
+    # —— 那就别再要求拼音了, 要求一个 LLM 做不到的事只会得到随机结果。
+    "- slug = **直接用 name 本身**, 中文就写中文 (e.g. 中电福富 → 中电福富, "
+    "ISO 27001 → iso-27001). 不要转拼音 —— 拼音分词不唯一, 同一实体会被拆成"
+    "多个文件. 只把 / \\ : * ? 这类文件名非法字符换成连字符.\n"
+    "- **先查已有条目**: 下面会给你现有 entity/concept 清单, 同一个东西**必须"
+    "复用已有 slug**, 不要造新的变体.\n"
+    "- entity slug 跟 concept slug 不冲突\n"
     "- frontmatter YAML 严格合法 (Obsidian 解析)\n"
     "- `related:` 必须真双引号 string list — 正确: "
     "`related: [\"[[陈鸿波]]\", \"[[FFCS]]\"]`. "
@@ -1216,8 +1229,53 @@ async def _call_analysis_llm(
         return None
 
 
+def _existing_wiki_index(catfish_home: Path, limit: int = 400) -> str:
+    r"""列现有 entity/concept 的 `slug ← title`, 拼成给 Generation LLM 的清单。
+
+    8/4: prompt 里要求"同一个东西必须复用已有 slug", 那就得**真的把清单给它** ——
+    在此之前 _call_generation_llm 只喂 analysis, LLM 完全不知道已有什么, 每次
+    从零造 slug, 于是同一实体攒出一堆拼音变体 (实测 21 组 / 50 个文件)。
+
+    写盘那道 _redirect_to_existing_equivalent 是确定性兜底 (只认规范化等价);
+    这份清单是让 LLM 一开始就少造变体, 两者互补, 都不能省:
+      · 清单降低发生率, 但 LLM 不保证遵守
+      · 兜底保证同名变体一定合并, 但拦不住"中电福富" vs "中电福富信息科技有限公司"
+        这种语义重复 —— 那个只有 LLM 看见清单才可能避免
+    """
+    lines = []
+    for sub, kind in (("wiki/entities", "entity"), ("wiki/concepts", "concept")):
+        d = catfish_home / sub
+        if not d.is_dir():
+            continue
+        try:
+            for p in sorted(d.iterdir()):
+                if p.suffix != ".md":
+                    continue
+                try:
+                    head = p.read_text(encoding="utf-8", errors="replace")[:400]
+                except OSError:
+                    continue
+                title = ""
+                for line in head.splitlines():
+                    if line.strip().startswith("title:"):
+                        title = line.split("title:", 1)[1].strip()
+                        break
+                lines.append(f"{kind}/{p.stem} ← {title or p.stem}")
+        except OSError:
+            continue
+    if not lines:
+        return ""
+    truncated = len(lines) > limit
+    body = "\n".join(lines[:limit])
+    return (
+        "## 现有条目 (同一个东西必须复用这里的 slug, 不要造新变体)\n\n"
+        + body
+        + ("\n… (还有更多, 已截断)" if truncated else "")
+    )
+
+
 async def _call_generation_llm(
-    analysis: str, model: str,
+    analysis: str, model: str, catfish_home: Optional[Path] = None,
 ) -> Optional[str]:
     """Step 2 Generation: 把 analysis 转 wiki pages (---FILE: sentinel).
 
@@ -1250,7 +1308,9 @@ async def _call_generation_llm(
                     "model": model,
                     "messages": [
                         {"role": "user",
-                         "content": _build_generation_prompt() + "\n\n## Analysis\n\n" + analysis}
+                         "content": _build_generation_prompt()
+                         + (("\n\n" + _existing_wiki_index(catfish_home)) if catfish_home else "")
+                         + "\n\n## Analysis\n\n" + analysis}
                     ],
                     "temperature": 0.3,
                     # P1.1.1 fix (6/4): 7000 → 4096 兼容 deepseek-flash /
@@ -1839,6 +1899,145 @@ def _scan_conclusion_words(rel_path: str, content: str) -> list[str]:
     return hits
 
 
+def _normalize_slug_for_dedup(stem: str) -> str:
+    r"""跟 Companion wiki_write.rs:54 normalize_slug 同一套口径。
+
+    去掉空白 / - / _ / . / 全角空格再小写。`zhongdian-fufu` 和 `zhongdianfufu`
+    和 `zhong-dian-fu-fu` 规范化后都是 `zhongdianfufu`。
+    """
+    return "".join(
+        c for c in stem
+        if not c.isspace() and c not in ("-", "_", ".", "\u3000")
+    ).lower()
+
+
+def _read_title_of(path: Path) -> str:
+    """拿这个文件**在 UI 上显示的名字**。
+
+    跟读侧 (wiki_read.rs build_file_info) 同一套 fallback: frontmatter title
+    取不到就用文件名。8/4 实测有条目是纯 markdown 完全没 frontmatter
+    (信息安全中心.md, 232 字节), 只按 frontmatter title 分组会漏掉它 ——
+    而 UI 上它显示的就是"信息安全中心", 跟另一条一模一样。
+    """
+    try:
+        head = path.read_text(encoding="utf-8", errors="replace")[:600]
+    except OSError:
+        return ""
+    fm, _ = _split_frontmatter_body(head)
+    if fm:
+        for line in fm.splitlines():
+            line = line.strip()
+            if line.startswith("title:"):
+                t = line.split("title:", 1)[1].strip()
+                if t:
+                    return t
+    return path.stem          # ← 跟读侧 fallback 一致
+
+
+def _title_of_content(text: str) -> str:
+    """从**还没写盘的内容**里拿 title。
+
+    ⚠ 这个函数存在的原因: _redirect_to_existing_equivalent 拿到的 rel_path 指向
+    一个还不存在的文件 (那正是它要判断该不该新建的东西)。第一版拿 Path 去读它,
+    永远读到空 → title 判据一次都不会触发, 而且**不报错**。
+    又是今天查了一整天的那种形状: 规则写了, 静默不生效。
+    """
+    fm, _ = _split_frontmatter_body(text[:600])
+    if not fm:
+        return ""
+    for line in fm.splitlines():
+        line = line.strip()
+        if line.startswith("title:"):
+            return line.split("title:", 1)[1].strip()
+    return ""
+
+
+def _redirect_to_existing_equivalent(
+    catfish_home: Path, rel_path: str, content: str = "",
+) -> str:
+    r"""同一实体的 slug 变体 → 指回已有的那个文件, 走 merge 而不是新建。
+
+    # 为什么会有变体 (8/4 鸿波 "为什么会被拆成多个")
+
+    实测鸿波机器 255 条里, **21 组同 title 多文件, 共 50 个文件 (20%)**:
+
+        「高新技术企业认定」 × 5   gaoxinjishu-qiye-rending / gaoxinjishu-qiye-ren-ding
+                                  / gaoxin-jishu-qiye-rending / gaoxinjishuqiyerending
+                                  / gao-xin-ji-shu-qi-ye-ren-ding
+        「中电福富」        × 3   zhongdianfufu / zhongdian-fufu / zhong-dian-fu-fu
+
+    三个原因叠在一起:
+
+    1. Generation prompt 的 slug 规则**自相矛盾** (:335):
+         "slug = 中文转拼音**首字母** (e.g. 陈鸿波 → chenhongbo, 中电福富 → zdff)"
+       说首字母, 举的例子一个是首字母 (zdff) 一个是全拼 (chenhongbo)。同一句话
+       两套规则, LLM 只能猜 —— 实测产出的是第三种 (全拼, 分词每次不同)。
+
+    2. _call_generation_llm 只喂 analysis, **LLM 不知道已有哪些条目**, 每次从零造。
+
+    3. _write_wiki_files 只做 `target.exists()` **精确路径匹配** —— 变体路径不同,
+       于是每次都建新文件。
+
+    而 Companion UI 建条目那条路 (wiki_write.rs::find_normalized_collision) 有
+    规范化重名检测, 13/21 组它本来就能拦住。**又是两条产线只有一条设防** ——
+    跟 8/3 mac/Windows 打包那次同一个形状。
+
+    # 这个函数做什么
+
+    写盘前查同目录里有没有规范化等价的文件。有就把写入路径**指回那一个**, 于是
+    落进已有的 merge 逻辑 (P18/P19) 而不是新建。
+
+    只认规范化等价 (差连字符/下划线/大小写), **不做模糊匹配** —— "中电福富" 和
+    "中电福富信息科技有限公司" 规范化后不同, 不会被误合。那种要靠语义判断, 不是
+    这里该干的事, 硬合会把两个真实体揉成一个, 比重复更糟。
+    """
+    d = catfish_home / rel_path
+    if d.exists():
+        return rel_path                      # 精确命中, 原逻辑已能处理
+    parent = d.parent
+    if not parent.is_dir():
+        return rel_path
+    want = _normalize_slug_for_dedup(d.stem)
+    # 判据用**员工看得见的名字**: frontmatter title 取不到就 fallback 文件名,
+    # 跟读侧 build_file_info 同一套规则。
+    new_title = _title_of_content(content) or d.stem
+    if not want and not new_title:
+        return rel_path
+    try:
+        for q in sorted(parent.iterdir()):
+            if q.suffix != ".md" or q.name == d.name:
+                continue
+            # 判据 ①: title 完全相同 —— 比 slug 规范化更强。
+            #
+            # 8/4 实测: 规范化等价只覆盖 13/21 组, 剩下 8 组是"中文名 vs 拼音名"
+            # (高新资质申报 vs gaoxin-zizhi-shenbao / 陈秀平 vs chenxiuping) 或
+            # 拼音转写不同 (zizhi-duibiao-fenxi-yuanze vs zizhibiaofenxifenze),
+            # slug 规范化后仍然不等 —— 但 title 一模一样。
+            #
+            # title 是员工在 UI 上**唯一看得见的东西**。两条 title 完全相同的
+            # 条目, 员工根本分不出是两个东西 —— 那就该是一个。
+            if new_title and new_title == _read_title_of(q):
+                new_rel = str(Path(rel_path).parent / q.name)
+                logger.info(
+                    "catfish-memory wiki 去重: %s 跟已有的 %s **title 相同**, "
+                    "改成更新那一个",
+                    rel_path, new_rel,
+                )
+                return new_rel
+            # 判据 ②: slug 规范化等价 (差连字符/下划线/大小写)
+            if _normalize_slug_for_dedup(q.stem) == want:
+                new_rel = str(Path(rel_path).parent / q.name)
+                logger.info(
+                    "catfish-memory wiki 去重: %s 跟已有的 %s 规范化等价, "
+                    "改成更新那一个 (LLM 每次造的拼音变体不同, 见函数注释)",
+                    rel_path, new_rel,
+                )
+                return new_rel
+    except OSError:
+        pass
+    return rel_path
+
+
 def _write_wiki_files(
     catfish_home: Path,
     files: Dict[str, str],
@@ -1858,6 +2057,9 @@ def _write_wiki_files(
     n_entities = 0
     n_concepts = 0
     for rel_path, content in files.items():
+        # 8/4: LLM 每次造的拼音 slug 不一样 → 先看有没有规范化等价的已有文件,
+        # 有就指回去走 merge, 不新建。
+        rel_path = _redirect_to_existing_equivalent(catfish_home, rel_path, content)
         target = catfish_home / rel_path
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
