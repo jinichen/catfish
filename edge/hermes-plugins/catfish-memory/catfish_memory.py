@@ -1861,8 +1861,14 @@ class CatfishMemoryProvider(MemoryProvider):
         # 触发 LLM 调用一次 (Analysis+Generation), 走 fallback chain.
         triggered_by_pending_ingest = False
         try:
-            if _wiki_enabled() and n_pairs >= 1:
-                if _list_pending_sources(home) or _list_pending_queries(home):
+            # 8/3: 跟下面 pending 列表同一个拆分 —— 员工显式入库的 source 要能
+            # 触发即时蒸馏, 不受 auto_ingest 管; queries (聊天派生) 仍受管。
+            # 不改这里的话, 开了下面那道门也只能等下一次 cooldown, 员工存完还是
+            # 看不到东西。
+            if n_pairs >= 1:
+                if _list_pending_sources(home):
+                    triggered_by_pending_ingest = True
+                elif _wiki_enabled() and _list_pending_queries(home):
                     triggered_by_pending_ingest = True
         except Exception:  # noqa: BLE001
             pass
@@ -2132,8 +2138,24 @@ class CatfishMemoryProvider(MemoryProvider):
             #    P1.2.3 (6/4): queries 触发也跑 — 绕 24h cooldown.
             #    P16 (6/5): sources 触发也跑 — 对话上传文件即时入库.
             cooldown_passed = _should_run_distill(catfish_home)
+            # 8/3: sources 跟 queries 分家 —— 它们本来就是两件相反的事。
+            #
+            # 6/16 鸿波"对话自动入知识库会很乱" → 加 _wiki_enabled() 守门, 默认关。
+            # 要关的是「**聊天内容自动**变成 entity」。但同一个门也罩住了
+            # wiki/raw/sources/ —— 而那个目录里的东西是 catfish_wiki_ingest 放的,
+            # 那个工具的第一句描述就是「**员工显式**要求把 chat 附件存到知识库时
+            # 才调」。
+            #
+            # 于是 auto_ingest: false 的机器上, 员工明说"存进知识库", 文件写进
+            # raw/sources/ 之后**没有任何东西会读它** —— 不是 24 小时后, 是永远。
+            # ingested_state 永不更新, sources 无限堆积, 全程零报错。
+            # 8/3 那份对标矩阵反复"看不到", 根因在这。
+            #
+            # 现在: queries (聊天派生) 仍受 auto_ingest 管; sources (员工显式)
+            # 不受。下面 combined_input 那里会保证关着 auto_ingest 时**不把
+            # journal 喂进去** —— 否则等于从后门把 6/16 禁掉的事又打开了。
             pending_queries = _list_pending_queries(catfish_home) if _wiki_enabled() else []
-            pending_sources = _list_pending_sources(catfish_home) if _wiki_enabled() else []
+            pending_sources = _list_pending_sources(catfish_home)
             if not cooldown_passed and not pending_queries and not pending_sources:
                 return
             journal_text = _read_full_journal(catfish_home)
@@ -2155,10 +2177,17 @@ class CatfishMemoryProvider(MemoryProvider):
             #     CATFISH_WIKI_ENABLE=1 默认 off (LLM 调用贵, 24h 1 次).
             #     Step 1 Analysis → Step 2 Generation → parse + 写文件 + journal
             #     P1.2.3 (6/4): queries 真有未 ingest file → 合并真 Analysis input
-            if _wiki_enabled():
+            # 8/3: auto_ingest 关着, 但有员工显式入库的 source → 也要跑。
+            explicit_only = not _wiki_enabled()
+            if _wiki_enabled() or pending_sources:
                 try:
                     # P1.2.3 / P16 (6/5): 合并 journal + queries + sources 真 Analysis input
-                    combined_input = journal_text
+                    #
+                    # 8/3 explicit_only: auto_ingest 关着时**只喂 sources**, 不喂
+                    # journal 也不喂 queries。这一条是拆开两个开关的前提 —— 如果
+                    # 顺手把 journal 一起喂进去, 聊天内容照样会被蒸出 entity,
+                    # 等于绕过 6/16 的决定, 那才是真的坏事。
+                    combined_input = "" if explicit_only else journal_text
                     if pending_queries:
                         queries_text = _read_queries_concat(pending_queries)
                         if queries_text:
