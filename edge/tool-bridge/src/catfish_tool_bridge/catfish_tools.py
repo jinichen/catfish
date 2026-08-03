@@ -848,6 +848,26 @@ def _dispatch_native_inner(name: str, args: Dict[str, Any]) -> Any:
     if name == "catfish_wiki_search":
         from . import wiki_search  # noqa: PLC0415
         return wiki_search.tool_wiki_search(args)
+    # 8/3: wiki 读写闭环 (list/create/read/update)。
+    #
+    # 补这四个的直接起因: 员工让鲶鱼把一份材料存进知识库, 存完 TAB 一直看不到,
+    # 鲶鱼查了 sqlite / embeddings / sync_turn 日志, 结论几乎全错 —— 因为它
+    # 手里根本没有能查证"TAB 现在有什么"的工具, 只能从磁盘产物反推。
+    #
+    # 之前它只有 search + ingest 两个; Companion UI 侧有七个。给一半的工具,
+    # 然后指望它推理出另一半的行为, 它只能猜。
+    if name == "catfish_wiki_list":
+        from . import wiki_files  # noqa: PLC0415
+        return wiki_files.tool_wiki_list(args)
+    if name == "catfish_wiki_create":
+        from . import wiki_files  # noqa: PLC0415
+        return wiki_files.tool_wiki_create(args)
+    if name == "catfish_wiki_read":
+        from . import wiki_files  # noqa: PLC0415
+        return wiki_files.tool_wiki_read(args)
+    if name == "catfish_wiki_update":
+        from . import wiki_files  # noqa: PLC0415
+        return wiki_files.tool_wiki_update(args)
     # BL-FIX-TIMEOUT-OUTPUTS (5/13 鸿波"做不出文档")
     if name == "catfish_list_my_outputs":
         from . import recent_outputs  # noqa: PLC0415

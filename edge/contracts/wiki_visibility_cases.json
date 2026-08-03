@@ -1,0 +1,119 @@
+{
+  "_doc": [
+    "知识体系 TAB 的可见性契约 —— Rust 与 Python 共用的唯一一份用例表。",
+    "",
+    "为什么需要它 (8/3):",
+    "  TAB 显示什么, 由 companion-app/src-tauri/src/commands/wiki_read.rs 的",
+    "  build_file_info + is_tombstone 决定。tool-bridge 新加的 catfish_wiki_list",
+    "  要在 Python 里复刻同一套判断, 好让鲶鱼能查证'TAB 现在有什么'。",
+    "",
+    "  两份实现讲同一件事, 就必然会漂。而漂的后果特别坏: 工具说有、TAB 说没有,",
+    "  比根本没有这个工具更误导 —— 8/3 那次绕一整轮, 起因就是鲶鱼手里没有可信的",
+    "  真相源, 只能反推。再造一个不可信的, 等于把问题换个形状留下。",
+    "",
+    "  所以判断表只写一份, 两边各自读它做断言:",
+    "    Rust:   src-tauri/src/commands/wiki_read.rs 的 #[test] visibility_contract",
+    "    Python: edge/tool-bridge/tests/test_wiki_files.py",
+    "  任何一边的行为漂了, 它自己的测试就红。",
+    "",
+    "字段:",
+    "  name    用例名 (报错时看得懂是哪条)",
+    "  path    相对 ~/.catfish/ 的路径, 决定 kind",
+    "  content 文件全文",
+    "  expect  visible: 会不会出现在 TAB / catfish_wiki_list 里",
+    "          title:   可见时的标题 (缺 frontmatter title 时 fallback 成文件名)",
+    "          kind:    entity / concept / query"
+  ],
+  "cases": [
+    {
+      "name": "标准 entity —— 有完整 frontmatter",
+      "path": "wiki/entities/cmmi-5.md",
+      "content": "---\ntype: entity\ntitle: CMMI-5\nentity_type: 资质\ntags: [认证, 软件]\nsources: [manual]\n---\n\n# CMMI-5\n\n软件能力成熟度模型集成五级。\n",
+      "expect": { "visible": true, "title": "CMMI-5", "kind": "entity" }
+    },
+    {
+      "name": "中文文件名 + 无 frontmatter —— 8/3 第一版就是这样, 它本来就该显示",
+      "path": "wiki/entities/中电系资质对标对齐矩阵.md",
+      "content": "# 中电系资质对标对齐矩阵\n\n这是一份纯 markdown, 没有 frontmatter, 文件名是中文。\n当时判断它'因为没 frontmatter 所以 TAB 不识别' —— 那是错的。\nkind 从目录路径推, title 缺了 fallback 成文件名。\n",
+      "expect": {
+        "visible": true,
+        "title": "中电系资质对标对齐矩阵",
+        "kind": "entity"
+      }
+    },
+    {
+      "name": "半截 frontmatter (只有开头的 ---, 没有收尾) —— 整篇当 body, 仍可见",
+      "path": "wiki/entities/半截frontmatter.md",
+      "content": "---\ntype: entity\ntitle: 不会被读到\n\n没有收尾的三横线, split_frontmatter 返 (\"\", 原文)。\n所以 title 取不到, fallback 文件名。\n",
+      "expect": { "visible": true, "title": "半截frontmatter", "kind": "entity" }
+    },
+    {
+      "name": "墓碑: 小文件 + 无 frontmatter + 空 body",
+      "path": "wiki/entities/tombstone-empty.md",
+      "content": "   \n\n  \n",
+      "expect": { "visible": false }
+    },
+    {
+      "name": "墓碑: 小文件 + 无 frontmatter + 废弃注释",
+      "path": "wiki/entities/tombstone-comment.md",
+      "content": "<!-- 已废弃, 请参见 中电系资质对标对齐矩阵 -->",
+      "expect": { "visible": false }
+    },
+    {
+      "name": "墓碑: 小文件 + frontmatter 标了 deprecated: true + 废弃注释",
+      "path": "wiki/entities/tombstone-fm.md",
+      "content": "---\ndeprecated: true\n---\n\n<!-- deprecated -->\n",
+      "expect": { "visible": false }
+    },
+    {
+      "name": "不是墓碑: 小文件但有正常 frontmatter (第 2 条不成立)",
+      "path": "wiki/entities/small-but-real.md",
+      "content": "---\ntype: entity\ntitle: 小而真\n---\n\n短。\n",
+      "expect": { "visible": true, "title": "小而真", "kind": "entity" }
+    },
+    {
+      "name": "不是墓碑: 无 frontmatter 且 body 是废弃注释, 但文件 > 256 字节 (第 1 条不成立)",
+      "path": "wiki/entities/big-deprecated-comment.md",
+      "content": "<!-- 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 已废弃 -->",
+      "expect": {
+        "visible": true,
+        "title": "big-deprecated-comment",
+        "kind": "entity"
+      }
+    },
+    {
+      "name": "不是墓碑: 小文件 + 无 frontmatter + 普通短 body (不是注释)",
+      "path": "wiki/entities/short-plain.md",
+      "content": "就一句话。\n",
+      "expect": { "visible": true, "title": "short-plain", "kind": "entity" }
+    },
+    {
+      "name": "concept 目录 → kind=concept",
+      "path": "wiki/concepts/资质申报流程.md",
+      "content": "---\ntype: concept\ntitle: 资质申报流程\nconcept_type: process\n---\n\n流程说明。\n",
+      "expect": { "visible": true, "title": "资质申报流程", "kind": "concept" }
+    },
+    {
+      "name": "query 目录 → kind=query",
+      "path": "wiki/queries/1781600637-写入-wiki.md",
+      "content": "---\ntype: query\ntitle: 写入 wiki\n---\n\n查询记录。\n",
+      "expect": { "visible": true, "title": "写入 wiki", "kind": "query" }
+    },
+    {
+      "name": "kind 看目录不看 frontmatter —— type 写错也按目录算",
+      "path": "wiki/entities/type写成concept.md",
+      "content": "---\ntype: concept\ntitle: 我 type 写的是 concept\n---\n\n但我在 entities 目录里, 所以 kind=entity。\n",
+      "expect": {
+        "visible": true,
+        "title": "我 type 写的是 concept",
+        "kind": "entity"
+      }
+    },
+    {
+      "name": "raw/sources 不在 TAB 的扫描范围 —— 8/3 内容最后被搬到这里, 所以什么都看不到",
+      "path": "wiki/raw/sources/1785759315-中电系资质对标对齐矩阵.md",
+      "content": "---\ntype: source\ntitle: 中电系资质对标对齐矩阵\nkind: text\n---\n\n入库暂存的原始材料, 等后台蒸馏。\n",
+      "expect": { "visible": false }
+    }
+  ]
+}

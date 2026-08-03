@@ -2601,6 +2601,156 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
         "toolset": "catfish_native",
         "available": True,
     },
+    # ── 8/3: wiki 读写闭环 ─────────────────────
+    #
+    # 起因是一次真实的绕圈: 员工让存一份材料进知识库, 存完知识体系 TAB 一直
+    # 看不到。鲶鱼当时只有 search + ingest 两个工具, 没有任何一个能回答
+    # 「TAB 现在到底有哪些条目」, 只好去翻 sqlite / embeddings / sync_turn 日志
+    # 反推, 结论几乎全错。
+    #
+    # 补 list 是为了让它能查证而不是推测; 补 create 是因为 ingest 只能丢进
+    # raw/sources/ 等后台蒸馏, 而 TAB 从不读那个目录 —— 员工要的「存了马上能
+    # 看到」以前根本没有对应的工具。
+    {
+        "name": "catfish_wiki_list",
+        "description": (
+            "★★ 列员工个人知识库的全部条目 —— 返回的就是知识体系 TAB 显示的内容.\n\n"
+            "✅ 调用场景:\n"
+            "  - 员工说「知识库里怎么没有 X」/「存进去了但看不到」→ 先调这个查证, 不要靠猜\n"
+            "  - 建条目前查有没有重名 / 该 update 还是 create\n"
+            "  - 员工问「我知识库里都有啥」\n\n"
+            "⚠ 这个工具跟 TAB 同源 (Companion 的 wiki_list_files, 直接扫\n"
+            "  ~/.catfish/wiki/{entities,concepts,queries} 三个目录的 .md).\n"
+            "  不在这个列表里 = TAB 里也看不到, 反之亦然. 没有第二个真相源 ——\n"
+            "  wiki_embeddings.db 是语义搜索用的, 不决定 TAB 显示什么.\n\n"
+            "  raw/sources/ 里的东西不在这里 —— 那是 ingest 的暂存区, 要等后台\n"
+            "  蒸馏成 entity 才会出现.\n\n"
+            "返参: {ok, total, items: [{rel_path, kind, slug, title, subtype, tags, "
+            "sources, size_bytes, mtime}], truncated}"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "description": "只看某一类: entity / concept / query. 不传 = 全部",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "最多返多少条 (默认 200, 按 mtime 新的在前)",
+                },
+            },
+            "required": [],
+        },
+        "emoji": "📇",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_wiki_create",
+        "description": (
+            "★★ 在员工个人知识库建一个新条目 (entity / concept) —— 写完立刻可见.\n\n"
+            "跟 catfish_wiki_ingest 的分工 (最容易搞错的一点):\n"
+            "  - catfish_wiki_ingest = 存一份原始材料进 raw/sources/, 等后台蒸馏出\n"
+            "    实体, 24h 内. 蒸馏完成前知识体系 TAB 看不到它.\n"
+            "  - catfish_wiki_create (本工具) = 现在就要一个知识库条目. 直接写\n"
+            "    wiki/entities/ 或 concepts/, 员工切走再切回 TAB 就能看到.\n\n"
+            "员工说「存进知识库」而且希望马上能看到 → 用这个.\n"
+            "员工给的是一份文件/附件, 只是想归档留底 → 用 catfish_wiki_ingest.\n"
+            "两个都想要 → 两个都调 (ingest 留原件, create 建可见条目).\n\n"
+            "⚠ 建之前先调 catfish_wiki_list 看有没有重名. 已存在会报错让你改走\n"
+            "  catfish_wiki_update; 规范化等价的名字 (中电系-资质 vs 中电系资质) 也会\n"
+            "  被拦, 防同一个东西躺两份文件.\n\n"
+            "⚠ title 支持中文, 文件名直接用中文, 不要自己转拼音.\n\n"
+            "返参: {ok, rel_path, bytes, created} 或 {ok: false, error, rel_path?}"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "description": "entity (具体的人/公司/系统/证书) 或 concept (流程/方法/概念)",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "条目标题, 中文即可 (会直接作为文件名, 只替换 / : * ? 这类文件系统敏感字符)",
+                },
+                "body": {
+                    "type": "string",
+                    "description": "正文 markdown (不含 frontmatter 和一级标题 —— 那两样会自动加)",
+                },
+                "subtype": {
+                    "type": "string",
+                    "description": "细分类型, 写进 entity_type / concept_type (如 person / company / process / 资质)",
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "标签",
+                },
+                "related": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "关联条目的标题, 会渲染成 [[wikilink]]",
+                },
+            },
+            "required": ["kind", "title", "body"],
+        },
+        "emoji": "📝",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_wiki_read",
+        "description": (
+            "读个人知识库某个条目的全文 —— 用于自检「我刚写进去的到底成了什么样」.\n\n"
+            "rel_path 从 catfish_wiki_list 或 catfish_wiki_search 的返参里拿\n"
+            "(形如 wiki/entities/中电系资质对标对齐矩阵.md).\n\n"
+            "返参含 visible_in_tab —— 直接告诉你这个文件在不在知识体系 TAB 里,\n"
+            "省得再去猜为什么员工看不到."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "rel_path": {
+                    "type": "string",
+                    "description": "相对 ~/.catfish/ 的路径, 必须 wiki/ 开头",
+                },
+            },
+            "required": ["rel_path"],
+        },
+        "emoji": "📖",
+        "toolset": "catfish_native",
+        "available": True,
+    },
+    {
+        "name": "catfish_wiki_update",
+        "description": (
+            "改个人知识库里已有的条目 —— 整文件覆写, 不是追加.\n\n"
+            "所以要先 catfish_wiki_read 拿到现有全文, 在它基础上改, 再整篇传回来.\n"
+            "直接传一段新内容会把原来的全冲掉.\n\n"
+            "建新条目用 catfish_wiki_create (那条路有重名检测), 这个只改已存在的.\n\n"
+            "⚠ 返参里的 warning: 如果覆写后的内容太短又没有 frontmatter, 会命中\n"
+            "  墓碑规则被 TAB 隐藏 —— 那种「写成功了但看不见」会当场告诉你."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "rel_path": {
+                    "type": "string",
+                    "description": "相对 ~/.catfish/ 的路径, 必须 wiki/ 开头",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "完整的新内容 (含 frontmatter). 这是覆写.",
+                },
+            },
+            "required": ["rel_path", "content"],
+        },
+        "emoji": "✏️",
+        "toolset": "catfish_native",
+        "available": True,
+    },
     # ── BL-FED2.3 (5/12 鸿波拍板) 跨员工路由 ──
     {
         "name": "catfish_expert_consult",
@@ -3056,8 +3206,15 @@ CATFISH_NATIVE_TOOLS: List[Dict[str, Any]] = [
             "  - '看看这份合同能不能签' — 只是问, 不要入库\n"
             "  - '这是今天开会的记录, 帮我总结' — 只是分析, 不要入库\n"
             "  - 员工不确定 → **问员工 '这个要存到知识库吗?'**, 不擅自调 (员工主权军规)\n\n"
-            "**调用后**: 严格文件复制到 ~/.catfish/wiki/raw/sources/, sync_turn 3b 严格\n"
-            "后台扫 → LLM 严格抽 entity/concept 到 wiki/entities/ + concepts/ (24h 内).\n\n"
+            "**调用后**: 文件复制到 ~/.catfish/wiki/raw/sources/, sync_turn 3b 后台扫\n"
+            "→ LLM 抽 entity/concept 到 wiki/entities/ + concepts/ (24h 内).\n\n"
+            "⚠⚠ **蒸馏完成前, 知识体系 TAB 看不到它**. TAB 只列\n"
+            "  wiki/{entities,concepts,queries} 三个目录, 从不读 raw/sources/.\n"
+            "  所以调完这个工具**不要**告诉员工「已经进知识库了, 去 TAB 看」——\n"
+            "  他会看不到, 然后你会陷进一轮查不出原因的排查 (8/3 真实发生过).\n"
+            "  如实说: 原件已归档, 条目要等后台蒸馏.\n\n"
+            "💡 员工希望**马上能在 TAB 看到** → 改用 catfish_wiki_create 直接建条目.\n"
+            "  两者不冲突: ingest 留原始材料存档, create 建立即可见的条目, 需要就都调.\n\n"
             "**注意**: 员工 chat 上传的附件, kept_path 严格从 message context 里拿 "
             "(前端 attachment.keptPath). parsed_text_path 严格是 preview 大文件的 sidecar\n"
             "(前端 attachment.parsedTextPath), 优先用它 (binary xlsx/pdf 严格拿不到\n"
