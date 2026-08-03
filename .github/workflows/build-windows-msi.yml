@@ -204,22 +204,43 @@ jobs:
         run: |
           set -euo pipefail
           # -h dereference symlinks: catfish repo 里 hermes-fork 的 plugin 软链展开
+          # ⚠ exclude 的前缀必须是 hermes-agent-src —— 打的就是这个目录。
+          #   8/3 之前全写成 hermes-agent/ , **十一条一条都匹配不上**, 全是死规则。
+          #
+          #   后果不是"包大了点": .git 跟着进包, 而它带着上游的 origin remote。
+          #   install.ps1 的 offline 分支把源码拷到 InstallDir 后 git init +
+          #   git remote add origin, 撞上已存在的 origin 直接报
+          #     error: remote origin already exists.
+          #   → 整个装机失败。8/3 Windows 现场就是这么挂的, 而且删掉
+          #   %LOCALAPPDATA%\hermes\hermes-agent 重装**也没用** —— .git 是从包里
+          #   重新带出来的。
+          #
+          #   为什么一直没暴露: CI 上 /tmp/hermes-agent-src 是 git clone --depth 1
+          #   的干净树, 没有 venv/node_modules 可排, 那几条死规则看不出来;
+          #   唯独 .git 是 clone 必然产生的, 于是只有它露了馅。
           tar czhf edge/companion-app/src-tauri/resources/windows/hermes-agent-bundle.tar.gz \
               -C /tmp \
-              --exclude='hermes-agent/.git' \
-              --exclude='hermes-agent/**/__pycache__' \
-              --exclude='hermes-agent/venv' \
-              --exclude='hermes-agent/venv.bak*' \
-              --exclude='hermes-agent/.venv' \
-              --exclude='hermes-agent/**/.venv' \
-              --exclude='hermes-agent/node_modules' \
-              --exclude='hermes-agent/**/node_modules' \
-              --exclude='hermes-agent/target' \
-              --exclude='hermes-agent/**/target' \
-              --exclude='hermes-agent/**/*.pyc' \
+              --exclude='hermes-agent-src/.git' \
+              --exclude='hermes-agent-src/**/__pycache__' \
+              --exclude='hermes-agent-src/venv' \
+              --exclude='hermes-agent-src/venv.bak*' \
+              --exclude='hermes-agent-src/.venv' \
+              --exclude='hermes-agent-src/**/.venv' \
+              --exclude='hermes-agent-src/node_modules' \
+              --exclude='hermes-agent-src/**/node_modules' \
+              --exclude='hermes-agent-src/target' \
+              --exclude='hermes-agent-src/**/target' \
+              --exclude='hermes-agent-src/**/*.pyc' \
               hermes-agent-src
-          # rename 顶层目录 hermes-agent-src → hermes-agent (install.ps1 offline 预期)
-          # tar 里已经用 hermes-agent-src 作根, install.ps1 -OfflineSourceDir 传目录名
+          # 打完就验 exclude 真生效 —— "死规则不出声"这件事已经吃过一次亏
+          BUNDLE=edge/companion-app/src-tauri/resources/windows/hermes-agent-bundle.tar.gz
+          if tar tzf "$BUNDLE" | grep -qE '^hermes-agent-src/(\.git|venv|node_modules|target)/'; then
+              echo "::error::exclude 没生效, 包里仍有本该排掉的目录:"
+              tar tzf "$BUNDLE" | grep -E '^hermes-agent-src/(\.git|venv|node_modules|target)/' | head -5
+              echo "pattern 的前缀必须跟 tar 收的目录名一致 (hermes-agent-src, 不是 hermes-agent)"
+              exit 1
+          fi
+          echo "✓ exclude 全部生效 (.git / venv / node_modules / target 都不在包里)"
           ls -lh edge/companion-app/src-tauri/resources/windows/
 
       # ─── Companion frontend build ───
