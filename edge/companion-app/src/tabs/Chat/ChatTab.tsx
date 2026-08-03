@@ -312,7 +312,7 @@ export default function ChatTab() {
             />
             {/* P3.5.17.c.2 (6/17): ContextCounter 砍 — cumulative cost / ctx_window
                 数学错, 误导. hermes 自带 ContextCompressor 处理 ctx, 不需 Companion 算. */}
-            <ChatModelPicker current={model} onChange={setModel} />
+            <ChatModelPicker current={model} onChange={setModel} onNewChat={() => void handleNew()} />
           </div>
         </header>
 

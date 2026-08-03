@@ -25,11 +25,14 @@ import { savePickerState } from "../../lib/picker_state";
 import { codexBackendSelectModel } from "../../lib/tauri";
 import { useChatStore } from "../../store/chat";
 import type { CatalogModel } from "../../types/catalog";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 interface Props {
   current: string;
   onChange: (modelId: string, pickedByUser?: boolean, runtimeAlreadySynced?: boolean) => void;
+  /** 8/3: 「要新建会话才生效」提示里那个按钮 —— 让员工在原地就能照做,
+   *  而不是读完一句话再自己去左上角找 +。ChatTab 的 handleNew。 */
+  onNewChat?: () => void;
 }
 
 function modelLabel(m: CatalogModel): string {
@@ -45,7 +48,7 @@ function reachDot(m: CatalogModel): string {
   return m.is_reachable === true ? "" : "◐ ";
 }
 
-export default function ChatModelPicker({ current, onChange }: Props) {
+export default function ChatModelPicker({ current, onChange, onNewChat }: Props) {
   const { catalog } = useCatalog();
   const models = catalog?.models ?? [];
   const [switching, setSwitching] = useState(false);
@@ -54,6 +57,19 @@ export default function ChatModelPicker({ current, onChange }: Props) {
   // setModel 的自动路径 (启动恢复 / catalog.default 联动) 对齐失败也要在这里
   // 说出来 —— 那几条路径没有别的界面入口。
   const runtimeSyncError = useChatStore((s) => s.runtimeSyncError);
+  const persistedSessionId = useChatStore((s) => s.persistedSessionId);
+
+  // 8/3 鸿波"搞得我都不知道怎么回事": 这条提示原来不会消失。
+  //
+  // needNewSession 只在下一次切模型时被重置 (handleChange 开头), 而
+  // ChatModelPicker 挂在 header 上, 换会话不重挂 —— 于是员工照做、新建了对话,
+  // 那句"要新建会话才生效"还挂在那儿。提示活得比它描述的状态还久, 人就没法
+  // 判断自己到底做没做对。
+  //
+  // 会话一换 (新建 / 切到别的) 这条提示就该消失, 因为它说的事已经成立了。
+  useEffect(() => {
+    setNeedNewSession(false);
+  }, [persistedSessionId]);
 
   const gatewayModels = models.filter((model) => model.source !== "codex");
   const codexModels = models.filter((model) => model.source === "codex");
@@ -132,9 +148,23 @@ export default function ChatModelPicker({ current, onChange }: Props) {
           运行时没跟上，界面显示的模型可能不是实际在跑的 —— 重选一次试试
         </span>
       )}
-      {needNewSession && (
+      {/* persistedSessionId 为空 = 现在就是一个还没落地的新对话, 下一条消息
+          本来就会创建新 session (ensureSessionId → X-Hermes-Session-Id),
+          模型自然生效。这种时候这条提示纯属噪音, 不显示。 */}
+      {needNewSession && persistedSessionId && (
         <span className="chat-model-picker__hint">
-          这次切换要新建会话才生效 —— 当前会话继续发消息仍走旧模型
+          <span>
+            这个模型要新开一个对话才会生效 —— 在当前对话继续发，跑的还是原来那个。
+          </span>
+          {onNewChat && (
+            <button
+              type="button"
+              onClick={onNewChat}
+              className="chat-model-picker__hint-action"
+            >
+              新建对话
+            </button>
+          )}
         </span>
       )}
     </div>

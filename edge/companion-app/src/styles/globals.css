@@ -3556,6 +3556,32 @@ button {
   border-radius: 7px;
   box-shadow: var(--shadow-md);
   font-size: 9px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+}
+
+/* 8/3: 提示里就地给一个"新建对话"按钮。只说该做什么、却让人自己去找入口,
+   等于把一半的活留给员工 —— 而这条提示出现时他们正处在"不知道怎么回事"
+   的状态。 */
+.chat-model-picker__hint-action {
+  align-self: flex-end;
+  padding: 3px 9px;
+  font-size: 9px;
+  font-weight: 600;
+  color: var(--catfish-bg-elevated);
+  /* fallback 用 #0E5F66 —— 跟这份样式表里其它 --catfish-accent 的兜底值一致
+     (2747 / 2796 / 2807 行)。写 var(--catfish-text) 会在变量缺失时变成深灰,
+     跟主色不是一回事。 */
+  background: var(--catfish-accent, #0E5F66);
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.chat-model-picker__hint-action:hover {
+  opacity: 0.85;
 }
 
 .chat-task-picker {
