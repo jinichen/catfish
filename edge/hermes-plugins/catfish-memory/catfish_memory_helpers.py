@@ -441,6 +441,18 @@ def _append_journal(catfish_home: Path, entry: str) -> None:
 def _read_picker_state_model(catfish_home: Path) -> str:
     """P3.5.2 (6/16 鸿波): 读 ~/.catfish/picker_state.json 拿 companion chat picker 当前 model.
 
+    ⚠⚠ 【原则, 8/4 鸿波明确拍板】蒸馏必须用**员工自己选的那个模型**, 不许换。
+
+    8/4 讨论知识库准确性时提过一个"优化": 蒸馏一天只跑几次, 换个更强的模型成本
+    可忽略, 质量还更好 —— 加个 distill_model 独立配置就行。鸿波否掉了, 明确说
+    这是原则问题。
+
+    别再提这个"优化"。员工选了哪个模型, 知识库就该是那个模型的产物 —— 换成别的
+    模型偷偷生成, 员工看到的东西就不再是他能预期的东西了。质量差是可以接受的,
+    不透明不行。
+
+    (下面的注释是原始设计说明, 保留。)
+
     companion chat.ts 每次 send 前 fire-and-forget 写这个文件, atomic write.
     plugin sync_turn 触发时读, 让 summary model 自动跟随 picker (而不是 yaml 静态).
 
@@ -1406,6 +1418,94 @@ async def _call_merge_llm(
         return None
 
 
+#: P19 LLM merge 的验收阈值 —— 只拦明显事故, 不做美学判断。
+_MERGE_MIN_BODY_RATIO = 0.4     # 正文缩到旧+新较长者的 40% 以下 = LLM 偷懒
+
+
+def _accept_llm_merge(
+    rel_path: str,
+    old_text: str,
+    new_content: str,
+    merged: str,
+) -> Optional[str]:
+    r"""验收 P19 LLM merge 的输出。不合格返 None → 自动落回 P18 regex 安全网。
+
+    # 为什么要验收 (8/4)
+
+    P19 把整个文件交给 LLM 重写, 拿到就写盘, **一行校验都没有**。而它只在
+    **更新已有条目**时触发 —— 一个条目被更新 N 次就被 LLM 重写 N 次, 误差累积。
+
+    8/4 在鸿波机器上实测到的后果: 255 条里 19 条 frontmatter 丢了开头的 `---`,
+    读侧一个字段都读不到, title 退化成文件名 (UI 上显示成拼音), tags/related
+    全部失效 —— 那些条目在知识图谱里是没有任何连线的孤岛。
+
+    P18 反而更安全: frontmatter list 取并集、created 保留旧、旧 body 转
+    `<!-- legacy body -->` 注释留在文末。**确定性, 且信息不丢。** 它唯一的
+    缺点是叙述不如 LLM 融合的顺 —— 那是可以接受的代价。
+
+    所以不砍 P19, 给它加验收: 过了就用 (读起来更好), 没过就退回 P18 (更保守)。
+    回退机制本来就有 (merged 为假 → n_failed → 不进 ok_paths → 写盘走 P18),
+    这里只是把"LLM 调用失败"扩展成"LLM 输出不合格"。
+
+    # 三条检查, 都来自实际事故形态, 不是想象
+
+    1. frontmatter 必须完整 (`---` 开头 + 有收尾)
+       → 8/4 那 19 个坏文件就是这个形态
+
+    2. 旧 frontmatter 的 list 字段不能丢
+       related / tags / sources 在 P18 里是**并集**语义。LLM merge 丢掉 related
+       → 图里连线消失、实体掉进"未分类"。丢了就是倒退, 不接受。
+
+    3. 正文不能暴缩 (< 旧/新 较长者的 40%)
+       LLM 偷懒把长文压成一句话。P18 至少有 legacy 留底, P19 是直接覆盖。
+
+    阈值保守是故意的: 宁可放过一些不完美的合并, 也不要频繁退回 P18 让叙述碎掉。
+    每次拒绝都打 WARNING —— 静默退回等于把 LLM 跑偏这件事藏起来。
+    """
+    if not merged or not merged.strip():
+        return None
+
+    # ① frontmatter 完整性
+    fm_new, body_new = _split_frontmatter_body(merged)
+    if not fm_new:
+        logger.warning(
+            "catfish-memory P19 拒收 %s: 输出没有完整 frontmatter "
+            "(不以 --- 开头, 或缺收尾) —— 落回 P18 regex merge",
+            rel_path,
+        )
+        return None
+
+    # ② 旧 list 字段不能丢 (并集语义, 丢了就是倒退)
+    fm_old, body_old = _split_frontmatter_body(old_text)
+    if fm_old:
+        old_lists = _parse_frontmatter_lists(fm_old)
+        new_lists = _parse_frontmatter_lists(fm_new)
+        for key, old_vals in old_lists.items():
+            if not old_vals:
+                continue
+            lost = [v for v in old_vals if v not in new_lists.get(key, [])]
+            if lost:
+                logger.warning(
+                    "catfish-memory P19 拒收 %s: 合并后 %s 丢了 %d 项 (%s) —— "
+                    "这些字段是并集语义, 丢了会让条目从图谱/筛选里消失. 落回 P18",
+                    rel_path, key, len(lost), ", ".join(lost[:3]),
+                )
+                return None
+
+    # ③ 正文不能暴缩
+    _, body_incoming = _split_frontmatter_body(new_content)
+    baseline = max(len(body_old.strip()), len(body_incoming.strip()))
+    if baseline > 0 and len(body_new.strip()) < baseline * _MERGE_MIN_BODY_RATIO:
+        logger.warning(
+            "catfish-memory P19 拒收 %s: 正文从 %d 缩到 %d 字符 "
+            "(不足 %.0f%%) —— 疑似 LLM 偷懒压缩. 落回 P18 (有 legacy 留底)",
+            rel_path, baseline, len(body_new.strip()), _MERGE_MIN_BODY_RATIO * 100,
+        )
+        return None
+
+    return merged
+
+
 async def merge_files_with_llm(
     catfish_home: Path,
     files: Dict[str, str],
@@ -1438,6 +1538,8 @@ async def merge_files_with_llm(
                 rel_path, type(e).__name__, e,
             )
             merged = None
+        # 8/4: LLM 的输出要过验收才采用, 不合格当失败处理 → 自动落回 P18。
+        merged = _accept_llm_merge(rel_path, old_text, new_content, merged)
         if merged:
             out[rel_path] = merged
             ok_paths.add(rel_path)
@@ -1691,6 +1793,52 @@ def _ensure_frontmatter_fence(rel_path: str, content: str) -> str:
     return "---\n" + stripped
 
 
+#: P3.5.205/206 在 prompt 里禁的"结论词" —— 现在真的去查一遍。
+#: 只查, 不改内容: 这些词出现不代表一定错, 但它是"LLM 在做因果推断/价值判断"
+#: 的信号, 而知识库要的是日志字面事实。
+_CONCLUSION_WORDS = (
+    "决定", "因此", "意味着", "视为红线", "直接影响",
+)
+
+
+def _scan_conclusion_words(rel_path: str, content: str) -> list[str]:
+    r"""扫正文里的禁用结论词, 命中就打 WARNING。返回命中的词。
+
+    # 为什么加这个 (8/4 鸿波 "要怎么提高准确性")
+
+    prompt 里写了一整套准确性约束 (P3.5.205 / P3.5.206):
+
+        - 只用日志字面出现的事实 rephrase, 不做因果推断 / 价值判断 / 生动化修饰
+        - 允许衔接词: 同时 / 然后 / 目前 / 另外
+        - 禁结论词: 决定 / 因此 / 意味着 / 影响 / 视为红线 / 直接影响
+
+    但**没有一条是可执行的检查** —— 全靠 LLM 自觉。写进 prompt ≠ 生效, 这跟
+    8/3~8/4 查了一整天的那些静默失败是同一个形状: 规则写了, 没人验, 于是跑偏
+    了也没有任何东西会喊一声。
+
+    # 为什么只警告不拦
+
+    这些词出现不等于内容错 —— 员工原话里就可能有"决定"。硬拦会丢数据, 而且
+    这是文风判断, 不该由一个词表说了算。
+
+    它的价值是**让漂移可见**: 日志里出现这类 WARNING 变多, 说明蒸馏 prompt
+    的约束正在失效 (换了模型 / prompt 被改 / 上游 hermes 变了), 该去查了。
+    在此之前, 这种漂移是完全无声的。
+
+    注意 "影响" 没进词表: 它在中文里太常见 ("影响范围" / "受影响的系统"),
+    误报会淹掉真信号。词表宁可漏, 不可吵 —— 一个天天响的告警等于没有告警。
+    """
+    _, body = _split_frontmatter_body(content)
+    hits = [w for w in _CONCLUSION_WORDS if w in body]
+    if hits:
+        logger.warning(
+            "catfish-memory wiki: %s 正文出现禁用结论词 %s —— prompt 要求只 rephrase "
+            "日志字面事实, 不做因果推断/价值判断. 内容照写不拦, 但这是蒸馏跑偏的信号.",
+            rel_path, "/".join(hits),
+        )
+    return hits
+
+
 def _write_wiki_files(
     catfish_home: Path,
     files: Dict[str, str],
@@ -1731,6 +1879,7 @@ def _write_wiki_files(
                         rel_path, e,
                     )
                     final_content = _ensure_frontmatter_fence(rel_path, content)
+            _scan_conclusion_words(rel_path, final_content)
             target.write_text(final_content + ("\n" if not final_content.endswith("\n") else ""), encoding="utf-8")
             if "entities/" in rel_path:
                 n_entities += 1
