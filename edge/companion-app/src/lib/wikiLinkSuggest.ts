@@ -95,24 +95,115 @@ const SUGGEST_TOOL_SCHEMA = {
 };
 
 /** 严格 P3.4.E robustJsonParse — 严格 fallback 处理 DeepSeek 边缘场景 truncate. */
-function robustJsonParse<T = unknown>(raw: string): T | null {
+export function robustJsonParse<T = unknown>(raw: string): T | null {
   if (!raw || typeof raw !== "string") return null;
   const trimmed = raw.trim();
   try {
     return JSON.parse(trimmed);
   } catch {
-    // fallback: 尝试提取 { ... } 块
+    // fallback 1: 提取 { ... } 块 (模型在 JSON 前后加了解释文字)
     const start = trimmed.indexOf("{");
     const end = trimmed.lastIndexOf("}");
     if (start >= 0 && end > start) {
       try {
         return JSON.parse(trimmed.slice(start, end + 1));
       } catch {
-        return null;
+        /* 落到 fallback 2 */
       }
     }
+    // fallback 2 (8/4): 截断修复。
+    //
+    // max_tokens 打满时 tool_call 的 arguments 会在数组中间断掉, 根本没有收尾的
+    // }, 上面那个 lastIndexOf("}") 要么找不到、要么找到数组里某个元素的 }, 切出来
+    // 的片段照样不合法 —— 于是整条路径静默失败, 只留一句"无法解析"。
+    //
+    // profile.ts:455 有同款实测记录: "JSON 在 keyPeople 数组中间截断 (鸿波 6/15
+    // console 验证)"。同一个模型家族、同样的 max_tokens 2500。而本文件的 prompt
+    // 要塞全部候选 title (8/4 实测 225 个), 比写它的时候大得多, 更容易打满。
+    //
+    // 修法: 从后往前砍到最后一个完整元素, 再按栈补齐没闭合的括号。宁可少给几条
+    // 建议, 也好过整个功能报错 —— 而且少给的那几条本来就没生成完。
+    return repairTruncatedJson<T>(trimmed);
+  }
+}
+
+/** 补齐被 max_tokens 截断的 JSON。补不出来返 null, 不硬凑。 */
+export function repairTruncatedJson<T = unknown>(text: string): T | null {
+  const start = text.indexOf("{");
+  if (start < 0) return null;
+  const body = text.slice(start);
+
+  // 扫一遍记录括号栈, 同时记住"最后一个完整元素结束"的位置
+  const stack: string[] = [];
+  let inStr = false;
+  let esc = false;
+  let lastSafe = -1;
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+    if (esc) { esc = false; continue; }
+    if (c === "\\") { esc = true; continue; }
+    if (c === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (c === "{" || c === "[") stack.push(c);
+    else if (c === "}" || c === "]") {
+      stack.pop();
+      // 只认"刚闭合一个括号"这一种安全点。
+      //
+      // 第一版还把 `,` 也当安全点 (lastSafe = i - 1), 那是错的: 截断元素内部的
+      // 逗号 (`{"title":"福富","conf` 里那个) 会把 lastSafe 覆盖成一个不完整对象
+      // 中间的位置, 补齐后仍然不合法 —— 于是修复功能自己也静默失败。
+      // node 实测复现过, 加进测试用例了。
+      lastSafe = i;
+    }
+  }
+  if (stack.length === 0) return null;   // 没有未闭合的括号, 不是截断问题
+
+  if (lastSafe < 0) return null;
+  let candidate = body.slice(0, lastSafe + 1).replace(/,\s*$/, "");
+
+  // 按剩余栈补齐 (从内往外)
+  const rest = [...stack];
+  // 重新算 candidate 的栈 —— 截短之后未闭合的括号数可能变了
+  const need: string[] = [];
+  let s2 = false, e2 = false;
+  const st: string[] = [];
+  for (const c of candidate) {
+    if (e2) { e2 = false; continue; }
+    if (c === "\\") { e2 = true; continue; }
+    if (c === '"') { s2 = !s2; continue; }
+    if (s2) continue;
+    if (c === "{" || c === "[") st.push(c);
+    else if (c === "}" || c === "]") st.pop();
+  }
+  while (st.length) need.push(st.pop() === "{" ? "}" : "]");
+  candidate += need.join("");
+  void rest;
+
+  try {
+    return JSON.parse(candidate);
+  } catch {
     return null;
   }
+}
+
+/** 从解析结果里取 suggestions —— 接受模型可能返的几种形状。
+ *
+ * 老代码只认 `{suggestions: [...]}`, 模型返 `{}` / 裸数组 / `{suggestions: null}`
+ * 时**两条路径全部落空**, 报一句没有信息量的"无法解析"。schema 虽然写了
+ * required: ["suggestions"], 但 schema 是给模型的期望, 不是保证。
+ */
+export function extractSuggestions(parsed: unknown): WikiLinkSuggestion[] | null {
+  if (!parsed) return null;
+  if (Array.isArray(parsed)) return parsed as WikiLinkSuggestion[];
+  if (typeof parsed !== "object") return null;
+  const obj = parsed as Record<string, unknown>;
+  if (Array.isArray(obj.suggestions)) return obj.suggestions as WikiLinkSuggestion[];
+  // 模型明确表示"没有匹配": {suggestions: null} / {} → 空结果, 不是失败
+  if ("suggestions" in obj && obj.suggestions == null) return [];
+  // 只有一个数组字段时认它 (模型换了个键名)
+  const arrays = Object.values(obj).filter(Array.isArray);
+  if (arrays.length === 1) return arrays[0] as WikiLinkSuggestion[];
+  return null;
 }
 
 /** 严格主入口 — 调 LLM 扫 body 找 wikilink 建议.
@@ -209,58 +300,69 @@ export async function suggestWikilinks(
     const data = await resp.json();
     const msg = data?.choices?.[0]?.message;
 
-    // Primary path: tool_calls[0].function.arguments (P3.4.E 严格 JSON schema 校验过)
+    const validTitles = new Set(candidateTitles);
+    const sanitize = (list: WikiLinkSuggestion[]) =>
+      list
+        .filter(
+          (x): x is WikiLinkSuggestion =>
+            !!x &&
+            typeof x.title === "string" &&
+            validTitles.has(x.title) &&
+            typeof x.confidence === "number" &&
+            x.confidence >= 0.4,
+        )
+        .sort((a, b) => b.confidence - a.confidence);
+
+    const finish = data?.choices?.[0]?.finish_reason;
+    const msgAny = msg as Record<string, unknown> | undefined;
+
+    // Primary: tool_calls[0].function.arguments
     const toolCalls = msg?.tool_calls;
+    let argsLen = 0;
     if (Array.isArray(toolCalls) && toolCalls.length > 0) {
       const args = toolCalls[0]?.function?.arguments;
       if (typeof args === "string" && args.trim()) {
-        const parsed = robustJsonParse<{ suggestions?: WikiLinkSuggestion[] }>(
-          args,
-        );
-        if (parsed && Array.isArray(parsed.suggestions)) {
-          // 严格 sanitize — 过滤 title 必须在 candidateTitles 里 (LLM 编造防御)
-          const validTitles = new Set(candidateTitles);
-          const clean = parsed.suggestions
-            .filter(
-              (s): s is WikiLinkSuggestion =>
-                !!s &&
-                typeof s.title === "string" &&
-                validTitles.has(s.title) &&
-                typeof s.confidence === "number" &&
-                s.confidence >= 0.4,
-            )
-            .sort((a, b) => b.confidence - a.confidence); // 严格 confidence 降序
-          return { ok: true, suggestions: clean };
-        }
+        argsLen = args.length;
+        const got = extractSuggestions(robustJsonParse(args));
+        if (got) return { ok: true, suggestions: sanitize(got) };
       }
     }
 
-    // Fallback: LLM 没遵守 tool_choice (DeepSeek 边缘场景), 回退 content parse
+    // Fallback: content (LLM 没遵守 tool_choice)
     const content = msg?.content;
+    let contentLen = 0;
     if (typeof content === "string" && content.trim()) {
-      const parsed = robustJsonParse<{ suggestions?: WikiLinkSuggestion[] }>(
-        content,
-      );
-      if (parsed && Array.isArray(parsed.suggestions)) {
-        const validTitles = new Set(candidateTitles);
-        const clean = parsed.suggestions
-          .filter(
-            (s): s is WikiLinkSuggestion =>
-              !!s &&
-              typeof s.title === "string" &&
-              validTitles.has(s.title) &&
-              typeof s.confidence === "number" &&
-              s.confidence >= 0.4,
-          )
-          .sort((a, b) => b.confidence - a.confidence);
-        return { ok: true, suggestions: clean };
-      }
+      contentLen = content.length;
+      const got = extractSuggestions(robustJsonParse(content));
+      if (got) return { ok: true, suggestions: sanitize(got) };
     }
 
+    // 8/4: 报错必须说清楚是什么情况 —— 老版本只有一句"tool_calls + content 均失败",
+    // 员工看不懂, 排查的人也无从下手 (8/4 就是靠翻源码 + 猜才定位到截断)。
+    // 一个不说明发生了什么的错误提示, 等于把问题藏起来。
+    const bits = [
+      `finish_reason=${finish ?? "?"}`,
+      `tool_calls=${Array.isArray(toolCalls) ? toolCalls.length : 0}`,
+      argsLen ? `args=${argsLen}字` : "args=空",
+      contentLen ? `content=${contentLen}字` : "content=空",
+    ];
+    const hint =
+      finish === "length"
+        ? " —— 输出被 max_tokens 截断了, 这条目关联太多. 可以先精简 body 再扫."
+        : Array.isArray(toolCalls) && toolCalls.length === 0
+          ? " —— 模型没调 tool 也没返 JSON, 换个模型试试."
+          : "";
+    const peek = (
+      (typeof content === "string" && content) ||
+      (typeof toolCalls?.[0]?.function?.arguments === "string"
+        ? toolCalls[0].function.arguments
+        : "") ||
+      JSON.stringify(msgAny ?? {})
+    ).slice(0, 160);
     return {
       ok: false,
       suggestions: [],
-      error: "LLM 返回无法解析 (tool_calls + content 均失败)",
+      error: `LLM 返回解析不了 (${bits.join(", ")})${hint}\n原样片段: ${peek}`,
     };
   } catch (e) {
     return {
