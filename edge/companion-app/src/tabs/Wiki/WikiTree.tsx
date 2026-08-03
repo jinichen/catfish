@@ -188,6 +188,26 @@ export default function WikiTree() {
     return g;
   }, [filtered]);
 
+  // 8/3 鸿波"根本就无效": 搜索/筛选生效时强制展开所有分组。
+  //
+  // 老行为是搜索完全不管折叠态 —— collapsed 只来自 localStorage 和手动点击,
+  // 没有任何地方跟 search 挂钩。而实体组**默认就是折叠的** (下面 484 行:
+  // localStorage 为空时 label.includes("实体") → true), 二级子组也默认折
+  // (CategorySubgroup 里 v === null → true)。
+  //
+  // 于是: 员工搜一个词, filtered 明明命中了, 组标题的计数也变了, 但组是折的,
+  // 屏幕上一条都不显示 —— 看起来就是"搜不到 / 根本没入库"。
+  //
+  // 这个坑对**新建的条目**格外狠: 新条目没有 related, 落进"未分类"子组, 而
+  // 未分类被排到最后 (entityCategories 的 sort)。折叠的组 + 最后一个子组 +
+  // 子组也折叠 = UI 上最难被发现的位置。8/3 那份对标矩阵反复"看不到", 这是
+  // 最可能的直接原因。
+  //
+  // 主动筛选时展开是安全的: 员工正在找东西, 这时候藏结果没有任何道理; 手动
+  // 折叠的偏好仍存在 localStorage 里, 清掉搜索就恢复。
+  const isFiltering =
+    !!search.trim() || kindFilter !== "all" || query !== "none";
+
   // P3.5.99 (6/24 鸿波 catch "62 实体看不过来, 200 真要爆"): 实体内部按
   // related[0] (第一个关联的 concept) 自动二级分组. 数据天然形成 — 鲶鱼
   // distill 时把 entity 的 body 写了 `[[XXX 类]]` wikilink (P3.5.42.13 后
@@ -415,6 +435,7 @@ export default function WikiTree() {
           <EntityGroup
             total={grouped.entity.length}
             categories={entityCategories}
+            forceOpen={isFiltering}
             selectedPath={selectedPath}
             onSelect={selectFile}
           />
@@ -423,10 +444,11 @@ export default function WikiTree() {
           <ConceptGroup
             total={grouped.concept.length}
             categories={conceptCategories}
+            forceOpen={isFiltering}
             selectedPath={selectedPath}
             onSelect={selectFile}
           />
-          <Group label="查询 (queries)" emoji="💬" color="#5fc878" files={grouped.query} selectedPath={selectedPath} onSelect={selectFile} />
+          <Group label="查询 (queries)" emoji="💬" color="#5fc878" files={grouped.query} selectedPath={selectedPath} onSelect={selectFile} forceOpen={isFiltering} />
           {/* P3.3.18 Phase 4 (6/10): 已装部门 wiki — read-only, 跟个人 wiki 视觉分离 */}
           {sharedFiles.length > 0 && (
             <Group
@@ -466,6 +488,7 @@ function Group({
   files,
   selectedPath,
   onSelect,
+  forceOpen = false,
 }: {
   label: string;
   emoji: string;
@@ -473,6 +496,8 @@ function Group({
   files: WikiFileInfo[];
   selectedPath: string | null;
   onSelect: (relPath: string) => void;
+  /** 8/3: 搜索/筛选生效时强制展开 */
+  forceOpen?: boolean;
 }) {
   // P40 (6/5 鸿波): Group collapsible. localStorage 记 collapse state per label.
   // 默认: entities (常长 21+) 折起; concepts/queries 展开. Wiki 累积后 sidebar
@@ -487,6 +512,9 @@ function Group({
       return false;
     }
   });
+  // 8/3: forceOpen —— 搜索/筛选生效时无视 collapsed。折叠是"我暂时不想看",
+  // 不是"即使我在搜也别给我看"。见 WikiTree 里 isFiltering 那段注释。
+  const isOpen = forceOpen || !collapsed;
   const toggle = () => {
     setCollapsed((c) => {
       const next = !c;
@@ -500,7 +528,7 @@ function Group({
   };
   if (files.length === 0) return null;
   return (
-    <div className={"wiki-group " + (collapsed ? "" : "wiki-group--open")}>
+    <div className={"wiki-group " + (isOpen ? "wiki-group--open" : "")}>
       <div
         className="wiki-group__header"
         onClick={toggle}
@@ -512,7 +540,7 @@ function Group({
         }}
         role="button"
         tabIndex={0}
-        aria-expanded={!collapsed}
+        aria-expanded={isOpen}
         style={{ color }}
       >
         <span className="wiki-group__caret">▶</span>
@@ -521,7 +549,7 @@ function Group({
           {files.length}
         </span>
       </div>
-      {!collapsed && (
+      {isOpen && (
       <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
         {files.map((f) => {
           const active = selectedPath === f.rel_path;
@@ -571,11 +599,14 @@ function EntityGroup({
   categories,
   selectedPath,
   onSelect,
+  forceOpen = false,
 }: {
   total: number;
   categories: Array<[string, WikiFileInfo[]]>;
   selectedPath: string | null;
   onSelect: (relPath: string) => void;
+  /** 8/3: 搜索/筛选生效时强制展开 */
+  forceOpen?: boolean;
 }) {
   const lsKey = "wiki_group_collapsed_实体 (entities)"; // 跟原 Group 一致, 不丢用户折叠
   const [collapsed, setCollapsed] = useState<boolean>(() => {
@@ -587,6 +618,9 @@ function EntityGroup({
       return true;
     }
   });
+  // 8/3: forceOpen —— 搜索/筛选生效时无视 collapsed。折叠是"我暂时不想看",
+  // 不是"即使我在搜也别给我看"。见 WikiTree 里 isFiltering 那段注释。
+  const isOpen = forceOpen || !collapsed;
   const toggle = () => {
     setCollapsed((c) => {
       const next = !c;
@@ -600,7 +634,7 @@ function EntityGroup({
   };
   if (total === 0) return null;
   return (
-    <div className={"wiki-group " + (collapsed ? "" : "wiki-group--open")}>
+    <div className={"wiki-group " + (isOpen ? "wiki-group--open" : "")}>
       <div
         className="wiki-group__header"
         onClick={toggle}
@@ -612,7 +646,7 @@ function EntityGroup({
         }}
         role="button"
         tabIndex={0}
-        aria-expanded={!collapsed}
+        aria-expanded={isOpen}
         style={{ color: "#4a9eff" }}
       >
         <span className="wiki-group__caret">▶</span>
@@ -621,13 +655,14 @@ function EntityGroup({
           {total}
         </span>
       </div>
-      {!collapsed && (
+      {isOpen && (
         <div style={{ paddingLeft: 8 }}>
           {categories.map(([category, list]) => (
             <CategorySubgroup
               key={category}
               category={category}
               files={list}
+              forceOpen={forceOpen}
               selectedPath={selectedPath}
               onSelect={onSelect}
             />
@@ -651,11 +686,14 @@ function CategorySubgroup({
   files,
   selectedPath,
   onSelect,
+  forceOpen = false,
 }: {
   category: string;
   files: WikiFileInfo[];
   selectedPath: string | null;
   onSelect: (relPath: string) => void;
+  /** 8/3: 搜索/筛选生效时强制展开 */
+  forceOpen?: boolean;
 }) {
   // P3.5.110: 从 store 拿 files (全 wiki) lookup, 跟 onSelect 同源
   const allFiles = useWikiStore((s) => s.files);
@@ -675,6 +713,9 @@ function CategorySubgroup({
       return true;
     }
   });
+  // 8/3: forceOpen —— 搜索/筛选生效时无视 collapsed。折叠是"我暂时不想看",
+  // 不是"即使我在搜也别给我看"。见 WikiTree 里 isFiltering 那段注释。
+  const isOpen = forceOpen || !collapsed;
   const toggle = () => {
     setCollapsed((c) => {
       const next = !c;
@@ -763,8 +804,8 @@ function CategorySubgroup({
         <span
           role="button"
           tabIndex={0}
-          aria-expanded={!collapsed}
-          aria-label={collapsed ? "展开" : "折叠"}
+          aria-expanded={isOpen}
+          aria-label={isOpen ? "折叠" : "展开"}
           onClick={(e) => {
             e.stopPropagation();
             toggle();
@@ -778,7 +819,7 @@ function CategorySubgroup({
           style={{
             display: "inline-block",
             transition: "transform 0.15s",
-            transform: collapsed ? "rotate(0deg)" : "rotate(90deg)",
+            transform: isOpen ? "rotate(90deg)" : "rotate(0deg)",
             fontSize: 9,
             cursor: "pointer",
             padding: "0 2px",
@@ -817,7 +858,7 @@ function CategorySubgroup({
           {files.length}
         </span>
       </div>
-      {!collapsed && (
+      {isOpen && (
         <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
           {files.map((f) => {
             const active = selectedPath === f.rel_path;
@@ -869,11 +910,14 @@ function ConceptGroup({
   categories,
   selectedPath,
   onSelect,
+  forceOpen = false,
 }: {
   total: number;
   categories: Array<[string, WikiFileInfo[]]>;
   selectedPath: string | null;
   onSelect: (relPath: string) => void;
+  /** 8/3: 搜索/筛选生效时强制展开 */
+  forceOpen?: boolean;
 }) {
   const lsKey = "wiki_group_collapsed_概念 (concepts)"; // 跟原 Group 一致, 不丢用户折叠
   const [collapsed, setCollapsed] = useState<boolean>(() => {
@@ -885,6 +929,9 @@ function ConceptGroup({
       return false;
     }
   });
+  // 8/3: forceOpen —— 搜索/筛选生效时无视 collapsed。折叠是"我暂时不想看",
+  // 不是"即使我在搜也别给我看"。见 WikiTree 里 isFiltering 那段注释。
+  const isOpen = forceOpen || !collapsed;
   const toggle = () => {
     setCollapsed((c) => {
       const next = !c;
@@ -898,7 +945,7 @@ function ConceptGroup({
   };
   if (total === 0) return null;
   return (
-    <div className={"wiki-group " + (collapsed ? "" : "wiki-group--open")}>
+    <div className={"wiki-group " + (isOpen ? "wiki-group--open" : "")}>
       <div
         className="wiki-group__header"
         onClick={toggle}
@@ -910,7 +957,7 @@ function ConceptGroup({
         }}
         role="button"
         tabIndex={0}
-        aria-expanded={!collapsed}
+        aria-expanded={isOpen}
         style={{ color: "#ff9933" }}
       >
         <span className="wiki-group__caret">▶</span>
@@ -919,13 +966,14 @@ function ConceptGroup({
           {total}
         </span>
       </div>
-      {!collapsed && (
+      {isOpen && (
         <div style={{ paddingLeft: 8 }}>
           {categories.map(([category, list]) => (
             <CategorySubgroup
               key={category}
               category={category}
               files={list}
+              forceOpen={forceOpen}
               selectedPath={selectedPath}
               onSelect={onSelect}
             />
