@@ -199,6 +199,69 @@ jobs:
           Get-ChildItem "$env:GITHUB_WORKSPACE\edge\companion-app\src-tauri\resources\windows\" |
               Format-Table Name, Length
 
+      - name: npm ci in hermes-agent-src (node_modules 必须进包 · 达华现场无公网)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 为什么这一步到 8/3 才有 —— 以及为什么"CI 一直绿"完全不代表它存在:
+          #
+          # install.ps1 装到最后会在 hermes-agent 根目录跑 `npm install`, 装
+          # browser tools (agent-browser / node-pty / playwright)。达华 POC 现场
+          # **没有公网**, 这一步必挂; 挂了之后 browser_* 工具全废。
+          #
+          # patch_install_ps1_offline.py 的 PATCH_6 早就写好了应对: 若
+          # $InstallDir/node_modules 已存在, 就跳过 npm install 直接返回。
+          # mac 那条产线 (build-mac-resources.sh 步骤 6a) 真的跑了 npm ci,
+          # 所以 mac 包里有 105146 条 node_modules 条目, 跳过分支正常命中。
+          #
+          # Windows 这条产线**从来没做过 npm ci**, 而且下面的 tar 还把
+          # node_modules 显式 exclude 掉了两条。于是 PATCH_6 那个跳过分支在
+          # Windows 上一次都没执行过 —— 每台员工机都得联网现装。
+          #
+          # 所以这不是"CI 挂了没人修", 是两条产线只有一条实现了这个功能,
+          # 而 CI 对**缺失的功能**没有任何断言, 因此一直绿。补丁写了 ≠ 生效了,
+          # 中间隔着一个从没有人验证过的前置条件。下面 Pack 步骤里加的反向
+          # 断言就是为了让"没做"这件事本身能变红。
+          export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1   # chromium 单独走 chromium-embed.tar.gz
+          cd /tmp/hermes-agent-src
+          if [ -f package-lock.json ]; then
+              npm ci --no-audit --no-fund --loglevel=error
+          else
+              npm install --no-audit --no-fund --loglevel=error
+          fi
+          echo "顶级 node_modules 装完: $(du -sh node_modules | cut -f1)"
+
+          # 手术级瘦身 —— 与 build-mac-resources.sh 步骤 6a.5 保持同一份清单。
+          # hermes 根 npm ci 装约 1GB, 其中绝大部分是 Electron 桌面版 / 前端 /
+          # dev 工具链。员工机跑的是 Python 主进程, node 侧只需要
+          # agent-browser + node-pty + playwright。
+          #
+          # ⚠ 这份清单和 mac 那份是**复制关系, 不是共享**。改一边要改两边;
+          #   两边不一致时 Windows 和 mac 员工机上的 hermes 行为会不同, 而
+          #   没有任何检查会发现。(要治本得抽成一个共用脚本, 未做。)
+          cd /tmp/hermes-agent-src/node_modules
+          for t in hermes mermaid @mermaid-js @tabler @icons-pack lucide-react \
+                   three three-stdlib electron-winstaller typescript @rolldown \
+                   @tauri-apps 'react-native-*' @types; do
+              for match in $t; do
+                  if [ -e "$match" ]; then
+                      echo "  删 $match ($(du -sh "$match" 2>/dev/null | cut -f1))"
+                      rm -rf "$match"
+                  fi
+              done
+          done
+          cd /tmp/hermes-agent-src
+          echo "手术后 node_modules: $(du -sh node_modules | cut -f1)"
+
+          # 瘦身别把真正要用的删了 —— 正向确认三个运行时依赖还在
+          for must in agent-browser node-pty; do
+              if [ ! -d "node_modules/$must" ]; then
+                  echo "::error::瘦身把 node_modules/$must 删掉了, browser tools 会废"
+                  exit 1
+              fi
+          done
+          echo "✓ agent-browser / node-pty 都在"
+
       - name: Pack hermes-agent bundle (follow symlink, exclude venv/cache)
         shell: bash
         run: |
@@ -226,21 +289,75 @@ jobs:
               --exclude='hermes-agent-src/venv.bak*' \
               --exclude='hermes-agent-src/.venv' \
               --exclude='hermes-agent-src/**/.venv' \
-              --exclude='hermes-agent-src/node_modules' \
-              --exclude='hermes-agent-src/**/node_modules' \
               --exclude='hermes-agent-src/target' \
               --exclude='hermes-agent-src/**/target' \
               --exclude='hermes-agent-src/**/*.pyc' \
+              --exclude='hermes-agent-src/apps/desktop' \
+              --exclude='hermes-agent-src/node_modules/electron' \
               hermes-agent-src
-          # 打完就验 exclude 真生效 —— "死规则不出声"这件事已经吃过一次亏
+          #
+          # 8/3: 删掉了原本的 node_modules / **/node_modules 两条 exclude。
+          # 那两条不是"顺手排一下缓存", 它们**正是**离线安装做不成的原因:
+          # 上一步 npm ci 刚装好的东西, 到这里被原样扔掉。
+          #
+          # 换成 mac 同款的两条 (apps/desktop + node_modules/electron): 前者是
+          # 我们用 Tauri Companion 替代掉的 Electron 桌面版, 后者是它被 npm
+          # workspaces 提升到根的 790MB 运行时 —— 排掉 app 却留着运行时是
+          # 8/1 在 mac 包上发现的漏排。
           BUNDLE=edge/companion-app/src-tauri/resources/windows/hermes-agent-bundle.tar.gz
-          if tar tzf "$BUNDLE" | grep -qE '^hermes-agent-src/(\.git|venv|node_modules|target)/'; then
-              echo "::error::exclude 没生效, 包里仍有本该排掉的目录:"
-              tar tzf "$BUNDLE" | grep -E '^hermes-agent-src/(\.git|venv|node_modules|target)/' | head -5
-              echo "pattern 的前缀必须跟 tar 收的目录名一致 (hermes-agent-src, 不是 hermes-agent)"
-              exit 1
+          #
+          # 归档现在有十几万条, 只 tar tzf **一次**存下来再反复 grep。
+          # 每个 pattern 单独解一遍 gzip 是几分钟起步。
+          HLIST="$(mktemp)"
+          trap 'rm -f "$HLIST"' EXIT
+          tar tzf "$BUNDLE" > "$HLIST"
+          leak=0
+
+          # ① 不该在包里的 —— 原有检查, 保留
+          for pat in '\.git/' 'venv/' 'target/' 'apps/desktop' 'node_modules/electron'; do
+              if grep -qE "^hermes-agent-src/${pat}" "$HLIST"; then
+                  echo "::error::exclude 没生效, 包里仍有 hermes-agent-src/${pat}"
+                  grep -E "^hermes-agent-src/${pat}" "$HLIST" | head -3
+                  leak=1
+              fi
+          done
+
+          # ② 必须在包里的 —— 新增。这条才是这次真正补上的东西。
+          #
+          # 上面 ① 那组断言在 8/3 之前一直是绿的, 而且**绿得完全正确**:
+          # node_modules 确实不在包里。问题是"不在包里"当时被当成通过条件,
+          # 没有任何一条检查在问"它是不是本来就该在"。
+          #
+          # 一个只检查"不该有的东西没有"的验收, 对整个功能没做这件事是全盲的。
+          NM=$(grep -c '^hermes-agent-src/node_modules/' "$HLIST" || true)
+          if [ "${NM:-0}" -lt 5000 ]; then
+              echo "::error::node_modules 没进包 (只有 ${NM:-0} 条, 期望 >5000)"
+              echo "  离线装机会退回联网跑 npm install, 达华现场无公网 → browser_* 工具全废。"
+              echo "  查上一步 npm ci 是不是挂了, 或者 tar 的 exclude 又把它排掉了。"
+              leak=1
           fi
-          echo "✓ exclude 全部生效 (.git / venv / node_modules / target 都不在包里)"
+          for must in agent-browser node-pty; do
+              if ! grep -q "^hermes-agent-src/node_modules/${must}/" "$HLIST"; then
+                  echo "::error::包里没有 node_modules/${must} —— browser tools 起不来"
+                  leak=1
+              fi
+          done
+
+          # ③ TUI 的 node_modules —— 只警告不拦。
+          # install.ps1 有第二个 npm 调用点 (2678 行, _Run-NpmInstall "TUI" $tuiDir),
+          # PATCH_6 patch 的是函数本身, 所以它也吃跳过分支 —— 前提是
+          # ui-tui/node_modules 也在包里。npm workspaces 会把大部分依赖提升到根,
+          # ui-tui 底下剩多少不确定, 所以这里不敢断言数量, 只报出来。
+          # 它失败是非致命的 (调用点写的是 [void](...)), 不值得为它挡构建。
+          TUI_NM=$(grep -c '^hermes-agent-src/ui-tui/node_modules/' "$HLIST" || true)
+          if [ "${TUI_NM:-0}" -eq 0 ]; then
+              echo "::warning::ui-tui/node_modules 不在包里, TUI 那步装机时仍会尝试联网 (非致命)"
+          else
+              echo "  ui-tui/node_modules: ${TUI_NM} 条"
+          fi
+
+          [ "$leak" = "0" ] || exit 1
+          echo "✓ exclude 生效 + node_modules 已进包 ($NM 条) · 归档共 $(wc -l < "$HLIST" | tr -d ' ') 条"
           ls -lh edge/companion-app/src-tauri/resources/windows/
 
       # ─── Companion frontend build ───
