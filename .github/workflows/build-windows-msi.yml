@@ -113,6 +113,39 @@ jobs:
           grep -q 'CATFISH-OFFLINE-PATCH-v1' \
               edge/companion-app/src-tauri/resources/windows/install.ps1
 
+      # ⚠ 这一步是 8/3 补的, 补它的原因值得写下来:
+      #
+      # 7/17 (79cbab9) 往补丁里写了一行 `Write-Info "$label: ..."`。PowerShell 里
+      # `$label:` 是驱动器/命名空间限定符 (同 $env:PATH), 冒号跟空格 = **解析错误**。
+      # 于是打出来的 install.ps1 在 parse 阶段就挂, 一行都执行不了。
+      #
+      # 而 CI 一路绿: 上面那步只 grep marker (在), tauri 只是把文件塞进 msi (成功),
+      # 产物照常上传。**只有员工双击安装时才炸**, 表现是 msi 弹
+      # "Windows Installer 程序包有问题" —— 一句什么都没说的话。
+      # 就这样装不上装了两周多没人发现。
+      #
+      # marker 检查只能证明"补丁打上了", 证明不了"打出来的东西是合法 PowerShell"。
+      # 这一步用 PowerShell 自己的解析器验语法, 不执行 —— 有语法错就当场红。
+      - name: Verify patched install.ps1 parses as valid PowerShell
+        shell: pwsh
+        run: |
+          $path = "edge/companion-app/src-tauri/resources/windows/install.ps1"
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path), [ref]$null, [ref]$errors) | Out-Null
+          if ($errors -and $errors.Count -gt 0) {
+              Write-Host "::error::打补丁后的 install.ps1 语法不合法 ($($errors.Count) 处):"
+              foreach ($e in $errors) {
+                  Write-Host "::error file=$path,line=$($e.Extent.StartLineNumber)::$($e.Message)"
+                  Write-Host "  行 $($e.Extent.StartLineNumber): $($e.Extent.Text)"
+              }
+              Write-Host ""
+              Write-Host "最常踩的一种: 字符串里写了 `"`$var:`" —— PowerShell 会把它当"
+              Write-Host "驱动器限定符 (同 `$env:PATH)。改成 `"`${var}:`"。"
+              exit 1
+          }
+          Write-Host "✓ install.ps1 语法合法 ($(Get-Content $path | Measure-Object -Line | % Lines) 行)"
+
       - name: Download uv Windows x86_64
         shell: bash
         run: |

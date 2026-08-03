@@ -262,7 +262,14 @@ PATCH_5_NPM_GLOBAL = f"""    {MARKER}: Catfish offline — 装本地 .tgz (agent
 PATCH_6_NPM_LOCAL = f"""    function _Run-NpmInstall([string]$label, [string]$installDir, [string]$logPath, [string]$npmPath) {{
         {MARKER}: Catfish offline — node_modules 已在 (msi 打了 CircleCI pre-install), skip
         if (Test-Path (Join-Path $installDir "node_modules")) {{
-            Write-Info "$label: node_modules already present (Catfish offline bundle), skip npm install"
+            # ⚠ 必须写 ${{label}} 不能写 $label —— PowerShell 里 `$label:` 会被当成
+            # 驱动器/命名空间限定符 (就像 $env:PATH), 冒号后面跟空格直接是**解析错误**:
+            #   变量引用无效。':' 后面的变量名称字符无效。
+            # 这是 parse 阶段的错, 整个 install.ps1 一行都执行不了, msi 的
+            # CustomAction 当场失败 → 员工看到"Windows Installer 程序包有问题"。
+            # 7/17 (79cbab9) 写下这行起, Windows msi 装不上装了两周多没人发现 ——
+            # 因为 CI 只是把文件打进包, 不解析它, 构建一路绿。
+            Write-Info "${{label}}: node_modules already present (Catfish offline bundle), skip npm install"
             Write-Success "$label dependencies already installed (offline)"
             return $true
         }}
