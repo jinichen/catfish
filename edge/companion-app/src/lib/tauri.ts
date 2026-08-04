@@ -472,6 +472,10 @@ export interface WikiFileInfo {
   /** P3.5.132 #5: 升级 typed RelatedRef 数组, 旧 frontmatter 自动 rel=null. */
   related: RelatedRef[];
   sources: string[];
+  /** 8/4: 同一实体的其他叫法 (frontmatter `aliases: [...]`)。
+   *  「中电福富」→「中电福富信息科技有限公司」这类简称/全称靠它连上, 而不是
+   *  靠 title 子串猜 —— 子串会同时命中「销售许可证-中电福富API…」那种无关条目。 */
+  aliases: string[];
   size_bytes: number;
   mtime: number;
   /** 8/4: 员工亲手写/改的条目带 'employee' —— 没有这个标记的都是 LLM 生成、

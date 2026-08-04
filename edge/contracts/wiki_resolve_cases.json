@@ -1,0 +1,113 @@
+{
+  "_why": [
+    "「一个 related 名字指向哪个条目」这件事, 8/4 之前有四套互不相同的实现:",
+    "  WikiGraph.tsx findTarget ×2 / wikiRelevance.ts / Python _check_dangling_related / wiki_health.py",
+    "同一条边, 图上连着、体检说它断了、蒸馏侧又是第三种看法。",
+    "口径分叉本身就是 bug —— 没有哪一处是对的, 它们只是不同。",
+    "",
+    "这个文件是唯一事实。TS (wikiResolve.test.ts) 和 Python (test_wiki_resolve.py)",
+    "都读它跑同一组用例, 任何一侧改了行为都会当场红。",
+    "",
+    "最要紧的是 ambiguous 那几条: 老实现在子串多命中时按 files 数组顺序取第一个,",
+    "而数组是按 mtime 倒序排的 —— 图长什么样取决于哪个文件最近被改过。"
+  ],
+  "files": [
+    { "rel_path": "wiki/entities/a.md", "slug": "zhong-dian-fu-fu-xin-xi-ke-ji-you-xian-gong-si", "title": "中电福富信息科技有限公司", "aliases": ["中电福富", "福富"] },
+    { "rel_path": "wiki/entities/b.md", "slug": "xiao-shou-xu-ke-zheng-zhong-dian-fu-fu-API", "title": "销售许可证-中电福富API与应用系统安全审计V2.0", "aliases": [] },
+    { "rel_path": "wiki/entities/c.md", "slug": "chenxiuping", "title": "陈秀平", "aliases": [] },
+    { "rel_path": "wiki/entities/d.md", "slug": "gaoxin-zizhi-shenbao", "title": "高新资质申报", "aliases": ["高新申报"] },
+    { "rel_path": "wiki/entities/e.md", "slug": "zhongdianfufu-jiu", "title": "旧编号 ZDFF", "aliases": [] },
+    { "rel_path": "wiki/concepts/f.md", "slug": "itss-yunwei", "title": "ITSS 运维资质", "aliases": [] },
+    { "rel_path": "wiki/entities/g.md", "slug": "cs4-xin-xi-xi-tong", "title": "CS4-信息系统建设及服务能力等级证书", "aliases": [] },
+    { "rel_path": "wiki/entities/h.md", "slug": "tongxin-erji", "title": "通信工程施工总承包(二级)", "aliases": [] }
+  ],
+  "cases": [
+    {
+      "name": "精确 title 命中",
+      "query": "陈秀平",
+      "expect": { "kind": "hit", "rel_path": "wiki/entities/c.md", "how": "title" }
+    },
+    {
+      "name": "别名命中 —— 这就是「中电福富」那 97 条边要走的路",
+      "query": "中电福富",
+      "expect": { "kind": "hit", "rel_path": "wiki/entities/a.md", "how": "alias" },
+      "note": "没有别名时会退到子串, 而子串同时命中 a 和 b。别名让它变成确定的。"
+    },
+    {
+      "name": "别名命中 · 另一个简称",
+      "query": "福富",
+      "expect": { "kind": "hit", "rel_path": "wiki/entities/a.md", "how": "alias" }
+    },
+    {
+      "name": "别名优先于子串 —— 顺序不能反",
+      "query": "高新申报",
+      "expect": { "kind": "hit", "rel_path": "wiki/entities/d.md", "how": "alias" }
+    },
+    {
+      "name": "精确 slug 命中",
+      "query": "chenxiuping",
+      "expect": { "kind": "hit", "rel_path": "wiki/entities/c.md", "how": "slug" }
+    },
+    {
+      "name": "slug 变体 —— 拼音分词每次不一样造成的",
+      "query": "zhong-dian-fu-fu-xin-xi-ke-ji-you-xian-gong-si",
+      "expect": { "kind": "hit", "rel_path": "wiki/entities/a.md", "how": "slug" }
+    },
+    {
+      "name": "子串唯一命中 → 认",
+      "query": "ITSS",
+      "expect": { "kind": "hit", "rel_path": "wiki/concepts/f.md", "how": "substring" },
+      "note": "保留这一档是因为它救回不少全称/简称的存量边; 砍掉会大面积断链。"
+    },
+    {
+      "name": "★ 子串多命中 → 绝不挑一个",
+      "query": "中电福富API",
+      "expect": { "kind": "hit", "rel_path": "wiki/entities/b.md", "how": "substring" },
+      "note": "这条唯一命中 b, 用来跟下一条形成对照。"
+    },
+    {
+      "name": "★★ 去掉别名后的歧义场景 —— 老实现在这里按 mtime 抛硬币",
+      "query": "资质",
+      "expect": { "kind": "ambiguous", "candidates": ["高新资质申报", "ITSS 运维资质"] },
+      "note": "两个 title 都含「资质」。老实现返回数组里第一个 = 最近改过的那个, 无声无息。"
+    },
+    {
+      "name": "标点差异 · 空格 vs 连字符",
+      "query": "CS4 信息系统建设及服务能力等级证书",
+      "expect": { "kind": "hit", "rel_path": "wiki/entities/g.md", "how": "title" },
+      "note": "实测断链里有一半是这种 —— 同一个名字被打了两遍, 不是两个东西。"
+    },
+    {
+      "name": "标点差异 · 括号有无",
+      "query": "通信工程施工总承包二级",
+      "expect": { "kind": "hit", "rel_path": "wiki/entities/h.md", "how": "title" }
+    },
+    {
+      "name": "标点归一不能过头 —— 简称不等于全称",
+      "query": "中电福富信息",
+      "expect": { "kind": "hit", "rel_path": "wiki/entities/a.md", "how": "substring" },
+      "note": "「中电福富」vs「中电福富信息科技有限公司」字符本身就不同, 去标点也合不到一起, 必须靠 aliases 明写。这条验证的是它退到了子串而不是被标点档错误吞掉。"
+    },
+    {
+      "name": "查无此名",
+      "query": "根本没有这个东西",
+      "expect": { "kind": "miss" }
+    },
+    {
+      "name": "真的不同的东西不能强行连上",
+      "query": "CMMI-5级评审项目",
+      "expect": { "kind": "miss" },
+      "note": "实测唯一剩下的断链。项目 ≠ 等级, 断着是对的 —— 别为了指标好看去连它。"
+    },
+    {
+      "name": "空名字不算命中",
+      "query": "   ",
+      "expect": { "kind": "miss" }
+    },
+    {
+      "name": "大小写与首尾空白不敏感",
+      "query": "  itss 运维资质  ",
+      "expect": { "kind": "hit", "rel_path": "wiki/concepts/f.md", "how": "title" }
+    }
+  ]
+}

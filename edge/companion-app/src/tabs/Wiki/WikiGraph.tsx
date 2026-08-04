@@ -21,6 +21,7 @@ import Sigma from "sigma";
 import { random } from "graphology-layout";
 import forceAtlas2 from "graphology-layout-forceatlas2";
 import { useWikiStore } from "../../store/wiki";
+import { resolveWikiRefOrNull } from "../../lib/wikiResolve";
 import type { WikiFileInfo } from "../../lib/tauri";
 
 // E5: brand 一致 3 色 (tokens.css 没暴露 hex 给 JS, 这里 mirror).
@@ -136,16 +137,13 @@ export default function WikiGraph() {
     const g = new Graph({ multi: false, type: "directed" });
 
     // P3.5.107 B: ego mode 真子集 — 先算 1-hop neighborhood set, 只 add 这些 node.
-    // helper: name → file lookup (复用下面的逻辑顺序)
-    const findTargetForFilter = (name: string): WikiFileInfo | null => {
-      const lower = name.toLowerCase().trim();
-      return (
-        files.find((f) => f.title.toLowerCase() === lower) ||
-        files.find((f) => f.slug.toLowerCase() === lower) ||
-        files.find((f) => f.title.toLowerCase().includes(lower)) ||
-        null
-      );
-    };
+    //
+    // 8/4: 原来这里和下面 findTarget 是两份几乎一样的拷贝, 第三档
+    // `title.includes(name)` + `files.find()` 取第一个, 而 files 是按 mtime
+    // 倒序的 —— 「中电福富」的 97 条边指向 org 还是那张同名证书, 取决于哪个
+    // 文件最近被改过。统一走 resolveWikiRef, 歧义时不猜。
+    const findTargetForFilter = (name: string): WikiFileInfo | null =>
+      resolveWikiRefOrNull(name, files);
 
     let nodeFilter: Set<string> | null = null;
     // P3.5.111: ego 仅真实 selectedPath 才走 (虚拟体系走 subtree, 不走 ego)
@@ -229,15 +227,9 @@ export default function WikiGraph() {
     }
 
     // 2. edge — frontmatter.related `[[name]]` 抽 → 找 target 真 rel_path
-    //    helper: name → file 真 lookup (title / slug 模糊 match)
+    //    8/4: 统一走 resolveWikiRef (见 lib/wikiResolve.ts 顶部注释)
     function findTarget(name: string): WikiFileInfo | null {
-      const lower = name.toLowerCase().trim();
-      return (
-        files.find((f) => f.title.toLowerCase() === lower) ||
-        files.find((f) => f.slug.toLowerCase() === lower) ||
-        files.find((f) => f.title.toLowerCase().includes(lower)) ||
-        null
-      );
+      return resolveWikiRefOrNull(name, files);
     }
 
     for (const f of files) {

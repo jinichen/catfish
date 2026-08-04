@@ -312,6 +312,15 @@ _GENERATION_PROMPT_TEMPLATE = (
     "entity_type: <一个贴切语义的短词, 员工可读>\n"
     "created: {today}\n"
     "updated: {today}\n"
+    # 8/4: aliases。跟 typed relation 一模一样的形状 —— 这个字段在 merge 侧
+    # (_FM_LIST_FIELDS_UNION) 早就会合并了, 但**从没有人要求 LLM 产出过**,
+    # 读侧也不按它解析。
+    #
+    # 代价实测: 97 个文件的 related 写的是「中电福富」, 而规范节点 title 是
+    # 「中电福富信息科技有限公司」。前端只能退到 title 子串兜底, 而子串同时命中
+    # 「销售许可证-中电福富API与应用系统安全审计V2.0」—— 指向谁取决于哪个文件
+    # 最近被改过。别名把"这两个名字是同一个东西"变成写下来的事实。
+    "aliases: [<简称>, <全称>, <英文名/旧称, 有才写>]\n"
     "tags: [<tag1>, <tag2>]\n"
     # 8/4: 加上 typed 形式。读侧 6/29 (P3.5.132 #5) 就支持 {name, rel} 了, 但
     # **prompt 从头到尾没提过 rel** —— 实测 408 条边 0 条带类型, 不是 LLM 不配合,
@@ -354,6 +363,13 @@ _GENERATION_PROMPT_TEMPLATE = (
     "复用已有 slug**, 不要造新的变体.\n"
     "- entity slug 跟 concept slug 不冲突\n"
     "- frontmatter YAML 严格合法 (Obsidian 解析)\n"
+    "- `aliases:` 写这个实体**在日志里实际出现过的其他叫法** —— 简称、全称、"
+    "英文名、旧称。例: title 是「中电福富信息科技有限公司」就写 "
+    "`aliases: [\"中电福富\", \"福富\"]`. "
+    "**只写真出现过的**, 不要臆造缩写 —— 编出来的别名会把无关条目连到一起, "
+    "比没有别名更糟。没有别名就写 `aliases: []`.\n"
+    "- 别的条目引用它时, `related` 里用简称还是全称都行, 系统靠 aliases 认得出"
+    "是同一个。\n"
     "- `related:` **优先带关系类型**: `{name: \"中电福富\", rel: \"隶属\"}`. "
     "rel 用 2-4 字中文短词 (隶属/认证/负责/参与/依赖/上级/同类). "
     "关系拿不准就退回裸 wikilink `\"[[名字]]\"` —— **编一个关系比没有关系更糟**.\n"
@@ -2268,22 +2284,16 @@ def _check_dangling_related(catfish_home: Path, rel_path: str, content: str) -> 
     names = [n for n in names if n]
     if not names:
         return []
-    known: set = set()
-    for sub in ("wiki/entities", "wiki/concepts"):
-        d = catfish_home / sub
-        if not d.is_dir():
-            continue
-        try:
-            for q in d.iterdir():
-                if q.suffix != ".md":
-                    continue
-                known.add(q.stem)
-                t = _read_title_of(q)
-                if t:
-                    known.add(t)
-        except OSError:
-            continue
-    missing = [n for n in names if n not in known]
+    # 8/4: 改走 wiki_resolve —— 前端 lib/wikiResolve.ts 同一套规则, 由
+    # edge/contracts/wiki_resolve_cases.json 对拍钉住。
+    #
+    # 原来这里是"stem/title 精确相等", 比前端严格得多 (前端还有别名、标点归一、
+    # 唯一子串三档)。于是同一条边蒸馏侧报断链、图上其实连着 —— 报出来的 16%
+    # 里大部分是假警报, 真问题反而被淹掉。
+    from wiki_resolve import load_nodes, resolve_wiki_ref
+
+    nodes = load_nodes(catfish_home)
+    missing = [n for n in names if resolve_wiki_ref(n, nodes).kind != "hit"]
     if missing:
         logger.info(
             "catfish-memory wiki: %s 的 related 有 %d 个指向不存在的节点 (%s) —— "

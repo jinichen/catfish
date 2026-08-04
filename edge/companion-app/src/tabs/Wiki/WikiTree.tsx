@@ -467,6 +467,7 @@ export default function WikiTree() {
                   tags: [],
                   related: [],
                   sources: [`by ${s.publishedBy || "?"}`],
+                  aliases: [],
                   size_bytes: s.sizeBytes,
                   mtime: 0,
                 };

@@ -44,6 +44,7 @@ from catfish_memory_helpers import (  # noqa: E402
     _read_title_of,
     _rel_item_name,
 )
+from wiki_resolve import load_nodes, resolve_wiki_ref  # noqa: E402
 
 KINDS = {"entities": "entity_type", "concepts": "concept_type"}
 
@@ -87,15 +88,18 @@ def scan(root: Path) -> dict:
     no_fm, typed_ok, type_empty, off_vocab = [], 0, [], Counter()
     edges_total = edges_typed = 0
     dangling: list[str] = []
+    ambiguous: list[str] = []
     employee = 0
     by_display: dict[str, list[str]] = defaultdict(list)
     by_slug: dict[str, list[str]] = defaultdict(list)
 
-    # 先建"存在哪些节点"的索引, 用显示名 —— 跟读侧一致
-    known: set[str] = set()
-    for kind, p, _ in files:
-        known.add(_read_title_of(p))
-        known.add(p.stem)
+    # 8/4: 名字→节点一律走 wiki_resolve —— 前端 lib/wikiResolve.ts 是同一套规则,
+    # 两侧由 edge/contracts/wiki_resolve_cases.json 对拍钉住。
+    #
+    # 之前这里自己写了一套精确匹配, 于是**体检说断了 55 条、图上其实连着** ——
+    # 体检比读侧严格。量出来的数跟员工看到的不是一回事, 那这个数就没有意义。
+    # 口径分叉本身就是 bug, 体检工具尤其不能是分叉的一方。
+    nodes = load_nodes(root)
 
     for kind, p, text in files:
         fm, _body = _split_fm(text)
@@ -116,8 +120,17 @@ def scan(root: Path) -> dict:
             if item.lstrip().startswith("{"):
                 edges_typed += 1
             name = _rel_item_name(item)
-            if name and name not in known:
+            if not name:
+                continue
+            res = resolve_wiki_ref(name, nodes)
+            if res.kind == "miss":
                 dangling.append(f"{kind}/{p.name} → {name}")
+            elif res.kind == "ambiguous":
+                # 跟断链分开记 —— 两种病不一样。断链是"少了", 看得出来;
+                # 歧义是"可能连错了", 老实现按 mtime 挑一个, 理直气壮地错。
+                ambiguous.append(
+                    f"{kind}/{p.name} → {name} ⟶ {' / '.join(c.title for c in res.candidates)}"
+                )
 
         if _fm_field(fm, "authored_by") == "employee":
             employee += 1
@@ -144,6 +157,8 @@ def scan(root: Path) -> dict:
             "带类型的边": edges_typed,
             "dangling边": len(dangling),
             "dangling明细": dangling[:10],
+            "歧义边": len(ambiguous),
+            "歧义明细": ambiguous[:10],
             "人工确认": employee,
         }
     )
@@ -167,7 +182,8 @@ def report(r: dict) -> None:
         ("类型已标注", r["有类型"], t, "entity_type / concept_type 非空"),
         ("无重复", t - r["重复涉及文件"], t, "按员工看得见的名字分组"),
         ("关系带类型", r["带类型的边"], e, "{name, rel} 形式, 光有边不知道是什么关系"),
-        ("引用有效", e - r["dangling边"], e, "指向真实存在的节点"),
+        ("引用有效", e - r["dangling边"] - r["歧义边"], e,
+         "解析到唯一节点 (断链 + 歧义都不算)"),
         ("人工确认过", r["人工确认"], t, "authored_by: employee — 蒸馏不会覆盖正文"),
     ]
     w = max(len(n) for n, *_ in rows)
@@ -176,7 +192,8 @@ def report(r: dict) -> None:
     if r["词表外类型"]:
         print(f"\n  词表外类型: {r['词表外类型']}")
     for k, label in (("缺frontmatter明细", "缺 frontmatter"),
-                     ("dangling明细", "指向不存在的节点")):
+                     ("dangling明细", "指向不存在的节点"),
+                     ("歧义明细", "★ 指向多个候选 —— 老实现在这里按 mtime 挑一个")):
         if r.get(k):
             print(f"\n  {label} (前 10):")
             for x in r[k]:

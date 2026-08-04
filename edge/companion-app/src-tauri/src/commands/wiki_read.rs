@@ -48,6 +48,23 @@ pub struct WikiFileInfo {
     pub related: Vec<RelatedRef>,
     /// sources (frontmatter `sources: [...]`)
     pub sources: Vec<String>,
+    /// 8/4: 别名 (frontmatter `aliases: [...]`) —— 同一实体的其他叫法。
+    ///
+    /// 为什么必须有: 实测 97 个文件 `related` 写的是「中电福富」, 而规范节点的
+    /// title 是「中电福富信息科技有限公司」。前端 findTarget 的第三档是
+    /// `title.includes(name)` 子串兜底 + `files.find()` 取第一个, 而
+    /// wiki_list_files 是**按 mtime 倒序**排的 —— 于是这 97 条边指向谁,
+    /// 取决于哪个文件最近被改过。
+    ///
+    /// 「中电福富」子串同时命中「中电福富信息科技有限公司」(org) 和
+    /// 「销售许可证-中电福富API与应用系统安全审计V2.0」(cert)。8/4 当天是前者
+    /// 较新所以碰巧连对, 动一下那个证书文件, 97 条边当场全翻到证书上, 无声无息。
+    ///
+    /// aliases 让「这两个名字是同一个东西」变成**写下来的事实**, 而不是靠子串
+    /// 猜 + mtime 决定。字段本身在蒸馏侧 _FM_LIST_FIELDS_UNION 里早就会合并了,
+    /// 只是从没人产出、也没人按它解析 —— 跟 typed relation 一模一样的形状:
+    /// 功能只建了一半。
+    pub aliases: Vec<String>,
     /// 文件 byte size
     pub size_bytes: u64,
     /// modified ts (unix epoch sec)
@@ -342,6 +359,7 @@ fn build_file_info_inner(
     // `[[name]]`. 合并两边给前端 WikiGraph 当 edge 源.
     let related = merge_related_with_body(parse_related(&fm), &body);
     let sources = parse_list_field(&fm, "sources");
+    let aliases = parse_list_field(&fm, "aliases");
     let mtime = meta
         .modified()
         .ok()
@@ -358,6 +376,7 @@ fn build_file_info_inner(
         tags,
         related,
         sources,
+        aliases,
         size_bytes,
         mtime,
         authored_by: parse_frontmatter_field(&fm, "authored_by"),
