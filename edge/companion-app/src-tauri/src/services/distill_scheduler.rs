@@ -36,7 +36,7 @@ use tauri::AppHandle;
 use tokio::time;
 
 use crate::commands::dream;
-use crate::services::picker_config;
+use crate::services::{catfish_paths, picker_config};
 
 /// 敲门间隔。真正的 24h 判定在 memory_distill_state.json, 不在这里。
 const TICK_SECS: u64 = 15 * 60;
@@ -74,6 +74,47 @@ async fn tick_once(app: &AppHandle) {
         Ok(out) => log::info!("定时蒸馏: 本轮结束 model={model} → {out:?}"),
         // 失败要出声 —— 静默失败正是这条线上最贵的毛病
         Err(e) => log::warn!("定时蒸馏失败 model={model}: {e}"),
+    }
+
+    log_wiki_health();
+}
+
+/// 顺带体检一次知识库, 指标写进日志。
+///
+/// 8/4: 结构指标 (frontmatter 完整率 / 类型覆盖 / 引用有效 / 重复组) 本来只有
+/// 员工手动跑 wiki_health.py 才看得到 —— 也就是"想起来查"才知道。而这两天所有
+/// 最贵的 bug 都是没人想起来去查的: 19 个文件缺 frontmatter、408 条边 0 条带
+/// 类型、21 组重复条目, 全都安静地待了几周。
+///
+/// 跟蒸馏共用一次 tick。失败只 warn —— 体检挂了不该影响蒸馏。
+fn log_wiki_health() {
+    let (Some(python), Some(dir)) = (
+        catfish_paths::tool_bridge_python(),
+        catfish_paths::catfish_memory_plugin_dir(),
+    ) else {
+        return;
+    };
+    let script = dir.join("wiki_health.py");
+    if !script.exists() {
+        return;
+    }
+    match std::process::Command::new(&python)
+        .arg(&script)
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            let txt = String::from_utf8_lossy(&out.stdout);
+            // 只捞百分比那几行, 不把整份报告灌进日志
+            for line in txt.lines().filter(|l| l.contains('%')) {
+                log::info!("知识库体检: {}", line.trim());
+            }
+        }
+        Ok(out) => log::warn!(
+            "知识库体检失败 (exit {:?}): {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr).chars().take(300).collect::<String>()
+        ),
+        Err(e) => log::warn!("知识库体检跑不起来: {e}"),
     }
 }
 
