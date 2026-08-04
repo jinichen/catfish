@@ -54,6 +54,14 @@ pub struct DreamRunOutput {
     pub exit_code: Option<i32>,
     /// 错误信息 (spawn 失败 / 进程崩 等).
     pub error: Option<String>,
+    /// 8/4: CLI 自己报的终态 —— {ok, reason, chunks_total, bytes_written, model}。
+    ///
+    /// 为什么补这个: 定时蒸馏上线当晚就发现日志分不出"真跑了"和"cooldown 跳过了"
+    /// —— 两种情况都是 exit_code=0, 长得一模一样。而这两天查的一堆 bug, 病根
+    /// 全是"报了成功但没说到底发生了什么"。自己刚写的代码又犯一次, 当场补上。
+    ///
+    /// None = CLI 没输出可解析的终态行 (老版本 / 崩在中途)。
+    pub result: Option<serde_json::Value>,
 }
 
 /// P3.5.1.4 (6/15 鸿波): 触发 Dream Engine 蒸馏.
@@ -63,6 +71,26 @@ pub struct DreamRunOutput {
 ///
 /// invoke 立即返回 (spawn ok), 真实进度走 Tauri event `dream:progress`.
 /// invoke 一直 await 直到 CLI 退出 — UI 知道终态. 进度走 event.
+/// 把 CLI 终态说成人话 —— exit_code=0 分不出"跑了"和"跳过了", 这行能。
+pub(crate) fn describe(result: &Option<serde_json::Value>) -> String {
+    let Some(v) = result else {
+        return "CLI 没报终态 (老版本? 中途崩了?)".to_string();
+    };
+    let reason = v.get("reason").and_then(|x| x.as_str()).unwrap_or("");
+    if v.get("ok").and_then(|x| x.as_bool()) == Some(true) {
+        format!(
+            "已重蒸: {} 段 → {} 字节 (model {})",
+            v.get("chunks_total").and_then(|x| x.as_u64()).unwrap_or(0),
+            v.get("bytes_written").and_then(|x| x.as_u64()).unwrap_or(0),
+            v.get("model").and_then(|x| x.as_str()).unwrap_or("?"),
+        )
+    } else if reason == "cooldown" {
+        "跳过: 24h 内已经蒸过".to_string()
+    } else {
+        format!("没跑成: {reason}")
+    }
+}
+
 #[tauri::command(rename_all = "camelCase")]
 pub async fn dream_distill_run(
     app: AppHandle,
@@ -172,6 +200,7 @@ pub(crate) async fn run_dream(
     });
 
     // 主路径: 读 stdout 逐行 emit
+    let mut final_result: Option<serde_json::Value> = None;
     let mut reader = BufReader::new(stdout).lines();
     while let Some(line) = reader
         .next_line()
@@ -183,6 +212,13 @@ pub(crate) async fn run_dream(
         if let Err(e) = app.emit(DREAM_EVENT, &line) {
             log::warn!("[dream] emit 失败: {} (line={})", e, line);
         }
+        // 终态行 (带 ok 字段) 留一份 —— 进度行没有 ok, 不会误判。
+        // 取最后一条而不是第一条: 中途万一有别的带 ok 的行, 最后那条才是结论。
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
+            if v.get("ok").is_some() {
+                final_result = Some(v);
+            }
+        }
     }
 
     let status = child
@@ -190,13 +226,14 @@ pub(crate) async fn run_dream(
         .await
         .map_err(|e| format!("Dream Engine: wait child 失败: {e}"))?;
     let code = status.code();
-    log::info!("[dream] CLI 退出, code={:?}", code);
+    log::info!("[dream] CLI 退出, code={:?} · {}", code, describe(&final_result));
 
     Ok(DreamRunOutput {
         spawn_ok: true,
         command: cmd_display,
         exit_code: code,
         error: None,
+        result: final_result,
     })
 }
 
@@ -317,4 +354,38 @@ fn strip_env_quotes(raw: &str) -> String {
         s = s[1..s.len() - 1].to_string();
     }
     s
+}
+
+#[cfg(test)]
+mod describe_tests {
+    use super::*;
+    use serde_json::json;
+
+    // 8/4: 定时蒸馏上线当晚就发现 exit_code=0 分不出"真跑了"和"cooldown 跳过了",
+    // 两种情况日志长得一模一样。这组测试钉住它们必须能被区分开。
+
+    #[test]
+    fn ran_and_skipped_are_distinguishable() {
+        let ran = describe(&Some(json!({
+            "ok": true, "chunks_total": 30, "bytes_written": 54129,
+            "model": "catfish-public-qwen-flash"
+        })));
+        let skipped = describe(&Some(json!({"ok": false, "reason": "cooldown"})));
+        assert_ne!(ran, skipped, "两种终态说出来是一样的话, 等于没说");
+        assert!(ran.contains("30") && ran.contains("54129"), "{ran}");
+        assert!(skipped.contains("24h"), "{skipped}");
+    }
+
+    #[test]
+    fn other_failures_carry_the_reason() {
+        let s = describe(&Some(json!({"ok": false, "reason": "llm_fail"})));
+        assert!(s.contains("llm_fail"), "{s}");
+    }
+
+    #[test]
+    fn missing_result_says_so_instead_of_pretending() {
+        // 没终态时不能装作成功 —— 那正是这次要修的毛病
+        let s = describe(&None);
+        assert!(s.contains("没报终态"), "{s}");
+    }
 }

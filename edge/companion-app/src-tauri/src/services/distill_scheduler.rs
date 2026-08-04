@@ -71,7 +71,12 @@ async fn tick_once(app: &AppHandle) {
     }
 
     match dream::run_dream(app.clone(), model.clone(), /* force */ false).await {
-        Ok(out) => log::info!("定时蒸馏: 本轮结束 model={model} → {out:?}"),
+        // 说人话 —— exit_code=0 分不出"跑了"和"cooldown 跳过了", describe 能
+        Ok(out) => log::info!(
+            "定时蒸馏: {} (model={model}, exit={:?})",
+            dream::describe(&out.result),
+            out.exit_code
+        ),
         // 失败要出声 —— 静默失败正是这条线上最贵的毛病
         Err(e) => log::warn!("定时蒸馏失败 model={model}: {e}"),
     }
