@@ -57,6 +57,22 @@ IMAGE_TAR="${IMAGE_TAR:-}"   # 若未装 image · 指到 image tar 路径
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# ── sed -i 的 GNU / BSD 差异 ────────────────────────────────
+#
+# BSD sed (macOS) 的 -i **必须**带备份后缀参数, GNU sed 不带。于是 GNU 写法
+#     sed -i -e "s|a|b|" f
+# 在 mac 上被解析成: -i 的后缀 = "-e", 脚本 = "s|a|b|", 输入文件 = "-e" 和 "f"
+# → `sed: -e: No such file or directory`  (8/4 鸿波在 mac 上试跑踩到)
+#
+# 脚本头写的是 Ubuntu/CentOS, 客户现场确实是 Linux —— 但交付前在本机试跑是常态,
+# 在这里绊一跤纯属浪费。而且 set -e 会让脚本停在半路: .env 已经被 .env.example
+# 覆盖、真密钥只剩在 .env.bak.* 里, 现场看到的是"装到一半没了", 很吓人。
+if sed --version >/dev/null 2>&1; then
+    sed_i() { sed -i "$@"; }        # GNU
+else
+    sed_i() { sed -i '' "$@"; }     # BSD / macOS
+fi
+
 echo "═══════════════════════════════════════════════════════"
 echo "  Catfish 中央服务一键装机 · 达华 POC"
 echo "═══════════════════════════════════════════════════════"
@@ -119,11 +135,27 @@ fi
 # 修: cp 之前把旧值抽出来, 覆盖后写回 (见第 101 段).
 OLD_PG_PW=""
 OLD_JWT_KEY=""
+# CATFISH_SECRET_KEY 也必须在 cp 之前捞出来 —— 8/4 鸿波跑装机时查出来的:
+#
+#   8/1 加这个 key 时, 保护逻辑写在第 235 段 ("有值就不动"), 但那段是在
+#   `cp .env.example .env` **之后**读 .env 的。而 .env.example:19 是
+#   `CATFISH_SECRET_KEY=` (空) —— 于是每次重跑必然命中"空"分支, 生成**新**主密钥。
+#   第 255 行那句"已有值 · 保持不变 (改了会让存库的 API key 全解不开)"
+#   **重跑时永远走不到**。
+#
+#   后果比 PG_PASSWORD 更狠: 密码错了服务连不上库, 至少会炸给你看; 主密钥换了
+#   服务照常起, 只是界面上所有已存的供应商 API key 全部解不开, 而且**旧密文
+#   无法恢复** —— 除非有人留着 .env.bak。
+#
+#   跟第 108 段记录的 PG_PASSWORD 事故是同一个形状: 覆盖在先、保护在后。
+#   那次给 PG_PASSWORD 和 JWT_SIGNING_KEY 接上了捞取, 加第三个 key 时漏了。
+OLD_SECRET_KEY=""
 if [ -f .env ]; then
     echo "→ .env 已存在 · 备份到 .env.bak.$(date +%s)"
     cp .env ".env.bak.$(date +%s)"
     OLD_PG_PW=$(grep -E "^PG_PASSWORD=" .env | head -1 | cut -d= -f2- || true)
     OLD_JWT_KEY=$(grep -E "^JWT_SIGNING_KEY=" .env | head -1 | cut -d= -f2- || true)
+    OLD_SECRET_KEY=$(grep -E "^CATFISH_SECRET_KEY=" .env | head -1 | cut -d= -f2- || true)
 else
     # ── .env 丢了但备份还在 → 自动救回 ──
     #
@@ -146,7 +178,9 @@ else
             OLD_PG_PW="$CAND"
             OLD_JWT_KEY=$(grep -h '^JWT_SIGNING_KEY=' "$LATEST_BAK" 2>/dev/null \
                           | head -1 | cut -d= -f2- || true)
-            echo "→ .env 不存在, 但从 $LATEST_BAK 找回了 PG_PASSWORD / JWT_SIGNING_KEY"
+            OLD_SECRET_KEY=$(grep -h '^CATFISH_SECRET_KEY=' "$LATEST_BAK" 2>/dev/null \
+                             | head -1 | cut -d= -f2- || true)
+            echo "→ .env 不存在, 但从 $LATEST_BAK 找回了 PG_PASSWORD / JWT_SIGNING_KEY / CATFISH_SECRET_KEY"
             echo "  (装机目录被清过? 密钥必须跟 pgdata 卷里的库一致, 否则四个服务全连不上)"
         elif [ "$CAND_N" -gt 1 ]; then
             echo "→ .env 不存在 · 备份里有 $CAND_N 个不同的 PG_PASSWORD · 不自动猜"
@@ -157,7 +191,7 @@ else
 fi
 
 cp .env.example .env
-sed -i \
+sed_i \
     -e "s|<server-ip>|$SERVER_IP|g" \
     -e "s|^CATFISH_OIDC_ISSUER=.*|CATFISH_OIDC_ISSUER=$ISSUER_URL|" \
     -e "s|^CATFISH_IDENTITY_ISSUER=.*|CATFISH_IDENTITY_ISSUER=$ISSUER_URL|" \
@@ -166,19 +200,19 @@ sed -i \
 
 # HTTPS 开关写进 .env 而不是只 export ——
 # 只 export 的话客户之后手动 `docker compose up` 会退回默认 0, HTTPS 悄悄关掉.
-sed -i "s|^CATFISH_ENABLE_HTTPS=.*|CATFISH_ENABLE_HTTPS=$ENABLE_HTTPS|" .env
-sed -i "s|^CATFISH_HTTPS_PORT=.*|CATFISH_HTTPS_PORT=$HTTPS_PORT|" .env
+sed_i "s|^CATFISH_ENABLE_HTTPS=.*|CATFISH_ENABLE_HTTPS=$ENABLE_HTTPS|" .env
+sed_i "s|^CATFISH_HTTPS_PORT=.*|CATFISH_HTTPS_PORT=$HTTPS_PORT|" .env
 
 echo "→ 生成 .env · 关键字段:"
 grep -E "^CATFISH_(OIDC|IDENTITY|ENABLE)_" .env | sed 's/^/    /'
 
 # ── 先写回上一次装机的 secret ──────────────
 if [ -n "$OLD_PG_PW" ]; then
-    sed -i "s|^PG_PASSWORD=.*|PG_PASSWORD=$OLD_PG_PW|" .env
+    sed_i "s|^PG_PASSWORD=.*|PG_PASSWORD=$OLD_PG_PW|" .env
     echo "→ PG_PASSWORD 沿用既有值 (跨装机保留 · 必须与 pgdata 卷里的库一致)"
 fi
 if [ -n "$OLD_JWT_KEY" ]; then
-    sed -i "s|^JWT_SIGNING_KEY=.*|JWT_SIGNING_KEY=$OLD_JWT_KEY|" .env
+    sed_i "s|^JWT_SIGNING_KEY=.*|JWT_SIGNING_KEY=$OLD_JWT_KEY|" .env
     echo "→ JWT_SIGNING_KEY 沿用既有值 (换了会让已签发的 token 全失效)"
 fi
 
@@ -204,14 +238,14 @@ if grep -qE "^PG_PASSWORD=$|^PG_PASSWORD= *$" .env; then
         exit 1
     fi
     RAND_PW=$(openssl rand -hex 16 2>/dev/null || head -c 32 /dev/urandom | base64 | tr -d '/+=' | head -c 24)
-    sed -i "s|^PG_PASSWORD=.*|PG_PASSWORD=$RAND_PW|" .env
+    sed_i "s|^PG_PASSWORD=.*|PG_PASSWORD=$RAND_PW|" .env
     echo "→ PG_PASSWORD 空 · 已生成随机: $RAND_PW  ← ★ 记好 · 数据库唯一密码"
 fi
 
 # JWT_SIGNING_KEY 若仍空 · 生成随机 (首次装机路径)
 if grep -qE "^JWT_SIGNING_KEY=$" .env; then
     JWT_KEY=$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | base64 | tr -d '/+=' | head -c 64)
-    sed -i "s|^JWT_SIGNING_KEY=.*|JWT_SIGNING_KEY=$JWT_KEY|" .env
+    sed_i "s|^JWT_SIGNING_KEY=.*|JWT_SIGNING_KEY=$JWT_KEY|" .env
     echo "→ JWT_SIGNING_KEY 空 · 已生成随机 (64 字符)"
 fi
 
@@ -232,6 +266,12 @@ if ! grep -qE "^CATFISH_SECRET_KEY=" .env; then
     echo "" >> .env
     echo "CATFISH_SECRET_KEY=" >> .env
 fi
+# 先写回上一次装机的主密钥 —— 必须在下面"空则生成"之前。
+# 少了这一步, 下面那个判空必然成立 (cp 刚把它清成 .env.example 的空值),
+# 于是每次重跑都换一把新钥匙, 而"已有值·保持不变"那个 else 分支永远走不到。
+if [ -n "$OLD_SECRET_KEY" ]; then
+    sed_i "s|^CATFISH_SECRET_KEY=.*|CATFISH_SECRET_KEY=$OLD_SECRET_KEY|" .env
+fi
 if grep -qE "^CATFISH_SECRET_KEY=$|^CATFISH_SECRET_KEY= *$" .env; then
     SECRET_KEY=$(openssl rand -base64 32 2>/dev/null | tr '+/' '-_')
     if [ -z "$SECRET_KEY" ]; then
@@ -240,7 +280,7 @@ if grep -qE "^CATFISH_SECRET_KEY=$|^CATFISH_SECRET_KEY= *$" .env; then
         echo "     head -c 32 /dev/urandom | base64 | tr '+/' '-_'"
         exit 1
     fi
-    sed -i "s|^CATFISH_SECRET_KEY=.*|CATFISH_SECRET_KEY=$SECRET_KEY|" .env
+    sed_i "s|^CATFISH_SECRET_KEY=.*|CATFISH_SECRET_KEY=$SECRET_KEY|" .env
     echo ""
     echo "════════════════════════════════════════════════════════════"
     echo "→ CATFISH_SECRET_KEY 已生成:"
