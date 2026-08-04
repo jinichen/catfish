@@ -1599,6 +1599,14 @@ async def merge_files_with_llm(
             old_text = target.read_text(encoding="utf-8")
         except OSError:
             continue
+        # 8/4: 员工改过的条目连送都不送给 LLM。
+        # 送了再拒是浪费 token, 而且只要送出去就有被改写的可能 —— 边界该划在这里,
+        # 不是划在验收上。写盘那边会走 _append_as_appendix 把新内容放进附录。
+        if _is_employee_authored(old_text):
+            logger.info(
+                "catfish-memory P19 跳过 %s: 员工改过的条目, 不交给 LLM 重写", rel_path
+            )
+            continue
         try:
             merged = await _call_merge_llm(old_text, new_content, model)
         except Exception as e:  # noqa: BLE001
@@ -2285,6 +2293,94 @@ def _check_dangling_related(catfish_home: Path, rel_path: str, content: str) -> 
     return missing
 
 
+# ─────────────────────────────────────────────────────────────
+# 人工修正保护 (8/4 鸿波 "有的数据还是需要人修正的")
+# ─────────────────────────────────────────────────────────────
+
+_AUTHORED_BY_EMPLOYEE = re.compile(r"^authored_by:\s*employee\s*$", re.MULTILINE)
+_LLM_APPENDIX_HEAD = "## 蒸馏补充 (待你确认)"
+
+
+def _is_employee_authored(text: str) -> bool:
+    """这条是不是员工亲手写/改过的。"""
+    fm, _ = _split_frontmatter_body(text)
+    return bool(fm) and bool(_AUTHORED_BY_EMPLOYEE.search(fm))
+
+
+def _append_as_appendix(old_text: str, new_text: str) -> str:
+    r"""员工改过的条目 —— 新蒸馏内容只能进附录, 不许覆盖正文。
+
+    # 为什么 (8/4)
+
+    实测: 220 条 wiki 里 **219 条是 LLM 生成的, 只有 1 条 sources=manual**。
+    而 frontmatter 里**没有任何字段记录"这条是谁写的"** —— 没有 author, 没有
+    reviewed, 没有 verified。
+
+    后果不是"信息缺失"。merge_files_with_llm 读文件时根本不看来源:
+
+        old_text = target.read_text(...)          # 不管这是谁写的
+        merged = await _call_merge_llm(old_text, new_content, model)
+
+    **员工在知识体系 TAB 里手工改的内容, 下一次蒸馏会被原样喂给 LLM 重写。**
+    你改掉一条错的断言, 几天后它可能又变回去了, 而且不会收到任何提示。
+
+    8/4 加的那些验收只检查"字段有没有丢、正文有没有暴缩", **不检查"这段是不是
+    人写的"** —— 一次完全合规的 LLM 重写照样能把人的修正抹掉。
+
+    # 做法
+
+    员工改过的条目 (authored_by: employee):
+      · **正文原样保留**, 一个字不动
+      · frontmatter 的 list 字段仍取并集 (tags/related 是累加语义, 不冲突)
+      · 新蒸馏内容进「蒸馏补充 (待你确认)」附录, 员工自己决定要不要并进去
+      · 多次蒸馏只保留最近一份附录, 不层叠
+
+    不是直接丢掉新内容 —— 那会让知识库停止更新。是把**裁决权交回给人**:
+    机器可以提出, 但改不了人已经定下的东西。
+    """
+    old_fm, old_body = _split_frontmatter_body(old_text)
+    new_fm, new_body = _split_frontmatter_body(new_text)
+
+    merged_fm = old_fm
+    for field in _FM_LIST_FIELDS_UNION:
+        old_lists = _parse_frontmatter_lists(old_fm)
+        new_lists = _parse_frontmatter_lists(new_fm)
+        union: list[str] = []
+        seen: dict[str, int] = {}
+        for v in old_lists.get(field, []) + new_lists.get(field, []):
+            n = _rel_item_name(v) if field == "related" else v
+            if n in seen:
+                if v.startswith("{"):
+                    union[seen[n]] = v
+                continue
+            seen[n] = len(union)
+            union.append(v)
+        if not union:
+            continue
+        quoted = ", ".join(
+            v if (v.startswith("{") or v.startswith('"')) else f'"{v}"' for v in union
+        )
+        line = f"{field}: [{quoted}]"
+        if re.search(rf"^{field}:\s*\[.*?\]\s*$", merged_fm, re.MULTILINE):
+            merged_fm = re.sub(
+                rf"^{field}:\s*\[.*?\]\s*$", line, merged_fm, count=1, flags=re.MULTILINE
+            )
+        else:
+            merged_fm = merged_fm.rstrip() + "\n" + line
+
+    # 正文: 员工那份原样保留, 砍掉上一次的附录再贴新的 (不层叠)
+    body = re.split(rf"^{re.escape(_LLM_APPENDIX_HEAD)}\s*$", old_body, maxsplit=1,
+                    flags=re.MULTILINE)[0].rstrip()
+    add = new_body.strip()
+    if add:
+        body += (
+            f"\n\n{_LLM_APPENDIX_HEAD}\n\n"
+            "<!-- 这段是后台蒸馏新抽出来的, 没有覆盖你写的正文。确认后可以自己并进去, "
+            "或者直接删掉这一节。 -->\n\n" + add + "\n"
+        )
+    return f"---\n{merged_fm}\n---\n\n{body}\n"
+
+
 def _write_wiki_files(
     catfish_home: Path,
     files: Dict[str, str],
@@ -2311,7 +2407,25 @@ def _write_wiki_files(
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             final_content = _ensure_frontmatter_fence(rel_path, content)
-            if target.exists() and rel_path not in skip:
+            if target.exists() and _is_employee_authored(
+                target.read_text(encoding="utf-8", errors="replace")
+            ):
+                # 8/4: 员工改过的条目 —— LLM 不许覆盖正文, 新内容只进附录。
+                try:
+                    old_text = target.read_text(encoding="utf-8")
+                    final_content = _append_as_appendix(old_text, content)
+                    logger.info(
+                        "catfish-memory wiki: %s 是员工改过的 (authored_by: employee), "
+                        "正文保持原样, 新蒸馏内容放进「蒸馏补充」附录等他确认",
+                        rel_path,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "catfish-memory 附录合并 %s 失败, **保留员工原文不动**: %s",
+                        rel_path, e,
+                    )
+                    final_content = target.read_text(encoding="utf-8", errors="replace")
+            elif target.exists() and rel_path not in skip:
                 # 重名 + LLM 没处理 → P18 regex merge 安全网
                 try:
                     old_text = target.read_text(encoding="utf-8")

@@ -474,6 +474,9 @@ export interface WikiFileInfo {
   sources: string[];
   size_bytes: number;
   mtime: number;
+  /** 8/4: 员工亲手写/改的条目带 'employee' —— 没有这个标记的都是 LLM 生成、
+   *  没人看过的。数据上区分开之前, 员工分不出哪些可信。 */
+  authored_by?: string | null;
 }
 
 export interface WikiFileFull {

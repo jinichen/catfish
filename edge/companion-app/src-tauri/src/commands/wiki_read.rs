@@ -52,6 +52,13 @@ pub struct WikiFileInfo {
     pub size_bytes: u64,
     /// modified ts (unix epoch sec)
     pub mtime: f64,
+    /// 8/4: 这条是不是员工亲手写/改的 (frontmatter `authored_by: employee`)。
+    ///
+    /// 实测 220 条 wiki 里 219 条是 LLM 生成的, 而在此之前**数据上完全区分不出来**
+    /// —— 员工看不出哪些是没人看过的机器输出, 后台蒸馏也照样覆盖他的修正。
+    /// 插件侧现在靠这个标记跳过 LLM 重写 (catfish_memory_helpers
+    /// ._is_employee_authored), UI 靠它给员工一个视觉区分。
+    pub authored_by: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -353,6 +360,7 @@ fn build_file_info_inner(
         sources,
         size_bytes,
         mtime,
+        authored_by: parse_frontmatter_field(&fm, "authored_by"),
     })
 }
 

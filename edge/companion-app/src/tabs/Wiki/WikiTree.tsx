@@ -573,6 +573,16 @@ function Group({
                 }}
               >
                 {f.title}
+                {/* 8/4: 员工确认过的打个记号。219/220 条是 LLM 生成的, 在此之前
+                    员工完全看不出哪些是没人看过的机器输出。 */}
+                {f.authored_by === "employee" && (
+                  <span
+                    title="你确认过这条 —— 后台蒸馏不会覆盖它的正文"
+                    style={{ marginLeft: 4, opacity: 0.7, fontSize: 10 }}
+                  >
+                    ✎
+                  </span>
+                )}
                 {f.subtype && (
                   <span style={{ fontSize: 10, color: "var(--catfish-text-muted)", marginLeft: 6 }}>
                     {f.subtype}
@@ -882,6 +892,16 @@ function CategorySubgroup({
                   }}
                 >
                   {f.title}
+                {/* 8/4: 员工确认过的打个记号。219/220 条是 LLM 生成的, 在此之前
+                    员工完全看不出哪些是没人看过的机器输出。 */}
+                {f.authored_by === "employee" && (
+                  <span
+                    title="你确认过这条 —— 后台蒸馏不会覆盖它的正文"
+                    style={{ marginLeft: 4, opacity: 0.7, fontSize: 10 }}
+                  >
+                    ✎
+                  </span>
+                )}
                   {f.subtype && (
                     <span style={{ fontSize: 9, color: "var(--catfish-text-muted)", marginLeft: 6 }}>
                       {f.subtype}

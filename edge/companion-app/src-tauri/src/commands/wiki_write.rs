@@ -215,11 +215,64 @@ pub async fn wiki_create_entity_or_concept(
          {body}\n"
     );
 
+    // 8/4: UI 新建的也是员工的
+    let content = mark_authored_by_employee(&content);
     fs::write(&path, &content).map_err(|e| format!("写 {path:?} 失败: {e}"))?;
     let bytes = content.len() as u64;
     let rel_path = format!("{sub_dir}/{slug}.md");
 
     Ok(WikiWriteResult { rel_path, bytes, created: true })
+}
+
+/// 8/4 (鸿波 "有的数据还是需要人修正的"): 给员工亲手写/改的条目打上
+/// `authored_by: employee`。
+///
+/// # 为什么需要
+///
+/// 实测鸿波机器 220 条 wiki, **219 条是 LLM 生成的**, frontmatter 里没有任何
+/// 字段记录"这条是谁写的" —— 没有 author / reviewed / verified。
+///
+/// 后果不是"信息缺失": catfish-memory 的 P19 LLM merge 读文件时根本不看来源,
+/// 员工在知识体系 TAB 里手工改的内容, 下一次蒸馏会被原样喂给 LLM 重写。
+/// 你改掉一条错的断言, 几天后它可能又变回去, 而且不会收到任何提示。
+///
+/// 有了这个标记, 插件侧 (_is_employee_authored) 就会:
+///   · P19 LLM merge 直接跳过, 连送都不送
+///   · 写盘时正文原样保留, 新蒸馏内容只进「蒸馏补充」附录等员工确认
+///
+/// 机器可以提出, 但改不了人已经定下的东西。
+fn mark_authored_by_employee(content: &str) -> String {
+    let trimmed = content.trim_start();
+    if !trimmed.starts_with("---") {
+        // 没 frontmatter 就不硬加 —— 读侧 (wiki_read.rs:81) 要求 --- 开头, 我们
+        // 在这里补一个 frontmatter 反而会改变文件语义。原样返回。
+        return content.to_string();
+    }
+    let after = &trimmed[3..];
+    let Some(end) = after.find("\n---") else {
+        return content.to_string();
+    };
+    let fm = &after[..end];
+    if fm.lines().any(|l| l.trim().starts_with("authored_by:")) {
+        // 已经有了 —— 覆盖成 employee (员工又改了一次也还是员工的)
+        let new_fm: String = fm
+            .lines()
+            .map(|l| {
+                if l.trim().starts_with("authored_by:") {
+                    "authored_by: employee".to_string()
+                } else {
+                    l.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        return format!("---{}\n---{}", new_fm, &after[end + 4..]);
+    }
+    format!(
+        "---{}\nauthored_by: employee\n---{}",
+        fm.trim_end(),
+        &after[end + 4..]
+    )
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -236,6 +289,8 @@ pub async fn wiki_update_file(
     if !abs_path.is_file() {
         return Err(format!("file 不存在 (用 create): {rel_path}"));
     }
+    // 8/4: 员工在 UI 里改的 → 打 authored_by: employee, 挡住后台蒸馏覆盖
+    let content = mark_authored_by_employee(&content);
     fs::write(&abs_path, &content).map_err(|e| format!("写 {abs_path:?} 失败: {e}"))?;
     Ok(WikiWriteResult {
         rel_path,
@@ -669,4 +724,44 @@ pub async fn wiki_ingest_source(
         bytes: content.len() as u64,
         full_text_chars: full_text.chars().count(),
     })
+}
+
+#[cfg(test)]
+mod authored_by_tests {
+    use super::mark_authored_by_employee;
+
+    /// 8/4: 员工在 UI 改的东西必须能被插件侧认出来, 否则下一次蒸馏 LLM 会把它
+    /// 重写掉 —— 实测 220 条 wiki 里 219 条是机器写的, 而数据上完全区分不出来。
+    #[test]
+    fn adds_marker_to_frontmatter() {
+        let out = mark_authored_by_employee("---\ntype: entity\ntitle: X\n---\n\n正文\n");
+        assert!(out.contains("authored_by: employee"), "{out}");
+        assert!(out.contains("title: X") && out.contains("正文"), "{out}");
+        // frontmatter 结构没被破坏 (读侧 split_frontmatter 要求 --- 开头 + \n--- 收尾)
+        assert!(out.starts_with("---\n"), "{out}");
+        assert!(out.contains("\n---"), "{out}");
+    }
+
+    #[test]
+    fn overwrites_existing_marker() {
+        let out = mark_authored_by_employee(
+            "---\ntype: entity\nauthored_by: llm\ntitle: X\n---\n\n正文\n",
+        );
+        assert!(out.contains("authored_by: employee"));
+        assert!(!out.contains("authored_by: llm"));
+    }
+
+    #[test]
+    fn leaves_content_without_frontmatter_alone() {
+        // 没 frontmatter 就不硬加 —— 补一个会改变文件语义 (读侧对 --- 开头很敏感,
+        // 8/4 查了半天的"显示成拼音"就是这个 fence 缺失造成的)
+        let src = "# 标题\n\n纯正文\n";
+        assert_eq!(mark_authored_by_employee(src), src);
+    }
+
+    #[test]
+    fn leaves_half_frontmatter_alone() {
+        let src = "---\ntype: entity\n没有收尾\n";
+        assert_eq!(mark_authored_by_employee(src), src);
+    }
 }
