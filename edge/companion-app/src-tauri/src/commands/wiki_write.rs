@@ -151,6 +151,7 @@ pub async fn wiki_create_entity_or_concept(
 
     let home = catfish_home()?;
     let sub_dir = if kind == "entity" { "wiki/entities" } else { "wiki/concepts" };
+    let is_entity = kind == "entity";
     let dir = home.join(sub_dir);
     fs::create_dir_all(&dir).map_err(|e| format!("建目录 {dir:?} 失败: {e}"))?;
 
@@ -216,7 +217,7 @@ pub async fn wiki_create_entity_or_concept(
     );
 
     // 8/4: UI 新建的也是员工的
-    let content = mark_authored_by_employee(&content);
+    let content = normalize_type_line(&mark_authored_by_employee(&content), is_entity);
     fs::write(&path, &content).map_err(|e| format!("写 {path:?} 失败: {e}"))?;
     let bytes = content.len() as u64;
     let rel_path = format!("{sub_dir}/{slug}.md");
@@ -241,6 +242,79 @@ pub async fn wiki_create_entity_or_concept(
 ///   · 写盘时正文原样保留, 新蒸馏内容只进「蒸馏补充」附录等员工确认
 ///
 /// 机器可以提出, 但改不了人已经定下的东西。
+/// 受控词表 —— 编译期嵌入 edge/contracts/wiki_type_vocab.json。
+///
+/// 打包后的 .app 里没有 edge/contracts/ 目录, 运行时读不到, 所以用
+/// include_str! 编译期嵌进来。同一个文件, Python 侧
+/// (catfish_memory_helpers._load_type_vocab) 运行时读它, 两边不会漂。
+const TYPE_VOCAB_JSON: &str = include_str!("../../../../contracts/wiki_type_vocab.json");
+
+/// 把 entity_type / concept_type 归一化到受控词表。
+///
+/// # 为什么 UI 侧也要做 (8/4 鸿波「新增的知识库能不能自动满足 ontology 规则」)
+///
+/// 之前**只有蒸馏侧归一化**, 员工在界面上手工建的条目不归一 —— 界面上敲
+/// 「规则」就存「规则」, 蒸馏出来的同类条目存「rule」。同一个受控词表, 两条
+/// 产线两个结果, 于是知识库里 rule/规则、standard/标准 长期并存, 指的是同一
+/// 个东西。这跟今天修的"名字解析五套口径"是同一个病, 所以词表直接抽成共享
+/// 文件, 不给它分叉的机会。
+///
+/// 表外的值**不拒绝, 只归一化大小写** —— 词表要能长。P3.5.176 删 enum 的
+/// 理由仍然成立: 硬编码 enum 不是更严格, 是让员工场景里的真实类型无处可去。
+fn canon_subtype(is_entity: bool, raw: &str) -> String {
+    let v = raw.trim();
+    if v.is_empty() {
+        return String::new();
+    }
+    let low = v.to_lowercase();
+    let Ok(vocab) = serde_json::from_str::<serde_json::Value>(TYPE_VOCAB_JSON) else {
+        // 词表坏了不能挡住员工存条目 —— 原样返回
+        log::warn!("受控词表解析失败, 类型不归一化");
+        return v.to_string();
+    };
+    let aliases = &vocab["aliases"];
+    let canon = aliases
+        .get(v)
+        .or_else(|| aliases.get(&low))
+        .and_then(|x| x.as_str())
+        .unwrap_or(&low)
+        .to_string();
+    if canon != low {
+        log::info!("类型归一化: {v} → {canon}");
+    }
+    let key = if is_entity { "entity_types" } else { "concept_types" };
+    let known = vocab[key]
+        .as_array()
+        .map(|a| a.iter().any(|x| x.as_str() == Some(canon.as_str())))
+        .unwrap_or(false);
+    if !known {
+        // 不拒绝, 但要有人知道 —— 词表长不长得靠这条日志
+        log::info!("类型「{canon}」在受控词表外 (不拒绝, 但请确认是不是新类型)");
+    }
+    canon
+}
+
+/// 把 frontmatter 里的 entity_type / concept_type 行换成归一化后的值。
+fn normalize_type_line(content: &str, is_entity: bool) -> String {
+    let key = if is_entity { "entity_type:" } else { "concept_type:" };
+    content
+        .lines()
+        .map(|line| {
+            let t = line.trim_start();
+            if let Some(rest) = t.strip_prefix(key) {
+                let canon = canon_subtype(is_entity, rest.trim().trim_matches('"').trim_matches('\''));
+                if !canon.is_empty() {
+                    let indent = &line[..line.len() - t.len()];
+                    return format!("{indent}{key} {canon}");
+                }
+            }
+            line.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + if content.ends_with('\n') { "\n" } else { "" }
+}
+
 fn mark_authored_by_employee(content: &str) -> String {
     let trimmed = content.trim_start();
     if !trimmed.starts_with("---") {
@@ -290,7 +364,9 @@ pub async fn wiki_update_file(
         return Err(format!("file 不存在 (用 create): {rel_path}"));
     }
     // 8/4: 员工在 UI 里改的 → 打 authored_by: employee, 挡住后台蒸馏覆盖
-    let content = mark_authored_by_employee(&content);
+    //      + 类型归一化 (kind 从路径判, 跟 wiki_read.rs::build_file_info 同口径)
+    let is_entity = rel_path.starts_with("wiki/entities/");
+    let content = normalize_type_line(&mark_authored_by_employee(&content), is_entity);
     fs::write(&abs_path, &content).map_err(|e| format!("写 {abs_path:?} 失败: {e}"))?;
     Ok(WikiWriteResult {
         rel_path,
@@ -763,5 +839,68 @@ mod authored_by_tests {
     fn leaves_half_frontmatter_alone() {
         let src = "---\ntype: entity\n没有收尾\n";
         assert_eq!(mark_authored_by_employee(src), src);
+    }
+}
+
+#[cfg(test)]
+mod type_vocab_tests {
+    use super::*;
+
+    // 8/4: 之前只有蒸馏侧归一化, UI 手工建的不归一 —— 界面上敲「规则」存
+    // 「规则」, 蒸馏出来的存「rule」。同一个受控词表两条产线两个结果。
+
+    #[test]
+    fn chinese_synonym_is_canonicalized() {
+        assert_eq!(canon_subtype(false, "规则"), "rule");
+        assert_eq!(canon_subtype(false, "流程"), "process");
+        assert_eq!(canon_subtype(true, "资质"), "cert");
+        assert_eq!(canon_subtype(true, "公司"), "org");
+    }
+
+    #[test]
+    fn known_english_is_kept() {
+        assert_eq!(canon_subtype(true, "cert"), "cert");
+    }
+
+    #[test]
+    fn unknown_type_is_allowed_not_rejected() {
+        // 词表要能长 —— 表外不拒绝, 只小写归一 + 打日志
+        assert_eq!(canon_subtype(true, "Spaceship"), "spaceship");
+    }
+
+    #[test]
+    fn empty_stays_empty() {
+        assert_eq!(canon_subtype(true, "   "), "");
+    }
+
+    #[test]
+    fn rewrites_only_the_type_line() {
+        let src = "---\ntype: concept\ntitle: X\nconcept_type: 规则\n---\n\n正文。\n";
+        let out = normalize_type_line(src, false);
+        assert!(out.contains("concept_type: rule"), "{out}");
+        assert!(out.contains("title: X") && out.contains("正文。"), "{out}");
+        assert!(out.ends_with('\n'), "尾部换行被吃了");
+    }
+
+    #[test]
+    fn already_canonical_is_unchanged() {
+        let src = "---\ntype: entity\ntitle: X\nentity_type: cert\n---\n\n正文。\n";
+        assert_eq!(normalize_type_line(src, true), src);
+    }
+
+    #[test]
+    fn entity_and_concept_use_different_vocab() {
+        // concept_type 行在 is_entity=true 时不该被动
+        let src = "---\nconcept_type: 规则\n---\n\n正文。\n";
+        assert_eq!(normalize_type_line(src, true), src);
+    }
+
+    #[test]
+    fn vocab_json_is_embedded_and_parses() {
+        // include_str! 路径写错的话这条会红 —— 打包后 .app 里没有
+        // edge/contracts/ 目录, 只能靠编译期嵌入
+        let v: serde_json::Value = serde_json::from_str(TYPE_VOCAB_JSON).unwrap();
+        assert_eq!(v["aliases"]["规则"], "rule");
+        assert!(v["entity_types"].as_array().unwrap().len() >= 5);
     }
 }
