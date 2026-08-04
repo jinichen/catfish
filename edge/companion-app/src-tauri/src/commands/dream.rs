@@ -68,6 +68,24 @@ pub async fn dream_distill_run(
     app: AppHandle,
     model: String,
 ) -> Result<DreamRunOutput, String> {
+    // 员工点按钮 = 现在就想跑, 跳 24h cooldown
+    run_dream(app, model, /* force */ true).await
+}
+
+/// 真正的 spawn。force=false 时带 --no-force, 24h 内跑过就直接返 cooldown。
+///
+/// 8/4: 抽出来给后台定时蒸馏用 (services::distill_scheduler)。
+/// 之前定时器写在 catfish-memory 的 Python 侧 (CatfishMemoryProvider.__init__),
+/// 但实测 `~/.hermes/config.yaml` 的 plugins.enabled 里**根本没有 catfish-memory**
+/// —— 这个 plugin 在当前架构下从来不是被 hermes 加载的 plugin, 它只以
+/// dream_cli.py 子进程的形式活着。挂在 provider 构造里的定时器是死代码。
+///
+/// 所以定时器必须在 Companion 这边 —— 这里本来就是唯一会执行到蒸馏的地方。
+pub(crate) async fn run_dream(
+    app: AppHandle,
+    model: String,
+    force: bool,
+) -> Result<DreamRunOutput, String> {
     let model = model.trim().to_string();
     if model.is_empty() {
         return Err("Dream Engine: model 参数为空, 不跑".into());
@@ -91,12 +109,17 @@ pub async fn dream_distill_run(
         ));
     }
 
-    let args = vec![
+    let mut args = vec![
         "-u".to_string(),  // unbuffered, 跟 PYTHONUNBUFFERED 双保险
         cli_path.to_string_lossy().to_string(),
         "--model".to_string(),
         model.clone(),
     ];
+    if !force {
+        // dream_cli 默认 force=True (员工主动触发场景); 后台定时必须尊重 24h
+        // cooldown, 否则每 15 分钟重蒸一次 journal, 白烧 LLM。
+        args.push("--no-force".to_string());
+    }
     let cmd_display = format!("{} {}", python.display(), args.join(" "));
     log::info!("[dream] spawn: {}", cmd_display);
 

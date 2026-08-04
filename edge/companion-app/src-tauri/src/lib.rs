@@ -595,6 +595,11 @@ pub fn run() {
             // 切 set_ignore_cursor_events 让透明区真透 (附近点击穿到桌面),
             // 桌宠区接事件 (能点能拖). 见 services/pet_hover.rs.
             services::pet_hover::schedule_pet_hover_tracker(app.handle().clone());
+            // 8/4: 定时蒸馏。以前那句"由 hermes plugin 自动每 24h 跑"是空的 ——
+            // catfish-memory 根本没被 hermes 加载 (config.yaml plugins.enabled
+            // 里没有它), 蒸馏只在员工点按钮时以 dream_cli.py 子进程形态跑过。
+            // 详见 services/distill_scheduler.rs 顶部。
+            services::distill_scheduler::schedule_distill(app.handle().clone());
 
             // BL-E27 spike (5/5 凌晨): macOS 透明窗 — 不依赖 unsafe NSWindow 调用.
             // 单纯 transparent:true 在某些 macOS 版本仍白底, macOSPrivateApi:true (config 顶层加)

@@ -20,6 +20,7 @@ pub mod political_config; // P3.3.53 (6/13 鸿波): 政治敏感规则配置 —
 pub mod hermes_api_config; // BL-COMPANION-HERMES-API-CONFIG (5/19, Phase 2-2A)
 pub mod hermes_jwt_sync;   // BL-HERMES-JWT-SYNC (7/19 Task #15): JWT auto-sync hermes 3 处
 pub mod oauth;
+pub mod distill_scheduler;
 pub mod pet_hover;
 pub mod picker_config;    // P3.5.28 (6/17 鸿波): chat picker 选的 model 桥给 background task
 pub mod role_config;      // P3.5.29 Phase 4 (6/17 鸿波): GET /v1/roles fetch + 5min cache 给 background task
