@@ -27,10 +27,62 @@ pub struct SpawnHandle {
     pub pid: u32,
 }
 
+/// 单个日志文件的上限, 超过就轮转。
+const LOG_MAX_BYTES: u64 = 32 * 1024 * 1024;
+/// 保留几个历史文件 (.1 .2 .3)。
+const LOG_KEEP: u32 = 3;
+
+/// 子进程日志轮转 —— 在 spawn 前做, 所以每次重启都是一次检查点。
+///
+/// # 为什么 (8/4 查 tool-bridge 反复重启时看到的)
+///
+/// 实测鸿波机器: `gateway.log` **462 MB**, `tool-bridge.log` 46 MB, 从来不轮转。
+/// tool-bridge 每天重启 ~100 次, 每次把整个启动序列 (70+ 行 patch 日志) 重写一遍,
+/// 一直涨到磁盘满为止。
+///
+/// 更实际的伤害是**查不了问题**: 出事想看日志, 先得跟一个几百 MB 的文件搏斗,
+/// 而真正有用的最后几十行埋在最底下。日志留着是为了被读, 读不了就等于没有。
+///
+/// 放在 spawn 前而不是起个后台线程定时轮转: 这里天然是安全点 —— 旧进程已经不再
+/// 写了, 新进程还没开始写, 不存在"轮转时有人正持有 fd 往里写"的竞态。
+fn rotate_if_needed(path: &std::path::Path) {
+    rotate_with_limit(path, LOG_MAX_BYTES, LOG_KEEP);
+}
+
+/// 阈值/代数做成参数, 测试才不用真写 32MB × 6 次。
+fn rotate_with_limit(path: &std::path::Path, max_bytes: u64, keep: u32) {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return; // 还没有这个文件 —— 首次启动, 无事可做
+    };
+    if meta.len() < max_bytes {
+        return;
+    }
+    // 最老的先删, 然后 .2→.3 .1→.2 当前→.1
+    let nth = |i: u32| path.with_extension(format!(
+        "{}.{i}",
+        path.extension().and_then(|s| s.to_str()).unwrap_or("log")
+    ));
+    let _ = std::fs::remove_file(nth(keep));
+    for i in (1..keep).rev() {
+        let _ = std::fs::rename(nth(i), nth(i + 1));
+    }
+    match std::fs::rename(path, nth(1)) {
+        Ok(()) => log::info!(
+            "日志轮转: {} 超过 {} MB, 已转存为 .1 (保留 {} 份)",
+            path.display(),
+            max_bytes / 1024 / 1024,
+            keep
+        ),
+        // 轮转失败不能挡住服务启动 —— 日志太大是小问题, 服务起不来是大问题
+        Err(e) => log::warn!("日志轮转失败 ({}), 继续追加写: {e}", path.display()),
+    }
+}
+
 pub fn spawn_detached(cfg: SpawnConfig) -> anyhow::Result<SpawnHandle> {
     if let Some(parent) = cfg.log_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    rotate_if_needed(&cfg.log_path);
 
     let log_file = std::fs::OpenOptions::new()
         .create(true)
@@ -195,5 +247,63 @@ fn cmdline_matches(pid: u32, substr: &str) -> Option<bool> {
             return None;
         }
         Some(s.contains(substr))
+    }
+}
+
+#[cfg(test)]
+mod rotate_tests {
+    use super::*;
+
+    fn write(p: &std::path::Path, n: usize) {
+        std::fs::write(p, vec![b'x'; n]).unwrap();
+    }
+
+    const LIMIT: u64 = 1024;
+    const KEEP: u32 = 3;
+
+    #[test]
+    fn small_log_is_left_alone() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("a.log");
+        write(&p, 100);
+        rotate_with_limit(&p, LIMIT, KEEP);
+        assert!(p.exists() && !d.path().join("a.log.1").exists());
+        assert_eq!(std::fs::metadata(&p).unwrap().len(), 100);
+    }
+
+    #[test]
+    fn oversized_log_moves_to_dot_1() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("a.log");
+        write(&p, LIMIT as usize + 1);
+        rotate_with_limit(&p, LIMIT, KEEP);
+        // 当前文件让位, 内容进 .1; spawn 会重新建一个空的
+        assert!(!p.exists(), "旧日志该被挪走");
+        assert!(d.path().join("a.log.1").exists());
+    }
+
+    #[test]
+    fn only_keeps_n_generations() {
+        // 实测 gateway.log 462MB —— 轮转必须有上限, 否则只是把一个大文件
+        // 变成一堆大文件, 磁盘照样满。
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("a.log");
+        for _ in 0..(KEEP + 3) {
+            write(&p, LIMIT as usize + 1);
+            rotate_with_limit(&p, LIMIT, KEEP);
+        }
+        for i in 1..=KEEP {
+            assert!(d.path().join(format!("a.log.{i}")).exists(), "少了第 {i} 代");
+        }
+        assert!(
+            !d.path().join(format!("a.log.{}", KEEP + 1)).exists(),
+            "代数超了上限, 磁盘还是会被撑满"
+        );
+    }
+
+    #[test]
+    fn missing_file_is_not_an_error() {
+        let d = tempfile::tempdir().unwrap();
+        rotate_with_limit(&d.path().join("never-existed.log"), LIMIT, KEEP); // 不该 panic
     }
 }
