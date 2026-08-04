@@ -211,7 +211,39 @@ PATCH_4_INSTALL_REPO = f"""    $didUpdate = $false
             Move-Item -LiteralPath $InstallDir -Destination $backupDir -ErrorAction SilentlyContinue
         }}
         New-Item -ItemType Directory -Force -Path (Split-Path $InstallDir) -ErrorAction SilentlyContinue | Out-Null
-        Copy-Item -LiteralPath $effectiveSourceDir -Destination $InstallDir -Recurse -Force
+        # 8/4: 改用 robocopy —— Copy-Item 在这个文件量级上是小时级。
+        #
+        # 8/3 之前包里只有 hermes 源码 (几千个文件), Copy-Item -Recurse 几秒完事。
+        # 8/3 加了 npm ci 把 node_modules 打进包 (为了达华无外网现场), 文件数直接
+        # 上到十万级 —— Copy-Item 逐个走 .NET 文件 API, 每个文件都吃一次 NTFS 元
+        # 数据开销 + Defender 实时扫描, 现场实测卡在这一步看不出在动。
+        #
+        # 而且它**什么都不输出** —— 员工看到的就是装机器停在
+        # "copying hermes-agent from ... to ..." 一行不动, 分不清是死了还是在跑。
+        #
+        # robocopy 是 Windows 自带 (Vista 起), 多线程 (/MT), 对海量小文件快一个
+        # 数量级以上。/NFL /NDL 关掉逐文件日志 (不然刷屏更看不清), 保留汇总。
+        #
+        # ⚠ robocopy 的退出码不是 0 才算成功: 0-7 都是成功 (1 = 有文件被复制,
+        #   2 = 有额外文件, 3 = 1+2 ...), **>=8 才是真失败**。直接判 $LASTEXITCODE
+        #   -ne 0 会把正常成功当成失败 —— 这是 robocopy 最经典的坑。
+        $roboSrc = $effectiveSourceDir.TrimEnd('\\')
+        $roboDst = $InstallDir.TrimEnd('\\')
+        $roboOk = $false
+        if (Get-Command robocopy -ErrorAction SilentlyContinue) {{
+            Write-Info "  (用 robocopy 多线程复制, node_modules 文件多, 请等一会)"
+            robocopy $roboSrc $roboDst /E /MT:16 /R:1 /W:1 /NFL /NDL /NP | Out-Null
+            if ($LASTEXITCODE -lt 8) {{
+                $roboOk = $true
+            }} else {{
+                Write-Warn "robocopy 退出码 $LASTEXITCODE (>=8 = 失败), 回退 Copy-Item"
+            }}
+            $global:LASTEXITCODE = 0
+        }}
+        if (-not $roboOk) {{
+            Write-Info "  (回退 Copy-Item —— 文件多的话会很慢, 别以为死了)"
+            Copy-Item -LiteralPath $effectiveSourceDir -Destination $InstallDir -Recurse -Force
+        }}
         # git init 让上游 update 路径能工作 (未来员工有网时 hermes update)
         #
         # ⚠ 整段包 try/catch, 而且**失败不算安装失败**。
