@@ -179,3 +179,47 @@ def test_write_path_normalizes_type(tmp_path):
         {"wiki/concepts/x.md": "---\ntype: concept\ntitle: X\nconcept_type: 流程\n---\n\n正文。\n"},
     )
     assert "concept_type: process" in (tmp_path / "wiki/concepts/x.md").read_text(encoding="utf-8")
+
+
+# ─────────────────────────────────────────────────────────────
+# ④ 写入时体检 (8/4) —— aliases / rel 以前只在 prompt 里要求, 没人检查
+# ─────────────────────────────────────────────────────────────
+
+from catfish_memory_helpers import report_ontology_gaps  # noqa: E402
+
+
+def test_missing_aliases_is_reported():
+    """★ 408 条边 0 条带类型的成因是"要求了但不验证"。别再犯第二次。"""
+    c = '---\ntype: entity\ntitle: 中电福富信息科技有限公司\n---\n\n正文。\n'
+    assert any("aliases" in g for g in report_ontology_gaps("wiki/entities/x.md", c))
+
+
+def test_untyped_relation_is_reported():
+    c = ('---\ntype: entity\ntitle: X\naliases: ["x"]\n'
+         'related: ["[[A]]", {name: "B", rel: "隶属"}]\n---\n\n正文。\n')
+    gaps = report_ontology_gaps("wiki/entities/x.md", c)
+    assert any("1/2" in g and "rel" in g for g in gaps), gaps
+
+
+def test_fully_compliant_entry_reports_nothing():
+    """别误报 —— 合规的条目必须安静。"""
+    c = ('---\ntype: entity\ntitle: X\naliases: ["x", "XX"]\n'
+         'related: [{name: "A", rel: "隶属"}]\n---\n\n正文。\n')
+    assert report_ontology_gaps("wiki/entities/x.md", c) == []
+
+
+def test_concept_without_aliases_is_fine():
+    """aliases 是给实体的 —— 概念没有简称/全称问题, 不该被要求。"""
+    c = '---\ntype: concept\ntitle: 资质申报流程\nconcept_type: process\n---\n\n正文。\n'
+    assert report_ontology_gaps("wiki/concepts/x.md", c) == []
+
+
+def test_no_frontmatter_is_the_first_thing_reported():
+    assert report_ontology_gaps("wiki/entities/x.md", "# 纯 markdown\n") == ["没有 frontmatter"]
+
+
+def test_vocab_comes_from_shared_contract():
+    """词表必须来自 contracts/wiki_type_vocab.json —— Rust 侧读同一份。"""
+    from catfish_memory_helpers import _TYPE_ALIASES, _ENTITY_TYPES
+    assert _TYPE_ALIASES.get("规则") == "rule"
+    assert "cert" in _ENTITY_TYPES

@@ -2184,25 +2184,22 @@ def _redirect_to_existing_equivalent(
 #   1. **归一化而不是拒绝** —— 规则→rule 这种直接改, 不丢数据
 #   2. **不认识的新类型放行 + WARNING** —— 词表要能长, 但长了要有人知道
 #
-_TYPE_ALIASES = {
-    # concept
-    "规则": "rule", "标准": "standard", "流程": "process", "原则": "principle",
-    "体系": "system", "方法": "method", "规范": "standard",
-    # entity
-    "证书": "cert", "资质": "cert", "认证": "cert",
-    "人": "person", "人员": "person", "员工": "person",
-    "公司": "org", "机构": "org", "组织": "org",
-    "部门": "department", "项目": "project", "文件": "doc", "文档": "doc",
-    "数据": "data", "通知": "notification",
-}
+# 受控词表从 edge/contracts/wiki_type_vocab.json 读 —— Rust 侧 (wiki_write.rs)
+# 读的是同一份。8/4: 之前只有蒸馏侧归一化, UI 手工建的不归一, 同一个词表两条
+# 产线两个结果。抽成共享文件, 不给它分叉的机会 (跟名字解析那套 contract 同因)。
+def _load_type_vocab() -> tuple[dict, frozenset, frozenset]:
+    import json as _json
+    p = Path(__file__).resolve().parents[2] / "contracts" / "wiki_type_vocab.json"
+    try:
+        d = _json.loads(p.read_text(encoding="utf-8"))
+        return d["aliases"], frozenset(d["entity_types"]), frozenset(d["concept_types"])
+    except (OSError, ValueError, KeyError) as e:
+        # 读不到不能让蒸馏整个挂掉 —— 退化成"不归一化", 但要出声
+        logger.warning("读不到受控词表 %s (%s), 类型归一化本次跳过", p, e)
+        return {}, frozenset(), frozenset()
 
-_ENTITY_TYPES = frozenset({
-    "cert", "person", "org", "department", "project",
-    "doc", "data", "system", "notification", "standard",
-})
-_CONCEPT_TYPES = frozenset({
-    "principle", "standard", "process", "rule", "system", "method",
-})
+
+_TYPE_ALIASES, _ENTITY_TYPES, _CONCEPT_TYPES = _load_type_vocab()
 
 
 def _canon_subtype(rel_path: str, raw: str) -> tuple[str, bool]:
@@ -2417,6 +2414,9 @@ def _write_wiki_files(
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             final_content = _ensure_frontmatter_fence(rel_path, content)
+            # 8/4: 本体规则体检 —— 只报不拦, 见 report_ontology_gaps 文档
+            for _gap in report_ontology_gaps(rel_path, final_content):
+                logger.info("catfish-memory wiki 体检: %s —— %s", rel_path, _gap)
             if target.exists() and _is_employee_authored(
                 target.read_text(encoding="utf-8", errors="replace")
             ):
@@ -2452,6 +2452,9 @@ def _write_wiki_files(
                         rel_path, e,
                     )
                     final_content = _ensure_frontmatter_fence(rel_path, content)
+            # 8/4: 本体规则体检 —— 只报不拦, 见 report_ontology_gaps 文档
+            for _gap in report_ontology_gaps(rel_path, final_content):
+                logger.info("catfish-memory wiki 体检: %s —— %s", rel_path, _gap)
             final_content = _normalize_types(rel_path, final_content)
             _scan_conclusion_words(rel_path, final_content)
             _check_dangling_related(catfish_home, rel_path, final_content)
@@ -2465,3 +2468,34 @@ def _write_wiki_files(
     return (n_entities, n_concepts)
 
 
+
+
+def report_ontology_gaps(rel_path: str, content: str) -> list[str]:
+    """写入时体检 —— 缺 aliases / 关系没类型, 报出来。
+
+    # 为什么只报不拦 (8/4)
+
+    aliases 和 typed relation 这两条, 到今天为止**只在 prompt 里要求过, 没有
+    任何代码检查**。408 条关系边 0 条带类型, 成因就是"读侧支持了、写侧 prompt
+    没提"; 现在 prompt 提了, 但 LLM 哪天不配合照样没人知道 —— 从"没人要求"
+    变成"要求了但不验证", 还是会静默退化。
+
+    不拦是因为拦了就丢数据: 一条内容正确、只是没写别名的条目, 价值远大于零。
+    但"不拦"不等于"不出声" —— 这两天所有最贵的 bug 都是不出声造成的。
+    """
+    gaps: list[str] = []
+    fm, _ = _split_frontmatter_body(content)
+    if not fm:
+        return ["没有 frontmatter"]
+
+    if "entities/" in rel_path and "aliases:" not in fm:
+        gaps.append("没有 aliases 字段 (简称/全称对不上时会连不上或连错)")
+
+    items = _parse_frontmatter_lists(fm).get("related", [])
+    untyped = [i for i in items if not i.lstrip().startswith("{")]
+    if items and untyped:
+        gaps.append(
+            f"{len(untyped)}/{len(items)} 条关系没有 rel 类型 "
+            f"(只知道有关系, 不知道是什么关系)"
+        )
+    return gaps

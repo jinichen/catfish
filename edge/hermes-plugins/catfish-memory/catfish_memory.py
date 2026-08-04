@@ -2503,10 +2503,41 @@ def _try_distill_once() -> None:
         fh.close()
 
 
+def _log_wiki_health() -> None:
+    """每轮顺带体检一次知识库, 指标写进日志。
+
+    8/4: 结构指标本来只有员工手动跑 wiki_health.py 才看得到 —— 也就是
+    "想起来查" 才知道。而这两天所有最贵的 bug 都是没人想起来去查的。
+    让它自己每 15 分钟说一次, 掉了至少有据可查。
+    """
+    try:
+        from wiki_health import scan
+    except ImportError:
+        return  # 体检模块不在不该影响蒸馏
+    try:
+        r = scan(_catfish_home())
+        if not r.get("总条目"):
+            return
+        t, e = r["总条目"], r["关系边"] or 1
+        logger.info(
+            "知识库体检: %d 条 · frontmatter 完整 %.0f%% · 类型已标注 %.0f%% · "
+            "引用有效 %.0f%% · 关系带类型 %.0f%% · 重复 %d 组 · 歧义 %d 条",
+            t,
+            (t - r["缺frontmatter"]) / t * 100,
+            r["有类型"] / t * 100,
+            (e - r["dangling边"] - r["歧义边"]) / e * 100,
+            r["带类型的边"] / e * 100,
+            r["重复组"], r["歧义边"],
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("知识库体检出错, 不影响蒸馏")
+
+
 def _distill_timer_loop() -> None:
     time.sleep(_DISTILL_TIMER_STARTUP_DELAY_SEC)
     while True:
         _try_distill_once()
+        _log_wiki_health()
         time.sleep(_DISTILL_TIMER_INTERVAL_SEC)
 
 

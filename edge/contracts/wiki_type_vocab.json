@@ -1,0 +1,57 @@
+{
+  "_why": [
+    "entity_type / concept_type 的受控词表, Python (catfish_memory_helpers._canon_subtype)",
+    "和 Rust (wiki_write.rs::canon_subtype) 都读这一份。",
+    "",
+    "8/4: 之前只有蒸馏侧做归一化, UI 手工建的条目不做 —— 同一个词表两条产线两个",
+    "结果, 界面上敲「规则」存「规则」, 蒸馏出来的存「rule」。这跟今天修的名字解析",
+    "五套口径是同一个病, 所以直接抽成共享文件, 不给它分叉的机会。",
+    "",
+    "表外的值不拒绝, 只报告 —— 词表要能长 (P3.5.176 删 enum 的理由仍然成立:",
+    "硬编码 enum 不是更严格, 是让员工场景里的真实类型无处可去)。"
+  ],
+  "aliases": {
+    "规则": "rule",
+    "标准": "standard",
+    "流程": "process",
+    "原则": "principle",
+    "体系": "system",
+    "方法": "method",
+    "规范": "standard",
+    "证书": "cert",
+    "资质": "cert",
+    "认证": "cert",
+    "人": "person",
+    "人员": "person",
+    "员工": "person",
+    "公司": "org",
+    "机构": "org",
+    "组织": "org",
+    "部门": "department",
+    "项目": "project",
+    "文件": "doc",
+    "文档": "doc",
+    "数据": "data",
+    "通知": "notification"
+  },
+  "entity_types": [
+    "cert",
+    "data",
+    "department",
+    "doc",
+    "notification",
+    "org",
+    "person",
+    "project",
+    "standard",
+    "system"
+  ],
+  "concept_types": [
+    "method",
+    "principle",
+    "process",
+    "rule",
+    "standard",
+    "system"
+  ]
+}
