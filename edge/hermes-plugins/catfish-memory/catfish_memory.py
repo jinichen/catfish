@@ -337,6 +337,11 @@ class CatfishMemoryProvider(MemoryProvider):
         self._last_summary_ts: float = 0.0  # epoch seconds; 0 = 没跑过
         self._buffer_lock = threading.Lock()
 
+        # 8/4: 起定时蒸馏。放这里是因为 hermes 加载 plugin 时会构造一次 provider,
+        # 是这个 plugin 唯一确定会被执行到的入口 —— 没有 on_load 之类的钩子。
+        # 内部有 started 标志, 重复构造只会起一个线程。
+        start_distill_timer()
+
     @property
     def name(self) -> str:
         return "catfish-memory"
@@ -2402,3 +2407,122 @@ async def run_distill_for_dream_engine(
         "model": model,
         "took_seconds": time.time() - started,
     }
+
+
+# ═════════════════════════════════════════════════════════════
+# 定时蒸馏 (8/4 鸿波「为什么超 24 小时蒸馏没自动启动, 要手动」)
+# ═════════════════════════════════════════════════════════════
+#
+# 查下来: **根本没有定时器**。_summarize_and_distill_async 全文件只有一个调用点,
+# 在会话结束、日志写完之后; 整个 plugin 没有 Timer / cron / while True。
+#
+# 所以「每 24h 自动跑」这个说法一直是不准的。真实语义是「**下一次会话结束时**
+# 才去检查距上次是否超 24h」—— 没有会话结束就永远不跑, 超多久都不跑。
+# 而 Dream Engine 卡片上明写着"平时由 hermes plugin 自动每 24h 跑",
+# 描述的是一个不存在的东西。
+#
+# ── 为什么是"定期敲门"而不是"睡到 24h 后醒来" ──
+#
+# 这个 plugin 跑在 tool-bridge 进程里, 而那个进程会重启 (config 真变了就该重启,
+# 这是设计)。长睡眠会被每次重启清零, 于是永远等不到 24h —— 那正是老实现"挂在
+# 会话结束上"同一类错误的另一种写法: **把状态放在活不了那么久的东西里**。
+#
+# 改成每 15 分钟敲一次门, 真正的 24h 判定交给 run_distill_for_dream_engine(
+# force=False) —— 它读 ~/.catfish/memory_distill_state.json, cooldown 内直接返
+# {ok: False, reason: 'cooldown'}。状态在盘上, 进程重启多少次都不丢。
+# 95/96 次敲门就是读一个小 JSON, 代价可以忽略。
+#
+# ── 为什么要跨进程锁 ──
+#
+# plugin 可能被不止一个进程加载。两个定时器同时过 cooldown 会同时开跑, 两个
+# LLM 长任务抢着写同一个 distilled_facts.md。用 flock 非阻塞: 抢不到就跳过这轮,
+# 15 分钟后再来 —— 不排队, 因为排队的那个醒来时 cooldown 已经被写上了。
+# 锁文件用 fcntl.flock, 跟 helpers 里 sync_turn 状态那套一致 (进程死了内核自动释放,
+# 不会留下需要人清的死锁)。
+
+_DISTILL_TIMER_INTERVAL_SEC = 15 * 60
+#: 启动后先等一会 —— tool-bridge 启动阶段在 import hermes / 装 156 个工具,
+#: 这时候再压一个 LLM 长任务上去没必要。
+_DISTILL_TIMER_STARTUP_DELAY_SEC = 5 * 60
+
+_distill_timer_started = False
+_distill_timer_lock = threading.Lock()
+
+
+def _try_distill_once() -> None:
+    """敲一次门。cooldown 没到 / 抢不到锁 / 没选模型 → 安静返回。"""
+    import fcntl
+
+    # 注意 _catfish_home() 返回 Path 而不是 Optional[Path] —— 判 `is None`
+    # 是个永远不触发的空守卫。要判的是目录在不在。
+    home = _catfish_home()
+    if not home.is_dir():
+        logger.debug("定时蒸馏: %s 不存在, 跳过", home)
+        return
+
+    # 蒸馏必须用**员工在 picker 里选的模型** —— 这是鸿波定的原则, 不另设
+    # distill_model。取不到就不跑, 而不是退到某个默认模型偷偷用别的。
+    model = _read_picker_state_model(home)
+    if not model:
+        logger.debug("定时蒸馏: picker 没有选定模型, 跳过这轮")
+        return
+
+    lock_path = home / "memory_distill.lock"
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fh = open(lock_path, "w", encoding="utf-8")  # noqa: SIM115
+    except OSError as e:
+        logger.warning("定时蒸馏: 打不开锁文件 %s: %s", lock_path, e)
+        return
+
+    try:
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            logger.debug("定时蒸馏: 另一个进程正在跑, 跳过这轮")
+            return
+
+        result = asyncio.run(run_distill_for_dream_engine(model, force=False))
+        reason = result.get("reason", "")
+        if result.get("ok"):
+            logger.info(
+                "定时蒸馏 ✓ model=%s chunks=%s 写入 %s 字节 耗时 %.0fs",
+                result.get("model"), result.get("chunks_total"),
+                result.get("bytes_written"), result.get("took_seconds", 0),
+            )
+        elif reason == "cooldown":
+            logger.debug("定时蒸馏: 24h 内跑过, 跳过")
+        else:
+            # 失败要出声 —— 静默失败正是这个 plugin 一路上最贵的毛病
+            logger.warning("定时蒸馏未执行: reason=%s model=%s", reason, model)
+    except Exception:  # noqa: BLE001
+        # 定时器绝不能把 plugin 带崩
+        logger.exception("定时蒸馏抛异常, 本轮跳过, %ds 后再试",
+                         _DISTILL_TIMER_INTERVAL_SEC)
+    finally:
+        fh.close()
+
+
+def _distill_timer_loop() -> None:
+    time.sleep(_DISTILL_TIMER_STARTUP_DELAY_SEC)
+    while True:
+        _try_distill_once()
+        time.sleep(_DISTILL_TIMER_INTERVAL_SEC)
+
+
+def start_distill_timer() -> None:
+    """起后台定时蒸馏线程。同一进程内重复调用只会起一个。"""
+    global _distill_timer_started
+    with _distill_timer_lock:
+        if _distill_timer_started:
+            return
+        _distill_timer_started = True
+    t = threading.Thread(
+        target=_distill_timer_loop, daemon=True, name="catfish-distill-timer"
+    )
+    t.start()
+    logger.info(
+        "定时蒸馏已启动: 每 %d 分钟检查一次 (真正的 24h 判定在 "
+        "memory_distill_state.json, 进程重启不丢)",
+        _DISTILL_TIMER_INTERVAL_SEC // 60,
+    )
