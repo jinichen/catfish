@@ -3,6 +3,10 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { bootstrapEndpoints } from "./lib/env";
 import { fetchViaProxy } from "./lib/http_proxy";
+import {
+  StartupErrorBoundary,
+  installStartupDiagnostics,
+} from "./lib/startupDiagnostics";
 import "./styles/tokens.css";
 import "./styles/globals.css";
 // highlight.js 主题 —— github 风格,在浅/深色都看得清
@@ -53,13 +57,50 @@ import "highlight.js/styles/github.css";
   };
 })();
 
+// 装错误钩子 —— 必须在 render 之前, 否则 render 期间出事照样是白屏。
+installStartupDiagnostics();
+
 // BL-WIN9 / DEPLOY1 (5/8): 启动前先从 Rust backend 拿 yaml 配置的 endpoints,
 // 替换 build-time 默认 gatewayUrl. 这样客户改 ~/.catfish/companion.yaml 重启
 // 就能切到任何网关地址 (中央服务器部署), 不需要重新打包 .app/.exe.
-bootstrapEndpoints().finally(() => {
+//
+// 8/4 (鸿波 Windows 启动白屏) 加超时:
+//   bootstrapEndpoints 内部两块都有 try/catch, 所以**抛异常**逃不出来 —— 但里面
+//   4 个 `await invoke(...)` 一个超时都没有。invoke 挂住 (不 resolve 也不 reject)
+//   时, 这个 promise 永远不 settle, 下面 .finally 里的 render **永远不执行**,
+//   表现就是一整片白, 且没有任何异常可抓。
+//
+//   .finally 能兜住 rejection, 兜不住"不返回"。所以这里必须是 race 而不是 catch。
+//
+//   5 秒: 这几个 invoke 是读本地 yaml + 拼 auth header, 正常是毫秒级。5 秒没回来
+//   就是卡住了, 而卡住的后果只是 endpoints 回退到 build-time 默认 —— 界面能起来,
+//   员工还能进设置改。**永远比白屏强。**
+const BOOTSTRAP_TIMEOUT_MS = 5000;
+
+function renderApp() {
   ReactDOM.createRoot(document.getElementById("root")!).render(
     <React.StrictMode>
-      <App />
+      <StartupErrorBoundary>
+        <App />
+      </StartupErrorBoundary>
     </React.StrictMode>,
   );
-});
+}
+
+Promise.race([
+  bootstrapEndpoints(),
+  new Promise<void>((resolve) =>
+    setTimeout(() => {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[startup] bootstrapEndpoints ${BOOTSTRAP_TIMEOUT_MS}ms 未返回, 先渲染界面; ` +
+          `endpoints 回退到 build-time 默认, 可在设置里改。`,
+      );
+      resolve();
+    }, BOOTSTRAP_TIMEOUT_MS),
+  ),
+])
+  .catch(() => {
+    /* bootstrapEndpoints 内部已全 try/catch, 这里只是保证 render 一定发生 */
+  })
+  .then(renderApp);
