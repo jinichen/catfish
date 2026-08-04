@@ -275,7 +275,10 @@ _GENERATION_PROMPT_TEMPLATE = (
     "created: {today}\n"
     "updated: {today}\n"
     "tags: [<tag1>, <tag2>]\n"
-    "related: [\"[[<other concept>]]\", \"[[<other entity>]]\"]\n"
+    # 8/4: 加上 typed 形式。读侧 6/29 (P3.5.132 #5) 就支持 {name, rel} 了, 但
+    # **prompt 从头到尾没提过 rel** —— 实测 408 条边 0 条带类型, 不是 LLM 不配合,
+    # 是根本没人要求过它。功能建在读侧、写侧不知道, 等于没建。
+    "related: [{name: \"<名字>\", rel: \"<关系, 2-4 字>\"}, \"[[<关系拿不准就用这种>]]\"]\n"
     # P3.5.205 (7/9 鸿波 catch): sources 从常量 `[employee_journal]` 改**日志日期列表**,
     # 让员工能反查每 wiki 页来自哪几天日志. 格式: `[journal:YYYY-MM-DD, ...]` (取自
     # Analysis Decisions 段的 YYYY-MM-DD 字段, 或员工日志里 heading `## [ts] journal`
@@ -310,7 +313,10 @@ _GENERATION_PROMPT_TEMPLATE = (
     "created: {today}\n"
     "updated: {today}\n"
     "tags: [<tag1>, <tag2>]\n"
-    "related: [\"[[<other entity>]]\", \"[[<other concept>]]\"]\n"
+    # 8/4: 加上 typed 形式。读侧 6/29 (P3.5.132 #5) 就支持 {name, rel} 了, 但
+    # **prompt 从头到尾没提过 rel** —— 实测 408 条边 0 条带类型, 不是 LLM 不配合,
+    # 是根本没人要求过它。功能建在读侧、写侧不知道, 等于没建。
+    "related: [{name: \"<名字>\", rel: \"<关系, 2-4 字>\"}, \"[[<关系拿不准就用这种>]]\"]\n"
     # P3.5.205 (7/9 鸿波 catch): sources 从常量 `[employee_journal]` 改**日志日期列表**,
     # 让员工能反查每 wiki 页来自哪几天日志. 格式: `[journal:YYYY-MM-DD, ...]` (取自
     # Analysis Decisions 段的 YYYY-MM-DD 字段, 或员工日志里 heading `## [ts] journal`
@@ -348,6 +354,9 @@ _GENERATION_PROMPT_TEMPLATE = (
     "复用已有 slug**, 不要造新的变体.\n"
     "- entity slug 跟 concept slug 不冲突\n"
     "- frontmatter YAML 严格合法 (Obsidian 解析)\n"
+    "- `related:` **优先带关系类型**: `{name: \"中电福富\", rel: \"隶属\"}`. "
+    "rel 用 2-4 字中文短词 (隶属/认证/负责/参与/依赖/上级/同类). "
+    "关系拿不准就退回裸 wikilink `\"[[名字]]\"` —— **编一个关系比没有关系更糟**.\n"
     "- `related:` 必须真双引号 string list — 正确: "
     "`related: [\"[[陈鸿波]]\", \"[[FFCS]]\"]`. "
     "**错**: `related: [[[陈鸿波]]]` (3 个 `[` YAML 真 inline list of list, "
@@ -1674,6 +1683,70 @@ def _split_frontmatter_body(text: str) -> Tuple[str, str]:
     return text[4:end], text[end + 5 :]
 
 
+def _split_top_level(inner: str) -> list[str]:
+    r"""按顶层逗号切分, 不切进 {} 和 [[]] 里面 —— Rust split_top_level 的 Python 版。
+
+    8/4: typed relation `{name: "中电福富", rel: "隶属"}` 里**有逗号**。老实现是
+    "regex 抓所有 quoted 字符串", 于是切出 ['中电福富', '隶属', ...] —— 关系标签
+    「隶属」变成一个假节点名, 合并时会被当成关联写回 frontmatter, 图谱上凭空多出
+    dangling 边。
+
+    读侧 (wiki_read.rs::split_top_level) 一直是 brace-aware 的; 写侧不是。
+    **又是两侧不同口径** —— 而且这次是在我准备让 prompt 开始产出 typed relation
+    的前一刻才查出来的, 差一点就上线了。
+    """
+    out: list[str] = []
+    depth = 0
+    buf: list[str] = []
+    in_str = False
+    quote = ""
+    for c in inner:
+        if in_str:
+            buf.append(c)
+            if c == quote:
+                in_str = False
+            continue
+        if c in ('"', "'"):
+            in_str = True
+            quote = c
+            buf.append(c)
+        elif c in "{[":
+            depth += 1
+            buf.append(c)
+        elif c in "}]":
+            depth -= 1
+            buf.append(c)
+        elif c == "," and depth == 0:
+            out.append("".join(buf).strip())
+            buf = []
+        else:
+            buf.append(c)
+    tail = "".join(buf).strip()
+    if tail:
+        out.append(tail)
+    return [x for x in out if x]
+
+
+_REL_NAME_RE = re.compile(r'name\s*:\s*["\']?([^"\',}]+)')
+
+
+def _rel_item_name(item: str) -> str:
+    """拿一条 related 的**节点名** —— 两种形态都认。
+
+        {name: "中电福富", rel: "隶属"}  → 中电福富
+        "[[北京福富]]"                   → 北京福富
+        中电福富                          → 中电福富
+
+    并集去重要按名字, 不能按整个字符串: 同一个节点带不带 rel 是同一条边,
+    按字符串去重会留下两份。
+    """
+    v = item.strip()
+    if v.startswith("{"):
+        m = _REL_NAME_RE.search(v)
+        return m.group(1).strip() if m else ""
+    return v.strip('"').strip("'").strip().strip("[]").strip()
+
+
 def _parse_frontmatter_lists(fm: str) -> Dict[str, List[str]]:
     """从 YAML frontmatter 抠 list 字段 ([\"[[a]]\", \"b\"]). 简单 regex,
     不全 YAML, 但对 prompt `生成` 真 format 够用.
@@ -1692,11 +1765,16 @@ def _parse_frontmatter_lists(fm: str) -> Dict[str, List[str]]:
             continue
         # 先 split by `,` (不在 `[[..]]` 内), 再 strip quotes
         # 简化: regex 抓所有 quoted (带 [[..]] 或纯字符串) 优先, 否则裸 token
-        parts = re.findall(r'"([^"]+)"|\'([^\']+)\'', inner)
-        items = [a or b for (a, b) in parts]
-        if not items:
-            # 没 quoted, 退裸 split (e.g. `tags: [a, b, c]`)
-            items = [s.strip() for s in inner.split(",")]
+        # 8/4: 改用 brace-aware 切分 (见 _split_top_level 注释)。
+        # 老实现是"regex 抓所有 quoted", typed relation 里的 rel 值会被当成
+        # 独立条目 —— 关系标签变假节点。
+        raw_items = _split_top_level(inner)
+        items = []
+        for it in raw_items:
+            if it.startswith("{"):
+                items.append(it)                    # typed, 整块保留
+            else:
+                items.append(it.strip('"').strip("'").strip())
         items = [s for s in items if s and s not in ("[", "]")]
         out[key] = items
     return out
@@ -1736,14 +1814,33 @@ def _merge_wiki_file(old_text: str, new_text: str) -> str:
     # 1. list 字段并集替换到 new_fm
     merged_fm = new_fm
     for field in _FM_LIST_FIELDS_UNION:
-        union = list(old_lists.get(field, []))
+        # 8/4: 按**节点名**去重, 不按整串 —— 同一个节点带不带 rel 是同一条边。
+        # 两边都有时保留带 rel 的那个 (信息更多)。
+        union: list[str] = []
+        seen_names: dict[str, int] = {}
+        for v in list(old_lists.get(field, [])):
+            n = _rel_item_name(v) if field == "related" else v
+            if n in seen_names:
+                if v.startswith("{"):
+                    union[seen_names[n]] = v
+                continue
+            seen_names[n] = len(union)
+            union.append(v)
         for v in new_lists.get(field, []):
-            if v not in union:
-                union.append(v)
+            n = _rel_item_name(v) if field == "related" else v
+            if n in seen_names:
+                if v.startswith("{"):
+                    union[seen_names[n]] = v        # 新的带 rel → 升级
+                continue
+            seen_names[n] = len(union)
+            union.append(v)
         if not union:
             continue
         # 双引号包每个 item (跟 Generation prompt 规范一致)
-        quoted = ", ".join(f'"{v}"' if not v.startswith('"') else v for v in union)
+        quoted = ", ".join(
+            v if (v.startswith("{") or v.startswith('"')) else f'"{v}"'
+            for v in union
+        )
         new_line = f"{field}: [{quoted}]"
         # 替已存的 list 字段; 没的话不动 (let new_fm 自然的没)
         merged_fm = re.sub(
@@ -2038,6 +2135,156 @@ def _redirect_to_existing_equivalent(
     return rel_path
 
 
+# ─────────────────────────────────────────────────────────────
+# 受控词表 —— 把"事实上已经存在的本体"显式化 (8/4 鸿波 "是不是应该用 ontology")
+# ─────────────────────────────────────────────────────────────
+#
+# 8/4 实测鸿波机器的类型分布:
+#
+#     entity_type   cert 81 · person 13 · project 8 · org 6 · department 3
+#                   + notification/standard/data 各 1 · 空 33 (22%)
+#     concept_type  principle 18 · standard 18 · process 17 · rule 15
+#                   + 规则 1 · 标准 1 · 流程 1 · system 1 · 空 1
+#
+# 两个事实同时成立:
+#   · 类型**自然收敛**了 —— entity 前 5 类覆盖 111/147, concept 前 4 类覆盖 68/73。
+#     不是无限发散, 定词表的成本很低。
+#   · 但没有约束, 边缘就漂 —— rule/规则、standard/标准、process/流程 中英文并存,
+#     指的是同一个东西。
+#
+# P3.5.176 删掉 enum 的理由是"enum 是硬编码"。但结果不是"更灵活", 是**没有词汇表**:
+# 同义词各写各的, 筛选和分组就散了。
+#
+# 所以这里不是引入一个新本体, 是把已经长出来的那个写下来 + 加校验。
+# 设计上守两条:
+#   1. **归一化而不是拒绝** —— 规则→rule 这种直接改, 不丢数据
+#   2. **不认识的新类型放行 + WARNING** —— 词表要能长, 但长了要有人知道
+#
+_TYPE_ALIASES = {
+    # concept
+    "规则": "rule", "标准": "standard", "流程": "process", "原则": "principle",
+    "体系": "system", "方法": "method", "规范": "standard",
+    # entity
+    "证书": "cert", "资质": "cert", "认证": "cert",
+    "人": "person", "人员": "person", "员工": "person",
+    "公司": "org", "机构": "org", "组织": "org",
+    "部门": "department", "项目": "project", "文件": "doc", "文档": "doc",
+    "数据": "data", "通知": "notification",
+}
+
+_ENTITY_TYPES = frozenset({
+    "cert", "person", "org", "department", "project",
+    "doc", "data", "system", "notification", "standard",
+})
+_CONCEPT_TYPES = frozenset({
+    "principle", "standard", "process", "rule", "system", "method",
+})
+
+
+def _canon_subtype(rel_path: str, raw: str) -> tuple[str, bool]:
+    """把 entity_type / concept_type 归一化到受控词表。
+
+    返 (归一化后的值, 是否表外)。表外不拒绝, 只报告 —— 词表要能长。
+    """
+    v = (raw or "").strip()
+    if not v:
+        return "", False
+    low = v.lower()
+    canon = _TYPE_ALIASES.get(v) or _TYPE_ALIASES.get(low) or low
+    known = _ENTITY_TYPES if "entities/" in rel_path else _CONCEPT_TYPES
+    if canon != low:
+        logger.info(
+            "catfish-memory wiki: %s 的类型 %r 归一化成 %r (受控词表)",
+            rel_path, v, canon,
+        )
+    elif canon not in known:
+        logger.warning(
+            "catfish-memory wiki: %s 用了词表外的类型 %r —— 不拦, 但词表该不该加它, "
+            "值得看一眼 (现有: %s)",
+            rel_path, canon, "/".join(sorted(known)),
+        )
+        return canon, True
+    return canon, False
+
+
+_SUBTYPE_LINE = re.compile(r"^(entity_type|concept_type):\s*(.*)$", re.MULTILINE)
+
+
+def _normalize_types(rel_path: str, content: str) -> str:
+    """写盘前把 frontmatter 里的类型字段归一化。"""
+    fm, body = _split_frontmatter_body(content)
+    if not fm:
+        return content
+    changed = False
+
+    def _sub(m: "re.Match[str]") -> str:
+        nonlocal changed
+        key, val = m.group(1), m.group(2).strip()
+        canon, _ = _canon_subtype(rel_path, val)
+        if canon and canon != val:
+            changed = True
+            return f"{key}: {canon}"
+        return m.group(0)
+
+    new_fm = _SUBTYPE_LINE.sub(_sub, fm)
+    if not changed:
+        return content
+    return f"---\n{new_fm}\n---\n{body}"
+
+
+# ─────────────────────────────────────────────────────────────
+# 引用完整性 —— related 指向不存在的节点 (8/4 实测 65/408 = 16%)
+# ─────────────────────────────────────────────────────────────
+
+
+def _check_dangling_related(catfish_home: Path, rel_path: str, content: str) -> list[str]:
+    r"""报告 related 里指向不存在节点的名字。只报告, 不改内容。
+
+    8/4 实测: 408 条 related 边里 65 条 (16%) 指向的节点根本不存在。
+
+    为什么不自动删: dangling 有两种, 语义完全相反 ——
+      · LLM 编了个不存在的东西        → 该删
+      · 这个节点还没被蒸馏出来, 之后会有 → 删了反而破坏未来的连接
+    分不清就不该动。而且 WikiTree 有 dangling 点击自动建真文件的路径 (P3.5.114),
+    说明产品上是把它当"待补"而不是"错误"看的。
+
+    但 16% 无声无息不行 —— 图谱上那些边直接消失, 没人知道。报出来。
+    """
+    fm, _ = _split_frontmatter_body(content)
+    if not fm:
+        return []
+    names = [
+        n.strip().strip('"').strip("'").strip("[]").strip()
+        for n in _parse_frontmatter_lists(fm).get("related", [])
+    ]
+    names = [n for n in names if n]
+    if not names:
+        return []
+    known: set = set()
+    for sub in ("wiki/entities", "wiki/concepts"):
+        d = catfish_home / sub
+        if not d.is_dir():
+            continue
+        try:
+            for q in d.iterdir():
+                if q.suffix != ".md":
+                    continue
+                known.add(q.stem)
+                t = _read_title_of(q)
+                if t:
+                    known.add(t)
+        except OSError:
+            continue
+    missing = [n for n in names if n not in known]
+    if missing:
+        logger.info(
+            "catfish-memory wiki: %s 的 related 有 %d 个指向不存在的节点 (%s) —— "
+            "可能是 LLM 编的, 也可能是还没蒸馏出来的, 不自动删",
+            rel_path, len(missing), ", ".join(missing[:4]),
+        )
+    return missing
+
+
 def _write_wiki_files(
     catfish_home: Path,
     files: Dict[str, str],
@@ -2081,7 +2328,9 @@ def _write_wiki_files(
                         rel_path, e,
                     )
                     final_content = _ensure_frontmatter_fence(rel_path, content)
+            final_content = _normalize_types(rel_path, final_content)
             _scan_conclusion_words(rel_path, final_content)
+            _check_dangling_related(catfish_home, rel_path, final_content)
             target.write_text(final_content + ("\n" if not final_content.endswith("\n") else ""), encoding="utf-8")
             if "entities/" in rel_path:
                 n_entities += 1
