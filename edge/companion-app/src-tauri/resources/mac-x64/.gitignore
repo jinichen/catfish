@@ -14,3 +14,5 @@ chromium-embed.tar.gz
 # 7/30 新增: catfish-email 的 wheel 包, 同样由打包脚本生成
 catfish-email-dist.tar.gz
 *.log
+# 8/5 新增: jieba / playwright 的 wheel (见 mac-aarch64/.gitignore)
+hermes-deps-dist.tar.gz

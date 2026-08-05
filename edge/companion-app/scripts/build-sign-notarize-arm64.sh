@@ -67,11 +67,12 @@ sign_archive() {
       --sign "$SIGNING_IDENTITY" "$bundle"
   done < <(find "$unpack" -type d -name '*.app' -print0)
 
-  local entries=()
-  while IFS= read -r entry; do
-    entries+=("$entry")
-  done < <(find "$unpack" -mindepth 1 -maxdepth 1 -exec basename {} \;)
-  tar czf "$repacked" -C "$unpack" "${entries[@]}"
+  # 8/5: 原来先 find 出顶层条目再 `tar czf ... "${entries[@]}"`。两个毛病:
+  #   1. macOS 自带 bash 3.2 下, 空数组展开 "${entries[@]}" 在 `set -u` 里直接
+  #      "unbound variable" 退出 —— 归档一旦是空的就炸。
+  #   2. 纯属多余 —— `-C "$unpack" .` 打出的结构完全一样, 而且这正是
+  #      build-mac-resources.sh 自己用的写法 (第 246、364 行)。
+  tar czf "$repacked" -C "$unpack" .
   cp "$repacked" "$archive"
 }
 
@@ -103,15 +104,29 @@ MAC_RESOURCES="$APP_PATH/Contents/Resources"
 echo "=== 签名 App 内直接二进制 ==="
 sign_macho_files "$MAC_RESOURCES"
 
+# 8/5: 这一段以前**一次都没执行过**。
+#
+# 原来写死三条路径 `$MAC_RESOURCES/cpython-3.11.15-embed.tar.gz` 等, 但归档的真实
+# 位置是 `$MAC_RESOURCES/resources/mac/cpython-3.11.15-embed.tar.gz` —— tauri.
+# aarch64.conf.json 里 "resources/mac-aarch64/X": "./resources/mac/X", 目标端多一层
+# `resources/mac/`。于是 `if [[ -f ... ]]` 每次都为假, 三个归档全部跳过, 而 for 循环
+# 悄无声息地走完 —— 日志里"=== 签名归档内运行时 ==="下面一行都没有, 谁也没看出来。
+# 又是一次"检查写了, 但恒假", 跟 catfish-calendar 漏签是同一个病。
+#
+# 改成扫出 Resources 下**所有** .tar.gz。好处跟上面签二进制一样: 以后再加归档
+# (node-embed、catfish-email-dist、hermes-deps-dist 本来就不在那三条里) 不用记得
+# 回来改这里。非 Mach-O 内容由 sign_macho_files 的 `file | grep Mach-O` 自然过滤。
+#
+# resources/windows/ 下那几个是 0 字节占位文件 (真件由 CI 现下), 用 -s 跳过 ——
+# 否则 `tar xzf` 对空文件报错, set -e 会把整个脚本带走。
 echo "=== 签名归档内运行时 ==="
-for archive in \
-  "$MAC_RESOURCES/cpython-3.11.15-embed.tar.gz" \
-  "$MAC_RESOURCES/chromium-embed.tar.gz" \
-  "$MAC_RESOURCES/hermes-agent-bundle.tar.gz"; do
-  if [[ -f "$archive" ]]; then
-    sign_archive "$archive"
+while IFS= read -r -d '' archive; do
+  if [[ ! -s "$archive" ]]; then
+    echo "→ 跳过空归档 (占位文件) · $archive"
+    continue
   fi
-done
+  sign_archive "$archive"
+done < <(find "$MAC_RESOURCES" -type f -name '*.tar.gz' -print0)
 
 echo "=== 签名 App ==="
 codesign --deep --force --options runtime --timestamp \
