@@ -349,15 +349,36 @@ EMBED_PY="$PY_UNPACK/python/bin/python3"
 [ -x "$EMBED_PY" ] || { echo "❌ 找不到嵌入解释器: $EMBED_PY"; exit 1; }
 echo "  用嵌入解释器取 wheel: $("$EMBED_PY" -V)"
 
-# --only-binary=:all: 不要 sdist —— 员工机上没有编译工具链, 源码包装不了
-"$EMBED_PY" -m pip download --only-binary=:all: -d "$DEPS_STAGE" jieba playwright >/dev/null || {
-    echo "❌ 取 jieba / playwright wheel 失败 (构建机需要外网)"
+# jieba 和 playwright 必须分开取 —— 8/5 实测:
+#
+#     ERROR: Could not find a version that satisfies the requirement jieba
+#            (from versions: none)
+#
+# 原因不是没网 (同一次运行里 node / uv / cpython 三个 curl 全部成功)。
+# **jieba 在 PyPI 上只发 sdist, 一个 wheel 都没有** (0.42.1 只有
+# jieba-0.42.1.tar.gz)。加了 --only-binary=:all: 就等于告诉 pip "只要 wheel",
+# 候选自然是空集。原来那句 "构建机需要外网" 的报错把人往完全错的方向带。
+#
+#   · playwright + greenlet: 编译产物, 必须是**跟内嵌 3.11.15 对齐**的 wheel
+#     → --only-binary=:all:, 用嵌入解释器取
+#   · jieba: 纯 Python, 我们自己 pip wheel 现打一个 py3-none-any 的轮子。
+#     不能把 sdist 丢给员工机 —— 装的时候 uv --no-index 要构建 sdist, 得有
+#     setuptools 后端, 离线环境下拿不到, 又是一个"到现场才炸"。
+"$EMBED_PY" -m pip download --only-binary=:all: -d "$DEPS_STAGE" playwright >/dev/null || {
+    echo "❌ 取 playwright wheel 失败 (需要外网; 若已联网请看上面 pip 的原始报错)"
     exit 1
 }
-# 正向断言: 这两个必须真的在, 否则就是"打了个空包"
+"$EMBED_PY" -m pip wheel --no-deps -w "$DEPS_STAGE" jieba >/dev/null || {
+    echo "❌ 打 jieba wheel 失败 (jieba 只有 sdist, 这一步是现打轮子, 需要外网)"
+    exit 1
+}
+# 正向断言: 这三个必须真的在, 而且必须是 .whl —— 光看 pip 退出码不够。
+# 限定 *.whl (不是 *-*) 是因为员工机上 uv 带 --no-index 装, sdist 装不了;
+# 混进一个 sdist 会一路绿到达华的机器上才炸。
 for pkg in jieba playwright greenlet; do
-    if ! find "$DEPS_STAGE" -maxdepth 1 -iname "${pkg}-*" | grep -q .; then
-        echo "❌ $DEPS_STAGE 里没有 $pkg 的 wheel —— 装机时会静默缺功能"
+    if ! find "$DEPS_STAGE" -maxdepth 1 -iname "${pkg}-*.whl" | grep -q .; then
+        echo "❌ $DEPS_STAGE 里没有 $pkg 的 **wheel** —— 装机时会静默缺功能"
+        find "$DEPS_STAGE" -maxdepth 1 -type f -exec basename {} \; | sed 's/^/     现有: /'
         exit 1
     fi
 done
