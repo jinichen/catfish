@@ -140,8 +140,77 @@ function showOverlay(title: string, detail: string) {
   document.body.appendChild(el);
 }
 
+/** IPC 载荷体检 —— 出事时说清楚是哪个 invoke、多大。
+ *
+ * # 为什么需要 (8/5 Windows 实测)
+ *
+ * 加了错误钩子之后, Windows 白屏终于说话了:
+ *
+ *     Failed to execute 'postMessage' on 'EmbeddedBrowserWebView':
+ *     Invalid string length
+ *     RangeError: Invalid string length
+ *         at Object.postMessage (<anonymous>:1:102)
+ *         at sendIpcMessage (<anonymous>:130:18)
+ *
+ * Tauri v2 在 Windows 上用 WebView2 的 postMessage 做 IPC 请求方向, mac 走另一套
+ * 传输 —— 所以同一份前端代码只有 Windows 炸。`Invalid string length` 是 V8 在
+ * 字符串超上限 (~512M 字符) 时抛的, 也就是**某个 invoke 的载荷大到离谱**。
+ *
+ * 但那个栈里**零个应用帧**, 全是 Tauri 注入的匿名脚本 —— 光看栈根本不知道是哪个
+ * 命令。读代码也定位不了 (invoke 调用点几十处, 谁在启动路径上带大载荷不明显)。
+ *
+ * 所以包一层: 记下命令名和载荷大小, 超阈值就 warn, 抛错就把命令名一起报出来。
+ * 下一个包会直接告诉我们是谁, 不用再猜。
+ *
+ * 阈值 8MB: 正常的 invoke 载荷是 KB 级; 真要传大文件也该走别的通道而不是
+ * postMessage。8MB 远低于 V8 上限, 但足够高到不会误报日常调用。
+ */
+const IPC_WARN_BYTES = 8 * 1024 * 1024;
+
+function installIpcSizeGuard(): void {
+  const internals = (window as unknown as Record<string, any>).__TAURI_INTERNALS__;
+  if (!internals || typeof internals.invoke !== "function") {
+    // 非 Tauri 环境 (vitest / storybook) 或 Tauri 换了内部结构 —— 静默跳过,
+    // 这只是诊断, 不该因为它拖垮启动。
+    return;
+  }
+  const original = internals.invoke.bind(internals);
+  internals.invoke = (cmd: string, args?: unknown, opts?: unknown) => {
+    let size = -1;
+    try {
+      size = args === undefined ? 0 : JSON.stringify(args).length;
+    } catch {
+      /* 序列化不了 (循环引用等) —— 交给原函数去报真正的错 */
+    }
+    if (size > IPC_WARN_BYTES) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[ipc] invoke("${cmd}") 载荷 ${(size / 1024 / 1024).toFixed(1)}MB —— ` +
+          `Windows 上 postMessage 有字符串长度上限, 过大会直接 RangeError 且栈里` +
+          `没有应用帧, 表现为白屏。`,
+      );
+    }
+    try {
+      return original(cmd, args, opts);
+    } catch (e) {
+      // 同步抛 (postMessage RangeError 就是这条路) —— 把命令名和大小带上,
+      // 否则错误信息里只有匿名栈, 等于没说。
+      const detail = `invoke("${cmd}") 失败, 载荷 ${size} 字节`;
+      // eslint-disable-next-line no-console
+      console.error(`[ipc] ${detail}`, e);
+      showOverlay(
+        "界面没能启动起来",
+        `${detail}\n\n${(e as Error)?.message || e}\n\n${(e as Error)?.stack || ""}`,
+      );
+      throw e;
+    }
+  };
+}
+
 /** 装全局错误钩子 + 白屏看门狗。在 main.tsx 最早处调一次。 */
 export function installStartupDiagnostics(): void {
+  installIpcSizeGuard();
+
   window.addEventListener("error", (e) => {
     // eslint-disable-next-line no-console
     console.error("[startup] window.onerror:", e.message, e.filename, e.lineno);
