@@ -85,7 +85,20 @@ if [[ ! -d "$APP_PATH" ]]; then
   exit 1
 fi
 
-MAC_RESOURCES="$APP_PATH/Contents/Resources/resources/mac"
+# 8/5: 遍历**整个** Contents/Resources, 不是只 resources/mac。
+#
+# Apple 公证驳回 (submission 8c3f698a) 的唯一硬错误就是这个:
+#   Contents/Resources/catfish-calendar —— The binary is not signed.
+#   (x86_64 和 arm64 两个架构各报 3 条: 没签名 / 没安全时间戳 / 没 hardened runtime)
+#
+# 原来只签 Contents/Resources/resources/mac/, 而 catfish-calendar 在**上一层**,
+# 于是从来没被签过 —— 而且构建、签 App、做 dmg、spctl 全部一路绿, 直到提交给
+# Apple 才炸。又是一个"本地全过、外部才发现"。
+#
+# 改成遍历整个 Resources: sign_macho_files 里用 `file | grep Mach-O` 过滤,
+# 非 Mach-O (Windows 的 exe / tar.gz / 文本) 自然跳过, 不会误签。
+# 好处是以后再往 Resources 里加二进制不用记得改这里。
+MAC_RESOURCES="$APP_PATH/Contents/Resources"
 
 echo "=== 签名 App 内直接二进制 ==="
 sign_macho_files "$MAC_RESOURCES"
