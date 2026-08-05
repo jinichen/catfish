@@ -3,50 +3,58 @@
  * 8/5 Windows 实测: postMessage 抛 `Invalid string length`, 栈里零个应用帧 ——
  * 只知道"某个 invoke 载荷过大", 不知道是哪个。这组测试钉住包装层必须把命令名
  * 带出来, 否则加了等于没加。
+ *
+ * 只测 installIpcSizeGuard: 它不碰 DOM, 所以不用 jsdom (项目里没装, 为一个
+ * 诊断测试引一个 DOM 依赖不划算)。
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { installStartupDiagnostics } from "./startupDiagnostics";
+import { beforeEach, expect, it, vi } from "vitest";
+import { installIpcSizeGuard } from "./startupDiagnostics";
 
 type Inv = (cmd: string, args?: unknown, opts?: unknown) => unknown;
-const internals = () =>
-  (window as unknown as Record<string, { invoke: Inv }>).__TAURI_INTERNALS__;
+
+function setup(invoke: Inv) {
+  (globalThis as any).window = { __TAURI_INTERNALS__: { invoke } };
+  installIpcSizeGuard();
+  return (globalThis as any).window.__TAURI_INTERNALS__.invoke as Inv;
+}
 
 beforeEach(() => {
-  document.body.innerHTML = '<div id="root"></div>';
   vi.restoreAllMocks();
+  delete (globalThis as any).window;
 });
 
 it("正常调用透传, 不改行为", () => {
   const inner = vi.fn(() => "ok");
-  (window as any).__TAURI_INTERNALS__ = { invoke: inner };
-  installStartupDiagnostics();
-  expect(internals().invoke("get_runtime_endpoints", { a: 1 })).toBe("ok");
+  const wrapped = setup(inner);
+  expect(wrapped("get_runtime_endpoints", { a: 1 })).toBe("ok");
   expect(inner).toHaveBeenCalledWith("get_runtime_endpoints", { a: 1 }, undefined);
 });
 
 it("★ 抛错时必须带上命令名 —— 原始栈里一个应用帧都没有", () => {
-  const boom = vi.fn(() => {
+  const err = vi.spyOn(console, "error").mockImplementation(() => {});
+  const wrapped = setup(() => {
     throw new RangeError("Invalid string length");
   });
-  (window as any).__TAURI_INTERNALS__ = { invoke: boom };
-  const err = vi.spyOn(console, "error").mockImplementation(() => {});
-  installStartupDiagnostics();
-  expect(() => internals().invoke("http_proxy", { req: {} })).toThrow(RangeError);
-  const logged = err.mock.calls.flat().join(" ");
-  expect(logged).toContain("http_proxy");
+  expect(() => wrapped("http_proxy", { req: {} })).toThrow(RangeError);
+  expect(err.mock.calls.flat().join(" ")).toContain("http_proxy");
 });
 
 it("超阈值要 warn 出大小, 不能闷头撞上限", () => {
-  (window as any).__TAURI_INTERNALS__ = { invoke: vi.fn(() => "ok") };
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  installStartupDiagnostics();
-  internals().invoke("big_one", { blob: "x".repeat(9 * 1024 * 1024) });
+  const wrapped = setup(() => "ok");
+  wrapped("big_one", { blob: "x".repeat(9 * 1024 * 1024) });
   const logged = warn.mock.calls.flat().join(" ");
   expect(logged).toContain("big_one");
   expect(logged).toMatch(/MB/);
 });
 
+it("正常大小不该 warn —— 误报会让人忽略真警告", () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  setup(() => "ok")("small", { a: "x".repeat(1000) });
+  expect(warn).not.toHaveBeenCalled();
+});
+
 it("非 Tauri 环境不该炸 —— 诊断不能拖垮启动", () => {
-  delete (window as any).__TAURI_INTERNALS__;
-  expect(() => installStartupDiagnostics()).not.toThrow();
+  (globalThis as any).window = {};
+  expect(() => installIpcSizeGuard()).not.toThrow();
 });

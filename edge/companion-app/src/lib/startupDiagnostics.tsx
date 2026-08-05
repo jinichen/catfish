@@ -122,6 +122,9 @@ export class StartupErrorBoundary extends React.Component<
 
 /** 在 #root 之外画一层, 用于 React 还没跑起来的情况。 */
 function showOverlay(title: string, detail: string) {
+  // 没有 DOM 时静默返回 —— 这个模块会被非浏览器环境 import (vitest node env),
+  // 诊断代码自己把宿主炸掉是最没道理的一种失败。
+  if (typeof document === "undefined") return;
   if (document.getElementById("catfish-startup-overlay")) return;
   const el = document.createElement("div");
   el.id = "catfish-startup-overlay";
@@ -167,7 +170,8 @@ function showOverlay(title: string, detail: string) {
  */
 const IPC_WARN_BYTES = 8 * 1024 * 1024;
 
-function installIpcSizeGuard(): void {
+/** 单独导出给测试用 —— 它不碰 DOM, 不必为它引一个 jsdom 依赖。 */
+export function installIpcSizeGuard(): void {
   const internals = (window as unknown as Record<string, any>).__TAURI_INTERNALS__;
   if (!internals || typeof internals.invoke !== "function") {
     // 非 Tauri 环境 (vitest / storybook) 或 Tauri 换了内部结构 —— 静默跳过,
