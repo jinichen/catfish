@@ -675,6 +675,32 @@ ls -lh "$RESOURCES/"
 TOTAL_MB=$(du -sm "$RESOURCES" | cut -f1)
 echo ""
 echo "总大小: ${TOTAL_MB} MB"
+
+# ─── 收尾: 清自己在 /tmp 留下的东西 (8/5 鸿波「空间又被吃完了」) ──────────
+#
+# 这个脚本一直只在**开头** clean 那几个目录, 跑完不管。于是每跑一次就在 /tmp
+# 躺下一坨, 累积到 4.5 GB:
+#
+#     /tmp/hermes-agent-src-aarch64   1.1G  (整棵 hermes clone + node_modules)
+#     /tmp/catfish-pw-aarch64         534M  (playwright 下的 chromium)
+#     /tmp/catfish-hermes-deps-*       59M
+#
+# 开头 clean 保证了**正确性** (不会用上一次的残留), 但保证不了盘。
+# 两件事, 之前只做了一件。
+#
+# PW_CACHE 特殊: 留着能省下次 ~170MB 的 chromium 下载, 是真缓存不是垃圾。
+# 所以只报大小 + 给命令, 不替人删。其余是纯垃圾, 直接清。
+echo ""
+echo "── 收尾清理 /tmp ──"
+for d in "$HERMES_SRC" "$DEPS_STAGE" "$PY_UNPACK" "$EMAIL_STAGE"; do
+    [ -d "$d" ] || continue
+    sz=$(du -sh "$d" 2>/dev/null | cut -f1)
+    rm -rf "$d" && echo "  ✓ 删 $d ($sz)"
+done
+if [ -d "$PW_CACHE" ]; then
+    echo "  · 留 $PW_CACHE ($(du -sh "$PW_CACHE" 2>/dev/null | cut -f1)) —— 这是缓存,"
+    echo "    留着下次省 ~170MB chromium 下载。要腾盘就: rm -rf $PW_CACHE"
+fi
 echo ""
 echo "下一步 (build dmg):"
 if [ "$ARCH" = "aarch64" ]; then
