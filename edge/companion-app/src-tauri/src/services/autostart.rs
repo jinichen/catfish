@@ -82,6 +82,7 @@ pub fn schedule_autostart() {
 pub async fn check_runtime_deps() {
     tokio::task::spawn_blocking(|| {
         check_jieba_installed();
+        check_playwright_installed();
         check_agent_browser_runnable();
     })
     .await
@@ -111,6 +112,55 @@ fn check_jieba_installed() {
             "     「jieba 分词」那栏会显 ❌,但没人会天天去看。\n",
             "     修: {py} -m pip install jieba\n",
             "     (hermes 升级重建 venv 后会再次丢失 —— 这条检查就是为那时准备的)"
+        ),
+        py = python.display(),
+    );
+}
+
+/// playwright 在不在 tool-bridge 那个解释器里 (catfish_browser_* 全靠它)。
+///
+/// # 为什么补这条 (8/5 鸿波 "MACOS 怎么安装了新包, 为什么会缺")
+///
+/// 员工让鲶鱼开个网页, 回答是"Chrome 那边缺 playwright 包, 导航没走成"。
+/// 而他刚装过 Companion 新包 —— 装的是 .app, 跟 ~/.hermes/hermes-agent/venv
+/// 是两码事, 重装 .app 完全不碰那个 venv。venv 会被 hermes 升级重建, 额外装
+/// 进去的包就没了。
+///
+/// 跟 jieba 是同一个成因 (见上面那条的最后一行注释), 而自检**只覆盖了 jieba
+/// 和 agent-browser** —— 机制建好了, 新依赖没接上去。于是 playwright 丢了没人
+/// 吭声, 直到员工撞上才发现, 而且报错还只出现在对话里。
+///
+/// 判据用 `import playwright.sync_api` 而不是 `import playwright`:
+/// catfish_tools_browser.py:139 导入的正是 `playwright.sync_api.sync_playwright`,
+/// 检查要跟真实用法一致。
+///
+/// **修复命令里刻意不含 `playwright install`**: catfish_tools_browser.py:46
+/// 写明「不装 chromium binary (Playwright 默认会装 ~150MB), 用 connect_over_cdp
+/// 复用员工 Chrome」。写上去会让人白下 150MB, 达华离线现场还会直接失败。
+/// `--proxy ''` 是照抄 _import_playwright 里那条 —— 受限网络下必要。
+fn check_playwright_installed() {
+    let Some(python) = catfish_paths::tool_bridge_python() else {
+        return;
+    };
+    let ok = std::process::Command::new(&python)
+        .args(["-c", "import playwright.sync_api"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if ok {
+        log::info!("deps: playwright ✓ ({})", python.display());
+        return;
+    }
+    log::warn!(
+        concat!(
+            "deps: ⚠ playwright 不在 {py}\n",
+            "     后果: catfish_browser_* 全部不可用 —— 员工让鲶鱼开网页会得到\n",
+            "     「缺 playwright 包, 导航没走成」, 而这句只出现在对话里, 没人\n",
+            "     会去翻它是环境问题还是网站问题。\n",
+            "     修: HTTPS_PROXY= HTTP_PROXY= {py} -m pip install --proxy '' playwright\n",
+            "     (**不要**跑 playwright install —— 我们走 connect_over_cdp 复用员工\n",
+            "      已登录的 Chrome, 不需要它自带的 chromium, 那是 150MB 白下)\n",
+            "     (hermes 升级重建 venv 后会再次丢失 —— 跟 jieba 同一个成因)"
         ),
         py = python.display(),
     );
