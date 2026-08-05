@@ -208,11 +208,113 @@ verify_tree() {
       echo "   ✗ 没开 hardened runtime · $f"; bad=$((bad + 1)); continue
     fi
   done <"$macholist"
+
+  # bundle 的封装单独验 —— 上面那圈只看**文件**, 而 .app / .framework 是否
+  # 被正确封口是另一回事: 只要签完 bundle 之后又动了它肚子里的东西, 封条就废了,
+  # 而每个文件自己的签名依然完好。这正是"由内向外"顺序写错时的表现, 逐文件检查
+  # 一个都抓不到。
+  local bundle
+  while IFS= read -r bundle; do
+    if ! codesign --verify --strict "$bundle" >/dev/null 2>&1; then
+      echo "   ✗ bundle 封装无效 (八成是签名顺序不对) · $bundle"
+      bad=$((bad + 1))
+    fi
+  done < <(find "$root" \( -name '*.app' -o -name '*.framework' \) -type d)
+
   if [[ $bad -gt 0 ]]; then
     echo "❌ $bad/$checked 个二进制没签好 —— 提交上去必被驳回, 就地停" >&2
     exit 1
   fi
   echo "   自检通过 · $checked 个 Mach-O 全部满足 Developer ID + 时间戳 + hardened runtime"
+}
+
+# ## 4. wheel 里面还有一层 —— .whl 就是 zip, Apple 也会拆
+#
+# 8/5 第三次驳回。这一轮新加的 hermes-deps-dist.tar.gz 里躺着 4 个没签的
+# Mach-O, 全在 wheel **内部** (实地拆开数的, 不是推测):
+#
+#   greenlet/_greenlet.cpython-311-darwin.so
+#   greenlet/tests/_test_extension.cpython-311-darwin.so
+#   greenlet/tests/_test_extension_cpp.cpython-311-darwin.so
+#   playwright/driver/node          ← 一整个 115MB 的 Node 二进制
+#
+# 而脚本对这个归档打的是"共签 0 个" —— 因为它只拆 .tar.gz。Apple 连 zip 一起拆,
+# 所以它看得见我看不见的东西。这就是本地全绿、提交必挂的原因。
+#
+# 重打包 wheel 要动两处, 少一处就是新的坑:
+#   · RECORD —— wheel 规范里记着每个文件的 sha256 和字节数。签名会改文件,
+#     不更新 RECORD 就是发一个自相矛盾的 wheel。装的时候校不校验取决于
+#     pip/uv 的实现, 我在 Linux 沙箱里装不了 macOS wheel, **验不了**;
+#     那就别赌 —— 直接把 RECORD 改对, 不管谁校验都成立。
+#   · 可执行位 —— playwright/driver/node 是 -rwxr-xr-x, 掉了就起不来。
+#     实测 unzip → zip 往返保留权限位 (所以不能用 zip -X)。
+#
+# 只碰真的含 Mach-O 的 wheel。jieba / pyee / typing_extensions 是纯 Python,
+# 原样保留、连解压都不解 —— 不动的东西不会坏。
+update_wheel_record() {
+  local wdir="$1" rec
+  rec="$(find "$wdir" -maxdepth 2 -path '*.dist-info/RECORD' | head -1)"
+  if [[ -z "$rec" ]]; then
+    echo "❌ wheel 里找不到 .dist-info/RECORD: $wdir" >&2
+    exit 1
+  fi
+  perl -e '
+    use strict; use warnings;
+    use Digest::SHA;
+    use MIME::Base64 qw(encode_base64);
+    my ($root, $rec) = @ARGV;
+    open(my $in, "<", $rec) or die "open $rec: $!";
+    my @out;
+    while (my $l = <$in>) {
+      chomp $l;
+      # RECORD 每行是  路径,sha256=<base64url无填充>,字节数
+      # RECORD 自己那行是 "....dist-info/RECORD,," (哈希为空), 匹配不上, 原样留下
+      if ($l =~ /^(.*),sha256=[A-Za-z0-9_\-]*,\d+$/) {
+        my $p = $1;
+        my $f = "$root/$p";
+        if (-f $f) {
+          my $sha = Digest::SHA->new(256);
+          $sha->addfile($f);
+          my $b = encode_base64($sha->digest, "");
+          $b =~ tr{+/}{-_};        # base64 -> base64url
+          $b =~ s/=+$//;           # wheel 规范: 去掉填充
+          $l = "$p,sha256=$b," . (-s $f);
+        }
+      }
+      push @out, $l;
+    }
+    close $in;
+    open(my $o, ">", $rec) or die "write $rec: $!";
+    print $o "$_\n" for @out;
+    close $o;
+  ' "$wdir" "$rec"
+}
+
+sign_wheels() {
+  local root="$1" total=0 n whl wdir
+  local list="$WORK_DIR/whl.macho"
+  while IFS= read -r whl; do
+    wdir="$WORK_DIR/whl-unpack"
+    rm -rf "$wdir"; mkdir -p "$wdir"
+    ( cd "$wdir" && unzip -qq -o "$whl" )
+    build_macho_list "$wdir" "$list"
+    n="$(wc -l <"$list" | tr -d ' ')"
+    if [[ "$n" -eq 0 ]]; then
+      echo "   · $(basename "$whl") 纯 Python, 原样保留 (不解不打, 不动就不会坏)"
+      rm -rf "$wdir"
+      continue
+    fi
+    echo "   · $(basename "$whl") 内含 $n 个 Mach-O, 逐个签名 + 重写 RECORD"
+    while IFS= read -r f; do sign_one "$f"; done <"$list"
+    verify_tree "$wdir"
+    update_wheel_record "$wdir"
+    rm -f "$whl"
+    ( cd "$wdir" && zip -qq -r "$whl" . )   # 不加 -X, 要保住可执行位
+    rm -rf "$wdir"
+    total=$((total + n))
+  done < <(find "$root" -type f -name '*.whl')
+  [[ "$total" -gt 0 ]] && echo "   wheel 内共签 $total 个"
+  return 0
 }
 
 sign_archive() {
@@ -224,6 +326,7 @@ sign_archive() {
   echo "→ 解压并签名 · $archive"
   mkdir -p "$unpack"
   tar xzf "$archive" -C "$unpack"
+  sign_wheels "$unpack"          # 先处理嵌套的 zip, 再签外层散文件
   sign_tree "$unpack" quiet
   verify_tree "$unpack"
 
