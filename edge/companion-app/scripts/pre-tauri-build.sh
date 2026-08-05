@@ -49,6 +49,45 @@ if [ "$avail_gb" -lt 3 ]; then
 fi
 
 echo "  ✓ 磁盘可用 ${avail_gb} GB · 继续 build"
+
+# 3.5 · 报一下"旁边躺着多少可回收的" (8/5 鸿波「空间又被吃完了」)
+#
+# 之前这个脚本的行为是: 磁盘 16 GB → 打一句"够用"→ 放行。然后同一天就爆盘。
+# 因为它只认 rw.*.dmg 那一种残留, 而真正吃盘的是:
+#
+#     target/debug                    15 G   (tauri dev 留的, 跟出包毫无关系)
+#     target/x86_64-apple-darwin      2.2 G  (上次打 Intel 包留的, 一周没动)
+#     resources/mac-x64               902 M  (打包脚本能重新生成)
+#
+# 三样加起来 18 G, 就在 TARGET 隔壁, 脚本一个字都没提。
+# "检查了但只检查最不重要的那项", 跟这两天修的其它毛病是同一个形状。
+#
+# **不自动删** —— target/debug 可能正是别人在跑 tauri dev 的成果, 替人做主
+# 删掉几分钟的编译不合适。这里只把不可见的东西变可见, 删不删由人定。
+report_reclaimable() {
+    local -a items=()
+    local total_kb=0
+    local p sz_kb sz_h age_d
+    for p in "$TARGET/debug" "$TARGET/x86_64-apple-darwin" \
+             "$APP_ROOT/src-tauri/resources/mac-x64" \
+             "$APP_ROOT/src-tauri/resources/mac-aarch64"; do
+        [ -d "$p" ] || continue
+        # 今天动过的不报 —— 那是正在用的
+        age_d=$(( ( $(date +%s) - $(stat -f %m "$p" 2>/dev/null || echo 0) ) / 86400 ))
+        [ "$age_d" -lt 1 ] && continue
+        sz_kb=$(du -sk "$p" 2>/dev/null | awk '{print $1}')
+        [ -n "$sz_kb" ] || continue
+        sz_h=$(du -sh "$p" 2>/dev/null | awk '{print $1}')
+        total_kb=$(( total_kb + sz_kb ))
+        items+=("     ${sz_h}\t${age_d} 天没动\t${p#$APP_ROOT/}")
+    done
+    [ ${#items[@]} -eq 0 ] && return 0
+    echo ""
+    echo "  · 顺带一提, 这些是可回收的 (都不影响当前出包):"
+    printf '%b\n' "${items[@]}"
+    echo "     合计 ~$(( total_kb / 1024 / 1024 )) GB · 删了下次要用时会重新编译/重新生成"
+}
+report_reclaimable
 echo ""
 
 # ─── 4 · hermes 版本 pin 对照 (P3.5.87 · 7/29) ──────────────────────
