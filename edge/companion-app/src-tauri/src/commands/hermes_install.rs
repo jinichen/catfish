@@ -112,6 +112,9 @@ const RUNTIME_ARCHIVES: [&str; 4] = [
 /// 单独一个常量、**不进 RUNTIME_ARCHIVES** —— 那个数组是"离线运行时齐不齐"的
 /// 判据 (决定 hermes 走离线还是联网装), 邮件是附加功能, 不该影响那个决策。
 const CATFISH_EMAIL_ARCHIVE: &str = "catfish-email-dist.tar.gz";
+/// hermes venv 的额外 Python 依赖 (jieba / playwright + 它们的依赖)。
+/// 8/5: 装机流程里这两个的安装语句一直是 0 处 —— 见 install_hermes_deps。
+const HERMES_DEPS_ARCHIVE: &str = "hermes-deps-dist.tar.gz";
 
 #[derive(Clone, Debug)]
 struct RuntimeArtifacts {
@@ -122,6 +125,8 @@ struct RuntimeArtifacts {
     hermes_tar: Option<PathBuf>,
     node_tar: Option<PathBuf>,
     chromium_tar: Option<PathBuf>,
+    /// hermes venv 额外依赖包 (8/5)。
+    deps_tar: Option<PathBuf>,
     /// catfish-email 源码包 (7/30)。
     ///
     /// **不计入 archive_count / is_complete_bundle** —— 那两个判的是
@@ -140,6 +145,7 @@ impl RuntimeArtifacts {
             node_tar: usable_artifact(&dir.join(RUNTIME_ARCHIVES[2])),
             chromium_tar: usable_artifact(&dir.join(RUNTIME_ARCHIVES[3])),
             email_tar: usable_artifact(&dir.join(CATFISH_EMAIL_ARCHIVE)),
+            deps_tar: usable_artifact(&dir.join(HERMES_DEPS_ARCHIVE)),
             dir,
         }
     }
@@ -1002,6 +1008,73 @@ fn rollback_install(paths: &BootstrapPaths, backup: Option<&PreviousInstall>) ->
 /// 邮件是附加功能, 缺了 hermes 和聊天都正常。装机在这一步失败就整体回滚,
 /// 代价远大于收益。所以这里 warn + 继续, 但**warn 里必须写清楚后果**
 /// (邮件 tab 会挂), 不能只写一句"失败了"。
+/// 把 jieba / playwright 装进 hermes 的 venv (8/5 达华现场)。
+///
+/// # 为什么需要
+///
+/// autostart.rs 的 check_jieba_installed / check_playwright_installed 早就
+/// 会报警了, 但**只报不装** —— 而装机流程里这两个包的安装语句是 0 处。
+/// 于是每台新机器都缺, 员工那边表现为:
+///   · 让鲶鱼开网页 → 「缺 playwright 包, 导航没走成」
+///   · 文书风格 → 分词退化成字符二元组, top_words 全是碎片
+///
+/// 达华现场无外网, 员工机不可能 pip install, 只能随包带。
+///
+/// # 跟 install_catfish_email 的不同
+///
+/// email 是**单个** wheel, 零依赖, 所以 `--no-deps` 直接装。
+/// 这里是一组 wheel (jieba / playwright / greenlet / pyee), 有依赖关系,
+/// 所以用 `--find-links <dir> --no-index` 让 uv 在本地目录里解析 ——
+/// `--no-index` 是关键: 少了它 uv 会去连 PyPI, 离线现场直接卡死超时。
+///
+/// # 不跑 `playwright install`
+///
+/// catfish_tools_browser.py:46 写明「不装 chromium binary (Playwright 默认会
+/// 装 ~150MB), 用 connect_over_cdp 复用员工 Chrome」。只要 Python 包。
+fn install_hermes_deps(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths) -> Result<()> {
+    let Some(tar) = artifacts.deps_tar.as_ref() else {
+        log::warn!(
+            "[hermes-deps] 资源里没有 {} —— 浏览器工具和中文分词会不可用。\
+             这个包由 scripts/build-mac-resources.sh 产出, 检查打包流程。",
+            HERMES_DEPS_ARCHIVE
+        );
+        return Ok(());
+    };
+    let venv_py = paths.install_dir.join("venv/bin/python");
+    if !venv_py.exists() {
+        anyhow::bail!("hermes venv 的 python 不存在: {}", venv_py.display());
+    }
+
+    let stage = paths.unique_sibling("hermes-deps");
+    remove_any(&stage)?;
+    std::fs::create_dir_all(&stage).with_context(|| format!("创建 {}", stage.display()))?;
+
+    let mut untar = Command::new("tar");
+    untar.arg("-xzf").arg(tar).arg("-C").arg(&stage);
+    let result = command_status(untar, "解压 hermes-deps-dist.tar.gz").and_then(|()| {
+        let mut pip = Command::new(&artifacts.uv);
+        pip.arg("pip")
+            .arg("install")
+            .arg("--python")
+            .arg(&venv_py)
+            .arg("--no-index")           // 离线现场必须 —— 否则会去连 PyPI 干等超时
+            .arg("--find-links")
+            .arg(&stage)
+            .arg("jieba")
+            .arg("playwright");
+        command_status(pip, "uv pip install jieba playwright")?;
+
+        // 装了但 import 不了等于没装 —— 而下游只会 warn 一句, 现场查不出来。
+        // 判据跟 autostart.rs 的自检一致 (playwright.sync_api, 不是 playwright)。
+        let mut check = Command::new(&venv_py);
+        check.args(["-c", "import jieba, playwright.sync_api"]);
+        command_status(check, "验证 jieba / playwright 可导入")
+    });
+
+    let _ = remove_any(&stage);
+    result
+}
+
 fn install_catfish_email(artifacts: &RuntimeArtifacts, paths: &BootstrapPaths) -> Result<()> {
     let Some(tar) = artifacts.email_tar.as_ref() else {
         log::warn!(
@@ -1149,6 +1222,26 @@ fn bootstrap_locked(
                 Err(e) => log::warn!("[catfish-email] 补装失败, 邮件 tab 仍不可用: {e:#}"),
             }
         }
+        // 同上: hermes 健康 ≠ jieba/playwright 装了。判据用 import 而不是
+        // 看目录 —— site-packages 里有目录但 import 不了的情况见过 (装了一半)。
+        let deps_ok = std::process::Command::new(paths.install_dir.join("venv/bin/python"))
+            .args(["-c", "import jieba, playwright.sync_api"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !deps_ok {
+            log::warn!(
+                "[hermes-deps] hermes 健康但 jieba/playwright 缺失 —— \
+                 只补装它们, 不重装 hermes。"
+            );
+            match resolve_runtime_dir(resource_dir)
+                .map(RuntimeArtifacts::from_dir)
+                .and_then(|artifacts| install_hermes_deps(&artifacts, paths))
+            {
+                Ok(()) => log::info!("[hermes-deps] 补装完成"),
+                Err(e) => log::warn!("[hermes-deps] 补装失败, 浏览器工具和分词仍不可用: {e:#}"),
+            }
+        }
         if let Err(e) = link_catfish_email_bin(paths) {
             // 原来是 `let _ =` —— 建软链失败 (权限 / ~/.local/bin 被占成普通
             // 文件 / 磁盘满) 一个字都不会有, 员工只看到"CLI 没装"。
@@ -1291,6 +1384,10 @@ fn bootstrap_locked(
         let final_problems = core_health_problems(paths, true);
         if !final_problems.is_empty() {
             anyhow::bail!("完成标记写入后健康检查失败: {}", final_problems.join("; "));
+        }
+        // 浏览器工具 / 中文分词也是附加功能, 同样不回滚, 但要出声。
+        if let Err(e) = install_hermes_deps(&artifacts, paths) {
+            log::warn!("[hermes-deps] 装 jieba/playwright 失败, 浏览器工具和分词不可用: {e:#}");
         }
         // 邮件是附加功能 —— 装不上不回滚整个 hermes, 但要留下能查的日志。
         if let Err(e) = install_catfish_email(&artifacts, paths) {
