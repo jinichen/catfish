@@ -58,3 +58,33 @@ it("非 Tauri 环境不该炸 —— 诊断不能拖垮启动", () => {
   (globalThis as any).window = {};
   expect(() => installIpcSizeGuard()).not.toThrow();
 });
+
+it("★ invoke 是只读属性时不能抛 —— 这条抛了会把整个诊断打哑", () => {
+  // 8/5 实测: 严格模式下给只读属性赋值直接 TypeError, 而它当时排在 error
+  // 钩子之前, 于是钩子再没装上 —— Windows 回到白屏且连错误面板都没有,
+  // 比不加诊断还糟。
+  const internals: Record<string, unknown> = {};
+  Object.defineProperty(internals, "invoke", {
+    value: () => "ok",
+    writable: false,
+    configurable: false,
+  });
+  (globalThis as any).window = { __TAURI_INTERNALS__: internals };
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  expect(() => installIpcSizeGuard()).not.toThrow();
+});
+
+it("configurable 的只读属性走 defineProperty 兜底, 仍能装上", () => {
+  const internals: Record<string, unknown> = {};
+  Object.defineProperty(internals, "invoke", {
+    value: () => "ok",
+    writable: false,
+    configurable: true,
+  });
+  (globalThis as any).window = { __TAURI_INTERNALS__: internals };
+  const err = vi.spyOn(console, "error").mockImplementation(() => {});
+  installIpcSizeGuard();
+  // 装上了就能带出命令名 —— 用抛错路径验
+  (internals as any).invoke = undefined;
+  expect(err).not.toHaveBeenCalled(); // 装的过程本身不该报错
+});

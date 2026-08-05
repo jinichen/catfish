@@ -179,7 +179,7 @@ export function installIpcSizeGuard(): void {
     return;
   }
   const original = internals.invoke.bind(internals);
-  internals.invoke = (cmd: string, args?: unknown, opts?: unknown) => {
+  const wrapped = (cmd: string, args?: unknown, opts?: unknown) => {
     let size = -1;
     try {
       size = args === undefined ? 0 : JSON.stringify(args).length;
@@ -209,12 +209,36 @@ export function installIpcSizeGuard(): void {
       throw e;
     }
   };
+
+  // 赋值可能失败 —— ES module 是严格模式, 属性若是只读/getter, `=` 直接抛
+  // TypeError。8/5 实测: 这一条曾经把整个诊断打哑 (它排在 error 钩子之前,
+  // 抛了之后钩子就装不上了, 白屏且零信息 —— 比没加诊断还糟)。
+  // 现在既降级又排在钩子之后, 两道都不再依赖它成功。
+  try {
+    internals.invoke = wrapped;
+  } catch {
+    try {
+      Object.defineProperty(internals, "invoke", {
+        value: wrapped,
+        configurable: true,
+        writable: true,
+      });
+    } catch {
+      // eslint-disable-next-line no-console
+      console.warn("[ipc] invoke 是只读属性, 装不上载荷体检 (不影响启动)");
+    }
+  }
 }
 
 /** 装全局错误钩子 + 白屏看门狗。在 main.tsx 最早处调一次。 */
 export function installStartupDiagnostics(): void {
-  installIpcSizeGuard();
-
+  // ⚠ 顺序是有讲究的, 别动。
+  //
+  // 8/5 实测教训: 我一度把 installIpcSizeGuard() 放在这一行之前, 结果它抛了
+  // 一次异常, 后面的 error / unhandledrejection 钩子就再没装上 —— Windows 回到
+  // 白屏且**连错误面板都没有了**, 比不加诊断还糟。
+  //
+  // 安全网必须最先铺。任何在它之前执行的东西, 出事时都没人接。
   window.addEventListener("error", (e) => {
     // eslint-disable-next-line no-console
     console.error("[startup] window.onerror:", e.message, e.filename, e.lineno);
@@ -254,4 +278,13 @@ export function installStartupDiagnostics(): void {
       );
     }
   }, 8000);
+
+  // 体检放最后, 而且自己套一层 —— 它只是"锦上添花"的定位辅助,
+  // 绝不能反过来把上面几层安全网带走。
+  try {
+    installIpcSizeGuard();
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn("[ipc] 载荷体检装不上 (不影响启动):", e);
+  }
 }
