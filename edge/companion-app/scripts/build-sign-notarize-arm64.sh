@@ -107,30 +107,43 @@ sign_one() {
 #    7  Chrome.app/Contents/MacOS/Chrome
 #    4  Chrome.app                                      ← 最后封外层
 
-# 先把 Mach-O 清单**一次性**算出来存文件, 有两个原因:
+# 先把 Mach-O 清单**一次性**算出来存文件。
 #
-#   · 快。hermes-agent-bundle 解开是 node_modules, 五万个文件; 对每个文件
-#     起一次 `file` 进程要跑十几分钟, 而签名和自检各要遍历一次, 等于翻倍。
-#     `file -b -f <清单>` 一个进程读完全部, 秒级。
-#   · 能大声失败。清单是在调用者的 shell 里算的, 不在 `< <(...)` 的子 shell 里
-#     —— 子 shell 里 `exit` 只杀子 shell, 外面的 while 读到空输入就"什么都没签"
-#     然后一路绿。这条线上已经栽过太多次这种静默成功了。
+# 为什么不是对每个文件跑一次 `file`: hermes-agent-bundle 解开是 node_modules,
+# 六万条; 每个起一个进程要十几分钟, 而签名和自检各遍历一次就是翻倍。
 #
-# 按行对齐依赖"文件名里没有换行"。不敢默认成立, 所以核对行数, 对不上就停。
+# 为什么也不是 `file -b -f <清单>` 然后按行对齐 —— 8/5 实测当场炸:
+#
+#     ❌ file 输出 17 行, 文件却有 15 个
+#
+# 不是文件名带换行, 是 **macOS 的 file 对 universal binary 会打多行**:
+# 一行总述 + 每个架构一行。catfish-calendar 正好是 x86_64+arm64 的胖二进制
+# (公证日志里它就被报了两个架构), 一个文件占三行, 15 个文件 17 行, 分毫不差。
+# 那条行数核对不是白写的 —— 它拦下的正是一次会静默错位的对齐。
+#
+# 所以改成直接读魔数, 一个 perl 进程扫完整份清单。判定是确定的, 不用解析
+# file 的自然语言输出, 也不受 file 版本影响。perl 是 macOS 自带的。
+#
+# 清单在调用者的 shell 里算 —— 不在 `< <(...)` 子 shell 里。子 shell 里 exit
+# 只杀子 shell, 外层 while 读到空输入 = 一个都没签, 然后一路绿到 Apple 那边。
 build_macho_list() {
   local root="$1" out="$2"
   find "$root" -type f >"$out.all"
-  file -b -f "$out.all" >"$out.desc"
-  local a b
-  a="$(wc -l <"$out.all")"; b="$(wc -l <"$out.desc")"
-  if [[ "$a" -ne "$b" ]]; then
-    echo "❌ file 输出 $b 行, 文件却有 $a 个 —— 大概有文件名带换行, 不敢按行对齐" >&2
-    exit 1
-  fi
-  # 没有任何 Mach-O 是合法的 (比如 catfish-email-dist 里全是 .whl), 所以 || true;
-  # 数量会由调用方打印出来, 不会闷掉
-  paste -d'\t' "$out.desc" "$out.all" | grep '^Mach-O' | cut -f2- >"$out" || true
-  rm -f "$out.all" "$out.desc"
+  perl -ne '
+    chomp;
+    open(my $fh, "<", $_) or next;
+    binmode $fh;
+    read($fh, my $m, 8) or next;
+    close $fh;
+    my $h = lc unpack("H*", substr($m, 0, 4));
+    # 瘦二进制: 32/64 位, 大小端各一
+    if ($h =~ /^(cffaedfe|cefaedfe|feedface|feedfacf)$/) { print "$_\n"; next; }
+    # 胖二进制 (universal): cafebabe 跟 Java .class 撞魔数, 用紧跟的
+    # nfat_arch 区分 —— Mach-O 的架构数是个位数, Java 的 major_version 从 45 起
+    if ($h eq "cafebabe") { my $n = unpack("N", substr($m,4,4)); print "$_\n" if $n >= 1 && $n <= 16; next; }
+    if ($h eq "bebafeca") { my $n = unpack("V", substr($m,4,4)); print "$_\n" if $n >= 1 && $n <= 16; next; }
+  ' "$out.all" >"$out"
+  rm -f "$out.all"
 }
 
 emit_signables() {
