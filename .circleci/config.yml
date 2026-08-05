@@ -241,6 +241,42 @@ jobs:
             if (-not $marker) { throw "patch marker missing" }
             Write-Host "install.ps1 patched OK"
 
+      # ⚠ 8/5 从 GH Actions 侧 (675ccc2) 搬过来。补它的原因值得写下来:
+      #
+      # 7/17 (79cbab9) 往补丁里写了一行 `Write-Info "$label: ..."`。PowerShell 里
+      # `$label:` 是驱动器/命名空间限定符 (同 $env:PATH), 冒号跟空格 = **解析错误**。
+      # 打出来的 install.ps1 在 parse 阶段就挂, 一行都执行不了。
+      #
+      # 而 CI 一路绿: 上面那步只查 marker 在不在 (在), tauri 只是把文件塞进 msi
+      # (成功), 产物照常上传。**只有员工双击安装时才炸**, 而且弹的是
+      # "Windows Installer 程序包有问题" —— 一句什么都没说的话。
+      # 就这样装不上装了两周多没人发现。
+      #
+      # 具体那个 bug 已经在 patch_install_ps1_offline.py 里修了 (共享文件,
+      # CircleCI 自动就有)。但**自检**这边一直没有 —— 上面 marker 那条只能证明
+      # "补丁打上了", 证明不了"打出来的是合法 PowerShell"。下次再写错还是静默。
+      - run:
+          name: Verify patched install.ps1 parses as valid PowerShell
+          command: |
+            $ErrorActionPreference = 'Stop'
+            $path = "edge\companion-app\src-tauri\resources\windows\install.ps1"
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+                (Resolve-Path $path), [ref]$null, [ref]$errors) | Out-Null
+            if ($errors -and $errors.Count -gt 0) {
+                Write-Host "打补丁后的 install.ps1 语法不合法 ($($errors.Count) 处):"
+                foreach ($e in $errors) {
+                    Write-Host "  行 $($e.Extent.StartLineNumber): $($e.Message)"
+                    Write-Host "    $($e.Extent.Text)"
+                }
+                Write-Host ""
+                Write-Host '最常踩的一种: 字符串里写了 "$var:" —— PowerShell 会把它当'
+                Write-Host '驱动器限定符 (同 $env:PATH)。改成 "${var}:"。'
+                throw "install.ps1 语法错 $($errors.Count) 处 —— 装机必挂, 就地停"
+            }
+            $lines = (Get-Content $path | Measure-Object -Line).Lines
+            Write-Host "OK install.ps1 语法合法 ($lines 行)"
+
       - run:
           name: Download uv Windows x86_64
           command: |
@@ -341,6 +377,42 @@ jobs:
                 hermes-agent-src
               if ($LASTEXITCODE -ne 0) { throw "tar pack failed" }
             } finally { Pop-Location }
+
+            # 打完就验 exclude 真生效 —— 8/5 从 GH Actions 侧 (019edc9) 搬过来的教训。
+            #
+            # 那边十一条 exclude 前缀全写成 hermes-agent/ , 而 tar 收的是
+            # hermes-agent-src, 于是**一条都没匹配上**, 从写下那天起就是死规则。
+            # .git 跟着进包, 它带着上游的 origin remote; install.ps1 的 offline 分支
+            # git init + git remote add origin 撞上已存在的 origin, 直接
+            #     error: remote origin already exists.
+            # → 装机失败。而且删掉 %LOCALAPPDATA%\hermes\hermes-agent 重装也没用 ——
+            # .git 是每次从包里重新带出来的。
+            #
+            # 这边的前缀本来就是对的 (hermes-agent-src), 所以不用改 exclude。
+            # 但**没有断言**这件事是一样的: exclude 写错不会让 tar 报错, 只会安静地
+            # 什么都不排。以后有人动这几行, 得当场红, 不能等到员工机上。
+            #
+            # ⚠ 这里**故意不断言 node_modules** —— 跟 GH Actions 那边不同。
+            #   这条流水线是**特意**把 node_modules 打进包的
+            #   (BL-WIN-INSTALL-NPM-OFFLINE, 上面那步预装的), 达华员工无公网,
+            #   包里没有 node_modules 反而装不上。照抄那边的断言会当场把自己拦掉。
+            $bundle = "$PWD\edge\companion-app\src-tauri\resources\windows\hermes-agent-bundle.tar.gz"
+            $leaked = tar tzf $bundle | Select-String -Pattern '^hermes-agent-src/(\.git|venv|\.venv|target)/'
+            if ($leaked) {
+                Write-Host "exclude 没生效, 包里仍有本该排掉的目录:"
+                $leaked | Select-Object -First 5 | ForEach-Object { Write-Host "  $_" }
+                Write-Host "pattern 的前缀必须跟 tar 收的目录名一致 (hermes-agent-src, 不是 hermes-agent)"
+                throw "hermes-agent-bundle.tar.gz 里混进了 .git/venv/target"
+            }
+            $entries = (tar tzf $bundle | Measure-Object -Line).Lines
+            $hasNodeModules = tar tzf $bundle | Select-String -Pattern '^hermes-agent-src/node_modules/' -Quiet
+            if (-not $hasNodeModules) {
+                # 正向断言: 上面那步预装的 node_modules 必须真进包。
+                # 少了它员工装完就是个跑不起来的壳 —— 而这恰恰是"补丁写了两周,
+                # 分支一次没跑过"那类问题的形状: 做了, 但没进最终产物。
+                throw "包里没有 node_modules —— 预装那步白跑了, 员工无公网装完用不了"
+            }
+            Write-Host "OK exclude 生效 (.git/venv/target 都不在包里) · node_modules 在 · 归档 $entries 条"
 
       # ─── W2.26 (7/15 BL-CATFISH-MAC-OFFLINE-INSTALL): tauri.conf.json bundle.resources
       #      加了 4 个 resources/mac/* path (mac dmg 用), Tauri v2 build 时**跨平台**
