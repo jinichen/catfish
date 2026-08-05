@@ -1115,7 +1115,45 @@ fn bootstrap_locked(
     let reusable_stage = recover_interrupted_transaction(paths)?;
     let current_health = core_health_problems(paths, true);
     if current_health.is_empty() {
-        let _ = link_catfish_email_bin(paths);
+        // 8/5 (达华现场): hermes 健康 ≠ catfish-email 装了。
+        //
+        // catfish-email 的 wheel 是 7/30 (beb25f0) 才开始进安装包的。在那之前
+        // 装机的员工, 机器上 hermes 是完整健康的 —— commit 跟 pin 一致、
+        // COMPLETION_MARKER 也在 —— 于是每次启动都走这条"跳过"分支,
+        // install_catfish_email 永远够不着。给他们发新包也没用, 因为新包一样
+        // 判定健康、一样跳过。
+        //
+        // 实测达华 (macOS M1) 就卡在这里: 邮件 tab 报「catfish-email CLI 没装」,
+        // 而界面给的修复命令指向 `edge/email-agent/` —— 员工手里只有 dmg,
+        // 那个目录根本不存在。四条路 (自动 bootstrap / 重装按钮 / 装新包 /
+        // 照提示操作) 全堵死。
+        //
+        // 为什么不把 catfish-email 加进 core_health_problems: 那会让**所有**
+        // 老机器判定不健康, 走完整路径重装几百 MB 的 python/node/chromium ——
+        // 为一个 76K 的 wheel 付这个代价不合理, 而且升级时长会吓到现场。
+        //
+        // 这里只补缺的那一个: 文件在就什么都不做 (零代价), 不在才装。
+        if !paths.install_dir.join("venv/bin/catfish-email").exists() {
+            log::warn!(
+                "[catfish-email] hermes 健康但 catfish-email 缺失 —— \
+                 多半是 7/30 之前装的机器。只补装它, 不重装 hermes。"
+            );
+            match resolve_runtime_dir(resource_dir)
+                .map(RuntimeArtifacts::from_dir)
+                .and_then(|artifacts| install_catfish_email(&artifacts, paths))
+            {
+                Ok(()) => log::info!("[catfish-email] 补装完成"),
+                // 补装失败不能挡住启动 —— 邮件不可用是局部功能缺失,
+                // 起不来是整个 Companion 没了。但必须出声: 这条静默了
+                // 一周多才被现场发现。
+                Err(e) => log::warn!("[catfish-email] 补装失败, 邮件 tab 仍不可用: {e:#}"),
+            }
+        }
+        if let Err(e) = link_catfish_email_bin(paths) {
+            // 原来是 `let _ =` —— 建软链失败 (权限 / ~/.local/bin 被占成普通
+            // 文件 / 磁盘满) 一个字都不会有, 员工只看到"CLI 没装"。
+            log::warn!("[catfish-email-link] 建软链失败: {e:#}");
+        }
         report(
             reporter,
             "complete",

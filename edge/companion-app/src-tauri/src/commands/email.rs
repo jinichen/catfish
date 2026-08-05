@@ -48,7 +48,8 @@ fn find_catfish_email() -> Option<PathBuf> {
 #[tauri::command]
 pub async fn email_digest_fetch(limit: Option<u32>) -> Result<String, String> {
     let bin = find_catfish_email().ok_or_else(|| {
-        "catfish-email CLI 没装. 装: cd ~/person_task/catfish/edge/email-agent && bash install.sh"
+        "邮件组件未安装。请重启鲶鱼 Companion —— 启动时会自动补装; \
+         若重启后仍提示, 请把 ~/Library/Logs/com.catfish.companion/ 里的日志发给 IT。"
             .to_string()
     })?;
 
@@ -127,7 +128,8 @@ pub async fn email_list_fetch(
     folder: Option<String>,
 ) -> Result<String, String> {
     let bin = find_catfish_email().ok_or_else(|| {
-        "catfish-email CLI 没装. 装: cd ~/person_task/catfish/edge/email-agent && bash install.sh"
+        "邮件组件未安装。请重启鲶鱼 Companion —— 启动时会自动补装; \
+         若重启后仍提示, 请把 ~/Library/Logs/com.catfish.companion/ 里的日志发给 IT。"
             .to_string()
     })?;
 
