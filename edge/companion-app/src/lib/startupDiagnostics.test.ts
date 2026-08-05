@@ -18,9 +18,49 @@ function setup(invoke: Inv) {
   return (globalThis as any).window.__TAURI_INTERNALS__.invoke as Inv;
 }
 
+/** 一份刚够 showOverlay 用的假 DOM。
+ *
+ * 项目里没有 jsdom, 为一个诊断测试引一整个 DOM 实现不划算 —— 但"面板上到底
+ * 写了什么"恰恰是员工唯一看得到的东西 (前端 console 不落盘, release 版
+ * devtools 是关的), 这段必须验, 不能只验到 console 为止。
+ *
+ * showOverlay 用到的就这几样: getElementById / createElement / style /
+ * innerHTML / children / body.appendChild。innerHTML 里那三个标签固定, 所以
+ * 赋值时直接摆三个孩子出来。
+ */
+function fakeDom(): any[] {
+  const appended: any[] = [];
+  (globalThis as any).document = {
+    getElementById: () => null,
+    createElement: () => {
+      const kids: any[] = [];
+      return {
+        style: {},
+        id: "",
+        children: kids,
+        set innerHTML(_html: string) {
+          kids.length = 0;
+          kids.push({ textContent: "" }, { textContent: "" }, { textContent: "" });
+        },
+        get innerHTML() {
+          return "";
+        },
+      };
+    },
+    body: { appendChild: (el: any) => appended.push(el) },
+  };
+  return appended;
+}
+
+/** 面板正文 (第三个孩子是 <pre>)。 */
+function panelText(appended: any[]): string {
+  return appended[0]?.children?.[2]?.textContent ?? "";
+}
+
 beforeEach(() => {
   vi.restoreAllMocks();
   delete (globalThis as any).window;
+  delete (globalThis as any).document;
 });
 
 it("正常调用透传, 不改行为", () => {
@@ -52,6 +92,57 @@ it("正常大小不该 warn —— 误报会让人忽略真警告", () => {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   setup(() => "ok")("small", { a: "x".repeat(1000) });
   expect(warn).not.toHaveBeenCalled();
+});
+
+it("★ 面板要带上此前的超大载荷 —— 真凶可能不是抛错的那个", async () => {
+  // 8/5 补的漏。原来"载荷过大"只 console.warn, 而前端 console 既进不了日志文件
+  // (没装 plugin-log / 没调 attachConsole), release 版 devtools 又是关的 ——
+  // 等于喊给空气听。于是最难查的那种情况会整个漏掉: 某个 invoke 载荷巨大但
+  // **没抛异常**, 把内存撑到下一个 invoke 才炸。真凶的名字只在 warn 里。
+  vi.resetModules();
+  const { installIpcSizeGuard: install } = await import("./startupDiagnostics");
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const appended = fakeDom();
+
+  let boom = false;
+  (globalThis as any).window = {
+    __TAURI_INTERNALS__: {
+      invoke: (_c: string) => {
+        if (boom) throw new RangeError("Invalid string length");
+        return "ok";
+      },
+    },
+  };
+  install();
+  const wrapped = (globalThis as any).window.__TAURI_INTERNALS__.invoke as Inv;
+
+  wrapped("the_real_culprit", { blob: "x".repeat(9 * 1024 * 1024) }); // 大, 但没炸
+  boom = true;
+  expect(() => wrapped("innocent_bystander", {})).toThrow(RangeError);
+
+  const text = panelText(appended);
+  expect(text).toContain("innocent_bystander");   // 抛错的那个
+  expect(text).toContain("the_real_culprit");     // ★ 之前那个巨型载荷也得在
+  expect(text).toMatch(/超大 IPC 载荷/);
+});
+
+it("没有超大载荷时, 面板不该多出那一段 —— 免得每次都以为有事", async () => {
+  vi.resetModules();
+  const { installIpcSizeGuard: install } = await import("./startupDiagnostics");
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const appended = fakeDom();
+  (globalThis as any).window = {
+    __TAURI_INTERNALS__: {
+      invoke: () => {
+        throw new RangeError("Invalid string length");
+      },
+    },
+  };
+  install();
+  const wrapped = (globalThis as any).window.__TAURI_INTERNALS__.invoke as Inv;
+  expect(() => wrapped("some_cmd", { a: 1 })).toThrow(RangeError);
+  expect(panelText(appended)).not.toMatch(/超大 IPC 载荷/);
 });
 
 it("非 Tauri 环境不该炸 —— 诊断不能拖垮启动", () => {
