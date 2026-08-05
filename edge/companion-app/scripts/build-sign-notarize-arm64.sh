@@ -412,8 +412,39 @@ xcrun notarytool submit "$DMG_PATH" \
   --keychain-profile "$NOTARY_PROFILE" \
   --wait
 
+# 8/5: 审核 Accepted 之后立刻 staple 会扑空。
+#
+#     CloudKit query ... failed due to "Record not found"
+#     The staple and validate action failed! Error 65.
+#
+# notarytool --wait 返回的是"**审核**通过", 而 stapler 要去 CloudKit
+# (api.apple-cloudkit.com/.../ticket-delivery) 取票据 —— 票据发布到 CDN 比
+# 审核完成晚一步。实测签名时间戳 12:07:14, 12:12 查还是 NOT_FOUND。
+#
+# 这跟包本身无关, 重编译、重公证都没用, 只能等票据上架。所以改成重试。
+#
+# 达华现场无外网, 这一步**不能跳**: 没装订的话 Gatekeeper 要联网向 Apple
+# 查公证记录才放行, 离线机器直接被拦。装订就是把票据钉进 dmg, 让它自己能验。
 echo "=== 装订公证票据 ==="
-xcrun stapler staple "$DMG_PATH"
+STAPLE_TRIES=20        # 20 × 60s = 最多等 20 分钟
+STAPLE_OK=0
+for i in $(seq 1 "$STAPLE_TRIES"); do
+  if xcrun stapler staple "$DMG_PATH"; then
+    STAPLE_OK=1
+    break
+  fi
+  if [[ "$i" -lt "$STAPLE_TRIES" ]]; then
+    echo "   票据还没上架 (第 $i/$STAPLE_TRIES 次), 60 秒后重试 ——"
+    echo "   审核已经 Accepted, 这只是 Apple 那边 CDN 的时间差, 包没问题"
+    sleep 60
+  fi
+done
+if [[ "$STAPLE_OK" -ne 1 ]]; then
+  echo "❌ 等了 $STAPLE_TRIES 分钟票据仍未上架。dmg 本身是好的 (审核 Accepted),"
+  echo "   过一会儿单独跑这条即可, **不用重新编译公证**:"
+  echo "     xcrun stapler staple \"$DMG_PATH\" && xcrun stapler validate \"$DMG_PATH\"" >&2
+  exit 1
+fi
 xcrun stapler validate "$DMG_PATH"
 
 echo "✅ 完成：$DMG_PATH"
