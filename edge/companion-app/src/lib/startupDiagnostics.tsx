@@ -98,7 +98,16 @@ export class StartupErrorBoundary extends React.Component<
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
     this.setState({ error, info: info.componentStack || "" });
-    // 同时进 Rust 日志 (tauri-plugin-log 会落盘), 员工发日志时就带上了
+    // ⚠ console.* **不会**进日志文件。
+    //
+    // 我原来在这行写着"同时进 Rust 日志 (tauri-plugin-log 会落盘)" —— 假的,
+    // 8/5 查证: 前端既没装 @tauri-apps/plugin-log 也没调 attachConsole(),
+    // Rust 侧 log plugin 只有 LogDir + Stderr 两个 target, 收的是 **Rust** 的
+    // 日志, 不是 webview 的 console。release 版 devtools 又是关的 (lib.rs:484),
+    // 所以这一句实际上是喊给空气听。
+    //
+    // 员工唯一能看到的是**画在页面上**的那块面板 —— 所以出错信息必须进 DOM,
+    // 不能只靠 console。下面的 render() 就是干这个的。
     // eslint-disable-next-line no-console
     console.error("[startup] 渲染崩溃:", error, info.componentStack);
   }
@@ -114,6 +123,7 @@ export class StartupErrorBoundary extends React.Component<
           {"\n\n"}
           {this.state.error.stack || ""}
           {this.state.info ? `\n\n组件栈:${this.state.info}` : ""}
+          {oversizedReport()}
         </pre>
       </div>
     );
@@ -139,8 +149,18 @@ function showOverlay(title: string, detail: string) {
   hint.textContent =
     "完整日志: Windows %APPDATA%\\com.catfish.companion\\logs\\ · " +
     "macOS ~/Library/Logs/com.catfish.companion/";
-  pre.textContent = detail;
+  pre.textContent = detail + oversizedReport();
   document.body.appendChild(el);
+}
+
+/** 把记下来的超大 invoke 拼成一段, 附在任何一块错误面板末尾。
+ *
+ * 真凶不一定是抛异常的那个 invoke —— 也可能是它前面某个把内存撑爆的。
+ * 所以面板上要能看到"在这之前谁发过巨型载荷"。
+ */
+function oversizedReport(): string {
+  if (oversized.length === 0) return "";
+  return `\n\n── 此前的超大 IPC 载荷 (>8MB) ──\n${oversized.join("\n")}`;
 }
 
 /** IPC 载荷体检 —— 出事时说清楚是哪个 invoke、多大。
@@ -170,6 +190,22 @@ function showOverlay(title: string, detail: string) {
  */
 const IPC_WARN_BYTES = 8 * 1024 * 1024;
 
+/** 超阈值的 invoke 记在这里, 出事时一并画进面板。
+ *
+ * 8/5 补的漏: 原来"载荷过大"只 console.warn。而 release 版 devtools 是关的
+ * (lib.rs:484), 前端的 console 又**不进日志文件** (没装 plugin-log, 没调
+ * attachConsole, Rust 侧 log plugin 收的是 Rust 自己的日志) —— 也就是说那条
+ * 告警是喊给空气听的。
+ *
+ * 于是会漏掉最难查的一种情况: 某个 invoke 载荷巨大**但没抛异常**, 它把内存
+ * 撑到下一个 invoke 才炸。真凶的名字在 warn 里, 而 warn 谁也看不见。
+ *
+ * 改成记在内存里, 面板出现时连着一起显示 —— 不引新依赖, 不多走一次 IPC
+ * (为了报告 IPC 问题而再发一次 IPC, 是能把现场彻底搅浑的那种做法)。
+ */
+const oversized: string[] = [];
+const OVERSIZED_KEEP = 20;
+
 /** 单独导出给测试用 —— 它不碰 DOM, 不必为它引一个 jsdom 依赖。 */
 export function installIpcSizeGuard(): void {
   const internals = (window as unknown as Record<string, any>).__TAURI_INTERNALS__;
@@ -187,11 +223,12 @@ export function installIpcSizeGuard(): void {
       /* 序列化不了 (循环引用等) —— 交给原函数去报真正的错 */
     }
     if (size > IPC_WARN_BYTES) {
+      const line = `invoke("${cmd}") 载荷 ${(size / 1024 / 1024).toFixed(1)}MB`;
+      if (oversized.length < OVERSIZED_KEEP) oversized.push(line);
       // eslint-disable-next-line no-console
       console.warn(
-        `[ipc] invoke("${cmd}") 载荷 ${(size / 1024 / 1024).toFixed(1)}MB —— ` +
-          `Windows 上 postMessage 有字符串长度上限, 过大会直接 RangeError 且栈里` +
-          `没有应用帧, 表现为白屏。`,
+        `[ipc] ${line} —— Windows 上 postMessage 有字符串长度上限, 过大会直接 ` +
+          `RangeError 且栈里没有应用帧, 表现为白屏。`,
       );
     }
     try {
