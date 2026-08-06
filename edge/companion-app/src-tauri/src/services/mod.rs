@@ -7,6 +7,7 @@ pub mod agent_prefs;
 pub mod autostart;
 pub mod catfish_paths;
 pub mod curator_config;
+pub mod memory_provider_config;
 pub mod curator_state;
 pub mod email_config;     // BL-COMPANION-EMAIL-YAML-CONFIG (5/18)
 pub mod email_scheduler;  // BL-COMPANION-EMAIL-DIGEST-STEP2 (5/18)

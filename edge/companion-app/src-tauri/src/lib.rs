@@ -275,6 +275,23 @@ pub fn run() {
                 Err(e) => log::warn!("BL-CR: ensure_curator_default 失败 (不阻塞启动): {e}"),
             }
 
+            // 8/6 鸿波「早安里说的项目进度, 工作台不知道」: catfish-memory 这个
+            // memory provider **从来没被激活过** —— 打包只 cp -R 拷文件
+            // (build-mac-resources.sh:185), 激活逻辑在 install-catfish-memory.sh:122,
+            // 而装机流程一处都没调它。于是每台机器的 config.yaml 里都没有 memory 段,
+            // 长期记忆整个功能从未开启, 而 lib/chat.ts 一直假定它在跑。
+            //
+            // 放启动路径而不是装机路径: 已装好的机器重启一次就自动修好, 不用重装。
+            // 已有 memory 段则不动 —— 员工可能自己配了 mem0/honcho, 跟 curator 同原则。
+            match services::memory_provider_config::ensure() {
+                Ok(true) => log::info!(
+                    "[memory-provider] 写入 memory.provider: catfish-memory —— \
+                     长期记忆此前从未激活, hermes 下次重启后生效"
+                ),
+                Ok(false) => log::debug!("[memory-provider] config.yaml 已有 memory 段, 不动"),
+                Err(e) => log::warn!("[memory-provider] 激活失败 (不阻塞启动): {e}"),
+            }
+
             // 7/17 BL-SESSIONS-INDEX: 后台 build state.db 索引, 员工点侧栏"对话"不卡.
             // 鸿波 2761 sessions 时 catch: 无 index 时 sessions_list 子查询 O(N×M)
             // 首启就要 1-3 秒卡. 挪到 startup 后台线程建, 员工首次点侧栏时索引就绪.
