@@ -1005,20 +1005,91 @@ class CatfishMemoryProvider(MemoryProvider):
             logger.warning("catfish-memory _tick_session_meta 失败: %s", e)
 
     def _render_employee_journal(self, catfish_home: Path) -> str:
-        # 优先 distilled_facts.md (LLM 蒸馏过), fallback employee_journal.md
-        distilled = _read_text_safe(
-            catfish_home / "distilled_facts.md",
-            _BUDGETS["employee_journal"],
-        )
+        """长期记忆 (distilled) + 近期未蒸馏增量 (journal 尾部), 两段都注入。
+
+        # 8/6 鸿波 catch「早安里说的项目进度, 工作台不知道」
+
+        原来是**二选一**:
+
+            distilled = read(distilled_facts.md)
+            if distilled.strip():
+                return distilled          # ← 读到就返回, journal 永远到不了
+            raw = read(employee_journal.md)
+
+        而 distilled_facts.md 是 **24h 蒸馏一次**的产物。于是最近一个蒸馏周期内
+        写进 journal 的所有内容, 主聊天一个字都看不到。
+
+        8/6 实测: 员工 15:11–15:15 在早安记了四条项目进度 (ISO 招投标 / 资质对标 /
+        ISO9001+45001 / CIC), journal 里都在, 而 distilled_facts.md 停在前一晚
+        22:02 —— 员工到工作台问同一件事, LLM 只能靠自己调 catfish_search_sessions
+        和 execute_code 去翻文件才找得到。能找到是因为工具强, 不是因为记忆通。
+
+        两者本来就是**互补的两层**, 不是备选关系:
+          · distilled_facts.md —— 长期画像, 已蒸馏、已去重、密度高
+          · employee_journal.md 尾部 —— 近期流水, 未蒸馏, 时效最新
+
+        所以改成都注入, 预算三七开 (长期占七, 近期占三 —— 近期条目短、信息密度低,
+        给太多会挤掉长期记忆)。蒸馏跑完之后, 近期那段自然并入 distilled, 不会重复
+        堆积。
+
+        journal 只取**尾部**: 它是 append-only 的, 8/6 实测已 533KB, 全量读进来
+        既超预算也没意义 —— 早期内容早就蒸馏进 distilled 了。
+        """
+        budget = _BUDGETS["employee_journal"]
+        long_budget = int(budget * 0.7)
+        recent_budget = budget - long_budget
+
+        parts: list[str] = []
+
+        distilled = _read_text_safe(catfish_home / "distilled_facts.md", long_budget)
         if distilled.strip():
-            return f"## 📝 员工长期记忆 (catfish distilled)\n\n{distilled}"
-        raw = _read_text_safe(
-            catfish_home / "employee_journal.md",
-            _BUDGETS["employee_journal"],
+            parts.append(f"## 📝 员工长期记忆 (catfish distilled)\n\n{distilled}")
+
+        # journal 尾部 = 尚未进入 distilled 的近期流水。_read_text_safe 从头截断,
+        # 这里要的是**末尾**, 所以自己读。
+        recent = self._tail_journal(
+            catfish_home / "employee_journal.md", recent_budget
         )
-        if raw.strip():
-            return f"## 📝 员工长期日记 (catfish)\n\n{raw}"
-        return ""
+        if recent.strip():
+            if parts:
+                parts.append(
+                    "## 🕒 近期流水 (尚未蒸馏, 比上面的长期记忆更新)\n\n" + recent
+                )
+            else:
+                # distilled 还不存在 (新装机器) —— journal 就是唯一的记忆, 给全额
+                recent = self._tail_journal(
+                    catfish_home / "employee_journal.md", budget
+                )
+                parts.append(f"## 📝 员工长期日记 (catfish)\n\n{recent}")
+
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _tail_journal(path: Path, max_bytes: int) -> str:
+        """读 journal 末尾 max_bytes, 并从第一个完整条目 (## 开头) 起返回。
+
+        直接按字节截尾会把第一条切成半句, LLM 读到残句容易误读。journal 的条目
+        以 `## ` 开头 (见 memory_router._route_to_journal / _route_to_reminder),
+        所以往后找第一个 `\\n## ` 作为起点。找不到就整段返回 (说明尾部就是一条
+        超长条目)。
+        """
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return ""
+        try:
+            with open(path, "rb") as f:
+                if size > max_bytes:
+                    f.seek(size - max_bytes)
+                data = f.read()
+        except OSError:
+            return ""
+        text = data.decode("utf-8", errors="ignore")
+        if size > max_bytes:
+            idx = text.find("\n## ")
+            if idx >= 0:
+                text = text[idx + 1 :]
+        return text
 
     def _render_task_status(self, catfish_home: Path) -> str:
         """P3.5.203 (β 7/9 鸿波): 从 ~/.catfish/advisor_cache.json 抽最近员工对
