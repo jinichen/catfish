@@ -1,38 +1,40 @@
 /* 鲶鱼品牌设计 token —— 只在这里定义，全应用引用 var(--xxx)。
  * 五一 sprint 5/3 BL-D11: 配色升级到正式 brand kit (深青 + 暖橙).
- *   旧 #06b6d4 亮青 → #0E5F66 墨青, 跟 app icon / 吉祥物 / PPT 统一.
- *   暖橙 #F47B3D 新增 (10% 用量), 用于 CTA / 在线指示 / 高亮.
- *   暖米 #FAF1E4 新增, 用作聊天卡 / hover 背景 (替代纯白).
+ * 8/7 UI REFRESH: token 体系扩容 —— 保留全部旧 token 名 (全 app 1200+ 处内联引用),
+ *   数值整体调优 + 新增 渐变 / 分层阴影 / 动效 / 焦点环 token (refresh.css 消费).
+ *   设计原则: 墨青做骨架, 暖橙只做点睛 (≤10%), 光影代替线框, 层次代替分割线.
  */
 
 :root {
   /* —— 配色 主色系 (墨青) —— */
-  --catfish-cyan: #0E5F66;        /* 主色：墨青 (深青) */
-  --catfish-cyan-dim: #0A464C;    /* 主色暗 (按钮 hover / 边框) */
-  --catfish-cyan-bright: #1A8A95; /* 主色亮 (链接 / 高光) */
+  --catfish-cyan: #0E6169;        /* 主色：墨青 (深青) */
+  --catfish-cyan-dim: #0A4A51;    /* 主色暗 (按钮 hover / 边框) */
+  --catfish-cyan-bright: #168D99; /* 主色亮 (链接 / 高光) */
+  --catfish-cyan-hover: #4FB8C2;  /* 编辑态描边等亮交互色 (老代码有 fallback 引用) */
 
   /* —— 配色 辅色系 (暖橙, ≤10% 用量) —— */
-  --catfish-orange: #F47B3D;      /* 辅色：暖橙 (CTA / 在线 / 锚点) */
-  --catfish-orange-soft: #F89866; /* 辅色淡 (hover / 浅徽章) */
+  --catfish-orange: #F0703A;      /* 辅色：暖橙 (CTA / 在线 / 锚点) */
+  --catfish-orange-soft: #F79A6B; /* 辅色淡 (hover / 浅徽章) */
 
   /* —— 配色 中性 —— */
-  --catfish-bg: #F6F8F8;          /* 冷白工作区，降低旧版米色雾感 */
+  --catfish-bg: #F3F6F6;          /* 冷白工作区 */
   --catfish-bg-elevated: #FFFFFF;
-  --catfish-bg-cream: #EEF4F4;    /* 选中态与轻量强调 */
-  --catfish-border: #DDE5E6;      /* 中性冷灰边框 */
-  --catfish-text: #17272C;        /* 主文字 (深青墨, 不用纯黑) */
-  --catfish-text-muted: #718085;  /* 弱文字 */
+  --catfish-bg-cream: #E8F1F0;    /* 选中态与轻量强调 */
+  --catfish-border: #DCE5E6;      /* 中性冷灰边框 */
+  --catfish-border-strong: #C8D5D6; /* 需要更清晰轮廓时 (控件描边) */
+  --catfish-text: #14232A;        /* 主文字 (深青墨, 不用纯黑) */
+  --catfish-text-muted: #68797F;  /* 弱文字 */
 
-  /* —— 工作台左侧主导航 —— */
-  --catfish-rail: #22313E;
-  --catfish-rail-deep: #1B2934;
-  --catfish-rail-text: #D9E3E7;
-  --catfish-rail-muted: #93A4AC;
-  --catfish-rail-active: #126B75;
+  /* —— 工作台左侧主导航 —— 8/7: 整体压深一档, 让工作区更亮、rail 更沉 */
+  --catfish-rail: #1B2B36;
+  --catfish-rail-deep: #131F28;
+  --catfish-rail-text: #DCE6EA;
+  --catfish-rail-muted: #8CA0A9;
+  --catfish-rail-active: #10717C;
   --catfish-rail-hover: rgba(255, 255, 255, 0.07);
 
   /* —— 状态色 (跟 brand 协调, ok=主色青, 不抢镜) —— */
-  --status-ok: #1A8A95;           /* 复用主色亮青, 一致感 */
+  --status-ok: #189AA6;           /* 复用主色亮青, 一致感 */
   --status-warn: #E8A33D;         /* 暖琥珀, 跟 brand 暖橙系一致 */
   --status-err: #D9534F;          /* 略带暖意的红, 不刺眼 */
   --status-idle: #A8A29E;
@@ -60,32 +62,61 @@
     "Microsoft YaHei", sans-serif;
   --font-mono: "SF Mono", Menlo, Consolas, "Source Code Pro", monospace;
 
-  /* —— 圆角 + 阴影 —— */
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.06);
+  /* —— 圆角 —— 8/7: 全档上调一号, 加 xl/full (大卡 / 胶囊) */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-full: 999px;
+
+  /* —— 阴影 —— 8/7: 单层小阴影 → 环境光 + 主光双层, 大面更柔 */
+  --shadow-sm: 0 1px 2px rgba(15, 34, 40, 0.05), 0 1px 1px rgba(15, 34, 40, 0.03);
+  --shadow-md: 0 2px 6px rgba(15, 34, 40, 0.05), 0 10px 28px rgba(15, 34, 40, 0.07);
+  --shadow-lg: 0 4px 12px rgba(15, 34, 40, 0.07), 0 20px 48px rgba(15, 34, 40, 0.12);
+  /* 主色投影 — 激活项 / 主按钮的"品牌光晕" */
+  --shadow-brand: 0 4px 14px rgba(14, 97, 105, 0.28);
+
+  /* —— 渐变 (refresh.css / 主按钮 / rail 激活态) ——
+   * 8/8 评审修正: 起点压深到 #12808D — 白字 14px 在渐变最亮端也 ≥ 4.5:1 (AA).
+   * 用户气泡 / 主按钮 / rail 激活 pill 都是白字, 起点太亮就是可读性硬伤. */
+  --gradient-brand: linear-gradient(135deg, #12808D 0%, #0A4F57 100%);
+  --gradient-cta: linear-gradient(135deg, #F78A50 0%, #EC6528 100%);
+  --gradient-rail: linear-gradient(180deg, var(--catfish-rail) 0%, var(--catfish-rail-deep) 100%);
+
+  /* —— 焦点环 (键盘可达性 + 输入态) —— */
+  --focus-ring: 0 0 0 3px rgba(22, 141, 153, 0.22);
+
+  /* —— 动效 —— */
+  --transition-fast: 130ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-med: 220ms cubic-bezier(0.33, 1, 0.68, 1);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    /* 深色模式: 主色提亮 (墨青在深底太重), 暖橙调柔 */
-    --catfish-cyan: #1A8A95;       /* 提到亮青, 暗底可读 */
-    --catfish-cyan-dim: #0E5F66;
-    --catfish-cyan-bright: #2DABB6;
+    /* 深色模式: 主色提亮 (墨青在深底太重), 暖橙调柔.
+     * 8/7: 底色加深一档并带青调, elevated 面更分明, 阴影加重.
+     * 8/8 二轮 (用户"不好看"反馈): 老暗色 rail/底/面板明度太接近 (#0F~#17 一段),
+     *   糊成一片. 重调为清晰四级明度阶梯 — rail 近黑 < 主底 < 面板 < 卡片,
+     *   边框提亮一档让轮廓站得住. 企业克制 + 科技感锐度. */
+    --catfish-cyan: #22A4B0;       /* 提到亮青, 暗底可读 */
+    --catfish-cyan-dim: #10646C;
+    --catfish-cyan-bright: #41BEC9;
+    --catfish-cyan-hover: #63CDD5;
     --catfish-orange: #F89866;      /* 暖橙调柔, 不刺眼 */
-    --catfish-bg: #131C1F;          /* 偏冷的深青墨, 跟 brand 一致, 不用纯灰 */
-    --catfish-bg-elevated: #1C2A2E;
-    --catfish-bg-cream: #2A3438;    /* 深模下"米色卡"换成深青卡 */
-    --catfish-border: #2E3F44;
-    --catfish-text: #E8E4DC;        /* 暖米色文字, 不用纯白 */
-    --catfish-text-muted: #8A9692;
-    --catfish-rail: #172128;
-    --catfish-rail-deep: #121B21;
+    --catfish-bg: #0C1317;          /* 近黑冷青墨 — 主工作区底 */
+    --catfish-bg-elevated: #19262D; /* 面板/卡片, 跟主底拉开一整档 */
+    --catfish-bg-cream: #24343C;    /* 深模下"米色卡"换成深青卡 */
+    --catfish-border: #2B3E47;
+    --catfish-border-strong: #3B5058;
+    --catfish-text: #ECEAE2;        /* 暖米色文字, 不用纯白 */
+    --catfish-text-muted: #97A9A8;
+    --catfish-rail: #0B1319;        /* rail 全局最深, 像设备边框 */
+    --catfish-rail-deep: #070C11;
     --catfish-rail-text: #E3ECEF;
     --catfish-rail-muted: #8FA1A8;
-    --catfish-rail-active: #197985;
+    --catfish-rail-active: #157A87;
+
+    --status-ok: #2FB3BE;
 
     /* P3.4.E.9 (6/15 鸿波): 暗模式 hint 横条 text 提亮 (深蓝→亮蓝, 深棕→亮琥珀),
      * bg/border 透明度调高让暗底对比清楚. 跟 --catfish-cyan 提亮策略一致. */
@@ -95,5 +126,17 @@
     --catfish-hint-amber-text: #fbbf24;   /* tailwind amber-400, 暗底可读 */
     --catfish-hint-amber-bg: rgba(245, 158, 11, 0.14);
     --catfish-hint-amber-border: rgba(251, 191, 36, 0.40);
+
+    /* 暗底阴影: 透明度加重 + 品牌光晕更明显 */
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.28), 0 1px 1px rgba(0, 0, 0, 0.18);
+    --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.32), 0 12px 32px rgba(0, 0, 0, 0.36);
+    --shadow-lg: 0 4px 14px rgba(0, 0, 0, 0.38), 0 24px 56px rgba(0, 0, 0, 0.46);
+    --shadow-brand: 0 4px 16px rgba(34, 164, 176, 0.38);
+
+    /* 8/8 评审修正: 暗底同理压深起点, 白字 AA */
+    --gradient-brand: linear-gradient(135deg, #17818C 0%, #0C525B 100%);
+    --gradient-cta: linear-gradient(135deg, #F89866 0%, #E9622A 100%);
+
+    --focus-ring: 0 0 0 3px rgba(65, 190, 201, 0.30);
   }
 }

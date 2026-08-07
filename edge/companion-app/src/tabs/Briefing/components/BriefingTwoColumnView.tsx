@@ -94,10 +94,12 @@ interface BriefingTwoColumnViewProps {
 
 type UrgencyGroup = "high" | "medium" | "low";
 
+// 8/8 评审修正: 老 tailwind orange-700/amber-700 硬编码跟品牌 token 两套橙并存,
+// 暗色下发闷. 改走 token — 急=品牌暖橙, 中=状态琥珀, 低=中性弱字.
 const URGENCY_META: Record<UrgencyGroup, { label: string; color: string; bg: string }> = {
-  high:   { label: "急", color: "#c2410c", bg: "rgba(194,65,12,0.08)" },
-  medium: { label: "中", color: "#a16207", bg: "rgba(161,98,7,0.08)" },
-  low:    { label: "低", color: "#6b7280", bg: "rgba(107,114,128,0.06)" },
+  high:   { label: "急", color: "var(--catfish-orange)", bg: "color-mix(in srgb, var(--catfish-orange) 9%, transparent)" },
+  medium: { label: "中", color: "var(--status-warn)", bg: "color-mix(in srgb, var(--status-warn) 9%, transparent)" },
+  low:    { label: "低", color: "var(--catfish-text-muted)", bg: "color-mix(in srgb, var(--catfish-text-muted) 7%, transparent)" },
 };
 
 export default function BriefingTwoColumnView({
@@ -280,8 +282,8 @@ function DetailPane({
 }) {
   const status = effective;
   const accent =
-    task.urgency === "high" ? "#c2410c" :
-    task.urgency === "medium" ? "#a16207" : "#6b7280";
+    task.urgency === "high" ? "var(--catfish-orange)" :
+    task.urgency === "medium" ? "var(--status-warn)" : "var(--catfish-text-muted)";
 
   // P3.5.91 (6/23 鸿波): canonical taskUid — 跟 LLM 给的可能不同.
   //   client 端按 normalized title 做 first-seen cache (~/.catfish/task_uid_cache.json),

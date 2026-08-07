@@ -327,7 +327,7 @@ function AboutChip() {
 
   useEffect(() => {
     getVersion()
-      .then((v) => setVersion(v))
+      .then((v) => setVersion(v || "?"))  // 8/8 评审: 空值兜底, 防 "vnull"
       .catch((e) => {
         // eslint-disable-next-line no-console
         console.warn("[AboutChip] getVersion 失败:", e);

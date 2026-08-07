@@ -112,14 +112,12 @@ export function Markdown({ text }: Props) {
         // rehype-highlight 后 (给 code 块染色). 两个都需要.
         rehypePlugins={[rehypeRaw, rehypeHighlight]}
         components={{
-          // 代码块外层 <pre>，加上滚动 + padding（高亮 css 只管语法色）
+          // 代码块外层 <pre>，只留结构属性 — 视觉 (底色/描边/圆角/内距)
+          // 交给 refresh.css 的 .markdown-body pre, 内联写死会把主题层压死
+          // (8/8 评审: 暗色下这里的 --catfish-bg 比面板还黑, 成了"黑带").
           pre: ({ children }) => (
             <pre
               style={{
-                background: "var(--catfish-bg)",
-                border: "1px solid var(--catfish-border)",
-                borderRadius: "var(--radius-sm)",
-                padding: "var(--space-3)",
                 overflow: "auto",
                 fontSize: 12,
                 margin: "var(--space-2) 0",
@@ -138,19 +136,8 @@ export function Markdown({ text }: Props) {
                 </code>
               );
             }
-            return (
-              <code
-                style={{
-                  background: "var(--catfish-bg)",
-                  padding: "1px 5px",
-                  borderRadius: 3,
-                  fontSize: "0.9em",
-                  fontFamily: "var(--font-mono)",
-                }}
-              >
-                {children}
-              </code>
-            );
+            // 行内 code 视觉交给 refresh.css 的 .markdown-body :not(pre) > code
+            return <code>{children}</code>;
           },
           // 表格: 包一层横向滚动, 资质对照表那种 4-5 列表格不至于挤
           table: ({ children }) => (
@@ -161,9 +148,9 @@ export function Markdown({ text }: Props) {
                 maxWidth: "100%",
               }}
             >
+              {/* borderCollapse 交给 refresh.css (separate + 圆角裁切) */}
               <table
                 style={{
-                  borderCollapse: "collapse",
                   fontSize: 13,
                   minWidth: "100%",
                 }}
@@ -175,9 +162,6 @@ export function Markdown({ text }: Props) {
           th: ({ children }) => (
             <th
               style={{
-                border: "1px solid var(--catfish-border)",
-                padding: "6px 10px",
-                background: "var(--catfish-bg)",
                 textAlign: "left",
                 verticalAlign: "top",
                 // 多行内容 (LLM 用 <br> 换行 / 单元格里有 \n) 要保留
@@ -191,8 +175,6 @@ export function Markdown({ text }: Props) {
           td: ({ children }) => (
             <td
               style={{
-                border: "1px solid var(--catfish-border)",
-                padding: "6px 10px",
                 verticalAlign: "top",
                 whiteSpace: "normal",
                 wordBreak: "break-word",

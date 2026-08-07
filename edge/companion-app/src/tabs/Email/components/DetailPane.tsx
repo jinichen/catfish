@@ -439,7 +439,21 @@ function DetailPane({
             </>
           )}
           <div>时间</div>
-          <div>{msg.date}</div>
+          {/* 8/8 评审: 原样输出 ISO 串 (2026-08-07T15:45:51.210Z) → 格式化为人话.
+              解析失败 (老数据格式怪) 时回退原串. */}
+          <div>
+            {(() => {
+              const d = new Date(msg.date);
+              return Number.isNaN(d.getTime())
+                ? msg.date
+                : d.toLocaleString("zh-CN", {
+                    month: "long",
+                    day: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  });
+            })()}
+          </div>
           <div>账号</div>
           <div>{msg.account}</div>
           {msg.has_attachments && msg.attachments && msg.attachments.length > 0 && (

@@ -452,7 +452,8 @@ function CatfishVersionFooter() {
   const [version, setVersion] = useState<string>("…");
   useEffect(() => {
     getVersion()
-      .then((v) => setVersion(`v${v}`))
+      // 8/8 评审: v 为空/null 时曾显 "vnull" — 空值兜底
+      .then((v) => setVersion(v ? `v${v}` : "(未知)"))
       .catch(() => setVersion("(未知)"));
   }, []);
   return (

@@ -149,12 +149,14 @@ function UserBubble({
         style={{
           background: isAutoContinue
             ? "var(--catfish-cyan-dim)"  // 淡色, 区别于真用户消息
-            : "var(--catfish-cyan)",
+            : "var(--gradient-brand, var(--catfish-cyan))",  // 8/8 UI 二轮: 品牌渐变气泡
           color: isAutoContinue
             ? "var(--catfish-cyan)"
             : "white",
           padding: "var(--space-3) var(--space-4)",
-          borderRadius: "var(--radius-md)",
+          borderRadius: "var(--radius-lg)",
+          borderBottomRightRadius: "var(--radius-sm)",  // 8/8: 右下小角 — 气泡指向感
+          boxShadow: isAutoContinue ? "none" : "var(--shadow-brand, none)",
           // BL-COMPANION-EDIT (7/23 P1): editing 时 minWidth 60% 撑起 textarea ·
           // 避免气泡太窄. 非编辑态保持 maxWidth 75% 短句居右紧凑.
           maxWidth: "75%",

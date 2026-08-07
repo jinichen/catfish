@@ -288,7 +288,7 @@ function FeedbackBtn({
         background: "transparent",
         color: "var(--catfish-text-muted)",
         cursor: "pointer",
-        opacity: 0.5,
+        opacity: 0.72,  // 8/8 评审: 0.5×容器 0.42 ≈ 21% 像坏掉的控件, 提到可读档
         transition: "opacity 100ms, background 100ms",
       }}
       onMouseEnter={(e) => {
@@ -296,7 +296,7 @@ function FeedbackBtn({
         e.currentTarget.style.background = "var(--catfish-bg-elevated)";
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.opacity = "0.5";
+        e.currentTarget.style.opacity = "0.72";
         e.currentTarget.style.background = "transparent";
       }}
     >

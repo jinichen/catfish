@@ -186,7 +186,7 @@ function StepWelcome({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
         欢迎使用 鲶鱼 Companion
       </h2>
       <p style={{ fontSize: 14, lineHeight: 1.6, color: "var(--catfish-text-muted)" }}>
-        鲶鱼是你的 AI 副手 — 跟同事一样**记得你**, 帮你写公文 / 看邮件 / 操作内网系统.
+        鲶鱼是你的 AI 副手 — 跟同事一样<strong style={{ color: "var(--catfish-text)" }}>记得你</strong>, 帮你写公文 / 看邮件 / 操作内网系统.
       </p>
       <ul
         style={{

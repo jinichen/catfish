@@ -1,0 +1,541 @@
+/* ─────────────────────────────────────────────────────────────────────
+ * 8/7 UI REFRESH 覆盖层 — 必须在 globals.css 之后加载 (main.tsx import 顺序).
+ *
+ * 定位: globals.css 是历史全量样式 (4200+ 行, 不动它防回归);
+ *       本文件是一层"品牌化打磨": 光影 / 渐变 / 动效 / 焦点环 / 滚动条,
+ *       同名单类选择器写在后面即可覆盖, 不抬 specificity 不用 !important.
+ * 消费 tokens.css 8/7 新增 token: --gradient-* / --shadow-* / --focus-ring /
+ *       --transition-* / --radius-xl / --catfish-border-strong.
+ * ───────────────────────────────────────────────────────────────────── */
+
+/* ═══ 1. 基底: 文字渲染 / 选区 / 滚动条 / 键盘焦点 ═══ */
+
+body {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--catfish-cyan-bright) 26%, transparent);
+}
+
+/* 滚动条: 细圆角, 默认半透明, hover 加深. WebKit (Tauri WebView) 为主. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--catfish-text-muted) 34%, transparent);
+  border: 3px solid transparent;
+  border-radius: var(--radius-full);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--catfish-text-muted) 58%, transparent);
+  border-width: 2px;
+  background-clip: padding-box;
+}
+
+/* 键盘可达性: 输入控件统一焦点环 (鼠标点击不打扰, 键盘 tab 清晰) */
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: none;
+  border-color: var(--catfish-cyan-bright);
+  box-shadow: var(--focus-ring);
+}
+button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* 原生控件跟品牌走 (checkbox / radio / select 下拉高亮) — 系统蓝穿帮 */
+input[type="checkbox"],
+input[type="radio"],
+select,
+progress {
+  accent-color: var(--catfish-cyan);
+}
+
+/* 工作区主底: 右上角一抹极淡的品牌青环境光, 打破大面纯色的"平".
+ * 8/8 评审修正: 只有仪表盘用 .app-main, 其余 4 个 tab 的主容器是
+ * .app-workspace__main — 老选择器在那 4 页整个打空. 两个都写. */
+.app-main,
+.app-workspace__main {
+  background:
+    radial-gradient(
+      1100px 700px at 88% -8%,
+      color-mix(in srgb, var(--catfish-cyan-bright) 7%, transparent),
+      transparent 62%
+    ),
+    var(--catfish-bg);
+}
+
+/* ═══ 2. 左侧主导航 rail: 更沉的底 + 发光的激活态 ═══ */
+
+.app-rail {
+  background: var(--gradient-rail);
+  border-right: 1px solid rgba(4, 16, 22, 0.42);
+  box-shadow:
+    inset -1px 0 rgba(255, 255, 255, 0.04),
+    4px 0 24px rgba(5, 20, 26, 0.18);
+}
+
+.app-rail__brand img {
+  transition: transform var(--transition-med), filter var(--transition-med);
+}
+.app-rail__brand:hover img {
+  transform: scale(1.07) rotate(-4deg);
+  filter: drop-shadow(0 8px 16px rgba(3, 21, 25, 0.35));
+}
+
+.app-rail__item {
+  border-radius: var(--radius-md);
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    transform var(--transition-fast);
+}
+.app-rail__item:hover:not([data-active="true"]) {
+  color: var(--catfish-rail-text);
+  background: var(--catfish-rail-hover);
+  transform: translateX(2px);
+}
+.app-rail__item[data-active="true"] {
+  color: #fff;
+  background: var(--gradient-brand);
+  border-color: rgba(255, 255, 255, 0.10);
+  box-shadow:
+    var(--shadow-brand),
+    inset 0 1px rgba(255, 255, 255, 0.14);
+}
+
+/* 底部身份区: 头像加品牌描边环 */
+.app-rail__identity img {
+  border-radius: var(--radius-full);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--catfish-cyan-bright) 65%, transparent),
+    0 0 0 4px rgba(255, 255, 255, 0.06);
+}
+
+/* ═══ 2.5 工作区分层 (8/8 二轮): 侧栏/内容区拉开明度, 顶栏毛玻璃 ═══ */
+
+/* 会话侧栏整体比聊天区浅半档 — 暗色下不再糊成一片 */
+.chat-sidebar {
+  background: color-mix(in srgb, var(--catfish-bg-elevated) 46%, var(--catfish-bg));
+  border-right: 1px solid var(--catfish-border);
+}
+
+/* 聊天区顶栏: 毛玻璃 + 发丝线, 内容滚动时有"悬浮仪表条"感 */
+.chat-workspace__header {
+  background: color-mix(in srgb, var(--catfish-bg) 72%, transparent);
+  backdrop-filter: blur(14px) saturate(1.15);
+  -webkit-backdrop-filter: blur(14px) saturate(1.15);
+  border-bottom: 1px solid var(--catfish-border);
+}
+
+/* 会话分组标签 (今天 / 本周): 小型大写 + 宽字距 — 科技感的克制版 */
+.chat-session-section__label {
+  font-size: 10px;
+  font-weight: 640;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--catfish-cyan-bright) 45%, var(--catfish-text-muted));
+}
+
+/* 数字一律等宽对齐 (token 数 / 条数 / 时间) — 工程仪表感 */
+.chat-session-row__meta,
+.chat-sidebar__count,
+.chat-workspace__message-count {
+  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
+}
+
+/* ═══ 3. 会话侧栏: 渐变主按钮 + 卡片化选中态 ═══ */
+
+.chat-sidebar__new-button {
+  background: var(--gradient-brand);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-brand);
+  transition:
+    transform var(--transition-fast),
+    box-shadow var(--transition-fast),
+    filter var(--transition-fast);
+}
+.chat-sidebar__new-button:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+  box-shadow:
+    0 8px 22px rgba(14, 97, 105, 0.34),
+    inset 0 1px rgba(255, 255, 255, 0.18);
+}
+.chat-sidebar__new-button:active {
+  transform: translateY(0);
+  filter: brightness(0.97);
+}
+
+.chat-session-row {
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    transform var(--transition-fast);
+}
+.chat-session-row:hover {
+  transform: translateX(1px);
+}
+.chat-session-row[data-active="true"] {
+  background: color-mix(in srgb, var(--catfish-cyan) 9%, var(--catfish-bg-elevated));
+  border-color: color-mix(in srgb, var(--catfish-cyan-bright) 42%, transparent);
+  box-shadow:
+    var(--shadow-sm),
+    inset 2px 0 0 var(--catfish-cyan-bright);
+}
+
+/* 会话删除按钮 (8/7 用户反馈"小垃圾桶太怪, 优化样式"):
+ * 老样式是 红字+红描边+白底 小方块 — 三种强信号叠一起, 跟整体风格脱节.
+ * 新样式: 柔和的浅红底圆角小按钮 (danger 只用 8% 底色暗示), 无描边不抢镜;
+ * 指针真悬停到按钮上才升级为实心红 + 白图标; 确认态维持红底. */
+/* 8/8 三改 (用户截图: 暗色下"浅红衬底"混成灰疙瘩, 图标看不清):
+ * 中间态一律不要底色 — 裸图标两档透明度示意, 危险色只留给按钮本身的
+ * hover 一瞬间 (实心红 + 白图标), 状态干脆不暧昧. */
+.chat-session-row[data-active="true"] .chat-session-row__delete {
+  color: var(--catfish-text-muted);
+  background: transparent;
+  border-color: transparent;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  opacity: 0.55;
+}
+.chat-session-row:hover .chat-session-row__delete,
+.chat-session-row:focus-within .chat-session-row__delete {
+  color: var(--catfish-text);
+  background: transparent;
+  border-color: transparent;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  opacity: 0.85;
+}
+/* 8/8 四改 (根因): 按钮里是 Phosphor 实心字形 (Trash weight=bold, 靠 fill
+ * 渲染), 但 globals 老规则强制 fill:none + stroke — 把实心图标渲成模糊的
+ * 双线轮廓, 哪个状态都发糊. 恢复 fill 渲染, 字形立刻变锐. */
+.chat-session-row__delete svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+  stroke: none;
+  stroke-width: 0;
+}
+/* 8/8 三改: 选择器提到 (0,4,0) — 必须压过下方"行悬停"规则 (0,3,0),
+ * 否则指到按钮上时行悬停的 transparent 底会把实心红吃掉 */
+.chat-session-row:hover .chat-session-row__delete:hover,
+.chat-session-row:focus-within .chat-session-row__delete:hover {
+  color: #fff;
+  background: var(--status-err);
+  border-color: transparent;
+  box-shadow: 0 3px 10px rgba(185, 28, 28, 0.28);
+  transform: none;
+  opacity: 1;
+}
+.chat-session-row__delete:active {
+  transform: scale(0.94);
+}
+.chat-session-row__delete[data-confirming="true"] {
+  opacity: 1;
+  border-radius: var(--radius-sm);
+}
+
+/* ═══ 4. 聊天工作区: 输入台 / 消息动效 / 空状态 ═══ */
+
+/* 输入台: 悬浮感 + 聚焦时品牌光环 (老样式 border 硬编码 #d8e1e3, 暗模式会穿帮) */
+.chat-composer__surface {
+  border: 1px solid var(--catfish-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-md);
+  transition:
+    border-color var(--transition-med),
+    box-shadow var(--transition-med);
+}
+.chat-composer__surface:focus-within {
+  border-color: color-mix(in srgb, var(--catfish-cyan-bright) 55%, var(--catfish-border));
+  box-shadow:
+    var(--shadow-lg),
+    var(--focus-ring);
+}
+/* 8/8 评审修正: 外层 surface 已画焦点环, 内层 textarea 不再叠一圈 (双环 bug) */
+.chat-composer__surface textarea:focus-visible,
+.chat-composer__surface input:focus-visible {
+  box-shadow: none;
+  border-color: transparent;
+}
+
+.chat-composer__primary-button {
+  background: var(--gradient-brand);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-brand);
+  transition:
+    transform var(--transition-fast),
+    box-shadow var(--transition-fast),
+    filter var(--transition-fast),
+    opacity var(--transition-fast);
+}
+.chat-composer__primary-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+}
+.chat-composer__primary-button:active:not(:disabled) {
+  transform: translateY(0);
+  filter: brightness(0.97);
+}
+
+.chat-composer__tool-button {
+  border-radius: var(--radius-sm);
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast),
+    transform var(--transition-fast);
+}
+.chat-composer__tool-button:hover {
+  background: color-mix(in srgb, var(--catfish-cyan) 10%, transparent);
+  transform: translateY(-1px);
+}
+
+/* 消息进场: 轻微上浮淡入 (仅动 transform/opacity, 不打扰布局) */
+@keyframes catfish-msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+/* 8/8 评审修正: thread 唯一子节点是 .chat-panel__content, 老选择器只让
+ * 整块一次性淡入 — 逐条动画要打在 content 的直接子级 (每条消息 wrapper) 上 */
+.chat-panel__content > * {
+  animation: catfish-msg-in 240ms var(--transition-med, ease-out) both;
+}
+
+/* 空状态标题: 品牌渐变文字, 招呼语更有精神 */
+.chat-empty-state__title {
+  background: var(--gradient-brand);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* ═══ 5. Markdown 输出: 代码块 / 行内码 / 表格 / 引用 ═══ */
+
+.markdown-body pre {
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--catfish-text) 4%, var(--catfish-bg-elevated));
+  border: 1px solid var(--catfish-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  overflow-x: auto;
+}
+
+.markdown-body :not(pre) > code {
+  padding: 1px 6px;
+  background: color-mix(in srgb, var(--catfish-cyan) 9%, transparent);
+  border-radius: 5px;
+  color: color-mix(in srgb, var(--catfish-cyan-bright) 80%, var(--catfish-text));
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+.markdown-body table {
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--catfish-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+.markdown-body th {
+  background: color-mix(in srgb, var(--catfish-cyan) 7%, var(--catfish-bg-elevated));
+  font-weight: 640;
+}
+.markdown-body th,
+.markdown-body td {
+  border: none;
+  border-bottom: 1px solid var(--catfish-border);
+  padding: 7px 12px;
+}
+.markdown-body tr:last-child td {
+  border-bottom: none;
+}
+.markdown-body tbody tr:hover {
+  background: color-mix(in srgb, var(--catfish-cyan) 4%, transparent);
+}
+
+.markdown-body blockquote {
+  margin: 8px 0;
+  padding: 6px 14px;
+  border-left: 3px solid var(--catfish-cyan-bright);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: color-mix(in srgb, var(--catfish-cyan) 6%, transparent);
+  color: var(--catfish-text-muted);
+}
+
+/* 8/8 评审修正: 操作条容器 0.42 × 按钮 0.5 ≈ 21% 透明度, 像 disabled.
+ * 容器提到 0.8, 静默仍克制但读得出来; hover 全亮由 globals 原规则接管. */
+.chat-message-actions {
+  opacity: 0.8;
+}
+
+/* 工具调用折叠块: 更清晰的容器感 */
+.toolcall {
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+.toolcall:hover {
+  border-color: var(--catfish-border-strong);
+}
+
+/* 侧栏搜索字号提到 12px (11px 与 14px 正文断层过大) */
+.chat-sidebar__search input {
+  font-size: 12px;
+}
+
+/* ═══ 6. 早安 (briefing) 双栏: 任务行卡片化 + 口径选项 ═══ */
+
+/* 8/8 评审修正: 详情面板中部空腔 — 空态提示收进一张居中小卡,
+ * 让"这里等你说话"读作有意设计而不是没做完 */
+.briefing-2col__chat-empty {
+  max-width: 420px;
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-6);
+  background: color-mix(in srgb, var(--catfish-cyan) 5%, var(--catfish-bg-elevated));
+  border: 1px solid var(--catfish-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.briefing-2col__task-row {
+  border: 1px solid transparent;
+  border-left: 2px solid transparent;
+  border-radius: var(--radius-md);
+  margin-bottom: 4px;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    transform var(--transition-fast);
+}
+.briefing-2col__task-row:hover {
+  background: color-mix(in srgb, var(--catfish-cyan) 6%, transparent);
+  transform: translateX(2px);
+}
+.briefing-2col__task-row--selected {
+  background: var(--catfish-bg-elevated);
+  border-color: var(--catfish-border);
+  border-left-color: var(--catfish-cyan-bright);
+  box-shadow: var(--shadow-sm);
+}
+
+.briefing-2col__option {
+  border-radius: var(--radius-md);
+  transition:
+    border-color var(--transition-fast),
+    background var(--transition-fast),
+    box-shadow var(--transition-fast),
+    transform var(--transition-fast);
+}
+.briefing-2col__option:hover {
+  border-color: color-mix(in srgb, var(--catfish-cyan-bright) 45%, var(--catfish-border));
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+.briefing-2col__option--selected {
+  border-color: var(--catfish-cyan-bright);
+  box-shadow: var(--focus-ring);
+}
+
+.briefing-2col__detail {
+  border-radius: var(--radius-lg);
+}
+
+/* ═══ 6.5 模型选择器 / wiki 分段控件 ═══ */
+
+.chat-model-picker__select {
+  background: var(--catfish-bg-elevated);
+  border: 1px solid var(--catfish-border);
+  border-radius: var(--radius-full);
+  box-shadow: var(--shadow-sm);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.01em;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+.chat-model-picker__select:hover {
+  border-color: var(--catfish-border-strong);
+}
+
+.wiki-segmented__btn {
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+.wiki-segmented__btn[data-active="true"] {
+  background: var(--gradient-brand);
+  color: #fff;
+  box-shadow: var(--shadow-brand);
+}
+
+/* ═══ 7. 横幅 / 弹窗 / toast ═══ */
+
+.install-dialog {
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+.install-dialog__backdrop {
+  background: color-mix(in srgb, var(--catfish-rail-deep) 46%, transparent);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+}
+
+.undo-toast {
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+}
+
+.advisory-banner {
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ═══ 8. 动效降级: 系统开了"减弱动态效果"就全部关掉 ═══ */
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-panel__thread > * {
+    animation: none;
+  }
+  .app-rail__item,
+  .app-rail__brand img,
+  .chat-session-row,
+  .chat-sidebar__new-button,
+  .chat-composer__primary-button,
+  .chat-composer__tool-button,
+  .briefing-2col__task-row,
+  .briefing-2col__option {
+    transition: none;
+  }
+  .app-rail__item:hover:not([data-active="true"]),
+  .chat-session-row:hover,
+  .briefing-2col__task-row:hover,
+  .chat-sidebar__new-button:hover,
+  .chat-composer__primary-button:hover:not(:disabled) {
+    transform: none;
+  }
+}

@@ -11,6 +11,8 @@ import "./styles/tokens.css";
 import "./styles/globals.css";
 // highlight.js 主题 —— github 风格,在浅/深色都看得清
 import "highlight.js/styles/github.css";
+// 8/7 UI REFRESH 覆盖层 — 必须最后 import (同名类靠源顺序覆盖 globals.css)
+import "./styles/refresh.css";
 
 // BL-CSP-PROXY-GLOBAL (7/18 鸿波): 全局 monkey-patch window.fetch → fetchViaProxy.
 //
